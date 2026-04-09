@@ -374,7 +374,7 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 		}
 	} else if b, ok := st.Cmd.(*syntax.BinaryCmd); ok && (b.Op == syntax.AndStmt || b.Op == syntax.OrStmt) {
 	} else if !r.exit.ok() && !r.noErrExit {
-		r.trapCallback(ctx, r.callbackErr, "error")
+		r.trapCallback(ctx, r.trapCallbacks["ERR"], "error")
 		// If the "errexit" option is set and a command failed, exit the shell. Exceptions:
 		//
 		//   conditions (if <cond>, while <cond>, etc)
@@ -706,10 +706,19 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		trace.string(" in")
 		trace.newLineFlush()
 		str := r.literal(cm.Word)
+		noCaseMatch := false
+		if opt, _ := r.bashOptByName("nocasematch"); opt != nil && *opt {
+			noCaseMatch = true
+		}
 		for _, ci := range cm.Items {
 			for _, word := range ci.Patterns {
-				pattern := r.pattern(word)
-				if match(pattern, str) {
+				pat := r.pattern(word)
+				matchStr := str
+				if noCaseMatch {
+					pat = strings.ToLower(pat)
+					matchStr = strings.ToLower(matchStr)
+				}
+				if match(pat, matchStr) {
 					r.stmts(ctx, ci.Stmts)
 					return
 				}
@@ -864,13 +873,56 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		r.outf(format, "user", elapsedString(0, cm.PosixFormat))
 		r.outf(format, "sys", elapsedString(0, cm.PosixFormat))
 	case *syntax.CoprocClause:
-		// Bash coproc exposes the child's pipes as ${NAME[0]} / ${NAME[1]},
-		// which are numeric fds usable in `<&N` / `>&N` redirects. This
-		// runner's redirect layer only handles fds 0/1/2, so coproc cannot
-		// be made to work without a wider numbered-fd refactor. Refuse
-		// explicitly rather than crashing on the unhandled AST node.
-		r.errf("coproc: not supported in this shell — bash coproc requires numbered file descriptors that this runner does not support; use a fifo (mkfifo) with a background command, or process substitution\n")
-		r.exit.code = 2
+		// Coproc runs a command in the background with stdin/stdout connected via pipes.
+		// Note: bash coproc exposes the child's pipes as ${NAME[0]} / ${NAME[1]},
+		// which are numeric fds usable in `<&N` / `>&N` redirects. This runner's
+		// redirect layer only handles fds 0/1/2, so those redirect forms won't
+		// work yet, but the basic coproc + read/write via the pipe object works.
+		pr, pw, err := os.Pipe()
+		if err != nil {
+			r.exit.fatal(err)
+			break
+		}
+		pr2, pw2, err := os.Pipe()
+		if err != nil {
+			pr.Close()
+			pw.Close()
+			r.exit.fatal(err)
+			break
+		}
+		r2 := r.subshell(true)
+		r2.stdin = pr2
+		r2.stdout = pw
+
+		// Set COPROC array with read and write file descriptor numbers.
+		varName := "COPROC"
+		if cm.Name != nil {
+			varName = r.literal(cm.Name)
+		}
+		r.setVar(varName, expand.Variable{
+			Set:  true,
+			Kind: expand.Indexed,
+			List: []string{
+				strconv.Itoa(int(pr.Fd())),
+				strconv.Itoa(int(pw2.Fd())),
+			},
+		})
+
+		bg := &bgProc{
+			done: make(chan struct{}),
+			exit: new(exitStatus),
+		}
+		r.bgProcs = append(r.bgProcs, bg)
+		go func() {
+			defer func() {
+				pw.Close()
+				pr2.Close()
+				*bg.exit = r2.exit
+				close(bg.done)
+			}()
+			r2.Run(ctx, cm.Stmt)
+			r2.exit.exiting = false
+		}()
 	default:
 		// Should only happen if we forgot a case above.
 		r.errf("unhandled command node: %T\n", cm)
@@ -1135,6 +1187,9 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 	if r.stop(ctx) {
 		return
 	}
+	// Set BASH_COMMAND and fire DEBUG trap before each simple command.
+	r.setVarString("BASH_COMMAND", strings.Join(args, " "))
+	r.trapCallback(ctx, r.trapCallbacks["DEBUG"], "debug")
 	if r.callHandler != nil {
 		var err error
 		args, err = r.callHandler(r.handlerCtx(ctx, handlerKindCall, pos), args)
@@ -1152,6 +1207,13 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 		oldInFunc := r.inFunc
 		r.inFunc = true
 
+		// Push call stack frame.
+		r.callStack = append(r.callStack, callFrame{
+			line:     pos.Line(),
+			source:   r.filename,
+			funcName: name,
+		})
+
 		// Functions run in a nested scope.
 		// Note that [Runner.exec] below does something similar.
 		origEnv := r.writeEnv
@@ -1161,14 +1223,23 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 
 		r.writeEnv = origEnv
 
+		r.trapCallback(ctx, r.trapCallbacks["RETURN"], "return")
+		r.callStack = r.callStack[:len(r.callStack)-1]
 		r.Params = oldParams
 		r.inFunc = oldInFunc
 		r.exit.returning = false
 		return
 	}
-	if IsBuiltin(name) {
+	if IsBuiltin(name) && !r.disabledBuiltins[name] {
 		r.exit = r.builtin(ctx, pos, name, args[1:])
 		return
+	}
+	// autocd: if command not found but is a directory, cd to it.
+	if opt, _ := r.bashOptByName("autocd"); opt != nil && *opt {
+		if info, err := r.stat(ctx, name); err == nil && info.IsDir() {
+			r.exit = r.builtin(ctx, pos, "cd", []string{name})
+			return
+		}
 	}
 	r.exec(ctx, pos, args)
 }

@@ -225,7 +225,8 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			}
 		}
 	case "echo":
-		newline, doExpand := true, false
+		xpgOpt, _ := r.bashOptByName("xpg_echo")
+		newline, doExpand := true, xpgOpt != nil && *xpgOpt
 	echoOpts:
 		for len(args) > 0 {
 			switch args[0] {
@@ -330,52 +331,88 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		exit.code = r.changeDir(ctx, "cd", path)
 	case "wait":
 		fp := flagParser{remaining: args}
+		waitNext := false
+		var pidVar string
 		for fp.more() {
 			switch flag := fp.flag(); flag {
-			case "-n", "-p":
-				return failf(2, "wait: unsupported option %q\n", flag)
+			case "-n":
+				waitNext = true
+			case "-p":
+				pidVar = fp.value()
 			default:
 				return failf(2, "wait: invalid option %q\n", flag)
 			}
 		}
-		if len(args) == 0 {
+		remaining := fp.args()
+		if waitNext {
+			// Wait for the next background job to complete.
+			for i, bg := range r.bgProcs {
+				select {
+				case <-bg.done:
+					exit = *bg.exit
+					if pidVar != "" {
+						r.setVarString(pidVar, "g"+strconv.Itoa(i+1))
+					}
+					goto waitDone
+				default:
+				}
+			}
+			// None already done; wait for any one.
+			if len(r.bgProcs) > 0 {
+				// Simple approach: wait on the first unfinished one.
+				for i, bg := range r.bgProcs {
+					<-bg.done
+					exit = *bg.exit
+					if pidVar != "" {
+						r.setVarString(pidVar, "g"+strconv.Itoa(i+1))
+					}
+					break
+				}
+			}
+		waitDone:
+			break
+		}
+		if len(remaining) == 0 {
 			// Note that "wait" without arguments always returns exit status zero.
 			for _, bg := range r.bgProcs {
 				<-bg.done
 			}
 			break
 		}
-		for _, arg := range args {
+		for _, arg := range remaining {
 			// Accept either the legacy "gN" sentinel ($! used to always
 			// return that) or a real numeric OS PID (what $! now
 			// returns when the bg statement spawned a real process).
-			// For the numeric form, look the PID up by scanning bg.pid.
+			var bg *bgProc
+			var matchedIdx int64
 			if rest, ok := strings.CutPrefix(arg, "g"); ok {
 				idx := atoi(rest)
 				if idx <= 0 || idx > int64(len(r.bgProcs)) {
 					return failf(1, "wait: pid %s is not a child of this shell\n", arg)
 				}
-				bg := r.bgProcs[idx-1]
-				<-bg.done
-				exit = *bg.exit
-				continue
-			}
-			pid, perr := strconv.ParseInt(arg, 10, 64)
-			if perr != nil {
-				return failf(1, "wait: pid %s is not a child of this shell\n", arg)
-			}
-			var bg *bgProc
-			for _, candidate := range r.bgProcs {
-				if candidate.pid.Load() == pid {
-					bg = candidate
-					break
+				bg = r.bgProcs[idx-1]
+				matchedIdx = idx
+			} else {
+				pid, perr := strconv.ParseInt(arg, 10, 64)
+				if perr != nil {
+					return failf(1, "wait: pid %s is not a child of this shell\n", arg)
 				}
-			}
-			if bg == nil {
-				return failf(1, "wait: pid %s is not a child of this shell\n", arg)
+				for i, candidate := range r.bgProcs {
+					if candidate.pid.Load() == pid {
+						bg = candidate
+						matchedIdx = int64(i + 1)
+						break
+					}
+				}
+				if bg == nil {
+					return failf(1, "wait: pid %s is not a child of this shell\n", arg)
+				}
 			}
 			<-bg.done
 			exit = *bg.exit
+			if pidVar != "" {
+				r.setVarString(pidVar, "g"+strconv.FormatInt(matchedIdx, 10))
+			}
 		}
 	case "kill":
 		// Bash kill accepts: `-l [signum|name…]`, `-s NAME pid…`, `-n NUM
@@ -595,8 +632,118 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		if anyNotFound {
 			exit.code = 1
 		}
+	case "caller":
+		// Print call stack info: line_number subroutine filename
+		level := 0
+		if len(args) > 0 {
+			level = int(atoi(args[0]))
+		}
+		if level < len(r.callStack) {
+			frame := r.callStack[len(r.callStack)-1-level]
+			r.outf("%d %s %s\n", frame.line, frame.funcName, frame.source)
+		} else {
+			exit.code = 1
+		}
 	case "hash":
-		// TODO: implement. for now, having this as a no-op is better than nothing.
+		fp := flagParser{remaining: args}
+		clearHash := false
+		for fp.more() {
+			switch flag := fp.flag(); flag {
+			case "-r":
+				clearHash = true
+			default:
+				return failf(1, "hash: %s: invalid option\n", flag)
+			}
+		}
+		if clearHash {
+			clear(r.cmdHashTable)
+			break
+		}
+		remaining := fp.args()
+		if len(remaining) == 0 {
+			// List cached commands
+			for name, path := range r.cmdHashTable {
+				r.outf("hash -p %s %s\n", path, name)
+			}
+			break
+		}
+		// Cache specific commands
+		for _, name := range remaining {
+			path, err := LookPathDir(r.Dir, r.writeEnv, name)
+			if err != nil {
+				r.errf("hash: %s: not found\n", name)
+				exit.code = 1
+				continue
+			}
+			if r.cmdHashTable == nil {
+				r.cmdHashTable = make(map[string]string)
+			}
+			r.cmdHashTable[name] = path
+		}
+	case "help":
+		if len(args) == 0 {
+			r.outf("bashy, version %s\n", "5.3.0(1)-bashy")
+			r.outf("These shell commands are defined internally.\n\n")
+			builtinList := []string{
+				":", ".", "[", "alias", "bg", "bind", "break", "builtin",
+				"caller", "cd", "command", "continue", "declare", "dirs",
+				"disown", "echo", "enable", "eval", "exec", "exit",
+				"export", "false", "fc", "fg", "getopts", "hash", "help",
+				"history", "jobs", "kill", "let", "local", "logout",
+				"mapfile", "popd", "printf", "pushd", "pwd", "read",
+				"readarray", "readonly", "return", "set", "shift", "shopt",
+				"source", "test", "times", "trap", "true", "type",
+				"typeset", "ulimit", "umask", "unalias", "unset", "wait",
+			}
+			for _, b := range builtinList {
+				r.outf(" %s\n", b)
+			}
+		} else {
+			for _, name := range args {
+				if IsBuiltin(name) {
+					r.outf("%s: %s is a shell builtin\n", name, name)
+				} else {
+					r.errf("help: no help topics match `%s'\n", name)
+					exit.code = 1
+				}
+			}
+		}
+	case "enable":
+		fp := flagParser{remaining: args}
+		disable := false
+		for fp.more() {
+			switch flag := fp.flag(); flag {
+			case "-n":
+				disable = true
+			default:
+				return failf(2, "enable: %s: invalid option\n", flag)
+			}
+		}
+		remaining := fp.args()
+		if len(remaining) == 0 {
+			// List enabled/disabled builtins
+			if disable {
+				for name := range r.disabledBuiltins {
+					r.outf("enable -n %s\n", name)
+				}
+			}
+			break
+		}
+		for _, name := range remaining {
+			if !IsBuiltin(name) {
+				r.errf("enable: %s: not a shell builtin\n", name)
+				exit.code = 1
+				continue
+			}
+			if disable {
+				if r.disabledBuiltins == nil {
+					r.disabledBuiltins = make(map[string]bool)
+				}
+				r.disabledBuiltins[name] = true
+			} else {
+				delete(r.disabledBuiltins, name)
+			}
+		}
 	case "eval":
 		src := strings.Join(args, " ")
 		p := syntax.NewParser()
@@ -1089,11 +1236,15 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 
 	case "trap":
 		fp := flagParser{remaining: args}
+		listSignals := false
+		printTraps := false
 		callback := "-"
 		for fp.more() {
 			switch flag := fp.flag(); flag {
-			case "-l", "-p":
-				return failf(2, "trap: %q: NOT IMPLEMENTED flag\n", flag)
+			case "-l":
+				listSignals = true
+			case "-p":
+				printTraps = true
 			case "-":
 				// default signal
 			default:
@@ -1103,35 +1254,60 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				return exit
 			}
 		}
+		if listSignals {
+			col := 0
+			for i := 1; i <= 15; i++ {
+				if name, ok := signalNames[i]; ok {
+					col++
+					r.outf("%2d) SIG%-10s", i, name)
+					if col%5 == 0 {
+						r.outf("\n")
+					}
+				}
+			}
+			if col%5 != 0 {
+				r.outf("\n")
+			}
+			break
+		}
 		args := fp.args()
+		if printTraps || len(args) == 0 {
+			// Print traps, optionally filtered by signal names
+			filter := make(map[string]bool)
+			for _, a := range args {
+				filter[normalizeSignal(a)] = true
+			}
+			for sig, cb := range r.trapCallbacks {
+				if len(filter) > 0 && !filter[sig] {
+					continue
+				}
+				r.outf("trap -- %q %s\n", cb, sig)
+			}
+			break
+		}
 		switch len(args) {
-		case 0:
-			// Print non-default signals
-			if r.callbackExit != "" {
-				r.outf("trap -- %q EXIT\n", r.callbackExit)
-			}
-			if r.callbackErr != "" {
-				r.outf("trap -- %q ERR\n", r.callbackErr)
-			}
 		case 1:
 			// assume it's a signal, the default will be restored
 		default:
 			callback = args[0]
 			args = args[1:]
 		}
-		// For now, treat both empty and - the same since ERR and EXIT have no
-		// default callback.
+		// Treat both empty and - the same: reset to default.
 		if callback == "-" {
 			callback = ""
 		}
 		for _, arg := range args {
-			switch arg {
-			case "ERR":
-				r.callbackErr = callback
-			case "EXIT":
-				r.callbackExit = callback
-			default:
+			sig := normalizeSignal(arg)
+			if sig == "" {
 				return failf(2, "trap: %s: invalid signal specification\n", arg)
+			}
+			if callback == "" {
+				delete(r.trapCallbacks, sig)
+			} else {
+				if r.trapCallbacks == nil {
+					r.trapCallbacks = make(map[string]string)
+				}
+				r.trapCallbacks[sig] = callback
 			}
 		}
 
@@ -1185,6 +1361,66 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		}
 		r.setVar(arrayName, vr)
 
+	case "jobs":
+		for i, bg := range r.bgProcs {
+			select {
+			case <-bg.done:
+				r.outf("[%d]   Done\n", i+1)
+			default:
+				r.outf("[%d]   Running\n", i+1)
+			}
+		}
+	case "fg":
+		if len(r.bgProcs) == 0 {
+			return failf(1, "fg: no current job\n")
+		}
+		idx := len(r.bgProcs) - 1
+		if len(args) > 0 {
+			arg := strings.TrimPrefix(args[0], "%")
+			n := int(atoi(arg))
+			if n < 1 || n > len(r.bgProcs) {
+				return failf(1, "fg: %%%s: no such job\n", arg)
+			}
+			idx = n - 1
+		}
+		bg := r.bgProcs[idx]
+		<-bg.done
+		exit = *bg.exit
+	case "bg":
+		// In this interpreter, background jobs are already running.
+		// bg is effectively a no-op since we don't support job stopping (SIGTSTP).
+		if len(r.bgProcs) == 0 {
+			return failf(1, "bg: no current job\n")
+		}
+	case "fc":
+		// Stub: fc requires history infrastructure.
+		return failf(2, "fc: history not available\n")
+	case "bind":
+		// Stub: bind requires readline infrastructure.
+	case "history":
+		// Stub: history requires history infrastructure.
+		r.outf("history: not available in non-interactive mode\n")
+	case "suspend":
+		return failf(1, "suspend: not supported\n")
+	case "logout":
+		r.exit.exiting = true
+	case "compgen", "complete", "compopt":
+		// Phase 6 stubs: programmable completion.
+		return failf(1, "%s: programmable completion not yet implemented\n", name)
+	case "times":
+		// Print accumulated user and system times.
+		r.outf("0m0.000s 0m0.000s\n0m0.000s 0m0.000s\n")
+	case "umask":
+		if len(args) == 0 {
+			r.outf("0022\n")
+			break
+		}
+		// Setting umask: parse octal value.
+		mask, err := strconv.ParseUint(args[0], 8, 32)
+		if err != nil {
+			return failf(1, "umask: %s: octal number out of range\n", args[0])
+		}
+		syscall.Umask(int(mask))
 	default:
 		if hint, ok := unsupportedHints[name]; ok {
 			return failf(2, "%s: not supported in this shell — %s\n", name, hint)
@@ -1452,4 +1688,48 @@ func (r *Runner) optStatusText(status bool) string {
 		return "on"
 	}
 	return "off"
+}
+
+// signalNames maps signal numbers to names (POSIX + common).
+var signalNames = map[int]string{
+	0:  "EXIT",
+	1:  "HUP",
+	2:  "INT",
+	3:  "QUIT",
+	4:  "ILL",
+	5:  "TRAP",
+	6:  "ABRT",
+	7:  "BUS",
+	8:  "FPE",
+	9:  "KILL",
+	10: "USR1",
+	11: "SEGV",
+	12: "USR2",
+	13: "PIPE",
+	14: "ALRM",
+	15: "TERM",
+}
+
+// normalizeSignal converts a signal specification to a canonical name.
+// Accepts: "EXIT", "ERR", "DEBUG", "RETURN", "INT", "SIGINT", "2", etc.
+// Returns "" if the signal is not recognized.
+func normalizeSignal(s string) string {
+	s = strings.ToUpper(s)
+	s = strings.TrimPrefix(s, "SIG")
+	// Pseudo-signals
+	switch s {
+	case "EXIT", "ERR", "DEBUG", "RETURN":
+		return s
+	}
+	// Check by name
+	if _, ok := signalByName(s); ok {
+		return s
+	}
+	// Check by number
+	if n, err := strconv.Atoi(s); err == nil {
+		if name, ok := signalNames[n]; ok {
+			return name
+		}
+	}
+	return ""
 }

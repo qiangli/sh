@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strings"
 
 	"golang.org/x/term"
 
@@ -38,8 +39,14 @@ func (r *Runner) bashTest(ctx context.Context, expr syntax.TestExpr, classic boo
 					return "1"
 				}
 			} else { // [[
-				pattern := r.pattern(yw)
-				if match(pattern, str) == (x.Op != syntax.TsNoMatch) {
+				pat := r.pattern(yw)
+				matchStr := str
+				// nocasematch: case-insensitive pattern matching
+				if opt, _ := r.bashOptByName("nocasematch"); opt != nil && *opt {
+					pat = strings.ToLower(pat)
+					matchStr = strings.ToLower(matchStr)
+				}
+				if match(pat, matchStr) == (x.Op != syntax.TsNoMatch) {
 					return "1"
 				}
 			}
@@ -61,7 +68,11 @@ func (r *Runner) bashTest(ctx context.Context, expr syntax.TestExpr, classic boo
 func (r *Runner) binTest(ctx context.Context, op syntax.BinTestOperator, x, y string) bool {
 	switch op {
 	case syntax.TsReMatch:
-		re, err := regexp.Compile(y)
+		pat := y
+		if opt, _ := r.bashOptByName("nocasematch"); opt != nil && *opt {
+			pat = "(?i)" + pat
+		}
+		re, err := regexp.Compile(pat)
 		if err != nil {
 			r.exit.code = 2
 			return false

@@ -212,6 +212,27 @@ func (r *Runner) lookupVar(name string) expand.Variable {
 		vr.Kind = expand.Indexed
 		vr.ReadOnly = true
 		vr.List = []string{"5", "3", "0", "1", "release", "bashy"}
+	case "FUNCNAME":
+		vr.Kind = expand.Indexed
+		names := make([]string, len(r.callStack))
+		for i, f := range r.callStack {
+			names[len(r.callStack)-1-i] = f.funcName
+		}
+		vr.List = names
+	case "BASH_SOURCE":
+		vr.Kind = expand.Indexed
+		sources := make([]string, len(r.callStack))
+		for i, f := range r.callStack {
+			sources[len(r.callStack)-1-i] = f.source
+		}
+		vr.List = sources
+	case "BASH_LINENO":
+		vr.Kind = expand.Indexed
+		lines := make([]string, len(r.callStack))
+		for i, f := range r.callStack {
+			lines[len(r.callStack)-1-i] = strconv.FormatUint(uint64(f.line), 10)
+		}
+		vr.List = lines
 	case "DIRSTACK":
 		vr.Kind, vr.List = expand.Indexed, r.dirStack
 	case "0":

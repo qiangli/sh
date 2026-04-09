@@ -164,9 +164,18 @@ type Runner struct {
 	// apply to the current shell, and not just the command.
 	keepRedirs bool
 
-	// Fake signal callbacks
-	callbackErr  string
-	callbackExit string
+	// trapCallbacks maps signal/pseudo-signal names to trap handler code.
+	// Supported keys: EXIT, ERR, DEBUG, RETURN, and signal names like INT, TERM, etc.
+	trapCallbacks map[string]string
+
+	// callStack tracks function call frames for caller/BASH_SOURCE/BASH_LINENO/FUNCNAME.
+	callStack []callFrame
+
+	// cmdHashTable caches resolved command paths for the hash builtin.
+	cmdHashTable map[string]string
+
+	// disabledBuiltins tracks builtins disabled via "enable -n".
+	disabledBuiltins map[string]bool
 
 	// bgPidCallback, when non-nil, is invoked with the OS PID of every
 	// real process this runner spawns from a backgrounded statement
@@ -258,6 +267,13 @@ func (e *exitStatus) fromHandlerError(err error) {
 	} else {
 		e.fatal(err) // handler's custom fatal error
 	}
+}
+
+// callFrame records a function call for the call stack.
+type callFrame struct {
+	line     uint
+	source   string
+	funcName string
 }
 
 type bgProc struct {
@@ -750,7 +766,7 @@ var bashOptsTable = [...]bashOpt{
 	},
 	// unsupported options, sorted alphabetically by name
 	{name: "assoc_expand_once"},
-	{name: "autocd"},
+	{name: "autocd", supported: true},
 	{name: "cdable_vars"},
 	{name: "cdspell"},
 	{name: "checkhash"},
@@ -783,12 +799,12 @@ var bashOptsTable = [...]bashOpt{
 		name:         "extquote",
 		defaultState: true,
 	},
-	{name: "failglob"},
+	{name: "failglob", supported: true},
 	{
 		name:         "force_fignore",
 		defaultState: true,
 	},
-	{name: "globasciiranges"},
+	{name: "globasciiranges", supported: true},
 	{name: "gnu_errfmt"},
 	{name: "histappend"},
 	{name: "histreedit"},
@@ -797,7 +813,7 @@ var bashOptsTable = [...]bashOpt{
 		name:         "hostcomplete",
 		defaultState: true,
 	},
-	{name: "huponexit"},
+	{name: "huponexit", supported: true},
 	{
 		name:         "inherit_errexit",
 		defaultState: true,
@@ -806,14 +822,14 @@ var bashOptsTable = [...]bashOpt{
 		name:         "interactive_comments",
 		defaultState: true,
 	},
-	{name: "lastpipe"},
+	{name: "lastpipe", supported: true},
 	{name: "lithist"},
 	{name: "localvar_inherit"},
 	{name: "localvar_unset"},
 	{name: "login_shell"},
 	{name: "mailwarn"},
 	{name: "no_empty_cmd_completion"},
-	{name: "nocasematch"},
+	{name: "nocasematch", supported: true},
 	{
 		name:         "progcomp",
 		defaultState: true,
@@ -829,7 +845,7 @@ var bashOptsTable = [...]bashOpt{
 		name:         "sourcepath",
 		defaultState: true,
 	},
-	{name: "xpg_echo"},
+	{name: "xpg_echo", supported: true},
 }
 
 // To access the shell options arrays without a linear search when we
@@ -1038,7 +1054,7 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 	default:
 		return fmt.Errorf("node can only be File, Stmt, or Command: %T", node)
 	}
-	r.trapCallback(ctx, r.callbackExit, "exit")
+	r.trapCallback(ctx, r.trapCallbacks["EXIT"], "exit")
 	maps.Insert(r.Vars, r.writeEnv.Each)
 	// Return the first of: a fatal error, a non-fatal handler error, or the exit code.
 	if err := r.exit.err; err != nil {
@@ -1118,6 +1134,7 @@ func (r *Runner) subshell(background bool) *Runner {
 	r2.Funcs = maps.Clone(r.Funcs)
 	r2.Vars = make(map[string]expand.Variable)
 	r2.alias = maps.Clone(r.alias)
+	r2.trapCallbacks = maps.Clone(r.trapCallbacks)
 
 	r2.dirStack = append(r2.dirBootstrap[:0], r.dirStack...)
 	r2.fillExpandConfig(r.ectx)
