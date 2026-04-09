@@ -6,3 +6,9 @@ suppressions/
 crashers/
 corpus/
 vendor/
+
+#
+external/bash-5.3
+gosh
+shfmt
+bin/

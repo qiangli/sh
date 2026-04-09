@@ -175,6 +175,12 @@ type Runner struct {
 	// `fg`/`bg`/`jobs` builtins are unimplemented because subshells
 	// here are goroutines, not OS processes.
 	bgPidCallback func(pid int)
+
+	// startTime records when the shell was created, for the SECONDS variable.
+	startTime time.Time
+
+	// subshellLevel tracks the nesting depth of subshells, for BASH_SUBSHELL.
+	subshellLevel int
 }
 
 // exitStatus holds the state of the shell after running one command.
@@ -908,6 +914,9 @@ func (r *Runner) Reset() {
 
 		dirStack: r.dirStack[:0],
 		usedNew:  r.usedNew,
+
+		startTime:    r.startTime,
+		subshellLevel: r.subshellLevel,
 	}
 	// Ensure we stop referencing any pointers before we reuse bgProcs.
 	clear(r.bgProcs)
@@ -951,6 +960,9 @@ func (r *Runner) Reset() {
 	r.setVarString("PWD", r.Dir)
 	r.setVarString("IFS", " \t\n")
 	r.setVarString("OPTIND", "1")
+	if r.startTime.IsZero() {
+		r.startTime = time.Now()
+	}
 
 	r.dirStack = append(r.dirStack, r.Dir)
 
@@ -1082,6 +1094,9 @@ func (r *Runner) subshell(background bool) *Runner {
 		bgPidCallback:  r.bgPidCallback,
 
 		origStdout: r.origStdout, // used for process substitutions
+
+		startTime:    r.startTime,
+		subshellLevel: r.subshellLevel + 1,
 	}
 	r2.writeEnv = newOverlayEnviron(r.writeEnv, background)
 	// Funcs are copied, since they might be modified.

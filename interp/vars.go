@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/syntax"
@@ -196,6 +197,21 @@ func (r *Runner) lookupVar(name string) expand.Variable {
 		cryptorand.Read(p[:])
 		n := binary.NativeEndian.Uint32(p[:])
 		vr.Kind, vr.Str = expand.String, strconv.FormatUint(uint64(n), 10)
+	case "BASHPID":
+		vr.Kind, vr.Str = expand.String, strconv.Itoa(os.Getpid())
+	case "SECONDS":
+		vr.Kind, vr.Str = expand.String, strconv.FormatInt(int64(time.Since(r.startTime).Seconds()), 10)
+	case "EPOCHSECONDS":
+		vr.Kind, vr.Str = expand.String, strconv.FormatInt(time.Now().Unix(), 10)
+	case "EPOCHREALTIME":
+		now := time.Now()
+		vr.Kind, vr.Str = expand.String, fmt.Sprintf("%d.%06d", now.Unix(), now.Nanosecond()/1000)
+	case "BASH_SUBSHELL":
+		vr.Kind, vr.Str = expand.String, strconv.Itoa(r.subshellLevel)
+	case "BASH_VERSINFO":
+		vr.Kind = expand.Indexed
+		vr.ReadOnly = true
+		vr.List = []string{"5", "3", "0", "1", "release", "bashy"}
 	case "DIRSTACK":
 		vr.Kind, vr.List = expand.Indexed, r.dirStack
 	case "0":
