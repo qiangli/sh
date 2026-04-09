@@ -988,7 +988,8 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		silent := false
 		readArray := false
 		var timeout time.Duration
-		timeoutSet := false
+		nchars := 0
+		delim := "\n"
 		fp := flagParser{remaining: args}
 		for fp.more() {
 			switch flag := fp.flag(); flag {
@@ -1004,16 +1005,37 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					return failf(2, "read: -p: option requires an argument\n")
 				}
 			case "-t":
-				s := fp.value()
-				if s == "" {
+				val := fp.value()
+				if val == "" {
 					return failf(2, "read: -t: option requires an argument\n")
 				}
-				secs, err := strconv.ParseFloat(s, 64)
+				secs, err := strconv.ParseFloat(val, 64)
 				if err != nil || secs < 0 {
-					return failf(2, "read: %s: invalid timeout specification\n", s)
+					return failf(2, "read: %s: invalid timeout specification\n", val)
 				}
 				timeout = time.Duration(secs * float64(time.Second))
-				timeoutSet = true
+			case "-n", "-N":
+				val := fp.value()
+				n, err := strconv.Atoi(val)
+				if err != nil || n < 0 {
+					return failf(2, "read: %s: invalid count\n", val)
+				}
+				nchars = n
+			case "-d":
+				d := fp.value()
+				if d == "" {
+					delim = "\x00"
+				} else {
+					delim = d[:1]
+				}
+			case "-e", "-i":
+				// -e (readline) and -i (initial text) require readline integration.
+				// Accept but ignore for now.
+				if flag == "-i" {
+					fp.value() // consume the argument
+				}
+			case "-u":
+				fp.value() // consume fd argument, ignore for now
 			default:
 				return failf(2, "read: invalid option %q\n", flag)
 			}
@@ -1030,20 +1052,34 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			r.out(prompt)
 		}
 
-		var line []byte
-		var err error
 		readCtx := ctx
-		if timeoutSet {
+		if timeout > 0 {
 			var cancel context.CancelFunc
 			readCtx, cancel = context.WithTimeout(ctx, timeout)
 			defer cancel()
 		}
-		if silent {
+
+		var line []byte
+		var err error
+		if nchars > 0 {
+			// Read exactly nchars bytes.
+			buf := make([]byte, nchars)
+			n, readErr := r.stdin.Read(buf)
+			line = buf[:n]
+			err = readErr
+		} else if silent {
 			// Note that on Windows, syscall.Stdin is of type uintptr.
 			line, err = term.ReadPassword(int(syscall.Stdin))
 		} else {
 			line, err = r.readLine(readCtx, raw)
 		}
+		// Handle custom delimiter: if delim != "\n", trim at the delimiter.
+		if delim != "\n" && len(line) > 0 {
+			if idx := strings.IndexByte(string(line), delim[0]); idx >= 0 {
+				line = line[:idx]
+			}
+		}
+		_ = delim
 		if readArray {
 			// read -a arrayname: split line into fields and assign to indexed array.
 			arrayName := shellReplyVar
@@ -1075,7 +1111,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		// We can get data back from readLine and an error at the same time, so
 		// check err after we process the data.
 		if err != nil {
-			if timeoutSet && errors.Is(readCtx.Err(), context.DeadlineExceeded) {
+			if timeout > 0 && errors.Is(readCtx.Err(), context.DeadlineExceeded) {
 				exit.code = 142
 				return exit
 			}

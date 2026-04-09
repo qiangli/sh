@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"golang.org/x/term"
@@ -21,13 +22,12 @@ import (
 )
 
 var (
-	command = flag.String("c", "", "command to be executed")
-	version = flag.Bool("version", false, "print version and exit")
-	posix   = flag.Bool("posix", false, "POSIX mode")
-
-	// Flags accepted for compatibility; not yet implemented.
-	_ = flag.Bool("norc", false, "do not read ~/.bashyrc")
-	_ = flag.Bool("noprofile", false, "do not read /etc/profile or ~/.bashy_profile")
+	command   = flag.String("c", "", "command to be executed")
+	version   = flag.Bool("version", false, "print version and exit")
+	posix     = flag.Bool("posix", false, "POSIX mode")
+	norc      = flag.Bool("norc", false, "do not read ~/.bashyrc")
+	noprofile = flag.Bool("noprofile", false, "do not read /etc/profile or ~/.bashy_profile")
+	login     = flag.Bool("login", false, "act as a login shell")
 )
 
 func main() {
@@ -48,8 +48,17 @@ func main() {
 }
 
 func newRunner() (*interp.Runner, error) {
-	// Build the initial environment with bashy identity variables.
-	env := expand.ListEnviron(append(os.Environ(), bashVersionVars()...)...)
+	// Increment SHLVL from parent environment.
+	shlvl := 0
+	if s := os.Getenv("SHLVL"); s != "" {
+		fmt.Sscanf(s, "%d", &shlvl)
+	}
+	shlvl++
+
+	envVars := append(os.Environ(), bashVersionVars()...)
+	envVars = append(envVars, fmt.Sprintf("SHLVL=%d", shlvl))
+
+	env := expand.ListEnviron(envVars...)
 	var r *interp.Runner
 	var err error
 	r, err = interp.New(
@@ -69,6 +78,59 @@ func newRunner() (*interp.Runner, error) {
 	return r, nil
 }
 
+// isLoginShell returns true if bashy was invoked as a login shell.
+func isLoginShell() bool {
+	if *login {
+		return true
+	}
+	// Login shell if argv[0] starts with '-'
+	return len(os.Args) > 0 && strings.HasPrefix(os.Args[0], "-")
+}
+
+// sourceIfExists sources a file if it exists, ignoring errors.
+func sourceIfExists(r *interp.Runner, path string) {
+	f, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	f.Close()
+	run(r, nil, path) // use runPath logic
+	runPath(r, path)
+}
+
+// loadStartupFiles sources the appropriate startup files.
+func loadStartupFiles(r *interp.Runner, interactive bool) {
+	home, _ := os.UserHomeDir()
+
+	if isLoginShell() {
+		if !*noprofile {
+			sourceIfExists(r, "/etc/profile")
+			// Source first of: ~/.bash_profile, ~/.bash_login, ~/.profile
+			for _, name := range []string{".bash_profile", ".bash_login", ".profile"} {
+				path := filepath.Join(home, name)
+				if _, err := os.Stat(path); err == nil {
+					sourceIfExists(r, path)
+					break
+				}
+			}
+		}
+	} else if interactive {
+		if !*norc && home != "" {
+			// Try ~/.bashyrc first, fall back to ~/.bashrc
+			rc := filepath.Join(home, ".bashyrc")
+			if _, err := os.Stat(rc); err != nil {
+				rc = filepath.Join(home, ".bashrc")
+			}
+			sourceIfExists(r, rc)
+		}
+	} else {
+		// Non-interactive: source $BASH_ENV
+		if bashEnv := os.Getenv("BASH_ENV"); bashEnv != "" {
+			sourceIfExists(r, bashEnv)
+		}
+	}
+}
+
 func runAll() error {
 	r, err := newRunner()
 	if err != nil {
@@ -76,14 +138,18 @@ func runAll() error {
 	}
 
 	if *command != "" {
+		loadStartupFiles(r, false)
 		return run(r, strings.NewReader(*command), "")
 	}
 	if flag.NArg() == 0 {
 		if term.IsTerminal(int(os.Stdin.Fd())) {
+			loadStartupFiles(r, true)
 			return runInteractive(r, os.Stdin, os.Stdout, os.Stderr)
 		}
+		loadStartupFiles(r, false)
 		return run(r, os.Stdin, "")
 	}
+	loadStartupFiles(r, false)
 	for _, path := range flag.Args() {
 		if err := runPath(r, path); err != nil {
 			return err
@@ -93,6 +159,9 @@ func runAll() error {
 }
 
 func run(r *interp.Runner, reader io.Reader, name string) error {
+	if reader == nil {
+		return nil
+	}
 	lang := syntax.LangBash
 	if *posix {
 		lang = syntax.LangPOSIX

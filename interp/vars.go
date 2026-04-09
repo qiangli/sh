@@ -208,6 +208,33 @@ func (r *Runner) lookupVar(name string) expand.Variable {
 		vr.Kind, vr.Str = expand.String, fmt.Sprintf("%d.%06d", now.Unix(), now.Nanosecond()/1000)
 	case "BASH_SUBSHELL":
 		vr.Kind, vr.Str = expand.String, strconv.Itoa(r.subshellLevel)
+	case "HOSTNAME":
+		h, _ := os.Hostname()
+		vr.Kind, vr.Str = expand.String, h
+	case "HOSTTYPE":
+		vr.Kind, vr.Str = expand.String, runtime.GOARCH
+	case "MACHTYPE":
+		vr.Kind, vr.Str = expand.String, runtime.GOARCH+"-unknown-"+runtime.GOOS
+	case "OSTYPE":
+		vr.Kind, vr.Str = expand.String, runtime.GOOS
+	case "SHELLOPTS":
+		var opts []string
+		for i, opt := range &posixOptsTable {
+			if r.opts[i] {
+				opts = append(opts, opt.name)
+			}
+		}
+		vr.Kind, vr.Str = expand.String, strings.Join(opts, ":")
+		vr.ReadOnly = true
+	case "BASHOPTS":
+		var opts []string
+		for i, opt := range bashOptsTable {
+			if r.opts[len(posixOptsTable)+i] {
+				opts = append(opts, opt.name)
+			}
+		}
+		vr.Kind, vr.Str = expand.String, strings.Join(opts, ":")
+		vr.ReadOnly = true
 	case "BASH_VERSINFO":
 		vr.Kind = expand.Indexed
 		vr.ReadOnly = true

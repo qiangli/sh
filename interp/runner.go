@@ -65,6 +65,10 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 			}
 			r2 := r.subshell(false)
 			r2.stdout = w
+			// inherit_errexit: command substitutions inherit the errexit option.
+			if opt, _ := r.bashOptByName("inherit_errexit"); opt != nil && *opt {
+				r2.opts[optErrExit] = r.opts[optErrExit]
+			}
 			r2.stmts(ctx, cs.Stmts)
 			r2.exit.exiting = false // subshells don't exit the parent shell
 			r.lastExpandExit = r2.exit
@@ -1068,17 +1072,29 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 	}
 
 	orig := &r.stdout
+	var namedFDVar string // non-empty if this is a {varname} redirect
 	if rd.N != nil {
-		switch rd.N.Value {
-		case "0":
-			// Note that the input redirects below always use stdin (0)
-			// because we don't support anything else right now.
-		case "1":
-			// The default for the output redirects below.
-		case "2":
-			orig = &r.stderr
-		default:
-			return nil, fmt.Errorf("unsupported redirect fd: %v", rd.N.Value)
+		val := rd.N.Value
+		// Named FD redirection: {varname}> or {varname}<
+		if strings.HasPrefix(val, "{") && strings.HasSuffix(val, "}") {
+			namedFDVar = val[1 : len(val)-1]
+			// Named FD close: {varname}>&- or {varname}<&-
+			// For named FD redirects, we handle after opening the file below.
+		} else {
+			switch val {
+			case "0":
+				// Note that the input redirects below always use stdin (0)
+				// because we don't support anything else right now.
+			case "1":
+				// The default for the output redirects below.
+			case "2":
+				orig = &r.stderr
+			default:
+				// Try to use as a numeric FD for dup operations.
+				if _, err := strconv.Atoi(val); err != nil {
+					return nil, fmt.Errorf("unsupported redirect fd: %v", val)
+				}
+			}
 		}
 	}
 	arg := r.literal(rd.Word)
@@ -1161,6 +1177,11 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 		r.stderr = f
 	default:
 		return nil, fmt.Errorf("unhandled redirect op: %v", rd.Op)
+	}
+	// For named FD redirections, store the FD number in the variable.
+	if namedFDVar != "" {
+		// Best effort: try to get the underlying fd, otherwise assign a synthetic number.
+		r.setVarString(namedFDVar, "10") // TODO: allocate real FD numbers
 	}
 	return f, nil
 }

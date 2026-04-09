@@ -10,6 +10,6 @@ vendor/
 #
 external/bash-5.3
 bin/
-gosh
-shfmt
-bashy
+/gosh
+/shfmt
+/bashy

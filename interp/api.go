@@ -817,6 +817,7 @@ var bashOptsTable = [...]bashOpt{
 	{
 		name:         "inherit_errexit",
 		defaultState: true,
+		supported:    true,
 	},
 	{
 		name:         "interactive_comments",
@@ -844,6 +845,7 @@ var bashOptsTable = [...]bashOpt{
 	{
 		name:         "sourcepath",
 		defaultState: true,
+		supported:    true,
 	},
 	{name: "xpg_echo", supported: true},
 }
