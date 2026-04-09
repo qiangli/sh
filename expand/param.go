@@ -167,9 +167,15 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 		slices.Sort(strs)
 		str = strings.Join(strs, " ")
 	case pe.Width:
-		return "", fmt.Errorf("unsupported")
+		// mksh's ${%var}: character width of the string value.
+		str = strconv.Itoa(utf8.RuneCountInString(str))
 	case pe.IsSet:
-		return "", fmt.Errorf("unsupported")
+		// Zsh's ${+var}: 1 if set, 0 if unset.
+		if vr.IsSet() {
+			str = "1"
+		} else {
+			str = "0"
+		}
 	case pe.Slice != nil:
 		if callVarInd {
 			slicePos := func(n int) int {
@@ -335,26 +341,110 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 				} else {
 					str = fmt.Sprintf("declare -%s %s=%s", flags, name, quoted)
 				}
-			case "P":
-				// TODO: implement prompt expansion (\u, \h, \w, etc.).
 			case "U":
 				str = strings.ToUpper(str)
 			case "u":
-				rs := []rune(str)
-				if len(rs) > 0 {
-					rs[0] = unicode.ToUpper(rs[0])
-					str = string(rs)
+				if str != "" {
+					r, size := utf8.DecodeRuneInString(str)
+					str = string(unicode.ToUpper(r)) + str[size:]
 				}
 			case "L":
 				str = strings.ToLower(str)
-			case "K", "k":
-				// TODO: implement, like @A but listing keys for assoc arrays.
+			case "K":
+				str = cfg.paramAtK(vr, name)
+			case "k":
+				str = cfg.paramAtK(vr, name)
+			case "P":
+				str = cfg.expandPrompt(str)
 			default:
-				panic(fmt.Sprintf("unexpected @%s param expansion", arg))
+				return "", fmt.Errorf("unexpected @%s param expansion", arg)
 			}
 		}
 	}
 	return str, nil
+}
+
+// paramAtK implements ${var@K} and ${var@k}, producing quoted key-value pairs
+// for arrays. For indexed arrays: "0 val0 1 val1 ...".
+// For associative arrays: "key1 val1 key2 val2 ...".
+// For plain strings, returns the value unchanged.
+func (cfg *Config) paramAtK(vr Variable, name string) string {
+	switch vr.Kind {
+	case Indexed:
+		var parts []string
+		for i, v := range vr.List {
+			if v != "" {
+				quoted, err := syntax.Quote(v, syntax.LangBash)
+				if err != nil {
+					quoted = v
+				}
+				parts = append(parts, strconv.Itoa(i)+" "+quoted)
+			}
+		}
+		return strings.Join(parts, " ")
+	case Associative:
+		keys := slices.Sorted(maps.Keys(vr.Map))
+		var parts []string
+		for _, k := range keys {
+			v := vr.Map[k]
+			quotedK, err := syntax.Quote(k, syntax.LangBash)
+			if err != nil {
+				quotedK = k
+			}
+			quotedV, err := syntax.Quote(v, syntax.LangBash)
+			if err != nil {
+				quotedV = v
+			}
+			parts = append(parts, quotedK+" "+quotedV)
+		}
+		return strings.Join(parts, " ")
+	default:
+		return vr.String()
+	}
+}
+
+// expandPrompt implements ${var@P} by delegating to [Config.PromptExpand].
+// If PromptExpand is not set, it performs basic prompt escape expansion.
+func (cfg *Config) expandPrompt(s string) string {
+	if cfg.PromptExpand != nil {
+		return cfg.PromptExpand(s)
+	}
+	return defaultPromptExpand(s)
+}
+
+// defaultPromptExpand handles a subset of Bash prompt escape sequences.
+func defaultPromptExpand(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] != '\\' {
+			b.WriteByte(s[i])
+			continue
+		}
+		i++
+		if i >= len(s) {
+			b.WriteByte('\\')
+			break
+		}
+		switch s[i] {
+		case 'a':
+			b.WriteByte('\a')
+		case 'e':
+			b.WriteByte('\x1b')
+		case 'n':
+			b.WriteByte('\n')
+		case 'r':
+			b.WriteByte('\r')
+		case '\\':
+			b.WriteByte('\\')
+		case '[', ']':
+			// Non-printing sequence markers; ignore.
+		default:
+			// For unrecognized sequences, preserve them.
+			b.WriteByte('\\')
+			b.WriteByte(s[i])
+		}
+	}
+	return b.String()
 }
 
 func removePattern(str, pat string, fromEnd, shortest bool) string {

@@ -176,6 +176,10 @@ type Runner struct {
 	// here are goroutines, not OS processes.
 	bgPidCallback func(pid int)
 
+	// promptExpand is called by ${var@P} to expand prompt escape sequences.
+	// If nil, a default basic expansion is used.
+	promptExpand func(string) string
+
 	// startTime records when the shell was created, for the SECONDS variable.
 	startTime time.Time
 
@@ -405,6 +409,15 @@ func Dir(path string) RunnerOption {
 			return fmt.Errorf("%s is not a directory", path)
 		}
 		r.Dir = path
+		return nil
+	}
+}
+
+// PromptExpand sets a function to expand prompt escape sequences for ${var@P}.
+// If not set, a basic default expansion is used.
+func PromptExpand(fn func(string) string) RunnerOption {
+	return func(r *Runner) error {
+		r.promptExpand = fn
 		return nil
 	}
 }
@@ -915,6 +928,7 @@ func (r *Runner) Reset() {
 		dirStack: r.dirStack[:0],
 		usedNew:  r.usedNew,
 
+		promptExpand:  r.promptExpand,
 		startTime:    r.startTime,
 		subshellLevel: r.subshellLevel,
 	}
@@ -1095,6 +1109,7 @@ func (r *Runner) subshell(background bool) *Runner {
 
 		origStdout: r.origStdout, // used for process substitutions
 
+		promptExpand:  r.promptExpand,
 		startTime:    r.startTime,
 		subshellLevel: r.subshellLevel + 1,
 	}

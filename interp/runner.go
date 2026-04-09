@@ -158,6 +158,7 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 			return path, nil
 		},
 	}
+	r.ecfg.PromptExpand = r.promptExpand
 	r.updateExpandOpts()
 }
 

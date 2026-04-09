@@ -87,6 +87,11 @@ type Config struct {
 	// pattern matching features when performing pathname expansion (globbing).
 	ExtGlob bool
 
+	// PromptExpand is called by the ${var@P} expansion to expand prompt
+	// escape sequences such as \u, \h, \w. If nil, ${var@P} returns the
+	// string unchanged.
+	PromptExpand func(string) string
+
 	bufferAlloc strings.Builder
 	fieldAlloc  [4]fieldPart
 	fieldsAlloc [4][]fieldPart

@@ -50,10 +50,18 @@ func main() {
 func newRunner() (*interp.Runner, error) {
 	// Build the initial environment with bashy identity variables.
 	env := expand.ListEnviron(append(os.Environ(), bashVersionVars()...)...)
-	r, err := interp.New(
+	var r *interp.Runner
+	var err error
+	r, err = interp.New(
 		interp.Interactive(true),
 		interp.StdIO(os.Stdin, os.Stdout, os.Stderr),
 		interp.Env(env),
+		interp.PromptExpand(func(s string) string {
+			envGet := func(name string) string {
+				return r.Env.Get(name).String()
+			}
+			return expandPrompt(s, envGet, 0, 0)
+		}),
 	)
 	if err != nil {
 		return nil, err
