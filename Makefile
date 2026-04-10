@@ -22,6 +22,7 @@ test-bash: build test-bash-helpers
 	@echo "Running bash 5.3 test suite against bashy..."
 	@cd $(BASH_TESTS_DIR) && \
 		export THIS_SH=$$(cd ../../.. && pwd)/$(BASHY) && \
+		export PATH=$$PWD:$$PATH && \
 		export BASH_TSTOUT=$${TMPDIR:-/tmp}/bashy-tstout-$$$$ && \
 		passed=0 && failed=0 && skipped=0 && \
 		for runner in run-*; do \
