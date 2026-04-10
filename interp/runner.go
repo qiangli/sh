@@ -765,7 +765,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				switch flag := fp.flag(); flag {
 				case "-x", "-r":
 					modes = append(modes, flag)
-				case "-a", "-A", "-n":
+				case "-a", "-A", "-n", "-i":
 					valType = flag
 				case "-g":
 					global = true

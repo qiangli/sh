@@ -229,14 +229,30 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		newline, doExpand := true, xpgOpt != nil && *xpgOpt
 	echoOpts:
 		for len(args) > 0 {
-			switch args[0] {
-			case "-n":
-				newline = false
-			case "-e":
-				doExpand = true
-			case "-E": // default
-			default:
+			arg := args[0]
+			if len(arg) < 2 || arg[0] != '-' {
 				break echoOpts
+			}
+			// Validate all chars are echo flags (n, e, E).
+			valid := true
+			for _, c := range arg[1:] {
+				if c != 'n' && c != 'e' && c != 'E' {
+					valid = false
+					break
+				}
+			}
+			if !valid {
+				break echoOpts
+			}
+			for _, c := range arg[1:] {
+				switch c {
+				case 'n':
+					newline = false
+				case 'e':
+					doExpand = true
+				case 'E':
+					doExpand = false
+				}
 			}
 			args = args[1:]
 		}
@@ -1457,6 +1473,64 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			return failf(1, "umask: %s: octal number out of range\n", args[0])
 		}
 		syscall.Umask(int(mask))
+	case "export":
+		// Handle "export" when used as a simple command (e.g., IFS=: export x).
+		for _, arg := range args {
+			eqIdx := strings.IndexByte(arg, '=')
+			if eqIdx >= 0 {
+				name := arg[:eqIdx]
+				val := arg[eqIdx+1:]
+				r.setVar(name, expand.Variable{Set: true, Kind: expand.String, Str: val, Exported: true})
+			} else {
+				vr := r.lookupVar(arg)
+				vr.Exported = true
+				r.setVar(arg, vr)
+			}
+		}
+	case "readonly":
+		for _, arg := range args {
+			eqIdx := strings.IndexByte(arg, '=')
+			if eqIdx >= 0 {
+				name := arg[:eqIdx]
+				val := arg[eqIdx+1:]
+				r.setVar(name, expand.Variable{Set: true, Kind: expand.String, Str: val, ReadOnly: true})
+			} else {
+				vr := r.lookupVar(arg)
+				vr.ReadOnly = true
+				r.setVar(arg, vr)
+			}
+		}
+	case "local":
+		if !r.inFunc {
+			return failf(1, "local: can only be used in a function\n")
+		}
+		for _, arg := range args {
+			eqIdx := strings.IndexByte(arg, '=')
+			if eqIdx >= 0 {
+				name := arg[:eqIdx]
+				val := arg[eqIdx+1:]
+				r.setVar(name, expand.Variable{Set: true, Kind: expand.String, Str: val, Local: true})
+			} else {
+				vr := r.lookupVar(arg)
+				vr.Local = true
+				r.setVar(arg, vr)
+			}
+		}
+	case "declare", "typeset":
+		// Simple declare when called as a command (not keyword).
+		// Keyword form is handled by DeclClause in runner.go.
+		for _, arg := range args {
+			eqIdx := strings.IndexByte(arg, '=')
+			if eqIdx >= 0 {
+				name := arg[:eqIdx]
+				val := arg[eqIdx+1:]
+				vr := expand.Variable{Set: true, Kind: expand.String, Str: val}
+				if r.inFunc {
+					vr.Local = true
+				}
+				r.setVar(name, vr)
+			}
+		}
 	default:
 		if hint, ok := unsupportedHints[name]; ok {
 			return failf(2, "%s: not supported in this shell — %s\n", name, hint)

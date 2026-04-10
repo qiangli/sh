@@ -358,14 +358,14 @@ func formatInto(sb *strings.Builder, format string, args []string) (int, error) 
 				}
 				sb.WriteByte(b)
 				fmts = nil
-			case '+', '-', ' ':
+			case '+', '-', ' ', '#', '\'':
 				if len(fmts) > 1 {
 					return 0, fmt.Errorf("invalid format char: %c", c)
 				}
 				fmts = append(fmts, c)
-			case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
+			case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '.':
 				fmts = append(fmts, c)
-			case 's', 'b', 'd', 'i', 'u', 'o', 'x':
+			case 's', 'b', 'd', 'i', 'u', 'o', 'x', 'X', 'f', 'e', 'E', 'g', 'G':
 				arg := ""
 				if len(args) > 0 {
 					arg, args = args[0], args[1:]
@@ -380,14 +380,19 @@ func formatInto(sb *strings.Builder, format string, args []string) (int, error) 
 						return 0, err
 					}
 				} else if c != 's' {
-					n, _ := strconv.ParseInt(arg, 0, 0)
-					if c == 'i' || c == 'd' {
-						farg = int(n)
+					if c == 'f' || c == 'e' || c == 'E' || c == 'g' || c == 'G' {
+						f, _ := strconv.ParseFloat(arg, 64)
+						farg = f
 					} else {
-						farg = uint(n)
-					}
-					if c == 'i' || c == 'u' {
-						c = 'd'
+						n, _ := strconv.ParseInt(arg, 0, 0)
+						if c == 'i' || c == 'd' {
+							farg = int(n)
+						} else {
+							farg = uint(n)
+						}
+						if c == 'i' || c == 'u' {
+							c = 'd'
+						}
 					}
 				} else {
 					farg = arg
