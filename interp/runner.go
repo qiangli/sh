@@ -757,6 +757,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		case "nameref":
 			valType = "-n"
 		}
+		declHadNames := false
 	assignLoop:
 		for as := range r.flattenAssigns(cm.Args) {
 			fp := flagParser{remaining: []string{as.Name.Value}}
@@ -768,7 +769,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 					valType = flag
 				case "-g":
 					global = true
-				case "-f", "-p":
+				case "-f", "-F", "-p":
 					declQuery = flag
 				default:
 					r.errf("declare: invalid option %q\n", flag)
@@ -777,11 +778,21 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				}
 				continue assignLoop
 			}
+			declHadNames = true
 			name := as.Name.Value
 			if !syntax.ValidName(name) {
 				r.errf("declare: invalid name %q\n", name)
 				r.exit.code = 1
 				return
+			}
+			if declQuery == "-F" {
+				// declare -F name: print just function name.
+				if body := r.Funcs[name]; body != nil {
+					r.outf("declare -f %s\n", name)
+				} else {
+					r.exit.code = 1
+				}
+				continue
 			}
 			if declQuery == "-f" {
 				// declare -f name: print function definition.
@@ -859,6 +870,20 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				}
 			}
 			r.setVar(name, vr)
+		}
+		// Handle declare -F/-f with no arguments: list all functions.
+		if !declHadNames && declQuery == "-F" {
+			for name := range r.Funcs {
+				r.outf("declare -f %s\n", name)
+			}
+		} else if !declHadNames && declQuery == "-f" {
+			for name, body := range r.Funcs {
+				r.outf("%s()\n", name)
+				printer := syntax.NewPrinter()
+				var buf bytes.Buffer
+				printer.Print(&buf, body)
+				r.outf("%s\n", buf.String())
+			}
 		}
 	case *syntax.TimeClause:
 		start := time.Now()

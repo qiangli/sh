@@ -779,6 +779,12 @@ func (p *Parser) paramToken(r rune) token {
 			return dblComma
 		}
 		return comma
+	case '~':
+		if p.rune() == '~' {
+			p.rune()
+			return peDblTilde
+		}
+		return peTilde
 	case '@':
 		p.rune()
 		return at

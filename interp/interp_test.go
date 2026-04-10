@@ -2469,10 +2469,12 @@ var runTests = []runTest{
 		`set -o allexport
 set +o errexit
 set +o noexec
+set +o noclobber
 set +o noglob
 set +o nounset
 set +o xtrace
 set +o pipefail
+set +o posix
  #IGNORE`,
 	},
 	{`set - foobar; echo $@; set -; echo $@`, "foobar\nfoobar\n"},

@@ -123,6 +123,8 @@ const (
 	dblCaret // ^^
 	comma    // ,
 	dblComma // ,,
+	peTilde    // ~ (param exp)
+	peDblTilde // ~~ (param exp)
 	at       // @
 	slash    // /
 	dblSlash // //
@@ -266,6 +268,8 @@ const (
 	UpperAll                                           // ^^
 	LowerFirst                                         // ,
 	LowerAll                                           // ,,
+	CaseToggleFirst                                    // ~
+	CaseToggleAll                                      // ~~
 	OtherParamOps                                      // @
 )
 

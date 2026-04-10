@@ -726,10 +726,12 @@ var posixOptsTable = [...]posixOpt{
 	{'a', "allexport"},
 	{'e', "errexit"},
 	{'n', "noexec"},
+	{'C', "noclobber"},
 	{'f', "noglob"},
 	{'u', "nounset"},
 	{'x', "xtrace"},
 	{' ', "pipefail"},
+	{' ', "posix"},
 }
 
 var bashOptsTable = [...]bashOpt{
@@ -858,10 +860,12 @@ const (
 	optAllExport = iota
 	optErrExit
 	optNoExec
+	optNoClobber
 	optNoGlob
 	optNoUnset
 	optXTrace
 	optPipeFail
+	optPosix
 
 	// These correspond to indexes (offset by the above seven items) of
 	// supported options in [bashOptsTable]

@@ -279,20 +279,31 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			}
 			str = strings.Join(elems, " ")
 		case syntax.UpperFirst, syntax.UpperAll,
-			syntax.LowerFirst, syntax.LowerAll:
+			syntax.LowerFirst, syntax.LowerAll,
+			syntax.CaseToggleFirst, syntax.CaseToggleAll:
 
 			caseFunc := unicode.ToLower
 			if op == syntax.UpperFirst || op == syntax.UpperAll {
 				caseFunc = unicode.ToUpper
+			} else if op == syntax.CaseToggleFirst || op == syntax.CaseToggleAll {
+				caseFunc = func(r rune) rune {
+					if unicode.IsUpper(r) {
+						return unicode.ToLower(r)
+					}
+					return unicode.ToUpper(r)
+				}
 			}
-			all := op == syntax.UpperAll || op == syntax.LowerAll
+			all := op == syntax.UpperAll || op == syntax.LowerAll || op == syntax.CaseToggleAll
 
 			// empty string means '?'; nothing to do there
 			expr, err := pattern.Regexp(arg, 0)
 			if err != nil {
 				return str, nil
 			}
-			rx := regexp.MustCompile(expr)
+			rx, err := regexp.Compile(expr)
+			if err != nil {
+				return str, nil
+			}
 
 			for i, elem := range elems {
 				rs := []rune(elem)

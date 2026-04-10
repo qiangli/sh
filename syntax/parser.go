@@ -1612,7 +1612,7 @@ zshPrefixLoop:
 		pe.Rbrace = p.pos
 		p.matchedArithm(pe.Dollar, dollBrace, rightBrace)
 		return pe
-	case caret, dblCaret, comma, dblComma: // upper/lower case
+	case caret, dblCaret, comma, dblComma, peTilde, peDblTilde: // upper/lower/toggle case
 		p.checkLang(p.pos, langBashLike, "this expansion operator")
 		pe.Exp = p.paramExpExp()
 	case at, star:
