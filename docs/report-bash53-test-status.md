@@ -1,12 +1,13 @@
 # Bash 5.3 Test Suite Status Report
 
-Date: 2026-04-09
+Date: 2026-04-09 (updated)
 
 ## Summary
 
 - **Unit tests**: All pass (`go test ./...` — 0 failures across 9 packages)
-- **Bash 5.3 native tests**: 2/83 pass (extglob3, invert)
+- **Bash 5.3 native tests**: 4/83 pass (extglob3, invert, strip, nquote1)
 - **Test harness**: `make test-bash` runs all 83 tests from `external/bash-5.3/tests/`
+- **Near-passing**: nquote5 (5 lines diff), ifs (8), iquote (15)
 
 ## Passing Tests
 
@@ -14,6 +15,8 @@ Date: 2026-04-09
 |------|-------------|
 | extglob3 | Extended globbing patterns (advanced) |
 | invert | Negation operator (`!`) in pipelines and conditions |
+| strip | Pattern stripping (${var#pat}, ${var%pat}) |
+| nquote1 | ANSI-C quoting ($'...') and echo -en |
 
 ## Failure Categories
 
