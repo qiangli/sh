@@ -80,6 +80,10 @@ The codebase is a layered pipeline. Each layer is a standalone package usable on
 - Cross-compile sanity: CI builds `GOOS=plan9` and `GOOS=js GOARCH=wasm`. Don't introduce hard syscall dependencies outside `*_unix.go` / platform-tagged files.
 - Builtins listed in `IsBuiltin` but not actually implemented (job control, completion programming, `ulimit`, etc.) print `<name>: not supported in this shell — <hint>` via the `unsupportedHints` map in `interp/builtin.go`. `coproc` does the same from the runner's command dispatcher. When adding a new entry to `IsBuiltin` without a dispatcher case, add a hint too — `TestUnsupportedHints` catches drift.
 
+## Workflow
+
+At the start of every session, read `docs/TODO.md` and pick the first unchecked item to work on. After completing it, check it off in the TODO, run `go test ./...` and `make test-bash`, then commit. Repeat until the user says otherwise.
+
 ## Plans
 
 Always save a copy of all implementation plans in `docs/`. Use a descriptive filename (e.g., `docs/plan-feature-name.md`).
