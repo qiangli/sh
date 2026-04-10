@@ -361,7 +361,7 @@ var runTests = []runTest{
 	{`count() { echo $#; }; count "${unset_var[@]}"`, "0\n"},
 	{`count() { echo $#; }; a=(""); count "${a[@]}"`, "1\n"},
 	{`echo $1 $3; set -- a b c; echo $1 $3`, "\na c\n"},
-	{`[[ $0 == "bash" || $0 == "gosh" ]]`, ""},
+	{`[[ $0 == "bash" || $0 == "gosh" || $0 == "bashy" ]]`, ""},
 
 	// dollar quotes
 	{`echo $'foo\nbar'`, "foo\nbar\n"},

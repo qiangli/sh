@@ -185,6 +185,9 @@ type Runner struct {
 	// here are goroutines, not OS processes.
 	bgPidCallback func(pid int)
 
+	// pipeStatus tracks exit codes from the last pipeline for PIPESTATUS.
+	pipeStatus []string
+
 	// promptExpand is called by ${var@P} to expand prompt escape sequences.
 	// If nil, a default basic expansion is used.
 	promptExpand func(string) string

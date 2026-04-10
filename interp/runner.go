@@ -560,6 +560,11 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			prDup.Close()
 			wg.Wait()
 			r.stdin = oldStdin
+			// Track PIPESTATUS.
+			r.pipeStatus = []string{
+				strconv.Itoa(int(r2.exit.code)),
+				strconv.Itoa(int(r.exit.code)),
+			}
 			if r.opts[optPipeFail] && !r2.exit.ok() && r.exit.ok() {
 				r.exit = r2.exit
 			}

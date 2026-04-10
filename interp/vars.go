@@ -208,6 +208,18 @@ func (r *Runner) lookupVar(name string) expand.Variable {
 		vr.Kind, vr.Str = expand.String, fmt.Sprintf("%d.%06d", now.Unix(), now.Nanosecond()/1000)
 	case "BASH_SUBSHELL":
 		vr.Kind, vr.Str = expand.String, strconv.Itoa(r.subshellLevel)
+	case "BASH_ARGV0":
+		vr.Kind = expand.String
+		if r.filename != "" {
+			vr.Str = r.filename
+		} else {
+			vr.Str = "bashy"
+		}
+	case "GROUPS":
+		gid := os.Getgid()
+		vr.Kind = expand.Indexed
+		vr.ReadOnly = true
+		vr.List = []string{strconv.Itoa(gid)}
 	case "HOSTNAME":
 		h, _ := os.Hostname()
 		vr.Kind, vr.Str = expand.String, h
@@ -260,6 +272,13 @@ func (r *Runner) lookupVar(name string) expand.Variable {
 			lines[len(r.callStack)-1-i] = strconv.FormatUint(uint64(f.line), 10)
 		}
 		vr.List = lines
+	case "PIPESTATUS":
+		vr.Kind = expand.Indexed
+		if r.pipeStatus != nil {
+			vr.List = r.pipeStatus
+		} else {
+			vr.List = []string{strconv.Itoa(int(r.lastExit.code))}
+		}
 	case "DIRSTACK":
 		vr.Kind, vr.List = expand.Indexed, r.dirStack
 	case "0":
@@ -267,12 +286,30 @@ func (r *Runner) lookupVar(name string) expand.Variable {
 		if r.filename != "" {
 			vr.Str = r.filename
 		} else {
-			vr.Str = "gosh"
+			vr.Str = "bashy"
 		}
 	case "1", "2", "3", "4", "5", "6", "7", "8", "9":
 		if i := int(name[0] - '1'); i < len(r.Params) {
 			vr.Kind = expand.String
 			vr.Str = r.Params[i]
+		}
+	default:
+		// Handle multi-digit positional parameters: ${10}, ${11}, etc.
+		if len(name) > 1 && name[0] >= '1' && name[0] <= '9' {
+			allDigits := true
+			for _, c := range name {
+				if c < '0' || c > '9' {
+					allDigits = false
+					break
+				}
+			}
+			if allDigits {
+				n, _ := strconv.Atoi(name)
+				if n > 0 && n <= len(r.Params) {
+					vr.Kind = expand.String
+					vr.Str = r.Params[n-1]
+				}
+			}
 		}
 	}
 	if vr.Kind != expand.Unknown {
