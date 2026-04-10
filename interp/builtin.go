@@ -155,8 +155,8 @@ func (hc HandlerContext) Builtin(ctx context.Context, args []string) error {
 }
 
 func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args []string) (exit exitStatus) {
-	failf := func(code uint8, format string, args ...any) exitStatus {
-		r.errf(format, args...)
+	failf := func(code uint8, format string, a ...any) exitStatus {
+		r.errf(format, a...)
 		exit.code = code
 		return exit
 	}
