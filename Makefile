@@ -17,14 +17,16 @@ build:
 test:
 	go test ./...
 
-## test-bash: Run bash 5.3 native test suite against bashy
+BASH_TEST_TIMEOUT := 15
+
+## test-bash: Run bash 5.3 native test suite against bashy (with per-test timeout)
 test-bash: build test-bash-helpers
-	@echo "Running bash 5.3 test suite against bashy..."
+	@echo "Running bash 5.3 test suite against bashy ($(BASH_TEST_TIMEOUT)s timeout per test)..."
 	@cd $(BASH_TESTS_DIR) && \
 		export THIS_SH=$$(cd ../../.. && pwd)/$(BASHY) && \
 		export PATH=$$PWD:$$PATH && \
 		export BASH_TSTOUT=$${TMPDIR:-/tmp}/bashy-tstout-$$$$ && \
-		passed=0 && failed=0 && skipped=0 && \
+		passed=0 && failed=0 && skipped=0 && timeout_count=0 && \
 		for runner in run-*; do \
 			[ "$$runner" = "run-all" ] && continue; \
 			name=$${runner#run-}; \
@@ -34,8 +36,17 @@ test-bash: build test-bash-helpers
 				skipped=$$((skipped + 1)); \
 				continue; \
 			fi; \
-			$$THIS_SH ./$$test_file > $$BASH_TSTOUT 2>&1; \
-			if diff -q $$BASH_TSTOUT $$right_file > /dev/null 2>&1; then \
+			( $$THIS_SH ./$$test_file > $$BASH_TSTOUT 2>&1 ) & \
+			test_pid=$$!; \
+			( sleep $(BASH_TEST_TIMEOUT) && kill -9 $$test_pid 2>/dev/null ) & \
+			timer_pid=$$!; \
+			wait $$test_pid 2>/dev/null; \
+			rc=$$?; \
+			kill $$timer_pid 2>/dev/null; wait $$timer_pid 2>/dev/null; \
+			if [ $$rc -eq 137 ] 2>/dev/null; then \
+				timeout_count=$$((timeout_count + 1)); \
+				printf "  TIME  %s\n" "$$name"; \
+			elif diff -q $$BASH_TSTOUT $$right_file > /dev/null 2>&1; then \
 				passed=$$((passed + 1)); \
 				printf "  PASS  %s\n" "$$name"; \
 			else \
@@ -45,7 +56,7 @@ test-bash: build test-bash-helpers
 			rm -f $$BASH_TSTOUT; \
 		done; \
 		echo ""; \
-		echo "Results: $$passed passed, $$failed failed, $$skipped skipped"; \
+		echo "Results: $$passed passed, $$failed failed, $$skipped skipped, $$timeout_count timed out"; \
 		echo ""
 
 ## test-bash-list: List all available bash 5.3 tests
