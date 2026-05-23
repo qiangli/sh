@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -253,6 +254,73 @@ func TestNohupChildIsInNewSession(t *testing.T) {
 	qt.Assert(t, qt.IsNil(err))
 	qt.Assert(t, qt.Not(qt.Equals(childSID, mySID)),
 		qt.Commentf("nohup child SID %d should differ from runner SID %d", childSID, mySID))
+}
+
+// TestWithBgPidCallback covers the WithBgPidCallback RunnerOption: when
+// a backgrounded statement spawns a real external process, the embedder's
+// callback must fire exactly once with the kernel PID. Outpost wires this
+// to its persistent job-control registry (`outpost jobs/fg/bg/kill`).
+func TestWithBgPidCallback(t *testing.T) {
+	if _, err := exec.LookPath("sleep"); err != nil {
+		t.Skip("no sleep on PATH:", err)
+	}
+	gotPid := make(chan int, 1)
+	file, err := syntax.NewParser().Parse(strings.NewReader(`sleep 30 & wait $!`), "")
+	qt.Assert(t, qt.IsNil(err))
+	r, err := interp.New(
+		interp.StdIO(nil, io.Discard, io.Discard),
+		interp.WithBgPidCallback(func(pid int) {
+			select {
+			case gotPid <- pid:
+			default:
+			}
+		}),
+	)
+	qt.Assert(t, qt.IsNil(err))
+
+	// Run the script in a goroutine so we can kill the sleep child once
+	// we've observed the callback, instead of waiting 30s for it to exit.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	runErrCh := make(chan error, 1)
+	go func() { runErrCh <- r.Run(ctx, file) }()
+
+	select {
+	case pid := <-gotPid:
+		qt.Assert(t, qt.IsTrue(pid > 0), qt.Commentf("callback PID must be > 0, got %d", pid))
+		// Kill the sleep so `wait $!` returns promptly.
+		_ = syscall.Kill(pid, syscall.SIGTERM)
+	case <-time.After(3 * time.Second):
+		cancel()
+		<-runErrCh
+		t.Fatal("WithBgPidCallback was not invoked within 3s")
+	}
+	<-runErrCh
+}
+
+// TestWithBgPidCallback_NotCalledForPureBuiltin: backgrounded statements
+// that never `exec.Start` (pure-builtin / pure-goroutine subshells) have
+// no kernel PID to report — the callback must stay silent for them, same
+// rationale as the `g<N>` sentinel that `$!` returns in this case.
+func TestWithBgPidCallback_NotCalledForPureBuiltin(t *testing.T) {
+	called := make(chan int, 1)
+	file, err := syntax.NewParser().Parse(strings.NewReader(`true & wait $!`), "")
+	qt.Assert(t, qt.IsNil(err))
+	r, err := interp.New(
+		interp.StdIO(nil, io.Discard, io.Discard),
+		interp.WithBgPidCallback(func(pid int) {
+			called <- pid
+		}),
+	)
+	qt.Assert(t, qt.IsNil(err))
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	qt.Assert(t, qt.IsNil(r.Run(ctx, file)))
+	select {
+	case pid := <-called:
+		t.Fatalf("pure-builtin bg should not fire callback, got pid=%d", pid)
+	default:
+	}
 }
 
 // guard against the package not being linked if errors lib changes

@@ -167,6 +167,14 @@ type Runner struct {
 	// Fake signal callbacks
 	callbackErr  string
 	callbackExit string
+
+	// bgPidCallback, when non-nil, is invoked with the OS PID of every
+	// real process this runner spawns from a backgrounded statement
+	// (`foo &`). Set via [WithBgPidCallback]. Outpost uses this to
+	// publish detached PIDs to its job-control registry — the in-shell
+	// `fg`/`bg`/`jobs` builtins are unimplemented because subshells
+	// here are goroutines, not OS processes.
+	bgPidCallback func(pid int)
 }
 
 // exitStatus holds the state of the shell after running one command.
@@ -263,6 +271,13 @@ type bgProc struct {
 	// of the "g<N>" sentinel whenever one is actually available — the
 	// usual `PID=$!; kill $PID` idiom relies on this.
 	pidReady chan struct{}
+
+	// pidCallback is the runner's WithBgPidCallback hook copied in at
+	// spawn time (so publishBgPid doesn't need to reach for the Runner).
+	// nil means "no embedder cares". Invoked synchronously from
+	// publishBgPid with the OS PID — embedders that want async fan-out
+	// should hand off to a goroutine themselves.
+	pidCallback func(pid int)
 }
 
 // bgProcCtxKey is the context-value key under which the bg goroutine
@@ -289,6 +304,9 @@ func publishBgPid(ctx context.Context, pid int) {
 		// already closed by an earlier exec or by goroutine exit
 	default:
 		close(bg.pidReady)
+	}
+	if bg.pidCallback != nil {
+		bg.pidCallback(pid)
 	}
 }
 
@@ -602,6 +620,30 @@ func StdIO(in io.Reader, out, err io.Writer) RunnerOption {
 	}
 }
 
+// WithBgPidCallback registers a callback invoked with the OS PID of each
+// real external process this runner spawns from a backgrounded statement
+// (`foo &`). Fires from inside [publishBgPid] right after the PID is
+// stored on the bgProc. Not invoked for pure-builtin or pure-goroutine
+// backgrounded subshells (e.g. `(true) &`), because there is no kernel
+// PID to report.
+//
+// The callback runs synchronously on the background goroutine. Keep it
+// cheap; hand off to your own goroutine if you need to do non-trivial
+// work (file I/O, network, etc.).
+//
+// Use case: an embedder (e.g. the outpost agent) that wants to surface
+// detached jobs to an external job-control CLI. The in-shell `fg`/`bg`/
+// `jobs` builtins are unimplemented because subshells in this
+// interpreter are goroutines, not OS processes — pushing the job
+// registry out to a process that can use real OS primitives is the
+// supported path.
+func WithBgPidCallback(fn func(pid int)) RunnerOption {
+	return func(r *Runner) error {
+		r.bgPidCallback = fn
+		return nil
+	}
+}
+
 func (r *Runner) posixOptByName(name string) *bool {
 	for i, opt := range &posixOptsTable {
 		if opt.name == name {
@@ -842,6 +884,7 @@ func (r *Runner) Reset() {
 		openHandler:    r.openHandler,
 		readDirHandler: r.readDirHandler,
 		statHandler:    r.statHandler,
+		bgPidCallback:  r.bgPidCallback,
 
 		// These can be set by functions like [Dir] or [Params], but
 		// builtins can overwrite them; reset the fields to whatever the
@@ -1036,6 +1079,7 @@ func (r *Runner) subshell(background bool) *Runner {
 		usedNew:        r.usedNew,
 		exit:           r.exit,
 		lastExit:       r.lastExit,
+		bgPidCallback:  r.bgPidCallback,
 
 		origStdout: r.origStdout, // used for process substitutions
 	}

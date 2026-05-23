@@ -317,9 +317,10 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 		st2.Background = false
 		st2.Disown = false
 		bg := &bgProc{
-			done:     make(chan struct{}),
-			exit:     new(exitStatus),
-			pidReady: make(chan struct{}),
+			done:        make(chan struct{}),
+			exit:        new(exitStatus),
+			pidReady:    make(chan struct{}),
+			pidCallback: r.bgPidCallback, // see WithBgPidCallback
 		}
 		r.bgProcs = append(r.bgProcs, bg)
 		// Stash a pointer to the freshly-appended bgProc on the
