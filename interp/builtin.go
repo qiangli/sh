@@ -107,7 +107,16 @@ func IsBuiltin(name string) bool {
 		"test",
 		"[", // NOTE: an alias for "test", not explicitly listed
 		"type",
-		"ulimit":
+		"ulimit",
+
+		// Non-bash, non-POSIX — implemented as builtins so they're
+		// reliable inside the in-process runner even where the
+		// corresponding /usr/bin/* binaries are missing (macOS has
+		// no setsid binary) or buggy in the runner's stdio context
+		// (BSD nohup hits "Inappropriate ioctl for device" when the
+		// parent is a session leader).
+		"nohup",
+		"setsid":
 		return true
 	}
 	return false
@@ -451,6 +460,10 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				r.errf("kill: (%d) - %v\n", pid, err)
 			}
 		}
+	case "nohup":
+		exit = r.runNohup(ctx, args)
+	case "setsid":
+		exit = r.runSetsid(ctx, args)
 	case "disown":
 		// The interpreter has no kernel-level job table — backgrounded `&`
 		// statements are goroutines, and nothing in the runner ever sends

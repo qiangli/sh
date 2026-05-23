@@ -10,8 +10,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -126,6 +129,72 @@ func TestKillCustomSignal(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("sleep did not exit within 5s of receiving SIGKILL")
 	}
+}
+
+// psSessionKey returns the `ps -o` keyword that prints the session-leader
+// PID on this OS. Linux/Solaris use "sid"; the BSDs (macOS, FreeBSD) use
+// "sess".
+func psSessionKey() string {
+	switch runtime.GOOS {
+	case "darwin", "freebsd", "netbsd", "openbsd", "dragonfly":
+		return "sess"
+	default:
+		return "sid"
+	}
+}
+
+func TestSetsidNewSession(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("no sh on PATH:", err)
+	}
+	script := fmt.Sprintf(`setsid sh -c 'ps -o %s= -p $$'`, psSessionKey())
+	out, err := runScript(t, script)
+	qt.Assert(t, qt.IsNil(err), qt.Commentf("out: %q", out))
+	childSID, parseErr := strconv.Atoi(strings.TrimSpace(out))
+	qt.Assert(t, qt.IsNil(parseErr), qt.Commentf("expected numeric SID, got %q", out))
+
+	// Get our own session id via getsid(0).
+	mySID, err := syscall.Getsid(0)
+	qt.Assert(t, qt.IsNil(err))
+
+	qt.Assert(t, qt.Not(qt.Equals(childSID, mySID)),
+		qt.Commentf("child SID %d should differ from runner SID %d", childSID, mySID))
+}
+
+func TestNohupNoTTYInheritsStdio(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("no sh on PATH:", err)
+	}
+	// Stdout is a bytes.Buffer (not a tty), so per POSIX nohup should
+	// inherit it — and the child's `echo hello` should land directly in
+	// our buffer, NOT in a nohup.out file.
+	tmpDir := t.TempDir()
+	prevDir, _ := os.Getwd()
+	qt.Assert(t, qt.IsNil(os.Chdir(tmpDir)))
+	defer os.Chdir(prevDir)
+
+	out, err := runScript(t, "nohup sh -c 'echo hello'")
+	qt.Assert(t, qt.IsNil(err), qt.Commentf("out: %q", out))
+	qt.Assert(t, qt.Equals(strings.TrimSpace(out), "hello"))
+
+	_, statErr := os.Stat(filepath.Join(tmpDir, "nohup.out"))
+	qt.Assert(t, qt.IsTrue(os.IsNotExist(statErr)),
+		qt.Commentf("nohup.out should not be created when stdout is not a tty"))
+}
+
+func TestNohupChildIsInNewSession(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("no sh on PATH:", err)
+	}
+	script := fmt.Sprintf(`nohup sh -c 'ps -o %s= -p $$'`, psSessionKey())
+	out, err := runScript(t, script)
+	qt.Assert(t, qt.IsNil(err), qt.Commentf("out: %q", out))
+	childSID, parseErr := strconv.Atoi(strings.TrimSpace(out))
+	qt.Assert(t, qt.IsNil(parseErr), qt.Commentf("expected numeric SID, got %q", out))
+	mySID, err := syscall.Getsid(0)
+	qt.Assert(t, qt.IsNil(err))
+	qt.Assert(t, qt.Not(qt.Equals(childSID, mySID)),
+		qt.Commentf("nohup child SID %d should differ from runner SID %d", childSID, mySID))
 }
 
 // guard against the package not being linked if errors lib changes

@@ -1608,6 +1608,15 @@ var runTests = []runTest{
 	{"kill -l SIGTERM", "15\n"},
 	{"kill -l 15", "TERM\n"},
 	{"kill -l KILL INT", "9\n2\n"},
+
+	// setsid / nohup — usage / lookup errors. Real-subprocess delivery is
+	// covered in builtin_proc_test.go (unix-only).
+	{"setsid", "setsid: usage: setsid [-f] [-w] [-c] <program> [args...]\nexit status 2 #JUSTERR"},
+	{"setsid -z foo", "setsid: invalid option: \"-z\"\nexit status 2 #JUSTERR"},
+	{"setsid nonexistent-binary-xyz", "setsid: \"nonexistent-binary-xyz\": executable file not found in $PATH\nexit status 127 #JUSTERR"},
+	{"nohup", "nohup: usage: nohup <program> [args...]\nexit status 125 #JUSTERR"},
+	{"nohup nonexistent-binary-xyz", "nohup: \"nonexistent-binary-xyz\": executable file not found in $PATH\nexit status 127 #JUSTERR"},
+
 	{"{ true; } & wait", ""},
 	{"{ false; } & wait", ""},
 	{"{ sleep 0.01; true; } & wait", ""},
