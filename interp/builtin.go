@@ -1169,9 +1169,43 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		r.setVar(arrayName, vr)
 
 	default:
-		return failf(2, "%s: unsupported builtin\n", name)
+		if hint, ok := unsupportedHints[name]; ok {
+			return failf(2, "%s: not supported in this shell — %s\n", name, hint)
+		}
+		return failf(2, "%s: not supported in this shell\n", name)
 	}
 	return exit
+}
+
+// unsupportedHints carries actionable messages for bash/POSIX builtins that
+// IsBuiltin recognizes but this runner does not implement. The hint is
+// appended to "<name>: not supported in this shell — " so agentic callers
+// see a named alternative or escape hatch rather than a generic refusal.
+var unsupportedHints = map[string]string{
+	// Job control — fundamentally unavailable because subshells are
+	// goroutines, not processes; there's no real job table to act on.
+	"fg":   "no in-shell job control; use an external job-control command",
+	"bg":   "no in-shell job control; use an external job-control command",
+	"jobs": "no in-shell job control; inspect background processes via the embedder API or an external tool",
+
+	// POSIX builtins with reasonable substitutes.
+	"fc":     "command history editing is not supported; edit and re-enter commands directly",
+	"newgrp": "group switching is not supported; switch groups in the parent process (e.g. with sudo -g)",
+	"umask":  "umask is not settable from this shell; set it in the parent process or use chmod after creating files",
+	"times":  "process-time accounting is not supported; use \"time CMD\" for per-command timing",
+
+	// Bash readline / completion / introspection — irrelevant in this non-interactive runner.
+	"bind":     "readline keybindings are not supported (this shell does no line editing)",
+	"caller":   "stack-frame introspection is not supported",
+	"compgen":  "completion programming is not supported (completion happens in the SSH client, not this shell)",
+	"complete": "completion programming is not supported (completion happens in the SSH client, not this shell)",
+	"compopt":  "completion programming is not supported (completion happens in the SSH client, not this shell)",
+	"enable":   "enabling/disabling builtins is not supported; all supported builtins are always enabled",
+	"history":  "this shell does not maintain history; use the SSH client's history",
+	"help":     "no in-shell help text; refer to the bash manual at https://www.gnu.org/software/bash/manual/",
+	"logout":   "use \"exit\" instead",
+	"suspend":  "shell suspension is not supported; close the SSH session or use Ctrl-D",
+	"ulimit":   "ulimit is not settable from this shell; set resource limits in the parent process",
 }
 
 // mapfileSplit returns a suitable Split function for a [bufio.Scanner];

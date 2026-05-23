@@ -4,8 +4,13 @@
 package interp
 
 import (
+	"bytes"
+	"context"
+	"strings"
 	"testing"
 	"time"
+
+	"mvdan.cc/sh/v3/syntax"
 )
 
 func TestElapsedString(t *testing.T) {
@@ -39,6 +44,41 @@ func TestElapsedString(t *testing.T) {
 			got := elapsedString(tc.in, tc.posix)
 			if got != tc.want {
 				t.Fatalf("wanted %q, got %q", tc.want, got)
+			}
+		})
+	}
+}
+
+// TestUnsupportedHints guards against drift in the unsupportedHints map.
+// Every key must still be recognized by IsBuiltin (otherwise the dispatcher
+// won't see the name to fall into the default arm), and invoking the name
+// must produce the expected "<name>: not supported in this shell — <hint>"
+// shape so agentic callers can rely on it.
+func TestUnsupportedHints(t *testing.T) {
+	t.Parallel()
+
+	for name, hint := range unsupportedHints {
+		t.Run(name, func(t *testing.T) {
+			if !IsBuiltin(name) {
+				t.Fatalf("unsupportedHints lists %q but IsBuiltin doesn't recognize it; the dispatcher will never see this name", name)
+			}
+
+			file, err := syntax.NewParser().Parse(strings.NewReader(name), "")
+			if err != nil {
+				t.Fatalf("parsing %q: %v", name, err)
+			}
+			var stderr bytes.Buffer
+			r, err := New(StdIO(nil, nil, &stderr))
+			if err != nil {
+				t.Fatalf("interp.New: %v", err)
+			}
+			runErr := r.Run(context.Background(), file)
+			if runErr == nil {
+				t.Fatalf("running %q: expected non-nil error", name)
+			}
+			wantPrefix := name + ": not supported in this shell — " + hint
+			if got := strings.TrimRight(stderr.String(), "\n"); got != wantPrefix {
+				t.Fatalf("running %q:\nwant stderr: %q\ngot:         %q", name, wantPrefix, got)
 			}
 		})
 	}
