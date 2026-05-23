@@ -3514,6 +3514,17 @@ done <<< 2`,
 	{"{ time -p; } |& wc | tr -s ' '", " 3 6 29\n"},
 	{"{ time -p echo -n; } |& wc | tr -s ' '", " 3 6 29\n"},
 
+	// coproc — not supported, but parses; expect a clean rejection rather
+	// than the legacy "unhandled command node" crash.
+	{
+		"coproc { echo hi; }",
+		"coproc: not supported in this shell — bash coproc requires numbered file descriptors that this runner does not support; use a fifo (mkfifo) with a background command, or process substitution\nexit status 2 #JUSTERR",
+	},
+	{
+		"coproc CO { echo hi; }",
+		"coproc: not supported in this shell — bash coproc requires numbered file descriptors that this runner does not support; use a fifo (mkfifo) with a background command, or process substitution\nexit status 2 #JUSTERR",
+	},
+
 	// exec
 	{"exec", ""},
 	{

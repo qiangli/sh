@@ -861,6 +861,14 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		// TODO: can we do these?
 		r.outf(format, "user", elapsedString(0, cm.PosixFormat))
 		r.outf(format, "sys", elapsedString(0, cm.PosixFormat))
+	case *syntax.CoprocClause:
+		// Bash coproc exposes the child's pipes as ${NAME[0]} / ${NAME[1]},
+		// which are numeric fds usable in `<&N` / `>&N` redirects. This
+		// runner's redirect layer only handles fds 0/1/2, so coproc cannot
+		// be made to work without a wider numbered-fd refactor. Refuse
+		// explicitly rather than crashing on the unhandled AST node.
+		r.errf("coproc: not supported in this shell — bash coproc requires numbered file descriptors that this runner does not support; use a fifo (mkfifo) with a background command, or process substitution\n")
+		r.exit.code = 2
 	default:
 		// Should only happen if we forgot a case above.
 		r.errf("unhandled command node: %T\n", cm)
