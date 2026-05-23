@@ -347,6 +347,9 @@ var runTests = []runTest{
 	{`echo "$(echo ' b c ')"`, " b c \n"},
 	{"echo ''", "\n"},
 	{`$(echo)`, ""},
+	{`printf '<%s>\n' $(printf hello)`, "<hello>\n"},
+	{`printf '<%s>\n' $(printf 'a b')`, "<a>\n<b>\n"},
+	{`set -- $(printf 'foo bar'); echo $#:$1,$2`, "2:foo,bar\n"},
 	{`echo -n '\\'`, `\\`},
 	{`echo -n "\\"`, `\`},
 	{`set -- a b c; x="$@"; echo "$x"`, "a b c\n"},
@@ -1536,6 +1539,18 @@ var runTests = []runTest{
 	{
 		"cat <<EOF\n \\\\ \\$ \\` \nEOF",
 		" \\ $ ` \n",
+	},
+	{
+		"cat <<'PY'\nhe said “smart” quotes\nPY",
+		"he said “smart” quotes\n",
+	},
+	{
+		"cat <<PY\nhe said “smart” quotes\nPY",
+		"he said “smart” quotes\n",
+	},
+	{
+		"cat <<'PY'\nprint(f“key: {v}”)\nPY",
+		"print(f“key: {v}”)\n",
 	},
 	{
 		"mkdir a; echo foo >a |& grep -q 'is a directory'",
