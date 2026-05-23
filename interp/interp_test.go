@@ -1596,6 +1596,18 @@ var runTests = []runTest{
 	{"true & disown; echo done", "done\n"},
 	{"set -e; disown -a; echo ok", "ok\n"},
 	{"disown -z", "disown: invalid option \"-z\"\nexit status 2 #JUSTERR"},
+
+	// kill — argv parsing / -l listing / error paths
+	{"kill", "kill: usage: kill [-s sigspec | -n signum | -sigspec] pid ...\nexit status 2 #JUSTERR"},
+	{"kill foo", "kill: foo: arguments must be process IDs\nexit status 1 #JUSTERR"},
+	{"kill %1", "kill: %1: no job control in this shell\nexit status 1 #JUSTERR"},
+	{"kill -s NOSIG 1", "kill: NOSIG: invalid signal specification\nexit status 1 #JUSTERR"},
+	{"kill -NOSIG 1", "kill: -NOSIG: invalid signal specification\nexit status 1 #JUSTERR"},
+	{"kill -s", "kill: -s requires a signal name\nexit status 2 #JUSTERR"},
+	{"kill -l TERM", "15\n"},
+	{"kill -l SIGTERM", "15\n"},
+	{"kill -l 15", "TERM\n"},
+	{"kill -l KILL INT", "9\n2\n"},
 	{"{ true; } & wait", ""},
 	{"{ false; } & wait", ""},
 	{"{ sleep 0.01; true; } & wait", ""},

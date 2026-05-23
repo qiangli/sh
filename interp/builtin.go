@@ -346,6 +346,111 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			<-bg.done
 			exit = *bg.exit
 		}
+	case "kill":
+		// Bash kill accepts: `-l [signum|name…]`, `-s NAME pid…`, `-n NUM
+		// pid…`, `-NAME pid…`, `-NUM pid…`, and `pid…` (default SIGTERM).
+		// Job specs (`%1`) aren't supported because the in-process runner
+		// has no real job table — `$!` returns a "g<N>" sentinel that is
+		// not a real PID. The shared flagParser doesn't fit here because
+		// `-SIGNAME` is a whole-arg flag, not stacked short flags.
+		listOnly := false
+		sig := syscall.Signal(15) // SIGTERM
+		remaining := args
+	killFlags:
+		for len(remaining) > 0 {
+			arg := remaining[0]
+			if !strings.HasPrefix(arg, "-") || arg == "-" {
+				break
+			}
+			switch arg {
+			case "--":
+				remaining = remaining[1:]
+				break killFlags
+			case "-l", "-L":
+				listOnly = true
+				remaining = remaining[1:]
+			case "-s":
+				if len(remaining) < 2 {
+					return failf(2, "kill: -s requires a signal name\n")
+				}
+				s, ok := signalByName(remaining[1])
+				if !ok {
+					return failf(1, "kill: %s: invalid signal specification\n", remaining[1])
+				}
+				sig = s
+				remaining = remaining[2:]
+			case "-n":
+				if len(remaining) < 2 {
+					return failf(2, "kill: -n requires a signal number\n")
+				}
+				n, err := strconv.Atoi(remaining[1])
+				if err != nil {
+					return failf(2, "kill: -n requires a signal number\n")
+				}
+				s, _, ok := signalByNumber(n)
+				if !ok {
+					return failf(1, "kill: %d: invalid signal specification\n", n)
+				}
+				sig = s
+				remaining = remaining[2:]
+			default:
+				// -SIGNAME or -NUMBER (whole flag is the spec)
+				spec := strings.TrimPrefix(arg, "-")
+				s, ok := parseSignalSpec(spec)
+				if !ok {
+					return failf(1, "kill: %s: invalid signal specification\n", arg)
+				}
+				sig = s
+				remaining = remaining[1:]
+				break killFlags
+			}
+		}
+		if listOnly {
+			if len(remaining) == 0 {
+				for _, e := range sortedSignalEntries() {
+					r.outf("%s\n", e.Name)
+				}
+				break
+			}
+			for _, a := range remaining {
+				if n, err := strconv.Atoi(a); err == nil {
+					if _, name, ok := signalByNumber(n); ok && name != "EXIT" {
+						r.outf("%s\n", name)
+						continue
+					}
+					exit.code = 1
+					r.errf("kill: %s: invalid signal specification\n", a)
+					continue
+				}
+				if s, ok := signalByName(a); ok {
+					r.outf("%d\n", int(s))
+					continue
+				}
+				exit.code = 1
+				r.errf("kill: %s: invalid signal specification\n", a)
+			}
+			break
+		}
+		if len(remaining) == 0 {
+			return failf(2, "kill: usage: kill [-s sigspec | -n signum | -sigspec] pid ...\n")
+		}
+		for _, target := range remaining {
+			if strings.HasPrefix(target, "%") || strings.HasPrefix(target, "g") {
+				exit.code = 1
+				r.errf("kill: %s: no job control in this shell\n", target)
+				continue
+			}
+			pid, err := strconv.Atoi(target)
+			if err != nil {
+				exit.code = 1
+				r.errf("kill: %s: arguments must be process IDs\n", target)
+				continue
+			}
+			if err := sendSignal(pid, sig); err != nil {
+				exit.code = 1
+				r.errf("kill: (%d) - %v\n", pid, err)
+			}
+		}
 	case "disown":
 		// The interpreter has no kernel-level job table — backgrounded `&`
 		// statements are goroutines, and nothing in the runner ever sends
