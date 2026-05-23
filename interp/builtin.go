@@ -684,12 +684,29 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		// the process. It's in theory what a shell should do,
 		// but in practice it would kill the entire Go process
 		// and it's not available on Windows.
+		var argv0 string
+		fp := flagParser{remaining: args}
+		for fp.more() {
+			switch flag := fp.flag(); flag {
+			case "-a":
+				argv0 = fp.value()
+				if argv0 == "" {
+					return failf(2, "exec: -a: option requires an argument\n")
+				}
+			default:
+				return failf(2, "exec: invalid option %q\n", flag)
+			}
+		}
+		args = fp.args()
 		if len(args) == 0 {
+			if argv0 != "" {
+				return failf(2, "exec: -a requires a command to execute\n")
+			}
 			r.keepRedirs = true
 			break
 		}
 		r.exit.exiting = true
-		r.exec(ctx, pos, args)
+		r.execAs(ctx, pos, argv0, args)
 		exit = r.exit
 	case "command":
 		show := false

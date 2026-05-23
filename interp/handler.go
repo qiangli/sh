@@ -74,6 +74,14 @@ type HandlerContext struct {
 	Stdout io.Writer
 	// Stderr is the interpreter's current standard error writer.
 	Stderr io.Writer
+
+	// ExecAs is the argv[0] override requested via "exec -a NAME CMD".
+	// It is empty for all other calls. Handlers that launch a real
+	// process should propagate it as the first element of the spawned
+	// argv, leaving the executable lookup in args[0] unchanged. The
+	// [DefaultExecHandler] honours this field; custom handlers may
+	// ignore it.
+	ExecAs string
 }
 
 // CallHandlerFunc is a handler which runs on every [syntax.CallExpr].
@@ -129,9 +137,13 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 			fmt.Fprintln(hc.Stderr, err)
 			return ExitStatus(127)
 		}
+		cmdArgs := args
+		if hc.ExecAs != "" {
+			cmdArgs = append([]string{hc.ExecAs}, args[1:]...)
+		}
 		cmd := exec.Cmd{
 			Path:   path,
-			Args:   args,
+			Args:   cmdArgs,
 			Env:    execEnv(hc.Env),
 			Dir:    hc.Dir,
 			Stdin:  hc.Stdin,

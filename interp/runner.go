@@ -1173,7 +1173,21 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 }
 
 func (r *Runner) exec(ctx context.Context, pos syntax.Pos, args []string) {
-	r.exit.fromHandlerError(r.execHandler(r.handlerCtx(ctx, handlerKindExec, pos), args))
+	r.execAs(ctx, pos, "", args)
+}
+
+// execAs is like exec but advertises argv0 to the exec handler via
+// [HandlerContext.ExecAs], so handlers can launch the spawned process
+// under a different argv[0] (the "exec -a NAME CMD" form in bash).
+// An empty argv0 means no override.
+func (r *Runner) execAs(ctx context.Context, pos syntax.Pos, argv0 string, args []string) {
+	hctx := r.handlerCtx(ctx, handlerKindExec, pos)
+	if argv0 != "" {
+		hc := HandlerCtx(hctx)
+		hc.ExecAs = argv0
+		hctx = context.WithValue(hctx, handlerCtxKey{}, hc)
+	}
+	r.exit.fromHandlerError(r.execHandler(hctx, args))
 }
 
 func (r *Runner) open(ctx context.Context, path string, flags int, mode os.FileMode, print bool) (io.ReadWriteCloser, error) {

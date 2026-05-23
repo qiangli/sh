@@ -3811,6 +3811,25 @@ done <<< 2`,
 
 var runTestsUnix = []runTest{
 	{"[[ -n $PPID && $PPID -ge 0 ]]", ""}, // can be 0 if running as the init process
+
+	// exec -a NAME CMD overrides argv[0] of the spawned process; the
+	// shell does not return (so "unreached" is never printed).
+	{
+		`exec -a renamed /bin/sh -c 'printf "%s\n" "$0"'; echo unreached`,
+		"renamed\n",
+	},
+	{
+		`exec -a`,
+		"exec: -a: option requires an argument\nexit status 2 #JUSTERR",
+	},
+	{
+		`exec -a foo`,
+		"exec: -a requires a command to execute\nexit status 2 #JUSTERR",
+	},
+	{
+		`exec -z echo hi`,
+		"exec: invalid option \"-z\"\nexit status 2 #JUSTERR",
+	},
 	{
 		// no root user on windows
 		"[[ ~root == '~root' ]]",
