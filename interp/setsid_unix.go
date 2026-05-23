@@ -9,7 +9,6 @@ import (
 	"context"
 	"os/exec"
 	"syscall"
-	"time"
 )
 
 // runSetsid implements the `setsid` builtin. It looks up the program in PATH
@@ -91,15 +90,19 @@ func runDetachedExec(ctx context.Context, r *Runner, label string, args []string
 		return exit
 	}
 
-	// Mirror DefaultExecHandler's context-cancellation behavior so the
-	// child is killed if the runner's context is cancelled (e.g. SSH
-	// session ends and the runner is torn down).
-	stopf := context.AfterFunc(ctx, func() {
-		_ = cmd.Process.Signal(syscall.SIGINT)
-		time.Sleep(2 * time.Second)
-		_ = cmd.Process.Signal(syscall.SIGKILL)
-	})
-	defer stopf()
+	// Deliberately NOT installing a context.AfterFunc that kills the child
+	// on ctx cancel: the whole point of nohup/setsid is that the child
+	// survives the parent shell going away. The runner's context is
+	// cancelled when the SSH session ends (or outpost is shutting down),
+	// and we want the detached child to keep running anyway. The parent
+	// goroutine just blocks on cmd.Wait() and returns naturally when the
+	// child exits on its own — which may be hours later. That's fine; the
+	// outpost daemon is long-lived and the goroutine leak is bounded by
+	// the child's actual lifetime.
+	//
+	// Side effect: SIGINT (^C) on the matrix-shell session can't reach a
+	// nohup'd child because it's now in a different session/PGID. That
+	// matches POSIX nohup / setsid semantics.
 
 	if err := cmd.Wait(); err != nil {
 		if ee, ok := err.(*exec.ExitError); ok {
