@@ -3640,6 +3640,32 @@ done <<< 2`,
 		"Prompt and raw flag together: \\a\\b\\c\n #IGNORE bash requires a terminal",
 	},
 
+	// read -t TIMEOUT
+	{
+		"read -t",
+		"read: -t: option requires an argument\nexit status 2 #JUSTERR",
+	},
+	{
+		"read -t bogus x",
+		"read: bogus: invalid timeout specification\nexit status 2 #JUSTERR",
+	},
+	{
+		"read -t -1 x",
+		"read: -1: invalid timeout specification\nexit status 2 #JUSTERR",
+	},
+	{
+		"read -t 5 x <<< hello; echo $x",
+		"hello\n",
+	},
+	{
+		"read -t 5 x </dev/null; echo $?",
+		"1\n",
+	},
+	{
+		"read -t 0.05 x < <(sleep 0.2); echo $?",
+		"142\n",
+	},
+
 	// read -a
 	{
 		`echo "1 2 3" | { read -a arr; echo "${arr[0]} ${arr[1]} ${arr[2]}"; }`,
