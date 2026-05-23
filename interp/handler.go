@@ -141,6 +141,7 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 
 		err = cmd.Start()
 		if err == nil {
+			publishBgPid(ctx, cmd.Process.Pid)
 			stopf := context.AfterFunc(ctx, func() {
 				if killTimeout <= 0 || runtime.GOOS == "windows" {
 					_ = cmd.Process.Signal(os.Kill)

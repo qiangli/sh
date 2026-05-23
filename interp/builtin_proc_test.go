@@ -16,6 +16,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -26,14 +27,34 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 )
 
+// safeBuf is a goroutine-safe wrapper around bytes.Buffer. Backgrounded
+// statements that spawn real exec.Cmd children get a copy goroutine
+// inside os/exec that writes to this buffer concurrently with the
+// parent shell's writes — so a plain bytes.Buffer would race.
+type safeBuf struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *safeBuf) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+func (b *safeBuf) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 // runScript parses and runs src under a fresh Runner, returning stdout+stderr
 // merged and any execution error.
 func runScript(t *testing.T, src string) (string, error) {
 	t.Helper()
 	file, err := syntax.NewParser().Parse(strings.NewReader(src), "")
 	qt.Assert(t, qt.IsNil(err))
-	var buf bytes.Buffer
-	r, err := interp.New(interp.StdIO(nil, &buf, &buf))
+	buf := &safeBuf{}
+	r, err := interp.New(interp.StdIO(nil, buf, buf))
 	qt.Assert(t, qt.IsNil(err))
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -180,6 +201,43 @@ func TestNohupNoTTYInheritsStdio(t *testing.T) {
 	_, statErr := os.Stat(filepath.Join(tmpDir, "nohup.out"))
 	qt.Assert(t, qt.IsTrue(os.IsNotExist(statErr)),
 		qt.Commentf("nohup.out should not be created when stdout is not a tty"))
+}
+
+// TestDollarBangReturnsRealPid is the canonical regression test for the
+// PID=$!; kill $PID bash idiom. Before the fix, $! returned a "g1"
+// sentinel that the kill builtin (correctly) rejected as a non-PID.
+func TestDollarBangReturnsRealPid(t *testing.T) {
+	if _, err := exec.LookPath("sleep"); err != nil {
+		t.Skip("no sleep on PATH:", err)
+	}
+	// sleep 5 & PID=$!; echo "pid=$PID"
+	// We then introspect: the printed PID must be numeric, and `kill -0
+	// $PID` must report "alive" because sleep is genuinely running.
+	out, err := runScript(t, `sleep 5 & PID=$!; echo "pid=$PID"; kill -0 $PID && echo alive; kill $PID; wait $PID 2>/dev/null; echo done`)
+	qt.Assert(t, qt.IsNil(err), qt.Commentf("out: %q", out))
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	qt.Assert(t, qt.IsTrue(len(lines) >= 3), qt.Commentf("expected >=3 lines, got %q", out))
+	pidLine := lines[0]
+	qt.Assert(t, qt.IsTrue(strings.HasPrefix(pidLine, "pid=")),
+		qt.Commentf("first line should be pid= prefixed: %q", pidLine))
+	pidStr := strings.TrimPrefix(pidLine, "pid=")
+	pid, perr := strconv.Atoi(pidStr)
+	qt.Assert(t, qt.IsNil(perr), qt.Commentf("$! must be numeric, got %q", pidStr))
+	qt.Assert(t, qt.IsTrue(pid > 0), qt.Commentf("PID must be > 0, got %d", pid))
+	qt.Assert(t, qt.IsTrue(strings.Contains(out, "alive")),
+		qt.Commentf("kill -0 should report alive; out=%q", out))
+}
+
+// TestDollarBangFallsBackToSentinel: when the backgrounded statement is
+// pure-builtin (no real exec), there's no OS PID to report. $! must
+// fall back to the legacy "g<N>" sentinel so `wait $!` (which the
+// pure-builtin case can still meaningfully wait for) still works.
+func TestDollarBangFallsBackToSentinel(t *testing.T) {
+	out, err := runScript(t, `true & echo "bg=$!"; wait $!; echo done`)
+	qt.Assert(t, qt.IsNil(err), qt.Commentf("out: %q", out))
+	first := strings.SplitN(strings.TrimSpace(out), "\n", 2)[0]
+	qt.Assert(t, qt.Equals(first, "bg=g1"),
+		qt.Commentf("pure-builtin bg should yield g1 sentinel: %q", out))
 }
 
 func TestNohupChildIsInNewSession(t *testing.T) {

@@ -346,12 +346,34 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			break
 		}
 		for _, arg := range args {
-			arg, ok := strings.CutPrefix(arg, "g")
-			pid := atoi(arg)
-			if !ok || pid <= 0 || pid > int64(len(r.bgProcs)) {
+			// Accept either the legacy "gN" sentinel ($! used to always
+			// return that) or a real numeric OS PID (what $! now
+			// returns when the bg statement spawned a real process).
+			// For the numeric form, look the PID up by scanning bg.pid.
+			if rest, ok := strings.CutPrefix(arg, "g"); ok {
+				idx := atoi(rest)
+				if idx <= 0 || idx > int64(len(r.bgProcs)) {
+					return failf(1, "wait: pid %s is not a child of this shell\n", arg)
+				}
+				bg := r.bgProcs[idx-1]
+				<-bg.done
+				exit = *bg.exit
+				continue
+			}
+			pid, perr := strconv.ParseInt(arg, 10, 64)
+			if perr != nil {
 				return failf(1, "wait: pid %s is not a child of this shell\n", arg)
 			}
-			bg := r.bgProcs[pid-1]
+			var bg *bgProc
+			for _, candidate := range r.bgProcs {
+				if candidate.pid.Load() == pid {
+					bg = candidate
+					break
+				}
+			}
+			if bg == nil {
+				return failf(1, "wait: pid %s is not a child of this shell\n", arg)
+			}
 			<-bg.done
 			exit = *bg.exit
 		}

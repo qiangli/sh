@@ -105,15 +105,21 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 			stdout := r.origStdout
 			// TODO: note that `man bash` mentions that `wait` only waits for the last
 			// process substitution as long as it is $!; the logic here would mean we wait for all of them.
-			bg := bgProc{
-				done: make(chan struct{}),
-				exit: new(exitStatus),
+			bg := &bgProc{
+				done:     make(chan struct{}),
+				exit:     new(exitStatus),
+				pidReady: make(chan struct{}),
 			}
 			r.bgProcs = append(r.bgProcs, bg)
 			go func() {
 				defer func() {
 					*bg.exit = r2.exit
 					close(bg.done)
+					select {
+					case <-bg.pidReady:
+					default:
+						close(bg.pidReady)
+					}
 				}()
 				switch ps.Op {
 				case syntax.CmdIn:
@@ -310,13 +316,29 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 		st2 := *st
 		st2.Background = false
 		st2.Disown = false
-		bg := bgProc{
-			done: make(chan struct{}),
-			exit: new(exitStatus),
+		bg := &bgProc{
+			done:     make(chan struct{}),
+			exit:     new(exitStatus),
+			pidReady: make(chan struct{}),
 		}
 		r.bgProcs = append(r.bgProcs, bg)
+		// Stash a pointer to the freshly-appended bgProc on the
+		// goroutine's ctx so the exec handlers (DefaultExecHandler,
+		// runDetachedExec) can publish the real OS PID into it via
+		// publishBgPid. `$!` reads that PID back via bgProc.pidReady.
+		bgCtx := context.WithValue(ctx, bgProcCtxKey{}, bg)
 		go func() {
-			r2.Run(ctx, &st2)
+			defer func() {
+				// Ensure pidReady is closed even if no real exec ever
+				// happened (e.g. `(true) &`). The reader of `$!` waits
+				// on this channel — leaving it open would hang forever.
+				select {
+				case <-bg.pidReady:
+				default:
+					close(bg.pidReady)
+				}
+			}()
+			r2.Run(bgCtx, &st2)
 			r2.exit.exiting = false // subshells don't exit the parent shell
 			*bg.exit = r2.exit
 			close(bg.done)

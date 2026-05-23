@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"mvdan.cc/sh/v3/expand"
@@ -141,7 +142,7 @@ type Runner struct {
 	//
 	// Note that each shell only tracks its direct children;
 	// subshells do not share nor inherit the background PIDs they can wait for.
-	bgProcs []bgProc
+	bgProcs []*bgProc
 
 	opts runnerOpts
 
@@ -247,6 +248,48 @@ type bgProc struct {
 	done chan struct{}
 
 	exit *exitStatus
+
+	// pid is the OS PID of the last real external process this
+	// backgrounded statement spawned. Zero until set, and stays zero for
+	// pure-builtin or pure-goroutine subshells (e.g. `(true) &`,
+	// `(echo hi) &`). Updated atomically because the exec handler
+	// (DefaultExecHandler / runDetachedExec) writes it from the
+	// background goroutine while the parent shell reads it via `$!`.
+	pid atomic.Int64
+
+	// pidReady is closed once the bg goroutine has either set pid via a
+	// real exec.Start, or finished running entirely without ever doing
+	// so. `$!` waits on this channel so it can return a real PID instead
+	// of the "g<N>" sentinel whenever one is actually available — the
+	// usual `PID=$!; kill $PID` idiom relies on this.
+	pidReady chan struct{}
+}
+
+// bgProcCtxKey is the context-value key under which the bg goroutine
+// stashes a pointer to its own bgProc. The default exec handler and the
+// nohup/setsid builtins read this back so they can publish the OS PID
+// of the process they just spawned. Nil means "not running in a
+// backgrounded subshell" — exec handlers in that case skip the publish
+// path entirely.
+type bgProcCtxKey struct{}
+
+// publishBgPid is what exec handlers call after a successful
+// exec.Start. Sets the running goroutine's bgProc.pid (last-writer
+// wins, matching bash's "$! is the last command in the pipeline"
+// semantic) and closes pidReady the first time. Safe no-op when not
+// in a backgrounded context.
+func publishBgPid(ctx context.Context, pid int) {
+	bg, _ := ctx.Value(bgProcCtxKey{}).(*bgProc)
+	if bg == nil {
+		return
+	}
+	bg.pid.Store(int64(pid))
+	select {
+	case <-bg.pidReady:
+		// already closed by an earlier exec or by goroutine exit
+	default:
+		close(bg.pidReady)
+	}
 }
 
 type alias struct {

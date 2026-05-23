@@ -81,6 +81,7 @@ func runDetachedExec(ctx context.Context, r *Runner, label string, args []string
 		exit.code = 126
 		return exit
 	}
+	publishBgPid(ctx, cmd.Process.Pid)
 
 	if !foreground {
 		// Detached: the child now owns its own session. We deliberately do

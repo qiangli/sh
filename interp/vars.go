@@ -165,8 +165,22 @@ func (r *Runner) lookupVar(name string) expand.Variable {
 			vr.List = r.Params
 		}
 	case "!":
+		// Prefer the real OS PID of the last backgrounded statement's
+		// spawned process so the `PID=$!; kill $PID` idiom works
+		// against the kernel. Wait briefly for the bg goroutine to
+		// either Start an exec.Cmd (typical) or finish without one
+		// (`(true) &`); pidReady is closed in either case so this
+		// can't hang. Falls back to the legacy "g<N>" sentinel when
+		// no real exec ever happened — `wait g<N>` still works against
+		// that for pure-builtin backgrounds.
 		if n := len(r.bgProcs); n > 0 {
-			vr.Kind, vr.Str = expand.String, "g"+strconv.Itoa(n)
+			bg := r.bgProcs[n-1]
+			<-bg.pidReady
+			if pid := bg.pid.Load(); pid > 0 {
+				vr.Kind, vr.Str = expand.String, strconv.FormatInt(pid, 10)
+			} else {
+				vr.Kind, vr.Str = expand.String, "g"+strconv.Itoa(n)
+			}
 		}
 	case "?":
 		vr.Kind, vr.Str = expand.String, strconv.Itoa(int(r.lastExit.code))
