@@ -1184,9 +1184,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 var unsupportedHints = map[string]string{
 	// Job control — fundamentally unavailable because subshells are
 	// goroutines, not processes; there's no real job table to act on.
-	"fg":   "no in-shell job control; use an external job-control command",
-	"bg":   "no in-shell job control; use an external job-control command",
-	"jobs": "no in-shell job control; inspect background processes via the embedder API or an external tool",
+	// Outpost (the canonical embedder) records detached PIDs via
+	// WithBgPidCallback and surfaces them through `outpost jobs/fg/bg/kill`.
+	"fg":   "no in-shell job control; use `outpost fg <pid>` (or the equivalent in your embedder)",
+	"bg":   "no in-shell job control; `outpost bg` is a no-op surface (bg & runs detached from the start)",
+	"jobs": "no in-shell job control; list background PIDs with `outpost jobs` (or the equivalent in your embedder)",
 
 	// POSIX builtins with reasonable substitutes.
 	"fc":     "command history editing is not supported; edit and re-enter commands directly",
