@@ -59,7 +59,7 @@ The codebase is a layered pipeline. Each layer is a standalone package usable on
    - `test.go` + `test_classic.go` implement `[[ ... ]]` and POSIX `test`.
    - `handler.go` defines the **middleware model** — exec/open/read-dir/stat/etc. handlers are chained so embedders can intercept any I/O or process launch. Default handlers use real OS syscalls.
    - `vars.go` manages variable scopes (locals, globals, exported, arrays, assoc arrays).
-   - Subshells are **goroutines, not real `fork()`** (pure-Go constraint) — there are no real subprocess PIDs and file descriptors aren't truly shared across "processes". Code that touches pipes/fds must keep this in mind; see the recent fix `ae56302f` for an example (closing parent pipe ends to deliver EOF/SIGPIPE inside the simulated pipeline).
+   - Subshells are **goroutines, not real `fork()`** (pure-Go constraint) — there are no real subprocess PIDs and file descriptors aren't truly shared across "processes". Code that touches pipes/fds must keep this in mind; see commit `12f5191d` for an example (dup'ing pipe fds so EOF/SIGPIPE propagate inside the simulated pipeline).
    - `os_unix.go` / `os_notunix.go` split the few syscalls that genuinely differ.
 
 5. **`shell/`** — thin convenience API (`Fields`, `Expand`, `SourceFile`, …) for callers who want one-shot expansion of a string without wiring up a `Runner` themselves. Uses POSIX syntax regardless of host OS — Windows paths must be escaped or single-quoted.
