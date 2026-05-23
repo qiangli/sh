@@ -346,6 +346,24 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			<-bg.done
 			exit = *bg.exit
 		}
+	case "disown":
+		// The interpreter has no kernel-level job table — backgrounded `&`
+		// statements are goroutines, and nothing in the runner ever sends
+		// SIGHUP to anything at exit. bash `disown` exists to keep jobs off
+		// that table so they survive shell exit; with no table to remove from
+		// and no SIGHUP to dodge, this builtin is a structural no-op. It must
+		// still exist so `set -e` scripts that include `disown` don't abort.
+		fp := flagParser{remaining: args}
+		for fp.more() {
+			switch flag := fp.flag(); flag {
+			case "-a", "-h", "-r":
+				// accepted; behavior is implicit (no job table to filter)
+			default:
+				return failf(2, "disown: invalid option %q\n", flag)
+			}
+		}
+		// Remaining positional args (job specs / PIDs) are ignored — we
+		// have no job table to look them up against.
 	case "builtin":
 		if len(args) < 1 {
 			break

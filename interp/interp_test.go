@@ -1586,6 +1586,16 @@ var runTests = []runTest{
 	// background/wait
 	{"wait", ""},
 	{"wait foo", "wait: pid foo is not a child of this shell\nexit status 1 #JUSTERR"},
+
+	// disown — no-op (no job table to remove from, no SIGHUP to dodge)
+	{"disown", ""},
+	{"disown -a", ""},
+	{"disown -h -r", ""},
+	{"disown 12345", ""},
+	{"disown %1", ""},
+	{"true & disown; echo done", "done\n"},
+	{"set -e; disown -a; echo ok", "ok\n"},
+	{"disown -z", "disown: invalid option \"-z\"\nexit status 2 #JUSTERR"},
 	{"{ true; } & wait", ""},
 	{"{ false; } & wait", ""},
 	{"{ sleep 0.01; true; } & wait", ""},
