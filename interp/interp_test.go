@@ -246,7 +246,7 @@ var runTests = []runTest{
 	{"false; exit", "exit status 1"},
 	{"exit; echo foo", ""},
 	{"exit 0; echo foo", ""},
-	{"printf", "usage: printf format [arguments]\nexit status 2 #JUSTERR"},
+	{"printf", "usage: printf [-v var] format [arguments]\nexit status 2 #JUSTERR"},
 	{"break", "break is only useful in a loop\n #JUSTERR"},
 	{"continue", "continue is only useful in a loop\n #JUSTERR"},
 	{"cd a b", "usage: cd [dir]\nexit status 2 #JUSTERR"},
@@ -302,6 +302,13 @@ var runTests = []runTest{
 	{"printf %%", "%"},
 	{"printf %", "missing format char\nexit status 1 #JUSTERR"},
 	{"printf %; echo foo", "missing format char\nfoo\n #IGNORE"},
+
+	// printf -v: assign formatted output to the named variable instead
+	// of writing to stdout.
+	{"printf -v out 'x=%d' 7; echo $out", "x=7\n"},
+	{"printf -v out '%s\\n' hi; echo \"$out\" | wc -c | tr -d ' '", "4\n"},
+	{"printf -v 1bad 'x'", "printf: \"1bad\": not a valid identifier\nexit status 1 #JUSTERR"},
+	{"printf -v", "printf: -v: option requires an argument\nexit status 2 #JUSTERR"},
 	{"printf %1", "missing format char\nexit status 1 #JUSTERR"},
 	{"printf %+", "missing format char\nexit status 1 #JUSTERR"},
 	{"printf %B foo", "invalid format char: B\nexit status 1 #JUSTERR"},

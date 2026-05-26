@@ -269,20 +269,47 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			r.out("\n")
 		}
 	case "printf":
+		// printf -v VAR FORMAT [args...] writes output to VAR instead of
+		// stdout. Multiple -v flags are illegal; -v requires a name.
+		var assignTo string
+		fp := flagParser{remaining: args}
+		for fp.more() {
+			switch flag := fp.flag(); flag {
+			case "-v":
+				assignTo = fp.value()
+				if assignTo == "" {
+					return failf(2, "printf: -v: option requires an argument\n")
+				}
+				if !syntax.ValidName(assignTo) {
+					return failf(1, "printf: %q: not a valid identifier\n", assignTo)
+				}
+			default:
+				return failf(2, "printf: invalid option %q\n", flag)
+			}
+		}
+		args = fp.args()
 		if len(args) == 0 {
-			return failf(2, "usage: printf format [arguments]\n")
+			return failf(2, "usage: printf [-v var] format [arguments]\n")
 		}
 		format, args := args[0], args[1:]
+		var sb strings.Builder
 		for {
 			s, n, err := expand.Format(r.ecfg, format, args)
 			if err != nil {
 				return failf(1, "%v\n", err)
 			}
-			r.out(s)
+			if assignTo != "" {
+				sb.WriteString(s)
+			} else {
+				r.out(s)
+			}
 			args = args[n:]
 			if n == 0 || len(args) == 0 {
 				break
 			}
+		}
+		if assignTo != "" {
+			r.setVarString(assignTo, sb.String())
 		}
 	case "break", "continue":
 		if !r.inLoop {
