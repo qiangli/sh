@@ -65,6 +65,7 @@ func newRunner() (*interp.Runner, error) {
 		interp.Interactive(true),
 		interp.StdIO(os.Stdin, os.Stdout, os.Stderr),
 		interp.Env(env),
+		interp.WithBashCompatErrors(true),
 		interp.PromptExpand(func(s string) string {
 			envGet := func(name string) string {
 				return r.Env.Get(name).String()

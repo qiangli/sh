@@ -155,10 +155,33 @@ func (hc HandlerContext) Builtin(ctx context.Context, args []string) error {
 }
 
 func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args []string) (exit exitStatus) {
+	// failf emits a user-fault error and sets the exit code. When
+	// [WithBashCompatErrors] is on, the message is prefixed with
+	// "<filename>: line <N>: " so bash 5.3's test suite output matches.
 	failf := func(code uint8, format string, a ...any) exitStatus {
-		r.errf(format, a...)
+		if prefix := r.bashErrPrefix(pos); prefix != "" {
+			r.errf(prefix+format, a...)
+		} else {
+			r.errf(format, a...)
+		}
 		exit.code = code
 		return exit
+	}
+	// invalidOpt is the canonical "<builtin>: <flag>: invalid option"
+	// formatter. In bashCompat mode it follows the bash 5.3 wording
+	// (arg-first, no quotes) and also emits a usage hint to stderr
+	// without the line prefix, matching bash. The legacy form
+	// "<builtin>: invalid option \"<flag>\"" is preserved otherwise.
+	invalidOpt := func(builtin, flag string) exitStatus {
+		if r.bashCompatErrors {
+			r.errf(r.bashErrPrefix(pos)+"%s: %s: invalid option\n", builtin, flag)
+			if usage := bashUsage[builtin]; usage != "" {
+				r.errf("%s: usage: %s\n", builtin, usage)
+			}
+			exit.code = 2
+			return exit
+		}
+		return failf(2, "%s: invalid option %q\n", builtin, flag)
 	}
 	switch name {
 	case ":", "true":
@@ -284,7 +307,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					return failf(1, "printf: %q: not a valid identifier\n", assignTo)
 				}
 			default:
-				return failf(2, "printf: invalid option %q\n", flag)
+				return invalidOpt("printf", flag)
 			}
 		}
 		args = fp.args()
@@ -383,7 +406,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			case "-p":
 				pidVar = fp.value()
 			default:
-				return failf(2, "wait: invalid option %q\n", flag)
+				return invalidOpt("wait", flag)
 			}
 		}
 		remaining := fp.args()
@@ -579,7 +602,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			case "-a", "-h", "-r":
 				// accepted; behavior is implicit (no job table to filter)
 			default:
-				return failf(2, "disown: invalid option %q\n", flag)
+				return invalidOpt("disown", flag)
 			}
 		}
 		// Remaining positional args (job specs / PIDs) are ignored — we
@@ -607,7 +630,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			case "-p", "-P", "-t":
 				mode = flag
 			default:
-				return failf(2, "type: invalid option %q\n", flag)
+				return invalidOpt("type", flag)
 			}
 		}
 		args := fp.args()
@@ -644,7 +667,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			}
 			if len(matches) == 0 {
 				if mode != "-t" {
-					r.errf("type: %s: not found\n", arg)
+					r.errf(r.bashErrPrefix(pos)+"type: %s: not found\n", arg)
 				}
 				anyNotFound = true
 				continue
@@ -703,7 +726,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		for _, name := range remaining {
 			path, err := LookPathDir(r.Dir, r.writeEnv, name)
 			if err != nil {
-				r.errf("hash: %s: not found\n", name)
+				r.errf(r.bashErrPrefix(pos)+"hash: %s: not found\n", name)
 				exit.code = 1
 				continue
 			}
@@ -873,7 +896,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					return failf(2, "exec: -a: option requires an argument\n")
 				}
 			default:
-				return failf(2, "exec: invalid option %q\n", flag)
+				return invalidOpt("exec", flag)
 			}
 		}
 		args = fp.args()
@@ -898,7 +921,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			case "-V":
 				showVV = true
 			default:
-				return failf(2, "command: invalid option %q\n", flag)
+				return invalidOpt("command", flag)
 			}
 		}
 		args := fp.args()
@@ -919,7 +942,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			if showVV {
 				ms := r.typeMatches(arg, false)
 				if len(ms) == 0 {
-					r.errf("command: %s: not found\n", arg)
+					r.errf(r.bashErrPrefix(pos)+"command: %s: not found\n", arg)
 					last = 1
 					continue
 				}
@@ -1093,7 +1116,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			case "-u":
 				fp.value() // consume fd argument, ignore for now
 			default:
-				return failf(2, "read: invalid option %q\n", flag)
+				return invalidOpt("read", flag)
 			}
 		}
 
@@ -1230,7 +1253,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			case "-p", "-q":
 				return failf(2, "shopt: unsupported option %q\n", flag)
 			default:
-				return failf(2, "shopt: invalid option %q\n", flag)
+				return invalidOpt("shopt", flag)
 			}
 		}
 		args := fp.args()
@@ -1423,7 +1446,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					delim = "\x00"
 				}
 			default:
-				return failf(2, "%s: invalid option %q\n", name, flag)
+				return invalidOpt(name, flag)
 			}
 		}
 
@@ -1643,6 +1666,51 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		return failf(2, "%s: not supported in this shell\n", name)
 	}
 	return exit
+}
+
+// bashUsage holds the usage line bash 5.3 prints after a builtin
+// rejects an invalid flag — verbatim from bash so the test suite
+// diffs cleanly. Only the builtins exercised by the bash 5.3 test
+// suite are listed; missing entries simply omit the usage line.
+var bashUsage = map[string]string{
+	"alias":    "alias [-p] [name[=value] ... ]",
+	"bg":       "bg [job_spec ...]",
+	"break":    "break [n]",
+	"cd":       "cd [-L|[-P [-e]] [-@]] [dir]",
+	"command":  "command [-pVv] command [arg ...]",
+	"continue": "continue [n]",
+	"declare":  "declare [-aAfFgiIlnrtux] [name[=value] ...] or declare -p [-aAfFilnrtux] [name ...]",
+	"disown":   "disown [-h] [-ar] [jobspec ... | pid ...]",
+	"enable":   "enable [-a] [-dnps] [-f filename] [name ...]",
+	"export":   "export [-fn] [name[=value] ...] or export -p",
+	"fc":       "fc [-e ename] [-lnr] [first] [last] or fc -s [pat=rep] [command]",
+	"fg":       "fg [job_spec]",
+	"getopts":  "getopts optstring name [arg ...]",
+	"hash":     "hash [-lr] [-p pathname] [-dt] [name ...]",
+	"help":     "help [-dms] [pattern ...]",
+	"history":  "history [-c] [-d offset] [n] or history -anrw [filename] or history -ps arg [arg...]",
+	"jobs":     "jobs [-lnprs] [jobspec ...] or jobs -x command [args]",
+	"kill":     "kill [-s sigspec | -n signum | -sigspec] pid | jobspec ... or kill -l [sigspec]",
+	"let":      "let arg [arg ...]",
+	"local":    "local [option] name[=value] ...",
+	"logout":   "logout [n]",
+	"mapfile":  "mapfile [-d delim] [-n count] [-O origin] [-s count] [-t] [-u fd] [-C callback] [-c quantum] [array]",
+	"printf":   "printf [-v var] format [arguments]",
+	"pwd":      "pwd [-LP]",
+	"read":     "read [-ers] [-a array] [-d delim] [-i text] [-n nchars] [-N nchars] [-p prompt] [-t timeout] [-u fd] [name ...]",
+	"readonly": "readonly [-aAf] [name[=value] ...] or readonly -p",
+	"return":   "return [n]",
+	"set":      "set [-abefhkmnptuvxBCEHPT] [-o option-name] [--] [-] [arg ...]",
+	"shift":    "shift [n]",
+	"shopt":    "shopt [-pqsu] [-o] [optname ...]",
+	"source":   "source filename [arguments]",
+	"trap":     "trap [-lp] [[arg] signal_spec ...]",
+	"type":     "type [-afptP] name [name ...]",
+	"typeset":  "typeset [-aAfFgiIlnrtux] name[=value] ... or typeset -p [-aAfFilnrtux] [name ...]",
+	"umask":    "umask [-p] [-S] [mode]",
+	"unalias":  "unalias [-a] name [name ...]",
+	"unset":    "unset [-f] [-v] [-n] [name ...]",
+	"wait":     "wait [-fn] [-p var] [id ...]",
 }
 
 // typeMatch is a single resolution of a name. type / command -V iterate

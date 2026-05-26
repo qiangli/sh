@@ -210,6 +210,14 @@ type Runner struct {
 	// shell with "not login shell: use 'exit'".
 	loginShell bool
 
+	// bashCompatErrors, when true, prefixes builtin error messages with
+	// `<filename>: line <N>:` and uses bash's argument-first/no-quote
+	// wording. Set via [WithBashCompatErrors] by [cmd/bashy] so the bash
+	// 5.3 test suite output matches. Default off so library callers
+	// (and the legacy TestRunnerRun tests) keep the old "<name>: <msg>
+	// <arg>" wording without the line prefix.
+	bashCompatErrors bool
+
 	// fdTable holds non-stdio file descriptors keyed by OS fd number.
 	// 0/1/2 stay in stdin/stdout/stderr; everything else (coproc pipe
 	// ends, future `exec N<file` targets) lives here. Lookups happen
@@ -714,6 +722,20 @@ func WithLoginShell(login bool) RunnerOption {
 	}
 }
 
+// WithBashCompatErrors switches builtin error messages to bash 5.3
+// wording. With this flag set, builtins prefix user-fault errors with
+// `<filename>: line <N>:` (using [Runner]'s filename or "bashy" when
+// running -c), put the offending argument before the message, and drop
+// Go's `%q` quoting. cmd/bashy enables this so the upstream bash test
+// suite output matches; library callers using [interp.New] directly
+// see the legacy mvdan/sh wording by default.
+func WithBashCompatErrors(on bool) RunnerOption {
+	return func(r *Runner) error {
+		r.bashCompatErrors = on
+		return nil
+	}
+}
+
 func (r *Runner) posixOptByName(name string) *bool {
 	for i, opt := range &posixOptsTable {
 		if opt.name == name {
@@ -989,11 +1011,12 @@ func (r *Runner) Reset() {
 		dirStack: r.dirStack[:0],
 		usedNew:  r.usedNew,
 
-		promptExpand:  r.promptExpand,
-		startTime:     r.startTime,
-		subshellLevel: r.subshellLevel,
-		umask:         r.umask,
-		loginShell:    r.loginShell,
+		promptExpand:     r.promptExpand,
+		startTime:        r.startTime,
+		subshellLevel:    r.subshellLevel,
+		umask:            r.umask,
+		loginShell:       r.loginShell,
+		bashCompatErrors: r.bashCompatErrors,
 		// fdTable is intentionally not preserved across Reset; a reset
 		// runner starts with no inherited non-stdio fds.
 	}
@@ -1174,11 +1197,12 @@ func (r *Runner) subshell(background bool) *Runner {
 
 		origStdout: r.origStdout, // used for process substitutions
 
-		promptExpand:  r.promptExpand,
-		startTime:     r.startTime,
-		subshellLevel: r.subshellLevel + 1,
-		umask:         r.umask,
-		loginShell:    r.loginShell,
+		promptExpand:     r.promptExpand,
+		startTime:        r.startTime,
+		subshellLevel:    r.subshellLevel + 1,
+		umask:            r.umask,
+		loginShell:       r.loginShell,
+		bashCompatErrors: r.bashCompatErrors,
 		// Subshells inherit open fds the way bash does. Clone the map so
 		// child mutations (close, dup) don't leak back to the parent;
 		// the underlying *os.File handles are shared (single OS fd).

@@ -298,6 +298,21 @@ func (r *Runner) errf(format string, a ...any) {
 	fmt.Fprintf(r.stderr, format, a...)
 }
 
+// bashErrPrefix returns the bash-style `<filename>: line <N>: ` prefix
+// when [WithBashCompatErrors] is on; the empty string otherwise. The
+// filename comes from the parsed script (set when running a File) or
+// falls back to "bashy" for `-c` / stdin / interactive invocations.
+func (r *Runner) bashErrPrefix(pos syntax.Pos) string {
+	if !r.bashCompatErrors {
+		return ""
+	}
+	name := r.filename
+	if name == "" {
+		name = "bashy"
+	}
+	return fmt.Sprintf("%s: line %d: ", name, pos.Line())
+}
+
 func (r *Runner) stop(ctx context.Context) bool {
 	// Some traps trigger on exit, so we do want those to run.
 	if !r.handlingTrap && (r.exit.returning || r.exit.exiting) {
