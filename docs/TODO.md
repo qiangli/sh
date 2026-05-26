@@ -104,7 +104,7 @@
 - [x] `BASH_CMDS` — associative array of hash table (dynamic from r.cmdHashTable)
 - [x] `BASH_COMPAT` — compatibility level (settable/readable as a regular variable; we always behave as bash 5.3 so the value has no effect)
 - [ ] `BASH_XTRACEFD` — redirect xtrace to FD
-- [ ] `MAIL` / `MAILCHECK` / `MAILPATH`
+- [x] `MAIL` / `MAILCHECK` / `MAILPATH` — settable/readable as plain variables; no periodic mail check loop (intentionally — modern shells skip this)
 - [ ] `READLINE_LINE` / `READLINE_POINT`
 
 ### P5: Interactive Features
@@ -300,7 +300,7 @@ covered by an earlier section above is NOT repeated here.
 - [ ] `declare -i` enforce arithmetic-on-assignment for subsequent assignments
 - [ ] `declare -u/-l/-c` case-attribute auto-transform (`att_uppercase`/`lowercase`/`capcase`)
 - [ ] `printf %q` to use bash's `sh_quote_reusable` style
-- [ ] `kill -L` (uppercase = signal table) alias
+- [x] `kill -L` (uppercase = signal table) — accepted as an alias for `-l` in the kill builtin
 - [ ] `getopts` OPTERR variable, leading-colon-in-optstring silent mode
 - [ ] `caller -e EXTDEBUG` extended-debug semantics
 - [ ] `command --explain foo` (new; from agentic extensions)
@@ -330,7 +330,7 @@ covered by an earlier section above is NOT repeated here.
 - [ ] `TIMEFORMAT` — for `time` builtin output
 - [ ] `TMOUT` — interactive idle / `read` default timeout
 - [x] `LINES`, `COLUMNS` — terminal dimensions via `golang.org/x/term`
-- [ ] `OLDPWD` — bind as set-by-cd readonly-after-set
+- [x] `OLDPWD` — set by cd to the previous PWD; `cd -` chdirs back and echoes it
 - [ ] `COMP_WORDS`, `COMP_CWORD`, `COMP_LINE`, `COMP_POINT`, `COMP_KEY`, `COMP_TYPE`, `COMPREPLY`, `COMP_WORDBREAKS` — set during completion functions
 - [ ] `READLINE_LINE`, `READLINE_POINT`, `READLINE_MARK` — set during `bind -x` callbacks
 
