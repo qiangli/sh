@@ -1314,6 +1314,12 @@ func (r *Runner) execAs(ctx context.Context, pos syntax.Pos, argv0 string, args 
 }
 
 func (r *Runner) open(ctx context.Context, path string, flags int, mode os.FileMode, print bool) (io.ReadWriteCloser, error) {
+	// Apply this Runner's virtual umask when creating a file. The
+	// process-wide syscall umask is never touched (see Runner.umask),
+	// so we have to mask the mode here before passing it down.
+	if flags&os.O_CREATE != 0 {
+		mode &^= os.FileMode(r.umask)
+	}
 	// If we are opening a FIFO temporary file created by the interpreter itself,
 	// don't pass this along to the open handler as it will not work at all
 	// unless [os.OpenFile] is used directly with it.

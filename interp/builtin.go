@@ -1455,7 +1455,24 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 	case "suspend":
 		return failf(1, "suspend: not supported\n")
 	case "logout":
-		r.exit.exiting = true
+		// Bash refuses `logout` from a non-login shell. Embedders mark
+		// the runner via WithLoginShell.
+		if !r.loginShell {
+			return failf(1, "logout: not login shell: use \"exit\"\n")
+		}
+		switch len(args) {
+		case 0:
+			exit = r.lastExit
+		case 1:
+			n, err := strconv.Atoi(args[0])
+			if err != nil {
+				return failf(2, "logout: invalid exit status code: %q\n", args[0])
+			}
+			exit.code = uint8(n)
+		default:
+			return failf(1, "logout: too many arguments\n")
+		}
+		exit.exiting = true
 	case "compgen", "complete", "compopt":
 		// Phase 6 stubs: programmable completion.
 		return failf(1, "%s: programmable completion not yet implemented\n", name)
@@ -1464,15 +1481,18 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		r.outf("0m0.000s 0m0.000s\n0m0.000s 0m0.000s\n")
 	case "umask":
 		if len(args) == 0 {
-			r.outf("0022\n")
+			r.outf("%04o\n", r.umask)
 			break
 		}
-		// Setting umask: parse octal value.
+		// Setting umask: parse octal value. Updates only the per-Runner
+		// virtual umask; we deliberately do not call syscall.Umask, which
+		// is process-wide and would clobber sibling runners. See
+		// Runner.umask.
 		mask, err := strconv.ParseUint(args[0], 8, 32)
 		if err != nil {
 			return failf(1, "umask: %s: octal number out of range\n", args[0])
 		}
-		syscall.Umask(int(mask))
+		r.umask = int(mask)
 	case "export":
 		// Handle "export" when used as a simple command (e.g., IFS=: export x).
 		for _, arg := range args {

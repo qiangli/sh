@@ -3525,6 +3525,20 @@ done <<< 2`,
 		"newgrp: not supported in this shell — group switching is not supported; switch groups in the parent process (e.g. with sudo -g)\nexit status 2 #JUSTERR",
 	},
 
+	// umask: per-Runner virtual mask. Reading is 4-digit octal; setting
+	// updates only the runner field, not the process.
+	{"umask 077; umask", "0077\n"},
+	{"umask 022; umask", "0022\n"},
+	{"umask 999", "umask: 999: octal number out of range\nexit status 1"},
+
+	// logout from a non-login shell errors with the bash-compatible
+	// message. The login-shell success path is covered in
+	// TestRunnerLoginShell.
+	{
+		"logout",
+		"logout: not login shell: use \"exit\"\nexit status 1 #JUSTERR",
+	},
+
 	// exec
 	{"exec", ""},
 	{
@@ -5062,6 +5076,35 @@ func TestRunnerManyResets(t *testing.T) {
 	r, _ := interp.New()
 	for range 5 {
 		r.Reset()
+	}
+}
+
+func TestRunnerLoginShell(t *testing.T) {
+	t.Parallel()
+
+	// With WithLoginShell, `logout` should exit cleanly with the
+	// caller-provided code.
+	file, err := syntax.NewParser().Parse(strings.NewReader("logout 7"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var b bytes.Buffer
+	r, err := interp.New(interp.StdIO(nil, &b, &b), interp.WithLoginShell(true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), runnerRunTimeout)
+	defer cancel()
+	runErr := r.Run(ctx, file)
+	if runErr == nil {
+		t.Fatalf("expected exit status from `logout 7`, got nil")
+	}
+	var status interp.ExitStatus
+	if !errors.As(runErr, &status) || uint8(status) != 7 {
+		t.Fatalf("want exit status 7, got %v", runErr)
+	}
+	if got := b.String(); got != "" {
+		t.Fatalf("unexpected stderr/stdout: %q", got)
 	}
 }
 

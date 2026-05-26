@@ -10,11 +10,27 @@ import (
 	"os"
 	"os/user"
 	"strconv"
+	"sync"
 	"syscall"
 
 	"golang.org/x/sys/unix"
 	"mvdan.cc/sh/v3/syntax"
 )
+
+// umaskMu serializes the read-then-restore dance for [syscall.Umask],
+// which is process-wide and has no native read-only access.
+var umaskMu sync.Mutex
+
+// processUmask returns the current process umask without permanently
+// changing it. It briefly sets the umask to 0 to read the prior value,
+// then restores it, all under a package-level mutex.
+func processUmask() int {
+	umaskMu.Lock()
+	defer umaskMu.Unlock()
+	m := syscall.Umask(0)
+	syscall.Umask(m)
+	return m
+}
 
 func mkfifo(path string, mode uint32) error {
 	return unix.Mkfifo(path, mode)

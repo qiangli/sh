@@ -197,6 +197,18 @@ type Runner struct {
 
 	// subshellLevel tracks the nesting depth of subshells, for BASH_SUBSHELL.
 	subshellLevel int
+
+	// umask is this Runner's virtual file-creation mask. It is applied at
+	// [Runner.open] when O_CREATE is set in the flags, never via
+	// [syscall.Umask] (which would clobber other Runners in the same
+	// process). A custom [OpenHandler] that bypasses [Runner.open]
+	// won't see the mask applied.
+	umask int
+
+	// loginShell, when true, allows the `logout` builtin to exit the shell.
+	// Set via [WithLoginShell]. Bash refuses `logout` from a non-login
+	// shell with "not login shell: use 'exit'".
+	loginShell bool
 }
 
 // exitStatus holds the state of the shell after running one command.
@@ -682,6 +694,17 @@ func WithBgPidCallback(fn func(pid int)) RunnerOption {
 	}
 }
 
+// WithLoginShell marks this runner as a login shell. Without it, the
+// `logout` builtin refuses with bash's "not login shell" error. cmd/bashy's
+// interactive mode and embedders that own the session lifetime (e.g.
+// outpost's SSH attach) should opt in.
+func WithLoginShell(login bool) RunnerOption {
+	return func(r *Runner) error {
+		r.loginShell = login
+		return nil
+	}
+}
+
 func (r *Runner) posixOptByName(name string) *bool {
 	for i, opt := range &posixOptsTable {
 		if opt.name == name {
@@ -918,6 +941,10 @@ func (r *Runner) Reset() {
 		}
 		// Clean it as we will later do a string prefix match.
 		r.tempDir = filepath.Clean(r.tempDir)
+		// Snapshot the process umask once at first Reset. The builtin
+		// updates only r.umask afterwards; the process value is never
+		// mutated by this runner.
+		r.umask = processUmask()
 	}
 	// reset the internal state
 	*r = Runner{
@@ -954,8 +981,10 @@ func (r *Runner) Reset() {
 		usedNew:  r.usedNew,
 
 		promptExpand:  r.promptExpand,
-		startTime:    r.startTime,
+		startTime:     r.startTime,
 		subshellLevel: r.subshellLevel,
+		umask:         r.umask,
+		loginShell:    r.loginShell,
 	}
 	// Ensure we stop referencing any pointers before we reuse bgProcs.
 	clear(r.bgProcs)
