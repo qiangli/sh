@@ -28,7 +28,20 @@ var (
 	norc      = flag.Bool("norc", false, "do not read ~/.bashyrc")
 	noprofile = flag.Bool("noprofile", false, "do not read /etc/profile or ~/.bashy_profile")
 	login     = flag.Bool("login", false, "act as a login shell")
+	optsOn    multiFlag
+	optsOff   multiFlag
 )
+
+// multiFlag collects repeated string values for a flag, e.g. -o opt.
+type multiFlag []string
+
+func (m *multiFlag) String() string     { return strings.Join(*m, ",") }
+func (m *multiFlag) Set(v string) error { *m = append(*m, v); return nil }
+
+func init() {
+	flag.Var(&optsOn, "o", "enable a set option (posix, errexit, xtrace, ...); may be repeated")
+	flag.Var(&optsOff, "O", "enable a shopt option; may be repeated")
+}
 
 func main() {
 	flag.Parse()
@@ -61,7 +74,7 @@ func newRunner() (*interp.Runner, error) {
 	env := expand.ListEnviron(envVars...)
 	var r *interp.Runner
 	var err error
-	r, err = interp.New(
+	opts := []interp.RunnerOption{
 		interp.Interactive(true),
 		interp.StdIO(os.Stdin, os.Stdout, os.Stderr),
 		interp.Env(env),
@@ -72,11 +85,35 @@ func newRunner() (*interp.Runner, error) {
 			}
 			return expandPrompt(s, envGet, 0, 0)
 		}),
-	)
+	}
+	// Reuse interp.Params to apply set-options requested on the
+	// command line. `bashy -o posix -o errexit` arrives here as
+	// optsOn=["posix","errexit"]; `+O foo` would land in optsOff
+	// once we accept the `+` prefix at flag-parse time.
+	if setArgs := collectSetArgs(); len(setArgs) > 0 {
+		opts = append(opts, interp.Params(setArgs...))
+	}
+	if *posix {
+		opts = append(opts, interp.Params("-o", "posix"))
+	}
+	r, err = interp.New(opts...)
 	if err != nil {
 		return nil, err
 	}
 	return r, nil
+}
+
+// collectSetArgs converts the -o / -O flags collected on the command
+// line into the argv form that interp.Params understands.
+func collectSetArgs() []string {
+	var out []string
+	for _, name := range optsOn {
+		out = append(out, "-o", name)
+	}
+	for _, name := range optsOff {
+		out = append(out, "+o", name)
+	}
+	return out
 }
 
 // isLoginShell returns true if bashy was invoked as a login shell.
