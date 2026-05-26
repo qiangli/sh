@@ -133,13 +133,64 @@ func atoi(s string) int64 {
 		if hasSep {
 			var err error
 			base, err = strconv.ParseInt(baseStr, 10, 8)
-			if err != nil || base > 64 {
+			if err != nil || base < 2 || base > 64 {
 				return 0
 			}
 			s = intStr
 		}
 	}
-	n, _ := strconv.ParseInt(s, int(base), 64)
+	// Bases 2-36 use Go's ParseInt (handles negative sign and case-
+	// insensitive a-z). Bases 37-64 need bash's custom digit map:
+	// 0-9 → 0-9, a-z → 10-35, A-Z → 36-61, @ → 62, _ → 63.
+	if base <= 36 {
+		n, _ := strconv.ParseInt(s, int(base), 64)
+		return n
+	}
+	return bashBaseAtoi(s, base)
+}
+
+// bashBaseAtoi parses an integer in bash's extended digit alphabet
+// for bases 2-64. Returns 0 on any invalid digit; callers don't
+// distinguish "invalid" from "zero" here, matching the silent
+// behaviour of [atoi] for malformed input.
+func bashBaseAtoi(s string, base int64) int64 {
+	if len(s) == 0 {
+		return 0
+	}
+	neg := false
+	switch s[0] {
+	case '+':
+		s = s[1:]
+	case '-':
+		neg = true
+		s = s[1:]
+	}
+	var n int64
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		var d int64
+		switch {
+		case c >= '0' && c <= '9':
+			d = int64(c - '0')
+		case c >= 'a' && c <= 'z':
+			d = int64(c-'a') + 10
+		case c >= 'A' && c <= 'Z':
+			d = int64(c-'A') + 36
+		case c == '@':
+			d = 62
+		case c == '_':
+			d = 63
+		default:
+			return 0
+		}
+		if d >= base {
+			return 0
+		}
+		n = n*base + d
+	}
+	if neg {
+		n = -n
+	}
 	return n
 }
 

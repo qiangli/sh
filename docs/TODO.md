@@ -44,7 +44,7 @@
 - [ ] `${ cmd; }` funsub (brace command substitution) execution
 - [ ] `${ (shift) }` funsub with subshell
 - [ ] `${H*}` — `*` as parameter expansion pattern inside `[[ ]]`
-- [ ] `((true ) )` — arithmetic with space before `)` in case clause
+- [x] `((true ) )` — arithmetic with space before `)` in case clause (peekArithmEnd skips horizontal whitespace)
 - [ ] `case esac in esac)` — eval parsing of unusual case patterns
 
 ### P1: Error Message Format (affects ~60 tests)
@@ -87,9 +87,9 @@
 - [ ] `$'...'` ANSI-C quoting edge cases
 - [ ] IFS scoping: temporary IFS in simple commands vs eval/special builtins
 - [ ] Word splitting with empty fields (IFS-related)
-- [ ] Tilde expansion in assignments: `PATH=~:$PATH`
+- [x] Tilde expansion in assignments: `PATH=~:$PATH` (LiteralForAssign + tildeInAssign flag)
 - [ ] `$"..."` locale translation strings
-- [ ] Arithmetic base notation: `16#FF`, `2#1010`
+- [x] Arithmetic base notation: `16#FF`, `2#1010` (bases 2-64 with bash's extended digit alphabet for 37-64)
 
 ### P4: Shell Variable Completeness
 
