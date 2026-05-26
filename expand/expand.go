@@ -19,6 +19,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"mvdan.cc/sh/v3/internal"
 	"mvdan.cc/sh/v3/pattern"
@@ -91,6 +92,11 @@ type Config struct {
 	// escape sequences such as \u, \h, \w. If nil, ${var@P} returns the
 	// string unchanged.
 	PromptExpand func(string) string
+
+	// StartTime is the timestamp printf's `%(fmt)T -2` resolves to (the
+	// shell's start time). If zero, -2 falls back to the current time.
+	// The interpreter sets this from [Runner.startTime].
+	StartTime time.Time
 
 	bufferAlloc strings.Builder
 	fieldAlloc  [4]fieldPart
@@ -253,7 +259,7 @@ func Format(cfg *Config, format string, args []string) (string, int, error) {
 	cfg = prepareConfig(cfg)
 	sb := cfg.strBuilder()
 
-	consumed, err := formatInto(sb, format, args)
+	consumed, err := formatInto(sb, format, args, cfg.StartTime)
 	if err != nil {
 		return "", 0, err
 	}
@@ -261,7 +267,98 @@ func Format(cfg *Config, format string, args []string) (string, int, error) {
 	return sb.String(), consumed, err
 }
 
-func formatInto(sb *strings.Builder, format string, args []string) (int, error) {
+// strftime implements a subset of POSIX strftime sufficient for bash's
+// `printf '%(fmt)T'`. Unknown specifiers (`%X` where X isn't handled)
+// are passed through unchanged, matching bash's behavior of preserving
+// the literal text rather than erroring.
+func strftime(format string, t time.Time) string {
+	var sb strings.Builder
+	for i := 0; i < len(format); i++ {
+		if format[i] != '%' || i+1 >= len(format) {
+			sb.WriteByte(format[i])
+			continue
+		}
+		i++
+		switch format[i] {
+		case 'Y':
+			fmt.Fprintf(&sb, "%04d", t.Year())
+		case 'y':
+			fmt.Fprintf(&sb, "%02d", t.Year()%100)
+		case 'm':
+			fmt.Fprintf(&sb, "%02d", int(t.Month()))
+		case 'd':
+			fmt.Fprintf(&sb, "%02d", t.Day())
+		case 'e':
+			fmt.Fprintf(&sb, "%2d", t.Day())
+		case 'H':
+			fmt.Fprintf(&sb, "%02d", t.Hour())
+		case 'I':
+			h := t.Hour() % 12
+			if h == 0 {
+				h = 12
+			}
+			fmt.Fprintf(&sb, "%02d", h)
+		case 'M':
+			fmt.Fprintf(&sb, "%02d", t.Minute())
+		case 'S':
+			fmt.Fprintf(&sb, "%02d", t.Second())
+		case 'j':
+			fmt.Fprintf(&sb, "%03d", t.YearDay())
+		case 'B':
+			sb.WriteString(t.Month().String())
+		case 'b', 'h':
+			sb.WriteString(t.Month().String()[:3])
+		case 'A':
+			sb.WriteString(t.Weekday().String())
+		case 'a':
+			sb.WriteString(t.Weekday().String()[:3])
+		case 'p':
+			if t.Hour() < 12 {
+				sb.WriteString("AM")
+			} else {
+				sb.WriteString("PM")
+			}
+		case 'T':
+			fmt.Fprintf(&sb, "%02d:%02d:%02d", t.Hour(), t.Minute(), t.Second())
+		case 'F':
+			fmt.Fprintf(&sb, "%04d-%02d-%02d", t.Year(), int(t.Month()), t.Day())
+		case 'D':
+			fmt.Fprintf(&sb, "%02d/%02d/%02d", int(t.Month()), t.Day(), t.Year()%100)
+		case 'R':
+			fmt.Fprintf(&sb, "%02d:%02d", t.Hour(), t.Minute())
+		case 'r':
+			h := t.Hour() % 12
+			if h == 0 {
+				h = 12
+			}
+			suffix := "AM"
+			if t.Hour() >= 12 {
+				suffix = "PM"
+			}
+			fmt.Fprintf(&sb, "%02d:%02d:%02d %s", h, t.Minute(), t.Second(), suffix)
+		case 'n':
+			sb.WriteByte('\n')
+		case 't':
+			sb.WriteByte('\t')
+		case 'Z':
+			sb.WriteString(t.Format("MST"))
+		case 'z':
+			sb.WriteString(t.Format("-0700"))
+		case 's':
+			fmt.Fprintf(&sb, "%d", t.Unix())
+		case 'N':
+			fmt.Fprintf(&sb, "%09d", t.Nanosecond())
+		case '%':
+			sb.WriteByte('%')
+		default:
+			sb.WriteByte('%')
+			sb.WriteByte(format[i])
+		}
+	}
+	return sb.String()
+}
+
+func formatInto(sb *strings.Builder, format string, args []string, startTime time.Time) (int, error) {
 	var fmts []byte
 	initialArgs := len(args)
 
@@ -347,6 +444,49 @@ func formatInto(sb *strings.Builder, format string, args []string) (int, error) 
 			case '%':
 				sb.WriteByte('%')
 				fmts = nil
+			case '(':
+				// bash's %(fmt)T datetime: read fmt up to ')', then
+				// require a trailing 'T'. The fmt argument is passed
+				// to strftime; the value argument is a Unix timestamp
+				// where -1 means now and -2 means shell start time.
+				if len(fmts) > 1 {
+					return 0, fmt.Errorf("invalid format char: %c", c)
+				}
+				end := strings.IndexByte(format[i+1:], ')')
+				if end < 0 {
+					return 0, fmt.Errorf("printf: missing matching `)' in format")
+				}
+				strFmt := format[i+1 : i+1+end]
+				nextIdx := i + 1 + end + 1
+				if nextIdx >= len(format) || format[nextIdx] != 'T' {
+					return 0, fmt.Errorf("printf: %%(...) must be followed by `T'")
+				}
+				var t time.Time
+				if len(args) > 0 {
+					arg := args[0]
+					args = args[1:]
+					switch arg {
+					case "-1", "":
+						t = time.Now()
+					case "-2":
+						if !startTime.IsZero() {
+							t = startTime
+						} else {
+							t = time.Now()
+						}
+					default:
+						n, err := strconv.ParseInt(arg, 10, 64)
+						if err != nil {
+							return 0, fmt.Errorf("printf: %q: invalid number", arg)
+						}
+						t = time.Unix(n, 0)
+					}
+				} else {
+					t = time.Now()
+				}
+				sb.WriteString(strftime(strFmt, t))
+				i = nextIdx // skip past the )T
+				fmts = nil
 			case 'c':
 				var b byte
 				if len(args) > 0 {
@@ -375,7 +515,7 @@ func formatInto(sb *strings.Builder, format string, args []string) (int, error) 
 					// Passing in nil for args ensures that % format
 					// strings aren't processed; only escape sequences
 					// will be handled.
-					_, err := formatInto(sb, arg, nil)
+					_, err := formatInto(sb, arg, nil, startTime)
 					if err != nil {
 						return 0, err
 					}

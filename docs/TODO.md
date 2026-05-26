@@ -59,8 +59,9 @@
 ### P2: Builtin Enhancements (affects ~30 tests)
 
 - [x] `printf -v var` — write output to variable instead of stdout
-- [ ] `printf %b` — interpret backslash escapes in argument
-- [ ] `printf %(fmt)T` — datetime formatting
+- [x] `printf %b` — interpret backslash escapes in argument (already worked; regression tests added)
+- [x] `printf %(fmt)T` — datetime formatting (strftime subset; -1 = now, -2 = shell start, integer = Unix timestamp)
+- [x] `printf --` — argument terminator (already worked via flagParser; regression test added)
 - [ ] `printf` full error handling matching bash
 - [ ] `declare -f` display format matching bash (indentation, semicolons)
 - [ ] `declare -p` output format matching bash

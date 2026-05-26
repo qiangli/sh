@@ -309,6 +309,23 @@ var runTests = []runTest{
 	{"printf -v out '%s\\n' hi; echo \"$out\" | wc -c | tr -d ' '", "4\n"},
 	{"printf -v 1bad 'x'", "printf: \"1bad\": not a valid identifier\nexit status 1 #JUSTERR"},
 	{"printf -v", "printf: -v: option requires an argument\nexit status 2 #JUSTERR"},
+
+	// printf %b: interpret backslash escapes inside the *argument*
+	// (not the format string), so `printf '%b\n' 'a\tb'` outputs a
+	// literal tab.
+	{`printf '%b' 'foo\nbar'`, "foo\nbar"},
+	{`printf '%b\n' 'a\tb'`, "a\tb\n"},
+
+	// printf %(fmt)T: strftime-style datetime. Year and Unix-time
+	// specifiers are timezone-stable for fixed timestamps.
+	{`printf '%(%Y)T\n' 1700000000`, "2023\n"},
+	{`printf '%(%s)T\n' 1700000000`, "1700000000\n"},
+	{`printf '%(%%)T' 1700000000`, "%"},
+	// Unknown specifier passes through verbatim, matching bash.
+	{`printf '%(%q)T\n' 1700000000`, "%q\n"},
+
+	// printf -- ends option parsing so a format starting with - works.
+	{`printf -- '-x: %s\n' world`, "-x: world\n"},
 	{"printf %1", "missing format char\nexit status 1 #JUSTERR"},
 	{"printf %+", "missing format char\nexit status 1 #JUSTERR"},
 	{"printf %B foo", "invalid format char: B\nexit status 1 #JUSTERR"},

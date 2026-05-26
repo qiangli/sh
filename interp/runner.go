@@ -164,6 +164,7 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 		},
 	}
 	r.ecfg.PromptExpand = r.promptExpand
+	r.ecfg.StartTime = r.startTime
 	r.updateExpandOpts()
 }
 
