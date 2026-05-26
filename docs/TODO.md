@@ -39,8 +39,8 @@
 
 ### P0: Parser Fixes (blocking entire test files)
 
-- [ ] `+=` compound assignment in arithmetic ternary: `$((cond ? val : x+=2))`
-- [ ] Empty heredoc delimiter: `cat <<''`
+- [x] `+=` compound assignment in arithmetic ternary: `$((cond ? val : x+=2))`
+- [x] Empty heredoc delimiter: `cat <<''` (already worked; regression tests added)
 - [ ] `${ cmd; }` funsub (brace command substitution) execution
 - [ ] `${ (shift) }` funsub with subshell
 - [ ] `${H*}` — `*` as parameter expansion pattern inside `[[ ]]`
@@ -58,7 +58,7 @@
 
 ### P2: Builtin Enhancements (affects ~30 tests)
 
-- [ ] `printf -v var` — write output to variable instead of stdout
+- [x] `printf -v var` — write output to variable instead of stdout
 - [ ] `printf %b` — interpret backslash escapes in argument
 - [ ] `printf %(fmt)T` — datetime formatting
 - [ ] `printf` full error handling matching bash
@@ -71,9 +71,9 @@
 - [x] `type -p` — print path only if no higher-priority match
 - [x] `type -P` — force PATH search
 - [x] `command -V` — verbose command description (reuses typeMatches)
-- [ ] `return` outside function — should error in non-POSIX mode
-- [ ] `let` with multiple expressions
-- [ ] `select` loop construct
+- [x] `return` outside function — already errors with proper message
+- [x] `let` with multiple expressions — already worked; regression tests added
+- [x] `select` loop construct — rewrote to actually loop and handle EOF/empty/invalid
 - [ ] `mapfile -O origin` — start index, `-c count`, `-C callback`
 - [ ] `read -N` nchars (don't stop at delimiter)
 - [ ] `getopts` OPTERR variable, error message format
@@ -82,7 +82,7 @@
 
 - [ ] Brace expansion with backslash quoting: `\{a,b\}` should not expand
 - [ ] Brace expansion sequence step: `{0..10..2}` step handling
-- [ ] Brace expansion zero-padding: `{01..05}` → 01 02 03 04 05
+- [x] Brace expansion zero-padding: `{01..05}` → 01 02 03 04 05 (now also handles mixed widths like `{01..100}` and negative ranges)
 - [ ] `$'...'` ANSI-C quoting edge cases
 - [ ] IFS scoping: temporary IFS in simple commands vs eval/special builtins
 - [ ] Word splitting with empty fields (IFS-related)

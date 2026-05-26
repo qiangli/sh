@@ -638,44 +638,8 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			}
 
 			if cm.Select {
-				ps3 := shellDefaultPS3
-				if e := r.envGet(shellReplyPS3Var); e != "" {
-					ps3 = e
-				}
-
-				prompt := func() []byte {
-					// display menu
-					for i, word := range items {
-						r.errf("%d) %v\n", i+1, word)
-					}
-					r.errf("%s", ps3)
-
-					line, err := r.readLine(ctx, true)
-					if err != nil {
-						r.exit.code = 1
-						return nil
-					}
-					return line
-				}
-
-			retry:
-				choice := prompt()
-				if len(choice) == 0 {
-					goto retry // no reply; try again
-				}
-
-				reply := string(choice)
-				r.setVarString(shellReplyVar, reply)
-
-				c, _ := strconv.Atoi(reply)
-				if c > 0 && c <= len(items) {
-					r.setVarString(name, items[c-1])
-				}
-
-				// execute commands until break or return is encountered
-				if r.loopStmtsBroken(ctx, cm.Do) {
-					break
-				}
+				r.selectLoop(ctx, name, items, cm.Do)
+				break
 			}
 
 			for _, field := range items {
@@ -1384,6 +1348,50 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 		r.setVarString(namedFDVar, strconv.Itoa(targetFd))
 	}
 	return f, nil
+}
+
+// selectLoop implements bash's `select var in items; do ...; done`.
+// Each iteration prints the numbered menu to stderr, prompts with PS3,
+// reads a line into REPLY, sets var to items[N-1] when the reply is a
+// valid integer 1..len(items) (otherwise var becomes empty), and runs
+// the body. An empty reply re-displays the menu without running the
+// body. EOF (Ctrl-D) exits the loop with exit code 1, matching bash.
+func (r *Runner) selectLoop(ctx context.Context, name string, items []string, do []*syntax.Stmt) {
+	ps3 := shellDefaultPS3
+	if e := r.envGet(shellReplyPS3Var); e != "" {
+		ps3 = e
+	}
+	for {
+		var reply string
+		// Re-display menu until the user supplies a non-empty reply
+		// (matching bash, which suppresses the body run on empty input).
+		for {
+			for i, word := range items {
+				r.errf("%d) %s\n", i+1, word)
+			}
+			r.errf("%s", ps3)
+			line, err := r.readLine(ctx, true)
+			if err != nil {
+				// EOF: exit the loop. Bash exits with status 1.
+				r.exit.code = 1
+				return
+			}
+			reply = string(line)
+			r.setVarString(shellReplyVar, reply)
+			if reply != "" {
+				break
+			}
+		}
+		c, _ := strconv.Atoi(reply)
+		if c > 0 && c <= len(items) {
+			r.setVarString(name, items[c-1])
+		} else {
+			r.setVarString(name, "")
+		}
+		if r.loopStmtsBroken(ctx, do) {
+			return
+		}
+	}
 }
 
 func (r *Runner) loopStmtsBroken(ctx context.Context, stmts []*syntax.Stmt) bool {

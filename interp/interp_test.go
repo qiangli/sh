@@ -2268,6 +2268,26 @@ var runTests = []runTest{
 	{"let 1 0; echo $?", "1\n"}, // last expr (0) → exit 1
 	{"let 0 1; echo $?", "0\n"}, // last expr (1) → exit 0
 
+	// select loop: prints menu to stderr, reads reply from stdin
+	// (which we feed via heredoc), sets var to items[N-1], REPLY to
+	// the raw input, then runs the body. Empty/invalid input is
+	// handled separately below.
+	{
+		"PS3='> '; select x in a b c; do echo \"x=$x R=$REPLY\"; break; done <<<2",
+		"1) a\n2) b\n3) c\n> x=b R=2\n",
+	},
+	// Invalid reply (out-of-range number) sets var to empty, REPLY
+	// to the raw input, body runs.
+	{
+		"PS3='> '; select x in a b c; do echo \"x=$x R=$REPLY\"; break; done <<<99",
+		"1) a\n2) b\n3) c\n> x= R=99\n",
+	},
+	// EOF on stdin exits the loop with status 1.
+	{
+		"PS3='> '; select x in a b c; do echo body; done </dev/null; echo end=$?",
+		"1) a\n2) b\n3) c\n> end=1\n",
+	},
+
 	// set/shift
 	{
 		"echo $#; set foo bar; echo $#",
