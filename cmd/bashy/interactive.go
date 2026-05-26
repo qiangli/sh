@@ -8,13 +8,29 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/ergochat/readline"
 
+	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/interp"
 	"mvdan.cc/sh/v3/syntax"
 )
+
+// setHistCmd publishes the interactive command counter as $HISTCMD.
+// Bash only sets HISTCMD when history is enabled (interactive mode),
+// so we update it here rather than in lookupVar.
+func setHistCmd(r *interp.Runner, n int) {
+	if r.Vars == nil {
+		r.Vars = make(map[string]expand.Variable)
+	}
+	r.Vars["HISTCMD"] = expand.Variable{
+		Set:  true,
+		Kind: expand.String,
+		Str:  strconv.Itoa(n),
+	}
+}
 
 func runInteractive(r *interp.Runner, stdin *os.File, stdout, stderr io.Writer) error {
 	lang := syntax.LangBash
@@ -112,6 +128,7 @@ func runInteractive(r *interp.Runner, stdin *os.File, stdout, stderr io.Writer) 
 			continue
 		}
 		cmdNum++
+		setHistCmd(r, cmdNum)
 		ctx := context.Background()
 		for _, stmt := range prog.Stmts {
 			if err := r.Run(ctx, stmt); r.Exited() {
@@ -156,6 +173,7 @@ func runInteractiveBasic(r *interp.Runner, stdin io.Reader, stdout io.Writer) er
 			continue
 		}
 		cmdNum++
+		setHistCmd(r, cmdNum)
 		ctx := context.Background()
 		for _, stmt := range stmts {
 			err := r.Run(ctx, stmt)
