@@ -217,11 +217,32 @@ Plus two pre-existing bugs uncovered along the way:
   after the file-close defers — so the in-stmt close behavior is
   preserved while subsequent stmts get fresh scoping.
 
+### Phase 2 — named-fd allocator DONE
+
+`{varname}>file` / `{varname}<file` / `{varname}>>file` / `{varname}<>file`
+now route through `allocateFd()` which picks the next unused fd ≥ 10
+(matches bash's convention of starting above the conventional 0-9
+stdio range). The allocated number is written back to the named
+variable so scripts can use it via `>&$var` / `<&$var`. Also handles
+`{var}>&-` / `{var}<&-` (read the fd from `$var`, delete from
+`fdTable`).
+
+End-to-end example:
+
+```sh
+exec {fd}>f          # fd=10, fdTable[10] = open(f, …)
+echo hi >&$fd        # write goes to f
+exec {fd}>&-         # close: delete fdTable[10]; $fd keeps the
+                     # stale "10" (bash matches this)
+cat f                # → "hi"
+```
+
+The allocator returns the first gap in `fdTable` starting at 10, so
+two simultaneous `exec {a}>… {b}>…` calls hand out distinct numbers
+(10, then 11).
+
 ### Phase 2 — still TODO
 
-- `{varname}>` / `{varname}<` named-fd allocator. Currently writes a
-  hard-coded `"10"` into the named variable. Needs a per-runner fresh-fd
-  allocator (next unused fd above 10) plus the same `fdTable` plumbing.
 - Custom `OpenHandler` returning non-`*os.File`: `setWriteFd` for
   `N >= 3` requires a `*os.File` because a numbered fd must back a real
   OS handle. A handler that returns a custom `io.ReadWriteCloser`

@@ -3543,6 +3543,12 @@ done <<< 2`,
 	// scoped 3>f: echo writes to stdout (not fd 3); file f is created empty.
 	{"echo a 3>f; cat f", "a\n"},
 
+	// {var}> named-fd allocator (Phase 2): picks a fresh fd >= 10,
+	// stores it in $var so the script can refer to it via `>&$var`.
+	{"exec {fd}>f; echo fd=$fd; echo hi >&$fd; exec {fd}>&-; cat f", "fd=10\nhi\n"},
+	{"exec {a}>f; exec {b}>g; echo $a $b", "10 11\n"},
+	{"echo data >f; exec {fd}<f; read line <&$fd; echo got=$line", "got=data\n"},
+
 	// fg: in-shell builtin waits on the bgProc.done channel and propagates
 	// the captured exit status. Without a controlling TTY we don't try to
 	// reattach stdio; see docs/plan-punted-builtins.md.

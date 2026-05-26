@@ -1129,6 +1129,18 @@ func (r *Runner) hdocReader(rd *syntax.Redirect) (*os.File, error) {
 	return pr, nil
 }
 
+// allocateFd returns the next unused fd number >= 10, suitable for
+// {varname} named-fd allocations. Bash picks fd numbers starting at
+// 10 to avoid colliding with the conventional stdio range (0/1/2) and
+// with fds a script may have explicitly assigned (3-9).
+func (r *Runner) allocateFd() int {
+	for n := 10; ; n++ {
+		if _, ok := r.fdTable[n]; !ok {
+			return n
+		}
+	}
+}
+
 // setReadFd binds f as a readable source for the given target fd.
 // targetFd == -1 means "use the input default (fd 0 / r.stdin)". For 0
 // we set r.stdin; for N >= 3 we store in fdTable. 1/2 are not valid
@@ -1184,16 +1196,33 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 		return pr, nil
 	}
 
+	arg := r.literal(rd.Word)
 	// targetFd is the fd this redirect operates on. -1 means "use the
 	// op's natural default" (fd 0 for input, fd 1 for output). N >= 3
 	// goes through fdTable; 1/2 are stdin/stdout/stderr.
 	targetFd := -1
-	var namedFDVar string // non-empty if this is a {varname} redirect
+	var namedFDVar string // non-empty if this is a {varname} redirect to be written back
 	if rd.N != nil {
 		val := rd.N.Value
 		// Named FD redirection: {varname}> or {varname}<
 		if strings.HasPrefix(val, "{") && strings.HasSuffix(val, "}") {
-			namedFDVar = val[1 : len(val)-1]
+			name := val[1 : len(val)-1]
+			// `{var}>&-` and `{var}<&-` are the close form: read the
+			// fd already stored in $var, target it for deletion, and
+			// don't write back (we keep $var with its stale number,
+			// matching bash).
+			if (rd.Op == syntax.DplOut || rd.Op == syntax.DplIn) && arg == "-" {
+				fdStr := r.lookupVar(name).String()
+				n, err := strconv.Atoi(fdStr)
+				if err != nil || n < 0 {
+					return nil, fmt.Errorf("invalid fd in $%s: %q", name, fdStr)
+				}
+				targetFd = n
+			} else {
+				// Open form: pick a fresh fd for the script.
+				targetFd = r.allocateFd()
+				namedFDVar = name
+			}
 		} else {
 			n, err := strconv.Atoi(val)
 			if err != nil || n < 0 {
@@ -1202,7 +1231,6 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 			targetFd = n
 		}
 	}
-	arg := r.literal(rd.Word)
 	switch rd.Op {
 	case syntax.WordHdoc:
 		pr, pw, err := os.Pipe()
@@ -1212,6 +1240,9 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 		// hdoc routes to the input slot (default fd 0); allow N<<EOF too.
 		if err := r.setReadFd(targetFd, pr); err != nil {
 			return nil, err
+		}
+		if namedFDVar != "" {
+			r.setVarString(namedFDVar, strconv.Itoa(targetFd))
 		}
 		// We write to the pipe in a new goroutine,
 		// as pipe writes may block once the buffer gets full.
@@ -1259,6 +1290,9 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 		if err := r.setWriteFd(targetFd, w); err != nil {
 			return nil, err
 		}
+		if namedFDVar != "" {
+			r.setVarString(namedFDVar, strconv.Itoa(targetFd))
+		}
 		return nil, nil
 	case syntax.DplIn:
 		// <&M — point the target input fd at fd M's reader.
@@ -1288,6 +1322,9 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 		}
 		if err := r.setReadFd(targetFd, f); err != nil {
 			return nil, err
+		}
+		if namedFDVar != "" {
+			r.setVarString(namedFDVar, strconv.Itoa(targetFd))
 		}
 		return nil, nil
 	case syntax.RdrIn, syntax.RdrOut, syntax.AppOut,
@@ -1340,10 +1377,11 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 	default:
 		return nil, fmt.Errorf("unhandled redirect op: %v", rd.Op)
 	}
-	// For named FD redirections, store the FD number in the variable.
+	// For named FD redirections that opened a real fd, write the
+	// allocated fd number to the variable. Bash callers then use it
+	// via `>&$var` / `<&$var` (which hit the numeric arg branch above).
 	if namedFDVar != "" {
-		// Best effort: try to get the underlying fd, otherwise assign a synthetic number.
-		r.setVarString(namedFDVar, "10") // TODO: allocate real FD numbers
+		r.setVarString(namedFDVar, strconv.Itoa(targetFd))
 	}
 	return f, nil
 }
