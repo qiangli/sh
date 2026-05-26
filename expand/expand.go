@@ -506,6 +506,23 @@ func formatInto(sb *strings.Builder, format string, args []string, startTime tim
 				fmts = append(fmts, c)
 			case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '.':
 				fmts = append(fmts, c)
+			case 'q':
+				// bash printf %q outputs the argument quoted so it can
+				// be reused as shell input. Empty → '', strings with
+				// only safe chars are emitted as-is, anything else uses
+				// $'...' ANSI-C quoting or single-quoting via
+				// syntax.Quote.
+				arg := ""
+				if len(args) > 0 {
+					arg, args = args[0], args[1:]
+				}
+				quoted, qerr := syntax.Quote(arg, syntax.LangBash)
+				if qerr != nil {
+					quoted = "'" + strings.ReplaceAll(arg, "'", `'\''`) + "'"
+				}
+				sb.WriteString(quoted)
+				fmts = nil
+				continue
 			case 's', 'b', 'd', 'i', 'u', 'o', 'x', 'X', 'f', 'e', 'E', 'g', 'G':
 				arg := ""
 				if len(args) > 0 {
