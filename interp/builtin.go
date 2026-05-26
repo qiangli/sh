@@ -1484,6 +1484,13 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 	case "readarray", "mapfile":
 		dropDelim := false
 		delim := "\n"
+		// -O origin: index to start writing at (default 0).
+		// -s skip:   discard the first `skip` lines from the input.
+		// -n max:    copy at most `max` lines (0 = no limit).
+		// -c quant:  invoke -C callback every `quant` lines (default 5000).
+		// -C cb:     shell code run as `cb INDEX LINE` every quant lines.
+		origin, skip, maxLines, quantum := 0, 0, 0, 5000
+		callback := ""
 		fp := flagParser{remaining: args}
 		for fp.more() {
 			switch flag := fp.flag(); flag {
@@ -1500,6 +1507,44 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					// string.
 					delim = "\x00"
 				}
+			case "-O":
+				v := fp.value()
+				n, err := strconv.Atoi(v)
+				if err != nil || n < 0 {
+					return failf(2, "%s: %s: invalid origin specification\n", name, v)
+				}
+				origin = n
+			case "-s":
+				v := fp.value()
+				n, err := strconv.Atoi(v)
+				if err != nil || n < 0 {
+					return failf(2, "%s: %s: invalid line count specification\n", name, v)
+				}
+				skip = n
+			case "-n":
+				v := fp.value()
+				n, err := strconv.Atoi(v)
+				if err != nil || n < 0 {
+					return failf(2, "%s: %s: invalid line count specification\n", name, v)
+				}
+				maxLines = n
+			case "-c":
+				v := fp.value()
+				n, err := strconv.Atoi(v)
+				if err != nil || n <= 0 {
+					return failf(2, "%s: %s: invalid callback quantum\n", name, v)
+				}
+				quantum = n
+			case "-C":
+				v := fp.value()
+				if v == "" {
+					return failf(2, "%s: -C: option requires an argument\n", name)
+				}
+				callback = v
+			case "-u":
+				// FD redirection isn't wired through builtins; accept
+				// the argument and continue to read from stdin.
+				fp.value()
 			default:
 				return invalidOpt(name, flag)
 			}
@@ -1521,10 +1566,34 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 
 		var vr expand.Variable
 		vr.Kind = expand.Indexed
+		// When writing to a non-zero origin, pad the lower indices so
+		// the resulting array indices line up with `origin..origin+N`.
+		if origin > 0 {
+			vr.List = make([]string, origin)
+		}
 		scanner := bufio.NewScanner(r.stdin)
 		scanner.Split(mapfileSplit(delim[0], dropDelim))
+		lineNum := 0
 		for scanner.Scan() {
+			lineNum++
+			if skip > 0 && lineNum <= skip {
+				continue
+			}
 			vr.List = append(vr.List, scanner.Text())
+			if maxLines > 0 && len(vr.List)-origin >= maxLines {
+				break
+			}
+			if callback != "" && (len(vr.List)-origin)%quantum == 0 {
+				idx := len(vr.List) - 1
+				quoted, qerr := syntax.Quote(scanner.Text(), syntax.LangBash)
+				if qerr != nil {
+					continue
+				}
+				cb := fmt.Sprintf("%s %d %s", callback, idx, quoted)
+				if prog, perr := syntax.NewParser().Parse(strings.NewReader(cb), ""); perr == nil {
+					r.stmts(ctx, prog.Stmts)
+				}
+			}
 		}
 		if err := scanner.Err(); err != nil {
 			return failf(2, "%s: unable to read, %v\n", name, err)

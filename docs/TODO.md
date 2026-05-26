@@ -75,7 +75,7 @@
 - [x] `return` outside function — already errors with proper message
 - [x] `let` with multiple expressions — already worked; regression tests added
 - [x] `select` loop construct — rewrote to actually loop and handle EOF/empty/invalid
-- [ ] `mapfile -O origin` — start index, `-c count`, `-C callback`
+- [x] `mapfile -O origin` (pad lower indices), `-s skip`, `-n max`, `-c quantum`, `-C callback` (callback receives `idx quoted-line`)
 - [x] `read -N` nchars (don't stop at delimiter; assigns the raw buffer to the first variable, no IFS split). `-n` now reads byte-by-byte so it stops correctly at the delimiter.
 - [x] `getopts` OPTERR variable (OPTERR=0 silences diagnostics regardless of leading `:` in optstring); error-message format still pending
 
@@ -292,7 +292,7 @@ covered by an earlier section above is NOT repeated here.
 
 ### G3: Builtin completeness (S–M each)
 
-- [ ] `mapfile -O origin`, `-c count`, `-C callback`, `-s count` (`builtins/mapfile.def:26`)
+- [x] `mapfile -O origin`, `-c count`, `-C callback`, `-s count`, `-n max`, `-u fd` (fd accepted but reads stdin)
 - [x] `read -N nchars` (distinct from `-n`): exact-count, no delimiter handling, no IFS split
 - [ ] `read -a array` for assoc arrays
 - [ ] `declare -p` formatting matching `subst.c:string_var_assignment`
