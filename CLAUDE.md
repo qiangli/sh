@@ -43,6 +43,23 @@ CGO_ENABLED=0 go test -run TestRunnerRunConfirm -exec 'dockexec bash:5.2' ./inte
 
 `TestRunnerRunConfirm` is the canonical "behaves like real Bash" oracle: the same script table is run by `gosh` and by the dockerized Bash, and outputs/exit codes are diffed. When changing interpreter semantics, run it.
 
+### Local-env PATH gotcha (ycode shim)
+
+A few tests fork a real shell via `exec sh -c '...'` (e.g. `interp/TestKillTimeout`, `cmd/shfmt/TestScript/atomic`) and verify behaviour like signal-delivered traps or atomic in-place writes. If your `PATH` puts a `ycode` shim in front of `sh` — common on this machine, where `which sh` returns something like `/var/folders/.../ycode-wrap/.../bin/sh` — those tests fail because the shim doesn't forward `SIGINT`/`SIGTERM` to the real shell underneath, so traps never fire. The failures look like:
+
+```
+TestKillTimeout/#01: want: trapped\n  got: ""
+TestScript/atomic: unknown command "input.sh" for "ycode"
+```
+
+Workaround when running the suite locally:
+
+```sh
+PATH=/bin:/usr/bin:$(dirname $(which go)) go test ./...
+```
+
+The same shim doesn't affect `make test-bash` (that one drives `bin/bashy` directly).
+
 ## Architecture
 
 The codebase is a layered pipeline. Each layer is a standalone package usable on its own; the higher layers compose the lower ones.
