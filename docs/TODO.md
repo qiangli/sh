@@ -317,7 +317,7 @@ covered by an earlier section above is NOT repeated here.
 - [x] `BASH_MONOSECONDS` — monotonic clock (new in 5.3) — uses time.Since(startTime) which keeps Go's monotonic component
 - [ ] `HISTCMD` — current history entry number
 - [ ] `HISTCONTROL`, `HISTIGNORE`, `HISTTIMEFORMAT` — history filtering
-- [ ] `FUNCNEST` — function recursion limit (default unlimited)
+- [x] `FUNCNEST` — function recursion limit (positive integer aborts call when callStack depth reached; 0/unset/empty/non-numeric disables)
 - [ ] `EXECIGNORE` — skip-exec patterns for command lookup
 - [ ] `GLOBIGNORE` — glob-skip patterns
 - [ ] `IGNOREEOF` — Ctrl-D count before exit

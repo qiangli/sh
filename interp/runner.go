@@ -1556,6 +1556,16 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 	}
 	name := args[0]
 	if body := r.Funcs[name]; body != nil {
+		// Honor $FUNCNEST: when set to a positive integer, bash aborts
+		// once nesting reaches that depth. An unset, empty, zero, or
+		// non-numeric value disables the limit.
+		if limit, _ := strconv.Atoi(r.envGet("FUNCNEST")); limit > 0 && len(r.callStack) >= limit {
+			r.errf("%s%s: maximum function nesting level exceeded (%d)\n",
+				r.bashErrPrefix(pos), name, limit)
+			r.exit.code = 1
+			return
+		}
+
 		// stack them to support nested func calls
 		oldParams := r.Params
 		r.Params = args[1:]
