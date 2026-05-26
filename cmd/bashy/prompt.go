@@ -98,6 +98,9 @@ func expandPrompt(s string, env func(string) string, cmdNum, histNum int) string
 			if home != "" && strings.HasPrefix(pwd, home) {
 				pwd = "~" + pwd[len(home):]
 			}
+			if n, err := strconv.Atoi(env("PROMPT_DIRTRIM")); err == nil && n > 0 {
+				pwd = trimPromptDir(pwd, n)
+			}
 			b.WriteString(pwd)
 		case 'W':
 			pwd := env("PWD")
@@ -138,6 +141,27 @@ func expandPrompt(s string, env func(string) string, cmdNum, histNum int) string
 		}
 	}
 	return b.String()
+}
+
+// trimPromptDir keeps the last n components of pwd, prepending ".../"
+// when truncation occurred. A leading "~" or "/" is preserved verbatim:
+// trim("~/a/b/c/d", 2) → "~/.../c/d", trim("/a/b/c/d", 2) → "/.../c/d".
+func trimPromptDir(pwd string, n int) string {
+	var prefix string
+	rest := pwd
+	switch {
+	case strings.HasPrefix(rest, "~/"):
+		prefix, rest = "~/", rest[2:]
+	case rest == "~":
+		return rest
+	case strings.HasPrefix(rest, "/"):
+		prefix, rest = "/", rest[1:]
+	}
+	parts := strings.Split(rest, "/")
+	if len(parts) <= n {
+		return pwd
+	}
+	return prefix + ".../" + strings.Join(parts[len(parts)-n:], "/")
 }
 
 // strftimeSimple converts a limited set of strftime format specifiers

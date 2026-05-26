@@ -97,7 +97,7 @@
 - [x] `BASH_EXECUTION_STRING` — set by cmd/bashy from the -c argument (env-passed before runner construction)
 - [ ] `BASH_SUBSHELL` — verify increments correctly in all subshell types
 - [x] `COLUMNS` / `LINES` — terminal dimensions via term.GetSize() (probes stdin/stdout/stderr; empty when no TTY)
-- [ ] `PROMPT_DIRTRIM` — truncate \w in prompts
+- [x] `PROMPT_DIRTRIM` — truncate \w in prompts (positive integer keeps last N components, prepends ".../")
 - [ ] `HISTCMD` — current history number
 - [ ] `COMP_*` variables (COMP_WORDS, COMP_CWORD, COMP_LINE, COMP_POINT, COMPREPLY)
 - [ ] `BASH_ALIASES` — associative array of aliases
