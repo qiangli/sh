@@ -141,6 +141,21 @@ var braceTests = []struct {
 		litWord("{0001..05..2}"),
 		litWords("0001", "0003", "0005"),
 	},
+	// Mixed-width pad: {01..100} should pad to width 3 (matching the
+	// longer operand), not the previous bug of width 2.
+	{
+		litWord("{01..3}"),
+		litWords("01", "02", "03"),
+	},
+	{
+		litWord("{1..03}"),
+		litWords("01", "02", "03"),
+	},
+	// Negative range pads to the longer operand's width, sign included.
+	{
+		litWord("{-05..05..5}"),
+		litWords("-05", "000", "005"),
+	},
 	{
 		litWord("{0..1}"),
 		litWords("0", "1"),

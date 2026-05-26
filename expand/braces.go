@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"iter"
 	"strconv"
-	"strings"
 
 	"mvdan.cc/sh/v3/syntax"
 )
@@ -78,7 +77,15 @@ func bracesSeqRec(word *syntax.Word, yield func(*syntax.Word) bool) bool {
 		if br.Sequence {
 			fromLit := br.Elems[0].Lit()
 			toLit := br.Elems[1].Lit()
-			zeros := max(extraLeadingZeros(fromLit), extraLeadingZeros(toLit))
+			// Bash zero-pads the output to the width of the longest
+			// operand when *either* operand has a leading zero. So
+			// {01..100} → 001..100, but {1..100} → 1..100. The width
+			// includes any leading "-" because bash's "-05..05" stays
+			// 3 chars wide on both sides.
+			padWidth := 0
+			if hasLeadingZero(fromLit) || hasLeadingZero(toLit) {
+				padWidth = max(len(fromLit), len(toLit))
+			}
 
 			chars := false
 			// ParseInt with bit size 64 to ensure consistent behavior on 32-bit platforms.
@@ -104,10 +111,13 @@ func bracesSeqRec(word *syntax.Word, yield func(*syntax.Word) bool) bool {
 			for n := from; (upward && n <= to) || (!upward && n >= to); n += incr {
 				next := *word
 				lit := &syntax.Lit{}
-				if chars {
+				switch {
+				case chars:
 					lit.Value = string(rune(n))
-				} else {
-					lit.Value = strings.Repeat("0", zeros) + strconv.FormatInt(n, 10)
+				case padWidth > 0:
+					lit.Value = fmt.Sprintf("%0*d", padWidth, n)
+				default:
+					lit.Value = strconv.FormatInt(n, 10)
 				}
 				next.Parts = append([]syntax.WordPart{lit}, rest...)
 				if !expand(&next) {
@@ -128,11 +138,16 @@ func bracesSeqRec(word *syntax.Word, yield func(*syntax.Word) bool) bool {
 	return yield(&syntax.Word{Parts: left})
 }
 
-func extraLeadingZeros(s string) int {
-	for i, r := range s {
-		if r != '0' {
-			return i
-		}
+// hasLeadingZero reports whether the literal carries a leading zero
+// after any sign, signaling bash's zero-pad mode for brace sequences.
+// "01" → true, "-01" → true, "0" → false (single zero is not padding),
+// "10" → false.
+func hasLeadingZero(s string) bool {
+	if len(s) == 0 {
+		return false
 	}
-	return 0 // "0" has no extra leading zeros
+	if s[0] == '-' || s[0] == '+' {
+		s = s[1:]
+	}
+	return len(s) > 1 && s[0] == '0'
 }
