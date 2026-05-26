@@ -94,7 +94,7 @@
 ### P4: Shell Variable Completeness
 
 - [ ] `BASH_COMMAND` — set dynamically before each command (currently static)
-- [ ] `BASH_EXECUTION_STRING` — store -c argument in runner
+- [x] `BASH_EXECUTION_STRING` — set by cmd/bashy from the -c argument (env-passed before runner construction)
 - [ ] `BASH_SUBSHELL` — verify increments correctly in all subshell types
 - [ ] `COLUMNS` / `LINES` — terminal dimensions via term.GetSize()
 - [ ] `PROMPT_DIRTRIM` — truncate \w in prompts

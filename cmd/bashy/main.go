@@ -133,6 +133,12 @@ func loadStartupFiles(r *interp.Runner, interactive bool) {
 }
 
 func runAll() error {
+	if *command != "" {
+		// BASH_EXECUTION_STRING holds the literal -c argument, per
+		// bash. Set on the process env BEFORE constructing the
+		// runner so its captured env includes the value.
+		os.Setenv("BASH_EXECUTION_STRING", *command)
+	}
 	r, err := newRunner()
 	if err != nil {
 		return err
