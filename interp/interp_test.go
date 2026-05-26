@@ -2262,6 +2262,11 @@ var runTests = []runTest{
 		"x=' 3'; let x++; echo \"$x\"",
 		"4\n",
 	},
+	// let with multiple expressions: each evaluates left to right and
+	// later ones can reference earlier ones. Exit code is from the last.
+	{"let a=10 b=20 c=a+b; echo \"$a $b $c\"", "10 20 30\n"},
+	{"let 1 0; echo $?", "1\n"}, // last expr (0) → exit 1
+	{"let 0 1; echo $?", "0\n"}, // last expr (1) → exit 0
 
 	// set/shift
 	{
