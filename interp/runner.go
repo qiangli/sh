@@ -250,8 +250,66 @@ func (r *Runner) expandErr(err error) {
 
 func (r *Runner) arithm(expr syntax.ArithmExpr) int {
 	n, err := expand.Arithm(r.ecfg, expr)
+	if err != nil && r.bashCompatErrors {
+		err = r.bashArithmError(expr, err)
+	}
 	r.expandErr(err)
 	return n
+}
+
+// bashArithmError reformats an arithmetic-evaluation error so it
+// matches bash 5.3's diagnostic shape:
+//
+//	<file>: line N: ((: <expr> : <message> (error token is "<token> ")
+//
+// The offending token is approximated as the right-hand side of a
+// division/remainder when the error is "division by zero"; otherwise
+// it's the whole expression. Bash includes a trailing space inside the
+// quoted token — preserved here so tests diff cleanly.
+func (r *Runner) bashArithmError(expr syntax.ArithmExpr, err error) error {
+	msg := err.Error()
+	bashMsg := msg
+	switch {
+	case strings.Contains(msg, "division by zero"), strings.Contains(msg, "division by 0"):
+		bashMsg = "division by 0"
+	default:
+		// Other errors keep their wording; still wrap with the file
+		// prefix and ((: ...) frame so they're parseable.
+	}
+	// Printer.Print doesn't accept bare ArithmExpr nodes; wrap in an
+	// ArithmCmd via a Stmt so the printer's command path handles it,
+	// then strip the surrounding "(( ... ))" and any escaped-newline
+	// continuations the printer inserts for multi-line layout.
+	printArithm := func(e syntax.ArithmExpr) string {
+		var b strings.Builder
+		syntax.NewPrinter().Print(&b, &syntax.Stmt{
+			Cmd: &syntax.ArithmCmd{X: e},
+		})
+		s := b.String()
+		s = strings.TrimSpace(s)
+		s = strings.TrimPrefix(s, "((")
+		s = strings.TrimSuffix(s, "))")
+		// Collapse "\\\n" (printer's line-continuation) and any
+		// surrounding whitespace into a single space.
+		s = strings.ReplaceAll(s, "\\\n", " ")
+		s = strings.Join(strings.Fields(s), " ")
+		return s
+	}
+	exprText := printArithm(expr)
+
+	tokenText := "0"
+	if b, ok := expr.(*syntax.BinaryArithm); ok {
+		switch b.Op {
+		case syntax.Quo, syntax.Rem, syntax.QuoAssgn, syntax.RemAssgn:
+			tokenText = printArithm(b.Y)
+		}
+	}
+	prefix := r.filename
+	if prefix == "" {
+		prefix = "bashy"
+	}
+	return fmt.Errorf("%s: line %d: ((: %s : %s (error token is \"%s \")",
+		prefix, expr.Pos().Line(), exprText, bashMsg, tokenText)
 }
 
 func (r *Runner) fields(words ...*syntax.Word) []string {
@@ -483,6 +541,16 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		r2.exit.exiting = false // subshells don't exit the parent shell
 		r.exit = r2.exit
 	case *syntax.CallExpr:
+		// Bash sets $BASH_COMMAND to the command's source text BEFORE
+		// expansion, so a command can reference its own line via
+		// $BASH_COMMAND. Capture it now via the printer; the later
+		// setVarString in r.call() will overwrite with the post-
+		// expansion form for the benefit of DEBUG traps.
+		{
+			var cmdBuf strings.Builder
+			syntax.NewPrinter().Print(&cmdBuf, cm)
+			r.setVarString("BASH_COMMAND", strings.TrimRight(cmdBuf.String(), "\n"))
+		}
 		// Use a new slice, to not modify the slice in the alias map.
 		args := cm.Args
 		for i := 0; i < len(args); {

@@ -113,6 +113,12 @@ type Runner struct {
 
 	filename string // only if Node was a File
 
+	// argv0 is bash's $0 / $BASH_ARGV0 — initialized from filename
+	// but separately settable by user code. Error-message prefixes
+	// continue to use filename so they stay stable across user
+	// reassignments of BASH_ARGV0.
+	argv0 string
+
 	// >0 to break or continue out of N enclosing loops
 	breakEnclosing, contnEnclosing int
 

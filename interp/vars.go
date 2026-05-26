@@ -217,7 +217,12 @@ func (r *Runner) lookupVar(name string) expand.Variable {
 		if r.deterministic {
 			vr.Kind, vr.Str = expand.String, strconv.Itoa(int(r.deterministicSeed&0x7fff))
 		} else {
-			vr.Kind, vr.Str = expand.String, strconv.Itoa(os.Getpid())
+			// Real bash returns the OS PID, which differs in a forked
+			// subshell. Our subshells are goroutines (same OS PID), so
+			// shift by subshellLevel to make BASHPID differ per
+			// subshell layer — scripts that compare $BASHPID across
+			// boundaries (the canonical use case) keep working.
+			vr.Kind, vr.Str = expand.String, strconv.Itoa(os.Getpid()+r.subshellLevel)
 		}
 	case "SECONDS":
 		if r.deterministic {
@@ -242,9 +247,12 @@ func (r *Runner) lookupVar(name string) expand.Variable {
 		vr.Kind, vr.Str = expand.String, strconv.Itoa(r.subshellLevel)
 	case "BASH_ARGV0":
 		vr.Kind = expand.String
-		if r.filename != "" {
+		switch {
+		case r.argv0 != "":
+			vr.Str = r.argv0
+		case r.filename != "":
 			vr.Str = r.filename
-		} else {
+		default:
 			vr.Str = "bashy"
 		}
 	case "GROUPS":
@@ -315,9 +323,12 @@ func (r *Runner) lookupVar(name string) expand.Variable {
 		vr.Kind, vr.List = expand.Indexed, r.dirStack
 	case "0":
 		vr.Kind = expand.String
-		if r.filename != "" {
+		switch {
+		case r.argv0 != "":
+			vr.Str = r.argv0
+		case r.filename != "":
 			vr.Str = r.filename
-		} else {
+		default:
 			vr.Str = "bashy"
 		}
 	case "1", "2", "3", "4", "5", "6", "7", "8", "9":
@@ -373,6 +384,12 @@ func (r *Runner) setVarString(name, value string) {
 func (r *Runner) setVar(name string, vr expand.Variable) {
 	if r.opts[optAllExport] {
 		vr.Exported = true
+	}
+	// BASH_ARGV0 is writable. Update r.argv0 so subsequent reads of
+	// $0 and $BASH_ARGV0 see the new value. r.filename stays as-is so
+	// error messages keep referring to the original script.
+	if name == "BASH_ARGV0" && vr.IsSet() {
+		r.argv0 = vr.Str
 	}
 	if err := r.writeEnv.Set(name, vr); err != nil {
 		r.errf("%s: %v\n", name, err)
