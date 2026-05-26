@@ -3521,7 +3521,7 @@ done <<< 2`,
 	// default arm is visible here too.
 	{
 		"fg",
-		"fg: not supported in this shell — no in-shell job control; use an external job-control command\nexit status 2 #JUSTERR",
+		"fg: not supported in this shell — no in-shell job control; use `outpost fg <pid>` (or the equivalent in your embedder)\nexit status 2 #JUSTERR",
 	},
 	{
 		"umask 022",
