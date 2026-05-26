@@ -11,6 +11,7 @@ import (
 	"io"
 	"io/fs"
 	"iter"
+	"maps"
 	"math"
 	mathrand "math/rand/v2"
 	"os"
@@ -356,7 +357,22 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 }
 
 func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
+	// keepRedirs is a per-stmt flag: only exec inside *this* stmt may
+	// set it (to opt out of restoring this stmt's redirects). Reset it
+	// at return so the next stmt starts with proper scoping. Registered
+	// first so it fires LAST (LIFO) — the file-close defers below still
+	// see the in-stmt value and skip closing for exec's persistent fds.
+	defer func() { r.keepRedirs = false }()
+
 	oldIn, oldOut, oldErr := r.stdin, r.stdout, r.stderr
+	// Snapshot fdTable only when this statement has redirects that
+	// might mutate it. A coproc statement registers fds in fdTable from
+	// inside cmd() itself, not via redir(), and those changes must
+	// persist past stmtSync; restoring unconditionally would wipe them.
+	var oldFdTable map[int]*os.File
+	if len(st.Redirs) > 0 {
+		oldFdTable = maps.Clone(r.fdTable)
+	}
 	for _, rd := range st.Redirs {
 		cls, err := r.redir(ctx, rd)
 		if err != nil {
@@ -364,7 +380,15 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 			break
 		}
 		if cls != nil {
-			defer cls.Close()
+			// Skip the close when keepRedirs is set (exec). The opened
+			// file is now owned by fdTable / stdio and must outlive
+			// this stmtSync call. Read keepRedirs at defer time, not
+			// here, because exec sets it during cmd execution.
+			defer func(c io.Closer) {
+				if !r.keepRedirs {
+					c.Close()
+				}
+			}(cls)
 		}
 	}
 	if r.exit.ok() && st.Cmd != nil {
@@ -390,6 +414,9 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 	}
 	if !r.keepRedirs {
 		r.stdin, r.stdout, r.stderr = oldIn, oldOut, oldErr
+		if len(st.Redirs) > 0 {
+			r.fdTable = oldFdTable
+		}
 	}
 }
 
@@ -1102,6 +1129,51 @@ func (r *Runner) hdocReader(rd *syntax.Redirect) (*os.File, error) {
 	return pr, nil
 }
 
+// setReadFd binds f as a readable source for the given target fd.
+// targetFd == -1 means "use the input default (fd 0 / r.stdin)". For 0
+// we set r.stdin; for N >= 3 we store in fdTable. 1/2 are not valid
+// input targets in bash and are rejected.
+func (r *Runner) setReadFd(targetFd int, f *os.File) error {
+	switch targetFd {
+	case -1, 0:
+		r.stdin = f
+	case 1, 2:
+		return fmt.Errorf("cannot use fd %d as input target", targetFd)
+	default:
+		if r.fdTable == nil {
+			r.fdTable = make(map[int]*os.File)
+		}
+		r.fdTable[targetFd] = f
+	}
+	return nil
+}
+
+// setWriteFd binds w as an output sink for the given target fd.
+// targetFd == -1 means "use the output default (fd 1 / r.stdout)".
+// For 1 we set r.stdout, for 2 r.stderr (both accept any io.Writer).
+// For N >= 3 we store in fdTable, which requires *os.File since a
+// numbered fd must back a real OS handle.
+func (r *Runner) setWriteFd(targetFd int, w io.Writer) error {
+	switch targetFd {
+	case -1, 1:
+		r.stdout = w
+	case 2:
+		r.stderr = w
+	case 0:
+		return fmt.Errorf("cannot use fd 0 as output target")
+	default:
+		f, ok := w.(*os.File)
+		if !ok {
+			return fmt.Errorf("non-file writer cannot be redirected to fd %d", targetFd)
+		}
+		if r.fdTable == nil {
+			r.fdTable = make(map[int]*os.File)
+		}
+		r.fdTable[targetFd] = f
+	}
+	return nil
+}
+
 func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, error) {
 	if rd.Hdoc != nil {
 		pr, err := r.hdocReader(rd)
@@ -1112,30 +1184,22 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 		return pr, nil
 	}
 
-	orig := &r.stdout
+	// targetFd is the fd this redirect operates on. -1 means "use the
+	// op's natural default" (fd 0 for input, fd 1 for output). N >= 3
+	// goes through fdTable; 1/2 are stdin/stdout/stderr.
+	targetFd := -1
 	var namedFDVar string // non-empty if this is a {varname} redirect
 	if rd.N != nil {
 		val := rd.N.Value
 		// Named FD redirection: {varname}> or {varname}<
 		if strings.HasPrefix(val, "{") && strings.HasSuffix(val, "}") {
 			namedFDVar = val[1 : len(val)-1]
-			// Named FD close: {varname}>&- or {varname}<&-
-			// For named FD redirects, we handle after opening the file below.
 		} else {
-			switch val {
-			case "0":
-				// Note that the input redirects below always use stdin (0)
-				// because we don't support anything else right now.
-			case "1":
-				// The default for the output redirects below.
-			case "2":
-				orig = &r.stderr
-			default:
-				// Try to use as a numeric FD for dup operations.
-				if _, err := strconv.Atoi(val); err != nil {
-					return nil, fmt.Errorf("unsupported redirect fd: %v", val)
-				}
+			n, err := strconv.Atoi(val)
+			if err != nil || n < 0 {
+				return nil, fmt.Errorf("unsupported redirect fd: %v", val)
 			}
+			targetFd = n
 		}
 	}
 	arg := r.literal(rd.Word)
@@ -1145,7 +1209,10 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 		if err != nil {
 			return nil, err
 		}
-		r.stdin = pr
+		// hdoc routes to the input slot (default fd 0); allow N<<EOF too.
+		if err := r.setReadFd(targetFd, pr); err != nil {
+			return nil, err
+		}
 		// We write to the pipe in a new goroutine,
 		// as pipe writes may block once the buffer gets full.
 		go func() {
@@ -1155,16 +1222,30 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 		}()
 		return pr, nil
 	case syntax.DplOut:
+		// >&M — point the target fd at whatever fd M references.
+		switch arg {
+		case "-":
+			// Closing form: >&- removes the fd binding rather than
+			// pointing it elsewhere. For default (stdout) we plug
+			// io.Discard; for stderr we plug io.Discard too; for
+			// fdTable entries we delete the entry.
+			switch targetFd {
+			case -1, 1:
+				r.stdout = io.Discard
+			case 2:
+				r.stderr = io.Discard
+			default:
+				delete(r.fdTable, targetFd)
+			}
+			return nil, nil
+		}
+		var w io.Writer
 		switch arg {
 		case "1":
-			*orig = r.stdout
+			w = r.stdout
 		case "2":
-			*orig = r.stderr
-		case "-":
-			*orig = io.Discard // closing the output writer
+			w = r.stderr
 		default:
-			// Numeric fd N >= 3: look up in fdTable (coproc / `exec N>…`).
-			// >&N — point the destination at the file held by fd N.
 			n, err := strconv.Atoi(arg)
 			if err != nil || n < 0 {
 				return nil, fmt.Errorf("unhandled %v arg: %q", rd.Op, arg)
@@ -1173,7 +1254,40 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 			if !ok {
 				return nil, fmt.Errorf("%v: bad fd number %q", rd.Op, arg)
 			}
-			*orig = f
+			w = f
+		}
+		if err := r.setWriteFd(targetFd, w); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	case syntax.DplIn:
+		// <&M — point the target input fd at fd M's reader.
+		if arg == "-" {
+			switch targetFd {
+			case -1, 0:
+				r.stdin = nil
+			default:
+				delete(r.fdTable, targetFd)
+			}
+			return nil, nil
+		}
+		var f *os.File
+		switch arg {
+		case "0":
+			f = r.stdin
+		default:
+			n, err := strconv.Atoi(arg)
+			if err != nil || n < 0 {
+				return nil, fmt.Errorf("unhandled %v arg: %q", rd.Op, arg)
+			}
+			var ok bool
+			f, ok = r.fdTable[n]
+			if !ok {
+				return nil, fmt.Errorf("%v: bad fd number %q", rd.Op, arg)
+			}
+		}
+		if err := r.setReadFd(targetFd, f); err != nil {
+			return nil, err
 		}
 		return nil, nil
 	case syntax.RdrIn, syntax.RdrOut, syntax.AppOut,
@@ -1181,7 +1295,7 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 		syntax.RdrClob, syntax.AppClob,
 		syntax.RdrAllClob, syntax.AppAllClob,
 		syntax.RdrInOut:
-		// done further below.
+		// File-opening fall through.
 		// The "Clob" variants (>|, >>|, &>|, &>>|) bypass the noclobber
 		// shell option (set -C). Since this interpreter does not enforce
 		// noclobber on file redirects, they are functionally identical to
@@ -1190,24 +1304,6 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 		// to the input fd (default 0); we read from the resulting file as
 		// stdin. Writes back through fd 0 are not propagated to the file
 		// since stdin is plumbed as io.Reader internally.
-	case syntax.DplIn:
-		switch arg {
-		case "-":
-			r.stdin = nil // closing the input file
-		default:
-			// Numeric fd N >= 3: look up in fdTable (coproc / `exec N<…`).
-			// <&N — point stdin at the file held by fd N.
-			n, err := strconv.Atoi(arg)
-			if err != nil || n < 0 {
-				return nil, fmt.Errorf("unhandled %v arg: %q", rd.Op, arg)
-			}
-			f, ok := r.fdTable[n]
-			if !ok {
-				return nil, fmt.Errorf("%v: bad fd number %q", rd.Op, arg)
-			}
-			r.stdin = f
-		}
-		return nil, nil
 	default:
 		return nil, fmt.Errorf("unhandled redirect op: %v", rd.Op)
 	}
@@ -1230,10 +1326,15 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 		if err != nil {
 			return nil, err
 		}
-		r.stdin = stdin
+		if err := r.setReadFd(targetFd, stdin); err != nil {
+			return nil, err
+		}
 	case syntax.RdrOut, syntax.AppOut, syntax.RdrClob, syntax.AppClob:
-		*orig = f
+		if err := r.setWriteFd(targetFd, f); err != nil {
+			return nil, err
+		}
 	case syntax.RdrAll, syntax.AppAll, syntax.RdrAllClob, syntax.AppAllClob:
+		// &> and &>> redirect both stdout and stderr; rd.N is ignored.
 		r.stdout = f
 		r.stderr = f
 	default:

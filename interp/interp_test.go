@@ -3534,6 +3534,15 @@ done <<< 2`,
 		"got=hi\n",
 	},
 
+	// numbered fds (Phase 2): persistent assignment via exec, scoped via
+	// plain redirect, dup forms with N >= 3 on either side. See
+	// docs/plan-punted-builtins.md.
+	{"echo a >&3", "exit status 1 #JUSTERR"},
+	{"exec 3>f; echo a >&3; echo b >&3; cat f", "a\nb\n"},
+	{"echo data >f; exec 3<f; read line <&3; echo got=$line", "got=data\n"},
+	// scoped 3>f: echo writes to stdout (not fd 3); file f is created empty.
+	{"echo a 3>f; cat f", "a\n"},
+
 	// fg: in-shell builtin waits on the bgProc.done channel and propagates
 	// the captured exit status. Without a controlling TTY we don't try to
 	// reattach stdio; see docs/plan-punted-builtins.md.

@@ -180,25 +180,53 @@ read out <&${CO[0]}
 echo $out          # → "got=hi"
 ```
 
-### Phase 2 — still pending
+### Phase 2 — DONE (numbered-fd redirects routed through `fdTable`)
 
-The redirect layer still hardcodes 0/1/2 for the `rd.N` numeric prefix
-in `interp/runner.go` `redir()`. The Phase 2 work is:
+`redir()` now tracks a `targetFd` derived from `rd.N` and dispatches
+via two helpers, `setReadFd(targetFd, *os.File)` and
+`setWriteFd(targetFd, io.Writer)`. `targetFd == -1` means "use the op's
+natural default" (fd 0 for input, fd 1 for output); 0/1/2 update the
+stdio slots; N ≥ 3 stores/looks-up in `fdTable`. All redirect ops were
+rewritten to go through this routing:
 
-- `exec N<file` / `exec N>file` / `exec N<>file` → open and store the
-  file in `fdTable[N]` (persistent because `keepRedirs` is set for
-  `exec`).
-- Plain `N>file` / `N<file` (no exec) → same routing but scoped to the
-  command via the save/restore dance in `stmtSync`.
-- `N>&M` / `N<&M` with arbitrary N → mutate `fdTable[N]` to reference
+- `exec N<file` / `exec N>file` / `exec N<>file` — opens the file and
+  installs it in `fdTable[N]`. `keepRedirs` (set by exec) keeps it past
+  this stmt; subsequent stmts see fd N.
+- Plain `N>file` / `N<file` (no exec) — same routing but scoped: the
+  full `fdTable` is cloned at stmt entry and restored at stmt exit. The
+  scoped clone only happens for stmts that *have* redirects, so coproc
+  registrations made from inside `cmd()` (which run on a redirect-less
+  stmt) still persist.
+- `N>&M` / `N<&M` with arbitrary N — `fdTable[N]` is set from
   `fdTable[M]` (or stdin/stdout/stderr if M is 0/1/2).
-- `{varname}>` / `{varname}<` named-fd allocator → currently writes a
-  hard-coded "10" into the named var; should pick a real unused fd
-  number from a per-runner allocator and route through `fdTable`.
-- `cls.Close()` semantics for keepRedirs: today `defer cls.Close()` in
-  `stmtSync` runs even when `keepRedirs` is true, which means
-  `exec 3<file` would close the file immediately. Need to gate the
-  close on `!keepRedirs` (or move ownership into `fdTable`).
+- `N>&-` / `N<&-` — deletes `fdTable[N]` (or sets the stdio slot to
+  `io.Discard` / `nil` for 0/1/2).
+- Heredocs (`N<<EOF`) — the input-side pipe now goes through
+  `setReadFd(targetFd, …)` so `N<<EOF` for `N >= 3` works too.
+
+Plus two pre-existing bugs uncovered along the way:
+
+- **`cls.Close()` ran even when `keepRedirs` was set** (so `exec 3<file`
+  would close the file immediately). The deferred close now reads
+  `r.keepRedirs` at fire time and skips when set; the file's ownership
+  has already transferred to `fdTable` or stdio.
+- **`keepRedirs` leaked across statements** (exec set it once, every
+  subsequent stmt observed it and skipped its own restore, which broke
+  scoped redirects after any prior exec-with-redirect). `keepRedirs`
+  is now reset at the end of every `stmtSync` via a LIFO defer ordered
+  after the file-close defers — so the in-stmt close behavior is
+  preserved while subsequent stmts get fresh scoping.
+
+### Phase 2 — still TODO
+
+- `{varname}>` / `{varname}<` named-fd allocator. Currently writes a
+  hard-coded `"10"` into the named variable. Needs a per-runner fresh-fd
+  allocator (next unused fd above 10) plus the same `fdTable` plumbing.
+- Custom `OpenHandler` returning non-`*os.File`: `setWriteFd` for
+  `N >= 3` requires a `*os.File` because a numbered fd must back a real
+  OS handle. A handler that returns a custom `io.ReadWriteCloser`
+  (e.g., an in-memory mock) cannot have its result installed at fd N.
+  Acceptable limit for now; documented on the helper.
 
 ### Tradeoff (still applies)
 
