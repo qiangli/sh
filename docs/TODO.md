@@ -100,8 +100,8 @@
 - [x] `PROMPT_DIRTRIM` — truncate \w in prompts (positive integer keeps last N components, prepends ".../")
 - [x] `HISTCMD` — current history number (set per interactive command, incrementing)
 - [ ] `COMP_*` variables (COMP_WORDS, COMP_CWORD, COMP_LINE, COMP_POINT, COMPREPLY)
-- [ ] `BASH_ALIASES` — associative array of aliases
-- [ ] `BASH_CMDS` — associative array of hash table
+- [x] `BASH_ALIASES` — associative array of aliases (dynamic from r.alias, reprinted via syntax.Printer)
+- [x] `BASH_CMDS` — associative array of hash table (dynamic from r.cmdHashTable)
 - [ ] `BASH_COMPAT` — compatibility level
 - [ ] `BASH_XTRACEFD` — redirect xtrace to FD
 - [ ] `MAIL` / `MAILCHECK` / `MAILPATH`

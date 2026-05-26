@@ -335,6 +335,18 @@ func (r *Runner) lookupVar(name string) expand.Variable {
 		}
 	case "DIRSTACK":
 		vr.Kind, vr.List = expand.Indexed, r.dirStack
+	case "BASH_ALIASES":
+		vr.Kind = expand.Associative
+		vr.Map = make(map[string]string, len(r.alias))
+		for k, als := range r.alias {
+			vr.Map[k] = aliasValue(als)
+		}
+	case "BASH_CMDS":
+		vr.Kind = expand.Associative
+		vr.Map = maps.Clone(r.cmdHashTable)
+		if vr.Map == nil {
+			vr.Map = map[string]string{}
+		}
 	case "0":
 		vr.Kind = expand.String
 		switch {
@@ -393,6 +405,20 @@ func (r *Runner) delVar(name string) {
 
 func (r *Runner) setVarString(name, value string) {
 	r.setVar(name, expand.Variable{Set: true, Kind: expand.String, Str: value})
+}
+
+// aliasValue returns the textual form of an alias as bash stores it in
+// BASH_ALIASES: the args reprinted as shell source, plus a trailing
+// space when the original definition ended in whitespace.
+func aliasValue(als alias) string {
+	var buf strings.Builder
+	if len(als.args) > 0 {
+		syntax.NewPrinter().Print(&buf, &syntax.CallExpr{Args: als.args})
+	}
+	if als.blank {
+		buf.WriteByte(' ')
+	}
+	return buf.String()
 }
 
 // terminalSize probes stdin/stdout/stderr for a terminal and returns
