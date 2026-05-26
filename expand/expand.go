@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"mvdan.cc/sh/v3/internal"
 	"mvdan.cc/sh/v3/pattern"
@@ -524,7 +525,19 @@ func formatInto(sb *strings.Builder, format string, args []string, startTime tim
 						f, _ := strconv.ParseFloat(arg, 64)
 						farg = f
 					} else {
-						n, _ := strconv.ParseInt(arg, 0, 0)
+						// Bash extension: if the arg starts with a `'` or
+						// `"`, the integer conversion takes the value of
+						// the first character after the quote. Used by
+						// scripts that want the ASCII / UTF-8 codepoint
+						// of a literal character. Multi-byte rune is
+						// supported.
+						var n int64
+						if len(arg) > 1 && (arg[0] == '\'' || arg[0] == '"') {
+							r, _ := utf8.DecodeRuneInString(arg[1:])
+							n = int64(r)
+						} else {
+							n, _ = strconv.ParseInt(arg, 0, 0)
+						}
 						if c == 'i' || c == 'd' {
 							farg = int(n)
 						} else {
