@@ -1423,19 +1423,64 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			}
 		}
 	case "fg":
-		if len(r.bgProcs) == 0 {
-			return failf(1, "fg: no current job\n")
-		}
-		idx := len(r.bgProcs) - 1
-		if len(args) > 0 {
+		// Argument forms mirror the merged `wait` logic: no args → most
+		// recent bgProc; %N → bash job-spec; gN → legacy $! sentinel;
+		// bare integer → real OS PID (since `$!` now returns one when the
+		// bg statement spawned a real exec). Stdio is not re-attached —
+		// see docs/plan-punted-builtins.md for why.
+		//
+		// Bash distinguishes "no current job" (no-arg with empty job
+		// table) from "no such job" (arg doesn't match anything); replicate
+		// that so scripts/tests can rely on the message shape.
+		var bg *bgProc
+		switch {
+		case len(args) == 0:
+			if len(r.bgProcs) == 0 {
+				return failf(1, "fg: no current job\n")
+			}
+			bg = r.bgProcs[len(r.bgProcs)-1]
+		case strings.HasPrefix(args[0], "%"):
 			arg := strings.TrimPrefix(args[0], "%")
 			n := int(atoi(arg))
 			if n < 1 || n > len(r.bgProcs) {
 				return failf(1, "fg: %%%s: no such job\n", arg)
 			}
-			idx = n - 1
+			bg = r.bgProcs[n-1]
+		default:
+			if rest, ok := strings.CutPrefix(args[0], "g"); ok {
+				n := int(atoi(rest))
+				if n < 1 || n > len(r.bgProcs) {
+					return failf(1, "fg: %s: no such job\n", args[0])
+				}
+				bg = r.bgProcs[n-1]
+			} else {
+				pid, perr := strconv.ParseInt(args[0], 10, 64)
+				if perr != nil {
+					return failf(1, "fg: %s: no such job\n", args[0])
+				}
+				for _, candidate := range r.bgProcs {
+					if candidate.pid.Load() == pid {
+						bg = candidate
+						break
+					}
+				}
+				if bg == nil {
+					return failf(1, "fg: pid %s is not a child of this shell\n", args[0])
+				}
+			}
 		}
-		bg := r.bgProcs[idx]
+		// If a real OS PID has been published, defensively resume it in
+		// case an external SIGSTOP left it stopped. Non-blocking: we only
+		// send SIGCONT when pidReady is already closed; otherwise the
+		// goroutine has not exec'd anything yet and there's nothing to
+		// resume.
+		select {
+		case <-bg.pidReady:
+			if pid := bg.pid.Load(); pid > 0 {
+				continueIfStopped(int(pid))
+			}
+		default:
+		}
 		<-bg.done
 		exit = *bg.exit
 	case "bg":

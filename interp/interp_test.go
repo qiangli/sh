@@ -3525,6 +3525,14 @@ done <<< 2`,
 		"newgrp: not supported in this shell — group switching is not supported; switch groups in the parent process (e.g. with sudo -g)\nexit status 2 #JUSTERR",
 	},
 
+	// fg: in-shell builtin waits on the bgProc.done channel and propagates
+	// the captured exit status. Without a controlling TTY we don't try to
+	// reattach stdio; see docs/plan-punted-builtins.md.
+	{"fg", "fg: no current job\nexit status 1 #JUSTERR"},
+	{"fg %99", "fg: %99: no such job\nexit status 1 #JUSTERR"},
+	{"(echo done) & fg", "done\n"},
+	{"(exit 7) & fg; echo after=$?", "after=7\n"},
+
 	// umask: per-Runner virtual mask. Reading is 4-digit octal; setting
 	// updates only the runner field, not the process.
 	{"umask 077; umask", "0077\n"},

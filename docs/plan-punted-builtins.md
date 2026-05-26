@@ -90,35 +90,68 @@ umask, not system umask. Document on the field.
 
 ---
 
-## 3. `fg` — copy outpost's PID-based implementation
+## 3. `fg` — channel-based wait with optional SIGCONT
 
 ### Current state
 
-`case "fg":` returns `"fg: no current job"` with exit 1 when there are no
-bg procs. There's no actual foregrounding when there are bg procs.
+After the merge, `case "fg":` returns `"fg: no current job"` when empty,
+and on `fg %N` it waits via `<-bg.done` and propagates `*bg.exit`. Two
+gaps:
 
-### Design (next batch — not implemented here)
+1. It only accepts `%N` job-spec form; `fg <real-pid>` and `fg gN`
+   sentinel aren't recognized (the `wait` merge fixed this for `wait`
+   but `fg` wasn't updated).
+2. If the underlying real PID was stopped (e.g. an external SIGSTOP),
+   `<-bg.done` blocks forever because the process never finishes.
 
-- Reuse the `wait` builtin's PID lookup logic we already merged (which
-  handles both legacy `gN` sentinels and real OS PIDs).
-- Default target: most recently started `bgProc` (top of the stack).
-- For real-PID procs: send `SIGCONT` (via the existing
-  `interp/kill_unix.go`/`kill_notunix.go` infrastructure), then wait on
-  `bg.done`, then propagate exit status via `r.exit`.
-- For goroutine-only procs (no real PID): degenerate to waiting on
-  `bg.done`. There's no "foreground" semantically because there was no
+### Why we are not copying outpost's `outpost fg`
+
+`outpost fg <pid>` (cmd/outpost/jobs.go) is a **different abstraction**:
+- It reads a persistent on-disk registry of detached PIDs populated via
+  `WithBgPidCallback` — pids that survived the original SSH session.
+- It polls `syscall.Kill(pid, 0)` every 250 ms because the proc ref is
+  gone; the OS exit status cannot be captured.
+- It always returns 0 on natural exit (the comment in the file calls
+  this out explicitly: "the OS exit status is not captured — this is the
+  qiangli/sh detached process trade-off").
+
+The in-shell builtin has strictly more information: the `bgProc` struct
+with its `done` channel and `exit` pointer. Polling and dropping the
+exit status here would be a regression. The two implementations stay
+separate by design — outpost's is for cross-process detached jobs; ours
+is for in-process bgProcs.
+
+### Design (implementing in this batch)
+
+- Mirror the merged `wait` logic for argument forms:
+  - no args → most recently started `bgProc`
+  - `%N` → `bgProcs[N-1]` (bash job-spec form)
+  - `gN` sentinel → `bgProcs[N-1]` (matches `$!` legacy form)
+  - bare integer → real-PID lookup by scanning `bg.pid.Load()`
+- Once a target is picked, **if a real OS PID has been published**
+  (`bg.pidReady` closed, `bg.pid.Load() > 0`), send `SIGCONT`
+  best-effort to resume any stopped process. Errors are ignored — the
+  proc may already be running or gone.
+- Then wait `<-bg.done` and propagate exit via `r.exit`.
+- For goroutine-only bgProcs (no real PID), the SIGCONT step is
+  skipped. There's no "foreground" semantically because there was no
   process group transition.
-- Optional: a `WithFgHandler` middleware so outpost can intercept and
-  delegate to its own job manager when the embedder owns the PID
-  registry (mirrors `WithBgPidCallback`).
 
 ### Tradeoff
 
-Without process group / terminal control (we have no controlling TTY in
-this in-process shell), `fg` cannot truly "reattach" stdio the way bash
-does. The implementation can only wait + propagate exit. Embedders that
-need real TTY reattach must implement `WithFgHandler` themselves; that's
-what outpost already does for its `outpost fg <pid>` command.
+Without process group / terminal control (the in-process shell has no
+controlling TTY of its own), `fg` cannot truly "reattach" stdio the way
+bash does. The implementation only waits + propagates exit. Embedders
+that need real TTY reattach (interactive `cmd/bashy`, outpost SSH
+session takeover) will need a `WithFgHandler` middleware in a later
+batch; not in scope here.
+
+### Cross-platform
+
+`syscall.SIGCONT` is only defined on Unix. The SIGCONT step is gated
+through a new `continueIfStopped(pid int)` helper in
+`kill_unix.go`/`kill_notunix.go` — on non-Unix it's a no-op (there are
+no suspended jobs to resume).
 
 ---
 

@@ -93,6 +93,13 @@ func sendSignal(pid int, sig syscall.Signal) error {
 	return syscall.Kill(pid, sig)
 }
 
+// continueIfStopped sends SIGCONT to pid, best-effort. Used by `fg` to
+// resume a stopped real-PID bg process before waiting on it. Errors are
+// swallowed because the process may already be running or gone.
+func continueIfStopped(pid int) {
+	_ = syscall.Kill(pid, syscall.SIGCONT)
+}
+
 // parseSignalSpec parses the part after the leading `-` in `kill -SPEC pid…`.
 // SPEC is either a number or a name (with or without SIG prefix). Returns the
 // resolved signal, or false if the spec is not recognized.

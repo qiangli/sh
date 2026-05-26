@@ -56,6 +56,10 @@ func sortedSignalEntries() []struct {
 	return killSignals
 }
 
+// continueIfStopped is a no-op on non-Unix: there is no SIGCONT analog,
+// and this runner cannot suspend jobs on this platform anyway.
+func continueIfStopped(pid int) {}
+
 // sendSignal on non-Unix uses os.Process.Signal which only supports
 // Interrupt and Kill. SIGTERM is mapped to Kill (no graceful equivalent
 // exists on Windows). Signal 0 does an existence probe via os.FindProcess.
