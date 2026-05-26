@@ -803,24 +803,94 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 		fields = append(fields, curField)
 		curField = nil
 	}
+	// Bash 5.3 IFS rule (POSIX-compatible):
+	//   - Each non-whitespace IFS character is one delimiter. Adjacent
+	//     whitespace IFS characters are absorbed into the same delimiter.
+	//   - A run of only whitespace IFS chars is one delimiter.
+	//   - Empty fields are produced between adjacent non-ws delimiters,
+	//     and before a leading run that contains any non-ws (after
+	//     leading-whitespace stripping).
+	//   - A trailing delimiter never produces a trailing empty field.
+	isIFSWS := func(r rune) bool {
+		return (r == ' ' || r == '\t' || r == '\n') && cfg.ifsRune(r)
+	}
+	emitEmpty := func() {
+		curField = append(curField, fieldPart{quote: quoteSingle, val: ""})
+		flush()
+	}
 	splitAdd := func(val string) {
+		// hadPrefix records whether curField had content (a lit prefix
+		// from before this splitAdd) when we hit the first IFS char.
+		// In that case the prefix becomes its own field, and the
+		// "leading empty field" logic must not kick in.
 		fieldStart := -1
+		inSepRun := false
+		// runNonWS counts the non-whitespace IFS chars in the current
+		// separator run (each one is its own delimiter).
+		runNonWS := 0
+		// flushedPrefix records whether we've already flushed (the
+		// prefix or a prior in-val field) — once true, the "leading
+		// edge" branch below is no longer eligible.
+		flushedPrefix := false
 		for i, r := range val {
 			if cfg.ifsRune(r) {
-				if fieldStart >= 0 { // ending a field
+				if fieldStart >= 0 {
+					// Ending an in-val field; emit it.
 					curField = append(curField, fieldPart{val: val[fieldStart:i]})
+					flush()
+					flushedPrefix = true
 					fieldStart = -1
+				} else if !inSepRun && len(curField) > 0 {
+					// First IFS char after a non-empty curField
+					// (typically a lit prefix). Emit it as its own field
+					// so $a's content doesn't glue to the prefix.
+					flush()
+					flushedPrefix = true
 				}
-				flush()
-			} else {
-				if fieldStart < 0 { // starting a new field
-					fieldStart = i
+				if !inSepRun {
+					inSepRun = true
+					runNonWS = 0
 				}
+				if !isIFSWS(r) {
+					runNonWS++
+				}
+				continue
+			}
+			// Non-IFS char.
+			if inSepRun {
+				// Leaving a separator run. Emit empty fields per the
+				// non-ws-delimiter count.
+				switch {
+				case runNonWS == 0:
+					// Pure-whitespace run is one soft delimiter; no
+					// extra fields.
+				case !flushedPrefix:
+					// Run at the leading edge with non-ws separators →
+					// N leading empties (one per non-ws delimiter).
+					for n := 0; n < runNonWS; n++ {
+						emitEmpty()
+					}
+				default:
+					// Between fields. First non-ws delimiter ended the
+					// previous field; each additional non-ws produces
+					// one empty field between them.
+					for n := 1; n < runNonWS; n++ {
+						emitEmpty()
+					}
+				}
+				inSepRun = false
+				runNonWS = 0
+			}
+			if fieldStart < 0 {
+				fieldStart = i
 			}
 		}
-		if fieldStart >= 0 { // ending a field without IFS
+		if fieldStart >= 0 {
 			curField = append(curField, fieldPart{val: val[fieldStart:]})
 		}
+		// Trailing separator runs (regardless of non-ws count) never
+		// produce trailing empty fields — bash matches this.
+		_ = flushedPrefix // referenced above
 	}
 	for i, wp := range wps {
 		switch wp := wp.(type) {
