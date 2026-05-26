@@ -66,7 +66,11 @@ func (p *Parser) arithmExprTernary(compact bool) ArithmExpr {
 	}
 	colonPos := p.pos
 	p.nextArithOp(compact)
-	falseExpr := p.arithmExprTernary(compact)
+	// Bash allows the ternary's false branch to be an assignment
+	// expression: `$((cond ? a : x += 2))`. Pure C only permits a
+	// conditional-expression here, but bash's parser delegates to the
+	// assignment level, so do the same.
+	falseExpr := p.arithmExprAssign(compact)
 	if falseExpr == nil {
 		p.followErrExp(colonPos, TernColon)
 	}
