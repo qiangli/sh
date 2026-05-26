@@ -64,6 +64,36 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 				f.Close()
 				return err
 			}
+			// Bash 5.3 funsub `${ cmd; }` (cs.TempFile) and valsub
+			// `${|cmd;}` (cs.ReplyVar) run the body in the *caller's*
+			// scope — variable assignments inside the substitution
+			// persist. Regular `$(...)` uses a subshell.
+			//
+			// Important: capture into an independent buffer rather
+			// than writing straight to w. The w supplied by
+			// expand.cmdSubst is the shared bufferAlloc; r.fields()
+			// invocations inside the body would otherwise interleave
+			// their workspace usage with our capture and double up.
+			if cs.TempFile || cs.ReplyVar {
+				var captureBuf bytes.Buffer
+				oldStdout := r.stdout
+				r.stdout = &captureBuf
+				r.stmts(ctx, cs.Stmts)
+				r.stdout = oldStdout
+				r.exit.exiting = false
+				// w is expand.cmdSubst's shared bufferAlloc; reset it
+				// to discard any residue that r.fields() left there
+				// during the body run, then deposit our captured output.
+				if sb, ok := w.(*strings.Builder); ok {
+					sb.Reset()
+				}
+				w.Write(captureBuf.Bytes())
+				if cs.ReplyVar {
+					s := strings.TrimRight(captureBuf.String(), "\n")
+					r.setVarString(shellReplyVar, s)
+				}
+				return nil
+			}
 			r2 := r.subshell(false)
 			r2.stdout = w
 			// inherit_errexit: command substitutions inherit the errexit option.

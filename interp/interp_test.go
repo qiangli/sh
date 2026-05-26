@@ -326,6 +326,16 @@ var runTests = []runTest{
 
 	// printf -- ends option parsing so a format starting with - works.
 	{`printf -- '-x: %s\n' world`, "-x: world\n"},
+
+	// bash 5.3 funsub ${ cmd; }: runs body in caller's scope (no
+	// subshell), captures stdout. Distinct from $(...) which subshells.
+	{`v=${ echo hi; }; echo "$v"`, "hi\n"},
+	{`x=before; v=${ x=after; echo cap; }; echo "$v $x"`, "cap after\n"},
+	{`v=${ echo a; echo b; }; echo "[$v]"`, "[a\nb]\n"},
+	// regular $(...) still subshells — assignments don't escape
+	{`x=before; v=$(x=after; echo cap); echo "$v $x"`, "cap before\n"},
+	// bash 5.3 valsub ${|cmd;}: same as funsub but also sets REPLY
+	{`v=${| echo hello; }; echo "v=$v REPLY=$REPLY"`, "v=hello REPLY=hello\n"},
 	{"printf %1", "missing format char\nexit status 1 #JUSTERR"},
 	{"printf %+", "missing format char\nexit status 1 #JUSTERR"},
 	{"printf %B foo", "invalid format char: B\nexit status 1 #JUSTERR"},
