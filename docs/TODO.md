@@ -320,7 +320,7 @@ covered by an earlier section above is NOT repeated here.
 - [x] `FUNCNEST` — function recursion limit (positive integer aborts call when callStack depth reached; 0/unset/empty/non-numeric disables)
 - [ ] `EXECIGNORE` — skip-exec patterns for command lookup
 - [ ] `GLOBIGNORE` — glob-skip patterns
-- [ ] `IGNOREEOF` — Ctrl-D count before exit
+- [x] `IGNOREEOF` — Ctrl-D count before exit (positive int = N additional EOFs, non-numeric = bash's default of 10, unset/empty = exit on first EOF)
 - [ ] `INPUTRC` — readline init file path
 - [x] `OPTERR` — getopts error-print flag (OPTERR=0 suppresses messages; covered with the getopts diagnostics path)
 - [ ] `PROMPT_COMMAND` as array — iterate all entries

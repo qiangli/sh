@@ -18,6 +18,23 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 )
 
+// ignoreEOFLimit decodes the IGNOREEOF environment variable into the
+// number of *additional* EOFs to tolerate before exiting. An unset
+// or empty value disables the feature (ok=false). A non-numeric value
+// behaves like bash's documented default of 10.
+func ignoreEOFLimit(s string) (int, bool) {
+	if s == "" {
+		return 0, false
+	}
+	if n, err := strconv.Atoi(s); err == nil {
+		if n < 0 {
+			n = 0
+		}
+		return n, true
+	}
+	return 10, true
+}
+
 // setHistCmd publishes the interactive command counter as $HISTCMD.
 // Bash only sets HISTCMD when history is enabled (interactive mode),
 // so we update it here rather than in lookupVar.
@@ -79,6 +96,11 @@ func runInteractive(r *interp.Runner, stdin *os.File, stdout, stderr io.Writer) 
 	}
 	defer rl.Close()
 
+	// IGNOREEOF counts consecutive Ctrl-D presses (received as EOF
+	// errors) we tolerate before actually exiting. Bash treats unset
+	// as "exit on first EOF", a positive integer N as "require N+1
+	// presses", and a non-numeric value the same as N=10.
+	var eofPresses int
 	for {
 		// Execute PROMPT_COMMAND before displaying PS1.
 		if pc := r.Env.Get("PROMPT_COMMAND").String(); pc != "" {
@@ -92,10 +114,18 @@ func runInteractive(r *interp.Runner, stdin *os.File, stdout, stderr io.Writer) 
 		line, err := rl.Readline()
 		if err != nil {
 			if err == readline.ErrInterrupt {
+				eofPresses = 0
+				continue
+			}
+			limit, ok := ignoreEOFLimit(r.Env.Get("IGNOREEOF").String())
+			if ok && eofPresses < limit {
+				eofPresses++
+				io.WriteString(stderr, "Use \"exit\" to leave the shell.\n")
 				continue
 			}
 			break // EOF
 		}
+		eofPresses = 0
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
