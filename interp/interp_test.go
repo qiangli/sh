@@ -1527,6 +1527,12 @@ var runTests = []runTest{
 		"cat <<-EOF\n\tfoo\nEOF",
 		"foo\n",
 	},
+	// Empty heredoc delimiter — terminated by an empty line. Both
+	// quoted forms (`<<''` and `<<""`) and the tab-stripping `<<-''`
+	// variant should round-trip body content.
+	{"cat <<''\nhi\n\n", "hi\n"},
+	{"cat <<\"\"\nhi\n\n", "hi\n"},
+	{"cat <<-''\n\tindented\n\n", "indented\n"},
 	{
 		"cat <<-EOF\n\tfoo\n\nEOF",
 		"foo\n\n",
