@@ -76,7 +76,7 @@
 - [x] `let` with multiple expressions — already worked; regression tests added
 - [x] `select` loop construct — rewrote to actually loop and handle EOF/empty/invalid
 - [ ] `mapfile -O origin` — start index, `-c count`, `-C callback`
-- [ ] `read -N` nchars (don't stop at delimiter)
+- [x] `read -N` nchars (don't stop at delimiter; assigns the raw buffer to the first variable, no IFS split). `-n` now reads byte-by-byte so it stops correctly at the delimiter.
 - [x] `getopts` OPTERR variable (OPTERR=0 silences diagnostics regardless of leading `:` in optstring); error-message format still pending
 
 ### P3: Expansion/Quoting Fixes (affects ~20 tests)
@@ -293,7 +293,7 @@ covered by an earlier section above is NOT repeated here.
 ### G3: Builtin completeness (S–M each)
 
 - [ ] `mapfile -O origin`, `-c count`, `-C callback`, `-s count` (`builtins/mapfile.def:26`)
-- [ ] `read -N nchars` (distinct from `-n`)
+- [x] `read -N nchars` (distinct from `-n`): exact-count, no delimiter handling, no IFS split
 - [ ] `read -a array` for assoc arrays
 - [ ] `declare -p` formatting matching `subst.c:string_var_assignment`
 - [ ] `declare -f NAME` formatting matching bash (indent, semicolons, function header)

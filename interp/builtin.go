@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -1074,6 +1075,10 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		readArray := false
 		var timeout time.Duration
 		nchars := 0
+		// nstrict tracks `-N`: read exactly that many bytes, ignoring
+		// the delimiter and skipping the IFS split step (the buffer
+		// becomes one verbatim field).
+		nstrict := false
 		delim := "\n"
 		fp := flagParser{remaining: args}
 		for fp.more() {
@@ -1106,6 +1111,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					return failf(2, "read: %s: invalid count\n", val)
 				}
 				nchars = n
+				nstrict = flag == "-N"
 			case "-d":
 				d := fp.value()
 				if d == "" {
@@ -1147,19 +1153,47 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		var line []byte
 		var err error
 		if nchars > 0 {
-			// Read exactly nchars bytes.
 			buf := make([]byte, nchars)
-			n, readErr := r.stdin.Read(buf)
-			line = buf[:n]
-			err = readErr
+			if nstrict {
+				// `-N`: read EXACTLY nchars bytes, never honoring the
+				// delimiter.
+				n, readErr := io.ReadFull(r.stdin, buf)
+				line = buf[:n]
+				err = readErr
+				if err == io.ErrUnexpectedEOF {
+					err = io.EOF
+				}
+			} else {
+				// `-n`: read up to nchars bytes, stopping early at the
+				// delimiter. Bash drops the delimiter byte from the
+				// result, so do this one byte at a time.
+				one := make([]byte, 1)
+				delimByte := byte('\n')
+				if len(delim) > 0 {
+					delimByte = delim[0]
+				}
+				for len(line) < nchars {
+					n, readErr := r.stdin.Read(one)
+					if n > 0 {
+						if one[0] == delimByte {
+							break
+						}
+						line = append(line, one[0])
+					}
+					if readErr != nil {
+						err = readErr
+						break
+					}
+				}
+			}
 		} else if silent {
 			// Note that on Windows, syscall.Stdin is of type uintptr.
 			line, err = term.ReadPassword(int(syscall.Stdin))
 		} else {
 			line, err = r.readLine(readCtx, raw)
 		}
-		// Handle custom delimiter: if delim != "\n", trim at the delimiter.
-		if delim != "\n" && len(line) > 0 {
+		// Trim at delimiter unless we're in `-N` strict-count mode.
+		if !nstrict && delim != "\n" && len(line) > 0 {
 			if idx := strings.IndexByte(string(line), delim[0]); idx >= 0 {
 				line = line[:idx]
 			}
@@ -1183,13 +1217,22 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				args = append(args, shellReplyVar)
 			}
 
-			values := expand.ReadFields(r.ecfg, string(line), len(args), raw)
-			for i, name := range args {
-				val := ""
-				if i < len(values) {
-					val = values[i]
+			if nstrict {
+				// `-N` assigns the raw buffer to the first variable
+				// and clears the rest; no field splitting per bash.
+				r.setVarString(args[0], string(line))
+				for _, name := range args[1:] {
+					r.setVarString(name, "")
 				}
-				r.setVarString(name, val)
+			} else {
+				values := expand.ReadFields(r.ecfg, string(line), len(args), raw)
+				for i, name := range args {
+					val := ""
+					if i < len(values) {
+						val = values[i]
+					}
+					r.setVarString(name, val)
+				}
 			}
 		}
 
