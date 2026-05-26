@@ -1224,7 +1224,13 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		if len(args) == 0 {
 			args = r.Params
 		}
+		// Diagnostics fire unless the optstring starts with ':' (silent
+		// mode) or the caller sets OPTERR=0 — the latter being bash's
+		// runtime escape hatch when the optstring is hard-coded.
 		diagnostics := !strings.HasPrefix(optstr, ":")
+		if opterr, err := strconv.Atoi(r.envGet("OPTERR")); err == nil && opterr == 0 {
+			diagnostics = false
+		}
 
 		opt, optarg, done := r.optState.next(optstr, args)
 

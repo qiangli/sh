@@ -77,7 +77,7 @@
 - [x] `select` loop construct — rewrote to actually loop and handle EOF/empty/invalid
 - [ ] `mapfile -O origin` — start index, `-c count`, `-C callback`
 - [ ] `read -N` nchars (don't stop at delimiter)
-- [ ] `getopts` OPTERR variable, error message format
+- [x] `getopts` OPTERR variable (OPTERR=0 silences diagnostics regardless of leading `:` in optstring); error-message format still pending
 
 ### P3: Expansion/Quoting Fixes (affects ~20 tests)
 
@@ -322,7 +322,7 @@ covered by an earlier section above is NOT repeated here.
 - [ ] `GLOBIGNORE` — glob-skip patterns
 - [ ] `IGNOREEOF` — Ctrl-D count before exit
 - [ ] `INPUTRC` — readline init file path
-- [ ] `OPTERR` — getopts error-print flag
+- [x] `OPTERR` — getopts error-print flag (OPTERR=0 suppresses messages; covered with the getopts diagnostics path)
 - [ ] `PROMPT_COMMAND` as array — iterate all entries
 - [ ] `PROMPT_DIRTRIM` — truncate `\w`
 - [ ] `PS0` — print after read, before exec
