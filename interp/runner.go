@@ -1534,6 +1534,17 @@ func (r *Runner) execAs(ctx context.Context, pos syntax.Pos, argv0 string, args 
 		hc.ExecAs = argv0
 		hctx = context.WithValue(hctx, handlerCtxKey{}, hc)
 	}
+	// Audit hook fires before exec, after all resolution and
+	// expansion. Builtins are dispatched elsewhere; this is the
+	// real-process boundary.
+	if r.auditHandler != nil && len(args) > 0 {
+		r.auditHandler(AuditEvent{
+			Args:      args,
+			Pos:       pos,
+			Filename:  r.filename,
+			IsBuiltin: false,
+		})
+	}
 	r.exit.fromHandlerError(r.execHandler(hctx, args))
 }
 

@@ -186,26 +186,54 @@ func (r *Runner) lookupVar(name string) expand.Variable {
 	case "?":
 		vr.Kind, vr.Str = expand.String, strconv.Itoa(int(r.lastExit.code))
 	case "$":
-		vr.Kind, vr.Str = expand.String, strconv.Itoa(os.Getpid())
+		if r.deterministic {
+			vr.Kind, vr.Str = expand.String, strconv.Itoa(int(r.deterministicSeed&0x7fff))
+		} else {
+			vr.Kind, vr.Str = expand.String, strconv.Itoa(os.Getpid())
+		}
 	case "PPID":
 		vr.Kind, vr.Str = expand.String, strconv.Itoa(os.Getppid())
 	case "RANDOM": // not for cryptographic use
-		vr.Kind, vr.Str = expand.String, strconv.Itoa(mathrand.IntN(32767))
+		if r.deterministic && r.deterministicRng != nil {
+			vr.Kind, vr.Str = expand.String, strconv.Itoa(int(r.deterministicRng.Uint64()&0x7fff))
+		} else {
+			vr.Kind, vr.Str = expand.String, strconv.Itoa(mathrand.IntN(32767))
+		}
 		// TODO: support setting RANDOM to seed it
 	case "SRANDOM": // pseudo-random generator from the system
-		var p [4]byte
-		cryptorand.Read(p[:])
-		n := binary.NativeEndian.Uint32(p[:])
-		vr.Kind, vr.Str = expand.String, strconv.FormatUint(uint64(n), 10)
+		if r.deterministic && r.deterministicRng != nil {
+			vr.Kind, vr.Str = expand.String, strconv.FormatUint(r.deterministicRng.Uint64()&0xffffffff, 10)
+		} else {
+			var p [4]byte
+			cryptorand.Read(p[:])
+			n := binary.NativeEndian.Uint32(p[:])
+			vr.Kind, vr.Str = expand.String, strconv.FormatUint(uint64(n), 10)
+		}
 	case "BASHPID":
-		vr.Kind, vr.Str = expand.String, strconv.Itoa(os.Getpid())
+		if r.deterministic {
+			vr.Kind, vr.Str = expand.String, strconv.Itoa(int(r.deterministicSeed&0x7fff))
+		} else {
+			vr.Kind, vr.Str = expand.String, strconv.Itoa(os.Getpid())
+		}
 	case "SECONDS":
-		vr.Kind, vr.Str = expand.String, strconv.FormatInt(int64(time.Since(r.startTime).Seconds()), 10)
+		if r.deterministic {
+			vr.Kind, vr.Str = expand.String, "0"
+		} else {
+			vr.Kind, vr.Str = expand.String, strconv.FormatInt(int64(time.Since(r.startTime).Seconds()), 10)
+		}
 	case "EPOCHSECONDS":
-		vr.Kind, vr.Str = expand.String, strconv.FormatInt(time.Now().Unix(), 10)
+		if r.deterministic {
+			vr.Kind, vr.Str = expand.String, strconv.FormatInt(r.startTime.Unix(), 10)
+		} else {
+			vr.Kind, vr.Str = expand.String, strconv.FormatInt(time.Now().Unix(), 10)
+		}
 	case "EPOCHREALTIME":
-		now := time.Now()
-		vr.Kind, vr.Str = expand.String, fmt.Sprintf("%d.%06d", now.Unix(), now.Nanosecond()/1000)
+		if r.deterministic {
+			vr.Kind, vr.Str = expand.String, fmt.Sprintf("%d.000000", r.startTime.Unix())
+		} else {
+			now := time.Now()
+			vr.Kind, vr.Str = expand.String, fmt.Sprintf("%d.%06d", now.Unix(), now.Nanosecond()/1000)
+		}
 	case "BASH_SUBSHELL":
 		vr.Kind, vr.Str = expand.String, strconv.Itoa(r.subshellLevel)
 	case "BASH_ARGV0":

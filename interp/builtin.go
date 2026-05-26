@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -116,7 +117,12 @@ func IsBuiltin(name string) bool {
 		// (BSD nohup hits "Inappropriate ioctl for device" when the
 		// parent is a session leader).
 		"nohup",
-		"setsid":
+		"setsid",
+
+		// Agentic extensions — bashy-specific introspection. Surfaces
+		// runner state as JSON so harnesses can observe and assert on
+		// what the shell is doing. See docs/agentic-extensions.md.
+		"runner-state":
 		return true
 	}
 	return false
@@ -1562,6 +1568,97 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		r.outf("history: not available in non-interactive mode\n")
 	case "suspend":
 		return failf(1, "suspend: not supported\n")
+	case "runner-state":
+		// Agentic introspection. Emits a JSON object describing the
+		// current runner state to stdout. Subcommand selects which
+		// section; with no arg, the full dump is returned.
+		section := "all"
+		if len(args) > 0 {
+			section = args[0]
+		}
+		obj := map[string]any{}
+		emitVars := func() map[string]string {
+			m := map[string]string{}
+			r.writeEnv.Each(func(name string, vr expand.Variable) bool {
+				if vr.IsSet() {
+					m[name] = vr.String()
+				}
+				return true
+			})
+			return m
+		}
+		emitOpts := func() map[string]bool {
+			m := map[string]bool{}
+			for i, opt := range &posixOptsTable {
+				m[opt.name] = r.opts[i]
+			}
+			for i, opt := range bashOptsTable {
+				m[opt.name] = r.opts[len(posixOptsTable)+i]
+			}
+			return m
+		}
+		emitTraps := func() map[string]string {
+			m := map[string]string{}
+			for k, v := range r.trapCallbacks {
+				m[k] = v
+			}
+			return m
+		}
+		emitFds := func() []int {
+			fds := []int{}
+			for n := range r.fdTable {
+				fds = append(fds, n)
+			}
+			slices.Sort(fds)
+			return fds
+		}
+		emitFuncs := func() []string {
+			names := []string{}
+			for k := range r.Funcs {
+				names = append(names, k)
+			}
+			slices.Sort(names)
+			return names
+		}
+		switch section {
+		case "vars":
+			obj["vars"] = emitVars()
+		case "opts":
+			obj["opts"] = emitOpts()
+		case "traps":
+			obj["traps"] = emitTraps()
+		case "fds":
+			obj["fds"] = emitFds()
+		case "funcs":
+			obj["funcs"] = emitFuncs()
+		case "callstack":
+			frames := []map[string]any{}
+			for _, f := range r.callStack {
+				frames = append(frames, map[string]any{
+					"funcName": f.funcName,
+					"source":   f.source,
+					"line":     f.line,
+				})
+			}
+			obj["callstack"] = frames
+		case "all", "":
+			obj["vars"] = emitVars()
+			obj["opts"] = emitOpts()
+			obj["traps"] = emitTraps()
+			obj["fds"] = emitFds()
+			obj["funcs"] = emitFuncs()
+			obj["subshell_level"] = r.subshellLevel
+			obj["umask"] = fmt.Sprintf("%04o", r.umask)
+			obj["deterministic"] = r.deterministic
+		default:
+			return failf(2, "runner-state: unknown section %q (try: vars opts traps fds funcs callstack all)\n", section)
+		}
+		buf, err := json.Marshal(obj)
+		if err != nil {
+			return failf(1, "runner-state: %v\n", err)
+		}
+		r.out(string(buf))
+		r.out("\n")
 	case "logout":
 		// Bash refuses `logout` from a non-login shell. Embedders mark
 		// the runner via WithLoginShell.

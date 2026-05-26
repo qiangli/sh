@@ -336,6 +336,11 @@ var runTests = []runTest{
 	{`x=before; v=$(x=after; echo cap); echo "$v $x"`, "cap before\n"},
 	// bash 5.3 valsub ${|cmd;}: same as funsub but also sets REPLY
 	{`v=${| echo hello; }; echo "v=$v REPLY=$REPLY"`, "v=hello REPLY=hello\n"},
+
+	// runner-state introspection builtin emits JSON; check it round-trips
+	// by extracting a known key via grep -q.
+	{`f(){ :; }; runner-state funcs | grep -q '"funcs":\[.*"f"' && echo ok`, "ok\n"},
+	{`runner-state bogus`, "runner-state: unknown section \"bogus\" (try: vars opts traps fds funcs callstack all)\nexit status 2 #JUSTERR"},
 	{"printf %1", "missing format char\nexit status 1 #JUSTERR"},
 	{"printf %+", "missing format char\nexit status 1 #JUSTERR"},
 	{"printf %B foo", "invalid format char: B\nexit status 1 #JUSTERR"},
@@ -5191,6 +5196,70 @@ func TestRunnerManyResets(t *testing.T) {
 	r, _ := interp.New()
 	for range 5 {
 		r.Reset()
+	}
+}
+
+func TestRunnerAuditHandler(t *testing.T) {
+	t.Parallel()
+	src := `f(){ :; }; f; echo hi; ls /noexist 2>/dev/null; true`
+	file, err := syntax.NewParser().Parse(strings.NewReader(src), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var events []interp.AuditEvent
+	hits := func(e interp.AuditEvent) { events = append(events, e) }
+	var out bytes.Buffer
+	r, err := interp.New(
+		interp.StdIO(nil, &out, &out),
+		interp.WithAuditHandler(hits),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), runnerRunTimeout)
+	defer cancel()
+	if err := r.Run(ctx, file); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	// We expect at least one AuditEvent for `ls` (the one external).
+	// echo, true, : are builtins → no audit event in our current wiring
+	// (builtins go through r.builtin not r.execAs).
+	var sawLs bool
+	for _, e := range events {
+		if len(e.Args) > 0 && e.Args[0] == "ls" {
+			sawLs = true
+		}
+	}
+	if !sawLs {
+		t.Fatalf("expected audit event for `ls`, got events: %+v", events)
+	}
+}
+
+func TestRunnerDeterministic(t *testing.T) {
+	t.Parallel()
+	run := func(seed int64) string {
+		src := `echo $RANDOM $RANDOM $$ $SECONDS`
+		file, _ := syntax.NewParser().Parse(strings.NewReader(src), "")
+		var out bytes.Buffer
+		r, _ := interp.New(
+			interp.StdIO(nil, &out, &out),
+			interp.WithDeterministic(seed),
+		)
+		ctx, cancel := context.WithTimeout(context.Background(), runnerRunTimeout)
+		defer cancel()
+		if err := r.Run(ctx, file); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		return out.String()
+	}
+	a := run(42)
+	b := run(42)
+	if a != b {
+		t.Fatalf("deterministic runs disagree: %q vs %q", a, b)
+	}
+	c := run(7)
+	if a == c {
+		t.Fatalf("different seeds produced same stream: %q", a)
 	}
 }
 

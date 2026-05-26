@@ -17,6 +17,7 @@ import (
 	"io"
 	"io/fs"
 	"maps"
+	mathrand "math/rand/v2"
 	"os"
 	"path/filepath"
 	"slices"
@@ -217,6 +218,21 @@ type Runner struct {
 	// (and the legacy TestRunnerRun tests) keep the old "<name>: <msg>
 	// <arg>" wording without the line prefix.
 	bashCompatErrors bool
+
+	// auditHandler, when non-nil, is invoked just before the runner
+	// hands a simple command off to execHandler. It receives an
+	// [AuditEvent] describing the command, its arguments, and the
+	// source position. Used by agentic harnesses to log/observe what
+	// the shell is about to run.
+	auditHandler func(AuditEvent)
+
+	// deterministic toggles deterministic-mode behaviour: a seeded
+	// PRNG for $RANDOM, frozen $SECONDS / $EPOCHSECONDS, and stable
+	// $$ when [deterministicSeed] is set. Embedders enable it via
+	// [WithDeterministic] for reproducible agent runs.
+	deterministic     bool
+	deterministicSeed int64
+	deterministicRng  *mathrand.PCG
 
 	// fdTable holds non-stdio file descriptors keyed by OS fd number.
 	// 0/1/2 stay in stdin/stdout/stderr; everything else (coproc pipe
@@ -736,6 +752,65 @@ func WithBashCompatErrors(on bool) RunnerOption {
 	}
 }
 
+// AuditEvent is delivered to the [WithAuditHandler] callback just
+// before the runner invokes [ExecHandlerFunc] for a simple command.
+// Builtins and shell-internal commands (loops, conditionals, etc.)
+// do not produce events — the audit surface is the exec boundary
+// where the shell hands control to an external program.
+type AuditEvent struct {
+	// Args is the resolved command and its arguments, post expansion.
+	Args []string
+	// Pos is the source position of the command in the script.
+	Pos syntax.Pos
+	// Filename is [Runner.filename] (the parsed script's name) or
+	// empty if the runner was driven by -c / a Node value.
+	Filename string
+	// IsBuiltin is true if Args[0] is a shell builtin. Embedders that
+	// want a record of every "command" — builtin or not — typically
+	// keep these; harnesses that only care about external launches
+	// can filter them out.
+	IsBuiltin bool
+}
+
+// WithAuditHandler registers a callback invoked once per simple
+// command immediately before [ExecHandlerFunc] runs. Use it to
+// build a record of what the shell is about to execute (replay
+// logs, capability checking, observability). The callback runs
+// synchronously; return quickly. Returning is non-fatal — there
+// is no way to veto the command from the audit callback. Use a
+// custom [ExecHandlerFunc] for that.
+func WithAuditHandler(fn func(AuditEvent)) RunnerOption {
+	return func(r *Runner) error {
+		r.auditHandler = fn
+		return nil
+	}
+}
+
+// WithDeterministic enables deterministic-mode runs targeted at
+// agentic harnesses that need reproducible output. When on:
+//   - $RANDOM uses a per-runner PRNG seeded from `seed` (or 0 if
+//     the caller passed no seed) rather than [crypto/rand].
+//   - $SECONDS and $EPOCHSECONDS return a fixed value derived from
+//     the runner's start time rather than wall-clock progression.
+//   - $$ (PID) is stable: the seed value modulo 2^15 instead of
+//     [os.Getpid].
+//
+// External commands still see the host wall clock and real PIDs;
+// determinism is bounded to what the shell itself emits. Embedders
+// that need stronger isolation should combine this with a custom
+// [ExecHandler]/[OpenHandler] and an [AuditHandler].
+func WithDeterministic(seed int64) RunnerOption {
+	return func(r *Runner) error {
+		r.deterministic = true
+		r.deterministicSeed = seed
+		// PCG seeded from (seed, seed^0x9E3779B97F4A7C15) — the lo
+		// half is the user seed, hi is a hash to avoid weak streams
+		// when the user passed 0.
+		r.deterministicRng = mathrand.NewPCG(uint64(seed), uint64(seed)^0x9E3779B97F4A7C15)
+		return nil
+	}
+}
+
 func (r *Runner) posixOptByName(name string) *bool {
 	for i, opt := range &posixOptsTable {
 		if opt.name == name {
@@ -1011,12 +1086,16 @@ func (r *Runner) Reset() {
 		dirStack: r.dirStack[:0],
 		usedNew:  r.usedNew,
 
-		promptExpand:     r.promptExpand,
-		startTime:        r.startTime,
-		subshellLevel:    r.subshellLevel,
-		umask:            r.umask,
-		loginShell:       r.loginShell,
-		bashCompatErrors: r.bashCompatErrors,
+		promptExpand:      r.promptExpand,
+		startTime:         r.startTime,
+		subshellLevel:     r.subshellLevel,
+		umask:             r.umask,
+		loginShell:        r.loginShell,
+		bashCompatErrors:  r.bashCompatErrors,
+		auditHandler:      r.auditHandler,
+		deterministic:     r.deterministic,
+		deterministicSeed: r.deterministicSeed,
+		deterministicRng:  r.deterministicRng,
 		// fdTable is intentionally not preserved across Reset; a reset
 		// runner starts with no inherited non-stdio fds.
 	}
@@ -1197,12 +1276,16 @@ func (r *Runner) subshell(background bool) *Runner {
 
 		origStdout: r.origStdout, // used for process substitutions
 
-		promptExpand:     r.promptExpand,
-		startTime:        r.startTime,
-		subshellLevel:    r.subshellLevel + 1,
-		umask:            r.umask,
-		loginShell:       r.loginShell,
-		bashCompatErrors: r.bashCompatErrors,
+		promptExpand:      r.promptExpand,
+		startTime:         r.startTime,
+		subshellLevel:     r.subshellLevel + 1,
+		umask:             r.umask,
+		loginShell:        r.loginShell,
+		bashCompatErrors:  r.bashCompatErrors,
+		auditHandler:      r.auditHandler,
+		deterministic:     r.deterministic,
+		deterministicSeed: r.deterministicSeed,
+		deterministicRng:  r.deterministicRng,
 		// Subshells inherit open fds the way bash does. Clone the map so
 		// child mutations (close, dup) don't leak back to the parent;
 		// the underlying *os.File handles are shared (single OS fd).
