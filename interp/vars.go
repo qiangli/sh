@@ -484,7 +484,10 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 	}
 	prev.Set = true
 	if as.Value != nil {
-		s := r.literal(as.Value)
+		// Use the assignment-context literal expansion so `var=foo:~/bin`
+		// expands the post-colon tilde to $HOME, matching bash.
+		s, err := expand.LiteralForAssign(r.ecfg, as.Value)
+		r.expandErr(err)
 		// Integer attribute (declare -i): parse the RHS as an
 		// arithmetic expression and evaluate it. For =, the result
 		// replaces the value; for +=, it's added to the current

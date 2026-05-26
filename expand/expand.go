@@ -104,6 +104,11 @@ type Config struct {
 	fieldsAlloc [4][]fieldPart
 
 	ifs string
+	// tildeInAssign is set by [LiteralForAssign] for the duration of
+	// the call. When on, the literal-part handler also expands "~"
+	// (and "~user") that immediately follows a ":" or "=" inside a
+	// single literal — bash's assignment-context tilde rule.
+	tildeInAssign bool
 	// A pointer to a parameter expansion node, if we're inside one.
 	// Necessary for ${LINENO}.
 	curParam *syntax.ParamExp
@@ -195,6 +200,25 @@ func Literal(cfg *Config, word *syntax.Word) (string, error) {
 		return "", nil
 	}
 	cfg = prepareConfig(cfg)
+	field, err := cfg.wordField(word.Parts, quoteNone)
+	if err != nil {
+		return "", err
+	}
+	return cfg.fieldJoin(field), nil
+}
+
+// LiteralForAssign is like [Literal] but applies bash's assignment-only
+// tilde expansion: a `~` (or `~user`) immediately following a `:` or `=`
+// inside an unquoted literal also expands to the user's home directory.
+// This matches bash's behaviour for `PATH=~/bin:~/scripts` and friends.
+func LiteralForAssign(cfg *Config, word *syntax.Word) (string, error) {
+	if word == nil {
+		return "", nil
+	}
+	cfg = prepareConfig(cfg)
+	prev := cfg.tildeInAssign
+	cfg.tildeInAssign = true
+	defer func() { cfg.tildeInAssign = prev }()
 	field, err := cfg.wordField(word.Parts, quoteNone)
 	if err != nil {
 		return "", err
@@ -722,6 +746,9 @@ func (cfg *Config) wordField(wps []syntax.WordPart, ql quoteLevel) ([]fieldPart,
 					s = prefix + rest
 				}
 			}
+			if ql == quoteNone && cfg.tildeInAssign {
+				s = cfg.expandTildesAfterColons(s)
+			}
 			if (ql == quoteDouble || ql == quoteHeredoc) && strings.Contains(s, "\\") {
 				sb := cfg.strBuilder()
 				for i := 0; i < len(s); i++ {
@@ -1115,6 +1142,41 @@ func (cfg *Config) sliceElems(pe *syntax.ParamExp, elems []string, positional bo
 		elems = elems[:slicePos(length)]
 	}
 	return elems
+}
+
+// expandTildesAfterColons applies bash's assignment-tilde rule to a
+// literal string: each `:~` (or `:~user`) is expanded as if the tilde
+// were at the start of a new field. The string before the first colon
+// is left alone — that case is handled by the leading-tilde branch in
+// the caller. Only invoked when [Config.tildeInAssign] is set.
+func (cfg *Config) expandTildesAfterColons(s string) string {
+	if !strings.Contains(s, ":~") {
+		return s
+	}
+	var sb strings.Builder
+	sb.Grow(len(s))
+	parts := strings.Split(s, ":")
+	for i, p := range parts {
+		if i > 0 {
+			sb.WriteByte(':')
+		}
+		if i == 0 {
+			sb.WriteString(p)
+			continue
+		}
+		if !strings.HasPrefix(p, "~") {
+			sb.WriteString(p)
+			continue
+		}
+		if prefix, rest := cfg.expandUser(p, false); prefix != "" {
+			sb.WriteString(prefix)
+			sb.WriteString(rest)
+			continue
+		}
+		// Unexpanded tilde stays as-is (no matching user, etc.).
+		sb.WriteString(p)
+	}
+	return sb.String()
 }
 
 func (cfg *Config) expandUser(field string, moreFields bool) (prefix, rest string) {
