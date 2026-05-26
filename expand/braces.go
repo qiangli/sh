@@ -102,9 +102,18 @@ func bracesSeqRec(word *syntax.Word, yield func(*syntax.Word) bool) bool {
 				incr = -1
 			}
 			if len(br.Elems) > 2 {
-				// ParseInt with bit size 64 to ensure consistent behavior on 32-bit platforms.
+				// Bash 5.3 treats the step as abs(N) with sign matching
+				// the range direction: {10..1..2}, {10..1..-2},
+				// {-1..-10..2} and {-1..-10..-2} all use |step|=2 with
+				// the implied direction.
 				n, _ := strconv.ParseInt(br.Elems[2].Lit(), 10, 64)
-				if n != 0 && n > 0 == upward {
+				if n != 0 {
+					if n < 0 {
+						n = -n
+					}
+					if !upward {
+						n = -n
+					}
 					incr = n
 				}
 			}

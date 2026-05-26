@@ -82,7 +82,7 @@
 ### P3: Expansion/Quoting Fixes (affects ~20 tests)
 
 - [ ] Brace expansion with backslash quoting: `\{a,b\}` should not expand
-- [ ] Brace expansion sequence step: `{0..10..2}` step handling
+- [x] Brace expansion sequence step: `{0..10..2}` step handling (now uses |step| with sign matching range direction; {10..1..2} → 10 8 6 4 2)
 - [x] Brace expansion zero-padding: `{01..05}` → 01 02 03 04 05 (now also handles mixed widths like `{01..100}` and negative ranges)
 - [ ] `$'...'` ANSI-C quoting edge cases
 - [ ] IFS scoping: temporary IFS in simple commands vs eval/special builtins
