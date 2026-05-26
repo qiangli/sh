@@ -314,7 +314,7 @@ covered by an earlier section above is NOT repeated here.
 - [ ] `BASH_ALIASES` — dynamic assoc array of aliases
 - [ ] `BASH_CMDS` — dynamic assoc array of hashed paths
 - [ ] `BASH_ARGV`/`BASH_ARGC` — function-call argv stack (requires `extdebug`)
-- [ ] `BASH_MONOSECONDS` — monotonic clock (new in 5.3)
+- [x] `BASH_MONOSECONDS` — monotonic clock (new in 5.3) — uses time.Since(startTime) which keeps Go's monotonic component
 - [ ] `HISTCMD` — current history entry number
 - [ ] `HISTCONTROL`, `HISTIGNORE`, `HISTTIMEFORMAT` — history filtering
 - [ ] `FUNCNEST` — function recursion limit (default unlimited)

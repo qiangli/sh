@@ -245,6 +245,12 @@ func (r *Runner) lookupVar(name string) expand.Variable {
 			now := time.Now()
 			vr.Kind, vr.Str = expand.String, fmt.Sprintf("%d.%06d", now.Unix(), now.Nanosecond()/1000)
 		}
+	case "BASH_MONOSECONDS":
+		// Bash 5.3 monotonic clock — seconds since an unspecified point,
+		// unaffected by wall-clock adjustments. Reusing the shell's
+		// monotonic start time keeps the value stable across calls and
+		// deterministic mode.
+		vr.Kind, vr.Str = expand.String, strconv.FormatInt(int64(time.Since(r.startTime).Seconds()), 10)
 	case "BASH_SUBSHELL":
 		vr.Kind, vr.Str = expand.String, strconv.Itoa(r.subshellLevel)
 	case "BASH_ARGV0":
