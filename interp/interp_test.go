@@ -3525,6 +3525,15 @@ done <<< 2`,
 		"newgrp: not supported in this shell — group switching is not supported; switch groups in the parent process (e.g. with sudo -g)\nexit status 2 #JUSTERR",
 	},
 
+	// coproc: pipes are real, fd numbers are real, and `<&${CO[0]}` /
+	// `>&${CO[1]}` go through fdTable. Without the fdTable lookup the
+	// redirect layer would reject any numeric fd >= 3 with "bad fd number".
+	// See docs/plan-punted-builtins.md for the numbered-fd refactor scope.
+	{
+		"coproc CO { read line; echo got=$line; }; echo hi >&${CO[1]}; read out <&${CO[0]}; echo $out",
+		"got=hi\n",
+	},
+
 	// fg: in-shell builtin waits on the bgProc.done channel and propagates
 	// the captured exit status. Without a controlling TTY we don't try to
 	// reattach stdio; see docs/plan-punted-builtins.md.

@@ -929,18 +929,29 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		r2.stdout = pw
 
 		// Set COPROC array with read and write file descriptor numbers.
+		// Also register them in fdTable so `<&"${COPROC[0]}"` and
+		// `>&"${COPROC[1]}"` work in scripts that use the array. Without
+		// this, the redirect layer would see the numeric arg, fail the
+		// fd lookup, and return "bad fd number".
 		varName := "COPROC"
 		if cm.Name != nil {
 			varName = r.literal(cm.Name)
 		}
+		readFd := int(pr.Fd())
+		writeFd := int(pw2.Fd())
 		r.setVar(varName, expand.Variable{
 			Set:  true,
 			Kind: expand.Indexed,
 			List: []string{
-				strconv.Itoa(int(pr.Fd())),
-				strconv.Itoa(int(pw2.Fd())),
+				strconv.Itoa(readFd),
+				strconv.Itoa(writeFd),
 			},
 		})
+		if r.fdTable == nil {
+			r.fdTable = make(map[int]*os.File)
+		}
+		r.fdTable[readFd] = pr
+		r.fdTable[writeFd] = pw2
 
 		bg := &bgProc{
 			done: make(chan struct{}),
@@ -1152,7 +1163,17 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 		case "-":
 			*orig = io.Discard // closing the output writer
 		default:
-			return nil, fmt.Errorf("unhandled %v arg: %q", rd.Op, arg)
+			// Numeric fd N >= 3: look up in fdTable (coproc / `exec N>…`).
+			// >&N — point the destination at the file held by fd N.
+			n, err := strconv.Atoi(arg)
+			if err != nil || n < 0 {
+				return nil, fmt.Errorf("unhandled %v arg: %q", rd.Op, arg)
+			}
+			f, ok := r.fdTable[n]
+			if !ok {
+				return nil, fmt.Errorf("%v: bad fd number %q", rd.Op, arg)
+			}
+			*orig = f
 		}
 		return nil, nil
 	case syntax.RdrIn, syntax.RdrOut, syntax.AppOut,
@@ -1174,7 +1195,17 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 		case "-":
 			r.stdin = nil // closing the input file
 		default:
-			return nil, fmt.Errorf("unhandled %v arg: %q", rd.Op, arg)
+			// Numeric fd N >= 3: look up in fdTable (coproc / `exec N<…`).
+			// <&N — point stdin at the file held by fd N.
+			n, err := strconv.Atoi(arg)
+			if err != nil || n < 0 {
+				return nil, fmt.Errorf("unhandled %v arg: %q", rd.Op, arg)
+			}
+			f, ok := r.fdTable[n]
+			if !ok {
+				return nil, fmt.Errorf("%v: bad fd number %q", rd.Op, arg)
+			}
+			r.stdin = f
 		}
 		return nil, nil
 	default:

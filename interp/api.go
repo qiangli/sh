@@ -209,6 +209,15 @@ type Runner struct {
 	// Set via [WithLoginShell]. Bash refuses `logout` from a non-login
 	// shell with "not login shell: use 'exit'".
 	loginShell bool
+
+	// fdTable holds non-stdio file descriptors keyed by OS fd number.
+	// 0/1/2 stay in stdin/stdout/stderr; everything else (coproc pipe
+	// ends, future `exec N<file` targets) lives here. Lookups happen
+	// when a script uses `<&N` / `>&N` with N >= 3. The map is shared
+	// with subshells (fds are inherited in bash), but mutations in a
+	// subshell do not leak back to the parent because the map itself
+	// is cloned by [Runner.subshell].
+	fdTable map[int]*os.File
 }
 
 // exitStatus holds the state of the shell after running one command.
@@ -985,6 +994,8 @@ func (r *Runner) Reset() {
 		subshellLevel: r.subshellLevel,
 		umask:         r.umask,
 		loginShell:    r.loginShell,
+		// fdTable is intentionally not preserved across Reset; a reset
+		// runner starts with no inherited non-stdio fds.
 	}
 	// Ensure we stop referencing any pointers before we reuse bgProcs.
 	clear(r.bgProcs)
@@ -1164,8 +1175,14 @@ func (r *Runner) subshell(background bool) *Runner {
 		origStdout: r.origStdout, // used for process substitutions
 
 		promptExpand:  r.promptExpand,
-		startTime:    r.startTime,
+		startTime:     r.startTime,
 		subshellLevel: r.subshellLevel + 1,
+		umask:         r.umask,
+		loginShell:    r.loginShell,
+		// Subshells inherit open fds the way bash does. Clone the map so
+		// child mutations (close, dup) don't leak back to the parent;
+		// the underlying *os.File handles are shared (single OS fd).
+		fdTable: maps.Clone(r.fdTable),
 	}
 	r2.writeEnv = newOverlayEnviron(r.writeEnv, background)
 	// Funcs are copied, since they might be modified.

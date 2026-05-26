@@ -155,45 +155,59 @@ no suspended jobs to resume).
 
 ---
 
-## 4. `coproc` — numbered-fd refactor (largest piece)
+## 4. `coproc` — numbered-fd refactor
 
-### Current state
+### Phase 1 — DONE (`fdTable` + coproc reads)
 
-`*syntax.CoprocClause` in `interp/runner.go` creates real `os.Pipe()`s
-and exposes the raw fd numbers in `COPROC[0]` / `COPROC[1]`. Reading
-from / writing to those fds via `${COPROC[N]}` array indexing works.
-**Redirects** like `<&"${COPROC[0]}"` and `>&"${COPROC[1]}"` do not,
-because the redirect layer only handles fds 0/1/2.
+Shipped via `interp/api.go` (`Runner.fdTable map[int]*os.File`) and
+`interp/runner.go`:
 
-### Design (next batch — not implemented here)
+- `coproc` registers both pipe ends in `fdTable` keyed by the real OS
+  fd numbers it also writes into `${COPROC[0]}` / `${COPROC[1]}`.
+- `syntax.DplIn` (`<&N`) and `syntax.DplOut` (`>&N`) now look up
+  numeric args via `fdTable`; arbitrary fds work for the dup forms
+  instead of returning `unhandled %v arg`.
+- Subshells clone `fdTable` so child mutations don't leak to the
+  parent (bash inherits fds; the underlying `*os.File` handles are
+  shared, the map slot ownership is not).
 
-The blocker isn't `coproc`-specific. It's a general "the redirect layer
-needs numbered-fd support" gap. Recommended approach:
+End-to-end test:
 
-- Add a runner-level `fdTable map[int]*os.File` keyed by fd number.
-- `coproc` registers `${NAME[0]}` and `${NAME[1]}` into the table.
-- `exec N<...`, `exec N>...`, `exec N<>...`, `<&N`, `>&N` all consult /
-  mutate this table instead of assuming 0/1/2.
-- `dupFd(src, dst)` becomes an indirection through the table rather
-  than direct stdio struct field assignment.
+```sh
+coproc CO { read line; echo got=$line; }
+echo hi >&${CO[1]}
+read out <&${CO[0]}
+echo $out          # → "got=hi"
+```
 
-This unlocks coproc, `exec 3<&0`, FIFO process substitution edge cases,
-and several lurking redirect bugs at once.
+### Phase 2 — still pending
 
-### Tradeoff
+The redirect layer still hardcodes 0/1/2 for the `rd.N` numeric prefix
+in `interp/runner.go` `redir()`. The Phase 2 work is:
+
+- `exec N<file` / `exec N>file` / `exec N<>file` → open and store the
+  file in `fdTable[N]` (persistent because `keepRedirs` is set for
+  `exec`).
+- Plain `N>file` / `N<file` (no exec) → same routing but scoped to the
+  command via the save/restore dance in `stmtSync`.
+- `N>&M` / `N<&M` with arbitrary N → mutate `fdTable[N]` to reference
+  `fdTable[M]` (or stdin/stdout/stderr if M is 0/1/2).
+- `{varname}>` / `{varname}<` named-fd allocator → currently writes a
+  hard-coded "10" into the named var; should pick a real unused fd
+  number from a per-runner allocator and route through `fdTable`.
+- `cls.Close()` semantics for keepRedirs: today `defer cls.Close()` in
+  `stmtSync` runs even when `keepRedirs` is true, which means
+  `exec 3<file` would close the file immediately. Need to gate the
+  close on `!keepRedirs` (or move ownership into `fdTable`).
+
+### Tradeoff (still applies)
 
 Real OS fds are still required for `exec` of external commands — bash
 passes them through `execve`'s fd inheritance, which only works with
 real fds. So the channel-based emulation idea is a dead end for any
-script that ever execs an external program against a coproc fd. Keeping
-real `os.Pipe()` and adding a virtual fd table is the more general
-answer.
-
-### Estimated effort
-
-Medium-large. Touches `runner.go` (redirect handling), `handler.go`
-(possibly a new handler kind), and several test expectations. Defer
-until after `umask`/`logout`/`fg` are in.
+script that ever execs an external program against a coproc fd. Phase 1
++ Phase 2 keep real `os.Pipe()` and a virtual fd table — that's the
+general answer.
 
 ---
 
