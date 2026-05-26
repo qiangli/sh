@@ -4,6 +4,7 @@ go 1.25.0
 
 require (
 	github.com/creack/pty v1.1.24
+	github.com/ergochat/readline v0.1.3
 	github.com/go-quicktest/qt v1.101.0
 	github.com/google/go-cmp v0.7.0
 	github.com/google/renameio/v2 v2.0.2
@@ -14,7 +15,6 @@ require (
 )
 
 require (
-	github.com/ergochat/readline v0.1.3 // indirect
 	github.com/kr/pretty v0.3.1 // indirect
 	github.com/kr/text v0.2.0 // indirect
 	golang.org/x/mod v0.29.0 // indirect
