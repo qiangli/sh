@@ -944,7 +944,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 						if i > 0 {
 							r.out(" ")
 						}
-						r.outf("[%d]=%q", i, v)
+						r.outf("[%d]=%s", i, bashDeclareQuote(v))
 					}
 					r.out(")\n")
 				case expand.Associative:
@@ -954,12 +954,12 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 						if !first {
 							r.out(" ")
 						}
-						r.outf("[%s]=%q", k, v)
+						r.outf("[%s]=%s", k, bashDeclareQuote(v))
 						first = false
 					}
 					r.out(")\n")
 				default:
-					r.outf("declare -%s %s=%q\n", flags, name, vr.Str)
+					r.outf("declare -%s %s=%s\n", flags, name, bashDeclareQuote(vr.Str))
 				}
 				continue
 			}

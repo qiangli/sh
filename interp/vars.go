@@ -413,6 +413,45 @@ func (r *Runner) setVarString(name, value string) {
 	r.setVar(name, expand.Variable{Set: true, Kind: expand.String, Str: value})
 }
 
+// bashDeclareQuote formats v the way bash's `declare -p` does: bare
+// when safe, double-quoted otherwise, falling back to ANSI-C $'...'
+// when v contains characters that double quotes can't represent
+// (control bytes, NULs, non-UTF-8 bytes, etc.).
+func bashDeclareQuote(v string) string {
+	if hasNonPrintable(v) {
+		q, err := syntax.Quote(v, syntax.LangBash)
+		if err == nil {
+			return q
+		}
+	}
+	// Mirror bash's "always double-quote inside the array literal".
+	// Escape the four characters that have special meaning in double-
+	// quoted bash: ", \, $, ` — leaving everything else literal so the
+	// output matches `declare -p` byte-for-byte.
+	var b strings.Builder
+	b.Grow(len(v) + 2)
+	b.WriteByte('"')
+	for i := 0; i < len(v); i++ {
+		c := v[i]
+		if c == '"' || c == '\\' || c == '$' || c == '`' {
+			b.WriteByte('\\')
+		}
+		b.WriteByte(c)
+	}
+	b.WriteByte('"')
+	return b.String()
+}
+
+func hasNonPrintable(s string) bool {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c < 0x20 || c == 0x7f {
+			return true
+		}
+	}
+	return false
+}
+
 // aliasValue returns the textual form of an alias as bash stores it in
 // BASH_ALIASES: the args reprinted as shell source, plus a trailing
 // space when the original definition ended in whitespace.

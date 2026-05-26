@@ -1491,6 +1491,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		// -C cb:     shell code run as `cb INDEX LINE` every quant lines.
 		origin, skip, maxLines, quantum := 0, 0, 0, 5000
 		callback := ""
+		// readFD lets the caller pick an open FD other than stdin
+		// (mapfile -u 3). -1 means "use r.stdin".
+		readFD := -1
 		fp := flagParser{remaining: args}
 		for fp.more() {
 			switch flag := fp.flag(); flag {
@@ -1542,9 +1545,12 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				}
 				callback = v
 			case "-u":
-				// FD redirection isn't wired through builtins; accept
-				// the argument and continue to read from stdin.
-				fp.value()
+				v := fp.value()
+				n, err := strconv.Atoi(v)
+				if err != nil || n < 0 {
+					return failf(2, "%s: %s: invalid file descriptor specification\n", name, v)
+				}
+				readFD = n
 			default:
 				return invalidOpt(name, flag)
 			}
@@ -1564,14 +1570,24 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			return failf(2, "%s: Only one array name may be specified, %v\n", name, args)
 		}
 
-		var vr expand.Variable
-		vr.Kind = expand.Indexed
-		// When writing to a non-zero origin, pad the lower indices so
-		// the resulting array indices line up with `origin..origin+N`.
-		if origin > 0 {
-			vr.List = make([]string, origin)
+		// Resolve the input source: -u FD selects an entry from the
+		// per-runner fdTable; 0 means stdin; anything else is an
+		// error if the fd hasn't been opened by a redirect.
+		var src io.Reader = r.stdin
+		switch {
+		case readFD < 0, readFD == 0:
+			// keep r.stdin
+		case readFD == 1, readFD == 2:
+			return failf(2, "%s: %d: invalid file descriptor: not open for reading\n", name, readFD)
+		default:
+			f, ok := r.fdTable[readFD]
+			if !ok {
+				return failf(2, "%s: %d: invalid file descriptor: not open\n", name, readFD)
+			}
+			src = f
 		}
-		scanner := bufio.NewScanner(r.stdin)
+		var newLines []string
+		scanner := bufio.NewScanner(src)
 		scanner.Split(mapfileSplit(delim[0], dropDelim))
 		lineNum := 0
 		for scanner.Scan() {
@@ -1579,24 +1595,47 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			if skip > 0 && lineNum <= skip {
 				continue
 			}
-			vr.List = append(vr.List, scanner.Text())
-			if maxLines > 0 && len(vr.List)-origin >= maxLines {
-				break
-			}
-			if callback != "" && (len(vr.List)-origin)%quantum == 0 {
-				idx := len(vr.List) - 1
+			newLines = append(newLines, scanner.Text())
+			// Fire the callback after the line is recorded — order
+			// matters when -n caps reads, so do this before the
+			// maxLines break check.
+			if callback != "" && len(newLines)%quantum == 0 {
+				idx := origin + len(newLines) - 1
 				quoted, qerr := syntax.Quote(scanner.Text(), syntax.LangBash)
-				if qerr != nil {
-					continue
+				if qerr == nil {
+					cb := fmt.Sprintf("%s %d %s", callback, idx, quoted)
+					if prog, perr := syntax.NewParser().Parse(strings.NewReader(cb), ""); perr == nil {
+						r.stmts(ctx, prog.Stmts)
+					}
 				}
-				cb := fmt.Sprintf("%s %d %s", callback, idx, quoted)
-				if prog, perr := syntax.NewParser().Parse(strings.NewReader(cb), ""); perr == nil {
-					r.stmts(ctx, prog.Stmts)
-				}
+			}
+			if maxLines > 0 && len(newLines) >= maxLines {
+				break
 			}
 		}
 		if err := scanner.Err(); err != nil {
 			return failf(2, "%s: unable to read, %v\n", name, err)
+		}
+
+		// Merge into the existing indexed array so that entries below
+		// origin and above origin+len(newLines) survive (matches bash).
+		var vr expand.Variable
+		vr.Kind = expand.Indexed
+		if origin > 0 {
+			prev := r.lookupVar(arrayName)
+			if prev.Kind == expand.Indexed {
+				vr.List = append([]string(nil), prev.List...)
+			}
+		}
+		if len(vr.List) < origin {
+			vr.List = append(vr.List, make([]string, origin-len(vr.List))...)
+		}
+		end := origin + len(newLines)
+		if len(vr.List) < end {
+			vr.List = append(vr.List, make([]string, end-len(vr.List))...)
+		}
+		for i, line := range newLines {
+			vr.List[origin+i] = line
 		}
 		r.setVar(arrayName, vr)
 
@@ -2001,6 +2040,11 @@ var unsupportedHints = map[string]string{
 // mapfileSplit returns a suitable Split function for a [bufio.Scanner];
 // the code is mostly stolen from [bufio.ScanLines].
 func mapfileSplit(delim byte, dropDelim bool) bufio.SplitFunc {
+	// Bash strings can't hold a NUL byte, so when -d '' selects the
+	// NUL delimiter we always drop it from the token regardless of -t.
+	if delim == 0 {
+		dropDelim = true
+	}
 	return func(data []byte, atEOF bool) (advance int, token []byte, err error) {
 		if atEOF && len(data) == 0 {
 			return 0, nil, nil
