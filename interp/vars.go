@@ -16,6 +16,8 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/term"
+
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/syntax"
 )
@@ -263,6 +265,18 @@ func (r *Runner) lookupVar(name string) expand.Variable {
 	case "HOSTNAME":
 		h, _ := os.Hostname()
 		vr.Kind, vr.Str = expand.String, h
+	case "COLUMNS":
+		// Bash exposes the terminal width via $COLUMNS. We query the
+		// controlling stdin/stdout/stderr for a TTY size; if none of
+		// them is a terminal, the variable stays empty so scripts can
+		// detect "no TTY" via [[ -z $COLUMNS ]].
+		if w := terminalWidth(); w > 0 {
+			vr.Kind, vr.Str = expand.String, strconv.Itoa(w)
+		}
+	case "LINES":
+		if _, h := terminalSize(); h > 0 {
+			vr.Kind, vr.Str = expand.String, strconv.Itoa(h)
+		}
 	case "HOSTTYPE":
 		vr.Kind, vr.Str = expand.String, runtime.GOARCH
 	case "MACHTYPE":
@@ -379,6 +393,27 @@ func (r *Runner) delVar(name string) {
 
 func (r *Runner) setVarString(name, value string) {
 	r.setVar(name, expand.Variable{Set: true, Kind: expand.String, Str: value})
+}
+
+// terminalSize probes stdin/stdout/stderr for a terminal and returns
+// the first valid (cols, rows). Returns (0, 0) if none of them is a
+// terminal — callers use that to leave $COLUMNS / $LINES empty.
+func terminalSize() (cols, rows int) {
+	for _, fd := range []int{
+		int(os.Stdin.Fd()),
+		int(os.Stdout.Fd()),
+		int(os.Stderr.Fd()),
+	} {
+		if c, r, err := term.GetSize(fd); err == nil {
+			return c, r
+		}
+	}
+	return 0, 0
+}
+
+func terminalWidth() int {
+	c, _ := terminalSize()
+	return c
 }
 
 func (r *Runner) setVar(name string, vr expand.Variable) {

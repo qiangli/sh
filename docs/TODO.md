@@ -96,7 +96,7 @@
 - [ ] `BASH_COMMAND` — set dynamically before each command (currently static)
 - [x] `BASH_EXECUTION_STRING` — set by cmd/bashy from the -c argument (env-passed before runner construction)
 - [ ] `BASH_SUBSHELL` — verify increments correctly in all subshell types
-- [ ] `COLUMNS` / `LINES` — terminal dimensions via term.GetSize()
+- [x] `COLUMNS` / `LINES` — terminal dimensions via term.GetSize() (probes stdin/stdout/stderr; empty when no TTY)
 - [ ] `PROMPT_DIRTRIM` — truncate \w in prompts
 - [ ] `HISTCMD` — current history number
 - [ ] `COMP_*` variables (COMP_WORDS, COMP_CWORD, COMP_LINE, COMP_POINT, COMPREPLY)
@@ -329,7 +329,7 @@ covered by an earlier section above is NOT repeated here.
 - [ ] `PS4` — replace hardcoded `+ ` in trace.go with expanded PS4
 - [ ] `TIMEFORMAT` — for `time` builtin output
 - [ ] `TMOUT` — interactive idle / `read` default timeout
-- [ ] `LINES`, `COLUMNS` — terminal dimensions via `golang.org/x/term`
+- [x] `LINES`, `COLUMNS` — terminal dimensions via `golang.org/x/term`
 - [ ] `OLDPWD` — bind as set-by-cd readonly-after-set
 - [ ] `COMP_WORDS`, `COMP_CWORD`, `COMP_LINE`, `COMP_POINT`, `COMP_KEY`, `COMP_TYPE`, `COMPREPLY`, `COMP_WORDBREAKS` — set during completion functions
 - [ ] `READLINE_LINE`, `READLINE_POINT`, `READLINE_MARK` — set during `bind -x` callbacks
