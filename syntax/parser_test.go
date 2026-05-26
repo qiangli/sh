@@ -1113,11 +1113,9 @@ var errorCases = []errorCase{
 		"echo $((a ; c))",
 		langErr("1:11: not a valid arithmetic operator: `;`"),
 	),
-	errCase(
-		"echo $((foo) )",
-		langErr("1:6: reached `)` without matching `$((` with `))`", LangBash|LangMirBSDKorn|LangZsh),
-		flipConfirmAll, // note that we don't backtrack
-	),
+	// `echo $((foo) )` — bash 5.3 accepts whitespace between the two
+	// closing arithmetic parens, so the matching streaming parse now
+	// succeeds (see peekArithmEnd in parser_arithm.go).
 	errCase(
 		"echo $((a *))",
 		langErr("1:11: `*` must be followed by an expression"),

@@ -326,7 +326,19 @@ func (p *Parser) followArithm(ftok token, fpos Pos) ArithmExpr {
 }
 
 func (p *Parser) peekArithmEnd() bool {
-	return p.tok == rightParen && p.r == ')'
+	if p.tok != rightParen {
+		return false
+	}
+	if p.r == ')' {
+		return true
+	}
+	// Bash 5.3 accepts whitespace between the two closing parens of
+	// an arithmetic command/expansion: `(( true ) )` is the same as
+	// `(( true ))`. Skip horizontal whitespace and re-check.
+	for p.r == ' ' || p.r == '\t' {
+		p.rune()
+	}
+	return p.r == ')'
 }
 
 func (p *Parser) arithmMatchingErr(pos Pos, left, right token) {
