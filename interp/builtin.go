@@ -1544,33 +1544,12 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 // IsBuiltin recognizes but this runner does not implement. The hint is
 // appended to "<name>: not supported in this shell — " so agentic callers
 // see a named alternative or escape hatch rather than a generic refusal.
+// Most former entries (fg/bg/jobs/fc/umask/logout/etc.) now have explicit
+// implementations in the dispatcher and no longer reach the default arm;
+// future design work may swap some back to hint-only for outpost.
 var unsupportedHints = map[string]string{
-	// Job control — fundamentally unavailable because subshells are
-	// goroutines, not processes; there's no real job table to act on.
-	// Outpost (the canonical embedder) records detached PIDs via
-	// WithBgPidCallback and surfaces them through `outpost jobs/fg/bg/kill`.
-	"fg":   "no in-shell job control; use `outpost fg <pid>` (or the equivalent in your embedder)",
-	"bg":   "no in-shell job control; `outpost bg` is a no-op surface (bg & runs detached from the start)",
-	"jobs": "no in-shell job control; list background PIDs with `outpost jobs` (or the equivalent in your embedder)",
-
-	// POSIX builtins with reasonable substitutes.
-	"fc":     "command history editing is not supported; edit and re-enter commands directly",
 	"newgrp": "group switching is not supported; switch groups in the parent process (e.g. with sudo -g)",
-	"umask":  "umask is not settable from this shell; set it in the parent process or use chmod after creating files",
-	"times":  "process-time accounting is not supported; use \"time CMD\" for per-command timing",
-
-	// Bash readline / completion / introspection — irrelevant in this non-interactive runner.
-	"bind":     "readline keybindings are not supported (this shell does no line editing)",
-	"caller":   "stack-frame introspection is not supported",
-	"compgen":  "completion programming is not supported (completion happens in the SSH client, not this shell)",
-	"complete": "completion programming is not supported (completion happens in the SSH client, not this shell)",
-	"compopt":  "completion programming is not supported (completion happens in the SSH client, not this shell)",
-	"enable":   "enabling/disabling builtins is not supported; all supported builtins are always enabled",
-	"history":  "this shell does not maintain history; use the SSH client's history",
-	"help":     "no in-shell help text; refer to the bash manual at https://www.gnu.org/software/bash/manual/",
-	"logout":   "use \"exit\" instead",
-	"suspend":  "shell suspension is not supported; close the SSH session or use Ctrl-D",
-	"ulimit":   "ulimit is not settable from this shell; set resource limits in the parent process",
+	"ulimit": "ulimit is not settable from this shell; set resource limits in the parent process",
 }
 
 // mapfileSplit returns a suitable Split function for a [bufio.Scanner];

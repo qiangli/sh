@@ -3516,33 +3516,13 @@ done <<< 2`,
 	{"{ time -p; } |& wc | tr -s ' '", " 3 6 29\n"},
 	{"{ time -p echo -n; } |& wc | tr -s ' '", " 3 6 29\n"},
 
-	// unsupported builtins — should print a per-name hint, not the legacy
-	// generic "unsupported builtin" message. Exhaustive coverage lives in
-	// TestUnsupportedHints (unexported_test.go); these spot-check a few
-	// names from different categories so a regression in the dispatcher's
-	// default arm is visible here too.
+	// unsupported builtins — remaining genuinely-unsupported names route to
+	// per-name hints via the default arm. Exhaustive coverage lives in
+	// TestUnsupportedHints (unexported_test.go); these spot-check one to
+	// catch a regression in the dispatcher's default arm.
 	{
-		"fg",
-		"fg: not supported in this shell — no in-shell job control; use `outpost fg <pid>` (or the equivalent in your embedder)\nexit status 2 #JUSTERR",
-	},
-	{
-		"umask 022",
-		"umask: not supported in this shell — umask is not settable from this shell; set it in the parent process or use chmod after creating files\nexit status 2 #JUSTERR",
-	},
-	{
-		"logout",
-		"logout: not supported in this shell — use \"exit\" instead\nexit status 2 #JUSTERR",
-	},
-
-	// coproc — not supported, but parses; expect a clean rejection rather
-	// than the legacy "unhandled command node" crash.
-	{
-		"coproc { echo hi; }",
-		"coproc: not supported in this shell — bash coproc requires numbered file descriptors that this runner does not support; use a fifo (mkfifo) with a background command, or process substitution\nexit status 2 #JUSTERR",
-	},
-	{
-		"coproc CO { echo hi; }",
-		"coproc: not supported in this shell — bash coproc requires numbered file descriptors that this runner does not support; use a fifo (mkfifo) with a background command, or process substitution\nexit status 2 #JUSTERR",
+		"newgrp staff",
+		"newgrp: not supported in this shell — group switching is not supported; switch groups in the parent process (e.g. with sudo -g)\nexit status 2 #JUSTERR",
 	},
 
 	// exec
