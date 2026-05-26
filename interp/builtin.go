@@ -567,22 +567,27 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		}
 		exit = r.builtin(ctx, pos, args[0], args[1:])
 	case "type":
-		anyNotFound := false
-		mode := ""
+		skipFuncs := false
+		showAll := false
+		mode := "" // "", "-t", "-p", "-P"
 		fp := flagParser{remaining: args}
 		for fp.more() {
 			switch flag := fp.flag(); flag {
-			case "-a", "-f", "--help":
-				return failf(3, "command: NOT IMPLEMENTED\n")
+			case "-a":
+				showAll = true
+			case "-f":
+				skipFuncs = true
 			case "-p", "-P", "-t":
 				mode = flag
 			default:
-				return failf(2, "command: invalid option %q\n", flag)
+				return failf(2, "type: invalid option %q\n", flag)
 			}
 		}
 		args := fp.args()
+		anyNotFound := false
 		for _, arg := range args {
-			if mode == "-p" || mode == "-P" {
+			// -P always does PATH lookup, ignoring builtin/function/etc.
+			if mode == "-P" {
 				if path, err := LookPathDir(r.Dir, r.writeEnv, arg); err == nil {
 					r.outf("%s\n", path)
 				} else {
@@ -590,60 +595,44 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				}
 				continue
 			}
-			if syntax.IsKeyword(arg) {
-				if mode == "-t" {
-					r.out("keyword\n")
-				} else {
-					r.outf("%s is a shell keyword\n", arg)
+			matches := r.typeMatches(arg, skipFuncs)
+			// -p: only print path if no non-file match exists.
+			if mode == "-p" {
+				var pathMatch string
+				hasNonFile := false
+				for _, m := range matches {
+					if m.kind == "file" {
+						pathMatch = m.path
+					} else {
+						hasNonFile = true
+					}
+				}
+				if !hasNonFile && pathMatch != "" {
+					r.outf("%s\n", pathMatch)
+				}
+				if len(matches) == 0 {
+					anyNotFound = true
 				}
 				continue
 			}
-			if als, ok := r.alias[arg]; ok && r.opts[optExpandAliases] {
-				var buf bytes.Buffer
-				if len(als.args) > 0 {
-					printer := syntax.NewPrinter()
-					printer.Print(&buf, &syntax.CallExpr{
-						Args: als.args,
-					})
+			if len(matches) == 0 {
+				if mode != "-t" {
+					r.errf("type: %s: not found\n", arg)
 				}
-				if als.blank {
-					buf.WriteByte(' ')
-				}
-				if mode == "-t" {
-					r.out("alias\n")
-				} else {
-					r.outf("%s is aliased to `%s'\n", arg, &buf)
-				}
+				anyNotFound = true
 				continue
 			}
-			if _, ok := r.Funcs[arg]; ok {
+			toShow := matches
+			if !showAll {
+				toShow = matches[:1]
+			}
+			for _, m := range toShow {
 				if mode == "-t" {
-					r.out("function\n")
+					r.outf("%s\n", m.kind)
 				} else {
-					r.outf("%s is a function\n", arg)
+					r.outf("%s\n", m.desc)
 				}
-				continue
 			}
-			if IsBuiltin(arg) {
-				if mode == "-t" {
-					r.out("builtin\n")
-				} else {
-					r.outf("%s is a shell builtin\n", arg)
-				}
-				continue
-			}
-			if path, err := LookPathDir(r.Dir, r.writeEnv, arg); err == nil {
-				if mode == "-t" {
-					r.out("file\n")
-				} else {
-					r.outf("%s is %s\n", arg, path)
-				}
-				continue
-			}
-			if mode != "-t" {
-				r.errf("type: %s: not found\n", arg)
-			}
-			anyNotFound = true
 		}
 		if anyNotFound {
 			exit.code = 1
@@ -872,12 +861,15 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		r.execAs(ctx, pos, argv0, args)
 		exit = r.exit
 	case "command":
-		show := false
+		showV := false // -v: name or path
+		showVV := false // -V: "X is a Y" description
 		fp := flagParser{remaining: args}
 		for fp.more() {
 			switch flag := fp.flag(); flag {
 			case "-v":
-				show = true
+				showV = true
+			case "-V":
+				showVV = true
 			default:
 				return failf(2, "command: invalid option %q\n", flag)
 			}
@@ -886,7 +878,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		if len(args) == 0 {
 			break
 		}
-		if !show {
+		if !showV && !showVV {
 			if IsBuiltin(args[0]) {
 				return r.builtin(ctx, pos, args[0], args[1:])
 			}
@@ -897,8 +889,29 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		last := uint8(0)
 		for _, arg := range args {
 			last = 0
-			if r.Funcs[arg] != nil || IsBuiltin(arg) {
+			if showVV {
+				ms := r.typeMatches(arg, false)
+				if len(ms) == 0 {
+					r.errf("command: %s: not found\n", arg)
+					last = 1
+					continue
+				}
+				r.outf("%s\n", ms[0].desc)
+				continue
+			}
+			// -v: minimal form. Functions/builtins/keywords print the
+			// name; files print the path.
+			if syntax.IsKeyword(arg) || r.Funcs[arg] != nil || IsBuiltin(arg) {
 				r.outf("%s\n", arg)
+			} else if als, ok := r.alias[arg]; ok && r.opts[optExpandAliases] {
+				var buf bytes.Buffer
+				if len(als.args) > 0 {
+					syntax.NewPrinter().Print(&buf, &syntax.CallExpr{Args: als.args})
+				}
+				if als.blank {
+					buf.WriteByte(' ')
+				}
+				r.outf("alias %s='%s'\n", arg, &buf)
 			} else if path, err := LookPathDir(r.Dir, r.writeEnv, arg); err == nil {
 				r.outf("%s\n", path)
 			} else {
@@ -1603,6 +1616,64 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		return failf(2, "%s: not supported in this shell\n", name)
 	}
 	return exit
+}
+
+// typeMatch is a single resolution of a name. type / command -V iterate
+// them in bash priority order (keyword → alias → function → builtin →
+// file). desc holds the "X is a Y" line for the default / -V output;
+// path is set only for file matches.
+type typeMatch struct {
+	kind string // "keyword" | "alias" | "function" | "builtin" | "file"
+	desc string
+	path string
+}
+
+// typeMatches returns all resolutions of arg, in bash priority order.
+// skipFuncs corresponds to `type -f` (suppress function matches);
+// alias matches are only included when [optExpandAliases] is set.
+func (r *Runner) typeMatches(arg string, skipFuncs bool) []typeMatch {
+	var ms []typeMatch
+	if syntax.IsKeyword(arg) {
+		ms = append(ms, typeMatch{
+			kind: "keyword",
+			desc: fmt.Sprintf("%s is a shell keyword", arg),
+		})
+	}
+	if als, ok := r.alias[arg]; ok && r.opts[optExpandAliases] {
+		var buf bytes.Buffer
+		if len(als.args) > 0 {
+			syntax.NewPrinter().Print(&buf, &syntax.CallExpr{Args: als.args})
+		}
+		if als.blank {
+			buf.WriteByte(' ')
+		}
+		ms = append(ms, typeMatch{
+			kind: "alias",
+			desc: fmt.Sprintf("%s is aliased to `%s'", arg, &buf),
+		})
+	}
+	if !skipFuncs {
+		if _, ok := r.Funcs[arg]; ok {
+			ms = append(ms, typeMatch{
+				kind: "function",
+				desc: fmt.Sprintf("%s is a function", arg),
+			})
+		}
+	}
+	if IsBuiltin(arg) {
+		ms = append(ms, typeMatch{
+			kind: "builtin",
+			desc: fmt.Sprintf("%s is a shell builtin", arg),
+		})
+	}
+	if path, err := LookPathDir(r.Dir, r.writeEnv, arg); err == nil {
+		ms = append(ms, typeMatch{
+			kind: "file",
+			desc: fmt.Sprintf("%s is %s", arg, path),
+			path: path,
+		})
+	}
+	return ms
 }
 
 // unsupportedHints carries actionable messages for bash/POSIX builtins that

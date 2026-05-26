@@ -65,10 +65,12 @@
 - [ ] `declare -f` display format matching bash (indentation, semicolons)
 - [ ] `declare -p` output format matching bash
 - [ ] `declare -i` integer arithmetic on assignment
-- [ ] `type -t` — output just type name (alias/keyword/function/builtin/file)
-- [ ] `type -a` — show all matches
-- [ ] `type -P` — force PATH search
-- [ ] `command -V` �� verbose command description
+- [x] `type -t` — output just type name (alias/keyword/function/builtin/file)
+- [x] `type -a` — show all matches (factored through typeMatches helper)
+- [x] `type -f` — skip function lookup
+- [x] `type -p` — print path only if no higher-priority match
+- [x] `type -P` — force PATH search
+- [x] `command -V` — verbose command description (reuses typeMatches)
 - [ ] `return` outside function — should error in non-POSIX mode
 - [ ] `let` with multiple expressions
 - [ ] `select` loop construct

@@ -2685,6 +2685,20 @@ done <<< 2`,
 	{"type -t $PATH_PROG", "file\n"},
 	{"type -t inexisting_dfgsdgfds", "exit status 1"},
 
+	// type -a: show all matches in priority order. echo is both a
+	// builtin and a file in PATH (via the test exec handler).
+	{"type -a -t echo", "builtin\nfile\n"},
+	{"interp_myfn(){ :; }; type -a -t interp_myfn", "function\n"},
+	{"interp_myfn(){ :; }; type -a interp_myfn echo | head -2", "interp_myfn is a function\necho is a shell builtin\n"},
+
+	// type -f: skip function lookup, fall through to builtin/file.
+	{"echo(){ :; }; type -t echo", "function\n"},
+	{"echo(){ :; }; type -t -f echo", "builtin\n"},
+
+	// command -V: verbose form, mirrors `type` default output.
+	{"command -V echo", "echo is a shell builtin\n"},
+	{"command -V noexist", "command: noexist: not found\nexit status 1 #JUSTERR"},
+
 	// hash
 	{"hash $PATH_PROG", ""},
 
