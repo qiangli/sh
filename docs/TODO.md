@@ -93,16 +93,16 @@
 
 ### P4: Shell Variable Completeness
 
-- [ ] `BASH_COMMAND` — set dynamically before each command (currently static)
+- [x] `BASH_COMMAND` — set dynamically before each command (pre-expansion via printer for CallExpr, post-expansion for builtin/exec)
 - [x] `BASH_EXECUTION_STRING` — set by cmd/bashy from the -c argument (env-passed before runner construction)
-- [ ] `BASH_SUBSHELL` — verify increments correctly in all subshell types
+- [x] `BASH_SUBSHELL` — verified: 0 at top, increments per nested `( ... )` subshell
 - [x] `COLUMNS` / `LINES` — terminal dimensions via term.GetSize() (probes stdin/stdout/stderr; empty when no TTY)
 - [x] `PROMPT_DIRTRIM` — truncate \w in prompts (positive integer keeps last N components, prepends ".../")
 - [x] `HISTCMD` — current history number (set per interactive command, incrementing)
 - [ ] `COMP_*` variables (COMP_WORDS, COMP_CWORD, COMP_LINE, COMP_POINT, COMPREPLY)
 - [x] `BASH_ALIASES` — associative array of aliases (dynamic from r.alias, reprinted via syntax.Printer)
 - [x] `BASH_CMDS` — associative array of hash table (dynamic from r.cmdHashTable)
-- [ ] `BASH_COMPAT` — compatibility level
+- [x] `BASH_COMPAT` — compatibility level (settable/readable as a regular variable; we always behave as bash 5.3 so the value has no effect)
 - [ ] `BASH_XTRACEFD` — redirect xtrace to FD
 - [ ] `MAIL` / `MAILCHECK` / `MAILPATH`
 - [ ] `READLINE_LINE` / `READLINE_POINT`
