@@ -94,6 +94,10 @@ type Variable struct {
 	Local    bool
 	Exported bool
 	ReadOnly bool
+	// Integer is set when the variable was declared with `declare -i`.
+	// Subsequent assignments evaluate the right-hand side as arithmetic
+	// rather than treating it as a literal string.
+	Integer bool
 
 	// Kind defines which of the value fields below should be used.
 	Kind ValueKind
@@ -113,7 +117,7 @@ func (v Variable) IsSet() bool {
 // Declared variables may not be set; `export foo` is exported but not set to a value,
 // and `declare -a foo` is an indexed array but not set to a value.
 func (v Variable) Declared() bool {
-	return v.Set || v.Local || v.Exported || v.ReadOnly || v.Kind != Unknown
+	return v.Set || v.Local || v.Exported || v.ReadOnly || v.Integer || v.Kind != Unknown
 }
 
 // Flags returns the variable's attribute flags in the order used by bash's

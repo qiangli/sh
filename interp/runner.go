@@ -633,10 +633,17 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			prDup.Close()
 			wg.Wait()
 			r.stdin = oldStdin
-			// Track PIPESTATUS.
-			r.pipeStatus = []string{
-				strconv.Itoa(int(r2.exit.code)),
-				strconv.Itoa(int(r.exit.code)),
+			// Track PIPESTATUS. mvdan/sh parses pipes left-associative,
+			// so `a | b | c` is (a | b) | c — X is the nested pipeline
+			// and runs in r2. If r2 itself ran a pipeline, its segment
+			// statuses are in r2.pipeStatus; we extend that with Y's
+			// status to form the full chain. Otherwise it's a simple
+			// X | Y pair.
+			yCode := strconv.Itoa(int(r.exit.code))
+			if len(r2.pipeStatus) > 0 {
+				r.pipeStatus = append(append([]string(nil), r2.pipeStatus...), yCode)
+			} else {
+				r.pipeStatus = []string{strconv.Itoa(int(r2.exit.code)), yCode}
 			}
 			if r.opts[optPipeFail] && !r2.exit.ok() && r.exit.ok() {
 				r.exit = r2.exit
@@ -889,6 +896,11 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				continue
 			}
 			vr := r.lookupVar(name)
+			// Set the Integer attribute *before* assignVal so the
+			// initial assignment can evaluate the RHS as arithmetic.
+			if valType == "-i" {
+				vr.Integer = true
+			}
 			if as.Naked {
 				if valType == "-A" {
 					vr.Kind = expand.Associative

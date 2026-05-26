@@ -103,8 +103,12 @@ func (o *overlayEnviron) Set(name string, vr expand.Variable) error {
 		return fmt.Errorf("readonly variable")
 	}
 	if !vr.IsSet() { // unsetting
-		if prev.Local {
-			vr.Local = true
+		// Preserve the variable when it carries an attribute that
+		// must outlive the assignment — local, integer, exported,
+		// readonly — so `declare -i tot` (no value) stays declared.
+		if prev.Local || vr.Integer || vr.Exported || vr.ReadOnly {
+			vr.Local = prev.Local || vr.Local
+			vr.Integer = prev.Integer || vr.Integer
 			o.values[normalized] = namedVariable{name, vr}
 			return nil
 		}
@@ -464,6 +468,26 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 	prev.Set = true
 	if as.Value != nil {
 		s := r.literal(as.Value)
+		// Integer attribute (declare -i): parse the RHS as an
+		// arithmetic expression and evaluate it. For =, the result
+		// replaces the value; for +=, it's added to the current
+		// numeric value.
+		if prev.Integer && valType != "-a" && valType != "-A" {
+			rhs := 0
+			if s != "" {
+				expr, perr := syntax.NewParser().Arithmetic(strings.NewReader(s))
+				if perr == nil {
+					rhs, _ = expand.Arithm(r.ecfg, expr)
+				}
+			}
+			if as.Append {
+				cur, _ := strconv.Atoi(prev.Str)
+				rhs = cur + rhs
+			}
+			prev.Kind = expand.String
+			prev.Str = strconv.Itoa(rhs)
+			return name, prev
+		}
 		if !as.Append {
 			prev.Kind = expand.String
 			if valType == "-n" {
