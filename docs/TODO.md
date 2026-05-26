@@ -252,3 +252,189 @@ THIS_SH=../../../bin/bashy PATH=$PWD:$PATH ../../../bin/bashy ./<name>.tests
 # Compare output
 diff <output> <name>.right
 ```
+
+---
+
+## Bash 5.3 Gap Analysis (from comprehensive audit, 2026-05-26)
+
+Full reports in `docs/bash-gap-analysis.md` and `docs/agentic-extensions.md`.
+Items below are organized by priority and tagged by effort: S (1 commit),
+M (a session), L (multi-session), XL (cross-cutting). Anything already
+covered by an earlier section above is NOT repeated here.
+
+### G0: Error-format pass (M, unlocks ~60 bash 5.3 tests)
+
+- [ ] `<file>: line N:` prefix on every `failf` site (use `r.curStmt` pos)
+- [ ] `<name>: usage: ...` ordering (vs. current `usage: <name>`) — match `printf`, `read`, `getopts`, etc.
+- [ ] Quote style: bash uses `` `foo' `` (backtick + single-quote); bashy uses `'foo'` — change globally
+- [ ] Exact wording match for: `command not found`, `bad substitution`, `not a valid identifier`, `readonly variable`, `unbound variable`, `cannot create temp file`, `arithmetic syntax error`
+- [ ] Verify `bash --posix` mode output matches bash's `--posix` variants
+
+### G1: Parser blockers (XL, unlocks 6 tests)
+
+- [ ] `${ cmd; }` funsub parser production (`parse.y:1115`), `FuncSubst` AST node, runtime that runs the body in caller's scope (no subshell)
+- [ ] `${ (shift) }` subshell-within-funsub
+- [ ] `${H*}` — treat `*` as parameter-set pattern inside `[[ ]]`
+- [ ] `((true ) )` — accept whitespace before closing `)` in case-clause arithm
+- [ ] `case esac in esac)` — eval-time reparse of unusual case patterns
+- [ ] `${|cmd;}` valsub (bash 5.3, separate from funsub)
+
+### G2: Stub builtins worth finishing (M each)
+
+- [ ] `complete`/`compgen`/`compopt` — full spec engine (`-F/-W/-G/-C/-A/-X/-P/-S/-o`), wire to readline tab callback (L)
+- [ ] `history` — `-c/-d/-a/-r/-w/-n/-s/-p` on `~/.bashy_history` (M)
+- [ ] `fc` — `-l/-s/-e/-n/-r` re-execute and edit (M)
+- [ ] `bind` — `-p/-l/-x KEYSEQ:command/-r/-q/-u/-m keymap/-f file` (M)
+- [ ] `disown -h` — mark jobs to skip SIGHUP (S)
+- [ ] `help` — embed bash-style per-builtin help text (//go:embed) (S)
+- [ ] `times` — `syscall.Getrusage(RUSAGE_SELF/CHILDREN)` (S)
+- [ ] `ulimit` — at minimum: `-n` (file desc), `-u` (procs), `-t` (cpu time), `-f` (file size); respect cap from `setrlimit` (M)
+
+### G3: Builtin completeness (S–M each)
+
+- [ ] `mapfile -O origin`, `-c count`, `-C callback`, `-s count` (`builtins/mapfile.def:26`)
+- [ ] `read -N nchars` (distinct from `-n`)
+- [ ] `read -a array` for assoc arrays
+- [ ] `declare -p` formatting matching `subst.c:string_var_assignment`
+- [ ] `declare -f NAME` formatting matching bash (indent, semicolons, function header)
+- [ ] `declare -i` enforce arithmetic-on-assignment for subsequent assignments
+- [ ] `declare -u/-l/-c` case-attribute auto-transform (`att_uppercase`/`lowercase`/`capcase`)
+- [ ] `printf %q` to use bash's `sh_quote_reusable` style
+- [ ] `kill -L` (uppercase = signal table) alias
+- [ ] `getopts` OPTERR variable, leading-colon-in-optstring silent mode
+- [ ] `caller -e EXTDEBUG` extended-debug semantics
+- [ ] `command --explain foo` (new; from agentic extensions)
+
+### G4: Variables — secondary set (S each)
+
+- [ ] `BASH_COMMAND` set before *every* simple command, not just traps
+- [ ] `BASH_EXECUTION_STRING` — store `-c` argument
+- [ ] `BASH_COMPAT` — accept and validate compatibility level
+- [ ] `BASH_XTRACEFD` — redirect xtrace output to FD
+- [ ] `BASH_ALIASES` — dynamic assoc array of aliases
+- [ ] `BASH_CMDS` — dynamic assoc array of hashed paths
+- [ ] `BASH_ARGV`/`BASH_ARGC` — function-call argv stack (requires `extdebug`)
+- [ ] `BASH_MONOSECONDS` — monotonic clock (new in 5.3)
+- [ ] `HISTCMD` — current history entry number
+- [ ] `HISTCONTROL`, `HISTIGNORE`, `HISTTIMEFORMAT` — history filtering
+- [ ] `FUNCNEST` — function recursion limit (default unlimited)
+- [ ] `EXECIGNORE` — skip-exec patterns for command lookup
+- [ ] `GLOBIGNORE` — glob-skip patterns
+- [ ] `IGNOREEOF` — Ctrl-D count before exit
+- [ ] `INPUTRC` — readline init file path
+- [ ] `OPTERR` — getopts error-print flag
+- [ ] `PROMPT_COMMAND` as array — iterate all entries
+- [ ] `PROMPT_DIRTRIM` — truncate `\w`
+- [ ] `PS0` — print after read, before exec
+- [ ] `PS4` — replace hardcoded `+ ` in trace.go with expanded PS4
+- [ ] `TIMEFORMAT` — for `time` builtin output
+- [ ] `TMOUT` — interactive idle / `read` default timeout
+- [ ] `LINES`, `COLUMNS` — terminal dimensions via `golang.org/x/term`
+- [ ] `OLDPWD` — bind as set-by-cd readonly-after-set
+- [ ] `COMP_WORDS`, `COMP_CWORD`, `COMP_LINE`, `COMP_POINT`, `COMP_KEY`, `COMP_TYPE`, `COMPREPLY`, `COMP_WORDBREAKS` — set during completion functions
+- [ ] `READLINE_LINE`, `READLINE_POINT`, `READLINE_MARK` — set during `bind -x` callbacks
+
+### G5: Variable attributes (M)
+
+- [ ] `declare -u` / `att_uppercase` — auto-uppercase on assignment
+- [ ] `declare -l` / `att_lowercase` — auto-lowercase on assignment
+- [ ] `declare -c` / `att_capcase` — auto-capitalize on assignment
+- [ ] `att_invisible` — variable exists but has no value yet
+- [ ] `att_trace` — function tracing for `set -o functrace`
+
+### G6: `set -o` options (S each)
+
+- [ ] `braceexpand` `-B` — accept toggle (always on)
+- [ ] `emacs` / `vi` — switch readline edit mode
+- [ ] `errtrace` `-E` — ERR trap inheritance
+- [ ] `functrace` `-T` — DEBUG/RETURN trap inheritance
+- [ ] `hashall` `-h` — toggle command hashing
+- [ ] `ignoreeof` — Ctrl-D count before exit
+- [ ] `interactive-comments` — `#` in interactive shells
+- [ ] `keyword` `-k` — all `name=value` treated as env
+- [ ] `notify` `-b` — async notify of bg completion
+- [ ] `onecmd` `-t` — exit after one command
+- [ ] `physical` `-P` — don't resolve symlinks in cd
+- [ ] `privileged` `-p` — disable startup files and `$ENV`
+
+### G7: Shopt options (S each)
+
+- [ ] `globskipdots` — skip `.`/`..` in `*` (new in 5.3, default on)
+- [ ] `patsub_replacement` — `&` in replacement of `${var//pat/rep}` (default on in 5.3)
+- [ ] `noexpand_translation` — suppress `$"..."` translation
+- [ ] `varredir_close` — close named-fd on stmt exit
+- [ ] `bash_source_fullpath` — full path in BASH_SOURCE (new in 5.3)
+- [ ] `array_expand_once` — controls re-expansion in `[[ ]]`
+- [ ] `extdebug` — enable BASH_ARGV/BASH_ARGC stack, `caller`-with-source line
+- [ ] `localvar_inherit` — local vars inherit value from enclosing scope
+- [ ] `localvar_unset` — local vars without value start unset (not "")
+- [ ] `cdspell`, `dirspell` — Levenshtein corrections
+- [ ] `restricted_shell` — actually enforce restrictions (for `rsh` test)
+- [ ] `histappend`, `histreedit`, `histverify`, `cmdhist`, `lithist`, `mailwarn` — connect to history backend
+- [ ] `login_shell` — reflect `WithLoginShell` state in `shopt -p`
+
+### G8: Job control phase 1 (L)
+
+- [ ] `Setpgid: true` on `exec.Cmd.SysProcAttr` (Unix)
+- [ ] Track per-bgProc `pgid`
+- [ ] `kill %N` resolves to pgid; signals whole group
+- [ ] `kill 0` — signal current process group
+- [ ] Jobspec parsing: `%+`, `%-`, `%?str`, `%str`, `%%`
+- [ ] `jobs -p` (PID only), `-l` (long format with PID), `-n` (changed-since-last), `-r` (running), `-s` (stopped), `-x cmd` (substitute jobspec)
+- [ ] `[1]+ Done <cmd>` status notification on prompt
+
+### G9: Job control phase 2 (XL)
+
+- [ ] TTY control (`tcsetpgrp` via golang.org/x/sys/unix)
+- [ ] SIGTSTP (Ctrl-Z) handler — stop foreground job, push to bg table
+- [ ] `fg %N` — tcsetpgrp + SIGCONT + wait, restore TTY on exit
+- [ ] `bg %N` — SIGCONT only
+- [ ] `wait -f` — wait for terminal state, not just status change
+
+### G10: Readline depth (L)
+
+- [ ] Tab completion through `complete`/`compgen` registry (depends on G2)
+- [ ] `bind -p` / `-l` / `-x KEYSEQ:cmd` / `-r` / `-q` / `-u` / `-f file`
+- [ ] `~/.inputrc` / `/etc/inputrc` parsing (consider `xo/inputrc`)
+- [ ] `set -o vi` / `set -o emacs` mode switching at runtime
+- [ ] SIGWINCH handler — update `COLUMNS`/`LINES`
+
+### G11: History expansion (M, separate from `history` builtin)
+
+- [ ] `!!`, `!N`, `!-N`, `!str`, `!?str?`, `!$`, `!*`, `!:N`, `!:N-M`
+- [ ] `^old^new^` substitution
+- [ ] Modifiers: `:h`, `:t`, `:r`, `:e`, `:p`, `:s/old/new/`, `:&`, `:g`, `:a`
+- [ ] `histchars` variable (default `!^#`) — change the trigger char
+
+### G12: Locale and i18n (M)
+
+- [ ] `$"..."` gettext translation (use `golang.org/x/text/message`)
+- [ ] `LC_ALL`, `LC_COLLATE`, `LC_CTYPE`, `LC_NUMERIC`, `LC_TIME` — wire through `unicode/utf8` and `time` formatters
+- [ ] Case modification respect locale (currently uppercase via Unicode tables only)
+
+### G13: Agentic extensions (see docs/agentic-extensions.md)
+
+- [ ] **#1 Deterministic mode**: `set -o deterministic`, `BASHY_DETERMINISTIC=N` (S–M)
+- [ ] **#2 `--json` flag** on `jobs`, `declare -p`, `declare -F`, `trap -p`, `set`, `set -o`, `shopt -p`, `type`, `times`, `kill -l` (S each, do all in one session)
+- [ ] **#3 `runner-state` builtin** with subcommands `vars`/`traps`/`fds`/`opts`/`callstack`/`all` (S)
+- [ ] **#4 Resource limits**: `WithMaxWallTime`, `WithMaxCPUTime`, `WithMaxOutputBytes`, `WithMaxChildProcs`, `WithMaxOpenFiles`; new builtin `limits` (M)
+- [ ] **#5 Sandbox mode**: `WithSandboxRoots(read, write)`, `BASHY_SANDBOX_READ/WRITE` env, `sandbox-status` builtin (M)
+- [ ] **#6 Audit hook**: `WithAuditHandler(func(AuditEvent))`, optional `BASHY_AUDIT_LOG=path.jsonl` (S)
+- [ ] **#7 Dry-run mode**: `--dry-run` flag emitting `[would-run]` per leaf cmd; `command --explain foo` (M for full, S for explain only)
+- [ ] **#8 Capability declarations**: `# bashy: requires net,fs-write` preamble + `require` builtin + `WithCapabilities(set)` option (S–M)
+- [ ] **#9 Structured errors**: `WithStructuredErrors(func(ErrorEvent))` carrying kind/severity/pos/function (S)
+- [ ] **#10 Record / replay**: `BASHY_RECORD=path.jsonl` and `bashy --replay file [--strict|--lax]` (M)
+- [ ] **#11 Inline docs**: `bashy explain <name>` from `//go:embed help/*.md` (S; value is content)
+- [ ] **#12 Cancellation audit**: verify `ctx.Done()` propagates into all loops/bg procs; add `WithCancelHook` (M)
+- [ ] **#13 Embedder builtins**: `WithExtraBuiltins(map[string]BuiltinFunc)` (S)
+- [ ] **#14 Metrics handler**: `WithMetricsHandler(func(Metric))` (S)
+- [ ] **#15 Policy file**: `~/.bashy/policy.toml` or `.bashy.toml` with options/deny/caps sections (M)
+
+### Recommended next batches (from gap-analysis Section "Recommended next batches")
+
+1. **Batch A**: Error-message format pass (G0) — ~60 tests for one session
+2. **Batch B**: `${ cmd; }` funsub + parser fixes (G1) — XL, unlocks comsub/comsub2/cond/parser tests
+3. **Batch C**: Agentic batch 1 — G13 items #1 (deterministic), #6 (audit), #2 (json), #3 (runner-state)
+4. **Batch D**: Job control phase 1 (G8)
+5. **Batch E**: Programmable completion (part of G2)
+
