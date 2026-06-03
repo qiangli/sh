@@ -828,6 +828,17 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		switch y := cm.Loop.(type) {
 		case *syntax.WordIter:
 			name := y.Name.Value
+			// Bash 5.3 rejects invalid identifier names at the
+			// `for`/`select` loop step before any iteration runs.
+			// `for invalid-name in a b c; do …` emits a
+			// "not a valid identifier" diagnostic and aborts the
+			// loop.
+			if !syntax.ValidName(name) {
+				r.errf("%s`%s': not a valid identifier\n",
+					r.bashErrPrefix(y.Pos()), name)
+				r.exit.code = 1
+				return
+			}
 			items := r.Params // for i; do ...
 
 			inToken := y.InPos.IsValid()
@@ -1655,6 +1666,13 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 // the body. An empty reply re-displays the menu without running the
 // body. EOF (Ctrl-D) exits the loop with exit code 1, matching bash.
 func (r *Runner) selectLoop(ctx context.Context, name string, items []string, do []*syntax.Stmt) {
+	// Bash 5.3: a `select` with an empty item list (because the
+	// optional `in <list>` was omitted and `$@` is empty, or the
+	// list expanded to nothing) exits immediately without
+	// prompting.
+	if len(items) == 0 {
+		return
+	}
 	ps3 := shellDefaultPS3
 	if e := r.envGet(shellReplyPS3Var); e != "" {
 		ps3 = e
