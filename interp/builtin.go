@@ -900,19 +900,29 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				// message to bash's "syntax error near unexpected
 				// token `X'" form when we can identify the
 				// offending token from the source.
-				if text == "statements must be separated by &, ; or a newline" {
+				switch {
+				case text == "statements must be separated by &, ; or a newline":
 					if tok := offendingToken(src, pe.Pos); tok != "" {
 						text = fmt.Sprintf("syntax error near unexpected token `%s'", tok)
+					}
+				case strings.HasPrefix(text, "reached EOF without matching"):
+					// Bash phrases unclosed brace/paren EOFs as
+					// "unexpected EOF while looking for matching `X'".
+					if strings.Contains(text, "`${`") || strings.Contains(text, "`{`") {
+						text = "unexpected EOF while looking for matching `}'"
+					} else if strings.Contains(text, "`$(`") || strings.Contains(text, "`(`") {
+						text = "unexpected EOF while looking for matching `)'"
 					}
 				}
 				r.errf("%s: eval: line %d: %s\n", name, pos.Line(), text)
 				// Bash also echoes the offending source line on a
-				// second `<file>: eval: line N: \`<line>'` line, so
-				// the diagnostic is self-contained when seen in a
-				// terminal. The "line" here is the eval-arg source
-				// the parser was reading, not the outer script.
-				if line := evalSourceLine(src, int(pe.Pos.Line())); line != "" {
-					r.errf("%s: eval: line %d: `%s'\n", name, pos.Line(), line)
+				// second `<file>: eval: line N: \`<line>'` line —
+				// except for "unexpected EOF" diagnostics, which
+				// already self-describe the unclosed token.
+				if !strings.HasPrefix(text, "unexpected EOF") {
+					if line := evalSourceLine(src, int(pe.Pos.Line())); line != "" {
+						r.errf("%s: eval: line %d: `%s'\n", name, pos.Line(), line)
+					}
 				}
 				exit.code = 1
 				return exit
