@@ -811,6 +811,21 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		p := syntax.NewParser()
 		file, err := p.Parse(strings.NewReader(src), "")
 		if err != nil {
+			// Bash 5.3 prints eval-time parse errors as
+			// `<file>: eval: line N: <text>` — `eval:` lives between
+			// the filename and `line N:`, not after it as `failf`
+			// would arrange. The line N refers to the outer-script
+			// line where `eval` was called.
+			var pe syntax.ParseError
+			if r.bashCompatErrors && errors.As(err, &pe) {
+				name := r.filename
+				if name == "" {
+					name = "bashy"
+				}
+				r.errf("%s: eval: line %d: %s\n", name, pos.Line(), pe.Text)
+				exit.code = 1
+				return exit
+			}
 			return failf(1, "eval: %v\n", err)
 		}
 		r.stmts(ctx, file.Stmts)
