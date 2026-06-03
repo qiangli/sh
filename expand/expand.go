@@ -1899,10 +1899,20 @@ func ReadFields(cfg *Config, s string, n int, raw bool) []string {
 		// `read x` (single variable) gets the rest of the line
 		// with leading/trailing IFS whitespace trimmed but the
 		// interior runs preserved — bash's behaviour. Extend
-		// the first field to the end of the last, but keep its
-		// existing leading edge (which already skipped leading
-		// IFS whitespace).
-		fpos[0].end = fpos[len(fpos)-1].end
+		// the first field to the end of the last, then trim
+		// any trailing IFS-whitespace runes (bash post-strips
+		// at the end of the line even if they came from a
+		// backslash-escape).
+		end := fpos[len(fpos)-1].end
+		for end > fpos[0].start {
+			r := runes[end-1]
+			if (r == ' ' || r == '\t' || r == '\n') && cfg.ifsRune(r) {
+				end--
+				continue
+			}
+			break
+		}
+		fpos[0].end = end
 		fpos = fpos[:1]
 	case n != -1 && n < len(fpos):
 		// combine to max n fields
