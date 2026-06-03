@@ -400,6 +400,20 @@ func (r *Runner) errf(format string, a ...any) {
 	fmt.Fprintf(r.stderr, format, a...)
 }
 
+// isPosixSpecialBuiltin reports whether name is a POSIX "special
+// builtin" (POSIX 1003.1 § 2.14). In bash's POSIX mode, an assignment
+// preceding a special-builtin invocation persists after the command
+// returns rather than being reverted.
+func isPosixSpecialBuiltin(name string) bool {
+	switch name {
+	case "break", ":", "continue", ".", "eval", "exec", "exit",
+		"export", "readonly", "return", "set", "shift",
+		"source", "times", "trap", "unset":
+		return true
+	}
+	return false
+}
+
 // bashErrPrefix returns the bash-style `<filename>: line <N>: ` prefix
 // when [WithBashCompatErrors] is on; the empty string otherwise. The
 // filename comes from the parsed script (set when running a File) or
@@ -669,8 +683,13 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		trace.newLineFlush()
 
 		r.call(ctx, cm.Args[0].Pos(), fields)
-		for _, restore := range restores {
-			r.setVar(restore.name, restore.vr)
+		// Bash POSIX mode: assignments preceding a special builtin
+		// (`export`, `eval`, `readonly`, `set`, etc.) persist after
+		// the command returns. Skip the restore loop in that case.
+		if !(r.opts[optPosix] && isPosixSpecialBuiltin(fields[0])) {
+			for _, restore := range restores {
+				r.setVar(restore.name, restore.vr)
+			}
 		}
 	case *syntax.BinaryCmd:
 		switch cm.Op {
@@ -888,9 +907,9 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		valType := ""
 		declQuery := "" // "-f" or "-p" for query mode
 		switch cm.Variant.Value {
-		case "declare":
-			// When used in a function, "declare" acts as "local"
-			// unless the "-g" option is used.
+		case "declare", "typeset":
+			// When used in a function, "declare"/"typeset" act as
+			// "local" unless the "-g" option is used.
 			local = r.inFunc
 		case "local":
 			if !r.inFunc {
@@ -1041,6 +1060,15 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				vr.Local = false
 			} else if local {
 				vr.Local = true
+				// `typeset OPTIND=N` (or `local OPTIND=N`) inside a
+				// function resets bash's getopts internal pointers
+				// to track the new value. Without this, the
+				// caller's char-position state stays around and
+				// reads into the new argv at the old offset, which
+				// loops forever in recursive-getopts patterns.
+				if name == "OPTIND" {
+					r.optState = getopts{}
+				}
 			}
 			for _, mode := range modes {
 				switch mode {
@@ -1636,6 +1664,12 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 		r.Params = args[1:]
 		oldInFunc := r.inFunc
 		r.inFunc = true
+		// Bash 5.3: if OPTIND is local in the called function (via
+		// `typeset OPTIND=1` or similar), getopts processes the
+		// nested args independently of the caller, and on return the
+		// caller's getopts state is restored. We model that by
+		// snapshotting r.optState and restoring it at return.
+		oldOptState := r.optState
 
 		// Push call stack frame.
 		r.callStack = append(r.callStack, callFrame{
@@ -1657,6 +1691,7 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 		r.callStack = r.callStack[:len(r.callStack)-1]
 		r.Params = oldParams
 		r.inFunc = oldInFunc
+		r.optState = oldOptState
 		r.exit.returning = false
 		return
 	}
