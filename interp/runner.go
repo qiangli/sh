@@ -406,6 +406,23 @@ func (r *Runner) errf(format string, a ...any) {
 	fmt.Fprintf(r.stderr, format, a...)
 }
 
+// validExportedFuncName reports whether name is acceptable as the
+// payload of `export -f <name>`. Bash 5.3 refuses to export
+// functions whose names contain `=` or `/` (or are otherwise
+// incompatible with the BASH_FUNC_<name>%%= envvar round-trip).
+func validExportedFuncName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		switch name[i] {
+		case '=', '/':
+			return false
+		}
+	}
+	return true
+}
+
 // printFuncDecl prints a function definition in bash 5.3's
 // `declare -f` shape: `name () \n{ \n    stmt;\n    stmt2\n}` —
 // 4-space indent, trailing semicolons between statements (omitted
@@ -1114,6 +1131,18 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				// name` forms print the function definition. Bash
 				// silently returns exit 1 for missing functions.
 				if cm.Variant.Value == "export" {
+					// Bash refuses to export functions whose name
+					// can't survive the env-var round-trip — names
+					// containing `=` or `/`, etc. — even when the
+					// function itself does exist. The diagnostic
+					// is `export: <name>: cannot export` and the
+					// builtin keeps going (exit 1).
+					if !validExportedFuncName(name) {
+						r.errf("%sexport: %s: cannot export\n",
+							r.bashErrPrefix(r.curStmtPos), name)
+						r.exit.code = 1
+						continue
+					}
 					if _, ok := r.Funcs[name]; !ok {
 						r.exit.code = 1
 						continue
@@ -1347,7 +1376,21 @@ func (r *Runner) trapCallback(ctx context.Context, callback, name string) uint8 
 // 'name=val'`) rather than parsed as a syntax-level assignment
 // (`readonly name=val`). Bash 5.3 attributes assignment-failure error
 // messages differently for the two paths, so the caller needs to know.
+//
+// Pre-scans args for `-f` / `-F` so a function-mode invocation keeps
+// the full string as the function name (functions can be named
+// `foo=bar` or `/bin/echo`) instead of splitting on `=`.
 func (r *Runner) flattenAssigns(args []*syntax.Assign) iter.Seq2[*syntax.Assign, bool] {
+	funcMode := false
+	for _, as := range args {
+		if as.Name != nil || as.Value == nil {
+			continue
+		}
+		if lit := as.Value.Lit(); lit == "-f" || lit == "-F" {
+			funcMode = true
+			break
+		}
+	}
 	return func(yield func(*syntax.Assign, bool) bool) {
 		for _, as := range args {
 			// Convert "declare $x" into "declare value".
@@ -1362,6 +1405,15 @@ func (r *Runner) flattenAssigns(args []*syntax.Assign) iter.Seq2[*syntax.Assign,
 			for _, field := range r.fields(as.Value) {
 				as := &syntax.Assign{}
 				name, val, ok := strings.Cut(field, "=")
+				if funcMode && !strings.HasPrefix(field, "-") {
+					// `export -f NAME` / `declare -f NAME` —
+					// keep the full field as the function name,
+					// even if it contains `=`. Option flags
+					// (starting with `-`) still get parsed by
+					// the option loop below.
+					name = field
+					ok = false
+				}
 				as.Name = &syntax.Lit{Value: name}
 				if !ok {
 					as.Naked = true
