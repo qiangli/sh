@@ -22,6 +22,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/internal"
@@ -404,6 +405,47 @@ func (r *Runner) outf(format string, a ...any) {
 
 func (r *Runner) errf(format string, a ...any) {
 	fmt.Fprintf(r.stderr, format, a...)
+}
+
+// applyCaseAttr folds the variable's value in place when its
+// case-modification attributes (`declare -u/-l/-c`) are set.
+// Operates on String, Indexed and Associative kinds; the
+// scalar / per-element value gets folded.
+func applyCaseAttr(vr *expand.Variable) {
+	if !(vr.Upper || vr.Lower || vr.Capitalize) {
+		return
+	}
+	fold := func(s string) string {
+		switch {
+		case vr.Upper:
+			return strings.ToUpper(s)
+		case vr.Lower:
+			return strings.ToLower(s)
+		case vr.Capitalize:
+			if s == "" {
+				return s
+			}
+			rs := []rune(s)
+			rs[0] = unicode.ToUpper(rs[0])
+			for i := 1; i < len(rs); i++ {
+				rs[i] = unicode.ToLower(rs[i])
+			}
+			return string(rs)
+		}
+		return s
+	}
+	switch vr.Kind {
+	case expand.String:
+		vr.Str = fold(vr.Str)
+	case expand.Indexed:
+		for i, v := range vr.List {
+			vr.List[i] = fold(v)
+		}
+	case expand.Associative:
+		for k, v := range vr.Map {
+			vr.Map[k] = fold(v)
+		}
+	}
 }
 
 // validExportedFuncName reports whether name is acceptable as the
@@ -1115,6 +1157,12 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 					modes = append(modes, flag)
 				case "-a", "-A", "-n", "-i":
 					valType = flag
+				case "-u", "-l", "-c":
+					// Case-conversion attributes (`declare -u/-l/-c`).
+					// Tracked as additional modes; applied at assign
+					// time via `setVar` and surfaced in `declare -p`
+					// output via `expand.Variable.Flags`.
+					modes = append(modes, flag)
 				case "-g":
 					global = true
 				case "-f", "-F", "-p":
@@ -1266,8 +1314,18 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 					vr.Exported = true
 				case "-r":
 					vr.ReadOnly = true
+				case "-u":
+					vr.Upper, vr.Lower, vr.Capitalize = true, false, false
+				case "-l":
+					vr.Upper, vr.Lower, vr.Capitalize = false, true, false
+				case "-c":
+					vr.Upper, vr.Lower, vr.Capitalize = false, false, true
 				}
 			}
+			// Apply case-conversion attributes to the current value
+			// so `declare -u foo; foo=$TEXT` immediately stores the
+			// folded form.
+			applyCaseAttr(&vr)
 			r.setVar(name, vr)
 		}
 		// Handle declare -F/-f with no arguments: list all functions.

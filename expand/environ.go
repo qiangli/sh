@@ -99,6 +99,14 @@ type Variable struct {
 	// rather than treating it as a literal string.
 	Integer bool
 
+	// Upper / Lower / Capitalize are bash's `declare -u`, `-l`, and
+	// `-c` attributes — they auto-fold assigned values to all-upper,
+	// all-lower, or capitalize-first respectively. Mutually exclusive
+	// in bash; setting one clears the others.
+	Upper      bool
+	Lower      bool
+	Capitalize bool
+
 	// Kind defines which of the value fields below should be used.
 	Kind ValueKind
 
@@ -117,7 +125,8 @@ func (v Variable) IsSet() bool {
 // Declared variables may not be set; `export foo` is exported but not set to a value,
 // and `declare -a foo` is an indexed array but not set to a value.
 func (v Variable) Declared() bool {
-	return v.Set || v.Local || v.Exported || v.ReadOnly || v.Integer || v.Kind != Unknown
+	return v.Set || v.Local || v.Exported || v.ReadOnly || v.Integer ||
+		v.Upper || v.Lower || v.Capitalize || v.Kind != Unknown
 }
 
 // Flags returns the variable's attribute flags in the order used by bash's
@@ -133,6 +142,15 @@ func (v Variable) Flags() string {
 		flags = append(flags, 'A')
 	case NameRef:
 		flags = append(flags, 'n')
+	}
+	if v.Capitalize {
+		flags = append(flags, 'c')
+	}
+	if v.Lower {
+		flags = append(flags, 'l')
+	}
+	if v.Upper {
+		flags = append(flags, 'u')
 	}
 	if v.Integer {
 		flags = append(flags, 'i')

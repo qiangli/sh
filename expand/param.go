@@ -365,13 +365,17 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			out := make([]string, len(elems))
 			for i, elem := range elems {
 				rs := []rune(elem)
-				for ri, r := range rs {
-					if rx.MatchString(string(r)) {
-						rs[ri] = caseFunc(r)
-						if !all {
-							break
+				if all {
+					for ri, r := range rs {
+						if rx.MatchString(string(r)) {
+							rs[ri] = caseFunc(r)
 						}
 					}
+				} else if len(rs) > 0 && rx.MatchString(string(rs[0])) {
+					// Single ^ / , / ~: only the first char of
+					// each element is tested; no fall-through
+					// to subsequent runes.
+					rs[0] = caseFunc(rs[0])
 				}
 				out[i] = string(rs)
 			}

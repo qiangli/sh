@@ -107,8 +107,10 @@ func (o *overlayEnviron) Set(name string, vr expand.Variable) error {
 	if !vr.IsSet() { // unsetting
 		// Preserve the variable when it carries an attribute that
 		// must outlive the assignment — local, integer, exported,
-		// readonly — so `declare -i tot` (no value) stays declared.
-		if prev.Local || vr.Integer || vr.Exported || vr.ReadOnly {
+		// readonly, case-conversion — so `declare -u foo` (no
+		// value) stays declared.
+		if prev.Local || vr.Integer || vr.Exported || vr.ReadOnly ||
+			vr.Upper || vr.Lower || vr.Capitalize {
 			vr.Local = prev.Local || vr.Local
 			vr.Integer = prev.Integer || vr.Integer
 			o.values[normalized] = namedVariable{name, vr}
@@ -585,6 +587,15 @@ func (r *Runner) setVar(name string, vr expand.Variable) {
 	if r.opts[optAllExport] {
 		vr.Exported = true
 	}
+	// Carry forward case-conversion attributes from any prior
+	// declaration of the same name (`declare -u foo` followed by
+	// `foo=value`), and fold the value through them so the stored
+	// value already reflects the attribute.
+	prev := r.lookupVar(name)
+	if prev.Upper || prev.Lower || prev.Capitalize {
+		vr.Upper, vr.Lower, vr.Capitalize = prev.Upper, prev.Lower, prev.Capitalize
+	}
+	applyCaseAttr(&vr)
 	// BASH_ARGV0 is writable. Update r.argv0 so subsequent reads of
 	// $0 and $BASH_ARGV0 see the new value. r.filename stays as-is so
 	// error messages keep referring to the original script.
