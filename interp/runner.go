@@ -438,13 +438,13 @@ func (r *Runner) printFuncDecl(name string, body *syntax.Stmt) {
 		// Non-Block bodies (rare — e.g. function with `()` only,
 		// or a single compound). Fall back to the printer.
 		var buf bytes.Buffer
-		syntax.NewPrinter(syntax.Indent(4)).Print(&buf, body)
+		syntax.NewPrinter(syntax.Indent(4), syntax.SpaceRedirects(true)).Print(&buf, body)
 		r.out(buf.String())
 		r.out("\n")
 		return
 	}
 	r.out("{ \n")
-	printer := syntax.NewPrinter(syntax.Indent(4))
+	printer := syntax.NewPrinter(syntax.Indent(4), syntax.SpaceRedirects(true))
 	for i, st := range block.Stmts {
 		var buf bytes.Buffer
 		printer.Print(&buf, st)
@@ -1244,17 +1244,19 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			r.setVar(name, vr)
 		}
 		// Handle declare -F/-f with no arguments: list all functions.
-		if !declHadNames && declQuery == "-F" {
+		// Bash sorts the listing by function name.
+		if !declHadNames && (declQuery == "-F" || declQuery == "-f") {
+			names := make([]string, 0, len(r.Funcs))
 			for name := range r.Funcs {
-				r.outf("declare -f %s\n", name)
+				names = append(names, name)
 			}
-		} else if !declHadNames && declQuery == "-f" {
-			for name, body := range r.Funcs {
-				r.outf("%s()\n", name)
-				printer := syntax.NewPrinter()
-				var buf bytes.Buffer
-				printer.Print(&buf, body)
-				r.outf("%s\n", buf.String())
+			slices.Sort(names)
+			for _, name := range names {
+				if declQuery == "-F" {
+					r.outf("declare -f %s\n", name)
+					continue
+				}
+				r.printFuncDecl(name, r.Funcs[name])
 			}
 		}
 	case *syntax.TimeClause:

@@ -2021,7 +2021,39 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			return failf(1, "logout: too many arguments\n")
 		}
 		exit.exiting = true
-	case "compgen", "complete", "compopt":
+	case "compgen":
+		// Minimal `compgen -A <type>` support: enough for scripts
+		// that probe `compgen -A function` to enumerate defined
+		// functions before unsetting them. Full programmable
+		// completion is still deferred.
+		i := 0
+		actionType := ""
+		for i < len(args) {
+			if args[i] == "-A" && i+1 < len(args) {
+				actionType = args[i+1]
+				i += 2
+				continue
+			}
+			break
+		}
+		switch actionType {
+		case "function":
+			names := make([]string, 0, len(r.Funcs))
+			for n := range r.Funcs {
+				names = append(names, n)
+			}
+			slices.Sort(names)
+			if len(names) == 0 {
+				exit.code = 1
+				break
+			}
+			for _, n := range names {
+				r.outf("%s\n", n)
+			}
+		default:
+			return failf(1, "compgen: programmable completion not yet implemented\n")
+		}
+	case "complete", "compopt":
 		// Phase 6 stubs: programmable completion.
 		return failf(1, "%s: programmable completion not yet implemented\n", name)
 	case "times":
