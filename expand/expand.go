@@ -124,6 +124,12 @@ type Config struct {
 	// pattern-context callers leave it false so backslashes can
 	// serve as glob escapes. Set by [LiteralWithQuoteRemoval].
 	stripBackslashEscapes bool
+
+	// insideDoubleQuote, when true, indicates that the current
+	// paramExp / cmdSubst is being expanded inside a double-quoted
+	// context. Tilde expansion in default values (`${var:-~}`)
+	// suppresses when this is set, matching bash semantics.
+	insideDoubleQuote bool
 	// A pointer to a parameter expansion node, if we're inside one.
 	// Necessary for ${LINENO}.
 	curParam *syntax.ParamExp
@@ -807,11 +813,18 @@ func (cfg *Config) wordField(wps []syntax.WordPart, ql quoteLevel) ([]fieldPart,
 		switch wp := wp.(type) {
 		case *syntax.Lit:
 			s := wp.Value
-			if i == 0 && ql == quoteNone {
+			if i == 0 && ql == quoteNone && !cfg.insideDoubleQuote {
 				if prefix, rest := cfg.expandUser(s, len(wps) > 1); prefix != "" {
 					// TODO: return two separate fieldParts,
 					// like in wordFields?
 					s = prefix + rest
+				} else if cfg.tildeInAssign && len(s) >= 2 && s[0] == '~' && s[1] == ':' {
+					// Bash's assignment-tilde rule: a bare `~:`
+					// at the start of an assignment value expands
+					// to HOME, with the colon kept.
+					if home := cfg.Env.Get("HOME"); home.IsSet() {
+						s = home.String() + s[1:]
+					}
 				}
 			}
 			if ql == quoteNone && cfg.tildeInAssign {
@@ -875,7 +888,16 @@ func (cfg *Config) wordField(wps []syntax.WordPart, ql quoteLevel) ([]fieldPart,
 				field = append(field, part)
 			}
 		case *syntax.ParamExp:
+			// Track whether this paramExp sits inside a double-
+			// quoted (or heredoc) context so its default-value
+			// expansion can suppress tilde expansion when bash
+			// would. The flag is per-cfg and restored after.
+			prevQuote := cfg.insideDoubleQuote
+			if ql == quoteDouble || ql == quoteHeredoc {
+				cfg.insideDoubleQuote = true
+			}
 			val, err := cfg.paramExp(wp)
+			cfg.insideDoubleQuote = prevQuote
 			if err != nil {
 				return nil, err
 			}
@@ -1131,13 +1153,23 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 				// leading tilde-prefix on the value (bash's `FOO=~/x`
 				// rule). expandTildesAfterColons handles the
 				// subsequent `:~` segments but not the leading one,
-				// so do that here when this is the first Lit.
+				// so do that here when this is the first Lit. Bash
+				// expands `~` followed by `/`, end-of-string, or
+				// `:`; the `~:` case must be handled explicitly
+				// since expandUser only triggers on `~` followed by
+				// `/` or alnum.
 				if i == 0 {
 					if eq := strings.IndexByte(s, '='); eq >= 0 && eq+1 < len(s) && s[eq+1] == '~' {
 						head := s[:eq+1]
 						tail := s[eq+1:]
 						if exp, rest := cfg.expandUser(tail, false); exp != "" {
 							s = head + exp + rest
+						} else if len(tail) >= 2 && tail[1] == ':' {
+							// `=~:rest` — bare leading tilde
+							// followed by `:`; expand to HOME.
+							if home := cfg.Env.Get("HOME"); home.IsSet() {
+								s = head + home.String() + tail[1:]
+							}
 						}
 					}
 				}
