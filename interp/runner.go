@@ -967,6 +967,9 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			valType = "-n"
 		}
 		declHadNames := false
+		oldDeclCtx := r.declAssignContext
+		r.declAssignContext = true
+		defer func() { r.declAssignContext = oldDeclCtx }()
 	assignLoop:
 		for as, fromString := range r.flattenAssigns(cm.Args) {
 			// Bash attributes assignment failures from a declare-

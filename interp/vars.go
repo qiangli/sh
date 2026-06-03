@@ -682,6 +682,61 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 			return name, prev
 		}
 		if !as.Append {
+			// The array-kind-preserving logic only applies to
+			// whole-variable assignments (`a=v`) in a declare-
+			// family context (declare/readonly/local/export), not
+			// to indexed forms or inline `v=foo cmd` calls.
+			if as.Index == nil && r.declAssignContext {
+				// `declare -a name=(elem1 elem2 …)` reaching here
+				// via string-form flattening hands us the raw
+				// `(elem1 …)` text; re-parse it as an array literal
+				// so the array kind sticks and parens get stripped.
+				if (valType == "-a" || valType == "-A") && strings.HasPrefix(s, "(") && strings.HasSuffix(s, ")") {
+					inner := s[1 : len(s)-1]
+					if valType == "-a" {
+						prev.Kind = expand.Indexed
+						prev.List = expand.ReadFields(r.ecfg, inner, -1, false)
+						if prev.List == nil {
+							prev.List = []string{}
+						}
+					} else { // "-A"
+						prev.Kind = expand.Associative
+						if prev.Map == nil {
+							prev.Map = map[string]string{}
+						}
+						// TODO: full key=value parsing for assoc string-form.
+						prev.Map["0"] = inner
+					}
+					return name, prev
+				}
+				// Bash: when the existing variable is an indexed or
+				// associative array, a scalar assignment (`a=v`) in
+				// declare-family context sets element [0] (or key
+				// "0") rather than collapsing to a scalar.
+				switch prev.Kind {
+				case expand.Indexed:
+					if valType != "-n" {
+						newList := slices.Clone(prev.List)
+						if len(newList) == 0 {
+							newList = []string{s}
+						} else {
+							newList[0] = s
+						}
+						prev.List = newList
+						return name, prev
+					}
+				case expand.Associative:
+					if valType != "-n" {
+						newMap := make(map[string]string, len(prev.Map)+1)
+						for k, v := range prev.Map {
+							newMap[k] = v
+						}
+						newMap["0"] = s
+						prev.Map = newMap
+						return name, prev
+					}
+				}
+			}
 			prev.Kind = expand.String
 			if valType == "-n" {
 				prev.Kind = expand.NameRef

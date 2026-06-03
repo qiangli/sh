@@ -144,6 +144,13 @@ type Runner struct {
 	// (`readonly r='(5)'`) get no extra prefix.
 	setVarArrayLiteral bool
 
+	// declAssignContext is true while a declare-family clause is
+	// processing its assignments. Some bash semantics differ between
+	// declare-context (`declare a=v`, `readonly a=v`) and an inline
+	// prefix-assignment (`a=v cmd`), notably preserving an existing
+	// variable's array kind on scalar assignment.
+	declAssignContext bool
+
 	// argv0 is bash's $0 / $BASH_ARGV0 — initialized from filename
 	// but separately settable by user code. Error-message prefixes
 	// continue to use filename so they stay stable across user
