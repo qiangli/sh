@@ -615,7 +615,10 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		// a trap that returns 2 skips the next command. Fire here
 		// so the assignment-only branch below honors the skip.
 		if len(cm.Args) == 0 && len(cm.Assigns) > 0 && r.trapCallbacks["DEBUG"] != "" {
+			prevLineno := r.ecfg.OverrideLineno
+			r.ecfg.OverrideLineno = int(cm.Assigns[0].Pos().Line())
 			debugCode := r.trapCallback(ctx, r.trapCallbacks["DEBUG"], "debug")
+			r.ecfg.OverrideLineno = prevLineno
 			if opt, _ := r.bashOptByName("extdebug"); opt != nil && *opt && debugCode == 2 {
 				return
 			}
@@ -1713,7 +1716,12 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 	}
 	// Set BASH_COMMAND and fire DEBUG trap before each simple command.
 	r.setVarString("BASH_COMMAND", strings.Join(args, " "))
+	// While the DEBUG trap body is being expanded, $LINENO should
+	// resolve to the line of the command that triggered the trap.
+	prevLineno := r.ecfg.OverrideLineno
+	r.ecfg.OverrideLineno = int(pos.Line())
 	debugCode := r.trapCallback(ctx, r.trapCallbacks["DEBUG"], "debug")
+	r.ecfg.OverrideLineno = prevLineno
 	// Bash: with `shopt -s extdebug`, a DEBUG trap that returns 2
 	// skips execution of the next command (but doesn't terminate
 	// the shell). The trap-callback already restored r.exit, so we
@@ -1753,6 +1761,11 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 		// caller's getopts state is restored. We model that by
 		// snapshotting r.optState and restoring it at return.
 		oldOptState := r.optState
+		// $LINENO override only applies to the trap text itself,
+		// not to functions called from the trap — those should see
+		// their own body line numbers.
+		oldOverrideLineno := r.ecfg.OverrideLineno
+		r.ecfg.OverrideLineno = 0
 
 		// Push call stack frame.
 		r.callStack = append(r.callStack, callFrame{
@@ -1775,6 +1788,7 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 		r.Params = oldParams
 		r.inFunc = oldInFunc
 		r.optState = oldOptState
+		r.ecfg.OverrideLineno = oldOverrideLineno
 		r.exit.returning = false
 		return
 	}

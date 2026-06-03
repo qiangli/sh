@@ -130,6 +130,14 @@ type Config struct {
 	// context. Tilde expansion in default values (`${var:-~}`)
 	// suppresses when this is set, matching bash semantics.
 	insideDoubleQuote bool
+
+	// OverrideLineno, when non-zero, replaces the source line that
+	// `$LINENO` would normally report. The interpreter sets this
+	// when expanding a trap body so `$LINENO` reflects the line of
+	// the command that triggered the trap rather than the line
+	// inside the trap text itself.
+	OverrideLineno int
+
 	// A pointer to a parameter expansion node, if we're inside one.
 	// Necessary for ${LINENO}.
 	curParam *syntax.ParamExp

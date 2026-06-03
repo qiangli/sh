@@ -66,8 +66,15 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 	switch name {
 	case "LINENO":
 		// This is the only parameter expansion that the environment
-		// interface cannot satisfy.
-		line := uint64(cfg.curParam.Pos().Line())
+		// interface cannot satisfy. When the interpreter has set
+		// [Config.OverrideLineno] (e.g. while expanding a trap
+		// body), use it instead of the actual parser position.
+		var line uint64
+		if cfg.OverrideLineno > 0 {
+			line = uint64(cfg.OverrideLineno)
+		} else {
+			line = uint64(cfg.curParam.Pos().Line())
+		}
 		vr = Variable{Set: true, Kind: String, Str: strconv.FormatUint(line, 10)}
 	default:
 		vr = cfg.Env.Get(name)

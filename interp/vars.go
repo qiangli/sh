@@ -313,11 +313,19 @@ func (r *Runner) lookupVar(name string) expand.Variable {
 		vr.List = []string{"5", "3", "0", "1", "release", "bashy"}
 	case "FUNCNAME":
 		vr.Kind = expand.Indexed
-		names := make([]string, len(r.callStack))
-		for i, f := range r.callStack {
-			names[len(r.callStack)-1-i] = f.funcName
+		// Bash appends "main" as the outermost frame in FUNCNAME so
+		// that scripts can reliably introspect the call chain back
+		// to the top-level. Match that — but only when there's at
+		// least one function on the stack; an empty FUNCNAME stays
+		// unset, like bash.
+		if len(r.callStack) > 0 {
+			names := make([]string, len(r.callStack)+1)
+			for i, f := range r.callStack {
+				names[len(r.callStack)-1-i] = f.funcName
+			}
+			names[len(r.callStack)] = "main"
+			vr.List = names
 		}
-		vr.List = names
 	case "BASH_SOURCE":
 		vr.Kind = expand.Indexed
 		sources := make([]string, len(r.callStack))
