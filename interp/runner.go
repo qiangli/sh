@@ -78,9 +78,23 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 				var captureBuf bytes.Buffer
 				oldStdout := r.stdout
 				r.stdout = &captureBuf
+				// Bash 5.3: "Any variable assignments performed during
+				// the execution of the [funsub] command list are local
+				// to the command list and lost after the substitution
+				// is performed." So the body runs in a function-like
+				// variable scope (return / local are legal, plain
+				// assignments don't leak), but in the *same process*
+				// (no subshell — unlike $(...) which forks).
+				oldInFunc := r.inFunc
+				r.inFunc = true
+				origEnv := r.writeEnv
+				r.writeEnv = &overlayEnviron{parent: r.writeEnv, funcScope: true}
 				r.stmts(ctx, cs.Stmts)
+				r.writeEnv = origEnv
+				r.inFunc = oldInFunc
 				r.stdout = oldStdout
 				r.exit.exiting = false
+				r.exit.returning = false
 				// w is expand.cmdSubst's shared bufferAlloc; reset it
 				// to discard any residue that r.fields() left there
 				// during the body run, then deposit our captured output.
