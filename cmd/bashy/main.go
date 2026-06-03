@@ -314,6 +314,12 @@ func printBashParseError(w io.Writer, src []byte, prefix string, pe syntax.Parse
 	line := int(pe.Pos.Line())
 	text := rewriteParserErrorText(string(src), pe)
 	fmt.Fprintf(w, "%s: line %d: %s\n", prefix, line, text)
+	// Bash omits the trailing source-line echo for "unexpected EOF"
+	// diagnostics (the matching-`X' messages already point at the
+	// unclosed construct).
+	if strings.HasPrefix(text, "unexpected EOF") {
+		return
+	}
 	if srcLine := nthLine(src, line); srcLine != "" {
 		fmt.Fprintf(w, "%s: line %d: `%s'\n", prefix, line, srcLine)
 	}
@@ -323,10 +329,25 @@ func printBashParseError(w io.Writer, src []byte, prefix string, pe syntax.Parse
 // into bash 5.3's canonical wording when the pattern is recognisable.
 // Falls back to the original text otherwise.
 func rewriteParserErrorText(src string, pe syntax.ParseError) string {
+	// Bash escalates a partial-arithmetic parse to "missing `))`"
+	// instead of naming the inner token — match that for `((` blocks
+	// before any of the per-message rewrites below.
+	if insideUnclosedArith(src, pe.Pos) {
+		return "unexpected EOF while looking for matching `)'"
+	}
 	switch {
 	case pe.Text == "statements must be separated by &, ; or a newline",
 		strings.Contains(pe.Text, "must be followed by"),
 		strings.Contains(pe.Text, "must follow a name"):
+		// For `case`/`for`/`select` follow-errors the parser anchors the
+		// position at the keyword itself ("`case x` must be followed by
+		// `in`") but bash reports the actually-offending token (the one
+		// it found instead). Skip over the construct's preamble to find
+		// that token in the source.
+		skipWords := tokensToSkip(pe.Text)
+		if tok := offendingTokenAfter(src, pe.Pos, skipWords); tok != "" {
+			return fmt.Sprintf("syntax error near unexpected token `%s'", tok)
+		}
 		if tok := offendingTokenAt(src, pe.Pos); tok != "" {
 			return fmt.Sprintf("syntax error near unexpected token `%s'", tok)
 		}
@@ -342,6 +363,133 @@ func rewriteParserErrorText(src string, pe syntax.ParseError) string {
 		return "unexpected EOF while looking for matching `\"'"
 	}
 	return pe.Text
+}
+
+// insideUnclosedArith reports whether pos sits inside an `(( ... ))`
+// arithmetic command whose matching `))` is missing in the source up
+// to that point.
+func insideUnclosedArith(src string, pos syntax.Pos) bool {
+	col := int(pos.Col())
+	line := int(pos.Line())
+	if line <= 0 || col <= 0 {
+		return false
+	}
+	curLine := 1
+	end := 0
+	for ; end < len(src) && curLine < line; end++ {
+		if src[end] == '\n' {
+			curLine++
+		}
+	}
+	end += col - 1
+	if end > len(src) {
+		end = len(src)
+	}
+	prefix := src[:end]
+	// Count `((` and `))` occurrences before pos. If `((` > `))` we
+	// are inside an unclosed arith block. This is conservative — it
+	// ignores `((` inside strings/comments — but good enough for the
+	// bashy CLI's error-message remap.
+	open := strings.Count(prefix, "((")
+	close := strings.Count(prefix, "))")
+	return open > close
+}
+
+// tokensToSkip returns how many words must be skipped past pe.Pos in
+// the source to land on the token bash would name as the offender.
+// For `case x must be followed by in` we must skip 2 words (`case`
+// and the subject); for `for must be followed by a literal` only 1
+// (`for`); etc. Returns 0 when no special skipping is needed.
+func tokensToSkip(text string) int {
+	switch {
+	case strings.HasPrefix(text, "`case ") && strings.Contains(text, "must be followed by `in`"):
+		return 2
+	case strings.HasPrefix(text, "`case` must be followed by"):
+		return 1
+	case strings.HasPrefix(text, "`for` must be followed by"),
+		strings.HasPrefix(text, "`select` must be followed by"):
+		return 1
+	case strings.Contains(text, "` must be followed by `in`, `do`, `;`, or a newline"):
+		// `for foo` / `select foo` -- skip kw + name.
+		return 2
+	}
+	return 0
+}
+
+// offendingTokenAfter advances `skip` whitespace-delimited words past
+// pos in src and returns the next token starting after the last skip,
+// in the same shape as offendingTokenAt. Used to find bash's notion of
+// the offender when the parser anchored its position at the start of
+// the construct (`case x`, `for`, `for foo`, …).
+func offendingTokenAfter(src string, pos syntax.Pos, skip int) string {
+	if skip <= 0 {
+		return ""
+	}
+	col := int(pos.Col())
+	line := int(pos.Line())
+	if line <= 0 || col <= 0 {
+		return ""
+	}
+	curLine := 1
+	i := 0
+	for ; i < len(src) && curLine < line; i++ {
+		if src[i] == '\n' {
+			curLine++
+		}
+	}
+	i += col - 1
+	if i >= len(src) {
+		return ""
+	}
+	skipWord := func() {
+		// skip leading whitespace
+		for ; i < len(src); i++ {
+			c := src[i]
+			if c != ' ' && c != '\t' {
+				break
+			}
+		}
+		// consume one bash-style word/operator
+		if i >= len(src) {
+			return
+		}
+		switch src[i] {
+		case ')', '(', '|', '&', ';', '<', '>', '`':
+			i++
+			return
+		}
+		for ; i < len(src); i++ {
+			c := src[i]
+			if c == ' ' || c == '\t' || c == '\n' || c == ';' || c == '&' || c == '|' || c == '<' || c == '>' || c == '(' || c == ')' || c == '`' {
+				break
+			}
+		}
+	}
+	for n := 0; n < skip; n++ {
+		skipWord()
+	}
+	// skip whitespace before the offender
+	for ; i < len(src); i++ {
+		c := src[i]
+		if c != ' ' && c != '\t' {
+			break
+		}
+	}
+	if i >= len(src) {
+		return ""
+	}
+	switch src[i] {
+	case ')', '(', '|', '&', ';', '<', '>', '`':
+		return string(src[i])
+	}
+	start := i
+	for ; i < len(src); i++ {
+		c := src[i]
+		if c == ' ' || c == '\t' || c == '\n' || c == ';' || c == '&' || c == '|' || c == '<' || c == '>' || c == '(' || c == ')' || c == '`' {
+			break
+		}
+	}
+	return src[start:i]
 }
 
 // offendingTokenAt extracts a single bash-style token (operator or
