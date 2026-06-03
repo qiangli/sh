@@ -1354,6 +1354,12 @@ func (r *Runner) subshell(background bool) *Runner {
 	r2.Vars = make(map[string]expand.Variable)
 	r2.alias = maps.Clone(r.alias)
 	r2.trapCallbacks = maps.Clone(r.trapCallbacks)
+	// Subshells inherit "we're inside a function" so that `return`
+	// in `$(... return ...)` aborts only the subshell rather than
+	// erroring with "can only be done from a func or sourced
+	// script". Bash distinguishes these — see comsub.tests.
+	r2.inFunc = r.inFunc
+	r2.callStack = append([]callFrame(nil), r.callStack...)
 
 	r2.dirStack = append(r2.dirBootstrap[:0], r.dirStack...)
 	r2.fillExpandConfig(r.ectx)

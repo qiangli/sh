@@ -122,6 +122,7 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 			}
 			r2.stmts(ctx, cs.Stmts)
 			r2.exit.exiting = false // subshells don't exit the parent shell
+			r2.exit.returning = false // and they swallow `return` locally
 			r.lastExpandExit = r2.exit
 			if r2.exit.fatalExit {
 				return r2.exit.err // surface fatal errors immediately
