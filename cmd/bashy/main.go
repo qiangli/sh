@@ -101,7 +101,47 @@ func newRunner() (*interp.Runner, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Bash imports exported functions from environment variables of
+	// the form `BASH_FUNC_<name>%%=() { body; }`. Parse each one and
+	// register it as a shell function so child invocations see the
+	// caller's exported functions.
+	importBashFuncs(r)
 	return r, nil
+}
+
+// importBashFuncs scans os.Environ() for entries matching
+// `BASH_FUNC_<name>%%=() { … }` and registers each one as a shell
+// function in r.Funcs. Silently ignores any that don't parse.
+func importBashFuncs(r *interp.Runner) {
+	for _, e := range os.Environ() {
+		name, value, ok := strings.Cut(e, "=")
+		if !ok {
+			continue
+		}
+		rest, ok := strings.CutPrefix(name, "BASH_FUNC_")
+		if !ok {
+			continue
+		}
+		funcName, ok := strings.CutSuffix(rest, "%%")
+		if !ok || funcName == "" {
+			continue
+		}
+		// The value is `() { body; }`. Synthesize a function
+		// definition by prepending the name.
+		src := funcName + " " + value
+		file, err := syntax.NewParser().Parse(strings.NewReader(src), "")
+		if err != nil || len(file.Stmts) != 1 {
+			continue
+		}
+		fn, ok := file.Stmts[0].Cmd.(*syntax.FuncDecl)
+		if !ok {
+			continue
+		}
+		if r.Funcs == nil {
+			r.Funcs = make(map[string]*syntax.Stmt)
+		}
+		r.Funcs[funcName] = fn.Body
+	}
 }
 
 // collectSetArgs converts the -o / -O flags collected on the command

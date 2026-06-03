@@ -1126,6 +1126,12 @@ func (r *Runner) Reset() {
 		// emptied below, to reuse the space
 		Vars: r.Vars,
 
+		// Preserve user-registered functions across Reset; bash's
+		// `BASH_FUNC_*` env imports run at construction time and the
+		// resulting functions are part of the initial shell state,
+		// not per-Run scratch state.
+		Funcs: r.Funcs,
+
 		dirStack: r.dirStack[:0],
 		usedNew:  r.usedNew,
 
