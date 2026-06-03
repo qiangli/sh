@@ -134,7 +134,15 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 		hc := HandlerCtx(ctx)
 		path, err := LookPathDir(hc.Dir, hc.Env, args[0])
 		if err != nil {
-			fmt.Fprintln(hc.Stderr, err)
+			if hc.runner != nil && hc.runner.bashCompatErrors {
+				// Bash 5.3 emits `<file>: line N: <cmd>: command not
+				// found` rather than the Go-error "<cmd>: executable
+				// file not found in $PATH" we'd otherwise leak.
+				fmt.Fprintf(hc.Stderr, "%s%s: command not found\n",
+					hc.runner.bashErrPrefix(hc.Pos), args[0])
+			} else {
+				fmt.Fprintln(hc.Stderr, err)
+			}
 			return ExitStatus(127)
 		}
 		cmdArgs := args
