@@ -5,6 +5,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"flag"
@@ -210,13 +211,63 @@ func run(r *interp.Runner, reader io.Reader, name string) error {
 	if *posix {
 		lang = syntax.LangPOSIX
 	}
-	prog, err := syntax.NewParser(syntax.Variant(lang)).Parse(reader, name)
+	// Buffer the source so we can echo the offending line back to stderr
+	// in bash's `<file>: line N: \`<line>'` format when parsing fails.
+	src, err := io.ReadAll(reader)
 	if err != nil {
+		return err
+	}
+	prog, err := syntax.NewParser(syntax.Variant(lang)).Parse(bytes.NewReader(src), name)
+	if err != nil {
+		var pe syntax.ParseError
+		if errors.As(err, &pe) {
+			printBashParseError(os.Stderr, src, name, pe)
+			return interp.ExitStatus(2)
+		}
 		return err
 	}
 	r.Reset()
 	ctx := context.Background()
 	return r.Run(ctx, prog)
+}
+
+// printBashParseError emits a syntax.ParseError in the same shape bash
+// 5.3 uses: a `<prefix>: line N: <text>` line, followed by a second
+// `<prefix>: line N: \`<offending source line>'` echo. The prefix is
+// `<file>` for a parsed script and `bashy: -c` for the -c form.
+func printBashParseError(w io.Writer, src []byte, name string, pe syntax.ParseError) {
+	prefix := name
+	if prefix == "" {
+		prefix = "bashy: -c"
+	}
+	line := int(pe.Pos.Line())
+	fmt.Fprintf(w, "%s: line %d: %s\n", prefix, line, pe.Text)
+	if srcLine := nthLine(src, line); srcLine != "" {
+		fmt.Fprintf(w, "%s: line %d: `%s'\n", prefix, line, srcLine)
+	}
+}
+
+// nthLine returns the 1-indexed line `n` of src with the trailing
+// newline stripped, or "" when n is out of range.
+func nthLine(src []byte, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	cur := 1
+	start := 0
+	for i := range len(src) {
+		if src[i] == '\n' {
+			if cur == n {
+				return string(src[start:i])
+			}
+			cur++
+			start = i + 1
+		}
+	}
+	if cur == n {
+		return string(src[start:])
+	}
+	return ""
 }
 
 func runPath(r *interp.Runner, path string) error {
