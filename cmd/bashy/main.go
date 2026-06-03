@@ -232,24 +232,31 @@ func run(r *interp.Runner, reader io.Reader, name string) error {
 	if err != nil {
 		return err
 	}
+	// Bash 5.3's `<file>: line N: …` prefix shape, with `: -c`
+	// inserted when running via `-c`. argv0 (the first positional
+	// after the -c command) is the file-name in -c mode; otherwise
+	// it's the actual script path.
+	errPrefix := name
+	if errPrefix == "" {
+		errPrefix = "bashy"
+	}
+	if *command != "" {
+		errPrefix += ": -c"
+	}
 	// Bash 5.3 treats `<<EOF\n...` running off the end of the file as a
 	// warning (not an error) and uses whatever was read up to EOF as
 	// the body. Wire that behaviour through the parser so the
 	// affected tests (comsub-eof, exportfunc, …) behave like bash.
 	hdocWarn := func(startLine, eofLine int, stop string) {
-		prefix := name
-		if prefix == "" {
-			prefix = "bashy: -c"
-		}
 		fmt.Fprintf(os.Stderr,
 			"%s: line %d: warning: here-document at line %d delimited by end-of-file (wanted `%s')\n",
-			prefix, eofLine, startLine, stop)
+			errPrefix, eofLine, startLine, stop)
 	}
 	prog, err := syntax.NewParser(syntax.Variant(lang), syntax.HeredocEOFWarning(hdocWarn)).Parse(bytes.NewReader(src), name)
 	if err != nil {
 		var pe syntax.ParseError
 		if errors.As(err, &pe) {
-			printBashParseError(os.Stderr, src, name, pe)
+			printBashParseError(os.Stderr, src, errPrefix, pe)
 			return interp.ExitStatus(2)
 		}
 		return err
@@ -263,16 +270,72 @@ func run(r *interp.Runner, reader io.Reader, name string) error {
 // 5.3 uses: a `<prefix>: line N: <text>` line, followed by a second
 // `<prefix>: line N: \`<offending source line>'` echo. The prefix is
 // `<file>` for a parsed script and `bashy: -c` for the -c form.
-func printBashParseError(w io.Writer, src []byte, name string, pe syntax.ParseError) {
-	prefix := name
-	if prefix == "" {
-		prefix = "bashy: -c"
-	}
+func printBashParseError(w io.Writer, src []byte, prefix string, pe syntax.ParseError) {
 	line := int(pe.Pos.Line())
-	fmt.Fprintf(w, "%s: line %d: %s\n", prefix, line, pe.Text)
+	text := rewriteParserErrorText(string(src), pe)
+	fmt.Fprintf(w, "%s: line %d: %s\n", prefix, line, text)
 	if srcLine := nthLine(src, line); srcLine != "" {
 		fmt.Fprintf(w, "%s: line %d: `%s'\n", prefix, line, srcLine)
 	}
+}
+
+// rewriteParserErrorText rewrites mvdan/sh's parser error messages
+// into bash 5.3's canonical wording when the pattern is recognisable.
+// Falls back to the original text otherwise.
+func rewriteParserErrorText(src string, pe syntax.ParseError) string {
+	switch {
+	case pe.Text == "statements must be separated by &, ; or a newline",
+		strings.Contains(pe.Text, "must be followed by"),
+		strings.Contains(pe.Text, "must follow a name"):
+		if tok := offendingTokenAt(src, pe.Pos); tok != "" {
+			return fmt.Sprintf("syntax error near unexpected token `%s'", tok)
+		}
+	case strings.HasPrefix(pe.Text, "reached EOF without matching"):
+		// Map our `${`/`$(`/`{` matching-error wording to bash's.
+		if strings.Contains(pe.Text, "`$(`") || strings.Contains(pe.Text, "`(`") {
+			return "unexpected EOF while looking for matching `)'"
+		}
+		if strings.Contains(pe.Text, "`${`") || strings.Contains(pe.Text, "`{`") {
+			return "unexpected EOF while looking for matching `}'"
+		}
+	case pe.Text == "unclosed quote":
+		return "unexpected EOF while looking for matching `\"'"
+	}
+	return pe.Text
+}
+
+// offendingTokenAt extracts a single bash-style token (operator or
+// word) starting at the given position in src. Used by the parser-
+// error rewriter to fill in `… unexpected token \`X' …`.
+func offendingTokenAt(src string, pos syntax.Pos) string {
+	col := int(pos.Col())
+	line := int(pos.Line())
+	if line <= 0 || col <= 0 {
+		return ""
+	}
+	curLine := 1
+	i := 0
+	for ; i < len(src) && curLine < line; i++ {
+		if src[i] == '\n' {
+			curLine++
+		}
+	}
+	i += col - 1
+	if i >= len(src) {
+		return ""
+	}
+	switch src[i] {
+	case ')', '(', '|', '&', ';', '<', '>', '`':
+		return string(src[i])
+	}
+	start := i
+	for ; i < len(src); i++ {
+		c := src[i]
+		if c == ' ' || c == '\t' || c == '\n' || c == ';' || c == '&' || c == '|' || c == '<' || c == '>' || c == '(' || c == ')' || c == '`' {
+			break
+		}
+	}
+	return src[start:i]
 }
 
 // nthLine returns the 1-indexed line `n` of src with the trailing
