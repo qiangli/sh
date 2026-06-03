@@ -41,7 +41,12 @@ func ExtendedPatternMatcher(pat string, mode pattern.Mode) (func(string) bool, e
 }
 
 // extNegatedMatcher handles !(pattern-list) extglob negation.
-// Only a single !(...) group with fixed-string prefix and suffix is supported.
+// Supports a single !(...) group; the prefix must be fixed text,
+// but the suffix can be an arbitrary glob (e.g. `!(foo)*`,
+// `!(foo)bar*`). The negation matches when *some* split of the
+// remaining string after the prefix can satisfy both halves: the
+// first half doesn't match the inner pattern, the second half
+// matches the glob suffix.
 func extNegatedMatcher(pat string, groups []pattern.NegExtGlobGroup) (func(string) bool, error) {
 	if len(groups) != 1 {
 		return nil, fmt.Errorf("multiple extglob !(...) groups are not supported yet")
@@ -50,17 +55,27 @@ func extNegatedMatcher(pat string, groups []pattern.NegExtGlobGroup) (func(strin
 	prefix := pat[:g.Start]
 	suffix := pat[g.End:]
 
-	if pattern.HasMeta(prefix, 0) || pattern.HasMeta(suffix, 0) {
-		return nil, fmt.Errorf("extglob !(...) is only supported with a fixed prefix and suffix")
+	if pattern.HasMeta(prefix, 0) {
+		return nil, fmt.Errorf("extglob !(...) is only supported with a fixed prefix")
 	}
 
 	// Use @(inner) to compile the pattern list, then negate the match.
 	inner := pat[g.Start+len("!(") : g.End-len(")")]
-	expr, err := pattern.Regexp("@("+inner+")", pattern.EntireString|pattern.ExtendedOperators)
+	innerExpr, err := pattern.Regexp("@("+inner+")", pattern.EntireString|pattern.ExtendedOperators)
 	if err != nil {
 		return nil, err
 	}
-	rx, err := regexp.Compile(expr)
+	innerRx, err := regexp.Compile(innerExpr)
+	if err != nil {
+		return nil, err
+	}
+
+	// Suffix may itself be a glob. Compile it (entire-string match).
+	suffixExpr, err := pattern.Regexp(suffix, pattern.EntireString|pattern.ExtendedOperators)
+	if err != nil {
+		return nil, err
+	}
+	suffixRx, err := regexp.Compile(suffixExpr)
 	if err != nil {
 		return nil, err
 	}
@@ -69,15 +84,20 @@ func extNegatedMatcher(pat string, groups []pattern.NegExtGlobGroup) (func(strin
 		if !strings.HasPrefix(name, prefix) {
 			return false
 		}
-		if !strings.HasSuffix(name, suffix) {
-			return false
+		rest := name[len(prefix):]
+		// Try every split of `rest` into negPart + suffPart such
+		// that negPart does NOT match the inner pattern and
+		// suffPart matches the suffix glob.
+		for split := 0; split <= len(rest); split++ {
+			negPart := rest[:split]
+			suffPart := rest[split:]
+			if innerRx.MatchString(negPart) {
+				continue
+			}
+			if suffixRx.MatchString(suffPart) {
+				return true
+			}
 		}
-		end := len(name) - len(suffix)
-		if end < len(prefix) {
-			return false // prefix and suffix overlap in name
-		}
-		middle := name[len(prefix):end]
-
-		return !rx.MatchString(middle)
+		return false
 	}, nil
 }
