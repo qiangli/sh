@@ -3455,7 +3455,7 @@ done <<< 2`,
 	},
 	{
 		"shopt -s extglob\ncase \"baz\" in !(foo)!(bar)) echo match;; esac",
-		" #IGNORE multiple extglob negation groups not supported",
+		"match\n",
 	},
 	{
 		"shopt -s extglob\ncase \".bar\" in .*!(foo)) echo match;; esac",

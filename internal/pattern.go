@@ -40,37 +40,42 @@ func ExtendedPatternMatcher(pat string, mode pattern.Mode) (func(string) bool, e
 	return rx.MatchString, nil
 }
 
-// extNegatedMatcher handles !(pattern-list) extglob negation.
-// Supports a single !(...) group; the prefix must be fixed text,
-// but the suffix can be an arbitrary glob (e.g. `!(foo)*`,
-// `!(foo)bar*`). The negation matches when *some* split of the
-// remaining string after the prefix can satisfy both halves: the
-// first half doesn't match the inner pattern, the second half
-// matches the glob suffix.
+// extNegatedMatcher handles !(pattern-list) extglob negation,
+// supporting one or more `!(...)` groups in sequence: the literal
+// text in between groups must match exactly, and each group's
+// inner pattern must NOT match the corresponding span of `name`.
+// The (possibly globby) suffix after the last `!(...)` is
+// compiled as its own entire-string glob. The matcher tries every
+// valid split of `name` across the groups and returns true if any
+// split satisfies all of them.
 func extNegatedMatcher(pat string, groups []pattern.NegExtGlobGroup) (func(string) bool, error) {
-	if len(groups) != 1 {
-		return nil, fmt.Errorf("multiple extglob !(...) groups are not supported yet")
+	// Per-segment compilation. Each group contributes: (literalBefore,
+	// innerRx). The trailing suffix (after the last group) is a single
+	// glob regex.
+	type segment struct {
+		literal string
+		innerRx *regexp.Regexp
 	}
-	g := groups[0]
-	prefix := pat[:g.Start]
-	suffix := pat[g.End:]
-
-	if pattern.HasMeta(prefix, 0) {
-		return nil, fmt.Errorf("extglob !(...) is only supported with a fixed prefix")
+	segs := make([]segment, len(groups))
+	cursor := 0
+	for i, g := range groups {
+		literal := pat[cursor:g.Start]
+		if pattern.HasMeta(literal, 0) {
+			return nil, fmt.Errorf("extglob !(...) is only supported with literal text between groups")
+		}
+		inner := pat[g.Start+len("!(") : g.End-len(")")]
+		innerExpr, err := pattern.Regexp("@("+inner+")", pattern.EntireString|pattern.ExtendedOperators)
+		if err != nil {
+			return nil, err
+		}
+		rx, err := regexp.Compile(innerExpr)
+		if err != nil {
+			return nil, err
+		}
+		segs[i] = segment{literal: literal, innerRx: rx}
+		cursor = g.End
 	}
-
-	// Use @(inner) to compile the pattern list, then negate the match.
-	inner := pat[g.Start+len("!(") : g.End-len(")")]
-	innerExpr, err := pattern.Regexp("@("+inner+")", pattern.EntireString|pattern.ExtendedOperators)
-	if err != nil {
-		return nil, err
-	}
-	innerRx, err := regexp.Compile(innerExpr)
-	if err != nil {
-		return nil, err
-	}
-
-	// Suffix may itself be a glob. Compile it (entire-string match).
+	suffix := pat[cursor:]
 	suffixExpr, err := pattern.Regexp(suffix, pattern.EntireString|pattern.ExtendedOperators)
 	if err != nil {
 		return nil, err
@@ -80,24 +85,30 @@ func extNegatedMatcher(pat string, groups []pattern.NegExtGlobGroup) (func(strin
 		return nil, err
 	}
 
-	return func(name string) bool {
-		if !strings.HasPrefix(name, prefix) {
+	var match func(name string, i int) bool
+	match = func(name string, i int) bool {
+		if i == len(segs) {
+			return suffixRx.MatchString(name)
+		}
+		seg := segs[i]
+		if !strings.HasPrefix(name, seg.literal) {
 			return false
 		}
-		rest := name[len(prefix):]
-		// Try every split of `rest` into negPart + suffPart such
-		// that negPart does NOT match the inner pattern and
-		// suffPart matches the suffix glob.
+		rest := name[len(seg.literal):]
+		// Try every split of `rest` into negPart + remainder.
+		// Note: even negPart="" is allowed — `!(p)` matches the
+		// empty string when p is non-empty.
 		for split := 0; split <= len(rest); split++ {
 			negPart := rest[:split]
-			suffPart := rest[split:]
-			if innerRx.MatchString(negPart) {
+			if seg.innerRx.MatchString(negPart) {
 				continue
 			}
-			if suffixRx.MatchString(suffPart) {
+			if match(rest[split:], i+1) {
 				return true
 			}
 		}
 		return false
-	}, nil
+	}
+
+	return func(name string) bool { return match(name, 0) }, nil
 }
