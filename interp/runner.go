@@ -406,6 +406,41 @@ func (r *Runner) errf(format string, a ...any) {
 	fmt.Fprintf(r.stderr, format, a...)
 }
 
+// printFuncDecl prints a function definition in bash 5.3's
+// `declare -f` shape: `name () \n{ \n    stmt;\n    stmt2\n}` —
+// 4-space indent, trailing semicolons between statements (omitted
+// after the last). Compound commands are passed through the
+// printer with the same indent setting.
+func (r *Runner) printFuncDecl(name string, body *syntax.Stmt) {
+	r.outf("%s () \n", name)
+	// Body is a syntax.Stmt whose Cmd is a syntax.Block (the `{ }`)
+	// in the usual case. Unwrap the block so we can render each
+	// inner stmt with the bash-specific trailing-semicolon rule.
+	block, ok := body.Cmd.(*syntax.Block)
+	if !ok {
+		// Non-Block bodies (rare — e.g. function with `()` only,
+		// or a single compound). Fall back to the printer.
+		var buf bytes.Buffer
+		syntax.NewPrinter(syntax.Indent(4)).Print(&buf, body)
+		r.out(buf.String())
+		r.out("\n")
+		return
+	}
+	r.out("{ \n")
+	printer := syntax.NewPrinter(syntax.Indent(4))
+	for i, st := range block.Stmts {
+		var buf bytes.Buffer
+		printer.Print(&buf, st)
+		line := strings.TrimRight(buf.String(), "\n")
+		r.outf("    %s", line)
+		if i < len(block.Stmts)-1 {
+			r.out(";")
+		}
+		r.out("\n")
+	}
+	r.out("}\n")
+}
+
 // isPosixSpecialBuiltin reports whether name is a POSIX "special
 // builtin" (POSIX 1003.1 § 2.14). In bash's POSIX mode, an assignment
 // preceding a special-builtin invocation persists after the command
@@ -1090,11 +1125,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 					continue
 				}
 				if body := r.Funcs[name]; body != nil {
-					r.outf("%s()\n", name)
-					printer := syntax.NewPrinter()
-					var buf bytes.Buffer
-					printer.Print(&buf, body)
-					r.outf("%s\n", buf.String())
+					r.printFuncDecl(name, body)
 				} else {
 					r.exit.code = 1
 				}

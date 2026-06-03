@@ -833,7 +833,7 @@ var runTests = []runTest{
 	// declare -f and declare -p
 	{
 		`f() { echo hello; }; declare -f f`,
-		"f()\n{ echo hello; }\n #IGNORE output format differs from bash",
+		"f () \n{ \n    echo hello\n}\n",
 	},
 	{
 		`declare -f nonexistent 2>/dev/null; echo "exit: $?"`,
