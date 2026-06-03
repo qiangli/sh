@@ -49,6 +49,41 @@ func overridingUnset(pe *syntax.ParamExp) bool {
 	return false
 }
 
+// bashAssocBucket computes the bucket index bash 5.3 stores an
+// associative-array key in — FNV-1 with the historical initial
+// value (2166136261) and prime (16777619), modulo 1024 (bash's
+// ASSOC_HASH_BUCKETS). Iterating bucket-ascending matches bash's
+// `${arr[@]}` order on assoc arrays.
+func bashAssocBucket(s string) uint32 {
+	i := uint32(2166136261)
+	for _, c := range []byte(s) {
+		i = i * 16777619
+		i = i ^ uint32(c)
+	}
+	return i % 1024
+}
+
+// AssocKeysInBashOrder returns the keys of an associative-array
+// map sorted by bash 5.3's hash-table iteration order so callers
+// (e.g. `declare -p` printers in interp) can produce bash-shaped
+// output without duplicating the hash math. Collisions break ties
+// lexically.
+func AssocKeysInBashOrder(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	slices.SortStableFunc(keys, func(a, b string) int {
+		ba := bashAssocBucket(a)
+		bb := bashAssocBucket(b)
+		if ba != bb {
+			return int(ba) - int(bb)
+		}
+		return strings.Compare(a, b)
+	})
+	return keys
+}
+
 func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 	oldParam := cfg.curParam
 	cfg.curParam = pe
@@ -125,6 +160,17 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			indexAllElements = true
 			callVarInd = false
 			elems = cfg.sliceElems(pe, vr.List, name == "@" || name == "*")
+			str = strings.Join(elems, " ")
+		case Associative:
+			indexAllElements = true
+			callVarInd = false
+			// Bash iterates assoc-array values in bash-bucket
+			// order (see AssocKeysInBashOrder).
+			keys := AssocKeysInBashOrder(vr.Map)
+			elems = make([]string, len(keys))
+			for i, k := range keys {
+				elems[i] = vr.Map[k]
+			}
 			str = strings.Join(elems, " ")
 		}
 	}
@@ -312,6 +358,11 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 				return str, nil
 			}
 
+			// Casemod operates on a copy — `elems` may alias the
+			// underlying array's List slice, and bash does not
+			// mutate the variable when an expansion-time casemod
+			// is applied.
+			out := make([]string, len(elems))
 			for i, elem := range elems {
 				rs := []rune(elem)
 				for ri, r := range rs {
@@ -322,9 +373,9 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 						}
 					}
 				}
-				elems[i] = string(rs)
+				out[i] = string(rs)
 			}
-			str = strings.Join(elems, " ")
+			str = strings.Join(out, " ")
 		case syntax.OtherParamOps:
 			switch arg {
 			case "Q":

@@ -1338,6 +1338,12 @@ func (cfg *Config) quotedElemFields(pe *syntax.ParamExp) []string {
 	if pe == nil || pe.Length || pe.Width || pe.IsSet {
 		return nil
 	}
+	// Casemod / pattern-substitution / prefix-removal operators
+	// need per-element processing by the full paramExp path, so
+	// return nil here and let the caller fall back to it.
+	if pe.Exp != nil || pe.Repl != nil {
+		return nil
+	}
 	name := pe.Param.Value
 	if pe.Excl {
 		switch pe.Names {
