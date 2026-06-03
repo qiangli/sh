@@ -2522,17 +2522,20 @@ func (r *Runner) readLine(ctx context.Context, raw bool, delim byte) ([]byte, er
 
 func (r *Runner) changeDir(ctx context.Context, cmd, path string) uint8 {
 	if path == "" {
-		r.errf("%s: empty directory path\n", cmd)
+		r.errf("%s%s: empty directory path\n", r.bashErrPrefix(r.curStmtPos), cmd)
 		return 1
 	}
 	apath := r.absPath(path)
 	info, err := r.stat(ctx, apath)
 	if err != nil || !info.IsDir() {
-		r.errf("%s: no such file or directory: %q\n", cmd, path)
+		// bash format: `<file>: line N: <cmd>: <path>: No such file or directory`
+		r.errf("%s%s: %s: No such file or directory\n",
+			r.bashErrPrefix(r.curStmtPos), cmd, path)
 		return 1
 	}
 	if r.access(ctx, apath, access_X_OK) != nil {
-		r.errf("%s: permission denied: %q\n", cmd, path)
+		r.errf("%s%s: %s: Permission denied\n",
+			r.bashErrPrefix(r.curStmtPos), cmd, path)
 		return 1
 	}
 	r.Dir = apath
