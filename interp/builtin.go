@@ -1127,11 +1127,16 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			r.builtin(ctx, syntax.Pos{}, "dirs", nil)
 		case 1:
 			if change {
+				// Push a new top slot first so that changeDir's
+				// "keep dirStack top in sync with r.Dir" update
+				// targets the new slot rather than overwriting the
+				// previous top.
+				r.dirStack = append(r.dirStack, "")
 				if code := r.changeDir(ctx, "pushd", args[0]); code != 0 {
+					r.dirStack = r.dirStack[:len(r.dirStack)-1]
 					exit.code = code
 					return exit
 				}
-				r.dirStack = append(r.dirStack, r.Dir)
 			} else {
 				r.dirStack = append(r.dirStack, args[0])
 				swap()
@@ -2322,6 +2327,12 @@ func (r *Runner) changeDir(ctx context.Context, cmd, path string) uint8 {
 		return 1
 	}
 	r.Dir = apath
+	// Keep the top of the directory stack in sync with the current
+	// dir so `pushd`/`popd`/`dirs` see the cd's effect. Bash treats
+	// the topmost dirStack entry as the live "current dir".
+	if len(r.dirStack) > 0 {
+		r.dirStack[len(r.dirStack)-1] = apath
+	}
 	r.setVarString("OLDPWD", r.envGet("PWD"))
 	r.setVarString("PWD", apath)
 	return 0
