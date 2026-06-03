@@ -259,15 +259,6 @@ func regexpNext(sb *strings.Builder, sl *stringLexer, mode Mode) error {
 		}
 		sb.WriteString(regexp.QuoteMeta(string(c)))
 	case '[':
-		// TODO: surely char classes can be mixed with others, e.g. [[:foo:]xyz]
-		if name, err := charClass(sl.peekRest()); err != nil {
-			return &SyntaxError{msg: "charClass invalid", err: err}
-		} else if name != "" {
-			sb.WriteByte('[')
-			sb.WriteString(name)
-			sl.i += len(name)
-			break
-		}
 		if mode&Filenames != 0 {
 			for i, c := range sl.peekRest() {
 				if i > 0 && c == ']' {
@@ -296,6 +287,41 @@ func regexpNext(sb *strings.Builder, sl *stringLexer, mode Mode) error {
 			}
 		}
 		for {
+			// POSIX collating elements `[.x.]` and equivalence
+			// classes `[=x=]` are not supported (Go's regexp can't
+			// model them).
+			if c == '[' {
+				rest := sl.peekRest()
+				if strings.HasPrefix(rest, ".") || strings.HasPrefix(rest, "=") {
+					return &SyntaxError{msg: "charClass invalid", err: fmt.Errorf("collating features not available")}
+				}
+			}
+			// POSIX bracket-class shortcut inside the bracket
+			// expression: `[:alpha:]`, `[:xdigit:]`, etc. Mix
+			// freely with other chars and ranges. We've already
+			// consumed the leading `[`; emit the full `[:name:]`
+			// atom and skip past the body.
+			if c == '[' && strings.HasPrefix(sl.peekRest(), ":") {
+				rest := sl.peekRest()
+				name, _, ok := strings.Cut(rest, ":]")
+				if !ok {
+					return &SyntaxError{msg: "charClass invalid", err: fmt.Errorf("[[: was not matched with a closing :]]")}
+				}
+				if strings.HasPrefix(name, ":") {
+					inner := name[1:] // strip leading `:`
+					switch inner {
+					case "alnum", "alpha", "ascii", "blank", "cntrl",
+						"digit", "graph", "lower", "print", "punct",
+						"space", "upper", "word", "xdigit":
+						sb.WriteString("[:" + inner + ":]")
+						sl.i += len(name) + len(":]")
+						c = sl.next()
+						continue
+					default:
+						return &SyntaxError{msg: "charClass invalid", err: fmt.Errorf("invalid character class: %q", inner)}
+					}
+				}
+			}
 			sb.WriteRune(c)
 			switch c {
 			case '\x00':
