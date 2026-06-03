@@ -449,6 +449,13 @@ func (r *Runner) printFuncDecl(name string, body *syntax.Stmt) {
 		var buf bytes.Buffer
 		printer.Print(&buf, st)
 		line := strings.TrimRight(buf.String(), "\n")
+		// bash 5.3 prints a trailing space after a bare `time`
+		// keyword in `declare -f` output (`    time \n`). The
+		// shared printer omits it for shfmt consistency, so add
+		// it back here for the no-body case.
+		if tc, ok := st.Cmd.(*syntax.TimeClause); ok && tc.Stmt == nil {
+			line += " "
+		}
 		r.outf("    %s", line)
 		if i < len(block.Stmts)-1 {
 			r.out(";")
@@ -1260,11 +1267,20 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			}
 		}
 	case *syntax.TimeClause:
+		// bash 5.3 only prints timing output for the outermost
+		// `time` keyword in a stack of nested `time` clauses;
+		// inner ones are absorbed by the outer measurement.
+		outer := !r.inTimeClause
+		r.inTimeClause = true
 		start := time.Now()
 		if cm.Stmt != nil {
 			r.stmt(ctx, cm.Stmt)
 		}
 		real := time.Since(start)
+		if !outer {
+			break
+		}
+		r.inTimeClause = false
 		var user, sys time.Duration // not tracked
 		if cm.PosixFormat {
 			r.outf("real %s\n", elapsedString(real, true))

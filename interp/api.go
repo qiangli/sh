@@ -167,10 +167,11 @@ type Runner struct {
 	// >0 to break or continue out of N enclosing loops
 	breakEnclosing, contnEnclosing int
 
-	inLoop       bool
-	inFunc       bool
-	inSource     bool
-	handlingTrap bool // whether we're currently in a trap callback
+	inLoop        bool
+	inFunc        bool
+	inSource      bool
+	inTimeClause  bool // suppress inner `time` keyword's output
+	handlingTrap  bool // whether we're currently in a trap callback
 
 	// track if a sourced script set positional parameters
 	sourceSetParams bool
