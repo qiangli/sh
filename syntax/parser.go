@@ -2126,10 +2126,36 @@ func (p *Parser) getStmt(readEnd, binCmd, fnBody bool) *Stmt {
 	if ok {
 		s.Negated = true
 		if p.stopToken() {
+			// bash treats a lone `!` as `! true` (no command body,
+			// just the negation), so the stmt resolves to exit
+			// status 1. Mark it negated and let the caller see an
+			// otherwise-empty Stmt.
+			if p.lang == LangBash {
+				return s
+			}
 			p.posErr(s.Pos(), `%#q cannot form a statement alone`, exclMark)
 		}
 		if _, ok := p.gotRsrv("!"); ok {
-			p.posErr(s.Pos(), `cannot negate a command multiple times`)
+			// bash 5.3 allows `! ! cmd` (`! true` semantics on the
+			// inner `!`, then outer negation flips again). Each
+			// additional `!` toggles s.Negated.
+			if p.lang == LangBash {
+				s.Negated = !s.Negated
+				for {
+					if _, ok := p.gotRsrv("!"); !ok {
+						break
+					}
+					s.Negated = !s.Negated
+				}
+				if p.stopToken() {
+					// `! !` (or longer chains) alone — same
+					// treatment as a single `!`: empty stmt with
+					// negation applied.
+					return s
+				}
+			} else {
+				p.posErr(s.Pos(), `cannot negate a command multiple times`)
+			}
 		}
 	}
 	if s = p.gotStmtPipe(s, false); s == nil || p.err != nil {
@@ -2231,6 +2257,16 @@ func (p *Parser) gotStmtPipe(s *Stmt, binCmd bool) *Stmt {
 		case "esac":
 			p.curErr("%#q can only be used to end a `case`", p.val)
 		case "!":
+			if !s.Negated && p.lang == LangBash {
+				// bash 5.3 accepts `time ! cmd`, `! ! cmd`, and
+				// other contexts where a `!` precedes the inner
+				// statement after a controlling keyword. Consume
+				// the `!` and continue parsing the rest of the
+				// pipeline as the negated body.
+				s.Negated = true
+				p.next()
+				return p.gotStmtPipe(s, binCmd)
+			}
 			if !s.Negated {
 				p.curErr(`%#q can only be used in full statements`, exclMark)
 				break

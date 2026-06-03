@@ -525,17 +525,15 @@ var errorCases = []errorCase{
 	),
 	errCase(
 		"!",
-		langErr("1:1: `!` cannot form a statement alone"),
+		langErr("1:1: `!` cannot form a statement alone", LangPOSIX|LangMirBSDKorn|LangZsh|LangBats),
 	),
 	errCase(
 		"! !",
-		langErr("1:1: cannot negate a command multiple times"),
-		flipConfirm(LangBash), // bash allows lone `!`, unlike dash, mksh, and us.
+		langErr("1:1: cannot negate a command multiple times", LangPOSIX|LangMirBSDKorn|LangZsh|LangBats),
 	),
 	errCase(
 		"! ! foo",
-		langErr("1:1: cannot negate a command multiple times"),
-		flipConfirm(LangBash|LangMirBSDKorn), // bash allows lone `!`, unlike dash, mksh, and us.
+		langErr("1:1: cannot negate a command multiple times", LangPOSIX|LangZsh|LangBats),
 	),
 	errCase(
 		"}",
@@ -791,7 +789,7 @@ var errorCases = []errorCase{
 	),
 	errCase(
 		"echo | ! true",
-		langErr("1:8: `!` can only be used in full statements"),
+		langErr("1:8: `!` can only be used in full statements", LangPOSIX|LangMirBSDKorn|LangZsh|LangBats),
 	),
 	errCase(
 		"echo >",
@@ -1847,8 +1845,7 @@ var errorCases = []errorCase{
 	),
 	errCase(
 		"time ! foo",
-		langErr("1:6: `!` can only be used in full statements", LangBash|LangMirBSDKorn|LangZsh),
-		flipConfirm(LangBash), // TODO: why is this valid?
+		langErr("1:6: `!` can only be used in full statements", LangMirBSDKorn|LangZsh),
 	),
 	errCase(
 		"coproc",
