@@ -286,15 +286,35 @@ func regexpNext(sb *strings.Builder, sl *stringLexer, mode Mode) error {
 				return &SyntaxError{msg: "[ was not matched with a closing ]"}
 			}
 		}
+		// lastEmitted tracks the most recent rune (collating or
+		// literal) the bracket expression actually emitted, so the
+		// range-validity check sees the resolved character rather
+		// than the trailing `]` of a `[.x.]` group.
+		var lastEmitted rune
 		for {
 			// POSIX collating elements `[.x.]` and equivalence
-			// classes `[=x=]` are not supported (Go's regexp can't
-			// model them).
-			if c == '[' {
+			// classes `[=x=]`. We map them to plain characters
+			// when the inner token is a single rune or one of
+			// bash's named symbols; multi-char unknown names
+			// become a no-op (match-nothing) atom so the
+			// surrounding bracket expression still works.
+			if c == '[' && (strings.HasPrefix(sl.peekRest(), ".") || strings.HasPrefix(sl.peekRest(), "=")) {
 				rest := sl.peekRest()
-				if strings.HasPrefix(rest, ".") || strings.HasPrefix(rest, "=") {
-					return &SyntaxError{msg: "charClass invalid", err: fmt.Errorf("collating features not available")}
+				openChar := rest[0]
+				closeSeq := string(openChar) + "]"
+				inner, _, ok := strings.Cut(rest[1:], closeSeq)
+				if !ok {
+					return &SyntaxError{msg: "charClass invalid", err: fmt.Errorf("collating feature %q not closed", "["+string(openChar))}
 				}
+				cr, _ := bashCollatingChar(inner)
+				if cr != 0 {
+					sb.WriteString(regexp.QuoteMeta(string(cr)))
+					lastEmitted = cr
+				}
+				// step past `[<X>...<X>]`
+				sl.i += 1 + len(inner) + len(closeSeq)
+				c = sl.next()
+				continue
 			}
 			// POSIX bracket-class shortcut inside the bracket
 			// expression: `[:alpha:]`, `[:xdigit:]`, etc. Mix
@@ -329,16 +349,45 @@ func regexpNext(sb *strings.Builder, sl *stringLexer, mode Mode) error {
 			case '\\':
 				if c = sl.next(); c != '0' {
 					sb.WriteRune(c)
+					lastEmitted = c
 				}
 			case '-':
-				start := sl.last()
+				start := lastEmitted
+				if start == 0 {
+					start = sl.last()
+				}
 				end := sl.peekNext()
+				// Lookahead: if the next char starts a collating
+				// element `[.X.]` or equivalence class `[=X=]`,
+				// resolve it so the range check sees the actual
+				// endpoint rather than the literal `[`. Unknown
+				// collating elements are skipped entirely — bash
+				// treats `[[.a.]-[.zz.]p]` like `[a-p]`.
+				rest := sl.peekRest()
+				for end == '[' && len(rest) >= 2 && (rest[1] == '.' || rest[1] == '=') {
+					closeSeq := string(rest[1]) + "]"
+					inner, _, ok := strings.Cut(rest[2:], closeSeq)
+					if !ok {
+						break
+					}
+					cr, _ := bashCollatingChar(inner)
+					if cr != 0 {
+						end = cr
+						break
+					}
+					// Unknown: skip past it and try the next rune.
+					sl.i += 2 + len(inner) + len(closeSeq)
+					end = sl.peekNext()
+					rest = sl.peekRest()
+				}
 				// TODO: what about overlapping ranges, like: [a--z]
 				if end != ']' && start > end {
 					return &SyntaxError{msg: fmt.Sprintf("invalid range: %c-%c", start, end)}
 				}
 			case ']':
 				return nil
+			default:
+				lastEmitted = c
 			}
 			c = sl.next()
 		}
@@ -350,6 +399,70 @@ func regexpNext(sb *strings.Builder, sl *stringLexer, mode Mode) error {
 		}
 	}
 	return nil
+}
+
+// bashCollatingChar maps a POSIX collating-element / equivalence
+// class body to its canonical rune. A single-character `<X>` is the
+// character itself; bash's named symbols (hyphen, space, comma, ...)
+// map to the punctuation they describe. Returns r=0 when the name
+// isn't a known collating element — the caller skips emission so
+// the atom matches nothing (bash's "invalid collating element makes
+// the bracket expression not match" behavior).
+//
+// The second return value reports whether this is an equivalence
+// class (`[=x=]`) — currently unused beyond the caller-side flag,
+// but kept so future locale support can be wired in.
+func bashCollatingChar(inner string) (rune, bool) {
+	// Single character (including `-`, `+`, etc.) maps directly.
+	if r, n := utf8.DecodeRuneInString(inner); n == len(inner) && r != utf8.RuneError {
+		return r, false
+	}
+	// Bash's standard symbolic collating-element names (C locale).
+	switch inner {
+	case "hyphen", "minus":
+		return '-', false
+	case "underscore":
+		return '_', false
+	case "comma":
+		return ',', false
+	case "period", "dot", "full-stop":
+		return '.', false
+	case "space":
+		return ' ', false
+	case "tab", "horizontal-tab":
+		return '\t', false
+	case "newline":
+		return '\n', false
+	case "grave-accent":
+		return '`', false
+	case "tilde":
+		return '~', false
+	case "exclamation-mark":
+		return '!', false
+	case "question-mark":
+		return '?', false
+	case "ampersand":
+		return '&', false
+	case "asterisk":
+		return '*', false
+	case "circumflex":
+		return '^', false
+	case "vertical-line":
+		return '|', false
+	case "dollar-sign":
+		return '$', false
+	case "percent-sign":
+		return '%', false
+	case "number-sign":
+		return '#', false
+	case "at-sign", "commercial-at":
+		return '@', false
+	case "colon":
+		return ':', false
+	case "semicolon":
+		return ';', false
+	}
+	return 0, false
 }
 
 func charClass(s string) (string, error) {

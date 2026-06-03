@@ -160,8 +160,8 @@ var regexpTests = []struct {
 	{pat: `[[:`, wantErr: `^charClass invalid$`},
 	{pat: `[[:digit`, wantErr: `^charClass invalid$`},
 	{pat: `[[:wrong:]]`, wantErr: `^charClass invalid$`},
-	{pat: `[[=x=]]`, wantErr: `^charClass invalid$`},
-	{pat: `[[.x.]]`, wantErr: `^charClass invalid$`},
+	{pat: `[[=x=]]`, want: `(?s)[x]`},
+	{pat: `[[.x.]]`, want: `(?s)[x]`},
 }
 
 func TestRegexp(t *testing.T) {
