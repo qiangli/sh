@@ -498,7 +498,26 @@ func (r *Runner) setVar(name string, vr expand.Variable) {
 		r.argv0 = vr.Str
 	}
 	if err := r.writeEnv.Set(name, vr); err != nil {
-		r.errf("%s%s: %v\n", r.bashErrPrefix(r.curStmtPos), name, err)
+		// Bash 5.3 attribution: syntax-level assignment failures
+		// inside a function are prefixed with the function name
+		// (`<file>: line N: <fn>: <var>: readonly variable`);
+		// failures from a declare-family builtin's array-conversion
+		// path (`readonly -a 'name=value'`) are prefixed with the
+		// builtin name. Plain string-form assignments via the same
+		// builtins get no extra prefix.
+		var inner string
+		switch {
+		case r.setVarFromBuiltin != "":
+			inner = r.setVarFromBuiltin + ": "
+		case r.setVarStringParsed:
+			// String-parsed assignment without array flag: no extra
+			// prefix beyond `<file>: line N: <var>:`.
+		case r.setVarArrayLiteral && len(r.callStack) > 0:
+			// Syntax-level array-literal assignment inside a
+			// function: bash attributes to the function name.
+			inner = r.callStack[len(r.callStack)-1].funcName + ": "
+		}
+		r.errf("%s%s%s: %v\n", r.bashErrPrefix(r.curStmtPos), inner, name, err)
 		r.exit.code = 1
 		return
 	}

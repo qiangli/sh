@@ -120,6 +120,30 @@ type Runner struct {
 	// [Runner.bashErrPrefix] so the `<file>: line N:` prefix lands.
 	curStmtPos syntax.Pos
 
+	// setVarFromBuiltin is non-empty while a declare-family builtin
+	// (declare/typeset/local/readonly/export) is parsing a string
+	// argument like `readonly -a 'name=value'` and assigning into the
+	// variable space. When set, [Runner.setVar]'s error message uses
+	// the builtin's name (e.g. "readonly:") instead of the enclosing
+	// function name. Bash 5.3 attributes array-conversion-from-string
+	// errors to the builtin and syntax-level assignment errors to the
+	// enclosing function.
+	setVarFromBuiltin string
+
+	// setVarStringParsed is true while a declare-family builtin is
+	// processing a string-form arg (`readonly 'name=value'`), even
+	// when no array flag is in use. Bash 5.3 suppresses the function-
+	// name attribution for these — the error gets no extra prefix
+	// beyond `<file>: line N: <var>:`.
+	setVarStringParsed bool
+
+	// setVarArrayLiteral is true while a declare-family builtin is
+	// processing a syntax-level array-literal assignment
+	// (`readonly -a a=(1 2 3)`). Bash 5.3 attributes a failure here
+	// to the enclosing function; scalar syntax-level assignments
+	// (`readonly r='(5)'`) get no extra prefix.
+	setVarArrayLiteral bool
+
 	// argv0 is bash's $0 / $BASH_ARGV0 — initialized from filename
 	// but separately settable by user code. Error-message prefixes
 	// continue to use filename so they stay stable across user

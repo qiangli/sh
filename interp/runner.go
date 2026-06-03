@@ -908,7 +908,29 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		}
 		declHadNames := false
 	assignLoop:
-		for as := range r.flattenAssigns(cm.Args) {
+		for as, fromString := range r.flattenAssigns(cm.Args) {
+			// Bash attributes assignment failures from a declare-
+			// family builtin's string-parsed arg path
+			// (`readonly 'a=v'`) to the builtin rather than the
+			// enclosing function. Set the runner-level flag so the
+			// setVar error printer picks it up; an inner loop
+			// guarantees we clear it once this Assign is done.
+			r.setVarFromBuiltin = ""
+			r.setVarStringParsed = false
+			r.setVarArrayLiteral = false
+			// Bash 5.3 attribution for declare-family failures:
+			//   no -a/-A flag       → no extra prefix
+			//   -a/-A + array literal → function name
+			//   -a/-A + scalar (or string-form) → builtin name
+			hasArrayFlag := slices.Contains(modes, "-a") || slices.Contains(modes, "-A") || valType == "-a" || valType == "-A"
+			switch {
+			case !hasArrayFlag:
+				r.setVarStringParsed = true // suppress any prefix
+			case as.Array != nil && !fromString:
+				r.setVarArrayLiteral = true // function-name attribution
+			default:
+				r.setVarFromBuiltin = cm.Variant.Value
+			}
 			fp := flagParser{remaining: []string{as.Name.Value}}
 			for fp.more() {
 				switch flag := fp.flag(); flag {
@@ -1153,14 +1175,20 @@ func (r *Runner) trapCallback(ctx context.Context, callback, name string) {
 	r.handlingTrap = false
 }
 
-func (r *Runner) flattenAssigns(args []*syntax.Assign) iter.Seq[*syntax.Assign] {
-	return func(yield func(*syntax.Assign) bool) {
+// flattenAssigns yields each effective syntax.Assign from a declare-
+// family clause's args. The second return value, fromString, is true
+// when the Assign was synthesized from a string-form arg (`readonly
+// 'name=val'`) rather than parsed as a syntax-level assignment
+// (`readonly name=val`). Bash 5.3 attributes assignment-failure error
+// messages differently for the two paths, so the caller needs to know.
+func (r *Runner) flattenAssigns(args []*syntax.Assign) iter.Seq2[*syntax.Assign, bool] {
+	return func(yield func(*syntax.Assign, bool) bool) {
 		for _, as := range args {
 			// Convert "declare $x" into "declare value".
 			// Don't use syntax.Parser here, as we only want the basic
 			// splitting by '='.
 			if as.Name != nil {
-				if !yield(as) {
+				if !yield(as, false) {
 					return
 				}
 				continue
@@ -1176,7 +1204,7 @@ func (r *Runner) flattenAssigns(args []*syntax.Assign) iter.Seq[*syntax.Assign] 
 						&syntax.Lit{Value: val},
 					}}
 				}
-				if !yield(as) {
+				if !yield(as, true) {
 					return
 				}
 			}
