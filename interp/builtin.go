@@ -1091,6 +1091,67 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		}
 		exit.code = last
 	case "dirs":
+		// `dirs +N` / `dirs -N` selects a single entry. `-v` adds
+		// "index<TAB>dir" line-per-entry. `-p` is line-per-entry.
+		// `-l` reserved (resolve ~ to HOME) — we emit the raw
+		// paths either way. Without flags or index, print the
+		// whole stack top-first on one line.
+		vertical := false
+		perLine := false
+		idx := -1
+		idxSign := byte(0)
+		for _, a := range args {
+			switch {
+			case a == "-v":
+				vertical = true
+				perLine = true
+			case a == "-p":
+				perLine = true
+			case a == "-c":
+				r.dirStack = r.dirStack[:0]
+				return exit
+			case a == "-l":
+				// no-op; we don't shorten paths.
+			case strings.HasPrefix(a, "+") || strings.HasPrefix(a, "-"):
+				n, err := strconv.Atoi(a[1:])
+				if err != nil {
+					return failf(2, "dirs: %s: invalid number\n", a)
+				}
+				idx = n
+				idxSign = a[0]
+			default:
+				return failf(2, "dirs: %s: invalid option\n", a)
+			}
+		}
+		topFirst := make([]string, len(r.dirStack))
+		for i, d := range r.dirStack {
+			topFirst[len(r.dirStack)-1-i] = d
+		}
+		if idx >= 0 {
+			n := idx
+			if idxSign == '-' {
+				n = len(topFirst) - 1 - n
+			}
+			if n < 0 || n >= len(topFirst) {
+				return failf(2, "dirs: %d: directory stack index out of range\n", idx)
+			}
+			if vertical {
+				r.outf("%2d  %s\n", n, topFirst[n])
+			} else {
+				r.outf("%s\n", topFirst[n])
+			}
+			break
+		}
+		if perLine {
+			for i, d := range topFirst {
+				if vertical {
+					r.outf("%2d  %s\n", i, d)
+				} else {
+					r.outf("%s\n", d)
+				}
+			}
+			break
+		}
 		for i, dir := range slices.Backward(r.dirStack) {
 			r.outf("%s", dir)
 			if i > 0 {

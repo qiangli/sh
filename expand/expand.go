@@ -940,6 +940,27 @@ func (cfg *Config) wordField(wps []syntax.WordPart, ql quoteLevel) ([]fieldPart,
 	return field, nil
 }
 
+// isStackIndex reports whether s looks like a `~N` / `~-N`
+// directory-stack reference body (the name after the leading `~`).
+// Accepts an optional leading `-` followed by one or more digits.
+func isStackIndex(s string) bool {
+	if s == "" {
+		return false
+	}
+	if s[0] == '-' {
+		s = s[1:]
+		if s == "" {
+			return false
+		}
+	}
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 // wordHasAssignShape reports whether the word's parts begin with a
 // `<name>=` prefix where <name> is a valid shell identifier — i.e.
 // the word looks like an assignment even when it's being passed as a
@@ -1444,6 +1465,25 @@ func (cfg *Config) expandUser(field string, moreFields bool) (prefix, rest strin
 	case "-":
 		if vr := cfg.Env.Get("OLDPWD"); vr.IsSet() {
 			return vr.String(), rest
+		}
+	}
+
+	// Bash's `~N` (e.g. `~0`, `~1`) and `~-N` (e.g. `~-1`) expand
+	// to the corresponding entry of the directory stack — i.e.
+	// DIRSTACK[N] / DIRSTACK[end-N] in 0-indexed terms. Resolve via
+	// the DIRSTACK env variable so the dirs builtin and the tilde
+	// shortcut stay in sync.
+	if isStackIndex(name) {
+		ds := cfg.Env.Get("DIRSTACK")
+		if ds.Kind == Indexed {
+			idx, _ := strconv.Atoi(name)
+			if strings.HasPrefix(name, "-") {
+				idx = -idx
+				idx = len(ds.List) - 1 - idx
+			}
+			if idx >= 0 && idx < len(ds.List) {
+				return ds.List[idx], rest
+			}
 		}
 	}
 

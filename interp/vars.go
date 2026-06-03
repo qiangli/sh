@@ -379,7 +379,14 @@ func (r *Runner) lookupVar(name string) expand.Variable {
 			vr.List = []string{strconv.Itoa(int(r.lastExit.code))}
 		}
 	case "DIRSTACK":
-		vr.Kind, vr.List = expand.Indexed, r.dirStack
+		// Bash exposes DIRSTACK with the top-of-stack at index 0,
+		// matching `dirs` output. r.dirStack stores the stack with
+		// the top at the end, so reverse it.
+		vr.Kind = expand.Indexed
+		vr.List = make([]string, len(r.dirStack))
+		for i, d := range r.dirStack {
+			vr.List[len(r.dirStack)-1-i] = d
+		}
 	case "BASH_ALIASES":
 		vr.Kind = expand.Associative
 		vr.Map = make(map[string]string, len(r.alias))
