@@ -521,40 +521,43 @@ func formatInto(sb *strings.Builder, format string, args []string, startTime tim
 				// bash 5.3 also accepts `\x{HEX}` / `\u{HEX}` /
 				// `\U{HEX}` with the digits wrapped in braces so
 				// you can use longer literals without ambiguity.
+				// Inside braces bash is greedy: it reads every hex
+				// digit it can (even past where the value would
+				// overflow), accepts both a closing `}` and an
+				// unclosed run that ends at the first non-hex or
+				// end-of-string, then truncates the value to the
+				// destination size (low byte for `\x`, low rune
+				// for `\u`/`\U`).
 				if i < len(format) && format[i] == '{' {
-					end := strings.IndexByte(format[i+1:], '}')
-					if end < 0 {
-						// No closing brace — emit literally,
-						// matching bash's "preserve verbatim" behavior
-						// when the escape is malformed.
-						sb.WriteByte('\\')
-						sb.WriteByte(c)
+					i++
+					start := i
+					for i < len(format) {
+						r := format[i]
+						if (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F') {
+							i++
+							continue
+						}
 						break
 					}
-					digits := format[i+1 : i+1+end]
-					i += end + 1 // position at the `}`
+					digits := format[start:i]
+					// Consume the closing `}` when present; the
+					// unclosed form is also accepted (we just stop
+					// at end-of-string or the next non-hex). `i`
+					// is left on the last consumed char so the
+					// outer i++ steps onto the next source char.
+					if i < len(format) && format[i] == '}' {
+						// step onto '}'; outer i++ will move past
+					} else {
+						i-- // outer i++ moves to the first
+						// non-hex/EOS character so it isn't lost
+					}
 					// Empty `\x{}` emits NUL (bash 5.3 treats the
 					// missing-digits case as `\x00`).
 					if digits == "" {
 						sb.WriteByte(0)
 						break
 					}
-					valid := true
-					for _, r := range digits {
-						if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')) {
-							valid = false
-							break
-						}
-					}
-					if !valid {
-						sb.WriteByte('\\')
-						sb.WriteByte(c)
-						sb.WriteByte('{')
-						sb.WriteString(digits)
-						sb.WriteByte('}')
-						break
-					}
-					n, _ := strconv.ParseUint(digits, 16, 32)
+					n, _ := strconv.ParseUint(digits, 16, 64)
 					if c == 'x' {
 						sb.WriteByte(byte(n))
 					} else {
