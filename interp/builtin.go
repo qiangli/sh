@@ -761,6 +761,13 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					r.outf("%s\n", m.kind)
 				} else {
 					r.outf("%s\n", m.desc)
+					// `type funcname` (and -a) also dumps the
+					// body in bash's `declare -f` shape.
+					if mode == "" && m.kind == "function" {
+						if body := r.Funcs[arg]; body != nil {
+							r.printFuncDecl(arg, body)
+						}
+					}
 				}
 			}
 		}

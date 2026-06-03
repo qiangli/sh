@@ -1264,17 +1264,20 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		if cm.Stmt != nil {
 			r.stmt(ctx, cm.Stmt)
 		}
-		format := "%s\t%s\n"
-		if cm.PosixFormat {
-			format = "%s %s\n"
-		} else {
-			r.outf("\n")
-		}
 		real := time.Since(start)
-		r.outf(format, "real", elapsedString(real, cm.PosixFormat))
-		// TODO: can we do these?
-		r.outf(format, "user", elapsedString(0, cm.PosixFormat))
-		r.outf(format, "sys", elapsedString(0, cm.PosixFormat))
+		var user, sys time.Duration // not tracked
+		if cm.PosixFormat {
+			r.outf("real %s\n", elapsedString(real, true))
+			r.outf("user %s\n", elapsedString(user, true))
+			r.outf("sys %s\n", elapsedString(sys, true))
+		} else if format := r.envGet("TIMEFORMAT"); format != "" {
+			r.outf("%s\n", formatTIMEFORMAT(format, real, user, sys))
+		} else {
+			r.outf("\nreal\t%s\nuser\t%s\nsys\t%s\n",
+				elapsedString(real, false),
+				elapsedString(user, false),
+				elapsedString(sys, false))
+		}
 	case *syntax.CoprocClause:
 		// Coproc runs a command in the background with stdin/stdout connected via pipes.
 		// Note: bash coproc exposes the child's pipes as ${NAME[0]} / ${NAME[1]},
@@ -1436,6 +1439,86 @@ func match(pat, name string) bool {
 	matcher, err := internal.ExtendedPatternMatcher(pat, pattern.EntireString|pattern.ExtendedOperators)
 	_ = err // TODO: report these errors
 	return matcher != nil && matcher(name)
+}
+
+// formatTIMEFORMAT renders the durations against bash's TIMEFORMAT
+// directives: `%[l][p]{R,U,S}` for real/user/sys with optional `l`
+// (mins+secs) prefix and a 0-3 precision digit; `%P` for %CPU; `%%`
+// for literal `%`; backslash escapes `\n` `\t` `\\` `\?` mapped to
+// their C equivalents (with unknown sequences emitted verbatim).
+func formatTIMEFORMAT(format string, real, user, sys time.Duration) string {
+	var sb strings.Builder
+	emit := func(d time.Duration, longForm bool, prec int) {
+		if longForm {
+			min := int(d.Minutes())
+			sec := math.Mod(d.Seconds(), 60.0)
+			fmt.Fprintf(&sb, "%dm%.*fs", min, prec, sec)
+			return
+		}
+		fmt.Fprintf(&sb, "%.*f", prec, d.Seconds())
+	}
+	for i := 0; i < len(format); i++ {
+		switch format[i] {
+		case '\\':
+			if i+1 >= len(format) {
+				sb.WriteByte('\\')
+				continue
+			}
+			i++
+			switch format[i] {
+			case 'n':
+				sb.WriteByte('\n')
+			case 't':
+				sb.WriteByte('\t')
+			case '\\':
+				sb.WriteByte('\\')
+			default:
+				sb.WriteByte('\\')
+				sb.WriteByte(format[i])
+			}
+		case '%':
+			i++
+			longForm := false
+			prec := 3
+			if i < len(format) && format[i] == 'l' {
+				longForm = true
+				i++
+			}
+			if i < len(format) && format[i] >= '0' && format[i] <= '9' {
+				prec = int(format[i] - '0')
+				i++
+				if i < len(format) && format[i] == 'l' {
+					longForm = true
+					i++
+				}
+			}
+			if i >= len(format) {
+				sb.WriteByte('%')
+				return sb.String()
+			}
+			switch format[i] {
+			case 'R':
+				emit(real, longForm, prec)
+			case 'U':
+				emit(user, longForm, prec)
+			case 'S':
+				emit(sys, longForm, prec)
+			case 'P':
+				// %CPU — bash computes (user+sys)/real*100. We
+				// don't track user/sys, so emit "0.00" so the
+				// directive expands to something parseable.
+				fmt.Fprintf(&sb, "%.*f", prec, 0.0)
+			case '%':
+				sb.WriteByte('%')
+			default:
+				sb.WriteByte('%')
+				sb.WriteByte(format[i])
+			}
+		default:
+			sb.WriteByte(format[i])
+		}
+	}
+	return sb.String()
 }
 
 func elapsedString(d time.Duration, posix bool) string {

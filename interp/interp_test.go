@@ -2763,7 +2763,7 @@ done <<< 2`,
 	// builtin and a file in PATH (via the test exec handler).
 	{"type -a -t echo", "builtin\nfile\n"},
 	{"interp_myfn(){ :; }; type -a -t interp_myfn", "function\n"},
-	{"interp_myfn(){ :; }; type -a interp_myfn echo | head -2", "interp_myfn is a function\necho is a shell builtin\n"},
+	{"interp_myfn(){ :; }; type -a interp_myfn echo | head -2", "interp_myfn is a function\ninterp_myfn () \n"},
 
 	// type -f: skip function lookup, fall through to builtin/file.
 	{"echo(){ :; }; type -t echo", "function\n"},

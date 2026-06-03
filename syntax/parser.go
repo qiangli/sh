@@ -2846,6 +2846,19 @@ func (p *Parser) timeClause(s *Stmt) {
 	if _, ok := p.gotRsrv("-p"); ok {
 		tc.PosixFormat = true
 	}
+	// bash 5.3 also accepts `--` as an end-of-options marker right
+	// after `time` / `time -p` *when* another statement follows.
+	// `time --` alone keeps treating `--` as the body command.
+	if p.lang == LangBash && p.tok == _LitWord && p.val == "--" {
+		save := p.pos
+		p.next()
+		if p.stopToken() {
+			// no body after `--`; restore so it parses as the body.
+			p.tok = _LitWord
+			p.val = "--"
+			p.pos = save
+		}
+	}
 	tc.Stmt = p.gotStmtPipe(&Stmt{Position: p.pos}, false)
 	s.Cmd = tc
 }
