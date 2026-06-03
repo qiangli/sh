@@ -916,7 +916,12 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			declHadNames = true
 			name := as.Name.Value
 			if !syntax.ValidName(name) {
-				r.errf("declare: invalid name %q\n", name)
+				if r.bashCompatErrors {
+					r.errf("%sdeclare: `%s': not a valid identifier\n",
+						r.bashErrPrefix(r.curStmtPos), name)
+				} else {
+					r.errf("declare: invalid name %q\n", name)
+				}
 				r.exit.code = 1
 				return
 			}

@@ -224,6 +224,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			}
 			fallthrough
 		default:
+			if r.bashCompatErrors {
+				return failf(2, "shift: usage: %s\n", bashUsage["shift"])
+			}
 			return failf(2, "usage: shift [n]\n")
 		}
 		if n >= len(r.Params) {
@@ -311,6 +314,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					return failf(2, "printf: -v: option requires an argument\n")
 				}
 				if !syntax.ValidName(assignTo) {
+					if r.bashCompatErrors {
+						return failf(1, "printf: `%s': not a valid identifier\n", assignTo)
+					}
 					return failf(1, "printf: %q: not a valid identifier\n", assignTo)
 				}
 			default:
@@ -319,6 +325,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		}
 		args = fp.args()
 		if len(args) == 0 {
+			if r.bashCompatErrors {
+				return failf(2, "printf: usage: %s\n", bashUsage["printf"])
+			}
 			return failf(2, "usage: printf [-v var] format [arguments]\n")
 		}
 		format, args := args[0], args[1:]
@@ -359,6 +368,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			}
 			fallthrough
 		default:
+			if r.bashCompatErrors {
+				return failf(2, "%s: usage: %s\n", name, bashUsage[name])
+			}
 			return failf(2, "usage: %s [n]\n", name)
 		}
 	case "pwd":
@@ -399,6 +411,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				r.outf("%s\n", path)
 			}
 		default:
+			if r.bashCompatErrors {
+				return failf(2, "cd: usage: %s\n", bashUsage["cd"])
+			}
 			return failf(2, "usage: cd [dir]\n")
 		}
 		exit.code = r.changeDir(ctx, "cd", path)
