@@ -59,6 +59,7 @@ const (
 	NoGlobStar                         // do not support "**"; negated shopt "globstar"
 	GlobLeadingDot                     // let wildcards match leading dots in filenames; shopt "dotglob"
 	ExtendedOperators                  // support extended pattern matching operators; shopt "extglob" for pathname expansion
+	LenientRanges                      // accept reversed bracket ranges (`[a-Z]`) as literal sets — bash 5.3 glob behavior
 )
 
 // Regexp turns a shell pattern into a regular expression that can be used with
@@ -382,6 +383,20 @@ func regexpNext(sb *strings.Builder, sl *stringLexer, mode Mode) error {
 				}
 				// TODO: what about overlapping ranges, like: [a--z]
 				if end != ']' && start > end {
+					if mode&LenientRanges != 0 {
+						// Rewrite the trailing `-` we already
+						// wrote as an escaped literal `-`, so
+						// the regex sees `[<start>\-<end>]` —
+						// matching bash 5.3's "literal set"
+						// fallback for reversed ranges.
+						s := sb.String()
+						if strings.HasSuffix(s, "-") {
+							sb.Reset()
+							sb.WriteString(s[:len(s)-1])
+							sb.WriteString(`\-`)
+						}
+						break
+					}
 					return &SyntaxError{msg: fmt.Sprintf("invalid range: %c-%c", start, end)}
 				}
 			case ']':

@@ -1511,7 +1511,7 @@ func (r *Runner) flattenAssigns(args []*syntax.Assign) iter.Seq2[*syntax.Assign,
 }
 
 func match(pat, name string) bool {
-	matcher, err := internal.ExtendedPatternMatcher(pat, pattern.EntireString|pattern.ExtendedOperators)
+	matcher, err := internal.ExtendedPatternMatcher(pat, pattern.EntireString|pattern.ExtendedOperators|pattern.LenientRanges)
 	_ = err // TODO: report these errors
 	return matcher != nil && matcher(name)
 }
