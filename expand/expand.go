@@ -1073,6 +1073,21 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 				s = sb.String()
 			}
 			if cfg.tildeInAssign {
+				// For an assignment-shape arg, the tilde immediately
+				// after the first `=` is expanded as if it were a
+				// leading tilde-prefix on the value (bash's `FOO=~/x`
+				// rule). expandTildesAfterColons handles the
+				// subsequent `:~` segments but not the leading one,
+				// so do that here when this is the first Lit.
+				if i == 0 {
+					if eq := strings.IndexByte(s, '='); eq >= 0 && eq+1 < len(s) && s[eq+1] == '~' {
+						head := s[:eq+1]
+						tail := s[eq+1:]
+						if exp, rest := cfg.expandUser(tail, false); exp != "" {
+							s = head + exp + rest
+						}
+					}
+				}
 				s = cfg.expandTildesAfterColons(s)
 			}
 			curField = append(curField, fieldPart{val: s})

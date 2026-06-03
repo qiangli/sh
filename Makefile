@@ -24,7 +24,7 @@ test-bash: build test-bash-helpers
 	@echo "Running bash 5.3 test suite against bashy ($(BASH_TEST_TIMEOUT)s timeout per test)..."
 	@BASHY_ABS=$$(pwd)/$(BASHY); cd $(BASH_TESTS_DIR) && \
 		export THIS_SH=$$BASHY_ABS && \
-		export PATH=$$PWD:$$PATH && \
+		export PATH=$$PWD:/usr/bin:/bin:/usr/local/bin && \
 		export BASH_TSTOUT=$${TMPDIR:-/tmp}/bashy-tstout-$$$$ && \
 		passed=0 && failed=0 && skipped=0 && timeout_count=0 && \
 		for runner in run-*; do \
