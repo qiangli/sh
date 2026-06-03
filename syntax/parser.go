@@ -660,6 +660,11 @@ const (
 	unquotedWordCont
 
 	subCmd
+	// subCmdBrace is like subCmd but for bash 5.3's `${ cmd; }` funsub
+	// and mksh's `${|cmd;}` valsub: the body is a list of statements,
+	// but the closing delimiter is `}` rather than `)`, so the lexer
+	// must treat `}` as a word boundary inside the body.
+	subCmdBrace
 	subCmdBckquo
 	dblQuotes
 	hdocWord
@@ -678,7 +683,7 @@ const (
 
 	allKeepSpaces = runeByRune | paramExpRepl | dblQuotes | hdocBody |
 		hdocBodyTabs | paramExpRepl | paramExpExp
-	allRegTokens = noState | unquotedWordCont | subCmd | subCmdBckquo | hdocWord |
+	allRegTokens = noState | unquotedWordCont | subCmd | subCmdBrace | subCmdBckquo | hdocWord |
 		switchCase | arrayElems | testExpr
 	allArithmExpr = arithmExpr | arithmExprLet | arithmExprCmd | paramExpArithm
 	allParamExp   = paramExpArithm | paramExpRepl | paramExpExp
@@ -1211,7 +1216,7 @@ func (p *Parser) wordPart() WordPart {
 				TempFile: p.r != '|',
 				ReplyVar: p.r == '|',
 			}
-			old := p.preNested(subCmd)
+			old := p.preNested(subCmdBrace)
 			p.rune() // don't tokenize '|'
 			p.next()
 			cs.Stmts, cs.Last = p.stmtList("}")

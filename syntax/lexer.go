@@ -283,6 +283,15 @@ skipSpace:
 	}
 	p.pos = p.nextPos()
 	switch {
+	case p.quote == subCmdBrace && r == '}':
+		// Funsub / valsub bodies (`${ cmd; }` and `${|cmd;}`) close
+		// on `}`. Emit it as a standalone `_LitWord` token so the
+		// stmts() loop can stop on it, and advance past it so the
+		// next call to [Parser.next] reads the character after.
+		p.pos = p.nextPos()
+		p.tok = _LitWord
+		p.val = "}"
+		p.rune()
 	case p.quote&allRegTokens != 0:
 		switch r {
 		case ';', '"', '\'', '(', ')', '$', '|', '&', '>', '<', '`':

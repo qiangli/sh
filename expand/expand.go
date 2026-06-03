@@ -843,6 +843,23 @@ func (cfg *Config) cmdSubst(cs *syntax.CmdSubst) (string, error) {
 	if cfg.CmdSubst == nil {
 		return "", UnexpectedCommandError{Node: cs}
 	}
+	// Bash 5.3 funsub `${ cmd; }` and mksh's valsub `${|cmd;}` run the
+	// body in the *caller's* scope rather than a subshell, so any
+	// recursive expansion inside the body shares this cfg's stack-
+	// allocated reuse arrays. The outer caller (typically wordFields)
+	// holds slice views over cfg.fieldAlloc / cfg.fieldsAlloc that the
+	// inner call would otherwise clobber. Snapshot the arrays before
+	// running the body and restore them after so the outer slice views
+	// keep pointing at consistent data. Regular `$(...)` does this
+	// implicitly by spawning a subshell with its own [Config].
+	if cs.TempFile || cs.ReplyVar {
+		savedFA := cfg.fieldAlloc
+		savedFsA := cfg.fieldsAlloc
+		defer func() {
+			cfg.fieldAlloc = savedFA
+			cfg.fieldsAlloc = savedFsA
+		}()
+	}
 	sb := cfg.strBuilder()
 	if err := cfg.CmdSubst(sb, cs); err != nil {
 		return "", err
