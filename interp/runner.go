@@ -114,8 +114,16 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 			// inherit_errexit: bash command substitutions do NOT
 			// inherit `set -e` by default — `$(false; echo ok)`
 			// must echo `ok` even when the caller is under -e.
-			// When inherit_errexit is enabled, copy -e through.
+			// When inherit_errexit is enabled (or implicitly via
+			// POSIX mode), copy -e through to the subshell.
+			inheritErrexit := false
 			if opt, _ := r.bashOptByName("inherit_errexit"); opt != nil && *opt {
+				inheritErrexit = true
+			}
+			if r.opts[optPosix] {
+				inheritErrexit = true
+			}
+			if inheritErrexit {
 				r2.opts[optErrExit] = r.opts[optErrExit]
 			} else {
 				r2.opts[optErrExit] = false

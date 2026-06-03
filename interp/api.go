@@ -1360,6 +1360,10 @@ func (r *Runner) subshell(background bool) *Runner {
 	// script". Bash distinguishes these — see comsub.tests.
 	r2.inFunc = r.inFunc
 	r2.callStack = append([]callFrame(nil), r.callStack...)
+	// Errexit-inhibition flags travel through — `(false; echo A)`
+	// as the LHS of `&&` runs both statements because the outer
+	// `&&` already suppresses errexit for the subshell body.
+	r2.noErrExit = r.noErrExit
 
 	r2.dirStack = append(r2.dirBootstrap[:0], r.dirStack...)
 	r2.fillExpandConfig(r.ectx)

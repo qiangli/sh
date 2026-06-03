@@ -232,6 +232,37 @@ func (r *Runner) lookupVar(name string) expand.Variable {
 		}
 	case "PPID":
 		vr.Kind, vr.Str = expand.String, strconv.Itoa(os.Getppid())
+	case "-":
+		// Bash's $- expands to the single-letter forms of all
+		// currently-set option flags. Always-on defaults (`h` —
+		// hashall, `B` — braceexpand) are surfaced too so the
+		// output is non-empty even on a fresh shell.
+		var sb strings.Builder
+		if r.opts[optAllExport] {
+			sb.WriteByte('a')
+		}
+		if r.opts[optErrExit] {
+			sb.WriteByte('e')
+		}
+		if r.opts[optNoGlob] {
+			sb.WriteByte('f')
+		}
+		if r.opts[optNoExec] {
+			sb.WriteByte('n')
+		}
+		if r.opts[optNoUnset] {
+			sb.WriteByte('u')
+		}
+		if r.opts[optXTrace] {
+			sb.WriteByte('x')
+		}
+		if r.opts[optPipeFail] {
+			// pipefail has no single-letter form; bash 5.3
+			// emits nothing for it in $-.
+		}
+		sb.WriteByte('h') // hashall (always on)
+		sb.WriteByte('B') // braceexpand (always on)
+		vr.Kind, vr.Str = expand.String, sb.String()
 	case "RANDOM": // not for cryptographic use
 		if r.deterministic && r.deterministicRng != nil {
 			vr.Kind, vr.Str = expand.String, strconv.Itoa(int(r.deterministicRng.Uint64()&0x7fff))
