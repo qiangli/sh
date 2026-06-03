@@ -13,6 +13,8 @@ Note: this checkout is a fork. `origin/master` is the fork integration branch â€
 
 ## Build / test / lint
 
+The `Makefile` wraps the common flows: `make build`, `make test`, `make test-bash` (drives `bin/bashy` against bash's own test suite â€” required by the Workflow section), `make test-bash-list`, `make tidy`, `make clean`. For finer-grained control use the underlying `go` commands:
+
 ```sh
 # Build everything
 go build ./...
@@ -110,4 +112,3 @@ Always save a copy of all implementation plans in `docs/`. Use a descriptive fil
 - **Permissive licenses only**: All third-party dependencies must use MIT, BSD, Apache 2.0, or equivalent permissive licenses. No GPL/LGPL.
 - **Pure Go only**: No CGo, no C dependencies.
 - **Local vendoring for fixes**: If any third-party library is missing features or has bugs that block our work, make a local clone of its source code in `./libs/<pkg-name>/`. Add a `CREDITS.md` file in that directory with proper attribution (original author, license, upstream URL). Then make the required changes locally. Update `go.mod` to use a `replace` directive pointing to the local copy. This ensures we can fix upstream issues without waiting for PRs to be merged, while maintaining clear provenance.
->>>>>>> 5a8f7980 (fix parser and interpreter issues for bash 5.3 test compatibility)
