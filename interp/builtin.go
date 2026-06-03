@@ -1080,7 +1080,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		r.execAs(ctx, pos, argv0, args)
 		exit = r.exit
 	case "command":
-		showV := false // -v: name or path
+		showV := false  // -v: name or path
 		showVV := false // -V: "X is a Y" description
 		fp := flagParser{remaining: args}
 		for fp.more() {
@@ -1477,7 +1477,12 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 
 	case "getopts":
 		if len(args) < 2 {
-			return failf(2, "getopts: usage: getopts optstring name [arg ...]\n")
+			// bash 5.3 emits the usage line without the
+			// `<file>: line N: ` prefix that other builtin
+			// errors carry.
+			r.errf("getopts: usage: getopts optstring name [arg ...]\n")
+			exit.code = 2
+			return exit
 		}
 		optind, _ := strconv.Atoi(r.envGet("OPTIND"))
 		if optind-1 != r.optState.argidx {

@@ -499,7 +499,7 @@ func (r *Runner) setVarString(name, value string) {
 // bashSetQuote formats `v` the way bash's `set` (no args) builtin
 // does: no quotes for fully-safe strings, backslash-escape for a
 // single shell-special character, single-quotes for everything else
-// (with `'` itself rendered as `'\''`). Differs from
+// (with `'` itself rendered as `'\”`). Differs from
 // [bashDeclareQuote] (which always double-quotes) and from
 // [syntax.Quote] (which always quotes `#`).
 func bashSetQuote(v string) string {

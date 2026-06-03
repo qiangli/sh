@@ -104,32 +104,32 @@ const (
 	assgnParen // =(
 	cmdOut     // >(
 
-	plus     // +
-	colPlus  // :+
-	minus    // -
-	colMinus // :-
-	quest    // ?
-	colQuest // :?
-	assgn    // =
-	colAssgn // :=
-	perc     // %
-	dblPerc  // %%
-	hash     // #
-	dblHash  // ##
-	colHash  // :#
-	colPipe  // :|
-	colStar  // :*
-	caret    // ^
-	dblCaret // ^^
-	comma    // ,
-	dblComma // ,,
+	plus       // +
+	colPlus    // :+
+	minus      // -
+	colMinus   // :-
+	quest      // ?
+	colQuest   // :?
+	assgn      // =
+	colAssgn   // :=
+	perc       // %
+	dblPerc    // %%
+	hash       // #
+	dblHash    // ##
+	colHash    // :#
+	colPipe    // :|
+	colStar    // :*
+	caret      // ^
+	dblCaret   // ^^
+	comma      // ,
+	dblComma   // ,,
 	peTilde    // ~ (param exp)
 	peDblTilde // ~~ (param exp)
-	at       // @
-	slash    // /
-	dblSlash // //
-	period   // .
-	colon    // :
+	at         // @
+	slash      // /
+	dblSlash   // //
+	period     // .
+	colon      // :
 
 	tsExists  // -e
 	tsRegFile // -f
