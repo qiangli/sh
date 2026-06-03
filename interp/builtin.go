@@ -1116,6 +1116,13 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					continue
 				}
 				r.outf("%s\n", ms[0].desc)
+				// bash's `command -V <fn>` also dumps the body
+				// for a function match, like `type <fn>`.
+				if ms[0].kind == "function" {
+					if body := r.Funcs[arg]; body != nil {
+						r.printFuncDecl(arg, body)
+					}
+				}
 				continue
 			}
 			// -v: minimal form. Functions/builtins/keywords print the
@@ -1574,6 +1581,14 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					return failf(1, "shopt: unsupported option %q\n", arg)
 				}
 				*opt = mode == "-s"
+				// Some shopts have a mirrored runner-level
+				// option (`optExpandAliases` etc.); keep them
+				// in sync so the alias / extglob / etc.
+				// code paths see the same state.
+				switch arg {
+				case "expand_aliases":
+					r.opts[optExpandAliases] = *opt
+				}
 			default: // ""
 				r.printOptLine(arg, *opt, supported)
 				// Bash's `shopt name` returns 0 if set, 1 if not —

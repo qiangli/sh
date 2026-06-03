@@ -135,8 +135,14 @@ func newRunner() (*interp.Runner, error) {
 	env := expand.ListEnviron(envVars...)
 	var r *interp.Runner
 	var err error
+	// bash defaults to expanding aliases ONLY in interactive shells.
+	// For `-c CMD` and script invocations the user must `shopt -s
+	// expand_aliases` explicitly. Treat a tty-attached stdin as
+	// interactive; otherwise leave alias expansion off, matching
+	// bash's startup behaviour.
+	interactive := *command == "" && flag.NArg() == 0 && term.IsTerminal(int(os.Stdin.Fd()))
 	opts := []interp.RunnerOption{
-		interp.Interactive(true),
+		interp.Interactive(interactive),
 		interp.StdIO(os.Stdin, os.Stdout, os.Stderr),
 		interp.Env(env),
 		interp.WithBashCompatErrors(true),
