@@ -518,6 +518,50 @@ func formatInto(sb *strings.Builder, format string, args []string, startTime tim
 				case 'U':
 					max = 8
 				}
+				// bash 5.3 also accepts `\x{HEX}` / `\u{HEX}` /
+				// `\U{HEX}` with the digits wrapped in braces so
+				// you can use longer literals without ambiguity.
+				if i < len(format) && format[i] == '{' {
+					end := strings.IndexByte(format[i+1:], '}')
+					if end < 0 {
+						// No closing brace — emit literally,
+						// matching bash's "preserve verbatim" behavior
+						// when the escape is malformed.
+						sb.WriteByte('\\')
+						sb.WriteByte(c)
+						break
+					}
+					digits := format[i+1 : i+1+end]
+					i += end + 1 // position at the `}`
+					// Empty `\x{}` emits NUL (bash 5.3 treats the
+					// missing-digits case as `\x00`).
+					if digits == "" {
+						sb.WriteByte(0)
+						break
+					}
+					valid := true
+					for _, r := range digits {
+						if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')) {
+							valid = false
+							break
+						}
+					}
+					if !valid {
+						sb.WriteByte('\\')
+						sb.WriteByte(c)
+						sb.WriteByte('{')
+						sb.WriteString(digits)
+						sb.WriteByte('}')
+						break
+					}
+					n, _ := strconv.ParseUint(digits, 16, 32)
+					if c == 'x' {
+						sb.WriteByte(byte(n))
+					} else {
+						sb.WriteRune(rune(n))
+					}
+					break
+				}
 				digits := readDigits(max, true)
 				if len(digits) > 0 {
 					// can't error
