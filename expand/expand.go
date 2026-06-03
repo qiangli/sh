@@ -252,9 +252,14 @@ func LiteralForAssign(cfg *Config, word *syntax.Word) (string, error) {
 		return "", nil
 	}
 	cfg = prepareConfig(cfg)
-	prev := cfg.tildeInAssign
+	prevT := cfg.tildeInAssign
 	cfg.tildeInAssign = true
-	defer func() { cfg.tildeInAssign = prev }()
+	prevS := cfg.stripBackslashEscapes
+	cfg.stripBackslashEscapes = true
+	defer func() {
+		cfg.tildeInAssign = prevT
+		cfg.stripBackslashEscapes = prevS
+	}()
 	field, err := cfg.wordField(word.Parts, quoteNone)
 	if err != nil {
 		return "", err
