@@ -44,7 +44,67 @@ func init() {
 	flag.Var(&optsOff, "O", "enable a shopt option; may be repeated")
 }
 
+// splitCombinedShortFlags rewrites bash-style short / combined
+// short flags into the long-form names our `flag` parser knows.
+// `-ce 'cmd'` becomes `-o errexit -c 'cmd'`, `-eu` becomes
+// `-o errexit -o nounset`, and so on. `-c` is value-taking so the
+// emitted `-c` goes last in the cluster, just before its argument.
+// Unknown clusters pass through untouched.
+func splitCombinedShortFlags(args []string) []string {
+	// Map of bash short-flag letters to their long set-option name.
+	shortToOpt := map[byte]string{
+		'a': "allexport",
+		'e': "errexit",
+		'f': "noglob",
+		'n': "noexec",
+		'u': "nounset",
+		'v': "verbose",
+		'x': "xtrace",
+		'p': "privileged",
+	}
+	out := make([]string, 0, len(args))
+	out = append(out, args[0])
+	for i := 1; i < len(args); i++ {
+		a := args[i]
+		if len(a) <= 2 || a[0] != '-' || a[1] == '-' {
+			out = append(out, a)
+			continue
+		}
+		allKnown := true
+		for j := 1; j < len(a); j++ {
+			if _, ok := shortToOpt[a[j]]; !ok && a[j] != 'c' {
+				allKnown = false
+				break
+			}
+		}
+		if !allKnown {
+			out = append(out, a)
+			continue
+		}
+		var bools, vals []byte
+		for j := 1; j < len(a); j++ {
+			if a[j] == 'c' {
+				vals = append(vals, a[j])
+			} else {
+				bools = append(bools, a[j])
+			}
+		}
+		for _, c := range bools {
+			out = append(out, "-o", shortToOpt[c])
+		}
+		for _, c := range vals {
+			out = append(out, "-"+string(c))
+		}
+	}
+	return out
+}
+
 func main() {
+	// bash accepts POSIX-style combined short flags (`-ce 'cmd'`,
+	// `-eu`, etc.). Go's flag package doesn't, so pre-split any
+	// bare `-XYZ` argument (where every char is a single-letter
+	// flag we know about) into individual `-X -Y -Z` args.
+	os.Args = splitCombinedShortFlags(os.Args)
 	flag.Parse()
 	if *version {
 		fmt.Printf("GNU bash, version %s\n", bashVersion)

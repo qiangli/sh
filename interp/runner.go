@@ -709,7 +709,21 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 		}
 	}
 	if r.exit.ok() && st.Cmd != nil {
-		r.cmd(ctx, st.Cmd)
+		// A negated stmt suppresses `set -e`-driven exit for the
+		// command it wraps — bash treats `! cmd` like `cmd || true`
+		// for errexit purposes.
+		if st.Negated {
+			oldNoErrExit := r.noErrExit
+			r.noErrExit = true
+			r.cmd(ctx, st.Cmd)
+			r.noErrExit = oldNoErrExit
+			// Clear any pending exit propagated by inner stmts
+			// under errexit; the outer `!` will set the final
+			// success/failure below.
+			r.exit.exiting = false
+		} else {
+			r.cmd(ctx, st.Cmd)
+		}
 	}
 	if st.Negated {
 		if r.exit.ok() {
@@ -1084,7 +1098,10 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 						break
 					}
 				}
-				if !r.exit.ok() || r.loopStmtsBroken(ctx, cm.Do) {
+				if r.exit.exiting || r.exit.returning || r.exit.fatalExit {
+					break
+				}
+				if r.loopStmtsBroken(ctx, cm.Do) {
 					break
 				}
 				if y.Post != nil {
