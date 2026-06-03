@@ -993,9 +993,8 @@ var bashOptsTable = [...]bashOpt{
 	},
 	{name: "huponexit", supported: true},
 	{
-		name:         "inherit_errexit",
-		defaultState: true,
-		supported:    true,
+		name:      "inherit_errexit",
+		supported: true,
 	},
 	{
 		name:         "interactive_comments",

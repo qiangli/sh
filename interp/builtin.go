@@ -1457,6 +1457,12 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				*opt = mode == "-s"
 			default: // ""
 				r.printOptLine(arg, *opt, supported)
+				// Bash's `shopt name` returns 0 if set, 1 if not —
+				// useful for `if shopt -q name`-style probes
+				// (and the open form too).
+				if !*opt {
+					exit.code = 1
+				}
 			}
 		}
 		r.updateExpandOpts()

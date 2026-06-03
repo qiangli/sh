@@ -110,9 +110,14 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 			}
 			r2 := r.subshell(false)
 			r2.stdout = w
-			// inherit_errexit: command substitutions inherit the errexit option.
+			// inherit_errexit: bash command substitutions do NOT
+			// inherit `set -e` by default — `$(false; echo ok)`
+			// must echo `ok` even when the caller is under -e.
+			// When inherit_errexit is enabled, copy -e through.
 			if opt, _ := r.bashOptByName("inherit_errexit"); opt != nil && *opt {
 				r2.opts[optErrExit] = r.opts[optErrExit]
+			} else {
+				r2.opts[optErrExit] = false
 			}
 			r2.stmts(ctx, cs.Stmts)
 			r2.exit.exiting = false // subshells don't exit the parent shell
