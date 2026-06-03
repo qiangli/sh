@@ -908,18 +908,35 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				case strings.HasPrefix(text, "reached EOF without matching"):
 					// Bash phrases unclosed brace/paren EOFs as
 					// "unexpected EOF while looking for matching `X'".
-					if strings.Contains(text, "`${`") || strings.Contains(text, "`{`") {
+					// An unclosed bare `{` (block) uses a special
+					// shape that points back at the opening line.
+					switch {
+					case strings.Contains(text, "`${`"):
 						text = "unexpected EOF while looking for matching `}'"
-					} else if strings.Contains(text, "`$(`") || strings.Contains(text, "`(`") {
+					case strings.Contains(text, "`{`"):
+						if openLine := firstBraceLine(src); openLine > 0 {
+							// Map eval-source-relative line back
+							// to the outer-script line by adding
+							// the eval call's own line minus 1.
+							absLine := int(pos.Line()) + openLine - 1
+							text = fmt.Sprintf(
+								"syntax error: unexpected end of file from `{' command on line %d",
+								absLine)
+						} else {
+							text = "unexpected EOF while looking for matching `}'"
+						}
+					case strings.Contains(text, "`$(`") || strings.Contains(text, "`(`"):
 						text = "unexpected EOF while looking for matching `)'"
 					}
 				}
 				r.errf("%s: eval: line %d: %s\n", name, pos.Line(), text)
 				// Bash also echoes the offending source line on a
 				// second `<file>: eval: line N: \`<line>'` line —
-				// except for "unexpected EOF" diagnostics, which
+				// except for "unexpected EOF" / "syntax error:
+				// unexpected end of file" diagnostics, which
 				// already self-describe the unclosed token.
-				if !strings.HasPrefix(text, "unexpected EOF") {
+				if !strings.HasPrefix(text, "unexpected EOF") &&
+					!strings.HasPrefix(text, "syntax error: unexpected end of file") {
 					if line := evalSourceLine(src, int(pe.Pos.Line())); line != "" {
 						r.errf("%s: eval: line %d: `%s'\n", name, pos.Line(), line)
 					}
@@ -2193,6 +2210,49 @@ func offendingToken(src string, pos syntax.Pos) string {
 // evalSourceLine returns the 1-indexed nth line of src with the
 // trailing newline stripped, or "" when n is out of range. Used by
 // the eval builtin to echo the offending line under a parse error.
+// firstBraceLine returns the 1-indexed line of the first bare `{`
+// token in src (skipping over `${`, `$()` insides, and single/double
+// quoted strings) — bash's "from `{' command on line M" diagnostic
+// points back at where the unclosed block started, which we can
+// only approximate from the source.
+func firstBraceLine(src string) int {
+	line := 1
+	for i := 0; i < len(src); i++ {
+		switch src[i] {
+		case '\n':
+			line++
+		case '\\':
+			if i+1 < len(src) {
+				i++
+			}
+		case '\'':
+			for i++; i < len(src) && src[i] != '\''; i++ {
+				if src[i] == '\n' {
+					line++
+				}
+			}
+		case '"':
+			for i++; i < len(src) && src[i] != '"'; i++ {
+				switch src[i] {
+				case '\\':
+					if i+1 < len(src) {
+						i++
+					}
+				case '\n':
+					line++
+				}
+			}
+		case '$':
+			if i+1 < len(src) && (src[i+1] == '{' || src[i+1] == '(') {
+				i++ // skip the `{` / `(`; we don't deeply scan
+			}
+		case '{':
+			return line
+		}
+	}
+	return 0
+}
+
 func evalSourceLine(src string, n int) string {
 	if n <= 0 {
 		return ""
