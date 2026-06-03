@@ -326,7 +326,13 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		args = fp.args()
 		if len(args) == 0 {
 			if r.bashCompatErrors {
-				return failf(2, "printf: usage: %s\n", bashUsage["printf"])
+				// Bash emits the bare `printf: usage: ...` line for
+				// no-args without the `<file>: line N:` prefix (the
+				// prefix is reserved for error conditions; usage on
+				// "no required arg" is informational).
+				r.errf("printf: usage: %s\n", bashUsage["printf"])
+				exit.code = 2
+				return exit
 			}
 			return failf(2, "usage: printf [-v var] format [arguments]\n")
 		}

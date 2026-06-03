@@ -1246,6 +1246,20 @@ func (cfg *Config) expandUser(field string, moreFields bool) (prefix, rest strin
 		return "", field
 	}
 
+	// Bash's `~+` and `~-` expand to PWD and OLDPWD respectively, even
+	// when used as a standalone prefix (`~+`, `~-`) or before a slash
+	// (`~+/foo`, `~-/foo`). Fall through to user-lookup otherwise.
+	switch name {
+	case "+":
+		if vr := cfg.Env.Get("PWD"); vr.IsSet() {
+			return vr.String(), rest
+		}
+	case "-":
+		if vr := cfg.Env.Get("OLDPWD"); vr.IsSet() {
+			return vr.String(), rest
+		}
+	}
+
 	// Not the current user; try via "HOME <name>", otherwise fall back to
 	// os/user. There isn't a way to lookup user home dirs without cgo.
 
