@@ -452,8 +452,15 @@ func bashOSError(err error) string {
 }
 
 func (r *Runner) stop(ctx context.Context) bool {
-	// Some traps trigger on exit, so we do want those to run.
-	if !r.handlingTrap && (r.exit.returning || r.exit.exiting) {
+	// `returning` is a function-scoped flag (set by the `return`
+	// builtin); honour it even inside a trap so a function called
+	// from a DEBUG/ERR trap can exit early. `exiting` is the
+	// script-level exit flag — some traps trigger on exit so we
+	// only honour that one outside trap handlers.
+	if r.exit.returning {
+		return true
+	}
+	if !r.handlingTrap && r.exit.exiting {
 		return true
 	}
 	if err := ctx.Err(); err != nil {
@@ -602,6 +609,16 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			var cmdBuf strings.Builder
 			syntax.NewPrinter().Print(&cmdBuf, cm)
 			r.setVarString("BASH_COMMAND", strings.TrimRight(cmdBuf.String(), "\n"))
+		}
+		// Bash fires DEBUG before each simple command, including
+		// assignment-only forms (`x=2`). With `shopt -s extdebug`,
+		// a trap that returns 2 skips the next command. Fire here
+		// so the assignment-only branch below honors the skip.
+		if len(cm.Args) == 0 && len(cm.Assigns) > 0 && r.trapCallbacks["DEBUG"] != "" {
+			debugCode := r.trapCallback(ctx, r.trapCallbacks["DEBUG"], "debug")
+			if opt, _ := r.bashOptByName("extdebug"); opt != nil && *opt && debugCode == 2 {
+				return
+			}
 		}
 		// Use a new slice, to not modify the slice in the alias map.
 		args := cm.Args
@@ -1234,12 +1251,12 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 	}
 }
 
-func (r *Runner) trapCallback(ctx context.Context, callback, name string) {
+func (r *Runner) trapCallback(ctx context.Context, callback, name string) uint8 {
 	if callback == "" {
-		return // nothing to do
+		return 0 // nothing to do
 	}
 	if r.handlingTrap {
-		return // don't recurse, as that could lead to cycles
+		return 0 // don't recurse, as that could lead to cycles
 	}
 	r.handlingTrap = true
 
@@ -1249,13 +1266,17 @@ func (r *Runner) trapCallback(ctx context.Context, callback, name string) {
 	if err != nil {
 		r.errf(name+"trap: %v\n", err)
 		// ignore errors in the callback
-		return
+		r.handlingTrap = false
+		return 0
 	}
 	oldExit := r.exit
+	r.exit = exitStatus{} // start fresh so we can capture the trap's exit
 	r.stmts(ctx, file.Stmts)
+	trapCode := r.exit.code
 	r.exit = oldExit // traps on EXIT or ERR should not modify the result
 
 	r.handlingTrap = false
+	return trapCode
 }
 
 // flattenAssigns yields each effective syntax.Assign from a declare-
@@ -1692,7 +1713,14 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 	}
 	// Set BASH_COMMAND and fire DEBUG trap before each simple command.
 	r.setVarString("BASH_COMMAND", strings.Join(args, " "))
-	r.trapCallback(ctx, r.trapCallbacks["DEBUG"], "debug")
+	debugCode := r.trapCallback(ctx, r.trapCallbacks["DEBUG"], "debug")
+	// Bash: with `shopt -s extdebug`, a DEBUG trap that returns 2
+	// skips execution of the next command (but doesn't terminate
+	// the shell). The trap-callback already restored r.exit, so we
+	// just bail out of call() before dispatch.
+	if opt, _ := r.bashOptByName("extdebug"); opt != nil && *opt && debugCode == 2 {
+		return
+	}
 	if r.callHandler != nil {
 		var err error
 		args, err = r.callHandler(r.handlerCtx(ctx, handlerKindCall, pos), args)

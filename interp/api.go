@@ -972,7 +972,7 @@ var bashOptsTable = [...]bashOpt{
 	{name: "direxpand"},
 	{name: "dirspell"},
 	{name: "execfail"},
-	{name: "extdebug"},
+	{name: "extdebug", supported: true},
 	{
 		name:         "extquote",
 		defaultState: true,
