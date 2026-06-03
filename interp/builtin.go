@@ -827,8 +827,16 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			// it to look for the sourced script in the current directory.
 			path = args[0]
 		}
-		f, err := r.open(ctx, path, os.O_RDONLY, 0, false)
+		// In bash-compat mode, let r.open print its own bash-shaped
+		// `<file>: line N: <path>: No such file or directory` line and
+		// avoid stacking a redundant `source: ` prefix on top. Outside
+		// compat mode, keep the legacy "source: <go-error>" wording.
+		f, err := r.open(ctx, path, os.O_RDONLY, 0, r.bashCompatErrors)
 		if err != nil {
+			if r.bashCompatErrors {
+				exit.code = 1
+				return exit
+			}
 			return failf(1, "source: %v\n", err)
 		}
 		defer f.Close()

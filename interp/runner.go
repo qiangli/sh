@@ -401,6 +401,22 @@ func (r *Runner) bashErrPrefix(pos syntax.Pos) string {
 	return fmt.Sprintf("%s: line %d: ", name, pos.Line())
 }
 
+// bashOSError formats an os.PathError (or any error) the way bash 5.3
+// formats file-open failures: the syscall reason with its first letter
+// capitalised (`No such file or directory`, `Permission denied`, …),
+// stripped of Go's `open <path>: ` prefix.
+func bashOSError(err error) string {
+	var pe *os.PathError
+	msg := err.Error()
+	if errors.As(err, &pe) {
+		msg = pe.Err.Error()
+	}
+	if msg == "" {
+		return msg
+	}
+	return strings.ToUpper(msg[:1]) + msg[1:]
+}
+
 func (r *Runner) stop(ctx context.Context) bool {
 	// Some traps trigger on exit, so we do want those to run.
 	if !r.handlingTrap && (r.exit.returning || r.exit.exiting) {
@@ -1667,7 +1683,11 @@ func (r *Runner) open(ctx context.Context, path string, flags int, mode os.FileM
 		return f, nil
 	case *os.PathError:
 		if print {
-			r.errf("%v\n", err)
+			if r.bashCompatErrors {
+				r.errf("%s%s: %s\n", r.bashErrPrefix(r.curStmtPos), path, bashOSError(err))
+			} else {
+				r.errf("%v\n", err)
+			}
 		}
 	default: // handler's custom fatal error
 		r.exit.fatal(err)
