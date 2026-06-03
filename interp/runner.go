@@ -883,18 +883,45 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		if opt, _ := r.bashOptByName("nocasematch"); opt != nil && *opt {
 			noCaseMatch = true
 		}
-		for _, ci := range cm.Items {
-			for _, word := range ci.Patterns {
-				pat := r.pattern(word)
-				matchStr := str
-				if noCaseMatch {
-					pat = strings.ToLower(pat)
-					matchStr = strings.ToLower(matchStr)
+		// fallthrough is set when the previous item ended with `;&`,
+		// meaning we run this item's stmts unconditionally.
+		fallthroughActive := false
+		for i, ci := range cm.Items {
+			matched := fallthroughActive
+			if !matched {
+				for _, word := range ci.Patterns {
+					pat := r.pattern(word)
+					matchStr := str
+					if noCaseMatch {
+						pat = strings.ToLower(pat)
+						matchStr = strings.ToLower(matchStr)
+					}
+					if match(pat, matchStr) {
+						matched = true
+						break
+					}
 				}
-				if match(pat, matchStr) {
-					r.stmts(ctx, ci.Stmts)
-					return
+			}
+			if !matched {
+				continue
+			}
+			r.stmts(ctx, ci.Stmts)
+			switch ci.Op {
+			case syntax.Fallthrough:
+				// `;&` — fall into the next item's body unless we're
+				// already at the last one.
+				if i+1 < len(cm.Items) {
+					fallthroughActive = true
+					continue
 				}
+				return
+			case syntax.Resume:
+				// `;;&` — keep evaluating remaining patterns.
+				fallthroughActive = false
+				continue
+			default:
+				// `;;` (Break) or trailing-item-without-op: done.
+				return
 			}
 		}
 	case *syntax.TestClause:
@@ -1035,6 +1062,12 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 						}
 						r.outf("[%s]=%s", k, bashDeclareQuote(v))
 						first = false
+					}
+					// Bash 5.3 prints a trailing space before the
+					// closing paren of an associative-array literal
+					// when the map is non-empty.
+					if !first {
+						r.out(" ")
 					}
 					r.out(")\n")
 				default:
