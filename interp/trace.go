@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 
 	"mvdan.cc/sh/v3/syntax"
@@ -23,9 +24,19 @@ func (r *Runner) tracer() *tracer {
 		return nil
 	}
 
+	out := r.stderr
+	// Honor BASH_XTRACEFD — if it's set to a numeric fd that is
+	// currently open, route xtrace output there instead of stderr.
+	if s := r.envGet("BASH_XTRACEFD"); s != "" {
+		if fd, err := strconv.Atoi(s); err == nil {
+			if f, ok := r.fdTable[fd]; ok && f != nil {
+				out = f
+			}
+		}
+	}
 	return &tracer{
 		printer:   syntax.NewPrinter(),
-		output:    r.stderr,
+		output:    out,
 		needsPlus: true,
 	}
 }
@@ -103,11 +114,18 @@ func (t *tracer) call(cmd string, args ...string) {
 		// fields may be empty for function () {} declarations
 		t.string(cmd)
 	} else if IsBuiltin(cmd) {
-		qs, err := syntax.Quote(s, syntax.LangBash)
-		if err != nil { // should never happen
-			panic(err)
+		// bash quotes each arg separately in xtrace output:
+		// `+ : '|' '&' ';'` rather than `: $'| & ;'`. Match that
+		// by Quote-ing element-by-element.
+		parts := make([]string, len(args))
+		for i, a := range args {
+			q, err := syntax.Quote(a, syntax.LangBash)
+			if err != nil { // should never happen
+				panic(err)
+			}
+			parts[i] = q
 		}
-		t.stringf("%s %s", cmd, qs)
+		t.stringf("%s %s", cmd, strings.Join(parts, " "))
 	} else {
 		t.stringf("%s %s", cmd, s)
 	}

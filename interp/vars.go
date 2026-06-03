@@ -641,6 +641,19 @@ func (r *Runner) setVar(name string, vr expand.Variable) {
 		r.opts[optPosix] = vr.IsSet() && vr.Str != ""
 		r.ecfg.Posix = r.opts[optPosix]
 	}
+	// BASH_XTRACEFD: when assigned, validate that the file
+	// descriptor is open and writable; bash 5.3 emits
+	// "BASH_XTRACEFD: <fd>: invalid value for trace file
+	// descriptor" otherwise and refuses to use it.
+	if name == "BASH_XTRACEFD" && vr.IsSet() && vr.Str != "" {
+		if fd, err := strconv.Atoi(vr.Str); err == nil && fd >= 0 {
+			if _, ok := r.fdTable[fd]; !ok {
+				r.errf("%sBASH_XTRACEFD: %s: invalid value for trace file descriptor\n",
+					r.bashErrPrefix(r.curStmtPos), vr.Str)
+				return
+			}
+		}
+	}
 	if err := r.writeEnv.Set(name, vr); err != nil {
 		// Bash 5.3 attribution: syntax-level assignment failures
 		// inside a function are prefixed with the function name
