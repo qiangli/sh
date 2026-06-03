@@ -224,6 +224,20 @@ func RecoverErrors(maximum int) ParserOption {
 	return func(p *Parser) { p.recoverErrorsMax = maximum }
 }
 
+// HeredocEOFWarning, when set, recovers from an unclosed here-document
+// at end-of-file: instead of failing the parse, the parser treats the
+// content read so far as the heredoc body and calls the provided
+// callback with the warning details. This matches bash 5.3's behaviour
+// of emitting `warning: here-document at line N delimited by
+// end-of-file (wanted "STOP")` to stderr while continuing parsing.
+//
+// The callback's `startLine` is the line of the heredoc opener
+// (`<<STOP`); `eofLine` is the line where EOF was reached; `stop` is
+// the expected closing marker.
+func HeredocEOFWarning(fn func(startLine, eofLine int, stop string)) ParserOption {
+	return func(p *Parser) { p.heredocEOFWarning = fn }
+}
+
 // NewParser allocates a new [Parser] and applies any number of options.
 func NewParser(options ...ParserOption) *Parser {
 	p := &Parser{
@@ -511,6 +525,11 @@ type Parser struct {
 	recoveredErrors  int
 	recoverErrorsMax int
 
+	// heredocEOFWarning, when non-nil, opts in to bash 5.3's behaviour
+	// of treating an unclosed here-document at end-of-file as a
+	// warning instead of a fatal parse error. See [HeredocEOFWarning].
+	heredocEOFWarning func(startLine, eofLine int, stop string)
+
 	forbidNested bool
 
 	// list of pending heredoc bodies
@@ -767,7 +786,15 @@ func (p *Parser) doHeredocs() {
 			r.Hdoc = p.getWord()
 		}
 		if stop := p.hdocStops[len(p.hdocStops)-1]; stop != nil {
-			p.posErr(r.Pos(), "unclosed here-document %#q", stop)
+			if p.heredocEOFWarning != nil {
+				// Bash 5.3 emits a warning and treats whatever was
+				// read up to EOF as the heredoc body, then continues
+				// parsing. r.Hdoc is already populated by getWord /
+				// quotedHdocWord above.
+				p.heredocEOFWarning(int(r.Pos().Line()), int(p.pos.Line()), string(stop))
+			} else {
+				p.posErr(r.Pos(), "unclosed here-document %#q", stop)
+			}
 		}
 		p.hdocStops = p.hdocStops[:len(p.hdocStops)-1]
 	}

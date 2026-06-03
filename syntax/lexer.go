@@ -1214,6 +1214,17 @@ func (p *Parser) advanceLitHdoc(r rune) {
 				}
 			}
 			if r != '\n' {
+				// Hit an unexpected EOF or closing backquote in
+				// the heredoc body. When the parser is in
+				// HeredocEOFWarning mode, surface what we did read
+				// as the body (bash 5.3 keeps the content up to
+				// EOF instead of discarding it). The
+				// `hdocStops[...] != nil` check in doHeredocs is
+				// what actually triggers the warning.
+				if r == utf8.RuneSelf && p.heredocEOFWarning != nil {
+					p.tok = _LitWord
+					p.val = p.endLit()
+				}
 				return // hit an unexpected EOF or closing backquote
 			}
 			for p.quote == hdocBodyTabs && p.peek() == '\t' {

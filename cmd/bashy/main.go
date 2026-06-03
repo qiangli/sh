@@ -217,7 +217,20 @@ func run(r *interp.Runner, reader io.Reader, name string) error {
 	if err != nil {
 		return err
 	}
-	prog, err := syntax.NewParser(syntax.Variant(lang)).Parse(bytes.NewReader(src), name)
+	// Bash 5.3 treats `<<EOF\n...` running off the end of the file as a
+	// warning (not an error) and uses whatever was read up to EOF as
+	// the body. Wire that behaviour through the parser so the
+	// affected tests (comsub-eof, exportfunc, …) behave like bash.
+	hdocWarn := func(startLine, eofLine int, stop string) {
+		prefix := name
+		if prefix == "" {
+			prefix = "bashy: -c"
+		}
+		fmt.Fprintf(os.Stderr,
+			"%s: line %d: warning: here-document at line %d delimited by end-of-file (wanted `%s')\n",
+			prefix, eofLine, startLine, stop)
+	}
+	prog, err := syntax.NewParser(syntax.Variant(lang), syntax.HeredocEOFWarning(hdocWarn)).Parse(bytes.NewReader(src), name)
 	if err != nil {
 		var pe syntax.ParseError
 		if errors.As(err, &pe) {
