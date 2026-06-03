@@ -122,7 +122,17 @@ func bracesSeqRec(word *syntax.Word, yield func(*syntax.Word) bool) bool {
 				lit := &syntax.Lit{}
 				switch {
 				case chars:
-					lit.Value = string(rune(n))
+					// bash 5.3 skips the backslash character
+					// in `{X..Y}` char ranges — likely because
+					// emitting a literal `\` would behave like
+					// a line continuation in subsequent shell
+					// processing. The generated arg is the
+					// empty string at that position.
+					if rune(n) == '\\' {
+						lit.Value = ""
+					} else {
+						lit.Value = string(rune(n))
+					}
 				case padWidth > 0:
 					lit.Value = fmt.Sprintf("%0*d", padWidth, n)
 				default:
