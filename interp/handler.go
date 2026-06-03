@@ -152,7 +152,7 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 		cmd := exec.Cmd{
 			Path:   path,
 			Args:   cmdArgs,
-			Env:    execEnv(hc.Env),
+			Env:    hc.runner.execEnvWithFuncs(),
 			Dir:    hc.Dir,
 			Stdin:  hc.Stdin,
 			Stdout: hc.Stdout,

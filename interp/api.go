@@ -151,6 +151,13 @@ type Runner struct {
 	// variable's array kind on scalar assignment.
 	declAssignContext bool
 
+	// exportedFuncs tracks function names marked for export via
+	// `export -f <name>`. When the runner spawns a child process,
+	// each entry becomes a `BASH_FUNC_<name>%%=() { … }` env var
+	// so the child can re-import the function on startup. Bash's
+	// way of propagating shell functions across `exec`.
+	exportedFuncs map[string]bool
+
 	// argv0 is bash's $0 / $BASH_ARGV0 — initialized from filename
 	// but separately settable by user code. Error-message prefixes
 	// continue to use filename so they stay stable across user

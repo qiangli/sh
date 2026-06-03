@@ -155,6 +155,37 @@ func execEnv(env expand.Environ) []string {
 	return list
 }
 
+// execEnvWithFuncs is like execEnv but also serialises any exported
+// shell functions as bash's `BASH_FUNC_<name>%%=() { body; }` entries.
+// Used when spawning a child process so a `${THIS_SH} -c '<name>'`
+// invocation can re-import the function on startup.
+func (r *Runner) execEnvWithFuncs() []string {
+	list := execEnv(r.writeEnv)
+	if len(r.exportedFuncs) == 0 {
+		return list
+	}
+	for name := range r.exportedFuncs {
+		body, ok := r.Funcs[name]
+		if !ok {
+			continue
+		}
+		var b strings.Builder
+		syntax.NewPrinter().Print(&b, &syntax.FuncDecl{
+			Name: &syntax.Lit{Value: name},
+			Body: body,
+		})
+		// The printer emits "name() { … }"; bash's exported form
+		// drops the name and keeps "() { … }".
+		s := b.String()
+		s = strings.TrimSpace(s)
+		if rest, ok := strings.CutPrefix(s, name); ok {
+			s = strings.TrimSpace(rest)
+		}
+		list = append(list, "BASH_FUNC_"+name+"%%="+s)
+	}
+	return list
+}
+
 func (r *Runner) lookupVar(name string) expand.Variable {
 	if name == "" {
 		panic("variable name must not be empty")

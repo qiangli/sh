@@ -1050,7 +1050,10 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			}
 			declHadNames = true
 			name := as.Name.Value
-			if !syntax.ValidName(name) {
+			// `declare -f <name>` / `export -f <name>` operate on
+			// function names; bash allows arbitrary function names
+			// (e.g. `foo-a`) so skip the identifier check there.
+			if declQuery != "-f" && declQuery != "-F" && !syntax.ValidName(name) {
 				if r.bashCompatErrors {
 					r.errf("%sdeclare: `%s': not a valid identifier\n",
 						r.bashErrPrefix(r.curStmtPos), name)
@@ -1070,8 +1073,22 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				continue
 			}
 			if declQuery == "-f" {
-				// declare -f name: print function definition.
-				// Bash silently returns exit 1 for missing functions.
+				// `export -f <name>` marks the function for export
+				// to child processes via BASH_FUNC_<name>%%=…
+				// envvar. Other `declare -f name` / `typeset -f
+				// name` forms print the function definition. Bash
+				// silently returns exit 1 for missing functions.
+				if cm.Variant.Value == "export" {
+					if _, ok := r.Funcs[name]; !ok {
+						r.exit.code = 1
+						continue
+					}
+					if r.exportedFuncs == nil {
+						r.exportedFuncs = make(map[string]bool)
+					}
+					r.exportedFuncs[name] = true
+					continue
+				}
 				if body := r.Funcs[name]; body != nil {
 					r.outf("%s()\n", name)
 					printer := syntax.NewPrinter()
