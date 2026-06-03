@@ -1370,14 +1370,14 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			// Note that on Windows, syscall.Stdin is of type uintptr.
 			line, err = term.ReadPassword(int(syscall.Stdin))
 		} else {
-			line, err = r.readLine(readCtx, raw)
-		}
-		// Trim at delimiter unless we're in `-N` strict-count mode.
-		if !nstrict && delim != "\n" && len(line) > 0 {
-			if idx := strings.IndexByte(string(line), delim[0]); idx >= 0 {
-				line = line[:idx]
+			delimByte := byte('\n')
+			if len(delim) > 0 {
+				delimByte = delim[0]
 			}
+			line, err = r.readLine(readCtx, raw, delimByte)
 		}
+		// readLine already stops at the configured delimiter and
+		// discards it; nothing left to trim here.
 		_ = delim
 		if readArray {
 			// read -a arrayname: split line into fields and assign to indexed array.
@@ -2357,7 +2357,7 @@ func (r *Runner) printOptLine(name string, enabled, supported bool) {
 	r.outf("%s\t%s\t(%q not supported)\n", name, state, r.optStatusText(!enabled))
 }
 
-func (r *Runner) readLine(ctx context.Context, raw bool) ([]byte, error) {
+func (r *Runner) readLine(ctx context.Context, raw bool, delim byte) ([]byte, error) {
 	if r.stdin == nil {
 		return nil, errors.New("interp: can't read, there's no stdin")
 	}
@@ -2387,11 +2387,13 @@ func (r *Runner) readLine(ctx context.Context, raw bool) ([]byte, error) {
 			case !raw && b == '\\':
 				line = append(line, b)
 				esc = !esc
-			case !raw && b == '\n' && esc:
-				// line continuation
-				line = line[len(line)-1:]
+			case !raw && b == '\n' && esc && delim == '\n':
+				// Backslash-newline is a line continuation only
+				// when the delimiter is the default newline. With
+				// `-d <other>` bash treats newline as ordinary.
+				line = line[:len(line)-1]
 				esc = false
-			case b == '\n':
+			case b == delim:
 				return line, nil
 			default:
 				line = append(line, b)

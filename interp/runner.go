@@ -1788,7 +1788,7 @@ func (r *Runner) selectLoop(ctx context.Context, name string, items []string, do
 				r.errf("%d) %s\n", i+1, word)
 			}
 			r.errf("%s", ps3)
-			line, err := r.readLine(ctx, true)
+			line, err := r.readLine(ctx, true, '\n')
 			if err != nil {
 				// EOF: exit the loop. Bash exits with status 1.
 				r.exit.code = 1

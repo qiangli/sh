@@ -1759,20 +1759,49 @@ func ReadFields(cfg *Config, s string, n int, raw bool) []string {
 	}
 	var fpos []pos
 
+	// ifsSepRune classifies non-whitespace IFS chars, which behave
+	// differently to whitespace ones: each occurrence delimits
+	// exactly one field (so a leading or consecutive run produces
+	// empty fields), while whitespace runs collapse and are
+	// stripped at the edges.
+	isIFSWhitespace := func(r rune) bool {
+		return (r == ' ' || r == '\t' || r == '\n') && cfg.ifsRune(r)
+	}
+	isIFSSeparator := func(r rune) bool {
+		return cfg.ifsRune(r) && !isIFSWhitespace(r)
+	}
+
 	runes := make([]rune, 0, len(s))
 	infield := false
+	sawSep := false
 	esc := false
 	for _, r := range s {
-		if infield {
-			if cfg.ifsRune(r) && (raw || !esc) {
+		consumed := r == '\\' && (raw || !esc)
+		_ = consumed
+		isIFS := cfg.ifsRune(r) && (raw || !esc)
+		if isIFS {
+			if infield {
 				fpos[len(fpos)-1].end = len(runes)
 				infield = false
 			}
+			if isIFSSeparator(r) {
+				if sawSep || len(fpos) == 0 {
+					// Either a leading/consecutive run of
+					// non-whitespace separators (produce an
+					// empty field) or the very first token
+					// is a separator with no prior field —
+					// open and close an empty field at the
+					// current rune index.
+					fpos = append(fpos, pos{start: len(runes), end: len(runes)})
+				}
+				sawSep = true
+			}
 		} else {
-			if !cfg.ifsRune(r) && (raw || !esc) {
+			if !infield {
 				fpos = append(fpos, pos{start: len(runes), end: -1})
 				infield = true
 			}
+			sawSep = false
 		}
 		if r == '\\' {
 			if raw || esc {
@@ -1784,11 +1813,11 @@ func ReadFields(cfg *Config, s string, n int, raw bool) []string {
 		runes = append(runes, r)
 		esc = false
 	}
-	if len(fpos) == 0 {
-		return nil
-	}
 	if infield {
 		fpos[len(fpos)-1].end = len(runes)
+	}
+	if len(fpos) == 0 {
+		return nil
 	}
 
 	switch {
