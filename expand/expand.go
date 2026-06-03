@@ -109,6 +109,13 @@ type Config struct {
 	// (and "~user") that immediately follows a ":" or "=" inside a
 	// single literal — bash's assignment-context tilde rule.
 	tildeInAssign bool
+
+	// Posix mirrors the interpreter's `set -o posix` state. When
+	// true, certain bash-extension behaviours are disabled — in
+	// particular the "argument that looks like an assignment gets
+	// assignment-context tilde expansion" rule. The interpreter
+	// flips this whenever the posix shell option changes.
+	Posix bool
 	// A pointer to a parameter expansion node, if we're inside one.
 	// Necessary for ${LINENO}.
 	curParam *syntax.ParamExp
@@ -560,6 +567,17 @@ func formatInto(sb *strings.Builder, format string, args []string, startTime tim
 				if qerr != nil {
 					quoted = "'" + strings.ReplaceAll(arg, "'", `'\''`) + "'"
 				}
+				// Bash 5.3 prefers backslash-escape over single-quoting
+				// for short shell-special strings. When syntax.Quote
+				// produced `'X'` (single-quoted, single rune wide) and
+				// the rune is a backslash-escapable shell-special
+				// character, rewrite as `\X` to match bash's output.
+				if len(quoted) >= 3 && quoted[0] == '\'' && quoted[len(quoted)-1] == '\'' {
+					inner := quoted[1 : len(quoted)-1]
+					if r, sz := utf8.DecodeRuneInString(inner); sz == len(inner) && isBashBackslashEscapable(r) {
+						quoted = "\\" + string(r)
+					}
+				}
 				sb.WriteString(quoted)
 				fmts = nil
 				continue
@@ -839,6 +857,53 @@ func (cfg *Config) wordField(wps []syntax.WordPart, ql quoteLevel) ([]fieldPart,
 	return field, nil
 }
 
+// wordHasAssignShape reports whether the word's parts begin with a
+// `<name>=` prefix where <name> is a valid shell identifier — i.e.
+// the word looks like an assignment even when it's being passed as a
+// regular command argument. Bash 5.3 applies the tilde-after-colon
+// rule to such arguments in non-posix mode.
+func wordHasAssignShape(wps []syntax.WordPart) bool {
+	if len(wps) == 0 {
+		return false
+	}
+	lit, ok := wps[0].(*syntax.Lit)
+	if !ok {
+		return false
+	}
+	eq := strings.IndexByte(lit.Value, '=')
+	if eq <= 0 {
+		return false
+	}
+	name := lit.Value[:eq]
+	for i, r := range name {
+		if i == 0 {
+			if !(r == '_' || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')) {
+				return false
+			}
+			continue
+		}
+		if !(r == '_' || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')) {
+			return false
+		}
+	}
+	return true
+}
+
+// isBashBackslashEscapable reports whether r is a single shell-special
+// character that bash's `printf %q` prefers to backslash-escape rather
+// than wrap in single-quotes. Multi-character strings still go through
+// single-quoting; this matches bash 5.3's output, where `printf "%q\n"
+// '~'` emits `\~`.
+func isBashBackslashEscapable(r rune) bool {
+	switch r {
+	case '~', '*', '?', '[', ']', '{', '}', '(', ')',
+		'#', '$', '&', '|', ';', '<', '>',
+		'`', '"', '\'', '\\', ' ', '\t':
+		return true
+	}
+	return false
+}
+
 func (cfg *Config) cmdSubst(cs *syntax.CmdSubst) (string, error) {
 	if cfg.CmdSubst == nil {
 		return "", UnexpectedCommandError{Node: cs}
@@ -870,6 +935,17 @@ func (cfg *Config) cmdSubst(cs *syntax.CmdSubst) (string, error) {
 }
 
 func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
+	// Bash 5.3 (non-posix): if a command argument has the shape
+	// `<name>=<rest>` where <name> is a valid identifier, treat the
+	// `<rest>` like an assignment value for tilde-after-colon
+	// expansion. That makes `echo foo=bar:~/x` print
+	// `foo=bar:$HOME/x`, matching bash. The flag is restored at end
+	// of this word so it doesn't leak across siblings.
+	if !cfg.tildeInAssign && !cfg.Posix && wordHasAssignShape(wps) {
+		oldT := cfg.tildeInAssign
+		cfg.tildeInAssign = true
+		defer func() { cfg.tildeInAssign = oldT }()
+	}
 	fields := cfg.fieldsAlloc[:0]
 	curField := cfg.fieldAlloc[:0]
 	allowEmpty := false
@@ -995,6 +1071,9 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 					sb.WriteByte(b)
 				}
 				s = sb.String()
+			}
+			if cfg.tildeInAssign {
+				s = cfg.expandTildesAfterColons(s)
 			}
 			curField = append(curField, fieldPart{val: s})
 		case *syntax.SglQuoted:

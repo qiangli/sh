@@ -242,6 +242,7 @@ func (r *Runner) updateExpandOpts() {
 	r.ecfg.NullGlob = r.opts[optNullGlob]
 	r.ecfg.NoUnset = r.opts[optNoUnset]
 	r.ecfg.ExtGlob = r.opts[optExtGlob]
+	r.ecfg.Posix = r.opts[optPosix]
 }
 
 func (r *Runner) expandErr(err error) {
