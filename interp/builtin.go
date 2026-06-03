@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -209,6 +210,57 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		}
 		exit.exiting = true
 	case "set":
+		if len(args) == 0 {
+			// `set` with no args prints all shell variables in
+			// `name=value` form, alphabetically sorted, values
+			// quoted bash-style. Bash distinguishes scalars,
+			// indexed arrays and associative arrays via the same
+			// rules as `declare -p`'s output minus the `declare -X`
+			// prefix.
+			var names []string
+			r.writeEnv.Each(func(name string, vr expand.Variable) bool {
+				if !vr.IsSet() {
+					return true
+				}
+				names = append(names, name)
+				return true
+			})
+			sort.Strings(names)
+			for _, name := range names {
+				vr := r.writeEnv.Get(name)
+				switch vr.Kind {
+				case expand.Indexed:
+					r.outf("%s=(", name)
+					for i, v := range vr.List {
+						if i > 0 {
+							r.out(" ")
+						}
+						r.outf("[%d]=%s", i, bashSetQuote(v))
+					}
+					if len(vr.List) > 0 {
+						r.out(" ")
+					}
+					r.out(")\n")
+				case expand.Associative:
+					r.outf("%s=(", name)
+					first := true
+					for k, v := range vr.Map {
+						if !first {
+							r.out(" ")
+						}
+						r.outf("[%s]=%s", k, bashSetQuote(v))
+						first = false
+					}
+					if !first {
+						r.out(" ")
+					}
+					r.out(")\n")
+				default:
+					r.outf("%s=%s\n", name, bashSetQuote(vr.Str))
+				}
+			}
+			break
+		}
 		if err := Params(args...)(r); err != nil {
 			return failf(2, "set: %v\n", err)
 		}
@@ -843,7 +895,17 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				if name == "" {
 					name = "bashy"
 				}
-				r.errf("%s: eval: line %d: %s\n", name, pos.Line(), pe.Text)
+				text := pe.Text
+				// Rewrite our generic "statements must be separated"
+				// message to bash's "syntax error near unexpected
+				// token `X'" form when we can identify the
+				// offending token from the source.
+				if text == "statements must be separated by &, ; or a newline" {
+					if tok := offendingToken(src, pe.Pos); tok != "" {
+						text = fmt.Sprintf("syntax error near unexpected token `%s'", tok)
+					}
+				}
+				r.errf("%s: eval: line %d: %s\n", name, pos.Line(), text)
 				// Bash also echoes the offending source line on a
 				// second `<file>: eval: line N: \`<line>'` line, so
 				// the diagnostic is self-contained when seen in a
@@ -1972,6 +2034,46 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		return failf(2, "%s: not supported in this shell\n", name)
 	}
 	return exit
+}
+
+// offendingToken extracts the token starting at pos within src, used
+// to reformat our generic "statements must be separated" parser error
+// into bash's "syntax error near unexpected token `X'" shape. Returns
+// "" when pos is out of range or no token can be identified.
+func offendingToken(src string, pos syntax.Pos) string {
+	col := int(pos.Col())
+	line := int(pos.Line())
+	if line <= 0 || col <= 0 {
+		return ""
+	}
+	// Walk to the start of the requested line.
+	curLine := 1
+	i := 0
+	for ; i < len(src) && curLine < line; i++ {
+		if src[i] == '\n' {
+			curLine++
+		}
+	}
+	// Advance to the requested column (1-indexed).
+	i += col - 1
+	if i >= len(src) {
+		return ""
+	}
+	// Single-char operators bash names verbatim.
+	switch src[i] {
+	case ')', '(', '|', '&', ';', '<', '>', '`':
+		return string(src[i])
+	}
+	// Identifier-ish token: keep reading until whitespace or
+	// another operator.
+	start := i
+	for ; i < len(src); i++ {
+		c := src[i]
+		if c == ' ' || c == '\t' || c == '\n' || c == ';' || c == '&' || c == '|' || c == '<' || c == '>' || c == '(' || c == ')' || c == '`' {
+			break
+		}
+	}
+	return src[start:i]
 }
 
 // evalSourceLine returns the 1-indexed nth line of src with the

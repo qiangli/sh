@@ -417,6 +417,54 @@ func (r *Runner) setVarString(name, value string) {
 // when safe, double-quoted otherwise, falling back to ANSI-C $'...'
 // when v contains characters that double quotes can't represent
 // (control bytes, NULs, non-UTF-8 bytes, etc.).
+// bashSetQuote formats `v` the way bash's `set` (no args) builtin
+// does: no quotes for fully-safe strings, backslash-escape for a
+// single shell-special character, single-quotes for everything else
+// (with `'` itself rendered as `'\''`). Differs from
+// [bashDeclareQuote] (which always double-quotes) and from
+// [syntax.Quote] (which always quotes `#`).
+func bashSetQuote(v string) string {
+	if v == "" {
+		return "''"
+	}
+	if !bashSetNeedsQuoting(v) {
+		return v
+	}
+	// Bash 5.3's `set` falls back to backslash-escape only for the
+	// single-quote character itself — everything else uses single
+	// quotes. Empty result from this if-block falls through to the
+	// general single-quoting case below.
+	if v == "'" {
+		return `\'`
+	}
+	// General case: single-quote, with embedded `'` → `'\''`.
+	return "'" + strings.ReplaceAll(v, "'", `'\''`) + "'"
+}
+
+// bashSetNeedsQuoting reports whether a value contains any character
+// bash's `set` would treat specially. The leading-only chars `#` and
+// `~` are special only at position 0.
+func bashSetNeedsQuoting(v string) bool {
+	for i := 0; i < len(v); i++ {
+		c := v[i]
+		switch c {
+		case ' ', '\t', '\n', '\r', '\v', '\f',
+			'"', '\'', '`', '\\', '$',
+			';', '|', '&', '<', '>', '(', ')',
+			'{', '}', '[', ']', '*', '?', '!':
+			return true
+		case '#', '~', '=':
+			if i == 0 {
+				return true
+			}
+		}
+		if c < 0x20 || c == 0x7f {
+			return true
+		}
+	}
+	return false
+}
+
 func bashDeclareQuote(v string) string {
 	if hasNonPrintable(v) {
 		q, err := syntax.Quote(v, syntax.LangBash)
