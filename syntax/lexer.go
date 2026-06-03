@@ -355,6 +355,17 @@ skipSpace:
 				p.advanceLitNone(r)
 			}
 		case '?', '*', '+', '@', '!':
+			// Bash 5.x `[idx]+=value` inside an array literal. In
+			// the arrayElems quote state, after a `]` (rightBrack)
+			// the parser expects either `=` or `+=`; treat the
+			// latter as `addAssgn` so the parser can branch on
+			// ArrayElem.Append.
+			if r == '+' && p.quote == arrayElems && p.tok == rightBrack && p.peek() == '=' {
+				p.rune()
+				p.rune()
+				p.tok = addAssgn
+				return
+			}
 			if p.extendedGlob() {
 				switch r {
 				case '?':

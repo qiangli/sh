@@ -957,11 +957,15 @@ func (a *ArrayExpr) End() Pos { return posAddCol(a.Rparen, 1) }
 //
 // Index can be nil; for example, declare -a x=(value).
 // Value can be nil; for example, declare -A x=([index]=).
-// Finally, neither can be nil; for example, declare -A x=([index]=value)
+// Finally, neither can be nil; for example, declare -A x=([index]=value).
+// When Append is true, the element was written with the bash 5.x
+// `[index]+=value` form, which appends to the existing element rather
+// than overwriting it.
 type ArrayElem struct {
 	Index    ArithmExpr
 	Value    *Word
 	Comments []Comment
+	Append   bool // [index]+=value
 }
 
 func (a *ArrayElem) Pos() Pos {

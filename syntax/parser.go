@@ -2018,7 +2018,14 @@ func (p *Parser) getAssign(needEqual bool) *Assign {
 					p.curErr("arrays cannot be nested")
 					return nil
 				}
-				p.follow(left, `[x]`, assgn)
+				if p.tok == addAssgn {
+					// Bash 5.x `[idx]+=value` — append to the
+					// existing element rather than overwrite.
+					ae.Append = true
+					p.next()
+				} else {
+					p.follow(left, `[x]`, assgn)
+				}
 			}
 			if ae.Value = p.getWord(); ae.Value == nil {
 				switch p.tok {

@@ -674,29 +674,55 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 	}
 	if valType == "-A" {
 		amap := make(map[string]string, len(elems))
+		// Inherit prev's map when this is a `+=`-style append at the
+		// outer assignment level; per-element `[k]+=v` appends to the
+		// previous value of that key.
+		if as.Append && prev.Map != nil {
+			for k, v := range prev.Map {
+				amap[k] = v
+			}
+		}
 		for _, elem := range elems {
 			k := r.literal(elem.Index.(*syntax.Word))
-			amap[k] = r.literal(elem.Value)
+			v := r.literal(elem.Value)
+			if elem.Append {
+				v = amap[k] + v
+			}
+			amap[k] = v
 		}
 		if !as.Append {
 			prev.Kind = expand.Associative
 			prev.Map = amap
 			return name, prev
 		}
-		// TODO
+		prev.Map = amap
 		return name, prev
 	}
 	// Evaluate values for each array element.
 	elemValues := make([]struct {
 		index  int
 		values []string
+		append bool // [idx]+=value
 	}, len(elems))
 	var index, maxIndex int
+	// Prev's list grows the working buffer when this is a +=-style
+	// outer assignment OR any element uses [idx]+=value (we need to
+	// read the previous element's value before appending).
+	needPrev := as.Append
+	if !needPrev {
+		for _, elem := range elems {
+			if elem.Append {
+				needPrev = true
+				break
+			}
+		}
+	}
 	for i, elem := range elems {
 		if elem.Index != nil {
 			// Index resets our index with a literal value.
 			index = r.arithm(elem.Index)
 			elemValues[i].values = []string{r.literal(elem.Value)}
+			elemValues[i].append = elem.Append
 		} else {
 			// Implicit index, advancing for every word.
 			elemValues[i].values = r.fields(elem.Value)
@@ -705,10 +731,19 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 		index += len(elemValues[i].values)
 		maxIndex = max(maxIndex, index)
 	}
+	if needPrev {
+		maxIndex = max(maxIndex, len(prev.List))
+	}
 	// Flatten down the values.
 	strs := make([]string, maxIndex)
+	if needPrev {
+		copy(strs, prev.List)
+	}
 	for _, ev := range elemValues {
 		for i, str := range ev.values {
+			if ev.append && i == 0 {
+				str = strs[ev.index+i] + str
+			}
 			strs[ev.index+i] = str
 		}
 	}

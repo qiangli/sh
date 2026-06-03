@@ -844,6 +844,14 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					name = "bashy"
 				}
 				r.errf("%s: eval: line %d: %s\n", name, pos.Line(), pe.Text)
+				// Bash also echoes the offending source line on a
+				// second `<file>: eval: line N: \`<line>'` line, so
+				// the diagnostic is self-contained when seen in a
+				// terminal. The "line" here is the eval-arg source
+				// the parser was reading, not the outer script.
+				if line := evalSourceLine(src, int(pe.Pos.Line())); line != "" {
+					r.errf("%s: eval: line %d: `%s'\n", name, pos.Line(), line)
+				}
 				exit.code = 1
 				return exit
 			}
@@ -1964,6 +1972,30 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		return failf(2, "%s: not supported in this shell\n", name)
 	}
 	return exit
+}
+
+// evalSourceLine returns the 1-indexed nth line of src with the
+// trailing newline stripped, or "" when n is out of range. Used by
+// the eval builtin to echo the offending line under a parse error.
+func evalSourceLine(src string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	cur := 1
+	start := 0
+	for i := 0; i < len(src); i++ {
+		if src[i] == '\n' {
+			if cur == n {
+				return src[start:i]
+			}
+			cur++
+			start = i + 1
+		}
+	}
+	if cur == n {
+		return src[start:]
+	}
+	return ""
 }
 
 // bashUsage holds the usage line bash 5.3 prints after a builtin
