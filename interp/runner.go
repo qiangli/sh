@@ -416,6 +416,131 @@ func (r *Runner) errf(format string, a ...any) {
 	fmt.Fprintf(r.stderr, format, a...)
 }
 
+// pureLiteral reports whether all parts of word are literal /
+// quoted-literal tokens (no parameter / command / arithmetic /
+// process substitution). Used by xtrace formatting to decide
+// between "render the source" (`$@`, `$(foo)`) and "expand to a
+// value and re-quote" (`$' '`, `\|`).
+func pureLiteral(word *syntax.Word) bool {
+	if word == nil {
+		return true
+	}
+	for _, p := range word.Parts {
+		switch p.(type) {
+		case *syntax.Lit, *syntax.SglQuoted:
+			// always literal
+		case *syntax.DblQuoted:
+			dq := p.(*syntax.DblQuoted)
+			for _, ip := range dq.Parts {
+				switch ip.(type) {
+				case *syntax.Lit:
+				default:
+					return false
+				}
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// traceArrayLiteral renders an array assignment for `set -x` in
+// bash 5.3's format: each element re-quoted independently via
+// `xtraceQuote`, preserving bash-style minimality (single quotes
+// where possible; backslash-escapes for single metacharacters).
+func traceArrayLiteral(t *tracer, name, op string, elems []*syntax.ArrayElem, r *Runner) {
+	t.stringf("%s%s(", name, op)
+	for i, el := range elems {
+		if i > 0 {
+			t.string(" ")
+		}
+		if el.Index != nil {
+			var buf bytes.Buffer
+			syntax.NewPrinter(syntax.SingleLine(true)).Print(&buf, &syntax.Word{Parts: []syntax.WordPart{
+				&syntax.Lit{Value: "[" + r.literal(el.Index.(*syntax.Word)) + "]"},
+			}})
+			t.string(buf.String() + "=")
+		}
+		// bash xtrace re-quotes purely-literal elements but
+		// keeps parameter expansions / command subs / arithmetic
+		// in their original source form (`$@`, `$(foo)`, …).
+		if pureLiteral(el.Value) {
+			val, _ := expand.LiteralWithQuoteRemoval(r.ecfg, el.Value)
+			t.string(xtraceQuote(val))
+		} else {
+			var buf bytes.Buffer
+			syntax.NewPrinter(syntax.SingleLine(true)).Print(&buf, el.Value)
+			t.string(buf.String())
+		}
+	}
+	t.string(")")
+}
+
+// xtraceQuote renders s the way bash 5.3 prints command/argument
+// values in xtrace output: bare if no shell-meta chars are
+// present, backslash-escape for a single metacharacter,
+// single-quote (with literal tab/newline inside) for anything
+// else with no embedded `'`, otherwise fall back to the default
+// `syntax.Quote`.
+func xtraceQuote(s string) string {
+	if s == "" {
+		return "''"
+	}
+	// Single metacharacter → backslash-escape: `\|`, `\&`, `\;`,
+	// `\(`, `\)`, `\<`, `\>`. Bash xtrace picks this form for
+	// single-byte shell metas.
+	if len(s) == 1 {
+		switch s[0] {
+		case '|', '&', ';', '(', ')', '<', '>':
+			return `\` + s
+		}
+	}
+	// Bare if no chars need quoting.
+	needsQuote := false
+	for _, r := range s {
+		switch r {
+		case ' ', '\t', '\n', '\r', '"', '\'', '\\', '`',
+			'$', '|', '&', ';', '(', ')', '<', '>',
+			'*', '?', '[', '{', '!', '#', '~', '=':
+			needsQuote = true
+		}
+		if !unicodeIsPrint(r) && r != '\t' && r != '\n' {
+			needsQuote = true
+		}
+		if needsQuote {
+			break
+		}
+	}
+	if !needsQuote {
+		return s
+	}
+	// Otherwise wrap in single quotes if the value has no embedded
+	// `'` and no truly unprintable runes; bash uses literal
+	// control chars inside single quotes (`'<TAB>'`, `'<NL>'`).
+	if !strings.ContainsRune(s, '\'') {
+		hasUnprintable := false
+		for _, r := range s {
+			if r != '\t' && r != '\n' && !unicodeIsPrint(r) {
+				hasUnprintable = true
+				break
+			}
+		}
+		if !hasUnprintable {
+			return "'" + s + "'"
+		}
+	}
+	q, err := syntax.Quote(s, syntax.LangBash)
+	if err != nil {
+		return s
+	}
+	return q
+}
+
+func unicodeIsPrint(r rune) bool {
+	return unicode.IsPrint(r)
+}
+
 // compactArithm strips bash-`set -x`-style padding from a printer-
 // rendered arithmetic expression: drops spaces around `=`, `+=`,
 // `-=`, etc., and around comparison/logical operators so the
@@ -843,7 +968,13 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 					op = "+="
 				}
 				if as.Array != nil {
-					trace.expr(as)
+					// bash xtrace re-quotes each array element
+					// rather than rendering the original source
+					// literal — `$' '` becomes `' '`, `\|` stays
+					// as `\|` (since the printer keeps backslash-
+					// escapes), and tab/newline use single-quote
+					// literals.
+					traceArrayLiteral(trace, name, op, as.Array.Elems, r)
 				} else if as.Value != nil {
 					// Bash 5.3 traces the *raw* RHS for `+=` (so
 					// the trace shows the appended chunk, not the

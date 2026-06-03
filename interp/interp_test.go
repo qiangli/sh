@@ -4138,7 +4138,7 @@ var runTestsUnix = []runTest{
 	// echo trace
 	{
 		`set -x; animals=("dog", "cat", "otter"); echo "hello ${animals[*]}"`,
-		`+ animals=("dog", "cat", "otter")
+		`+ animals=(dog, cat, otter)
 + echo 'hello dog, cat, otter'
 hello dog, cat, otter
 `,
