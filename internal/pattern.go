@@ -22,6 +22,21 @@ func ExtendedPatternMatcher(pat string, mode pattern.Mode) (func(string) bool, e
 		panic("ExtendedOperators is only supported with EntireString")
 	}
 
+	// `*(!(p))` and `+(!(p))` patterns embed a negation inside an
+	// extglob quantifier. Detect these specifically and build a
+	// custom matcher — bash matches when the input can be split
+	// into 1+ pieces (or 0+ for `*()`) that each fail to match p.
+	if rep, ok := repeatedNegationMatcher(pat); ok {
+		return rep, nil
+	}
+
+	// `@(<alt1>|<alt2>|…)` containing one or more `!(…)` alts
+	// across the alternatives — recurse per-alternative and OR
+	// the results.
+	if alt, ok := atUnionWithNegationMatcher(pat, mode); ok {
+		return alt, nil
+	}
+
 	// Extended pattern matching operators are always on outside of pathname expansion.
 	expr, err := pattern.Regexp(pat, mode)
 	if err != nil {
@@ -38,6 +53,113 @@ func ExtendedPatternMatcher(pat string, mode pattern.Mode) (func(string) bool, e
 		return nil, err
 	}
 	return rx.MatchString, nil
+}
+
+// atUnionWithNegationMatcher handles `@(<alt>|<alt>|…)` patterns
+// where at least one alternative contains a `!(…)` negation —
+// the alternatives are compiled separately and OR'd together.
+// Returns (matcher, true) if pat matches the shape AND every
+// alt parses; (nil, false) otherwise.
+func atUnionWithNegationMatcher(pat string, mode pattern.Mode) (func(string) bool, bool) {
+	if !strings.HasPrefix(pat, "@(") || !strings.HasSuffix(pat, ")") {
+		return nil, false
+	}
+	inner := pat[len("@("):len(pat)-len(")")]
+	if !strings.Contains(inner, "!(") {
+		return nil, false
+	}
+	// Split top-level `|` only — `!(a|b)` has nested `|` that we
+	// must keep with its group.
+	var alts []string
+	depth := 0
+	last := 0
+	for i := 0; i < len(inner); i++ {
+		switch inner[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+		case '|':
+			if depth == 0 {
+				alts = append(alts, inner[last:i])
+				last = i + 1
+			}
+		}
+	}
+	alts = append(alts, inner[last:])
+	matchers := make([]func(string) bool, len(alts))
+	for i, a := range alts {
+		m, err := ExtendedPatternMatcher(a, mode)
+		if err != nil {
+			return nil, false
+		}
+		matchers[i] = m
+	}
+	return func(name string) bool {
+		for _, m := range matchers {
+			if m(name) {
+				return true
+			}
+		}
+		return false
+	}, true
+}
+
+// repeatedNegationMatcher handles `*(!(p))` / `+(!(p))` patterns.
+// Returns (matcher, true) if pat exactly matches that shape;
+// (nil, false) otherwise.
+func repeatedNegationMatcher(pat string) (func(string) bool, bool) {
+	var quantifier byte
+	switch {
+	case strings.HasPrefix(pat, "*(!(") && strings.HasSuffix(pat, "))"):
+		quantifier = '*'
+	case strings.HasPrefix(pat, "+(!(") && strings.HasSuffix(pat, "))"):
+		quantifier = '+'
+	default:
+		return nil, false
+	}
+	inner := pat[len("*(!("):len(pat)-len("))")]
+	// Reject if the inner pattern itself contains another `!(` —
+	// the simple split logic below can't reason about that.
+	if strings.Contains(inner, "!(") {
+		return nil, false
+	}
+	innerExpr, err := pattern.Regexp("@("+inner+")", pattern.EntireString|pattern.ExtendedOperators)
+	if err != nil {
+		return nil, false
+	}
+	rx, err := regexp.Compile(innerExpr)
+	if err != nil {
+		return nil, false
+	}
+	// Try every partition of name into 1+ pieces (0+ for `*`)
+	// where each piece does NOT match the inner pattern.
+	var canPartition func(name string) bool
+	canPartition = func(name string) bool {
+		if name == "" {
+			return true
+		}
+		for split := 1; split <= len(name); split++ {
+			piece := name[:split]
+			if rx.MatchString(piece) {
+				continue
+			}
+			if canPartition(name[split:]) {
+				return true
+			}
+		}
+		return false
+	}
+	return func(name string) bool {
+		if quantifier == '*' && name == "" {
+			return true
+		}
+		if name == "" {
+			return false
+		}
+		// At least one piece must not match the inner pattern.
+		return canPartition(name)
+	}, true
 }
 
 // extNegatedMatcher handles !(pattern-list) extglob negation,
