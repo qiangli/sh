@@ -407,6 +407,39 @@ func (r *Runner) errf(format string, a ...any) {
 	fmt.Fprintf(r.stderr, format, a...)
 }
 
+// compactArithm strips bash-`set -x`-style padding from a printer-
+// rendered arithmetic expression: drops spaces around `=`, `+=`,
+// `-=`, etc., and around comparison/logical operators so the
+// traced form reads `i=0`, `i<5`, `i++` rather than the shfmt
+// `i = 0`, `i < 5`, `i ++` rendering. Conservative — leaves
+// other whitespace alone.
+func compactArithm(s string) string {
+	out := make([]byte, 0, len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == ' ' && i+1 < len(s) {
+			// drop space before `=`, `+`, `-`, `*`, `/`, `%`,
+			// `<`, `>`, `!`, `&`, `|`, `^`, `?`, `:`, `,` —
+			// the operators bash's xtrace renders unspaced.
+			n := s[i+1]
+			switch n {
+			case '=', '+', '-', '*', '/', '%', '<', '>', '!', '&', '|', '^', '?', ':', ',':
+				continue
+			}
+		}
+		if c == ' ' && len(out) > 0 {
+			// drop space after operator chars (the matching
+			// side of the rule above).
+			switch out[len(out)-1] {
+			case '=', '+', '-', '*', '/', '%', '<', '>', '!', '&', '|', '^', '?', ':', ',':
+				continue
+			}
+		}
+		out = append(out, c)
+	}
+	return string(out)
+}
+
 // applyCaseAttr folds the variable's value in place when its
 // case-modification attributes (`declare -u/-l/-c`) are set.
 // Operates on String, Indexed and Associative kinds; the
@@ -781,15 +814,27 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 
 				// Strangely enough, it seems like Bash prints original
 				// source for arrays, but the expanded value otherwise.
-				// TODO: add test cases for x[i]=y and x+=y.
+				// TODO: add test cases for x[i]=y.
+				op := "="
+				if as.Append {
+					op = "+="
+				}
 				if as.Array != nil {
 					trace.expr(as)
 				} else if as.Value != nil {
-					val, err := syntax.Quote(vr.String(), syntax.LangBash)
+					// Bash 5.3 traces the *raw* RHS for `+=` (so
+					// the trace shows the appended chunk, not the
+					// pre-append concatenated value). For `=` we
+					// keep the expanded form.
+					val := vr.String()
+					if as.Append {
+						val, _ = expand.Literal(r.ecfg, as.Value)
+					}
+					quoted, err := syntax.Quote(val, syntax.LangBash)
 					if err != nil { // should never happen
 						panic(err)
 					}
-					trace.stringf("%s=%s", name, val)
+					trace.stringf("%s%s%s", name, op, quoted)
 				}
 				trace.newLineFlush()
 			}
@@ -823,6 +868,22 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			restores = append(restores, restoreVar{name, prev})
 
 			r.setVar(name, vr)
+			if tracingEnabled && as.Value != nil {
+				op := "="
+				if as.Append {
+					op = "+="
+				}
+				val := vr.String()
+				if as.Append {
+					val, _ = expand.Literal(r.ecfg, as.Value)
+				}
+				quoted, err := syntax.Quote(val, syntax.LangBash)
+				if err != nil {
+					panic(err)
+				}
+				trace.stringf("%s%s%s", name, op, quoted)
+				trace.newLineFlush()
+			}
 		}
 
 		trace.call(fields[0], fields[1:]...)
@@ -988,21 +1049,72 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				}
 			}
 		case *syntax.CStyleLoop:
+			// bash `set -x` traces each of the C-style for-loop
+			// expressions as a separate `+ (( ... ))` line.
+			traceArith := func(expr syntax.ArithmExpr) {
+				if !tracingEnabled || expr == nil {
+					return
+				}
+				var inner bytes.Buffer
+				syntax.NewPrinter(syntax.SingleLine(true)).Print(&inner, &syntax.ArithmCmd{X: expr})
+				rendered := inner.String()
+				rendered = strings.TrimPrefix(rendered, "((")
+				rendered = strings.TrimSuffix(rendered, "))")
+				rendered = strings.TrimSpace(rendered)
+				rendered = compactArithm(rendered)
+				trace.string("(( ")
+				trace.string(rendered)
+				// bash 5.3 quirk: trailing `++` / `--` get a
+				// double space before `))` in the xtrace line.
+				if strings.HasSuffix(rendered, "++") || strings.HasSuffix(rendered, "--") {
+					trace.string(" ")
+				}
+				trace.string(" ))")
+				trace.newLineFlush()
+			}
 			if y.Init != nil {
+				traceArith(y.Init)
 				r.arithm(y.Init)
 			}
-			for y.Cond == nil || r.arithm(y.Cond) != 0 {
+			for {
+				if y.Cond != nil {
+					traceArith(y.Cond)
+					if r.arithm(y.Cond) == 0 {
+						break
+					}
+				}
 				if !r.exit.ok() || r.loopStmtsBroken(ctx, cm.Do) {
 					break
 				}
 				if y.Post != nil {
+					traceArith(y.Post)
 					r.arithm(y.Post)
+				}
+				if y.Cond == nil {
+					// infinite loop; need an explicit break
+					// path — already handled above.
 				}
 			}
 		}
 	case *syntax.FuncDecl:
 		r.setFunc(cm.Name.Value, cm.Body)
 	case *syntax.ArithmCmd:
+		if tracingEnabled {
+			// bash `set -x` traces `((expr))` as
+			// `+ (( <printed-expr> ))` with spaces inside the
+			// double-parens and the inner expression in
+			// compact, no-space-around-operator form.
+			var inner bytes.Buffer
+			syntax.NewPrinter(syntax.SingleLine(true)).Print(&inner, cm)
+			rendered := inner.String()
+			rendered = strings.TrimPrefix(rendered, "((")
+			rendered = strings.TrimSuffix(rendered, "))")
+			rendered = strings.TrimSpace(rendered)
+			trace.string("(( ")
+			trace.string(compactArithm(rendered))
+			trace.string(" ))")
+			trace.newLineFlush()
+		}
 		r.exit.oneIf(r.arithm(cm.X) == 0)
 	case *syntax.LetClause:
 		var val int
