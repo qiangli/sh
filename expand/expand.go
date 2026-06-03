@@ -1896,8 +1896,13 @@ func ReadFields(cfg *Config, s string, n int, raw bool) []string {
 
 	switch {
 	case n == 1:
-		// include heading/trailing IFSs
-		fpos[0].start, fpos[0].end = 0, len(runes)
+		// `read x` (single variable) gets the rest of the line
+		// with leading/trailing IFS whitespace trimmed but the
+		// interior runs preserved — bash's behaviour. Extend
+		// the first field to the end of the last, but keep its
+		// existing leading edge (which already skipped leading
+		// IFS whitespace).
+		fpos[0].end = fpos[len(fpos)-1].end
 		fpos = fpos[:1]
 	case n != -1 && n < len(fpos):
 		// combine to max n fields

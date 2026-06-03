@@ -1449,10 +1449,13 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			})
 		} else {
 			if len(args) == 0 {
-				args = append(args, shellReplyVar)
-			}
-
-			if nstrict {
+				// `read` (no NAMEs) assigns the raw line to
+				// REPLY with leading/trailing IFS whitespace
+				// preserved — bash's "otherwise unmodified"
+				// behaviour. The trimming/splitting only kicks
+				// in with explicit variable names.
+				r.setVarString(shellReplyVar, string(line))
+			} else if nstrict {
 				// `-N` assigns the raw buffer to the first variable
 				// and clears the rest; no field splitting per bash.
 				r.setVarString(args[0], string(line))
