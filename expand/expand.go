@@ -840,12 +840,80 @@ func FieldsSeq(cfg *Config, words ...*syntax.Word) iter.Seq2[string, error] {
 					yield("", err)
 					return
 				}
+				// bash 5.3 performs brace expansion at the text
+				// level, so `$var{x,y}` becomes the two tokens
+				// `$varx` and `$vary` — the `$var` parameter
+				// reference greedily absorbs the trailing
+				// identifier chars. Mirror that here by folding
+				// an unbraced `$var` ParamExp followed by a Lit
+				// that begins with identifier chars into a
+				// single `$varsuffix` ParamExp.
+				mergeIdentAfterParamExp(w)
 				if expandWord(w) {
 					return
 				}
 			}
 		}
 	}
+}
+
+// mergeIdentAfterParamExp folds an unbraced `$var` ParamExp
+// followed by a Lit beginning with identifier characters into a
+// single ParamExp whose Param.Value is the concatenation. bash 5.3
+// performs this textually as part of brace expansion (`$var{x,y}`
+// → `$varx $vary`), and the merge ensures parameter expansion sees
+// the right variable name.
+func mergeIdentAfterParamExp(w *syntax.Word) {
+	if w == nil || len(w.Parts) < 2 {
+		return
+	}
+	out := make([]syntax.WordPart, 0, len(w.Parts))
+	for i := 0; i < len(w.Parts); i++ {
+		p := w.Parts[i]
+		pe, isPE := p.(*syntax.ParamExp)
+		if !isPE || pe.Short == false || pe.Index != nil ||
+			pe.Length || pe.Width || pe.Excl || pe.Repl != nil ||
+			pe.Exp != nil || pe.Slice != nil || pe.Names != 0 {
+			out = append(out, p)
+			continue
+		}
+		j := i + 1
+		for j < len(w.Parts) {
+			lit, ok := w.Parts[j].(*syntax.Lit)
+			if !ok {
+				break
+			}
+			cut := 0
+			for cut < len(lit.Value) {
+				c := lit.Value[cut]
+				if c == '_' || (c >= '0' && c <= '9') ||
+					(c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') {
+					cut++
+					continue
+				}
+				break
+			}
+			if cut == 0 {
+				break
+			}
+			peCopy := *pe
+			peCopy.Param = &syntax.Lit{Value: pe.Param.Value + lit.Value[:cut]}
+			pe = &peCopy
+			if cut == len(lit.Value) {
+				j++ // consumed the whole Lit; advance
+				continue
+			}
+			// Partial consume: rewrite the Lit head into a
+			// trimmed version and stop merging.
+			litCopy := *lit
+			litCopy.Value = lit.Value[cut:]
+			w.Parts[j] = &litCopy
+			break
+		}
+		out = append(out, pe)
+		i = j - 1
+	}
+	w.Parts = out
 }
 
 type fieldPart struct {
