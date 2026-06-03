@@ -1170,12 +1170,20 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			case strings.HasPrefix(a, "+") || strings.HasPrefix(a, "-"):
 				n, err := strconv.Atoi(a[1:])
 				if err != nil {
-					return failf(2, "dirs: %s: invalid number\n", a)
+					r.errf("%sdirs: %s: invalid number\n",
+						r.bashErrPrefix(r.curStmtPos), a)
+					r.errf("dirs: usage: dirs [-clpv] [+N] [-N]\n")
+					exit.code = 1
+					return exit
 				}
 				idx = n
 				idxSign = a[0]
 			default:
-				return failf(2, "dirs: %s: invalid option\n", a)
+				r.errf("%sdirs: %s: invalid option\n",
+					r.bashErrPrefix(r.curStmtPos), a)
+				r.errf("dirs: usage: dirs [-clpv] [+N] [-N]\n")
+				exit.code = 1
+				return exit
 			}
 		}
 		topFirst := make([]string, len(r.dirStack))
@@ -1242,19 +1250,34 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			}
 			r.builtin(ctx, syntax.Pos{}, "dirs", nil)
 		case 1:
+			// bash's pushd treats `+N` / `-N` arguments as a
+			// stack-index rotation; reject other `-…` / `+…`
+			// forms as an "invalid number" usage error before
+			// trying to change directories.
+			arg := args[0]
+			if len(arg) > 1 && (arg[0] == '+' || arg[0] == '-') {
+				if _, err := strconv.Atoi(arg[1:]); err != nil {
+					r.errf("%spushd: %s: invalid number\n",
+						r.bashErrPrefix(r.curStmtPos), arg)
+					r.errf("pushd: usage: pushd [-n] [+N | -N | dir]\n")
+					exit.code = 1
+					return exit
+				}
+				// TODO: actually rotate the stack by +N/-N.
+			}
 			if change {
 				// Push a new top slot first so that changeDir's
 				// "keep dirStack top in sync with r.Dir" update
 				// targets the new slot rather than overwriting the
 				// previous top.
 				r.dirStack = append(r.dirStack, "")
-				if code := r.changeDir(ctx, "pushd", args[0]); code != 0 {
+				if code := r.changeDir(ctx, "pushd", arg); code != 0 {
 					r.dirStack = r.dirStack[:len(r.dirStack)-1]
 					exit.code = code
 					return exit
 				}
 			} else {
-				r.dirStack = append(r.dirStack, args[0])
+				r.dirStack = append(r.dirStack, arg)
 				swap()
 			}
 			r.builtin(ctx, syntax.Pos{}, "dirs", nil)
@@ -1285,6 +1308,20 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			}
 			r.builtin(ctx, syntax.Pos{}, "dirs", nil)
 		default:
+			// `popd +N` / `popd -N` are stack-index ops in
+			// bash; other `-…` / `+…` args are an "invalid
+			// number" usage error.
+			arg := args[0]
+			if len(arg) > 1 && (arg[0] == '+' || arg[0] == '-') {
+				if _, err := strconv.Atoi(arg[1:]); err != nil {
+					r.errf("%spopd: %s: invalid number\n",
+						r.bashErrPrefix(r.curStmtPos), arg)
+					r.errf("popd: usage: popd [-n] [+N | -N]\n")
+					exit.code = 1
+					return exit
+				}
+				// TODO: actually pop at index +N/-N.
+			}
 			return failf(2, "popd: invalid argument\n")
 		}
 	case "return":
