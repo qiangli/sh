@@ -595,6 +595,25 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 	if len(st.Redirs) > 0 {
 		oldFdTable = maps.Clone(r.fdTable)
 	}
+	// bash 5.3 caps the number of here-documents per simple command
+	// (the historical compile-time limit, 16). Beyond that bash
+	// rejects the entire command with "maximum here-document count
+	// exceeded" before executing it.
+	const maxHeredocs = 16
+	hdocCount := 0
+	for _, rd := range st.Redirs {
+		if rd.Op == syntax.Hdoc || rd.Op == syntax.DashHdoc {
+			hdocCount++
+		}
+	}
+	if hdocCount > maxHeredocs {
+		r.errf("%smaximum here-document count exceeded\n", r.bashErrPrefix(st.Pos()))
+		r.exit.code = 1
+		// bash treats the limit as a fatal parser error and
+		// stops executing the rest of the script.
+		r.exit.exiting = true
+		return
+	}
 	for _, rd := range st.Redirs {
 		cls, err := r.redir(ctx, rd)
 		if err != nil {

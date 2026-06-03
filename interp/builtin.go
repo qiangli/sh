@@ -936,7 +936,21 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 						text = "unexpected EOF while looking for matching `)'"
 					}
 				}
-				r.errf("%s: eval: line %d: %s\n", name, pos.Line(), text)
+				// bash reports the eval-time EOF on the line right
+				// after the eval source ran out, not the eval-call
+				// line itself. Add the eval source's line count to
+				// approximate; a trailing `\` in the eval payload
+				// triggers bash's line-continuation reader, so
+				// count one extra line for that case.
+				evalLine := int(pos.Line())
+				if strings.HasPrefix(text, "unexpected EOF") ||
+					strings.HasPrefix(text, "syntax error: unexpected end of file") {
+					evalLine += strings.Count(src, "\n") + 1
+					if strings.HasSuffix(src, "\\") {
+						evalLine++
+					}
+				}
+				r.errf("%s: eval: line %d: %s\n", name, evalLine, text)
 				// Bash also echoes the offending source line on a
 				// second `<file>: eval: line N: \`<line>'` line —
 				// except for "unexpected EOF" / "syntax error:
