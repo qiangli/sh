@@ -121,7 +121,9 @@ func (v Variable) Declared() bool {
 }
 
 // Flags returns the variable's attribute flags in the order used by bash's
-// declare builtin and ${var@a}: type (a/A/n), readonly (r), exported (x).
+// declare builtin and ${var@a}: type (a/A/n), integer (i), readonly (r),
+// exported (x). Bash 5.3 emits `-ai`, `-air`, etc. — type letter first,
+// then `i` for integer, then `r`/`x`.
 func (v Variable) Flags() string {
 	var flags []byte
 	switch v.Kind {
@@ -131,6 +133,9 @@ func (v Variable) Flags() string {
 		flags = append(flags, 'A')
 	case NameRef:
 		flags = append(flags, 'n')
+	}
+	if v.Integer {
+		flags = append(flags, 'i')
 	}
 	if v.ReadOnly {
 		flags = append(flags, 'r')

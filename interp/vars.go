@@ -591,6 +591,14 @@ func (r *Runner) setVar(name string, vr expand.Variable) {
 	if name == "BASH_ARGV0" && vr.IsSet() {
 		r.argv0 = vr.Str
 	}
+	// POSIXLY_CORRECT switches bash into POSIX mode whenever it is
+	// set (and back out when unset). Mirror that here so subsequent
+	// POSIX-gated behaviour (special-builtin assignment persistence,
+	// etc.) kicks in without an explicit `set -o posix`.
+	if name == "POSIXLY_CORRECT" {
+		r.opts[optPosix] = vr.IsSet() && vr.Str != ""
+		r.ecfg.Posix = r.opts[optPosix]
+	}
 	if err := r.writeEnv.Set(name, vr); err != nil {
 		// Bash 5.3 attribution: syntax-level assignment failures
 		// inside a function are prefixed with the function name
@@ -732,10 +740,20 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 				// element through the same arithmetic-evaluate
 				// path; pull the element's prior text from
 				// prev.List so `a[i]+=N` reads N from there.
-				if as.Index != nil && prev.Kind == expand.Indexed {
+				// Bare `a+=N` (no index) on an integer indexed
+				// array targets element 0 — same rule bash uses
+				// for non-integer indexed arrays.
+				switch {
+				case as.Index != nil && prev.Kind == expand.Indexed:
 					k := r.arithm(as.Index)
 					if k >= 0 && k < len(prev.List) {
 						curStr = prev.List[k]
+					} else {
+						curStr = ""
+					}
+				case prev.Kind == expand.Indexed:
+					if len(prev.List) > 0 {
+						curStr = prev.List[0]
 					} else {
 						curStr = ""
 					}
@@ -846,7 +864,18 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 					prev.Str = prev.Map[k] + s
 					return name, prev
 				}
+				break
 			}
+			// `arr+=value` (no index) on an assoc array sets key
+			// "0" — bash treats the bare-scalar append on an
+			// assoc array as `arr[0]+=value`.
+			newMap := maps.Clone(prev.Map)
+			if newMap == nil {
+				newMap = make(map[string]string)
+			}
+			newMap["0"] = newMap["0"] + s
+			prev.Map = newMap
+			return name, prev
 		}
 		return name, prev
 	}
