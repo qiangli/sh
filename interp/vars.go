@@ -710,18 +710,37 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 		// Integer attribute (declare -i): parse the RHS as an
 		// arithmetic expression and evaluate it. For =, the result
 		// replaces the value; for +=, it's added to the current
-		// numeric value.
+		// numeric value (also re-parsed as arithmetic — bash 5.3
+		// honours integer-attribute math even when the prior value
+		// was stored as a literal expression like `4+1`).
 		if prev.Integer && valType != "-a" && valType != "-A" {
-			rhs := 0
-			if s != "" {
-				expr, perr := syntax.NewParser().Arithmetic(strings.NewReader(s))
-				if perr == nil {
-					rhs, _ = expand.Arithm(r.ecfg, expr)
+			arithEval := func(s string) int {
+				if s == "" {
+					return 0
 				}
+				expr, perr := syntax.NewParser().Arithmetic(strings.NewReader(s))
+				if perr != nil || expr == nil {
+					return 0
+				}
+				v, _ := expand.Arithm(r.ecfg, expr)
+				return v
 			}
+			rhs := arithEval(s)
 			if as.Append {
-				cur, _ := strconv.Atoi(prev.Str)
-				rhs = cur + rhs
+				curStr := prev.Str
+				// For indexed arrays the integer-flag bumps each
+				// element through the same arithmetic-evaluate
+				// path; pull the element's prior text from
+				// prev.List so `a[i]+=N` reads N from there.
+				if as.Index != nil && prev.Kind == expand.Indexed {
+					k := r.arithm(as.Index)
+					if k >= 0 && k < len(prev.List) {
+						curStr = prev.List[k]
+					} else {
+						curStr = ""
+					}
+				}
+				rhs = arithEval(curStr) + rhs
 			}
 			prev.Kind = expand.String
 			prev.Str = strconv.Itoa(rhs)
@@ -795,12 +814,39 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 			prev.Kind = expand.String
 			prev.Str += s
 		case expand.Indexed:
+			// `arr[i]+=s` appends `s` onto the existing element
+			// at index `i`. setVarWithIndex receives vr.Str and
+			// writes it into list[k] for us, so seed the scalar
+			// with the prior element's value here.
+			if as.Index != nil {
+				k := r.arithm(as.Index)
+				var cur string
+				if k >= 0 && k < len(prev.List) {
+					cur = prev.List[k]
+				}
+				prev.Kind = expand.String
+				prev.Str = cur + s
+				return name, prev
+			}
+			// Bare `arr+=s` (no index) targets element 0, per
+			// bash's "treat as `arr[0]+=s`" rule.
 			if len(prev.List) == 0 {
 				prev.List = append(prev.List, "")
 			}
 			prev.List[0] += s
 		case expand.Associative:
-			// TODO
+			// `arr[k]+=s` for associative arrays appends `s`
+			// onto the existing value at key `k`. setVarWithIndex
+			// receives vr.Str and writes it to map[k] for us.
+			if as.Index != nil {
+				w, ok := as.Index.(*syntax.Word)
+				if ok {
+					k := r.literal(w)
+					prev.Kind = expand.String
+					prev.Str = prev.Map[k] + s
+					return name, prev
+				}
+			}
 		}
 		return name, prev
 	}
@@ -857,14 +903,16 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 	// Prev's list grows the working buffer when this is a +=-style
 	// outer assignment OR any element uses [idx]+=value (we need to
 	// read the previous element's value before appending).
+	// Inherit prev.List only for an outer-`+=` assignment. Per-element
+	// `[i]+=value` inside a fresh `x=(...)` appends onto whatever the
+	// new array has accumulated so far, not onto the previous value
+	// (bash 5.3 behavior — confirmed against `x=(1 2 [2]+=7 4 5)`).
 	needPrev := as.Append
-	if !needPrev {
-		for _, elem := range elems {
-			if elem.Append {
-				needPrev = true
-				break
-			}
-		}
+	// `arr+=( … )` starts implicit indexes at the existing length —
+	// bash appends new elements to the tail rather than overlaying
+	// position 0. Explicit `[i]=…` still overrides this baseline.
+	if as.Append && prev.Kind == expand.Indexed {
+		index = len(prev.List)
 	}
 	for i, elem := range elems {
 		if elem.Index != nil {
@@ -880,6 +928,28 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 		index += len(elemValues[i].values)
 		maxIndex = max(maxIndex, index)
 	}
+	// Integer attribute on an array (`typeset -i arr; arr=(1+2 3+4)`)
+	// evaluates each element value as an arithmetic expression. Apply
+	// the same to `arr=([0]=7+11)` literals and to per-element `+=`
+	// appends.
+	if prev.Integer {
+		arithEval := func(s string) string {
+			if s == "" {
+				return "0"
+			}
+			expr, perr := syntax.NewParser().Arithmetic(strings.NewReader(s))
+			if perr != nil || expr == nil {
+				return "0"
+			}
+			v, _ := expand.Arithm(r.ecfg, expr)
+			return strconv.Itoa(v)
+		}
+		for i := range elemValues {
+			for j, v := range elemValues[i].values {
+				elemValues[i].values[j] = arithEval(v)
+			}
+		}
+	}
 	if needPrev {
 		maxIndex = max(maxIndex, len(prev.List))
 	}
@@ -891,7 +961,15 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 	for _, ev := range elemValues {
 		for i, str := range ev.values {
 			if ev.append && i == 0 {
-				str = strs[ev.index+i] + str
+				if prev.Integer {
+					// Integer-attribute arrays: `[k]+=N` adds
+					// arithmetically rather than concatenating.
+					cur, _ := strconv.Atoi(strs[ev.index+i])
+					rhs, _ := strconv.Atoi(str)
+					str = strconv.Itoa(cur + rhs)
+				} else {
+					str = strs[ev.index+i] + str
+				}
 			}
 			strs[ev.index+i] = str
 		}
@@ -907,9 +985,14 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 		prev.List = strs
 	case expand.String:
 		prev.Kind = expand.Indexed
+		// String → Indexed: keep the prior scalar at index 0 and
+		// shift the new elements above it.
 		prev.List = append([]string{prev.Str}, strs...)
 	case expand.Indexed:
-		prev.List = append(prev.List, strs...)
+		// strs was sized to include prev.List (needPrev=true) and
+		// already contains its values via the initial copy, so we
+		// replace prev.List with strs rather than concatenating.
+		prev.List = strs
 	case expand.Associative:
 		// TODO
 	default:
