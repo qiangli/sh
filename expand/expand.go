@@ -116,6 +116,14 @@ type Config struct {
 	// assignment-context tilde expansion" rule. The interpreter
 	// flips this whenever the posix shell option changes.
 	Posix bool
+
+	// stripBackslashEscapes, when true, makes the literal-part
+	// expansion perform POSIX quote-removal on unquoted backslash
+	// escapes (\X → X). This is what bash does when expanding a
+	// case-statement subject (and other "literal" contexts);
+	// pattern-context callers leave it false so backslashes can
+	// serve as glob escapes. Set by [LiteralWithQuoteRemoval].
+	stripBackslashEscapes bool
 	// A pointer to a parameter expansion node, if we're inside one.
 	// Necessary for ${LINENO}.
 	curParam *syntax.ParamExp
@@ -207,6 +215,27 @@ func Literal(cfg *Config, word *syntax.Word) (string, error) {
 		return "", nil
 	}
 	cfg = prepareConfig(cfg)
+	field, err := cfg.wordField(word.Parts, quoteNone)
+	if err != nil {
+		return "", err
+	}
+	return cfg.fieldJoin(field), nil
+}
+
+// LiteralWithQuoteRemoval is like [Literal] but also performs POSIX
+// quote-removal: in unquoted literal parts, `\X` collapses to `X`
+// and a trailing `\` is dropped. Parameter-expansion results are
+// left untouched. The case-statement subject and a few other
+// unquoted-word callers need this; pattern callers go through
+// [Pattern] so backslashes serve as glob escapes.
+func LiteralWithQuoteRemoval(cfg *Config, word *syntax.Word) (string, error) {
+	if word == nil {
+		return "", nil
+	}
+	cfg = prepareConfig(cfg)
+	prev := cfg.stripBackslashEscapes
+	cfg.stripBackslashEscapes = true
+	defer func() { cfg.stripBackslashEscapes = prev }()
 	field, err := cfg.wordField(word.Parts, quoteNone)
 	if err != nil {
 		return "", err
@@ -782,6 +811,25 @@ func (cfg *Config) wordField(wps []syntax.WordPart, ql quoteLevel) ([]fieldPart,
 			}
 			if ql == quoteNone && cfg.tildeInAssign {
 				s = cfg.expandTildesAfterColons(s)
+			}
+			// POSIX quote-removal: in an unquoted literal part,
+			// `\X` collapses to `X`. Tag the resulting field-part
+			// as `quoteSingle` so callers that re-apply pattern
+			// escaping (e.g. [Pattern]) treat it as already-quoted
+			// and don't reinterpret remaining bytes.
+			if ql == quoteNone && cfg.stripBackslashEscapes && strings.Contains(s, "\\") {
+				sb := cfg.strBuilder()
+				for j := 0; j < len(s); j++ {
+					b := s[j]
+					if b == '\\' {
+						if j++; j >= len(s) {
+							break
+						}
+						b = s[j]
+					}
+					sb.WriteByte(b)
+				}
+				s = sb.String()
 			}
 			if (ql == quoteDouble || ql == quoteHeredoc) && strings.Contains(s, "\\") {
 				sb := cfg.strBuilder()

@@ -878,7 +878,12 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		trace.expr(cm.Word)
 		trace.string(" in")
 		trace.newLineFlush()
-		str := r.literal(cm.Word)
+		// Case subject undergoes full quote-removal (per POSIX): an
+		// unquoted `\X` collapses to `X` so it can be compared against
+		// patterns that have their own backslash semantics.
+		subj, err := expand.LiteralWithQuoteRemoval(r.ecfg, cm.Word)
+		r.expandErr(err)
+		str := subj
 		noCaseMatch := false
 		if opt, _ := r.bashOptByName("nocasematch"); opt != nil && *opt {
 			noCaseMatch = true
@@ -890,7 +895,15 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			matched := fallthroughActive
 			if !matched {
 				for _, word := range ci.Patterns {
+					prevCode := r.exit.code
 					pat := r.pattern(word)
+					// Bash: if pattern evaluation (e.g. an inner
+					// `$((expr))` arithmetic) failed, bail the case
+					// entirely with the resulting exit code rather
+					// than running any branch.
+					if r.exit.code != prevCode && r.exit.code != 0 {
+						return
+					}
 					matchStr := str
 					if noCaseMatch {
 						pat = strings.ToLower(pat)
