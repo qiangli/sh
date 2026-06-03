@@ -13,3 +13,6 @@ bin/
 /gosh
 /shfmt
 /bashy
+
+# Claude Code session artifacts
+.claude/

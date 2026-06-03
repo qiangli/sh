@@ -183,8 +183,23 @@ func runAll() error {
 	}
 
 	if *command != "" {
+		// Bash 5.3 syntax: `bash -c COMMAND [argv0 [arg1 arg2 …]]`.
+		// The first positional after the -c command sets $0 (used
+		// for parse-error prefixes and as the script name within the
+		// runner). The rest become $1, $2, … . The command body
+		// itself stays in *command.
+		argv0 := ""
+		var posArgs []string
+		if rest := flag.Args(); len(rest) > 0 {
+			argv0 = rest[0]
+			posArgs = rest[1:]
+		}
+		if len(posArgs) > 0 {
+			// Reach the Params option side-effect for free.
+			interp.Params(append([]string{"--"}, posArgs...)...)(r)
+		}
 		loadStartupFiles(r, false)
-		return run(r, strings.NewReader(*command), "")
+		return run(r, strings.NewReader(*command), argv0)
 	}
 	if flag.NArg() == 0 {
 		if term.IsTerminal(int(os.Stdin.Fd())) {
