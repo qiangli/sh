@@ -113,6 +113,13 @@ type Runner struct {
 
 	filename string // only if Node was a File
 
+	// curStmtPos is the position of the currently executing top-level
+	// statement, updated at the top of stmtSync. Error sites that have
+	// no other pos to hand (setVar/readonly, builtin-internal failures
+	// reached via paths that don't carry a Pos) use it to drive
+	// [Runner.bashErrPrefix] so the `<file>: line N:` prefix lands.
+	curStmtPos syntax.Pos
+
 	// argv0 is bash's $0 / $BASH_ARGV0 — initialized from filename
 	// but separately settable by user code. Error-message prefixes
 	// continue to use filename so they stay stable across user

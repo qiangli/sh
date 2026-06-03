@@ -498,7 +498,7 @@ func (r *Runner) setVar(name string, vr expand.Variable) {
 		r.argv0 = vr.Str
 	}
 	if err := r.writeEnv.Set(name, vr); err != nil {
-		r.errf("%s: %v\n", name, err)
+		r.errf("%s%s: %v\n", r.bashErrPrefix(r.curStmtPos), name, err)
 		r.exit.code = 1
 		return
 	}

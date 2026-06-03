@@ -22,8 +22,8 @@ BASH_TEST_TIMEOUT := 15
 ## test-bash: Run bash 5.3 native test suite against bashy (with per-test timeout)
 test-bash: build test-bash-helpers
 	@echo "Running bash 5.3 test suite against bashy ($(BASH_TEST_TIMEOUT)s timeout per test)..."
-	@cd $(BASH_TESTS_DIR) && \
-		export THIS_SH=$$(cd ../../.. && pwd)/$(BASHY) && \
+	@BASHY_ABS=$$(pwd)/$(BASHY); cd $(BASH_TESTS_DIR) && \
+		export THIS_SH=$$BASHY_ABS && \
 		export PATH=$$PWD:$$PATH && \
 		export BASH_TSTOUT=$${TMPDIR:-/tmp}/bashy-tstout-$$$$ && \
 		passed=0 && failed=0 && skipped=0 && timeout_count=0 && \

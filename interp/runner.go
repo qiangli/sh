@@ -468,6 +468,8 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 	// see the in-stmt value and skip closing for exec's persistent fds.
 	defer func() { r.keepRedirs = false }()
 
+	r.curStmtPos = st.Pos()
+
 	oldIn, oldOut, oldErr := r.stdin, r.stdout, r.stderr
 	// Snapshot fdTable only when this statement has redirects that
 	// might mutate it. A coproc statement registers fds in fdTable from
