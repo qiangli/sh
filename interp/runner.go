@@ -406,6 +406,45 @@ func (r *Runner) errf(format string, a ...any) {
 	fmt.Fprintf(r.stderr, format, a...)
 }
 
+// assocKeysInBashOrder returns the keys of an associative-array map
+// in the order bash 5.3 iterates them: bucket index ascending, where
+// each key's bucket = FNV-1 hash mod 1024 (bash's
+// `ASSOC_HASH_BUCKETS`). Ties (collisions) are broken by insertion
+// order — but since Go maps don't preserve insertion, fall back to
+// lexical key order so the output is at least deterministic.
+func assocKeysInBashOrder(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort := func(i, j int) bool {
+		bi := bashAssocBucket(keys[i])
+		bj := bashAssocBucket(keys[j])
+		if bi != bj {
+			return bi < bj
+		}
+		return keys[i] < keys[j]
+	}
+	for i := 1; i < len(keys); i++ {
+		for j := i; j > 0 && sort(j, j-1); j-- {
+			keys[j-1], keys[j] = keys[j], keys[j-1]
+		}
+	}
+	return keys
+}
+
+// bashAssocBucket computes the bucket index bash 5.3 uses to store
+// an associative-array key — FNV-1 with the historical initial
+// value (2166136261) and prime (16777619), modulo 1024.
+func bashAssocBucket(s string) uint32 {
+	i := uint32(2166136261)
+	for _, c := range []byte(s) {
+		i = i * 16777619
+		i = i ^ uint32(c)
+	}
+	return i % 1024
+}
+
 // validExportedFuncName reports whether name is acceptable as the
 // payload of `export -f <name>`. Bash 5.3 refuses to export
 // functions whose names contain `=` or `/` (or are otherwise
@@ -1211,7 +1250,8 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				case expand.Associative:
 					r.outf("declare -%s %s=(", flags, name)
 					first := true
-					for k, v := range vr.Map {
+					for _, k := range assocKeysInBashOrder(vr.Map) {
+						v := vr.Map[k]
 						if !first {
 							r.out(" ")
 						}

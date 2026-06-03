@@ -892,7 +892,15 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 	elems := as.Array.Elems
 	if valType == "" {
 		valType = "-a" // indexed
-		if len(elems) > 0 && stringIndex(elems[0].Index) {
+		switch {
+		case as.Append && prev.Kind == expand.Associative:
+			// `assoc+=([key]=value)` on an already-associative
+			// var preserves the assoc kind even when the index
+			// is a bare literal, not a quoted string. Plain
+			// `assoc=(…)` (no `+=`) still falls through to the
+			// inference below for back-compat.
+			valType = "-A"
+		case len(elems) > 0 && stringIndex(elems[0].Index):
 			valType = "-A" // associative
 		}
 	}
