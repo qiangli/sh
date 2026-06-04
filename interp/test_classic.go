@@ -138,9 +138,12 @@ func (p *testParser) testExprBase(fval string) syntax.TestExpr {
 	default:
 		u := &syntax.UnaryTest{Op: op}
 		p.next()
-		if p.eof {
-			// make [ -e ] fall back to [ -n -e ], i.e. use
-			// the operator as an argument
+		// Bash 5.3: a unary operator at the end of args, OR followed
+		// by `)` (group closer) without an explicit operand, falls
+		// back to the 1-arg form — the operator is treated as a
+		// literal non-empty string (true). Covers `[ -e ]`,
+		// `( ! -a )`, etc.
+		if p.eof || p.val == ")" {
 			return &syntax.Word{Parts: []syntax.WordPart{
 				&syntax.Lit{Value: op.String()},
 			}}

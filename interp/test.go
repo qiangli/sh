@@ -235,12 +235,11 @@ func (r *Runner) unTest(ctx context.Context, op syntax.UnTestOperator, x string)
 		info, err := r.stat(ctx, x)
 		return err == nil && info.Size() > 0
 	case syntax.TsFdTerm:
-		// Bash 5.3: `-t N` silently returns false when N is
-		// not a parseable integer (whereas `-eq` / `-lt` / etc.
-		// raise `integer expected`). Mirror that: do NOT set
-		// testIntErr here.
+		// bash 5.3: `-t N` requires N to be an integer; emit
+		// "<X>: integer expected" with exit 2 otherwise.
 		fd, err := strconv.ParseInt(strings.TrimSpace(x), 10, 64)
 		if err != nil {
+			r.testIntErr = x
 			return false
 		}
 		var f any
