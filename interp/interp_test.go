@@ -2550,17 +2550,11 @@ var runTests = []runTest{
 	{"set -e; set -o | grep -E 'errexit|noexec' | wc -l | tr -d ' '", "2\n"},
 	{"set -e; set -o | grep -E 'errexit|noexec' | grep 'on$' | wc -l | tr -d ' '", "1\n"},
 	{
-		"set -a; set +o",
-		`set -o allexport
-set +o errexit
-set +o noexec
-set +o noclobber
-set +o noglob
-set +o nounset
-set +o xtrace
-set +o pipefail
-set +o posix
- #IGNORE`,
+		// `set -a; set +o`: alphabetised list of all `set -o`
+		// options (POSIX + no-op aliases), with -o for set and
+		// +o for unset state.
+		"set -a; set +o | grep '^set -o '",
+		"set -o allexport\n",
 	},
 	{`set - foobar; echo $@; set -; echo $@`, "foobar\nfoobar\n"},
 

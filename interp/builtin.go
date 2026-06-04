@@ -1826,14 +1826,31 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			showSet := mode == "" || mode == "-s"
 			showUnset := mode == "" || mode == "-u"
 			if posixOpts {
+				// Build the combined list: real POSIX options
+				// from posixOptsTable, plus all no-op aliases
+				// (history, hashall, etc.) so `set -o` matches
+				// bash's output. Sort alphabetically.
+				type oentry struct {
+					name    string
+					enabled bool
+				}
+				var list []oentry
 				for i, opt := range &posixOptsTable {
-					enabled := r.opts[i]
-					if (enabled && !showSet) || (!enabled && !showUnset) {
+					list = append(list, oentry{opt.name, r.opts[i]})
+				}
+				for name := range noOpSetOptions {
+					list = append(list, oentry{name, false})
+				}
+				sort.Slice(list, func(i, j int) bool { return list[i].name < list[j].name })
+				for _, e := range list {
+					if (e.enabled && !showSet) || (!e.enabled && !showUnset) {
 						continue
 					}
-					emitOpt(opt.name, enabled, true)
+					emitOpt(e.name, e.enabled, true)
 				}
-			} else {
+				break
+			}
+			{
 				names := make([]string, len(bashOptsTable))
 				for i, opt := range bashOptsTable {
 					names[i] = opt.name

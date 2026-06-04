@@ -21,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strconv"
 	"sync/atomic"
 	"time"
@@ -595,18 +596,47 @@ func Params(args ...string) RunnerOption {
 			}
 			value := fp.value()
 			if value == "" && enable {
+				// `set -o` (no name): bash lists all options
+				// including no-op aliases (history, hashall,
+				// emacs, etc.) sorted alphabetically. Build the
+				// combined list and emit.
+				type oentry struct {
+					name    string
+					enabled bool
+				}
+				var list []oentry
 				for i, opt := range &posixOptsTable {
-					r.printOptLine(opt.name, r.opts[i], true)
+					list = append(list, oentry{opt.name, r.opts[i]})
+				}
+				for n := range noOpSetOptions {
+					list = append(list, oentry{n, false})
+				}
+				sort.Slice(list, func(i, j int) bool { return list[i].name < list[j].name })
+				for _, e := range list {
+					r.printOptLine(e.name, e.enabled, true)
 				}
 				continue
 			}
 			if value == "" && !enable {
+				// `set +o` (no name): same set, reusable form.
+				type oentry struct {
+					name    string
+					enabled bool
+				}
+				var list []oentry
 				for i, opt := range &posixOptsTable {
+					list = append(list, oentry{opt.name, r.opts[i]})
+				}
+				for n := range noOpSetOptions {
+					list = append(list, oentry{n, false})
+				}
+				sort.Slice(list, func(i, j int) bool { return list[i].name < list[j].name })
+				for _, e := range list {
 					setFlag := "+o"
-					if r.opts[i] {
+					if e.enabled {
 						setFlag = "-o"
 					}
-					r.outf("set %s %s\n", setFlag, opt.name)
+					r.outf("set %s %s\n", setFlag, e.name)
 				}
 				continue
 			}
