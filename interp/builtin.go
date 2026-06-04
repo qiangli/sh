@@ -1062,7 +1062,17 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			exit.code = 2
 			return exit
 		}
+		r.testIntErr = ""
 		exit.oneIf(r.bashTest(ctx, expr, true) == "")
+		if r.testIntErr != "" {
+			// bash: `<file>: line N: test: <arg>: integer expected` (exit 2).
+			// The `[` form uses `[` instead of `test` as the inner name.
+			inner := name
+			r.errf("%s%s: %s: integer expected\n",
+				r.bashErrPrefix(pos), inner, r.testIntErr)
+			r.testIntErr = ""
+			exit.code = 2
+		}
 	case "exec":
 		// TODO: Consider unix.Exec, i.e. actually replacing
 		// the process. It's in theory what a shell should do,

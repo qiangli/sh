@@ -300,6 +300,13 @@ type Runner struct {
 	// call setrlimit (would affect the whole process and need
 	// permissions); the map is purely cosmetic.
 	ulimitOverride map[string]string
+
+	// testIntErr is set non-empty when an integer test operator
+	// (`-eq`, `-lt`, …) saw a non-integer operand; the test
+	// builtin uses this to mirror bash's "integer expected" error
+	// and exit 2 after binTest returns. Cleared on next test
+	// builtin entry.
+	testIntErr string
 }
 
 // exitStatus holds the state of the shell after running one command.

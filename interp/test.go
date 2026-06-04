@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"golang.org/x/term"
@@ -52,7 +53,7 @@ func (r *Runner) bashTest(ctx context.Context, expr syntax.TestExpr, classic boo
 			}
 			return ""
 		}
-		if r.binTest(ctx, x.Op, r.bashTest(ctx, x.X, classic), r.bashTest(ctx, x.Y, classic)) {
+		if r.binTest(ctx, x.Op, r.bashTest(ctx, x.X, classic), r.bashTest(ctx, x.Y, classic), classic) {
 			return "1"
 		}
 		return ""
@@ -65,7 +66,7 @@ func (r *Runner) bashTest(ctx context.Context, expr syntax.TestExpr, classic boo
 	return ""
 }
 
-func (r *Runner) binTest(ctx context.Context, op syntax.BinTestOperator, x, y string) bool {
+func (r *Runner) binTest(ctx context.Context, op syntax.BinTestOperator, x, y string, classic bool) bool {
 	switch op {
 	case syntax.TsReMatch:
 		pat := y
@@ -109,18 +110,44 @@ func (r *Runner) binTest(ctx context.Context, op syntax.BinTestOperator, x, y st
 			return false
 		}
 		return os.SameFile(info1, info2)
-	case syntax.TsEql:
-		return atoi(x) == atoi(y)
-	case syntax.TsNeq:
-		return atoi(x) != atoi(y)
-	case syntax.TsLeq:
-		return atoi(x) <= atoi(y)
-	case syntax.TsGeq:
-		return atoi(x) >= atoi(y)
-	case syntax.TsLss:
-		return atoi(x) < atoi(y)
-	case syntax.TsGtr:
-		return atoi(x) > atoi(y)
+	case syntax.TsEql, syntax.TsNeq, syntax.TsLeq, syntax.TsGeq, syntax.TsLss, syntax.TsGtr:
+		// Classic `test` / `[`: validate operand is an integer
+		// and emit bash's "integer expected" diagnostic via the
+		// runner-scoped testIntErr field. `[[ ]]` does
+		// arithmetic evaluation instead — fall through to the
+		// best-effort atoi where unset/non-numeric is 0.
+		var xn, yn int64
+		if classic {
+			var err error
+			xn, err = strconv.ParseInt(strings.TrimSpace(x), 10, 64)
+			if err != nil {
+				r.testIntErr = x
+				return false
+			}
+			yn, err = strconv.ParseInt(strings.TrimSpace(y), 10, 64)
+			if err != nil {
+				r.testIntErr = y
+				return false
+			}
+		} else {
+			xn = atoi(x)
+			yn = atoi(y)
+		}
+		switch op {
+		case syntax.TsEql:
+			return xn == yn
+		case syntax.TsNeq:
+			return xn != yn
+		case syntax.TsLeq:
+			return xn <= yn
+		case syntax.TsGeq:
+			return xn >= yn
+		case syntax.TsLss:
+			return xn < yn
+		case syntax.TsGtr:
+			return xn > yn
+		}
+		return false
 	case syntax.AndTest:
 		return x != "" && y != ""
 	case syntax.OrTest:
