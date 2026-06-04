@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"mvdan.cc/sh/v3/internal"
@@ -716,20 +717,24 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 				if len(args) > 0 {
 					arg, args = args[0], args[1:]
 				}
-				quoted, qerr := syntax.Quote(arg, syntax.LangBash)
-				if qerr != nil {
-					quoted = "'" + strings.ReplaceAll(arg, "'", `'\''`) + "'"
-				}
-				// Bash 5.3 prefers backslash-escape over single-quoting
-				// for short shell-special strings. When syntax.Quote
-				// produced `'X'` (single-quoted, single rune wide) and
-				// the rune is a backslash-escapable shell-special
-				// character, rewrite as `\X` to match bash's output.
-				if len(quoted) >= 3 && quoted[0] == '\'' && quoted[len(quoted)-1] == '\'' {
-					inner := quoted[1 : len(quoted)-1]
-					if r, sz := utf8.DecodeRuneInString(inner); sz == len(inner) && isBashBackslashEscapable(r) {
-						quoted = "\\" + string(r)
+				// bash's `printf %q` strategy:
+				//   - All chars printable AND no shell-special:
+				//     no quoting.
+				//   - All chars printable, some shell-special:
+				//     backslash-escape each special char.
+				//   - Any non-printable / invalid-UTF-8 byte:
+				//     fall back to syntax.Quote (`$'…'` form).
+				quoted := bashPrintfQuote(arg)
+				if quoted == "" && arg != "" {
+					// fallback: control chars present, use $'…'
+					q, qerr := syntax.Quote(arg, syntax.LangBash)
+					if qerr != nil {
+						q = "'" + strings.ReplaceAll(arg, "'", `'\''`) + "'"
 					}
+					quoted = q
+				}
+				if arg == "" {
+					quoted = "''"
 				}
 				// Honor the width/precision specifier (`%-10q`,
 				// `%10q`, `%.5q`, …) by passing the quoted result
@@ -1204,6 +1209,57 @@ func isBashBackslashEscapable(r rune) bool {
 	case '~', '*', '?', '[', ']', '{', '}', '(', ')',
 		'#', '$', '&', '|', ';', '<', '>',
 		'`', '"', '\'', '\\', ' ', '\t':
+		return true
+	}
+	return false
+}
+
+// bashPrintfQuote emits the bash-`printf %q` style quoting: leave
+// fully-safe strings unchanged, backslash-escape any shell-special
+// characters when the whole string is printable, and return an empty
+// string to signal the caller that control characters were found and
+// a `$'...'` fallback is required.
+func bashPrintfQuote(s string) string {
+	if s == "" {
+		return ""
+	}
+	allPrintable := true
+	anyEscapable := false
+	anyShellMeta := false
+	for _, r := range s {
+		if r == utf8.RuneError || !unicode.IsPrint(r) {
+			allPrintable = false
+			break
+		}
+		if isBashBackslashEscapable(r) {
+			anyEscapable = true
+			anyShellMeta = true
+		}
+	}
+	if !allPrintable {
+		return ""
+	}
+	if !anyShellMeta && !isKeywordPrintfQuote(s) {
+		return s
+	}
+	var b strings.Builder
+	for _, r := range s {
+		if anyEscapable && isBashBackslashEscapable(r) {
+			b.WriteByte('\\')
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// isKeywordPrintfQuote returns true if `s` is a shell keyword that
+// would change meaning if unquoted. Mirrors the keyword set checked
+// by syntax.Quote.
+func isKeywordPrintfQuote(s string) bool {
+	switch s {
+	case "if", "then", "elif", "else", "fi", "for", "in", "do",
+		"done", "while", "until", "case", "esac", "function",
+		"select", "{", "}", "!", "[[", "]]", "time", "coproc":
 		return true
 	}
 	return false
