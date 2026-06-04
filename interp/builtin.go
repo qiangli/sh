@@ -1838,8 +1838,8 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				for i, opt := range &posixOptsTable {
 					list = append(list, oentry{opt.name, r.opts[i]})
 				}
-				for name := range noOpSetOptions {
-					list = append(list, oentry{name, false})
+				for name, on := range noOpSetOptions {
+					list = append(list, oentry{name, on})
 				}
 				sort.Slice(list, func(i, j int) bool { return list[i].name < list[j].name })
 				for _, e := range list {

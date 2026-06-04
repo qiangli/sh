@@ -2550,10 +2550,11 @@ var runTests = []runTest{
 	{"set -e; set -o | grep -E 'errexit|noexec' | wc -l | tr -d ' '", "2\n"},
 	{"set -e; set -o | grep -E 'errexit|noexec' | grep 'on$' | wc -l | tr -d ' '", "1\n"},
 	{
-		// `set -a; set +o`: alphabetised list of all `set -o`
-		// options (POSIX + no-op aliases), with -o for set and
-		// +o for unset state.
-		"set -a; set +o | grep '^set -o '",
+		// `set -a; set +o`: confirm the explicitly-set allexport
+		// is reflected as `set -o allexport`. The no-op aliases
+		// (history, monitor, …) interleave but we just look for
+		// the line we care about.
+		"set -a; set +o | grep '^set -o allexport$'",
 		"set -o allexport\n",
 	},
 	{`set - foobar; echo $@; set -; echo $@`, "foobar\nfoobar\n"},

@@ -608,8 +608,8 @@ func Params(args ...string) RunnerOption {
 				for i, opt := range &posixOptsTable {
 					list = append(list, oentry{opt.name, r.opts[i]})
 				}
-				for n := range noOpSetOptions {
-					list = append(list, oentry{n, false})
+				for n, on := range noOpSetOptions {
+					list = append(list, oentry{n, on})
 				}
 				sort.Slice(list, func(i, j int) bool { return list[i].name < list[j].name })
 				for _, e := range list {
@@ -627,8 +627,8 @@ func Params(args ...string) RunnerOption {
 				for i, opt := range &posixOptsTable {
 					list = append(list, oentry{opt.name, r.opts[i]})
 				}
-				for n := range noOpSetOptions {
-					list = append(list, oentry{n, false})
+				for n, on := range noOpSetOptions {
+					list = append(list, oentry{n, on})
 				}
 				sort.Slice(list, func(i, j int) bool { return list[i].name < list[j].name })
 				for _, e := range list {
@@ -977,24 +977,29 @@ var posixOptsTable = [...]posixOpt{
 // pass but which we silently accept without any runtime effect. This is
 // the long-name set; the short-flag set is in
 // [posixOptByFlag] / [Params].
+// noOpSetOptions maps each `set -o NAME` we accept-and-ignore to its
+// default state in bash 5.3 (true = on, false = off). The state isn't
+// tracked per-runner; the value just lets the listing form match bash.
 var noOpSetOptions = map[string]bool{
-	"history":              true, // set -H (history expansion, interactive only)
-	"histexpand":           true, // alias for history
-	"hashcmds":             true, // set -h
-	"hashall":              true, // alias for hashcmds
-	"verbose":              true, // set -v
-	"monitor":              true, // set -m (job control)
-	"vi":                   true, // set -o vi
-	"emacs":                true, // set -o emacs
-	"interactive-comments": true, // already implied for non-interactive
-	"ignoreeof":            true, // interactive only
-	"physical":             true, // set -P (cd resolves symlinks)
-	"privileged":           true, // set -p
-	"functrace":            true, // set -T (DEBUG/RETURN trap inheritance)
-	"braceexpand":          true, // set -B (we always brace-expand)
-	"keyword":              true, // set -k
-	"notify":               true, // set -b
-	"onecmd":               true, // set -t
+	"history":              true,  // on by default
+	"histexpand":           true,  // alias for history
+	"hashcmds":             false, // set -h on for bash interactive
+	"hashall":              true,  // alias for hashcmds (on in bash)
+	"verbose":              false,
+	"monitor":              true, // job control on in bash by default
+	"vi":                   false,
+	"emacs":                true, // bash defaults emacs editor on
+	"interactive-comments": true,
+	"ignoreeof":            false,
+	"physical":             false,
+	"privileged":           false,
+	"functrace":            false,
+	"braceexpand":          true, // always on
+	"keyword":              false,
+	"notify":               false,
+	"onecmd":               false,
+	"errtrace":             false, // set -E, listed by bash
+	"nolog":                false, // listed by bash
 }
 
 var bashOptsTable = [...]bashOpt{
