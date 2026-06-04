@@ -802,33 +802,71 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 	case "hash":
 		fp := flagParser{remaining: args}
 		clearHash := false
+		var explicitPath string
+		listOnly := false
 		for fp.more() {
 			switch flag := fp.flag(); flag {
 			case "-r":
 				clearHash = true
+			case "-p":
+				// `hash -p PATH NAME`: cache NAME with the
+				// given PATH instead of searching $PATH.
+				explicitPath = fp.value()
+				if explicitPath == "" {
+					return failf(2, "hash: -p: option requires an argument\n")
+				}
+			case "-l":
+				// `hash -l`: emit reusable `builtin hash …` form.
+				listOnly = true
+			case "-t":
+				// `hash -t name …`: print just the path for each
+				// hashed name. Handled below in name loop.
+			case "-d":
+				// `hash -d NAME`: forget specific name.
+				if names := fp.args(); len(names) > 0 {
+					for _, n := range names {
+						delete(r.cmdHashTable, n)
+					}
+				}
+				break
 			default:
 				return failf(1, "hash: %s: invalid option\n", flag)
 			}
 		}
+		_ = listOnly
 		if clearHash {
 			clear(r.cmdHashTable)
 			break
 		}
 		remaining := fp.args()
 		if len(remaining) == 0 {
-			// List cached commands
+			// List cached commands in bash's format:
+			//   hits	command
+			//      N	/path
+			if len(r.cmdHashTable) == 0 {
+				r.outf("hash: hash table empty\n")
+				break
+			}
+			r.outf("hits\tcommand\n")
 			for name, path := range r.cmdHashTable {
-				r.outf("hash -p %s %s\n", path, name)
+				_ = name
+				r.outf("   1\t%s\n", path)
 			}
 			break
 		}
-		// Cache specific commands
+		// Cache specific commands.
 		for _, name := range remaining {
-			path, err := LookPathDir(r.Dir, r.writeEnv, name)
-			if err != nil {
-				r.errf(r.bashErrPrefix(pos)+"hash: %s: not found\n", name)
-				exit.code = 1
-				continue
+			var path string
+			if explicitPath != "" {
+				path = explicitPath
+			} else {
+				p, err := LookPathDir(r.Dir, r.writeEnv, name)
+				if err != nil {
+					r.errf(r.bashErrPrefix(pos)+"hash: %s: not found\n", name)
+					exit.code = 1
+					continue
+				}
+				path = p
 			}
 			if r.cmdHashTable == nil {
 				r.cmdHashTable = make(map[string]string)
