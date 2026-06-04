@@ -690,6 +690,12 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 				fmts = append(fmts, c)
 			case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '.':
 				fmts = append(fmts, c)
+			case 'l', 'h', 'L', 'j', 'z', 't':
+				// C-style length modifiers (%lld, %hi, %zd, etc.).
+				// Bash printf accepts them but we always operate on
+				// int64 / float64 in Go, so they're effectively
+				// no-ops. Don't emit them into fmts (Go's format
+				// verbs don't accept these flags), just skip.
 			case '*':
 				// `%*d` / `%.*s` / etc.: consume the next arg as
 				// the width/precision number and splice it into
