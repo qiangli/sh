@@ -2448,8 +2448,18 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			return failf(1, "compgen: programmable completion not yet implemented\n")
 		}
 	case "complete", "compopt":
-		// Phase 6 stubs: programmable completion.
-		return failf(1, "%s: programmable completion not yet implemented\n", name)
+		// Phase 6 stubs: programmable completion. We accept the
+		// invocation silently so scripts that defensively call
+		// `complete -p` etc. don't abort. `-p` and `-r` with no
+		// matching name return exit 1, mirroring bash's behaviour
+		// when there's nothing to print / remove.
+		for _, a := range args {
+			if a == "-p" || a == "-r" {
+				// No completions installed; exit 1 quietly.
+				exit.code = 1
+				return exit
+			}
+		}
 	case "times":
 		// Print accumulated user and system times.
 		r.outf("0m0.000s 0m0.000s\n0m0.000s 0m0.000s\n")
