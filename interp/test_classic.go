@@ -12,10 +12,11 @@ import (
 const illegalTok = 0
 
 type testParser struct {
-	eof  bool
-	val  string
-	rem  []string
-	errd bool // an error was already reported; bail subsequent diagnostics
+	eof    bool
+	val    string
+	rem    []string
+	errd   bool   // an error was already reported; bail subsequent diagnostics
+	closer string // the literal token that closes the test (`]` for `[`, empty for plain test)
 
 	err func(err error)
 }
@@ -100,11 +101,16 @@ func (p *testParser) testExprBase(fval string) syntax.TestExpr {
 		pe.X = p.classicTest(op.String(), false)
 		if p.val != ")" {
 			// bash: `\`)' expected` (or `\`)' expected, found X`
-			// when something else was there).
-			if p.eof {
-				p.errf("`)' expected")
-			} else {
+			// when something else was there). When p.eof is set
+			// AND there's a closer token (`]` for `[`), use it
+			// in the diagnostic.
+			switch {
+			case !p.eof:
 				p.errf("`)' expected, found %s", p.val)
+			case p.closer != "":
+				p.errf("`)' expected, found %s", p.closer)
+			default:
+				p.errf("`)' expected")
 			}
 		}
 		p.next()

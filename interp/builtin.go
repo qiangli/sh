@@ -1049,8 +1049,13 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		fallthrough
 	case "test":
 		parseErr := false
+		closer := ""
+		if name == "[" {
+			closer = "]"
+		}
 		p := testParser{
-			rem: args,
+			rem:    args,
+			closer: closer,
 			err: func(err error) {
 				// bash format: `<file>: line N: <test|[>: <msg>`
 				r.errf("%s%s: %v\n",
