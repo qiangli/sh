@@ -77,3 +77,19 @@ func (r *Runner) unTestOwnOrGrp(ctx context.Context, op syntax.UnTestOperator, x
 }
 
 type waitStatus = syscall.WaitStatus
+
+// modifiedSinceAccessed reports whether the file's mtime is strictly
+// greater than its atime — bash's `-N FILE` test operator. On
+// platforms where atime is unavailable, returns false.
+func modifiedSinceAccessed(info os.FileInfo) bool {
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return false
+	}
+	mtim := unixStatMtime(stat)
+	atim := unixStatAtime(stat)
+	if mtim.Equal(atim) {
+		return false
+	}
+	return mtim.After(atim)
+}

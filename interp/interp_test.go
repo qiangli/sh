@@ -2089,7 +2089,7 @@ var runTests = []runTest{
 	},
 	{
 		"test -N a",
-		"unsupported unary test op: -N\nexit status 1 #IGNORE",
+		"exit status 1",
 	},
 	{
 		"test -? a",

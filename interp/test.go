@@ -177,8 +177,13 @@ func (r *Runner) unTest(ctx context.Context, op syntax.UnTestOperator, x string)
 	case syntax.TsGIDSet:
 		return r.statMode(ctx, x, os.ModeSetgid)
 	case syntax.TsModif:
-		r.errf("unsupported unary test op: %v\n", op)
-		return false
+		// `-N FILE` — true iff the file has been modified
+		// since it was last accessed (mtime > atime).
+		info, err := r.stat(ctx, r.absPath(x))
+		if err != nil {
+			return false
+		}
+		return modifiedSinceAccessed(info)
 	case syntax.TsRead:
 		return r.access(ctx, r.absPath(x), access_R_OK) == nil
 	case syntax.TsWrite:
