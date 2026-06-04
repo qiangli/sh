@@ -455,6 +455,19 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		}
 		r.outf("%s\n", pwd)
 	case "cd":
+		// bash's `cd` accepts `-L` (logical, default), `-P`
+		// (physical — resolve symlinks via the real filesystem)
+		// and `-@` (extended attributes; not meaningful here).
+		// We accept and ignore all three options since our
+		// path resolution is already filesystem-backed.
+		for len(args) > 0 {
+			a := args[0]
+			if a == "-L" || a == "-P" || a == "-e" || a == "-@" {
+				args = args[1:]
+				continue
+			}
+			break
+		}
 		var path string
 		switch len(args) {
 		case 0:
