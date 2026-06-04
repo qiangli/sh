@@ -1309,10 +1309,6 @@ var errorCases = []errorCase{
 		langErr("1:9: cannot index a special parameter name", LangBash|LangMirBSDKorn),
 	),
 	errCase(
-		"echo ${foo*}",
-		langErr("1:11: not a valid parameter expansion operator: `*`", LangBash|LangMirBSDKorn),
-	),
-	errCase(
 		"echo ${foo;}",
 		langErr("1:11: not a valid parameter expansion operator: `;`", LangBash|LangMirBSDKorn),
 	),

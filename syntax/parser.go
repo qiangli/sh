@@ -1649,6 +1649,13 @@ zshPrefixLoop:
 		pe.Exp = p.paramExpExp()
 	case at, star:
 		switch {
+		case p.tok == star && !pe.Excl && p.r == '}':
+			// Bash 5.3 parses `${name*}` (no `!`) without
+			// complaint and defers the error to expansion time
+			// as `bad substitution`. Reuse the names operator so
+			// the runner can emit that same runtime diagnostic.
+			pe.Names = ParNamesOperator(p.tok)
+			p.next()
 		case p.tok == star && !pe.Excl:
 			p.curErr("not a valid parameter expansion operator: %#q", p.tok)
 		case pe.Excl && p.r == '}':

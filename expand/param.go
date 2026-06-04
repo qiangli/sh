@@ -186,6 +186,10 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 	}
 
 	switch {
+	case pe.Names != 0 && !pe.Excl:
+		// `${name*}` without `!` — bash 5.3 parses this but emits
+		// `bad substitution` at expansion time.
+		return "", fmt.Errorf("bad substitution")
 	case pe.Length:
 		n := len(elems)
 		switch nodeLit(index) {
