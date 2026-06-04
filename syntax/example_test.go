@@ -130,8 +130,8 @@ func ExampleQuote() {
 	// Quote(     "name=value"): 'name=value'
 	// Quote(            "for"): 'for'
 	// Quote(         "glob-*"): 'glob-*'
-	// Quote(  "invalid-\xe2'"): $'invalid-\xe2\''
-	// Quote("nonprint-\v\x1b"): $'nonprint-\v\x1b'
+	// Quote(  "invalid-\xe2'"): $'invalid-\342\''
+	// Quote("nonprint-\v\x1b"): $'nonprint-\v\033'
 }
 
 func ExampleWalk() {

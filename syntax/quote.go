@@ -128,12 +128,21 @@ func Quote(s string, lang LangVariant) (string, error) {
 			case r == '\v':
 				b.WriteString(`\v`)
 			case r < utf8.RuneSelf, r == utf8.RuneError && size == 1:
-				// \xXX, fixed at two hexadecimal characters.
-				fmt.Fprintf(&b, "\\x%02x", rem[0])
-				// Unfortunately, mksh allows \x to consume more hex characters.
-				// Ensure that we don't allow it to read more than two.
-				if lang.in(LangMirBSDKorn) {
-					nextRequoteIfHex = true
+				// For bash: \NNN, three-digit octal — matches what
+				// bash's own `printf %q` / `${var@Q}` / `declare -p`
+				// emits for non-printable bytes and invalid UTF-8
+				// fragments. Other languages keep the historical
+				// \xXX form.
+				if lang.in(LangBash) {
+					fmt.Fprintf(&b, "\\%03o", rem[0])
+				} else {
+					fmt.Fprintf(&b, "\\x%02x", rem[0])
+					// Unfortunately, mksh allows \x to consume more
+					// hex characters. Ensure that we don't allow it
+					// to read more than two.
+					if lang.in(LangMirBSDKorn) {
+						nextRequoteIfHex = true
+					}
 				}
 			case r > utf8.MaxRune:
 				// Not a valid Unicode code point?

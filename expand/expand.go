@@ -505,6 +505,16 @@ func formatInto(sb *strings.Builder, format string, args []string, startTime tim
 				}
 				sb.WriteByte(next ^ 0x40)
 			case '0', '1', '2', '3', '4', '5', '6', '7':
+				// bash printf: `\nnn` is 1-3 octal digits. A leading
+				// `\0` is also accepted as a marker followed by up
+				// to 3 more octal digits (so `\0200` reads 200 octal
+				// = 0x80, NOT \020 + literal "0"). Match that.
+				if c == '0' && i+1 < len(format) {
+					next := format[i+1]
+					if next >= '0' && next <= '7' {
+						i++
+					}
+				}
 				digits := readDigits(3, false)
 				// if digits don't fit in 8 bits, 0xff via strconv
 				n, _ := strconv.ParseUint(digits, 8, 8)
@@ -1863,89 +1873,81 @@ func ReadFields(cfg *Config, s string, n int, raw bool) []string {
 		return cfg.ifsRune(r) && !isIFSWhitespace(r)
 	}
 
-	runes := make([]rune, 0, len(s))
+	// Accumulate bytes (not runes), so invalid UTF-8 fragments in
+	// the input round-trip through `read` unchanged. Positions in
+	// fpos index into this byte slice.
+	buf := make([]byte, 0, len(s))
 	infield := false
 	sawSep := false
 	esc := false
-	for _, r := range s {
-		consumed := r == '\\' && (raw || !esc)
-		_ = consumed
+	for i, r := range s {
+		// Determine the byte width Go's range actually consumed.
+		// utf8.RuneLen(U+FFFD) returns 3 (it's a valid codepoint),
+		// but `range` over invalid UTF-8 yields U+FFFD with a
+		// 1-byte step — re-decode at i to learn the real step.
+		_, size := utf8.DecodeRuneInString(s[i:])
+		if size == 0 {
+			size = 1
+		}
+		runeBytes := s[i : i+size]
 		isIFS := cfg.ifsRune(r) && (raw || !esc)
 		if isIFS {
 			if infield {
-				fpos[len(fpos)-1].end = len(runes)
+				fpos[len(fpos)-1].end = len(buf)
 				infield = false
 			}
 			if isIFSSeparator(r) {
 				if sawSep || len(fpos) == 0 {
-					// Either a leading/consecutive run of
-					// non-whitespace separators (produce an
-					// empty field) or the very first token
-					// is a separator with no prior field —
-					// open and close an empty field at the
-					// current rune index.
-					fpos = append(fpos, pos{start: len(runes), end: len(runes)})
+					fpos = append(fpos, pos{start: len(buf), end: len(buf)})
 				}
 				sawSep = true
 			}
 		} else {
 			if !infield {
-				fpos = append(fpos, pos{start: len(runes), end: -1})
+				fpos = append(fpos, pos{start: len(buf), end: -1})
 				infield = true
 			}
 			sawSep = false
 		}
 		if r == '\\' {
 			if raw || esc {
-				runes = append(runes, r)
+				buf = append(buf, '\\')
 			}
 			esc = !esc
 			continue
 		}
-		runes = append(runes, r)
+		buf = append(buf, runeBytes...)
 		esc = false
 	}
 	if infield {
-		fpos[len(fpos)-1].end = len(runes)
+		fpos[len(fpos)-1].end = len(buf)
 	}
 	if len(fpos) == 0 {
 		return nil
 	}
 
+	// Trimming helper: walks back over IFS-whitespace BYTES so we
+	// only strip ASCII space/tab/newline that the user has included
+	// in IFS. Non-ASCII bytes (including invalid UTF-8) are never
+	// considered whitespace.
+	isWSByte := func(b byte) bool {
+		if b != ' ' && b != '\t' && b != '\n' {
+			return false
+		}
+		return cfg.ifsRune(rune(b))
+	}
 	switch {
 	case n == 1:
-		// `read x` (single variable) gets the rest of the line
-		// with leading/trailing IFS whitespace trimmed but the
-		// interior runs preserved — bash's behaviour. Extend
-		// the first field to the end of the last, then trim
-		// any trailing IFS-whitespace runes (bash post-strips
-		// at the end of the line even if they came from a
-		// backslash-escape).
 		end := fpos[len(fpos)-1].end
-		for end > fpos[0].start {
-			r := runes[end-1]
-			if (r == ' ' || r == '\t' || r == '\n') && cfg.ifsRune(r) {
-				end--
-				continue
-			}
-			break
+		for end > fpos[0].start && isWSByte(buf[end-1]) {
+			end--
 		}
 		fpos[0].end = end
 		fpos = fpos[:1]
 	case n != -1 && n < len(fpos):
-		// `read v1 v2 ... vN` with more fields than vars: the last
-		// variable swallows everything from the start of field N to
-		// the end of the input, with trailing IFS-whitespace
-		// trimmed. Interior non-ws IFS separators are preserved
-		// (e.g. `:::` with IFS=": " and `read x y` → x="", y="::").
-		end := len(runes)
-		for end > fpos[n-1].start {
-			r := runes[end-1]
-			if (r == ' ' || r == '\t' || r == '\n') && cfg.ifsRune(r) {
-				end--
-				continue
-			}
-			break
+		end := len(buf)
+		for end > fpos[n-1].start && isWSByte(buf[end-1]) {
+			end--
 		}
 		fpos[n-1].end = end
 		fpos = fpos[:n]
@@ -1953,7 +1955,7 @@ func ReadFields(cfg *Config, s string, n int, raw bool) []string {
 
 	fields := make([]string, len(fpos))
 	for i, p := range fpos {
-		fields[i] = string(runes[p.start:p.end])
+		fields[i] = string(buf[p.start:p.end])
 	}
 	return fields
 }

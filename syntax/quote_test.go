@@ -28,7 +28,7 @@ func TestQuote(t *testing.T) {
 		{"posix\x1b", LangPOSIX, &QuoteError{5, quoteErrPOSIX}},
 		{"posix\n", LangPOSIX, &QuoteError{5, quoteErrPOSIX}},
 		{"mksh16\U00086199", LangMirBSDKorn, &QuoteError{6, quoteErrMksh}},
-		{"\x1b\x1caaa", LangBash, `$'\x1b\x1caaa'`},
+		{"\x1b\x1caaa", LangBash, `$'\033\034aaa'`},
 		{"\x1b\x1caaa", LangMirBSDKorn, `$'\x1b\x1c'$'aaa'`},
 		{"\xff\x00", LangBash, &QuoteError{1, quoteErrNull}},
 	}
