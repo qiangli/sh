@@ -1091,7 +1091,11 @@ func (p *Printer) stmt(s *Stmt) {
 			p.writeLit(r.N.Value)
 		}
 		p.w.WriteString(r.Op.String())
-		if p.spaceRedirects && (r.Op != DplIn && r.Op != DplOut) {
+		// Bash 5.3's `declare -f` output omits the space between
+		// `<<` / `<<-` and the heredoc delimiter, even with
+		// SpaceRedirects enabled. DplIn / DplOut (`>&` / `<&`)
+		// share the same flush-the-operator convention.
+		if p.spaceRedirects && r.Op != DplIn && r.Op != DplOut && r.Op != Hdoc && r.Op != DashHdoc {
 			p.space()
 		} else {
 			p.wantSpace = spaceRequired
