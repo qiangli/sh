@@ -201,6 +201,10 @@ func testBinaryOp(val string) syntax.BinTestOperator {
 		return syntax.TsLss
 	case "-gt":
 		return syntax.TsGtr
+	case "<":
+		return syntax.TsBefore
+	case ">":
+		return syntax.TsAfter
 	default:
 		return illegalTok
 	}
