@@ -94,7 +94,10 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 				r.writeEnv = origEnv
 				r.inFunc = oldInFunc
 				r.stdout = oldStdout
-				r.exit.exiting = false
+				// `return` is local to the funsub body (same as a
+				// function); `exit` propagates out (kills the shell)
+				// — bash 5.3 treats funsub like a function body for
+				// scoping but does NOT swallow `exit`.
 				r.exit.returning = false
 				// w is expand.cmdSubst's shared bufferAlloc; reset it
 				// to discard any residue that r.fields() left there

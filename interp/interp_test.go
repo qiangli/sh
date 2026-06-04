@@ -336,6 +336,12 @@ var runTests = []runTest{
 	{`x=before; v=$(x=after; echo cap); echo "$v $x"`, "cap before\n"},
 	// bash 5.3 valsub ${|cmd;}: same as funsub but also sets REPLY
 	{`v=${| echo hello; }; echo "v=$v REPLY=$REPLY"`, "v=hello REPLY=hello\n"},
+	// `return` inside funsub is local to the body (like a function);
+	// `exit` propagates out (kills the shell). Mirrors bash 5.3.
+	{`v=${ echo a; return; echo b; }; echo "[$v]"`, "[a]\n"},
+	{`v=${ echo a; exit 2; echo b; }; echo never`, "exit status 2"},
+	// `break` inside funsub breaks the enclosing loop.
+	{`for i in 1 2 3; do v=${ break; }; echo "i=$i"; done; echo done`, "done\n"},
 
 	// runner-state introspection builtin emits JSON; check it round-trips
 	// by extracting a known key via grep -q.
