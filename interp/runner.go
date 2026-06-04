@@ -1632,6 +1632,17 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			// so `declare -u foo; foo=$TEXT` immediately stores the
 			// folded form.
 			applyCaseAttr(&vr)
+			// `typeset -n NAME=target` on an existing readonly NAME
+			// is silently a no-op in bash 5.3 (the nameref conversion
+			// is treated as a type change, not an assignment, so the
+			// readonly attribute doesn't block it; but since we don't
+			// model nameref-with-readonly conversions fully, leave
+			// the prior readonly scalar untouched and skip the error).
+			if valType == "-n" {
+				if prev := r.lookupVar(name); prev.ReadOnly {
+					continue
+				}
+			}
 			r.setVar(name, vr)
 		}
 		// Handle declare -F/-f with no arguments: list all functions.

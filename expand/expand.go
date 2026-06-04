@@ -805,7 +805,17 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 					continue
 				} else if c != 's' {
 					if c == 'f' || c == 'e' || c == 'E' || c == 'g' || c == 'G' {
-						f, _ := strconv.ParseFloat(arg, 64)
+						// The same `'X` / `"X` shorthand the integer
+						// conversions honor — bash extends it to
+						// float conversions, so `printf '%f' "'A"` is
+						// `65.000000`.
+						var f float64
+						if len(arg) > 1 && (arg[0] == '\'' || arg[0] == '"') {
+							r, _ := utf8.DecodeRuneInString(arg[1:])
+							f = float64(r)
+						} else {
+							f, _ = strconv.ParseFloat(arg, 64)
+						}
 						farg = f
 					} else {
 						// Bash extension: if the arg starts with a `'` or
