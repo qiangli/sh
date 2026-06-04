@@ -2035,23 +2035,27 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			}
 			break
 		}
+		reset := false
 		switch len(args) {
 		case 1:
-			// assume it's a signal, the default will be restored
+			// 1-arg form is just signal names — reset to default.
+			reset = true
 		default:
 			callback = args[0]
 			args = args[1:]
 		}
-		// Treat both empty and - the same: reset to default.
+		// `-` is the explicit "reset to default" sentinel; an
+		// empty string means "ignore the signal" (a distinct state
+		// that `trap -p` prints as `trap -- '' SIG`).
 		if callback == "-" {
-			callback = ""
+			reset = true
 		}
 		for _, arg := range args {
 			sig := normalizeSignal(arg)
 			if sig == "" {
 				return failf(2, "trap: %s: invalid signal specification\n", arg)
 			}
-			if callback == "" {
+			if reset {
 				delete(r.trapCallbacks, sig)
 			} else {
 				if r.trapCallbacks == nil {
