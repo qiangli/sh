@@ -1802,13 +1802,21 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			r.printOptLine(name, enabled, supported)
 		}
 		if len(args) == 0 {
+			// When combined with `-p`, `shopt -s` lists only set
+			// options and `shopt -u` lists only unset ones.
+			// Without `-p`, the same form just lists everything
+			// in default bash format.
+			showSet := mode == "" || mode == "-s"
+			showUnset := mode == "" || mode == "-u"
 			if posixOpts {
 				for i, opt := range &posixOptsTable {
-					emitOpt(opt.name, r.opts[i], true)
+					enabled := r.opts[i]
+					if (enabled && !showSet) || (!enabled && !showUnset) {
+						continue
+					}
+					emitOpt(opt.name, enabled, true)
 				}
 			} else {
-				// bash sorts shopt output alphabetically. Build
-				// an index→state mapping and emit by sorted name.
 				names := make([]string, len(bashOptsTable))
 				for i, opt := range bashOptsTable {
 					names[i] = opt.name
@@ -1820,7 +1828,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				sort.Strings(names)
 				for _, n := range names {
 					i := idx[n]
-					emitOpt(n, r.opts[len(posixOptsTable)+i], bashOptsTable[i].supported)
+					enabled := r.opts[len(posixOptsTable)+i]
+					if (enabled && !showSet) || (!enabled && !showUnset) {
+						continue
+					}
+					emitOpt(n, enabled, bashOptsTable[i].supported)
 				}
 			}
 			break
