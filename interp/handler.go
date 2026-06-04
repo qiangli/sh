@@ -160,6 +160,28 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 		}
 
 		err = cmd.Start()
+		// POSIX/bash: when execve fails with ENOEXEC (the file
+		// has no shebang and isn't a recognised binary), the
+		// shell falls back to running the file as a shell
+		// script. Re-invoke our own bashy binary on the file so
+		// the script's traps/locals/etc. all work in the same
+		// shell.
+		if err != nil && isExecFormatError(err) {
+			selfBin, lookupErr := os.Executable()
+			if lookupErr == nil {
+				newArgs := append([]string{selfBin, path}, args[1:]...)
+				cmd = exec.Cmd{
+					Path:   selfBin,
+					Args:   newArgs,
+					Env:    hc.runner.execEnvWithFuncs(),
+					Dir:    hc.Dir,
+					Stdin:  hc.Stdin,
+					Stdout: hc.Stdout,
+					Stderr: hc.Stderr,
+				}
+				err = cmd.Start()
+			}
+		}
 		if err == nil {
 			publishBgPid(ctx, cmd.Process.Pid)
 			stopf := context.AfterFunc(ctx, func() {
@@ -198,6 +220,17 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 			return err
 		}
 	}
+}
+
+// isExecFormatError reports whether err is the ENOEXEC error returned
+// by execve when the file isn't a recognised executable format (no
+// shebang, not an ELF/Mach-O binary). bash, dash, and ash all fall
+// back to running the file as a shell script in that case.
+func isExecFormatError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "exec format error")
 }
 
 func checkStat(dir, file string, checkExec bool) (string, error) {
