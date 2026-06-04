@@ -316,12 +316,15 @@ func runAll() error {
 		return run(r, os.Stdin, "")
 	}
 	loadStartupFiles(r, false)
-	for _, path := range flag.Args() {
-		if err := runPath(r, path); err != nil {
-			return err
-		}
+	// Bash invokes `bash script.sh arg1 arg2 …` as: run script.sh with
+	// $0 = script.sh and the remaining tokens as positional args. Only
+	// the first positional is a path to execute; the rest become $1, $2 …
+	rest := flag.Args()
+	path := rest[0]
+	if posArgs := rest[1:]; len(posArgs) > 0 {
+		interp.Params(append([]string{"--"}, posArgs...)...)(r)
 	}
-	return nil
+	return runPath(r, path)
 }
 
 func run(r *interp.Runner, reader io.Reader, name string) error {

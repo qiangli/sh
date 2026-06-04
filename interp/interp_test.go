@@ -1308,7 +1308,7 @@ var runTests = []runTest{
 	// alias (note the input newlines)
 	{
 		"alias foo; alias foo=echo; alias foo; alias foo=; alias foo",
-		"alias: \"foo\" not found\nalias foo='echo'\nalias foo=''\n #IGNORE",
+		"alias: foo: not found\nalias foo='echo'\nalias foo=''\n #IGNORE",
 	},
 	{
 		"shopt -s expand_aliases; alias foo=echo\nfoo foo; foo bar",

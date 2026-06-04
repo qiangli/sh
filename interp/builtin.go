@@ -1669,18 +1669,27 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			r.outf("alias %s='%s'\n", name, &buf)
 		}
 
+		// `alias -p` prints all aliases (same as no args).
+		filtered := args
+		if len(filtered) > 0 && filtered[0] == "-p" {
+			filtered = filtered[1:]
+			for name, als := range r.alias {
+				show(name, als)
+			}
+		}
 		if len(args) == 0 {
 			for name, als := range r.alias {
 				show(name, als)
 			}
 		}
 	argsLoop:
-		for _, arg := range args {
+		for _, arg := range filtered {
 			name, src, ok := strings.Cut(arg, "=")
 			if !ok {
 				als, ok := r.alias[name]
 				if !ok {
-					r.errf("alias: %q not found\n", name)
+					r.errf("alias: %s: not found\n", name)
+					exit.code = 1
 					continue
 				}
 				show(name, als)
