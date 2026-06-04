@@ -111,6 +111,12 @@ func (p *testParser) testExprBase(fval string) syntax.TestExpr {
 		pe := &syntax.ParenTest{}
 		p.next()
 		pe.X = p.classicTest(op.String(), false)
+		// Bash 5.3: `( )` with an empty body is a syntax error
+		// (the `)' is found in the place where the argument
+		// should be). Surface that as `\`)' expected`.
+		if pe.X == nil && p.val == ")" {
+			p.errf("`)' expected")
+		}
 		if p.val != ")" {
 			// bash: `\`)' expected` (or `\`)' expected, found X`
 			// when something else was there). When p.eof is set
