@@ -111,11 +111,15 @@ func SplitBraces(word *Word) bool {
 				if j+1 >= len(lit.Value) || lit.Value[j+1] != '.' {
 					continue
 				}
-				// Bash 5.3 only treats the first two `..` runs
-				// inside a brace as sequence separators (X..Y..Z).
-				// Once we already have 3 elements, the third
-				// `..` is part of the trailing literal — don't
-				// keep splitting.
+				// Bash 5.3:
+				// - Once a brace has commas, the `..` is part of
+				//   the trailing literal (`{a,b..c}` is a list
+				//   `a`, `b..c`, not a 3-element sequence).
+				// - A sequence caps at 3 elements; the fourth
+				//   `..` belongs to the trailing literal.
+				if !cur.Sequence && len(cur.Elems) > 1 {
+					continue
+				}
 				if cur.Sequence && len(cur.Elems) >= 3 {
 					continue
 				}
