@@ -1604,14 +1604,8 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		// bash's getopts only surfaces the OPTARG-readonly diagnostic
 		// when it would have written to OPTARG (i.e. the default branch
 		// below): the unset that happens at the top of every getopts
-		// call is silent on readonly. Follow namerefs so a chain
-		// `OPTARG → readonly RO` is treated the same as a direct
-		// readonly OPTARG.
-		optargVar := r.lookupVar("OPTARG")
-		if _, resolved := optargVar.Resolve(r.writeEnv); resolved.IsSet() {
-			optargVar = resolved
-		}
-		optargRO := optargVar.ReadOnly
+		// call is silent on readonly.
+		optargRO := r.lookupVar("OPTARG").ReadOnly
 		if !optargRO {
 			r.delVar("OPTARG")
 		}
@@ -2728,6 +2722,16 @@ func (p *flagParser) flag() string {
 }
 
 func (p *flagParser) value() string {
+	// When the previous `flag()` call split a cluster like `-dX`,
+	// the rest (`X`, prefixed with `-`) is sitting in `p.current`.
+	// For value-taking flags, that's the value — consume it.
+	if p.current != "" {
+		// p.current is shaped like "-<rest>". Strip the leading "-"
+		// to recover the original tail.
+		v := p.current[1:]
+		p.current = ""
+		return v
+	}
 	if len(p.remaining) == 0 {
 		return ""
 	}
