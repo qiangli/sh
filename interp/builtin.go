@@ -393,13 +393,17 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		for {
 			s, n, err := expand.Format(r.ecfg, format, args)
 			stop := errors.Is(err, expand.ErrPrintfStop)
-			if err != nil && !stop {
-				return failf(1, "%v\n", err)
-			}
+			// Emit any partial output before reporting the error.
 			if assignTo != "" {
 				sb.WriteString(s)
 			} else {
 				r.out(s)
+			}
+			if err != nil && !stop {
+				if assignTo != "" {
+					r.setVarString(assignTo, sb.String())
+				}
+				return failf(1, "%v\n", err)
 			}
 			if stop {
 				break

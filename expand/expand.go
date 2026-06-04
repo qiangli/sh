@@ -348,7 +348,11 @@ func Format(cfg *Config, format string, args []string) (string, int, error) {
 		return sb.String(), consumed, errPrintfStop
 	}
 	if err != nil {
-		return "", 0, err
+		// Surface partial output along with the error. bash flushes
+		// what it has emitted before reporting (e.g.
+		// `printf '%s\n%n' abc bad-name` prints `abc\n` before
+		// "not a valid identifier").
+		return sb.String(), consumed, err
 	}
 
 	return sb.String(), consumed, err
@@ -738,6 +742,22 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 					sb.WriteString(fmt.Sprintf(verb, quoted))
 				} else {
 					sb.WriteString(quoted)
+				}
+				fmts = nil
+				continue
+			case 'n':
+				// bash printf %n stores the byte count emitted
+				// so far into the variable named by the next arg.
+				// We don't have a writeback channel from this
+				// package, so just validate the identifier and
+				// emit bash's diagnostic on bad names; the actual
+				// assignment is dropped (TODO).
+				arg := ""
+				if len(args) > 0 {
+					arg, args = args[0], args[1:]
+				}
+				if !syntax.ValidName(arg) {
+					return 0, fmt.Errorf("printf: `%s': not a valid identifier", arg)
 				}
 				fmts = nil
 				continue
