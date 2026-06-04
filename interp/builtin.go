@@ -346,7 +346,16 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				r.out(" ")
 			}
 			if doExpand {
-				arg, _, _ = expand.Format(r.ecfg, arg, nil)
+				// `echo -e` uses bash's `%b`-style escape table:
+				// `\c` terminates output, `\'`/`\"`/`\?` stay
+				// literal (no `\` strip), the rest follow the
+				// standard ANSI-C escapes.
+				out, err := expand.FormatBPercent(r.ecfg, arg)
+				r.out(out)
+				if err == expand.ErrPrintfStop {
+					return exit
+				}
+				continue
 			}
 			r.out(arg)
 		}

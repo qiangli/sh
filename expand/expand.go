@@ -500,6 +500,24 @@ func ansiCEscape(s string) string {
 	return sb.String()
 }
 
+// FormatBPercent is the bash printf `%b` interpretation of an
+// escape-bearing argument. Unlike Format (which is the format-string
+// mode), the `\'`, `\"`, `\?` escapes keep their backslash and `\c`
+// terminates output by returning [ErrPrintfStop]. Use this from
+// `echo -e` and from explicit `%b` conversions.
+func FormatBPercent(cfg *Config, s string) (string, error) {
+	cfg = prepareConfig(cfg)
+	sb := cfg.strBuilder()
+	_, err := formatIntoMode(sb, s, nil, cfg.StartTime, true)
+	if err == errPrintfStop {
+		return sb.String(), errPrintfStop
+	}
+	if err != nil {
+		return sb.String(), err
+	}
+	return sb.String(), nil
+}
+
 func Format(cfg *Config, format string, args []string) (string, int, error) {
 	cfg = prepareConfig(cfg)
 	sb := cfg.strBuilder()
