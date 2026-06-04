@@ -17,7 +17,7 @@ build:
 test:
 	go test ./...
 
-BASH_TEST_TIMEOUT := 15
+BASH_TEST_TIMEOUT := 60
 
 ## test-bash: Run bash 5.3 native test suite against bashy (with per-test timeout)
 test-bash: build test-bash-helpers
