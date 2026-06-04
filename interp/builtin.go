@@ -1789,14 +1789,23 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		}
 		args := fp.args()
 		// Emit a line as either `shopt -s NAME` / `shopt -u NAME`
-		// (printReusable) or `name<TAB>on/off` (the default).
+		// (or `set -o`/`set +o` when -o is in play) for the
+		// printReusable form, or `name<TAB>on/off` otherwise.
 		emitOpt := func(name string, enabled, supported bool) {
 			if printReusable {
-				flag := "-u"
-				if enabled {
-					flag = "-s"
+				if posixOpts {
+					flag := "+o"
+					if enabled {
+						flag = "-o"
+					}
+					r.outf("set %s %s\n", flag, name)
+				} else {
+					flag := "-u"
+					if enabled {
+						flag = "-s"
+					}
+					r.outf("shopt %s %s\n", flag, name)
 				}
-				r.outf("shopt %s %s\n", flag, name)
 				return
 			}
 			r.printOptLine(name, enabled, supported)

@@ -949,7 +949,9 @@ var posixOptsTable = [...]posixOpt{
 // [posixOptByFlag] / [Params].
 var noOpSetOptions = map[string]bool{
 	"history":              true, // set -H (history expansion, interactive only)
+	"histexpand":           true, // alias for history
 	"hashcmds":             true, // set -h
+	"hashall":              true, // alias for hashcmds
 	"verbose":              true, // set -v
 	"monitor":              true, // set -m (job control)
 	"vi":                   true, // set -o vi
