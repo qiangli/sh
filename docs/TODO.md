@@ -1,6 +1,6 @@
 # Bashy: Bash 5.3 Drop-In Replacement — TODO Checklist
 
-**Current status**: 30/83 bash tests passing | All Go unit tests pass
+**Current status**: 31/83 bash tests passing | All Go unit tests pass
 **Last updated**: 2026-06-04
 
 ---
