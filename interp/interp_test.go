@@ -2105,7 +2105,7 @@ var runTests = []runTest{
 	{
 		"test -? a",
 		// TODO: this error message should refer to `-?`
-		"test: a: binary operator expected\nexit status 2 #JUSTERR",
+		"test: -?: unary operator expected\nexit status 2 #JUSTERR",
 	},
 	{
 		"[ -s a ] && echo x; echo body >a; [ -s a ] && echo y",

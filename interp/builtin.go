@@ -1048,6 +1048,25 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		args = args[:len(args)-1]
 		fallthrough
 	case "test":
+		// bash arg-count quirks for `test`:
+		//
+		//   - 2 args: usually `-X arg` (unary). bash picks unary
+		//     when neither side looks like the operator it needs:
+		//     args[1] isn't a known *binary* op AND args[0] isn't
+		//     a known *unary* op (or `!`). In that case the
+		//     diagnostic blames args[0] with "unary operator
+		//     expected". When args[1] IS a binary op (e.g.
+		//     `a -a`), bash instead treats it as a binary form
+		//     missing the right operand — let the parser surface
+		//     that.
+		if len(args) == 2 &&
+			testUnaryOp(args[0]) == illegalTok && args[0] != "!" &&
+			testBinaryOp(args[1]) == illegalTok {
+			r.errf("%s%s: %s: unary operator expected\n",
+				r.bashErrPrefix(pos), name, args[0])
+			exit.code = 2
+			return exit
+		}
 		parseErr := false
 		closer := ""
 		if name == "[" {
