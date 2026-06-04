@@ -85,6 +85,23 @@ func SplitBraces(word *Word) bool {
 					continue
 				}
 				addlitidx()
+				if cur.Sequence {
+					// `{X..Y,Z}` and friends: the comma proves
+					// this isn't a sequence after all. Collapse
+					// the accumulated `..`-split elements back
+					// into a single literal element joined by
+					// `..` (so `{a..,Z}` becomes the list
+					// elements `a..` and `Z`).
+					merged := &Word{}
+					for i, e := range cur.Elems {
+						if i > 0 {
+							merged.Parts = append(merged.Parts, litDots)
+						}
+						merged.Parts = append(merged.Parts, e.Parts...)
+					}
+					cur.Elems = []*Word{merged}
+					cur.Sequence = false
+				}
 				acc = &Word{}
 				cur.Elems = append(cur.Elems, acc)
 			case '.':
@@ -92,6 +109,14 @@ func SplitBraces(word *Word) bool {
 					continue
 				}
 				if j+1 >= len(lit.Value) || lit.Value[j+1] != '.' {
+					continue
+				}
+				// Bash 5.3 only treats the first two `..` runs
+				// inside a brace as sequence separators (X..Y..Z).
+				// Once we already have 3 elements, the third
+				// `..` is part of the trailing literal — don't
+				// keep splitting.
+				if cur.Sequence && len(cur.Elems) >= 3 {
 					continue
 				}
 				addlitidx()
