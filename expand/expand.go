@@ -439,6 +439,15 @@ func strftime(format string, t time.Time) string {
 }
 
 func formatInto(sb *strings.Builder, format string, args []string, startTime time.Time) (int, error) {
+	return formatIntoMode(sb, format, args, startTime, false)
+}
+
+// formatIntoMode is the inner worker for [Format]. percentB switches the
+// escape table to bash's `%b` interpretation: `\"`, `\'`, `\?` are
+// preserved with their backslash (bash only honors those escapes in
+// format strings, not in `%b` arg).
+func formatIntoMode(sb *strings.Builder, format string, args []string, startTime time.Time, percentB bool) (int, error) {
+	inPercentB := percentB
 	var fmts []byte
 	initialArgs := len(args)
 
@@ -486,7 +495,13 @@ func formatInto(sb *strings.Builder, format string, args []string, startTime tim
 				sb.WriteByte('\t')
 			case 'v': // vertical tab
 				sb.WriteByte('\v')
-			case '\\', '\'', '"', '?': // just the character
+			case '\\': // always recognized
+				sb.WriteByte('\\')
+			case '\'', '"', '?':
+				if inPercentB {
+					// `%b` arg: bash passes these through as-is.
+					sb.WriteByte('\\')
+				}
 				sb.WriteByte(c)
 			case 'c':
 				// bash's printf preserves `\c` literally in the
@@ -686,8 +701,9 @@ func formatInto(sb *strings.Builder, format string, args []string, startTime tim
 				if c == 'b' {
 					// Passing in nil for args ensures that % format
 					// strings aren't processed; only escape sequences
-					// will be handled.
-					_, err := formatInto(sb, arg, nil, startTime)
+					// will be handled. The `percentB` flag flips off
+					// the bash format-only escapes (`\"`, `\'`, `\?`).
+					_, err := formatIntoMode(sb, arg, nil, startTime, true)
 					if err != nil {
 						return 0, err
 					}
