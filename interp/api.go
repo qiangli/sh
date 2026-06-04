@@ -582,6 +582,12 @@ func Params(args ...string) RunnerOption {
 			if flag[1] != 'o' {
 				opt := r.posixOptByFlag(flag[1])
 				if opt == nil {
+					// Accept-and-ignore single-letter options
+					// that bash supports but we don't model.
+					switch flag[1] {
+					case 'h', 'H', 'v', 'm', 'P', 'p', 'T', 'B', 'k', 'b', 't':
+						continue
+					}
 					return fmt.Errorf("invalid option: %q", flag)
 				}
 				*opt = enable
@@ -606,6 +612,12 @@ func Params(args ...string) RunnerOption {
 			}
 			opt := r.posixOptByName(value)
 			if opt == nil {
+				if noOpSetOptions[value] {
+					// accept-and-ignore: this option name is
+					// recognised by bash but has no runtime
+					// effect in our runner.
+					continue
+				}
 				return fmt.Errorf("invalid option: %q", value)
 			}
 			*opt = enable
@@ -929,6 +941,28 @@ var posixOptsTable = [...]posixOpt{
 	{'x', "xtrace"},
 	{' ', "pipefail"},
 	{' ', "posix"},
+}
+
+// noOpSetOptions are option names that `set -o NAME` / `set -H` etc. can
+// pass but which we silently accept without any runtime effect. This is
+// the long-name set; the short-flag set is in
+// [posixOptByFlag] / [Params].
+var noOpSetOptions = map[string]bool{
+	"history":              true, // set -H (history expansion, interactive only)
+	"hashcmds":             true, // set -h
+	"verbose":              true, // set -v
+	"monitor":              true, // set -m (job control)
+	"vi":                   true, // set -o vi
+	"emacs":                true, // set -o emacs
+	"interactive-comments": true, // already implied for non-interactive
+	"ignoreeof":            true, // interactive only
+	"physical":             true, // set -P (cd resolves symlinks)
+	"privileged":           true, // set -p
+	"functrace":            true, // set -T (DEBUG/RETURN trap inheritance)
+	"braceexpand":          true, // set -B (we always brace-expand)
+	"keyword":              true, // set -k
+	"notify":               true, // set -b
+	"onecmd":               true, // set -t
 }
 
 var bashOptsTable = [...]bashOpt{
