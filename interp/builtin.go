@@ -2604,10 +2604,15 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			}
 			break
 		}
-		// Setting umask: parse octal value. Updates only the per-Runner
-		// virtual umask; we deliberately do not call syscall.Umask, which
-		// is process-wide and would clobber sibling runners. See
-		// Runner.umask.
+		// Setting umask: accept either an octal mode or a bash-style
+		// symbolic form (e.g. `u=rwx,g=rx,o=rx`, `g-w`, `+x`). The
+		// symbolic form mutates the current mask; the octal form
+		// replaces it. We deliberately do not call syscall.Umask
+		// (process-wide) — only the per-Runner virtual mask moves.
+		if newMask, ok := parseSymbolicUmask(args[0], r.umask); ok {
+			r.umask = newMask
+			break
+		}
 		mask, err := strconv.ParseUint(args[0], 8, 32)
 		if err != nil {
 			return failf(1, "umask: %s: octal number out of range\n", args[0])
@@ -2895,6 +2900,109 @@ func (r *Runner) typeMatches(arg string, skipFuncs bool) []typeMatch {
 		})
 	}
 	return ms
+}
+
+// parseSymbolicUmask applies a bash-style symbolic umask string to
+// `current` and returns the new mask. The grammar is one or more
+// clauses separated by commas; each clause is `[who][op]perms` where
+// `who` is any combination of `u`, `g`, `o`, `a` (default `a`),
+// `op` is `=`, `+`, or `-`, and `perms` is any combination of
+// `r`, `w`, `x`. Returns ok=false if the string doesn't conform
+// (caller falls back to octal parsing).
+func parseSymbolicUmask(s string, current int) (int, bool) {
+	if s == "" {
+		return 0, false
+	}
+	// Quick reject: octal-looking input goes through ParseUint instead.
+	allDigits := true
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			allDigits = false
+			break
+		}
+	}
+	if allDigits {
+		return 0, false
+	}
+	mask := current
+	for _, clause := range strings.Split(s, ",") {
+		if clause == "" {
+			return 0, false
+		}
+		who := 0 // bitmask of which triads to affect: 4=u, 2=g, 1=o
+		i := 0
+		for ; i < len(clause); i++ {
+			switch clause[i] {
+			case 'u':
+				who |= 4
+			case 'g':
+				who |= 2
+			case 'o':
+				who |= 1
+			case 'a':
+				who |= 7
+			default:
+				goto opStart
+			}
+		}
+	opStart:
+		if who == 0 {
+			who = 7 // default = `a`
+		}
+		if i >= len(clause) {
+			return 0, false
+		}
+		op := clause[i]
+		if op != '=' && op != '+' && op != '-' {
+			return 0, false
+		}
+		i++
+		var perms int
+		for ; i < len(clause); i++ {
+			switch clause[i] {
+			case 'r':
+				perms |= 4
+			case 'w':
+				perms |= 2
+			case 'x':
+				perms |= 1
+			default:
+				// Ignore `s` (setuid/setgid) and `t` (sticky)
+				// — they don't fit in a umask. `X` (execute
+				// if dir) is similarly absent. Anything else
+				// is an error.
+				if clause[i] != 's' && clause[i] != 't' && clause[i] != 'X' {
+					return 0, false
+				}
+			}
+		}
+		// Apply to each affected triad. Remember: umask bits MEAN
+		// "denied", so allowed perms clear the corresponding bits.
+		applyTriad := func(shift int) {
+			cur := (^mask >> shift) & 7
+			switch op {
+			case '=':
+				cur = perms
+			case '+':
+				cur |= perms
+			case '-':
+				cur &^= perms
+			}
+			// Rebuild mask: set triad bits to ~cur.
+			mask &^= 7 << shift
+			mask |= ((^cur) & 7) << shift
+		}
+		if who&4 != 0 {
+			applyTriad(6)
+		}
+		if who&2 != 0 {
+			applyTriad(3)
+		}
+		if who&1 != 0 {
+			applyTriad(0)
+		}
+	}
+	return mask & 0o777, true
 }
 
 // ulimitBuiltin implements a best-effort `ulimit`. `ulimit -X` reads
