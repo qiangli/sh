@@ -2088,6 +2088,15 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 				}
 				targetFd = n
 			} else {
+				// Bash 5.3 refuses `{var}>...` when var is readonly
+				// (or otherwise unassignable), emitting
+				// `<file>: line N: <var>: cannot assign fd to
+				// variable`. Catch that before we open the file.
+				if r.lookupVar(name).ReadOnly {
+					r.errf("%s%s: cannot assign fd to variable\n",
+						r.bashErrPrefix(rd.Pos()), name)
+					return nil, fmt.Errorf("%s: cannot assign fd to variable", name)
+				}
 				// Open form: pick a fresh fd for the script.
 				targetFd = r.allocateFd()
 				namedFDVar = name
