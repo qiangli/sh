@@ -1903,7 +1903,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			// bash prints `trap -- 'CMD' SIGNAME` with the body in
 			// single-quotes (`'`) and the signal name prefixed with
 			// `SIG` for all non-EXIT/non-DEBUG/non-ERR/non-RETURN
-			// pseudo-signals.
+			// pseudo-signals. Order matches bash: EXIT first
+			// (signal 0), then numeric signals in ascending order,
+			// then ERR/DEBUG/RETURN at the end.
 			sigPrefix := func(name string) string {
 				switch name {
 				case "EXIT", "DEBUG", "ERR", "RETURN":
@@ -1912,13 +1914,24 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					return "SIG" + name
 				}
 			}
-			for sig, cb := range r.trapCallbacks {
+			// Build the sort order: EXIT, then signals 1..15
+			// (HUP, INT, QUIT, ILL, …, TERM) in numeric order,
+			// then ERR, DEBUG, RETURN.
+			sigOrder := []string{"EXIT"}
+			for i := 1; i <= 31; i++ {
+				if name, ok := signalNames[i]; ok {
+					sigOrder = append(sigOrder, name)
+				}
+			}
+			sigOrder = append(sigOrder, "ERR", "DEBUG", "RETURN")
+			for _, sig := range sigOrder {
+				cb, ok := r.trapCallbacks[sig]
+				if !ok {
+					continue
+				}
 				if len(filter) > 0 && !filter[sig] {
 					continue
 				}
-				// bash single-quotes the body and escapes embedded
-				// single quotes via `'\''`. No escaping of other
-				// characters.
 				quoted := "'" + strings.ReplaceAll(cb, "'", `'\''`) + "'"
 				r.outf("trap -- %s %s\n", quoted, sigPrefix(sig))
 			}
