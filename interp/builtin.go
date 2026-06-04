@@ -924,6 +924,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		disable := false
 		listAll := false
 		showAll := false
+		specialOnly := false
 		for fp.more() {
 			switch flag := fp.flag(); flag {
 			case "-n":
@@ -937,10 +938,15 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				// enable/disable state.
 				showAll = true
 				listAll = true
-			case "-f", "-d", "-s":
+			case "-s":
+				// `-s` filters the listing to POSIX special
+				// builtins (1003.1 § 2.14). Bash combines it
+				// with `-p`/`-n`/`-a` for that subset.
+				specialOnly = true
+				listAll = true
+			case "-f", "-d":
 				// `-f` loads/unloads dynamic builtins (not
-				// supported), `-d` deletes them, `-s` lists
-				// POSIX-mandated special builtins. Accept the
+				// supported), `-d` deletes them. Accept the
 				// flag silently to avoid breaking scripts.
 				fp.value() // consume filename if -f
 			default:
@@ -966,13 +972,17 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				}
 				sort.Strings(names)
 				for _, n := range names {
+					if specialOnly && !isPosixSpecialBuiltin(n) {
+						continue
+					}
 					if r.disabledBuiltins[n] {
-						r.outf("enable -n %s\n", n)
-					} else {
+						if disable || showAll || specialOnly {
+							r.outf("enable -n %s\n", n)
+						}
+					} else if !disable {
 						r.outf("enable %s\n", n)
 					}
 				}
-				_ = showAll
 				break
 			}
 			// Default (no args, no -p): list only enabled OR only
@@ -2871,7 +2881,7 @@ func (r *Runner) typeMatches(arg string, skipFuncs bool) []typeMatch {
 			})
 		}
 	}
-	if IsBuiltin(arg) {
+	if IsBuiltin(arg) && !r.disabledBuiltins[arg] {
 		ms = append(ms, typeMatch{
 			kind: "builtin",
 			desc: fmt.Sprintf("%s is a shell builtin", arg),
