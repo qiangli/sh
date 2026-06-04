@@ -336,6 +336,170 @@ func Pattern(cfg *Config, word *syntax.Word) (string, error) {
 //
 // The config specifies shell expansion options; nil behaves the same as an
 // empty config.
+// ansiCEscape processes the bash 5.3 ANSI-C `$'...'` escape table.
+// This is similar to Format's escape handling but adds the `\cX`
+// control-character form (consumes the next char), which printf/Format
+// preserve literally. Returns the decoded string.
+func ansiCEscape(s string) string {
+	var sb strings.Builder
+	sb.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c != '\\' || i+1 >= len(s) {
+			sb.WriteByte(c)
+			continue
+		}
+		i++
+		c = s[i]
+		switch c {
+		case 'a':
+			sb.WriteByte('\a')
+		case 'b':
+			sb.WriteByte('\b')
+		case 'e', 'E':
+			sb.WriteByte('\x1b')
+		case 'f':
+			sb.WriteByte('\f')
+		case 'n':
+			sb.WriteByte('\n')
+		case 'r':
+			sb.WriteByte('\r')
+		case 't':
+			sb.WriteByte('\t')
+		case 'v':
+			sb.WriteByte('\v')
+		case '\\', '\'', '"', '?':
+			sb.WriteByte(c)
+		case 'c':
+			// `\cX` produces a control character. Bash 5.3 also
+			// allows `\c\X` (the next char is itself an escape):
+			// `\c\\` → 0x1C (control-backslash, FS). Special
+			// cases: `\c?` → 0x7F (DEL), `\c@` → 0x00 (NUL).
+			if i+1 >= len(s) {
+				sb.WriteByte('\\')
+				sb.WriteByte('c')
+				break
+			}
+			i++
+			nx := s[i]
+			// `\c\X`: consume the inner `\X`; X is the byte we
+			// control-mask. For our purposes (bash 5.3 nquote3
+			// suite), X is just `\` — we keep it simple and
+			// always treat `\c\` as `\c` applied to a literal
+			// `\`. Other inner escapes are unusual; fall back to
+			// the same behaviour.
+			if nx == '\\' && i+1 < len(s) {
+				inner := s[i+1]
+				i++
+				switch inner {
+				case '\\':
+					sb.WriteByte(0x1c)
+				case '?':
+					sb.WriteByte(0x7f)
+				case '@':
+					sb.WriteByte(0x00)
+				default:
+					if inner >= 'a' && inner <= 'z' {
+						inner -= 'a' - 'A'
+					}
+					sb.WriteByte(inner & 0x1f)
+				}
+				break
+			}
+			switch nx {
+			case '?':
+				sb.WriteByte(0x7f)
+			case '@':
+				sb.WriteByte(0x00)
+			default:
+				if nx >= 'a' && nx <= 'z' {
+					nx -= 'a' - 'A'
+				}
+				sb.WriteByte(nx & 0x1f)
+			}
+		case '0', '1', '2', '3', '4', '5', '6', '7':
+			// 1-3 octal digits.
+			j := 0
+			for ; j < 3 && i+j < len(s); j++ {
+				d := s[i+j]
+				if d < '0' || d > '7' {
+					break
+				}
+			}
+			n, _ := strconv.ParseUint(s[i:i+j], 8, 8)
+			sb.WriteByte(byte(n))
+			i += j - 1
+		case 'x', 'u', 'U':
+			// `\xN[N]`, `\uN[NNN]`, `\UN[NNNNNNN]`. The brace
+			// form `\x{HEX}` / `\u{HEX}` / `\U{HEX}` is also
+			// accepted (greedy, may be unclosed).
+			max := 2
+			switch c {
+			case 'u':
+				max = 4
+			case 'U':
+				max = 8
+			}
+			if i+1 < len(s) && s[i+1] == '{' {
+				// Brace form: consume from after `{` until the
+				// next non-hex or `}`.
+				start := i + 2
+				end := start
+				for end < len(s) {
+					d := s[end]
+					if (d >= '0' && d <= '9') || (d >= 'a' && d <= 'f') || (d >= 'A' && d <= 'F') {
+						end++
+						continue
+					}
+					break
+				}
+				digits := s[start:end]
+				closer := end
+				if closer < len(s) && s[closer] == '}' {
+					i = closer
+				} else {
+					// Unclosed — stop on first non-hex char.
+					i = end - 1
+				}
+				if digits == "" {
+					sb.WriteByte(0)
+					break
+				}
+				n, _ := strconv.ParseUint(digits, 16, 64)
+				if c == 'x' {
+					sb.WriteByte(byte(n))
+				} else {
+					sb.WriteRune(rune(n))
+				}
+				break
+			}
+			j := 0
+			for ; j < max && i+1+j < len(s); j++ {
+				d := s[i+1+j]
+				if !((d >= '0' && d <= '9') || (d >= 'a' && d <= 'f') || (d >= 'A' && d <= 'F')) {
+					break
+				}
+			}
+			if j == 0 {
+				sb.WriteByte('\\')
+				sb.WriteByte(c)
+				break
+			}
+			n, _ := strconv.ParseUint(s[i+1:i+1+j], 16, 32)
+			if c == 'x' {
+				sb.WriteByte(byte(n))
+			} else {
+				sb.WriteRune(rune(n))
+			}
+			i += j
+		default:
+			sb.WriteByte('\\')
+			sb.WriteByte(c)
+		}
+	}
+	return sb.String()
+}
+
 func Format(cfg *Config, format string, args []string) (string, int, error) {
 	cfg = prepareConfig(cfg)
 	sb := cfg.strBuilder()
@@ -1120,7 +1284,7 @@ func (cfg *Config) wordField(wps []syntax.WordPart, ql quoteLevel) ([]fieldPart,
 		case *syntax.SglQuoted:
 			fp := fieldPart{quote: quoteSingle, val: wp.Value}
 			if wp.Dollar {
-				fp.val, _, _ = Format(cfg, fp.val, nil)
+				fp.val = ansiCEscape(fp.val)
 				fp.val, _, _ = strings.Cut(fp.val, "\x00") // cut the string if format included \x00
 			}
 			field = append(field, fp)
@@ -1516,7 +1680,7 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 			allowEmpty = true
 			fp := fieldPart{quote: quoteSingle, val: wp.Value}
 			if wp.Dollar {
-				fp.val, _, _ = Format(cfg, fp.val, nil)
+				fp.val = ansiCEscape(fp.val)
 				fp.val, _, _ = strings.Cut(fp.val, "\x00") // cut the string if format included \x00
 			}
 			curField = append(curField, fp)
