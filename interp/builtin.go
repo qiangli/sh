@@ -1900,11 +1900,27 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			for _, a := range args {
 				filter[normalizeSignal(a)] = true
 			}
+			// bash prints `trap -- 'CMD' SIGNAME` with the body in
+			// single-quotes (`'`) and the signal name prefixed with
+			// `SIG` for all non-EXIT/non-DEBUG/non-ERR/non-RETURN
+			// pseudo-signals.
+			sigPrefix := func(name string) string {
+				switch name {
+				case "EXIT", "DEBUG", "ERR", "RETURN":
+					return name
+				default:
+					return "SIG" + name
+				}
+			}
 			for sig, cb := range r.trapCallbacks {
 				if len(filter) > 0 && !filter[sig] {
 					continue
 				}
-				r.outf("trap -- %q %s\n", cb, sig)
+				// bash single-quotes the body and escapes embedded
+				// single quotes via `'\''`. No escaping of other
+				// characters.
+				quoted := "'" + strings.ReplaceAll(cb, "'", `'\''`) + "'"
+				r.outf("trap -- %s %s\n", quoted, sigPrefix(sig))
 			}
 			break
 		}
