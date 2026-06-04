@@ -64,9 +64,31 @@ func splitCombinedShortFlags(args []string) []string {
 	}
 	out := make([]string, 0, len(args))
 	out = append(out, args[0])
+	// Once we see a non-flag argument (or the literal `--`), it's
+	// the script path or end-of-flags. Everything after must be
+	// passed through untouched: those tokens belong to the script
+	// (positional `$@`) and may legitimately look like combined
+	// flags (e.g. `bashy ./script.sh -ac` should give the script
+	// `-ac` as $1, not pre-split it into shell options).
+	endOfFlags := false
 	for i := 1; i < len(args); i++ {
 		a := args[i]
+		if endOfFlags {
+			out = append(out, a)
+			continue
+		}
 		if len(a) <= 2 || a[0] != '-' || a[1] == '-' {
+			if !(len(a) > 0 && a[0] == '-' && (len(a) == 1 || a[1] == '-')) {
+				// First non-flag arg: it's the script path.
+				// Everything after this is positional for the
+				// script.
+				endOfFlags = true
+			} else if a == "--" {
+				// Literal `--` ends flag parsing; emit it so
+				// Go's flag package sees it, then pass rest
+				// through.
+				endOfFlags = true
+			}
 			out = append(out, a)
 			continue
 		}

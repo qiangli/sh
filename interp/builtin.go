@@ -1576,12 +1576,19 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		}
 		optstr := args[0]
 		name := args[1]
-		if !syntax.ValidName(name) {
-			return failf(2, "getopts: `%s': not a valid identifier\n", name)
-		}
+		invalidName := !syntax.ValidName(name)
 		args = args[2:]
 		if len(args) == 0 {
 			args = r.Params
+		}
+		// Invalid identifier: bash still advances getopts' internal
+		// state (so the caller's subsequent `shift $((OPTIND-1))`
+		// works) but refuses the assignment and returns rc=2.
+		if invalidName {
+			r.optState.next(optstr, args)
+			optind := r.optState.argidx + 1
+			r.setVarString("OPTIND", strconv.Itoa(optind))
+			return failf(2, "getopts: `%s': not a valid identifier\n", name)
 		}
 		// Diagnostics fire unless the optstring starts with ':' (silent
 		// mode) or the caller sets OPTERR=0 — the latter being bash's
@@ -1597,8 +1604,14 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		// bash's getopts only surfaces the OPTARG-readonly diagnostic
 		// when it would have written to OPTARG (i.e. the default branch
 		// below): the unset that happens at the top of every getopts
-		// call is silent on readonly.
-		optargRO := r.lookupVar("OPTARG").ReadOnly
+		// call is silent on readonly. Follow namerefs so a chain
+		// `OPTARG → readonly RO` is treated the same as a direct
+		// readonly OPTARG.
+		optargVar := r.lookupVar("OPTARG")
+		if _, resolved := optargVar.Resolve(r.writeEnv); resolved.IsSet() {
+			optargVar = resolved
+		}
+		optargRO := optargVar.ReadOnly
 		if !optargRO {
 			r.delVar("OPTARG")
 		}
@@ -1619,9 +1632,6 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			r.errf("%s: option requires an argument -- %s\n", scriptName, optarg)
 		default:
 			if optarg != "" {
-				// Let setVarString emit the readonly diagnostic if any —
-				// matches bash, which prints "OPTARG: readonly variable"
-				// for the call that would have assigned to it.
 				r.setVarString("OPTARG", optarg)
 			}
 		}
