@@ -231,6 +231,13 @@ type Runner struct {
 	// disabledBuiltins tracks builtins disabled via "enable -n".
 	disabledBuiltins map[string]bool
 
+	// noOpSetState tracks the on/off state of accept-and-ignore
+	// `set -o` options (history, monitor, privileged, etc.). The
+	// runner doesn't otherwise act on these flags, but it must
+	// remember the value so `set -o` listings echo back what the
+	// script most recently asserted.
+	noOpSetState map[string]bool
+
 	// bgPidCallback, when non-nil, is invoked with the OS PID of every
 	// real process this runner spawns from a backgrounded statement
 	// (`foo &`). Set via [WithBgPidCallback]. Outpost uses this to
@@ -609,6 +616,9 @@ func Params(args ...string) RunnerOption {
 					list = append(list, oentry{opt.name, r.opts[i]})
 				}
 				for n, on := range noOpSetOptions {
+					if v, ok := r.noOpSetState[n]; ok {
+						on = v
+					}
 					list = append(list, oentry{n, on})
 				}
 				sort.Slice(list, func(i, j int) bool { return list[i].name < list[j].name })
@@ -628,6 +638,9 @@ func Params(args ...string) RunnerOption {
 					list = append(list, oentry{opt.name, r.opts[i]})
 				}
 				for n, on := range noOpSetOptions {
+					if v, ok := r.noOpSetState[n]; ok {
+						on = v
+					}
 					list = append(list, oentry{n, on})
 				}
 				sort.Slice(list, func(i, j int) bool { return list[i].name < list[j].name })
@@ -643,9 +656,14 @@ func Params(args ...string) RunnerOption {
 			opt := r.posixOptByName(value)
 			if opt == nil {
 				if _, ok := noOpSetOptions[value]; ok {
-					// accept-and-ignore: this option name is
-					// recognised by bash but has no runtime
-					// effect in our runner.
+					// accept-and-ignore: remember the toggle so
+					// subsequent `set -o` listings echo back what
+					// the script asserted, but don't otherwise act
+					// on the flag.
+					if r.noOpSetState == nil {
+						r.noOpSetState = make(map[string]bool)
+					}
+					r.noOpSetState[value] = enable
 					continue
 				}
 				return fmt.Errorf("invalid option: %q", value)
@@ -981,10 +999,9 @@ var posixOptsTable = [...]posixOpt{
 // default state in bash 5.3 (true = on, false = off). The state isn't
 // tracked per-runner; the value just lets the listing form match bash.
 var noOpSetOptions = map[string]bool{
-	"history":              true,  // on by default
-	"histexpand":           true,  // alias for history
-	"hashcmds":             false, // set -h on for bash interactive
-	"hashall":              true,  // alias for hashcmds (on in bash)
+	"history":              true, // on by default
+	"histexpand":           true, // alias for history
+	"hashall":              true, // bash's listing uses "hashall", not "hashcmds"
 	"verbose":              false,
 	"monitor":              true, // job control on in bash by default
 	"vi":                   false,

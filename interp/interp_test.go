@@ -2650,15 +2650,15 @@ done <<< 2`,
 	},
 	{
 		"shopt pipefail",
-		"shopt: invalid option name \"pipefail\"\nexit status 1 #JUSTERR",
+		"shopt: pipefail: invalid shell option name\nexit status 1 #JUSTERR",
 	},
 	{
 		"shopt -s pipefail",
-		"shopt: invalid option name \"pipefail\"\nexit status 1 #JUSTERR",
+		"shopt: pipefail: invalid shell option name\nexit status 1 #JUSTERR",
 	},
 	{
 		"shopt -o -s extglob",
-		"shopt: invalid option name \"extglob\"\nexit status 1 #JUSTERR",
+		"shopt: extglob: invalid option name\nexit status 1 #JUSTERR",
 	},
 	{
 		"shopt -s login_shell",
@@ -2670,11 +2670,11 @@ done <<< 2`,
 	},
 	{
 		"shopt -s nosuchname",
-		"shopt: invalid option name \"nosuchname\"\nexit status 1 #JUSTERR",
+		"shopt: nosuchname: invalid shell option name\nexit status 1 #JUSTERR",
 	},
 	{
 		"shopt -o -s nosuchname",
-		"shopt: invalid option name \"nosuchname\"\nexit status 1 #JUSTERR",
+		"shopt: nosuchname: invalid option name\nexit status 1 #JUSTERR",
 	},
 	{
 		"touch a .b ..c; shopt -u dotglob; echo *",

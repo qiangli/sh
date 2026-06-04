@@ -1880,7 +1880,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				}
 				return
 			}
-			r.printOptLine(name, enabled, supported)
+			width := 20 // shopt uses 20-char padding
+			if posixOpts {
+				width = 15 // shopt -o (aka set -o) uses 15
+			}
+			r.printOptLineWidth(name, enabled, supported, width)
 		}
 		if len(args) == 0 {
 			// When combined with `-p`, `shopt -s` lists only set
@@ -1903,6 +1907,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					list = append(list, oentry{opt.name, r.opts[i]})
 				}
 				for name, on := range noOpSetOptions {
+					if v, ok := r.noOpSetState[name]; ok {
+						on = v
+					}
 					list = append(list, oentry{name, on})
 				}
 				sort.Slice(list, func(i, j int) bool { return list[i].name < list[j].name })
@@ -1940,10 +1947,31 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			if posixOpts {
 				opt = r.posixOptByName(arg)
 				if opt == nil {
-					if _, ok := noOpSetOptions[arg]; ok {
+					if defaultOn, ok := noOpSetOptions[arg]; ok {
 						// `shopt -so NAME` for an accept-and-ignore
-						// option (physical, ignoreeof, etc.):
-						// silently succeed.
+						// option (physical, ignoreeof, etc.): record
+						// the toggle so subsequent listings echo it.
+						if mode == "-s" || mode == "-u" {
+							if r.noOpSetState == nil {
+								r.noOpSetState = make(map[string]bool)
+							}
+							r.noOpSetState[arg] = mode == "-s"
+							continue
+						}
+						// For `shopt -p -o NAME` / `shopt -q -o NAME`
+						// emit/check using the tracked state so the
+						// listing form matches bash's output.
+						state := defaultOn
+						if v, ok := r.noOpSetState[arg]; ok {
+							state = v
+						}
+						if quiet {
+							if !state {
+								exit.code = 1
+							}
+							continue
+						}
+						emitOpt(arg, state, true)
 						continue
 					}
 				}
@@ -1951,7 +1979,16 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				opt, supported = r.bashOptByName(arg)
 			}
 			if opt == nil {
-				return failf(1, "shopt: invalid option name %q\n", arg)
+				// Bash 5.3 distinguishes the two `shopt` namespaces:
+				// `shopt NAME` → "invalid shell option name"
+				// `shopt -o NAME` → "invalid option name"
+				kind := "invalid shell option name"
+				if posixOpts {
+					kind = "invalid option name"
+				}
+				r.errf("%sshopt: %s: %s\n", r.bashErrPrefix(pos), arg, kind)
+				exit.code = 1
+				return exit
 			}
 
 			switch mode {
@@ -2545,6 +2582,42 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			for _, n := range names {
 				r.outf("%s\n", n)
 			}
+		case "shopt":
+			names := make([]string, 0, len(bashOptsTable))
+			for _, opt := range bashOptsTable {
+				names = append(names, opt.name)
+			}
+			slices.Sort(names)
+			for _, n := range names {
+				r.outf("%s\n", n)
+			}
+		case "builtin":
+			names := []string{
+				":", ".", "[", "alias", "bg", "bind", "break", "builtin",
+				"caller", "cd", "command", "compgen", "complete", "compopt",
+				"continue", "declare", "dirs", "disown", "echo", "enable",
+				"eval", "exec", "exit", "export", "false", "fc", "fg",
+				"getopts", "hash", "help", "history", "jobs", "kill",
+				"let", "local", "logout", "mapfile", "popd", "printf",
+				"pushd", "pwd", "read", "readarray", "readonly", "return",
+				"set", "shift", "shopt", "source", "suspend", "test",
+				"times", "trap", "true", "type", "typeset", "ulimit",
+				"umask", "unalias", "unset", "wait",
+			}
+			slices.Sort(names)
+			for _, n := range names {
+				r.outf("%s\n", n)
+			}
+		case "variable":
+			var names []string
+			r.writeEnv.Each(func(n string, _ expand.Variable) bool {
+				names = append(names, n)
+				return true
+			})
+			slices.Sort(names)
+			for _, n := range names {
+				r.outf("%s\n", n)
+			}
 		default:
 			return failf(1, "compgen: programmable completion not yet implemented\n")
 		}
@@ -3105,12 +3178,15 @@ func mapfileSplit(delim byte, dropDelim bool) bufio.SplitFunc {
 }
 
 func (r *Runner) printOptLine(name string, enabled, supported bool) {
-	// bash's `shopt` (no flags) and `set -o` pads the option name
-	// to a 20-character field with spaces, then emits a tab and
-	// the on/off state. Names longer than 20 chars don't get any
-	// padding — just one tab.
+	r.printOptLineWidth(name, enabled, supported, 15)
+}
+
+// printOptLineWidth emits a `name<spaces><tab>on/off` line padding the
+// name to a width-character field. Bash uses 15 for `set -o` and 20
+// for `shopt`. Names longer than the field get no padding.
+func (r *Runner) printOptLineWidth(name string, enabled, supported bool, width int) {
 	_ = supported
-	pad := 20 - len(name)
+	pad := width - len(name)
 	if pad < 0 {
 		pad = 0
 	}
