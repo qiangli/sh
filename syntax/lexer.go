@@ -1158,6 +1158,18 @@ loop:
 		case '"':
 			break loop
 		case '\\': // escaped byte follows
+			// bash treats `\<newline>` inside "..." as a line
+			// continuation: both bytes are removed from the
+			// final value. Detect that case and discard them
+			// by trimming the trailing '\' from litBs and
+			// consuming the '\n' without appending.
+			if p.peek() == '\n' {
+				if n := len(p.litBs); n > 0 && p.litBs[n-1] == '\\' {
+					p.litBs = p.litBs[:n-1]
+				}
+				p.rune() // consume the '\n'
+				continue
+			}
 			p.rune()
 		case escNewl, '`', '$':
 			tok = _Lit
