@@ -1365,6 +1365,8 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		// becomes one verbatim field).
 		nstrict := false
 		delim := "\n"
+		// readFD: -u <N>. -1 means "use r.stdin" (the default).
+		readFD := -1
 		fp := flagParser{remaining: args}
 		for fp.more() {
 			switch flag := fp.flag(); flag {
@@ -1411,7 +1413,12 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					fp.value() // consume the argument
 				}
 			case "-u":
-				fp.value() // consume fd argument, ignore for now
+				val := fp.value()
+				n, err := strconv.Atoi(val)
+				if err != nil || n < 0 {
+					return failf(2, "read: %s: invalid file descriptor specification\n", val)
+				}
+				readFD = n
 			default:
 				return invalidOpt("read", flag)
 			}
@@ -1427,6 +1434,49 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		if prompt != "" {
 			r.out(prompt)
 		}
+
+		// Resolve the reader: `-u N` opens fd N from the runner's
+		// fd table; otherwise we keep r.stdin. Swap r.stdin so
+		// readLine (which talks to r.stdin directly) sees the right
+		// source. With `-t T` against a non-deadline-able file
+		// (FIFOs without O_NONBLOCK), SetReadDeadline silently
+		// fails and the read would block forever — skip the swap
+		// in that case so the existing `r.stdin` path (which is
+		// known to be deadline-able) still bounds the wait.
+		var savedStdin *os.File
+		stdinSwapped := false
+		if readFD >= 0 {
+			switch {
+			case readFD == 1, readFD == 2:
+				return failf(2, "read: %d: invalid file descriptor: not open for reading\n", readFD)
+			case readFD == 0:
+				// `-u 0` is just stdin — no swap needed.
+			default:
+				f, ok := r.fdTable[readFD]
+				if !ok {
+					return failf(2, "read: %d: invalid file descriptor: not open\n", readFD)
+				}
+				canSwap := true
+				if timeout > 0 {
+					// Probe whether SetReadDeadline is honored.
+					if err := f.SetReadDeadline(time.Now().Add(time.Hour)); err != nil {
+						canSwap = false
+					} else {
+						f.SetReadDeadline(time.Time{})
+					}
+				}
+				if canSwap {
+					savedStdin = r.stdin
+					r.stdin = f
+					stdinSwapped = true
+				}
+			}
+		}
+		defer func() {
+			if stdinSwapped {
+				r.stdin = savedStdin
+			}
+		}()
 
 		readCtx := ctx
 		if timeout > 0 {
