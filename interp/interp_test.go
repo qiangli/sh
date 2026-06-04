@@ -3852,7 +3852,7 @@ done <<< 2`,
 	},
 	{
 		"getopts a a:b",
-		"getopts: invalid identifier: \"a:b\"\nexit status 2 #JUSTERR",
+		"getopts: `a:b': not a valid identifier\nexit status 2 #JUSTERR",
 	},
 	{
 		"getopts abc opt -a; echo $opt; $optarg",
@@ -3860,11 +3860,11 @@ done <<< 2`,
 	},
 	{
 		"getopts abc opt -z",
-		"getopts: illegal option -- \"z\"\n #IGNORE",
+		"bashy: illegal option -- z\n #IGNORE",
 	},
 	{
 		"getopts a: opt -a",
-		"getopts: option requires an argument -- \"a\"\n #IGNORE",
+		"bashy: option requires an argument -- a\n #IGNORE",
 	},
 	{
 		"getopts :abc opt -z; echo $opt; echo $OPTARG",

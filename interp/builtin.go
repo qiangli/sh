@@ -1536,6 +1536,16 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		}
 
 	case "getopts":
+		// bash rejects any leading `-X` flag with an "invalid option"
+		// diagnostic, even though our own optstring may legitimately
+		// start with `-` (no, it can't — only `:` is special in bash).
+		if len(args) > 0 && len(args[0]) > 1 && args[0][0] == '-' && args[0][1] != ':' {
+			r.errf("%s%s: %s: invalid option\n",
+				r.bashErrPrefix(r.curStmtPos), "getopts", args[0])
+			r.errf("getopts: usage: getopts optstring name [arg ...]\n")
+			exit.code = 2
+			return exit
+		}
 		if len(args) < 2 {
 			// bash 5.3 emits the usage line without the
 			// `<file>: line N: ` prefix that other builtin
@@ -1554,7 +1564,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		optstr := args[0]
 		name := args[1]
 		if !syntax.ValidName(name) {
-			return failf(2, "getopts: invalid identifier: %q\n", name)
+			return failf(2, "getopts: `%s': not a valid identifier\n", name)
 		}
 		args = args[2:]
 		if len(args) == 0 {
@@ -1572,11 +1582,21 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 
 		r.setVarString(name, string(opt))
 		r.delVar("OPTARG")
+		// bash prefixes diagnostics with $0 (the script name) and prints
+		// the offending character unquoted (e.g. `./script.sh: illegal
+		// option -- c`).
+		scriptName := r.argv0
+		if scriptName == "" {
+			scriptName = r.filename
+		}
+		if scriptName == "" {
+			scriptName = "bashy"
+		}
 		switch {
 		case opt == '?' && diagnostics && !done:
-			r.errf("getopts: illegal option -- %q\n", optarg)
+			r.errf("%s: illegal option -- %s\n", scriptName, optarg)
 		case opt == ':' && diagnostics:
-			r.errf("getopts: option requires an argument -- %q\n", optarg)
+			r.errf("%s: option requires an argument -- %s\n", scriptName, optarg)
 		default:
 			if optarg != "" {
 				r.setVarString("OPTARG", optarg)
@@ -2695,35 +2715,62 @@ func (g *getopts) next(optstr string, args []string) (opt rune, optarg string, d
 		return '?', "", true
 	}
 	arg := []rune(args[g.argidx])
-	if len(arg) < 2 || arg[0] != '-' || arg[1] == '-' {
+	if len(arg) < 2 || arg[0] != '-' {
+		return '?', "", true
+	}
+	// `--` is the end-of-options marker; consume it so OPTIND points
+	// past it, matching bash.
+	if string(arg) == "--" {
+		g.argidx++
+		g.runeidx = 0
+		return '?', "", true
+	}
+	if arg[1] == '-' {
 		return '?', "", true
 	}
 
 	opts := arg[1:]
 	opt = opts[g.runeidx]
-	if g.runeidx+1 < len(opts) {
+	hasRest := g.runeidx+1 < len(opts)
+
+	i := strings.IndexRune(optstr, opt)
+	if i < 0 {
+		// invalid option — advance past this letter so we don't loop forever
+		if hasRest {
+			g.runeidx++
+		} else {
+			g.argidx++
+			g.runeidx = 0
+		}
+		return '?', string(opt), false
+	}
+
+	if i+1 < len(optstr) && optstr[i+1] == ':' {
+		// Option requires an argument. If there's content remaining in
+		// the current cluster (e.g. `-bbval` for option `b`), that's
+		// the value. Otherwise consume the next arg.
+		if hasRest {
+			optarg = string(opts[g.runeidx+1:])
+			g.argidx++
+			g.runeidx = 0
+		} else {
+			g.argidx++
+			g.runeidx = 0
+			if g.argidx >= len(args) {
+				return ':', string(opt), false
+			}
+			optarg = args[g.argidx]
+			g.argidx++
+		}
+		return opt, optarg, false
+	}
+
+	if hasRest {
 		g.runeidx++
 	} else {
 		g.argidx++
 		g.runeidx = 0
 	}
-
-	i := strings.IndexRune(optstr, opt)
-	if i < 0 {
-		// invalid option
-		return '?', string(opt), false
-	}
-
-	if i+1 < len(optstr) && optstr[i+1] == ':' {
-		if g.argidx >= len(args) {
-			// missing argument
-			return ':', string(opt), false
-		}
-		optarg = args[g.argidx]
-		g.argidx++
-		g.runeidx = 0
-	}
-
 	return opt, optarg, false
 }
 
