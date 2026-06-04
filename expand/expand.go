@@ -1260,9 +1260,27 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 		if fieldStart >= 0 {
 			curField = append(curField, fieldPart{val: val[fieldStart:]})
 		}
-		// Trailing separator runs (regardless of non-ws count) never
-		// produce trailing empty fields — bash matches this.
-		_ = flushedPrefix // referenced above
+		// A trailing separator run still emits empties for any
+		// non-ws delimiters beyond the first:
+		//   `a::`   → fields `a` + `""` (two `:` → 1 between-empty)
+		//   `:::`   → fields `""` + `""` + `""` (three `:` →
+		//             two between-empties, plus the leading edge one)
+		// Per POSIX, the position *after* the last non-ws delimiter
+		// is always dropped, so we emit `runNonWS - 1` extra
+		// empties after an already-emitted field, or `runNonWS`
+		// total when the leading edge had nothing flushed.
+		if inSepRun && runNonWS > 0 {
+			extra := runNonWS - 1
+			if !flushedPrefix && len(curField) == 0 {
+				// Pure separator-only run with nothing before — emit
+				// the leading-edge empty in addition to the
+				// between-delimiter empties.
+				extra = runNonWS
+			}
+			for n := 0; n < extra; n++ {
+				emitEmpty()
+			}
+		}
 	}
 	for i, wp := range wps {
 		switch wp := wp.(type) {
@@ -1915,8 +1933,21 @@ func ReadFields(cfg *Config, s string, n int, raw bool) []string {
 		fpos[0].end = end
 		fpos = fpos[:1]
 	case n != -1 && n < len(fpos):
-		// combine to max n fields
-		fpos[n-1].end = fpos[len(fpos)-1].end
+		// `read v1 v2 ... vN` with more fields than vars: the last
+		// variable swallows everything from the start of field N to
+		// the end of the input, with trailing IFS-whitespace
+		// trimmed. Interior non-ws IFS separators are preserved
+		// (e.g. `:::` with IFS=": " and `read x y` → x="", y="::").
+		end := len(runes)
+		for end > fpos[n-1].start {
+			r := runes[end-1]
+			if (r == ' ' || r == '\t' || r == '\n') && cfg.ifsRune(r) {
+				end--
+				continue
+			}
+			break
+		}
+		fpos[n-1].end = end
 		fpos = fpos[:n]
 	}
 
