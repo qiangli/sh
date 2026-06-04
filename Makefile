@@ -36,7 +36,7 @@ test-bash: build test-bash-helpers
 				skipped=$$((skipped + 1)); \
 				continue; \
 			fi; \
-			( $$THIS_SH ./$$test_file 2>&1 | grep -v '^expect' > $$BASH_TSTOUT ) & \
+			( $$THIS_SH ./$$test_file 2>&1 | grep -av '^expect' > $$BASH_TSTOUT ) & \
 			test_pid=$$!; \
 			( sleep $(BASH_TEST_TIMEOUT) && kill -9 $$test_pid 2>/dev/null ) & \
 			timer_pid=$$!; \
