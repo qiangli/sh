@@ -1059,13 +1059,17 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		//     `a -a`), bash instead treats it as a binary form
 		//     missing the right operand — let the parser surface
 		//     that.
-		if len(args) == 2 &&
-			testUnaryOp(args[0]) == illegalTok && args[0] != "!" &&
-			testBinaryOp(args[1]) == illegalTok {
-			r.errf("%s%s: %s: unary operator expected\n",
-				r.bashErrPrefix(pos), name, args[0])
-			exit.code = 2
-			return exit
+		if len(args) == 2 && testBinaryOp(args[1]) == illegalTok {
+			u := testUnaryOp(args[0])
+			// `(` is in our unary table as TsParen (grouping),
+			// but bash doesn't accept it as a true unary operator
+			// in the 2-arg form — treat it like an unknown name.
+			if (u == illegalTok || u == syntax.TsParen) && args[0] != "!" {
+				r.errf("%s%s: %s: unary operator expected\n",
+					r.bashErrPrefix(pos), name, args[0])
+				exit.code = 2
+				return exit
+			}
 		}
 		parseErr := false
 		closer := ""
