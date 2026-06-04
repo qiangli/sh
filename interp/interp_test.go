@@ -2034,7 +2034,7 @@ var runTests = []runTest{
 	},
 	{
 		"[ a -a ]",
-		"[: -a must be followed by an expression\nexit status 2 #JUSTERR",
+		"[: argument expected\nexit status 2 #JUSTERR",
 	},
 	{"[ a ]", ""},
 	{"[ -n ]", ""},
@@ -2062,7 +2062,7 @@ var runTests = []runTest{
 	},
 	{
 		"test 3 -lt",
-		"test: -lt must be followed by a word\nexit status 2 #JUSTERR",
+		"test: syntax error: `-lt' unexpected\nexit status 2 #JUSTERR",
 	},
 	{
 		"touch -t 202111050000.00 a; touch -t 202111060000.00 b; [ a -nt b ]",

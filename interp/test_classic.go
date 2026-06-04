@@ -5,6 +5,7 @@ package interp
 
 import (
 	"fmt"
+	"strings"
 
 	"mvdan.cc/sh/v3/syntax"
 )
@@ -41,7 +42,12 @@ func (p *testParser) next() {
 
 func (p *testParser) followWord(fval string) *syntax.Word {
 	if p.eof {
-		p.errf("%s must be followed by a word", fval)
+		// Bash 5.3 wording for "binary op missing right operand"
+		// is `syntax error: \`OP' unexpected` for the comparison
+		// ops, and `argument expected` for the boolean -a / -o.
+		// followWord is only reached for the comparison ops; the
+		// -a/-o path emits its own diagnostic via classicTest.
+		p.errf("syntax error: `%s' unexpected", fval)
 	}
 	w := &syntax.Word{Parts: []syntax.WordPart{
 		&syntax.Lit{Value: p.val},
@@ -63,10 +69,14 @@ func (p *testParser) classicTest(fval string, pastAndOr bool) syntax.TestExpr {
 	opStr := p.val
 	op := testBinaryOp(p.val)
 	if op == illegalTok {
-		// bash's wording: `<arg>: binary operator expected`
-		// when we were trying to find a binary op between two
-		// operands.
-		p.errf("%s: binary operator expected", p.val)
+		// Bash 5.3 wording: a leading `-` (looks like an
+		// operator name) gets `syntax error: \`X' unexpected`;
+		// anything else gets `too many arguments`.
+		if strings.HasPrefix(p.val, "-") {
+			p.errf("syntax error: `%s' unexpected", p.val)
+		} else {
+			p.errf("too many arguments")
+		}
 	}
 	b := &syntax.BinaryTest{
 		Op: op,
@@ -76,7 +86,9 @@ func (p *testParser) classicTest(fval string, pastAndOr bool) syntax.TestExpr {
 	switch b.Op {
 	case syntax.AndTest, syntax.OrTest:
 		if b.Y = p.classicTest(opStr, false); b.Y == nil {
-			p.errf("%s must be followed by an expression", opStr)
+			// Bash 5.3 emits `argument expected` rather than
+			// naming the boolean operator.
+			p.errf("argument expected")
 		}
 	default:
 		b.Y = p.followWord(opStr)

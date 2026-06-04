@@ -1181,6 +1181,22 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				return exit
 			}
 		}
+		// 3-arg `arg1 OP arg2` where OP isn't a binary operator:
+		// bash 5.3 emits `<OP>: binary operator expected` rather
+		// than the generic "too many arguments" path used for 4+
+		// args. Catch it here so the testParser doesn't take the
+		// general recursive route for this case. Skip if args[0]
+		// is `!` / `(` (grouping/negation), or any known unary op
+		// — those go through the recursive parser unchanged.
+		if len(args) == 3 &&
+			testBinaryOp(args[1]) == illegalTok &&
+			args[0] != "!" && args[0] != "(" &&
+			testUnaryOp(args[0]) == illegalTok {
+			r.errf("%s%s: %s: binary operator expected\n",
+				r.bashErrPrefix(pos), name, args[1])
+			exit.code = 2
+			return exit
+		}
 		parseErr := false
 		closer := ""
 		if name == "[" {
