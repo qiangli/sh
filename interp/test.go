@@ -235,7 +235,13 @@ func (r *Runner) unTest(ctx context.Context, op syntax.UnTestOperator, x string)
 		info, err := r.stat(ctx, x)
 		return err == nil && info.Size() > 0
 	case syntax.TsFdTerm:
-		fd := atoi(x)
+		// bash 5.3: `-t N` requires N to be an integer; emit
+		// "<X>: integer expected" with exit 2 otherwise.
+		fd, err := strconv.ParseInt(strings.TrimSpace(x), 10, 64)
+		if err != nil {
+			r.testIntErr = x
+			return false
+		}
 		var f any
 		switch fd {
 		case 0:
