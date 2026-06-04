@@ -488,22 +488,13 @@ func formatInto(sb *strings.Builder, format string, args []string, startTime tim
 				sb.WriteByte('\v')
 			case '\\', '\'', '"', '?': // just the character
 				sb.WriteByte(c)
-			case 'c': // \cX → control char (X XOR 0x40)
-				i++
-				if i >= len(format) {
-					sb.WriteByte('\\')
-					sb.WriteByte('c')
-					i--
-					break
-				}
-				next := format[i]
-				// Bash's \cx: lowercase letters fold to upper, then
-				// the byte is XOR'd with 0x40 (so \c@→0x00, \cA→0x01,
-				// \cZ→0x1A, \c?→0x7F).
-				if next >= 'a' && next <= 'z' {
-					next -= 'a' - 'A'
-				}
-				sb.WriteByte(next ^ 0x40)
+			case 'c':
+				// bash's printf preserves `\c` literally in the
+				// format string (i.e. emits two bytes `\` and `c`)
+				// — POSIX says `\c` stops output, but bash 5.3 only
+				// honors that for echo, not printf. Match bash.
+				sb.WriteByte('\\')
+				sb.WriteByte('c')
 			case '0', '1', '2', '3', '4', '5', '6', '7':
 				// bash printf: `\nnn` is 1-3 octal digits. A leading
 				// `\0` is also accepted as a marker followed by up
