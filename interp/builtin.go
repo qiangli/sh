@@ -1939,6 +1939,14 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			opt, supported := (*bool)(nil), true
 			if posixOpts {
 				opt = r.posixOptByName(arg)
+				if opt == nil {
+					if _, ok := noOpSetOptions[arg]; ok {
+						// `shopt -so NAME` for an accept-and-ignore
+						// option (physical, ignoreeof, etc.):
+						// silently succeed.
+						continue
+					}
+				}
 			} else {
 				opt, supported = r.bashOptByName(arg)
 			}

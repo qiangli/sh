@@ -642,7 +642,7 @@ func Params(args ...string) RunnerOption {
 			}
 			opt := r.posixOptByName(value)
 			if opt == nil {
-				if noOpSetOptions[value] {
+				if _, ok := noOpSetOptions[value]; ok {
 					// accept-and-ignore: this option name is
 					// recognised by bash but has no runtime
 					// effect in our runner.
