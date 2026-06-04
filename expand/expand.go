@@ -1514,6 +1514,27 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 				curField = append(curField, part)
 			}
 		case *syntax.ParamExp:
+			// `${var-"$@"}` (unquoted) preserves the field
+			// structure of "$@" when the default fires. Detect
+			// that special case before falling through to the
+			// generic single-string paramExp path. We restrict
+			// the recovery to `"$@"` defaults — `"$*"` always
+			// joins to a single string, so the regular path is
+			// already correct for it.
+			if isDefaultWithQuotedAt(wp) {
+				if elems := cfg.quotedElemFields(wp); elems != nil {
+					for i, elem := range elems {
+						if i > 0 {
+							flush()
+						}
+						curField = append(curField, fieldPart{
+							quote: quoteSingle,
+							val:   elem,
+						})
+					}
+					continue
+				}
+			}
 			val, err := cfg.paramExp(wp)
 			if err != nil {
 				return nil, err
@@ -1560,11 +1581,75 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 	return fields, nil
 }
 
+// isDefaultWithQuotedAt reports whether `pe` is a `${var-"$@"}` /
+// `${var:-"$@"}` / `${var-"$*"}` form — a default-substitution whose
+// WORD is exactly one double-quoted `$@` or `$*`. Both flavors are
+// handled identically here since the immediate enclosing context for
+// the substituted WORD is double-quoted: in that context `"$@"` and
+// `"$*"` both produce *at least one* field (multiple for @, the
+// IFS-joined string for *), which is what we want.
+func isDefaultWithQuotedAt(pe *syntax.ParamExp) bool {
+	if pe == nil || pe.Exp == nil {
+		return false
+	}
+	op := pe.Exp.Op
+	if op != syntax.DefaultUnset && op != syntax.DefaultUnsetOrNull {
+		return false
+	}
+	if pe.Exp.Word == nil || len(pe.Exp.Word.Parts) != 1 {
+		return false
+	}
+	dq, ok := pe.Exp.Word.Parts[0].(*syntax.DblQuoted)
+	if !ok || len(dq.Parts) != 1 {
+		return false
+	}
+	inner, ok := dq.Parts[0].(*syntax.ParamExp)
+	if !ok {
+		return false
+	}
+	if inner.Excl || inner.Exp != nil || inner.Repl != nil {
+		return false
+	}
+	return inner.Param.Value == "@" || inner.Param.Value == "*"
+}
+
 // quotedElemFields returns the list of elements resulting from a quoted
 // parameter expansion that should be treated especially, like "${foo[@]}".
 func (cfg *Config) quotedElemFields(pe *syntax.ParamExp) []string {
 	if pe == nil || pe.Length || pe.Width || pe.IsSet {
 		return nil
+	}
+	// Default-value substitution (`${var-WORD}` etc.) where the
+	// substituted WORD is a single `"$@"` or `"$*"` should preserve
+	// field structure — bash treats `${unset-"$@"}` as if `"$@"` were
+	// written directly. Recurse into the WORD when it's exactly one
+	// of those forms and the substitution is going to fire.
+	if pe.Exp != nil && pe.Repl == nil {
+		op := pe.Exp.Op
+		isDefaultOp := op == syntax.DefaultUnset || op == syntax.DefaultUnsetOrNull
+		if isDefaultOp && pe.Exp.Word != nil && len(pe.Exp.Word.Parts) == 1 {
+			if inner, ok := pe.Exp.Word.Parts[0].(*syntax.DblQuoted); ok &&
+				len(inner.Parts) == 1 {
+				if innerPE, ok := inner.Parts[0].(*syntax.ParamExp); ok &&
+					!innerPE.Excl && innerPE.Exp == nil && innerPE.Repl == nil &&
+					(innerPE.Param.Value == "@" || innerPE.Param.Value == "*") {
+					// Check whether the outer variable would actually
+					// require substitution: unset OR (for `:-`)
+					// unset/null.
+					vr := cfg.Env.Get(pe.Param.Value)
+					trigger := !vr.IsSet()
+					if op == syntax.DefaultUnsetOrNull {
+						trigger = !vr.IsSet() || vr.String() == ""
+					}
+					if trigger {
+						// Use the inner PE's special handling.
+						if e := cfg.quotedElemFields(innerPE); e != nil {
+							return e
+						}
+					}
+				}
+			}
+		}
 	}
 	// Casemod / pattern-substitution / prefix-removal operators
 	// need per-element processing by the full paramExp path, so
