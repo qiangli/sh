@@ -966,95 +966,53 @@ var noOpSetOptions = map[string]bool{
 }
 
 var bashOptsTable = [...]bashOpt{
-	// supported options, sorted alphabetically by name
-	{
-		name:         "dotglob",
-		defaultState: false,
-		supported:    true,
-	},
-	{
-		name:         "expand_aliases",
-		defaultState: false,
-		supported:    true,
-	},
-	{
-		name:         "extglob",
-		defaultState: false,
-		supported:    true,
-	},
-	{
-		name:         "globstar",
-		defaultState: false,
-		supported:    true,
-	},
-	{
-		name:         "nocaseglob",
-		defaultState: false,
-		supported:    true,
-	},
-	{
-		name:         "nullglob",
-		defaultState: false,
-		supported:    true,
-	},
-	// unsupported options, sorted alphabetically by name
+	// IMPORTANT: the first six entries — dotglob, expand_aliases,
+	// extglob, globstar, nocaseglob, nullglob — are referenced by
+	// the optDotGlob…optNullGlob const constants below in that
+	// exact order. Don't reorder them. The rest is sorted
+	// alphabetically and printed sorted by `shopt`/`shopt -p`.
+	{name: "dotglob", supported: true},
+	{name: "expand_aliases", supported: true},
+	{name: "extglob", supported: true},
+	{name: "globstar", supported: true},
+	{name: "nocaseglob", supported: true},
+	{name: "nullglob", supported: true},
+	// Everything below is in alphabetical order.
+	{name: "array_expand_once"},
 	{name: "assoc_expand_once"},
 	{name: "autocd", supported: true},
+	{name: "bash_source_fullpath"},
 	{name: "cdable_vars"},
 	{name: "cdspell"},
 	{name: "checkhash"},
 	{name: "checkjobs"},
-	{
-		name:         "checkwinsize",
-		defaultState: true,
-	},
-	{
-		name:         "cmdhist",
-		defaultState: true,
-	},
+	{name: "checkwinsize", defaultState: true},
+	{name: "cmdhist", defaultState: true},
 	{name: "compat31"},
 	{name: "compat32"},
 	{name: "compat40"},
 	{name: "compat41"},
 	{name: "compat42"},
-	{name: "compat44"},
 	{name: "compat43"},
 	{name: "compat44"},
-	{
-		name:         "complete_fullquote",
-		defaultState: true,
-	},
+	{name: "complete_fullquote", defaultState: true},
 	{name: "direxpand"},
 	{name: "dirspell"},
 	{name: "execfail"},
 	{name: "extdebug", supported: true},
-	{
-		name:         "extquote",
-		defaultState: true,
-	},
+	{name: "extquote", defaultState: true},
 	{name: "failglob", supported: true},
-	{
-		name:         "force_fignore",
-		defaultState: true,
-	},
-	{name: "globasciiranges", supported: true},
+	{name: "force_fignore", defaultState: true},
+	{name: "globasciiranges", defaultState: true, supported: true},
+	{name: "globskipdots", defaultState: true},
 	{name: "gnu_errfmt"},
 	{name: "histappend"},
 	{name: "histreedit"},
 	{name: "histverify"},
-	{
-		name:         "hostcomplete",
-		defaultState: true,
-	},
+	{name: "hostcomplete", defaultState: true},
 	{name: "huponexit", supported: true},
-	{
-		name:      "inherit_errexit",
-		supported: true,
-	},
-	{
-		name:         "interactive_comments",
-		defaultState: true,
-	},
+	{name: "inherit_errexit", supported: true},
+	{name: "interactive_comments", defaultState: true},
 	{name: "lastpipe", supported: true},
 	{name: "lithist"},
 	{name: "localvar_inherit"},
@@ -1063,22 +1021,15 @@ var bashOptsTable = [...]bashOpt{
 	{name: "mailwarn"},
 	{name: "no_empty_cmd_completion"},
 	{name: "nocasematch", supported: true},
-	{
-		name:         "progcomp",
-		defaultState: true,
-	},
+	{name: "noexpand_translation"},
+	{name: "patsub_replacement", defaultState: true},
+	{name: "progcomp", defaultState: true},
 	{name: "progcomp_alias"},
-	{
-		name:         "promptvars",
-		defaultState: true,
-	},
+	{name: "promptvars", defaultState: true},
 	{name: "restricted_shell"},
 	{name: "shift_verbose"},
-	{
-		name:         "sourcepath",
-		defaultState: true,
-		supported:    true,
-	},
+	{name: "sourcepath", defaultState: true, supported: true},
+	{name: "varredir_close"},
 	{name: "xpg_echo", supported: true},
 }
 

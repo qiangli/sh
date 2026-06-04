@@ -2667,11 +2667,11 @@ done <<< 2`,
 	},
 	{
 		"shopt -s login_shell",
-		"shopt: unsupported option \"login_shell\"\nexit status 1 #IGNORE",
+		"",
 	},
 	{
 		"shopt -s interactive_comments",
-		"shopt: unsupported option \"interactive_comments\"\nexit status 1 #IGNORE",
+		"",
 	},
 	{
 		"shopt -s nosuchname",
@@ -2716,12 +2716,15 @@ done <<< 2`,
 		"ab abB\n",
 	},
 	{
-		"shopt -p",
-		"shopt: unsupported option \"-p\"\nexit status 2 #IGNORE",
+		// `shopt -p` lists every shopt in reusable form.
+		// We don't pin the full output; just check exit 0.
+		"shopt -p > /dev/null && echo ok",
+		"ok\n",
 	},
 	{
-		"shopt -q",
-		"shopt: unsupported option \"-q\"\nexit status 2 #IGNORE",
+		// `shopt -q NAME` returns 0 if set, 1 if not, no output.
+		"shopt -q extglob; echo $?; shopt -s extglob; shopt -q extglob; echo $?",
+		"1\n0\n",
 	},
 
 	// IFS

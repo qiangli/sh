@@ -1766,6 +1766,8 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 	case "shopt":
 		mode := ""
 		posixOpts := false
+		printReusable := false
+		quiet := false
 		fp := flagParser{remaining: args}
 		for fp.more() {
 			switch flag := fp.flag(); flag {
@@ -1773,21 +1775,52 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				mode = flag
 			case "-o":
 				posixOpts = true
-			case "-p", "-q":
-				return failf(2, "shopt: unsupported option %q\n", flag)
+			case "-p":
+				// bash's `shopt -p` lists every option in
+				// `shopt -s NAME` / `shopt -u NAME` form.
+				printReusable = true
+			case "-q":
+				// `shopt -q NAME`: return 0 if set, 1 if not,
+				// no output. Inline below in the per-arg loop.
+				quiet = true
 			default:
 				return invalidOpt("shopt", flag)
 			}
 		}
 		args := fp.args()
+		// Emit a line as either `shopt -s NAME` / `shopt -u NAME`
+		// (printReusable) or `name<TAB>on/off` (the default).
+		emitOpt := func(name string, enabled, supported bool) {
+			if printReusable {
+				flag := "-u"
+				if enabled {
+					flag = "-s"
+				}
+				r.outf("shopt %s %s\n", flag, name)
+				return
+			}
+			r.printOptLine(name, enabled, supported)
+		}
 		if len(args) == 0 {
 			if posixOpts {
 				for i, opt := range &posixOptsTable {
-					r.printOptLine(opt.name, r.opts[i], true)
+					emitOpt(opt.name, r.opts[i], true)
 				}
 			} else {
+				// bash sorts shopt output alphabetically. Build
+				// an index→state mapping and emit by sorted name.
+				names := make([]string, len(bashOptsTable))
 				for i, opt := range bashOptsTable {
-					r.printOptLine(opt.name, r.opts[len(posixOptsTable)+i], opt.supported)
+					names[i] = opt.name
+				}
+				idx := make(map[string]int, len(names))
+				for i, n := range names {
+					idx[n] = i
+				}
+				sort.Strings(names)
+				for _, n := range names {
+					i := idx[n]
+					emitOpt(n, r.opts[len(posixOptsTable)+i], bashOptsTable[i].supported)
 				}
 			}
 			break
@@ -1805,9 +1838,13 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 
 			switch mode {
 			case "-s", "-u":
-				if !supported {
-					return failf(1, "shopt: unsupported option %q\n", arg)
-				}
+				// bash silently accepts `shopt -s NAME` even for
+				// options that don't change anything at runtime
+				// (cdspell, checkhash, histappend, etc.). Mirror
+				// that — store the bit so subsequent `shopt -p`
+				// reflects the user's choice; we just don't do
+				// anything with it.
+				_ = supported
 				*opt = mode == "-s"
 				// Some shopts have a mirrored runner-level
 				// option (`optExpandAliases` etc.); keep them
@@ -1818,7 +1855,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					r.opts[optExpandAliases] = *opt
 				}
 			default: // ""
-				r.printOptLine(arg, *opt, supported)
+				if !quiet {
+					emitOpt(arg, *opt, supported)
+				}
 				// Bash's `shopt name` returns 0 if set, 1 if not —
 				// useful for `if shopt -q name`-style probes
 				// (and the open form too).
