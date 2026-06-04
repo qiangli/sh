@@ -2834,12 +2834,16 @@ func mapfileSplit(delim byte, dropDelim bool) bufio.SplitFunc {
 }
 
 func (r *Runner) printOptLine(name string, enabled, supported bool) {
-	state := r.optStatusText(enabled)
-	if supported {
-		r.outf("%s\t%s\n", name, state)
-		return
+	// bash's `shopt` (no flags) and `set -o` pads the option name
+	// to a 20-character field with spaces, then emits a tab and
+	// the on/off state. Names longer than 20 chars don't get any
+	// padding — just one tab.
+	_ = supported
+	pad := 20 - len(name)
+	if pad < 0 {
+		pad = 0
 	}
-	r.outf("%s\t%s\t(%q not supported)\n", name, state, r.optStatusText(!enabled))
+	r.outf("%s%s\t%s\n", name, strings.Repeat(" ", pad), r.optStatusText(enabled))
 }
 
 func (r *Runner) readLine(ctx context.Context, raw bool, delim byte) ([]byte, error) {
