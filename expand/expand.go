@@ -783,10 +783,26 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 					// strings aren't processed; only escape sequences
 					// will be handled. The `percentB` flag flips off
 					// the bash format-only escapes (`\"`, `\'`, `\?`).
-					_, err := formatIntoMode(sb, arg, nil, startTime, true)
+					// Apply width/precision via Go's %s after the
+					// escape-processed bytes are captured.
+					var bsb strings.Builder
+					_, err := formatIntoMode(&bsb, arg, nil, startTime, true)
+					if err == ErrPrintfStop {
+						// Surface the partial output and signal stop.
+						sb.WriteString(bsb.String())
+						return initialArgs - len(args), ErrPrintfStop
+					}
 					if err != nil {
 						return 0, err
 					}
+					if len(fmts) > 1 {
+						verb := string(fmts) + "s"
+						sb.WriteString(fmt.Sprintf(verb, bsb.String()))
+					} else {
+						sb.WriteString(bsb.String())
+					}
+					fmts = nil
+					continue
 				} else if c != 's' {
 					if c == 'f' || c == 'e' || c == 'E' || c == 'g' || c == 'G' {
 						f, _ := strconv.ParseFloat(arg, 64)
