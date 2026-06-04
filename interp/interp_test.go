@@ -2030,11 +2030,11 @@ var runTests = []runTest{
 	},
 	{
 		"[ a b c ]",
-		"1:1: not a valid test operator: `b`\nexit status 2 #JUSTERR",
+		"[: b: binary operator expected\nexit status 2 #JUSTERR",
 	},
 	{
 		"[ a -a ]",
-		"1:1: -a must be followed by an expression\nexit status 2 #JUSTERR",
+		"[: -a must be followed by an expression\nexit status 2 #JUSTERR",
 	},
 	{"[ a ]", ""},
 	{"[ -n ]", ""},
@@ -2062,7 +2062,7 @@ var runTests = []runTest{
 	},
 	{
 		"test 3 -lt",
-		"1:1: -lt must be followed by a word\nexit status 2 #JUSTERR",
+		"test: -lt must be followed by a word\nexit status 2 #JUSTERR",
 	},
 	{
 		"touch -t 202111050000.00 a; touch -t 202111060000.00 b; [ a -nt b ]",
@@ -2105,7 +2105,7 @@ var runTests = []runTest{
 	{
 		"test -? a",
 		// TODO: this error message should refer to `-?`
-		"1:1: not a valid test operator: `a`\n1:1: a must be followed by a word\nexit status 2 #JUSTERR",
+		"test: a: binary operator expected\ntest: a must be followed by a word\nexit status 2 #JUSTERR",
 	},
 	{
 		"[ -s a ] && echo x; echo body >a; [ -s a ] && echo y",

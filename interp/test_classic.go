@@ -57,7 +57,10 @@ func (p *testParser) classicTest(fval string, pastAndOr bool) syntax.TestExpr {
 	opStr := p.val
 	op := testBinaryOp(p.val)
 	if op == illegalTok {
-		p.errf("not a valid test operator: %#q", p.val)
+		// bash's wording: `<arg>: binary operator expected`
+		// when we were trying to find a binary op between two
+		// operands.
+		p.errf("%s: binary operator expected", p.val)
 	}
 	b := &syntax.BinaryTest{
 		Op: op,
@@ -91,7 +94,13 @@ func (p *testParser) testExprBase(fval string) syntax.TestExpr {
 		p.next()
 		pe.X = p.classicTest(op.String(), false)
 		if p.val != ")" {
-			p.errf("reached %s without matching '(' with ')'", p.val)
+			// bash: `\`)' expected` (or `\`)' expected, found X`
+			// when something else was there).
+			if p.eof {
+				p.errf("`)' expected")
+			} else {
+				p.errf("`)' expected, found %s", p.val)
+			}
 		}
 		p.next()
 		return pe

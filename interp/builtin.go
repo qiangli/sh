@@ -1052,7 +1052,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		p := testParser{
 			rem: args,
 			err: func(err error) {
-				r.errf("%v: %v\n", pos, err)
+				// bash format: `<file>: line N: <test|[>: <msg>`
+				r.errf("%s%s: %v\n",
+					r.bashErrPrefix(pos), name, err)
 				parseErr = true
 			},
 		}
