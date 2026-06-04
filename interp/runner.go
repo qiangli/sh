@@ -40,7 +40,11 @@ const (
 	// the select command or of the read command, when no variable name is specified
 	shellReplyVar = "REPLY"
 
-	fifoNamePrefix = "sh-interp-"
+	// `sh-np` matches bash's own naming convention for procsub
+	// named pipes; bash's test fixtures (procsub.tests) `case
+	// "$1" in *sh-np*) ...` look for this substring to fall into a
+	// hard-coded "file has been consumed" branch.
+	fifoNamePrefix = "sh-np-"
 )
 
 func (r *Runner) fillExpandConfig(ctx context.Context) {
