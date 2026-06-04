@@ -340,12 +340,27 @@ func Format(cfg *Config, format string, args []string) (string, int, error) {
 	sb := cfg.strBuilder()
 
 	consumed, err := formatInto(sb, format, args, cfg.StartTime)
+	if err == errPrintfStop {
+		// `\c` told printf to stop emitting output from a %b arg
+		// (or `\c` directly in format). Surface what's already in
+		// the builder and tell the outer loop to stop iterating
+		// args too — propagating errPrintfStop to the caller.
+		return sb.String(), consumed, errPrintfStop
+	}
 	if err != nil {
 		return "", 0, err
 	}
 
 	return sb.String(), consumed, err
 }
+
+// ErrPrintfStop is the sentinel returned when `\c` was seen inside a
+// %b conversion; the caller stops processing the rest of the format
+// and any remaining args.
+var ErrPrintfStop = errors.New("printf: stop")
+
+// errPrintfStop is the internal alias kept while we update callers.
+var errPrintfStop = ErrPrintfStop
 
 // strftime implements a subset of POSIX strftime sufficient for bash's
 // `printf '%(fmt)T'`. Unknown specifiers (`%X` where X isn't handled)
@@ -504,10 +519,16 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 				}
 				sb.WriteByte(c)
 			case 'c':
-				// bash's printf preserves `\c` literally in the
-				// format string (i.e. emits two bytes `\` and `c`)
-				// — POSIX says `\c` stops output, but bash 5.3 only
-				// honors that for echo, not printf. Match bash.
+				// In a `%b`-converted arg, `\c` stops emitting
+				// further output (and discards remaining args)
+				// — matches echo's behavior, which bash extends to
+				// %b. In a format string, bash preserves `\c`
+				// literally as two bytes `\c`.
+				if inPercentB {
+					// Discard remaining input so subsequent
+					// escapes / format chars don't fire.
+					return initialArgs - len(args), errPrintfStop
+				}
 				sb.WriteByte('\\')
 				sb.WriteByte('c')
 			case '0', '1', '2', '3', '4', '5', '6', '7':

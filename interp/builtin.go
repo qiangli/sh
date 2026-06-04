@@ -392,13 +392,17 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		var sb strings.Builder
 		for {
 			s, n, err := expand.Format(r.ecfg, format, args)
-			if err != nil {
+			stop := errors.Is(err, expand.ErrPrintfStop)
+			if err != nil && !stop {
 				return failf(1, "%v\n", err)
 			}
 			if assignTo != "" {
 				sb.WriteString(s)
 			} else {
 				r.out(s)
+			}
+			if stop {
+				break
 			}
 			args = args[n:]
 			if n == 0 || len(args) == 0 {
