@@ -1109,6 +1109,15 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			} else {
 				r2.stderr = r.stderr
 			}
+			// bash 5.3: the last command in a pipeline runs in a
+			// subshell unless `shopt -s lastpipe` is enabled (and
+			// job control is off). Without lastpipe, assignments
+			// in `... | { IFS=:; read line; }` MUST NOT leak to
+			// the parent shell. Decide subshell-vs-current here.
+			lastpipe := false
+			if opt, _ := r.bashOptByName("lastpipe"); opt != nil && *opt {
+				lastpipe = true
+			}
 			oldStdin := r.stdin
 			r.stdin = prDup
 			var wg sync.WaitGroup
@@ -1117,10 +1126,26 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				r2.exit.exiting = false // subshells don't exit the parent shell
 				pwDup.Close()
 			})
-			r.stmt(ctx, cm.Y)
+			var r3 *Runner
+			if lastpipe {
+				r.stmt(ctx, cm.Y)
+			} else {
+				// background=false: r3 lazily walks up to r.writeEnv,
+				// matching `(...)` subshell semantics so callers that
+				// supply a sparse parent env (e.g. expand.FuncEnviron
+				// with no Each enumeration) still resolve variables.
+				r3 = r.subshell(false)
+				r3.stdin = prDup
+				r3.stdout = r.stdout
+				r3.stderr = r.stderr
+				r3.stmt(ctx, cm.Y)
+				r3.exit.exiting = false
+				r.exit = r3.exit
+			}
 			prDup.Close()
 			wg.Wait()
 			r.stdin = oldStdin
+			_ = r3 // suppress unused when lastpipe is on
 			// Track PIPESTATUS. mvdan/sh parses pipes left-associative,
 			// so `a | b | c` is (a | b) | c — X is the nested pipeline
 			// and runs in r2. If r2 itself ran a pipeline, its segment

@@ -104,11 +104,16 @@ var interactiveTests = []struct {
 		},
 	},
 	{
+		// `echo foo | read var; echo $var`: without `shopt -s
+		// lastpipe`, bash runs the last command of a pipeline in
+		// a subshell, so the assignment to `var` is lost. The
+		// `echo $var` after the semicolon therefore prints
+		// nothing — just a bare newline.
 		pairs: []string{
 			"echo foo |\n",
 			"> ",
 			"read var; echo $var\n",
-			"foo\n",
+			"\n",
 		},
 	},
 	{

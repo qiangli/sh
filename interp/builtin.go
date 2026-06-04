@@ -1393,7 +1393,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				val := fp.value()
 				n, err := strconv.Atoi(val)
 				if err != nil || n < 0 {
-					return failf(2, "read: %s: invalid count\n", val)
+					return failf(2, "read: %s: invalid number\n", val)
 				}
 				nchars = n
 				nstrict = flag == "-N"
@@ -1514,12 +1514,25 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				}
 			} else {
 				values := expand.ReadFields(r.ecfg, string(line), len(args), raw)
+				readonlyFailed := false
 				for i, name := range args {
 					val := ""
 					if i < len(values) {
 						val = values[i]
 					}
+					if r.lookupVar(name).ReadOnly {
+						// bash: abort the read with exit 2 on
+						// readonly-assignment failure. setVarString
+						// will surface the diagnostic itself.
+						r.setVarString(name, val)
+						readonlyFailed = true
+						break
+					}
 					r.setVarString(name, val)
+				}
+				if readonlyFailed {
+					exit.code = 2
+					return exit
 				}
 			}
 		}
