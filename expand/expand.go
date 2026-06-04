@@ -692,7 +692,18 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 						quoted = "\\" + string(r)
 					}
 				}
-				sb.WriteString(quoted)
+				// Honor the width/precision specifier (`%-10q`,
+				// `%10q`, `%.5q`, …) by passing the quoted result
+				// through fmt.Sprintf with `%s` semantics.
+				if len(fmts) > 1 {
+					// fmts holds the partial verb prefix, e.g.
+					// `%10` (no trailing letter yet). Append `s` to
+					// reuse Go's string formatter.
+					verb := string(fmts) + "s"
+					sb.WriteString(fmt.Sprintf(verb, quoted))
+				} else {
+					sb.WriteString(quoted)
+				}
 				fmts = nil
 				continue
 			case 's', 'b', 'd', 'i', 'u', 'o', 'x', 'X', 'f', 'e', 'E', 'g', 'G':
