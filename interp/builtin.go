@@ -424,11 +424,21 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		if name == "continue" {
 			enclosing = &r.contnEnclosing
 		}
+		// Accept and skip `--` as the end-of-options marker.
+		if len(args) > 0 && args[0] == "--" {
+			args = args[1:]
+		}
 		switch len(args) {
 		case 0:
 			*enclosing = 1
 		case 1:
 			if n, err := strconv.Atoi(args[0]); err == nil {
+				if n < 1 {
+					if r.bashCompatErrors {
+						return failf(1, "%s: %s: loop count out of range\n", name, args[0])
+					}
+					return failf(1, "%s: %s: loop count out of range\n", name, args[0])
+				}
 				*enclosing = n
 				break
 			}
