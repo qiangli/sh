@@ -922,17 +922,61 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 	case "enable":
 		fp := flagParser{remaining: args}
 		disable := false
+		listAll := false
+		showAll := false
 		for fp.more() {
 			switch flag := fp.flag(); flag {
 			case "-n":
 				disable = true
+			case "-p":
+				// `enable -p` lists all builtins in the format
+				// `enable [-n] NAME` per builtin.
+				listAll = true
+			case "-a":
+				// `enable -a` lists all builtins regardless of
+				// enable/disable state.
+				showAll = true
+				listAll = true
+			case "-f", "-d", "-s":
+				// `-f` loads/unloads dynamic builtins (not
+				// supported), `-d` deletes them, `-s` lists
+				// POSIX-mandated special builtins. Accept the
+				// flag silently to avoid breaking scripts.
+				fp.value() // consume filename if -f
 			default:
 				return failf(2, "enable: %s: invalid option\n", flag)
 			}
 		}
 		remaining := fp.args()
 		if len(remaining) == 0 {
-			// List enabled/disabled builtins
+			if listAll {
+				// Print every recognised builtin, marking disabled
+				// ones with the `-n` flag. Bash sorts alphabetically.
+				names := []string{
+					":", ".", "[", "alias", "bg", "bind", "break", "builtin",
+					"caller", "cd", "command", "compgen", "complete", "compopt",
+					"continue", "declare", "dirs", "disown", "echo", "enable",
+					"eval", "exec", "exit", "export", "false", "fc", "fg",
+					"getopts", "hash", "help", "history", "jobs", "kill",
+					"let", "local", "logout", "mapfile", "popd", "printf",
+					"pushd", "pwd", "read", "readarray", "readonly", "return",
+					"set", "shift", "shopt", "source", "suspend", "test",
+					"times", "trap", "true", "type", "typeset", "ulimit",
+					"umask", "unalias", "unset", "wait",
+				}
+				sort.Strings(names)
+				for _, n := range names {
+					if r.disabledBuiltins[n] {
+						r.outf("enable -n %s\n", n)
+					} else {
+						r.outf("enable %s\n", n)
+					}
+				}
+				_ = showAll
+				break
+			}
+			// Default (no args, no -p): list only enabled OR only
+			// disabled depending on `-n`.
 			if disable {
 				for name := range r.disabledBuiltins {
 					r.outf("enable -n %s\n", name)
