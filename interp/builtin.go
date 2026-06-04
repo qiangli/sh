@@ -2493,8 +2493,51 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		// Print accumulated user and system times.
 		r.outf("0m0.000s 0m0.000s\n0m0.000s 0m0.000s\n")
 	case "umask":
+		symbolic := false
+		printFlag := false
+		fp := flagParser{remaining: args}
+		for fp.more() {
+			switch flag := fp.flag(); flag {
+			case "-S":
+				symbolic = true
+			case "-p":
+				printFlag = true
+			default:
+				return failf(2, "umask: %s: invalid option\n", flag)
+			}
+		}
+		args = fp.args()
+		// helper to format the current mask in symbolic form
+		formatSymbolic := func(mask int) string {
+			// umask bits are inverted: a 1 bit means "deny".
+			// Convert each user/group/other triad.
+			perm := func(shift int) string {
+				bits := (^mask >> shift) & 7
+				s := ""
+				if bits&4 != 0 {
+					s += "r"
+				}
+				if bits&2 != 0 {
+					s += "w"
+				}
+				if bits&1 != 0 {
+					s += "x"
+				}
+				return s
+			}
+			return fmt.Sprintf("u=%s,g=%s,o=%s", perm(6), perm(3), perm(0))
+		}
 		if len(args) == 0 {
-			r.outf("%04o\n", r.umask)
+			switch {
+			case symbolic && printFlag:
+				r.outf("umask -S %s\n", formatSymbolic(r.umask))
+			case symbolic:
+				r.outf("%s\n", formatSymbolic(r.umask))
+			case printFlag:
+				r.outf("umask %04o\n", r.umask)
+			default:
+				r.outf("%04o\n", r.umask)
+			}
 			break
 		}
 		// Setting umask: parse octal value. Updates only the per-Runner
