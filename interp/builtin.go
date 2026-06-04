@@ -1581,7 +1581,14 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		opt, optarg, done := r.optState.next(optstr, args)
 
 		r.setVarString(name, string(opt))
-		r.delVar("OPTARG")
+		// bash's getopts only surfaces the OPTARG-readonly diagnostic
+		// when it would have written to OPTARG (i.e. the default branch
+		// below): the unset that happens at the top of every getopts
+		// call is silent on readonly.
+		optargRO := r.lookupVar("OPTARG").ReadOnly
+		if !optargRO {
+			r.delVar("OPTARG")
+		}
 		// bash prefixes diagnostics with $0 (the script name) and prints
 		// the offending character unquoted (e.g. `./script.sh: illegal
 		// option -- c`).
@@ -1599,6 +1606,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			r.errf("%s: option requires an argument -- %s\n", scriptName, optarg)
 		default:
 			if optarg != "" {
+				// Let setVarString emit the readonly diagnostic if any —
+				// matches bash, which prints "OPTARG: readonly variable"
+				// for the call that would have assigned to it.
 				r.setVarString("OPTARG", optarg)
 			}
 		}
