@@ -685,6 +685,20 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 				fmts = append(fmts, c)
 			case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '.':
 				fmts = append(fmts, c)
+			case '*':
+				// `%*d` / `%.*s` / etc.: consume the next arg as
+				// the width/precision number and splice it into
+				// the format-spec buffer in place of the `*`.
+				if len(args) == 0 {
+					return 0, fmt.Errorf("printf: missing width argument for *")
+				}
+				wArg := args[0]
+				args = args[1:]
+				width, err := strconv.ParseInt(strings.TrimSpace(wArg), 10, 64)
+				if err != nil {
+					return 0, fmt.Errorf("printf: %q: invalid number", wArg)
+				}
+				fmts = append(fmts, []byte(strconv.FormatInt(width, 10))...)
 			case 'q', 'Q':
 				// bash printf %q outputs the argument quoted so it can
 				// be reused as shell input. Empty → '', strings with
