@@ -99,6 +99,11 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 				// — bash 5.3 treats funsub like a function body for
 				// scoping but does NOT swallow `exit`.
 				r.exit.returning = false
+				// Stash the funsub's exit status the same way `$(…)`
+				// does so the assignment path's "if exit.ok() restore
+				// lastExpandExit" recovery doesn't wipe our exiting
+				// flag for `exit 0` inside the body.
+				r.lastExpandExit = r.exit
 				// w is expand.cmdSubst's shared bufferAlloc; reset it
 				// to discard any residue that r.fields() left there
 				// during the body run, then deposit our captured output.

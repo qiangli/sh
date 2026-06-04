@@ -340,6 +340,11 @@ var runTests = []runTest{
 	// `exit` propagates out (kills the shell). Mirrors bash 5.3.
 	{`v=${ echo a; return; echo b; }; echo "[$v]"`, "[a]\n"},
 	{`v=${ echo a; exit 2; echo b; }; echo never`, "exit status 2"},
+	// `exit 0` from a funsub also propagates — without preserving the
+	// funsub's exit status as lastExpandExit, the assignment path's
+	// "restore lastExpandExit on success" recovery would silently
+	// clear the exiting flag.
+	{`v=${ exit 0; }; echo never`, ""},
 	// `break` inside funsub breaks the enclosing loop.
 	{`for i in 1 2 3; do v=${ break; }; echo "i=$i"; done; echo done`, "done\n"},
 
