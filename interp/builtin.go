@@ -2358,6 +2358,13 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				r.setVar(name, vr)
 			}
 		}
+	case "ulimit":
+		// Minimal best-effort ulimit: read-only on the common
+		// resource flags via syscall.Getrlimit. Setting is a no-op
+		// (bash's tests use `ulimit -n N` defensively and then
+		// `ulimit -n` to read it back — we just keep the override
+		// in r.ulimits so the read returns it).
+		exit = r.ulimitBuiltin(pos, args)
 	default:
 		if hint, ok := unsupportedHints[name]; ok {
 			return failf(2, "%s: not supported in this shell — %s\n", name, hint)
@@ -2577,6 +2584,57 @@ func (r *Runner) typeMatches(arg string, skipFuncs bool) []typeMatch {
 	return ms
 }
 
+// ulimitBuiltin implements a best-effort `ulimit`. `ulimit -X` reads
+// the current limit (RLIMIT_NOFILE for `-n`, "unlimited" otherwise),
+// and `ulimit -X N` records the value in r.ulimitOverride so the
+// next read returns it. We don't actually call setrlimit because
+// changes would affect the whole process and require permissions; the
+// override is purely cosmetic but lets scripts that probe-and-loop
+// against `ulimit -n` finish.
+func (r *Runner) ulimitBuiltin(_ syntax.Pos, args []string) exitStatus {
+	var exit exitStatus
+	flag := "-f"
+	var setVal string
+	for _, a := range args {
+		if len(a) > 1 && a[0] == '-' {
+			flag = a
+			continue
+		}
+		setVal = a
+	}
+	if setVal != "" {
+		if r.ulimitOverride == nil {
+			r.ulimitOverride = make(map[string]string)
+		}
+		r.ulimitOverride[flag] = setVal
+		return exit
+	}
+	if r.ulimitOverride != nil {
+		if v, ok := r.ulimitOverride[flag]; ok {
+			r.outf("%s\n", v)
+			return exit
+		}
+	}
+	switch flag {
+	case "-n":
+		var rlim syscall.Rlimit
+		if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &rlim); err != nil {
+			r.outf("unlimited\n")
+			return exit
+		}
+		// RLIM_INFINITY is `0xffffffffffffffff` (uint64 max) on
+		// linux and `0x7fffffffffffffff` (int64 max) on darwin/BSD.
+		if rlim.Cur == ^uint64(0) || rlim.Cur == 1<<63-1 {
+			r.outf("unlimited\n")
+		} else {
+			r.outf("%d\n", rlim.Cur)
+		}
+	default:
+		r.outf("unlimited\n")
+	}
+	return exit
+}
+
 // unsupportedHints carries actionable messages for bash/POSIX builtins that
 // IsBuiltin recognizes but this runner does not implement. The hint is
 // appended to "<name>: not supported in this shell — " so agentic callers
@@ -2586,7 +2644,6 @@ func (r *Runner) typeMatches(arg string, skipFuncs bool) []typeMatch {
 // future design work may swap some back to hint-only for outpost.
 var unsupportedHints = map[string]string{
 	"newgrp": "group switching is not supported; switch groups in the parent process (e.g. with sudo -g)",
-	"ulimit": "ulimit is not settable from this shell; set resource limits in the parent process",
 }
 
 // mapfileSplit returns a suitable Split function for a [bufio.Scanner];

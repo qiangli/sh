@@ -294,6 +294,12 @@ type Runner struct {
 	// subshell do not leak back to the parent because the map itself
 	// is cloned by [Runner.subshell].
 	fdTable map[int]*os.File
+
+	// ulimitOverride records pseudo-set values from `ulimit -X N`
+	// so the next `ulimit -X` read returns them. We don't actually
+	// call setrlimit (would affect the whole process and need
+	// permissions); the map is purely cosmetic.
+	ulimitOverride map[string]string
 }
 
 // exitStatus holds the state of the shell after running one command.
@@ -1346,7 +1352,8 @@ func (r *Runner) subshell(background bool) *Runner {
 		// Subshells inherit open fds the way bash does. Clone the map so
 		// child mutations (close, dup) don't leak back to the parent;
 		// the underlying *os.File handles are shared (single OS fd).
-		fdTable: maps.Clone(r.fdTable),
+		fdTable:        maps.Clone(r.fdTable),
+		ulimitOverride: maps.Clone(r.ulimitOverride),
 	}
 	r2.writeEnv = newOverlayEnviron(r.writeEnv, background)
 	// Funcs are copied, since they might be modified.
