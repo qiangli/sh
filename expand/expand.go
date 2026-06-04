@@ -635,7 +635,7 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 				// to strftime; the value argument is a Unix timestamp
 				// where -1 means now and -2 means shell start time.
 				if len(fmts) > 1 {
-					return 0, fmt.Errorf("invalid format char: %c", c)
+					return 0, fmt.Errorf("printf: `%c': invalid format character", c)
 				}
 				end := strings.IndexByte(format[i+1:], ')')
 				if end < 0 {
@@ -685,7 +685,7 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 				fmts = nil
 			case '+', '-', ' ', '#', '\'':
 				if len(fmts) > 1 {
-					return 0, fmt.Errorf("invalid format char: %c", c)
+					return 0, fmt.Errorf("printf: `%c': invalid format character", c)
 				}
 				fmts = append(fmts, c)
 			case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '.':
@@ -839,7 +839,7 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 				}
 				fmts = nil
 			default:
-				return 0, fmt.Errorf("invalid format char: %c", c)
+				return 0, fmt.Errorf("printf: `%c': invalid format character", c)
 			}
 		case args != nil && c == '%':
 			// if args == nil, we are not doing format
@@ -850,7 +850,7 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 		}
 	}
 	if len(fmts) > 0 {
-		return 0, fmt.Errorf("missing format char")
+		return 0, fmt.Errorf("printf: `%s': missing format character", string(fmts))
 	}
 	return initialArgs - len(args), nil
 }

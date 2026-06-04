@@ -300,8 +300,8 @@ var runTests = []runTest{
 	// printf
 	{"printf foo", "foo"},
 	{"printf %%", "%"},
-	{"printf %", "missing format char\nexit status 1 #JUSTERR"},
-	{"printf %; echo foo", "missing format char\nfoo\n #IGNORE"},
+	{"printf %", "printf: `%': missing format character\nexit status 1 #JUSTERR"},
+	{"printf %; echo foo", "printf: `%': missing format character\nfoo\n #IGNORE"},
 
 	// printf -v: assign formatted output to the named variable instead
 	// of writing to stdout.
@@ -352,10 +352,10 @@ var runTests = []runTest{
 	// by extracting a known key via grep -q.
 	{`f(){ :; }; runner-state funcs | grep -q '"funcs":\[.*"f"' && echo ok`, "ok\n"},
 	{`runner-state bogus`, "runner-state: unknown section \"bogus\" (try: vars opts traps fds funcs callstack all)\nexit status 2 #JUSTERR"},
-	{"printf %1", "missing format char\nexit status 1 #JUSTERR"},
-	{"printf %+", "missing format char\nexit status 1 #JUSTERR"},
-	{"printf %B foo", "invalid format char: B\nexit status 1 #JUSTERR"},
-	{"printf %12-s foo", "invalid format char: -\nexit status 1 #JUSTERR"},
+	{"printf %1", "printf: `%1': missing format character\nexit status 1 #JUSTERR"},
+	{"printf %+", "printf: `%+': missing format character\nexit status 1 #JUSTERR"},
+	{"printf %B foo", "printf: `B': invalid format character\nexit status 1 #JUSTERR"},
+	{"printf %12-s foo", "printf: `-': invalid format character\nexit status 1 #JUSTERR"},
 	{"printf ' %s \n' bar", " bar \n"},
 	{"printf '\\A'", "\\A"},
 	{"printf %s foo", "foo"},
