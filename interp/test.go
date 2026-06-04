@@ -90,19 +90,33 @@ func (r *Runner) binTest(ctx context.Context, op syntax.BinTestOperator, x, y st
 		r.setVar("BASH_REMATCH", vr)
 		return true
 	case syntax.TsNewer:
+		// bash: `f1 -nt f2` is true if f1 is newer than f2, OR if
+		// f1 exists and f2 does not (a present file is "newer than"
+		// a missing one). False if both are missing or only f2 exists.
 		info1, err1 := r.stat(ctx, x)
 		info2, err2 := r.stat(ctx, y)
-		if err1 != nil || err2 != nil {
+		switch {
+		case err1 == nil && err2 == nil:
+			return info1.ModTime().After(info2.ModTime())
+		case err1 == nil && err2 != nil:
+			return true
+		default:
 			return false
 		}
-		return info1.ModTime().After(info2.ModTime())
 	case syntax.TsOlder:
+		// bash: `f1 -ot f2` is true if f1 is older than f2, OR if
+		// f1 is missing and f2 exists. False if both are missing
+		// or only f1 exists.
 		info1, err1 := r.stat(ctx, x)
 		info2, err2 := r.stat(ctx, y)
-		if err1 != nil || err2 != nil {
+		switch {
+		case err1 == nil && err2 == nil:
+			return info1.ModTime().Before(info2.ModTime())
+		case err1 != nil && err2 == nil:
+			return true
+		default:
 			return false
 		}
-		return info1.ModTime().Before(info2.ModTime())
 	case syntax.TsDevIno:
 		info1, err1 := r.stat(ctx, x)
 		info2, err2 := r.stat(ctx, y)

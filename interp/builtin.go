@@ -1043,7 +1043,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		exit.returning = false
 	case "[":
 		if len(args) == 0 || args[len(args)-1] != "]" {
-			return failf(2, "%v: [: missing matching ]\n", pos)
+			return failf(2, "[: missing `]'\n")
 		}
 		args = args[:len(args)-1]
 		fallthrough

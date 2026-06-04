@@ -2022,11 +2022,11 @@ var runTests = []runTest{
 	// classic test
 	{
 		"[",
-		"1:1: [: missing matching ]\nexit status 2 #JUSTERR",
+		"[: missing `]'\nexit status 2 #JUSTERR",
 	},
 	{
 		"[ a",
-		"1:1: [: missing matching ]\nexit status 2 #JUSTERR",
+		"[: missing `]'\nexit status 2 #JUSTERR",
 	},
 	{
 		"[ a b c ]",
@@ -2105,7 +2105,7 @@ var runTests = []runTest{
 	{
 		"test -? a",
 		// TODO: this error message should refer to `-?`
-		"test: a: binary operator expected\ntest: a must be followed by a word\nexit status 2 #JUSTERR",
+		"test: a: binary operator expected\nexit status 2 #JUSTERR",
 	},
 	{
 		"[ -s a ] && echo x; echo body >a; [ -s a ] && echo y",

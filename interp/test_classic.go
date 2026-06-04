@@ -12,14 +12,19 @@ import (
 const illegalTok = 0
 
 type testParser struct {
-	eof bool
-	val string
-	rem []string
+	eof  bool
+	val  string
+	rem  []string
+	errd bool // an error was already reported; bail subsequent diagnostics
 
 	err func(err error)
 }
 
 func (p *testParser) errf(format string, a ...any) {
+	if p.errd {
+		return
+	}
+	p.errd = true
 	p.err(fmt.Errorf(format, a...))
 }
 
