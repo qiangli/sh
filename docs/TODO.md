@@ -41,7 +41,7 @@
 
 - [x] `+=` compound assignment in arithmetic ternary: `$((cond ? val : x+=2))`
 - [x] Empty heredoc delimiter: `cat <<''` (already worked; regression tests added)
-- [ ] `${ cmd; }` funsub (brace command substitution) execution
+- [x] `${ cmd; }` funsub (brace command substitution) execution — body runs in caller (no fork), stdout captured; bash 5.3 scope semantic (all assignments local to body) via funsubScope on overlayEnviron
 - [ ] `${ (shift) }` funsub with subshell
 - [ ] `${H*}` — `*` as parameter expansion pattern inside `[[ ]]`
 - [x] `((true ) )` — arithmetic with space before `)` in case clause (peekArithmEnd skips horizontal whitespace)

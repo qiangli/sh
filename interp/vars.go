@@ -49,6 +49,14 @@ type overlayEnviron struct {
 	// We need to know if the current scope is a function's scope, because
 	// functions can modify global variables. When true, [parent] must not be nil.
 	funcScope bool
+
+	// funsubScope is set for bash 5.3 `${ cmd; }` / mksh `${|cmd;}` bodies.
+	// Like funcScope it allows `return` and `local`, but unlike a function
+	// body plain assignments do NOT write through to the parent — per
+	// bash 5.3: "Any variable assignments performed during the execution
+	// of the command list are local to the command list and lost after
+	// the substitution is performed." Implies funcScope.
+	funsubScope bool
 }
 
 // namedVariable records the original name of a variable for platforms
@@ -84,8 +92,10 @@ func (o *overlayEnviron) Get(name string) expand.Variable {
 func (o *overlayEnviron) Set(name string, vr expand.Variable) error {
 	normalized := o.normalize(name)
 	prev, inOverlay := o.values[normalized]
-	// Manipulation of a global var inside a function.
-	if o.funcScope && !vr.Local && !prev.Local {
+	// Manipulation of a global var inside a function. Funsub bodies
+	// share the funcScope wiring (for `return` / `local`) but assignments
+	// stay local to the overlay — they must not write through.
+	if o.funcScope && !o.funsubScope && !vr.Local && !prev.Local {
 		// In a function, the parent environment is ours, so it's always read-write.
 		return o.parent.(expand.WriteEnviron).Set(name, vr)
 	}

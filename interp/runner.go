@@ -93,7 +93,7 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 				oldInFunc := r.inFunc
 				r.inFunc = true
 				origEnv := r.writeEnv
-				r.writeEnv = &overlayEnviron{parent: r.writeEnv, funcScope: true}
+				r.writeEnv = &overlayEnviron{parent: r.writeEnv, funcScope: true, funsubScope: true}
 				r.stmts(ctx, cs.Stmts)
 				r.writeEnv = origEnv
 				r.inFunc = oldInFunc
