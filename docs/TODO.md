@@ -43,7 +43,7 @@
 - [x] Empty heredoc delimiter: `cat <<''` (already worked; regression tests added)
 - [x] `${ cmd; }` funsub (brace command substitution) execution — body runs in caller (no fork), stdout captured; bash 5.3 scope semantic (all assignments local to body) via funsubScope on overlayEnviron
 - [x] `${ (shift) }` funsub with subshell — already worked once funsubScope landed (subshell isolates positional-param changes; shift in a bare funsub correctly leaks per bash 5.3); regression tests pin all three shapes
-- [ ] `${H*}` — `*` as parameter expansion pattern inside `[[ ]]`
+- [x] `${H*}` — `*` as parameter expansion pattern inside `[[ ]]` — root cause was eager rhs evaluation in `[[ a && b ]]` / `[[ a || b ]]`; short-circuit so unevaluatable expansions on rhs never run when lhs settles result
 - [x] `((true ) )` — arithmetic with space before `)` in case clause (peekArithmEnd skips horizontal whitespace)
 - [ ] `case esac in esac)` — eval parsing of unusual case patterns
 

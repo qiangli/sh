@@ -579,6 +579,12 @@ var runTests = []runTest{
 	{"for i in 1 2; do\necho $LINENO\necho $LINENO\ndone", "2\n3\n2\n3\n"},
 	{"[[ -n $$ && $$ -gt 0 ]]", ""},
 	{"[[ $$ -eq $PPID ]]", "exit status 1"},
+	// [[ ]] && / || must short-circuit so the rhs (and its expansions) is
+	// never evaluated when the lhs settles the result. Mirrors bash's
+	// cond.tests `[[ -n $TDIR || $HOME -ef ${H*} ]]` — the unevaluatable
+	// ${H*} on the rhs must never run.
+	{`TDIR=set; [[ -n $TDIR || $(echo SIDE >&2; echo x) ]] && echo ok 2>&1`, "ok\n"},
+	{`unset TDIR; [[ -n $TDIR && $(echo SIDE >&2; echo x) ]] 2>&1 || echo no`, "no\n"},
 	{"[[ $RANDOM -eq $RANDOM ]]", "exit status 1"},   // 1 in 32k chance of a collision, 0.003%
 	{"[[ $SRANDOM -eq $SRANDOM ]]", "exit status 1"}, // 1 in 2**32 chance of a collision,
 

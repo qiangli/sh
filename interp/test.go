@@ -30,6 +30,22 @@ func (r *Runner) bashTest(ctx context.Context, expr syntax.TestExpr, classic boo
 	case *syntax.ParenTest:
 		return r.bashTest(ctx, x.X, classic)
 	case *syntax.BinaryTest:
+		// && and || in [[ ]] short-circuit: the rhs must not be evaluated
+		// (and so its expansions like ${H*} not run) if the lhs settles
+		// the result. Eager evaluation here used to run `${H*}` even when
+		// `-n $TDIR || $HOME -ef ${H*}` was already true on the lhs.
+		switch x.Op {
+		case syntax.AndTest:
+			if r.bashTest(ctx, x.X, classic) == "" {
+				return ""
+			}
+			return r.bashTest(ctx, x.Y, classic)
+		case syntax.OrTest:
+			if lhs := r.bashTest(ctx, x.X, classic); lhs != "" {
+				return lhs
+			}
+			return r.bashTest(ctx, x.Y, classic)
+		}
 		switch x.Op {
 		case syntax.TsMatchShort, syntax.TsMatch, syntax.TsNoMatch:
 			str := r.literal(x.X.(*syntax.Word))
