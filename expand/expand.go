@@ -223,7 +223,35 @@ func (cfg *Config) envSet(name, value string) error {
 	if !ok {
 		return fmt.Errorf("environment is read-only")
 	}
-	return wenv.Set(name, Variable{Set: true, Kind: String, Str: value})
+	// Preserve declare attributes (`-i`, `-r`, `-x`, …) and the
+	// indexed/associative kind by reading the existing variable and
+	// overwriting only its scalar value. A fresh Variable would
+	// strip the integer attribute and turn a value-set on `declare
+	// -i` into a plain string, which subsequent arithmetic
+	// assignments then mis-handle.
+	vr := cfg.Env.Get(name)
+	vr.Set = true
+	switch vr.Kind {
+	case Indexed:
+		if len(vr.List) == 0 {
+			vr.List = []string{value}
+		} else {
+			vr.List[0] = value
+		}
+	case Associative:
+		// Associative arrays without an explicit key fall back to
+		// the bash-3-style "key 0" slot, which is what bash does
+		// for `assoc=val` with no `[k]`.
+		if vr.Map == nil {
+			vr.Map = map[string]string{"0": value}
+		} else {
+			vr.Map["0"] = value
+		}
+	default:
+		vr.Kind = String
+		vr.Str = value
+	}
+	return wenv.Set(name, vr)
 }
 
 // Literal expands a single shell word. It is similar to [Fields], but the result
