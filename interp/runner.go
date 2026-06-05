@@ -1098,8 +1098,15 @@ func bashDeclareFmt(body string, lastTop bool) string {
 			}
 			continue
 		}
+		// Bare-paren subshell lines (`(` opener, `)` closer) get
+		// no `;`; check those before the suffix loop since `)`
+		// would otherwise match `))` (arith-exp closing) which
+		// IS a simple statement and DOES need `;`.
+		if trim == "(" || trim == ")" {
+			continue
+		}
 		for _, suffix := range []string{
-			" then", " do", " in", " {", " else", "(", ")",
+			" then", " do", " in", " {", " else",
 			";", "&", "|", ";;", ";&", "&&", "||",
 		} {
 			if strings.HasSuffix(trim, suffix) {
