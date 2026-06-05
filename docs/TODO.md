@@ -62,7 +62,7 @@
 - [x] `printf %b` — interpret backslash escapes in argument (already worked; regression tests added)
 - [x] `printf %(fmt)T` — datetime formatting (strftime subset; -1 = now, -2 = shell start, integer = Unix timestamp)
 - [x] `printf --` — argument terminator (already worked via flagParser; regression test added)
-- [ ] `printf` full error handling matching bash
+- [x] `printf` full error handling matching bash — extended OnFormatWarning to the float (`%f/%e/%g/%G/%E`) path; switched the remaining `%q` quoting to bare in the width-arg + `%(fmt)T` time-arg invalid-number paths so the wording is bash-identical.
 - [ ] `declare -f` display format matching bash (indentation, semicolons)
 - [ ] `declare -p` output format matching bash
 - [ ] `declare -i` integer arithmetic on assignment

@@ -851,7 +851,7 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 					default:
 						n, err := strconv.ParseInt(arg, 10, 64)
 						if err != nil {
-							return 0, fmt.Errorf("printf: %q: invalid number", arg)
+							return 0, fmt.Errorf("printf: %s: invalid number", arg)
 						}
 						t = time.Unix(n, 0)
 					}
@@ -896,7 +896,7 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 				args = args[1:]
 				width, err := strconv.ParseInt(strings.TrimSpace(wArg), 10, 64)
 				if err != nil {
-					return 0, fmt.Errorf("printf: %q: invalid number", wArg)
+					return 0, fmt.Errorf("printf: %s: invalid number", wArg)
 				}
 				fmts = append(fmts, []byte(strconv.FormatInt(width, 10))...)
 			case 'q', 'Q':
@@ -1002,8 +1002,12 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 						if len(arg) > 1 && (arg[0] == '\'' || arg[0] == '"') {
 							r, _ := utf8.DecodeRuneInString(arg[1:])
 							f = float64(r)
-						} else {
-							f, _ = strconv.ParseFloat(arg, 64)
+						} else if arg != "" {
+							var perr error
+							f, perr = strconv.ParseFloat(arg, 64)
+							if perr != nil && warn != nil {
+								warn(fmt.Sprintf("printf: %s: invalid number", arg))
+							}
 						}
 						farg = f
 					} else {
