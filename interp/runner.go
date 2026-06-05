@@ -1869,13 +1869,20 @@ func bashDeclareFmt(body string, lastTop bool) string {
 	body = bashFdExplicit(body)
 	lines := strings.Split(body, "\n")
 	inHdoc := ""
+	hdocStripTabs := false
 	for i, raw := range lines {
 		trim := strings.TrimSpace(raw)
 		// Inside a heredoc: leave body / terminator untouched
-		// (no re-indent, no `;`). The terminator closes it.
+		// (no re-indent, no `;`). If the opener was `<<-`, strip
+		// leading tabs from body and terminator (bash 5.3
+		// declare -f matches the runtime tab-stripping).
 		if inHdoc != "" {
+			if hdocStripTabs {
+				lines[i] = strings.TrimLeft(raw, "\t")
+			}
 			if trim == inHdoc {
 				inHdoc = ""
+				hdocStripTabs = false
 			}
 			continue
 		}
@@ -1895,7 +1902,9 @@ func bashDeclareFmt(body string, lastTop bool) string {
 			// is the tag. The line may continue with redirections
 			// (`<<TAG > file`) or a following compound — strip
 			// quotes around the tag and stop at first whitespace.
-			rest := strings.TrimLeft(trim[idx+2:], "-")
+			afterOp := trim[idx+2:]
+			stripTabs := strings.HasPrefix(afterOp, "-")
+			rest := strings.TrimLeft(afterOp, "-")
 			rest = strings.TrimLeft(rest, " \t")
 			end := strings.IndexAny(rest, " \t")
 			if end < 0 {
@@ -1904,6 +1913,7 @@ func bashDeclareFmt(body string, lastTop bool) string {
 			tag := strings.Trim(rest[:end], "'\"")
 			if tag != "" {
 				inHdoc = tag
+				hdocStripTabs = stripTabs
 				continue
 			}
 		}
