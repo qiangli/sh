@@ -703,6 +703,80 @@ func (r *Runner) printFuncDecl(name string, body *syntax.Stmt) {
 	r.out("}\n")
 }
 
+// bashArithSpace pads the contents of `((...))` and `$((...))` runs
+// with single spaces inside the parens to match bash 5.3's
+// `declare -f` rendering: `((i<3))` → `(( i<3 ))`. Skips already-
+// padded constructs to avoid `(( (( x )) ))` blowing up to
+// `(((  ( ( x )  ) ))`. Handles nested parens by counting depth.
+func bashArithSpace(body string) string {
+	var b strings.Builder
+	b.Grow(len(body) + 32)
+	i := 0
+	for i < len(body) {
+		// Detect `$((` or `((` at top level.
+		start, prefix := -1, ""
+		switch {
+		case i+2 < len(body) && body[i] == '$' && body[i+1] == '(' && body[i+2] == '(':
+			start, prefix = i, "$(("
+		case i+1 < len(body) && body[i] == '(' && body[i+1] == '(':
+			// Avoid matching `(((` openers (rare but possible).
+			start, prefix = i, "(("
+		}
+		if start < 0 {
+			b.WriteByte(body[i])
+			i++
+			continue
+		}
+		// Walk forward to find the position of the FIRST `)` of
+		// the closing `))`. Track depth (open `((` counts as 2).
+		// Stop when depth would drop to 0 — that means the current
+		// `)` is the inner of the pair and the next `)` closes the
+		// outer.
+		j := start + len(prefix)
+		depth := 2
+		found := false
+		for j < len(body) {
+			switch body[j] {
+			case '(':
+				depth++
+			case ')':
+				if depth == 2 && j+1 < len(body) && body[j+1] == ')' {
+					// `))` closing the outer arith.
+					found = true
+				} else {
+					depth--
+				}
+			}
+			if found {
+				break
+			}
+			j++
+		}
+		if !found {
+			// Couldn't find a matching `))` — emit as-is, skip just
+			// the opening to avoid infinite loop.
+			b.WriteString(prefix)
+			i = start + len(prefix)
+			continue
+		}
+		// content is between start+len(prefix) and j (exclusive) and j+1
+		// is the second `)` of the closing `))`.
+		content := body[start+len(prefix) : j]
+		trimmed := strings.TrimSpace(content)
+		if trimmed == "" {
+			// `(())` — leave it as-is.
+			b.WriteString(body[start : j+2])
+		} else {
+			b.WriteString(prefix)
+			b.WriteByte(' ')
+			b.WriteString(trimmed)
+			b.WriteString(" ))")
+		}
+		i = j + 2
+	}
+	return b.String()
+}
+
 // findHeredocOp returns the index of the first `<<` in line that is
 // NOT part of `<<<` (here-string), or -1 if none. Used by
 // bashDeclareFmt to distinguish heredoc openers from here-string ops.
@@ -744,6 +818,11 @@ func findHeredocOp(line string) int {
 // line ending with `<<TAG` we capture TAG; subsequent lines up to and
 // including the TAG-only line are heredoc content.
 func bashDeclareFmt(body string, lastTop bool) string {
+	// Bash 5.3 renders `((expr))` as `(( expr ))` (space-padded
+	// inside the double-parens) in `declare -f` output. Same for
+	// arith expansion `$((expr))` → `$(( expr ))`. The printer
+	// emits the compact form; pad with regex.
+	body = bashArithSpace(body)
 	lines := strings.Split(body, "\n")
 	inHdoc := ""
 	for i, raw := range lines {
