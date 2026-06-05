@@ -776,16 +776,35 @@ func splitCompoundLine(line string) []string {
 		}
 		trailing := strings.TrimSpace(trim[doneIdx+len("; done"):])
 		trim = trim[:doneIdx+len("; done")]
-		// Split into: opener (no trailing `; do`) / do (own line) /
-		// body / done. bash 5.3 puts `do` on its own line, NOT
-		// glued to the for/while/until header.
+		// Split into header + (do on its own line for `for`, same
+		// line for `while`/`until` — that's bash 5.3's
+		// declare -f convention) + body + done. We always emit
+		// `do` on a NEW line for `for` (whether `for X in Y` or
+		// arith-for `for ((;;))`); for while/until we keep `do`
+		// on the same line as the condition.
 		doIdx := strings.Index(trim, "; do ")
-		opener := trim[:doIdx]
+		var opener string
+		isFor := strings.HasPrefix(trim, "for ")
+		// bash 5.3 arith-for `for ((...))` drops the trailing `;`
+		// before the `do` line; the other forms keep it.
+		isArithFor := strings.HasPrefix(trim, "for ((")
+		if isFor {
+			opener = trim[:doIdx]
+			if isArithFor {
+				opener = strings.TrimSuffix(opener, ";")
+				opener = strings.TrimRight(opener, " ")
+			}
+		} else {
+			opener = trim[:doIdx] + "; do"
+		}
 		body := trim[doIdx+len("; do ") : len(trim)-len("; done")]
 		bodyLines := splitTopLevel(body, ";")
 		ind := strings.Repeat(" ", indent)
 		inner := strings.Repeat(" ", indent+4)
-		out := []string{ind + opener, ind + "do"}
+		out := []string{ind + opener}
+		if isFor {
+			out = append(out, ind+"do")
+		}
 		for _, b := range bodyLines {
 			b = strings.TrimSpace(b)
 			if b == "" {
@@ -1350,13 +1369,21 @@ func bashDeclareFmt(body string, lastTop bool) string {
 		// Skip the trailing `;` when the next non-empty line is
 		// `;;` (case-pattern separator) — bash 5.3 emits bare
 		// body lines before `;;` in declare -f output.
+		//
+		// Also skip when next line is `do` AND the current line
+		// ends with `))` — that's the bash 5.3 arith-for header
+		// (`for ((init; cond; post))` with no trailing `;`).
+		// `for X in Y; do` keeps the `;` after `Y` (matches bash).
 		if !skip {
 			for k := i + 1; k < len(lines); k++ {
 				nxt := strings.TrimSpace(lines[k])
 				if nxt == "" {
 					continue
 				}
-				if nxt == ";;" || strings.HasPrefix(nxt, ";;") {
+				switch {
+				case nxt == ";;" || strings.HasPrefix(nxt, ";;"):
+					skip = true
+				case nxt == "do" && strings.HasSuffix(trim, "))"):
 					skip = true
 				}
 				break
