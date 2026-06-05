@@ -2762,6 +2762,62 @@ func (p *Parser) testExprBinary(pastAndOr bool) TestExpr {
 	return b
 }
 
+// testExprNotBody parses the operand of a `!` unary in `[[ ]]`.
+// `!` binds tighter than `&&` / `||` but looser than binary
+// primaries — so we accept a single unary primary, optionally
+// followed by one binary-primary op and its RHS, but never a
+// `&&` / `||` chain (which the outer testExprBinary handles).
+func (p *Parser) testExprNotBody() TestExpr {
+	p.got(_Newl)
+	left := p.testExprUnary()
+	if left == nil {
+		return nil
+	}
+	p.got(_Newl)
+	switch p.tok {
+	case andAnd, orOr, _EOF, rightParen:
+		return left
+	case _LitWord:
+		if p.val == "]]" {
+			return left
+		}
+		op := token(testBinaryOp(p.val))
+		if op == illegalTok {
+			p.curErr("not a valid test operator: %#q", p.val)
+		}
+		p.tok = op
+	case rdrIn, rdrOut:
+		// `<` / `>` as string-compare binary primaries.
+	case _Lit:
+		p.curErr("test operator words must consist of a single literal")
+	default:
+		p.curErr("not a valid test operator: %#q", p.tok)
+	}
+	b := &BinaryTest{
+		OpPos: p.pos,
+		Op:    BinTestOperator(p.tok),
+		X:     left,
+	}
+	if b.Op == AndTest || b.Op == OrTest {
+		// Unreachable given the cases above, but guard against
+		// future operator additions.
+		return left
+	}
+	if b.Op == TsReMatch {
+		p.checkLang(p.pos, langBashLike|LangZsh, "regex tests")
+		p.rxOpenParens = 0
+		p.rxFirstPart = true
+		p.quote = testExprRegexp
+	}
+	if _, ok := b.X.(*Word); !ok {
+		p.posErr(b.OpPos, "expected %#q, %#q or %#q after complex expr",
+			AndTest, OrTest, dblRightBrack)
+	}
+	p.next()
+	b.Y = p.followWordTok(token(b.Op), b.OpPos)
+	return b
+}
+
 func (p *Parser) testExprUnary() TestExpr {
 	switch p.tok {
 	case _EOF, rightParen:
@@ -2782,7 +2838,13 @@ func (p *Parser) testExprUnary() TestExpr {
 	case exclMark:
 		u := &UnaryTest{OpPos: p.pos, Op: TsNot}
 		p.next()
-		if u.X = p.testExprBinary(false); u.X == nil {
+		// `!` binds tighter than `&&` / `||` but looser than binary
+		// primaries (`<`, `==`, `-eq`, …): `! a || b` is
+		// `(! a) || b`, while `! a < b` is `! (a < b)`. Parse a
+		// single unary primary, then optionally one binary-primary
+		// op + RHS, then let the outer testExprBinary handle any
+		// `&&` / `||` chain.
+		if u.X = p.testExprNotBody(); u.X == nil {
 			p.followErrExp(u.OpPos, u.Op)
 		}
 		return u
