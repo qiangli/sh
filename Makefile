@@ -26,6 +26,7 @@ test-bash: build test-bash-helpers
 		export THIS_SH=$$BASHY_ABS && \
 		export PATH=$$PWD:/usr/bin:/bin:/usr/local/bin && \
 		export BASH_TSTOUT=$${TMPDIR:-/tmp}/bashy-tstout-$$$$ && \
+		export BASH_TSTRAW=$${TMPDIR:-/tmp}/bashy-tstraw-$$$$ && \
 		passed=0 && failed=0 && skipped=0 && timeout_count=0 && \
 		for runner in run-*; do \
 			[ "$$runner" = "run-all" ] && continue; \
@@ -36,13 +37,15 @@ test-bash: build test-bash-helpers
 				skipped=$$((skipped + 1)); \
 				continue; \
 			fi; \
-			( $$THIS_SH ./$$test_file 2>&1 | grep -av '^expect' > $$BASH_TSTOUT ) & \
+			perl -e 'setpgrp; exec @ARGV' $$THIS_SH ./$$test_file >$$BASH_TSTRAW 2>&1 & \
 			test_pid=$$!; \
-			( sleep $(BASH_TEST_TIMEOUT) && kill -9 $$test_pid 2>/dev/null ) & \
+			( sleep $(BASH_TEST_TIMEOUT) && kill -KILL -- -$$test_pid 2>/dev/null ) & \
 			timer_pid=$$!; \
 			wait $$test_pid 2>/dev/null; \
 			rc=$$?; \
+			kill -KILL -- -$$test_pid 2>/dev/null; \
 			kill $$timer_pid 2>/dev/null; wait $$timer_pid 2>/dev/null; \
+			grep -av '^expect' <$$BASH_TSTRAW >$$BASH_TSTOUT 2>/dev/null || :; \
 			if [ $$rc -eq 137 ] 2>/dev/null; then \
 				timeout_count=$$((timeout_count + 1)); \
 				printf "  TIME  %s\n" "$$name"; \
@@ -53,7 +56,7 @@ test-bash: build test-bash-helpers
 				failed=$$((failed + 1)); \
 				printf "  FAIL  %s\n" "$$name"; \
 			fi; \
-			rm -f $$BASH_TSTOUT; \
+			rm -f $$BASH_TSTOUT $$BASH_TSTRAW; \
 		done; \
 		echo ""; \
 		echo "Results: $$passed passed, $$failed failed, $$skipped skipped, $$timeout_count timed out"; \
