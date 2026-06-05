@@ -270,16 +270,19 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		switch len(args) {
 		case 0:
 		case 1:
-			if n2, err := strconv.Atoi(args[0]); err == nil {
-				n = n2
-				break
+			n2, err := strconv.Atoi(args[0])
+			if err != nil {
+				// Bash 5.3: `shift abc` → "shift: abc: numeric argument required"
+				return failf(1, "shift: %s: numeric argument required\n", args[0])
 			}
-			fallthrough
+			if n2 < 0 {
+				// Bash 5.3: `shift -1` → "shift: -1: shift count out of range"
+				return failf(1, "shift: %s: shift count out of range\n", args[0])
+			}
+			n = n2
 		default:
-			if r.bashCompatErrors {
-				return failf(2, "shift: usage: %s\n", bashUsage["shift"])
-			}
-			return failf(2, "usage: shift [n]\n")
+			// Bash 5.3: extra args → "shift: too many arguments"
+			return failf(1, "shift: too many arguments\n")
 		}
 		if n >= len(r.Params) {
 			r.Params = nil
@@ -303,6 +306,12 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		}
 
 		for _, arg := range args {
+			// Bash 5.3: `unset 1bad` errors with "not a valid identifier"
+			// (exit 2) when the var-namespace is in scope. Function names
+			// are unrestricted, so `unset -f 1bad` is allowed.
+			if vars && !syntax.ValidName(arg) {
+				return failf(2, "unset: `%s': not a valid identifier\n", arg)
+			}
 			if vars && r.lookupVar(arg).IsSet() {
 				r.delVar(arg)
 			} else if _, ok := r.Funcs[arg]; ok && funcs {

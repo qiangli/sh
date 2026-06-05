@@ -250,7 +250,9 @@ var runTests = []runTest{
 	{"break", "break is only useful in a loop\n #JUSTERR"},
 	{"continue", "continue is only useful in a loop\n #JUSTERR"},
 	{"cd a b", "usage: cd [dir]\nexit status 2 #JUSTERR"},
-	{"shift a", "usage: shift [n]\nexit status 2 #JUSTERR"},
+	{"shift a", "shift: a: numeric argument required\nexit status 1 #JUSTERR"},
+	{"shift 1 2", "shift: too many arguments\nexit status 1 #JUSTERR"},
+	{"shift -1", "shift: -1: shift count out of range\nexit status 1 #JUSTERR"},
 	{
 		"shouldnotexist",
 		"\"shouldnotexist\": executable file not found in $PATH\nexit status 127 #JUSTERR",
