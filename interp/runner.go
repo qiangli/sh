@@ -695,7 +695,19 @@ func (r *Runner) printFuncDecl(name string, body *syntax.Stmt) {
 			continue
 		}
 		var buf bytes.Buffer
-		printer.Print(&buf, st)
+		// Nested function declaration: render with bash 5.3's
+		// `function NAME () { ... }` form rather than the
+		// printer's `NAME() { ... }`. Pass redirs from BOTH the
+		// surrounding stmt (Stmt.Redirs) and the body block
+		// (FuncDecl.Body.Redirs) — bash attaches the body-level
+		// ones to the closing brace.
+		if fd, ok := st.Cmd.(*syntax.FuncDecl); ok {
+			redirs := append([]*syntax.Redirect(nil), st.Redirs...)
+			redirs = append(redirs, fd.Body.Redirs...)
+			renderNestedFuncDecl(&buf, printer, fd, redirs)
+		} else {
+			printer.Print(&buf, st)
+		}
 		body := strings.TrimRight(buf.String(), "\n")
 		if tc, ok := st.Cmd.(*syntax.TimeClause); ok && tc.Stmt == nil {
 			body += " "
@@ -832,6 +844,49 @@ func fieldsAllAssignments(fields []string) bool {
 		}
 	}
 	return true
+}
+
+// renderNestedFuncDecl writes a nested function decl into buf in
+// bash 5.3's declare -f shape:
+//
+//	function NAME ()
+//	{
+//	    body
+//	} <redirs>
+func renderNestedFuncDecl(buf *bytes.Buffer, printer *syntax.Printer, fd *syntax.FuncDecl, redirs []*syntax.Redirect) {
+	buf.WriteString("function ")
+	buf.WriteString(fd.Name.Value)
+	buf.WriteString(" () \n{\n")
+	// Print the function body (which is a Stmt — usually a Block).
+	var bodyBuf bytes.Buffer
+	if block, ok := fd.Body.Cmd.(*syntax.Block); ok {
+		for _, st := range block.Stmts {
+			var sb bytes.Buffer
+			printer.Print(&sb, st)
+			line := strings.TrimRight(sb.String(), "\n")
+			// Each body stmt indented by 4 spaces in declare -f.
+			bodyBuf.WriteString("    ")
+			bodyBuf.WriteString(line)
+			bodyBuf.WriteString("\n")
+		}
+	} else {
+		// Non-Block body (rare) — pass through printer.
+		printer.Print(&bodyBuf, fd.Body)
+	}
+	buf.WriteString(bodyBuf.String())
+	buf.WriteString("}")
+	// Function-level redirections from the surrounding Stmt.
+	for _, rd := range redirs {
+		text := formatRedirect(rd)
+		text = strings.TrimSpace(text)
+		if strings.HasPrefix(text, ">&") {
+			text = "1" + text
+		} else if strings.HasPrefix(text, "<&") {
+			text = "0" + text
+		}
+		buf.WriteString(" ")
+		buf.WriteString(text)
+	}
 }
 
 // isSimpleForAmpJoin reports whether stmt can be joined onto the
@@ -1019,6 +1074,89 @@ func splitCompoundLine(line string) []string {
 			return []string{line}
 		}
 		return splitCaseLine(line, indent, trim)
+	}
+	// Nested function declaration: `NAME() { BODY; } [trailing]` →
+	//   function NAME ()
+	//   {
+	//       BODY
+	//   } trailing
+	// bash 5.3 declare -f renders nested function declarations
+	// using the `function NAME ()` form. Only fires when the line
+	// matches the pattern `<ident>() { ... }`.
+	if idx := strings.Index(trim, "() { "); idx > 0 {
+		name := trim[:idx]
+		if syntax.ValidName(name) {
+			rest := trim[idx+len("() { "):]
+			// Find matching closing `}` at top level.
+			closer := -1
+			depthC := 1
+			depthP := 0
+			inSgl, inDbl := false, false
+			for k := 0; k < len(rest); k++ {
+				c := rest[k]
+				if c == '\\' && k+1 < len(rest) {
+					k++
+					continue
+				}
+				switch {
+				case inSgl:
+					if c == '\'' {
+						inSgl = false
+					}
+				case inDbl:
+					if c == '"' {
+						inDbl = false
+					}
+				case c == '\'':
+					inSgl = true
+				case c == '"':
+					inDbl = true
+				case c == '(':
+					depthP++
+				case c == ')':
+					if depthP > 0 {
+						depthP--
+					}
+				case c == '{':
+					depthC++
+				case c == '}':
+					depthC--
+					if depthC == 0 {
+						closer = k
+					}
+				}
+				if closer >= 0 {
+					break
+				}
+			}
+			if closer >= 0 {
+				body := strings.TrimSpace(rest[:closer])
+				body = strings.TrimSuffix(body, ";")
+				body = strings.TrimSpace(body)
+				trailing := strings.TrimSpace(rest[closer+1:])
+				ind := strings.Repeat(" ", indent)
+				inner := strings.Repeat(" ", indent+4)
+				out := []string{
+					ind + "function " + name + " () ",
+					ind + "{ ",
+				}
+				for _, b := range splitTopLevel(body, ";") {
+					b = strings.TrimSpace(b)
+					if b == "" {
+						continue
+					}
+					for _, sub := range splitCompoundLine(inner + b) {
+						out = append(out, sub)
+					}
+				}
+				closeBrace := ind + "}"
+				if trailing != "" {
+					closeBrace += " " + trailing
+				}
+				out = append(out, closeBrace)
+				return out
+			}
+		}
 	}
 	// Subshell wrapping a brace group: `( { X; } ) [trailing]` →
 	//   ( {
