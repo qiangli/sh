@@ -27,6 +27,12 @@ BASH_TEST_TIMEOUT := 60
 # Skipping these saves ~60s each on every `make test-bash` run.
 BASH_TEST_SKIP := coproc jobs trap
 
+# Tests whose bash run-* helper strips lines starting with `expect ` from
+# the captured output before diffing against the .right file. The
+# convention is local to a handful of tests: most embed `expect` echoes
+# directly in the .right file (so filtering them would break the diff).
+BASH_TEST_FILTER_EXPECT := attr exp extglob extglob2 invert invocation more-exp new-exp nquote nquote1 nquote2 nquote3 nquote5 posix2 varenv
+
 ## test-bash: Run bash 5.3 native test suite against bashy (with per-test timeout)
 test-bash: build test-bash-helpers
 	@echo "Running bash 5.3 test suite against bashy ($(BASH_TEST_TIMEOUT)s timeout per test)..."
@@ -59,7 +65,12 @@ test-bash: build test-bash-helpers
 			rc=$$?; \
 			kill -KILL -- -$$test_pid 2>/dev/null; \
 			kill $$timer_pid 2>/dev/null; wait $$timer_pid 2>/dev/null; \
-			grep -av '^expect' <$$BASH_TSTRAW >$$BASH_TSTOUT 2>/dev/null || :; \
+			case " $(BASH_TEST_FILTER_EXPECT) " in \
+				*" $$name "*) \
+					grep -av '^expect' <$$BASH_TSTRAW >$$BASH_TSTOUT 2>/dev/null || : ;; \
+				*) \
+					cp $$BASH_TSTRAW $$BASH_TSTOUT 2>/dev/null || : ;; \
+			esac; \
 			if [ $$rc -eq 137 ] 2>/dev/null; then \
 				timeout_count=$$((timeout_count + 1)); \
 				printf "  TIME  %s\n" "$$name"; \

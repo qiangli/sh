@@ -669,7 +669,17 @@ func validExportedFuncName(name string) bool {
 // no `;` on the last top-level statement or on compound block
 // closers (`fi`, `done`, `esac`, `}`).
 func (r *Runner) printFuncDecl(name string, body *syntax.Stmt) {
-	r.outf("%s () \n", name)
+	// bash 5.3 prefixes the `function` keyword only when the
+	// `NAME ()` form would fail to reparse as a function decl —
+	// i.e. when the name contains `=` (otherwise an assignment),
+	// `(`, `)`, or other characters that break the standard
+	// declaration syntax. Pure-digit / dash names render as plain
+	// `NAME ()` without `function`.
+	if funcDeclNeedsKeyword(name) {
+		r.outf("function %s () \n", name)
+	} else {
+		r.outf("%s () \n", name)
+	}
 	// Body is a syntax.Stmt whose Cmd is a syntax.Block (the `{ }`)
 	// in the usual case. Unwrap the block so we can render each
 	// inner stmt with the bash-specific trailing-semicolon rule.
@@ -875,6 +885,24 @@ func fieldsAllAssignments(fields []string) bool {
 //	{
 //	    body
 //	} <redirs>
+// funcDeclNeedsKeyword reports whether the bash 5.3 declare -f
+// renderer must prefix the `function` keyword for a function with
+// this name. The plain `NAME ()` form would fail to reparse when
+// the name contains characters that break the declaration syntax —
+// `=` (parsed as assignment), `(`, `)`, whitespace, etc. Names that
+// are pure-identifier or pure-digit (`11111`) don't need it.
+func funcDeclNeedsKeyword(name string) bool {
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		switch c {
+		case '=', '(', ')', '<', '>', '"', '\'', '`', '$', '\\',
+			' ', '\t', '\n', ';', '&', '|', '*', '?', '[', ']', '{', '}':
+			return true
+		}
+	}
+	return false
+}
+
 func renderNestedFuncDecl(buf *bytes.Buffer, printer *syntax.Printer, fd *syntax.FuncDecl, redirs []*syntax.Redirect) {
 	buf.WriteString("function ")
 	buf.WriteString(fd.Name.Value)
@@ -2473,8 +2501,11 @@ func bashDeclareFmt(body string, lastTop bool) string {
 			}
 		}
 		// Case-pattern line: trimmed text ends with bare `)`
-		// (single right paren NOT being `))` from arith).
-		if !skip && strings.HasSuffix(trim, ")") && !strings.HasSuffix(trim, "))") {
+		// (single right paren NOT being `))` from arith). Skip
+		// when this looks like a case pattern: doesn't begin with
+		// `(` (a subshell stmt like `( foo )` should still get a
+		// trailing `;` inside a function body).
+		if !skip && strings.HasSuffix(trim, ")") && !strings.HasSuffix(trim, "))") && !strings.HasPrefix(trim, "(") {
 			skip = true
 		}
 		// Skip the trailing `;` when the next non-empty line is
