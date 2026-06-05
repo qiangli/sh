@@ -45,7 +45,7 @@
 - [x] `${ (shift) }` funsub with subshell — already worked once funsubScope landed (subshell isolates positional-param changes; shift in a bare funsub correctly leaks per bash 5.3); regression tests pin all three shapes
 - [x] `${H*}` — `*` as parameter expansion pattern inside `[[ ]]` — root cause was eager rhs evaluation in `[[ a && b ]]` / `[[ a || b ]]`; short-circuit so unevaluatable expansions on rhs never run when lhs settles result
 - [x] `((true ) )` — arithmetic with space before `)` in case clause (peekArithmEnd skips horizontal whitespace)
-- [ ] `case esac in esac)` — eval parsing of unusual case patterns
+- [x] `case esac in esac)` — eval parsing of unusual case patterns — peek past horizontal whitespace from p.r + buffer to disambiguate `esac` as pattern (followed by `)` / `|` / `(`) vs case closer
 
 ### P1: Error Message Format (affects ~60 tests)
 

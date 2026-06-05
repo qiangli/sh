@@ -3778,6 +3778,40 @@ var fileTests = []fileTestCase{
 		}),
 	),
 	fileTest(
+		// `esac` as a case word and a case pattern — bash/mksh accept
+		// the bare form (`esac)`); the parser disambiguates by peeking
+		// past the literal. Dash and Zsh reject it, so the test is
+		// restricted to bash/mksh to avoid the TestParseConfirm probe
+		// against those shells.
+		[]string{
+			"case esac in (esac) a ;; esac",
+			"case esac in esac) a ;; esac",
+			"case esac in esac ) a ;; esac",
+		},
+		langFile(&CaseClause{
+			Word: litWord("esac"),
+			Items: []*CaseItem{{
+				Op:       Break,
+				Patterns: litWords("esac"),
+				Stmts:    litStmts("a"),
+			}},
+		}, LangBash|LangMirBSDKorn),
+	),
+	fileTest(
+		[]string{
+			"case k in else | done | time | esac) a ;; esac",
+			"case k in else|done|time|esac) a ;; esac",
+		},
+		langFile(&CaseClause{
+			Word: litWord("k"),
+			Items: []*CaseItem{{
+				Op:       Break,
+				Patterns: litWords("else", "done", "time", "esac"),
+				Stmts:    litStmts("a"),
+			}},
+		}, LangBash|LangMirBSDKorn),
+	),
+	fileTest(
 		[]string{"case i in 1) a ;& 2) ;; esac"},
 		langFile(&CaseClause{
 			Word: litWord("i"),

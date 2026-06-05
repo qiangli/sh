@@ -2602,6 +2602,37 @@ func (p *Parser) selectClause(s *Stmt) {
 	s.Cmd = fc
 }
 
+// caseStopIsPattern reports whether the just-lexed `esac` literal is
+// actually the start of a case pattern (e.g. `case esac in esac) ...`)
+// rather than the closer for the surrounding case clause. The lexer has
+// already pre-read one rune past `esac` into p.r, so we start from
+// there and scan into the remaining buffer; a `)`, `|`, or `(` (after
+// any horizontal whitespace) means a pattern.
+func (p *Parser) caseStopIsPattern() bool {
+	r := p.r
+	// p.bsp can sit past len(p.bs) after an EOF read (lexer signals "no
+	// more bytes" by setting it to len(p.bs)+1) — clamp before slicing.
+	var rest []byte
+	if int(p.bsp) <= len(p.bs) {
+		rest = p.bs[p.bsp:]
+	}
+	for {
+		switch r {
+		case ' ', '\t':
+			// fall through to advance below
+		case ')', '|', '(':
+			return true
+		default:
+			return false
+		}
+		if len(rest) == 0 {
+			return false
+		}
+		r = rune(rest[0])
+		rest = rest[1:]
+	}
+}
+
 func (p *Parser) caseClause(s *Stmt) {
 	cc := &CaseClause{Case: p.pos}
 	p.next()
@@ -2627,7 +2658,17 @@ func (p *Parser) caseClause(s *Stmt) {
 
 func (p *Parser) caseItems(stop string) (items []*CaseItem) {
 	p.got(_Newl)
-	for p.tok != _EOF && (p.tok != _LitWord || p.val != stop) {
+	for p.tok != _EOF {
+		if p.tok == _LitWord && p.val == stop {
+			// `esac` (the case closer) doubling as a pattern, e.g.
+			// `case esac in esac) ...` or `case k in foo|esac) ...`,
+			// is legal in bash and POSIX. Disambiguate by peeking
+			// past horizontal whitespace: a following `)`, `|`, or
+			// `(` means it's a pattern; anything else is the closer.
+			if !p.caseStopIsPattern() {
+				break
+			}
+		}
 		ci := &CaseItem{}
 		ci.Comments, p.accComs = p.accComs, nil
 		p.got(leftParen)
