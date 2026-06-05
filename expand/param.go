@@ -17,6 +17,27 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 )
 
+// stripBackslashEscapes removes a single backslash before any
+// character, mirroring bash 5.3's quote-removal pass on the replacement
+// in ${var/pat/repl}: `\X` → `X` for any X, `\\` → `\`. A trailing
+// backslash is kept as-is.
+func stripBackslashEscapes(s string) string {
+	if !strings.ContainsRune(s, '\\') {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+1 < len(s) {
+			b.WriteByte(s[i+1])
+			i++
+			continue
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
+}
+
 func nodeLit(node syntax.Node) string {
 	if word, ok := node.(*syntax.Word); ok {
 		return word.Lit()
@@ -265,6 +286,11 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 		if err != nil {
 			return "", err
 		}
+		// Bash 5.3 applies quote-removal to the replacement: a
+		// backslash escapes the next character (`\'` → `'`, `\\` → `\`,
+		// `\&` → `&`, etc.). Without this, `${v/x/\'}` emits `\'`
+		// instead of `'` and many quote-roundtrip tests fail.
+		with = stripBackslashEscapes(with)
 		n := 1
 		if pe.Repl.All {
 			n = -1
