@@ -817,6 +817,23 @@ func endsWithHeredocTerminator(body string) bool {
 	return lastIsTerm
 }
 
+// fieldsAllAssignments reports whether every element of fields is
+// shaped like `name=value` with name being a valid identifier. Used
+// by the cmd dispatch to promote a leftover expansion to plain
+// assignments when the command word expanded to nothing.
+func fieldsAllAssignments(fields []string) bool {
+	for _, f := range fields {
+		eq := strings.IndexByte(f, '=')
+		if eq <= 0 {
+			return false
+		}
+		if !syntax.ValidName(f[:eq]) {
+			return false
+		}
+	}
+	return true
+}
+
 // isSimpleForAmpJoin reports whether stmt can be joined onto the
 // preceding `&` stmt's line in declare -f rendering — true for plain
 // CallExpr or subshell, false for compound openers / declarations.
@@ -2482,6 +2499,26 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		}
 		r.lastExpandExit = exitStatus{}
 		fields := r.fields(args...)
+		// bash 5.3: when a CallExpr already has assignment prefixes
+		// (`a=5 b=6 $CMD ...`) AND the remaining words after
+		// expansion are ALL assignment-shaped (typically because
+		// the command word expanded to nothing), promote them to
+		// additional plain assignments. e.g.
+		//   a=5 b=6 $UNSET c=7 d=8
+		// becomes assignments a=5, b=6, c=7, d=8.
+		// Only fires when cm.Assigns is non-empty — keeps the
+		// brace-expanded `{a,b}=value` case (no leading assigns)
+		// on the cmd path so it errors as bash 3.x did.
+		if len(cm.Assigns) > 0 && len(fields) > 0 && fieldsAllAssignments(fields) {
+			for _, f := range fields {
+				eq := strings.IndexByte(f, '=')
+				name := f[:eq]
+				val := f[eq+1:]
+				vr := expand.Variable{Set: true, Kind: expand.String, Str: val}
+				r.setVar(name, vr)
+			}
+			fields = nil
+		}
 		if len(fields) == 0 {
 			for _, as := range cm.Assigns {
 				name := as.Name.Value
