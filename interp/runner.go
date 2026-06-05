@@ -785,8 +785,175 @@ func splitCompoundLine(line string) []string {
 			return []string{line}
 		}
 		return splitIfLine(line, indent, trim)
+	case strings.HasPrefix(trim, "case "):
+		if !strings.HasSuffix(trim, " esac") {
+			return []string{line}
+		}
+		return splitCaseLine(line, indent, trim)
 	}
 	return []string{line}
+}
+
+// splitCaseLine handles `case X in PAT) BODY ;; PAT2) BODY2 ;; esac` →
+// multi-line bash 5.3 declare -f format:
+//
+//	case X in
+//	    a)
+//	        BODY
+//	    ;;
+//	    b)
+//	        BODY2
+//	    ;;
+//	esac
+func splitCaseLine(orig string, indent int, trim string) []string {
+	ind := strings.Repeat(" ", indent)
+	inner := strings.Repeat(" ", indent+4)
+	innerBody := strings.Repeat(" ", indent+8)
+	// trim = `case X in PATS esac`. Strip prefix `case ` and suffix ` esac`.
+	rest := strings.TrimSuffix(strings.TrimPrefix(trim, "case "), " esac")
+	// rest = `X in PATS`. Find ` in ` to separate subject.
+	inIdx := strings.Index(rest, " in ")
+	if inIdx < 0 {
+		return []string{orig}
+	}
+	subject := rest[:inIdx]
+	pats := rest[inIdx+len(" in "):]
+	// Trim leading/trailing space and a trailing `;` from the
+	// patterns block (sometimes the printer leaves one).
+	pats = strings.TrimSpace(pats)
+	// Bash 5.3 includes a trailing space after `in `: "case x in ".
+	out := []string{ind + "case " + subject + " in "}
+	// Walk pats looking for each PAT) BODY ;; (or `;&`, `;;&`, etc.)
+	// We rely on splitTopLevel to break at `;;` separators.
+	items := splitCaseItems(pats)
+	for _, it := range items {
+		patEnd := indexUnnestedRune(it, ')')
+		if patEnd < 0 {
+			return []string{orig}
+		}
+		pat := strings.TrimSpace(it[:patEnd])
+		body := strings.TrimSpace(it[patEnd+1:])
+		// Body may end with `;;` — splitCaseItems already stripped
+		// the separator, so trim defensively.
+		body = strings.TrimSuffix(body, ";;")
+		body = strings.TrimSpace(body)
+		out = append(out, inner+pat+")")
+		// Body may have multiple stmts.
+		for _, b := range splitTopLevel(body, ";") {
+			b = strings.TrimSpace(b)
+			if b == "" {
+				continue
+			}
+			for _, sub := range splitCompoundLine(innerBody + b) {
+				out = append(out, sub)
+			}
+		}
+		out = append(out, inner+";;")
+	}
+	out = append(out, ind+"esac")
+	return out
+}
+
+// splitCaseItems splits a case-pattern body string at top-level `;;`
+// boundaries (respecting nested parens/quotes). Returns items WITHOUT
+// the trailing `;;`.
+func splitCaseItems(s string) []string {
+	var out []string
+	depthP := 0
+	inSgl, inDbl := false, false
+	last := 0
+	for i := 0; i+1 < len(s); i++ {
+		c := s[i]
+		if c == '\\' && i+1 < len(s) {
+			i++
+			continue
+		}
+		switch {
+		case inSgl:
+			if c == '\'' {
+				inSgl = false
+			}
+		case inDbl:
+			if c == '"' {
+				inDbl = false
+			}
+		case c == '\'':
+			inSgl = true
+		case c == '"':
+			inDbl = true
+		case c == '(':
+			depthP++
+		case c == ')':
+			if depthP > 0 {
+				depthP--
+			}
+		case depthP == 0 && c == ';' && s[i+1] == ';':
+			out = append(out, s[last:i])
+			last = i + 2
+			// Skip a possible third char for `;;&`.
+			if last < len(s) && s[last] == '&' {
+				last++
+			}
+			i = last - 1
+		}
+	}
+	if last < len(s) {
+		tail := strings.TrimSpace(s[last:])
+		if tail != "" {
+			out = append(out, tail)
+		}
+	}
+	return out
+}
+
+// indexUnnestedRune returns the index of the first occurrence of r in
+// s that is not inside parens/brackets/quotes. -1 if not found.
+func indexUnnestedRune(s string, r byte) int {
+	depthP, depthB := 0, 0
+	inSgl, inDbl := false, false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == '\\' && i+1 < len(s) {
+			i++
+			continue
+		}
+		switch {
+		case inSgl:
+			if c == '\'' {
+				inSgl = false
+			}
+			continue
+		case inDbl:
+			if c == '"' {
+				inDbl = false
+			}
+			continue
+		case c == '\'':
+			inSgl = true
+			continue
+		case c == '"':
+			inDbl = true
+			continue
+		case c == '(':
+			depthP++
+			continue
+		case c == '[':
+			depthB++
+			continue
+		case c == ']':
+			if depthB > 0 {
+				depthB--
+			}
+			continue
+		}
+		if c == r && depthP == 0 && depthB == 0 {
+			return i
+		}
+		if c == ')' && depthP > 0 {
+			depthP--
+		}
+	}
+	return -1
 }
 
 // splitIfLine handles `if X; then A; elif Y; then B; else C; fi` →
@@ -1105,18 +1272,42 @@ func bashDeclareFmt(body string, lastTop bool) string {
 		if trim == "(" || trim == ")" {
 			continue
 		}
+		skip := false
 		for _, suffix := range []string{
 			" then", " do", " in", " {", " else",
 			";", "&", "|", ";;", ";&", "&&", "||",
 		} {
 			if strings.HasSuffix(trim, suffix) {
-				goto next
+				skip = true
+				break
 			}
+		}
+		// Case-pattern line: trimmed text ends with bare `)`
+		// (single right paren NOT being `))` from arith).
+		if !skip && strings.HasSuffix(trim, ")") && !strings.HasSuffix(trim, "))") {
+			skip = true
+		}
+		// Skip the trailing `;` when the next non-empty line is
+		// `;;` (case-pattern separator) — bash 5.3 emits bare
+		// body lines before `;;` in declare -f output.
+		if !skip {
+			for k := i + 1; k < len(lines); k++ {
+				nxt := strings.TrimSpace(lines[k])
+				if nxt == "" {
+					continue
+				}
+				if nxt == ";;" || strings.HasPrefix(nxt, ";;") {
+					skip = true
+				}
+				break
+			}
+		}
+		if skip {
+			continue
 		}
 		if !(lastTop && i == len(lines)-1) {
 			lines[i] += ";"
 		}
-	next:
 	}
 	return strings.Join(lines, "\n")
 }
