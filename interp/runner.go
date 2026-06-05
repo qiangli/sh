@@ -2092,6 +2092,123 @@ func bashArithSpace(body string) string {
 	return b.String()
 }
 
+// bashArithForNorm normalises the `for ((init; cond; post))` header in
+// declare -f output to match bash 5.3:
+//   - empty init/cond/post slots become `1` (a no-op true expression);
+//   - a single space is inserted before the closing `))`;
+//   - the rest of the contents is left untouched.
+//
+// `for ((;;))` becomes `for ((1; 1; 1))`. `for (( ; i<3; i++))` becomes
+// `for ((1; i<3; i++ ))`.
+func bashArithForNorm(body string) string {
+	var b strings.Builder
+	b.Grow(len(body) + 16)
+	i := 0
+	for i < len(body) {
+		// Look for `for ((` at the start of the trimmed line.
+		if !(i+6 <= len(body) && body[i] == 'f' && body[i+1] == 'o' && body[i+2] == 'r' &&
+			(body[i+3] == ' ' || body[i+3] == '\t')) {
+			b.WriteByte(body[i])
+			i++
+			continue
+		}
+		// Need previous char (if any) to be a line start or whitespace.
+		if i > 0 {
+			prev := body[i-1]
+			if prev != '\n' && prev != ' ' && prev != '\t' && prev != ';' {
+				b.WriteByte(body[i])
+				i++
+				continue
+			}
+		}
+		// Find `((` after "for ".
+		k := i + 4
+		for k < len(body) && (body[k] == ' ' || body[k] == '\t') {
+			k++
+		}
+		if !(k+1 < len(body) && body[k] == '(' && body[k+1] == '(') {
+			b.WriteByte(body[i])
+			i++
+			continue
+		}
+		// Find matching `))`, tracking paren depth.
+		start := k + 2
+		j := start
+		depth := 2
+		found := false
+		for j < len(body) {
+			switch body[j] {
+			case '(':
+				depth++
+			case ')':
+				if depth == 2 && j+1 < len(body) && body[j+1] == ')' {
+					found = true
+				} else {
+					depth--
+				}
+			}
+			if found {
+				break
+			}
+			j++
+		}
+		if !found {
+			b.WriteByte(body[i])
+			i++
+			continue
+		}
+		header := body[start:j]
+		// Split on `;` at top-level paren depth.
+		parts := []string{}
+		level := 0
+		last := 0
+		for x := 0; x < len(header); x++ {
+			switch header[x] {
+			case '(':
+				level++
+			case ')':
+				level--
+			case ';':
+				if level == 0 {
+					parts = append(parts, header[last:x])
+					last = x + 1
+				}
+			}
+		}
+		parts = append(parts, header[last:])
+		if len(parts) != 3 {
+			b.WriteString(body[i : j+2])
+			i = j + 2
+			continue
+		}
+		postEmpty := false
+		for idx, p := range parts {
+			p = strings.TrimSpace(p)
+			if p == "" {
+				if idx == 2 {
+					postEmpty = true
+				}
+				p = "1"
+			}
+			parts[idx] = p
+		}
+		b.WriteString(body[i:k])
+		b.WriteString("((")
+		b.WriteString(parts[0])
+		b.WriteString("; ")
+		b.WriteString(parts[1])
+		b.WriteString("; ")
+		b.WriteString(parts[2])
+		if postEmpty {
+			b.WriteString("))")
+		} else {
+			b.WriteString(" ))")
+		}
+		i = j + 2
+	}
+	return b.String()
+}
+
 // findHeredocOp returns the index of the first `<<` in line that is
 // NOT part of `<<<` (here-string), or -1 if none. Used by
 // bashDeclareFmt to distinguish heredoc openers from here-string ops.
@@ -2142,6 +2259,9 @@ func bashDeclareFmt(body string, lastTop bool) string {
 	// BEFORE the compound splitter so subshell-of-block patterns
 	// like `( { X; } )` are detectable.
 	body = bashSubshellSpace(body)
+	// bash 5.3 normalises `for ((;;))` headers: empty parts become
+	// `1` and a space is added before `))`.
+	body = bashArithForNorm(body)
 	// Bash 5.3 always renders for/while/until/if as multi-line in
 	// `declare -f` even when the source was single-line; the
 	// printer collapses to single-line. Split here.
