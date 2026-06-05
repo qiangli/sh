@@ -756,6 +756,24 @@ func splitCompoundLine(line string) []string {
 	case strings.HasPrefix(trim, "for ") ||
 		strings.HasPrefix(trim, "while ") ||
 		strings.HasPrefix(trim, "until "):
+		// A for-in header that ends with `; do` (no body on this
+		// line — body is already on subsequent lines from the
+		// printer) needs `do` split to its own line. bash 5.3
+		// renders for-in as `for X in Y;\n    do`. while/until
+		// keep `do` glued so leave them alone.
+		if strings.HasSuffix(trim, "; do") {
+			ind := strings.Repeat(" ", indent)
+			isFor := strings.HasPrefix(trim, "for ")
+			isArithFor := strings.HasPrefix(trim, "for ((")
+			if isFor {
+				header := strings.TrimSuffix(trim, "; do")
+				if isArithFor {
+					return []string{ind + header, ind + "do"}
+				}
+				return []string{ind + header + ";", ind + "do"}
+			}
+			return []string{line}
+		}
 		if !strings.Contains(trim, "; do ") {
 			return []string{line}
 		}
