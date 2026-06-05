@@ -4,10 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Pure-Go shell parser, formatter, and interpreter for POSIX Shell, Bash, mksh, and Zsh. Published as the Go module `mvdan.cc/sh/v3` and requires Go 1.25+. Two binaries are shipped from `cmd/`:
+Pure-Go shell parser, formatter, and interpreter for POSIX Shell, Bash, mksh, and Zsh. Published as the Go module `mvdan.cc/sh/v3` and requires Go 1.25+. Three binaries are shipped from `cmd/` (see `Makefile`'s `CMDS`):
 
 - `shfmt` — formatter (the user-facing flagship; flags/style documented in `cmd/shfmt/shfmt.1.scd`).
 - `gosh` — proof-of-concept interactive shell built on `interp`.
+- `bashy` — Bash 5.3 drop-in built on `interp`; the active focus of this fork (`docs/TODO.md` tracks the phased roadmap, and `make test-bash` runs bash's own 5.3 test suite against it).
 
 Note: this checkout is a fork. `origin/master` is the fork integration branch — `upstream/master` with our unmerged patches rebased on top, force-pushed on each sync. Upstream PRs target `upstream/master` directly via single-commit topic branches (e.g. `interp-pipe-fd-eof`, `interp-bash-redirects`).
 
@@ -87,7 +88,13 @@ The codebase is a layered pipeline. Each layer is a standalone package usable on
 
 7. **`moreinterp/`** — **separate Go module** (`mvdan.cc/sh/moreinterp`). Contains `coreutils/`, an `ExecHandler` middleware that satisfies commands like `cat`, `cp`, `find`, `ls`, `mkdir`, `rm`, etc. via the [u-root](https://github.com/u-root/u-root) implementations. Primarily for Windows / minimal environments where these binaries aren't installed. Because it's a separate module, dependency updates and tests are run independently of the root module.
 
-8. **`cmd/shfmt/`** — CLI wrapping `syntax` + `typedjson` + `fileutil` + `editorconfig`. Reads `.editorconfig` for per-file style. `cmd/gosh/` is a small CLI wrapping `interp.Runner` in interactive/script modes.
+8. **`interactive/`** — single-file reusable readline wrapper around `interp.Runner` (used by `cmd/bashy`'s interactive mode and consumed by sibling projects: outpost's matrix shell + `/ssh`, ycode's shell runner — keep its API stable when refactoring).
+
+9. **`internal/`** — module-private helpers (`pattern.go`, `testing.go`) shared between `syntax`/`interp` tests; not part of the public API surface.
+
+10. **`external/bash-5.3/`** — vendored Bash 5.3 source tree, used only for its `tests/` directory which `make test-bash` drives against `bin/bashy` (per-test 60s timeout, results summarized as PASS/FAIL/TIME/SKIP). `make test-bash-helpers` compiles the `recho`/`zecho` C helpers the suite needs.
+
+11. **`cmd/shfmt/`** — CLI wrapping `syntax` + `typedjson` + `fileutil` + `editorconfig`. Reads `.editorconfig` for per-file style. `cmd/gosh/` is a small CLI wrapping `interp.Runner` in interactive/script modes. `cmd/bashy/` adds Bash 5.3 compatibility on top (prompt expansion, version vars, signal/job-control surface — see `docs/plan-bashy-drop-in.md`).
 
 ### Conventions / sharp edges
 
