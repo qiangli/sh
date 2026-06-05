@@ -756,9 +756,26 @@ func splitCompoundLine(line string) []string {
 	case strings.HasPrefix(trim, "for ") ||
 		strings.HasPrefix(trim, "while ") ||
 		strings.HasPrefix(trim, "until "):
-		if !strings.Contains(trim, "; do ") || !strings.HasSuffix(trim, "; done") {
+		if !strings.Contains(trim, "; do ") {
 			return []string{line}
 		}
+		// Match `; done` either at end of line or followed by
+		// trailing redirections (`done > /dev/null`); capture
+		// trailing so it lands on the closing `done` line.
+		doneIdx := -1
+		for i := 0; i+len("; done") <= len(trim); i++ {
+			if trim[i:i+len("; done")] == "; done" &&
+				(i+len("; done") == len(trim) ||
+					trim[i+len("; done")] == ' ' ||
+					trim[i+len("; done")] == ';') {
+				doneIdx = i
+			}
+		}
+		if doneIdx < 0 {
+			return []string{line}
+		}
+		trailing := strings.TrimSpace(trim[doneIdx+len("; done"):])
+		trim = trim[:doneIdx+len("; done")]
 		// Split into: opener (no trailing `; do`) / do (own line) /
 		// body / done. bash 5.3 puts `do` on its own line, NOT
 		// glued to the for/while/until header.
@@ -778,13 +795,40 @@ func splitCompoundLine(line string) []string {
 				out = append(out, sub)
 			}
 		}
-		out = append(out, ind+"done")
+		closer := ind + "done"
+		if trailing != "" {
+			closer += " " + trailing
+		}
+		out = append(out, closer)
 		return out
 	case strings.HasPrefix(trim, "if "):
-		if !strings.Contains(trim, "; then ") || !strings.HasSuffix(trim, "; fi") {
+		if !strings.Contains(trim, "; then ") {
 			return []string{line}
 		}
-		return splitIfLine(line, indent, trim)
+		// Match `; fi` either at end of line or followed by a
+		// trailing redirection (`fi > /dev/null`). Capture the
+		// trailing portion so it can be appended to the closing
+		// `fi` line.
+		fiIdx := -1
+		for i := 0; i+len("; fi") <= len(trim); i++ {
+			if trim[i:i+len("; fi")] == "; fi" &&
+				(i+len("; fi") == len(trim) ||
+					trim[i+len("; fi")] == ' ' ||
+					trim[i+len("; fi")] == ';') {
+				fiIdx = i
+			}
+		}
+		if fiIdx < 0 {
+			return []string{line}
+		}
+		ifChain := trim[:fiIdx+len("; fi")]
+		trailing := strings.TrimSpace(trim[fiIdx+len("; fi"):])
+		out := splitIfLine(line, indent, ifChain)
+		if trailing != "" && len(out) > 0 {
+			// Append trailing redirection to the closing `fi`.
+			out[len(out)-1] += " " + trailing
+		}
+		return out
 	case strings.HasPrefix(trim, "case "):
 		if !strings.HasSuffix(trim, " esac") {
 			return []string{line}
