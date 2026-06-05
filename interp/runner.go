@@ -1695,6 +1695,98 @@ func splitTopLevel(s, sep string) []string {
 //	                      fi
 //
 // The closing `fi` line keeps any trailing redirection.
+// bashCollapseSubshellHdoc collapses the multi-line subshell-with-
+// heredoc layout to bash 5.3's declare -f form. The input has
+// already been through the +4 indent pass:
+//
+//	    (                       →    ( cat <<EOF
+//	        cat <<EOF                body
+//	    body                         EOF
+//	    EOF                         );
+//	    )
+//
+// Only fires when the subshell contains exactly one statement and
+// that statement opens a heredoc. The closing `)` becomes ` );`
+// at column 1 (one leading space), matching bash 5.3 quirks.
+func bashCollapseSubshellHdoc(body string) string {
+	lines := strings.Split(body, "\n")
+	out := make([]string, 0, len(lines))
+	for i := 0; i < len(lines); i++ {
+		l := lines[i]
+		trim := strings.TrimSpace(l)
+		if trim != "(" || i+1 >= len(lines) {
+			out = append(out, l)
+			continue
+		}
+		// Find a heredoc opener on the next non-empty line.
+		stmt := strings.TrimRight(lines[i+1], "\n")
+		stmtTrim := strings.TrimSpace(stmt)
+		// Strip a single trailing `;` that the +4/`;` pass may
+		// have appended.
+		stmtTrim = strings.TrimSuffix(stmtTrim, ";")
+		hdIdx := findHeredocOp(stmtTrim)
+		if hdIdx < 0 {
+			out = append(out, l)
+			continue
+		}
+		// Extract the heredoc tag.
+		after := stmtTrim[hdIdx+2:]
+		after = strings.TrimLeft(after, "-")
+		after = strings.TrimLeft(after, " \t")
+		tag := after
+		tag = strings.TrimRight(tag, " \t")
+		tag = strings.Trim(tag, "'\"")
+		if tag == "" {
+			out = append(out, l)
+			continue
+		}
+		// Find the terminator line and the closing `)` after it.
+		termIdx := -1
+		for k := i + 2; k < len(lines); k++ {
+			if strings.TrimSpace(lines[k]) == tag {
+				termIdx = k
+				break
+			}
+		}
+		if termIdx < 0 {
+			out = append(out, l)
+			continue
+		}
+		// Find the next non-empty line after the terminator —
+		// it must be a lone `)` (possibly with trailing ops).
+		closeIdx := -1
+		for k := termIdx + 1; k < len(lines); k++ {
+			if strings.TrimSpace(lines[k]) == "" {
+				continue
+			}
+			closeIdx = k
+			break
+		}
+		if closeIdx < 0 {
+			out = append(out, l)
+			continue
+		}
+		closeTrim := strings.TrimSpace(lines[closeIdx])
+		if !strings.HasPrefix(closeTrim, ")") {
+			out = append(out, l)
+			continue
+		}
+		trailing := strings.TrimSuffix(closeTrim[1:], ";")
+		indent := l[:len(l)-len(trim)]
+		// Emit `<indent>( STMT` line, the heredoc body, terminator,
+		// then ` );` plus any trailing ops at column 1 (bash 5.3
+		// quirk: the close lands one space in regardless of the
+		// surrounding indentation).
+		out = append(out, indent+"( "+stmtTrim)
+		for k := i + 2; k <= termIdx; k++ {
+			out = append(out, lines[k])
+		}
+		out = append(out, " )"+trailing+";")
+		i = closeIdx
+	}
+	return strings.Join(out, "\n")
+}
+
 // bashSubshellSpace pads subshell `(EXPR)` openers/closers with one
 // space inside the parens to match bash 5.3 declare -f rendering:
 // `(exit 1)` → `( exit 1 )`. Per-line: if the trimmed line starts
@@ -2547,18 +2639,28 @@ func bashDeclareFmt(body string, lastTop bool) string {
 	}
 	// Insert a blank line after each heredoc terminator (bash 5.3
 	// declare -f puts a blank line between the EOF closer and the
-	// next stmt or the function close).
+	// next stmt or the function close). Skip when the next line
+	// is the collapsed ` );` subshell-close (bash 5.3 keeps the
+	// terminator and the close adjacent in that case).
 	if len(hdocTermAt) > 0 {
 		out := make([]string, 0, len(lines)+len(hdocTermAt))
 		for i, l := range lines {
 			out = append(out, l)
 			if hdocTermAt[i] && i+1 < len(lines) {
+				nxtTrim := strings.TrimSpace(lines[i+1])
+				if strings.HasPrefix(nxtTrim, ")") {
+					continue
+				}
 				out = append(out, "")
 			}
 		}
 		lines = out
 	}
-	return strings.Join(lines, "\n")
+	result := strings.Join(lines, "\n")
+	// bash 5.3 collapses `(\n    CMD <<TAG\n...\nTAG\n    )` to
+	// `( CMD <<TAG\n...\nTAG\n );` when the subshell body is a
+	// single heredoc-bearing statement.
+	return bashCollapseSubshellHdoc(result)
 }
 
 // isPosixSpecialBuiltin reports whether name is a POSIX "special
