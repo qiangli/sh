@@ -939,11 +939,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		} else {
 			for _, name := range args {
 				if IsBuiltin(name) {
-					kind := "shell builtin"
-					if isPosixSpecialBuiltin(name) {
-						kind = "special shell builtin"
-					}
-					r.outf("%s: %s is a %s\n", name, name, kind)
+					r.outf("%s: %s is a shell builtin\n", name, name)
 				} else {
 					r.errf(r.bashErrPrefix(pos)+"help: no help topics match `%s'\n", name)
 					exit.code = 1
@@ -3063,17 +3059,20 @@ func (r *Runner) typeMatches(arg string, skipFuncs bool) []typeMatch {
 		}
 	}
 	if IsBuiltin(arg) && !r.disabledBuiltins[arg] {
-		// bash 5.3 distinguishes POSIX special builtins from
-		// regular builtins in `type` output: "is a special shell
-		// builtin" vs "is a shell builtin".
-		kind := "shell builtin"
-		if isPosixSpecialBuiltin(arg) {
-			kind = "special shell builtin"
-		}
+		// All builtins surface as "<name> is a shell builtin".
 		ms = append(ms, typeMatch{
 			kind: "builtin",
-			desc: fmt.Sprintf("%s is a %s", arg, kind),
+			desc: fmt.Sprintf("%s is a shell builtin", arg),
 		})
+		// POSIX special builtins ALSO surface as
+		// "<name> is a special shell builtin" — bash 5.3 type -a
+		// emits BOTH lines for special builtins.
+		if isPosixSpecialBuiltin(arg) {
+			ms = append(ms, typeMatch{
+				kind: "builtin",
+				desc: fmt.Sprintf("%s is a special shell builtin", arg),
+			})
+		}
 	}
 	if path, err := LookPathDir(r.Dir, r.writeEnv, arg); err == nil {
 		ms = append(ms, typeMatch{
