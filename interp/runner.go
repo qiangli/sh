@@ -878,6 +878,44 @@ func splitCompoundLine(line string) []string {
 		}
 		return splitCaseLine(line, indent, trim)
 	}
+	// Single-line brace-group `{ X; Y; }` → multi-line bash form:
+	//
+	//	{
+	//	    X
+	//	    Y
+	//	}
+	//
+	// Only triggers when the line STARTS with `{ ` and contains
+	// the matching `}` at the top level. The closing brace may
+	// be followed by trailing ops (`}; foo` or `} > file`).
+	if strings.HasPrefix(trim, "{ ") {
+		// Find matching `}` at top level.
+		closer := indexUnnestedBraceClose(trim)
+		if closer > 0 {
+			body := strings.TrimSpace(trim[2:closer])
+			trailing := strings.TrimSpace(trim[closer+1:])
+			body = strings.TrimSuffix(body, ";")
+			body = strings.TrimSpace(body)
+			ind := strings.Repeat(" ", indent)
+			inner := strings.Repeat(" ", indent+4)
+			out := []string{ind + "{ "}
+			for _, b := range splitTopLevel(body, ";") {
+				b = strings.TrimSpace(b)
+				if b == "" {
+					continue
+				}
+				for _, sub := range splitCompoundLine(inner + b) {
+					out = append(out, sub)
+				}
+			}
+			closeBrace := ind + "}"
+			if trailing != "" {
+				closeBrace += trailing
+			}
+			out = append(out, closeBrace)
+			return out
+		}
+	}
 	// Per-line case item: `PAT) BODY ;;` — the printer emits each
 	// case item on its own line when the case is multi-line. Split
 	// into pattern / body / ;; lines, indented one level deeper
@@ -1020,6 +1058,57 @@ func splitCaseItems(s string) []string {
 		}
 	}
 	return out
+}
+
+// indexUnnestedBraceClose returns the index of the matching `}` for a
+// brace group that starts at s[0] (assumed to be `{`). Tracks nested
+// braces, parens, and quoted regions. -1 if not found.
+func indexUnnestedBraceClose(s string) int {
+	depthC := 0
+	depthP := 0
+	inSgl, inDbl := false, false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == '\\' && i+1 < len(s) {
+			i++
+			continue
+		}
+		switch {
+		case inSgl:
+			if c == '\'' {
+				inSgl = false
+			}
+			continue
+		case inDbl:
+			if c == '"' {
+				inDbl = false
+			}
+			continue
+		case c == '\'':
+			inSgl = true
+			continue
+		case c == '"':
+			inDbl = true
+			continue
+		case c == '(':
+			depthP++
+			continue
+		case c == ')':
+			if depthP > 0 {
+				depthP--
+			}
+			continue
+		case c == '{':
+			depthC++
+			continue
+		case c == '}':
+			depthC--
+			if depthC == 0 && depthP == 0 {
+				return i
+			}
+		}
+	}
+	return -1
 }
 
 // indexUnnestedRune returns the index of the first occurrence of r in
@@ -1236,6 +1325,21 @@ func splitTopLevel(s, sep string) []string {
 //	                      fi
 //
 // The closing `fi` line keeps any trailing redirection.
+// bashBraceTrailSpace adds the bash 5.3 trailing space after standalone
+// `{` opener lines in declare -f output. The printer emits `{` bare;
+// bash renders it as `{ ` (trailing space). Idempotent — won't add a
+// second space if the splitter already attached one.
+func bashBraceTrailSpace(body string) string {
+	lines := strings.Split(body, "\n")
+	for i, l := range lines {
+		trim := strings.TrimSpace(l)
+		if trim == "{" && !strings.HasSuffix(l, " ") {
+			lines[i] = l + " "
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
 func bashNestElifChain(body string) string {
 	lines := strings.Split(body, "\n")
 	// Find if-chain bounds: groups of lines starting with `if ` and
@@ -1463,6 +1567,8 @@ func bashDeclareFmt(body string, lastTop bool) string {
 	body = bashSplitCompound(body)
 	// bash 5.3 converts multi-line elif chains to nested else/if/fi.
 	body = bashNestElifChain(body)
+	// bash 5.3 emits standalone `{` openers with a trailing space.
+	body = bashBraceTrailSpace(body)
 	lines := strings.Split(body, "\n")
 	inHdoc := ""
 	for i, raw := range lines {
@@ -1548,6 +1654,10 @@ func bashDeclareFmt(body string, lastTop bool) string {
 		// ends with `))` — that's the bash 5.3 arith-for header
 		// (`for ((init; cond; post))` with no trailing `;`).
 		// `for X in Y; do` keeps the `;` after `Y` (matches bash).
+		//
+		// Also skip when next line is `}` (or `};` etc.) — body
+		// lines inside `{ ... }` blocks omit `;` on the last
+		// stmt, matching the function-body rule one level deeper.
 		if !skip {
 			for k := i + 1; k < len(lines); k++ {
 				nxt := strings.TrimSpace(lines[k])
@@ -1558,6 +1668,9 @@ func bashDeclareFmt(body string, lastTop bool) string {
 				case nxt == ";;" || strings.HasPrefix(nxt, ";;"):
 					skip = true
 				case nxt == "do" && strings.HasSuffix(trim, "))"):
+					skip = true
+				case nxt == "}" || strings.HasPrefix(nxt, "} ") ||
+					strings.HasPrefix(nxt, "};"):
 					skip = true
 				}
 				break
