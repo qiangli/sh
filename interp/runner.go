@@ -1589,13 +1589,28 @@ func bashArithSpace(body string) string {
 	b.Grow(len(body) + 32)
 	i := 0
 	for i < len(body) {
-		// Detect `$((` or `((` at top level.
+		// Detect `$((` or `((` at top level. Skip `for ((...))` —
+		// bash 5.3 declare -f preserves the source's arith-for
+		// header spacing (sometimes spaced, sometimes not).
 		start, prefix := -1, ""
 		switch {
 		case i+2 < len(body) && body[i] == '$' && body[i+1] == '(' && body[i+2] == '(':
 			start, prefix = i, "$(("
 		case i+1 < len(body) && body[i] == '(' && body[i+1] == '(':
-			// Avoid matching `(((` openers (rare but possible).
+			// Skip arith-for: look back for "for " before the `((`.
+			//   - skip optional whitespace
+			//   - check for trailing "for"
+			j := i - 1
+			for j >= 0 && (body[j] == ' ' || body[j] == '\t') {
+				j--
+			}
+			if j >= 2 && body[j] == 'r' && body[j-1] == 'o' && body[j-2] == 'f' &&
+				(j == 2 || body[j-3] == ' ' || body[j-3] == '\t' || body[j-3] == '\n') {
+				// `for ((`: leave the contents alone.
+				b.WriteByte(body[i])
+				i++
+				continue
+			}
 			start, prefix = i, "(("
 		}
 		if start < 0 {
