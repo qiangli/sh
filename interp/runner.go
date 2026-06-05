@@ -2794,7 +2794,11 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 	case *syntax.Subshell:
 		r2 := r.subshell(false)
 		r2.stmts(ctx, cm.Stmts)
-		r2.exit.exiting = false // subshells don't exit the parent shell
+		// Subshells don't exit or return from the surrounding
+		// function: `(return 5)` makes the subshell exit with
+		// status 5, but the outer function/script keeps running.
+		r2.exit.exiting = false
+		r2.exit.returning = false
 		r.exit = r2.exit
 	case *syntax.CallExpr:
 		// Bash sets $BASH_COMMAND to the command's source text BEFORE
