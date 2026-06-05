@@ -14,6 +14,21 @@ import (
 // TODO(v4): the arithmetic APIs should return int64 for portability with 32-bit systems,
 // even if Bash only supports native int sizes.
 
+// containsArithOp reports whether s contains a character that would
+// make it an arithmetic expression rather than a bare identifier or
+// number literal. Used to decide whether the string form of an arith
+// operand needs to be re-parsed (`let "jv *= 2"`).
+func containsArithOp(s string) bool {
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '+', '-', '*', '/', '%', '<', '>', '=', '!',
+			'&', '|', '^', '~', '?', ':', '(', ')', ' ', '\t':
+			return true
+		}
+	}
+	return false
+}
+
 func Arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 	switch expr := expr.(type) {
 	case *syntax.Word:
@@ -32,6 +47,22 @@ func Arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 				break
 			}
 			str = val
+		}
+		// Bash re-parses the literal text of a Word-shaped arith
+		// operand as an arithmetic expression when it contains
+		// operators — `let "jv *= 2"` quotes the whole expression
+		// in a Word, but we still need to evaluate it.
+		if containsArithOp(str) {
+			file, perr := syntax.NewParser().Parse(strings.NewReader("(("+str+"))"), "")
+			if perr == nil && len(file.Stmts) == 1 {
+				if ac, ok := file.Stmts[0].Cmd.(*syntax.ArithmCmd); ok && ac.X != nil {
+					// Avoid infinite recursion when the re-parse
+					// produces the same Word back.
+					if _, isWord := ac.X.(*syntax.Word); !isWord {
+						return Arithm(cfg, ac.X)
+					}
+				}
+			}
 		}
 		// default to 0
 		return int(atoi(str)), nil
