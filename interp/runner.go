@@ -1509,6 +1509,97 @@ func bashSubshellSpace(body string) string {
 	return strings.Join(lines, "\n")
 }
 
+// bashFdExplicit walks each line and rewrites implicit redirections
+// (no leading fd digit) to bash 5.3's explicit form. Only fires when
+// the redirection is at the boundary of words (preceded by a space or
+// at line start), to avoid mangling things inside strings.
+func bashFdExplicit(body string) string {
+	lines := strings.Split(body, "\n")
+	for i, l := range lines {
+		lines[i] = fdExplicitLine(l)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// fdExplicitLine rewrites ` >&N` → ` 1>&N`, ` <&N` → ` 0<&N`,
+// ` > X` → ` 1> X`, ` < X` → ` 0< X` in a single line. Skips
+// already-explicit forms (`1>&N`, `2>file`), `>>`, `>|`, `<<`, `<>`,
+// and operators inside strings.
+func fdExplicitLine(s string) string {
+	var b strings.Builder
+	b.Grow(len(s) + 4)
+	inSgl, inDbl := false, false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == '\\' && i+1 < len(s) {
+			b.WriteByte(c)
+			b.WriteByte(s[i+1])
+			i++
+			continue
+		}
+		switch {
+		case inSgl:
+			b.WriteByte(c)
+			if c == '\'' {
+				inSgl = false
+			}
+			continue
+		case inDbl:
+			b.WriteByte(c)
+			if c == '"' {
+				inDbl = false
+			}
+			continue
+		case c == '\'':
+			inSgl = true
+			b.WriteByte(c)
+			continue
+		case c == '"':
+			inDbl = true
+			b.WriteByte(c)
+			continue
+		}
+		// Only consider redirections at word boundaries: previous
+		// char is space, or this is at start of line / after `;`.
+		boundary := i == 0 || s[i-1] == ' ' || s[i-1] == '\t' ||
+			s[i-1] == ';' || s[i-1] == '&' || s[i-1] == '|' ||
+			s[i-1] == '\n'
+		if !boundary {
+			b.WriteByte(c)
+			continue
+		}
+		// Peek for redirection ops.
+		if c == '>' {
+			if i+1 < len(s) && (s[i+1] == '>' || s[i+1] == '|') {
+				b.WriteByte(c)
+				continue
+			}
+			if i+1 < len(s) && s[i+1] == '&' {
+				// `>&N` — make explicit `1>&N`.
+				b.WriteString("1>")
+				continue
+			}
+			// `> file` — explicit `1> file`.
+			b.WriteString("1>")
+			continue
+		}
+		if c == '<' {
+			if i+1 < len(s) && (s[i+1] == '<' || s[i+1] == '>') {
+				b.WriteByte(c)
+				continue
+			}
+			if i+1 < len(s) && s[i+1] == '&' {
+				b.WriteString("0<")
+				continue
+			}
+			b.WriteString("0<")
+			continue
+		}
+		b.WriteByte(c)
+	}
+	return b.String()
+}
+
 // bashBraceTrailSpace adds the bash 5.3 trailing space after standalone
 // `{` opener lines in declare -f output. The printer emits `{` bare;
 // bash renders it as `{ ` (trailing space). Idempotent — won't add a
@@ -1772,6 +1863,10 @@ func bashDeclareFmt(body string, lastTop bool) string {
 	body = bashNestElifChain(body)
 	// bash 5.3 emits standalone `{` openers with a trailing space.
 	body = bashBraceTrailSpace(body)
+	// bash 5.3 normalises implicit fd1/fd0 to explicit form in
+	// declare -f output: `>&2` → `1>&2`, `<&3` → `0<&3`,
+	// `> file` → `1> file`, `< file` → `0< file`.
+	body = bashFdExplicit(body)
 	lines := strings.Split(body, "\n")
 	inHdoc := ""
 	for i, raw := range lines {
