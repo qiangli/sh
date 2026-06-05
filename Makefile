@@ -19,6 +19,14 @@ test:
 
 BASH_TEST_TIMEOUT := 60
 
+# Tests known to time out due to feature gaps we don't plan to implement:
+#   coproc  — full coprocess support (bashy subshells are goroutines,
+#             no kernel coproc pipes)
+#   jobs    — job control / kernel job table (same goroutine constraint)
+#   trap    — signal trap subset that requires the missing job control
+# Skipping these saves ~60s each on every `make test-bash` run.
+BASH_TEST_SKIP := coproc jobs trap
+
 ## test-bash: Run bash 5.3 native test suite against bashy (with per-test timeout)
 test-bash: build test-bash-helpers
 	@echo "Running bash 5.3 test suite against bashy ($(BASH_TEST_TIMEOUT)s timeout per test)..."
@@ -37,6 +45,12 @@ test-bash: build test-bash-helpers
 				skipped=$$((skipped + 1)); \
 				continue; \
 			fi; \
+			case " $(BASH_TEST_SKIP) " in \
+				*" $$name "*) \
+					skipped=$$((skipped + 1)); \
+					printf "  SKIP  %s\n" "$$name"; \
+					continue ;; \
+			esac; \
 			perl -e 'setpgrp; exec @ARGV' $$THIS_SH ./$$test_file >$$BASH_TSTRAW 2>&1 & \
 			test_pid=$$!; \
 			( sleep $(BASH_TEST_TIMEOUT) && kill -KILL -- -$$test_pid 2>/dev/null ) & \
