@@ -2092,24 +2092,24 @@ func bashDeclareFmt(body string, lastTop bool) string {
 		// Block closers (fi / done / esac / `}`) DO get `;` when
 		// followed by more statements in the body — only the last
 		// line of the function (lastTop && last i) is bare. Also
-		// bare when the PRECEDING non-empty line was a heredoc
-		// terminator (bash 5.3 omits `;` on the closer in that
-		// case — the heredoc body / closer pair are treated as a
-		// single visual block).
+		// bare for `done` / `fi` when the PRECEDING non-empty
+		// line was a heredoc terminator (bash 5.3 omits `;` on
+		// for/while/until/if closers in that case but KEEPS it
+		// on `}` and `esac`).
 		switch trim {
 		case "fi", "done", "esac", "}":
 			lastSkip := false
-			for k := i - 1; k >= 0; k-- {
-				ptrim := strings.TrimSpace(lines[k])
-				if ptrim == "" {
-					continue
+			if trim == "done" || trim == "fi" {
+				for k := i - 1; k >= 0; k-- {
+					ptrim := strings.TrimSpace(lines[k])
+					if ptrim == "" {
+						continue
+					}
+					if hdocTermAt[k] {
+						lastSkip = true
+					}
+					break
 				}
-				// Previous non-empty line was a heredoc
-				// terminator? Use the pre-pass map.
-				if hdocTermAt[k] {
-					lastSkip = true
-				}
-				break
 			}
 			if !(lastTop && i == len(lines)-1) && !lastSkip {
 				lines[i] += ";"
