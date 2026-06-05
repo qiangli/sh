@@ -3105,6 +3105,16 @@ func (r *Runner) typeMatches(arg string, skipFuncs bool) []typeMatch {
 			desc: fmt.Sprintf("%s is aliased to `%s'", arg, &buf),
 		})
 	}
+	// Bash POSIX mode: POSIX special builtins (break, :, continue,
+	// ., eval, exec, exit, …) take precedence over functions during
+	// command lookup. List the builtin entry first in that case.
+	posixSpecial := r.opts[optPosix] && isPosixSpecialBuiltin(arg) && IsBuiltin(arg) && !r.disabledBuiltins[arg]
+	if posixSpecial {
+		ms = append(ms, typeMatch{
+			kind: "builtin",
+			desc: fmt.Sprintf("%s is a special shell builtin", arg),
+		})
+	}
 	if !skipFuncs {
 		if _, ok := r.Funcs[arg]; ok {
 			ms = append(ms, typeMatch{
@@ -3113,18 +3123,10 @@ func (r *Runner) typeMatches(arg string, skipFuncs bool) []typeMatch {
 			})
 		}
 	}
-	if IsBuiltin(arg) && !r.disabledBuiltins[arg] {
-		// bash 5.3: default mode → "<name> is a shell builtin".
-		// POSIX mode (set -o posix) → POSIX special builtins
-		// (break, :, continue, ., eval, exec, exit, ...) get
-		// "<name> is a special shell builtin" instead.
-		kind := "shell builtin"
-		if r.opts[optPosix] && isPosixSpecialBuiltin(arg) {
-			kind = "special shell builtin"
-		}
+	if !posixSpecial && IsBuiltin(arg) && !r.disabledBuiltins[arg] {
 		ms = append(ms, typeMatch{
 			kind: "builtin",
-			desc: fmt.Sprintf("%s is a %s", arg, kind),
+			desc: fmt.Sprintf("%s is a shell builtin", arg),
 		})
 	}
 	if path, err := LookPathDir(r.Dir, r.writeEnv, arg); err == nil {

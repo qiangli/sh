@@ -3334,7 +3334,18 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			}
 		}
 	case *syntax.FuncDecl:
-		r.setFunc(cm.Name.Value, cm.Body)
+		// POSIX mode: a function name that shadows a special
+		// builtin (`return`, `break`, `export`, etc.) is a fatal
+		// error. Reject before stashing in the function table.
+		name := cm.Name.Value
+		if r.opts[optPosix] && isPosixSpecialBuiltin(name) {
+			r.errf("%s%s: cannot use `%s' as a function name in POSIX mode\n",
+				r.bashErrPrefix(cm.Position), name, name)
+			r.exit.code = 1
+			r.exit.exiting = true
+			return
+		}
+		r.setFunc(name, cm.Body)
 	case *syntax.ArithmCmd:
 		if tracingEnabled {
 			// bash `set -x` traces `((expr))` as
