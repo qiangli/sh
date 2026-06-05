@@ -50,7 +50,7 @@
 ### P1: Error Message Format (affects ~60 tests)
 
 - [x] Add `<filename>: line <N>:` prefix to error messages from builtins — added `r.bashErrPrefix(pos)` to the primary-error errf calls in `builtin()` (kill, alias, enable, help, dirs/pushd/popd, printf, getopts, trap) and the declare/local/local-only paths in runner.go
-- [ ] Add `<filename>: line <N>:` prefix to error messages from setVar/readonly
+- [x] Add `<filename>: line <N>:` prefix to error messages from setVar/readonly — setVar already had it; delVar (the unset path) was missing — now uses the same `r.bashErrPrefix(r.curStmtPos)` pattern
 - [ ] Match bash error message wording exactly (e.g., `readonly variable` → same)
 - [ ] Error messages for `printf` should match bash format
 - [ ] Error messages for `read` should match bash format

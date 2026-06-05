@@ -492,7 +492,7 @@ func (r *Runner) envGet(name string) string {
 
 func (r *Runner) delVar(name string) {
 	if err := r.writeEnv.Set(name, expand.Variable{}); err != nil {
-		r.errf("%s: %v\n", name, err)
+		r.errf("%s%s: %v\n", r.bashErrPrefix(r.curStmtPos), name, err)
 		r.exit.code = 1
 		return
 	}
