@@ -190,6 +190,13 @@ type Runner struct {
 
 	lastExpandExit exitStatus // used to surface exit statuses while expanding fields
 
+	// lastArithErr captures the most recent error from r.arithm so
+	// callers (notably the C-style for-loop) can detect arithmetic
+	// failures and abort, matching bash 5.3 — a runtime arith error
+	// inside `for ((init; cond; post))` terminates the loop. The
+	// runner clears it before each arithm call site that cares.
+	lastArithErr error
+
 	// bgProcs holds all background shells spawned by this runner.
 	// Their PIDs are 1-indexed, from 1 to len(bgProcs), with a "g" prefix
 	// to distinguish them from real PIDs on the host operating system.

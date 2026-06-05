@@ -383,18 +383,108 @@ func run(r *interp.Runner, reader io.Reader, name string) error {
 			"%s: line %d: warning: here-document at line %d delimited by end-of-file (wanted `%s')\n",
 			errPrefix, eofLine, startLine, stop)
 	}
-	prog, err := syntax.NewParser(syntax.Variant(lang), syntax.HeredocEOFWarning(hdocWarn)).Parse(bytes.NewReader(src), name)
-	if err != nil {
+	ctx := context.Background()
+	r.Reset()
+	// bash 5.3 parses statement-by-statement and continues after parse
+	// errors (one bad construct doesn't kill the rest of the file).
+	// Mirror that here. cursor is the byte offset into src we still
+	// need to consume; on each iteration we (re-)parse the remaining
+	// chunk. On parse error we run whatever stmts were successfully
+	// parsed, emit the bash-format error, advance past the offending
+	// line, and try again. The chunk is fed to the parser with empty
+	// newlines prepended so line numbers in the AST line up with the
+	// original file (the parser tracks line independent of byte
+	// offset). Returns the final-stmt exit status the same way
+	// r.Run(prog) would. The -c case (`*command != ""`) skips
+	// recovery; bash also fails -c entirely on parse error.
+	parseOnce := func(chunk []byte) (*syntax.File, syntax.ParseError, bool) {
+		f, perr := syntax.NewParser(syntax.Variant(lang), syntax.HeredocEOFWarning(hdocWarn)).
+			Parse(bytes.NewReader(chunk), name)
+		if perr == nil {
+			return f, syntax.ParseError{}, false
+		}
 		var pe syntax.ParseError
-		if errors.As(err, &pe) {
+		if errors.As(perr, &pe) {
+			return f, pe, true
+		}
+		return f, syntax.ParseError{}, false
+	}
+	if *command != "" {
+		// `bashy -c '...'` — one-shot, no recovery.
+		prog, pe, ok := parseOnce(src)
+		if ok {
 			printBashParseError(os.Stderr, src, errPrefix, pe)
 			return interp.ExitStatus(2)
 		}
-		return err
+		if prog == nil {
+			return nil
+		}
+		return r.Run(ctx, prog)
 	}
-	r.Reset()
-	ctx := context.Background()
-	return r.Run(ctx, prog)
+	var runErr error
+	cursor := 0
+	for cursor < len(src) {
+		// Build the chunk the parser sees: src[cursor:] with as many
+		// leading newlines as needed so the parser's internal line
+		// counter aligns with the absolute line in src. The line
+		// containing byte index `cursor` is determined by counting
+		// newlines in src[:cursor]; we want the parser to start at
+		// that line, so prepend (lineAtCursor - 1) newlines.
+		lineAtCursor := bytes.Count(src[:cursor], []byte("\n")) + 1
+		var chunk []byte
+		if lineAtCursor > 1 {
+			chunk = make([]byte, lineAtCursor-1+len(src)-cursor)
+			for i := 0; i < lineAtCursor-1; i++ {
+				chunk[i] = '\n'
+			}
+			copy(chunk[lineAtCursor-1:], src[cursor:])
+		} else {
+			chunk = src[cursor:]
+		}
+		prog, pe, gotErr := parseOnce(chunk)
+		if prog != nil && len(prog.Stmts) > 0 {
+			if err := r.Run(ctx, prog); err != nil {
+				runErr = err
+			}
+		}
+		if !gotErr {
+			return runErr
+		}
+		printBashParseError(os.Stderr, src, errPrefix, pe)
+		// Advance past the offending line. The error line is absolute
+		// (because we prepended newlines), so find the next '\n' at
+		// or after the start of that line in src.
+		errLine := int(pe.Pos.Line())
+		newCursor := advancePastLine(src, errLine)
+		if newCursor <= cursor {
+			// No forward progress — bail to avoid infinite loop.
+			return interp.ExitStatus(2)
+		}
+		cursor = newCursor
+		// Best-effort exit status; bash's exit after a recovered parse
+		// error is the exit of the last successfully-run command, but
+		// any parse error in -i / file mode at least sets $? = 2 for
+		// the immediate failed parse.
+		runErr = interp.ExitStatus(2)
+	}
+	return runErr
+}
+
+// advancePastLine returns the byte offset just after the end of line
+// `line` (1-based) in src, or len(src) if the line is the last one. A
+// line is terminated by '\n'; the returned offset points to the byte
+// after that '\n'.
+func advancePastLine(src []byte, line int) int {
+	current := 1
+	for i, b := range src {
+		if current == line && b == '\n' {
+			return i + 1
+		}
+		if b == '\n' {
+			current++
+		}
+	}
+	return len(src)
 }
 
 // printBashParseError emits a syntax.ParseError in the same shape bash

@@ -304,6 +304,7 @@ func (r *Runner) arithm(expr syntax.ArithmExpr) int {
 	if err != nil && r.bashCompatErrors {
 		err = r.bashArithmError(expr, err)
 	}
+	r.lastArithErr = err
 	r.expandErr(err)
 	return n
 }
@@ -1381,14 +1382,28 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				trace.string(" ))")
 				trace.newLineFlush()
 			}
+			// bash 5.3: a runtime arith error in init/cond/post
+			// terminates the for-loop (and sets exit status 1).
+			// Clear lastArithErr at each call site we care about so
+			// we can detect *this* invocation's failure.
+			r.lastArithErr = nil
 			if y.Init != nil {
 				traceArith(y.Init)
 				r.arithm(y.Init)
+				if r.lastArithErr != nil {
+					r.exit.code = 1
+					break
+				}
 			}
 			for {
+				r.lastArithErr = nil
 				if y.Cond != nil {
 					traceArith(y.Cond)
 					if r.arithm(y.Cond) == 0 {
+						break
+					}
+					if r.lastArithErr != nil {
+						r.exit.code = 1
 						break
 					}
 				}
@@ -1399,8 +1414,13 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 					break
 				}
 				if y.Post != nil {
+					r.lastArithErr = nil
 					traceArith(y.Post)
 					r.arithm(y.Post)
+					if r.lastArithErr != nil {
+						r.exit.code = 1
+						break
+					}
 				}
 				if y.Cond == nil {
 					// infinite loop; need an explicit break
