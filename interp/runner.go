@@ -732,16 +732,11 @@ func (r *Runner) printFuncDecl(name string, body *syntax.Stmt) {
 		r.out("}")
 		for _, rd := range body.Redirs {
 			text := formatRedirect(rd)
-			// Make fd explicit: `>&N` → `1>&N`, `<&N` → `0<&N`.
+			// bash 5.3 normalises only the `&N`-duplicate form
+			// (file redirects `> file` / `< file` stay as-is).
 			if strings.HasPrefix(text, ">&") {
 				text = "1" + text
 			} else if strings.HasPrefix(text, "<&") {
-				text = "0" + text
-			} else if strings.HasPrefix(text, ">") && !strings.HasPrefix(text, ">>") &&
-				!strings.HasPrefix(text, ">|") {
-				text = "1" + text
-			} else if strings.HasPrefix(text, "<") && !strings.HasPrefix(text, "<<") &&
-				!strings.HasPrefix(text, "<>") {
 				text = "0" + text
 			}
 			r.outf(" %s", text)
@@ -1521,14 +1516,16 @@ func bashFdExplicit(body string) string {
 	return strings.Join(lines, "\n")
 }
 
-// fdExplicitLine rewrites ` >&N` → ` 1>&N`, ` <&N` → ` 0<&N`,
-// ` > X` → ` 1> X`, ` < X` → ` 0< X` in a single line. Skips
-// already-explicit forms (`1>&N`, `2>file`), `>>`, `>|`, `<<`, `<>`,
-// and operators inside strings.
+// fdExplicitLine rewrites ` >&N` → ` 1>&N` and ` <&N` → ` 0<&N` in
+// a single line. Only fires on the `&`-duplicate forms (bash 5.3
+// does NOT normalise plain file `> file` / `< file` to explicit fd).
+// Skips already-explicit (`1>&N`), arith-comparison contexts (`<`
+// inside `(( ))`), heredocs (`<<`), `<>`, `>>`, `>|`, and strings.
 func fdExplicitLine(s string) string {
 	var b strings.Builder
 	b.Grow(len(s) + 4)
 	inSgl, inDbl := false, false
+	arithDepth := 0
 	for i := 0; i < len(s); i++ {
 		c := s[i]
 		if c == '\\' && i+1 < len(s) {
@@ -1559,8 +1556,28 @@ func fdExplicitLine(s string) string {
 			b.WriteByte(c)
 			continue
 		}
-		// Only consider redirections at word boundaries: previous
-		// char is space, or this is at start of line / after `;`.
+		// Track `((` / `))` so we don't mangle arith comparison
+		// operators (`i < 3`, `7 > 40`).
+		if c == '(' && i+1 < len(s) && s[i+1] == '(' {
+			arithDepth++
+			b.WriteByte(c)
+			b.WriteByte(s[i+1])
+			i++
+			continue
+		}
+		if arithDepth > 0 && c == ')' && i+1 < len(s) && s[i+1] == ')' {
+			arithDepth--
+			b.WriteByte(c)
+			b.WriteByte(s[i+1])
+			i++
+			continue
+		}
+		if arithDepth > 0 {
+			b.WriteByte(c)
+			continue
+		}
+		// Word-boundary check: only rewrite when not part of a
+		// preceding word (so `2>&3` isn't touched).
 		boundary := i == 0 || s[i-1] == ' ' || s[i-1] == '\t' ||
 			s[i-1] == ';' || s[i-1] == '&' || s[i-1] == '|' ||
 			s[i-1] == '\n'
@@ -1568,30 +1585,13 @@ func fdExplicitLine(s string) string {
 			b.WriteByte(c)
 			continue
 		}
-		// Peek for redirection ops.
-		if c == '>' {
-			if i+1 < len(s) && (s[i+1] == '>' || s[i+1] == '|') {
-				b.WriteByte(c)
-				continue
-			}
-			if i+1 < len(s) && s[i+1] == '&' {
-				// `>&N` — make explicit `1>&N`.
-				b.WriteString("1>")
-				continue
-			}
-			// `> file` — explicit `1> file`.
+		// `>&` (no leading fd) → `1>&`.
+		if c == '>' && i+1 < len(s) && s[i+1] == '&' {
 			b.WriteString("1>")
 			continue
 		}
-		if c == '<' {
-			if i+1 < len(s) && (s[i+1] == '<' || s[i+1] == '>') {
-				b.WriteByte(c)
-				continue
-			}
-			if i+1 < len(s) && s[i+1] == '&' {
-				b.WriteString("0<")
-				continue
-			}
+		// `<&` → `0<&`.
+		if c == '<' && i+1 < len(s) && s[i+1] == '&' {
 			b.WriteString("0<")
 			continue
 		}
