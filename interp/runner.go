@@ -759,9 +759,18 @@ func bashDeclareFmt(body string, lastTop bool) string {
 		// so the next line parses as the heredoc body. We scan for
 		// the FIRST `<<` that isn't part of `<<<`.
 		if idx := findHeredocOp(trim); idx >= 0 {
+			// After `<<` (optionally `-` for `<<-`), the next word
+			// is the tag. The line may continue with redirections
+			// (`<<TAG > file`) or a following compound — strip
+			// quotes around the tag and stop at first whitespace.
 			rest := strings.TrimLeft(trim[idx+2:], "-")
-			tag := strings.Trim(rest, " \t'\"")
-			if tag != "" && !strings.ContainsAny(tag, " \t") {
+			rest = strings.TrimLeft(rest, " \t")
+			end := strings.IndexAny(rest, " \t")
+			if end < 0 {
+				end = len(rest)
+			}
+			tag := strings.Trim(rest[:end], "'\"")
+			if tag != "" {
 				inHdoc = tag
 				continue
 			}
