@@ -400,7 +400,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				// no-args without the `<file>: line N:` prefix (the
 				// prefix is reserved for error conditions; usage on
 				// "no required arg" is informational).
-				r.errf(r.bashErrPrefix(pos)+"printf: usage: %s\n", bashUsage["printf"])
+				r.errf("printf: usage: %s\n", bashUsage["printf"])
 				exit.code = 2
 				return exit
 			}
@@ -1378,7 +1378,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				if err != nil {
 					r.errf("%sdirs: %s: invalid number\n",
 						r.bashErrPrefix(r.curStmtPos), a)
-					r.errf("%sdirs: usage: dirs [-clpv] [+N] [-N]\n", r.bashErrPrefix(pos))
+					r.errf("dirs: usage: dirs [-clpv] [+N] [-N]\n")
 					exit.code = 1
 					return exit
 				}
@@ -1465,7 +1465,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				if _, err := strconv.Atoi(arg[1:]); err != nil {
 					r.errf("%spushd: %s: invalid number\n",
 						r.bashErrPrefix(r.curStmtPos), arg)
-					r.errf("%spushd: usage: pushd [-n] [+N | -N | dir]\n", r.bashErrPrefix(pos))
+					r.errf("pushd: usage: pushd [-n] [+N | -N | dir]\n")
 					exit.code = 1
 					return exit
 				}
@@ -1522,7 +1522,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				if _, err := strconv.Atoi(arg[1:]); err != nil {
 					r.errf("%spopd: %s: invalid number\n",
 						r.bashErrPrefix(r.curStmtPos), arg)
-					r.errf("%spopd: usage: popd [-n] [+N | -N]\n", r.bashErrPrefix(pos))
+					r.errf("popd: usage: popd [-n] [+N | -N]\n")
 					exit.code = 1
 					return exit
 				}
@@ -1798,7 +1798,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		if len(args) > 0 && len(args[0]) > 1 && args[0][0] == '-' && args[0][1] != ':' {
 			r.errf("%s%s: %s: invalid option\n",
 				r.bashErrPrefix(r.curStmtPos), "getopts", args[0])
-			r.errf("%sgetopts: usage: getopts optstring name [arg ...]\n", r.bashErrPrefix(pos))
+			r.errf("getopts: usage: getopts optstring name [arg ...]\n")
 			exit.code = 2
 			return exit
 		}
@@ -1806,7 +1806,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			// bash 5.3 emits the usage line without the
 			// `<file>: line N: ` prefix that other builtin
 			// errors carry.
-			r.errf("%sgetopts: usage: getopts optstring name [arg ...]\n", r.bashErrPrefix(pos))
+			r.errf("getopts: usage: getopts optstring name [arg ...]\n")
 			exit.code = 2
 			return exit
 		}
@@ -2147,7 +2147,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				// default signal
 			default:
 				r.errf("%strap: %s: invalid option\n", r.bashErrPrefix(pos), flag)
-				r.errf("%strap: usage: trap [-lp] [[arg] signal_spec ...]\n", r.bashErrPrefix(pos))
+				r.errf("trap: usage: trap [-lp] [[arg] signal_spec ...]\n")
 				exit.code = 2
 				return exit
 			}
