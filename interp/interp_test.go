@@ -3723,7 +3723,7 @@ done <<< 2`,
 	},
 	{
 		"read 0ab",
-		"read: invalid identifier \"0ab\"\nexit status 2 #JUSTERR",
+		"read: `0ab': not a valid identifier\nexit status 2 #JUSTERR",
 	},
 	{
 		"read <<< foo; echo $REPLY",

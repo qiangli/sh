@@ -1620,7 +1620,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		args := fp.args()
 		for _, name := range args {
 			if !syntax.ValidName(name) {
-				return failf(2, "read: invalid identifier %q\n", name)
+				return failf(2, "read: `%s': not a valid identifier\n", name)
 			}
 		}
 
@@ -2324,7 +2324,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			arrayName = "MAPFILE"
 		case 1:
 			if !syntax.ValidName(args[0]) {
-				return failf(2, "%s: invalid identifier %q\n", name, args[0])
+				return failf(2, "%s: `%s': not a valid identifier\n", name, args[0])
 			}
 			arrayName = args[0]
 		default:
