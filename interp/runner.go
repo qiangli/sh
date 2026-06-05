@@ -655,9 +655,10 @@ func validExportedFuncName(name string) bool {
 
 // printFuncDecl prints a function definition in bash 5.3's
 // `declare -f` shape: `name () \n{ \n    stmt;\n    stmt2\n}` —
-// 4-space indent, trailing semicolons between statements (omitted
-// after the last). Compound commands are passed through the
-// printer with the same indent setting.
+// 4-space indent at every nesting level, trailing `;` on every
+// simple statement (and inner statements of compound commands),
+// no `;` on the last top-level statement or on compound block
+// closers (`fi`, `done`, `esac`, `}`).
 func (r *Runner) printFuncDecl(name string, body *syntax.Stmt) {
 	r.outf("%s () \n", name)
 	// Body is a syntax.Stmt whose Cmd is a syntax.Block (the `{ }`)
@@ -678,21 +679,69 @@ func (r *Runner) printFuncDecl(name string, body *syntax.Stmt) {
 	for i, st := range block.Stmts {
 		var buf bytes.Buffer
 		printer.Print(&buf, st)
-		line := strings.TrimRight(buf.String(), "\n")
+		body := strings.TrimRight(buf.String(), "\n")
 		// bash 5.3 prints a trailing space after a bare `time`
 		// keyword in `declare -f` output (`    time \n`). The
 		// shared printer omits it for shfmt consistency, so add
 		// it back here for the no-body case.
 		if tc, ok := st.Cmd.(*syntax.TimeClause); ok && tc.Stmt == nil {
-			line += " "
+			body += " "
 		}
-		r.outf("    %s", line)
-		if i < len(block.Stmts)-1 {
-			r.out(";")
-		}
+		isLast := i == len(block.Stmts)-1
+		r.out(bashDeclareFmt(body, isLast))
 		r.out("\n")
 	}
 	r.out("}\n")
+}
+
+// bashDeclareFmt reformats a printer-produced statement body to match
+// bash 5.3's `declare -f` rendering: prepend 4 spaces to every line
+// (so nested lines that the printer left at column 4 land at column 8,
+// etc.), then append `;` to every line that's a simple statement —
+// not a block opener (ends with `then`, `do`, `in`, `{`, `else`, etc.)
+// and not a block closer (`fi`, `done`, `esac`, `}`). The lastTop flag
+// suppresses the trailing `;` on the final top-level statement of the
+// function body, matching bash's omission of the closing semicolon.
+func bashDeclareFmt(body string, lastTop bool) string {
+	lines := strings.Split(body, "\n")
+	for i, raw := range lines {
+		// Indent uniformly by 4 spaces (every line, including
+		// nested ones — the printer already nested with its own
+		// Indent(4), so a 4-space prepend lifts the whole stmt
+		// by one level relative to the function body).
+		lines[i] = "    " + raw
+		trim := strings.TrimSpace(raw)
+		if trim == "" {
+			continue
+		}
+		// Block closers and openers: never add `;`.
+		switch trim {
+		case "fi", "done", "esac", "}", "{", "else", "do", "then":
+			continue
+		}
+		// Heuristic for openers: if the line ends with `then`, `do`,
+		// `in`, `{`, `else`, `elif <cond>` (which is `then`-ended),
+		// or already terminates with `;` / `&` / `|` / `;;` etc.,
+		// skip the semicolon append.
+		last := trim
+		for _, suffix := range []string{
+			" then", " do", " in", " {", " else", "(", ")",
+			";", "&", "|", ";;", ";&", "&&", "||",
+		} {
+			if strings.HasSuffix(last, suffix) {
+				goto next
+			}
+		}
+		// On the last top-level line, suppress the trailing `;` to
+		// match bash's `declare -f` output. Inner-nested last lines
+		// (handled recursively by the printer + this re-indent) still
+		// get `;` since bash adds them inside compound bodies.
+		if !(lastTop && i == len(lines)-1) {
+			lines[i] += ";"
+		}
+	next:
+	}
+	return strings.Join(lines, "\n")
 }
 
 // isPosixSpecialBuiltin reports whether name is a POSIX "special

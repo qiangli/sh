@@ -63,7 +63,7 @@
 - [x] `printf %(fmt)T` — datetime formatting (strftime subset; -1 = now, -2 = shell start, integer = Unix timestamp)
 - [x] `printf --` — argument terminator (already worked via flagParser; regression test added)
 - [x] `printf` full error handling matching bash — extended OnFormatWarning to the float (`%f/%e/%g/%G/%E`) path; switched the remaining `%q` quoting to bare in the width-arg + `%(fmt)T` time-arg invalid-number paths so the wording is bash-identical.
-- [ ] `declare -f` display format matching bash (indentation, semicolons)
+- [x] `declare -f` display format matching bash (indentation, semicolons) — printFuncDecl now re-indents every printer-output line by 4 spaces (so nested blocks land at 8/12/...) and appends `;` to each simple statement (with heuristic skip for openers/closers and the last top-level stmt). Output of `declare -f` on `foo() { if [ 1 ]; then a=1; b=2; fi; }` now matches bash 5.3 exactly.
 - [ ] `declare -p` output format matching bash
 - [ ] `declare -i` integer arithmetic on assignment
 - [x] `type -t` — output just type name (alias/keyword/function/builtin/file)
