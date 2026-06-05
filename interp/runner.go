@@ -3392,9 +3392,9 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				return
 			}
 			if declQuery == "-F" {
-				// declare -F name: print just function name.
+				// declare -F name: print just the function name.
 				if body := r.Funcs[name]; body != nil {
-					r.outf("declare -f %s\n", name)
+					r.outf("%s\n", name)
 				} else {
 					r.exit.code = 1
 				}
