@@ -694,6 +694,26 @@ func (r *Runner) printFuncDecl(name string, body *syntax.Stmt) {
 	r.out("}\n")
 }
 
+// findHeredocOp returns the index of the first `<<` in line that is
+// NOT part of `<<<` (here-string), or -1 if none. Used by
+// bashDeclareFmt to distinguish heredoc openers from here-string ops.
+func findHeredocOp(line string) int {
+	for i := 0; i+1 < len(line); i++ {
+		if line[i] != '<' || line[i+1] != '<' {
+			continue
+		}
+		// `<<<` (here-string) — skip past all the `<`s.
+		if i+2 < len(line) && line[i+2] == '<' {
+			for i+1 < len(line) && line[i+1] == '<' {
+				i++
+			}
+			continue
+		}
+		return i
+	}
+	return -1
+}
+
 // bashDeclareFmt reformats a printer-produced statement body to match
 // bash 5.3's `declare -f` rendering. Per-stmt the printer emits the
 // opener line at column 0, nested-block bodies at column 4 (via
@@ -732,11 +752,13 @@ func bashDeclareFmt(body string, lastTop bool) string {
 		if trim == "" {
 			continue
 		}
-		// Heredoc opener: line ends with `<<TAG`, `<<-TAG`,
-		// `<<'TAG'`, or `<<"TAG"`. Capture the terminator and
-		// skip the `;` — heredoc-opener stmts in bash render
-		// without a trailing `;` so the body parses correctly.
-		if idx := strings.LastIndex(trim, "<<"); idx >= 0 {
+		// Heredoc opener: line contains `<<TAG`, `<<-TAG`,
+		// `<<'TAG'`, or `<<"TAG"`. NOT to be confused with `<<<`
+		// (here-strings) which are simple-statement-like and get
+		// a trailing `;`. Capture the terminator and skip the `;`
+		// so the next line parses as the heredoc body. We scan for
+		// the FIRST `<<` that isn't part of `<<<`.
+		if idx := findHeredocOp(trim); idx >= 0 {
 			rest := strings.TrimLeft(trim[idx+2:], "-")
 			tag := strings.Trim(rest, " \t'\"")
 			if tag != "" && !strings.ContainsAny(tag, " \t") {
