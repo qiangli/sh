@@ -1483,7 +1483,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				case "-f", "-F", "-p":
 					declQuery = flag
 				default:
-					r.errf(r.bashErrPrefix(r.curStmtPos)+"declare: invalid option %q\n", flag)
+					r.errf("%sdeclare: %s: invalid option\n", r.bashErrPrefix(r.curStmtPos), flag)
 					r.exit.code = 2
 					return
 				}

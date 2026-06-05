@@ -1212,11 +1212,11 @@ var runTests = []runTest{
 	},
 	{
 		`pwd -a`,
-		"invalid option: \"-a\"\nexit status 2 #JUSTERR",
+		"pwd: -a: invalid option\nexit status 2 #JUSTERR",
 	},
 	{
 		`pwd -L -P -a`,
-		"invalid option: \"-a\"\nexit status 2 #JUSTERR",
+		"pwd: -a: invalid option\nexit status 2 #JUSTERR",
 	},
 	{
 		`mkdir a; ln -s a b; [[ "$(cd a && pwd -P)" == "$(cd b && pwd -P)" ]]`,
@@ -3089,7 +3089,7 @@ done <<< 2`,
 	{"i=3; declare -A a=(['x']=b); a[i]=x; for e in ${!a[@]}; do echo $e; done | sort", "i\nx\n"},
 
 	// declare
-	{"declare -B foo", "declare: invalid option \"-B\"\nexit status 2 #JUSTERR"},
+	{"declare -B foo", "declare: -B: invalid option\nexit status 2 #JUSTERR"},
 	{"a=b; declare a; echo $a; declare a=; echo $a", "b\n\n"},
 	{"a=b; declare a; echo $a", "b\n"},
 	{

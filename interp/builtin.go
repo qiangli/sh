@@ -485,7 +485,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			case "-P":
 				evalSymlinks = true
 			default:
-				return failf(2, "invalid option: %q\n", args[0])
+				return failf(2, "pwd: %s: invalid option\n", args[0])
 			}
 			args = args[1:]
 		}
@@ -2146,7 +2146,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			case "-":
 				// default signal
 			default:
-				r.errf("%strap: %q: invalid option\n", r.bashErrPrefix(pos), flag)
+				r.errf("%strap: %s: invalid option\n", r.bashErrPrefix(pos), flag)
 				r.errf("%strap: usage: trap [-lp] [[arg] signal_spec ...]\n", r.bashErrPrefix(pos))
 				exit.code = 2
 				return exit
