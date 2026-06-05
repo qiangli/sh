@@ -1683,15 +1683,15 @@ func fdExplicitLine(s string) string {
 	return b.String()
 }
 
-// bashBraceTrailSpace adds the bash 5.3 trailing space after standalone
-// `{` opener lines in declare -f output. The printer emits `{` bare;
-// bash renders it as `{ ` (trailing space). Idempotent — won't add a
-// second space if the splitter already attached one.
+// bashBraceTrailSpace adds the bash 5.3 trailing space after any line
+// that ends with a `{` opener in declare -f output. Covers both:
+//   - bare standalone `{`
+//   - prefixed forms like `coproc a {`, `function f () {`
+// Idempotent — skips lines already ending in `{ ` (trailing space).
 func bashBraceTrailSpace(body string) string {
 	lines := strings.Split(body, "\n")
 	for i, l := range lines {
-		trim := strings.TrimSpace(l)
-		if trim == "{" && !strings.HasSuffix(l, " ") {
+		if strings.HasSuffix(l, "{") {
 			lines[i] = l + " "
 		}
 	}
