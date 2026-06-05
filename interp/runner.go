@@ -685,22 +685,57 @@ func (r *Runner) printFuncDecl(name string, body *syntax.Stmt) {
 	}
 	r.out("{ \n")
 	printer := syntax.NewPrinter(syntax.Indent(4), syntax.SpaceRedirects(true))
+	// bash 5.3 declare -f groups a `cmd &` with the following
+	// simple stmt onto one line. Skip ahead when we emit a
+	// background stmt and merge the buffer of the next.
+	skipNext := false
 	for i, st := range block.Stmts {
+		if skipNext {
+			skipNext = false
+			continue
+		}
 		var buf bytes.Buffer
 		printer.Print(&buf, st)
 		body := strings.TrimRight(buf.String(), "\n")
-		// bash 5.3 prints a trailing space after a bare `time`
-		// keyword in `declare -f` output (`    time \n`). The
-		// shared printer omits it for shfmt consistency, so add
-		// it back here for the no-body case.
 		if tc, ok := st.Cmd.(*syntax.TimeClause); ok && tc.Stmt == nil {
 			body += " "
 		}
-		isLast := i == len(block.Stmts)-1
+		// bash 5.3 groups `cmd & nextStmt` onto one line when
+		// the next stmt is a simple/subshell stmt (not a
+		// compound). The merged line gets a trailing `;`.
+		if st.Background && i+1 < len(block.Stmts) {
+			nxt := block.Stmts[i+1]
+			if isSimpleForAmpJoin(nxt) {
+				var nbuf bytes.Buffer
+				printer.Print(&nbuf, nxt)
+				nbody := strings.TrimRight(nbuf.String(), "\n")
+				// Pre-pad the subshell in nbody so the merged
+				// line gets `( EXPR )` instead of `(EXPR)`.
+				nbody = bashSubshellSpace(nbody)
+				body = body + " " + nbody
+				if !strings.HasSuffix(body, ";") {
+					body += ";"
+				}
+				skipNext = true
+			}
+		}
+		isLast := (i == len(block.Stmts)-1) ||
+			(skipNext && i+1 == len(block.Stmts)-1)
 		r.out(bashDeclareFmt(body, isLast))
 		r.out("\n")
 	}
 	r.out("}\n")
+}
+
+// isSimpleForAmpJoin reports whether stmt can be joined onto the
+// preceding `&` stmt's line in declare -f rendering — true for plain
+// CallExpr or subshell, false for compound openers / declarations.
+func isSimpleForAmpJoin(s *syntax.Stmt) bool {
+	switch s.Cmd.(type) {
+	case *syntax.CallExpr, *syntax.Subshell:
+		return true
+	}
+	return false
 }
 
 // bashSplitCompound expands single-line `for/while/until/if/case`
@@ -877,6 +912,46 @@ func splitCompoundLine(line string) []string {
 			return []string{line}
 		}
 		return splitCaseLine(line, indent, trim)
+	}
+	// Subshell wrapping a brace group: `( { X; } ) [trailing]` →
+	//   ( {
+	//       X
+	//   } ) trailing
+	// Detect the `( { ` prefix and `} )` suffix (with possible
+	// trailing ops after the `)`).
+	if strings.HasPrefix(trim, "( { ") {
+		// Find `} )` at top level (with whatever trailing).
+		braceEnd := -1
+		for k := 0; k+2 < len(trim); k++ {
+			if trim[k] == '}' && trim[k+1] == ' ' && trim[k+2] == ')' {
+				braceEnd = k
+				break
+			}
+		}
+		if braceEnd > 4 {
+			body := strings.TrimSpace(trim[4:braceEnd])
+			body = strings.TrimSuffix(body, ";")
+			body = strings.TrimSpace(body)
+			trailing := strings.TrimSpace(trim[braceEnd+3:])
+			ind := strings.Repeat(" ", indent)
+			inner := strings.Repeat(" ", indent+4)
+			out := []string{ind + "( { "}
+			for _, b := range splitTopLevel(body, ";") {
+				b = strings.TrimSpace(b)
+				if b == "" {
+					continue
+				}
+				for _, sub := range splitCompoundLine(inner + b) {
+					out = append(out, sub)
+				}
+			}
+			closer := ind + "} )"
+			if trailing != "" {
+				closer += " " + trailing
+			}
+			out = append(out, closer)
+			return out
+		}
 	}
 	// Single-line brace-group `{ X; Y; }` → multi-line bash form:
 	//
@@ -1325,6 +1400,69 @@ func splitTopLevel(s, sep string) []string {
 //	                      fi
 //
 // The closing `fi` line keeps any trailing redirection.
+// bashSubshellSpace pads subshell `(EXPR)` openers/closers with one
+// space inside the parens to match bash 5.3 declare -f rendering:
+// `(exit 1)` → `( exit 1 )`. Per-line: if the trimmed line starts
+// with `(` (and not `((` arith) and contains the matching `)` at
+// top level, pad. Trailing ops after the closer are preserved.
+func bashSubshellSpace(body string) string {
+	lines := strings.Split(body, "\n")
+	for i, l := range lines {
+		ind := leadingSpaces(l)
+		trim := l[ind:]
+		// Only fire when the line begins with `(` but NOT `((`
+		// (which is arith, handled separately).
+		if !strings.HasPrefix(trim, "(") || strings.HasPrefix(trim, "((") {
+			continue
+		}
+		// Find matching `)` at top level.
+		closer := -1
+		depth := 0
+		inSgl, inDbl := false, false
+		for j := 0; j < len(trim); j++ {
+			c := trim[j]
+			if c == '\\' && j+1 < len(trim) {
+				j++
+				continue
+			}
+			switch {
+			case inSgl:
+				if c == '\'' {
+					inSgl = false
+				}
+			case inDbl:
+				if c == '"' {
+					inDbl = false
+				}
+			case c == '\'':
+				inSgl = true
+			case c == '"':
+				inDbl = true
+			case c == '(':
+				depth++
+			case c == ')':
+				depth--
+				if depth == 0 {
+					closer = j
+				}
+			}
+			if closer >= 0 {
+				break
+			}
+		}
+		if closer < 0 {
+			continue
+		}
+		inner := strings.TrimSpace(trim[1:closer])
+		trailing := trim[closer+1:]
+		if inner == "" {
+			continue
+		}
+		lines[i] = strings.Repeat(" ", ind) + "( " + inner + " )" + trailing
+	}
+	return strings.Join(lines, "\n")
+}
+
 // bashBraceTrailSpace adds the bash 5.3 trailing space after standalone
 // `{` opener lines in declare -f output. The printer emits `{` bare;
 // bash renders it as `{ ` (trailing space). Idempotent — won't add a
@@ -1561,6 +1699,10 @@ func bashDeclareFmt(body string, lastTop bool) string {
 	// arith expansion `$((expr))` → `$(( expr ))`. The printer
 	// emits the compact form; pad with regex.
 	body = bashArithSpace(body)
+	// bash 5.3 pads subshell parens: `(expr)` → `( expr )`. Run
+	// BEFORE the compound splitter so subshell-of-block patterns
+	// like `( { X; } )` are detectable.
+	body = bashSubshellSpace(body)
 	// Bash 5.3 always renders for/while/until/if as multi-line in
 	// `declare -f` even when the source was single-line; the
 	// printer collapses to single-line. Split here.
