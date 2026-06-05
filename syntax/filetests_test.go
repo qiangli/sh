@@ -3166,6 +3166,36 @@ var fileTests = []fileTestCase{
 		langSkip(LangZsh),
 	),
 	fileTest(
+		// $! is the last bg PID; ${!-x}, ${!?x}, ${!:-x} apply
+		// default/error/null-default operators to it, and must NOT
+		// be parsed as the bash/mksh ${!name} indirection form.
+		[]string{`${!-foo} ${!?bar} ${!:-baz}`},
+		langFile(call(
+			word(&ParamExp{
+				Param: lit("!"),
+				Exp: &Expansion{
+					Op:   DefaultUnset,
+					Word: litWord("foo"),
+				},
+			}),
+			word(&ParamExp{
+				Param: lit("!"),
+				Exp: &Expansion{
+					Op:   ErrorUnset,
+					Word: litWord("bar"),
+				},
+			}),
+			word(&ParamExp{
+				Param: lit("!"),
+				Exp: &Expansion{
+					Op:   DefaultUnsetOrNull,
+					Word: litWord("baz"),
+				},
+			}),
+		)),
+		langSkip(LangZsh),
+	),
+	fileTest(
 		[]string{`"${foo}"`},
 		langFile(dblQuoted(&ParamExp{Param: lit("foo")})),
 	),

@@ -1537,8 +1537,17 @@ zshPrefixLoop:
 				pe.Width = true
 			}
 		case '!':
-			// Unlike the others, zsh has no $!foo prefix.
-			if !pe.Short && p.paramNameStart() {
+			// Unlike the others, zsh has no $!foo prefix. Bash
+			// only enters indirect mode when the next char starts
+			// a real identifier — `${!-x}`, `${!+x}`, `${!:-x}`,
+			// `${!?x}`, `${!=x}`, `${!#x}`, `${!%x}` are parsed as
+			// `$!` (last bg PID) followed by an operator, NOT
+			// indirection. peek before paramNameStart commits.
+			next := p.peek()
+			isOperatorNext := next == '-' || next == '+' || next == '=' ||
+				next == '?' || next == ':' || next == '#' || next == '%' ||
+				next == '/'
+			if !pe.Short && !isOperatorNext && p.paramNameStart() {
 				p.checkLang(pe.Pos(), langBashLike|LangMirBSDKorn, "`${!foo}`")
 				pe.Excl = true
 			}
