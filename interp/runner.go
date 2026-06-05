@@ -957,64 +957,83 @@ func indexUnnestedRune(s string, r byte) int {
 }
 
 // splitIfLine handles `if X; then A; elif Y; then B; else C; fi` →
-// multi-line. Returns slice of new lines.
+// bash 5.3's multi-line declare -f form, where elif chains are
+// rendered as NESTED `else; if; fi` (each elif level adds an
+// indented `if/fi` pair inside the prior `else`):
+//
+//	if X; then
+//	    A
+//	else
+//	    if Y; then
+//	        B
+//	    else
+//	        C
+//	    fi
+//	fi
+// ifClause is one (condition, body) pair from an if/elif chain.
+// Used by splitIfLine + renderNestedIf to convert flat elif chains
+// to the bash 5.3 nested-if rendering.
+type ifClause struct{ cond, body string }
+
 func splitIfLine(orig string, indent int, trim string) []string {
-	ind := strings.Repeat(" ", indent)
-	inner := strings.Repeat(" ", indent+4)
-	out := []string{}
-	rest := trim[len("if "):]
-	// rest now starts with the cond; then BODY [; elif ... [; else ...]]; fi
-	rest = strings.TrimSuffix(rest, "; fi")
-	first := true
+	rest := strings.TrimSuffix(trim[len("if "):], "; fi")
+	var clauses []ifClause
+	var elseBody string
 	for {
 		thenIdx := strings.Index(rest, "; then ")
 		if thenIdx < 0 {
-			return []string{orig} // give up on weird input
+			return []string{orig}
 		}
 		cond := rest[:thenIdx]
 		afterThen := rest[thenIdx+len("; then "):]
-		header := "if " + cond + "; then"
-		if !first {
-			header = "elif " + cond + "; then"
-		}
-		first = false
-		out = append(out, ind+header)
-		// Find next "; elif " or "; else " or end.
 		elifIdx := strings.Index(afterThen, "; elif ")
 		elseIdx := strings.Index(afterThen, "; else ")
-		var bodyEnd int
-		var bodyTerm string
 		switch {
 		case elifIdx >= 0 && (elseIdx < 0 || elifIdx < elseIdx):
-			bodyEnd = elifIdx
-			bodyTerm = "elif"
-			rest = afterThen[elifIdx+len("; "):]
+			clauses = append(clauses, ifClause{cond, afterThen[:elifIdx]})
+			rest = afterThen[elifIdx+len("; elif "):]
 		case elseIdx >= 0:
-			bodyEnd = elseIdx
-			bodyTerm = "else"
-			rest = afterThen[elseIdx+len("; "):]
+			clauses = append(clauses, ifClause{cond, afterThen[:elseIdx]})
+			elseBody = afterThen[elseIdx+len("; else "):]
+			goto done
 		default:
-			bodyEnd = len(afterThen)
-			bodyTerm = ""
-			rest = ""
+			clauses = append(clauses, ifClause{cond, afterThen})
+			goto done
 		}
-		body := afterThen[:bodyEnd]
-		for _, b := range splitTopLevel(body, ";") {
-			b = strings.TrimSpace(b)
-			if b == "" {
-				continue
-			}
-			for _, sub := range splitCompoundLine(inner + b) {
+	}
+done:
+	return renderNestedIf(indent, clauses, elseBody)
+}
+
+// renderNestedIf emits the bash 5.3 nested-if form: each clause after
+// the first becomes an `else { if ... fi }` block nested one
+// indentation level deeper. lastIndent positions the surrounding
+// `if`/`fi`; the recursion handles deeper levels.
+func renderNestedIf(indent int, clauses []ifClause, elseBody string) []string {
+	if len(clauses) == 0 {
+		return nil
+	}
+	ind := strings.Repeat(" ", indent)
+	inner := strings.Repeat(" ", indent+4)
+	first := clauses[0]
+	out := []string{ind + "if " + first.cond + "; then"}
+	for _, b := range splitTopLevel(first.body, ";") {
+		b = strings.TrimSpace(b)
+		if b == "" {
+			continue
+		}
+		for _, sub := range splitCompoundLine(inner + b) {
+			out = append(out, sub)
+		}
+	}
+	rest := clauses[1:]
+	if len(rest) > 0 || elseBody != "" {
+		out = append(out, ind+"else")
+		if len(rest) > 0 {
+			for _, sub := range renderNestedIf(indent+4, rest, elseBody) {
 				out = append(out, sub)
 			}
-		}
-		if bodyTerm == "" {
-			break
-		}
-		if bodyTerm == "else" {
-			out = append(out, ind+"else")
-			// rest is now `else BODY`; trim leading "else "
-			elseBody := strings.TrimPrefix(rest, "else ")
+		} else {
 			for _, b := range splitTopLevel(elseBody, ";") {
 				b = strings.TrimSpace(b)
 				if b == "" {
@@ -1024,10 +1043,7 @@ func splitIfLine(orig string, indent int, trim string) []string {
 					out = append(out, sub)
 				}
 			}
-			break
 		}
-		// elif: rest starts with `elif COND; then ...`
-		rest = strings.TrimPrefix(rest, "elif ")
 	}
 	out = append(out, ind+"fi")
 	return out
