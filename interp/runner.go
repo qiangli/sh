@@ -1884,6 +1884,48 @@ func fdExplicitLine(s string) string {
 		}
 		b.WriteByte(c)
 	}
+	return normalizeCloseRedir(b.String())
+}
+
+// normalizeCloseRedir rewrites the `<&-` close-read form to `>&-`
+// (close-write) to match bash 5.3's declare -f normalisation: both
+// directions are equivalent for closing a file descriptor, and bash
+// renders the close-write form regardless of source.
+func normalizeCloseRedir(s string) string {
+	if !strings.Contains(s, "<&-") {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	inSgl, inDbl := false, false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == '\\' && i+1 < len(s) {
+			b.WriteByte(c)
+			b.WriteByte(s[i+1])
+			i++
+			continue
+		}
+		switch {
+		case inSgl:
+			if c == '\'' {
+				inSgl = false
+			}
+		case inDbl:
+			if c == '"' {
+				inDbl = false
+			}
+		case c == '\'':
+			inSgl = true
+		case c == '"':
+			inDbl = true
+		case c == '<' && i+2 < len(s) && s[i+1] == '&' && s[i+2] == '-':
+			b.WriteString(">&-")
+			i += 2
+			continue
+		}
+		b.WriteByte(c)
+	}
 	return b.String()
 }
 
