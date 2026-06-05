@@ -724,7 +724,53 @@ func (r *Runner) printFuncDecl(name string, body *syntax.Stmt) {
 		r.out(bashDeclareFmt(body, isLast))
 		r.out("\n")
 	}
-	r.out("}\n")
+	// bash 5.3 attaches function-level redirections (`f() { ... } >file`)
+	// to the closing brace. Render via the printer for each Redir and
+	// rewrite implicit fd1/fd0 to explicit `1>&N` / `0<&N` to match
+	// bash's normalisation.
+	if len(body.Redirs) > 0 {
+		r.out("}")
+		for _, rd := range body.Redirs {
+			text := formatRedirect(rd)
+			// Make fd explicit: `>&N` → `1>&N`, `<&N` → `0<&N`.
+			if strings.HasPrefix(text, ">&") {
+				text = "1" + text
+			} else if strings.HasPrefix(text, "<&") {
+				text = "0" + text
+			} else if strings.HasPrefix(text, ">") && !strings.HasPrefix(text, ">>") &&
+				!strings.HasPrefix(text, ">|") {
+				text = "1" + text
+			} else if strings.HasPrefix(text, "<") && !strings.HasPrefix(text, "<<") &&
+				!strings.HasPrefix(text, "<>") {
+				text = "0" + text
+			}
+			r.outf(" %s", text)
+		}
+		r.out("\n")
+	} else {
+		r.out("}\n")
+	}
+}
+
+// formatRedirect renders a single redirect node as text. Walks the
+// node's fields directly instead of going through the printer (the
+// printer needs a wrapping stmt that can panic on empty CallExpr).
+func formatRedirect(r *syntax.Redirect) string {
+	var b strings.Builder
+	if r.N != nil {
+		b.WriteString(r.N.Value)
+	}
+	b.WriteString(r.Op.String())
+	if r.Hdoc != nil {
+		// Heredoc — rare in function redir; just render the word.
+	}
+	if r.Word != nil {
+		var wb bytes.Buffer
+		syntax.NewPrinter().Print(&wb, &syntax.Stmt{Cmd: &syntax.CallExpr{Args: []*syntax.Word{r.Word}}})
+		s := strings.TrimSpace(wb.String())
+		b.WriteString(s)
+	}
+	return b.String()
 }
 
 // isSimpleForAmpJoin reports whether stmt can be joined onto the
