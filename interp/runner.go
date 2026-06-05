@@ -675,8 +675,30 @@ func (r *Runner) printFuncDecl(name string, body *syntax.Stmt) {
 	// inner stmt with the bash-specific trailing-semicolon rule.
 	block, ok := body.Cmd.(*syntax.Block)
 	if !ok {
-		// Non-Block bodies (rare — e.g. function with `()` only,
-		// or a single compound). Fall back to the printer.
+		// Subshell bodies (`f() ( ... )`) are wrapped in `{ }` by
+		// bash 5.3 declare -f and rendered inline as one stmt.
+		// Body redirections are attached to the subshell line.
+		if sub, ok := body.Cmd.(*syntax.Subshell); ok {
+			r.out("{ \n")
+			var buf bytes.Buffer
+			printer := syntax.NewPrinter(syntax.SingleLine(true), syntax.SpaceRedirects(true))
+			printer.Print(&buf, &syntax.Stmt{Cmd: sub})
+			inner := strings.TrimRight(buf.String(), "\n")
+			inner = bashSubshellSpace(inner)
+			for _, rd := range body.Redirs {
+				text := formatRedirect(rd)
+				if strings.HasPrefix(text, ">&") {
+					text = "1" + text
+				} else if strings.HasPrefix(text, "<&") {
+					text = "0" + text
+				}
+				inner += " " + text
+			}
+			r.outf("    %s\n", inner)
+			r.out("}\n")
+			return
+		}
+		// Other Non-Block bodies (rare). Fall back to the printer.
 		var buf bytes.Buffer
 		syntax.NewPrinter(syntax.Indent(4), syntax.SpaceRedirects(true)).Print(&buf, body)
 		r.out(buf.String())
