@@ -52,7 +52,7 @@
 - [x] Add `<filename>: line <N>:` prefix to error messages from builtins — added `r.bashErrPrefix(pos)` to the primary-error errf calls in `builtin()` (kill, alias, enable, help, dirs/pushd/popd, printf, getopts, trap) and the declare/local/local-only paths in runner.go
 - [x] Add `<filename>: line <N>:` prefix to error messages from setVar/readonly — setVar already had it; delVar (the unset path) was missing — now uses the same `r.bashErrPrefix(r.curStmtPos)` pattern
 - [x] Match bash error message wording exactly (e.g., `readonly variable` → same) — fixed: unset of invalid identifier (`unset 1bad` → "not a valid identifier", exit 2); shift wording (`abc` → numeric argument required, `-1` → shift count out of range, extras → too many arguments, exit 1); other wording covered by items 55-57
-- [ ] Error messages for `printf` should match bash format
+- [x] Error messages for `printf` should match bash format — added `cfg.OnFormatWarning` callback for soft conversion failures (`printf %d xyz` → "invalid number" warning + exit 1 + continue with 0). Hard errors (invalid format char, missing format char, not a valid identifier for -v) already matched.
 - [ ] Error messages for `read` should match bash format
 - [ ] Use backtick quoting style matching bash (`` ` `` vs `'`)
 

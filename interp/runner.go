@@ -51,6 +51,15 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 	r.ectx = ctx
 	r.ecfg = &expand.Config{
 		Env: expandEnv{r},
+		OnFormatWarning: func(msg string) {
+			// Bash 5.3 printf: numeric-conversion failures
+			// (e.g. `printf %d xyz`) print the warning and set
+			// exit status 1 but keep formatting (the value falls
+			// back to 0). The exit-code wire-up lives in the
+			// printf builtin which checks r.lastExpandExit.
+			r.errf("%s%s\n", r.bashErrPrefix(r.curStmtPos), msg)
+			r.lastExpandExit = exitStatus{code: 1}
+		},
 		CmdSubst: func(w io.Writer, cs *syntax.CmdSubst) error {
 			switch len(cs.Stmts) {
 			case 0: // nothing to do

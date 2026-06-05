@@ -408,6 +408,12 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		}
 		format, args := args[0], args[1:]
 		var sb strings.Builder
+		// Format may also invoke r.ecfg.OnFormatWarning for soft
+		// failures (e.g. `printf %d xyz` → "invalid number"). The
+		// callback stashes the bash-compat exit code in
+		// r.lastExpandExit; reset it here so we only see warnings
+		// from this invocation, then propagate at the end.
+		r.lastExpandExit = exitStatus{}
 		for {
 			s, n, err := expand.Format(r.ecfg, format, args)
 			stop := errors.Is(err, expand.ErrPrintfStop)
@@ -433,6 +439,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		}
 		if assignTo != "" {
 			r.setVarString(assignTo, sb.String())
+		}
+		if r.lastExpandExit.code != 0 {
+			exit.code = r.lastExpandExit.code
 		}
 	case "break", "continue":
 		if !r.inLoop {

@@ -100,6 +100,13 @@ type Config struct {
 	// The interpreter sets this from [Runner.startTime].
 	StartTime time.Time
 
+	// OnFormatWarning is called by [Format] for recoverable conversion
+	// failures (e.g. `printf %d xyz` — the value falls back to 0). The
+	// callback is responsible for emitting the message to stderr and
+	// setting a non-zero exit status; if nil the warning is silently
+	// dropped. Matches bash 5.3's "warn but continue" printf behaviour.
+	OnFormatWarning func(msg string)
+
 	bufferAlloc strings.Builder
 	fieldAlloc  [4]fieldPart
 	fieldsAlloc [4][]fieldPart
@@ -508,7 +515,7 @@ func ansiCEscape(s string) string {
 func FormatBPercent(cfg *Config, s string) (string, error) {
 	cfg = prepareConfig(cfg)
 	sb := cfg.strBuilder()
-	_, err := formatIntoMode(sb, s, nil, cfg.StartTime, true)
+	_, err := formatIntoMode(sb, s, nil, cfg.StartTime, true, cfg.OnFormatWarning)
 	if err == errPrintfStop {
 		return sb.String(), errPrintfStop
 	}
@@ -522,7 +529,7 @@ func Format(cfg *Config, format string, args []string) (string, int, error) {
 	cfg = prepareConfig(cfg)
 	sb := cfg.strBuilder()
 
-	consumed, err := formatInto(sb, format, args, cfg.StartTime)
+	consumed, err := formatInto(sb, format, args, cfg.StartTime, cfg.OnFormatWarning)
 	if err == errPrintfStop {
 		// `\c` told printf to stop emitting output from a %b arg
 		// (or `\c` directly in format). Surface what's already in
@@ -640,15 +647,15 @@ func strftime(format string, t time.Time) string {
 	return sb.String()
 }
 
-func formatInto(sb *strings.Builder, format string, args []string, startTime time.Time) (int, error) {
-	return formatIntoMode(sb, format, args, startTime, false)
+func formatInto(sb *strings.Builder, format string, args []string, startTime time.Time, warn func(string)) (int, error) {
+	return formatIntoMode(sb, format, args, startTime, false, warn)
 }
 
 // formatIntoMode is the inner worker for [Format]. percentB switches the
 // escape table to bash's `%b` interpretation: `\"`, `\'`, `\?` are
 // preserved with their backslash (bash only honors those escapes in
 // format strings, not in `%b` arg).
-func formatIntoMode(sb *strings.Builder, format string, args []string, startTime time.Time, percentB bool) (int, error) {
+func formatIntoMode(sb *strings.Builder, format string, args []string, startTime time.Time, percentB bool, warn func(string)) (int, error) {
 	inPercentB := percentB
 	var fmts []byte
 	initialArgs := len(args)
@@ -968,7 +975,7 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 					// Apply width/precision via Go's %s after the
 					// escape-processed bytes are captured.
 					var bsb strings.Builder
-					_, err := formatIntoMode(&bsb, arg, nil, startTime, true)
+					_, err := formatIntoMode(&bsb, arg, nil, startTime, true, warn)
 					if err == ErrPrintfStop {
 						// Surface the partial output and signal stop.
 						sb.WriteString(bsb.String())
@@ -1010,8 +1017,12 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 						if len(arg) > 1 && (arg[0] == '\'' || arg[0] == '"') {
 							r, _ := utf8.DecodeRuneInString(arg[1:])
 							n = int64(r)
-						} else {
-							n, _ = strconv.ParseInt(arg, 0, 0)
+						} else if arg != "" {
+							var perr error
+							n, perr = strconv.ParseInt(arg, 0, 0)
+							if perr != nil && warn != nil {
+								warn(fmt.Sprintf("printf: %s: invalid number", arg))
+							}
 						}
 						if c == 'i' || c == 'd' {
 							farg = int(n)
