@@ -872,6 +872,35 @@ func splitCompoundLine(line string) []string {
 		}
 		return splitCaseLine(line, indent, trim)
 	}
+	// Per-line case item: `PAT) BODY ;;` — the printer emits each
+	// case item on its own line when the case is multi-line. Split
+	// into pattern / body / ;; lines, indented one level deeper
+	// than the surrounding `case ... in` (bash 5.3 convention).
+	if strings.HasSuffix(trim, " ;;") || strings.HasSuffix(trim, ";;") {
+		patEnd := indexUnnestedRune(trim, ')')
+		if patEnd > 0 && patEnd < len(trim)-1 {
+			pat := trim[:patEnd]
+			body := strings.TrimSpace(strings.TrimSuffix(strings.TrimSuffix(trim[patEnd+1:], ";;"), " ;"))
+			// Indent patterns +4 relative to the printer's
+			// position so they sit inside the surrounding
+			// `case ... in` after bashDeclareFmt's outer +4
+			// prepend.
+			patInd := strings.Repeat(" ", indent+4)
+			bodyInd := strings.Repeat(" ", indent+8)
+			out := []string{patInd + pat + ")"}
+			for _, b := range splitTopLevel(body, ";") {
+				b = strings.TrimSpace(b)
+				if b == "" {
+					continue
+				}
+				for _, sub := range splitCompoundLine(bodyInd + b) {
+					out = append(out, sub)
+				}
+			}
+			out = append(out, patInd+";;")
+			return out
+		}
+	}
 	return []string{line}
 }
 
