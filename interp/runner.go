@@ -1504,6 +1504,89 @@ func bashSubshellSpace(body string) string {
 	return strings.Join(lines, "\n")
 }
 
+// bashCaretCtrlChars rewrites ANSI-C control-char escapes inside
+// `$'...'` strings to bash 5.3's caret-notation single-quoted form:
+//   $'\001'  →  '^A'
+//   $'\037'  →  '^_'
+//   $'\177'  →  '^?'
+// Only fires when the $'...' content is purely control-char escapes
+// (and no other text); mixed-content $'X\001Y' stays as-is.
+func bashCaretCtrlChars(body string) string {
+	// Pattern: $' [\ + 3 octal digits | \ + 1-2 octal digits] $'
+	// → caret form. We do a simple linear scan.
+	var b strings.Builder
+	b.Grow(len(body))
+	for i := 0; i < len(body); i++ {
+		if i+1 < len(body) && body[i] == '$' && body[i+1] == '\'' {
+			// Look for matching `'` and check if body is all
+			// `\NNN` octal escapes that map to control chars.
+			end := -1
+			for j := i + 2; j < len(body); j++ {
+				if body[j] == '\\' && j+1 < len(body) {
+					j++
+					continue
+				}
+				if body[j] == '\'' {
+					end = j
+					break
+				}
+			}
+			if end < 0 {
+				b.WriteByte(body[i])
+				continue
+			}
+			content := body[i+2 : end]
+			if caret, ok := allOctalControlChars(content); ok {
+				b.WriteByte('\'')
+				b.WriteString(caret)
+				b.WriteByte('\'')
+				i = end
+				continue
+			}
+		}
+		b.WriteByte(body[i])
+	}
+	return b.String()
+}
+
+// allOctalControlChars parses a string composed entirely of `\NNN`
+// octal escapes mapping to control characters (0x01–0x1F, 0x7F).
+// Returns the caret-notation string and true if so.
+func allOctalControlChars(s string) (string, bool) {
+	if len(s) < 2 || s[0] != '\\' {
+		return "", false
+	}
+	var b strings.Builder
+	for i := 0; i < len(s); {
+		if s[i] != '\\' {
+			return "", false
+		}
+		// Read 1-3 octal digits.
+		end := i + 1
+		for end < len(s) && end < i+4 && s[end] >= '0' && s[end] <= '7' {
+			end++
+		}
+		if end == i+1 {
+			return "", false
+		}
+		var v int
+		for k := i + 1; k < end; k++ {
+			v = v*8 + int(s[k]-'0')
+		}
+		switch {
+		case v >= 0x01 && v <= 0x1F:
+			b.WriteByte('^')
+			b.WriteByte(byte('A' - 1 + v))
+		case v == 0x7F:
+			b.WriteString("^?")
+		default:
+			return "", false
+		}
+		i = end
+	}
+	return b.String(), true
+}
+
 // bashFdExplicit walks each line and rewrites implicit redirections
 // (no leading fd digit) to bash 5.3's explicit form. Only fires when
 // the redirection is at the boundary of words (preceded by a space or
@@ -1867,6 +1950,9 @@ func bashDeclareFmt(body string, lastTop bool) string {
 	// declare -f output: `>&2` → `1>&2`, `<&3` → `0<&3`,
 	// `> file` → `1> file`, `< file` → `0< file`.
 	body = bashFdExplicit(body)
+	// bash 5.3 declare -f renders control chars (`$'\001'`) using
+	// caret notation (`'^A'`) instead of ANSI-C.
+	body = bashCaretCtrlChars(body)
 	lines := strings.Split(body, "\n")
 	inHdoc := ""
 	hdocStripTabs := false
