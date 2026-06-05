@@ -309,8 +309,19 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			// Bash 5.3: `unset 1bad` errors with "not a valid identifier"
 			// (exit 2) when the var-namespace is in scope. Function names
 			// are unrestricted, so `unset -f 1bad` is allowed.
-			if vars && !syntax.ValidName(arg) {
-				return failf(2, "unset: `%s': not a valid identifier\n", arg)
+			//
+			// Array-element form `name[index]` is valid: unset the
+			// specified element instead of the whole variable.
+			if vars {
+				if name, idx, ok := splitArrayRef(arg); ok {
+					if syntax.ValidName(name) {
+						r.unsetArrayElem(name, idx)
+						continue
+					}
+				}
+				if !syntax.ValidName(arg) {
+					return failf(2, "unset: `%s': not a valid identifier\n", arg)
+				}
 			}
 			if vars && r.lookupVar(arg).IsSet() {
 				r.delVar(arg)

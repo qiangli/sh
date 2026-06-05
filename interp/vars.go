@@ -498,6 +498,56 @@ func (r *Runner) delVar(name string) {
 	}
 }
 
+// splitArrayRef recognises `name[index]` references used by builtins
+// like `unset` to address a single array element. Returns the bare
+// variable name and the (unparsed) index expression; ok is false if
+// the input is not in the `NAME[INDEX]` form.
+func splitArrayRef(s string) (name, idx string, ok bool) {
+	lb := strings.IndexByte(s, '[')
+	if lb <= 0 || !strings.HasSuffix(s, "]") {
+		return "", "", false
+	}
+	return s[:lb], s[lb+1 : len(s)-1], true
+}
+
+// unsetArrayElem removes a single element from an indexed or
+// associative array. For indexed arrays the index is arithmetic;
+// for associative arrays it's a literal key. `name[*]` / `name[@]`
+// unset the entire variable (matching bash).
+func (r *Runner) unsetArrayElem(name, idx string) {
+	if idx == "*" || idx == "@" {
+		r.delVar(name)
+		return
+	}
+	vr := r.lookupVar(name)
+	if !vr.IsSet() {
+		return
+	}
+	switch vr.Kind {
+	case expand.Indexed:
+		n, err := strconv.Atoi(idx)
+		if err != nil || n < 0 || n >= len(vr.List) {
+			return
+		}
+		// Bash preserves index gaps after unset, so use sparse
+		// storage by replacing the element with empty and then
+		// stripping the trailing positions if it was the last
+		// one. For simpler semantics we just blank the slot.
+		vr.List[n] = ""
+		// If the unset was the tail, shrink the slice.
+		if n == len(vr.List)-1 {
+			vr.List = vr.List[:n]
+		}
+	case expand.Associative:
+		if _, ok := vr.Map[idx]; ok {
+			delete(vr.Map, idx)
+		}
+	default:
+		return
+	}
+	r.setVar(name, vr)
+}
+
 func (r *Runner) setVarString(name, value string) {
 	r.setVar(name, expand.Variable{Set: true, Kind: expand.String, Str: value})
 }
