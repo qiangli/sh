@@ -2106,13 +2106,19 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			r.outf("alias %s='%s'\n", name, &buf)
 		}
 
-		// `alias -p` prints all aliases (same as no args).
+		// `alias -p` prints all aliases (same as no args). Reject
+		// any other `-X` option with bash 5.3's wording + usage.
 		filtered := args
 		if len(filtered) > 0 && filtered[0] == "-p" {
 			filtered = filtered[1:]
 			for name, als := range r.alias {
 				show(name, als)
 			}
+		} else if len(filtered) > 0 && len(filtered[0]) > 1 && filtered[0][0] == '-' && !strings.Contains(filtered[0], "=") {
+			r.errf("%salias: %s: invalid option\n", r.bashErrPrefix(pos), filtered[0])
+			r.errf("alias: usage: alias [-p] [name[=value] ... ]\n")
+			exit.code = 2
+			return exit
 		}
 		if len(args) == 0 {
 			for name, als := range r.alias {
@@ -2182,7 +2188,34 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			r.alias[name] = als
 		}
 	case "unalias":
+		all := false
+		for len(args) > 0 && len(args[0]) > 1 && args[0][0] == '-' {
+			switch args[0] {
+			case "-a":
+				all = true
+				args = args[1:]
+			default:
+				r.errf("%sunalias: %s: invalid option\n", r.bashErrPrefix(pos), args[0])
+				r.errf("unalias: usage: unalias [-a] name [name ...]\n")
+				exit.code = 2
+				return exit
+			}
+		}
+		if all {
+			r.alias = nil
+			break
+		}
+		if len(args) == 0 {
+			r.errf("unalias: usage: unalias [-a] name [name ...]\n")
+			exit.code = 2
+			return exit
+		}
 		for _, name := range args {
+			if _, ok := r.alias[name]; !ok {
+				r.errf("%sunalias: %s: not found\n", r.bashErrPrefix(pos), name)
+				exit.code = 1
+				continue
+			}
 			delete(r.alias, name)
 		}
 
