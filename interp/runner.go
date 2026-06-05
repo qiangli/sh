@@ -3284,7 +3284,13 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			}
 		}
 	case *syntax.TestClause:
-		if r.bashTest(ctx, cm.X, false) == "" && r.exit.ok() {
+		r.testIntErr = ""
+		result := r.bashTest(ctx, cm.X, false)
+		if r.testIntErr != "" {
+			r.errf(r.bashErrPrefix(cm.Left)+"[[: %s: integer expected\n", r.testIntErr)
+			r.testIntErr = ""
+			r.exit.code = 2
+		} else if result == "" && r.exit.ok() {
 			// to preserve exit status code 2 for regex errors, etc
 			r.exit.code = 1
 		}
