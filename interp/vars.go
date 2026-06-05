@@ -980,7 +980,18 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 			}
 		}
 		for _, elem := range elems {
-			k := r.literal(elem.Index.(*syntax.Word))
+			// `declare -A foo=(value)` — non-keyed element in an
+			// associative-array context. Bash 5.3 emits
+			// `<file>: line N: foo: <value>: must use subscript when
+			// assigning associative array` and skips the element;
+			// guard against the nil-Index panic and ignore the
+			// element (the missing-subscript error will surface from
+			// the surrounding parse/declare path elsewhere).
+			w, ok := elem.Index.(*syntax.Word)
+			if !ok || w == nil {
+				continue
+			}
+			k := r.literal(w)
 			v := r.literal(elem.Value)
 			if elem.Append {
 				v = amap[k] + v

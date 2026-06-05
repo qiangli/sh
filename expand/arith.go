@@ -40,17 +40,21 @@ func Arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 	case *syntax.UnaryArithm:
 		switch expr.Op {
 		case syntax.Inc, syntax.Dec:
-			name := expr.X.(*syntax.Word).Lit()
 			// Bash 5.3: `7++` → "attempted assignment to
-			// non-variable (error token is `7++`)". Increment /
-			// decrement require an lvalue; literal non-identifiers
-			// must error so the surrounding loop or expression
-			// terminates instead of running forever.
+			// non-variable"; `--x++` (compound) → "assignment
+			// requires lvalue". Increment / decrement require an
+			// identifier on X; literals, parenthesised expressions,
+			// or nested unary/binary trees aren't lvalues.
+			op := "++"
+			if expr.Op == syntax.Dec {
+				op = "--"
+			}
+			w, ok := expr.X.(*syntax.Word)
+			if !ok {
+				return 0, fmt.Errorf("%s: assignment requires lvalue (error token is %q)", op, op)
+			}
+			name := w.Lit()
 			if !syntax.ValidName(name) {
-				op := "++"
-				if expr.Op == syntax.Dec {
-					op = "--"
-				}
 				return 0, fmt.Errorf("attempted assignment to non-variable (error token is %q)", op)
 			}
 			old := atoi(cfg.envGet(name))
