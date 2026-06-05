@@ -3059,20 +3059,18 @@ func (r *Runner) typeMatches(arg string, skipFuncs bool) []typeMatch {
 		}
 	}
 	if IsBuiltin(arg) && !r.disabledBuiltins[arg] {
-		// All builtins surface as "<name> is a shell builtin".
+		// bash 5.3: default mode → "<name> is a shell builtin".
+		// POSIX mode (set -o posix) → POSIX special builtins
+		// (break, :, continue, ., eval, exec, exit, ...) get
+		// "<name> is a special shell builtin" instead.
+		kind := "shell builtin"
+		if r.opts[optPosix] && isPosixSpecialBuiltin(arg) {
+			kind = "special shell builtin"
+		}
 		ms = append(ms, typeMatch{
 			kind: "builtin",
-			desc: fmt.Sprintf("%s is a shell builtin", arg),
+			desc: fmt.Sprintf("%s is a %s", arg, kind),
 		})
-		// POSIX special builtins ALSO surface as
-		// "<name> is a special shell builtin" — bash 5.3 type -a
-		// emits BOTH lines for special builtins.
-		if isPosixSpecialBuiltin(arg) {
-			ms = append(ms, typeMatch{
-				kind: "builtin",
-				desc: fmt.Sprintf("%s is a special shell builtin", arg),
-			})
-		}
 	}
 	if path, err := LookPathDir(r.Dir, r.writeEnv, arg); err == nil {
 		ms = append(ms, typeMatch{
