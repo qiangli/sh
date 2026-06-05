@@ -41,6 +41,18 @@ func Arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 		switch expr.Op {
 		case syntax.Inc, syntax.Dec:
 			name := expr.X.(*syntax.Word).Lit()
+			// Bash 5.3: `7++` → "attempted assignment to
+			// non-variable (error token is `7++`)". Increment /
+			// decrement require an lvalue; literal non-identifiers
+			// must error so the surrounding loop or expression
+			// terminates instead of running forever.
+			if !syntax.ValidName(name) {
+				op := "++"
+				if expr.Op == syntax.Dec {
+					op = "--"
+				}
+				return 0, fmt.Errorf("attempted assignment to non-variable (error token is %q)", op)
+			}
 			old := atoi(cfg.envGet(name))
 			val := old
 			if expr.Op == syntax.Inc {
@@ -195,7 +207,18 @@ func bashBaseAtoi(s string, base int64) int64 {
 }
 
 func (cfg *Config) assgnArit(b *syntax.BinaryArithm) (int, error) {
-	name := b.X.(*syntax.Word).Lit()
+	// Bash 5.3 accepts `7=4`, `(a)=4` at parse time and errors here
+	// with "attempted assignment to non-variable". The arith parser
+	// no longer rejects non-name lvalues so the for-loop tests can
+	// reach this runtime path; surface the same wording bash uses.
+	w, ok := b.X.(*syntax.Word)
+	if !ok {
+		return 0, fmt.Errorf("attempted assignment to non-variable (error token is %q)", b.Op.String())
+	}
+	name := w.Lit()
+	if !syntax.ValidName(name) {
+		return 0, fmt.Errorf("attempted assignment to non-variable (error token is %q)", b.Op.String())
+	}
 	val := atoi(cfg.envGet(name))
 	arg_, err := Arithm(cfg, b.Y)
 	if err != nil {

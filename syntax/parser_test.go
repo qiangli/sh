@@ -1138,25 +1138,11 @@ var errorCases = []errorCase{
 		"echo $((:",
 		langErr("1:9: ternary operator missing `?` before `:`"),
 	),
-	errCase(
-		"echo $(((a)+=b))",
-		langErr("1:12: `+=` must follow a name"),
-		flipConfirm(LangMirBSDKorn),
-	),
-	errCase(
-		"echo $((1=2))",
-		langErr("1:10: `=` must follow a name"),
-	),
-	errCase(
-		"echo $(($0=2))",
-		langErr("1:11: `=` must follow a name"),
-		flipConfirmAll,
-	),
-	errCase(
-		"echo $(($(a)=2))",
-		langErr("1:13: `=` must follow a name"),
-		flipConfirmAll,
-	),
+	// Bash 5.3 accepts assignment to non-name lvalue at parse time and
+	// errors at runtime; the parse-time check was removed so for-loop
+	// expressions like `for (( 7=4; ; ))` reach the runtime path
+	// instead of aborting the surrounding parse. See expand/arith.go
+	// for the "attempted assignment to non-variable" error.
 	// errCase(
 	// 	"echo $((1'2`))",
 	// 	// TODO: Take a look at this again, since this no longer fails
@@ -1490,18 +1476,11 @@ var errorCases = []errorCase{
 		"let a ++",
 		langErr("1:7: `++` must be followed by a literal", LangBash|LangMirBSDKorn|LangZsh),
 	),
-	errCase(
-		"let (a)++",
-		langErr("1:8: `++` must follow a name", LangBash|LangMirBSDKorn|LangZsh),
-	),
-	errCase(
-		"let 1++",
-		langErr("1:6: `++` must follow a name", LangBash|LangMirBSDKorn|LangZsh),
-	),
-	errCase(
-		"let $0++",
-		langErr("1:7: `++` must follow a name", LangBash|LangMirBSDKorn|LangZsh),
-	),
+	// Bash 5.3 accepts `(a)++`, `1++`, `$0++` at parse time and emits
+	// the "attempted assignment to non-variable" error at runtime (so
+	// surrounding constructs like for-loops can terminate cleanly).
+	// The previous parse-time `++ must follow a name` errors blocked
+	// that runtime path — see expand/arith.go for the runtime check.
 	errCase(
 		"let --(a)",
 		langErr("1:5: `--` must be followed by a literal", LangBash|LangMirBSDKorn|LangZsh),
@@ -1526,10 +1505,7 @@ var errorCases = []errorCase{
 		"let a:b",
 		langErr("1:6: ternary operator missing `?` before `:`", LangBash|LangMirBSDKorn|LangZsh),
 	),
-	errCase(
-		"let a+b=c",
-		langErr("1:8: `=` must follow a name", LangBash|LangMirBSDKorn|LangZsh),
-	),
+	// `let a+b=c` — runtime error now (see comment above).
 	errCase(
 		"`let` { foo; }",
 		langErr("1:2: `let` must be followed by an expression", LangBash|LangMirBSDKorn|LangZsh),

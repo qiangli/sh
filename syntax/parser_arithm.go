@@ -23,9 +23,12 @@ func (p *Parser) arithmExprAssign(compact bool) ArithmExpr {
 		if compact && p.spaced {
 			return value
 		}
-		if !isArithName(value) {
-			p.posErr(p.pos, "%#q must follow a name", p.tok)
-		}
+		// Bash 5.3 accepts assignment to non-name lvalue at parse
+		// time (`7=4`, `(a)=4`) and errors at runtime with
+		// "attempted assignment to non-variable". The runtime
+		// check is in expand/arith.go. Without this, for-loop
+		// expressions that the bash 5.3 suite deliberately feeds
+		// bad lvalues to abort the whole surrounding parse.
 		pos := p.pos
 		tok := p.tok
 		p.nextArithOp(compact)
@@ -230,9 +233,12 @@ func (p *Parser) arithmExprValue(compact bool) ArithmExpr {
 	// we want real nil, not (*Word)(nil) as that
 	// sets the type to non-nil and then x != nil
 	if p.tok == addAdd || p.tok == subSub {
-		if !isArithName(x) {
-			p.curErr("%#q must follow a name", p.tok)
-		}
+		// Bash 5.3 accepts postfix `++`/`--` on any operand at
+		// parse time and errors at runtime with "attempted
+		// assignment to non-variable" for non-lvalues (`7++`,
+		// `f()++`). Accept the parse so `for (( ; ; 7++ ))` and
+		// similar expression-error test cases reach the runtime
+		// check rather than aborting the surrounding parse.
 		u := &UnaryArithm{
 			Post:  true,
 			OpPos: p.pos,
@@ -299,21 +305,6 @@ func (p *Parser) arithmExprBinary(compact bool, nextOp func(bool) ArithmExpr, op
 			X:     value,
 			Y:     y,
 		}
-	}
-}
-
-func isArithName(left ArithmExpr) bool {
-	w, ok := left.(*Word)
-	if !ok || len(w.Parts) != 1 {
-		return false
-	}
-	switch wp := w.Parts[0].(type) {
-	case *Lit:
-		return ValidName(wp.Value)
-	case *ParamExp:
-		return wp.nakedIndex()
-	default:
-		return false
 	}
 }
 
