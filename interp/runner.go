@@ -3339,8 +3339,8 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		// error. Reject before stashing in the function table.
 		name := cm.Name.Value
 		if r.opts[optPosix] && isPosixSpecialBuiltin(name) {
-			r.errf("%s%s: cannot use `%s' as a function name in POSIX mode\n",
-				r.bashErrPrefix(cm.Position), name, name)
+			r.errf("%s`%s': is a special builtin\n",
+				r.bashErrPrefix(cm.Position), name)
 			r.exit.code = 1
 			r.exit.exiting = true
 			return
@@ -4428,7 +4428,13 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 		}
 	}
 	name := args[0]
-	if body := r.Funcs[name]; body != nil {
+	// Bash POSIX mode: POSIX special builtins outrank shell
+	// functions during command lookup. Skip the function dispatch
+	// so a function defined before POSIX mode was enabled doesn't
+	// shadow the builtin (`break`, `return`, `exit`, …).
+	if r.opts[optPosix] && isPosixSpecialBuiltin(name) && IsBuiltin(name) {
+		// fall through to builtin/exec dispatch below
+	} else if body := r.Funcs[name]; body != nil {
 		// Honor $FUNCNEST: when set to a positive integer, bash aborts
 		// once nesting reaches that depth. An unset, empty, zero, or
 		// non-numeric value disables the limit.
