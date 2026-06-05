@@ -703,6 +703,222 @@ func (r *Runner) printFuncDecl(name string, body *syntax.Stmt) {
 	r.out("}\n")
 }
 
+// bashSplitCompound expands single-line `for/while/until/if/case`
+// compound commands to multi-line layout matching bash 5.3's
+// `declare -f` rendering. The mvdan/sh printer compresses them onto
+// one line; bash always splits across lines, indenting the body.
+//
+// Pattern (single-line for/while/until):
+//   while EXPR; do BODY; done    →    while EXPR; do
+//                                         BODY
+//                                     done
+//
+// Pattern (if):
+//   if X; then A; elif Y; then B; else C; fi
+//     → if X; then
+//            A
+//        elif Y; then
+//            B
+//        else
+//            C
+//        fi
+//
+// Pattern (case):
+//   case X in PAT) BODY ;; PAT2) BODY2 ;; esac  → multi-line.
+//
+// We operate on already-arith-padded text. The splitting walks each
+// line looking for openers (`do `, `then `, etc. as substrings) and
+// closers (`done`, `fi`, `esac`); the body between them gets one
+// statement per line at +4 indent relative to the opener.
+func bashSplitCompound(body string) string {
+	lines := strings.Split(body, "\n")
+	out := make([]string, 0, len(lines)*2)
+	for _, line := range lines {
+		out = append(out, splitCompoundLine(line)...)
+	}
+	return strings.Join(out, "\n")
+}
+
+// splitCompoundLine splits a single printer-output line on compound
+// boundaries (`do `, `then `, `else `, `elif `, `fi`, `done`, `;;`),
+// returning the new multi-line layout as a slice of lines.
+func splitCompoundLine(line string) []string {
+	indent := 0
+	for indent < len(line) && line[indent] == ' ' {
+		indent++
+	}
+	trim := line[indent:]
+	// Detect a compound-keyword opener (for/while/until/if/case at
+	// the start of the trimmed line). Only split if the line ALSO
+	// contains the matching closer (otherwise it's already
+	// multi-line from the printer).
+	switch {
+	case strings.HasPrefix(trim, "for ") ||
+		strings.HasPrefix(trim, "while ") ||
+		strings.HasPrefix(trim, "until "):
+		if !strings.Contains(trim, "; do ") || !strings.HasSuffix(trim, "; done") {
+			return []string{line}
+		}
+		// Split into: opener + body + done.
+		doIdx := strings.Index(trim, "; do ")
+		opener := trim[:doIdx] + "; do"
+		body := trim[doIdx+len("; do ") : len(trim)-len("; done")]
+		// Body may contain multiple stmts separated by `; `.
+		bodyLines := splitTopLevel(body, ";")
+		ind := strings.Repeat(" ", indent)
+		inner := strings.Repeat(" ", indent+4)
+		out := []string{ind + opener}
+		for _, b := range bodyLines {
+			b = strings.TrimSpace(b)
+			if b == "" {
+				continue
+			}
+			// Recursively split nested compounds.
+			for _, sub := range splitCompoundLine(inner + b) {
+				out = append(out, sub)
+			}
+		}
+		out = append(out, ind+"done")
+		return out
+	case strings.HasPrefix(trim, "if "):
+		if !strings.Contains(trim, "; then ") || !strings.HasSuffix(trim, "; fi") {
+			return []string{line}
+		}
+		return splitIfLine(line, indent, trim)
+	}
+	return []string{line}
+}
+
+// splitIfLine handles `if X; then A; elif Y; then B; else C; fi` →
+// multi-line. Returns slice of new lines.
+func splitIfLine(orig string, indent int, trim string) []string {
+	ind := strings.Repeat(" ", indent)
+	inner := strings.Repeat(" ", indent+4)
+	out := []string{}
+	rest := trim[len("if "):]
+	// rest now starts with the cond; then BODY [; elif ... [; else ...]]; fi
+	rest = strings.TrimSuffix(rest, "; fi")
+	first := true
+	for {
+		thenIdx := strings.Index(rest, "; then ")
+		if thenIdx < 0 {
+			return []string{orig} // give up on weird input
+		}
+		cond := rest[:thenIdx]
+		afterThen := rest[thenIdx+len("; then "):]
+		header := "if " + cond + "; then"
+		if !first {
+			header = "elif " + cond + "; then"
+		}
+		first = false
+		out = append(out, ind+header)
+		// Find next "; elif " or "; else " or end.
+		elifIdx := strings.Index(afterThen, "; elif ")
+		elseIdx := strings.Index(afterThen, "; else ")
+		var bodyEnd int
+		var bodyTerm string
+		switch {
+		case elifIdx >= 0 && (elseIdx < 0 || elifIdx < elseIdx):
+			bodyEnd = elifIdx
+			bodyTerm = "elif"
+			rest = afterThen[elifIdx+len("; "):]
+		case elseIdx >= 0:
+			bodyEnd = elseIdx
+			bodyTerm = "else"
+			rest = afterThen[elseIdx+len("; "):]
+		default:
+			bodyEnd = len(afterThen)
+			bodyTerm = ""
+			rest = ""
+		}
+		body := afterThen[:bodyEnd]
+		for _, b := range splitTopLevel(body, ";") {
+			b = strings.TrimSpace(b)
+			if b == "" {
+				continue
+			}
+			for _, sub := range splitCompoundLine(inner + b) {
+				out = append(out, sub)
+			}
+		}
+		if bodyTerm == "" {
+			break
+		}
+		if bodyTerm == "else" {
+			out = append(out, ind+"else")
+			// rest is now `else BODY`; trim leading "else "
+			elseBody := strings.TrimPrefix(rest, "else ")
+			for _, b := range splitTopLevel(elseBody, ";") {
+				b = strings.TrimSpace(b)
+				if b == "" {
+					continue
+				}
+				for _, sub := range splitCompoundLine(inner + b) {
+					out = append(out, sub)
+				}
+			}
+			break
+		}
+		// elif: rest starts with `elif COND; then ...`
+		rest = strings.TrimPrefix(rest, "elif ")
+	}
+	out = append(out, ind+"fi")
+	return out
+}
+
+// splitTopLevel splits s on sep that is NOT inside nested parens,
+// brackets, braces, or quoted strings.
+func splitTopLevel(s, sep string) []string {
+	var out []string
+	var b strings.Builder
+	depthP, depthB, depthC := 0, 0, 0
+	inSgl, inDbl := false, false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == '\\' && i+1 < len(s) {
+			b.WriteByte(c)
+			b.WriteByte(s[i+1])
+			i++
+			continue
+		}
+		switch {
+		case inSgl:
+			if c == '\'' {
+				inSgl = false
+			}
+		case inDbl:
+			if c == '"' {
+				inDbl = false
+			}
+		case c == '\'':
+			inSgl = true
+		case c == '"':
+			inDbl = true
+		case c == '(':
+			depthP++
+		case c == ')':
+			depthP--
+		case c == '[':
+			depthB++
+		case c == ']':
+			depthB--
+		case c == '{':
+			depthC++
+		case c == '}':
+			depthC--
+		case depthP == 0 && depthB == 0 && depthC == 0 && c == sep[0]:
+			out = append(out, b.String())
+			b.Reset()
+			continue
+		}
+		b.WriteByte(c)
+	}
+	if b.Len() > 0 {
+		out = append(out, b.String())
+	}
+	return out
+}
+
 // bashArithSpace pads the contents of `((...))` and `$((...))` runs
 // with single spaces inside the parens to match bash 5.3's
 // `declare -f` rendering: `((i<3))` → `(( i<3 ))`. Skips already-
@@ -823,6 +1039,10 @@ func bashDeclareFmt(body string, lastTop bool) string {
 	// arith expansion `$((expr))` → `$(( expr ))`. The printer
 	// emits the compact form; pad with regex.
 	body = bashArithSpace(body)
+	// Bash 5.3 always renders for/while/until/if as multi-line in
+	// `declare -f` even when the source was single-line; the
+	// printer collapses to single-line. Split here.
+	body = bashSplitCompound(body)
 	lines := strings.Split(body, "\n")
 	inHdoc := ""
 	for i, raw := range lines {
