@@ -465,7 +465,16 @@ func publishBgPid(ctx context.Context, pid int) {
 }
 
 type alias struct {
-	args  []*syntax.Word
+	// args is set for the common "simple call" alias case
+	// (`alias l='ls -la'`); inlined into the surrounding CallExpr's
+	// arg list at expansion time.
+	args []*syntax.Word
+	// file is set for aliases whose body parses to multiple
+	// statements or non-CallExpr commands (e.g. with embedded
+	// newlines: `alias foo=$'echo a\necho b'`). At expansion time the
+	// surrounding command is replaced by running the parsed
+	// statements; args is nil in this case.
+	file  *syntax.File
 	blank bool
 }
 

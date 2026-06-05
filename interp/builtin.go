@@ -1339,6 +1339,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				var buf bytes.Buffer
 				if len(als.args) > 0 {
 					syntax.NewPrinter().Print(&buf, &syntax.CallExpr{Args: als.args})
+				} else if als.file != nil {
+					syntax.NewPrinter().Print(&buf, als.file)
+					bs := bytes.TrimRight(buf.Bytes(), "\n")
+					buf.Reset()
+					buf.Write(bs)
 				}
 				if als.blank {
 					buf.WriteByte(' ')
@@ -2074,6 +2079,15 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				printer.Print(&buf, &syntax.CallExpr{
 					Args: als.args,
 				})
+			} else if als.file != nil {
+				printer := syntax.NewPrinter()
+				printer.Print(&buf, als.file)
+				// Bash 5.3 single-quotes the whole body; the
+				// printer emits trailing newline which we strip
+				// so the `'<body>'` quoting closes cleanly.
+				bs := bytes.TrimRight(buf.Bytes(), "\n")
+				buf.Reset()
+				buf.Write(bs)
 			}
 			if als.blank {
 				buf.WriteByte(' ')
@@ -2108,24 +2122,34 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				continue
 			}
 
-			// TODO: parse any CallExpr perhaps, or even any Stmt
+			// Parse the body as a full statement list — alias bodies
+			// can contain compound commands, multiple statements, and
+			// embedded newlines (`alias foo=$'echo a\necho b'`). If
+			// the parse reduces to exactly one CallExpr stmt with all
+			// literal Cmd args, keep the simple-inline shape so the
+			// existing arg-substitution fast path runs; otherwise
+			// stash the whole file for the expansion site to execute.
 			parser := syntax.NewParser()
-			var words []*syntax.Word
-			for w, err := range parser.WordsSeq(strings.NewReader(src)) {
-				if err != nil {
-					r.errf(r.bashErrPrefix(pos)+"alias: could not parse %q: %v\n", src, err)
-					continue argsLoop
-				}
-				words = append(words, w)
+			file, perr := parser.Parse(strings.NewReader(src), "")
+			if perr != nil {
+				r.errf(r.bashErrPrefix(pos)+"alias: could not parse %q: %v\n", src, perr)
+				continue argsLoop
 			}
-
+			als := alias{
+				blank: strings.TrimRight(src, " \t") != src,
+			}
+			if len(file.Stmts) == 1 {
+				if ce, ok := file.Stmts[0].Cmd.(*syntax.CallExpr); ok && len(ce.Assigns) == 0 && file.Stmts[0].Redirs == nil {
+					als.args = ce.Args
+				}
+			}
+			if als.args == nil {
+				als.file = file
+			}
 			if r.alias == nil {
 				r.alias = make(map[string]alias)
 			}
-			r.alias[name] = alias{
-				args:  words,
-				blank: strings.TrimRight(src, " \t") != src,
-			}
+			r.alias[name] = als
 		}
 	case "unalias":
 		for _, name := range args {
@@ -2993,6 +3017,11 @@ func (r *Runner) typeMatches(arg string, skipFuncs bool) []typeMatch {
 		var buf bytes.Buffer
 		if len(als.args) > 0 {
 			syntax.NewPrinter().Print(&buf, &syntax.CallExpr{Args: als.args})
+		} else if als.file != nil {
+			syntax.NewPrinter().Print(&buf, als.file)
+			bs := bytes.TrimRight(buf.Bytes(), "\n")
+			buf.Reset()
+			buf.Write(bs)
 		}
 		if als.blank {
 			buf.WriteByte(' ')

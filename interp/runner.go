@@ -1065,6 +1065,14 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			if !ok {
 				break
 			}
+			// Multi-stmt alias (`alias foo=$'echo a\necho b'`):
+			// execute the parsed file in place of the surrounding
+			// call. Only kicks in when the alias word is at i==0
+			// (alias position); otherwise treat it as plain text.
+			if als.file != nil && i == 0 {
+				r.stmts(ctx, als.file.Stmts)
+				return
+			}
 			args = slices.Replace(args, i, i+1, als.args...)
 			if !als.blank {
 				break
