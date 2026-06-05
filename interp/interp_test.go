@@ -357,6 +357,13 @@ var runTests = []runTest{
 	{`v=${ exit 0; }; echo never`, ""},
 	// `break` inside funsub breaks the enclosing loop.
 	{`for i in 1 2 3; do v=${ break; }; echo "i=$i"; done; echo done`, "done\n"},
+	// positional-parameter changes (shift, set --) are NOT variable
+	// assignments per bash 5.3 funsub spec, so they DO leak from a funsub
+	// body. Wrapping the body in (...) subshells the call and isolates
+	// them. Mirrors bash 5.3 comsub2.tests lines 117-130.
+	{`set -- 1 2; : "${ shift; }"; echo "$@"`, "2\n"},
+	{`set -- 1 2; : "${| shift; }"; echo "$@"`, "2\n"},
+	{`set -- 1 2; : "${ ( shift ); }"; echo "$@"`, "1 2\n"},
 
 	// runner-state introspection builtin emits JSON; check it round-trips
 	// by extracting a known key via grep -q.
