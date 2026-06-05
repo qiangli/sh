@@ -197,6 +197,14 @@ type Runner struct {
 	// runner clears it before each arithm call site that cares.
 	lastArithErr error
 
+	// aliasLineOverride is non-zero while expanding a multi-stmt
+	// alias body. bashErrPrefix prefers it over the AST stmt's own
+	// Pos().Line() so runtime errors from inside an alias body
+	// (`command not found`, etc.) report the call site's line in
+	// the source script rather than the body-relative line in the
+	// alias-body parse.
+	aliasLineOverride int
+
 	// bgProcs holds all background shells spawned by this runner.
 	// Their PIDs are 1-indexed, from 1 to len(bgProcs), with a "g" prefix
 	// to distinguish them from real PIDs on the host operating system.

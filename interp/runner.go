@@ -831,7 +831,16 @@ func (r *Runner) bashErrPrefix(pos syntax.Pos) string {
 	if name == "" {
 		name = "bashy"
 	}
-	return fmt.Sprintf("%s: line %d: ", name, pos.Line())
+	line := int(pos.Line())
+	// When executing a multi-stmt alias body the AST positions are
+	// from the alias-body parse (line N within the body), not from
+	// the call site in the script. r.aliasLineOverride is set by the
+	// alias-expansion code in cmd() to make runtime diagnostics
+	// (`command not found`, etc.) report the invocation line.
+	if r.aliasLineOverride > 0 {
+		line = r.aliasLineOverride
+	}
+	return fmt.Sprintf("%s: line %d: ", name, line)
 }
 
 // bashOSError formats an os.PathError (or any error) the way bash 5.3
@@ -1069,8 +1078,14 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			// execute the parsed file in place of the surrounding
 			// call. Only kicks in when the alias word is at i==0
 			// (alias position); otherwise treat it as plain text.
+			// Override the runtime line so diagnostics
+			// (`command not found`, etc.) report bash's invocation
+			// line rather than the line within the alias body.
 			if als.file != nil && i == 0 {
+				prevOverride := r.aliasLineOverride
+				r.aliasLineOverride = int(cm.Pos().Line())
 				r.stmts(ctx, als.file.Stmts)
+				r.aliasLineOverride = prevOverride
 				return
 			}
 			args = slices.Replace(args, i, i+1, als.args...)
