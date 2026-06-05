@@ -721,8 +721,16 @@ func (r *Runner) printFuncDecl(name string, body *syntax.Stmt) {
 		}
 		isLast := (i == len(block.Stmts)-1) ||
 			(skipNext && i+1 == len(block.Stmts)-1)
-		r.out(bashDeclareFmt(body, isLast))
+		rendered := bashDeclareFmt(body, isLast)
+		r.out(rendered)
 		r.out("\n")
+		// bash 5.3 inserts a blank line between two top-level
+		// stmts in a function body when the prior stmt ended
+		// with a heredoc terminator. Detect by checking the last
+		// non-empty line of the rendered output.
+		if !isLast && endsWithHeredocTerminator(body) {
+			r.out("\n")
+		}
 	}
 	// bash 5.3 attaches function-level redirections (`f() { ... } >file`)
 	// to the closing brace. Render via the printer for each Redir and
@@ -766,6 +774,47 @@ func formatRedirect(r *syntax.Redirect) string {
 		b.WriteString(s)
 	}
 	return b.String()
+}
+
+// endsWithHeredocTerminator returns true if the printer-output body
+// for a single stmt ends with a heredoc terminator line (i.e. last
+// stmt was something like `cat <<EOF\\n...\\nEOF`). Used by
+// printFuncDecl to insert a blank line between such a stmt and the
+// next stmt, matching bash 5.3 declare -f formatting.
+func endsWithHeredocTerminator(body string) bool {
+	lines := strings.Split(body, "\n")
+	// Walk forward, track heredoc terminator tag, and check if
+	// the LAST non-empty line is a terminator.
+	inH := ""
+	lastIsTerm := false
+	for _, raw := range lines {
+		trim := strings.TrimSpace(raw)
+		if trim == "" {
+			continue
+		}
+		if inH != "" {
+			if trim == inH {
+				inH = ""
+				lastIsTerm = true
+			}
+			continue
+		}
+		lastIsTerm = false
+		if idx := findHeredocOp(trim); idx >= 0 {
+			afterOp := trim[idx+2:]
+			rest := strings.TrimLeft(afterOp, "-")
+			rest = strings.TrimLeft(rest, " \t")
+			end := strings.IndexAny(rest, " \t")
+			if end < 0 {
+				end = len(rest)
+			}
+			tag := strings.Trim(rest[:end], "'\"")
+			if tag != "" {
+				inH = tag
+			}
+		}
+	}
+	return lastIsTerm
 }
 
 // isSimpleForAmpJoin reports whether stmt can be joined onto the
@@ -1953,6 +2002,38 @@ func bashDeclareFmt(body string, lastTop bool) string {
 	// bash 5.3 declare -f renders control chars (`$'\001'`) using
 	// caret notation (`'^A'`) instead of ANSI-C.
 	body = bashCaretCtrlChars(body)
+	// Pre-pass: track heredoc terminators so we can insert a blank
+	// line after each one (bash 5.3 declare -f convention) when we
+	// emit the final joined string.
+	preLines := strings.Split(body, "\n")
+	hdocTermAt := make(map[int]bool)
+	{
+		inH := ""
+		for i, raw := range preLines {
+			trim := strings.TrimSpace(raw)
+			if inH != "" {
+				if trim == inH {
+					inH = ""
+					hdocTermAt[i] = true
+				}
+				continue
+			}
+			if idx := findHeredocOp(trim); idx >= 0 {
+				afterOp := trim[idx+2:]
+				rest := strings.TrimLeft(afterOp, "-")
+				rest = strings.TrimLeft(rest, " \t")
+				end := strings.IndexAny(rest, " \t")
+				if end < 0 {
+					end = len(rest)
+				}
+				tag := strings.Trim(rest[:end], "'\"")
+				if tag != "" {
+					inH = tag
+				}
+			}
+		}
+	}
+
 	lines := strings.Split(body, "\n")
 	inHdoc := ""
 	hdocStripTabs := false
@@ -2076,6 +2157,19 @@ func bashDeclareFmt(body string, lastTop bool) string {
 		if !(lastTop && i == len(lines)-1) {
 			lines[i] += ";"
 		}
+	}
+	// Insert a blank line after each heredoc terminator (bash 5.3
+	// declare -f puts a blank line between the EOF closer and the
+	// next stmt or the function close).
+	if len(hdocTermAt) > 0 {
+		out := make([]string, 0, len(lines)+len(hdocTermAt))
+		for i, l := range lines {
+			out = append(out, l)
+			if hdocTermAt[i] && i+1 < len(lines) {
+				out = append(out, "")
+			}
+		}
+		lines = out
 	}
 	return strings.Join(lines, "\n")
 }
