@@ -759,21 +759,21 @@ func splitCompoundLine(line string) []string {
 		if !strings.Contains(trim, "; do ") || !strings.HasSuffix(trim, "; done") {
 			return []string{line}
 		}
-		// Split into: opener + body + done.
+		// Split into: opener (no trailing `; do`) / do (own line) /
+		// body / done. bash 5.3 puts `do` on its own line, NOT
+		// glued to the for/while/until header.
 		doIdx := strings.Index(trim, "; do ")
-		opener := trim[:doIdx] + "; do"
+		opener := trim[:doIdx]
 		body := trim[doIdx+len("; do ") : len(trim)-len("; done")]
-		// Body may contain multiple stmts separated by `; `.
 		bodyLines := splitTopLevel(body, ";")
 		ind := strings.Repeat(" ", indent)
 		inner := strings.Repeat(" ", indent+4)
-		out := []string{ind + opener}
+		out := []string{ind + opener, ind + "do"}
 		for _, b := range bodyLines {
 			b = strings.TrimSpace(b)
 			if b == "" {
 				continue
 			}
-			// Recursively split nested compounds.
 			for _, sub := range splitCompoundLine(inner + b) {
 				out = append(out, sub)
 			}
