@@ -2122,29 +2122,48 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				continue
 			}
 
-			// Parse the body as a full statement list — alias bodies
-			// can contain compound commands, multiple statements, and
-			// embedded newlines (`alias foo=$'echo a\necho b'`). If
-			// the parse reduces to exactly one CallExpr stmt with all
-			// literal Cmd args, keep the simple-inline shape so the
-			// existing arg-substitution fast path runs; otherwise
-			// stash the whole file for the expansion site to execute.
+			// Bash stores alias bodies as TEXT and only re-parses
+			// at expansion time, so things like
+			// `alias switch=case` (a body that's a bare keyword) or
+			// `alias foo="echo 'Error:"` (with unclosed quotes that
+			// continue into the next user input) are legal even
+			// though they don't parse standalone. Try the multi-stmt
+			// parse first so embedded newlines / compound commands
+			// run correctly; if that fails, fall back to the
+			// per-word parse to preserve the legacy text-style
+			// behaviour for tricky bodies.
 			parser := syntax.NewParser()
-			file, perr := parser.Parse(strings.NewReader(src), "")
-			if perr != nil {
-				r.errf(r.bashErrPrefix(pos)+"alias: could not parse %q: %v\n", src, perr)
-				continue argsLoop
-			}
 			als := alias{
 				blank: strings.TrimRight(src, " \t") != src,
 			}
-			if len(file.Stmts) == 1 {
-				if ce, ok := file.Stmts[0].Cmd.(*syntax.CallExpr); ok && len(ce.Assigns) == 0 && file.Stmts[0].Redirs == nil {
-					als.args = ce.Args
+			file, perr := parser.Parse(strings.NewReader(src), "")
+			if perr == nil {
+				if len(file.Stmts) == 1 {
+					if ce, ok := file.Stmts[0].Cmd.(*syntax.CallExpr); ok && len(ce.Assigns) == 0 && file.Stmts[0].Redirs == nil {
+						als.args = ce.Args
+					}
 				}
-			}
-			if als.args == nil {
-				als.file = file
+				if als.args == nil {
+					als.file = file
+				}
+			} else {
+				// Stmt-parse failed — try the per-word path. If even
+				// that fails, surface the original error so users see
+				// what's wrong (matches the old behaviour).
+				var words []*syntax.Word
+				var werr error
+				for w, e := range parser.WordsSeq(strings.NewReader(src)) {
+					if e != nil {
+						werr = e
+						break
+					}
+					words = append(words, w)
+				}
+				if werr != nil {
+					r.errf(r.bashErrPrefix(pos)+"alias: could not parse %q: %v\n", src, werr)
+					continue argsLoop
+				}
+				als.args = words
 			}
 			if r.alias == nil {
 				r.alias = make(map[string]alias)
