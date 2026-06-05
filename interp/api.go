@@ -330,6 +330,14 @@ type Runner struct {
 	// and exit 2 after binTest returns. Cleared on next test
 	// builtin entry.
 	testIntErr string
+
+	// testArithErr captures an arithmetic-syntax error encountered
+	// while parsing a [[ ]] arithmetic operand (`[[ 7 -eq 4+ ]]`).
+	// It is non-empty alongside the offending operand in
+	// [Runner.testIntErr]; TestClause prints the bash 5.3
+	// arithmetic-syntax-error wording instead of "integer expected"
+	// when this is set, and the exit status is 1, not 2.
+	testArithErr string
 }
 
 // exitStatus holds the state of the shell after running one command.

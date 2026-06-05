@@ -3285,8 +3285,14 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		}
 	case *syntax.TestClause:
 		r.testIntErr = ""
+		r.testArithErr = ""
 		result := r.bashTest(ctx, cm.X, false)
-		if r.testIntErr != "" {
+		if r.testArithErr != "" {
+			r.errf("%s[[: %s: %s\n", r.bashErrPrefix(cm.Left), r.testIntErr, r.testArithErr)
+			r.testIntErr = ""
+			r.testArithErr = ""
+			r.exit.code = 1
+		} else if r.testIntErr != "" {
 			r.errf(r.bashErrPrefix(cm.Left)+"[[: %s: integer expected\n", r.testIntErr)
 			r.testIntErr = ""
 			r.exit.code = 2

@@ -17,6 +17,65 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 )
 
+// arithErrMsg returns the bash 5.3 wording for an arithmetic-
+// syntax error encountered while evaluating the [[ ]] operand `s`.
+// The returned text is shaped like
+//
+//	arithmetic syntax error: operand expected (error token is "X")
+//
+// where `X` is the trailing fragment that bash would highlight.
+// Best-effort: when we can't determine a token, fall back to the
+// full operand.
+func arithErrMsg(err error, s string) string {
+	tok := s
+	// Strip a known prefix like "1:N: " from our parser error.
+	msg := err.Error()
+	if idx := strings.LastIndex(msg, ": "); idx >= 0 {
+		core := msg[idx+2:]
+		if core != "" {
+			// Heuristic: take the last char of the operand as the
+			// "error token" when the parser complained about a
+			// trailing operator (`4+`, `4*`, …).
+			last := s[len(s)-1]
+			switch last {
+			case '+', '-', '*', '/', '%', '<', '>', '&', '|', '^', '=', '!':
+				tok = string(last)
+			}
+		}
+	}
+	return "arithmetic syntax error: operand expected (error token is \"" + tok + "\")"
+}
+
+// arithFromString parses s as a bash arithmetic expression and
+// returns its int64 value. Empty input is treated as 0 (bash behaves
+// the same way). Unset / non-numeric tokens that don't parse as a
+// valid expression return a non-nil error so callers can report the
+// bash 5.3 "integer expected" / "syntax error" diagnostics.
+func (r *Runner) arithFromString(s string) (int64, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, nil
+	}
+	// Wrap as `(( s ))` so the parser produces a single ArithmCmd.
+	src := "((" + s + "))"
+	file, err := syntax.NewParser().Parse(strings.NewReader(src), "")
+	if err != nil {
+		return 0, err
+	}
+	if len(file.Stmts) != 1 {
+		return 0, fmt.Errorf("not a valid arithmetic expression")
+	}
+	ac, ok := file.Stmts[0].Cmd.(*syntax.ArithmCmd)
+	if !ok || ac.X == nil {
+		return 0, fmt.Errorf("not a valid arithmetic expression")
+	}
+	n, err := expand.Arithm(r.ecfg, ac.X)
+	if err != nil {
+		return 0, err
+	}
+	return int64(n), nil
+}
+
 // non-empty string is true, empty string is false
 func (r *Runner) bashTest(ctx context.Context, expr syntax.TestExpr, classic bool) string {
 	switch x := expr.(type) {
@@ -160,8 +219,25 @@ func (r *Runner) binTest(ctx context.Context, op syntax.BinTestOperator, x, y st
 				return false
 			}
 		} else {
-			xn = atoi(x)
-			yn = atoi(y)
+			// `[[ ]]` evaluates the operands as full arithmetic
+			// expressions: `[[ 7 -eq 4+3 ]]` is true. Empty input
+			// is treated as 0 (matches bash). Genuine arithmetic
+			// syntax errors set testArithErr so TestClause prints
+			// bash's "arithmetic syntax error" wording (exit 1)
+			// rather than "integer expected" (exit 2).
+			var xerr, yerr error
+			xn, xerr = r.arithFromString(x)
+			if xerr != nil {
+				r.testIntErr = x
+				r.testArithErr = arithErrMsg(xerr, x)
+				return false
+			}
+			yn, yerr = r.arithFromString(y)
+			if yerr != nil {
+				r.testIntErr = y
+				r.testArithErr = arithErrMsg(yerr, y)
+				return false
+			}
 		}
 		switch op {
 		case syntax.TsEql:
