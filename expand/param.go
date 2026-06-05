@@ -282,15 +282,30 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 		if orig == "" {
 			break // nothing to replace
 		}
-		with, err := Literal(cfg, pe.Repl.With)
-		if err != nil {
-			return "", err
+		// Bash 5.3 applies quote-removal to the replacement string:
+		// a backslash in the *unquoted* portion escapes the next
+		// character (`\'` → `'`, `\\` → `\`, `\&` → `&`). Already-
+		// quoted parts (DblQuoted, SglQuoted) keep their text as
+		// Literal returned it, since they've already been through
+		// the relevant per-context backslash handling. So we walk
+		// the word parts: strip backslashes only on the bare Lit
+		// pieces, concatenate the rest as Literal would have.
+		var with string
+		if pe.Repl.With != nil {
+			var withSb strings.Builder
+			for _, part := range pe.Repl.With.Parts {
+				if lit, ok := part.(*syntax.Lit); ok {
+					withSb.WriteString(stripBackslashEscapes(lit.Value))
+					continue
+				}
+				s, lerr := Literal(cfg, &syntax.Word{Parts: []syntax.WordPart{part}})
+				if lerr != nil {
+					return "", lerr
+				}
+				withSb.WriteString(s)
+			}
+			with = withSb.String()
 		}
-		// Bash 5.3 applies quote-removal to the replacement: a
-		// backslash escapes the next character (`\'` → `'`, `\\` → `\`,
-		// `\&` → `&`, etc.). Without this, `${v/x/\'}` emits `\'`
-		// instead of `'` and many quote-roundtrip tests fail.
-		with = stripBackslashEscapes(with)
 		n := 1
 		if pe.Repl.All {
 			n = -1
