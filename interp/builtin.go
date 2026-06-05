@@ -1281,6 +1281,13 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				if argv0 == "" {
 					return failf(2, "exec: -a: option requires an argument\n")
 				}
+			case "-c":
+				// bash 5.3 `-c` clears the environment for the
+				// exec'd command. Accept but don't implement —
+				// `exec` is a no-op replace here anyway.
+			case "-l":
+				// bash 5.3 `-l` makes the exec'd shell act as a
+				// login shell. Accept silently.
 			default:
 				return invalidOpt("exec", flag)
 			}
@@ -1306,6 +1313,10 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				showV = true
 			case "-V":
 				showVV = true
+			case "-p":
+				// bash 5.3 `-p` runs the lookup with a default PATH;
+				// we don't currently honour the override but accept
+				// the flag so scripts that rely on it don't error.
 			default:
 				return invalidOpt("command", flag)
 			}
