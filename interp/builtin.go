@@ -391,7 +391,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				// no-args without the `<file>: line N:` prefix (the
 				// prefix is reserved for error conditions; usage on
 				// "no required arg" is informational).
-				r.errf("printf: usage: %s\n", bashUsage["printf"])
+				r.errf(r.bashErrPrefix(pos)+"printf: usage: %s\n", bashUsage["printf"])
 				exit.code = 2
 				return exit
 			}
@@ -673,7 +673,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 						continue
 					}
 					exit.code = 1
-					r.errf("kill: %s: invalid signal specification\n", a)
+					r.errf(r.bashErrPrefix(pos)+"kill: %s: invalid signal specification\n", a)
 					continue
 				}
 				if s, ok := signalByName(a); ok {
@@ -691,18 +691,18 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		for _, target := range remaining {
 			if strings.HasPrefix(target, "%") || strings.HasPrefix(target, "g") {
 				exit.code = 1
-				r.errf("kill: %s: no job control in this shell\n", target)
+				r.errf(r.bashErrPrefix(pos)+"kill: %s: no job control in this shell\n", target)
 				continue
 			}
 			pid, err := strconv.Atoi(target)
 			if err != nil {
 				exit.code = 1
-				r.errf("kill: %s: arguments must be process IDs\n", target)
+				r.errf(r.bashErrPrefix(pos)+"kill: %s: arguments must be process IDs\n", target)
 				continue
 			}
 			if err := sendSignal(pid, sig); err != nil {
 				exit.code = 1
-				r.errf("kill: (%d) - %v\n", pid, err)
+				r.errf(r.bashErrPrefix(pos)+"kill: (%d) - %v\n", pid, err)
 			}
 		}
 	case "nohup":
@@ -923,7 +923,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				if IsBuiltin(name) {
 					r.outf("%s: %s is a shell builtin\n", name, name)
 				} else {
-					r.errf("help: no help topics match `%s'\n", name)
+					r.errf(r.bashErrPrefix(pos)+"help: no help topics match `%s'\n", name)
 					exit.code = 1
 				}
 			}
@@ -1005,7 +1005,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		}
 		for _, name := range remaining {
 			if !IsBuiltin(name) {
-				r.errf("enable: %s: not a shell builtin\n", name)
+				r.errf(r.bashErrPrefix(pos)+"enable: %s: not a shell builtin\n", name)
 				exit.code = 1
 				continue
 			}
@@ -1360,7 +1360,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				if err != nil {
 					r.errf("%sdirs: %s: invalid number\n",
 						r.bashErrPrefix(r.curStmtPos), a)
-					r.errf("dirs: usage: dirs [-clpv] [+N] [-N]\n")
+					r.errf("%sdirs: usage: dirs [-clpv] [+N] [-N]\n", r.bashErrPrefix(pos))
 					exit.code = 1
 					return exit
 				}
@@ -1447,7 +1447,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				if _, err := strconv.Atoi(arg[1:]); err != nil {
 					r.errf("%spushd: %s: invalid number\n",
 						r.bashErrPrefix(r.curStmtPos), arg)
-					r.errf("pushd: usage: pushd [-n] [+N | -N | dir]\n")
+					r.errf("%spushd: usage: pushd [-n] [+N | -N | dir]\n", r.bashErrPrefix(pos))
 					exit.code = 1
 					return exit
 				}
@@ -1504,7 +1504,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				if _, err := strconv.Atoi(arg[1:]); err != nil {
 					r.errf("%spopd: %s: invalid number\n",
 						r.bashErrPrefix(r.curStmtPos), arg)
-					r.errf("popd: usage: popd [-n] [+N | -N]\n")
+					r.errf("%spopd: usage: popd [-n] [+N | -N]\n", r.bashErrPrefix(pos))
 					exit.code = 1
 					return exit
 				}
@@ -1780,7 +1780,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		if len(args) > 0 && len(args[0]) > 1 && args[0][0] == '-' && args[0][1] != ':' {
 			r.errf("%s%s: %s: invalid option\n",
 				r.bashErrPrefix(r.curStmtPos), "getopts", args[0])
-			r.errf("getopts: usage: getopts optstring name [arg ...]\n")
+			r.errf("%sgetopts: usage: getopts optstring name [arg ...]\n", r.bashErrPrefix(pos))
 			exit.code = 2
 			return exit
 		}
@@ -1788,7 +1788,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			// bash 5.3 emits the usage line without the
 			// `<file>: line N: ` prefix that other builtin
 			// errors carry.
-			r.errf("getopts: usage: getopts optstring name [arg ...]\n")
+			r.errf("%sgetopts: usage: getopts optstring name [arg ...]\n", r.bashErrPrefix(pos))
 			exit.code = 2
 			return exit
 		}
@@ -2082,7 +2082,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			if !ok {
 				als, ok := r.alias[name]
 				if !ok {
-					r.errf("alias: %s: not found\n", name)
+					r.errf(r.bashErrPrefix(pos)+"alias: %s: not found\n", name)
 					exit.code = 1
 					continue
 				}
@@ -2095,7 +2095,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			var words []*syntax.Word
 			for w, err := range parser.WordsSeq(strings.NewReader(src)) {
 				if err != nil {
-					r.errf("alias: could not parse %q: %v\n", src, err)
+					r.errf(r.bashErrPrefix(pos)+"alias: could not parse %q: %v\n", src, err)
 					continue argsLoop
 				}
 				words = append(words, w)
@@ -2128,8 +2128,8 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			case "-":
 				// default signal
 			default:
-				r.errf("trap: %q: invalid option\n", flag)
-				r.errf("trap: usage: trap [-lp] [[arg] signal_spec ...]\n")
+				r.errf("%strap: %q: invalid option\n", r.bashErrPrefix(pos), flag)
+				r.errf("%strap: usage: trap [-lp] [[arg] signal_spec ...]\n", r.bashErrPrefix(pos))
 				exit.code = 2
 				return exit
 			}

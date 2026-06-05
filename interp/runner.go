@@ -1416,7 +1416,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			local = r.inFunc
 		case "local":
 			if !r.inFunc {
-				r.errf("local: can only be used in a function\n")
+				r.errf("%slocal: can only be used in a function\n", r.bashErrPrefix(r.curStmtPos))
 				r.exit.code = 1
 				return
 			}
@@ -1474,7 +1474,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				case "-f", "-F", "-p":
 					declQuery = flag
 				default:
-					r.errf("declare: invalid option %q\n", flag)
+					r.errf(r.bashErrPrefix(r.curStmtPos)+"declare: invalid option %q\n", flag)
 					r.exit.code = 2
 					return
 				}
@@ -1544,7 +1544,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				// declare -p name: print variable with attributes.
 				vr := r.lookupVar(name)
 				if !vr.Declared() {
-					r.errf("declare: %s: not found\n", name)
+					r.errf(r.bashErrPrefix(r.curStmtPos)+"declare: %s: not found\n", name)
 					r.exit.code = 1
 					continue
 				}
