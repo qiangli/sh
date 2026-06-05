@@ -695,47 +695,68 @@ func (r *Runner) printFuncDecl(name string, body *syntax.Stmt) {
 }
 
 // bashDeclareFmt reformats a printer-produced statement body to match
-// bash 5.3's `declare -f` rendering: prepend 4 spaces to every line
-// (so nested lines that the printer left at column 4 land at column 8,
-// etc.), then append `;` to every line that's a simple statement —
-// not a block opener (ends with `then`, `do`, `in`, `{`, `else`, etc.)
-// and not a block closer (`fi`, `done`, `esac`, `}`). The lastTop flag
-// suppresses the trailing `;` on the final top-level statement of the
-// function body, matching bash's omission of the closing semicolon.
+// bash 5.3's `declare -f` rendering. Per-stmt the printer emits the
+// opener line at column 0, nested-block bodies at column 4 (via
+// Indent(4)), nested-block closers (fi/done/esac/}) at column 0, and
+// any heredoc body+terminator at column 0 (heredocs always anchor
+// left).
+//
+// We need to:
+//   - prepend 4 spaces to every printer line *except* heredoc body
+//     and heredoc terminator lines (those stay at column 0 to match
+//     bash);
+//   - append `;` to each simple statement except heredoc openers
+//     (`cat <<TAG`), heredoc body / terminator, block openers
+//     (ending in then/do/in/{/else/operators), block closers
+//     (fi/done/esac/}), and the last top-level statement of the
+//     function body.
+//
+// Heredoc context is tracked explicitly via inHdoc: when we see a
+// line ending with `<<TAG` we capture TAG; subsequent lines up to and
+// including the TAG-only line are heredoc content.
 func bashDeclareFmt(body string, lastTop bool) string {
 	lines := strings.Split(body, "\n")
+	inHdoc := ""
 	for i, raw := range lines {
-		// Indent uniformly by 4 spaces (every line, including
-		// nested ones — the printer already nested with its own
-		// Indent(4), so a 4-space prepend lifts the whole stmt
-		// by one level relative to the function body).
-		lines[i] = "    " + raw
 		trim := strings.TrimSpace(raw)
+		// Inside a heredoc: leave body / terminator untouched
+		// (no re-indent, no `;`). The terminator closes it.
+		if inHdoc != "" {
+			if trim == inHdoc {
+				inHdoc = ""
+			}
+			continue
+		}
+		// Outside a heredoc: every line gets the 4-space lift.
+		lines[i] = "    " + raw
 		if trim == "" {
 			continue
 		}
-		// Block closers and openers: never add `;`.
+		// Heredoc opener: line ends with `<<TAG`, `<<-TAG`,
+		// `<<'TAG'`, or `<<"TAG"`. Capture the terminator and
+		// skip the `;` — heredoc-opener stmts in bash render
+		// without a trailing `;` so the body parses correctly.
+		if idx := strings.LastIndex(trim, "<<"); idx >= 0 {
+			rest := strings.TrimLeft(trim[idx+2:], "-")
+			tag := strings.Trim(rest, " \t'\"")
+			if tag != "" && !strings.ContainsAny(tag, " \t") {
+				inHdoc = tag
+				continue
+			}
+		}
+		// Block closers / openers: never add `;`.
 		switch trim {
 		case "fi", "done", "esac", "}", "{", "else", "do", "then":
 			continue
 		}
-		// Heuristic for openers: if the line ends with `then`, `do`,
-		// `in`, `{`, `else`, `elif <cond>` (which is `then`-ended),
-		// or already terminates with `;` / `&` / `|` / `;;` etc.,
-		// skip the semicolon append.
-		last := trim
 		for _, suffix := range []string{
 			" then", " do", " in", " {", " else", "(", ")",
 			";", "&", "|", ";;", ";&", "&&", "||",
 		} {
-			if strings.HasSuffix(last, suffix) {
+			if strings.HasSuffix(trim, suffix) {
 				goto next
 			}
 		}
-		// On the last top-level line, suppress the trailing `;` to
-		// match bash's `declare -f` output. Inner-nested last lines
-		// (handled recursively by the printer + this re-indent) still
-		// get `;` since bash adds them inside compound bodies.
 		if !(lastTop && i == len(lines)-1) {
 			lines[i] += ";"
 		}
