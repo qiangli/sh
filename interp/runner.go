@@ -868,6 +868,12 @@ func splitCompoundLine(line string) []string {
 		return out
 	case strings.HasPrefix(trim, "case "):
 		if !strings.HasSuffix(trim, " esac") {
+			// `case X in` (no body on this line — printer left
+			// the patterns and esac for following lines). bash
+			// 5.3 emits this with a trailing space: `case X in `.
+			if strings.HasSuffix(trim, " in") {
+				return []string{line + " "}
+			}
 			return []string{line}
 		}
 		return splitCaseLine(line, indent, trim)
@@ -1212,6 +1218,125 @@ func splitTopLevel(s, sep string) []string {
 	return out
 }
 
+// bashNestElifChain converts multi-line if-elif-else-fi chains in
+// declare -f output to bash 5.3's nested else/if/fi rendering. The
+// printer emits the source-level form (with the `elif` keyword); bash
+// rewrites it to nested ifs.
+//
+// Example transformation:
+//
+//	if X; then       →    if X; then
+//	    A                     A
+//	elif Y; then          else
+//	    B                     if Y; then
+//	else                          B
+//	    C                     else
+//	fi                            C
+//	                          fi
+//	                      fi
+//
+// The closing `fi` line keeps any trailing redirection.
+func bashNestElifChain(body string) string {
+	lines := strings.Split(body, "\n")
+	// Find if-chain bounds: groups of lines starting with `if ` and
+	// ending with `fi[ <redir>]` at the same indent that contain
+	// at least one `elif `. Convert each found chain.
+	for i := 0; i < len(lines); i++ {
+		ind := leadingSpaces(lines[i])
+		trim := strings.TrimSpace(lines[i])
+		if !strings.HasPrefix(trim, "if ") || !strings.HasSuffix(trim, "; then") {
+			continue
+		}
+		// Walk forward to find the matching `fi` at the same indent.
+		fiIdx := -1
+		hasElif := false
+		for j := i + 1; j < len(lines); j++ {
+			jInd := leadingSpaces(lines[j])
+			if jInd != ind {
+				continue
+			}
+			jTrim := strings.TrimSpace(lines[j])
+			if jTrim == "elif" || strings.HasPrefix(jTrim, "elif ") {
+				hasElif = true
+				continue
+			}
+			if jTrim == "fi" || strings.HasPrefix(jTrim, "fi ") || strings.HasPrefix(jTrim, "fi;") {
+				fiIdx = j
+				break
+			}
+			if strings.HasPrefix(jTrim, "if ") {
+				// nested same-indent if — give up; let recursion
+				// handle inner chains separately.
+				break
+			}
+		}
+		if fiIdx < 0 || !hasElif {
+			continue
+		}
+		// Convert lines [i..fiIdx] in place.
+		converted := convertElifBlock(lines[i:fiIdx+1], ind)
+		newLines := make([]string, 0, len(lines)-(fiIdx-i+1)+len(converted))
+		newLines = append(newLines, lines[:i]...)
+		newLines = append(newLines, converted...)
+		newLines = append(newLines, lines[fiIdx+1:]...)
+		lines = newLines
+		// Re-process from the same i to handle remaining elifs in
+		// chains converted into nested form (recursive nesting).
+		// The outer i still points at the converted `if X; then`
+		// line; the inner elif chain (now nested) needs another
+		// pass. Decrement i so the loop re-examines this line.
+		i = -1
+	}
+	return strings.Join(lines, "\n")
+}
+
+// convertElifBlock takes the lines of an if-elif-...-fi block (at
+// indent `ind`) and returns the bash 5.3 nested form. The original
+// block's first line is `if COND; then` at indent `ind`, and the
+// last is `fi[ <redir>]` at indent `ind`.
+func convertElifBlock(block []string, ind int) []string {
+	// Locate the FIRST `elif` line at indent ind; nest it.
+	for j := 1; j < len(block); j++ {
+		jInd := leadingSpaces(block[j])
+		if jInd != ind {
+			continue
+		}
+		jTrim := strings.TrimSpace(block[j])
+		if !strings.HasPrefix(jTrim, "elif ") {
+			continue
+		}
+		// Replace `elif COND; then` with `else` + nested
+		// `    if COND; then`. Then indent the rest of the
+		// block (until the trailing `fi`) by +4, and add an
+		// extra `fi` at indent+4 before the original `fi`.
+		out := make([]string, 0, len(block)+3)
+		out = append(out, block[:j]...) // up to (not including) the elif
+		out = append(out, strings.Repeat(" ", ind)+"else")
+		// Convert `elif COND; then` → `if COND; then` at ind+4.
+		condThen := strings.TrimPrefix(jTrim, "elif ")
+		out = append(out, strings.Repeat(" ", ind+4)+"if "+condThen)
+		// Re-indent the remainder (lines j+1 .. end-1) by +4.
+		for k := j + 1; k < len(block)-1; k++ {
+			out = append(out, "    "+block[k])
+		}
+		// Add nested `fi` at indent+4, then the original `fi`
+		// (with any trailing redir).
+		out = append(out, strings.Repeat(" ", ind+4)+"fi")
+		out = append(out, block[len(block)-1])
+		return out
+	}
+	return block
+}
+
+// leadingSpaces counts the number of leading space chars in s.
+func leadingSpaces(s string) int {
+	n := 0
+	for n < len(s) && s[n] == ' ' {
+		n++
+	}
+	return n
+}
+
 // bashArithSpace pads the contents of `((...))` and `$((...))` runs
 // with single spaces inside the parens to match bash 5.3's
 // `declare -f` rendering: `((i<3))` → `(( i<3 ))`. Skips already-
@@ -1336,6 +1461,8 @@ func bashDeclareFmt(body string, lastTop bool) string {
 	// `declare -f` even when the source was single-line; the
 	// printer collapses to single-line. Split here.
 	body = bashSplitCompound(body)
+	// bash 5.3 converts multi-line elif chains to nested else/if/fi.
+	body = bashNestElifChain(body)
 	lines := strings.Split(body, "\n")
 	inHdoc := ""
 	for i, raw := range lines {
