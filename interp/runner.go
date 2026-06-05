@@ -863,9 +863,19 @@ func bashDeclareFmt(body string, lastTop bool) string {
 				continue
 			}
 		}
-		// Block closers / openers: never add `;`.
+		// Block openers / mid-clauses: never add `;`.
 		switch trim {
-		case "fi", "done", "esac", "}", "{", "else", "do", "then":
+		case "{", "do", "then", "else":
+			continue
+		}
+		// Block closers (fi / done / esac / `}`) DO get `;` when
+		// followed by more statements in the body — only the last
+		// line of the function (lastTop && last i) is bare.
+		switch trim {
+		case "fi", "done", "esac", "}":
+			if !(lastTop && i == len(lines)-1) {
+				lines[i] += ";"
+			}
 			continue
 		}
 		for _, suffix := range []string{
