@@ -2611,7 +2611,7 @@ var runTests = []runTest{
 	},
 	{
 		"readonly a=1; echo $a; unset a; echo $a",
-		"1\na: readonly variable\n1\n #IGNORE bash prints a warning",
+		"1\nunset: a: cannot unset: readonly variable\n1\n #IGNORE bash prints a warning",
 	},
 	{
 		"f() { local a=1; echo $a; unset a; echo $a; }; f",
@@ -4069,7 +4069,7 @@ var runTestsUnix = []runTest{
 	},
 	{
 		`unset UID`,
-		"UID: readonly variable\n #IGNORE",
+		"unset: UID: cannot unset: readonly variable\nexit status 1 #IGNORE",
 	},
 	{
 		`test -n "$EUID" && echo OK`,
@@ -4081,12 +4081,12 @@ var runTestsUnix = []runTest{
 	},
 	{
 		`unset EUID`,
-		"EUID: readonly variable\n #IGNORE",
+		"unset: EUID: cannot unset: readonly variable\nexit status 1 #IGNORE",
 	},
 	// GID is not set in bash
 	{
 		`unset GID`,
-		"GID: readonly variable\n #IGNORE",
+		"unset: GID: cannot unset: readonly variable\nexit status 1 #IGNORE",
 	},
 	{
 		`[[ -z $GID ]] && echo "GID not set"`,

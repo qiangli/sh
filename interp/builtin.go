@@ -350,8 +350,21 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					// The nameref itself keeps the attribute
 					// (now pointing at an unset variable).
 					if vr.Str != "" {
+						tgt := r.lookupVar(vr.Str)
+						if tgt.ReadOnly {
+							r.errf("%sunset: %s: cannot unset: readonly variable\n",
+								r.bashErrPrefix(pos), vr.Str)
+							exit.code = 1
+							continue
+						}
 						r.delVar(vr.Str)
 					}
+					continue
+				}
+				if vr.ReadOnly {
+					r.errf("%sunset: %s: cannot unset: readonly variable\n",
+						r.bashErrPrefix(pos), arg)
+					exit.code = 1
 					continue
 				}
 				if vr.IsSet() {
