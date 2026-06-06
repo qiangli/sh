@@ -3188,7 +3188,16 @@ func (r *Runner) typeMatches(arg string, skipFuncs bool) []typeMatch {
 			desc: fmt.Sprintf("%s is a shell builtin", arg),
 		})
 	}
-	if path, err := LookPathDir(r.Dir, r.writeEnv, arg); err == nil {
+	// Check the command hash table before doing a PATH lookup.
+	// Bash uses the hashed entry directly (`<name> is hashed
+	// (<path>)`) even when the file no longer exists.
+	if path, ok := r.cmdHashTable[arg]; ok {
+		ms = append(ms, typeMatch{
+			kind: "file",
+			desc: fmt.Sprintf("%s is hashed (%s)", arg, path),
+			path: path,
+		})
+	} else if path, err := LookPathDir(r.Dir, r.writeEnv, arg); err == nil {
 		ms = append(ms, typeMatch{
 			kind: "file",
 			desc: fmt.Sprintf("%s is %s", arg, path),
