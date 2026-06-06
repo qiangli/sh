@@ -4161,10 +4161,39 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 		if err != nil {
 			return nil, err
 		}
+		// `exec {v}<<EOF` form: route the heredoc reader through a
+		// fresh fd and stash that fd in $v (globally — bash 5.3
+		// makes named-fd assignments visible outside any enclosing
+		// function).
+		if rd.N != nil {
+			val := rd.N.Value
+			if strings.HasPrefix(val, "{") && strings.HasSuffix(val, "}") {
+				name := val[1 : len(val)-1]
+				fd := r.allocateFd()
+				if err := r.setReadFd(fd, pr); err != nil {
+					return nil, err
+				}
+				r.setGlobalVarString(name, strconv.Itoa(fd))
+				return pr, nil
+			}
+		}
 		r.stdin = pr
 		return pr, nil
 	}
 
+	// Bash: when the target word of a non-heredoc redirect expands
+	// to zero or more than one field, emit "ambiguous redirect".
+	// Skip the check for here-string (`<<<`) since the entire word
+	// is treated as the body, not a filename.
+	if rd.Op != syntax.WordHdoc {
+		fields := r.fields(rd.Word)
+		if len(fields) != 1 {
+			var b bytes.Buffer
+			syntax.NewPrinter().Print(&b, rd.Word)
+			r.errf("%s%s: ambiguous redirect\n", r.bashErrPrefix(rd.Word.Pos()), b.String())
+			return nil, fmt.Errorf("ambiguous redirect")
+		}
+	}
 	arg := r.literal(rd.Word)
 	// targetFd is the fd this redirect operates on. -1 means "use the
 	// op's natural default" (fd 0 for input, fd 1 for output). N >= 3
@@ -4222,7 +4251,7 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 			return nil, err
 		}
 		if namedFDVar != "" {
-			r.setVarString(namedFDVar, strconv.Itoa(targetFd))
+			r.setGlobalVarString(namedFDVar, strconv.Itoa(targetFd))
 		}
 		// We write to the pipe in a new goroutine,
 		// as pipe writes may block once the buffer gets full.
@@ -4271,7 +4300,7 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 			return nil, err
 		}
 		if namedFDVar != "" {
-			r.setVarString(namedFDVar, strconv.Itoa(targetFd))
+			r.setGlobalVarString(namedFDVar, strconv.Itoa(targetFd))
 		}
 		return nil, nil
 	case syntax.DplIn:
@@ -4304,7 +4333,7 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 			return nil, err
 		}
 		if namedFDVar != "" {
-			r.setVarString(namedFDVar, strconv.Itoa(targetFd))
+			r.setGlobalVarString(namedFDVar, strconv.Itoa(targetFd))
 		}
 		return nil, nil
 	case syntax.RdrIn, syntax.RdrOut, syntax.AppOut,

@@ -562,6 +562,34 @@ func formatLocalVar(name string, vr expand.Variable) string {
 	return b.String()
 }
 
+// setGlobalVarString assigns name=value at the outermost (global)
+// scope, bypassing any in-flight function overlays. Used for bash
+// 5.3 `{var}` redirections, which set the captured fd globally even
+// when the redirect is inside a function body.
+func (r *Runner) setGlobalVarString(name, value string) {
+	vr := expand.Variable{Set: true, Kind: expand.String, Str: value}
+	env := r.writeEnv
+	for {
+		ol, ok := env.(*overlayEnviron)
+		if !ok || ol.parent == nil {
+			break
+		}
+		nextWE, ok := ol.parent.(*overlayEnviron)
+		if !ok {
+			break
+		}
+		env = nextWE
+	}
+	wenv, ok := env.(expand.WriteEnviron)
+	if !ok {
+		r.setVarString(name, value)
+		return
+	}
+	if err := wenv.Set(name, vr); err != nil {
+		r.setVarString(name, value)
+	}
+}
+
 func (r *Runner) delVar(name string) {
 	if err := r.writeEnv.Set(name, expand.Variable{}); err != nil {
 		r.errf("%s%s: %v\n", r.bashErrPrefix(r.curStmtPos), name, err)
