@@ -631,7 +631,7 @@ func Params(args ...string) RunnerOption {
 					// Accept-and-ignore single-letter options
 					// that bash supports but we don't model.
 					switch flag[1] {
-					case 'h', 'H', 'v', 'm', 'P', 'p', 'T', 'B', 'k', 'b', 't':
+					case 'h', 'H', 'v', 'm', 'P', 'p', 'T', 'B', 'b', 't':
 						continue
 					}
 					return fmt.Errorf("invalid option: %q", flag)
@@ -1027,6 +1027,7 @@ var posixOptsTable = [...]posixOpt{
 	{'x', "xtrace"},
 	{' ', "pipefail"},
 	{' ', "posix"},
+	{'k', "keyword"},
 }
 
 // noOpSetOptions are option names that `set -o NAME` / `set -H` etc. can
@@ -1050,7 +1051,6 @@ var noOpSetOptions = map[string]bool{
 	"privileged":           false,
 	"functrace":            false,
 	"braceexpand":          true, // always on
-	"keyword":              false,
 	"notify":               false,
 	"onecmd":               false,
 	"errtrace":             false, // set -E, listed by bash
@@ -1139,6 +1139,7 @@ const (
 	optXTrace
 	optPipeFail
 	optPosix
+	optKeyword
 
 	// These correspond to indexes (offset by the above seven items) of
 	// supported options in [bashOptsTable]

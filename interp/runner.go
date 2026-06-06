@@ -2966,10 +2966,15 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		// additional plain assignments. e.g.
 		//   a=5 b=6 $UNSET c=7 d=8
 		// becomes assignments a=5, b=6, c=7, d=8.
-		// Only fires when cm.Assigns is non-empty — keeps the
-		// brace-expanded `{a,b}=value` case (no leading assigns)
-		// on the cmd path so it errors as bash 3.x did.
-		if len(cm.Assigns) > 0 && len(fields) > 0 && fieldsAllAssignments(fields) {
+		// Also promote when `set -k` (keyword mode) is on: bash
+		// treats any `name=value` word anywhere on the line as
+		// part of the env, and when the command word disappears
+		// the assignments become plain global assignments.
+		// Without -k, only fires when cm.Assigns is non-empty —
+		// keeps the brace-expanded `{a,b}=value` case (no leading
+		// assigns) on the cmd path so it errors as bash 3.x did.
+		setK := r.opts[optKeyword]
+		if (len(cm.Assigns) > 0 || setK) && len(fields) > 0 && fieldsAllAssignments(fields) {
 			for _, f := range fields {
 				eq := strings.IndexByte(f, '=')
 				name := f[:eq]
