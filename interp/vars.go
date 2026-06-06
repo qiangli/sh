@@ -534,6 +534,97 @@ func (r *Runner) printLocalVars() {
 	}
 }
 
+// printArrayVars writes every variable of the requested array kind
+// (`-A` associative, `-a` indexed) to stdout in declare -p format,
+// sorted by name. Built-in bash arrays (BASH_ALIASES, BASH_CMDS,
+// BASH_ARGC, …) appear alongside user-declared ones so scripts
+// that probe `declare -A` see them.
+func (r *Runner) printArrayVars(kind string) {
+	want := expand.Associative
+	flag := "-A"
+	if kind == "-a" {
+		want = expand.Indexed
+		flag = "-a"
+	}
+	seen := map[string]bool{}
+	add := func(name string) {
+		if !seen[name] {
+			seen[name] = true
+		}
+	}
+	// Built-in arrays that bash always exposes — pull them so they
+	// list even when the user hasn't touched the variable.
+	if want == expand.Associative {
+		for _, n := range []string{"BASH_ALIASES", "BASH_CMDS"} {
+			add(n)
+		}
+	} else {
+		for _, n := range []string{"BASH_ARGC", "BASH_ARGV", "BASH_LINENO", "BASH_SOURCE", "DIRSTACK", "FUNCNAME"} {
+			add(n)
+		}
+	}
+	r.writeEnv.Each(func(name string, vr expand.Variable) bool {
+		if vr.Kind == want {
+			add(name)
+		}
+		return true
+	})
+	names := make([]string, 0, len(seen))
+	for n := range seen {
+		names = append(names, n)
+	}
+	slices.Sort(names)
+	for _, name := range names {
+		vr := r.lookupVar(name)
+		if vr.Kind != want {
+			continue
+		}
+		// Bash convention for built-in associative arrays —
+		// BASH_ALIASES, BASH_CMDS — uses `=()` even when empty.
+		// User-declared empty associative arrays render without
+		// the `=()` suffix (just `declare -A NAME`).
+		isBuiltin := false
+		switch name {
+		case "BASH_ALIASES", "BASH_CMDS", "BASH_ARGC", "BASH_ARGV", "BASH_LINENO", "BASH_SOURCE", "DIRSTACK", "FUNCNAME":
+			isBuiltin = true
+		}
+		switch vr.Kind {
+		case expand.Indexed:
+			if len(vr.List) == 0 {
+				r.outf("declare %s %s=()\n", flag, name)
+				continue
+			}
+			r.outf("declare %s %s=(", flag, name)
+			for i, v := range vr.List {
+				if i > 0 {
+					r.out(" ")
+				}
+				fmt.Fprintf(r.stdout, "[%d]=%s", i, bashDeclareQuote(v))
+			}
+			r.out(")\n")
+		case expand.Associative:
+			if len(vr.Map) == 0 {
+				if isBuiltin {
+					r.outf("declare %s %s=()\n", flag, name)
+				} else {
+					r.outf("declare %s %s\n", flag, name)
+				}
+				continue
+			}
+			r.outf("declare %s %s=(", flag, name)
+			first := true
+			for _, k := range expand.AssocKeysInBashOrder(vr.Map) {
+				if !first {
+					r.out(" ")
+				}
+				first = false
+				fmt.Fprintf(r.stdout, "[%s]=%s", k, bashDeclareQuote(vr.Map[k]))
+			}
+			r.out(" )\n")
+		}
+	}
+}
+
 // printNamerefVars writes every nameref-typed variable to stdout in
 // bash's `declare -n NAME="target"` format, sorted by name. Used
 // by `typeset -n` / `declare -n` with no arguments.

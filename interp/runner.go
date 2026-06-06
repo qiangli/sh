@@ -3899,6 +3899,12 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		if !declHadNames && valType == "-n" && declQuery == "" {
 			r.printNamerefVars()
 		}
+		// `declare -A` / `declare -a` with no name lists every
+		// array variable of that kind, including bash's built-in
+		// arrays (BASH_ALIASES, BASH_CMDS, BASH_ARGC, …).
+		if !declHadNames && (valType == "-A" || valType == "-a") && declQuery == "" {
+			r.printArrayVars(valType)
+		}
 	case *syntax.TimeClause:
 		// bash 5.3 only prints timing output for the outermost
 		// `time` keyword in a stack of nested `time` clauses;
