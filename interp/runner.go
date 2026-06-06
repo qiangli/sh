@@ -4434,7 +4434,11 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 				fdStr := r.lookupVar(name).String()
 				n, err := strconv.Atoi(fdStr)
 				if err != nil || n < 0 {
-					return nil, fmt.Errorf("invalid fd in $%s: %q", name, fdStr)
+					// Bash 5.3: `exec {v}>&-` with $v unset
+					// or non-numeric emits `v: ambiguous
+					// redirect` (single error message).
+					r.errf("%s%s: ambiguous redirect\n", r.bashErrPrefix(rd.Pos()), name)
+					return nil, fmt.Errorf("%s: ambiguous redirect", name)
 				}
 				targetFd = n
 			} else {
