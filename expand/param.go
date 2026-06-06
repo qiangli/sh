@@ -283,7 +283,9 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 		case pe.Index != nil && vr.Kind == Associative:
 			strs = slices.AppendSeq(strs, maps.Keys(vr.Map))
 		case !vr.IsSet():
-			return "", fmt.Errorf("invalid indirect expansion")
+			// Bash 5.3 includes the variable name in the message
+			// (`./file: line N: foo: invalid indirect expansion`).
+			return "", fmt.Errorf("%s: invalid indirect expansion", name)
 		case str == "":
 			return "", nil
 		default:

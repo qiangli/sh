@@ -613,7 +613,7 @@ var runTests = []runTest{
 	{"set -- a bc; echo ${#@} ${#*} $#", "2 2 2\n"},
 	{
 		"echo ${!a}; echo more",
-		"invalid indirect expansion\nexit status 1 #JUSTERR",
+		"a: invalid indirect expansion\nexit status 1 #JUSTERR",
 	},
 	{
 		"a=b; echo ${!a}; b=c; echo ${!a}",
