@@ -456,6 +456,12 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		}
 	case "break", "continue":
 		if !r.inLoop {
+			// Bash 5.3 in POSIX mode silently treats break/continue
+			// outside a loop as a no-op (returns 0), instead of
+			// emitting the "only meaningful in a loop" diagnostic.
+			if r.opts[optPosix] {
+				break
+			}
 			return failf(0, "%s: only meaningful in a `for', `while', or `until' loop\n", name)
 		}
 		enclosing := &r.breakEnclosing
