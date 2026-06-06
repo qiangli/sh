@@ -307,6 +307,12 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				nameref = true
 				funcs = false
 			default:
+				if len(arg) > 1 && arg[0] == '-' {
+					r.errf("%sunset: %s: invalid option\n", r.bashErrPrefix(pos), arg)
+					r.errf("unset: usage: unset [-f] [-v] [-n] [name ...]\n")
+					exit.code = 2
+					return exit
+				}
 				args = args[i:]
 				break unsetOpts
 			}
@@ -354,6 +360,12 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				}
 			}
 			if _, ok := r.Funcs[arg]; ok && funcs {
+				if r.readonlyFuncs[arg] {
+					r.errf("%sunset: %s: cannot unset: readonly function\n",
+						r.bashErrPrefix(pos), arg)
+					exit.code = 1
+					continue
+				}
 				delete(r.Funcs, arg)
 			}
 		}

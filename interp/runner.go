@@ -3425,6 +3425,14 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			r.exit.exiting = true
 			return
 		}
+		// Bash rejects redefinition of a readonly function with
+		// `<file>: line N: NAME: readonly function`.
+		if r.readonlyFuncs[name] {
+			r.errf("%s%s: readonly function\n",
+				r.bashErrPrefix(cm.Position), name)
+			r.exit.code = 1
+			return
+		}
 		r.setFunc(name, cm.Body)
 	case *syntax.ArithmCmd:
 		if tracingEnabled {
