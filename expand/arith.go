@@ -14,6 +14,21 @@ import (
 // TODO(v4): the arithmetic APIs should return int64 for portability with 32-bit systems,
 // even if Bash only supports native int sizes.
 
+// isAllDigits reports whether s is non-empty and consists entirely
+// of ASCII digits (no sign, no separators).
+func isAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 // containsArithOp reports whether s contains a character that would
 // make it an arithmetic expression rather than a bare identifier or
 // number literal. Used to decide whether the string form of an arith
@@ -71,20 +86,30 @@ func Arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 	case *syntax.UnaryArithm:
 		switch expr.Op {
 		case syntax.Inc, syntax.Dec:
-			// Bash 5.3: `7++` → "attempted assignment to
-			// non-variable"; `--x++` (compound) → "assignment
-			// requires lvalue". Increment / decrement require an
-			// identifier on X; literals, parenthesised expressions,
-			// or nested unary/binary trees aren't lvalues.
+			// Bash 5.3 distinguishes:
+			//   - `7++` / `7--` (literal number) — treats as a
+			//     parse-time syntax error: "arithmetic syntax
+			//     error: operand expected (error token is "+ ")".
+			//     The parser splits `++` into `+ +`; the trailing
+			//     `+` is a unary operator missing its operand.
+			//   - `--x++` (compound expression) — "assignment
+			//     requires lvalue".
+			//   - other non-name lvalues — "attempted assignment to
+			//     non-variable".
 			op := "++"
+			tail := "+ "
 			if expr.Op == syntax.Dec {
 				op = "--"
+				tail = "- "
 			}
 			w, ok := expr.X.(*syntax.Word)
 			if !ok {
 				return 0, fmt.Errorf("%s: assignment requires lvalue (error token is %q)", op, op)
 			}
 			name := w.Lit()
+			if name != "" && isAllDigits(name) {
+				return 0, fmt.Errorf("arithmetic syntax error: operand expected (error token is %q)", tail)
+			}
 			if !syntax.ValidName(name) {
 				return 0, fmt.Errorf("attempted assignment to non-variable (error token is %q)", op)
 			}

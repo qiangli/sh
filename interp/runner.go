@@ -286,6 +286,17 @@ func (r *Runner) expandErr(err error) {
 		return
 	}
 	errMsg := err.Error()
+	// Bash 5.3 prefixes arithmetic errors that surface during
+	// expansion (`$(( ))`, `let`, etc.) with the standard
+	// `<file>: line N:` framing and re-states the offending
+	// expression. The wrapper isn't applied when the error
+	// already carries the framing (arithm()'s own path) or when
+	// the runner doesn't request bash-compatible wording.
+	if r.bashCompatErrors && !strings.HasPrefix(errMsg, r.bashErrPrefix(r.curStmtPos)) {
+		if looksLikeArithError(errMsg) {
+			errMsg = r.bashErrPrefix(r.curStmtPos) + errMsg
+		}
+	}
 	fmt.Fprintln(r.stderr, errMsg)
 	switch {
 	case errors.As(err, &expand.UnsetParameterError{}):
@@ -297,6 +308,26 @@ func (r *Runner) expandErr(err error) {
 	}
 	r.exit.code = 1
 	r.exit.exiting = true
+}
+
+// looksLikeArithError reports whether the given expand-time error
+// message originated from arithmetic evaluation. Heuristic — covers
+// the wordings produced by [expand.Arithm] so we can add the bash
+// 5.3 `<file>: line N:` prefix uniformly.
+func looksLikeArithError(msg string) bool {
+	switch {
+	case strings.Contains(msg, "error token is"),
+		strings.Contains(msg, "division by"),
+		strings.Contains(msg, "attempted assignment to non-variable"),
+		strings.Contains(msg, "arithmetic syntax error"),
+		strings.Contains(msg, "invalid arithmetic"),
+		strings.Contains(msg, "invalid integer constant"),
+		strings.Contains(msg, "value too great for base"),
+		strings.Contains(msg, "exponent less than 0"),
+		strings.Contains(msg, "expression expected"):
+		return true
+	}
+	return false
 }
 
 func (r *Runner) arithm(expr syntax.ArithmExpr) int {
