@@ -70,6 +70,23 @@ func overridingUnset(pe *syntax.ParamExp) bool {
 	return false
 }
 
+func bashAlternateCommandSubstEOF(word *syntax.Word) bool {
+	if word == nil {
+		return false
+	}
+	for _, part := range word.Parts {
+		sq, ok := part.(*syntax.SglQuoted)
+		if !ok {
+			continue
+		}
+		idx := strings.Index(sq.Value, "$(")
+		if idx >= 0 && !strings.Contains(sq.Value[idx+2:], ")") {
+			return true
+		}
+	}
+	return false
+}
+
 // bashAssocBucket computes the bucket index bash 5.3 stores an
 // associative-array key in — FNV-1 with the historical initial
 // value (2166136261) and prime (16777619), modulo 1024 (bash's
@@ -370,16 +387,20 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 		if pe.Repl.All {
 			n = -1
 		}
-		locs := findAllIndex(orig, str, n)
-		sb := cfg.strBuilder()
-		last := 0
-		for _, loc := range locs {
-			sb.WriteString(str[last:loc[0]])
-			sb.WriteString(with)
-			last = loc[1]
+		out := slices.Clone(elems)
+		for i, elem := range out {
+			locs := findAllIndex(orig, elem, n)
+			sb := cfg.strBuilder()
+			last := 0
+			for _, loc := range locs {
+				sb.WriteString(elem[last:loc[0]])
+				sb.WriteString(with)
+				last = loc[1]
+			}
+			sb.WriteString(elem[last:])
+			out[i] = sb.String()
 		}
-		sb.WriteString(str[last:])
-		str = sb.String()
+		str = strings.Join(out, " ")
 	case pe.Exp != nil:
 		// Bash 5.3 keeps `$'…'` ANSI-C sequences literal inside the
 		// substitute text of a default-value parameter expansion
@@ -419,6 +440,9 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			fallthrough
 		case syntax.AlternateUnset:
 			if vr.IsSet() {
+				if bashAlternateCommandSubstEOF(pe.Exp.Word) {
+					return "", fmt.Errorf("command substitution: line %d: unexpected EOF while looking for matching `)'", pe.Pos().Line()+2)
+				}
 				str = arg
 			}
 		case syntax.DefaultUnset:
@@ -458,10 +482,11 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			syntax.RemSmallSuffix, syntax.RemLargeSuffix:
 			suffix := op == syntax.RemSmallSuffix || op == syntax.RemLargeSuffix
 			small := op == syntax.RemSmallPrefix || op == syntax.RemSmallSuffix
-			for i, elem := range elems {
-				elems[i] = removePattern(elem, arg, suffix, small)
+			out := slices.Clone(elems)
+			for i, elem := range out {
+				out[i] = removePattern(elem, arg, suffix, small)
 			}
-			str = strings.Join(elems, " ")
+			str = strings.Join(out, " ")
 		case syntax.UpperFirst, syntax.UpperAll,
 			syntax.LowerFirst, syntax.LowerAll,
 			syntax.CaseToggleFirst, syntax.CaseToggleAll:

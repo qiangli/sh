@@ -112,7 +112,8 @@ type Runner struct {
 
 	usedNew bool
 
-	filename string // only if Node was a File
+	filename      string // only if Node was a File
+	commandString bool
 
 	// curStmtPos is the position of the currently executing top-level
 	// statement, updated at the top of stmtSync. Error sites that have
@@ -120,6 +121,11 @@ type Runner struct {
 	// reached via paths that don't carry a Pos) use it to drive
 	// [Runner.bashErrPrefix] so the `<file>: line N:` prefix lands.
 	curStmtPos syntax.Pos
+
+	// enclosingSubshellEnd is set while executing statements inside a
+	// foreground subshell. Bash 5.3 reports some fatal declaration errors
+	// at the closing ")" rather than at the inner declaration.
+	enclosingSubshellEnd syntax.Pos
 
 	// setVarFromBuiltin is non-empty while a declare-family builtin
 	// (declare/typeset/local/readonly/export) is parsing a string
@@ -229,12 +235,13 @@ type Runner struct {
 
 	opts runnerOpts
 
-	origDir    string
-	origParams []string
-	origOpts   runnerOpts
-	origStdin  *os.File
-	origStdout io.Writer
-	origStderr io.Writer
+	origDir          string
+	origParams       []string
+	origOpts         runnerOpts
+	origNoOpSetState map[string]bool
+	origStdin        *os.File
+	origStdout       io.Writer
+	origStderr       io.Writer
 
 	// Most scripts don't use pushd/popd, so make space for the initial PWD
 	// without requiring an extra allocation.
@@ -254,11 +261,15 @@ type Runner struct {
 	// callStack tracks function call frames for caller/BASH_SOURCE/BASH_LINENO/FUNCNAME.
 	callStack []callFrame
 
-	// cmdHashTable caches resolved command paths for the hash builtin.
-	cmdHashTable map[string]string
+	// cmdHashTable caches resolved command paths and lookup counts for the hash builtin.
+	cmdHashTable map[string]cmdHashEntry
 
 	// disabledBuiltins tracks builtins disabled via "enable -n".
 	disabledBuiltins map[string]bool
+
+	// completionSpecs stores programmable-completion specs registered
+	// via the complete builtin.
+	completionSpecs map[string]completionSpec
 
 	// noOpSetState tracks the on/off state of accept-and-ignore
 	// `set -o` options (history, monitor, privileged, etc.). The
@@ -615,6 +626,15 @@ func Interactive(enabled bool) RunnerOption {
 	}
 }
 
+// CommandString marks the runner as executing a command supplied via
+// Bash's `-c` mode. This affects dynamic shell state such as `$-`.
+func CommandString(enabled bool) RunnerOption {
+	return func(r *Runner) error {
+		r.commandString = enabled
+		return nil
+	}
+}
+
 // Params populates the shell options and parameters. For example, Params("-e",
 // "--", "foo") will set the "-e" option and the parameters ["foo"], and
 // Params("+e") will unset the "-e" option and leave the parameters untouched.
@@ -634,6 +654,25 @@ func Params(args ...string) RunnerOption {
 			}
 			enable := flag[0] == '-'
 			if flag[1] != 'o' {
+				if flag[1] == 'O' {
+					value := fp.value()
+					opt, supported := r.bashOptByName(value)
+					if opt == nil || !supported {
+						return fmt.Errorf("invalid option: %q", value)
+					}
+					*opt = enable
+					continue
+				}
+				if flag[1] == 'B' {
+					if r.noOpSetState == nil {
+						r.noOpSetState = make(map[string]bool)
+					}
+					r.noOpSetState["braceexpand"] = enable
+					continue
+				}
+				if flag == "+r" {
+					return fmt.Errorf("+r: invalid option")
+				}
 				opt := r.posixOptByFlag(flag[1])
 				if opt == nil {
 					// Accept-and-ignore single-letter options
@@ -659,6 +698,9 @@ func Params(args ...string) RunnerOption {
 				}
 				var list []oentry
 				for i, opt := range &posixOptsTable {
+					if opt.name == "restricted" {
+						continue
+					}
 					list = append(list, oentry{opt.name, r.opts[i]})
 				}
 				for n, on := range noOpSetOptions {
@@ -681,6 +723,9 @@ func Params(args ...string) RunnerOption {
 				}
 				var list []oentry
 				for i, opt := range &posixOptsTable {
+					if opt.name == "restricted" {
+						continue
+					}
 					list = append(list, oentry{opt.name, r.opts[i]})
 				}
 				for n, on := range noOpSetOptions {
@@ -713,6 +758,9 @@ func Params(args ...string) RunnerOption {
 					continue
 				}
 				return fmt.Errorf("invalid option: %q", value)
+			}
+			if value == "restricted" && !enable {
+				return fmt.Errorf("restricted: invalid option name")
 			}
 			*opt = enable
 		}
@@ -1035,6 +1083,7 @@ var posixOptsTable = [...]posixOpt{
 	{'x', "xtrace"},
 	{' ', "pipefail"},
 	{' ', "posix"},
+	{'r', "restricted"},
 	{'k', "keyword"},
 }
 
@@ -1084,10 +1133,10 @@ var bashOptsTable = [...]bashOpt{
 	{name: "bash_source_fullpath"},
 	{name: "cdable_vars"},
 	{name: "cdspell"},
-	{name: "checkhash"},
+	{name: "checkhash", supported: true},
 	{name: "checkjobs"},
-	{name: "checkwinsize", defaultState: true},
-	{name: "cmdhist", defaultState: true},
+	{name: "checkwinsize", defaultState: true, supported: true},
+	{name: "cmdhist", defaultState: true, supported: true},
 	{name: "compat31"},
 	{name: "compat32"},
 	{name: "compat40"},
@@ -1095,24 +1144,24 @@ var bashOptsTable = [...]bashOpt{
 	{name: "compat42"},
 	{name: "compat43"},
 	{name: "compat44"},
-	{name: "complete_fullquote", defaultState: true},
+	{name: "complete_fullquote", defaultState: true, supported: true},
 	{name: "direxpand"},
 	{name: "dirspell"},
 	{name: "execfail"},
 	{name: "extdebug", supported: true},
-	{name: "extquote", defaultState: true},
+	{name: "extquote", defaultState: true, supported: true},
 	{name: "failglob", supported: true},
-	{name: "force_fignore", defaultState: true},
+	{name: "force_fignore", defaultState: true, supported: true},
 	{name: "globasciiranges", defaultState: true, supported: true},
-	{name: "globskipdots", defaultState: true},
+	{name: "globskipdots", defaultState: true, supported: true},
 	{name: "gnu_errfmt"},
 	{name: "histappend"},
 	{name: "histreedit"},
 	{name: "histverify"},
-	{name: "hostcomplete", defaultState: true},
+	{name: "hostcomplete", defaultState: true, supported: true},
 	{name: "huponexit", supported: true},
 	{name: "inherit_errexit", supported: true},
-	{name: "interactive_comments", defaultState: true},
+	{name: "interactive_comments", defaultState: true, supported: true},
 	{name: "lastpipe", supported: true},
 	{name: "lithist"},
 	{name: "localvar_inherit"},
@@ -1122,10 +1171,10 @@ var bashOptsTable = [...]bashOpt{
 	{name: "no_empty_cmd_completion"},
 	{name: "nocasematch", supported: true},
 	{name: "noexpand_translation"},
-	{name: "patsub_replacement", defaultState: true},
-	{name: "progcomp", defaultState: true},
+	{name: "patsub_replacement", defaultState: true, supported: true},
+	{name: "progcomp", defaultState: true, supported: true},
 	{name: "progcomp_alias"},
-	{name: "promptvars", defaultState: true},
+	{name: "promptvars", defaultState: true, supported: true},
 	{name: "restricted_shell"},
 	{name: "shift_verbose"},
 	{name: "sourcepath", defaultState: true, supported: true},
@@ -1147,6 +1196,7 @@ const (
 	optXTrace
 	optPipeFail
 	optPosix
+	optRestricted
 	optKeyword
 
 	// These correspond to indexes (offset by the above seven items) of
@@ -1174,6 +1224,7 @@ func (r *Runner) Reset() {
 		r.origDir = r.Dir
 		r.origParams = r.Params
 		r.origOpts = r.opts
+		r.origNoOpSetState = maps.Clone(r.noOpSetState)
 		r.origStdin = r.stdin
 		r.origStdout = r.stdout
 		r.origStderr = r.stderr
@@ -1216,19 +1267,21 @@ func (r *Runner) Reset() {
 		// These can be set by functions like [Dir] or [Params], but
 		// builtins can overwrite them; reset the fields to whatever the
 		// constructor set up.
-		Dir:    r.origDir,
-		Params: r.origParams,
-		opts:   r.origOpts,
-		stdin:  r.origStdin,
-		stdout: r.origStdout,
-		stderr: r.origStderr,
+		Dir:          r.origDir,
+		Params:       r.origParams,
+		opts:         r.origOpts,
+		noOpSetState: maps.Clone(r.origNoOpSetState),
+		stdin:        r.origStdin,
+		stdout:       r.origStdout,
+		stderr:       r.origStderr,
 
-		origDir:    r.origDir,
-		origParams: r.origParams,
-		origOpts:   r.origOpts,
-		origStdin:  r.origStdin,
-		origStdout: r.origStdout,
-		origStderr: r.origStderr,
+		origDir:          r.origDir,
+		origParams:       r.origParams,
+		origOpts:         r.origOpts,
+		origNoOpSetState: maps.Clone(r.origNoOpSetState),
+		origStdin:        r.origStdin,
+		origStdout:       r.origStdout,
+		origStderr:       r.origStderr,
 
 		// emptied below, to reuse the space
 		Vars: r.Vars,
@@ -1252,6 +1305,7 @@ func (r *Runner) Reset() {
 		deterministic:     r.deterministic,
 		deterministicSeed: r.deterministicSeed,
 		deterministicRng:  r.deterministicRng,
+		commandString:     r.commandString,
 		// fdTable is intentionally not preserved across Reset; a reset
 		// runner starts with no inherited non-stdio fds.
 	}
@@ -1412,23 +1466,26 @@ func (r *Runner) subshell(background bool) *Runner {
 	// Keep in sync with the Runner type. Manually copy fields, to not copy
 	// sensitive ones like [errgroup.Group], and to do deep copies of slices.
 	r2 := &Runner{
-		Dir:            r.Dir,
-		tempDir:        r.tempDir,
-		Params:         r.Params,
-		callHandler:    r.callHandler,
-		execHandler:    r.execHandler,
-		openHandler:    r.openHandler,
-		readDirHandler: r.readDirHandler,
-		statHandler:    r.statHandler,
-		stdin:          r.stdin,
-		stdout:         r.stdout,
-		stderr:         r.stderr,
-		filename:       r.filename,
-		opts:           r.opts,
-		usedNew:        r.usedNew,
-		exit:           r.exit,
-		lastExit:       r.lastExit,
-		bgPidCallback:  r.bgPidCallback,
+		Dir:                  r.Dir,
+		tempDir:              r.tempDir,
+		Params:               r.Params,
+		callHandler:          r.callHandler,
+		execHandler:          r.execHandler,
+		openHandler:          r.openHandler,
+		readDirHandler:       r.readDirHandler,
+		statHandler:          r.statHandler,
+		stdin:                r.stdin,
+		stdout:               r.stdout,
+		stderr:               r.stderr,
+		filename:             r.filename,
+		curStmtPos:           r.curStmtPos,
+		enclosingSubshellEnd: r.enclosingSubshellEnd,
+		opts:                 r.opts,
+		noOpSetState:         maps.Clone(r.noOpSetState),
+		usedNew:              r.usedNew,
+		exit:                 r.exit,
+		lastExit:             r.lastExit,
+		bgPidCallback:        r.bgPidCallback,
 
 		origStdout: r.origStdout, // used for process substitutions
 

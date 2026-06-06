@@ -2019,9 +2019,15 @@ func (cfg *Config) quotedElemFields(pe *syntax.ParamExp) []string {
 			}
 		}
 	}
-	// Casemod / pattern-substitution / prefix-removal operators
-	// need per-element processing by the full paramExp path, so
-	// return nil here and let the caller fall back to it.
+	if elems := cfg.quotedReplElemFields(pe); elems != nil {
+		return elems
+	}
+	if elems := cfg.quotedRemoveElemFields(pe); elems != nil {
+		return elems
+	}
+	// Casemod operators need per-element processing by the full
+	// paramExp path, so return nil here and let the caller fall back
+	// to it.
 	if pe.Exp != nil || pe.Repl != nil {
 		return nil
 	}
@@ -2077,6 +2083,112 @@ func (cfg *Config) quotedElemFields(pe *syntax.ParamExp) []string {
 		}
 	}
 	return nil
+}
+
+func (cfg *Config) quotedAllElemValues(pe *syntax.ParamExp) []string {
+	name := pe.Param.Value
+	switch name {
+	case "*":
+		return []string{cfg.ifsJoin(cfg.sliceElems(pe, cfg.Env.Get(name).List, true))}
+	case "@":
+		return cfg.sliceElems(pe, cfg.Env.Get(name).List, true)
+	default:
+		switch nodeLit(pe.Index) {
+		case "@":
+			vr := cfg.Env.Get(name)
+			switch vr.Kind {
+			case Indexed:
+				return cfg.sliceElems(pe, vr.List, false)
+			case Associative:
+				keys := AssocKeysInBashOrder(vr.Map)
+				elems := make([]string, len(keys))
+				for i, k := range keys {
+					elems[i] = vr.Map[k]
+				}
+				return elems
+			}
+		case "*":
+			if vr := cfg.Env.Get(name); vr.Kind == Indexed {
+				return []string{cfg.ifsJoin(cfg.sliceElems(pe, vr.List, false))}
+			}
+		}
+	}
+	return nil
+}
+
+func (cfg *Config) quotedReplElemFields(pe *syntax.ParamExp) []string {
+	if pe == nil || pe.Repl == nil || pe.Length || pe.Width || pe.IsSet || pe.Excl {
+		return nil
+	}
+	elems := cfg.quotedAllElemValues(pe)
+	if elems == nil {
+		return nil
+	}
+	orig, err := Pattern(cfg, pe.Repl.Orig)
+	if err != nil || orig == "" {
+		return nil
+	}
+	var with string
+	if pe.Repl.With != nil {
+		var sb strings.Builder
+		for _, part := range pe.Repl.With.Parts {
+			if lit, ok := part.(*syntax.Lit); ok {
+				sb.WriteString(stripBackslashEscapes(lit.Value))
+				continue
+			}
+			s, lerr := Literal(cfg, &syntax.Word{Parts: []syntax.WordPart{part}})
+			if lerr != nil {
+				return nil
+			}
+			sb.WriteString(s)
+		}
+		with = sb.String()
+	}
+	n := 1
+	if pe.Repl.All {
+		n = -1
+	}
+	out := make([]string, len(elems))
+	for i, elem := range elems {
+		locs := findAllIndex(orig, elem, n)
+		var sb strings.Builder
+		last := 0
+		for _, loc := range locs {
+			sb.WriteString(elem[last:loc[0]])
+			sb.WriteString(with)
+			last = loc[1]
+		}
+		sb.WriteString(elem[last:])
+		out[i] = sb.String()
+	}
+	return out
+}
+
+func (cfg *Config) quotedRemoveElemFields(pe *syntax.ParamExp) []string {
+	if pe == nil || pe.Exp == nil || pe.Length || pe.Width || pe.IsSet || pe.Excl {
+		return nil
+	}
+	op := pe.Exp.Op
+	isPatternOp := op == syntax.RemSmallPrefix || op == syntax.RemLargePrefix ||
+		op == syntax.RemSmallSuffix || op == syntax.RemLargeSuffix
+	if !isPatternOp {
+		return nil
+	}
+	elems := cfg.quotedAllElemValues(pe)
+	if elems == nil {
+		return nil
+	}
+	arg, err := Pattern(cfg, pe.Exp.Word)
+	if err != nil {
+		return nil
+	}
+	suffix := op == syntax.RemSmallSuffix || op == syntax.RemLargeSuffix
+	small := op == syntax.RemSmallPrefix || op == syntax.RemSmallSuffix
+	out := make([]string, len(elems))
+	for i, elem := range elems {
+		out[i] = removePattern(elem, arg, suffix, small)
+	}
+	return out
 }
 
 // sliceElems applies ${var:offset:length} slicing to a list of elements.
@@ -2509,7 +2621,7 @@ func ReadFields(cfg *Config, s string, n int, raw bool) []string {
 	// empty fields), while whitespace runs collapse and are
 	// stripped at the edges.
 	isIFSWhitespace := func(r rune) bool {
-		return (r == ' ' || r == '\t' || r == '\n') && cfg.ifsRune(r)
+		return (r == ' ' || r == '\t' || r == '\n' || r == '\r' || r == '\f' || r == '\v') && cfg.ifsRune(r)
 	}
 	isIFSSeparator := func(r rune) bool {
 		return cfg.ifsRune(r) && !isIFSWhitespace(r)
@@ -2573,7 +2685,7 @@ func ReadFields(cfg *Config, s string, n int, raw bool) []string {
 	// in IFS. Non-ASCII bytes (including invalid UTF-8) are never
 	// considered whitespace.
 	isWSByte := func(b byte) bool {
-		if b != ' ' && b != '\t' && b != '\n' {
+		if b != ' ' && b != '\t' && b != '\n' && b != '\r' && b != '\f' && b != '\v' {
 			return false
 		}
 		return cfg.ifsRune(rune(b))

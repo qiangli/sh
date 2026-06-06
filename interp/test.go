@@ -285,6 +285,46 @@ func (r *Runner) statMode(ctx context.Context, name string, mode os.FileMode) bo
 	return err == nil && info.Mode()&mode != 0
 }
 
+func (r *Runner) testFdPath(name string, mode uint32) (bool, bool) {
+	var fd int
+	switch name {
+	case "/dev/stdin":
+		fd = 0
+	case "/dev/stdout":
+		fd = 1
+	case "/dev/stderr":
+		fd = 2
+	default:
+		const prefix = "/dev/fd/"
+		if !strings.HasPrefix(name, prefix) {
+			return false, false
+		}
+		n, err := strconv.Atoi(name[len(prefix):])
+		if err != nil {
+			return true, false
+		}
+		fd = n
+	}
+	var f any
+	switch fd {
+	case 0:
+		f = r.stdin
+	case 1:
+		f = r.stdout
+	case 2:
+		f = r.stderr
+	default:
+		f = r.fdTable[fd]
+	}
+	if f == nil {
+		return true, false
+	}
+	// Bash treats these pseudo-paths as probes of the currently open
+	// descriptor. For descriptors we own, existence is the best
+	// signal available without performing a destructive read/write.
+	return true, mode&(access_R_OK|access_W_OK) != 0
+}
+
 // These are copied from x/sys/unix as we can't import it here.
 const (
 	access_R_OK = 0x4
@@ -330,8 +370,14 @@ func (r *Runner) unTest(ctx context.Context, op syntax.UnTestOperator, x string)
 		}
 		return modifiedSinceAccessed(info)
 	case syntax.TsRead:
+		if ok, result := r.testFdPath(x, access_R_OK); ok {
+			return result
+		}
 		return r.access(ctx, r.absPath(x), access_R_OK) == nil
 	case syntax.TsWrite:
+		if ok, result := r.testFdPath(x, access_W_OK); ok {
+			return result
+		}
 		return r.access(ctx, r.absPath(x), access_W_OK) == nil
 	case syntax.TsExec:
 		return r.access(ctx, r.absPath(x), access_X_OK) == nil

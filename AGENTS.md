@@ -1,0 +1,38 @@
+# Repository Guidelines
+
+## Project Structure & Module Organization
+- This repository is a Go workspace for `mvdan.cc/sh/v3`, a shell parser, formatter, and interpreter.
+- Core packages live in top-level directories such as `syntax/`, `interp/`, `expand/`, `shell/`, `pattern/`, and `fileutil/`.
+- Command-line tools are under `cmd/`: `cmd/shfmt`, `cmd/gosh`, and `cmd/bashy`.
+- `moreinterp/` is a separate Go module for extended interpreter behavior.
+- Tests usually sit beside the code they cover as `*_test.go`. Bash compatibility fixtures live under `external/bash-5.3/tests/`.
+
+## Build, Test, and Development Commands
+- `make build` builds the main binaries into `bin/`.
+- `go test ./...` runs the Go test suite across all packages.
+- `make test` runs the same full Go test sweep from the repository root.
+- `make test-bash` runs the Bash 5.3 compatibility suite against `bashy`; it is slower and depends on `external/bash-5.3/tests/`.
+- `make tidy` runs `go mod tidy`, `gofmt -s -w .`, and `go vet ./...`.
+- `make clean` removes the `bin/` directory.
+
+## Coding Style & Naming Conventions
+- Use `gofmt` formatting and keep Go code idiomatic.
+- Follow existing package naming and keep exported identifiers descriptive.
+- Prefer short, lower-case file names that match package purpose, such as `parser.go`, `printer.go`, or `handler_test.go`.
+- When adding shell fixtures or examples, keep names aligned with the package or feature under test.
+
+## Testing Guidelines
+- Add unit tests alongside code changes, using the standard Go `testing` package and the existing table-driven style where practical.
+- Name tests `TestXxx`, benchmarks `BenchmarkXxx`, and fuzz targets `FuzzXxx`.
+- For parser, formatter, and interpreter changes, update or add focused tests in the affected package before relying on the full suite.
+- Run `go test ./...` for routine validation and `make test-bash` when changing Bash-compatibility behavior.
+
+## Commit & Pull Request Guidelines
+- Recent commits use concise, scoped prefixes such as `interp:`, `syntax:`, or `expand+interp:` followed by a brief imperative summary.
+- Keep commits focused on one behavior or bug fix.
+- Pull requests should describe the change, the affected package(s), and the validation performed.
+- Include sample output or reproduction steps when behavior changes, especially for CLI or compatibility fixes.
+
+## Agent-Specific Instructions
+- Prefer small, targeted edits over broad refactors.
+- Preserve existing test conventions and do not introduce new formatting tools without a clear need.

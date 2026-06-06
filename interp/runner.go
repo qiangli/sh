@@ -292,7 +292,13 @@ func (r *Runner) expandErr(err error) {
 	// it (arithm()'s own path) or when the runner doesn't
 	// request bash-compatible wording.
 	if r.bashCompatErrors && !strings.HasPrefix(errMsg, r.bashErrPrefix(r.curStmtPos)) {
-		if looksLikeExpandError(errMsg) {
+		if strings.HasPrefix(errMsg, "command substitution: ") {
+			prefix := r.filename
+			if prefix == "" {
+				prefix = "bashy"
+			}
+			errMsg = prefix + ": " + errMsg
+		} else if looksLikeExpandError(errMsg) {
 			errMsg = r.bashErrPrefix(r.curStmtPos) + errMsg
 		}
 	}
@@ -326,12 +332,12 @@ func looksLikeExpandError(msg string) bool {
 		strings.Contains(msg, "expression expected"),
 		strings.Contains(msg, "invalid indirect expansion"),
 		strings.Contains(msg, "bad substitution"),
+		strings.HasPrefix(msg, "command substitution: "),
 		strings.Contains(msg, "invalid variable name"):
 		return true
 	}
 	return false
 }
-
 
 func (r *Runner) arithm(expr syntax.ArithmExpr) int {
 	n, err := expand.Arithm(r.ecfg, expr)
@@ -946,6 +952,7 @@ func fieldsAllAssignments(fields []string) bool {
 //	{
 //	    body
 //	} <redirs>
+//
 // funcDeclNeedsKeyword reports whether the bash 5.3 declare -f
 // renderer must prefix the `function` keyword for a function with
 // this name. The plain `NAME ()` form would fail to reparse when
@@ -1017,22 +1024,25 @@ func isSimpleForAmpJoin(s *syntax.Stmt) bool {
 // one line; bash always splits across lines, indenting the body.
 //
 // Pattern (single-line for/while/until):
-//   while EXPR; do BODY; done    →    while EXPR; do
-//                                         BODY
-//                                     done
+//
+//	while EXPR; do BODY; done    →    while EXPR; do
+//	                                      BODY
+//	                                  done
 //
 // Pattern (if):
-//   if X; then A; elif Y; then B; else C; fi
-//     → if X; then
-//            A
-//        elif Y; then
-//            B
-//        else
-//            C
-//        fi
+//
+//	if X; then A; elif Y; then B; else C; fi
+//	  → if X; then
+//	         A
+//	     elif Y; then
+//	         B
+//	     else
+//	         C
+//	     fi
 //
 // Pattern (case):
-//   case X in PAT) BODY ;; PAT2) BODY2 ;; esac  → multi-line.
+//
+//	case X in PAT) BODY ;; PAT2) BODY2 ;; esac  → multi-line.
 //
 // We operate on already-arith-padded text. The splitting walks each
 // line looking for openers (`do `, `then `, etc. as substrings) and
@@ -1606,6 +1616,7 @@ func indexUnnestedRune(s string, r byte) int {
 //	        C
 //	    fi
 //	fi
+//
 // ifClause is one (condition, body) pair from an if/elif chain.
 // Used by splitIfLine + renderNestedIf to convert flat elif chains
 // to the bash 5.3 nested-if rendering.
@@ -1760,11 +1771,11 @@ func splitTopLevel(s, sep string) []string {
 // heredoc layout to bash 5.3's declare -f form. The input has
 // already been through the +4 indent pass:
 //
-//	    (                       →    ( cat <<EOF
-//	        cat <<EOF                body
-//	    body                         EOF
-//	    EOF                         );
-//	    )
+//	(                       →    ( cat <<EOF
+//	    cat <<EOF                body
+//	body                         EOF
+//	EOF                         );
+//	)
 //
 // Only fires when the subshell contains exactly one statement and
 // that statement opens a heredoc. The closing `)` becomes ` );`
@@ -1848,6 +1859,63 @@ func bashCollapseSubshellHdoc(body string) string {
 	return strings.Join(out, "\n")
 }
 
+func bashCollapseCoprocSubshellHdoc(body string) string {
+	lines := strings.Split(body, "\n")
+	out := make([]string, 0, len(lines))
+	for i := 0; i < len(lines); i++ {
+		l := lines[i]
+		trim := strings.TrimSpace(l)
+		if trim != "coproc (;" || i+1 >= len(lines) {
+			out = append(out, l)
+			continue
+		}
+		stmtTrim := strings.TrimSuffix(strings.TrimSpace(lines[i+1]), ";")
+		hdIdx := findHeredocOp(stmtTrim)
+		if hdIdx < 0 {
+			out = append(out, l)
+			continue
+		}
+		after := strings.TrimLeft(stmtTrim[hdIdx+2:], "-")
+		after = strings.TrimLeft(after, " \t")
+		tag := strings.Trim(strings.TrimRight(after, " \t"), "'\"")
+		if tag == "" {
+			out = append(out, l)
+			continue
+		}
+		termIdx := -1
+		for k := i + 2; k < len(lines); k++ {
+			if strings.TrimSpace(lines[k]) == tag {
+				termIdx = k
+				break
+			}
+		}
+		if termIdx < 0 {
+			out = append(out, l)
+			continue
+		}
+		closeIdx := -1
+		for k := termIdx + 1; k < len(lines); k++ {
+			if strings.TrimSpace(lines[k]) == "" {
+				continue
+			}
+			closeIdx = k
+			break
+		}
+		if closeIdx < 0 || strings.TrimSpace(lines[closeIdx]) != ")" {
+			out = append(out, l)
+			continue
+		}
+		indent := l[:len(l)-len(trim)]
+		out = append(out, indent+"coproc COPROC ( "+stmtTrim)
+		for k := i + 2; k <= termIdx; k++ {
+			out = append(out, lines[k])
+		}
+		out = append(out, " );")
+		i = closeIdx
+	}
+	return strings.Join(out, "\n")
+}
+
 // bashSubshellSpace pads subshell `(EXPR)` openers/closers with one
 // space inside the parens to match bash 5.3 declare -f rendering:
 // `(exit 1)` → `( exit 1 )`. Per-line: if the trimmed line starts
@@ -1913,9 +1981,11 @@ func bashSubshellSpace(body string) string {
 
 // bashCaretCtrlChars rewrites ANSI-C control-char escapes inside
 // `$'...'` strings to bash 5.3's caret-notation single-quoted form:
-//   $'\001'  →  '^A'
-//   $'\037'  →  '^_'
-//   $'\177'  →  '^?'
+//
+//	$'\001'  →  '^A'
+//	$'\037'  →  '^_'
+//	$'\177'  →  '^?'
+//
 // Only fires when the $'...' content is purely control-char escapes
 // (and no other text); mixed-content $'X\001Y' stays as-is.
 func bashCaretCtrlChars(body string) string {
@@ -2136,6 +2206,7 @@ func normalizeCloseRedir(s string) string {
 // that ends with a `{` opener in declare -f output. Covers both:
 //   - bare standalone `{`
 //   - prefixed forms like `coproc a {`, `function f () {`
+//
 // Idempotent — skips lines already ending in `{ ` (trailing space).
 func bashBraceTrailSpace(body string) string {
 	lines := strings.Split(body, "\n")
@@ -2790,7 +2861,8 @@ func bashDeclareFmt(body string, lastTop bool) string {
 	// bash 5.3 collapses `(\n    CMD <<TAG\n...\nTAG\n    )` to
 	// `( CMD <<TAG\n...\nTAG\n );` when the subshell body is a
 	// single heredoc-bearing statement.
-	return bashCollapseSubshellHdoc(result)
+	result = bashCollapseSubshellHdoc(result)
+	return bashCollapseCoprocSubshellHdoc(result)
 }
 
 // isPosixSpecialBuiltin reports whether name is a POSIX "special
@@ -3025,6 +3097,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		r.stmts(ctx, cm.Stmts)
 	case *syntax.Subshell:
 		r2 := r.subshell(false)
+		r2.enclosingSubshellEnd = cm.Rparen
 		r2.stmts(ctx, cm.Stmts)
 		// Subshells don't exit or return from the surrounding
 		// function: `(return 5)` makes the subshell exit with
@@ -3524,10 +3597,12 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			return
 		}
 		if r.opts[optPosix] && isPosixSpecialBuiltin(name) {
-			// Bash reports at end of declaration (closing brace
-			// line), matching the "not a valid identifier" path.
+			errPos := cm.End()
+			if r.enclosingSubshellEnd.IsValid() {
+				errPos = r.enclosingSubshellEnd
+			}
 			r.errf("%s`%s': is a special builtin\n",
-				r.bashErrPrefix(cm.End()), name)
+				r.bashErrPrefix(errPos), name)
 			r.exit.code = 1
 			r.exit.exiting = true
 			return
@@ -3786,6 +3861,19 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				}
 				r.exit.code = 1
 				return
+			}
+			if cm.Variant.Value == "export" && as.Value == nil && (name == "BASHOPTS" || name == "SHELLOPTS") {
+				vr := r.lookupVar(name)
+				vr.Exported = true
+				if overlay, ok := r.writeEnv.(*overlayEnviron); ok {
+					if overlay.values == nil {
+						overlay.values = make(map[string]namedVariable)
+					}
+					overlay.values[overlay.normalize(name)] = namedVariable{name, vr}
+				} else if r.writeEnv.Set(name, vr) != nil {
+					r.exit.code = 1
+				}
+				continue
 			}
 			if declQuery == "-F" {
 				// declare -F name: print just the function name.
@@ -4521,6 +4609,16 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 		}
 	}
 	arg := r.literal(rd.Word)
+	if r.opts[optRestricted] {
+		switch rd.Op {
+		case syntax.RdrOut, syntax.AppOut, syntax.RdrInOut, syntax.RdrClob,
+			syntax.AppClob, syntax.RdrAll, syntax.RdrAllClob, syntax.AppAll,
+			syntax.AppAllClob:
+			r.errf("%s%s: restricted: cannot redirect output\n",
+				r.bashErrPrefix(rd.Word.Pos()), arg)
+			return nil, fmt.Errorf("restricted redirect")
+		}
+	}
 	// targetFd is the fd this redirect operates on. -1 means "use the
 	// op's natural default" (fd 0 for input, fd 1 for output). N >= 3
 	// goes through fdTable; 1/2 are stdin/stdout/stderr.
@@ -4917,6 +5015,26 @@ func (r *Runner) exec(ctx context.Context, pos syntax.Pos, args []string) {
 // under a different argv[0] (the "exec -a NAME CMD" form in bash).
 // An empty argv0 means no override.
 func (r *Runner) execAs(ctx context.Context, pos syntax.Pos, argv0 string, args []string) {
+	hashed := false
+	if len(args) > 0 {
+		if entry, ok := r.cmdHashTable[args[0]]; ok {
+			hashed = true
+			entry.hits++
+			r.cmdHashTable[args[0]] = entry
+			if r.opts[optRestricted] && entry.restricted && strings.Contains(entry.path, "/") {
+				r.errf("%s%s: restricted\n", r.bashErrPrefix(pos), entry.path)
+				r.exit.code = 1
+				return
+			}
+			args = append([]string{entry.path}, args[1:]...)
+		}
+	}
+	if r.opts[optRestricted] && !hashed && len(args) > 0 && strings.Contains(args[0], "/") {
+		r.errf("%s%s: restricted: cannot specify `/' in command names\n",
+			r.bashErrPrefix(pos), args[0])
+		r.exit.code = 1
+		return
+	}
 	hctx := r.handlerCtx(ctx, handlerKindExec, pos)
 	if argv0 != "" {
 		hc := HandlerCtx(hctx)
@@ -4935,6 +5053,28 @@ func (r *Runner) execAs(ctx context.Context, pos syntax.Pos, argv0 string, args 
 		})
 	}
 	r.exit.fromHandlerError(r.execHandler(hctx, args))
+}
+
+type ttyFallbackFile struct {
+	read  *os.File
+	write *os.File
+}
+
+func (f *ttyFallbackFile) Read(p []byte) (int, error) {
+	return f.read.Read(p)
+}
+
+func (f *ttyFallbackFile) Write(p []byte) (int, error) {
+	return 0, fs.ErrInvalid
+}
+
+func (f *ttyFallbackFile) Close() error {
+	err1 := f.read.Close()
+	err2 := f.write.Close()
+	if err1 != nil {
+		return err1
+	}
+	return err2
 }
 
 func (r *Runner) open(ctx context.Context, path string, flags int, mode os.FileMode, print bool) (io.ReadWriteCloser, error) {
@@ -4963,6 +5103,12 @@ func (r *Runner) open(ctx context.Context, path string, flags int, mode os.FileM
 	case nil:
 		return f, nil
 	case *os.PathError:
+		if path == "/dev/tty" && flags&(os.O_WRONLY|os.O_RDWR) == 0 {
+			read, write, pipeErr := os.Pipe()
+			if pipeErr == nil {
+				return &ttyFallbackFile{read: read, write: write}, nil
+			}
+		}
 		if print {
 			if r.bashCompatErrors {
 				r.errf("%s%s: %s\n", r.bashErrPrefix(r.curStmtPos), path, bashOSError(err))

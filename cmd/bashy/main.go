@@ -31,6 +31,8 @@ var (
 	login     = flag.Bool("login", false, "act as a login shell")
 	optsOn    multiFlag
 	optsOff   multiFlag
+	setOff    multiFlag
+	shoptOff  multiFlag
 )
 
 // multiFlag collects repeated string values for a flag, e.g. -o opt.
@@ -42,6 +44,8 @@ func (m *multiFlag) Set(v string) error { *m = append(*m, v); return nil }
 func init() {
 	flag.Var(&optsOn, "o", "enable a set option (posix, errexit, xtrace, ...); may be repeated")
 	flag.Var(&optsOff, "O", "enable a shopt option; may be repeated")
+	flag.Var(&setOff, "bashy-plus-o", "disable a set option; internal")
+	flag.Var(&shoptOff, "bashy-plus-O", "disable a shopt option; internal")
 }
 
 // splitCombinedShortFlags rewrites bash-style short / combined
@@ -76,6 +80,28 @@ func splitCombinedShortFlags(args []string) []string {
 		if endOfFlags {
 			out = append(out, a)
 			continue
+		}
+		if a == "+O" {
+			out = append(out, "-bashy-plus-O")
+			continue
+		}
+		if a == "+o" {
+			out = append(out, "-bashy-plus-o")
+			continue
+		}
+		if a == "+B" {
+			out = append(out, "-bashy-plus-o", "braceexpand")
+			continue
+		}
+		if a == "-B" {
+			out = append(out, "-o", "braceexpand")
+			continue
+		}
+		if len(a) == 2 && a[0] == '-' {
+			if opt, ok := shortToOpt[a[1]]; ok {
+				out = append(out, "-o", opt)
+				continue
+			}
 		}
 		if len(a) <= 2 || a[0] != '-' || a[1] == '-' {
 			if !(len(a) > 0 && a[0] == '-' && (len(a) == 1 || a[1] == '-')) {
@@ -165,6 +191,8 @@ func newRunner() (*interp.Runner, error) {
 	interactive := *command == "" && flag.NArg() == 0 && term.IsTerminal(int(os.Stdin.Fd()))
 	opts := []interp.RunnerOption{
 		interp.Interactive(interactive),
+		interp.CommandString(*command != ""),
+		interp.WithLoginShell(isLoginShell()),
 		interp.StdIO(os.Stdin, os.Stdout, os.Stderr),
 		interp.Env(env),
 		interp.WithBashCompatErrors(true),
@@ -181,6 +209,28 @@ func newRunner() (*interp.Runner, error) {
 	// once we accept the `+` prefix at flag-parse time.
 	if setArgs := collectSetArgs(); len(setArgs) > 0 {
 		opts = append(opts, interp.Params(setArgs...))
+	}
+	if bashOpts := os.Getenv("BASHOPTS"); bashOpts != "" {
+		var setArgs []string
+		for _, name := range strings.Split(bashOpts, ":") {
+			if name != "" {
+				setArgs = append(setArgs, "-O", name)
+			}
+		}
+		if len(setArgs) > 0 {
+			opts = append(opts, interp.Params(setArgs...))
+		}
+	}
+	if shellOpts := os.Getenv("SHELLOPTS"); shellOpts != "" {
+		var setArgs []string
+		for _, name := range strings.Split(shellOpts, ":") {
+			if name != "" {
+				setArgs = append(setArgs, "-o", name)
+			}
+		}
+		if len(setArgs) > 0 {
+			opts = append(opts, interp.Params(setArgs...))
+		}
 	}
 	if *posix {
 		opts = append(opts, interp.Params("-o", "posix"))
@@ -239,8 +289,14 @@ func collectSetArgs() []string {
 	for _, name := range optsOn {
 		out = append(out, "-o", name)
 	}
-	for _, name := range optsOff {
+	for _, name := range setOff {
 		out = append(out, "+o", name)
+	}
+	for _, name := range optsOff {
+		out = append(out, "-O", name)
+	}
+	for _, name := range shoptOff {
+		out = append(out, "+O", name)
 	}
 	return out
 }
@@ -298,6 +354,16 @@ func loadStartupFiles(r *interp.Runner, interactive bool) {
 	}
 }
 
+func runWithLoginLogout(r *interp.Runner, fn func() error) error {
+	err := fn()
+	if isLoginShell() {
+		if home, _ := os.UserHomeDir(); home != "" {
+			sourceIfExists(r, filepath.Join(home, ".bash_logout"))
+		}
+	}
+	return err
+}
+
 func runAll() error {
 	if *command != "" {
 		// BASH_EXECUTION_STRING holds the literal -c argument, per
@@ -316,26 +382,34 @@ func runAll() error {
 		// for parse-error prefixes and as the script name within the
 		// runner). The rest become $1, $2, … . The command body
 		// itself stays in *command.
-		argv0 := ""
+		argv0 := filepath.Base(os.Args[0])
 		var posArgs []string
 		if rest := flag.Args(); len(rest) > 0 {
 			argv0 = rest[0]
 			posArgs = rest[1:]
+		} else if envArgv0 := os.Getenv("BASH_ARGV0"); envArgv0 != "" {
+			argv0 = envArgv0
 		}
 		if len(posArgs) > 0 {
 			// Reach the Params option side-effect for free.
 			interp.Params(append([]string{"--"}, posArgs...)...)(r)
 		}
 		loadStartupFiles(r, false)
-		return run(r, strings.NewReader(*command), argv0)
+		return runWithLoginLogout(r, func() error {
+			return run(r, strings.NewReader(*command), argv0)
+		})
 	}
 	if flag.NArg() == 0 {
 		if term.IsTerminal(int(os.Stdin.Fd())) {
 			loadStartupFiles(r, true)
-			return runInteractive(r, os.Stdin, os.Stdout, os.Stderr)
+			return runWithLoginLogout(r, func() error {
+				return runInteractive(r, os.Stdin, os.Stdout, os.Stderr)
+			})
 		}
 		loadStartupFiles(r, false)
-		return run(r, os.Stdin, "")
+		return runWithLoginLogout(r, func() error {
+			return run(r, os.Stdin, "")
+		})
 	}
 	loadStartupFiles(r, false)
 	// Bash invokes `bash script.sh arg1 arg2 …` as: run script.sh with
@@ -346,7 +420,9 @@ func runAll() error {
 	if posArgs := rest[1:]; len(posArgs) > 0 {
 		interp.Params(append([]string{"--"}, posArgs...)...)(r)
 	}
-	return runPath(r, path)
+	return runWithLoginLogout(r, func() error {
+		return runPath(r, path)
+	})
 }
 
 func run(r *interp.Runner, reader io.Reader, name string) error {

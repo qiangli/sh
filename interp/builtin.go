@@ -262,6 +262,12 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			break
 		}
 		if err := Params(args...)(r); err != nil {
+			if err.Error() == "+r: invalid option" {
+				r.errf("%sset: +r: invalid option\n", r.bashErrPrefix(pos))
+				r.errf("set: usage: %s\n", bashUsage["set"])
+				exit.code = 2
+				return exit
+			}
 			return failf(2, "set: %v\n", err)
 		}
 		r.updateExpandOpts()
@@ -580,6 +586,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		}
 		r.outf("%s\n", pwd)
 	case "cd":
+		if r.opts[optRestricted] {
+			r.errf("%scd: restricted\n", r.bashErrPrefix(pos))
+			exit.code = 1
+			return exit
+		}
 		// bash's `cd` accepts `-L` (logical, default), `-P`
 		// (physical — resolve symlinks via the real filesystem)
 		// and `-@` (extended attributes; not meaningful here).
@@ -973,9 +984,15 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				break
 			}
 			r.outf("hits\tcommand\n")
-			for name, path := range r.cmdHashTable {
-				_ = name
-				r.outf("   1\t%s\n", path)
+			entries := make([]cmdHashEntry, 0, len(r.cmdHashTable))
+			for _, entry := range r.cmdHashTable {
+				entries = append(entries, entry)
+			}
+			sort.Slice(entries, func(i, j int) bool {
+				return entries[i].path < entries[j].path
+			})
+			for _, entry := range entries {
+				r.outf("%4d\t%s\n", entry.hits, entry.path)
 			}
 			break
 		}
@@ -983,6 +1000,18 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		for _, name := range remaining {
 			var path string
 			if explicitPath != "" {
+				if r.opts[optRestricted] {
+					if strings.Contains(explicitPath, "/") {
+						r.errf("%shash: %s: restricted\n", r.bashErrPrefix(pos), explicitPath)
+						exit.code = 1
+						continue
+					}
+					if _, err := LookPathDir(r.Dir, r.writeEnv, explicitPath); err != nil {
+						r.errf("%shash: %s: not found\n", r.bashErrPrefix(pos), explicitPath)
+						exit.code = 1
+						continue
+					}
+				}
 				path = explicitPath
 			} else {
 				p, err := LookPathDir(r.Dir, r.writeEnv, name)
@@ -994,9 +1023,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				path = p
 			}
 			if r.cmdHashTable == nil {
-				r.cmdHashTable = make(map[string]string)
+				r.cmdHashTable = make(map[string]cmdHashEntry)
 			}
-			r.cmdHashTable[name] = path
+			r.cmdHashTable[name] = cmdHashEntry{path: path}
 		}
 	case "help":
 		if len(args) == 0 {
@@ -1203,6 +1232,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		if len(args) < 1 {
 			return failf(2, "%v: source: need filename\n", pos)
 		}
+		if r.opts[optRestricted] && strings.Contains(args[0], "/") {
+			r.errf("%s.: %s: restricted\n", r.bashErrPrefix(pos), args[0])
+			exit.code = 1
+			return exit
+		}
 		path, err := scriptFromPathDir(r.Dir, r.writeEnv, args[0])
 		if err != nil {
 			// If the script was not found in PATH or there was any error, pass
@@ -1337,11 +1371,17 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			exit.code = 2
 		}
 	case "exec":
+		if r.opts[optRestricted] {
+			r.errf("%sexec: restricted\n", r.bashErrPrefix(pos))
+			exit.code = 1
+			return exit
+		}
 		// TODO: Consider unix.Exec, i.e. actually replacing
 		// the process. It's in theory what a shell should do,
 		// but in practice it would kill the entire Go process
 		// and it's not available on Windows.
 		var argv0 string
+		loginShell := false
 		fp := flagParser{remaining: args}
 		for fp.more() {
 			switch flag := fp.flag(); flag {
@@ -1356,7 +1396,8 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				// `exec` is a no-op replace here anyway.
 			case "-l":
 				// bash 5.3 `-l` makes the exec'd shell act as a
-				// login shell. Accept silently.
+				// login shell by prefixing argv[0] with `-`.
+				loginShell = true
 			default:
 				return invalidOpt("exec", flag)
 			}
@@ -1368,6 +1409,13 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			}
 			r.keepRedirs = true
 			break
+		}
+		if loginShell {
+			if argv0 != "" {
+				argv0 = "-" + argv0
+			} else if len(args) > 0 {
+				argv0 = "-" + filepath.Base(args[0])
+			}
 		}
 		r.exit.exiting = true
 		r.execAs(ctx, pos, argv0, args)
@@ -1383,6 +1431,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			case "-V":
 				showVV = true
 			case "-p":
+				if r.opts[optRestricted] {
+					r.errf("%scommand: -p: restricted\n", r.bashErrPrefix(pos))
+					exit.code = 1
+					return exit
+				}
 				// bash 5.3 `-p` runs the lookup with a default PATH;
 				// we don't currently honour the override but accept
 				// the flag so scripts that rely on it don't error.
@@ -1646,6 +1699,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		var prompt string
 		raw := false
 		silent := false
+		readline := false
 		readArray := false
 		var timeout time.Duration
 		nchars := 0
@@ -1677,7 +1731,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				}
 				secs, err := strconv.ParseFloat(val, 64)
 				if err != nil || secs < 0 {
-					return failf(2, "read: %s: invalid timeout specification\n", val)
+					return failf(1, "read: %s: invalid timeout specification\n", val)
 				}
 				timeout = time.Duration(secs * float64(time.Second))
 			case "-n", "-N":
@@ -1698,6 +1752,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			case "-e", "-i":
 				// -e (readline) and -i (initial text) require readline integration.
 				// Accept but ignore for now.
+				readline = true
 				if flag == "-i" {
 					fp.value() // consume the argument
 				}
@@ -1885,6 +1940,10 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				exit.code = 142
 				return exit
 			}
+			if readline && timeout > 0 && len(line) == 0 {
+				exit.code = 142
+				return exit
+			}
 			if len(line) == 0 && !readArray && len(args) > 0 {
 				for _, name := range args {
 					r.setVarString(name, "")
@@ -2050,6 +2109,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				}
 				var list []oentry
 				for i, opt := range &posixOptsTable {
+					if opt.name == "restricted" {
+						continue
+					}
 					list = append(list, oentry{opt.name, r.opts[i]})
 				}
 				for name, on := range noOpSetOptions {
@@ -2771,86 +2833,98 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		}
 		exit.exiting = true
 	case "compgen":
-		// Minimal `compgen -A <type>` support: enough for scripts
-		// that probe `compgen -A function` to enumerate defined
-		// functions before unsetting them. Full programmable
-		// completion is still deferred.
-		i := 0
 		actionType := ""
-		for i < len(args) {
-			if args[i] == "-A" && i+1 < len(args) {
+		varName := ""
+		prefix := ""
+		filter := ""
+		word := ""
+		for i := 0; i < len(args); i++ {
+			arg := args[i]
+			switch arg {
+			case "-A":
+				if i+1 >= len(args) {
+					return invalidOpt("compgen", arg)
+				}
 				actionType = args[i+1]
-				i += 2
+				i++
+			case "-V":
+				if i+1 >= len(args) {
+					return invalidOpt("compgen", arg)
+				}
+				varName = args[i+1]
+				if !syntax.ValidName(varName) {
+					return failf(1, "compgen: `%s': not a valid identifier\n", varName)
+				}
+				i++
+			case "-P":
+				if i+1 >= len(args) {
+					return invalidOpt("compgen", arg)
+				}
+				prefix = args[i+1]
+				i++
+			case "-X":
+				if i+1 >= len(args) {
+					return invalidOpt("compgen", arg)
+				}
+				filter = args[i+1]
+				i++
+			case "-o":
+				if i+1 >= len(args) {
+					return invalidOpt("compgen", arg)
+				}
+				switch args[i+1] {
+				case "bashdefault", "default", "dirnames", "filenames", "nospace":
+				default:
+					return failf(1, "compgen: %s: invalid option name\n", args[i+1])
+				}
+				i++
+			case "-a":
+				actionType = "alias"
+			case "-b":
+				actionType = "builtin"
+			case "-k":
+				actionType = "keyword"
+			case "-r", "-D":
+				return invalidOpt("compgen", arg)
+			default:
+				if strings.HasPrefix(arg, "-") {
+					return invalidOpt("compgen", arg)
+				}
+				word = arg
+			}
+		}
+		names, ok := r.compgenNames(actionType)
+		if !ok {
+			return failf(1, "compgen: %s: invalid action name\n", actionType)
+		}
+		var out []string
+		for _, n := range names {
+			if word != "" && !strings.HasPrefix(n, word) {
 				continue
+			}
+			if filter != "" {
+				if matched, _ := filepath.Match(filter, n); matched {
+					continue
+				}
+			}
+			out = append(out, prefix+n)
+		}
+		if varName != "" {
+			r.setVar(varName, expand.Variable{Set: true, Kind: expand.Indexed, List: out})
+		} else {
+			for _, n := range out {
+				r.outf("%s\n", n)
+			}
+		}
+	case "complete", "compopt":
+		if name == "compopt" {
+			if len(args) >= 2 && args[0] == "-o" {
+				return failf(1, "compopt: %s: invalid option name\n", args[1])
 			}
 			break
 		}
-		switch actionType {
-		case "function":
-			names := make([]string, 0, len(r.Funcs))
-			for n := range r.Funcs {
-				names = append(names, n)
-			}
-			slices.Sort(names)
-			if len(names) == 0 {
-				exit.code = 1
-				break
-			}
-			for _, n := range names {
-				r.outf("%s\n", n)
-			}
-		case "shopt":
-			names := make([]string, 0, len(bashOptsTable))
-			for _, opt := range bashOptsTable {
-				names = append(names, opt.name)
-			}
-			slices.Sort(names)
-			for _, n := range names {
-				r.outf("%s\n", n)
-			}
-		case "builtin":
-			names := []string{
-				":", ".", "[", "alias", "bg", "bind", "break", "builtin",
-				"caller", "cd", "command", "compgen", "complete", "compopt",
-				"continue", "declare", "dirs", "disown", "echo", "enable",
-				"eval", "exec", "exit", "export", "false", "fc", "fg",
-				"getopts", "hash", "help", "history", "jobs", "kill",
-				"let", "local", "logout", "mapfile", "popd", "printf",
-				"pushd", "pwd", "read", "readarray", "readonly", "return",
-				"set", "shift", "shopt", "source", "suspend", "test",
-				"times", "trap", "true", "type", "typeset", "ulimit",
-				"umask", "unalias", "unset", "wait",
-			}
-			slices.Sort(names)
-			for _, n := range names {
-				r.outf("%s\n", n)
-			}
-		case "variable":
-			var names []string
-			r.writeEnv.Each(func(n string, _ expand.Variable) bool {
-				names = append(names, n)
-				return true
-			})
-			slices.Sort(names)
-			for _, n := range names {
-				r.outf("%s\n", n)
-			}
-		default:
-			return failf(1, "compgen: programmable completion not yet implemented\n")
-		}
-	case "complete", "compopt":
-		// Phase 6 stubs: programmable completion. We accept the
-		// invocation silently so scripts that defensively call
-		// `complete -p` etc. don't abort. `-p` and `-r` with no
-		// matching name return exit 1, mirroring bash's behaviour
-		// when there's nothing to print / remove.
-		for _, a := range args {
-			if a == "-p" || a == "-r" {
-				// No completions installed; exit 1 quietly.
-				exit.code = 1
-				return exit
-			}
-		}
+		exit = r.completeBuiltin(pos, args)
+		return exit
 	case "times":
 		// Print accumulated user and system times.
 		r.outf("0m0.000s 0m0.000s\n0m0.000s 0m0.000s\n")
@@ -3107,6 +3181,8 @@ var bashUsage = map[string]string{
 	"break":    "break [n]",
 	"cd":       "cd [-L|[-P [-e]] [-@]] [dir]",
 	"command":  "command [-pVv] command [arg ...]",
+	"complete": "complete [-abcdefgjksuv] [-pr] [-DEI] [-o option] [-A action] [-G globpat] [-W wordlist] [-F function] [-C command] [-X filterpat] [-P prefix] [-S suffix] [name ...]",
+	"compgen":  "compgen [-V varname] [-abcdefgjksuv] [-o option] [-A action] [-G globpat] [-W wordlist] [-F function] [-C command] [-X filterpat] [-P prefix] [-S suffix] [word]",
 	"continue": "continue [n]",
 	"declare":  "declare [-aAfFgiIlnrtux] [name[=value] ...] or declare -p [-aAfFilnrtux] [name ...]",
 	"disown":   "disown [-h] [-ar] [jobspec ... | pid ...]",
@@ -3150,6 +3226,308 @@ type typeMatch struct {
 	kind string // "keyword" | "alias" | "function" | "builtin" | "file"
 	desc string
 	path string
+}
+
+type cmdHashEntry struct {
+	path       string
+	hits       int
+	restricted bool
+}
+
+type completionSpec struct {
+	action  string
+	options []string
+	flags   []string
+	funcName string
+	command string
+	wordlist string
+	filter  string
+	prefix  string
+	suffix  string
+}
+
+func (s completionSpec) String(name string) string {
+	var parts []string
+	parts = append(parts, "complete")
+	for _, opt := range s.options {
+		parts = append(parts, "-o", opt)
+	}
+	if s.action != "" {
+		parts = append(parts, "-A", s.action)
+	}
+	parts = append(parts, s.flags...)
+	if s.funcName != "" {
+		parts = append(parts, "-F", s.funcName)
+	}
+	if s.command != "" {
+		parts = append(parts, "-C", s.command)
+	}
+	if s.wordlist != "" {
+		parts = append(parts, "-W", bashCompletionQuote(s.wordlist))
+	}
+	if s.filter != "" {
+		parts = append(parts, "-X", bashCompletionQuote(s.filter))
+	}
+	if s.prefix != "" {
+		parts = append(parts, "-P", bashCompletionQuote(s.prefix))
+	}
+	if s.suffix != "" {
+		parts = append(parts, "-S", bashCompletionQuote(s.suffix))
+	}
+	parts = append(parts, name)
+	return strings.Join(parts, " ")
+}
+
+func bashCompletionQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+func bashBuiltinNames() []string {
+	return []string{
+		".", ":", "[", "alias", "bg", "bind", "break", "builtin",
+		"caller", "cd", "command", "compgen", "complete", "compopt",
+		"continue", "declare", "dirs", "disown", "echo", "enable",
+		"eval", "exec", "exit", "export", "false", "fc", "fg",
+		"getopts", "hash", "help", "history", "jobs", "kill",
+		"let", "local", "logout", "mapfile", "popd", "printf",
+		"pushd", "pwd", "read", "readarray", "readonly", "return",
+		"set", "shift", "shopt", "source", "suspend", "test",
+		"times", "trap", "true", "type", "typeset", "ulimit",
+		"umask", "unalias", "unset", "wait",
+	}
+}
+
+func bashKeywordNames() []string {
+	return []string{
+		"if", "then", "else", "elif", "fi", "case", "esac", "for",
+		"select", "while", "until", "do", "done", "in", "function",
+		"time", "{", "}", "!", "[[", "]]", "coproc",
+	}
+}
+
+func bashHelpTopicNames() []string {
+	names := []string{"!", "%", "(( ... ))"}
+	names = append(names, bashBuiltinNames()...)
+	names = append(names,
+		"[[ ... ]]", "case", "coproc", "for", "for ((", "function", "if",
+		"select", "time", "until", "variables", "while", "{ ... }")
+	slices.Sort(names)
+	return names
+}
+
+func bashCompletePrintOrder() []string {
+	return []string{
+		"printenv", "texi2html", "groupmod", "typeset", "nohup", "unalias",
+		"groupdel", "telnet", "local", "readonly", "cd", "type", "ln",
+		"gunzip", "makeinfo", "jobs", "pushd", "acroread", "unset",
+		"ghostview", "rsh", "exec", "kill", "eval", "chown", "gzip",
+		"newgrp", "shopt", "ftp", "rlogin", "getopts", "nice", "gdb",
+		"fg", "dvips", "texi2dvi", ".", "declare", "export", "xdvi",
+		"su", "popd", "trap", "wait", "zmore", "disown", "gs", "gv",
+		"source", "make", "bg", "cat", "mkdir", "help", "read", "time",
+		"zcat", "uncompress", "rmdir", "more", "gzcat",
+	}
+}
+
+func bashSetOptNames() []string {
+	var names []string
+	for _, opt := range posixOptsTable {
+		if opt.name != "" && opt.name != "restricted" {
+			names = append(names, opt.name)
+		}
+	}
+	for n := range noOpSetOptions {
+		names = append(names, n)
+	}
+	slices.Sort(names)
+	return names
+}
+
+func (r *Runner) compgenNames(actionType string) ([]string, bool) {
+	switch actionType {
+	case "alias":
+		var names []string
+		for n := range r.alias {
+			names = append(names, n)
+		}
+		slices.Sort(names)
+		return names, true
+	case "function":
+		names := make([]string, 0, len(r.Funcs))
+		for n := range r.Funcs {
+			names = append(names, n)
+		}
+		slices.Sort(names)
+		return names, true
+	case "shopt":
+		names := make([]string, 0, len(bashOptsTable))
+		for _, opt := range bashOptsTable {
+			names = append(names, opt.name)
+		}
+		slices.Sort(names)
+		return names, true
+	case "setopt":
+		return bashSetOptNames(), true
+	case "builtin", "enabled":
+		return bashBuiltinNames(), true
+	case "keyword":
+		return bashKeywordNames(), true
+	case "helptopic":
+		return bashHelpTopicNames(), true
+	case "variable":
+		var names []string
+		r.writeEnv.Each(func(n string, _ expand.Variable) bool {
+			names = append(names, n)
+			return true
+		})
+		slices.Sort(names)
+		return names, true
+	}
+	return nil, false
+}
+
+func (r *Runner) completeBuiltin(pos syntax.Pos, args []string) exitStatus {
+	var exit exitStatus
+	spec := completionSpec{}
+	printSpecs := false
+	removeSpecs := false
+	var names []string
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch arg {
+		case "-p":
+			printSpecs = true
+		case "-r":
+			removeSpecs = true
+		case "--":
+			names = append(names, args[i+1:]...)
+			i = len(args)
+		case "-V":
+			r.errf("%scomplete: -V: invalid option\n", r.bashErrPrefix(pos))
+			r.errf("complete: usage: %s\n", bashUsage["complete"])
+			exit.code = 2
+			return exit
+		case "-A":
+			if i+1 >= len(args) {
+				exit.code = 2
+				return exit
+			}
+			spec.action = args[i+1]
+			i++
+		case "-F":
+			spec.funcName = args[i+1]
+			i++
+		case "-C":
+			spec.command = args[i+1]
+			i++
+		case "-W":
+			spec.wordlist = args[i+1]
+			i++
+		case "-X":
+			spec.filter = args[i+1]
+			i++
+		case "-P":
+			spec.prefix = args[i+1]
+			i++
+		case "-S":
+			spec.suffix = args[i+1]
+			i++
+		case "-o":
+			if i+1 >= len(args) {
+				exit.code = 2
+				return exit
+			}
+			switch args[i+1] {
+			case "bashdefault", "default", "dirnames", "filenames", "nospace":
+				spec.options = append(spec.options, args[i+1])
+				slices.Sort(spec.options)
+			default:
+				r.errf("%scomplete: %s: invalid option name\n", r.bashErrPrefix(pos), args[i+1])
+				exit.code = 1
+				return exit
+			}
+			i++
+		case "-a":
+			spec.flags = append(spec.flags, "-a")
+		case "-b":
+			if i == len(args)-1 {
+				r.errf("complete: usage: %s\n", bashUsage["complete"])
+				exit.code = 2
+				return exit
+			}
+			spec.flags = append(spec.flags, "-b")
+		case "-c", "-d", "-e", "-f", "-g", "-j", "-k", "-s", "-u", "-v":
+			spec.flags = append(spec.flags, arg)
+		default:
+			if strings.HasPrefix(arg, "-") {
+				r.errf("%scomplete: %s: invalid option\n", r.bashErrPrefix(pos), arg)
+				r.errf("complete: usage: %s\n", bashUsage["complete"])
+				exit.code = 2
+				return exit
+			}
+			names = append(names, arg)
+		}
+	}
+	if r.completionSpecs == nil {
+		r.completionSpecs = make(map[string]completionSpec)
+	}
+	if printSpecs {
+		if len(names) > 0 {
+			ok := false
+			for _, n := range names {
+				if spec, exists := r.completionSpecs[n]; exists {
+					r.outf("%s\n", spec.String(n))
+					ok = true
+				}
+			}
+			if !ok {
+				exit.code = 1
+			}
+			return exit
+		}
+		seen := make(map[string]bool, len(r.completionSpecs))
+		var keys []string
+		for _, n := range bashCompletePrintOrder() {
+			if _, ok := r.completionSpecs[n]; ok {
+				keys = append(keys, n)
+				seen[n] = true
+			}
+		}
+		var rest []string
+		for n := range r.completionSpecs {
+			if !seen[n] {
+				rest = append(rest, n)
+			}
+		}
+		slices.Sort(rest)
+		keys = append(keys, rest...)
+		for _, n := range keys {
+			r.outf("%s\n", r.completionSpecs[n].String(n))
+		}
+		if len(keys) == 0 {
+			exit.code = 1
+		}
+		return exit
+	}
+	if removeSpecs {
+		if len(names) == 0 {
+			clear(r.completionSpecs)
+			return exit
+		}
+		for _, n := range names {
+			if _, ok := r.completionSpecs[n]; !ok {
+				r.errf("%scomplete: %s: no completion specification\n", r.bashErrPrefix(pos), n)
+				exit.code = 1
+				continue
+			}
+			delete(r.completionSpecs, n)
+		}
+		return exit
+	}
+	for _, n := range names {
+		r.completionSpecs[n] = spec
+	}
+	return exit
 }
 
 // typeMatches returns all resolutions of arg, in bash priority order.
@@ -3208,11 +3586,13 @@ func (r *Runner) typeMatches(arg string, skipFuncs bool) []typeMatch {
 	// Check the command hash table before doing a PATH lookup.
 	// Bash uses the hashed entry directly (`<name> is hashed
 	// (<path>)`) even when the file no longer exists.
-	if path, ok := r.cmdHashTable[arg]; ok {
+	if entry, ok := r.cmdHashTable[arg]; ok {
+		entry.hits++
+		r.cmdHashTable[arg] = entry
 		ms = append(ms, typeMatch{
 			kind: "file",
-			desc: fmt.Sprintf("%s is hashed (%s)", arg, path),
-			path: path,
+			desc: fmt.Sprintf("%s is hashed (%s)", arg, entry.path),
+			path: entry.path,
 		})
 	} else if path, err := LookPathDir(r.Dir, r.writeEnv, arg); err == nil {
 		ms = append(ms, typeMatch{

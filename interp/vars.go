@@ -173,6 +173,18 @@ func execEnv(env expand.Environ) []string {
 // invocation can re-import the function on startup.
 func (r *Runner) execEnvWithFuncs() []string {
 	list := execEnv(r.writeEnv)
+	for _, name := range []string{"BASHOPTS", "SHELLOPTS"} {
+		if !r.writeEnv.Get(name).Exported {
+			continue
+		}
+		prefix := name + "="
+		for i, kv := range list {
+			if strings.HasPrefix(kv, prefix) {
+				list[i] = ""
+			}
+		}
+		list = append(list, prefix+r.lookupVar(name).String())
+	}
 	if len(r.exportedFuncs) == 0 {
 		return list
 	}
@@ -252,6 +264,9 @@ func (r *Runner) lookupVar(name string) expand.Variable {
 		// hashall, `B` — braceexpand) are surfaced too so the
 		// output is non-empty even on a fresh shell.
 		var sb strings.Builder
+		if r.commandString {
+			sb.WriteByte('c')
+		}
 		if r.opts[optAllExport] {
 			sb.WriteByte('a')
 		}
@@ -382,6 +397,9 @@ func (r *Runner) lookupVar(name string) expand.Variable {
 		// SHELLOPTS without having to know which options are
 		// "real" vs. compat-only.
 		for _, name := range []string{"braceexpand", "hashall", "interactive-comments"} {
+			if enabled, ok := r.noOpSetState[name]; ok && !enabled {
+				continue
+			}
 			opts = append(opts, name)
 		}
 		slices.Sort(opts)
@@ -453,9 +471,9 @@ func (r *Runner) lookupVar(name string) expand.Variable {
 		}
 	case "BASH_CMDS":
 		vr.Kind = expand.Associative
-		vr.Map = maps.Clone(r.cmdHashTable)
-		if vr.Map == nil {
-			vr.Map = map[string]string{}
+		vr.Map = make(map[string]string, len(r.cmdHashTable))
+		for name, entry := range r.cmdHashTable {
+			vr.Map[name] = entry.path
 		}
 	case "0":
 		vr.Kind = expand.String
@@ -903,6 +921,10 @@ func terminalWidth() int {
 }
 
 func (r *Runner) setVar(name string, vr expand.Variable) {
+	if r.opts[optRestricted] && (name == "PATH" || name == "SHELL") {
+		r.errf("%s%s: readonly variable\n", r.bashErrPrefix(r.curStmtPos), name)
+		return
+	}
 	if r.opts[optAllExport] {
 		vr.Exported = true
 	}
@@ -1007,6 +1029,25 @@ func (r *Runner) setVarWithIndex(prev expand.Variable, name string, index syntax
 			return
 		}
 		k := r.literal(w)
+		if name == "BASH_CMDS" {
+			if r.opts[optRestricted] {
+				if strings.Contains(valStr, "/") {
+					r.errf("%s%s: restricted\n", r.bashErrPrefix(r.curStmtPos), valStr)
+					r.exit.code = 1
+					return
+				}
+				if _, err := LookPathDir(r.Dir, r.writeEnv, valStr); err != nil {
+					r.errf("%s%s: not found\n", r.bashErrPrefix(r.curStmtPos), valStr)
+					r.exit.code = 1
+					return
+				}
+			}
+			if r.cmdHashTable == nil {
+				r.cmdHashTable = make(map[string]cmdHashEntry)
+			}
+			r.cmdHashTable[k] = cmdHashEntry{path: valStr, restricted: r.opts[optRestricted]}
+			return
+		}
 
 		// TODO: only clone when inside a subshell and getting a var from outside for the first time
 		prev.Map = maps.Clone(prev.Map)

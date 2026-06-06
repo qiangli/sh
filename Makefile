@@ -3,7 +3,7 @@
 BIN_DIR := bin
 CMDS := bashy gosh shfmt
 BASH_TESTS_DIR := external/bash-5.3/tests
-BASHY := $(BIN_DIR)/bashy
+BASHY := $(BIN_DIR)/bash
 
 ## build: Build all commands into bin/
 build:
@@ -12,6 +12,7 @@ build:
 		echo "building $$cmd..."; \
 		go build -o $(BIN_DIR)/$$cmd ./cmd/$$cmd; \
 	done
+	@cp $(BIN_DIR)/bashy $(BASHY)
 
 ## test: Run all Go tests
 test:

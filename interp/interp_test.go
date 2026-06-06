@@ -4491,6 +4491,26 @@ func TestRunnerRun(t *testing.T) {
 	}
 }
 
+func TestBashCompatPosixSpecialBuiltinFuncDeclInSubshell(t *testing.T) {
+	src := "( set -o posix\n" +
+		"break()\n" +
+		"{\n" +
+		"echo hi\n" +
+		"}\n" +
+		"echo after\n" +
+		")\n"
+	file, err := syntax.NewParser().Parse(strings.NewReader(src), "./func5.sub")
+	qt.Assert(t, qt.IsNil(err))
+
+	var cb bytes.Buffer
+	r, err := interp.New(interp.StdIO(nil, &cb, &cb), interp.WithBashCompatErrors(true))
+	qt.Assert(t, qt.IsNil(err))
+
+	err = r.Run(context.Background(), file)
+	qt.Assert(t, qt.ErrorMatches(err, "exit status 1"))
+	qt.Assert(t, qt.Equals(cb.String(), "./func5.sub: line 7: `break': is a special builtin\n"))
+}
+
 func readLines(hc interp.HandlerContext) ([][]byte, error) {
 	bs, err := io.ReadAll(hc.Stdin)
 	if err != nil {
