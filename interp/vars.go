@@ -200,7 +200,11 @@ func (r *Runner) execEnvWithFuncs() []string {
 
 func (r *Runner) lookupVar(name string) expand.Variable {
 	if name == "" {
-		panic("variable name must not be empty")
+		// A nameref whose target is the empty string (or other
+		// invalid identifier) can reach here via Variable.Resolve.
+		// Bash treats this as "unset"; return the zero value
+		// instead of crashing.
+		return expand.Variable{}
 	}
 	var vr expand.Variable
 	switch name {
