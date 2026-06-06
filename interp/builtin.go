@@ -336,9 +336,24 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				r.delVar(arg)
 				continue
 			}
-			if vars && r.lookupVar(arg).IsSet() {
-				r.delVar(arg)
-			} else if _, ok := r.Funcs[arg]; ok && funcs {
+			if vars {
+				vr := r.lookupVar(arg)
+				if vr.Kind == expand.NameRef {
+					// Bash: `unset NAME` on a nameref follows
+					// the reference and unsets the *target*.
+					// The nameref itself keeps the attribute
+					// (now pointing at an unset variable).
+					if vr.Str != "" {
+						r.delVar(vr.Str)
+					}
+					continue
+				}
+				if vr.IsSet() {
+					r.delVar(arg)
+					continue
+				}
+			}
+			if _, ok := r.Funcs[arg]; ok && funcs {
 				delete(r.Funcs, arg)
 			}
 		}
