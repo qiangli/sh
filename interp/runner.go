@@ -3839,6 +3839,11 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		if !declHadNames && cm.Variant.Value == "local" && r.inFunc {
 			r.printLocalVars()
 		}
+		// `typeset -n` / `declare -n` with no name lists every
+		// nameref variable in `declare -n NAME="target"` form.
+		if !declHadNames && valType == "-n" && declQuery == "" {
+			r.printNamerefVars()
+		}
 	case *syntax.TimeClause:
 		// bash 5.3 only prints timing output for the outermost
 		// `time` keyword in a stack of nested `time` clauses;

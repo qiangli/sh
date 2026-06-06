@@ -530,6 +530,24 @@ func (r *Runner) printLocalVars() {
 	}
 }
 
+// printNamerefVars writes every nameref-typed variable to stdout in
+// bash's `declare -n NAME="target"` format, sorted by name. Used
+// by `typeset -n` / `declare -n` with no arguments.
+func (r *Runner) printNamerefVars() {
+	var names []string
+	r.writeEnv.Each(func(name string, vr expand.Variable) bool {
+		if vr.Kind == expand.NameRef {
+			names = append(names, name)
+		}
+		return true
+	})
+	slices.Sort(names)
+	for _, name := range names {
+		vr := r.lookupVar(name)
+		r.outf("declare -n %s=%s\n", name, bashDeclareQuote(vr.Str))
+	}
+}
+
 // formatLocalVar renders a single variable in bash 5.3's `local`
 // listing shape: `declare <flags> name=value`. `<flags>` covers
 // `-a` (indexed), `-A` (associative), `-i`/`-r`/`-x`/etc., or `--`
@@ -932,8 +950,15 @@ func stringIndex(index syntax.ArithmExpr) bool {
 // TODO: make assignVal and [setVar] consistent with the [expand.WriteEnviron] interface
 
 func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign, valType string) (string, expand.Variable) {
-	if n, v := prev.Resolve(r.writeEnv); n != "" {
-		name, prev = n, v
+	// `declare -n NAME=target` retargets the nameref itself —
+	// don't dereference the existing nameref first or we'd
+	// overwrite the *target* (e.g. `typeset -n fee=flow` followed
+	// by `typeset -n fee=flip` should leave fee→flip, not
+	// flow=flip).
+	if valType != "-n" {
+		if n, v := prev.Resolve(r.writeEnv); n != "" {
+			name, prev = n, v
+		}
 	}
 	prev.Set = true
 	if as.Value != nil {
