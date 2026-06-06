@@ -3640,43 +3640,46 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			default:
 				r.setVarFromBuiltin = cm.Variant.Value
 			}
-			fp := flagParser{remaining: []string{as.Name.Value}}
-			for fp.more() {
-				switch flag := fp.flag(); flag {
-				case "-x", "-r":
-					modes = append(modes, flag)
-				case "+x", "+r":
-					modes = append(modes, flag)
-				case "-a", "-A", "-n", "-i":
-					valType = flag
-				case "+i", "+a", "+A":
-					// `+X` removes attribute X. Tracked via modes
-					// so setVar can clear the flag on the
-					// destination variable.
-					modes = append(modes, flag)
-				case "+n":
-					// `+n` strips the nameref attribute. Also
-					// flagged via valType so assignVal targets
-					// the nameref var itself, not the resolved
-					// reference target.
-					valType = "+n"
-					modes = append(modes, flag)
-				case "-u", "-l", "-c":
-					// Case-conversion attributes (`declare -u/-l/-c`).
-					// Tracked as additional modes; applied at assign
-					// time via `setVar` and surfaced in `declare -p`
-					// output via `expand.Variable.Flags`.
-					modes = append(modes, flag)
-				case "+u", "+l", "+c":
-					modes = append(modes, flag)
-				case "-g":
-					global = true
-				case "-f", "-F", "-p":
-					declQuery = flag
-				default:
-					r.errf("%sdeclare: %s: invalid option\n", r.bashErrPrefix(r.curStmtPos), flag)
-					r.exit.code = 2
-					return
+			isFlag := strings.HasPrefix(as.Name.Value, "-") || strings.HasPrefix(as.Name.Value, "+")
+			if isFlag {
+				fp := flagParser{remaining: []string{as.Name.Value}}
+				for fp.more() {
+					switch flag := fp.flag(); flag {
+					case "-x", "-r":
+						modes = append(modes, flag)
+					case "+x", "+r":
+						modes = append(modes, flag)
+					case "-a", "-A", "-n", "-i":
+						valType = flag
+					case "+i", "+a", "+A":
+						// `+X` removes attribute X. Tracked via modes
+						// so setVar can clear the flag on the
+						// destination variable.
+						modes = append(modes, flag)
+					case "+n":
+						// `+n` strips the nameref attribute. Also
+						// flagged via valType so assignVal targets
+						// the nameref var itself, not the resolved
+						// reference target.
+						valType = "+n"
+						modes = append(modes, flag)
+					case "-u", "-l", "-c":
+						// Case-conversion attributes (`declare -u/-l/-c`).
+						// Tracked as additional modes; applied at assign
+						// time via `setVar` and surfaced in `declare -p`
+						// output via `expand.Variable.Flags`.
+						modes = append(modes, flag)
+					case "+u", "+l", "+c":
+						modes = append(modes, flag)
+					case "-g":
+						global = true
+					case "-f", "-F", "-p":
+						declQuery = flag
+					default:
+						r.errf("%sdeclare: %s: invalid option\n", r.bashErrPrefix(r.curStmtPos), flag)
+						r.exit.code = 2
+						return
+					}
 				}
 				continue assignLoop
 			}
@@ -3924,10 +3927,15 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		// (no args) lists only read-only functions, each suffixed
 		// with `declare -fr NAME`.
 		if !declHadNames && (declQuery == "-F" || declQuery == "-f") {
-			readonlyOnly := cm.Variant.Value == "readonly"
+			readonlyOnly := cm.Variant.Value == "readonly" ||
+				slices.Contains(modes, "-r")
+			exportedOnly := slices.Contains(modes, "-x")
 			names := make([]string, 0, len(r.Funcs))
 			for name := range r.Funcs {
 				if readonlyOnly && !r.readonlyFuncs[name] {
+					continue
+				}
+				if exportedOnly && !r.exportedFuncs[name] {
 					continue
 				}
 				names = append(names, name)
@@ -3935,7 +3943,15 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			slices.Sort(names)
 			for _, name := range names {
 				if declQuery == "-F" {
-					r.outf("declare -f %s\n", name)
+					// `declare -F` (no NAMEs) outputs
+					// `declare -f NAME` (or `declare -fr` when
+					// readonly) per function. Per-name lookup
+					// `declare -F NAME` is handled elsewhere.
+					if readonlyOnly {
+						r.outf("declare -fr %s\n", name)
+					} else {
+						r.outf("declare -f %s\n", name)
+					}
 					continue
 				}
 				r.printFuncDecl(name, r.Funcs[name])
