@@ -321,11 +321,28 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 		sb.WriteString(str[last:])
 		str = sb.String()
 	case pe.Exp != nil:
-		arg, err := Literal(cfg, pe.Exp.Word)
+		// Bash 5.3 keeps `$'…'` ANSI-C sequences literal inside the
+		// substitute text of a default-value parameter expansion
+		// (`${var-DEFAULT}`, `${var+ALT}`, `${var=ASSIGN}`,
+		// `${var?ERR}`) when the whole thing is evaluated for a
+		// heredoc body. Other operations (pattern strip, replace,
+		// substring, case-fold) still decode `$'…'` normally.
+		op := pe.Exp.Op
+		isDefaultLike := op == syntax.AlternateUnset || op == syntax.AlternateUnsetOrNull ||
+			op == syntax.DefaultUnset || op == syntax.DefaultUnsetOrNull ||
+			op == syntax.AssignUnset || op == syntax.AssignUnsetOrNull ||
+			op == syntax.ErrorUnset || op == syntax.ErrorUnsetOrNull
+		var arg string
+		var err error
+		if cfg.inHeredocBody && isDefaultLike {
+			arg, err = literalKeepAnsiC(cfg, pe.Exp.Word)
+		} else {
+			arg, err = Literal(cfg, pe.Exp.Word)
+		}
 		if err != nil {
 			return "", err
 		}
-		switch op := pe.Exp.Op; op {
+		switch op {
 		case syntax.AlternateUnsetOrNull:
 			if str == "" {
 				break

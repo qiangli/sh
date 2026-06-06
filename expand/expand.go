@@ -139,6 +139,19 @@ type Config struct {
 	// suppresses when this is set, matching bash semantics.
 	insideDoubleQuote bool
 
+	// inHeredocBody, when true, signals that we are currently
+	// expanding content of a heredoc body. Bash 5.3 keeps `$'…'`
+	// ANSI-C sequences literal when they appear inside a parameter
+	// expansion's substitute text (`${var-DEFAULT}`, `${var+ALT}`,
+	// …) that is being expanded for a heredoc — even though they
+	// would decode in other contexts.
+	inHeredocBody bool
+
+	// literalAnsiC, when true, tells [wordField]'s SglQuoted
+	// handler to keep `$'…'` literal instead of decoding the
+	// ANSI-C escape sequences. Used by [literalKeepAnsiC].
+	literalAnsiC bool
+
 	// OverrideLineno, when non-zero, replaces the source line that
 	// `$LINENO` would normally report. The interpreter sets this
 	// when expanding a trap body so `$LINENO` reflects the line of
@@ -254,6 +267,25 @@ func (cfg *Config) envSet(name, value string) error {
 	return wenv.Set(name, vr)
 }
 
+// literalKeepAnsiC is like [Literal] but leaves `$'…'` ANSI-C
+// quoting literal (no decoding). Used by the parameter-expansion
+// default-value path inside heredoc bodies — bash 5.3 preserves
+// `$'\01'` as five literal characters in that position.
+func literalKeepAnsiC(cfg *Config, word *syntax.Word) (string, error) {
+	if word == nil {
+		return "", nil
+	}
+	cfg = prepareConfig(cfg)
+	prev := cfg.literalAnsiC
+	cfg.literalAnsiC = true
+	defer func() { cfg.literalAnsiC = prev }()
+	field, err := cfg.wordField(word.Parts, quoteNone)
+	if err != nil {
+		return "", err
+	}
+	return cfg.fieldJoin(field), nil
+}
+
 // Literal expands a single shell word. It is similar to [Fields], but the result
 // is a single string. This is the behavior when a word is used as the value in
 // a shell variable assignment, for example.
@@ -328,6 +360,9 @@ func Document(cfg *Config, word *syntax.Word) (string, error) {
 		return "", nil
 	}
 	cfg = prepareConfig(cfg)
+	prev := cfg.inHeredocBody
+	cfg.inHeredocBody = true
+	defer func() { cfg.inHeredocBody = prev }()
 	field, err := cfg.wordField(word.Parts, quoteHeredoc)
 	if err != nil {
 		return "", err
@@ -1345,8 +1380,15 @@ func (cfg *Config) wordField(wps []syntax.WordPart, ql quoteLevel) ([]fieldPart,
 		case *syntax.SglQuoted:
 			fp := fieldPart{quote: quoteSingle, val: wp.Value}
 			if wp.Dollar {
-				fp.val = ansiCEscape(fp.val)
-				fp.val, _, _ = strings.Cut(fp.val, "\x00") // cut the string if format included \x00
+				if cfg.literalAnsiC {
+					// Preserve the source `$'…'` verbatim — bash
+					// 5.3 keeps it literal in this context.
+					fp.val = "$'" + wp.Value + "'"
+					fp.quote = quoteNone
+				} else {
+					fp.val = ansiCEscape(fp.val)
+					fp.val, _, _ = strings.Cut(fp.val, "\x00") // cut the string if format included \x00
+				}
 			}
 			field = append(field, fp)
 		case *syntax.DblQuoted:
