@@ -775,13 +775,13 @@ func (r *Runner) printFuncDecl(name string, body *syntax.Stmt) {
 		}
 		// Other Non-Block bodies (rare). Fall back to the printer.
 		var buf bytes.Buffer
-		syntax.NewPrinter(syntax.Indent(4), syntax.SpaceRedirects(true)).Print(&buf, body)
+		syntax.NewPrinter(syntax.Indent(4), syntax.SpaceRedirects(true), syntax.BashCompatArith(true)).Print(&buf, body)
 		r.out(buf.String())
 		r.out("\n")
 		return
 	}
 	r.out("{ \n")
-	printer := syntax.NewPrinter(syntax.Indent(4), syntax.SpaceRedirects(true))
+	printer := syntax.NewPrinter(syntax.Indent(4), syntax.SpaceRedirects(true), syntax.BashCompatArith(true))
 	// bash 5.3 declare -f groups a `cmd &` with the following
 	// simple stmt onto one line. Skip ahead when we emit a
 	// background stmt and merge the buffer of the next.

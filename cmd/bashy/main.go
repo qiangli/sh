@@ -382,7 +382,13 @@ func runAll() error {
 		// for parse-error prefixes and as the script name within the
 		// runner). The rest become $1, $2, … . The command body
 		// itself stays in *command.
-		argv0 := filepath.Base(os.Args[0])
+		//
+		// Default for $0 / the parse-error prefix when no positional
+		// and no BASH_ARGV0 is the literal "bash" — bash 5.3 uses
+		// "bash:" as the error prefix in -c mode regardless of the
+		// invocation binary's name, and tests in the suite (e.g.
+		// arith-for, comsub-posix, cond) pin that exact wording.
+		argv0 := "bash"
 		var posArgs []string
 		if rest := flag.Args(); len(rest) > 0 {
 			argv0 = rest[0]

@@ -99,6 +99,27 @@ func FunctionNextLine(enabled bool) PrinterOption {
 	return func(p *Printer) { p.funcNextLine = enabled }
 }
 
+// BashCompatArith prints arithmetic expressions preserving the source
+// spacing around binary operators (so `i<3` stays compact and `i < 3`
+// keeps its spaces). This matches bash 5.3's `declare -f` rendering,
+// which echoes operator gaps verbatim from the parsed source.
+func BashCompatArith(enabled bool) PrinterOption {
+	return func(p *Printer) { p.bashCompatArith = enabled }
+}
+
+// hasGap reports whether there is at least one column between two
+// adjacent positions in the source — used to decide whether to emit a
+// space when re-rendering arithmetic operators in bash-compat mode.
+func hasGap(a, b Pos) bool {
+	if !a.IsValid() || !b.IsValid() {
+		return false
+	}
+	if a.Line() != b.Line() {
+		return true
+	}
+	return b.Col() > a.Col()
+}
+
 // NewPrinter allocates a new Printer and applies any number of options.
 func NewPrinter(opts ...PrinterOption) *Printer {
 	p := &Printer{
@@ -230,9 +251,10 @@ type Printer struct {
 	swtCaseIndent  bool
 	spaceRedirects bool
 	keepPadding    bool
-	minify         bool
-	singleLine     bool
-	funcNextLine   bool
+	minify          bool
+	singleLine      bool
+	funcNextLine    bool
+	bashCompatArith bool
 
 	wantSpace wantSpaceState // whether space is required or has been written
 
@@ -885,6 +907,18 @@ func (p *Printer) arithmExprRecurse(expr ArithmExpr, compact, spacePlusMinus boo
 		if compact {
 			p.arithmExprRecurse(expr.X, compact, spacePlusMinus)
 			p.w.WriteString(expr.Op.String())
+			p.arithmExprRecurse(expr.Y, compact, false)
+		} else if p.bashCompatArith {
+			p.arithmExprRecurse(expr.X, compact, spacePlusMinus)
+			leftSpace := expr.Op != Comma && hasGap(expr.X.End(), expr.OpPos)
+			if leftSpace {
+				p.space()
+			}
+			p.w.WriteString(expr.Op.String())
+			opEnd := posAddCol(expr.OpPos, len(expr.Op.String()))
+			if hasGap(opEnd, expr.Y.Pos()) {
+				p.space()
+			}
 			p.arithmExprRecurse(expr.Y, compact, false)
 		} else {
 			p.arithmExprRecurse(expr.X, compact, spacePlusMinus)
