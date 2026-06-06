@@ -771,9 +771,10 @@ func (r *Runner) printFuncDecl(name string, body *syntax.Stmt) {
 		r.out("\n")
 		// bash 5.3 inserts a blank line between two top-level
 		// stmts in a function body when the prior stmt ended
-		// with a heredoc terminator. Detect by checking the last
-		// non-empty line of the rendered output.
-		if !isLast && endsWithHeredocTerminator(body) {
+		// with a heredoc terminator. The blank also appears
+		// before the closing `}` of the function when the last
+		// stmt ends with a terminator.
+		if endsWithHeredocTerminator(body) {
 			r.out("\n")
 		}
 	}
