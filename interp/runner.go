@@ -3649,8 +3649,20 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 						modes = append(modes, flag)
 					case "+x", "+r":
 						modes = append(modes, flag)
-					case "-a", "-A", "-n", "-i":
+					case "-a", "-A", "-n":
 						valType = flag
+					case "-i":
+						// `-i` is an attribute that can coexist
+						// with `-a`/`-A` (indexed/assoc array).
+						// Track via modes; the post-loop also
+						// sets it as valType when no other type
+						// flag took precedence so the integer-
+						// aware assign path still fires for
+						// `typeset -i x=4+5`.
+						modes = append(modes, "-i")
+						if valType == "" {
+							valType = "-i"
+						}
 					case "+i", "+a", "+A":
 						// `+X` removes attribute X. Tracked via modes
 						// so setVar can clear the flag on the
@@ -3808,7 +3820,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			vr := r.lookupVar(name)
 			// Set the Integer attribute *before* assignVal so the
 			// initial assignment can evaluate the RHS as arithmetic.
-			if valType == "-i" {
+			if valType == "-i" || slices.Contains(modes, "-i") {
 				vr.Integer = true
 			}
 			if as.Naked {
