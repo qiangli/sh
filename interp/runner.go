@@ -4431,7 +4431,13 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 			w = r.stderr
 		default:
 			n, err := strconv.Atoi(arg)
-			if err != nil || n < 0 {
+			if err == nil && n < 0 {
+				// Bash: negative fd in `>&N` is an
+				// "ambiguous redirect" before any open.
+				r.errf("%s%s: ambiguous redirect\n", r.bashErrPrefix(rd.Pos()), arg)
+				return nil, fmt.Errorf("ambiguous redirect")
+			}
+			if err != nil {
 				return nil, fmt.Errorf("unhandled %v arg: %q", rd.Op, arg)
 			}
 			f, ok := r.fdTable[n]
@@ -4464,7 +4470,13 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 			f = r.stdin
 		default:
 			n, err := strconv.Atoi(arg)
-			if err != nil || n < 0 {
+			if err == nil && n < 0 {
+				// Bash: negative fd in `<&N` is an
+				// "ambiguous redirect".
+				r.errf("%s%s: ambiguous redirect\n", r.bashErrPrefix(rd.Pos()), arg)
+				return nil, fmt.Errorf("ambiguous redirect")
+			}
+			if err != nil {
 				return nil, fmt.Errorf("unhandled %v arg: %q", rd.Op, arg)
 			}
 			var ok bool
