@@ -519,10 +519,20 @@ func (r *Runner) printLocalVars() {
 	}
 }
 
-// formatLocalVar renders a single variable in bash's `local` listing
-// shape (no `declare` prefix, no attribute flags).
+// formatLocalVar renders a single variable in bash 5.3's `local`
+// listing shape: `declare <flags> name=value`. `<flags>` covers
+// `-a` (indexed), `-A` (associative), `-i`/`-r`/`-x`/etc., or `--`
+// when no other flag is set. Values use the same quoting rules as
+// `declare -p`.
 func formatLocalVar(name string, vr expand.Variable) string {
+	flags := vr.Flags()
+	if flags == "" {
+		flags = "-"
+	}
 	var b strings.Builder
+	b.WriteString("declare -")
+	b.WriteString(flags)
+	b.WriteByte(' ')
 	b.WriteString(name)
 	b.WriteByte('=')
 	switch vr.Kind {
@@ -547,7 +557,7 @@ func formatLocalVar(name string, vr expand.Variable) string {
 		}
 		b.WriteByte(')')
 	default:
-		b.WriteString(bashSetQuote(vr.Str))
+		b.WriteString(bashDeclareQuote(vr.Str))
 	}
 	return b.String()
 }
