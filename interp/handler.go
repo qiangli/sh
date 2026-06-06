@@ -234,10 +234,11 @@ func isExecFormatError(err error) bool {
 }
 
 func checkStat(dir, file string, checkExec bool) (string, error) {
-	if !filepath.IsAbs(file) {
-		file = filepath.Join(dir, file)
+	target := file
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(dir, file)
 	}
-	info, err := os.Stat(file)
+	info, err := os.Stat(target)
 	if err != nil {
 		return "", err
 	}
@@ -248,6 +249,10 @@ func checkStat(dir, file string, checkExec bool) (string, error) {
 	if checkExec && runtime.GOOS != "windows" && m&0o111 == 0 {
 		return "", fmt.Errorf("permission denied")
 	}
+	// Return the input form (`./e`, `bin/foo`, `/abs/path`) so
+	// callers like `type -P` mirror bash's output, which echoes
+	// the path as it appeared in $PATH rather than the absolute
+	// form derived from the runner's cwd.
 	return file, nil
 }
 
