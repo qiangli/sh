@@ -3733,6 +3733,10 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				}
 				switch vr.Kind {
 				case expand.Indexed:
+					if len(vr.List) == 0 {
+						r.outf("declare -%s %s\n", flags, name)
+						continue
+					}
 					r.outf("declare -%s %s=(", flags, name)
 					for i, v := range vr.List {
 						if i > 0 {
@@ -3742,6 +3746,10 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 					}
 					r.out(")\n")
 				case expand.Associative:
+					if len(vr.Map) == 0 {
+						r.outf("declare -%s %s\n", flags, name)
+						continue
+					}
 					r.outf("declare -%s %s=(", flags, name)
 					first := true
 					for _, k := range expand.AssocKeysInBashOrder(vr.Map) {
@@ -3773,7 +3781,17 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			if as.Naked {
 				switch valType {
 				case "-A":
+					// `declare -A NAME` (no value) declares an
+					// empty associative array; the variable is
+					// "declared" but `[[ -v NAME ]]` is still
+					// false until an element is assigned.
 					vr.Kind = expand.Associative
+				case "-a":
+					// `declare -a NAME` (no value) declares an
+					// empty indexed array even when NAME was
+					// previously unset. Like -A, this is a
+					// declaration without setting the value.
+					vr.Kind = expand.Indexed
 				case "-n":
 					// `typeset -n NAME` (no value) on an
 					// existing var converts it to a nameref

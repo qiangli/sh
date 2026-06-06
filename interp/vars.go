@@ -591,7 +591,11 @@ func (r *Runner) printArrayVars(kind string) {
 		switch vr.Kind {
 		case expand.Indexed:
 			if len(vr.List) == 0 {
-				r.outf("declare %s %s=()\n", flag, name)
+				if isBuiltin {
+					r.outf("declare %s %s=()\n", flag, name)
+				} else {
+					r.outf("declare %s %s\n", flag, name)
+				}
 				continue
 			}
 			r.outf("declare %s %s=(", flag, name)
