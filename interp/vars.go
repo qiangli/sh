@@ -1018,6 +1018,16 @@ func (r *Runner) setVarWithIndex(prev expand.Variable, name string, index syntax
 		return
 	}
 	k := r.arithm(index)
+	if k < 0 {
+		// Bash 5.3 accepts negative indices as offsets from the
+		// end of the array: `a[-1]` targets the last element.
+		k = len(list) + k
+		if k < 0 {
+			r.errf("%s%s: bad array subscript\n", r.bashErrPrefix(r.curStmtPos), name)
+			r.exit.code = 1
+			return
+		}
+	}
 	for len(list) < k+1 {
 		list = append(list, "")
 	}
@@ -1324,6 +1334,14 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 		if elem.Index != nil {
 			// Index resets our index with a literal value.
 			index = r.arithm(elem.Index)
+			if index < 0 {
+				// Bash 5.3 treats `arr[-1]=v` as an offset
+				// from the end of the existing list.
+				index = len(prev.List) + index
+				if index < 0 {
+					index = 0
+				}
+			}
 			elemValues[i].values = []string{r.literal(elem.Value)}
 			elemValues[i].append = elem.Append
 		} else {
