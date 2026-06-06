@@ -2292,15 +2292,35 @@ func (cfg *Config) glob(base, pat string) ([]string, error) {
 			matches = newMatches
 			continue
 		case part == "**" && cfg.GlobStar:
+			// Bash: consecutive "**" segments collapse to a single "**".
+			// Skip redundant adjacent "**" segments.
+			if i > 0 && parts[i-1] == "**" {
+				continue
+			}
+			// Bash: only add a trailing-separator zero-match for `lit/**`
+			// patterns — i.e. when this is the final segment AND no earlier
+			// segment was "**". `a/**` includes `a/`, but `**/a/**` and
+			// `a/**/**` do not include the bare `a/`-style entries.
+			addTrailingSep := i == len(parts)-1 && i > 0
+			if addTrailingSep {
+				for _, p := range parts[:i] {
+					if p == "**" {
+						addTrailingSep = false
+						break
+					}
+				}
+			}
 			// Find all recursive matches for "**".
 			// Note that we need the results to be in depth-first order,
 			// and to avoid recursion, we use a slice as a stack.
 			// Since we pop from the back, we populate the stack backwards.
 			stack := make([]string, 0, len(matches))
 			for _, match := range slices.Backward(matches) {
-				// "a/**" should match "a/ a/b a/b/cfg ...";
-				// note how the zero-match case there has a trailing separator.
-				stack = append(stack, pathJoin2(match, ""))
+				if addTrailingSep {
+					stack = append(stack, pathJoin2(match, ""))
+				} else {
+					stack = append(stack, match)
+				}
 			}
 			matches = matches[:0]
 			var newMatches []string // to reuse its capacity
@@ -2308,6 +2328,17 @@ func (cfg *Config) glob(base, pat string) ([]string, error) {
 				dir := stack[len(stack)-1]
 				stack = stack[:len(stack)-1]
 				matches = append(matches, dir)
+
+				// Bash: `**` does not follow symlinks during recursion
+				// (to avoid cycles and unbounded expansion). Include the
+				// symlink entry itself but do not descend into it.
+				dirPath := dir
+				if !filepath.IsAbs(dirPath) {
+					dirPath = filepath.Join(base, dirPath)
+				}
+				if info, err := os.Lstat(dirPath); err == nil && info.Mode()&os.ModeSymlink != 0 {
+					continue
+				}
 
 				// If dir is not a directory, we keep the stack as-is and continue.
 				newMatches = newMatches[:0]
@@ -2318,6 +2349,32 @@ func (cfg *Config) glob(base, pat string) ([]string, error) {
 				newMatches, _ = cfg.globDir(base, dir, rx, wantDir, newMatches)
 				for _, match := range slices.Backward(newMatches) {
 					stack = append(stack, match)
+				}
+			}
+			// Bash: subsequent path expansion after `**` doesn't follow
+			// symlinks discovered by `**`. Filter symlinks out of the
+			// match set if any following part would descend into them.
+			if i < len(parts)-1 {
+				needsDescent := false
+				for _, p := range parts[i+1:] {
+					if p != "" {
+						needsDescent = true
+						break
+					}
+				}
+				if needsDescent {
+					filtered := matches[:0]
+					for _, m := range matches {
+						mPath := m
+						if !filepath.IsAbs(mPath) {
+							mPath = filepath.Join(base, mPath)
+						}
+						if info, err := os.Lstat(mPath); err == nil && info.Mode()&os.ModeSymlink != 0 {
+							continue
+						}
+						filtered = append(filtered, m)
+					}
+					matches = filtered
 				}
 			}
 			continue
