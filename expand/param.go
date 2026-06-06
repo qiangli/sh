@@ -390,11 +390,20 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			op == syntax.DefaultUnset || op == syntax.DefaultUnsetOrNull ||
 			op == syntax.AssignUnset || op == syntax.AssignUnsetOrNull ||
 			op == syntax.ErrorUnset || op == syntax.ErrorUnsetOrNull
+		isPatternOp := op == syntax.RemSmallPrefix || op == syntax.RemLargePrefix ||
+			op == syntax.RemSmallSuffix || op == syntax.RemLargeSuffix
 		var arg string
 		var err error
-		if cfg.inHeredocBody && isDefaultLike {
+		switch {
+		case cfg.inHeredocBody && isDefaultLike:
 			arg, err = literalKeepAnsiC(cfg, pe.Exp.Word)
-		} else {
+		case isPatternOp:
+			// `${var%PAT}` family: quoted segments of PAT are
+			// literal characters, not glob metacharacters.
+			// `${P%"*"}` removes a literal `*`, not the longest
+			// possible match.
+			arg, err = Pattern(cfg, pe.Exp.Word)
+		default:
 			arg, err = Literal(cfg, pe.Exp.Word)
 		}
 		if err != nil {
