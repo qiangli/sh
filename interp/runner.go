@@ -3164,8 +3164,38 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		special := isPosixSpecialBuiltin(fields[0])
 		persistInline := special && (r.opts[optPosix] || r.inFunc)
 		if !persistInline {
+			// Outer (non-persist) inline restore: skip names
+			// that an inner function-scoped special builtin
+			// already leaked outward — restoring would clobber
+			// the leaked value.
 			for _, restore := range restores {
+				if r.inlineLeakFromFunc[restore.name] {
+					continue
+				}
 				r.setVar(restore.name, restore.vr)
+			}
+			// Clear the leak flags now that this immediate
+			// caller has had its chance to consume them. A leak
+			// that wasn't matched by an outer restore is still
+			// "applied" — the leaked value is in the global
+			// scope already; the flag was only there to block
+			// the matching restore from clobbering it.
+			r.inlineLeakFromFunc = nil
+		} else if r.inFunc && fields[0] == "return" {
+			// `var=N return …` inside a function: bash 5.3 leaks
+			// the inline assignment to the caller's scope so it
+			// outlives the function's overlay being popped.
+			// Promote the function-local value to global and
+			// flag the caller's restore loop to skip the name.
+			for _, restore := range restores {
+				vr := r.lookupVar(restore.name)
+				if vr.IsSet() {
+					r.setGlobalVarString(restore.name, vr.String())
+					if r.inlineLeakFromFunc == nil {
+						r.inlineLeakFromFunc = make(map[string]bool)
+					}
+					r.inlineLeakFromFunc[restore.name] = true
+				}
 			}
 		}
 	case *syntax.BinaryCmd:

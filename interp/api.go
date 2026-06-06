@@ -165,6 +165,14 @@ type Runner struct {
 	// lists only these names.
 	readonlyFuncs map[string]bool
 
+	// inlineLeakFromFunc records variable names whose inline
+	// assignments leaked out of a function-scoped special-builtin
+	// invocation (`var=N return …`). The outer inline-restore
+	// loop checks this map and skips restoring affected names
+	// so the leaked value survives. Cleared by callers after
+	// they handle their own restore.
+	inlineLeakFromFunc map[string]bool
+
 	// argv0 is bash's $0 / $BASH_ARGV0 — initialized from filename
 	// but separately settable by user code. Error-message prefixes
 	// continue to use filename so they stay stable across user
