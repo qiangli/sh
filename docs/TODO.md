@@ -45,7 +45,7 @@
 - [x] `${ (shift) }` funsub with subshell — already worked once funsubScope landed (subshell isolates positional-param changes; shift in a bare funsub correctly leaks per bash 5.3); regression tests pin all three shapes
 - [x] `${H*}` — `*` as parameter expansion pattern inside `[[ ]]` — root cause was eager rhs evaluation in `[[ a && b ]]` / `[[ a || b ]]`; short-circuit so unevaluatable expansions on rhs never run when lhs settles result
 - [x] `((true ) )` — arithmetic with space before `)` in case clause (peekArithmEnd skips horizontal whitespace)
-- [ ] `case esac in esac)` — eval parsing of unusual case patterns
+- [x] `case esac in esac)` — verified: bash 5.3 *rejects* bare `esac)` as a pattern (POSIX grammar rule 4: "when PATTERN == ESAC, return ESAC"). Only `(esac)` parenthesized or `foo|esac)` post-pipe forms are accepted, and bashy already handles both. Earlier attempt (ee9202fb) accepted the bare form too, which regressed `parser.tests`; reverted.
 
 ### P1: Error Message Format (affects ~60 tests)
 
@@ -276,7 +276,7 @@ covered by an earlier section above is NOT repeated here.
 - [ ] `${ (shift) }` subshell-within-funsub
 - [ ] `${H*}` — treat `*` as parameter-set pattern inside `[[ ]]`
 - [ ] `((true ) )` — accept whitespace before closing `)` in case-clause arithm
-- [ ] `case esac in esac)` — eval-time reparse of unusual case patterns
+- [x] `case esac in esac)` — N/A: bash 5.3 rejects bare `esac)` per POSIX rule 4. `(esac)` and `foo|esac)` work in bashy.
 - [ ] `${|cmd;}` valsub (bash 5.3, separate from funsub)
 
 ### G2: Stub builtins worth finishing (M each)
