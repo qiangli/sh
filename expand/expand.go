@@ -396,6 +396,30 @@ func Pattern(cfg *Config, word *syntax.Word) (string, error) {
 	return sb.String(), nil
 }
 
+// RegexPattern is like Pattern but quotes regex metacharacters
+// (instead of glob metacharacters) for any quoted sub-parts. Used
+// by `[[ x =~ y ]]` so that single- or double-quoted segments of
+// the rhs are treated as literal characters, matching bash 5.3.
+func RegexPattern(cfg *Config, word *syntax.Word) (string, error) {
+	if word == nil {
+		return "", nil
+	}
+	cfg = prepareConfig(cfg)
+	field, err := cfg.wordField(word.Parts, quoteNone)
+	if err != nil {
+		return "", err
+	}
+	sb := cfg.strBuilder()
+	for _, part := range field {
+		if part.quote > quoteNone {
+			sb.WriteString(regexp.QuoteMeta(part.val))
+		} else {
+			sb.WriteString(part.val)
+		}
+	}
+	return sb.String(), nil
+}
+
 // Format expands a format string with a number of arguments, following the
 // shell's format specifications. These include printf(1), among others.
 //

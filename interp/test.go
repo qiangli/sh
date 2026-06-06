@@ -128,7 +128,19 @@ func (r *Runner) bashTest(ctx context.Context, expr syntax.TestExpr, classic boo
 			}
 			return ""
 		}
-		if r.binTest(ctx, x.Op, r.bashTest(ctx, x.X, classic), r.bashTest(ctx, x.Y, classic), classic) {
+		yStr := r.bashTest(ctx, x.Y, classic)
+		// `[[ X =~ Y ]]` treats quoted segments of Y as literal —
+		// re-expand Y through RegexPattern when it's a Word so
+		// `[[ a =~ '[[:alpha:]]' ]]` doesn't match (the brackets
+		// become literal characters).
+		if !classic && x.Op == syntax.TsReMatch {
+			if yw, ok := x.Y.(*syntax.Word); ok {
+				if s, err := expand.RegexPattern(r.ecfg, yw); err == nil {
+					yStr = s
+				}
+			}
+		}
+		if r.binTest(ctx, x.Op, r.bashTest(ctx, x.X, classic), yStr, classic) {
 			return "1"
 		}
 		return ""
