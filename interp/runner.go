@@ -4222,6 +4222,12 @@ func (r *Runner) hdocReader(rd *syntax.Redirect) (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Empty heredoc body (`<<EOF\nEOF`): nothing to write, just
+	// close the writer so the reader hits EOF immediately.
+	if rd.Hdoc == nil {
+		pw.Close()
+		return pr, nil
+	}
 	// We write to the pipe in a new goroutine,
 	// as pipe writes may block once the buffer gets full.
 	// We still construct and buffer the entire heredoc first,
@@ -4326,7 +4332,11 @@ func (r *Runner) setWriteFd(targetFd int, w io.Writer) error {
 }
 
 func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, error) {
-	if rd.Hdoc != nil {
+	// Heredoc operator (`<<TAG`, `<<-TAG`) with an empty body
+	// parses to rd.Hdoc == nil. Still route an empty reader to
+	// stdin so the consumer (`read`, `cat`, …) sees EOF cleanly
+	// instead of treating the tag name as a filename to open.
+	if rd.Hdoc != nil || rd.Op == syntax.Hdoc || rd.Op == syntax.DashHdoc {
 		pr, err := r.hdocReader(rd)
 		if err != nil {
 			return nil, err

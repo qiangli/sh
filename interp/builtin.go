@@ -1867,11 +1867,18 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		}
 
 		// We can get data back from readLine and an error at the same time, so
-		// check err after we process the data.
+		// check err after we process the data. For EOF with no data,
+		// bash still clears the named variables to empty before
+		// returning the non-zero exit status.
 		if err != nil {
 			if timeout > 0 && errors.Is(readCtx.Err(), context.DeadlineExceeded) {
 				exit.code = 142
 				return exit
+			}
+			if len(line) == 0 && !readArray && len(args) > 0 {
+				for _, name := range args {
+					r.setVarString(name, "")
+				}
 			}
 			exit.code = 1
 			return exit
