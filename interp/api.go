@@ -159,6 +159,12 @@ type Runner struct {
 	// way of propagating shell functions across `exec`.
 	exportedFuncs map[string]bool
 
+	// readonlyFuncs tracks function names marked read-only via
+	// `readonly -f <name>`. Subsequent redefinition or unset of
+	// the function is rejected, and `declare -fr` / `readonly -f`
+	// lists only these names.
+	readonlyFuncs map[string]bool
+
 	// argv0 is bash's $0 / $BASH_ARGV0 — initialized from filename
 	// but separately settable by user code. Error-message prefixes
 	// continue to use filename so they stay stable across user

@@ -3601,6 +3601,15 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 					continue
 				}
 				if body := r.Funcs[name]; body != nil {
+					// `readonly -f NAME` marks the function as
+					// read-only (it can't be unset or redefined).
+					if cm.Variant.Value == "readonly" {
+						if r.readonlyFuncs == nil {
+							r.readonlyFuncs = make(map[string]bool)
+						}
+						r.readonlyFuncs[name] = true
+						continue
+					}
 					r.printFuncDecl(name, body)
 				} else {
 					r.exit.code = 1
@@ -3713,10 +3722,16 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			r.setVar(name, vr)
 		}
 		// Handle declare -F/-f with no arguments: list all functions.
-		// Bash sorts the listing by function name.
+		// Bash sorts the listing by function name. `readonly -f`
+		// (no args) lists only read-only functions, each suffixed
+		// with `declare -fr NAME`.
 		if !declHadNames && (declQuery == "-F" || declQuery == "-f") {
+			readonlyOnly := cm.Variant.Value == "readonly"
 			names := make([]string, 0, len(r.Funcs))
 			for name := range r.Funcs {
+				if readonlyOnly && !r.readonlyFuncs[name] {
+					continue
+				}
 				names = append(names, name)
 			}
 			slices.Sort(names)
@@ -3726,6 +3741,9 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 					continue
 				}
 				r.printFuncDecl(name, r.Funcs[name])
+				if readonlyOnly {
+					r.outf("declare -fr %s\n", name)
+				}
 			}
 		}
 	case *syntax.TimeClause:
