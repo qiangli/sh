@@ -1446,6 +1446,9 @@ func (r *Runner) subshell(background bool) *Runner {
 	r2.Vars = make(map[string]expand.Variable)
 	r2.alias = maps.Clone(r.alias)
 	r2.trapCallbacks = maps.Clone(r.trapCallbacks)
+	r2.disabledBuiltins = maps.Clone(r.disabledBuiltins)
+	r2.readonlyFuncs = maps.Clone(r.readonlyFuncs)
+	r2.exportedFuncs = maps.Clone(r.exportedFuncs)
 	// Subshells inherit "we're inside a function" so that `return`
 	// in `$(... return ...)` aborts only the subshell rather than
 	// erroring with "can only be done from a func or sourced
