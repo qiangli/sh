@@ -3081,10 +3081,14 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		trace.newLineFlush()
 
 		r.call(ctx, cm.Args[0].Pos(), fields)
-		// Bash POSIX mode: assignments preceding a special builtin
-		// (`export`, `eval`, `readonly`, `set`, etc.) persist after
-		// the command returns. Skip the restore loop in that case.
-		if !(r.opts[optPosix] && isPosixSpecialBuiltin(fields[0])) {
+		// Bash POSIX mode (or inside a function): assignments
+		// preceding a special builtin (`return`, `export`, `eval`,
+		// `readonly`, `set`, …) persist after the command returns.
+		// Outside POSIX mode at top level, the temporary is
+		// restored so `v=inline source ./f` reverts v afterwards.
+		special := isPosixSpecialBuiltin(fields[0])
+		persistInline := special && (r.opts[optPosix] || r.inFunc)
+		if !persistInline {
 			for _, restore := range restores {
 				r.setVar(restore.name, restore.vr)
 			}
