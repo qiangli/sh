@@ -3746,6 +3746,12 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				}
 			}
 		}
+		// Bash `local` with no args lists every variable local to
+		// the current function scope in `name=value` form (arrays
+		// rendered as `name=([0]="..." [1]="...")`).
+		if !declHadNames && cm.Variant.Value == "local" && r.inFunc {
+			r.printLocalVars()
+		}
 	case *syntax.TimeClause:
 		// bash 5.3 only prints timing output for the outermost
 		// `time` keyword in a stack of nested `time` clauses;

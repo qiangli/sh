@@ -490,6 +490,68 @@ func (r *Runner) envGet(name string) string {
 	return r.lookupVar(name).String()
 }
 
+// printLocalVars writes the local variables of the current function
+// scope to stdout in bash's `local` listing format:
+//
+//	name=value                                  (scalar)
+//	name=([0]="x" [1]="y")                      (indexed array)
+//	name=([k]="v")                              (associative array)
+//
+// Iteration order is sorted by name to match bash. Only the current
+// overlay is enumerated; vars inherited from the parent scope are
+// skipped — those aren't local.
+func (r *Runner) printLocalVars() {
+	overlay, ok := r.writeEnv.(*overlayEnviron)
+	if !ok || overlay == nil {
+		return
+	}
+	names := make([]string, 0, len(overlay.values))
+	for k := range overlay.values {
+		names = append(names, k)
+	}
+	slices.Sort(names)
+	for _, name := range names {
+		nv := overlay.values[name]
+		if !nv.Variable.IsSet() {
+			continue
+		}
+		r.outf("%s\n", formatLocalVar(name, nv.Variable))
+	}
+}
+
+// formatLocalVar renders a single variable in bash's `local` listing
+// shape (no `declare` prefix, no attribute flags).
+func formatLocalVar(name string, vr expand.Variable) string {
+	var b strings.Builder
+	b.WriteString(name)
+	b.WriteByte('=')
+	switch vr.Kind {
+	case expand.Indexed:
+		b.WriteByte('(')
+		for i, v := range vr.List {
+			if i > 0 {
+				b.WriteByte(' ')
+			}
+			fmt.Fprintf(&b, "[%d]=%s", i, bashDeclareQuote(v))
+		}
+		b.WriteByte(')')
+	case expand.Associative:
+		b.WriteByte('(')
+		first := true
+		for _, k := range expand.AssocKeysInBashOrder(vr.Map) {
+			if !first {
+				b.WriteByte(' ')
+			}
+			first = false
+			fmt.Fprintf(&b, "[%s]=%s", k, bashDeclareQuote(vr.Map[k]))
+		}
+		b.WriteByte(')')
+	default:
+		b.WriteString(bashSetQuote(vr.Str))
+	}
+	return b.String()
+}
+
 func (r *Runner) delVar(name string) {
 	if err := r.writeEnv.Set(name, expand.Variable{}); err != nil {
 		r.errf("%s%s: %v\n", r.bashErrPrefix(r.curStmtPos), name, err)
