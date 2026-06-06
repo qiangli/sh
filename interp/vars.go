@@ -1107,10 +1107,18 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 	}
 	if as.Array == nil {
 		// don't return the zero value, as that's an unset variable
-		prev.Kind = expand.String
 		if valType == "-n" {
+			// `typeset -n NAME` (no value) converts an existing
+			// scalar to a nameref pointing at whatever its
+			// current value names (bash 5.3 behavior). Preserve
+			// the existing Str — `foo=bar; typeset -n foo` keeps
+			// foo's "bar" and dereferences it on read.
 			prev.Kind = expand.NameRef
+			return name, prev
 		}
+		// Plain `declare NAME` (no value, no -n): start fresh as
+		// an empty string so `declare x; echo "<$x>"` shows `<>`.
+		prev.Kind = expand.String
 		prev.Str = ""
 		return name, prev
 	}

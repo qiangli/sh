@@ -3747,9 +3747,17 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				vr.Integer = true
 			}
 			if as.Naked {
-				if valType == "-A" {
+				switch valType {
+				case "-A":
 					vr.Kind = expand.Associative
-				} else {
+				case "-n":
+					// `typeset -n NAME` (no value) on an
+					// existing var converts it to a nameref
+					// pointing at whatever its current value
+					// names (bash 5.3). Preserve the scalar
+					// value as the reference target.
+					vr.Kind = expand.NameRef
+				default:
 					vr.Kind = expand.KeepValue
 				}
 			} else {
