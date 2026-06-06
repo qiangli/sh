@@ -365,11 +365,22 @@ func (r *Runner) lookupVar(name string) expand.Variable {
 		vr.Kind, vr.Str = expand.String, runtime.GOOS
 	case "SHELLOPTS":
 		var opts []string
+		// Append the long names of POSIX-table options that are
+		// currently enabled.
 		for i, opt := range &posixOptsTable {
-			if r.opts[i] {
+			if r.opts[i] && opt.name != "" {
 				opts = append(opts, opt.name)
 			}
 		}
+		// Bash 5.3 also includes a curated subset of the
+		// default-on no-op options — braceexpand, hashall,
+		// interactive-comments — so scripts can read
+		// SHELLOPTS without having to know which options are
+		// "real" vs. compat-only.
+		for _, name := range []string{"braceexpand", "hashall", "interactive-comments"} {
+			opts = append(opts, name)
+		}
+		slices.Sort(opts)
 		vr.Kind, vr.Str = expand.String, strings.Join(opts, ":")
 		vr.ReadOnly = true
 	case "BASHOPTS":
