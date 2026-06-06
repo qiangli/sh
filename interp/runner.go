@@ -3779,6 +3779,24 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			} else {
 				name, vr = r.assignVal(name, vr, as, valType)
 			}
+			// `typeset +n NAME=value` semantics: the assignment
+			// goes to the nameref's resolved target (handled
+			// above), then the nameref attribute is stripped
+			// from the ORIGINAL name. The original keeps its
+			// value (the target name), e.g. `foo→bar` →
+			// `foo="bar"` after `+n foo=...`.
+			if valType == "+n" {
+				origName := as.Name.Value
+				if origName != name {
+					r.setVar(name, vr) // assign target first
+					orig := r.lookupVar(origName)
+					if orig.Kind == expand.NameRef {
+						orig.Kind = expand.String
+						r.setVar(origName, orig)
+					}
+					continue
+				}
+			}
 			if global {
 				vr.Local = false
 			} else if local {

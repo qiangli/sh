@@ -954,9 +954,8 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 	// don't dereference the existing nameref first or we'd
 	// overwrite the *target* (e.g. `typeset -n fee=flow` followed
 	// by `typeset -n fee=flip` should leave fee→flip, not
-	// flow=flip). `+n NAME=value` also targets the original var
-	// (strips the nameref attribute and sets a plain scalar).
-	if valType != "-n" && valType != "+n" {
+	// flow=flip).
+	if valType != "-n" {
 		if n, v := prev.Resolve(r.writeEnv); n != "" {
 			name, prev = n, v
 		}
