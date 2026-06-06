@@ -625,12 +625,15 @@ var errorCases = []errorCase{
 	),
 	errCase(
 		`"foo"(){ :; }`,
-		langErr("1:1: invalid func name"),
+		// Bash 5.3 defers non-identifier func-name errors to runtime,
+		// so the parser accepts here. Other langs still reject.
+		langErr("1:1: invalid func name", LangPOSIX|LangBats|LangZsh),
 		flipConfirm(LangMirBSDKorn), // TODO: support non-literal func names
 	),
 	errCase(
 		`foo$bar(){ :; }`,
-		langErr("1:1: invalid func name"),
+		// Bash 5.3 defers to runtime.
+		langErr("1:1: invalid func name", LangPOSIX|LangBats|LangMirBSDKorn|LangZsh),
 	),
 	errCase(
 		"{",
@@ -1425,7 +1428,12 @@ var errorCases = []errorCase{
 	),
 	errCase(
 		`""()`,
-		langErr("1:1: invalid func name"),
+		// Bash 5.3 parses this and emits "not a valid identifier" at
+		// runtime (the empty name fails ValidName); the bashy parser
+		// then errors with "foo() must be followed by a statement"
+		// because no body follows. Match that.
+		langErr("1:1: `foo()` must be followed by a statement", LangBash),
+		langErr("1:1: invalid func name", LangPOSIX|LangBats|LangZsh),
 		flipConfirm(LangMirBSDKorn), // TODO: support non-literal func names, even empty ones?
 	),
 	errCase(
@@ -1709,12 +1717,19 @@ var errorCases = []errorCase{
 	),
 	errCase(
 		"function `function",
-		langErr("1:1: `function` must be followed by a name", LangBash|LangMirBSDKorn),
+		// Bash 5.3 reads the backquote-prefixed token as part of the
+		// name (deferred to runtime) and then errors on the unclosed
+		// command substitution; the bashy parser surfaces the same
+		// "must be followed by a name" but the position now points
+		// inside the backquote rather than at the leading `function`.
+		langErr("1:11: `function` must be followed by a name", LangBash),
+		langErr("1:1: `function` must be followed by a name", LangMirBSDKorn),
 		langErr("1:11: `foo()` must be followed by a statement", LangZsh),
 	),
 	errCase(
 		`function "foo"(){}`,
-		langErr("1:1: `function` must be followed by a name", LangBash|LangMirBSDKorn),
+		// Bash 5.3 defers the non-identifier name check to runtime.
+		langErr("1:1: `function` must be followed by a name", LangMirBSDKorn),
 		langErr("1:10: invalid func name", LangZsh),
 	),
 	errCase(

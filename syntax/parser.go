@@ -2367,6 +2367,21 @@ func (p *Parser) gotStmtPipe(s *Stmt, binCmd bool) *Stmt {
 		}
 		w := p.wordAnyNumber()
 		if p.got(leftParen) {
+			// Bash 5.3 accepts `<(:) ()` / `'a b' ()` etc. at parse
+			// time and emits "not a valid identifier" at runtime.
+			// Reconstruct the source text of the word as the name
+			// and let the interpreter validate it. Other languages
+			// still reject at parse time.
+			if p.lang.in(LangBash) {
+				name := funcNameWordText(w)
+				if name == "" {
+					p.posErr(w.Pos(), "invalid func name")
+				}
+				lit := &Lit{ValuePos: w.Pos(), ValueEnd: w.End(), Value: name}
+				p.follow(w.Pos(), "foo(", rightParen)
+				p.funcDecl(s, w.Pos(), false, true, lit)
+				break
+			}
 			p.posErr(w.Pos(), "invalid func name")
 		}
 		p.callExpr(s, w, false)
@@ -2988,13 +3003,106 @@ func (p *Parser) letClause(s *Stmt) {
 	s.Cmd = lc
 }
 
+// funcNameWordText reconstructs a source-form string from a parsed Word
+// being used as a function name. It handles the common WordPart shapes
+// that bash accepts in function names (literals, $param, ${param},
+// single/double quotes, process substitutions); the resulting string
+// is what bash would diagnose as the "not a valid identifier" name at
+// runtime if it is not a valid identifier.
+func funcNameWordText(w *Word) string {
+	var sb strings.Builder
+	for _, part := range w.Parts {
+		switch p := part.(type) {
+		case *Lit:
+			sb.WriteString(p.Value)
+		case *ParamExp:
+			sb.WriteByte('$')
+			if !p.Short {
+				sb.WriteByte('{')
+			}
+			if p.Length {
+				sb.WriteByte('#')
+			} else if p.Excl {
+				sb.WriteByte('!')
+			}
+			if p.Param != nil {
+				sb.WriteString(p.Param.Value)
+			}
+			if !p.Short {
+				sb.WriteByte('}')
+			}
+		case *SglQuoted:
+			if p.Dollar {
+				sb.WriteByte('$')
+			}
+			sb.WriteByte('\'')
+			sb.WriteString(p.Value)
+			sb.WriteByte('\'')
+		case *DblQuoted:
+			if p.Dollar {
+				sb.WriteByte('$')
+			}
+			sb.WriteByte('"')
+			for _, inner := range p.Parts {
+				if lit, ok := inner.(*Lit); ok {
+					sb.WriteString(lit.Value)
+				} else {
+					sb.WriteString(funcNameWordText(&Word{Parts: []WordPart{inner}}))
+				}
+			}
+			sb.WriteByte('"')
+		case *CmdSubst:
+			sb.WriteString("$(...)")
+		case *ProcSubst:
+			if p.Op == CmdIn {
+				sb.WriteString("<(")
+			} else {
+				sb.WriteString(">(")
+			}
+			for _, stmt := range p.Stmts {
+				if call, ok := stmt.Cmd.(*CallExpr); ok && len(call.Args) > 0 {
+					sb.WriteString(funcNameWordText(call.Args[0]))
+				}
+			}
+			sb.WriteByte(')')
+		default:
+			// Unknown part — emit a placeholder so the runtime sees a
+			// non-empty (invalid) identifier.
+			sb.WriteByte('?')
+		}
+	}
+	return sb.String()
+}
+
 func (p *Parser) bashFuncDecl(s *Stmt) {
 	fpos := p.pos
 	p.next()
 	names := make([]*Lit, 0, 1)
-	for p.tok == _LitWord && p.val != "{" {
-		names = append(names, p.lit(p.pos, p.val))
-		p.next()
+	// Bash accepts `function NAME` where NAME may contain non-name
+	// characters like `$`, `[`, quotes, etc. (e.g. `function sys$read`
+	// or `function 'a b'`), and defers the "not a valid identifier"
+	// error to runtime. Read each name as a Word and stringify it so
+	// the interpreter can validate the literal text later. Only Bash
+	// has this deferral; other languages still reject at parse time.
+	if p.lang.in(LangBash) {
+		for p.tok != _Newl && p.tok != semicolon && p.tok != _EOF &&
+			p.tok != leftBrace && !(p.tok == _LitWord && p.val == "{") &&
+			p.tok != leftParen {
+			w := p.getWord()
+			if w == nil {
+				break
+			}
+			text := funcNameWordText(w)
+			if text == "" {
+				break
+			}
+			names = append(names, &Lit{ValuePos: w.Pos(), ValueEnd: w.End(), Value: text})
+		}
+	} else {
+		for p.tok == _LitWord && p.val != "{" {
+			names = append(names, p.lit(p.pos, p.val))
+			p.next()
+		}
 	}
 	hasParens := p.got(leftParen)
 	switch len(names) {

@@ -696,6 +696,31 @@ func validExportedFuncName(name string) bool {
 	return true
 }
 
+// validBashFuncName reports whether s is a function name bash 5.3
+// would accept. Bash is much more lenient than the identifier syntax
+// (e.g. `+`, `@`, `foo-bar`, `2nd` are all valid function names), but
+// it still rejects names containing shell metacharacters or whitespace
+// that would require quoting in a normal command. The intent is to
+// catch the names that bash itself diagnoses as "not a valid
+// identifier" at runtime (parameter expansions, process subs, quoted
+// strings, etc.) while still admitting bash's broad nominal alphabet.
+func validBashFuncName(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch c {
+		case ' ', '\t', '\n', '\r',
+			'$', '\'', '"', '`', '\\',
+			'(', ')', '{', '}', '[', ']',
+			'<', '>', '|', '&', ';', '#':
+			return false
+		}
+	}
+	return true
+}
+
 // printFuncDecl prints a function definition in bash 5.3's
 // `declare -f` shape: `name () \n{ \n    stmt;\n    stmt2\n}` —
 // 4-space indent at every nesting level, trailing `;` on every
@@ -3482,6 +3507,19 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		// builtin (`return`, `break`, `export`, etc.) is a fatal
 		// error. Reject before stashing in the function table.
 		name := cm.Name.Value
+		// Bash 5.3 defers non-identifier function-name checks from
+		// parse time to runtime. `function sys$read` parses cleanly
+		// (name = literal text "sys$read") and then errors here with
+		// "<name>: not a valid identifier". Bash allows many chars
+		// in function names (e.g. `+`, `@`, `foo-bar`), so only
+		// reject names containing shell-special chars that bash
+		// itself rejects (whitespace, $, ', ", (, ), etc.).
+		if !validBashFuncName(name) {
+			r.errf("%s`%s': not a valid identifier\n",
+				r.bashErrPrefix(cm.Position), name)
+			r.exit.code = 1
+			return
+		}
 		if r.opts[optPosix] && isPosixSpecialBuiltin(name) {
 			r.errf("%s`%s': is a special builtin\n",
 				r.bashErrPrefix(cm.Position), name)
