@@ -478,6 +478,16 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		// r.lastExpandExit; reset it here so we only see warnings
 		// from this invocation, then propagate at the end.
 		r.lastExpandExit = exitStatus{}
+		// Wire up bash printf %n: store the byte count emitted so far
+		// into the named variable. Restore the previous callback after
+		// this printf invocation so nested users of r.ecfg aren't
+		// affected.
+		prevOnPercentN := r.ecfg.OnPercentN
+		r.ecfg.OnPercentN = func(name string, n int) error {
+			r.setVarString(name, strconv.Itoa(n))
+			return nil
+		}
+		defer func() { r.ecfg.OnPercentN = prevOnPercentN }()
 		for {
 			s, n, err := expand.Format(r.ecfg, format, args)
 			stop := errors.Is(err, expand.ErrPrintfStop)

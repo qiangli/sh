@@ -173,6 +173,22 @@ func Quote(s string, lang LangVariant) (string, error) {
 		return "'" + s + "'", nil
 	}
 
+	// Bash 5.3 `${var@Q}` and `printf %q` form for strings containing
+	// single quotes: close-quote, backslash-escape the quote, reopen.
+	// e.g. `a'b` -> `'a'\''b'`.
+	if lang.in(LangBash) {
+		b.WriteByte('\'')
+		for _, r := range s {
+			if r == '\'' {
+				b.WriteString(`'\''`)
+				continue
+			}
+			b.WriteRune(r)
+		}
+		b.WriteByte('\'')
+		return b.String(), nil
+	}
+
 	// The string contains single quotes,
 	// so fall back to double quotes.
 	b.WriteByte('"')

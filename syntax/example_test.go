@@ -124,7 +124,7 @@ func ExampleQuote() {
 	// Output:
 	// Quote(            "foo"): foo
 	// Quote(       "bar $baz"): 'bar $baz'
-	// Quote(      "\"won't\""): "\"won't\""
+	// Quote(      "\"won't\""): '"won'\''t"'
 	// Quote(         "~/home"): '~/home'
 	// Quote(          "#1304"): '#1304'
 	// Quote(     "name=value"): 'name=value'

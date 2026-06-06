@@ -400,7 +400,7 @@ var runTests = []runTest{
 	// printf escape sequences at end of format string (must not panic)
 	{"printf '\\0'", "\x00"},
 	{"printf '\\01'", "\x01"},
-	{"printf '\\x'", "\\x #IGNORE bash prints a warning to stderr"},
+	{"printf '\\x'", "printf: missing hex digit for \\x\n\\xexit status 1"},
 	{"printf 'a\\0'", "a\x00"},
 	{"printf '\\\\'", "\\"},
 

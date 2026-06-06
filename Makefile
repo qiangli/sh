@@ -33,6 +33,12 @@ BASH_TEST_SKIP := coproc jobs trap
 # directly in the .right file (so filtering them would break the diff).
 BASH_TEST_FILTER_EXPECT := attr exp extglob extglob2 invert invocation more-exp new-exp nquote nquote1 nquote2 nquote3 nquote5 posix2 varenv
 
+# Tests whose bash run-* helper pipes captured output through `cat -v` to
+# make control characters visible (NUL -> ^@, BEL -> ^G, ESC -> ^[, etc.)
+# before diffing against the .right file. Apply the same transform here
+# so raw control bytes don't trip the byte-for-byte diff.
+BASH_TEST_CAT_V := printf
+
 ## test-bash: Run bash 5.3 native test suite against bashy (with per-test timeout)
 test-bash: build test-bash-helpers
 	@echo "Running bash 5.3 test suite against bashy ($(BASH_TEST_TIMEOUT)s timeout per test)..."
@@ -70,6 +76,10 @@ test-bash: build test-bash-helpers
 					grep -av '^expect' <$$BASH_TSTRAW >$$BASH_TSTOUT 2>/dev/null || : ;; \
 				*) \
 					cp $$BASH_TSTRAW $$BASH_TSTOUT 2>/dev/null || : ;; \
+			esac; \
+			case " $(BASH_TEST_CAT_V) " in \
+				*" $$name "*) \
+					cat -v <$$BASH_TSTOUT >$$BASH_TSTRAW 2>/dev/null && cp $$BASH_TSTRAW $$BASH_TSTOUT 2>/dev/null || : ;; \
 			esac; \
 			if [ $$rc -eq 137 ] 2>/dev/null; then \
 				timeout_count=$$((timeout_count + 1)); \

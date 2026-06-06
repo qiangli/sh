@@ -4,6 +4,7 @@
 package expand
 
 import (
+	"bytes"
 	"cmp"
 	"errors"
 	"fmt"
@@ -106,6 +107,12 @@ type Config struct {
 	// setting a non-zero exit status; if nil the warning is silently
 	// dropped. Matches bash 5.3's "warn but continue" printf behaviour.
 	OnFormatWarning func(msg string)
+
+	// OnPercentN is invoked by [Format] when printf's `%n` conversion
+	// runs. It receives the variable name (next argument) and the byte
+	// count emitted so far. The callback is responsible for assigning
+	// the count to the named variable. If nil, %n is a no-op.
+	OnPercentN func(name string, n int) error
 
 	bufferAlloc strings.Builder
 	fieldAlloc  [4]fieldPart
@@ -602,7 +609,7 @@ func ansiCEscape(s string) string {
 func FormatBPercent(cfg *Config, s string) (string, error) {
 	cfg = prepareConfig(cfg)
 	sb := cfg.strBuilder()
-	_, err := formatIntoMode(sb, s, nil, cfg.StartTime, true, cfg.OnFormatWarning)
+	_, err := formatIntoMode(sb, s, nil, cfg.StartTime, true, cfg.OnFormatWarning, nil)
 	if err == errPrintfStop {
 		return sb.String(), errPrintfStop
 	}
@@ -616,7 +623,7 @@ func Format(cfg *Config, format string, args []string) (string, int, error) {
 	cfg = prepareConfig(cfg)
 	sb := cfg.strBuilder()
 
-	consumed, err := formatInto(sb, format, args, cfg.StartTime, cfg.OnFormatWarning)
+	consumed, err := formatIntoMode(sb, format, args, cfg.StartTime, false, cfg.OnFormatWarning, cfg.OnPercentN)
 	if err == errPrintfStop {
 		// `\c` told printf to stop emitting output from a %b arg
 		// (or `\c` directly in format). Surface what's already in
@@ -735,14 +742,15 @@ func strftime(format string, t time.Time) string {
 }
 
 func formatInto(sb *strings.Builder, format string, args []string, startTime time.Time, warn func(string)) (int, error) {
-	return formatIntoMode(sb, format, args, startTime, false, warn)
+	return formatIntoMode(sb, format, args, startTime, false, warn, nil)
 }
 
 // formatIntoMode is the inner worker for [Format]. percentB switches the
 // escape table to bash's `%b` interpretation: `\"`, `\'`, `\?` are
 // preserved with their backslash (bash only honors those escapes in
-// format strings, not in `%b` arg).
-func formatIntoMode(sb *strings.Builder, format string, args []string, startTime time.Time, percentB bool, warn func(string)) (int, error) {
+// format strings, not in `%b` arg). onPercentN is invoked by `%n` to
+// store the byte count into the variable named by the next arg.
+func formatIntoMode(sb *strings.Builder, format string, args []string, startTime time.Time, percentB bool, warn func(string), onPercentN func(string, int) error) (int, error) {
 	inPercentB := percentB
 	var fmts []byte
 	initialArgs := len(args)
@@ -754,12 +762,17 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 			j := 0
 			for ; j < max && i+j < len(format); j++ {
 				c := format[i+j]
-				if (c >= '0' && c <= '9') ||
-					(hex && c >= 'a' && c <= 'f') ||
-					(hex && c >= 'A' && c <= 'F') {
-					// valid octal or hex char
+				if hex {
+					if !((c >= '0' && c <= '9') ||
+						(c >= 'a' && c <= 'f') ||
+						(c >= 'A' && c <= 'F')) {
+						break
+					}
 				} else {
-					break
+					// octal: only 0-7
+					if c < '0' || c > '7' {
+						break
+					}
 				}
 			}
 			digits := format[i : i+j]
@@ -895,7 +908,14 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 					}
 					break
 				}
-				fallthrough
+				// Bash 5.3: `\x`, `\u`, `\U` with no following hex
+				// digits emits a warning to stderr; the bytes `\x`
+				// (or `\u`, `\U`) are still written out literally.
+				if warn != nil {
+					warn(fmt.Sprintf("printf: missing hex digit for \\%c", c))
+				}
+				sb.WriteByte('\\')
+				sb.WriteByte(c)
 			default: // no escape sequence
 				sb.WriteByte('\\')
 				sb.WriteByte(c)
@@ -991,13 +1011,34 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 				// be reused as shell input. Empty → '', strings with
 				// only safe chars are emitted as-is, anything else uses
 				// $'...' ANSI-C quoting or single-quoting via
-				// syntax.Quote. %Q is bash 5.3's variant — same quoting
-				// rules, just applies any precision to the *unquoted*
-				// argument first (we treat it identically here since
-				// our precision handling is limited).
+				// syntax.Quote.
+				//
+				// Bash 5.3 precision semantics differ between the two:
+				//   - `%.Nq` quotes the full argument first, then
+				//     applies the precision to the quoted result.
+				//   - `%.NQ` applies the precision to the *unquoted*
+				//     argument first, then quotes the truncated string.
 				arg := ""
 				if len(args) > 0 {
 					arg, args = args[0], args[1:]
+				}
+				// Parse a precision (`%.N…`) from the partial verb
+				// prefix so we can apply it before vs after quoting.
+				precN := -1
+				stripPrec := false
+				if dot := bytes.IndexByte(fmts, '.'); dot >= 0 {
+					if n, perr := strconv.Atoi(string(fmts[dot+1:])); perr == nil {
+						precN = n
+						stripPrec = true
+					}
+				}
+				// %Q: trim unquoted arg to precision before quoting.
+				if c == 'Q' && precN >= 0 {
+					if precN <= 0 {
+						arg = ""
+					} else if precN < len(arg) {
+						arg = arg[:precN]
+					}
 				}
 				// bash's `printf %q` strategy:
 				//   - All chars printable AND no shell-special:
@@ -1020,12 +1061,15 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 				}
 				// Honor the width/precision specifier (`%-10q`,
 				// `%10q`, `%.5q`, …) by passing the quoted result
-				// through fmt.Sprintf with `%s` semantics.
+				// through fmt.Sprintf with `%s` semantics. For `%Q`
+				// we already trimmed the unquoted arg, so strip the
+				// precision from the verb to avoid Go re-trimming.
 				if len(fmts) > 1 {
-					// fmts holds the partial verb prefix, e.g.
-					// `%10` (no trailing letter yet). Append `s` to
-					// reuse Go's string formatter.
 					verb := string(fmts) + "s"
+					if stripPrec && c == 'Q' {
+						dot := bytes.IndexByte(fmts, '.')
+						verb = string(fmts[:dot]) + "s"
+					}
 					sb.WriteString(fmt.Sprintf(verb, quoted))
 				} else {
 					sb.WriteString(quoted)
@@ -1033,12 +1077,8 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 				fmts = nil
 				continue
 			case 'n':
-				// bash printf %n stores the byte count emitted
-				// so far into the variable named by the next arg.
-				// We don't have a writeback channel from this
-				// package, so just validate the identifier and
-				// emit bash's diagnostic on bad names; the actual
-				// assignment is dropped (TODO).
+				// bash printf %n stores the byte count emitted so
+				// far into the variable named by the next arg.
 				arg := ""
 				if len(args) > 0 {
 					arg, args = args[0], args[1:]
@@ -1046,9 +1086,14 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 				if !syntax.ValidName(arg) {
 					return 0, fmt.Errorf("printf: `%s': not a valid identifier", arg)
 				}
+				if onPercentN != nil {
+					if err := onPercentN(arg, sb.Len()); err != nil {
+						return 0, err
+					}
+				}
 				fmts = nil
 				continue
-			case 's', 'b', 'd', 'i', 'u', 'o', 'x', 'X', 'f', 'e', 'E', 'g', 'G':
+			case 's', 'b', 'd', 'i', 'u', 'o', 'x', 'X', 'f', 'F', 'e', 'E', 'g', 'G':
 				arg := ""
 				if len(args) > 0 {
 					arg, args = args[0], args[1:]
@@ -1062,7 +1107,7 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 					// Apply width/precision via Go's %s after the
 					// escape-processed bytes are captured.
 					var bsb strings.Builder
-					_, err := formatIntoMode(&bsb, arg, nil, startTime, true, warn)
+					_, err := formatIntoMode(&bsb, arg, nil, startTime, true, warn, nil)
 					if err == ErrPrintfStop {
 						// Surface the partial output and signal stop.
 						sb.WriteString(bsb.String())
@@ -1080,7 +1125,7 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 					fmts = nil
 					continue
 				} else if c != 's' {
-					if c == 'f' || c == 'e' || c == 'E' || c == 'g' || c == 'G' {
+					if c == 'f' || c == 'F' || c == 'e' || c == 'E' || c == 'g' || c == 'G' {
 						// The same `'X` / `"X` shorthand the integer
 						// conversions honor — bash extends it to
 						// float conversions, so `printf '%f' "'A"` is
