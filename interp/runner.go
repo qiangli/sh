@@ -3607,13 +3607,29 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				switch flag := fp.flag(); flag {
 				case "-x", "-r":
 					modes = append(modes, flag)
+				case "+x", "+r":
+					modes = append(modes, flag)
 				case "-a", "-A", "-n", "-i":
 					valType = flag
+				case "+i", "+a", "+A":
+					// `+X` removes attribute X. Tracked via modes
+					// so setVar can clear the flag on the
+					// destination variable.
+					modes = append(modes, flag)
+				case "+n":
+					// `+n` strips the nameref attribute. Also
+					// flagged via valType so assignVal targets
+					// the nameref var itself, not the resolved
+					// reference target.
+					valType = "+n"
+					modes = append(modes, flag)
 				case "-u", "-l", "-c":
 					// Case-conversion attributes (`declare -u/-l/-c`).
 					// Tracked as additional modes; applied at assign
 					// time via `setVar` and surfaced in `declare -p`
 					// output via `expand.Variable.Flags`.
+					modes = append(modes, flag)
+				case "+u", "+l", "+c":
 					modes = append(modes, flag)
 				case "-g":
 					global = true
@@ -3781,14 +3797,35 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				switch mode {
 				case "-x":
 					vr.Exported = true
+				case "+x":
+					vr.Exported = false
 				case "-r":
 					vr.ReadOnly = true
+				case "+r":
+					// Bash refuses to remove the readonly
+					// attribute once set; skip silently.
 				case "-u":
 					vr.Upper, vr.Lower, vr.Capitalize = true, false, false
+				case "+u":
+					vr.Upper = false
 				case "-l":
 					vr.Upper, vr.Lower, vr.Capitalize = false, true, false
+				case "+l":
+					vr.Lower = false
 				case "-c":
 					vr.Upper, vr.Lower, vr.Capitalize = false, false, true
+				case "+c":
+					vr.Capitalize = false
+				case "+i":
+					vr.Integer = false
+				case "+n":
+					// `+n` strips the nameref attribute and
+					// returns the variable to a plain scalar
+					// whose value is whatever the nameref was
+					// pointing at.
+					if vr.Kind == expand.NameRef {
+						vr.Kind = expand.String
+					}
 				}
 			}
 			// Apply case-conversion attributes to the current value
