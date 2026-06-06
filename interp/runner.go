@@ -746,7 +746,8 @@ func (r *Runner) printFuncDecl(name string, body *syntax.Stmt) {
 		}
 		// bash 5.3 groups `cmd & nextStmt` onto one line when
 		// the next stmt is a simple/subshell stmt (not a
-		// compound). The merged line gets a trailing `;`.
+		// compound). The merged line gets a trailing `;` only
+		// when it's not the last stmt of the function body.
 		if st.Background && i+1 < len(block.Stmts) {
 			nxt := block.Stmts[i+1]
 			if isSimpleForAmpJoin(nxt) {
@@ -757,14 +758,14 @@ func (r *Runner) printFuncDecl(name string, body *syntax.Stmt) {
 				// line gets `( EXPR )` instead of `(EXPR)`.
 				nbody = bashSubshellSpace(nbody)
 				body = body + " " + nbody
-				if !strings.HasSuffix(body, ";") {
-					body += ";"
-				}
 				skipNext = true
 			}
 		}
 		isLast := (i == len(block.Stmts)-1) ||
 			(skipNext && i+1 == len(block.Stmts)-1)
+		if skipNext && !isLast && !strings.HasSuffix(body, ";") {
+			body += ";"
+		}
 		rendered := bashDeclareFmt(body, isLast)
 		r.out(rendered)
 		r.out("\n")
