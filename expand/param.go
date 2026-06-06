@@ -105,6 +105,53 @@ func AssocKeysInBashOrder(m map[string]string) []string {
 	return keys
 }
 
+// applyParamMods applies the trailing modifier portion of a parameter
+// expansion (Slice, Repl, Exp) to a precomputed string value. Used
+// by the indirect-expansion path (`${!x//c/x}`) where the value
+// comes from a name lookup but the substitution should still apply.
+func applyParamMods(cfg *Config, pe *syntax.ParamExp, str string) (string, error) {
+	if pe.Repl == nil {
+		return str, nil
+	}
+	orig, err := Pattern(cfg, pe.Repl.Orig)
+	if err != nil {
+		return "", err
+	}
+	if orig == "" {
+		return str, nil
+	}
+	var with string
+	if pe.Repl.With != nil {
+		var withSb strings.Builder
+		for _, part := range pe.Repl.With.Parts {
+			if lit, ok := part.(*syntax.Lit); ok {
+				withSb.WriteString(stripBackslashEscapes(lit.Value))
+				continue
+			}
+			s, lerr := Literal(cfg, &syntax.Word{Parts: []syntax.WordPart{part}})
+			if lerr != nil {
+				return "", lerr
+			}
+			withSb.WriteString(s)
+		}
+		with = withSb.String()
+	}
+	n := 1
+	if pe.Repl.All {
+		n = -1
+	}
+	locs := findAllIndex(orig, str, n)
+	var sb strings.Builder
+	last := 0
+	for _, loc := range locs {
+		sb.WriteString(str[last:loc[0]])
+		sb.WriteString(with)
+		last = loc[1]
+	}
+	sb.WriteString(str[last:])
+	return sb.String(), nil
+}
+
 func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 	oldParam := cfg.curParam
 	cfg.curParam = pe
@@ -221,6 +268,7 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 		str = strconv.Itoa(n)
 	case pe.Excl:
 		var strs []string
+		applyMod := false
 		switch {
 		case pe.Names != 0:
 			strs = cfg.namesByPrefix(pe.Param.Value)
@@ -241,9 +289,19 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 		default:
 			vr = cfg.Env.Get(str)
 			strs = append(strs, vr.String())
+			// `${!x//c/x}` — apply trailing modifiers to the
+			// dereferenced value (bash 5.3).
+			applyMod = true
 		}
 		slices.Sort(strs)
 		str = strings.Join(strs, " ")
+		if applyMod {
+			if mod, err := applyParamMods(cfg, pe, str); err != nil {
+				return "", err
+			} else {
+				str = mod
+			}
+		}
 	case pe.Width:
 		// mksh's ${%var}: character width of the string value.
 		str = strconv.Itoa(utf8.RuneCountInString(str))
