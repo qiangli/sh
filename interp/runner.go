@@ -2278,6 +2278,68 @@ func bashArithSpace(body string) string {
 	return b.String()
 }
 
+// compactArithAssign removes single spaces around assignment-family
+// operators (`=`, `+=`, `-=`, `*=`, `/=`, `%=`, `&=`, `|=`, `^=`)
+// so `i = 0` becomes `i=0` to match bash 5.3's declare -f arith-for
+// header. Comparison operators (`==`, `!=`, `<`, `<=`, `>`, `>=`,
+// `&&`, `||`) and other non-assign ops are preserved verbatim —
+// bash echoes the source spacing for those.
+func compactArithAssign(s string) string {
+	// Single-pass regex-like rewrite: look for spaces flanking an
+	// `=` token where the left-side identifier ends in a valid
+	// assignment context. We scan for occurrences of ` = ` or
+	// ` += `, ` -= ` … and collapse them. Comparison `==`/`!=`/
+	// `<=`/`>=` stay spaced.
+	out := make([]byte, 0, len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		// Look for `<space>OP<space>` where OP is assignment.
+		if c == ' ' && i+2 < len(s) && s[i+2] == ' ' {
+			// Single-char op: `=`
+			op := s[i+1]
+			if op == '=' {
+				// Reject comparison `==` (would be ` == `, but
+				// then s[i+2] would be `=` not ` `, so we'd
+				// never reach here).
+				out = trimTrailingSpace(out)
+				out = append(out, '=')
+				i += 2
+				continue
+			}
+			// Two-char op: `+=`, `-=`, `*=`, `/=`, `%=`, `&=`,
+			// `|=`, `^=`, `<<=`, `>>=`. We're scanning a single
+			// `<space>OP<space>` pattern (OP being s[i+1] then
+			// `=`). Look for that shape: s[i+1] is op char,
+			// s[i+2] is `=`, s[i+3] is space.
+		}
+		if c == ' ' && i+3 < len(s) && s[i+3] == ' ' && s[i+2] == '=' {
+			op := s[i+1]
+			switch op {
+			case '+', '-', '*', '/', '%', '&', '|', '^':
+				// Reject `<=`, `>=`, `!=` (comparisons)
+				// — handled separately, none reach here
+				// because the leading char wouldn't match.
+				out = trimTrailingSpace(out)
+				out = append(out, op, '=')
+				i += 3
+				continue
+			}
+		}
+		out = append(out, c)
+	}
+	return string(out)
+}
+
+// trimTrailingSpace strips a single trailing space from buf and
+// returns the truncated slice. Helper for compactArithAssign so we
+// drop the space we already emitted on the left side of an `=`.
+func trimTrailingSpace(buf []byte) []byte {
+	if n := len(buf); n > 0 && buf[n-1] == ' ' {
+		return buf[:n-1]
+	}
+	return buf
+}
+
 // bashArithForNorm normalises the `for ((init; cond; post))` header in
 // declare -f output to match bash 5.3:
 //   - empty init/cond/post slots become `1` (a no-op true expression);
@@ -2375,6 +2437,13 @@ func bashArithForNorm(body string) string {
 					postEmpty = true
 				}
 				p = "1"
+			} else {
+				// bash 5.3 declare -f keeps assignment-family
+				// operators (`=`, `+=`, …) compact inside arith-
+				// for headers while preserving spaces around
+				// comparison ops (`<`, `>`, `&&`, `||`). Source
+				// `i=0` stays `i=0` after a round trip.
+				p = compactArithAssign(p)
 			}
 			parts[idx] = p
 		}
