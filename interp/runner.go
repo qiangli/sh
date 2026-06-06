@@ -4328,6 +4328,17 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 				r.setGlobalVarString(name, strconv.Itoa(fd))
 				return pr, nil
 			}
+			// `cmd N<<TAG` with a numeric fd routes the heredoc
+			// reader through fd N instead of stdin. This lets
+			// multi-heredoc commands like `while read l <&3; …;
+			// done <<EOF1 3<<EOF2` work — both heredocs become
+			// distinct fds.
+			if n, err := strconv.Atoi(val); err == nil && n >= 0 {
+				if err := r.setReadFd(n, pr); err != nil {
+					return nil, err
+				}
+				return pr, nil
+			}
 		}
 		r.stdin = pr
 		return pr, nil
