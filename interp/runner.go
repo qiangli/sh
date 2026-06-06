@@ -3515,14 +3515,19 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		// reject names containing shell-special chars that bash
 		// itself rejects (whitespace, $, ', ", (, ), etc.).
 		if !validBashFuncName(name) {
+			// Bash reports the failure at the end of the function
+			// declaration (line of the closing brace), not at its
+			// start, so use End().
 			r.errf("%s`%s': not a valid identifier\n",
-				r.bashErrPrefix(cm.Position), name)
+				r.bashErrPrefix(cm.End()), name)
 			r.exit.code = 1
 			return
 		}
 		if r.opts[optPosix] && isPosixSpecialBuiltin(name) {
+			// Bash reports at end of declaration (closing brace
+			// line), matching the "not a valid identifier" path.
 			r.errf("%s`%s': is a special builtin\n",
-				r.bashErrPrefix(cm.Position), name)
+				r.bashErrPrefix(cm.End()), name)
 			r.exit.code = 1
 			r.exit.exiting = true
 			return
