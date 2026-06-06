@@ -292,6 +292,10 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 	case "unset":
 		vars := true
 		funcs := true
+		// `-n NAME` unsets the nameref itself (not the variable
+		// it points to). Without -n, unset of a nameref follows
+		// the reference and unsets the target.
+		nameref := false
 	unsetOpts:
 		for i, arg := range args {
 			switch arg {
@@ -299,6 +303,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				funcs = false
 			case "-f":
 				vars = false
+			case "-n":
+				nameref = true
+				funcs = false
 			default:
 				args = args[i:]
 				break unsetOpts
@@ -322,6 +329,12 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				if !syntax.ValidName(arg) {
 					return failf(2, "unset: `%s': not a valid identifier\n", arg)
 				}
+			}
+			if nameref {
+				// Skip the auto-resolve so we delete the nameref
+				// variable itself rather than its target.
+				r.delVar(arg)
+				continue
 			}
 			if vars && r.lookupVar(arg).IsSet() {
 				r.delVar(arg)
