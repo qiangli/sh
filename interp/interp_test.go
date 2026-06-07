@@ -1950,7 +1950,7 @@ var runTests = []runTest{
 	},
 	{
 		"[[ a =~ [ ]]",
-		"exit status 2 #JUSTERR",
+		"[[: error parsing regexp: missing closing ]: `[`\nexit status 2 #JUSTERR",
 	},
 	{
 		"[[ a__b__c =~ _*(b_*) ]]; echo ${BASH_REMATCH[0]}; echo ${BASH_REMATCH[1]}",

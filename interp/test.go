@@ -162,11 +162,16 @@ func (r *Runner) binTest(ctx context.Context, op syntax.BinTestOperator, x, y st
 		}
 		re, err := regexp.Compile(pat)
 		if err != nil {
+			r.errf("[[: %s\n", err)
 			r.exit.code = 2
 			return false
 		}
 		m := re.FindStringSubmatch(x)
 		if m == nil {
+			r.setVar("BASH_REMATCH", expand.Variable{
+				Set:  true,
+				Kind: expand.Indexed,
+			})
 			return false
 		}
 		vr := expand.Variable{
