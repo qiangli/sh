@@ -1129,18 +1129,32 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 		// honours integer-attribute math even when the prior value
 		// was stored as a literal expression like `4+1`).
 		if prev.Integer && valType != "-a" && valType != "-A" {
-			arithEval := func(s string) int {
+			arithEval := func(s string) (int, error) {
 				if s == "" {
-					return 0
+					return 0, nil
 				}
 				expr, perr := syntax.NewParser().Arithmetic(strings.NewReader(s))
 				if perr != nil || expr == nil {
-					return 0
+					return 0, perr
 				}
-				v, _ := expand.Arithm(r.ecfg, expr)
-				return v
+				return expand.Arithm(r.ecfg, expr)
 			}
-			rhs := arithEval(s)
+			arithAssignErr := func(s string, err error) {
+				if err == nil {
+					return
+				}
+				prefix := r.filename
+				if prefix == "" {
+					prefix = "bashy"
+				}
+				r.expandErr(fmt.Errorf("%s: line %d: %s: %s",
+					prefix, as.Value.Pos().Line(), s, err))
+			}
+			rhs, err := arithEval(s)
+			if err != nil {
+				arithAssignErr(s, err)
+				return name, prev
+			}
 			if as.Append {
 				curStr := prev.Str
 				// For indexed arrays the integer-flag bumps each
@@ -1165,7 +1179,12 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 						curStr = ""
 					}
 				}
-				rhs = arithEval(curStr) + rhs
+				cur, err := arithEval(curStr)
+				if err != nil {
+					arithAssignErr(curStr, err)
+					return name, prev
+				}
+				rhs = cur + rhs
 			}
 			prev.Kind = expand.String
 			prev.Str = strconv.Itoa(rhs)

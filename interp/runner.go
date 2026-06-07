@@ -361,6 +361,39 @@ func (r *Runner) arithm(expr syntax.ArithmExpr) int {
 	return n
 }
 
+func (r *Runner) letArithm(expr syntax.ArithmExpr) int {
+	n, err := expand.Arithm(r.ecfg, expr)
+	if err != nil && r.bashCompatErrors {
+		exprText := r.arithmSourceText(expr, false)
+		if exprText == "" {
+			exprText = printArithmExpr(expr)
+		}
+		if w, ok := expr.(*syntax.Word); ok {
+			exprText = r.literal(w)
+		}
+		prefix := r.filename
+		if prefix == "" {
+			prefix = "bashy"
+		}
+		err = fmt.Errorf("%s: line %d: let: %s: %s",
+			prefix, expr.Pos().Line(), exprText, err)
+	}
+	r.lastArithErr = err
+	r.expandErr(err)
+	return n
+}
+
+func printArithmExpr(expr syntax.ArithmExpr) string {
+	var b strings.Builder
+	syntax.NewPrinter().Print(&b, &syntax.Stmt{
+		Cmd: &syntax.ArithmCmd{X: expr},
+	})
+	s := strings.TrimSpace(b.String())
+	s = strings.TrimPrefix(s, "((")
+	s = strings.TrimSuffix(s, "))")
+	return strings.TrimSpace(s)
+}
+
 // bashArithmError reformats an arithmetic-evaluation error so it
 // matches bash 5.3's diagnostic shape:
 //
@@ -407,6 +440,18 @@ func (r *Runner) bashArithmError(expr syntax.ArithmExpr, err error, command bool
 		return compactArithAssign(s)
 	}
 	exprText := printArithm(expr)
+	if !command && strings.Contains(bashMsg, "error token is \"$") {
+		exprText = strings.ReplaceAll(exprText, `\$`, "$")
+		if start := strings.Index(bashMsg, "error token is \""); start >= 0 {
+			tokenStart := start + len("error token is \"")
+			if tokenEnd := strings.IndexByte(bashMsg[tokenStart:], '"'); tokenEnd >= 0 {
+				token := bashMsg[tokenStart : tokenStart+tokenEnd]
+				if strings.Contains(exprText, token+" ") && !strings.HasSuffix(token, " ") {
+					bashMsg = bashMsg[:tokenStart] + token + " " + bashMsg[tokenStart+tokenEnd:]
+				}
+			}
+		}
+	}
 
 	tokenText := "0"
 	exactToken := false
@@ -3783,7 +3828,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 	case *syntax.LetClause:
 		var val int
 		for _, expr := range cm.Exprs {
-			val = r.arithm(expr)
+			val = r.letArithm(expr)
 
 			if !tracingEnabled {
 				continue

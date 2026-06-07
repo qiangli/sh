@@ -71,12 +71,18 @@ func Arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 			}
 			str = val
 		}
+		if token := literalDollarArithmToken(str); token != "" {
+			return 0, fmt.Errorf("arithmetic syntax error: operand expected (error token is %q)", token)
+		}
 		// Bash re-parses the literal text of a Word-shaped arith
 		// operand as an arithmetic expression when it contains
 		// operators — `let "jv *= 2"` quotes the whole expression
 		// in a Word, but we still need to evaluate it.
 		if containsArithOp(str) {
 			file, perr := syntax.NewParser().Parse(strings.NewReader("(("+str+"))"), "")
+			if perr != nil {
+				return 0, arithmParseError(str, perr)
+			}
 			if perr == nil && len(file.Stmts) == 1 {
 				if ac, ok := file.Stmts[0].Cmd.(*syntax.ArithmCmd); ok && ac.X != nil {
 					// Avoid infinite recursion when the re-parse
@@ -270,6 +276,9 @@ func atoiCheck(s string) (int64, error) {
 			if intStr == "" {
 				return 0, fmt.Errorf("invalid integer constant (error token is %q)", orig)
 			}
+			if strings.Contains(intStr, "#") {
+				return 0, fmt.Errorf("invalid number (error token is %q)", orig)
+			}
 			s = intStr
 		}
 	}
@@ -306,6 +315,51 @@ func numericLiteralLike(s string) bool {
 		}
 	}
 	return false
+}
+
+func literalDollarArithmToken(s string) string {
+	for i := 0; i < len(s); i++ {
+		if s[i] != '$' {
+			continue
+		}
+		j := i + 1
+		for j < len(s) {
+			c := s[j]
+			if c != '_' && (c < '0' || c > '9') &&
+				(c < 'A' || c > 'Z') && (c < 'a' || c > 'z') {
+				break
+			}
+			j++
+		}
+		if j == i+1 {
+			return "$"
+		}
+		for j < len(s) && (s[j] == ' ' || s[j] == '\t') {
+			j++
+		}
+		return s[i:j]
+	}
+	return ""
+}
+
+func arithmParseError(s string, err error) error {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "must be followed by an expression"):
+		tok := strings.TrimSpace(s)
+		if idx := strings.LastIndexAny(tok, "+-*/%<>=!&|^?:,"); idx >= 0 {
+			tok = tok[idx:]
+		}
+		return fmt.Errorf("arithmetic syntax error: operand expected (error token is %q)", tok)
+	case strings.Contains(msg, "without matching `((` with `))`"):
+		tok := strings.TrimSpace(s)
+		if fields := strings.Fields(tok); len(fields) > 0 {
+			tok = fields[len(fields)-1]
+		}
+		return fmt.Errorf("missing `)' (error token is %q)", tok)
+	default:
+		return err
+	}
 }
 
 // bashBaseAtoi parses an integer in bash's extended digit alphabet
