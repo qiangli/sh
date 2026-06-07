@@ -148,6 +148,9 @@ func (o *overlayEnviron) Each(f func(name string, vr expand.Variable) bool) {
 func execEnv(env expand.Environ) []string {
 	list := make([]string, 0, 64)
 	for name, vr := range env.Each {
+		if name == BashyInheritedFdsEnv {
+			continue
+		}
 		if !vr.IsSet() {
 			// If a variable is set globally but unset in the
 			// runner, we need to ensure it's not part of the final
@@ -713,6 +716,9 @@ func formatLocalVar(name string, vr expand.Variable) string {
 // 5.3 `{var}` redirections, which set the captured fd globally even
 // when the redirect is inside a function body.
 func (r *Runner) setGlobalVarString(name, value string) {
+	if n, _ := r.lookupVar(name).Resolve(r.writeEnv); n != "" {
+		name = n
+	}
 	vr := expand.Variable{Set: true, Kind: expand.String, Str: value}
 	env := r.writeEnv
 	for {

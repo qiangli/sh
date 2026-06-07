@@ -2763,6 +2763,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			for n := range r.fdTable {
 				fds = append(fds, n)
 			}
+			for n := range r.inheritedFds {
+				if !slices.Contains(fds, n) {
+					fds = append(fds, n)
+				}
+			}
 			slices.Sort(fds)
 			return fds
 		}
@@ -3235,15 +3240,15 @@ type cmdHashEntry struct {
 }
 
 type completionSpec struct {
-	action  string
-	options []string
-	flags   []string
+	action   string
+	options  []string
+	flags    []string
 	funcName string
-	command string
+	command  string
 	wordlist string
-	filter  string
-	prefix  string
-	suffix  string
+	filter   string
+	prefix   string
+	suffix   string
 }
 
 func (s completionSpec) String(name string) string {

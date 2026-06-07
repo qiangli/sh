@@ -6,6 +6,7 @@ package syntax
 import (
 	"bytes"
 	"io"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -220,7 +221,7 @@ func (p *Parser) nextKeepSpaces() {
 		switch r {
 		case '}':
 			p.tok = p.paramToken(r)
-		case '`', '"', '$', '\'':
+		case '`', '"', '$':
 			p.tok = p.regToken(r)
 		default:
 			p.advanceLitOther(r)
@@ -1007,7 +1008,14 @@ func (p *Parser) endLit() (s string) {
 func (p *Parser) isLitRedir() bool {
 	lit := p.litBs[:len(p.litBs)-1]
 	if lit[0] == '{' && lit[len(lit)-1] == '}' {
-		return ValidName(string(lit[1 : len(lit)-1]))
+		name := string(lit[1 : len(lit)-1])
+		if ValidName(name) {
+			return true
+		}
+		if base, index, ok := strings.Cut(name, "["); ok && strings.HasSuffix(index, "]") {
+			return ValidName(base) && strings.TrimSuffix(index, "]") != ""
+		}
+		return false
 	}
 	return numberLiteral(lit)
 }
@@ -1141,7 +1149,7 @@ loop:
 				p.eqlOffs = len(p.litBs) - 1
 			}
 		case '[':
-			if p.lang.in(langBashLike|LangMirBSDKorn|LangZsh) && len(p.litBs) > 1 && p.litBs[0] != '[' {
+			if p.lang.in(langBashLike|LangMirBSDKorn|LangZsh) && len(p.litBs) > 1 && p.litBs[0] != '[' && p.litBs[0] != '{' {
 				tok = _Lit
 				break loop
 			}

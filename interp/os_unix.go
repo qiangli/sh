@@ -50,6 +50,24 @@ func dupPipeFd(f *os.File) (*os.File, error) {
 	return os.NewFile(uintptr(newFd), f.Name()+"-dup"), nil
 }
 
+func (r *Runner) inheritedFd(fd int) (*os.File, bool) {
+	if fd < 3 {
+		return nil, false
+	}
+	if !r.inheritedFds[fd] {
+		return nil, false
+	}
+	f := os.NewFile(uintptr(fd), "/dev/fd/"+strconv.Itoa(fd))
+	if f == nil {
+		return nil, false
+	}
+	if r.fdTable == nil {
+		r.fdTable = make(map[int]*os.File)
+	}
+	r.fdTable[fd] = f
+	return f, true
+}
+
 // access is similar to checking the permission bits from [io/fs.FileInfo],
 // but it also takes into account the current user's role.
 func (r *Runner) access(ctx context.Context, path string, mode uint32) error {

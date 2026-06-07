@@ -12,7 +12,7 @@ Phases 1-8 built bashy into a solid Bash-compatible script runner (~60-70% of sc
 
 ## References
 
-- **Bash 5.3 docs**: `docs/bash.txt`
+- **Bash 5.3 docs**: upstream GNU Bash manual at `https://www.gnu.org/software/bash/manual/bash.html`
 - **Bash 5.3 source**: `external/bash-5.3/` (C source for reference)
 - **Bash 5.3 tests**: `external/bash-5.3/tests/` (83 `.tests` files, 87 `.right` expected output files, 88 `run-*` runner scripts)
 - **Current bashy**: `cmd/bashy/` (main.go, interactive.go, prompt.go, version.go)

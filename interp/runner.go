@@ -3001,8 +3001,23 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 	// inside cmd() itself, not via redir(), and those changes must
 	// persist past stmtSync; restoring unconditionally would wipe them.
 	var oldFdTable map[int]*os.File
+	var oldFdWriteTable map[int]io.Writer
 	if len(st.Redirs) > 0 {
 		oldFdTable = maps.Clone(r.fdTable)
+		oldFdWriteTable = maps.Clone(r.fdWriteTable)
+	}
+	persistNamedRedirs := false
+	varredirClose := false
+	if opt, _ := r.bashOptByName("varredir_close"); opt != nil {
+		varredirClose = *opt
+	}
+	if !varredirClose {
+		for _, rd := range st.Redirs {
+			if isNamedFdRedir(rd) {
+				persistNamedRedirs = true
+				break
+			}
+		}
 	}
 	// bash 5.3 caps the number of here-documents per simple command
 	// (the historical compile-time limit, 16). Beyond that bash
@@ -3035,7 +3050,7 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 			// this stmtSync call. Read keepRedirs at defer time, not
 			// here, because exec sets it during cmd execution.
 			defer func(c io.Closer) {
-				if !r.keepRedirs {
+				if !r.keepRedirs && !persistNamedRedirs {
 					c.Close()
 				}
 			}(cls)
@@ -3078,8 +3093,9 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 	}
 	if !r.keepRedirs {
 		r.stdin, r.stdout, r.stderr = oldIn, oldOut, oldErr
-		if len(st.Redirs) > 0 {
+		if len(st.Redirs) > 0 && !persistNamedRedirs {
 			r.fdTable = oldFdTable
+			r.fdWriteTable = oldFdWriteTable
 		}
 	}
 }
@@ -4501,12 +4517,35 @@ func (r *Runner) hdocReader(rd *syntax.Redirect) (*os.File, error) {
 // {varname} named-fd allocations. Bash picks fd numbers starting at
 // 10 to avoid colliding with the conventional stdio range (0/1/2) and
 // with fds a script may have explicitly assigned (3-9).
-func (r *Runner) allocateFd() int {
-	for n := 10; ; n++ {
-		if _, ok := r.fdTable[n]; !ok {
-			return n
+func (r *Runner) allocateFd() (int, bool) {
+	limit := 0
+	if r.ulimitOverride != nil {
+		if s := r.ulimitOverride["-n"]; s != "" {
+			limit, _ = strconv.Atoi(s)
 		}
 	}
+	for n := 10; limit == 0 || n < limit; n++ {
+		if _, ok := r.fdTable[n]; !ok {
+			if _, ok := r.fdWriteTable[n]; !ok {
+				return n, true
+			}
+		}
+	}
+	return -1, false
+}
+
+func (r *Runner) execExtraFiles() ([]*os.File, string) {
+	var extra []*os.File
+	var fds []string
+	for fd := 3; ; fd++ {
+		f, ok := r.fdTable[fd]
+		if !ok {
+			break
+		}
+		extra = append(extra, f)
+		fds = append(fds, strconv.Itoa(fd))
+	}
+	return extra, strings.Join(fds, ",")
 }
 
 // setReadFd binds f as a readable source for the given target fd.
@@ -4542,14 +4581,23 @@ func (r *Runner) setWriteFd(targetFd int, w io.Writer) error {
 	case 0:
 		return fmt.Errorf("cannot use fd 0 as output target")
 	default:
-		f, ok := w.(*os.File)
-		if !ok {
-			return fmt.Errorf("non-file writer cannot be redirected to fd %d", targetFd)
+		if f, ok := w.(*os.File); ok {
+			if r.fdTable == nil {
+				r.fdTable = make(map[int]*os.File)
+			}
+			r.fdTable[targetFd] = f
+			if r.fdWriteTable != nil {
+				delete(r.fdWriteTable, targetFd)
+			}
+			return nil
 		}
-		if r.fdTable == nil {
-			r.fdTable = make(map[int]*os.File)
+		if r.fdWriteTable == nil {
+			r.fdWriteTable = make(map[int]io.Writer)
 		}
-		r.fdTable[targetFd] = f
+		r.fdWriteTable[targetFd] = w
+		if r.fdTable != nil {
+			delete(r.fdTable, targetFd)
+		}
 	}
 	return nil
 }
@@ -4572,11 +4620,15 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 			val := rd.N.Value
 			if strings.HasPrefix(val, "{") && strings.HasSuffix(val, "}") {
 				name := val[1 : len(val)-1]
-				fd := r.allocateFd()
+				fd, ok := r.allocateFd()
+				if !ok {
+					r.namedFdAllocError(rd, "")
+					return nil, fmt.Errorf("cannot duplicate fd")
+				}
 				if err := r.setReadFd(fd, pr); err != nil {
 					return nil, err
 				}
-				r.setGlobalVarString(name, strconv.Itoa(fd))
+				r.setGlobalNamedFdVarString(name, strconv.Itoa(fd))
 				return pr, nil
 			}
 			// `cmd N<<TAG` with a numeric fd routes the heredoc
@@ -4634,7 +4686,7 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 			// don't write back (we keep $var with its stale number,
 			// matching bash).
 			if (rd.Op == syntax.DplOut || rd.Op == syntax.DplIn) && arg == "-" {
-				fdStr := r.lookupVar(name).String()
+				fdStr := r.namedFdVarString(name)
 				n, err := strconv.Atoi(fdStr)
 				if err != nil || n < 0 {
 					// Bash 5.3: `exec {v}>&-` with $v unset
@@ -4651,13 +4703,19 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 				// cannot assign fd to variable` — before abandoning
 				// the redirect.
 				if r.lookupVar(name).ReadOnly {
+					r.readonlyNamedFdOpenSideEffect(ctx, rd, arg)
 					prefix := r.bashErrPrefix(rd.Pos())
 					r.errf("%s%s: readonly variable\n", prefix, name)
 					r.errf("%s%s: cannot assign fd to variable\n", prefix, name)
 					return nil, fmt.Errorf("%s: cannot assign fd to variable", name)
 				}
 				// Open form: pick a fresh fd for the script.
-				targetFd = r.allocateFd()
+				var ok bool
+				targetFd, ok = r.allocateFd()
+				if !ok {
+					r.namedFdAllocError(rd, arg)
+					return nil, fmt.Errorf("cannot duplicate fd")
+				}
 				namedFDVar = name
 			}
 		} else {
@@ -4679,7 +4737,7 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 			return nil, err
 		}
 		if namedFDVar != "" {
-			r.setGlobalVarString(namedFDVar, strconv.Itoa(targetFd))
+			r.setGlobalNamedFdVarString(namedFDVar, strconv.Itoa(targetFd))
 		}
 		// We write to the pipe in a new goroutine,
 		// as pipe writes may block once the buffer gets full.
@@ -4704,15 +4762,24 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 				r.stderr = io.Discard
 			default:
 				delete(r.fdTable, targetFd)
+				delete(r.fdWriteTable, targetFd)
 			}
 			return nil, nil
 		}
+		closeSource := false
+		if strings.HasSuffix(arg, "-") {
+			closeSource = true
+			arg = strings.TrimSuffix(arg, "-")
+		}
 		var w io.Writer
+		sourceFd := -1
 		switch arg {
 		case "1":
 			w = r.stdout
+			sourceFd = 1
 		case "2":
 			w = r.stderr
+			sourceFd = 2
 		default:
 			n, err := strconv.Atoi(arg)
 			if err == nil && n < 0 {
@@ -4725,16 +4792,30 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 				return nil, fmt.Errorf("unhandled %v arg: %q", rd.Op, arg)
 			}
 			f, ok := r.fdTable[n]
-			if !ok {
-				return nil, fmt.Errorf("%v: bad fd number %q", rd.Op, arg)
+			if ok {
+				w = f
+			} else if r.fdWriteTable != nil {
+				w, ok = r.fdWriteTable[n]
 			}
-			w = f
+			if !ok {
+				if f, ok = r.inheritedFd(n); ok {
+					w = f
+				}
+			}
+			if !ok {
+				r.errf("%s%s: Bad file descriptor\n", r.bashErrPrefix(rd.Word.Pos()), redirWordText(rd))
+				return nil, fmt.Errorf("%s: Bad file descriptor", redirWordText(rd))
+			}
+			sourceFd = n
 		}
 		if err := r.setWriteFd(targetFd, w); err != nil {
 			return nil, err
 		}
+		if closeSource {
+			r.closeFd(sourceFd)
+		}
 		if namedFDVar != "" {
-			r.setGlobalVarString(namedFDVar, strconv.Itoa(targetFd))
+			r.setGlobalNamedFdVarString(namedFDVar, strconv.Itoa(targetFd))
 		}
 		return nil, nil
 	case syntax.DplIn:
@@ -4745,13 +4826,21 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 				r.stdin = nil
 			default:
 				delete(r.fdTable, targetFd)
+				delete(r.fdWriteTable, targetFd)
 			}
 			return nil, nil
 		}
+		closeSource := false
+		if strings.HasSuffix(arg, "-") {
+			closeSource = true
+			arg = strings.TrimSuffix(arg, "-")
+		}
 		var f *os.File
+		sourceFd := -1
 		switch arg {
 		case "0":
 			f = r.stdin
+			sourceFd = 0
 		default:
 			n, err := strconv.Atoi(arg)
 			if err == nil && n < 0 {
@@ -4766,14 +4855,22 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 			var ok bool
 			f, ok = r.fdTable[n]
 			if !ok {
-				return nil, fmt.Errorf("%v: bad fd number %q", rd.Op, arg)
+				f, ok = r.inheritedFd(n)
 			}
+			if !ok {
+				r.errf("%s%s: Bad file descriptor\n", r.bashErrPrefix(rd.Word.Pos()), redirWordText(rd))
+				return nil, fmt.Errorf("%s: Bad file descriptor", redirWordText(rd))
+			}
+			sourceFd = n
 		}
 		if err := r.setReadFd(targetFd, f); err != nil {
 			return nil, err
 		}
+		if closeSource {
+			r.closeFd(sourceFd)
+		}
 		if namedFDVar != "" {
-			r.setGlobalVarString(namedFDVar, strconv.Itoa(targetFd))
+			r.setGlobalNamedFdVarString(namedFDVar, strconv.Itoa(targetFd))
 		}
 		return nil, nil
 	case syntax.RdrIn, syntax.RdrOut, syntax.AppOut,
@@ -4782,10 +4879,8 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 		syntax.RdrAllClob, syntax.AppAllClob,
 		syntax.RdrInOut:
 		// File-opening fall through.
-		// The "Clob" variants (>|, >>|, &>|, &>>|) bypass the noclobber
-		// shell option (set -C). Since this interpreter does not enforce
-		// noclobber on file redirects, they are functionally identical to
-		// their plain counterparts.
+		// The "Clob" variants (>|, >>|, &>|, &>>|) bypass the
+		// noclobber shell option (set -C).
 		// RdrInOut (<>) opens the target file for read+write and binds it
 		// to the input fd (default 0); we read from the resulting file as
 		// stdin. Writes back through fd 0 are not propagated to the file
@@ -4801,6 +4896,16 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 		mode = os.O_WRONLY | os.O_CREATE | os.O_TRUNC
 	case syntax.RdrInOut:
 		mode = os.O_RDWR | os.O_CREATE
+	}
+	if r.opts[optNoClobber] {
+		switch rd.Op {
+		case syntax.RdrOut, syntax.RdrAll:
+			if _, err := r.stat(ctx, arg); err == nil {
+				r.errf("%s%s: cannot overwrite existing file\n", r.bashErrPrefix(rd.Word.Pos()), arg)
+				return nil, fmt.Errorf("%s: cannot overwrite existing file", arg)
+			}
+			mode = os.O_WRONLY | os.O_CREATE | os.O_EXCL
+		}
 	}
 	f, err := r.open(ctx, arg, mode, 0o644, true)
 	if err != nil {
@@ -4830,9 +4935,149 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 	// allocated fd number to the variable. Bash callers then use it
 	// via `>&$var` / `<&$var` (which hit the numeric arg branch above).
 	if namedFDVar != "" {
-		r.setVarString(namedFDVar, strconv.Itoa(targetFd))
+		r.setGlobalNamedFdVarString(namedFDVar, strconv.Itoa(targetFd))
 	}
 	return f, nil
+}
+
+func redirWordText(rd *syntax.Redirect) string {
+	var b bytes.Buffer
+	if rd.Word != nil {
+		syntax.NewPrinter().Print(&b, rd.Word)
+	}
+	return b.String()
+}
+
+func isNamedFdRedir(rd *syntax.Redirect) bool {
+	if rd == nil || rd.N == nil {
+		return false
+	}
+	val := rd.N.Value
+	return strings.HasPrefix(val, "{") && strings.HasSuffix(val, "}")
+}
+
+func splitArrayElemName(name string) (base, index string, ok bool) {
+	base, rest, ok := strings.Cut(name, "[")
+	if !ok || !strings.HasSuffix(rest, "]") || !syntax.ValidName(base) {
+		return "", "", false
+	}
+	index = strings.TrimSuffix(rest, "]")
+	if index == "" {
+		return "", "", false
+	}
+	return base, index, true
+}
+
+func (r *Runner) namedFdVarString(name string) string {
+	if base, index, ok := splitArrayElemName(name); ok {
+		vr := r.lookupVar(base)
+		if vr.Kind == expand.Indexed {
+			i, err := strconv.Atoi(index)
+			if err == nil && i >= 0 && i < len(vr.List) {
+				return vr.List[i]
+			}
+		}
+		if vr.Kind == expand.Associative && vr.Map != nil {
+			return vr.Map[index]
+		}
+		return ""
+	}
+	vr := r.lookupVar(name)
+	if _, resolved := vr.Resolve(r.writeEnv); resolved.Declared() {
+		vr = resolved
+	}
+	return vr.String()
+}
+
+func (r *Runner) setGlobalNamedFdVarString(name, value string) {
+	if base, index, ok := splitArrayElemName(name); ok {
+		vr := r.lookupVar(base)
+		if vr.Kind != expand.Associative {
+			i, err := strconv.Atoi(index)
+			if err != nil || i < 0 {
+				return
+			}
+			if vr.Kind != expand.Indexed {
+				vr = expand.Variable{Set: true, Kind: expand.Indexed}
+			}
+			for len(vr.List) <= i {
+				vr.List = append(vr.List, "")
+			}
+			vr.List[i] = value
+			r.setVar(base, vr)
+			r.setGlobalVar(base, vr)
+			return
+		}
+		if vr.Map == nil {
+			vr.Map = make(map[string]string)
+		}
+		vr.Map[index] = value
+		r.setVar(base, vr)
+		r.setGlobalVar(base, vr)
+		return
+	}
+	r.setGlobalVarString(name, value)
+}
+
+func (r *Runner) setGlobalVar(name string, vr expand.Variable) {
+	env := r.writeEnv
+	for {
+		ol, ok := env.(*overlayEnviron)
+		if !ok || ol.parent == nil {
+			break
+		}
+		nextWE, ok := ol.parent.(*overlayEnviron)
+		if !ok {
+			break
+		}
+		env = nextWE
+	}
+	if wenv, ok := env.(expand.WriteEnviron); ok {
+		if err := wenv.Set(name, vr); err == nil {
+			return
+		}
+	}
+	r.setVar(name, vr)
+}
+
+func (r *Runner) namedFdAllocError(rd *syntax.Redirect, path string) {
+	prefix := r.bashErrPrefix(rd.Pos())
+	r.errf("%s: redirection error: cannot duplicate fd: Invalid argument\n", r.filename)
+	if path != "" {
+		r.errf("%s%s: Invalid argument\n", prefix, path)
+	}
+}
+
+func (r *Runner) closeFd(fd int) {
+	switch fd {
+	case 0:
+		r.stdin = nil
+	case 1:
+		r.stdout = io.Discard
+	case 2:
+		r.stderr = io.Discard
+	default:
+		delete(r.fdTable, fd)
+		delete(r.fdWriteTable, fd)
+	}
+}
+
+func (r *Runner) readonlyNamedFdOpenSideEffect(ctx context.Context, rd *syntax.Redirect, arg string) {
+	mode := 0
+	switch rd.Op {
+	case syntax.RdrOut, syntax.RdrAll, syntax.RdrClob, syntax.RdrAllClob:
+		mode = os.O_WRONLY | os.O_CREATE | os.O_TRUNC
+	case syntax.AppOut, syntax.AppAll, syntax.AppClob, syntax.AppAllClob:
+		mode = os.O_WRONLY | os.O_CREATE | os.O_APPEND
+	case syntax.RdrInOut:
+		mode = os.O_RDWR | os.O_CREATE
+	default:
+		return
+	}
+	f, err := r.open(ctx, arg, mode, 0o644, false)
+	if err == nil {
+		f.Close()
+	}
 }
 
 // selectLoop implements bash's `select var in items; do ...; done`.
@@ -5103,7 +5348,7 @@ func (r *Runner) open(ctx context.Context, path string, flags int, mode os.FileM
 	case nil:
 		return f, nil
 	case *os.PathError:
-		if path == "/dev/tty" && flags&(os.O_WRONLY|os.O_RDWR) == 0 {
+		if path == "/dev/tty" && flags&os.O_WRONLY == 0 {
 			read, write, pipeErr := os.Pipe()
 			if pipeErr == nil {
 				return &ttyFallbackFile{read: read, write: write}, nil

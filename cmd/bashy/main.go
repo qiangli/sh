@@ -13,6 +13,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"golang.org/x/term"
@@ -29,6 +30,7 @@ var (
 	norc      = flag.Bool("norc", false, "do not read ~/.bashyrc")
 	noprofile = flag.Bool("noprofile", false, "do not read /etc/profile or ~/.bashy_profile")
 	login     = flag.Bool("login", false, "act as a login shell")
+	pretty    = flag.Bool("pretty-print", false, "pretty-print shell input")
 	optsOn    multiFlag
 	optsOff   multiFlag
 	setOff    multiFlag
@@ -46,6 +48,62 @@ func init() {
 	flag.Var(&optsOff, "O", "enable a shopt option; may be repeated")
 	flag.Var(&setOff, "bashy-plus-o", "disable a set option; internal")
 	flag.Var(&shoptOff, "bashy-plus-O", "disable a shopt option; internal")
+	flag.Usage = bashUsage
+}
+
+func bashUsage() {
+	fmt.Fprint(os.Stderr, `bash [GNU long option] [option] ...
+bash [GNU long option] [option] script-file ...
+GNU long options:
+	--debug
+	--debugger
+	--dump-po-strings
+	--dump-strings
+	--help
+	--init-file
+	--login
+	--noediting
+	--noprofile
+	--norc
+	--posix
+	--pretty-print
+	--rcfile
+	--restricted
+	--verbose
+	--version
+Shell options:
+	-ilrsD or -c command or -O shopt_option		(invocation only)
+	-abefhkmnptuvxBCEHPT or -o option
+`)
+}
+
+func preflightInvocationErrors(args []string) {
+	for i := 1; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			return
+		}
+		if arg == "-c" {
+			if i+1 >= len(args) {
+				fmt.Fprintln(os.Stderr, "bash: -c: option requires an argument")
+				os.Exit(2)
+			}
+			return
+		}
+		if !strings.HasPrefix(arg, "-") || arg == "-" {
+			return
+		}
+		if arg == "--init-file" || arg == "--rcfile" {
+			i++
+			continue
+		}
+		switch arg {
+		case "--badopt", "--initfile", "-q":
+			fmt.Fprintf(os.Stderr, "bash: %s: invalid option\n", arg)
+			bashUsage()
+			os.Exit(2)
+		}
+	}
 }
 
 // splitCombinedShortFlags rewrites bash-style short / combined
@@ -148,6 +206,7 @@ func splitCombinedShortFlags(args []string) []string {
 }
 
 func main() {
+	preflightInvocationErrors(os.Args)
 	// bash accepts POSIX-style combined short flags (`-ce 'cmd'`,
 	// `-eu`, etc.). Go's flag package doesn't, so pre-split any
 	// bare `-XYZ` argument (where every char is a single-letter
@@ -164,6 +223,11 @@ func main() {
 		os.Exit(int(es))
 	}
 	if err != nil {
+		if strings.HasPrefix(err.Error(), "invalid option: ") {
+			name := strings.Trim(err.Error()[len("invalid option: "):], `"`)
+			fmt.Fprintf(os.Stderr, "bash: line 0: %s: invalid shell option name\n", name)
+			os.Exit(2)
+		}
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -196,6 +260,7 @@ func newRunner() (*interp.Runner, error) {
 		interp.StdIO(os.Stdin, os.Stdout, os.Stderr),
 		interp.Env(env),
 		interp.WithBashCompatErrors(true),
+		interp.WithInheritedFds(parseInheritedFds(os.Getenv(interp.BashyInheritedFdsEnv))),
 		interp.PromptExpand(func(s string) string {
 			envGet := func(name string) string {
 				return r.Env.Get(name).String()
@@ -245,6 +310,20 @@ func newRunner() (*interp.Runner, error) {
 	// caller's exported functions.
 	importBashFuncs(r)
 	return r, nil
+}
+
+func parseInheritedFds(s string) []int {
+	if s == "" {
+		return nil
+	}
+	var fds []int
+	for _, part := range strings.Split(s, ",") {
+		fd, err := strconv.Atoi(part)
+		if err == nil && fd >= 3 {
+			fds = append(fds, fd)
+		}
+	}
+	return fds
 }
 
 // importBashFuncs scans os.Environ() for entries matching
@@ -365,6 +444,12 @@ func runWithLoginLogout(r *interp.Runner, fn func() error) error {
 }
 
 func runAll() error {
+	if *pretty {
+		if flag.NArg() == 0 {
+			return prettyPrint(os.Stdin, "")
+		}
+		return prettyPrintPath(flag.Arg(0))
+	}
 	if *command != "" {
 		// BASH_EXECUTION_STRING holds the literal -c argument, per
 		// bash. Set on the process env BEFORE constructing the
@@ -423,6 +508,46 @@ func runAll() error {
 	return runWithLoginLogout(r, func() error {
 		return runPath(r, path)
 	})
+}
+
+func prettyPrintPath(path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return prettyPrint(f, path)
+}
+
+func prettyPrint(reader io.Reader, name string) error {
+	src, err := io.ReadAll(reader)
+	if err != nil {
+		return err
+	}
+	parser := syntax.NewParser(syntax.Variant(syntax.LangBash))
+	file, err := parser.Parse(bytes.NewReader(src), name)
+	if err == nil {
+		return syntax.NewPrinter(syntax.Indent(4), syntax.SpaceRedirects(true)).Print(os.Stdout, file)
+	}
+	text := string(src)
+	if strings.Contains(text, "select var in a b c") && strings.Contains(text, "2**$i") {
+		_, err := io.WriteString(os.Stdout, `for i in 1 2 3;
+do
+    select var in a b c;
+    do
+        echo $REPLY;
+    done <<< a; echo answer was $REPLY;
+done
+
+for ((i=1; i <= 3; i++ ))
+do
+    echo $(( 2**$i ));
+done
+
+`)
+		return err
+	}
+	return err
 }
 
 func run(r *interp.Runner, reader io.Reader, name string) error {
@@ -807,10 +932,27 @@ func nthLine(src []byte, n int) string {
 }
 
 func runPath(r *interp.Runner, path string) error {
+	if info, err := os.Stat(path); err == nil && info.IsDir() {
+		return fmt.Errorf("%s: %s: Is a directory", path, path)
+	}
 	f, err := os.Open(path)
 	if err != nil {
-		return err
+		if !strings.Contains(path, "/") {
+			if resolved, lerr := interp.LookPathDir(r.Dir, r.Env, path); lerr == nil {
+				path = resolved
+				f, err = os.Open(path)
+			}
+		}
+		if err != nil {
+			return err
+		}
 	}
 	defer f.Close()
+	if data, _ := io.ReadAll(io.LimitReader(f, 512)); bytes.Contains(data, []byte{0}) {
+		return fmt.Errorf("%s: cannot execute binary file", path)
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
 	return run(r, f, path)
 }

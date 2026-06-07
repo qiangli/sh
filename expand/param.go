@@ -5,6 +5,7 @@ package expand
 
 import (
 	"fmt"
+	"io"
 	"maps"
 	"regexp"
 	"slices"
@@ -36,6 +37,104 @@ func stripBackslashEscapes(s string) string {
 		b.WriteByte(s[i])
 	}
 	return b.String()
+}
+
+func stripParamExpLitEscapes(s string, stripSingle bool) string {
+	if !strings.ContainsRune(s, '\\') {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+1 < len(s) {
+			switch s[i+1] {
+			case '"', '\\', '$', '`':
+				b.WriteByte(s[i+1])
+				i++
+				continue
+			case '\'':
+				if stripSingle {
+					b.WriteByte(s[i+1])
+					i++
+					continue
+				}
+			}
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
+}
+
+func (cfg *Config) literalParamExpWord(word *syntax.Word, innerDoubleQuoted bool) (string, error) {
+	if word == nil {
+		return "", nil
+	}
+	var sb strings.Builder
+	for _, part := range word.Parts {
+		switch part := part.(type) {
+		case *syntax.SglQuoted:
+			if cfg.insideDoubleQuote {
+				val, err := cfg.literalParamExpQuotedText(part.Value)
+				if err != nil {
+					return "", err
+				}
+				sb.WriteByte('\'')
+				sb.WriteString(val)
+				sb.WriteByte('\'')
+			} else {
+				sb.WriteString(part.Value)
+			}
+		case *syntax.DblQuoted:
+			val, err := cfg.literalParamExpWord(&syntax.Word{Parts: part.Parts}, true)
+			if err != nil {
+				return "", err
+			}
+			sb.WriteString(val)
+		case *syntax.Lit:
+			if innerDoubleQuoted {
+				if cfg.insideDoubleQuote {
+					sb.WriteString(stripBackslashEscapes(part.Value))
+				} else {
+					sb.WriteString(stripParamExpLitEscapes(part.Value, false))
+				}
+			} else if !cfg.insideDoubleQuote {
+				sb.WriteString(stripBackslashEscapes(part.Value))
+			} else {
+				sb.WriteString(stripParamExpLitEscapes(part.Value, false))
+			}
+		default:
+			val, err := Literal(cfg, &syntax.Word{Parts: []syntax.WordPart{part}})
+			if err != nil {
+				return "", err
+			}
+			sb.WriteString(val)
+		}
+	}
+	return sb.String(), nil
+}
+
+func (cfg *Config) literalParamExpQuotedText(text string) (string, error) {
+	if !strings.ContainsAny(text, "$`\\") {
+		return text, nil
+	}
+	word, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Document(strings.NewReader(text))
+	if err != nil && err != io.EOF {
+		return "", err
+	}
+	return Literal(cfg, word)
+}
+
+func paramExpWordSingleQuotesOnly(word *syntax.Word) bool {
+	if word == nil || len(word.Parts) == 0 {
+		return false
+	}
+	for _, part := range word.Parts {
+		sq, ok := part.(*syntax.SglQuoted)
+		if !ok || sq.Dollar {
+			return false
+		}
+	}
+	return true
 }
 
 func nodeLit(node syntax.Node) string {
@@ -426,10 +525,19 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			// `${P%"*"}` removes a literal `*`, not the longest
 			// possible match.
 			arg, err = Pattern(cfg, pe.Exp.Word)
+		case op == syntax.AlternateUnset || op == syntax.AlternateUnsetOrNull:
+			arg, err = cfg.literalParamExpWord(pe.Exp.Word, false)
+		case cfg.insideDoubleQuote && (op == syntax.DefaultUnset || op == syntax.DefaultUnsetOrNull) &&
+			paramExpWordSingleQuotesOnly(pe.Exp.Word):
+			arg, err = cfg.literalParamExpWord(pe.Exp.Word, false)
 		default:
 			arg, err = Literal(cfg, pe.Exp.Word)
 		}
 		if err != nil {
+			if (op == syntax.AlternateUnset || op == syntax.AlternateUnsetOrNull) &&
+				vr.IsSet() && bashAlternateCommandSubstEOF(pe.Exp.Word) {
+				return "", fmt.Errorf("command substitution: line %d: unexpected EOF while looking for matching `)'", pe.Pos().Line()+2)
+			}
 			return "", err
 		}
 		switch op {

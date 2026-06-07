@@ -1,2 +1,6 @@
 # To prevent CRLF breakages on Windows for fragile files, like testdata.
 * -text
+
+# Third-party reference material is useful in git but should not be bundled
+# into project source archives as if it were covered by the repository license.
+external/bash-5.3 export-ignore
