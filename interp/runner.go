@@ -379,6 +379,13 @@ func (r *Runner) bashArithmError(expr syntax.ArithmExpr, err error, command bool
 	// then strip the surrounding "(( ... ))" and any escaped-newline
 	// continuations the printer inserts for multi-line layout.
 	printArithm := func(e syntax.ArithmExpr) string {
+		extendExpr := !command && !arithmInvalidLiteralMsg(bashMsg)
+		if s := r.arithmSourceText(e, extendExpr); s != "" {
+			if command {
+				s = strings.TrimRight(s, " \t")
+			}
+			return s
+		}
 		var b strings.Builder
 		syntax.NewPrinter().Print(&b, &syntax.Stmt{
 			Cmd: &syntax.ArithmCmd{X: e},
@@ -391,22 +398,37 @@ func (r *Runner) bashArithmError(expr syntax.ArithmExpr, err error, command bool
 		// surrounding whitespace into a single space.
 		s = strings.ReplaceAll(s, "\\\n", " ")
 		s = strings.Join(strings.Fields(s), " ")
-		return s
+		return compactArithAssign(s)
 	}
-	exprText := compactArithAssign(printArithm(expr))
+	exprText := printArithm(expr)
 
 	tokenText := "0"
 	exactToken := false
+	commandSep := " : "
+	if command && strings.Contains(bashMsg, "division by 0") {
+		exactToken = true
+		commandSep = ": "
+	}
 	if b, ok := expr.(*syntax.BinaryArithm); ok {
 		switch b.Op {
 		case syntax.Quo, syntax.Rem, syntax.QuoAssgn, syntax.RemAssgn:
-			tokenText = printArithm(b.Y)
+			tokenText = r.arithmSourceText(b.Y, false)
+			if tokenText == "" {
+				tokenText = printArithm(b.Y)
+			}
+			if command {
+				exactToken = true
+				commandSep = ": "
+			}
 		case syntax.Assgn, syntax.AddAssgn, syntax.SubAssgn,
 			syntax.MulAssgn, syntax.AndAssgn, syntax.OrAssgn,
 			syntax.XorAssgn, syntax.ShlAssgn, syntax.ShrAssgn,
 			syntax.PowAssgn:
 			if strings.Contains(bashMsg, "attempted assignment to non-variable") {
-				tokenText = b.Op.String() + compactArithAssign(printArithm(b.Y))
+				tokenText = r.sourceTextRange(b.OpPos, b.Y.End(), true)
+				if tokenText == "" {
+					tokenText = b.Op.String() + compactArithAssign(printArithm(b.Y))
+				}
 				exactToken = !strings.ContainsAny(tokenText, " \t")
 			}
 		}
@@ -427,20 +449,75 @@ func (r *Runner) bashArithmError(expr syntax.ArithmExpr, err error, command bool
 		return fmt.Errorf("%s: line %d: %s: %s",
 			prefix, expr.Pos().Line(), exprText, bashMsg)
 	}
-	if command {
-		if exactToken {
-			return fmt.Errorf("%s: line %d: ((: %s : %s (error token is \"%s\")",
-				prefix, expr.Pos().Line(), exprText, bashMsg, tokenText)
-		}
-		return fmt.Errorf("%s: line %d: ((: %s : %s (error token is \"%s \")",
-			prefix, expr.Pos().Line(), exprText, bashMsg, tokenText)
+	quotedToken := tokenText
+	if !exactToken && !strings.HasSuffix(tokenText, " ") {
+		quotedToken += " "
 	}
 	if exactToken {
-		return fmt.Errorf("%s: line %d: %s: %s (error token is \"%s\")",
-			prefix, expr.Pos().Line(), exprText, bashMsg, tokenText)
+		quotedToken = tokenText
 	}
-	return fmt.Errorf("%s: line %d: %s: %s (error token is \"%s \")",
-		prefix, expr.Pos().Line(), exprText, bashMsg, tokenText)
+	if command {
+		return fmt.Errorf("%s: line %d: ((: %s%s%s (error token is \"%s\")",
+			prefix, expr.Pos().Line(), exprText, commandSep, bashMsg, quotedToken)
+	}
+	return fmt.Errorf("%s: line %d: %s: %s (error token is \"%s\")",
+		prefix, expr.Pos().Line(), exprText, bashMsg, quotedToken)
+}
+
+func arithmInvalidLiteralMsg(msg string) bool {
+	return strings.Contains(msg, "invalid arithmetic base") ||
+		strings.Contains(msg, "invalid integer constant") ||
+		strings.Contains(msg, "value too great for base") ||
+		strings.Contains(msg, "invalid number")
+}
+
+func (r *Runner) arithmSourceText(expr syntax.ArithmExpr, extendTrailingSpace bool) string {
+	return r.sourceTextRange(expr.Pos(), expr.End(), extendTrailingSpace)
+}
+
+func (r *Runner) sourceTextRange(start, end syntax.Pos, extendTrailingSpace bool) string {
+	if len(r.bashSource) == 0 || !start.IsValid() || !end.IsValid() {
+		return ""
+	}
+	i, ok := r.sourceOffset(start)
+	if !ok {
+		return ""
+	}
+	j, ok := r.sourceOffset(end)
+	if !ok {
+		return ""
+	}
+	if i < 0 || j < i || j > len(r.bashSource) {
+		return ""
+	}
+	if extendTrailingSpace {
+		for j < len(r.bashSource) && (r.bashSource[j] == ' ' || r.bashSource[j] == '\t') {
+			j++
+		}
+	}
+	return string(r.bashSource[i:j])
+}
+
+func (r *Runner) sourceOffset(pos syntax.Pos) (int, bool) {
+	line, col := int(pos.Line()), int(pos.Col())
+	if line <= 0 || col <= 0 {
+		return 0, false
+	}
+	curLine := 1
+	i := 0
+	for ; i < len(r.bashSource) && curLine < line; i++ {
+		if r.bashSource[i] == '\n' {
+			curLine++
+		}
+	}
+	if curLine != line {
+		return 0, false
+	}
+	i += col - 1
+	if i < 0 || i > len(r.bashSource) {
+		return 0, false
+	}
+	return i, true
 }
 
 func (r *Runner) fields(words ...*syntax.Word) []string {

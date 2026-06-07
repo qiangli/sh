@@ -592,6 +592,9 @@ func run(r *interp.Runner, reader io.Reader, name string) error {
 	}
 	ctx := context.Background()
 	r.Reset()
+	if err := interp.WithBashSource(src)(r); err != nil {
+		return err
+	}
 	// bash 5.3 parses statement-by-statement and continues after parse
 	// errors (one bad construct doesn't kill the rest of the file).
 	// Mirror that here. cursor is the byte offset into src we still

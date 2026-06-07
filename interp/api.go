@@ -219,6 +219,11 @@ type Runner struct {
 	// runner clears it before each arithm call site that cares.
 	lastArithErr error
 
+	// bashSource holds the original script bytes for bash-compatible
+	// diagnostics that must preserve source spelling rather than printer
+	// output, notably arithmetic errors.
+	bashSource []byte
+
 	// aliasLineOverride is non-zero while expanding a multi-stmt
 	// alias body. bashErrPrefix prefers it over the AST stmt's own
 	// Pos().Line() so runtime errors from inside an alias body
@@ -977,6 +982,16 @@ func WithLoginShell(login bool) RunnerOption {
 func WithBashCompatErrors(on bool) RunnerOption {
 	return func(r *Runner) error {
 		r.bashCompatErrors = on
+		return nil
+	}
+}
+
+// WithBashSource provides the original script bytes for bash-compatible
+// diagnostics that need source-preserved snippets. The runner copies src so
+// callers may reuse their buffer after applying the option.
+func WithBashSource(src []byte) RunnerOption {
+	return func(r *Runner) error {
+		r.bashSource = append(r.bashSource[:0], src...)
 		return nil
 	}
 }
