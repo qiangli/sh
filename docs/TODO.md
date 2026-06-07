@@ -1,7 +1,7 @@
 # Bashy: Bash 5.3 Drop-In Replacement — TODO Checklist
 
-**Current status**: 31/83 bash tests passing | All Go unit tests pass
-**Last updated**: 2026-06-04
+**Current status**: 45 bash tests passing, 29 failing, 13 skipped
+**Last updated**: 2026-06-07
 
 ---
 
@@ -437,4 +437,3 @@ covered by an earlier section above is NOT repeated here.
 3. **Batch C**: Agentic batch 1 — G13 items #1 (deterministic), #6 (audit), #2 (json), #3 (runner-state)
 4. **Batch D**: Job control phase 1 (G8)
 5. **Batch E**: Programmable completion (part of G2)
-

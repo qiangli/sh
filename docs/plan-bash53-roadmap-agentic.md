@@ -7,7 +7,10 @@ test-bash`) is the headline metric. Interactive-only features
 restricted shell) are **deferred** until the script-correctness bands
 are done.
 
-Status: **11/83** passing as of `006537ac`. Baseline (April) was 4/83.
+Status: **45 passed, 29 failed, 13 skipped** as of 2026-06-07. Baseline
+(April) was 4/83. The parser-wording sweep below is complete, but the
+broader parser/arith/funsub Batch B tracked in `docs/bash-gap-analysis.md`
+is not complete.
 
 ## Currently PASSING
 
@@ -111,16 +114,18 @@ Implement only after P0–P2 saturate.
 Each phase is one focused session.
 
 **Phase A** — P0 quick wins:
-1. `case` (arithmetic-error abort + backslash patterns) — IN PROGRESS
-2. `iquote` (CTLNUL through word-splitting)
-3. `attr` (array-from-string for `-a` flag)
-4. `set-e` (errexit edge cases)
+1. `case` (arithmetic-error abort + backslash patterns) — DONE
+2. `iquote` (CTLNUL through word-splitting) — DONE
+3. `attr` (array-from-string for `-a` flag) — DONE
+4. `set-e` (errexit edge cases) — DONE
 5. `comsub-eof` (`$(...)` recovery)
 
 **Phase B** — parser-wording sweep:
 6. Generalise the eval-time bash-wording rewriter to ALL parser
    errors (not just eval). Unlocks `parser`, helps `comsub`,
-   `exportfunc`, `posixpat`.
+   `exportfunc`, `posixpat`. — DONE for the narrow wording target
+   (`parser`, `exportfunc`, and `posixpat` pass). This does not cover the
+   broader arith/funsub/heredoc/conditional parser Batch B.
 
 **Phase C** — expansion family:
 7. CTLESC propagation → `nquote2/3/4`, helps `quote`/`quotearray`.

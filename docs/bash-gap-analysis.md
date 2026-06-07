@@ -469,6 +469,24 @@ ROI work unit by a wide margin.
 
 ### Batch B — `${ cmd; }` funsub + companion parser fixes (XL, ~6 tests unlocked, removes 2 P0 blockers)
 
+Status on 2026-06-07: **not complete**. Targeted verification against
+`bashy` showed all broader Batch B target files still failing:
+
+| Test | Current result | Diff lines |
+|---|---:|---:|
+| `arith` | FAIL | 10622 |
+| `arith-for` | FAIL | 38 |
+| `comsub` | FAIL | 97 |
+| `comsub2` | FAIL | 204 |
+| `comsub-eof` | FAIL | 46 |
+| `cond` | FAIL | 106 |
+| `more-exp` | FAIL | 102 |
+| `heredoc` | FAIL | 152 |
+
+The narrow parser-wording sweep in `docs/plan-bash53-roadmap-agentic.md`
+is complete (`parser`, `exportfunc`, and `posixpat` pass), but it should
+not be confused with this broader parser/arith/funsub batch.
+
 1. Parser: add `funsub` production cloned from bash `parse.y:1115` (`DOLBRACE compound_list '}'`).
 2. AST: a new `FuncSubst` `WordPart` (or repurpose `CmdSubst` with a flag).
 3. Runtime: execute the body in the **same** variable scope as the caller
