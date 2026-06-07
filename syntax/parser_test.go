@@ -1090,15 +1090,6 @@ var errorCases = []errorCase{
 		langErr("1:11: not a valid arithmetic operator: `b`"),
 	),
 	errCase(
-		"echo $(())",
-		langErr("1:6: `$((` must be followed by an expression"),
-		flipConfirmAll, // TODO: empty arithmetic expressions seem to be OK?
-	),
-	errCase(
-		"echo $((()))",
-		langErr("1:9: `(` must be followed by an expression"),
-	),
-	errCase(
 		"echo $(((3))",
 		langErr("1:6: reached `)` without matching `$((` with `))`"),
 	),
@@ -1445,10 +1436,6 @@ var errorCases = []errorCase{
 		"((foo",
 		langErr("1:1: reached EOF without matching `((` with `))`", LangBash|LangMirBSDKorn|LangZsh),
 		langErr("1:2: reached EOF without matching `(` with `)`", LangPOSIX),
-	),
-	errCase(
-		"(())",
-		langErr("1:1: `((` must be followed by an expression", LangBash|LangMirBSDKorn|LangZsh),
 	),
 	errCase(
 		"echo ((foo",
@@ -1922,16 +1909,6 @@ var errorCases = []errorCase{
 	errCase(
 		"foo=force_expansion; echo ${foo@'Q'}",
 		langErr("1:33: @ expansion operator requires a literal", LangBash),
-	),
-	errCase(
-		`echo $((echo a); (echo b))`,
-		langErr("1:14: not a valid arithmetic operator: `a`", LangBash|LangMirBSDKorn|LangZsh),
-		flipConfirmAll, // note that we don't backtrack
-	),
-	errCase(
-		`((echo a); (echo b))`,
-		langErr("1:8: not a valid arithmetic operator: `a`", LangBash|LangMirBSDKorn|LangZsh),
-		flipConfirmAll, // note that we don't backtrack
 	),
 	errCase(
 		"for ((;;",

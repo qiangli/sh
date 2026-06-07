@@ -54,6 +54,8 @@ func containsArithOp(s string) bool {
 
 func Arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 	switch expr := expr.(type) {
+	case nil:
+		return 0, nil
 	case *syntax.Word:
 		str, err := Literal(cfg, expr)
 		if err != nil {

@@ -66,6 +66,7 @@ func (p *Parser) rune() rune {
 	}
 	p.col += int64(p.w)
 	bquotes := 0
+	bquoteEscapedByte := false
 retry:
 	if p.bsp >= uint(len(p.bs)) && p.fill() == 0 {
 		if len(p.bs) == 0 {
@@ -93,11 +94,13 @@ retry:
 			if p.r == '\\' {
 			} else if p.peek() == '\n' {
 				p.bsp++
+				p.bquoteEscapedByte = bquoteEscapedByte
 				p.w, p.r = 1, escNewl
 				return escNewl
 			} else if p1, p2 := p.peekTwo(); p1 == '\r' && p2 == '\n' { // \\\r\n turns into \\\n
 				p.col++
 				p.bsp += 2
+				p.bquoteEscapedByte = bquoteEscapedByte
 				p.w, p.r = 2, escNewl
 				return escNewl
 			}
@@ -105,8 +108,12 @@ retry:
 			p.readEOF = false
 			if p.openBquotes > 0 && bquotes < p.openBquotes &&
 				p.bsp < uint(len(p.bs)) && bquoteEscaped(p.bs[p.bsp]) {
+				if bquoteEscapedByte && p.bs[p.bsp] == '`' {
+					break
+				}
 				// We turn backquote command substitutions into $(),
 				// so we remove the extra backslashes needed by the backquotes.
+				bquoteEscapedByte = true
 				bquotes++
 				p.col++
 				goto retry
@@ -118,6 +125,7 @@ retry:
 		if p.litBs != nil {
 			p.litBs = append(p.litBs, b)
 		}
+		p.bquoteEscapedByte = bquoteEscapedByte
 		p.w, p.r = 1, rune(b)
 		return p.r
 	}
@@ -134,6 +142,7 @@ decodeRune:
 		p.litBs = append(p.litBs, p.bs[p.bsp:p.bsp+uint(w)]...)
 	}
 	p.bsp += uint(w)
+	p.bquoteEscapedByte = bquoteEscapedByte
 	if p.r == utf8.RuneError && w == 1 {
 		p.posErr(p.nextPos(), "invalid UTF-8 encoding")
 	}
@@ -575,6 +584,9 @@ func (p *Parser) regToken(r rune) token {
 		return dollar
 	case '(':
 		if p.rune() == '(' && p.lang.in(langBashLike|LangMirBSDKorn|LangZsh) && p.quote != testExpr {
+			if p.dblLeftParenAsSubshell() {
+				return leftParen
+			}
 			p.rune()
 			return dblLeftParen
 		}
@@ -688,6 +700,20 @@ func (p *Parser) regToken(r rune) token {
 		return rdrOut
 	}
 	panic("unreachable")
+}
+
+func (p *Parser) dblLeftParenAsSubshell() bool {
+	rest := p.bs[p.bsp:]
+	trimmed := bytes.TrimLeft(rest, " \t")
+	if len(trimmed) >= 2 && trimmed[0] == '$' && trimmed[1] == '(' {
+		return false
+	}
+	closeSub := bytes.Index(rest, []byte(");"))
+	if closeSub < 0 {
+		return false
+	}
+	closeArith := bytes.Index(rest, []byte("))"))
+	return closeArith < 0 || closeSub < closeArith
 }
 
 func (p *Parser) dqToken(r rune) token {
@@ -1176,6 +1202,9 @@ loop:
 					p.litBs = p.litBs[:n-1]
 				}
 				p.rune() // consume the '\n'
+				continue
+			}
+			if p.openBquotes > 0 && p.bquoteEscapedByte && p.peek() == '`' {
 				continue
 			}
 			p.rune()

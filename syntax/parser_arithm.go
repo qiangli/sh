@@ -316,6 +316,9 @@ func (p *Parser) arithmExprBinary(compact bool, nextOp func(bool) ArithmExpr, op
 func (p *Parser) followArithm(ftok token, fpos Pos) ArithmExpr {
 	x := p.arithmExpr(false)
 	if x == nil {
+		if (ftok == dblLeftParen || ftok == dollDblParen) && p.peekArithmEnd() {
+			return nil
+		}
 		p.followErrExp(fpos, ftok)
 	}
 	return x

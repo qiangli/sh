@@ -549,6 +549,9 @@ type Parser struct {
 
 	// lastBquoteEsc is how many times the last backquote token was escaped
 	lastBquoteEsc int
+	// bquoteEscapedByte reports whether the current byte had a legacy
+	// backquote escape removed by the lexer.
+	bquoteEscapedByte bool
 
 	rxOpenParens int
 	rxFirstPart  bool
@@ -1320,6 +1323,12 @@ func (p *Parser) wordPart() WordPart {
 				p.next()
 				return sq
 			case escNewl:
+				if p.quote == subCmdBckquo {
+					if p.bquoteEscapedByte {
+						p.litBs = append(p.litBs, '\\', '\n')
+					}
+					continue
+				}
 				p.litBs = append(p.litBs, '\\', '\n')
 			case utf8.RuneSelf:
 				p.tok = _EOF
