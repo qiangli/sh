@@ -4448,7 +4448,28 @@ func skipIfUnsupported(tb testing.TB, src string) {
 		tb.Skipf("skipping non-portable test on windows")
 	case runtime.GOOS == "darwin" && skipOnMac.MatchString(src):
 		tb.Skipf("skipping non-portable test on mac")
+	case strings.Contains(src, "chmod u+s") && !supportsSetIDMode(os.ModeSetuid):
+		tb.Skipf("skipping setuid mode test on filesystem without setuid support")
+	case strings.Contains(src, "chmod g+s") && !supportsSetIDMode(os.ModeSetgid):
+		tb.Skipf("skipping setgid mode test on filesystem without setgid support")
 	}
+}
+
+func supportsSetIDMode(bit os.FileMode) bool {
+	dir, err := os.MkdirTemp("", "sh-setid-test-*")
+	if err != nil {
+		return false
+	}
+	defer os.RemoveAll(dir)
+	path := filepath.Join(dir, "a")
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
+		return false
+	}
+	if err := os.Chmod(path, 0o644|bit); err != nil {
+		return false
+	}
+	info, err := os.Stat(path)
+	return err == nil && info.Mode()&bit != 0
 }
 
 func TestRunnerRun(t *testing.T) {
@@ -4580,6 +4601,44 @@ var testBuiltinsMap = map[string]func(interp.HandlerContext, []string) error{
 			fmt.Fprintln(hc.Stdout, bytes.Count(bs, []byte("\n")))
 		}
 		return nil
+	},
+	"head": func(hc interp.HandlerContext, args []string) error {
+		limit := 10
+		if len(args) == 1 && strings.HasPrefix(args[0], "-") {
+			if _, err := fmt.Sscanf(args[0], "-%d", &limit); err != nil {
+				return err
+			}
+		} else if len(args) != 0 {
+			return fmt.Errorf("unexpected arg: %q", args[0])
+		}
+		lines, err := readLines(hc)
+		if err != nil {
+			return err
+		}
+		for i, line := range lines {
+			if i >= limit {
+				break
+			}
+			fmt.Fprintf(hc.Stdout, "%s\n", line)
+		}
+		return nil
+	},
+	"sh": func(hc interp.HandlerContext, args []string) error {
+		if len(args) != 2 || args[0] != "-c" {
+			return fmt.Errorf("unexpected args: %q", args)
+		}
+		file, err := syntax.NewParser().Parse(strings.NewReader(args[1]), "")
+		if err != nil {
+			return err
+		}
+		r, err := interp.New(
+			interp.Dir(hc.Dir),
+			interp.StdIO(hc.Stdin, hc.Stdout, hc.Stderr),
+		)
+		if err != nil {
+			return err
+		}
+		return r.Run(context.Background(), file)
 	},
 	"tr": func(hc interp.HandlerContext, args []string) error {
 		if len(args) != 2 || len(args[1]) != 1 {
