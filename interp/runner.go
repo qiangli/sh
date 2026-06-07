@@ -285,6 +285,12 @@ func (r *Runner) expandErr(err error) {
 	if err == nil {
 		return
 	}
+	if r.bashCompatErrors {
+		var arithErr *expand.ArithmError
+		if errors.As(err, &arithErr) {
+			err = r.bashArithmError(arithErr.Expr, arithErr.Err, false)
+		}
+	}
 	errMsg := err.Error()
 	// Bash 5.3 prefixes expansion errors (`$(( ))`, `${!x}`,
 	// `let`, etc.) with the standard `<file>: line N:` framing.
@@ -342,7 +348,7 @@ func looksLikeExpandError(msg string) bool {
 func (r *Runner) arithm(expr syntax.ArithmExpr) int {
 	n, err := expand.Arithm(r.ecfg, expr)
 	if err != nil && r.bashCompatErrors {
-		err = r.bashArithmError(expr, err)
+		err = r.bashArithmError(expr, err, true)
 	}
 	r.lastArithErr = err
 	r.expandErr(err)
@@ -358,7 +364,7 @@ func (r *Runner) arithm(expr syntax.ArithmExpr) int {
 // division/remainder when the error is "division by zero"; otherwise
 // it's the whole expression. Bash includes a trailing space inside the
 // quoted token — preserved here so tests diff cleanly.
-func (r *Runner) bashArithmError(expr syntax.ArithmExpr, err error) error {
+func (r *Runner) bashArithmError(expr syntax.ArithmExpr, err error, command bool) error {
 	msg := err.Error()
 	bashMsg := msg
 	switch {
@@ -387,13 +393,22 @@ func (r *Runner) bashArithmError(expr syntax.ArithmExpr, err error) error {
 		s = strings.Join(strings.Fields(s), " ")
 		return s
 	}
-	exprText := printArithm(expr)
+	exprText := compactArithAssign(printArithm(expr))
 
 	tokenText := "0"
+	exactToken := false
 	if b, ok := expr.(*syntax.BinaryArithm); ok {
 		switch b.Op {
 		case syntax.Quo, syntax.Rem, syntax.QuoAssgn, syntax.RemAssgn:
 			tokenText = printArithm(b.Y)
+		case syntax.Assgn, syntax.AddAssgn, syntax.SubAssgn,
+			syntax.MulAssgn, syntax.AndAssgn, syntax.OrAssgn,
+			syntax.XorAssgn, syntax.ShlAssgn, syntax.ShrAssgn,
+			syntax.PowAssgn:
+			if strings.Contains(bashMsg, "attempted assignment to non-variable") {
+				tokenText = b.Op.String() + compactArithAssign(printArithm(b.Y))
+				exactToken = !strings.ContainsAny(tokenText, " \t")
+			}
 		}
 	}
 	prefix := r.filename
@@ -405,10 +420,26 @@ func (r *Runner) bashArithmError(expr syntax.ArithmExpr, err error) error {
 	// `7++` / `7=4`), skip appending our outer copy — bash emits one
 	// instance, not two.
 	if strings.Contains(bashMsg, "error token is") {
-		return fmt.Errorf("%s: line %d: ((: %s : %s",
+		if command {
+			return fmt.Errorf("%s: line %d: ((: %s : %s",
+				prefix, expr.Pos().Line(), exprText, bashMsg)
+		}
+		return fmt.Errorf("%s: line %d: %s: %s",
 			prefix, expr.Pos().Line(), exprText, bashMsg)
 	}
-	return fmt.Errorf("%s: line %d: ((: %s : %s (error token is \"%s \")",
+	if command {
+		if exactToken {
+			return fmt.Errorf("%s: line %d: ((: %s : %s (error token is \"%s\")",
+				prefix, expr.Pos().Line(), exprText, bashMsg, tokenText)
+		}
+		return fmt.Errorf("%s: line %d: ((: %s : %s (error token is \"%s \")",
+			prefix, expr.Pos().Line(), exprText, bashMsg, tokenText)
+	}
+	if exactToken {
+		return fmt.Errorf("%s: line %d: %s: %s (error token is \"%s\")",
+			prefix, expr.Pos().Line(), exprText, bashMsg, tokenText)
+	}
+	return fmt.Errorf("%s: line %d: %s: %s (error token is \"%s \")",
 		prefix, expr.Pos().Line(), exprText, bashMsg, tokenText)
 }
 

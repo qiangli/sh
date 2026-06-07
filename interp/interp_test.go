@@ -2173,10 +2173,10 @@ var runTests = []runTest{
 		"echo $((1 == +1))",
 		"1\n",
 	},
-	// `+=` (and other compound assignments) inside the ternary's false
-	// branch — bash allows this; pure C does not.
-	{"a=10; echo $((0 ? a : a+=5)); echo $a", "15\n15\n"},
-	{"a=10; echo $((1 ? a*=2 : a+=5)); echo $a", "20\n20\n"},
+	// Assignment binds lower than the ternary false branch in bash:
+	// these parse like `(cond ? a : a) += 5`, which is not an lvalue.
+	{"a=10; echo $((0 ? a : a+=5)); echo $a", "attempted assignment to non-variable\n10\n"},
+	{"a=10; echo $((1 ? a*=2 : a+=5)); echo $a", "attempted assignment to non-variable\n10\n"},
 	{
 		"echo $((!0))",
 		"1\n",

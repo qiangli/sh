@@ -470,11 +470,16 @@ ROI work unit by a wide margin.
 ### Batch B — `${ cmd; }` funsub + companion parser fixes (XL, ~6 tests unlocked, removes 2 P0 blockers)
 
 Status on 2026-06-07: **not complete**. Targeted verification against
-`bashy` showed all broader Batch B target files still failing:
+`bashy` showed all broader Batch B target files still failing. Current
+partial progress: arithmetic ternary false-branch assignment precedence
+now matches bash (`1 ? 20 : x+=2` errors as assignment to a non-variable),
+and invalid base constants such as `3425#56`, `2#`, and `2#44` now emit
+bash-shaped arithmetic errors. The first remaining `arith` divergence is
+B5 source-text preservation (`7 = 43` prints as `7=43`).
 
 | Test | Current result | Diff lines |
 |---|---:|---:|
-| `arith` | FAIL | 10622 |
+| `arith` | FAIL | 10576 |
 | `arith-for` | FAIL | 38 |
 | `comsub` | FAIL | 97 |
 | `comsub2` | FAIL | 204 |

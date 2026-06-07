@@ -2350,6 +2350,22 @@ var arithmeticTests = []struct {
 		},
 	},
 	{
+		"1 ? 20 : x+=2",
+		&BinaryArithm{
+			Op: AddAssgn,
+			X: &BinaryArithm{
+				Op: TernQuest,
+				X:  litWord("1"),
+				Y: &BinaryArithm{
+					Op: TernColon,
+					X:  litWord("20"),
+					Y:  litWord("x"),
+				},
+			},
+			Y: litWord("2"),
+		},
+	},
+	{
 		"a = 3, ++a, a--",
 		&BinaryArithm{
 			Op: Comma,

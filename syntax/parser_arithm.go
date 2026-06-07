@@ -69,11 +69,12 @@ func (p *Parser) arithmExprTernary(compact bool) ArithmExpr {
 	}
 	colonPos := p.pos
 	p.nextArithOp(compact)
-	// Bash allows the ternary's false branch to be an assignment
-	// expression: `$((cond ? a : x += 2))`. Pure C only permits a
-	// conditional-expression here, but bash's parser delegates to the
-	// assignment level, so do the same.
-	falseExpr := p.arithmExprAssign(compact)
+	// Bash gives assignment lower precedence than the conditional
+	// operator in the false branch: `1 ? 20 : x+=2` is parsed like
+	// `(1 ? 20 : x) += 2`, so it errors as assignment to a non-variable
+	// even though the false branch is not evaluated. Parentheses still
+	// allow an assignment expression there: `1 ? 20 : (x+=2)`.
+	falseExpr := p.arithmExprTernary(compact)
 	if falseExpr == nil {
 		p.followErrExp(colonPos, TernColon)
 	}

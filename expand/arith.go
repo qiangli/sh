@@ -14,6 +14,14 @@ import (
 // TODO(v4): the arithmetic APIs should return int64 for portability with 32-bit systems,
 // even if Bash only supports native int sizes.
 
+type ArithmError struct {
+	Expr syntax.ArithmExpr
+	Err  error
+}
+
+func (e *ArithmError) Error() string { return e.Err.Error() }
+func (e *ArithmError) Unwrap() error { return e.Err }
+
 // isAllDigits reports whether s is non-empty and consists entirely
 // of ASCII digits (no sign, no separators).
 func isAllDigits(s string) bool {
@@ -79,8 +87,11 @@ func Arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 				}
 			}
 		}
-		// default to 0
-		return int(atoi(str)), nil
+		n, err := atoiCheck(str)
+		if err != nil {
+			return 0, err
+		}
+		return int(n), nil
 	case *syntax.ParenArithm:
 		return Arithm(cfg, expr.X)
 	case *syntax.UnaryArithm:
@@ -191,6 +202,12 @@ func oneIf(b bool) int {
 // refer to the bash manual:
 // https://www.man7.org/linux/man-pages/man1/bash.1.html
 func atoi(s string) int64 {
+	n, _ := atoiCheck(s)
+	return n
+}
+
+func atoiCheck(s string) (int64, error) {
+	orig := s
 	s = strings.TrimSpace(s)
 	base := int64(10)
 	switch {
@@ -200,13 +217,22 @@ func atoi(s string) int64 {
 	case strings.HasPrefix(s, "0"):
 		base = 8
 		s = s[1:]
+		if strings.Contains(s, "#") {
+			return 0, fmt.Errorf("invalid number (error token is %q)", orig)
+		}
 	default:
 		baseStr, intStr, hasSep := strings.Cut(s, "#")
 		if hasSep {
 			var err error
 			base, err = strconv.ParseInt(baseStr, 10, 8)
-			if err != nil || base < 2 || base > 64 {
-				return 0
+			if err != nil || base > 64 {
+				return 0, fmt.Errorf("invalid arithmetic base (error token is %q)", orig)
+			}
+			if base < 2 {
+				return 0, fmt.Errorf("invalid number (error token is %q)", orig)
+			}
+			if intStr == "" {
+				return 0, fmt.Errorf("invalid integer constant (error token is %q)", orig)
 			}
 			s = intStr
 		}
@@ -215,19 +241,44 @@ func atoi(s string) int64 {
 	// insensitive a-z). Bases 37-64 need bash's custom digit map:
 	// 0-9 → 0-9, a-z → 10-35, A-Z → 36-61, @ → 62, _ → 63.
 	if base <= 36 {
-		n, _ := strconv.ParseInt(s, int(base), 64)
-		return n
+		n, err := strconv.ParseInt(s, int(base), 64)
+		if err != nil && numericLiteralLike(orig) {
+			return 0, fmt.Errorf("value too great for base (error token is %q)", orig)
+		}
+		return n, nil
 	}
-	return bashBaseAtoi(s, base)
+	n, ok := bashBaseAtoi(s, base)
+	if !ok {
+		return 0, fmt.Errorf("value too great for base (error token is %q)", orig)
+	}
+	return n, nil
+}
+
+func numericLiteralLike(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return false
+	}
+	if strings.Contains(s, "#") {
+		return true
+	}
+	if len(s) > 1 && s[0] == '0' {
+		for i := 1; i < len(s); i++ {
+			if s[i] < '0' || s[i] > '7' {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // bashBaseAtoi parses an integer in bash's extended digit alphabet
 // for bases 2-64. Returns 0 on any invalid digit; callers don't
 // distinguish "invalid" from "zero" here, matching the silent
 // behaviour of [atoi] for malformed input.
-func bashBaseAtoi(s string, base int64) int64 {
+func bashBaseAtoi(s string, base int64) (int64, bool) {
 	if len(s) == 0 {
-		return 0
+		return 0, true
 	}
 	neg := false
 	switch s[0] {
@@ -253,17 +304,17 @@ func bashBaseAtoi(s string, base int64) int64 {
 		case c == '_':
 			d = 63
 		default:
-			return 0
+			return 0, false
 		}
 		if d >= base {
-			return 0
+			return 0, false
 		}
 		n = n*base + d
 	}
 	if neg {
 		n = -n
 	}
-	return n
+	return n, true
 }
 
 func (cfg *Config) assgnArit(b *syntax.BinaryArithm) (int, error) {
@@ -273,11 +324,11 @@ func (cfg *Config) assgnArit(b *syntax.BinaryArithm) (int, error) {
 	// reach this runtime path; surface the same wording bash uses.
 	w, ok := b.X.(*syntax.Word)
 	if !ok {
-		return 0, fmt.Errorf("attempted assignment to non-variable (error token is %q)", b.Op.String())
+		return 0, fmt.Errorf("attempted assignment to non-variable")
 	}
 	name := w.Lit()
 	if !syntax.ValidName(name) {
-		return 0, fmt.Errorf("attempted assignment to non-variable (error token is %q)", b.Op.String())
+		return 0, fmt.Errorf("attempted assignment to non-variable")
 	}
 	val := atoi(cfg.envGet(name))
 	arg_, err := Arithm(cfg, b.Y)
