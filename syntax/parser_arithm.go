@@ -34,7 +34,11 @@ func (p *Parser) arithmExprAssign(compact bool) ArithmExpr {
 		p.nextArithOp(compact)
 		y := p.arithmExprAssign(compact)
 		if y == nil {
-			p.followErrExp(pos, tok)
+			if p.quote == arithmExprCmd && (p.tok == semicolon || p.tok == dblSemicolon || p.tok == rightParen) {
+				y = p.wordOne(&Lit{ValuePos: p.pos, ValueEnd: p.pos})
+			} else {
+				p.followErrExp(pos, tok)
+			}
 		}
 		return &BinaryArithm{
 			OpPos: pos,

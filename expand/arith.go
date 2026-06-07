@@ -172,6 +172,42 @@ func Arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 				return Arithm(cfg, b2.X)
 			}
 			return Arithm(cfg, b2.Y)
+		case syntax.AndArit:
+			left, err := Arithm(cfg, expr.X)
+			if err != nil {
+				return 0, err
+			}
+			if left == 0 {
+				return 0, nil
+			}
+			right, err := Arithm(cfg, expr.Y)
+			if err != nil {
+				return 0, err
+			}
+			return oneIf(right != 0), nil
+		case syntax.OrArit:
+			left, err := Arithm(cfg, expr.X)
+			if err != nil {
+				return 0, err
+			}
+			if left != 0 {
+				return 1, nil
+			}
+			right, err := Arithm(cfg, expr.Y)
+			if err != nil {
+				return 0, err
+			}
+			return oneIf(right != 0), nil
+		case syntax.XorBool:
+			left, err := Arithm(cfg, expr.X)
+			if err != nil {
+				return 0, err
+			}
+			right, err := Arithm(cfg, expr.Y)
+			if err != nil {
+				return 0, err
+			}
+			return oneIf((left != 0) != (right != 0)), nil
 		}
 		left, err := Arithm(cfg, expr.X)
 		if err != nil {
@@ -330,6 +366,9 @@ func (cfg *Config) assgnArit(b *syntax.BinaryArithm) (int, error) {
 	if !syntax.ValidName(name) {
 		return 0, fmt.Errorf("attempted assignment to non-variable")
 	}
+	if word, ok := b.Y.(*syntax.Word); ok && arithMissingRHS(word) {
+		return 0, fmt.Errorf("arithmetic syntax error: operand expected (error token is %q)", b.Op.String())
+	}
 	val := atoi(cfg.envGet(name))
 	arg_, err := Arithm(cfg, b.Y)
 	if err != nil {
@@ -370,6 +409,14 @@ func (cfg *Config) assgnArit(b *syntax.BinaryArithm) (int, error) {
 		return 0, err
 	}
 	return int(val), nil
+}
+
+func arithMissingRHS(word *syntax.Word) bool {
+	if len(word.Parts) != 1 {
+		return false
+	}
+	lit, ok := word.Parts[0].(*syntax.Lit)
+	return ok && lit.Value == "" && lit.Pos() == lit.End()
 }
 
 func intPow(a, b int) int {

@@ -448,12 +448,23 @@ func (r *Runner) bashArithmError(expr syntax.ArithmExpr, err error, command bool
 	if prefix == "" {
 		prefix = "bashy"
 	}
+	compactErrSep := false
+	if command && (strings.HasSuffix(exprText, "=") || strings.HasSuffix(exprText, "= ")) &&
+		strings.Contains(bashMsg, "arithmetic syntax error: operand expected") &&
+		strings.Contains(bashMsg, "error token is") {
+		exprText = strings.TrimRight(exprText, " \t")
+		compactErrSep = true
+	}
 	// If the inner message already carries its own "(error token is ...)"
 	// suffix (e.g. the "attempted assignment to non-variable" path for
 	// `7++` / `7=4`), skip appending our outer copy — bash emits one
 	// instance, not two.
 	if strings.Contains(bashMsg, "error token is") {
 		if command {
+			if compactErrSep {
+				return fmt.Errorf("%s: line %d: ((: %s: %s",
+					prefix, expr.Pos().Line(), exprText, bashMsg)
+			}
 			return fmt.Errorf("%s: line %d: ((: %s : %s",
 				prefix, expr.Pos().Line(), exprText, bashMsg)
 		}

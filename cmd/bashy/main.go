@@ -703,6 +703,12 @@ func advancePastLine(src []byte, line int) int {
 // `<file>` for a parsed script and `bashy: -c` for the -c form.
 func printBashParseError(w io.Writer, src []byte, prefix string, pe syntax.ParseError) {
 	line := int(pe.Pos.Line())
+	if lines := arithForParseErrorLines(string(src), pe); len(lines) > 0 {
+		for _, text := range lines {
+			fmt.Fprintf(w, "%s: line %d: %s\n", prefix, line, text)
+		}
+		return
+	}
 	text := rewriteParserErrorText(string(src), pe)
 	fmt.Fprintf(w, "%s: line %d: %s\n", prefix, line, text)
 	// Bash omits the trailing source-line echo for "unexpected EOF"
@@ -714,6 +720,44 @@ func printBashParseError(w io.Writer, src []byte, prefix string, pe syntax.Parse
 	if srcLine := nthLine(src, line); srcLine != "" {
 		fmt.Fprintf(w, "%s: line %d: `%s'\n", prefix, line, srcLine)
 	}
+}
+
+func arithForParseErrorLines(src string, pe syntax.ParseError) []string {
+	header, ok := arithForHeader(src)
+	if !ok {
+		return nil
+	}
+	switch {
+	case pe.Text == "`expr` must be followed by `;`":
+		return []string{
+			"syntax error: arithmetic expression required",
+			fmt.Sprintf("syntax error: `%s'", header),
+		}
+	case strings.Contains(pe.Text, "not a valid arithmetic operator: `;`"):
+		return []string{
+			"syntax error: `;' unexpected",
+			fmt.Sprintf("syntax error: `%s'", header),
+		}
+	}
+	return nil
+}
+
+func arithForHeader(src string) (string, bool) {
+	forIdx := strings.Index(src, "for")
+	if forIdx < 0 {
+		return "", false
+	}
+	open := strings.Index(src[forIdx:], "((")
+	if open < 0 {
+		return "", false
+	}
+	open += forIdx
+	close := strings.Index(src[open+2:], "))")
+	if close < 0 {
+		return "", false
+	}
+	close += open + 2
+	return src[open : close+2], true
 }
 
 // rewriteParserErrorText rewrites mvdan/sh's parser error messages
