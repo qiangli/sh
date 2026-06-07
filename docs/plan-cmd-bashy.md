@@ -2,11 +2,11 @@
 
 ## Context
 
-The project (`mvdan.cc/sh/v3`) provides a Go library for parsing, formatting, and interpreting shell programs. It includes `cmd/gosh`, a ~100-line proof-of-concept shell. The goal is to create a new `cmd/bashy` command that progressively implements Bash 5.3 features, using `cmd/gosh` as the starting point. The Bash 5.3 reference is at `docs/bash.txt` and the Bash 5.3 source code is at `external/bash-5.3/`.
+The project (`mvdan.cc/sh/v3`) provides a Go library for parsing, formatting, and interpreting shell programs. It includes `cmd/gosh`, a ~100-line proof-of-concept shell. The goal is to create a new `cmd/bashy` command that progressively implements Bash 5.3 features, using `cmd/gosh` as the starting point. The Bash 5.3 reference manual is upstream at `https://www.gnu.org/software/bash/manual/bash.html`; the local Bash 5.3 source tree is ignored at `external/bash-5.3/`.
 
 ## References
 
-- **Bash 5.3 documentation**: `docs/bash.md` → `docs/bash.txt` (13,085 lines, full GNU Bash Reference Manual)
+- **Bash 5.3 documentation**: `docs/bash.md` links to the upstream GNU Bash Reference Manual
 - **Bash 5.3 source code**: `external/bash-5.3/` (C source for reference)
 - **Starting point**: `cmd/gosh/main.go` (~100 lines, proof-of-concept shell)
 

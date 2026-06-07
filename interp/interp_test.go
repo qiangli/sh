@@ -1558,6 +1558,14 @@ var runTests = []runTest{
 		"bar\n",
 	},
 	{
+		"echo foo >a; set -C; echo bar >a; cat a",
+		"a: cannot overwrite existing file\nfoo\n",
+	},
+	{
+		"echo foo >a; set -C; echo bar >| a; cat a",
+		"bar\n",
+	},
+	{
 		// <> opens for read-write; the file must be readable as stdin.
 		"echo foo >a; cat <>a",
 		"foo\n",
@@ -3659,7 +3667,7 @@ done <<< 2`,
 	// numbered fds (Phase 2): persistent assignment via exec, scoped via
 	// plain redirect, dup forms with N >= 3 on either side. See
 	// docs/plan-punted-builtins.md.
-	{"echo a >&3", "exit status 1 #JUSTERR"},
+	{"echo a >&3", "3: Bad file descriptor\nexit status 1 #JUSTERR"},
 	{"exec 3>f; echo a >&3; echo b >&3; cat f", "a\nb\n"},
 	{"echo data >f; exec 3<f; read line <&3; echo got=$line", "got=data\n"},
 	// scoped 3>f: echo writes to stdout (not fd 3); file f is created empty.
@@ -3826,11 +3834,11 @@ done <<< 2`,
 	},
 	{
 		"read -t bogus x",
-		"read: bogus: invalid timeout specification\nexit status 2 #JUSTERR",
+		"read: bogus: invalid timeout specification\nexit status 1 #JUSTERR",
 	},
 	{
 		"read -t -1 x",
-		"read: -1: invalid timeout specification\nexit status 2 #JUSTERR",
+		"read: -1: invalid timeout specification\nexit status 1 #JUSTERR",
 	},
 	{
 		"read -t 5 x <<< hello; echo $x",

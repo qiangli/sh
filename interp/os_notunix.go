@@ -70,3 +70,7 @@ type waitStatus struct{}
 
 func (waitStatus) Signaled() bool { return false }
 func (waitStatus) Signal() int    { return 0 }
+
+func (r *Runner) inheritedFd(fd int) (*os.File, bool) {
+	return nil, false
+}

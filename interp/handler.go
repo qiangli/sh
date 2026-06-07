@@ -149,14 +149,20 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 		if hc.ExecAs != "" {
 			cmdArgs = append([]string{hc.ExecAs}, args[1:]...)
 		}
+		extraFiles, inheritedFds := hc.runner.execExtraFiles()
+		env := hc.runner.execEnvWithFuncs()
+		if inheritedFds != "" {
+			env = append(env, BashyInheritedFdsEnv+"="+inheritedFds)
+		}
 		cmd := exec.Cmd{
-			Path:   path,
-			Args:   cmdArgs,
-			Env:    hc.runner.execEnvWithFuncs(),
-			Dir:    hc.Dir,
-			Stdin:  hc.Stdin,
-			Stdout: hc.Stdout,
-			Stderr: hc.Stderr,
+			Path:       path,
+			Args:       cmdArgs,
+			Env:        env,
+			Dir:        hc.Dir,
+			Stdin:      hc.Stdin,
+			Stdout:     hc.Stdout,
+			Stderr:     hc.Stderr,
+			ExtraFiles: extraFiles,
 		}
 
 		err = cmd.Start()
@@ -171,15 +177,27 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 			if lookupErr == nil {
 				newArgs := append([]string{selfBin, path}, args[1:]...)
 				cmd = exec.Cmd{
-					Path:   selfBin,
-					Args:   newArgs,
-					Env:    hc.runner.execEnvWithFuncs(),
-					Dir:    hc.Dir,
-					Stdin:  hc.Stdin,
-					Stdout: hc.Stdout,
-					Stderr: hc.Stderr,
+					Path:       selfBin,
+					Args:       newArgs,
+					Env:        env,
+					Dir:        hc.Dir,
+					Stdin:      hc.Stdin,
+					Stdout:     hc.Stdout,
+					Stderr:     hc.Stderr,
+					ExtraFiles: extraFiles,
 				}
 				err = cmd.Start()
+			}
+		}
+		if err != nil && hc.runner != nil && hc.runner.bashCompatErrors {
+			scriptPath := path
+			if !filepath.IsAbs(scriptPath) {
+				scriptPath = filepath.Join(hc.Dir, scriptPath)
+			}
+			if interp, ok := missingShebangInterpreter(scriptPath); ok {
+				fmt.Fprintf(hc.Stderr, "%s: %s: %s: bad interpreter: No such file or directory\n",
+					hc.runner.filename, args[0], interp)
+				return ExitStatus(126)
 			}
 		}
 		if err == nil {
@@ -220,6 +238,32 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 			return err
 		}
 	}
+}
+
+func missingShebangInterpreter(path string) (string, bool) {
+	data, err := os.ReadFile(path)
+	if err != nil || !strings.HasPrefix(string(data), "#!") {
+		return "", false
+	}
+	line := string(data[2:])
+	if i := strings.IndexByte(line, '\n'); i >= 0 {
+		line = line[:i]
+	}
+	fields := strings.Fields(line)
+	if len(fields) == 0 {
+		return "", false
+	}
+	interp := fields[0]
+	if filepath.IsAbs(interp) {
+		if _, err := os.Stat(interp); err == nil {
+			return "", false
+		}
+		return interp, true
+	}
+	if _, err := exec.LookPath(interp); err == nil {
+		return "", false
+	}
+	return interp, true
 }
 
 // isExecFormatError reports whether err is the ENOEXEC error returned

@@ -1889,7 +1889,7 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 			// the recovery to `"$@"` defaults — `"$*"` always
 			// joins to a single string, so the regular path is
 			// already correct for it.
-			if isDefaultWithQuotedAt(wp) {
+			if isSubstWithQuotedAt(wp) {
 				if elems := cfg.quotedElemFields(wp); elems != nil {
 					for i, elem := range elems {
 						if i > 0 {
@@ -1906,6 +1906,10 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 			val, err := cfg.paramExp(wp)
 			if err != nil {
 				return nil, err
+			}
+			if val == "" && paramExpDefaultWordAllowsEmpty(wp) {
+				emitEmpty()
+				continue
 			}
 			splitAdd(val)
 		case *syntax.CmdSubst:
@@ -1949,19 +1953,45 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 	return fields, nil
 }
 
-// isDefaultWithQuotedAt reports whether `pe` is a `${var-"$@"}` /
-// `${var:-"$@"}` / `${var-"$*"}` form — a default-substitution whose
-// WORD is exactly one double-quoted `$@` or `$*`. Both flavors are
-// handled identically here since the immediate enclosing context for
-// the substituted WORD is double-quoted: in that context `"$@"` and
-// `"$*"` both produce *at least one* field (multiple for @, the
-// IFS-joined string for *), which is what we want.
-func isDefaultWithQuotedAt(pe *syntax.ParamExp) bool {
+func paramExpDefaultWordAllowsEmpty(pe *syntax.ParamExp) bool {
+	if pe == nil || pe.Exp == nil || pe.Exp.Word == nil {
+		return false
+	}
+	switch pe.Exp.Op {
+	case syntax.AlternateUnset, syntax.AlternateUnsetOrNull,
+		syntax.DefaultUnset, syntax.DefaultUnsetOrNull,
+		syntax.AssignUnset, syntax.AssignUnsetOrNull:
+	default:
+		return false
+	}
+	for _, part := range pe.Exp.Word.Parts {
+		switch part := part.(type) {
+		case *syntax.SglQuoted:
+			if part.Value == "" {
+				return true
+			}
+		case *syntax.DblQuoted:
+			if len(part.Parts) == 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// isSubstWithQuotedAt reports whether `pe` is a `${var-"$@"}` /
+// `${var+"$@"}` / `${var:-"$*"}`-style form whose WORD is exactly one
+// double-quoted `$@` or `$*`. The caller still asks quotedElemFields
+// whether the substitution actually fires.
+func isSubstWithQuotedAt(pe *syntax.ParamExp) bool {
 	if pe == nil || pe.Exp == nil {
 		return false
 	}
 	op := pe.Exp.Op
-	if op != syntax.DefaultUnset && op != syntax.DefaultUnsetOrNull {
+	switch op {
+	case syntax.AlternateUnset, syntax.AlternateUnsetOrNull,
+		syntax.DefaultUnset, syntax.DefaultUnsetOrNull:
+	default:
 		return false
 	}
 	if pe.Exp.Word == nil || len(pe.Exp.Word.Parts) != 1 {
@@ -1987,27 +2017,35 @@ func (cfg *Config) quotedElemFields(pe *syntax.ParamExp) []string {
 	if pe == nil || pe.Length || pe.Width || pe.IsSet {
 		return nil
 	}
-	// Default-value substitution (`${var-WORD}` etc.) where the
+	// Default/alternate substitution (`${var-WORD}`, `${var+WORD}`,
+	// etc.) where the
 	// substituted WORD is a single `"$@"` or `"$*"` should preserve
 	// field structure — bash treats `${unset-"$@"}` as if `"$@"` were
 	// written directly. Recurse into the WORD when it's exactly one
 	// of those forms and the substitution is going to fire.
 	if pe.Exp != nil && pe.Repl == nil {
 		op := pe.Exp.Op
-		isDefaultOp := op == syntax.DefaultUnset || op == syntax.DefaultUnsetOrNull
-		if isDefaultOp && pe.Exp.Word != nil && len(pe.Exp.Word.Parts) == 1 {
+		isSubstOp := op == syntax.AlternateUnset || op == syntax.AlternateUnsetOrNull ||
+			op == syntax.DefaultUnset || op == syntax.DefaultUnsetOrNull
+		if isSubstOp && pe.Exp.Word != nil && len(pe.Exp.Word.Parts) == 1 {
 			if inner, ok := pe.Exp.Word.Parts[0].(*syntax.DblQuoted); ok &&
 				len(inner.Parts) == 1 {
 				if innerPE, ok := inner.Parts[0].(*syntax.ParamExp); ok &&
 					!innerPE.Excl && innerPE.Exp == nil && innerPE.Repl == nil &&
 					(innerPE.Param.Value == "@" || innerPE.Param.Value == "*") {
 					// Check whether the outer variable would actually
-					// require substitution: unset OR (for `:-`)
-					// unset/null.
+					// require substitution.
 					vr := cfg.Env.Get(pe.Param.Value)
-					trigger := !vr.IsSet()
-					if op == syntax.DefaultUnsetOrNull {
+					trigger := false
+					switch op {
+					case syntax.DefaultUnset:
+						trigger = !vr.IsSet()
+					case syntax.DefaultUnsetOrNull:
 						trigger = !vr.IsSet() || vr.String() == ""
+					case syntax.AlternateUnset:
+						trigger = vr.IsSet()
+					case syntax.AlternateUnsetOrNull:
+						trigger = vr.IsSet() && vr.String() != ""
 					}
 					if trigger {
 						// Use the inner PE's special handling.

@@ -30,6 +30,8 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 )
 
+const BashyInheritedFdsEnv = "BASHY_INHERITED_FDS"
+
 // A Runner interprets shell programs. It can be reused, but it is not safe for
 // concurrent use. Use [New] to build a new Runner.
 //
@@ -342,6 +344,14 @@ type Runner struct {
 	// subshell do not leak back to the parent because the map itself
 	// is cloned by [Runner.subshell].
 	fdTable map[int]*os.File
+
+	// fdWriteTable holds write-only descriptors whose target is not a
+	// real file, such as stdout captured by command substitution. Those
+	// cannot be represented in fdTable but bash still allows `exec 4>&1`
+	// and later `echo >&4` within the same shell/subshell.
+	fdWriteTable map[int]io.Writer
+
+	inheritedFds map[int]bool
 
 	// ulimitOverride records pseudo-set values from `ulimit -X N`
 	// so the next `ulimit -X` read returns them. We don't actually
@@ -971,6 +981,22 @@ func WithBashCompatErrors(on bool) RunnerOption {
 	}
 }
 
+func WithInheritedFds(fds []int) RunnerOption {
+	return func(r *Runner) error {
+		if len(fds) == 0 {
+			r.inheritedFds = nil
+			return nil
+		}
+		r.inheritedFds = make(map[int]bool, len(fds))
+		for _, fd := range fds {
+			if fd >= 3 {
+				r.inheritedFds[fd] = true
+			}
+		}
+		return nil
+	}
+}
+
 // AuditEvent is delivered to the [WithAuditHandler] callback just
 // before the runner invokes [ExecHandlerFunc] for a simple command.
 // Builtins and shell-internal commands (loops, conditionals, etc.)
@@ -1306,6 +1332,7 @@ func (r *Runner) Reset() {
 		deterministicSeed: r.deterministicSeed,
 		deterministicRng:  r.deterministicRng,
 		commandString:     r.commandString,
+		inheritedFds:      maps.Clone(r.inheritedFds),
 		// fdTable is intentionally not preserved across Reset; a reset
 		// runner starts with no inherited non-stdio fds.
 	}
@@ -1502,7 +1529,10 @@ func (r *Runner) subshell(background bool) *Runner {
 		// Subshells inherit open fds the way bash does. Clone the map so
 		// child mutations (close, dup) don't leak back to the parent;
 		// the underlying *os.File handles are shared (single OS fd).
-		fdTable:        maps.Clone(r.fdTable),
+		fdTable:      maps.Clone(r.fdTable),
+		fdWriteTable: maps.Clone(r.fdWriteTable),
+		inheritedFds: maps.Clone(r.inheritedFds),
+
 		ulimitOverride: maps.Clone(r.ulimitOverride),
 	}
 	r2.writeEnv = newOverlayEnviron(r.writeEnv, background)
