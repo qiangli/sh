@@ -155,6 +155,23 @@ func (u UnsetParameterError) Error() string {
 	return fmt.Sprintf("%s: %s", u.Node.Param.Value, u.Message)
 }
 
+// BadSubstitutionError is returned for malformed parameter expansions which
+// bash accepts at parse time but rejects during expansion.
+type BadSubstitutionError struct {
+	Node *syntax.ParamExp
+}
+
+func (b BadSubstitutionError) Error() string { return "bad substitution" }
+
+func bashLengthSliceExpr(pe *syntax.ParamExp, expr syntax.ArithmExpr) syntax.ArithmExpr {
+	if pe.Param == nil || pe.Param.Value != "#" || expr == nil {
+		return expr
+	}
+	return &syntax.Word{Parts: []syntax.WordPart{
+		&syntax.Lit{ValuePos: pe.Param.Pos(), Value: "#: " + nodeLit(expr)},
+	}}
+}
+
 func overridingUnset(pe *syntax.ParamExp) bool {
 	if pe.Exp == nil {
 		return false
@@ -313,8 +330,17 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 	if pe.Slice != nil {
 		var err error
 		if pe.Slice.Offset != nil {
+			if pe.Param != nil && pe.Param.Value == "#" && nodeLit(pe.Slice.Offset) == "%" {
+				return "", &ArithmError{
+					Expr: bashLengthSliceExpr(pe, pe.Slice.Offset),
+					Err:  fmt.Errorf("arithmetic syntax error: operand expected (error token is %q)", "%"),
+				}
+			}
 			sliceOffset, err = Arithm(cfg, pe.Slice.Offset)
 			if err != nil {
+				if arithErr, ok := err.(*ArithmError); ok {
+					arithErr.Expr = bashLengthSliceExpr(pe, arithErr.Expr)
+				}
 				return "", err
 			}
 		}
@@ -373,7 +399,7 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 	case pe.Names != 0 && !pe.Excl:
 		// `${name*}` without `!` — bash 5.3 parses this but emits
 		// `bad substitution` at expansion time.
-		return "", fmt.Errorf("bad substitution")
+		return "", BadSubstitutionError{Node: pe}
 	case pe.Length:
 		n := len(elems)
 		switch nodeLit(index) {

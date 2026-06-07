@@ -1342,6 +1342,7 @@ func (r *Runner) Reset() {
 		umask:             r.umask,
 		loginShell:        r.loginShell,
 		bashCompatErrors:  r.bashCompatErrors,
+		bashSource:        slices.Clone(r.bashSource),
 		auditHandler:      r.auditHandler,
 		deterministic:     r.deterministic,
 		deterministicSeed: r.deterministicSeed,

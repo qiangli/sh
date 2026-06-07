@@ -4541,6 +4541,37 @@ func TestBashCompatPosixSpecialBuiltinFuncDeclInSubshell(t *testing.T) {
 	qt.Assert(t, qt.Equals(cb.String(), "./func5.sub: line 7: `break': is a special builtin\n"))
 }
 
+func TestBashCompatMalformedLengthSubstitution(t *testing.T) {
+	src := "echo ${#:}\n" +
+		"echo ${#/}\n" +
+		"echo ${#%}\n" +
+		"echo ${#=}\n" +
+		"echo ${#+}\n" +
+		"echo ${#1xyz}\n" +
+		"echo ${#:%}\n"
+	file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(src), "./more-exp.tests")
+	qt.Assert(t, qt.IsNil(err))
+
+	var cb bytes.Buffer
+	r, err := interp.New(
+		interp.StdIO(nil, &cb, &cb),
+		interp.WithBashCompatErrors(true),
+		interp.WithBashSource([]byte(src)),
+	)
+	qt.Assert(t, qt.IsNil(err))
+
+	err = r.Run(context.Background(), file)
+	qt.Assert(t, qt.IsNil(err))
+	qt.Assert(t, qt.Equals(cb.String(),
+		"./more-exp.tests: line 1: ${#:}: bad substitution\n"+
+			"./more-exp.tests: line 2: ${#/}: bad substitution\n"+
+			"./more-exp.tests: line 3: ${#%}: bad substitution\n"+
+			"./more-exp.tests: line 4: ${#=}: bad substitution\n"+
+			"./more-exp.tests: line 5: ${#+}: bad substitution\n"+
+			"./more-exp.tests: line 6: ${#1xyz}: bad substitution\n"+
+			"./more-exp.tests: line 7: #: %: arithmetic syntax error: operand expected (error token is \"%\")\n"))
+}
+
 func readLines(hc interp.HandlerContext) ([][]byte, error) {
 	bs, err := io.ReadAll(hc.Stdin)
 	if err != nil {

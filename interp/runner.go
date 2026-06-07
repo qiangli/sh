@@ -292,6 +292,12 @@ func (r *Runner) expandErr(err error) {
 		}
 	}
 	errMsg := err.Error()
+	var badSubst expand.BadSubstitutionError
+	if r.bashCompatErrors && errors.As(err, &badSubst) && badSubst.Node != nil {
+		if src := r.sourceTextRange(badSubst.Node.Pos(), badSubst.Node.End(), false); src != "" {
+			errMsg = src + ": bad substitution"
+		}
+	}
 	// Bash 5.3 prefixes expansion errors (`$(( ))`, `${!x}`,
 	// `let`, etc.) with the standard `<file>: line N:` framing.
 	// The wrapper isn't applied when the error already carries

@@ -1599,6 +1599,12 @@ zshPrefixLoop:
 	if p.tok != _EOF && (pe.Length || pe.Width || pe.IsSet) {
 		p.curErr("cannot combine multiple parameter expansion operators")
 	}
+	if pe.Param != nil && pe.Param.Value == "#" {
+		switch p.tok {
+		case slash, perc, assgn, plus:
+			pe.Names = NamesPrefix
+		}
+	}
 	switch p.tok {
 	case slash, dblSlash: // pattern search and replace
 		p.checkLang(p.pos, langBashLike|LangMirBSDKorn|LangZsh, "search and replace")
@@ -1611,6 +1617,17 @@ zshPrefixLoop:
 			pe.Repl.With = p.getWord()
 		}
 	case colon: // slicing
+		if pe.Names != 0 && !pe.Excl && p.r == '}' {
+			break
+		}
+		if pe.Param != nil && pe.Param.Value == "#" && p.r == '}' {
+			pe.Names = NamesPrefix
+			pe.Rbrace = p.nextPos()
+			p.rune()
+			p.quote = old
+			p.next()
+			return pe
+		}
 		if p.lang.in(LangZsh) && (p.r == '&' || asciiLetter(p.r)) {
 			pos := p.pos
 		loop:
@@ -1641,7 +1658,12 @@ zshPrefixLoop:
 		colonPos := p.pos
 		p.quote = paramExpArithm
 		if p.next(); p.tok != colon {
-			pe.Slice.Offset = p.followArithm(colon, colonPos)
+			if pe.Param != nil && pe.Param.Value == "#" && p.tok == perc {
+				pe.Slice.Offset = p.wordOne(p.lit(p.pos, "%"))
+				p.next()
+			} else {
+				pe.Slice.Offset = p.followArithm(colon, colonPos)
+			}
 		}
 		colonPos = p.pos
 		if p.got(colon) {
@@ -1807,6 +1829,12 @@ func (p *Parser) paramExpParameter(pe *ParamExp) *ParamExp {
 			if !numberLiteral(p.val) && !ValidName(p.val) {
 				if pe.Short {
 					return nil // just "$"
+				}
+				if pe.Length {
+					pe.Length = false
+					pe.Names = NamesPrefix
+					pe.Param = p.lit(posAddCol(pos, -1), p.val)
+					return pe
 				}
 				if p.lang.in(LangZsh) && p.val == "" {
 					// Zsh allows omitting the parameter name, e.g. ${:-word}.

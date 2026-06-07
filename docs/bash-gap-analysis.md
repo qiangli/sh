@@ -476,9 +476,11 @@ now matches bash (`1 ? 20 : x+=2` errors as assignment to a non-variable),
 and invalid base constants such as `3425#56`, `2#`, and `2#44` now emit
 bash-shaped arithmetic errors. B5 source-text preservation is partially
 wired for bashy arithmetic diagnostics, fixing the early `7 = 43`,
-`44 / 0`, and `b /= 0` spacing mismatches. The first remaining `arith`
-divergence is now `let 'jv += $iv'` arithmetic operand wording; the first
-remaining `arith-for` arithmetic-error divergence is `(( j= ))`.
+`44 / 0`, and `b /= 0` spacing mismatches. B7 `${#OP}` parser tolerance is
+also wired: `${#:}`, `${#/}`, `${#%}`, `${#=}`, `${#+}`, `${#1xyz}`, and
+`${#:%}` now reach bash-shaped runtime diagnostics. The first remaining
+`arith` divergence is now `let 'jv += $iv'` arithmetic operand wording; the
+first remaining `arith-for` arithmetic-error divergence is `(( j= ))`.
 
 | Test | Current result | Diff lines |
 |---|---:|---:|
@@ -488,7 +490,7 @@ remaining `arith-for` arithmetic-error divergence is `(( j= ))`.
 | `comsub2` | FAIL | 204 |
 | `comsub-eof` | FAIL | 46 |
 | `cond` | FAIL | 106 |
-| `more-exp` | FAIL | 102 |
+| `more-exp` | FAIL | 78 |
 | `heredoc` | FAIL | 152 |
 
 The narrow parser-wording sweep in `docs/plan-bash53-roadmap-agentic.md`
