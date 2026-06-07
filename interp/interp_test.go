@@ -249,10 +249,11 @@ var runTests = []runTest{
 	{"printf", "usage: printf [-v var] format [arguments]\nexit status 2 #JUSTERR"},
 	{"break", "break: only meaningful in a `for', `while', or `until' loop\n #JUSTERR"},
 	{"continue", "continue: only meaningful in a `for', `while', or `until' loop\n #JUSTERR"},
-	{"cd a b", "usage: cd [dir]\nexit status 2 #JUSTERR"},
+	{"cd a b", "cd: too many arguments\nexit status 1 #JUSTERR"},
 	{"shift a", "shift: a: numeric argument required\nexit status 1 #JUSTERR"},
 	{"shift 1 2", "shift: too many arguments\nexit status 1 #JUSTERR"},
-	{"shift -1", "shift: -1: shift count out of range\nexit status 1 #JUSTERR"},
+	{"shift -1", "exit status 1 #JUSTERR"},
+	{"shopt -s shift_verbose; shift -1", "shift: -1: shift count out of range\nexit status 1 #JUSTERR"},
 	{
 		"shouldnotexist",
 		"\"shouldnotexist\": executable file not found in $PATH\nexit status 127 #JUSTERR",
@@ -1408,13 +1409,13 @@ var runTests = []runTest{
 	},
 
 	// return
-	{"return", "return: can only be done from a func or sourced script\nexit status 1 #JUSTERR"},
+	{"return", "return: can only `return' from a function or sourced script\nexit status 1 #JUSTERR"},
 	{"f() { return; }; f", ""},
 	{"f() { return 2; }; f", "exit status 2"},
 	{"f() { echo foo; return; echo bar; }; f", "foo\n"},
 	{"f1() { :; }; f2() { f1; return; }; f2", ""},
 	{"echo 'return' >a; source ./a", ""},
-	{"echo 'return' >a; source ./a; return", "return: can only be done from a func or sourced script\nexit status 1 #JUSTERR"},
+	{"echo 'return' >a; source ./a; return", "return: can only `return' from a function or sourced script\nexit status 1 #JUSTERR"},
 	{"echo 'return 2' >a; source ./a", "exit status 2"},
 	{"echo 'echo foo; return; echo bar' >a; source ./a", "foo\n"},
 
@@ -2848,7 +2849,7 @@ done <<< 2`,
 	// source
 	{
 		"source",
-		"1:1: source: need filename\nexit status 2 #JUSTERR",
+		"source: filename argument required\nsource: usage: source filename [arguments]\nexit status 2 #JUSTERR",
 	},
 	{
 		"echo 'echo foo' >a; source ./a; . ./a",
@@ -3698,7 +3699,7 @@ done <<< 2`,
 	// TestRunnerLoginShell.
 	{
 		"logout",
-		"logout: not login shell: use \"exit\"\nexit status 1 #JUSTERR",
+		"logout: not login shell: use `exit'\nexit status 1 #JUSTERR",
 	},
 
 	// exec

@@ -272,23 +272,33 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		}
 		r.updateExpandOpts()
 	case "shift":
+		// Accept `--` as end-of-options.
+		if len(args) > 0 && args[0] == "--" {
+			args = args[1:]
+		}
 		n := 1
 		switch len(args) {
 		case 0:
 		case 1:
 			n2, err := strconv.Atoi(args[0])
 			if err != nil {
-				// Bash 5.3: `shift abc` → "shift: abc: numeric argument required"
-				return failf(1, "shift: %s: numeric argument required\n", args[0])
+				return failf(1, "%sshift: %s: numeric argument required\n",
+					r.bashErrPrefix(r.curStmtPos), args[0])
 			}
-			if n2 < 0 {
-				// Bash 5.3: `shift -1` → "shift: -1: shift count out of range"
-				return failf(1, "shift: %s: shift count out of range\n", args[0])
+			if n2 < 0 || n2 > len(r.Params) {
+				// Out of range: silent error by default; with
+				// `shopt -s shift_verbose`, emit a diagnostic.
+				if opt, _ := r.bashOptByName("shift_verbose"); opt != nil && *opt {
+					return failf(1, "%sshift: %s: shift count out of range\n",
+						r.bashErrPrefix(r.curStmtPos), args[0])
+				}
+				exit.code = 1
+				return exit
 			}
 			n = n2
 		default:
-			// Bash 5.3: extra args → "shift: too many arguments"
-			return failf(1, "shift: too many arguments\n")
+			return failf(1, "%sshift: too many arguments\n",
+				r.bashErrPrefix(r.curStmtPos))
 		}
 		if n >= len(r.Params) {
 			r.Params = nil
@@ -547,10 +557,14 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		case 1:
 			if n, err := strconv.Atoi(args[0]); err == nil {
 				if n < 1 {
-					if r.bashCompatErrors {
-						return failf(1, "%s: %s: loop count out of range\n", name, args[0])
-					}
-					return failf(1, "%s: %s: loop count out of range\n", name, args[0])
+					// Bash still breaks out of the current loop
+					// (the body after `break N<1` is unreachable),
+					// but exits with a diagnostic.
+					*enclosing = 1
+					r.errf("%s%s: %s: loop count out of range\n",
+						r.bashErrPrefix(r.curStmtPos), name, args[0])
+					exit.code = 1
+					return exit
 				}
 				*enclosing = n
 				break
@@ -608,6 +622,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		switch len(args) {
 		case 0:
 			path = r.envGet("HOME")
+			if path == "" {
+				r.errf("%scd: HOME not set\n", r.bashErrPrefix(r.curStmtPos))
+				exit.code = 1
+				return exit
+			}
 		case 1:
 			path = args[0]
 
@@ -615,13 +634,15 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			// ref: https://www.man7.org/linux/man-pages/man1/cd.1p.html#OPERANDS
 			if path == "-" {
 				path = r.envGet("OLDPWD")
+				if path == "" {
+					r.errf("%scd: OLDPWD not set\n", r.bashErrPrefix(r.curStmtPos))
+					exit.code = 1
+					return exit
+				}
 				r.outf("%s\n", path)
 			}
 		default:
-			if r.bashCompatErrors {
-				return failf(2, "cd: usage: %s\n", bashUsage["cd"])
-			}
-			return failf(2, "usage: cd [dir]\n")
+			return failf(1, "%scd: too many arguments\n", r.bashErrPrefix(r.curStmtPos))
 		}
 		exit.code = r.changeDir(ctx, "cd", path)
 	case "wait":
@@ -924,10 +945,44 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			exit.code = 1
 		}
 	case "caller":
-		// Print call stack info: line_number subroutine filename
-		level := 0
-		if len(args) > 0 {
-			level = int(atoi(args[0]))
+		// Bash semantics:
+		//  caller          — prints "<line> [<source>]" for the current
+		//                    function call or "0 NULL" at top-level.
+		//  caller <expr>   — prints "<line> <function> <source>" for the
+		//                    frame at depth <expr>; errors if <expr> is
+		//                    not an integer or is out of range.
+		//  caller -X       — invalid option.
+		if len(args) > 0 && strings.HasPrefix(args[0], "-") && args[0] != "--" {
+			r.errf("%scaller: %s: invalid option\ncaller: usage: caller [expr]\n",
+				r.bashErrPrefix(pos), args[0])
+			exit.code = 2
+			return exit
+		}
+		if len(args) > 1 && args[0] == "--" {
+			args = args[1:]
+		}
+		if len(args) > 1 {
+			r.errf("caller: usage: caller [expr]\n")
+			exit.code = 1
+			return exit
+		}
+		if len(args) == 0 {
+			// "Implicit" caller: print line + source of the
+			// immediate caller, or "0 NULL" if at the top level.
+			if len(r.callStack) == 0 {
+				r.outf("0 NULL\n")
+				break
+			}
+			frame := r.callStack[len(r.callStack)-1]
+			r.outf("%d %s\n", frame.line, frame.source)
+			break
+		}
+		level, err := strconv.Atoi(args[0])
+		if err != nil || level < 0 {
+			r.errf("%scaller: %s: invalid number\ncaller: usage: caller [expr]\n",
+				r.bashErrPrefix(pos), args[0])
+			exit.code = 1
+			return exit
 		}
 		if level < len(r.callStack) {
 			frame := r.callStack[len(r.callStack)-1-level]
@@ -1229,15 +1284,48 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		r.stmts(ctx, file.Stmts)
 		exit = r.exit
 	case "source", ".":
+		// Bash 5.3: accept `-p PATH` to override the search path.
+		var pathOverride string
+		havePathOverride := false
+		fp := flagParser{remaining: args}
+		for fp.more() {
+			switch flag := fp.flag(); flag {
+			case "-p":
+				pathOverride = fp.value()
+				havePathOverride = true
+				if pathOverride == "" {
+					return failf(2, "%s%s: -p: option requires an argument\n",
+						r.bashErrPrefix(pos), name)
+				}
+			default:
+				return failf(2, "%s%s: %s: invalid option\n%s: usage: %s\n",
+					r.bashErrPrefix(pos), name, flag, name, bashUsage[name])
+			}
+		}
+		args = fp.args()
 		if len(args) < 1 {
-			return failf(2, "%v: source: need filename\n", pos)
+			r.errf("%s%s: filename argument required\n%s: usage: %s\n",
+				r.bashErrPrefix(pos), name, name, bashUsage[name])
+			exit.code = 2
+			return exit
 		}
 		if r.opts[optRestricted] && strings.Contains(args[0], "/") {
 			r.errf("%s.: %s: restricted\n", r.bashErrPrefix(pos), args[0])
 			exit.code = 1
 			return exit
 		}
-		path, err := scriptFromPathDir(r.Dir, r.writeEnv, args[0])
+		var path string
+		var err error
+		if havePathOverride {
+			// Search the explicit PATH only; layer a one-off overlay on
+			// top of the writeEnv so PATH is overridden but other env
+			// stays intact for the search.
+			overlay := newOverlayEnviron(r.writeEnv, false)
+			overlay.Set("PATH", expand.Variable{Kind: expand.String, Str: pathOverride})
+			path, err = scriptFromPathDir(r.Dir, overlay, args[0])
+		} else {
+			path, err = scriptFromPathDir(r.Dir, r.writeEnv, args[0])
+		}
 		if err != nil {
 			// If the script was not found in PATH or there was any error, pass
 			// the source path to the open handler so it has a chance to look
@@ -1681,7 +1769,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		}
 	case "return":
 		if !r.inFunc && !r.inSource {
-			return failf(1, "return: can only be done from a func or sourced script\n")
+			return failf(1, "return: can only `return' from a function or sourced script\n")
 		}
 		switch len(args) {
 		case 0:
@@ -2822,7 +2910,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		// Bash refuses `logout` from a non-login shell. Embedders mark
 		// the runner via WithLoginShell.
 		if !r.loginShell {
-			return failf(1, "logout: not login shell: use \"exit\"\n")
+			return failf(1, "logout: not login shell: use `exit'\n")
 		}
 		switch len(args) {
 		case 0:
@@ -2986,9 +3074,20 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		// symbolic form mutates the current mask; the octal form
 		// replaces it. We deliberately do not call syscall.Umask
 		// (process-wide) — only the per-Runner virtual mask moves.
-		if newMask, ok := parseSymbolicUmask(args[0], r.umask); ok {
-			r.umask = newMask
+		symRes := parseSymbolicUmask(args[0], r.umask)
+		if symRes.ok {
+			r.umask = symRes.mask
 			break
+		}
+		if symRes.kind != "" {
+			// Symbolic mode that parsed partially before hitting
+			// an invalid byte — match bash's diagnostic shape.
+			tok := string(symRes.badChar)
+			if symRes.badChar == 0 {
+				tok = ""
+			}
+			return failf(1, "%sumask: `%s': invalid symbolic mode %s\n",
+				r.bashErrPrefix(r.curStmtPos), tok, symRes.kind)
 		}
 		mask, err := strconv.ParseUint(args[0], 8, 32)
 		if err != nil {
@@ -3207,14 +3306,14 @@ var bashUsage = map[string]string{
 	"mapfile":  "mapfile [-d delim] [-n count] [-O origin] [-s count] [-t] [-u fd] [-C callback] [-c quantum] [array]",
 	"printf":   "printf [-v var] format [arguments]",
 	"pwd":      "pwd [-LP]",
-	"read":     "read [-ers] [-a array] [-d delim] [-i text] [-n nchars] [-N nchars] [-p prompt] [-t timeout] [-u fd] [name ...]",
+	"read":     "read [-Eers] [-a array] [-d delim] [-i text] [-n nchars] [-N nchars] [-p prompt] [-t timeout] [-u fd] [name ...]",
 	"readonly": "readonly [-aAf] [name[=value] ...] or readonly -p",
 	"return":   "return [n]",
 	"set":      "set [-abefhkmnptuvxBCEHPT] [-o option-name] [--] [-] [arg ...]",
 	"shift":    "shift [n]",
 	"shopt":    "shopt [-pqsu] [-o] [optname ...]",
 	"source":   "source filename [arguments]",
-	"trap":     "trap [-lp] [[arg] signal_spec ...]",
+	"trap":     "trap [-Plp] [[action] signal_spec ...]",
 	"type":     "type [-afptP] name [name ...]",
 	"typeset":  "typeset [-aAfFgiIlnrtux] name[=value] ... or typeset -p [-aAfFilnrtux] [name ...]",
 	"umask":    "umask [-p] [-S] [mode]",
@@ -3609,16 +3708,27 @@ func (r *Runner) typeMatches(arg string, skipFuncs bool) []typeMatch {
 	return ms
 }
 
+// symbolicUmaskResult conveys how parseSymbolicUmask classified its input.
+// `kind` is "" on success or `looks-octal` (caller should try ParseUint),
+// otherwise the bash diagnostic kind: "character", "operator", or "".
+type symbolicUmaskResult struct {
+	mask    int
+	ok      bool
+	badChar byte
+	kind    string // "character" | "operator" | "" (general)
+}
+
 // parseSymbolicUmask applies a bash-style symbolic umask string to
 // `current` and returns the new mask. The grammar is one or more
 // clauses separated by commas; each clause is `[who][op]perms` where
 // `who` is any combination of `u`, `g`, `o`, `a` (default `a`),
 // `op` is `=`, `+`, or `-`, and `perms` is any combination of
-// `r`, `w`, `x`. Returns ok=false if the string doesn't conform
-// (caller falls back to octal parsing).
-func parseSymbolicUmask(s string, current int) (int, bool) {
+// `r`, `w`, `x`. On failure, returns kind="" for "looks octal" so
+// caller can try numeric parse, or "character"/"operator" with the
+// offending byte for a bash-shaped diagnostic.
+func parseSymbolicUmask(s string, current int) symbolicUmaskResult {
 	if s == "" {
-		return 0, false
+		return symbolicUmaskResult{}
 	}
 	// Quick reject: octal-looking input goes through ParseUint instead.
 	allDigits := true
@@ -3629,12 +3739,12 @@ func parseSymbolicUmask(s string, current int) (int, bool) {
 		}
 	}
 	if allDigits {
-		return 0, false
+		return symbolicUmaskResult{}
 	}
 	mask := current
 	for _, clause := range strings.Split(s, ",") {
 		if clause == "" {
-			return 0, false
+			return symbolicUmaskResult{badChar: ',', kind: "character"}
 		}
 		who := 0 // bitmask of which triads to affect: 4=u, 2=g, 1=o
 		i := 0
@@ -3657,11 +3767,11 @@ func parseSymbolicUmask(s string, current int) (int, bool) {
 			who = 7 // default = `a`
 		}
 		if i >= len(clause) {
-			return 0, false
+			return symbolicUmaskResult{badChar: 0, kind: "operator"}
 		}
 		op := clause[i]
 		if op != '=' && op != '+' && op != '-' {
-			return 0, false
+			return symbolicUmaskResult{badChar: op, kind: "operator"}
 		}
 		i++
 		var perms int
@@ -3679,7 +3789,7 @@ func parseSymbolicUmask(s string, current int) (int, bool) {
 				// if dir) is similarly absent. Anything else
 				// is an error.
 				if clause[i] != 's' && clause[i] != 't' && clause[i] != 'X' {
-					return 0, false
+					return symbolicUmaskResult{badChar: clause[i], kind: "character"}
 				}
 			}
 		}
@@ -3709,7 +3819,7 @@ func parseSymbolicUmask(s string, current int) (int, bool) {
 			applyTriad(0)
 		}
 	}
-	return mask & 0o777, true
+	return symbolicUmaskResult{mask: mask & 0o777, ok: true}
 }
 
 // ulimitBuiltin implements a best-effort `ulimit`. `ulimit -X` reads
