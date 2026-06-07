@@ -110,11 +110,20 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 					}
 				}
 				r.writeEnv = funEnv
+				oldErrExit := r.opts[optErrExit]
+				inheritErrexit := r.opts[optPosix]
+				if opt, _ := r.bashOptByName("inherit_errexit"); opt != nil && *opt {
+					inheritErrexit = true
+				}
+				if !inheritErrexit {
+					r.opts[optErrExit] = false
+				}
 				r.stmts(ctx, cs.Stmts)
 				reply := ""
 				if cs.ReplyVar {
 					reply = r.lookupVar(shellReplyVar).Str
 				}
+				r.opts[optErrExit] = oldErrExit
 				r.writeEnv = origEnv
 				r.inFunc = oldInFunc
 				r.stdout = oldStdout
@@ -3333,14 +3342,20 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		}
 		// Use a new slice, to not modify the slice in the alias map.
 		args := cm.Args
+		seenAliases := make(map[string]bool)
 		for i := 0; i < len(args); {
 			if !r.opts[optExpandAliases] {
 				break
 			}
-			als, ok := r.alias[args[i].Lit()]
+			name := args[i].Lit()
+			if seenAliases[name] {
+				break
+			}
+			als, ok := r.alias[name]
 			if !ok {
 				break
 			}
+			seenAliases[name] = true
 			// Multi-stmt alias (`alias foo=$'echo a\necho b'`):
 			// execute the parsed file in place of the surrounding
 			// call. Only kicks in when the alias word is at i==0
@@ -3357,9 +3372,10 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			}
 			args = slices.Replace(args, i, i+1, als.args...)
 			if !als.blank {
-				break
+				continue
 			}
 			i += len(als.args)
+			seenAliases = make(map[string]bool)
 		}
 		r.lastExpandExit = exitStatus{}
 		fields := r.fields(args...)

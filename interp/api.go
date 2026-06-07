@@ -778,6 +778,9 @@ func Params(args ...string) RunnerOption {
 				return fmt.Errorf("restricted: invalid option name")
 			}
 			*opt = enable
+			if value == "posix" {
+				r.setPosixMode(enable)
+			}
 		}
 		if args := fp.args(); args != nil {
 			// If "--" wasn't given and there were zero arguments,
@@ -1078,6 +1081,16 @@ func (r *Runner) posixOptByName(name string) *bool {
 		}
 	}
 	return nil
+}
+
+func (r *Runner) setPosixMode(enabled bool) {
+	r.opts[optPosix] = enabled
+	if r.ecfg != nil {
+		r.ecfg.Posix = enabled
+	}
+	if enabled {
+		r.opts[optExpandAliases] = true
+	}
 }
 
 func (r *Runner) posixOptByFlag(flag byte) *bool {

@@ -950,8 +950,7 @@ func (r *Runner) setVar(name string, vr expand.Variable) {
 	// POSIX-gated behaviour (special-builtin assignment persistence,
 	// etc.) kicks in without an explicit `set -o posix`.
 	if name == "POSIXLY_CORRECT" {
-		r.opts[optPosix] = vr.IsSet() && vr.Str != ""
-		r.ecfg.Posix = r.opts[optPosix]
+		r.setPosixMode(vr.IsSet() && vr.Str != "")
 	}
 	// BASH_XTRACEFD: when assigned, validate that the file
 	// descriptor is open and writable; bash 5.3 emits

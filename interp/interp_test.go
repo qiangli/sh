@@ -347,10 +347,13 @@ var runTests = []runTest{
 	// bash 5.3 valsub ${|cmd;}: stdout passes through; the expansion
 	// value comes from REPLY.
 	{`v=${| echo hello; REPLY=value; }; echo "v=$v REPLY=$REPLY"`, "hello\nv=value REPLY=\n"},
+	{`v=${| REPLY=$'a\n\n'; }; printf '<%s>\n' "$v"`, "<a\n\n>\n"},
 	// `return` inside funsub is local to the body (like a function);
 	// `exit` propagates out (kills the shell). Mirrors bash 5.3.
 	{`v=${ echo a; return; echo b; }; echo "[$v]"`, "[a]\n"},
 	{`v=${ echo a; exit 2; echo b; }; echo never`, "exit status 2"},
+	{`set -e; v=${ echo a; false; echo b; }; echo "[$v]"`, "[a\nb]\n"},
+	{`set -e -o posix; v=${ echo a; false; echo b; }; echo "[$v]"`, "exit status 1"},
 	// `exit 0` from a funsub also propagates — without preserving the
 	// funsub's exit status as lastExpandExit, the assignment path's
 	// "restore lastExpandExit on success" recovery would silently

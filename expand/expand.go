@@ -1660,6 +1660,9 @@ func (cfg *Config) cmdSubst(cs *syntax.CmdSubst) (string, error) {
 	}
 	out := sb.String()
 	out = strings.ReplaceAll(out, "\x00", "")
+	if cs.ReplyVar {
+		return out, nil
+	}
 	return strings.TrimRight(out, "\n"), nil
 }
 
