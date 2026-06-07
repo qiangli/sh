@@ -405,10 +405,6 @@ func (r *Runner) bashArithmError(expr syntax.ArithmExpr, err error, command bool
 	tokenText := "0"
 	exactToken := false
 	commandSep := " : "
-	if command && strings.Contains(bashMsg, "division by 0") {
-		exactToken = true
-		commandSep = ": "
-	}
 	if b, ok := expr.(*syntax.BinaryArithm); ok {
 		switch b.Op {
 		case syntax.Quo, syntax.Rem, syntax.QuoAssgn, syntax.RemAssgn:
@@ -431,6 +427,15 @@ func (r *Runner) bashArithmError(expr syntax.ArithmExpr, err error, command bool
 				}
 				exactToken = !strings.ContainsAny(tokenText, " \t")
 			}
+		}
+	}
+	if command && strings.Contains(bashMsg, "division by 0") {
+		if strings.Contains(exprText, " / ") {
+			exactToken = false
+			commandSep = " : "
+		} else {
+			exactToken = true
+			commandSep = ": "
 		}
 	}
 	prefix := r.filename
