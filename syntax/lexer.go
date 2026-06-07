@@ -221,7 +221,7 @@ func (p *Parser) nextKeepSpaces() {
 		switch r {
 		case '}':
 			p.tok = p.paramToken(r)
-		case '`', '"', '$':
+		case '`', '"', '$', '\'':
 			p.tok = p.regToken(r)
 		default:
 			p.advanceLitOther(r)
