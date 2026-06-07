@@ -383,7 +383,8 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					exit.code = 1
 					continue
 				}
-				if vr.IsSet() {
+				if vr.IsSet() || vr.Integer || vr.Exported || vr.Local ||
+					vr.Upper || vr.Lower || vr.Capitalize || vr.Kind != expand.Unset {
 					r.delVar(arg)
 					continue
 				}

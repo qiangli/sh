@@ -91,19 +91,30 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 			if cs.TempFile || cs.ReplyVar {
 				var captureBuf bytes.Buffer
 				oldStdout := r.stdout
-				r.stdout = &captureBuf
-				// Bash 5.3: "Any variable assignments performed during
-				// the execution of the [funsub] command list are local
-				// to the command list and lost after the substitution
-				// is performed." So the body runs in a function-like
-				// variable scope (return / local are legal, plain
-				// assignments don't leak), but in the *same process*
-				// (no subshell — unlike $(...) which forks).
+				if cs.TempFile {
+					r.stdout = &captureBuf
+				}
+				// The body runs in a function-like variable scope
+				// (return / local are legal), but in the same process
+				// and caller scope for ordinary assignments (no
+				// subshell — unlike $(...) which forks).
 				oldInFunc := r.inFunc
 				r.inFunc = true
 				origEnv := r.writeEnv
-				r.writeEnv = &overlayEnviron{parent: r.writeEnv, funcScope: true, funsubScope: true}
+				funEnv := &overlayEnviron{parent: r.writeEnv, funcScope: true, funsubScope: true}
+				if cs.ReplyVar {
+					reply := r.lookupVar(shellReplyVar)
+					reply.Local = true
+					funEnv.values = map[string]namedVariable{
+						shellReplyVar: {Name: shellReplyVar, Variable: reply},
+					}
+				}
+				r.writeEnv = funEnv
 				r.stmts(ctx, cs.Stmts)
+				reply := ""
+				if cs.ReplyVar {
+					reply = r.lookupVar(shellReplyVar).Str
+				}
 				r.writeEnv = origEnv
 				r.inFunc = oldInFunc
 				r.stdout = oldStdout
@@ -123,10 +134,10 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 				if sb, ok := w.(*strings.Builder); ok {
 					sb.Reset()
 				}
-				w.Write(captureBuf.Bytes())
 				if cs.ReplyVar {
-					s := strings.TrimRight(captureBuf.String(), "\n")
-					r.setVarString(shellReplyVar, s)
+					w.Write([]byte(reply))
+				} else {
+					w.Write(captureBuf.Bytes())
 				}
 				return nil
 			}

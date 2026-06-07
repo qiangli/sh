@@ -51,11 +51,9 @@ type overlayEnviron struct {
 	funcScope bool
 
 	// funsubScope is set for bash 5.3 `${ cmd; }` / mksh `${|cmd;}` bodies.
-	// Like funcScope it allows `return` and `local`, but unlike a function
-	// body plain assignments do NOT write through to the parent — per
-	// bash 5.3: "Any variable assignments performed during the execution
-	// of the command list are local to the command list and lost after
-	// the substitution is performed." Implies funcScope.
+	// Like funcScope it allows `return` and `local`; ordinary assignments
+	// still write through to the caller, while local variables remain scoped
+	// to the overlay. Implies funcScope.
 	funsubScope bool
 }
 
@@ -92,10 +90,9 @@ func (o *overlayEnviron) Get(name string) expand.Variable {
 func (o *overlayEnviron) Set(name string, vr expand.Variable) error {
 	normalized := o.normalize(name)
 	prev, inOverlay := o.values[normalized]
-	// Manipulation of a global var inside a function. Funsub bodies
-	// share the funcScope wiring (for `return` / `local`) but assignments
-	// stay local to the overlay — they must not write through.
-	if o.funcScope && !o.funsubScope && !vr.Local && !prev.Local {
+	// Manipulation of a global var inside a function or funsub. Local
+	// variables stay in the overlay; ordinary assignments write through.
+	if o.funcScope && !vr.Local && !prev.Local {
 		// In a function, the parent environment is ours, so it's always read-write.
 		return o.parent.(expand.WriteEnviron).Set(name, vr)
 	}
@@ -119,10 +116,9 @@ func (o *overlayEnviron) Set(name string, vr expand.Variable) error {
 		// must outlive the assignment — local, integer, exported,
 		// readonly, case-conversion — so `declare -u foo` (no
 		// value) stays declared.
-		if prev.Local || vr.Integer || vr.Exported || vr.ReadOnly ||
+		if prev.Local || vr.Exported || vr.ReadOnly ||
 			vr.Upper || vr.Lower || vr.Capitalize {
 			vr.Local = prev.Local || vr.Local
-			vr.Integer = prev.Integer || vr.Integer
 			o.values[normalized] = namedVariable{name, vr}
 			return nil
 		}
