@@ -213,6 +213,16 @@ func Run(ctx context.Context, opts Options) error {
 			}
 			return nil // EOF (Ctrl-D) — clean exit
 		}
+		// readline echoes the Enter key as a bare \n while the TTY is
+		// still in raw mode (no ONLCR), so the cursor drops a row but
+		// stays at the column the prompt+input ended on. Without this
+		// \r, the first line of command output starts indented under
+		// that column — subsequent \n get ONLCR'd in cooked mode and
+		// behave normally. Writing \r once after each successful read
+		// snaps the cursor back to column 0. A \r when already at col
+		// 0 is a no-op, so this is safe for every consumer (xterm.js
+		// PTY surfaces included).
+		_, _ = io.WriteString(stdout, "\r")
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
@@ -238,6 +248,9 @@ func Run(ctx context.Context, opts Options) error {
 				input = ""
 				break
 			}
+			// Same Enter-key-stuck-column issue as the primary read,
+			// for continuation lines.
+			_, _ = io.WriteString(stdout, "\r")
 			input += "\n" + cont
 		}
 		if input == "" {
