@@ -2162,7 +2162,14 @@ func (cfg *Config) quotedElemFields(pe *syntax.ParamExp) []string {
 		case syntax.NamesPrefixWords: // "${!prefix@}"
 			return cfg.namesByPrefix(pe.Param.Value)
 		case syntax.NamesPrefix: // "${!prefix*}"
-			return nil
+			return []string{cfg.ifsJoin(cfg.namesByPrefix(pe.Param.Value))}
+		}
+		if base, idx, ok := splitIndirectArrayRef(cfg.Env.Get(name).String()); ok {
+			return cfg.quotedAllElemValues(&syntax.ParamExp{
+				Param: &syntax.Lit{Value: base},
+				Index: idx,
+				Slice: pe.Slice,
+			})
 		}
 		switch nodeLit(pe.Index) {
 		case "@": // "${!name[@]}"

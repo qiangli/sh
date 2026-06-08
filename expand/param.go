@@ -195,6 +195,18 @@ func (u UnsetParameterError) Error() string {
 	name := u.Name
 	if name == "" && u.Node != nil && u.Node.Param != nil {
 		name = u.Node.Param.Value
+		if u.Node.Short {
+			numeric := true
+			for i := 0; i < len(name); i++ {
+				if name[i] < '0' || name[i] > '9' {
+					numeric = false
+					break
+				}
+			}
+			if numeric && name != "" {
+				name = "$" + name
+			}
+		}
 	}
 	return fmt.Sprintf("%s: %s", name, u.Message)
 }
@@ -251,12 +263,29 @@ func validIndirectName(name string) bool {
 	if syntax.ValidName(name) {
 		return true
 	}
+	if _, _, ok := splitIndirectArrayRef(name); ok {
+		return true
+	}
 	for i := 0; i < len(name); i++ {
 		if name[i] < '0' || name[i] > '9' {
 			return false
 		}
 	}
 	return name != ""
+}
+
+func splitIndirectArrayRef(ref string) (base string, index *syntax.Word, ok bool) {
+	base, rest, ok := strings.Cut(ref, "[")
+	if !ok || !strings.HasSuffix(rest, "]") || !syntax.ValidName(base) {
+		return "", nil, false
+	}
+	idx := strings.TrimSuffix(rest, "]")
+	if idx == "" {
+		return "", nil, false
+	}
+	return base, &syntax.Word{Parts: []syntax.WordPart{
+		&syntax.Lit{Value: idx},
+	}}, true
 }
 
 func cannotAssignParam(name string) bool {
@@ -557,11 +586,17 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 		}
 		str = strconv.Itoa(n)
 	case pe.Excl:
+		if pe.Exp != nil && !indirectDefaultOp(pe.Exp.Op) {
+			return "", BadSubstitutionError{Node: pe}
+		}
 		var strs []string
 		applyMod := false
 		sortStrs := false
 		switch {
 		case pe.Names != 0:
+			if !syntax.ValidName(pe.Param.Value) {
+				return "", BadSubstitutionError{Node: pe}
+			}
 			strs = cfg.namesByPrefix(pe.Param.Value)
 			sortStrs = true
 		case orig.Kind == NameRef:
@@ -592,6 +627,16 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 		default:
 			if !validIndirectName(str) {
 				return "", fmt.Errorf("%s: invalid variable name", str)
+			}
+			if base, idx, ok := splitIndirectArrayRef(str); ok {
+				vr = cfg.Env.Get(base)
+				val, err := cfg.varInd(vr, idx)
+				if err != nil {
+					return "", err
+				}
+				strs = append(strs, val)
+				applyMod = true
+				break
 			}
 			vr = cfg.Env.Get(str)
 			switch str {
@@ -1106,5 +1151,6 @@ func (cfg *Config) namesByPrefix(prefix string) []string {
 			names = append(names, name)
 		}
 	}
+	slices.Sort(names)
 	return names
 }
