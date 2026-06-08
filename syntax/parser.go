@@ -553,6 +553,11 @@ type Parser struct {
 	// openBquotes is how many levels of backquotes are open at the moment.
 	openBquotes int
 
+	// paramExpExpDblQuoted records whether the current ${paramOPword}
+	// substitute word was entered while parsing inside double quotes.
+	paramExpExpDblQuoted bool
+	paramExpOuterQuote   quoteState
+
 	// lastBquoteEsc is how many times the last backquote token was escaped
 	lastBquoteEsc int
 	// bquoteEscapedByte reports whether the current byte had a legacy
@@ -721,18 +726,24 @@ const (
 )
 
 type saveState struct {
-	quote       quoteState
-	buriedHdocs int
+	quote                quoteState
+	buriedHdocs          int
+	paramExpExpDblQuoted bool
+	paramExpOuterQuote   quoteState
 }
 
 func (p *Parser) preNested(quote quoteState) (s saveState) {
 	s.quote, s.buriedHdocs = p.quote, p.buriedHdocs
+	s.paramExpExpDblQuoted = p.paramExpExpDblQuoted
+	s.paramExpOuterQuote = p.paramExpOuterQuote
 	p.buriedHdocs, p.quote = len(p.heredocs), quote
 	return s
 }
 
 func (p *Parser) postNested(s saveState) {
 	p.quote, p.buriedHdocs = s.quote, s.buriedHdocs
+	p.paramExpExpDblQuoted = s.paramExpExpDblQuoted
+	p.paramExpOuterQuote = s.paramExpOuterQuote
 }
 
 func (p *Parser) unquotedWordBytes(w *Word) ([]byte, bool) {
@@ -1489,6 +1500,9 @@ func (p *Parser) dblQuoted() *DblQuoted {
 // as a literal.
 func (p *Parser) paramExp() *ParamExp {
 	old := p.quote
+	oldParamExpOuterQuote := p.paramExpOuterQuote
+	p.paramExpOuterQuote = old
+	defer func() { p.paramExpOuterQuote = oldParamExpOuterQuote }()
 	p.quote = runeByRune
 	// [ParamExp.Short] means we are parsing $exp rather than ${exp}.
 	pe := &ParamExp{
@@ -1882,6 +1896,9 @@ func (p *Parser) paramExpExp() *Expansion {
 	case MatchEmpty, ArrayExclude, ArrayIntersect:
 		p.checkLang(p.pos, LangZsh, "${name%sarg}", op)
 	}
+	oldDblQuoted := p.paramExpExpDblQuoted
+	p.paramExpExpDblQuoted = p.paramExpOuterQuote == dblQuotes
+	defer func() { p.paramExpExpDblQuoted = oldDblQuoted }()
 	p.quote = paramExpExp
 	p.next()
 	if op == OtherParamOps {

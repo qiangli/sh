@@ -230,7 +230,13 @@ func (p *Parser) nextKeepSpaces() {
 		switch r {
 		case '}':
 			p.tok = p.paramToken(r)
-		case '`', '"', '$', '\'':
+		case '\'':
+			if p.lang.in(LangPOSIX) && p.paramExpExpDblQuoted {
+				p.advanceLitOther(r)
+			} else {
+				p.tok = p.regToken(r)
+			}
+		case '`', '"', '$':
 			p.tok = p.regToken(r)
 		default:
 			p.advanceLitOther(r)
@@ -1082,7 +1088,13 @@ loop:
 		switch r {
 		case '\\': // escaped byte follows
 			p.rune()
-		case '\'', '"', '`', '$':
+		case '\'':
+			if p.quote == paramExpExp && p.lang.in(LangPOSIX) && p.paramExpExpDblQuoted {
+				continue
+			}
+			tok = _Lit
+			break loop
+		case '"', '`', '$':
 			tok = _Lit
 			break loop
 		case '}':

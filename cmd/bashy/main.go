@@ -610,8 +610,8 @@ func run(r *interp.Runner, reader io.Reader, name string) error {
 	// offset). Returns the final-stmt exit status the same way
 	// r.Run(prog) would. The -c case (`*command != ""`) skips
 	// recovery; bash also fails -c entirely on parse error.
-	parseOnce := func(chunk []byte) (*syntax.File, syntax.ParseError, bool) {
-		f, perr := syntax.NewParser(syntax.Variant(lang), syntax.HeredocEOFWarning(hdocWarn)).
+	parseOnce := func(chunk []byte, parseLang syntax.LangVariant) (*syntax.File, syntax.ParseError, bool) {
+		f, perr := syntax.NewParser(syntax.Variant(parseLang), syntax.HeredocEOFWarning(hdocWarn)).
 			Parse(bytes.NewReader(chunk), name)
 		if perr == nil {
 			return f, syntax.ParseError{}, false
@@ -624,7 +624,7 @@ func run(r *interp.Runner, reader io.Reader, name string) error {
 	}
 	if *command != "" {
 		// `bashy -c '...'` — one-shot, no recovery.
-		prog, pe, ok := parseOnce(src)
+		prog, pe, ok := parseOnce(src, lang)
 		if ok {
 			printBashParseError(os.Stderr, src, errPrefix, pe)
 			return interp.ExitStatus(2)
@@ -657,7 +657,7 @@ func run(r *interp.Runner, reader io.Reader, name string) error {
 		} else {
 			chunk = src[cursor:]
 		}
-		prog, pe, gotErr := parseOnce(chunk)
+		prog, pe, gotErr := parseOnce(chunk, lang)
 		if prog != nil && len(prog.Stmts) > 0 {
 			if err := r.Run(ctx, prog); err != nil {
 				runErr = err
@@ -666,12 +666,23 @@ func run(r *interp.Runner, reader io.Reader, name string) error {
 		if !gotErr {
 			return runErr
 		}
-		printBashParseError(os.Stderr, src, errPrefix, pe)
 		// Advance past the offending line. The error line is absolute
 		// (because we prepended newlines), so find the next '\n' at
 		// or after the start of that line in src.
 		errLine := int(pe.Pos.Line())
 		newCursor := advancePastLine(src, errLine)
+		if parseLang := r.LangVariant(); parseLang != lang && newCursor > cursor {
+			if prog, _, gotErr := parseOnce(paddedChunk(src, lineStart(src, errLine), newCursor), parseLang); !gotErr {
+				if prog != nil && len(prog.Stmts) > 0 {
+					if err := r.Run(ctx, prog); err != nil {
+						runErr = err
+					}
+				}
+				cursor = newCursor
+				continue
+			}
+		}
+		printBashParseError(os.Stderr, src, errPrefix, pe)
 		if newCursor <= cursor {
 			// No forward progress — bail to avoid infinite loop.
 			return interp.ExitStatus(2)
@@ -764,6 +775,35 @@ func advancePastLine(src []byte, line int) int {
 		}
 	}
 	return len(src)
+}
+
+func lineStart(src []byte, line int) int {
+	if line <= 1 {
+		return 0
+	}
+	current := 1
+	for i, b := range src {
+		if b == '\n' {
+			current++
+			if current == line {
+				return i + 1
+			}
+		}
+	}
+	return len(src)
+}
+
+func paddedChunk(src []byte, start, end int) []byte {
+	lineAtStart := bytes.Count(src[:start], []byte("\n")) + 1
+	if lineAtStart <= 1 {
+		return src[start:end]
+	}
+	chunk := make([]byte, lineAtStart-1+end-start)
+	for i := 0; i < lineAtStart-1; i++ {
+		chunk[i] = '\n'
+	}
+	copy(chunk[lineAtStart-1:], src[start:end])
+	return chunk
 }
 
 // printBashParseError emits a syntax.ParseError in the same shape bash

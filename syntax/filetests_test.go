@@ -2375,6 +2375,24 @@ var fileTests = []fileTestCase{
 		)),
 	),
 	fileTest(
+		[]string{`echo "foo ${IFS+'bar} baz"`},
+		langFile(call(
+			litWord("echo"),
+			word(dblQuoted(
+				lit("foo "),
+				&ParamExp{
+					Param: lit("IFS"),
+					Exp: &Expansion{
+						Op:   AlternateUnset,
+						Word: litWord("'bar"),
+					},
+				},
+				lit(" baz"),
+			)),
+		), LangPOSIX),
+		langErr2("1:17: reached EOF without closing quote `'`", LangBash),
+	),
+	fileTest(
 		[]string{`${foo:=<"bar"}`},
 		langFile(&ParamExp{
 			Param: lit("foo"),

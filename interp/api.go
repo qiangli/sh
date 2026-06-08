@@ -1119,6 +1119,15 @@ func (r *Runner) setPosixMode(enabled bool) {
 	}
 }
 
+// LangVariant returns the parser language implied by the runner's
+// current shell options.
+func (r *Runner) LangVariant() syntax.LangVariant {
+	if r.opts[optPosix] {
+		return syntax.LangPOSIX
+	}
+	return syntax.LangBash
+}
+
 func (r *Runner) posixOptByFlag(flag byte) *bool {
 	for i, opt := range &posixOptsTable {
 		if opt.flag == flag {
