@@ -214,10 +214,17 @@ func (p *Parser) arithmExprValue(compact bool) ArithmExpr {
 	case addAdd, subSub:
 		ue := &UnaryArithm{OpPos: p.pos, Op: UnAritOperator(p.tok)}
 		p.nextArith(compact)
-		if p.tok != _LitWord {
-			p.followErr(ue.OpPos, ue.Op, noQuote("a literal"))
+		switch p.tok {
+		case rightParen, dblRightParen, _EOF:
+			ue.X = p.wordOne(&Lit{ValuePos: p.pos, ValueEnd: p.pos})
+		case plus, minus:
+			ue.X = p.arithmExprUnary(compact)
+		default:
+			if p.tok != _LitWord {
+				p.followErr(ue.OpPos, ue.Op, noQuote("a literal"))
+			}
+			ue.X = p.arithmExprValue(compact)
 		}
-		ue.X = p.arithmExprValue(compact)
 		return ue
 	case leftParen:
 		if p.quote == paramExpArithm && p.lang.in(LangZsh) {
@@ -334,6 +341,22 @@ func (p *Parser) arithmExprBinary(compact bool, nextOp func(bool) ArithmExpr, op
 			p.followErrExp(pos, foundOp)
 		}
 
+		if u, ok := value.(*UnaryArithm); ok && u.Post && arithmWordAllDigits(u.X) {
+			if (u.Op == Inc && foundOp == Add) || (u.Op == Dec && foundOp == Sub) {
+				value = &BinaryArithm{
+					OpPos: u.OpPos,
+					Op:    foundOp,
+					X:     u.X,
+					Y: &UnaryArithm{
+						OpPos: pos,
+						Op:    u.Op,
+						X:     y,
+					},
+				}
+				continue
+			}
+		}
+
 		value = &BinaryArithm{
 			OpPos: pos,
 			Op:    foundOp,
@@ -341,6 +364,23 @@ func (p *Parser) arithmExprBinary(compact bool, nextOp func(bool) ArithmExpr, op
 			Y:     y,
 		}
 	}
+}
+
+func arithmWordAllDigits(expr ArithmExpr) bool {
+	word, ok := expr.(*Word)
+	if !ok || len(word.Parts) != 1 {
+		return false
+	}
+	lit, ok := word.Parts[0].(*Lit)
+	if !ok || lit.Value == "" {
+		return false
+	}
+	for _, r := range lit.Value {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func (p *Parser) followArithm(ftok token, fpos Pos) ArithmExpr {

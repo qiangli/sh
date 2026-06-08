@@ -1112,10 +1112,8 @@ var errorCases = []errorCase{
 		"echo $((a *))",
 		langErr("1:11: `*` must be followed by an expression"),
 	),
-	errCase(
-		"echo $((++))",
-		langErr("1:9: `++` must be followed by a literal"),
-	),
+	// Bash accepts a bare prefix ++/-- at parse time and reports it as
+	// an arithmetic command/expansion error at runtime.
 	// Bash accepts a missing ternary ':' at parse time and reports it
 	// as an arithmetic expansion error at runtime.
 	errCase(
@@ -1465,10 +1463,8 @@ var errorCases = []errorCase{
 		"let + a",
 		langErr("1:5: `+` must be followed by an expression", LangBash|LangMirBSDKorn|LangZsh),
 	),
-	errCase(
-		"let a ++",
-		langErr("1:7: `++` must be followed by a literal", LangBash|LangMirBSDKorn|LangZsh),
-	),
+	// Bash accepts `let a ++` at parse time and reports the trailing
+	// `++` as a runtime arithmetic error.
 	// Bash 5.3 accepts `(a)++`, `1++`, `$0++` at parse time and emits
 	// the "attempted assignment to non-variable" error at runtime (so
 	// surrounding constructs like for-loops can terminate cleanly).

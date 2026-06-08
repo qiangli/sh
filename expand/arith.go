@@ -139,6 +139,11 @@ func Arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 			}
 			lval, ok := arithLvalueFrom(expr.X)
 			if !ok {
+				if !expr.Post {
+					if inner, ok := expr.X.(*syntax.UnaryArithm); ok && (inner.Op == syntax.Plus || inner.Op == syntax.Minus) {
+						return Arithm(cfg, expr.X)
+					}
+				}
 				badOp := op
 				if inner, ok := expr.X.(*syntax.UnaryArithm); ok {
 					switch inner.Op {
@@ -149,6 +154,9 @@ func Arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 					}
 				}
 				return 0, fmt.Errorf("%s: assignment requires lvalue (error token is %q)", badOp, badOp+" ")
+			}
+			if word, ok := expr.X.(*syntax.Word); ok && arithMissingRHS(word) {
+				return 0, fmt.Errorf("arithmetic syntax error: operand expected (error token is %q)", tail)
 			}
 			if lval.name != "" && isAllDigits(lval.name) {
 				if !expr.Post {
