@@ -590,10 +590,16 @@ func (p *Parser) regToken(r rune) token {
 			p.rune()
 			return dollBrack
 		case '(':
-			if p.rune() == '(' {
+			if p.peek() == '(' {
+				if p.dollarDblLeftParenAsSubshell() {
+					p.rune()
+					return dollParen
+				}
+				p.rune()
 				p.rune()
 				return dollDblParen
 			}
+			p.rune()
 			return dollParen
 		}
 		return dollar
@@ -731,6 +737,29 @@ func (p *Parser) dblLeftParenAsSubshell() bool {
 	return closeArith < 0 || closeSub < closeArith
 }
 
+func (p *Parser) dollarDblLeftParenAsSubshell() bool {
+	rest := p.bs[p.bsp:]
+	if len(rest) == 0 || rest[0] != '(' {
+		return false
+	}
+	rest = rest[1:]
+	closeArith := bytes.Index(rest, []byte("))"))
+	if closeArith < 0 {
+		line, _, _ := bytes.Cut(rest, []byte("\n"))
+		closeSub := bytes.IndexByte(line, ')')
+		if closeSub < 0 {
+			return false
+		}
+		after := bytes.TrimLeft(line[closeSub+1:], " \t")
+		return len(after) > 0 && after[0] == ')'
+	}
+	closeSub := bytes.Index(rest, []byte(");"))
+	if closeSub < 0 {
+		return false
+	}
+	return closeSub < closeArith
+}
+
 func (p *Parser) dqToken(r rune) token {
 	switch r {
 	case '"':
@@ -752,10 +781,16 @@ func (p *Parser) dqToken(r rune) token {
 			p.rune()
 			return dollBrack
 		case '(':
-			if p.rune() == '(' {
+			if p.peek() == '(' {
+				if p.dollarDblLeftParenAsSubshell() {
+					p.rune()
+					return dollParen
+				}
+				p.rune()
 				p.rune()
 				return dollDblParen
 			}
+			p.rune()
 			return dollParen
 		}
 		return dollar

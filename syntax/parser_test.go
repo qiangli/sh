@@ -58,6 +58,30 @@ func TestParseFiles(t *testing.T) {
 	}
 }
 
+func TestParseDblParenCommandSubst(t *testing.T) {
+	t.Parallel()
+	for _, lang := range []LangVariant{LangBash, LangPOSIX} {
+		p := NewParser(Variant(lang))
+		for _, src := range []string{
+			`echo $((echo a);(echo b))`,
+			`echo $(( echo ab cde ) )`,
+		} {
+			f, err := p.Parse(strings.NewReader(src), "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			call := f.Stmts[0].Cmd.(*CallExpr)
+			cs, ok := call.Args[1].Parts[0].(*CmdSubst)
+			if !ok {
+				t.Fatalf("%s %q: wanted command substitution, got %T", lang, src, call.Args[1].Parts[0])
+			}
+			if len(cs.Stmts) == 0 {
+				t.Fatalf("%s %q: wanted statements in command substitution", lang, src)
+			}
+		}
+	}
+}
+
 func TestParseErr(t *testing.T) {
 	t.Parallel()
 	for lang := range langResolvedVariants.bits() {
