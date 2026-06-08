@@ -614,7 +614,7 @@ func ansiCEscape(s string) string {
 func FormatBPercent(cfg *Config, s string) (string, error) {
 	cfg = prepareConfig(cfg)
 	sb := cfg.strBuilder()
-	_, err := formatIntoMode(sb, s, nil, cfg.StartTime, true, cfg.OnFormatWarning, nil)
+	_, err := formatIntoMode(sb, s, nil, cfg.StartTime, true, nil, nil)
 	if err == errPrintfStop {
 		return sb.String(), errPrintfStop
 	}
@@ -2178,6 +2178,13 @@ func (cfg *Config) quotedElemFields(pe *syntax.ParamExp) []string {
 			case Associative:
 				return slices.Collect(maps.Keys(vr.Map))
 			}
+		}
+		vr := cfg.Env.Get(name)
+		switch target := vr.String(); target {
+		case "@":
+			return cfg.quotedAllElemValues(&syntax.ParamExp{Param: &syntax.Lit{Value: "@"}})
+		case "*":
+			return cfg.quotedAllElemValues(&syntax.ParamExp{Param: &syntax.Lit{Value: "*"}})
 		}
 		return nil
 	}

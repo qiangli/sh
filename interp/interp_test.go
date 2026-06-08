@@ -297,6 +297,7 @@ var runTests = []runTest{
 	{`echo -e '\t'`, "\t\n"},
 	{`echo -E '\t'`, "\\t\n"},
 	{`echo -e 'before\x00after'`, "before\x00after\n"},
+	{`echo -e '\x'`, "\\x\n"},
 	{"echo -x foo", "-x foo\n"},
 	{"echo -e -x -e foo", "-x -e foo\n"},
 
@@ -2231,6 +2232,10 @@ var runTests = []runTest{
 	{"set -u; echo $((a > 4)); echo after", "a: unbound variable\nexit status 1 #JUSTERR"},
 	{"a=b b=a; echo $((a + 7)); echo after", "b: expression recursion level exceeded (error token is \"b\")\nafter\n"},
 	{"x=8; echo $((--x++)); echo after", "++: assignment requires lvalue (error token is \"++ \")\nafter\n"},
+	{"HOME=/usr/homes/chet; echo \"${HOME:`echo }`}\"; echo after", "arithmetic syntax error: operand expected (error token is \"}\")\nafter\n"},
+	{"set -- a b c d op; echo ${!#}; v=bad-var; echo ${!v}; echo after", "op\nbad-var: invalid variable name\nafter\n"},
+	{"set -- a 'b c' d; foo=@; printf '<%s>\\n' ${!foo}; printf 'Q<%s>\\n' \"${!foo}\"", "<a>\n<b>\n<c>\n<d>\nQ<a>\nQ<b c>\nQ<d>\n"},
+	{"set -- a b c d e; echo ${6=arg6}; echo after", "$6: cannot assign in this way\nafter\n"},
 	// Assignment binds lower than the ternary false branch in bash:
 	// these parse like `(cond ? a : a) += 5`, which is not an lvalue.
 	{"a=10; echo $((0 ? a : a+=5)); echo $a", "attempted assignment to non-variable\n10\n"},

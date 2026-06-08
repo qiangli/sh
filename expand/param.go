@@ -216,6 +216,62 @@ func bashLengthSliceExpr(pe *syntax.ParamExp, expr syntax.ArithmExpr) syntax.Ari
 	}}
 }
 
+func bashParamSliceExpr(pe *syntax.ParamExp, expr syntax.ArithmExpr) syntax.ArithmExpr {
+	if pe.Param == nil || expr == nil {
+		return expr
+	}
+	return &syntax.Word{Parts: []syntax.WordPart{
+		&syntax.Lit{ValuePos: pe.Param.Pos(), Value: pe.Param.Value + ": " + nodeLit(expr)},
+	}}
+}
+
+func bashParamSliceText(pe *syntax.ParamExp, err error) string {
+	if pe.Param == nil {
+		return ""
+	}
+	msg := err.Error()
+	const prefix = "error token is \""
+	start := strings.Index(msg, prefix)
+	if start < 0 {
+		return ""
+	}
+	start += len(prefix)
+	end := strings.IndexByte(msg[start:], '"')
+	if end < 0 {
+		return ""
+	}
+	return pe.Param.Value + ": " + msg[start:start+end]
+}
+
+func validIndirectName(name string) bool {
+	switch name {
+	case "#", "@", "*", "?", "-", "$", "!", "0":
+		return true
+	}
+	if syntax.ValidName(name) {
+		return true
+	}
+	for i := 0; i < len(name); i++ {
+		if name[i] < '0' || name[i] > '9' {
+			return false
+		}
+	}
+	return name != ""
+}
+
+func cannotAssignParam(name string) bool {
+	switch name {
+	case "@", "*", "#", "?", "-", "$", "!", "0":
+		return true
+	}
+	for i := 0; i < len(name); i++ {
+		if name[i] < '0' || name[i] > '9' {
+			return false
+		}
+	}
+	return name != ""
+}
+
 func overridingUnset(pe *syntax.ParamExp) bool {
 	if pe.Exp == nil {
 		return false
@@ -336,6 +392,9 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 
 	name := pe.Param.Value
 	index := pe.Index
+	if name == "!" && pe.Exp != nil && pe.Exp.Op == syntax.RemSmallPrefix && pe.Exp.Word == nil {
+		return cfg.Env.Get(cfg.Env.Get("#").String()).String(), nil
+	}
 	switch name {
 	case "@", "*":
 		index = &syntax.Word{Parts: []syntax.WordPart{
@@ -384,6 +443,12 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			if err != nil {
 				if arithErr, ok := err.(*ArithmError); ok {
 					arithErr.Expr = bashLengthSliceExpr(pe, arithErr.Expr)
+				} else {
+					err = &ArithmError{
+						Expr: bashParamSliceExpr(pe, pe.Slice.Offset),
+						Text: bashParamSliceText(pe, err),
+						Err:  err,
+					}
 				}
 				return "", err
 			}
@@ -455,9 +520,11 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 	case pe.Excl:
 		var strs []string
 		applyMod := false
+		sortStrs := false
 		switch {
 		case pe.Names != 0:
 			strs = cfg.namesByPrefix(pe.Param.Value)
+			sortStrs = true
 		case orig.Kind == NameRef:
 			strs = append(strs, orig.Str)
 		case pe.Index != nil && vr.Kind == Indexed:
@@ -466,8 +533,10 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 					strs = append(strs, strconv.Itoa(i))
 				}
 			}
+			sortStrs = true
 		case pe.Index != nil && vr.Kind == Associative:
 			strs = slices.AppendSeq(strs, maps.Keys(vr.Map))
+			sortStrs = true
 		case (name == "@" || name == "*") && !vr.IsSet():
 			return "", nil
 		case !vr.IsSet():
@@ -482,13 +551,25 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 		case str == "":
 			return "", nil
 		default:
+			if !validIndirectName(str) {
+				return "", fmt.Errorf("%s: invalid variable name", str)
+			}
 			vr = cfg.Env.Get(str)
-			strs = append(strs, vr.String())
+			switch str {
+			case "@":
+				strs = append(strs, vr.List...)
+			case "*":
+				strs = append(strs, cfg.ifsJoin(vr.List))
+			default:
+				strs = append(strs, vr.String())
+			}
 			// `${!x//c/x}` — apply trailing modifiers to the
 			// dereferenced value (bash 5.3).
 			applyMod = true
 		}
-		slices.Sort(strs)
+		if sortStrs {
+			slices.Sort(strs)
+		}
 		str = strings.Join(strs, " ")
 		if pe.Exp != nil && indirectDefaultOp(pe.Exp.Op) {
 			arg, err := Literal(cfg, pe.Exp.Word)
@@ -698,6 +779,9 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			fallthrough
 		case syntax.AssignUnsetOrNull:
 			if str == "" {
+				if cannotAssignParam(name) {
+					return "", fmt.Errorf("$%s: cannot assign in this way", name)
+				}
 				if err := cfg.envSet(name, arg); err != nil {
 					return "", err
 				}

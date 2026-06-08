@@ -372,6 +372,7 @@ func looksLikeExpandError(msg string) bool {
 		strings.Contains(msg, "bad substitution"),
 		strings.HasPrefix(msg, "command substitution: "),
 		strings.Contains(msg, "unbound variable"),
+		strings.Contains(msg, "cannot assign in this way"),
 		strings.Contains(msg, "invalid variable name"):
 		return true
 	}

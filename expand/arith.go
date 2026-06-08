@@ -185,6 +185,9 @@ func arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 		if token := literalDollarArithmToken(str); token != "" {
 			return 0, fmt.Errorf("arithmetic syntax error: operand expected (error token is %q)", token)
 		}
+		if strings.TrimSpace(str) == "}" {
+			return 0, fmt.Errorf("arithmetic syntax error: operand expected (error token is %q)", "}")
+		}
 		// Bash re-parses the literal text of a Word-shaped arith
 		// operand as an arithmetic expression when it contains
 		// operators — `let "jv *= 2"` quotes the whole expression
