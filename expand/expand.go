@@ -2290,10 +2290,13 @@ func (cfg *Config) substWordFields(pe *syntax.ParamExp) ([][]fieldPart, bool, er
 	if len(pe.Exp.Word.Parts) != 1 {
 		return nil, false, nil
 	}
+	lit, litOnly := pe.Exp.Word.Parts[0].(*syntax.Lit)
 	switch pe.Exp.Word.Parts[0].(type) {
 	case *syntax.SglQuoted, *syntax.DblQuoted:
 	default:
-		return nil, false, nil
+		if !litOnly || !strings.Contains(lit.Value, "\\") {
+			return nil, false, nil
+		}
 	}
 	vr := cfg.Env.Get(pe.Param.Value)
 	trigger := false
@@ -2310,6 +2313,9 @@ func (cfg *Config) substWordFields(pe *syntax.ParamExp) ([][]fieldPart, bool, er
 	if !trigger {
 		return nil, false, nil
 	}
+	if litOnly {
+		return cfg.escapedLitFields(lit.Value), true, nil
+	}
 	fields, err := cfg.wordFields(pe.Exp.Word.Parts)
 	if err != nil {
 		return nil, false, err
@@ -2320,6 +2326,102 @@ func (cfg *Config) substWordFields(pe *syntax.ParamExp) ([][]fieldPart, bool, er
 		}
 	}
 	return fields, true, nil
+}
+
+func (cfg *Config) escapedLitFields(s string) [][]fieldPart {
+	var fields [][]fieldPart
+	var curField []fieldPart
+	flush := func() {
+		if len(curField) == 0 {
+			return
+		}
+		fields = append(fields, curField)
+		curField = nil
+	}
+	isIFSWS := func(r rune) bool {
+		return (r == ' ' || r == '\t' || r == '\n') && cfg.ifsRune(r)
+	}
+	emitEmpty := func() {
+		curField = append(curField, fieldPart{quote: quoteSingle, val: ""})
+		flush()
+	}
+	splitAdd := func(val string) {
+		fieldStart := -1
+		inSepRun := false
+		runNonWS := 0
+		flushedPrefix := false
+		for i, r := range val {
+			if cfg.ifsRune(r) {
+				if fieldStart >= 0 {
+					curField = append(curField, fieldPart{val: val[fieldStart:i]})
+					flush()
+					flushedPrefix = true
+					fieldStart = -1
+				} else if !inSepRun && len(curField) > 0 {
+					flush()
+					flushedPrefix = true
+				}
+				if !inSepRun {
+					inSepRun = true
+					runNonWS = 0
+				}
+				if !isIFSWS(r) {
+					runNonWS++
+				}
+				continue
+			}
+			if inSepRun {
+				switch {
+				case runNonWS == 0:
+				case !flushedPrefix:
+					for n := 0; n < runNonWS; n++ {
+						emitEmpty()
+					}
+				default:
+					for n := 1; n < runNonWS; n++ {
+						emitEmpty()
+					}
+				}
+				inSepRun = false
+				runNonWS = 0
+			}
+			if fieldStart < 0 {
+				fieldStart = i
+			}
+		}
+		if fieldStart >= 0 {
+			curField = append(curField, fieldPart{val: val[fieldStart:]})
+		}
+		if inSepRun && runNonWS > 0 {
+			extra := runNonWS - 1
+			if !flushedPrefix && len(curField) == 0 {
+				extra = runNonWS
+			}
+			for n := 0; n < extra; n++ {
+				emitEmpty()
+			}
+		}
+	}
+	fieldStart := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] != '\\' {
+			continue
+		}
+		if fieldStart < i {
+			splitAdd(s[fieldStart:i])
+		}
+		if i++; i < len(s) {
+			curField = append(curField, fieldPart{quote: quoteSingle, val: s[i : i+1]})
+		} else {
+			curField = append(curField, fieldPart{val: "\\"})
+		}
+		fieldStart = i + 1
+	}
+	if fieldStart < len(s) {
+		splitAdd(s[fieldStart:])
+	}
+	flush()
+	return fields
 }
 
 // quotedElemFields returns the list of elements resulting from a quoted

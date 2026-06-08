@@ -212,6 +212,29 @@ func TestFieldsParamExpDefaultBackslashInDoubleQuotes(t *testing.T) {
 	}
 }
 
+func TestFieldsParamExpDefaultBackslashFields(t *testing.T) {
+	cfg := &Config{Env: ListEnviron("HOME=/usr/homes/chet")}
+	tests := []struct {
+		src  string
+		want []string
+	}{
+		{`echo ${somevar:-a\ b}`, []string{"a b"}},
+		{`echo ${somevar:-a\\b}`, []string{`a\b`}},
+		{`echo ${somevar:-\$HOME}`, []string{"$HOME"}},
+		{`echo ${somevar:-string \\\}}`, []string{"string", `\}`}},
+	}
+	for _, tc := range tests {
+		word := parseCallArg(t, tc.src, 1)
+		got, err := Fields(cfg, word)
+		if err != nil {
+			t.Fatalf("%s: did not want error, got %v", tc.src, err)
+		}
+		if !reflect.DeepEqual(got, tc.want) {
+			t.Fatalf("%s: wanted %q, got %q", tc.src, tc.want, got)
+		}
+	}
+}
+
 func TestFieldsParamExpAssignSingleQuotesInDoubleQuotes(t *testing.T) {
 	cfg := &Config{Env: testEnv{
 		"foo": {Set: true, Kind: String, Str: "bar"},
