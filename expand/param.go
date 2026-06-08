@@ -877,7 +877,7 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			small := op == syntax.RemSmallPrefix || op == syntax.RemSmallSuffix
 			out := slices.Clone(elems)
 			for i, elem := range out {
-				out[i] = removePattern(elem, arg, suffix, small)
+				out[i] = cfg.removePattern(elem, arg, suffix, small)
 			}
 			str = strings.Join(out, " ")
 		case syntax.UpperFirst, syntax.UpperAll,
@@ -1069,10 +1069,13 @@ func defaultPromptExpand(s string) string {
 	return b.String()
 }
 
-func removePattern(str, pat string, fromEnd, shortest bool) string {
+func (cfg *Config) removePattern(str, pat string, fromEnd, shortest bool) string {
 	var mode pattern.Mode
 	if shortest {
 		mode |= pattern.Shortest
+	}
+	if cfg.ExtGlob {
+		mode |= pattern.ExtendedOperators
 	}
 	expr, err := pattern.Regexp(pat, mode)
 	if err != nil {

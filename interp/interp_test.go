@@ -734,8 +734,16 @@ var runTests = []runTest{
 		"aabccc\nbccc\n",
 	},
 	{
+		"shopt -s extglob; x=000987; echo ${x##*(0)}",
+		"987\n",
+	},
+	{
 		"x=(__a _b c_); echo ${x[@]#_}",
 		"_a b c_\n",
+	},
+	{
+		"shopt -s extglob; x=(000987 00123); printf '<%s>\\n' \"${x[@]##*(0)}\"",
+		"<987>\n<123>\n",
 	},
 	{
 		"x=(a__ b_ _c); echo ${x[@]%%_}",

@@ -2399,7 +2399,7 @@ func (cfg *Config) quotedRemoveElemFields(pe *syntax.ParamExp) []string {
 	small := op == syntax.RemSmallPrefix || op == syntax.RemSmallSuffix
 	out := make([]string, len(elems))
 	for i, elem := range elems {
-		out[i] = removePattern(elem, arg, suffix, small)
+		out[i] = cfg.removePattern(elem, arg, suffix, small)
 	}
 	return out
 }
