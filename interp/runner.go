@@ -2690,6 +2690,11 @@ func bashArithSpace(body string) string {
 		// content is between start+len(prefix) and j (exclusive) and j+1
 		// is the second `)` of the closing `))`.
 		content := body[start+len(prefix) : j]
+		if strings.Contains(content, "\n") {
+			b.WriteString(body[start : j+2])
+			i = j + 2
+			continue
+		}
 		trimmed := strings.TrimSpace(content)
 		if trimmed == "" {
 			// `(())` — leave it as-is.
@@ -2932,6 +2937,7 @@ func findHeredocOp(line string) int {
 // line ending with `<<TAG` we capture TAG; subsequent lines up to and
 // including the TAG-only line are heredoc content.
 func bashDeclareFmt(body string, lastTop bool) string {
+	body = bashMultilineArithExpansion(body)
 	// Bash 5.3 renders `((expr))` as `(( expr ))` (space-padded
 	// inside the double-parens) in `declare -f` output. Same for
 	// arith expansion `$((expr))` → `$(( expr ))`. The printer
@@ -2941,6 +2947,7 @@ func bashDeclareFmt(body string, lastTop bool) string {
 	// BEFORE the compound splitter so subshell-of-block patterns
 	// like `( { X; } )` are detectable.
 	body = bashSubshellSpace(body)
+	body = bashTightenMultilineArithParens(body)
 	// bash 5.3 normalises `for ((;;))` headers: empty parts become
 	// `1` and a space is added before `))`.
 	body = bashArithForNorm(body)
@@ -3046,6 +3053,9 @@ func bashDeclareFmt(body string, lastTop bool) string {
 		// Block openers / mid-clauses: never add `;`.
 		switch trim {
 		case "{", "do", "then", "else":
+			continue
+		}
+		if strings.HasSuffix(trim, "$((") {
 			continue
 		}
 		// Block closers (fi / done / esac / `}`) DO get `;` when
@@ -3161,7 +3171,101 @@ func bashDeclareFmt(body string, lastTop bool) string {
 	// `( CMD <<TAG\n...\nTAG\n );` when the subshell body is a
 	// single heredoc-bearing statement.
 	result = bashCollapseSubshellHdoc(result)
-	return bashCollapseCoprocSubshellHdoc(result)
+	result = bashCollapseCoprocSubshellHdoc(result)
+	return bashFinalizeMultilineArith(result)
+}
+
+func bashMultilineArithExpansion(body string) string {
+	if !strings.Contains(body, "$(((\\\n") {
+		return body
+	}
+	lines := strings.Split(body, "\n")
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
+		idx := strings.Index(line, "$(((\\")
+		if idx < 0 {
+			continue
+		}
+		indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+		exprIndent := indent + strings.Repeat(" ", 16)
+		finalIndent := indent + strings.Repeat(" ", 20)
+		closeIndent := indent + strings.Repeat(" ", 13)
+		lines[i] = line[:idx] + "$((" + line[idx+len("$(((\\"):]
+		for j := i + 1; j < len(lines); j++ {
+			trim := strings.TrimSpace(lines[j])
+			switch {
+			case strings.HasSuffix(trim, "| (\\"):
+				expr := strings.TrimSuffix(trim, "| (\\")
+				lines[j] = exprIndent + "(" + strings.TrimRight(expr, " \t") + " |"
+			case strings.HasSuffix(trim, "))"):
+				expr := strings.TrimSuffix(trim, "))")
+				lines[j] = finalIndent + "(" + strings.TrimRight(expr, " \t")
+				lines = append(lines, "")
+				copy(lines[j+2:], lines[j+1:])
+				lines[j+1] = closeIndent + "))"
+				i = j + 1
+				goto nextLine
+			}
+		}
+	nextLine:
+	}
+	return strings.Join(lines, "\n")
+}
+
+func bashTightenMultilineArithParens(body string) string {
+	if !strings.Contains(body, "$((\n") {
+		return body
+	}
+	lines := strings.Split(body, "\n")
+	inArith := false
+	for i, line := range lines {
+		trim := strings.TrimSpace(line)
+		if strings.HasSuffix(trim, "$((") {
+			inArith = true
+			continue
+		}
+		if !inArith {
+			continue
+		}
+		line = strings.ReplaceAll(line, "( ", "(")
+		line = strings.ReplaceAll(line, " )", ")")
+		line = strings.ReplaceAll(line, ")|", ") |")
+		lines[i] = line
+		if trim == "))" || strings.HasSuffix(trim, "))") {
+			inArith = false
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func bashFinalizeMultilineArith(body string) string {
+	if !strings.Contains(body, "$((\n") {
+		return body
+	}
+	lines := strings.Split(body, "\n")
+	inArith := false
+	for i, line := range lines {
+		trim := strings.TrimSpace(line)
+		if strings.HasSuffix(trim, "$((") {
+			inArith = true
+			continue
+		}
+		if inArith && trim == "))" {
+			lines[i] = line + ";"
+			inArith = false
+			for j := i + 1; j < len(lines); j++ {
+				next := strings.TrimSpace(lines[j])
+				if next == "" {
+					continue
+				}
+				if next == "done" && !strings.HasPrefix(lines[j], " ") {
+					lines[j] = "    " + next
+				}
+				break
+			}
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 // isPosixSpecialBuiltin reports whether name is a POSIX "special

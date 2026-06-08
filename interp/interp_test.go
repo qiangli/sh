@@ -2918,6 +2918,20 @@ done <<< 2`,
 	{"interp_myfn(){ :; }; type -a -t interp_myfn", "function\n"},
 	{"interp_myfn(){ :; }; type -a interp_myfn echo | head -2", "interp_myfn is a function\ninterp_myfn () \n"},
 	{"interp_myfn(){ echo foo |& cat; }; type interp_myfn", "interp_myfn is a function\ninterp_myfn () \n{ \n    echo foo 2>&1 | cat\n}\n"},
+	{`set -o posix
+swap32_posix()
+{
+	local arg
+	for arg in "$@"; do
+		echo $((
+			($arg & 4278190080) >> 24 |
+			($arg & 16711680) >> 8 |
+			($arg & 65280) << 8 |
+			($arg & 255) << 24
+		))
+	done
+}
+type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local arg;\n    for arg in \"$@\";\n    do\n        echo $((\n                        ($arg & 4278190080) >> 24 |\n                        ($arg & 16711680) >> 8 |\n                        ($arg & 65280) << 8 |\n                        ($arg & 255) << 24\n                ));\n    done\n}\n"},
 
 	// type -f: skip function lookup, fall through to builtin/file.
 	{"echo(){ :; }; type -t echo", "function\n"},

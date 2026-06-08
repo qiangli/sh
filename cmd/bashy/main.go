@@ -954,6 +954,16 @@ func rewriteParserErrorText(src string, pe syntax.ParseError) string {
 		strings.Contains(pe.Text, "statement must end with") {
 		return "syntax error near unexpected token `)'"
 	}
+	if commandSubstOpenBefore([]byte(src), pe.Pos) || strings.Contains(src, "$(") {
+		switch {
+		case strings.Contains(pe.Text, "`done` can only"):
+			return "syntax error near unexpected token `done' while looking for matching `)'"
+		case strings.Contains(pe.Text, "`esac` can only"):
+			return "syntax error near unexpected token `esac' while looking for matching `)'"
+		case strings.Contains(pe.Text, "`;;` can only"):
+			return "syntax error near unexpected token `in' while looking for matching `)'"
+		}
+	}
 	switch {
 	case pe.Text == "statements must be separated by &, ; or a newline",
 		strings.Contains(pe.Text, "must be followed by"),
