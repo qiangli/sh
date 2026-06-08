@@ -229,6 +229,7 @@ func (r *Runner) lookupVar(name string) expand.Variable {
 		} else {
 			vr.List = r.Params
 		}
+		vr.Set = len(vr.List) > 0
 	case "!":
 		// Prefer the real OS PID of the last backgrounded statement's
 		// spawned process so the `PID=$!; kill $PID` idiom works
@@ -509,6 +510,9 @@ func (r *Runner) lookupVar(name string) expand.Variable {
 		}
 	}
 	if vr.Kind != expand.Unknown {
+		if name == "@" || name == "*" {
+			return vr
+		}
 		vr.Set = true
 		return vr
 	}

@@ -23,6 +23,20 @@ func parseWord(t *testing.T, src string) *syntax.Word {
 	return word
 }
 
+func parseCallArg(t *testing.T, src string, index int) *syntax.Word {
+	t.Helper()
+	p := syntax.NewParser()
+	file, err := p.Parse(strings.NewReader(src), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	call, ok := file.Stmts[0].Cmd.(*syntax.CallExpr)
+	if !ok {
+		t.Fatalf("wanted call expression, got %T", file.Stmts[0].Cmd)
+	}
+	return call.Args[index]
+}
+
 func TestConfigNils(t *testing.T) {
 	os.Setenv("EXPAND_GLOBAL", "value")
 	tests := []struct {
@@ -90,6 +104,146 @@ func TestFieldsIdempotency(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestFieldsParamExpSubstWordQuotes(t *testing.T) {
+	cfg := &Config{Env: ListEnviron("A=aaa bbb ccc")}
+	tests := []struct {
+		src  string
+		want []string
+	}{
+		{`${B:-"$A"}`, []string{"aaa bbb ccc"}},
+		{`${B-"$A"}`, []string{"aaa bbb ccc"}},
+		{`${B:-""}`, []string{""}},
+	}
+	for _, tc := range tests {
+		word := parseWord(t, tc.src)
+		got, err := Fields(cfg, word)
+		if err != nil {
+			t.Fatalf("%s: did not want error, got %v", tc.src, err)
+		}
+		if !reflect.DeepEqual(got, tc.want) {
+			t.Fatalf("%s: wanted %q, got %q", tc.src, tc.want, got)
+		}
+	}
+}
+
+func TestFieldsParamExpSubstWordQuotedAt(t *testing.T) {
+	cfg := &Config{Env: testEnv{
+		"1": {Set: true, Kind: String, Str: "a b"},
+		"@": {Set: true, Kind: Indexed, List: []string{"a b", "c", "d"}},
+	}}
+	for _, src := range []string{`${1+"$@"}`} {
+		word := parseWord(t, src)
+		got, err := Fields(cfg, word)
+		if err != nil {
+			t.Fatalf("%s: did not want error, got %v", src, err)
+		}
+		want := []string{"a b", "c", "d"}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s: wanted %q, got %q", src, want, got)
+		}
+	}
+}
+
+func TestFieldsParamExpUnsetPositionalDefault(t *testing.T) {
+	cfg := &Config{Env: testEnv{
+		"*": {Kind: Indexed},
+		"@": {Kind: Indexed},
+	}}
+	for _, src := range []string{`${*-x}`, `${@-x}`} {
+		word := parseWord(t, src)
+		got, err := Fields(cfg, word)
+		if err != nil {
+			t.Fatalf("%s: did not want error, got %v", src, err)
+		}
+		want := []string{"x"}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s: wanted %q, got %q", src, want, got)
+		}
+	}
+	for _, src := range []string{`echo "${*-x}"`, `echo "${@-x}"`} {
+		word := parseCallArg(t, src, 1)
+		got, err := Fields(cfg, word)
+		if err != nil {
+			t.Fatalf("%s: did not want error, got %v", src, err)
+		}
+		want := []string{"x"}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s: wanted %q, got %q", src, want, got)
+		}
+	}
+}
+
+func TestFieldsQuotedAtDefaultPreservesElements(t *testing.T) {
+	cfg := &Config{Env: testEnv{
+		"@": {Set: true, Kind: Indexed, List: []string{"a", "b"}},
+	}}
+	word := parseCallArg(t, `echo "${@-}"`, 1)
+	got, err := Fields(cfg, word)
+	if err != nil {
+		t.Fatalf("did not want error, got %v", err)
+	}
+	want := []string{"a", "b"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("wanted %q, got %q", want, got)
+	}
+}
+
+func TestFieldsParamExpDefaultBackslashInDoubleQuotes(t *testing.T) {
+	cfg := &Config{Env: ListEnviron("somevar=", "HOME=/usr/homes/chet")}
+	tests := []struct {
+		src  string
+		want []string
+	}{
+		{`echo "${somevar:-\$HOME}"`, []string{"$HOME"}},
+		{`echo "${somevar:-\ \$HOME}"`, []string{`\ $HOME`}},
+		{`echo "${somevar:-\ \ \$HOME}"`, []string{`\ \ $HOME`}},
+	}
+	for _, tc := range tests {
+		word := parseCallArg(t, tc.src, 1)
+		got, err := Fields(cfg, word)
+		if err != nil {
+			t.Fatalf("%s: did not want error, got %v", tc.src, err)
+		}
+		if !reflect.DeepEqual(got, tc.want) {
+			t.Fatalf("%s: wanted %q, got %q", tc.src, tc.want, got)
+		}
+	}
+}
+
+func TestFieldsParamExpAssignSingleQuotesInDoubleQuotes(t *testing.T) {
+	cfg := &Config{Env: testEnv{
+		"foo": {Set: true, Kind: String, Str: "bar"},
+	}}
+	word := parseCallArg(t, `echo "${fox='$foo'}"`, 1)
+	got, err := Fields(cfg, word)
+	if err != nil {
+		t.Fatalf("did not want error, got %v", err)
+	}
+	want := []string{"'bar'"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("wanted %q, got %q", want, got)
+	}
+}
+
+type testEnv map[string]Variable
+
+func (e testEnv) Get(name string) Variable {
+	return e[name]
+}
+
+func (e testEnv) Each(fn func(string, Variable) bool) {
+	for name, vr := range e {
+		if !fn(name, vr) {
+			return
+		}
+	}
+}
+
+func (e testEnv) Set(name string, vr Variable) error {
+	e[name] = vr
+	return nil
 }
 
 func Test_glob(t *testing.T) {

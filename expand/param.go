@@ -137,6 +137,35 @@ func paramExpWordSingleQuotesOnly(word *syntax.Word) bool {
 	return true
 }
 
+func paramExpWordHasBackslashLit(word *syntax.Word) bool {
+	if word == nil {
+		return false
+	}
+	for _, part := range word.Parts {
+		switch part := part.(type) {
+		case *syntax.Lit:
+			if strings.ContainsRune(part.Value, '\\') {
+				return true
+			}
+		case *syntax.DblQuoted:
+			if paramExpWordHasBackslashLit(&syntax.Word{Parts: part.Parts}) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func paramExpDefaultTriggers(op syntax.ParExpOperator, vr Variable, str string) bool {
+	switch op {
+	case syntax.DefaultUnset:
+		return !vr.IsSet()
+	case syntax.DefaultUnsetOrNull:
+		return !vr.IsSet() || str == ""
+	}
+	return false
+}
+
 func nodeLit(node syntax.Node) string {
 	if word, ok := node.(*syntax.Word); ok {
 		return word.Lit()
@@ -424,6 +453,8 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			}
 		case pe.Index != nil && vr.Kind == Associative:
 			strs = slices.AppendSeq(strs, maps.Keys(vr.Map))
+		case (name == "@" || name == "*") && !vr.IsSet():
+			return "", nil
 		case !vr.IsSet():
 			// Bash 5.3 includes the variable name in the message
 			// (`./file: line N: foo: invalid indirect expansion`).
@@ -553,7 +584,11 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			arg, err = Pattern(cfg, pe.Exp.Word)
 		case op == syntax.AlternateUnset || op == syntax.AlternateUnsetOrNull:
 			arg, err = cfg.literalParamExpWord(pe.Exp.Word, false)
-		case cfg.insideDoubleQuote && (op == syntax.DefaultUnset || op == syntax.DefaultUnsetOrNull) &&
+		case cfg.insideDoubleQuote && paramExpDefaultTriggers(op, vr, str) &&
+			(op == syntax.DefaultUnset || op == syntax.DefaultUnsetOrNull) &&
+			(paramExpWordSingleQuotesOnly(pe.Exp.Word) || paramExpWordHasBackslashLit(pe.Exp.Word)):
+			arg, err = cfg.literalParamExpWord(pe.Exp.Word, false)
+		case cfg.insideDoubleQuote && (op == syntax.AssignUnset || op == syntax.AssignUnsetOrNull) &&
 			paramExpWordSingleQuotesOnly(pe.Exp.Word):
 			arg, err = cfg.literalParamExpWord(pe.Exp.Word, false)
 		default:

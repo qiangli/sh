@@ -1906,6 +1906,17 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 					continue
 				}
 			}
+			if fields, ok, err := cfg.substWordFields(wp); err != nil {
+				return nil, err
+			} else if ok {
+				for i, field := range fields {
+					if i > 0 {
+						flush()
+					}
+					curField = append(curField, field...)
+				}
+				continue
+			}
 			val, err := cfg.paramExp(wp)
 			if err != nil {
 				return nil, err
@@ -2014,6 +2025,52 @@ func isSubstWithQuotedAt(pe *syntax.ParamExp) bool {
 	return inner.Param.Value == "@" || inner.Param.Value == "*"
 }
 
+func (cfg *Config) substWordFields(pe *syntax.ParamExp) ([][]fieldPart, bool, error) {
+	if pe == nil || pe.Param == nil || pe.Exp == nil || pe.Repl != nil || pe.Exp.Word == nil {
+		return nil, false, nil
+	}
+	op := pe.Exp.Op
+	switch op {
+	case syntax.AlternateUnset, syntax.AlternateUnsetOrNull,
+		syntax.DefaultUnset, syntax.DefaultUnsetOrNull:
+	default:
+		return nil, false, nil
+	}
+	if len(pe.Exp.Word.Parts) != 1 {
+		return nil, false, nil
+	}
+	switch pe.Exp.Word.Parts[0].(type) {
+	case *syntax.SglQuoted, *syntax.DblQuoted:
+	default:
+		return nil, false, nil
+	}
+	vr := cfg.Env.Get(pe.Param.Value)
+	trigger := false
+	switch op {
+	case syntax.DefaultUnset:
+		trigger = !vr.IsSet()
+	case syntax.DefaultUnsetOrNull:
+		trigger = !vr.IsSet() || vr.String() == ""
+	case syntax.AlternateUnset:
+		trigger = vr.IsSet()
+	case syntax.AlternateUnsetOrNull:
+		trigger = vr.IsSet() && vr.String() != ""
+	}
+	if !trigger {
+		return nil, false, nil
+	}
+	fields, err := cfg.wordFields(pe.Exp.Word.Parts)
+	if err != nil {
+		return nil, false, err
+	}
+	for i, field := range fields {
+		if len(field) == 0 {
+			fields[i] = []fieldPart{{quote: quoteSingle, val: ""}}
+		}
+	}
+	return fields, true, nil
+}
+
 // quotedElemFields returns the list of elements resulting from a quoted
 // parameter expansion that should be treated especially, like "${foo[@]}".
 func (cfg *Config) quotedElemFields(pe *syntax.ParamExp) []string {
@@ -2030,31 +2087,53 @@ func (cfg *Config) quotedElemFields(pe *syntax.ParamExp) []string {
 		op := pe.Exp.Op
 		isSubstOp := op == syntax.AlternateUnset || op == syntax.AlternateUnsetOrNull ||
 			op == syntax.DefaultUnset || op == syntax.DefaultUnsetOrNull
+		if isSubstOp && pe.Param != nil && (pe.Param.Value == "@" || pe.Param.Value == "*") {
+			vr := cfg.Env.Get(pe.Param.Value)
+			trigger := false
+			switch op {
+			case syntax.DefaultUnset:
+				trigger = !vr.IsSet()
+			case syntax.DefaultUnsetOrNull:
+				trigger = !vr.IsSet() || vr.String() == ""
+			case syntax.AlternateUnset:
+				trigger = vr.IsSet()
+			case syntax.AlternateUnsetOrNull:
+				trigger = vr.IsSet() && vr.String() != ""
+			}
+			if !trigger {
+				return cfg.quotedAllElemValues(pe)
+			}
+		}
 		if isSubstOp && pe.Exp.Word != nil && len(pe.Exp.Word.Parts) == 1 {
-			if inner, ok := pe.Exp.Word.Parts[0].(*syntax.DblQuoted); ok &&
-				len(inner.Parts) == 1 {
-				if innerPE, ok := inner.Parts[0].(*syntax.ParamExp); ok &&
-					!innerPE.Excl && innerPE.Exp == nil && innerPE.Repl == nil &&
-					(innerPE.Param.Value == "@" || innerPE.Param.Value == "*") {
-					// Check whether the outer variable would actually
-					// require substitution.
-					vr := cfg.Env.Get(pe.Param.Value)
-					trigger := false
-					switch op {
-					case syntax.DefaultUnset:
-						trigger = !vr.IsSet()
-					case syntax.DefaultUnsetOrNull:
-						trigger = !vr.IsSet() || vr.String() == ""
-					case syntax.AlternateUnset:
-						trigger = vr.IsSet()
-					case syntax.AlternateUnsetOrNull:
-						trigger = vr.IsSet() && vr.String() != ""
-					}
-					if trigger {
-						// Use the inner PE's special handling.
-						if e := cfg.quotedElemFields(innerPE); e != nil {
-							return e
-						}
+			var innerPE *syntax.ParamExp
+			switch inner := pe.Exp.Word.Parts[0].(type) {
+			case *syntax.ParamExp:
+				innerPE = inner
+			case *syntax.DblQuoted:
+				if len(inner.Parts) == 1 {
+					innerPE, _ = inner.Parts[0].(*syntax.ParamExp)
+				}
+			}
+			if innerPE != nil && !innerPE.Excl && innerPE.Exp == nil && innerPE.Repl == nil &&
+				(innerPE.Param.Value == "@" || innerPE.Param.Value == "*") {
+				// Check whether the outer variable would actually
+				// require substitution.
+				vr := cfg.Env.Get(pe.Param.Value)
+				trigger := false
+				switch op {
+				case syntax.DefaultUnset:
+					trigger = !vr.IsSet()
+				case syntax.DefaultUnsetOrNull:
+					trigger = !vr.IsSet() || vr.String() == ""
+				case syntax.AlternateUnset:
+					trigger = vr.IsSet()
+				case syntax.AlternateUnsetOrNull:
+					trigger = vr.IsSet() && vr.String() != ""
+				}
+				if trigger {
+					// Use the inner PE's special handling.
+					if e := cfg.quotedElemFields(innerPE); e != nil {
+						return e
 					}
 				}
 			}

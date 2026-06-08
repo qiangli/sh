@@ -1339,6 +1339,14 @@ var runTests = []runTest{
 		"0\n3\n1\n0\n",
 	},
 	{
+		`foo() { echo "<${*-x}> <${@-x}>"; }; foo; foo ""; foo "" ""`,
+		"<x> <x>\n<> <>\n< > < >\n",
+	},
+	{
+		`foo() { echo "${!@}-${!*}"; }; foo`,
+		"-\n",
+	},
+	{
 		`foo() { for a in $*; do echo "$a"; done }; foo 'a  1' 'b  2'`,
 		"a\n1\nb\n2\n",
 	},
