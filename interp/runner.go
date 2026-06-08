@@ -312,9 +312,8 @@ func (r *Runner) expandErr(err error) {
 		return
 	}
 	if r.bashCompatErrors {
-		var arithErr *expand.ArithmError
-		if errors.As(err, &arithErr) {
-			err = r.bashArithmError(arithErr.Expr, arithErr.Err, false)
+		if arithErr, expr := innermostArithmError(err); arithErr != nil {
+			err = r.bashArithmError(expr, arithErr.Err, false, arithErr.Text)
 		}
 	}
 	errMsg := err.Error()
@@ -380,7 +379,14 @@ func looksLikeExpandError(msg string) bool {
 func (r *Runner) arithm(expr syntax.ArithmExpr) int {
 	n, err := expand.Arithm(r.ecfg, expr)
 	if err != nil && r.bashCompatErrors {
-		err = r.bashArithmError(expr, err, true)
+		if arithErr, arithExpr := innermostArithmError(err); arithErr != nil {
+			if arithExpr == nil {
+				arithExpr = expr
+			}
+			err = r.bashArithmError(arithExpr, arithErr.Err, true, arithErr.Text)
+		} else {
+			err = r.bashArithmError(expr, err, true, "")
+		}
 	}
 	r.lastArithErr = err
 	r.expandErr(err)
@@ -389,6 +395,12 @@ func (r *Runner) arithm(expr syntax.ArithmExpr) int {
 
 func (r *Runner) letArithm(expr syntax.ArithmExpr) int {
 	n, err := expand.Arithm(r.ecfg, expr)
+	if arithErr, arithExpr := innermostArithmError(err); arithErr != nil {
+		if arithExpr != nil {
+			expr = arithExpr
+		}
+		err = arithErr.Err
+	}
 	if err != nil && r.bashCompatErrors {
 		exprText := r.arithmSourceText(expr, false)
 		if exprText == "" {
@@ -420,6 +432,23 @@ func printArithmExpr(expr syntax.ArithmExpr) string {
 	return strings.TrimSpace(s)
 }
 
+func innermostArithmError(err error) (*expand.ArithmError, syntax.ArithmExpr) {
+	var found *expand.ArithmError
+	var expr syntax.ArithmExpr
+	for err != nil {
+		var arithErr *expand.ArithmError
+		if !errors.As(err, &arithErr) {
+			break
+		}
+		found = arithErr
+		if arithErr.Expr != nil {
+			expr = arithErr.Expr
+		}
+		err = arithErr.Err
+	}
+	return found, expr
+}
+
 // bashArithmError reformats an arithmetic-evaluation error so it
 // matches bash 5.3's diagnostic shape:
 //
@@ -429,7 +458,7 @@ func printArithmExpr(expr syntax.ArithmExpr) string {
 // division/remainder when the error is "division by zero"; otherwise
 // it's the whole expression. Bash includes a trailing space inside the
 // quoted token — preserved here so tests diff cleanly.
-func (r *Runner) bashArithmError(expr syntax.ArithmExpr, err error, command bool) error {
+func (r *Runner) bashArithmError(expr syntax.ArithmExpr, err error, command bool, exprTextOverride string) error {
 	msg := err.Error()
 	bashMsg := msg
 	switch {
@@ -444,6 +473,9 @@ func (r *Runner) bashArithmError(expr syntax.ArithmExpr, err error, command bool
 	// then strip the surrounding "(( ... ))" and any escaped-newline
 	// continuations the printer inserts for multi-line layout.
 	printArithm := func(e syntax.ArithmExpr) string {
+		if e == nil {
+			return ""
+		}
 		extendExpr := !command && !arithmInvalidLiteralMsg(bashMsg)
 		if s := r.arithmSourceText(e, extendExpr); s != "" {
 			if command {
@@ -466,6 +498,9 @@ func (r *Runner) bashArithmError(expr syntax.ArithmExpr, err error, command bool
 		return compactArithAssign(s)
 	}
 	exprText := printArithm(expr)
+	if exprTextOverride != "" {
+		exprText = exprTextOverride
+	}
 	if !command && strings.Contains(bashMsg, "error token is \"$") {
 		exprText = strings.ReplaceAll(exprText, `\$`, "$")
 		if start := strings.Index(bashMsg, "error token is \""); start >= 0 {
@@ -558,6 +593,10 @@ func (r *Runner) bashArithmError(expr syntax.ArithmExpr, err error, command bool
 	if prefix == "" {
 		prefix = "bashy"
 	}
+	line := 0
+	if expr != nil {
+		line = int(expr.Pos().Line())
+	}
 	compactErrSep := false
 	if command && (strings.HasSuffix(exprText, "=") || strings.HasSuffix(exprText, "= ")) &&
 		strings.Contains(bashMsg, "arithmetic syntax error: operand expected") &&
@@ -573,13 +612,13 @@ func (r *Runner) bashArithmError(expr syntax.ArithmExpr, err error, command bool
 		if command {
 			if compactErrSep {
 				return fmt.Errorf("%s: line %d: ((: %s: %s",
-					prefix, expr.Pos().Line(), exprText, bashMsg)
+					prefix, line, exprText, bashMsg)
 			}
 			return fmt.Errorf("%s: line %d: ((: %s : %s",
-				prefix, expr.Pos().Line(), exprText, bashMsg)
+				prefix, line, exprText, bashMsg)
 		}
 		return fmt.Errorf("%s: line %d: %s: %s",
-			prefix, expr.Pos().Line(), exprText, bashMsg)
+			prefix, line, exprText, bashMsg)
 	}
 	quotedToken := tokenText
 	if !exactToken && !strings.HasSuffix(tokenText, " ") {
@@ -590,10 +629,10 @@ func (r *Runner) bashArithmError(expr syntax.ArithmExpr, err error, command bool
 	}
 	if command {
 		return fmt.Errorf("%s: line %d: ((: %s%s%s (error token is \"%s\")",
-			prefix, expr.Pos().Line(), exprText, commandSep, bashMsg, quotedToken)
+			prefix, line, exprText, commandSep, bashMsg, quotedToken)
 	}
 	return fmt.Errorf("%s: line %d: %s: %s (error token is \"%s\")",
-		prefix, expr.Pos().Line(), exprText, bashMsg, quotedToken)
+		prefix, line, exprText, bashMsg, quotedToken)
 }
 
 func arithmInvalidLiteralMsg(msg string) bool {
@@ -612,6 +651,9 @@ func arithWordEmpty(word *syntax.Word) bool {
 }
 
 func (r *Runner) arithmSourceText(expr syntax.ArithmExpr, extendTrailingSpace bool) string {
+	if expr == nil {
+		return ""
+	}
 	return r.sourceTextRange(expr.Pos(), expr.End(), extendTrailingSpace)
 }
 

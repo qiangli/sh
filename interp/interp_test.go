@@ -2209,6 +2209,9 @@ var runTests = []runTest{
 	{"echo $((1 ? 20)); echo after", "`:' expected for conditional expression\nafter\n"},
 	{"echo $((4 ? 20 :)); echo after", "expression expected\nafter\n"},
 	{"echo $((2**-1)); echo after", "exponent less than 0\nafter\n"},
+	{"A='4 + '; echo $(((4 + A) + 4)); echo after", "arithmetic syntax error: operand expected (error token is \"+ \")\nafter\n"},
+	{"echo $((++7)); echo $((--7))", "7\n7\n"},
+	{"x=8; echo $((--x++)); echo after", "++: assignment requires lvalue (error token is \"++ \")\nafter\n"},
 	// Assignment binds lower than the ternary false branch in bash:
 	// these parse like `(cond ? a : a) += 5`, which is not an lvalue.
 	{"a=10; echo $((0 ? a : a+=5)); echo $a", "attempted assignment to non-variable\n10\n"},

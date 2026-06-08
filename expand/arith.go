@@ -16,6 +16,7 @@ import (
 
 type ArithmError struct {
 	Expr syntax.ArithmExpr
+	Text string
 	Err  error
 }
 
@@ -91,14 +92,21 @@ func Arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 		if containsArithOp(str) {
 			file, perr := syntax.NewParser().Parse(strings.NewReader("(("+str+"))"), "")
 			if perr != nil {
-				return 0, arithmParseError(str, perr)
+				return 0, &ArithmError{Text: str, Err: arithmParseError(str, perr)}
 			}
 			if perr == nil && len(file.Stmts) == 1 {
 				if ac, ok := file.Stmts[0].Cmd.(*syntax.ArithmCmd); ok && ac.X != nil {
 					// Avoid infinite recursion when the re-parse
 					// produces the same Word back.
 					if _, isWord := ac.X.(*syntax.Word); !isWord {
-						return Arithm(cfg, ac.X)
+						n, err := Arithm(cfg, ac.X)
+						if err != nil {
+							if _, ok := err.(*ArithmError); ok {
+								return 0, err
+							}
+							return 0, &ArithmError{Expr: ac.X, Err: err}
+						}
+						return n, nil
 					}
 				}
 			}
@@ -131,9 +139,21 @@ func Arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 			}
 			lval, ok := arithLvalueFrom(expr.X)
 			if !ok {
-				return 0, fmt.Errorf("%s: assignment requires lvalue (error token is %q)", op, op)
+				badOp := op
+				if inner, ok := expr.X.(*syntax.UnaryArithm); ok {
+					switch inner.Op {
+					case syntax.Inc:
+						badOp = "++"
+					case syntax.Dec:
+						badOp = "--"
+					}
+				}
+				return 0, fmt.Errorf("%s: assignment requires lvalue (error token is %q)", badOp, badOp+" ")
 			}
 			if lval.name != "" && isAllDigits(lval.name) {
+				if !expr.Post {
+					return Arithm(cfg, expr.X)
+				}
 				return 0, fmt.Errorf("arithmetic syntax error: operand expected (error token is %q)", tail)
 			}
 			if !syntax.ValidName(lval.name) {
@@ -469,8 +489,8 @@ func arithmParseError(s string, err error) error {
 	switch {
 	case strings.Contains(msg, "must be followed by an expression"):
 		tok := strings.TrimSpace(s)
-		if idx := strings.LastIndexAny(tok, "+-*/%<>=!&|^?:,"); idx >= 0 {
-			tok = tok[idx:]
+		if idx := strings.LastIndexAny(s, "+-*/%<>=!&|^?:,"); idx >= 0 {
+			tok = strings.TrimLeft(s[idx:], " \t")
 		}
 		return fmt.Errorf("arithmetic syntax error: operand expected (error token is %q)", tok)
 	case strings.Contains(msg, "without matching `((` with `))`"):
