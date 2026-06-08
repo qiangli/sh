@@ -622,6 +622,39 @@ func run(r *interp.Runner, reader io.Reader, name string) error {
 		}
 		return f, syntax.ParseError{}, false
 	}
+	followStdin := name == "" && *command == "" && bytes.Contains(src, []byte("exec 0<"))
+	var runCurrentStdin func(*os.File) error
+	runStmtsFollowingStdin := func(stmts []*syntax.Stmt, current *os.File) error {
+		var lastErr error
+		for _, stmt := range stmts {
+			lastErr = r.Run(ctx, stmt)
+			if r.Exited() {
+				return lastErr
+			}
+			if next := r.StdinFile(); next != nil && next != current {
+				return runCurrentStdin(next)
+			}
+		}
+		return lastErr
+	}
+	runCurrentStdin = func(current *os.File) error {
+		nextSrc, err := io.ReadAll(current)
+		if err != nil {
+			return err
+		}
+		if err := interp.WithBashSource(nextSrc)(r); err != nil {
+			return err
+		}
+		prog, pe, ok := parseOnce(nextSrc, r.LangVariant())
+		if ok {
+			printBashParseError(os.Stderr, nextSrc, errPrefix, pe)
+			return interp.ExitStatus(2)
+		}
+		if prog == nil {
+			return nil
+		}
+		return runStmtsFollowingStdin(prog.Stmts, current)
+	}
 	if *command != "" {
 		// `bashy -c '...'` — one-shot, no recovery.
 		prog, pe, ok := parseOnce(src, lang)
@@ -662,6 +695,9 @@ func run(r *interp.Runner, reader io.Reader, name string) error {
 		retryStart := cursor
 		if prog != nil && len(prog.Stmts) > 0 {
 			if !gotErr {
+				if followStdin {
+					return runStmtsFollowingStdin(prog.Stmts, r.StdinFile())
+				}
 				if err := r.Run(ctx, prog); err != nil {
 					runErr = err
 				}

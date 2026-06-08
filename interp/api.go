@@ -363,6 +363,8 @@ type Runner struct {
 	// subshell do not leak back to the parent because the map itself
 	// is cloned by [Runner.subshell].
 	fdTable map[int]*os.File
+	// fdReadTable marks fdTable entries that are valid input sources.
+	fdReadTable map[int]bool
 
 	// fdWriteTable holds write-only descriptors whose target is not a
 	// real file, such as stdout captured by command substitution. Those
@@ -1537,6 +1539,12 @@ func (r *Runner) Exited() bool {
 	return r.exit.exiting
 }
 
+// StdinFile returns the file currently used as the runner's standard input.
+// It can change after a persistent redirection such as `exec 0<file`.
+func (r *Runner) StdinFile() *os.File {
+	return r.stdin
+}
+
 // Subshell makes a copy of the given [Runner], suitable for use concurrently
 // with the original. The copy will have the same environment, including
 // variables and functions, but they can all be modified without affecting the
@@ -1600,6 +1608,7 @@ func (r *Runner) subshell(background bool) *Runner {
 		// child mutations (close, dup) don't leak back to the parent;
 		// the underlying *os.File handles are shared (single OS fd).
 		fdTable:      maps.Clone(r.fdTable),
+		fdReadTable:  maps.Clone(r.fdReadTable),
 		fdWriteTable: maps.Clone(r.fdWriteTable),
 		inheritedFds: maps.Clone(r.inheritedFds),
 

@@ -1637,6 +1637,14 @@ var runTests = []runTest{
 		"bar\n",
 	},
 	{
+		": 2>/dev/null <$((foo+=42)); echo $foo",
+		"42\n",
+	},
+	{
+		"echo foo >a; exec 3<a; echo bad 2>/dev/null >&3; echo ok",
+		"ok\n",
+	},
+	{
 		// <> opens for read-write; the file must be readable as stdin.
 		"echo foo >a; cat <>a",
 		"foo\n",

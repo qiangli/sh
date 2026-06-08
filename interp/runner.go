@@ -3414,9 +3414,11 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 	// inside cmd() itself, not via redir(), and those changes must
 	// persist past stmtSync; restoring unconditionally would wipe them.
 	var oldFdTable map[int]*os.File
+	var oldFdReadTable map[int]bool
 	var oldFdWriteTable map[int]io.Writer
 	if len(st.Redirs) > 0 {
 		oldFdTable = maps.Clone(r.fdTable)
+		oldFdReadTable = maps.Clone(r.fdReadTable)
 		oldFdWriteTable = maps.Clone(r.fdWriteTable)
 	}
 	persistNamedRedirs := false
@@ -3451,6 +3453,14 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 		r.exit.exiting = true
 		return
 	}
+	oldCurStmtPos := r.curStmtPos
+	if r.subshellLevel > 0 {
+		switch st.Cmd.(type) {
+		case *syntax.WhileClause, *syntax.ForClause:
+			pos := st.Pos()
+			r.curStmtPos = syntax.NewPos(pos.Offset(), pos.Line()+1, pos.Col())
+		}
+	}
 	for _, rd := range st.Redirs {
 		cls, err := r.redir(ctx, rd)
 		if err != nil {
@@ -3469,6 +3479,7 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 			}(cls)
 		}
 	}
+	r.curStmtPos = oldCurStmtPos
 	if r.exit.ok() && st.Cmd != nil {
 		// A negated stmt suppresses `set -e`-driven exit for the
 		// command it wraps — bash treats `! cmd` like `cmd || true`
@@ -3509,6 +3520,7 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 		r.stdinTTYFallback = oldStdinTTYFallback
 		if len(st.Redirs) > 0 && !persistNamedRedirs {
 			r.fdTable = oldFdTable
+			r.fdReadTable = oldFdReadTable
 			r.fdWriteTable = oldFdWriteTable
 		}
 	}
@@ -4665,6 +4677,14 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		}
 		r.fdTable[readFd] = pr
 		r.fdTable[writeFd] = pw2
+		if r.fdReadTable == nil {
+			r.fdReadTable = make(map[int]bool)
+		}
+		r.fdReadTable[readFd] = true
+		if r.fdWriteTable == nil {
+			r.fdWriteTable = make(map[int]io.Writer)
+		}
+		r.fdWriteTable[writeFd] = pw2
 
 		bg := &bgProc{
 			done: make(chan struct{}),
@@ -4985,6 +5005,13 @@ func (r *Runner) setReadFd(targetFd int, f *os.File) error {
 			r.fdTable = make(map[int]*os.File)
 		}
 		r.fdTable[targetFd] = f
+		if r.fdReadTable == nil {
+			r.fdReadTable = make(map[int]bool)
+		}
+		r.fdReadTable[targetFd] = true
+		if r.fdWriteTable != nil {
+			delete(r.fdWriteTable, targetFd)
+		}
 	}
 	return nil
 }
@@ -5008,8 +5035,12 @@ func (r *Runner) setWriteFd(targetFd int, w io.Writer) error {
 				r.fdTable = make(map[int]*os.File)
 			}
 			r.fdTable[targetFd] = f
-			if r.fdWriteTable != nil {
-				delete(r.fdWriteTable, targetFd)
+			if r.fdWriteTable == nil {
+				r.fdWriteTable = make(map[int]io.Writer)
+			}
+			r.fdWriteTable[targetFd] = f
+			if r.fdReadTable != nil {
+				delete(r.fdReadTable, targetFd)
 			}
 			return nil
 		}
@@ -5019,6 +5050,9 @@ func (r *Runner) setWriteFd(targetFd int, w io.Writer) error {
 		r.fdWriteTable[targetFd] = w
 		if r.fdTable != nil {
 			delete(r.fdTable, targetFd)
+		}
+		if r.fdReadTable != nil {
+			delete(r.fdReadTable, targetFd)
 		}
 	}
 	return nil
@@ -5073,16 +5107,23 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 	// to zero or more than one field, emit "ambiguous redirect".
 	// Skip the check for here-string (`<<<`) since the entire word
 	// is treated as the body, not a filename.
+	var arg string
 	if rd.Op != syntax.WordHdoc {
-		fields := r.fields(rd.Word)
-		if len(fields) != 1 {
-			var b bytes.Buffer
-			syntax.NewPrinter().Print(&b, rd.Word)
-			r.errf("%s%s: ambiguous redirect\n", r.bashErrPrefix(rd.Word.Pos()), b.String())
-			return nil, fmt.Errorf("ambiguous redirect")
+		if r.opts[optPosix] && rd.Op == syntax.RdrIn {
+			arg = r.literal(rd.Word)
+		} else {
+			fields := r.fields(rd.Word)
+			if len(fields) != 1 {
+				var b bytes.Buffer
+				syntax.NewPrinter().Print(&b, rd.Word)
+				r.errf("%s%s: ambiguous redirect\n", r.bashErrPrefix(rd.Word.Pos()), b.String())
+				return nil, fmt.Errorf("ambiguous redirect")
+			}
+			arg = fields[0]
 		}
+	} else {
+		arg = r.literal(rd.Word)
 	}
-	arg := r.literal(rd.Word)
 	if r.opts[optRestricted] {
 		switch rd.Op {
 		case syntax.RdrOut, syntax.AppOut, syntax.RdrInOut, syntax.RdrClob,
@@ -5184,6 +5225,7 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 				r.stderr = io.Discard
 			default:
 				delete(r.fdTable, targetFd)
+				delete(r.fdReadTable, targetFd)
 				delete(r.fdWriteTable, targetFd)
 			}
 			return nil, nil
@@ -5222,15 +5264,13 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 			if err != nil {
 				return nil, fmt.Errorf("unhandled %v arg: %q", rd.Op, arg)
 			}
-			f, ok := r.fdTable[n]
-			if ok {
-				w = f
-			} else if r.fdWriteTable != nil {
+			ok := false
+			if r.fdWriteTable != nil {
 				w, ok = r.fdWriteTable[n]
 			}
 			if !ok {
-				if f, ok = r.inheritedFd(n); ok {
-					w = f
+				if _, inherited := r.inheritedFd(n); inherited && r.fdWriteTable != nil {
+					w, ok = r.fdWriteTable[n]
 				}
 			}
 			if !ok {
@@ -5257,6 +5297,7 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 				r.stdin = nil
 			default:
 				delete(r.fdTable, targetFd)
+				delete(r.fdReadTable, targetFd)
 				delete(r.fdWriteTable, targetFd)
 			}
 			return nil, nil
@@ -5285,8 +5326,16 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 			}
 			var ok bool
 			f, ok = r.fdTable[n]
+			if ok && !r.fdReadTable[n] {
+				ok = false
+			}
 			if !ok {
-				f, ok = r.inheritedFd(n)
+				if _, inherited := r.inheritedFd(n); inherited {
+					f, ok = r.fdTable[n]
+					if ok && !r.fdReadTable[n] {
+						ok = false
+					}
+				}
 			}
 			if !ok {
 				r.errf("%s%s: Bad file descriptor\n", r.bashErrPrefix(rd.Word.Pos()), redirWordText(rd))
@@ -5351,6 +5400,18 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 		}
 		if err := r.setReadFd(targetFd, stdin); err != nil {
 			return nil, err
+		}
+		if rd.Op == syntax.RdrInOut {
+			writeFd := targetFd
+			if writeFd == -1 {
+				writeFd = 0
+			}
+			if writeFd >= 3 {
+				if r.fdWriteTable == nil {
+					r.fdWriteTable = make(map[int]io.Writer)
+				}
+				r.fdWriteTable[writeFd] = stdin
+			}
 		}
 		if targetFd == -1 || targetFd == 0 {
 			r.stdinTTYFallback = ttyFallback
@@ -5493,6 +5554,7 @@ func (r *Runner) closeFd(fd int) {
 		r.stderr = io.Discard
 	default:
 		delete(r.fdTable, fd)
+		delete(r.fdReadTable, fd)
 		delete(r.fdWriteTable, fd)
 	}
 }
