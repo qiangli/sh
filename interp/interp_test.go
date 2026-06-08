@@ -3542,6 +3542,10 @@ done <<< 2`,
 		"a1z\n",
 	},
 	{
+		"shopt -s nullglob extglob\nprintf '<%s>\\n' @(missing) after",
+		"<after>\n",
+	},
+	{
 		"shopt -s extglob\ntouch a{1..9}0z; echo a+(0|[1-2]|8)z",
 		"a10z a20z a80z\n",
 	},

@@ -1295,7 +1295,7 @@ func (cfg *Config) escapedGlobField(parts []fieldPart) (escaped string, glob boo
 			continue
 		}
 		sb.WriteString(part.val)
-		if pattern.HasMeta(part.val, 0) {
+		if cfg.hasGlobMeta(part.val) {
 			glob = true
 		}
 	}
@@ -1303,6 +1303,26 @@ func (cfg *Config) escapedGlobField(parts []fieldPart) (escaped string, glob boo
 		escaped = sb.String()
 	}
 	return escaped, glob
+}
+
+func (cfg *Config) hasGlobMeta(s string) bool {
+	if pattern.HasMeta(s, 0) {
+		return true
+	}
+	if !cfg.ExtGlob {
+		return false
+	}
+	for i := 0; i+1 < len(s); i++ {
+		switch s[i] {
+		case '\\':
+			i++
+		case '@', '+', '!':
+			if s[i+1] == '(' {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // Fields is a pre-iterators API which now wraps [FieldsSeq].
