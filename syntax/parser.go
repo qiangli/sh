@@ -509,6 +509,9 @@ type Parser struct {
 	tok token  // current token
 	val string // current value (valid if tok is _Lit*)
 
+	pendingTok token
+	pendingPos Pos
+
 	// position of [Parser.r], to be converted to [Parser.pos] later
 	offs, line, col int64
 

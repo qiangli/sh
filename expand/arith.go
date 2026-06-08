@@ -22,6 +22,13 @@ type ArithmError struct {
 func (e *ArithmError) Error() string { return e.Err.Error() }
 func (e *ArithmError) Unwrap() error { return e.Err }
 
+type arithLvalue struct {
+	name       string
+	index      syntax.ArithmExpr
+	indexValue int
+	indexSet   bool
+}
+
 // isAllDigits reports whether s is non-empty and consists entirely
 // of ASCII digits (no sign, no separators).
 func isAllDigits(s string) bool {
@@ -121,25 +128,31 @@ func Arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 				op = "--"
 				tail = "- "
 			}
-			w, ok := expr.X.(*syntax.Word)
+			lval, ok := arithLvalueFrom(expr.X)
 			if !ok {
 				return 0, fmt.Errorf("%s: assignment requires lvalue (error token is %q)", op, op)
 			}
-			name := w.Lit()
-			if name != "" && isAllDigits(name) {
+			if lval.name != "" && isAllDigits(lval.name) {
 				return 0, fmt.Errorf("arithmetic syntax error: operand expected (error token is %q)", tail)
 			}
-			if !syntax.ValidName(name) {
+			if !syntax.ValidName(lval.name) {
 				return 0, fmt.Errorf("attempted assignment to non-variable (error token is %q)", op)
 			}
-			old := atoi(cfg.envGet(name))
+			lval, err := cfg.resolveAritLvalue(lval)
+			if err != nil {
+				return 0, err
+			}
+			old, err := cfg.getAritLvalue(lval)
+			if err != nil {
+				return 0, err
+			}
 			val := old
 			if expr.Op == syntax.Inc {
 				val++
 			} else {
 				val--
 			}
-			if err := cfg.envSet(name, strconv.FormatInt(val, 10)); err != nil {
+			if err := cfg.setAritLvalue(lval, val); err != nil {
 				return 0, err
 			}
 			if expr.Post {
@@ -229,6 +242,88 @@ func Arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 	default:
 		panic(fmt.Sprintf("unexpected arithm expr: %T", expr))
 	}
+}
+
+func arithLvalueFrom(expr syntax.ArithmExpr) (arithLvalue, bool) {
+	w, ok := expr.(*syntax.Word)
+	if !ok {
+		return arithLvalue{}, false
+	}
+	if len(w.Parts) == 1 {
+		if pe, ok := w.Parts[0].(*syntax.ParamExp); ok && pe.Param != nil && pe.NestedParam == nil {
+			return arithLvalue{name: pe.Param.Value, index: pe.Index}, true
+		}
+	}
+	return arithLvalue{name: w.Lit()}, true
+}
+
+func (cfg *Config) getAritLvalue(lval arithLvalue) (int64, error) {
+	if lval.index == nil {
+		return atoi(cfg.envGet(lval.name)), nil
+	}
+	if !lval.indexSet {
+		var err error
+		lval, err = cfg.resolveAritLvalue(lval)
+		if err != nil {
+			return 0, err
+		}
+	}
+	vr := cfg.Env.Get(lval.name)
+	switch vr.Kind {
+	case Indexed:
+		if lval.indexValue < len(vr.List) {
+			return atoi(vr.List[lval.indexValue]), nil
+		}
+	case String, NameRef:
+		if lval.indexValue == 0 {
+			return atoi(vr.Str), nil
+		}
+	}
+	return 0, nil
+}
+
+func (cfg *Config) resolveAritLvalue(lval arithLvalue) (arithLvalue, error) {
+	if lval.index == nil || lval.indexSet {
+		return lval, nil
+	}
+	index, err := Arithm(cfg, lval.index)
+	if err != nil {
+		return lval, err
+	}
+	if index < 0 {
+		return lval, fmt.Errorf("bad array subscript")
+	}
+	lval.indexValue = index
+	lval.indexSet = true
+	return lval, nil
+}
+
+func (cfg *Config) setAritLvalue(lval arithLvalue, val int64) error {
+	if lval.index == nil {
+		return cfg.envSet(lval.name, strconv.FormatInt(val, 10))
+	}
+	wenv, ok := cfg.Env.(WriteEnviron)
+	if !ok {
+		return fmt.Errorf("environment is read-only")
+	}
+	if !lval.indexSet {
+		var err error
+		lval, err = cfg.resolveAritLvalue(lval)
+		if err != nil {
+			return err
+		}
+	}
+	vr := cfg.Env.Get(lval.name)
+	if vr.Kind == String && vr.Str != "" {
+		vr.List = []string{vr.Str}
+	}
+	vr.Kind = Indexed
+	vr.Set = true
+	if lval.indexValue >= len(vr.List) {
+		vr.List = append(vr.List, make([]string, lval.indexValue-len(vr.List)+1)...)
+	}
+	vr.List[lval.indexValue] = strconv.FormatInt(val, 10)
+	return wenv.Set(lval.name, vr)
 }
 
 func oneIf(b bool) int {
@@ -414,18 +509,24 @@ func (cfg *Config) assgnArit(b *syntax.BinaryArithm) (int, error) {
 	// with "attempted assignment to non-variable". The arith parser
 	// no longer rejects non-name lvalues so the for-loop tests can
 	// reach this runtime path; surface the same wording bash uses.
-	w, ok := b.X.(*syntax.Word)
+	lval, ok := arithLvalueFrom(b.X)
 	if !ok {
 		return 0, fmt.Errorf("attempted assignment to non-variable")
 	}
-	name := w.Lit()
-	if !syntax.ValidName(name) {
+	if !syntax.ValidName(lval.name) {
 		return 0, fmt.Errorf("attempted assignment to non-variable")
 	}
 	if word, ok := b.Y.(*syntax.Word); ok && arithMissingRHS(word) {
 		return 0, fmt.Errorf("arithmetic syntax error: operand expected (error token is %q)", b.Op.String())
 	}
-	val := atoi(cfg.envGet(name))
+	lval, err := cfg.resolveAritLvalue(lval)
+	if err != nil {
+		return 0, err
+	}
+	val, err := cfg.getAritLvalue(lval)
+	if err != nil {
+		return 0, err
+	}
 	arg_, err := Arithm(cfg, b.Y)
 	if err != nil {
 		return 0, err
@@ -461,7 +562,7 @@ func (cfg *Config) assgnArit(b *syntax.BinaryArithm) (int, error) {
 	case syntax.ShrAssgn:
 		val >>= uint(arg)
 	}
-	if err := cfg.envSet(name, strconv.FormatInt(val, 10)); err != nil {
+	if err := cfg.setAritLvalue(lval, val); err != nil {
 		return 0, err
 	}
 	return int(val), nil

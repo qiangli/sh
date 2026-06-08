@@ -242,6 +242,13 @@ func (p *Parser) nextKeepSpaces() {
 }
 
 func (p *Parser) next() {
+	if p.pendingTok != illegalTok {
+		p.tok = p.pendingTok
+		p.pos = p.pendingPos
+		p.pendingTok = illegalTok
+		p.pendingPos = Pos{}
+		return
+	}
 	if p.r == utf8.RuneSelf {
 		p.tok = _EOF
 		return
@@ -1272,6 +1279,17 @@ func (p *Parser) advanceLitHdoc(r rune) {
 					p.hdocStops[len(p.hdocStops)-1] = nil
 					return
 				}
+				if len(line) == len(stop)+1 && bytes.HasPrefix(line, stop) && line[len(stop)] == ')' {
+					p.tok = _LitWord
+					p.val = p.endLit()[:lStart]
+					if p.val == "" {
+						p.tok = _Newl
+					}
+					p.pendingTok = rightParen
+					p.pendingPos = posAddCol(p.nextPos(), -1)
+					p.hdocStops[len(p.hdocStops)-1] = nil
+					return
+				}
 			}
 			if r != '\n' {
 				// Hit an unexpected EOF or closing backquote in
@@ -1334,6 +1352,16 @@ func (p *Parser) quotedHdocWord() *Word {
 		if bytes.Equal(line, stop) {
 			p.hdocStops[len(p.hdocStops)-1] = nil
 			val := p.endLit()[:lStart]
+			if val == "" {
+				return nil
+			}
+			return p.wordOne(p.lit(pos, val))
+		}
+		if len(line) == len(stop)+1 && bytes.HasPrefix(line, stop) && line[len(stop)] == ')' {
+			p.hdocStops[len(p.hdocStops)-1] = nil
+			val := p.endLit()[:lStart]
+			p.pendingTok = rightParen
+			p.pendingPos = posAddCol(p.nextPos(), -1)
 			if val == "" {
 				return nil
 			}

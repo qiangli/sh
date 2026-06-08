@@ -272,12 +272,12 @@ covered by an earlier section above is NOT repeated here.
 
 ### G1: Parser blockers (XL, unlocks 6 tests)
 
-- [ ] `${ cmd; }` funsub parser production (`parse.y:1115`), `FuncSubst` AST node, runtime that runs the body in caller's scope (no subshell)
-- [ ] `${ (shift) }` subshell-within-funsub
-- [ ] `${H*}` — treat `*` as parameter-set pattern inside `[[ ]]`
-- [ ] `((true ) )` — accept whitespace before closing `)` in case-clause arithm
+- [x] `${ cmd; }` funsub parser production (`syntax/parser.go:1247`, `CmdSubst.TempFile`), runtime runs body in caller's scope (`interp/runner.go:91`) — shipped under P0
+- [x] `${ (shift) }` subshell-within-funsub — shipped under P0 (subshell isolates positional-param changes)
+- [x] `${H*}` — short-circuit unevaluatable rhs in `[[ a && b ]]` / `[[ a || b ]]` so `${H*}` never runs when lhs settles result — shipped under P0
+- [x] `((true ) )` — accept whitespace before closing `)` in case-clause arithm (`peekArithmEnd` skips horizontal whitespace) — shipped under P0
 - [x] `case esac in esac)` — N/A: bash 5.3 rejects bare `esac)` per POSIX rule 4. `(esac)` and `foo|esac)` work in bashy.
-- [ ] `${|cmd;}` valsub (bash 5.3, separate from funsub)
+- [x] `${|cmd;}` valsub — `CmdSubst.ReplyVar` parsed at `syntax/parser.go:1250`, runtime captures body's `REPLY` as expansion value at `interp/runner.go:105-124`
 
 ### G2: Stub builtins worth finishing (M each)
 

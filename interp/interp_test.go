@@ -598,6 +598,9 @@ var runTests = []runTest{
 	{"[[ 1000000000123 -eq 1000000000456 ]]", "exit status 1"},
 	{"[[ 1000000000123 < 100 ]]", "exit status 1"},
 	{"((1000000000123 == 1000000000456))", "exit status 1"},
+	{"(( array[0]++ )); echo ${array[0]}; (( array[0] ++ )); echo ${array[0]}", "1\n2\n"},
+	{"(( ++array[1] )); echo ${array[1]}", "1\n"},
+	{"v=4; DIND=20; (( dice[DIND/v]+=2 )); echo ${dice[5]}", "2\n"},
 
 	// var manipulation
 	{"echo ${#a} ${#a[@]}", "0 0\n"},

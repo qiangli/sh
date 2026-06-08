@@ -1189,6 +1189,7 @@ var fileTests = []fileTestCase{
 		[]string{
 			"$(\n\tfoo <<EOF\nbar\nEOF\n)",
 			"$(foo <<EOF\nbar\nEOF\n)",
+			"$(foo <<EOF\nbar\nEOF)",
 			"`\nfoo <<EOF\nbar\nEOF\n`",
 			"`foo <<EOF\nbar\nEOF`",
 		},
