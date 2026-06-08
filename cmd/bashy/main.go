@@ -640,6 +640,7 @@ func run(r *interp.Runner, reader io.Reader, name string) error {
 	var runErr error
 	cursor := 0
 	for cursor < len(src) {
+		parseLang := r.LangVariant()
 		// Build the chunk the parser sees: src[cursor:] with as many
 		// leading newlines as needed so the parser's internal line
 		// counter aligns with the absolute line in src. The line
@@ -657,13 +658,31 @@ func run(r *interp.Runner, reader io.Reader, name string) error {
 		} else {
 			chunk = src[cursor:]
 		}
-		prog, pe, gotErr := parseOnce(chunk, lang)
+		prog, pe, gotErr := parseOnce(chunk, parseLang)
 		retryStart := cursor
 		if prog != nil && len(prog.Stmts) > 0 {
-			if err := r.Run(ctx, prog); err != nil {
-				runErr = err
+			if !gotErr {
+				if err := r.Run(ctx, prog); err != nil {
+					runErr = err
+				}
+			} else {
+				for _, stmt := range prog.Stmts {
+					if err := r.Run(ctx, stmt); err != nil {
+						runErr = err
+					}
+					cursor = advancePastLine(src, int(stmt.End().Line()))
+					if r.Exited() {
+						return runErr
+					}
+					if r.LangVariant() != parseLang {
+						break
+					}
+				}
+				retryStart = cursor
+				if r.LangVariant() != parseLang {
+					continue
+				}
 			}
-			retryStart = advancePastLine(src, int(prog.Stmts[len(prog.Stmts)-1].End().Line()))
 		}
 		if !gotErr {
 			return runErr
@@ -673,11 +692,11 @@ func run(r *interp.Runner, reader io.Reader, name string) error {
 		// or after the start of that line in src.
 		errLine := int(pe.Pos.Line())
 		newCursor := advancePastLine(src, errLine)
-		if parseLang := r.LangVariant(); parseLang != lang && newCursor > cursor {
+		if retryLang := r.LangVariant(); retryLang != parseLang && newCursor > cursor {
 			if retryStart <= cursor || retryStart > newCursor {
 				retryStart = lineStart(src, errLine)
 			}
-			if prog, _, gotErr := parseOnce(paddedChunk(src, retryStart, newCursor), parseLang); !gotErr {
+			if prog, _, gotErr := parseOnce(paddedChunk(src, retryStart, newCursor), retryLang); !gotErr {
 				if prog != nil && len(prog.Stmts) > 0 {
 					if err := r.Run(ctx, prog); err != nil {
 						runErr = err

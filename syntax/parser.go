@@ -556,6 +556,7 @@ type Parser struct {
 	// paramExpExpDblQuoted records whether the current ${paramOPword}
 	// substitute word was entered while parsing inside double quotes.
 	paramExpExpDblQuoted bool
+	paramExpExpOp        ParExpOperator
 	paramExpOuterQuote   quoteState
 
 	// lastBquoteEsc is how many times the last backquote token was escaped
@@ -729,12 +730,14 @@ type saveState struct {
 	quote                quoteState
 	buriedHdocs          int
 	paramExpExpDblQuoted bool
+	paramExpExpOp        ParExpOperator
 	paramExpOuterQuote   quoteState
 }
 
 func (p *Parser) preNested(quote quoteState) (s saveState) {
 	s.quote, s.buriedHdocs = p.quote, p.buriedHdocs
 	s.paramExpExpDblQuoted = p.paramExpExpDblQuoted
+	s.paramExpExpOp = p.paramExpExpOp
 	s.paramExpOuterQuote = p.paramExpOuterQuote
 	p.buriedHdocs, p.quote = len(p.heredocs), quote
 	return s
@@ -743,7 +746,22 @@ func (p *Parser) preNested(quote quoteState) (s saveState) {
 func (p *Parser) postNested(s saveState) {
 	p.quote, p.buriedHdocs = s.quote, s.buriedHdocs
 	p.paramExpExpDblQuoted = s.paramExpExpDblQuoted
+	p.paramExpExpOp = s.paramExpExpOp
 	p.paramExpOuterQuote = s.paramExpOuterQuote
+}
+
+func (p *Parser) posixParamExpExpSingleQuotesLiteral() bool {
+	if !p.lang.in(LangPOSIX) || !p.paramExpExpDblQuoted {
+		return false
+	}
+	switch p.paramExpExpOp {
+	case AlternateUnset, AlternateUnsetOrNull,
+		DefaultUnset, DefaultUnsetOrNull,
+		AssignUnset, AssignUnsetOrNull,
+		ErrorUnset, ErrorUnsetOrNull:
+		return true
+	}
+	return false
 }
 
 func (p *Parser) unquotedWordBytes(w *Word) ([]byte, bool) {
@@ -1897,8 +1915,13 @@ func (p *Parser) paramExpExp() *Expansion {
 		p.checkLang(p.pos, LangZsh, "${name%sarg}", op)
 	}
 	oldDblQuoted := p.paramExpExpDblQuoted
+	oldOp := p.paramExpExpOp
 	p.paramExpExpDblQuoted = p.paramExpOuterQuote == dblQuotes
-	defer func() { p.paramExpExpDblQuoted = oldDblQuoted }()
+	p.paramExpExpOp = op
+	defer func() {
+		p.paramExpExpDblQuoted = oldDblQuoted
+		p.paramExpExpOp = oldOp
+	}()
 	p.quote = paramExpExp
 	p.next()
 	if op == OtherParamOps {

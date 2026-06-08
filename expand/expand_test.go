@@ -201,7 +201,11 @@ func TestFieldsParamExpDefaultBackslashInDoubleQuotes(t *testing.T) {
 		{`echo "${somevar:-\ \ \$HOME}"`, []string{`\ \ $HOME`}},
 	}
 	for _, tc := range tests {
-		word := parseCallArg(t, tc.src, 1)
+		index := 1
+		if strings.HasPrefix(tc.src, "echo foo ") {
+			index = 2
+		}
+		word := parseCallArg(t, tc.src, index)
 		got, err := Fields(cfg, word)
 		if err != nil {
 			t.Fatalf("%s: did not want error, got %v", tc.src, err)
@@ -224,7 +228,11 @@ func TestFieldsParamExpDefaultBackslashFields(t *testing.T) {
 		{`echo ${somevar:-string \\\}}`, []string{"string", `\}`}},
 	}
 	for _, tc := range tests {
-		word := parseCallArg(t, tc.src, 1)
+		index := 1
+		if strings.HasPrefix(tc.src, "echo foo ") {
+			index = 2
+		}
+		word := parseCallArg(t, tc.src, index)
 		got, err := Fields(cfg, word)
 		if err != nil {
 			t.Fatalf("%s: did not want error, got %v", tc.src, err)
@@ -247,6 +255,83 @@ func TestFieldsParamExpAssignSingleQuotesInDoubleQuotes(t *testing.T) {
 	want := []string{"'bar'"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("wanted %q, got %q", want, got)
+	}
+}
+
+func TestFieldsParamExpPosixEscapedBrace(t *testing.T) {
+	cfg := &Config{Env: ListEnviron("IFS= \t\n")}
+	tests := []struct {
+		src  string
+		want []string
+	}{
+		{`echo "${IFS+\}z}"`, []string{"}z"}},
+		{`echo "${IFS+\"\}\"z}"`, []string{`"}"z`}},
+	}
+	for _, tc := range tests {
+		word := parseCallArg(t, tc.src, 1)
+		got, err := Fields(cfg, word)
+		if err != nil {
+			t.Fatalf("%s: did not want error, got %v", tc.src, err)
+		}
+		if !reflect.DeepEqual(got, tc.want) {
+			t.Fatalf("%s: wanted %q, got %q", tc.src, tc.want, got)
+		}
+	}
+}
+
+func TestFieldsParamExpAssignQuoteRemoval(t *testing.T) {
+	cfg := &Config{Env: testEnv{}}
+	word := parseCallArg(t, `echo ${v=a\ b} x ${v=c\ d}`, 1)
+	got, err := Fields(cfg, word)
+	if err != nil {
+		t.Fatalf("did not want error, got %v", err)
+	}
+	want := []string{"a", "b"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("wanted %q, got %q", want, got)
+	}
+	if v := cfg.Env.Get("v").String(); v != "a b" {
+		t.Fatalf("v = %q, want %q", v, "a b")
+	}
+}
+
+func TestFieldsParamExpAssignLeadingTilde(t *testing.T) {
+	cfg := &Config{Env: testEnv{
+		"HOME": {Set: true, Kind: String, Str: "/usr/xyz"},
+	}}
+	word := parseCallArg(t, `echo ${ADDPATH:=~/bin:~/bin2}`, 1)
+	got, err := Fields(cfg, word)
+	if err != nil {
+		t.Fatalf("did not want error, got %v", err)
+	}
+	want := []string{"/usr/xyz/bin:~/bin2"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("wanted %q, got %q", want, got)
+	}
+	if v := cfg.Env.Get("ADDPATH").String(); v != "/usr/xyz/bin:~/bin2" {
+		t.Fatalf("ADDPATH = %q, want %q", v, "/usr/xyz/bin:~/bin2")
+	}
+}
+
+func TestFieldsParamExpAlternatePreservesQuotedFields(t *testing.T) {
+	cfg := &Config{Env: ListEnviron("IFS= \t\n", "u=x")}
+	tests := []struct {
+		src  string
+		want []string
+	}{
+		{`echo ${IFS+foo 'b\
+ar' baz}`, []string{"foo", "b\\\nar", "baz"}},
+		{`echo ${IFS+a" b" c}`, []string{"a b", "c"}},
+	}
+	for _, tc := range tests {
+		word := parseCallArg(t, tc.src, 1)
+		got, err := Fields(cfg, word)
+		if err != nil {
+			t.Fatalf("%s: did not want error, got %v", tc.src, err)
+		}
+		if !reflect.DeepEqual(got, tc.want) {
+			t.Fatalf("%s: wanted %q, got %q", tc.src, tc.want, got)
+		}
 	}
 }
 

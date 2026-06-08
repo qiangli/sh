@@ -48,7 +48,7 @@ func stripParamExpLitEscapes(s string, stripSingle bool) string {
 	for i := 0; i < len(s); i++ {
 		if s[i] == '\\' && i+1 < len(s) {
 			switch s[i+1] {
-			case '"', '\\', '$', '`':
+			case '"', '\\', '$', '`', '}':
 				b.WriteByte(s[i+1])
 				i++
 				continue
@@ -807,12 +807,15 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			arg, err = Pattern(cfg, pe.Exp.Word)
 		case op == syntax.AlternateUnset || op == syntax.AlternateUnsetOrNull:
 			arg, err = cfg.literalParamExpWord(pe.Exp.Word, false)
+		case op == syntax.AssignUnset || op == syntax.AssignUnsetOrNull:
+			if cfg.insideDoubleQuote {
+				arg, err = cfg.literalParamExpWord(pe.Exp.Word, false)
+			} else {
+				arg, err = LiteralWithQuoteRemoval(cfg, pe.Exp.Word)
+			}
 		case cfg.insideDoubleQuote && paramExpDefaultTriggers(op, vr, str) &&
 			(op == syntax.DefaultUnset || op == syntax.DefaultUnsetOrNull) &&
 			(paramExpWordSingleQuotesOnly(pe.Exp.Word) || paramExpWordHasBackslashLit(pe.Exp.Word)):
-			arg, err = cfg.literalParamExpWord(pe.Exp.Word, false)
-		case cfg.insideDoubleQuote && (op == syntax.AssignUnset || op == syntax.AssignUnsetOrNull) &&
-			paramExpWordSingleQuotesOnly(pe.Exp.Word):
 			arg, err = cfg.literalParamExpWord(pe.Exp.Word, false)
 		default:
 			arg, err = Literal(cfg, pe.Exp.Word)

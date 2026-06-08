@@ -231,7 +231,7 @@ func (p *Parser) nextKeepSpaces() {
 		case '}':
 			p.tok = p.paramToken(r)
 		case '\'':
-			if p.lang.in(LangPOSIX) && p.paramExpExpDblQuoted {
+			if p.posixParamExpExpSingleQuotesLiteral() {
 				p.advanceLitOther(r)
 			} else {
 				p.tok = p.regToken(r)
@@ -1124,7 +1124,7 @@ loop:
 		case '\\': // escaped byte follows
 			p.rune()
 		case '\'':
-			if p.quote == paramExpExp && p.lang.in(LangPOSIX) && p.paramExpExpDblQuoted {
+			if p.quote == paramExpExp && p.posixParamExpExpSingleQuotesLiteral() {
 				continue
 			}
 			tok = _Lit

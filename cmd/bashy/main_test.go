@@ -81,7 +81,7 @@ func TestRunRetriesPosixAfterParsedPrefix(t *testing.T) {
 	if err := run(r, strings.NewReader(src), "posixexp2.sub"); err != nil {
 		t.Fatal(err)
 	}
-	want := "1 }z\n2 '}'z\n3 foo 'bar baz\n4 foo b   c baz\n"
+	want := "1 }z\n2 ''z}\n3 foo 'bar baz\n4 foo b   c baz\n"
 	if got := stdout.String(); got != want {
 		t.Fatalf("stdout mismatch\nwant:\n%q\ngot:\n%q\nstderr:\n%s", want, got, stderr.String())
 	}
