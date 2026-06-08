@@ -397,6 +397,8 @@ var runTests = []runTest{
 	{"printf %d,%d 010 0x10", "8,16"},
 	{"printf %c,%c,%c foo àa", "f,\xc3,\x00"}, // TODO: use a rune?
 	{"printf %3s a", "  a"},
+	{"printf '%#q\\n' no-quotes-needed 'quotes;needed'", "'no-quotes-needed'\n'quotes;needed'\n"},
+	{"printf -v out '%#q\\n' \"a'b\"; printf '%s' \"$out\"", "'a'\\''b'\n"},
 	{"printf %3i 1", "  1"},
 	{"printf %+i%+d 1 -3", "+1-3"},
 	{"printf %-5x 10", "a    "},

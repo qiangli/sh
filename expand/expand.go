@@ -1114,6 +1114,7 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 						arg = arg[:precN]
 					}
 				}
+				altQuote := bytes.Contains(fmts, []byte{'#'})
 				// bash's `printf %q` strategy:
 				//   - All chars printable AND no shell-special:
 				//     no quoting.
@@ -1121,16 +1122,21 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 				//     backslash-escape each special char.
 				//   - Any non-printable / invalid-UTF-8 byte:
 				//     fall back to syntax.Quote (`$'…'` form).
-				quoted := bashPrintfQuote(arg)
-				if quoted == "" && arg != "" {
+				var quoted string
+				if altQuote {
+					quoted = bashSingleQuote(arg)
+				} else {
+					quoted = bashPrintfQuote(arg)
+				}
+				if !altQuote && quoted == "" && arg != "" {
 					// fallback: control chars present, use $'…'
 					q, qerr := syntax.Quote(arg, syntax.LangBash)
 					if qerr != nil {
-						q = "'" + strings.ReplaceAll(arg, "'", `'\''`) + "'"
+						q = bashSingleQuote(arg)
 					}
 					quoted = q
 				}
-				if arg == "" {
+				if !altQuote && arg == "" {
 					quoted = "''"
 				}
 				// Honor the width/precision specifier (`%-10q`,
@@ -1139,10 +1145,11 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 				// we already trimmed the unquoted arg, so strip the
 				// precision from the verb to avoid Go re-trimming.
 				if len(fmts) > 1 {
-					verb := string(fmts) + "s"
+					verbFmts := bytes.ReplaceAll(fmts, []byte{'#'}, nil)
+					verb := string(verbFmts) + "s"
 					if stripPrec && c == 'Q' {
-						dot := bytes.IndexByte(fmts, '.')
-						verb = string(fmts[:dot]) + "s"
+						dot := bytes.IndexByte(verbFmts, '.')
+						verb = string(verbFmts[:dot]) + "s"
 					}
 					sb.WriteString(fmt.Sprintf(verb, quoted))
 				} else {
@@ -1717,6 +1724,10 @@ func bashPrintfQuote(s string) string {
 		b.WriteRune(r)
 	}
 	return b.String()
+}
+
+func bashSingleQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // isKeywordPrintfQuote returns true if `s` is a shell keyword that
