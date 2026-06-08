@@ -187,11 +187,16 @@ func nodeLit(node syntax.Node) string {
 // unset variable and [Config.NoUnset] has been set.
 type UnsetParameterError struct {
 	Node    *syntax.ParamExp
+	Name    string
 	Message string
 }
 
 func (u UnsetParameterError) Error() string {
-	return fmt.Sprintf("%s: %s", u.Node.Param.Value, u.Message)
+	name := u.Name
+	if name == "" && u.Node != nil && u.Node.Param != nil {
+		name = u.Node.Param.Value
+	}
+	return fmt.Sprintf("%s: %s", name, u.Message)
 }
 
 // BadSubstitutionError is returned for malformed parameter expansions which

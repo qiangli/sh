@@ -169,6 +169,11 @@ type Config struct {
 	// A pointer to a parameter expansion node, if we're inside one.
 	// Necessary for ${LINENO}.
 	curParam *syntax.ParamExp
+
+	// arithmParamValues snapshots explicit parameter expansions inside
+	// a single arithmetic expression. Bare arithmetic variables remain
+	// live, but `$x` expands before arithmetic side effects run.
+	arithmParamValues map[*syntax.ParamExp]string
 }
 
 // UnexpectedCommandError is returned if a command substitution is encountered

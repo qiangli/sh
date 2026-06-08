@@ -62,6 +62,68 @@ func arithWordLit(expr syntax.ArithmExpr) string {
 	return strings.TrimSpace(lit.Value)
 }
 
+func (cfg *Config) snapshotArithmParams(expr syntax.ArithmExpr) (map[*syntax.ParamExp]string, error) {
+	values := make(map[*syntax.ParamExp]string)
+	if expr == nil {
+		return values, nil
+	}
+	var err error
+	syntax.Walk(expr, func(node syntax.Node) bool {
+		if err != nil {
+			return false
+		}
+		pe, ok := node.(*syntax.ParamExp)
+		if !ok {
+			return true
+		}
+		if !pe.Dollar.IsValid() {
+			return true
+		}
+		values[pe], err = Literal(cfg, &syntax.Word{Parts: []syntax.WordPart{pe}})
+		return false
+	})
+	return values, err
+}
+
+func (cfg *Config) arithmLiteral(word *syntax.Word) (string, error) {
+	if len(cfg.arithmParamValues) == 0 {
+		return Literal(cfg, word)
+	}
+	parts, changed := cfg.arithmSnapshotParts(word.Parts)
+	if !changed {
+		return Literal(cfg, word)
+	}
+	wordCopy := *word
+	wordCopy.Parts = parts
+	return Literal(cfg, &wordCopy)
+}
+
+func (cfg *Config) arithmSnapshotParts(parts []syntax.WordPart) ([]syntax.WordPart, bool) {
+	var changed bool
+	out := make([]syntax.WordPart, len(parts))
+	for i, part := range parts {
+		switch part := part.(type) {
+		case *syntax.ParamExp:
+			if val, ok := cfg.arithmParamValues[part]; ok {
+				out[i] = &syntax.Lit{Value: val}
+				changed = true
+				continue
+			}
+		case *syntax.DblQuoted:
+			dqParts, ok := cfg.arithmSnapshotParts(part.Parts)
+			if ok {
+				dq := *part
+				dq.Parts = dqParts
+				out[i] = &dq
+				changed = true
+				continue
+			}
+		}
+		out[i] = part
+	}
+	return out, changed
+}
+
 // containsArithOp reports whether s contains a character that would
 // make it an arithmetic expression rather than a bare identifier or
 // number literal. Used to decide whether the string form of an arith
@@ -78,23 +140,45 @@ func containsArithOp(s string) bool {
 }
 
 func Arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
+	cfg = prepareConfig(cfg)
+	if cfg.arithmParamValues != nil {
+		return arithm(cfg, expr)
+	}
+	values, err := cfg.snapshotArithmParams(expr)
+	if err != nil {
+		return 0, err
+	}
+	prev := cfg.arithmParamValues
+	cfg.arithmParamValues = values
+	defer func() { cfg.arithmParamValues = prev }()
+	return arithm(cfg, expr)
+}
+
+func arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 	switch expr := expr.(type) {
 	case nil:
 		return 0, nil
 	case *syntax.Word:
-		str, err := Literal(cfg, expr)
+		str, err := cfg.arithmLiteral(expr)
 		if err != nil {
 			return 0, err
 		}
 		// recursively fetch vars
 		i := 0
 		for syntax.ValidName(str) {
-			val := cfg.envGet(str)
+			vr := cfg.Env.Get(str)
+			if !vr.IsSet() {
+				if cfg.NoUnset {
+					return 0, UnsetParameterError{Name: str, Message: "unbound variable"}
+				}
+				break
+			}
+			val := vr.String()
 			if val == "" {
 				break
 			}
 			if i++; i >= maxNameRefDepth {
-				break
+				return 0, fmt.Errorf("%s: expression recursion level exceeded (error token is %q)", str, str)
 			}
 			str = val
 		}
@@ -595,6 +679,20 @@ func (cfg *Config) assgnArit(b *syntax.BinaryArithm) (int, error) {
 	if word, ok := b.Y.(*syntax.Word); ok && arithMissingRHS(word) {
 		return 0, fmt.Errorf("arithmetic syntax error: operand expected (error token is %q)", b.Op.String())
 	}
+	if b.Op == syntax.Assgn {
+		arg, err := Arithm(cfg, b.Y)
+		if err != nil {
+			return 0, err
+		}
+		lval, err = cfg.resolveAritLvalue(lval)
+		if err != nil {
+			return 0, err
+		}
+		if err := cfg.setAritLvalue(lval, int64(arg)); err != nil {
+			return 0, err
+		}
+		return arg, nil
+	}
 	lval, err = cfg.resolveAritLvalue(lval)
 	if err != nil {
 		return 0, err
@@ -609,8 +707,6 @@ func (cfg *Config) assgnArit(b *syntax.BinaryArithm) (int, error) {
 	}
 	arg := int64(arg_)
 	switch b.Op {
-	case syntax.Assgn:
-		val = arg
 	case syntax.AddAssgn:
 		val += arg
 	case syntax.SubAssgn:

@@ -2215,6 +2215,13 @@ var runTests = []runTest{
 	{"((++)); echo $?", "arithmetic syntax error: operand expected (error token is \"+ \")\n1\n"},
 	{"echo $((+++7)); echo $((++ + 7)); echo $((---7)); echo $((-- - 7))", "7\n7\n-7\n-7\n"},
 	{"a=1; echo $((4+++a)); echo $a; a=1; echo $((4---a)); echo $a", "6\n2\n4\n0\n"},
+	{"x=1; ((x=2, y=x)); echo $x $y", "2 2\n"},
+	{"x=(456 123); (( x[1] < x && (x=x[1], x[1]=$x) )); echo ${x[@]}", "123 456\n"},
+	{"x=(456 123); (( x[1] < x[0] && (x[0]=x[1], x[1]=$x) )); echo ${x[@]}", "123 456\n"},
+	{"n=0; (( a[n]=++n )); echo $n ${a[@]}", "1 1\n"},
+	{"n=0 a='(a[n]=++n)<7&&a[0]'; ((a[0])); echo ${a[@]:1}", "1 2 3 4 5 6 7\n"},
+	{"set -u; echo $((a > 4)); echo after", "a: unbound variable\nexit status 1 #JUSTERR"},
+	{"a=b b=a; echo $((a + 7)); echo after", "b: expression recursion level exceeded (error token is \"b\")\nafter\n"},
 	{"x=8; echo $((--x++)); echo after", "++: assignment requires lvalue (error token is \"++ \")\nafter\n"},
 	// Assignment binds lower than the ternary false branch in bash:
 	// these parse like `(cond ? a : a) += 5`, which is not an lvalue.
@@ -2365,7 +2372,7 @@ var runTests = []runTest{
 	},
 	{
 		"a=b b=a; echo $(($a))",
-		"0\n #IGNORE bash prints a warning",
+		"a: expression recursion level exceeded (error token is \"a\")\n",
 	},
 	{
 		"let x=3; let 3/0; ((3/0)); echo $((x/y)); let x/=0",

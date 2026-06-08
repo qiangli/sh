@@ -311,8 +311,9 @@ func (r *Runner) expandErr(err error) {
 	if err == nil {
 		return
 	}
+	var unsetParam expand.UnsetParameterError
 	if r.bashCompatErrors {
-		if arithErr, expr := innermostArithmError(err); arithErr != nil {
+		if arithErr, expr := innermostArithmError(err); arithErr != nil && !errors.As(err, &unsetParam) {
 			err = r.bashArithmError(expr, arithErr.Err, false, arithErr.Text)
 		}
 	}
@@ -370,6 +371,7 @@ func looksLikeExpandError(msg string) bool {
 		strings.Contains(msg, "invalid indirect expansion"),
 		strings.Contains(msg, "bad substitution"),
 		strings.HasPrefix(msg, "command substitution: "),
+		strings.Contains(msg, "unbound variable"),
 		strings.Contains(msg, "invalid variable name"):
 		return true
 	}
@@ -378,8 +380,9 @@ func looksLikeExpandError(msg string) bool {
 
 func (r *Runner) arithm(expr syntax.ArithmExpr) int {
 	n, err := expand.Arithm(r.ecfg, expr)
+	var unsetParam expand.UnsetParameterError
 	if err != nil && r.bashCompatErrors {
-		if arithErr, arithExpr := innermostArithmError(err); arithErr != nil {
+		if arithErr, arithExpr := innermostArithmError(err); arithErr != nil && !errors.As(err, &unsetParam) {
 			if arithExpr == nil {
 				arithExpr = expr
 			}
@@ -467,6 +470,9 @@ func (r *Runner) bashArithmError(expr syntax.ArithmExpr, err error, command bool
 	default:
 		// Other errors keep their wording; still wrap with the file
 		// prefix and ((: ...) frame so they're parseable.
+	}
+	if strings.Contains(bashMsg, "expression recursion level exceeded") {
+		return fmt.Errorf("%s%s", r.bashErrPrefix(r.curStmtPos), bashMsg)
 	}
 	// Printer.Print doesn't accept bare ArithmExpr nodes; wrap in an
 	// ArithmCmd via a Stmt so the printer's command path handles it,
