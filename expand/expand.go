@@ -792,6 +792,7 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 	inPercentB := percentB
 	var fmts []byte
 	wideFmt := false
+	precisionOverflow := false
 	initialArgs := len(args)
 
 	for i := 0; i < len(format); i++ {
@@ -1064,7 +1065,26 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 					return 0, fmt.Errorf("printf: `%c': invalid format character", c)
 				}
 				fmts = append(fmts, c)
-			case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '.':
+			case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
+				fmts = append(fmts, c)
+			case '.':
+				start := i + 1
+				end := start
+				for end < len(format) && format[end] >= '0' && format[end] <= '9' {
+					end++
+				}
+				if end > start {
+					digits := format[start:end]
+					if n, err := strconv.ParseInt(digits, 10, 64); err != nil || n > int64(1<<31-1) {
+						precisionOverflow = true
+						i = end - 1
+						break
+					}
+					fmts = append(fmts, '.')
+					fmts = append(fmts, digits...)
+					i = end - 1
+					break
+				}
 				fmts = append(fmts, c)
 			case 'l':
 				wideFmt = true
@@ -1083,12 +1103,32 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 				}
 				wArg := args[0]
 				args = args[1:]
+				isPrecision := len(fmts) > 0 && fmts[len(fmts)-1] == '.'
 				width, err := strconv.ParseInt(strings.TrimSpace(wArg), 10, 64)
 				if err != nil {
-					return 0, fmt.Errorf("printf: %s: invalid number", wArg)
+					if warn != nil {
+						warn(fmt.Sprintf("printf: %s: numerical result out of range", wArg))
+					}
+					if isPrecision {
+						fmts = fmts[:len(fmts)-1]
+					}
+					break
+				}
+				const maxPrintfWidth = int64(1<<31 - 1)
+				if width > maxPrintfWidth || width < -maxPrintfWidth {
+					if warn != nil {
+						warn(fmt.Sprintf("printf: %s: numerical result out of range", wArg))
+					}
+					if isPrecision {
+						fmts = fmts[:len(fmts)-1]
+					}
+					break
 				}
 				fmts = append(fmts, []byte(strconv.FormatInt(width, 10))...)
 			case 'q', 'Q':
+				if precisionOverflow && c == 'Q' && warn != nil {
+					warn("printf: numerical result out of range")
+				}
 				// bash printf %q outputs the argument quoted so it can
 				// be reused as shell input. Empty → '', strings with
 				// only safe chars are emitted as-is, anything else uses
@@ -1164,6 +1204,7 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 					sb.WriteString(quoted)
 				}
 				fmts = nil
+				precisionOverflow = false
 				continue
 			case 'n':
 				// bash printf %n stores the byte count emitted so
@@ -1181,6 +1222,7 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 					}
 				}
 				fmts = nil
+				precisionOverflow = false
 				continue
 			case 'C':
 				arg := ""
@@ -1190,6 +1232,7 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 				sb.WriteString(formatWideChar(arg, fmts))
 				fmts = nil
 				wideFmt = false
+				precisionOverflow = false
 				continue
 			case 'S':
 				wideFmt = true
@@ -1226,11 +1269,13 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 						sb.WriteString(bsb.String())
 					}
 					fmts = nil
+					precisionOverflow = false
 					continue
 				} else if wideFmt && c == 's' {
 					sb.WriteString(formatWideString(arg, fmts))
 					fmts = nil
 					wideFmt = false
+					precisionOverflow = false
 					continue
 				} else if c != 's' {
 					if c == 'f' || c == 'F' || c == 'e' || c == 'E' || c == 'g' || c == 'G' {
@@ -1293,6 +1338,7 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 				}
 				fmts = nil
 				wideFmt = false
+				precisionOverflow = false
 			default:
 				return 0, fmt.Errorf("printf: `%c': invalid format character", c)
 			}
