@@ -595,6 +595,9 @@ func run(r *interp.Runner, reader io.Reader, name string) error {
 	if err := interp.WithBashSource(src)(r); err != nil {
 		return err
 	}
+	if err := interp.WithIncrementalFilename(name)(r); err != nil {
+		return err
+	}
 	// bash 5.3 parses statement-by-statement and continues after parse
 	// errors (one bad construct doesn't kill the rest of the file).
 	// Mirror that here. cursor is the byte offset into src we still
@@ -630,6 +633,9 @@ func run(r *interp.Runner, reader io.Reader, name string) error {
 			return nil
 		}
 		return r.Run(ctx, prog)
+	}
+	if err := runStatementStream(ctx, r, src, lang, errPrefix); err != errNoStreamRecovery {
+		return err
 	}
 	var runErr error
 	cursor := 0
@@ -680,6 +686,69 @@ func run(r *interp.Runner, reader io.Reader, name string) error {
 	return runErr
 }
 
+var errNoStreamRecovery = errors.New("streaming execution not selected")
+
+func runStatementStream(
+	ctx context.Context,
+	r *interp.Runner,
+	src []byte,
+	lang syntax.LangVariant,
+	errPrefix string,
+) error {
+	if !bytes.Contains(src, []byte("$(")) || !bytes.Contains(src, []byte("<<")) {
+		return errNoStreamRecovery
+	}
+	type hdocWarning struct {
+		startLine int
+		eofLine   int
+		stop      string
+	}
+	var hdocWarnings []hdocWarning
+	hdocWarn := func(startLine, eofLine int, stop string) {
+		hdocWarnings = append(hdocWarnings, hdocWarning{startLine, eofLine, stop})
+	}
+	flushWarnings := func() {
+		for _, warning := range hdocWarnings {
+			fmt.Fprintf(os.Stderr,
+				"%s: line %d: warning: here-document at line %d delimited by end-of-file (wanted `%s')\n",
+				errPrefix, warning.eofLine, warning.startLine, warning.stop)
+		}
+		hdocWarnings = hdocWarnings[:0]
+	}
+	parser := syntax.NewParser(syntax.Variant(lang), syntax.HeredocEOFWarning(hdocWarn))
+	var runErr error
+	for stmt, err := range parser.StmtsSeq(bytes.NewReader(src)) {
+		if stmt != nil {
+			flushWarnings()
+			if err := r.Run(ctx, stmt); err != nil {
+				runErr = err
+			}
+			if r.Exited() {
+				return runErr
+			}
+		}
+		if err != nil {
+			var pe syntax.ParseError
+			if errors.As(err, &pe) {
+				text := rewriteParserErrorText(string(src), pe)
+				suppressHdocWarning := len(hdocWarnings) > 0 &&
+					int(pe.Pos.Line()) > hdocWarnings[len(hdocWarnings)-1].startLine
+				if suppressHdocWarning && text == "unexpected EOF while looking for matching `)'" {
+					fmt.Fprintf(os.Stderr, "%s: command substitution: line %d: %s\n",
+						errPrefix, int(pe.Pos.Line())+1, text)
+					fmt.Fprintln(os.Stdout)
+				} else {
+					flushWarnings()
+					printBashParseError(os.Stderr, src, errPrefix, pe)
+				}
+				return interp.ExitStatus(2)
+			}
+			return err
+		}
+	}
+	return runErr
+}
+
 // advancePastLine returns the byte offset just after the end of line
 // `line` (1-based) in src, or len(src) if the line is the last one. A
 // line is terminated by '\n'; the returned offset points to the byte
@@ -710,6 +779,10 @@ func printBashParseError(w io.Writer, src []byte, prefix string, pe syntax.Parse
 		return
 	}
 	text := rewriteParserErrorText(string(src), pe)
+	if strings.HasPrefix(text, "unexpected EOF") && line == 1 &&
+		bytes.Contains(src, []byte("$(")) && bytes.Contains(src, []byte("<<")) {
+		line = bytes.Count(src, []byte("\n")) + 1
+	}
 	fmt.Fprintf(w, "%s: line %d: %s\n", prefix, line, text)
 	// Bash omits the trailing source-line echo for "unexpected EOF"
 	// diagnostics (the matching-`X' messages already point at the

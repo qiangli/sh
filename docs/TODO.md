@@ -1,7 +1,7 @@
 # Bashy: Bash 5.3 Drop-In Replacement — TODO Checklist
 
-**Current status**: 45 bash tests passing, 29 failing, 13 skipped
-**Last updated**: 2026-06-07
+**Current status**: 47 bash tests passing, 27 failing, 13 skipped
+**Last updated**: 2026-06-08
 
 ---
 
@@ -168,71 +168,60 @@
 
 ## Test Progress Tracking
 
-| Test | Status | Diff Lines | Blocking Issue |
-|------|--------|-----------|----------------|
-| extglob3 | PASS | 0 | — |
-| invert | PASS | 0 | — |
-| strip | PASS | 0 | — |
-| nquote1 | PASS | 0 | — |
-| nquote5 | FAIL | 5 | Word splitting empty field |
-| ifs | FAIL | 8 | IFS scoping in eval/export |
-| posix2 | FAIL | 13 | sh -c, ${10}+, eval case esac |
-| dbg-support2 | FAIL | 14 | DEBUG trap line tracking |
-| dynvar | FAIL | 15 | BASH_ARGV0 settable, BASH_COMMAND |
-| iquote | FAIL | 15 | printf %#x edge cases |
-| lastpipe | FAIL | 14 | declare -i arithmetic, PIPESTATUS |
-| tilde | FAIL | 23 | ~+/~- expansion, tilde in assignments |
-| parser | FAIL | 23 | ((true ) ) in case clause |
-| tilde2 | FAIL | 27 | Tilde expansion edge cases |
-| comsub-eof | FAIL | 28 | Command substitution EOF handling |
-| exportfunc | FAIL | 28 | Exported function format |
-| appendop | FAIL | 31 | += operator edge cases |
-| nquote3 | FAIL | 32 | Quoting in various contexts |
-| posixpat | FAIL | 33 | POSIX pattern matching |
-| lastpipe | FAIL | 14 | declare -i, PIPESTATUS format |
-| nquote4 | FAIL | 38 | Quoting edge cases |
-| rsh | FAIL | 42 | Restricted shell |
-| posixexp2 | FAIL | 43 | POSIX expansion edge cases |
-| attr | FAIL | 46 | Variable attributes |
-| posixpipe | FAIL | 48 | POSIX pipeline behavior |
-| set-e | FAIL | 55 | errexit edge cases |
-| nquote2 | FAIL | 56 | Quoting in expansions |
-| casemod | FAIL | 59 | Case modification operators |
-| rhs-exp | FAIL | 64 | Right-hand side expansion |
-| extglob2 | FAIL | 65 | Extended glob edge cases |
-| set-x | FAIL | 75 | xtrace format (PS4) |
-| cprint | FAIL | 70 | $'...' printing |
-| braces | FAIL | 77 | Brace expansion edge cases |
-| intl | FAIL | 81 | $"..." locale strings |
-| alias | FAIL | 88 | Alias expansion edge cases |
-| arith-for | FAIL | 99 | C-style for loop arithmetic |
-| comsub-posix | FAIL | 103 | POSIX command substitution |
-| glob-bracket | FAIL | 107 | Bracket glob patterns |
-| getopts | FAIL | 121 | getopts edge cases |
-| quote | FAIL | 127 | Quoting comprehensive |
-| vredir | FAIL | 131 | Variable redirections |
-| read | FAIL | 133 | read builtin options |
-| mapfile | FAIL | 142 | mapfile options |
-| quotearray | FAIL | 155 | Array quoting |
-| type | FAIL | 158 | type builtin output |
-| test | FAIL | 173 | test/[ expressions |
-| redir | FAIL | 187 | Redirection edge cases |
-| extglob | FAIL | 194 | Extended glob patterns |
-| trap | FAIL | 195 | Trap handling edge cases |
-| more-exp | FAIL | 217 | Parameter expansion |
-| func | FAIL | 390 | Function handling |
-| globstar | FAIL | 468 | ** recursive glob |
-| varenv | FAIL | 480 | Variable/environment |
-| shopt | FAIL | 547 | Shell options |
-| new-exp | FAIL | 813 | New expansion features |
-| nameref | FAIL | 1033 | Name references |
-| arith | FAIL | 372 | Arithmetic (blocked: += in ternary) |
-| heredoc | FAIL | 171 | Heredoc (blocked: <<'') |
-| comsub | FAIL | 100 | Comsub (blocked: ${ }) |
-| comsub2 | FAIL | 195 | Comsub2 (blocked: ${ }) |
-| cond | FAIL | 194 | Conditional (blocked: ${H*}) |
-| coproc | TIME | — | Needs terminal |
-| jobs | TIME | — | Needs terminal |
+Snapshot from `make test-bash` on 2026-06-08: **47 PASS, 27 FAIL, 13 SKIP**
+(diff line counts are `diff <bashy-output> <name>.right | wc -l`, lower = closer to passing).
+
+### Passing (47)
+
+```
+appendop      arith-for     attr          braces        case
+casemod       complete      comsub-eof    cprint        dbg-support2
+dynvar        exportfunc    extglob2      extglob3      func
+getopts       globstar      herestr       ifs           ifs-posix
+invert        invocation    iquote        lastpipe      mapfile
+nquote        nquote1       nquote2       nquote3       nquote4
+nquote5       parser        posix2        posixpat      posixpipe
+procsub       read          rhs-exp       rsh           set-e
+set-x         shopt         strip         tilde         tilde2
+type          vredir
+```
+
+### Failing (27, sorted by diff size)
+
+| Test | Diff Lines | Likely blocker |
+|------|-----------:|----------------|
+| posixexp2    |  43 | POSIX expansion edge cases |
+| alias        |  67 | Alias expansion edge cases |
+| intl         |  70 | `$"..."` locale strings (G12) |
+| comsub       | 100 | Command substitution edge cases |
+| comsub-posix | 103 | POSIX command substitution |
+| glob-bracket | 106 | Bracket glob patterns |
+| quotearray   | 155 | Array quoting |
+| heredoc      | 171 | Heredoc edge cases |
+| quote        | 187 | Quoting comprehensive |
+| redir        | 187 | Redirection edge cases |
+| cond         | 194 | Conditional expression edge cases |
+| extglob      | 194 | Extended glob patterns |
+| comsub2      | 195 | Command substitution edge cases |
+| more-exp     | 217 | Parameter expansion |
+| posixexp     | 311 | POSIX expansion |
+| test         | 341 | `test`/`[` expressions |
+| errors       | 349 | Error-message format (G0) |
+| varenv       | 366 | Variable/environment |
+| arith        | 372 | Arithmetic edge cases |
+| dbg-support  | 377 | DEBUG trap / source-line tracking |
+| printf       | 395 | `printf` edge cases |
+| history      | 399 | `history` builtin (G2, G11) |
+| assoc        | 412 | Associative array edge cases |
+| builtins     | 509 | Misc builtins |
+| nameref      | 591 | Name references |
+| new-exp      | 813 | New expansion features |
+| array        | 855 | Indexed array edge cases |
+
+### Skipped (13)
+
+- `coproc`, `jobs`, `trap` — skipped via `BASH_TEST_SKIP` in Makefile (need controlling TTY / real job control)
+- 10 silent skips — bash test-suite runners with no matching `.tests` or `.right` file in the vendored tree
 
 ---
 

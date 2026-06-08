@@ -245,8 +245,10 @@ func (p *Parser) next() {
 	if p.pendingTok != illegalTok {
 		p.tok = p.pendingTok
 		p.pos = p.pendingPos
-		p.pendingTok = illegalTok
-		p.pendingPos = Pos{}
+		p.pendingTok = p.pendingTok2
+		p.pendingPos = p.pendingPos2
+		p.pendingTok2 = illegalTok
+		p.pendingPos2 = Pos{}
 		return
 	}
 	if p.r == utf8.RuneSelf {
@@ -1279,7 +1281,7 @@ func (p *Parser) advanceLitHdoc(r rune) {
 					p.hdocStops[len(p.hdocStops)-1] = nil
 					return
 				}
-				if len(line) == len(stop)+1 && bytes.HasPrefix(line, stop) && line[len(stop)] == ')' {
+				if closeQuote, ok := hdocComsubClose(line, stop); ok {
 					p.tok = _LitWord
 					p.val = p.endLit()[:lStart]
 					if p.val == "" {
@@ -1287,6 +1289,11 @@ func (p *Parser) advanceLitHdoc(r rune) {
 					}
 					p.pendingTok = rightParen
 					p.pendingPos = posAddCol(p.nextPos(), -1)
+					if closeQuote {
+						p.pendingTok2 = dblQuote
+						p.pendingPos2 = p.nextPos()
+					}
+					p.warnHdocEOFAtComsubClose(stop)
 					p.hdocStops[len(p.hdocStops)-1] = nil
 					return
 				}
@@ -1357,17 +1364,39 @@ func (p *Parser) quotedHdocWord() *Word {
 			}
 			return p.wordOne(p.lit(pos, val))
 		}
-		if len(line) == len(stop)+1 && bytes.HasPrefix(line, stop) && line[len(stop)] == ')' {
+		if closeQuote, ok := hdocComsubClose(line, stop); ok {
 			p.hdocStops[len(p.hdocStops)-1] = nil
 			val := p.endLit()[:lStart]
 			p.pendingTok = rightParen
 			p.pendingPos = posAddCol(p.nextPos(), -1)
+			if closeQuote {
+				p.pendingTok2 = dblQuote
+				p.pendingPos2 = p.nextPos()
+			}
+			p.warnHdocEOFAtComsubClose(stop)
 			if val == "" {
 				return nil
 			}
 			return p.wordOne(p.lit(pos, val))
 		}
 	}
+}
+
+func hdocComsubClose(line, stop []byte) (closeQuote, ok bool) {
+	if !bytes.HasPrefix(line, stop) {
+		return false, false
+	}
+	i := len(stop)
+	for i < len(line) && (line[i] == ' ' || line[i] == '\t') {
+		i++
+	}
+	if i == len(line)-1 && line[i] == ')' {
+		return false, true
+	}
+	if i == len(line)-2 && line[i] == ')' && line[i+1] == '"' {
+		return true, true
+	}
+	return false, false
 }
 
 func (p *Parser) advanceLitRe(r rune) {

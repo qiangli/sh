@@ -509,8 +509,10 @@ type Parser struct {
 	tok token  // current token
 	val string // current value (valid if tok is _Lit*)
 
-	pendingTok token
-	pendingPos Pos
+	pendingTok  token
+	pendingPos  Pos
+	pendingTok2 token
+	pendingPos2 Pos
 
 	// position of [Parser.r], to be converted to [Parser.pos] later
 	offs, line, col int64
@@ -539,7 +541,8 @@ type Parser struct {
 	buriedHdocs int
 	heredocs    []*Redirect
 
-	hdocStops [][]byte // stack of end words for open heredocs
+	hdocStops      [][]byte // stack of end words for open heredocs
+	hdocStartLines []int    // stack of redirect lines for open heredocs
 
 	parsingDoc bool // true if using [Parser.Document]
 
@@ -585,6 +588,8 @@ const bufSize = 1 << 10
 
 func (p *Parser) reset() {
 	p.tok, p.val = illegalTok, ""
+	p.pendingTok, p.pendingPos = illegalTok, Pos{}
+	p.pendingTok2, p.pendingPos2 = illegalTok, Pos{}
 	p.eqlOffs = 0
 	p.bs, p.bsp = nil, 0
 	p.offs, p.line, p.col = 0, 1, 1
@@ -595,6 +600,7 @@ func (p *Parser) reset() {
 	p.recoveredErrors = 0
 	p.heredocs, p.buriedHdocs = p.heredocs[:0], 0
 	p.hdocStops = nil
+	p.hdocStartLines = nil
 	p.parsingDoc = false
 	p.openBquotes = 0
 	p.accComs = nil
@@ -782,6 +788,7 @@ func (p *Parser) doHeredocs() {
 		}
 		stop, quoted := p.unquotedWordBytes(r.Word)
 		p.hdocStops = append(p.hdocStops, stop)
+		p.hdocStartLines = append(p.hdocStartLines, int(r.Pos().Line()))
 		if i > 0 && p.r == '\n' {
 			p.rune()
 		}
@@ -803,8 +810,17 @@ func (p *Parser) doHeredocs() {
 			}
 		}
 		p.hdocStops = p.hdocStops[:len(p.hdocStops)-1]
+		p.hdocStartLines = p.hdocStartLines[:len(p.hdocStartLines)-1]
 	}
 	p.quote = old
+}
+
+func (p *Parser) warnHdocEOFAtComsubClose(stop []byte) {
+	if p.heredocEOFWarning == nil || len(p.hdocStartLines) == 0 {
+		return
+	}
+	startLine := p.hdocStartLines[len(p.hdocStartLines)-1]
+	p.heredocEOFWarning(startLine, int(p.nextPos().Line()), string(stop))
 }
 
 func (p *Parser) got(tok token) bool {

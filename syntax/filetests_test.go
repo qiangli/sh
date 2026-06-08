@@ -1189,7 +1189,6 @@ var fileTests = []fileTestCase{
 		[]string{
 			"$(\n\tfoo <<EOF\nbar\nEOF\n)",
 			"$(foo <<EOF\nbar\nEOF\n)",
-			"$(foo <<EOF\nbar\nEOF)",
 			"`\nfoo <<EOF\nbar\nEOF\n`",
 			"`foo <<EOF\nbar\nEOF`",
 		},
@@ -5416,6 +5415,18 @@ var fileTests = []fileTestCase{
 
 // these don't have a canonical format with the same syntax tree
 var fileTestsNoPrint = []fileTestCase{
+	fileTest(
+		[]string{"$(foo <<EOF\nbar\nEOF)"},
+		langFile(cmdSubst(&Stmt{
+			Cmd: litCall("foo"),
+			Redirs: []*Redirect{{
+				Op:   Hdoc,
+				Word: litWord("EOF"),
+				Hdoc: litWord("bar\n"),
+			}},
+		})),
+		flipConfirm2(LangPOSIX|LangZsh),
+	),
 	fileTest(
 		[]string{`$[foo]`},
 		langFile(word(lit("$"), lit("[foo]")), LangPOSIX),

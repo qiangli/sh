@@ -114,8 +114,9 @@ type Runner struct {
 
 	usedNew bool
 
-	filename      string // only if Node was a File
-	commandString bool
+	filename            string // only if Node was a File, or set for incremental runs
+	incrementalFilename string
+	commandString       bool
 
 	// curStmtPos is the position of the currently executing top-level
 	// statement, updated at the top of stmtSync. Error sites that have
@@ -999,6 +1000,16 @@ func WithBashSource(src []byte) RunnerOption {
 	}
 }
 
+// WithIncrementalFilename sets the filename used for bash-compatible
+// diagnostics when [Runner.Run] is called incrementally with a [*syntax.Stmt]
+// or [syntax.Command] instead of a full [*syntax.File].
+func WithIncrementalFilename(name string) RunnerOption {
+	return func(r *Runner) error {
+		r.incrementalFilename = name
+		return nil
+	}
+}
+
 func WithInheritedFds(fds []int) RunnerOption {
 	return func(r *Runner) error {
 		if len(fds) == 0 {
@@ -1459,10 +1470,12 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 	}
 	r.fillExpandConfig(ctx)
 	r.exit = exitStatus{}
-	r.filename = ""
+	r.filename = r.incrementalFilename
+	runExitTrap := false
 	switch node := node.(type) {
 	case *syntax.File:
 		r.filename = node.Name
+		runExitTrap = true
 		r.stmts(ctx, node.Stmts)
 	case *syntax.Stmt:
 		r.stmt(ctx, node)
@@ -1471,7 +1484,9 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 	default:
 		return fmt.Errorf("node can only be File, Stmt, or Command: %T", node)
 	}
-	r.trapCallback(ctx, r.trapCallbacks["EXIT"], "exit")
+	if runExitTrap {
+		r.trapCallback(ctx, r.trapCallbacks["EXIT"], "exit")
+	}
 	maps.Insert(r.Vars, r.writeEnv.Each)
 	// Return the first of: a fatal error, a non-fatal handler error, or the exit code.
 	if err := r.exit.err; err != nil {
