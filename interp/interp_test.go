@@ -1581,6 +1581,10 @@ var runTests = []runTest{
 		"",
 	},
 	{
+		"exec 3>&1 4>&2; exec >&a; echo out; echo err >&2; exec 1>&3 2>&4; cat a",
+		"out\nerr\n",
+	},
+	{
 		// >| force-overwrite; equivalent to > when noclobber is unset.
 		"echo foo >| a; cat a",
 		"foo\n",
@@ -2879,6 +2883,7 @@ done <<< 2`,
 	{"type -a -t echo", "builtin\nfile\n"},
 	{"interp_myfn(){ :; }; type -a -t interp_myfn", "function\n"},
 	{"interp_myfn(){ :; }; type -a interp_myfn echo | head -2", "interp_myfn is a function\ninterp_myfn () \n"},
+	{"interp_myfn(){ echo foo |& cat; }; type interp_myfn", "interp_myfn is a function\ninterp_myfn () \n{ \n    echo foo 2>&1 | cat\n}\n"},
 
 	// type -f: skip function lookup, fall through to builtin/file.
 	{"echo(){ :; }; type -t echo", "function\n"},
@@ -4642,6 +4647,26 @@ func TestBashCompatMalformedLengthSubstitution(t *testing.T) {
 			"./more-exp.tests: line 5: ${#+}: bad substitution\n"+
 			"./more-exp.tests: line 6: ${#1xyz}: bad substitution\n"+
 			"./more-exp.tests: line 7: #: %: arithmetic syntax error: operand expected (error token is \"%\")\n"))
+}
+
+func TestBashCompatExecInvalidOptionUsage(t *testing.T) {
+	src := "exec -1</dev/null\n"
+	file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(src), "./redir.tests")
+	qt.Assert(t, qt.IsNil(err))
+
+	var cb bytes.Buffer
+	r, err := interp.New(
+		interp.StdIO(nil, &cb, &cb),
+		interp.WithBashCompatErrors(true),
+		interp.WithBashSource([]byte(src)),
+	)
+	qt.Assert(t, qt.IsNil(err))
+
+	err = r.Run(context.Background(), file)
+	qt.Assert(t, qt.ErrorMatches(err, "exit status 2"))
+	qt.Assert(t, qt.Equals(cb.String(),
+		"./redir.tests: line 1: exec: -1: invalid option\n"+
+			"exec: usage: exec [-cl] [-a name] [command [argument ...]] [redirection ...]\n"))
 }
 
 func readLines(hc interp.HandlerContext) ([][]byte, error) {

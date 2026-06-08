@@ -3340,6 +3340,7 @@ var bashUsage = map[string]string{
 	"declare":  "declare [-aAfFgiIlnrtux] [name[=value] ...] or declare -p [-aAfFilnrtux] [name ...]",
 	"disown":   "disown [-h] [-ar] [jobspec ... | pid ...]",
 	"enable":   "enable [-a] [-dnps] [-f filename] [name ...]",
+	"exec":     "exec [-cl] [-a name] [command [argument ...]] [redirection ...]",
 	"export":   "export [-fn] [name[=value] ...] or export -p",
 	"fc":       "fc [-e ename] [-lnr] [first] [last] or fc -s [pat=rep] [command]",
 	"fg":       "fg [job_spec]",

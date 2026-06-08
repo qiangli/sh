@@ -2952,6 +2952,8 @@ func bashDeclareFmt(body string, lastTop bool) string {
 	body = bashNestElifChain(body)
 	// bash 5.3 emits standalone `{` openers with a trailing space.
 	body = bashBraceTrailSpace(body)
+	// bash 5.3 declare/type output expands the pipe-all shorthand.
+	body = strings.ReplaceAll(body, " |& ", " 2>&1 | ")
 	// bash 5.3 normalises implicit fd1/fd0 to explicit form in
 	// declare -f output: `>&2` → `1>&2`, `<&3` → `0<&3`,
 	// `> file` → `1> file`, `< file` → `0< file`.
@@ -5096,6 +5098,15 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 			sourceFd = 2
 		default:
 			n, err := strconv.Atoi(arg)
+			if err != nil && targetFd == -1 {
+				f, err := r.open(ctx, arg, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644, true)
+				if err != nil {
+					return nil, err
+				}
+				r.stdout = f
+				r.stderr = f
+				return f, nil
+			}
 			if err == nil && n < 0 {
 				// Bash: negative fd in `>&N` is an
 				// "ambiguous redirect" before any open.
