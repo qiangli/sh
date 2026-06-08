@@ -710,23 +710,25 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 		}
 	case pe.Slice != nil:
 		if callVarInd {
+			runes := []rune(str)
 			slicePos := func(n int) int {
 				if n < 0 {
-					n = len(str) + n
+					n = len(runes) + n
 					if n < 0 {
-						n = len(str)
+						n = len(runes)
 					}
-				} else if n > len(str) {
-					n = len(str)
+				} else if n > len(runes) {
+					n = len(runes)
 				}
 				return n
 			}
 			if pe.Slice.Offset != nil {
-				str = str[slicePos(sliceOffset):]
+				runes = runes[slicePos(sliceOffset):]
 			}
 			if pe.Slice.Length != nil {
-				str = str[:slicePos(sliceLen)]
+				runes = runes[:slicePos(sliceLen)]
 			}
+			str = string(runes)
 		} // else, elems are already sliced
 	case pe.Repl != nil:
 		orig, replAnchoredStart, replAnchoredEnd, err := replPattern(cfg, pe.Repl.Orig)

@@ -404,6 +404,9 @@ var runTests = []runTest{
 	{"printf 'x%-+10.0fx\\n' 123", "x+123      x\n"},
 	{"printf 'x%-+10.0dx\\n' 123", "x+123      x\n"},
 	{"printf 'x%+010.0xx\\n' 123", "x        7bx\n"},
+	{"printf '%.2ls\\n' 'ಇಳಿಕೆಗಳು'", "ಇಳ\n"},
+	{"printf '%4.2lc---\\n' 'ಇ'", "   ಇ---\n"},
+	{"printf '%S %C\\n' 'ಇಳ' 'ಇ'", "ಇಳ ಇ\n"},
 	{"printf %-5x 10", "a    "},
 	{"printf %02x 1", "01"},
 	{"printf 'a% 5s' a", "a    a"},
@@ -552,6 +555,7 @@ var runTests = []runTest{
 	{`arr=("foo"); echo ${arr[@]:99}`, "\n"},
 	{`echo ${arr[@]:1:99}; echo ${arr[*]:1:99}`, "\n\n"},
 	{`arr=(0 1 2 3 4 5 6 7 8 9 0 a b c d e f g h); echo ${arr[@]:3:4}`, "3 4 5 6\n"},
+	{`v=ಇಳಿಕೆಗಳು; printf '<%s> <%s>\n' "${v:0:2}" "${v:0:1}"`, "<ಇಳ> <ಇ>\n"},
 
 	// quoted array slicing
 	{`a=(1 2 3 4 5); echo "${a[@]:2:2}"`, "3 4\n"},

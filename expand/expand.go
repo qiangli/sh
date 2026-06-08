@@ -791,6 +791,7 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 	}
 	inPercentB := percentB
 	var fmts []byte
+	wideFmt := false
 	initialArgs := len(args)
 
 	for i := 0; i < len(format); i++ {
@@ -1043,16 +1044,21 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 				i = nextIdx // skip past the )T
 				fmts = nil
 			case 'c':
+				arg := ""
 				var b byte
 				if len(args) > 0 {
-					arg := ""
 					arg, args = args[0], args[1:]
 					if len(arg) > 0 {
 						b = arg[0]
 					}
 				}
-				sb.WriteByte(b)
+				if wideFmt {
+					sb.WriteString(formatWideChar(arg, fmts))
+				} else {
+					sb.WriteByte(b)
+				}
 				fmts = nil
+				wideFmt = false
 			case '+', '-', ' ', '#', '\'':
 				if bytes.IndexAny(fmts[1:], "0123456789.") >= 0 {
 					return 0, fmt.Errorf("printf: `%c': invalid format character", c)
@@ -1060,7 +1066,9 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 				fmts = append(fmts, c)
 			case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '.':
 				fmts = append(fmts, c)
-			case 'l', 'h', 'L', 'j', 'z', 't':
+			case 'l':
+				wideFmt = true
+			case 'h', 'L', 'j', 'z', 't':
 				// C-style length modifiers (%lld, %hi, %zd, etc.).
 				// Bash printf accepts them but we always operate on
 				// int64 / float64 in Go, so they're effectively
@@ -1174,6 +1182,19 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 				}
 				fmts = nil
 				continue
+			case 'C':
+				arg := ""
+				if len(args) > 0 {
+					arg, args = args[0], args[1:]
+				}
+				sb.WriteString(formatWideChar(arg, fmts))
+				fmts = nil
+				wideFmt = false
+				continue
+			case 'S':
+				wideFmt = true
+				c = 's'
+				fallthrough
 			case 's', 'b', 'd', 'i', 'u', 'o', 'x', 'X', 'f', 'F', 'e', 'E', 'g', 'G':
 				arg := ""
 				hadArg := len(args) > 0
@@ -1205,6 +1226,11 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 						sb.WriteString(bsb.String())
 					}
 					fmts = nil
+					continue
+				} else if wideFmt && c == 's' {
+					sb.WriteString(formatWideString(arg, fmts))
+					fmts = nil
+					wideFmt = false
 					continue
 				} else if c != 's' {
 					if c == 'f' || c == 'F' || c == 'e' || c == 'E' || c == 'g' || c == 'G' {
@@ -1266,6 +1292,7 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 					fmt.Fprintf(sb, string(fmts), farg)
 				}
 				fmts = nil
+				wideFmt = false
 			default:
 				return 0, fmt.Errorf("printf: `%c': invalid format character", c)
 			}
@@ -1731,6 +1758,66 @@ func bashPrintfQuote(s string) string {
 
 func bashSingleQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+func formatWideString(s string, fmts []byte) string {
+	width, prec, left := printfStringWidthPrec(fmts)
+	rs := []rune(s)
+	if prec >= 0 && prec < len(rs) {
+		rs = rs[:prec]
+	}
+	return padPrintfString(string(rs), width, left)
+}
+
+func formatWideChar(s string, fmts []byte) string {
+	out := "\x00"
+	if s != "" {
+		r, _ := utf8.DecodeRuneInString(s)
+		out = string(r)
+	}
+	width, _, left := printfStringWidthPrec(fmts)
+	return padPrintfString(out, width, left)
+}
+
+func printfStringWidthPrec(fmts []byte) (width, prec int, left bool) {
+	prec = -1
+	for i := 1; i < len(fmts); i++ {
+		c := fmts[i]
+		switch {
+		case c == '-':
+			left = true
+		case c >= '0' && c <= '9':
+			n := 0
+			for i < len(fmts) && fmts[i] >= '0' && fmts[i] <= '9' {
+				n = n*10 + int(fmts[i]-'0')
+				i++
+			}
+			width = n
+			i--
+		case c == '.':
+			i++
+			n := 0
+			for i < len(fmts) && fmts[i] >= '0' && fmts[i] <= '9' {
+				n = n*10 + int(fmts[i]-'0')
+				i++
+			}
+			prec = n
+			i--
+		}
+	}
+	return width, prec, left
+}
+
+func padPrintfString(s string, width int, left bool) string {
+	pad := width - utf8.RuneCountInString(s)
+	if pad <= 0 {
+		return s
+	}
+	spaces := strings.Repeat(" ", pad)
+	if left {
+		return s + spaces
+	}
+	return spaces + s
 }
 
 // isKeywordPrintfQuote returns true if `s` is a shell keyword that
