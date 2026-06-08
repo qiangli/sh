@@ -614,7 +614,7 @@ func ansiCEscape(s string) string {
 func FormatBPercent(cfg *Config, s string) (string, error) {
 	cfg = prepareConfig(cfg)
 	sb := cfg.strBuilder()
-	_, err := formatIntoMode(sb, s, nil, cfg.StartTime, true, nil, nil)
+	_, err := formatIntoMode(sb, s, nil, cfg.StartTime, nil, true, nil, nil)
 	if err == errPrintfStop {
 		return sb.String(), errPrintfStop
 	}
@@ -628,7 +628,7 @@ func Format(cfg *Config, format string, args []string) (string, int, error) {
 	cfg = prepareConfig(cfg)
 	sb := cfg.strBuilder()
 
-	consumed, err := formatIntoMode(sb, format, args, cfg.StartTime, false, cfg.OnFormatWarning, cfg.OnPercentN)
+	consumed, err := formatIntoMode(sb, format, args, cfg.StartTime, printfTimeLocation(cfg), false, cfg.OnFormatWarning, cfg.OnPercentN)
 	if err == errPrintfStop {
 		// `\c` told printf to stop emitting output from a %b arg
 		// (or `\c` directly in format). Surface what's already in
@@ -645,6 +645,32 @@ func Format(cfg *Config, format string, args []string) (string, int, error) {
 	}
 
 	return sb.String(), consumed, err
+}
+
+func printfTimeLocation(cfg *Config) *time.Location {
+	if cfg == nil || cfg.Env == nil {
+		return time.Local
+	}
+	tz := cfg.Env.Get("TZ")
+	if !tz.IsSet() {
+		return time.Local
+	}
+	name := tz.String()
+	if name == "" {
+		return time.UTC
+	}
+	if loc, err := time.LoadLocation(name); err == nil {
+		return loc
+	}
+	// Bash's tests use this POSIX TZ rule. Go's time package does not
+	// load POSIX rule strings directly, so map the common eastern-US
+	// rule to the equivalent IANA zone.
+	if strings.HasPrefix(name, "EST5EDT") {
+		if loc, err := time.LoadLocation("America/New_York"); err == nil {
+			return loc
+		}
+	}
+	return time.Local
 }
 
 // ErrPrintfStop is the sentinel returned when `\c` was seen inside a
@@ -708,9 +734,13 @@ func strftime(format string, t time.Time) string {
 			}
 		case 'T':
 			fmt.Fprintf(&sb, "%02d:%02d:%02d", t.Hour(), t.Minute(), t.Second())
+		case 'X':
+			fmt.Fprintf(&sb, "%02d:%02d:%02d", t.Hour(), t.Minute(), t.Second())
 		case 'F':
 			fmt.Fprintf(&sb, "%04d-%02d-%02d", t.Year(), int(t.Month()), t.Day())
 		case 'D':
+			fmt.Fprintf(&sb, "%02d/%02d/%02d", int(t.Month()), t.Day(), t.Year()%100)
+		case 'x':
 			fmt.Fprintf(&sb, "%02d/%02d/%02d", int(t.Month()), t.Day(), t.Year()%100)
 		case 'R':
 			fmt.Fprintf(&sb, "%02d:%02d", t.Hour(), t.Minute())
@@ -747,7 +777,7 @@ func strftime(format string, t time.Time) string {
 }
 
 func formatInto(sb *strings.Builder, format string, args []string, startTime time.Time, warn func(string)) (int, error) {
-	return formatIntoMode(sb, format, args, startTime, false, warn, nil)
+	return formatIntoMode(sb, format, args, startTime, nil, false, warn, nil)
 }
 
 // formatIntoMode is the inner worker for [Format]. percentB switches the
@@ -755,7 +785,10 @@ func formatInto(sb *strings.Builder, format string, args []string, startTime tim
 // preserved with their backslash (bash only honors those escapes in
 // format strings, not in `%b` arg). onPercentN is invoked by `%n` to
 // store the byte count into the variable named by the next arg.
-func formatIntoMode(sb *strings.Builder, format string, args []string, startTime time.Time, percentB bool, warn func(string), onPercentN func(string, int) error) (int, error) {
+func formatIntoMode(sb *strings.Builder, format string, args []string, startTime time.Time, loc *time.Location, percentB bool, warn func(string), onPercentN func(string, int) error) (int, error) {
+	if loc == nil {
+		loc = time.Local
+	}
 	inPercentB := percentB
 	var fmts []byte
 	initialArgs := len(args)
@@ -831,11 +864,12 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 				sb.WriteByte('\\')
 				sb.WriteByte('c')
 			case '0', '1', '2', '3', '4', '5', '6', '7':
-				// bash printf: `\nnn` is 1-3 octal digits. A leading
-				// `\0` is also accepted as a marker followed by up
-				// to 3 more octal digits (so `\0200` reads 200 octal
-				// = 0x80, NOT \020 + literal "0"). Match that.
-				if c == '0' && i+1 < len(format) {
+				// bash printf format strings use `\nnn`: 1-3
+				// octal digits total. `%b` arguments additionally
+				// treat a leading `\0` as a marker followed by up
+				// to 3 octal digits, so `%b` `\0200` reads 0200
+				// while format-string `\0200` reads 020 + "0".
+				if inPercentB && c == '0' && i+1 < len(format) {
 					next := format[i+1]
 					if next >= '0' && next <= '7' {
 						i++
@@ -935,17 +969,44 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 				// require a trailing 'T'. The fmt argument is passed
 				// to strftime; the value argument is a Unix timestamp
 				// where -1 means now and -2 means shell start time.
-				if len(fmts) > 1 {
-					return 0, fmt.Errorf("printf: `%c': invalid format character", c)
+				end := -1
+				for j := i + 1; j < len(format); j++ {
+					if format[j] == ')' {
+						if j+1 < len(format) && format[j+1] == 'T' {
+							end = j - (i + 1)
+							break
+						}
+						if end < 0 {
+							end = j - (i + 1)
+						}
+					}
 				}
-				end := strings.IndexByte(format[i+1:], ')')
 				if end < 0 {
 					return 0, fmt.Errorf("printf: missing matching `)' in format")
 				}
 				strFmt := format[i+1 : i+1+end]
 				nextIdx := i + 1 + end + 1
 				if nextIdx >= len(format) || format[nextIdx] != 'T' {
-					return 0, fmt.Errorf("printf: %%(...) must be followed by `T'")
+					if warn != nil {
+						bad := byte(0)
+						if nextIdx < len(format) {
+							bad = format[nextIdx]
+						}
+						if bad != 0 {
+							warn(fmt.Sprintf("printf: warning: `%c': invalid time format specification", bad))
+						}
+					}
+					sb.WriteString("%(")
+					sb.WriteString(strFmt)
+					sb.WriteByte(')')
+					if nextIdx < len(format) {
+						sb.WriteByte(format[nextIdx])
+						i = nextIdx
+					} else {
+						i = nextIdx - 1
+					}
+					fmts = nil
+					break
 				}
 				var t time.Time
 				if len(args) > 0 {
@@ -953,24 +1014,32 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 					args = args[1:]
 					switch arg {
 					case "-1", "":
-						t = time.Now()
+						t = time.Now().In(loc)
 					case "-2":
 						if !startTime.IsZero() {
-							t = startTime
+							t = startTime.In(loc)
 						} else {
-							t = time.Now()
+							t = time.Now().In(loc)
 						}
 					default:
 						n, err := strconv.ParseInt(arg, 10, 64)
 						if err != nil {
 							return 0, fmt.Errorf("printf: %s: invalid number", arg)
 						}
-						t = time.Unix(n, 0)
+						t = time.Unix(n, 0).In(loc)
 					}
 				} else {
-					t = time.Now()
+					t = time.Now().In(loc)
 				}
-				sb.WriteString(strftime(strFmt, t))
+				if strFmt == "" {
+					strFmt = "%X"
+				}
+				out := strftime(strFmt, t)
+				if len(fmts) > 1 {
+					sb.WriteString(fmt.Sprintf(string(fmts)+"s", out))
+				} else {
+					sb.WriteString(out)
+				}
 				i = nextIdx // skip past the )T
 				fmts = nil
 			case 'c':
@@ -1100,6 +1169,7 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 				continue
 			case 's', 'b', 'd', 'i', 'u', 'o', 'x', 'X', 'f', 'F', 'e', 'E', 'g', 'G':
 				arg := ""
+				hadArg := len(args) > 0
 				if len(args) > 0 {
 					arg, args = args[0], args[1:]
 				}
@@ -1112,7 +1182,7 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 					// Apply width/precision via Go's %s after the
 					// escape-processed bytes are captured.
 					var bsb strings.Builder
-					_, err := formatIntoMode(&bsb, arg, nil, startTime, true, warn, nil)
+					_, err := formatIntoMode(&bsb, arg, nil, startTime, loc, true, warn, nil)
 					if err == ErrPrintfStop {
 						// Surface the partial output and signal stop.
 						sb.WriteString(bsb.String())
@@ -1145,6 +1215,8 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 							if perr != nil && warn != nil {
 								warn(fmt.Sprintf("printf: %s: invalid number", arg))
 							}
+						} else if hadArg && warn != nil {
+							warn("printf: : invalid number")
 						}
 						farg = f
 					} else {
@@ -1164,6 +1236,8 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 							if perr != nil && warn != nil {
 								warn(fmt.Sprintf("printf: %s: invalid number", arg))
 							}
+						} else if hadArg && warn != nil {
+							warn("printf: : invalid number")
 						}
 						if c == 'i' || c == 'd' {
 							farg = int(n)

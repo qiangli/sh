@@ -319,11 +319,19 @@ var runTests = []runTest{
 	// literal tab.
 	{`printf '%b' 'foo\nbar'`, "foo\nbar"},
 	{`printf '%b\n' 'a\tb'`, "a\tb\n"},
+	{`printf '\0007'`, "\x007"},
+	{`printf '%b' '\0007'`, "\a"},
+	{`printf '\0200'`, "\x100"},
+	{`printf '%b' '\0200'`, "\x80"},
 
 	// printf %(fmt)T: strftime-style datetime. Year and Unix-time
 	// specifiers are timezone-stable for fixed timestamps.
 	{`printf '%(%Y)T\n' 1700000000`, "2023\n"},
 	{`printf '%(%s)T\n' 1700000000`, "1700000000\n"},
+	{`TZ=EST5EDT,M3.2.0/2,M11.1.0/2 printf '%()T %(%x %X)T\n' 1275250155 1275246555`, "16:09:15 05/30/10 15:09:15\n"},
+	{`TZ=EST5EDT,M3.2.0/2,M11.1.0/2 printf '%-12.20(%H:%M:%S)T!\n' 1275250155`, "16:09:15    !\n"},
+	{`TZ=EST5EDT,M3.2.0/2,M11.1.0/2 printf '%.50(%x (foo) %X)T\n' 1275250155`, "05/30/10 (foo) 16:09:15\n"},
+	{`printf '%(abde)Z\n'`, "printf: warning: `Z': invalid time format specification\n%(abde)Z\nexit status 1 #JUSTERR"},
 	{`printf '%(%%)T' 1700000000`, "%"},
 	// Unknown specifier passes through verbatim, matching bash.
 	{`printf '%(%q)T\n' 1700000000`, "%q\n"},
@@ -384,6 +392,8 @@ var runTests = []runTest{
 	{"printf %s", ""},
 	{"printf %d,%i 3 4", "3,4"},
 	{"printf %d", "0"},
+	{"printf '%d' ''", "printf: : invalid number\n0exit status 1 #JUSTERR"},
+	{"printf '%d' 2>/dev/null", "0"},
 	{"printf %d,%d 010 0x10", "8,16"},
 	{"printf %c,%c,%c foo àa", "f,\xc3,\x00"}, // TODO: use a rune?
 	{"printf %3s a", "  a"},
