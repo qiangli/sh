@@ -1116,10 +1116,8 @@ var errorCases = []errorCase{
 		"echo $((++))",
 		langErr("1:9: `++` must be followed by a literal"),
 	),
-	errCase(
-		"echo $((a ? b))",
-		langErr("1:11: ternary operator missing `:` after `?`"),
-	),
+	// Bash accepts a missing ternary ':' at parse time and reports it
+	// as an arithmetic expansion error at runtime.
 	errCase(
 		"echo $((a : b))",
 		langErr("1:11: ternary operator missing `?` before `:`"),

@@ -190,6 +190,15 @@ func Arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 				return 0, err
 			}
 			b2 := expr.Y.(*syntax.BinaryArithm) // must have Op==TernColon
+			if word, _ := b2.X.(*syntax.Word); arithMissingRHS(word) {
+				return 0, fmt.Errorf("expression expected")
+			}
+			if word, _ := b2.Y.(*syntax.Word); arithMissingRHS(word) {
+				if b2.OpPos == expr.OpPos {
+					return 0, fmt.Errorf("`:' expected for conditional expression")
+				}
+				return 0, fmt.Errorf("expression expected")
+			}
 			if cond != 0 {
 				return Arithm(cfg, b2.X)
 			}
@@ -238,6 +247,9 @@ func Arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 		right, err := Arithm(cfg, expr.Y)
 		if err != nil {
 			return 0, err
+		}
+		if expr.Op == syntax.Pow && right < 0 {
+			return 0, fmt.Errorf("exponent less than 0")
 		}
 		return binArit(expr.Op, left, right)
 	default:
@@ -586,6 +598,9 @@ func (cfg *Config) assgnArit(b *syntax.BinaryArithm) (int, error) {
 }
 
 func arithMissingRHS(word *syntax.Word) bool {
+	if word == nil {
+		return false
+	}
 	if len(word.Parts) != 1 {
 		return false
 	}

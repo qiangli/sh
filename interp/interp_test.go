@@ -2205,6 +2205,10 @@ var runTests = []runTest{
 		"1\n",
 	},
 	{"echo $((4 ? 1 : 0))", "1\n"},
+	{"A='3 + 5'; echo $((4 ? : $A)); echo after", "expression expected\nafter\n"},
+	{"echo $((1 ? 20)); echo after", "`:' expected for conditional expression\nafter\n"},
+	{"echo $((4 ? 20 :)); echo after", "expression expected\nafter\n"},
+	{"echo $((2**-1)); echo after", "exponent less than 0\nafter\n"},
 	// Assignment binds lower than the ternary false branch in bash:
 	// these parse like `(cond ? a : a) += 5`, which is not an lvalue.
 	{"a=10; echo $((0 ? a : a+=5)); echo $a", "attempted assignment to non-variable\n10\n"},

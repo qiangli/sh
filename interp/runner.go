@@ -482,6 +482,38 @@ func (r *Runner) bashArithmError(expr syntax.ArithmExpr, err error, command bool
 	tokenText := "0"
 	exactToken := false
 	commandSep := " : "
+	if b, ok := expr.(*syntax.BinaryArithm); ok && b.Op == syntax.TernQuest {
+		branchText := func(e syntax.ArithmExpr) string {
+			if w, ok := e.(*syntax.Word); ok {
+				if s, err := expand.Literal(r.ecfg, w); err == nil {
+					return s
+				}
+			}
+			if s := r.arithmSourceText(e, false); s != "" {
+				return strings.TrimSpace(s)
+			}
+			return printArithm(e)
+		}
+		if b2, ok := b.Y.(*syntax.BinaryArithm); ok && b2.Op == syntax.TernColon {
+			if word, _ := b2.X.(*syntax.Word); arithWordEmpty(word) {
+				left := branchText(b.X)
+				right := branchText(b2.Y)
+				exprText = strings.TrimSpace(left+" ? : "+right) + " "
+				bashMsg = "expression expected"
+				tokenText = ": " + right + " "
+				exactToken = true
+			} else if word, _ := b2.Y.(*syntax.Word); arithWordEmpty(word) {
+				if b2.OpPos == b.OpPos {
+					tokenText = branchText(b2.X) + " "
+					bashMsg = "`:' expected for conditional expression"
+				} else {
+					tokenText = ": "
+					bashMsg = "expression expected"
+				}
+				exactToken = true
+			}
+		}
+	}
 	if b, ok := expr.(*syntax.BinaryArithm); ok {
 		switch b.Op {
 		case syntax.Quo, syntax.Rem, syntax.QuoAssgn, syntax.RemAssgn:
@@ -492,6 +524,13 @@ func (r *Runner) bashArithmError(expr syntax.ArithmExpr, err error, command bool
 			if command {
 				exactToken = true
 				commandSep = ": "
+			}
+		case syntax.Pow:
+			if strings.Contains(bashMsg, "exponent less than 0") {
+				tokenText = strings.TrimPrefix(strings.TrimSpace(r.arithmSourceText(b.Y, false)), "-")
+				if tokenText == "" {
+					tokenText = strings.TrimPrefix(strings.TrimSpace(printArithm(b.Y)), "-")
+				}
 			}
 		case syntax.Assgn, syntax.AddAssgn, syntax.SubAssgn,
 			syntax.MulAssgn, syntax.AndAssgn, syntax.OrAssgn,
@@ -562,6 +601,14 @@ func arithmInvalidLiteralMsg(msg string) bool {
 		strings.Contains(msg, "invalid integer constant") ||
 		strings.Contains(msg, "value too great for base") ||
 		strings.Contains(msg, "invalid number")
+}
+
+func arithWordEmpty(word *syntax.Word) bool {
+	if word == nil || len(word.Parts) != 1 {
+		return false
+	}
+	lit, ok := word.Parts[0].(*syntax.Lit)
+	return ok && lit.Value == "" && lit.Pos() == lit.End()
 }
 
 func (r *Runner) arithmSourceText(expr syntax.ArithmExpr, extendTrailingSpace bool) string {

@@ -61,15 +61,45 @@ func (p *Parser) arithmExprTernary(compact bool) ArithmExpr {
 	}
 	questPos := p.pos
 	p.nextArithOp(compact)
+	missingExpr := func() ArithmExpr {
+		return p.wordOne(&Lit{ValuePos: p.pos, ValueEnd: p.pos})
+	}
 	if BinAritOperator(p.tok) == TernColon {
-		p.followErrExp(questPos, TernQuest)
+		trueExpr := missingExpr()
+		colonPos := p.pos
+		p.nextArithOp(compact)
+		falseExpr := p.arithmExprTernary(compact)
+		if falseExpr == nil {
+			falseExpr = missingExpr()
+		}
+		return &BinaryArithm{
+			OpPos: questPos,
+			Op:    TernQuest,
+			X:     value,
+			Y: &BinaryArithm{
+				OpPos: colonPos,
+				Op:    TernColon,
+				X:     trueExpr,
+				Y:     falseExpr,
+			},
+		}
 	}
 	trueExpr := p.arithmExpr(compact)
 	if trueExpr == nil {
-		p.followErrExp(questPos, TernQuest)
+		trueExpr = missingExpr()
 	}
 	if BinAritOperator(p.tok) != TernColon {
-		p.posErr(questPos, "ternary operator missing %#q after %#q", colon, quest)
+		return &BinaryArithm{
+			OpPos: questPos,
+			Op:    TernQuest,
+			X:     value,
+			Y: &BinaryArithm{
+				OpPos: questPos,
+				Op:    TernColon,
+				X:     trueExpr,
+				Y:     missingExpr(),
+			},
+		}
 	}
 	colonPos := p.pos
 	p.nextArithOp(compact)
@@ -80,7 +110,7 @@ func (p *Parser) arithmExprTernary(compact bool) ArithmExpr {
 	// allow an assignment expression there: `1 ? 20 : (x+=2)`.
 	falseExpr := p.arithmExprTernary(compact)
 	if falseExpr == nil {
-		p.followErrExp(colonPos, TernColon)
+		falseExpr = missingExpr()
 	}
 	return &BinaryArithm{
 		OpPos: questPos,
