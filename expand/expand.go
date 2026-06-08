@@ -2256,7 +2256,7 @@ func (cfg *Config) quotedReplElemFields(pe *syntax.ParamExp) []string {
 	if elems == nil {
 		return nil
 	}
-	orig, err := Pattern(cfg, pe.Repl.Orig)
+	orig, replAnchoredStart, replAnchoredEnd, err := replPattern(cfg, pe.Repl.Orig)
 	if err != nil || orig == "" {
 		return nil
 	}
@@ -2282,7 +2282,7 @@ func (cfg *Config) quotedReplElemFields(pe *syntax.ParamExp) []string {
 	}
 	out := make([]string, len(elems))
 	for i, elem := range elems {
-		locs := findAllIndex(orig, elem, n)
+		locs := findReplIndex(orig, elem, n, replAnchoredStart, replAnchoredEnd)
 		var sb strings.Builder
 		last := 0
 		for _, loc := range locs {

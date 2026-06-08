@@ -346,7 +346,7 @@ func applyParamMods(cfg *Config, pe *syntax.ParamExp, str string) (string, error
 	if pe.Repl == nil {
 		return str, nil
 	}
-	orig, err := Pattern(cfg, pe.Repl.Orig)
+	orig, replAnchoredStart, replAnchoredEnd, err := replPattern(cfg, pe.Repl.Orig)
 	if err != nil {
 		return "", err
 	}
@@ -373,7 +373,7 @@ func applyParamMods(cfg *Config, pe *syntax.ParamExp, str string) (string, error
 	if pe.Repl.All {
 		n = -1
 	}
-	locs := findAllIndex(orig, str, n)
+	locs := findReplIndex(orig, str, n, replAnchoredStart, replAnchoredEnd)
 	var sb strings.Builder
 	last := 0
 	for _, loc := range locs {
@@ -383,6 +383,45 @@ func applyParamMods(cfg *Config, pe *syntax.ParamExp, str string) (string, error
 	}
 	sb.WriteString(str[last:])
 	return sb.String(), nil
+}
+
+func replPattern(cfg *Config, word *syntax.Word) (pat string, start, end bool, err error) {
+	pat, err = Pattern(cfg, word)
+	if err != nil || word == nil || len(word.Parts) == 0 {
+		return pat, false, false, err
+	}
+	lit, ok := word.Parts[0].(*syntax.Lit)
+	if !ok || lit.Value == "" {
+		return pat, false, false, nil
+	}
+	switch lit.Value[0] {
+	case '#':
+		return strings.TrimPrefix(pat, "#"), true, false, nil
+	case '%':
+		return strings.TrimPrefix(pat, "%"), false, true, nil
+	}
+	return pat, false, false, nil
+}
+
+func findReplIndex(pat, name string, n int, start, end bool) [][]int {
+	if !start && !end {
+		return findAllIndex(pat, name, n)
+	}
+	expr, err := pattern.Regexp(pat, 0)
+	if err != nil {
+		return nil
+	}
+	switch {
+	case start:
+		expr = "^(" + expr + ")"
+	case end:
+		expr = "(" + expr + ")$"
+	}
+	rx := regexp.MustCompile(expr)
+	if loc := rx.FindStringSubmatchIndex(name); loc != nil && len(loc) >= 4 {
+		return [][]int{{loc[2], loc[3]}}
+	}
+	return nil
 }
 
 func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
@@ -645,7 +684,7 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			}
 		} // else, elems are already sliced
 	case pe.Repl != nil:
-		orig, err := Pattern(cfg, pe.Repl.Orig)
+		orig, replAnchoredStart, replAnchoredEnd, err := replPattern(cfg, pe.Repl.Orig)
 		if err != nil {
 			return "", err
 		}
@@ -682,7 +721,7 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 		}
 		out := slices.Clone(elems)
 		for i, elem := range out {
-			locs := findAllIndex(orig, elem, n)
+			locs := findReplIndex(orig, elem, n, replAnchoredStart, replAnchoredEnd)
 			sb := cfg.strBuilder()
 			last := 0
 			for _, loc := range locs {

@@ -2236,6 +2236,8 @@ var runTests = []runTest{
 	{"set -- a b c d op; echo ${!#}; v=bad-var; echo ${!v}; echo after", "op\nbad-var: invalid variable name\nafter\n"},
 	{"set -- a 'b c' d; foo=@; printf '<%s>\\n' ${!foo}; printf 'Q<%s>\\n' \"${!foo}\"", "<a>\n<b>\n<c>\n<d>\nQ<a>\nQ<b c>\nQ<d>\n"},
 	{"set -- a b c d e; echo ${6=arg6}; echo after", "$6: cannot assign in this way\nafter\n"},
+	{"v=abcde; echo ${v/#a/ab}; echo ${v/%?/last}; av=(abcd efgh); echo ${av[1]/#?/xx}; echo ${av[1]/%??/za}", "abbcde\nabcdlast\nxxfgh\nefza\n"},
+	{"av=(abcd efgh ijkl); printf '<%s>\\n' ${av[@]/%??/xx}; set -- abcd efgh ijkl; printf 'P<%s>\\n' ${@/#??/za}", "<abxx>\n<efxx>\n<ijxx>\nP<zacd>\nP<zagh>\nP<zakl>\n"},
 	// Assignment binds lower than the ternary false branch in bash:
 	// these parse like `(cond ? a : a) += 5`, which is not an lvalue.
 	{"a=10; echo $((0 ? a : a+=5)); echo $a", "attempted assignment to non-variable\n10\n"},
