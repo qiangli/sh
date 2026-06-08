@@ -1054,7 +1054,7 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 				sb.WriteByte(b)
 				fmts = nil
 			case '+', '-', ' ', '#', '\'':
-				if len(fmts) > 1 {
+				if bytes.IndexAny(fmts[1:], "0123456789.") >= 0 {
 					return 0, fmt.Errorf("printf: `%c': invalid format character", c)
 				}
 				fmts = append(fmts, c)
@@ -1259,6 +1259,9 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 					farg = arg
 				}
 				if farg != nil {
+					if c == 'o' || c == 'x' || c == 'X' {
+						fmts = bytes.ReplaceAll(fmts, []byte{'+'}, nil)
+					}
 					fmts = append(fmts, c)
 					fmt.Fprintf(sb, string(fmts), farg)
 				}
