@@ -1056,7 +1056,7 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 				if wideFmt {
 					sb.WriteString(formatWideChar(arg, fmts))
 				} else {
-					sb.WriteByte(b)
+					sb.WriteString(padPrintfString(string([]byte{b}), printfCharWidth(fmts), bytes.Contains(fmts, []byte{'-'})))
 				}
 				fmts = nil
 				wideFmt = false
@@ -1852,6 +1852,11 @@ func printfStringWidthPrec(fmts []byte) (width, prec int, left bool) {
 		}
 	}
 	return width, prec, left
+}
+
+func printfCharWidth(fmts []byte) int {
+	width, _, _ := printfStringWidthPrec(fmts)
+	return width
 }
 
 func padPrintfString(s string, width int, left bool) string {

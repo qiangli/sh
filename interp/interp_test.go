@@ -385,6 +385,7 @@ var runTests = []runTest{
 	{"printf %1", "printf: `%1': missing format character\nexit status 1 #JUSTERR"},
 	{"printf %+", "printf: `%+': missing format character\nexit status 1 #JUSTERR"},
 	{"printf %B foo", "printf: `B': invalid format character\nexit status 1 #JUSTERR"},
+	{"printf 'ab%Mcd\n'; printf '%y' 0", "printf: `M': invalid format character\nabprintf: `y': invalid format character\nexit status 1 #JUSTERR"},
 	{"printf %12-s foo", "printf: `-': invalid format character\nexit status 1 #JUSTERR"},
 	{"printf ' %s \n' bar", " bar \n"},
 	{"printf '\\A'", "\\A"},
@@ -396,6 +397,8 @@ var runTests = []runTest{
 	{"printf '%d' 2>/dev/null", "0"},
 	{"printf %d,%d 010 0x10", "8,16"},
 	{"printf %c,%c,%c foo àa", "f,\xc3,\x00"}, // TODO: use a rune?
+	{"printf '%2c\\n' 65", " 6\n"},
+	{"printf '%-2c--\\n' 65", "6 --\n"},
 	{"printf %3s a", "  a"},
 	{"printf '%#q\\n' no-quotes-needed 'quotes;needed'", "'no-quotes-needed'\n'quotes;needed'\n"},
 	{"printf -v out '%#q\\n' \"a'b\"; printf '%s' \"$out\"", "'a'\\''b'\n"},

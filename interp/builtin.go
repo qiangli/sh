@@ -508,15 +508,23 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		for {
 			s, n, err := expand.Format(r.ecfg, format, args)
 			stop := errors.Is(err, expand.ErrPrintfStop)
-			// Emit any partial output before reporting the error.
+			formatErr := err != nil && !stop
+			diagnosticBeforeOutput := formatErr && bashPrintfFormatError(err)
+			if diagnosticBeforeOutput {
+				r.errf("%s%v\n", r.bashErrPrefix(pos), err)
+			}
 			if assignTo != "" {
 				sb.WriteString(s)
 			} else {
 				r.out(s)
 			}
-			if err != nil && !stop {
+			if formatErr {
 				if assignTo != "" {
 					r.setVarString(assignTo, sb.String())
+				}
+				if diagnosticBeforeOutput {
+					exit.code = 1
+					return exit
 				}
 				return failf(1, "%v\n", err)
 			}
@@ -3215,6 +3223,12 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		return failf(2, "%s: not supported in this shell\n", name)
 	}
 	return exit
+}
+
+func bashPrintfFormatError(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "invalid format character") ||
+		strings.Contains(msg, "missing format character")
 }
 
 // offendingToken extracts the token starting at pos within src, used
