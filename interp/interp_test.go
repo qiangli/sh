@@ -2209,6 +2209,7 @@ var runTests = []runTest{
 	{"echo $((1 ? 20)); echo after", "`:' expected for conditional expression\nafter\n"},
 	{"echo $((4 ? 20 :)); echo after", "expression expected\nafter\n"},
 	{"echo $((2**-1)); echo after", "exponent less than 0\nafter\n"},
+	{"v=-9223372036854775808; echo $((v)); echo $((v / -1)); echo $((v * -1)); echo $((-v))", "-9223372036854775808\n-9223372036854775808\n-9223372036854775808\n-9223372036854775808\n"},
 	{"A='4 + '; echo $(((4 + A) + 4)); echo after", "arithmetic syntax error: operand expected (error token is \"+ \")\nafter\n"},
 	{"echo $((++7)); echo $((--7))", "7\n7\n"},
 	{"((++)); echo $?", "arithmetic syntax error: operand expected (error token is \"+ \")\n1\n"},

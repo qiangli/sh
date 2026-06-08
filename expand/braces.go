@@ -142,6 +142,9 @@ func bracesSeqRec(word *syntax.Word, yield func(*syntax.Word) bool) bool {
 				if !expand(&next) {
 					return false
 				}
+				if n == to {
+					break
+				}
 			}
 			return true
 		}

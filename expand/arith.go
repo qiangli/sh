@@ -46,6 +46,22 @@ func isAllDigits(s string) bool {
 	return true
 }
 
+func minInt() int {
+	return -int(^uint(0)>>1) - 1
+}
+
+func arithWordLit(expr syntax.ArithmExpr) string {
+	word, ok := expr.(*syntax.Word)
+	if !ok || len(word.Parts) != 1 {
+		return ""
+	}
+	lit, ok := word.Parts[0].(*syntax.Lit)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(lit.Value)
+}
+
 // containsArithOp reports whether s contains a character that would
 // make it an arithmetic expression rather than a bare identifier or
 // number literal. Used to decide whether the string form of an arith
@@ -201,6 +217,9 @@ func Arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 		case syntax.Plus:
 			return val, nil
 		case syntax.Minus:
+			if arithWordLit(expr.X) == "9223372036854775808" {
+				return minInt(), nil
+			}
 			return -val, nil
 		default:
 			return 0, fmt.Errorf("unsupported unary arithmetic operator: %q", expr.Op)
