@@ -1980,6 +1980,14 @@ var runTests = []runTest{
 		"foo\n",
 	},
 	{
+		`[[ x =~ \x ]]; echo $?; [[ a-b =~ a\-b ]]; echo $?; c=$'\001'; [[ $c =~ \$c ]]; echo $?`,
+		"0\n0\n1\n",
+	},
+	{
+		`[[ dog =~ [[=d=]].. ]] && echo ok1; [[ dog =~ [[.d.][.D.]]o. ]] && echo ok2; [[ dog =~ ([[.d.][.D.]])o(.) ]] && echo "${BASH_REMATCH[1]} ${BASH_REMATCH[2]}"`,
+		"ok1\nok2\nd g\n",
+	},
+	{
 		"[[ a =~ [ ]]",
 		"[[: error parsing regexp: missing closing ]: `[`\nexit status 2 #JUSTERR",
 	},

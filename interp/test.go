@@ -156,7 +156,7 @@ func (r *Runner) bashTest(ctx context.Context, expr syntax.TestExpr, classic boo
 func (r *Runner) binTest(ctx context.Context, op syntax.BinTestOperator, x, y string, classic bool) bool {
 	switch op {
 	case syntax.TsReMatch:
-		pat := y
+		pat := bashRegexToGo(y)
 		if opt, _ := r.bashOptByName("nocasematch"); opt != nil && *opt {
 			pat = "(?i)" + pat
 		}
@@ -283,6 +283,83 @@ func (r *Runner) binTest(ctx context.Context, op syntax.BinTestOperator, x, y st
 		// Should only happen if we forgot a case above.
 		panic(fmt.Sprintf("unexpected binary test operator: %q", op))
 	}
+}
+
+func bashRegexToGo(pat string) string {
+	pat = bashRegexBracketsToGo(pat)
+	var sb strings.Builder
+	for i := 0; i < len(pat); i++ {
+		if pat[i] != '\\' || i+1 == len(pat) {
+			sb.WriteByte(pat[i])
+			continue
+		}
+		next := pat[i+1]
+		switch next {
+		case '\\', '.', '[', ']', '(', ')', '*', '+', '?', '{', '}', '|', '^', '$':
+			sb.WriteByte('\\')
+		}
+		sb.WriteByte(next)
+		i++
+	}
+	return sb.String()
+}
+
+func bashRegexBracketsToGo(pat string) string {
+	var sb strings.Builder
+	for i := 0; i < len(pat); i++ {
+		if pat[i] != '[' {
+			sb.WriteByte(pat[i])
+			continue
+		}
+		expr, end, ok := bashRegexBracketToGo(pat, i)
+		if !ok {
+			sb.WriteByte(pat[i])
+			continue
+		}
+		sb.WriteString(expr)
+		i = end
+	}
+	return sb.String()
+}
+
+func bashRegexBracketToGo(pat string, start int) (string, int, bool) {
+	var sb strings.Builder
+	sb.WriteByte('[')
+	i := start + 1
+	if i < len(pat) && (pat[i] == '!' || pat[i] == '^') {
+		sb.WriteByte('^')
+		i++
+	}
+	if i < len(pat) && pat[i] == ']' {
+		sb.WriteByte(']')
+		i++
+	}
+	for ; i < len(pat); i++ {
+		if pat[i] == ']' {
+			sb.WriteByte(']')
+			return sb.String(), i, true
+		}
+		if i+1 < len(pat) && pat[i] == '[' {
+			switch pat[i+1] {
+			case '=', '.':
+				op := pat[i+1]
+				close := string([]byte{op, ']'})
+				if j := strings.Index(pat[i+2:], close); j >= 0 {
+					sb.WriteString(regexp.QuoteMeta(pat[i+2 : i+2+j]))
+					i += j + 3
+					continue
+				}
+			case ':':
+				if j := strings.Index(pat[i+2:], ":]"); j >= 0 {
+					sb.WriteString(pat[i : i+2+j+2])
+					i += j + 3
+					continue
+				}
+			}
+		}
+		sb.WriteByte(pat[i])
+	}
+	return "", start, false
 }
 
 func (r *Runner) statMode(ctx context.Context, name string, mode os.FileMode) bool {
