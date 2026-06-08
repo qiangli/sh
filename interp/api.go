@@ -100,9 +100,10 @@ type Runner struct {
 	// statHandler is a function responsible for getting file stat. It must be non-nil.
 	statHandler StatHandlerFunc
 
-	stdin  *os.File // e.g. the read end of a pipe
-	stdout io.Writer
-	stderr io.Writer
+	stdin            *os.File // e.g. the read end of a pipe
+	stdinTTYFallback bool
+	stdout           io.Writer
+	stderr           io.Writer
 
 	ecfg *expand.Config
 	ectx context.Context // just so that Runner.Subshell can use it again

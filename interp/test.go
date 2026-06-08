@@ -477,11 +477,17 @@ func (r *Runner) unTest(ctx context.Context, op syntax.UnTestOperator, x string)
 		var f any
 		switch fd {
 		case 0:
+			if r.stdinTTYFallback {
+				return true
+			}
 			f = r.stdin
 		case 1:
 			f = r.stdout
 		case 2:
 			f = r.stderr
+		}
+		if _, ok := f.(*ttyFallbackFile); ok {
+			return true
 		}
 		if f, ok := f.(interface{ Fd() uintptr }); ok {
 			// Support [os.File.Fd] methods such as the one on [*os.File].

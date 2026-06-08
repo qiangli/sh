@@ -3304,7 +3304,7 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 
 	r.curStmtPos = st.Pos()
 
-	oldIn, oldOut, oldErr := r.stdin, r.stdout, r.stderr
+	oldIn, oldStdinTTYFallback, oldOut, oldErr := r.stdin, r.stdinTTYFallback, r.stdout, r.stderr
 	// Snapshot fdTable only when this statement has redirects that
 	// might mutate it. A coproc statement registers fds in fdTable from
 	// inside cmd() itself, not via redir(), and those changes must
@@ -3402,6 +3402,7 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 	}
 	if !r.keepRedirs {
 		r.stdin, r.stdout, r.stderr = oldIn, oldOut, oldErr
+		r.stdinTTYFallback = oldStdinTTYFallback
 		if len(st.Redirs) > 0 && !persistNamedRedirs {
 			r.fdTable = oldFdTable
 			r.fdWriteTable = oldFdWriteTable
@@ -4872,6 +4873,7 @@ func (r *Runner) setReadFd(targetFd int, f *os.File) error {
 	switch targetFd {
 	case -1, 0:
 		r.stdin = f
+		r.stdinTTYFallback = false
 	case 1, 2:
 		return fmt.Errorf("cannot use fd %d as input target", targetFd)
 	default:
@@ -5238,12 +5240,16 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 	}
 	switch rd.Op {
 	case syntax.RdrIn, syntax.RdrInOut:
+		_, ttyFallback := f.(*ttyFallbackFile)
 		stdin, err := stdinFile(f)
 		if err != nil {
 			return nil, err
 		}
 		if err := r.setReadFd(targetFd, stdin); err != nil {
 			return nil, err
+		}
+		if targetFd == -1 || targetFd == 0 {
+			r.stdinTTYFallback = ttyFallback
 		}
 	case syntax.RdrOut, syntax.AppOut, syntax.RdrClob, syntax.AppClob:
 		if err := r.setWriteFd(targetFd, f); err != nil {

@@ -53,6 +53,13 @@ func mockFileOpen(ctx context.Context, path string, flags int, mode os.FileMode)
 	return nopWriterCloser{strings.NewReader(fmt.Sprintf("body of %s", path))}, nil
 }
 
+func unavailableTTYOpen(ctx context.Context, path string, flags int, mode os.FileMode) (io.ReadWriteCloser, error) {
+	if path == "/dev/tty" {
+		return nil, &os.PathError{Op: "open", Path: path, Err: syscall.ENXIO}
+	}
+	return interp.DefaultOpenHandler()(ctx, path, flags, mode)
+}
+
 func blocklistGlob(ctx context.Context, path string) ([]fs.FileInfo, error) {
 	return nil, fmt.Errorf("blocklisted: glob")
 }
@@ -370,6 +377,14 @@ var modCases = []struct {
 		},
 		src:  "echo $(<foo); echo $(< <(echo bar))",
 		want: "body of foo\nbar\n",
+	},
+	{
+		name: "OpenDevTTYFallbackIsTerminal",
+		opts: []interp.RunnerOption{
+			interp.OpenHandler(unavailableTTYOpen),
+		},
+		src:  "test -t 0 < /dev/tty; echo $?",
+		want: "0\n",
 	},
 	{
 		name: "CallReplaceWithBlank",
