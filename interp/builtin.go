@@ -2764,11 +2764,22 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 
 	case "jobs":
 		for i, bg := range r.bgProcs {
+			marker := ' '
+			switch i {
+			case len(r.bgProcs) - 1:
+				marker = '+'
+			case len(r.bgProcs) - 2:
+				marker = '-'
+			}
+			cmd := bg.cmd
+			if cmd == "" {
+				cmd = "running"
+			}
 			select {
 			case <-bg.done:
-				r.outf("[%d]   Done\n", i+1)
+				r.outf("[%d]%c  Done                       %s\n", i+1, marker, cmd)
 			default:
-				r.outf("[%d]   Running\n", i+1)
+				r.outf("[%d]%c  Running                    %s\n", i+1, marker, cmd)
 			}
 		}
 	case "fg":

@@ -24,6 +24,7 @@ func (e *ArithmError) Unwrap() error { return e.Err }
 
 type arithLvalue struct {
 	name       string
+	word       *syntax.Word
 	index      syntax.ArithmExpr
 	indexValue int
 	indexSet   bool
@@ -189,7 +190,7 @@ func Arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 				return 0, err
 			}
 			b2 := expr.Y.(*syntax.BinaryArithm) // must have Op==TernColon
-			if cond == 1 {
+			if cond != 0 {
 				return Arithm(cfg, b2.X)
 			}
 			return Arithm(cfg, b2.Y)
@@ -254,7 +255,19 @@ func arithLvalueFrom(expr syntax.ArithmExpr) (arithLvalue, bool) {
 			return arithLvalue{name: pe.Param.Value, index: pe.Index}, true
 		}
 	}
-	return arithLvalue{name: w.Lit()}, true
+	return arithLvalue{name: w.Lit(), word: w}, true
+}
+
+func (cfg *Config) resolveAritLvalueName(lval arithLvalue) (arithLvalue, error) {
+	if lval.word == nil {
+		return lval, nil
+	}
+	name, err := Literal(cfg, lval.word)
+	if err != nil {
+		return lval, err
+	}
+	lval.name = name
+	return lval, nil
 }
 
 func (cfg *Config) getAritLvalue(lval arithLvalue) (int64, error) {
@@ -513,13 +526,17 @@ func (cfg *Config) assgnArit(b *syntax.BinaryArithm) (int, error) {
 	if !ok {
 		return 0, fmt.Errorf("attempted assignment to non-variable")
 	}
+	lval, err := cfg.resolveAritLvalueName(lval)
+	if err != nil {
+		return 0, err
+	}
 	if !syntax.ValidName(lval.name) {
 		return 0, fmt.Errorf("attempted assignment to non-variable")
 	}
 	if word, ok := b.Y.(*syntax.Word); ok && arithMissingRHS(word) {
 		return 0, fmt.Errorf("arithmetic syntax error: operand expected (error token is %q)", b.Op.String())
 	}
-	lval, err := cfg.resolveAritLvalue(lval)
+	lval, err = cfg.resolveAritLvalue(lval)
 	if err != nil {
 		return 0, err
 	}

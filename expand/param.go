@@ -166,6 +166,16 @@ func paramExpDefaultTriggers(op syntax.ParExpOperator, vr Variable, str string) 
 	return false
 }
 
+func indirectDefaultOp(op syntax.ParExpOperator) bool {
+	switch op {
+	case syntax.AlternateUnset, syntax.AlternateUnsetOrNull,
+		syntax.DefaultUnset, syntax.DefaultUnsetOrNull,
+		syntax.ErrorUnset, syntax.ErrorUnsetOrNull:
+		return true
+	}
+	return false
+}
+
 func nodeLit(node syntax.Node) string {
 	if word, ok := node.(*syntax.Word); ok {
 		return word.Lit()
@@ -456,9 +466,14 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 		case (name == "@" || name == "*") && !vr.IsSet():
 			return "", nil
 		case !vr.IsSet():
+			if pe.Exp != nil && indirectDefaultOp(pe.Exp.Op) {
+				break
+			}
 			// Bash 5.3 includes the variable name in the message
 			// (`./file: line N: foo: invalid indirect expansion`).
 			return "", fmt.Errorf("%s: invalid indirect expansion", name)
+		case str == "" && pe.Exp != nil && indirectDefaultOp(pe.Exp.Op):
+			break
 		case str == "":
 			return "", nil
 		default:
@@ -470,6 +485,42 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 		}
 		slices.Sort(strs)
 		str = strings.Join(strs, " ")
+		if pe.Exp != nil && indirectDefaultOp(pe.Exp.Op) {
+			arg, err := Literal(cfg, pe.Exp.Word)
+			if err != nil {
+				return "", err
+			}
+			switch pe.Exp.Op {
+			case syntax.AlternateUnset:
+				if vr.IsSet() {
+					str = arg
+				} else {
+					str = ""
+				}
+			case syntax.AlternateUnsetOrNull:
+				if vr.IsSet() && str != "" {
+					str = arg
+				} else {
+					str = ""
+				}
+			case syntax.DefaultUnset:
+				if !vr.IsSet() {
+					str = arg
+				}
+			case syntax.DefaultUnsetOrNull:
+				if !vr.IsSet() || str == "" {
+					str = arg
+				}
+			case syntax.ErrorUnset:
+				if !vr.IsSet() {
+					return "", UnsetParameterError{Node: pe, Message: arg}
+				}
+			case syntax.ErrorUnsetOrNull:
+				if !vr.IsSet() || str == "" {
+					return "", UnsetParameterError{Node: pe, Message: arg}
+				}
+			}
+		}
 		if applyMod {
 			if mod, err := applyParamMods(cfg, pe, str); err != nil {
 				return "", err

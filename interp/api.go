@@ -233,6 +233,12 @@ type Runner struct {
 	// alias-body parse.
 	aliasLineOverride int
 
+	// funsubLineOffset is applied to bash-style diagnostic line
+	// numbers while executing a multi-line `${ ...; }` funsub body.
+	// Bash 5.3 reports runtime command diagnostics one line later
+	// than the physical AST position in that form.
+	funsubLineOffset int
+
 	// bgProcs holds all background shells spawned by this runner.
 	// Their PIDs are 1-indexed, from 1 to len(bgProcs), with a "g" prefix
 	// to distinguish them from real PIDs on the host operating system.
@@ -341,6 +347,12 @@ type Runner struct {
 	deterministic     bool
 	deterministicSeed int64
 	deterministicRng  *mathrand.PCG
+
+	// randomSeeded tracks whether $RANDOM has been explicitly assigned.
+	// Once set, reads follow bash's own Park-Miller generator so
+	// `RANDOM=42; echo $RANDOM $RANDOM` is reproducible.
+	randomSeeded bool
+	randomSeed   uint32
 
 	// fdTable holds non-stdio file descriptors keyed by OS fd number.
 	// 0/1/2 stay in stdin/stdout/stderr; everything else (coproc pipe
@@ -467,6 +479,8 @@ type bgProc struct {
 	done chan struct{}
 
 	exit *exitStatus
+
+	cmd string
 
 	// pid is the OS PID of the last real external process this
 	// backgrounded statement spawned. Zero until set, and stays zero for
@@ -1570,6 +1584,8 @@ func (r *Runner) subshell(background bool) *Runner {
 		deterministic:     r.deterministic,
 		deterministicSeed: r.deterministicSeed,
 		deterministicRng:  r.deterministicRng,
+		randomSeeded:      r.randomSeeded,
+		randomSeed:        r.randomSeed,
 		// Subshells inherit open fds the way bash does. Clone the map so
 		// child mutations (close, dup) don't leak back to the parent;
 		// the underlying *os.File handles are shared (single OS fd).

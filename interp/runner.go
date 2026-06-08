@@ -118,7 +118,12 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 				if !inheritErrexit {
 					r.opts[optErrExit] = false
 				}
+				oldFunsubLineOffset := r.funsubLineOffset
+				if cs.TempFile && cs.Left.Line() != cs.Right.Line() {
+					r.funsubLineOffset = 1
+				}
 				r.stmts(ctx, cs.Stmts)
+				r.funsubLineOffset = oldFunsubLineOffset
 				reply := ""
 				if cs.ReplyVar {
 					reply = r.lookupVar(shellReplyVar).Str
@@ -214,6 +219,7 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 				done:     make(chan struct{}),
 				exit:     new(exitStatus),
 				pidReady: make(chan struct{}),
+				cmd:      "process substitution",
 			}
 			r.bgProcs = append(r.bgProcs, bg)
 			go func() {
@@ -3095,6 +3101,7 @@ func (r *Runner) bashErrPrefix(pos syntax.Pos) string {
 	if r.aliasLineOverride > 0 {
 		line = r.aliasLineOverride
 	}
+	line += r.funsubLineOffset
 	return fmt.Sprintf("%s: line %d: ", name, line)
 }
 
@@ -3136,6 +3143,14 @@ func (r *Runner) stop(ctx context.Context) bool {
 	return false
 }
 
+func backgroundJobText(st *syntax.Stmt) string {
+	var buf strings.Builder
+	if err := syntax.NewPrinter(syntax.SingleLine(true)).Print(&buf, st); err != nil {
+		return ""
+	}
+	return buf.String()
+}
+
 func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 	if r.stop(ctx) {
 		return
@@ -3151,6 +3166,7 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 			exit:        new(exitStatus),
 			pidReady:    make(chan struct{}),
 			pidCallback: r.bgPidCallback, // see WithBgPidCallback
+			cmd:         backgroundJobText(st),
 		}
 		r.bgProcs = append(r.bgProcs, bg)
 		// Stash a pointer to the freshly-appended bgProc on the

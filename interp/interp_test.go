@@ -591,6 +591,8 @@ var runTests = []runTest{
 	{`unset TDIR; [[ -n $TDIR && $(echo SIDE >&2; echo x) ]] 2>&1 || echo no`, "no\n"},
 	{"[[ $RANDOM -eq $RANDOM ]]", "exit status 1"},   // 1 in 32k chance of a collision, 0.003%
 	{"[[ $SRANDOM -eq $SRANDOM ]]", "exit status 1"}, // 1 in 2**32 chance of a collision,
+	{"RANDOM=42; echo $RANDOM $RANDOM", "17772 26794\n"},
+	{"RANDOM=42; echo $RANDOM ${ echo $RANDOM; }", "17772 26794\n"},
 
 	// Ensure that we consistently use 64 bits even on 32-bit platforms.
 	// Bash doesn't do this, but we do, for portability and consistency.
@@ -623,6 +625,10 @@ var runTests = []runTest{
 	{
 		"a=b; echo ${!a}; b=c; echo ${!a}",
 		"\nc\n",
+	},
+	{
+		"set -- a b c d e f g h; z=abcdefghijklmnop; echo ${!9:-$z}",
+		"abcdefghijklmnop\n",
 	},
 	{
 		"a=foo_very_long; echo ${a:1}; echo ${a: -1}; echo ${a: -10}; echo ${a:5}",
@@ -2198,10 +2204,12 @@ var runTests = []runTest{
 		"echo $((1 == +1))",
 		"1\n",
 	},
+	{"echo $((4 ? 1 : 0))", "1\n"},
 	// Assignment binds lower than the ternary false branch in bash:
 	// these parse like `(cond ? a : a) += 5`, which is not an lvalue.
 	{"a=10; echo $((0 ? a : a+=5)); echo $a", "attempted assignment to non-variable\n10\n"},
 	{"a=10; echo $((1 ? a*=2 : a+=5)); echo $a", "attempted assignment to non-variable\n10\n"},
+	{"_ENV=oops; x=${_ENV[(_$-=0)+(_=1)-_${-%%*i*}]}; echo ${x:-unset}", "unset\n"},
 	{
 		"echo $((!0))",
 		"1\n",

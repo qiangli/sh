@@ -293,12 +293,13 @@ func (r *Runner) lookupVar(name string) expand.Variable {
 		sb.WriteByte('B') // braceexpand (always on)
 		vr.Kind, vr.Str = expand.String, sb.String()
 	case "RANDOM": // not for cryptographic use
-		if r.deterministic && r.deterministicRng != nil {
+		if r.randomSeeded {
+			vr.Kind, vr.Str = expand.String, strconv.Itoa(r.bashRandom())
+		} else if r.deterministic && r.deterministicRng != nil {
 			vr.Kind, vr.Str = expand.String, strconv.Itoa(int(r.deterministicRng.Uint64()&0x7fff))
 		} else {
 			vr.Kind, vr.Str = expand.String, strconv.Itoa(mathrand.IntN(32767))
 		}
-		// TODO: support setting RANDOM to seed it
 	case "SRANDOM": // pseudo-random generator from the system
 		if r.deterministic && r.deterministicRng != nil {
 			vr.Kind, vr.Str = expand.String, strconv.FormatUint(r.deterministicRng.Uint64()&0xffffffff, 10)
@@ -524,6 +525,23 @@ func (r *Runner) lookupVar(name string) expand.Variable {
 
 func (r *Runner) envGet(name string) string {
 	return r.lookupVar(name).String()
+}
+
+func (r *Runner) bashRandom() int {
+	seed := r.randomSeed
+	if seed == 0 {
+		seed = 123459876
+	}
+	h := seed / 127773
+	l := seed % 127773
+	t := int32(16807*l) - int32(2836*h)
+	if t < 0 {
+		seed = uint32(t + 0x7fffffff)
+	} else {
+		seed = uint32(t)
+	}
+	r.randomSeed = seed
+	return int(((seed >> 16) ^ (seed & 0xffff)) & 0x7fff)
 }
 
 // printLocalVars writes the local variables of the current function
@@ -929,6 +947,13 @@ func terminalWidth() int {
 func (r *Runner) setVar(name string, vr expand.Variable) {
 	if r.opts[optRestricted] && (name == "PATH" || name == "SHELL") {
 		r.errf("%s%s: readonly variable\n", r.bashErrPrefix(r.curStmtPos), name)
+		return
+	}
+	if name == "RANDOM" && vr.IsSet() {
+		if seed, err := strconv.ParseInt(vr.String(), 10, 64); err == nil {
+			r.randomSeeded = true
+			r.randomSeed = uint32(seed)
+		}
 		return
 	}
 	if r.opts[optAllExport] {
