@@ -1070,6 +1070,13 @@ func (r *Runner) setVarWithIndex(prev expand.Variable, name string, index syntax
 			return
 		}
 	}
+	if name == "DIRSTACK" {
+		if k >= len(r.dirStack) {
+			return
+		}
+		r.dirStack[len(r.dirStack)-1-k] = valStr
+		return
+	}
 	for len(list) < k+1 {
 		list = append(list, "")
 	}

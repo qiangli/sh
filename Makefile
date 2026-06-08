@@ -54,6 +54,10 @@ test-bash: build test-bash-helpers
 			name=$${runner#run-}; \
 			test_file="$$name.tests"; \
 			right_file="$$name.right"; \
+			if [ "$$name" = "dirstack" ]; then \
+				test_file="dstack.tests"; \
+				right_file="dstack.right"; \
+			fi; \
 			if [ ! -f "$$test_file" ] || [ ! -f "$$right_file" ]; then \
 				skipped=$$((skipped + 1)); \
 				continue; \

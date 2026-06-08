@@ -1607,7 +1607,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			case a == "-p":
 				perLine = true
 			case a == "-c":
-				r.dirStack = r.dirStack[:0]
+				r.dirStack = append(r.dirStack[:0], r.Dir)
 				return exit
 			case a == "-l":
 				// no-op; we don't shorten paths.
@@ -1700,14 +1700,31 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			// trying to change directories.
 			arg := args[0]
 			if len(arg) > 1 && (arg[0] == '+' || arg[0] == '-') {
-				if _, err := strconv.Atoi(arg[1:]); err != nil {
+				idx, err := strconv.Atoi(arg[1:])
+				if err != nil {
 					r.errf("%spushd: %s: invalid number\n",
 						r.bashErrPrefix(r.curStmtPos), arg)
 					r.errf("pushd: usage: pushd [-n] [+N | -N | dir]\n")
 					exit.code = 1
 					return exit
 				}
-				// TODO: actually rotate the stack by +N/-N.
+				topFirst := dirStackTopFirst(r.dirStack)
+				n := dirStackIndex(len(topFirst), arg[0], idx)
+				if n < 0 || n >= len(topFirst) {
+					return failf(1, "pushd: %s: directory stack index out of range\n", arg)
+				}
+				oldStack := slices.Clone(r.dirStack)
+				rotated := append(append([]string(nil), topFirst[n:]...), topFirst[:n]...)
+				setDirStackTopFirst(r, rotated)
+				if change {
+					if code := r.changeDir(ctx, "pushd", rotated[0]); code != 0 {
+						r.dirStack = oldStack
+						exit.code = code
+						return exit
+					}
+					r.builtin(ctx, syntax.Pos{}, "dirs", nil)
+				}
+				return exit
 			}
 			if change {
 				// Push a new top slot first so that changeDir's
@@ -1757,14 +1774,34 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			// number" usage error.
 			arg := args[0]
 			if len(arg) > 1 && (arg[0] == '+' || arg[0] == '-') {
-				if _, err := strconv.Atoi(arg[1:]); err != nil {
+				idx, err := strconv.Atoi(arg[1:])
+				if err != nil {
 					r.errf("%spopd: %s: invalid number\n",
 						r.bashErrPrefix(r.curStmtPos), arg)
 					r.errf("popd: usage: popd [-n] [+N | -N]\n")
 					exit.code = 1
 					return exit
 				}
-				// TODO: actually pop at index +N/-N.
+				topFirst := dirStackTopFirst(r.dirStack)
+				n := dirStackIndex(len(topFirst), arg[0], idx)
+				if n < 0 || n >= len(topFirst) {
+					return failf(1, "popd: %s: directory stack index out of range\n", arg)
+				}
+				if len(topFirst) < 2 {
+					return failf(1, "popd: directory stack empty\n")
+				}
+				oldStack := slices.Clone(r.dirStack)
+				newTopFirst := append(append([]string(nil), topFirst[:n]...), topFirst[n+1:]...)
+				setDirStackTopFirst(r, newTopFirst)
+				if change && n == 0 {
+					if code := r.changeDir(ctx, "popd", newTopFirst[0]); code != 0 {
+						r.dirStack = oldStack
+						exit.code = code
+						return exit
+					}
+				}
+				r.builtin(ctx, syntax.Pos{}, "dirs", nil)
+				return exit
 			}
 			return failf(2, "popd: invalid argument\n")
 		}
@@ -3385,6 +3422,32 @@ func (s completionSpec) String(name string) string {
 
 func bashCompletionQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+func dirStackTopFirst(stack []string) []string {
+	topFirst := make([]string, len(stack))
+	for i, d := range stack {
+		topFirst[len(stack)-1-i] = d
+	}
+	return topFirst
+}
+
+func setDirStackTopFirst(r *Runner, topFirst []string) {
+	if cap(r.dirStack) < len(topFirst) {
+		r.dirStack = make([]string, len(topFirst))
+	} else {
+		r.dirStack = r.dirStack[:len(topFirst)]
+	}
+	for i, d := range topFirst {
+		r.dirStack[len(topFirst)-1-i] = d
+	}
+}
+
+func dirStackIndex(length int, sign byte, idx int) int {
+	if sign == '-' {
+		return length - 1 - idx
+	}
+	return idx
 }
 
 func bashBuiltinNames() []string {

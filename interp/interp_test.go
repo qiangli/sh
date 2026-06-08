@@ -1242,6 +1242,7 @@ var runTests = []runTest{
 
 	// dirs/pushd/popd
 	{"set -- $(dirs); echo $# ${#DIRSTACK[@]}", "1 1\n"},
+	{"dirs -c; set -- $(dirs); echo $# ${#DIRSTACK[@]}", "1 1\n"},
 	{"pushd", "pushd: no other directory\nexit status 1 #JUSTERR"},
 	{"pushd -n", ""},
 	{"pushd foo bar", "pushd: too many arguments\nexit status 2 #JUSTERR"},
@@ -1288,6 +1289,18 @@ var runTests = []runTest{
 	{
 		`old=$(dirs); mkdir a; pushd a >/dev/null; popd -n >/dev/null; [[ $(dirs) == "$old" ]]`,
 		"exit status 1",
+	},
+	{
+		`root=$PWD; mkdir a b; pushd "$root/a" >/dev/null; pushd "$root/b" >/dev/null; pushd +1 >/dev/null; [[ ${DIRSTACK[0]} == */a ]]`,
+		"",
+	},
+	{
+		`root=$PWD; mkdir a b c; pushd "$root/a" >/dev/null; pushd "$root/b" >/dev/null; pushd "$root/c" >/dev/null; popd +2 >/dev/null; [[ ${DIRSTACK[0]} == */c && ${DIRSTACK[1]} == */b && ${DIRSTACK[2]} == "$root" ]]`,
+		"",
+	},
+	{
+		`root=$PWD; mkdir a b; pushd "$root/a" >/dev/null; pushd "$root/b" >/dev/null; DIRSTACK[1]=$root; [[ $(dirs) == "$root/b $root $root" ]]`,
+		"",
 	},
 	{
 		"mkdir a; pushd a >/dev/null; pushd >/dev/null; rm -r a; popd",
