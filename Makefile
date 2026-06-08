@@ -58,6 +58,9 @@ test-bash: build test-bash-helpers
 				test_file="dstack.tests"; \
 				right_file="dstack.right"; \
 			fi; \
+			if [ "$$name" = "precedence" ]; then \
+				right_file="prec.right"; \
+			fi; \
 			if [ ! -f "$$test_file" ] || [ ! -f "$$right_file" ]; then \
 				skipped=$$((skipped + 1)); \
 				continue; \
