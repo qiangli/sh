@@ -658,10 +658,12 @@ func run(r *interp.Runner, reader io.Reader, name string) error {
 			chunk = src[cursor:]
 		}
 		prog, pe, gotErr := parseOnce(chunk, lang)
+		retryStart := cursor
 		if prog != nil && len(prog.Stmts) > 0 {
 			if err := r.Run(ctx, prog); err != nil {
 				runErr = err
 			}
+			retryStart = advancePastLine(src, int(prog.Stmts[len(prog.Stmts)-1].End().Line()))
 		}
 		if !gotErr {
 			return runErr
@@ -672,7 +674,10 @@ func run(r *interp.Runner, reader io.Reader, name string) error {
 		errLine := int(pe.Pos.Line())
 		newCursor := advancePastLine(src, errLine)
 		if parseLang := r.LangVariant(); parseLang != lang && newCursor > cursor {
-			if prog, _, gotErr := parseOnce(paddedChunk(src, lineStart(src, errLine), newCursor), parseLang); !gotErr {
+			if retryStart <= cursor || retryStart > newCursor {
+				retryStart = lineStart(src, errLine)
+			}
+			if prog, _, gotErr := parseOnce(paddedChunk(src, retryStart, newCursor), parseLang); !gotErr {
 				if prog != nil && len(prog.Stmts) > 0 {
 					if err := r.Run(ctx, prog); err != nil {
 						runErr = err

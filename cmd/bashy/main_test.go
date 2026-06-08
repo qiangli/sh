@@ -1,8 +1,12 @@
 package main
 
 import (
+	"bytes"
+	"strings"
 	"testing"
 
+	"mvdan.cc/sh/v3/expand"
+	"mvdan.cc/sh/v3/interp"
 	"mvdan.cc/sh/v3/syntax"
 )
 
@@ -52,5 +56,36 @@ func TestCommandSubstOpenBefore(t *testing.T) {
 				t.Fatalf("commandSubstOpenBefore() = %v, want %v", got, test.want)
 			}
 		})
+	}
+}
+
+func TestRunRetriesPosixAfterParsedPrefix(t *testing.T) {
+	t.Parallel()
+	src := strings.Join([]string{
+		"set -o posix",
+		`echo 1 ${IFS+'}'z}`,
+		`echo 2 "${IFS+'}'z}"`,
+		`echo 3 "foo ${IFS+'bar} baz"`,
+		`printf '%s\n' "4 foo ${IFS+"b   c"} baz"`,
+		"",
+	}, "\n")
+	var stdout, stderr bytes.Buffer
+	r, err := interp.New(
+		interp.StdIO(nil, &stdout, &stderr),
+		interp.Env(expand.ListEnviron()),
+		interp.WithBashCompatErrors(true),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := run(r, strings.NewReader(src), "posixexp2.sub"); err != nil {
+		t.Fatal(err)
+	}
+	want := "1 }z\n2 '}'z\n3 foo 'bar baz\n4 foo b   c baz\n"
+	if got := stdout.String(); got != want {
+		t.Fatalf("stdout mismatch\nwant:\n%q\ngot:\n%q\nstderr:\n%s", want, got, stderr.String())
+	}
+	if stderr.Len() > 0 {
+		t.Fatalf("unexpected stderr: %s", stderr.String())
 	}
 }
