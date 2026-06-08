@@ -4,6 +4,7 @@
 package expand
 
 import (
+	"io"
 	"io/fs"
 	"os"
 	"reflect"
@@ -331,6 +332,62 @@ ar' baz}`, []string{"foo", "b\\\nar", "baz"}},
 		}
 		if !reflect.DeepEqual(got, tc.want) {
 			t.Fatalf("%s: wanted %q, got %q", tc.src, tc.want, got)
+		}
+	}
+}
+
+func TestFieldsParamExpAlternateQuotedAtWithQuotedEmpty(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want []string
+	}{
+		{"no args", nil, []string{""}},
+		{"one empty", []string{""}, []string{""}},
+		{"two empty", []string{"", ""}, []string{"", ""}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &Config{Env: testEnv{
+				"x": {Set: true, Kind: String, Str: "x"},
+				"@": {Set: true, Kind: Indexed, List: tc.args},
+			}}
+			for _, src := range []string{
+				`echo ${x+"$@"''}`,
+				`echo ${x+''"$@"}`,
+				`echo ${x+''"$@"''}`,
+			} {
+				word := parseCallArg(t, src, 1)
+				got, err := Fields(cfg, word)
+				if err != nil {
+					t.Fatalf("%s: did not want error, got %v", src, err)
+				}
+				if !reflect.DeepEqual(got, tc.want) {
+					t.Fatalf("%s: wanted %q, got %q", src, tc.want, got)
+				}
+			}
+		})
+	}
+}
+
+func TestFieldsParamExpAlternateQuotedEmptyAfterSplit(t *testing.T) {
+	cfg := &Config{Env: testEnv{
+		"x": {Set: true, Kind: String, Str: "x"},
+		"e": {Set: true, Kind: String, Str: ""},
+	}}
+	cfg.CmdSubst = func(io.Writer, *syntax.CmdSubst) error { return nil }
+	for _, src := range []string{
+		`echo ${x:+"$e""$e" ""}`,
+		`echo ${x:+"$(:)""$(:)" ""}`,
+	} {
+		word := parseCallArg(t, src, 1)
+		got, err := Fields(cfg, word)
+		if err != nil {
+			t.Fatalf("%s: did not want error, got %v", src, err)
+		}
+		want := []string{"", ""}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s: wanted %q, got %q", src, want, got)
 		}
 	}
 }

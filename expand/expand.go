@@ -2429,6 +2429,26 @@ func (cfg *Config) substWordPartFields(parts []syntax.WordPart) ([][]fieldPart, 
 			allowEmpty = true
 			curField = append(curField, fieldPart{quote: quoteSingle, val: part.Value})
 		case *syntax.DblQuoted:
+			if len(part.Parts) == 0 {
+				allowEmpty = true
+				curField = append(curField, fieldPart{quote: quoteDouble, val: ""})
+				continue
+			}
+			if len(part.Parts) == 1 {
+				pe, _ := part.Parts[0].(*syntax.ParamExp)
+				if elems := cfg.quotedElemFields(pe); elems != nil {
+					for i, elem := range elems {
+						if i > 0 {
+							flush()
+						}
+						curField = append(curField, fieldPart{
+							quote: quoteDouble,
+							val:   elem,
+						})
+					}
+					continue
+				}
+			}
 			allowEmpty = true
 			wfield, err := cfg.wordField(part.Parts, quoteDouble)
 			if err != nil {
