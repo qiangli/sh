@@ -683,6 +683,9 @@ func run(r *interp.Runner, reader io.Reader, name string) error {
 			}
 		}
 		printBashParseError(os.Stderr, src, errPrefix, pe)
+		if fatalRecoveredParseError(src, pe) {
+			return interp.ExitStatus(2)
+		}
 		if newCursor <= cursor {
 			// No forward progress — bail to avoid infinite loop.
 			return interp.ExitStatus(2)
@@ -806,6 +809,65 @@ func paddedChunk(src []byte, start, end int) []byte {
 	return chunk
 }
 
+func fatalRecoveredParseError(src []byte, pe syntax.ParseError) bool {
+	return commandSubstOpenBefore(src, pe.Pos)
+}
+
+func commandSubstOpenBefore(src []byte, pos syntax.Pos) bool {
+	end := offsetBeforePos(src, pos)
+	if end <= 0 {
+		return false
+	}
+	depth := 0
+	for i := 0; i < end; i++ {
+		switch src[i] {
+		case '$':
+			if i+1 < end && src[i+1] == '(' {
+				if i+2 < end && src[i+2] == '(' {
+					continue
+				}
+				depth++
+				i++
+			}
+		case ')':
+			if depth > 0 {
+				depth--
+			}
+		}
+	}
+	return depth > 0
+}
+
+func offsetBeforePos(src []byte, pos syntax.Pos) int {
+	line, col := int(pos.Line()), int(pos.Col())
+	if line <= 0 || col <= 0 {
+		return 0
+	}
+	currentLine := 1
+	lineStart := 0
+	for i, b := range src {
+		if currentLine == line {
+			end := lineStart + col - 1
+			if end > len(src) {
+				return len(src)
+			}
+			return end
+		}
+		if b == '\n' {
+			currentLine++
+			lineStart = i + 1
+		}
+	}
+	if currentLine == line {
+		end := lineStart + col - 1
+		if end > len(src) {
+			return len(src)
+		}
+		return end
+	}
+	return len(src)
+}
+
 // printBashParseError emits a syntax.ParseError in the same shape bash
 // 5.3 uses: a `<prefix>: line N: <text>` line, followed by a second
 // `<prefix>: line N: \`<offending source line>'` echo. The prefix is
@@ -882,6 +944,10 @@ func rewriteParserErrorText(src string, pe syntax.ParseError) string {
 	// before any of the per-message rewrites below.
 	if insideUnclosedArith(src, pe.Pos) {
 		return "unexpected EOF while looking for matching `)'"
+	}
+	if commandSubstOpenBefore([]byte(src), pe.Pos) &&
+		strings.Contains(pe.Text, "statement must end with") {
+		return "syntax error near unexpected token `)'"
 	}
 	switch {
 	case pe.Text == "statements must be separated by &, ; or a newline",
