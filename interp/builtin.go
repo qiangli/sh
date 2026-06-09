@@ -307,7 +307,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		case 1:
 			n2, err := strconv.Atoi(args[0])
 			if err != nil {
-				return failf(1, "shift: %s: numeric argument required\n", args[0])
+				return failf(2, "shift: %s: numeric argument required\n", args[0])
 			}
 			if n2 < 0 {
 				return failf(1, "shift: %s: shift count out of range\n", args[0])
@@ -323,7 +323,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			}
 			n = n2
 		default:
-			return failf(1, "shift: too many arguments\n")
+			return failf(2, "shift: too many arguments\n")
 		}
 		if n >= len(r.Params) {
 			r.Params = nil
