@@ -296,23 +296,20 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		case 1:
 			n2, err := strconv.Atoi(args[0])
 			if err != nil {
-				return failf(1, "%sshift: %s: numeric argument required\n",
-					r.bashErrPrefix(r.curStmtPos), args[0])
+				return failf(1, "shift: %s: numeric argument required\n", args[0])
 			}
 			if n2 < 0 || n2 > len(r.Params) {
 				// Out of range: silent error by default; with
 				// `shopt -s shift_verbose`, emit a diagnostic.
 				if opt, _ := r.bashOptByName("shift_verbose"); opt != nil && *opt {
-					return failf(1, "%sshift: %s: shift count out of range\n",
-						r.bashErrPrefix(r.curStmtPos), args[0])
+					return failf(1, "shift: %s: shift count out of range\n", args[0])
 				}
 				exit.code = 1
 				return exit
 			}
 			n = n2
 		default:
-			return failf(1, "%sshift: too many arguments\n",
-				r.bashErrPrefix(r.curStmtPos))
+			return failf(1, "shift: too many arguments\n")
 		}
 		if n >= len(r.Params) {
 			r.Params = nil
@@ -665,7 +662,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				r.outf("%s\n", path)
 			}
 		default:
-			return failf(1, "%scd: too many arguments\n", r.bashErrPrefix(r.curStmtPos))
+			return failf(1, "cd: too many arguments\n")
 		}
 		exit.code = r.changeDir(ctx, "cd", path)
 	case "wait":
@@ -3255,8 +3252,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			if symRes.badChar == 0 {
 				tok = ""
 			}
-			return failf(1, "%sumask: `%s': invalid symbolic mode %s\n",
-				r.bashErrPrefix(r.curStmtPos), tok, symRes.kind)
+			return failf(1, "umask: `%s': invalid symbolic mode %s\n", tok, symRes.kind)
 		}
 		mask, err := strconv.ParseUint(args[0], 8, 32)
 		if err != nil {
