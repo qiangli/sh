@@ -1088,6 +1088,18 @@ var runTests = []runTest{
 		"1 a\n2 a\n",
 	},
 	{
+		"for i in 1 2 3; do continue -1; done",
+		"continue: -1: loop count out of range\nexit status 1 #JUSTERR",
+	},
+	{
+		"for i in 1 2 3; do continue 0; done",
+		"continue: 0: loop count out of range\nexit status 1 #JUSTERR",
+	},
+	{
+		"for i in 1 2 3; do continue -- -5; done",
+		"continue: -5: loop count out of range\nexit status 1 #JUSTERR",
+	},
+	{
 		"for ((i=0; i<3; i++)); do echo $i; done",
 		"0\n1\n2\n",
 	},

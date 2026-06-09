@@ -600,7 +600,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					// Bash still breaks out of the current loop
 					// (the body after `break N<1` is unreachable),
 					// but exits with a diagnostic.
-					*enclosing = 1
+					if name == "continue" {
+						r.breakEnclosing = 1
+					} else {
+						*enclosing = 1
+					}
 					r.errf("%s%s: %s: loop count out of range\n",
 						r.bashErrPrefix(r.curStmtPos), name, args[0])
 					exit.code = 1
