@@ -262,11 +262,11 @@ var runTests = []runTest{
 	},
 	{
 		"for i in 1; do continue a; done",
-		"usage: continue [n]\nexit status 2 #JUSTERR",
+		"continue: a: numeric argument required\nexit status 128 #JUSTERR",
 	},
 	{
 		"for i in 1; do break a; done",
-		"usage: break [n]\nexit status 2 #JUSTERR",
+		"break: a: numeric argument required\nexit status 128 #JUSTERR",
 	},
 	{"false; a=b", ""},
 	{"false; false &", ""},

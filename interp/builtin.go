@@ -613,7 +613,12 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				*enclosing = n
 				break
 			}
-			fallthrough
+			r.breakEnclosing = 1
+			r.errf("%s%s: %s: numeric argument required\n",
+				r.bashErrPrefix(r.curStmtPos), name, args[0])
+			exit.code = 128
+			exit.exiting = true
+			return exit
 		default:
 			if r.bashCompatErrors {
 				return failf(2, "%s: usage: %s\n", name, bashUsage[name])
