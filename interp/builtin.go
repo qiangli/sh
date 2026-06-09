@@ -215,7 +215,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			}
 			exit.code = uint8(n)
 		default:
-			return failf(1, "exit cannot take multiple arguments\n")
+			return failf(2, "exit: too many arguments\n")
 		}
 		exit.exiting = true
 	case "set":
@@ -1943,6 +1943,16 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			return failf(2, "popd: invalid argument\n")
 		}
 	case "return":
+		if len(args) > 1 {
+			msg := r.bashErrPrefix(pos) + "return: too many arguments"
+			r.errf("%s\n", msg)
+			r.reportError("builtin", pos, name, msg, 2)
+			exit.code = 2
+			if r.inFunc || r.inSource {
+				exit.returning = true
+			}
+			return exit
+		}
 		if !r.inFunc && !r.inSource {
 			return failf(1, "return: can only `return' from a function or sourced script\n")
 		}
@@ -1959,13 +1969,6 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				return exit
 			}
 			exit.code = uint8(n)
-		default:
-			msg := r.bashErrPrefix(pos) + "return: too many arguments"
-			r.errf("%s\n", msg)
-			r.reportError("builtin", pos, name, msg, 2)
-			exit.code = 2
-			exit.returning = true
-			return exit
 		}
 		exit.returning = true
 	case "read":

@@ -297,9 +297,10 @@ var runTests = []runTest{
 
 	// we don't need to follow bash error strings
 	{"exit a", "exit: a: numeric argument required\nexit status 2 #JUSTERR"},
-	{"exit 1 2", "exit cannot take multiple arguments\nexit status 1 #JUSTERR"},
+	{"exit 1 2", "exit: too many arguments\nexit status 2 #JUSTERR"},
 	{"f() { return a; }; f", "return: a: numeric argument required\nexit status 2 #JUSTERR"},
 	{"f() { return a; echo bad; }; f; echo after:$?", "return: a: numeric argument required\nafter:2\n #JUSTERR"},
+	{"return 1 2", "return: too many arguments\nexit status 2 #JUSTERR"},
 
 	// echo
 	{"echo", "\n"},
