@@ -1652,6 +1652,10 @@ var runTests = []runTest{
 		"foo\nfoo\n",
 	},
 	{
+		"echo foo >f; echo $(<f*)",
+		"foo\n",
+	},
+	{
 		"echo foo >f; echo $(<f; echo bar)",
 		"bar\n",
 	},

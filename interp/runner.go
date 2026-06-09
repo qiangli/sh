@@ -73,10 +73,18 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 				if word == nil {
 					break
 				}
-				path := r.literal(word)
+				path, ok := r.catShortcutPath(word)
+				if !ok {
+					r.lastExpandExit = exitStatus{code: 1}
+					return nil
+				}
+				if sb, ok := w.(*strings.Builder); ok {
+					sb.Reset()
+				}
 				f, err := r.open(ctx, path, os.O_RDONLY, 0, true)
 				if err != nil {
-					return err
+					r.lastExpandExit = exitStatus{code: 1}
+					return nil
 				}
 				_, err = io.Copy(w, f)
 				f.Close()
@@ -292,6 +300,20 @@ func catShortcutArg(stmt *syntax.Stmt) *syntax.Word {
 		return nil
 	}
 	return redir.Word
+}
+
+func (r *Runner) catShortcutPath(word *syntax.Word) (string, bool) {
+	if r.opts[optPosix] {
+		return r.literal(word), true
+	}
+	fields := r.fields(word)
+	if len(fields) != 1 {
+		var b bytes.Buffer
+		syntax.NewPrinter().Print(&b, word)
+		r.errf("%s%s: ambiguous redirect\n", r.bashErrPrefix(word.Pos()), b.String())
+		return "", false
+	}
+	return fields[0], true
 }
 
 func (r *Runner) updateExpandOpts() {
