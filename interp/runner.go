@@ -4531,6 +4531,11 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 					// previously unset. Like -A, this is a
 					// declaration without setting the value.
 					vr.Kind = expand.Indexed
+					if vr.Set && vr.List == nil {
+						vr.List = []string{vr.Str}
+						vr.ListSet = nil
+						vr.Str = ""
+					}
 				case "-n":
 					// `typeset -n NAME` (no value) on an
 					// existing var converts it to a nameref
@@ -4546,7 +4551,12 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 					}
 				}
 			} else {
+				prevForIndex := vr
 				name, vr = r.assignVal(name, vr, as, valType)
+				if as.Index != nil {
+					r.setVarWithIndex(prevForIndex, name, as.Index, vr)
+					continue
+				}
 			}
 			// `typeset +n NAME=value` semantics: the assignment
 			// goes to the nameref's resolved target (handled
@@ -5595,7 +5605,7 @@ func (r *Runner) namedFdVarString(name string) string {
 		vr := r.lookupVar(base)
 		if vr.Kind == expand.Indexed {
 			i, err := strconv.Atoi(index)
-			if err == nil && i >= 0 && i < len(vr.List) {
+			if err == nil && vr.IndexedSet(i) {
 				return vr.List[i]
 			}
 		}
@@ -5622,10 +5632,19 @@ func (r *Runner) setGlobalNamedFdVarString(name, value string) {
 			if vr.Kind != expand.Indexed {
 				vr = expand.Variable{Set: true, Kind: expand.Indexed}
 			}
+			oldLen := len(vr.List)
+			listSet := vr.CloneListSet()
+			if listSet == nil && i >= oldLen {
+				listSet = vr.DenseListSet()
+			}
 			for len(vr.List) <= i {
 				vr.List = append(vr.List, "")
 			}
 			vr.List[i] = value
+			if listSet != nil {
+				listSet[i] = true
+				vr.ListSet = listSet
+			}
 			r.setVar(base, vr)
 			r.setGlobalVar(base, vr)
 			return

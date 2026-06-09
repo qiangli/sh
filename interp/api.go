@@ -1581,6 +1581,13 @@ func IsExitStatus(err error) (status uint8, ok bool) {
 	return 0, false
 }
 
+// SetLastExitStatus sets the shell status exposed via $? without running a
+// command. It is intended for embedders that recover from external parse or
+// scheduling errors and need the next shell statement to observe that status.
+func (r *Runner) SetLastExitStatus(status uint8) {
+	r.lastExit = exitStatus{code: status}
+}
+
 // Run interprets a node, which can be a [*File], [*Stmt], or [Command]. If a non-nil
 // error is returned, it will typically contain a command's exit status, which
 // can be retrieved with [IsExitStatus].

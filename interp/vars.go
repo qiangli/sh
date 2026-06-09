@@ -107,6 +107,7 @@ func (o *overlayEnviron) Set(name string, vr expand.Variable) error {
 		vr.Kind = prev.Kind
 		vr.Str = prev.Str
 		vr.List = prev.List
+		vr.ListSet = prev.ListSet
 		vr.Map = prev.Map
 	} else if prev.ReadOnly {
 		return fmt.Errorf("readonly variable")
@@ -669,11 +670,13 @@ func formatDeclareVar(name string, vr expand.Variable, forceEmptyArrayValue bool
 		}
 		b.WriteByte('=')
 		b.WriteByte('(')
-		for i, v := range vr.List {
-			if i > 0 {
+		first := true
+		for _, i := range vr.IndexedIndexes() {
+			if !first {
 				b.WriteByte(' ')
 			}
-			fmt.Fprintf(&b, "[%d]=%s", i, bashDeclareQuote(v))
+			first = false
+			fmt.Fprintf(&b, "[%d]=%s", i, bashDeclareQuote(vr.List[i]))
 		}
 		b.WriteByte(')')
 	case expand.Associative:
@@ -724,7 +727,11 @@ func variableJSON(name string, vr expand.Variable) map[string]any {
 	switch vr.Kind {
 	case expand.Indexed:
 		obj["kind"] = "indexed"
-		obj["value"] = slices.Clone(vr.List)
+		values := make(map[string]string, vr.IndexedCount())
+		for _, i := range vr.IndexedIndexes() {
+			values[strconv.Itoa(i)] = vr.List[i]
+		}
+		obj["value"] = values
 	case expand.Associative:
 		obj["kind"] = "associative"
 		m := make(map[string]string, len(vr.Map))
@@ -868,14 +875,15 @@ func (r *Runner) unsetArrayElem(name, idx string) {
 		if err != nil || n < 0 || n >= len(vr.List) {
 			return
 		}
-		// Bash preserves index gaps after unset, so use sparse
-		// storage by replacing the element with empty and then
-		// stripping the trailing positions if it was the last
-		// one. For simpler semantics we just blank the slot.
+		set := vr.DenseListSet()
+		delete(set, n)
 		vr.List[n] = ""
-		// If the unset was the tail, shrink the slice.
-		if n == len(vr.List)-1 {
-			vr.List = vr.List[:n]
+		for len(vr.List) > 0 && !set[len(vr.List)-1] {
+			vr.List = vr.List[:len(vr.List)-1]
+		}
+		vr.ListSet = set
+		if len(vr.List) == 0 {
+			vr.ListSet = nil
 		}
 	case expand.Associative:
 		if _, ok := vr.Map[idx]; ok {
@@ -1120,12 +1128,14 @@ func (r *Runner) setVarWithIndex(prev expand.Variable, name string, index syntax
 	valStr := vr.Str
 
 	var list []string
+	var listSet map[int]bool
 	switch prev.Kind {
 	case expand.String:
 		list = append(list, prev.Str)
 	case expand.Indexed:
 		// TODO: only clone when inside a subshell and getting a var from outside for the first time
 		list = slices.Clone(prev.List)
+		listSet = prev.CloneListSet()
 	case expand.Associative:
 		// if the existing variable is already an AssocArray, try our
 		// best to convert the key to a string
@@ -1190,8 +1200,21 @@ func (r *Runner) setVarWithIndex(prev expand.Variable, name string, index syntax
 		list = append(list, "")
 	}
 	list[k] = valStr
+	if listSet != nil {
+		listSet[k] = true
+	} else if k >= len(prev.List) {
+		listSet = prev.DenseListSet()
+		if listSet == nil {
+			listSet = make(map[int]bool)
+			if prev.Kind == expand.String {
+				listSet[0] = true
+			}
+		}
+		listSet[k] = true
+	}
 	prev.Kind = expand.Indexed
 	prev.List = list
+	prev.ListSet = listSet
 	r.setVar(name, prev)
 }
 
@@ -1279,7 +1302,7 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 				switch {
 				case as.Index != nil && prev.Kind == expand.Indexed:
 					k := r.arithm(as.Index)
-					if k >= 0 && k < len(prev.List) {
+					if prev.IndexedSet(k) {
 						curStr = prev.List[k]
 					} else {
 						curStr = ""
@@ -1344,6 +1367,10 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 							newList[0] = s
 						}
 						prev.List = newList
+						if prev.ListSet != nil {
+							prev.ListSet = prev.CloneListSet()
+							prev.ListSet[0] = true
+						}
 						return name, prev
 					}
 				case expand.Associative:
@@ -1377,7 +1404,7 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 			if as.Index != nil {
 				k := r.arithm(as.Index)
 				var cur string
-				if k >= 0 && k < len(prev.List) {
+				if prev.IndexedSet(k) {
 					cur = prev.List[k]
 				}
 				prev.Kind = expand.String
@@ -1390,6 +1417,10 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 				prev.List = append(prev.List, "")
 			}
 			prev.List[0] += s
+			if prev.ListSet != nil {
+				prev.ListSet = prev.CloneListSet()
+				prev.ListSet[0] = true
+			}
 		case expand.Associative:
 			// `arr[k]+=s` for associative arrays appends `s`
 			// onto the existing value at key `k`. setVarWithIndex
@@ -1510,6 +1541,10 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 	if as.Append && prev.Kind == expand.Indexed {
 		index = len(prev.List)
 	}
+	nextSet := make(map[int]bool)
+	if as.Append && prev.Kind == expand.Indexed {
+		nextSet = prev.DenseListSet()
+	}
 	for i, elem := range elems {
 		if elem.Index != nil {
 			// Index resets our index with a literal value.
@@ -1564,29 +1599,33 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 	}
 	for _, ev := range elemValues {
 		for i, str := range ev.values {
+			elemIndex := ev.index + i
 			if ev.append && i == 0 {
 				if prev.Integer {
 					// Integer-attribute arrays: `[k]+=N` adds
 					// arithmetically rather than concatenating.
-					cur, _ := strconv.Atoi(strs[ev.index+i])
+					cur, _ := strconv.Atoi(strs[elemIndex])
 					rhs, _ := strconv.Atoi(str)
 					str = strconv.Itoa(cur + rhs)
 				} else {
-					str = strs[ev.index+i] + str
+					str = strs[elemIndex] + str
 				}
 			}
-			strs[ev.index+i] = str
+			strs[elemIndex] = str
+			nextSet[elemIndex] = true
 		}
 	}
 	if !as.Append {
 		prev.Kind = expand.Indexed
 		prev.List = strs
+		prev.ListSet = nextSet
 		return name, prev
 	}
 	switch prev.Kind {
 	case expand.Unknown:
 		prev.Kind = expand.Indexed
 		prev.List = strs
+		prev.ListSet = nextSet
 	case expand.String:
 		prev.Kind = expand.Indexed
 		// String → Indexed: keep a set prior scalar at index 0 and
@@ -1594,14 +1633,22 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 		// scalar (`declare a`) has no element to preserve.
 		if prevWasSet {
 			prev.List = append([]string{prev.Str}, strs...)
+			shifted := make(map[int]bool, len(nextSet)+1)
+			shifted[0] = true
+			for i := range nextSet {
+				shifted[i+1] = true
+			}
+			prev.ListSet = shifted
 		} else {
 			prev.List = strs
+			prev.ListSet = nextSet
 		}
 	case expand.Indexed:
 		// strs was sized to include prev.List (needPrev=true) and
 		// already contains its values via the initial copy, so we
 		// replace prev.List with strs rather than concatenating.
 		prev.List = strs
+		prev.ListSet = nextSet
 	case expand.Associative:
 		// TODO
 	default:

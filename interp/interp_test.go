@@ -3200,7 +3200,14 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 		`a=(b); echo ${a[-2]}`,
 		"negative array index\n #JUSTERR",
 	},
-	// TODO: also test with gaps in arrays.
+	{
+		`a=abcde; declare -a a; a[5]="hello world"; a[4+5/2]="test expression"; declare a["7 + 8"]="test 2"; a[7 + 8]="test 2"; declare -p a; echo "${#a[@]}"; printf '%s\n' "${!a[@]}"`,
+		"declare -a a=([0]=\"abcde\" [5]=\"hello world\" [6]=\"test expression\" [15]=\"test 2\")\n4\n0\n5\n6\n15\n",
+	},
+	{
+		`a=(x "" y); unset 'a[0]'; a[5]=z; declare -p a; echo "${#a[@]}"; printf '<%s>\n' "${a[@]}"`,
+		"declare -a a=([1]=\"\" [2]=\"y\" [5]=\"z\")\n3\n<>\n<y>\n<z>\n",
+	},
 	{
 		`a=([0]=' x ' [1]=' y '); for v in "${a[@]}"; do echo "$v"; done`,
 		" x \n y \n",

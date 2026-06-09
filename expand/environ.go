@@ -110,9 +110,10 @@ type Variable struct {
 	// Kind defines which of the value fields below should be used.
 	Kind ValueKind
 
-	Str  string            // Used when Kind is String or NameRef.
-	List []string          // Used when Kind is Indexed.
-	Map  map[string]string // Used when Kind is Associative.
+	Str     string            // Used when Kind is String or NameRef.
+	List    []string          // Used when Kind is Indexed.
+	ListSet map[int]bool      // Used when Kind is Indexed and sparse; nil means every List index is set.
+	Map     map[string]string // Used when Kind is Associative.
 }
 
 // IsSet reports whether the variable has been set to a value.
@@ -171,13 +172,92 @@ func (v Variable) String() string {
 	case String:
 		return v.Str
 	case Indexed:
-		if len(v.List) > 0 {
+		if v.IndexedSet(0) {
 			return v.List[0]
 		}
 	case Associative:
 		// nothing to do
 	}
 	return ""
+}
+
+// IndexedSet reports whether index is set for an indexed array variable.
+// A nil ListSet preserves the historical dense-array representation: every
+// in-range List entry is considered set, including empty-string elements.
+func (v Variable) IndexedSet(index int) bool {
+	if v.Kind != Indexed || index < 0 || index >= len(v.List) {
+		return false
+	}
+	return v.ListSet == nil || v.ListSet[index]
+}
+
+// IndexedIndexes returns the set indexes for an indexed array in ascending
+// numeric order.
+func (v Variable) IndexedIndexes() []int {
+	if v.Kind != Indexed {
+		return nil
+	}
+	if v.ListSet == nil {
+		indexes := make([]int, len(v.List))
+		for i := range indexes {
+			indexes[i] = i
+		}
+		return indexes
+	}
+	indexes := make([]int, 0, len(v.ListSet))
+	for i, ok := range v.ListSet {
+		if ok && i >= 0 && i < len(v.List) {
+			indexes = append(indexes, i)
+		}
+	}
+	slices.Sort(indexes)
+	return indexes
+}
+
+// IndexedValues returns the set indexed-array values in ascending numeric
+// index order.
+func (v Variable) IndexedValues() []string {
+	indexes := v.IndexedIndexes()
+	values := make([]string, len(indexes))
+	for i, index := range indexes {
+		values[i] = v.List[index]
+	}
+	return values
+}
+
+// IndexedCount returns the number of set elements in an indexed array.
+func (v Variable) IndexedCount() int {
+	return len(v.IndexedIndexes())
+}
+
+// CloneListSet returns a copy of the sparse indexed-array set map.
+func (v Variable) CloneListSet() map[int]bool {
+	if v.ListSet == nil {
+		return nil
+	}
+	clone := make(map[int]bool, len(v.ListSet))
+	for i, ok := range v.ListSet {
+		if ok {
+			clone[i] = true
+		}
+	}
+	return clone
+}
+
+// DenseListSet returns a sparse set map with every current List index marked
+// as set. It is useful before deleting from a historically dense array.
+func (v Variable) DenseListSet() map[int]bool {
+	if v.Kind != Indexed {
+		return nil
+	}
+	if v.ListSet != nil {
+		return v.CloneListSet()
+	}
+	set := make(map[int]bool, len(v.List))
+	for i := range v.List {
+		set[i] = true
+	}
+	return set
 }
 
 // maxNameRefDepth defines the maximum number of times to follow references when

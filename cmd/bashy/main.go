@@ -1313,36 +1313,62 @@ func runStatementStream(
 		}
 		hdocWarnings = hdocWarnings[:0]
 	}
-	parser := syntax.NewParser(syntax.Variant(lang), syntax.HeredocEOFWarning(hdocWarn))
 	var runErr error
-	for stmt, err := range parser.StmtsSeq(bytes.NewReader(src)) {
-		if stmt != nil {
-			flushWarnings()
-			if err := r.Run(ctx, stmt); err != nil {
-				runErr = err
+	cursor := 0
+	for cursor < len(src) {
+		parseLang := r.LangVariant()
+		parser := syntax.NewParser(syntax.Variant(parseLang), syntax.HeredocEOFWarning(hdocWarn))
+		restart := false
+		chunk := paddedChunk(src, cursor, len(src))
+		for stmt, err := range parser.StmtsSeq(bytes.NewReader(chunk)) {
+			if stmt != nil {
+				flushWarnings()
+				if err := r.Run(ctx, stmt); err != nil {
+					runErr = err
+				}
+				cursor = advancePastLine(src, int(stmt.End().Line()))
+				if r.Exited() {
+					return runErr
+				}
+				if r.LangVariant() != parseLang {
+					restart = true
+					break
+				}
 			}
-			if r.Exited() {
-				return runErr
-			}
-		}
-		if err != nil {
-			var pe syntax.ParseError
-			if errors.As(err, &pe) {
-				text := rewriteParserErrorText(string(src), pe)
-				suppressHdocWarning := len(hdocWarnings) > 0 &&
-					int(pe.Pos.Line()) > hdocWarnings[len(hdocWarnings)-1].startLine
-				if suppressHdocWarning && text == "unexpected EOF while looking for matching `)'" {
-					fmt.Fprintf(os.Stderr, "%s: command substitution: line %d: %s\n",
-						errPrefix, int(pe.Pos.Line())+1, text)
-					fmt.Fprintln(os.Stdout)
-				} else {
+			if err != nil {
+				var pe syntax.ParseError
+				if errors.As(err, &pe) {
+					text := rewriteParserErrorText(string(src), pe)
+					suppressHdocWarning := len(hdocWarnings) > 0 &&
+						int(pe.Pos.Line()) > hdocWarnings[len(hdocWarnings)-1].startLine
+					if suppressHdocWarning && text == "unexpected EOF while looking for matching `)'" {
+						fmt.Fprintf(os.Stderr, "%s: command substitution: line %d: %s\n",
+							errPrefix, int(pe.Pos.Line())+1, text)
+						fmt.Fprintln(os.Stdout)
+						return interp.ExitStatus(2)
+					}
 					flushWarnings()
 					printBashParseError(os.Stderr, src, errPrefix, pe)
+					if fatalRecoveredParseError(src, pe) {
+						return interp.ExitStatus(2)
+					}
+					newCursor := advancePastLine(src, int(pe.Pos.Line()))
+					if newCursor <= cursor {
+						return interp.ExitStatus(2)
+					}
+					cursor = newCursor
+					r.SetLastExitStatus(1)
+					runErr = interp.ExitStatus(2)
+					restart = true
+					break
 				}
-				return interp.ExitStatus(2)
+				return err
 			}
-			return err
 		}
+		if restart {
+			continue
+		}
+		return runErr
 	}
 	return runErr
 }
@@ -1394,7 +1420,11 @@ func paddedChunk(src []byte, start, end int) []byte {
 }
 
 func fatalRecoveredParseError(src []byte, pe syntax.ParseError) bool {
-	return commandSubstOpenBefore(src, pe.Pos)
+	if commandSubstOpenBefore(src, pe.Pos) {
+		return true
+	}
+	return bytes.Contains(src, []byte("$(")) &&
+		rewriteParserErrorText(string(src), pe) == "unexpected EOF while looking for matching `)'"
 }
 
 func commandSubstOpenBefore(src []byte, pos syntax.Pos) bool {

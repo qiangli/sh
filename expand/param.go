@@ -551,7 +551,7 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 		case Indexed:
 			indexAllElements = true
 			callVarInd = false
-			elems = cfg.sliceElems(pe, vr.List, name == "@" || name == "*")
+			elems = cfg.sliceElems(pe, vr.IndexedValues(), name == "@" || name == "*")
 			str = strings.Join(elems, " ")
 		case Associative:
 			indexAllElements = true
@@ -605,10 +605,8 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			strs = cfg.namesByPrefix(pe.Param.Value)
 			sortStrs = true
 		case pe.Index != nil && vr.Kind == Indexed:
-			for i, e := range vr.List {
-				if e != "" {
-					strs = append(strs, strconv.Itoa(i))
-				}
+			for _, i := range vr.IndexedIndexes() {
+				strs = append(strs, strconv.Itoa(i))
 			}
 			sortStrs = true
 		case pe.Index != nil && vr.Kind == Associative:
@@ -1004,14 +1002,13 @@ func (cfg *Config) paramAtK(vr Variable, name string) string {
 	switch vr.Kind {
 	case Indexed:
 		var parts []string
-		for i, v := range vr.List {
-			if v != "" {
-				quoted, err := syntax.Quote(v, syntax.LangBash)
-				if err != nil {
-					quoted = v
-				}
-				parts = append(parts, strconv.Itoa(i)+" "+quoted)
+		for _, i := range vr.IndexedIndexes() {
+			v := vr.List[i]
+			quoted, err := syntax.Quote(v, syntax.LangBash)
+			if err != nil {
+				quoted = v
 			}
+			parts = append(parts, strconv.Itoa(i)+" "+quoted)
 		}
 		return strings.Join(parts, " ")
 	case Associative:
@@ -1171,7 +1168,7 @@ func (cfg *Config) varInd(vr Variable, idx syntax.ArithmExpr) (string, error) {
 	case Indexed:
 		switch nodeLit(idx) {
 		case "*", "@":
-			return strings.Join(vr.List, " "), nil
+			return strings.Join(vr.IndexedValues(), " "), nil
 		}
 		i, err := Arithm(cfg, idx)
 		if err != nil {
@@ -1180,7 +1177,7 @@ func (cfg *Config) varInd(vr Variable, idx syntax.ArithmExpr) (string, error) {
 		if i < 0 {
 			return "", fmt.Errorf("negative array index")
 		}
-		if i < len(vr.List) {
+		if vr.IndexedSet(i) {
 			return vr.List[i], nil
 		}
 	case Associative:

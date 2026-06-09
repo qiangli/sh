@@ -430,7 +430,7 @@ func (cfg *Config) getAritLvalue(lval arithLvalue) (int64, error) {
 	vr := cfg.Env.Get(lval.name)
 	switch vr.Kind {
 	case Indexed:
-		if lval.indexValue < len(vr.List) {
+		if vr.IndexedSet(lval.indexValue) {
 			return atoi(vr.List[lval.indexValue]), nil
 		}
 	case String, NameRef:
@@ -475,13 +475,22 @@ func (cfg *Config) setAritLvalue(lval arithLvalue, val int64) error {
 	vr := cfg.Env.Get(lval.name)
 	if vr.Kind == String && vr.Str != "" {
 		vr.List = []string{vr.Str}
+		vr.ListSet = nil
 	}
 	vr.Kind = Indexed
 	vr.Set = true
+	listSet := vr.CloneListSet()
 	if lval.indexValue >= len(vr.List) {
+		if listSet == nil {
+			listSet = vr.DenseListSet()
+		}
 		vr.List = append(vr.List, make([]string, lval.indexValue-len(vr.List)+1)...)
 	}
 	vr.List[lval.indexValue] = strconv.FormatInt(val, 10)
+	if listSet != nil {
+		listSet[lval.indexValue] = true
+		vr.ListSet = listSet
+	}
 	return wenv.Set(lval.name, vr)
 }
 

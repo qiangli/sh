@@ -27,7 +27,7 @@ Variable objects include:
 - `flags`: Bash-style declaration flags, or `-` when none are set.
 - `set`: whether the variable has a value.
 - `exported`, `readonly`, `integer`, `local`, `uppercase`, `lowercase`, `capitalized`: attribute booleans.
-- `value`: string or nameref target for scalar-like variables, array for indexed variables, object for associative variables.
+- `value`: string or nameref target for scalar-like variables, object keyed by numeric index strings for indexed variables, object keyed by array key for associative variables.
 
 ## `declare --json -F [name ...]`
 

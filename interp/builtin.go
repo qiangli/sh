@@ -243,13 +243,15 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				switch vr.Kind {
 				case expand.Indexed:
 					r.outf("%s=(", name)
-					for i, v := range vr.List {
-						if i > 0 {
+					first := true
+					for _, i := range vr.IndexedIndexes() {
+						if !first {
 							r.out(" ")
 						}
-						r.outf("[%d]=%s", i, bashSetQuote(v))
+						first = false
+						r.outf("[%d]=%s", i, bashSetQuote(vr.List[i]))
 					}
-					if len(vr.List) > 0 {
+					if !first {
 						r.out(" ")
 					}
 					r.out(")\n")

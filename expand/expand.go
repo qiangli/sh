@@ -277,6 +277,10 @@ func (cfg *Config) envSet(name, value string) error {
 		} else {
 			vr.List[0] = value
 		}
+		if vr.ListSet != nil {
+			vr.ListSet = vr.CloneListSet()
+			vr.ListSet[0] = true
+		}
 	case Associative:
 		// Associative arrays without an explicit key fall back to
 		// the bash-3-style "key 0" slot, which is what bash does
@@ -3017,11 +3021,9 @@ func (cfg *Config) quotedElemFields(pe *syntax.ParamExp) []string {
 			}
 			switch vr.Kind {
 			case Indexed:
-				keys := make([]string, 0, len(vr.List))
-				for key, elem := range vr.List {
-					if elem != "" {
-						keys = append(keys, strconv.Itoa(key))
-					}
+				keys := make([]string, 0, vr.IndexedCount())
+				for _, key := range vr.IndexedIndexes() {
+					keys = append(keys, strconv.Itoa(key))
 				}
 				return keys
 			case Associative:
@@ -3048,7 +3050,7 @@ func (cfg *Config) quotedElemFields(pe *syntax.ParamExp) []string {
 		vr := cfg.Env.Get(name)
 		switch vr.Kind {
 		case Indexed:
-			return cfg.sliceElems(pe, vr.List, false)
+			return cfg.sliceElems(pe, vr.IndexedValues(), false)
 		case Associative:
 			return slices.Collect(maps.Values(vr.Map))
 		case Unknown:
@@ -3060,7 +3062,7 @@ func (cfg *Config) quotedElemFields(pe *syntax.ParamExp) []string {
 		}
 	case "*": // "${name[*]}"
 		if vr := cfg.Env.Get(name); vr.Kind == Indexed {
-			return []string{cfg.ifsJoin(cfg.sliceElems(pe, vr.List, false))}
+			return []string{cfg.ifsJoin(cfg.sliceElems(pe, vr.IndexedValues(), false))}
 		}
 	}
 	return nil
@@ -3079,7 +3081,7 @@ func (cfg *Config) quotedAllElemValues(pe *syntax.ParamExp) []string {
 			vr := cfg.Env.Get(name)
 			switch vr.Kind {
 			case Indexed:
-				return cfg.sliceElems(pe, vr.List, false)
+				return cfg.sliceElems(pe, vr.IndexedValues(), false)
 			case Associative:
 				keys := AssocKeysInBashOrder(vr.Map)
 				elems := make([]string, len(keys))
@@ -3090,7 +3092,7 @@ func (cfg *Config) quotedAllElemValues(pe *syntax.ParamExp) []string {
 			}
 		case "*":
 			if vr := cfg.Env.Get(name); vr.Kind == Indexed {
-				return []string{cfg.ifsJoin(cfg.sliceElems(pe, vr.List, false))}
+				return []string{cfg.ifsJoin(cfg.sliceElems(pe, vr.IndexedValues(), false))}
 			}
 		}
 	}
