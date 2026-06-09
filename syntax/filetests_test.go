@@ -1492,6 +1492,20 @@ var fileTests = []fileTestCase{
 	),
 	fileTest(
 		[]string{
+			"foo <<EOF\nbar\nEOF",
+			"foo <<EOF\nbar\nEO\\\nF\n",
+		},
+		langFile(&Stmt{
+			Cmd: litCall("foo"),
+			Redirs: []*Redirect{{
+				Op:   Hdoc,
+				Word: litWord("EOF"),
+				Hdoc: litWord("bar\n"),
+			}},
+		}),
+	),
+	fileTest(
+		[]string{
 			"foo <<'EOF'\nbar\\\nEOF",
 			"foo <<'EOF'\nbar\\\r\nEOF",
 			"foo <<'EOF'\nbar\\\r\nEOF\r\n",

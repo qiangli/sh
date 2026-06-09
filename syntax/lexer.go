@@ -1298,7 +1298,36 @@ func (p *Parser) advanceLitHdoc(r rune) {
 	stop := p.hdocStops[len(p.hdocStops)-1]
 	for ; ; r = p.rune() {
 		switch r {
-		case escNewl, '$':
+		case escNewl:
+			if !p.parsingDoc && lStart >= 0 {
+				prefix := append([]byte(nil), p.litBs[lStart:]...)
+				i := int(p.bsp)
+				for p.quote == hdocBodyTabs && i < len(p.bs) && p.bs[i] == '\t' {
+					i++
+				}
+				j := i
+				for j < len(p.bs) && p.bs[j] != '\n' {
+					j++
+				}
+				if j < len(p.bs) {
+					line := append(prefix, p.bs[i:j]...)
+					if bytes.Equal(line, stop) {
+						for int(p.bsp) <= j {
+							r = p.rune()
+						}
+						p.tok = _LitWord
+						p.val = p.endLit()[:lStart]
+						if p.val == "" {
+							p.tok = _Newl
+						}
+						p.hdocStops[len(p.hdocStops)-1] = nil
+						return
+					}
+				}
+			}
+			p.val = p.endLit()
+			return
+		case '$':
 			p.val = p.endLit()
 			return
 		case '\\': // escaped byte follows
