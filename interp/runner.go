@@ -4592,6 +4592,13 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			if valType == "-i" || slices.Contains(modes, "-i") {
 				vr.Integer = true
 			}
+			if as.Naked && (slices.Contains(modes, "+a") || slices.Contains(modes, "+A")) &&
+				(vr.Kind == expand.Indexed || vr.Kind == expand.Associative) {
+				r.errf("%sdeclare: %s: cannot destroy array variables in this way\n",
+					r.bashErrPrefix(r.curStmtPos), name)
+				r.exit.code = 1
+				continue
+			}
 			if as.Naked {
 				switch valType {
 				case "-A":

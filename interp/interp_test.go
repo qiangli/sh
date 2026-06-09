@@ -3371,6 +3371,10 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 		"a: four: must use subscript when assigning associative array\ndeclare -A a=([one]=\"1\" [zero]=\"0\" )\n #JUSTERR",
 	},
 	{
+		`declare -A a; declare +A a; declare -a b; declare +a b`,
+		"declare: a: cannot destroy array variables in this way\ndeclare: b: cannot destroy array variables in this way\nexit status 1 #JUSTERR",
+	},
+	{
 		`declare -A a=([0]=zero [x]=ex); echo "$a"; echo "${a:1:2}"`,
 		"zero\ner\n",
 	},
