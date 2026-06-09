@@ -2959,7 +2959,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		switch {
 		case len(args) == 0:
 			if len(r.bgProcs) == 0 {
-				return failf(1, "fg: no current job\n")
+				return failf(1, "fg: no job control\n")
 			}
 			bg = r.bgProcs[len(r.bgProcs)-1]
 		case strings.HasPrefix(args[0], "%"):
@@ -3010,7 +3010,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		// In this interpreter, background jobs are already running.
 		// bg is effectively a no-op since we don't support job stopping (SIGTSTP).
 		if len(r.bgProcs) == 0 {
-			return failf(1, "bg: no current job\n")
+			return failf(1, "bg: no job control\n")
 		}
 	case "fc":
 		// Stub: fc requires history infrastructure.
