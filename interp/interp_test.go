@@ -4259,6 +4259,10 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 		"mapfile: 42: invalid file descriptor: Bad file descriptor\nexit status 2 #JUSTERR",
 	},
 	{
+		"mapfile ''",
+		"mapfile: empty array variable name\nexit status 1 #JUSTERR",
+	},
+	{
 		"mapfile -t -d b <<EOF\nabc\nEOF\n" + `for x in "${MAPFILE[@]}"; do echo "$x"; done`,
 		"a\nc\n\n",
 	},

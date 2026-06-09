@@ -2827,6 +2827,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		case 0:
 			arrayName = "MAPFILE"
 		case 1:
+			if args[0] == "" {
+				return failf(1, "%s: empty array variable name\n", name)
+			}
 			if !syntax.ValidName(args[0]) {
 				return failf(2, "%s: `%s': not a valid identifier\n", name, args[0])
 			}
