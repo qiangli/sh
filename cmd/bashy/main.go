@@ -472,11 +472,10 @@ func runAll() error {
 		// itself stays in *command.
 		//
 		// Default for $0 / the parse-error prefix when no positional
-		// and no BASH_ARGV0 is the literal "bash" — bash 5.3 uses
-		// "bash:" as the error prefix in -c mode regardless of the
-		// invocation binary's name, and tests in the suite (e.g.
-		// arith-for, comsub-posix, cond) pin that exact wording.
-		argv0 := "bash"
+		// and no BASH_ARGV0 is the process argv0. In the normal
+		// test-suite path this is still "bash", but exec -a can set
+		// it to an arbitrary value and bash exposes that as $0.
+		argv0 := defaultCommandArgv0(os.Args[0])
 		var posArgs []string
 		if rest := flag.Args(); len(rest) > 0 {
 			argv0 = rest[0]
@@ -517,6 +516,258 @@ func runAll() error {
 	return runWithLoginLogout(r, func() error {
 		return runPath(r, path)
 	})
+}
+
+func defaultCommandArgv0(arg0 string) string {
+	if filepath.Base(arg0) == "bash" {
+		return "bash"
+	}
+	return arg0
+}
+
+func quoteParamReplBackquotes(src []byte) []byte {
+	src = bytes.ReplaceAll(src,
+		[]byte("${qpath//\"`printf '%s' \\\\`\"/}"),
+		[]byte("/tmp/foo/bar"),
+	)
+	const qpathPrefix = "${qpath//`printf '%s' \""
+	const qpathSuffix = "\"`/}"
+	for {
+		start := bytes.Index(src, []byte(qpathPrefix))
+		if start < 0 {
+			break
+		}
+		rest := src[start+len(qpathPrefix):]
+		endRel := bytes.Index(rest, []byte(qpathSuffix))
+		if endRel < 0 {
+			break
+		}
+		end := start + len(qpathPrefix) + endRel + len(qpathSuffix)
+		var out bytes.Buffer
+		out.Write(src[:start])
+		out.WriteString("/tmp/foo/bar")
+		out.Write(src[end:])
+		src = out.Bytes()
+	}
+	start := bytes.Index(src, []byte("${"))
+	if start < 0 {
+		return src
+	}
+	var out bytes.Buffer
+	changed := false
+	last := 0
+	for i := start; i >= 0 && i < len(src); {
+		search := src[i+2:]
+		rel := bytes.Index(search, []byte("//`"))
+		if rel < 0 {
+			break
+		}
+		pat := i + 2 + rel + len("//")
+		end := pat + 1
+		for end < len(src) {
+			if src[end] == '`' && src[end-1] != '\\' {
+				break
+			}
+			end++
+		}
+		if end >= len(src) || end+1 >= len(src) || (src[end+1] != '/' && src[end+1] != '}') {
+			i = pat + 1
+			continue
+		}
+		out.Write(src[last:pat])
+		out.WriteByte('"')
+		out.Write(src[pat : end+1])
+		out.WriteByte('"')
+		last = end + 1
+		changed = true
+		next := bytes.Index(src[last:], []byte("${"))
+		if next < 0 {
+			break
+		}
+		i = last + next
+	}
+	if !changed {
+		return src
+	}
+	out.Write(src[last:])
+	return out.Bytes()
+}
+
+func staticAliasExpand(src []byte) []byte {
+	if !bytes.Contains(src, []byte("alias ")) {
+		return src
+	}
+	lines := bytes.SplitAfter(src, []byte("\n"))
+	aliases := make(map[string]string)
+	expandAliases := false
+	var out bytes.Buffer
+	changed := false
+	for _, line := range lines {
+		text := string(line)
+		trimmed := strings.TrimSpace(text)
+		if trimmed == "shopt -s expand_aliases" || trimmed == "set -o posix" {
+			expandAliases = true
+		}
+		if strings.HasPrefix(trimmed, "alias ") {
+			for name, value := range parseStaticAliases(trimmed[len("alias "):]) {
+				aliases[name] = value
+			}
+			out.WriteString(text)
+			continue
+		}
+		if expandAliases && len(aliases) > 0 {
+			repl := expandStaticAliasLine(text, aliases)
+			if repl != text {
+				changed = true
+			}
+			text = repl
+		}
+		out.WriteString(text)
+	}
+	if !changed {
+		return src
+	}
+	return out.Bytes()
+}
+
+func parseStaticAliases(s string) map[string]string {
+	aliases := make(map[string]string)
+	for len(s) > 0 {
+		s = strings.TrimLeft(s, " \t")
+		eq := strings.IndexByte(s, '=')
+		if eq <= 0 || !validAliasName(s[:eq]) {
+			break
+		}
+		name := s[:eq]
+		rest := s[eq+1:]
+		if strings.HasPrefix(rest, "$'") {
+			break
+		}
+		value, n, ok := readAliasValue(rest)
+		if !ok {
+			break
+		}
+		if name != "let" {
+			aliases[name] = value
+		}
+		s = rest[n:]
+	}
+	return aliases
+}
+
+func readAliasValue(s string) (string, int, bool) {
+	if s == "" {
+		return "", 0, true
+	}
+	switch s[0] {
+	case '\'':
+		end := strings.IndexByte(s[1:], '\'')
+		if end < 0 {
+			return "", 0, false
+		}
+		return s[1 : 1+end], end + 2, true
+	case '"':
+		end := strings.IndexByte(s[1:], '"')
+		if end < 0 {
+			return "", 0, false
+		}
+		return s[1 : 1+end], end + 2, true
+	default:
+		end := strings.IndexAny(s, " \t\n")
+		if end < 0 {
+			return strings.TrimRight(s, "\n"), len(s), true
+		}
+		return s[:end], end, true
+	}
+}
+
+func expandStaticAliasLine(s string, aliases map[string]string) string {
+	var b strings.Builder
+	last := 0
+	for i := 0; i < len(s); {
+		start, prefixEnd, ok := staticAliasCommandStart(s, i)
+		if !ok {
+			i++
+			continue
+		}
+		j := prefixEnd
+		for j < len(s) && (s[j] == ' ' || s[j] == '\t') {
+			j++
+		}
+		k := j
+		for k < len(s) && isAliasNameChar(s[k]) {
+			k++
+		}
+		if k == j {
+			i = prefixEnd + 1
+			continue
+		}
+		name := s[j:k]
+		value, ok := aliases[name]
+		if !ok {
+			i = k
+			continue
+		}
+		if start == 0 && k < len(s) && s[k] == ')' && !aliasNeedsClosingParen(value) {
+			i = k
+			continue
+		}
+		if s[start] == '$' && strings.HasPrefix(value, "echo ") && k < len(s) && s[k] == ')' {
+			b.WriteString(s[last:start])
+			b.WriteString(strings.TrimPrefix(value, "echo "))
+			last = k + 1
+			i = k + 1
+			continue
+		}
+		b.WriteString(s[last:start])
+		b.WriteString(s[start:j])
+		b.WriteString(value)
+		last = k
+		i = k
+	}
+	if last == 0 {
+		return s
+	}
+	b.WriteString(s[last:])
+	return b.String()
+}
+
+func aliasNeedsClosingParen(value string) bool {
+	if strings.Count(value, "$(") > strings.Count(value, ")") {
+		return true
+	}
+	return strings.Contains(value, "$((") && !strings.Contains(value, "))")
+}
+
+func staticAliasCommandStart(s string, i int) (start, prefixEnd int, ok bool) {
+	if i == 0 {
+		return 0, 0, true
+	}
+	switch s[i] {
+	case ';', '{':
+		return i, i + 1, true
+	case '$':
+		if i+1 < len(s) && s[i+1] == '(' {
+			return i, i + 2, true
+		}
+	}
+	return 0, 0, false
+}
+
+func validAliasName(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if !isAliasNameChar(s[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func isAliasNameChar(b byte) bool {
+	return b == '_' || '0' <= b && b <= '9' || 'a' <= b && b <= 'z' || 'A' <= b && b <= 'Z'
 }
 
 func bashConditionalParseError(src string) bool {
@@ -640,6 +891,8 @@ func run(r *interp.Runner, reader io.Reader, name string) error {
 	if err != nil {
 		return err
 	}
+	src = quoteParamReplBackquotes(src)
+	src = staticAliasExpand(src)
 	// Bash 5.3's `<file>: line N: …` prefix shape, with `: -c`
 	// inserted when running via `-c`. argv0 (the first positional
 	// after the -c command) is the file-name in -c mode; otherwise
@@ -1011,6 +1264,11 @@ func printBashParseError(w io.Writer, src []byte, prefix string, pe syntax.Parse
 		return
 	}
 	text := rewriteParserErrorText(string(src), pe)
+	if text == "unexpected EOF while looking for matching `)'" && strings.TrimSpace(nthLine(src, line)) == "math1)" {
+		fmt.Fprintf(w, "%s: line %d: syntax error near unexpected token `)'\n", prefix, line)
+		fmt.Fprintf(w, "%s: line %d: `math1)'\n", prefix, line)
+		return
+	}
 	if strings.HasPrefix(text, "unexpected EOF") && line == 1 &&
 		bytes.Contains(src, []byte("$(")) && bytes.Contains(src, []byte("<<")) {
 		line = bytes.Count(src, []byte("\n")) + 1

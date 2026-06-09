@@ -1127,6 +1127,8 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 	case "enable":
 		fp := flagParser{remaining: args}
 		disable := false
+		deleteDynamic := false
+		loadDynamic := false
 		listAll := false
 		showAll := false
 		specialOnly := false
@@ -1149,11 +1151,15 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				// with `-p`/`-n`/`-a` for that subset.
 				specialOnly = true
 				listAll = true
-			case "-f", "-d":
-				// `-f` loads/unloads dynamic builtins (not
-				// supported), `-d` deletes them. Accept the
-				// flag silently to avoid breaking scripts.
-				fp.value() // consume filename if -f
+			case "-f":
+				// `-f` loads dynamic builtins, which are not
+				// supported. Accept the flag and consume its
+				// filename argument to avoid breaking scripts.
+				fp.value()
+				loadDynamic = true
+			case "-d":
+				// `-d` deletes a dynamically-loaded builtin.
+				deleteDynamic = true
 			default:
 				return failf(2, "enable: %s: invalid option\n", flag)
 			}
@@ -1204,6 +1210,25 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				r.errf(r.bashErrPrefix(pos)+"enable: %s: not a shell builtin\n", name)
 				exit.code = 1
 				continue
+			}
+			if deleteDynamic {
+				if r.dynamicBuiltins[name] {
+					delete(r.dynamicBuiltins, name)
+					if r.disabledBuiltins == nil {
+						r.disabledBuiltins = make(map[string]bool)
+					}
+					r.disabledBuiltins[name] = true
+					continue
+				}
+				r.errf(r.bashErrPrefix(pos)+"enable: %s: not dynamically loaded\n", name)
+				exit.code = 1
+				continue
+			}
+			if loadDynamic {
+				if r.dynamicBuiltins == nil {
+					r.dynamicBuiltins = make(map[string]bool)
+				}
+				r.dynamicBuiltins[name] = true
 			}
 			if disable {
 				if r.disabledBuiltins == nil {
@@ -1490,6 +1515,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		// but in practice it would kill the entire Go process
 		// and it's not available on Windows.
 		var argv0 string
+		clearEnv := false
 		loginShell := false
 		fp := flagParser{remaining: args}
 		for fp.more() {
@@ -1501,8 +1527,8 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				}
 			case "-c":
 				// bash 5.3 `-c` clears the environment for the
-				// exec'd command. Accept but don't implement —
-				// `exec` is a no-op replace here anyway.
+				// exec'd command.
+				clearEnv = true
 			case "-l":
 				// bash 5.3 `-l` makes the exec'd shell act as a
 				// login shell by prefixing argv[0] with `-`.
@@ -1527,7 +1553,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			}
 		}
 		r.exit.exiting = true
-		r.execAs(ctx, pos, argv0, args)
+		r.execAs(ctx, pos, argv0, clearEnv, args)
 		exit = r.exit
 	case "command":
 		showV := false  // -v: name or path
@@ -2380,7 +2406,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 	case "alias":
 		show := func(name string, als alias) {
 			var buf bytes.Buffer
-			if len(als.args) > 0 {
+			if als.raw != "" {
+				buf.WriteString(als.raw)
+			} else if len(als.args) > 0 {
 				printer := syntax.NewPrinter()
 				printer.Print(&buf, &syntax.CallExpr{
 					Args: als.args,
@@ -2472,7 +2500,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					words = append(words, w)
 				}
 				if werr != nil {
-					r.errf(r.bashErrPrefix(pos)+"alias: could not parse %q: %v\n", src, werr)
+					als.raw = src
+					if r.alias == nil {
+						r.alias = make(map[string]alias)
+					}
+					r.alias[name] = als
 					continue argsLoop
 				}
 				als.args = words

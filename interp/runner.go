@@ -3594,6 +3594,9 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			if !ok {
 				break
 			}
+			if als.raw != "" {
+				break
+			}
 			seenAliases[name] = true
 			// Multi-stmt alias (`alias foo=$'echo a\necho b'`):
 			// execute the parsed file in place of the surrounding
@@ -4093,7 +4096,13 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		r.exit.oneIf(r.arithm(cm.X) == 0)
 	case *syntax.LetClause:
 		var val int
-		for _, expr := range cm.Exprs {
+		exprs := cm.Exprs
+		if len(exprs) > 0 {
+			if w, ok := exprs[0].(*syntax.Word); ok && r.literal(w) == "--" {
+				exprs = exprs[1:]
+			}
+		}
+		for _, expr := range exprs {
 			val = r.letArithm(expr)
 
 			if !tracingEnabled {
@@ -5763,14 +5772,14 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 }
 
 func (r *Runner) exec(ctx context.Context, pos syntax.Pos, args []string) {
-	r.execAs(ctx, pos, "", args)
+	r.execAs(ctx, pos, "", false, args)
 }
 
 // execAs is like exec but advertises argv0 to the exec handler via
 // [HandlerContext.ExecAs], so handlers can launch the spawned process
 // under a different argv[0] (the "exec -a NAME CMD" form in bash).
 // An empty argv0 means no override.
-func (r *Runner) execAs(ctx context.Context, pos syntax.Pos, argv0 string, args []string) {
+func (r *Runner) execAs(ctx context.Context, pos syntax.Pos, argv0 string, clearEnv bool, args []string) {
 	hashed := false
 	if len(args) > 0 {
 		if entry, ok := r.cmdHashTable[args[0]]; ok {
@@ -5795,6 +5804,11 @@ func (r *Runner) execAs(ctx context.Context, pos syntax.Pos, argv0 string, args 
 	if argv0 != "" {
 		hc := HandlerCtx(hctx)
 		hc.ExecAs = argv0
+		hctx = context.WithValue(hctx, handlerCtxKey{}, hc)
+	}
+	if clearEnv {
+		hc := HandlerCtx(hctx)
+		hc.ExecClearEnv = true
 		hctx = context.WithValue(hctx, handlerCtxKey{}, hc)
 	}
 	// Audit hook fires before exec, after all resolution and

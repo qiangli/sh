@@ -4167,12 +4167,32 @@ var runTestsUnix = []runTest{
 		"renamed\n",
 	},
 	{
+		`FOO=BAR; export FOO; exec -c /bin/sh -c 'printf "%s\n" "${FOO-unset}"'; echo unreached`,
+		"unset\n",
+	},
+	{
 		`exec -a`,
 		"exec: -a: option requires an argument\nexit status 2 #JUSTERR",
 	},
 	{
 		`exec -a foo`,
 		"exec: -a requires a command to execute\nexit status 2 #JUSTERR",
+	},
+	{
+		`enable -d notbuiltin`,
+		"enable: notbuiltin: not a shell builtin\nexit status 1 #JUSTERR",
+	},
+	{
+		`enable -d test`,
+		"enable: test: not dynamically loaded\nexit status 1 #JUSTERR",
+	},
+	{
+		`enable -f ./strmatch.so strmatch; enable -d strmatch`,
+		"",
+	},
+	{
+		`shopt -s expand_aliases; alias let='let --'; let '1 == 1'`,
+		"",
 	},
 	{
 		`exec -z echo hi`,

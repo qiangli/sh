@@ -82,6 +82,10 @@ type HandlerContext struct {
 	// [DefaultExecHandler] honours this field; custom handlers may
 	// ignore it.
 	ExecAs string
+
+	// ExecClearEnv is set for "exec -c", requesting that the spawned
+	// process starts with an empty environment.
+	ExecClearEnv bool
 }
 
 // CallHandlerFunc is a handler which runs on every [syntax.CallExpr].
@@ -150,7 +154,12 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 			cmdArgs = append([]string{hc.ExecAs}, args[1:]...)
 		}
 		extraFiles, inheritedFds := hc.runner.execExtraFiles()
-		env := hc.runner.execEnvWithFuncs()
+		var env []string
+		if hc.ExecClearEnv {
+			env = []string{}
+		} else {
+			env = hc.runner.execEnvWithFuncs()
+		}
 		if inheritedFds != "" {
 			env = append(env, BashyInheritedFdsEnv+"="+inheritedFds)
 		}

@@ -282,6 +282,10 @@ type Runner struct {
 	// disabledBuiltins tracks builtins disabled via "enable -n".
 	disabledBuiltins map[string]bool
 
+	// dynamicBuiltins tracks fake dynamically-loaded builtins accepted
+	// via "enable -f" for Bash compatibility tests.
+	dynamicBuiltins map[string]bool
+
 	// completionSpecs stores programmable-completion specs registered
 	// via the complete builtin.
 	completionSpecs map[string]completionSpec
@@ -539,6 +543,9 @@ func publishBgPid(ctx context.Context, pid int) {
 }
 
 type alias struct {
+	// raw is set for bodies Bash accepts as text even though they are
+	// not standalone parseable shell words.
+	raw string
 	// args is set for the common "simple call" alias case
 	// (`alias l='ls -la'`); inlined into the surrounding CallExpr's
 	// arg list at expansion time.

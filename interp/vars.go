@@ -914,7 +914,9 @@ func hasNonPrintable(s string) bool {
 // space when the original definition ended in whitespace.
 func aliasValue(als alias) string {
 	var buf strings.Builder
-	if len(als.args) > 0 {
+	if als.raw != "" {
+		buf.WriteString(als.raw)
+	} else if len(als.args) > 0 {
 		syntax.NewPrinter().Print(&buf, &syntax.CallExpr{Args: als.args})
 	}
 	if als.blank {

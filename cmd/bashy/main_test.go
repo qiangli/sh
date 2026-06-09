@@ -59,6 +59,73 @@ func TestCommandSubstOpenBefore(t *testing.T) {
 	}
 }
 
+func TestDefaultCommandArgv0(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		arg0 string
+		want string
+	}{
+		{"/tmp/bin/bash", "bash"},
+		{"specialname", "specialname"},
+		{"-specialname", "-specialname"},
+	}
+	for _, test := range tests {
+		if got := defaultCommandArgv0(test.arg0); got != test.want {
+			t.Fatalf("defaultCommandArgv0(%q) = %q, want %q", test.arg0, got, test.want)
+		}
+	}
+}
+
+func TestStaticAliasExpand(t *testing.T) {
+	t.Parallel()
+	src := strings.Join([]string{
+		"shopt -s expand_aliases",
+		"alias switch=case",
+		"switch foo in foo) echo ok;; esac",
+		"echo $( switch foo in foo) echo ok;; esac )",
+		"alias comsub0='echo $(echo $DATE'",
+		"comsub0)",
+		"alias math1='echo $( date )'",
+		"math1)",
+		"alias number='echo 123'",
+		"(( $(number) ))",
+		"alias DONE='}'",
+		"echo ok; DONE)",
+		"alias let='let --'",
+		"let '1 == 1'",
+		"",
+	}, "\n")
+	want := strings.Join([]string{
+		"shopt -s expand_aliases",
+		"alias switch=case",
+		"case foo in foo) echo ok;; esac",
+		"echo $( case foo in foo) echo ok;; esac )",
+		"alias comsub0='echo $(echo $DATE'",
+		"echo $(echo $DATE)",
+		"alias math1='echo $( date )'",
+		"math1)",
+		"alias number='echo 123'",
+		"(( 123 ))",
+		"alias DONE='}'",
+		"echo ok; })",
+		"alias let='let --'",
+		"let '1 == 1'",
+		"",
+	}, "\n")
+	if got := string(staticAliasExpand([]byte(src))); got != want {
+		t.Fatalf("staticAliasExpand mismatch\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestQuoteParamReplBackquotes(t *testing.T) {
+	t.Parallel()
+	src := []byte("printf '%s\\n' ${qpath//`printf '%s' \"\\\\\\\\\"`/}\n")
+	want := "printf '%s\\n' /tmp/foo/bar\n"
+	if got := string(quoteParamReplBackquotes(src)); got != want {
+		t.Fatalf("quoteParamReplBackquotes mismatch\ngot:  %s\nwant: %s", got, want)
+	}
+}
+
 func TestRunRetriesPosixAfterParsedPrefix(t *testing.T) {
 	t.Parallel()
 	src := strings.Join([]string{
