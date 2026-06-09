@@ -499,6 +499,20 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 		name, vr = n, v
 	}
 	if cfg.NoUnset && !vr.IsSet() && !overridingUnset(pe) {
+		if pe.Index != nil && vr.Kind == Indexed {
+			idxText := nodeLit(pe.Index)
+			if idxText == "" {
+				if i, err := Arithm(cfg, pe.Index); err == nil {
+					idxText = strconv.Itoa(i)
+				}
+			}
+			if idxText != "" {
+				return "", UnsetParameterError{
+					Name:    fmt.Sprintf("%s[%s]", name, idxText),
+					Message: "unbound variable",
+				}
+			}
+		}
 		return "", UnsetParameterError{
 			Node:    pe,
 			Message: "unbound variable",
@@ -1190,6 +1204,16 @@ func (cfg *Config) varInd(vr Variable, idx syntax.ArithmExpr) (string, error) {
 		}
 		if vr.IndexedSet(i) {
 			return vr.List[i], nil
+		}
+		if cfg.NoUnset {
+			idxText := nodeLit(idx)
+			if idxText == "" {
+				idxText = strconv.Itoa(i)
+			}
+			return "", UnsetParameterError{
+				Name:    fmt.Sprintf("%s[%s]", cfg.curParam.Param.Value, idxText),
+				Message: "unbound variable",
+			}
 		}
 	case Associative:
 		switch lit := nodeLit(idx); lit {

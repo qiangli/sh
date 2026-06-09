@@ -2742,6 +2742,10 @@ var runTests = []runTest{
 	// 	"bar\nfoo: unbound variable\nexit status 1 #JUSTERR",
 	// },
 	{
+		"set -u; foo=(bar); echo ${foo[3]}",
+		"foo[3]: unbound variable\nexit status 1 #JUSTERR",
+	},
+	{
 		"set -u; foo=(''); echo ${foo[0]}",
 		"\n",
 	},
