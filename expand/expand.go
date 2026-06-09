@@ -286,8 +286,8 @@ func (cfg *Config) envSet(name, value string) error {
 	return wenv.Set(name, vr)
 }
 
-// literalKeepAnsiC is like [Literal] but leaves `$'…'` ANSI-C
-// quoting literal (no decoding). Used by the parameter-expansion
+// literalKeepAnsiC is like [LiteralWithQuoteRemoval] but leaves `$'…'`
+// ANSI-C quoting literal (no decoding). Used by the parameter-expansion
 // default-value path inside heredoc bodies — bash 5.3 preserves
 // `$'\01'` as five literal characters in that position.
 func literalKeepAnsiC(cfg *Config, word *syntax.Word) (string, error) {
@@ -297,7 +297,12 @@ func literalKeepAnsiC(cfg *Config, word *syntax.Word) (string, error) {
 	cfg = prepareConfig(cfg)
 	prev := cfg.literalAnsiC
 	cfg.literalAnsiC = true
-	defer func() { cfg.literalAnsiC = prev }()
+	prevS := cfg.stripBackslashEscapes
+	cfg.stripBackslashEscapes = true
+	defer func() {
+		cfg.literalAnsiC = prev
+		cfg.stripBackslashEscapes = prevS
+	}()
 	field, err := cfg.wordField(word.Parts, quoteNone)
 	if err != nil {
 		return "", err

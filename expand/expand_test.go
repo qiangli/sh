@@ -79,6 +79,27 @@ func TestConfigNils(t *testing.T) {
 	}
 }
 
+func TestDocumentParamExpDefaultQuoteRemoval(t *testing.T) {
+	cfg := &Config{Env: ListEnviron("P=A")}
+	word := parseWord(t, `${P+\"$P\"}`)
+	got, err := Document(cfg, word)
+	if err != nil {
+		t.Fatalf("did not want error, got %v", err)
+	}
+	if want := `"A"`; got != want {
+		t.Fatalf("wanted %q, got %q", want, got)
+	}
+
+	word = parseWord(t, `${P+$'A\n'}`)
+	got, err = Document(cfg, word)
+	if err != nil {
+		t.Fatalf("did not want error, got %v", err)
+	}
+	if want := `$'A\n'`; got != want {
+		t.Fatalf("wanted %q, got %q", want, got)
+	}
+}
+
 func TestFieldsIdempotency(t *testing.T) {
 	tests := []struct {
 		src  string
