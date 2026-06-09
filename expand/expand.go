@@ -416,6 +416,9 @@ func RegexPattern(cfg *Config, word *syntax.Word) (string, error) {
 	if word == nil {
 		return "", nil
 	}
+	if lit, ok := regexQuotedBracketLiteral(word); ok {
+		return lit, nil
+	}
 	cfg = prepareConfig(cfg)
 	field, err := cfg.wordField(word.Parts, quoteNone)
 	if err != nil {
@@ -430,6 +433,49 @@ func RegexPattern(cfg *Config, word *syntax.Word) (string, error) {
 		}
 	}
 	return sb.String(), nil
+}
+
+func regexQuotedBracketLiteral(word *syntax.Word) (string, bool) {
+	if len(word.Parts) != 3 {
+		return "", false
+	}
+	left, ok := word.Parts[0].(*syntax.Lit)
+	if !ok || left.Value != "[" {
+		return "", false
+	}
+	right, ok := word.Parts[2].(*syntax.Lit)
+	if !ok || right.Value != "]" {
+		return "", false
+	}
+	var val string
+	switch mid := word.Parts[1].(type) {
+	case *syntax.SglQuoted:
+		if mid.Dollar {
+			return "", false
+		}
+		val = mid.Value
+	case *syntax.DblQuoted:
+		if len(mid.Parts) != 1 {
+			return "", false
+		}
+		lit, ok := mid.Parts[0].(*syntax.Lit)
+		if !ok {
+			return "", false
+		}
+		val = lit.Value
+	default:
+		return "", false
+	}
+	if !strings.Contains(val, "]") || regexBracketSpecialQuotedText(val) {
+		return "", false
+	}
+	return regexp.QuoteMeta(val), true
+}
+
+func regexBracketSpecialQuotedText(s string) bool {
+	return (strings.HasPrefix(s, "[=") && strings.HasSuffix(s, "=]")) ||
+		(strings.HasPrefix(s, "[.") && strings.HasSuffix(s, ".]")) ||
+		(strings.HasPrefix(s, "[:") && strings.HasSuffix(s, ":]"))
 }
 
 // Format expands a format string with a number of arguments, following the

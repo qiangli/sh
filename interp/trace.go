@@ -130,3 +130,44 @@ func (t *tracer) call(cmd string, args ...string) {
 		t.stringf("%s %s", cmd, s)
 	}
 }
+
+func (r *Runner) traceTestClause(expr syntax.TestExpr) {
+	trace := r.tracer()
+	if trace == nil {
+		return
+	}
+	r.traceTestExpr(trace, expr)
+}
+
+func (r *Runner) traceTestExpr(trace *tracer, expr syntax.TestExpr) {
+	switch x := expr.(type) {
+	case *syntax.BinaryTest:
+		switch x.Op {
+		case syntax.AndTest, syntax.OrTest:
+			r.traceTestExpr(trace, x.X)
+			r.traceTestExpr(trace, x.Y)
+			return
+		}
+	}
+	trace.string("[[ ")
+	trace.string(r.traceTestExprString(expr))
+	trace.string(" ]]")
+	trace.newLineFlush()
+}
+
+func (r *Runner) traceTestExprString(expr syntax.TestExpr) string {
+	switch x := expr.(type) {
+	case *syntax.Word:
+		return xtraceQuote(r.literal(x))
+	case *syntax.ParenTest:
+		return "( " + r.traceTestExprString(x.X) + " )"
+	case *syntax.UnaryTest:
+		return x.Op.String() + " " + r.traceTestExprString(x.X)
+	case *syntax.BinaryTest:
+		if x.Op == syntax.AndTest || x.Op == syntax.OrTest {
+			return r.traceTestExprString(x.X) + " " + x.Op.String() + " " + r.traceTestExprString(x.Y)
+		}
+		return r.traceTestExprString(x.X) + " " + x.Op.String() + " " + r.traceTestExprString(x.Y)
+	}
+	return ""
+}

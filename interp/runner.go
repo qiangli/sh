@@ -3505,7 +3505,12 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 		}
 	} else if b, ok := st.Cmd.(*syntax.BinaryCmd); ok && (b.Op == syntax.AndStmt || b.Op == syntax.OrStmt) {
 	} else if !r.exit.ok() && !r.noErrExit {
-		r.trapCallback(ctx, r.trapCallbacks["ERR"], "error")
+		if !r.inFunc {
+			prevLineno := r.ecfg.OverrideLineno
+			r.ecfg.OverrideLineno = int(st.Pos().Line())
+			r.trapCallback(ctx, r.trapCallbacks["ERR"], "error")
+			r.ecfg.OverrideLineno = prevLineno
+		}
 		// If the "errexit" option is set and a command failed, exit the shell. Exceptions:
 		//
 		//   conditions (if <cond>, while <cond>, etc)
@@ -3553,7 +3558,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		// $BASH_COMMAND. Capture it now via the printer; the later
 		// setVarString in r.call() will overwrite with the post-
 		// expansion form for the benefit of DEBUG traps.
-		{
+		if !r.handlingTrap {
 			var cmdBuf strings.Builder
 			syntax.NewPrinter().Print(&cmdBuf, cm)
 			r.setVarString("BASH_COMMAND", strings.TrimRight(cmdBuf.String(), "\n"))
@@ -4173,6 +4178,12 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			}
 		}
 	case *syntax.TestClause:
+		{
+			var cmdBuf strings.Builder
+			syntax.NewPrinter(syntax.SingleLine(true)).Print(&cmdBuf, cm)
+			r.setVarString("BASH_COMMAND", strings.TrimRight(cmdBuf.String(), "\n"))
+		}
+		r.traceTestClause(cm.X)
 		r.testIntErr = ""
 		r.testArithErr = ""
 		result := r.bashTest(ctx, cm.X, false)

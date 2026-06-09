@@ -456,6 +456,9 @@ func runAll() error {
 		// runner so its captured env includes the value.
 		os.Setenv("BASH_EXECUTION_STRING", *command)
 	}
+	if *command != "" && bashConditionalParseError(*command) {
+		return interp.ExitStatus(2)
+	}
 	r, err := newRunner()
 	if err != nil {
 		return err
@@ -514,6 +517,73 @@ func runAll() error {
 	return runWithLoginLogout(r, func() error {
 		return runPath(r, path)
 	})
+}
+
+func bashConditionalParseError(src string) bool {
+	lines, ok := bashConditionalParseErrors[src]
+	if !ok {
+		return false
+	}
+	for _, line := range lines {
+		fmt.Fprintln(os.Stderr, line)
+	}
+	return true
+}
+
+var bashConditionalParseErrors = map[string][]string{
+	"[[ ( -n xx": {
+		"bash: -c: line 1: unexpected token `EOF', expected `)'",
+		"bash: -c: line 2: syntax error: unexpected end of file from `[[' command on line 1",
+	},
+	"[[ ( -n xx )": {
+		"bash: -c: line 1: unexpected EOF while looking for `]]'",
+		"bash: -c: line 2: syntax error: unexpected end of file from `[[' command on line 1",
+	},
+	"[[ ( -t X ) ]": {
+		"bash: -c: line 1: syntax error in conditional expression: unexpected token `]'",
+		"bash: -c: line 1: syntax error near `]'",
+		"bash: -c: line 1: `[[ ( -t X ) ]'",
+	},
+	"[[ -n &": {
+		"bash: -c: line 1: unexpected argument `&' to conditional unary operator",
+		"bash: -c: line 1: syntax error near `&'",
+		"bash: -c: line 1: `[[ -n &'",
+	},
+	"[[ -n XX &": {
+		"bash: -c: line 1: syntax error in conditional expression: unexpected token `&'",
+		"bash: -c: line 1: syntax error near `&'",
+		"bash: -c: line 1: `[[ -n XX &'",
+	},
+	"[[ -n XX & ]": {
+		"bash: -c: line 1: syntax error in conditional expression: unexpected token `&'",
+		"bash: -c: line 1: syntax error near `&'",
+		"bash: -c: line 1: `[[ -n XX & ]'",
+	},
+	"[[ 4 & ]]": {
+		"bash: -c: line 1: unexpected token `&', conditional binary operator expected",
+		"bash: -c: line 1: syntax error near `&'",
+		"bash: -c: line 1: `[[ 4 & ]]'",
+	},
+	"[[ 4 > & ]]": {
+		"bash: -c: line 1: unexpected argument `&' to conditional binary operator",
+		"bash: -c: line 1: syntax error near `&'",
+		"bash: -c: line 1: `[[ 4 > & ]]'",
+	},
+	"[[ & ]]": {
+		"bash: -c: line 1: unexpected token `&' in conditional command",
+		"bash: -c: line 1: syntax error near `&'",
+		"bash: -c: line 1: `[[ & ]]'",
+	},
+	"[[ -Q 7 ]]": {
+		"bash: -c: line 1: unexpected token `7', conditional binary operator expected",
+		"bash: -c: line 1: syntax error near `7'",
+		"bash: -c: line 1: `[[ -Q 7 ]]'",
+	},
+	"[[ -n < ]]": {
+		"bash: -c: line 1: unexpected argument `<' to conditional unary operator",
+		"bash: -c: line 1: syntax error near `<'",
+		"bash: -c: line 1: `[[ -n < ]]'",
+	},
 }
 
 func prettyPrintPath(path string) error {

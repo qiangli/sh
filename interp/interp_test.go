@@ -2035,6 +2035,10 @@ var runTests = []runTest{
 		"ok1\nok2\nd g\n",
 	},
 	{
+		`[[ ']' =~ [']'] ]] && echo rb; [[ a =~ ['a]'] ]] || echo no; [[ a] =~ ['a]'] ]] && echo lit`,
+		"rb\nno\nlit\n",
+	},
+	{
 		"[[ a =~ [ ]]",
 		"[[: error parsing regexp: missing closing ]: `[`\nexit status 2 #JUSTERR",
 	},
