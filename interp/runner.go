@@ -4444,49 +4444,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 					r.exit.code = 1
 					continue
 				}
-				flags := vr.Flags()
-				if flags == "" {
-					flags = "-"
-				}
-				switch vr.Kind {
-				case expand.Indexed:
-					if len(vr.List) == 0 {
-						r.outf("declare -%s %s\n", flags, name)
-						continue
-					}
-					r.outf("declare -%s %s=(", flags, name)
-					for i, v := range vr.List {
-						if i > 0 {
-							r.out(" ")
-						}
-						r.outf("[%d]=%s", i, bashDeclareQuote(v))
-					}
-					r.out(")\n")
-				case expand.Associative:
-					if len(vr.Map) == 0 {
-						r.outf("declare -%s %s\n", flags, name)
-						continue
-					}
-					r.outf("declare -%s %s=(", flags, name)
-					first := true
-					for _, k := range expand.AssocKeysInBashOrder(vr.Map) {
-						v := vr.Map[k]
-						if !first {
-							r.out(" ")
-						}
-						r.outf("[%s]=%s", k, bashDeclareQuote(v))
-						first = false
-					}
-					// Bash 5.3 prints a trailing space before the
-					// closing paren of an associative-array literal
-					// when the map is non-empty.
-					if !first {
-						r.out(" ")
-					}
-					r.out(")\n")
-				default:
-					r.outf("declare -%s %s=%s\n", flags, name, bashDeclareQuote(vr.Str))
-				}
+				r.outf("%s\n", formatDeclareVar(name, vr, false))
 				continue
 			}
 			vr := r.lookupVar(name)
@@ -4517,7 +4475,11 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 					// value as the reference target.
 					vr.Kind = expand.NameRef
 				default:
-					vr.Kind = expand.KeepValue
+					if !vr.Declared() {
+						vr.Kind = expand.String
+					} else {
+						vr.Kind = expand.KeepValue
+					}
 				}
 			} else {
 				name, vr = r.assignVal(name, vr, as, valType)

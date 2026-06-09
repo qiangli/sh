@@ -580,10 +580,8 @@ func (r *Runner) printLocalVars() {
 // that probe `declare -A` see them.
 func (r *Runner) printArrayVars(kind string) {
 	want := expand.Associative
-	flag := "-A"
 	if kind == "-a" {
 		want = expand.Indexed
-		flag = "-a"
 	}
 	seen := map[string]bool{}
 	add := func(name string) {
@@ -618,53 +616,12 @@ func (r *Runner) printArrayVars(kind string) {
 		if vr.Kind != want {
 			continue
 		}
-		// Bash convention for built-in associative arrays —
-		// BASH_ALIASES, BASH_CMDS — uses `=()` even when empty.
-		// User-declared empty associative arrays render without
-		// the `=()` suffix (just `declare -A NAME`).
 		isBuiltin := false
 		switch name {
 		case "BASH_ALIASES", "BASH_CMDS", "BASH_ARGC", "BASH_ARGV", "BASH_LINENO", "BASH_SOURCE", "DIRSTACK", "FUNCNAME":
 			isBuiltin = true
 		}
-		switch vr.Kind {
-		case expand.Indexed:
-			if len(vr.List) == 0 {
-				if isBuiltin {
-					r.outf("declare %s %s=()\n", flag, name)
-				} else {
-					r.outf("declare %s %s\n", flag, name)
-				}
-				continue
-			}
-			r.outf("declare %s %s=(", flag, name)
-			for i, v := range vr.List {
-				if i > 0 {
-					r.out(" ")
-				}
-				fmt.Fprintf(r.stdout, "[%d]=%s", i, bashDeclareQuote(v))
-			}
-			r.out(")\n")
-		case expand.Associative:
-			if len(vr.Map) == 0 {
-				if isBuiltin {
-					r.outf("declare %s %s=()\n", flag, name)
-				} else {
-					r.outf("declare %s %s\n", flag, name)
-				}
-				continue
-			}
-			r.outf("declare %s %s=(", flag, name)
-			first := true
-			for _, k := range expand.AssocKeysInBashOrder(vr.Map) {
-				if !first {
-					r.out(" ")
-				}
-				first = false
-				fmt.Fprintf(r.stdout, "[%s]=%s", k, bashDeclareQuote(vr.Map[k]))
-			}
-			r.out(" )\n")
-		}
+		r.outf("%s\n", formatDeclareVar(name, vr, isBuiltin))
 	}
 }
 
@@ -692,6 +649,10 @@ func (r *Runner) printNamerefVars() {
 // when no other flag is set. Values use the same quoting rules as
 // `declare -p`.
 func formatLocalVar(name string, vr expand.Variable) string {
+	return formatDeclareVar(name, vr, false)
+}
+
+func formatDeclareVar(name string, vr expand.Variable, forceEmptyArrayValue bool) string {
 	flags := vr.Flags()
 	if flags == "" {
 		flags = "-"
@@ -701,9 +662,12 @@ func formatLocalVar(name string, vr expand.Variable) string {
 	b.WriteString(flags)
 	b.WriteByte(' ')
 	b.WriteString(name)
-	b.WriteByte('=')
 	switch vr.Kind {
 	case expand.Indexed:
+		if !vr.Set && !forceEmptyArrayValue && len(vr.List) == 0 {
+			return b.String()
+		}
+		b.WriteByte('=')
 		b.WriteByte('(')
 		for i, v := range vr.List {
 			if i > 0 {
@@ -713,6 +677,10 @@ func formatLocalVar(name string, vr expand.Variable) string {
 		}
 		b.WriteByte(')')
 	case expand.Associative:
+		if !vr.Set && !forceEmptyArrayValue && len(vr.Map) == 0 {
+			return b.String()
+		}
+		b.WriteByte('=')
 		b.WriteByte('(')
 		first := true
 		for _, k := range expand.AssocKeysInBashOrder(vr.Map) {
@@ -722,8 +690,15 @@ func formatLocalVar(name string, vr expand.Variable) string {
 			first = false
 			fmt.Fprintf(&b, "[%s]=%s", k, bashDeclareQuote(vr.Map[k]))
 		}
+		if !first {
+			b.WriteByte(' ')
+		}
 		b.WriteByte(')')
 	default:
+		if !vr.Set {
+			return b.String()
+		}
+		b.WriteByte('=')
 		b.WriteString(bashDeclareQuote(vr.Str))
 	}
 	return b.String()
@@ -1158,6 +1133,7 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 			name, prev = n, v
 		}
 	}
+	prevWasSet := prev.Set
 	prev.Set = true
 	if as.Value != nil {
 		// Use the assignment-context literal expansion so `var=foo:~/bin`
@@ -1376,6 +1352,8 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 			// `assoc=(…)` (no `+=`) still falls through to the
 			// inference below for back-compat.
 			valType = "-A"
+		case prev.Kind == expand.Associative && len(elems) == 0:
+			valType = "-A"
 		case len(elems) > 0 && stringIndex(elems[0].Index):
 			valType = "-A" // associative
 		}
@@ -1517,9 +1495,14 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 		prev.List = strs
 	case expand.String:
 		prev.Kind = expand.Indexed
-		// String → Indexed: keep the prior scalar at index 0 and
-		// shift the new elements above it.
-		prev.List = append([]string{prev.Str}, strs...)
+		// String → Indexed: keep a set prior scalar at index 0 and
+		// shift the new elements above it. A declared-but-unset
+		// scalar (`declare a`) has no element to preserve.
+		if prevWasSet {
+			prev.List = append([]string{prev.Str}, strs...)
+		} else {
+			prev.List = strs
+		}
 	case expand.Indexed:
 		// strs was sized to include prev.List (needPrev=true) and
 		// already contains its values via the initial copy, so we

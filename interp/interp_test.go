@@ -938,8 +938,32 @@ var runTests = []runTest{
 		"declare -- a=\"hello\"\n",
 	},
 	{
+		`declare a; declare -p a`,
+		"declare -- a\n",
+	},
+	{
 		`declare -a arr=(1 2 3); declare -p arr`,
 		"declare -a arr=([0]=\"1\" [1]=\"2\" [2]=\"3\")\n",
+	},
+	{
+		`declare -a arr; declare -p arr; arr=(); declare -p arr`,
+		"declare -a arr\ndeclare -a arr=()\n",
+	},
+	{
+		`declare -A assoc; declare -p assoc; assoc=(); declare -p assoc`,
+		"declare -A assoc\ndeclare -A assoc=()\n",
+	},
+	{
+		`declare -A assoc=([foo]=bar); declare -p assoc`,
+		"declare -A assoc=([foo]=\"bar\" )\n",
+	},
+	{
+		`declare -ai arr=(1+1); declare -p arr`,
+		"declare -ai arr=([0]=\"2\")\n",
+	},
+	{
+		`readonly -a arr=(); declare -p arr`,
+		"declare -ar arr=()\n",
 	},
 	{
 		`export e=1; declare -p e`,
