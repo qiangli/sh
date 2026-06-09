@@ -11,7 +11,6 @@ import (
 	"io"
 	"io/fs"
 	"iter"
-	"maps"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -3045,7 +3044,7 @@ func (cfg *Config) quotedElemFields(pe *syntax.ParamExp) []string {
 				}
 				return keys
 			case Associative:
-				return slices.Collect(maps.Keys(vr.Map))
+				return AssocKeysInBashOrder(vr.Map)
 			}
 		}
 		vr := cfg.Env.Get(name)
@@ -3070,7 +3069,12 @@ func (cfg *Config) quotedElemFields(pe *syntax.ParamExp) []string {
 		case Indexed:
 			return cfg.sliceElems(pe, vr.IndexedValues(), false)
 		case Associative:
-			return slices.Collect(maps.Values(vr.Map))
+			keys := AssocKeysInBashOrder(vr.Map)
+			elems := make([]string, len(keys))
+			for i, k := range keys {
+				elems[i] = vr.Map[k]
+			}
+			return elems
 		case Unknown:
 			if !vr.IsSet() {
 				// An unset variable expanded as "${name[@]}" produces
