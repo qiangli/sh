@@ -925,6 +925,18 @@ var runTests = []runTest{
 		"unset\n",
 	},
 	{
+		`declare -a a; a[1]=1; [[ -v a ]] && echo set || echo unset; [[ -v a[@] ]] && echo set || echo unset`,
+		"unset\nset\n",
+	},
+	{
+		`declare -A A; A[a]=1; [[ -v A ]] && echo set || echo unset; [[ -v A[@] ]] && echo at || echo no-at; A[@]=2; [[ -v A[@] ]] && echo at || echo no-at`,
+		"unset\nno-at\nat\n",
+	},
+	{
+		`scalar=; [[ -v scalar[@] ]] && echo set || echo unset`,
+		"set\n",
+	},
+	{
 		`declare -r -x x; [[ -v x ]] && echo set || echo unset`,
 		"unset\n",
 	},

@@ -591,7 +591,7 @@ func (r *Runner) unTest(ctx context.Context, op syntax.UnTestOperator, x string)
 		}
 		return false
 	case syntax.TsVarSet:
-		return r.lookupVar(x).IsSet()
+		return r.varIsSetForTest(x)
 	case syntax.TsRefVar:
 		return r.lookupVar(x).Kind == expand.NameRef
 	case syntax.TsNot:
@@ -601,5 +601,36 @@ func (r *Runner) unTest(ctx context.Context, op syntax.UnTestOperator, x string)
 	default:
 		// Should only happen if we forgot a case above.
 		panic(fmt.Sprintf("unexpected unary test op: %v", op))
+	}
+}
+
+func (r *Runner) varIsSetForTest(name string) bool {
+	base, index, ok := splitArrayElemName(name)
+	if !ok {
+		vr := r.lookupVar(name)
+		switch vr.Kind {
+		case expand.Indexed:
+			return vr.IndexedSet(0)
+		case expand.Associative:
+			return false
+		default:
+			return vr.IsSet()
+		}
+	}
+	vr := r.lookupVar(base)
+	switch vr.Kind {
+	case expand.Indexed:
+		if index == "@" || index == "*" {
+			return vr.IndexedCount() > 0
+		}
+		i, err := strconv.Atoi(index)
+		return err == nil && vr.IndexedSet(i)
+	case expand.Associative:
+		_, ok := vr.Map[index]
+		return ok
+	case expand.String, expand.NameRef:
+		return vr.IsSet() && (index == "@" || index == "*" || index == "0")
+	default:
+		return false
 	}
 }
