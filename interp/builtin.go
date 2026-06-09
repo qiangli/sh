@@ -1798,6 +1798,8 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		idxSign := byte(0)
 		for _, a := range args {
 			switch {
+			case a == "--":
+				args = nil
 			case a == "-v":
 				vertical = true
 				perLine = true
@@ -1868,6 +1870,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		if len(args) > 0 && args[0] == "-n" {
 			change = false
 			args = args[1:]
+		}
+		if len(args) > 0 && args[0] == "--" {
+			args = nil
 		}
 		swap := func() string {
 			oldtop := r.dirStack[len(r.dirStack)-1]
@@ -1948,6 +1953,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			change = false
 			args = args[1:]
 		}
+		if len(args) > 0 && args[0] == "--" {
+			args = nil
+		}
 		switch len(args) {
 		case 0:
 			if len(r.dirStack) < 2 {
@@ -2000,7 +2008,10 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				r.builtin(ctx, syntax.Pos{}, "dirs", nil)
 				return exit
 			}
-			return failf(2, "popd: invalid argument\n")
+			r.errf("%spopd: %s: invalid argument\n", r.bashErrPrefix(r.curStmtPos), arg)
+			r.errf("popd: usage: popd [-n] [+N | -N]\n")
+			exit.code = 2
+			return exit
 		}
 	case "return":
 		if len(args) > 1 {
