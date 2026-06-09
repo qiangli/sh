@@ -279,3 +279,46 @@ func TestRunBadSubstDollarParamRecovery(t *testing.T) {
 		t.Fatalf("stderr mismatch\nwant:\n%q\ngot:\n%q", wantErr, string(globalStderr))
 	}
 }
+
+func TestRunNestedBadSubstRecoveryContinues(t *testing.T) {
+	src := "c=\"\"\necho ${c//${$(($#-1))}/x/}\nset -- a b\nprintf '<%s>\\n' \"$@\"\n"
+	var stdout, stderr bytes.Buffer
+	r, err := interp.New(
+		interp.StdIO(nil, &stdout, &stderr),
+		interp.Env(expand.ListEnviron()),
+		interp.WithBashCompatErrors(true),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldStderr := os.Stderr
+	readStderr, writeStderr, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = writeStderr
+	defer func() {
+		os.Stderr = oldStderr
+		readStderr.Close()
+	}()
+	err = run(r, strings.NewReader(src), "./new-exp.tests")
+	writeStderr.Close()
+	globalStderr, readErr := io.ReadAll(readStderr)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if err == nil {
+		t.Fatal("expected recovered parse error status")
+	}
+	wantOut := "<a>\n<b>\n"
+	if stdout.String() != wantOut {
+		t.Fatalf("stdout mismatch\nwant:\n%q\ngot:\n%q\nstderr:\n%s", wantOut, stdout.String(), stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("unexpected runner stderr: %s", stderr.String())
+	}
+	wantErr := "./new-exp.tests: line 2: ${$(($#-1))}: bad substitution\n"
+	if string(globalStderr) != wantErr {
+		t.Fatalf("stderr mismatch\nwant:\n%q\ngot:\n%q", wantErr, string(globalStderr))
+	}
+}

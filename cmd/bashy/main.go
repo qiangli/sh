@@ -1292,6 +1292,26 @@ func run(r *interp.Runner, reader io.Reader, name string) error {
 
 var errNoStreamRecovery = errors.New("streaming execution not selected")
 
+func needsStatementStreamRecovery(src []byte) bool {
+	if bytes.Contains(src, []byte("$(")) && bytes.Contains(src, []byte("<<")) {
+		return true
+	}
+	if bytes.Contains(src, []byte("${'")) || bytes.Contains(src, []byte("${$'")) {
+		return true
+	}
+	for start := 0; ; {
+		idx := bytes.Index(src[start:], []byte("${$"))
+		if idx < 0 {
+			return false
+		}
+		after := start + idx + len("${$")
+		if after >= len(src) || src[after] != '(' {
+			return true
+		}
+		start = after + 1
+	}
+}
+
 func runStatementStream(
 	ctx context.Context,
 	r *interp.Runner,
@@ -1299,11 +1319,7 @@ func runStatementStream(
 	lang syntax.LangVariant,
 	errPrefix string,
 ) error {
-	if !(bytes.Contains(src, []byte("$(")) && bytes.Contains(src, []byte("<<"))) &&
-		!bytes.Contains(src, []byte("${$(")) &&
-		!bytes.Contains(src, []byte("${$")) &&
-		!bytes.Contains(src, []byte("${'")) &&
-		!bytes.Contains(src, []byte("${$'")) {
+	if !needsStatementStreamRecovery(src) {
 		return errNoStreamRecovery
 	}
 	type hdocWarning struct {
