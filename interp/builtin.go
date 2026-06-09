@@ -2662,7 +2662,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				// default signal
 			default:
 				r.errf("%strap: %s: invalid option\n", r.bashErrPrefix(pos), flag)
-				r.errf("trap: usage: trap [-lp] [[arg] signal_spec ...]\n")
+				r.errf("trap: usage: %s\n", bashUsage["trap"])
 				exit.code = 2
 				return exit
 			}
