@@ -495,7 +495,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				if assignTo == "" {
 					return failf(2, "printf: -v: option requires an argument\n")
 				}
-				if !syntax.ValidName(assignTo) {
+				if !validAssignName(assignTo) {
 					if r.bashCompatErrors {
 						return failf(1, "printf: `%s': not a valid identifier\n", assignTo)
 					}
@@ -2046,7 +2046,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 
 		args := fp.args()
 		for _, name := range args {
-			if !syntax.ValidName(name) {
+			if !validAssignName(name) {
 				return failf(2, "read: `%s': not a valid identifier\n", name)
 			}
 		}
@@ -2202,7 +2202,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					if i < len(values) {
 						val = values[i]
 					}
-					if r.lookupVar(name).ReadOnly {
+					lookupName := name
+					if base, _, ok := splitArrayRef(name); ok {
+						lookupName = base
+					}
+					if r.lookupVar(lookupName).ReadOnly {
 						// bash: abort the read with exit 2 on
 						// readonly-assignment failure. setVarString
 						// will surface the diagnostic itself.

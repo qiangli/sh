@@ -915,7 +915,22 @@ func (r *Runner) unsetArrayElem(name, idx string) {
 }
 
 func (r *Runner) setVarString(name, value string) {
+	if base, idx, ok := splitArrayRef(name); ok && syntax.ValidName(base) {
+		w := &syntax.Word{Parts: []syntax.WordPart{
+			&syntax.Lit{Value: idx},
+		}}
+		r.setVarWithIndex(r.lookupVar(base), base, w, expand.Variable{Set: true, Kind: expand.String, Str: value})
+		return
+	}
 	r.setVar(name, expand.Variable{Set: true, Kind: expand.String, Str: value})
+}
+
+func validAssignName(name string) bool {
+	if syntax.ValidName(name) {
+		return true
+	}
+	base, _, ok := splitArrayRef(name)
+	return ok && syntax.ValidName(base)
 }
 
 // bashDeclareQuote formats v the way bash's `declare -p` does: bare

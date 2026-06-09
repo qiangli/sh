@@ -323,6 +323,7 @@ var runTests = []runTest{
 	// of writing to stdout.
 	{"printf -v out 'x=%d' 7; echo $out", "x=7\n"},
 	{"printf -v out '%s\\n' hi; echo \"$out\" | wc -c | tr -d ' '", "4\n"},
+	{"declare -A A; printf -v 'A[ ]' '%s' X; declare -p A", "declare -A A=([\" \"]=\"X\" )\n"},
 	{"printf -v 1bad 'x'", "printf: \"1bad\": not a valid identifier\nexit status 1 #JUSTERR"},
 	{"printf -v", "printf: -v: option requires an argument\nexit status 2 #JUSTERR"},
 
@@ -4095,6 +4096,14 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	{
 		"read a_0 <<< foo; echo $a_0",
 		"foo\n",
+	},
+	{
+		"read 'a[2]' <<< foo; declare -p a",
+		"declare -a a=([2]=\"foo\")\n",
+	},
+	{
+		"declare -A A; read 'A[*]' <<< foo; declare -p A",
+		"declare -A A=([\"*\"]=\"foo\" )\n",
 	},
 	{
 		"read a b <<< 'foo  bar  baz  '; echo \"$a\"; echo \"$b\"",
