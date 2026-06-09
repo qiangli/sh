@@ -896,7 +896,14 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		if len(args) < 1 {
 			break
 		}
+		if strings.HasPrefix(args[0], "-") && args[0] != "-" {
+			r.errf("%sbuiltin: %s: invalid option\n", r.bashErrPrefix(pos), args[0])
+			r.errf("builtin: usage: %s\n", bashUsage["builtin"])
+			exit.code = 2
+			return exit
+		}
 		if !IsBuiltin(args[0]) {
+			r.errf("%sbuiltin: %s: not a shell builtin\n", r.bashErrPrefix(pos), args[0])
 			exit.code = 1
 			return exit
 		}
@@ -3504,6 +3511,7 @@ var bashUsage = map[string]string{
 	"alias":    "alias [-p] [name[=value] ... ]",
 	"bg":       "bg [job_spec ...]",
 	"break":    "break [n]",
+	"builtin":  "builtin [shell-builtin [arg ...]]",
 	"cd":       "cd [-L|[-P [-e]] [-@]] [dir]",
 	".":        ". [-p path] filename [arguments]",
 	"command":  "command [-pVv] command [arg ...]",
