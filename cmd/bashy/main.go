@@ -1386,7 +1386,7 @@ func runStatementStream(
 						}
 					}
 					printBashParseError(os.Stderr, src, errPrefix, pe)
-					if strings.HasSuffix(text, ": bad substitution") {
+					if strings.HasPrefix(text, "${$") && strings.HasSuffix(text, ": bad substitution") {
 						r.SetLastExitStatus(1)
 						_ = r.Run(ctx, &syntax.File{})
 						return interp.ExitStatus(2)

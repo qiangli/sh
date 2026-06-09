@@ -320,7 +320,10 @@ func (r *Runner) expandErr(err error) {
 	}
 	var unsetParam expand.UnsetParameterError
 	if r.bashCompatErrors {
-		if arithErr, expr := innermostArithmError(err); arithErr != nil && !errors.As(err, &unsetParam) {
+		if strings.Contains(err.Error(), "readonly variable") {
+			// Keep readonly assignment diagnostics plain, even when
+			// they originated inside arithmetic evaluation.
+		} else if arithErr, expr := innermostArithmError(err); arithErr != nil && !errors.As(err, &unsetParam) {
 			err = r.bashArithmError(expr, arithErr.Err, false, arithErr.Text)
 		}
 	}
@@ -395,7 +398,11 @@ func (r *Runner) arithm(expr syntax.ArithmExpr) int {
 	n, err := expand.Arithm(r.ecfg, expr)
 	var unsetParam expand.UnsetParameterError
 	if err != nil && r.bashCompatErrors {
-		if arithErr, arithExpr := innermostArithmError(err); arithErr != nil && !errors.As(err, &unsetParam) {
+		if strings.Contains(err.Error(), "readonly variable") {
+			// Bash reports arithmetic assignments to readonly vars
+			// as a plain variable diagnostic, not as an arithmetic
+			// expression error with an error token.
+		} else if arithErr, arithExpr := innermostArithmError(err); arithErr != nil && !errors.As(err, &unsetParam) {
 			if arithExpr == nil {
 				arithExpr = expr
 			}
