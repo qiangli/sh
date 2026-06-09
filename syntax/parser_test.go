@@ -1852,10 +1852,6 @@ var errorCases = []errorCase{
 		langErr("1:16: `declare` must be followed by names or assignments", LangBash),
 	),
 	errCase(
-		"echo ${foo[1 2]}",
-		langErr("1:14: not a valid arithmetic operator: `2`", LangBash|LangMirBSDKorn|LangZsh),
-	),
-	errCase(
 		"echo ${foo[}",
 		langErr("1:11: `[` must be followed by an expression", LangBash|LangMirBSDKorn|LangZsh),
 	),

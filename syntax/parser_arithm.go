@@ -245,6 +245,13 @@ func (p *Parser) arithmExprValue(compact bool) ArithmExpr {
 		p.curErr("ternary operator missing %#q before %#q", quest, colon)
 	case _LitWord:
 		l := p.getLit()
+		if p.quote == paramExpArithm && p.assignIndexWords {
+			for p.spaced && p.tok == _LitWord {
+				next := p.getLit()
+				l.Value += " " + next.Value
+				l.ValueEnd = next.ValueEnd
+			}
+		}
 		if p.tok != leftBrack {
 			x = p.wordOne(l)
 			break

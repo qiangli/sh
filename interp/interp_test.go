@@ -3355,6 +3355,10 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 		"declare -A a=([two]=\"2\" [one]=\"1\" )\n",
 	},
 	{
+		`declare -A a; a[hello world]=flip; printf '<%s>\n' "${a[hello world]}"; a=([six]=6 [foo bar]="qux qix"); printf '<%s>\n' "${a[foo bar]}"; declare -p a`,
+		"<flip>\n<qux qix>\ndeclare -A a=([six]=\"6\" [\"foo bar\"]=\"qux qix\" )\n",
+	},
+	{
 		`declare -A a=([0]=zero [x]=ex); echo "$a"; echo "${a:1:2}"`,
 		"zero\ner\n",
 	},

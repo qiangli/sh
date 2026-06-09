@@ -559,6 +559,7 @@ type Parser struct {
 	paramExpExpDblQuoted bool
 	paramExpExpOp        ParExpOperator
 	paramExpOuterQuote   quoteState
+	assignIndexWords     bool
 
 	// lastBquoteEsc is how many times the last backquote token was escaped
 	lastBquoteEsc int
@@ -1979,8 +1980,10 @@ func (p *Parser) paramExpExp() *Expansion {
 
 func (p *Parser) eitherIndex() ArithmExpr {
 	old := p.quote
+	oldAssignIndexWords := p.assignIndexWords
 	lpos := p.pos
 	p.quote = paramExpArithm
+	p.assignIndexWords = true
 	p.next()
 	switch p.tok {
 	case star, at, perc, exclMark:
@@ -1988,6 +1991,7 @@ func (p *Parser) eitherIndex() ArithmExpr {
 	}
 	expr := p.followArithm(leftBrack, lpos)
 	p.quote = old
+	p.assignIndexWords = oldAssignIndexWords
 	p.matchedArithm(lpos, leftBrack, rightBrack)
 	return expr
 }
