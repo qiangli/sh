@@ -1568,12 +1568,14 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 			// `declare -A foo=(value)` — non-keyed element in an
 			// associative-array context. Bash 5.3 emits
 			// `<file>: line N: foo: <value>: must use subscript when
-			// assigning associative array` and skips the element;
-			// guard against the nil-Index panic and ignore the
-			// element (the missing-subscript error will surface from
-			// the surrounding parse/declare path elsewhere).
+			// assigning associative array` and skips the element.
 			w, ok := elem.Index.(*syntax.Word)
 			if !ok || w == nil {
+				if elem.Value != nil {
+					r.errf("%s%s: %s: must use subscript when assigning associative array\n",
+						r.bashErrPrefix(r.curStmtPos), name, r.literalForAssign(elem.Value))
+					r.exit.code = 1
+				}
 				continue
 			}
 			k := r.literal(w)

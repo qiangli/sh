@@ -3367,6 +3367,10 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 		"declare -Ai a=([one]=\"10\" [\"foo bar\"]=\"16\" [zero]=\"5\" )\n",
 	},
 	{
+		`declare -A a; a=([zero]=0 four [one]=1); declare -p a`,
+		"a: four: must use subscript when assigning associative array\ndeclare -A a=([one]=\"1\" [zero]=\"0\" )\n #JUSTERR",
+	},
+	{
 		`declare -A a=([0]=zero [x]=ex); echo "$a"; echo "${a:1:2}"`,
 		"zero\ner\n",
 	},
