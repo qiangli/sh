@@ -2520,7 +2520,14 @@ func (cfg *Config) substWordFields(pe *syntax.ParamExp) ([][]fieldPart, bool, er
 			return nil, false, err
 		}
 	}
-	if assignOp && cfg.Posix && cfg.ifs == "" && paramExpWordHasAtOrStar(pe.Exp.Word) {
+	if assignOp && cfg.ifs == " \t\n" && paramExpWordIsQuotedStar(pe.Exp.Word) {
+		elems := slices.Clone(cfg.Env.Get("*").List)
+		fields = make([][]fieldPart, len(elems))
+		for i, elem := range elems {
+			fields[i] = []fieldPart{{val: elem}}
+		}
+	}
+	if assignOp && cfg.ifs == "" && paramExpWordHasAtOrStar(pe.Exp.Word) {
 		assignVal, ok := cfg.simpleAtStarNullIFSAssign(pe.Exp.Word)
 		if !ok {
 			assignVal, err = LiteralForAssign(cfg, pe.Exp.Word)
@@ -2676,9 +2683,6 @@ func (cfg *Config) substWordPartFields(parts []syntax.WordPart) ([][]fieldPart, 
 			if len(part.Parts) == 1 {
 				pe, _ := part.Parts[0].(*syntax.ParamExp)
 				if elems := cfg.quotedElemFields(pe); elems != nil {
-					if pe != nil && pe.Param.Value == "@" && cfg.ifs == "" {
-						elems = []string{cfg.ifsJoin(elems)}
-					}
 					for i, elem := range elems {
 						if i > 0 {
 							flush()
@@ -2704,7 +2708,7 @@ func (cfg *Config) substWordPartFields(parts []syntax.WordPart) ([][]fieldPart, 
 			if !part.Excl && part.Exp == nil && part.Repl == nil &&
 				(part.Param.Value == "@" || part.Param.Value == "*") {
 				elems := cfg.sliceElems(part, cfg.Env.Get(part.Param.Value).List, true)
-				if cfg.Posix && part.Param.Value == "@" {
+				if part.Param.Value == "@" || (part.Param.Value == "*" && cfg.ifs == "") {
 					switch {
 					case cfg.ifs == "":
 						for i, elem := range elems {
@@ -2762,7 +2766,11 @@ func (cfg *Config) simpleAtStarNullIFSAssign(word *syntax.Word) (string, bool) {
 	if pe.Param.Value != "@" && pe.Param.Value != "*" {
 		return "", false
 	}
-	return cfg.ifsJoin(cfg.sliceElems(pe, cfg.Env.Get(pe.Param.Value).List, true)), true
+	elems := cfg.sliceElems(pe, cfg.Env.Get(pe.Param.Value).List, true)
+	if pe.Param.Value == "@" {
+		return strings.Join(elems, " "), true
+	}
+	return cfg.ifsJoin(elems), true
 }
 
 func paramExpWordHasQuotedPart(word *syntax.Word) bool {
@@ -2805,6 +2813,19 @@ func paramExpWordHasAtOrStar(word *syntax.Word) bool {
 		}
 	}
 	return false
+}
+
+func paramExpWordIsQuotedStar(word *syntax.Word) bool {
+	if word == nil || len(word.Parts) != 1 {
+		return false
+	}
+	dq, ok := word.Parts[0].(*syntax.DblQuoted)
+	if !ok || len(dq.Parts) != 1 {
+		return false
+	}
+	pe, ok := dq.Parts[0].(*syntax.ParamExp)
+	return ok && !pe.Excl && pe.Exp == nil && pe.Repl == nil &&
+		!pe.Length && !pe.Width && !pe.IsSet && pe.Param.Value == "*"
 }
 
 func fieldStrings(fields [][]fieldPart) []string {
@@ -2976,9 +2997,6 @@ func (cfg *Config) quotedElemFields(pe *syntax.ParamExp) []string {
 				}
 				if trigger {
 					// Use the inner PE's special handling.
-					if innerPE.Param.Value == "@" && cfg.ifs == "" {
-						return []string{cfg.ifsJoin(cfg.sliceElems(innerPE, cfg.Env.Get("@").List, true))}
-					}
 					if e := cfg.quotedElemFields(innerPE); e != nil {
 						return e
 					}

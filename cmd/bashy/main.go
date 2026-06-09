@@ -1340,6 +1340,15 @@ func runStatementStream(
 			if err != nil {
 				if pe, ok := bashRecoverableParseError(err); ok {
 					text := rewriteParserErrorText(string(src), pe)
+					if reportLine, resumeLine, ok := heredocBodyBadSubstRecovery(src, pe, text); ok {
+						hdocWarnings = hdocWarnings[:0]
+						fmt.Fprintf(os.Stderr, "%s: line %d: %s\n", errPrefix, reportLine, text)
+						cursor = advancePastLine(src, resumeLine)
+						r.SetLastExitStatus(1)
+						runErr = interp.ExitStatus(2)
+						restart = true
+						break
+					}
 					suppressHdocWarning := len(hdocWarnings) > 0 &&
 						int(pe.Pos.Line()) > hdocWarnings[len(hdocWarnings)-1].startLine
 					if suppressHdocWarning && text == "unexpected EOF while looking for matching `)'" {
@@ -1405,6 +1414,39 @@ func lineStart(src []byte, line int) int {
 		}
 	}
 	return len(src)
+}
+
+func heredocBodyBadSubstRecovery(src []byte, pe syntax.ParseError, text string) (reportLine, resumeLine int, ok bool) {
+	if !strings.HasSuffix(text, ": bad substitution") {
+		return 0, 0, false
+	}
+	line := int(pe.Pos.Line())
+	if line <= 1 {
+		return 0, 0, false
+	}
+	prev := strings.TrimSpace(nthLine(src, line-1))
+	body := strings.TrimSpace(nthLine(src, line))
+	next := strings.TrimSpace(nthLine(src, line+1))
+	if body == "" || next == "" {
+		return 0, 0, false
+	}
+	idx := strings.Index(prev, "<<")
+	if idx < 0 {
+		return 0, 0, false
+	}
+	rest := strings.TrimSpace(prev[idx+2:])
+	if strings.HasPrefix(rest, "-") {
+		rest = strings.TrimSpace(rest[1:])
+	}
+	fields := strings.Fields(rest)
+	if len(fields) == 0 {
+		return 0, 0, false
+	}
+	stop := strings.Trim(fields[0], `'"`)
+	if stop == "" || next != stop {
+		return 0, 0, false
+	}
+	return line - 1, line + 1, true
 }
 
 func paddedChunk(src []byte, start, end int) []byte {
@@ -1580,12 +1622,14 @@ func arithForHeader(src string) (string, bool) {
 func rewriteParserErrorText(src string, pe syntax.ParseError) string {
 	if strings.Contains(pe.Text, "nested parameter expansions") {
 		if subst := nestedBadSubstSource(src, pe.Pos); subst != "" {
+			subst = strings.ReplaceAll(subst, "$'", "'")
 			return subst + ": bad substitution"
 		}
 		return "bad substitution"
 	}
 	if pe.Text == "invalid parameter name" {
 		if subst := nestedBadSubstSource(src, pe.Pos); subst != "" && subst != "${" {
+			subst = strings.ReplaceAll(subst, "$'", "'")
 			return subst + ": bad substitution"
 		}
 	}

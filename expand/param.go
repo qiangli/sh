@@ -811,7 +811,15 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 		case op == syntax.AlternateUnset || op == syntax.AlternateUnsetOrNull:
 			arg, err = cfg.literalParamExpWord(pe.Exp.Word, false)
 		case op == syntax.AssignUnset || op == syntax.AssignUnsetOrNull:
-			if cfg.insideDoubleQuote {
+			if cfg.ifs == "" && paramExpWordHasAtOrStar(pe.Exp.Word) {
+				if assignVal, ok := cfg.simpleAtStarNullIFSAssign(pe.Exp.Word); ok {
+					arg = assignVal
+				} else if cfg.insideDoubleQuote {
+					arg, err = cfg.literalParamExpWord(pe.Exp.Word, false)
+				} else {
+					arg, err = LiteralWithQuoteRemoval(cfg, pe.Exp.Word)
+				}
+			} else if cfg.insideDoubleQuote {
 				arg, err = cfg.literalParamExpWord(pe.Exp.Word, false)
 			} else {
 				arg, err = LiteralWithQuoteRemoval(cfg, pe.Exp.Word)

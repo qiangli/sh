@@ -406,12 +406,12 @@ func TestFieldsParamExpAssignAtNullIFSPosix(t *testing.T) {
 	if err != nil {
 		t.Fatalf("did not want error, got %v", err)
 	}
-	want := []string{"12"}
+	want := []string{"1 2"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("wanted %q, got %q", want, got)
 	}
-	if v := cfg.Env.Get("v").String(); v != "12" {
-		t.Fatalf("v = %q, want %q", v, "12")
+	if v := cfg.Env.Get("v").String(); v != "1 2" {
+		t.Fatalf("v = %q, want %q", v, "1 2")
 	}
 }
 
