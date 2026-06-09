@@ -102,7 +102,7 @@
 - [ ] `COMP_*` variables (COMP_WORDS, COMP_CWORD, COMP_LINE, COMP_POINT, COMPREPLY)
 - [x] `BASH_ALIASES` — associative array of aliases (dynamic from r.alias, reprinted via syntax.Printer)
 - [x] `BASH_CMDS` — associative array of hash table (dynamic from r.cmdHashTable)
-- [x] `BASH_COMPAT` — compatibility level (settable/readable as a regular variable; we always behave as bash 5.3 so the value has no effect)
+- [ ] `BASH_COMPAT` — compatibility level (settable/readable as a regular variable; we always behave as bash 5.3 so the value has no effect)
 - [ ] `BASH_XTRACEFD` — redirect xtrace to FD
 - [x] `MAIL` / `MAILCHECK` / `MAILPATH` — settable/readable as plain variables; no periodic mail check loop (intentionally — modern shells skip this)
 - [ ] `READLINE_LINE` / `READLINE_POINT`
@@ -287,15 +287,15 @@ covered by an earlier section above is NOT repeated here.
 
 ### G4: Variables — secondary set (S each)
 
-- [ ] `BASH_COMMAND` set before *every* simple command, not just traps
-- [ ] `BASH_EXECUTION_STRING` — store `-c` argument
+- [x] `BASH_COMMAND` set before *every* simple command, not just traps
+- [x] `BASH_EXECUTION_STRING` — store `-c` argument
 - [ ] `BASH_COMPAT` — accept and validate compatibility level
 - [ ] `BASH_XTRACEFD` — redirect xtrace output to FD
-- [ ] `BASH_ALIASES` — dynamic assoc array of aliases
-- [ ] `BASH_CMDS` — dynamic assoc array of hashed paths
+- [x] `BASH_ALIASES` — dynamic assoc array of aliases
+- [x] `BASH_CMDS` — dynamic assoc array of hashed paths
 - [ ] `BASH_ARGV`/`BASH_ARGC` — function-call argv stack (requires `extdebug`)
 - [x] `BASH_MONOSECONDS` — monotonic clock (new in 5.3) — uses time.Since(startTime) which keeps Go's monotonic component
-- [ ] `HISTCMD` — current history entry number
+- [x] `HISTCMD` — current history entry number
 - [ ] `HISTCONTROL`, `HISTIGNORE`, `HISTTIMEFORMAT` — history filtering
 - [x] `FUNCNEST` — function recursion limit (positive integer aborts call when callStack depth reached; 0/unset/empty/non-numeric disables)
 - [ ] `EXECIGNORE` — skip-exec patterns for command lookup
@@ -304,7 +304,7 @@ covered by an earlier section above is NOT repeated here.
 - [ ] `INPUTRC` — readline init file path
 - [x] `OPTERR` — getopts error-print flag (OPTERR=0 suppresses messages; covered with the getopts diagnostics path)
 - [ ] `PROMPT_COMMAND` as array — iterate all entries
-- [ ] `PROMPT_DIRTRIM` — truncate `\w`
+- [x] `PROMPT_DIRTRIM` — truncate `\w`
 - [ ] `PS0` — print after read, before exec
 - [ ] `PS4` — replace hardcoded `+ ` in trace.go with expanded PS4
 - [ ] `TIMEFORMAT` — for `time` builtin output
