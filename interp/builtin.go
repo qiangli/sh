@@ -790,7 +790,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				remaining = remaining[1:]
 			case "-s":
 				if len(remaining) < 2 {
-					return failf(2, "kill: -s requires a signal name\n")
+					r.errf("%skill: -s: option requires an argument\n", r.bashErrPrefix(pos))
+					exit.code = 2
+					return exit
 				}
 				s, ok := signalByName(remaining[1])
 				if !ok {
@@ -817,7 +819,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				spec := strings.TrimPrefix(arg, "-")
 				s, ok := parseSignalSpec(spec)
 				if !ok {
-					return failf(1, "kill: %s: invalid signal specification\n", arg)
+					return failf(1, "kill: %s: invalid signal specification\n", spec)
 				}
 				sig = s
 				remaining = remaining[1:]
@@ -846,12 +848,14 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					continue
 				}
 				exit.code = 1
-				r.errf("kill: %s: invalid signal specification\n", a)
+				r.errf(r.bashErrPrefix(pos)+"kill: %s: invalid signal specification\n", a)
 			}
 			break
 		}
 		if len(remaining) == 0 {
-			return failf(2, "kill: usage: kill [-s sigspec | -n signum | -sigspec] pid ...\n")
+			r.errf("kill: usage: %s\n", bashUsage["kill"])
+			exit.code = 2
+			return exit
 		}
 		for _, target := range remaining {
 			if strings.HasPrefix(target, "%") || strings.HasPrefix(target, "g") {
@@ -862,7 +866,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			pid, err := strconv.Atoi(target)
 			if err != nil {
 				exit.code = 1
-				r.errf(r.bashErrPrefix(pos)+"kill: %s: arguments must be process IDs\n", target)
+				r.errf(r.bashErrPrefix(pos)+"kill: `%s': not a pid or valid job spec\n", target)
 				continue
 			}
 			if err := sendSignal(pid, sig); err != nil {
