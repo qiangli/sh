@@ -3359,6 +3359,10 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 		"<flip>\n<qux qix>\ndeclare -A a=([six]=\"6\" [\"foo bar\"]=\"qux qix\" )\n",
 	},
 	{
+		`flix=9; declare -Ai a=([zero]=1+4 [one]=3+7 [foo bar]=flix); a[foo bar]+=7; declare -p a`,
+		"declare -Ai a=([one]=\"10\" [\"foo bar\"]=\"16\" [zero]=\"5\" )\n",
+	},
+	{
 		`declare -A a=([0]=zero [x]=ex); echo "$a"; echo "${a:1:2}"`,
 		"zero\ner\n",
 	},

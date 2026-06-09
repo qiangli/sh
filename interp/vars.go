@@ -1213,6 +1213,9 @@ func (r *Runner) setVarWithIndex(prev expand.Variable, name string, index syntax
 		if prev.Map == nil {
 			prev.Map = make(map[string]string)
 		}
+		if prev.Integer {
+			valStr = r.integerArrayValue(valStr)
+		}
 		prev.Map[k] = valStr
 		r.setVar(name, prev)
 		return
@@ -1255,6 +1258,18 @@ func (r *Runner) setVarWithIndex(prev expand.Variable, name string, index syntax
 	prev.List = list
 	prev.ListSet = listSet
 	r.setVar(name, prev)
+}
+
+func (r *Runner) integerArrayValue(s string) string {
+	if s == "" {
+		return "0"
+	}
+	expr, perr := syntax.NewParser().Arithmetic(strings.NewReader(s))
+	if perr != nil || expr == nil {
+		return "0"
+	}
+	v, _ := expand.Arithm(r.ecfg, expr)
+	return strconv.Itoa(v)
 }
 
 func (r *Runner) setFunc(name string, body *syntax.Stmt) {
@@ -1351,6 +1366,10 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 						curStr = prev.List[0]
 					} else {
 						curStr = ""
+					}
+				case as.Index != nil && prev.Kind == expand.Associative:
+					if w, ok := as.Index.(*syntax.Word); ok {
+						curStr = prev.Map[r.literal(w)]
 					}
 				}
 				cur, err := arithEval(curStr)
@@ -1469,7 +1488,13 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 				if ok {
 					k := r.literal(w)
 					prev.Kind = expand.String
-					prev.Str = prev.Map[k] + s
+					if prev.Integer {
+						cur, _ := strconv.Atoi(r.integerArrayValue(prev.Map[k]))
+						rhs, _ := strconv.Atoi(r.integerArrayValue(s))
+						prev.Str = strconv.Itoa(cur + rhs)
+					} else {
+						prev.Str = prev.Map[k] + s
+					}
 					return name, prev
 				}
 				break
@@ -1481,7 +1506,13 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 			if newMap == nil {
 				newMap = make(map[string]string)
 			}
-			newMap["0"] = newMap["0"] + s
+			if prev.Integer {
+				cur, _ := strconv.Atoi(r.integerArrayValue(newMap["0"]))
+				rhs, _ := strconv.Atoi(r.integerArrayValue(s))
+				newMap["0"] = strconv.Itoa(cur + rhs)
+			} else {
+				newMap["0"] = newMap["0"] + s
+			}
 			prev.Map = newMap
 			return name, prev
 		}
@@ -1547,7 +1578,15 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 			k := r.literal(w)
 			v := r.literalForAssign(elem.Value)
 			if elem.Append {
-				v = amap[k] + v
+				if prev.Integer {
+					cur, _ := strconv.Atoi(r.integerArrayValue(amap[k]))
+					rhs, _ := strconv.Atoi(r.integerArrayValue(v))
+					v = strconv.Itoa(cur + rhs)
+				} else {
+					v = amap[k] + v
+				}
+			} else if prev.Integer {
+				v = r.integerArrayValue(v)
 			}
 			amap[k] = v
 		}
