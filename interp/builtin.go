@@ -282,6 +282,17 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				exit.code = 2
 				return exit
 			}
+			if opt, ok := strings.CutPrefix(err.Error(), "invalid option: "); ok {
+				opt = strings.Trim(opt, `"`)
+				if strings.HasPrefix(opt, "-") || strings.HasPrefix(opt, "+") {
+					r.errf("%sset: %s: invalid option\n", r.bashErrPrefix(pos), opt)
+					r.errf("set: usage: %s\n", bashUsage["set"])
+				} else {
+					r.errf("%sset: %s: invalid option name\n", r.bashErrPrefix(pos), opt)
+				}
+				exit.code = 2
+				return exit
+			}
 			return failf(2, "set: %v\n", err)
 		}
 		r.updateExpandOpts()

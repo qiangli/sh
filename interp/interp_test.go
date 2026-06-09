@@ -2579,7 +2579,11 @@ var runTests = []runTest{
 	},
 	{
 		"set -U",
-		"set: invalid option: \"-U\"\nexit status 2 #JUSTERR",
+		"set: -U: invalid option\nset: usage: set [-abefhkmnptuvxBCEHPT] [-o option-name] [--] [-] [arg ...]\nexit status 2 #JUSTERR",
+	},
+	{
+		"set -o trackall",
+		"set: trackall: invalid option name\nexit status 2 #JUSTERR",
 	},
 	{
 		"set -e; false; echo foo",
@@ -2768,7 +2772,7 @@ var runTests = []runTest{
 	{"set -n; set +n; echo foo", ""},
 	{
 		"set -o foobar",
-		"set: invalid option: \"foobar\"\nexit status 2 #JUSTERR",
+		"set: foobar: invalid option name\nexit status 2 #JUSTERR",
 	},
 	{"set -o noexec; echo foo", ""},
 	{"set +o noexec; echo foo", "foo\n"},
