@@ -309,7 +309,10 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			if err != nil {
 				return failf(1, "shift: %s: numeric argument required\n", args[0])
 			}
-			if n2 < 0 || n2 > len(r.Params) {
+			if n2 < 0 {
+				return failf(1, "shift: %s: shift count out of range\n", args[0])
+			}
+			if n2 > len(r.Params) {
 				// Out of range: silent error by default; with
 				// `shopt -s shift_verbose`, emit a diagnostic.
 				if opt, _ := r.bashOptByName("shift_verbose"); opt != nil && *opt {

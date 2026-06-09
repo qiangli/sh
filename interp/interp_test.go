@@ -253,7 +253,8 @@ var runTests = []runTest{
 	{"cd a b", "cd: too many arguments\nexit status 1 #JUSTERR"},
 	{"shift a", "shift: a: numeric argument required\nexit status 1 #JUSTERR"},
 	{"shift 1 2", "shift: too many arguments\nexit status 1 #JUSTERR"},
-	{"shift -1", "exit status 1 #JUSTERR"},
+	{"shift -1", "shift: -1: shift count out of range\nexit status 1 #JUSTERR"},
+	{"shift -- -4", "shift: -4: shift count out of range\nexit status 1 #JUSTERR"},
 	{"shopt -s shift_verbose; shift -1", "shift: -1: shift count out of range\nexit status 1 #JUSTERR"},
 	{
 		"shouldnotexist",
