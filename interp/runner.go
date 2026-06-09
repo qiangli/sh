@@ -3855,6 +3855,19 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		// restored so `v=inline source ./f` reverts v afterwards.
 		special := isPosixSpecialBuiltin(fields[0])
 		persistInline := special && (r.opts[optPosix] || r.inFunc)
+		switch fields[0] {
+		case "export", "readonly":
+			persistInline = true
+		case "declare", "typeset":
+			for _, arg := range fields[1:] {
+				if arg == "--" {
+					continue
+				}
+				if strings.HasPrefix(arg, "-") && strings.Contains(arg, "x") {
+					persistInline = true
+				}
+			}
+		}
 		if !persistInline {
 			// Outer (non-persist) inline restore: skip names
 			// that an inner function-scoped special builtin

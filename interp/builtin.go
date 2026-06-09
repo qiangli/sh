@@ -3482,16 +3482,57 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 	case "declare", "typeset":
 		// Simple declare when called as a command (not keyword).
 		// Keyword form is handled by DeclClause in runner.go.
+		printMode := false
+		exportMode := false
+		var names []string
 		for _, arg := range args {
+			if strings.HasPrefix(arg, "-") && !strings.Contains(arg, "=") {
+				fp := flagParser{remaining: []string{arg}}
+				for fp.more() {
+					switch flag := fp.flag(); flag {
+					case "-p":
+						printMode = true
+					case "-x":
+						exportMode = true
+					default:
+						// Other simple-command declare flags are handled by
+						// DeclClause in the common path; keep this fallback
+						// narrowly scoped to the inline-assignment cases.
+					}
+				}
+				continue
+			}
 			eqIdx := strings.IndexByte(arg, '=')
 			if eqIdx >= 0 {
 				name := arg[:eqIdx]
 				val := arg[eqIdx+1:]
 				vr := expand.Variable{Set: true, Kind: expand.String, Str: val}
+				if exportMode {
+					vr.Exported = true
+				}
 				if r.inFunc {
 					vr.Local = true
 				}
 				r.setVar(name, vr)
+				names = append(names, name)
+			} else {
+				names = append(names, arg)
+				if exportMode {
+					vr := r.lookupVar(arg)
+					vr.Exported = true
+					r.setVar(arg, vr)
+				}
+			}
+		}
+		if printMode {
+			for _, name := range names {
+				vr := r.lookupVar(name)
+				if !vr.Declared() {
+					r.errf(r.bashErrPrefix(pos)+"declare: %s: not found\n", name)
+					exit.code = 1
+					continue
+				}
+				r.outf("%s\n", formatDeclareVar(name, vr, false))
 			}
 		}
 	case "ulimit":
