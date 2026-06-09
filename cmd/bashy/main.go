@@ -1293,7 +1293,9 @@ func runStatementStream(
 	errPrefix string,
 ) error {
 	if !(bytes.Contains(src, []byte("$(")) && bytes.Contains(src, []byte("<<"))) &&
-		!bytes.Contains(src, []byte("${$(")) {
+		!bytes.Contains(src, []byte("${$(")) &&
+		!bytes.Contains(src, []byte("${'")) &&
+		!bytes.Contains(src, []byte("${$'")) {
 		return errNoStreamRecovery
 	}
 	type hdocWarning struct {
@@ -1581,6 +1583,11 @@ func rewriteParserErrorText(src string, pe syntax.ParseError) string {
 			return subst + ": bad substitution"
 		}
 		return "bad substitution"
+	}
+	if pe.Text == "invalid parameter name" {
+		if subst := nestedBadSubstSource(src, pe.Pos); subst != "" && subst != "${" {
+			return subst + ": bad substitution"
+		}
 	}
 	// Bash escalates a partial-arithmetic parse to "missing `))`"
 	// instead of naming the inner token — match that for `((` blocks
