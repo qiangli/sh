@@ -1140,8 +1140,7 @@ func run(r *interp.Runner, reader io.Reader, name string) error {
 		if perr == nil {
 			return f, syntax.ParseError{}, false
 		}
-		var pe syntax.ParseError
-		if errors.As(perr, &pe) {
+		if pe, ok := bashRecoverableParseError(perr); ok {
 			return f, pe, true
 		}
 		return f, syntax.ParseError{}, false
@@ -1293,7 +1292,8 @@ func runStatementStream(
 	lang syntax.LangVariant,
 	errPrefix string,
 ) error {
-	if !bytes.Contains(src, []byte("$(")) || !bytes.Contains(src, []byte("<<")) {
+	if !(bytes.Contains(src, []byte("$(")) && bytes.Contains(src, []byte("<<"))) &&
+		!bytes.Contains(src, []byte("${$(")) {
 		return errNoStreamRecovery
 	}
 	type hdocWarning struct {
@@ -1336,8 +1336,7 @@ func runStatementStream(
 				}
 			}
 			if err != nil {
-				var pe syntax.ParseError
-				if errors.As(err, &pe) {
+				if pe, ok := bashRecoverableParseError(err); ok {
 					text := rewriteParserErrorText(string(src), pe)
 					suppressHdocWarning := len(hdocWarnings) > 0 &&
 						int(pe.Pos.Line()) > hdocWarnings[len(hdocWarnings)-1].startLine
@@ -1427,6 +1426,22 @@ func fatalRecoveredParseError(src []byte, pe syntax.ParseError) bool {
 		rewriteParserErrorText(string(src), pe) == "unexpected EOF while looking for matching `)'"
 }
 
+func bashRecoverableParseError(err error) (syntax.ParseError, bool) {
+	var pe syntax.ParseError
+	if errors.As(err, &pe) {
+		return pe, true
+	}
+	var le syntax.LangError
+	if errors.As(err, &le) && strings.Contains(le.Feature, "nested parameter expansions") {
+		return syntax.ParseError{
+			Filename: le.Filename,
+			Pos:      le.Pos,
+			Text:     le.Feature,
+		}, true
+	}
+	return syntax.ParseError{}, false
+}
+
 func commandSubstOpenBefore(src []byte, pos syntax.Pos) bool {
 	end := offsetBeforePos(src, pos)
 	if end <= 0 {
@@ -1505,6 +1520,9 @@ func printBashParseError(w io.Writer, src []byte, prefix string, pe syntax.Parse
 		line = bytes.Count(src, []byte("\n")) + 1
 	}
 	fmt.Fprintf(w, "%s: line %d: %s\n", prefix, line, text)
+	if strings.HasSuffix(text, ": bad substitution") {
+		return
+	}
 	// Bash omits the trailing source-line echo for "unexpected EOF"
 	// diagnostics (the matching-`X' messages already point at the
 	// unclosed construct).
@@ -1558,6 +1576,12 @@ func arithForHeader(src string) (string, bool) {
 // into bash 5.3's canonical wording when the pattern is recognisable.
 // Falls back to the original text otherwise.
 func rewriteParserErrorText(src string, pe syntax.ParseError) string {
+	if strings.Contains(pe.Text, "nested parameter expansions") {
+		if subst := nestedBadSubstSource(src, pe.Pos); subst != "" {
+			return subst + ": bad substitution"
+		}
+		return "bad substitution"
+	}
 	// Bash escalates a partial-arithmetic parse to "missing `))`"
 	// instead of naming the inner token — match that for `((` blocks
 	// before any of the per-message rewrites below.
@@ -1607,6 +1631,37 @@ func rewriteParserErrorText(src string, pe syntax.ParseError) string {
 		return "unexpected EOF while looking for matching `\"'"
 	}
 	return pe.Text
+}
+
+func nestedBadSubstSource(src string, pos syntax.Pos) string {
+	off := offsetBeforePos([]byte(src), pos)
+	if off <= 0 || off > len(src) {
+		return ""
+	}
+	start := strings.LastIndex(src[:off], "${")
+	if start < 0 {
+		return ""
+	}
+	depth := 0
+	for i := start; i < len(src); i++ {
+		switch src[i] {
+		case '$':
+			if i+1 < len(src) && src[i+1] == '{' {
+				depth++
+				i++
+			}
+		case '}':
+			if depth > 0 {
+				depth--
+				if depth == 0 {
+					return src[start : i+1]
+				}
+			}
+		case '\n':
+			return ""
+		}
+	}
+	return ""
 }
 
 // insideUnclosedArith reports whether pos sits inside an `(( ... ))`
