@@ -740,6 +740,20 @@ func (r *Runner) literal(word *syntax.Word) string {
 	return str
 }
 
+func unsetArrayOperandLiteral(word *syntax.Word) (string, bool) {
+	var b strings.Builder
+	for _, part := range word.Parts {
+		lit, ok := part.(*syntax.Lit)
+		if !ok {
+			return "", false
+		}
+		b.WriteString(lit.Value)
+	}
+	s := b.String()
+	name, _, ok := splitArrayRef(s)
+	return s, ok && syntax.ValidName(name)
+}
+
 func (r *Runner) literalForAssign(word *syntax.Word) string {
 	str, err := expand.LiteralForAssign(r.ecfg, word)
 	r.expandErr(err)
@@ -3717,6 +3731,16 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		}
 		r.lastExpandExit = exitStatus{}
 		fields := r.fields(args...)
+		if len(args) > 1 && args[0].Lit() == "unset" {
+			fields = []string{"unset"}
+			for _, arg := range args[1:] {
+				if lit, ok := unsetArrayOperandLiteral(arg); ok {
+					fields = append(fields, lit)
+				} else {
+					fields = append(fields, r.fields(arg)...)
+				}
+			}
+		}
 		// bash 5.3: when a CallExpr already has assignment prefixes
 		// (`a=5 b=6 $CMD ...`) AND the remaining words after
 		// expansion are ALL assignment-shaped (typically because

@@ -1216,6 +1216,7 @@ func (r *Runner) setVarWithIndex(prev expand.Variable, name string, index syntax
 		if prev.Integer {
 			valStr = r.integerArrayValue(valStr)
 		}
+		prev.Set = true
 		prev.Map[k] = valStr
 		r.setVar(name, prev)
 		return
