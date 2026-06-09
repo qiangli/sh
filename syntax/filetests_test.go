@@ -1367,7 +1367,7 @@ var fileTests = []fileTestCase{
 				Redirs: []*Redirect{{
 					Op:   DashHdoc,
 					Word: litWord("EOF"),
-					Hdoc: litWord("\t\tbar\n\t"),
+					Hdoc: litWord("\t\tbar\n"),
 				}},
 			}},
 		}),
@@ -1381,7 +1381,6 @@ var fileTests = []fileTestCase{
 				Redirs: []*Redirect{{
 					Op:   DashHdoc,
 					Word: litWord("EOF"),
-					Hdoc: litWord("\t"),
 				}},
 			}},
 		}),
@@ -1571,6 +1570,20 @@ var fileTests = []fileTestCase{
 			Redirs: []*Redirect{{
 				Op:   DashHdoc,
 				Word: word(sglQuoted("EOF")),
+				Hdoc: litWord("\tbar\n"),
+			}},
+		}),
+	),
+	fileTest(
+		[]string{
+			"foo <<-'\tEOF'\n\tbar\n\tEOF",
+			"foo <<-'\tEOF'\r\n\tbar\r\n\tEOF",
+		},
+		langFile(&Stmt{
+			Cmd: litCall("foo"),
+			Redirs: []*Redirect{{
+				Op:   DashHdoc,
+				Word: word(sglQuoted("\tEOF")),
 				Hdoc: litWord("\tbar\n"),
 			}},
 		}),

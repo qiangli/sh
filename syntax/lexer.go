@@ -1291,6 +1291,7 @@ func (p *Parser) advanceLitHdoc(r rune) {
 
 	p.tok = _Lit
 	p.newLit(r)
+	lineValStart := len(p.litBs) - 1
 	for p.quote == hdocBodyTabs && r == '\t' {
 		r = p.rune()
 	}
@@ -1316,7 +1317,7 @@ func (p *Parser) advanceLitHdoc(r rune) {
 							r = p.rune()
 						}
 						p.tok = _LitWord
-						p.val = p.endLit()[:lStart]
+						p.val = p.endLit()[:lineValStart]
 						if p.val == "" {
 							p.tok = _Newl
 						}
@@ -1356,7 +1357,7 @@ func (p *Parser) advanceLitHdoc(r rune) {
 				}
 				if bytes.Equal(line, stop) {
 					p.tok = _LitWord
-					p.val = p.endLit()[:lStart]
+					p.val = p.endLit()[:lineValStart]
 					if p.val == "" {
 						p.tok = _Newl
 					}
@@ -1365,7 +1366,7 @@ func (p *Parser) advanceLitHdoc(r rune) {
 				}
 				if closeQuote, ok := hdocComsubClose(line, stop); ok {
 					p.tok = _LitWord
-					p.val = p.endLit()[:lStart]
+					p.val = p.endLit()[:lineValStart]
 					if p.val == "" {
 						p.tok = _Newl
 					}
@@ -1394,6 +1395,7 @@ func (p *Parser) advanceLitHdoc(r rune) {
 				}
 				return // hit an unexpected EOF or closing backquote
 			}
+			lineValStart = len(p.litBs)
 			for p.quote == hdocBodyTabs && p.peek() == '\t' {
 				p.rune()
 			}
@@ -1411,6 +1413,7 @@ func (p *Parser) quotedHdocWord() *Word {
 		if r == utf8.RuneSelf {
 			return nil
 		}
+		lineValStart := len(p.litBs) - 1
 		for p.quote == hdocBodyTabs && r == '\t' {
 			r = p.rune()
 		}
@@ -1440,7 +1443,7 @@ func (p *Parser) quotedHdocWord() *Word {
 		}
 		if bytes.Equal(line, stop) {
 			p.hdocStops[len(p.hdocStops)-1] = nil
-			val := p.endLit()[:lStart]
+			val := p.endLit()[:lineValStart]
 			if val == "" {
 				return nil
 			}
@@ -1448,7 +1451,7 @@ func (p *Parser) quotedHdocWord() *Word {
 		}
 		if closeQuote, ok := hdocComsubClose(line, stop); ok {
 			p.hdocStops[len(p.hdocStops)-1] = nil
-			val := p.endLit()[:lStart]
+			val := p.endLit()[:lineValStart]
 			p.pendingTok = rightParen
 			p.pendingPos = posAddCol(p.nextPos(), -1)
 			if closeQuote {

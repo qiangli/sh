@@ -4,6 +4,7 @@
 package syntax
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"iter"
@@ -816,6 +817,9 @@ func (p *Parser) doHeredocs() {
 			p.quote = hdocBodyTabs
 		}
 		stop, quoted := p.unquotedWordBytes(r.Word)
+		if r.Op == DashHdoc {
+			stop = bytes.TrimLeft(stop, "\t")
+		}
 		p.hdocStops = append(p.hdocStops, stop)
 		p.hdocStartLines = append(p.hdocStartLines, int(r.Pos().Line()))
 		if i > 0 && p.r == '\n' {
