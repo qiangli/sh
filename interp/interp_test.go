@@ -4435,6 +4435,10 @@ var runTestsUnix = []runTest{
 		"unset: UID: cannot unset: readonly variable\nexit status 1 #IGNORE",
 	},
 	{
+		`unset -v BASH_LINENO BASH_SOURCE`,
+		"unset: BASH_LINENO: cannot unset\nunset: BASH_SOURCE: cannot unset\nexit status 1 #JUSTERR",
+	},
+	{
 		`test -n "$EUID" && echo OK`,
 		"OK\n",
 	},

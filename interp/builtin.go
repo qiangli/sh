@@ -381,6 +381,12 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				continue
 			}
 			if vars {
+				switch arg {
+				case "BASH_LINENO", "BASH_SOURCE":
+					r.errf("%sunset: %s: cannot unset\n", r.bashErrPrefix(pos), arg)
+					exit.code = 1
+					continue
+				}
 				vr := r.lookupVar(arg)
 				if vr.Kind == expand.NameRef {
 					// Bash: `unset NAME` on a nameref follows
