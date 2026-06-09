@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/internal"
@@ -344,6 +345,7 @@ func (r *Runner) expandErr(err error) {
 		}
 	}
 	fmt.Fprintln(r.stderr, errMsg)
+	r.reportError("expand", r.curStmtPos, "", errMsg, 1)
 	switch {
 	case errors.As(err, &expand.UnsetParameterError{}):
 	case strings.HasSuffix(errMsg, "invalid indirect expansion"):
@@ -724,10 +726,36 @@ func (r *Runner) literal(word *syntax.Word) string {
 	return str
 }
 
+func (r *Runner) literalForAssign(word *syntax.Word) string {
+	str, err := expand.LiteralForAssign(r.ecfg, word)
+	r.expandErr(err)
+	return str
+}
+
 func (r *Runner) document(word *syntax.Word) string {
 	str, err := expand.Document(r.ecfg, word)
 	r.expandErr(err)
 	return str
+}
+
+func bashDiagnosticWord(s string) string {
+	needsQuote := !utf8.ValidString(s)
+	if !needsQuote {
+		for _, r := range s {
+			if !unicode.IsPrint(r) {
+				needsQuote = true
+				break
+			}
+		}
+	}
+	if !needsQuote {
+		return s
+	}
+	q, err := syntax.Quote(s, syntax.LangBash)
+	if err != nil {
+		return s
+	}
+	return q
 }
 
 func (r *Runner) pattern(word *syntax.Word) string {
@@ -784,6 +812,26 @@ func (r *Runner) outf(format string, a ...any) {
 
 func (r *Runner) errf(format string, a ...any) {
 	fmt.Fprintf(r.stderr, format, a...)
+}
+
+func (r *Runner) reportError(kind string, pos syntax.Pos, command, message string, code uint8) {
+	if r.structuredErrorHandler == nil {
+		return
+	}
+	message = strings.TrimSuffix(message, "\n")
+	ev := ErrorEvent{
+		Kind:       kind,
+		Severity:   "error",
+		Message:    message,
+		Pos:        pos,
+		Filename:   r.filename,
+		Command:    command,
+		ExitStatus: code,
+	}
+	if n := len(r.callStack); n > 0 {
+		ev.Function = r.callStack[n-1].funcName
+	}
+	r.structuredErrorHandler(ev)
 }
 
 // pureLiteral reports whether all parts of word are literal /
@@ -4846,6 +4894,9 @@ func (r *Runner) flattenAssigns(args []*syntax.Assign) iter.Seq2[*syntax.Assign,
 }
 
 func match(pat, name string) bool {
+	if !utf8.ValidString(pat) {
+		return internal.BytePatternMatch([]byte(pat), []byte(name))
+	}
 	matcher, err := internal.ExtendedPatternMatcher(pat, pattern.EntireString|pattern.ExtendedOperators|pattern.LenientRanges)
 	_ = err // TODO: report these errors
 	return matcher != nil && matcher(name)
@@ -5824,8 +5875,10 @@ func (r *Runner) execAs(ctx context.Context, pos syntax.Pos, argv0 string, clear
 		}
 	}
 	if r.opts[optRestricted] && !hashed && len(args) > 0 && strings.Contains(args[0], "/") {
-		r.errf("%s%s: restricted: cannot specify `/' in command names\n",
+		msg := fmt.Sprintf("%s%s: restricted: cannot specify `/' in command names\n",
 			r.bashErrPrefix(pos), args[0])
+		r.errf("%s", msg)
+		r.reportError("exec", pos, args[0], msg, 1)
 		r.exit.code = 1
 		return
 	}

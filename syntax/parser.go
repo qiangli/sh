@@ -2173,6 +2173,11 @@ func (p *Parser) getAssign(needEqual bool) *Assign {
 			}
 			if ae.Value = p.getWord(); ae.Value == nil {
 				switch p.tok {
+				case assgn:
+					ae.Value = &Word{Parts: []WordPart{
+						&Lit{ValuePos: p.pos, ValueEnd: posAddCol(p.pos, 1), Value: "="},
+					}}
+					p.next()
 				case _Newl, rightParen, leftBrack:
 					// TODO: support [index]=[
 				default:

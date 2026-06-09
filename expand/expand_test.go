@@ -79,6 +79,64 @@ func TestConfigNils(t *testing.T) {
 	}
 }
 
+func TestFormatLocaleDecimal(t *testing.T) {
+	got, _, err := Format(&Config{Env: ListEnviron("LANG=de_DE.UTF-8")}, "%.4f", []string{"1"})
+	if err != nil {
+		t.Fatalf("did not want error, got %v", err)
+	}
+	if want := "1,0000"; got != want {
+		t.Fatalf("wanted %q, got %q", want, got)
+	}
+
+	got, _, err = Format(&Config{Env: ListEnviron("LANG=C")}, "%.4f", []string{"1"})
+	if err != nil {
+		t.Fatalf("did not want error, got %v", err)
+	}
+	if want := "1.0000"; got != want {
+		t.Fatalf("wanted %q, got %q", want, got)
+	}
+}
+
+func TestFormatLocaleUnicodeEscapes(t *testing.T) {
+	tests := []struct {
+		env  string
+		fmt  string
+		want string
+	}{
+		{"LC_CTYPE=fr_FR.ISO8859-1", `\U000000e9`, "\xe9"},
+		{"LC_CTYPE=zh_TW.BIG5", `\U000003a8`, "\xa3Z"},
+		{"LC_CTYPE=ja_JP.SJIS", `\U0000ff8e`, "\xce"},
+		{"LC_CTYPE=C.UTF-8", `\U000000e9`, "é"},
+		{"LC_CTYPE=en_US.UTF-8", `\U01000000`, "\xf9\x80\x80\x80\x80"},
+		{"LC_CTYPE=en_US.UTF-8", `\U70000000`, "\xfd\xb0\x80\x80\x80\x80"},
+		{"LC_CTYPE=en_US.UTF-8", `\Uffffffff`, ""},
+	}
+	for _, tc := range tests {
+		got, _, err := Format(&Config{Env: ListEnviron(tc.env)}, tc.fmt, nil)
+		if err != nil {
+			t.Fatalf("%s: did not want error, got %v", tc.env, err)
+		}
+		if got != tc.want {
+			t.Fatalf("%s: wanted bytes %v, got %v", tc.env, []byte(tc.want), []byte(got))
+		}
+	}
+}
+
+func TestParamRemovePatternInvalidByte(t *testing.T) {
+	cfg := &Config{Env: ListEnviron(
+		"euro=\342\202\254",
+		"mid=\202",
+	)}
+	word := parseWord(t, `${euro##*$mid}`)
+	got, err := Literal(cfg, word)
+	if err != nil {
+		t.Fatalf("did not want error, got %v", err)
+	}
+	if want := "\254"; got != want {
+		t.Fatalf("wanted bytes %v, got %v", []byte(want), []byte(got))
+	}
+}
+
 func TestDocumentParamExpDefaultQuoteRemoval(t *testing.T) {
 	cfg := &Config{Env: ListEnviron("P=A")}
 	word := parseWord(t, `${P+\"$P\"}`)

@@ -1257,6 +1257,14 @@ var runTests = []runTest{
 		"cd: a: No such file or directory\nexit status 1 #JUSTERR",
 	},
 	{
+		`payload=$'\065\247\100\063\231\053\306\123\070\237\242\352\263'; cd "$payload"`,
+		"cd: $'5\\247@3\\231+\\306S8\\237\\242\\352\\263': No such file or directory\nexit status 1 #JUSTERR",
+	},
+	{
+		`[ "!" != "!" ]; echo bang:$?; [ "(" != "(" ]; echo paren:$?`,
+		"bang:1\nparen:1\n",
+	},
+	{
 		`[[ $PWD == "$(pwd)" ]]`,
 		"",
 	},
@@ -1490,6 +1498,10 @@ var runTests = []runTest{
 	{
 		"case foo in '*') echo x ;; f*) echo y ;; esac",
 		"y\n",
+	},
+	{
+		"euro=$'\\342\\202\\254'; b=$'\\202'; case $euro in *$b*) echo bytematch ;; *) echo mbchar ;; esac",
+		"bytematch\n",
 	},
 
 	// exec
@@ -2930,6 +2942,7 @@ done <<< 2`,
 	{`a=(x y z); IFS=-; echo "${!a[@]}"`, "0 1 2\n"},
 	{`set -- x y z; IFS=-; echo $*`, "x y z\n"},
 	{`set -- x y z; IFS=-; echo "$*"`, "x-y-z\n"},
+	{`set -- a b; IFS=é; echo "$*"`, "aéb\n"},
 	{`set -- "x y" z; unset IFS; printf '<%s>\n' $@`, "<x y>\n<z>\n"},
 	{`set -- "x y" z; IFS=; printf '<%s>\n' $@`, "<x y>\n<z>\n"},
 	{`set -- x y z; IFS=; echo $*`, "x y z\n"},
@@ -3247,6 +3260,15 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 		"b b b\n",
 	},
 	{
+		`arr=([0x003d]==); echo ${arr[61]}`,
+		"=\n",
+	},
+	{
+		`arr=([0x0020]=\  [0x0021]=\! [0x005c]=\\); printf '<%s>\n' "${arr[32]}" "${arr[33]}" "${arr[92]}"`,
+		"< >\n<!>\n<\\>\n",
+	},
+	{`printf '<%s>\n' $'\Uffffffff'`, "<>\n"},
+	{
 		`a=(['x']=b); echo ${a['y']}`,
 		"\n #IGNORE bash requires -A",
 	},
@@ -3394,6 +3416,8 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	{"declare -n foo=bar; bar=etc; [[ -R foo ]]", ""},
 	{"declare -n foo=bar; bar=etc; [ -R foo ]", ""},
 	{"nameref foo=bar; bar=etc; [[ -R foo ]]", " #IGNORE"},
+	{`arr=(a b); f(){ local -n A=arr; printf '<%s>\n' "${!A[@]}"; }; f`, "<0>\n<1>\n"},
+	{`arr=([0x03A8]=x); f(){ local -n A=${1:?}; printf '<%s>\n' "${!A[@]}"; }; f arr`, "<936>\n"},
 	{"declare foo=bar; bar=etc; [[ -R foo ]]", "exit status 1"},
 	{
 		"declare -n foo=bar; bar=etc; echo $foo; bar=zzz; echo $foo",
@@ -4039,6 +4063,10 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	{
 		"IFS=: read a b c <<< '1\\:2:3'; echo \"$a\"; echo $b; echo $c",
 		"1:2\n3\n\n",
+	},
+	{
+		"read -n 5 a <<< 'абвгдежзиклмноп '; echo -$a- ${#a}",
+		"-абвгд- 5\n",
 	},
 	{
 		"read -p",
@@ -5662,6 +5690,67 @@ func TestRunnerAuditHandler(t *testing.T) {
 	}
 	if !sawLs {
 		t.Fatalf("expected audit event for `ls`, got events: %+v", events)
+	}
+}
+
+func TestRunnerStructuredErrors(t *testing.T) {
+	t.Parallel()
+	src := "f(){ return 1 2; }\nf\nmissing-command\n"
+	file, err := syntax.NewParser().Parse(strings.NewReader(src), "script.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var events []interp.ErrorEvent
+	var out bytes.Buffer
+	r, err := interp.New(
+		interp.StdIO(nil, &out, &out),
+		interp.WithBashCompatErrors(true),
+		interp.WithStructuredErrors(func(e interp.ErrorEvent) {
+			events = append(events, e)
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), runnerRunTimeout)
+	defer cancel()
+	err = r.Run(ctx, file)
+	if status, ok := interp.IsExitStatus(err); !ok || status != 127 {
+		t.Fatalf("Run status = %v, %v; want 127", status, err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("events = %+v; want 2 events", events)
+	}
+	if got, want := events[0].Kind, "builtin"; got != want {
+		t.Fatalf("first kind = %q, want %q", got, want)
+	}
+	if got, want := events[0].Command, "return"; got != want {
+		t.Fatalf("first command = %q, want %q", got, want)
+	}
+	if got, want := events[0].Function, "f"; got != want {
+		t.Fatalf("first function = %q, want %q", got, want)
+	}
+	if got, want := events[0].ExitStatus, uint8(2); got != want {
+		t.Fatalf("first exit status = %d, want %d", got, want)
+	}
+	if got, want := events[0].Message, "script.sh: line 1: return: too many arguments"; got != want {
+		t.Fatalf("first message = %q, want %q", got, want)
+	}
+	if got, want := events[0].Pos.Line(), uint(1); got != want {
+		t.Fatalf("first line = %d, want %d", got, want)
+	}
+
+	if got, want := events[1].Kind, "exec"; got != want {
+		t.Fatalf("second kind = %q, want %q", got, want)
+	}
+	if got, want := events[1].Command, "missing-command"; got != want {
+		t.Fatalf("second command = %q, want %q", got, want)
+	}
+	if got, want := events[1].ExitStatus, uint8(127); got != want {
+		t.Fatalf("second exit status = %d, want %d", got, want)
+	}
+	if got, want := events[1].Message, "script.sh: line 3: missing-command: command not found"; got != want {
+		t.Fatalf("second message = %q, want %q", got, want)
 	}
 }
 

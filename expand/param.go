@@ -604,8 +604,6 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			}
 			strs = cfg.namesByPrefix(pe.Param.Value)
 			sortStrs = true
-		case orig.Kind == NameRef:
-			strs = append(strs, orig.Str)
 		case pe.Index != nil && vr.Kind == Indexed:
 			for i, e := range vr.List {
 				if e != "" {
@@ -616,6 +614,8 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 		case pe.Index != nil && vr.Kind == Associative:
 			strs = slices.AppendSeq(strs, maps.Keys(vr.Map))
 			sortStrs = true
+		case orig.Kind == NameRef:
+			strs = append(strs, orig.Str)
 		case (name == "@" || name == "*") && !vr.IsSet():
 			return "", nil
 		case !vr.IsSet():
@@ -1084,23 +1084,33 @@ func (cfg *Config) removePattern(str, pat string, fromEnd, shortest bool) string
 	if cfg.ExtGlob {
 		mode |= pattern.ExtendedOperators
 	}
-	matcher, err := internal.ExtendedPatternMatcher(pat, mode)
-	if err != nil {
-		return str
-	}
-
 	match := func(s string) bool {
-		return matcher(s)
+		return false
+	}
+	splitPoints := removePatternSplitPoints
+	if !utf8.ValidString(pat) {
+		match = func(s string) bool {
+			return internal.BytePatternMatch([]byte(pat), []byte(s))
+		}
+		splitPoints = removePatternByteSplitPoints
+	} else {
+		matcher, err := internal.ExtendedPatternMatcher(pat, mode)
+		if err != nil {
+			return str
+		}
+		match = func(s string) bool {
+			return matcher(s)
+		}
 	}
 	if !fromEnd {
 		if shortest {
-			for _, i := range removePatternSplitPoints(str) {
+			for _, i := range splitPoints(str) {
 				if match(str[:i]) {
 					return str[i:]
 				}
 			}
 		} else {
-			for _, i := range slices.Backward(removePatternSplitPoints(str)) {
+			for _, i := range slices.Backward(splitPoints(str)) {
 				if match(str[:i]) {
 					return str[i:]
 				}
@@ -1110,13 +1120,13 @@ func (cfg *Config) removePattern(str, pat string, fromEnd, shortest bool) string
 	}
 
 	if shortest {
-		for _, i := range slices.Backward(removePatternSplitPoints(str)) {
+		for _, i := range slices.Backward(splitPoints(str)) {
 			if match(str[i:]) {
 				return str[:i]
 			}
 		}
 	} else {
-		for _, i := range removePatternSplitPoints(str) {
+		for _, i := range splitPoints(str) {
 			if match(str[i:]) {
 				return str[:i]
 			}
@@ -1134,6 +1144,14 @@ func removePatternSplitPoints(s string) []int {
 		}
 	}
 	points = append(points, len(s))
+	return points
+}
+
+func removePatternByteSplitPoints(s string) []int {
+	points := make([]int, len(s)+1)
+	for i := range points {
+		points[i] = i
+	}
 	return points
 }
 

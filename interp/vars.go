@@ -1381,7 +1381,7 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 				continue
 			}
 			k := r.literal(w)
-			v := r.literal(elem.Value)
+			v := r.literalForAssign(elem.Value)
 			if elem.Append {
 				v = amap[k] + v
 			}
@@ -1428,7 +1428,7 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 					index = 0
 				}
 			}
-			elemValues[i].values = []string{r.literal(elem.Value)}
+			elemValues[i].values = []string{r.literalForAssign(elem.Value)}
 			elemValues[i].append = elem.Append
 		} else {
 			// Implicit index, advancing for every word.

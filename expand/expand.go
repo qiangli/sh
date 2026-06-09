@@ -24,6 +24,9 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"golang.org/x/text/encoding/japanese"
+	"golang.org/x/text/encoding/traditionalchinese"
+
 	"mvdan.cc/sh/v3/internal"
 	"mvdan.cc/sh/v3/pattern"
 	"mvdan.cc/sh/v3/syntax"
@@ -235,7 +238,11 @@ func (cfg *Config) ifsRune(r rune) bool {
 func (cfg *Config) ifsJoin(strs []string) string {
 	sep := ""
 	if cfg.ifs != "" {
-		sep = cfg.ifs[:1]
+		r, size := utf8.DecodeRuneInString(cfg.ifs)
+		sep = string(r)
+		if r == utf8.RuneError && size == 1 {
+			sep = cfg.ifs[:1]
+		}
 	}
 	return strings.Join(strs, sep)
 }
@@ -633,7 +640,7 @@ func ansiCEscape(s string) string {
 				if c == 'x' {
 					sb.WriteByte(byte(n))
 				} else {
-					sb.WriteRune(rune(n))
+					sb.WriteString(printfEncodeRune("", rune(n)))
 				}
 				break
 			}
@@ -653,7 +660,7 @@ func ansiCEscape(s string) string {
 			if c == 'x' {
 				sb.WriteByte(byte(n))
 			} else {
-				sb.WriteRune(rune(n))
+				sb.WriteString(printfEncodeRune("", rune(n)))
 			}
 			i += j
 		default:
@@ -672,7 +679,7 @@ func ansiCEscape(s string) string {
 func FormatBPercent(cfg *Config, s string) (string, error) {
 	cfg = prepareConfig(cfg)
 	sb := cfg.strBuilder()
-	_, err := formatIntoMode(sb, s, nil, cfg.StartTime, nil, true, nil, nil)
+	_, err := formatIntoMode(sb, s, nil, cfg.StartTime, nil, "", false, true, nil, nil)
 	if err == errPrintfStop {
 		return sb.String(), errPrintfStop
 	}
@@ -686,7 +693,7 @@ func Format(cfg *Config, format string, args []string) (string, int, error) {
 	cfg = prepareConfig(cfg)
 	sb := cfg.strBuilder()
 
-	consumed, err := formatIntoMode(sb, format, args, cfg.StartTime, printfTimeLocation(cfg), false, cfg.OnFormatWarning, cfg.OnPercentN)
+	consumed, err := formatIntoMode(sb, format, args, cfg.StartTime, printfTimeLocation(cfg), printfCTypeLocale(cfg), printfDecimalComma(cfg), false, cfg.OnFormatWarning, cfg.OnPercentN)
 	if err == errPrintfStop {
 		// `\c` told printf to stop emitting output from a %b arg
 		// (or `\c` directly in format). Surface what's already in
@@ -729,6 +736,86 @@ func printfTimeLocation(cfg *Config) *time.Location {
 		}
 	}
 	return time.Local
+}
+
+func printfDecimalComma(cfg *Config) bool {
+	if cfg == nil || cfg.Env == nil {
+		return false
+	}
+	locale := ""
+	for _, name := range []string{"LC_ALL", "LC_NUMERIC", "LANG"} {
+		vr := cfg.Env.Get(name)
+		if vr.IsSet() && vr.String() != "" {
+			locale = vr.String()
+			break
+		}
+	}
+	locale = strings.ToLower(locale)
+	return strings.HasPrefix(locale, "de_") ||
+		strings.HasPrefix(locale, "fr_") ||
+		strings.HasPrefix(locale, "it_") ||
+		strings.HasPrefix(locale, "es_")
+}
+
+func printfCTypeLocale(cfg *Config) string {
+	if cfg == nil || cfg.Env == nil {
+		return ""
+	}
+	for _, name := range []string{"LC_ALL", "LC_CTYPE", "LANG"} {
+		vr := cfg.Env.Get(name)
+		if vr.IsSet() && vr.String() != "" {
+			return strings.ToLower(vr.String())
+		}
+	}
+	return ""
+}
+
+func printfEncodeRune(locale string, r rune) string {
+	if r < 0 {
+		return ""
+	}
+	if r > utf8.MaxRune && (locale == "" || strings.Contains(locale, "utf")) {
+		return string(legacyUTF8(r))
+	}
+	switch {
+	case strings.Contains(locale, "iso8859") || strings.Contains(locale, "iso-8859"):
+		if r <= 0xff {
+			return string([]byte{byte(r)})
+		}
+	case strings.Contains(locale, "big5"):
+		if r < utf8.RuneSelf {
+			return string([]byte{byte(r)})
+		}
+		if s, err := traditionalchinese.Big5.NewEncoder().String(string(r)); err == nil {
+			return s
+		}
+	case strings.Contains(locale, "sjis") || strings.Contains(locale, "shift_jis"):
+		if r < utf8.RuneSelf {
+			return string([]byte{byte(r)})
+		}
+		if s, err := japanese.ShiftJIS.NewEncoder().String(string(r)); err == nil {
+			return s
+		}
+	}
+	return string(r)
+}
+
+func legacyUTF8(r rune) []byte {
+	u := uint32(r)
+	switch {
+	case u <= 0x7f:
+		return []byte{byte(u)}
+	case u <= 0x7ff:
+		return []byte{byte(0xc0 | (u >> 6)), byte(0x80 | (u & 0x3f))}
+	case u <= 0xffff:
+		return []byte{byte(0xe0 | (u >> 12)), byte(0x80 | ((u >> 6) & 0x3f)), byte(0x80 | (u & 0x3f))}
+	case u <= 0x1fffff:
+		return []byte{byte(0xf0 | (u >> 18)), byte(0x80 | ((u >> 12) & 0x3f)), byte(0x80 | ((u >> 6) & 0x3f)), byte(0x80 | (u & 0x3f))}
+	case u <= 0x3ffffff:
+		return []byte{byte(0xf8 | (u >> 24)), byte(0x80 | ((u >> 18) & 0x3f)), byte(0x80 | ((u >> 12) & 0x3f)), byte(0x80 | ((u >> 6) & 0x3f)), byte(0x80 | (u & 0x3f))}
+	default:
+		return []byte{byte(0xfc | (u >> 30)), byte(0x80 | ((u >> 24) & 0x3f)), byte(0x80 | ((u >> 18) & 0x3f)), byte(0x80 | ((u >> 12) & 0x3f)), byte(0x80 | ((u >> 6) & 0x3f)), byte(0x80 | (u & 0x3f))}
+	}
 }
 
 // ErrPrintfStop is the sentinel returned when `\c` was seen inside a
@@ -835,7 +922,7 @@ func strftime(format string, t time.Time) string {
 }
 
 func formatInto(sb *strings.Builder, format string, args []string, startTime time.Time, warn func(string)) (int, error) {
-	return formatIntoMode(sb, format, args, startTime, nil, false, warn, nil)
+	return formatIntoMode(sb, format, args, startTime, nil, "", false, false, warn, nil)
 }
 
 // formatIntoMode is the inner worker for [Format]. percentB switches the
@@ -843,7 +930,7 @@ func formatInto(sb *strings.Builder, format string, args []string, startTime tim
 // preserved with their backslash (bash only honors those escapes in
 // format strings, not in `%b` arg). onPercentN is invoked by `%n` to
 // store the byte count into the variable named by the next arg.
-func formatIntoMode(sb *strings.Builder, format string, args []string, startTime time.Time, loc *time.Location, percentB bool, warn func(string), onPercentN func(string, int) error) (int, error) {
+func formatIntoMode(sb *strings.Builder, format string, args []string, startTime time.Time, loc *time.Location, ctypeLocale string, decimalComma bool, percentB bool, warn func(string), onPercentN func(string, int) error) (int, error) {
 	if loc == nil {
 		loc = time.Local
 	}
@@ -1003,7 +1090,7 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 						// always as a single byte
 						sb.WriteByte(byte(n))
 					} else {
-						sb.WriteRune(rune(n))
+						sb.WriteString(printfEncodeRune(ctypeLocale, rune(n)))
 					}
 					break
 				}
@@ -1311,7 +1398,7 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 					// Apply width/precision via Go's %s after the
 					// escape-processed bytes are captured.
 					var bsb strings.Builder
-					_, err := formatIntoMode(&bsb, arg, nil, startTime, loc, true, warn, nil)
+					_, err := formatIntoMode(&bsb, arg, nil, startTime, loc, ctypeLocale, decimalComma, true, warn, nil)
 					if err == ErrPrintfStop {
 						// Surface the partial output and signal stop.
 						sb.WriteString(bsb.String())
@@ -1392,7 +1479,16 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 						fmts = bytes.ReplaceAll(fmts, []byte{'+'}, nil)
 					}
 					fmts = append(fmts, c)
+					start := sb.Len()
 					fmt.Fprintf(sb, string(fmts), farg)
+					if decimalComma && (c == 'f' || c == 'F' || c == 'e' || c == 'E' || c == 'g' || c == 'G') {
+						s := sb.String()
+						if strings.Contains(s[start:], ".") {
+							sb.Reset()
+							sb.WriteString(s[:start])
+							sb.WriteString(strings.ReplaceAll(s[start:], ".", ","))
+						}
+					}
 				}
 				fmts = nil
 				wideFmt = false
@@ -2877,13 +2973,17 @@ func (cfg *Config) quotedElemFields(pe *syntax.ParamExp) []string {
 		}
 		switch nodeLit(pe.Index) {
 		case "@": // "${!name[@]}"
-			switch vr := cfg.Env.Get(name); vr.Kind {
+			vr := cfg.Env.Get(name)
+			if _, resolved := vr.Resolve(cfg.Env); resolved.IsSet() {
+				vr = resolved
+			}
+			switch vr.Kind {
 			case Indexed:
-				// TODO: if an indexed array only has elements 0 and 10,
-				// we should not return all indices in between those.
 				keys := make([]string, 0, len(vr.List))
-				for key := range vr.List {
-					keys = append(keys, strconv.Itoa(key))
+				for key, elem := range vr.List {
+					if elem != "" {
+						keys = append(keys, strconv.Itoa(key))
+					}
 				}
 				return keys
 			case Associative:

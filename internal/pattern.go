@@ -7,6 +7,7 @@ import (
 	"errors"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"mvdan.cc/sh/v3/pattern"
 )
@@ -54,6 +55,59 @@ func ExtendedPatternMatcher(pat string, mode pattern.Mode) (func(string) bool, e
 		return nil, err
 	}
 	return rx.MatchString, nil
+}
+
+// BytePatternMatch is a small byte-oriented shell wildcard matcher for
+// patterns containing invalid UTF-8 bytes. Go regexps match runes, but bash's
+// pattern operators can match raw bytes in those edge cases.
+func BytePatternMatch(pat, name []byte) bool {
+	for len(pat) > 0 {
+		switch p := pat[0]; p {
+		case '*':
+			for len(pat) > 1 && pat[1] == '*' {
+				pat = pat[1:]
+			}
+			if len(pat) == 1 {
+				return true
+			}
+			pat = pat[1:]
+			for i := 0; i <= len(name); i++ {
+				if BytePatternMatch(pat, name[i:]) {
+					return true
+				}
+			}
+			return false
+		case '?':
+			if len(name) == 0 {
+				return false
+			}
+			_, size := utf8.DecodeRune(name)
+			if size == 0 {
+				size = 1
+			}
+			pat = pat[1:]
+			name = name[size:]
+		case '\\':
+			if len(pat) == 1 {
+				p = '\\'
+				pat = pat[1:]
+			} else {
+				p = pat[1]
+				pat = pat[2:]
+			}
+			if len(name) == 0 || name[0] != p {
+				return false
+			}
+			name = name[1:]
+		default:
+			if len(name) == 0 || name[0] != p {
+				return false
+			}
+			pat = pat[1:]
+			name = name[1:]
+		}
+	}
+	return len(name) == 0
 }
 
 // atUnionWithNegationMatcher handles `@(<alt>|<alt>|…)` patterns

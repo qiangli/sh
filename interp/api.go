@@ -345,6 +345,12 @@ type Runner struct {
 	// the shell is about to run.
 	auditHandler func(AuditEvent)
 
+	// structuredErrorHandler, when non-nil, is invoked for known
+	// user-facing diagnostics as they are emitted to stderr. It is an
+	// additive observability hook; stderr output and exit semantics are
+	// unchanged when it is set.
+	structuredErrorHandler func(ErrorEvent)
+
 	// deterministic toggles deterministic-mode behaviour: a seeded
 	// PRNG for $RANDOM, frozen $SECONDS / $EPOCHSECONDS, and stable
 	// $$ when [deterministicSeed] is set. Embedders enable it via
@@ -1084,6 +1090,45 @@ func WithAuditHandler(fn func(AuditEvent)) RunnerOption {
 	}
 }
 
+// ErrorEvent is delivered to the [WithStructuredErrors] callback when
+// the runner emits a known user-facing diagnostic.
+type ErrorEvent struct {
+	// Kind classifies the diagnostic at a coarse level, such as
+	// "builtin", "expand", "exec", or "io".
+	Kind string
+	// Severity is "error" for diagnostics that affect the command's
+	// status. Future warning-only sites may use "warning".
+	Severity string
+	// Message is the exact diagnostic text written to stderr, minus a
+	// trailing newline.
+	Message string
+	// Pos is the source position associated with the diagnostic.
+	Pos syntax.Pos
+	// Filename is [Runner.filename] (the parsed script's name) or
+	// empty if the runner was driven by -c / a Node value.
+	Filename string
+	// Function is the innermost shell function active when the
+	// diagnostic was produced, if any.
+	Function string
+	// Command is the command or builtin name associated with the
+	// diagnostic, if known.
+	Command string
+	// ExitStatus is the status assigned by the diagnostic site, when
+	// that status is known.
+	ExitStatus uint8
+}
+
+// WithStructuredErrors registers a callback invoked when the runner
+// emits known diagnostics. It gives embedders a typed stream for
+// observability and audit trails without parsing bash-shaped stderr.
+// The callback runs synchronously; keep it cheap.
+func WithStructuredErrors(fn func(ErrorEvent)) RunnerOption {
+	return func(r *Runner) error {
+		r.structuredErrorHandler = fn
+		return nil
+	}
+}
+
 // WithDeterministic enables deterministic-mode runs targeted at
 // agentic harnesses that need reproducible output. When on:
 //   - $RANDOM uses a per-runner PRNG seeded from `seed` (or 0 if
@@ -1393,19 +1438,20 @@ func (r *Runner) Reset() {
 		dirStack: r.dirStack[:0],
 		usedNew:  r.usedNew,
 
-		promptExpand:      r.promptExpand,
-		startTime:         r.startTime,
-		subshellLevel:     r.subshellLevel,
-		umask:             r.umask,
-		loginShell:        r.loginShell,
-		bashCompatErrors:  r.bashCompatErrors,
-		bashSource:        slices.Clone(r.bashSource),
-		auditHandler:      r.auditHandler,
-		deterministic:     r.deterministic,
-		deterministicSeed: r.deterministicSeed,
-		deterministicRng:  r.deterministicRng,
-		commandString:     r.commandString,
-		inheritedFds:      maps.Clone(r.inheritedFds),
+		promptExpand:           r.promptExpand,
+		startTime:              r.startTime,
+		subshellLevel:          r.subshellLevel,
+		umask:                  r.umask,
+		loginShell:             r.loginShell,
+		bashCompatErrors:       r.bashCompatErrors,
+		bashSource:             slices.Clone(r.bashSource),
+		auditHandler:           r.auditHandler,
+		structuredErrorHandler: r.structuredErrorHandler,
+		deterministic:          r.deterministic,
+		deterministicSeed:      r.deterministicSeed,
+		deterministicRng:       r.deterministicRng,
+		commandString:          r.commandString,
+		inheritedFds:           maps.Clone(r.inheritedFds),
 		// fdTable is intentionally not preserved across Reset; a reset
 		// runner starts with no inherited non-stdio fds.
 	}
@@ -1599,18 +1645,19 @@ func (r *Runner) subshell(background bool) *Runner {
 
 		origStdout: r.origStdout, // used for process substitutions
 
-		promptExpand:      r.promptExpand,
-		startTime:         r.startTime,
-		subshellLevel:     r.subshellLevel + 1,
-		umask:             r.umask,
-		loginShell:        r.loginShell,
-		bashCompatErrors:  r.bashCompatErrors,
-		auditHandler:      r.auditHandler,
-		deterministic:     r.deterministic,
-		deterministicSeed: r.deterministicSeed,
-		deterministicRng:  r.deterministicRng,
-		randomSeeded:      r.randomSeeded,
-		randomSeed:        r.randomSeed,
+		promptExpand:           r.promptExpand,
+		startTime:              r.startTime,
+		subshellLevel:          r.subshellLevel + 1,
+		umask:                  r.umask,
+		loginShell:             r.loginShell,
+		bashCompatErrors:       r.bashCompatErrors,
+		auditHandler:           r.auditHandler,
+		structuredErrorHandler: r.structuredErrorHandler,
+		deterministic:          r.deterministic,
+		deterministicSeed:      r.deterministicSeed,
+		deterministicRng:       r.deterministicRng,
+		randomSeeded:           r.randomSeeded,
+		randomSeed:             r.randomSeed,
 		// Subshells inherit open fds the way bash does. Clone the map so
 		// child mutations (close, dup) don't leak back to the parent;
 		// the underlying *os.File handles are shared (single OS fd).

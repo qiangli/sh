@@ -19,6 +19,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"golang.org/x/term"
 
@@ -172,11 +173,14 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 	// [WithBashCompatErrors] is on, the message is prefixed with
 	// "<filename>: line <N>: " so bash 5.3's test suite output matches.
 	failf := func(code uint8, format string, a ...any) exitStatus {
+		msg := fmt.Sprintf(format, a...)
 		if prefix := r.bashErrPrefix(pos); prefix != "" {
-			r.errf(prefix+format, a...)
+			msg = prefix + msg
+			r.errf("%s", msg)
 		} else {
-			r.errf(format, a...)
+			r.errf("%s", msg)
 		}
+		r.reportError("builtin", pos, name, msg, code)
 		exit.code = code
 		return exit
 	}
@@ -1458,6 +1462,31 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				return exit
 			}
 		}
+		if len(args) == 3 {
+			if op := testBinaryOp(args[1]); op != illegalTok &&
+				op != syntax.AndTest && op != syntax.OrTest {
+				word := func(s string) *syntax.Word {
+					return &syntax.Word{Parts: []syntax.WordPart{
+						&syntax.Lit{Value: s},
+					}}
+				}
+				expr := &syntax.BinaryTest{
+					Op: op,
+					X:  word(args[0]),
+					Y:  word(args[2]),
+				}
+				r.testIntErr = ""
+				exit.oneIf(r.bashTest(ctx, expr, true) == "")
+				if r.testIntErr != "" {
+					inner := name
+					r.errf("%s%s: %s: integer expected\n",
+						r.bashErrPrefix(pos), inner, r.testIntErr)
+					r.testIntErr = ""
+					exit.code = 2
+				}
+				return exit
+			}
+		}
 		// 3-arg `arg1 OP arg2` where OP isn't a binary operator:
 		// bash 5.3 emits `<OP>: binary operator expected` rather
 		// than the generic "too many arguments" path used for 4+
@@ -2024,21 +2053,33 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					err = io.EOF
 				}
 			} else {
-				// `-n`: read up to nchars bytes, stopping early at the
-				// delimiter. Bash drops the delimiter byte from the
-				// result, so do this one byte at a time.
+				// `-n`: read up to nchars characters, stopping early at
+				// the delimiter. Bash drops the delimiter byte from the
+				// result, so read one byte at a time but count complete
+				// UTF-8 runes.
 				one := make([]byte, 1)
 				delimByte := byte('\n')
 				if len(delim) > 0 {
 					delimByte = delim[0]
 				}
-				for len(line) < nchars {
+				for chars := 0; chars < nchars; {
 					n, readErr := r.stdin.Read(one)
 					if n > 0 {
 						if one[0] == delimByte {
 							break
 						}
 						line = append(line, one[0])
+						start := len(line) - 1
+						for start > 0 && (line[start]&0xc0) == 0x80 {
+							start--
+						}
+						cur := line[start:]
+						if utf8.FullRune(cur) {
+							chars++
+						} else if len(cur) >= utf8.UTFMax {
+							// Malformed input should still make progress.
+							chars++
+						}
 					}
 					if readErr != nil {
 						err = readErr
@@ -4144,12 +4185,12 @@ func (r *Runner) changeDir(ctx context.Context, cmd, path string) uint8 {
 	if err != nil || !info.IsDir() {
 		// bash format: `<file>: line N: <cmd>: <path>: No such file or directory`
 		r.errf("%s%s: %s: No such file or directory\n",
-			r.bashErrPrefix(r.curStmtPos), cmd, path)
+			r.bashErrPrefix(r.curStmtPos), cmd, bashDiagnosticWord(path))
 		return 1
 	}
 	if r.access(ctx, apath, access_X_OK) != nil {
 		r.errf("%s%s: %s: Permission denied\n",
-			r.bashErrPrefix(r.curStmtPos), cmd, path)
+			r.bashErrPrefix(r.curStmtPos), cmd, bashDiagnosticWord(path))
 		return 1
 	}
 	r.Dir = apath
