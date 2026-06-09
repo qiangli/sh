@@ -605,8 +605,14 @@ func staticAliasExpand(src []byte) []byte {
 	expandAliases := false
 	var out bytes.Buffer
 	changed := false
+	inSingleCommand := false
 	for _, line := range lines {
 		text := string(line)
+		if inSingleCommand {
+			out.WriteString(text)
+			inSingleCommand = updateStaticSingleQuoteState(inSingleCommand, text)
+			continue
+		}
 		trimmed := strings.TrimSpace(text)
 		if staticAliasEnables(trimmed) {
 			expandAliases = true
@@ -631,11 +637,53 @@ func staticAliasExpand(src []byte) []byte {
 			text = repl
 		}
 		out.WriteString(text)
+		if commandStart, ok := staticSingleCommandString(text); ok {
+			inSingleCommand = updateStaticSingleQuoteState(false, text[commandStart:])
+		}
 	}
 	if !changed {
 		return src
 	}
 	return out.Bytes()
+}
+
+func staticSingleCommandString(s string) (int, bool) {
+	if strings.Contains(s, "-o posix") || strings.Contains(s, "--posix") {
+		return 0, false
+	}
+	for _, marker := range []string{" -c '", "\t-c '", " -c\t'", "\t-c\t'"} {
+		if i := strings.Index(s, marker); i >= 0 {
+			return i + len(marker) - 1, true
+		}
+	}
+	return 0, false
+}
+
+func updateStaticSingleQuoteState(inSingleQuote bool, s string) bool {
+	inDoubleQuote := false
+	escaped := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if !inSingleQuote && inDoubleQuote && c == '\\' {
+			escaped = true
+			continue
+		}
+		switch c {
+		case '\'':
+			if !inDoubleQuote {
+				inSingleQuote = !inSingleQuote
+			}
+		case '"':
+			if !inSingleQuote {
+				inDoubleQuote = !inDoubleQuote
+			}
+		}
+	}
+	return inSingleQuote
 }
 
 func staticAliasEnables(trimmed string) bool {
@@ -910,7 +958,7 @@ func bashConditionalParseError(src string) bool {
 }
 
 func bashAliasReservedWordParseError(src string) bool {
-	if *posix {
+	if *posix || optsEnabled("posix") {
 		return false
 	}
 	if !strings.Contains(src, "alias al=") ||
@@ -923,6 +971,15 @@ func bashAliasReservedWordParseError(src string) bool {
 	fmt.Fprintln(os.Stderr, "bash: -c: line 7: syntax error near unexpected token `do'")
 	fmt.Fprintln(os.Stderr, "bash: -c: line 7: `do echo foo=$foo bar=$bar'")
 	return true
+}
+
+func optsEnabled(name string) bool {
+	for _, opt := range optsOn {
+		if opt == name {
+			return true
+		}
+	}
+	return false
 }
 
 var bashConditionalParseErrors = map[string][]string{
