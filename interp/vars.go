@@ -885,9 +885,6 @@ func (r *Runner) unsetArrayElem(name, idx string) {
 		return
 	}
 	vr := r.lookupVar(name)
-	if !vr.IsSet() {
-		return
-	}
 	switch vr.Kind {
 	case expand.Indexed:
 		n, err := strconv.Atoi(idx)
@@ -1216,7 +1213,6 @@ func (r *Runner) setVarWithIndex(prev expand.Variable, name string, index syntax
 		if prev.Integer {
 			valStr = r.integerArrayValue(valStr)
 		}
-		prev.Set = true
 		prev.Map[k] = valStr
 		r.setVar(name, prev)
 		return
