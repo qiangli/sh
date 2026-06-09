@@ -4420,8 +4420,12 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 						modes = append(modes, flag)
 					case "-g":
 						global = true
-					case "-f", "-F", "-p":
+					case "-f", "-F":
 						declQuery = flag
+						modes = append(modes, flag)
+					case "-p":
+						declQuery = flag
+						modes = append(modes, flag)
 					default:
 						builtinName := cm.Variant.Value
 						r.errf("%s%s: %s: invalid option\n", r.bashErrPrefix(r.curStmtPos), builtinName, flag)
@@ -4521,6 +4525,16 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				continue
 			}
 			if declQuery == "-p" {
+				if slices.Contains(modes, "-f") || slices.Contains(modes, "-F") {
+					if body := r.Funcs[name]; body != nil {
+						if slices.Contains(modes, "-F") {
+							r.outf("%s\n", name)
+						} else {
+							r.printFuncDecl(name, body)
+						}
+						continue
+					}
+				}
 				// declare -p name: print variable with attributes.
 				vr := r.lookupVar(name)
 				if !vr.Declared() {

@@ -939,7 +939,15 @@ var runTests = []runTest{
 		"f () \n{ \n    echo hello\n}\n",
 	},
 	{
+		`f() { echo hello; }; declare -f -p f`,
+		"f () \n{ \n    echo hello\n}\n",
+	},
+	{
 		`declare -f nonexistent 2>/dev/null; echo "exit: $?"`,
+		"exit: 1\n",
+	},
+	{
+		`declare -f -p nonexistent 2>/dev/null; echo "exit: $?"`,
 		"exit: 1\n",
 	},
 	{
