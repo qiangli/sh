@@ -1148,7 +1148,7 @@ func (r *Runner) setVarWithIndex(prev expand.Variable, name string, index syntax
 			}}
 		case expand.Associative:
 			index = &syntax.Word{Parts: []syntax.WordPart{
-				&syntax.DblQuoted{},
+				&syntax.Lit{Value: "0"},
 			}}
 		}
 	}
@@ -1511,7 +1511,7 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 			// `assoc=(…)` (no `+=`) still falls through to the
 			// inference below for back-compat.
 			valType = "-A"
-		case prev.Kind == expand.Associative && len(elems) == 0:
+		case prev.Kind == expand.Associative:
 			valType = "-A"
 		case len(elems) > 0 && stringIndex(elems[0].Index):
 			valType = "-A" // associative
