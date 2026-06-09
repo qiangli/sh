@@ -1550,6 +1550,7 @@ func rewriteParserErrorText(src string, pe syntax.ParseError) string {
 	}
 	switch {
 	case pe.Text == "statements must be separated by &, ; or a newline",
+		pe.Text == "array element values must be words",
 		strings.Contains(pe.Text, "must be followed by"),
 		strings.Contains(pe.Text, "must follow a name"):
 		// For `case`/`for`/`select` follow-errors the parser anchors the
