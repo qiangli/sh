@@ -5946,7 +5946,38 @@ func (r *Runner) exec(ctx context.Context, pos syntax.Pos, args []string) {
 func (r *Runner) execAs(ctx context.Context, pos syntax.Pos, argv0 string, clearEnv bool, args []string) {
 	hashed := false
 	if len(args) > 0 {
-		if entry, ok := r.cmdHashTable[args[0]]; ok {
+		name := args[0]
+		if entry, ok := r.cmdHashTable[name]; ok {
+			checkHash := false
+			if opt, _ := r.bashOptByName("checkhash"); opt != nil {
+				checkHash = *opt
+			}
+			if _, err := os.Stat(entry.path); err != nil && os.IsNotExist(err) {
+				if checkHash {
+					delete(r.cmdHashTable, name)
+					if path, err := LookPathDir(r.Dir, r.writeEnv, name); err == nil {
+						r.cmdHashTable[name] = cmdHashEntry{path: path}
+						hashed = true
+						args = append([]string{path}, args[1:]...)
+					}
+				} else {
+					msg := fmt.Sprintf("%s%s: No such file or directory\n",
+						r.bashErrPrefix(pos), entry.path)
+					r.errf("%s", msg)
+					r.reportError("exec", pos, entry.path, msg, 127)
+					r.exit.code = 127
+					return
+				}
+			} else if err != nil {
+				msg := fmt.Sprintf("%s%s: %s\n",
+					r.bashErrPrefix(pos), entry.path, err)
+				r.errf("%s", msg)
+				r.reportError("exec", pos, entry.path, msg, 126)
+				r.exit.code = 126
+				return
+			}
+		}
+		if entry, ok := r.cmdHashTable[args[0]]; ok && !hashed {
 			hashed = true
 			entry.hits++
 			r.cmdHashTable[args[0]] = entry

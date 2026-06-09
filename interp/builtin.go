@@ -1060,6 +1060,8 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		clearHash := false
 		var explicitPath string
 		listOnly := false
+		printPath := false
+		deleteNames := false
 		for fp.more() {
 			switch flag := fp.flag(); flag {
 			case "-r":
@@ -1077,24 +1079,55 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			case "-t":
 				// `hash -t name …`: print just the path for each
 				// hashed name. Handled below in name loop.
+				printPath = true
 			case "-d":
 				// `hash -d NAME`: forget specific name.
-				if names := fp.args(); len(names) > 0 {
-					for _, n := range names {
-						delete(r.cmdHashTable, n)
-					}
-				}
-				break
+				deleteNames = true
 			default:
 				return failf(1, "hash: %s: invalid option\n", flag)
 			}
 		}
-		_ = listOnly
 		if clearHash {
 			clear(r.cmdHashTable)
 			break
 		}
 		remaining := fp.args()
+		hashListEntry := func(name string, entry cmdHashEntry) {
+			r.outf("builtin hash -p %s %s\n", entry.path, name)
+		}
+		if deleteNames {
+			if len(remaining) == 0 {
+				break
+			}
+			for _, name := range remaining {
+				if _, ok := r.cmdHashTable[name]; !ok {
+					r.errf(r.bashErrPrefix(pos)+"hash: %s: not found\n", name)
+					exit.code = 1
+					continue
+				}
+				delete(r.cmdHashTable, name)
+			}
+			break
+		}
+		if printPath {
+			if len(remaining) == 0 {
+				break
+			}
+			for _, name := range remaining {
+				entry, ok := r.cmdHashTable[name]
+				if !ok {
+					r.errf(r.bashErrPrefix(pos)+"hash: %s: not found\n", name)
+					exit.code = 1
+					continue
+				}
+				if listOnly {
+					hashListEntry(name, entry)
+				} else {
+					r.outf("%s\n", entry.path)
+				}
+			}
+			break
+		}
 		if len(remaining) == 0 {
 			// List cached commands in bash's format:
 			//   hits	command
@@ -1103,16 +1136,23 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				r.outf("hash: hash table empty\n")
 				break
 			}
-			r.outf("hits\tcommand\n")
-			entries := make([]cmdHashEntry, 0, len(r.cmdHashTable))
-			for _, entry := range r.cmdHashTable {
-				entries = append(entries, entry)
+			names := make([]string, 0, len(r.cmdHashTable))
+			for name := range r.cmdHashTable {
+				names = append(names, name)
 			}
-			sort.Slice(entries, func(i, j int) bool {
-				return entries[i].path < entries[j].path
+			sort.Slice(names, func(i, j int) bool {
+				return r.cmdHashTable[names[i]].path < r.cmdHashTable[names[j]].path
 			})
-			for _, entry := range entries {
-				r.outf("%4d\t%s\n", entry.hits, entry.path)
+			if listOnly {
+				for _, name := range names {
+					hashListEntry(name, r.cmdHashTable[name])
+				}
+			} else {
+				r.outf("hits\tcommand\n")
+				for _, name := range names {
+					entry := r.cmdHashTable[name]
+					r.outf("%4d\t%s\n", entry.hits, entry.path)
+				}
 			}
 			break
 		}
@@ -1120,6 +1160,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		for _, name := range remaining {
 			var path string
 			if explicitPath != "" {
+				if info, err := os.Stat(explicitPath); err == nil && info.IsDir() {
+					r.errf("%shash: %s: Is a directory\n", r.bashErrPrefix(pos), explicitPath)
+					exit.code = 1
+					continue
+				}
 				if r.opts[optRestricted] {
 					if strings.Contains(explicitPath, "/") {
 						r.errf("%shash: %s: restricted\n", r.bashErrPrefix(pos), explicitPath)

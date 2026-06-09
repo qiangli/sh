@@ -1184,6 +1184,11 @@ func (r *Runner) setVarWithIndex(prev expand.Variable, name string, index syntax
 			return
 		}
 		if name == "BASH_CMDS" {
+			if info, err := os.Stat(valStr); err == nil && info.IsDir() {
+				r.errf("%s%s: Is a directory\n", r.bashErrPrefix(r.curStmtPos), valStr)
+				r.exit.code = 1
+				return
+			}
 			if r.opts[optRestricted] {
 				if strings.Contains(valStr, "/") {
 					r.errf("%s%s: restricted\n", r.bashErrPrefix(r.curStmtPos), valStr)

@@ -1697,6 +1697,7 @@ func (r *Runner) subshell(background bool) *Runner {
 		exit:                 r.exit,
 		lastExit:             r.lastExit,
 		bgPidCallback:        r.bgPidCallback,
+		cmdHashTable:         maps.Clone(r.cmdHashTable),
 
 		origStdout: r.origStdout, // used for process substitutions
 
