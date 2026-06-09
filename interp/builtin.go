@@ -1465,21 +1465,29 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		// Bash 5.3: accept `-p PATH` to override the search path.
 		var pathOverride string
 		havePathOverride := false
-		fp := flagParser{remaining: args}
-		for fp.more() {
-			switch flag := fp.flag(); flag {
-			case "-p":
-				pathOverride = fp.value()
-				havePathOverride = true
-				if pathOverride == "" {
+		var parsedArgs []string
+		for i := 0; i < len(args); i++ {
+			arg := args[i]
+			switch {
+			case arg == "--":
+				parsedArgs = append(parsedArgs, args[i+1:]...)
+				i = len(args)
+			case arg == "-p":
+				if i+1 >= len(args) {
 					return failf(2, "%s: -p: option requires an argument\n", name)
 				}
-			default:
+				i++
+				pathOverride = args[i]
+				havePathOverride = true
+			case strings.HasPrefix(arg, "-") && len(arg) > 1:
 				return failf(2, "%s: %s: invalid option\n%s: usage: %s\n",
-					name, flag, name, bashUsage[name])
+					name, arg, name, bashUsage[name])
+			default:
+				parsedArgs = append(parsedArgs, args[i:]...)
+				i = len(args)
 			}
 		}
-		args = fp.args()
+		args = parsedArgs
 		if len(args) < 1 {
 			r.errf("%s%s: filename argument required\n%s: usage: %s\n",
 				r.bashErrPrefix(pos), name, name, bashUsage[name])
@@ -1508,6 +1516,14 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			// the source path to the open handler so it has a chance to look
 			// at files it manages (eg: virtual filesystem), and also allow
 			// it to look for the sourced script in the current directory.
+			if havePathOverride || (r.opts[optPosix] && !strings.Contains(args[0], "/")) {
+				r.errf("%s%s: %s: file not found\n", r.bashErrPrefix(pos), name, args[0])
+				if r.opts[optPosix] {
+					exit.exiting = true
+				}
+				exit.code = 1
+				return exit
+			}
 			path = args[0]
 		}
 		// In bash-compat mode, let r.open print its own bash-shaped
@@ -1517,6 +1533,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		f, err := r.open(ctx, path, os.O_RDONLY, 0, r.bashCompatErrors)
 		if err != nil {
 			if r.bashCompatErrors {
+				if r.opts[optPosix] {
+					exit.exiting = true
+				}
 				exit.code = 1
 				return exit
 			}

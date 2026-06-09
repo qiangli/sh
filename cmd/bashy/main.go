@@ -497,7 +497,6 @@ func runAll() error {
 			// Reach the Params option side-effect for free.
 			interp.Params(append([]string{"--"}, posArgs...)...)(r)
 		}
-		loadStartupFiles(r, false)
 		return runWithLoginLogout(r, func() error {
 			return run(r, strings.NewReader(*command), argv0)
 		})
