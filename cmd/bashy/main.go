@@ -1301,6 +1301,7 @@ func runStatementStream(
 ) error {
 	if !(bytes.Contains(src, []byte("$(")) && bytes.Contains(src, []byte("<<"))) &&
 		!bytes.Contains(src, []byte("${$(")) &&
+		!bytes.Contains(src, []byte("${$")) &&
 		!bytes.Contains(src, []byte("${'")) &&
 		!bytes.Contains(src, []byte("${$'")) {
 		return errNoStreamRecovery
@@ -1365,7 +1366,31 @@ func runStatementStream(
 						return interp.ExitStatus(2)
 					}
 					flushWarnings()
+					if strings.HasSuffix(text, ": bad substitution") {
+						errLine := int(pe.Pos.Line())
+						start := lineStart(src, errLine)
+						if start > cursor {
+							prefix := paddedChunk(src, cursor, start)
+							prefixParser := syntax.NewParser(syntax.Variant(parseLang), syntax.HeredocEOFWarning(hdocWarn))
+							for stmt, perr := range prefixParser.StmtsSeq(bytes.NewReader(prefix)) {
+								if stmt != nil {
+									if err := r.Run(ctx, stmt); err != nil {
+										runErr = err
+									}
+								}
+								if perr != nil {
+									break
+								}
+							}
+							cursor = start
+						}
+					}
 					printBashParseError(os.Stderr, src, errPrefix, pe)
+					if strings.HasSuffix(text, ": bad substitution") {
+						r.SetLastExitStatus(1)
+						_ = r.Run(ctx, &syntax.File{})
+						return interp.ExitStatus(2)
+					}
 					if fatalRecoveredParseError(src, pe) {
 						return interp.ExitStatus(2)
 					}
@@ -1385,7 +1410,13 @@ func runStatementStream(
 		if restart {
 			continue
 		}
+		if err := r.Run(ctx, &syntax.File{}); err != nil && runErr == nil {
+			runErr = err
+		}
 		return runErr
+	}
+	if err := r.Run(ctx, &syntax.File{}); err != nil && runErr == nil {
+		runErr = err
 	}
 	return runErr
 }
@@ -1470,6 +1501,9 @@ func paddedChunk(src []byte, start, end int) []byte {
 }
 
 func fatalRecoveredParseError(src []byte, pe syntax.ParseError) bool {
+	if strings.HasSuffix(rewriteParserErrorText(string(src), pe), ": bad substitution") {
+		return false
+	}
 	if commandSubstOpenBefore(src, pe.Pos) {
 		return true
 	}
@@ -1636,6 +1670,12 @@ func rewriteParserErrorText(src string, pe syntax.ParseError) string {
 	}
 	if pe.Text == "invalid parameter name" {
 		if subst := nestedBadSubstSource(src, pe.Pos); subst != "" && subst != "${" {
+			subst = strings.ReplaceAll(subst, "$'", "'")
+			return subst + ": bad substitution"
+		}
+	}
+	if strings.Contains(pe.Text, "cannot be followed by a word") {
+		if subst := nestedBadSubstSource(src, pe.Pos); subst != "" {
 			subst = strings.ReplaceAll(subst, "$'", "'")
 			return subst + ": bad substitution"
 		}

@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"io"
+	"os"
 	"strings"
 	"testing"
 
@@ -233,5 +235,47 @@ func TestRunRetriesPosixAfterParsedPrefix(t *testing.T) {
 	}
 	if stderr.Len() > 0 {
 		t.Fatalf("unexpected stderr: %s", stderr.String())
+	}
+}
+
+func TestRunBadSubstDollarParamRecovery(t *testing.T) {
+	src := "set -e\ntrap 'echo $?' EXIT\necho ${$NO_SUCH_VAR}\n"
+	var stdout, stderr bytes.Buffer
+	r, err := interp.New(
+		interp.StdIO(nil, &stdout, &stderr),
+		interp.Env(expand.ListEnviron()),
+		interp.WithBashCompatErrors(true),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldStderr := os.Stderr
+	readStderr, writeStderr, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = writeStderr
+	defer func() {
+		os.Stderr = oldStderr
+		readStderr.Close()
+	}()
+	err = run(r, strings.NewReader(src), "./errors2.sub")
+	writeStderr.Close()
+	globalStderr, readErr := io.ReadAll(readStderr)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if err == nil {
+		t.Fatal("expected recovered parse error")
+	}
+	if want := "1\n"; stdout.String() != want {
+		t.Fatalf("stdout mismatch\nwant:\n%q\ngot:\n%q\nstderr:\n%s", want, stdout.String(), stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("unexpected runner stderr: %s", stderr.String())
+	}
+	wantErr := "./errors2.sub: line 3: ${$NO_SUCH_VAR}: bad substitution\n"
+	if string(globalStderr) != wantErr {
+		t.Fatalf("stderr mismatch\nwant:\n%q\ngot:\n%q", wantErr, string(globalStderr))
 	}
 }
