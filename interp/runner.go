@@ -299,6 +299,9 @@ func (r *Runner) updateExpandOpts() {
 		}
 	}
 	r.ecfg.GlobStar = r.opts[optGlobStar]
+	if opt, _ := r.bashOptByName("globskipdots"); opt != nil {
+		r.ecfg.GlobSkipDots = *opt
+	}
 	r.ecfg.DotGlob = r.opts[optDotGlob]
 	r.ecfg.NoCaseGlob = r.opts[optNoCaseGlob]
 	r.ecfg.NullGlob = r.opts[optNullGlob]

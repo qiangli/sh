@@ -163,6 +163,100 @@ func (sl *stringLexer) peekRest() string {
 	return sl.s[sl.i:]
 }
 
+func extGlobEnd(s string, open int) int {
+	if open >= len(s) || s[open] != '(' {
+		return -1
+	}
+	depth := 1
+	escaped := false
+	for i := open + 1; i < len(s); i++ {
+		c := s[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if c == '\\' {
+			escaped = true
+			continue
+		}
+		switch c {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+func extGlobMalformedBracket(inner string) bool {
+	depth := 0
+	escaped := false
+	for i := 0; i < len(inner); i++ {
+		c := inner[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if c == '\\' {
+			escaped = true
+			continue
+		}
+		switch c {
+		case '(':
+			depth++
+		case ')':
+			if depth > 0 {
+				depth--
+			}
+		case '[':
+			for j := i + 1; j < len(inner); j++ {
+				switch inner[j] {
+				case '\\':
+					j++
+				case ']':
+					i = j
+					goto bracketClosed
+				case '|':
+					if depth == 0 {
+						return true
+					}
+				}
+			}
+			return true
+		bracketClosed:
+		}
+	}
+	return false
+}
+
+func extGlobAltAtSegmentStart(s string, op int) bool {
+	if op <= 0 || op > len(s) {
+		return false
+	}
+	if prev := s[op-1]; prev != '(' && prev != '|' {
+		return false
+	}
+	depth := 0
+	for i := op - 1; i >= 0; i-- {
+		switch s[i] {
+		case ')':
+			depth++
+		case '(':
+			if depth > 0 {
+				depth--
+				continue
+			}
+			return i > 0 && strings.ContainsRune("!?*+@", rune(s[i-1])) &&
+				(i == 1 || s[i-2] == '/')
+		}
+	}
+	return false
+}
+
 func regexpNext(sb *strings.Builder, sl *stringLexer, mode Mode) error {
 	c := sl.next()
 	if mode&ExtendedOperators != 0 {
@@ -175,7 +269,15 @@ func regexpNext(sb *strings.Builder, sl *stringLexer, mode Mode) error {
 			if sl.peekNext() != '(' {
 				break
 			}
-			start := sl.i - 1       // position of the operator
+			start := sl.i - 1 // position of the operator
+			if end := extGlobEnd(sl.s, sl.i); end >= 0 {
+				inner := sl.s[sl.i+1 : end]
+				if extGlobMalformedBracket(inner) {
+					sl.i = end + 1
+					sb.WriteString(regexp.QuoteMeta(sl.s[start:sl.i]))
+					return nil
+				}
+			}
 			sb.WriteRune(sl.next()) // (
 		nestedLoop:
 			for {
@@ -214,8 +316,10 @@ func regexpNext(sb *strings.Builder, sl *stringLexer, mode Mode) error {
 			break
 		}
 		// "**" only acts as globstar if it is alone as a path element.
-		singleBefore := sl.i == 1 || sl.last() == '/'
-		if sl.peekNext() == '*' {
+		singleBefore := sl.i == 1 || sl.last() == '/' || extGlobAltAtSegmentStart(sl.s, sl.i-1)
+		if mode&ExtendedOperators != 0 && strings.HasPrefix(sl.s[sl.i:], "*(") {
+			// Treat **(alt) as a normal * followed by an extglob *(alt).
+		} else if sl.peekNext() == '*' {
 			sl.i++
 			singleAfter := sl.i == len(sl.s) || sl.peekNext() == '/'
 			if mode&NoGlobStar == 0 && singleBefore && singleAfter {
@@ -249,7 +353,11 @@ func regexpNext(sb *strings.Builder, sl *stringLexer, mode Mode) error {
 		}
 	case '?':
 		if mode&Filenames != 0 {
-			sb.WriteString(`[^/]`)
+			if mode&GlobLeadingDot == 0 && extGlobAltAtSegmentStart(sl.s, sl.i-1) {
+				sb.WriteString(`[^/.]`)
+			} else {
+				sb.WriteString(`[^/]`)
+			}
 		} else {
 			sb.WriteByte('.')
 		}
@@ -353,10 +461,11 @@ func regexpNext(sb *strings.Builder, sl *stringLexer, mode Mode) error {
 					lastEmitted = c
 				}
 			case '-':
-				start := lastEmitted
-				if start == 0 {
-					start = sl.last()
+				if lastEmitted == 0 {
+					lastEmitted = '-'
+					break
 				}
+				start := lastEmitted
 				end := sl.peekNext()
 				// Lookahead: if the next char starts a collating
 				// element `[.X.]` or equivalence class `[=X=]`,

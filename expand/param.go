@@ -14,6 +14,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"mvdan.cc/sh/v3/internal"
 	"mvdan.cc/sh/v3/pattern"
 	"mvdan.cc/sh/v3/syntax"
 )
@@ -402,7 +403,7 @@ func applyParamMods(cfg *Config, pe *syntax.ParamExp, str string) (string, error
 	if pe.Repl.All {
 		n = -1
 	}
-	locs := findReplIndex(orig, str, n, replAnchoredStart, replAnchoredEnd)
+	locs := cfg.findReplIndex(orig, str, n, replAnchoredStart, replAnchoredEnd)
 	var sb strings.Builder
 	last := 0
 	for _, loc := range locs {
@@ -432,11 +433,15 @@ func replPattern(cfg *Config, word *syntax.Word) (pat string, start, end bool, e
 	return pat, false, false, nil
 }
 
-func findReplIndex(pat, name string, n int, start, end bool) [][]int {
+func (cfg *Config) findReplIndex(pat, name string, n int, start, end bool) [][]int {
 	if !start && !end {
-		return findAllIndex(pat, name, n)
+		return cfg.findAllIndex(pat, name, n)
 	}
-	expr, err := pattern.Regexp(pat, 0)
+	var mode pattern.Mode
+	if cfg.ExtGlob {
+		mode |= pattern.ExtendedOperators
+	}
+	expr, err := pattern.Regexp(pat, mode)
 	if err != nil {
 		return nil
 	}
@@ -768,7 +773,7 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 		}
 		out := slices.Clone(elems)
 		for i, elem := range out {
-			locs := findReplIndex(orig, elem, n, replAnchoredStart, replAnchoredEnd)
+			locs := cfg.findReplIndex(orig, elem, n, replAnchoredStart, replAnchoredEnd)
 			sb := cfg.strBuilder()
 			last := 0
 			for _, loc := range locs {
@@ -1075,35 +1080,61 @@ func defaultPromptExpand(s string) string {
 }
 
 func (cfg *Config) removePattern(str, pat string, fromEnd, shortest bool) string {
-	var mode pattern.Mode
-	if shortest {
-		mode |= pattern.Shortest
-	}
+	mode := pattern.EntireString
 	if cfg.ExtGlob {
 		mode |= pattern.ExtendedOperators
 	}
-	expr, err := pattern.Regexp(pat, mode)
+	matcher, err := internal.ExtendedPatternMatcher(pat, mode)
 	if err != nil {
 		return str
 	}
-	switch {
-	case fromEnd && shortest:
-		// use .* to get the right-most shortest match
-		expr = ".*(" + expr + ")$"
-	case fromEnd:
-		// simple suffix
-		expr = "(" + expr + ")$"
-	default:
-		// simple prefix
-		expr = "^(" + expr + ")"
+
+	match := func(s string) bool {
+		return matcher(s)
 	}
-	// no need to check error as Translate returns one
-	rx := regexp.MustCompile(expr)
-	if loc := rx.FindStringSubmatchIndex(str); loc != nil {
-		// remove the original pattern (the submatch)
-		str = str[:loc[2]] + str[loc[3]:]
+	if !fromEnd {
+		if shortest {
+			for _, i := range removePatternSplitPoints(str) {
+				if match(str[:i]) {
+					return str[i:]
+				}
+			}
+		} else {
+			for _, i := range slices.Backward(removePatternSplitPoints(str)) {
+				if match(str[:i]) {
+					return str[i:]
+				}
+			}
+		}
+		return str
+	}
+
+	if shortest {
+		for _, i := range slices.Backward(removePatternSplitPoints(str)) {
+			if match(str[i:]) {
+				return str[:i]
+			}
+		}
+	} else {
+		for _, i := range removePatternSplitPoints(str) {
+			if match(str[i:]) {
+				return str[:i]
+			}
+		}
 	}
 	return str
+}
+
+func removePatternSplitPoints(s string) []int {
+	points := make([]int, 0, utf8.RuneCountInString(s)+1)
+	points = append(points, 0)
+	for i := range s {
+		if i > 0 {
+			points = append(points, i)
+		}
+	}
+	points = append(points, len(s))
+	return points
 }
 
 func (cfg *Config) varInd(vr Variable, idx syntax.ArithmExpr) (string, error) {

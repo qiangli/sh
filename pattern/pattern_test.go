@@ -151,6 +151,21 @@ var regexpTests = []struct {
 	{pat: `[a-]`, want: `(?s)[a-]`},
 	{pat: `[z-a]`, wantErr: `^invalid range: z-a$`},
 	{pat: `[a-a]`, want: `(?s)[a-a]`},
+	{
+		pat: `a[-.,:\;\ _]b`, mode: Filenames | EntireString, want: `(?s)^a[-.,:\;\ _]b$`,
+		mustMatch:    []string{"a.b", "a,b", "a:b", "a-b", "a;b", "a b", "a_b"},
+		mustNotMatch: []string{"aab"},
+	},
+	{
+		pat: `a@([-.,:; _])b`, mode: Filenames | EntireString | ExtendedOperators, want: `(?s)^a([-.,:; _])b$`,
+		mustMatch:    []string{"a.b", "a,b", "a:b", "a-b", "a;b", "a b", "a_b"},
+		mustNotMatch: []string{"aab"},
+	},
+	{
+		pat: `@(*|@(f))`, mode: Filenames | EntireString | ExtendedOperators, want: `(?s)^(([^/.][^/]*)?|(f))$`,
+		mustMatch:    []string{"a", "b", "c"},
+		mustNotMatch: []string{".x", ".y", ".z"},
+	},
 	{pat: `[aa]`, want: `(?s)[aa]`},
 	{pat: `[0-4A-Z]`, want: `(?s)[0-4A-Z]`},
 	{pat: `[-a]`, want: `(?s)[-a]`},

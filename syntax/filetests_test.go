@@ -5123,6 +5123,16 @@ var fileTests = []fileTestCase{
 		)), LangZsh),
 	),
 	fileTest(
+		[]string{"echo +()c @()x"},
+		langFile(call(litWord("echo"), word(
+			&ExtGlob{Op: GlobOneOrMore, Pattern: lit("")},
+			lit("c"),
+		), word(
+			&ExtGlob{Op: GlobOne, Pattern: lit("")},
+			lit("x"),
+		)), LangBash|LangMirBSDKorn),
+	),
+	fileTest(
 		[]string{"echo foo@(b*(c|d))bar"},
 		langFile(call(litWord("echo"), word(
 			lit("foo"),

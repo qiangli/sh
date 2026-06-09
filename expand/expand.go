@@ -71,6 +71,10 @@ type Config struct {
 	// GlobStar corresponds to the shell option which allows globbing with "**".
 	GlobStar bool
 
+	// GlobSkipDots corresponds to the shell option which prevents pathname
+	// expansion from returning "." or "..".
+	GlobSkipDots bool
+
 	// DotGlob corresponds to the shell option which allows filenames beginning
 	// with a dot to be matched by a pattern which does not begin with a dot.
 	DotGlob bool
@@ -1445,8 +1449,8 @@ func (cfg *Config) hasGlobMeta(s string) bool {
 		switch s[i] {
 		case '\\':
 			i++
-		case '@', '+', '!':
-			if s[i+1] == '(' {
+		case '@', '+', '!', '*', '?':
+			if s[i+1] == '(' && (i+2 >= len(s) || s[i+2] != ')') {
 				return true
 			}
 		}
@@ -2847,7 +2851,7 @@ func (cfg *Config) quotedReplElemFields(pe *syntax.ParamExp) []string {
 	}
 	out := make([]string, len(elems))
 	for i, elem := range elems {
-		locs := findReplIndex(orig, elem, n, replAnchoredStart, replAnchoredEnd)
+		locs := cfg.findReplIndex(orig, elem, n, replAnchoredStart, replAnchoredEnd)
 		var sb strings.Builder
 		last := 0
 		for _, loc := range locs {
@@ -3044,8 +3048,12 @@ func (cfg *Config) expandUser(field string, moreFields bool) (prefix, rest strin
 	return u.HomeDir, rest
 }
 
-func findAllIndex(pat, name string, n int) [][]int {
-	expr, err := pattern.Regexp(pat, 0)
+func (cfg *Config) findAllIndex(pat, name string, n int) [][]int {
+	var mode pattern.Mode
+	if cfg.ExtGlob {
+		mode |= pattern.ExtendedOperators
+	}
+	expr, err := pattern.Regexp(pat, mode)
 	if err != nil {
 		return nil
 	}
@@ -3112,7 +3120,7 @@ func (cfg *Config) glob(base, pat string) ([]string, error) {
 				matches[i] = pathJoin2(dir, part)
 			}
 			continue
-		case !pattern.HasMeta(part, 0):
+		case !cfg.hasGlobMeta(part):
 			var newMatches []string
 			for _, dir := range matches {
 				match := dir
@@ -3249,6 +3257,21 @@ func (cfg *Config) glob(base, pat string) ([]string, error) {
 		}
 		var newMatches []string
 		for _, dir := range matches {
+			if !cfg.GlobSkipDots && strings.HasPrefix(part, ".") {
+				if matcher(".") {
+					newMatches = append(newMatches, pathJoin2(dir, "."))
+				}
+				if matcher("..") {
+					newMatches = append(newMatches, pathJoin2(dir, ".."))
+				}
+			} else if !cfg.GlobSkipDots && strings.HasPrefix(part, "@(") {
+				if globAtExplicitDotAltMatches(part, ".", mode) {
+					newMatches = append(newMatches, pathJoin2(dir, "."))
+				}
+				if globAtExplicitDotAltMatches(part, "..", mode) {
+					newMatches = append(newMatches, pathJoin2(dir, ".."))
+				}
+			}
 			newMatches, err = cfg.globDir(base, dir, matcher, wantDir, newMatches)
 			if err != nil {
 				return nil, err
@@ -3267,6 +3290,86 @@ func (cfg *Config) glob(base, pat string) ([]string, error) {
 	return matches, nil
 }
 
+func globAtExplicitDotAltMatches(part, name string, mode pattern.Mode) bool {
+	end := globExtGroupEnd(part, 1)
+	if end < 0 {
+		return false
+	}
+	inner := part[len("@("):end]
+	suffix := part[end+1:]
+	for _, alt := range splitExtGlobAlts(inner) {
+		if !strings.HasPrefix(alt, ".") {
+			continue
+		}
+		matcher, err := internal.ExtendedPatternMatcher(alt+suffix, mode)
+		if err == nil && matcher(name) {
+			return true
+		}
+	}
+	return false
+}
+
+func globExtGroupEnd(s string, open int) int {
+	if open >= len(s) || s[open] != '(' {
+		return -1
+	}
+	depth := 1
+	escaped := false
+	for i := open + 1; i < len(s); i++ {
+		c := s[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if c == '\\' {
+			escaped = true
+			continue
+		}
+		switch c {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+func splitExtGlobAlts(s string) []string {
+	var alts []string
+	start := 0
+	depth := 0
+	escaped := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if c == '\\' {
+			escaped = true
+			continue
+		}
+		switch c {
+		case '(':
+			depth++
+		case ')':
+			if depth > 0 {
+				depth--
+			}
+		case '|':
+			if depth == 0 {
+				alts = append(alts, s[start:i])
+				start = i + 1
+			}
+		}
+	}
+	return append(alts, s[start:])
+}
+
 func (cfg *Config) filterGlobIgnore(matches []string) []string {
 	if cfg.Env == nil {
 		return matches
@@ -3280,7 +3383,7 @@ func (cfg *Config) filterGlobIgnore(matches []string) []string {
 	if cfg.ExtGlob {
 		mode |= pattern.ExtendedOperators
 	}
-	for pat := range strings.SplitSeq(globIgnore, ":") {
+	for _, pat := range splitGlobIgnore(globIgnore) {
 		if pat == "" {
 			continue
 		}
@@ -3312,6 +3415,36 @@ func (cfg *Config) filterGlobIgnore(matches []string) []string {
 		}
 	}
 	return filtered
+}
+
+func splitGlobIgnore(s string) []string {
+	var parts []string
+	start := 0
+	inBracket := false
+	escaped := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if c == '\\' {
+			escaped = true
+			continue
+		}
+		switch c {
+		case '[':
+			inBracket = true
+		case ']':
+			inBracket = false
+		case ':':
+			if !inBracket {
+				parts = append(parts, s[start:i])
+				start = i + 1
+			}
+		}
+	}
+	return append(parts, s[start:])
 }
 
 func globIgnorePathnameBlocked(pat string) bool {

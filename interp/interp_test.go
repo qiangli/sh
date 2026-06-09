@@ -754,6 +754,14 @@ var runTests = []runTest{
 		"987\n",
 	},
 	{
+		"shopt -s extglob; x=abcdef; echo ${x#+(a|abc)}; echo ${x##+(a|abc)}",
+		"bcdef\ndef\n",
+	},
+	{
+		"shopt -s extglob; TEST='a , b'; echo ${TEST//*([[:space:]]),*([[:space:]])/,}",
+		"a,b\n",
+	},
+	{
 		"x=(__a _b c_); echo ${x[@]#_}",
 		"_a b c_\n",
 	},
@@ -3564,6 +3572,10 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 		"invalid-?([)\n",
 	},
 	{
+		"shopt -s extglob\necho +()c @()x",
+		"+()c @()x\n",
+	},
+	{
 		"touch az a1z a12z a123z; echo a?([0-9])z",
 		"extended globbing operator used without the \"extglob\" option set\n #JUSTERR",
 	},
@@ -3578,6 +3590,34 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	{
 		"shopt -s extglob\ntouch az a1z a12z a123z; echo a+([0-9])z",
 		"a123z a12z a1z\n",
+	},
+	{
+		"shopt -s extglob\ntouch abd acd aed; echo a+(b|c)d",
+		"abd acd\n",
+	},
+	{
+		"shopt -s extglob\ntouch ab abcdef abef abcfef; echo ab**(e|f)",
+		"ab abcdef abcfef abef\n",
+	},
+	{
+		"shopt -s extglob\ncase '*(a|b[)' in *(a|b[)) echo yes;; *) echo no;; esac",
+		"yes\n",
+	},
+	{
+		"shopt -s extglob\ntouch a ab ba; echo a*!(x)",
+		"a ab\n",
+	},
+	{
+		"shopt -s extglob\ntouch a b c .x .y .z; echo !(f); echo !(f)!(f)",
+		"a b c\na b c\n",
+	},
+	{
+		"shopt -s extglob; GLOBIGNORE='+([^[:alnum:]]):@([-.,:; _]):[![:alnum:]]'; touch ';' '++'; echo *",
+		"*\n",
+	},
+	{
+		"shopt -s extglob; shopt -u globskipdots; touch .a .foo a.log; echo .*; echo @(.*); echo .?; echo @(.?); echo '---'; echo *(.)",
+		". .. .a .foo\n. .. .a .foo\n.. .a\n.. .a\n---\n*(.)\n",
 	},
 	{
 		"shopt -s extglob\ntouch az a1z a12z a123z; echo a@([0-9])z",

@@ -5,12 +5,13 @@ package internal
 
 import (
 	"errors"
-	"fmt"
 	"regexp"
 	"strings"
 
 	"mvdan.cc/sh/v3/pattern"
 )
+
+var errGlobPrefixUnsupported = errors.New("extglob !(...) is only supported with literal text between groups")
 
 // ExtendedPatternMatcher returns a [regexp.Regexp.MatchString]-like function
 // to support !(pattern-list) extended patterns where possible.
@@ -46,7 +47,7 @@ func ExtendedPatternMatcher(pat string, mode pattern.Mode) (func(string) bool, e
 		if !errors.As(err, &negErr) {
 			return nil, err
 		}
-		return extNegatedMatcher(pat, negErr.Groups)
+		return extNegatedMatcher(pat, negErr.Groups, mode)
 	}
 	rx, err := regexp.Compile(expr)
 	if err != nil {
@@ -64,7 +65,7 @@ func atUnionWithNegationMatcher(pat string, mode pattern.Mode) (func(string) boo
 	if !strings.HasPrefix(pat, "@(") || !strings.HasSuffix(pat, ")") {
 		return nil, false
 	}
-	inner := pat[len("@("):len(pat)-len(")")]
+	inner := pat[len("@(") : len(pat)-len(")")]
 	if !strings.Contains(inner, "!(") {
 		return nil, false
 	}
@@ -118,7 +119,7 @@ func repeatedNegationMatcher(pat string) (func(string) bool, bool) {
 	default:
 		return nil, false
 	}
-	inner := pat[len("*(!("):len(pat)-len("))")]
+	inner := pat[len("*(!(") : len(pat)-len("))")]
 	// Reject if the inner pattern itself contains another `!(` —
 	// the simple split logic below can't reason about that.
 	if strings.Contains(inner, "!(") {
@@ -170,23 +171,32 @@ func repeatedNegationMatcher(pat string) (func(string) bool, bool) {
 // compiled as its own entire-string glob. The matcher tries every
 // valid split of `name` across the groups and returns true if any
 // split satisfies all of them.
-func extNegatedMatcher(pat string, groups []pattern.NegExtGlobGroup) (func(string) bool, error) {
+func extNegatedMatcher(pat string, groups []pattern.NegExtGlobGroup, mode pattern.Mode) (func(string) bool, error) {
 	// Per-segment compilation. Each group contributes: (literalBefore,
 	// innerRx). The trailing suffix (after the last group) is a single
 	// glob regex.
 	type segment struct {
-		literal string
-		innerRx *regexp.Regexp
+		prefixRx         *regexp.Regexp
+		innerRx          *regexp.Regexp
+		rejectLeadingDot bool
 	}
 	segs := make([]segment, len(groups))
 	cursor := 0
 	for i, g := range groups {
-		literal := pat[cursor:g.Start]
-		if pattern.HasMeta(literal, 0) {
-			return nil, fmt.Errorf("extglob !(...) is only supported with literal text between groups")
+		prefix := pat[cursor:g.Start]
+		if pattern.HasMeta(prefix, 0) && mode&pattern.Filenames == 0 {
+			return nil, errGlobPrefixUnsupported
+		}
+		prefixExpr, err := pattern.Regexp(prefix, mode|pattern.EntireString|pattern.ExtendedOperators)
+		if err != nil {
+			return nil, err
+		}
+		prefixRx, err := regexp.Compile(prefixExpr)
+		if err != nil {
+			return nil, err
 		}
 		inner := pat[g.Start+len("!(") : g.End-len(")")]
-		innerExpr, err := pattern.Regexp("@("+inner+")", pattern.EntireString|pattern.ExtendedOperators)
+		innerExpr, err := pattern.Regexp("@("+inner+")", mode|pattern.EntireString|pattern.ExtendedOperators)
 		if err != nil {
 			return nil, err
 		}
@@ -194,11 +204,13 @@ func extNegatedMatcher(pat string, groups []pattern.NegExtGlobGroup) (func(strin
 		if err != nil {
 			return nil, err
 		}
-		segs[i] = segment{literal: literal, innerRx: rx}
+		rejectLeadingDot := mode&pattern.Filenames != 0 && mode&pattern.GlobLeadingDot == 0 &&
+			prefix == "" && (g.Start == 0 || pat[g.Start-1] == '/')
+		segs[i] = segment{prefixRx: prefixRx, innerRx: rx, rejectLeadingDot: rejectLeadingDot}
 		cursor = g.End
 	}
 	suffix := pat[cursor:]
-	suffixExpr, err := pattern.Regexp(suffix, pattern.EntireString|pattern.ExtendedOperators)
+	suffixExpr, err := pattern.Regexp(suffix, mode|pattern.EntireString|pattern.ExtendedOperators)
 	if err != nil {
 		return nil, err
 	}
@@ -213,24 +225,35 @@ func extNegatedMatcher(pat string, groups []pattern.NegExtGlobGroup) (func(strin
 			return suffixRx.MatchString(name)
 		}
 		seg := segs[i]
-		if !strings.HasPrefix(name, seg.literal) {
-			return false
-		}
-		rest := name[len(seg.literal):]
-		// Try every split of `rest` into negPart + remainder.
-		// Note: even negPart="" is allowed — `!(p)` matches the
-		// empty string when p is non-empty.
-		for split := 0; split <= len(rest); split++ {
-			negPart := rest[:split]
-			if seg.innerRx.MatchString(negPart) {
+		for prefixEnd := 0; prefixEnd <= len(name); prefixEnd++ {
+			if !seg.prefixRx.MatchString(name[:prefixEnd]) {
 				continue
 			}
-			if match(rest[split:], i+1) {
-				return true
+			rest := name[prefixEnd:]
+			// Try every split of `rest` into negPart + remainder.
+			// Note: even negPart="" is allowed — `!(p)` matches the
+			// empty string when p is non-empty.
+			for split := 0; split <= len(rest); split++ {
+				negPart := rest[:split]
+				if seg.rejectLeadingDot && strings.HasPrefix(negPart, ".") {
+					continue
+				}
+				if seg.innerRx.MatchString(negPart) {
+					continue
+				}
+				if match(rest[split:], i+1) {
+					return true
+				}
 			}
 		}
 		return false
 	}
 
-	return func(name string) bool { return match(name, 0) }, nil
+	return func(name string) bool {
+		if mode&pattern.Filenames != 0 && mode&pattern.GlobLeadingDot == 0 &&
+			strings.HasPrefix(pat, "!(") && strings.HasPrefix(name, ".") {
+			return false
+		}
+		return match(name, 0)
+	}, nil
 }

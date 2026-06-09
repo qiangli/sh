@@ -462,14 +462,20 @@ func (p *Parser) extendedGlob() bool {
 		return false
 	}
 	if p.peek() == '(' {
-		// NOTE: empty pattern list is a valid globbing syntax like `@()`,
-		// but we'll operate on the "likelihood" that it is a function;
-		// only tokenize if its a non-empty pattern list.
-		// We do this after peeking for just one byte, so that the input `echo *`
-		// followed by a newline does not hang an interactive shell parser until
-		// another byte is input.
 		_, p2 := p.peekTwo()
-		return p2 != ')'
+		if p2 == ')' {
+			if int(p.bsp+2) >= len(p.bs) {
+				p.fill()
+			}
+			if int(p.bsp+2) >= len(p.bs) {
+				return false
+			}
+			switch p.bs[p.bsp+2] {
+			case ' ', '\t', '\n', '\r', '&', '|', ';', '{', ')':
+				return false
+			}
+		}
+		return true
 	}
 	return false
 }
