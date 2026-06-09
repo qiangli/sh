@@ -2756,6 +2756,14 @@ var runTests = []runTest{
 		"foo[3]: unbound variable\nexit status 1 #JUSTERR",
 	},
 	{
+		"set -u; echo ${narray[4]}",
+		"narray[4]: unbound variable\nexit status 1 #JUSTERR",
+	},
+	{
+		"set -u; echo ${narray[bar]}",
+		"bar: unbound variable\nexit status 1 #JUSTERR",
+	},
+	{
 		"set -u; foo=(''); echo ${foo[0]}",
 		"\n",
 	},

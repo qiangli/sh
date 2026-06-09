@@ -499,9 +499,18 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 		name, vr = n, v
 	}
 	if cfg.NoUnset && !vr.IsSet() && !overridingUnset(pe) {
-		if pe.Index != nil && vr.Kind == Indexed {
+		if pe.Index != nil {
 			idxText := nodeLit(pe.Index)
-			if idxText == "" {
+			if vr.Kind != Associative {
+				i, err := Arithm(cfg, pe.Index)
+				if err != nil {
+					return "", err
+				}
+				if idxText == "" {
+					idxText = strconv.Itoa(i)
+				}
+			}
+			if idxText == "" && vr.Kind == Indexed {
 				if i, err := Arithm(cfg, pe.Index); err == nil {
 					idxText = strconv.Itoa(i)
 				}
