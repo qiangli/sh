@@ -351,6 +351,9 @@ func (r *Runner) expandErr(err error) {
 	r.reportError("expand", r.curStmtPos, "", errMsg, 1)
 	switch {
 	case errors.As(err, &expand.UnsetParameterError{}):
+	case strings.Contains(errMsg, "readonly variable"):
+		r.exit.code = 1
+		return
 	case strings.HasSuffix(errMsg, "invalid indirect expansion"):
 		// TODO: These errors are treated as fatal by bash.
 		// Make the error type reflect that.
@@ -380,6 +383,7 @@ func looksLikeExpandError(msg string) bool {
 		strings.Contains(msg, "bad substitution"),
 		strings.HasPrefix(msg, "command substitution: "),
 		strings.Contains(msg, "unbound variable"),
+		strings.Contains(msg, "readonly variable"),
 		strings.Contains(msg, "cannot assign in this way"),
 		strings.Contains(msg, "invalid variable name"):
 		return true
@@ -779,8 +783,11 @@ func (e expandEnv) Get(name string) expand.Variable {
 }
 
 func (e expandEnv) Set(name string, vr expand.Variable) error {
+	if e.r.lookupVar(name).ReadOnly {
+		return fmt.Errorf("%s: readonly variable", name)
+	}
 	e.r.setVar(name, vr)
-	return nil // TODO: return any errors
+	return nil // TODO: return any other errors
 }
 
 func (e expandEnv) Each(fn func(name string, vr expand.Variable) bool) {

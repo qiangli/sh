@@ -2347,6 +2347,7 @@ var runTests = []runTest{
 	{"((++)); echo $?", "arithmetic syntax error: operand expected (error token is \"+ \")\n1\n"},
 	{"echo $((+++7)); echo $((++ + 7)); echo $((---7)); echo $((-- - 7))", "7\n7\n-7\n-7\n"},
 	{"a=1; echo $((4+++a)); echo $a; a=1; echo $((4---a)); echo $a", "6\n2\n4\n0\n"},
+	{"readonly xx=5; echo $((xx=5)); echo $?", "xx: readonly variable\n1\n"},
 	{"x=1; ((x=2, y=x)); echo $x $y", "2 2\n"},
 	{"x=(456 123); (( x[1] < x && (x=x[1], x[1]=$x) )); echo ${x[@]}", "123 456\n"},
 	{"x=(456 123); (( x[1] < x[0] && (x[0]=x[1], x[1]=$x) )); echo ${x[@]}", "123 456\n"},
