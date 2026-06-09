@@ -1259,7 +1259,7 @@ var runTests = []runTest{
 	},
 	{
 		">a && cd a",
-		"cd: a: No such file or directory\nexit status 1 #JUSTERR",
+		"cd: a: Not a directory\nexit status 1 #JUSTERR",
 	},
 	{
 		`payload=$'\065\247\100\063\231\053\306\123\070\237\242\352\263'; cd "$payload"`,

@@ -4198,9 +4198,14 @@ func (r *Runner) changeDir(ctx context.Context, cmd, path string) uint8 {
 	}
 	apath := r.absPath(path)
 	info, err := r.stat(ctx, apath)
-	if err != nil || !info.IsDir() {
+	if err != nil {
 		// bash format: `<file>: line N: <cmd>: <path>: No such file or directory`
 		r.errf("%s%s: %s: No such file or directory\n",
+			r.bashErrPrefix(r.curStmtPos), cmd, bashDiagnosticWord(path))
+		return 1
+	}
+	if !info.IsDir() {
+		r.errf("%s%s: %s: Not a directory\n",
 			r.bashErrPrefix(r.curStmtPos), cmd, bashDiagnosticWord(path))
 		return 1
 	}
