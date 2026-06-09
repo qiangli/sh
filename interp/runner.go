@@ -6112,12 +6112,21 @@ func (f *ttyFallbackFile) Close() error {
 	return err2
 }
 
+type borrowedFile struct {
+	*os.File
+}
+
+func (f borrowedFile) Close() error { return nil }
+
 func (r *Runner) open(ctx context.Context, path string, flags int, mode os.FileMode, print bool) (io.ReadWriteCloser, error) {
 	// Apply this Runner's virtual umask when creating a file. The
 	// process-wide syscall umask is never touched (see Runner.umask),
 	// so we have to mask the mode here before passing it down.
 	if flags&os.O_CREATE != 0 {
 		mode &^= os.FileMode(r.umask)
+	}
+	if path == "/dev/stdin" && flags&3 == os.O_RDONLY && r.stdin != nil {
+		return borrowedFile{r.stdin}, nil
 	}
 	// If we are opening a FIFO temporary file created by the interpreter itself,
 	// don't pass this along to the open handler as it will not work at all

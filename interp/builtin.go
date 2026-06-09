@@ -1766,7 +1766,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		}
 		if !showV && !showVV {
 			if IsBuiltin(args[0]) {
-				return r.builtin(ctx, pos, args[0], args[1:])
+				exit = r.builtin(ctx, pos, args[0], args[1:])
+				if args[0] == "." || args[0] == "source" {
+					exit.exiting = false
+				}
+				return exit
 			}
 			r.exec(ctx, pos, args)
 			exit = r.exit

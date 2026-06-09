@@ -246,11 +246,11 @@ type Printer struct {
 	tabWriter *tabwriter.Writer
 	cols      colCounter // used for [KeepPadding]
 
-	indentSpaces   uint
-	binNextLine    bool
-	swtCaseIndent  bool
-	spaceRedirects bool
-	keepPadding    bool
+	indentSpaces    uint
+	binNextLine     bool
+	swtCaseIndent   bool
+	spaceRedirects  bool
+	keepPadding     bool
 	minify          bool
 	singleLine      bool
 	funcNextLine    bool
