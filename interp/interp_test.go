@@ -3383,6 +3383,10 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 		"<multiple words>\n<12>\n<flip>\n<a>\n<box>\n<*>\n<hello world>\n<one>\n",
 	},
 	{
+		`declare -A a; a[bar\"bie]=doll; a[bar\'bie]=toy; a[bar\$bie]=cash; printf '<%s>\n' "${!a[@]}"; declare -p a`,
+		"<bar'bie>\n<bar$bie>\n<bar\"bie>\ndeclare -A a=([\"bar'bie\"]=\"toy\" [\"bar\\$bie\"]=\"cash\" [\"bar\\\"bie\"]=\"doll\" )\n",
+	},
+	{
 		`declare -A a; declare +A a; declare -a b; declare +a b`,
 		"declare: a: cannot destroy array variables in this way\ndeclare: b: cannot destroy array variables in this way\nexit status 1 #JUSTERR",
 	},

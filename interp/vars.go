@@ -1174,7 +1174,10 @@ func (r *Runner) setVarWithIndex(prev expand.Variable, name string, index syntax
 		if !ok {
 			return
 		}
-		k := r.literal(w)
+		k := r.assocAssignKey(w)
+		if name == "BASH_ALIASES" || name == "BASH_CMDS" {
+			k = r.literal(w)
+		}
 		if name == "BASH_ALIASES" && !validAliasName(k) {
 			r.errf("%s`%s': invalid alias name\n", r.bashErrPrefix(r.curStmtPos), k)
 			r.exit.code = 1
@@ -1288,6 +1291,33 @@ func stringIndex(index syntax.ArithmExpr) bool {
 	return false
 }
 
+func bashAssocAssignKey(s string) string {
+	if !strings.Contains(s, "\\") {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+1 < len(s) {
+			switch s[i+1] {
+			case '"', '\'', '$', '`', '\\', ']', '[':
+				i++
+			}
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
+}
+
+func (r *Runner) assocAssignKey(w *syntax.Word) string {
+	if len(w.Parts) == 1 {
+		if lit, ok := w.Parts[0].(*syntax.Lit); ok {
+			return bashAssocAssignKey(lit.Value)
+		}
+	}
+	return r.literal(w)
+}
+
 // TODO: make assignVal and [setVar] consistent with the [expand.WriteEnviron] interface
 
 func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign, valType string) (string, expand.Variable) {
@@ -1366,7 +1396,7 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 					}
 				case as.Index != nil && prev.Kind == expand.Associative:
 					if w, ok := as.Index.(*syntax.Word); ok {
-						curStr = prev.Map[r.literal(w)]
+						curStr = prev.Map[r.assocAssignKey(w)]
 					}
 				}
 				cur, err := arithEval(curStr)
@@ -1483,7 +1513,7 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 			if as.Index != nil {
 				w, ok := as.Index.(*syntax.Word)
 				if ok {
-					k := r.literal(w)
+					k := r.assocAssignKey(w)
 					prev.Kind = expand.String
 					if prev.Integer {
 						cur, _ := strconv.Atoi(r.integerArrayValue(prev.Map[k]))
@@ -1574,7 +1604,7 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 				}
 				continue
 			}
-			k := r.literal(w)
+			k := r.assocAssignKey(w)
 			v := r.literalForAssign(elem.Value)
 			if elem.Append {
 				if prev.Integer {
