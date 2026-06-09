@@ -297,6 +297,10 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		}
 		r.updateExpandOpts()
 	case "shift":
+		if len(args) == 1 && args[0] == "--help" {
+			r.outf("%s", bashHelpShiftLong())
+			break
+		}
 		// Accept `--` as end-of-options.
 		if len(args) > 0 && args[0] == "--" {
 			args = args[1:]
@@ -1193,31 +1197,38 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			r.cmdHashTable[name] = cmdHashEntry{path: path}
 		}
 	case "help":
-		if len(args) == 0 {
-			r.outf("bashy, version %s\n", "5.3.0(1)-bashy")
-			r.outf("These shell commands are defined internally.\n\n")
-			builtinList := []string{
-				":", ".", "[", "alias", "bg", "bind", "break", "builtin",
-				"caller", "cd", "command", "continue", "declare", "dirs",
-				"disown", "echo", "enable", "eval", "exec", "exit",
-				"export", "false", "fc", "fg", "getopts", "hash", "help",
-				"history", "jobs", "kill", "let", "local", "logout",
-				"mapfile", "popd", "printf", "pushd", "pwd", "read",
-				"readarray", "readonly", "return", "set", "shift", "shopt",
-				"source", "test", "times", "trap", "true", "type",
-				"typeset", "ulimit", "umask", "unalias", "unset", "wait",
-			}
-			for _, b := range builtinList {
-				r.outf(" %s\n", b)
-			}
-		} else {
-			for _, name := range args {
-				if IsBuiltin(name) {
-					r.outf("%s: %s is a shell builtin\n", name, name)
-				} else {
-					r.errf(r.bashErrPrefix(pos)+"help: no help topics match `%s'\n", name)
-					exit.code = 1
+		mode := ""
+		var patterns []string
+		for i := 0; i < len(args); i++ {
+			arg := args[i]
+			switch arg {
+			case "--":
+				patterns = append(patterns, args[i+1:]...)
+				i = len(args)
+			case "-d":
+				mode = "description"
+			case "-m":
+				mode = "man"
+			case "-s":
+				mode = "short"
+			default:
+				if strings.HasPrefix(arg, "-") {
+					r.errf("%shelp: %s: invalid option\n", r.bashErrPrefix(pos), arg)
+					r.errf("help: usage: help [-dms] [pattern ...]\n")
+					exit.code = 2
+					return exit
 				}
+				patterns = append(patterns, arg)
+			}
+		}
+		if len(patterns) == 0 {
+			r.outf("%s", bashHelpOverview())
+			break
+		}
+		for _, pattern := range patterns {
+			if !r.helpTopic(pattern, mode) {
+				r.errf(r.bashErrPrefix(pos)+"help: no help topics match `%s'.  Try `help help' or `man -k %s' or `info %s'.\n", pattern, pattern, pattern)
+				exit.code = 1
 			}
 		}
 	case "enable":
@@ -3767,6 +3778,150 @@ func bashCompletePrintOrder() []string {
 		"source", "make", "bg", "cat", "mkdir", "help", "read", "time",
 		"zcat", "uncompress", "rmdir", "more", "gzcat",
 	}
+}
+
+func bashHelpOverview() string {
+	return `GNU bash, version 5.3.0(1)-release (x86_64-apple-darwin24.0.0)
+These shell commands are defined internally.  Type ` + "`help'" + ` to see this list.
+Type ` + "`help name'" + ` to find out more about the function ` + "`name'" + `.
+Use ` + "`info bash'" + ` to find out more about the shell in general.
+Use ` + "`man -k'" + ` or ` + "`info'" + ` to find out more about commands not in this list.
+
+A star (*) next to a name means that the command is disabled.
+
+ ! PIPELINE                              history [-c] [-d offset] [n] or hist>
+ job_spec [&]                            if COMMANDS; then COMMANDS; [ elif C>
+ (( expression ))                        jobs [-lnprs] [jobspec ...] or jobs >
+ . [-p path] filename [arguments]        kill [-s sigspec | -n signum | -sigs>
+ :                                       let arg [arg ...]
+ [ arg... ]                              local [option] name[=value] ...
+ [[ expression ]]                        logout [n]
+ alias [-p] [name[=value] ... ]          mapfile [-d delim] [-n count] [-O or>
+ bg [job_spec ...]                       popd [-n] [+N | -N]
+ bind [-lpsvPSVX] [-m keymap] [-f file>  printf [-v var] format [arguments]
+ break [n]                               pushd [-n] [+N | -N | dir]
+ builtin [shell-builtin [arg ...]]       pwd [-LP]
+ caller [expr]                           read [-Eers] [-a array] [-d delim] [>
+ case WORD in [PATTERN [| PATTERN]...)>  readarray [-d delim] [-n count] [-O >
+ cd [-L|[-P [-e]]] [-@] [dir]            readonly [-aAf] [name[=value] ...] o>
+ command [-pVv] command [arg ...]        return [n]
+ compgen [-V varname] [-abcdefgjksuv] >  select NAME [in WORDS ... ;] do COMM>
+ complete [-abcdefgjksuv] [-pr] [-DEI]>  set [-abefhkmnptuvxBCEHPT] [-o optio>
+ compopt [-o|+o option] [-DEI] [name .>  shift [n]
+ continue [n]                            shopt [-pqsu] [-o] [optname ...]
+ coproc [NAME] command [redirections]    source [-p path] filename [argument>
+ declare [-aAfFgiIlnrtux] [name[=value>  suspend [-f]
+ dirs [-clpv] [+N] [-N]                  test [expr]
+ disown [-h] [-ar] [jobspec ... | pid >  time [-p] pipeline
+ echo [-neE] [arg ...]                   times
+ enable [-a] [-dnps] [-f filename] [na>  trap [-Plp] [[action] signal_spec ..>
+ eval [arg ...]                          true
+ exec [-cl] [-a name] [command [argume>  type [-afptP] name [name ...]
+ exit [n]                                typeset [-aAfFgiIlnrtux] name[=value>
+ export [-fn] [name[=value] ...] or ex>  ulimit [-SHabcdefiklmnpqrstuvxPRT] [>
+ false                                   umask [-p] [-S] [mode]
+ fc [-e ename] [-lnr] [first] [last] o>  unalias [-a] name [name ...]
+ fg [job_spec]                           unset [-f] [-v] [-n] [name ...]
+ for NAME [in WORDS ... ] ; do COMMAND>  until COMMANDS; do COMMANDS-2; done
+ for (( exp1; exp2; exp3 )); do COMMAN>  variables - Names and meanings of so>
+ function name { COMMANDS ; } or name >  wait [-fn] [-p var] [id ...]
+ getopts optstring name [arg ...]        while COMMANDS; do COMMANDS-2; done
+ hash [-lr] [-p pathname] [-dt] [name >  { COMMANDS ; }
+ help [-dms] [pattern ...]
+`
+}
+
+func bashHelpShiftLong() string {
+	return `shift: shift [n]
+    Shift positional parameters.
+    
+    Rename the positional parameters $N+1,$N+2 ... to $1,$2 ...  If N is
+    not given, it is assumed to be 1.
+    
+    Exit Status:
+    Returns success unless N is negative or greater than $#.
+`
+}
+
+func (r *Runner) helpTopic(pattern, mode string) bool {
+	switch mode {
+	case "description":
+		switch pattern {
+		case "shift":
+			r.outf("shift - Shift positional parameters.\n")
+			return true
+		}
+	case "man":
+		switch pattern {
+		case ":":
+			r.outf(`NAME
+    : - Null command.
+
+SYNOPSIS
+    :
+
+DESCRIPTION
+    Null command.
+    
+    No effect; the command does nothing.
+    
+    Exit Status:
+    Always succeeds.
+
+SEE ALSO
+    bash(1)
+
+IMPLEMENTATION
+    Copyright (C) 2025 Free Software Foundation, Inc.
+
+`)
+			return true
+		}
+	case "short":
+		switch pattern {
+		case "help":
+			r.outf("help: help [-dms] [pattern ...]\n")
+			return true
+		case "builtin":
+			r.outf("builtin: builtin [shell-builtin [arg ...]]\n")
+			return true
+		case "shift":
+			r.outf("shift: shift [n]\n")
+			return true
+		case "read*":
+			r.outf("Shell commands matching keyword `read*'\n\n")
+			r.outf("%s", bashHelpReadShort())
+			return true
+		case "rea":
+			r.outf("%s", bashHelpReadShort())
+			return true
+		}
+	default:
+		switch pattern {
+		case ":":
+			r.outf(`:: :
+    Null command.
+    
+    No effect; the command does nothing.
+    
+    Exit Status:
+    Always succeeds.
+`)
+			return true
+		}
+	}
+	if mode == "" && IsBuiltin(pattern) {
+		r.outf("%s: %s is a shell builtin\n", pattern, pattern)
+		return true
+	}
+	return false
+}
+
+func bashHelpReadShort() string {
+	return `read: read [-Eers] [-a array] [-d delim] [-i text] [-n nchars] [-N nchars] [-p prompt] [-t timeout] [-u fd] [name ...]
+readarray: readarray [-d delim] [-n count] [-O origin] [-s count] [-t] [-u fd] [-C callback] [-c quantum] [array]
+readonly: readonly [-aAf] [name[=value] ...] or readonly -p
+`
 }
 
 func bashSetOptNames() []string {
