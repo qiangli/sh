@@ -238,6 +238,35 @@ func TestRunRetriesPosixAfterParsedPrefix(t *testing.T) {
 	}
 }
 
+func TestRunKeepsBashConditionalAfterRuntimePosix(t *testing.T) {
+	t.Parallel()
+	src := strings.Join([]string{
+		"set -o posix",
+		"empty=",
+		"if [[ $empty -gt 0 ]]; then echo bad; fi",
+		"if [[ 1 -gt 0 ]]; then echo ok; fi",
+		"",
+	}, "\n")
+	var stdout, stderr bytes.Buffer
+	r, err := interp.New(
+		interp.StdIO(nil, &stdout, &stderr),
+		interp.Env(expand.ListEnviron()),
+		interp.WithBashCompatErrors(true),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := run(r, strings.NewReader(src), "new-exp2.sub"); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := stdout.String(), "ok\n"; got != want {
+		t.Fatalf("stdout mismatch\nwant:\n%q\ngot:\n%q\nstderr:\n%s", want, got, stderr.String())
+	}
+	if stderr.Len() > 0 {
+		t.Fatalf("unexpected stderr: %s", stderr.String())
+	}
+}
+
 func TestRunBadSubstDollarParamRecovery(t *testing.T) {
 	src := "set -e\ntrap 'echo $?' EXIT\necho ${$NO_SUCH_VAR}\n"
 	var stdout, stderr bytes.Buffer

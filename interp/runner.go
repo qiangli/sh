@@ -4355,23 +4355,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			syntax.NewPrinter(syntax.SingleLine(true)).Print(&cmdBuf, cm)
 			r.setVarString("BASH_COMMAND", strings.TrimRight(cmdBuf.String(), "\n"))
 		}
-		r.traceTestClause(cm.X)
-		r.testIntErr = ""
-		r.testArithErr = ""
-		result := r.bashTest(ctx, cm.X, false)
-		if r.testArithErr != "" {
-			r.errf("%s[[: %s: %s\n", r.bashErrPrefix(cm.Left), r.testIntErr, r.testArithErr)
-			r.testIntErr = ""
-			r.testArithErr = ""
-			r.exit.code = 1
-		} else if r.testIntErr != "" {
-			r.errf(r.bashErrPrefix(cm.Left)+"[[: %s: integer expected\n", r.testIntErr)
-			r.testIntErr = ""
-			r.exit.code = 2
-		} else if result == "" && r.exit.ok() {
-			// to preserve exit status code 2 for regex errors, etc
-			r.exit.code = 1
-		}
+		r.runTestClause(ctx, cm.Left, cm.X, true)
 	case *syntax.DeclClause:
 		local, global := false, false
 		var modes []string
@@ -5925,6 +5909,12 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 		}
 	}
 	name := args[0]
+	if name == "[[" {
+		if expr := parseReparsedTestClause(args[1:]); expr != nil {
+			r.runTestClause(ctx, pos, expr, true)
+			return
+		}
+	}
 	// Bash POSIX mode: POSIX special builtins outrank shell
 	// functions during command lookup. Skip the function dispatch
 	// so a function defined before POSIX mode was enabled doesn't
@@ -6105,6 +6095,88 @@ func (r *Runner) emitAudit(kind string, pos syntax.Pos, args []string, isBuiltin
 			r.auditLog.Write(data)
 			r.auditLog.Write([]byte{'\n'})
 		}
+	}
+}
+
+func parseReparsedTestClause(args []string) syntax.TestExpr {
+	if len(args) == 0 || args[len(args)-1] != "]]" {
+		return nil
+	}
+	if len(args) > 1 && testClauseBinaryOperatorArg(args[0]) {
+		args = append([]string{""}, args...)
+	}
+	var b strings.Builder
+	b.WriteString("[[")
+	for _, arg := range args[:len(args)-1] {
+		b.WriteByte(' ')
+		if testClauseOperatorArg(arg) {
+			b.WriteString(arg)
+			continue
+		}
+		quoted, err := syntax.Quote(arg, syntax.LangBash)
+		if err != nil {
+			return nil
+		}
+		b.WriteString(quoted)
+	}
+	b.WriteString(" ]]")
+	file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(b.String()), "")
+	if err != nil || len(file.Stmts) != 1 {
+		return nil
+	}
+	tc, ok := file.Stmts[0].Cmd.(*syntax.TestClause)
+	if !ok {
+		return nil
+	}
+	return tc.X
+}
+
+func testClauseOperatorArg(arg string) bool {
+	switch arg {
+	case "!", "(", ")", "&&", "||",
+		"==", "=", "!=", "<", ">", "=~":
+		return true
+	}
+	if testClauseBinaryOperatorArg(arg) {
+		return true
+	}
+	if len(arg) == 2 && arg[0] == '-' {
+		switch arg[1] {
+		case 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'k', 'n', 'p', 'r', 's', 't', 'u', 'w', 'x', 'O', 'G', 'L', 'S', 'v':
+			return true
+		}
+	}
+	return false
+}
+
+func testClauseBinaryOperatorArg(arg string) bool {
+	switch arg {
+	case "-eq", "-ne", "-lt", "-le", "-gt", "-ge",
+		"-ef", "-nt", "-ot":
+		return true
+	}
+	return false
+}
+
+func (r *Runner) runTestClause(ctx context.Context, pos syntax.Pos, expr syntax.TestExpr, trace bool) {
+	if trace {
+		r.traceTestClause(expr)
+	}
+	r.testIntErr = ""
+	r.testArithErr = ""
+	result := r.bashTest(ctx, expr, false)
+	if r.testArithErr != "" {
+		r.errf("%s[[: %s: %s\n", r.bashErrPrefix(pos), r.testIntErr, r.testArithErr)
+		r.testIntErr = ""
+		r.testArithErr = ""
+		r.exit.code = 1
+	} else if r.testIntErr != "" {
+		r.errf(r.bashErrPrefix(pos)+"[[: %s: integer expected\n", r.testIntErr)
+		r.testIntErr = ""
+		r.exit.code = 2
+	} else if result == "" && r.exit.ok() {
+		// Preserve exit status code 2 for regex errors, etc.
+		r.exit.code = 1
 	}
 }
 
