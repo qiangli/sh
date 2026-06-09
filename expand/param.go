@@ -1188,6 +1188,9 @@ func removePatternByteSplitPoints(s string) []int {
 
 func (cfg *Config) varInd(vr Variable, idx syntax.ArithmExpr) (string, error) {
 	if idx == nil {
+		if vr.Kind == Associative {
+			return vr.Map["0"], nil
+		}
 		return vr.String(), nil
 	}
 	switch vr.Kind {
