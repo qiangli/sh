@@ -393,6 +393,28 @@ func TestFieldsParamExpAssignLeadingTilde(t *testing.T) {
 	}
 }
 
+func TestFieldsParamExpAssignAtNullIFSPosix(t *testing.T) {
+	cfg := &Config{
+		Env: testEnv{
+			"IFS": {Set: true, Kind: String, Str: ""},
+			"@":   {Set: true, Kind: Indexed, List: []string{"1", "2"}},
+		},
+		Posix: true,
+	}
+	word := parseCallArg(t, `echo ${v=$@}`, 1)
+	got, err := Fields(cfg, word)
+	if err != nil {
+		t.Fatalf("did not want error, got %v", err)
+	}
+	want := []string{"12"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("wanted %q, got %q", want, got)
+	}
+	if v := cfg.Env.Get("v").String(); v != "12" {
+		t.Fatalf("v = %q, want %q", v, "12")
+	}
+}
+
 func TestFieldsParamExpAlternatePreservesQuotedFields(t *testing.T) {
 	cfg := &Config{Env: ListEnviron("IFS= \t\n", "u=x")}
 	tests := []struct {

@@ -2516,6 +2516,22 @@ func (cfg *Config) substWordFields(pe *syntax.ParamExp) ([][]fieldPart, bool, er
 			return nil, false, err
 		}
 	}
+	if assignOp && cfg.Posix && cfg.ifs == "" && paramExpWordHasAtOrStar(pe.Exp.Word) {
+		assignVal, ok := cfg.simpleAtStarNullIFSAssign(pe.Exp.Word)
+		if !ok {
+			assignVal, err = LiteralForAssign(cfg, pe.Exp.Word)
+			if err != nil {
+				return nil, false, err
+			}
+		}
+		if cannotAssignParam(pe.Param.Value) {
+			return nil, false, fmt.Errorf("$%s: cannot assign in this way", pe.Param.Value)
+		}
+		if err := cfg.envSet(pe.Param.Value, assignVal); err != nil {
+			return nil, false, err
+		}
+		return cfg.escapedLitFields(assignVal), true, nil
+	}
 	for i, field := range fields {
 		if len(field) == 0 {
 			fields[i] = []fieldPart{{quote: quoteSingle, val: ""}}
@@ -2721,6 +2737,28 @@ func (cfg *Config) substWordPartFields(parts []syntax.WordPart) ([][]fieldPart, 
 		fields = append(fields, curField)
 	}
 	return fields, nil
+}
+
+func (cfg *Config) simpleAtStarNullIFSAssign(word *syntax.Word) (string, bool) {
+	if word == nil || len(word.Parts) != 1 {
+		return "", false
+	}
+	var pe *syntax.ParamExp
+	switch part := word.Parts[0].(type) {
+	case *syntax.ParamExp:
+		pe = part
+	case *syntax.DblQuoted:
+		if len(part.Parts) == 1 {
+			pe, _ = part.Parts[0].(*syntax.ParamExp)
+		}
+	}
+	if pe == nil || pe.Excl || pe.Exp != nil || pe.Repl != nil || pe.Length || pe.Width || pe.IsSet {
+		return "", false
+	}
+	if pe.Param.Value != "@" && pe.Param.Value != "*" {
+		return "", false
+	}
+	return cfg.ifsJoin(cfg.sliceElems(pe, cfg.Env.Get(pe.Param.Value).List, true)), true
 }
 
 func paramExpWordHasQuotedPart(word *syntax.Word) bool {
