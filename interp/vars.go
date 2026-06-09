@@ -704,6 +704,100 @@ func formatDeclareVar(name string, vr expand.Variable, forceEmptyArrayValue bool
 	return b.String()
 }
 
+func variableJSON(name string, vr expand.Variable) map[string]any {
+	flags := vr.Flags()
+	if flags == "" {
+		flags = "-"
+	}
+	obj := map[string]any{
+		"name":        name,
+		"flags":       flags,
+		"set":         vr.Set,
+		"exported":    vr.Exported,
+		"readonly":    vr.ReadOnly,
+		"integer":     vr.Integer,
+		"local":       vr.Local,
+		"uppercase":   vr.Upper,
+		"lowercase":   vr.Lower,
+		"capitalized": vr.Capitalize,
+	}
+	switch vr.Kind {
+	case expand.Indexed:
+		obj["kind"] = "indexed"
+		obj["value"] = slices.Clone(vr.List)
+	case expand.Associative:
+		obj["kind"] = "associative"
+		m := make(map[string]string, len(vr.Map))
+		for k, v := range vr.Map {
+			m[k] = v
+		}
+		obj["value"] = m
+	case expand.NameRef:
+		obj["kind"] = "nameref"
+		obj["value"] = vr.Str
+	case expand.String:
+		obj["kind"] = "string"
+		obj["value"] = vr.Str
+	default:
+		obj["kind"] = "unknown"
+	}
+	return obj
+}
+
+func (r *Runner) variablesJSON(setOnly bool) []map[string]any {
+	var names []string
+	r.writeEnv.Each(func(name string, vr expand.Variable) bool {
+		if setOnly && !vr.IsSet() {
+			return true
+		}
+		if !setOnly && !vr.Declared() {
+			return true
+		}
+		names = append(names, name)
+		return true
+	})
+	slices.Sort(names)
+	var vars []map[string]any
+	for _, name := range names {
+		vars = append(vars, variableJSON(name, r.writeEnv.Get(name)))
+	}
+	return vars
+}
+
+func (r *Runner) functionJSON(name string) map[string]any {
+	obj := map[string]any{
+		"name":     name,
+		"readonly": r.readonlyFuncs[name],
+		"exported": r.exportedFuncs[name],
+	}
+	if body := r.Funcs[name]; body != nil {
+		var b strings.Builder
+		syntax.NewPrinter().Print(&b, body)
+		obj["body"] = strings.TrimRight(b.String(), "\n")
+		obj["line"] = int(body.Pos().Line())
+	}
+	return obj
+}
+
+func (r *Runner) functionsJSON(readonlyOnly, exportedOnly bool) []map[string]any {
+	names := make([]string, 0, len(r.Funcs))
+	for name := range r.Funcs {
+		if readonlyOnly && !r.readonlyFuncs[name] {
+			continue
+		}
+		if exportedOnly && !r.exportedFuncs[name] {
+			continue
+		}
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	funcs := make([]map[string]any, 0, len(names))
+	for _, name := range names {
+		funcs = append(funcs, r.functionJSON(name))
+	}
+	return funcs
+}
+
 // setGlobalVarString assigns name=value at the outermost (global)
 // scope, bypassing any in-flight function overlays. Used for bash
 // 5.3 `{var}` redirections, which set the captured fd globally even

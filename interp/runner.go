@@ -6,6 +6,9 @@ package interp
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -4300,6 +4303,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		var modes []string
 		valType := ""
 		declQuery := "" // "-f" or "-p" for query mode
+		jsonMode := false
 		switch cm.Variant.Value {
 		case "declare", "typeset":
 			// When used in a function, "declare"/"typeset" act as
@@ -4349,6 +4353,10 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			}
 			isFlag := strings.HasPrefix(as.Name.Value, "-") || strings.HasPrefix(as.Name.Value, "+")
 			if isFlag {
+				if as.Name.Value == "--json" {
+					jsonMode = true
+					continue assignLoop
+				}
 				fp := flagParser{remaining: []string{as.Name.Value}}
 				for fp.more() {
 					switch flag := fp.flag(); flag {
@@ -4433,7 +4441,11 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			if declQuery == "-F" {
 				// declare -F name: print just the function name.
 				if body := r.Funcs[name]; body != nil {
-					r.outf("%s\n", name)
+					if jsonMode {
+						r.exit = r.jsonOut(r.functionJSON(name))
+					} else {
+						r.outf("%s\n", name)
+					}
 				} else {
 					r.exit.code = 1
 				}
@@ -4492,7 +4504,11 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 					r.exit.code = 1
 					continue
 				}
-				r.outf("%s\n", formatDeclareVar(name, vr, false))
+				if jsonMode {
+					r.exit = r.jsonOut(variableJSON(name, vr))
+				} else {
+					r.outf("%s\n", formatDeclareVar(name, vr, false))
+				}
 				continue
 			}
 			vr := r.lookupVar(name)
@@ -4624,6 +4640,12 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			readonlyOnly := cm.Variant.Value == "readonly" ||
 				slices.Contains(modes, "-r")
 			exportedOnly := slices.Contains(modes, "-x")
+			if jsonMode {
+				r.exit = r.jsonOut(map[string]any{
+					"functions": r.functionsJSON(readonlyOnly, exportedOnly),
+				})
+				return
+			}
 			names := make([]string, 0, len(r.Funcs))
 			for name := range r.Funcs {
 				if readonlyOnly && !r.readonlyFuncs[name] {
@@ -4653,6 +4675,10 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 					r.outf("declare -fr %s\n", name)
 				}
 			}
+		}
+		if !declHadNames && declQuery == "-p" && jsonMode {
+			r.exit = r.jsonOut(map[string]any{"variables": r.variablesJSON(false)})
+			return
 		}
 		// Bash `local` with no args lists every variable local to
 		// the current function scope in `name=value` form (arrays
@@ -5838,6 +5864,7 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 		return
 	}
 	if IsBuiltin(name) && !r.disabledBuiltins[name] {
+		r.emitAudit("builtin", pos, args, true)
 		r.exit = r.builtin(ctx, pos, name, args[1:])
 		return
 	}
@@ -5893,18 +5920,73 @@ func (r *Runner) execAs(ctx context.Context, pos syntax.Pos, argv0 string, clear
 		hc.ExecClearEnv = true
 		hctx = context.WithValue(hctx, handlerCtxKey{}, hc)
 	}
-	// Audit hook fires before exec, after all resolution and
-	// expansion. Builtins are dispatched elsewhere; this is the
-	// real-process boundary.
-	if r.auditHandler != nil && len(args) > 0 {
-		r.auditHandler(AuditEvent{
-			Args:      args,
-			Pos:       pos,
-			Filename:  r.filename,
-			IsBuiltin: false,
-		})
-	}
+	r.emitAudit("exec", pos, args, false)
 	r.exit.fromHandlerError(r.execHandler(hctx, args))
+}
+
+func (r *Runner) emitAudit(kind string, pos syntax.Pos, args []string, isBuiltin bool) {
+	if len(args) == 0 || (r.auditHandler == nil && r.auditLog == nil) {
+		return
+	}
+	when := time.Now()
+	if r.deterministic {
+		when = r.startTime
+	}
+	ev := AuditEvent{
+		Kind:          kind,
+		Args:          slices.Clone(args),
+		Pos:           pos,
+		When:          when,
+		Filename:      r.filename,
+		CallStackHash: r.callStackDigest(),
+		EnvDigest:     r.envDigest(),
+		IsBuiltin:     isBuiltin,
+	}
+	if r.auditHandler != nil {
+		r.auditHandler(ev)
+	}
+	if r.auditLog != nil {
+		if data, err := json.Marshal(ev); err == nil {
+			r.auditLog.Write(data)
+			r.auditLog.Write([]byte{'\n'})
+		}
+	}
+}
+
+func (r *Runner) callStackDigest() string {
+	h := sha256.New()
+	for _, frame := range r.callStack {
+		fmt.Fprintf(h, "%s\x00%s\x00%d\x00", frame.funcName, frame.source, frame.line)
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func (r *Runner) envDigest() string {
+	h := sha256.New()
+	var names []string
+	r.writeEnv.Each(func(name string, vr expand.Variable) bool {
+		names = append(names, name)
+		return true
+	})
+	slices.Sort(names)
+	for _, name := range names {
+		vr := r.writeEnv.Get(name)
+		fmt.Fprintf(h, "%s\x00%d\x00%t\x00%t\x00%t\x00%t\x00%s\x00", name, vr.Kind, vr.Set, vr.Exported, vr.ReadOnly, vr.Integer, vr.Str)
+		for i, v := range vr.List {
+			fmt.Fprintf(h, "%d\x00%s\x00", i, v)
+		}
+		if len(vr.Map) > 0 {
+			keys := make([]string, 0, len(vr.Map))
+			for k := range vr.Map {
+				keys = append(keys, k)
+			}
+			slices.Sort(keys)
+			for _, k := range keys {
+				fmt.Fprintf(h, "%s\x00%s\x00", k, vr.Map[k])
+			}
+		}
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 type ttyFallbackFile struct {

@@ -168,33 +168,31 @@
 
 ## Test Progress Tracking
 
-Snapshot from `make test-bash` on 2026-06-09: **61 PASS, 15 FAIL, 11 SKIP**
+Snapshot from `make test-bash` on 2026-06-09: **63 PASS, 13 FAIL, 11 SKIP**
 (diff line counts are `diff <bashy-output> <name>.right | wc -l`, lower = closer to passing).
 
-### Passing (61)
+### Passing (63)
 
 ```
-appendop      arith-for     attr          braces        case
-casemod       complete      comsub        comsub-eof    comsub-posix
-comsub2       cond          cprint        dbg-support2  dirstack
-dynvar        exportfunc    extglob       extglob2      extglob3
-func          getopts       glob-bracket  globstar      herestr
-ifs           ifs-posix     invert        invocation    iquote
-lastpipe      mapfile       more-exp      nquote        nquote1
-nquote2       nquote3       nquote4       nquote5       parser
-posix2        posixexp2     posixpat      posixpipe     precedence
-printf        procsub       quote         read          redir
-rhs-exp       rsh           set-e         set-x         shopt
-strip         test          tilde         tilde2        type
-vredir
+alias         appendop      arith-for     attr          braces
+case          casemod       complete      comsub        comsub-eof
+comsub-posix  comsub2       cond          cprint        dbg-support2
+dirstack      dynvar        exportfunc    extglob       extglob2
+extglob3      func          getopts       glob-bracket  globstar
+herestr       ifs           ifs-posix     intl          invert
+invocation    iquote        lastpipe      mapfile       more-exp
+nquote        nquote1       nquote2       nquote3       nquote4
+nquote5       parser        posix2        posixexp2     posixpat
+posixpipe     precedence    printf        procsub       quote
+read          redir         rhs-exp       rsh           set-e
+set-x         shopt         strip         test          tilde
+tilde2        type          vredir
 ```
 
-### Failing (15, sorted by diff size)
+### Failing (13, sorted by previous diff size)
 
 | Test | Diff Lines | Likely blocker |
 |------|-----------:|----------------|
-| alias        |  67 | Alias expansion edge cases |
-| intl         |  70 | `$"..."` locale strings (G12) |
 | quotearray   | 155 | Array quoting |
 | heredoc      | 171 | Heredoc edge cases |
 | posixexp     | 311 | POSIX expansion |

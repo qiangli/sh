@@ -219,6 +219,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		}
 		exit.exiting = true
 	case "set":
+		if len(args) == 1 && args[0] == "--json" {
+			return r.jsonOut(map[string]any{"variables": r.variablesJSON(true)})
+		}
 		if len(args) == 0 {
 			// `set` with no args prints all shell variables in
 			// `name=value` form, alphabetically sorted, values
@@ -3330,6 +3333,17 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		return failf(2, "%s: not supported in this shell\n", name)
 	}
 	return exit
+}
+
+func (r *Runner) jsonOut(v any) exitStatus {
+	buf, err := json.Marshal(v)
+	if err != nil {
+		r.errf("json: %v\n", err)
+		return exitStatus{code: 1}
+	}
+	r.out(string(buf))
+	r.out("\n")
+	return exitStatus{}
 }
 
 func bashPrintfFormatError(err error) bool {

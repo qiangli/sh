@@ -6,6 +6,7 @@ package interp_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -5679,17 +5680,124 @@ func TestRunnerAuditHandler(t *testing.T) {
 	if err := r.Run(ctx, file); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	// We expect at least one AuditEvent for `ls` (the one external).
-	// echo, true, : are builtins → no audit event in our current wiring
-	// (builtins go through r.builtin not r.execAs).
-	var sawLs bool
+	var sawLs, sawEcho, sawTrue bool
 	for _, e := range events {
 		if len(e.Args) > 0 && e.Args[0] == "ls" {
 			sawLs = true
+			if e.Kind != "exec" || e.IsBuiltin {
+				t.Fatalf("ls event = %+v; want exec/non-builtin", e)
+			}
+		}
+		if len(e.Args) > 0 && e.Args[0] == "echo" {
+			sawEcho = true
+			if e.Kind != "builtin" || !e.IsBuiltin {
+				t.Fatalf("echo event = %+v; want builtin", e)
+			}
+			if e.EnvDigest == "" || e.CallStackHash == "" {
+				t.Fatalf("echo event missing digests: %+v", e)
+			}
+		}
+		if len(e.Args) > 0 && e.Args[0] == "true" {
+			sawTrue = true
 		}
 	}
-	if !sawLs {
-		t.Fatalf("expected audit event for `ls`, got events: %+v", events)
+	if !sawLs || !sawEcho || !sawTrue {
+		t.Fatalf("expected audit events for ls/echo/true, got events: %+v", events)
+	}
+}
+
+func TestRunnerAuditLog(t *testing.T) {
+	t.Parallel()
+	file, err := syntax.NewParser().Parse(strings.NewReader("echo hi"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out, log bytes.Buffer
+	r, err := interp.New(
+		interp.StdIO(nil, &out, &out),
+		interp.WithDeterministic(1),
+		interp.WithAuditLog(&log),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), runnerRunTimeout)
+	defer cancel()
+	if err := r.Run(ctx, file); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	var ev interp.AuditEvent
+	if err := json.Unmarshal(bytes.TrimSpace(log.Bytes()), &ev); err != nil {
+		t.Fatalf("audit log json: %v\n%s", err, log.String())
+	}
+	if got, want := ev.Kind, "builtin"; got != want {
+		t.Fatalf("kind = %q, want %q", got, want)
+	}
+	if got, want := strings.Join(ev.Args, " "), "echo hi"; got != want {
+		t.Fatalf("args = %q, want %q", got, want)
+	}
+}
+
+func TestRunnerJsonBuiltins(t *testing.T) {
+	t.Parallel()
+	src := `
+foo=bar
+arr=(zero one)
+declare -A assoc=([k]=v)
+f(){ echo ok; }
+set --json
+declare --json -p foo
+declare --json -p arr
+declare --json -p assoc
+declare --json -F f
+`
+	file, err := syntax.NewParser().Parse(strings.NewReader(src), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	r, err := interp.New(interp.StdIO(nil, &out, &out))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), runnerRunTimeout)
+	defer cancel()
+	if err := r.Run(ctx, file); err != nil {
+		t.Fatalf("Run: %v\n%s", err, out.String())
+	}
+	dec := json.NewDecoder(strings.NewReader(out.String()))
+	var setObj struct {
+		Variables []map[string]any `json:"variables"`
+	}
+	if err := dec.Decode(&setObj); err != nil {
+		t.Fatalf("set json: %v\n%s", err, out.String())
+	}
+	if len(setObj.Variables) == 0 {
+		t.Fatalf("set json has no variables")
+	}
+	var foo, arr, assoc, fn map[string]any
+	for _, dst := range []*map[string]any{&foo, &arr, &assoc, &fn} {
+		if err := dec.Decode(dst); err != nil {
+			t.Fatalf("decode json line: %v\n%s", err, out.String())
+		}
+	}
+	if got, want := foo["name"], "foo"; got != want {
+		t.Fatalf("foo name = %v, want %q", got, want)
+	}
+	if got, want := foo["kind"], "string"; got != want {
+		t.Fatalf("foo kind = %v, want %q", got, want)
+	}
+	if got, want := foo["value"], "bar"; got != want {
+		t.Fatalf("foo value = %v, want %q", got, want)
+	}
+	if got, want := arr["kind"], "indexed"; got != want {
+		t.Fatalf("arr kind = %v, want %q", got, want)
+	}
+	if got, want := assoc["kind"], "associative"; got != want {
+		t.Fatalf("assoc kind = %v, want %q", got, want)
+	}
+	if got, want := fn["name"], "f"; got != want {
+		t.Fatalf("function name = %v, want %q", got, want)
 	}
 }
 
@@ -5779,6 +5887,31 @@ func TestRunnerDeterministic(t *testing.T) {
 	c := run(7)
 	if a == c {
 		t.Fatalf("different seeds produced same stream: %q", a)
+	}
+}
+
+func TestRunnerDeterministicEnvAndSetOption(t *testing.T) {
+	t.Parallel()
+	src := `echo $RANDOM $$ $SECONDS; set -o deterministic; echo $RANDOM $$ $SECONDS`
+	file, _ := syntax.NewParser().Parse(strings.NewReader(src), "")
+	run := func() string {
+		var out bytes.Buffer
+		r, err := interp.New(
+			interp.Env(expand.ListEnviron("BASHY_DETERMINISTIC=9")),
+			interp.StdIO(nil, &out, &out),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), runnerRunTimeout)
+		defer cancel()
+		if err := r.Run(ctx, file); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		return out.String()
+	}
+	if a, b := run(), run(); a != b {
+		t.Fatalf("deterministic env runs disagree: %q vs %q", a, b)
 	}
 }
 

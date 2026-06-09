@@ -344,6 +344,7 @@ type Runner struct {
 	// source position. Used by agentic harnesses to log/observe what
 	// the shell is about to run.
 	auditHandler func(AuditEvent)
+	auditLog     io.Writer
 
 	// structuredErrorHandler, when non-nil, is invoked for known
 	// user-facing diagnostics as they are emitted to stderr. It is an
@@ -602,6 +603,24 @@ func New(opts ...RunnerOption) (*Runner, error) {
 	if r.stdout == nil || r.stderr == nil {
 		StdIO(r.stdin, r.stdout, r.stderr)(r)
 	}
+	if !r.deterministic {
+		if value := r.Env.Get("BASHY_DETERMINISTIC").String(); value != "" {
+			seed, err := strconv.ParseInt(value, 10, 64)
+			if err != nil {
+				seed = 0
+			}
+			WithDeterministic(seed)(r)
+		}
+	}
+	if r.auditLog == nil {
+		if path := r.Env.Get("BASHY_AUDIT_LOG").String(); path != "" {
+			f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o666)
+			if err != nil {
+				return nil, err
+			}
+			r.auditLog = f
+		}
+	}
 	return r, nil
 }
 
@@ -733,6 +752,13 @@ func Params(args ...string) RunnerOption {
 				continue
 			}
 			value := fp.value()
+			if value == "deterministic" {
+				r.deterministic = enable
+				if enable {
+					r.deterministicRng = mathrand.NewPCG(uint64(r.deterministicSeed), uint64(r.deterministicSeed)^0x9E3779B97F4A7C15)
+				}
+				continue
+			}
 			if value == "" && enable {
 				// `set -o` (no name): bash lists all options
 				// including no-op aliases (history, hashall,
@@ -1057,18 +1083,27 @@ func WithInheritedFds(fds []int) RunnerOption {
 }
 
 // AuditEvent is delivered to the [WithAuditHandler] callback just
-// before the runner invokes [ExecHandlerFunc] for a simple command.
-// Builtins and shell-internal commands (loops, conditionals, etc.)
-// do not produce events — the audit surface is the exec boundary
-// where the shell hands control to an external program.
+// before the runner dispatches a simple command to either a shell
+// builtin or [ExecHandlerFunc].
 type AuditEvent struct {
+	// Kind is "builtin" or "exec".
+	Kind string
 	// Args is the resolved command and its arguments, post expansion.
 	Args []string
 	// Pos is the source position of the command in the script.
 	Pos syntax.Pos
+	// When records when the command was observed. In deterministic
+	// mode, this is the runner's frozen start time.
+	When time.Time
 	// Filename is [Runner.filename] (the parsed script's name) or
 	// empty if the runner was driven by -c / a Node value.
 	Filename string
+	// CallStackHash is a SHA-256 digest of the active shell function
+	// stack at the observation point.
+	CallStackHash string
+	// EnvDigest is a SHA-256 digest of the current shell variable
+	// environment.
+	EnvDigest string
 	// IsBuiltin is true if Args[0] is a shell builtin. Embedders that
 	// want a record of every "command" — builtin or not — typically
 	// keep these; harnesses that only care about external launches
@@ -1086,6 +1121,15 @@ type AuditEvent struct {
 func WithAuditHandler(fn func(AuditEvent)) RunnerOption {
 	return func(r *Runner) error {
 		r.auditHandler = fn
+		return nil
+	}
+}
+
+// WithAuditLog writes each [AuditEvent] as one JSON object per line.
+// It is additive with [WithAuditHandler]; both receive the same event.
+func WithAuditLog(w io.Writer) RunnerOption {
+	return func(r *Runner) error {
+		r.auditLog = w
 		return nil
 	}
 }
@@ -1446,6 +1490,7 @@ func (r *Runner) Reset() {
 		bashCompatErrors:       r.bashCompatErrors,
 		bashSource:             slices.Clone(r.bashSource),
 		auditHandler:           r.auditHandler,
+		auditLog:               r.auditLog,
 		structuredErrorHandler: r.structuredErrorHandler,
 		deterministic:          r.deterministic,
 		deterministicSeed:      r.deterministicSeed,
@@ -1463,6 +1508,9 @@ func (r *Runner) Reset() {
 		r.Vars = make(map[string]expand.Variable)
 	} else {
 		clear(r.Vars)
+	}
+	if r.deterministic {
+		r.deterministicRng = mathrand.NewPCG(uint64(r.deterministicSeed), uint64(r.deterministicSeed)^0x9E3779B97F4A7C15)
 	}
 	// TODO(v4): Use the supplied Env directly if it implements enough methods.
 	r.writeEnv = &overlayEnviron{parent: r.Env}
@@ -1652,6 +1700,7 @@ func (r *Runner) subshell(background bool) *Runner {
 		loginShell:             r.loginShell,
 		bashCompatErrors:       r.bashCompatErrors,
 		auditHandler:           r.auditHandler,
+		auditLog:               r.auditLog,
 		structuredErrorHandler: r.structuredErrorHandler,
 		deterministic:          r.deterministic,
 		deterministicSeed:      r.deterministicSeed,
