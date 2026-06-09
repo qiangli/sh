@@ -3067,7 +3067,7 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	// source
 	{
 		"source",
-		"source: filename argument required\nsource: usage: source filename [arguments]\nexit status 2 #JUSTERR",
+		"source: filename argument required\nsource: usage: source [-p path] filename [arguments]\nexit status 2 #JUSTERR",
 	},
 	{
 		"echo 'echo foo' >a; source ./a; . ./a",

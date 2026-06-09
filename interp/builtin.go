@@ -1352,12 +1352,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				pathOverride = fp.value()
 				havePathOverride = true
 				if pathOverride == "" {
-					return failf(2, "%s%s: -p: option requires an argument\n",
-						r.bashErrPrefix(pos), name)
+					return failf(2, "%s: -p: option requires an argument\n", name)
 				}
 			default:
-				return failf(2, "%s%s: %s: invalid option\n%s: usage: %s\n",
-					r.bashErrPrefix(pos), name, flag, name, bashUsage[name])
+				return failf(2, "%s: %s: invalid option\n%s: usage: %s\n",
+					name, flag, name, bashUsage[name])
 			}
 		}
 		args = fp.args()
@@ -3470,6 +3469,7 @@ var bashUsage = map[string]string{
 	"bg":       "bg [job_spec ...]",
 	"break":    "break [n]",
 	"cd":       "cd [-L|[-P [-e]] [-@]] [dir]",
+	".":        ". [-p path] filename [arguments]",
 	"command":  "command [-pVv] command [arg ...]",
 	"complete": "complete [-abcdefgjksuv] [-pr] [-DEI] [-o option] [-A action] [-G globpat] [-W wordlist] [-F function] [-C command] [-X filterpat] [-P prefix] [-S suffix] [name ...]",
 	"compgen":  "compgen [-V varname] [-abcdefgjksuv] [-o option] [-A action] [-G globpat] [-W wordlist] [-F function] [-C command] [-X filterpat] [-P prefix] [-S suffix] [word]",
@@ -3499,7 +3499,7 @@ var bashUsage = map[string]string{
 	"set":      "set [-abefhkmnptuvxBCEHPT] [-o option-name] [--] [-] [arg ...]",
 	"shift":    "shift [n]",
 	"shopt":    "shopt [-pqsu] [-o] [optname ...]",
-	"source":   "source filename [arguments]",
+	"source":   "source [-p path] filename [arguments]",
 	"trap":     "trap [-Plp] [[action] signal_spec ...]",
 	"type":     "type [-afptP] name [name ...]",
 	"typeset":  "typeset [-aAfFgiIlnrtux] name[=value] ... or typeset -p [-aAfFilnrtux] [name ...]",
