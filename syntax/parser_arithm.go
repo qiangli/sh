@@ -246,11 +246,7 @@ func (p *Parser) arithmExprValue(compact bool) ArithmExpr {
 	case _LitWord:
 		l := p.getLit()
 		if p.quote == paramExpArithm && p.assignIndexWords {
-			for p.spaced && p.tok == _LitWord {
-				next := p.getLit()
-				l.Value += " " + next.Value
-				l.ValueEnd = next.ValueEnd
-			}
+			p.appendAssignIndexWord(l)
 		}
 		if p.tok != leftBrack {
 			x = p.wordOne(l)
@@ -298,6 +294,36 @@ func (p *Parser) arithmExprValue(compact bool) ArithmExpr {
 		return u
 	}
 	return x
+}
+
+func (p *Parser) appendAssignIndexWord(l *Lit) {
+	if !p.rawAssignIndex || p.lang.in(LangZsh) {
+		for p.spaced && p.tok == _LitWord {
+			next := p.getLit()
+			l.Value += " " + next.Value
+			l.ValueEnd = next.ValueEnd
+		}
+		return
+	}
+	for p.tok != rightBrack && p.tok != leftBrack && p.tok != rightParen && p.tok != _EOF {
+		sep := ""
+		if p.spaced {
+			sep = " "
+		}
+		if p.tok == _LitWord {
+			next := p.getLit()
+			l.Value += sep + next.Value
+			l.ValueEnd = next.ValueEnd
+			continue
+		}
+		text := p.tok.String()
+		if text == "" {
+			return
+		}
+		l.Value += sep + text
+		l.ValueEnd = posAddCol(p.pos, len(text))
+		p.nextArith(false)
+	}
 }
 
 // nextArith consumes a token.

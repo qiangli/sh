@@ -560,6 +560,7 @@ type Parser struct {
 	paramExpExpOp        ParExpOperator
 	paramExpOuterQuote   quoteState
 	assignIndexWords     bool
+	rawAssignIndex       bool
 
 	// lastBquoteEsc is how many times the last backquote token was escaped
 	lastBquoteEsc int
@@ -2108,7 +2109,10 @@ func (p *Parser) getAssign(needEqual bool) *Assign {
 		// hasValidIdent already checks p.r is '['
 		p.rune()
 		p.pos = posAddCol(p.pos, 1)
+		oldRawAssignIndex := p.rawAssignIndex
+		p.rawAssignIndex = true
 		as.Index = p.eitherIndex()
+		p.rawAssignIndex = oldRawAssignIndex
 		if p.spaced || p.stopToken() {
 			if needEqual {
 				p.followErr(as.Pos(), "a[b]", assgn)
@@ -2166,7 +2170,10 @@ func (p *Parser) getAssign(needEqual bool) *Assign {
 			ae.Comments, p.accComs = p.accComs, nil
 			if p.tok == leftBrack {
 				left := p.pos
+				oldRawAssignIndex := p.rawAssignIndex
+				p.rawAssignIndex = true
 				ae.Index = p.eitherIndex()
+				p.rawAssignIndex = oldRawAssignIndex
 				if p.tok == assgnParen {
 					p.curErr("arrays cannot be nested")
 					return nil
