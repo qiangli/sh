@@ -1261,6 +1261,17 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			}
 		}
 	case "eval":
+		if len(args) > 0 {
+			switch first := args[0]; {
+			case first == "--":
+				args = args[1:]
+			case strings.HasPrefix(first, "-") && first != "-":
+				r.errf("%seval: %s: invalid option\n", r.bashErrPrefix(pos), first)
+				r.errf("eval: usage: %s\n", bashUsage["eval"])
+				exit.code = 2
+				return exit
+			}
+		}
 		src := strings.Join(args, " ")
 		p := syntax.NewParser()
 		file, err := p.Parse(strings.NewReader(src), "")
@@ -3502,6 +3513,7 @@ var bashUsage = map[string]string{
 	"declare":  "declare [-aAfFgiIlnrtux] [name[=value] ...] or declare -p [-aAfFilnrtux] [name ...]",
 	"disown":   "disown [-h] [-ar] [jobspec ... | pid ...]",
 	"enable":   "enable [-a] [-dnps] [-f filename] [name ...]",
+	"eval":     "eval [arg ...]",
 	"exec":     "exec [-cl] [-a name] [command [argument ...]] [redirection ...]",
 	"export":   "export [-fn] [name[=value] ...] or export -p",
 	"fc":       "fc [-e ename] [-lnr] [first] [last] or fc -s [pat=rep] [command]",

@@ -3059,6 +3059,11 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	// eval
 	{"eval", ""},
 	{"eval ''", ""},
+	{
+		"eval -i 'echo foo'",
+		"eval: -i: invalid option\neval: usage: eval [arg ...]\nexit status 2 #JUSTERR",
+	},
+	{"eval -- echo foo", "foo\n"},
 	{"eval echo foo", "foo\n"},
 	{"eval 'echo foo'", "foo\n"},
 	{"eval 'exit 1'", "exit status 1"},
