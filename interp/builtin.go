@@ -121,6 +121,11 @@ func IsBuiltin(name string) bool {
 		"nohup",
 		"setsid",
 
+		// Bash loadable builtin used by its glob-bracket test. We
+		// implement it internally since bashy has no dynamic builtin
+		// loader.
+		"strmatch",
+
 		// Agentic extensions — bashy-specific introspection. Surfaces
 		// runner state as JSON so harnesses can observe and assert on
 		// what the shell is doing. See docs/agentic-extensions.md.
@@ -1466,6 +1471,13 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				r.bashErrPrefix(pos), inner, r.testIntErr)
 			r.testIntErr = ""
 			exit.code = 2
+		}
+	case "strmatch":
+		if len(args) != 2 {
+			return failf(2, "strmatch: usage: strmatch string pattern\n")
+		}
+		if !bashStrmatch(args[1], args[0]) {
+			exit.code = 1
 		}
 	case "exec":
 		if r.opts[optRestricted] {

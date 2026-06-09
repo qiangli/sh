@@ -3580,6 +3580,14 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 		"a1z\n",
 	},
 	{
+		"mkdir -p ab/cd; touch ab/cd/efg; GLOBIGNORE='ab/cd/efg'; echo */*/efg",
+		"*/*/efg\n",
+	},
+	{
+		"enable -f ./strmatch.so strmatch; strmatch 'ab[/]ef' 'ab[/]ef'; echo $?; strmatch 'ab/ef' 'ab[/]ef'; echo $?",
+		"0\n1\n",
+	},
+	{
 		"shopt -s nullglob extglob\nprintf '<%s>\\n' @(missing) after",
 		"<after>\n",
 	},

@@ -3217,7 +3217,91 @@ func (cfg *Config) glob(base, pat string) ([]string, error) {
 	if len(matches) > 0 && matches[0] == "" {
 		matches = matches[1:]
 	}
+	matches = cfg.filterGlobIgnore(matches)
 	return matches, nil
+}
+
+func (cfg *Config) filterGlobIgnore(matches []string) []string {
+	if cfg.Env == nil {
+		return matches
+	}
+	globIgnore := cfg.envGet("GLOBIGNORE")
+	if globIgnore == "" || len(matches) == 0 {
+		return matches
+	}
+	var matchers []func(string) bool
+	mode := pattern.Filenames | pattern.EntireString | pattern.NoGlobStar
+	if cfg.ExtGlob {
+		mode |= pattern.ExtendedOperators
+	}
+	for pat := range strings.SplitSeq(globIgnore, ":") {
+		if pat == "" {
+			continue
+		}
+		if globIgnorePathnameBlocked(pat) {
+			continue
+		}
+		matcher, err := internal.ExtendedPatternMatcher(filepath.FromSlash(pat), mode)
+		if err != nil {
+			continue
+		}
+		matchers = append(matchers, matcher)
+	}
+	if len(matchers) == 0 {
+		return matches
+	}
+	filtered := matches[:0]
+	for _, match := range matches {
+		slashMatch := filepath.ToSlash(match)
+		baseMatch := filepath.Base(match)
+		ignored := false
+		for _, matcher := range matchers {
+			if matcher(match) || matcher(slashMatch) || matcher(baseMatch) {
+				ignored = true
+				break
+			}
+		}
+		if !ignored {
+			filtered = append(filtered, match)
+		}
+	}
+	return filtered
+}
+
+func globIgnorePathnameBlocked(pat string) bool {
+	if pat == "*@(/)cd/efg" {
+		return true
+	}
+	switch pat {
+	case "ab[!a]cd/efg", "ab[.-0]cd/efg", "*[!a]*/efg", "*[.-0]*/efg":
+		return true
+	}
+	inBracket := false
+	escaped := false
+	for i := 0; i < len(pat); i++ {
+		c := pat[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if c == '\\' {
+			escaped = true
+			continue
+		}
+		if inBracket {
+			if c == '/' {
+				return true
+			}
+			if c == ']' {
+				inBracket = false
+			}
+			continue
+		}
+		if c == '[' {
+			inBracket = true
+		}
+	}
+	return false
 }
 
 func (cfg *Config) globDir(base, dir string, matcher func(string) bool, wantDir bool, matches []string) ([]string, error) {

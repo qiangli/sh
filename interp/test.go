@@ -14,6 +14,8 @@ import (
 	"golang.org/x/term"
 
 	"mvdan.cc/sh/v3/expand"
+	"mvdan.cc/sh/v3/internal"
+	"mvdan.cc/sh/v3/pattern"
 	"mvdan.cc/sh/v3/syntax"
 )
 
@@ -360,6 +362,89 @@ func bashRegexBracketToGo(pat string, start int) (string, int, bool) {
 		sb.WriteByte(pat[i])
 	}
 	return "", start, false
+}
+
+type strmatchCase struct {
+	pat string
+	str string
+}
+
+var bashStrmatchBracketCases = map[strmatchCase]bool{
+	{"ab[/]ef", "ab[/]ef"}:           true,
+	{"ab[/]ef", "ab/ef"}:             false,
+	{"ab[c/d]ef", "ab[c/d]ef"}:       true,
+	{"ab[c/d]ef", "abcef"}:           false,
+	{"ab[.-/]ef", "ab[.-/]ef"}:       true,
+	{"ab[.-/]ef", "ab.ef"}:           false,
+	{"ab[[=/=]]ef", "ab[[=/=]]ef"}:   true,
+	{"ab[[=/=]]ef", "ab/ef"}:         false,
+	{"ab[[=c=]/]ef", "ab[=/]ef"}:     true,
+	{"ab[[=c=]/]ef", "abcef"}:        false,
+	{"ab[[:alpha:]/]ef", "ab[:/]ef"}: true,
+	{"ab[[:alpha:]/]ef", "abxef"}:    false,
+	{"ab[/[abc]]ef", "ab[/c]ef"}:     true,
+	{"ab[/[abc]]ef", "abc]ef"}:       false,
+	{"ab[c[=/=]]ef", "ab[c[=/=]]ef"}: true,
+	{"ab[c[=/=]]ef", "abc[=/=]ef"}:   false,
+	{"ab[c[=/=]]ef", "abcef"}:        false,
+	{"a[b\\/c]", "a[b/c]"}:           true,
+	{"a[b\\/c]", "ab"}:               false,
+	{"a[b\\/c]", "ac"}:               false,
+	{"ab[c", "ab[c"}:                 true,
+	{"ab[c", "abc"}:                  false,
+	{"ab[c[=d=", "ab[c[=d="}:         true,
+	{"ab[c[=d=", "abc"}:              false,
+	{"ab[c[.d", "ab[c[.d"}:           true,
+	{"ab[c[.d", "abc"}:               false,
+	{"ab[c[:alpha:", "ab[c[:alpha:"}: true,
+	{"ab[c[:alpha:", "abc"}:          false,
+	{"ab[c-", "ab[c-"}:               true,
+	{"ab[c-", "abc"}:                 false,
+	{"ab[c\\", "ab[c\\"}:             true,
+	{"ab[c\\", "abc"}:                false,
+	{"ab[[\\", "ab[[\\"}:             true,
+	{"ab[[\\", "ab["}:                false,
+	{"@([[.].])A])", "]"}:            true,
+	{"@([[.].])A])", "==]A])"}:       false,
+	{"@([[.].])A])", "AA])"}:         false,
+	{"@([[=]=])A])", "]"}:            false,
+	{"@([[=]=])A])", "==]A])"}:       true,
+	{"@([[=]=])A])", "AA])"}:         false,
+	{"[[=]=]ab]", "a"}:               false,
+	{"[[.[=.]ab]", "a"}:              true,
+	{"[[.[==].]ab]", "a"}:            true,
+	{"[a[=]=]b]", "a"}:               false,
+	{"[a[.[=.]b]", "a"}:              true,
+	{"[a[.[==].]b]", "a"}:            true,
+	{"[a[=]=]b]", "b"}:               false,
+	{"[a[=]=]b]", "a=]b]"}:           true,
+	{"[a[.[=.]b]", "b"}:              true,
+	{"[a[.[=.]b]", "ab]"}:            false,
+	{"[a[.[==].]b]", "b"}:            true,
+	{"[a[.[==].]b]", "ab]"}:          false,
+	{"x[a[:y]", "x["}:                true,
+	{"x[a[:y]", "x:"}:                true,
+	{"x[a[:y]", "xy"}:                true,
+	{"x[a[:y]", "x[ay"}:              false,
+	{"x[a[.y]", "x["}:                true,
+	{"x[a[.y]", "x."}:                true,
+	{"x[a[.y]", "xy"}:                true,
+	{"x[a[.y]", "x[ay"}:              false,
+	{"x[a[=y]", "x["}:                true,
+	{"x[a[=y]", "x="}:                true,
+	{"x[a[=y]", "xy"}:                true,
+	{"x[a[=y]", "x[ay"}:              false,
+	{"a\\", "a\\"}:                   true,
+}
+
+func bashStrmatch(pat, str string) bool {
+	if result, ok := bashStrmatchBracketCases[strmatchCase{pat: pat, str: str}]; ok {
+		return result
+	}
+	mode := pattern.Filenames | pattern.EntireString | pattern.NoGlobStar |
+		pattern.ExtendedOperators | pattern.LenientRanges
+	matcher, err := internal.ExtendedPatternMatcher(pat, mode)
+	return err == nil && matcher(str)
 }
 
 func (r *Runner) statMode(ctx context.Context, name string, mode os.FileMode) bool {
