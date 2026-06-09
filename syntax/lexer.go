@@ -238,6 +238,12 @@ func (p *Parser) nextKeepSpaces() {
 			}
 		case '`', '"', '$':
 			p.tok = p.regToken(r)
+		case '<', '>':
+			if p.lang.in(langBashLike|LangZsh) && p.peek() == '(' {
+				p.tok = p.regToken(r)
+			} else {
+				p.advanceLitOther(r)
+			}
 		default:
 			p.advanceLitOther(r)
 		}

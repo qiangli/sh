@@ -4642,6 +4642,10 @@ var runTestsUnix = []runTest{
 		"nested\n",
 	},
 	{
+		"cat ${foo:-<(echo a)}",
+		"a\n",
+	},
+	{
 		// The tests here use "wait" because otherwise the parent may finish before
 		// the subprocess has had time to process the input and print the result.
 		"echo foo bar > >(sed 's/o/e/g'); wait",

@@ -1833,6 +1833,22 @@ var fileTests = []fileTestCase{
 		), LangBash|LangZsh),
 	),
 	fileTest(
+		[]string{"cat ${foo:-<(echo a)}"},
+		langFile(call(
+			litWord("cat"),
+			word(&ParamExp{
+				Param: lit("foo"),
+				Exp: &Expansion{
+					Op: DefaultUnsetOrNull,
+					Word: word(&ProcSubst{
+						Op:    CmdIn,
+						Stmts: []*Stmt{litStmt("echo", "a")},
+					}),
+				},
+			}),
+		), LangBash|LangZsh),
+	),
+	fileTest(
 		[]string{"foo =(bar)"},
 		langErr2("1:5: `=(` process substitutions are a zsh feature; tried parsing as LANG"),
 		langFile(call(
