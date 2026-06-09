@@ -846,13 +846,14 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		}
 		if listOnly {
 			if len(remaining) == 0 {
-				for _, e := range sortedSignalEntries() {
-					r.outf("%s\n", e.Name)
-				}
+				r.printSignalList()
 				break
 			}
 			for _, a := range remaining {
 				if n, err := strconv.Atoi(a); err == nil {
+					if n > 128 {
+						n -= 128
+					}
 					if _, name, ok := signalByNumber(n); ok && name != "EXIT" {
 						r.outf("%s\n", name)
 						continue
@@ -2714,19 +2715,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			}
 		}
 		if listSignals {
-			col := 0
-			for i := 1; i <= 15; i++ {
-				if name, ok := signalNames[i]; ok {
-					col++
-					r.outf("%2d) SIG%-10s", i, name)
-					if col%5 == 0 {
-						r.outf("\n")
-					}
-				}
-			}
-			if col%5 != 0 {
-				r.outf("\n")
-			}
+			r.printSignalList()
 			break
 		}
 		args := fp.args()
@@ -4542,6 +4531,22 @@ var signalNames = map[int]string{
 	13: "PIPE",
 	14: "ALRM",
 	15: "TERM",
+}
+
+func (r *Runner) printSignalList() {
+	col := 0
+	for i := 1; i <= 15; i++ {
+		if name, ok := signalNames[i]; ok {
+			col++
+			r.outf("%2d) SIG%-10s", i, name)
+			if col%5 == 0 {
+				r.outf("\n")
+			}
+		}
+	}
+	if col%5 != 0 {
+		r.outf("\n")
+	}
 }
 
 // normalizeSignal converts a signal specification to a canonical name.

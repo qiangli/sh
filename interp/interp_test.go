@@ -1915,6 +1915,9 @@ var runTests = []runTest{
 	{"kill -l TERM", "15\n"},
 	{"kill -l SIGTERM", "15\n"},
 	{"kill -l 15", "TERM\n"},
+	{"kill -l 129", "HUP\n"},
+	{"kill -l | head -1", " 1) SIGHUP        2) SIGINT        3) SIGQUIT       4) SIGILL        5) SIGTRAP      \n"},
+	{"diff <(kill -l) <(trap -l)", ""},
 	{"kill -l KILL INT", "9\n2\n"},
 
 	// setsid / nohup — usage / lookup errors. Real-subprocess delivery is
