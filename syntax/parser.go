@@ -1978,7 +1978,8 @@ func (p *Parser) eitherIndex() ArithmExpr {
 	lpos := p.pos
 	p.quote = paramExpArithm
 	p.next()
-	if p.tok == star || p.tok == at {
+	switch p.tok {
+	case star, at, perc, exclMark:
 		p.tok, p.val = _LitWord, p.tok.String()
 	}
 	expr := p.followArithm(leftBrack, lpos)

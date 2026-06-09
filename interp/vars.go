@@ -691,7 +691,7 @@ func formatDeclareVar(name string, vr expand.Variable, forceEmptyArrayValue bool
 				b.WriteByte(' ')
 			}
 			first = false
-			fmt.Fprintf(&b, "[%s]=%s", k, bashDeclareQuote(vr.Map[k]))
+			fmt.Fprintf(&b, "[%s]=%s", bashAssocKeyQuote(k), bashDeclareQuote(vr.Map[k]))
 		}
 		if !first {
 			b.WriteByte(' ')
@@ -705,6 +705,25 @@ func formatDeclareVar(name string, vr expand.Variable, forceEmptyArrayValue bool
 		b.WriteString(bashDeclareQuote(vr.Str))
 	}
 	return b.String()
+}
+
+func bashAssocKeyQuote(s string) string {
+	if s == "" {
+		return bashDeclareQuote(s)
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case 'a' <= c && c <= 'z',
+			'A' <= c && c <= 'Z',
+			'0' <= c && c <= '9',
+			c == '_', c == '.', c == '%', c == '-':
+			continue
+		default:
+			return bashDeclareQuote(s)
+		}
+	}
+	return s
 }
 
 func variableJSON(name string, vr expand.Variable) map[string]any {

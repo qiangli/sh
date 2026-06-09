@@ -959,6 +959,10 @@ var runTests = []runTest{
 		"declare -A assoc=([foo]=\"bar\" )\n",
 	},
 	{
+		`declare -A assoc; key='x],b[$(echo uname >&2)'; (( assoc[$key]++ )); assoc[!]=bang; assoc[%]=pct; declare -p assoc`,
+		"declare -A assoc=([%]=\"pct\" [\"!\"]=\"bang\" [\"x],b[\\$(echo uname >&2)\"]=\"1\" )\n",
+	},
+	{
 		`declare -ai arr=(1+1); declare -p arr`,
 		"declare -ai arr=([0]=\"2\")\n",
 	},

@@ -5,6 +5,7 @@ package expand
 
 import (
 	"fmt"
+	"maps"
 	"strconv"
 	"strings"
 
@@ -28,6 +29,8 @@ type arithLvalue struct {
 	word       *syntax.Word
 	index      syntax.ArithmExpr
 	indexValue int
+	indexKey   string
+	indexAssoc bool
 	indexSet   bool
 }
 
@@ -429,6 +432,10 @@ func (cfg *Config) getAritLvalue(lval arithLvalue) (int64, error) {
 	}
 	vr := cfg.Env.Get(lval.name)
 	switch vr.Kind {
+	case Associative:
+		if lval.indexAssoc {
+			return atoi(vr.Map[lval.indexKey]), nil
+		}
 	case Indexed:
 		if vr.IndexedSet(lval.indexValue) {
 			return atoi(vr.List[lval.indexValue]), nil
@@ -443,6 +450,20 @@ func (cfg *Config) getAritLvalue(lval arithLvalue) (int64, error) {
 
 func (cfg *Config) resolveAritLvalue(lval arithLvalue) (arithLvalue, error) {
 	if lval.index == nil || lval.indexSet {
+		return lval, nil
+	}
+	if vr := cfg.Env.Get(lval.name); vr.Kind == Associative {
+		word, ok := lval.index.(*syntax.Word)
+		if !ok {
+			return lval, fmt.Errorf("bad array subscript")
+		}
+		key, err := Literal(cfg, word)
+		if err != nil {
+			return lval, err
+		}
+		lval.indexKey = key
+		lval.indexAssoc = true
+		lval.indexSet = true
 		return lval, nil
 	}
 	index, err := Arithm(cfg, lval.index)
@@ -473,6 +494,16 @@ func (cfg *Config) setAritLvalue(lval arithLvalue, val int64) error {
 		}
 	}
 	vr := cfg.Env.Get(lval.name)
+	if vr.Kind == Associative {
+		if vr.Map == nil {
+			vr.Map = make(map[string]string)
+		} else {
+			vr.Map = maps.Clone(vr.Map)
+		}
+		vr.Set = true
+		vr.Map[lval.indexKey] = strconv.FormatInt(val, 10)
+		return wenv.Set(lval.name, vr)
+	}
 	if vr.Kind == String && vr.Str != "" {
 		vr.List = []string{vr.Str}
 		vr.ListSet = nil
