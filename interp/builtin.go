@@ -4336,18 +4336,52 @@ func parseSymbolicUmask(s string, current int) symbolicUmaskResult {
 // changes would affect the whole process and require permissions; the
 // override is purely cosmetic but lets scripts that probe-and-loop
 // against `ulimit -n` finish.
-func (r *Runner) ulimitBuiltin(_ syntax.Pos, args []string) exitStatus {
+func (r *Runner) ulimitBuiltin(pos syntax.Pos, args []string) exitStatus {
 	var exit exitStatus
 	flag := "-f"
 	var setVal string
+	parsingOpts := true
 	for _, a := range args {
-		if len(a) > 1 && a[0] == '-' {
-			flag = a
+		if parsingOpts && a == "--" {
+			parsingOpts = false
+			continue
+		}
+		if parsingOpts && len(a) > 1 && a[0] == '-' {
+			for _, ch := range a[1:] {
+				switch ch {
+				case 'S', 'H':
+					// Soft/hard selectors affect real setrlimit calls.
+					// We keep cosmetic state only, so the resource flag
+					// remains unchanged.
+				case 'a':
+					return exit
+				case 'g':
+					r.errf("%sulimit: -g: invalid option\n", r.bashErrPrefix(pos))
+					r.errf("ulimit: usage: ulimit [-SHabcdefiklmnpqrstuvxPRT] [limit]\n")
+					exit.code = 2
+					return exit
+				default:
+					flag = "-" + string(ch)
+				}
+			}
 			continue
 		}
 		setVal = a
 	}
 	if setVal != "" {
+		if strings.HasPrefix(setVal, "+") {
+			r.errf("%sulimit: %s: invalid number\n", r.bashErrPrefix(pos), setVal)
+			exit.code = 1
+			return exit
+		}
+		if flag == "-u" {
+			r.errf("%sulimit: max user processes: cannot modify limit: Operation not permitted\n", r.bashErrPrefix(pos))
+			exit.code = 1
+			return exit
+		}
+		if setVal == "soft" || setVal == "hard" {
+			return exit
+		}
 		if r.ulimitOverride == nil {
 			r.ulimitOverride = make(map[string]string)
 		}
