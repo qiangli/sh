@@ -4079,6 +4079,10 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	// updates only the runner field, not the process.
 	{"umask 077; umask", "0077\n"},
 	{"umask 022; umask", "0022\n"},
+	{"umask 022; umask u=r+w; umask -S", "u=rw,g=rx,o=rx\n"},
+	{"umask 022; umask u+w=r+x; umask -S", "u=rx,g=rx,o=rx\n"},
+	{"umask 022; umask g+u,o+rwx-u; umask -S", "u=rwx,g=rwx,o=\n"},
+	{"umask 022; umask +xwr; umask -S", "u=rwx,g=rwx,o=rwx\n"},
 	{"umask 999", "umask: 999: octal number out of range\nexit status 1"},
 
 	// logout from a non-login shell errors with the bash-compatible

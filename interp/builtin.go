@@ -3275,18 +3275,23 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 	case "umask":
 		symbolic := false
 		printFlag := false
-		fp := flagParser{remaining: args}
-		for fp.more() {
-			switch flag := fp.flag(); flag {
-			case "-S":
-				symbolic = true
-			case "-p":
-				printFlag = true
-			default:
-				return failf(2, "umask: %s: invalid option\n", flag)
+		for len(args) > 0 {
+			if args[0] == "-S" || args[0] == "-p" {
+				flag := args[0]
+				args = args[1:]
+				switch flag {
+				case "-S":
+					symbolic = true
+				case "-p":
+					printFlag = true
+				}
+				continue
 			}
+			if strings.HasPrefix(args[0], "-") && args[0] != "-" {
+				return failf(2, "umask: %s: invalid option\n", args[0])
+			}
+			break
 		}
-		args = fp.args()
 		// helper to format the current mask in symbolic form
 		formatSymbolic := func(mask int) string {
 			// umask bits are inverted: a 1 bit means "deny".
@@ -4020,9 +4025,11 @@ type symbolicUmaskResult struct {
 // clauses separated by commas; each clause is `[who][op]perms` where
 // `who` is any combination of `u`, `g`, `o`, `a` (default `a`),
 // `op` is `=`, `+`, or `-`, and `perms` is any combination of
-// `r`, `w`, `x`. On failure, returns kind="" for "looks octal" so
-// caller can try numeric parse, or "character"/"operator" with the
-// offending byte for a bash-shaped diagnostic.
+// `r`, `w`, `x`, or permission-copy tokens `u`, `g`, `o`. Additional
+// operators may appear in the permissions tail, e.g. `u+w=r+x`; they
+// are applied left-to-right. On failure, returns kind="" for "looks
+// octal" so caller can try numeric parse, or "character"/"operator"
+// with the offending byte for a bash-shaped diagnostic.
 func parseSymbolicUmask(s string, current int) symbolicUmaskResult {
 	if s == "" {
 		return symbolicUmaskResult{}
@@ -4070,50 +4077,64 @@ func parseSymbolicUmask(s string, current int) symbolicUmaskResult {
 		if op != '=' && op != '+' && op != '-' {
 			return symbolicUmaskResult{badChar: op, kind: "operator"}
 		}
-		i++
-		var perms int
-		for ; i < len(clause); i++ {
-			switch clause[i] {
-			case 'r':
-				perms |= 4
-			case 'w':
-				perms |= 2
-			case 'x':
-				perms |= 1
-			default:
-				// Ignore `s` (setuid/setgid) and `t` (sticky)
-				// — they don't fit in a umask. `X` (execute
-				// if dir) is similarly absent. Anything else
-				// is an error.
-				if clause[i] != 's' && clause[i] != 't' && clause[i] != 'X' {
+		apply := func(op byte, perms int) {
+			applyTriad := func(shift int) {
+				cur := (^mask >> shift) & 7
+				switch op {
+				case '=':
+					cur = perms
+				case '+':
+					cur |= perms
+				case '-':
+					cur &^= perms
+				}
+				// Rebuild mask: set triad bits to ~cur.
+				mask &^= 7 << shift
+				mask |= ((^cur) & 7) << shift
+			}
+			if who&4 != 0 {
+				applyTriad(6)
+			}
+			if who&2 != 0 {
+				applyTriad(3)
+			}
+			if who&1 != 0 {
+				applyTriad(0)
+			}
+		}
+		for i < len(clause) {
+			i++
+			perms := 0
+			for ; i < len(clause); i++ {
+				switch clause[i] {
+				case '=', '+', '-':
+					goto applySegment
+				case 'r':
+					perms |= 4
+				case 'w':
+					perms |= 2
+				case 'x':
+					perms |= 1
+				case 'u':
+					perms |= (^mask >> 6) & 7
+				case 'g':
+					perms |= (^mask >> 3) & 7
+				case 'o':
+					perms |= (^mask >> 0) & 7
+				case 's', 't', 'X':
+					// Ignore permission bits that don't fit in umask.
+				default:
 					return symbolicUmaskResult{badChar: clause[i], kind: "character"}
 				}
 			}
-		}
-		// Apply to each affected triad. Remember: umask bits MEAN
-		// "denied", so allowed perms clear the corresponding bits.
-		applyTriad := func(shift int) {
-			cur := (^mask >> shift) & 7
-			switch op {
-			case '=':
-				cur = perms
-			case '+':
-				cur |= perms
-			case '-':
-				cur &^= perms
+		applySegment:
+			apply(op, perms)
+			if i < len(clause) {
+				op = clause[i]
+				if op != '=' && op != '+' && op != '-' {
+					return symbolicUmaskResult{badChar: op, kind: "operator"}
+				}
 			}
-			// Rebuild mask: set triad bits to ~cur.
-			mask &^= 7 << shift
-			mask |= ((^cur) & 7) << shift
-		}
-		if who&4 != 0 {
-			applyTriad(6)
-		}
-		if who&2 != 0 {
-			applyTriad(3)
-		}
-		if who&1 != 0 {
-			applyTriad(0)
 		}
 	}
 	return symbolicUmaskResult{mask: mask & 0o777, ok: true}
