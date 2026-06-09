@@ -639,6 +639,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			break
 		}
 		var path string
+		printPath := false
 		switch len(args) {
 		case 0:
 			path = r.envGet("HOME")
@@ -659,12 +660,15 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					exit.code = 1
 					return exit
 				}
-				r.outf("%s\n", path)
+				printPath = true
 			}
 		default:
 			return failf(1, "cd: too many arguments\n")
 		}
 		exit.code = r.changeDir(ctx, "cd", path)
+		if printPath && exit.code == 0 {
+			r.outf("%s\n", path)
+		}
 	case "wait":
 		fp := flagParser{remaining: args}
 		waitNext := false

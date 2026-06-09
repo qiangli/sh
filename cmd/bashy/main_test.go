@@ -10,6 +10,17 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 )
 
+func TestNewRunnerIgnoresInheritedOLDPWD(t *testing.T) {
+	t.Setenv("OLDPWD", "/tmp")
+	r, err := newRunner()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := r.Env.Get("OLDPWD"); got.IsSet() {
+		t.Fatalf("OLDPWD inherited into runner as %q", got.String())
+	}
+}
+
 func TestCommandSubstOpenBefore(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

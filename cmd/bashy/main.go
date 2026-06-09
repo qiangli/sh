@@ -241,7 +241,14 @@ func newRunner() (*interp.Runner, error) {
 	}
 	shlvl++
 
-	envVars := append(os.Environ(), bashVersionVars()...)
+	envVars := make([]string, 0, len(os.Environ())+len(bashVersionVars()))
+	for _, env := range os.Environ() {
+		if strings.HasPrefix(env, "OLDPWD=") {
+			continue
+		}
+		envVars = append(envVars, env)
+	}
+	envVars = append(envVars, bashVersionVars()...)
 	envVars = append(envVars, fmt.Sprintf("SHLVL=%d", shlvl))
 
 	env := expand.ListEnviron(envVars...)

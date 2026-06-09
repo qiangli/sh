@@ -1325,6 +1325,10 @@ var runTests = []runTest{
 		`orig="$PWD"; mkdir a; cd a; [[ $(cd -) == "$orig" ]]`,
 		"",
 	},
+	{
+		`OLDPWD=/tmp/bashy-does-not-exist; cd -; echo status:$?`,
+		"cd: /tmp/bashy-does-not-exist: No such file or directory\nstatus:1\n #JUSTERR",
+	},
 
 	// dirs/pushd/popd
 	{"set -- $(dirs); echo $# ${#DIRSTACK[@]}", "1 1\n"},
