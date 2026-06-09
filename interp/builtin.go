@@ -222,6 +222,18 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		if len(args) == 1 && args[0] == "--json" {
 			return r.jsonOut(map[string]any{"variables": r.variablesJSON(true)})
 		}
+		if len(args) == 2 && args[0] == "-o" && strings.HasPrefix(args[1], "-") {
+			for _, name := range bashSetOptNames() {
+				status := "off"
+				if opt := r.posixOptByName(name); opt != nil && *opt {
+					status = "on"
+				} else if on, ok := r.noOpSetState[name]; ok && on {
+					status = "on"
+				}
+				r.outf("%-15s\t%s\n", name, status)
+			}
+			break
+		}
 		if len(args) == 0 {
 			// `set` with no args prints all shell variables in
 			// `name=value` form, alphabetically sorted, values
