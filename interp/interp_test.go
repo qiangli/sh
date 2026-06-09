@@ -296,9 +296,10 @@ var runTests = []runTest{
 	},
 
 	// we don't need to follow bash error strings
-	{"exit a", "invalid exit status code: \"a\"\nexit status 2 #JUSTERR"},
+	{"exit a", "exit: a: numeric argument required\nexit status 2 #JUSTERR"},
 	{"exit 1 2", "exit cannot take multiple arguments\nexit status 1 #JUSTERR"},
-	{"f() { return a; }; f", "invalid return status code: \"a\"\nexit status 2 #JUSTERR"},
+	{"f() { return a; }; f", "return: a: numeric argument required\nexit status 2 #JUSTERR"},
+	{"f() { return a; echo bad; }; f; echo after:$?", "return: a: numeric argument required\nafter:2\n #JUSTERR"},
 
 	// echo
 	{"echo", "\n"},

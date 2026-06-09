@@ -211,7 +211,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		case 1:
 			n, err := strconv.Atoi(args[0])
 			if err != nil {
-				return failf(2, "invalid exit status code: %q\n", args[0])
+				return failf(2, "exit: %s: numeric argument required\n", args[0])
 			}
 			exit.code = uint8(n)
 		default:
@@ -1951,11 +1951,21 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		case 1:
 			n, err := strconv.Atoi(args[0])
 			if err != nil {
-				return failf(2, "invalid return status code: %q\n", args[0])
+				msg := r.bashErrPrefix(pos) + fmt.Sprintf("return: %s: numeric argument required", args[0])
+				r.errf("%s\n", msg)
+				r.reportError("builtin", pos, name, msg, 2)
+				exit.code = 2
+				exit.returning = true
+				return exit
 			}
 			exit.code = uint8(n)
 		default:
-			return failf(2, "return: too many arguments\n")
+			msg := r.bashErrPrefix(pos) + "return: too many arguments"
+			r.errf("%s\n", msg)
+			r.reportError("builtin", pos, name, msg, 2)
+			exit.code = 2
+			exit.returning = true
+			return exit
 		}
 		exit.returning = true
 	case "read":
