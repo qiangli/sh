@@ -925,6 +925,10 @@ func aliasValue(als alias) string {
 	return buf.String()
 }
 
+func validAliasName(name string) bool {
+	return name != "" && !strings.ContainsAny(name, "\\$")
+}
+
 // terminalSize probes stdin/stdout/stderr for a terminal and returns
 // the first valid (cols, rows). Returns (0, 0) if none of them is a
 // terminal — callers use that to leave $COLUMNS / $LINES empty.
@@ -1061,6 +1065,11 @@ func (r *Runner) setVarWithIndex(prev expand.Variable, name string, index syntax
 			return
 		}
 		k := r.literal(w)
+		if name == "BASH_ALIASES" && !validAliasName(k) {
+			r.errf("%s`%s': invalid alias name\n", r.bashErrPrefix(r.curStmtPos), k)
+			r.exit.code = 1
+			return
+		}
 		if name == "BASH_CMDS" {
 			if r.opts[optRestricted] {
 				if strings.Contains(valStr, "/") {

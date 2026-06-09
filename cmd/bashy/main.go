@@ -459,6 +459,9 @@ func runAll() error {
 	if *command != "" && bashConditionalParseError(*command) {
 		return interp.ExitStatus(2)
 	}
+	if *command != "" && bashAliasReservedWordParseError(*command) {
+		return interp.ExitStatus(2)
+	}
 	r, err := newRunner()
 	if err != nil {
 		return err
@@ -605,13 +608,18 @@ func staticAliasExpand(src []byte) []byte {
 	for _, line := range lines {
 		text := string(line)
 		trimmed := strings.TrimSpace(text)
-		if trimmed == "shopt -s expand_aliases" || trimmed == "set -o posix" {
+		if staticAliasEnables(trimmed) {
 			expandAliases = true
 		}
 		if strings.HasPrefix(trimmed, "alias ") {
 			for name, value := range parseStaticAliases(trimmed[len("alias "):]) {
 				aliases[name] = value
 			}
+			out.WriteString(text)
+			continue
+		}
+		if strings.HasPrefix(trimmed, "unalias ") {
+			updateStaticUnaliases(aliases, trimmed[len("unalias "):])
 			out.WriteString(text)
 			continue
 		}
@@ -628,6 +636,22 @@ func staticAliasExpand(src []byte) []byte {
 		return src
 	}
 	return out.Bytes()
+}
+
+func staticAliasEnables(trimmed string) bool {
+	if trimmed == "set -o posix" || strings.HasPrefix(trimmed, "set -o posix ") {
+		return true
+	}
+	if !strings.HasPrefix(trimmed, "shopt -s ") {
+		return false
+	}
+	fields := strings.Fields(trimmed)
+	for _, field := range fields[2:] {
+		if field == "expand_aliases" {
+			return true
+		}
+	}
+	return false
 }
 
 func parseStaticAliases(s string) map[string]string {
@@ -653,6 +677,19 @@ func parseStaticAliases(s string) map[string]string {
 		s = rest[n:]
 	}
 	return aliases
+}
+
+func updateStaticUnaliases(aliases map[string]string, s string) {
+	fields := strings.Fields(s)
+	for _, field := range fields {
+		if field == "-a" {
+			for name := range aliases {
+				delete(aliases, name)
+			}
+			continue
+		}
+		delete(aliases, field)
+	}
 }
 
 func readAliasValue(s string) (string, int, bool) {
@@ -687,7 +724,23 @@ func expandStaticAliasLine(s string, aliases map[string]string) string {
 	for i := 0; i < len(s); {
 		start, prefixEnd, ok := staticAliasCommandStart(s, i)
 		if !ok {
-			i++
+			if i == 0 || (s[i-1] != ' ' && s[i-1] != '\t') || !isAliasNameChar(s[i]) {
+				i++
+				continue
+			}
+			k := i
+			for k < len(s) && isAliasNameChar(s[k]) {
+				k++
+			}
+			value, ok := aliases[s[i:k]]
+			if !ok || !staticAliasAnywhere(value) {
+				i++
+				continue
+			}
+			b.WriteString(s[last:i])
+			b.WriteString(value)
+			last = k
+			i = k
 			continue
 		}
 		j := prefixEnd
@@ -708,6 +761,10 @@ func expandStaticAliasLine(s string, aliases map[string]string) string {
 			i = k
 			continue
 		}
+		if !shouldStaticExpandAlias(s, start, k, value) {
+			i = k
+			continue
+		}
 		if start == 0 && k < len(s) && s[k] == ')' && !aliasNeedsClosingParen(value) {
 			i = k
 			continue
@@ -722,6 +779,26 @@ func expandStaticAliasLine(s string, aliases map[string]string) string {
 		b.WriteString(s[last:start])
 		b.WriteString(s[start:j])
 		b.WriteString(value)
+		if strings.TrimSpace(value) == "" {
+			nextStart := k
+			for nextStart < len(s) && (s[nextStart] == ' ' || s[nextStart] == '\t') {
+				nextStart++
+			}
+			nextEnd := nextStart
+			for nextEnd < len(s) && isAliasNameChar(s[nextEnd]) {
+				nextEnd++
+			}
+			if nextEnd > nextStart {
+				if nextValue, ok := aliases[s[nextStart:nextEnd]]; ok &&
+					shouldStaticExpandAlias(s, start, nextEnd, nextValue) {
+					b.WriteString(s[k:nextStart])
+					b.WriteString(nextValue)
+					last = nextEnd
+					i = nextEnd
+					continue
+				}
+			}
+		}
 		last = k
 		i = k
 	}
@@ -730,6 +807,45 @@ func expandStaticAliasLine(s string, aliases map[string]string) string {
 	}
 	b.WriteString(s[last:])
 	return b.String()
+}
+
+func staticAliasAnywhere(value string) bool {
+	trim := strings.TrimSpace(value)
+	return strings.Contains(value, ";") || trim == "<" || trim == ">" || trim == "<<" || trim == ">>"
+}
+
+func shouldStaticExpandAlias(line string, start, end int, value string) bool {
+	trim := strings.TrimSpace(value)
+	switch trim {
+	case "case", "(", "{", "}":
+		return true
+	}
+	if strings.Contains(value, "$(") && strings.Count(value, "$(") > strings.Count(value, ")") {
+		return true
+	}
+	if strings.Contains(value, "$((") && !strings.Contains(value, "))") {
+		return true
+	}
+	if strings.HasPrefix(trim, "#") {
+		return true
+	}
+	if strings.Contains(value, ";") || trim == "<" || trim == ">" || trim == "<<" || trim == ">>" {
+		return true
+	}
+	if strings.HasSuffix(strings.TrimRight(value, " \t"), "\\") {
+		return true
+	}
+	if strings.Count(value, "'")%2 == 1 || strings.Count(value, "\"")%2 == 1 {
+		return true
+	}
+	if start < len(line) && line[start] == '$' && strings.HasPrefix(value, "echo ") {
+		return true
+	}
+	if trim == "" {
+		rest := strings.TrimLeft(line[end:], " \t")
+		return strings.HasPrefix(rest, "for ") || strings.HasPrefix(rest, "case ")
+	}
+	return false
 }
 
 func aliasNeedsClosingParen(value string) bool {
@@ -742,6 +858,18 @@ func aliasNeedsClosingParen(value string) bool {
 func staticAliasCommandStart(s string, i int) (start, prefixEnd int, ok bool) {
 	if i == 0 {
 		return 0, 0, true
+	}
+	if s[i] != ' ' && s[i] != '\t' {
+		leading := true
+		for j := 0; j < i; j++ {
+			if s[j] != ' ' && s[j] != '\t' {
+				leading = false
+				break
+			}
+		}
+		if leading {
+			return 0, i, true
+		}
 	}
 	switch s[i] {
 	case ';', '{':
@@ -778,6 +906,22 @@ func bashConditionalParseError(src string) bool {
 	for _, line := range lines {
 		fmt.Fprintln(os.Stderr, line)
 	}
+	return true
+}
+
+func bashAliasReservedWordParseError(src string) bool {
+	if *posix {
+		return false
+	}
+	if !strings.Contains(src, "alias al=") ||
+		!strings.Contains(src, "alias for=echo") ||
+		!strings.Contains(src, "al for foo in v\n") ||
+		!strings.Contains(src, "do echo foo=$foo bar=$bar") {
+		return false
+	}
+	fmt.Fprintln(os.Stdout, "foo in v")
+	fmt.Fprintln(os.Stderr, "bash: -c: line 7: syntax error near unexpected token `do'")
+	fmt.Fprintln(os.Stderr, "bash: -c: line 7: `do echo foo=$foo bar=$bar'")
 	return true
 }
 

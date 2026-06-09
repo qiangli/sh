@@ -3581,7 +3581,9 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		}
 		// Use a new slice, to not modify the slice in the alias map.
 		args := cm.Args
+		origCallPos := cm.Pos()
 		seenAliases := make(map[string]bool)
+		aliasExpanded := false
 		for i := 0; i < len(args); {
 			if !r.opts[optExpandAliases] {
 				break
@@ -3594,10 +3596,34 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			if !ok {
 				break
 			}
+			seenAliases[name] = true
+			aliasExpanded = true
+			if als.raw != "" && i == 0 {
+				var src strings.Builder
+				src.WriteString(als.raw)
+				if als.blank {
+					src.WriteByte(' ')
+				}
+				if i+1 < len(args) {
+					if src.Len() > 0 && !strings.HasSuffix(src.String(), " ") && !strings.HasSuffix(src.String(), "\t") {
+						src.WriteByte(' ')
+					}
+					syntax.NewPrinter().Print(&src, &syntax.CallExpr{Args: args[i+1:]})
+				}
+				p := syntax.NewParser()
+				file, err := p.Parse(strings.NewReader(src.String()), "")
+				if err != nil {
+					break
+				}
+				prevOverride := r.aliasLineOverride
+				r.aliasLineOverride = int(cm.Pos().Line())
+				r.stmts(ctx, file.Stmts)
+				r.aliasLineOverride = prevOverride
+				return
+			}
 			if als.raw != "" {
 				break
 			}
-			seenAliases[name] = true
 			// Multi-stmt alias (`alias foo=$'echo a\necho b'`):
 			// execute the parsed file in place of the surrounding
 			// call. Only kicks in when the alias word is at i==0
@@ -3618,6 +3644,11 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			}
 			i += len(als.args)
 			seenAliases = make(map[string]bool)
+		}
+		if aliasExpanded {
+			prevOverride := r.aliasLineOverride
+			r.aliasLineOverride = int(origCallPos.Line())
+			defer func() { r.aliasLineOverride = prevOverride }()
 		}
 		r.lastExpandExit = exitStatus{}
 		fields := r.fields(args...)
@@ -3747,7 +3778,11 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		trace.call(fields[0], fields[1:]...)
 		trace.newLineFlush()
 
-		r.call(ctx, cm.Args[0].Pos(), fields)
+		callPos := cm.Args[0].Pos()
+		if aliasExpanded {
+			callPos = origCallPos
+		}
+		r.call(ctx, callPos, fields)
 		// Bash POSIX mode (or inside a function): assignments
 		// preceding a special builtin (`return`, `export`, `eval`,
 		// `readonly`, `set`, …) persist after the command returns.
@@ -4759,6 +4794,35 @@ func (r *Runner) trapCallback(ctx context.Context, callback, name string) uint8 
 	return trapCode
 }
 
+func (r *Runner) expandRawAliasSource(src string) (string, bool) {
+	i := 0
+	for i < len(src) && (src[i] == ' ' || src[i] == '\t' || src[i] == '\n') {
+		i++
+	}
+	start := i
+	for i < len(src) && (src[i] == '_' || '0' <= src[i] && src[i] <= '9' ||
+		'a' <= src[i] && src[i] <= 'z' || 'A' <= src[i] && src[i] <= 'Z') {
+		i++
+	}
+	if i == start {
+		return "", false
+	}
+	als, ok := r.alias[src[start:i]]
+	if !ok || als.raw == "" {
+		return "", false
+	}
+	var b strings.Builder
+	b.WriteString(src[:start])
+	b.WriteString(als.raw)
+	if als.blank {
+		b.WriteByte(' ')
+	} else if i < len(src) && src[i] != ' ' && src[i] != '\t' && src[i] != '\n' {
+		b.WriteByte(' ')
+	}
+	b.WriteString(src[i:])
+	return b.String(), true
+}
+
 // flattenAssigns yields each effective syntax.Assign from a declare-
 // family clause's args. The second return value, fromString, is true
 // when the Assign was synthesized from a string-form arg (`readonly
@@ -5748,7 +5812,10 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 
 		r.writeEnv = origEnv
 
+		prevLineno = r.ecfg.OverrideLineno
+		r.ecfg.OverrideLineno = int(body.Pos().Line())
 		r.trapCallback(ctx, r.trapCallbacks["RETURN"], "return")
+		r.ecfg.OverrideLineno = prevLineno
 		r.callStack = r.callStack[:len(r.callStack)-1]
 		r.Params = oldParams
 		r.inFunc = oldInFunc

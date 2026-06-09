@@ -1244,6 +1244,15 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		p := syntax.NewParser()
 		file, err := p.Parse(strings.NewReader(src), "")
 		if err != nil {
+			if r.opts[optExpandAliases] {
+				if expanded, ok := r.expandRawAliasSource(src); ok {
+					if retry, rerr := p.Parse(strings.NewReader(expanded), ""); rerr == nil {
+						r.stmts(ctx, retry.Stmts)
+						exit = r.exit
+						break
+					}
+				}
+			}
 			// Bash 5.3 prints eval-time parse errors as
 			// `<file>: eval: line N: <text>` — `eval:` lives between
 			// the filename and `line N:`, not after it as `failf`
@@ -2461,6 +2470,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				show(name, als)
 				continue
 			}
+			if !validAliasName(name) {
+				r.errf("%salias: `%s': invalid alias name\n", r.bashErrPrefix(pos), name)
+				exit.code = 1
+				continue
+			}
 
 			// Bash stores alias bodies as TEXT and only re-parses
 			// at expansion time, so things like
@@ -2475,6 +2489,14 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			parser := syntax.NewParser()
 			als := alias{
 				blank: strings.TrimRight(src, " \t") != src,
+			}
+			if strings.HasPrefix(strings.TrimLeft(src, " \t"), "#") {
+				als.raw = src
+				if r.alias == nil {
+					r.alias = make(map[string]alias)
+				}
+				r.alias[name] = als
+				continue argsLoop
 			}
 			file, perr := parser.Parse(strings.NewReader(src), "")
 			if perr == nil {

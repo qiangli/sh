@@ -1856,6 +1856,9 @@ func (p *Parser) paramExpParameter(pe *ParamExp) *ParamExp {
 		}
 		return pe
 	}
+	if p.dollSglQuotedParamName(pe) {
+		return pe
+	}
 	// The parameter name itself, like $foo or $?.
 	switch p.r {
 	case '?', '-':
@@ -1906,6 +1909,35 @@ func (p *Parser) paramExpParameter(pe *ParamExp) *ParamExp {
 		pe.Param = p.lit(pos, p.val)
 	}
 	return pe
+}
+
+func (p *Parser) dollSglQuotedParamName(pe *ParamExp) bool {
+	if pe.Short || p.r != '$' || p.peek() != '\'' {
+		return false
+	}
+	p.checkLang(p.nextPos(), langBashLike, "$'name' parameter names")
+	pos := p.nextPos()
+	p.rune() // '
+	p.rune() // first quoted rune
+	start := p.nextPos()
+	for p.newLit(p.r); ; p.rune() {
+		switch p.r {
+		case '\\':
+			p.rune()
+		case '\'':
+			val := p.endLit()
+			if !numberLiteral(val) && !ValidName(val) {
+				p.posErr(pos, "invalid parameter name")
+			}
+			pe.Param = p.lit(start, val)
+			p.rune()
+			return true
+		case utf8.RuneSelf:
+			p.tok = _EOF
+			p.matchingErr(pos, dollSglQuote, sglQuote)
+			return true
+		}
+	}
 }
 
 func (p *Parser) paramExpExp() *Expansion {

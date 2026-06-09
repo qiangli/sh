@@ -122,7 +122,8 @@ type Config struct {
 	fieldAlloc  [4]fieldPart
 	fieldsAlloc [4][]fieldPart
 
-	ifs string
+	ifs    string
+	ifsSet bool
 	// tildeInAssign is set by [LiteralForAssign] for the duration of
 	// the call. When on, the literal-part handler also expands "~"
 	// (and "~user") that immediately follows a ":" or "=" inside a
@@ -200,8 +201,10 @@ func prepareConfig(cfg *Config) *Config {
 	cfg.Env = cmp.Or(cfg.Env, FuncEnviron(func(string) string { return "" }))
 
 	cfg.ifs = " \t\n"
+	cfg.ifsSet = false
 	if vr := cfg.Env.Get("IFS"); vr.IsSet() {
 		cfg.ifs = vr.String()
+		cfg.ifsSet = true
 	}
 
 	if cfg.ReadDir != nil && cfg.ReadDir2 == nil {
@@ -1706,12 +1709,18 @@ func (cfg *Config) wordField(wps []syntax.WordPart, ql quoteLevel) ([]fieldPart,
 			// quoted (or heredoc) context so its default-value
 			// expansion can suppress tilde expansion when bash
 			// would. The flag is per-cfg and restored after.
-			prevQuote := cfg.insideDoubleQuote
-			if ql == quoteDouble || ql == quoteHeredoc {
-				cfg.insideDoubleQuote = true
+			var val string
+			var err error
+			if cfg.tildeInAssign && !wp.Excl && wp.Exp == nil && wp.Repl == nil && wp.Param.Value == "*" {
+				val = cfg.ifsJoin(cfg.sliceElems(wp, cfg.Env.Get(wp.Param.Value).List, true))
+			} else {
+				prevQuote := cfg.insideDoubleQuote
+				if ql == quoteDouble || ql == quoteHeredoc {
+					cfg.insideDoubleQuote = true
+				}
+				val, err = cfg.paramExp(wp)
+				cfg.insideDoubleQuote = prevQuote
 			}
-			val, err := cfg.paramExp(wp)
-			cfg.insideDoubleQuote = prevQuote
 			if err != nil {
 				return nil, err
 			}
@@ -2186,6 +2195,16 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 				curField = append(curField, part)
 			}
 		case *syntax.ParamExp:
+			if !wp.Excl && wp.Exp == nil && wp.Repl == nil && !wp.Length && !wp.Width && !wp.IsSet &&
+				wp.Param.Value == "@" && (!cfg.ifsSet || cfg.ifs != " \t\n") {
+				for i, elem := range cfg.sliceElems(wp, cfg.Env.Get("@").List, true) {
+					if i > 0 {
+						flush()
+					}
+					curField = append(curField, fieldPart{val: elem})
+				}
+				continue
+			}
 			// `${var-"$@"}` (unquoted) preserves the field
 			// structure of "$@" when the default fires. Detect
 			// that special case before falling through to the
@@ -2333,7 +2352,8 @@ func (cfg *Config) substWordFields(pe *syntax.ParamExp) ([][]fieldPart, bool, er
 	op := pe.Exp.Op
 	switch op {
 	case syntax.AlternateUnset, syntax.AlternateUnsetOrNull,
-		syntax.DefaultUnset, syntax.DefaultUnsetOrNull:
+		syntax.DefaultUnset, syntax.DefaultUnsetOrNull,
+		syntax.AssignUnset, syntax.AssignUnsetOrNull:
 	default:
 		return nil, false, nil
 	}
@@ -2341,7 +2361,7 @@ func (cfg *Config) substWordFields(pe *syntax.ParamExp) ([][]fieldPart, bool, er
 	if len(pe.Exp.Word.Parts) == 1 {
 		lit, litOnly = pe.Exp.Word.Parts[0].(*syntax.Lit)
 	}
-	if !paramExpWordHasQuotedPart(pe.Exp.Word) {
+	if !paramExpWordHasQuotedPart(pe.Exp.Word) && !paramExpWordHasAtOrStar(pe.Exp.Word) {
 		if !litOnly || !strings.Contains(lit.Value, "\\") {
 			return nil, false, nil
 		}
@@ -2357,20 +2377,68 @@ func (cfg *Config) substWordFields(pe *syntax.ParamExp) ([][]fieldPart, bool, er
 		trigger = vr.IsSet()
 	case syntax.AlternateUnsetOrNull:
 		trigger = vr.IsSet() && vr.String() != ""
+	case syntax.AssignUnset:
+		trigger = !vr.IsSet()
+	case syntax.AssignUnsetOrNull:
+		trigger = !vr.IsSet() || vr.String() == ""
 	}
 	if !trigger {
 		return nil, false, nil
 	}
-	if litOnly {
+	assignOp := op == syntax.AssignUnset || op == syntax.AssignUnsetOrNull
+	if litOnly && assignOp {
+		return nil, false, nil
+	}
+	if litOnly && !assignOp {
 		return cfg.escapedLitFields(lit.Value), true, nil
 	}
-	fields, err := cfg.substWordPartFields(pe.Exp.Word.Parts)
-	if err != nil {
-		return nil, false, err
+	if assignOp && !paramExpWordHasAtOrStar(pe.Exp.Word) {
+		assignVal, err := LiteralWithQuoteRemoval(cfg, pe.Exp.Word)
+		if err != nil {
+			return nil, false, err
+		}
+		if cannotAssignParam(pe.Param.Value) {
+			return nil, false, fmt.Errorf("$%s: cannot assign in this way", pe.Param.Value)
+		}
+		if err := cfg.envSet(pe.Param.Value, assignVal); err != nil {
+			return nil, false, err
+		}
+		return cfg.escapedLitFields(assignVal), true, nil
+	}
+	var fields [][]fieldPart
+	var err error
+	if litOnly {
+		fields = cfg.escapedLitFields(lit.Value)
+	} else {
+		fields, err = cfg.substWordPartFields(pe.Exp.Word.Parts)
+		if err != nil {
+			return nil, false, err
+		}
 	}
 	for i, field := range fields {
 		if len(field) == 0 {
 			fields[i] = []fieldPart{{quote: quoteSingle, val: ""}}
+		}
+	}
+	if assignOp {
+		if cannotAssignParam(pe.Param.Value) {
+			return nil, false, fmt.Errorf("$%s: cannot assign in this way", pe.Param.Value)
+		}
+		assignVal := ""
+		if paramExpWordHasAtOrStar(pe.Exp.Word) {
+			assignVal, err = LiteralForAssign(cfg, pe.Exp.Word)
+			if err != nil {
+				return nil, false, err
+			}
+		} else {
+			var err error
+			assignVal, err = LiteralWithQuoteRemoval(cfg, pe.Exp.Word)
+			if err != nil {
+				return nil, false, err
+			}
+		}
+		if err := cfg.envSet(pe.Param.Value, assignVal); err != nil {
+			return nil, false, err
 		}
 	}
 	return fields, true, nil
@@ -2487,6 +2555,9 @@ func (cfg *Config) substWordPartFields(parts []syntax.WordPart) ([][]fieldPart, 
 			if len(part.Parts) == 1 {
 				pe, _ := part.Parts[0].(*syntax.ParamExp)
 				if elems := cfg.quotedElemFields(pe); elems != nil {
+					if pe != nil && pe.Param.Value == "@" && cfg.ifs == "" {
+						elems = []string{cfg.ifsJoin(elems)}
+					}
 					for i, elem := range elems {
 						if i > 0 {
 							flush()
@@ -2508,6 +2579,34 @@ func (cfg *Config) substWordPartFields(parts []syntax.WordPart) ([][]fieldPart, 
 				part.quote = quoteDouble
 				curField = append(curField, part)
 			}
+		case *syntax.ParamExp:
+			if !part.Excl && part.Exp == nil && part.Repl == nil &&
+				(part.Param.Value == "@" || part.Param.Value == "*") {
+				elems := cfg.sliceElems(part, cfg.Env.Get(part.Param.Value).List, true)
+				if cfg.Posix && part.Param.Value == "@" {
+					switch {
+					case cfg.ifs == "":
+						for i, elem := range elems {
+							if i > 0 {
+								flush()
+							}
+							curField = append(curField, fieldPart{val: elem})
+						}
+					case !cfg.ifsSet || cfg.ifs != " \t\n":
+						curField = append(curField, fieldPart{quote: quoteSingle, val: strings.Join(elems, " ")})
+					default:
+						splitAdd(strings.Join(elems, " "))
+					}
+				} else {
+					splitAdd(cfg.ifsJoin(elems))
+				}
+				continue
+			}
+			val, err := Literal(cfg, &syntax.Word{Parts: []syntax.WordPart{part}})
+			if err != nil {
+				return nil, err
+			}
+			splitAdd(val)
 		default:
 			val, err := Literal(cfg, &syntax.Word{Parts: []syntax.WordPart{part}})
 			if err != nil {
@@ -2540,6 +2639,41 @@ func paramExpWordHasQuotedPart(word *syntax.Word) bool {
 		}
 	}
 	return false
+}
+
+func paramExpWordHasAtOrStar(word *syntax.Word) bool {
+	if word == nil {
+		return false
+	}
+	for _, part := range word.Parts {
+		switch part := part.(type) {
+		case *syntax.ParamExp:
+			if !part.Excl && part.Exp == nil && part.Repl == nil &&
+				(part.Param.Value == "@" || part.Param.Value == "*") {
+				return true
+			}
+			if part.Exp != nil && paramExpWordHasAtOrStar(part.Exp.Word) {
+				return true
+			}
+		case *syntax.DblQuoted:
+			if paramExpWordHasAtOrStar(&syntax.Word{Parts: part.Parts}) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func fieldStrings(fields [][]fieldPart) []string {
+	strs := make([]string, len(fields))
+	for i, field := range fields {
+		var sb strings.Builder
+		for _, part := range field {
+			sb.WriteString(part.val)
+		}
+		strs[i] = sb.String()
+	}
+	return strs
 }
 
 func (cfg *Config) escapedLitFields(s string) [][]fieldPart {
@@ -2699,6 +2833,9 @@ func (cfg *Config) quotedElemFields(pe *syntax.ParamExp) []string {
 				}
 				if trigger {
 					// Use the inner PE's special handling.
+					if innerPE.Param.Value == "@" && cfg.ifs == "" {
+						return []string{cfg.ifsJoin(cfg.sliceElems(innerPE, cfg.Env.Get("@").List, true))}
+					}
 					if e := cfg.quotedElemFields(innerPE); e != nil {
 						return e
 					}
