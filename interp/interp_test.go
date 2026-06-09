@@ -1329,6 +1329,14 @@ var runTests = []runTest{
 		`OLDPWD=/tmp/bashy-does-not-exist; cd -; echo status:$?`,
 		"cd: /tmp/bashy-does-not-exist: No such file or directory\nstatus:1\n #JUSTERR",
 	},
+	{
+		`readonly PWD; cd /; echo status:$?`,
+		"PWD: readonly variable\nstatus:1\n #JUSTERR",
+	},
+	{
+		`readonly OLDPWD; cd /; echo status:$?`,
+		"OLDPWD: readonly variable\nstatus:1\n #JUSTERR",
+	},
 
 	// dirs/pushd/popd
 	{"set -- $(dirs); echo $# ${#DIRSTACK[@]}", "1 1\n"},

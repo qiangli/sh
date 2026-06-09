@@ -4209,6 +4209,14 @@ func (r *Runner) changeDir(ctx context.Context, cmd, path string) uint8 {
 			r.bashErrPrefix(r.curStmtPos), cmd, bashDiagnosticWord(path))
 		return 1
 	}
+	if r.lookupVar("OLDPWD").ReadOnly {
+		r.errf("%sOLDPWD: readonly variable\n", r.bashErrPrefix(r.curStmtPos))
+		return 1
+	}
+	if r.lookupVar("PWD").ReadOnly {
+		r.errf("%sPWD: readonly variable\n", r.bashErrPrefix(r.curStmtPos))
+		return 1
+	}
 	r.Dir = apath
 	// Keep the top of the directory stack in sync with the current
 	// dir so `pushd`/`popd`/`dirs` see the cd's effect. Bash treats
