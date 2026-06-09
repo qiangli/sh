@@ -1,7 +1,7 @@
 # Bashy: Bash 5.3 Drop-In Replacement — TODO Checklist
 
-**Current status**: 47 bash tests passing, 27 failing, 13 skipped
-**Last updated**: 2026-06-08
+**Current status**: 61 bash tests passing, 15 failing, 11 skipped
+**Last updated**: 2026-06-09
 
 ---
 
@@ -168,49 +168,40 @@
 
 ## Test Progress Tracking
 
-Snapshot from `make test-bash` on 2026-06-08: **47 PASS, 27 FAIL, 13 SKIP**
+Snapshot from `make test-bash` on 2026-06-09: **61 PASS, 15 FAIL, 11 SKIP**
 (diff line counts are `diff <bashy-output> <name>.right | wc -l`, lower = closer to passing).
 
-### Passing (47)
+### Passing (61)
 
 ```
 appendop      arith-for     attr          braces        case
-casemod       complete      comsub-eof    cprint        dbg-support2
-dynvar        exportfunc    extglob2      extglob3      func
-getopts       globstar      herestr       ifs           ifs-posix
-invert        invocation    iquote        lastpipe      mapfile
-nquote        nquote1       nquote2       nquote3       nquote4
-nquote5       parser        posix2        posixpat      posixpipe
-procsub       read          rhs-exp       rsh           set-e
-set-x         shopt         strip         tilde         tilde2
-type          vredir
+casemod       complete      comsub        comsub-eof    comsub-posix
+comsub2       cond          cprint        dbg-support2  dirstack
+dynvar        exportfunc    extglob       extglob2      extglob3
+func          getopts       glob-bracket  globstar      herestr
+ifs           ifs-posix     invert        invocation    iquote
+lastpipe      mapfile       more-exp      nquote        nquote1
+nquote2       nquote3       nquote4       nquote5       parser
+posix2        posixexp2     posixpat      posixpipe     precedence
+printf        procsub       quote         read          redir
+rhs-exp       rsh           set-e         set-x         shopt
+strip         test          tilde         tilde2        type
+vredir
 ```
 
-### Failing (27, sorted by diff size)
+### Failing (15, sorted by diff size)
 
 | Test | Diff Lines | Likely blocker |
 |------|-----------:|----------------|
-| posixexp2    |  43 | POSIX expansion edge cases |
 | alias        |  67 | Alias expansion edge cases |
 | intl         |  70 | `$"..."` locale strings (G12) |
-| comsub       | 100 | Command substitution edge cases |
-| comsub-posix | 103 | POSIX command substitution |
-| glob-bracket | 106 | Bracket glob patterns |
 | quotearray   | 155 | Array quoting |
 | heredoc      | 171 | Heredoc edge cases |
-| quote        | 187 | Quoting comprehensive |
-| redir        | 187 | Redirection edge cases |
-| cond         | 194 | Conditional expression edge cases |
-| extglob      | 194 | Extended glob patterns |
-| comsub2      | 195 | Command substitution edge cases |
-| more-exp     | 217 | Parameter expansion |
 | posixexp     | 311 | POSIX expansion |
-| test         | 341 | `test`/`[` expressions |
 | errors       | 349 | Error-message format (G0) |
 | varenv       | 366 | Variable/environment |
 | arith        | 372 | Arithmetic edge cases |
 | dbg-support  | 377 | DEBUG trap / source-line tracking |
-| printf       | 395 | `printf` edge cases |
 | history      | 399 | `history` builtin (G2, G11) |
 | assoc        | 412 | Associative array edge cases |
 | builtins     | 509 | Misc builtins |
@@ -218,10 +209,10 @@ type          vredir
 | new-exp      | 813 | New expansion features |
 | array        | 855 | Indexed array edge cases |
 
-### Skipped (13)
+### Skipped (11)
 
 - `coproc`, `jobs`, `trap` — skipped via `BASH_TEST_SKIP` in Makefile (need controlling TTY / real job control)
-- 10 silent skips — bash test-suite runners with no matching `.tests` or `.right` file in the vendored tree
+- 8 silent skips — bash test-suite runners with no matching `.tests` or `.right` file in the vendored tree
 
 ---
 
