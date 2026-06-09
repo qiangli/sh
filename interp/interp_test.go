@@ -3526,6 +3526,10 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	// read-only vars
 	{"declare -r foo=bar; echo $foo", "bar\n"},
 	{"readonly foo=bar; echo $foo", "bar\n"},
+	{
+		"readonly -x foo",
+		"readonly: -x: invalid option\nreadonly: usage: readonly [-aAf] [name[=value] ...] or readonly -p\nexit status 2 #JUSTERR",
+	},
 	{"readonly foo=bar; export foo; echo $foo", "bar\n"},
 	{"readonly foo=bar; readonly bar=foo; export foo bar; echo $bar", "foo\n"},
 	{

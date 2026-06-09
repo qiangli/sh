@@ -4360,9 +4360,15 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				fp := flagParser{remaining: []string{as.Name.Value}}
 				for fp.more() {
 					switch flag := fp.flag(); flag {
-					case "-x", "-r":
+					case "-x", "+x":
+						if cm.Variant.Value == "readonly" {
+							r.errf("%sreadonly: %s: invalid option\n", r.bashErrPrefix(r.curStmtPos), flag)
+							r.errf("readonly: usage: %s\n", bashUsage["readonly"])
+							r.exit.code = 2
+							return
+						}
 						modes = append(modes, flag)
-					case "+x", "+r":
+					case "-r", "+r":
 						modes = append(modes, flag)
 					case "-a", "-A", "-n":
 						valType = flag
@@ -4403,7 +4409,11 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 					case "-f", "-F", "-p":
 						declQuery = flag
 					default:
-						r.errf("%sdeclare: %s: invalid option\n", r.bashErrPrefix(r.curStmtPos), flag)
+						builtinName := cm.Variant.Value
+						r.errf("%s%s: %s: invalid option\n", r.bashErrPrefix(r.curStmtPos), builtinName, flag)
+						if usage, ok := bashUsage[builtinName]; ok && builtinName == "readonly" {
+							r.errf("%s: usage: %s\n", builtinName, usage)
+						}
 						r.exit.code = 2
 						return
 					}
