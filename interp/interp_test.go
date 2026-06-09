@@ -4070,6 +4070,10 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 		"echo file1 >f; echo file2 >>f; while read a; do echo $a; done <f",
 		"file1\nfile2\n",
 	},
+	{
+		"read -u 42 a",
+		"read: 42: invalid file descriptor: Bad file descriptor\nexit status 2 #JUSTERR",
+	},
 	// TODO: our final exit status here isn't right.
 	// {
 	// 	"while read a; do echo $a; GOSH_CMD=print_fail $GOSH_PROG; done <<< 'a\nb\nc'",
@@ -4241,6 +4245,10 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	{
 		"mapfile -t <<EOF\na\nb\nc\nEOF\n" + `for x in "${MAPFILE[@]}"; do echo "$x"; done`,
 		"a\nb\nc\n",
+	},
+	{
+		"mapfile -u 42 A",
+		"mapfile: 42: invalid file descriptor: Bad file descriptor\nexit status 2 #JUSTERR",
 	},
 	{
 		"mapfile -t -d b <<EOF\nabc\nEOF\n" + `for x in "${MAPFILE[@]}"; do echo "$x"; done`,

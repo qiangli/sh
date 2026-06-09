@@ -2013,7 +2013,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			default:
 				f, ok := r.fdTable[readFD]
 				if !ok {
-					return failf(2, "read: %d: invalid file descriptor: not open\n", readFD)
+					return failf(2, "read: %d: invalid file descriptor: Bad file descriptor\n", readFD)
 				}
 				canSwap := true
 				if timeout > 0 {
@@ -2825,7 +2825,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		default:
 			f, ok := r.fdTable[readFD]
 			if !ok {
-				return failf(2, "%s: %d: invalid file descriptor: not open\n", name, readFD)
+				return failf(2, "%s: %d: invalid file descriptor: Bad file descriptor\n", name, readFD)
 			}
 			src = f
 		}
