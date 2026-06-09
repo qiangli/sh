@@ -451,7 +451,10 @@ func (cfg *Config) findReplIndex(pat, name string, n int, start, end bool) [][]i
 	case end:
 		expr = "(" + expr + ")$"
 	}
-	rx := regexp.MustCompile(expr)
+	rx, err := regexp.Compile(expr)
+	if err != nil {
+		return nil
+	}
 	if loc := rx.FindStringSubmatchIndex(name); loc != nil && len(loc) >= 4 {
 		return [][]int{{loc[2], loc[3]}}
 	}
