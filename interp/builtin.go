@@ -620,10 +620,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			exit.exiting = true
 			return exit
 		default:
-			if r.bashCompatErrors {
-				return failf(2, "%s: usage: %s\n", name, bashUsage[name])
-			}
-			return failf(2, "usage: %s [n]\n", name)
+			return failf(2, "%s: too many arguments\n", name)
 		}
 	case "pwd":
 		evalSymlinks := false

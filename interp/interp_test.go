@@ -268,6 +268,14 @@ var runTests = []runTest{
 		"for i in 1; do break a; done",
 		"break: a: numeric argument required\nexit status 128 #JUSTERR",
 	},
+	{
+		"for i in 1; do break 1 2; done",
+		"break: too many arguments\nexit status 2 #JUSTERR",
+	},
+	{
+		"for i in 1; do continue 1 2; done",
+		"continue: too many arguments\nexit status 2 #JUSTERR",
+	},
 	{"false; a=b", ""},
 	{"false; false &", ""},
 	{
