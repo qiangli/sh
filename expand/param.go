@@ -1240,9 +1240,21 @@ func (cfg *Config) varInd(vr Variable, idx syntax.ArithmExpr) (string, error) {
 		if err != nil {
 			return "", err
 		}
+		if val == "" {
+			return "", fmt.Errorf("[%s]: bad array subscript", subscriptText(idx))
+		}
 		return vr.Map[val], nil
 	}
 	return "", nil
+}
+
+func subscriptText(idx syntax.ArithmExpr) string {
+	if lit := nodeLit(idx); lit != "" {
+		return lit
+	}
+	var b strings.Builder
+	syntax.NewPrinter().Print(&b, idx)
+	return b.String()
 }
 
 func (cfg *Config) namesByPrefix(prefix string) []string {

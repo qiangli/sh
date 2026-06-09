@@ -387,6 +387,7 @@ func looksLikeExpandError(msg string) bool {
 		strings.HasPrefix(msg, "command substitution: "),
 		strings.Contains(msg, "unbound variable"),
 		strings.Contains(msg, "readonly variable"),
+		strings.Contains(msg, "bad array subscript"),
 		strings.Contains(msg, "cannot assign in this way"),
 		strings.Contains(msg, "invalid variable name"):
 		return true

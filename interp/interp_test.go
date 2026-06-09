@@ -3375,6 +3375,10 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 		"declare -A a=([\"s*\"]=\"6\" [\"foo bar\"]=\"flix\" )\n<flix>\ndeclare -a b=([3]=\"three\")\n",
 	},
 	{
+		`declare -A a=([foo]=bar); unset empty; echo ${#a[$empty]}; echo ${#a[missing]}`,
+		"[$empty]: bad array subscript\n0\n #JUSTERR",
+	},
+	{
 		`declare -A a; declare +A a; declare -a b; declare +a b`,
 		"declare: a: cannot destroy array variables in this way\ndeclare: b: cannot destroy array variables in this way\nexit status 1 #JUSTERR",
 	},
