@@ -687,6 +687,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					return exit
 				}
 				printPath = true
+			} else if cdpath, printCdpath, ok := r.cdpath(ctx, path); ok {
+				path = cdpath
+				printPath = printCdpath
 			}
 		default:
 			return failf(1, "cd: too many arguments\n")
@@ -4313,6 +4316,28 @@ func (r *Runner) changeDir(ctx context.Context, cmd, path string) uint8 {
 	r.setVarString("OLDPWD", r.envGet("PWD"))
 	r.setVarString("PWD", apath)
 	return 0
+}
+
+func (r *Runner) cdpath(ctx context.Context, path string) (string, bool, bool) {
+	if path == "" || filepath.IsAbs(path) || strings.ContainsRune(path, filepath.Separator) {
+		return "", false, false
+	}
+	cdpath := r.envGet("CDPATH")
+	if cdpath == "" {
+		return "", false, false
+	}
+	for _, elem := range strings.Split(cdpath, ":") {
+		base := elem
+		if base == "" {
+			base = "."
+		}
+		candidate := absPath(r.absPath(base), path)
+		info, err := r.stat(ctx, candidate)
+		if err == nil && info.IsDir() && r.access(ctx, candidate, access_X_OK) == nil {
+			return candidate, elem != "" && elem != ".", true
+		}
+	}
+	return "", false, false
 }
 
 func absPath(dir, path string) string {

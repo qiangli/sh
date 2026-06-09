@@ -1330,6 +1330,14 @@ var runTests = []runTest{
 		"",
 	},
 	{
+		`old="$PWD"; mkdir a; mkdir parent parent/d; CDPATH=parent; cd d >/dev/null; [[ "$PWD" = "$old/parent/d" ]]; echo path:$?; [[ "$OLDPWD" = "$old" ]]; echo old:$?`,
+		"path:0\nold:0\n",
+	},
+	{
+		`old="$PWD"; mkdir d; CDPATH=.; cd d; [[ "$PWD" = "$old/d" ]]; echo path:$?`,
+		"path:0\n",
+	},
+	{
 		`mkdir a; ln -s a b; [[ $(cd a && pwd) == "$(cd b && pwd)" ]]; echo $?`,
 		"1\n",
 	},
