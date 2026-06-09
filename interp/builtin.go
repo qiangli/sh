@@ -2280,13 +2280,19 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 
 	case "shopt":
 		mode := ""
+		sawSet := false
+		sawUnset := false
 		posixOpts := false
 		printReusable := false
 		quiet := false
 		fp := flagParser{remaining: args}
 		for fp.more() {
 			switch flag := fp.flag(); flag {
-			case "-s", "-u":
+			case "-s":
+				sawSet = true
+				mode = flag
+			case "-u":
+				sawUnset = true
 				mode = flag
 			case "-o":
 				posixOpts = true
@@ -2301,6 +2307,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			default:
 				return invalidOpt("shopt", flag)
 			}
+		}
+		if sawSet && sawUnset {
+			r.errf("%sshopt: cannot set and unset shell options simultaneously\n", r.bashErrPrefix(pos))
+			exit.code = 1
+			return exit
 		}
 		args := fp.args()
 		// Emit a line as either `shopt -s NAME` / `shopt -u NAME`
