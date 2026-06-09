@@ -39,9 +39,9 @@ go test ./interp -run TestRunnerRun/specific_subtest
 # Fuzzing (Go native)
 cd syntax && go test -run=- -fuzz=ParsePrint
 
-# Confirm interpreter behavior against real Bash 5.2 (requires Docker + dockexec)
+# Confirm interpreter behavior against real Bash 5.3 (requires Docker + dockexec)
 go install mvdan.cc/dockexec@latest
-CGO_ENABLED=0 go test -run TestRunnerRunConfirm -exec 'dockexec bash:5.2' ./interp
+CGO_ENABLED=0 go test -run TestRunnerRunConfirm -exec 'dockexec bash:5.3' ./interp
 ```
 
 `TestRunnerRunConfirm` is the canonical "behaves like real Bash" oracle: the same script table is run by `gosh` and by the dockerized Bash, and outputs/exit codes are diffed. When changing interpreter semantics, run it.
@@ -88,7 +88,7 @@ The codebase is a layered pipeline. Each layer is a standalone package usable on
 
 7. **`moreinterp/`** — **separate Go module** (`mvdan.cc/sh/moreinterp`). Contains `coreutils/`, an `ExecHandler` middleware that satisfies commands like `cat`, `cp`, `find`, `ls`, `mkdir`, `rm`, etc. via the [u-root](https://github.com/u-root/u-root) implementations. Primarily for Windows / minimal environments where these binaries aren't installed. Because it's a separate module, dependency updates and tests are run independently of the root module.
 
-8. **`interactive/`** — single-file reusable readline wrapper around `interp.Runner` (used by `cmd/bashy`'s interactive mode and consumed by sibling projects: outpost's matrix shell + `/ssh`, ycode's shell runner — keep its API stable when refactoring).
+8. **`interactive/`** — single-file reusable readline wrapper around `interp.Runner` (used by `cmd/bashy`'s interactive mode and consumed by sibling projects: outpost's matrix shell + `/ssh`, ycode's shell runner — keep its API stable when refactoring). This checkout is a submodule under the `dhnt/` umbrella; `outpost` and `ycode` import it via `replace mvdan.cc/sh/v3 => ../sh`. See `dhnt/CLAUDE.md` for the sibling-replace convention — drifting the `sh` SHA between consumers was the catalyst for the umbrella migration, so coordinated pin-bumps matter.
 
 9. **`internal/`** — module-private helpers (`pattern.go`, `testing.go`) shared between `syntax`/`interp` tests; not part of the public API surface.
 
@@ -109,6 +109,20 @@ The codebase is a layered pipeline. Each layer is a standalone package usable on
 ## Workflow
 
 At the start of every session, read `docs/TODO.md` and pick the first unchecked item to work on. After completing it, check it off in the TODO, run `go test ./...` and `make test-bash`, then commit. Repeat until the user says otherwise.
+
+The bashy goal is **PASS-count flips**: `make test-bash-list` prints per-fixture PASS/FAIL/TIME/SKIP, and the headline three-tuple that `docs/TODO.md` tracks at the top (e.g. `61 passing, 15 failing, 11 skipped`) is the scoreboard. A change that flips a fixture from FAIL → PASS without regressing anything else is worth shipping; cleanup or refactoring that doesn't move the count isn't the priority.
+
+### Doc index
+
+`docs/` holds the planning + status corpus. Load-bearing entries:
+
+- `TODO.md` — phase checklist + current PASS/FAIL/SKIP headline. Always read first.
+- `report-bash53-test-status.md` — per-fixture status snapshot from the bash 5.3 suite.
+- `handoff-bashy-2026-06.md` — most recent session-handoff notes (read when picking up cold).
+- `bash-gap-analysis.md` — ungated bash semantics gap analysis behind the failing fixtures.
+- `plan-bashy-drop-in.md` / `plan-cmd-bashy.md` / `plan-bash53-roadmap-agentic.md` — phase plans for the bashy work; each phase lands as a checkbox in `TODO.md`.
+- `plan-dynvar.md`, `plan-error-format-pass.md`, `plan-punted-builtins.md`, `proposal-declare-p-format.md` — scoped sub-plans for specific clusters of fixture failures.
+- `bash.md`, `agentic-extensions.md` — background references, not active plans.
 
 ## Plans
 
