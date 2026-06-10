@@ -4676,13 +4676,14 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			}
 			if as.Naked {
 				if as.Index != nil {
-					if cm.Variant.Value == "readonly" {
+					if cm.Variant.Value == "readonly" || cm.Variant.Value == "export" {
 						ref := name
 						if w, ok := as.Index.(*syntax.Word); ok {
 							ref += "[" + r.literal(w) + "]"
 						}
-						r.errf("%sreadonly: `%s': not a valid identifier\n",
-							r.bashErrPrefix(r.curStmtPos), ref)
+						builtinName := cm.Variant.Value
+						r.errf("%s%s: `%s': not a valid identifier\n",
+							r.bashErrPrefix(r.curStmtPos), builtinName, ref)
 						r.exit.code = 1
 						continue
 					}

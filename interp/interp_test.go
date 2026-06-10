@@ -1046,6 +1046,10 @@ var runTests = []runTest{
 		"export: invalid name \"invalid-name\"\nexit status 1 #JUSTERR",
 	},
 	{
+		`export a[5]`,
+		"export: `a[5]': not a valid identifier\nexit status 1 #JUSTERR",
+	},
+	{
 		`export e=1; declare -p e`,
 		"declare -x e=\"1\"\n",
 	},
