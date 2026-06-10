@@ -375,6 +375,10 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			}
 		}
 
+		if !vars && !funcs {
+			return failf(1, "unset: cannot simultaneously unset a function and a variable\n")
+		}
+
 		for _, arg := range args {
 			// Bash 5.3: `unset 1bad` errors with "not a valid identifier"
 			// (exit 2) when the var-namespace is in scope. Function names

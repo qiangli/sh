@@ -2918,6 +2918,10 @@ var runTests = []runTest{
 		"func\n\n",
 	},
 	{
+		"unset -f -v SHELL",
+		"unset: cannot simultaneously unset a function and a variable\nexit status 1 #JUSTERR",
+	},
+	{
 		"notinpath=1; notinpath() { echo func; }; notinpath; echo $notinpath; unset notinpath; notinpath; echo $notinpath; unset notinpath; notinpath",
 		"func\n1\nfunc\n\n\"notinpath\": executable file not found in $PATH\nexit status 127 #JUSTERR",
 	},
