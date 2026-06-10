@@ -116,9 +116,138 @@ func TestParseHeredocEOFWarningEmptyDelimiter(t *testing.T) {
 	}))
 	f, err := p.Parse(strings.NewReader("cat <<\nhi\nthere"), "")
 	qt.Assert(t, qt.IsNil(err))
-	qt.Assert(t, qt.DeepEquals(warnings, []string{`1:2:""`}))
+	// eofLine is the last line with body content, matching bash 5.3.
+	qt.Assert(t, qt.DeepEquals(warnings, []string{`1:3:""`}))
 	qt.Assert(t, qt.Equals(f.Stmts[0].Redirs[0].Word.Lit(), ""))
 	qt.Assert(t, qt.Equals(f.Stmts[0].Redirs[0].Hdoc.Lit(), "hi\nthere"))
+}
+
+// Covers the warning numbers bash 5.3 prints for here-documents
+// delimited by end-of-file: the second number ("here-document at line
+// N") is the line whose newline triggered gathering the body — not
+// necessarily the `<<` opener's line — and the first ("line N:
+// warning") is the last line with body content before EOF.
+func TestParseHeredocEOFWarningLines(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		src  string
+		want []string
+	}{
+		// Quoted empty delimiter; body runs to EOF after a trailing
+		// newline: the warning points at the last content line.
+		{"cat <<''\nhi\nthere\n''\n", []string{`181:184:""`}},
+		// An unquoted delimiter heredoc whose gathering is delayed by
+		// a command substitution spanning several lines: both numbers
+		// use the line where gathering finally happened (bash numbers
+		// the comsub's inner lines one behind, hence the close paren
+		// ends "line 184" here).
+		{"cat <<EOF && grep $(\n foobar\nEOF\necho nothere) *.c\n", []string{`184:184:"EOF"`}},
+	}
+	for _, tc := range tests {
+		var warnings []string
+		p := NewParser(HeredocEOFWarning(func(startLine, eofLine int, stop string) {
+			warnings = append(warnings, fmt.Sprintf("%d:%d:%q", startLine, eofLine, stop))
+		}))
+		// Pad the snippet so it starts at line 181, mirroring the
+		// bash 5.3 heredoc.tests / heredoc7.sub fixtures these were
+		// distilled from.
+		src := strings.Repeat("\n", 180) + tc.src
+		_, err := p.Parse(strings.NewReader(src), "")
+		qt.Assert(t, qt.IsNil(err), qt.Commentf("src=%q", tc.src))
+		qt.Assert(t, qt.DeepEquals(warnings, tc.want), qt.Commentf("src=%q", tc.src))
+	}
+}
+
+// A here-document inside a plain `( ... )` subshell that runs to
+// end-of-file is a hard parse error in bash 5.3 (unlike inside a
+// command substitution, where a body line like `EOF)` stands in for
+// the missing terminator): the body swallows the input, so the
+// subshell can never be closed. The error carries bash's wording and
+// is anchored at the EOF line, after the usual heredoc warning.
+func TestParseHeredocSubshellEOF(t *testing.T) {
+	t.Parallel()
+	var warnings []string
+	p := NewParser(HeredocEOFWarning(func(startLine, eofLine int, stop string) {
+		warnings = append(warnings, fmt.Sprintf("%d:%d:%q", startLine, eofLine, stop))
+	}))
+	_, err := p.Parse(strings.NewReader("(cat <<EOF\nbody text\nEOF)\n"), "")
+	qt.Assert(t, qt.DeepEquals(warnings, []string{`1:3:"EOF"`}))
+	perr, ok := err.(ParseError)
+	qt.Assert(t, qt.IsTrue(ok))
+	qt.Assert(t, qt.Equals(perr.Text, "syntax error: unexpected end of file from `(' command on line 1"))
+	qt.Assert(t, qt.Equals(perr.Pos.Line(), 4))
+
+	// Inside a command substitution the close-paren recovery still
+	// applies and parsing succeeds with only the warning.
+	warnings = nil
+	f, err := p.Parse(strings.NewReader("x=$(cat <<EOF\nbody text\nEOF)\n"), "")
+	qt.Assert(t, qt.IsNil(err))
+	qt.Assert(t, qt.DeepEquals(warnings, []string{`1:3:"EOF"`}))
+	qt.Assert(t, qt.Equals(len(f.Stmts), 1))
+}
+
+// A backquote in an unquoted here-document delimiter is not quoting:
+// the delimiter is the raw word text and the body still expands, like
+// bash 5.3 (heredoc4.sub).
+func TestParseHeredocBackquoteDelim(t *testing.T) {
+	t.Parallel()
+	f, err := NewParser().Parse(strings.NewReader("cat <<EO`true`F\nheredoc1\nEO`false`F\nEO`true`F\necho Ok:$?\n"), "")
+	qt.Assert(t, qt.IsNil(err))
+	qt.Assert(t, qt.Equals(len(f.Stmts), 2))
+	hdoc := f.Stmts[0].Redirs[0].Hdoc
+	// The body must contain an expandable command substitution for
+	// `false`, not the literal text "EO`false`F".
+	hasComsub := false
+	for _, part := range hdoc.Parts {
+		if _, ok := part.(*CmdSubst); ok {
+			hasComsub = true
+		}
+	}
+	qt.Assert(t, qt.IsTrue(hasComsub), qt.Commentf("hdoc parts: %#v", hdoc.Parts))
+}
+
+// Closing a `$(...)` while here-documents opened inside it are still
+// pending triggers bash 5.3's "command substitution: N unterminated
+// here-document" warning; their bodies are then read from the lines
+// following the substitution (heredoc7.sub).
+func TestParseHeredocComsubWarning(t *testing.T) {
+	t.Parallel()
+	var warnings []string
+	p := NewParser(
+		HeredocEOFWarning(func(startLine, eofLine int, stop string) {}),
+		HeredocComsubWarning(func(line, count int) {
+			warnings = append(warnings, fmt.Sprintf("%d:%d", line, count))
+		}),
+	)
+	f, err := p.Parse(strings.NewReader("echo $(cat << EOF)\nfoo\nbar\nEOF\nafter\n"), "")
+	qt.Assert(t, qt.IsNil(err))
+	qt.Assert(t, qt.DeepEquals(warnings, []string{"1:1"}))
+	qt.Assert(t, qt.Equals(len(f.Stmts), 2))
+	cs := f.Stmts[0].Cmd.(*CallExpr).Args[1].Parts[0].(*CmdSubst)
+	qt.Assert(t, qt.Equals(cs.Stmts[0].Redirs[0].Hdoc.Lit(), "foo\nbar\n"))
+}
+
+// When a here-document is pending at a `$(`, bash 5.3 numbers the
+// substitution's inner lines one behind the input (heredoc7.sub:
+// `foobar` sits physically on line 2 but bash reports line 1). The
+// shift only applies in HeredocEOFWarning mode.
+func TestParseHeredocComsubLineLag(t *testing.T) {
+	t.Parallel()
+	src := "cat <<EOF && grep $(\n foobar\necho nothere) *.c\nbody\nEOF\n"
+	parse := func(p *Parser) (foobarLine, echoLine uint) {
+		f, err := p.Parse(strings.NewReader(src), "")
+		qt.Assert(t, qt.IsNil(err))
+		call := f.Stmts[0].Cmd.(*BinaryCmd).Y.Cmd.(*CallExpr)
+		cs := call.Args[1].Parts[0].(*CmdSubst)
+		return cs.Stmts[0].Pos().Line(), cs.Stmts[1].Pos().Line()
+	}
+	foobar, echo := parse(NewParser(HeredocEOFWarning(func(int, int, string) {})))
+	qt.Assert(t, qt.Equals(foobar, 1))
+	qt.Assert(t, qt.Equals(echo, 2))
+	// Without the bash-compat option, positions stay physical.
+	foobar, echo = parse(NewParser())
+	qt.Assert(t, qt.Equals(foobar, 2))
+	qt.Assert(t, qt.Equals(echo, 3))
 }
 
 func TestParseConfirm(t *testing.T) {

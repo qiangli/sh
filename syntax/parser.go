@@ -239,6 +239,17 @@ func HeredocEOFWarning(fn func(startLine, eofLine int, stop string)) ParserOptio
 	return func(p *Parser) { p.heredocEOFWarning = fn }
 }
 
+// HeredocComsubWarning, when set, reports bash 5.3's parse-time
+// `command substitution: %d unterminated here-document%s` warning: a
+// `$(...)` was closed while here-documents opened inside it had not yet
+// read their bodies. The callback receives the line of the closing
+// parenthesis and the number of pending here-documents. Parsing
+// continues either way: the bodies are read from the lines following
+// the substitution, matching bash.
+func HeredocComsubWarning(fn func(line, count int)) ParserOption {
+	return func(p *Parser) { p.heredocComsubWarning = fn }
+}
+
 // NewParser allocates a new [Parser] and applies any number of options.
 func NewParser(options ...ParserOption) *Parser {
 	p := &Parser{
@@ -536,6 +547,11 @@ type Parser struct {
 	// warning instead of a fatal parse error. See [HeredocEOFWarning].
 	heredocEOFWarning func(startLine, eofLine int, stop string)
 
+	// heredocComsubWarning, when non-nil, reports a `$(...)` closing
+	// with here-documents opened inside it still pending. See
+	// [HeredocComsubWarning].
+	heredocComsubWarning func(line, count int)
+
 	forbidNested bool
 
 	// list of pending heredoc bodies
@@ -543,7 +559,8 @@ type Parser struct {
 	heredocs    []*Redirect
 
 	hdocStops      [][]byte // stack of end words for open heredocs
-	hdocStartLines []int    // stack of redirect lines for open heredocs
+	hdocStartLines []int    // stack of gather lines for open heredocs
+	hdocEOFLine    int      // last content line read when a heredoc body hit EOF
 
 	parsingDoc bool // true if using [Parser.Document]
 
@@ -553,6 +570,12 @@ type Parser struct {
 	openNodes int
 	// openBquotes is how many levels of backquotes are open at the moment.
 	openBquotes int
+	// openComsubs is how many `$(...)` command substitutions are open at
+	// the moment. Used to keep heredoc close-paren recovery (a body line
+	// like `EOF)` standing in for the missing terminator) from firing
+	// inside plain `( ... )` subshells, where bash instead reads the
+	// body through to end-of-file.
+	openComsubs int
 
 	// paramExpExpDblQuoted records whether the current ${paramOPword}
 	// substitute word was entered while parsing inside double quotes.
@@ -610,8 +633,10 @@ func (p *Parser) reset() {
 	p.heredocs, p.buriedHdocs = p.heredocs[:0], 0
 	p.hdocStops = nil
 	p.hdocStartLines = nil
+	p.hdocEOFLine = 0
 	p.parsingDoc = false
 	p.openBquotes = 0
+	p.openComsubs = 0
 	p.accComs = nil
 	p.accComs, p.curComs = nil, &p.accComs
 	p.litBatch = nil
@@ -807,12 +832,21 @@ func (p *Parser) doHeredocs() {
 		// Nothing do do; don't even issue a read.
 		return
 	}
+	// Bash numbers here-document diagnostics from the line whose
+	// newline triggered gathering the bodies (its line_number when
+	// gather_here_documents runs), not from the line of the `<<`
+	// opener — they differ when a command substitution sits between
+	// the opener and the gathering newline.
+	gatherLine := int(p.line)
 	p.rune() // consume '\n', since we know p.tok == _Newl
 	old := p.quote
 	p.heredocs = p.heredocs[:p.buriedHdocs]
 	for i, r := range hdocs {
 		if p.err != nil {
 			break
+		}
+		if i > 0 {
+			gatherLine = int(p.line)
 		}
 		p.quote = hdocBody
 		if r.Op == DashHdoc {
@@ -823,7 +857,8 @@ func (p *Parser) doHeredocs() {
 			stop = bytes.TrimLeft(stop, "\t")
 		}
 		p.hdocStops = append(p.hdocStops, stop)
-		p.hdocStartLines = append(p.hdocStartLines, int(r.Pos().Line()))
+		p.hdocStartLines = append(p.hdocStartLines, gatherLine)
+		p.hdocEOFLine = 0
 		if i > 0 && p.r == '\n' {
 			p.rune()
 		}
@@ -838,8 +873,14 @@ func (p *Parser) doHeredocs() {
 				// Bash 5.3 emits a warning and treats whatever was
 				// read up to EOF as the heredoc body, then continues
 				// parsing. r.Hdoc is already populated by getWord /
-				// quotedHdocWord above.
-				p.heredocEOFWarning(int(r.Pos().Line()), int(p.pos.Line()), string(stop))
+				// quotedHdocWord above. The reported eofLine is the
+				// last line with content before EOF; with an empty
+				// body that is the gather line itself.
+				eofLine := p.hdocEOFLine
+				if eofLine == 0 {
+					eofLine = gatherLine
+				}
+				p.heredocEOFWarning(gatherLine, eofLine, string(stop))
 			} else {
 				p.posErr(r.Pos(), "unclosed here-document %#q", stop)
 			}
@@ -1490,10 +1531,34 @@ func (p *Parser) wordPart() WordPart {
 
 func (p *Parser) cmdSubst() *CmdSubst {
 	cs := &CmdSubst{Left: p.pos}
+	// Bash 5.3 numbers the lines inside a command substitution one
+	// behind the input when a here-document opened earlier on the
+	// same line is still waiting for its body: the newline ending
+	// the opener's line is accounted to the pending here-document
+	// rather than to the line counter. Mirror that lag while inside
+	// the parens (and undo it after the close) so diagnostics for
+	// the substitution's statements match bash. Bashy mode only.
+	hdocLag := p.heredocEOFWarning != nil && len(p.heredocs) > p.buriedHdocs
+	if hdocLag {
+		p.line--
+	}
 	old := p.preNested(subCmd)
+	p.openComsubs++
 	p.next()
 	cs.Stmts, cs.Last = p.stmtList()
+	p.openComsubs--
+	// Here-documents opened inside the substitution whose bodies were
+	// not reached before the closing paren: bash warns about them at
+	// the close and then reads the bodies from the lines that follow
+	// the substitution, which is also what doHeredocs will do.
+	if pending := len(p.heredocs) - p.buriedHdocs; pending > 0 &&
+		p.heredocComsubWarning != nil && p.tok == rightParen {
+		p.heredocComsubWarning(int(p.pos.Line()), pending)
+	}
 	p.postNested(old)
+	if hdocLag {
+		p.line++
+	}
 	cs.Right = p.matched(cs.Left, dollParen, rightParen)
 	return cs
 }
@@ -2607,6 +2672,13 @@ func (p *Parser) subshell(s *Stmt) {
 	p.next()
 	sub.Stmts, sub.Last = p.followStmts("(", sub.Lparen)
 	p.postNested(old)
+	if p.err == nil && p.tok == _EOF && p.heredocEOFWarning != nil && p.hdocEOFLine != 0 {
+		// A here-document inside this subshell ran to end-of-file
+		// (we already emitted bash 5.3's warning for it), so the `)`
+		// can never arrive. Report bash's wording, anchored at the
+		// EOF position rather than at the `(`.
+		p.posErr(p.nextPos(), "syntax error: unexpected end of file from `(' command on line %d", sub.Lparen.Line())
+	}
 	sub.Rparen = p.matched(sub.Lparen, leftParen, rightParen)
 	s.Cmd = sub
 }
