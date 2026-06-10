@@ -3520,7 +3520,8 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	{"i=3; declare -A a=(['x']=b); a[i]=x; for e in ${!a[@]}; do echo $e; done | sort", "i\nx\n"},
 
 	// declare
-	{"declare -B foo", "declare: -B: invalid option\nexit status 2 #JUSTERR"},
+	{"declare -B foo", "declare: -B: invalid option\ndeclare: usage: declare [-aAfFgiIlnrtux] [name[=value] ...] or declare -p [-aAfFilnrtux] [name ...]\nexit status 2 #JUSTERR"},
+	{"declare -- -z", "declare: invalid name \"-z\"\nexit status 1 #JUSTERR"},
 	{"a=b; declare a; echo $a; declare a=; echo $a", "b\n\n"},
 	{"a=b; declare a; echo $a", "b\n"},
 	{

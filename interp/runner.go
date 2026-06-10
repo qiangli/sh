@@ -4410,6 +4410,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		}
 		declHadNames := false
 		declFuncInvalidOptReported := false
+		optionsEnded := false
 		oldDeclCtx := r.declAssignContext
 		r.declAssignContext = true
 		defer func() { r.declAssignContext = oldDeclCtx }()
@@ -4437,7 +4438,11 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			default:
 				r.setVarFromBuiltin = cm.Variant.Value
 			}
-			isFlag := strings.HasPrefix(as.Name.Value, "-") || strings.HasPrefix(as.Name.Value, "+")
+			if as.Name.Value == "--" && !optionsEnded {
+				optionsEnded = true
+				continue assignLoop
+			}
+			isFlag := !optionsEnded && (strings.HasPrefix(as.Name.Value, "-") || strings.HasPrefix(as.Name.Value, "+"))
 			if isFlag {
 				if as.Name.Value == "--json" {
 					jsonMode = true
@@ -4501,7 +4506,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 					default:
 						builtinName := cm.Variant.Value
 						r.errf("%s%s: %s: invalid option\n", r.bashErrPrefix(r.curStmtPos), builtinName, flag)
-						if usage, ok := bashUsage[builtinName]; ok && builtinName == "readonly" {
+						if usage, ok := bashUsage[builtinName]; ok && (builtinName == "declare" || builtinName == "typeset" || builtinName == "readonly") {
 							r.errf("%s: usage: %s\n", builtinName, usage)
 						}
 						r.exit.code = 2
