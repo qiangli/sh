@@ -3418,6 +3418,10 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 		"[$empty]: bad array subscript\n0\n #JUSTERR",
 	},
 	{
+		`declare -a AA; unset 'AA[-2]'`,
+		"unset: [-2]: bad array subscript\nexit status 1 #JUSTERR",
+	},
+	{
 		`declare -A a=([one]=a [*]=12 [hello world]=flip [box]="multiple words"); printf '<%s>\n' "${a[@]}"; printf '<%s>\n' "${!a[@]}"`,
 		"<multiple words>\n<12>\n<flip>\n<a>\n<box>\n<*>\n<hello world>\n<one>\n",
 	},

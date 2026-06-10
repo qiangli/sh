@@ -948,17 +948,21 @@ func splitArrayRef(s string) (name, idx string, ok bool) {
 // associative array. For indexed arrays the index is arithmetic;
 // for associative arrays it's a literal key. `name[*]` / `name[@]`
 // unset the entire variable (matching bash).
-func (r *Runner) unsetArrayElem(name, idx string) {
+func (r *Runner) unsetArrayElem(name, idx string) bool {
 	if idx == "*" || idx == "@" {
 		r.delVar(name)
-		return
+		return true
 	}
 	vr := r.lookupVar(name)
 	switch vr.Kind {
 	case expand.Indexed:
 		n, err := strconv.Atoi(idx)
-		if err != nil || n < 0 || n >= len(vr.List) {
-			return
+		if err != nil || n < 0 {
+			r.errf("%sunset: [%s]: bad array subscript\n", r.bashErrPrefix(r.curStmtPos), idx)
+			return false
+		}
+		if n >= len(vr.List) {
+			return true
 		}
 		set := vr.DenseListSet()
 		delete(set, n)
@@ -975,9 +979,10 @@ func (r *Runner) unsetArrayElem(name, idx string) {
 			delete(vr.Map, idx)
 		}
 	default:
-		return
+		return true
 	}
 	r.setVar(name, vr)
+	return true
 }
 
 func (r *Runner) setVarString(name, value string) {

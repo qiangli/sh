@@ -385,7 +385,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			if vars {
 				if name, idx, ok := splitArrayRef(arg); ok {
 					if syntax.ValidName(name) {
-						r.unsetArrayElem(name, idx)
+						if !r.unsetArrayElem(name, idx) {
+							exit.code = 1
+						}
 						continue
 					}
 				}
