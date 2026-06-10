@@ -258,6 +258,7 @@ var runTests = []runTest{
 	{"shopt -s shift_verbose; shift -1", "shift: -1: shift count out of range\nexit status 1 #JUSTERR"},
 	{"history abcde", "history: abcde: numeric argument required\nexit status 2 #JUSTERR"},
 	{"history 10 42", "history: too many arguments\nexit status 2 #JUSTERR"},
+	{"eval 'a=(1 \"two words\")'; printf '<%s>\\n' \"${a[@]}\"", "<1>\n<two words>\n"},
 	{
 		"shouldnotexist",
 		"\"shouldnotexist\": executable file not found in $PATH\nexit status 127 #JUSTERR",

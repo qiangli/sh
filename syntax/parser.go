@@ -3334,6 +3334,16 @@ loop:
 				ce.Assigns = append(ce.Assigns, p.getAssign(true))
 				break
 			}
+			if evalArrayAssignmentArg := len(ce.Args) > 0 && ce.Args[0].Lit() == "eval" &&
+				p.eqlOffs > 0 && ValidName(p.val[:p.eqlOffs]); evalArrayAssignmentArg {
+				w := p.wordOne(p.lit(p.pos, p.val))
+				p.next()
+				if p.tok == leftParen && !p.spaced {
+					w.Parts = append(w.Parts, p.evalArrayArgParts()...)
+				}
+				ce.Args = append(ce.Args, w)
+				break
+			}
 			// Avoid failing later with the confusing "} can only be used to close a block".
 			if p.val == "{" && w != nil && w.Lit() == "function" {
 				p.checkLang(p.pos, langBashLike, `the "function" builtin`)
@@ -3394,6 +3404,33 @@ loop:
 		}
 	}
 	s.Cmd = ce
+}
+
+func (p *Parser) evalArrayArgParts() []WordPart {
+	var parts []WordPart
+	parts = append(parts, p.lit(p.pos, "("))
+	p.next()
+	for p.tok != _EOF && p.tok != rightParen {
+		if p.spaced {
+			parts = append(parts, &Lit{
+				ValuePos: posAddCol(p.pos, -1),
+				ValueEnd: p.pos,
+				Value:    " ",
+			})
+		}
+		before := len(parts)
+		parts = p.wordParts(parts)
+		if len(parts) == before {
+			break
+		}
+	}
+	if p.tok == rightParen {
+		parts = append(parts, p.lit(p.pos, ")"))
+		p.next()
+	} else {
+		p.matchingErr(Pos{}, leftParen, rightParen)
+	}
+	return parts
 }
 
 func (p *Parser) funcDecl(s *Stmt, pos Pos, long, withParens bool, names ...*Lit) {

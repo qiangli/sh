@@ -4718,6 +4718,13 @@ var fileTests = []fileTestCase{
 		langFile(litStmt("eval", "a=b", "foo")),
 	),
 	fileTest(
+		[]string{`eval a=(1 "two words")`},
+		langFile(stmt(call(
+			litWord("eval"),
+			word(lit("a="), lit("("), lit("1"), lit(" "), dblQuoted(lit("two words")), lit(")")),
+		)), LangBash|LangMirBSDKorn|LangZsh),
+	),
+	fileTest(
 		[]string{"time", "time\n"},
 		langFile(litStmt("time"), LangPOSIX),
 		langFile(&TimeClause{}, LangBash|LangMirBSDKorn|LangZsh),
