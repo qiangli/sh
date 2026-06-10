@@ -4284,6 +4284,11 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				exprs = exprs[1:]
 			}
 		}
+		if len(exprs) == 0 {
+			r.errf("%slet: expression expected\n", r.bashErrPrefix(cm.Pos()))
+			r.exit.code = 1
+			break
+		}
 		for _, expr := range exprs {
 			val = r.letArithm(expr)
 

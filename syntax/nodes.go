@@ -1053,7 +1053,12 @@ type LetClause struct {
 }
 
 func (l *LetClause) Pos() Pos { return l.Let }
-func (l *LetClause) End() Pos { return l.Exprs[len(l.Exprs)-1].End() }
+func (l *LetClause) End() Pos {
+	if len(l.Exprs) == 0 {
+		return posAddCol(l.Let, len("let"))
+	}
+	return l.Exprs[len(l.Exprs)-1].End()
+}
 
 // BraceExp represents a Bash brace expression, such as "{a,f}" or "{1..10}".
 //

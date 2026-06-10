@@ -3145,7 +3145,7 @@ func (p *Parser) letClause(s *Stmt) {
 		}
 		lc.Exprs = append(lc.Exprs, x)
 	}
-	if len(lc.Exprs) == 0 {
+	if len(lc.Exprs) == 0 && !p.stopToken() && !p.peekRedir() {
 		p.followErrExp(lc.Let, "let")
 	}
 	p.postNested(old)

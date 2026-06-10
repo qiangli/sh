@@ -2587,6 +2587,10 @@ var runTests = []runTest{
 		"8\n7\n",
 	},
 	{
+		"let; echo $?",
+		"let: expression expected\n1\n",
+	},
+	{
 		"let 3==4",
 		"exit status 1",
 	},

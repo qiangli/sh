@@ -4791,6 +4791,11 @@ var fileTests = []fileTestCase{
 		))}, LangBash),
 	),
 	fileTest(
+		[]string{`let`},
+		langFile(letClause(), LangBash|LangMirBSDKorn|LangZsh),
+		langFile(litStmt("let"), LangPOSIX),
+	),
+	fileTest(
 		[]string{`let i++`},
 		langFile(letClause(
 			&UnaryArithm{Op: Inc, Post: true, X: litWord("i")},

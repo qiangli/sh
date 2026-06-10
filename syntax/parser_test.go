@@ -1476,10 +1476,6 @@ var errorCases = []errorCase{
 		langErr("1:5: `|` must be followed by a statement", LangPOSIX),
 	),
 	errCase(
-		"let",
-		langErr("1:1: `let` must be followed by an expression", LangBash|LangMirBSDKorn|LangZsh),
-	),
-	errCase(
 		"let a+ b",
 		langErr("1:6: `+` must be followed by an expression", LangBash|LangMirBSDKorn|LangZsh),
 	),
@@ -1507,10 +1503,6 @@ var errorCases = []errorCase{
 		langErr("1:6: `+` must be followed by an expression", LangBash|LangMirBSDKorn|LangZsh),
 	),
 	errCase(
-		"let ))",
-		langErr("1:1: `let` must be followed by an expression", LangBash|LangMirBSDKorn|LangZsh),
-	),
-	errCase(
 		"`let !`",
 		langErr("1:6: `!` must be followed by an expression", LangBash|LangMirBSDKorn|LangZsh),
 	),
@@ -1519,14 +1511,6 @@ var errorCases = []errorCase{
 		langErr("1:6: ternary operator missing `?` before `:`", LangBash|LangMirBSDKorn|LangZsh),
 	),
 	// `let a+b=c` — runtime error now (see comment above).
-	errCase(
-		"`let` { foo; }",
-		langErr("1:2: `let` must be followed by an expression", LangBash|LangMirBSDKorn|LangZsh),
-	),
-	errCase(
-		"$(let)",
-		langErr("1:3: `let` must be followed by an expression", LangBash|LangMirBSDKorn|LangZsh),
-	),
 	errCase(
 		"[[",
 		langErr("1:1: `[[` must be followed by an expression", LangBash|LangMirBSDKorn|LangZsh),
