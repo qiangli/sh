@@ -121,10 +121,21 @@ test-bash-list:
 	done
 
 ## test-bash-helpers: Build helper programs needed by bash tests
+# heredoc5.sub round-trips $(BUILD_DIR)/config.h (needs 4096 < size <
+# 65536) and version.h (512 < size < 4096) through here-documents. They
+# are bash build artifacts absent from the vendored source tree, so
+# generate deterministic stubs of the right sizes. y.tab.c ships with
+# the source tree and needs no stub.
 test-bash-helpers:
 	@cd $(BASH_TESTS_DIR) && \
 		[ -f recho ] || cc -o recho ../support/recho.c 2>/dev/null; \
 		[ -f zecho ] || cc -o zecho ../support/zecho.c 2>/dev/null; \
+		[ -f ../config.h ] || for i in $$(seq 1 128); do \
+			printf '/* stub config.h line %03d for heredoc5.sub */\n' $$i; \
+		done > ../config.h; \
+		[ -f ../version.h ] || for i in $$(seq 1 16); do \
+			printf '/* stub version.h line %03d for heredoc5.sub */\n' $$i; \
+		done > ../version.h; \
 		true
 
 ## tidy: Run go mod tidy, gofmt, and go vet

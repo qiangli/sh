@@ -1346,7 +1346,12 @@ func (p *Parser) advanceLitHdoc(r rune) {
 		case '\\': // escaped byte follows
 			p.rune()
 		case '`':
-			if bytes.Contains(stop, []byte("`")) {
+			// A backquote in the stop word does not quote it (the
+			// body still expands, like bash); it only means the
+			// terminator line itself contains backquotes. Lex this
+			// backquote as a literal just for that line, so the
+			// newline case below can match it against the stop.
+			if bytes.Contains(stop, []byte("`")) && p.hdocLineIsStop(lStart, stop) {
 				continue
 			}
 			if !p.backquoteEnd() {
@@ -1379,7 +1384,7 @@ func (p *Parser) advanceLitHdoc(r rune) {
 					p.hdocStops[len(p.hdocStops)-1] = nil
 					return
 				}
-				if closeQuote, ok := hdocComsubClose(line, stop); ok {
+				if closeQuote, ok := hdocComsubClose(line, stop); ok && p.openComsubs > 0 {
 					p.tok = _LitWord
 					p.val = p.endLit()[:lineValStart]
 					if p.val == "" {
@@ -1404,9 +1409,12 @@ func (p *Parser) advanceLitHdoc(r rune) {
 				// EOF instead of discarding it). The
 				// `hdocStops[...] != nil` check in doHeredocs is
 				// what actually triggers the warning.
-				if r == utf8.RuneSelf && p.heredocEOFWarning != nil {
-					p.tok = _LitWord
-					p.val = p.endLit()
+				if r == utf8.RuneSelf {
+					p.setHdocEOFLine()
+					if p.heredocEOFWarning != nil {
+						p.tok = _LitWord
+						p.val = p.endLit()
+					}
 				}
 				return // hit an unexpected EOF or closing backquote
 			}
@@ -1426,6 +1434,7 @@ func (p *Parser) quotedHdocWord() *Word {
 	stop := p.hdocStops[len(p.hdocStops)-1]
 	for ; ; r = p.rune() {
 		if r == utf8.RuneSelf {
+			p.setHdocEOFLine()
 			if p.heredocEOFWarning != nil {
 				val := p.endLit()
 				if val != "" {
@@ -1470,7 +1479,7 @@ func (p *Parser) quotedHdocWord() *Word {
 			}
 			return p.wordOne(p.lit(pos, val))
 		}
-		if closeQuote, ok := hdocComsubClose(line, stop); ok {
+		if closeQuote, ok := hdocComsubClose(line, stop); ok && p.openComsubs > 0 {
 			p.hdocStops[len(p.hdocStops)-1] = nil
 			val := p.endLit()[:lineValStart]
 			p.pendingTok = rightParen
@@ -1486,6 +1495,34 @@ func (p *Parser) quotedHdocWord() *Word {
 			return p.wordOne(p.lit(pos, val))
 		}
 	}
+}
+
+// hdocLineIsStop reports whether the heredoc body line being lexed,
+// completed with the not-yet-read bytes up to the next newline, equals
+// the stop word. Like the escaped-newline lookahead above, it can only
+// see as far as the current read buffer, which in practice covers a
+// terminator line.
+func (p *Parser) hdocLineIsStop(lStart int, stop []byte) bool {
+	if lStart < 0 || p.parsingDoc {
+		return false
+	}
+	line := append([]byte(nil), p.litBs[lStart:]...)
+	for i := int(p.bsp); i < len(p.bs) && p.bs[i] != '\n'; i++ {
+		line = append(line, p.bs[i])
+	}
+	return bytes.Equal(line, stop)
+}
+
+// setHdocEOFLine records the line number bash would report when a
+// here-document body runs into end-of-file: the last line that had any
+// content. p.line has already advanced past a trailing newline by the
+// time EOF is seen, so step back one line in that case.
+func (p *Parser) setHdocEOFLine() {
+	line := int(p.line)
+	if len(p.litBs) > 0 && p.litBs[len(p.litBs)-1] == '\n' {
+		line--
+	}
+	p.hdocEOFLine = line
 }
 
 func hdocComsubClose(line, stop []byte) (closeQuote, ok bool) {
