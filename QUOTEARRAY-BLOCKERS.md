@@ -6,7 +6,7 @@ Current verified measurements in this sandbox:
 - Exact requested repro command: `155` diff lines. Note: `external` is a
   symlink here, so `realpath ../../../bin/bashy` resolves to a different
   checkout's `bin/bashy`, not this sandbox's rebuilt binary.
-- Same fixture with this sandbox's `bin/bashy`: `180` diff lines using
+- Same fixture with this sandbox's rebuilt `bin/bashy`: `199` diff lines using
   `diff - ./quotearray.right | wc -l`.
 
 Implemented progress:
@@ -20,12 +20,16 @@ Implemented progress:
 - `[[ ... -eq ... ]]` and related arithmetic comparisons now prefer source
   operand text in bash mode, deferring array-subscript evaluation to the
   arithmetic evaluator.
+- Double-quoted arithmetic text only takes the raw-text path when it contains
+  a parameter expansion, preserving normal quote removal for cases like
+  `let "a[\" \"]=11"`.
 
 Remaining clusters:
 
 - Arithmetic error framing for indirect expressions like `$expr`/`expr` still
   prints bashy's `((: <expr> :` wrapper in several cases where bash reports the
-  expanded token directly.
+  expanded token directly. Synthetic reparse positions are no longer mapped
+  against unrelated source text, but the message shape still differs.
 - Indexed-array malformed subscripts such as `array[$index]++` now classify as
   arithmetic syntax errors, but the diagnostic still differs from bash's
   backslash-escaped token text.

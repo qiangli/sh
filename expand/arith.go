@@ -171,25 +171,28 @@ func arithmRawWordPart(part syntax.WordPart) (string, bool) {
 	return "", false
 }
 
-func arithmDoubleQuotedText(word *syntax.Word) (string, bool) {
+func arithmDoubleQuotedText(word *syntax.Word) (string, bool, bool) {
 	if word == nil || len(word.Parts) == 0 {
-		return "", false
+		return "", false, false
 	}
 	var b strings.Builder
+	var hasParam bool
 	for _, part := range word.Parts {
 		dq, ok := part.(*syntax.DblQuoted)
 		if !ok || dq.Dollar {
-			return "", false
+			return "", false, false
 		}
 		for _, dqPart := range dq.Parts {
 			text, ok := arithmRawWordPart(dqPart)
 			if !ok {
-				return "", false
+				return "", false, false
 			}
+			_, isParam := dqPart.(*syntax.ParamExp)
+			hasParam = hasParam || isParam
 			b.WriteString(text)
 		}
 	}
-	return b.String(), true
+	return b.String(), hasParam, true
 }
 
 func arithmWordHasParam(word *syntax.Word) bool {
@@ -324,7 +327,7 @@ func arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 		if err != nil {
 			return 0, err
 		}
-		if dqText, ok := arithmDoubleQuotedText(expr); ok && containsArithOp(dqText) {
+		if dqText, hasParam, ok := arithmDoubleQuotedText(expr); ok && hasParam && containsArithOp(dqText) {
 			str = dqText
 		}
 		if sqText, ok := arithmSingleQuotedText(expr); ok && containsArithOp(sqText) {
@@ -384,7 +387,7 @@ func arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 							if _, ok := err.(*ArithmError); ok {
 								return 0, err
 							}
-							return 0, &ArithmError{Expr: ac.X, Err: err}
+							return 0, &ArithmError{Expr: ac.X, Text: str, Err: err}
 						}
 						return n, nil
 					}
