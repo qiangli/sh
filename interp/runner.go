@@ -4535,7 +4535,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 					r.errf("%s: invalid name %q\n", builtinName, name)
 				}
 				r.exit.code = 1
-				return
+				continue
 			}
 			if cm.Variant.Value == "export" && as.Value == nil && (name == "BASHOPTS" || name == "SHELLOPTS") {
 				vr := r.lookupVar(name)

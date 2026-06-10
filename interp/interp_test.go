@@ -1050,12 +1050,28 @@ var runTests = []runTest{
 		"export: `a[5]': not a valid identifier\nexit status 1 #JUSTERR",
 	},
 	{
+		`readonly non-identifier invalid+ident`,
+		"readonly: invalid name \"non-identifier\"\nreadonly: invalid name \"invalid+ident\"\nexit status 1 #JUSTERR",
+	},
+	{
+		`export non-identifier invalid+ident`,
+		"export: invalid name \"non-identifier\"\nexport: invalid name \"invalid+ident\"\nexit status 1 #JUSTERR",
+	},
+	{
 		`command readonly invalid-name; echo status:$?`,
 		"readonly: invalid name \"invalid-name\"\nstatus:1\n",
 	},
 	{
 		`command export invalid-name; echo status:$?`,
 		"export: invalid name \"invalid-name\"\nstatus:1\n",
+	},
+	{
+		`command readonly non-identifier invalid+ident; echo status:$?`,
+		"readonly: invalid name \"non-identifier\"\nreadonly: invalid name \"invalid+ident\"\nstatus:1\n",
+	},
+	{
+		`command export non-identifier invalid+ident; echo status:$?`,
+		"export: invalid name \"non-identifier\"\nexport: invalid name \"invalid+ident\"\nstatus:1\n",
 	},
 	{
 		`export e=1; declare -p e`,

@@ -3492,13 +3492,15 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			if eqIdx >= 0 {
 				name := arg[:eqIdx]
 				if !syntax.ValidName(name) {
-					return invalidIdentifier("export", name)
+					exit = invalidIdentifier("export", name)
+					continue
 				}
 				val := arg[eqIdx+1:]
 				r.setVar(name, expand.Variable{Set: true, Kind: expand.String, Str: val, Exported: true})
 			} else {
 				if !syntax.ValidName(arg) {
-					return invalidIdentifier("export", arg)
+					exit = invalidIdentifier("export", arg)
+					continue
 				}
 				vr := r.lookupVar(arg)
 				vr.Exported = true
@@ -3511,13 +3513,15 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			if eqIdx >= 0 {
 				name := arg[:eqIdx]
 				if !syntax.ValidName(name) {
-					return invalidIdentifier("readonly", name)
+					exit = invalidIdentifier("readonly", name)
+					continue
 				}
 				val := arg[eqIdx+1:]
 				r.setVar(name, expand.Variable{Set: true, Kind: expand.String, Str: val, ReadOnly: true})
 			} else {
 				if !syntax.ValidName(arg) {
-					return invalidIdentifier("readonly", arg)
+					exit = invalidIdentifier("readonly", arg)
+					continue
 				}
 				vr := r.lookupVar(arg)
 				vr.ReadOnly = true
@@ -3533,13 +3537,15 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			if eqIdx >= 0 {
 				name := arg[:eqIdx]
 				if !syntax.ValidName(name) {
-					return invalidIdentifier("local", name)
+					exit = invalidIdentifier("local", name)
+					continue
 				}
 				val := arg[eqIdx+1:]
 				r.setVar(name, expand.Variable{Set: true, Kind: expand.String, Str: val, Local: true})
 			} else {
 				if !syntax.ValidName(arg) {
-					return invalidIdentifier("local", arg)
+					exit = invalidIdentifier("local", arg)
+					continue
 				}
 				vr := r.lookupVar(arg)
 				vr.Local = true
