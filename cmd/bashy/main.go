@@ -612,7 +612,8 @@ func staticAliasExpand(src []byte) []byte {
 	var out bytes.Buffer
 	changed := false
 	inSingleCommand := false
-	for _, line := range lines {
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
 		text := string(line)
 		if inSingleCommand {
 			out.WriteString(text)
@@ -624,10 +625,15 @@ func staticAliasExpand(src []byte) []byte {
 			expandAliases = true
 		}
 		if strings.HasPrefix(trimmed, "alias ") {
-			for name, value := range parseStaticAliases(trimmed[len("alias "):]) {
+			aliasText := text
+			for !staticAliasCommandComplete(aliasText) && i+1 < len(lines) {
+				i++
+				aliasText += string(lines[i])
+			}
+			for name, value := range parseStaticAliases(strings.TrimSpace(aliasText)[len("alias "):]) {
 				aliases[name] = value
 			}
-			out.WriteString(text)
+			out.WriteString(aliasText)
 			continue
 		}
 		if strings.HasPrefix(trimmed, "unalias ") {
@@ -636,8 +642,13 @@ func staticAliasExpand(src []byte) []byte {
 			continue
 		}
 		if expandAliases && len(aliases) > 0 {
+			origText := text
 			repl := expandStaticAliasLine(text, aliases)
-			if repl != text {
+			for n := 0; n < 8 && strings.Count(repl, "\n") > strings.Count(text, "\n") && repl != text; n++ {
+				text = repl
+				repl = expandStaticAliasLine(text, aliases)
+			}
+			if repl != origText {
 				changed = true
 			}
 			text = repl
@@ -651,6 +662,32 @@ func staticAliasExpand(src []byte) []byte {
 		return src
 	}
 	return out.Bytes()
+}
+
+func staticAliasCommandComplete(s string) bool {
+	inSingle, inDouble, escaped := false, false, false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if !inSingle && inDouble && c == '\\' {
+			escaped = true
+			continue
+		}
+		switch c {
+		case '\'':
+			if !inDouble {
+				inSingle = !inSingle
+			}
+		case '"':
+			if !inSingle {
+				inDouble = !inDouble
+			}
+		}
+	}
+	return !inSingle && !inDouble
 }
 
 func staticSingleCommandString(s string) (int, bool) {
@@ -712,6 +749,19 @@ func parseStaticAliases(s string) map[string]string {
 	aliases := make(map[string]string)
 	for len(s) > 0 {
 		s = strings.TrimLeft(s, " \t")
+		if strings.HasPrefix(s, "'") || strings.HasPrefix(s, "\"") {
+			arg, n, ok := readAliasValue(s)
+			if !ok {
+				break
+			}
+			if name, value, ok := strings.Cut(arg, "="); ok && validAliasName(name) {
+				if !strings.Contains(value, "\\\n") {
+					aliases[name] = value
+				}
+			}
+			s = s[n:]
+			continue
+		}
 		eq := strings.IndexByte(s, '=')
 		if eq <= 0 || !validAliasName(s[:eq]) {
 			break
@@ -726,7 +776,9 @@ func parseStaticAliases(s string) map[string]string {
 			break
 		}
 		if name != "let" {
-			aliases[name] = value
+			if !strings.Contains(value, "\\\n") {
+				aliases[name] = value
+			}
 		}
 		s = rest[n:]
 	}
@@ -815,6 +867,11 @@ func expandStaticAliasLine(s string, aliases map[string]string) string {
 			i = k
 			continue
 		}
+		if strings.Contains(value, "\n") && !strings.Contains(value, "<<") {
+			if repl, ok := staticAliasHeredocPrefix(value, aliases); ok {
+				value = repl
+			}
+		}
 		if !shouldStaticExpandAlias(s, start, k, value) {
 			i = k
 			continue
@@ -865,7 +922,9 @@ func expandStaticAliasLine(s string, aliases map[string]string) string {
 
 func staticAliasAnywhere(value string) bool {
 	trim := strings.TrimSpace(value)
-	return strings.Contains(value, ";") || trim == "<" || trim == ">" || trim == "<<" || trim == ">>"
+	return strings.Contains(value, ";") ||
+		strings.Contains(value, "<<") ||
+		trim == "<" || trim == ">" || trim == "<<" || trim == ">>"
 }
 
 func shouldStaticExpandAlias(line string, start, end int, value string) bool {
@@ -883,7 +942,12 @@ func shouldStaticExpandAlias(line string, start, end int, value string) bool {
 	if strings.HasPrefix(trim, "#") {
 		return true
 	}
-	if strings.Contains(value, ";") || trim == "<" || trim == ">" || trim == "<<" || trim == ">>" {
+	if strings.Contains(value, "\n") && !strings.Contains(value, "<<") {
+		return false
+	}
+	if strings.Contains(value, ";") ||
+		strings.Contains(value, "<<") ||
+		trim == "<" || trim == ">" || trim == "<<" || trim == ">>" {
 		return true
 	}
 	if strings.HasSuffix(strings.TrimRight(value, " \t"), "\\") {
@@ -900,6 +964,25 @@ func shouldStaticExpandAlias(line string, start, end int, value string) bool {
 		return strings.HasPrefix(rest, "for ") || strings.HasPrefix(rest, "case ")
 	}
 	return false
+}
+
+func staticAliasHeredocPrefix(value string, aliases map[string]string) (string, bool) {
+	j := 0
+	for j < len(value) && (value[j] == ' ' || value[j] == '\t') {
+		j++
+	}
+	k := j
+	for k < len(value) && isAliasNameChar(value[k]) {
+		k++
+	}
+	if k == j {
+		return "", false
+	}
+	repl, ok := aliases[value[j:k]]
+	if !ok || !strings.Contains(repl, "<<") {
+		return "", false
+	}
+	return value[:j] + repl + value[k:], true
 }
 
 func aliasNeedsClosingParen(value string) bool {
