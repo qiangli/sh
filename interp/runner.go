@@ -3280,6 +3280,12 @@ func bashDeclareFmt(body string, lastTop bool) string {
 				if strings.HasPrefix(nxtTrim, ")") {
 					continue
 				}
+				// bash 5.3 keeps the terminator adjacent to a
+				// following `then`/`do` (heredoc fed the if/while
+				// condition); the blank only separates statements.
+				if nxtTrim == "then" || nxtTrim == "do" {
+					continue
+				}
 				out = append(out, "")
 			}
 		}

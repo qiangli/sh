@@ -1203,6 +1203,15 @@ func run(r *interp.Runner, reader io.Reader, name string) error {
 			"%s: line %d: warning: here-document at line %d delimited by end-of-file (wanted `%s')\n",
 			errPrefix, eofLine, startLine, stop)
 	}
+	comsubWarn := func(line, count int) {
+		plural := ""
+		if count > 1 {
+			plural = "s"
+		}
+		fmt.Fprintf(os.Stderr,
+			"%s: line %d: warning: command substitution: %d unterminated here-document%s\n",
+			errPrefix, line, count, plural)
+	}
 	ctx := context.Background()
 	r.Reset()
 	if err := interp.WithBashSource(src)(r); err != nil {
@@ -1224,7 +1233,8 @@ func run(r *interp.Runner, reader io.Reader, name string) error {
 	// r.Run(prog) would. The -c case (`*command != ""`) skips
 	// recovery; bash also fails -c entirely on parse error.
 	parseOnce := func(chunk []byte, parseLang syntax.LangVariant) (*syntax.File, syntax.ParseError, bool) {
-		f, perr := syntax.NewParser(syntax.Variant(parseLang), syntax.HeredocEOFWarning(hdocWarn)).
+		f, perr := syntax.NewParser(syntax.Variant(parseLang), syntax.HeredocEOFWarning(hdocWarn),
+			syntax.HeredocComsubWarning(comsubWarn)).
 			Parse(bytes.NewReader(chunk), name)
 		if perr == nil {
 			return f, syntax.ParseError{}, false
@@ -1413,7 +1423,25 @@ func runStatementStream(
 	hdocWarn := func(startLine, eofLine int, stop string) {
 		hdocWarnings = append(hdocWarnings, hdocWarning{startLine, eofLine, stop})
 	}
+	type comsubWarning struct {
+		line  int
+		count int
+	}
+	var comsubWarnings []comsubWarning
+	comsubWarn := func(line, count int) {
+		comsubWarnings = append(comsubWarnings, comsubWarning{line, count})
+	}
 	flushWarnings := func() {
+		for _, warning := range comsubWarnings {
+			plural := ""
+			if warning.count > 1 {
+				plural = "s"
+			}
+			fmt.Fprintf(os.Stderr,
+				"%s: line %d: warning: command substitution: %d unterminated here-document%s\n",
+				errPrefix, warning.line, warning.count, plural)
+		}
+		comsubWarnings = comsubWarnings[:0]
 		for _, warning := range hdocWarnings {
 			fmt.Fprintf(os.Stderr,
 				"%s: line %d: warning: here-document at line %d delimited by end-of-file (wanted `%s')\n",
@@ -1425,7 +1453,8 @@ func runStatementStream(
 	cursor := 0
 	for cursor < len(src) {
 		parseLang := r.LangVariant()
-		parser := syntax.NewParser(syntax.Variant(parseLang), syntax.HeredocEOFWarning(hdocWarn))
+		parser := syntax.NewParser(syntax.Variant(parseLang), syntax.HeredocEOFWarning(hdocWarn),
+			syntax.HeredocComsubWarning(comsubWarn))
 		restart := false
 		chunk := paddedChunk(src, cursor, len(src))
 		for stmt, err := range parser.StmtsSeq(bytes.NewReader(chunk)) {
