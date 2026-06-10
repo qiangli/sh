@@ -4,6 +4,7 @@
 package interp
 
 import (
+	"bytes"
 	cryptorand "crypto/rand"
 	"encoding/binary"
 	"fmt"
@@ -193,21 +194,50 @@ func (r *Runner) execEnvWithFuncs() []string {
 		if !ok {
 			continue
 		}
+		list = append(list, "BASH_FUNC_"+name+"%%="+bashExportedFuncValue(name, body))
+	}
+	return list
+}
+
+func bashExportedFuncValue(name string, body *syntax.Stmt) string {
+	block, ok := body.Cmd.(*syntax.Block)
+	if !ok {
 		var b strings.Builder
-		syntax.NewPrinter().Print(&b, &syntax.FuncDecl{
+		syntax.NewPrinter(syntax.SpaceRedirects(true), syntax.BashCompatArith(true)).Print(&b, &syntax.FuncDecl{
 			Name: &syntax.Lit{Value: name},
 			Body: body,
 		})
-		// The printer emits "name() { … }"; bash's exported form
-		// drops the name and keeps "() { … }".
-		s := b.String()
-		s = strings.TrimSpace(s)
+		s := strings.TrimSpace(b.String())
 		if rest, ok := strings.CutPrefix(s, name); ok {
 			s = strings.TrimSpace(rest)
 		}
-		list = append(list, "BASH_FUNC_"+name+"%%="+s)
+		return s
 	}
-	return list
+	var b strings.Builder
+	b.WriteString("() { \n")
+	printer := syntax.NewPrinter(syntax.Indent(4), syntax.SpaceRedirects(true), syntax.BashCompatArith(true))
+	for i, st := range block.Stmts {
+		var stmt bytes.Buffer
+		printer.Print(&stmt, st)
+		rendered := bashDeclareFmt(strings.TrimRight(stmt.String(), "\n"), i == len(block.Stmts)-1)
+		b.WriteString(rendered)
+		b.WriteByte('\n')
+		if endsWithHeredocTerminator(stmt.String()) {
+			b.WriteByte('\n')
+		}
+	}
+	b.WriteString("}")
+	for _, rd := range body.Redirs {
+		text := formatRedirect(rd)
+		if strings.HasPrefix(text, ">&") {
+			text = "1" + text
+		} else if strings.HasPrefix(text, "<&") {
+			text = "0" + text
+		}
+		b.WriteByte(' ')
+		b.WriteString(text)
+	}
+	return b.String()
 }
 
 func (r *Runner) lookupVar(name string) expand.Variable {
