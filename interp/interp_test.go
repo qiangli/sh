@@ -1038,6 +1038,14 @@ var runTests = []runTest{
 		"readonly: `a[5]': not a valid identifier\nexit status 1 #JUSTERR",
 	},
 	{
+		`readonly invalid-name`,
+		"readonly: invalid name \"invalid-name\"\nexit status 1 #JUSTERR",
+	},
+	{
+		`export invalid-name`,
+		"export: invalid name \"invalid-name\"\nexit status 1 #JUSTERR",
+	},
+	{
 		`export e=1; declare -p e`,
 		"declare -x e=\"1\"\n",
 	},

@@ -4527,11 +4527,12 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			// function names; bash allows arbitrary function names
 			// (e.g. `foo-a`) so skip the identifier check there.
 			if declQuery != "-f" && declQuery != "-F" && !syntax.ValidName(name) {
+				builtinName := cm.Variant.Value
 				if r.bashCompatErrors {
-					r.errf("%sdeclare: `%s': not a valid identifier\n",
-						r.bashErrPrefix(r.curStmtPos), name)
+					r.errf("%s%s: `%s': not a valid identifier\n",
+						r.bashErrPrefix(r.curStmtPos), builtinName, name)
 				} else {
-					r.errf("declare: invalid name %q\n", name)
+					r.errf("%s: invalid name %q\n", builtinName, name)
 				}
 				r.exit.code = 1
 				return
