@@ -200,6 +200,12 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		}
 		return failf(2, "%s: invalid option %q\n", builtin, flag)
 	}
+	invalidIdentifier := func(builtin, ident string) exitStatus {
+		if r.bashCompatErrors {
+			return failf(1, "%s: `%s': not a valid identifier\n", builtin, ident)
+		}
+		return failf(1, "%s: invalid name %q\n", builtin, ident)
+	}
 	switch name {
 	case ":", "true":
 	case "false":
@@ -3485,9 +3491,15 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			eqIdx := strings.IndexByte(arg, '=')
 			if eqIdx >= 0 {
 				name := arg[:eqIdx]
+				if !syntax.ValidName(name) {
+					return invalidIdentifier("export", name)
+				}
 				val := arg[eqIdx+1:]
 				r.setVar(name, expand.Variable{Set: true, Kind: expand.String, Str: val, Exported: true})
 			} else {
+				if !syntax.ValidName(arg) {
+					return invalidIdentifier("export", arg)
+				}
 				vr := r.lookupVar(arg)
 				vr.Exported = true
 				r.setVar(arg, vr)
@@ -3498,9 +3510,15 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			eqIdx := strings.IndexByte(arg, '=')
 			if eqIdx >= 0 {
 				name := arg[:eqIdx]
+				if !syntax.ValidName(name) {
+					return invalidIdentifier("readonly", name)
+				}
 				val := arg[eqIdx+1:]
 				r.setVar(name, expand.Variable{Set: true, Kind: expand.String, Str: val, ReadOnly: true})
 			} else {
+				if !syntax.ValidName(arg) {
+					return invalidIdentifier("readonly", arg)
+				}
 				vr := r.lookupVar(arg)
 				vr.ReadOnly = true
 				r.setVar(arg, vr)
@@ -3514,9 +3532,15 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			eqIdx := strings.IndexByte(arg, '=')
 			if eqIdx >= 0 {
 				name := arg[:eqIdx]
+				if !syntax.ValidName(name) {
+					return invalidIdentifier("local", name)
+				}
 				val := arg[eqIdx+1:]
 				r.setVar(name, expand.Variable{Set: true, Kind: expand.String, Str: val, Local: true})
 			} else {
+				if !syntax.ValidName(arg) {
+					return invalidIdentifier("local", arg)
+				}
 				vr := r.lookupVar(arg)
 				vr.Local = true
 				r.setVar(arg, vr)

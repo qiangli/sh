@@ -1050,6 +1050,14 @@ var runTests = []runTest{
 		"export: `a[5]': not a valid identifier\nexit status 1 #JUSTERR",
 	},
 	{
+		`command readonly invalid-name; echo status:$?`,
+		"readonly: invalid name \"invalid-name\"\nstatus:1\n",
+	},
+	{
+		`command export invalid-name; echo status:$?`,
+		"export: invalid name \"invalid-name\"\nstatus:1\n",
+	},
+	{
 		`export e=1; declare -p e`,
 		"declare -x e=\"1\"\n",
 	},
