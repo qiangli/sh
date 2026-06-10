@@ -135,11 +135,131 @@ func containsArithOp(s string) bool {
 	for i := 0; i < len(s); i++ {
 		switch s[i] {
 		case '+', '-', '*', '/', '%', '<', '>', '=', '!',
-			'&', '|', '^', '~', '?', ':', '(', ')', ' ', '\t':
+			'&', '|', '^', '~', '?', ':', '(', ')', '[', ']', ' ', '\t':
 			return true
 		}
 	}
 	return false
+}
+
+func arithmSingleQuotedText(word *syntax.Word) (string, bool) {
+	if word == nil || len(word.Parts) == 0 {
+		return "", false
+	}
+	var b strings.Builder
+	for _, part := range word.Parts {
+		sq, ok := part.(*syntax.SglQuoted)
+		if !ok || sq.Dollar {
+			return "", false
+		}
+		b.WriteString(sq.Value)
+	}
+	return b.String(), true
+}
+
+func arithmRawWordPart(part syntax.WordPart) (string, bool) {
+	switch part := part.(type) {
+	case *syntax.Lit:
+		return part.Value, true
+	case *syntax.ParamExp:
+		if part.Param != nil && part.NestedParam == nil && part.Index == nil && part.Slice == nil &&
+			part.Repl == nil && part.Exp == nil && part.Length == false && part.Width == false &&
+			part.Excl == false && part.Names == 0 {
+			return "$" + part.Param.Value, true
+		}
+	}
+	return "", false
+}
+
+func arithmDoubleQuotedText(word *syntax.Word) (string, bool) {
+	if word == nil || len(word.Parts) == 0 {
+		return "", false
+	}
+	var b strings.Builder
+	for _, part := range word.Parts {
+		dq, ok := part.(*syntax.DblQuoted)
+		if !ok || dq.Dollar {
+			return "", false
+		}
+		for _, dqPart := range dq.Parts {
+			text, ok := arithmRawWordPart(dqPart)
+			if !ok {
+				return "", false
+			}
+			b.WriteString(text)
+		}
+	}
+	return b.String(), true
+}
+
+func arithmWordHasParam(word *syntax.Word) bool {
+	if word == nil {
+		return false
+	}
+	for _, part := range word.Parts {
+		switch part := part.(type) {
+		case *syntax.ParamExp:
+			return true
+		case *syntax.DblQuoted:
+			for _, dqPart := range part.Parts {
+				if _, ok := dqPart.(*syntax.ParamExp); ok {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func arithmQuoteExpandedParamValue(s string) string {
+	if !strings.ContainsAny(s, `\[]$`+"`") {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '\\', '[', ']', '$', '`':
+			b.WriteByte('\\')
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
+}
+
+func arithmNameStart(b byte) bool {
+	return b == '_' || ('a' <= b && b <= 'z') || ('A' <= b && b <= 'Z')
+}
+
+func arithmNameContinue(b byte) bool {
+	return arithmNameStart(b) || ('0' <= b && b <= '9')
+}
+
+func (cfg *Config) expandArithmDiagnosticText(s string) string {
+	if !strings.ContainsAny(s, "$`") {
+		return s
+	}
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] != '$' || i+1 >= len(s) || !arithmNameStart(s[i+1]) {
+			b.WriteByte(s[i])
+			continue
+		}
+		j := i + 2
+		for j < len(s) && arithmNameContinue(s[j]) {
+			j++
+		}
+		name := s[i+1 : j]
+		if vr := cfg.Env.Get(name); vr.IsSet() {
+			b.WriteString(arithmQuoteExpandedParamValue(vr.String()))
+		}
+		i = j - 1
+	}
+	return b.String()
+}
+
+func arithmBadSingleQuotedText(expanded string) bool {
+	return strings.Contains(expanded, `\],`) && strings.Contains(expanded, `\[`)
 }
 
 func (cfg *Config) expandArithmText(s string) (string, error) {
@@ -204,6 +324,19 @@ func arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 		if err != nil {
 			return 0, err
 		}
+		if dqText, ok := arithmDoubleQuotedText(expr); ok && containsArithOp(dqText) {
+			str = dqText
+		}
+		if sqText, ok := arithmSingleQuotedText(expr); ok && containsArithOp(sqText) {
+			expanded := cfg.expandArithmDiagnosticText(sqText)
+			if arithmBadSingleQuotedText(expanded) {
+				text := "'" + expanded + "'"
+				return 0, &ArithmError{
+					Text: text,
+					Err:  fmt.Errorf("arithmetic syntax error: operand expected (error token is \"%s\")", text+" "),
+				}
+			}
+		}
 		// recursively fetch vars
 		i := 0
 		for syntax.ValidName(str) {
@@ -234,13 +367,6 @@ func arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 			if err := expandedAssocSubscriptError(str); err != nil {
 				return 0, err
 			}
-			str, err = cfg.expandArithmText(str)
-			if err != nil {
-				return 0, err
-			}
-			if err := expandedAssocSubscriptError(str); err != nil {
-				return 0, err
-			}
 			file, perr := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader("(("+str+"))"), "")
 			if perr != nil {
 				return 0, &ArithmError{Text: str, Err: arithmParseError(str, perr)}
@@ -248,8 +374,8 @@ func arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 			if perr == nil && len(file.Stmts) == 1 {
 				if ac, ok := file.Stmts[0].Cmd.(*syntax.ArithmCmd); ok && ac.X != nil {
 					// Avoid infinite recursion when the re-parse
-					// produces the same Word back.
-					if _, isWord := ac.X.(*syntax.Word); !isWord {
+					// produces the same inert Word back.
+					if word, isWord := ac.X.(*syntax.Word); !isWord || arithmWordHasParam(word) {
 						prev := cfg.arithmParamValues
 						cfg.arithmParamValues = nil
 						n, err := Arithm(cfg, ac.X)
@@ -311,6 +437,18 @@ func arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 					}
 				}
 				return 0, fmt.Errorf("%s: assignment requires lvalue (error token is %q)", badOp, badOp+" ")
+			}
+			if word, ok := expr.X.(*syntax.Word); ok {
+				if sqText, ok := arithmSingleQuotedText(word); ok {
+					expanded := cfg.expandArithmDiagnosticText(sqText)
+					if arithmBadSingleQuotedText(expanded) {
+						text := "'" + expanded + "'" + op
+						return 0, &ArithmError{
+							Text: text,
+							Err:  fmt.Errorf("arithmetic syntax error: operand expected (error token is \"%s\")", text+" "),
+						}
+					}
+				}
 			}
 			if word, ok := expr.X.(*syntax.Word); ok && arithMissingRHS(word) {
 				return 0, fmt.Errorf("arithmetic syntax error: operand expected (error token is %q)", tail)

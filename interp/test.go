@@ -130,6 +130,7 @@ func (r *Runner) bashTest(ctx context.Context, expr syntax.TestExpr, classic boo
 			}
 			return ""
 		}
+		xStr := r.bashTest(ctx, x.X, classic)
 		yStr := r.bashTest(ctx, x.Y, classic)
 		// `[[ X =~ Y ]]` treats quoted segments of Y as literal —
 		// re-expand Y through RegexPattern when it's a Word so
@@ -142,7 +143,22 @@ func (r *Runner) bashTest(ctx context.Context, expr syntax.TestExpr, classic boo
 				}
 			}
 		}
-		if r.binTest(ctx, x.Op, r.bashTest(ctx, x.X, classic), yStr, classic) {
+		if !classic {
+			switch x.Op {
+			case syntax.TsEql, syntax.TsNeq, syntax.TsLeq, syntax.TsGeq, syntax.TsLss, syntax.TsGtr:
+				if xw, ok := x.X.(*syntax.Word); ok {
+					if src := r.sourceTextRange(xw.Pos(), xw.End(), false); src != "" {
+						xStr = src
+					}
+				}
+				if yw, ok := x.Y.(*syntax.Word); ok {
+					if src := r.sourceTextRange(yw.Pos(), yw.End(), false); src != "" {
+						yStr = src
+					}
+				}
+			}
+		}
+		if r.binTest(ctx, x.Op, xStr, yStr, classic) {
 			return "1"
 		}
 		return ""

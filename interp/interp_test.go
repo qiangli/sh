@@ -1027,7 +1027,11 @@ var runTests = []runTest{
 	},
 	{
 		`declare -A assoc; key='x],b[$(echo uname >&2)'; (( 'assoc[$key]++' )); echo status:$?; declare -p assoc`,
-		"arithmetic syntax error: invalid arithmetic operator (error token is \"],b[$(echo uname >&2)\")\nstatus:1\ndeclare -A assoc\n",
+		"arithmetic syntax error: operand expected (error token is \"'assoc[x\\],b\\[\\$(echo uname >&2)]++' \")\nstatus:1\ndeclare -A assoc\n",
+	},
+	{
+		`declare -A assoc; key='x],b[$(echo uname >&2)'; (( assoc[$key]++ )); (( assoc["$key"]++ )); (( "assoc[$key]++" )); declare -p assoc`,
+		"declare -A assoc=([\"x],b[\\$(echo uname >&2)\"]=\"3\" )\n",
 	},
 	{
 		`declare -ai arr=(1+1); declare -p arr`,
