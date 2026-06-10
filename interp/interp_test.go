@@ -3775,7 +3775,27 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	},
 	{
 		"VAR=4; readonly VAR; VAR=7 :; echo $VAR",
-		"VAR: readonly variable\n4\n #JUSTERR",
+		"VAR: readonly variable\n4\n",
+	},
+	{
+		"set -o posix; VAR=4; readonly VAR; VAR=7 :; echo after",
+		"VAR: readonly variable\nexit status 1 #JUSTERR",
+	},
+	{
+		"set -o posix; VAR=4; readonly VAR; VAR=7; echo after",
+		"VAR: readonly variable\nexit status 1 #JUSTERR",
+	},
+	{
+		"set -o posix; readonly VAR; : ${VAR:=value}; echo after",
+		"VAR: readonly variable\nexit status 1 #JUSTERR",
+	},
+	{
+		"VAR=4; readonly VAR; VAR=7 echo ok; echo status:$?",
+		"VAR: readonly variable\nok\nstatus:0\n",
+	},
+	{
+		"VAR=4; readonly VAR; VAR=7 notthere; echo status:$?",
+		"VAR: readonly variable\n\"notthere\": executable file not found in $PATH\nstatus:127\n #IGNORE",
 	},
 	{
 		"declare -r foo=bar; export foo=",

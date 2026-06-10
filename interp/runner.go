@@ -3778,6 +3778,16 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				}
 			}
 		}
+		if !r.exit.ok() && r.opts[optPosix] {
+			special := len(fields) > 0 && isPosixSpecialBuiltin(fields[0])
+			if !special && len(args) > 0 {
+				special = isPosixSpecialBuiltin(args[0].Lit())
+			}
+			if special {
+				r.exit.exiting = true
+				break
+			}
+		}
 		// bash 5.3: when a CallExpr already has assignment prefixes
 		// (`a=5 b=6 $CMD ...`) AND the remaining words after
 		// expansion are ALL assignment-shaped (typically because
@@ -3816,6 +3826,10 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 
 				name, vr := r.assignVal(name, prev, as, "")
 				r.setVarWithIndex(prev, name, as.Index, vr)
+				if !r.exit.ok() && r.opts[optPosix] {
+					r.exit.exiting = true
+					break
+				}
 
 				if !tracingEnabled {
 					continue
@@ -3881,13 +3895,12 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			// Inline command vars are always exported.
 			vr.Exported = true
 
-			restores = append(restores, restoreVar{name, prev})
-
 			r.setVar(name, vr)
 			if !r.exit.ok() {
 				assignFailed = true
 				break
 			}
+			restores = append(restores, restoreVar{name, prev})
 			if tracingEnabled && as.Value != nil {
 				op := "="
 				if as.Append {
@@ -3906,7 +3919,10 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			}
 		}
 		if assignFailed {
-			break
+			if r.opts[optPosix] && isPosixSpecialBuiltin(fields[0]) {
+				r.exit.exiting = true
+				break
+			}
 		}
 
 		trace.call(fields[0], fields[1:]...)
