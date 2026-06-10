@@ -3165,8 +3165,27 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 	case "bind":
 		// Stub: bind requires readline infrastructure.
 	case "history":
-		// Stub: history requires history infrastructure.
-		r.outf("history: not available in non-interactive mode\n")
+		// Minimal non-interactive validation. Full history storage is
+		// still interactive-only, but bash validates arguments first.
+		if len(args) > 1 {
+			return failf(2, "history: too many arguments\n")
+		}
+		if len(args) == 1 {
+			arg := args[0]
+			if strings.HasPrefix(arg, "-") {
+				switch arg {
+				case "-c", "-a", "-n", "-r", "-w":
+					// Accepted no-op without history storage.
+				default:
+					r.errf("%shistory: %s: invalid option\n", r.bashErrPrefix(pos), arg)
+					r.errf("history: usage: %s\n", bashUsage["history"])
+					exit.code = 2
+					return exit
+				}
+			} else if _, err := strconv.Atoi(arg); err != nil {
+				return failf(2, "history: %s: numeric argument required\n", arg)
+			}
+		}
 	case "suspend":
 		return failf(1, "suspend: not supported\n")
 	case "runner-state":

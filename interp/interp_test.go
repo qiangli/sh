@@ -256,6 +256,8 @@ var runTests = []runTest{
 	{"shift -1", "shift: -1: shift count out of range\nexit status 1 #JUSTERR"},
 	{"shift -- -4", "shift: -4: shift count out of range\nexit status 1 #JUSTERR"},
 	{"shopt -s shift_verbose; shift -1", "shift: -1: shift count out of range\nexit status 1 #JUSTERR"},
+	{"history abcde", "history: abcde: numeric argument required\nexit status 2 #JUSTERR"},
+	{"history 10 42", "history: too many arguments\nexit status 2 #JUSTERR"},
 	{
 		"shouldnotexist",
 		"\"shouldnotexist\": executable file not found in $PATH\nexit status 127 #JUSTERR",
