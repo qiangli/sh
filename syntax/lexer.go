@@ -330,6 +330,12 @@ skipSpace:
 				p.advanceLitNone(r)
 				return
 			}
+			if r == '`' && p.quote == hdocWord && !p.spaced {
+				p.newLit(r)
+				p.rune()
+				p.tok, p.val = _Lit, p.endLit()
+				return
+			}
 			p.tok = p.regToken(r)
 		case '#':
 			// If we're parsing $foo#bar, ${foo}#bar, 'foo'#bar, or "foo"#bar,
@@ -1340,6 +1346,9 @@ func (p *Parser) advanceLitHdoc(r rune) {
 		case '\\': // escaped byte follows
 			p.rune()
 		case '`':
+			if bytes.Contains(stop, []byte("`")) {
+				continue
+			}
 			if !p.backquoteEnd() {
 				p.val = p.endLit()
 				return

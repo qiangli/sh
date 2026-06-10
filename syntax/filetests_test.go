@@ -1265,6 +1265,17 @@ var fileTests = []fileTestCase{
 		}),
 	),
 	fileTest(
+		[]string{"foo <<EO`true`F\nbar\nEO`true`F"},
+		langFile(&Stmt{
+			Cmd: litCall("foo"),
+			Redirs: []*Redirect{{
+				Op:   Hdoc,
+				Word: word(lit("EO"), lit("`"), lit("true"), lit("`"), lit("F")),
+				Hdoc: litWord("bar\n"),
+			}},
+		}),
+	),
+	fileTest(
 		[]string{"foo <<'EOF'\nbar\nNOTEOF`oops`\nEOF"},
 		langFile(&Stmt{
 			Cmd: litCall("foo"),
