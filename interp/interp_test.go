@@ -963,6 +963,26 @@ var runTests = []runTest{
 		"exit: 1\n",
 	},
 	{
+		`f() { :; }; declare -f -a f; declare -f -i f g`,
+		"declare: -a: invalid option\ndeclare: -i: invalid option\nexit status 2 #JUSTERR",
+	},
+	{
+		`f() { :; }; readonly -f f; declare -f +r f`,
+		"declare: f: readonly function\nexit status 1 #JUSTERR",
+	},
+	{
+		`f() { :; }; declare -fr f; declare -F -r`,
+		"declare -fr f\n",
+	},
+	{
+		`declare -f f='() { :; }'`,
+		"declare: cannot use `-f' to make functions\nexit status 1 #JUSTERR",
+	},
+	{
+		`x=1; export -f x`,
+		"export: x: not a function\nexit status 1 #JUSTERR",
+	},
+	{
 		`f() { echo hello; }; declare -f f >/dev/null && echo "f exists"`,
 		"f exists\n",
 	},

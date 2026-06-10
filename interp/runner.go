@@ -1104,6 +1104,20 @@ func validExportedFuncName(name string) bool {
 	return true
 }
 
+func declareFuncInvalidOption(valType string, modes []string) string {
+	switch valType {
+	case "-a", "-A", "-i", "-n":
+		return valType
+	}
+	for _, mode := range modes {
+		switch mode {
+		case "-a", "-A", "-i", "-n":
+			return mode
+		}
+	}
+	return ""
+}
+
 // validBashFuncName reports whether s is a function name bash 5.3
 // would accept. Bash is much more lenient than the identifier syntax
 // (e.g. `+`, `@`, `foo-bar`, `2nd` are all valid function names), but
@@ -4382,6 +4396,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			valType = "-n"
 		}
 		declHadNames := false
+		declFuncInvalidOptReported := false
 		oldDeclCtx := r.declAssignContext
 		r.declAssignContext = true
 		defer func() { r.declAssignContext = oldDeclCtx }()
@@ -4524,6 +4539,19 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				continue
 			}
 			if declQuery == "-f" {
+				if bad := declareFuncInvalidOption(valType, modes); bad != "" {
+					if !declFuncInvalidOptReported {
+						r.errf("%sdeclare: %s: invalid option\n", r.bashErrPrefix(r.curStmtPos), bad)
+						declFuncInvalidOptReported = true
+					}
+					r.exit.code = 2
+					continue
+				}
+				if as.Value != nil || as.Array != nil || as.Index != nil {
+					r.errf("%sdeclare: cannot use `-f' to make functions\n", r.bashErrPrefix(r.curStmtPos))
+					r.exit.code = 1
+					continue
+				}
 				// `export -f <name>` marks the function for export
 				// to child processes via BASH_FUNC_<name>%%=…
 				// envvar. Other `declare -f name` / `typeset -f
@@ -4543,6 +4571,8 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 						continue
 					}
 					if _, ok := r.Funcs[name]; !ok {
+						r.errf("%sexport: %s: not a function\n",
+							r.bashErrPrefix(r.curStmtPos), name)
 						r.exit.code = 1
 						continue
 					}
@@ -4553,6 +4583,19 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 					continue
 				}
 				if body := r.Funcs[name]; body != nil {
+					if slices.Contains(modes, "+r") && r.readonlyFuncs[name] {
+						r.errf("%sdeclare: %s: readonly function\n",
+							r.bashErrPrefix(r.curStmtPos), name)
+						r.exit.code = 1
+						continue
+					}
+					if slices.Contains(modes, "-r") {
+						if r.readonlyFuncs == nil {
+							r.readonlyFuncs = make(map[string]bool)
+						}
+						r.readonlyFuncs[name] = true
+						continue
+					}
 					// `readonly -f NAME` marks the function as
 					// read-only (it can't be unset or redefined).
 					if cm.Variant.Value == "readonly" {
