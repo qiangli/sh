@@ -3182,6 +3182,7 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	{"trap 'echo at_exit' EXIT; trap - EXIT; echo OK", "OK\n"},
 	{"set -e; trap 'echo A' ERR EXIT; false; echo FAIL", "A\nA\nexit status 1"},
 	{"trap 'foobar' UNKNOWN", "trap: UNKNOWN: invalid signal specification\nexit status 2 #JUSTERR"},
+	{"trap -p NOSIG", "trap: NOSIG: invalid signal specification\nexit status 1 #JUSTERR"},
 	{
 		"trap -s",
 		"trap: -s: invalid option\ntrap: usage: trap [-Plp] [[action] signal_spec ...]\nexit status 2 #JUSTERR",

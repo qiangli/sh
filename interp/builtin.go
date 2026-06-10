@@ -2838,7 +2838,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			// Print traps, optionally filtered by signal names
 			filter := make(map[string]bool)
 			for _, a := range args {
-				filter[normalizeSignal(a)] = true
+				sig := normalizeSignal(a)
+				if sig == "" {
+					return failf(1, "trap: %s: invalid signal specification\n", a)
+				}
+				filter[sig] = true
 			}
 			// bash prints `trap -- 'CMD' SIGNAME` with the body in
 			// single-quotes (`'`) and the signal name prefixed with
