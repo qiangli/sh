@@ -2731,7 +2731,18 @@ func (p *Parser) loop(fpos Pos) Loop {
 func (p *Parser) wordIter(ftok string, fpos Pos) *WordIter {
 	wi := &WordIter{}
 	if wi.Name = p.getLit(); wi.Name == nil {
-		p.followErr(fpos, ftok, noQuote("a literal"))
+		if p.lang.in(langBashLike | LangMirBSDKorn) {
+			if w := p.getWord(); w != nil && wordHasParamExp(w) {
+				wi.Name = &Lit{
+					ValuePos: w.Pos(),
+					ValueEnd: w.End(),
+					Value:    funcNameWordText(w),
+				}
+			}
+		}
+		if wi.Name == nil {
+			p.followErr(fpos, ftok, noQuote("a literal"))
+		}
 	}
 	if p.got(semicolon) {
 		p.got(_Newl)
@@ -2754,6 +2765,15 @@ func (p *Parser) wordIter(ftok string, fpos Pos) *WordIter {
 		p.followErr(fpos, ftok+" foo", noQuote("`in`, `do`, `;`, or a newline"))
 	}
 	return wi
+}
+
+func wordHasParamExp(w *Word) bool {
+	for _, part := range w.Parts {
+		if _, ok := part.(*ParamExp); ok {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *Parser) selectClause(s *Stmt) {

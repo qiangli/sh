@@ -346,7 +346,7 @@ var fileTests = []fileTestCase{
 				Y:  litWord("2"),
 			})),
 			Then: litStmts("b"),
-		}, LangBash|LangMirBSDKorn|LangZsh),
+		}, LangBash|LangMirBSDKorn),
 	),
 	fileTest(
 		[]string{
@@ -443,7 +443,7 @@ var fileTests = []fileTestCase{
 				Y:  litWord("2"),
 			})),
 			Do: litStmts("b"),
-		}, LangBash|LangMirBSDKorn|LangZsh),
+		}, LangBash|LangMirBSDKorn),
 	),
 	fileTest(
 		[]string{"until a; do b; done", "until a\ndo\nb\ndone"},
@@ -612,6 +612,20 @@ var fileTests = []fileTestCase{
 				word(litParamExp("i")),
 			)),
 		}, LangBash|LangMirBSDKorn|LangZsh),
+	),
+	fileTest(
+		[]string{"select $1 in a b c; do echo $REPLY; done"},
+		langFile(&ForClause{
+			Select: true,
+			Loop: &WordIter{
+				Name:  lit("$1"),
+				Items: litWords("a", "b", "c"),
+			},
+			Do: stmts(call(
+				litWord("echo"),
+				word(litParamExp("REPLY")),
+			)),
+		}, LangBash|LangMirBSDKorn),
 	),
 	fileTest(
 		[]string{"select foo bar"},

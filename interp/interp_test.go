@@ -2958,6 +2958,14 @@ var runTests = []runTest{
 		"1) foo\n2) bar\n3) baz\npick one: Selected baz\n",
 	},
 	{
+		`(set -o posix; for invalid-name in a; do echo body; done; echo after); echo outer:$?`,
+		"`invalid-name': not a valid identifier\nouter:2\n",
+	},
+	{
+		`bad_select() { select $1 in a b c; do echo $REPLY; done; }; bad_select "a b"; echo status:$?`,
+		"`$1': not a valid identifier\nstatus:1\n",
+	},
+	{
 		`opts=(foo bar baz); select opt in ${opts[@]}; do echo "Selected $opt"; break; done <<< 99`,
 		"1) foo\n2) bar\n3) baz\n#? Selected \n",
 	},

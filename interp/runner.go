@@ -4116,7 +4116,13 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			if !syntax.ValidName(name) {
 				r.errf("%s`%s': not a valid identifier\n",
 					r.bashErrPrefix(y.Pos()), name)
-				r.exit.code = 1
+				if r.opts[optPosix] && !cm.Select {
+					r.exit.code = 2
+					r.exit.err = ExitStatus(2)
+					r.exit.exiting = true
+				} else {
+					r.exit.code = 1
+				}
 				return
 			}
 			items := r.Params // for i; do ...
