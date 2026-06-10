@@ -3868,6 +3868,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		}
 		var restores []restoreVar
 
+		assignFailed := false
 		for _, as := range cm.Assigns {
 			name := as.Name.Value
 			prev := r.lookupVar(name)
@@ -3883,6 +3884,10 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			restores = append(restores, restoreVar{name, prev})
 
 			r.setVar(name, vr)
+			if !r.exit.ok() {
+				assignFailed = true
+				break
+			}
 			if tracingEnabled && as.Value != nil {
 				op := "="
 				if as.Append {
@@ -3899,6 +3904,9 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				trace.stringf("%s%s%s", name, op, quoted)
 				trace.newLineFlush()
 			}
+		}
+		if assignFailed {
+			break
 		}
 
 		trace.call(fields[0], fields[1:]...)

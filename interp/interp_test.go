@@ -3717,6 +3717,10 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 		"foo: readonly variable\nexit status 1 #JUSTERR",
 	},
 	{
+		"VAR=4; readonly VAR; VAR=7 :; echo $VAR",
+		"VAR: readonly variable\n4\n #JUSTERR",
+	},
+	{
 		"declare -r foo=bar; export foo=",
 		"foo: readonly variable\nexit status 1 #JUSTERR",
 	},
