@@ -4162,6 +4162,7 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	{"umask 022; umask g+u,o+rwx-u; umask -S", "u=rwx,g=rwx,o=\n"},
 	{"umask 022; umask +xwr; umask -S", "u=rwx,g=rwx,o=rwx\n"},
 	{"umask 999", "umask: 999: octal number out of range\nexit status 1"},
+	{"umask -i", "umask: -i: invalid option\numask: usage: umask [-p] [-S] [mode]\nexit status 2 #JUSTERR"},
 
 	// logout from a non-login shell errors with the bash-compatible
 	// message. The login-shell success path is covered in

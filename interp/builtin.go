@@ -3386,7 +3386,10 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				continue
 			}
 			if strings.HasPrefix(args[0], "-") && args[0] != "-" {
-				return failf(2, "umask: %s: invalid option\n", args[0])
+				r.errf("%sumask: %s: invalid option\n", r.bashErrPrefix(pos), args[0])
+				r.errf("umask: usage: %s\n", bashUsage["umask"])
+				exit.code = 2
+				return exit
 			}
 			break
 		}
