@@ -1108,6 +1108,10 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			break
 		}
 		remaining := fp.args()
+		if enabled, ok := r.noOpSetState["hashall"]; ok && !enabled &&
+			(len(remaining) > 0 || explicitPath != "" || printPath || deleteNames) {
+			return failf(1, "hash: hashing disabled\n")
+		}
 		hashListEntry := func(name string, entry cmdHashEntry) {
 			r.outf("builtin hash -p %s %s\n", entry.path, name)
 		}
