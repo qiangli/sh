@@ -4607,6 +4607,19 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				continue
 			}
 			if as.Naked {
+				if as.Index != nil {
+					if cm.Variant.Value == "readonly" {
+						ref := name
+						if w, ok := as.Index.(*syntax.Word); ok {
+							ref += "[" + r.literal(w) + "]"
+						}
+						r.errf("%sreadonly: `%s': not a valid identifier\n",
+							r.bashErrPrefix(r.curStmtPos), ref)
+						r.exit.code = 1
+						continue
+					}
+					vr.Kind = expand.Indexed
+				}
 				switch valType {
 				case "-A":
 					// `declare -A NAME` (no value) declares an
@@ -4633,7 +4646,9 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 					// value as the reference target.
 					vr.Kind = expand.NameRef
 				default:
-					if !vr.Declared() {
+					if as.Index != nil {
+						vr.Kind = expand.Indexed
+					} else if !vr.Declared() {
 						vr.Kind = expand.String
 					} else {
 						vr.Kind = expand.KeepValue

@@ -644,6 +644,11 @@ func (r *Runner) printArrayVars(kind string) {
 	slices.Sort(names)
 	for _, name := range names {
 		vr := r.lookupVar(name)
+		if want == expand.Indexed {
+			if builtin, ok := bashBuiltinArrayDeclVar(name, r); ok {
+				vr = builtin
+			}
+		}
 		if vr.Kind != want {
 			continue
 		}
@@ -652,8 +657,42 @@ func (r *Runner) printArrayVars(kind string) {
 		case "BASH_ALIASES", "BASH_CMDS", "BASH_ARGC", "BASH_ARGV", "BASH_LINENO", "BASH_SOURCE", "DIRSTACK", "FUNCNAME":
 			isBuiltin = true
 		}
+		if name == "FUNCNAME" && !vr.Set && len(vr.List) == 0 {
+			isBuiltin = false
+		}
 		r.outf("%s\n", formatDeclareVar(name, vr, isBuiltin))
 	}
+}
+
+func bashBuiltinArrayDeclVar(name string, r *Runner) (expand.Variable, bool) {
+	switch name {
+	case "BASH_ARGC", "BASH_ARGV":
+		return expand.Variable{Kind: expand.Indexed, Set: true, List: []string{}}, true
+	case "BASH_LINENO":
+		vr := r.lookupVar(name)
+		if len(vr.List) == 0 {
+			vr.Set = true
+			vr.List = []string{"0"}
+		}
+		return vr, true
+	case "BASH_SOURCE":
+		vr := r.lookupVar(name)
+		if len(vr.List) == 0 && r.filename != "" {
+			vr.Set = true
+			vr.List = []string{r.filename}
+		}
+		return vr, true
+	case "DIRSTACK":
+		return expand.Variable{Kind: expand.Indexed, Set: true, List: []string{}}, true
+	case "FUNCNAME":
+		vr := r.lookupVar(name)
+		if len(vr.List) == 0 {
+			vr.Set = false
+			vr.List = nil
+		}
+		return vr, true
+	}
+	return expand.Variable{}, false
 }
 
 // printNamerefVars writes every nameref-typed variable to stdout in

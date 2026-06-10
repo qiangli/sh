@@ -983,6 +983,10 @@ var runTests = []runTest{
 		"declare -a arr\ndeclare -a arr=()\n",
 	},
 	{
+		`declare -a | grep -E '^(declare -a BASH_ARGC|declare -a BASH_ARGV|declare -a FUNCNAME)'`,
+		"declare -a BASH_ARGC=()\ndeclare -a BASH_ARGV=()\ndeclare -a FUNCNAME\n",
+	},
+	{
 		`declare -A assoc; declare -p assoc; assoc=(); declare -p assoc`,
 		"declare -A assoc\ndeclare -A assoc=()\n",
 	},
@@ -1001,6 +1005,14 @@ var runTests = []runTest{
 	{
 		`readonly -a arr=(); declare -p arr`,
 		"declare -ar arr=()\n",
+	},
+	{
+		`declare -r c[100]; declare -p c`,
+		"declare -ar c\n",
+	},
+	{
+		`readonly a[5]`,
+		"readonly: `a[5]': not a valid identifier\nexit status 1 #JUSTERR",
 	},
 	{
 		`export e=1; declare -p e`,
