@@ -1100,7 +1100,10 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				// `hash -d NAME`: forget specific name.
 				deleteNames = true
 			default:
-				return failf(1, "hash: %s: invalid option\n", flag)
+				r.errf("%shash: %s: invalid option\n", r.bashErrPrefix(pos), flag)
+				r.errf("hash: usage: %s\n", bashUsage["hash"])
+				exit.code = 1
+				return exit
 			}
 		}
 		if clearHash {
@@ -1117,7 +1120,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		}
 		if deleteNames {
 			if len(remaining) == 0 {
-				break
+				return failf(2, "hash: -d: option requires an argument\n")
 			}
 			for _, name := range remaining {
 				if _, ok := r.cmdHashTable[name]; !ok {

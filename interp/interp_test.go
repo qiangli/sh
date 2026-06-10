@@ -3156,6 +3156,8 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	// hash
 	{"hash $PATH_PROG", ""},
 	{"set +o hashall; hash -p /bin/sh sh", "hash: hashing disabled\nexit status 1 #JUSTERR"},
+	{"hash -v", "hash: -v: invalid option\nhash: usage: hash [-lr] [-p pathname] [-dt] [name ...]\nexit status 1 #JUSTERR"},
+	{"hash -d", "hash: -d: option requires an argument\nexit status 2 #JUSTERR"},
 
 	// trap
 	{"trap 'echo at_exit' EXIT; true", "at_exit\n"},
