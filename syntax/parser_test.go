@@ -109,6 +109,18 @@ func TestParseErr(t *testing.T) {
 	}
 }
 
+func TestParseHeredocEOFWarningEmptyDelimiter(t *testing.T) {
+	var warnings []string
+	p := NewParser(HeredocEOFWarning(func(startLine, eofLine int, stop string) {
+		warnings = append(warnings, fmt.Sprintf("%d:%d:%q", startLine, eofLine, stop))
+	}))
+	f, err := p.Parse(strings.NewReader("cat <<\nhi\nthere"), "")
+	qt.Assert(t, qt.IsNil(err))
+	qt.Assert(t, qt.DeepEquals(warnings, []string{`1:2:""`}))
+	qt.Assert(t, qt.Equals(f.Stmts[0].Redirs[0].Word.Lit(), ""))
+	qt.Assert(t, qt.Equals(f.Stmts[0].Redirs[0].Hdoc.Lit(), "hi\nthere"))
+}
+
 func TestParseConfirm(t *testing.T) {
 	if testing.Short() {
 		t.Skip("calling external shells is slow")

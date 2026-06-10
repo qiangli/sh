@@ -964,6 +964,10 @@ func (p *Parser) followWordTok(tok token, pos Pos) *Word {
 	return w
 }
 
+func (p *Parser) emptyHdocWord(pos Pos) *Word {
+	return p.wordOne(&Lit{ValuePos: pos, ValueEnd: pos})
+}
+
 func (p *Parser) stmtEnd(n Node, start, end string) Pos {
 	pos, ok := p.gotRsrv(end)
 	if !ok {
@@ -2265,7 +2269,11 @@ func (p *Parser) doRedirect(s *Stmt) {
 		old := p.quote
 		p.quote, p.forbidNested = hdocWord, true
 		p.heredocs = append(p.heredocs, r)
-		r.Word = p.followWordTok(token(r.Op), r.OpPos)
+		if p.heredocEOFWarning != nil && p.lang.in(langBashLike) && (p.tok == _Newl || p.tok == _EOF) {
+			r.Word = p.emptyHdocWord(posAddCol(r.OpPos, len(r.Op.String())))
+		} else {
+			r.Word = p.followWordTok(token(r.Op), r.OpPos)
+		}
 		p.quote, p.forbidNested = old, false
 		if p.tok == _Newl {
 			if len(p.accComs) > 0 {
