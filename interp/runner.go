@@ -646,6 +646,9 @@ func (r *Runner) bashArithmError(expr syntax.ArithmExpr, err error, command bool
 	if expr != nil {
 		line = int(expr.Pos().Line())
 	}
+	if exprTextOverride != "" && r.curStmtPos.IsValid() {
+		line = int(r.curStmtPos.Line())
+	}
 	compactErrSep := false
 	if command && (strings.HasSuffix(exprText, "=") || strings.HasSuffix(exprText, "= ")) &&
 		strings.Contains(bashMsg, "arithmetic syntax error: operand expected") &&
