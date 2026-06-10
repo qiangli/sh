@@ -1417,6 +1417,12 @@ func (p *Parser) quotedHdocWord() *Word {
 	stop := p.hdocStops[len(p.hdocStops)-1]
 	for ; ; r = p.rune() {
 		if r == utf8.RuneSelf {
+			if p.heredocEOFWarning != nil {
+				val := p.endLit()
+				if val != "" {
+					return p.wordOne(p.lit(pos, val))
+				}
+			}
 			return nil
 		}
 		lineValStart := len(p.litBs) - 1

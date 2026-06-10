@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"os"
 	"strings"
@@ -264,6 +265,41 @@ func TestRunKeepsBashConditionalAfterRuntimePosix(t *testing.T) {
 	}
 	if stderr.Len() > 0 {
 		t.Fatalf("unexpected stderr: %s", stderr.String())
+	}
+}
+
+func TestRunQuotedEmptyHeredocEOFKeepsBody(t *testing.T) {
+	t.Parallel()
+	src := "cat <<''\nhi\nthere\n''\n"
+	var stdout, stderr bytes.Buffer
+	parser := syntax.NewParser(
+		syntax.Variant(syntax.LangBash),
+		syntax.HeredocEOFWarning(func(startLine, eofLine int, stop string) {
+			stderr.WriteString("heredoc.tests: line 4: warning: here-document at line 1 delimited by end-of-file (wanted `')\n")
+		}),
+	)
+	file, err := parser.Parse(strings.NewReader(src), "heredoc.tests")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := interp.New(
+		interp.StdIO(nil, &stdout, &stderr),
+		interp.Env(expand.ListEnviron("PATH=/usr/bin:/bin")),
+		interp.WithBashCompatErrors(true),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runErr := r.Run(context.Background(), file)
+	if got, want := stdout.String(), "hi\nthere\n''\n"; got != want {
+		t.Fatalf("stdout mismatch\nwant:\n%q\ngot:\n%q\nstderr:\n%s\nrunErr:%v", want, got, stderr.String(), runErr)
+	}
+	wantErr := "heredoc.tests: line 4: warning: here-document at line 1 delimited by end-of-file (wanted `')\n"
+	if got := stderr.String(); got != wantErr {
+		t.Fatalf("stderr mismatch\nwant:\n%q\ngot:\n%q\nrunErr:%v", wantErr, got, runErr)
+	}
+	if runErr != nil {
+		t.Fatalf("run error: %v\nstdout:\n%s\nstderr:\n%s", runErr, stdout.String(), stderr.String())
 	}
 }
 
