@@ -142,6 +142,44 @@ func containsArithOp(s string) bool {
 	return false
 }
 
+func (cfg *Config) expandArithmText(s string) (string, error) {
+	if !strings.ContainsAny(s, "$`") {
+		return s, nil
+	}
+	file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(": "+s), "")
+	if err != nil || len(file.Stmts) != 1 {
+		return s, nil
+	}
+	call, ok := file.Stmts[0].Cmd.(*syntax.CallExpr)
+	if !ok || len(call.Args) < 2 {
+		return s, nil
+	}
+	args := make([]string, 0, len(call.Args)-1)
+	for _, arg := range call.Args[1:] {
+		val, err := Literal(cfg, arg)
+		if err != nil {
+			return "", err
+		}
+		args = append(args, val)
+	}
+	return strings.Join(args, " "), nil
+}
+
+func expandedAssocSubscriptError(s string) error {
+	idx := strings.Index(s, "],")
+	if idx < 0 {
+		return nil
+	}
+	token := s[idx:]
+	if !strings.Contains(token, "[") {
+		return nil
+	}
+	if end := strings.LastIndex(token, "]"); end > 0 {
+		token = token[:end]
+	}
+	return fmt.Errorf("arithmetic syntax error: invalid arithmetic operator (error token is %q)", token)
+}
+
 func Arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 	cfg = prepareConfig(cfg)
 	if cfg.arithmParamValues != nil {
@@ -185,9 +223,6 @@ func arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 			}
 			str = val
 		}
-		if token := literalDollarArithmToken(str); token != "" {
-			return 0, fmt.Errorf("arithmetic syntax error: operand expected (error token is %q)", token)
-		}
 		if strings.TrimSpace(str) == "}" {
 			return 0, fmt.Errorf("arithmetic syntax error: operand expected (error token is %q)", "}")
 		}
@@ -196,7 +231,17 @@ func arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 		// operators — `let "jv *= 2"` quotes the whole expression
 		// in a Word, but we still need to evaluate it.
 		if containsArithOp(str) {
-			file, perr := syntax.NewParser().Parse(strings.NewReader("(("+str+"))"), "")
+			if err := expandedAssocSubscriptError(str); err != nil {
+				return 0, err
+			}
+			str, err = cfg.expandArithmText(str)
+			if err != nil {
+				return 0, err
+			}
+			if err := expandedAssocSubscriptError(str); err != nil {
+				return 0, err
+			}
+			file, perr := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader("(("+str+"))"), "")
 			if perr != nil {
 				return 0, &ArithmError{Text: str, Err: arithmParseError(str, perr)}
 			}
@@ -205,7 +250,10 @@ func arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 					// Avoid infinite recursion when the re-parse
 					// produces the same Word back.
 					if _, isWord := ac.X.(*syntax.Word); !isWord {
+						prev := cfg.arithmParamValues
+						cfg.arithmParamValues = nil
 						n, err := Arithm(cfg, ac.X)
+						cfg.arithmParamValues = prev
 						if err != nil {
 							if _, ok := err.(*ArithmError); ok {
 								return 0, err
@@ -216,6 +264,9 @@ func arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 					}
 				}
 			}
+		}
+		if token := literalDollarArithmToken(str); token != "" {
+			return 0, fmt.Errorf("arithmetic syntax error: operand expected (error token is %q)", token)
 		}
 		n, err := atoiCheck(str)
 		if err != nil {
