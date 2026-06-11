@@ -5,6 +5,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -15,6 +16,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"golang.org/x/term"
 
@@ -31,6 +33,7 @@ var (
 	noprofile = flag.Bool("noprofile", false, "do not read /etc/profile or ~/.bashy_profile")
 	login     = flag.Bool("login", false, "act as a login shell")
 	pretty    = flag.Bool("pretty-print", false, "pretty-print shell input")
+	forceI    = flag.Bool("i", false, "force the shell to run interactively")
 	optsOn    multiFlag
 	optsOff   multiFlag
 	setOff    multiFlag
@@ -155,6 +158,11 @@ func splitCombinedShortFlags(args []string) []string {
 			out = append(out, "-o", "braceexpand")
 			continue
 		}
+		if a == "-i" {
+			// Invocation-only flag, not a set option.
+			out = append(out, a)
+			continue
+		}
 		if len(a) == 2 && a[0] == '-' {
 			if opt, ok := shortToOpt[a[1]]; ok {
 				out = append(out, "-o", opt)
@@ -178,7 +186,7 @@ func splitCombinedShortFlags(args []string) []string {
 		}
 		allKnown := true
 		for j := 1; j < len(a); j++ {
-			if _, ok := shortToOpt[a[j]]; !ok && a[j] != 'c' {
+			if _, ok := shortToOpt[a[j]]; !ok && a[j] != 'c' && a[j] != 'i' {
 				allKnown = false
 				break
 			}
@@ -196,6 +204,10 @@ func splitCombinedShortFlags(args []string) []string {
 			}
 		}
 		for _, c := range bools {
+			if c == 'i' {
+				out = append(out, "-i")
+				continue
+			}
 			out = append(out, "-o", shortToOpt[c])
 		}
 		for _, c := range vals {
@@ -508,6 +520,21 @@ func runAll() error {
 				return runInteractive(r, os.Stdin, os.Stdout, os.Stderr)
 			})
 		}
+		if *forceI {
+			// `bash -i` with a non-tty stdin: forced-interactive
+			// line loop with prompt echo and history saving, but no
+			// readline. With `-n` (noexec) lines are only recorded.
+			loadStartupFiles(r, true)
+			noexec := false
+			for _, o := range optsOn {
+				if o == "noexec" {
+					noexec = true
+				}
+			}
+			return runWithLoginLogout(r, func() error {
+				return runForcedInteractive(r, noexec)
+			})
+		}
 		loadStartupFiles(r, false)
 		return runWithLoginLogout(r, func() error {
 			return run(r, os.Stdin, "")
@@ -525,6 +552,70 @@ func runAll() error {
 	return runWithLoginLogout(r, func() error {
 		return runPath(r, path)
 	})
+}
+
+// runForcedInteractive emulates `bash -i` when stdin is not a terminal:
+// each input line is echoed to stderr after the primary prompt, recorded
+// into the session history, and (unless noexec) executed. At EOF the
+// shell prints `exit` and writes the history file, truncated to
+// HISTFILESIZE entries, with `#<epoch>` timestamp lines when
+// HISTTIMEFORMAT is set (even if empty), matching bash.
+func runForcedInteractive(r *interp.Runner, noexec bool) error {
+	ps1 := os.Getenv("PS1")
+	if ps1 == "" {
+		ps1 = "$ "
+	}
+	var entries []string
+	parser := syntax.NewParser(syntax.Variant(syntax.LangBash), syntax.KeepComments(true))
+	sc := bufio.NewScanner(os.Stdin)
+	for sc.Scan() {
+		line := sc.Text()
+		fmt.Fprintf(os.Stderr, "%s%s\n", ps1, line)
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		entries = append(entries, line)
+		if noexec {
+			continue
+		}
+		file, err := parser.Parse(strings.NewReader(line), "bashy")
+		if err != nil {
+			continue
+		}
+		_ = r.Run(context.Background(), file)
+		if r.Exited() {
+			saveInteractiveHistory(entries)
+			return nil
+		}
+	}
+	fmt.Fprintf(os.Stderr, "%sexit\n", ps1)
+	saveInteractiveHistory(entries)
+	return nil
+}
+
+// saveInteractiveHistory writes the session history to $HISTFILE and
+// truncates it to $HISTFILESIZE entries, like an interactive bash exit.
+func saveInteractiveHistory(entries []string) {
+	path := os.Getenv("HISTFILE")
+	if path == "" || len(entries) == 0 {
+		return
+	}
+	_, timestamps := os.LookupEnv("HISTTIMEFORMAT")
+	if v, ok := os.LookupEnv("HISTFILESIZE"); ok {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n >= 0 && len(entries) > n {
+			entries = entries[len(entries)-n:]
+		}
+	}
+	var sb strings.Builder
+	now := time.Now().Unix()
+	for _, e := range entries {
+		if timestamps {
+			fmt.Fprintf(&sb, "#%d\n", now)
+		}
+		sb.WriteString(e)
+		sb.WriteByte('\n')
+	}
+	_ = os.WriteFile(path, []byte(sb.String()), 0o600)
 }
 
 func defaultCommandArgv0(arg0 string) string {
