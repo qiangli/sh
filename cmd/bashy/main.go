@@ -1817,6 +1817,14 @@ func rewriteParserErrorText(src string, pe syntax.ParseError) string {
 		strings.Contains(pe.Text, "statement must end with") {
 		return "syntax error near unexpected token `)'"
 	}
+	if commandSubstOpenBefore([]byte(src), pe.Pos) &&
+		strings.Contains(pe.Text, "must be followed by a statement list") {
+		return "syntax error near unexpected token `)'"
+	}
+	if commandSubstOpenBefore([]byte(src), pe.Pos) &&
+		strings.Contains(pe.Text, "must be followed by `do`") {
+		return "syntax error near unexpected token `done' while looking for matching `)'"
+	}
 	if commandSubstOpenBefore([]byte(src), pe.Pos) || strings.Contains(src, "$(") {
 		switch {
 		case strings.Contains(pe.Text, "`done` can only"):

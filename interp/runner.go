@@ -3582,13 +3582,6 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 		return
 	}
 	oldCurStmtPos := r.curStmtPos
-	if r.subshellLevel > 0 {
-		switch st.Cmd.(type) {
-		case *syntax.WhileClause, *syntax.ForClause:
-			pos := st.Pos()
-			r.curStmtPos = syntax.NewPos(pos.Offset(), pos.Line()+1, pos.Col())
-		}
-	}
 	for _, rd := range st.Redirs {
 		cls, err := r.redir(ctx, rd)
 		if err != nil {
@@ -4141,7 +4134,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			if !syntax.ValidName(name) {
 				r.errf("%s`%s': not a valid identifier\n",
 					r.bashErrPrefix(y.Pos()), name)
-				if r.opts[optPosix] && !cm.Select {
+				if r.opts[optPosix] {
 					r.exit.code = 2
 					r.exit.err = ExitStatus(2)
 					r.exit.exiting = true
