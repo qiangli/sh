@@ -148,6 +148,11 @@ func (o *overlayEnviron) holdsLocally(name string) bool {
 	return ok
 }
 
+func (o *overlayEnviron) hasLocalVar(name string) bool {
+	vr, ok := o.values[o.normalize(name)]
+	return ok && vr.Local
+}
+
 // unsetLocalFromChild implements bash's default `unset` semantics for
 // a variable that is local to a *previous* function scope: the local
 // is removed entirely, uncovering the variable beneath (an outer local
@@ -766,6 +771,32 @@ func (r *Runner) printNamerefVars() {
 	}
 }
 
+func (r *Runner) printReadonlyVars() {
+	seen := map[string]bool{}
+	r.writeEnv.Each(func(name string, vr expand.Variable) bool {
+		if vr.ReadOnly {
+			seen[name] = true
+		}
+		return true
+	})
+	for _, name := range []string{"BASHOPTS", "BASH_VERSINFO", "GROUPS", "SHELLOPTS"} {
+		if r.lookupVar(name).ReadOnly {
+			seen[name] = true
+		}
+	}
+	names := make([]string, 0, len(seen))
+	for name := range seen {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	for _, name := range names {
+		vr := r.lookupVar(name)
+		if vr.ReadOnly {
+			r.outf("%s\n", formatDeclareVar(name, vr, false))
+		}
+	}
+}
+
 // formatLocalVar renders a single variable in bash 5.3's `local`
 // listing shape: `declare <flags> name=value`. `<flags>` covers
 // `-a` (indexed), `-A` (associative), `-i`/`-r`/`-x`/etc., or `--`
@@ -946,15 +977,7 @@ func (r *Runner) functionsJSON(readonlyOnly, exportedOnly bool) []map[string]any
 	return funcs
 }
 
-// setGlobalVarString assigns name=value at the outermost (global)
-// scope, bypassing any in-flight function overlays. Used for bash
-// 5.3 `{var}` redirections, which set the captured fd globally even
-// when the redirect is inside a function body.
-func (r *Runner) setGlobalVarString(name, value string) {
-	if n, _ := r.lookupVar(name).Resolve(r.writeEnv); n != "" {
-		name = n
-	}
-	vr := expand.Variable{Set: true, Kind: expand.String, Str: value}
+func (r *Runner) globalWriteEnv() expand.WriteEnviron {
 	env := r.writeEnv
 	for {
 		ol, ok := env.(*overlayEnviron)
@@ -967,14 +990,31 @@ func (r *Runner) setGlobalVarString(name, value string) {
 		}
 		env = nextWE
 	}
-	wenv, ok := env.(expand.WriteEnviron)
-	if !ok {
-		r.setVarString(name, value)
-		return
+	wenv, _ := env.(expand.WriteEnviron)
+	return wenv
+}
+
+func (r *Runner) lookupGlobalVar(name string) expand.Variable {
+	wenv := r.globalWriteEnv()
+	if wenv == nil {
+		return r.lookupVar(name)
 	}
-	if err := wenv.Set(name, vr); err != nil {
-		r.setVarString(name, value)
+	if vr := wenv.Get(name); vr.Declared() {
+		return vr
 	}
+	return expand.Variable{}
+}
+
+// setGlobalVarString assigns name=value at the outermost (global)
+// scope, bypassing any in-flight function overlays. Used for bash
+// 5.3 `{var}` redirections, which set the captured fd globally even
+// when the redirect is inside a function body.
+func (r *Runner) setGlobalVarString(name, value string) {
+	if n, _ := r.lookupVar(name).Resolve(r.writeEnv); n != "" {
+		name = n
+	}
+	vr := expand.Variable{Set: true, Kind: expand.String, Str: value}
+	r.setGlobalVar(name, vr)
 }
 
 // bashShoptEnabled reports the state of a bash `shopt` option by name.
@@ -1303,13 +1343,10 @@ func (r *Runner) setVar(name string, vr expand.Variable) {
 		}
 	}
 	// `local x` (no value) creates a fresh unset local; bash only
-	// inherits the previous scope's value with shopt localvar_inherit
-	// or when x sits in the temporary environment. We don't track
-	// tempenv variables separately, but they are always exported, so
-	// exported parents keep the historical inherit behavior as a proxy.
+	// inherits the previous scope's value with shopt localvar_inherit.
 	// Explicitly-requested attributes like `-i`/`-u` are kept, but the
 	// parent's value is not.
-	if vr.Local && vr.Kind == expand.KeepValue && !prev.Exported &&
+	if vr.Local && vr.Kind == expand.KeepValue &&
 		!r.bashShoptEnabled("localvar_inherit") {
 		if ol, ok := r.writeEnv.(*overlayEnviron); ok && ol.funcScope && !ol.holdsLocally(name) {
 			vr = expand.Variable{
@@ -1354,6 +1391,33 @@ func (r *Runner) setVar(name string, vr expand.Variable) {
 		r.exit.code = 1
 		return
 	}
+}
+
+func (r *Runner) rejectDeclareConversion(name string, prev, vr expand.Variable) bool {
+	if !r.declAssignContext || !prev.Declared() {
+		return false
+	}
+	var convErr string
+	switch {
+	case prev.Kind == expand.Indexed && vr.Kind == expand.Associative:
+		convErr = "cannot convert indexed to associative array"
+	case prev.Kind == expand.Associative && vr.Kind == expand.Indexed:
+		convErr = "cannot convert associative to indexed array"
+	}
+	if convErr == "" {
+		return false
+	}
+	if r.setVarArrayLiteral && len(r.callStack) > 0 {
+		r.errf("%s%s: %s: %s\n", r.bashErrPrefix(r.curStmtPos),
+			r.callStack[len(r.callStack)-1].funcName, name, convErr)
+	}
+	builtin := r.setVarFromBuiltin
+	if builtin == "" {
+		builtin = "declare"
+	}
+	r.errf("%s%s: %s: %s\n", r.bashErrPrefix(r.curStmtPos), builtin, name, convErr)
+	r.exit.code = 1
+	return true
 }
 
 func (r *Runner) setVarWithIndex(prev expand.Variable, name string, index syntax.ArithmExpr, vr expand.Variable) {

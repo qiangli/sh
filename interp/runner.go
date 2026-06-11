@@ -4723,7 +4723,15 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 					case "-r", "+r":
 						modes = append(modes, flag)
 					case "-a", "-A", "-n":
+						// `export -n NAME` removes the export
+						// attribute; it is not a nameref flag.
+						if cm.Variant.Value == "export" && flag == "-n" {
+							modes = append(modes, "+x")
+							break
+						}
 						valType = flag
+					case "-I":
+						modes = append(modes, flag)
 					case "-i":
 						// `-i` is an attribute that can coexist
 						// with `-a`/`-A` (indexed/assoc array).
@@ -4909,6 +4917,15 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 						continue
 					}
 				}
+				// `local -p NAME` only prints variables local to
+				// the current function scope.
+				if cm.Variant.Value == "local" {
+					if ol, ok := r.writeEnv.(*overlayEnviron); !ok || !ol.hasLocalVar(name) {
+						r.errf(r.bashErrPrefix(r.curStmtPos)+"local: %s: not found\n", name)
+						r.exit.code = 1
+						continue
+					}
+				}
 				// declare -p name: print variable with attributes.
 				vr := r.lookupVar(name)
 				if !vr.Declared() {
@@ -4924,6 +4941,9 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				continue
 			}
 			vr := r.lookupVar(name)
+			if global {
+				vr = r.lookupGlobalVar(name)
+			}
 			// Set the Integer attribute *before* assignVal so the
 			// initial assignment can evaluate the RHS as arithmetic.
 			if valType == "-i" || slices.Contains(modes, "-i") {
@@ -4983,6 +5003,9 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				default:
 					if as.Index != nil {
 						vr.Kind = expand.Indexed
+					} else if slices.Contains(modes, "-I") {
+						// Keep the value and attributes found in an
+						// outer scope for `local -I NAME`.
 					} else if !vr.Declared() {
 						vr.Kind = expand.String
 					} else {
@@ -5099,7 +5122,14 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 					continue
 				}
 			}
-			r.setVar(name, vr)
+			if global {
+				if r.rejectDeclareConversion(name, r.lookupGlobalVar(name), vr) {
+					continue
+				}
+				r.setGlobalVar(name, vr)
+			} else {
+				r.setVar(name, vr)
+			}
 		}
 		// Handle declare -F/-f with no arguments: list all functions.
 		// Bash sorts the listing by function name. `readonly -f`
@@ -5148,6 +5178,9 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		if !declHadNames && declQuery == "-p" && jsonMode {
 			r.exit = r.jsonOut(map[string]any{"variables": r.variablesJSON(false)})
 			return
+		}
+		if !declHadNames && declQuery == "-p" && !jsonMode && cm.Variant.Value == "readonly" {
+			r.printReadonlyVars()
 		}
 		// Bash `local` with no args lists every variable local to
 		// the current function scope in `name=value` form (arrays
