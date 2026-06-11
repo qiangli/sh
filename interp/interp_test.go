@@ -6687,6 +6687,30 @@ func TestRunnerSubshell(t *testing.T) {
 	}
 }
 
+func TestAssignValNilIndex(t *testing.T) {
+	t.Parallel()
+
+	src := "declare -A a; a[]=x"
+	file, err := syntax.NewParser().Parse(strings.NewReader(src), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	r, err := interp.New(interp.StdIO(nil, &out, &out))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), runnerRunTimeout)
+	defer cancel()
+	err = r.Run(ctx, file)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(out.String(), "bad array subscript") {
+		t.Fatalf("unexpected output: %q", out.String())
+	}
+}
+
 func TestRunnerNonFileStdin(t *testing.T) {
 	t.Parallel()
 
