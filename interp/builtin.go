@@ -227,6 +227,10 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		}
 		return failf(1, "%s: invalid name %q\n", builtin, ident)
 	}
+	// Emulate bash's reader-level history recording: every builtin
+	// dispatch advances the history cursor up to its source line. No-op
+	// unless a script has turned on `set -o history`.
+	r.histSync(ctx, pos)
 	switch name {
 	case ":", "true":
 	case "false":
@@ -314,6 +318,8 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			}
 			break
 		}
+		prevHistOn := r.noOpSetState["history"]
+		prevHistExp := r.noOpSetState["histexpand"]
 		if err := Params(args...)(r); err != nil {
 			if err.Error() == "+r: invalid option" {
 				r.errf("%sset: +r: invalid option\n", r.bashErrPrefix(pos))
@@ -335,6 +341,22 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			return failf(2, "set: %v\n", err)
 		}
 		r.updateExpandOpts()
+		if now := r.noOpSetState["history"]; now != prevHistOn {
+			r.histSetEnabled(now, pos)
+		}
+		if now := r.noOpSetState["histexpand"]; now != prevHistExp {
+			r.histSetExpand(now)
+		}
+		// `set -H` / `set +H` aren't modeled in noOpSetState; scan the
+		// flag arguments for the histexpand toggle.
+		for _, a := range args {
+			if a == "--" || a == "-" || len(a) < 2 || (a[0] != '-' && a[0] != '+') {
+				break
+			}
+			if a[1] != 'o' && strings.ContainsRune(a[1:], 'H') {
+				r.histSetExpand(a[0] == '-')
+			}
+		}
 	case "shift":
 		if len(args) == 1 && args[0] == "--help" {
 			r.outf("%s", bashHelpShiftLong())
@@ -2617,7 +2639,14 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 							if r.noOpSetState == nil {
 								r.noOpSetState = make(map[string]bool)
 							}
+							prev := r.noOpSetState[arg]
 							r.noOpSetState[arg] = mode == "-s"
+							if arg == "history" && prev != (mode == "-s") {
+								r.histSetEnabled(mode == "-s", pos)
+							}
+							if arg == "histexpand" && prev != (mode == "-s") {
+								r.histSetExpand(mode == "-s")
+							}
 							continue
 						}
 						// For `shopt -p -o NAME` / `shopt -q -o NAME`
@@ -3192,32 +3221,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			return failf(1, "bg: no job control\n")
 		}
 	case "fc":
-		// Stub: fc requires history infrastructure.
-		return failf(2, "fc: history not available\n")
+		return r.fcBuiltin(ctx, pos, args)
 	case "bind":
 		// Stub: bind requires readline infrastructure.
 	case "history":
-		// Minimal non-interactive validation. Full history storage is
-		// still interactive-only, but bash validates arguments first.
-		if len(args) > 1 {
-			return failf(2, "history: too many arguments\n")
-		}
-		if len(args) == 1 {
-			arg := args[0]
-			if strings.HasPrefix(arg, "-") {
-				switch arg {
-				case "-c", "-a", "-n", "-r", "-w":
-					// Accepted no-op without history storage.
-				default:
-					r.errf("%shistory: %s: invalid option\n", r.bashErrPrefix(pos), arg)
-					r.errf("history: usage: %s\n", bashUsage["history"])
-					exit.code = 2
-					return exit
-				}
-			} else if _, err := strconv.Atoi(arg); err != nil {
-				return failf(2, "history: %s: numeric argument required\n", arg)
-			}
-		}
+		return r.historyBuiltin(pos, args)
 	case "suspend":
 		return failf(1, "suspend: not supported\n")
 	case "runner-state":
