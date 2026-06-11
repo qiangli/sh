@@ -661,6 +661,15 @@ func (r *Runner) bashArithmError(expr syntax.ArithmExpr, err error, command bool
 	// `7++` / `7=4`), skip appending our outer copy — bash emits one
 	// instance, not two.
 	if strings.Contains(bashMsg, "error token is") {
+		// Expanded-subscript overrides ($expr/expr indirection over a
+		// malformed assoc key): bash reports the expanded token text
+		// directly, without the `((: ... :` command wrapper. Verified
+		// patch handed across the scope wall in QUOTEARRAY-BLOCKERS.md.
+		if command && exprTextOverride != "" &&
+			strings.Contains(bashMsg, "arithmetic syntax error: invalid arithmetic operator") {
+			return fmt.Errorf("%s: line %d: %s: %s",
+				prefix, line, exprText, bashMsg)
+		}
 		if command {
 			if compactErrSep {
 				return fmt.Errorf("%s: line %d: ((: %s: %s",
