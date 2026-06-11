@@ -376,6 +376,9 @@ func (r *Runner) expandErr(err error) {
 	}
 	fmt.Fprintln(r.stderr, errMsg)
 	r.reportError("expand", r.curStmtPos, "", errMsg, 1)
+	if strings.Contains(errMsg, "arithmetic syntax error: invalid arithmetic operator") {
+		r.lastExpandExit = exitStatus{code: 1}
+	}
 	switch {
 	case errors.As(err, &expand.UnsetParameterError{}):
 	case strings.Contains(errMsg, "readonly variable"):

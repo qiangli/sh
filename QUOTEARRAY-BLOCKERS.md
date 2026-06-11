@@ -3,6 +3,14 @@ quotearray residual blockers
 
 Current verified measurements in this sandbox:
 
+- 2026-06-11 follow-up: fresh `GOCACHE=$PWD/.cache/go-build GOPROXY=off
+  GOSUMDB=off make build` plus `make test-bash-helpers` measures the gate at
+  `errors 77`, `redir 0`, `history 0`, `quotearray 53`.
+- The arithmetic diagnostic framing cluster below was already fixed in this
+  tree; the remaining live arithmetic mismatches were exit statuses after
+  malformed indirect arithmetic expansion. The narrow status propagation fix
+  landed in `interp/runner.go` because the status is owned by the runner's
+  command-expansion path, not `expand/arith.go`.
 - After the builtin/expand changes in this round, the exact requested repro
   with this sandbox's rebuilt `bin/bashy` is `112` diff lines.
 - Exact requested repro command: `155` diff lines. Note: `external` is a
