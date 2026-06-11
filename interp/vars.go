@@ -99,6 +99,15 @@ func (o *overlayEnviron) Set(name string, vr expand.Variable) error {
 	}
 	if !inOverlay && o.parent != nil {
 		prev.Variable = o.parent.Get(name)
+		// Bash only refuses `local` when it would shadow a readonly
+		// *global* ("since I believe that this could be a security
+		// hole" — variables.c); a readonly local belonging to a
+		// calling function may be shadowed, and the shadow starts
+		// fresh rather than inheriting the value or readonly bit.
+		if vr.Local && prev.ReadOnly && prev.Local {
+			prev.Variable = expand.Variable{}
+			vr.ReadOnly = false
+		}
 	}
 
 	if o.values == nil {
@@ -132,6 +141,37 @@ func (o *overlayEnviron) Set(name string, vr expand.Variable) error {
 	return nil
 }
 
+// holdsLocally reports whether this overlay itself has an entry for
+// name, regardless of any parent environment.
+func (o *overlayEnviron) holdsLocally(name string) bool {
+	_, ok := o.values[o.normalize(name)]
+	return ok
+}
+
+// unsetLocalFromChild implements bash's default `unset` semantics for
+// a variable that is local to a *previous* function scope: the local
+// is removed entirely, uncovering the variable beneath (an outer local
+// or the global). Returns false when no such local exists — e.g. the
+// nearest binding is a global, or a readonly local that must keep
+// reporting an error through the ordinary path. The walk stops at
+// non-function boundaries (subshells) so it never mutates an
+// environment shared across goroutines.
+func (o *overlayEnviron) unsetLocalFromChild(name string) bool {
+	normalized := o.normalize(name)
+	if prev, ok := o.values[normalized]; ok {
+		if prev.Local && !prev.ReadOnly {
+			delete(o.values, normalized)
+			return true
+		}
+		return false
+	}
+	if !o.funcScope {
+		return false
+	}
+	p, ok := o.parent.(*overlayEnviron)
+	return ok && p.unsetLocalFromChild(name)
+}
+
 func (o *overlayEnviron) Each(f func(name string, vr expand.Variable) bool) {
 	if o.parent != nil {
 		o.parent.Each(f)
@@ -149,12 +189,15 @@ func execEnv(env expand.Environ) []string {
 		if name == BashyInheritedFdsEnv {
 			continue
 		}
-		if !vr.IsSet() {
+		if !vr.IsSet() && !vr.Local {
 			// If a variable is set globally but unset in the
 			// runner, we need to ensure it's not part of the final
 			// list. Seems like zeroing the element is enough.
 			// This is a linear search, but this scenario should be
 			// rare, and the number of variables shouldn't be large.
+			// Unset *locals* are skipped: like bash's invisible
+			// variables they merely shadow within the shell, so an
+			// exported global beneath them still reaches children.
 			for i, kv := range list {
 				if strings.HasPrefix(kv, name+"=") {
 					list[i] = ""
@@ -322,6 +365,11 @@ func (r *Runner) lookupVar(name string) expand.Variable {
 		}
 		sb.WriteByte('h') // hashall (always on)
 		sb.WriteByte('B') // braceexpand (always on)
+		if r.noOpSetState["physical"] {
+			// `set -P` / `set -o physical` is accept-and-ignore, but
+			// bash surfaces it in $- once toggled on.
+			sb.WriteByte('P')
+		}
 		vr.Kind, vr.Str = expand.String, sb.String()
 	case "RANDOM": // not for cryptographic use
 		if r.randomSeeded {
@@ -433,6 +481,11 @@ func (r *Runner) lookupVar(name string) expand.Variable {
 				continue
 			}
 			opts = append(opts, name)
+		}
+		// Accept-and-ignore options that bash nonetheless reflects in
+		// SHELLOPTS once toggled on (`shopt -so physical`).
+		if r.noOpSetState["physical"] {
+			opts = append(opts, "physical")
 		}
 		slices.Sort(opts)
 		vr.Kind, vr.Str = expand.String, strings.Join(opts, ":")
@@ -755,7 +808,7 @@ func formatDeclareVar(name string, vr expand.Variable, forceEmptyArrayValue bool
 		b.WriteByte('=')
 		b.WriteByte('(')
 		first := true
-		for _, k := range expand.AssocKeysInBashOrder(vr.Map) {
+		for _, k := range vr.AssocKeysForDeclare() {
 			if !first {
 				b.WriteByte(' ')
 			}
@@ -924,7 +977,29 @@ func (r *Runner) setGlobalVarString(name, value string) {
 	}
 }
 
+// bashShoptEnabled reports the state of a bash `shopt` option by name.
+func (r *Runner) bashShoptEnabled(name string) bool {
+	for i, opt := range bashOptsTable {
+		if opt.name == name {
+			return r.opts[len(posixOptsTable)+i]
+		}
+	}
+	return false
+}
+
 func (r *Runner) delVar(name string) {
+	// Unsetting a variable that is local to a *previous* function scope
+	// removes that local entirely, uncovering the variable beneath
+	// (bash's default dynamic-unset behavior). With shopt
+	// localvar_unset, the local is instead marked unset and keeps
+	// shadowing, which is what the ordinary path below implements.
+	if !r.bashShoptEnabled("localvar_unset") {
+		if o, ok := r.writeEnv.(*overlayEnviron); ok && o.funcScope && !o.holdsLocally(name) {
+			if p, ok := o.parent.(*overlayEnviron); ok && p.unsetLocalFromChild(name) {
+				return
+			}
+		}
+	}
 	if err := r.writeEnv.Set(name, expand.Variable{}); err != nil {
 		r.errf("%s%s: %v\n", r.bashErrPrefix(r.curStmtPos), name, err)
 		r.exit.code = 1
@@ -1182,6 +1257,62 @@ func (r *Runner) setVar(name string, vr expand.Variable) {
 			}
 		}
 	}
+	// Bash refuses to convert between indexed and associative arrays
+	// via the declare family; the variable keeps its prior kind. The
+	// failure is attributed to the builtin, with an extra
+	// function-attributed line when it came from an array literal
+	// assignment inside a function (matching bash 5.3's double report).
+	if r.declAssignContext && prev.Declared() {
+		var convErr string
+		switch {
+		case prev.Kind == expand.Indexed && vr.Kind == expand.Associative:
+			convErr = "cannot convert indexed to associative array"
+		case prev.Kind == expand.Associative && vr.Kind == expand.Indexed:
+			convErr = "cannot convert associative to indexed array"
+		}
+		if convErr != "" {
+			if r.setVarArrayLiteral && len(r.callStack) > 0 {
+				r.errf("%s%s: %s: %s\n", r.bashErrPrefix(r.curStmtPos),
+					r.callStack[len(r.callStack)-1].funcName, name, convErr)
+			}
+			builtin := r.setVarFromBuiltin
+			if builtin == "" {
+				builtin = "declare"
+			}
+			r.errf("%s%s: %s: %s\n", r.bashErrPrefix(r.curStmtPos), builtin, name, convErr)
+			r.exit.code = 1
+			return
+		}
+		// `declare -A name` (no value) on an existing scalar converts
+		// it like bash's convert_var_to_assoc: the old value becomes
+		// element "0", and the resulting table has 128 hash buckets
+		// (assoc_create(0)) rather than a fresh declare -A's 1024,
+		// which `declare -p` key ordering reflects.
+		if vr.Kind == expand.Associative && vr.Map == nil && vr.Set && prev.Kind == expand.String {
+			vr.Map = map[string]string{"0": vr.Str}
+			vr.Str = ""
+			vr.AssocBuckets = 128
+		}
+	}
+	// `local x` (no value) creates a fresh unset local; bash only
+	// inherits the previous scope's value with shopt localvar_inherit
+	// or when x sits in the temporary environment. We don't track
+	// tempenv variables separately, but they are always exported, so
+	// exported parents keep the historical inherit behavior as a proxy.
+	// Explicitly-requested attributes like `-i`/`-u` are kept, but the
+	// parent's value is not.
+	if vr.Local && vr.Kind == expand.KeepValue && !prev.Exported &&
+		!r.bashShoptEnabled("localvar_inherit") {
+		if ol, ok := r.writeEnv.(*overlayEnviron); ok && ol.funcScope && !ol.holdsLocally(name) {
+			vr = expand.Variable{
+				Local:      true,
+				Integer:    vr.Integer,
+				Upper:      vr.Upper,
+				Lower:      vr.Lower,
+				Capitalize: vr.Capitalize,
+			}
+		}
+	}
 	if err := r.writeEnv.Set(name, vr); err != nil {
 		// Bash 5.3 attribution: syntax-level assignment failures
 		// inside a function are prefixed with the function name
@@ -1201,6 +1332,15 @@ func (r *Runner) setVar(name string, vr expand.Variable) {
 			// Syntax-level array-literal assignment inside a
 			// function: bash attributes to the function name.
 			inner = r.callStack[len(r.callStack)-1].funcName + ": "
+		}
+		// An array-literal assignment failing on a readonly variable
+		// through `local` is reported twice by bash: once for the
+		// failed assignment, once from the builtin. `readonly`/`export`
+		// and declare-family forms report only once (see attr.tests).
+		if r.setVarFromBuiltin == "local" &&
+			(vr.Kind == expand.Indexed || vr.Kind == expand.Associative) &&
+			strings.Contains(err.Error(), "readonly") {
+			r.errf("%s%s: %v\n", r.bashErrPrefix(r.curStmtPos), name, err)
 		}
 		r.errf("%s%s%s: %v\n", r.bashErrPrefix(r.curStmtPos), inner, name, err)
 		r.exit.code = 1
@@ -1363,6 +1503,25 @@ func stringIndex(index syntax.ArithmExpr) bool {
 		return true
 	}
 	return false
+}
+
+// wordLooksLikeAssign mirrors bash's W_ASSIGNMENT check for the first
+// word of a compound assoc assignment: `name=...` (or `name+=...`)
+// words keep the subscript-required error path rather than enabling
+// key/value pair mode.
+func wordLooksLikeAssign(w *syntax.Word) bool {
+	if w == nil || len(w.Parts) == 0 {
+		return false
+	}
+	lit, ok := w.Parts[0].(*syntax.Lit)
+	if !ok {
+		return false
+	}
+	eq := strings.IndexByte(lit.Value, '=')
+	if eq <= 0 {
+		return false
+	}
+	return syntax.ValidName(strings.TrimSuffix(lit.Value[:eq], "+"))
 }
 
 func bashAssocAssignKey(s string) string {
@@ -1553,6 +1712,15 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 		}
 		switch prev.Kind {
 		case expand.String, expand.Unknown:
+			// `declare -a s+=Y` on a scalar converts it to an indexed
+			// array first; the append then targets element 0.
+			if valType == "-a" && r.declAssignContext {
+				prev.Kind = expand.Indexed
+				prev.List = []string{prev.Str + s}
+				prev.ListSet = nil
+				prev.Str = ""
+				return name, prev
+			}
 			prev.Kind = expand.String
 			prev.Str += s
 		case expand.Indexed:
@@ -1656,6 +1824,17 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 	}
 	if valType == "-A" {
 		amap := make(map[string]string, len(elems))
+		assocBuckets := prev.AssocBuckets
+		// Converting an existing scalar mirrors bash's
+		// convert_var_to_assoc: a 128-bucket hash table (which
+		// `declare -p` key ordering reflects), with the old value
+		// surviving at key "0" only for `+=`-style appends.
+		if prev.Kind == expand.String && prev.Declared() {
+			assocBuckets = 128
+			if as.Append && prev.Set {
+				amap["0"] = prev.Str
+			}
+		}
 		// Inherit prev's map when this is a `+=`-style append at the
 		// outer assignment level; per-element `[k]+=v` appends to the
 		// previous value of that key.
@@ -1664,11 +1843,44 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 				amap[k] = v
 			}
 		}
+		// bash 5.1+: a compound assignment to an associative array
+		// whose first word is neither `[key]=value` nor assignment-
+		// shaped is a list of alternating keys and values
+		// (kvpair_assignment_p); a missing trailing value is empty.
+		if len(elems) > 0 && elems[0].Index == nil && !wordLooksLikeAssign(elems[0].Value) {
+			var words []string
+			for _, elem := range elems {
+				if elem.Index != nil {
+					// A later [k]=v word in kvpair mode is plain
+					// key/value text in bash; reassemble it.
+					if w, ok := elem.Index.(*syntax.Word); ok && w != nil {
+						words = append(words, "["+r.literal(w)+"]="+r.literalForAssign(elem.Value))
+						continue
+					}
+				}
+				words = append(words, r.literalForAssign(elem.Value))
+			}
+			for i := 0; i < len(words); i += 2 {
+				v := ""
+				if i+1 < len(words) {
+					v = words[i+1]
+				}
+				if prev.Integer {
+					v = r.integerArrayValue(v)
+				}
+				amap[words[i]] = v
+			}
+			prev.Kind = expand.Associative
+			prev.Map = amap
+			prev.AssocBuckets = assocBuckets
+			return name, prev
+		}
 		for _, elem := range elems {
-			// `declare -A foo=(value)` — non-keyed element in an
-			// associative-array context. Bash 5.3 emits
-			// `<file>: line N: foo: <value>: must use subscript when
-			// assigning associative array` and skips the element.
+			// `declare -A foo=([k]=v value)` — non-keyed element in an
+			// associative-array context with a subscripted first word.
+			// Bash 5.3 emits `<file>: line N: foo: <value>: must use
+			// subscript when assigning associative array` and stops
+			// processing the remaining elements.
 			w, ok := elem.Index.(*syntax.Word)
 			if !ok || w == nil {
 				if elem.Value != nil {
@@ -1676,7 +1888,7 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 						r.bashErrPrefix(r.curStmtPos), name, r.literalForAssign(elem.Value))
 					r.exit.code = 1
 				}
-				continue
+				break
 			}
 			k := r.assocAssignKey(w)
 			v := r.literalForAssign(elem.Value)
@@ -1696,9 +1908,17 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 		if !as.Append {
 			prev.Kind = expand.Associative
 			prev.Map = amap
+			prev.AssocBuckets = assocBuckets
 			return name, prev
 		}
 		prev.Map = amap
+		prev.AssocBuckets = assocBuckets
+		// `declare -A name+=(…)` in a declare-family context records
+		// the associative kind so a previously-indexed variable trips
+		// the cannot-convert check in setVar, like bash.
+		if r.declAssignContext {
+			prev.Kind = expand.Associative
+		}
 		return name, prev
 	}
 	// Evaluate values for each array element.

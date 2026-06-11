@@ -114,6 +114,45 @@ type Variable struct {
 	List    []string          // Used when Kind is Indexed.
 	ListSet map[int]bool      // Used when Kind is Indexed and sparse; nil means every List index is set.
 	Map     map[string]string // Used when Kind is Associative.
+
+	// AssocBuckets records the bash hash-table bucket count that key
+	// iteration order should be derived from when Kind is Associative.
+	// Zero means the default 1024 buckets of a fresh `declare -A`;
+	// bash converts an existing scalar to an associative array with a
+	// 128-bucket table instead, which changes `declare -p` ordering.
+	AssocBuckets uint16
+}
+
+// AssocKeysForDeclare returns the associative-array keys in the order
+// bash's `declare -p` would print them, honoring the variable's hash
+// bucket count (see [Variable.AssocBuckets]).
+func (v Variable) AssocKeysForDeclare() []string {
+	buckets := uint32(1024)
+	if v.AssocBuckets != 0 {
+		buckets = uint32(v.AssocBuckets)
+	}
+	// bash's hashlib.c hash_string: FNV-1 (multiply first, then XOR).
+	hash := func(s string) uint32 {
+		i := uint32(2166136261)
+		for _, c := range []byte(s) {
+			i = i * 16777619
+			i = i ^ uint32(c)
+		}
+		return i
+	}
+	keys := make([]string, 0, len(v.Map))
+	for k := range v.Map {
+		keys = append(keys, k)
+	}
+	slices.SortStableFunc(keys, func(a, b string) int {
+		ba := hash(a) % buckets
+		bb := hash(b) % buckets
+		if ba != bb {
+			return int(ba) - int(bb)
+		}
+		return strings.Compare(a, b)
+	})
+	return keys
 }
 
 // IsSet reports whether the variable has been set to a value.
