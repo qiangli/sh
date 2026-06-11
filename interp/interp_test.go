@@ -4565,6 +4565,18 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 		"read -t 0.05 x < <(sleep 0.2); echo $?",
 		"142\n",
 	},
+	{
+		"a=4; read -t 0.05 a < <(sleep 0.2); status=$?; echo ${a:-unset} $status",
+		"unset 142\n",
+	},
+	{
+		"a=4; read -t 0.000001 a <<< abcde; status=$?; echo ${a:-unset} $status",
+		"abcde 0\n",
+	},
+	{
+		"echo abcde | { read -t 0.5 a; status=$?; echo ${a:-unset} $status; }",
+		"abcde 0\n",
+	},
 
 	// read -a
 	{

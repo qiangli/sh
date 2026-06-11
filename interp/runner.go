@@ -5868,11 +5868,20 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 		if namedFDVar != "" {
 			r.setGlobalNamedFdVarString(namedFDVar, strconv.Itoa(targetFd))
 		}
-		// We write to the pipe in a new goroutine,
+		input := arg + "\n"
+		if len(input) <= 512 {
+			if _, err := io.WriteString(pw, input); err != nil {
+				pw.Close()
+				pr.Close()
+				return nil, err
+			}
+			pw.Close()
+			return pr, nil
+		}
+		// We write larger payloads to the pipe in a new goroutine,
 		// as pipe writes may block once the buffer gets full.
 		go func() {
-			pw.WriteString(arg)
-			pw.WriteString("\n")
+			io.WriteString(pw, input)
 			pw.Close()
 		}()
 		return pr, nil

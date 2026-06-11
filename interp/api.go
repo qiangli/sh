@@ -1723,6 +1723,7 @@ func (r *Runner) subshell(background bool) *Runner {
 		readDirHandler:       r.readDirHandler,
 		statHandler:          r.statHandler,
 		stdin:                r.stdin,
+		stdinTTYFallback:     r.stdinTTYFallback,
 		stdout:               r.stdout,
 		stderr:               r.stderr,
 		filename:             r.filename,
