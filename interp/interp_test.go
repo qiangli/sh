@@ -3474,8 +3474,11 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 		"declare -Ai a=([one]=\"10\" [\"foo bar\"]=\"16\" [zero]=\"5\" )\n",
 	},
 	{
+		// bash 5.3 stops processing the compound list at the first
+		// non-subscripted word (arrayfunc.c: any_failed++; break),
+		// so [one] is never assigned.
 		`declare -A a; a=([zero]=0 four [one]=1); declare -p a`,
-		"a: four: must use subscript when assigning associative array\ndeclare -A a=([one]=\"1\" [zero]=\"0\" )\n #JUSTERR",
+		"a: four: must use subscript when assigning associative array\ndeclare -A a=([zero]=\"0\" )\n #JUSTERR",
 	},
 	{
 		`flix=9; declare -A a=([s*]=6 [foo bar]=flix); declare -p a; printf '<%s>\n' "${a[foo bar]}"; b=([1+2]=three); declare -p b`,
