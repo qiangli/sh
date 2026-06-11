@@ -3582,6 +3582,19 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 		return
 	}
 	oldCurStmtPos := r.curStmtPos
+	// bash quirk, encoded empirically: a redirection failure on a
+	// while/for compound INSIDE a subshell is reported one line past
+	// the statement's start (see redir12.sub:43 → bash says line 44).
+	// Removing this block flips the redir fixture from PASS to FAIL
+	// while buying nothing elsewhere — it was removed once during
+	// errors-fixture work and had to be restored. Don't.
+	if r.subshellLevel > 0 {
+		switch st.Cmd.(type) {
+		case *syntax.WhileClause, *syntax.ForClause:
+			pos := st.Pos()
+			r.curStmtPos = syntax.NewPos(pos.Offset(), pos.Line()+1, pos.Col())
+		}
+	}
 	for _, rd := range st.Redirs {
 		cls, err := r.redir(ctx, rd)
 		if err != nil {
