@@ -73,6 +73,48 @@ func TestCommandSubstOpenBefore(t *testing.T) {
 	}
 }
 
+func TestPrintBashParseErrorCompoundEOF(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		src  string
+		text string
+		want string
+	}{
+		{
+			name: "if non-empty eof line",
+			src:  "if\n\ttrue; true\nthen\n\techo foo bar",
+			text: "`if` statement must end with `fi`",
+			want: "bash: -c: line 5: syntax error: unexpected end of file from `if' command on line 1\n",
+		},
+		{
+			name: "until whitespace eof line",
+			src:  "until false\ndo\n\techo false\n\t",
+			text: "`until` statement must end with `done`",
+			want: "bash: -c: line 4: syntax error: unexpected end of file from `until' command on line 1\n",
+		},
+		{
+			name: "case whitespace eof line",
+			src:  "case foo in\nbar)\tif false\n\tthen\n\t\ttrue\n\tfi\n\t;;\n\t",
+			text: "`case` statement must end with `esac`",
+			want: "bash: -c: line 7: syntax error: unexpected end of file from `case' command on line 1\n",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			var buf bytes.Buffer
+			printBashParseError(&buf, []byte(test.src), "bash: -c", syntax.ParseError{
+				Pos:  syntax.NewPos(0, 1, 1),
+				Text: test.text,
+			})
+			if got := buf.String(); got != test.want {
+				t.Fatalf("printBashParseError mismatch\nwant:\n%q\ngot:\n%q", test.want, got)
+			}
+		})
+	}
+}
+
 func TestDefaultCommandArgv0(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

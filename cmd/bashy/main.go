@@ -1722,6 +1722,10 @@ func printBashParseError(w io.Writer, src []byte, prefix string, pe syntax.Parse
 		return
 	}
 	text := rewriteParserErrorText(string(src), pe)
+	if eofLine, construct, ok := compoundEOFParseError(src, text); ok {
+		fmt.Fprintf(w, "%s: line %d: syntax error: unexpected end of file from `%s' command on line 1\n", prefix, eofLine, construct)
+		return
+	}
 	if text == "unexpected EOF while looking for matching `)'" && strings.TrimSpace(nthLine(src, line)) == "math1)" {
 		fmt.Fprintf(w, "%s: line %d: syntax error near unexpected token `)'\n", prefix, line)
 		fmt.Fprintf(w, "%s: line %d: `math1)'\n", prefix, line)
@@ -1764,6 +1768,30 @@ func arithForParseErrorLines(src string, pe syntax.ParseError) []string {
 		}
 	}
 	return nil
+}
+
+func compoundEOFParseError(src []byte, text string) (eofLine int, construct string, ok bool) {
+	for _, keyword := range []string{"if", "while", "until", "for", "case"} {
+		if text == fmt.Sprintf("`%s` statement must end with `%s`", keyword, compoundEndKeyword(keyword)) {
+			line := bytes.Count(src, []byte("\n")) + 1
+			if strings.TrimSpace(nthLine(src, line)) != "" {
+				line++
+			}
+			return line, keyword, true
+		}
+	}
+	return 0, "", false
+}
+
+func compoundEndKeyword(keyword string) string {
+	switch keyword {
+	case "if":
+		return "fi"
+	case "case":
+		return "esac"
+	default:
+		return "done"
+	}
 }
 
 func arithForHeader(src string) (string, bool) {
