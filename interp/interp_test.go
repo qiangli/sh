@@ -6690,7 +6690,12 @@ func TestRunnerSubshell(t *testing.T) {
 func TestAssignValNilIndex(t *testing.T) {
 	t.Parallel()
 
-	src := "declare -A a; a[]=x"
+	// This is the real trigger from bash 5.3's assoc11.sub:
+	// associative pair-list compound assignment where elements
+	// without [key]= form are treated as alternating key/value.
+	// Previously this caused a nil pointer dereference in assignVal
+	// when as.Index was nil but prev.Kind was expand.Associative.
+	src := "declare -A foo\nfoo=( 0 'a]=test1;#a' 1 123 )\ndeclare -p foo\n"
 	file, err := syntax.NewParser().Parse(strings.NewReader(src), "")
 	if err != nil {
 		t.Fatal(err)
@@ -6702,12 +6707,13 @@ func TestAssignValNilIndex(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), runnerRunTimeout)
 	defer cancel()
-	err = r.Run(ctx, file)
-	if err == nil {
-		t.Fatal("expected error")
+	if err := r.Run(ctx, file); err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "bad array subscript") {
-		t.Fatalf("unexpected output: %q", out.String())
+	got := out.String()
+	// The output should contain keys 0 and 1 with values, and no panic.
+	if !strings.Contains(got, "[0]=") || !strings.Contains(got, "[1]=") {
+		t.Fatalf("expected declare -p output with keys 0 and 1, got: %q", got)
 	}
 }
 
