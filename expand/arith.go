@@ -841,21 +841,25 @@ func literalDollarArithmToken(s string) string {
 			continue
 		}
 		j := i + 1
-		for j < len(s) {
-			c := s[j]
-			if c != '_' && (c < '0' || c > '9') &&
-				(c < 'A' || c > 'Z') && (c < 'a' || c > 'z') {
-				break
+		// Check if followed by a valid variable name start character.
+		if j < len(s) && arithmNameStart(s[j]) {
+			// Consume the variable name.
+			j++
+			for j < len(s) && arithmNameContinue(s[j]) {
+				j++
 			}
-			j++
+			// If the variable name is followed by ']', this is a valid
+			// array subscript expansion like $key in assoc[$key]++.
+			// Skip it and continue looking for actual errors.
+			if j < len(s) && s[j] == ']' {
+				i = j - 1 // -1 because the for loop will do i++
+				continue
+			}
+			// Otherwise, $name as a bare operand is an error.
+			return s[i:j]
 		}
-		if j == i+1 {
-			return "$"
-		}
-		for j < len(s) && (s[j] == ' ' || s[j] == '\t') {
-			j++
-		}
-		return s[i:j]
+		// Bare $ not followed by a name start is an error.
+		return "$"
 	}
 	return ""
 }
