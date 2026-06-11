@@ -215,6 +215,14 @@ func (p *Parser) arithmExprValue(compact bool) ArithmExpr {
 		ue := &UnaryArithm{OpPos: p.pos, Op: UnAritOperator(p.tok)}
 		p.nextArith(compact)
 		switch p.tok {
+		case semicolon:
+			// Only a C-style for loop (`for (( -- ; ++; -- ))`)
+			// legitimately ends an arithmetic expression at `;`;
+			// bash accepts the parse and errors at runtime.
+			if p.quote != arithmExprCmd {
+				p.followErr(ue.OpPos, ue.Op, noQuote("a literal"))
+			}
+			ue.X = p.wordOne(&Lit{ValuePos: p.pos, ValueEnd: p.pos})
 		case rightParen, dblRightParen, _EOF:
 			ue.X = p.wordOne(&Lit{ValuePos: p.pos, ValueEnd: p.pos})
 		case plus, minus:
