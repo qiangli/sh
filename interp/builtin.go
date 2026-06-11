@@ -168,6 +168,27 @@ func (hc HandlerContext) Builtin(ctx context.Context, args []string) error {
 	return nil
 }
 
+func validBuiltinAssignName(name string) bool {
+	if syntax.ValidName(name) {
+		return true
+	}
+	base, idx, ok := splitArrayRef(name)
+	return ok && syntax.ValidName(base) && !strings.Contains(idx, "]")
+}
+
+func (r *Runner) unsetBuiltinArrayElem(name, idx string) bool {
+	vr := r.lookupVar(name)
+	if vr.Kind == expand.Associative {
+		if _, ok := vr.Map[idx]; ok {
+			delete(vr.Map, idx)
+			vr.Set = true
+			r.setVar(name, vr)
+		}
+		return true
+	}
+	return r.unsetArrayElem(name, idx)
+}
+
 func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args []string) (exit exitStatus) {
 	// failf emits a user-fault error and sets the exit code. When
 	// [WithBashCompatErrors] is on, the message is prefixed with
@@ -395,7 +416,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			if vars {
 				if name, idx, ok := splitArrayRef(arg); ok {
 					if syntax.ValidName(name) {
-						if !r.unsetArrayElem(name, idx) {
+						if !r.unsetBuiltinArrayElem(name, idx) {
 							exit.code = 1
 						}
 						continue
@@ -523,11 +544,16 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				if assignTo == "" {
 					return failf(2, "printf: -v: option requires an argument\n")
 				}
-				if !validAssignName(assignTo) {
+				if !validBuiltinAssignName(assignTo) {
 					if r.bashCompatErrors {
 						return failf(1, "printf: `%s': not a valid identifier\n", assignTo)
 					}
 					return failf(1, "printf: %q: not a valid identifier\n", assignTo)
+				}
+				if base, idx, ok := splitArrayRef(assignTo); ok && (idx == "@" || idx == "*") {
+					if r.lookupVar(base).Kind == expand.Indexed {
+						return failf(1, "%s: bad array subscript\n", assignTo)
+					}
 				}
 			default:
 				return invalidOpt("printf", flag)
@@ -2171,7 +2197,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 
 		args := fp.args()
 		for _, name := range args {
-			if !validAssignName(name) {
+			if !validBuiltinAssignName(name) {
 				return failf(2, "read: `%s': not a valid identifier\n", name)
 			}
 		}

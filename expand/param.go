@@ -1230,7 +1230,11 @@ func (cfg *Config) varInd(vr Variable, idx syntax.ArithmExpr) (string, error) {
 	case Associative:
 		switch lit := nodeLit(idx); lit {
 		case "@", "*":
-			strs := slices.Sorted(maps.Values(vr.Map))
+			keys := AssocKeysInBashOrder(vr.Map)
+			strs := make([]string, len(keys))
+			for i, k := range keys {
+				strs[i] = vr.Map[k]
+			}
 			if lit == "*" {
 				return cfg.ifsJoin(strs), nil
 			}
