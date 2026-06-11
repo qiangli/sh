@@ -495,6 +495,15 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 		vr = cfg.Env.Get(name)
 	}
 	orig := vr
+	if vr.Kind == NameRef && index == nil {
+		if base, idx, ok := nameRefArrayTarget(vr.Str); ok {
+			name = base
+			vr = cfg.Env.Get(base)
+			index = &syntax.Word{Parts: []syntax.WordPart{
+				&syntax.Lit{Value: idx},
+			}}
+		}
+	}
 	if n, v := vr.Resolve(cfg.Env); n != "" {
 		name, vr = n, v
 	}
@@ -1259,6 +1268,18 @@ func subscriptText(idx syntax.ArithmExpr) string {
 	var b strings.Builder
 	syntax.NewPrinter().Print(&b, idx)
 	return b.String()
+}
+
+func nameRefArrayTarget(s string) (name, idx string, ok bool) {
+	lb := strings.IndexByte(s, '[')
+	if lb <= 0 || !strings.HasSuffix(s, "]") {
+		return "", "", false
+	}
+	name = s[:lb]
+	if !syntax.ValidName(name) {
+		return "", "", false
+	}
+	return name, s[lb+1 : len(s)-1], true
 }
 
 func (cfg *Config) namesByPrefix(prefix string) []string {

@@ -1025,7 +1025,15 @@ func splitArrayRef(s string) (name, idx string, ok bool) {
 // unset the entire variable (matching bash).
 func (r *Runner) unsetArrayElem(name, idx string) bool {
 	if idx == "*" || idx == "@" {
-		r.delVar(name)
+		vr := r.lookupVar(name)
+		if vr.Kind == expand.Indexed && vr.IndexedCount() > 0 {
+			vr.Set = true
+			vr.List = []string{}
+			vr.ListSet = nil
+			r.setVar(name, vr)
+		} else {
+			r.delVar(name)
+		}
 		return true
 	}
 	vr := r.lookupVar(name)
@@ -1548,7 +1556,38 @@ func (r *Runner) assocAssignKey(w *syntax.Word) string {
 			return bashAssocAssignKey(lit.Value)
 		}
 	}
+	if key, ok := r.assocAssignKeyLiteral(w.Parts); ok {
+		return bashAssocAssignKey(key)
+	}
 	return r.literal(w)
+}
+
+func (r *Runner) assocAssignKeyLiteral(parts []syntax.WordPart) (string, bool) {
+	var b strings.Builder
+	for _, part := range parts {
+		switch part := part.(type) {
+		case *syntax.Lit:
+			b.WriteString(part.Value)
+		case *syntax.SglQuoted:
+			b.WriteString(part.Value)
+		case *syntax.DblQuoted:
+			s, ok := r.assocAssignKeyLiteral(part.Parts)
+			if !ok {
+				return "", false
+			}
+			b.WriteString(s)
+		case *syntax.ParamExp:
+			if part.Param == nil || part.NestedParam != nil || part.Index != nil ||
+				part.Slice != nil || part.Repl != nil || part.Exp != nil ||
+				part.Length || part.Width || part.Excl || part.Names != 0 {
+				return "", false
+			}
+			b.WriteString(r.envGet(part.Param.Value))
+		default:
+			return "", false
+		}
+	}
+	return b.String(), true
 }
 
 // TODO: make assignVal and [setVar] consistent with the [expand.WriteEnviron] interface

@@ -3,94 +3,56 @@ quotearray residual blockers
 
 Current verified measurements in this sandbox:
 
-- 2026-06-11 follow-up: fresh `GOCACHE=$PWD/.cache/go-build GOPROXY=off
-  GOSUMDB=off make build` plus `make test-bash-helpers` measures the gate at
-  `errors 77`, `redir 0`, `history 0`, `quotearray 53`.
-- The arithmetic diagnostic framing cluster below was already fixed in this
-  tree; the remaining live arithmetic mismatches were exit statuses after
-  malformed indirect arithmetic expansion. The narrow status propagation fix
-  landed in `interp/runner.go` because the status is owned by the runner's
-  command-expansion path, not `expand/arith.go`.
-- After the builtin/expand changes in this round, the exact requested repro
-  with this sandbox's rebuilt `bin/bashy` is `112` diff lines.
-- Exact requested repro command: `155` diff lines. Note: `external` is a
-  symlink here, so `realpath ../../../bin/bashy` resolves to a different
-  checkout's `bin/bashy`, not this sandbox's rebuilt binary.
-- Same fixture with this sandbox's rebuilt `bin/bashy`: `173` diff lines using
-  `diff - ./quotearray.right | wc -l`.
+- 2026-06-11: rebuilt this checkout's `bin/bashy` with
+  `GOCACHE=$PWD/.cache/go-build go build -o bin/bashy ./cmd/bashy`.
+- Gate fixtures, with `THIS_SH=$PWD/bin/bashy` anchored at the repo root before
+  `cd external/bash-5.3/tests`:
+  - `errors`: 70 diff lines.
+  - `redir`: 0 diff lines; runner emits only its warning banner.
+  - `history`: 0 diff lines; runner emits only its warning banner.
+  - `quotearray`: 22 diff lines.
 
-Implemented progress:
+Implemented progress in this round:
 
-- Whole double-quoted arithmetic text such as `"assoc[$key]++"` is reparsed
-  without prematurely expanding `$key`, so associative-array subscript
-  resolution increments the expanded key exactly once.
-- Single-quoted arithmetic text with an expanded malformed associative
-  subscript now reports bash's operand-error shape for the fixture's
-  `x],b[$(echo uname >&2)` key instead of mutating the array.
-- `[[ ... -eq ... ]]` and related arithmetic comparisons now prefer source
-  operand text in bash mode, deferring array-subscript evaluation to the
-  arithmetic evaluator.
-- Double-quoted arithmetic text only takes the raw-text path when it contains
-  a parameter expansion, preserving normal quote removal for cases like
-  `let "a[\" \"]=11"`.
-- Malformed arithmetic subscript diagnostics now carry the expanded token text
-  through `expand.ArithmError.Text`, and indexed-array malformed subscripts
-  quote bracket characters in that text, reducing the sandbox-local
-  `quotearray` diff from `176` to `173`.
-- `unset` now treats `@` and `*` as ordinary associative-array keys while
-  preserving whole-array behavior for indexed arrays, and leaves an explicitly
-  empty associative array after deleting its last element.
-- `read` and `printf -v` now reject malformed builtin array destinations such
-  as `A[]]`, while `printf -v array[@]` rejects indexed whole-array
-  destinations as a bad subscript.
-- Indirect expansion of associative `[@]`/`[*]` now uses bash 5.3 associative
-  iteration order instead of sorted values.
+- `declare A[$k]=X` and string-form `declare "A[$k]=X"` now reject the
+  post-expansion malformed `]` key as `A[]]=X` while accepting `*` and `@` as
+  ordinary associative keys.
+- Associative assignment keys from simple parameter expansions are expanded
+  once, so values like `$(echo foo)` and `$key` stay literal keys instead of
+  being evaluated a second time.
+- `let assoc[$key]++` now reports the malformed associative subscript in the
+  bash-shaped `let:` diagnostic instead of mutating `assoc`.
+- Namerefs to array targets such as `assoc[@]` and `array[@]` now expand to the
+  referenced array values for `$nref`, fixing the missing `star bang at` and
+  `1 2 3` output.
+- `unset array[@]` on a populated indexed array now leaves `declare -a
+  array=()`; a later unset of the already-empty array removes it.
 
-Remaining clusters:
+Remaining live `quotearray` clusters:
 
-- Arithmetic error framing for indirect expressions like `$expr`/`expr` and
-  malformed indexed-array subscripts such as `array[$index]++` still prints
-  bashy's `((: <expanded-token> :` wrapper in command-arithmetic paths where
-  bash 5.3 reports the expanded token directly. The remaining wrapper is added
-  by `interp.Runner.bashArithmError`; `expand/arith.go` now supplies the right
-  expanded override text, including backslash-escaped indexed-array tokens.
-  This round re-verified that the in-scope `expand.ArithmError.Text` values
-  are already correct for the cluster:
-
-  - `(( $expr ))` and `(( expr ))` pass `x],b[$(echo uname >&2)` as the override.
-  - `((array[$index]++))` passes `0\],b\[1` as the override.
-  - `interp.Runner.bashArithmError` still wraps command arithmetic errors
-    whenever the inner message already contains `error token is`, producing the
-    remaining line mismatches.
-
-  Full outside-scope patch for the next `interp/` owner:
-
-  ```diff
-  diff --git a/interp/runner.go b/interp/runner.go
-  --- a/interp/runner.go
-  +++ b/interp/runner.go
-  @@
-   if strings.Contains(bashMsg, "error token is") {
- +     if command && exprTextOverride != "" &&
- +        strings.Contains(bashMsg, "arithmetic syntax error: invalid arithmetic operator") {
- +        return fmt.Errorf("%s: line %d: %s: %s",
- +           prefix, line, exprText, bashMsg)
- +     }
-      if command {
-         if compactErrSep {
-            return fmt.Errorf("%s: line %d: ((: %s: %s",
-  ```
-- Remaining `assoc_expand_once` builtin cases in `quotearray2.sub` through
-  `quotearray5.sub` are now mostly outside this round's writable files:
-  `declare A[$k]=X`, quoted string-form `declare "A[$k]=X"`, compound
-  associative literals like `declare -A a=(@ v0 . v1)`, and classic `test -v`
-  word-splitting diagnostics are handled in `interp/runner.go`/`interp/vars.go`
-  paths.
+- `quotearray2.sub` still misses one `assoc_expand_once` round-trip:
+  `test -v assoc["$key"]` leaves `assoc` empty where bash preserves
+  `["$var"]="value"`.
+- `quotearray3.sub` still differs for `unset` with command-substitution-shaped
+  associative keys. The hard part is preserving the distinction between quoted
+  whole operands (`unset 'a[$key]'`, which bash treats as a string operand and
+  can evaluate the subscript) and unquoted raw operands (`unset a[$key]`, which
+  should avoid the split-into-two-invalid-identifiers behavior without breaking
+  normal `unset A[$key]` for special keys like `@`).
+- `quotearray5.sub` string-token unset cases still leave populated
+  `$(echo foo)`, `$key`, and `foo` keys where bash prints `declare -A a=()`.
+- Compound associative assignment ordering/semantics for
+  `declare -A a=(@ v0 . v1)` still retains the `@` key in two cases where bash
+  only prints `[.]="v1"`.
 
 Verification notes:
 
-- `go build ./...` passes with `GOCACHE=$PWD/.cache/go-build`.
-- `go test ./expand/... ./interp/...` is blocked by this sandbox denying
-  `/bin/ps` in `TestSetsidNewSession` and `TestNohupChildIsInNewSession`.
-  Focused `go test ./interp -run 'TestRunnerRun|TestRunnerRunConfirm|TestBash'`
-  passes.
+- `GOCACHE=$PWD/.cache/go-build go build ./...` passes. Go still prints a
+  sandbox warning when it cannot write the global module stat cache.
+- `GOCACHE=$PWD/.cache/go-build go test ./expand/...` passes.
+- Focused `GOCACHE=$PWD/.cache/go-build go test ./interp -run
+  'TestRunnerRun|TestBashCompat|TestBash'` passes.
+- Full `GOCACHE=$PWD/.cache/go-build go test ./interp/... ./expand/...` is
+  blocked by this sandbox denying `/bin/ps` in `TestSetsidNewSession` and
+  `TestNohupChildIsInNewSession`; no other failures were observed before that
+  package failed.
