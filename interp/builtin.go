@@ -195,6 +195,139 @@ func (r *Runner) unsetBuiltinArrayElem(name, idx string) bool {
 	return r.unsetArrayElem(name, idx)
 }
 
+func (r *Runner) unsetStringArrayElem(name, idx string) bool {
+	vr := r.lookupVar(name)
+	if vr.Kind != expand.Associative {
+		return r.unsetArrayElem(name, idx)
+	}
+	key := r.unsetStringSubscript(idx)
+	if _, ok := vr.Map[key]; ok {
+		delete(vr.Map, key)
+		vr.Set = true
+		r.setVar(name, vr)
+	}
+	return true
+}
+
+func (r *Runner) unsetStringSubscript(idx string) string {
+	if opt, _ := r.bashOptByName("assoc_expand_once"); opt != nil && *opt {
+		return quoteRemoveUnsetSubscript(idx)
+	}
+	parser := syntax.NewParser(syntax.Variant(syntax.LangBash))
+	file, err := parser.Parse(strings.NewReader("x "+idx+"\n"), "")
+	if err != nil || len(file.Stmts) != 1 {
+		return idx
+	}
+	call, ok := file.Stmts[0].Cmd.(*syntax.CallExpr)
+	if !ok || len(call.Args) != 2 {
+		return idx
+	}
+	return r.literal(call.Args[1])
+}
+
+func quoteRemoveUnsetSubscript(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '\\':
+			if i+1 < len(s) {
+				i++
+			}
+			b.WriteByte(s[i])
+		case '\'':
+			i++
+			for i < len(s) && s[i] != '\'' {
+				b.WriteByte(s[i])
+				i++
+			}
+		case '"':
+			i++
+			for i < len(s) && s[i] != '"' {
+				if s[i] == '\\' && i+1 < len(s) {
+					i++
+				}
+				b.WriteByte(s[i])
+				i++
+			}
+		default:
+			b.WriteByte(s[i])
+		}
+	}
+	return b.String()
+}
+
+type unsetOperandSource struct {
+	quoted bool
+}
+
+func (r *Runner) unsetOperandSources(pos syntax.Pos) []unsetOperandSource {
+	offs, ok := r.sourceOffset(pos)
+	if !ok {
+		return nil
+	}
+	end := offs
+	for end < len(r.bashSource) && r.bashSource[end] != '\n' {
+		end++
+	}
+	line := string(r.bashSource[offs:end])
+	return scanUnsetOperandSources(line)
+}
+
+func scanUnsetOperandSources(line string) []unsetOperandSource {
+	var operands []unsetOperandSource
+	i := 0
+	for i < len(line) {
+		for i < len(line) && (line[i] == ' ' || line[i] == '\t') {
+			i++
+		}
+		if i >= len(line) {
+			break
+		}
+		start := i
+		quoted := line[i] == '\'' || line[i] == '"'
+		for i < len(line) {
+			switch line[i] {
+			case '\\':
+				i += 2
+			case '\'':
+				i++
+				for i < len(line) && line[i] != '\'' {
+					i++
+				}
+				if i < len(line) {
+					i++
+				}
+			case '"':
+				i++
+				for i < len(line) {
+					if line[i] == '\\' {
+						i += 2
+						continue
+					}
+					if line[i] == '"' {
+						i++
+						break
+					}
+					i++
+				}
+			case ' ', '\t':
+				goto wordDone
+			default:
+				i++
+			}
+		}
+	wordDone:
+		if line[start:i] == "unset" {
+			continue
+		}
+		if strings.HasPrefix(line[start:i], "-") {
+			continue
+		}
+		operands = append(operands, unsetOperandSource{quoted: quoted})
+	}
+	return operands
+}
+
 func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args []string) (exit exitStatus) {
 	// failf emits a user-fault error and sets the exit code. When
 	// [WithBashCompatErrors] is on, the message is prefixed with
@@ -411,6 +544,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 	case "unset":
 		vars := true
 		funcs := true
+		explicitVars := false
 		// `-n NAME` unsets the nameref itself (not the variable
 		// it points to). Without -n, unset of a nameref follows
 		// the reference and unsets the target.
@@ -419,6 +553,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		for i, arg := range args {
 			switch arg {
 			case "-v":
+				explicitVars = true
 				funcs = false
 			case "-f":
 				vars = false
@@ -441,7 +576,13 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			return failf(1, "unset: cannot simultaneously unset a function and a variable\n")
 		}
 
-		for _, arg := range args {
+		operandSources := r.unsetOperandSources(pos)
+		for i := 0; i < len(args); i++ {
+			arg := args[i]
+			operand := unsetOperandSource{}
+			if i < len(operandSources) {
+				operand = operandSources[i]
+			}
 			// Bash 5.3: `unset 1bad` errors with "not a valid identifier"
 			// (exit 2) when the var-namespace is in scope. Function names
 			// are unrestricted, so `unset -f 1bad` is allowed.
@@ -451,13 +592,23 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			if vars {
 				if name, idx, ok := splitArrayRef(arg); ok {
 					if syntax.ValidName(name) {
-						if !r.unsetBuiltinArrayElem(name, idx) {
+						unsetElem := r.unsetBuiltinArrayElem
+						if operand.quoted {
+							unsetElem = r.unsetStringArrayElem
+						}
+						if !unsetElem(name, idx) {
 							exit.code = 1
 						}
 						continue
 					}
 				}
 				if !syntax.ValidName(arg) {
+					if !explicitVars && strings.Contains(arg, "$(") {
+						for i+1 < len(args) && !syntax.ValidName(args[i+1]) {
+							i++
+						}
+						continue
+					}
 					if r.bashCompatErrors && strings.Contains(arg, "/") {
 						continue
 					}
