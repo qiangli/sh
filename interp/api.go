@@ -494,6 +494,11 @@ type callFrame struct {
 	line     uint
 	source   string
 	funcName string
+	// bodyLine is the line of the function body's opening token.
+	// Bash's parser stamps for/select commands inside a function with
+	// this line rather than their own, and runtime diagnostics like
+	// "not a valid identifier" surface it.
+	bodyLine uint
 }
 
 type bgProc struct {
