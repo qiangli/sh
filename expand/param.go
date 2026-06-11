@@ -380,7 +380,7 @@ func applyParamMods(cfg *Config, pe *syntax.ParamExp, str string) (string, error
 	if err != nil {
 		return "", err
 	}
-	if orig == "" {
+	if orig == "" && !replAnchoredStart && !replAnchoredEnd {
 		return str, nil
 	}
 	var with string
@@ -434,6 +434,15 @@ func replPattern(cfg *Config, word *syntax.Word) (pat string, start, end bool, e
 }
 
 func (cfg *Config) findReplIndex(pat, name string, n int, start, end bool) [][]int {
+	if pat == "" {
+		if start {
+			return [][]int{{0, 0}}
+		}
+		if end {
+			return [][]int{{len(name), len(name)}}
+		}
+		return nil
+	}
 	if !start && !end {
 		return cfg.findAllIndex(pat, name, n)
 	}
@@ -773,7 +782,7 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if orig == "" {
+		if orig == "" && !replAnchoredStart && !replAnchoredEnd {
 			break // nothing to replace
 		}
 		// Bash 5.3 applies quote-removal to the replacement string:
