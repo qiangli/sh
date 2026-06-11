@@ -376,7 +376,7 @@ func applyParamMods(cfg *Config, pe *syntax.ParamExp, str string) (string, error
 	if pe.Repl == nil {
 		return str, nil
 	}
-	orig, replAnchoredStart, replAnchoredEnd, err := replPattern(cfg, pe.Repl.Orig)
+	orig, replAnchoredStart, replAnchoredEnd, err := replPattern(cfg, pe.Repl.Orig, pe.Repl.All)
 	if err != nil {
 		return "", err
 	}
@@ -415,7 +415,7 @@ func applyParamMods(cfg *Config, pe *syntax.ParamExp, str string) (string, error
 	return sb.String(), nil
 }
 
-func replPattern(cfg *Config, word *syntax.Word) (pat string, start, end bool, err error) {
+func replPattern(cfg *Config, word *syntax.Word, all bool) (pat string, start, end bool, err error) {
 	pat, err = Pattern(cfg, word)
 	if err != nil || word == nil || len(word.Parts) == 0 {
 		return pat, false, false, err
@@ -424,11 +424,13 @@ func replPattern(cfg *Config, word *syntax.Word) (pat string, start, end bool, e
 	if !ok || lit.Value == "" {
 		return pat, false, false, nil
 	}
-	switch lit.Value[0] {
-	case '#':
-		return strings.TrimPrefix(pat, "#"), true, false, nil
-	case '%':
-		return strings.TrimPrefix(pat, "%"), false, true, nil
+	if !all {
+		switch lit.Value[0] {
+		case '#':
+			return strings.TrimPrefix(pat, "#"), true, false, nil
+		case '%':
+			return strings.TrimPrefix(pat, "%"), false, true, nil
+		}
 	}
 	return pat, false, false, nil
 }
@@ -778,7 +780,7 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			str = string(runes)
 		} // else, elems are already sliced
 	case pe.Repl != nil:
-		orig, replAnchoredStart, replAnchoredEnd, err := replPattern(cfg, pe.Repl.Orig)
+		orig, replAnchoredStart, replAnchoredEnd, err := replPattern(cfg, pe.Repl.Orig, pe.Repl.All)
 		if err != nil {
 			return "", err
 		}
