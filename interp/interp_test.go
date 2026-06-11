@@ -3919,6 +3919,22 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 		"VAR: readonly variable\nok\nstatus:0\n",
 	},
 	{
+		"f() { local -i a; a+=3; echo $a; }; a=4 b=7 f; echo after: ${a-unset}",
+		"7\nafter: unset\n",
+	},
+	{
+		"f() { local a; echo ${a-unset}; }; a=4 f",
+		"4\n",
+	},
+	{
+		"f() { local a; echo ${a-unset}; }; export a=4; f",
+		"unset\n",
+	},
+	{
+		"g() { local -i a; a+=3; echo $a; }; f() { g; }; a=4 f",
+		"7\n",
+	},
+	{
 		"VAR=4; readonly VAR; VAR=7 notthere; echo status:$?",
 		"VAR: readonly variable\n\"notthere\": executable file not found in $PATH\nstatus:127\n #IGNORE",
 	},

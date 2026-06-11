@@ -183,6 +183,15 @@ type Runner struct {
 	// they handle their own restore.
 	inlineLeakFromFunc map[string]bool
 
+	// tempEnv records variable names bound by inline assignments for
+	// the in-flight call (`a=4 foo`). Bash lets `local a` (no value)
+	// inside the callee inherit the temporary-environment value even
+	// without shopt localvar_inherit; setVar consults this set to
+	// keep that inherit while plain exported globals stay uninherited.
+	// Saved/restored around each call so nested calls see the outer
+	// binding (the temp env spans the whole call stack).
+	tempEnv map[string]bool
+
 	// argv0 is bash's $0 / $BASH_ARGV0 — initialized from filename
 	// but separately settable by user code. Error-message prefixes
 	// continue to use filename so they stay stable across user
@@ -1721,6 +1730,7 @@ func (r *Runner) subshell(background bool) *Runner {
 		enclosingSubshellEnd: r.enclosingSubshellEnd,
 		opts:                 r.opts,
 		noOpSetState:         maps.Clone(r.noOpSetState),
+		tempEnv:              maps.Clone(r.tempEnv),
 		usedNew:              r.usedNew,
 		exit:                 r.exit,
 		lastExit:             r.lastExit,

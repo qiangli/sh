@@ -1343,10 +1343,13 @@ func (r *Runner) setVar(name string, vr expand.Variable) {
 		}
 	}
 	// `local x` (no value) creates a fresh unset local; bash only
-	// inherits the previous scope's value with shopt localvar_inherit.
+	// inherits the previous scope's value with shopt localvar_inherit
+	// or when x is bound in the call's temporary environment
+	// (`x=4 foo` + `local -i x` inside foo sees 4).
 	// Explicitly-requested attributes like `-i`/`-u` are kept, but the
 	// parent's value is not.
 	if vr.Local && vr.Kind == expand.KeepValue &&
+		!r.tempEnv[name] &&
 		!r.bashShoptEnabled("localvar_inherit") {
 		if ol, ok := r.writeEnv.(*overlayEnviron); ok && ol.funcScope && !ol.holdsLocally(name) {
 			vr = expand.Variable{

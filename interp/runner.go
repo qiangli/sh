@@ -4124,7 +4124,19 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		if aliasExpanded {
 			callPos = origCallPos
 		}
+		savedTempEnv := r.tempEnv
+		if len(cm.Assigns) > 0 {
+			m := maps.Clone(savedTempEnv)
+			if m == nil {
+				m = make(map[string]bool, len(cm.Assigns))
+			}
+			for _, as := range cm.Assigns {
+				m[as.Name.Value] = true
+			}
+			r.tempEnv = m
+		}
 		r.call(ctx, callPos, fields)
+		r.tempEnv = savedTempEnv
 		// Bash POSIX mode (or inside a function): assignments
 		// preceding a special builtin (`return`, `export`, `eval`,
 		// `readonly`, `set`, …) persist after the command returns.
