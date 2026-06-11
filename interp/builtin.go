@@ -2501,11 +2501,6 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		if prompt != "" {
 			r.out(prompt)
 		}
-		if timeout > 0 && r.stdinFromHereStr && timeout < 10*time.Millisecond {
-			clearReadVars()
-			exit.code = 142
-			return exit
-		}
 		readInput := func() ([]byte, error) {
 			var line []byte
 			if nchars > 0 {
@@ -2569,47 +2564,82 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			line []byte
 			err  error
 		}
+		isReadTimeout := func(err error) bool {
+			return timeout > 0 && (errors.Is(readCtx.Err(), context.DeadlineExceeded) ||
+				errors.Is(err, os.ErrDeadlineExceeded))
+		}
 		var line []byte
 		var err error
 		if timeout > 0 {
-			stopc := make(chan struct{})
-			stop := context.AfterFunc(readCtx, func() {
-				if stdin != nil {
-					stdin.SetReadDeadline(time.Now())
-				}
-				close(stopc)
-			})
-			resetDeadline := func() {
-				if !stop() {
-					<-stopc
+			deadline := time.Now().Add(timeout)
+			cancelGrace := func() {}
+			if stdin != nil && timeout < 10*time.Millisecond && fdReadableNow(stdin) {
+				deadline = time.Now().Add(10 * time.Millisecond)
+				var cancel context.CancelFunc
+				readCtx, cancel = context.WithTimeout(ctx, 10*time.Millisecond)
+				cancelGrace = cancel
+			}
+			if stdin != nil && stdin.SetReadDeadline(deadline) == nil {
+				line, err = readInput()
+				stdin.SetReadDeadline(time.Time{})
+				cancelGrace()
+			} else {
+				cancelGrace()
+				stopc := make(chan struct{})
+				stop := context.AfterFunc(readCtx, func() {
 					if stdin != nil {
-						stdin.SetReadDeadline(time.Time{})
+						stdin.SetReadDeadline(time.Now())
+					}
+					close(stopc)
+				})
+				resetDeadline := func() {
+					if !stop() {
+						<-stopc
+						if stdin != nil {
+							stdin.SetReadDeadline(time.Time{})
+						}
 					}
 				}
-			}
-			resultc := make(chan readResult, 1)
-			go func() {
-				line, err := readInput()
-				if errors.Is(readCtx.Err(), context.DeadlineExceeded) && stdin != nil {
-					stdin.SetReadDeadline(time.Time{})
+				resultc := make(chan readResult, 1)
+				go func() {
+					line, err := readInput()
+					if errors.Is(readCtx.Err(), context.DeadlineExceeded) && stdin != nil {
+						stdin.SetReadDeadline(time.Time{})
+					}
+					resultc <- readResult{line, err}
+				}()
+				select {
+				case result := <-resultc:
+					resetDeadline()
+					line, err = result.line, result.err
+				case <-readCtx.Done():
+					gotResult := false
+					select {
+					case result := <-resultc:
+						resetDeadline()
+						line, err = result.line, result.err
+						gotResult = true
+					default:
+					}
+					if gotResult {
+						break
+					}
+					if errors.Is(readCtx.Err(), context.DeadlineExceeded) {
+						clearReadVars()
+						exit.code = 142
+						return exit
+					}
+					resetDeadline()
+					err = readCtx.Err()
 				}
-				resultc <- readResult{line, err}
-			}()
-			select {
-			case result := <-resultc:
-				resetDeadline()
-				line, err = result.line, result.err
-			case <-readCtx.Done():
-				if errors.Is(readCtx.Err(), context.DeadlineExceeded) {
-					clearReadVars()
-					exit.code = 142
-					return exit
-				}
-				resetDeadline()
-				err = readCtx.Err()
 			}
 		} else {
 			line, err = readInput()
+		}
+		if isReadTimeout(err) {
+			clearReadVars()
+			exit.code = 142
+			return exit
 		}
 		// readLine already stops at the configured delimiter and
 		// discards it; nothing left to trim here.
