@@ -4163,6 +4163,15 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			}
 
 			for _, field := range items {
+				// Check if the iteration variable is readonly before
+				// attempting to assign. Bash reports an error and stops
+				// the loop in this case.
+				if r.lookupVar(name).ReadOnly {
+					r.errf("%s%s: readonly variable\n",
+						r.bashErrPrefix(r.curStmtPos), name)
+					r.exit.code = 1
+					break
+				}
 				r.setVarString(name, field)
 				trace.stringf("for %s in", y.Name.Value)
 				if inToken {
@@ -4463,7 +4472,15 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			hasArrayFlag := slices.Contains(modes, "-a") || slices.Contains(modes, "-A") || valType == "-a" || valType == "-A"
 			switch {
 			case !hasArrayFlag:
-				r.setVarStringParsed = true // suppress any prefix
+				// For readonly and export, plain assignments get no prefix.
+				// For declare/local/typeset, all assignments get the builtin
+				// prefix (these builtins are specifically for variable
+				// manipulation, so errors are attributed to them).
+				if cm.Variant.Value == "readonly" || cm.Variant.Value == "export" {
+					r.setVarStringParsed = true // suppress any prefix
+				} else {
+					r.setVarFromBuiltin = cm.Variant.Value
+				}
 			case as.Array != nil && !fromString:
 				r.setVarArrayLiteral = true // function-name attribution
 			default:
@@ -4796,9 +4813,14 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 					vr.Exported = false
 				case "-r":
 					vr.ReadOnly = true
-				case "+r":
-					// Bash refuses to remove the readonly
-					// attribute once set; skip silently.
+			case "+r":
+				// Bash refuses to remove the readonly
+				// attribute once set; report error if readonly.
+				if vr.ReadOnly {
+					r.errf("%s%s: %s: readonly variable\n",
+						r.bashErrPrefix(r.curStmtPos), cm.Variant.Value, name)
+					r.exit.code = 1
+				}
 				case "-u":
 					vr.Upper, vr.Lower, vr.Capitalize = true, false, false
 				case "+u":
@@ -4905,6 +4927,11 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		if !declHadNames && (valType == "-A" || valType == "-a") && declQuery == "" {
 			r.printArrayVars(valType)
 		}
+		// Clear the builtin attribution flags so they don't leak to
+		// subsequent commands.
+		r.setVarFromBuiltin = ""
+		r.setVarStringParsed = false
+		r.setVarArrayLiteral = false
 	case *syntax.TimeClause:
 		// bash 5.3 only prints timing output for the outermost
 		// `time` keyword in a stack of nested `time` clauses;

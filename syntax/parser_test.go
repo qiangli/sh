@@ -1171,10 +1171,6 @@ var errorCases = []errorCase{
 		langErr("1:1: `for foo [in words]` must be followed by `do`"),
 	),
 	errCase(
-		"for 'i' in 1 2 3; do echo $i; done",
-		langErr("1:1: `for` must be followed by a literal"),
-	),
-	errCase(
 		"for in 1 2 3; do echo $i; done",
 		langErr("1:1: `for foo` must be followed by `in`, `do`, `;`, or a newline"),
 	),
@@ -1201,10 +1197,6 @@ var errorCases = []errorCase{
 	errCase(
 		"select i in 1 2 3; echo $i;",
 		langErr("1:1: `select foo [in words]` must be followed by `do`", LangBash|LangMirBSDKorn|LangZsh),
-	),
-	errCase(
-		"select 'i' in 1 2 3; do echo $i; done",
-		langErr("1:1: `select` must be followed by a literal", LangBash|LangMirBSDKorn|LangZsh),
 	),
 	errCase(
 		"select in 1 2 3; do echo $i; done",

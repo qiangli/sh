@@ -2812,11 +2812,21 @@ func (p *Parser) wordIter(ftok string, fpos Pos) *WordIter {
 	wi := &WordIter{}
 	if wi.Name = p.getLit(); wi.Name == nil {
 		if p.lang.in(langBashLike | LangMirBSDKorn) {
-			if w := p.getWord(); w != nil && wordHasParamExp(w) {
-				wi.Name = &Lit{
-					ValuePos: w.Pos(),
-					ValueEnd: w.End(),
-					Value:    funcNameWordText(w),
+			if w := p.getWord(); w != nil {
+				if wordHasParamExp(w) {
+					wi.Name = &Lit{
+						ValuePos: w.Pos(),
+						ValueEnd: w.End(),
+						Value:    funcNameWordText(w),
+					}
+				} else {
+					// Allow any word as the iterator variable name; the
+					// interpreter will validate that it is a valid identifier.
+					wi.Name = &Lit{
+						ValuePos: w.Pos(),
+						ValueEnd: w.End(),
+						Value:    w.Lit(),
+					}
 				}
 			}
 		}
