@@ -76,6 +76,9 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 				path, ok := r.catShortcutPath(word)
 				if !ok {
 					r.lastExpandExit = exitStatus{code: 1}
+					if sb, ok := w.(*strings.Builder); ok {
+						sb.Reset()
+					}
 					return nil
 				}
 				if sb, ok := w.(*strings.Builder); ok {
@@ -305,17 +308,18 @@ func catShortcutArg(stmt *syntax.Stmt) *syntax.Word {
 }
 
 func (r *Runner) catShortcutPath(word *syntax.Word) (string, bool) {
-	if r.opts[optPosix] {
-		return r.literal(word), true
-	}
 	fields := r.fields(word)
 	if len(fields) != 1 {
-		var b bytes.Buffer
-		syntax.NewPrinter().Print(&b, word)
-		r.errf("%s%s: ambiguous redirect\n", r.bashErrPrefix(word.Pos()), b.String())
+		r.ambiguousRedirect(word.Pos(), word)
 		return "", false
 	}
 	return fields[0], true
+}
+
+func (r *Runner) ambiguousRedirect(pos syntax.Pos, word *syntax.Word) {
+	var b bytes.Buffer
+	syntax.NewPrinter().Print(&b, word)
+	r.errf("%s%s: ambiguous redirect\n", r.bashErrPrefix(pos), b.String())
 }
 
 func (r *Runner) updateExpandOpts() {
@@ -5780,9 +5784,7 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 		} else {
 			fields := r.fields(rd.Word)
 			if len(fields) != 1 {
-				var b bytes.Buffer
-				syntax.NewPrinter().Print(&b, rd.Word)
-				r.errf("%s%s: ambiguous redirect\n", r.bashErrPrefix(rd.Word.Pos()), b.String())
+				r.ambiguousRedirect(rd.Word.Pos(), rd.Word)
 				return nil, fmt.Errorf("ambiguous redirect")
 			}
 			arg = fields[0]

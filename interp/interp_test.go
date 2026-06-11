@@ -1831,6 +1831,22 @@ var runTests = []runTest{
 		"foo\n",
 	},
 	{
+		"echo foo >f; p=f*; echo $(<$p)",
+		"foo\n",
+	},
+	{
+		"set -o posix; echo foo >f; echo $(<f*)",
+		"foo\n",
+	},
+	{
+		"echo foo >f1; echo foo >f2; echo $(<f*)",
+		"f*: ambiguous redirect\n\n #JUSTERR",
+	},
+	{
+		"echo foo >f1; echo foo >f2; p=f*; echo $(<$p)",
+		"$p: ambiguous redirect\n\n #JUSTERR",
+	},
+	{
 		"echo foo >f; echo $(<f; echo bar)",
 		"bar\n",
 	},
