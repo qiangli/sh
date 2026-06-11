@@ -393,6 +393,13 @@ func arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 			if err := expandedAssocSubscriptError(str); err != nil {
 				return 0, err
 			}
+			// Check for literal `$` tokens in single-quoted text before re-parsing.
+			// Single-quoted strings like '$iv' have literal $ that should error.
+			if sqText, ok := arithmSingleQuotedText(expr); ok {
+				if token := literalDollarArithmToken(sqText); token != "" {
+					return 0, fmt.Errorf("arithmetic syntax error: operand expected (error token is %q)", token)
+				}
+			}
 			file, perr := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader("(("+str+"))"), "")
 			if perr != nil {
 				return 0, &ArithmError{Text: str, Err: arithmParseError(str, perr)}
