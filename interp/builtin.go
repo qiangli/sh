@@ -1710,6 +1710,12 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				}
 				return exit
 			}
+			if r.bashCompatErrors && args[0] == "-v" {
+				r.errf("%s%s: %s: binary operator expected\n",
+					r.bashErrPrefix(pos), name, args[1])
+				exit.code = 2
+				return exit
+			}
 		}
 		// 3-arg `arg1 OP arg2` where OP isn't a binary operator:
 		// bash 5.3 emits `<OP>: binary operator expected` rather
