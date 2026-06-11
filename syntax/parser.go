@@ -989,6 +989,12 @@ func (p *Parser) followStmts(left string, lpos Pos, stops ...string) ([]*Stmt, [
 		if p.recoverError() {
 			return []*Stmt{{Position: recoveredPos}}, nil
 		}
+		if left == "(" && p.tok == _EOF && p.lang.in(LangBash) {
+			// Bash 5.3 reports an empty subshell running into
+			// end-of-file as an EOF error pointing back at the `(`
+			// line, like the heredoc-EOF case in [Parser.subshell].
+			p.posErr(p.nextPos(), "syntax error: unexpected end of file from `(' command on line %d", lpos.Line())
+		}
 		p.followErr(lpos, left, noQuote("a statement list"))
 	}
 	return stmts, last
