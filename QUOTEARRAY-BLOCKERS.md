@@ -46,6 +46,32 @@ Remaining clusters:
   bash 5.3 reports the expanded token directly. The remaining wrapper is added
   by `interp.Runner.bashArithmError`; `expand/arith.go` now supplies the right
   expanded override text, including backslash-escaped indexed-array tokens.
+  This round re-verified that the in-scope `expand.ArithmError.Text` values
+  are already correct for the cluster:
+
+  - `(( $expr ))` and `(( expr ))` pass `x],b[$(echo uname >&2)` as the override.
+  - `((array[$index]++))` passes `0\],b\[1` as the override.
+  - `interp.Runner.bashArithmError` still wraps command arithmetic errors
+    whenever the inner message already contains `error token is`, producing the
+    remaining line mismatches.
+
+  Full outside-scope patch for the next `interp/` owner:
+
+  ```diff
+  diff --git a/interp/runner.go b/interp/runner.go
+  --- a/interp/runner.go
+  +++ b/interp/runner.go
+  @@
+   if strings.Contains(bashMsg, "error token is") {
+ +     if command && exprTextOverride != "" &&
+ +        strings.Contains(bashMsg, "arithmetic syntax error: invalid arithmetic operator") {
+ +        return fmt.Errorf("%s: line %d: %s: %s",
+ +           prefix, line, exprText, bashMsg)
+ +     }
+      if command {
+         if compactErrSep {
+            return fmt.Errorf("%s: line %d: ((: %s: %s",
+  ```
 - Remaining `assoc_expand_once` builtin cases in `quotearray2.sub` through
   `quotearray5.sub` are now mostly outside this round's writable files:
   `declare A[$k]=X`, quoted string-form `declare "A[$k]=X"`, compound
