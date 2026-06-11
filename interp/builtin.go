@@ -2336,6 +2336,8 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		readline := false
 		readArray := false
 		var timeout time.Duration
+		var timeoutSpec string
+		invalidTimeoutStatus := uint8(0)
 		nchars := 0
 		// nstrict tracks `-N`: read exactly that many bytes, ignoring
 		// the delimiter and skipping the IFS split step (the buffer
@@ -2365,10 +2367,14 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				}
 				secs, err := strconv.ParseFloat(val, 64)
 				if err != nil {
-					return failf(1, "read: %s: invalid timeout specification\n", val)
+					timeoutSpec = val
+					invalidTimeoutStatus = 1
+					break
 				}
 				if secs < 0 {
-					return failf(2, "read: %s: invalid timeout specification\n", val)
+					timeoutSpec = val
+					invalidTimeoutStatus = 2
+					break
 				}
 				timeout = time.Duration(secs * float64(time.Second))
 				if secs > 0 && timeout == 0 {
@@ -2413,10 +2419,6 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			if !validBuiltinAssignName(name) {
 				return failf(2, "read: `%s': not a valid identifier\n", name)
 			}
-		}
-
-		if prompt != "" {
-			r.out(prompt)
 		}
 
 		// Resolve the reader: `-u N` opens fd N from the runner's
@@ -2470,6 +2472,40 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		}
 
 		stdin := r.stdin
+		clearReadVars := func() {
+			if readArray {
+				arrayName := shellReplyVar
+				if len(args) > 0 {
+					arrayName = args[0]
+				}
+				r.setVar(arrayName, expand.Variable{
+					Set:  true,
+					Kind: expand.Indexed,
+				})
+				return
+			}
+			for _, name := range args {
+				r.setVarString(name, "")
+			}
+		}
+		if invalidTimeoutStatus != 0 {
+			r.errf("%sread: %s: invalid timeout specification\n",
+				r.bashErrPrefix(r.curStmtPos), timeoutSpec)
+			if r.stdinTTYFallback {
+				exit.code = 1
+			} else {
+				exit.code = invalidTimeoutStatus
+			}
+			return exit
+		}
+		if prompt != "" {
+			r.out(prompt)
+		}
+		if timeout > 0 && r.stdinFromHereStr && timeout < 10*time.Millisecond {
+			clearReadVars()
+			exit.code = 142
+			return exit
+		}
 		readInput := func() ([]byte, error) {
 			var line []byte
 			if nchars > 0 {
@@ -2565,6 +2601,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				line, err = result.line, result.err
 			case <-readCtx.Done():
 				if errors.Is(readCtx.Err(), context.DeadlineExceeded) {
+					clearReadVars()
 					exit.code = 142
 					return exit
 				}

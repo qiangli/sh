@@ -102,6 +102,7 @@ type Runner struct {
 
 	stdin            *os.File // e.g. the read end of a pipe
 	stdinTTYFallback bool
+	stdinFromHereStr bool
 	stdout           io.Writer
 	stderr           io.Writer
 
@@ -1723,6 +1724,8 @@ func (r *Runner) subshell(background bool) *Runner {
 		readDirHandler:       r.readDirHandler,
 		statHandler:          r.statHandler,
 		stdin:                r.stdin,
+		stdinTTYFallback:     r.stdinTTYFallback,
+		stdinFromHereStr:     r.stdinFromHereStr,
 		stdout:               r.stdout,
 		stderr:               r.stderr,
 		filename:             r.filename,
