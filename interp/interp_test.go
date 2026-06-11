@@ -936,6 +936,10 @@ var runTests = []runTest{
 		"unset\nno-at\nat\n",
 	},
 	{
+		`declare -A A; key='$(echo foo)'; A[$key]=1; test -v A["$key"]; echo $?`,
+		"1\n",
+	},
+	{
 		`scalar=; [[ -v scalar[@] ]] && echo set || echo unset`,
 		"set\n",
 	},
