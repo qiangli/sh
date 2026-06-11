@@ -5202,6 +5202,26 @@ func TestBashCompatMalformedLengthSubstitution(t *testing.T) {
 			"./more-exp.tests: line 7: #: %: arithmetic syntax error: operand expected (error token is \"%\")\n"))
 }
 
+func TestBashCompatTestVarSetSplitArrayRef(t *testing.T) {
+	src := "key='$(echo foo)'\n" +
+		"test -v aa[$key]\n"
+	file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(src), "./quotearray1.sub")
+	qt.Assert(t, qt.IsNil(err))
+
+	var cb bytes.Buffer
+	r, err := interp.New(
+		interp.StdIO(nil, &cb, &cb),
+		interp.WithBashCompatErrors(true),
+		interp.WithBashSource([]byte(src)),
+	)
+	qt.Assert(t, qt.IsNil(err))
+
+	err = r.Run(context.Background(), file)
+	qt.Assert(t, qt.ErrorMatches(err, "exit status 2"))
+	qt.Assert(t, qt.Equals(cb.String(),
+		"./quotearray1.sub: line 2: test: aa[$(echo: binary operator expected\n"))
+}
+
 func TestBashCompatExecInvalidOptionUsage(t *testing.T) {
 	src := "exec -1</dev/null\n"
 	file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(src), "./redir.tests")
