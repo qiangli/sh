@@ -589,3 +589,46 @@ func TestAnchoredEmptyPatternSubst(t *testing.T) {
 		})
 	}
 }
+
+func TestGlobalAnchoredPatternSubst(t *testing.T) {
+	tests := []struct {
+		env  testEnv
+		src  string
+		want string
+	}{
+		{
+			env: testEnv{
+				"var": {Set: true, Kind: Indexed, List: []string{"abcde", "abcdf"}},
+			},
+			src:  `${var[*]//#abc/foo}`,
+			want: "abcde abcdf",
+		},
+		{
+			env: testEnv{
+				"var": {Set: true, Kind: Indexed, List: []string{"abcde", "abcdf"}},
+			},
+			src:  `${var[*]/#abc/foo}`,
+			want: "foode foodf",
+		},
+		{
+			env: testEnv{
+				"v": {Set: true, Kind: String, Str: "x#abcy"},
+			},
+			src:  `${v//#abc/Z}`,
+			want: "xZy",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.src, func(t *testing.T) {
+			cfg := &Config{Env: tc.env}
+			word := parseWord(t, tc.src)
+			got, err := Literal(cfg, word)
+			if err != nil {
+				t.Fatalf("did not want error, got %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("wanted %q, got %q", tc.want, got)
+			}
+		})
+	}
+}
