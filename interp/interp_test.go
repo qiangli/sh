@@ -5318,6 +5318,52 @@ func TestBashCompatTestVarSetSplitArrayRef(t *testing.T) {
 		"./quotearray1.sub: line 2: test: aa[$(echo: binary operator expected\n"))
 }
 
+func TestBashCompatUnsetQuotedArrayOperands(t *testing.T) {
+	src := `declare -A a
+key='$(echo foo)'
+a[$key]=1
+unset 'a[$key]'
+declare -p a
+a[$key]=1
+unset a[$key]
+declare -p a
+unset a
+declare -A a
+a['$key']=2
+unset "a['\$key']"
+declare -p a
+declare -A a=(@ v0 . v1)
+key=@
+unset 'a[$key]'
+declare -p a
+declare -A assoc
+assoc['$var']=value
+var=x123
+shopt -s assoc_expand_once
+unset 'assoc[$var]'
+declare -p assoc
+`
+	file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(src), "./quotearray5.sub")
+	qt.Assert(t, qt.IsNil(err))
+
+	var cb bytes.Buffer
+	r, err := interp.New(
+		interp.StdIO(nil, &cb, &cb),
+		interp.WithBashCompatErrors(true),
+		interp.WithBashSource([]byte(src)),
+	)
+	qt.Assert(t, qt.IsNil(err))
+
+	err = r.Run(context.Background(), file)
+	qt.Assert(t, qt.IsNil(err))
+	qt.Assert(t, qt.Equals(cb.String(),
+		"declare -A a=()\n"+
+			"declare -A a=([\"\\$(echo foo)\"]=\"1\" )\n"+
+			"declare -A a=()\n"+
+			"declare -A a=([.]=\"v1\" )\n"+
+			"declare -A assoc=()\n"))
+}
+
 func TestBashCompatExecInvalidOptionUsage(t *testing.T) {
 	src := "exec -1</dev/null\n"
 	file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(src), "./redir.tests")
