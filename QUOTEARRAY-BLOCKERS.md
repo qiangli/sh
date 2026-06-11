@@ -6,7 +6,7 @@ Current verified measurements in this sandbox:
 - Exact requested repro command: `155` diff lines. Note: `external` is a
   symlink here, so `realpath ../../../bin/bashy` resolves to a different
   checkout's `bin/bashy`, not this sandbox's rebuilt binary.
-- Same fixture with this sandbox's rebuilt `bin/bashy`: `199` diff lines using
+- Same fixture with this sandbox's rebuilt `bin/bashy`: `173` diff lines using
   `diff - ./quotearray.right | wc -l`.
 
 Implemented progress:
@@ -23,16 +23,19 @@ Implemented progress:
 - Double-quoted arithmetic text only takes the raw-text path when it contains
   a parameter expansion, preserving normal quote removal for cases like
   `let "a[\" \"]=11"`.
+- Malformed arithmetic subscript diagnostics now carry the expanded token text
+  through `expand.ArithmError.Text`, and indexed-array malformed subscripts
+  quote bracket characters in that text, reducing the sandbox-local
+  `quotearray` diff from `176` to `173`.
 
 Remaining clusters:
 
-- Arithmetic error framing for indirect expressions like `$expr`/`expr` still
-  prints bashy's `((: <expr> :` wrapper in several cases where bash reports the
-  expanded token directly. Synthetic reparse positions are no longer mapped
-  against unrelated source text, but the message shape still differs.
-- Indexed-array malformed subscripts such as `array[$index]++` now classify as
-  arithmetic syntax errors, but the diagnostic still differs from bash's
-  backslash-escaped token text.
+- Arithmetic error framing for indirect expressions like `$expr`/`expr` and
+  malformed indexed-array subscripts such as `array[$index]++` still prints
+  bashy's `((: <expanded-token> :` wrapper in command-arithmetic paths where
+  bash 5.3 reports the expanded token directly. The remaining wrapper is added
+  by `interp.Runner.bashArithmError`; `expand/arith.go` now supplies the right
+  expanded override text, including backslash-escaped indexed-array tokens.
 - Several `assoc_expand_once` builtin cases in `quotearray2.sub` through
   `quotearray5.sub` remain outside the arithmetic path, mainly `read`,
   `printf -v`, `declare`, `unset`, and `test -v` handling of quoted or special

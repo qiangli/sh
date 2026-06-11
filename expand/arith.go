@@ -230,6 +230,25 @@ func arithmQuoteExpandedParamValue(s string) string {
 	return b.String()
 }
 
+func arithmQuoteMalformedIndexText(s string) string {
+	if strings.ContainsAny(s, "$`") {
+		return s
+	}
+	if !strings.ContainsAny(s, `\[]`) {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '\\', '[', ']':
+			b.WriteByte('\\')
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
+}
+
 func arithmNameStart(b byte) bool {
 	return b == '_' || ('a' <= b && b <= 'z') || ('A' <= b && b <= 'Z')
 }
@@ -300,7 +319,11 @@ func expandedAssocSubscriptError(s string) error {
 	if end := strings.LastIndex(token, "]"); end > 0 {
 		token = token[:end]
 	}
-	return fmt.Errorf("arithmetic syntax error: invalid arithmetic operator (error token is %q)", token)
+	return &ArithmError{
+		Text: arithmQuoteMalformedIndexText(s),
+		Err: fmt.Errorf("arithmetic syntax error: invalid arithmetic operator (error token is \"%s\")",
+			arithmQuoteMalformedIndexText(token)),
+	}
 }
 
 func Arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
