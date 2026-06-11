@@ -3712,6 +3712,7 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	{"foo() { export bar; }; bar=foo; foo; $ENV_PROG | grep ^bar=", "bar=foo\n"},
 	{"foo() { export bar; }; foo; bar=foo; $ENV_PROG | grep ^bar=", "bar=foo\n"},
 	{"foo() { export bar=foo; }; foo; readonly bar; $ENV_PROG | grep ^bar=", "bar=foo\n"},
+	{"var=10; export var; export -n var; var=60 export var; declare -p var", "declare -x var=\"60\"\n"},
 
 	// local
 	{
@@ -3753,6 +3754,18 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	{
 		"f() { a=1; declare b=2; export c=3; readonly d=4; declare -g e=5; }; f; echo $a $b $c $d $e",
 		"1 3 4 5\n",
+	},
+	{
+		`w=old; f() { local w=local; declare -g w=global; echo "f:$w"; }; f; echo "G:$w"`,
+		"f:local\nG:global\n",
+	},
+	{
+		`var=global; f() { local -I var; declare -p var; }; f`,
+		"declare -- var=\"global\"\n",
+	},
+	{
+		`f() { local x; g; }; g() { local -p x; }; f`,
+		"local: x: not found\nexit status 1 #JUSTERR",
 	},
 	{
 		`f() { local x; [[ -v x ]] && echo set || echo unset; }; f`,
@@ -3876,6 +3889,7 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	},
 	{"readonly foo=bar; export foo; echo $foo", "bar\n"},
 	{"readonly foo=bar; readonly bar=foo; export foo bar; echo $bar", "foo\n"},
+	{"readonly -p | grep '^declare -r SHELLOPTS='", "declare -r SHELLOPTS=\"braceexpand:hashall:interactive-comments\"\n"},
 	{
 		"a=b; a=c; echo $a; readonly a; a=d",
 		"c\na: readonly variable\nexit status 1 #JUSTERR",
