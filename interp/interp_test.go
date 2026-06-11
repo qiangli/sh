@@ -947,8 +947,20 @@ var runTests = []runTest{
 		"declare -A A=([\"*\"]=\"2\" [\"]\"]=\"2\" [\"@\"]=\"2\" )\n",
 	},
 	{
+		`declare -A A; for k in ']' '*' '@'; do declare A[$k]=X; done; declare -p A`,
+		"declare: `A[]]=X': not a valid identifier\ndeclare -A A=([\"*\"]=\"X\" [\"@\"]=\"X\" )\n",
+	},
+	{
+		`declare -A A; for k in ']' '*' '@'; do declare "A[$k]=X"; done; declare -p A`,
+		"declare: `A[]]=X': not a valid identifier\ndeclare -A A=([\"*\"]=\"X\" [\"@\"]=\"X\" )\n",
+	},
+	{
 		`declare -A a; a[0]=0 a[1]=1; let "a[\" \"]=11"; declare -p a`,
 		"declare -A a=([1]=\"1\" [0]=\"0\" [\" \"]=\"11\" )\n",
+	},
+	{
+		`declare -A assoc; key='x],b[$(echo uname >&2)'; let assoc[$key]++; declare -p assoc`,
+		"bashy: line 1: let: assoc[x],b[$(echo: bad array subscript (error token is \"b[$(echo\")\ndeclare -A assoc\n",
 	},
 	{
 		`declare -A A; for k in $'\t' ' ' '*' '@'; do read "A[$k]" <<< X; done; declare -p A`,
@@ -1018,6 +1030,14 @@ var runTests = []runTest{
 	{
 		`declare -A A; A[@]=at; A[!]=bang; key=@; unset A[$key]; declare -p A`,
 		"declare -A A=([\"!\"]=\"bang\" )\n",
+	},
+	{
+		`declare -A assoc; assoc[@]=at assoc[*]=star assoc[!]=bang; aref='assoc[@]'; declare -n nref=$aref; echo $nref`,
+		"star bang at\n",
+	},
+	{
+		`array=(1 2 3); iref='array[@]'; declare -n nref=$iref; echo $nref; unset array[@]; declare -p array; unset array[@]; declare -p array`,
+		"1 2 3\ndeclare -a array=()\ndeclare: array: not found\nexit status 1 #JUSTERR",
 	},
 
 	// declare -f and declare -p

@@ -456,19 +456,35 @@ func (r *Runner) arithm(expr syntax.ArithmExpr) int {
 }
 
 func (r *Runner) letArithm(expr syntax.ArithmExpr) int {
+	if exprText, token, ok := r.malformedLetAssocSubscript(expr); ok {
+		prefix := r.filename
+		if prefix == "" {
+			prefix = "bashy"
+		}
+		err := fmt.Errorf("%s: line %d: let: %s: bad array subscript (error token is %q)",
+			prefix, expr.Pos().Line(), exprText, token)
+		r.lastArithErr = err
+		r.expandErr(err)
+		return 0
+	}
 	n, err := expand.Arithm(r.ecfg, expr)
+	exprTextOverride := ""
 	if arithErr, arithExpr := innermostArithmError(err); arithErr != nil {
 		if arithExpr != nil {
 			expr = arithExpr
 		}
+		exprTextOverride = arithErr.Text
 		err = arithErr.Err
 	}
 	if err != nil && r.bashCompatErrors {
 		exprText := r.arithmSourceText(expr, false)
+		if exprTextOverride != "" {
+			exprText = exprTextOverride
+		}
 		if exprText == "" {
 			exprText = printArithmExpr(expr)
 		}
-		if w, ok := expr.(*syntax.Word); ok {
+		if w, ok := expr.(*syntax.Word); ok && exprTextOverride == "" {
 			exprText = r.literal(w)
 		}
 		prefix := r.filename
@@ -481,6 +497,52 @@ func (r *Runner) letArithm(expr syntax.ArithmExpr) int {
 	r.lastArithErr = err
 	r.expandErr(err)
 	return n
+}
+
+func (r *Runner) malformedLetAssocSubscript(expr syntax.ArithmExpr) (exprText, token string, ok bool) {
+	un, ok := expr.(*syntax.UnaryArithm)
+	if !ok || (un.Op != syntax.Inc && un.Op != syntax.Dec) {
+		return "", "", false
+	}
+	lval, ok := arithLetWordLvalue(un.X)
+	if !ok {
+		return "", "", false
+	}
+	vr := r.lookupVar(lval.name)
+	if vr.Kind != expand.Associative {
+		return "", "", false
+	}
+	key := r.assocAssignKey(lval.index)
+	idx := strings.Index(key, "],")
+	if idx < 0 {
+		return "", "", false
+	}
+	token = key[idx+2:]
+	if sp := strings.IndexAny(token, " \t\n"); sp >= 0 {
+		token = token[:sp]
+	}
+	return lval.name + "[" + key[:idx+2] + token, token, true
+}
+
+type arithLetLvalue struct {
+	name  string
+	index *syntax.Word
+}
+
+func arithLetWordLvalue(expr syntax.ArithmExpr) (arithLetLvalue, bool) {
+	w, ok := expr.(*syntax.Word)
+	if !ok || len(w.Parts) != 1 {
+		return arithLetLvalue{}, false
+	}
+	pe, ok := w.Parts[0].(*syntax.ParamExp)
+	if !ok || pe.Param == nil || pe.Index == nil {
+		return arithLetLvalue{}, false
+	}
+	index, ok := pe.Index.(*syntax.Word)
+	if !ok {
+		return arithLetLvalue{}, false
+	}
+	return arithLetLvalue{name: pe.Param.Value, index: index}, true
 }
 
 func printArithmExpr(expr syntax.ArithmExpr) string {
@@ -4929,6 +4991,21 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				}
 			} else {
 				prevForIndex := vr
+				if as.Index != nil && (vr.Kind == expand.Associative || valType == "-A") {
+					if w, ok := as.Index.(*syntax.Word); ok {
+						key := r.assocAssignKey(w)
+						if strings.Contains(key, "]") {
+							assignForm := name + "[" + key + "]"
+							if as.Value != nil {
+								assignForm += "=" + r.literalForAssign(as.Value)
+							}
+							r.errf("%s%s: `%s': not a valid identifier\n",
+								r.bashErrPrefix(r.curStmtPos), cm.Variant.Value, assignForm)
+							r.exit.code = 1
+							continue
+						}
+					}
+				}
 				name, vr = r.assignVal(name, vr, as, valType)
 				if as.Index != nil {
 					r.setVarWithIndex(prevForIndex, name, as.Index, vr)
@@ -5305,9 +5382,29 @@ func (r *Runner) flattenAssigns(args []*syntax.Assign) iter.Seq2[*syntax.Assign,
 				if !ok {
 					as.Naked = true
 				} else {
-					as.Value = &syntax.Word{Parts: []syntax.WordPart{
-						&syntax.Lit{Value: val},
-					}}
+					if base, idx, ok := splitArrayRef(name); ok && syntax.ValidName(base) {
+						name = base
+						as.Name = &syntax.Lit{Value: name}
+						as.Index = &syntax.Word{Parts: []syntax.WordPart{
+							&syntax.Lit{Value: idx},
+						}}
+					} else if strings.Contains(name, "[") {
+						// Keep the whole assignment form so the
+						// identifier diagnostic matches bash, e.g.
+						// `declare "A[$k]=X"` with k=] reports
+						// `A[]]=X': not a valid identifier.
+						as.Name = &syntax.Lit{Value: field}
+						as.Naked = true
+					} else {
+						as.Value = &syntax.Word{Parts: []syntax.WordPart{
+							&syntax.Lit{Value: val},
+						}}
+					}
+					if !as.Naked && as.Value == nil {
+						as.Value = &syntax.Word{Parts: []syntax.WordPart{
+							&syntax.Lit{Value: val},
+						}}
+					}
 				}
 				if !yield(as, true) {
 					return
