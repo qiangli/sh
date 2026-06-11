@@ -4551,7 +4551,7 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	},
 	{
 		"read -t -1 x",
-		"read: -1: invalid timeout specification\nexit status 1 #JUSTERR",
+		"read: -1: invalid timeout specification\nexit status 2 #JUSTERR",
 	},
 	{
 		"read -t 5 x <<< hello; echo $x",
@@ -6000,6 +6000,33 @@ func TestCancelBlockedStdinRead(t *testing.T) {
 		}
 	case <-time.After(timeout):
 		t.Fatalf("program was not killed in %s", timeout)
+	}
+}
+
+func TestReadTimeoutBlockedStdin(t *testing.T) {
+	t.Parallel()
+
+	file := parse(t, nil, "read -t 0.000001 x")
+	ctx, cancel := context.WithTimeout(context.Background(), runnerRunTimeout)
+	defer cancel()
+
+	stdinRead, stdinWrite, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("Error calling os.Pipe: %v", err)
+	}
+	defer func() {
+		stdinWrite.Close()
+		stdinRead.Close()
+	}()
+
+	r, _ := interp.New(interp.StdIO(stdinRead, nil, nil))
+	now := time.Now()
+	err = r.Run(ctx, file)
+	if err == nil || err.Error() != "exit status 142" {
+		t.Fatalf("read -t did not return timeout status 142; err: %v", err)
+	}
+	if dur := time.Since(now); dur > time.Second {
+		t.Fatalf("read -t took too long to time out: %v", dur)
 	}
 }
 

@@ -2364,10 +2364,16 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					return failf(2, "read: -t: option requires an argument\n")
 				}
 				secs, err := strconv.ParseFloat(val, 64)
-				if err != nil || secs < 0 {
+				if err != nil {
 					return failf(1, "read: %s: invalid timeout specification\n", val)
 				}
+				if secs < 0 {
+					return failf(2, "read: %s: invalid timeout specification\n", val)
+				}
 				timeout = time.Duration(secs * float64(time.Second))
+				if secs > 0 && timeout == 0 {
+					timeout = time.Nanosecond
+				}
 			case "-n", "-N":
 				val := fp.value()
 				n, err := strconv.Atoi(val)
@@ -2463,20 +2469,22 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			defer cancel()
 		}
 
-		var line []byte
-		var err error
-		if nchars > 0 {
-			buf := make([]byte, nchars)
-			if nstrict {
-				// `-N`: read EXACTLY nchars bytes, never honoring the
-				// delimiter.
-				n, readErr := io.ReadFull(r.stdin, buf)
-				line = buf[:n]
-				err = readErr
-				if err == io.ErrUnexpectedEOF {
-					err = io.EOF
+		stdin := r.stdin
+		readInput := func() ([]byte, error) {
+			var line []byte
+			if nchars > 0 {
+				buf := make([]byte, nchars)
+				if nstrict {
+					// `-N`: read EXACTLY nchars bytes, never honoring the
+					// delimiter.
+					n, readErr := io.ReadFull(stdin, buf)
+					line = buf[:n]
+					if readErr == io.ErrUnexpectedEOF {
+						readErr = io.EOF
+					}
+					return line, readErr
 				}
-			} else {
+
 				// `-n`: read up to nchars characters, stopping early at
 				// the delimiter. Bash drops the delimiter byte from the
 				// result, so read one byte at a time but count complete
@@ -2487,7 +2495,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					delimByte = delim[0]
 				}
 				for chars := 0; chars < nchars; {
-					n, readErr := r.stdin.Read(one)
+					n, readErr := stdin.Read(one)
 					if n > 0 {
 						if one[0] == delimByte {
 							break
@@ -2506,20 +2514,65 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 						}
 					}
 					if readErr != nil {
-						err = readErr
-						break
+						return line, readErr
 					}
 				}
+				return line, nil
 			}
-		} else if silent {
-			// Note that on Windows, syscall.Stdin is of type uintptr.
-			line, err = term.ReadPassword(int(syscall.Stdin))
-		} else {
+			if silent {
+				// Note that on Windows, syscall.Stdin is of type uintptr.
+				return term.ReadPassword(int(syscall.Stdin))
+			}
 			delimByte := byte('\n')
 			if len(delim) > 0 {
 				delimByte = delim[0]
 			}
-			line, err = r.readLine(readCtx, raw, delimByte)
+			return r.readLine(readCtx, raw, delimByte)
+		}
+		type readResult struct {
+			line []byte
+			err  error
+		}
+		var line []byte
+		var err error
+		if timeout > 0 {
+			stopc := make(chan struct{})
+			stop := context.AfterFunc(readCtx, func() {
+				if stdin != nil {
+					stdin.SetReadDeadline(time.Now())
+				}
+				close(stopc)
+			})
+			resetDeadline := func() {
+				if !stop() {
+					<-stopc
+					if stdin != nil {
+						stdin.SetReadDeadline(time.Time{})
+					}
+				}
+			}
+			resultc := make(chan readResult, 1)
+			go func() {
+				line, err := readInput()
+				if errors.Is(readCtx.Err(), context.DeadlineExceeded) && stdin != nil {
+					stdin.SetReadDeadline(time.Time{})
+				}
+				resultc <- readResult{line, err}
+			}()
+			select {
+			case result := <-resultc:
+				resetDeadline()
+				line, err = result.line, result.err
+			case <-readCtx.Done():
+				if errors.Is(readCtx.Err(), context.DeadlineExceeded) {
+					exit.code = 142
+					return exit
+				}
+				resetDeadline()
+				err = readCtx.Err()
+			}
+		} else {
+			line, err = readInput()
 		}
 		// readLine already stops at the configured delimiter and
 		// discards it; nothing left to trim here.
@@ -4844,13 +4897,14 @@ func (r *Runner) readLine(ctx context.Context, raw bool, delim byte) ([]byte, er
 	if r.stdin == nil {
 		return nil, errors.New("interp: can't read, there's no stdin")
 	}
+	stdin := r.stdin
 
 	var line []byte
 	esc := false
 
 	stopc := make(chan struct{})
 	stop := context.AfterFunc(ctx, func() {
-		r.stdin.SetReadDeadline(time.Now())
+		stdin.SetReadDeadline(time.Now())
 		close(stopc)
 	})
 	defer func() {
@@ -4858,12 +4912,12 @@ func (r *Runner) readLine(ctx context.Context, raw bool, delim byte) ([]byte, er
 			// The AfterFunc was started.
 			// Wait for it to complete, and reset the file's deadline.
 			<-stopc
-			r.stdin.SetReadDeadline(time.Time{})
+			stdin.SetReadDeadline(time.Time{})
 		}
 	}()
 	for {
 		var buf [1]byte
-		n, err := r.stdin.Read(buf[:])
+		n, err := stdin.Read(buf[:])
 		if n > 0 {
 			b := buf[0]
 			switch {
