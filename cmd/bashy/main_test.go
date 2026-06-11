@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -448,5 +449,79 @@ func TestRunNestedBadSubstRecoveryContinues(t *testing.T) {
 	wantErr := "./new-exp.tests: line 2: ${$(($#-1))}: bad substitution\n"
 	if string(globalStderr) != wantErr {
 		t.Fatalf("stderr mismatch\nwant:\n%q\ngot:\n%q", wantErr, string(globalStderr))
+	}
+}
+
+// runForcedInteractiveInput drives runForcedInteractiveExec with raw
+// input bytes (including readline control keys) on a pipe replacing
+// os.Stdin, returning the runner's stdout.
+func runForcedInteractiveInput(t *testing.T, input string) string {
+	t.Helper()
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		pw.WriteString(input)
+		pw.Close()
+	}()
+	oldStdin := os.Stdin
+	os.Stdin = pr
+	t.Cleanup(func() { os.Stdin = oldStdin })
+
+	var out bytes.Buffer
+	r, err := interp.New(interp.StdIO(nil, &out, io.Discard), interp.Interactive(true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runForcedInteractiveExec(r); err != nil {
+		t.Fatal(err)
+	}
+	return out.String()
+}
+
+func TestForcedInteractiveOperateAndGetNext(t *testing.T) {
+	// Mirrors the last sections of bash's history4.sub: type a few
+	// commands (one multi-line, one HISTIGNOREd), then C-p back three
+	// entries and C-o twice. The recalled multi-line entry must rerun
+	// whole, and each C-o must execute and fetch the next entry even
+	// while HISTSIZE stifling shifts the list.
+	t.Setenv("HISTSIZE", "6")
+	t.Setenv("HISTFILE", "")
+	t.Setenv("HISTIGNORE", "&:history*:fc*")
+	out := runForcedInteractiveInput(t,
+		"echo 0\necho 1\necho 2\necho \"(left\nmid\nright)\"\necho A\necho B\nhistory -w\n\x10\x10\x10\x0f\x0f\n")
+	want := "0\n1\n2\n(left\nmid\nright)\nA\nB\n(left\nmid\nright)\nA\nB\n"
+	if out != want {
+		t.Errorf("operate-and-get-next:\n got: %q\nwant: %q", out, want)
+	}
+}
+
+func TestForcedInteractiveReverseSearch(t *testing.T) {
+	// Mirrors the first sections of history4.sub: load a HISTFILE whose
+	// multi-line entry comes back as separate line entries, C-r search
+	// for it, then C-o through the continuation lines and the next
+	// entries. Clearing HISTFILE first must prevent the exit-time save
+	// from clobbering the file.
+	dir := t.TempDir()
+	hf := filepath.Join(dir, "histfile")
+	content := "echo 0\necho 1\necho 2\necho \"(left\nmid\nright)\"\necho A\necho B\nhistory -w\n"
+	if err := os.WriteFile(hf, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HISTSIZE", "8")
+	t.Setenv("HISTFILE", hf)
+	t.Setenv("HISTIGNORE", "&:history*:fc*")
+	out := runForcedInteractiveInput(t, "HISTFILE=\n\x12left\x0f\x0f\x0f\x0f\n")
+	want := "(left\nmid\nright)\nA\nB\n"
+	if out != want {
+		t.Errorf("reverse search:\n got: %q\nwant: %q", out, want)
+	}
+	data, err := os.ReadFile(hf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != content {
+		t.Errorf("history file clobbered at exit:\n got: %q\nwant: %q", string(data), content)
 	}
 }

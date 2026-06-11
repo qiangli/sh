@@ -40,6 +40,12 @@ import (
 // IsBuiltin returns true if the given word is a POSIX Shell
 // or Bash builtin.
 func IsBuiltin(name string) bool {
+	// While reader-level history expansion is armed (`set -o history`
+	// plus `set -H`), `!`-prefixed words are history event designators
+	// resolved by the history engine at dispatch, not external commands.
+	if histDesignator(name) {
+		return true
+	}
 	switch name {
 	case
 		// POSIX Shell builtins, from section 1.d obtained in September 2025 from:
@@ -231,6 +237,13 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 	// dispatch advances the history cursor up to its source line. No-op
 	// unless a script has turned on `set -o history`.
 	r.histSync(ctx, pos)
+	if histDesignator(name) {
+		// The histSync call above consumed this line's `!` event
+		// designator from the reader timeline, echoing the expansion to
+		// stderr and executing it. Surface that execution's exit code.
+		exit.code = r.exit.code
+		return exit
+	}
 	switch name {
 	case ":", "true":
 	case "false":

@@ -78,6 +78,24 @@ func histReset() {
 	h.lastAdded, h.lastPushed = false, false
 }
 
+// histDesignator reports whether a command word should be treated as a
+// history event designator (`!!`, `!n`, `!prefix`) rather than a
+// command name. Mirrors the reader gate in histSync: the `!` event
+// char is only special once `set -o history` and `set -H` are both on,
+// and never before a blank, `=` or `(`.
+func histDesignator(name string) bool {
+	if len(name) < 2 || name[0] != '!' || strings.ContainsRune(" \t=(", rune(name[1])) {
+		return false
+	}
+	h := shellHist
+	if !h.active.Load() {
+		return false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.enabled && h.expand
+}
+
 // histSync advances the reader-emulation cursor up to the given source
 // position, recording every timeline entry bash's reader would have
 // consumed by now. Called at the top of every builtin dispatch.
