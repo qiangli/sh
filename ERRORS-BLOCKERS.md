@@ -34,3 +34,8 @@
 - After: (no output, matching bash 5.3 behavior)
 
 **Diff Impact**: Removes 1 line from diff
+
+**2026-06-11 Update**: Applied locally in `interp/builtin.go` with
+`interp/interp_test.go` coverage. Fresh gate numbers: errors 71, redir 0,
+history 0, quotearray 48. Commit was blocked because the sandbox exposes
+`.git` metadata read-only (`git add` cannot create `.git/index.lock`).
