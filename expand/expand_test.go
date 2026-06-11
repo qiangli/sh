@@ -563,3 +563,29 @@ var _ fs.DirEntry = (*mockFileInfo)(nil)
 
 func (fi *mockFileInfo) Name() string      { return fi.name }
 func (fi *mockFileInfo) Type() fs.FileMode { return fi.typ }
+
+func TestAnchoredEmptyPatternSubst(t *testing.T) {
+	tests := []struct {
+		env  string
+		src  string
+		want string
+	}{
+		{"var=blah", `${var/#/--}`, "--blah"},
+		{"var=abc", `${var/#/x}`, "xabc"},
+		{"var=", `${var/#/x}`, "x"},
+		{"var=abc", `${var/%/x}`, "abcx"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.src, func(t *testing.T) {
+			cfg := &Config{Env: ListEnviron(tc.env)}
+			word := parseWord(t, tc.src)
+			got, err := Literal(cfg, word)
+			if err != nil {
+				t.Fatalf("did not want error, got %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("wanted %q, got %q", tc.want, got)
+			}
+		})
+	}
+}
