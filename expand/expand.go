@@ -3129,7 +3129,7 @@ func (cfg *Config) quotedReplElemFields(pe *syntax.ParamExp) []string {
 	if elems == nil {
 		return nil
 	}
-	orig, replAnchoredStart, replAnchoredEnd, err := replPattern(cfg, pe.Repl.Orig)
+	orig, replAnchoredStart, replAnchoredEnd, err := replPattern(cfg, pe.Repl.Orig, pe.Repl.All)
 	if err != nil || orig == "" {
 		return nil
 	}
