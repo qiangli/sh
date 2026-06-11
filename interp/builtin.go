@@ -4620,17 +4620,12 @@ func (r *Runner) ulimitBuiltin(pos syntax.Pos, args []string) exitStatus {
 	}
 	switch flag {
 	case "-n":
-		var rlim syscall.Rlimit
-		if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &rlim); err != nil {
-			r.outf("unlimited\n")
-			return exit
-		}
-		// RLIM_INFINITY is `0xffffffffffffffff` (uint64 max) on
-		// linux and `0x7fffffffffffffff` (int64 max) on darwin/BSD.
-		if rlim.Cur == ^uint64(0) || rlim.Cur == 1<<63-1 {
-			r.outf("unlimited\n")
+		// nofileLimit is per-platform: getrlimit on unix, "unlimited"
+		// elsewhere (Windows has no fd rlimit concept).
+		if cur, ok := nofileLimit(); ok {
+			r.outf("%d\n", cur)
 		} else {
-			r.outf("%d\n", rlim.Cur)
+			r.outf("unlimited\n")
 		}
 	default:
 		r.outf("unlimited\n")

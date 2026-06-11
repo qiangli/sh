@@ -65,6 +65,13 @@ func (r *Runner) unTestOwnOrGrp(ctx context.Context, op syntax.UnTestOperator, x
 	return false
 }
 
+// modifiedSinceAccessed reports whether the file's mtime is strictly
+// greater than its atime — bash's `-N FILE` test operator. atime is not
+// portably available off unix; report false.
+func modifiedSinceAccessed(info os.FileInfo) bool {
+	return false
+}
+
 // waitStatus is a no-op on plan9 and windows.
 type waitStatus struct{}
 

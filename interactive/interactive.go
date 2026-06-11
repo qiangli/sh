@@ -47,8 +47,23 @@ type Options struct {
 	// Stdin is the input source. When it is an *os.File on a TTY, the
 	// package auto-wires raw-mode handling against that fd — required for
 	// arrow keys, history navigation, and Ctrl-C. Otherwise Run falls
-	// back to plain newline-buffered input via [syntax.Parser.InteractiveSeq].
+	// back to plain newline-buffered input via [syntax.Parser.InteractiveSeq],
+	// unless AssumeTTY is set.
 	Stdin io.Reader
+
+	// AssumeTTY makes Run treat Stdin as an interactive terminal that is
+	// already in raw mode, even when it is not an *os.File on a TTY. For
+	// embedders bridging a remote terminal whose raw mode is managed at
+	// the far end — an SSH client that did a pty-req, or a WebSocket-
+	// attached xterm.js — over a plain pipe, on platforms (Windows) where
+	// no kernel PTY pair can sit in between. Raw-mode enter/exit become
+	// no-ops; echo and line editing are readline's own, written to Stdout.
+	// Ignored when Stdin is a real TTY *os.File (the real binding wins).
+	AssumeTTY bool
+	// GetSize reports the current terminal size (cols, rows) when
+	// AssumeTTY is in effect. Nil, or a non-positive return, falls back
+	// to 80x24.
+	GetSize func() (cols, rows int)
 	// Stdout receives line-edit echo and command stdout. If nil, [os.Stdout]
 	// is used.
 	Stdout io.Writer
@@ -170,7 +185,9 @@ func Run(ctx context.Context, opts Options) error {
 		Stdout:            stdout,
 		Stderr:            stderr,
 	}
-	bindTTY(cfg, stdin)
+	if !bindTTY(cfg, stdin) && opts.AssumeTTY {
+		bindAssumedTTY(cfg, opts.GetSize)
+	}
 
 	rl, err := readline.NewFromConfig(cfg)
 	if err != nil {
@@ -283,14 +300,16 @@ func Run(ctx context.Context, opts Options) error {
 // — wrong fd, raw mode never reaches the PTY slave the caller asked us to
 // drive. The hardcoded fd 0 default works for cmd/bashy (a CLI tool) but
 // breaks for embedders driving a separate PTY pair.
-func bindTTY(cfg *readline.Config, stdin io.Reader) {
+//
+// Returns whether the binding was installed (stdin really is a TTY file).
+func bindTTY(cfg *readline.Config, stdin io.Reader) bool {
 	f, ok := stdin.(*os.File)
 	if !ok {
-		return
+		return false
 	}
 	fd := int(f.Fd())
 	if !term.IsTerminal(fd) {
-		return
+		return false
 	}
 	var saved *term.State
 	cfg.FuncIsTerminal = func() bool { return true }
@@ -318,6 +337,29 @@ func bindTTY(cfg *readline.Config, stdin io.Reader) {
 		}
 		return w, h
 	}
+	return true
+}
+
+// bindAssumedTTY wires terminal callbacks for a stream that is not a
+// kernel TTY but whose far end is a terminal already in raw mode (see
+// [Options.AssumeTTY]). Raw-mode enter/exit are no-ops — the bytes
+// arrive raw and leave raw; the daemon process's own console (if any)
+// must never be touched, which is also why the width-change hook is
+// disarmed: readline's unix default would install a SIGWINCH handler
+// keyed to the wrong terminal.
+func bindAssumedTTY(cfg *readline.Config, getSize func() (cols, rows int)) {
+	cfg.FuncIsTerminal = func() bool { return true }
+	cfg.FuncMakeRaw = func() error { return nil }
+	cfg.FuncExitRaw = func() error { return nil }
+	cfg.FuncGetSize = func() (int, int) {
+		if getSize != nil {
+			if w, h := getSize(); w > 0 && h > 0 {
+				return w, h
+			}
+		}
+		return 80, 24
+	}
+	cfg.FuncOnWidthChanged = func(func()) {}
 }
 
 // runFallback runs the plain newline-buffered loop when readline cannot
