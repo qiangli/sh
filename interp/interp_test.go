@@ -5250,6 +5250,25 @@ func TestBashCompatExecInvalidOptionUsage(t *testing.T) {
 			"exec: usage: exec [-cl] [-a name] [command [argument ...]] [redirection ...]\n"))
 }
 
+func TestBashCompatUnsetInvalidPathName(t *testing.T) {
+	src := "unset /bin/sh\nunset invalid-name\n"
+	file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(src), "./errors.tests")
+	qt.Assert(t, qt.IsNil(err))
+
+	var cb bytes.Buffer
+	r, err := interp.New(
+		interp.StdIO(nil, &cb, &cb),
+		interp.WithBashCompatErrors(true),
+		interp.WithBashSource([]byte(src)),
+	)
+	qt.Assert(t, qt.IsNil(err))
+
+	err = r.Run(context.Background(), file)
+	qt.Assert(t, qt.ErrorMatches(err, "exit status 2"))
+	qt.Assert(t, qt.Equals(cb.String(),
+		"./errors.tests: line 2: unset: `invalid-name': not a valid identifier\n"))
+}
+
 func readLines(hc interp.HandlerContext) ([][]byte, error) {
 	bs, err := io.ReadAll(hc.Stdin)
 	if err != nil {
