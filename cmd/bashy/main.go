@@ -561,12 +561,14 @@ func runAll() error {
 // HISTFILESIZE entries, with `#<epoch>` timestamp lines when
 // HISTTIMEFORMAT is set (even if empty), matching bash.
 func runForcedInteractive(r *interp.Runner, noexec bool) error {
+	if !noexec {
+		return runForcedInteractiveExec(r)
+	}
 	ps1 := os.Getenv("PS1")
 	if ps1 == "" {
 		ps1 = "$ "
 	}
 	var entries []string
-	parser := syntax.NewParser(syntax.Variant(syntax.LangBash), syntax.KeepComments(true))
 	sc := bufio.NewScanner(os.Stdin)
 	for sc.Scan() {
 		line := sc.Text()
@@ -575,18 +577,6 @@ func runForcedInteractive(r *interp.Runner, noexec bool) error {
 			continue
 		}
 		entries = append(entries, line)
-		if noexec {
-			continue
-		}
-		file, err := parser.Parse(strings.NewReader(line), "bashy")
-		if err != nil {
-			continue
-		}
-		_ = r.Run(context.Background(), file)
-		if r.Exited() {
-			saveInteractiveHistory(entries)
-			return nil
-		}
 	}
 	fmt.Fprintf(os.Stderr, "%sexit\n", ps1)
 	saveInteractiveHistory(entries)
@@ -596,13 +586,24 @@ func runForcedInteractive(r *interp.Runner, noexec bool) error {
 // saveInteractiveHistory writes the session history to $HISTFILE and
 // truncates it to $HISTFILESIZE entries, like an interactive bash exit.
 func saveInteractiveHistory(entries []string) {
-	path := os.Getenv("HISTFILE")
+	_, timestamps := os.LookupEnv("HISTTIMEFORMAT")
+	sizeVal := "__unset__"
+	if v, ok := os.LookupEnv("HISTFILESIZE"); ok {
+		sizeVal = v
+	}
+	writeSessionHistory(os.Getenv("HISTFILE"), entries, timestamps, sizeVal)
+}
+
+// writeSessionHistory writes history entries to path, truncated to the
+// HISTFILESIZE value in sizeVal ("__unset__" disables truncation), with
+// `#<epoch>` timestamp lines when timestamps is set, matching an
+// interactive bash exit.
+func writeSessionHistory(path string, entries []string, timestamps bool, sizeVal string) {
 	if path == "" || len(entries) == 0 {
 		return
 	}
-	_, timestamps := os.LookupEnv("HISTTIMEFORMAT")
-	if v, ok := os.LookupEnv("HISTFILESIZE"); ok {
-		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n >= 0 && len(entries) > n {
+	if sizeVal != "__unset__" {
+		if n, err := strconv.Atoi(strings.TrimSpace(sizeVal)); err == nil && n >= 0 && len(entries) > n {
 			entries = entries[len(entries)-n:]
 		}
 	}

@@ -167,6 +167,24 @@ fc -s aa=cc
 	}
 }
 
+func TestHistoryExpansionDesignators(t *testing.T) {
+	out := runHistScript(t, `HISTFILE=/dev/null
+set -o history
+echo line one
+set -H
+!!
+!e
+`)
+	// `!!` repeats the previous command (`set -H`); `!e` repeats the
+	// last command starting with `e`. Each expansion is echoed to
+	// stderr before running, and the designator must not fall through
+	// to command lookup (`!!: command not found`).
+	want := "line one\nset -H\necho line one\nline one\n"
+	if out != want {
+		t.Errorf("history expansion:\n got: %q\nwant: %q", out, want)
+	}
+}
+
 func TestHistorySAndW(t *testing.T) {
 	dir := t.TempDir()
 	hf := filepath.Join(dir, "histfile")
