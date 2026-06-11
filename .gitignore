@@ -16,3 +16,4 @@ bin/
 
 # Claude Code session artifacts
 .claude/
+.aider*
