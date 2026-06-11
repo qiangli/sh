@@ -1459,6 +1459,11 @@ func (r *Runner) setVarWithIndex(prev expand.Variable, name string, index syntax
 	case expand.Associative:
 		// if the existing variable is already an AssocArray, try our
 		// best to convert the key to a string
+		if index == nil {
+			r.errf("%s%s: bad array subscript\n", r.bashErrPrefix(r.curStmtPos), name)
+			r.exit.code = 1
+			return
+		}
 		w, ok := index.(*syntax.Word)
 		if !ok {
 			return
