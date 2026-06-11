@@ -458,7 +458,14 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					}
 				}
 				if !syntax.ValidName(arg) {
-					return failf(2, "unset: `%s': not a valid identifier\n", arg)
+					msg := fmt.Sprintf("unset: `%s': not a valid identifier\n", arg)
+					if prefix := r.bashErrPrefix(pos); prefix != "" {
+						msg = prefix + msg
+					}
+					r.errf("%s", msg)
+					r.reportError("builtin", pos, name, msg, 2)
+					exit.code = 2
+					continue
 				}
 			}
 			if nameref {
