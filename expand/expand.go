@@ -2276,7 +2276,11 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 		case *syntax.DblQuoted:
 			if len(wp.Parts) == 1 {
 				pe, _ := wp.Parts[0].(*syntax.ParamExp)
-				if elems := cfg.quotedElemFields(pe); elems != nil {
+				elems, err := cfg.quotedElemFields(pe)
+				if err != nil {
+					return nil, err
+				}
+				if elems != nil {
 					for i, elem := range elems {
 						if i > 0 {
 							flush()
@@ -2681,7 +2685,11 @@ func (cfg *Config) substWordPartFields(parts []syntax.WordPart) ([][]fieldPart, 
 			}
 			if len(part.Parts) == 1 {
 				pe, _ := part.Parts[0].(*syntax.ParamExp)
-				if elems := cfg.quotedElemFields(pe); elems != nil {
+				elems, err := cfg.quotedElemFields(pe)
+				if err != nil {
+					return nil, err
+				}
+				if elems != nil {
 					for i, elem := range elems {
 						if i > 0 {
 							flush()
@@ -2937,9 +2945,9 @@ func (cfg *Config) escapedLitFields(s string) [][]fieldPart {
 
 // quotedElemFields returns the list of elements resulting from a quoted
 // parameter expansion that should be treated especially, like "${foo[@]}".
-func (cfg *Config) quotedElemFields(pe *syntax.ParamExp) []string {
+func (cfg *Config) quotedElemFields(pe *syntax.ParamExp) ([]string, error) {
 	if pe == nil || pe.Length || pe.Width || pe.IsSet {
-		return nil
+		return nil, nil
 	}
 	// Default/alternate substitution (`${var-WORD}`, `${var+WORD}`,
 	// etc.) where the
@@ -2996,32 +3004,44 @@ func (cfg *Config) quotedElemFields(pe *syntax.ParamExp) []string {
 				}
 				if trigger {
 					// Use the inner PE's special handling.
-					if e := cfg.quotedElemFields(innerPE); e != nil {
-						return e
+					e, err := cfg.quotedElemFields(innerPE)
+					if err != nil {
+						return nil, err
+					}
+					if e != nil {
+						return e, nil
 					}
 				}
 			}
 		}
 	}
-	if elems := cfg.quotedReplElemFields(pe); elems != nil {
-		return elems
+	elems, err := cfg.quotedReplElemFields(pe)
+	if err != nil {
+		return nil, err
 	}
-	if elems := cfg.quotedRemoveElemFields(pe); elems != nil {
-		return elems
+	if elems != nil {
+		return elems, nil
+	}
+	elems, err = cfg.quotedRemoveElemFields(pe)
+	if err != nil {
+		return nil, err
+	}
+	if elems != nil {
+		return elems, nil
 	}
 	// Casemod operators need per-element processing by the full
 	// paramExp path, so return nil here and let the caller fall back
 	// to it.
 	if pe.Exp != nil || pe.Repl != nil {
-		return nil
+		return nil, nil
 	}
 	name := pe.Param.Value
 	if pe.Excl {
 		switch pe.Names {
 		case syntax.NamesPrefixWords: // "${!prefix@}"
-			return cfg.namesByPrefix(pe.Param.Value)
+			return cfg.namesByPrefix(pe.Param.Value), nil
 		case syntax.NamesPrefix: // "${!prefix*}"
-			return []string{cfg.ifsJoin(cfg.namesByPrefix(pe.Param.Value))}
+			return []string{cfg.ifsJoin(cfg.namesByPrefix(pe.Param.Value))}, nil
 		}
 		if base, idx, ok := splitIndirectArrayRef(cfg.Env.Get(name).String()); ok {
 			return cfg.quotedAllElemValues(&syntax.ParamExp{
@@ -3042,9 +3062,9 @@ func (cfg *Config) quotedElemFields(pe *syntax.ParamExp) []string {
 				for _, key := range vr.IndexedIndexes() {
 					keys = append(keys, strconv.Itoa(key))
 				}
-				return keys
+				return keys, nil
 			case Associative:
-				return AssocKeysInBashOrder(vr.Map)
+				return AssocKeysInBashOrder(vr.Map), nil
 			}
 		}
 		vr := cfg.Env.Get(name)
@@ -3054,11 +3074,15 @@ func (cfg *Config) quotedElemFields(pe *syntax.ParamExp) []string {
 		case "*":
 			return cfg.quotedAllElemValues(&syntax.ParamExp{Param: &syntax.Lit{Value: "*"}})
 		}
-		return nil
+		return nil, nil
 	}
 	switch name {
 	case "*": // "${*}" or "${*:offset:length}"
-		return []string{cfg.ifsJoin(cfg.sliceElems(pe, cfg.Env.Get(name).List, true))}
+		elems, err := cfg.sliceElems(pe, cfg.Env.Get(name).List, true)
+		if err != nil {
+			return nil, err
+		}
+		return []string{cfg.ifsJoin(elems)}, nil
 	case "@": // "${@}" or "${@:offset:length}"
 		return cfg.sliceElems(pe, cfg.Env.Get(name).List, true)
 	}
@@ -3074,27 +3098,35 @@ func (cfg *Config) quotedElemFields(pe *syntax.ParamExp) []string {
 			for i, k := range keys {
 				elems[i] = vr.Map[k]
 			}
-			return elems
+			return elems, nil
 		case Unknown:
 			if !vr.IsSet() {
 				// An unset variable expanded as "${name[@]}" produces
 				// zero fields, just like an empty array.
-				return []string{}
+				return []string{}, nil
 			}
 		}
 	case "*": // "${name[*]}"
 		if vr := cfg.Env.Get(name); vr.Kind == Indexed {
-			return []string{cfg.ifsJoin(cfg.sliceElems(pe, vr.IndexedValues(), false))}
+			elems, err := cfg.sliceElems(pe, vr.IndexedValues(), false)
+			if err != nil {
+				return nil, err
+			}
+			return []string{cfg.ifsJoin(elems)}, nil
 		}
 	}
-	return nil
+	return nil, nil
 }
 
-func (cfg *Config) quotedAllElemValues(pe *syntax.ParamExp) []string {
+func (cfg *Config) quotedAllElemValues(pe *syntax.ParamExp) ([]string, error) {
 	name := pe.Param.Value
 	switch name {
 	case "*":
-		return []string{cfg.ifsJoin(cfg.sliceElems(pe, cfg.Env.Get(name).List, true))}
+		elems, err := cfg.sliceElems(pe, cfg.Env.Get(name).List, true)
+		if err != nil {
+			return nil, err
+		}
+		return []string{cfg.ifsJoin(elems)}, nil
 	case "@":
 		return cfg.sliceElems(pe, cfg.Env.Get(name).List, true)
 	default:
@@ -3110,28 +3142,35 @@ func (cfg *Config) quotedAllElemValues(pe *syntax.ParamExp) []string {
 				for i, k := range keys {
 					elems[i] = vr.Map[k]
 				}
-				return elems
+				return elems, nil
 			}
 		case "*":
 			if vr := cfg.Env.Get(name); vr.Kind == Indexed {
-				return []string{cfg.ifsJoin(cfg.sliceElems(pe, vr.IndexedValues(), false))}
+				elems, err := cfg.sliceElems(pe, vr.IndexedValues(), false)
+				if err != nil {
+					return nil, err
+				}
+				return []string{cfg.ifsJoin(elems)}, nil
 			}
 		}
 	}
-	return nil
+	return nil, nil
 }
 
-func (cfg *Config) quotedReplElemFields(pe *syntax.ParamExp) []string {
+func (cfg *Config) quotedReplElemFields(pe *syntax.ParamExp) ([]string, error) {
 	if pe == nil || pe.Repl == nil || pe.Length || pe.Width || pe.IsSet || pe.Excl {
-		return nil
+		return nil, nil
 	}
-	elems := cfg.quotedAllElemValues(pe)
+	elems, err := cfg.quotedAllElemValues(pe)
+	if err != nil {
+		return nil, err
+	}
 	if elems == nil {
-		return nil
+		return nil, nil
 	}
 	orig, replAnchoredStart, replAnchoredEnd, err := replPattern(cfg, pe.Repl.Orig, pe.Repl.All)
 	if err != nil || orig == "" {
-		return nil
+		return nil, nil
 	}
 	var with string
 	if pe.Repl.With != nil {
@@ -3143,7 +3182,7 @@ func (cfg *Config) quotedReplElemFields(pe *syntax.ParamExp) []string {
 			}
 			s, lerr := Literal(cfg, &syntax.Word{Parts: []syntax.WordPart{part}})
 			if lerr != nil {
-				return nil
+				return nil, lerr
 			}
 			sb.WriteString(s)
 		}
@@ -3166,26 +3205,29 @@ func (cfg *Config) quotedReplElemFields(pe *syntax.ParamExp) []string {
 		sb.WriteString(elem[last:])
 		out[i] = sb.String()
 	}
-	return out
+	return out, nil
 }
 
-func (cfg *Config) quotedRemoveElemFields(pe *syntax.ParamExp) []string {
+func (cfg *Config) quotedRemoveElemFields(pe *syntax.ParamExp) ([]string, error) {
 	if pe == nil || pe.Exp == nil || pe.Length || pe.Width || pe.IsSet || pe.Excl {
-		return nil
+		return nil, nil
 	}
 	op := pe.Exp.Op
 	isPatternOp := op == syntax.RemSmallPrefix || op == syntax.RemLargePrefix ||
 		op == syntax.RemSmallSuffix || op == syntax.RemLargeSuffix
 	if !isPatternOp {
-		return nil
+		return nil, nil
 	}
-	elems := cfg.quotedAllElemValues(pe)
+	elems, err := cfg.quotedAllElemValues(pe)
+	if err != nil {
+		return nil, err
+	}
 	if elems == nil {
-		return nil
+		return nil, nil
 	}
 	arg, err := Pattern(cfg, pe.Exp.Word)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	suffix := op == syntax.RemSmallSuffix || op == syntax.RemLargeSuffix
 	small := op == syntax.RemSmallPrefix || op == syntax.RemSmallSuffix
@@ -3193,7 +3235,7 @@ func (cfg *Config) quotedRemoveElemFields(pe *syntax.ParamExp) []string {
 	for i, elem := range elems {
 		out[i] = cfg.removePattern(elem, arg, suffix, small)
 	}
-	return out
+	return out, nil
 }
 
 // sliceElems applies ${var:offset:length} slicing to a list of elements.
@@ -3201,9 +3243,9 @@ func (cfg *Config) quotedRemoveElemFields(pe *syntax.ParamExp) []string {
 // In bash, positional parameter offsets ($@ and $*) are 1-based and
 // offset 0 includes $0 (the shell or script name). Negative offsets
 // count from $# + 1, so $0 is reachable via large enough negative values.
-func (cfg *Config) sliceElems(pe *syntax.ParamExp, elems []string, positional bool) []string {
+func (cfg *Config) sliceElems(pe *syntax.ParamExp, elems []string, positional bool) ([]string, error) {
 	if pe.Slice == nil {
-		return elems
+		return elems, nil
 	}
 	if positional {
 		elems = append([]string{cfg.Env.Get("0").Str}, elems...)
@@ -3222,18 +3264,27 @@ func (cfg *Config) sliceElems(pe *syntax.ParamExp, elems []string, positional bo
 	if pe.Slice.Offset != nil {
 		offset, err := Arithm(cfg, pe.Slice.Offset)
 		if err != nil {
-			return elems
+			return elems, err
 		}
 		elems = elems[slicePos(offset):]
 	}
 	if pe.Slice.Length != nil {
 		length, err := Arithm(cfg, pe.Slice.Length)
 		if err != nil {
-			return elems
+			return elems, err
+		}
+		// Negative length is an error for positional parameters and for
+		// array expansions with @ or * index (bash 5.3).
+		if length < 0 && (positional || nodeLit(pe.Index) == "@" || nodeLit(pe.Index) == "*") {
+			name := pe.Param.Value
+			if name == "" {
+				name = nodeLit(pe.Index)
+			}
+			return elems, fmt.Errorf("%s: %d: substring expression < 0", name, length)
 		}
 		elems = elems[:slicePos(length)]
 	}
-	return elems
+	return elems, nil
 }
 
 // expandTildesAfterColons applies bash's assignment-tilde rule to a

@@ -597,7 +597,11 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 		case Indexed:
 			indexAllElements = true
 			callVarInd = false
-			elems = cfg.sliceElems(pe, vr.IndexedValues(), name == "@" || name == "*")
+			var sliceErr error
+			elems, sliceErr = cfg.sliceElems(pe, vr.IndexedValues(), name == "@" || name == "*")
+			if sliceErr != nil {
+				return "", sliceErr
+			}
 			str = strings.Join(elems, " ")
 		case Associative:
 			indexAllElements = true

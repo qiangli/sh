@@ -590,6 +590,83 @@ func TestAnchoredEmptyPatternSubst(t *testing.T) {
 	}
 }
 
+func TestNegativeSubstringLengthError(t *testing.T) {
+	tests := []struct {
+		env  testEnv
+		src  string
+		want string // expected error substring
+	}{
+		{
+			env: testEnv{
+				"@": {Set: true, Kind: Indexed, List: []string{"a"}},
+			},
+			src:  `${@:1:$(($# - 2))}`,
+			want: "-1: substring expression < 0",
+		},
+		{
+			env: testEnv{
+				"a": {Set: true, Kind: Indexed, List: []string{"x", "y", "z"}},
+			},
+			src:  `${a[@]:0:-2}`,
+			want: "-2: substring expression < 0",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.src, func(t *testing.T) {
+			cfg := &Config{Env: tc.env}
+			word := parseWord(t, tc.src)
+			_, err := Literal(cfg, word)
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tc.want)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error %q does not contain %q", err.Error(), tc.want)
+			}
+		})
+	}
+	// Must keep working cases
+	keepTests := []struct {
+		env  testEnv
+		src  string
+		want string
+	}{
+		{
+			env: testEnv{
+				"v": {Set: true, Kind: String, Str: "hello"},
+			},
+			src:  `${v:1:-2}`,
+			want: "ell",
+		},
+		{
+			env: testEnv{
+				"v": {Set: true, Kind: String, Str: "hello"},
+			},
+			src:  `${v: -3:2}`,
+			want: "ll",
+		},
+		{
+			env: testEnv{
+				"@": {Set: true, Kind: Indexed, List: []string{"a", "b", "c"}},
+			},
+			src:  `${@:2:2}`,
+			want: "b c",
+		},
+	}
+	for _, tc := range keepTests {
+		t.Run(tc.src, func(t *testing.T) {
+			cfg := &Config{Env: tc.env}
+			word := parseWord(t, tc.src)
+			got, err := Literal(cfg, word)
+			if err != nil {
+				t.Fatalf("did not want error, got %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("wanted %q, got %q", tc.want, got)
+			}
+		})
+	}
+}
+
 func TestGlobalAnchoredPatternSubst(t *testing.T) {
 	tests := []struct {
 		env  testEnv
