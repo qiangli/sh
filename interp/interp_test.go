@@ -939,6 +939,45 @@ var runTests = []runTest{
 		`declare -A A; key='$(echo foo)'; A[$key]=1; test -v A["$key"]; echo $?`,
 		"1\n",
 	},
+	// Regressions from bash 5.3 quotearray2-5.sub: special assoc array keys
+	// (']', '*', '@', whitespace) through arith, read, printf -v, test -v,
+	// and single-expansion unset -v.
+	{
+		`declare -A A; for k in ']' '*' '@'; do (( A[$k]=2 )); done; declare -p A`,
+		"declare -A A=([\"*\"]=\"2\" [\"]\"]=\"2\" [\"@\"]=\"2\" )\n",
+	},
+	{
+		`declare -A a; a[0]=0 a[1]=1; let "a[\" \"]=11"; declare -p a`,
+		"declare -A a=([1]=\"1\" [0]=\"0\" [\" \"]=\"11\" )\n",
+	},
+	{
+		`declare -A A; for k in $'\t' ' ' '*' '@'; do read "A[$k]" <<< X; done; declare -p A`,
+		"declare -A A=([$'\\t']=\"X\" [\"*\"]=\"X\" [\" \"]=\"X\" [\"@\"]=\"X\" )\n",
+	},
+	{
+		`declare -A A; read 'A[]]' <<< X`,
+		"read: `A[]]': not a valid identifier\nexit status 2 #JUSTERR",
+	},
+	{
+		`declare -A A; for k in $'\t' ' ' '*' '@'; do printf -v "A[$k]" %s X; done; declare -p A`,
+		"declare -A A=([$'\\t']=\"X\" [\"*\"]=\"X\" [\" \"]=\"X\" [\"@\"]=\"X\" )\n",
+	},
+	{
+		`declare -A A; printf -v 'A[]]' %s X`,
+		"printf: \"A[]]\": not a valid identifier\nexit status 1 #JUSTERR",
+	},
+	{
+		`declare -A A; A[']']=x; test -v 'A[]]' && echo yes`,
+		"yes\n",
+	},
+	{
+		`declare -A a; key='$(echo foo)'; a[$key]=1; unset -v a["$key"]; declare -p a`,
+		"declare -A a=()\n",
+	},
+	{
+		`declare -A a; a['$key']=2; unset -v a['$key']; declare -p a`,
+		"declare -A a=()\n",
+	},
 	{
 		`scalar=; [[ -v scalar[@] ]] && echo set || echo unset`,
 		"set\n",
