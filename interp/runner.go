@@ -3482,6 +3482,12 @@ func (r *Runner) posixSpecialBuiltinFatal(name string, args []string) {
 // filename comes from the parsed script (set when running a File) or
 // falls back to "bashy" for `-c` / stdin / interactive invocations.
 func (r *Runner) bashErrPrefix(pos syntax.Pos) string {
+	return r.bashErrPrefixLine(int(pos.Line()))
+}
+
+// bashErrPrefixLine is bashErrPrefix for callers that need to override
+// the reported line number rather than take it from an AST position.
+func (r *Runner) bashErrPrefixLine(line int) string {
 	if !r.bashCompatErrors {
 		return ""
 	}
@@ -3489,7 +3495,6 @@ func (r *Runner) bashErrPrefix(pos syntax.Pos) string {
 	if name == "" {
 		name = "bashy"
 	}
-	line := int(pos.Line())
 	// When executing a multi-stmt alias body the AST positions are
 	// from the alias-body parse (line N within the body), not from
 	// the call site in the script. r.aliasLineOverride is set by the
@@ -4257,8 +4262,16 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			// "not a valid identifier" diagnostic and aborts the
 			// loop.
 			if !syntax.ValidName(name) {
+				// Bash's parser stamps a for/select command inside a
+				// function with the body's opening line rather than
+				// the keyword's own, and this diagnostic reports that
+				// stamped line.
+				line := int(y.Pos().Line())
+				if n := len(r.callStack); n > 0 && r.callStack[n-1].bodyLine > 0 {
+					line = int(r.callStack[n-1].bodyLine)
+				}
 				r.errf("%s`%s': not a valid identifier\n",
-					r.bashErrPrefix(y.Pos()), name)
+					r.bashErrPrefixLine(line), name)
 				if r.opts[optPosix] {
 					r.exit.code = 2
 					r.exit.err = ExitStatus(2)
@@ -6270,6 +6283,7 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 			line:     pos.Line(),
 			source:   r.filename,
 			funcName: name,
+			bodyLine: body.Pos().Line(),
 		})
 
 		// Functions run in a nested scope.
