@@ -462,11 +462,16 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 						continue
 					}
 					msg := fmt.Sprintf("unset: `%s': not a valid identifier\n", arg)
-					if prefix := r.bashErrPrefix(pos); prefix != "" {
+					// Bash reports in-function errors at the function body brace line.
+					line := int(pos.Line())
+					if n := len(r.callStack); n > 0 && r.callStack[n-1].bodyLine > 0 {
+						line = int(r.callStack[n-1].bodyLine)
+					}
+					if prefix := r.bashErrPrefixLine(line); prefix != "" {
 						msg = prefix + msg
 					}
 					r.errf("%s", msg)
-					r.reportError("builtin", pos, name, msg, 2)
+					r.reportError("builtin", syntax.NewPos(pos.Offset(), uint(line), pos.Col()), name, msg, 2)
 					exit.code = 2
 					continue
 				}
