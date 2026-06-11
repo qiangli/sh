@@ -2973,6 +2973,10 @@ var runTests = []runTest{
 		"unset: cannot simultaneously unset a function and a variable\nexit status 1 #JUSTERR",
 	},
 	{
+		"unset '1bad' '2bad'",
+		"unset: `1bad': not a valid identifier\nunset: `2bad': not a valid identifier\nexit status 2 #JUSTERR",
+	},
+	{
 		"notinpath=1; notinpath() { echo func; }; notinpath; echo $notinpath; unset notinpath; notinpath; echo $notinpath; unset notinpath; notinpath",
 		"func\n1\nfunc\n\n\"notinpath\": executable file not found in $PATH\nexit status 127 #JUSTERR",
 	},
