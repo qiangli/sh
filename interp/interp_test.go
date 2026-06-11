@@ -990,6 +990,35 @@ var runTests = []runTest{
 		`declare -n x; [[ -v x ]] && echo set || echo unset`,
 		"unset\n",
 	},
+	// Additional regressions from bash 5.3 quotearray2-5.sub (round-10)
+	{
+		`declare -A A; k='['; echo $(( A[$k]=7 ))`,
+		"7\n",
+	},
+	{
+		`declare -A A; k=']'; echo $(( A[$k]=7 ))`,
+		"7\n",
+	},
+	{
+		`declare -A A; A[@]=at; A[!]=bang; key=@; test -v A[$key]; echo $?`,
+		"0\n",
+	},
+	{
+		`declare -A A; A[@]=at; A[!]=bang; key=@; [[ -v A[$key] ]]; echo $?`,
+		"0\n",
+	},
+	{
+		`declare -A A; A[@]=at; A[!]=bang; unset -v A[@]; declare -p A`,
+		"declare -A A=([\"!\"]=\"bang\" )\n",
+	},
+	{
+		`declare -A A; A[*]=star; A[!]=bang; unset -v A[*]; declare -p A`,
+		"declare -A A=([\"!\"]=\"bang\" )\n",
+	},
+	{
+		`declare -A A; A[@]=at; A[!]=bang; key=@; unset A[$key]; declare -p A`,
+		"declare -A A=([\"!\"]=\"bang\" )\n",
+	},
 
 	// declare -f and declare -p
 	{
