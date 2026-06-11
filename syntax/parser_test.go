@@ -2163,7 +2163,7 @@ var errorCases = []errorCase{
 func TestInputName(t *testing.T) {
 	t.Parallel()
 	in := "("
-	want := "some-file.sh:1:1: `(` must be followed by a statement list"
+	want := "some-file.sh:1:2: syntax error: unexpected end of file from `(' command on line 1"
 	p := NewParser()
 	_, err := p.Parse(strings.NewReader(in), "some-file.sh")
 	if err == nil {
