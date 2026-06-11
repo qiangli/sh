@@ -163,7 +163,7 @@ func (r *Runner) bashTest(ctx context.Context, expr syntax.TestExpr, classic boo
 		}
 		return ""
 	case *syntax.UnaryTest:
-		if r.unTest(ctx, x.Op, r.bashTest(ctx, x.X, classic)) {
+		if r.unTest(ctx, x.Op, r.bashTest(ctx, x.X, classic), classic) {
 			return "1"
 		}
 		return ""
@@ -515,7 +515,7 @@ const (
 	access_X_OK = 0x1
 )
 
-func (r *Runner) unTest(ctx context.Context, op syntax.UnTestOperator, x string) bool {
+func (r *Runner) unTest(ctx context.Context, op syntax.UnTestOperator, x string, classic bool) bool {
 	switch op {
 	case syntax.TsExists:
 		_, err := r.stat(ctx, x)
@@ -607,7 +607,7 @@ func (r *Runner) unTest(ctx context.Context, op syntax.UnTestOperator, x string)
 		}
 		return false
 	case syntax.TsVarSet:
-		return r.varIsSetForTest(x)
+		return r.varIsSetForTest(x, classic)
 	case syntax.TsRefVar:
 		return r.lookupVar(x).Kind == expand.NameRef
 	case syntax.TsNot:
@@ -620,7 +620,7 @@ func (r *Runner) unTest(ctx context.Context, op syntax.UnTestOperator, x string)
 	}
 }
 
-func (r *Runner) varIsSetForTest(name string) bool {
+func (r *Runner) varIsSetForTest(name string, classic bool) bool {
 	base, index, ok := splitArrayElemName(name)
 	if !ok {
 		vr := r.lookupVar(name)
@@ -634,6 +634,11 @@ func (r *Runner) varIsSetForTest(name string) bool {
 		}
 	}
 	vr := r.lookupVar(base)
+	if classic && vr.Kind == expand.Associative {
+		if opt, _ := r.bashOptByName("assoc_expand_once"); opt == nil || !*opt {
+			index = r.expandClassicTestArrayIndex(index)
+		}
+	}
 	switch vr.Kind {
 	case expand.Indexed:
 		if index == "@" || index == "*" {
@@ -649,4 +654,24 @@ func (r *Runner) varIsSetForTest(name string) bool {
 	default:
 		return false
 	}
+}
+
+func (r *Runner) expandClassicTestArrayIndex(index string) string {
+	if !strings.Contains(index, "$(") && !strings.Contains(index, "`") {
+		return index
+	}
+	parser := syntax.NewParser(syntax.Variant(syntax.LangBash))
+	file, err := parser.Parse(strings.NewReader("x "+index+"\n"), "")
+	if err != nil || len(file.Stmts) != 1 {
+		return index
+	}
+	call, ok := file.Stmts[0].Cmd.(*syntax.CallExpr)
+	if !ok || len(call.Args) != 2 {
+		return index
+	}
+	fields := r.fields(call.Args[1])
+	if len(fields) == 0 {
+		return ""
+	}
+	return fields[0]
 }
