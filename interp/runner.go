@@ -187,7 +187,8 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 				r2.opts[optErrExit] = false
 			}
 			r2.stmts(ctx, cs.Stmts)
-			r2.exit.exiting = false   // subshells don't exit the parent shell
+			r2.exit.exiting = false // subshells don't exit the parent shell
+			r2.exit.discarding = false
 			r2.exit.returning = false // and they swallow `return` locally
 			r.lastExpandExit = r2.exit
 			if r2.exit.fatalExit {
@@ -277,6 +278,7 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 				}
 				r2.stmts(ctx, ps.Stmts)
 				r2.exit.exiting = false // subshells don't exit the parent shell
+				r2.exit.discarding = false
 			}()
 			return path, nil
 		},
@@ -378,6 +380,17 @@ func (r *Runner) expandErr(err error) {
 	case errors.As(err, &expand.UnsetParameterError{}):
 	case strings.Contains(errMsg, "readonly variable"):
 		r.exit.code = 1
+		// Bash: a variable-assignment error during word expansion
+		// (`${v:=val}` with v readonly) is fatal in POSIX mode and
+		// DISCARDs the current top-level command otherwise.
+		// Arithmetic readonly failures (`$((v=1))`) only fail the
+		// expansion — the next command still runs.
+		if arithErr, _ := innermostArithmError(err); arithErr == nil {
+			r.exit.exiting = true
+			if !r.opts[optPosix] {
+				r.exit.discarding = true
+			}
+		}
 		return
 	case strings.HasSuffix(errMsg, "invalid indirect expansion"):
 		// TODO: These errors are treated as fatal by bash.
@@ -3419,6 +3432,48 @@ func isPosixSpecialBuiltin(name string) bool {
 	return false
 }
 
+// posixSpecialBuiltinFatal upgrades certain special-builtin failures
+// to a shell exit in POSIX mode (POSIX 1003.1 § 2.8.1). Bash limits
+// this to "hard" errors: any unset failure (readonly variable, bad
+// identifier), return outside a function, and non-numeric arguments
+// to exit/return/shift/break/continue. "Too many arguments" (a valid
+// leading number followed by extras) and semantic failures like
+// `trap` with a bad signal name stay non-fatal.
+func (r *Runner) posixSpecialBuiltinFatal(name string, args []string) {
+	if r.exit.code == 0 || r.exit.exiting {
+		return
+	}
+	badNumericArg := func() bool {
+		if len(args) == 0 {
+			return false
+		}
+		arg := args[0]
+		if arg == "--" && len(args) > 1 {
+			arg = args[1]
+		}
+		_, err := strconv.ParseInt(arg, 10, 64)
+		return err != nil
+	}
+	switch name {
+	case "unset":
+		r.exit.exiting = true
+	case "return":
+		// "return 42 abcde" fails with "too many arguments", which
+		// stays non-fatal even in POSIX mode; "return" outside a
+		// function and "return abcde" are fatal.
+		if len(args) > 1 && !badNumericArg() {
+			return
+		}
+		if !r.exit.returning || (r.exit.code == 2 && badNumericArg()) {
+			r.exit.exiting = true
+		}
+	case "exit", "shift", "break", "continue":
+		if r.exit.code == 2 && badNumericArg() {
+			r.exit.exiting = true
+		}
+	}
+}
+
 // bashErrPrefix returns the bash-style `<filename>: line <N>: ` prefix
 // when [WithBashCompatErrors] is on; the empty string otherwise. The
 // filename comes from the parsed script (set when running a File) or
@@ -3526,6 +3581,7 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 			}()
 			r2.Run(bgCtx, &st2)
 			r2.exit.exiting = false // subshells don't exit the parent shell
+			r2.exit.discarding = false
 			*bg.exit = r2.exit
 			close(bg.done)
 		}()
@@ -3608,6 +3664,15 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 		cls, err := r.redir(ctx, rd)
 		if err != nil {
 			r.exit.code = 1
+			// POSIX mode: a redirection error on a special builtin
+			// (`exec 9<nosuchfile`, …) exits a non-interactive shell,
+			// even on the left side of || or &&.
+			if r.opts[optPosix] {
+				if call, ok := st.Cmd.(*syntax.CallExpr); ok && len(call.Args) > 0 &&
+					isPosixSpecialBuiltin(call.Args[0].Lit()) {
+					r.exit.exiting = true
+				}
+			}
 			break
 		}
 		if cls != nil {
@@ -3636,6 +3701,7 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 			// under errexit; the outer `!` will set the final
 			// success/failure below.
 			r.exit.exiting = false
+			r.exit.discarding = false
 		} else {
 			r.cmd(ctx, st.Cmd)
 		}
@@ -3693,6 +3759,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		// function: `(return 5)` makes the subshell exit with
 		// status 5, but the outer function/script keeps running.
 		r2.exit.exiting = false
+		r2.exit.discarding = false
 		r2.exit.returning = false
 		r.exit = r2.exit
 	case *syntax.CallExpr:
@@ -3834,6 +3901,15 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				val := f[eq+1:]
 				vr := expand.Variable{Set: true, Kind: expand.String, Str: val}
 				r.setVar(name, vr)
+				if !r.exit.ok() && !r.exit.exiting && !r.exit.returning && !r.exit.fatalExit {
+					// Assignment-statement error: fatal in POSIX
+					// mode, DISCARD otherwise (see below).
+					r.exit.exiting = true
+					if !r.opts[optPosix] {
+						r.exit.discarding = true
+					}
+					return
+				}
 			}
 			fields = nil
 		}
@@ -3850,8 +3926,18 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 
 				name, vr := r.assignVal(name, prev, as, "")
 				r.setVarWithIndex(prev, name, as.Index, vr)
-				if !r.exit.ok() && r.opts[optPosix] {
+				if !r.exit.ok() && !r.exit.exiting && !r.exit.returning && !r.exit.fatalExit {
+					// Bash: an assignment-statement error (readonly
+					// variable, bad subscript, …) exits a POSIX-mode
+					// shell and DISCARDs the current top-level
+					// command otherwise — aborting any enclosing
+					// loop, but not the whole script. A real exit
+					// propagating out of an expansion (`v=${ exit 2; }`)
+					// already carries its own flags; leave it alone.
 					r.exit.exiting = true
+					if !r.opts[optPosix] {
+						r.exit.discarding = true
+					}
 					break
 				}
 
@@ -3943,10 +4029,22 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			}
 		}
 		if assignFailed {
-			if r.opts[optPosix] && isPosixSpecialBuiltin(fields[0]) {
-				r.exit.exiting = true
+			if r.opts[optPosix] {
+				if isPosixSpecialBuiltin(fields[0]) {
+					r.exit.exiting = true
+					break
+				}
+				// POSIX mode, non-special command: the command is
+				// not executed; the shell continues with status 1
+				// (bash follows ksh93 here rather than strict POSIX).
+				for _, restore := range restores {
+					r.setVar(restore.name, restore.vr)
+				}
+				r.exit.code = 1
 				break
 			}
+			// Default mode: the error is reported but the command
+			// still runs (`VAR=7 echo ok` prints ok).
 		}
 
 		trace.call(fields[0], fields[1:]...)
@@ -4076,6 +4174,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			wg.Go(func() {
 				r2.stmt(ctx, cm.X)
 				r2.exit.exiting = false // subshells don't exit the parent shell
+				r2.exit.discarding = false
 				pwDup.Close()
 			})
 			var r3 *Runner
@@ -4092,6 +4191,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				r3.stderr = r.stderr
 				r3.stmt(ctx, cm.Y)
 				r3.exit.exiting = false
+				r3.exit.discarding = false
 				r.exit = r3.exit
 			}
 			prDup.Close()
@@ -4178,13 +4278,20 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			}
 
 			for _, field := range items {
+				if r.exit.exiting || r.exit.returning || r.exit.fatalExit {
+					break
+				}
 				// Check if the iteration variable is readonly before
 				// attempting to assign. Bash reports an error and stops
-				// the loop in this case.
+				// the loop in this case; in POSIX mode the whole
+				// non-interactive shell exits.
 				if r.lookupVar(name).ReadOnly {
 					r.errf("%s%s: readonly variable\n",
 						r.bashErrPrefix(r.curStmtPos), name)
 					r.exit.code = 1
+					if r.opts[optPosix] {
+						r.exit.exiting = true
+					}
 					break
 				}
 				r.setVarString(name, field)
@@ -4203,6 +4310,11 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				}
 			}
 		case *syntax.CStyleLoop:
+			// bash runs the DEBUG trap before evaluating the
+			// arithmetic for-loop's expressions.
+			if r.fireDebugTrap(ctx, cm) {
+				break
+			}
 			// bash `set -x` traces each of the C-style for-loop
 			// expressions as a separate `+ (( ... ))` line.
 			traceArith := func(expr syntax.ArithmExpr) {
@@ -4305,15 +4417,20 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			return
 		}
 		// Bash rejects redefinition of a readonly function with
-		// `<file>: line N: NAME: readonly function`.
+		// `<file>: line N: NAME: readonly function`, reported at the
+		// end of the rejected definition (closing brace), not its
+		// start.
 		if r.readonlyFuncs[name] {
 			r.errf("%s%s: readonly function\n",
-				r.bashErrPrefix(cm.Position), name)
+				r.bashErrPrefix(cm.End()), name)
 			r.exit.code = 1
 			return
 		}
 		r.setFunc(name, cm.Body)
 	case *syntax.ArithmCmd:
+		if r.fireDebugTrap(ctx, cm) {
+			return
+		}
 		if tracingEnabled {
 			// bash `set -x` traces `((expr))` as
 			// `+ (( <printed-expr> ))` with spaces inside the
@@ -4436,6 +4553,9 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			var cmdBuf strings.Builder
 			syntax.NewPrinter(syntax.SingleLine(true)).Print(&cmdBuf, cm)
 			r.setVarString("BASH_COMMAND", strings.TrimRight(cmdBuf.String(), "\n"))
+		}
+		if r.fireDebugTrap(ctx, cm) {
+			return
 		}
 		r.runTestClause(ctx, cm.Left, cm.X, true)
 	case *syntax.DeclClause:
@@ -4592,6 +4712,13 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 					r.errf("%s: invalid name %q\n", builtinName, name)
 				}
 				r.exit.code = 1
+				// POSIX mode: readonly/export are special builtins, so
+				// a bad identifier is fatal — bash stops at the first
+				// offending name and exits.
+				if r.opts[optPosix] && (builtinName == "readonly" || builtinName == "export") {
+					r.exit.exiting = true
+					return
+				}
 				continue
 			}
 			if cm.Variant.Value == "export" && as.Value == nil && (name == "BASHOPTS" || name == "SHELLOPTS") {
@@ -4742,6 +4869,10 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 						r.errf("%s%s: `%s': not a valid identifier\n",
 							r.bashErrPrefix(r.curStmtPos), builtinName, ref)
 						r.exit.code = 1
+						if r.opts[optPosix] {
+							r.exit.exiting = true
+							return
+						}
 						continue
 					}
 					vr.Kind = expand.Indexed
@@ -4828,14 +4959,14 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 					vr.Exported = false
 				case "-r":
 					vr.ReadOnly = true
-			case "+r":
-				// Bash refuses to remove the readonly
-				// attribute once set; report error if readonly.
-				if vr.ReadOnly {
-					r.errf("%s%s: %s: readonly variable\n",
-						r.bashErrPrefix(r.curStmtPos), cm.Variant.Value, name)
-					r.exit.code = 1
-				}
+				case "+r":
+					// Bash refuses to remove the readonly
+					// attribute once set; report error if readonly.
+					if vr.ReadOnly {
+						r.errf("%s%s: %s: readonly variable\n",
+							r.bashErrPrefix(r.curStmtPos), cm.Variant.Value, name)
+						r.exit.code = 1
+					}
 				case "-u":
 					vr.Upper, vr.Lower, vr.Capitalize = true, false, false
 				case "+u":
@@ -5044,6 +5175,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			}()
 			r2.Run(ctx, cm.Stmt)
 			r2.exit.exiting = false
+			r2.exit.discarding = false
 		}()
 	default:
 		// Should only happen if we forgot a case above.
@@ -5968,6 +6100,24 @@ func (r *Runner) readonlyNamedFdOpenSideEffect(ctx context.Context, rd *syntax.R
 // valid integer 1..len(items) (otherwise var becomes empty), and runs
 // the body. An empty reply re-displays the menu without running the
 // body. EOF (Ctrl-D) exits the loop with exit code 1, matching bash.
+// fireDebugTrap mirrors the DEBUG-trap firing done for simple commands
+// in call(): bash also runs the trap before `[[ ]]`, `(( ))`, and the
+// arithmetic parts of a C-style for loop. Reports whether extdebug is
+// on and the trap returned 2, in which case the command is skipped.
+func (r *Runner) fireDebugTrap(ctx context.Context, node syntax.Node) bool {
+	if r.trapCallbacks["DEBUG"] == "" {
+		return false
+	}
+	prevLineno := r.ecfg.OverrideLineno
+	prevStmtPos := r.curStmtPos
+	r.ecfg.OverrideLineno = int(node.Pos().Line())
+	debugCode := r.trapCallback(ctx, r.trapCallbacks["DEBUG"], "debug")
+	r.ecfg.OverrideLineno = prevLineno
+	r.curStmtPos = prevStmtPos
+	opt, _ := r.bashOptByName("extdebug")
+	return opt != nil && *opt && debugCode == 2
+}
+
 func (r *Runner) selectLoop(ctx context.Context, name string, items []string, do []*syntax.Stmt) {
 	// Bash 5.3: a `select` with an empty item list (because the
 	// optional `in <list>` was omitted and `$@` is empty, or the
@@ -6000,6 +6150,18 @@ func (r *Runner) selectLoop(ctx context.Context, name string, items []string, do
 			if reply != "" {
 				break
 			}
+		}
+		// Bash binds the select variable after reading the reply; a
+		// readonly variable aborts the select (and exits a POSIX-mode
+		// shell), with the menu and prompt already printed.
+		if r.lookupVar(name).ReadOnly {
+			r.errf("%s%s: readonly variable\n",
+				r.bashErrPrefix(r.curStmtPos), name)
+			r.exit.code = 1
+			if r.opts[optPosix] {
+				r.exit.exiting = true
+			}
+			return
 		}
 		c, _ := strconv.Atoi(reply)
 		if c > 0 && c <= len(items) {
@@ -6131,6 +6293,9 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 	if IsBuiltin(name) && !r.disabledBuiltins[name] {
 		r.emitAudit("builtin", pos, args, true)
 		r.exit = r.builtin(ctx, pos, name, args[1:])
+		if r.opts[optPosix] {
+			r.posixSpecialBuiltinFatal(name, args[1:])
+		}
 		return
 	}
 	// autocd: if command not found but is a directory, cd to it.

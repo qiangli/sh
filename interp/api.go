@@ -424,6 +424,15 @@ type exitStatus struct {
 	exiting   bool // whether the current shell is exiting
 	fatalExit bool // whether the current shell is exiting due to a fatal error; err below must not be nil
 
+	// discarding qualifies exiting: a variable-assignment error in a
+	// non-interactive non-POSIX shell aborts the current top-level
+	// command (bash's DISCARD longjmp) rather than the whole shell.
+	// It unwinds via the exiting machinery and is converted back to a
+	// plain non-zero status at the end of [Runner.Run]; whenever
+	// exiting is cleared (subshell boundaries), discarding must be
+	// cleared with it.
+	discarding bool
+
 	// err holds the error information for a non-zero exit status code or fatal error.
 	// Used so that running a single statement with a custom handler
 	// which returns a non-fatal Go error, such as a Go error wrapping [NewExitStatus],
@@ -1610,13 +1619,27 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 	case *syntax.File:
 		r.filename = node.Name
 		runExitTrap = true
-		r.stmts(ctx, node.Stmts)
+		for _, stmt := range node.Stmts {
+			r.stmt(ctx, stmt)
+			// A DISCARD only aborts the top-level command it
+			// occurred in; the next one still runs.
+			if r.exit.discarding {
+				r.exit.discarding = false
+				r.exit.exiting = false
+			}
+		}
 	case *syntax.Stmt:
 		r.stmt(ctx, node)
 	case syntax.Command:
 		r.cmd(ctx, node)
 	default:
 		return fmt.Errorf("node can only be File, Stmt, or Command: %T", node)
+	}
+	// A DISCARDed top-level command only aborts itself; the shell (and
+	// any caller driving Run statement-by-statement) keeps going.
+	if r.exit.discarding {
+		r.exit.discarding = false
+		r.exit.exiting = false
 	}
 	if runExitTrap {
 		r.trapCallback(ctx, r.trapCallbacks["EXIT"], "exit")
