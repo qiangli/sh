@@ -172,6 +172,9 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 			}
 			r2 := r.subshell(false)
 			r2.stdout = w
+			if !r.functraceEnabled() {
+				delete(r2.trapCallbacks, "DEBUG")
+			}
 			// inherit_errexit: bash command substitutions do NOT
 			// inherit `set -e` by default — `$(false; echo ok)`
 			// must echo `ok` even when the caller is under -e.
@@ -4779,6 +4782,9 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				if r.exit.exiting || r.exit.returning || r.exit.fatalExit {
 					break
 				}
+				if r.fireDebugTrap(ctx, cm) {
+					break
+				}
 				// Check if the iteration variable is readonly before
 				// attempting to assign. Bash reports an error and stops
 				// the loop in this case; in POSIX mode the whole
@@ -4852,6 +4858,9 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			for {
 				r.lastArithErr = nil
 				if y.Cond != nil {
+					if r.fireDebugTrap(ctx, cm) {
+						break
+					}
 					traceArith(y.Cond)
 					if r.arithm(y.Cond) == 0 {
 						break
@@ -4869,6 +4878,9 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				}
 				if y.Post != nil {
 					r.lastArithErr = nil
+					if r.fireDebugTrap(ctx, cm) {
+						break
+					}
 					traceArith(y.Post)
 					r.arithm(y.Post)
 					if r.lastArithErr != nil {
@@ -4988,6 +5000,9 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		trace.newLineFlush()
 		r.exit.oneIf(val == 0)
 	case *syntax.CaseClause:
+		if r.fireDebugTrap(ctx, cm) {
+			return
+		}
 		trace.string("case ")
 		trace.expr(cm.Word)
 		trace.string(" in")
@@ -5062,6 +5077,9 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		}
 		r.runTestClause(ctx, cm.Left, cm.X, true)
 	case *syntax.DeclClause:
+		if r.fireDebugTrap(ctx, cm) {
+			return
+		}
 		local, global := false, false
 		var modes []string
 		valType := ""
