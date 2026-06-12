@@ -1876,8 +1876,15 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		r.callStack = r.callStack[:len(r.callStack)-1]
 		if r.trapCallbacks["RETURN"] != "" && (r.functraceEnabled() || len(r.callStack) == 0) {
 			prevLineno := r.ecfg.OverrideLineno
+			prevDebugTrap := r.trapCallbacks["DEBUG"]
 			r.ecfg.OverrideLineno = int(pos.Line())
+			if !r.functraceEnabled() && len(r.callStack) == 0 {
+				delete(r.trapCallbacks, "DEBUG")
+			}
 			r.trapCallback(ctx, r.trapCallbacks["RETURN"], "return")
+			if prevDebugTrap != "" {
+				r.trapCallbacks["DEBUG"] = prevDebugTrap
+			}
 			r.ecfg.OverrideLineno = prevLineno
 		}
 		r.filename = oldFilename

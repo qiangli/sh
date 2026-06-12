@@ -4102,9 +4102,9 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 	case *syntax.CallExpr:
 		// Bash sets $BASH_COMMAND to the command's source text BEFORE
 		// expansion, so a command can reference its own line via
-		// $BASH_COMMAND. Capture it now via the printer; the later
-		// setVarString in r.call() will overwrite with the post-
-		// expansion form for the benefit of DEBUG traps.
+		// $BASH_COMMAND. The later setVarString in r.call()
+		// overwrites this with the post-expansion command while the
+		// command itself runs.
 		if !r.handlingTrap {
 			var cmdBuf strings.Builder
 			syntax.NewPrinter().Print(&cmdBuf, cm)
@@ -4112,11 +4112,16 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		}
 		// Bash fires DEBUG before each simple command, including
 		// assignment-only forms (`x=2`). With `shopt -s extdebug`,
-		// a trap that returns 2 skips the next command. Fire here
-		// so the assignment-only branch below honors the skip.
-		if len(cm.Args) == 0 && len(cm.Assigns) > 0 && r.shouldFireDebugTrap() {
+		// a trap that returns 2 skips the next command. Fire before
+		// word expansion so command substitutions in arguments do
+		// not run ahead of the trap.
+		if r.shouldFireDebugTrap() {
+			debugPos := cm.Pos()
+			if len(cm.Args) == 0 && len(cm.Assigns) > 0 {
+				debugPos = cm.Assigns[0].Pos()
+			}
 			prevLineno := r.ecfg.OverrideLineno
-			r.ecfg.OverrideLineno = r.debugTrapLine(cm.Assigns[0].Pos())
+			r.ecfg.OverrideLineno = r.debugTrapLine(debugPos)
 			debugCode := r.trapCallback(ctx, r.trapCallbacks["DEBUG"], "debug")
 			r.ecfg.OverrideLineno = prevLineno
 			if opt, _ := r.bashOptByName("extdebug"); opt != nil && *opt && debugCode == 2 {
@@ -6935,24 +6940,8 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 	if r.stop(ctx) {
 		return
 	}
-	// Set BASH_COMMAND and fire DEBUG trap before each simple command.
+	// Set BASH_COMMAND to the expanded command while it executes.
 	r.setVarString("BASH_COMMAND", strings.Join(args, " "))
-	// While the DEBUG trap body is being expanded, $LINENO should
-	// resolve to the line of the command that triggered the trap.
-	debugCode := uint8(0)
-	if r.shouldFireDebugTrap() {
-		prevLineno := r.ecfg.OverrideLineno
-		r.ecfg.OverrideLineno = r.debugTrapLine(pos)
-		debugCode = r.trapCallback(ctx, r.trapCallbacks["DEBUG"], "debug")
-		r.ecfg.OverrideLineno = prevLineno
-	}
-	// Bash: with `shopt -s extdebug`, a DEBUG trap that returns 2
-	// skips execution of the next command (but doesn't terminate
-	// the shell). The trap-callback already restored r.exit, so we
-	// just bail out of call() before dispatch.
-	if opt, _ := r.bashOptByName("extdebug"); opt != nil && *opt && debugCode == 2 {
-		return
-	}
 	if r.callHandler != nil {
 		var err error
 		args, err = r.callHandler(r.handlerCtx(ctx, handlerKindCall, pos), args)
