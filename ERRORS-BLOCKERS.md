@@ -1,6 +1,13 @@
 # Errors Fixture Blockers
 
-## Cluster 2: unset /bin/sh behavior
+> **2026-06-11 R2 note**: full 48-line clustering of the residual diff now
+> lives in [ERRORS-ANALYSIS-R2.md](ERRORS-ANALYSIS-R2.md). That doc also
+> explains why earlier counts (70/71) didn't move: the
+> `external/bash-5.3/tests/../../../bin/bashy` measurement path resolves
+> through the `external` symlink into a *different checkout's stale binary*.
+> Measure with `THIS_SH=$(pwd -P)/bin/bashy` from the repo root instead.
+
+## Cluster 2: unset /bin/sh behavior — LANDED
 
 **Problem**: `unset /bin/sh` reports "not a valid identifier" but bash 5.3 stays silent.
 
@@ -39,3 +46,10 @@
 `interp/interp_test.go` coverage. Fresh gate numbers: errors 71, redir 0,
 history 0, quotearray 48. Commit was blocked because the sandbox exposes
 `.git` metadata read-only (`git add` cannot create `.git/index.lock`).
+
+**2026-06-11 R2 Update**: The fix is now in the tree (a slightly different
+shape — `interp/builtin.go:612` skips `/`-containing args under
+`bashCompatErrors`), and the `unset: /bin/sh` line is gone from the diff.
+The "errors 71" number above was measured through the stale-binary recipe;
+the true residue with the sandbox binary is 48 lines (see
+ERRORS-ANALYSIS-R2.md).
