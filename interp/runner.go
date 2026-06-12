@@ -5269,6 +5269,18 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 						}
 					}
 				}
+				if as.Index != nil && valType == "-a" && as.Value != nil {
+					if s := r.literalForAssign(as.Value); strings.HasPrefix(s, "(") && strings.HasSuffix(s, ")") {
+						if file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader("x="+s), ""); err == nil &&
+							len(file.Stmts) == 1 {
+							if call, ok := file.Stmts[0].Cmd.(*syntax.CallExpr); ok && len(call.Assigns) == 1 && call.Assigns[0].Array != nil {
+								_, arr := r.assignVal(name, vr, call.Assigns[0], valType)
+								r.setVar(name, arr)
+								continue
+							}
+						}
+					}
+				}
 				name, vr = r.assignVal(name, vr, as, valType)
 				if as.Index != nil {
 					r.setVarWithIndex(prevForIndex, name, as.Index, vr)
@@ -5453,7 +5465,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		// `declare -A` / `declare -a` with no name lists every
 		// array variable of that kind, including bash's built-in
 		// arrays (BASH_ALIASES, BASH_CMDS, BASH_ARGC, …).
-		if !declHadNames && (valType == "-A" || valType == "-a") && declQuery == "" {
+		if !declHadNames && (valType == "-A" || valType == "-a") && (declQuery == "" || declQuery == "-p") {
 			readonlyOnly := cm.Variant.Value == "readonly" || slices.Contains(modes, "-r")
 			readonlyKeyword := cm.Variant.Value == "readonly" && r.opts[optPosix]
 			r.printArrayVars(valType, readonlyOnly, readonlyKeyword)

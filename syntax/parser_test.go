@@ -1874,7 +1874,8 @@ var errorCases = []errorCase{
 	),
 	errCase(
 		"a[]",
-		langErr("1:2: `[` must be followed by an expression", LangBash|LangMirBSDKorn|LangZsh),
+		langErr("1:1: `a[b]` must be followed by `=`", LangBash),
+		langErr("1:2: `[` must be followed by an expression", LangMirBSDKorn|LangZsh),
 		flipConfirmAll, // is cmd
 	),
 	errCase(

@@ -1654,6 +1654,23 @@ func (r *Runner) rejectDeclareConversion(name string, prev, vr expand.Variable) 
 	return true
 }
 
+func literalBadIndexedAssignSubscript(index syntax.ArithmExpr) (string, bool) {
+	w, ok := index.(*syntax.Word)
+	if !ok || len(w.Parts) != 1 {
+		return "", false
+	}
+	lit, ok := w.Parts[0].(*syntax.Lit)
+	if !ok {
+		return "", false
+	}
+	switch lit.Value {
+	case "", "*", "@":
+		return lit.Value, true
+	default:
+		return "", false
+	}
+}
+
 func (r *Runner) setVarWithIndex(prev expand.Variable, name string, index syntax.ArithmExpr, vr expand.Variable) {
 	if vr.Kind == expand.String && index == nil {
 		// When assigning a string to an array, fall back to the
@@ -1671,6 +1688,11 @@ func (r *Runner) setVarWithIndex(prev expand.Variable, name string, index syntax
 	}
 	if index == nil {
 		r.setVar(name, vr)
+		return
+	}
+	if idx, bad := literalBadIndexedAssignSubscript(index); bad && prev.Kind != expand.Associative {
+		r.errf("%s%s[%s]: bad array subscript\n", r.bashErrPrefix(r.curStmtPos), name, idx)
+		r.exit.code = 1
 		return
 	}
 
@@ -2012,14 +2034,17 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 				// `(elem1 …)` text; re-parse it as an array literal
 				// so the array kind sticks and parens get stripped.
 				if (valType == "-a" || valType == "-A") && strings.HasPrefix(s, "(") && strings.HasSuffix(s, ")") {
-					inner := s[1 : len(s)-1]
 					if valType == "-a" {
-						prev.Kind = expand.Indexed
-						prev.List = expand.ReadFields(r.ecfg, inner, -1, false)
-						if prev.List == nil {
-							prev.List = []string{}
+						if file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader("x="+s), ""); err == nil &&
+							len(file.Stmts) == 1 {
+							if call, ok := file.Stmts[0].Cmd.(*syntax.CallExpr); ok && len(call.Assigns) == 1 && call.Assigns[0].Array != nil {
+								return r.assignVal(name, prev, call.Assigns[0], valType)
+							}
 						}
+						prev.Kind = expand.Indexed
+						prev.List = []string{}
 					} else { // "-A"
+						inner := s[1 : len(s)-1]
 						prev.Kind = expand.Associative
 						if prev.Map == nil {
 							prev.Map = map[string]string{}
@@ -2306,6 +2331,19 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 	}
 	for i, elem := range elems {
 		if elem.Index != nil {
+			if idx, bad := literalBadIndexedAssignSubscript(elem.Index); bad {
+				val := r.literalForAssign(elem.Value)
+				if idx == "*" || idx == "@" {
+					r.errf("%s[%s]=%s: cannot assign to non-numeric index\n",
+						r.bashErrPrefix(r.curStmtPos), idx, val)
+				} else {
+					r.errf("%s[]=%s: bad array subscript\n",
+						r.bashErrPrefix(r.curStmtPos), val)
+				}
+				r.exit.code = 1
+				elemValues[i].index = index
+				break
+			}
 			// Index resets our index with a literal value.
 			index = r.arithm(elem.Index)
 			if index < 0 {
@@ -2313,7 +2351,11 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 				// from the end of the existing list.
 				index = len(prev.List) + index
 				if index < 0 {
-					index = 0
+					r.errf("%s[%s]=%s: bad array subscript\n",
+						r.bashErrPrefix(r.curStmtPos), r.arithmSourceText(elem.Index, false), r.literalForAssign(elem.Value))
+					r.exit.code = 1
+					elemValues[i].index = 0
+					break
 				}
 			}
 			elemValues[i].values = []string{r.literalForAssign(elem.Value)}

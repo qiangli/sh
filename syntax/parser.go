@@ -2130,6 +2130,23 @@ func (p *Parser) eitherIndexBlank(blankOK bool) ArithmExpr {
 	p.quote = paramExpArithm
 	p.assignIndexWords = true
 	p.next()
+	if p.rawAssignIndex && p.lang == LangBash {
+		switch p.tok {
+		case rightBrack:
+			expr := ArithmExpr(p.wordOne(p.lit(p.pos, "")))
+			p.quote = old
+			p.assignIndexWords = oldAssignIndexWords
+			p.matchedArithm(lpos, leftBrack, rightBrack)
+			return expr
+		case star, at:
+			expr := ArithmExpr(p.wordOne(p.lit(p.pos, p.tok.String())))
+			p.next()
+			p.quote = old
+			p.assignIndexWords = oldAssignIndexWords
+			p.matchedArithm(lpos, leftBrack, rightBrack)
+			return expr
+		}
+	}
 	switch p.tok {
 	case star, at, perc, exclMark:
 		p.tok, p.val = _LitWord, p.tok.String()

@@ -3887,6 +3887,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		printMode := false
 		exportMode := false
 		readonlyMode := false
+		arrayMode := ""
 		var names []string
 		for _, arg := range args {
 			if strings.HasPrefix(arg, "-") && !strings.Contains(arg, "=") {
@@ -3899,6 +3900,8 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 						exportMode = true
 					case "-r":
 						readonlyMode = true
+					case "-a", "-A":
+						arrayMode = flag
 					default:
 						// Other simple-command declare flags are handled by
 						// DeclClause in the common path; keep this fallback
@@ -3932,6 +3935,10 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					r.setVar(arg, vr)
 				}
 			}
+		}
+		if len(names) == 0 && arrayMode != "" {
+			r.printArrayVars(arrayMode, readonlyMode, false)
+			break
 		}
 		if printMode {
 			for _, name := range names {
