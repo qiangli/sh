@@ -3942,6 +3942,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		// Keyword form is handled by DeclClause in runner.go.
 		printMode := false
 		exportMode := false
+		readonlyMode := false
 		var names []string
 		for _, arg := range args {
 			if strings.HasPrefix(arg, "-") && !strings.Contains(arg, "=") {
@@ -3952,6 +3953,8 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 						printMode = true
 					case "-x":
 						exportMode = true
+					case "-r":
+						readonlyMode = true
 					default:
 						// Other simple-command declare flags are handled by
 						// DeclClause in the common path; keep this fallback
@@ -3965,8 +3968,10 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				name := arg[:eqIdx]
 				val := arg[eqIdx+1:]
 				vr := expand.Variable{Set: true, Kind: expand.String, Str: val}
-				if exportMode {
-					vr.Exported = true
+				prev := r.lookupVar(name)
+				vr.Exported = prev.Exported || exportMode
+				if readonlyMode {
+					vr.ReadOnly = true
 				}
 				if r.inFunc {
 					vr.Local = true
@@ -3975,9 +3980,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				names = append(names, name)
 			} else {
 				names = append(names, arg)
-				if exportMode {
+				if exportMode || readonlyMode || r.inFunc {
 					vr := r.lookupVar(arg)
-					vr.Exported = true
+					vr.Exported = vr.Exported || exportMode
+					vr.ReadOnly = vr.ReadOnly || readonlyMode
+					vr.Local = vr.Local || r.inFunc
 					r.setVar(arg, vr)
 				}
 			}

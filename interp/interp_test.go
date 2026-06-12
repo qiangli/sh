@@ -895,11 +895,11 @@ var runTests = []runTest{
 	},
 	{
 		`a=hello; echo "${a@A}"`,
-		"a=hello\n #IGNORE bash always single-quotes",
+		"a='hello'\n",
 	},
 	{
 		`export e=1; echo "${e@A}"`,
-		"declare -x e=1\n #IGNORE bash always single-quotes",
+		"declare -x e='1'\n",
 	},
 	{
 		`a=Hello; echo "${a@U}"`,

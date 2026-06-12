@@ -1066,10 +1066,7 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			case "A":
 				// ${var@A} returns a declare statement that recreates the variable.
 				flags := orig.Flags()
-				quoted, err := syntax.Quote(str, syntax.LangBash)
-				if err != nil {
-					return "", err
-				}
+				quoted := bashSingleQuote(str)
 				if flags == "" {
 					str = fmt.Sprintf("%s=%s", name, quoted)
 				} else {
