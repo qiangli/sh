@@ -766,6 +766,19 @@ var runTests = []runTest{
 		"echo ${a:?%s}",
 		"a: %s\nexit status 1 #JUSTERR",
 	},
+	// Bash substitutes default messages when no word follows ? / :?.
+	{
+		"echo ${a?}",
+		"a: parameter not set\nexit status 1 #JUSTERR",
+	},
+	{
+		"echo ${a:?}",
+		"a: parameter null or not set\nexit status 1 #JUSTERR",
+	},
+	{
+		"a=; echo ${a:?}",
+		"a: parameter null or not set\nexit status 1 #JUSTERR",
+	},
 	{
 		"x=aaabccc; echo ${x#*a}; echo ${x##*a}",
 		"aabccc\nbccc\n",

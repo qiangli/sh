@@ -736,10 +736,16 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 				}
 			case syntax.ErrorUnset:
 				if !vr.IsSet() {
+					if arg == "" {
+						arg = "parameter not set"
+					}
 					return "", UnsetParameterError{Node: pe, Message: arg}
 				}
 			case syntax.ErrorUnsetOrNull:
 				if !vr.IsSet() || str == "" {
+					if arg == "" {
+						arg = "parameter null or not set"
+					}
 					return "", UnsetParameterError{Node: pe, Message: arg}
 				}
 			}
@@ -925,9 +931,15 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			if vr.IsSet() {
 				break
 			}
+			if arg == "" {
+				arg = "parameter not set"
+			}
 			fallthrough
 		case syntax.ErrorUnsetOrNull:
 			if str == "" {
+				if arg == "" {
+					arg = "parameter null or not set"
+				}
 				return "", UnsetParameterError{
 					Node:    pe,
 					Message: arg,

@@ -440,6 +440,8 @@ func looksLikeExpandError(msg string) bool {
 		strings.Contains(msg, "readonly variable"),
 		strings.Contains(msg, "bad array subscript"),
 		strings.Contains(msg, "cannot assign in this way"),
+		strings.Contains(msg, "parameter not set"),
+		strings.Contains(msg, "parameter null or not set"),
 		strings.Contains(msg, "invalid variable name"):
 		return true
 	}
