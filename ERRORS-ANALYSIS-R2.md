@@ -46,6 +46,18 @@ make build && ROOT=$PWD && cd external/bash-5.3/tests && \
 With the freshly built sandbox binary the diff is **48 lines** (stable across
 repeated runs: 48/48/48). All 48 are clustered below.
 
+> **Orchestrator correction (post-merge):** the canonical hermetic
+> measurement (`bash --noprofile --norc`, no PTY) on a fresh build is
+> **70 lines**, and every wrapper gate measured it correctly via the
+> absolute `BASHY=$PWD/bin/bashy` capture. The 48 here was measured
+> inside an interactive TUI session (PTY-attached), which changes some
+> error output. The headline discovery stands: the issue-body recipe
+> (`$PWD/../../../bin/bashy` from inside `tests/`) physically traverses
+> the `external` symlink and runs the OLD ai/sh repo's May-26 binary
+> (349-line diff) — that stale binary has been renamed
+> `bashy.stale-trap-2026-06-11` to kill the trap. The cluster analysis
+> below is environment-independent and remains the mining source.
+
 ## Coverage table
 
 `D<n>` numbers the 48 `<`/`>` lines of the corrected diff in order
