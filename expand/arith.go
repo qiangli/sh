@@ -101,6 +101,44 @@ func (cfg *Config) arithmLiteral(word *syntax.Word) (string, error) {
 	return Literal(cfg, &wordCopy)
 }
 
+func (cfg *Config) arithmIndexedParamLiteral(word *syntax.Word) (string, bool, error) {
+	if len(word.Parts) != 1 {
+		return "", false, nil
+	}
+	pe, ok := word.Parts[0].(*syntax.ParamExp)
+	if !ok || pe.Param == nil || pe.NestedParam != nil || pe.Index == nil ||
+		pe.Slice != nil || pe.Repl != nil || pe.Exp != nil ||
+		pe.Length || pe.Width || pe.Excl || pe.Names != 0 {
+		return "", false, nil
+	}
+	name := pe.Param.Value
+	vr := cfg.Env.Get(name)
+	if n, v := vr.Resolve(cfg.Env); n != "" {
+		name, vr = n, v
+	}
+	if cfg.NoUnset && !vr.Declared() {
+		return "", true, UnsetParameterError{Name: name, Message: "unbound variable"}
+	}
+	if vr.Kind == Associative {
+		return "", false, nil
+	}
+	index, err := Arithm(cfg, pe.Index)
+	if err != nil {
+		return "", true, err
+	}
+	switch vr.Kind {
+	case Indexed:
+		if vr.IndexedSet(index) {
+			return vr.List[index], true, nil
+		}
+	case String, NameRef:
+		if index == 0 && vr.IsSet() {
+			return vr.Str, true, nil
+		}
+	}
+	return "0", true, nil
+}
+
 func (cfg *Config) arithmSnapshotParts(parts []syntax.WordPart) ([]syntax.WordPart, bool) {
 	var changed bool
 	out := make([]syntax.WordPart, len(parts))
@@ -346,9 +384,15 @@ func arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 	case nil:
 		return 0, nil
 	case *syntax.Word:
-		str, err := cfg.arithmLiteral(expr)
+		str, ok, err := cfg.arithmIndexedParamLiteral(expr)
 		if err != nil {
 			return 0, err
+		}
+		if !ok {
+			str, err = cfg.arithmLiteral(expr)
+			if err != nil {
+				return 0, err
+			}
 		}
 		if dqText, hasParam, ok := arithmDoubleQuotedText(expr); ok && hasParam && containsArithOp(dqText) {
 			str = dqText
