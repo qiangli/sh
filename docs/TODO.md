@@ -1,7 +1,7 @@
 # Bashy: Bash 5.3 Drop-In Replacement — TODO Checklist
 
-**Current status**: 67 bash tests passing, 9 failing, 11 skipped
-**Last updated**: 2026-06-11 (history fixture flipped FAIL → PASS: 43 → 0 diff lines)
+**Current status**: 68 bash tests passing, 8 failing, 11 skipped
+**Last updated**: 2026-06-11 (errors fixture flipped FAIL → PASS: 48 → 0 diff lines, R2 clusters C1-C10)
 
 ---
 
@@ -196,7 +196,6 @@ tilde2        type          vredir
 | quotearray   | 155 | Array quoting |
 | heredoc      | 171 | Heredoc edge cases |
 | posixexp     | 311 | POSIX expansion |
-| errors       | 349 | Error-message format (G0) |
 | varenv       | 366 | Variable/environment |
 | arith        | 372 | Arithmetic edge cases |
 | dbg-support  | 377 | DEBUG trap / source-line tracking |

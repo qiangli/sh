@@ -766,6 +766,19 @@ var runTests = []runTest{
 		"echo ${a:?%s}",
 		"a: %s\nexit status 1 #JUSTERR",
 	},
+	// Bash substitutes default messages when no word follows ? / :?.
+	{
+		"echo ${a?}",
+		"a: parameter not set\nexit status 1 #JUSTERR",
+	},
+	{
+		"echo ${a:?}",
+		"a: parameter null or not set\nexit status 1 #JUSTERR",
+	},
+	{
+		"a=; echo ${a:?}",
+		"a: parameter null or not set\nexit status 1 #JUSTERR",
+	},
 	{
 		"x=aaabccc; echo ${x#*a}; echo ${x##*a}",
 		"aabccc\nbccc\n",
@@ -2622,6 +2635,22 @@ var runTests = []runTest{
 	{"_QUANTITY= _QUOTA= _QUOTE= _QUILL= _QUEST= _QUART=; IFS=-; printf '<%s>\\n' \"${!_Q*}\"; printf '<%s>\\n' \"${!_Q@}\"", "<_QUANTITY-_QUART-_QUEST-_QUILL-_QUOTA-_QUOTE>\n<_QUANTITY>\n<_QUART>\n<_QUEST>\n<_QUILL>\n<_QUOTA>\n<_QUOTE>\n"},
 	{"_Q=1; echo \"${!_Q* }\"; echo after", "bad substitution\nafter\n"},
 	{"set -- a b; echo ${!1*}; echo ${!@*}; echo after", "bad substitution\nbad substitution\nafter\n"},
+	// A non-fatal bad substitution fails the command with $? = 1.
+	{"echo ${#+} second; echo after: $?", "bad substitution\nafter: 1\n"},
+	// Malformed expansions which bash accepts at parse time and
+	// rejects at expansion time.
+	{"echo ${x!y} second; echo after: $?", "bad substitution\nafter: 1\n"},
+	{"echo ${#foo%} second; echo after: $?", "bad substitution\nafter: 1\n"},
+	// Indirection through an unset variable: fatal when bare (covered
+	// above), non-fatal with $? = 1 when a default-style op follows.
+	{"echo ${!var:-unset}; echo after: $?", "var: invalid indirect expansion\nafter: 1\n"},
+	{"echo ${!var+set}; echo after: $?", "var: invalid indirect expansion\nafter: 1\n"},
+	// An invalid indirection target name fails with $? = 1.
+	{"x=-3; echo ${!x}; echo after: $?", "-3: invalid variable name\nafter: 1\n"},
+	// A blank (whitespace-only) subscript evaluates as index 0 for
+	// indexed arrays and misses every associative array key.
+	{"b[0]=4; echo ${b[   ]}; echo after: $?", "4\nafter: 0\n"},
+	{"typeset -A v; v[0]=one; echo ${v[   ]}; echo after: $?", "\nafter: 0\n"},
 	{"arrayA=(A B C); xx='arrayA[*]'; arrayB=( ${!xx} ); echo \"${#arrayB[*]}:${arrayB[0]}:${arrayB[1]}:${arrayB[2]}\"; arrayB=( \"${!xx}\" ); echo \"${#arrayB[*]}:${arrayB[0]}:${arrayB[1]}:${arrayB[2]}\"; xx='arrayA[@]'; arrayB=( ${!xx} ); echo \"${#arrayB[*]}:${arrayB[0]}:${arrayB[1]}:${arrayB[2]}\"; arrayB=( \"${!xx}\" ); echo \"${#arrayB[*]}:${arrayB[0]}:${arrayB[1]}:${arrayB[2]}\"", "3:A:B:C\n1:A B C::\n3:A:B:C\n3:A:B:C\n"},
 	// Assignment binds lower than the ternary false branch in bash:
 	// these parse like `(cond ? a : a) += 5`, which is not an lvalue.
@@ -3910,6 +3939,12 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	},
 	{"readonly foo=bar; export foo; echo $foo", "bar\n"},
 	{"readonly foo=bar; readonly bar=foo; export foo bar; echo $bar", "foo\n"},
+	// Assigning to a readonly variable via the export/readonly
+	// builtins fails with status 1 and keeps the old value.
+	{"readonly v=a; command export v=foo; echo after: $?; echo $v", "v: readonly variable\nafter: 1\na\n"},
+	{"readonly v=a; command readonly v=foo; echo after: $?; echo $v", "v: readonly variable\nafter: 1\na\n"},
+	// POSIX mode implies shift_verbose.
+	{"set -o posix; command shift 2; echo after: $?", "shift: 2: shift count out of range\nafter: 1\n"},
 	{"readonly -p | grep '^declare -r SHELLOPTS='", "declare -r SHELLOPTS=\"braceexpand:hashall:interactive-comments\"\n"},
 	{
 		"a=b; a=c; echo $a; readonly a; a=d",
@@ -5359,6 +5394,54 @@ func TestBashCompatMalformedLengthSubstitution(t *testing.T) {
 			"./more-exp.tests: line 5: ${#+}: bad substitution\n"+
 			"./more-exp.tests: line 6: ${#1xyz}: bad substitution\n"+
 			"./more-exp.tests: line 7: #: %: arithmetic syntax error: operand expected (error token is \"%\")\n"))
+}
+
+func TestBashCompatEvalArithOperandError(t *testing.T) {
+	// Bash defers arithmetic parsing to expansion time, so an
+	// operator-first expression inside eval'd $((...)) / $[...]
+	// reports through the arithmetic evaluator: no `eval:` tag, no
+	// source echo (errors.tests lines 286-287).
+	src := "eval echo \\$\\[/bin/sh + 0\\]\n" +
+		"eval echo '$((/bin/sh + 0))'\n" +
+		"true\n"
+	file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(src), "./errors.tests")
+	qt.Assert(t, qt.IsNil(err))
+
+	var cb bytes.Buffer
+	r, err := interp.New(
+		interp.StdIO(nil, &cb, &cb),
+		interp.WithBashCompatErrors(true),
+		interp.WithBashSource([]byte(src)),
+	)
+	qt.Assert(t, qt.IsNil(err))
+
+	err = r.Run(context.Background(), file)
+	qt.Assert(t, qt.IsNil(err))
+	qt.Assert(t, qt.Equals(cb.String(),
+		"./errors.tests: line 1: /bin/sh + 0: arithmetic syntax error: operand expected (error token is \"/bin/sh + 0\")\n"+
+			"./errors.tests: line 2: /bin/sh + 0: arithmetic syntax error: operand expected (error token is \"/bin/sh + 0\")\n"))
+}
+
+func TestBashCompatEvalUnclosedParenLineRebase(t *testing.T) {
+	// The parser stamps "from `(' command on line N" with the line
+	// inside the eval'd string; bash counts from the top of the
+	// enclosing script (errors8.sub line 6).
+	src := "\n\n\n\n\neval '( '\ntrue\n"
+	file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(src), "./errors8.sub")
+	qt.Assert(t, qt.IsNil(err))
+
+	var cb bytes.Buffer
+	r, err := interp.New(
+		interp.StdIO(nil, &cb, &cb),
+		interp.WithBashCompatErrors(true),
+		interp.WithBashSource([]byte(src)),
+	)
+	qt.Assert(t, qt.IsNil(err))
+
+	err = r.Run(context.Background(), file)
+	qt.Assert(t, qt.IsNil(err))
+	qt.Assert(t, qt.Equals(cb.String(),
+		"./errors8.sub: eval: line 7: syntax error: unexpected end of file from `(' command on line 6\n"))
 }
 
 func TestBashCompatTestVarSetSplitArrayRef(t *testing.T) {

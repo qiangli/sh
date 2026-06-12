@@ -107,6 +107,7 @@ func Walk(node Node, f func(Node) bool) {
 		if node.Exp != nil {
 			walkNilable(node.Exp.Word, f)
 		}
+		walkNilable(node.BadSubst, f)
 	case *ArithmExp:
 		Walk(node.X, f)
 	case *ArithmCmd:

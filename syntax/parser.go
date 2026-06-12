@@ -1726,7 +1726,7 @@ zshPrefixLoop:
 		}
 		p.pos = p.nextPos()
 		p.rune()
-		pe.Index = p.eitherIndex()
+		pe.Index = p.eitherIndexBlank(true)
 	}
 	tokRune := p.r
 	p.pos = p.nextPos()
@@ -1738,6 +1738,11 @@ zshPrefixLoop:
 		return pe
 	}
 	if p.tok != _EOF && (pe.Length || pe.Width || pe.IsSet) {
+		if p.lang == LangBash {
+			// Bash defers `${#foo%}` and friends to expansion
+			// time, rejecting them as a bad substitution there.
+			return p.deferBadSubst(pe, old)
+		}
 		p.curErr("cannot combine multiple parameter expansion operators")
 	}
 	if pe.Param != nil && pe.Param.Value == "#" {
@@ -1829,6 +1834,9 @@ zshPrefixLoop:
 			pe.Names = ParNamesOperator(p.tok)
 			p.next()
 		case p.tok == star && !pe.Excl:
+			if p.lang == LangBash {
+				return p.deferBadSubst(pe, old)
+			}
 			p.curErr("not a valid parameter expansion operator: %#q", p.tok)
 		case pe.Excl && p.r == '}':
 			p.checkLang(pe.Pos(), langBashLike, "`${!foo%s}`", p.tok)
@@ -1852,6 +1860,11 @@ zshPrefixLoop:
 				p.curErr("nested parameter expansion cannot be followed by a word")
 			}
 		} else {
+			if p.lang == LangBash {
+				// Bash scans to the matching `}` and rejects the
+				// whole expansion at expansion time (`${x!y}`).
+				return p.deferBadSubst(pe, old)
+			}
 			p.curErr("not a valid parameter expansion operator: %#q", string(tokRune))
 		}
 	}
@@ -1860,6 +1873,52 @@ zshPrefixLoop:
 	}
 	p.quote = old
 	pe.Rbrace = p.matched(pe.Dollar, dollBrace, rightBrace)
+	return pe
+}
+
+// badSubstRemainder consumes the raw remainder of a parameter
+// expansion up to its matching `}` for operators which bash accepts
+// at parse time but rejects at expansion time, such as `${x!y}` or
+// `${#foo%}`. pre holds the operator text already consumed.
+func (p *Parser) badSubstRemainder(pre string) *Lit {
+	pos := p.pos
+	var sb strings.Builder
+	sb.WriteString(pre)
+	depth := 0
+	for {
+		switch p.r {
+		case utf8.RuneSelf:
+			p.tok = _EOF
+			return p.lit(pos, sb.String())
+		case '{':
+			depth++
+		case '}':
+			if depth == 0 {
+				return p.lit(pos, sb.String())
+			}
+			depth--
+		}
+		sb.WriteRune(p.r)
+		p.rune()
+	}
+}
+
+// deferBadSubst finishes a ${...} expansion whose remainder bash only
+// rejects at expansion time, storing the raw text in pe.BadSubst.
+func (p *Parser) deferBadSubst(pe *ParamExp, old quoteState) *ParamExp {
+	pre := p.tok.String()
+	if p.tok == illegalTok {
+		pre = ""
+	}
+	pe.BadSubst = p.badSubstRemainder(pre)
+	if p.tok == _EOF {
+		p.matchingErr(pe.Dollar, dollBrace, rightBrace)
+		return pe
+	}
+	pe.Rbrace = p.nextPos()
+	p.rune()
+	p.quote = old
+	p.next()
 	return pe
 }
 
@@ -2055,6 +2114,16 @@ func (p *Parser) paramExpExp() *Expansion {
 }
 
 func (p *Parser) eitherIndex() ArithmExpr {
+	return p.eitherIndexBlank(false)
+}
+
+// eitherIndexBlank is eitherIndex with blankOK controlling whether a
+// whitespace-only subscript like ${b[   ]} is accepted. Bash rejects
+// `${b[]}` at parse time but defers a blank subscript to expansion
+// time, where it evaluates as index 0 (indexed arrays) or as a key
+// that no associative array contains. Only `${name[...]}` subscripts
+// qualify; assignment subscripts like `b[ ]=x` stay rejected.
+func (p *Parser) eitherIndexBlank(blankOK bool) ArithmExpr {
 	old := p.quote
 	oldAssignIndexWords := p.assignIndexWords
 	lpos := p.pos
@@ -2064,6 +2133,14 @@ func (p *Parser) eitherIndex() ArithmExpr {
 	switch p.tok {
 	case star, at, perc, exclMark:
 		p.tok, p.val = _LitWord, p.tok.String()
+	}
+	if blankOK && p.lang == LangBash && p.tok == rightBrack &&
+		p.pos.Offset() > lpos.Offset()+1 {
+		expr := ArithmExpr(p.wordOne(p.lit(p.pos, " ")))
+		p.quote = old
+		p.assignIndexWords = oldAssignIndexWords
+		p.matchedArithm(lpos, leftBrack, rightBrack)
+		return expr
 	}
 	expr := p.followArithm(leftBrack, lpos)
 	p.quote = old

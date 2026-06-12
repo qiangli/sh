@@ -525,8 +525,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			}
 			if n2 > len(r.Params) {
 				// Out of range: silent error by default; with
-				// `shopt -s shift_verbose`, emit a diagnostic.
-				if opt, _ := r.bashOptByName("shift_verbose"); opt != nil && *opt {
+				// `shopt -s shift_verbose` or in POSIX mode, emit
+				// a diagnostic.
+				if opt, _ := r.bashOptByName("shift_verbose"); (opt != nil && *opt) || r.opts[optPosix] {
 					return failf(1, "shift: %s: shift count out of range\n", args[0])
 				}
 				exit.code = 1
@@ -1641,6 +1642,17 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					name = "bashy"
 				}
 				text := pe.Text
+				// The parser stamps "from `(' command on line N"
+				// with the line inside the eval'd string; bash
+				// counts from the top of the enclosing script.
+				// Re-base before the rewrites below (the `{` case
+				// constructs its own absolute line).
+				if i := strings.LastIndex(text, " command on line "); i >= 0 {
+					if n, aerr := strconv.Atoi(text[i+len(" command on line "):]); aerr == nil {
+						text = fmt.Sprintf("%s command on line %d",
+							text[:i], n+int(pos.Line())-1)
+					}
+				}
 				// Rewrite our generic "statements must be separated"
 				// message to bash's "syntax error near unexpected
 				// token `X'" form when we can identify the
@@ -1672,6 +1684,21 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 						}
 					case strings.Contains(text, "`$(`") || strings.Contains(text, "`(`"):
 						text = "unexpected EOF while looking for matching `)'"
+					}
+				}
+				// An arithmetic operator error inside $((...)) or
+				// $[...] is a *runtime* arithmetic error in bash,
+				// which defers arithmetic parsing to expansion time:
+				// no `eval:` tag, no source echo, and the evaluator's
+				// "operand expected" shape.
+				if strings.HasSuffix(text, "must follow an expression") {
+					if srcLine := evalSourceLine(src, int(pe.Pos.Line())); srcLine != "" {
+						if expr, ok := innerArithText(srcLine); ok {
+							r.errf("%s: line %d: %s: arithmetic syntax error: operand expected (error token is %q)\n",
+								name, pos.Line(), expr, expr)
+							exit.code = 1
+							return exit
+						}
 					}
 				}
 				// bash reports the eval-time EOF on the line right
@@ -3834,6 +3861,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					exit = invalidIdentifier("export", name)
 					continue
 				}
+				if prev := r.lookupVar(name); prev.ReadOnly {
+					r.errf("%s%s: readonly variable\n", r.bashErrPrefix(r.curStmtPos), name)
+					exit.code = 1
+					continue
+				}
 				val := arg[eqIdx+1:]
 				r.setVar(name, expand.Variable{Set: true, Kind: expand.String, Str: val, Exported: true})
 			} else {
@@ -3853,6 +3885,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				name := arg[:eqIdx]
 				if !syntax.ValidName(name) {
 					exit = invalidIdentifier("readonly", name)
+					continue
+				}
+				if prev := r.lookupVar(name); prev.ReadOnly {
+					r.errf("%s%s: readonly variable\n", r.bashErrPrefix(r.curStmtPos), name)
+					exit.code = 1
 					continue
 				}
 				val := arg[eqIdx+1:]
@@ -4064,6 +4101,22 @@ func firstBraceLine(src string) int {
 		}
 	}
 	return 0
+}
+
+// innerArithText extracts the body of the first $((...)) or $[...]
+// in line, returning ok=false when neither is present.
+func innerArithText(line string) (string, bool) {
+	if i := strings.Index(line, "$(("); i >= 0 {
+		if j := strings.Index(line[i:], "))"); j >= 0 {
+			return strings.TrimSpace(line[i+3 : i+j]), true
+		}
+	}
+	if i := strings.Index(line, "$["); i >= 0 {
+		if j := strings.IndexByte(line[i:], ']'); j >= 0 {
+			return strings.TrimSpace(line[i+2 : i+j]), true
+		}
+	}
+	return "", false
 }
 
 func evalSourceLine(src string, n int) string {
