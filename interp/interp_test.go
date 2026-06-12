@@ -1114,6 +1114,10 @@ var runTests = []runTest{
 		"declare -a arr=([0]=\"1\" [1]=\"2\" [2]=\"3\")\n",
 	},
 	{
+		`>a.x >b.x; array2=(grep [ 123 ] \*); declare -p array2; printf '<%s>\n' "${array2[@]}"; rm a.x b.x`,
+		"declare -a array2=([0]=\"grep\" [1]=\"[\" [2]=\"123\" [3]=\"]\" [4]=\"*\")\n<grep>\n<[>\n<123>\n<]>\n<*>\n",
+	},
+	{
 		`declare -a arr; declare -p arr; arr=(); declare -p arr`,
 		"declare -a arr\ndeclare -a arr=()\n",
 	},
@@ -4107,6 +4111,10 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	{
 		`>a.x; echo '*.x' "*.x"; rm a.x`,
 		"*.x *.x\n",
+	},
+	{
+		`>a.x >b.x; printf '<%s>\n' \* a\*; rm a.x b.x`,
+		"<*>\n<a*>\n",
 	},
 	{
 		`>a.x >b.y; echo *'.'x; rm a.x`,

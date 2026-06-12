@@ -598,6 +598,36 @@ func Test_glob(t *testing.T) {
 	}
 }
 
+func TestFieldsBackslashEscapedGlobMeta(t *testing.T) {
+	cfg := &Config{
+		ReadDir2: func(string) ([]fs.DirEntry, error) {
+			return []fs.DirEntry{
+				&mockFileInfo{name: "a"},
+				&mockFileInfo{name: "ab"},
+			}, nil
+		},
+	}
+	tests := []struct {
+		src  string
+		want []string
+	}{
+		{`\*`, []string{"*"}},
+		{`*`, []string{"a", "ab"}},
+		{`a\*`, []string{"a*"}},
+		{`a*`, []string{"a", "ab"}},
+	}
+	for _, tc := range tests {
+		word := parseWord(t, tc.src)
+		got, err := Fields(cfg, word)
+		if err != nil {
+			t.Fatalf("%s: did not want error, got %v", tc.src, err)
+		}
+		if !reflect.DeepEqual(got, tc.want) {
+			t.Fatalf("%s: wanted %q, got %q", tc.src, tc.want, got)
+		}
+	}
+}
+
 type mockFileInfo struct {
 	name        string
 	typ         fs.FileMode

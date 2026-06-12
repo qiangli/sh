@@ -2121,6 +2121,29 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 		curField = append(curField, fieldPart{quote: quoteSingle, val: ""})
 		flush()
 	}
+	addLit := func(s string) {
+		fieldStart := 0
+		for i := 0; i < len(s); i++ {
+			if s[i] != '\\' {
+				continue
+			}
+			if fieldStart < i {
+				curField = append(curField, fieldPart{val: s[fieldStart:i]})
+			}
+			if i++; i < len(s) {
+				curField = append(curField, fieldPart{
+					quote: quoteSingle,
+					val:   s[i : i+1],
+				})
+			} else {
+				curField = append(curField, fieldPart{val: "\\"})
+			}
+			fieldStart = i + 1
+		}
+		if fieldStart < len(s) {
+			curField = append(curField, fieldPart{val: s[fieldStart:]})
+		}
+	}
 	splitAdd := func(val string) {
 		// hadPrefix records whether curField had content (a lit prefix
 		// from before this splitAdd) when we hit the first IFS char.
@@ -2225,21 +2248,6 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 				})
 				s = rest
 			}
-			if strings.Contains(s, "\\") {
-				sb := cfg.strBuilder()
-				for i := 0; i < len(s); i++ {
-					b := s[i]
-					if b == '\\' {
-						if i++; i >= len(s) {
-							sb.WriteByte(b)
-							break
-						}
-						b = s[i]
-					}
-					sb.WriteByte(b)
-				}
-				s = sb.String()
-			}
 			if cfg.tildeInAssign {
 				// For an assignment-shape arg, the tilde immediately
 				// after the first `=` is expanded as if it were a
@@ -2268,7 +2276,7 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 				}
 				s = cfg.expandTildesAfterColons(s)
 			}
-			curField = append(curField, fieldPart{val: s})
+			addLit(s)
 		case *syntax.SglQuoted:
 			allowEmpty = true
 			fp := fieldPart{quote: quoteSingle, val: wp.Value}
