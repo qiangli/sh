@@ -1866,7 +1866,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		})
 		r.stmts(ctx, file.Stmts)
 		r.callStack = r.callStack[:len(r.callStack)-1]
-		if r.functraceEnabled() {
+		if r.trapCallbacks["RETURN"] != "" && (r.functraceEnabled() || len(r.callStack) == 0) {
 			prevLineno := r.ecfg.OverrideLineno
 			r.ecfg.OverrideLineno = int(pos.Line())
 			r.trapCallback(ctx, r.trapCallbacks["RETURN"], "return")

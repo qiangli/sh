@@ -364,6 +364,10 @@ type Runner struct {
 	// (and the legacy TestRunnerRun tests) keep the old "<name>: <msg>
 	// <arg>" wording without the line prefix.
 	bashCompatErrors bool
+	// handlingDebugTrap prevents DEBUG traps from recursively firing
+	// for commands inside the DEBUG trap itself while still allowing
+	// DEBUG to run inside other trap handlers such as RETURN.
+	handlingDebugTrap bool
 
 	// auditHandler, when non-nil, is invoked just before the runner
 	// hands a simple command off to execHandler. It receives an

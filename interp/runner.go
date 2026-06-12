@@ -4098,7 +4098,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		// so the assignment-only branch below honors the skip.
 		if len(cm.Args) == 0 && len(cm.Assigns) > 0 && r.shouldFireDebugTrap() {
 			prevLineno := r.ecfg.OverrideLineno
-			r.ecfg.OverrideLineno = int(cm.Assigns[0].Pos().Line())
+			r.ecfg.OverrideLineno = r.debugTrapLine(cm.Assigns[0].Pos())
 			debugCode := r.trapCallback(ctx, r.trapCallbacks["DEBUG"], "debug")
 			r.ecfg.OverrideLineno = prevLineno
 			if opt, _ := r.bashOptByName("extdebug"); opt != nil && *opt && debugCode == 2 {
@@ -5785,10 +5785,25 @@ func (r *Runner) trapCallback(ctx context.Context, callback, name string) uint8 
 	if callback == "" {
 		return 0 // nothing to do
 	}
-	if r.handlingTrap {
-		return 0 // don't recurse, as that could lead to cycles
+	wasHandlingTrap := r.handlingTrap
+	if wasHandlingTrap {
+		if name != "debug" || r.handlingDebugTrap {
+			return 0 // don't recurse, as that could lead to cycles
+		}
+	} else {
+		r.handlingTrap = true
 	}
-	r.handlingTrap = true
+	if name == "debug" {
+		r.handlingDebugTrap = true
+	}
+	defer func() {
+		if name == "debug" {
+			r.handlingDebugTrap = false
+		}
+		if !wasHandlingTrap {
+			r.handlingTrap = false
+		}
+	}()
 
 	p := syntax.NewParser()
 	// TODO: do this parsing when "trap" is called?
@@ -5796,7 +5811,6 @@ func (r *Runner) trapCallback(ctx context.Context, callback, name string) uint8 
 	if err != nil {
 		r.errf(name+"trap: %v\n", err)
 		// ignore errors in the callback
-		r.handlingTrap = false
 		return 0
 	}
 	oldExit := r.exit
@@ -5805,7 +5819,6 @@ func (r *Runner) trapCallback(ctx context.Context, callback, name string) uint8 
 	trapCode := r.exit.code
 	r.exit = oldExit // traps on EXIT or ERR should not modify the result
 
-	r.handlingTrap = false
 	return trapCode
 }
 
@@ -6773,6 +6786,13 @@ func (r *Runner) shouldFireDebugTrap() bool {
 	return len(r.callStack) == 0 || r.functraceEnabled()
 }
 
+func (r *Runner) debugTrapLine(pos syntax.Pos) int {
+	if r.handlingTrap && r.ecfg.OverrideLineno > 0 {
+		return r.ecfg.OverrideLineno
+	}
+	return int(pos.Line())
+}
+
 // selectLoop implements bash's `select var in items; do ...; done`.
 // Each iteration prints the numbered menu to stderr, prompts with PS3,
 // reads a line into REPLY, sets var to items[N-1] when the reply is a
@@ -6789,7 +6809,7 @@ func (r *Runner) fireDebugTrap(ctx context.Context, node syntax.Node) bool {
 	}
 	prevLineno := r.ecfg.OverrideLineno
 	prevStmtPos := r.curStmtPos
-	r.ecfg.OverrideLineno = int(node.Pos().Line())
+	r.ecfg.OverrideLineno = r.debugTrapLine(node.Pos())
 	debugCode := r.trapCallback(ctx, r.trapCallbacks["DEBUG"], "debug")
 	r.ecfg.OverrideLineno = prevLineno
 	r.curStmtPos = prevStmtPos
@@ -6883,7 +6903,7 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 	debugCode := uint8(0)
 	if r.shouldFireDebugTrap() {
 		prevLineno := r.ecfg.OverrideLineno
-		r.ecfg.OverrideLineno = int(pos.Line())
+		r.ecfg.OverrideLineno = r.debugTrapLine(pos)
 		debugCode = r.trapCallback(ctx, r.trapCallbacks["DEBUG"], "debug")
 		r.ecfg.OverrideLineno = prevLineno
 	}
@@ -6963,7 +6983,7 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 
 		if r.shouldFireDebugTrap() {
 			prevLineno := r.ecfg.OverrideLineno
-			r.ecfg.OverrideLineno = int(body.Pos().Line())
+			r.ecfg.OverrideLineno = r.debugTrapLine(body.Pos())
 			r.trapCallback(ctx, r.trapCallbacks["DEBUG"], "debug")
 			r.ecfg.OverrideLineno = prevLineno
 		}
