@@ -1709,6 +1709,46 @@ func escapedQuotedAssignIndex(expr syntax.ArithmExpr) (string, bool) {
 	return strings.TrimSuffix(strings.TrimPrefix(lit.Value, `\"`), `\"`), true
 }
 
+func (r *Runner) arithmCompoundArrayIndex(expr syntax.ArithmExpr) (int, bool) {
+	n, err := expand.Arithm(r.ecfg, expr)
+	if err == nil {
+		r.lastArithErr = nil
+		return n, true
+	}
+	if r.bashCompatErrors {
+		if arithErr, arithExpr := innermostArithmError(err); arithErr != nil {
+			if arithExpr != nil {
+				expr = arithExpr
+			}
+			exprText := arithErr.Text
+			if exprText == "" {
+				exprText = r.arithmSourceText(expr, false)
+			}
+			msg := arithErr.Err.Error()
+			if strings.Contains(msg, "not a valid arithmetic operator") {
+				token := strings.TrimSpace(exprText)
+				if i := strings.LastIndexByte(token, ' '); i >= 0 {
+					token = token[i+1:]
+				}
+				prefix := r.filename
+				if prefix == "" {
+					prefix = "bashy"
+				}
+				line := int(r.curStmtPos.Line())
+				err = fmt.Errorf("%s: line %d: %s: arithmetic syntax error in expression (error token is %q)",
+					prefix, line, strings.TrimSpace(exprText), token)
+			} else {
+				err = r.bashArithmError(expr, arithErr.Err, false, arithErr.Text)
+			}
+		} else {
+			err = r.bashArithmError(expr, err, false, "")
+		}
+	}
+	r.lastArithErr = err
+	r.expandErr(err)
+	return n, false
+}
+
 func (r *Runner) setVarWithIndex(prev expand.Variable, name string, index syntax.ArithmExpr, vr expand.Variable) {
 	if vr.Kind == expand.String && index == nil {
 		// When assigning a string to an array, fall back to the
@@ -2427,7 +2467,15 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 				break
 			}
 			// Index resets our index with a literal value.
-			index = r.arithm(elem.Index)
+			var ok bool
+			index, ok = r.arithmCompoundArrayIndex(elem.Index)
+			if !ok {
+				prev.Kind = expand.Indexed
+				prev.List = []string{}
+				prev.ListSet = nil
+				prev.Str = ""
+				return name, prev
+			}
 			if index < 0 {
 				// Bash 5.3 treats `arr[-1]=v` as an offset
 				// from the end of the existing list.

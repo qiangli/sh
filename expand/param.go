@@ -650,6 +650,7 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 
 	switch nodeLit(index) {
 	case "@", "*":
+		allOp := nodeLit(index)
 		switch vr.Kind {
 		case Unknown:
 			elems = nil
@@ -662,7 +663,11 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			if err != nil {
 				return "", err
 			}
-			str = strings.Join(elems, " ")
+			if allOp == "*" && name != "*" && name != "@" {
+				str = cfg.ifsJoin(elems)
+			} else {
+				str = strings.Join(elems, " ")
+			}
 		case Associative:
 			indexAllElements = true
 			callVarInd = false
@@ -673,7 +678,11 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			for i, k := range keys {
 				elems[i] = vr.Map[k]
 			}
-			str = strings.Join(elems, " ")
+			if allOp == "*" && name != "*" && name != "@" {
+				str = cfg.ifsJoin(elems)
+			} else {
+				str = strings.Join(elems, " ")
+			}
 		}
 	}
 	if callVarInd {
@@ -899,8 +908,7 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 		if pe.Repl.All {
 			n = -1
 		}
-		out := slices.Clone(elems)
-		for i, elem := range out {
+		replaceOne := func(elem string) string {
 			locs := cfg.findReplIndex(orig, elem, n, replAnchoredStart, replAnchoredEnd)
 			sb := cfg.strBuilder()
 			last := 0
@@ -910,7 +918,19 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 				last = loc[1]
 			}
 			sb.WriteString(elem[last:])
-			out[i] = sb.String()
+			return sb.String()
+		}
+		if indexAllElements && nodeLit(index) == "*" && !replAnchoredStart && !replAnchoredEnd {
+			target := str
+			if name == "*" {
+				target = cfg.ifsJoin(elems)
+			}
+			str = replaceOne(target)
+			break
+		}
+		out := slices.Clone(elems)
+		for i, elem := range out {
+			out[i] = replaceOne(elem)
 		}
 		str = strings.Join(out, " ")
 	case pe.Exp != nil:
@@ -972,6 +992,16 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			}
 			return "", err
 		}
+		starAggregateNull := false
+		if name == "*" {
+			starAggregateNull = len(vr.List) > 0
+			for _, elem := range vr.List {
+				if elem != "" {
+					starAggregateNull = false
+					break
+				}
+			}
+		}
 		switch op {
 		case syntax.AlternateUnsetOrNull:
 			if str == "" {
@@ -991,7 +1021,7 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			}
 			fallthrough
 		case syntax.DefaultUnsetOrNull:
-			if str == "" {
+			if str == "" || starAggregateNull {
 				str = arg
 			}
 		case syntax.ErrorUnset:
@@ -1306,6 +1336,10 @@ func (cfg *Config) varInd(vr Variable, idx syntax.ArithmExpr) (string, error) {
 	}
 	switch vr.Kind {
 	case String:
+		switch nodeLit(idx) {
+		case "*", "@":
+			return vr.Str, nil
+		}
 		n, err := Arithm(cfg, idx)
 		if err != nil {
 			return "", err

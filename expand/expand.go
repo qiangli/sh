@@ -2525,26 +2525,55 @@ func (cfg *Config) substWordFields(pe *syntax.ParamExp) ([][]fieldPart, bool, er
 	if len(pe.Exp.Word.Parts) == 1 {
 		lit, litOnly = pe.Exp.Word.Parts[0].(*syntax.Lit)
 	}
-	if !paramExpWordHasQuotedPart(pe.Exp.Word) && !paramExpWordHasAtOrStar(pe.Exp.Word) {
+	allIndexed := false
+	allIndexedSet := false
+	allIndexedNonNull := false
+	if (nodeLit(pe.Index) == "@" || nodeLit(pe.Index) == "*") && cfg.Env.Get(pe.Param.Value).Kind == Indexed {
+		allIndexed = true
+		for _, elem := range cfg.Env.Get(pe.Param.Value).IndexedValues() {
+			allIndexedSet = true
+			if elem != "" {
+				allIndexedNonNull = true
+			}
+		}
+	}
+	if !allIndexed && !paramExpWordHasQuotedPart(pe.Exp.Word) && !paramExpWordHasAtOrStar(pe.Exp.Word) {
 		if !litOnly || !strings.Contains(lit.Value, "\\") {
 			return nil, false, nil
 		}
 	}
 	vr := cfg.Env.Get(pe.Param.Value)
 	trigger := false
-	switch op {
-	case syntax.DefaultUnset:
-		trigger = !vr.IsSet()
-	case syntax.DefaultUnsetOrNull:
-		trigger = !vr.IsSet() || vr.String() == ""
-	case syntax.AlternateUnset:
-		trigger = vr.IsSet()
-	case syntax.AlternateUnsetOrNull:
-		trigger = vr.IsSet() && vr.String() != ""
-	case syntax.AssignUnset:
-		trigger = !vr.IsSet()
-	case syntax.AssignUnsetOrNull:
-		trigger = !vr.IsSet() || vr.String() == ""
+	if allIndexed {
+		switch op {
+		case syntax.DefaultUnset:
+			trigger = !allIndexedSet
+		case syntax.DefaultUnsetOrNull:
+			trigger = !allIndexedSet || !allIndexedNonNull
+		case syntax.AlternateUnset:
+			trigger = allIndexedSet
+		case syntax.AlternateUnsetOrNull:
+			trigger = allIndexedSet && allIndexedNonNull
+		case syntax.AssignUnset:
+			trigger = !allIndexedSet
+		case syntax.AssignUnsetOrNull:
+			trigger = !allIndexedSet || !allIndexedNonNull
+		}
+	} else {
+		switch op {
+		case syntax.DefaultUnset:
+			trigger = !vr.IsSet()
+		case syntax.DefaultUnsetOrNull:
+			trigger = !vr.IsSet() || vr.String() == ""
+		case syntax.AlternateUnset:
+			trigger = vr.IsSet()
+		case syntax.AlternateUnsetOrNull:
+			trigger = vr.IsSet() && vr.String() != ""
+		case syntax.AssignUnset:
+			trigger = !vr.IsSet()
+		case syntax.AssignUnsetOrNull:
+			trigger = !vr.IsSet() || vr.String() == ""
+		}
 	}
 	if !trigger {
 		return nil, false, nil
@@ -3161,6 +3190,74 @@ func (cfg *Config) quotedElemFields(pe *syntax.ParamExp) ([]string, error) {
 	elems, err = cfg.quotedCaseModElemFields(pe)
 	if err != nil || elems != nil {
 		return elems, err
+	}
+	if pe.Exp != nil && pe.Repl == nil {
+		op := pe.Exp.Op
+		switch op {
+		case syntax.DefaultUnset, syntax.DefaultUnsetOrNull:
+			defaultElems := func() ([]string, error) {
+				if pe.Exp.Word == nil {
+					return []string{""}, nil
+				}
+				s, err := Literal(cfg, pe.Exp.Word)
+				if err != nil {
+					return nil, err
+				}
+				return []string{s}, nil
+			}
+			switch pe.Param.Value {
+			case "@":
+				vr := cfg.Env.Get("@")
+				if vr.IsSet() && len(vr.List) > 0 {
+					return cfg.sliceElems(pe, vr.List, true)
+				}
+				return defaultElems()
+			case "*":
+				vr := cfg.Env.Get("*")
+				set := len(vr.List) > 0
+				nonNull := false
+				for _, elem := range vr.List {
+					if elem != "" {
+						nonNull = true
+						break
+					}
+				}
+				trigger := !set
+				if op == syntax.DefaultUnsetOrNull {
+					trigger = !set || !nonNull
+				}
+				if trigger {
+					return defaultElems()
+				}
+				elems, err := cfg.sliceElems(pe, vr.List, true)
+				if err != nil {
+					return nil, err
+				}
+				return []string{cfg.ifsJoin(elems)}, nil
+			}
+			switch nodeLit(pe.Index) {
+			case "@":
+				vr := cfg.Env.Get(pe.Param.Value)
+				if vr.Kind == Indexed {
+					if vr.IndexedSet(0) {
+						return cfg.sliceIndexedElems(pe, vr, false)
+					}
+					return defaultElems()
+				}
+			case "*":
+				vr := cfg.Env.Get(pe.Param.Value)
+				if vr.Kind == Indexed {
+					if vr.IndexedSet(0) {
+						elems, err := cfg.sliceIndexedElems(pe, vr, false)
+						if err != nil {
+							return nil, err
+						}
+						return []string{cfg.ifsJoin(elems)}, nil
+					}
+					return defaultElems()
+				}
+			}
+		}
 	}
 	// Casemod operators need per-element processing by the full
 	// paramExp path, so return nil here and let the caller fall back

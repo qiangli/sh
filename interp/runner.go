@@ -5496,6 +5496,12 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 						}
 					}
 				}
+				if as.Index != nil && valType == "" && as.Value != nil && !vr.Declared() {
+					if s := r.literalForAssign(as.Value); strings.HasPrefix(s, "(") && strings.HasSuffix(s, ")") {
+						r.errf("%swarning: %s[%s]=%s: quoted compound array assignment deprecated\n",
+							r.bashErrPrefix(r.curStmtPos), name, r.arithmSourceText(as.Index, false), s)
+					}
+				}
 				name, vr = r.assignVal(name, vr, as, valType)
 				if as.Index != nil {
 					r.setVarWithIndex(prevForIndex, name, as.Index, vr)

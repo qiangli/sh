@@ -2671,6 +2671,12 @@ var runTests = []runTest{
 	{"set -u; echo ${9}", "9: unbound variable\nexit status 1 #JUSTERR"},
 	{"v=abcde; echo ${v/#a/ab}; echo ${v/%?/last}; av=(abcd efgh); echo ${av[1]/#?/xx}; echo ${av[1]/%??/za}", "abbcde\nabcdlast\nxxfgh\nefza\n"},
 	{"av=(abcd efgh ijkl); printf '<%s>\\n' ${av[@]/%??/xx}; set -- abcd efgh ijkl; printf 'P<%s>\\n' ${@/#??/za}", "<abxx>\n<efxx>\n<ijxx>\nP<zacd>\nP<zagh>\nP<zakl>\n"},
+	{"IFS=; B=''; echo \"<${B[*]:-X}>\" \"<${B[@]:-X}>\"", "<X> <X>\n"},
+	{"IFS=; A=('' ''); echo \"<${A[*]:-X}>\"", "<X>\n"},
+	{"IFS=+; arr=(a b c); echo ${arr[*]/a/x}; set -- 'a+b' 'c+d' 'e+f'; echo ${*/a/x}", "x+b+c\nx+b+c+d+e+f\n"},
+	{"recho() { i=1; for arg; do echo \"$i:<$arg>\"; i=$((i+1)); done; }; a[0]= a[1]=; recho \"${a[@]:-y}\"; unset a; a[1]=; recho \"${a[@]:-y}\"; set -- '' x; recho \"${@:-y}\"", "1:<>\n2:<>\n1:<y>\n1:<>\n2:<x>\n"},
+	{"a[0]= a[1]=x; printf '<%s>\\n' ${a[@]:+y}", "<y>\n"},
+	{"set -- '' ''; echo \"<${*:-X}>\"", "<X>\n"},
 	{"_QUANTITY= _QUOTA= _QUOTE= _QUILL= _QUEST= _QUART=; IFS=-; printf '<%s>\\n' \"${!_Q*}\"; printf '<%s>\\n' \"${!_Q@}\"", "<_QUANTITY-_QUART-_QUEST-_QUILL-_QUOTA-_QUOTE>\n<_QUANTITY>\n<_QUART>\n<_QUEST>\n<_QUILL>\n<_QUOTA>\n<_QUOTE>\n"},
 	{"_Q=1; echo \"${!_Q* }\"; echo after", "bad substitution\nafter\n"},
 	{"set -- a b; echo ${!1*}; echo ${!@*}; echo after", "bad substitution\nbad substitution\nafter\n"},
@@ -2694,6 +2700,7 @@ var runTests = []runTest{
 	{"a[0]=0 a[1]=1; (( a[ ]=10 )); declare -p a; let 'a[ ]=11'; declare -p a; v=' '; let \"a[\\\"$v\\\"]=12\"; declare -p a", "declare -a a=([0]=\"10\" [1]=\"1\")\ndeclare -a a=([0]=\"11\" [1]=\"1\")\ndeclare -a a=([0]=\"12\" [1]=\"1\")\n"},
 	{"declare -A a; a[0]=0 a[1]=1; v=' '; let \"a[\\\"$v\\\"]=13\"; declare -p a", "declare -A a=([1]=\"1\" [0]=\"0\" [\" \"]=\"13\" )\n"},
 	{"shopt -s assoc_expand_once; declare -A a; a[0]=0 a[1]=1; let \"a[\\\" \\\"]=11\"; v=' '; let \"a[\\\"$v\\\"]=13\"; declare -p a", "declare -A a=([1]=\"1\" [0]=\"0\" [\" \"]=\"13\" )\n"},
+	{"value='[$(echo total 0)]=1 [2]=2'; declare -a var=\"($value)\"; declare -p var", "1:9: not a valid arithmetic operator: `0`\ndeclare -a var=()\n #JUSTERR"},
 	{"arrayA=(A B C); xx='arrayA[*]'; arrayB=( ${!xx} ); echo \"${#arrayB[*]}:${arrayB[0]}:${arrayB[1]}:${arrayB[2]}\"; arrayB=( \"${!xx}\" ); echo \"${#arrayB[*]}:${arrayB[0]}:${arrayB[1]}:${arrayB[2]}\"; xx='arrayA[@]'; arrayB=( ${!xx} ); echo \"${#arrayB[*]}:${arrayB[0]}:${arrayB[1]}:${arrayB[2]}\"; arrayB=( \"${!xx}\" ); echo \"${#arrayB[*]}:${arrayB[0]}:${arrayB[1]}:${arrayB[2]}\"", "3:A:B:C\n1:A B C::\n3:A:B:C\n3:A:B:C\n"},
 	// Assignment binds lower than the ternary false branch in bash:
 	// these parse like `(cond ? a : a) += 5`, which is not an lvalue.
