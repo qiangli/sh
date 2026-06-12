@@ -685,8 +685,7 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 				strs = append(strs, strconv.Itoa(i))
 			}
 		case pe.Index != nil && vr.Kind == Associative:
-			strs = slices.AppendSeq(strs, maps.Keys(vr.Map))
-			sortStrs = true
+			strs = AssocKeysInBashOrder(vr.Map)
 		case orig.Kind == NameRef:
 			strs = append(strs, orig.Str)
 		case (name == "@" || name == "*") && !vr.IsSet():

@@ -978,6 +978,18 @@ var runTests = []runTest{
 		"declare: `A[]]=X': not a valid identifier\ndeclare -A A=([\"*\"]=\"X\" [\"@\"]=\"X\" )\n",
 	},
 	{
+		`declare -A A; declare A["foo[bar]"]=X; echo ${!A[@]} ${A["foo[bar]"]}`,
+		"foo[bar] X\n",
+	},
+	{
+		`declare -A A["foo[bar]"]=X; echo ${!A[@]} ${A["foo[bar]"]}`,
+		"foo[bar] X\n",
+	},
+	{
+		`declare -A A; A["foo[bar]"]=x; A["foobar]"]=y; A[foo]=z; echo ${!A[@]}`,
+		"foobar] foo foo[bar]\n",
+	},
+	{
 		`declare -A a; a[0]=0 a[1]=1; let "a[\" \"]=11"; declare -p a`,
 		"declare -A a=([1]=\"1\" [0]=\"0\" [\" \"]=\"11\" )\n",
 	},

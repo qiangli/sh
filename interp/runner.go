@@ -5451,10 +5451,13 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				}
 			} else {
 				prevForIndex := vr
+				if as.Index != nil && valType == "-A" {
+					prevForIndex.Kind = expand.Associative
+				}
 				if as.Index != nil && (vr.Kind == expand.Associative || valType == "-A") {
 					if w, ok := as.Index.(*syntax.Word); ok {
 						key := r.assocAssignKey(w)
-						if strings.Contains(key, "]") {
+						if strings.Contains(key, "]") && !assocAssignKeyQuoted(w.Parts) {
 							assignForm := name + "[" + key + "]"
 							if as.Value != nil {
 								assignForm += "=" + r.literalForAssign(as.Value)
@@ -5913,6 +5916,20 @@ func (r *Runner) flattenAssigns(args []*syntax.Assign) iter.Seq2[*syntax.Assign,
 			}
 		}
 	}
+}
+
+func assocAssignKeyQuoted(parts []syntax.WordPart) bool {
+	for _, part := range parts {
+		switch part := part.(type) {
+		case *syntax.SglQuoted, *syntax.DblQuoted:
+			return true
+		case *syntax.ParamExp:
+			if part.Exp != nil && assocAssignKeyQuoted(part.Exp.Word.Parts) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func match(pat, name string) bool {
