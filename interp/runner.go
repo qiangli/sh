@@ -948,6 +948,9 @@ func (r *Runner) restoreInlineVar(name string, vr expand.Variable) {
 			}
 		}
 	}
+	if !vr.Declared() && r.lookupVar(name).ReadOnly {
+		return
+	}
 	r.setVar(name, vr)
 }
 
@@ -4150,8 +4153,9 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		}
 
 		type restoreVar struct {
-			name string
-			vr   expand.Variable
+			name    string
+			vr      expand.Variable
+			wasTemp bool
 		}
 		var restores []restoreVar
 		type callAssign struct {
@@ -4186,16 +4190,38 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			}
 			name := as.Name.Value
 			prev := r.lookupVar(name)
+			wasTemp := false
+			if o, ok := r.writeEnv.(*overlayEnviron); ok {
+				wasTemp = o.isTemp(name)
+			}
 			// Resolve any nameref so we can restore the original final value later on.
 			if n, v := prev.Resolve(r.writeEnv); n != "" {
 				name, prev = n, v
+			}
+			readonlyTemp := false
+			if fields[0] == "readonly" && prev.ReadOnly {
+				if o, ok := r.writeEnv.(*overlayEnviron); ok && o.isTemp(name) {
+					for _, field := range fields[1:] {
+						if field == name {
+							prev.ReadOnly = false
+							readonlyTemp = true
+							break
+						}
+					}
+				}
 			}
 
 			name, vr := r.assignVal(name, prev, as, "")
 			// Inline command vars are always exported.
 			vr.Exported = true
 
-			r.setVar(name, vr)
+			if readonlyTemp {
+				if o, ok := r.writeEnv.(*overlayEnviron); ok {
+					o.setTempVar(name, vr)
+				}
+			} else {
+				r.setVar(name, vr)
+			}
 			if !r.exit.ok() {
 				assignFailed = true
 				break
@@ -4203,7 +4229,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			if o, ok := r.writeEnv.(*overlayEnviron); ok {
 				o.markTemp(name, prev)
 			}
-			restores = append(restores, restoreVar{name, prev})
+			restores = append(restores, restoreVar{name: name, vr: prev, wasTemp: wasTemp})
 			if tracingEnabled && as.Value != nil {
 				op := "="
 				if as.Append {
@@ -4223,6 +4249,10 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		}
 		for _, as := range keywordAssigns {
 			prev := r.lookupVar(as.name)
+			wasTemp := false
+			if o, ok := r.writeEnv.(*overlayEnviron); ok {
+				wasTemp = o.isTemp(as.name)
+			}
 			r.setVar(as.name, as.vr)
 			if !r.exit.ok() {
 				assignFailed = true
@@ -4231,7 +4261,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			if o, ok := r.writeEnv.(*overlayEnviron); ok {
 				o.markTemp(as.name, prev)
 			}
-			restores = append(restores, restoreVar{as.name, prev})
+			restores = append(restores, restoreVar{name: as.name, vr: prev, wasTemp: wasTemp})
 		}
 		if assignFailed {
 			if r.opts[optPosix] {
@@ -4316,7 +4346,9 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			// "applied" — the leaked value is in the global
 			// scope already; the flag was only there to block
 			// the matching restore from clobbering it.
-			r.inlineLeakFromFunc = nil
+			if len(restores) > 0 {
+				r.inlineLeakFromFunc = nil
+			}
 		} else if r.inFunc && fields[0] == "return" {
 			// `var=N return …` inside a function: bash 5.3 leaks
 			// the inline assignment to the caller's scope so it
@@ -4332,6 +4364,26 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 					}
 					r.inlineLeakFromFunc[restore.name] = true
 				}
+			}
+		} else if r.inFunc && r.opts[optPosix] && (fields[0] == "export" || fields[0] == "readonly") {
+			// POSIX export/readonly keep preceding assignments after
+			// the function returns. If the function was called through
+			// `name=value f`, the caller's restore must not clobber
+			// this value.
+			for _, restore := range restores {
+				if o, ok := r.writeEnv.(*overlayEnviron); ok {
+					if o.holdsLocally(restore.name) {
+						continue
+					}
+					o.clearTemp(restore.name)
+				}
+				if !restore.wasTemp {
+					continue
+				}
+				if r.inlineLeakFromFunc == nil {
+					r.inlineLeakFromFunc = make(map[string]bool)
+				}
+				r.inlineLeakFromFunc[restore.name] = true
 			}
 		}
 	case *syntax.BinaryCmd:
@@ -5294,6 +5346,9 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 					continue
 				}
 			}
+			if as.Naked && cm.Variant.Value == "readonly" && r.lookupVar(name).ReadOnly {
+				continue
+			}
 			if global {
 				if r.rejectDeclareConversion(name, r.lookupGlobalVar(name), vr) {
 					continue
@@ -5752,8 +5807,12 @@ func (r *Runner) hdocReader(rd *syntax.Redirect) (*os.File, error) {
 	// as pipe writes may block once the buffer gets full.
 	// We still construct and buffer the entire heredoc first,
 	// as doing it concurrently would lead to different semantics and be racy.
+	quoted := quotedHdocDelimiter(rd.Word)
 	if rd.Op != syntax.DashHdoc {
-		hdoc := r.document(rd.Hdoc)
+		hdoc := rd.Hdoc.Lit()
+		if !quoted {
+			hdoc = r.document(rd.Hdoc)
+		}
 		go func() {
 			pw.WriteString(hdoc)
 			pw.Close()
@@ -5766,7 +5825,12 @@ func (r *Runner) hdocReader(rd *syntax.Redirect) (*os.File, error) {
 		if buf.Len() > 0 {
 			buf.WriteByte('\n')
 		}
-		buf.WriteString(r.document(&syntax.Word{Parts: cur}))
+		word := &syntax.Word{Parts: cur}
+		if quoted {
+			buf.WriteString(word.Lit())
+		} else {
+			buf.WriteString(r.document(word))
+		}
 		cur = cur[:0]
 	}
 	for _, wp := range rd.Hdoc.Parts {
@@ -5792,6 +5856,22 @@ func (r *Runner) hdocReader(rd *syntax.Redirect) (*os.File, error) {
 		pw.Close()
 	}()
 	return pr, nil
+}
+
+func quotedHdocDelimiter(word *syntax.Word) bool {
+	for _, part := range word.Parts {
+		switch part := part.(type) {
+		case *syntax.Lit:
+			if strings.Contains(part.Value, `\`) {
+				return true
+			}
+		case *syntax.SglQuoted, *syntax.DblQuoted:
+			return true
+		default:
+			return true
+		}
+	}
+	return false
 }
 
 // allocateFd returns the next unused fd number >= 10, suitable for

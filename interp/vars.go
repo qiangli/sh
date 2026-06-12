@@ -128,7 +128,7 @@ func (o *overlayEnviron) Set(name string, vr expand.Variable) error {
 		vr.List = prev.List
 		vr.ListSet = prev.ListSet
 		vr.Map = prev.Map
-	} else if prev.ReadOnly {
+	} else if prev.ReadOnly && prev.Declared() {
 		return fmt.Errorf("readonly variable")
 	}
 	if !vr.IsSet() { // unsetting
@@ -187,10 +187,53 @@ func (o *overlayEnviron) markTemp(name string, prev expand.Variable) bool {
 	return false
 }
 
+func (o *overlayEnviron) clearTemp(name string) bool {
+	normalized := o.normalize(name)
+	if cur, ok := o.values[normalized]; ok {
+		if !cur.Temp {
+			return false
+		}
+		cur.Temp = false
+		cur.Prev = expand.Variable{}
+		o.values[normalized] = cur
+		return true
+	}
+	if o.funcScope {
+		if p, ok := o.parent.(*overlayEnviron); ok {
+			return p.clearTemp(name)
+		}
+	}
+	return false
+}
+
+func (o *overlayEnviron) setTempVar(name string, vr expand.Variable) bool {
+	normalized := o.normalize(name)
+	if cur, ok := o.values[normalized]; ok {
+		if !cur.Temp {
+			return false
+		}
+		cur.Variable = vr
+		o.values[normalized] = cur
+		return true
+	}
+	if o.funcScope {
+		if p, ok := o.parent.(*overlayEnviron); ok {
+			return p.setTempVar(name, vr)
+		}
+	}
+	return false
+}
+
 func (o *overlayEnviron) unsetTemp(name string, restoreLocal bool) bool {
 	normalized := o.normalize(name)
 	if cur, ok := o.values[normalized]; ok {
 		if !cur.Temp {
+			if restoreLocal && cur.Variable.Local && cur.Variable.Exported {
+				if p, ok := o.parent.(*overlayEnviron); ok && p.isTemp(name) {
+					o.values[normalized] = namedVariable{Name: name, Variable: expand.Variable{Local: true, Exported: true}}
+					return true
+				}
+			}
 			return false
 		}
 		switch {

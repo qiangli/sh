@@ -625,6 +625,8 @@ var runTests = []runTest{
 	{"f() { echo $v; }; v=x; v+=y f; f", "xy\nx\n"},
 	{"f() { echo $v; }; declare -n v=v2; v2=x; v=y f; f", "y\nx\n"},
 	{"f() { echo ${v[@]}; }; v=(e1 e2); v=y f; f", "y\ne1 e2\n"},
+	{`f() { local v=x; unset v; declare -p v; }; v=g; f; v=t f`, "declare -- v\ndeclare -x v\n"},
+	{`a=bcde; f1() { a=3 readonly a; echo f1:$a; }; a=7 f1; echo "global:$a"; set -o posix; a=7 f1; echo "global:$a"`, "f1:3\nglobal:bcde\nf1:3\nglobal:3\n"},
 
 	// special vars
 	{"echo $?; false; echo $?", "0\n1\n"},
@@ -2033,6 +2035,10 @@ var runTests = []runTest{
 	{
 		"cat <<'EOF'\nfoo\\\nbar\nEOF",
 		"foo\\\nbar\n",
+	},
+	{
+		"cat <<\\EOF\n\\$FUNCNAME\nEOF",
+		"\\$FUNCNAME\n",
 	},
 	{
 		"cat <<EOF\nfoo\\\"bar\\baz\nEOF",
