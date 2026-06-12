@@ -3066,6 +3066,10 @@ func (cfg *Config) quotedElemFields(pe *syntax.ParamExp) ([]string, error) {
 	if err != nil || elems != nil {
 		return elems, err
 	}
+	elems, err = cfg.quotedCaseModElemFields(pe)
+	if err != nil || elems != nil {
+		return elems, err
+	}
 	// Casemod operators need per-element processing by the full
 	// paramExp path, so return nil here and let the caller fall back
 	// to it.
@@ -3194,11 +3198,35 @@ func (cfg *Config) quotedAllElemValues(pe *syntax.ParamExp) ([]string, error) {
 	return nil, nil
 }
 
+func (cfg *Config) quotedModElemValues(pe *syntax.ParamExp) ([]string, bool, error) {
+	switch pe.Param.Value {
+	case "*":
+		elems, err := cfg.sliceElems(pe, cfg.Env.Get("*").List, true)
+		return elems, true, err
+	case "@":
+		elems, err := cfg.sliceElems(pe, cfg.Env.Get("@").List, true)
+		return elems, false, err
+	default:
+		if vr := cfg.Env.Get(pe.Param.Value); vr.Kind == Indexed {
+			switch nodeLit(pe.Index) {
+			case "*":
+				elems, err := cfg.sliceIndexedElems(pe, vr, false)
+				return elems, true, err
+			case "@":
+				elems, err := cfg.sliceIndexedElems(pe, vr, false)
+				return elems, false, err
+			}
+		}
+	}
+	elems, err := cfg.quotedAllElemValues(pe)
+	return elems, false, err
+}
+
 func (cfg *Config) quotedReplElemFields(pe *syntax.ParamExp) ([]string, error) {
 	if pe == nil || pe.Repl == nil || pe.Length || pe.Width || pe.IsSet || pe.Excl {
 		return nil, nil
 	}
-	elems, err := cfg.quotedAllElemValues(pe)
+	elems, join, err := cfg.quotedModElemValues(pe)
 	if err != nil || elems == nil {
 		return elems, err
 	}
@@ -3239,6 +3267,9 @@ func (cfg *Config) quotedReplElemFields(pe *syntax.ParamExp) ([]string, error) {
 		sb.WriteString(elem[last:])
 		out[i] = sb.String()
 	}
+	if join {
+		return []string{cfg.ifsJoin(out)}, nil
+	}
 	return out, nil
 }
 
@@ -3252,7 +3283,7 @@ func (cfg *Config) quotedRemoveElemFields(pe *syntax.ParamExp) ([]string, error)
 	if !isPatternOp {
 		return nil, nil
 	}
-	elems, err := cfg.quotedAllElemValues(pe)
+	elems, join, err := cfg.quotedModElemValues(pe)
 	if err != nil || elems == nil {
 		return elems, err
 	}
@@ -3265,6 +3296,69 @@ func (cfg *Config) quotedRemoveElemFields(pe *syntax.ParamExp) ([]string, error)
 	out := make([]string, len(elems))
 	for i, elem := range elems {
 		out[i] = cfg.removePattern(elem, arg, suffix, small)
+	}
+	if join {
+		return []string{cfg.ifsJoin(out)}, nil
+	}
+	return out, nil
+}
+
+func (cfg *Config) quotedCaseModElemFields(pe *syntax.ParamExp) ([]string, error) {
+	if pe == nil || pe.Exp == nil || pe.Length || pe.Width || pe.IsSet || pe.Excl {
+		return nil, nil
+	}
+	op := pe.Exp.Op
+	switch op {
+	case syntax.UpperFirst, syntax.UpperAll,
+		syntax.LowerFirst, syntax.LowerAll,
+		syntax.CaseToggleFirst, syntax.CaseToggleAll:
+	default:
+		return nil, nil
+	}
+	elems, join, err := cfg.quotedModElemValues(pe)
+	if err != nil || elems == nil {
+		return elems, err
+	}
+	arg, err := Pattern(cfg, pe.Exp.Word)
+	if err != nil {
+		return nil, nil
+	}
+	caseFunc := unicode.ToLower
+	if op == syntax.UpperFirst || op == syntax.UpperAll {
+		caseFunc = unicode.ToUpper
+	} else if op == syntax.CaseToggleFirst || op == syntax.CaseToggleAll {
+		caseFunc = func(r rune) rune {
+			if unicode.IsUpper(r) {
+				return unicode.ToLower(r)
+			}
+			return unicode.ToUpper(r)
+		}
+	}
+	all := op == syntax.UpperAll || op == syntax.LowerAll || op == syntax.CaseToggleAll
+	expr, err := pattern.Regexp(arg, 0)
+	if err != nil {
+		return nil, nil
+	}
+	rx, err := regexp.Compile(expr)
+	if err != nil {
+		return nil, nil
+	}
+	out := make([]string, len(elems))
+	for i, elem := range elems {
+		rs := []rune(elem)
+		if all {
+			for ri, r := range rs {
+				if rx.MatchString(string(r)) {
+					rs[ri] = caseFunc(r)
+				}
+			}
+		} else if len(rs) > 0 && rx.MatchString(string(rs[0])) {
+			rs[0] = caseFunc(rs[0])
+		}
+		out[i] = string(rs)
+	}
+	if join {
+		return []string{cfg.ifsJoin(out)}, nil
 	}
 	return out, nil
 }
