@@ -27,6 +27,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/ergochat/readline"
 	"golang.org/x/term"
@@ -186,7 +187,20 @@ func Run(ctx context.Context, opts Options) error {
 		Stderr:            stderr,
 	}
 	if !bindTTY(cfg, stdin) && opts.AssumeTTY {
-		bindAssumedTTY(cfg, opts.GetSize)
+		// Virtual TTY: no kernel terminal behind the stream; the far end
+		// (an SSH client that did a pty-req, or a WebSocket-attached
+		// xterm.js) already manages raw mode. Drive it with x/term's line
+		// editor instead of readline. readline cannot serve this case on
+		// Windows: its terminal init unconditionally calls ansi.EnableANSI
+		// (terminal.go newTerminal, gated on isInteractive=FuncIsTerminal),
+		// which probes the *process* console handles — absent on a daemon
+		// — and returns a fatal error, so NewFromConfig fails and Run would
+		// silently drop to the echo-less runFallback loop. x/term assumes
+		// already-raw I/O over a plain io.ReadWriter and does no console
+		// probing, so echo + line editing work over the pipe pair on every
+		// platform. (Ctrl-R reverse search is the one readline feature not
+		// carried over.)
+		return runAssumedTTY(ctx, opts, r, stdin, stdout, stderr, lang, ps1, ps2, onRunError)
 	}
 
 	rl, err := readline.NewFromConfig(cfg)
@@ -340,26 +354,223 @@ func bindTTY(cfg *readline.Config, stdin io.Reader) bool {
 	return true
 }
 
-// bindAssumedTTY wires terminal callbacks for a stream that is not a
-// kernel TTY but whose far end is a terminal already in raw mode (see
-// [Options.AssumeTTY]). Raw-mode enter/exit are no-ops — the bytes
-// arrive raw and leave raw; the daemon process's own console (if any)
-// must never be touched, which is also why the width-change hook is
-// disarmed: readline's unix default would install a SIGWINCH handler
-// keyed to the wrong terminal.
-func bindAssumedTTY(cfg *readline.Config, getSize func() (cols, rows int)) {
-	cfg.FuncIsTerminal = func() bool { return true }
-	cfg.FuncMakeRaw = func() error { return nil }
-	cfg.FuncExitRaw = func() error { return nil }
-	cfg.FuncGetSize = func() (int, int) {
-		if getSize != nil {
-			if w, h := getSize(); w > 0 && h > 0 {
-				return w, h
+// runAssumedTTY is the interactive loop for a virtual terminal — a stream
+// whose far end is a real terminal already in raw mode, with no kernel TTY
+// (hence no console) on this side. It is driven by [golang.org/x/term]'s
+// line editor rather than readline: x/term reads keystrokes and writes echo
+// over a single io.ReadWriter, assumes the far end is already raw, and makes
+// no platform console calls — so it works on a console-less Windows daemon
+// where readline's ANSI-enable step fatally fails. Echo, cursor editing, and
+// up/down history navigation all come from x/term; Ctrl-R reverse search is
+// the one readline feature this path drops.
+//
+// The structure mirrors the readline loop above (multi-line continuation,
+// per-statement child contexts, OnEOF), so both paths behave identically
+// apart from the editor. Command stdout/stderr go straight to the runner's
+// own writers (the slave fd), not through x/term — exactly as the readline
+// path leaves interp writing to the PTY slave directly.
+func runAssumedTTY(ctx context.Context, opts Options, r *interp.Runner, stdin io.Reader, stdout, stderr io.Writer, lang syntax.LangVariant, ps1, ps2 func() string, onRunError func(error)) error {
+	// The far end is raw, so Ctrl-C arrives as a 0x03 byte; x/term maps that
+	// to the same io.EOF it returns for Ctrl-D, which would exit the shell.
+	// Strip it from the line-editing input so Ctrl-C is a no-op while
+	// editing — during a running command interp reads the raw fd directly,
+	// so the command still sees its own Ctrl-C.
+	t := term.NewTerminal(rwAdapter{r: ctrlCFilter{r: stdin}, w: stdout}, ps1())
+	if h := newFileHistory(opts.HistoryFile, opts.HistoryLimit); h != nil {
+		t.History = h
+	}
+	applySize := func() {
+		if opts.GetSize == nil {
+			return
+		}
+		if w, hgt := opts.GetSize(); w > 0 && hgt > 0 {
+			_ = t.SetSize(w, hgt)
+		}
+	}
+
+	// Unblock the in-flight ReadLine when ctx is canceled (server shutdown,
+	// remote peer closed the PTY) by closing the underlying stream. Mirrors
+	// the readline path's rl.Close-on-cancel; the vpty Close is idempotent,
+	// so a later Session.Close is harmless.
+	if ctx.Done() != nil && ctx.Err() == nil {
+		stop := context.AfterFunc(ctx, func() {
+			if c, ok := stdin.(io.Closer); ok {
+				_ = c.Close()
+			}
+		})
+		defer stop()
+	}
+
+	for {
+		if opts.PreCommand != nil {
+			opts.PreCommand(ctx, r)
+		}
+		applySize()
+		t.SetPrompt(ps1())
+		line, err := t.ReadLine()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				if opts.OnEOF != nil && opts.OnEOF() {
+					continue
+				}
+				return nil
+			}
+			return nil // stream closed (peer hung up / shutdown) — clean exit
+		}
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+
+		// Multi-line continuation: keep reading until the parser is
+		// satisfied or hits a real syntax error. Same shape as the
+		// readline loop, using a fresh parser per probe.
+		input := line
+		for {
+			pp := syntax.NewParser(syntax.Variant(lang))
+			_, perr := pp.Parse(strings.NewReader(input), "")
+			if perr == nil || !pp.Incomplete() {
+				break
+			}
+			t.SetPrompt(ps2())
+			cont, cerr := t.ReadLine()
+			if cerr != nil {
+				input = ""
+				break
+			}
+			input += "\n" + cont
+		}
+		if input == "" {
+			continue
+		}
+
+		parser := syntax.NewParser(syntax.Variant(lang))
+		prog, perr := parser.Parse(strings.NewReader(input), "")
+		if perr != nil {
+			_, _ = io.WriteString(stderr, perr.Error()+"\n")
+			continue
+		}
+		for _, stmt := range prog.Stmts {
+			cmdCtx, cancel := context.WithCancel(ctx)
+			runErr := r.Run(cmdCtx, stmt)
+			cancel()
+			if runErr != nil && !isExitStatus(runErr) {
+				onRunError(runErr)
+			}
+			if r.Exited() {
+				return runErr
 			}
 		}
-		return 80, 24
 	}
-	cfg.FuncOnWidthChanged = func(func()) {}
+}
+
+// rwAdapter joins a separate reader and writer into the single io.ReadWriter
+// [term.Terminal] expects.
+type rwAdapter struct {
+	r io.Reader
+	w io.Writer
+}
+
+func (a rwAdapter) Read(p []byte) (int, error)  { return a.r.Read(p) }
+func (a rwAdapter) Write(p []byte) (int, error) { return a.w.Write(p) }
+
+// ctrlCFilter drops 0x03 (Ctrl-C) bytes from the line-editing input so
+// x/term does not surface it as io.EOF and exit the shell. It never returns
+// (0, nil): when a read was entirely Ctrl-C it reads again rather than
+// signalling a spurious empty read to the line editor.
+type ctrlCFilter struct{ r io.Reader }
+
+func (f ctrlCFilter) Read(p []byte) (int, error) {
+	for {
+		n, err := f.r.Read(p)
+		if n > 0 {
+			w := 0
+			for i := range n {
+				if p[i] != 0x03 {
+					p[w] = p[i]
+					w++
+				}
+			}
+			if w > 0 {
+				return w, err
+			}
+			if err != nil {
+				return 0, err
+			}
+			continue // whole chunk was Ctrl-C; wait for more input
+		}
+		return n, err
+	}
+}
+
+// fileHistory is an x/term History that mirrors readline's persistent
+// history: it loads HistoryFile on construction and appends each new entry,
+// keeping the most-recent `limit` lines in memory (index 0 = most recent,
+// per the History contract).
+type fileHistory struct {
+	mu      sync.Mutex
+	entries []string
+	limit   int
+	path    string
+}
+
+// newFileHistory returns nil when history is disabled (negative limit), in
+// which case the caller keeps x/term's default in-memory ring. A zero limit
+// defaults to 1000, matching the readline path.
+func newFileHistory(path string, limit int) *fileHistory {
+	if limit < 0 {
+		return nil
+	}
+	if limit == 0 {
+		limit = 1000
+	}
+	h := &fileHistory{limit: limit, path: path}
+	if path != "" {
+		if data, err := os.ReadFile(path); err == nil {
+			for ln := range strings.SplitSeq(string(data), "\n") {
+				if strings.TrimSpace(ln) != "" {
+					h.prepend(ln)
+				}
+			}
+		}
+	}
+	return h
+}
+
+// prepend inserts e as the most-recent entry (index 0), trimming to limit.
+func (h *fileHistory) prepend(e string) {
+	h.entries = append(h.entries, "")
+	copy(h.entries[1:], h.entries)
+	h.entries[0] = e
+	if len(h.entries) > h.limit {
+		h.entries = h.entries[:h.limit]
+	}
+}
+
+func (h *fileHistory) Add(entry string) {
+	if strings.TrimSpace(entry) == "" {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.prepend(entry)
+	if h.path != "" {
+		if f, err := os.OpenFile(h.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil {
+			_, _ = f.WriteString(entry + "\n")
+			_ = f.Close()
+		}
+	}
+}
+
+func (h *fileHistory) Len() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return len(h.entries)
+}
+
+func (h *fileHistory) At(idx int) string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.entries[idx]
 }
 
 // runFallback runs the plain newline-buffered loop when readline cannot
