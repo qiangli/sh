@@ -165,10 +165,22 @@ func psSessionKey() string {
 	}
 }
 
+func requireSessionPS(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("ps"); err != nil {
+		t.Skip("no ps on PATH:", err)
+	}
+	cmd := exec.Command("sh", "-c", fmt.Sprintf("ps -o %s= -p $$", psSessionKey()))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Skipf("ps cannot inspect sessions: %v; out: %q", err, out)
+	}
+}
+
 func TestSetsidNewSession(t *testing.T) {
 	if _, err := exec.LookPath("sh"); err != nil {
 		t.Skip("no sh on PATH:", err)
 	}
+	requireSessionPS(t)
 	script := fmt.Sprintf(`setsid sh -c 'ps -o %s= -p $$'`, psSessionKey())
 	out, err := runScript(t, script)
 	qt.Assert(t, qt.IsNil(err), qt.Commentf("out: %q", out))
@@ -245,6 +257,7 @@ func TestNohupChildIsInNewSession(t *testing.T) {
 	if _, err := exec.LookPath("sh"); err != nil {
 		t.Skip("no sh on PATH:", err)
 	}
+	requireSessionPS(t)
 	script := fmt.Sprintf(`nohup sh -c 'ps -o %s= -p $$'`, psSessionKey())
 	out, err := runScript(t, script)
 	qt.Assert(t, qt.IsNil(err), qt.Commentf("out: %q", out))

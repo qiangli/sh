@@ -5407,6 +5407,44 @@ func TestBashCompatPosixSpecialBuiltinFuncDeclInSubshell(t *testing.T) {
 	qt.Assert(t, qt.Equals(cb.String(), "./func5.sub: line 7: `break': is a special builtin\n"))
 }
 
+func TestBashCompatPosixTempEnvFunctionCallRestore(t *testing.T) {
+	src := "set -o posix\n" +
+		"func() { return 5; }\n" +
+		"myfunction() { var=20 return; }\n" +
+		"var=20\n" +
+		"myfunction\n" +
+		"var=30 func\n" +
+		"echo $? $var\n"
+	file, err := syntax.NewParser().Parse(strings.NewReader(src), "./func3.sub")
+	qt.Assert(t, qt.IsNil(err))
+
+	var cb bytes.Buffer
+	r, err := interp.New(interp.StdIO(nil, &cb, &cb))
+	qt.Assert(t, qt.IsNil(err))
+
+	err = r.Run(context.Background(), file)
+	qt.Assert(t, qt.IsNil(err))
+	qt.Assert(t, qt.Equals(cb.String(), "5 20\n"))
+}
+
+func TestBashCompatPosixTempEnvSpecialBuiltinInFunctionPersists(t *testing.T) {
+	src := "set -o posix\n" +
+		"myfunction() { var=20 return; }\n" +
+		"var=10\n" +
+		"myfunction\n" +
+		"echo $var\n"
+	file, err := syntax.NewParser().Parse(strings.NewReader(src), "./varenv12.sub")
+	qt.Assert(t, qt.IsNil(err))
+
+	var cb bytes.Buffer
+	r, err := interp.New(interp.StdIO(nil, &cb, &cb))
+	qt.Assert(t, qt.IsNil(err))
+
+	err = r.Run(context.Background(), file)
+	qt.Assert(t, qt.IsNil(err))
+	qt.Assert(t, qt.Equals(cb.String(), "20\n"))
+}
+
 func TestBashCompatMalformedLengthSubstitution(t *testing.T) {
 	src := "echo ${#:}\n" +
 		"echo ${#/}\n" +

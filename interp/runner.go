@@ -3565,6 +3565,18 @@ func isPosixSpecialBuiltin(name string) bool {
 	return false
 }
 
+// invokesSpecialBuiltin reports whether [Runner.call] will dispatch name as a
+// POSIX special builtin, rather than as a shell function shadowing that name.
+func (r *Runner) invokesSpecialBuiltin(name string) bool {
+	if !isPosixSpecialBuiltin(name) || !IsBuiltin(name) {
+		return false
+	}
+	if r.opts[optPosix] {
+		return true
+	}
+	return r.Funcs[name] == nil
+}
+
 // posixSpecialBuiltinFatal upgrades certain special-builtin failures
 // to a shell exit in POSIX mode (POSIX 1003.1 § 2.8.1). Bash limits
 // this to "hard" errors: any unset failure (readonly variable, bad
@@ -4308,9 +4320,9 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		// Bash POSIX mode (or inside a function): assignments
 		// preceding a special builtin (`return`, `export`, `eval`,
 		// `readonly`, `set`, …) persist after the command returns.
-		// Outside POSIX mode at top level, the temporary is
-		// restored so `v=inline source ./f` reverts v afterwards.
-		special := isPosixSpecialBuiltin(fields[0])
+		// Plain functions and regular commands restore their temporary
+		// assignments even in POSIX mode.
+		special := r.invokesSpecialBuiltin(fields[0])
 		inFuncScope := r.inFunc || len(r.callStack) > 0
 		persistInline := special && (r.opts[optPosix] || inFuncScope)
 		switch fields[0] {
@@ -4340,13 +4352,11 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				}
 				r.restoreInlineVar(restore.name, restore.vr)
 			}
-			// Clear the leak flags now that this immediate
-			// caller has had its chance to consume them. A leak
-			// that wasn't matched by an outer restore is still
-			// "applied" — the leaked value is in the global
-			// scope already; the flag was only there to block
-			// the matching restore from clobbering it.
-			if len(restores) > 0 {
+			// Clear the leak flags once the immediate caller has
+			// had its chance to consume them. Commands still running
+			// inside the callee must leave the marker for the caller's
+			// restore loop.
+			if len(restores) > 0 || !r.inFunc {
 				r.inlineLeakFromFunc = nil
 			}
 		} else if r.inFunc && fields[0] == "return" {
