@@ -68,6 +68,8 @@ type namedVariable struct {
 	// and know what was its original name without looping over Environ.Each.
 	Name string
 	expand.Variable
+	Temp bool
+	Prev expand.Variable
 }
 
 func (o *overlayEnviron) normalize(name string) string {
@@ -113,6 +115,12 @@ func (o *overlayEnviron) Set(name string, vr expand.Variable) error {
 	if o.values == nil {
 		o.values = make(map[string]namedVariable)
 	}
+	parentTemp := false
+	if !inOverlay && o.parent != nil {
+		if p, ok := o.parent.(*overlayEnviron); ok {
+			parentTemp = p.isTemp(name)
+		}
+	}
 	if vr.Kind == expand.KeepValue {
 		vr.Set = prev.Set
 		vr.Kind = prev.Kind
@@ -131,15 +139,70 @@ func (o *overlayEnviron) Set(name string, vr expand.Variable) error {
 		if prev.Local || vr.Exported || vr.ReadOnly ||
 			vr.Upper || vr.Lower || vr.Capitalize {
 			vr.Local = prev.Local || vr.Local
-			o.values[normalized] = namedVariable{name, vr}
+			o.values[normalized] = namedVariable{Name: name, Variable: vr, Temp: prev.Temp || parentTemp, Prev: prev.Prev}
 			return nil
 		}
 		delete(o.values, normalized)
 	}
 	// modifying the entire variable
 	vr.Local = prev.Local || vr.Local
-	o.values[normalized] = namedVariable{name, vr}
+	o.values[normalized] = namedVariable{Name: name, Variable: vr, Temp: prev.Temp || parentTemp, Prev: prev.Prev}
 	return nil
+}
+
+func (o *overlayEnviron) isTemp(name string) bool {
+	normalized := o.normalize(name)
+	if cur, ok := o.values[normalized]; ok {
+		return cur.Temp
+	}
+	if o.funcScope {
+		if p, ok := o.parent.(*overlayEnviron); ok {
+			return p.isTemp(name)
+		}
+	}
+	return false
+}
+
+func (o *overlayEnviron) markTemp(name string, prev expand.Variable) bool {
+	normalized := o.normalize(name)
+	if cur, ok := o.values[normalized]; ok {
+		cur.Temp = true
+		cur.Prev = prev
+		o.values[normalized] = cur
+		return true
+	}
+	if o.funcScope {
+		if p, ok := o.parent.(*overlayEnviron); ok {
+			return p.markTemp(name, prev)
+		}
+	}
+	return false
+}
+
+func (o *overlayEnviron) unsetTemp(name string, restoreLocal bool) bool {
+	normalized := o.normalize(name)
+	if cur, ok := o.values[normalized]; ok {
+		if !cur.Temp {
+			return false
+		}
+		switch {
+		case restoreLocal && cur.Prev.Local:
+			o.values[normalized] = namedVariable{Name: name, Variable: cur.Prev}
+		case restoreLocal && cur.Variable.Local && cur.Variable.Exported:
+			o.values[normalized] = namedVariable{Name: name, Variable: expand.Variable{Exported: true}}
+		case !restoreLocal && cur.Variable.Local:
+			o.values[normalized] = namedVariable{Name: name, Variable: expand.Variable{Local: true}}
+		default:
+			delete(o.values, normalized)
+		}
+		return true
+	}
+	if o.funcScope {
+		if p, ok := o.parent.(*overlayEnviron); ok {
+			return p.unsetTemp(name, restoreLocal)
+		}
+	}
+	return false
 }
 
 // holdsLocally reports whether this overlay itself has an entry for
@@ -1056,6 +1119,12 @@ func (r *Runner) bashShoptEnabled(name string) bool {
 }
 
 func (r *Runner) delVar(name string) {
+	if o, ok := r.writeEnv.(*overlayEnviron); ok && r.tempEnv[name] {
+		restoreLocal := !r.opts[optPosix]
+		if o.unsetTemp(name, restoreLocal) {
+			return
+		}
+	}
 	// Unsetting a variable that is local to a *previous* function scope
 	// removes that local entirely, uncovering the variable beneath
 	// (bash's default dynamic-unset behavior). With shopt

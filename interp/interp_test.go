@@ -3819,7 +3819,7 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	},
 	{
 		`IGNOREEOF=0; set -o ignoreeof; echo $IGNOREEOF; f() { local -; set +o ignoreeof; shopt -o ignoreeof; }; f; shopt -o ignoreeof; echo $IGNOREEOF`,
-		"10\nignoreeof      \toff\nignoreeof      \ton\n10\n",
+		"10\nignoreeof           \toff\nignoreeof           \ton\n10\n",
 	},
 	{
 		`before=$-; f() { local -; set -u; local -p; }; f; echo "$before|$-"`,

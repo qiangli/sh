@@ -4182,6 +4182,9 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				assignFailed = true
 				break
 			}
+			if o, ok := r.writeEnv.(*overlayEnviron); ok {
+				o.markTemp(name, prev)
+			}
 			restores = append(restores, restoreVar{name, prev})
 			if tracingEnabled && as.Value != nil {
 				op := "="
@@ -4206,6 +4209,9 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			if !r.exit.ok() {
 				assignFailed = true
 				break
+			}
+			if o, ok := r.writeEnv.(*overlayEnviron); ok {
+				o.markTemp(as.name, prev)
 			}
 			restores = append(restores, restoreVar{as.name, prev})
 		}
@@ -4948,7 +4954,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 					if overlay.values == nil {
 						overlay.values = make(map[string]namedVariable)
 					}
-					overlay.values[overlay.normalize(name)] = namedVariable{name, vr}
+					overlay.values[overlay.normalize(name)] = namedVariable{Name: name, Variable: vr}
 				} else if r.writeEnv.Set(name, vr) != nil {
 					r.exit.code = 1
 				}
