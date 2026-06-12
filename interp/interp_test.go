@@ -2674,6 +2674,7 @@ var runTests = []runTest{
 	{"IFS=; B=''; echo \"<${B[*]:-X}>\" \"<${B[@]:-X}>\"", "<X> <X>\n"},
 	{"IFS=; A=('' ''); echo \"<${A[*]:-X}>\"", "<X>\n"},
 	{"IFS=+; arr=(a b c); echo ${arr[*]/a/x}; set -- 'a+b' 'c+d' 'e+f'; echo ${*/a/x}", "x+b+c\nx+b+c+d+e+f\n"},
+	{"IFS=+; a=(aa bb); printf '<%s>\\n' ${a[@]} ${a[@]:0}", "<aa>\n<bb>\n<aa>\n<bb>\n"},
 	{"recho() { i=1; for arg; do echo \"$i:<$arg>\"; i=$((i+1)); done; }; a[0]= a[1]=; recho \"${a[@]:-y}\"; unset a; a[1]=; recho \"${a[@]:-y}\"; set -- '' x; recho \"${@:-y}\"", "1:<>\n2:<>\n1:<y>\n1:<>\n2:<x>\n"},
 	{"a[0]= a[1]=x; printf '<%s>\\n' ${a[@]:+y}", "<y>\n"},
 	{"set -- '' ''; echo \"<${*:-X}>\"", "<X>\n"},
@@ -2695,6 +2696,7 @@ var runTests = []runTest{
 	// A blank (whitespace-only) subscript evaluates as index 0 for
 	// indexed arrays and misses every associative array key.
 	{"b[0]=4; echo ${b[   ]}; echo after: $?", "4\nafter: 0\n"},
+	{"b[0]=4; echo ${b[' ']}; echo after: $?", "arithmetic syntax error: operand expected (error token is \"' '\")\nafter: 0\n #JUSTERR"},
 	{"typeset -A v; v[0]=one; echo ${v[   ]}; echo after: $?", "\nafter: 0\n"},
 	{"a[0]=0 a[1]=1; a[ ]=10; declare -p a; a[]=bad; echo after: $?", "declare -a a=([0]=\"10\" [1]=\"1\")\na[]: bad array subscript\nafter: 1\n #JUSTERR"},
 	{"a[0]=0 a[1]=1; (( a[ ]=10 )); declare -p a; let 'a[ ]=11'; declare -p a; v=' '; let \"a[\\\"$v\\\"]=12\"; declare -p a", "declare -a a=([0]=\"10\" [1]=\"1\")\ndeclare -a a=([0]=\"11\" [1]=\"1\")\ndeclare -a a=([0]=\"12\" [1]=\"1\")\n"},

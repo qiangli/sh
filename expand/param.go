@@ -1352,6 +1352,12 @@ func (cfg *Config) varInd(vr Variable, idx syntax.ArithmExpr) (string, error) {
 		case "*", "@":
 			return strings.Join(vr.IndexedValues(), " "), nil
 		}
+		if text, ok := singleQuotedWhitespaceIndex(idx); ok {
+			return "", &ArithmError{
+				Text: "'" + text + "'",
+				Err:  fmt.Errorf("arithmetic syntax error: operand expected (error token is %q)", "'"+text+"'"),
+			}
+		}
 		if start, end, ok := indexedBraceRange(idx); ok {
 			var vals []string
 			step := 1
@@ -1426,6 +1432,18 @@ func (cfg *Config) varInd(vr Variable, idx syntax.ArithmExpr) (string, error) {
 		return vr.Map[val], nil
 	}
 	return "", nil
+}
+
+func singleQuotedWhitespaceIndex(idx syntax.ArithmExpr) (string, bool) {
+	word, ok := idx.(*syntax.Word)
+	if !ok || len(word.Parts) != 1 {
+		return "", false
+	}
+	sq, ok := word.Parts[0].(*syntax.SglQuoted)
+	if !ok || strings.TrimSpace(sq.Value) != "" {
+		return "", false
+	}
+	return sq.Value, true
 }
 
 func indexedBraceRange(idx syntax.ArithmExpr) (int, int, bool) {

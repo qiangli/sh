@@ -2336,7 +2336,7 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 				continue
 			}
 			if !wp.Excl && wp.Exp == nil && wp.Repl == nil && !wp.Length && !wp.Width && !wp.IsSet &&
-				nodeLit(wp.Index) == "@" && cfg.ifs == "" {
+				nodeLit(wp.Index) == "@" {
 				elems, err := cfg.quotedAllElemValues(wp)
 				if err != nil {
 					return nil, err
@@ -2346,7 +2346,7 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 						if i > 0 {
 							flush()
 						}
-						curField = append(curField, fieldPart{val: elem})
+						splitAdd(elem)
 					}
 					continue
 				}
