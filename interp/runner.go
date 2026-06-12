@@ -4009,7 +4009,18 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			defer func() { r.aliasLineOverride = prevOverride }()
 		}
 		r.lastExpandExit = exitStatus{}
-		fields := r.fields(args...)
+		fields, expandErr := expand.Fields(r.ecfg, args...)
+		r.expandErr(expandErr)
+		if expandErr != nil && strings.Contains(expandErr.Error(), "bad array subscript") {
+			fields = fields[:0]
+			for _, arg := range args {
+				argFields, err := expand.Fields(r.ecfg, arg)
+				if err != nil {
+					continue
+				}
+				fields = append(fields, argFields...)
+			}
+		}
 		if len(args) > 1 && args[0].Lit() == "unset" {
 			fields = []string{"unset"}
 			for _, arg := range args[1:] {

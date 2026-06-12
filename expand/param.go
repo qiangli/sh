@@ -1279,7 +1279,11 @@ func (cfg *Config) varInd(vr Variable, idx syntax.ArithmExpr) (string, error) {
 			return "", err
 		}
 		if i < 0 {
-			return "", fmt.Errorf("negative array index")
+			name := ""
+			if cfg.curParam.Param != nil {
+				name = cfg.curParam.Param.Value
+			}
+			return "", fmt.Errorf("%s: bad array subscript", name)
 		}
 		if vr.IndexedSet(i) {
 			return vr.List[i], nil

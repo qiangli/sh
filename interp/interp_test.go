@@ -3574,7 +3574,15 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	},
 	{
 		`a=(b); echo ${a[-2]}`,
-		"negative array index\n #JUSTERR",
+		"a: bad array subscript\n\n #JUSTERR",
+	},
+	{
+		`a=(b); echo ok ${a[-2]} later`,
+		"a: bad array subscript\nok later\n #JUSTERR",
+	},
+	{
+		`a=(b); ${a[-2]} echo hi`,
+		"a: bad array subscript\nhi\n #JUSTERR",
 	},
 	{
 		`a=abcde; declare -a a; a[5]="hello world"; a[4+5/2]="test expression"; declare a["7 + 8"]="test 2"; a[7 + 8]="test 2"; declare -p a; echo "${#a[@]}"; printf '%s\n' "${!a[@]}"`,
@@ -3643,7 +3651,7 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	},
 	{
 		`declare -A a=([foo]=bar); unset empty; echo ${#a[$empty]}; echo ${#a[missing]}`,
-		"[$empty]: bad array subscript\n0\n #JUSTERR",
+		"[$empty]: bad array subscript\n\n0\n #JUSTERR",
 	},
 	{
 		`declare -a AA; unset 'AA[-2]'`,
