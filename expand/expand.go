@@ -2335,6 +2335,20 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 				}
 				continue
 			}
+			if elems, err := cfg.quotedReplElemFields(wp); err != nil {
+				return nil, err
+			} else if elems != nil {
+				for i, elem := range elems {
+					if i > 0 {
+						flush()
+					}
+					curField = append(curField, fieldPart{
+						quote: quoteSingle,
+						val:   elem,
+					})
+				}
+				continue
+			}
 			// `${var-"$@"}` (unquoted) preserves the field
 			// structure of "$@" when the default fires. Detect
 			// that special case before falling through to the
@@ -3189,7 +3203,7 @@ func (cfg *Config) quotedReplElemFields(pe *syntax.ParamExp) ([]string, error) {
 		return elems, err
 	}
 	orig, replAnchoredStart, replAnchoredEnd, err := replPattern(cfg, pe.Repl.Orig, pe.Repl.All)
-	if err != nil || orig == "" {
+	if err != nil || (orig == "" && !replAnchoredStart && !replAnchoredEnd) {
 		return nil, nil
 	}
 	var with string
