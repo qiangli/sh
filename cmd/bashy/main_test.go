@@ -409,6 +409,46 @@ func TestRunBadSubstDollarParamRecovery(t *testing.T) {
 	}
 }
 
+func TestRunArithmeticParseErrorRecoveryContinues(t *testing.T) {
+	src := "echo $((a b))\n(( x=9 y=41 ))\necho after\n"
+	var stdout, stderr bytes.Buffer
+	r, err := interp.New(
+		interp.StdIO(nil, &stdout, &stderr),
+		interp.Env(expand.ListEnviron()),
+		interp.WithBashCompatErrors(true),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldStderr := os.Stderr
+	readStderr, writeStderr, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = writeStderr
+	defer func() {
+		os.Stderr = oldStderr
+		readStderr.Close()
+	}()
+	err = run(r, strings.NewReader(src), "./arith.tests")
+	writeStderr.Close()
+	globalStderr, readErr := io.ReadAll(readStderr)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if err == nil {
+		t.Fatal("expected recovered parse error")
+	}
+	if got, want := stdout.String(), "after\n"; got != want {
+		t.Fatalf("stdout mismatch\nwant:\n%q\ngot:\n%q\nstderr:\n%s", want, got, stderr.String())
+	}
+	wantErr := "./arith.tests: line 1: a b: arithmetic syntax error in expression (error token is \"b\")\n" +
+		"./arith.tests: line 2: ((: x=9 y=41 : arithmetic syntax error in expression (error token is \"y=41 \")\n"
+	if string(globalStderr) != wantErr {
+		t.Fatalf("stderr mismatch\nwant:\n%q\ngot:\n%q", wantErr, string(globalStderr))
+	}
+}
+
 func TestRunNestedBadSubstRecoveryContinues(t *testing.T) {
 	src := "c=\"\"\necho ${c//${$(($#-1))}/x/}\nset -- a b\nprintf '<%s>\\n' \"$@\"\n"
 	var stdout, stderr bytes.Buffer

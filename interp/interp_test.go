@@ -2647,6 +2647,7 @@ var runTests = []runTest{
 	{"x=4+; declare -i x; x+=7 y=4; echo x=$x y=$y", "bashy: line 1: 4+: 1:2: `+` must be followed by an expression\nx=4+ y=\n"},
 	{"x=8; echo $((--x++)); echo after", "++: assignment requires lvalue (error token is \"++ \")\nafter\n"},
 	{"HOME=/usr/homes/chet; echo \"${HOME:`echo }`}\"; echo after", "arithmetic syntax error: operand expected (error token is \"}\")\nafter\n"},
+	{"foo=1; echo $(( 'foo' )); echo after", "arithmetic syntax error: operand expected (error token is \"'foo' \")\nafter\n"},
 	{"set -- a b c d op; echo ${!#}; v=bad-var; echo ${!v}; echo after", "op\nbad-var: invalid variable name\nafter\n"},
 	{"set -- a 'b c' d; foo=@; printf '<%s>\\n' ${!foo}; printf 'Q<%s>\\n' \"${!foo}\"", "<a>\n<b>\n<c>\n<d>\nQ<a>\nQ<b c>\nQ<d>\n"},
 	{"set -- a b c d e; echo ${6=arg6}; echo after", "$6: cannot assign in this way\nafter\n"},

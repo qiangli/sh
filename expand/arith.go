@@ -397,12 +397,17 @@ func arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 		if dqText, hasParam, ok := arithmDoubleQuotedText(expr); ok && hasParam && containsArithOp(dqText) {
 			str = dqText
 		}
-		if sqText, ok := arithmSingleQuotedText(expr); ok && containsArithOp(sqText) {
+		if sqText, ok := arithmSingleQuotedText(expr); ok {
 			expanded := cfg.expandArithmDiagnosticText(sqText)
-			if arithmBadSingleQuotedText(expanded) {
+			if arithmBadSingleQuotedText(expanded) ||
+				(syntax.ValidName(sqText) && cfg.Env.Get(sqText).IsSet()) {
 				text := "'" + expanded + "'"
+				arithText := text
+				if syntax.ValidName(sqText) && cfg.Env.Get(sqText).IsSet() {
+					arithText += " "
+				}
 				return 0, &ArithmError{
-					Text: text,
+					Text: arithText,
 					Err:  fmt.Errorf("arithmetic syntax error: operand expected (error token is \"%s\")", text+" "),
 				}
 			}

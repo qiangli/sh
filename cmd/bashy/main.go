@@ -1813,6 +1813,10 @@ func printBashParseError(w io.Writer, src []byte, prefix string, pe syntax.Parse
 		}
 		return
 	}
+	if text := arithmeticParseErrorText(string(src), pe); text != "" {
+		fmt.Fprintf(w, "%s: line %d: %s\n", prefix, line, text)
+		return
+	}
 	text := rewriteParserErrorText(string(src), pe)
 	if eofLine, construct, ok := compoundEOFParseError(src, text); ok {
 		fmt.Fprintf(w, "%s: line %d: syntax error: unexpected end of file from `%s' command on line 1\n", prefix, eofLine, construct)
@@ -1930,6 +1934,9 @@ func rewriteParserErrorText(src string, pe syntax.ParseError) string {
 	// Bash escalates a partial-arithmetic parse to "missing `))`"
 	// instead of naming the inner token — match that for `((` blocks
 	// before any of the per-message rewrites below.
+	if text := arithmeticParseErrorText(src, pe); text != "" {
+		return text
+	}
 	if insideUnclosedArith(src, pe.Pos) {
 		return "unexpected EOF while looking for matching `)'"
 	}
@@ -1984,6 +1991,74 @@ func rewriteParserErrorText(src string, pe syntax.ParseError) string {
 		return "unexpected EOF while looking for matching `\"'"
 	}
 	return pe.Text
+}
+
+func arithmeticParseErrorText(src string, pe syntax.ParseError) string {
+	if !strings.Contains(pe.Text, "not a valid arithmetic operator:") {
+		return ""
+	}
+	line := strings.TrimSpace(nthLine([]byte(src), int(pe.Pos.Line())))
+	if line == "" {
+		return ""
+	}
+	expr, command, spaced := arithmeticSourceExpr(line)
+	if expr == "" {
+		return ""
+	}
+	token := parseErrorBacktickToken(pe.Text)
+	if token == "" {
+		return ""
+	}
+	errToken := token
+	if idx := strings.Index(expr, token); idx >= 0 {
+		errToken = strings.TrimLeft(expr[idx:], " \t")
+		if strings.ContainsAny(errToken, " \t") {
+			errToken = strings.TrimRight(errToken, " \t") + " "
+		} else if strings.Contains(errToken, "=") {
+			errToken += " "
+		}
+	}
+	if command {
+		sep := ":"
+		if spaced {
+			sep = " :"
+		}
+		return fmt.Sprintf("((: %s%s arithmetic syntax error in expression (error token is %q)", expr, sep, errToken)
+	}
+	return fmt.Sprintf("%s: arithmetic syntax error in expression (error token is %q)", expr, errToken)
+}
+
+func arithmeticSourceExpr(line string) (expr string, command, spaced bool) {
+	if strings.HasPrefix(line, "((") {
+		if end := strings.LastIndex(line, "))"); end >= 0 {
+			raw := line[2:end]
+			return strings.TrimSpace(raw), true, strings.TrimRight(raw, " \t") != raw
+		}
+	}
+	if start := strings.Index(line, "$(("); start >= 0 {
+		if end := strings.LastIndex(line[start+3:], "))"); end >= 0 {
+			return strings.TrimSpace(line[start+3 : start+3+end]), false, false
+		}
+	}
+	if eq := strings.IndexByte(line, '='); eq > 0 {
+		prefix := line[:eq]
+		if open := strings.IndexByte(prefix, '['); open > 0 && strings.HasSuffix(prefix, "]") {
+			return strings.TrimSpace(prefix[open+1 : len(prefix)-1]), false, false
+		}
+	}
+	return "", false, false
+}
+
+func parseErrorBacktickToken(text string) string {
+	start := strings.LastIndex(text, "`")
+	if start < 0 {
+		return ""
+	}
+	end := strings.LastIndex(text[:start], "`")
+	if end < 0 {
+		return ""
+	}
+	return text[end+1 : start]
 }
 
 func nestedBadSubstSource(src string, pos syntax.Pos) string {
