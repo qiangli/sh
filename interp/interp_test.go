@@ -2643,6 +2643,10 @@ var runTests = []runTest{
 	{"echo ${!var+set}; echo after: $?", "var: invalid indirect expansion\nafter: 1\n"},
 	// An invalid indirection target name fails with $? = 1.
 	{"x=-3; echo ${!x}; echo after: $?", "-3: invalid variable name\nafter: 1\n"},
+	// A blank (whitespace-only) subscript evaluates as index 0 for
+	// indexed arrays and misses every associative array key.
+	{"b[0]=4; echo ${b[   ]}; echo after: $?", "4\nafter: 0\n"},
+	{"typeset -A v; v[0]=one; echo ${v[   ]}; echo after: $?", "\nafter: 0\n"},
 	{"arrayA=(A B C); xx='arrayA[*]'; arrayB=( ${!xx} ); echo \"${#arrayB[*]}:${arrayB[0]}:${arrayB[1]}:${arrayB[2]}\"; arrayB=( \"${!xx}\" ); echo \"${#arrayB[*]}:${arrayB[0]}:${arrayB[1]}:${arrayB[2]}\"; xx='arrayA[@]'; arrayB=( ${!xx} ); echo \"${#arrayB[*]}:${arrayB[0]}:${arrayB[1]}:${arrayB[2]}\"; arrayB=( \"${!xx}\" ); echo \"${#arrayB[*]}:${arrayB[0]}:${arrayB[1]}:${arrayB[2]}\"", "3:A:B:C\n1:A B C::\n3:A:B:C\n3:A:B:C\n"},
 	// Assignment binds lower than the ternary false branch in bash:
 	// these parse like `(cond ? a : a) += 5`, which is not an lvalue.

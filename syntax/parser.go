@@ -1726,7 +1726,7 @@ zshPrefixLoop:
 		}
 		p.pos = p.nextPos()
 		p.rune()
-		pe.Index = p.eitherIndex()
+		pe.Index = p.eitherIndexBlank(true)
 	}
 	tokRune := p.r
 	p.pos = p.nextPos()
@@ -2055,6 +2055,16 @@ func (p *Parser) paramExpExp() *Expansion {
 }
 
 func (p *Parser) eitherIndex() ArithmExpr {
+	return p.eitherIndexBlank(false)
+}
+
+// eitherIndexBlank is eitherIndex with blankOK controlling whether a
+// whitespace-only subscript like ${b[   ]} is accepted. Bash rejects
+// `${b[]}` at parse time but defers a blank subscript to expansion
+// time, where it evaluates as index 0 (indexed arrays) or as a key
+// that no associative array contains. Only `${name[...]}` subscripts
+// qualify; assignment subscripts like `b[ ]=x` stay rejected.
+func (p *Parser) eitherIndexBlank(blankOK bool) ArithmExpr {
 	old := p.quote
 	oldAssignIndexWords := p.assignIndexWords
 	lpos := p.pos
@@ -2064,6 +2074,14 @@ func (p *Parser) eitherIndex() ArithmExpr {
 	switch p.tok {
 	case star, at, perc, exclMark:
 		p.tok, p.val = _LitWord, p.tok.String()
+	}
+	if blankOK && p.lang == LangBash && p.tok == rightBrack &&
+		p.pos.Offset() > lpos.Offset()+1 {
+		expr := ArithmExpr(p.wordOne(p.lit(p.pos, " ")))
+		p.quote = old
+		p.assignIndexWords = oldAssignIndexWords
+		p.matchedArithm(lpos, leftBrack, rightBrack)
+		return expr
 	}
 	expr := p.followArithm(leftBrack, lpos)
 	p.quote = old
