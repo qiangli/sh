@@ -491,6 +491,10 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 	cfg.curParam = pe
 	defer func() { cfg.curParam = oldParam }()
 
+	if pe.BadSubst != nil {
+		return "", BadSubstitutionError{Node: pe}
+	}
+
 	name := pe.Param.Value
 	index := pe.Index
 	if name == "!" && pe.Exp != nil && pe.Exp.Op == syntax.RemSmallPrefix && pe.Exp.Word == nil {

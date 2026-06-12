@@ -660,6 +660,12 @@ type ParamExp struct {
 	Repl      *Replace         // ${a/x/y}
 	Names     ParNamesOperator // ${!prefix*} or ${!prefix@}
 	Exp       *Expansion       // ${a:-b}, ${a#b}, etc
+
+	// BadSubst holds the raw remainder of a parameter expansion which
+	// bash accepts at parse time but rejects at expansion time as a
+	// bad substitution, such as `${x!y}` or `${#foo%}`. Only possible
+	// with [LangBash].
+	BadSubst *Lit
 }
 
 // simple returns true if the parameter expansion is of the form $name or ${name},
@@ -670,7 +676,7 @@ func (p *ParamExp) simple() bool {
 		p.Split == OptUnset && p.GlobSubst == OptUnset && p.RcExpand == OptUnset &&
 		p.NestedParam == nil && p.Index == nil &&
 		len(p.Modifiers) == 0 && p.Slice == nil &&
-		p.Repl == nil && p.Names == 0 && p.Exp == nil
+		p.Repl == nil && p.Names == 0 && p.Exp == nil && p.BadSubst == nil
 }
 
 func (p *ParamExp) Pos() Pos {

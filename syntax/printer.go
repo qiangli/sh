@@ -826,6 +826,8 @@ func (p *Printer) paramExp(pe *ParamExp) {
 		if pe.Repl.With != nil {
 			p.word(pe.Repl.With)
 		}
+	case pe.BadSubst != nil:
+		p.writeLit(pe.BadSubst.Value)
 	case pe.Names != 0:
 		p.writeLit(pe.Names.String())
 	case pe.Exp != nil:

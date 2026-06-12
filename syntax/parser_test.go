@@ -1330,7 +1330,10 @@ var errorCases = []errorCase{
 	),
 	errCase(
 		`echo "foo${bar"`,
-		langErr("1:15: not a valid parameter expansion operator: `\"`"),
+		// Bash scans bad substitutions to the matching `}`, past the
+		// closing quote, and only hits EOF.
+		langErr("1:10: reached EOF without matching `${` with `}`", LangBash),
+		langErr("1:15: not a valid parameter expansion operator: `\"`", LangPOSIX|LangMirBSDKorn|LangBats|LangZsh),
 	),
 	errCase(
 		"echo ${%",
@@ -1367,7 +1370,8 @@ var errorCases = []errorCase{
 	),
 	errCase(
 		"echo ${#<}",
-		langErr("1:9: not a valid parameter expansion operator: `<`"),
+		// Bash defers the bad substitution to expansion time.
+		langErr("1:9: not a valid parameter expansion operator: `<`", LangPOSIX|LangMirBSDKorn|LangBats|LangZsh),
 	),
 	errCase(
 		"echo ${%<}",
@@ -1375,7 +1379,7 @@ var errorCases = []errorCase{
 	),
 	errCase(
 		"echo ${!<}",
-		langErr("1:9: not a valid parameter expansion operator: `<`", LangBash|LangMirBSDKorn),
+		langErr("1:9: not a valid parameter expansion operator: `<`", LangMirBSDKorn),
 	),
 	errCase(
 		"echo ${@foo}",
@@ -1443,15 +1447,15 @@ var errorCases = []errorCase{
 	),
 	errCase(
 		"echo ${foo;}",
-		langErr("1:11: not a valid parameter expansion operator: `;`", LangBash|LangMirBSDKorn),
+		langErr("1:11: not a valid parameter expansion operator: `;`", LangMirBSDKorn),
 	),
 	errCase(
 		"echo ${foo!}",
-		langErr("1:11: not a valid parameter expansion operator: `!`", LangBash|LangMirBSDKorn),
+		langErr("1:11: not a valid parameter expansion operator: `!`", LangMirBSDKorn),
 	),
 	errCase(
 		"echo ${#foo:-bar}",
-		langErr("1:12: cannot combine multiple parameter expansion operators", LangBash|LangMirBSDKorn),
+		langErr("1:12: cannot combine multiple parameter expansion operators", LangMirBSDKorn),
 	),
 	errCase(
 		"echo ${%foo:1:3}",
@@ -1974,7 +1978,7 @@ var errorCases = []errorCase{
 	),
 	errCase(
 		"echo ${foo]}",
-		langErr("1:11: not a valid parameter expansion operator: `]`", LangBash|LangMirBSDKorn|LangZsh),
+		langErr("1:11: not a valid parameter expansion operator: `]`", LangMirBSDKorn|LangZsh),
 	),
 	errCase(
 		"echo ${foo[]}",

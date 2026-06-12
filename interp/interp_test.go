@@ -2637,6 +2637,10 @@ var runTests = []runTest{
 	{"set -- a b; echo ${!1*}; echo ${!@*}; echo after", "bad substitution\nbad substitution\nafter\n"},
 	// A non-fatal bad substitution fails the command with $? = 1.
 	{"echo ${#+} second; echo after: $?", "bad substitution\nafter: 1\n"},
+	// Malformed expansions which bash accepts at parse time and
+	// rejects at expansion time.
+	{"echo ${x!y} second; echo after: $?", "bad substitution\nafter: 1\n"},
+	{"echo ${#foo%} second; echo after: $?", "bad substitution\nafter: 1\n"},
 	// Indirection through an unset variable: fatal when bare (covered
 	// above), non-fatal with $? = 1 when a default-style op follows.
 	{"echo ${!var:-unset}; echo after: $?", "var: invalid indirect expansion\nafter: 1\n"},
