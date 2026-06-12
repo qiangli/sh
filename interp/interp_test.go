@@ -579,6 +579,8 @@ var runTests = []runTest{
 	{`arr=("foo"); echo ${arr[@]:99}`, "\n"},
 	{`echo ${arr[@]:1:99}; echo ${arr[*]:1:99}`, "\n\n"},
 	{`arr=(0 1 2 3 4 5 6 7 8 9 0 a b c d e f g h); echo ${arr[@]:3:4}`, "3 4 5 6\n"},
+	{`a=([1]=one [3]=three [7]=seven); printf '<%s>\n' "${a[@]:2:2}" "${a[@]: -5}" "${a[*]:2:2}"`, "<three>\n<seven>\n<three>\n<seven>\n<three seven>\n"},
+	{`n=0; (( (a[n]=++n)<7&&a[0] )); printf '<%s>\n' "${a[@]:1}"`, "<1>\n"},
 	{`v=hello; echo ${v:1:-2}`, "ell\n"},
 	{`v=hello; echo ${v: -3:2}`, "ll\n"},
 	{`v=ಇಳಿಕೆಗಳು; printf '<%s> <%s>\n' "${v:0:2}" "${v:0:1}"`, "<ಇಳ> <ಇ>\n"},

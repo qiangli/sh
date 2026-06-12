@@ -616,7 +616,7 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			indexAllElements = true
 			callVarInd = false
 			var err error
-			elems, err = cfg.sliceElems(pe, vr.IndexedValues(), name == "@" || name == "*")
+			elems, err = cfg.sliceIndexedElems(pe, vr, name == "@" || name == "*")
 			if err != nil {
 				return "", err
 			}

@@ -3108,7 +3108,7 @@ func (cfg *Config) quotedElemFields(pe *syntax.ParamExp) ([]string, error) {
 		vr := cfg.Env.Get(name)
 		switch vr.Kind {
 		case Indexed:
-			return cfg.sliceElems(pe, vr.IndexedValues(), false)
+			return cfg.sliceIndexedElems(pe, vr, false)
 		case Associative:
 			keys := AssocKeysInBashOrder(vr.Map)
 			elems := make([]string, len(keys))
@@ -3125,7 +3125,7 @@ func (cfg *Config) quotedElemFields(pe *syntax.ParamExp) ([]string, error) {
 		}
 	case "*": // "${name[*]}"
 		if vr := cfg.Env.Get(name); vr.Kind == Indexed {
-			elems, err := cfg.sliceElems(pe, vr.IndexedValues(), false)
+			elems, err := cfg.sliceIndexedElems(pe, vr, false)
 			if err != nil {
 				return nil, err
 			}
@@ -3152,7 +3152,7 @@ func (cfg *Config) quotedAllElemValues(pe *syntax.ParamExp) ([]string, error) {
 			vr := cfg.Env.Get(name)
 			switch vr.Kind {
 			case Indexed:
-				return cfg.sliceElems(pe, vr.IndexedValues(), false)
+				return cfg.sliceIndexedElems(pe, vr, false)
 			case Associative:
 				keys := AssocKeysInBashOrder(vr.Map)
 				elems := make([]string, len(keys))
@@ -3163,7 +3163,7 @@ func (cfg *Config) quotedAllElemValues(pe *syntax.ParamExp) ([]string, error) {
 			}
 		case "*":
 			if vr := cfg.Env.Get(name); vr.Kind == Indexed {
-				elems, err := cfg.sliceElems(pe, vr.IndexedValues(), false)
+				elems, err := cfg.sliceIndexedElems(pe, vr, false)
 				if err != nil {
 					return nil, err
 				}
@@ -3295,6 +3295,55 @@ func (cfg *Config) sliceElems(pe *syntax.ParamExp, elems []string, positional bo
 			return nil, fmt.Errorf("%s: %d: substring expression < 0", pe.Param.Value, length)
 		}
 		elems = elems[:slicePos(length)]
+	}
+	return elems, nil
+}
+
+func (cfg *Config) sliceIndexedElems(pe *syntax.ParamExp, vr Variable, positional bool) ([]string, error) {
+	if pe.Slice == nil || positional {
+		return cfg.sliceElems(pe, vr.IndexedValues(), positional)
+	}
+	indexes := vr.IndexedIndexes()
+	if len(indexes) == 0 {
+		return nil, nil
+	}
+	offset := indexes[0]
+	if pe.Slice.Offset != nil {
+		var err error
+		offset, err = Arithm(cfg, pe.Slice.Offset)
+		if err != nil {
+			return nil, err
+		}
+		if offset < 0 {
+			offset += indexes[len(indexes)-1] + 1
+			if offset < 0 {
+				return nil, nil
+			}
+		}
+	}
+	start := len(indexes)
+	for i, index := range indexes {
+		if index >= offset {
+			start = i
+			break
+		}
+	}
+	indexes = indexes[start:]
+	if pe.Slice.Length != nil {
+		length, err := Arithm(cfg, pe.Slice.Length)
+		if err != nil {
+			return nil, err
+		}
+		if length < 0 {
+			return nil, fmt.Errorf("%s: %d: substring expression < 0", pe.Param.Value, length)
+		}
+		if length < len(indexes) {
+			indexes = indexes[:length]
+		}
+	}
+	elems := make([]string, len(indexes))
+	for i, index := range indexes {
+		elems[i] = vr.List[index]
 	}
 	return elems, nil
 }
