@@ -19,6 +19,14 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 )
 
+func indexedNegativeOffset(vr Variable, n int) int {
+	indexes := vr.IndexedIndexes()
+	if len(indexes) == 0 {
+		return n
+	}
+	return indexes[len(indexes)-1] + 1 + n
+}
+
 // stripBackslashEscapes removes a single backslash before any
 // character, mirroring bash 5.3's quote-removal pass on the replacement
 // in ${var/pat/repl}: `\X` → `X` for any X, `\\` → `\`. A trailing
@@ -676,7 +684,6 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			for _, i := range vr.IndexedIndexes() {
 				strs = append(strs, strconv.Itoa(i))
 			}
-			sortStrs = true
 		case pe.Index != nil && vr.Kind == Associative:
 			strs = slices.AppendSeq(strs, maps.Keys(vr.Map))
 			sortStrs = true
@@ -1274,23 +1281,43 @@ func (cfg *Config) varInd(vr Variable, idx syntax.ArithmExpr) (string, error) {
 		case "*", "@":
 			return strings.Join(vr.IndexedValues(), " "), nil
 		}
+		if start, end, ok := indexedBraceRange(idx); ok {
+			var vals []string
+			step := 1
+			if start > end {
+				step = -1
+			}
+			for i := start; ; i += step {
+				if vr.IndexedSet(i) {
+					vals = append(vals, vr.List[i])
+				}
+				if i == end {
+					break
+				}
+			}
+			return strings.Join(vals, " "), nil
+		}
 		i, err := Arithm(cfg, idx)
 		if err != nil {
 			return "", err
 		}
 		if i < 0 {
-			if cfg.curParam.Length {
+			orig := i
+			i = indexedNegativeOffset(vr, i)
+			if i < 0 && cfg.curParam.Length {
 				idxText := subscriptText(idx)
 				if idxText == "" {
-					idxText = strconv.Itoa(i)
+					idxText = strconv.Itoa(orig)
 				}
 				return "", fmt.Errorf("[%s]: bad array subscript", idxText)
 			}
-			name := ""
-			if cfg.curParam.Param != nil {
-				name = cfg.curParam.Param.Value
+			if i < 0 {
+				name := ""
+				if cfg.curParam.Param != nil {
+					name = cfg.curParam.Param.Value
+				}
+				return "", fmt.Errorf("%s: bad array subscript", name)
 			}
-			return "", fmt.Errorf("%s: bad array subscript", name)
 		}
 		if vr.IndexedSet(i) {
 			return vr.List[i], nil
@@ -1328,6 +1355,32 @@ func (cfg *Config) varInd(vr Variable, idx syntax.ArithmExpr) (string, error) {
 		return vr.Map[val], nil
 	}
 	return "", nil
+}
+
+func indexedBraceRange(idx syntax.ArithmExpr) (int, int, bool) {
+	word, ok := idx.(*syntax.Word)
+	if !ok || len(word.Parts) != 1 {
+		return 0, 0, false
+	}
+	dq, ok := word.Parts[0].(*syntax.DblQuoted)
+	if !ok || len(dq.Parts) != 1 {
+		return 0, 0, false
+	}
+	lit, ok := dq.Parts[0].(*syntax.Lit)
+	if !ok || !strings.HasPrefix(lit.Value, "{") || !strings.HasSuffix(lit.Value, "}") {
+		return 0, 0, false
+	}
+	inner := strings.TrimSuffix(strings.TrimPrefix(lit.Value, "{"), "}")
+	parts := strings.Split(inner, "..")
+	if len(parts) != 2 {
+		return 0, 0, false
+	}
+	start, err1 := strconv.Atoi(parts[0])
+	end, err2 := strconv.Atoi(parts[1])
+	if err1 != nil || err2 != nil {
+		return 0, 0, false
+	}
+	return start, end, true
 }
 
 func subscriptText(idx syntax.ArithmExpr) string {

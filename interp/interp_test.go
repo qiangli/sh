@@ -3614,7 +3614,7 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	},
 	{
 		`a=(x y z); n=3; unset 'a[n-1]'; declare -p a; unset 'a[-1]'`,
-		"declare -a a=([0]=\"x\" [1]=\"y\")\nunset: [-1]: bad array subscript\nexit status 1 #JUSTERR",
+		"declare -a a=([0]=\"x\" [1]=\"y\")\n",
 	},
 	{
 		`a=([0]=' x ' [1]=' y '); for v in "${a[@]}"; do echo "$v"; done`,

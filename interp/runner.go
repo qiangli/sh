@@ -1031,6 +1031,44 @@ func (r *Runner) literalForAssign(word *syntax.Word) string {
 	return str
 }
 
+func (r *Runner) integerArrayAssignWithArithSuffix(cm *syntax.CallExpr, args []*syntax.Word) bool {
+	if len(cm.Assigns) != 1 || len(args) != 1 {
+		return false
+	}
+	as := cm.Assigns[0]
+	if as.Array == nil || as.Index != nil || as.Name == nil || len(as.Array.Elems) != 1 {
+		return false
+	}
+	elem := as.Array.Elems[0]
+	if elem.Index != nil || elem.Append || elem.Value == nil {
+		return false
+	}
+	prev := r.lookupVar(as.Name.Value)
+	if !prev.Integer {
+		return false
+	}
+	suffix := r.literalForAssign(args[0])
+	if suffix == "" || !strings.ContainsAny(suffix[:1], "+-*/%") {
+		return false
+	}
+	exprText := "(" + r.literalForAssign(elem.Value) + ")" + suffix
+	expr, err := syntax.NewParser().Arithmetic(strings.NewReader(exprText))
+	if err != nil || expr == nil {
+		return false
+	}
+	n, err := expand.Arithm(r.ecfg, expr)
+	if err != nil {
+		r.expandErr(err)
+		r.exit.code = 1
+		return true
+	}
+	prev.Set = true
+	prev.Kind = expand.String
+	prev.Str = strconv.Itoa(n)
+	r.setVar(as.Name.Value, prev)
+	return true
+}
+
 func (r *Runner) document(word *syntax.Word) string {
 	str, err := expand.Document(r.ecfg, word)
 	r.expandErr(err)
@@ -4138,6 +4176,9 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			r.aliasLineOverride = int(origCallPos.Line())
 			defer func() { r.aliasLineOverride = prevOverride }()
 		}
+		if r.integerArrayAssignWithArithSuffix(cm, args) {
+			return
+		}
 		r.lastExpandExit = exitStatus{}
 		fields, expandErr := expand.Fields(r.ecfg, args...)
 		r.expandErr(expandErr)
@@ -5335,6 +5376,9 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			// initial assignment can evaluate the RHS as arithmetic.
 			if valType == "-i" || slices.Contains(modes, "-i") {
 				vr.Integer = true
+			}
+			if slices.Contains(modes, "+i") {
+				vr.Integer = false
 			}
 			if as.Naked && (slices.Contains(modes, "+a") || slices.Contains(modes, "+A")) &&
 				(vr.Kind == expand.Indexed || vr.Kind == expand.Associative) {

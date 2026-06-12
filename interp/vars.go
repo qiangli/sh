@@ -1267,6 +1267,14 @@ func splitArrayRef(s string) (name, idx string, ok bool) {
 	return s[:lb], s[lb+1 : len(s)-1], true
 }
 
+func indexedNegativeOffset(vr expand.Variable, n int) int {
+	indexes := vr.IndexedIndexes()
+	if len(indexes) == 0 {
+		return n
+	}
+	return indexes[len(indexes)-1] + 1 + n
+}
+
 // unsetArrayElem removes a single element from an indexed or
 // associative array. For indexed arrays the index is arithmetic;
 // for associative arrays it's a literal key. `name[*]` / `name[@]`
@@ -1288,11 +1296,18 @@ func (r *Runner) unsetArrayElem(name, idx string) bool {
 	switch vr.Kind {
 	case expand.Indexed:
 		n64, err := r.arithFromString(idx)
-		if err != nil || n64 < 0 {
+		if err != nil {
 			r.errf("%sunset: [%s]: bad array subscript\n", r.bashErrPrefix(r.curStmtPos), idx)
 			return false
 		}
 		n := int(n64)
+		if n < 0 {
+			n = indexedNegativeOffset(vr, n)
+			if n < 0 {
+				r.errf("%sunset: [%s]: bad array subscript\n", r.bashErrPrefix(r.curStmtPos), idx)
+				return false
+			}
+		}
 		if n >= len(vr.List) {
 			return true
 		}
@@ -1795,7 +1810,10 @@ func (r *Runner) setVarWithIndex(prev expand.Variable, name string, index syntax
 	if k < 0 {
 		// Bash 5.3 accepts negative indices as offsets from the
 		// end of the array: `a[-1]` targets the last element.
-		k = len(list) + k
+		prevForOffset := prev
+		prevForOffset.List = list
+		prevForOffset.ListSet = listSet
+		k = indexedNegativeOffset(prevForOffset, k)
 		if k < 0 {
 			idxText := r.arithmSourceText(index, false)
 			if idxText == "" {
@@ -2024,6 +2042,9 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 				switch {
 				case as.Index != nil && prev.Kind == expand.Indexed:
 					k := r.arithm(as.Index)
+					if k < 0 {
+						k = indexedNegativeOffset(prev, k)
+					}
 					if prev.IndexedSet(k) {
 						curStr = prev.List[k]
 					} else {
@@ -2141,6 +2162,9 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 			// with the prior element's value here.
 			if as.Index != nil {
 				k := r.arithm(as.Index)
+				if k < 0 {
+					k = indexedNegativeOffset(prev, k)
+				}
 				var cur string
 				if prev.IndexedSet(k) {
 					cur = prev.List[k]
@@ -2377,7 +2401,7 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 			if index < 0 {
 				// Bash 5.3 treats `arr[-1]=v` as an offset
 				// from the end of the existing list.
-				index = len(prev.List) + index
+				index = indexedNegativeOffset(prev, index)
 				if index < 0 {
 					r.errf("%s[%s]=%s: bad array subscript\n",
 						r.bashErrPrefix(r.curStmtPos), r.arithmSourceText(elem.Index, false), r.literalForAssign(elem.Value))
