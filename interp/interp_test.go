@@ -3497,6 +3497,10 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 		"echo 'f(){ printf \"%s|%s|%s\\n\" \"${FUNCNAME[0]}\" \"${BASH_SOURCE[1]}\" \"${BASH_LINENO[0]}\"; }; f' >a; source ./a",
 		"f|./a|1\n",
 	},
+	{
+		`f1() { f2 y 2; }; f2() { f3 z 3; }; f3() { printf '<%s>\n' "${BASH_ARGV[@]}"; printf 'argc:%s\n' "${BASH_ARGC[@]}"; }; f1 x 1`,
+		"<3>\n<z>\n<2>\n<y>\n<1>\n<x>\nargc:2\nargc:2\nargc:2\n",
+	},
 
 	// source from PATH
 	{

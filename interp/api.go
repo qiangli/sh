@@ -526,6 +526,7 @@ type callFrame struct {
 	source       string
 	callerSource string
 	funcName     string
+	args         []string
 	// bodyLine is the line of the function body's opening token.
 	// Bash's parser stamps for/select commands inside a function with
 	// this line rather than their own, and runtime diagnostics like

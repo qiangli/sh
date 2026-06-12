@@ -6990,6 +6990,7 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 			line:     pos.Line(),
 			source:   r.filename,
 			funcName: name,
+			args:     slices.Clone(args[1:]),
 			bodyLine: body.Pos().Line(),
 		})
 		r.localOptStack = append(r.localOptStack, localOptFrame{

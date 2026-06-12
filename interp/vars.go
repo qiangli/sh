@@ -724,6 +724,28 @@ func (r *Runner) lookupVar(name string) expand.Variable {
 			lines[len(r.callStack)] = "0"
 			vr.List = lines
 		}
+	case "BASH_ARGC":
+		vr.Kind = expand.Indexed
+		if len(r.callStack) > 0 {
+			counts := make([]string, len(r.callStack))
+			for i := range r.callStack {
+				f := r.callStack[len(r.callStack)-1-i]
+				counts[i] = strconv.Itoa(len(f.args))
+			}
+			vr.List = counts
+		}
+	case "BASH_ARGV":
+		vr.Kind = expand.Indexed
+		if len(r.callStack) > 0 {
+			var argv []string
+			for i := len(r.callStack) - 1; i >= 0; i-- {
+				args := r.callStack[i].args
+				for j := len(args) - 1; j >= 0; j-- {
+					argv = append(argv, args[j])
+				}
+			}
+			vr.List = argv
+		}
 	case "PIPESTATUS":
 		vr.Kind = expand.Indexed
 		if r.pipeStatus != nil {
