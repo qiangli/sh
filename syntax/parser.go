@@ -2338,7 +2338,7 @@ func (p *Parser) getAssign(needEqual bool) *Assign {
 		for p.tok != _EOF && p.tok != rightParen {
 			ae := &ArrayElem{}
 			ae.Comments, p.accComs = p.accComs, nil
-			if p.tok == leftBrack {
+			if p.tok == leftBrack && p.arrayElemIndex() {
 				left := p.pos
 				oldRawAssignIndex := p.rawAssignIndex
 				p.rawAssignIndex = true
@@ -2359,12 +2359,25 @@ func (p *Parser) getAssign(needEqual bool) *Assign {
 			}
 			if ae.Value = p.getWord(); ae.Value == nil {
 				switch p.tok {
+				case leftBrack:
+					if ae.Index != nil {
+						break
+					}
+					ae.Value = &Word{Parts: []WordPart{
+						&Lit{ValuePos: p.pos, ValueEnd: posAddCol(p.pos, 1), Value: p.tok.String()},
+					}}
+					p.next()
+				case rightBrack:
+					ae.Value = &Word{Parts: []WordPart{
+						&Lit{ValuePos: p.pos, ValueEnd: posAddCol(p.pos, 1), Value: p.tok.String()},
+					}}
+					p.next()
 				case assgn:
 					ae.Value = &Word{Parts: []WordPart{
 						&Lit{ValuePos: p.pos, ValueEnd: posAddCol(p.pos, 1), Value: "="},
 					}}
 					p.next()
-				case _Newl, rightParen, leftBrack:
+				case _Newl, rightParen:
 					// TODO: support [index]=[
 				default:
 					p.curErr("array element values must be words")
@@ -2392,6 +2405,14 @@ func (p *Parser) getAssign(needEqual bool) *Assign {
 		}
 	}
 	return as
+}
+
+func (p *Parser) arrayElemIndex() bool {
+	if p.lang != LangBash {
+		return true
+	}
+	i := int(p.pos.Offset()) - int(p.offs) + 1
+	return i >= len(p.bs) || (p.bs[i] != ' ' && p.bs[i] != '\t')
 }
 
 func (p *Parser) peekRedir() bool {

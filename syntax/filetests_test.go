@@ -5091,16 +5091,27 @@ var fileTests = []fileTestCase{
 		}), LangBash|LangMirBSDKorn|LangZsh),
 	),
 	fileTest(
-		[]string{
-			`a=(["x y"]=b)`,
-			`a=( [ "x y" ]=b)`,
-		},
+		[]string{`a=(["x y"]=b)`},
 		langFile(&CallExpr{Assigns: []*Assign{{
 			Name: lit("a"),
 			Array: &ArrayExpr{Elems: []*ArrayElem{{
 				Index: word(dblQuoted(lit("x y"))),
 				Value: litWord("b"),
 			}}},
+		}}}, LangBash),
+	),
+	fileTest(
+		[]string{
+			`a=([ "x y" ]=b)`,
+			`a=( [ "x y" ]=b)`,
+		},
+		langFile(&CallExpr{Assigns: []*Assign{{
+			Name: lit("a"),
+			Array: &ArrayExpr{Elems: []*ArrayElem{
+				{Value: litWord("[")},
+				{Value: word(dblQuoted(lit("x y")))},
+				{Value: litWord("]=b")},
+			}},
 		}}}, LangBash),
 	),
 	fileTest(
