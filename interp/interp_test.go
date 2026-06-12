@@ -1129,6 +1129,10 @@ var runTests = []runTest{
 		"declare -a arr=([0]=\"1\" [1]=\"2\" [2]=\"3\")\n",
 	},
 	{
+		`b='[0]=bar'; declare -a arr="$b"; declare -p arr`,
+		"declare -a arr=([0]=\"[0]=bar\")\n",
+	},
+	{
 		`>a.x >b.x; array2=(grep [ 123 ] \*); declare -p array2; printf '<%s>\n' "${array2[@]}"; rm a.x b.x`,
 		"declare -a array2=([0]=\"grep\" [1]=\"[\" [2]=\"123\" [3]=\"]\" [4]=\"*\")\n<grep>\n<[>\n<123>\n<]>\n<*>\n",
 	},

@@ -2103,6 +2103,13 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 					}
 					return name, prev
 				}
+				if valType == "-a" {
+					prev.Kind = expand.Indexed
+					prev.List = []string{s}
+					prev.ListSet = nil
+					prev.Str = ""
+					return name, prev
+				}
 				// Bash: when the existing variable is an indexed or
 				// associative array, a scalar assignment (`a=v`) in
 				// declare-family context sets element [0] (or key
