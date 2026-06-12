@@ -2080,33 +2080,46 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 			if as.Index == nil && r.declAssignContext {
 				// `declare -a name=(elem1 elem2 …)` reaching here
 				// via string-form flattening hands us the raw
-				// `(elem1 …)` text; re-parse it as an array literal
-				// so the array kind sticks and parens get stripped.
-				if (valType == "-a" || valType == "-A") && strings.HasPrefix(s, "(") && strings.HasSuffix(s, ")") {
-					if valType == "-a" {
+				// `(elem1 …)` text. Bash also applies this
+				// compound-assignment parse when a plain `declare
+				// name='(...)'` targets an existing array.
+				if strings.HasPrefix(s, "(") && strings.HasSuffix(s, ")") {
+					arrayType := valType
+					if arrayType == "" && !r.setVarStringParsed {
+						switch prev.Kind {
+						case expand.Indexed:
+							arrayType = "-a"
+						case expand.Associative:
+							arrayType = "-A"
+						}
+					}
+					if arrayType == "-a" || arrayType == "-A" {
 						if file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader("x="+s), ""); err == nil &&
 							len(file.Stmts) == 1 {
 							if call, ok := file.Stmts[0].Cmd.(*syntax.CallExpr); ok && len(call.Assigns) == 1 && call.Assigns[0].Array != nil {
-								return r.assignVal(name, prev, call.Assigns[0], valType)
+								return r.assignVal(name, prev, call.Assigns[0], arrayType)
 							}
 						}
-						prev.Kind = expand.Indexed
-						prev.List = []string{}
-					} else { // "-A"
-						inner := s[1 : len(s)-1]
-						prev.Kind = expand.Associative
-						if prev.Map == nil {
+						if arrayType == "-a" {
+							prev.Kind = expand.Indexed
+							prev.List = []string{}
+						} else {
+							prev.Kind = expand.Associative
 							prev.Map = map[string]string{}
 						}
-						// TODO: full key=value parsing for assoc string-form.
-						prev.Map["0"] = inner
+						return name, prev
 					}
-					return name, prev
 				}
 				if valType == "-a" {
 					prev.Kind = expand.Indexed
 					prev.List = []string{s}
 					prev.ListSet = nil
+					prev.Str = ""
+					return name, prev
+				}
+				if valType == "-A" {
+					prev.Kind = expand.Associative
+					prev.Map = map[string]string{"0": s}
 					prev.Str = ""
 					return name, prev
 				}

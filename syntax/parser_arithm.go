@@ -198,11 +198,6 @@ func (p *Parser) arithmExprUnary(compact bool) ArithmExpr {
 		p.got(_Newl)
 	}
 
-	if p.quote == paramExpArithm && p.tok == tilde && p.r == ']' {
-		l := p.lit(p.pos, p.tok.String())
-		p.nextArith(compact)
-		return p.wordOne(l)
-	}
 	switch UnAritOperator(p.tok) {
 	case Not, BitNegation, Plus, Minus:
 		ue := &UnaryArithm{OpPos: p.pos, Op: UnAritOperator(p.tok)}
