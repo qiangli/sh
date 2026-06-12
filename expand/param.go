@@ -1334,7 +1334,7 @@ func (cfg *Config) varInd(vr Variable, idx syntax.ArithmExpr) (string, error) {
 			}
 			return strings.Join(vals, " "), nil
 		}
-		i, err := Arithm(cfg, idx)
+		i, err := Arithm(cfg, indexedQuotedLiteralIndex(idx))
 		if err != nil {
 			return "", err
 		}
@@ -1418,6 +1418,22 @@ func indexedBraceRange(idx syntax.ArithmExpr) (int, int, bool) {
 		return 0, 0, false
 	}
 	return start, end, true
+}
+
+func indexedQuotedLiteralIndex(idx syntax.ArithmExpr) syntax.ArithmExpr {
+	word, ok := idx.(*syntax.Word)
+	if !ok || len(word.Parts) != 1 {
+		return idx
+	}
+	dq, ok := word.Parts[0].(*syntax.DblQuoted)
+	if !ok || len(dq.Parts) != 1 {
+		return idx
+	}
+	lit, ok := dq.Parts[0].(*syntax.Lit)
+	if !ok {
+		return idx
+	}
+	return &syntax.Word{Parts: []syntax.WordPart{&syntax.Lit{Value: strings.TrimSpace(lit.Value)}}}
 }
 
 func subscriptText(idx syntax.ArithmExpr) string {

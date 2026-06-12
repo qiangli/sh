@@ -2053,6 +2053,14 @@ func arrayElementErrorTokenAt(src string, pos syntax.Pos) string {
 }
 
 func arithmeticParseErrorText(src string, pe syntax.ParseError) string {
+	if strings.Contains(pe.Text, "`~` must be followed by an expression") {
+		line := strings.TrimSpace(nthLine([]byte(src), int(pe.Pos.Line())))
+		expr := "~"
+		if strings.Contains(line, "$(( ~ ))") || strings.Contains(line, "(( ~ ))") {
+			expr = "~ "
+		}
+		return fmt.Sprintf("%s: arithmetic syntax error: operand expected (error token is %q)", expr, expr)
+	}
 	if !strings.Contains(pe.Text, "not a valid arithmetic operator:") {
 		return ""
 	}

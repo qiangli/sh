@@ -156,6 +156,13 @@ func TestPrintBashParseErrorArrayCompatibility(t *testing.T) {
 			want: "bash: -c: line 1: syntax error near unexpected token `<>'\n" +
 				"bash: -c: line 1: `metas=( <> < > ! )'\n",
 		},
+		{
+			name: "arithmetic bare tilde",
+			src:  `echo $(( ~ ))`,
+			pos:  syntax.NewPos(0, 1, 10),
+			text: "`~` must be followed by an expression",
+			want: "bash: -c: line 1: ~ : arithmetic syntax error: operand expected (error token is \"~ \")\n",
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
