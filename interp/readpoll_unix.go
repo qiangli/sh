@@ -72,10 +72,11 @@ func (r *timeoutFileReader) Read(p []byte) (int, error) {
 		}
 		var rfds unix.FdSet
 		rfds.Set(fd)
-		tv := unix.Timeval{
-			Sec:  usec / 1e6,
-			Usec: int32(usec % 1e6),
-		}
+		// NsecToTimeval fills Sec/Usec with the platform-correct field
+		// types: unix.Timeval.Usec is int32 on darwin/BSD but int64 on
+		// linux, so a hand-built literal with an int32 Usec fails to
+		// compile on linux. (µs → ns for the helper.)
+		tv := unix.NsecToTimeval(usec * 1000)
 		n, err := unix.Select(fd+1, &rfds, nil, nil, &tv)
 		if err == unix.EINTR {
 			continue
