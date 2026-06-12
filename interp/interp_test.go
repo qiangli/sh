@@ -2637,6 +2637,12 @@ var runTests = []runTest{
 	{"set -- a b; echo ${!1*}; echo ${!@*}; echo after", "bad substitution\nbad substitution\nafter\n"},
 	// A non-fatal bad substitution fails the command with $? = 1.
 	{"echo ${#+} second; echo after: $?", "bad substitution\nafter: 1\n"},
+	// Indirection through an unset variable: fatal when bare (covered
+	// above), non-fatal with $? = 1 when a default-style op follows.
+	{"echo ${!var:-unset}; echo after: $?", "var: invalid indirect expansion\nafter: 1\n"},
+	{"echo ${!var+set}; echo after: $?", "var: invalid indirect expansion\nafter: 1\n"},
+	// An invalid indirection target name fails with $? = 1.
+	{"x=-3; echo ${!x}; echo after: $?", "-3: invalid variable name\nafter: 1\n"},
 	{"arrayA=(A B C); xx='arrayA[*]'; arrayB=( ${!xx} ); echo \"${#arrayB[*]}:${arrayB[0]}:${arrayB[1]}:${arrayB[2]}\"; arrayB=( \"${!xx}\" ); echo \"${#arrayB[*]}:${arrayB[0]}:${arrayB[1]}:${arrayB[2]}\"; xx='arrayA[@]'; arrayB=( ${!xx} ); echo \"${#arrayB[*]}:${arrayB[0]}:${arrayB[1]}:${arrayB[2]}\"; arrayB=( \"${!xx}\" ); echo \"${#arrayB[*]}:${arrayB[0]}:${arrayB[1]}:${arrayB[2]}\"", "3:A:B:C\n1:A B C::\n3:A:B:C\n3:A:B:C\n"},
 	// Assignment binds lower than the ternary false branch in bash:
 	// these parse like `(cond ? a : a) += 5`, which is not an lvalue.

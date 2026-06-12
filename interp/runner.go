@@ -357,6 +357,7 @@ func (r *Runner) expandErr(err error) {
 	}
 	errMsg := err.Error()
 	var badSubst expand.BadSubstitutionError
+	var indirErr expand.IndirectExpansionError
 	if r.bashCompatErrors && errors.As(err, &badSubst) && badSubst.Node != nil {
 		if src := r.sourceTextRange(badSubst.Node.Pos(), badSubst.Node.End(), false); src != "" {
 			errMsg = src + ": bad substitution"
@@ -408,9 +409,20 @@ func (r *Runner) expandErr(err error) {
 			r.exit.exiting = true
 		}
 		return
-	case strings.HasSuffix(errMsg, "invalid indirect expansion"):
-		// TODO: These errors are treated as fatal by bash.
-		// Make the error type reflect that.
+	case strings.Contains(errMsg, "invalid variable name"):
+		// errors6.sub lines 40-56: bash prints the diagnostic, sets
+		// $? = 1, and keeps running (even in POSIX mode).
+		r.exit.code = 1
+		r.lastExpandExit = exitStatus{code: 1}
+		return
+	case errors.As(err, &indirErr):
+		if indirErr.NonFatal {
+			// `${!var:-def}` with var unset: $? = 1, keep running.
+			r.exit.code = 1
+			r.lastExpandExit = exitStatus{code: 1}
+			return
+		}
+		// Bare `${!var}` with var unset is fatal in bash.
 	default:
 		return // other cases do not exit
 	}

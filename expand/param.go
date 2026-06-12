@@ -220,6 +220,20 @@ type BadSubstitutionError struct {
 
 func (b BadSubstitutionError) Error() string { return "bad substitution" }
 
+// IndirectExpansionError is returned when an indirect expansion ${!var}
+// fails because var itself is unset. Bash treats the failure as fatal
+// unless a default-style operator (:- and friends) follows the
+// indirection, in which case the command fails with $? = 1 and
+// execution continues (errors6.sub lines 50-51).
+type IndirectExpansionError struct {
+	Name     string
+	NonFatal bool
+}
+
+func (i IndirectExpansionError) Error() string {
+	return i.Name + ": invalid indirect expansion"
+}
+
 func bashLengthSliceExpr(pe *syntax.ParamExp, expr syntax.ArithmExpr) syntax.ArithmExpr {
 	if pe.Param == nil || pe.Param.Value != "#" || expr == nil {
 		return expr
@@ -667,12 +681,17 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 		case (name == "@" || name == "*") && !vr.IsSet():
 			return "", nil
 		case !vr.IsSet():
-			if pe.Exp != nil && indirectDefaultOp(pe.Exp.Op) {
-				break
-			}
 			// Bash 5.3 includes the variable name in the message
 			// (`./file: line N: foo: invalid indirect expansion`).
-			return "", fmt.Errorf("%s: invalid indirect expansion", name)
+			if pe.Exp != nil && indirectDefaultOp(pe.Exp.Op) {
+				if !syntax.ValidName(name) {
+					// Unset positional/special parameter: the
+					// default-style operator simply applies.
+					break
+				}
+				return "", IndirectExpansionError{Name: name, NonFatal: true}
+			}
+			return "", IndirectExpansionError{Name: name}
 		case str == "" && pe.Exp != nil && indirectDefaultOp(pe.Exp.Op):
 			break
 		case str == "":
