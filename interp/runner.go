@@ -399,6 +399,15 @@ func (r *Runner) expandErr(err error) {
 			}
 		}
 		return
+	case errors.As(err, &badSubst):
+		// Bash fails the expansion with $? = 1 and keeps running;
+		// POSIX mode makes it fatal (errors6.sub, run 2).
+		r.exit.code = 1
+		r.lastExpandExit = exitStatus{code: 1}
+		if r.opts[optPosix] {
+			r.exit.exiting = true
+		}
+		return
 	case strings.HasSuffix(errMsg, "invalid indirect expansion"):
 		// TODO: These errors are treated as fatal by bash.
 		// Make the error type reflect that.
