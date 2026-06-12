@@ -2952,6 +2952,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 							if arg == "histexpand" && prev != (mode == "-s") {
 								r.histSetExpand(mode == "-s")
 							}
+							if arg == "ignoreeof" {
+								r.setIgnoreEOFOption(mode == "-s")
+							}
 							continue
 						}
 						// For `shopt -p -o NAME` / `shopt -q -o NAME`

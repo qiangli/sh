@@ -648,6 +648,9 @@ func (r *Runner) printLocalVars() {
 	if !ok || overlay == nil {
 		return
 	}
+	if r.localOptsActive() {
+		r.outf("local -\n")
+	}
 	names := make([]string, 0, len(overlay.values))
 	for k := range overlay.values {
 		names = append(names, k)
@@ -1119,6 +1122,20 @@ func (r *Runner) setVarString(name, value string) {
 	r.setVar(name, expand.Variable{Set: true, Kind: expand.String, Str: value})
 }
 
+func (r *Runner) setIgnoreEOFOption(enable bool) {
+	if r.noOpSetState == nil {
+		r.noOpSetState = make(map[string]bool)
+	}
+	r.noOpSetState["ignoreeof"] = enable
+	r.settingIgnoreEOFOption = true
+	if enable {
+		r.setVarString("IGNOREEOF", "10")
+	} else {
+		r.setVarString("IGNOREEOF", "0")
+	}
+	r.settingIgnoreEOFOption = false
+}
+
 func validAssignName(name string) bool {
 	if syntax.ValidName(name) {
 		return true
@@ -1266,6 +1283,15 @@ func (r *Runner) setVar(name string, vr expand.Variable) {
 			r.randomSeed = uint32(seed)
 		}
 		return
+	}
+	if name == "IGNOREEOF" && vr.IsSet() && !r.settingIgnoreEOFOption {
+		if r.noOpSetState == nil {
+			r.noOpSetState = make(map[string]bool)
+		}
+		r.noOpSetState["ignoreeof"] = true
+		if vr.Kind == expand.String && vr.Str == "0" {
+			vr.Str = "10"
+		}
 	}
 	if r.opts[optAllExport] {
 		vr.Exported = true
