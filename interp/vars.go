@@ -846,8 +846,8 @@ func (r *Runner) printLocalVars() {
 // (`-A` associative, `-a` indexed) to stdout in declare -p format,
 // sorted by name. Built-in bash arrays (BASH_ALIASES, BASH_CMDS,
 // BASH_ARGC, …) appear alongside user-declared ones so scripts
-// that probe `declare -A` see them.
-func (r *Runner) printArrayVars(kind string) {
+// that probe `declare -A` see them, unless readonlyOnly filters them.
+func (r *Runner) printArrayVars(kind string, readonlyOnly, readonlyKeyword bool) {
 	want := expand.Associative
 	if kind == "-a" {
 		want = expand.Indexed
@@ -870,6 +870,9 @@ func (r *Runner) printArrayVars(kind string) {
 		}
 	}
 	r.writeEnv.Each(func(name string, vr expand.Variable) bool {
+		if readonlyOnly && !vr.ReadOnly {
+			return true
+		}
 		if vr.Kind == want {
 			add(name)
 		}
@@ -890,6 +893,9 @@ func (r *Runner) printArrayVars(kind string) {
 		if vr.Kind != want {
 			continue
 		}
+		if readonlyOnly && !vr.ReadOnly {
+			continue
+		}
 		isBuiltin := false
 		switch name {
 		case "BASH_ALIASES", "BASH_CMDS", "BASH_ARGC", "BASH_ARGV", "BASH_LINENO", "BASH_SOURCE", "DIRSTACK", "FUNCNAME":
@@ -898,7 +904,23 @@ func (r *Runner) printArrayVars(kind string) {
 		if name == "FUNCNAME" && !vr.Set && len(vr.List) == 0 {
 			isBuiltin = false
 		}
-		r.outf("%s\n", formatDeclareVar(name, vr, isBuiltin))
+		if readonlyKeyword {
+			r.outf("%s\n", formatReadonlyArrayVar(name, vr))
+		} else {
+			r.outf("%s\n", formatDeclareVar(name, vr, isBuiltin))
+		}
+	}
+}
+
+func formatReadonlyArrayVar(name string, vr expand.Variable) string {
+	line := formatDeclareVar(name, vr, false)
+	switch vr.Kind {
+	case expand.Indexed:
+		return strings.Replace(line, "declare -ar ", "readonly -a ", 1)
+	case expand.Associative:
+		return strings.Replace(line, "declare -Ar ", "readonly -A ", 1)
+	default:
+		return line
 	}
 }
 
@@ -1873,6 +1895,18 @@ func (r *Runner) assocAssignKeyLiteral(parts []syntax.WordPart) (string, bool) {
 
 // TODO: make assignVal and [setVar] consistent with the [expand.WriteEnviron] interface
 
+func bashIntegerAssignArithErr(src string, err error) error {
+	msg := err.Error()
+	if !strings.Contains(msg, "must be followed by an expression") {
+		return err
+	}
+	token := strings.TrimSpace(src)
+	if idx := strings.LastIndexAny(src, "+-*/%<>=!&|^?:,"); idx >= 0 {
+		token = strings.TrimSpace(src[idx:])
+	}
+	return fmt.Errorf("arithmetic syntax error: operand expected (error token is %q)", token)
+}
+
 func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign, valType string) (string, expand.Variable) {
 	// `declare -n NAME=target` retargets the nameref itself —
 	// don't dereference the existing nameref first or we'd
@@ -1912,12 +1946,16 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 				if err == nil {
 					return
 				}
+				if r.bashCompatErrors {
+					err = bashIntegerAssignArithErr(s, err)
+				}
 				prefix := r.filename
 				if prefix == "" {
 					prefix = "bashy"
 				}
 				r.expandErr(fmt.Errorf("%s: line %d: %s: %s",
 					prefix, as.Value.Pos().Line(), s, err))
+				r.exit.code = 1
 			}
 			rhs, err := arithEval(s)
 			if err != nil {

@@ -1154,6 +1154,10 @@ var runTests = []runTest{
 		"declare -ar arr=()\n",
 	},
 	{
+		`arr=(x); readonly arr; set -o posix; readonly -a`,
+		"readonly -a arr=([0]=\"x\")\n",
+	},
+	{
 		`declare -r c[100]; declare -p c`,
 		"declare -ar c\n",
 	},
@@ -2629,6 +2633,7 @@ var runTests = []runTest{
 	{"n=0 a='(a[n]=++n)<7&&a[0]'; ((a[0])); echo ${a[@]:1}", "1 2 3 4 5 6 7\n"},
 	{"set -u; echo $((a > 4)); echo after", "a: unbound variable\nexit status 1 #JUSTERR"},
 	{"a=b b=a; echo $((a + 7)); echo after", "b: expression recursion level exceeded (error token is \"b\")\nafter\n"},
+	{"x=4+; declare -i x; x+=7 y=4; echo x=$x y=$y", "bashy: line 1: 4+: 1:2: `+` must be followed by an expression\nx=4+ y=\n"},
 	{"x=8; echo $((--x++)); echo after", "++: assignment requires lvalue (error token is \"++ \")\nafter\n"},
 	{"HOME=/usr/homes/chet; echo \"${HOME:`echo }`}\"; echo after", "arithmetic syntax error: operand expected (error token is \"}\")\nafter\n"},
 	{"set -- a b c d op; echo ${!#}; v=bad-var; echo ${!v}; echo after", "op\nbad-var: invalid variable name\nafter\n"},
@@ -5057,6 +5062,15 @@ hello dog, cat, otter
 		`+ s='always print a decimal point for %e, %E, %f, %F, %g and %G; do not remove trailing zeros for %g and %G'
 + echo 'always print a decimal point for %e, %E, %f, %F, %g and %G; do not remove trailing zeros for %g and %G'
 always print a decimal point for %e, %E, %f, %F, %g and %G; do not remove trailing zeros for %g and %G
+`,
+	},
+	{
+		`set -x; var=42; (( $var )); null=; (( $null )); set +x`,
+		`+ var=42
++ ((  42  ))
+
++ ((    ))
++ set +x
 `,
 	},
 	{

@@ -4737,6 +4737,11 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			rendered = strings.TrimPrefix(rendered, "((")
 			rendered = strings.TrimSuffix(rendered, "))")
 			rendered = strings.TrimSpace(rendered)
+			if w, ok := cm.X.(*syntax.Word); ok && len(w.Parts) == 1 {
+				if pe, ok := w.Parts[0].(*syntax.ParamExp); ok && pe.Dollar.IsValid() {
+					rendered = " " + r.literal(w) + " "
+				}
+			}
 			trace.string("(( ")
 			trace.string(compactArithm(rendered))
 			trace.string(" ))")
@@ -5449,7 +5454,9 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		// array variable of that kind, including bash's built-in
 		// arrays (BASH_ALIASES, BASH_CMDS, BASH_ARGC, …).
 		if !declHadNames && (valType == "-A" || valType == "-a") && declQuery == "" {
-			r.printArrayVars(valType)
+			readonlyOnly := cm.Variant.Value == "readonly" || slices.Contains(modes, "-r")
+			readonlyKeyword := cm.Variant.Value == "readonly" && r.opts[optPosix]
+			r.printArrayVars(valType, readonlyOnly, readonlyKeyword)
 		}
 		// Clear the builtin attribution flags so they don't leak to
 		// subsequent commands.

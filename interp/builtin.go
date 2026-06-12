@@ -3827,6 +3827,10 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			}
 		}
 	case "readonly":
+		if len(args) == 1 && (args[0] == "-a" || args[0] == "-A") {
+			r.printArrayVars(args[0], true, r.opts[optPosix])
+			break
+		}
 		for _, arg := range args {
 			eqIdx := strings.IndexByte(arg, '=')
 			if eqIdx >= 0 {
