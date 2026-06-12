@@ -3931,6 +3931,12 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	},
 	{"readonly foo=bar; export foo; echo $foo", "bar\n"},
 	{"readonly foo=bar; readonly bar=foo; export foo bar; echo $bar", "foo\n"},
+	// Assigning to a readonly variable via the export/readonly
+	// builtins fails with status 1 and keeps the old value.
+	{"readonly v=a; command export v=foo; echo after: $?; echo $v", "v: readonly variable\nafter: 1\na\n"},
+	{"readonly v=a; command readonly v=foo; echo after: $?; echo $v", "v: readonly variable\nafter: 1\na\n"},
+	// POSIX mode implies shift_verbose.
+	{"set -o posix; command shift 2; echo after: $?", "shift: 2: shift count out of range\nafter: 1\n"},
 	{"readonly -p | grep '^declare -r SHELLOPTS='", "declare -r SHELLOPTS=\"braceexpand:hashall:interactive-comments\"\n"},
 	{
 		"a=b; a=c; echo $a; readonly a; a=d",
@@ -5380,6 +5386,28 @@ func TestBashCompatMalformedLengthSubstitution(t *testing.T) {
 			"./more-exp.tests: line 5: ${#+}: bad substitution\n"+
 			"./more-exp.tests: line 6: ${#1xyz}: bad substitution\n"+
 			"./more-exp.tests: line 7: #: %: arithmetic syntax error: operand expected (error token is \"%\")\n"))
+}
+
+func TestBashCompatEvalUnclosedParenLineRebase(t *testing.T) {
+	// The parser stamps "from `(' command on line N" with the line
+	// inside the eval'd string; bash counts from the top of the
+	// enclosing script (errors8.sub line 6).
+	src := "\n\n\n\n\neval '( '\ntrue\n"
+	file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(src), "./errors8.sub")
+	qt.Assert(t, qt.IsNil(err))
+
+	var cb bytes.Buffer
+	r, err := interp.New(
+		interp.StdIO(nil, &cb, &cb),
+		interp.WithBashCompatErrors(true),
+		interp.WithBashSource([]byte(src)),
+	)
+	qt.Assert(t, qt.IsNil(err))
+
+	err = r.Run(context.Background(), file)
+	qt.Assert(t, qt.IsNil(err))
+	qt.Assert(t, qt.Equals(cb.String(),
+		"./errors8.sub: eval: line 7: syntax error: unexpected end of file from `(' command on line 6\n"))
 }
 
 func TestBashCompatTestVarSetSplitArrayRef(t *testing.T) {
