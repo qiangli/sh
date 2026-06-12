@@ -2613,9 +2613,13 @@ func (cfg *Config) substWordFields(pe *syntax.ParamExp) ([][]fieldPart, bool, er
 		}
 		assignVal := ""
 		if paramExpWordHasAtOrStar(pe.Exp.Word) {
-			assignVal, err = LiteralForAssign(cfg, pe.Exp.Word)
-			if err != nil {
-				return nil, false, err
+			if val, ok := cfg.simpleAtStarNullIFSAssign(pe.Exp.Word); ok {
+				assignVal = val
+			} else {
+				assignVal, err = LiteralForAssign(cfg, pe.Exp.Word)
+				if err != nil {
+					return nil, false, err
+				}
 			}
 		} else {
 			var err error
@@ -2768,6 +2772,28 @@ func (cfg *Config) substWordPartFields(parts []syntax.WordPart) ([][]fieldPart, 
 				curField = append(curField, part)
 			}
 		case *syntax.ParamExp:
+			if elems, allOp, ok, err := cfg.substWordPartAllElemValues(part); err != nil {
+				return nil, err
+			} else if ok {
+				if allOp == "@" || (allOp == "*" && cfg.ifs == "") {
+					switch {
+					case cfg.ifs == "":
+						for i, elem := range elems {
+							if i > 0 {
+								flush()
+							}
+							curField = append(curField, fieldPart{val: elem})
+						}
+					case !cfg.ifsSet || cfg.ifs != " \t\n":
+						curField = append(curField, fieldPart{quote: quoteSingle, val: strings.Join(elems, " ")})
+					default:
+						splitAdd(strings.Join(elems, " "))
+					}
+				} else {
+					splitAdd(cfg.ifsJoin(elems))
+				}
+				continue
+			}
 			if !part.Excl && part.Exp == nil && part.Repl == nil &&
 				(part.Param.Value == "@" || part.Param.Value == "*") {
 				elems, err := cfg.sliceElems(part, cfg.Env.Get(part.Param.Value).List, true)
@@ -2813,6 +2839,47 @@ func (cfg *Config) substWordPartFields(parts []syntax.WordPart) ([][]fieldPart, 
 	return fields, nil
 }
 
+func (cfg *Config) substWordPartAllElemValues(pe *syntax.ParamExp) (elems []string, allOp string, ok bool, err error) {
+	if pe == nil || pe.Excl || pe.Exp != nil || pe.Repl != nil || pe.Length || pe.Width || pe.IsSet {
+		return nil, "", false, nil
+	}
+	switch pe.Param.Value {
+	case "@", "*":
+		return nil, "", false, nil
+	}
+	switch nodeLit(pe.Index) {
+	case "@":
+		vr := cfg.Env.Get(pe.Param.Value)
+		switch vr.Kind {
+		case Indexed:
+			elems, err := cfg.sliceIndexedElems(pe, vr, false)
+			return elems, "@", true, err
+		case Associative:
+			keys := AssocKeysInBashOrder(vr.Map)
+			elems := make([]string, len(keys))
+			for i, k := range keys {
+				elems[i] = vr.Map[k]
+			}
+			return elems, "@", true, nil
+		}
+	case "*":
+		vr := cfg.Env.Get(pe.Param.Value)
+		switch vr.Kind {
+		case Indexed:
+			elems, err := cfg.sliceIndexedElems(pe, vr, false)
+			return elems, "*", true, err
+		case Associative:
+			keys := AssocKeysInBashOrder(vr.Map)
+			elems := make([]string, len(keys))
+			for i, k := range keys {
+				elems[i] = vr.Map[k]
+			}
+			return elems, "*", true, nil
+		}
+	}
+	return nil, "", false, nil
+}
+
 func (cfg *Config) simpleAtStarNullIFSAssign(word *syntax.Word) (string, bool) {
 	if word == nil || len(word.Parts) != 1 {
 		return "", false
@@ -2829,15 +2896,23 @@ func (cfg *Config) simpleAtStarNullIFSAssign(word *syntax.Word) (string, bool) {
 	if pe == nil || pe.Excl || pe.Exp != nil || pe.Repl != nil || pe.Length || pe.Width || pe.IsSet {
 		return "", false
 	}
-	if pe.Param.Value != "@" && pe.Param.Value != "*" {
-		return "", false
-	}
-	elems, err := cfg.sliceElems(pe, cfg.Env.Get(pe.Param.Value).List, true)
-	if err != nil {
-		return "", false
-	}
-	if pe.Param.Value == "@" {
+	switch pe.Param.Value {
+	case "@":
+		elems, err := cfg.sliceElems(pe, cfg.Env.Get(pe.Param.Value).List, true)
+		if err != nil {
+			return "", false
+		}
 		return strings.Join(elems, " "), true
+	case "*":
+		elems, err := cfg.sliceElems(pe, cfg.Env.Get(pe.Param.Value).List, true)
+		if err != nil {
+			return "", false
+		}
+		return cfg.ifsJoin(elems), true
+	}
+	elems, _, ok, err := cfg.substWordPartAllElemValues(pe)
+	if err != nil || !ok {
+		return "", false
 	}
 	return cfg.ifsJoin(elems), true
 }
@@ -2869,7 +2944,8 @@ func paramExpWordHasAtOrStar(word *syntax.Word) bool {
 		switch part := part.(type) {
 		case *syntax.ParamExp:
 			if !part.Excl && part.Exp == nil && part.Repl == nil &&
-				(part.Param.Value == "@" || part.Param.Value == "*") {
+				(part.Param.Value == "@" || part.Param.Value == "*" ||
+					nodeLit(part.Index) == "@" || nodeLit(part.Index) == "*") {
 				return true
 			}
 			if part.Exp != nil && paramExpWordHasAtOrStar(part.Exp.Word) {

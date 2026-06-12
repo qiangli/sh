@@ -731,6 +731,27 @@ func arithEscapedQuotedIndex(expr syntax.ArithmExpr) (int, bool) {
 	return 0, true
 }
 
+func (cfg *Config) arithLetEscapedQuotedIndex(expr syntax.ArithmExpr) (string, bool, error) {
+	if !cfg.LetArithmetic {
+		return "", false, nil
+	}
+	word, ok := expr.(*syntax.Word)
+	if !ok {
+		return "", false, nil
+	}
+	text, err := Literal(cfg, word)
+	if err != nil {
+		return "", false, err
+	}
+	switch {
+	case strings.HasPrefix(text, `\"`) && strings.HasSuffix(text, `\"`):
+		return strings.TrimSuffix(strings.TrimPrefix(text, `\"`), `\"`), true, nil
+	case strings.HasPrefix(text, `"`) && strings.HasSuffix(text, `"`):
+		return strings.TrimSuffix(strings.TrimPrefix(text, `"`), `"`), true, nil
+	}
+	return "", false, nil
+}
+
 func arithEmptyQuotedIndex(expr syntax.ArithmExpr) bool {
 	word, ok := expr.(*syntax.Word)
 	if !ok || len(word.Parts) != 1 {
@@ -796,7 +817,16 @@ func (cfg *Config) resolveAritLvalue(lval arithLvalue) (arithLvalue, error) {
 		if !ok {
 			return lval, fmt.Errorf("bad array subscript")
 		}
-		key, err := Literal(cfg, word)
+		key, quoted, err := "", false, error(nil)
+		if !lval.fromString {
+			key, quoted, err = cfg.arithLetEscapedQuotedIndex(lval.index)
+		}
+		if err != nil {
+			return lval, err
+		}
+		if !quoted {
+			key, err = Literal(cfg, word)
+		}
 		if err != nil {
 			return lval, err
 		}
@@ -805,10 +835,19 @@ func (cfg *Config) resolveAritLvalue(lval arithLvalue) (arithLvalue, error) {
 		lval.indexSet = true
 		return lval, nil
 	}
-	if index, ok := arithEscapedQuotedIndex(lval.index); ok {
+	if index, ok := arithEscapedQuotedIndex(lval.index); ok && !lval.fromString {
 		lval.indexValue = index
 		lval.indexSet = true
 		return lval, nil
+	}
+	if !lval.fromString {
+		if _, ok, err := cfg.arithLetEscapedQuotedIndex(lval.index); err != nil {
+			return lval, err
+		} else if ok {
+			lval.indexValue = 0
+			lval.indexSet = true
+			return lval, nil
+		}
 	}
 	if arithEmptyQuotedIndex(lval.index) && !lval.fromString && !cfg.LetArithmetic {
 		return lval, fmt.Errorf("`%s[]': not a valid identifier", lval.name)

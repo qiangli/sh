@@ -415,6 +415,65 @@ func TestFieldsParamExpAssignAtNullIFSPosix(t *testing.T) {
 	}
 }
 
+func TestFieldsParamExpArrayStarSubstWord(t *testing.T) {
+	tests := []struct {
+		name      string
+		ifs       string
+		src       string
+		want      []string
+		wantVar   string
+		wantVarOK bool
+	}{
+		{
+			name: "colon default",
+			ifs:  ":",
+			src:  `echo ${v-${a[*]}}`,
+			want: []string{"abc", "def ghi", "jkl"},
+		},
+		{
+			name:    "colon assign",
+			ifs:     ":",
+			src:     `echo ${v=${a[*]}}`,
+			want:    []string{"abc", "def ghi", "jkl"},
+			wantVar: "abc:def ghi:jkl", wantVarOK: true,
+		},
+		{
+			name: "empty default",
+			ifs:  "",
+			src:  `echo ${v-${a[*]}}`,
+			want: []string{"abc", "def ghi", "jkl"},
+		},
+		{
+			name:    "empty assign",
+			ifs:     "",
+			src:     `echo ${v=${a[*]}}`,
+			want:    []string{"abcdef ghijkl"},
+			wantVar: "abcdef ghijkl", wantVarOK: true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &Config{Env: testEnv{
+				"IFS": {Set: true, Kind: String, Str: tc.ifs},
+				"a":   {Set: true, Kind: Indexed, List: []string{"abc", "def ghi", "jkl"}},
+			}}
+			word := parseCallArg(t, tc.src, 1)
+			got, err := Fields(cfg, word)
+			if err != nil {
+				t.Fatalf("did not want error, got %v", err)
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("wanted %q, got %q", tc.want, got)
+			}
+			if tc.wantVarOK {
+				if v := cfg.Env.Get("v").String(); v != tc.wantVar {
+					t.Fatalf("v = %q, want %q", v, tc.wantVar)
+				}
+			}
+		})
+	}
+}
+
 func TestFieldsParamExpAlternatePreservesQuotedFields(t *testing.T) {
 	cfg := &Config{Env: ListEnviron("IFS= \t\n", "u=x")}
 	tests := []struct {

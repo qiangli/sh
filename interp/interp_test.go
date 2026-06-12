@@ -2690,6 +2690,10 @@ var runTests = []runTest{
 	// indexed arrays and misses every associative array key.
 	{"b[0]=4; echo ${b[   ]}; echo after: $?", "4\nafter: 0\n"},
 	{"typeset -A v; v[0]=one; echo ${v[   ]}; echo after: $?", "\nafter: 0\n"},
+	{"a[0]=0 a[1]=1; a[ ]=10; declare -p a; a[]=bad; echo after: $?", "declare -a a=([0]=\"10\" [1]=\"1\")\na[]: bad array subscript\nafter: 1\n #JUSTERR"},
+	{"a[0]=0 a[1]=1; (( a[ ]=10 )); declare -p a; let 'a[ ]=11'; declare -p a; v=' '; let \"a[\\\"$v\\\"]=12\"; declare -p a", "declare -a a=([0]=\"10\" [1]=\"1\")\ndeclare -a a=([0]=\"11\" [1]=\"1\")\ndeclare -a a=([0]=\"12\" [1]=\"1\")\n"},
+	{"declare -A a; a[0]=0 a[1]=1; v=' '; let \"a[\\\"$v\\\"]=13\"; declare -p a", "declare -A a=([1]=\"1\" [0]=\"0\" [\" \"]=\"13\" )\n"},
+	{"shopt -s assoc_expand_once; declare -A a; a[0]=0 a[1]=1; let \"a[\\\" \\\"]=11\"; v=' '; let \"a[\\\"$v\\\"]=13\"; declare -p a", "declare -A a=([1]=\"1\" [0]=\"0\" [\" \"]=\"13\" )\n"},
 	{"arrayA=(A B C); xx='arrayA[*]'; arrayB=( ${!xx} ); echo \"${#arrayB[*]}:${arrayB[0]}:${arrayB[1]}:${arrayB[2]}\"; arrayB=( \"${!xx}\" ); echo \"${#arrayB[*]}:${arrayB[0]}:${arrayB[1]}:${arrayB[2]}\"; xx='arrayA[@]'; arrayB=( ${!xx} ); echo \"${#arrayB[*]}:${arrayB[0]}:${arrayB[1]}:${arrayB[2]}\"; arrayB=( \"${!xx}\" ); echo \"${#arrayB[*]}:${arrayB[0]}:${arrayB[1]}:${arrayB[2]}\"", "3:A:B:C\n1:A B C::\n3:A:B:C\n3:A:B:C\n"},
 	// Assignment binds lower than the ternary false branch in bash:
 	// these parse like `(cond ? a : a) += 5`, which is not an lvalue.
@@ -3172,6 +3176,10 @@ var runTests = []runTest{
 	{
 		"s=abc; unset 's[1]'; echo status:$?; echo $s",
 		"unset: s: not an array variable\nstatus:1\nabc\n #JUSTERR",
+	},
+	{
+		"s=abc; unset 's[0]'; echo status:$?; echo ${s-unset}",
+		"status:0\nunset\n",
 	},
 	{
 		"f() { local a=1; echo $a; unset a; echo $a; }; f",

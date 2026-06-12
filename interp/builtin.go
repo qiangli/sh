@@ -185,6 +185,10 @@ func validBuiltinAssignName(name string) bool {
 func (r *Runner) unsetBuiltinArrayElem(name, idx string) bool {
 	vr := r.lookupVar(name)
 	if vr.Kind == expand.String && vr.IsSet() {
+		if n, err := r.arithFromString(idx); err == nil && n == 0 {
+			r.delVar(name)
+			return true
+		}
 		r.errf("%sunset: %s: not an array variable\n", r.bashErrPrefix(r.curStmtPos), name)
 		return false
 	}
@@ -202,6 +206,10 @@ func (r *Runner) unsetBuiltinArrayElem(name, idx string) bool {
 func (r *Runner) unsetStringArrayElem(name, idx string) bool {
 	vr := r.lookupVar(name)
 	if vr.Kind == expand.String && vr.IsSet() {
+		if n, err := r.arithFromString(idx); err == nil && n == 0 {
+			r.delVar(name)
+			return true
+		}
 		r.errf("%sunset: %s: not an array variable\n", r.bashErrPrefix(r.curStmtPos), name)
 		return false
 	}

@@ -563,8 +563,13 @@ func (r *Runner) letArithm(expr syntax.ArithmExpr) int {
 		if prefix == "" {
 			prefix = "bashy"
 		}
-		err = fmt.Errorf("%s: line %d: let: %s: %s",
-			prefix, expr.Pos().Line(), exprText, err)
+		if msg := err.Error(); strings.HasPrefix(msg, `"`) &&
+			strings.Contains(msg, ": arithmetic syntax error") {
+			err = fmt.Errorf("%s: line %d: %s", prefix, expr.Pos().Line(), msg)
+		} else {
+			err = fmt.Errorf("%s: line %d: let: %s: %s",
+				prefix, expr.Pos().Line(), exprText, err)
+		}
 	}
 	r.lastArithErr = err
 	r.expandErr(err)
@@ -611,6 +616,16 @@ func (r *Runner) assocExpandOnceLetQuotedIndex(expr syntax.ArithmExpr) (string, 
 		lvalue = r.literal(expr)
 		if eq := strings.IndexByte(lvalue, '='); eq >= 0 {
 			lvalue = lvalue[:eq]
+			open := strings.IndexByte(lvalue, '[')
+			close := strings.LastIndexByte(lvalue, ']')
+			if open <= 0 || close <= open+1 || close != len(lvalue)-1 {
+				return "", false
+			}
+			sub := lvalue[open+1 : close]
+			if sub == `""` {
+				return "", true
+			}
+			return "", false
 		}
 	}
 	if lvalue == "" {
