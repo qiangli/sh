@@ -2456,12 +2456,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 
 		// Resolve the reader: `-u N` opens fd N from the runner's
 		// fd table; otherwise we keep r.stdin. Swap r.stdin so
-		// readLine (which talks to r.stdin directly) sees the right
-		// source. With `-t T` against a non-deadline-able file
-		// (FIFOs without O_NONBLOCK), SetReadDeadline silently
-		// fails and the read would block forever — skip the swap
-		// in that case so the existing `r.stdin` path (which is
-		// known to be deadline-able) still bounds the wait.
+		// readLine sees the requested source.
 		var savedStdin *os.File
 		stdinSwapped := false
 		if readFD >= 0 {
@@ -2475,20 +2470,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				if !ok {
 					return failf(2, "read: %d: invalid file descriptor: Bad file descriptor\n", readFD)
 				}
-				canSwap := true
-				if timeout > 0 {
-					// Probe whether SetReadDeadline is honored.
-					if err := f.SetReadDeadline(time.Now().Add(time.Hour)); err != nil {
-						canSwap = false
-					} else {
-						f.SetReadDeadline(time.Time{})
-					}
-				}
-				if canSwap {
-					savedStdin = r.stdin
-					r.stdin = f
-					stdinSwapped = true
-				}
+				savedStdin = r.stdin
+				r.stdin = f
+				stdinSwapped = true
 			}
 		}
 		defer func() {
@@ -2505,6 +2489,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		}
 
 		stdin := r.stdin
+		var input io.Reader = stdin
 		clearReadVars := func() {
 			if readArray {
 				arrayName := shellReplyVar
@@ -2524,11 +2509,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		if invalidTimeoutStatus != 0 {
 			r.errf("%sread: %s: invalid timeout specification\n",
 				r.bashErrPrefix(r.curStmtPos), timeoutSpec)
-			if r.stdinTTYFallback {
-				exit.code = 1
-			} else {
-				exit.code = invalidTimeoutStatus
-			}
+			exit.code = 1
 			return exit
 		}
 		if prompt != "" {
@@ -2541,7 +2522,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				if nstrict {
 					// `-N`: read EXACTLY nchars bytes, never honoring the
 					// delimiter.
-					n, readErr := io.ReadFull(stdin, buf)
+					n, readErr := io.ReadFull(input, buf)
 					line = buf[:n]
 					if readErr == io.ErrUnexpectedEOF {
 						readErr = io.EOF
@@ -2559,7 +2540,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					delimByte = delim[0]
 				}
 				for chars := 0; chars < nchars; {
-					n, readErr := stdin.Read(one)
+					n, readErr := input.Read(one)
 					if n > 0 {
 						if one[0] == delimByte {
 							break
@@ -2591,11 +2572,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			if len(delim) > 0 {
 				delimByte = delim[0]
 			}
-			return r.readLine(readCtx, raw, delimByte)
-		}
-		type readResult struct {
-			line []byte
-			err  error
+			return r.readLineFrom(readCtx, input, raw, delimByte)
 		}
 		isReadTimeout := func(err error) bool {
 			return timeout > 0 && (errors.Is(readCtx.Err(), context.DeadlineExceeded) ||
@@ -2604,6 +2581,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		var line []byte
 		var err error
 		if timeout > 0 {
+			if r.stdinTTYFallback || r.stdinDevTTY {
+				clearReadVars()
+				exit.code = 142
+				return exit
+			}
 			deadline := time.Now().Add(timeout)
 			cancelGrace := func() {}
 			if stdin != nil && timeout < 10*time.Millisecond && fdReadableNow(stdin) {
@@ -2618,53 +2600,10 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				cancelGrace()
 			} else {
 				cancelGrace()
-				stopc := make(chan struct{})
-				stop := context.AfterFunc(readCtx, func() {
-					if stdin != nil {
-						stdin.SetReadDeadline(time.Now())
-					}
-					close(stopc)
-				})
-				resetDeadline := func() {
-					if !stop() {
-						<-stopc
-						if stdin != nil {
-							stdin.SetReadDeadline(time.Time{})
-						}
-					}
+				if stdin != nil {
+					input = &timeoutFileReader{ctx: readCtx, file: stdin, deadline: deadline}
 				}
-				resultc := make(chan readResult, 1)
-				go func() {
-					line, err := readInput()
-					if errors.Is(readCtx.Err(), context.DeadlineExceeded) && stdin != nil {
-						stdin.SetReadDeadline(time.Time{})
-					}
-					resultc <- readResult{line, err}
-				}()
-				select {
-				case result := <-resultc:
-					resetDeadline()
-					line, err = result.line, result.err
-				case <-readCtx.Done():
-					gotResult := false
-					select {
-					case result := <-resultc:
-						resetDeadline()
-						line, err = result.line, result.err
-						gotResult = true
-					default:
-					}
-					if gotResult {
-						break
-					}
-					if errors.Is(readCtx.Err(), context.DeadlineExceeded) {
-						clearReadVars()
-						exit.code = 142
-						return exit
-					}
-					resetDeadline()
-					err = readCtx.Err()
-				}
+				line, err = readInput()
 			}
 		} else {
 			line, err = readInput()
@@ -5035,24 +4974,34 @@ func (r *Runner) readLine(ctx context.Context, raw bool, delim byte) ([]byte, er
 	if r.stdin == nil {
 		return nil, errors.New("interp: can't read, there's no stdin")
 	}
-	stdin := r.stdin
+	return r.readLineFrom(ctx, r.stdin, raw, delim)
+}
 
+func (r *Runner) readLineFrom(ctx context.Context, stdin io.Reader, raw bool, delim byte) ([]byte, error) {
 	var line []byte
 	esc := false
 
-	stopc := make(chan struct{})
-	stop := context.AfterFunc(ctx, func() {
-		stdin.SetReadDeadline(time.Now())
-		close(stopc)
-	})
-	defer func() {
-		if !stop() {
-			// The AfterFunc was started.
-			// Wait for it to complete, and reset the file's deadline.
-			<-stopc
-			stdin.SetReadDeadline(time.Time{})
+	if file, ok := stdin.(*os.File); ok {
+		stopc := make(chan struct{})
+		stop := context.AfterFunc(ctx, func() {
+			file.SetReadDeadline(time.Now())
+			close(stopc)
+		})
+		defer func() {
+			if !stop() {
+				// The AfterFunc was started.
+				// Wait for it to complete, and reset the file's deadline.
+				<-stopc
+				file.SetReadDeadline(time.Time{})
+			}
+		}()
+	} else {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
 		}
-	}()
+	}
 	for {
 		var buf [1]byte
 		n, err := stdin.Read(buf[:])

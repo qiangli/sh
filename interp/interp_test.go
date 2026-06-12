@@ -4649,7 +4649,7 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	},
 	{
 		"read -t -1 x",
-		"read: -1: invalid timeout specification\nexit status 2 #JUSTERR",
+		"read: -1: invalid timeout specification\nexit status 1 #JUSTERR",
 	},
 	{
 		"read -t 5 x <<< hello; echo $x",
@@ -6223,6 +6223,40 @@ func TestReadTimeoutBlockedStdin(t *testing.T) {
 	}
 	if dur := time.Since(now); dur > time.Second {
 		t.Fatalf("read -t took too long to time out: %v", dur)
+	}
+}
+
+func TestReadTimeoutFromFdWithoutDeadline(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mkfifo is not available on windows")
+	}
+	t.Parallel()
+
+	file := parse(t, nil, `
+mkfifo p
+exec 9<>p
+printf 'from-fd\n' >&9
+read -u 9 -t 0.1 x
+printf '%s:%s\n' "$?" "$x"
+read -u 9 -t 0.001 y
+printf '%s:%s\n' "$?" "${y:-empty}"
+`)
+	var stdout bytes.Buffer
+	r, _ := interp.New(
+		interp.Dir(t.TempDir()),
+		interp.StdIO(strings.NewReader("from-stdin\n"), &stdout, nil),
+	)
+	ctx, cancel := context.WithTimeout(context.Background(), runnerRunTimeout)
+	defer cancel()
+	start := time.Now()
+	if err := r.Run(ctx, file); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := stdout.String(), "0:from-fd\n142:empty\n"; got != want {
+		t.Fatalf("read -u with timeout read the wrong input:\nwant: %q\ngot:  %q", want, got)
+	}
+	if dur := time.Since(start); dur > time.Second {
+		t.Fatalf("read -u with timeout took too long: %v", dur)
 	}
 }
 

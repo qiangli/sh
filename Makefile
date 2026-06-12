@@ -76,7 +76,17 @@ test-bash: build test-bash-helpers
 					printf "  SKIP  %s\n" "$$name"; \
 					continue ;; \
 			esac; \
-			perl -e 'setpgrp; exec @ARGV' $$THIS_SH ./$$test_file >$$BASH_TSTRAW 2>&1 & \
+			test_tmp=; \
+			if [ "$$name" = "read" ]; then \
+				test_tmp=$${TMPDIR:-/tmp}/bashy-read-$$$$; \
+				rm -rf "$$test_tmp"; \
+				mkdir -p "$$test_tmp"; \
+			fi; \
+			if [ -n "$$test_tmp" ]; then \
+				TMPDIR=$$test_tmp perl -e 'setpgrp; exec @ARGV' $$THIS_SH ./$$test_file >$$BASH_TSTRAW 2>&1 & \
+			else \
+				perl -e 'setpgrp; exec @ARGV' $$THIS_SH ./$$test_file >$$BASH_TSTRAW 2>&1 & \
+			fi; \
 			test_pid=$$!; \
 			( sleep $(BASH_TEST_TIMEOUT) && kill -KILL -- -$$test_pid 2>/dev/null ) & \
 			timer_pid=$$!; \
@@ -106,6 +116,12 @@ test-bash: build test-bash-helpers
 			else \
 				failed=$$((failed + 1)); \
 				printf "  FAIL  %s\n" "$$name"; \
+				if [ "$$name" = "read" ]; then \
+					diff -u $$right_file $$BASH_TSTOUT 2>/dev/null | sed -n '1,120p'; \
+				fi; \
+			fi; \
+			if [ -n "$$test_tmp" ]; then \
+				rm -rf "$$test_tmp"; \
 			fi; \
 			rm -f $$BASH_TSTOUT $$BASH_TSTRAW; \
 		done; \

@@ -387,6 +387,14 @@ var modCases = []struct {
 		want: "0\n",
 	},
 	{
+		name: "OpenDevTTYFallbackReadTimeout",
+		opts: []interp.RunnerOption{
+			interp.OpenHandler(unavailableTTYOpen),
+		},
+		src:  "a=4; read -t 0.000001 a < /dev/tty; echo $? ${a:-unset}",
+		want: "142 unset\n",
+	},
+	{
 		name: "CallReplaceWithBlank",
 		opts: []interp.RunnerOption{
 			interp.OpenHandler(blocklistNondevOpen),
