@@ -1672,6 +1672,18 @@ func literalBadIndexedAssignSubscript(index syntax.ArithmExpr) (string, bool) {
 	}
 }
 
+func escapedQuotedAssignIndex(expr syntax.ArithmExpr) (string, bool) {
+	word, ok := expr.(*syntax.Word)
+	if !ok || len(word.Parts) != 1 {
+		return "", false
+	}
+	lit, ok := word.Parts[0].(*syntax.Lit)
+	if !ok || !strings.HasPrefix(lit.Value, `\"`) || !strings.HasSuffix(lit.Value, `\"`) {
+		return "", false
+	}
+	return strings.TrimSuffix(strings.TrimPrefix(lit.Value, `\"`), `\"`), true
+}
+
 func (r *Runner) setVarWithIndex(prev expand.Variable, name string, index syntax.ArithmExpr, vr expand.Variable) {
 	if vr.Kind == expand.String && index == nil {
 		// When assigning a string to an array, fall back to the
@@ -1768,7 +1780,18 @@ func (r *Runner) setVarWithIndex(prev expand.Variable, name string, index syntax
 		r.setVar(name, prev)
 		return
 	}
+	if text, ok := escapedQuotedAssignIndex(index); ok {
+		quoted := `"` + text + `"`
+		r.errf("%s%s: arithmetic syntax error: operand expected (error token is \"%s\")\n",
+			r.bashErrPrefix(r.curStmtPos), quoted, quoted)
+		r.exit.code = 1
+		return
+	}
 	k := r.arithm(index)
+	if r.lastArithErr != nil {
+		r.exit.code = 1
+		return
+	}
 	if k < 0 {
 		// Bash 5.3 accepts negative indices as offsets from the
 		// end of the array: `a[-1]` targets the last element.

@@ -384,6 +384,14 @@ func (r *Runner) expandErr(err error) {
 	if strings.Contains(errMsg, "arithmetic syntax error: invalid arithmetic operator") {
 		r.lastExpandExit = exitStatus{code: 1}
 	}
+	if strings.Contains(errMsg, `operand expected (error token is """ ")`) {
+		r.exit.code = 1
+		r.exit.exiting = true
+		if !r.opts[optPosix] {
+			r.exit.discarding = true
+			r.discardNextStmt = true
+		}
+	}
 	switch {
 	case errors.As(err, &expand.UnsetParameterError{}):
 	case strings.Contains(errMsg, "readonly variable"):
@@ -484,6 +492,26 @@ func (r *Runner) arithm(expr syntax.ArithmExpr) int {
 }
 
 func (r *Runner) letArithm(expr syntax.ArithmExpr) int {
+	if exprText, ok := r.letEmptyQuotedBinary(expr); ok {
+		r.errf("%slet: %s: arithmetic syntax error: operand expected (error token is \"\"\"\")\n",
+			r.bashErrPrefix(expr.Pos()), exprText)
+		r.exit.code = 1
+		r.lastArithErr = fmt.Errorf("let: %s: arithmetic syntax error: operand expected (error token is \"\"\"\")", exprText)
+		return 0
+	}
+	if text, ok := r.assocExpandOnceLetQuotedIndex(expr); ok {
+		quoted := `"` + text + `"`
+		err := fmt.Errorf("%s: arithmetic syntax error: operand expected (error token is \"%s\")",
+			quoted, quoted)
+		r.lastArithErr = err
+		r.expandErr(err)
+		r.exit.code = 1
+		r.exit.exiting = true
+		if !r.opts[optPosix] {
+			r.exit.discarding = true
+		}
+		return 0
+	}
 	if exprText, token, ok := r.malformedLetAssocSubscript(expr); ok {
 		prefix := r.filename
 		if prefix == "" {
@@ -495,7 +523,10 @@ func (r *Runner) letArithm(expr syntax.ArithmExpr) int {
 		r.expandErr(err)
 		return 0
 	}
+	prevLetArithmetic := r.ecfg.LetArithmetic
+	r.ecfg.LetArithmetic = true
 	n, err := expand.Arithm(r.ecfg, expr)
+	r.ecfg.LetArithmetic = prevLetArithmetic
 	exprTextOverride := ""
 	if arithErr, arithExpr := innermostArithmError(err); arithErr != nil {
 		if arithExpr != nil {
@@ -515,6 +546,19 @@ func (r *Runner) letArithm(expr syntax.ArithmExpr) int {
 		if w, ok := expr.(*syntax.Word); ok && exprTextOverride == "" {
 			exprText = r.literal(w)
 		}
+		if idx := strings.Index(exprText, ": let: "); idx >= 0 {
+			exprText = exprText[idx+len(": let: "):]
+		}
+		if inner := err.Error(); strings.Contains(inner, ": let: ") {
+			if idx := strings.Index(inner, ": let: "); idx >= 0 {
+				rest := inner[idx+len(": let: "):]
+				if strings.HasPrefix(rest, exprText+": ") {
+					err = fmt.Errorf("%s", strings.TrimPrefix(rest, exprText+": "))
+				} else if j := strings.Index(rest, ": "); j >= 0 {
+					err = fmt.Errorf("%s", rest[j+len(": "):])
+				}
+			}
+		}
 		prefix := r.filename
 		if prefix == "" {
 			prefix = "bashy"
@@ -525,6 +569,76 @@ func (r *Runner) letArithm(expr syntax.ArithmExpr) int {
 	r.lastArithErr = err
 	r.expandErr(err)
 	return n
+}
+
+func (r *Runner) letEmptyQuotedBinary(expr syntax.ArithmExpr) (string, bool) {
+	exprText := ""
+	switch expr := expr.(type) {
+	case *syntax.Word:
+		exprText = r.literal(expr)
+	case *syntax.BinaryArithm:
+		if expr.Op == syntax.Sub && arithEmptyDoubleQuotedWord(expr.Y) {
+			exprText = r.arithmSourceText(expr, false)
+			if exprText == "" {
+				exprText = printArithmExpr(expr)
+			}
+		}
+	}
+	if strings.Contains(exprText, `- ""`) {
+		return exprText, true
+	}
+	return "", false
+}
+
+func (r *Runner) assocExpandOnceLetQuotedIndex(expr syntax.ArithmExpr) (string, bool) {
+	opt, _ := r.bashOptByName("assoc_expand_once")
+	if opt == nil || !*opt {
+		return "", false
+	}
+	lvalue := ""
+	switch expr := expr.(type) {
+	case *syntax.BinaryArithm:
+		switch expr.Op {
+		case syntax.Assgn, syntax.AddAssgn, syntax.SubAssgn,
+			syntax.MulAssgn, syntax.QuoAssgn, syntax.RemAssgn,
+			syntax.AndAssgn, syntax.OrAssgn, syntax.XorAssgn,
+			syntax.ShlAssgn, syntax.ShrAssgn:
+			if w, ok := expr.X.(*syntax.Word); ok {
+				lvalue = r.literal(w)
+			}
+		}
+	case *syntax.Word:
+		lvalue = r.literal(expr)
+		if eq := strings.IndexByte(lvalue, '='); eq >= 0 {
+			lvalue = lvalue[:eq]
+		}
+	}
+	if lvalue == "" {
+		return "", false
+	}
+	open := strings.IndexByte(lvalue, '[')
+	close := strings.LastIndexByte(lvalue, ']')
+	if open <= 0 || close <= open+1 || close != len(lvalue)-1 {
+		return "", false
+	}
+	sub := lvalue[open+1 : close]
+	if len(sub) < 2 || sub[0] != '"' || sub[len(sub)-1] != '"' {
+		return "", false
+	}
+	text := sub[1 : len(sub)-1]
+	if text == "" || strings.TrimSpace(text) == "" {
+		return text, true
+	}
+	return "", false
+}
+
+func arithEmptyDoubleQuotedWord(expr syntax.ArithmExpr) bool {
+	word, ok := expr.(*syntax.Word)
+	if !ok || len(word.Parts) != 1 {
+		return false
+	}
+	dq, ok := word.Parts[0].(*syntax.DblQuoted)
+	return ok && len(dq.Parts) == 0
 }
 
 func (r *Runner) malformedLetAssocSubscript(expr syntax.ArithmExpr) (exprText, token string, ok bool) {
@@ -621,6 +735,12 @@ func (r *Runner) bashArithmError(expr syntax.ArithmExpr, err error, command bool
 		// prefix and ((: ...) frame so they're parseable.
 	}
 	if strings.Contains(bashMsg, "expression recursion level exceeded") {
+		return fmt.Errorf("%s%s", r.bashErrPrefix(r.curStmtPos), bashMsg)
+	}
+	if strings.Contains(bashMsg, "not a valid identifier") {
+		if command {
+			return fmt.Errorf("%s((: %s", r.bashErrPrefix(r.curStmtPos), bashMsg)
+		}
 		return fmt.Errorf("%s%s", r.bashErrPrefix(r.curStmtPos), bashMsg)
 	}
 	// Printer.Print doesn't accept bare ArithmExpr nodes; wrap in an
@@ -721,6 +841,16 @@ func (r *Runner) bashArithmError(expr syntax.ArithmExpr, err error, command bool
 				if tokenText == "" {
 					tokenText = strings.TrimPrefix(strings.TrimSpace(printArithm(b.Y)), "-")
 				}
+			}
+		case syntax.Sub:
+			if command && strings.Contains(bashMsg, "arithmetic syntax error: operand expected") &&
+				arithEmptyDoubleQuotedWord(b.Y) {
+				left := r.arithmSourceText(b.X, false)
+				if left == "" {
+					left = printArithm(b.X)
+				}
+				exprText = strings.TrimSpace(left) + " - "
+				bashMsg = "arithmetic syntax error: operand expected (error token is \"-  \")"
 			}
 		case syntax.Assgn, syntax.AddAssgn, syntax.SubAssgn,
 			syntax.MulAssgn, syntax.AndAssgn, syntax.OrAssgn,

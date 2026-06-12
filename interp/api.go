@@ -127,6 +127,11 @@ type Runner struct {
 	// [Runner.bashErrPrefix] so the `<file>: line N:` prefix lands.
 	curStmtPos syntax.Pos
 
+	// discardNextStmt keeps one following top-level statement skipped
+	// for bash arithmetic-expansion errors that abort the rest of a
+	// physical line rather than only the current simple command.
+	discardNextStmt bool
+
 	// enclosingSubshellEnd is set while executing statements inside a
 	// foreground subshell. Bash 5.3 reports some fatal declaration errors
 	// at the closing ")" rather than at the inner declaration.
@@ -1670,6 +1675,10 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 			// A DISCARD only aborts the top-level command it
 			// occurred in; the next one still runs.
 			if r.exit.discarding {
+				if r.discardNextStmt {
+					r.discardNextStmt = false
+					continue
+				}
 				r.exit.discarding = false
 				r.exit.exiting = false
 			}

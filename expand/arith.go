@@ -6,6 +6,7 @@ package expand
 import (
 	"fmt"
 	"maps"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -32,6 +33,7 @@ type arithLvalue struct {
 	indexKey   string
 	indexAssoc bool
 	indexSet   bool
+	fromString bool
 }
 
 // isAllDigits reports whether s is non-empty and consists entirely
@@ -384,6 +386,12 @@ func arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 	case nil:
 		return 0, nil
 	case *syntax.Word:
+		if arithEscapedEmptyQuotedWord(expr) {
+			return 0, &ArithmError{
+				Text: `"" `,
+				Err:  fmt.Errorf("arithmetic syntax error: operand expected (error token is \"\"\" \")"),
+			}
+		}
 		str, ok, err := cfg.arithmIndexedParamLiteral(expr)
 		if err != nil {
 			return 0, err
@@ -652,6 +660,9 @@ func arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 		if err != nil {
 			return 0, err
 		}
+		if arithEmptyDoubleQuotedWord(expr.Y) {
+			return 0, fmt.Errorf("arithmetic syntax error: operand expected (error token is \"\"\"\")")
+		}
 		right, err := Arithm(cfg, expr.Y)
 		if err != nil {
 			return 0, err
@@ -705,7 +716,46 @@ func arithLvalueFromString(s string) (arithLvalue, bool) {
 	if err != nil {
 		return arithLvalue{}, false
 	}
-	return arithLvalue{name: s[:open], index: expr}, true
+	return arithLvalue{name: s[:open], index: expr, fromString: true}, true
+}
+
+func arithEscapedQuotedIndex(expr syntax.ArithmExpr) (int, bool) {
+	word, ok := expr.(*syntax.Word)
+	if !ok || len(word.Parts) != 1 {
+		return 0, false
+	}
+	lit, ok := word.Parts[0].(*syntax.Lit)
+	if !ok || !strings.HasPrefix(lit.Value, `\"`) || !strings.HasSuffix(lit.Value, `\"`) {
+		return 0, false
+	}
+	return 0, true
+}
+
+func arithEmptyQuotedIndex(expr syntax.ArithmExpr) bool {
+	word, ok := expr.(*syntax.Word)
+	if !ok || len(word.Parts) != 1 {
+		return false
+	}
+	dq, ok := word.Parts[0].(*syntax.DblQuoted)
+	return ok && len(dq.Parts) == 0
+}
+
+func arithEscapedEmptyQuotedWord(expr syntax.ArithmExpr) bool {
+	word, ok := expr.(*syntax.Word)
+	if !ok || len(word.Parts) != 1 {
+		return false
+	}
+	lit, ok := word.Parts[0].(*syntax.Lit)
+	return ok && lit.Value == `\"\"`
+}
+
+func arithEmptyDoubleQuotedWord(expr syntax.ArithmExpr) bool {
+	word, ok := expr.(*syntax.Word)
+	if !ok || len(word.Parts) != 1 {
+		return false
+	}
+	dq, ok := word.Parts[0].(*syntax.DblQuoted)
+	return ok && len(dq.Parts) == 0
 }
 
 func (cfg *Config) getAritLvalue(lval arithLvalue) (int64, error) {
@@ -755,6 +805,14 @@ func (cfg *Config) resolveAritLvalue(lval arithLvalue) (arithLvalue, error) {
 		lval.indexSet = true
 		return lval, nil
 	}
+	if index, ok := arithEscapedQuotedIndex(lval.index); ok {
+		lval.indexValue = index
+		lval.indexSet = true
+		return lval, nil
+	}
+	if arithEmptyQuotedIndex(lval.index) && !lval.fromString && !cfg.LetArithmetic {
+		return lval, fmt.Errorf("`%s[]': not a valid identifier", lval.name)
+	}
 	index, err := Arithm(cfg, lval.index)
 	if err != nil {
 		return lval, err
@@ -799,6 +857,7 @@ func (cfg *Config) setAritLvalue(lval arithLvalue, val int64) error {
 	}
 	vr.Kind = Indexed
 	vr.Set = true
+	vr.List = slices.Clone(vr.List)
 	listSet := vr.CloneListSet()
 	if lval.indexValue >= len(vr.List) {
 		if listSet == nil {

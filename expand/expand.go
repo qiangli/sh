@@ -181,6 +181,11 @@ type Config struct {
 	// a single arithmetic expression. Bare arithmetic variables remain
 	// live, but `$x` expands before arithmetic side effects run.
 	arithmParamValues map[*syntax.ParamExp]string
+
+	// LetArithmetic is set by the interpreter while evaluating the
+	// `let` builtin, whose subscript quote handling differs from
+	// arithmetic commands and arithmetic expansion.
+	LetArithmetic bool
 }
 
 // UnexpectedCommandError is returned if a command substitution is encountered
@@ -271,6 +276,7 @@ func (cfg *Config) envSet(name, value string) error {
 	vr.Set = true
 	switch vr.Kind {
 	case Indexed:
+		vr.List = slices.Clone(vr.List)
 		if len(vr.List) == 0 {
 			vr.List = []string{value}
 		} else {
