@@ -597,7 +597,11 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 		case Indexed:
 			indexAllElements = true
 			callVarInd = false
-			elems = cfg.sliceElems(pe, vr.IndexedValues(), name == "@" || name == "*")
+			var err error
+			elems, err = cfg.sliceElems(pe, vr.IndexedValues(), name == "@" || name == "*")
+			if err != nil {
+				return "", err
+			}
 			str = strings.Join(elems, " ")
 		case Associative:
 			indexAllElements = true
@@ -760,6 +764,7 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 	case pe.Slice != nil:
 		if callVarInd {
 			runes := []rune(str)
+			start, end := 0, len(runes)
 			slicePos := func(n int) int {
 				if n < 0 {
 					n = len(runes) + n
@@ -772,12 +777,22 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 				return n
 			}
 			if pe.Slice.Offset != nil {
-				runes = runes[slicePos(sliceOffset):]
+				start = slicePos(sliceOffset)
 			}
 			if pe.Slice.Length != nil {
-				runes = runes[:slicePos(sliceLen)]
+				if sliceLen < 0 {
+					end = slicePos(sliceLen)
+					if start > 0 && end < len(runes) {
+						end++
+					}
+				} else if start+sliceLen < end {
+					end = start + sliceLen
+				}
+				if end < start {
+					end = start
+				}
 			}
-			str = string(runes)
+			str = string(runes[start:end])
 		} // else, elems are already sliced
 	case pe.Repl != nil:
 		orig, replAnchoredStart, replAnchoredEnd, err := replPattern(cfg, pe.Repl.Orig, pe.Repl.All)

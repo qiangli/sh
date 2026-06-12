@@ -574,10 +574,13 @@ var runTests = []runTest{
 	{`a=" x  y"; b=$a c="$a"; echo "$b"; echo "$c"`, " x  y\n x  y\n"},
 	{`arr=("foo" "bar" "lala" "foobar"); echo ${arr[@]:2}; echo ${arr[*]:2}`, "lala foobar\nlala foobar\n"},
 	{`arr=("foo" "bar" "lala" "foobar"); echo ${arr[@]:2:4}; echo ${arr[*]:1:4}`, "lala foobar\nbar lala foobar\n"},
+	{`a=(x y z); echo ${a[@]:0:-2}`, "a: -2: substring expression < 0\n #JUSTERR"},
 	{`arr=("foo" "bar"); echo ${arr[@]}; echo ${arr[*]}`, "foo bar\nfoo bar\n"},
 	{`arr=("foo"); echo ${arr[@]:99}`, "\n"},
 	{`echo ${arr[@]:1:99}; echo ${arr[*]:1:99}`, "\n\n"},
 	{`arr=(0 1 2 3 4 5 6 7 8 9 0 a b c d e f g h); echo ${arr[@]:3:4}`, "3 4 5 6\n"},
+	{`v=hello; echo ${v:1:-2}`, "ell\n"},
+	{`v=hello; echo ${v: -3:2}`, "ll\n"},
 	{`v=ಇಳಿಕೆಗಳು; printf '<%s> <%s>\n' "${v:0:2}" "${v:0:1}"`, "<ಇಳ> <ಇ>\n"},
 
 	// quoted array slicing
@@ -591,6 +594,8 @@ var runTests = []runTest{
 	// positional parameter slicing (1-based offset, $0 at offset 0)
 	{`f() { echo "${@:2:2}"; }; f a b c d e`, "b c\n"},
 	{`f() { echo ${@:2:2}; }; f a b c d e`, "b c\n"},
+	{`set -- a b c; echo ${@:2:2}`, "b c\n"},
+	{`set -- a; echo ${@:1:$(($# - 2))}`, "@: -1: substring expression < 0\n #JUSTERR"},
 	{`f() { echo "${@:1}"; }; f a b c`, "a b c\n"},
 	{`f() { echo "${*:2:2}"; }; f a b c d e`, "b c\n"},
 	{`f() { echo "${@: -2}"; }; f a b c d e`, "d e\n"},
