@@ -114,6 +114,7 @@ func (o *overlayEnviron) Set(name string, vr expand.Variable) error {
 		o.values = make(map[string]namedVariable)
 	}
 	if vr.Kind == expand.KeepValue {
+		vr.Set = prev.Set
 		vr.Kind = prev.Kind
 		vr.Str = prev.Str
 		vr.List = prev.List
@@ -151,6 +152,30 @@ func (o *overlayEnviron) holdsLocally(name string) bool {
 func (o *overlayEnviron) hasLocalVar(name string) bool {
 	vr, ok := o.values[o.normalize(name)]
 	return ok && vr.Local
+}
+
+func (o *overlayEnviron) currentLocalVar(name string) (expand.Variable, bool) {
+	vr, ok := o.values[o.normalize(name)]
+	if !ok || !vr.Local {
+		return expand.Variable{}, false
+	}
+	return vr.Variable, true
+}
+
+func (o *overlayEnviron) setNearestLocal(name string, vr expand.Variable) (bool, error) {
+	normalized := o.normalize(name)
+	if prev, ok := o.values[normalized]; ok && prev.Local {
+		vr.Local = true
+		return true, o.Set(name, vr)
+	}
+	if !o.funcScope {
+		return false, nil
+	}
+	p, ok := o.parent.(*overlayEnviron)
+	if !ok {
+		return false, nil
+	}
+	return p.setNearestLocal(name, vr)
 }
 
 // unsetLocalFromChild implements bash's default `unset` semantics for

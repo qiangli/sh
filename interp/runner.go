@@ -4262,11 +4262,14 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		case "export", "readonly":
 			persistInline = true
 		case "declare", "typeset":
+			if r.inFunc {
+				persistInline = true
+			}
 			for _, arg := range fields[1:] {
 				if arg == "--" {
 					continue
 				}
-				if strings.HasPrefix(arg, "-") && strings.Contains(arg, "x") {
+				if strings.HasPrefix(arg, "-") && (strings.Contains(arg, "x") || strings.Contains(arg, "r")) {
 					persistInline = true
 				}
 			}
@@ -5050,12 +5053,25 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				}
 				// `local -p NAME` only prints variables local to
 				// the current function scope.
+				var currentLocal expand.Variable
 				if cm.Variant.Value == "local" {
-					if ol, ok := r.writeEnv.(*overlayEnviron); !ok || !ol.hasLocalVar(name) {
+					ol, ok := r.writeEnv.(*overlayEnviron)
+					if !ok {
 						r.errf(r.bashErrPrefix(r.curStmtPos)+"local: %s: not found\n", name)
 						r.exit.code = 1
 						continue
 					}
+					var okLocal bool
+					currentLocal, okLocal = ol.currentLocalVar(name)
+					if !okLocal {
+						r.errf(r.bashErrPrefix(r.curStmtPos)+"local: %s: not found\n", name)
+						r.exit.code = 1
+						continue
+					}
+				}
+				if cm.Variant.Value == "local" {
+					r.outf("%s\n", formatDeclareVar(name, currentLocal, false))
+					continue
 				}
 				// declare -p name: print variable with attributes.
 				vr := r.lookupVar(name)
@@ -5259,6 +5275,20 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				}
 				r.setGlobalVar(name, vr)
 			} else {
+				if (cm.Variant.Value == "readonly" || cm.Variant.Value == "export") &&
+					vr.Local {
+					if ol, ok := r.writeEnv.(*overlayEnviron); ok && ol.funcScope && !ol.holdsLocally(name) {
+						if p, ok := ol.parent.(*overlayEnviron); ok {
+							if found, err := p.setNearestLocal(name, vr); found {
+								if err != nil {
+									r.errf("%s%s: %v\n", r.bashErrPrefix(r.curStmtPos), name, err)
+									r.exit.code = 1
+								}
+								continue
+							}
+						}
+					}
+				}
 				r.setVar(name, vr)
 			}
 		}
