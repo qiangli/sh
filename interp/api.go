@@ -285,6 +285,14 @@ type Runner struct {
 	// callStack tracks function call frames for caller/BASH_SOURCE/BASH_LINENO/FUNCNAME.
 	callStack []callFrame
 
+	// exitTrapCallStack preserves the function stack for an EXIT trap
+	// triggered by `exit` from inside a function.
+	exitTrapCallStack []callFrame
+
+	// localOptStack tracks function frames that used `local -`,
+	// which asks bash to restore shell option state on return.
+	localOptStack []localOptFrame
+
 	// cmdHashTable caches resolved command paths and lookup counts for the hash builtin.
 	cmdHashTable map[string]cmdHashEntry
 
@@ -305,6 +313,10 @@ type Runner struct {
 	// remember the value so `set -o` listings echo back what the
 	// script most recently asserted.
 	noOpSetState map[string]bool
+
+	// settingIgnoreEOFOption is true while set/shopt is synchronizing
+	// IGNOREEOF from the ignoreeof option, not from a user assignment.
+	settingIgnoreEOFOption bool
 
 	// bgPidCallback, when non-nil, is invoked with the OS PID of every
 	// real process this runner spawns from a backgrounded statement
@@ -850,6 +862,9 @@ func Params(args ...string) RunnerOption {
 						r.noOpSetState = make(map[string]bool)
 					}
 					r.noOpSetState[value] = enable
+					if value == "ignoreeof" {
+						r.setIgnoreEOFOption(enable)
+					}
 					continue
 				}
 				return fmt.Errorf("invalid option: %q", value)
@@ -1271,6 +1286,22 @@ func (r *Runner) bashOptByName(name string) (status *bool, supported bool) {
 // runnerOpts contains all POSIX Shell and Bash options as one contiguous table.
 type runnerOpts [len(posixOptsTable) + len(bashOptsTable)]bool
 
+type localOptFrame struct {
+	active       bool
+	opts         runnerOpts
+	noOpSetState map[string]bool
+}
+
+func (r *Runner) markLocalOpts() {
+	if n := len(r.localOptStack); n > 0 {
+		r.localOptStack[n-1].active = true
+	}
+}
+
+func (r *Runner) localOptsActive() bool {
+	return len(r.localOptStack) > 0 && r.localOptStack[len(r.localOptStack)-1].active
+}
+
 type posixOpt struct {
 	flag byte   // one-character flag form for this option; a space if none exists
 	name string // full name of the option
@@ -1656,7 +1687,13 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 		r.exit.exiting = false
 	}
 	if runExitTrap {
+		oldCallStack := r.callStack
+		if r.exitTrapCallStack != nil {
+			r.callStack = r.exitTrapCallStack
+		}
 		r.trapCallback(ctx, r.trapCallbacks["EXIT"], "exit")
+		r.callStack = oldCallStack
+		r.exitTrapCallStack = nil
 	}
 	maps.Insert(r.Vars, r.writeEnv.Each)
 	// Return the first of: a fatal error, a non-fatal handler error, or the exit code.

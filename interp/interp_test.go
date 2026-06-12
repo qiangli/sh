@@ -595,7 +595,7 @@ var runTests = []runTest{
 	{`f() { echo "${@:2:2}"; }; f a b c d e`, "b c\n"},
 	{`f() { echo ${@:2:2}; }; f a b c d e`, "b c\n"},
 	{`set -- a b c; echo ${@:2:2}`, "b c\n"},
-	{`set -- a; echo ${@:1:$(($# - 2))}`, "@: -1: substring expression < 0\n #JUSTERR"},
+	{`set -- a; echo ${@:1:$(($# - 2))}`, "$(($# - 2)): substring expression < 0\n #JUSTERR"},
 	{`f() { echo "${@:1}"; }; f a b c`, "a b c\n"},
 	{`f() { echo "${*:2:2}"; }; f a b c d e`, "b c\n"},
 	{`f() { echo "${@: -2}"; }; f a b c d e`, "d e\n"},
@@ -3818,6 +3818,18 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 		"local: x: not found\nexit status 1 #JUSTERR",
 	},
 	{
+		`IGNOREEOF=0; set -o ignoreeof; echo $IGNOREEOF; f() { local -; set +o ignoreeof; shopt -o ignoreeof; }; f; shopt -o ignoreeof; echo $IGNOREEOF`,
+		"10\nignoreeof      \toff\nignoreeof      \ton\n10\n",
+	},
+	{
+		`before=$-; f() { local -; set -u; local -p; }; f; echo "$before|$-"`,
+		"local -\nhB|hB\n",
+	},
+	{
+		`trap 'echo trap:$FUNCNAME' EXIT; f() { exit; }; f`,
+		"trap:f\n",
+	},
+	{
 		`f() { local x; [[ -v x ]] && echo set || echo unset; }; f`,
 		"unset\n",
 	},
@@ -3973,6 +3985,22 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	{
 		"VAR=4; readonly VAR; VAR=7 echo ok; echo status:$?",
 		"VAR: readonly variable\nok\nstatus:0\n",
+	},
+	{
+		"set -k; export HOME=/foo/bar; c=7; HOME=/a/b/c echo $HOME c=9; echo $c",
+		"/foo/bar\n7\n",
+	},
+	{
+		"set -k; ECHO=; export HOME=/foo/bar; HOME=/a/b/c $ECHO a=$HOME c=9; echo $HOME $c $a",
+		"/a/b/c 9 /a/b/c\n",
+	},
+	{
+		"f() { declare -p var; }; var[0]=X var[@]=Y f",
+		"`var[0]': not a valid identifier\n`var[@]': not a valid identifier\ndeclare: var: not found\nexit status 1 #JUSTERR",
+	},
+	{
+		"f() { test -v 'var[0]'; echo $?; }; var[0]=X f",
+		"`var[0]': not a valid identifier\n1\n",
 	},
 	{
 		"f() { local -i a; a+=3; echo $a; }; a=4 b=7 f; echo after: ${a-unset}",

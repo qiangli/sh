@@ -451,6 +451,7 @@ func looksLikeExpandError(msg string) bool {
 		strings.Contains(msg, "unbound variable"),
 		strings.Contains(msg, "readonly variable"),
 		strings.Contains(msg, "bad array subscript"),
+		strings.Contains(msg, "substring expression < 0"),
 		strings.Contains(msg, "cannot assign in this way"),
 		strings.Contains(msg, "parameter not set"),
 		strings.Contains(msg, "parameter null or not set"),
@@ -1476,6 +1477,25 @@ func fieldsAllAssignments(fields []string) bool {
 		}
 	}
 	return true
+}
+
+func splitAssignmentField(field string) (name, value string, ok bool) {
+	eq := strings.IndexByte(field, '=')
+	if eq <= 0 || !syntax.ValidName(field[:eq]) {
+		return "", "", false
+	}
+	return field[:eq], field[eq+1:], true
+}
+
+func (r *Runner) inlineArrayAssignName(as *syntax.Assign) string {
+	name := as.Name.Value
+	if as.Index != nil {
+		if w, ok := as.Index.(*syntax.Word); ok {
+			return name + "[" + r.literal(w) + "]"
+		}
+		return name + "[]"
+	}
+	return name
 }
 
 // renderNestedFuncDecl writes a nested function decl into buf in
@@ -3992,11 +4012,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		// assigns) on the cmd path so it errors as bash 3.x did.
 		setK := r.opts[optKeyword]
 		if (len(cm.Assigns) > 0 || setK) && len(fields) > 0 && fieldsAllAssignments(fields) {
-			for _, f := range fields {
-				eq := strings.IndexByte(f, '=')
-				name := f[:eq]
-				val := f[eq+1:]
-				vr := expand.Variable{Set: true, Kind: expand.String, Str: val}
+			assignPlain := func(name string, vr expand.Variable) bool {
 				r.setVar(name, vr)
 				if !r.exit.ok() && !r.exit.exiting && !r.exit.returning && !r.exit.fatalExit {
 					// Assignment-statement error: fatal in POSIX
@@ -4005,7 +4021,39 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 					if !r.opts[optPosix] {
 						r.exit.discarding = true
 					}
-					return
+					return false
+				}
+				return true
+			}
+			if setK {
+				for _, as := range cm.Assigns {
+					name := as.Name.Value
+					prev := r.lookupVar(name)
+					prev.Local = false
+					name, vr := r.assignVal(name, prev, as, "")
+					if !assignPlain(name, vr) {
+						return
+					}
+				}
+				for _, arg := range args {
+					field := r.literalForAssign(arg)
+					if field == "" {
+						continue
+					}
+					name, val, ok := splitAssignmentField(field)
+					if !ok {
+						continue
+					}
+					if !assignPlain(name, expand.Variable{Set: true, Kind: expand.String, Str: val}) {
+						return
+					}
+				}
+			} else {
+				for _, f := range fields {
+					name, val, _ := splitAssignmentField(f)
+					if !assignPlain(name, expand.Variable{Set: true, Kind: expand.String, Str: val}) {
+						return
+					}
 				}
 			}
 			fields = nil
@@ -4088,9 +4136,36 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			vr   expand.Variable
 		}
 		var restores []restoreVar
+		type callAssign struct {
+			name string
+			vr   expand.Variable
+		}
+		var keywordAssigns []callAssign
+
+		if setK {
+			cleanFields := fields[:1]
+			for _, field := range fields[1:] {
+				name, val, ok := splitAssignmentField(field)
+				if !ok {
+					cleanFields = append(cleanFields, field)
+					continue
+				}
+				keywordAssigns = append(keywordAssigns, callAssign{
+					name: name,
+					vr:   expand.Variable{Set: true, Kind: expand.String, Str: val, Exported: true},
+				})
+			}
+			fields = cleanFields
+		}
 
 		assignFailed := false
 		for _, as := range cm.Assigns {
+			if as.Index != nil || as.Array != nil {
+				r.errf("%s`%s': not a valid identifier\n",
+					r.bashErrPrefix(r.curStmtPos), r.inlineArrayAssignName(as))
+				assignFailed = true
+				continue
+			}
 			name := as.Name.Value
 			prev := r.lookupVar(name)
 			// Resolve any nameref so we can restore the original final value later on.
@@ -4125,6 +4200,15 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				trace.newLineFlush()
 			}
 		}
+		for _, as := range keywordAssigns {
+			prev := r.lookupVar(as.name)
+			r.setVar(as.name, as.vr)
+			if !r.exit.ok() {
+				assignFailed = true
+				break
+			}
+			restores = append(restores, restoreVar{as.name, prev})
+		}
 		if assignFailed {
 			if r.opts[optPosix] {
 				if isPosixSpecialBuiltin(fields[0]) {
@@ -4152,13 +4236,16 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			callPos = origCallPos
 		}
 		savedTempEnv := r.tempEnv
-		if len(cm.Assigns) > 0 {
+		if len(cm.Assigns) > 0 || len(keywordAssigns) > 0 {
 			m := maps.Clone(savedTempEnv)
 			if m == nil {
-				m = make(map[string]bool, len(cm.Assigns))
+				m = make(map[string]bool, len(cm.Assigns)+len(keywordAssigns))
 			}
 			for _, as := range cm.Assigns {
 				m[as.Name.Value] = true
+			}
+			for _, as := range keywordAssigns {
+				m[as.name] = true
 			}
 			r.tempEnv = m
 		}
@@ -4746,6 +4833,11 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			if isFlag {
 				if as.Name.Value == "--json" {
 					jsonMode = true
+					continue assignLoop
+				}
+				if cm.Variant.Value == "local" && as.Name.Value == "-" {
+					r.markLocalOpts()
+					declHadNames = true
 					continue assignLoop
 				}
 				fp := flagParser{remaining: []string{as.Name.Value}}
@@ -6461,6 +6553,10 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 			funcName: name,
 			bodyLine: body.Pos().Line(),
 		})
+		r.localOptStack = append(r.localOptStack, localOptFrame{
+			opts:         r.opts,
+			noOpSetState: maps.Clone(r.noOpSetState),
+		})
 
 		// Functions run in a nested scope.
 		// Note that [Runner.exec] below does something similar.
@@ -6468,6 +6564,9 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 		r.writeEnv = &overlayEnviron{parent: r.writeEnv, funcScope: true}
 
 		r.stmt(ctx, body)
+		if r.exit.exiting && r.trapCallbacks["EXIT"] != "" {
+			r.exitTrapCallStack = slices.Clone(r.callStack)
+		}
 
 		r.writeEnv = origEnv
 
@@ -6476,6 +6575,15 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 		r.trapCallback(ctx, r.trapCallbacks["RETURN"], "return")
 		r.ecfg.OverrideLineno = prevLineno
 		r.callStack = r.callStack[:len(r.callStack)-1]
+		if n := len(r.localOptStack); n > 0 {
+			frame := r.localOptStack[n-1]
+			r.localOptStack = r.localOptStack[:n-1]
+			if frame.active {
+				r.opts = frame.opts
+				r.noOpSetState = frame.noOpSetState
+				r.setIgnoreEOFOption(r.noOpSetState["ignoreeof"])
+			}
+		}
 		r.Params = oldParams
 		r.inFunc = oldInFunc
 		r.optState = oldOptState
