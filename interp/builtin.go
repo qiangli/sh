@@ -2899,9 +2899,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				}
 				return
 			}
-			width := 20 // shopt uses 20-char padding
+			width := 20 // bash 5.3 pads `shopt` names to 20 before the tab
 			if posixOpts {
-				width = 20 // shopt -o (aka set -o) uses 20
+				width = 15 // ...but `shopt -o` (aka set -o) pads to 15
 			}
 			r.printOptLineWidth(name, enabled, supported, width)
 		}
@@ -5015,12 +5015,13 @@ func mapfileSplit(delim byte, dropDelim bool) bufio.SplitFunc {
 }
 
 func (r *Runner) printOptLine(name string, enabled, supported bool) {
-	r.printOptLineWidth(name, enabled, supported, 20)
+	r.printOptLineWidth(name, enabled, supported, 15)
 }
 
 // printOptLineWidth emits a `name<spaces><tab>on/off` line padding the
-// name to a width-character field. Bash uses 20 for `set -o`/`shopt -o`
-// and `shopt`. Names longer than the field get no padding.
+// name to a width-character field. Bash 5.3 pads `shopt` to 20 and
+// `set -o`/`shopt -o` to 15 (both encoded in the shopt fixture).
+// Names longer than the field get no padding.
 func (r *Runner) printOptLineWidth(name string, enabled, supported bool, width int) {
 	_ = supported
 	pad := width - len(name)
