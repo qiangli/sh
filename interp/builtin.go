@@ -2900,8 +2900,8 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				return
 			}
 			width := 20 // bash 5.3 pads `shopt` names to 20 before the tab
-			if posixOpts {
-				width = 15 // ...but `shopt -o` (aka set -o) pads to 15
+			if posixOpts && len(args) == 0 {
+				width = 15 // ...but `shopt -o` listings pad to 15
 			}
 			r.printOptLineWidth(name, enabled, supported, width)
 		}

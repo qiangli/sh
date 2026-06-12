@@ -4352,13 +4352,11 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				}
 				r.restoreInlineVar(restore.name, restore.vr)
 			}
-			// Clear the leak flags now that this immediate
-			// caller has had its chance to consume them. A leak
-			// that wasn't matched by an outer restore is still
-			// "applied" — the leaked value is in the global
-			// scope already; the flag was only there to block
-			// the matching restore from clobbering it.
-			if len(restores) > 0 {
+			// Clear the leak flags once the immediate caller has
+			// had its chance to consume them. Commands still running
+			// inside the callee must leave the marker for the caller's
+			// restore loop.
+			if len(restores) > 0 || !r.inFunc {
 				r.inlineLeakFromFunc = nil
 			}
 		} else if r.inFunc && fields[0] == "return" {

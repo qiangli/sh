@@ -3825,7 +3825,7 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	},
 	{
 		`IGNOREEOF=0; set -o ignoreeof; echo $IGNOREEOF; f() { local -; set +o ignoreeof; shopt -o ignoreeof; }; f; shopt -o ignoreeof; echo $IGNOREEOF`,
-		"10\nignoreeof      \toff\nignoreeof      \ton\n10\n",
+		"10\nignoreeof           \toff\nignoreeof           \ton\n10\n",
 	},
 	{
 		`before=$-; f() { local -; set -u; local -p; }; f; echo "$before|$-"`,
@@ -5410,7 +5410,9 @@ func TestBashCompatPosixSpecialBuiltinFuncDeclInSubshell(t *testing.T) {
 func TestBashCompatPosixTempEnvFunctionCallRestore(t *testing.T) {
 	src := "set -o posix\n" +
 		"func() { return 5; }\n" +
+		"myfunction() { var=20 return; }\n" +
 		"var=20\n" +
+		"myfunction\n" +
 		"var=30 func\n" +
 		"echo $? $var\n"
 	file, err := syntax.NewParser().Parse(strings.NewReader(src), "./func3.sub")
