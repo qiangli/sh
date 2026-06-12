@@ -2358,10 +2358,7 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 					if i > 0 {
 						flush()
 					}
-					curField = append(curField, fieldPart{
-						quote: quoteSingle,
-						val:   elem,
-					})
+					splitAdd(elem)
 				}
 				continue
 			}

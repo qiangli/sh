@@ -663,7 +663,7 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			if err != nil {
 				return "", err
 			}
-			if allOp == "*" && name != "*" && name != "@" {
+			if allOp == "*" && name != "@" && (name != "*" || cfg.ifs != "") {
 				str = cfg.ifsJoin(elems)
 			} else {
 				str = strings.Join(elems, " ")
@@ -678,7 +678,7 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			for i, k := range keys {
 				elems[i] = vr.Map[k]
 			}
-			if allOp == "*" && name != "*" && name != "@" {
+			if allOp == "*" && name != "@" && (name != "*" || cfg.ifs != "") {
 				str = cfg.ifsJoin(elems)
 			} else {
 				str = strings.Join(elems, " ")

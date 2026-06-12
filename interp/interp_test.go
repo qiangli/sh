@@ -2673,7 +2673,7 @@ var runTests = []runTest{
 	{"av=(abcd efgh ijkl); printf '<%s>\\n' ${av[@]/%??/xx}; set -- abcd efgh ijkl; printf 'P<%s>\\n' ${@/#??/za}", "<abxx>\n<efxx>\n<ijxx>\nP<zacd>\nP<zagh>\nP<zakl>\n"},
 	{"IFS=; B=''; echo \"<${B[*]:-X}>\" \"<${B[@]:-X}>\"", "<X> <X>\n"},
 	{"IFS=; A=('' ''); echo \"<${A[*]:-X}>\"", "<X>\n"},
-	{"IFS=+; arr=(a b c); echo ${arr[*]/a/x}; set -- 'a+b' 'c+d' 'e+f'; echo ${*/a/x}", "x+b+c\nx+b+c+d+e+f\n"},
+	{"IFS=+; arr=(a b c); echo ${arr[*]/a/x}; set -- 'a+b' 'c+d' 'e+f'; echo ${*/a/x}", "x b c\nx b c d e f\n"},
 	{"IFS=+; a=(aa bb); printf '<%s>\\n' ${a[@]} ${a[@]:0}", "<aa>\n<bb>\n<aa>\n<bb>\n"},
 	{"recho() { i=1; for arg; do echo \"$i:<$arg>\"; i=$((i+1)); done; }; a[0]= a[1]=; recho \"${a[@]:-y}\"; unset a; a[1]=; recho \"${a[@]:-y}\"; set -- '' x; recho \"${@:-y}\"", "1:<>\n2:<>\n1:<y>\n1:<>\n2:<x>\n"},
 	{"a[0]= a[1]=x; printf '<%s>\\n' ${a[@]:+y}", "<y>\n"},
