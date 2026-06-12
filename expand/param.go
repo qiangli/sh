@@ -1279,6 +1279,13 @@ func (cfg *Config) varInd(vr Variable, idx syntax.ArithmExpr) (string, error) {
 			return "", err
 		}
 		if i < 0 {
+			if cfg.curParam.Length {
+				idxText := subscriptText(idx)
+				if idxText == "" {
+					idxText = strconv.Itoa(i)
+				}
+				return "", fmt.Errorf("[%s]: bad array subscript", idxText)
+			}
 			name := ""
 			if cfg.curParam.Param != nil {
 				name = cfg.curParam.Param.Value

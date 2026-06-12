@@ -3142,6 +3142,10 @@ var runTests = []runTest{
 		"1\nunset: a: cannot unset: readonly variable\n1\n #IGNORE bash prints a warning",
 	},
 	{
+		"s=abc; unset 's[1]'; echo status:$?; echo $s",
+		"unset: s: not an array variable\nstatus:1\nabc\n #JUSTERR",
+	},
+	{
 		"f() { local a=1; echo $a; unset a; echo $a; }; f",
 		"1\n\n",
 	},
@@ -3577,6 +3581,10 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 		"a: bad array subscript\n\n #JUSTERR",
 	},
 	{
+		`a=(b); echo ${#a[-2]}`,
+		"[-2]: bad array subscript\n #JUSTERR",
+	},
+	{
 		`a=(b); echo ok ${a[-2]} later`,
 		"a: bad array subscript\nok later\n #JUSTERR",
 	},
@@ -3591,6 +3599,10 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	{
 		`a=(x "" y); unset 'a[0]'; a[5]=z; declare -p a; echo "${#a[@]}"; printf '<%s>\n' "${a[@]}"`,
 		"declare -a a=([1]=\"\" [2]=\"y\" [5]=\"z\")\n3\n<>\n<y>\n<z>\n",
+	},
+	{
+		`a=(x y z); n=3; unset 'a[n-1]'; declare -p a; unset 'a[-1]'`,
+		"declare -a a=([0]=\"x\" [1]=\"y\")\nunset: [-1]: bad array subscript\nexit status 1 #JUSTERR",
 	},
 	{
 		`a=([0]=' x ' [1]=' y '); for v in "${a[@]}"; do echo "$v"; done`,
@@ -3651,7 +3663,7 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	},
 	{
 		`declare -A a=([foo]=bar); unset empty; echo ${#a[$empty]}; echo ${#a[missing]}`,
-		"[$empty]: bad array subscript\n\n0\n #JUSTERR",
+		"[$empty]: bad array subscript\n0\n #JUSTERR",
 	},
 	{
 		`declare -a AA; unset 'AA[-2]'`,
@@ -3668,6 +3680,10 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	{
 		`declare -A a; declare +A a; declare -a b; declare +a b`,
 		"declare: a: cannot destroy array variables in this way\ndeclare: b: cannot destroy array variables in this way\nexit status 1 #JUSTERR",
+	},
+	{
+		`declare -ar a; declare +a a`,
+		"declare: a: readonly variable\nexit status 1 #JUSTERR",
 	},
 	{
 		`declare -A a=([0]=zero [x]=ex); echo "$a"; echo "${a:1:2}"`,
@@ -4644,11 +4660,15 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	},
 	{
 		"read -p 'Display me as a prompt. Continue? (y/n) ' choice <<< 'y'; echo $choice",
-		"Display me as a prompt. Continue? (y/n) y\n #IGNORE bash requires a terminal",
+		"y\n",
 	},
 	{
 		"read -r -p 'Prompt and raw flag together: ' a <<< '\\a\\b\\c'; echo $a",
-		"Prompt and raw flag together: \\a\\b\\c\n #IGNORE bash requires a terminal",
+		"\\a\\b\\c\n",
+	},
+	{
+		"read -p 'no prompt: ' a <<EOF\nvalue\nEOF\necho $a",
+		"value\n",
 	},
 
 	// read -t TIMEOUT

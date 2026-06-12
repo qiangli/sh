@@ -1287,11 +1287,12 @@ func (r *Runner) unsetArrayElem(name, idx string) bool {
 	vr := r.lookupVar(name)
 	switch vr.Kind {
 	case expand.Indexed:
-		n, err := strconv.Atoi(idx)
-		if err != nil || n < 0 {
+		n64, err := r.arithFromString(idx)
+		if err != nil || n64 < 0 {
 			r.errf("%sunset: [%s]: bad array subscript\n", r.bashErrPrefix(r.curStmtPos), idx)
 			return false
 		}
+		n := int(n64)
 		if n >= len(vr.List) {
 			return true
 		}

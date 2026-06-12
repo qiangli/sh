@@ -184,6 +184,10 @@ func validBuiltinAssignName(name string) bool {
 
 func (r *Runner) unsetBuiltinArrayElem(name, idx string) bool {
 	vr := r.lookupVar(name)
+	if vr.Kind == expand.String && vr.IsSet() {
+		r.errf("%sunset: %s: not an array variable\n", r.bashErrPrefix(r.curStmtPos), name)
+		return false
+	}
 	if vr.Kind == expand.Associative {
 		if _, ok := vr.Map[idx]; ok {
 			delete(vr.Map, idx)
@@ -197,6 +201,10 @@ func (r *Runner) unsetBuiltinArrayElem(name, idx string) bool {
 
 func (r *Runner) unsetStringArrayElem(name, idx string) bool {
 	vr := r.lookupVar(name)
+	if vr.Kind == expand.String && vr.IsSet() {
+		r.errf("%sunset: %s: not an array variable\n", r.bashErrPrefix(r.curStmtPos), name)
+		return false
+	}
 	if vr.Kind != expand.Associative {
 		return r.unsetArrayElem(name, idx)
 	}
@@ -2512,7 +2520,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			exit.code = 1
 			return exit
 		}
-		if prompt != "" {
+		if prompt != "" && stdin != nil && term.IsTerminal(int(stdin.Fd())) {
 			r.out(prompt)
 		}
 		readInput := func() ([]byte, error) {

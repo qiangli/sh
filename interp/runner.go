@@ -4011,7 +4011,8 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		r.lastExpandExit = exitStatus{}
 		fields, expandErr := expand.Fields(r.ecfg, args...)
 		r.expandErr(expandErr)
-		if expandErr != nil && strings.Contains(expandErr.Error(), "bad array subscript") {
+		if expandErr != nil && strings.Contains(expandErr.Error(), "bad array subscript") &&
+			!strings.HasPrefix(expandErr.Error(), "[") {
 			fields = fields[:0]
 			for _, arg := range args {
 				argFields, err := expand.Fields(r.ecfg, arg)
@@ -5207,6 +5208,12 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			}
 			if as.Naked && (slices.Contains(modes, "+a") || slices.Contains(modes, "+A")) &&
 				(vr.Kind == expand.Indexed || vr.Kind == expand.Associative) {
+				if vr.ReadOnly {
+					r.errf("%sdeclare: %s: readonly variable\n",
+						r.bashErrPrefix(r.curStmtPos), name)
+					r.exit.code = 1
+					continue
+				}
 				r.errf("%sdeclare: %s: cannot destroy array variables in this way\n",
 					r.bashErrPrefix(r.curStmtPos), name)
 				r.exit.code = 1
