@@ -493,6 +493,51 @@ func TestFieldsParamExpAlternateQuotedEmptyAfterSplit(t *testing.T) {
 	}
 }
 
+func TestParamSliceNegativeLength(t *testing.T) {
+	env := testEnv{
+		"#": {Set: true, Kind: String, Str: "1"},
+		"@": {Set: true, Kind: Indexed, List: []string{"a"}},
+		"a": {Set: true, Kind: Indexed, List: []string{"x", "y", "z"}},
+		"v": {Set: true, Kind: String, Str: "hello"},
+	}
+	cfg := &Config{Env: env}
+	tests := []struct {
+		src     string
+		want    []string
+		wantErr string
+	}{
+		{`${@:1:$(($# - 2))}`, nil, "@: -1: substring expression < 0"},
+		{`${a[@]:0:-2}`, nil, "a: -2: substring expression < 0"},
+		{`${v:1:-2}`, []string{"ell"}, ""},
+		{`${v: -3:2}`, []string{"ll"}, ""},
+		{`${@:2:2}`, []string{"b", "c"}, ""},
+	}
+	for _, tc := range tests {
+		if tc.src == `${@:1:$(($# - 2))}` {
+			env["@"] = Variable{Set: true, Kind: Indexed, List: []string{"a"}}
+		} else {
+			env["@"] = Variable{Set: true, Kind: Indexed, List: []string{"a", "b", "c"}}
+		}
+		word := parseWord(t, tc.src)
+		got, err := Fields(cfg, word)
+		if tc.wantErr != "" {
+			if err == nil {
+				t.Fatalf("%s: wanted error %q, got nil", tc.src, tc.wantErr)
+			}
+			if err.Error() != tc.wantErr {
+				t.Fatalf("%s: wanted error %q, got %q", tc.src, tc.wantErr, err)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("%s: did not want error, got %v", tc.src, err)
+		}
+		if !reflect.DeepEqual(got, tc.want) {
+			t.Fatalf("%s: wanted %q, got %q", tc.src, tc.want, got)
+		}
+	}
+}
+
 type testEnv map[string]Variable
 
 func (e testEnv) Get(name string) Variable {
