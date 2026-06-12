@@ -3940,6 +3940,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 	case "declare", "typeset":
 		// Simple declare when called as a command (not keyword).
 		// Keyword form is handled by DeclClause in runner.go.
+		inFuncScope := r.inFunc || len(r.callStack) > 0
 		printMode := false
 		exportMode := false
 		readonlyMode := false
@@ -3973,18 +3974,18 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				if readonlyMode {
 					vr.ReadOnly = true
 				}
-				if r.inFunc {
+				if inFuncScope {
 					vr.Local = true
 				}
 				r.setVar(name, vr)
 				names = append(names, name)
 			} else {
 				names = append(names, arg)
-				if exportMode || readonlyMode || r.inFunc {
+				if exportMode || readonlyMode || inFuncScope {
 					vr := r.lookupVar(arg)
 					vr.Exported = vr.Exported || exportMode
 					vr.ReadOnly = vr.ReadOnly || readonlyMode
-					vr.Local = vr.Local || r.inFunc
+					vr.Local = vr.Local || inFuncScope
 					r.setVar(arg, vr)
 				}
 			}

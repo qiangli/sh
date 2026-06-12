@@ -136,17 +136,25 @@ func (o *overlayEnviron) Set(name string, vr expand.Variable) error {
 		// must outlive the assignment — local, integer, exported,
 		// readonly, case-conversion — so `declare -u foo` (no
 		// value) stays declared.
-		if prev.Local || vr.Exported || vr.ReadOnly ||
+		if prev.Local || vr.Local || vr.Exported || vr.ReadOnly ||
 			vr.Upper || vr.Lower || vr.Capitalize {
 			vr.Local = prev.Local || vr.Local
-			o.values[normalized] = namedVariable{Name: name, Variable: vr, Temp: prev.Temp || parentTemp, Prev: prev.Prev}
+			temp := prev.Temp || parentTemp
+			if vr.Local && !inOverlay {
+				temp = prev.Temp
+			}
+			o.values[normalized] = namedVariable{Name: name, Variable: vr, Temp: temp, Prev: prev.Variable}
 			return nil
 		}
 		delete(o.values, normalized)
 	}
 	// modifying the entire variable
 	vr.Local = prev.Local || vr.Local
-	o.values[normalized] = namedVariable{Name: name, Variable: vr, Temp: prev.Temp || parentTemp, Prev: prev.Prev}
+	temp := prev.Temp || parentTemp
+	if vr.Local && !inOverlay {
+		temp = prev.Temp
+	}
+	o.values[normalized] = namedVariable{Name: name, Variable: vr, Temp: temp, Prev: prev.Prev}
 	return nil
 }
 
@@ -200,6 +208,29 @@ func (o *overlayEnviron) unsetTemp(name string, restoreLocal bool) bool {
 	if o.funcScope {
 		if p, ok := o.parent.(*overlayEnviron); ok {
 			return p.unsetTemp(name, restoreLocal)
+		}
+	}
+	return false
+}
+
+func (o *overlayEnviron) restoreTemp(name string, prev expand.Variable) bool {
+	normalized := o.normalize(name)
+	if cur, ok := o.values[normalized]; ok {
+		if cur.Temp {
+			if prev.Declared() {
+				o.values[normalized] = namedVariable{Name: name, Variable: prev}
+			} else {
+				delete(o.values, normalized)
+			}
+			return true
+		}
+		if !o.funcScope {
+			return false
+		}
+	}
+	if o.funcScope {
+		if p, ok := o.parent.(*overlayEnviron); ok {
+			return p.restoreTemp(name, prev)
 		}
 	}
 	return false
@@ -278,6 +309,21 @@ func (o *overlayEnviron) Each(f func(name string, vr expand.Variable) bool) {
 
 func execEnv(env expand.Environ) []string {
 	list := make([]string, 0, 64)
+	if o, ok := env.(*overlayEnviron); ok && o.parent == nil {
+		for _, named := range o.values {
+			name, vr := named.Name, named.Variable
+			if name == BashyInheritedFdsEnv {
+				continue
+			}
+			if !vr.IsSet() && vr.Local && named.Prev.Exported && named.Prev.Kind == expand.String {
+				list = append(list, name+"="+named.Prev.String())
+			}
+			if vr.Exported && vr.Kind == expand.String {
+				list = append(list, name+"="+vr.String())
+			}
+		}
+		return list
+	}
 	for name, vr := range env.Each {
 		if name == BashyInheritedFdsEnv {
 			continue
