@@ -63,10 +63,9 @@ func TestHashBuiltin_P_missingArgs(t *testing.T) {
 			script: "hash -p",
 			want:   "hash: -p: option requires an argument",
 		},
-		{
-			script: "hash -p /nonexistent",
-			want:   "hash: -p: option requires an argument",
-		},
+		// `hash -p <path>` with no names is NOT an error in bash 5.3:
+		// it falls through to listing mode (rc=0, "hash table empty"
+		// on stdout when the table is empty) — covered separately.
 	}
 
 	for _, tc := range tests {
