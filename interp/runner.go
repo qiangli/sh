@@ -4103,6 +4103,11 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				// TODO: there is likely a better way to do this.
 				prev.Local = false
 
+				if as.Index != nil && as.Array != nil {
+					r.errf("%s%s: cannot assign list to array member\n", r.bashErrPrefix(r.curStmtPos), r.inlineArrayAssignName(as))
+					r.exit.code = 1
+					break
+				}
 				name, vr := r.assignVal(name, prev, as, "")
 				r.setVarWithIndex(prev, name, as.Index, vr)
 				if !r.exit.ok() && !r.exit.exiting && !r.exit.returning && !r.exit.fatalExit {

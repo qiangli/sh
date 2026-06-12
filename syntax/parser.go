@@ -2291,11 +2291,12 @@ func (p *Parser) getAssign(needEqual bool) *Assign {
 			}
 		}
 		if p.tok == assgnParen {
-			if !p.lang.in(LangZsh) {
+			if !p.lang.in(langBashLike | LangZsh) {
 				p.curErr("arrays cannot be nested")
 				return nil
 			}
-			// zsh allows a[i]=(values...).
+			// zsh allows a[i]=(values...). Bash parses it and
+			// reports "cannot assign list to array member" at runtime.
 			// assgnParen consumed both '=' and '(',
 			// so rewrite as leftParen for array parsing below.
 			p.tok = leftParen

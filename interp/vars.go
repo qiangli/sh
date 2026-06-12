@@ -1773,7 +1773,11 @@ func (r *Runner) setVarWithIndex(prev expand.Variable, name string, index syntax
 		// end of the array: `a[-1]` targets the last element.
 		k = len(list) + k
 		if k < 0 {
-			r.errf("%s%s: bad array subscript\n", r.bashErrPrefix(r.curStmtPos), name)
+			idxText := r.arithmSourceText(index, false)
+			if idxText == "" {
+				idxText = strconv.Itoa(k)
+			}
+			r.errf("%s%s[%s]: bad array subscript\n", r.bashErrPrefix(r.curStmtPos), name, idxText)
 			r.exit.code = 1
 			return
 		}
