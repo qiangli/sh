@@ -17,3 +17,7 @@ bin/
 # Claude Code session artifacts
 .claude/
 .aider*
+
+# ycode local artifacts
+.agents/
+.gfy-out/

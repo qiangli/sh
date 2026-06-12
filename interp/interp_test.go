@@ -4015,6 +4015,14 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 		"unset\n",
 	},
 	{
+		"set -o posix; f() { foo=abc :; typeset +x foo; $ENV_PROG | grep '^foo='; }; f; declare -p foo",
+		"foo=abc\ndeclare -x foo=\"abc\"\n",
+	},
+	{
+		"set -o posix; f() { var=value declare -x var; declare -p var; }; var=one; f; declare -p var",
+		"declare -x var=\"value\"\ndeclare -- var=\"one\"\n",
+	},
+	{
 		"g() { local -i a; a+=3; echo $a; }; f() { g; }; a=4 f",
 		"7\n",
 	},

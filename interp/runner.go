@@ -933,6 +933,24 @@ func (r *Runner) pattern(word *syntax.Word) string {
 	return str
 }
 
+func (r *Runner) restoreInlineVar(name string, vr expand.Variable) {
+	if o, ok := r.writeEnv.(*overlayEnviron); ok {
+		if o.restoreTemp(name, vr) {
+			return
+		}
+		if o.funcScope && o.holdsLocally(name) {
+			if wenv, ok := o.parent.(expand.WriteEnviron); ok {
+				saved := r.writeEnv
+				r.writeEnv = wenv
+				r.setVar(name, vr)
+				r.writeEnv = saved
+				return
+			}
+		}
+	}
+	r.setVar(name, vr)
+}
+
 // expandEnviron exposes [Runner]'s variables to the expand package.
 type expandEnv struct {
 	r *Runner
@@ -4225,7 +4243,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				// not executed; the shell continues with status 1
 				// (bash follows ksh93 here rather than strict POSIX).
 				for _, restore := range restores {
-					r.setVar(restore.name, restore.vr)
+					r.restoreInlineVar(restore.name, restore.vr)
 				}
 				r.exit.code = 1
 				break
@@ -4263,20 +4281,21 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		// Outside POSIX mode at top level, the temporary is
 		// restored so `v=inline source ./f` reverts v afterwards.
 		special := isPosixSpecialBuiltin(fields[0])
-		persistInline := special && (r.opts[optPosix] || r.inFunc)
+		inFuncScope := r.inFunc || len(r.callStack) > 0
+		persistInline := special && (r.opts[optPosix] || inFuncScope)
 		switch fields[0] {
 		case "export", "readonly":
 			persistInline = true
 		case "declare", "typeset":
-			if r.inFunc {
-				persistInline = true
-			}
-			for _, arg := range fields[1:] {
-				if arg == "--" {
-					continue
-				}
-				if strings.HasPrefix(arg, "-") && (strings.Contains(arg, "x") || strings.Contains(arg, "r")) {
-					persistInline = true
+			persistInline = false
+			if !inFuncScope {
+				for _, arg := range fields[1:] {
+					if arg == "--" {
+						continue
+					}
+					if strings.HasPrefix(arg, "-") && (strings.Contains(arg, "x") || strings.Contains(arg, "r")) {
+						persistInline = true
+					}
 				}
 			}
 		}
@@ -4289,7 +4308,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				if r.inlineLeakFromFunc[restore.name] {
 					continue
 				}
-				r.setVar(restore.name, restore.vr)
+				r.restoreInlineVar(restore.name, restore.vr)
 			}
 			// Clear the leak flags now that this immediate
 			// caller has had its chance to consume them. A leak
