@@ -5388,6 +5388,32 @@ func TestBashCompatMalformedLengthSubstitution(t *testing.T) {
 			"./more-exp.tests: line 7: #: %: arithmetic syntax error: operand expected (error token is \"%\")\n"))
 }
 
+func TestBashCompatEvalArithOperandError(t *testing.T) {
+	// Bash defers arithmetic parsing to expansion time, so an
+	// operator-first expression inside eval'd $((...)) / $[...]
+	// reports through the arithmetic evaluator: no `eval:` tag, no
+	// source echo (errors.tests lines 286-287).
+	src := "eval echo \\$\\[/bin/sh + 0\\]\n" +
+		"eval echo '$((/bin/sh + 0))'\n" +
+		"true\n"
+	file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(src), "./errors.tests")
+	qt.Assert(t, qt.IsNil(err))
+
+	var cb bytes.Buffer
+	r, err := interp.New(
+		interp.StdIO(nil, &cb, &cb),
+		interp.WithBashCompatErrors(true),
+		interp.WithBashSource([]byte(src)),
+	)
+	qt.Assert(t, qt.IsNil(err))
+
+	err = r.Run(context.Background(), file)
+	qt.Assert(t, qt.IsNil(err))
+	qt.Assert(t, qt.Equals(cb.String(),
+		"./errors.tests: line 1: /bin/sh + 0: arithmetic syntax error: operand expected (error token is \"/bin/sh + 0\")\n"+
+			"./errors.tests: line 2: /bin/sh + 0: arithmetic syntax error: operand expected (error token is \"/bin/sh + 0\")\n"))
+}
+
 func TestBashCompatEvalUnclosedParenLineRebase(t *testing.T) {
 	// The parser stamps "from `(' command on line N" with the line
 	// inside the eval'd string; bash counts from the top of the

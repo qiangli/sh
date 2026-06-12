@@ -1686,6 +1686,21 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 						text = "unexpected EOF while looking for matching `)'"
 					}
 				}
+				// An arithmetic operator error inside $((...)) or
+				// $[...] is a *runtime* arithmetic error in bash,
+				// which defers arithmetic parsing to expansion time:
+				// no `eval:` tag, no source echo, and the evaluator's
+				// "operand expected" shape.
+				if strings.HasSuffix(text, "must follow an expression") {
+					if srcLine := evalSourceLine(src, int(pe.Pos.Line())); srcLine != "" {
+						if expr, ok := innerArithText(srcLine); ok {
+							r.errf("%s: line %d: %s: arithmetic syntax error: operand expected (error token is %q)\n",
+								name, pos.Line(), expr, expr)
+							exit.code = 1
+							return exit
+						}
+					}
+				}
 				// bash reports the eval-time EOF on the line right
 				// after the eval source ran out, not the eval-call
 				// line itself. Add the eval source's line count to
@@ -4086,6 +4101,22 @@ func firstBraceLine(src string) int {
 		}
 	}
 	return 0
+}
+
+// innerArithText extracts the body of the first $((...)) or $[...]
+// in line, returning ok=false when neither is present.
+func innerArithText(line string) (string, bool) {
+	if i := strings.Index(line, "$(("); i >= 0 {
+		if j := strings.Index(line[i:], "))"); j >= 0 {
+			return strings.TrimSpace(line[i+3 : i+j]), true
+		}
+	}
+	if i := strings.Index(line, "$["); i >= 0 {
+		if j := strings.IndexByte(line[i:], ']'); j >= 0 {
+			return strings.TrimSpace(line[i+2 : i+j]), true
+		}
+	}
+	return "", false
 }
 
 func evalSourceLine(src string, n int) string {
