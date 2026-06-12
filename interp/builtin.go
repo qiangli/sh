@@ -1314,8 +1314,13 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			return exit
 		}
 		if level < len(r.callStack) {
-			frame := r.callStack[len(r.callStack)-1-level]
-			r.outf("%d %s %s\n", frame.line, frame.funcName, frame.source)
+			idx := len(r.callStack) - 1 - level
+			frame := r.callStack[idx]
+			funcName := "main"
+			if idx > 0 {
+				funcName = r.callStack[idx-1].funcName
+			}
+			r.outf("%d %s %s\n", frame.line, funcName, frame.source)
 		} else {
 			exit.code = 1
 		}
@@ -1839,6 +1844,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		oldParams := r.Params
 		oldSourceSetParams := r.sourceSetParams
 		oldInSource := r.inSource
+		oldFilename := r.filename
 
 		// If we run "source file args...", set said args as parameters.
 		// Otherwise, keep the current parameters.
@@ -1851,7 +1857,22 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		// parameters.
 		r.sourceSetParams = false
 		r.inSource = true // know that we're inside a sourced script.
+		r.filename = path
+		r.callStack = append(r.callStack, callFrame{
+			line:         pos.Line(),
+			source:       path,
+			callerSource: oldFilename,
+			funcName:     "source",
+		})
 		r.stmts(ctx, file.Stmts)
+		r.callStack = r.callStack[:len(r.callStack)-1]
+		if r.functraceEnabled() {
+			prevLineno := r.ecfg.OverrideLineno
+			r.ecfg.OverrideLineno = int(pos.Line())
+			r.trapCallback(ctx, r.trapCallbacks["RETURN"], "return")
+			r.ecfg.OverrideLineno = prevLineno
+		}
+		r.filename = oldFilename
 
 		// If we modified the parameters and the sourced file didn't
 		// explicitly set them, we restore the old ones.

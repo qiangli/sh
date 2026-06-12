@@ -702,18 +702,28 @@ func (r *Runner) lookupVar(name string) expand.Variable {
 		}
 	case "BASH_SOURCE":
 		vr.Kind = expand.Indexed
-		sources := make([]string, len(r.callStack))
-		for i, f := range r.callStack {
-			sources[len(r.callStack)-1-i] = f.source
+		if len(r.callStack) > 0 {
+			sources := make([]string, len(r.callStack)+1)
+			for i, f := range r.callStack {
+				sources[len(r.callStack)-1-i] = f.source
+			}
+			outer := r.callStack[0].source
+			if r.callStack[0].callerSource != "" {
+				outer = r.callStack[0].callerSource
+			}
+			sources[len(r.callStack)] = outer
+			vr.List = sources
 		}
-		vr.List = sources
 	case "BASH_LINENO":
 		vr.Kind = expand.Indexed
-		lines := make([]string, len(r.callStack))
-		for i, f := range r.callStack {
-			lines[len(r.callStack)-1-i] = strconv.FormatUint(uint64(f.line), 10)
+		if len(r.callStack) > 0 {
+			lines := make([]string, len(r.callStack)+1)
+			for i, f := range r.callStack {
+				lines[len(r.callStack)-1-i] = strconv.FormatUint(uint64(f.line), 10)
+			}
+			lines[len(r.callStack)] = "0"
+			vr.List = lines
 		}
-		vr.List = lines
 	case "PIPESTATUS":
 		vr.Kind = expand.Indexed
 		if r.pipeStatus != nil {

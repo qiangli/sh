@@ -518,9 +518,10 @@ func (e *exitStatus) fromHandlerError(err error) {
 
 // callFrame records a function call for the call stack.
 type callFrame struct {
-	line     uint
-	source   string
-	funcName string
+	line         uint
+	source       string
+	callerSource string
+	funcName     string
 	// bodyLine is the line of the function body's opening token.
 	// Bash's parser stamps for/select commands inside a function with
 	// this line rather than their own, and runtime diagnostics like
@@ -784,7 +785,13 @@ func Params(args ...string) RunnerOption {
 					// Accept-and-ignore single-letter options
 					// that bash supports but we don't model.
 					switch flag[1] {
-					case 'h', 'H', 'v', 'm', 'P', 'p', 'T', 'B', 'b', 't':
+					case 'T':
+						if r.noOpSetState == nil {
+							r.noOpSetState = make(map[string]bool)
+						}
+						r.noOpSetState["functrace"] = enable
+						continue
+					case 'h', 'H', 'v', 'm', 'P', 'p', 'B', 'b', 't':
 						continue
 					}
 					return fmt.Errorf("invalid option: %q", flag)

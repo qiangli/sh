@@ -4096,7 +4096,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		// assignment-only forms (`x=2`). With `shopt -s extdebug`,
 		// a trap that returns 2 skips the next command. Fire here
 		// so the assignment-only branch below honors the skip.
-		if len(cm.Args) == 0 && len(cm.Assigns) > 0 && r.trapCallbacks["DEBUG"] != "" {
+		if len(cm.Args) == 0 && len(cm.Assigns) > 0 && r.shouldFireDebugTrap() {
 			prevLineno := r.ecfg.OverrideLineno
 			r.ecfg.OverrideLineno = int(cm.Assigns[0].Pos().Line())
 			debugCode := r.trapCallback(ctx, r.trapCallbacks["DEBUG"], "debug")
@@ -6759,6 +6759,20 @@ func (r *Runner) readonlyNamedFdOpenSideEffect(ctx context.Context, rd *syntax.R
 	}
 }
 
+func (r *Runner) functraceEnabled() bool {
+	if enabled, ok := r.noOpSetState["functrace"]; ok {
+		return enabled
+	}
+	return noOpSetOptions["functrace"]
+}
+
+func (r *Runner) shouldFireDebugTrap() bool {
+	if r.trapCallbacks["DEBUG"] == "" {
+		return false
+	}
+	return len(r.callStack) == 0 || r.functraceEnabled()
+}
+
 // selectLoop implements bash's `select var in items; do ...; done`.
 // Each iteration prints the numbered menu to stderr, prompts with PS3,
 // reads a line into REPLY, sets var to items[N-1] when the reply is a
@@ -6770,7 +6784,7 @@ func (r *Runner) readonlyNamedFdOpenSideEffect(ctx context.Context, rd *syntax.R
 // arithmetic parts of a C-style for loop. Reports whether extdebug is
 // on and the trap returned 2, in which case the command is skipped.
 func (r *Runner) fireDebugTrap(ctx context.Context, node syntax.Node) bool {
-	if r.trapCallbacks["DEBUG"] == "" {
+	if !r.shouldFireDebugTrap() {
 		return false
 	}
 	prevLineno := r.ecfg.OverrideLineno
@@ -6866,10 +6880,13 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 	r.setVarString("BASH_COMMAND", strings.Join(args, " "))
 	// While the DEBUG trap body is being expanded, $LINENO should
 	// resolve to the line of the command that triggered the trap.
-	prevLineno := r.ecfg.OverrideLineno
-	r.ecfg.OverrideLineno = int(pos.Line())
-	debugCode := r.trapCallback(ctx, r.trapCallbacks["DEBUG"], "debug")
-	r.ecfg.OverrideLineno = prevLineno
+	debugCode := uint8(0)
+	if r.shouldFireDebugTrap() {
+		prevLineno := r.ecfg.OverrideLineno
+		r.ecfg.OverrideLineno = int(pos.Line())
+		debugCode = r.trapCallback(ctx, r.trapCallbacks["DEBUG"], "debug")
+		r.ecfg.OverrideLineno = prevLineno
+	}
 	// Bash: with `shopt -s extdebug`, a DEBUG trap that returns 2
 	// skips execution of the next command (but doesn't terminate
 	// the shell). The trap-callback already restored r.exit, so we
@@ -6944,6 +6961,12 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 		origEnv := r.writeEnv
 		r.writeEnv = &overlayEnviron{parent: r.writeEnv, funcScope: true}
 
+		if r.shouldFireDebugTrap() {
+			prevLineno := r.ecfg.OverrideLineno
+			r.ecfg.OverrideLineno = int(body.Pos().Line())
+			r.trapCallback(ctx, r.trapCallbacks["DEBUG"], "debug")
+			r.ecfg.OverrideLineno = prevLineno
+		}
 		r.stmt(ctx, body)
 		if r.exit.exiting && r.trapCallbacks["EXIT"] != "" {
 			r.exitTrapCallStack = slices.Clone(r.callStack)
@@ -6951,10 +6974,12 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 
 		r.writeEnv = origEnv
 
-		prevLineno = r.ecfg.OverrideLineno
-		r.ecfg.OverrideLineno = int(body.Pos().Line())
-		r.trapCallback(ctx, r.trapCallbacks["RETURN"], "return")
-		r.ecfg.OverrideLineno = prevLineno
+		if r.functraceEnabled() {
+			prevLineno := r.ecfg.OverrideLineno
+			r.ecfg.OverrideLineno = int(body.Pos().Line())
+			r.trapCallback(ctx, r.trapCallbacks["RETURN"], "return")
+			r.ecfg.OverrideLineno = prevLineno
+		}
 		r.callStack = r.callStack[:len(r.callStack)-1]
 		if n := len(r.localOptStack); n > 0 {
 			frame := r.localOptStack[n-1]

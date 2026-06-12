@@ -3428,6 +3428,8 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 		"trap: -s: invalid option\ntrap: usage: trap [-Plp] [[action] signal_spec ...]\nexit status 2 #JUSTERR",
 	},
 	{"set -T; f(){\n:\n}\ntrap 'echo return:$LINENO' RETURN; f", "return:1\n"},
+	{"f(){ caller 0; }; f", "1 main \n"},
+	{"g(){ caller 0; caller 1; }; f(){ g; }; f", "1 f \n1 main \n"},
 	// TODO: our builtin appears to not receive the piped bytes?
 	// {"trap 'echo on_err' ERR; trap | grep -q '.*echo on_err.*'", "trap -- \"echo on_err\" ERR\n"},
 	{"trap 'false' ERR EXIT; false", "exit status 1"},
@@ -3469,6 +3471,14 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	{
 		"echo 'foo=bar' >a; source ./a; echo $foo",
 		"bar\n",
+	},
+	{
+		"echo 'echo ${BASH_SOURCE[0]}; f(){ echo ${FUNCNAME[1]}:${BASH_SOURCE[1]}; }; f' >a; source ./a",
+		"./a\nsource:./a\n",
+	},
+	{
+		"echo 'f(){ printf \"%s|%s|%s\\n\" \"${FUNCNAME[0]}\" \"${BASH_SOURCE[1]}\" \"${BASH_LINENO[0]}\"; }; f' >a; source ./a",
+		"f|./a|1\n",
 	},
 
 	// source from PATH
