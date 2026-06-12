@@ -3783,6 +3783,16 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 		`declare -A a; a[a]=x; a[b]=y; declare -A a; for v in "${!a[@]}"; do echo "$v"; done | sort`,
 		"a\nb\n",
 	},
+	{
+		`IFS=; a=('a b' 'c d' 'e f'); printf '<%s>\n' ${a[@]:1:2}`,
+		"<c d>\n<e f>\n",
+	},
+	{
+		`IFS=; a=(ab cd ef); foo='var with spaces'; printf '<%s>\n' ${foo}${a[@]}`,
+		"<var with spacesab>\n<cd>\n<ef>\n",
+	},
+	{`echo "${dbg-'"'hey}"`, "''hey\n"},
+	{`echo "${dbg-'"hey'}"`, "'hey'\n"},
 	// weird assignments
 	{"a=b; a=(c d); echo ${a[@]}", "c d\n"},
 	{"a=(b c); a=d; echo ${a[@]}", "d c\n"},

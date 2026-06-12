@@ -2335,6 +2335,22 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 				}
 				continue
 			}
+			if !wp.Excl && wp.Exp == nil && wp.Repl == nil && !wp.Length && !wp.Width && !wp.IsSet &&
+				nodeLit(wp.Index) == "@" && cfg.ifs == "" {
+				elems, err := cfg.quotedAllElemValues(wp)
+				if err != nil {
+					return nil, err
+				}
+				if elems != nil {
+					for i, elem := range elems {
+						if i > 0 {
+							flush()
+						}
+						curField = append(curField, fieldPart{val: elem})
+					}
+					continue
+				}
+			}
 			if elems, err := cfg.quotedReplElemFields(wp); err != nil {
 				return nil, err
 			} else if elems != nil {

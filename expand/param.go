@@ -165,6 +165,40 @@ func paramExpWordHasBackslashLit(word *syntax.Word) bool {
 	return false
 }
 
+func paramExpWordHasSingleQuotedLeadingDouble(word *syntax.Word) bool {
+	if word == nil {
+		return false
+	}
+	for _, part := range word.Parts {
+		sq, ok := part.(*syntax.SglQuoted)
+		if ok && !sq.Dollar && strings.HasPrefix(sq.Value, `"`) {
+			return true
+		}
+	}
+	return false
+}
+
+func (cfg *Config) literalParamExpDoubleQuotedDefault(word *syntax.Word) (string, error) {
+	var sb strings.Builder
+	for _, part := range word.Parts {
+		switch part := part.(type) {
+		case *syntax.SglQuoted:
+			if !part.Dollar && strings.HasPrefix(part.Value, `"`) {
+				sb.WriteByte('\'')
+				sb.WriteString(strings.TrimPrefix(part.Value, `"`))
+				sb.WriteByte('\'')
+				continue
+			}
+		}
+		val, err := cfg.literalParamExpWord(&syntax.Word{Parts: []syntax.WordPart{part}}, false)
+		if err != nil {
+			return "", err
+		}
+		sb.WriteString(val)
+	}
+	return sb.String(), nil
+}
+
 func paramExpDefaultTriggers(op syntax.ParExpOperator, vr Variable, str string) bool {
 	switch op {
 	case syntax.DefaultUnset:
@@ -920,6 +954,10 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			} else {
 				arg, err = LiteralWithQuoteRemoval(cfg, pe.Exp.Word)
 			}
+		case cfg.insideDoubleQuote && paramExpDefaultTriggers(op, vr, str) &&
+			(op == syntax.DefaultUnset || op == syntax.DefaultUnsetOrNull) &&
+			paramExpWordHasSingleQuotedLeadingDouble(pe.Exp.Word):
+			arg, err = cfg.literalParamExpDoubleQuotedDefault(pe.Exp.Word)
 		case cfg.insideDoubleQuote && paramExpDefaultTriggers(op, vr, str) &&
 			(op == syntax.DefaultUnset || op == syntax.DefaultUnsetOrNull) &&
 			(paramExpWordSingleQuotesOnly(pe.Exp.Word) || paramExpWordHasBackslashLit(pe.Exp.Word)):
