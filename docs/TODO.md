@@ -1,7 +1,7 @@
 # Bashy: Bash 5.3 Drop-In Replacement — TODO Checklist
 
-**Current status**: 68 bash tests passing, 8 failing, 11 skipped
-**Last updated**: 2026-06-11 (errors fixture flipped FAIL → PASS: 48 → 0 diff lines, R2 clusters C1-C10)
+**Current status**: 69 bash tests passing, 7 failing, 11 skipped
+**Last updated**: 2026-06-11 (errors fixture flipped FAIL -> PASS: 70 -> 0 diff lines; varenv 112 -> 75; read -t TTY hang fixed; suite 69/7/11/0)
 
 ---
 
