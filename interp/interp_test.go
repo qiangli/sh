@@ -583,6 +583,7 @@ var runTests = []runTest{
 	{`n=0; (( (a[n]=++n)<7&&a[0] )); printf '<%s>\n' "${a[@]:1}"`, "<1>\n"},
 	{`v=hello; echo ${v:1:-2}`, "ell\n"},
 	{`v=hello; echo ${v: -3:2}`, "ll\n"},
+	{`v=hello; echo ${v:2:}; echo ${v:2}`, "\nllo\n"},
 	{`v=ಇಳಿಕೆಗಳು; printf '<%s> <%s>\n' "${v:0:2}" "${v:0:1}"`, "<ಇಳ> <ಇ>\n"},
 
 	// quoted array slicing
@@ -2635,6 +2636,7 @@ var runTests = []runTest{
 	{"x=1; ((x=2, y=x)); echo $x $y", "2 2\n"},
 	{"x=(456 123); (( x[1] < x && (x=x[1], x[1]=$x) )); echo ${x[@]}", "123 456\n"},
 	{"x=(456 123); (( x[1] < x[0] && (x[0]=x[1], x[1]=$x) )); echo ${x[@]}", "123 456\n"},
+	{`declare -a a; a[0]=0; let a\[" "\]=13; declare -p a; let "a[\" \"]"=18; declare -p a; let "a[\"\"]"=22; declare -p a`, "declare -a a=([0]=\"13\")\ndeclare -a a=([0]=\"18\")\ndeclare -a a=([0]=\"22\")\n"},
 	{"n=0; (( a[n]=++n )); echo $n ${a[@]}", "1 1\n"},
 	{"n=0 a='(a[n]=++n)<7&&a[0]'; ((a[0])); echo ${a[@]:1}", "1 2 3 4 5 6 7\n"},
 	{"set -u; echo $((a > 4)); echo after", "a: unbound variable\nexit status 1 #JUSTERR"},

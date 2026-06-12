@@ -1813,7 +1813,11 @@ zshPrefixLoop:
 		}
 		colonPos = p.pos
 		if p.got(colon) {
-			pe.Slice.Length = p.followArithm(colon, colonPos)
+			if p.tok == rightBrace {
+				pe.Slice.Length = p.wordOne(p.lit(colonPos, "0"))
+			} else {
+				pe.Slice.Length = p.followArithm(colon, colonPos)
+			}
 		}
 		// Need to use a different matched style so arithm errors
 		// get reported correctly

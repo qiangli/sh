@@ -677,12 +677,30 @@ func (cfg *Config) resolveAritLvalueName(lval arithLvalue) (arithLvalue, error) 
 	if lval.word == nil {
 		return lval, nil
 	}
-	name, err := Literal(cfg, lval.word)
+	name, err := LiteralWithQuoteRemoval(cfg, lval.word)
 	if err != nil {
 		return lval, err
 	}
+	if parsed, ok := arithLvalueFromString(name); ok {
+		return parsed, nil
+	}
 	lval.name = name
 	return lval, nil
+}
+
+func arithLvalueFromString(s string) (arithLvalue, bool) {
+	if !strings.HasSuffix(s, "]") {
+		return arithLvalue{}, false
+	}
+	open := strings.IndexByte(s, '[')
+	if open <= 0 || !syntax.ValidName(s[:open]) {
+		return arithLvalue{}, false
+	}
+	expr, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Arithmetic(strings.NewReader(s[open+1 : len(s)-1]))
+	if err != nil {
+		return arithLvalue{}, false
+	}
+	return arithLvalue{name: s[:open], index: expr}, true
 }
 
 func (cfg *Config) getAritLvalue(lval arithLvalue) (int64, error) {
