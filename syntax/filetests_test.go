@@ -1730,6 +1730,34 @@ var fileTests = []fileTestCase{
 		}),
 	),
 	fileTest(
+		[]string{"2147483647>file"},
+		langFile(&Stmt{
+			Redirs: []*Redirect{
+				{Op: RdrOut, N: lit("2147483647"), Word: litWord("file")},
+			},
+		}),
+	),
+	fileTest(
+		// Digits which do not fit in a signed 32-bit integer are not a
+		// file descriptor number, but a regular word.
+		[]string{"2147483648 >file", "2147483648>file"},
+		langFile(&Stmt{
+			Cmd: litCall("2147483648"),
+			Redirs: []*Redirect{
+				{Op: RdrOut, Word: litWord("file")},
+			},
+		}),
+	),
+	fileTest(
+		[]string{"99999999999999999999 <file", "99999999999999999999<file"},
+		langFile(&Stmt{
+			Cmd: litCall("99999999999999999999"),
+			Redirs: []*Redirect{
+				{Op: RdrIn, Word: litWord("file")},
+			},
+		}),
+	),
+	fileTest(
 		[]string{"a >f1\nb >f2", "a >f1; b >f2"},
 		langFile([]*Stmt{
 			{
