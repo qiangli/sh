@@ -1420,6 +1420,12 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			break
 		}
 		// Cache specific commands.
+		if explicitPath != "" && len(remaining) == 0 {
+			r.errf("%shash: -p: option requires an argument\n", r.bashErrPrefix(pos))
+			r.errf("hash: usage: %s\n", bashUsage["hash"])
+			exit.code = 2
+			return exit
+		}
 		for _, name := range remaining {
 			var path string
 			if explicitPath != "" {
