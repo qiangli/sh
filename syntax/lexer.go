@@ -6,6 +6,7 @@ package syntax
 import (
 	"bytes"
 	"io"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -1111,7 +1112,14 @@ func (p *Parser) isLitRedir() bool {
 		}
 		return false
 	}
-	return numberLiteral(lit)
+	if !numberLiteral(lit) {
+		return false
+	}
+	// Like Bash, only treat the digits as a file descriptor number if the
+	// value fits in a signed 32-bit integer; otherwise the digits are a
+	// regular word, e.g. a command name in `99999999999999999999>file`.
+	_, err := strconv.ParseInt(string(lit), 10, 32)
+	return err == nil
 }
 
 func positionalRuneParam[T rune | byte](r T) bool {
