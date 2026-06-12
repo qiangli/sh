@@ -3277,11 +3277,26 @@ func (cfg *Config) sliceElems(pe *syntax.ParamExp, elems []string, positional bo
 			return elems, err
 		}
 		if length < 0 {
+			if positional {
+				name := pe.Param.Value
+				if text := arithmExprText(pe.Slice.Length); text != "" {
+					name = text
+				}
+				return nil, fmt.Errorf("%s: substring expression < 0", name)
+			}
 			return nil, fmt.Errorf("%s: %d: substring expression < 0", pe.Param.Value, length)
 		}
 		elems = elems[:slicePos(length)]
 	}
 	return elems, nil
+}
+
+func arithmExprText(expr syntax.ArithmExpr) string {
+	var buf bytes.Buffer
+	if err := syntax.NewPrinter().Print(&buf, expr); err != nil {
+		return ""
+	}
+	return buf.String()
 }
 
 // expandTildesAfterColons applies bash's assignment-tilde rule to a

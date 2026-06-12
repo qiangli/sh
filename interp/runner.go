@@ -430,6 +430,7 @@ func looksLikeExpandError(msg string) bool {
 		strings.Contains(msg, "unbound variable"),
 		strings.Contains(msg, "readonly variable"),
 		strings.Contains(msg, "bad array subscript"),
+		strings.Contains(msg, "substring expression < 0"),
 		strings.Contains(msg, "cannot assign in this way"),
 		strings.Contains(msg, "invalid variable name"):
 		return true
@@ -1461,6 +1462,17 @@ func splitAssignmentField(field string) (name, value string, ok bool) {
 		return "", "", false
 	}
 	return field[:eq], field[eq+1:], true
+}
+
+func (r *Runner) inlineArrayAssignName(as *syntax.Assign) string {
+	name := as.Name.Value
+	if as.Index != nil {
+		if w, ok := as.Index.(*syntax.Word); ok {
+			return name + "[" + r.literal(w) + "]"
+		}
+		return name + "[]"
+	}
+	return name
 }
 
 // renderNestedFuncDecl writes a nested function decl into buf in
@@ -4125,6 +4137,12 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 
 		assignFailed := false
 		for _, as := range cm.Assigns {
+			if as.Index != nil || as.Array != nil {
+				r.errf("%s`%s': not a valid identifier\n",
+					r.bashErrPrefix(r.curStmtPos), r.inlineArrayAssignName(as))
+				assignFailed = true
+				continue
+			}
 			name := as.Name.Value
 			prev := r.lookupVar(name)
 			// Resolve any nameref so we can restore the original final value later on.
