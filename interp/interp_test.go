@@ -3791,6 +3791,7 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 		`IFS=; a=(ab cd ef); foo='var with spaces'; printf '<%s>\n' ${foo}${a[@]}`,
 		"<var with spacesab>\n<cd>\n<ef>\n",
 	},
+	{`array[1001 - $(echo -n 1001)]=1; echo ${array[0]}`, "1\n"},
 	{`echo "${dbg-'"'hey}"`, "''hey\n"},
 	{`echo "${dbg-'"hey'}"`, "'hey'\n"},
 	// weird assignments

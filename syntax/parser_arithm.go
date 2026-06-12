@@ -1,5 +1,7 @@
 package syntax
 
+import "strings"
+
 // compact specifies whether we allow spaces between expressions.
 // This is true for let
 func (p *Parser) arithmExpr(compact bool) ArithmExpr {
@@ -313,7 +315,10 @@ func (p *Parser) appendAssignIndexWord(l *Lit) {
 		}
 		return
 	}
-	for p.tok != rightBrack && p.tok != leftBrack && p.tok != rightParen && p.tok != _EOF {
+	for p.tok != rightBrack && p.tok != leftBrack && p.tok != _EOF {
+		if p.tok == rightParen && (p.r != ']' || !rawAssignIndexOpenCommandSubst(l.Value)) {
+			break
+		}
 		sep := ""
 		if p.spaced {
 			sep = " "
@@ -332,6 +337,10 @@ func (p *Parser) appendAssignIndexWord(l *Lit) {
 		l.ValueEnd = posAddCol(p.pos, len(text))
 		p.nextArith(false)
 	}
+}
+
+func rawAssignIndexOpenCommandSubst(s string) bool {
+	return strings.Count(s, "$(") > strings.Count(s, ")")
 }
 
 // nextArith consumes a token.
