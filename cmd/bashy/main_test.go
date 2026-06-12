@@ -116,6 +116,62 @@ func TestPrintBashParseErrorCompoundEOF(t *testing.T) {
 	}
 }
 
+func TestPrintBashParseErrorArrayCompatibility(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		src  string
+		pos  syntax.Pos
+		text string
+		want string
+	}{
+		{
+			name: "array assignment after command word",
+			src:  `printf "%s\n" -a a=(a 'b  c')`,
+			pos:  syntax.NewPos(0, 1, 20),
+			text: "a command can only contain words and redirects; encountered `(`",
+			want: "bash: -c: line 1: syntax error near unexpected token `('\n" +
+				"bash: -c: line 1: `printf \"%s\\n\" -a a=(a 'b  c')'\n",
+		},
+		{
+			name: "empty declare name",
+			src:  `declare -r []=asdf`,
+			pos:  syntax.NewPos(0, 1, 13),
+			text: "invalid var name",
+			want: "bash: -c: line 1: declare: `[]=asdf': not a valid identifier\n",
+		},
+		{
+			name: "zsh process substitution in declare",
+			src:  `declare -a ''=(a 'b c')`,
+			pos:  syntax.NewPos(0, 1, 14),
+			text: "`=(` process substitutions are a zsh feature",
+			want: "bash: -c: line 1: syntax error near unexpected token `('\n" +
+				"bash: -c: line 1: `declare -a ''=(a 'b c')'\n",
+		},
+		{
+			name: "array metacharacter pair",
+			src:  `metas=( <> < > ! )`,
+			pos:  syntax.NewPos(0, 1, 9),
+			text: "array element values must be words",
+			want: "bash: -c: line 1: syntax error near unexpected token `<>'\n" +
+				"bash: -c: line 1: `metas=( <> < > ! )'\n",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			var buf bytes.Buffer
+			printBashParseError(&buf, []byte(test.src), "bash: -c", syntax.ParseError{
+				Pos:  test.pos,
+				Text: test.text,
+			})
+			if got := buf.String(); got != test.want {
+				t.Fatalf("printBashParseError mismatch\nwant:\n%q\ngot:\n%q", test.want, got)
+			}
+		})
+	}
+}
+
 func TestDefaultCommandArgv0(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

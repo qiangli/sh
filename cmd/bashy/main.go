@@ -1743,6 +1743,13 @@ func bashRecoverableParseError(err error) (syntax.ParseError, bool) {
 			Text:     le.Feature,
 		}, true
 	}
+	if errors.As(err, &le) && strings.Contains(le.Feature, "`=(` process substitutions") {
+		return syntax.ParseError{
+			Filename: le.Filename,
+			Pos:      le.Pos,
+			Text:     le.Feature,
+		}, true
+	}
 	return syntax.ParseError{}, false
 }
 
@@ -1835,6 +1842,9 @@ func printBashParseError(w io.Writer, src []byte, prefix string, pe syntax.Parse
 	if strings.HasSuffix(text, ": bad substitution") {
 		return
 	}
+	if strings.Contains(text, ": `") && strings.HasSuffix(text, "': not a valid identifier") {
+		return
+	}
 	// Bash omits the trailing source-line echo for "unexpected EOF"
 	// diagnostics (the matching-`X' messages already point at the
 	// unclosed construct).
@@ -1912,6 +1922,9 @@ func arithForHeader(src string) (string, bool) {
 // into bash 5.3's canonical wording when the pattern is recognisable.
 // Falls back to the original text otherwise.
 func rewriteParserErrorText(src string, pe syntax.ParseError) string {
+	if text, ok := declareInvalidIdentifierText(src, pe); ok {
+		return text
+	}
 	if strings.Contains(pe.Text, "nested parameter expansions") {
 		if subst := nestedBadSubstSource(src, pe.Pos); subst != "" {
 			subst = strings.ReplaceAll(subst, "$'", "'")
@@ -1965,8 +1978,18 @@ func rewriteParserErrorText(src string, pe syntax.ParseError) string {
 	switch {
 	case pe.Text == "statements must be separated by &, ; or a newline",
 		pe.Text == "array element values must be words",
+		strings.Contains(pe.Text, "a command can only contain words and redirects"),
+		strings.Contains(pe.Text, "`=(` process substitutions"),
 		strings.Contains(pe.Text, "must be followed by"),
 		strings.Contains(pe.Text, "must follow a name"):
+		if strings.Contains(pe.Text, "`=(` process substitutions") {
+			return "syntax error near unexpected token `('"
+		}
+		if pe.Text == "array element values must be words" {
+			if tok := arrayElementErrorTokenAt(src, pe.Pos); tok != "" {
+				return fmt.Sprintf("syntax error near unexpected token `%s'", tok)
+			}
+		}
 		// For `case`/`for`/`select` follow-errors the parser anchors the
 		// position at the keyword itself ("`case x` must be followed by
 		// `in`") but bash reports the actually-offending token (the one
@@ -1991,6 +2014,42 @@ func rewriteParserErrorText(src string, pe syntax.ParseError) string {
 		return "unexpected EOF while looking for matching `\"'"
 	}
 	return pe.Text
+}
+
+func declareInvalidIdentifierText(src string, pe syntax.ParseError) (string, bool) {
+	if pe.Text != "invalid var name" {
+		return "", false
+	}
+	line := strings.TrimSpace(nthLine([]byte(src), int(pe.Pos.Line())))
+	fields := strings.Fields(line)
+	if len(fields) == 0 {
+		return "", false
+	}
+	name := fields[0]
+	switch name {
+	case "declare", "export", "local", "readonly", "typeset":
+	default:
+		return "", false
+	}
+	for _, field := range fields[1:] {
+		if strings.HasPrefix(field, "-") {
+			continue
+		}
+		return fmt.Sprintf("%s: `%s': not a valid identifier", name, field), true
+	}
+	return "", false
+}
+
+func arrayElementErrorTokenAt(src string, pos syntax.Pos) string {
+	off := offsetBeforePos([]byte(src), pos)
+	if off < 0 || off >= len(src) {
+		return ""
+	}
+	rest := src[off:]
+	if strings.HasPrefix(rest, "<>") {
+		return "<>"
+	}
+	return ""
 }
 
 func arithmeticParseErrorText(src string, pe syntax.ParseError) string {
