@@ -3649,6 +3649,10 @@ func (cfg *Config) sliceIndexedElems(pe *syntax.ParamExp, vr Variable, positiona
 }
 
 func arithmExprText(expr syntax.ArithmExpr) string {
+	if unary, ok := expr.(*syntax.UnaryArithm); ok && !unary.Post &&
+		(unary.Op == syntax.Plus || unary.Op == syntax.Minus) {
+		return unary.Op.String() + arithmExprText(unary.X)
+	}
 	var buf bytes.Buffer
 	if err := syntax.NewPrinter().Print(&buf, expr); err != nil {
 		return ""

@@ -599,6 +599,7 @@ var runTests = []runTest{
 	{`f() { echo ${@:2:2}; }; f a b c d e`, "b c\n"},
 	{`set -- a b c; echo ${@:2:2}`, "b c\n"},
 	{`set -- a; echo ${@:1:$(($# - 2))}`, "$(($# - 2)): substring expression < 0\n #JUSTERR"},
+	{`set -- a b c d e; echo ${@: -3:-2}`, "-2: substring expression < 0\n #JUSTERR"},
 	{`f() { echo "${@:1}"; }; f a b c`, "a b c\n"},
 	{`f() { echo "${*:2:2}"; }; f a b c d e`, "b c\n"},
 	{`f() { echo "${@: -2}"; }; f a b c d e`, "d e\n"},
