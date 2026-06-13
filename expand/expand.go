@@ -85,6 +85,10 @@ type Config struct {
 	// pattern matching in pathname expansion.
 	NoCaseGlob bool
 
+	// NoCaseMatch corresponds to the shell option which causes case-insensitive
+	// pattern matching in parameter replacement.
+	NoCaseMatch bool
+
 	// NullGlob corresponds to the shell option which allows globbing
 	// patterns which match nothing to result in zero fields.
 	NullGlob bool
@@ -3780,6 +3784,9 @@ func (cfg *Config) findAllIndex(pat, name string, n int) [][]int {
 	var mode pattern.Mode
 	if cfg.ExtGlob {
 		mode |= pattern.ExtendedOperators
+	}
+	if cfg.NoCaseMatch {
+		mode |= pattern.NoGlobCase
 	}
 	expr, err := pattern.Regexp(pat, mode)
 	if err != nil {

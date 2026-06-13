@@ -344,6 +344,9 @@ func (r *Runner) updateExpandOpts() {
 	}
 	r.ecfg.DotGlob = r.opts[optDotGlob]
 	r.ecfg.NoCaseGlob = r.opts[optNoCaseGlob]
+	if opt, _ := r.bashOptByName("nocasematch"); opt != nil {
+		r.ecfg.NoCaseMatch = *opt
+	}
 	r.ecfg.NullGlob = r.opts[optNullGlob]
 	r.ecfg.NoUnset = r.opts[optNoUnset]
 	r.ecfg.ExtGlob = r.opts[optExtGlob]

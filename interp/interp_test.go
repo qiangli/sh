@@ -585,6 +585,7 @@ var runTests = []runTest{
 	{`v=hello; echo ${v: -3:2}`, "ll\n"},
 	{`v=hello; echo ${v:2:}; echo ${v:2}`, "\nllo\n"},
 	{`v=ಇಳಿಕೆಗಳು; printf '<%s> <%s>\n' "${v:0:2}" "${v:0:1}"`, "<ಇಳ> <ಇ>\n"},
+	{`shopt -s nocasematch; v=abcd; printf '%s\n' "${v//A/z}" "${v//BC/x}" "${v//[BC]/x}"`, "zbcd\naxd\naxxd\n"},
 
 	// quoted array slicing
 	{`a=(1 2 3 4 5); echo "${a[@]:2:2}"`, "3 4\n"},

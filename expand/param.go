@@ -508,6 +508,9 @@ func (cfg *Config) findReplIndex(pat, name string, n int, start, end bool) [][]i
 	if cfg.ExtGlob {
 		mode |= pattern.ExtendedOperators
 	}
+	if cfg.NoCaseMatch {
+		mode |= pattern.NoGlobCase
+	}
 	expr, err := pattern.Regexp(pat, mode)
 	if err != nil {
 		return nil
