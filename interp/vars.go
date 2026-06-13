@@ -1602,11 +1602,19 @@ func (r *Runner) setVar(name string, vr expand.Variable) {
 				r.errf("%s%s: %s: %s\n", r.bashErrPrefix(r.curStmtPos),
 					r.callStack[len(r.callStack)-1].funcName, name, convErr)
 			}
-			builtin := r.setVarFromBuiltin
-			if builtin == "" {
-				builtin = "declare"
+			// A top-level array-literal assignment (`declare -a A=(...)`)
+			// that fails to convert is attributed by bash 5.3 to the
+			// variable alone, with no builtin prefix; the builtin-prefixed
+			// line only accompanies the function-attributed report.
+			if r.setVarArrayLiteral && len(r.callStack) == 0 {
+				r.errf("%s%s: %s\n", r.bashErrPrefix(r.curStmtPos), name, convErr)
+			} else {
+				builtin := r.setVarFromBuiltin
+				if builtin == "" {
+					builtin = "declare"
+				}
+				r.errf("%s%s: %s: %s\n", r.bashErrPrefix(r.curStmtPos), builtin, name, convErr)
 			}
-			r.errf("%s%s: %s: %s\n", r.bashErrPrefix(r.curStmtPos), builtin, name, convErr)
 			r.exit.code = 1
 			return
 		}
@@ -1692,6 +1700,15 @@ func (r *Runner) rejectDeclareConversion(name string, prev, vr expand.Variable) 
 	if r.setVarArrayLiteral && len(r.callStack) > 0 {
 		r.errf("%s%s: %s: %s\n", r.bashErrPrefix(r.curStmtPos),
 			r.callStack[len(r.callStack)-1].funcName, name, convErr)
+	}
+	// A top-level array-literal assignment (`declare -a A=(...)`) that
+	// fails to convert is attributed by bash 5.3 to the variable alone,
+	// with no builtin prefix; the builtin-prefixed line only accompanies
+	// the function-attributed report.
+	if r.setVarArrayLiteral && len(r.callStack) == 0 {
+		r.errf("%s%s: %s\n", r.bashErrPrefix(r.curStmtPos), name, convErr)
+		r.exit.code = 1
+		return true
 	}
 	builtin := r.setVarFromBuiltin
 	if builtin == "" {
