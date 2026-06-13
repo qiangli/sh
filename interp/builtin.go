@@ -463,11 +463,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				case expand.Associative:
 					r.outf("%s=(", name)
 					first := true
-					for k, v := range vr.Map {
+					for _, k := range vr.AssocKeysForDeclare() {
 						if !first {
 							r.out(" ")
 						}
-						r.outf("[%s]=%s", k, bashSetQuote(v))
+						r.outf("[%s]=%s", k, bashSetQuote(vr.Map[k]))
 						first = false
 					}
 					if !first {

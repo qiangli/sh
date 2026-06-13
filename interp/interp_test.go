@@ -965,6 +965,10 @@ var runTests = []runTest{
 		"unset\nno-at\nat\n",
 	},
 	{
+		`declare -A a=([foo]=bleh [bar]=qux [baz]=z); set | grep '^a='`,
+		"a=([foo]=bleh [bar]=qux [baz]=z )\n",
+	},
+	{
 		`declare -A A; key='$(echo foo)'; A[$key]=1; test -v A["$key"]; echo $?`,
 		"1\n",
 	},
@@ -994,6 +998,10 @@ var runTests = []runTest{
 	{
 		`declare -A A; A["foo[bar]"]=x; A["foobar]"]=y; A[foo]=z; echo ${!A[@]}`,
 		"foobar] foo foo[bar]\n",
+	},
+	{
+		`declare -A foo; foo["bar\]bie"]=doll; echo "${!foo[@]}"; declare -p foo`,
+		"bar\\]bie\ndeclare -A foo=([\"bar\\\\]bie\"]=\"doll\" )\n",
 	},
 	{
 		`declare -A a; a[0]=0 a[1]=1; let "a[\" \"]=11"; declare -p a`,

@@ -1992,7 +1992,7 @@ func wordLooksLikeAssign(w *syntax.Word) bool {
 	return syntax.ValidName(strings.TrimSuffix(lit.Value[:eq], "+"))
 }
 
-func bashAssocAssignKey(s string) string {
+func bashAssocAssignKey(s string, quoted bool) string {
 	if !strings.Contains(s, "\\") {
 		return s
 	}
@@ -2001,8 +2001,12 @@ func bashAssocAssignKey(s string) string {
 	for i := 0; i < len(s); i++ {
 		if s[i] == '\\' && i+1 < len(s) {
 			switch s[i+1] {
-			case '"', '\'', '$', '`', '\\', ']', '[':
+			case '"', '\'', '$', '`', '\\', '[':
 				i++
+			case ']':
+				if !quoted {
+					i++
+				}
 			}
 		}
 		b.WriteByte(s[i])
@@ -2013,11 +2017,11 @@ func bashAssocAssignKey(s string) string {
 func (r *Runner) assocAssignKey(w *syntax.Word) string {
 	if len(w.Parts) == 1 {
 		if lit, ok := w.Parts[0].(*syntax.Lit); ok {
-			return bashAssocAssignKey(lit.Value)
+			return bashAssocAssignKey(lit.Value, false)
 		}
 	}
 	if key, ok := r.assocAssignKeyLiteral(w.Parts); ok {
-		return bashAssocAssignKey(key)
+		return bashAssocAssignKey(key, assocAssignKeyQuoted(w.Parts))
 	}
 	return r.literal(w)
 }
