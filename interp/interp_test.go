@@ -5606,6 +5606,25 @@ func TestBashCompatMalformedLengthSubstitution(t *testing.T) {
 			"./more-exp.tests: line 7: #: %: arithmetic syntax error: operand expected (error token is \"%\")\n"))
 }
 
+func TestBashCompatUnsetParameterCustomMessage(t *testing.T) {
+	src := "recho ${ABXD:?\"parameter unset\"}\n"
+	file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(src), "./new-exp.tests")
+	qt.Assert(t, qt.IsNil(err))
+
+	var cb bytes.Buffer
+	r, err := interp.New(
+		interp.StdIO(nil, &cb, &cb),
+		interp.WithBashCompatErrors(true),
+		interp.WithBashSource([]byte(src)),
+	)
+	qt.Assert(t, qt.IsNil(err))
+
+	err = r.Run(context.Background(), file)
+	qt.Assert(t, qt.ErrorMatches(err, "exit status 1"))
+	qt.Assert(t, qt.Equals(cb.String(),
+		"./new-exp.tests: line 1: ABXD: parameter unset\n"))
+}
+
 func TestBashCompatEvalArithOperandError(t *testing.T) {
 	// Bash defers arithmetic parsing to expansion time, so an
 	// operator-first expression inside eval'd $((...)) / $[...]

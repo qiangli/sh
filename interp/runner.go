@@ -386,7 +386,7 @@ func (r *Runner) expandErr(err error) {
 				prefix = "bashy"
 			}
 			errMsg = prefix + ": " + errMsg
-		} else if looksLikeExpandError(errMsg) {
+		} else if errors.As(err, &unsetParam) || looksLikeExpandError(errMsg) {
 			errMsg = r.bashErrPrefix(r.curStmtPos) + errMsg
 		}
 	}
