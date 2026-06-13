@@ -1127,12 +1127,25 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			}
 			switch arg {
 			case "Q":
-				str, err = syntax.Quote(str, syntax.LangBash)
-				if err != nil {
-					// Is this even possible? If a user runs into this panic,
-					// it's most likely a bug we need to fix.
-					panic(err)
+				// Bash 5.3 quotes each element of an array transform
+				// separately (`${arr[@]@Q}` -> `'a' 'b'`).
+				out := make([]string, len(elems))
+				for i, elem := range elems {
+					quoted, qerr := syntax.Quote(elem, syntax.LangBash)
+					if qerr != nil {
+						// Is this even possible? If a user runs into this
+						// panic, it's most likely a bug we need to fix.
+						panic(qerr)
+					}
+					// syntax.Quote leaves strings that need no quoting
+					// unchanged, but bash 5.3's ${var@Q} always wraps a
+					// non-empty value in single quotes (`zzz` -> `'zzz'`).
+					if quoted == elem {
+						quoted = bashSingleQuote(elem)
+					}
+					out[i] = quoted
 				}
+				str = strings.Join(out, " ")
 			case "E":
 				tail := str
 				var rns []rune
