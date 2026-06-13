@@ -2101,17 +2101,13 @@ func (p *Parser) paramExpExp() *Expansion {
 	p.quote = paramExpExp
 	p.next()
 	if op == OtherParamOps {
-		if !p.tok.isLit() {
-			p.curErr("@ expansion operator requires a literal")
-		}
-		switch p.val {
-		case "a", "k", "u", "A", "E", "K", "L", "P", "U":
-			p.checkLang(p.pos, langBashLike, "this expansion operator")
-		case "#":
-			p.checkLang(p.pos, LangMirBSDKorn, "this expansion operator")
-		case "Q":
-		default:
-			p.curErr("invalid @ expansion operator %#q", p.val)
+		if p.tok.isLit() {
+			switch p.val {
+			case "a", "k", "u", "A", "E", "K", "L", "P", "U":
+				p.checkLang(p.pos, langBashLike, "this expansion operator")
+			case "#":
+				p.checkLang(p.pos, LangMirBSDKorn, "this expansion operator")
+			}
 		}
 	}
 	return &Expansion{Op: op, Word: p.getWord()}

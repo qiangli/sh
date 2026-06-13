@@ -925,6 +925,10 @@ var runTests = []runTest{
 		"<foo><foo>\n #IGNORE not implemented; must not panic",
 	},
 	{
+		`x=abcdef; echo ${x@C}; echo ${x@}; echo ${x@bar}; echo ${x@'Q'}`,
+		"bad substitution\nbad substitution\nbad substitution\nbad substitution\nexit status 1 #JUSTERR",
+	},
+	{
 		"declare a; a+=(b); echo ${a[@]} ${#a[@]}",
 		"b 1\n",
 	},

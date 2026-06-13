@@ -1119,6 +1119,12 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			}
 			str = strings.Join(out, " ")
 		case syntax.OtherParamOps:
+			if pe.Exp.Word == nil || len(pe.Exp.Word.Parts) != 1 {
+				return "", BadSubstitutionError{Node: pe}
+			}
+			if _, ok := pe.Exp.Word.Parts[0].(*syntax.Lit); !ok {
+				return "", BadSubstitutionError{Node: pe}
+			}
 			switch arg {
 			case "Q":
 				str, err = syntax.Quote(str, syntax.LangBash)
@@ -1165,7 +1171,7 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			case "P":
 				str = cfg.expandPrompt(str)
 			default:
-				return "", fmt.Errorf("unexpected @%s param expansion", arg)
+				return "", BadSubstitutionError{Node: pe}
 			}
 		}
 	}
