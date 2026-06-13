@@ -415,6 +415,82 @@ func TestFieldsParamExpAssignAtNullIFSPosix(t *testing.T) {
 	}
 }
 
+func TestFieldsParamExpAssignArrayElement(t *testing.T) {
+	tests := []struct {
+		name      string
+		initial   Variable
+		src       string
+		want      []string
+		wantIndex int
+		wantKey   string
+		wantValue string
+	}{
+		{
+			name:      "indexed element assign",
+			initial:   Variable{},
+			src:       `${a[42]=foo}`,
+			want:      []string{"foo"},
+			wantIndex: 42,
+			wantValue: "foo",
+		},
+		{
+			name:      "indexed element existing no overwrite",
+			initial:   Variable{Set: true, Kind: Indexed, List: []string{"existing"}, ListSet: map[int]bool{0: true}},
+			src:       `${a[0]=new}`,
+			want:      []string{"existing"},
+			wantIndex: 0,
+			wantValue: "existing",
+		},
+		{
+			name:      "indexed element colon assign empty",
+			initial:   Variable{Set: true, Kind: Indexed, List: []string{""}, ListSet: map[int]bool{0: true}},
+			src:       `${a[0]:=new}`,
+			want:      []string{"new"},
+			wantIndex: 0,
+			wantValue: "new",
+		},
+		{
+			name:      "associative element assign",
+			initial:   Variable{Kind: Associative, Map: map[string]string{}},
+			src:       `${A[key]=value}`,
+			want:      []string{"value"},
+			wantKey:   "key",
+			wantValue: "value",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var varName string
+			if tc.initial.Kind == Associative {
+				varName = "A"
+			} else {
+				varName = "a"
+			}
+			env := testEnv{varName: tc.initial}
+			cfg := &Config{Env: env}
+			word := parseWord(t, tc.src)
+			got, err := Fields(cfg, word)
+			if err != nil {
+				t.Fatalf("did not want error, got %v", err)
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("wanted %q, got %q", tc.want, got)
+			}
+			vr := cfg.Env.Get(varName)
+			if tc.wantKey != "" {
+				if got, ok := vr.Map[tc.wantKey]; !ok || got != tc.wantValue {
+					t.Fatalf("%s[%s] = %q, want %q", varName, tc.wantKey, got, tc.wantValue)
+				}
+			}
+			if tc.wantIndex >= 0 && tc.wantIndex < len(vr.List) {
+				if got := vr.List[tc.wantIndex]; got != tc.wantValue {
+					t.Fatalf("%s[%d] = %q, want %q", varName, tc.wantIndex, got, tc.wantValue)
+				}
+			}
+		})
+	}
+}
+
 func TestFieldsParamExpArrayStarSubstWord(t *testing.T) {
 	tests := []struct {
 		name      string

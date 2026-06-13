@@ -226,6 +226,125 @@ func nodeLit(node syntax.Node) string {
 	return ""
 }
 
+// arrayElemSet reports whether a specific array element is set.
+// For indexed arrays, it checks the ListSet map. For associative arrays,
+// it checks if the key exists in the Map. Returns true for scalar variables.
+func arrayElemSet(vr Variable, idx syntax.ArithmExpr, cfg *Config) bool {
+	if idx == nil {
+		return vr.IsSet()
+	}
+	switch vr.Kind {
+	case Associative:
+		key, err := Literal(cfg, idx.(*syntax.Word))
+		if err != nil {
+			return false
+		}
+		_, ok := vr.Map[key]
+		return ok
+	case Indexed:
+		i, err := Arithm(cfg, idx)
+		if err != nil {
+			return false
+		}
+		if i < 0 {
+			// Handle negative index
+			indexes := vr.IndexedIndexes()
+			if len(indexes) == 0 {
+				return false
+			}
+			i = indexes[len(indexes)-1] + 1 + i
+			if i < 0 {
+				return false
+			}
+		}
+		return vr.IndexedSet(i)
+	default:
+		return vr.IsSet()
+	}
+}
+
+// envSetIndex sets a variable value, handling array element assignment when
+// idx is not nil. Used by parameter expansion assignment operators like ${a[i]=value}.
+func (cfg *Config) envSetIndex(name string, idx syntax.ArithmExpr, value string) error {
+	wenv, ok := cfg.Env.(WriteEnviron)
+	if !ok {
+		return fmt.Errorf("environment is read-only")
+	}
+	if idx == nil {
+		return cfg.envSet(name, value)
+	}
+
+	vr := cfg.Env.Get(name)
+
+	// Check for special indices
+	switch nodeLit(idx) {
+	case "@", "*":
+		return fmt.Errorf("%s: cannot assign in this way", name)
+	}
+
+	if vr.Kind == Associative {
+		// Associative array: evaluate index as string
+		key, err := Literal(cfg, idx.(*syntax.Word))
+		if err != nil {
+			return err
+		}
+		if vr.Map == nil {
+			vr.Map = make(map[string]string)
+		} else {
+			vr.Map = maps.Clone(vr.Map)
+		}
+		vr.Set = true
+		vr.Kind = Associative
+		vr.Map[key] = value
+		return wenv.Set(name, vr)
+	}
+
+	// Indexed array: evaluate index as arithmetic
+	i, err := Arithm(cfg, idx)
+	if err != nil {
+		return err
+	}
+	if i < 0 {
+		// Handle negative index - convert to positive offset from end
+		indexes := vr.IndexedIndexes()
+		if len(indexes) == 0 {
+			i = 0
+		} else {
+			i = indexes[len(indexes)-1] + 1 + i
+			if i < 0 {
+				return fmt.Errorf("%s: bad array subscript", name)
+			}
+		}
+	}
+
+	// Convert string to indexed array if needed
+	if vr.Kind == String && vr.Str != "" {
+		vr.List = []string{vr.Str}
+		vr.ListSet = nil
+	}
+
+	vr.Kind = Indexed
+	vr.Set = true
+	vr.List = slices.Clone(vr.List)
+	listSet := vr.CloneListSet()
+
+	// Grow array if needed
+	if i >= len(vr.List) {
+		if listSet == nil {
+			listSet = vr.DenseListSet()
+		}
+		vr.List = append(vr.List, make([]string, i-len(vr.List)+1)...)
+	}
+
+	vr.List[i] = value
+	if listSet != nil {
+		listSet[i] = true
+		vr.ListSet = listSet
+	}
+
+	return wenv.Set(name, vr)
+}
+
 // UnsetParameterError is returned when a parameter expansion encounters an
 // unset variable and [Config.NoUnset] has been set.
 type UnsetParameterError struct {
@@ -1046,7 +1165,7 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 				}
 			}
 		case syntax.AssignUnset:
-			if vr.IsSet() {
+			if arrayElemSet(vr, index, cfg) {
 				break
 			}
 			fallthrough
@@ -1055,7 +1174,7 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 				if cannotAssignParam(name) {
 					return "", fmt.Errorf("$%s: cannot assign in this way", name)
 				}
-				if err := cfg.envSet(name, arg); err != nil {
+				if err := cfg.envSetIndex(name, index, arg); err != nil {
 					return "", err
 				}
 				str = arg
