@@ -4001,6 +4001,14 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 		"y\nb\n",
 	},
 	{
+		"declare -n foo=bar; bar=(1 3 5 7 9); foo[2]=42; echo ${bar[@]}",
+		"1 3 42 7 9\n",
+	},
+	{
+		"bar=(1 3 5 7 9); f(){ local -n v=$1; v[2]=44; }; f bar; echo ${bar[@]}",
+		"1 3 44 7 9\n",
+	},
+	{
 		"declare -n foo=bar; bar=etc; echo $foo; unset bar; echo $foo",
 		"etc\n\n",
 	},

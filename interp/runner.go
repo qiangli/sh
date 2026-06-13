@@ -4327,8 +4327,14 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 					r.exit.code = 1
 					break
 				}
+				prevForIndex := prev
+				if as.Index != nil {
+					if n, resolved := prev.Resolve(r.writeEnv); n != "" {
+						prevForIndex = resolved
+					}
+				}
 				name, vr := r.assignVal(name, prev, as, "")
-				r.setVarWithIndex(prev, name, as.Index, vr)
+				r.setVarWithIndex(prevForIndex, name, as.Index, vr)
 				if !r.exit.ok() && !r.exit.exiting && !r.exit.returning && !r.exit.fatalExit {
 					// Bash: an assignment-statement error (readonly
 					// variable, bad subscript, …) exits a POSIX-mode
@@ -5540,6 +5546,11 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				}
 				name, vr = r.assignVal(name, vr, as, valType)
 				if as.Index != nil {
+					if prevForIndex.Kind == expand.NameRef {
+						if n, resolved := prevForIndex.Resolve(r.writeEnv); n != "" {
+							prevForIndex = resolved
+						}
+					}
 					r.setVarWithIndex(prevForIndex, name, as.Index, vr)
 					continue
 				}
