@@ -1883,7 +1883,7 @@ var runTests = []runTest{
 	},
 	{
 		"set -o posix; echo foo >f; echo $(<f*)",
-		"foo\n",
+		"f*: No such file or directory\n\n #JUSTERR",
 	},
 	{
 		"echo foo >f1; echo foo >f2; echo $(<f*)",

@@ -73,7 +73,7 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 				if word == nil {
 					break
 				}
-				path, ok := r.catShortcutPath(word)
+				path, displayPath, ok := r.catShortcutPath(word)
 				if !ok {
 					r.lastExpandExit = exitStatus{code: 1}
 					if sb, ok := w.(*strings.Builder); ok {
@@ -84,8 +84,9 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 				if sb, ok := w.(*strings.Builder); ok {
 					sb.Reset()
 				}
-				f, err := r.open(ctx, path, os.O_RDONLY, 0, true)
+				f, err := r.open(ctx, path, os.O_RDONLY, 0, false)
 				if err != nil {
+					r.errf("%s%s: %s\n", r.bashErrPrefix(r.curStmtPos), displayPath, bashOSError(err))
 					r.lastExpandExit = exitStatus{code: 1}
 					return nil
 				}
@@ -310,13 +311,17 @@ func catShortcutArg(stmt *syntax.Stmt) *syntax.Word {
 	return redir.Word
 }
 
-func (r *Runner) catShortcutPath(word *syntax.Word) (string, bool) {
+func (r *Runner) catShortcutPath(word *syntax.Word) (path, displayPath string, ok bool) {
+	if r.opts[optPosix] {
+		path := r.literal(word)
+		return path, path, true
+	}
 	fields := r.fields(word)
 	if len(fields) != 1 {
 		r.ambiguousRedirect(word.Pos(), word)
-		return "", false
+		return "", "", false
 	}
-	return fields[0], true
+	return fields[0], fields[0], true
 }
 
 func (r *Runner) ambiguousRedirect(pos syntax.Pos, word *syntax.Word) {
@@ -3840,15 +3845,20 @@ func (r *Runner) bashErrPrefixLine(line int) string {
 // capitalised (`No such file or directory`, `Permission denied`, …),
 // stripped of Go's `open <path>: ` prefix.
 func bashOSError(err error) string {
+	msg := pathErrReason(err)
+	if msg == "" {
+		return msg
+	}
+	return strings.ToUpper(msg[:1]) + msg[1:]
+}
+
+func pathErrReason(err error) string {
 	var pe *os.PathError
 	msg := err.Error()
 	if errors.As(err, &pe) {
 		msg = pe.Err.Error()
 	}
-	if msg == "" {
-		return msg
-	}
-	return strings.ToUpper(msg[:1]) + msg[1:]
+	return msg
 }
 
 func (r *Runner) stop(ctx context.Context) bool {
