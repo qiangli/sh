@@ -5437,6 +5437,12 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			if slices.Contains(modes, "+i") {
 				vr.Integer = false
 			}
+			if as.Naked && valType != "-n" && valType != "+n" &&
+				(slices.Contains(modes, "-r") || slices.Contains(modes, "+r")) {
+				if n, resolved := vr.Resolve(r.writeEnv); n != "" {
+					name, vr = n, resolved
+				}
+			}
 			if as.Naked && (slices.Contains(modes, "+a") || slices.Contains(modes, "+A")) &&
 				(vr.Kind == expand.Indexed || vr.Kind == expand.Associative) {
 				if vr.ReadOnly {

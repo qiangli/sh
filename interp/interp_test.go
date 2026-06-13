@@ -4076,6 +4076,14 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 		"declare -n ref=arr; ref+=(x y); echo ${ref[@]} ${arr[@]}",
 		"x y x y\n",
 	},
+	{
+		"declare -n ref=foo; readonly ref; declare -p ref foo; foo=4",
+		"declare -n ref=\"foo\"\ndeclare -r foo\nfoo: readonly variable\nexit status 1 #JUSTERR",
+	},
+	{
+		"readonly foo; declare -n ref=foo; ref=4",
+		"foo: readonly variable\nexit status 1 #JUSTERR",
+	},
 
 	// read-only vars
 	{"declare -r foo=bar; echo $foo", "bar\n"},
