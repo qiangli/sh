@@ -764,12 +764,19 @@ func (r *Runner) lookupVar(name string) expand.Variable {
 		}
 	case "BASH_ALIASES":
 		vr.Kind = expand.Associative
+		// Bash's alias table is a hash_create(0) table with
+		// DEFAULT_HASH_BUCKETS (128) buckets, so ${BASH_ALIASES[@]} /
+		// ${!BASH_ALIASES[@]} iterate in 128-bucket order, not the
+		// 1024-bucket order of a fresh `declare -A`.
+		vr.AssocBuckets = 128
 		vr.Map = make(map[string]string, len(r.alias))
 		for k, als := range r.alias {
 			vr.Map[k] = aliasValue(als)
 		}
 	case "BASH_CMDS":
 		vr.Kind = expand.Associative
+		// Same 128-bucket hash table as the alias table above.
+		vr.AssocBuckets = 128
 		vr.Map = make(map[string]string, len(r.cmdHashTable))
 		for name, entry := range r.cmdHashTable {
 			vr.Map[name] = entry.path
@@ -1485,19 +1492,57 @@ func hasNonPrintable(s string) bool {
 }
 
 // aliasValue returns the textual form of an alias as bash stores it in
-// BASH_ALIASES: the args reprinted as shell source, plus a trailing
-// space when the original definition ended in whitespace.
+// BASH_ALIASES and displays it via `alias`/`type`: the literal body
+// verbatim, including any trailing whitespace from the definition.
 func aliasValue(als alias) string {
-	var buf strings.Builder
-	if als.raw != "" {
-		buf.WriteString(als.raw)
-	} else if len(als.args) > 0 {
-		syntax.NewPrinter().Print(&buf, &syntax.CallExpr{Args: als.args})
+	return als.text
+}
+
+// parseAliasBody parses an alias body string into an alias struct. Bash
+// stores alias bodies as TEXT and only re-parses at expansion time, so
+// bodies that don't parse standalone (a bare keyword, unclosed quotes,
+// a leading comment) fall back to per-word or raw text storage. The
+// `alias` builtin and BASH_ALIASES[...]= assignments share this path so
+// both populate r.alias identically.
+func parseAliasBody(src string) alias {
+	als := alias{
+		text:  src,
+		blank: strings.TrimRight(src, " \t") != src,
 	}
-	if als.blank {
-		buf.WriteByte(' ')
+	if strings.HasPrefix(strings.TrimLeft(src, " \t"), "#") {
+		als.raw = src
+		return als
 	}
-	return buf.String()
+	parser := syntax.NewParser()
+	file, perr := parser.Parse(strings.NewReader(src), "")
+	if perr == nil {
+		if len(file.Stmts) == 1 {
+			if ce, ok := file.Stmts[0].Cmd.(*syntax.CallExpr); ok && len(ce.Assigns) == 0 && file.Stmts[0].Redirs == nil {
+				als.args = ce.Args
+			}
+		}
+		if als.args == nil {
+			als.file = file
+		}
+		return als
+	}
+	// Stmt-parse failed — try the per-word path. If even that fails,
+	// store the raw text so it round-trips unchanged.
+	var words []*syntax.Word
+	var werr error
+	for w, e := range parser.WordsSeq(strings.NewReader(src)) {
+		if e != nil {
+			werr = e
+			break
+		}
+		words = append(words, w)
+	}
+	if werr != nil {
+		als.raw = src
+		return als
+	}
+	als.args = words
+	return als
 }
 
 func validAliasName(name string) bool {
@@ -1849,9 +1894,20 @@ func (r *Runner) setVarWithIndex(prev expand.Variable, name string, index syntax
 		if name == "BASH_ALIASES" || name == "BASH_CMDS" {
 			k = r.literal(w)
 		}
-		if name == "BASH_ALIASES" && !validAliasName(k) {
-			r.errf("%s`%s': invalid alias name\n", r.bashErrPrefix(r.curStmtPos), k)
-			r.exit.code = 1
+		if name == "BASH_ALIASES" {
+			if !validAliasName(k) {
+				r.errf("%s`%s': invalid alias name\n", r.bashErrPrefix(r.curStmtPos), k)
+				r.exit.code = 1
+				return
+			}
+			// BASH_ALIASES is a live view of the alias table: writing an
+			// element creates/updates an alias, exactly like `alias k=v`.
+			// Reads regenerate the map from r.alias, so storing here keeps
+			// the two in sync.
+			if r.alias == nil {
+				r.alias = make(map[string]alias)
+			}
+			r.alias[k] = parseAliasBody(valStr)
 			return
 		}
 		if name == "BASH_CMDS" {

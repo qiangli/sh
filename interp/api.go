@@ -597,6 +597,12 @@ func publishBgPid(ctx context.Context, pid int) {
 }
 
 type alias struct {
+	// text is the literal alias body exactly as supplied (the part
+	// after `=`, including any trailing whitespace). Bash stores and
+	// displays alias bodies verbatim, so this is what `alias`/`alias -p`,
+	// `type`, and ${BASH_ALIASES[...]} render — args/file/raw below are
+	// the re-parsed forms used only at expansion time.
+	text string
 	// raw is set for bodies Bash accepts as text even though they are
 	// not standalone parseable shell words.
 	raw string

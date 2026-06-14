@@ -2143,19 +2143,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			if syntax.IsKeyword(arg) || r.Funcs[arg] != nil || IsBuiltin(arg) {
 				r.outf("%s\n", arg)
 			} else if als, ok := r.alias[arg]; ok && r.opts[optExpandAliases] {
-				var buf bytes.Buffer
-				if len(als.args) > 0 {
-					syntax.NewPrinter().Print(&buf, &syntax.CallExpr{Args: als.args})
-				} else if als.file != nil {
-					syntax.NewPrinter().Print(&buf, als.file)
-					bs := bytes.TrimRight(buf.Bytes(), "\n")
-					buf.Reset()
-					buf.Write(bs)
-				}
-				if als.blank {
-					buf.WriteByte(' ')
-				}
-				r.outf("alias %s='%s'\n", arg, &buf)
+				r.outf("alias %s='%s'\n", arg, aliasValue(als))
 			} else if path, err := LookPathDir(r.Dir, r.writeEnv, arg); err == nil {
 				r.outf("%s\n", path)
 			} else {
@@ -3053,28 +3041,23 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 
 	case "alias":
 		show := func(name string, als alias) {
-			var buf bytes.Buffer
-			if als.raw != "" {
-				buf.WriteString(als.raw)
-			} else if len(als.args) > 0 {
-				printer := syntax.NewPrinter()
-				printer.Print(&buf, &syntax.CallExpr{
-					Args: als.args,
-				})
-			} else if als.file != nil {
-				printer := syntax.NewPrinter()
-				printer.Print(&buf, als.file)
-				// Bash 5.3 single-quotes the whole body; the
-				// printer emits trailing newline which we strip
-				// so the `'<body>'` quoting closes cleanly.
-				bs := bytes.TrimRight(buf.Bytes(), "\n")
-				buf.Reset()
-				buf.Write(bs)
+			// Bash displays alias bodies verbatim (single-quoted),
+			// preserving the original text exactly.
+			r.outf("alias %s='%s'\n", name, aliasValue(als))
+		}
+
+		// showAll lists every alias sorted by name, matching bash 5.3
+		// (which keeps its alias table sorted). Go map iteration order is
+		// nondeterministic, so without this the listing flaps run-to-run.
+		showAll := func() {
+			names := make([]string, 0, len(r.alias))
+			for name := range r.alias {
+				names = append(names, name)
 			}
-			if als.blank {
-				buf.WriteByte(' ')
+			slices.Sort(names)
+			for _, name := range names {
+				show(name, r.alias[name])
 			}
-			r.outf("alias %s='%s'\n", name, &buf)
 		}
 
 		// `alias -p` prints all aliases (same as no args). Reject
@@ -3082,9 +3065,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		filtered := args
 		if len(filtered) > 0 && filtered[0] == "-p" {
 			filtered = filtered[1:]
-			for name, als := range r.alias {
-				show(name, als)
-			}
+			showAll()
 		} else if len(filtered) > 0 && len(filtered[0]) > 1 && filtered[0][0] == '-' && !strings.Contains(filtered[0], "=") {
 			r.errf("%salias: %s: invalid option\n", r.bashErrPrefix(pos), filtered[0])
 			r.errf("alias: usage: alias [-p] [name[=value] ... ]\n")
@@ -3092,11 +3073,8 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			return exit
 		}
 		if len(args) == 0 {
-			for name, als := range r.alias {
-				show(name, als)
-			}
+			showAll()
 		}
-	argsLoop:
 		for _, arg := range filtered {
 			name, src, ok := strings.Cut(arg, "=")
 			if !ok {
@@ -3120,60 +3098,13 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			// `alias switch=case` (a body that's a bare keyword) or
 			// `alias foo="echo 'Error:"` (with unclosed quotes that
 			// continue into the next user input) are legal even
-			// though they don't parse standalone. Try the multi-stmt
-			// parse first so embedded newlines / compound commands
-			// run correctly; if that fails, fall back to the
-			// per-word parse to preserve the legacy text-style
-			// behaviour for tricky bodies.
-			parser := syntax.NewParser()
-			als := alias{
-				blank: strings.TrimRight(src, " \t") != src,
-			}
-			if strings.HasPrefix(strings.TrimLeft(src, " \t"), "#") {
-				als.raw = src
-				if r.alias == nil {
-					r.alias = make(map[string]alias)
-				}
-				r.alias[name] = als
-				continue argsLoop
-			}
-			file, perr := parser.Parse(strings.NewReader(src), "")
-			if perr == nil {
-				if len(file.Stmts) == 1 {
-					if ce, ok := file.Stmts[0].Cmd.(*syntax.CallExpr); ok && len(ce.Assigns) == 0 && file.Stmts[0].Redirs == nil {
-						als.args = ce.Args
-					}
-				}
-				if als.args == nil {
-					als.file = file
-				}
-			} else {
-				// Stmt-parse failed — try the per-word path. If even
-				// that fails, surface the original error so users see
-				// what's wrong (matches the old behaviour).
-				var words []*syntax.Word
-				var werr error
-				for w, e := range parser.WordsSeq(strings.NewReader(src)) {
-					if e != nil {
-						werr = e
-						break
-					}
-					words = append(words, w)
-				}
-				if werr != nil {
-					als.raw = src
-					if r.alias == nil {
-						r.alias = make(map[string]alias)
-					}
-					r.alias[name] = als
-					continue argsLoop
-				}
-				als.args = words
-			}
+			// though they don't parse standalone. parseAliasBody
+			// handles the multi-stmt / per-word / raw fallbacks; the
+			// same helper backs BASH_ALIASES[...]= assignments.
 			if r.alias == nil {
 				r.alias = make(map[string]alias)
 			}
-			r.alias[name] = als
+			r.alias[name] = parseAliasBody(src)
 		}
 	case "unalias":
 		all := false
@@ -4709,21 +4640,9 @@ func (r *Runner) typeMatches(arg string, skipFuncs bool) []typeMatch {
 		})
 	}
 	if als, ok := r.alias[arg]; ok && r.opts[optExpandAliases] {
-		var buf bytes.Buffer
-		if len(als.args) > 0 {
-			syntax.NewPrinter().Print(&buf, &syntax.CallExpr{Args: als.args})
-		} else if als.file != nil {
-			syntax.NewPrinter().Print(&buf, als.file)
-			bs := bytes.TrimRight(buf.Bytes(), "\n")
-			buf.Reset()
-			buf.Write(bs)
-		}
-		if als.blank {
-			buf.WriteByte(' ')
-		}
 		ms = append(ms, typeMatch{
 			kind: "alias",
-			desc: fmt.Sprintf("%s is aliased to `%s'", arg, &buf),
+			desc: fmt.Sprintf("%s is aliased to `%s'", arg, aliasValue(als)),
 		})
 	}
 	// Bash POSIX mode: POSIX special builtins (break, :, continue,

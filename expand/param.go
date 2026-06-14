@@ -512,41 +512,6 @@ func bashAlternateCommandSubstEOF(word *syntax.Word) bool {
 	return false
 }
 
-// bashAssocBucket computes the bucket index bash 5.3 stores an
-// associative-array key in — FNV-1 with the historical initial
-// value (2166136261) and prime (16777619), modulo 1024 (bash's
-// ASSOC_HASH_BUCKETS). Iterating bucket-ascending matches bash's
-// `${arr[@]}` order on assoc arrays.
-func bashAssocBucket(s string) uint32 {
-	i := uint32(2166136261)
-	for _, c := range []byte(s) {
-		i = i * 16777619
-		i = i ^ uint32(c)
-	}
-	return i % 1024
-}
-
-// AssocKeysInBashOrder returns the keys of an associative-array
-// map sorted by bash 5.3's hash-table iteration order so callers
-// (e.g. `declare -p` printers in interp) can produce bash-shaped
-// output without duplicating the hash math. Collisions break ties
-// lexically.
-func AssocKeysInBashOrder(m map[string]string) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	slices.SortStableFunc(keys, func(a, b string) int {
-		ba := bashAssocBucket(a)
-		bb := bashAssocBucket(b)
-		if ba != bb {
-			return int(ba) - int(bb)
-		}
-		return strings.Compare(a, b)
-	})
-	return keys
-}
-
 // applyParamMods applies the trailing modifier portion of a parameter
 // expansion (Slice, Repl, Exp) to a precomputed string value. Used
 // by the indirect-expansion path (`${!x//c/x}`) where the value
@@ -797,9 +762,10 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 		case Associative:
 			indexAllElements = true
 			callVarInd = false
-			// Bash iterates assoc-array values in bash-bucket
-			// order (see AssocKeysInBashOrder).
-			keys := AssocKeysInBashOrder(vr.Map)
+			// Bash iterates assoc-array values in its hash-table
+			// order, the same order `declare -p` prints (honoring the
+			// variable's bucket count via AssocKeysForDeclare).
+			keys := vr.AssocKeysForDeclare()
 			elems = make([]string, len(keys))
 			for i, k := range keys {
 				elems[i] = vr.Map[k]
@@ -856,7 +822,7 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 				strs = append(strs, strconv.Itoa(i))
 			}
 		case pe.Index != nil && vr.Kind == Associative:
-			strs = AssocKeysInBashOrder(vr.Map)
+			strs = vr.AssocKeysForDeclare()
 		case orig.Kind == NameRef:
 			strs = append(strs, orig.Str)
 		case (name == "@" || name == "*") && !vr.IsSet():
@@ -1736,7 +1702,7 @@ func (cfg *Config) varInd(vr Variable, idx syntax.ArithmExpr) (string, error) {
 	case Associative:
 		switch lit := nodeLit(idx); lit {
 		case "@", "*":
-			keys := AssocKeysInBashOrder(vr.Map)
+			keys := vr.AssocKeysForDeclare()
 			strs := make([]string, len(keys))
 			for i, k := range keys {
 				strs[i] = vr.Map[k]

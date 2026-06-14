@@ -2885,7 +2885,7 @@ func (cfg *Config) substWordPartAllElemValues(pe *syntax.ParamExp) (elems []stri
 			elems, err := cfg.sliceIndexedElems(pe, vr, false)
 			return elems, "@", true, err
 		case Associative:
-			keys := AssocKeysInBashOrder(vr.Map)
+			keys := vr.AssocKeysForDeclare()
 			elems := make([]string, len(keys))
 			for i, k := range keys {
 				elems[i] = vr.Map[k]
@@ -2899,7 +2899,7 @@ func (cfg *Config) substWordPartAllElemValues(pe *syntax.ParamExp) (elems []stri
 			elems, err := cfg.sliceIndexedElems(pe, vr, false)
 			return elems, "*", true, err
 		case Associative:
-			keys := AssocKeysInBashOrder(vr.Map)
+			keys := vr.AssocKeysForDeclare()
 			elems := make([]string, len(keys))
 			for i, k := range keys {
 				elems[i] = vr.Map[k]
@@ -3295,7 +3295,7 @@ func (cfg *Config) quotedElemFields(pe *syntax.ParamExp) ([]string, error) {
 				}
 				return keys, nil
 			case Associative:
-				return AssocKeysInBashOrder(vr.Map), nil
+				return vr.AssocKeysForDeclare(), nil
 			}
 		}
 		vr := cfg.Env.Get(name)
@@ -3324,7 +3324,7 @@ func (cfg *Config) quotedElemFields(pe *syntax.ParamExp) ([]string, error) {
 		case Indexed:
 			return cfg.sliceIndexedElems(pe, vr, false)
 		case Associative:
-			keys := AssocKeysInBashOrder(vr.Map)
+			keys := vr.AssocKeysForDeclare()
 			elems := make([]string, len(keys))
 			for i, k := range keys {
 				elems[i] = vr.Map[k]
@@ -3368,7 +3368,7 @@ func (cfg *Config) quotedAllElemValues(pe *syntax.ParamExp) ([]string, error) {
 			case Indexed:
 				return cfg.sliceIndexedElems(pe, vr, false)
 			case Associative:
-				keys := AssocKeysInBashOrder(vr.Map)
+				keys := vr.AssocKeysForDeclare()
 				elems := make([]string, len(keys))
 				for i, k := range keys {
 					elems[i] = vr.Map[k]
