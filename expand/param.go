@@ -980,13 +980,7 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			case "a":
 				str = indirectOrig.Flags()
 			case "A":
-				flags := indirectOrig.Flags()
-				quoted := bashSingleQuote(str)
-				if flags == "" {
-					str = fmt.Sprintf("%s=%s", indirectName, quoted)
-				} else {
-					str = fmt.Sprintf("declare -%s %s=%s", flags, indirectName, quoted)
-				}
+				str = cfg.paramAtA(indirectOrig, indirectOrig, indirectName, str, indexAllElements)
 			default:
 				return "", BadSubstitutionError{Node: pe}
 			}
@@ -1327,12 +1321,15 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 				str = orig.Flags()
 			case "A":
 				// ${var@A} returns a declare statement that recreates the variable.
-				flags := orig.Flags()
-				quoted := bashSingleQuote(str)
-				if flags == "" {
-					str = fmt.Sprintf("%s=%s", name, quoted)
+				if name == "@" || name == "*" {
+					// Positional parameters reproduce as `set -- ...`.
+					out := make([]string, len(elems))
+					for i, elem := range elems {
+						out[i] = bashSingleQuote(elem)
+					}
+					str = "set -- " + strings.Join(out, " ")
 				} else {
-					str = fmt.Sprintf("declare -%s %s=%s", flags, name, quoted)
+					str = cfg.paramAtA(vr, orig, name, str, indexAllElements)
 				}
 			case "U":
 				str = strings.ToUpper(str)
@@ -1393,6 +1390,145 @@ func (cfg *Config) paramAtK(vr Variable, name string) string {
 	default:
 		return vr.String()
 	}
+}
+
+// paramAtA implements ${var@A}: a reusable declaration that recreates the
+// variable. For arrays bash emits the full `declare -a NAME=([i]="v" ...)` /
+// `declare -A NAME=([k]="v" ...)` form (double-quoted element values, in
+// bash's hash-bucket key order); for scalars it emits the single-quoted
+// `[declare -flags ]NAME='value'` form. `scalarStr` is the already-expanded
+// scalar value, and `orig` carries the scalar's attribute flags.
+func (cfg *Config) paramAtA(vr, orig Variable, name, scalarStr string, forceLiteral bool) string {
+	switch vr.Kind {
+	case Indexed, Associative:
+		return declareArray(name, vr, forceLiteral)
+	default:
+		flags := orig.Flags()
+		if !orig.IsSet() {
+			// Declared but unset: bash prints just the attributes.
+			if flags == "" {
+				return name + "="
+			}
+			return "declare -" + flags + " " + name
+		}
+		quoted := bashSingleQuote(scalarStr)
+		if flags == "" {
+			return name + "=" + quoted
+		}
+		return "declare -" + flags + " " + name + "=" + quoted
+	}
+}
+
+// declareArray formats an indexed or associative array as bash's ${arr@A}
+// (and `declare -p`) reusable assignment.
+//
+// forceLiteral is true when the expansion used an explicit `[@]` / `[*]`
+// subscript (`${arr[@]@A}`): bash then always emits the array literal for a
+// *set* array, so an empty one yields `...NAME=()`. Without the subscript
+// (`${arr@A}`) an array with no elements is reproduced as just the
+// declaration (`declare -flags NAME`), matching bash treating an empty array
+// as having no value. An unset-but-declared array never gets a value.
+func declareArray(name string, vr Variable, forceLiteral bool) string {
+	flags := vr.Flags()
+	if flags == "" {
+		flags = "-"
+	}
+	var b strings.Builder
+	b.WriteString("declare -")
+	b.WriteString(flags)
+	b.WriteByte(' ')
+	b.WriteString(name)
+	switch vr.Kind {
+	case Indexed:
+		if forceLiteral {
+			if !vr.IsSet() {
+				return b.String()
+			}
+		} else if len(vr.IndexedIndexes()) == 0 {
+			return b.String()
+		}
+		b.WriteString("=(")
+		first := true
+		for _, i := range vr.IndexedIndexes() {
+			if !first {
+				b.WriteByte(' ')
+			}
+			first = false
+			fmt.Fprintf(&b, "[%d]=%s", i, bashDeclareQuote(vr.List[i]))
+		}
+		b.WriteByte(')')
+	case Associative:
+		if forceLiteral {
+			if !vr.IsSet() {
+				return b.String()
+			}
+		} else if len(vr.Map) == 0 {
+			return b.String()
+		}
+		b.WriteString("=(")
+		first := true
+		for _, k := range vr.AssocKeysForDeclare() {
+			if !first {
+				b.WriteByte(' ')
+			}
+			first = false
+			fmt.Fprintf(&b, "[%s]=%s", bashAssocKeyQuote(k), bashDeclareQuote(vr.Map[k]))
+		}
+		// Bash leaves a trailing space before `)` for associative arrays.
+		if !first {
+			b.WriteByte(' ')
+		}
+		b.WriteByte(')')
+	}
+	return b.String()
+}
+
+// bashDeclareQuote formats v the way bash's declare -p / ${arr@A} array
+// literals do: double-quoted, escaping ", \, $ and `, falling back to ANSI-C
+// $'...' for non-printable bytes. (Mirrors the interp helper of the same name;
+// kept here so the expand layer needn't import interp.)
+func bashDeclareQuote(v string) string {
+	for i := 0; i < len(v); i++ {
+		if c := v[i]; c < 0x20 || c == 0x7f {
+			if q, err := syntax.Quote(v, syntax.LangBash); err == nil {
+				return q
+			}
+			break
+		}
+	}
+	var b strings.Builder
+	b.Grow(len(v) + 2)
+	b.WriteByte('"')
+	for i := 0; i < len(v); i++ {
+		c := v[i]
+		if c == '"' || c == '\\' || c == '$' || c == '`' {
+			b.WriteByte('\\')
+		}
+		b.WriteByte(c)
+	}
+	b.WriteByte('"')
+	return b.String()
+}
+
+// bashAssocKeyQuote quotes an associative-array key for declare -p / ${arr@A}:
+// bare when it contains only "safe" characters, double-quoted otherwise.
+func bashAssocKeyQuote(s string) string {
+	if s == "" {
+		return bashDeclareQuote(s)
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case 'a' <= c && c <= 'z',
+			'A' <= c && c <= 'Z',
+			'0' <= c && c <= '9',
+			c == '_', c == '.', c == '%', c == '-':
+			continue
+		default:
+			return bashDeclareQuote(s)
+		}
+	}
+	return s
 }
 
 // expandPrompt implements ${var@P} by delegating to [Config.PromptExpand].

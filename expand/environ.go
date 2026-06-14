@@ -171,8 +171,8 @@ func (v Variable) Declared() bool {
 
 // Flags returns the variable's attribute flags in the order used by bash's
 // declare builtin and ${var@a}: type (a/A/n), integer (i), readonly (r),
-// exported (x). Bash 5.3 emits `-ai`, `-air`, etc. — type letter first,
-// then `i` for integer, then `r`/`x`.
+// exported (x), then case-modification (c/l/u). Bash 5.3 emits `-ai`, `-air`,
+// `-rl`, `-arl`, etc. — type letter first, then `i`/`r`/`x`, then `c`/`l`/`u`.
 func (v Variable) Flags() string {
 	var flags []byte
 	switch v.Kind {
@@ -183,15 +183,9 @@ func (v Variable) Flags() string {
 	case NameRef:
 		flags = append(flags, 'n')
 	}
-	if v.Capitalize {
-		flags = append(flags, 'c')
-	}
-	if v.Lower {
-		flags = append(flags, 'l')
-	}
-	if v.Upper {
-		flags = append(flags, 'u')
-	}
+	// Bash prints the integer/readonly/export attributes before the
+	// case-modification ones, so e.g. `declare -lr x` reports `rl` and
+	// `declare -alr arr` reports `arl` via ${x@a} / declare -p.
 	if v.Integer {
 		flags = append(flags, 'i')
 	}
@@ -200,6 +194,15 @@ func (v Variable) Flags() string {
 	}
 	if v.Exported {
 		flags = append(flags, 'x')
+	}
+	if v.Capitalize {
+		flags = append(flags, 'c')
+	}
+	if v.Lower {
+		flags = append(flags, 'l')
+	}
+	if v.Upper {
+		flags = append(flags, 'u')
 	}
 	return string(flags)
 }

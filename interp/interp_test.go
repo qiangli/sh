@@ -912,6 +912,44 @@ var runTests = []runTest{
 		`var=VAR2 VAR2=zzz; printf '<%s>\n' "${!var@Q}" "${!var@A}" "${!var@a}"`,
 		"<'zzz'>\n<VAR2='zzz'>\n<>\n",
 	},
+	// ${arr@A} reproduces the full reusable declaration for arrays.
+	{
+		`A=(ab 'cd ef' '' gh); echo "${A[@]@A}"`,
+		`declare -a A=([0]="ab" [1]="cd ef" [2]="" [3]="gh")` + "\n",
+	},
+	{
+		`A=(ab 'cd ef' '' gh); echo "${A@A}"`,
+		`declare -a A=([0]="ab" [1]="cd ef" [2]="" [3]="gh")` + "\n",
+	},
+	{
+		// Empty array with explicit [@] keeps the `=()` literal.
+		`B=(); echo "${B[@]@A}"`,
+		"declare -a B=()\n",
+	},
+	{
+		// Empty array without a subscript reproduces as a bare declaration.
+		`declare -ia foo=(); echo "${foo@A}"`,
+		"declare -ai foo\n",
+	},
+	{
+		// Associative arrays emit -A and iterate in bash hash-bucket order.
+		`declare -A A=([one]=1 [two]='b c' [three]='' [four]=de); echo "${A[@]@A}"`,
+		`declare -A A=([four]="de" [two]="b c" [three]="" [one]="1" )` + "\n",
+	},
+	{
+		`declare -a arr=(1 2 3); echo "${arr[@]@a}"`,
+		"a\n",
+	},
+	{
+		// Attribute order: integer/readonly/export before case mods.
+		`declare -lr s=ABC; echo "${s@a}"`,
+		"rl\n",
+	},
+	{
+		// Positional parameters reproduce via `set --`.
+		`set -- ab 'cd ef' '' gh; echo "${@@A}"`,
+		"set -- 'ab' 'cd ef' '' 'gh'\n",
+	},
 	{
 		`a=Hello; echo "${a@U}"`,
 		"HELLO\n",
