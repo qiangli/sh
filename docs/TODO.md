@@ -1,7 +1,9 @@
 # Bashy: Bash 5.3 Drop-In Replacement — TODO Checklist
 
-**Current status**: 70 bash tests passing, 6 failing, 11 skipped
-**Last updated**: 2026-06-12 (varenv fixture flipped FAIL -> PASS: 112 -> 0 across six scoped rounds; func/shopt regressions caught by full suite and repaired same round; suite 70/6/11/0)
+**Current status**: 72 bash tests passing, 4 failing, 11 skipped
+**Last updated**: 2026-06-14 (weave round: nameref 631->576 via array-element nameref assignment (#87); new-exp 225->212 via indirect-expansion @Q/@A/@a composition (#88). No PASS flip yet — both fixtures still failing — but diff reduced. Reliable scoreboard = /tmp/scoreboard.sh; `make test-bash` is unreliable under the ycode shell wrapper. NOTE: weave sandboxes need the external/bash-5.3 fixture symlink prepped or workers can't measure; assoc has pre-existing nondeterministic alias ordering (243±3).)
+
+**Remaining 4 failing fixtures (reliable scoreboard diff lines):** array(184), assoc(243), nameref(576), new-exp(212)
 
 ---
 
