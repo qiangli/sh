@@ -219,6 +219,10 @@ func indirectDefaultOp(op syntax.ParExpOperator) bool {
 	return false
 }
 
+func indirectAtOp(op syntax.ParExpOperator) bool {
+	return op == syntax.OtherParamOps
+}
+
 func nodeLit(node syntax.Node) string {
 	if word, ok := node.(*syntax.Word); ok {
 		return word.Lit()
@@ -832,10 +836,12 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 		}
 		str = strconv.Itoa(n)
 	case pe.Excl:
-		if pe.Exp != nil && !indirectDefaultOp(pe.Exp.Op) {
+		if pe.Exp != nil && !indirectDefaultOp(pe.Exp.Op) && !indirectAtOp(pe.Exp.Op) {
 			return "", BadSubstitutionError{Node: pe}
 		}
 		var strs []string
+		indirectName := name
+		indirectOrig := vr
 		applyMod := false
 		sortStrs := false
 		switch {
@@ -877,6 +883,8 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			}
 			if base, idx, ok := splitIndirectArrayRef(str); ok {
 				vr = cfg.Env.Get(base)
+				indirectName = base
+				indirectOrig = vr
 				val, err := cfg.varInd(vr, idx)
 				if err != nil {
 					return "", err
@@ -885,7 +893,9 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 				applyMod = true
 				break
 			}
+			indirectName = str
 			vr = cfg.Env.Get(str)
+			indirectOrig = vr
 			switch str {
 			case "@":
 				strs = append(strs, vr.List...)
@@ -901,6 +911,7 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 		if sortStrs {
 			slices.Sort(strs)
 		}
+		elems = strs
 		str = strings.Join(strs, " ")
 		if pe.Exp != nil && indirectDefaultOp(pe.Exp.Op) {
 			arg, err := Literal(cfg, pe.Exp.Word)
@@ -942,6 +953,42 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 					}
 					return "", UnsetParameterError{Node: pe, Message: arg}
 				}
+			}
+		}
+		if pe.Exp != nil && indirectAtOp(pe.Exp.Op) {
+			if pe.Exp.Word == nil || len(pe.Exp.Word.Parts) != 1 {
+				return "", BadSubstitutionError{Node: pe}
+			}
+			lit, ok := pe.Exp.Word.Parts[0].(*syntax.Lit)
+			if !ok {
+				return "", BadSubstitutionError{Node: pe}
+			}
+			switch lit.Value {
+			case "Q":
+				out := make([]string, len(elems))
+				for i, elem := range elems {
+					quoted, qerr := syntax.Quote(elem, syntax.LangBash)
+					if qerr != nil {
+						panic(qerr)
+					}
+					if quoted == elem {
+						quoted = bashSingleQuote(elem)
+					}
+					out[i] = quoted
+				}
+				str = strings.Join(out, " ")
+			case "a":
+				str = indirectOrig.Flags()
+			case "A":
+				flags := indirectOrig.Flags()
+				quoted := bashSingleQuote(str)
+				if flags == "" {
+					str = fmt.Sprintf("%s=%s", indirectName, quoted)
+				} else {
+					str = fmt.Sprintf("declare -%s %s=%s", flags, indirectName, quoted)
+				}
+			default:
+				return "", BadSubstitutionError{Node: pe}
 			}
 		}
 		if applyMod {

@@ -909,6 +909,10 @@ var runTests = []runTest{
 		"declare -x e='1'\n",
 	},
 	{
+		`var=VAR2 VAR2=zzz; printf '<%s>\n' "${!var@Q}" "${!var@A}" "${!var@a}"`,
+		"<'zzz'>\n<VAR2='zzz'>\n<>\n",
+	},
+	{
 		`a=Hello; echo "${a@U}"`,
 		"HELLO\n",
 	},
