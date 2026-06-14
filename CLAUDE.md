@@ -4,17 +4,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Pure-Go shell parser, formatter, and interpreter for POSIX Shell, Bash, mksh, and Zsh. Published as the Go module `mvdan.cc/sh/v3` and requires Go 1.25+. Three binaries are shipped from `cmd/` (see `Makefile`'s `CMDS`):
+Pure-Go shell parser, formatter, and interpreter for POSIX Shell, Bash, mksh, and Zsh. Published as the Go module `mvdan.cc/sh/v3` and requires Go 1.25+. Two binaries are shipped from `cmd/` (see `Makefile`'s `CMDS`):
 
 - `shfmt` — formatter (the user-facing flagship; flags/style documented in `cmd/shfmt/shfmt.1.scd`).
 - `gosh` — proof-of-concept interactive shell built on `interp`.
-- `bashy` — Bash 5.3 drop-in built on `interp`; the active focus of this fork (`docs/TODO.md` tracks the phased roadmap, and `make test-bash` runs bash's own 5.3 test suite against it).
+
+This fork carries unmerged `interp`/`expand`/`syntax` patches that extend Bash 5.3 semantics. The **`bashy` Bash 5.3 drop-in CLI** that those patches exist for now lives in its own repo, [`github.com/qiangli/bashy`](https://github.com/qiangli/bashy) — a downstream consumer of this module via `replace mvdan.cc/sh/v3 => ../sh`. The bash 5.3 compliance test suite (`make test-bash`) and the bashy planning/status docs moved there too; this repo keeps `TestRunnerRunConfirm` as its library-level bash-fidelity oracle (see Build/test below). A bash-5.3 feature flip typically edits `interp`/`expand`/`syntax` here, then is measured by `make test-bash` over in `bashy`.
 
 Note: this checkout is a fork. `origin/master` is the fork integration branch — `upstream/master` with our unmerged patches rebased on top, force-pushed on each sync. Upstream PRs target `upstream/master` directly via single-commit topic branches (e.g. `interp-pipe-fd-eof`, `interp-bash-redirects`).
 
 ## Build / test / lint
 
-The `Makefile` wraps the common flows: `make build`, `make test`, `make test-bash` (drives `bin/bashy` against bash's own test suite — required by the Workflow section), `make test-bash-list`, `make tidy`, `make clean`. For finer-grained control use the underlying `go` commands:
+The `Makefile` wraps the common flows: `make build`, `make test`, `make tidy`, `make clean`. For finer-grained control use the underlying `go` commands:
 
 ```sh
 # Build everything
@@ -61,8 +62,6 @@ Workaround when running the suite locally:
 PATH=/bin:/usr/bin:$(dirname $(which go)) go test ./...
 ```
 
-The same shim doesn't affect `make test-bash` (that one drives `bin/bashy` directly).
-
 ## Architecture
 
 The codebase is a layered pipeline. Each layer is a standalone package usable on its own; the higher layers compose the lower ones.
@@ -88,13 +87,11 @@ The codebase is a layered pipeline. Each layer is a standalone package usable on
 
 7. **`moreinterp/`** — **separate Go module** (`mvdan.cc/sh/moreinterp`). Contains `coreutils/`, an `ExecHandler` middleware that satisfies commands like `cat`, `cp`, `find`, `ls`, `mkdir`, `rm`, etc. via the [u-root](https://github.com/u-root/u-root) implementations. Primarily for Windows / minimal environments where these binaries aren't installed. Because it's a separate module, dependency updates and tests are run independently of the root module.
 
-8. **`interactive/`** — single-file reusable readline wrapper around `interp.Runner` (used by `cmd/bashy`'s interactive mode and consumed by sibling projects: outpost's matrix shell + `/ssh`, ycode's shell runner — keep its API stable when refactoring). `Options.AssumeTTY` (+ `GetSize`) makes the loop treat a non-TTY stdin as an already-raw terminal — raw-mode enter/exit become no-ops, echo/editing are readline's own; the consumer is outpost's Windows virtual PTY, where no kernel PTY exists for an in-process runner and the far-end terminal (SSH client / xterm.js) is the one in raw mode. This checkout is a submodule under the `dhnt/` umbrella; `outpost` and `ycode` import it via `replace mvdan.cc/sh/v3 => ../sh`. See `dhnt/CLAUDE.md` for the sibling-replace convention — drifting the `sh` SHA between consumers was the catalyst for the umbrella migration, so coordinated pin-bumps matter.
+8. **`interactive/`** — single-file reusable readline wrapper around `interp.Runner` (consumed by sibling projects: the `bashy` CLI, outpost's matrix shell + `/ssh`, ycode's shell runner — keep its API stable when refactoring). `Options.AssumeTTY` (+ `GetSize`) makes the loop treat a non-TTY stdin as an already-raw terminal — raw-mode enter/exit become no-ops, echo/editing are readline's own; the consumer is outpost's Windows virtual PTY, where no kernel PTY exists for an in-process runner and the far-end terminal (SSH client / xterm.js) is the one in raw mode. This checkout is a submodule under the `dhnt/` umbrella; `outpost` and `ycode` import it via `replace mvdan.cc/sh/v3 => ../sh`. See `dhnt/CLAUDE.md` for the sibling-replace convention — drifting the `sh` SHA between consumers was the catalyst for the umbrella migration, so coordinated pin-bumps matter.
 
 9. **`internal/`** — module-private helpers (`pattern.go`, `testing.go`) shared between `syntax`/`interp` tests; not part of the public API surface.
 
-10. **`external/bash-5.3/`** — vendored Bash 5.3 source tree, used only for its `tests/` directory which `make test-bash` drives against `bin/bashy` (per-test 60s timeout, results summarized as PASS/FAIL/TIME/SKIP). `make test-bash-helpers` compiles the `recho`/`zecho` C helpers the suite needs.
-
-11. **`cmd/shfmt/`** — CLI wrapping `syntax` + `typedjson` + `fileutil` + `editorconfig`. Reads `.editorconfig` for per-file style. `cmd/gosh/` is a small CLI wrapping `interp.Runner` in interactive/script modes. `cmd/bashy/` adds Bash 5.3 compatibility on top (prompt expansion, version vars, signal/job-control surface — see `docs/plan-bashy-drop-in.md`).
+10. **`cmd/shfmt/`** — CLI wrapping `syntax` + `typedjson` + `fileutil` + `editorconfig`. Reads `.editorconfig` for per-file style. `cmd/gosh/` is a small CLI wrapping `interp.Runner` in interactive/script modes. (The Bash 5.3 drop-in CLI built on these packages is the separate [`github.com/qiangli/bashy`](https://github.com/qiangli/bashy) repo.)
 
 ### Conventions / sharp edges
 
@@ -108,38 +105,13 @@ The codebase is a layered pipeline. Each layer is a standalone package usable on
 
 ## Workflow
 
-At the start of every session, read `docs/TODO.md` and pick the first unchecked item to work on. After completing it, check it off in the TODO, run `go test ./...` and `make test-bash`, then commit. Repeat until the user says otherwise.
+This repo is the library/engine. When you change interpreter semantics, the canonical check is `TestRunnerRunConfirm` (see Build/test) — run it before committing. Bash 5.3 drop-in behaviour as a whole (the full CLI + bash's own test suite) is validated in the [`bashy`](https://github.com/qiangli/bashy) repo via `make test-bash`; if your change targets a specific bash fixture, flip it there.
 
-The bashy goal is **PASS-count flips**: `make test-bash-list` prints per-fixture PASS/FAIL/TIME/SKIP, and the headline three-tuple that `docs/TODO.md` tracks at the top (e.g. `72 passing, 4 failing, 11 skipped`) is the scoreboard. A change that flips a fixture from FAIL → PASS without regressing anything else is worth shipping; cleanup or refactoring that doesn't move the count isn't the priority.
-
-**Scoreboard reliability.** `make test-bash` is unreliable on this machine because the ycode shell wrapper in `PATH` shadows `sh` (see the PATH gotcha above) and perturbs the harness. To measure fixtures reliably, drive `bin/bashy` directly with the same environment the Makefile sets up — export `BASH_TSTOUT`/`BASH_TSTRAW` to temp files, `THIS_SH=$(pwd)/bin/bashy`, a clean `PATH` (`$PWD:/usr/bin:/bin`), and mirror the Makefile's per-fixture transforms: `BASH_TEST_FILTER_EXPECT` (strip `expect `-prefixed lines before diff) and `BASH_TEST_CAT_V` (pipe through `cat -v` for control-char fixtures like `printf`). `BASH_TEST_SKIP` (`coproc jobs trap`) covers fixtures that hang on the goroutine-subshell / no-kernel-job-control constraint. A diff that ignores these transforms will false-positive; a sandbox missing the `external/bash-5.3` fixture symlink (gitignored) will false-pass because the fixtures simply aren't there to run.
-
-### Doc index
-
-`docs/` holds the planning + status corpus. Load-bearing entries:
-
-- `TODO.md` — phase checklist + current PASS/FAIL/SKIP headline. Always read first.
-- `report-bash53-test-status.md` — per-fixture status snapshot from the bash 5.3 suite.
-- `handoff-bashy-2026-06.md` — most recent session-handoff notes (read when picking up cold).
-- `bash-gap-analysis.md` — ungated bash semantics gap analysis behind the failing fixtures.
-- `plan-bashy-drop-in.md` / `plan-cmd-bashy.md` / `plan-bash53-roadmap-agentic.md` — phase plans for the bashy work; each phase lands as a checkbox in `TODO.md`.
-- `plan-dynvar.md`, `plan-error-format-pass.md`, `plan-punted-builtins.md`, `proposal-declare-p-format.md` — scoped sub-plans for specific clusters of fixture failures.
-- `bash.md`, `agentic-extensions.md` — background references, not active plans.
-
-Per-fixture cluster analyses + blocker ledgers from the weave campaign (snapshots — diff line-counts and PASS/FAIL claims in them are dated, re-measure before trusting):
-
-- `ARITH-ANALYSIS.md`, `ARRAY-ANALYSIS.md`, `ASSOC-ANALYSIS.md`, `DBG-SUPPORT-ANALYSIS.md`, `NAMEREF-ANALYSIS.md`, `NEWEXP-ANALYSIS.md` — failure-cluster breakdowns for the named bash 5.3 fixtures vs. `bashy`.
-- `NEWEXP-RESIDUE-R2.md`, `ERRORS-ANALYSIS-R2.md` — round-2 residue analyses extending the originals (`new-exp`, `errors`).
-- `ERRORS-BLOCKERS.md`, `HEREDOC-BLOCKERS.md`, `HISTORY-BLOCKERS.md`, `QUOTEARRAY-BLOCKERS.md`, `VARENV-BLOCKERS.md` — per-fixture blocker ledgers (what's left, what's out-of-scope).
-
-Weave-round verification + retro reports (historical, not load-bearing):
-
-- `QA-REPORT-R10.md`, `JUDGE-REPORT-R6.md`, `JUDGE-REPORT-R7.md` — per-round verification reports.
-- `SPRINT-R10-RETRO-DRAFT.md` — round-10 sprint retrospective draft.
+Commit style follows upstream: scoped prefixes (`interp:`, `syntax:`, `expand+interp:`) with an imperative summary; keep commits focused so they cherry-pick cleanly onto upstream topic branches.
 
 ## Plans
 
-Always save a copy of all implementation plans in `docs/`. Use a descriptive filename (e.g., `docs/plan-feature-name.md`).
+Save implementation plans for non-trivial work as Markdown alongside the change or in the repo root; use a descriptive filename (e.g. `plan-feature-name.md`). (The bashy compliance roadmap and per-fixture analyses live in the `bashy` repo's `docs/`.)
 
 ## Third-Party Libraries
 

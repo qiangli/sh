@@ -1,6 +1,6 @@
 # mvdan.cc/sh - Pure-Go Shell Parser, Formatter, and Interpreter
 
-This repository is a pure-Go shell toolset for POSIX Shell, Bash, Zsh, and mksh. It is currently being developed as a fork with a primary focus on **Bash 5.3 compatibility** (via the `bashy` command) and "Agentic" extensions.
+This repository is a pure-Go shell toolset for POSIX Shell, Bash, Zsh, and mksh. It is a **fork** of `mvdan.cc/sh` that carries unmerged `interp`/`expand`/`syntax` patches extending **Bash 5.3 compatibility**. The user-facing Bash 5.3 drop-in CLI built on these patches — `bashy` — lives in its own repo, [`github.com/qiangli/bashy`](https://github.com/qiangli/bashy); this repo is the engine it depends on.
 
 ## Project Overview
 
@@ -10,7 +10,7 @@ This repository is a pure-Go shell toolset for POSIX Shell, Bash, Zsh, and mksh.
 - **Key Commands**:
     - `shfmt`: The flagship shell formatter (used by many editor integrations).
     - `gosh`: A proof-of-concept interactive shell.
-    - `bashy`: A Bash 5.3 drop-in replacement (current active development focus).
+- **Downstream**: `github.com/qiangli/bashy` (Bash 5.3 drop-in CLI), `outpost`, and `ycode` consume this module via `replace mvdan.cc/sh/v3 => ../sh`.
 
 ## Architecture & Layers
 
@@ -20,23 +20,17 @@ The codebase is a layered pipeline:
 3.  **`pattern/`**: Shell glob to Go regexp translation.
 4.  **`interp/`**: The execution engine (Runner). Uses a middleware model for I/O and process execution.
 5.  **`shell/`**: High-level one-shot expansion API.
-6.  **`interactive/`**: Readline wrapper for `interp.Runner`.
+6.  **`interactive/`**: Readline wrapper for `interp.Runner` (consumed by `bashy`, outpost, ycode — keep its API stable).
 7.  **`moreinterp/`**: `u-root` based coreutils (cat, ls, rm, etc.) as an `ExecHandler`.
 
 ## Building and Running
 
 Common flows are managed via the `Makefile`:
-- `make build`: Builds `bashy`, `gosh`, and `shfmt` into `bin/`.
-- `make test`: Runs all Go tests (including `moreinterp`).
-- `make test-bash`: Runs the native Bash 5.3 test suite against `bin/bashy` (the primary quality metric).
-- `make test-bash-list`: Lists available bash tests.
+- `make build`: Builds `gosh` and `shfmt` into `bin/`.
+- `make test`: Runs all Go tests.
 - `make tidy`: Standard Go maintenance (`mod tidy`, `gofmt`, `vet`).
 
-**Running a single bash test**:
-```bash
-cd external/bash-5.3/tests
-THIS_SH=../../../bin/bashy PATH=$PWD:$PATH ../../../bin/bashy ./<name>.tests
-```
+`moreinterp/` is a separate module — test it independently: `cd moreinterp && go test ./...`.
 
 ## Development Conventions
 
@@ -46,29 +40,24 @@ THIS_SH=../../../bin/bashy PATH=$PWD:$PATH ../../../bin/bashy ./<name>.tests
 - **Generated Code**: Run `go generate ./...` after touching enums in `syntax` or `expand`.
 - **Testing**:
     - Use table-driven tests.
-    - `TestRunnerRunConfirm` (in `interp`) is the "oracle" test against real Bash 5.3 (requires Docker).
+    - `TestRunnerRunConfirm` (in `interp`) is the "oracle" test against real Bash 5.3 (requires Docker). It is the canonical bash-fidelity check in this repo — run it when changing interpreter semantics.
     - Fuzzing: `go test -run=- -fuzz=ParsePrint` in `syntax/`.
 - **Formatting**: Strictly follow `shfmt`'s style (run `make tidy`).
 
-## Active Focus: Bashy & Agentic Extensions
+## Bash 5.3 drop-in work
 
-- **Roadmap**: Tracked in `docs/TODO.md`. Always check this first for priorities.
-- **Bash 5.3 Conformance**: The goal is to maximize the PASS count in `make test-bash`.
-- **Agentic Extensions**: Features like `--json` output, deterministic mode, and structured errors are being added to support LLM/Agentic use cases. See `docs/agentic-extensions.md`.
+The full Bash 5.3 drop-in (the `bashy` CLI + bash's own test suite + the compliance roadmap/scoreboard) lives in [`github.com/qiangli/bashy`](https://github.com/qiangli/bashy). A bash-fixture flip usually edits `interp`/`expand`/`syntax` **here**, then is measured by `make test-bash` **there**. Keep changes here focused and upstream-cherry-pickable.
 
 ## Strategic Orchestration (For Gemini CLI)
 
-1.  **Always read `docs/TODO.md`** at the start of a session to understand current priorities and status.
-2.  **Verify with `make test-bash`**: Any change to `bashy` or `interp` must be verified against the bash test suite.
-3.  **Local PATH Gotcha**: If tests fail with signal/trap issues, ensure `ycode` shims are bypassed:
+1.  **Verify with `TestRunnerRunConfirm`**: Any change to interpreter semantics must be verified against real Bash (Docker required). Full drop-in verification happens in the `bashy` repo.
+2.  **Local PATH Gotcha**: If tests fail with signal/trap issues, ensure `ycode` shims are bypassed:
     `PATH=/bin:/usr/bin:$(dirname $(which go)) go test ./...`
-4.  **Middleware Power**: Use `interp` handlers to intercept or mock system behavior for testing or specialized execution.
-5.  **Commit Style**: Use scoped prefixes (e.g., `interp: fix redirect handling`).
+3.  **Middleware Power**: Use `interp` handlers to intercept or mock system behavior for testing or specialized execution.
+4.  **Commit Style**: Use scoped prefixes (e.g., `interp: fix redirect handling`).
 
 ## Key Documentation
 
 - `README.md`: High-level overview and caveats.
-- `docs/TODO.md`: Current development scoreboard and roadmap.
-- `docs/bash-gap-analysis.md`: Detailed breakdown of missing bash features.
-- `docs/agentic-extensions.md`: Design for new agent-focused features.
 - `CLAUDE.md` / `AGENTS.md`: Technical handoff and tool-specific guidance.
+- The `bashy` repo's `docs/`: Bash 5.3 compliance scoreboard, roadmap, and per-fixture analyses.

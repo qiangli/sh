@@ -5,15 +5,13 @@ This file provides guidance to AI coding assistants working in this repository.
 ## Project Structure & Module Organization
 - Go workspace for `mvdan.cc/sh/v3`, a shell parser, formatter, and interpreter.
 - Core packages: `syntax/` (lexer/parser/AST/printer), `interp/` (runner), `expand/` (expansions), `shell/` (convenience API), `pattern/` (globbing), `fileutil/` (script detection).
-- CLI tools under `cmd/`: `shfmt` (formatter), `gosh` (interactive shell), `bashy` (Bash 5.3 drop-in).
+- CLI tools under `cmd/`: `shfmt` (formatter), `gosh` (interactive shell). The Bash 5.3 drop-in CLI built on these packages is the separate [`github.com/qiangli/bashy`](https://github.com/qiangli/bashy) repo.
 - **`moreinterp/` is a separate Go module** (`mvdan.cc/sh/moreinterp`). Must test independently: `cd moreinterp && go test ./...`
 
 ## Build, Test, and Development Commands
 ```bash
 make build          # Build binaries to bin/
 make test           # Run all Go tests
-make test-bash      # Run Bash 5.3 compatibility suite against bashy (slow)
-make test-bash-list # List available bash tests
 make tidy           # Run go mod tidy, gofmt -s -w ., go vet ./...
 make clean          # Remove bin/
 ```
@@ -60,13 +58,14 @@ PATH=/bin:/usr/bin:$(dirname $(which go)) go test ./...
 4. **`shell/`** — provides convenient API functions for one-off expansion and script evaluation.
 5. **`fileutil/`** — recognizes shell scripts by file extension and shebang lines.
 6. **`moreinterp/`** — separate Go module with `coreutils/` middleware for basic command implementations on Windows or minimal environments.
-7. **`interactive/`** — reusable readline wrapper integrated into `cmd/bashy`.
+7. **`interactive/`** — reusable readline wrapper around `interp.Runner` (consumed by the `bashy` CLI, outpost, and ycode).
 8. **`internal/`** — private utilities shared between packages.
 
 ## Important Scripts
 
 - **`cmd/shfmt/main.go`**: Implements the shell formatter, integrates with editorconfig for per-file style rules.
 - **`cmd/gosh/main.go`**: Minimal interactive shell using `interp.Runner`, primarily a proof-of-concept.
-- **`cmd/bashy/main.go`**: Bash 5.3 compatible shell built on `interp`, provides enhancements like prompt expansion and version variables.
+
+The Bash 5.3 drop-in CLI built on `interp` (prompt expansion, version vars, the bash test-suite harness) lives in [`github.com/qiangli/bashy`](https://github.com/qiangli/bashy).
 
 **Read [CLAUDE.md](./CLAUDE.md)** for Claude Code-specific conventions.
