@@ -126,6 +126,17 @@ The bashy goal is **PASS-count flips**: `make test-bash-list` prints per-fixture
 - `plan-dynvar.md`, `plan-error-format-pass.md`, `plan-punted-builtins.md`, `proposal-declare-p-format.md` — scoped sub-plans for specific clusters of fixture failures.
 - `bash.md`, `agentic-extensions.md` — background references, not active plans.
 
+Per-fixture cluster analyses + blocker ledgers from the weave campaign (snapshots — diff line-counts and PASS/FAIL claims in them are dated, re-measure before trusting):
+
+- `ARITH-ANALYSIS.md`, `ARRAY-ANALYSIS.md`, `ASSOC-ANALYSIS.md`, `DBG-SUPPORT-ANALYSIS.md`, `NAMEREF-ANALYSIS.md`, `NEWEXP-ANALYSIS.md` — failure-cluster breakdowns for the named bash 5.3 fixtures vs. `bashy`.
+- `NEWEXP-RESIDUE-R2.md`, `ERRORS-ANALYSIS-R2.md` — round-2 residue analyses extending the originals (`new-exp`, `errors`).
+- `ERRORS-BLOCKERS.md`, `HEREDOC-BLOCKERS.md`, `HISTORY-BLOCKERS.md`, `QUOTEARRAY-BLOCKERS.md`, `VARENV-BLOCKERS.md` — per-fixture blocker ledgers (what's left, what's out-of-scope).
+
+Weave-round verification + retro reports (historical, not load-bearing):
+
+- `QA-REPORT-R10.md`, `JUDGE-REPORT-R6.md`, `JUDGE-REPORT-R7.md` — per-round verification reports.
+- `SPRINT-R10-RETRO-DRAFT.md` — round-10 sprint retrospective draft.
+
 ## Plans
 
 Always save a copy of all implementation plans in `docs/`. Use a descriptive filename (e.g., `docs/plan-feature-name.md`).
