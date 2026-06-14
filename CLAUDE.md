@@ -110,7 +110,9 @@ The codebase is a layered pipeline. Each layer is a standalone package usable on
 
 At the start of every session, read `docs/TODO.md` and pick the first unchecked item to work on. After completing it, check it off in the TODO, run `go test ./...` and `make test-bash`, then commit. Repeat until the user says otherwise.
 
-The bashy goal is **PASS-count flips**: `make test-bash-list` prints per-fixture PASS/FAIL/TIME/SKIP, and the headline three-tuple that `docs/TODO.md` tracks at the top (e.g. `61 passing, 15 failing, 11 skipped`) is the scoreboard. A change that flips a fixture from FAIL → PASS without regressing anything else is worth shipping; cleanup or refactoring that doesn't move the count isn't the priority.
+The bashy goal is **PASS-count flips**: `make test-bash-list` prints per-fixture PASS/FAIL/TIME/SKIP, and the headline three-tuple that `docs/TODO.md` tracks at the top (e.g. `72 passing, 4 failing, 11 skipped`) is the scoreboard. A change that flips a fixture from FAIL → PASS without regressing anything else is worth shipping; cleanup or refactoring that doesn't move the count isn't the priority.
+
+**Scoreboard reliability.** `make test-bash` is unreliable on this machine because the ycode shell wrapper in `PATH` shadows `sh` (see the PATH gotcha above) and perturbs the harness. To measure fixtures reliably, drive `bin/bashy` directly with the same environment the Makefile sets up — export `BASH_TSTOUT`/`BASH_TSTRAW` to temp files, `THIS_SH=$(pwd)/bin/bashy`, a clean `PATH` (`$PWD:/usr/bin:/bin`), and mirror the Makefile's per-fixture transforms: `BASH_TEST_FILTER_EXPECT` (strip `expect `-prefixed lines before diff) and `BASH_TEST_CAT_V` (pipe through `cat -v` for control-char fixtures like `printf`). `BASH_TEST_SKIP` (`coproc jobs trap`) covers fixtures that hang on the goroutine-subshell / no-kernel-job-control constraint. A diff that ignores these transforms will false-positive; a sandbox missing the `external/bash-5.3` fixture symlink (gitignored) will false-pass because the fixtures simply aren't there to run.
 
 ### Doc index
 
