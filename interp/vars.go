@@ -1526,6 +1526,13 @@ func terminalWidth() int {
 }
 
 func (r *Runner) setVar(name string, vr expand.Variable) {
+	if base, idx, ok := splitArrayRef(name); ok && syntax.ValidName(base) && vr.Kind == expand.String {
+		w := &syntax.Word{Parts: []syntax.WordPart{
+			&syntax.Lit{Value: idx},
+		}}
+		r.setVarWithIndex(r.lookupVar(base), base, w, vr)
+		return
+	}
 	if r.opts[optRestricted] && (name == "PATH" || name == "SHELL") {
 		r.errf("%s%s: readonly variable\n", r.bashErrPrefix(r.curStmtPos), name)
 		return
@@ -1942,6 +1949,44 @@ func (r *Runner) setVarWithIndex(prev expand.Variable, name string, index syntax
 	r.setVar(name, prev)
 }
 
+func (r *Runner) arrayElemAsScalar(idx string, vr expand.Variable) expand.Variable {
+	elem := expand.Variable{
+		Kind:       expand.String,
+		Integer:    vr.Integer,
+		Upper:      vr.Upper,
+		Lower:      vr.Lower,
+		Capitalize: vr.Capitalize,
+	}
+	switch vr.Kind {
+	case expand.Indexed:
+		n64, err := r.arithFromString(idx)
+		if err != nil {
+			return elem
+		}
+		n := int(n64)
+		if n < 0 {
+			n = indexedNegativeOffset(vr, n)
+		}
+		if vr.IndexedSet(n) {
+			elem.Set = true
+			elem.Str = vr.List[n]
+		}
+	case expand.Associative:
+		if vr.Map != nil {
+			if s, ok := vr.Map[idx]; ok {
+				elem.Set = true
+				elem.Str = s
+			}
+		}
+	default:
+		if idx == "0" && vr.IsSet() {
+			elem.Set = true
+			elem.Str = vr.String()
+		}
+	}
+	return elem
+}
+
 func (r *Runner) integerArrayValue(s string) string {
 	if s == "" {
 		return "0"
@@ -2075,6 +2120,12 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 	// by `typeset -n fee=flip` should leave fee→flip, not
 	// flow=flip).
 	if valType != "-n" {
+		if prev.Kind == expand.NameRef && as.Index == nil {
+			if base, idx, ok := splitArrayRef(prev.Str); ok && syntax.ValidName(base) {
+				name = prev.Str
+				prev = r.arrayElemAsScalar(idx, r.lookupVar(base))
+			}
+		}
 		if n, v := prev.Resolve(r.writeEnv); n != "" {
 			name, prev = n, v
 		}

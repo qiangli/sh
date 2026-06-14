@@ -4013,6 +4013,18 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 		"1 3 42 7 9\n",
 	},
 	{
+		"arr=(a b c); declare -n ref='arr[1]'; echo $ref; ref=X; declare -p arr; echo ${!ref}; echo ${!ref[@]}",
+		"b\ndeclare -a arr=([0]=\"a\" [1]=\"X\" [2]=\"c\")\narr[1]\narr[1]\n",
+	},
+	{
+		"arr=(a b c); declare -n ref='arr[1]'; ref+=X; unset ref; declare -p arr ref",
+		"declare -a arr=([0]=\"a\" [2]=\"c\")\ndeclare -n ref=\"arr[1]\"\n",
+	},
+	{
+		"declare -A arr=([k]=v); declare -n ref='arr[k]'; ref+=X; echo $ref; unset ref; declare -p arr ref",
+		"vX\ndeclare -A arr=()\ndeclare -n ref=\"arr[k]\"\n",
+	},
+	{
 		"bar=(1 3 5 7 9); f(){ local -n v=$1; v[2]=44; }; f bar; echo ${bar[@]}",
 		"1 3 44 7 9\n",
 	},

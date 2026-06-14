@@ -664,6 +664,19 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					// The nameref itself keeps the attribute
 					// (now pointing at an unset variable).
 					if vr.Str != "" {
+						if base, idx, ok := splitArrayRef(vr.Str); ok && syntax.ValidName(base) {
+							tgt := r.lookupVar(base)
+							if tgt.ReadOnly {
+								r.errf("%sunset: %s: cannot unset: readonly variable\n",
+									r.bashErrPrefix(pos), base)
+								exit.code = 1
+								continue
+							}
+							if !r.unsetArrayElem(base, idx) {
+								exit.code = 1
+							}
+							continue
+						}
 						tgt := r.lookupVar(vr.Str)
 						if tgt.ReadOnly {
 							r.errf("%sunset: %s: cannot unset: readonly variable\n",
