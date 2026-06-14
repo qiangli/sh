@@ -1,9 +1,14 @@
 # Bashy: Bash 5.3 Drop-In Replacement — TODO Checklist
 
 **Current status**: 72 bash tests passing, 4 failing, 11 skipped
-**Last updated**: 2026-06-14 (weave round: nameref 631->576 via array-element nameref assignment (#87); new-exp 225->212 via indirect-expansion @Q/@A/@a composition (#88). No PASS flip yet — both fixtures still failing — but diff reduced. Reliable scoreboard = /tmp/scoreboard.sh; `make test-bash` is unreliable under the ycode shell wrapper. NOTE: weave sandboxes need the external/bash-5.3 fixture symlink prepped or workers can't measure; assoc has pre-existing nondeterministic alias ordering (243±3).)
+**Last updated**: 2026-06-14 (two weave rounds, diff reductions on the 4 deep fixtures — no PASS flip yet, all 4 still fail but are closer to 0):
+  - nameref 631->576 — array-element nameref assignment (#87)
+  - new-exp 225->163 — indirect @Q/@A/@a composition (#88) + @A/@a array-aware declare format (#91)
+  - assoc 243->216 — deterministic bash-ordered alias/assoc output, flap fixed (#89)
+  - array: REJECTED a candidate (#90) that netted 184->170 but regressed arith + quotearray (PASS->FAIL) by broadening expand/arith.go; array stays 184. A scoped array23.sub arith-subscript-error fix is future work.
+  Reliable scoreboard = /tmp/scoreboard.sh (must export BASH_TSTOUT; match Makefile FILTER_EXPECT/CAT_V). `make test-bash` is unreliable under the ycode shell wrapper. weave sandboxes need the external/bash-5.3 fixture symlink prepped (it's a gitignored symlink) or workers can't measure and gates false-pass.
 
-**Remaining 4 failing fixtures (reliable scoreboard diff lines):** array(184), assoc(243), nameref(576), new-exp(212)
+**Remaining 4 failing fixtures (reliable scoreboard diff lines):** array(184), assoc(216), nameref(576), new-exp(163)
 
 ---
 
