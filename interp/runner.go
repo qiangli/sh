@@ -5491,6 +5491,11 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 						}
 						continue
 					}
+					if vr.Kind == expand.String && vr.Set {
+						vr.List = []string{vr.Str}
+						vr.ListSet = nil
+						vr.Str = ""
+					}
 					vr.Kind = expand.Indexed
 				}
 				if valType != "-n" && valType != "+n" &&
