@@ -1921,6 +1921,11 @@ func (r *Runner) setVarWithIndex(prev expand.Variable, name string, index syntax
 		r.setVar(name, vr)
 		return
 	}
+	if prev.Kind == expand.NameRef && prev.Str == "" {
+		r.errf("%s`': not a valid identifier\n", r.bashErrPrefix(r.curStmtPos))
+		r.exit.code = 1
+		return
+	}
 	if idx, bad := literalBadIndexedAssignSubscript(index); bad && prev.Kind != expand.Associative {
 		r.errf("%s%s[%s]: bad array subscript\n", r.bashErrPrefix(r.curStmtPos), name, idx)
 		r.exit.code = 1
