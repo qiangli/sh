@@ -6060,7 +6060,13 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			if _, _, ok := splitArrayRef(prev.Str); ok {
 				r.errf("%s`%s': not a valid identifier\n", r.bashErrPrefix(r.curStmtPos), prev.Str)
 			} else {
-				r.setVar(varName, expand.Variable{
+				// Write the coproc array through the nameref to its
+				// target, leaving the nameref attribute intact.
+				target := varName
+				if n, _ := prev.Resolve(r.writeEnv); n != "" {
+					target = n
+				}
+				r.setVar(target, expand.Variable{
 					Set:  true,
 					Kind: expand.Indexed,
 					List: []string{
