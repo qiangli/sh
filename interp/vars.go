@@ -2273,6 +2273,9 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 					r.errf("%s`%s': not a valid identifier\n", prefix, target)
 				}
 				r.exit.code = 1
+				if r.setVarFromBuiltin != "" && !prev.Local {
+					return name, expand.Variable{}
+				}
 				return name, prev
 			}
 		}
