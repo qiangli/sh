@@ -184,6 +184,15 @@ func validBuiltinAssignName(name string) bool {
 
 func (r *Runner) unsetBuiltinArrayElem(name, idx string) bool {
 	vr := r.lookupVar(name)
+	if vr.Kind == expand.NameRef {
+		if base, targetIdx, ok := splitArrayRef(vr.Str); ok && syntax.ValidName(base) {
+			return r.unsetArrayElem(base, targetIdx)
+		}
+		if vr.Str != "" && syntax.ValidName(vr.Str) {
+			name = vr.Str
+			vr = r.lookupVar(name)
+		}
+	}
 	if vr.Kind == expand.String && vr.IsSet() {
 		if n, err := r.arithFromString(idx); err == nil && n == 0 {
 			r.delVar(name)
