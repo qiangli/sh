@@ -1121,6 +1121,17 @@ func (cfg *Config) assgnArit(b *syntax.BinaryArithm) (int, error) {
 		if err != nil {
 			return 0, err
 		}
+		// Assigning through an as-yet-untargeted nameref retargets it;
+		// an arithmetic result is never a valid identifier, so bash
+		// rejects it ("((: `0': not a valid identifier").
+		if lval.index == nil {
+			if vr := cfg.Env.Get(lval.name); vr.Kind == NameRef && vr.Str == "" {
+				target := strconv.FormatInt(int64(arg), 10)
+				if !syntax.ValidName(target) {
+					return 0, fmt.Errorf("`%s': not a valid identifier", target)
+				}
+			}
+		}
 		lval, err = cfg.resolveAritLvalue(lval)
 		if err != nil {
 			return 0, err
