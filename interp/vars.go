@@ -2288,12 +2288,23 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 		// A nameref chain that loops between distinct names (x→v→w→x)
 		// can't be resolved to a real target. Bash warns and drops the
 		// assignment, leaving the nameref itself untouched.
+		origName := name
+		origWasNameRef := prev.Kind == expand.NameRef
 		if n, v, circular := prev.ResolveTracked(r.writeEnv); circular {
 			r.errf("%swarning: %s: circular name reference\n",
 				r.bashErrPrefix(r.curStmtPos), name)
 			return name, prev
 		} else if n != "" {
 			name, prev = n, v
+		}
+		// `typeset -n a=b b; b=a[1]; a=foo` resolves a→b→a[1], so the
+		// nameref a must become an indexed array of itself. Bash drops
+		// the nameref attribute and warns before storing the element.
+		if origWasNameRef {
+			if base, _, ok := splitArrayRef(name); ok && base == origName {
+				r.errf("%swarning: %s: removing nameref attribute\n",
+					r.bashErrPrefix(r.curStmtPos), origName)
+			}
 		}
 	}
 	prevWasSet := prev.Set
