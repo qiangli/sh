@@ -982,6 +982,12 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 				return "", fmt.Errorf("%s: invalid variable name", strings.Join(vals, " "))
 			}
 			strs = vr.AssocKeysForDeclare()
+		case orig.Kind == NameRef && pe.Index != nil && nodeLit(pe.Index) != "@" && nodeLit(pe.Index) != "*":
+			if vr.IsSet() {
+				strs = append(strs, "")
+			} else {
+				return "", IndirectExpansionError{Name: fmt.Sprintf("%s[%s]", name, nodeLit(pe.Index))}
+			}
 		case orig.Kind == NameRef:
 			strs = append(strs, orig.Str)
 		case (name == "@" || name == "*") && !vr.IsSet():
