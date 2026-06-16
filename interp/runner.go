@@ -5570,10 +5570,18 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 						continue
 					}
 					if vr.Kind == expand.String && vr.Str == name {
-						r.errf("%s%s: %s: nameref variable self references not allowed\n",
-							r.bashErrPrefix(r.curStmtPos), cm.Variant.Value, name)
-						r.exit.code = 1
-						continue
+						if local && !global {
+							prefix := r.bashErrPrefix(r.curStmtPos)
+							r.errf("%s%s: warning: %s: circular name reference\n",
+								prefix, cm.Variant.Value, name)
+							r.errf("%swarning: %s: circular name reference\n",
+								prefix, name)
+						} else {
+							r.errf("%s%s: %s: nameref variable self references not allowed\n",
+								r.bashErrPrefix(r.curStmtPos), cm.Variant.Value, name)
+							r.exit.code = 1
+							continue
+						}
 					}
 					if vr.Kind == expand.String && vr.Str != "" && !validNameRefTarget(vr.Str) {
 						r.errf("%s%s: `%s': invalid variable name for name reference\n",
@@ -5647,10 +5655,18 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 							continue
 						}
 						if target == name {
-							r.errf("%s%s: %s: nameref variable self references not allowed\n",
-								r.bashErrPrefix(r.curStmtPos), cm.Variant.Value, name)
-							r.exit.code = 1
-							continue
+							if local && !global {
+								prefix := r.bashErrPrefix(r.curStmtPos)
+								r.errf("%s%s: warning: %s: circular name reference\n",
+									prefix, cm.Variant.Value, name)
+								r.errf("%swarning: %s: circular name reference\n",
+									prefix, name)
+							} else {
+								r.errf("%s%s: %s: nameref variable self references not allowed\n",
+									r.bashErrPrefix(r.curStmtPos), cm.Variant.Value, name)
+								r.exit.code = 1
+								continue
+							}
 						}
 						if vr.Kind == expand.Indexed || vr.Kind == expand.Associative {
 							r.errf("%s%s: %s: reference variable cannot be an array\n",
