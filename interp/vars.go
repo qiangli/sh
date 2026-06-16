@@ -1851,11 +1851,6 @@ func (r *Runner) arithmCompoundArrayIndex(expr syntax.ArithmExpr) (int, bool) {
 }
 
 func (r *Runner) setVarWithIndex(prev expand.Variable, name string, index syntax.ArithmExpr, vr expand.Variable) {
-	if _, _, ok := splitArrayRef(name); ok && index != nil {
-		r.errf("%s`%s': not a valid identifier\n", r.bashErrPrefix(r.curStmtPos), name)
-		r.exit.code = 1
-		return
-	}
 	if vr.Kind == expand.String && index == nil {
 		// When assigning a string to an array, fall back to the
 		// zero value for the index.
