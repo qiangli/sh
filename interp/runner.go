@@ -4496,7 +4496,19 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				}
 			}
 
-			name, vr := r.assignVal(name, prev, as, "")
+			var vr expand.Variable
+			// A command-prefix assignment to an empty-target nameref
+			// whose value is not a valid identifier (`r=/ cmd` with
+			// `declare -n r` in scope) is stored literally in the temp
+			// environment by bash rather than retargeting the nameref
+			// and failing. `$r` then expands to the raw value; a later
+			// `declare -n r` re-validates and reports the bad target.
+			if prev.Kind == expand.NameRef && prev.Str == "" && as.Value != nil &&
+				!validNameRefTarget(r.literalForAssign(as.Value)) {
+				vr = expand.Variable{Set: true, Kind: expand.String, Str: r.literalForAssign(as.Value)}
+			} else {
+				name, vr = r.assignVal(name, prev, as, "")
+			}
 			// Inline command vars are always exported.
 			vr.Exported = true
 
