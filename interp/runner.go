@@ -5562,7 +5562,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 						continue
 					}
 					if as.Value == nil {
-						r.errf("%s%s: `%s': invalid variable name for name reference\n",
+						r.errf("%s%s: `%s': not a valid identifier\n",
 							r.bashErrPrefix(r.curStmtPos), cm.Variant.Value, "")
 						r.exit.code = 1
 						continue
