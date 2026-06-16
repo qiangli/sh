@@ -780,6 +780,7 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 
 	name := pe.Param.Value
 	index := pe.Index
+	hadIndex := index != nil
 	if name == "!" && pe.Exp != nil && pe.Exp.Op == syntax.RemSmallPrefix && pe.Exp.Word == nil {
 		return cfg.Env.Get(cfg.Env.Get("#").String()).String(), nil
 	}
@@ -837,8 +838,12 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 				}
 			}
 			if idxText != "" {
+				errName := fmt.Sprintf("%s[%s]", name, idxText)
+				if orig.Kind == NameRef && !hadIndex {
+					errName = pe.Param.Value
+				}
 				return "", UnsetParameterError{
-					Name:    fmt.Sprintf("%s[%s]", name, idxText),
+					Name:    errName,
 					Message: "unbound variable",
 				}
 			}
@@ -2028,8 +2033,12 @@ func (cfg *Config) varInd(vr Variable, idx syntax.ArithmExpr) (string, error) {
 			if idxText == "" {
 				idxText = strconv.Itoa(i)
 			}
+			errName := cfg.curParam.Param.Value
+			if cfg.curParam.Index != nil {
+				errName = fmt.Sprintf("%s[%s]", errName, idxText)
+			}
 			return "", UnsetParameterError{
-				Name:    fmt.Sprintf("%s[%s]", cfg.curParam.Param.Value, idxText),
+				Name:    errName,
 				Message: "unbound variable",
 			}
 		}
