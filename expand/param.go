@@ -811,9 +811,7 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 		if base, idx, ok := nameRefArrayTarget(vr.Str); ok {
 			name = base
 			vr = cfg.Env.Get(base)
-			index = &syntax.Word{Parts: []syntax.WordPart{
-				&syntax.Lit{Value: idx},
-			}}
+			index = nameRefArrayTargetIndex(idx)
 		}
 	}
 	if n, v := vr.Resolve(cfg.Env); n != "" {
@@ -2125,6 +2123,21 @@ func nameRefArrayTarget(s string) (name, idx string, ok bool) {
 		return "", "", false
 	}
 	return name, s[lb+1 : len(s)-1], true
+}
+
+func nameRefArrayTargetIndex(idx string) syntax.ArithmExpr {
+	src := "x[" + idx + "]=_"
+	parser := syntax.NewParser(syntax.Variant(syntax.LangBash))
+	if file, err := parser.Parse(strings.NewReader(src), ""); err == nil && len(file.Stmts) == 1 {
+		if call, ok := file.Stmts[0].Cmd.(*syntax.CallExpr); ok && len(call.Assigns) == 1 {
+			if call.Assigns[0].Index != nil {
+				return call.Assigns[0].Index
+			}
+		}
+	}
+	return &syntax.Word{Parts: []syntax.WordPart{
+		&syntax.Lit{Value: idx},
+	}}
 }
 
 func (cfg *Config) namesByPrefix(prefix string) []string {
