@@ -5768,6 +5768,9 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 					// Bash refuses to remove the readonly
 					// attribute once set; report error if readonly.
 					if vr.ReadOnly {
+						if vr.Kind == expand.NameRef && vr.Str == "" {
+							continue
+						}
 						r.errf("%s%s: %s: readonly variable\n",
 							r.bashErrPrefix(r.curStmtPos), cm.Variant.Value, name)
 						r.exit.code = 1
