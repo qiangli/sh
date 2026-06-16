@@ -4486,10 +4486,19 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				assignFailed = true
 				break
 			}
-			if o, ok := r.writeEnv.(*overlayEnviron); ok {
-				o.markTemp(name, prev)
+			alreadyRestoring := false
+			for _, restore := range restores {
+				if restore.name == name {
+					alreadyRestoring = true
+					break
+				}
 			}
-			restores = append(restores, restoreVar{name: name, vr: prev, wasTemp: wasTemp})
+			if !alreadyRestoring {
+				if o, ok := r.writeEnv.(*overlayEnviron); ok {
+					o.markTemp(name, prev)
+				}
+				restores = append(restores, restoreVar{name: name, vr: prev, wasTemp: wasTemp})
+			}
 			if tracingEnabled && as.Value != nil {
 				op := "="
 				if as.Append {
