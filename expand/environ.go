@@ -181,12 +181,15 @@ func (v Variable) Flags() string {
 	case Associative:
 		flags = append(flags, 'A')
 	case NameRef:
+		if v.Integer {
+			flags = append(flags, 'i')
+		}
 		flags = append(flags, 'n')
 	}
 	// Bash prints the integer/readonly/export attributes before the
 	// case-modification ones, so e.g. `declare -lr x` reports `rl` and
 	// `declare -alr arr` reports `arl` via ${x@a} / declare -p.
-	if v.Integer {
+	if v.Integer && v.Kind != NameRef {
 		flags = append(flags, 'i')
 	}
 	if v.ReadOnly {
