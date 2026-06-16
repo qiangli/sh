@@ -5382,6 +5382,12 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				continue
 			}
 			if declQuery == "-p" {
+				if as.Index != nil {
+					ref := r.inlineArrayAssignName(as)
+					r.errf(r.bashErrPrefix(r.curStmtPos)+"%s: %s: not found\n", cm.Variant.Value, ref)
+					r.exit.code = 1
+					continue
+				}
 				if slices.Contains(modes, "-f") || slices.Contains(modes, "-F") {
 					if body := r.Funcs[name]; body != nil {
 						if slices.Contains(modes, "-F") {
