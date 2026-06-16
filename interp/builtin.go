@@ -867,6 +867,12 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			}
 		}
 		if assignTo != "" {
+			// Writing through an as-yet-untargeted nameref retargets it;
+			// reject a value that isn't a valid identifier.
+			if vr := r.lookupVar(assignTo); vr.Kind == expand.NameRef && vr.Str == "" &&
+				!validNameRefTarget(sb.String()) {
+				return failf(1, "printf: `%s': not a valid identifier\n", sb.String())
+			}
 			r.setVarString(assignTo, sb.String())
 		}
 		if r.lastExpandExit.code != 0 {
