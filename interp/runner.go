@@ -5967,14 +5967,29 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		}
 		readFd := int(pr.Fd())
 		writeFd := int(pw2.Fd())
-		r.setVar(varName, expand.Variable{
-			Set:  true,
-			Kind: expand.Indexed,
-			List: []string{
-				strconv.Itoa(readFd),
-				strconv.Itoa(writeFd),
-			},
-		})
+		if prev := r.lookupVar(varName); prev.Kind == expand.NameRef {
+			if _, _, ok := splitArrayRef(prev.Str); ok {
+				r.errf("%s`%s': not a valid identifier\n", r.bashErrPrefix(r.curStmtPos), prev.Str)
+			} else {
+				r.setVar(varName, expand.Variable{
+					Set:  true,
+					Kind: expand.Indexed,
+					List: []string{
+						strconv.Itoa(readFd),
+						strconv.Itoa(writeFd),
+					},
+				})
+			}
+		} else {
+			r.setVar(varName, expand.Variable{
+				Set:  true,
+				Kind: expand.Indexed,
+				List: []string{
+					strconv.Itoa(readFd),
+					strconv.Itoa(writeFd),
+				},
+			})
+		}
 		if r.fdTable == nil {
 			r.fdTable = make(map[int]*os.File)
 		}
