@@ -2189,6 +2189,11 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 	// by `typeset -n fee=flip` should leave fee→flip, not
 	// flow=flip).
 	if valType != "-n" {
+		if prev.Kind == expand.NameRef && prev.Str == "" && as.Index == nil {
+			valType = "-n"
+		}
+	}
+	if valType != "-n" {
 		if prev.Kind == expand.NameRef && as.Index == nil {
 			if base, idx, ok := splitArrayRef(prev.Str); ok && syntax.ValidName(base) {
 				name = prev.Str
@@ -2388,6 +2393,11 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 			}
 			prev.Kind = expand.String
 			prev.Str += s
+		case expand.NameRef:
+			if valType == "-n" {
+				prev.Str += s
+				return name, prev
+			}
 		case expand.Indexed:
 			// `arr[i]+=s` appends `s` onto the existing element
 			// at index `i`. setVarWithIndex receives vr.Str and
