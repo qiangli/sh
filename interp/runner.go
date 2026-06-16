@@ -1162,6 +1162,24 @@ func (e expandEnv) Get(name string) expand.Variable {
 	return e.r.lookupVar(name)
 }
 
+// ResolveNameRef follows one nameref hop during expansion. A
+// self-referencing local nameref (`typeset -n v=v` inside a function)
+// would otherwise loop forever; bash warns "circular name reference" and
+// resolves the name in the enclosing scope without following namerefs.
+func (e expandEnv) ResolveNameRef(name string) expand.Variable {
+	r := e.r
+	vr := r.lookupVar(name)
+	if vr.Kind == expand.NameRef && vr.Str == name {
+		r.errf("%swarning: %s: circular name reference\n",
+			r.bashErrPrefix(r.curStmtPos), name)
+		if o, ok := r.writeEnv.(*overlayEnviron); ok && o.parent != nil {
+			return o.parent.Get(name)
+		}
+		return expand.Variable{}
+	}
+	return vr
+}
+
 func (e expandEnv) Set(name string, vr expand.Variable) error {
 	if e.r.lookupVar(name).ReadOnly {
 		return fmt.Errorf("%s: readonly variable", name)
