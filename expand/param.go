@@ -224,6 +224,10 @@ func indirectAtOp(op syntax.ParExpOperator) bool {
 	return op == syntax.OtherParamOps
 }
 
+func transformNounsetUnset(vr Variable) bool {
+	return !vr.IsSet() || vr.Kind == Indexed && vr.IndexedCount() == 0
+}
+
 func indirectParamModOp(op syntax.ParExpOperator) bool {
 	switch op {
 	case syntax.RemSmallPrefix, syntax.RemLargePrefix,
@@ -1131,8 +1135,14 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 				}
 				str = strings.Join(out, " ")
 			case "a":
+				if cfg.NoUnset && transformNounsetUnset(indirectOrig) {
+					return "", UnsetParameterError{Name: "!" + name, Message: "unbound variable"}
+				}
 				str = indirectOrig.Flags()
 			case "A":
+				if cfg.NoUnset && transformNounsetUnset(indirectOrig) {
+					return "", UnsetParameterError{Name: "!" + name, Message: "unbound variable"}
+				}
 				str = cfg.paramAtA(indirectOrig, indirectOrig, indirectName, str, indexAllElements)
 			default:
 				return "", BadSubstitutionError{Node: pe}
@@ -1465,10 +1475,16 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 				}
 				str = string(rns)
 			case "a":
+				if cfg.NoUnset && transformNounsetUnset(orig) {
+					return "", UnsetParameterError{Name: name, Message: "unbound variable"}
+				}
 				// ${var@a} returns variable attribute flags.
 				// We use orig (before nameref resolve) for the attributes.
 				str = orig.Flags()
 			case "A":
+				if cfg.NoUnset && transformNounsetUnset(orig) {
+					return "", UnsetParameterError{Name: name, Message: "unbound variable"}
+				}
 				// ${var@A} returns a declare statement that recreates the
 				// variable. A variable that was never declared expands to
 				// nothing (a declared-but-unset variable still prints its

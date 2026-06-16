@@ -1992,7 +1992,7 @@ func bashSingleQuote(s string) string {
 // bashQuoteParamQ quotes a single value the way bash 5.3's ${var@Q}
 // transform does: it produces a string that re-reads as the same value,
 // always wrapping a value that would otherwise need no quoting in single
-// quotes (`zzz` -> `'zzz'`, `` -> `''`).
+// quotes (`zzz` -> `'zzz'`, empty string -> `''`).
 func bashQuoteParamQ(s string) string {
 	quoted, err := syntax.Quote(s, syntax.LangBash)
 	if err != nil {
@@ -2319,6 +2319,9 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 			}
 			curField = append(curField, fp)
 		case *syntax.DblQuoted:
+			if cfg.quotedEmptyAtElidesField(wp.Parts) {
+				continue
+			}
 			if len(wp.Parts) == 1 {
 				pe, _ := wp.Parts[0].(*syntax.ParamExp)
 				elems, err := cfg.quotedElemFields(pe)
@@ -2475,6 +2478,31 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 	return fields, nil
 }
 
+func (cfg *Config) quotedEmptyAtElidesField(parts []syntax.WordPart) bool {
+	hasAt := false
+	for _, part := range parts {
+		pe, ok := part.(*syntax.ParamExp)
+		if !ok || pe.Excl || pe.Exp != nil || pe.Repl != nil || pe.Slice != nil ||
+			pe.Length || pe.Width || pe.IsSet || pe.Index != nil {
+			return false
+		}
+		if pe.Param.Value == "@" {
+			if len(cfg.Env.Get("@").List) > 0 {
+				return false
+			}
+			hasAt = true
+			continue
+		}
+		if pe.Param.Value == "*" {
+			return false
+		}
+		if cfg.Env.Get(pe.Param.Value).String() != "" {
+			return false
+		}
+	}
+	return hasAt
+}
+
 func paramExpDefaultWordAllowsEmpty(pe *syntax.ParamExp) bool {
 	if pe == nil || pe.Exp == nil || pe.Exp.Word == nil {
 		return false
@@ -2495,6 +2523,14 @@ func paramExpDefaultWordAllowsEmpty(pe *syntax.ParamExp) bool {
 		case *syntax.DblQuoted:
 			if len(part.Parts) == 0 {
 				return true
+			}
+			if len(part.Parts) == 1 {
+				inner, ok := part.Parts[0].(*syntax.ParamExp)
+				if ok && !inner.Excl && inner.Exp == nil && inner.Repl == nil &&
+					inner.Param.Value != "@" && inner.Param.Value != "*" &&
+					nodeLit(inner.Index) != "@" && nodeLit(inner.Index) != "*" {
+					return true
+				}
 			}
 		}
 	}
@@ -2659,6 +2695,9 @@ func (cfg *Config) substWordFields(pe *syntax.ParamExp) ([][]fieldPart, bool, er
 		if len(field) == 0 {
 			fields[i] = []fieldPart{{quote: quoteSingle, val: ""}}
 		}
+	}
+	if len(fields) == 0 && paramExpDefaultWordAllowsEmpty(pe) {
+		fields = [][]fieldPart{{{quote: quoteSingle, val: ""}}}
 	}
 	if assignOp {
 		if cannotAssignParam(pe.Param.Value) {
@@ -3169,10 +3208,12 @@ func (cfg *Config) quotedElemFields(pe *syntax.ParamExp) ([]string, error) {
 		}
 		if isSubstOp && pe.Exp.Word != nil && len(pe.Exp.Word.Parts) == 1 {
 			var innerPE *syntax.ParamExp
+			innerQuoted := false
 			switch inner := pe.Exp.Word.Parts[0].(type) {
 			case *syntax.ParamExp:
 				innerPE = inner
 			case *syntax.DblQuoted:
+				innerQuoted = true
 				if len(inner.Parts) == 1 {
 					innerPE, _ = inner.Parts[0].(*syntax.ParamExp)
 				}
@@ -3196,7 +3237,7 @@ func (cfg *Config) quotedElemFields(pe *syntax.ParamExp) ([]string, error) {
 				if trigger {
 					// Use the inner PE's special handling.
 					e, err := cfg.quotedElemFields(innerPE)
-					if err != nil || e != nil {
+					if err != nil || e != nil && (innerQuoted || len(e) > 0) {
 						return e, err
 					}
 				}
