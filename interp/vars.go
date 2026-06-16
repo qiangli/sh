@@ -2253,6 +2253,22 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 		// expands the post-colon tilde to $HOME, matching bash.
 		s, err := expand.LiteralForAssign(r.ecfg, as.Value)
 		r.expandErr(err)
+		if valType == "-n" && as.Index == nil && as.Array == nil {
+			target := s
+			if as.Append {
+				target = prev.Str + target
+			}
+			if !validNameRefTarget(target) {
+				prefix := r.bashErrPrefix(as.Value.Pos())
+				if r.setVarFromBuiltin != "" {
+					r.errf("%s%s: `%s': not a valid identifier\n", prefix, r.setVarFromBuiltin, target)
+				} else {
+					r.errf("%s`%s': not a valid identifier\n", prefix, target)
+				}
+				r.exit.code = 1
+				return name, prev
+			}
+		}
 		// Integer attribute (declare -i): parse the RHS as an
 		// arithmetic expression and evaluate it. For =, the result
 		// replaces the value; for +=, it's added to the current
