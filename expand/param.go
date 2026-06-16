@@ -1434,37 +1434,59 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 // for arrays. For indexed arrays: "0 val0 1 val1 ...".
 // For associative arrays: "key1 val1 key2 val2 ...".
 // For plain strings, returns the value unchanged.
+// paramAtK implements the string form of ${var@K} and ${var@k}. A scalar
+// becomes a single-quoted value (`'string'`); positional parameters become
+// the single-quoted values without keys (`'a b' 'c d'`); indexed and
+// associative arrays become a sequence of `key "value"` pairs with the
+// value in double quotes, in bash key order.
 func (cfg *Config) paramAtK(vr Variable, name string) string {
+	if name == "@" || name == "*" {
+		// Positional parameters: quoted values, no keys.
+		var parts []string
+		for _, v := range vr.List {
+			parts = append(parts, bashQuoteParamQ(v))
+		}
+		return strings.Join(parts, " ")
+	}
 	switch vr.Kind {
 	case Indexed:
 		var parts []string
 		for _, i := range vr.IndexedIndexes() {
-			v := vr.List[i]
-			quoted, err := syntax.Quote(v, syntax.LangBash)
-			if err != nil {
-				quoted = v
-			}
-			parts = append(parts, strconv.Itoa(i)+" "+quoted)
+			parts = append(parts, strconv.Itoa(i)+" "+bashDeclareQuote(vr.List[i]))
 		}
 		return strings.Join(parts, " ")
 	case Associative:
-		keys := slices.Sorted(maps.Keys(vr.Map))
 		var parts []string
-		for _, k := range keys {
-			v := vr.Map[k]
-			quotedK, err := syntax.Quote(k, syntax.LangBash)
-			if err != nil {
-				quotedK = k
-			}
-			quotedV, err := syntax.Quote(v, syntax.LangBash)
-			if err != nil {
-				quotedV = v
-			}
-			parts = append(parts, quotedK+" "+quotedV)
+		for _, k := range vr.AssocKeysForDeclare() {
+			parts = append(parts, bashDeclareQuote(k)+" "+bashDeclareQuote(vr.Map[k]))
 		}
 		return strings.Join(parts, " ")
 	default:
-		return vr.String()
+		return bashQuoteParamQ(vr.String())
+	}
+}
+
+// paramAtKFields implements the field-splitting form of "${arr[@]@k}":
+// each key and each (unquoted) value becomes a separate field.
+func (cfg *Config) paramAtKFields(vr Variable, name string) []string {
+	if name == "@" || name == "*" {
+		return append([]string(nil), vr.List...)
+	}
+	switch vr.Kind {
+	case Indexed:
+		var out []string
+		for _, i := range vr.IndexedIndexes() {
+			out = append(out, strconv.Itoa(i), vr.List[i])
+		}
+		return out
+	case Associative:
+		var out []string
+		for _, k := range vr.AssocKeysForDeclare() {
+			out = append(out, k, vr.Map[k])
+		}
+		return out
+	default:
+		return []string{vr.String()}
 	}
 }
 

@@ -3424,18 +3424,34 @@ func (cfg *Config) quotedTransformElemFields(pe *syntax.ParamExp) ([]string, err
 		return nil, nil
 	}
 	if pe.Exp.Op != syntax.OtherParamOps || pe.Exp.Word == nil ||
-		len(pe.Exp.Word.Parts) != 1 || nodeLit(pe.Exp.Word) != "Q" {
+		len(pe.Exp.Word.Parts) != 1 {
 		return nil, nil
 	}
-	elems, join, err := cfg.quotedModElemValues(pe)
-	if err != nil || elems == nil || join {
-		return nil, err
+	switch nodeLit(pe.Exp.Word) {
+	case "Q":
+		elems, join, err := cfg.quotedModElemValues(pe)
+		if err != nil || elems == nil || join {
+			return nil, err
+		}
+		out := make([]string, len(elems))
+		for i, elem := range elems {
+			out[i] = bashQuoteParamQ(elem)
+		}
+		return out, nil
+	case "k":
+		// "${arr[@]@k}" splits into separate key and value fields. Only
+		// the `@`/`[@]` array/positional forms split; scalars and the
+		// `*`/`[*]` forms fall through to the single-string path.
+		name := pe.Param.Value
+		if name != "@" && name != "*" && nodeLit(pe.Index) != "@" {
+			return nil, nil
+		}
+		if nodeLit(pe.Index) == "*" {
+			return nil, nil
+		}
+		return cfg.paramAtKFields(cfg.Env.Get(name), name), nil
 	}
-	out := make([]string, len(elems))
-	for i, elem := range elems {
-		out[i] = bashQuoteParamQ(elem)
-	}
-	return out, nil
+	return nil, nil
 }
 
 func (cfg *Config) quotedModElemValues(pe *syntax.ParamExp) ([]string, bool, error) {
