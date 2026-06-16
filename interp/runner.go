@@ -5559,6 +5559,10 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 						r.errf("%s%s: %s: reference variable cannot be an array\n",
 							r.bashErrPrefix(r.curStmtPos), cm.Variant.Value, ref)
 						r.exit.code = 1
+						if as.Array != nil {
+							_, arr := r.assignVal(name, vr, as, "-a")
+							r.setVar(name, arr)
+						}
 						continue
 					}
 					if as.Value == nil {
