@@ -5441,6 +5441,11 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			if global {
 				vr = r.lookupGlobalVar(name)
 			}
+			if local && !global && valType != "-n" && !slices.Contains(modes, "-I") && !r.tempEnv[name] {
+				if ol, ok := r.writeEnv.(*overlayEnviron); ok && ol.funcScope && !ol.holdsLocally(name) {
+					vr = expand.Variable{}
+				}
+			}
 			// Set the Integer attribute *before* assignVal so the
 			// initial assignment can evaluate the RHS as arithmetic.
 			if valType == "-i" || slices.Contains(modes, "-i") {
