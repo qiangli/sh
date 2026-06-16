@@ -3942,6 +3942,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		printMode := false
 		exportMode := false
 		readonlyMode := false
+		namerefMode := false
 		arrayMode := ""
 		var names []string
 		for _, arg := range args {
@@ -3955,6 +3956,8 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 						exportMode = true
 					case "-r":
 						readonlyMode = true
+					case "-n":
+						namerefMode = true
 					case "-a", "-A":
 						arrayMode = flag
 					default:
@@ -3980,6 +3983,24 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				}
 				r.setVar(name, vr)
 				names = append(names, name)
+			} else if namerefMode {
+				// `VAR=val declare -n NAME` (and other CallExpr-form
+				// declares): adding the nameref attribute re-validates
+				// NAME's current value as a reference target, matching
+				// the keyword DeclClause path (nameref11.sub line 22).
+				names = append(names, arg)
+				vr := r.lookupVar(arg)
+				if vr.Kind == expand.String && (vr.Str != "" || vr.Set) && !validNameRefTarget(vr.Str) {
+					r.errf("%s%s: `%s': invalid variable name for name reference\n",
+						r.bashErrPrefix(pos), name, vr.Str)
+					exit.code = 1
+					continue
+				}
+				vr.Kind = expand.NameRef
+				vr.Exported = vr.Exported || exportMode
+				vr.ReadOnly = vr.ReadOnly || readonlyMode
+				vr.Local = vr.Local || inFuncScope
+				r.setVar(arg, vr)
 			} else {
 				names = append(names, arg)
 				if exportMode || readonlyMode || inFuncScope {
