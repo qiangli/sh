@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -221,6 +222,19 @@ func indirectDefaultOp(op syntax.ParExpOperator) bool {
 
 func indirectAtOp(op syntax.ParExpOperator) bool {
 	return op == syntax.OtherParamOps
+}
+
+func transformNounsetUnset(vr Variable) bool {
+	return !vr.IsSet() || vr.Kind == Indexed && vr.IndexedCount() == 0
+}
+
+func indirectParamModOp(op syntax.ParExpOperator) bool {
+	switch op {
+	case syntax.RemSmallPrefix, syntax.RemLargePrefix,
+		syntax.RemSmallSuffix, syntax.RemLargeSuffix:
+		return true
+	}
+	return false
 }
 
 func nodeLit(node syntax.Node) string {
@@ -517,46 +531,69 @@ func bashAlternateCommandSubstEOF(word *syntax.Word) bool {
 // by the indirect-expansion path (`${!x//c/x}`) where the value
 // comes from a name lookup but the substitution should still apply.
 func applyParamMods(cfg *Config, pe *syntax.ParamExp, str string) (string, error) {
-	if pe.Repl == nil {
-		return str, nil
-	}
-	orig, replAnchoredStart, replAnchoredEnd, err := replPattern(cfg, pe.Repl.Orig, pe.Repl.All)
+	out, err := applyParamModsElems(cfg, pe, []string{str})
 	if err != nil {
 		return "", err
 	}
-	if orig == "" && !replAnchoredStart && !replAnchoredEnd {
-		return str, nil
+	if len(out) == 0 {
+		return "", nil
 	}
-	var with string
-	if pe.Repl.With != nil {
-		var withSb strings.Builder
-		for _, part := range pe.Repl.With.Parts {
-			if lit, ok := part.(*syntax.Lit); ok {
-				withSb.WriteString(stripBackslashEscapes(lit.Value))
-				continue
-			}
-			s, lerr := Literal(cfg, &syntax.Word{Parts: []syntax.WordPart{part}})
-			if lerr != nil {
-				return "", lerr
-			}
-			withSb.WriteString(s)
+	return out[0], nil
+}
+
+func applyParamModsElems(cfg *Config, pe *syntax.ParamExp, elems []string) ([]string, error) {
+	if pe.Repl == nil && (pe.Exp == nil || !indirectParamModOp(pe.Exp.Op)) {
+		return elems, nil
+	}
+	out := slices.Clone(elems)
+	if pe.Exp != nil && indirectParamModOp(pe.Exp.Op) {
+		arg, err := Pattern(cfg, pe.Exp.Word)
+		if err != nil {
+			return nil, err
 		}
-		with = withSb.String()
+		suffix := pe.Exp.Op == syntax.RemSmallSuffix || pe.Exp.Op == syntax.RemLargeSuffix
+		small := pe.Exp.Op == syntax.RemSmallPrefix || pe.Exp.Op == syntax.RemSmallSuffix
+		for i, elem := range out {
+			out[i] = cfg.removePattern(elem, arg, suffix, small)
+		}
 	}
+	if pe.Repl == nil {
+		return out, nil
+	}
+	orig, replAnchoredStart, replAnchoredEnd, err := replPattern(cfg, pe.Repl.Orig, pe.Repl.All)
+	if err != nil {
+		return nil, err
+	}
+	if orig == "" && !replAnchoredStart && !replAnchoredEnd {
+		return out, nil
+	}
+	segs, err := cfg.replTemplate(pe.Repl.With)
+	if err != nil {
+		return nil, err
+	}
+	matchSpecial := replHasMatch(segs)
+	with := renderRepl(segs, "")
 	n := 1
 	if pe.Repl.All {
 		n = -1
 	}
-	locs := cfg.findReplIndex(orig, str, n, replAnchoredStart, replAnchoredEnd)
-	var sb strings.Builder
-	last := 0
-	for _, loc := range locs {
-		sb.WriteString(str[last:loc[0]])
-		sb.WriteString(with)
-		last = loc[1]
+	for i, elem := range out {
+		locs := cfg.findReplIndex(orig, elem, n, replAnchoredStart, replAnchoredEnd)
+		var sb strings.Builder
+		last := 0
+		for _, loc := range locs {
+			sb.WriteString(elem[last:loc[0]])
+			if matchSpecial {
+				sb.WriteString(renderRepl(segs, elem[loc[0]:loc[1]]))
+			} else {
+				sb.WriteString(with)
+			}
+			last = loc[1]
+		}
+		sb.WriteString(elem[last:])
+		out[i] = sb.String()
 	}
-	sb.WriteString(str[last:])
-	return sb.String(), nil
+	return out, nil
 }
 
 func replPattern(cfg *Config, word *syntax.Word, all bool) (pat string, start, end bool, err error) {
@@ -617,6 +654,119 @@ func (cfg *Config) findReplIndex(pat, name string, n int, start, end bool) [][]i
 		return [][]int{{loc[2], loc[3]}}
 	}
 	return nil
+}
+
+// replSegment is one piece of a ${var/pat/repl} replacement template. When
+// match is true the matched portion of the value is substituted here;
+// otherwise lit is emitted verbatim.
+type replSegment struct {
+	lit   string
+	match bool
+}
+
+// replTemplate builds the replacement template for the With word of a
+// substitution. Backslash escapes and quoting are resolved up front; when
+// patsub_replacement is enabled an unquoted `&` becomes a match placeholder.
+// Tilde expansion is applied to a leading unquoted `~`.
+func (cfg *Config) replTemplate(with *syntax.Word) ([]replSegment, error) {
+	var segs []replSegment
+	if with == nil {
+		return segs, nil
+	}
+	emitLit := func(s string) {
+		if s == "" {
+			return
+		}
+		if n := len(segs); n > 0 && !segs[n-1].match {
+			segs[n-1].lit += s
+			return
+		}
+		segs = append(segs, replSegment{lit: s})
+	}
+	patsub := cfg.PatSubReplacement
+	// scanUnquoted processes source/expanded text that is subject to
+	// patsub `&` substitution and backslash escaping.
+	scanUnquoted := func(s string, fromSource bool) {
+		for i := 0; i < len(s); i++ {
+			c := s[i]
+			if c == '\\' && i+1 < len(s) {
+				next := s[i+1]
+				// In bare source text a backslash escapes any
+				// character. In expanded variable content only `\&`
+				// and `\\` are special; other backslashes are kept.
+				if fromSource || next == '&' || next == '\\' {
+					emitLit(string(next))
+					i++
+					continue
+				}
+				emitLit("\\")
+				continue
+			}
+			if c == '&' && patsub {
+				segs = append(segs, replSegment{match: true})
+				continue
+			}
+			emitLit(string(c))
+		}
+	}
+	for idx, part := range with.Parts {
+		switch part := part.(type) {
+		case *syntax.Lit:
+			val := part.Value
+			if idx == 0 {
+				if prefix, rest := cfg.expandUser(val, len(with.Parts) > 1); prefix != "" {
+					emitLit(prefix)
+					val = rest
+				}
+			}
+			scanUnquoted(val, true)
+		case *syntax.ParamExp, *syntax.CmdSubst, *syntax.ArithmExp, *syntax.ProcSubst, *syntax.ExtGlob:
+			s, err := Literal(cfg, &syntax.Word{Parts: []syntax.WordPart{part}})
+			if err != nil {
+				return nil, err
+			}
+			scanUnquoted(s, false)
+		default:
+			// Quoted parts (SglQuoted, DblQuoted): fully literal, no
+			// `&` substitution or backslash processing here.
+			s, err := Literal(cfg, &syntax.Word{Parts: []syntax.WordPart{part}})
+			if err != nil {
+				return nil, err
+			}
+			emitLit(s)
+		}
+	}
+	return segs, nil
+}
+
+// renderRepl renders a replacement template, substituting matched for each
+// match placeholder.
+func renderRepl(segs []replSegment, matched string) string {
+	if len(segs) == 0 {
+		return ""
+	}
+	if len(segs) == 1 && !segs[0].match {
+		return segs[0].lit
+	}
+	var sb strings.Builder
+	for _, s := range segs {
+		if s.match {
+			sb.WriteString(matched)
+		} else {
+			sb.WriteString(s.lit)
+		}
+	}
+	return sb.String()
+}
+
+// replHasMatch reports whether any segment substitutes the matched text.
+func replHasMatch(segs []replSegment) bool {
+	for _, s := range segs {
+		if s.match {
+			return true
+		}
+	}
+	return false
 }
 
 func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
@@ -802,7 +952,7 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 		}
 		str = strconv.Itoa(n)
 	case pe.Excl:
-		if pe.Exp != nil && !indirectDefaultOp(pe.Exp.Op) && !indirectAtOp(pe.Exp.Op) {
+		if pe.Exp != nil && !indirectDefaultOp(pe.Exp.Op) && !indirectAtOp(pe.Exp.Op) && !indirectParamModOp(pe.Exp.Op) {
 			return "", BadSubstitutionError{Node: pe}
 		}
 		var strs []string
@@ -818,10 +968,21 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			strs = cfg.namesByPrefix(pe.Param.Value)
 			sortStrs = true
 		case pe.Index != nil && vr.Kind == Indexed:
+			if pe.Exp != nil && indirectAtOp(pe.Exp.Op) {
+				return "", fmt.Errorf("%s: invalid variable name", strings.Join(vr.IndexedValues(), " "))
+			}
 			for _, i := range vr.IndexedIndexes() {
 				strs = append(strs, strconv.Itoa(i))
 			}
 		case pe.Index != nil && vr.Kind == Associative:
+			if pe.Exp != nil && indirectAtOp(pe.Exp.Op) {
+				keys := vr.AssocKeysForDeclare()
+				vals := make([]string, len(keys))
+				for i, key := range keys {
+					vals[i] = vr.Map[key]
+				}
+				return "", fmt.Errorf("%s: invalid variable name", strings.Join(vals, " "))
+			}
 			strs = vr.AssocKeysForDeclare()
 		case orig.Kind == NameRef:
 			strs = append(strs, orig.Str)
@@ -851,11 +1012,41 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 				vr = cfg.Env.Get(base)
 				indirectName = base
 				indirectOrig = vr
-				val, err := cfg.varInd(vr, idx)
-				if err != nil {
-					return "", err
+				switch vr.Kind {
+				case Indexed:
+					switch nodeLit(idx) {
+					case "@", "*":
+						strs = append(strs, vr.IndexedValues()...)
+						indexAllElements = true
+					default:
+						val, err := cfg.varInd(vr, idx)
+						if err != nil {
+							return "", err
+						}
+						strs = append(strs, val)
+					}
+				case Associative:
+					switch nodeLit(idx) {
+					case "@", "*":
+						keys := vr.AssocKeysForDeclare()
+						for _, key := range keys {
+							strs = append(strs, vr.Map[key])
+						}
+						indexAllElements = true
+					default:
+						val, err := cfg.varInd(vr, idx)
+						if err != nil {
+							return "", err
+						}
+						strs = append(strs, val)
+					}
+				default:
+					val, err := cfg.varInd(vr, idx)
+					if err != nil {
+						return "", err
+					}
+					strs = append(strs, val)
 				}
-				strs = append(strs, val)
 				applyMod = true
 				break
 			}
@@ -944,18 +1135,25 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 				}
 				str = strings.Join(out, " ")
 			case "a":
+				if cfg.NoUnset && transformNounsetUnset(indirectOrig) {
+					return "", UnsetParameterError{Name: "!" + name, Message: "unbound variable"}
+				}
 				str = indirectOrig.Flags()
 			case "A":
+				if cfg.NoUnset && transformNounsetUnset(indirectOrig) {
+					return "", UnsetParameterError{Name: "!" + name, Message: "unbound variable"}
+				}
 				str = cfg.paramAtA(indirectOrig, indirectOrig, indirectName, str, indexAllElements)
 			default:
 				return "", BadSubstitutionError{Node: pe}
 			}
 		}
-		if applyMod {
-			if mod, err := applyParamMods(cfg, pe, str); err != nil {
+		if applyMod && (pe.Repl != nil || pe.Exp != nil && indirectParamModOp(pe.Exp.Op)) {
+			if modElems, err := applyParamModsElems(cfg, pe, elems); err != nil {
 				return "", err
 			} else {
-				str = mod
+				elems = modElems
+				str = strings.Join(elems, " ")
 			}
 		}
 	case pe.Width:
@@ -1011,28 +1209,16 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 		}
 		// Bash 5.3 applies quote-removal to the replacement string:
 		// a backslash in the *unquoted* portion escapes the next
-		// character (`\'` → `'`, `\\` → `\`, `\&` → `&`). Already-
-		// quoted parts (DblQuoted, SglQuoted) keep their text as
-		// Literal returned it, since they've already been through
-		// the relevant per-context backslash handling. So we walk
-		// the word parts: strip backslashes only on the bare Lit
-		// pieces, concatenate the rest as Literal would have.
-		var with string
-		if pe.Repl.With != nil {
-			var withSb strings.Builder
-			for _, part := range pe.Repl.With.Parts {
-				if lit, ok := part.(*syntax.Lit); ok {
-					withSb.WriteString(stripBackslashEscapes(lit.Value))
-					continue
-				}
-				s, lerr := Literal(cfg, &syntax.Word{Parts: []syntax.WordPart{part}})
-				if lerr != nil {
-					return "", lerr
-				}
-				withSb.WriteString(s)
-			}
-			with = withSb.String()
+		// character (`\'` → `'`, `\\` → `\`, `\&` → `&`). With the
+		// patsub_replacement option an unquoted `&` is replaced by
+		// the matched text. [Config.replTemplate] resolves all of
+		// this into a template rendered per match.
+		segs, terr := cfg.replTemplate(pe.Repl.With)
+		if terr != nil {
+			return "", terr
 		}
+		matchSpecial := replHasMatch(segs)
+		with := renderRepl(segs, "")
 		n := 1
 		if pe.Repl.All {
 			n = -1
@@ -1043,7 +1229,11 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			last := 0
 			for _, loc := range locs {
 				sb.WriteString(elem[last:loc[0]])
-				sb.WriteString(with)
+				if matchSpecial {
+					sb.WriteString(renderRepl(segs, elem[loc[0]:loc[1]]))
+				} else {
+					sb.WriteString(with)
+				}
 				last = loc[1]
 			}
 			sb.WriteString(elem[last:])
@@ -1253,23 +1443,26 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			}
 			switch arg {
 			case "Q":
+				// Bash 5.3's @Q on an unset variable (or unset array
+				// element) expands to nothing, rather than quoting an
+				// empty value to `''`. `@`/`*` and `[@]`/`[*]` forms are
+				// "set" whenever any element exists, so they use IsSet
+				// directly; a specific subscript checks that element.
+				qSet := vr.IsSet()
+				if name != "@" && name != "*" {
+					if il := nodeLit(index); il != "@" && il != "*" {
+						qSet = arrayElemSet(vr, index, cfg)
+					}
+				}
+				if !qSet {
+					str = ""
+					break
+				}
 				// Bash 5.3 quotes each element of an array transform
 				// separately (`${arr[@]@Q}` -> `'a' 'b'`).
 				out := make([]string, len(elems))
 				for i, elem := range elems {
-					quoted, qerr := syntax.Quote(elem, syntax.LangBash)
-					if qerr != nil {
-						// Is this even possible? If a user runs into this
-						// panic, it's most likely a bug we need to fix.
-						panic(qerr)
-					}
-					// syntax.Quote leaves strings that need no quoting
-					// unchanged, but bash 5.3's ${var@Q} always wraps a
-					// non-empty value in single quotes (`zzz` -> `'zzz'`).
-					if quoted == elem {
-						quoted = bashSingleQuote(elem)
-					}
-					out[i] = quoted
+					out[i] = bashQuoteParamQ(elem)
 				}
 				str = strings.Join(out, " ")
 			case "E":
@@ -1282,10 +1475,24 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 				}
 				str = string(rns)
 			case "a":
+				if cfg.NoUnset && transformNounsetUnset(orig) {
+					return "", UnsetParameterError{Name: name, Message: "unbound variable"}
+				}
 				// ${var@a} returns variable attribute flags.
 				// We use orig (before nameref resolve) for the attributes.
 				str = orig.Flags()
 			case "A":
+				if cfg.NoUnset && transformNounsetUnset(orig) {
+					return "", UnsetParameterError{Name: name, Message: "unbound variable"}
+				}
+				// ${var@A} returns a declare statement that recreates the
+				// variable. A variable that was never declared expands to
+				// nothing (a declared-but-unset variable still prints its
+				// `declare` line).
+				if !vr.Declared() && name != "@" && name != "*" {
+					str = ""
+					break
+				}
 				// ${var@A} returns a declare statement that recreates the variable.
 				if name == "@" || name == "*" {
 					// Positional parameters reproduce as `set -- ...`.
@@ -1324,37 +1531,59 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 // for arrays. For indexed arrays: "0 val0 1 val1 ...".
 // For associative arrays: "key1 val1 key2 val2 ...".
 // For plain strings, returns the value unchanged.
+// paramAtK implements the string form of ${var@K} and ${var@k}. A scalar
+// becomes a single-quoted value (`'string'`); positional parameters become
+// the single-quoted values without keys (`'a b' 'c d'`); indexed and
+// associative arrays become a sequence of `key "value"` pairs with the
+// value in double quotes, in bash key order.
 func (cfg *Config) paramAtK(vr Variable, name string) string {
+	if name == "@" || name == "*" {
+		// Positional parameters: quoted values, no keys.
+		var parts []string
+		for _, v := range vr.List {
+			parts = append(parts, bashQuoteParamQ(v))
+		}
+		return strings.Join(parts, " ")
+	}
 	switch vr.Kind {
 	case Indexed:
 		var parts []string
 		for _, i := range vr.IndexedIndexes() {
-			v := vr.List[i]
-			quoted, err := syntax.Quote(v, syntax.LangBash)
-			if err != nil {
-				quoted = v
-			}
-			parts = append(parts, strconv.Itoa(i)+" "+quoted)
+			parts = append(parts, strconv.Itoa(i)+" "+bashDeclareQuote(vr.List[i]))
 		}
 		return strings.Join(parts, " ")
 	case Associative:
-		keys := slices.Sorted(maps.Keys(vr.Map))
 		var parts []string
-		for _, k := range keys {
-			v := vr.Map[k]
-			quotedK, err := syntax.Quote(k, syntax.LangBash)
-			if err != nil {
-				quotedK = k
-			}
-			quotedV, err := syntax.Quote(v, syntax.LangBash)
-			if err != nil {
-				quotedV = v
-			}
-			parts = append(parts, quotedK+" "+quotedV)
+		for _, k := range vr.AssocKeysForDeclare() {
+			parts = append(parts, bashDeclareQuote(k)+" "+bashDeclareQuote(vr.Map[k]))
 		}
 		return strings.Join(parts, " ")
 	default:
-		return vr.String()
+		return bashQuoteParamQ(vr.String())
+	}
+}
+
+// paramAtKFields implements the field-splitting form of "${arr[@]@k}":
+// each key and each (unquoted) value becomes a separate field.
+func (cfg *Config) paramAtKFields(vr Variable, name string) []string {
+	if name == "@" || name == "*" {
+		return append([]string(nil), vr.List...)
+	}
+	switch vr.Kind {
+	case Indexed:
+		var out []string
+		for _, i := range vr.IndexedIndexes() {
+			out = append(out, strconv.Itoa(i), vr.List[i])
+		}
+		return out
+	case Associative:
+		var out []string
+		for _, k := range vr.AssocKeysForDeclare() {
+			out = append(out, k, vr.Map[k])
+		}
+		return out
+	default:
+		return []string{vr.String()}
 	}
 }
 
@@ -1500,16 +1729,18 @@ func bashAssocKeyQuote(s string) string {
 // expandPrompt implements ${var@P} by delegating to [Config.PromptExpand].
 // If PromptExpand is not set, it performs basic prompt escape expansion.
 func (cfg *Config) expandPrompt(s string) string {
-	if cfg.PromptExpand != nil {
-		return cfg.PromptExpand(s)
-	}
-	return defaultPromptExpand(s)
+	return cfg.defaultPromptExpand(s)
 }
 
 // defaultPromptExpand handles a subset of Bash prompt escape sequences.
-func defaultPromptExpand(s string) string {
+func (cfg *Config) defaultPromptExpand(s string) string {
+	s = cfg.expandPromptVars(s)
 	var b strings.Builder
 	for i := 0; i < len(s); i++ {
+		if s[i] == '!' {
+			b.WriteByte('1')
+			continue
+		}
 		if s[i] != '\\' {
 			b.WriteByte(s[i])
 			continue
@@ -1522,16 +1753,68 @@ func defaultPromptExpand(s string) string {
 		switch s[i] {
 		case 'a':
 			b.WriteByte('\a')
+		case 'h', 'H':
+			host := cfg.envGet("HOSTNAME")
+			if host == "" {
+				host = cfg.envGet("HOST")
+			}
+			if s[i] == 'h' {
+				if dot := strings.IndexByte(host, '.'); dot >= 0 {
+					host = host[:dot]
+				}
+			}
+			b.WriteString(host)
+		case 'j':
+			b.WriteByte('0')
 		case 'e':
 			b.WriteByte('\x1b')
 		case 'n':
 			b.WriteByte('\n')
 		case 'r':
 			b.WriteByte('\r')
+		case 's':
+			b.WriteString("bash")
+		case 'v':
+			b.WriteString("5.3")
+		case 'V':
+			b.WriteString("5.3.0")
+		case 'w':
+			b.WriteString(cfg.promptWorkingDir(false))
+		case 'W':
+			b.WriteString(cfg.promptWorkingDir(true))
+		case '!':
+			b.WriteByte('1')
+		case '#':
+			b.WriteByte('0')
+		case '$':
+			b.WriteByte('$')
 		case '\\':
 			b.WriteByte('\\')
-		case '[', ']':
-			// Non-printing sequence markers; ignore.
+		case '[':
+			end := promptMarkerEnd(s, i+1)
+			if end < 0 {
+				break
+			}
+			inner := cfg.defaultPromptExpand(s[i+1 : end])
+			switch inner {
+			case "":
+			case "\001":
+				b.WriteByte('\001')
+			default:
+				b.WriteByte('\001')
+				b.WriteString(inner)
+				b.WriteByte('\002')
+			}
+			i = end + 1
+		case ']':
+		case '0', '1', '2', '3', '4', '5', '6', '7':
+			end := i + 1
+			for end < len(s) && end < i+3 && s[end] >= '0' && s[end] <= '7' {
+				end++
+			}
+			val, _ := strconv.ParseUint(s[i:end], 8, 8)
+			b.WriteByte(byte(val))
+			i = end - 1
 		default:
 			// For unrecognized sequences, preserve them.
 			b.WriteByte('\\')
@@ -1539,6 +1822,51 @@ func defaultPromptExpand(s string) string {
 		}
 	}
 	return b.String()
+}
+
+func promptMarkerEnd(s string, start int) int {
+	for i := start; i+1 < len(s); i++ {
+		if s[i] == '\\' && s[i+1] == ']' {
+			return i
+		}
+	}
+	return -1
+}
+
+func (cfg *Config) expandPromptVars(s string) string {
+	if !strings.ContainsAny(s, "$`") {
+		return s
+	}
+	word, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Document(strings.NewReader(s))
+	if err != nil && err != io.EOF {
+		return s
+	}
+	out, err := Literal(cfg, word)
+	if err != nil {
+		return s
+	}
+	return out
+}
+
+func (cfg *Config) promptWorkingDir(base bool) string {
+	pwd := cfg.envGet("PWD")
+	if pwd == "" {
+		pwd = "."
+	}
+	home := cfg.envGet("HOME")
+	if home != "" && (pwd == home || strings.HasPrefix(pwd, home+"/")) {
+		pwd = "~" + strings.TrimPrefix(pwd, home)
+	}
+	if !base {
+		return pwd
+	}
+	switch pwd {
+	case "", "/":
+		return "/"
+	case "~":
+		return "~"
+	}
+	return filepath.Base(pwd)
 }
 
 func (cfg *Config) removePattern(str, pat string, fromEnd, shortest bool) string {

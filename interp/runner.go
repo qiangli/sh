@@ -350,6 +350,9 @@ func (r *Runner) updateExpandOpts() {
 	r.ecfg.NullGlob = r.opts[optNullGlob]
 	r.ecfg.NoUnset = r.opts[optNoUnset]
 	r.ecfg.ExtGlob = r.opts[optExtGlob]
+	if opt, _ := r.bashOptByName("patsub_replacement"); opt != nil {
+		r.ecfg.PatSubReplacement = *opt
+	}
 	r.ecfg.Posix = r.opts[optPosix]
 }
 
