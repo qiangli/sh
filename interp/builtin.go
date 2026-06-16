@@ -656,7 +656,14 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			if nameref {
 				// Skip the auto-resolve so we delete the nameref
 				// variable itself rather than its target.
-				if r.lookupVar(arg).ReadOnly {
+				vr := r.lookupVar(arg)
+				// Bash only acts when NAME actually has the nameref
+				// attribute; `unset -n` on a plain variable is a no-op
+				// (it does NOT fall back to unsetting the variable).
+				if vr.Kind != expand.NameRef {
+					continue
+				}
+				if vr.ReadOnly {
 					r.errf("%sunset: %s: cannot unset: readonly variable\n", r.bashErrPrefix(pos), arg)
 					exit.code = 1
 					continue
