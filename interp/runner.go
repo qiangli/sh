@@ -6105,9 +6105,19 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		if cm.Name != nil {
 			varName = r.literal(cm.Name)
 		}
-		readFd := int(pr.Fd())
-		writeFd := int(pw2.Fd())
+		// Bash moves the coproc pipe ends to high fds via
+		// move_to_high_fd(fd, 1, 64) (general.c sh_openpipe), so the
+		// `${NAME[0]}` / `${NAME[1]}` the script sees count down from 63
+		// rather than the raw pipe fds. Mirror that numbering and register
+		// the real *os.File objects under those logical fds; the redirect
+		// layer keys off fdTable, not the OS fd, so any number works.
+		readFd := r.coprocHighFd(-1)
+		writeFd := r.coprocHighFd(readFd)
 		coprocReadonly := ""
+		// pidBase is the effective base name bash builds `<NAME>_PID` from
+		// (the nameref target when the coproc name resolves through one);
+		// empty when the name was invalid and no variables were bound.
+		pidBase := ""
 		if prev := r.lookupVar(varName); prev.Kind == expand.NameRef {
 			if _, _, ok := splitArrayRef(prev.Str); ok {
 				r.errf("%s`%s': not a valid identifier\n", r.bashErrPrefix(r.curStmtPos), prev.Str)
@@ -6120,6 +6130,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				if r.coprocSetVar(varName, readFd, writeFd) {
 					coprocReadonly = varName
 				}
+				pidBase = varName
 			} else {
 				// Write the coproc array through the nameref to its
 				// target, leaving the nameref attribute intact.
@@ -6130,9 +6141,40 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				if r.coprocSetVar(target, readFd, writeFd) {
 					coprocReadonly = target
 				}
+				pidBase = target
 			}
-		} else if r.coprocSetVar(varName, readFd, writeFd) {
-			coprocReadonly = varName
+		} else {
+			if r.coprocSetVar(varName, readFd, writeFd) {
+				coprocReadonly = varName
+			}
+			pidBase = varName
+		}
+		// coproc_setvars binds `<NAME>_PID` only after the array binding
+		// succeeds; a readonly array makes bash bail before the PID. The
+		// assignment follows a nameref to its target (so a nameref pointing
+		// at a readonly variable reports that target as readonly), matching
+		// bash's bind_variable.
+		coprocPidVar := ""
+		if pidBase != "" {
+			pidName := pidBase + "_PID"
+			coprocPidVar = pidName
+			if coprocReadonly == "" {
+				pidTarget := pidName
+				if pv := r.lookupVar(pidName); pv.Kind == expand.NameRef {
+					if n, _ := pv.Resolve(r.writeEnv); n != "" {
+						pidTarget = n
+					}
+				}
+				if r.lookupVar(pidTarget).ReadOnly {
+					r.errf("%s%s: readonly variable\n", r.bashErrPrefix(r.curStmtPos), pidTarget)
+				} else {
+					r.setVar(pidTarget, expand.Variable{
+						Set:  true,
+						Kind: expand.String,
+						Str:  strconv.Itoa(os.Getpid()),
+					})
+				}
+			}
 		}
 		if r.fdTable == nil {
 			r.fdTable = make(map[int]*os.File)
@@ -6153,6 +6195,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			exit:              new(exitStatus),
 			coprocReadonly:    coprocReadonly,
 			coprocReadonlyPos: r.curStmtPos,
+			coprocPidVar:      coprocPidVar,
 		}
 		r.bgProcs = append(r.bgProcs, bg)
 		go func() {
@@ -6192,12 +6235,40 @@ func (r *Runner) coprocSetVar(varName string, readFd, writeFd int) bool {
 	return readonly
 }
 
+// coprocHighFd picks a logical fd number for a coproc pipe end the way
+// bash's move_to_high_fd(fd, 1, 64) does: scan down from 63 and take the
+// first fd that isn't already in use. `reserved` lets the caller hold the
+// read fd while allocating the write fd so the two never collide.
+func (r *Runner) coprocHighFd(reserved int) int {
+	for n := 63; n > 3; n-- {
+		if n == reserved {
+			continue
+		}
+		if _, ok := r.fdTable[n]; ok {
+			continue
+		}
+		if _, ok := r.fdWriteTable[n]; ok {
+			continue
+		}
+		return n
+	}
+	return -1
+}
+
 // reapCoproc emits the diagnostics bash produces when it reaps a
-// finished coprocess and unsets its variable. A readonly coproc
-// variable can't be unset, so reaping reports `<var>: cannot unset:
-// readonly variable` — ordered after any commands between `coproc` and
-// `wait`, which is why it fires here rather than at coproc creation.
+// finished coprocess and unsets its variables. Like bash's
+// coproc_unsetvars, it first force-unbinds the `<NAME>_PID` variable —
+// without following namerefs and ignoring the readonly attribute, so a
+// readonly PID variable simply disappears rather than erroring. A
+// readonly coproc *array* still can't be unset, so reaping reports
+// `<var>: cannot unset: readonly variable` — ordered after any commands
+// between `coproc` and `wait`, which is why it fires here rather than at
+// coproc creation.
 func (r *Runner) reapCoproc(bg *bgProc) {
+	if bg.coprocPidVar != "" {
+		r.forceDelVar(bg.coprocPidVar)
+		bg.coprocPidVar = ""
+	}
 	if bg.coprocReadonly == "" {
 		return
 	}

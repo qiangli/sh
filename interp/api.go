@@ -582,6 +582,13 @@ type bgProc struct {
 	// coprocReadonlyPos is the position of the `coproc` clause, used to
 	// drive the `cannot unset` diagnostic's line number at reap time.
 	coprocReadonlyPos syntax.Pos
+
+	// coprocPidVar names the `<NAME>_PID` variable a `coproc` is
+	// responsible for. Bash's coproc_unsetvars unbinds it (without
+	// following namerefs and ignoring the readonly attribute) when the
+	// coprocess is reaped, so reaping force-removes it here. Empty for
+	// non-coproc background jobs and for coprocs whose name was invalid.
+	coprocPidVar string
 }
 
 // bgProcCtxKey is the context-value key under which the bg goroutine

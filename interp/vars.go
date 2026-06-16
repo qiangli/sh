@@ -1371,6 +1371,31 @@ func (r *Runner) delVar(name string) {
 	}
 }
 
+// forceUnset removes name from this overlay (or the nearest parent
+// overlay that holds it), ignoring the readonly attribute and without
+// following namerefs. Used by coproc reaping, which unbinds
+// `<NAME>_PID` the way bash's unbind_variable_noref does.
+func (o *overlayEnviron) forceUnset(name string) bool {
+	normalized := o.normalize(name)
+	if _, ok := o.values[normalized]; ok {
+		delete(o.values, normalized)
+		return true
+	}
+	if p, ok := o.parent.(*overlayEnviron); ok {
+		return p.forceUnset(name)
+	}
+	return false
+}
+
+// forceDelVar removes a variable bypassing the readonly check, used when
+// bash's internal unbind paths (rather than the `unset` builtin) drop a
+// variable. A no-op when the write environment isn't an overlayEnviron.
+func (r *Runner) forceDelVar(name string) {
+	if o, ok := r.writeEnv.(*overlayEnviron); ok {
+		o.forceUnset(name)
+	}
+}
+
 // splitArrayRef recognises `name[index]` references used by builtins
 // like `unset` to address a single array element. Returns the bare
 // variable name and the (unparsed) index expression; ok is false if
