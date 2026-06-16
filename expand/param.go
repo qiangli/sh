@@ -817,7 +817,8 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 	if n, v := vr.Resolve(cfg.Env); n != "" {
 		name, vr = n, v
 	}
-	if cfg.NoUnset && !vr.IsSet() && !overridingUnset(pe) {
+	if cfg.NoUnset && !vr.IsSet() && !overridingUnset(pe) &&
+		nodeLit(index) != "@" && nodeLit(index) != "*" {
 		if pe.Index != nil {
 			idxText := nodeLit(pe.Index)
 			if vr.Kind != Associative {
