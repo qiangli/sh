@@ -129,7 +129,9 @@ func (o *overlayEnviron) Set(name string, vr expand.Variable) error {
 		vr.ListSet = prev.ListSet
 		vr.Map = prev.Map
 	} else if prev.ReadOnly && prev.Declared() {
-		return fmt.Errorf("readonly variable")
+		if !(prev.Kind == expand.NameRef && prev.Str == "" && vr.Kind == expand.String && vr.ReadOnly) {
+			return fmt.Errorf("readonly variable")
+		}
 	}
 	if !vr.IsSet() { // unsetting
 		// Preserve the variable when it carries an attribute that

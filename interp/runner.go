@@ -5546,6 +5546,10 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 					// names (bash 5.3). Preserve the scalar
 					// value as the reference target.
 					vr.Kind = expand.NameRef
+				case "+n":
+					if vr.Kind == expand.NameRef {
+						vr.Kind = expand.String
+					}
 				default:
 					if as.Index != nil {
 						vr.Kind = expand.Indexed
