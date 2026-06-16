@@ -5283,6 +5283,12 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 					case "-r", "+r":
 						modes = append(modes, flag)
 					case "-a", "-A", "-n":
+						// Bash accepts `readonly -n NAME` without
+						// treating `-n` as nameref; it leaves the
+						// existing readonly status alone.
+						if cm.Variant.Value == "readonly" && flag == "-n" {
+							break
+						}
 						// `export -n NAME` removes the export
 						// attribute; it is not a nameref flag.
 						if cm.Variant.Value == "export" && flag == "-n" {
