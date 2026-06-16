@@ -1352,23 +1352,17 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			}
 			switch arg {
 			case "Q":
+				// Bash 5.3's @Q on an unset variable expands to nothing,
+				// rather than quoting an empty value to `''`.
+				if !vr.IsSet() {
+					str = ""
+					break
+				}
 				// Bash 5.3 quotes each element of an array transform
 				// separately (`${arr[@]@Q}` -> `'a' 'b'`).
 				out := make([]string, len(elems))
 				for i, elem := range elems {
-					quoted, qerr := syntax.Quote(elem, syntax.LangBash)
-					if qerr != nil {
-						// Is this even possible? If a user runs into this
-						// panic, it's most likely a bug we need to fix.
-						panic(qerr)
-					}
-					// syntax.Quote leaves strings that need no quoting
-					// unchanged, but bash 5.3's ${var@Q} always wraps a
-					// non-empty value in single quotes (`zzz` -> `'zzz'`).
-					if quoted == elem {
-						quoted = bashSingleQuote(elem)
-					}
-					out[i] = quoted
+					out[i] = bashQuoteParamQ(elem)
 				}
 				str = strings.Join(out, " ")
 			case "E":
@@ -1385,6 +1379,14 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 				// We use orig (before nameref resolve) for the attributes.
 				str = orig.Flags()
 			case "A":
+				// ${var@A} returns a declare statement that recreates the
+				// variable. A variable that was never declared expands to
+				// nothing (a declared-but-unset variable still prints its
+				// `declare` line).
+				if !vr.Declared() && name != "@" && name != "*" {
+					str = ""
+					break
+				}
 				// ${var@A} returns a declare statement that recreates the variable.
 				if name == "@" || name == "*" {
 					// Positional parameters reproduce as `set -- ...`.

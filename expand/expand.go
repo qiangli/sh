@@ -1989,6 +1989,23 @@ func bashSingleQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
+// bashQuoteParamQ quotes a single value the way bash 5.3's ${var@Q}
+// transform does: it produces a string that re-reads as the same value,
+// always wrapping a value that would otherwise need no quoting in single
+// quotes (`zzz` -> `'zzz'`, `` -> `''`).
+func bashQuoteParamQ(s string) string {
+	quoted, err := syntax.Quote(s, syntax.LangBash)
+	if err != nil {
+		// Is this even possible? If a user runs into this panic, it's
+		// most likely a bug we need to fix.
+		panic(err)
+	}
+	if quoted == s {
+		quoted = bashSingleQuote(s)
+	}
+	return quoted
+}
+
 func formatWideString(s string, fmts []byte) string {
 	width, prec, left := printfStringWidthPrec(fmts)
 	rs := []rune(s)
@@ -3198,6 +3215,10 @@ func (cfg *Config) quotedElemFields(pe *syntax.ParamExp) ([]string, error) {
 	if err != nil || elems != nil {
 		return elems, err
 	}
+	elems, err = cfg.quotedTransformElemFields(pe)
+	if err != nil || elems != nil {
+		return elems, err
+	}
 	if pe.Exp != nil && pe.Repl == nil {
 		op := pe.Exp.Op
 		switch op {
@@ -3392,6 +3413,29 @@ func (cfg *Config) quotedAllElemValues(pe *syntax.ParamExp) ([]string, error) {
 		}
 	}
 	return nil, nil
+}
+
+// quotedTransformElemFields handles a quoted `@`-transform expansion
+// (`"${arr[@]@Q}"`) that should keep its elements as separate fields.
+// Only the `@Q` operator on a `@`/`[@]` form is intercepted; the `*`/`[*]`
+// (joining) and scalar forms fall through to the single-string path.
+func (cfg *Config) quotedTransformElemFields(pe *syntax.ParamExp) ([]string, error) {
+	if pe == nil || pe.Exp == nil || pe.Length || pe.Width || pe.IsSet || pe.Excl {
+		return nil, nil
+	}
+	if pe.Exp.Op != syntax.OtherParamOps || pe.Exp.Word == nil ||
+		len(pe.Exp.Word.Parts) != 1 || nodeLit(pe.Exp.Word) != "Q" {
+		return nil, nil
+	}
+	elems, join, err := cfg.quotedModElemValues(pe)
+	if err != nil || elems == nil || join {
+		return nil, err
+	}
+	out := make([]string, len(elems))
+	for i, elem := range elems {
+		out[i] = bashQuoteParamQ(elem)
+	}
+	return out, nil
 }
 
 func (cfg *Config) quotedModElemValues(pe *syntax.ParamExp) ([]string, bool, error) {
