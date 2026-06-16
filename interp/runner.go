@@ -5457,7 +5457,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 					vr = expand.Variable{}
 				}
 			}
-			if valType != "-n" && valType != "+n" {
+			if valType != "-n" && (valType != "+n" || !as.Naked) {
 				resolveForAttr := valType == "-i" || valType == "-a" || valType == "-A"
 				for _, mode := range modes {
 					switch mode {
