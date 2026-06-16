@@ -5271,6 +5271,13 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			// `declare -f <name>` / `export -f <name>` operate on
 			// function names; bash allows arbitrary function names
 			// (e.g. `foo-a`) so skip the identifier check there.
+			if declQuery == "-p" && as.Index == nil && !syntax.ValidName(name) {
+				if base, _, ok := splitArrayRef(name); ok && syntax.ValidName(base) {
+					r.errf(r.bashErrPrefix(r.curStmtPos)+"%s: %s: not found\n", cm.Variant.Value, name)
+					r.exit.code = 1
+					continue
+				}
+			}
 			if declQuery != "-f" && declQuery != "-F" && !syntax.ValidName(name) {
 				builtinName := cm.Variant.Value
 				if r.bashCompatErrors {
