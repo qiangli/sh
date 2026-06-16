@@ -2281,6 +2281,21 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 		}
 		if prev.Kind == expand.NameRef && as.Index == nil {
 			if base, idx, ok := splitArrayRef(prev.Str); ok && syntax.ValidName(base) {
+				// `local -n a='a[0]'; a=X` points the nameref at an
+				// element of itself: resolving base `a` lands back on
+				// the nameref. Bash reports this as circular and drops
+				// the assignment rather than recursing.
+				if baseVar := r.lookupVar(base); baseVar.Kind == expand.NameRef {
+					if b2, _, ok2 := splitArrayRef(baseVar.Str); ok2 && b2 == base {
+						prefix := r.bashErrPrefix(r.curStmtPos)
+						if baseVar.Local {
+							r.errf("%slocal: warning: %s: circular name reference\n", prefix, base)
+						}
+						r.errf("%swarning: %s: circular name reference\n", prefix, base)
+						r.errf("%s`%s': not a valid identifier\n", prefix, prev.Str)
+						return name, prev
+					}
+				}
 				name = prev.Str
 				prev = r.arrayElemAsScalar(idx, r.lookupVar(base))
 			}
