@@ -5446,6 +5446,20 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 					vr = expand.Variable{}
 				}
 			}
+			if valType != "-n" && valType != "+n" {
+				resolveForAttr := valType == "-i" || valType == "-a" || valType == "-A"
+				for _, mode := range modes {
+					switch mode {
+					case "-i", "+i", "-r", "+r", "-u", "+u", "-l", "+l", "-c", "+c", "-a", "-A":
+						resolveForAttr = true
+					}
+				}
+				if resolveForAttr {
+					if n, resolved := vr.Resolve(r.writeEnv); n != "" {
+						name, vr = n, resolved
+					}
+				}
+			}
 			// Set the Integer attribute *before* assignVal so the
 			// initial assignment can evaluate the RHS as arithmetic.
 			if valType == "-i" || slices.Contains(modes, "-i") {
@@ -5453,12 +5467,6 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			}
 			if slices.Contains(modes, "+i") {
 				vr.Integer = false
-			}
-			if as.Naked && valType != "-n" && valType != "+n" &&
-				(slices.Contains(modes, "-r") || slices.Contains(modes, "+r")) {
-				if n, resolved := vr.Resolve(r.writeEnv); n != "" {
-					name, vr = n, resolved
-				}
 			}
 			if as.Naked && (slices.Contains(modes, "+a") || slices.Contains(modes, "+A")) &&
 				(vr.Kind == expand.Indexed || vr.Kind == expand.Associative) {
