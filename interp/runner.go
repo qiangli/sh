@@ -4840,6 +4840,16 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				// the loop in this case; in POSIX mode the whole
 				// non-interactive shell exits.
 				if vr := r.lookupVar(name); vr.Kind == expand.NameRef {
+					// Assigning the loop value through an as-yet
+					// untargeted nameref retargets it; bash rejects
+					// a value that isn't a valid identifier with the
+					// bare "not a valid identifier" diagnostic.
+					if vr.Str == "" && !validNameRefTarget(field) {
+						r.errf("%s`%s': not a valid identifier\n",
+							r.bashErrPrefix(r.curStmtPos), field)
+						r.exit.code = 1
+						continue
+					}
 					vr.Str = field
 					r.setVar(name, vr)
 				} else if r.lookupVar(name).ReadOnly {
