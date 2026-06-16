@@ -5546,6 +5546,12 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 						r.exit.code = 1
 						continue
 					}
+					if vr.Kind == expand.String && vr.Str == name {
+						r.errf("%s%s: %s: nameref variable self references not allowed\n",
+							r.bashErrPrefix(r.curStmtPos), cm.Variant.Value, name)
+						r.exit.code = 1
+						continue
+					}
 					if vr.Kind == expand.String && vr.Str != "" && !validNameRefTarget(vr.Str) {
 						r.errf("%s%s: `%s': invalid variable name for name reference\n",
 							r.bashErrPrefix(r.curStmtPos), cm.Variant.Value, vr.Str)
@@ -5604,6 +5610,12 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 						if !validNameRefTarget(target) {
 							r.errf("%s%s: `%s': invalid variable name for name reference\n",
 								r.bashErrPrefix(r.curStmtPos), cm.Variant.Value, target)
+							r.exit.code = 1
+							continue
+						}
+						if target == name {
+							r.errf("%s%s: %s: nameref variable self references not allowed\n",
+								r.bashErrPrefix(r.curStmtPos), cm.Variant.Value, name)
 							r.exit.code = 1
 							continue
 						}
