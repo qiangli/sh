@@ -5668,6 +5668,12 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 						}
 					}
 				}
+				if valType == "" && vr.Kind == expand.NameRef && vr.Str == "" && vr.ReadOnly && as.Value != nil {
+					r.errf("%s%s: %s: readonly variable\n",
+						r.bashErrPrefix(r.curStmtPos), cm.Variant.Value, name)
+					r.exit.code = 1
+					continue
+				}
 				if as.Index != nil && valType == "-A" {
 					prevForIndex.Kind = expand.Associative
 				}
