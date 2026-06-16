@@ -132,6 +132,13 @@ type Runner struct {
 	// physical line rather than only the current simple command.
 	discardNextStmt bool
 
+	// discardRestOfLine, when non-zero, names a source line whose
+	// remaining top-level statements bash skips. A standalone assignment
+	// to a readonly variable (`RO=z; echo skipped`) aborts the rest of
+	// its physical line but not subsequent lines, so the runner skips
+	// every following top-level statement sharing this line number.
+	discardRestOfLine uint
+
 	// enclosingSubshellEnd is set while executing statements inside a
 	// foreground subshell. Bash 5.3 reports some fatal declaration errors
 	// at the closing ")" rather than at the inner declaration.
@@ -1700,12 +1707,25 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 		r.filename = node.Name
 		runExitTrap = true
 		for _, stmt := range node.Stmts {
+			// Skip the tail of a physical line aborted by a readonly
+			// assignment error; resume once the source line changes.
+			if r.discardRestOfLine != 0 {
+				if stmt.Pos().Line() == r.discardRestOfLine {
+					continue
+				}
+				r.discardRestOfLine = 0
+				r.exit.discarding = false
+				r.exit.exiting = false
+			}
 			r.stmt(ctx, stmt)
 			// A DISCARD only aborts the top-level command it
 			// occurred in; the next one still runs.
 			if r.exit.discarding {
 				if r.discardNextStmt {
 					r.discardNextStmt = false
+					continue
+				}
+				if r.discardRestOfLine != 0 {
 					continue
 				}
 				r.exit.discarding = false
@@ -1721,6 +1741,7 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 	}
 	// A DISCARDed top-level command only aborts itself; the shell (and
 	// any caller driving Run statement-by-statement) keeps going.
+	r.discardRestOfLine = 0
 	if r.exit.discarding {
 		r.exit.discarding = false
 		r.exit.exiting = false

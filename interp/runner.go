@@ -4375,6 +4375,11 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 						continue
 					}
 				}
+				roTarget := prev
+				if n, resolved := prev.Resolve(r.writeEnv); n != "" {
+					roTarget = resolved
+				}
+				wasReadOnly := roTarget.ReadOnly
 				name, vr := r.assignVal(name, prev, as, "")
 				r.setVarWithIndex(prevForIndex, name, as.Index, vr)
 				if !r.exit.ok() && !r.exit.exiting && !r.exit.returning && !r.exit.fatalExit {
@@ -4388,6 +4393,12 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 					r.exit.exiting = true
 					if !r.opts[optPosix] {
 						r.exit.discarding = true
+						// A standalone assignment to a readonly variable
+						// also aborts the remaining statements on the same
+						// physical line (`RO=z; declare -p RO; echo $RO`).
+						if wasReadOnly && as.Index == nil {
+							r.discardRestOfLine = r.curStmtPos.Line()
+						}
 					}
 					break
 				}
