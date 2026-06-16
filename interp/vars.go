@@ -2271,6 +2271,14 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 		}
 	}
 	if valType != "-n" {
+		// A self-referencing local nameref (`typeset -n v=v` inside a
+		// function) loops back to itself during assignment resolution.
+		// Bash bails out after NAMEREF_MAX hops with this warning and
+		// then binds the value at the global scope.
+		if prev.Kind == expand.NameRef && prev.Str == name && name != "" {
+			r.errf("%swarning: %s: maximum nameref depth (8) exceeded\n",
+				r.bashErrPrefix(r.curStmtPos), name)
+		}
 		if prev.Kind == expand.NameRef && as.Index == nil {
 			if base, idx, ok := splitArrayRef(prev.Str); ok && syntax.ValidName(base) {
 				name = prev.Str
