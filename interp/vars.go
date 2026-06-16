@@ -408,8 +408,8 @@ func execEnv(env expand.Environ) []string {
 			if !vr.IsSet() && vr.Local && named.Prev.Exported && named.Prev.Kind == expand.String {
 				list = append(list, name+"="+named.Prev.String())
 			}
-			if vr.Exported && vr.Kind == expand.String {
-				list = append(list, name+"="+vr.String())
+			if vr.Exported && (vr.Kind == expand.String || vr.Kind == expand.NameRef) {
+				list = append(list, name+"="+vr.Str)
 			}
 		}
 		return list
@@ -433,8 +433,8 @@ func execEnv(env expand.Environ) []string {
 				}
 			}
 		}
-		if vr.Exported && vr.Kind == expand.String {
-			list = append(list, name+"="+vr.String())
+		if vr.Exported && (vr.Kind == expand.String || vr.Kind == expand.NameRef) {
+			list = append(list, name+"="+vr.Str)
 		}
 	}
 	return list
