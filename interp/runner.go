@@ -5477,7 +5477,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				resolveForAttr := valType == "-i" || valType == "-a" || valType == "-A"
 				for _, mode := range modes {
 					switch mode {
-					case "-i", "+i", "-r", "+r", "-u", "+u", "-l", "+l", "-c", "+c", "-a", "-A":
+					case "-i", "+i", "-r", "+r", "-x", "+x", "-u", "+u", "-l", "+l", "-c", "+c", "-a", "-A":
 						resolveForAttr = true
 					}
 				}
