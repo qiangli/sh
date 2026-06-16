@@ -2268,7 +2268,11 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 			if !validNameRefTarget(target) {
 				prefix := r.bashErrPrefix(as.Value.Pos())
 				if r.setVarFromBuiltin != "" {
-					r.errf("%s%s: `%s': not a valid identifier\n", prefix, r.setVarFromBuiltin, target)
+					if prev.Local {
+						r.errf("%s%s: `%s': invalid variable name for name reference\n", prefix, r.setVarFromBuiltin, target)
+					} else {
+						r.errf("%s%s: `%s': not a valid identifier\n", prefix, r.setVarFromBuiltin, target)
+					}
 				} else {
 					r.errf("%s`%s': not a valid identifier\n", prefix, target)
 				}
