@@ -283,6 +283,9 @@ func (cfg *Config) envSet(name, value string) error {
 	// -i` into a plain string, which subsequent arithmetic
 	// assignments then mis-handle.
 	vr := cfg.Env.Get(name)
+	if n, resolved := vr.Resolve(cfg.Env); n != "" {
+		name, vr = n, resolved
+	}
 	vr.Set = true
 	switch vr.Kind {
 	case Indexed:
