@@ -986,7 +986,7 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			if vr.IsSet() {
 				strs = append(strs, "")
 			} else {
-				return "", IndirectExpansionError{Name: fmt.Sprintf("%s[%s]", name, nodeLit(pe.Index))}
+				return "", IndirectExpansionError{Name: fmt.Sprintf("%s[%s]", pe.Param.Value, nodeLit(pe.Index))}
 			}
 		case orig.Kind == NameRef:
 			strs = append(strs, orig.Str)
