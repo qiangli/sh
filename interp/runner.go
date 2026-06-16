@@ -5679,6 +5679,9 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 					}
 				}
 				name, vr = r.assignVal(name, vr, as, valType)
+				if valType == "-n" && !slices.Contains(modes, "-i") {
+					vr.Integer = false
+				}
 				if as.Index != nil {
 					if prevForIndex.Kind == expand.NameRef {
 						if n, resolved := prevForIndex.Resolve(r.writeEnv); n != "" {
