@@ -93,6 +93,26 @@ func (o *overlayEnviron) Get(name string) expand.Variable {
 	return expand.Variable{}
 }
 
+func (o *overlayEnviron) ResolveNameRef(name string) expand.Variable {
+	if base, idx, ok := splitArrayRef(name); ok && syntax.ValidName(base) {
+		return environArrayElemAsScalar(idx, o.ResolveNameRef(base))
+	}
+	normalized := o.normalize(name)
+	if vr, ok := o.values[normalized]; ok {
+		if vr.Local && vr.Kind == expand.NameRef && vr.Str == name && o.parent != nil {
+			return o.parent.Get(name)
+		}
+		return vr.Variable
+	}
+	if o.parent != nil {
+		if p, ok := o.parent.(*overlayEnviron); ok {
+			return p.ResolveNameRef(name)
+		}
+		return o.parent.Get(name)
+	}
+	return expand.Variable{}
+}
+
 func environArrayElemAsScalar(idx string, vr expand.Variable) expand.Variable {
 	elem := expand.Variable{
 		Kind:       expand.String,
@@ -135,6 +155,9 @@ func (o *overlayEnviron) Set(name string, vr expand.Variable) error {
 	prev, inOverlay := o.values[normalized]
 	// Manipulation of a global var inside a function or funsub. Local
 	// variables stay in the overlay; ordinary assignments write through.
+	if o.funcScope && !vr.Local && prev.Local && prev.Kind == expand.NameRef && prev.Str == name && o.parent != nil {
+		return o.parent.(expand.WriteEnviron).Set(name, vr)
+	}
 	if o.funcScope && !vr.Local && !prev.Local {
 		// In a function, the parent environment is ours, so it's always read-write.
 		return o.parent.(expand.WriteEnviron).Set(name, vr)

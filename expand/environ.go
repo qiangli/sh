@@ -54,6 +54,10 @@ type WriteEnviron interface {
 	Set(name string, vr Variable) error
 }
 
+type nameRefResolver interface {
+	ResolveNameRef(name string) Variable
+}
+
 //go:generate go tool stringer -type=ValueKind
 
 // ValueKind describes which kind of value the variable holds.
@@ -319,7 +323,11 @@ func (v Variable) Resolve(env Environ) (string, Variable) {
 			return name, v
 		}
 		name = v.Str // keep name for the next iteration
-		v = env.Get(name)
+		if resolver, ok := env.(nameRefResolver); ok {
+			v = resolver.ResolveNameRef(name)
+		} else {
+			v = env.Get(name)
+		}
 	}
 	return name, Variable{}
 }
