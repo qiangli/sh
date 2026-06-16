@@ -6044,6 +6044,15 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		// which are numeric fds usable in `<&N` / `>&N` redirects. This runner's
 		// redirect layer only handles fds 0/1/2, so those redirect forms won't
 		// work yet, but the basic coproc + read/write via the pipe object works.
+		// A named coproc must use a valid identifier; bash rejects e.g.
+		// `coproc @ { :; }` before launching anything.
+		if cm.Name != nil {
+			if nm := r.literal(cm.Name); !syntax.ValidName(nm) {
+				r.errf("%s`%s': not a valid identifier\n", r.bashErrPrefix(r.curStmtPos), nm)
+				r.exit.code = 1
+				break
+			}
+		}
 		pr, pw, err := os.Pipe()
 		if err != nil {
 			r.exit.fatal(err)
