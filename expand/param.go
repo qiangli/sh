@@ -996,7 +996,10 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			if vr.IsSet() {
 				strs = append(strs, "")
 			} else {
-				return "", IndirectExpansionError{Name: fmt.Sprintf("%s[%s]", pe.Param.Value, nodeLit(pe.Index))}
+				// `${!ref[idx]}` on an unset nameref: bash prints the
+				// diagnostic, sets $? = 1, and keeps running (it is not
+				// the fatal bare-`${!var}` form).
+				return "", IndirectExpansionError{Name: fmt.Sprintf("%s[%s]", pe.Param.Value, nodeLit(pe.Index)), NonFatal: true}
 			}
 		case orig.Kind == NameRef:
 			strs = append(strs, orig.Str)
