@@ -1352,9 +1352,18 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			}
 			switch arg {
 			case "Q":
-				// Bash 5.3's @Q on an unset variable expands to nothing,
-				// rather than quoting an empty value to `''`.
-				if !vr.IsSet() {
+				// Bash 5.3's @Q on an unset variable (or unset array
+				// element) expands to nothing, rather than quoting an
+				// empty value to `''`. `@`/`*` and `[@]`/`[*]` forms are
+				// "set" whenever any element exists, so they use IsSet
+				// directly; a specific subscript checks that element.
+				qSet := vr.IsSet()
+				if name != "@" && name != "*" {
+					if il := nodeLit(index); il != "@" && il != "*" {
+						qSet = arrayElemSet(vr, index, cfg)
+					}
+				}
+				if !qSet {
 					str = ""
 					break
 				}
