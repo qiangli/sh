@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -221,6 +222,15 @@ func indirectDefaultOp(op syntax.ParExpOperator) bool {
 
 func indirectAtOp(op syntax.ParExpOperator) bool {
 	return op == syntax.OtherParamOps
+}
+
+func indirectParamModOp(op syntax.ParExpOperator) bool {
+	switch op {
+	case syntax.RemSmallPrefix, syntax.RemLargePrefix,
+		syntax.RemSmallSuffix, syntax.RemLargeSuffix:
+		return true
+	}
+	return false
 }
 
 func nodeLit(node syntax.Node) string {
@@ -517,19 +527,45 @@ func bashAlternateCommandSubstEOF(word *syntax.Word) bool {
 // by the indirect-expansion path (`${!x//c/x}`) where the value
 // comes from a name lookup but the substitution should still apply.
 func applyParamMods(cfg *Config, pe *syntax.ParamExp, str string) (string, error) {
+	out, err := applyParamModsElems(cfg, pe, []string{str})
+	if err != nil {
+		return "", err
+	}
+	if len(out) == 0 {
+		return "", nil
+	}
+	return out[0], nil
+}
+
+func applyParamModsElems(cfg *Config, pe *syntax.ParamExp, elems []string) ([]string, error) {
+	if pe.Repl == nil && (pe.Exp == nil || !indirectParamModOp(pe.Exp.Op)) {
+		return elems, nil
+	}
+	out := slices.Clone(elems)
+	if pe.Exp != nil && indirectParamModOp(pe.Exp.Op) {
+		arg, err := Pattern(cfg, pe.Exp.Word)
+		if err != nil {
+			return nil, err
+		}
+		suffix := pe.Exp.Op == syntax.RemSmallSuffix || pe.Exp.Op == syntax.RemLargeSuffix
+		small := pe.Exp.Op == syntax.RemSmallPrefix || pe.Exp.Op == syntax.RemSmallSuffix
+		for i, elem := range out {
+			out[i] = cfg.removePattern(elem, arg, suffix, small)
+		}
+	}
 	if pe.Repl == nil {
-		return str, nil
+		return out, nil
 	}
 	orig, replAnchoredStart, replAnchoredEnd, err := replPattern(cfg, pe.Repl.Orig, pe.Repl.All)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	if orig == "" && !replAnchoredStart && !replAnchoredEnd {
-		return str, nil
+		return out, nil
 	}
 	segs, err := cfg.replTemplate(pe.Repl.With)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	matchSpecial := replHasMatch(segs)
 	with := renderRepl(segs, "")
@@ -537,20 +573,23 @@ func applyParamMods(cfg *Config, pe *syntax.ParamExp, str string) (string, error
 	if pe.Repl.All {
 		n = -1
 	}
-	locs := cfg.findReplIndex(orig, str, n, replAnchoredStart, replAnchoredEnd)
-	var sb strings.Builder
-	last := 0
-	for _, loc := range locs {
-		sb.WriteString(str[last:loc[0]])
-		if matchSpecial {
-			sb.WriteString(renderRepl(segs, str[loc[0]:loc[1]]))
-		} else {
-			sb.WriteString(with)
+	for i, elem := range out {
+		locs := cfg.findReplIndex(orig, elem, n, replAnchoredStart, replAnchoredEnd)
+		var sb strings.Builder
+		last := 0
+		for _, loc := range locs {
+			sb.WriteString(elem[last:loc[0]])
+			if matchSpecial {
+				sb.WriteString(renderRepl(segs, elem[loc[0]:loc[1]]))
+			} else {
+				sb.WriteString(with)
+			}
+			last = loc[1]
 		}
-		last = loc[1]
+		sb.WriteString(elem[last:])
+		out[i] = sb.String()
 	}
-	sb.WriteString(str[last:])
-	return sb.String(), nil
+	return out, nil
 }
 
 func replPattern(cfg *Config, word *syntax.Word, all bool) (pat string, start, end bool, err error) {
@@ -909,7 +948,7 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 		}
 		str = strconv.Itoa(n)
 	case pe.Excl:
-		if pe.Exp != nil && !indirectDefaultOp(pe.Exp.Op) && !indirectAtOp(pe.Exp.Op) {
+		if pe.Exp != nil && !indirectDefaultOp(pe.Exp.Op) && !indirectAtOp(pe.Exp.Op) && !indirectParamModOp(pe.Exp.Op) {
 			return "", BadSubstitutionError{Node: pe}
 		}
 		var strs []string
@@ -958,11 +997,41 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 				vr = cfg.Env.Get(base)
 				indirectName = base
 				indirectOrig = vr
-				val, err := cfg.varInd(vr, idx)
-				if err != nil {
-					return "", err
+				switch vr.Kind {
+				case Indexed:
+					switch nodeLit(idx) {
+					case "@", "*":
+						strs = append(strs, vr.IndexedValues()...)
+						indexAllElements = true
+					default:
+						val, err := cfg.varInd(vr, idx)
+						if err != nil {
+							return "", err
+						}
+						strs = append(strs, val)
+					}
+				case Associative:
+					switch nodeLit(idx) {
+					case "@", "*":
+						keys := vr.AssocKeysForDeclare()
+						for _, key := range keys {
+							strs = append(strs, vr.Map[key])
+						}
+						indexAllElements = true
+					default:
+						val, err := cfg.varInd(vr, idx)
+						if err != nil {
+							return "", err
+						}
+						strs = append(strs, val)
+					}
+				default:
+					val, err := cfg.varInd(vr, idx)
+					if err != nil {
+						return "", err
+					}
+					strs = append(strs, val)
 				}
-				strs = append(strs, val)
 				applyMod = true
 				break
 			}
@@ -1058,11 +1127,12 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 				return "", BadSubstitutionError{Node: pe}
 			}
 		}
-		if applyMod {
-			if mod, err := applyParamMods(cfg, pe, str); err != nil {
+		if applyMod && (pe.Repl != nil || pe.Exp != nil && indirectParamModOp(pe.Exp.Op)) {
+			if modElems, err := applyParamModsElems(cfg, pe, elems); err != nil {
 				return "", err
 			} else {
-				str = mod
+				elems = modElems
+				str = strings.Join(elems, " ")
 			}
 		}
 	case pe.Width:
@@ -1632,16 +1702,18 @@ func bashAssocKeyQuote(s string) string {
 // expandPrompt implements ${var@P} by delegating to [Config.PromptExpand].
 // If PromptExpand is not set, it performs basic prompt escape expansion.
 func (cfg *Config) expandPrompt(s string) string {
-	if cfg.PromptExpand != nil {
-		return cfg.PromptExpand(s)
-	}
-	return defaultPromptExpand(s)
+	return cfg.defaultPromptExpand(s)
 }
 
 // defaultPromptExpand handles a subset of Bash prompt escape sequences.
-func defaultPromptExpand(s string) string {
+func (cfg *Config) defaultPromptExpand(s string) string {
+	s = cfg.expandPromptVars(s)
 	var b strings.Builder
 	for i := 0; i < len(s); i++ {
+		if s[i] == '!' {
+			b.WriteByte('1')
+			continue
+		}
 		if s[i] != '\\' {
 			b.WriteByte(s[i])
 			continue
@@ -1654,16 +1726,55 @@ func defaultPromptExpand(s string) string {
 		switch s[i] {
 		case 'a':
 			b.WriteByte('\a')
+		case 'h', 'H':
+			host := cfg.envGet("HOSTNAME")
+			if host == "" {
+				host = cfg.envGet("HOST")
+			}
+			if s[i] == 'h' {
+				if dot := strings.IndexByte(host, '.'); dot >= 0 {
+					host = host[:dot]
+				}
+			}
+			b.WriteString(host)
+		case 'j':
+			b.WriteByte('0')
 		case 'e':
 			b.WriteByte('\x1b')
 		case 'n':
 			b.WriteByte('\n')
 		case 'r':
 			b.WriteByte('\r')
+		case 's':
+			b.WriteString("bash")
+		case 'v':
+			b.WriteString("5.3")
+		case 'V':
+			b.WriteString("5.3.0")
+		case 'w':
+			b.WriteString(cfg.promptWorkingDir(false))
+		case 'W':
+			b.WriteString(cfg.promptWorkingDir(true))
+		case '!':
+			b.WriteByte('1')
+		case '#':
+			b.WriteByte('0')
+		case '$':
+			b.WriteByte('$')
 		case '\\':
 			b.WriteByte('\\')
-		case '[', ']':
-			// Non-printing sequence markers; ignore.
+		case '[':
+			b.WriteByte('\001')
+		case ']':
+			b.WriteByte('\002')
+		case '0', '1', '2', '3', '4', '5', '6', '7':
+			end := i + 1
+			for end < len(s) && end < i+3 && s[end] >= '0' && s[end] <= '7' {
+				end++
+			}
+			val, _ := strconv.ParseUint(s[i:end], 8, 8)
+			b.WriteByte(byte(val))
+			i = end - 1
 		default:
 			// For unrecognized sequences, preserve them.
 			b.WriteByte('\\')
@@ -1671,6 +1782,42 @@ func defaultPromptExpand(s string) string {
 		}
 	}
 	return b.String()
+}
+
+func (cfg *Config) expandPromptVars(s string) string {
+	if !strings.ContainsAny(s, "$`") {
+		return s
+	}
+	word, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Document(strings.NewReader(s))
+	if err != nil && err != io.EOF {
+		return s
+	}
+	out, err := Literal(cfg, word)
+	if err != nil {
+		return s
+	}
+	return out
+}
+
+func (cfg *Config) promptWorkingDir(base bool) string {
+	pwd := cfg.envGet("PWD")
+	if pwd == "" {
+		pwd = "."
+	}
+	home := cfg.envGet("HOME")
+	if home != "" && (pwd == home || strings.HasPrefix(pwd, home+"/")) {
+		pwd = "~" + strings.TrimPrefix(pwd, home)
+	}
+	if !base {
+		return pwd
+	}
+	switch pwd {
+	case "", "/":
+		return "/"
+	case "~":
+		return "~"
+	}
+	return filepath.Base(pwd)
 }
 
 func (cfg *Config) removePattern(str, pat string, fromEnd, shortest bool) string {

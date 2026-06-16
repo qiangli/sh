@@ -964,7 +964,7 @@ var runTests = []runTest{
 	},
 	{
 		`a=foo; echo "<${a@K}><${a@k}>"`,
-		"<foo><foo>\n #IGNORE not implemented; must not panic",
+		"<'foo'><'foo'>\n #IGNORE not implemented; must not panic",
 	},
 	{
 		`x=abcdef; echo ${x@C}; echo ${x@}; echo ${x@bar}; echo ${x@'Q'}`,
