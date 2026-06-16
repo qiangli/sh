@@ -1404,6 +1404,14 @@ func validAssignName(name string) bool {
 	return ok && syntax.ValidName(base)
 }
 
+func validNameRefTarget(name string) bool {
+	if syntax.ValidName(name) {
+		return true
+	}
+	base, idx, ok := splitArrayRef(name)
+	return ok && idx != "" && syntax.ValidName(base)
+}
+
 // bashDeclareQuote formats v the way bash's `declare -p` does: bare
 // when safe, double-quoted otherwise, falling back to ANSI-C $'...'
 // when v contains characters that double quotes can't represent

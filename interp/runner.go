@@ -5417,7 +5417,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				// declare -p name: print variable with attributes.
 				vr := r.lookupVar(name)
 				if !vr.Declared() {
-					r.errf(r.bashErrPrefix(r.curStmtPos)+"declare: %s: not found\n", name)
+					r.errf(r.bashErrPrefix(r.curStmtPos)+"%s: %s: not found\n", cm.Variant.Value, name)
 					r.exit.code = 1
 					continue
 				}
@@ -5461,6 +5461,12 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			}
 			if as.Naked {
 				if as.Index != nil {
+					if valType == "-n" {
+						r.errf("%s%s: %s: reference variable cannot be an array\n",
+							r.bashErrPrefix(r.curStmtPos), cm.Variant.Value, r.inlineArrayAssignName(as))
+						r.exit.code = 1
+						continue
+					}
 					if cm.Variant.Value == "readonly" || cm.Variant.Value == "export" {
 						ref := name
 						if w, ok := as.Index.(*syntax.Word); ok {
@@ -5477,6 +5483,12 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 						continue
 					}
 					vr.Kind = expand.Indexed
+				}
+				if valType != "-n" && valType != "+n" &&
+					(valType == "-a" || valType == "-A" || slices.Contains(modes, "-a") || slices.Contains(modes, "-A")) {
+					if n, resolved := vr.Resolve(r.writeEnv); n != "" {
+						name, vr = n, resolved
+					}
 				}
 				switch valType {
 				case "-A":
@@ -5497,6 +5509,12 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 						vr.Str = ""
 					}
 				case "-n":
+					if vr.Kind == expand.Indexed || vr.Kind == expand.Associative {
+						r.errf("%s%s: %s: reference variable cannot be an array\n",
+							r.bashErrPrefix(r.curStmtPos), cm.Variant.Value, name)
+						r.exit.code = 1
+						continue
+					}
 					// `typeset -n NAME` (no value) on an
 					// existing var converts it to a nameref
 					// pointing at whatever its current value
@@ -5517,6 +5535,30 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				}
 			} else {
 				prevForIndex := vr
+				if valType == "-n" {
+					if as.Index != nil || as.Array != nil {
+						ref := name
+						if as.Index != nil {
+							ref = r.inlineArrayAssignName(as)
+						}
+						r.errf("%s%s: %s: reference variable cannot be an array\n",
+							r.bashErrPrefix(r.curStmtPos), cm.Variant.Value, ref)
+						r.exit.code = 1
+						continue
+					}
+					if as.Value != nil {
+						target := r.literalForAssign(as.Value)
+						if as.Append {
+							target = vr.Str + target
+						}
+						if !validNameRefTarget(target) {
+							r.errf("%s%s: `%s': invalid variable name for name reference\n",
+								r.bashErrPrefix(r.curStmtPos), cm.Variant.Value, target)
+							r.exit.code = 1
+							continue
+						}
+					}
+				}
 				if as.Index != nil && valType == "-A" {
 					prevForIndex.Kind = expand.Associative
 				}
