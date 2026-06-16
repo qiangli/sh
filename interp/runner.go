@@ -5577,6 +5577,14 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 							r.exit.code = 1
 							continue
 						}
+						if slices.Contains(modes, "-i") {
+							if base, _, ok := splitArrayRef(target); ok && syntax.ValidName(base) {
+								tgt := r.lookupVar(base)
+								tgt.Integer = true
+								r.setVar(base, tgt)
+								continue
+							}
+						}
 					}
 				}
 				if as.Index != nil && valType == "-A" {
