@@ -5602,8 +5602,15 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 					}
 					vr.Kind = expand.Indexed
 				}
+				// A plain `declare NAME` (no value, no attribute flags) on
+				// an existing nameref follows the reference and declares
+				// its target instead — e.g. inside a function this makes
+				// the target a local variable, so a later write through
+				// the nameref stays local (nameref20.sub line 54).
+				plainNameRefDecl := valType == "" && len(modes) == 0 &&
+					vr.Kind == expand.NameRef && as.Value == nil
 				if valType != "-n" && valType != "+n" &&
-					(valType == "-a" || valType == "-A" || slices.Contains(modes, "-a") || slices.Contains(modes, "-A")) {
+					(valType == "-a" || valType == "-A" || slices.Contains(modes, "-a") || slices.Contains(modes, "-A") || plainNameRefDecl) {
 					if n, resolved := vr.Resolve(r.writeEnv); n != "" {
 						name, vr = n, resolved
 					}
