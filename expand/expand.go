@@ -2358,6 +2358,57 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 					}
 					continue
 				}
+			} else {
+				// A multi-part double-quoted word can still contain a
+				// field-splitting array expansion, e.g. "${arr[@]}x",
+				// "x${arr[@]}", or "${!indir}$ref". Bash splits one field
+				// per element, with the first/last elements gluing to the
+				// neighbouring parts. Detect any such part and, if present,
+				// process the parts one by one so the boundaries glue
+				// through curField.
+				anySplit := false
+				for _, dqp := range wp.Parts {
+					pe, ok := dqp.(*syntax.ParamExp)
+					if !ok || !quotedPartSplits(pe) {
+						continue
+					}
+					if elems, err := cfg.quotedElemFields(pe); err != nil {
+						return nil, err
+					} else if elems != nil {
+						anySplit = true
+						break
+					}
+				}
+				if anySplit {
+					allowEmpty = true
+					for _, dqp := range wp.Parts {
+						if pe, ok := dqp.(*syntax.ParamExp); ok && quotedPartSplits(pe) {
+							if elems, err := cfg.quotedElemFields(pe); err != nil {
+								return nil, err
+							} else if elems != nil {
+								for i, elem := range elems {
+									if i > 0 {
+										flush()
+									}
+									curField = append(curField, fieldPart{
+										quote: quoteDouble,
+										val:   elem,
+									})
+								}
+								continue
+							}
+						}
+						wfield, err := cfg.wordField([]syntax.WordPart{dqp}, quoteDouble)
+						if err != nil {
+							return nil, err
+						}
+						for _, part := range wfield {
+							part.quote = quoteDouble
+							curField = append(curField, part)
+						}
+					}
+					continue
+				}
 			}
 			allowEmpty = true
 			wfield, err := cfg.wordField(wp.Parts, quoteDouble)
@@ -3193,6 +3244,26 @@ func (cfg *Config) escapedLitFields(s string) [][]fieldPart {
 
 // quotedElemFields returns the list of elements resulting from a quoted
 // parameter expansion that should be treated especially, like "${foo[@]}".
+// quotedPartSplits reports whether a ParamExp inside a multi-part
+// double-quoted word may expand to multiple fields (a `[@]`-style array
+// expansion). `[*]` joins to one field, and operator-bearing forms
+// (`${a[*]:-X}`, replacements, length, …) are left to the generic
+// single-string path so their semantics aren't bypassed. Plain scalar
+// references pass this cheap pre-filter but are filtered out by
+// [Config.quotedElemFields] returning nil.
+func quotedPartSplits(pe *syntax.ParamExp) bool {
+	if pe == nil || pe.Exp != nil || pe.Repl != nil || pe.Length || pe.Width || pe.IsSet {
+		return false
+	}
+	if pe.Param != nil && pe.Param.Value == "@" {
+		return true
+	}
+	if pe.Index != nil {
+		return nodeLit(pe.Index) == "@"
+	}
+	return true
+}
+
 func (cfg *Config) quotedElemFields(pe *syntax.ParamExp) ([]string, error) {
 	if pe == nil || pe.Length || pe.Width || pe.IsSet {
 		return nil, nil
