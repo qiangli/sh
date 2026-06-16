@@ -6111,6 +6111,15 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		if prev := r.lookupVar(varName); prev.Kind == expand.NameRef {
 			if _, _, ok := splitArrayRef(prev.Str); ok {
 				r.errf("%s`%s': not a valid identifier\n", r.bashErrPrefix(r.curStmtPos), prev.Str)
+			} else if prev.Str == "" {
+				// Empty-target nameref: bash can't use it as a reference,
+				// so it drops the nameref attribute and binds the fd array
+				// to the variable itself, warning first.
+				r.errf("%swarning: %s: removing nameref attribute\n",
+					r.bashErrPrefix(r.curStmtPos), varName)
+				if r.coprocSetVar(varName, readFd, writeFd) {
+					coprocReadonly = varName
+				}
 			} else {
 				// Write the coproc array through the nameref to its
 				// target, leaving the nameref attribute intact.
