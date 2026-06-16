@@ -55,6 +55,10 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 	r.ectx = ctx
 	r.ecfg = &expand.Config{
 		Env: expandEnv{r},
+		OnNameRefCircular: func(name string) {
+			r.errf("%swarning: %s: circular name reference\n",
+				r.bashErrPrefix(r.curStmtPos), name)
+		},
 		OnFormatWarning: func(msg string) {
 			// Bash 5.3 printf: numeric-conversion failures
 			// (e.g. `printf %d xyz`) print the warning and set

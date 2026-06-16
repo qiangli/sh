@@ -4080,7 +4080,7 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	},
 	{
 		"declare -n foo=bar bar=foo; echo $foo",
-		"\n #IGNORE",
+		"warning: foo: circular name reference\n\n #IGNORE",
 	},
 	{
 		"declare -n foo=bar; echo $foo",

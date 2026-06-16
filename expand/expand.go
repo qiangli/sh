@@ -130,6 +130,12 @@ type Config struct {
 	// the count to the named variable. If nil, %n is a no-op.
 	OnPercentN func(name string, n int) error
 
+	// OnNameRefCircular is called when expanding a parameter whose
+	// nameref chain loops back on itself between distinct names (e.g.
+	// x→v→w→x). It receives the originating variable name. Bash emits a
+	// "circular name reference" warning and treats the value as unset.
+	OnNameRefCircular func(name string)
+
 	bufferAlloc strings.Builder
 	fieldAlloc  [4]fieldPart
 	fieldsAlloc [4][]fieldPart

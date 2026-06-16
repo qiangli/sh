@@ -2285,7 +2285,14 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 				prev = r.arrayElemAsScalar(idx, r.lookupVar(base))
 			}
 		}
-		if n, v := prev.Resolve(r.writeEnv); n != "" {
+		// A nameref chain that loops between distinct names (x→v→w→x)
+		// can't be resolved to a real target. Bash warns and drops the
+		// assignment, leaving the nameref itself untouched.
+		if n, v, circular := prev.ResolveTracked(r.writeEnv); circular {
+			r.errf("%swarning: %s: circular name reference\n",
+				r.bashErrPrefix(r.curStmtPos), name)
+			return name, prev
+		} else if n != "" {
 			name, prev = n, v
 		}
 	}

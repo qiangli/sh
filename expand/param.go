@@ -815,8 +815,11 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			index = nameRefArrayTargetIndex(idx)
 		}
 	}
-	if n, v := vr.Resolve(cfg.Env); n != "" {
+	if n, v, circular := vr.ResolveTracked(cfg.Env); n != "" {
 		name, vr = n, v
+		if circular && cfg.OnNameRefCircular != nil {
+			cfg.OnNameRefCircular(pe.Param.Value)
+		}
 	}
 	if cfg.NoUnset && !vr.IsSet() && !overridingUnset(pe) &&
 		!(orig.Kind == NameRef && index != nil && vr.Kind == Indexed) &&

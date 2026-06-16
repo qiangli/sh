@@ -317,19 +317,38 @@ const maxNameRefDepth = 100
 // Resolve follows a number of nameref variables, returning the last reference
 // name that was followed and the variable that it points to.
 func (v Variable) Resolve(env Environ) (string, Variable) {
+	name, vr, _ := v.ResolveTracked(env)
+	return name, vr
+}
+
+// ResolveTracked is like [Variable.Resolve] but also reports whether the
+// nameref chain looped back on itself (a circular reference between
+// distinct names, e.g. x→v→w→x). Such a chain resolves to an unset
+// variable; bash additionally emits a "circular name reference" warning.
+func (v Variable) ResolveTracked(env Environ) (string, Variable, bool) {
 	name := ""
+	var seen map[string]bool
 	for range maxNameRefDepth {
 		if v.Kind != NameRef {
-			return name, v
+			return name, v, false
 		}
 		name = v.Str // keep name for the next iteration
+		if name != "" {
+			if seen[name] {
+				return name, Variable{}, true
+			}
+			if seen == nil {
+				seen = make(map[string]bool)
+			}
+			seen[name] = true
+		}
 		if resolver, ok := env.(nameRefResolver); ok {
 			v = resolver.ResolveNameRef(name)
 		} else {
 			v = env.Get(name)
 		}
 	}
-	return name, Variable{}
+	return name, Variable{}, true
 }
 
 // FuncEnviron wraps a function mapping variable names to their string values,
