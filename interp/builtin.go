@@ -2818,7 +2818,16 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 
 		opt, optarg, done := r.optState.next(optstr, args)
 
-		r.setVarString(name, string(opt))
+		// Storing the option character into an empty-target nameref
+		// retargets it; a non-identifier result like `?` is rejected.
+		// Bash reports this after the regular `illegal option`
+		// diagnostic, so defer the error past the switch below.
+		nameVar := r.lookupVar(name)
+		nameRefBadTarget := nameVar.Kind == expand.NameRef && nameVar.Str == "" &&
+			!validNameRefTarget(string(opt))
+		if !nameRefBadTarget {
+			r.setVarString(name, string(opt))
+		}
 		// bash's getopts only surfaces the OPTARG-readonly diagnostic
 		// when it would have written to OPTARG (i.e. the default branch
 		// below): the unset that happens at the top of every getopts
@@ -2849,6 +2858,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		}
 		if optind-1 != r.optState.argidx {
 			r.setVarString("OPTIND", strconv.FormatInt(int64(r.optState.argidx+1), 10))
+		}
+		if nameRefBadTarget {
+			r.errf("%sgetopts: `%s': not a valid identifier\n", r.bashErrPrefix(r.curStmtPos), string(opt))
 		}
 
 		exit.oneIf(done)
@@ -3358,7 +3370,16 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				if _, _, ok := splitArrayRef(vr.Str); ok {
 					return failf(1, "%s: `%s': not a valid identifier\n", name, vr.Str)
 				}
-				arrayName = vr.Str
+				if vr.Str == "" {
+					// An empty-target nameref can't be followed; bash drops
+					// the nameref attribute and turns the variable itself
+					// into the array (with a warning) rather than
+					// dereferencing to an empty name.
+					r.errf("%swarning: %s: removing nameref attribute\n",
+						r.bashErrPrefix(r.curStmtPos), arrayName)
+				} else {
+					arrayName = vr.Str
+				}
 			}
 		default:
 			return failf(2, "%s: Only one array name may be specified, %v\n", name, args)
@@ -3413,8 +3434,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 
 		// Merge into the existing indexed array so that entries below
 		// origin and above origin+len(newLines) survive (matches bash).
+		// mapfile always assigns the array, so it is set even when the
+		// input was empty (`declare -a r=()` rather than `declare -a r`).
 		var vr expand.Variable
 		vr.Kind = expand.Indexed
+		vr.Set = true
 		if origin > 0 {
 			prev := r.lookupVar(arrayName)
 			if prev.Kind == expand.Indexed {
