@@ -435,9 +435,11 @@ func (r *Runner) expandErr(err error) {
 			r.exit.exiting = true
 		}
 		return
-	case strings.Contains(errMsg, "invalid variable name"):
-		// errors6.sub lines 40-56: bash prints the diagnostic, sets
-		// $? = 1, and keeps running (even in POSIX mode).
+	case strings.Contains(errMsg, "invalid variable name"),
+		strings.Contains(errMsg, "not a valid identifier"):
+		// errors6.sub lines 40-56 and nameref default-assignment to an
+		// empty-target nameref (`${r=}`, `${r:=/}`): bash prints the
+		// diagnostic, sets $? = 1, and keeps running (even in POSIX mode).
 		r.exit.code = 1
 		r.lastExpandExit = exitStatus{code: 1}
 		return
@@ -481,6 +483,7 @@ func looksLikeExpandError(msg string) bool {
 		strings.Contains(msg, "cannot assign in this way"),
 		strings.Contains(msg, "parameter not set"),
 		strings.Contains(msg, "parameter null or not set"),
+		strings.Contains(msg, "not a valid identifier"),
 		strings.Contains(msg, "invalid variable name"):
 		return true
 	}

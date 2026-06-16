@@ -2133,6 +2133,17 @@ func subscriptText(idx syntax.ArithmExpr) string {
 	return b.String()
 }
 
+// validNameRefTargetName reports whether s is a legal nameref target:
+// a plain identifier or an array-element reference (`arr[idx]`). Mirrors
+// interp.validNameRefTarget for the expand-side assignment path.
+func validNameRefTargetName(s string) bool {
+	if syntax.ValidName(s) {
+		return true
+	}
+	_, idx, ok := nameRefArrayTarget(s)
+	return ok && idx != ""
+}
+
 func nameRefArrayTarget(s string) (name, idx string, ok bool) {
 	lb := strings.IndexByte(s, '[')
 	if lb <= 0 || !strings.HasSuffix(s, "]") {

@@ -289,6 +289,15 @@ func (cfg *Config) envSet(name, value string) error {
 	// -i` into a plain string, which subsequent arithmetic
 	// assignments then mis-handle.
 	vr := cfg.Env.Get(name)
+	// Assigning to a nameref with an empty (unset) target retargets it:
+	// `declare -n r; r=foo` points r at foo. Bash validates the new
+	// target like `declare -n` does, rejecting invalid identifiers with
+	// "<target>: not a valid identifier". The default-assignment
+	// operators (${r=v}, ${r:=v}) reach this path too, so guard them
+	// here rather than silently overwriting the nameref with a string.
+	if vr.Kind == NameRef && vr.Str == "" && !validNameRefTargetName(value) {
+		return fmt.Errorf("`%s': not a valid identifier", value)
+	}
 	if n, resolved := vr.Resolve(cfg.Env); n != "" {
 		name, vr = n, resolved
 	}
