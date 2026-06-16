@@ -7188,10 +7188,25 @@ func (r *Runner) selectLoop(ctx context.Context, name string, items []string, do
 			return
 		}
 		c, _ := strconv.Atoi(reply)
+		val := ""
 		if c > 0 && c <= len(items) {
-			r.setVarString(name, items[c-1])
+			val = items[c-1]
+		}
+		if vr := r.lookupVar(name); vr.Kind == expand.NameRef {
+			// Binding the chosen value through an untargeted nameref
+			// retargets it; an invalid identifier is rejected without
+			// touching the nameref.
+			if vr.Str == "" && val != "" && !validNameRefTarget(val) {
+				r.errf("%s`%s': not a valid identifier\n",
+					r.bashErrPrefix(r.curStmtPos), val)
+				r.exit.code = 1
+				return
+			} else {
+				vr.Str = val
+				r.setVar(name, vr)
+			}
 		} else {
-			r.setVarString(name, "")
+			r.setVarString(name, val)
 		}
 		if r.loopStmtsBroken(ctx, do) {
 			return
