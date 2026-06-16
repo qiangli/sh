@@ -5487,6 +5487,14 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 					}
 				}
 			}
+			if (cm.Variant.Value == "readonly" || cm.Variant.Value == "export") && as.Index == nil {
+				if base, _, ok := splitArrayRef(name); ok && syntax.ValidName(base) {
+					r.errf("%s%s: `%s': not a valid identifier\n",
+						r.bashErrPrefix(r.curStmtPos), cm.Variant.Value, name)
+					r.exit.code = 1
+					continue
+				}
+			}
 			// Set the Integer attribute *before* assignVal so the
 			// initial assignment can evaluate the RHS as arithmetic.
 			if valType == "-i" || slices.Contains(modes, "-i") {
