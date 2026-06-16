@@ -5522,6 +5522,18 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 					r.exit.code = 1
 					continue
 				}
+				// An integer nameref whose value assignment was rejected
+				// (`declare -n foo; declare -i foo; foo=7*6`, where the
+				// "target" 7*6 is not a valid identifier) stays invisible
+				// in bash: the integer-assignment path leaves it set but
+				// without a usable target, and `declare -p` skips it
+				// silently — no value, no "not found". A plain (non-integer)
+				// rejected nameref like `declare -n r; r=^` still prints
+				// `declare -n r`, and an unassigned integer nameref
+				// (`declare -xi foo6`, Set=false) still prints its flags.
+				if vr.Kind == expand.NameRef && vr.Integer && vr.Set && vr.Str == "" {
+					continue
+				}
 				if jsonMode {
 					r.exit = r.jsonOut(variableJSON(name, vr))
 				} else {

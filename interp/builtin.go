@@ -4024,6 +4024,13 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					exit.code = 1
 					continue
 				}
+				if vr.Kind == expand.NameRef && vr.Integer && vr.Set && vr.Str == "" {
+					// An integer nameref whose value assignment was
+					// rejected (`declare -i foo; foo=7*6`) stays invisible
+					// in bash: `declare -p` skips it silently. See the
+					// matching DeclClause path in runner.go.
+					continue
+				}
 				r.outf("%s\n", formatDeclareVar(name, vr, false))
 			}
 		}
