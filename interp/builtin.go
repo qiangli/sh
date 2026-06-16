@@ -1031,6 +1031,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				select {
 				case <-bg.done:
 					exit = *bg.exit
+					r.reapCoproc(bg)
 					if pidVar != "" {
 						r.setVarString(pidVar, "g"+strconv.Itoa(i+1))
 					}
@@ -1044,6 +1045,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				for i, bg := range r.bgProcs {
 					<-bg.done
 					exit = *bg.exit
+					r.reapCoproc(bg)
 					if pidVar != "" {
 						r.setVarString(pidVar, "g"+strconv.Itoa(i+1))
 					}
@@ -1057,6 +1059,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			// Note that "wait" without arguments always returns exit status zero.
 			for _, bg := range r.bgProcs {
 				<-bg.done
+				r.reapCoproc(bg)
 			}
 			break
 		}
@@ -1091,6 +1094,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			}
 			<-bg.done
 			exit = *bg.exit
+			r.reapCoproc(bg)
 			if pidVar != "" {
 				r.setVarString(pidVar, "g"+strconv.FormatInt(matchedIdx, 10))
 			}

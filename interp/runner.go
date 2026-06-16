@@ -6080,6 +6080,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		}
 		readFd := int(pr.Fd())
 		writeFd := int(pw2.Fd())
+		coprocReadonly := ""
 		if prev := r.lookupVar(varName); prev.Kind == expand.NameRef {
 			if _, _, ok := splitArrayRef(prev.Str); ok {
 				r.errf("%s`%s': not a valid identifier\n", r.bashErrPrefix(r.curStmtPos), prev.Str)
@@ -6090,24 +6091,12 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				if n, _ := prev.Resolve(r.writeEnv); n != "" {
 					target = n
 				}
-				r.setVar(target, expand.Variable{
-					Set:  true,
-					Kind: expand.Indexed,
-					List: []string{
-						strconv.Itoa(readFd),
-						strconv.Itoa(writeFd),
-					},
-				})
+				if r.coprocSetVar(target, readFd, writeFd) {
+					coprocReadonly = target
+				}
 			}
-		} else {
-			r.setVar(varName, expand.Variable{
-				Set:  true,
-				Kind: expand.Indexed,
-				List: []string{
-					strconv.Itoa(readFd),
-					strconv.Itoa(writeFd),
-				},
-			})
+		} else if r.coprocSetVar(varName, readFd, writeFd) {
+			coprocReadonly = varName
 		}
 		if r.fdTable == nil {
 			r.fdTable = make(map[int]*os.File)
@@ -6124,8 +6113,10 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		r.fdWriteTable[writeFd] = pw2
 
 		bg := &bgProc{
-			done: make(chan struct{}),
-			exit: new(exitStatus),
+			done:              make(chan struct{}),
+			exit:              new(exitStatus),
+			coprocReadonly:    coprocReadonly,
+			coprocReadonlyPos: r.curStmtPos,
 		}
 		r.bgProcs = append(r.bgProcs, bg)
 		go func() {
@@ -6144,6 +6135,39 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		r.errf("unhandled command node: %T\n", cm)
 		r.exit.code = 1
 	}
+}
+
+// coprocSetVar binds the coproc fd array to varName, reporting
+// `<var>: readonly variable` when varName is readonly. It returns
+// whether the variable was readonly: bash also unsets the coproc
+// variable when the coprocess is reaped, and that deferred unset of a
+// readonly variable yields a separate `<var>: cannot unset: readonly
+// variable` at wait time (see [Runner.reapCoproc]).
+func (r *Runner) coprocSetVar(varName string, readFd, writeFd int) bool {
+	readonly := r.lookupVar(varName).ReadOnly
+	r.setVar(varName, expand.Variable{
+		Set:  true,
+		Kind: expand.Indexed,
+		List: []string{
+			strconv.Itoa(readFd),
+			strconv.Itoa(writeFd),
+		},
+	})
+	return readonly
+}
+
+// reapCoproc emits the diagnostics bash produces when it reaps a
+// finished coprocess and unsets its variable. A readonly coproc
+// variable can't be unset, so reaping reports `<var>: cannot unset:
+// readonly variable` — ordered after any commands between `coproc` and
+// `wait`, which is why it fires here rather than at coproc creation.
+func (r *Runner) reapCoproc(bg *bgProc) {
+	if bg.coprocReadonly == "" {
+		return
+	}
+	name := bg.coprocReadonly
+	bg.coprocReadonly = ""
+	r.errf("%s%s: cannot unset: readonly variable\n", r.bashErrPrefix(bg.coprocReadonlyPos), name)
 }
 
 func (r *Runner) trapCallback(ctx context.Context, callback, name string) uint8 {

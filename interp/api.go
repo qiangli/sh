@@ -564,6 +564,17 @@ type bgProc struct {
 	// publishBgPid with the OS PID — embedders that want async fan-out
 	// should hand off to a goroutine themselves.
 	pidCallback func(pid int)
+
+	// coprocReadonly names a readonly variable that a `coproc` failed to
+	// bind its fd array to. Bash defers unsetting the coproc variable
+	// until the coprocess is reaped, so reaping a readonly one reports
+	// `<var>: cannot unset: readonly variable` (see Runner.reapCoproc).
+	// Empty for non-coproc background jobs and writable coproc variables.
+	coprocReadonly string
+
+	// coprocReadonlyPos is the position of the `coproc` clause, used to
+	// drive the `cannot unset` diagnostic's line number at reap time.
+	coprocReadonlyPos syntax.Pos
 }
 
 // bgProcCtxKey is the context-value key under which the bg goroutine
