@@ -582,7 +582,12 @@ type Parser struct {
 	paramExpExpDblQuoted bool
 	paramExpExpOp        ParExpOperator
 	paramExpOuterQuote   quoteState
-	assignIndexWords     bool
+	// paramExpReplFirst is set while the lexer reads the first token of a
+	// ${var/pat/repl} pattern. Bash treats a `/` as the very first
+	// character of the pattern as a literal, not the pattern/replacement
+	// separator: `${a///a/}` parses as pattern `/a`, empty replacement.
+	paramExpReplFirst bool
+	assignIndexWords  bool
 	rawAssignIndex       bool
 
 	// lastBquoteEsc is how many times the last backquote token was escaped
@@ -1756,7 +1761,9 @@ zshPrefixLoop:
 		p.checkLang(p.pos, langBashLike|LangMirBSDKorn|LangZsh, "search and replace")
 		pe.Repl = &Replace{All: p.tok == dblSlash}
 		p.quote = paramExpRepl
+		p.paramExpReplFirst = true
 		p.next()
+		p.paramExpReplFirst = false
 		pe.Repl.Orig = p.getWord()
 		p.quote = paramExpExp
 		if p.got(slash) {

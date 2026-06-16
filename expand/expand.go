@@ -101,6 +101,12 @@ type Config struct {
 	// pattern matching features when performing pathname expansion (globbing).
 	ExtGlob bool
 
+	// PatSubReplacement corresponds to the `patsub_replacement` shell option.
+	// When true, an unquoted `&` in the replacement string of a
+	// `${var/pat/repl}` expansion is replaced by the portion of the value
+	// that the pattern matched.
+	PatSubReplacement bool
+
 	// PromptExpand is called by the ${var@P} expansion to expand prompt
 	// escape sequences such as \u, \h, \w. If nil, ${var@P} returns the
 	// string unchanged.

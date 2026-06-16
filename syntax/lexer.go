@@ -221,7 +221,7 @@ func (p *Parser) nextKeepSpaces() {
 			p.advanceLitHdoc(r)
 		}
 	case paramExpRepl:
-		if r == '/' {
+		if r == '/' && !p.paramExpReplFirst {
 			p.rune()
 			p.tok = slash
 			break
@@ -1144,6 +1144,10 @@ func paramNameRune[T rune | byte](r T) bool {
 
 func (p *Parser) advanceLitOther(r rune) {
 	tok := _LitWord
+	// firstReplChar exempts the very first character of a ${var/pat/repl}
+	// pattern from being treated as the `/` separator (bash quirk).
+	firstReplChar := p.paramExpReplFirst
+	p.paramExpReplFirst = false
 loop:
 	for p.newLit(r); r != utf8.RuneSelf; r = p.rune() {
 		switch r {
@@ -1163,7 +1167,7 @@ loop:
 				break loop
 			}
 		case '/':
-			if p.quote != paramExpExp {
+			if p.quote != paramExpExp && !firstReplChar {
 				break loop
 			}
 		case ':', '=', '%', '^', ',', '?', '!', '~', '*':
@@ -1184,6 +1188,7 @@ loop:
 				break loop
 			}
 		}
+		firstReplChar = false
 	}
 	p.tok, p.val = tok, p.endLit()
 }

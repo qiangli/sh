@@ -822,7 +822,13 @@ func (p *Printer) paramExp(pe *ParamExp) {
 		if pe.Repl.Orig != nil {
 			p.word(pe.Repl.Orig)
 		}
-		p.w.WriteByte('/')
+		// The pattern/replacement separator is only printed when there is
+		// a pattern or a replacement. Printing it for an empty pattern
+		// (`${foo//}`) would make a leading `/` of the separator be
+		// reparsed as a literal first character of the pattern.
+		if pe.Repl.Orig != nil || pe.Repl.With != nil {
+			p.w.WriteByte('/')
+		}
 		if pe.Repl.With != nil {
 			p.word(pe.Repl.With)
 		}

@@ -527,22 +527,12 @@ func applyParamMods(cfg *Config, pe *syntax.ParamExp, str string) (string, error
 	if orig == "" && !replAnchoredStart && !replAnchoredEnd {
 		return str, nil
 	}
-	var with string
-	if pe.Repl.With != nil {
-		var withSb strings.Builder
-		for _, part := range pe.Repl.With.Parts {
-			if lit, ok := part.(*syntax.Lit); ok {
-				withSb.WriteString(stripBackslashEscapes(lit.Value))
-				continue
-			}
-			s, lerr := Literal(cfg, &syntax.Word{Parts: []syntax.WordPart{part}})
-			if lerr != nil {
-				return "", lerr
-			}
-			withSb.WriteString(s)
-		}
-		with = withSb.String()
+	segs, err := cfg.replTemplate(pe.Repl.With)
+	if err != nil {
+		return "", err
 	}
+	matchSpecial := replHasMatch(segs)
+	with := renderRepl(segs, "")
 	n := 1
 	if pe.Repl.All {
 		n = -1
@@ -552,7 +542,11 @@ func applyParamMods(cfg *Config, pe *syntax.ParamExp, str string) (string, error
 	last := 0
 	for _, loc := range locs {
 		sb.WriteString(str[last:loc[0]])
-		sb.WriteString(with)
+		if matchSpecial {
+			sb.WriteString(renderRepl(segs, str[loc[0]:loc[1]]))
+		} else {
+			sb.WriteString(with)
+		}
 		last = loc[1]
 	}
 	sb.WriteString(str[last:])
@@ -617,6 +611,119 @@ func (cfg *Config) findReplIndex(pat, name string, n int, start, end bool) [][]i
 		return [][]int{{loc[2], loc[3]}}
 	}
 	return nil
+}
+
+// replSegment is one piece of a ${var/pat/repl} replacement template. When
+// match is true the matched portion of the value is substituted here;
+// otherwise lit is emitted verbatim.
+type replSegment struct {
+	lit   string
+	match bool
+}
+
+// replTemplate builds the replacement template for the With word of a
+// substitution. Backslash escapes and quoting are resolved up front; when
+// patsub_replacement is enabled an unquoted `&` becomes a match placeholder.
+// Tilde expansion is applied to a leading unquoted `~`.
+func (cfg *Config) replTemplate(with *syntax.Word) ([]replSegment, error) {
+	var segs []replSegment
+	if with == nil {
+		return segs, nil
+	}
+	emitLit := func(s string) {
+		if s == "" {
+			return
+		}
+		if n := len(segs); n > 0 && !segs[n-1].match {
+			segs[n-1].lit += s
+			return
+		}
+		segs = append(segs, replSegment{lit: s})
+	}
+	patsub := cfg.PatSubReplacement
+	// scanUnquoted processes source/expanded text that is subject to
+	// patsub `&` substitution and backslash escaping.
+	scanUnquoted := func(s string, fromSource bool) {
+		for i := 0; i < len(s); i++ {
+			c := s[i]
+			if c == '\\' && i+1 < len(s) {
+				next := s[i+1]
+				// In bare source text a backslash escapes any
+				// character. In expanded variable content only `\&`
+				// and `\\` are special; other backslashes are kept.
+				if fromSource || next == '&' || next == '\\' {
+					emitLit(string(next))
+					i++
+					continue
+				}
+				emitLit("\\")
+				continue
+			}
+			if c == '&' && patsub {
+				segs = append(segs, replSegment{match: true})
+				continue
+			}
+			emitLit(string(c))
+		}
+	}
+	for idx, part := range with.Parts {
+		switch part := part.(type) {
+		case *syntax.Lit:
+			val := part.Value
+			if idx == 0 {
+				if prefix, rest := cfg.expandUser(val, len(with.Parts) > 1); prefix != "" {
+					emitLit(prefix)
+					val = rest
+				}
+			}
+			scanUnquoted(val, true)
+		case *syntax.ParamExp, *syntax.CmdSubst, *syntax.ArithmExp, *syntax.ProcSubst, *syntax.ExtGlob:
+			s, err := Literal(cfg, &syntax.Word{Parts: []syntax.WordPart{part}})
+			if err != nil {
+				return nil, err
+			}
+			scanUnquoted(s, false)
+		default:
+			// Quoted parts (SglQuoted, DblQuoted): fully literal, no
+			// `&` substitution or backslash processing here.
+			s, err := Literal(cfg, &syntax.Word{Parts: []syntax.WordPart{part}})
+			if err != nil {
+				return nil, err
+			}
+			emitLit(s)
+		}
+	}
+	return segs, nil
+}
+
+// renderRepl renders a replacement template, substituting matched for each
+// match placeholder.
+func renderRepl(segs []replSegment, matched string) string {
+	if len(segs) == 0 {
+		return ""
+	}
+	if len(segs) == 1 && !segs[0].match {
+		return segs[0].lit
+	}
+	var sb strings.Builder
+	for _, s := range segs {
+		if s.match {
+			sb.WriteString(matched)
+		} else {
+			sb.WriteString(s.lit)
+		}
+	}
+	return sb.String()
+}
+
+// replHasMatch reports whether any segment substitutes the matched text.
+func replHasMatch(segs []replSegment) bool {
+	for _, s := range segs {
+		if s.match {
+			return true
+		}
+	}
+	return false
 }
 
 func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
@@ -1011,28 +1118,16 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 		}
 		// Bash 5.3 applies quote-removal to the replacement string:
 		// a backslash in the *unquoted* portion escapes the next
-		// character (`\'` → `'`, `\\` → `\`, `\&` → `&`). Already-
-		// quoted parts (DblQuoted, SglQuoted) keep their text as
-		// Literal returned it, since they've already been through
-		// the relevant per-context backslash handling. So we walk
-		// the word parts: strip backslashes only on the bare Lit
-		// pieces, concatenate the rest as Literal would have.
-		var with string
-		if pe.Repl.With != nil {
-			var withSb strings.Builder
-			for _, part := range pe.Repl.With.Parts {
-				if lit, ok := part.(*syntax.Lit); ok {
-					withSb.WriteString(stripBackslashEscapes(lit.Value))
-					continue
-				}
-				s, lerr := Literal(cfg, &syntax.Word{Parts: []syntax.WordPart{part}})
-				if lerr != nil {
-					return "", lerr
-				}
-				withSb.WriteString(s)
-			}
-			with = withSb.String()
+		// character (`\'` → `'`, `\\` → `\`, `\&` → `&`). With the
+		// patsub_replacement option an unquoted `&` is replaced by
+		// the matched text. [Config.replTemplate] resolves all of
+		// this into a template rendered per match.
+		segs, terr := cfg.replTemplate(pe.Repl.With)
+		if terr != nil {
+			return "", terr
 		}
+		matchSpecial := replHasMatch(segs)
+		with := renderRepl(segs, "")
 		n := 1
 		if pe.Repl.All {
 			n = -1
@@ -1043,7 +1138,11 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			last := 0
 			for _, loc := range locs {
 				sb.WriteString(elem[last:loc[0]])
-				sb.WriteString(with)
+				if matchSpecial {
+					sb.WriteString(renderRepl(segs, elem[loc[0]:loc[1]]))
+				} else {
+					sb.WriteString(with)
+				}
 				last = loc[1]
 			}
 			sb.WriteString(elem[last:])

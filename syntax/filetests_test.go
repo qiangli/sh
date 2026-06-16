@@ -3075,10 +3075,20 @@ var fileTests = []fileTestCase{
 		}, LangBash|LangMirBSDKorn|LangZsh),
 	),
 	fileTest(
-		[]string{`${foo///}`, `${foo//}`},
+		[]string{`${foo//}`},
 		langFile(&ParamExp{
 			Param: lit("foo"),
 			Repl:  &Replace{All: true},
+		}, LangBash|LangMirBSDKorn|LangZsh),
+	),
+	fileTest(
+		// A `/` as the very first character of the pattern is a literal,
+		// not the pattern/replacement separator: `${foo///}` is a
+		// global replacement of the pattern `/`. Matches bash.
+		[]string{`${foo////}`, `${foo///}`},
+		langFile(&ParamExp{
+			Param: lit("foo"),
+			Repl:  &Replace{All: true, Orig: litWord("/")},
 		}, LangBash|LangMirBSDKorn|LangZsh),
 	),
 	fileTest(
