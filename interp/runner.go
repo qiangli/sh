@@ -5662,8 +5662,13 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 								r.errf("%swarning: %s: circular name reference\n",
 									prefix, name)
 							} else {
-								r.errf("%s%s: %s: nameref variable self references not allowed\n",
-									r.bashErrPrefix(r.curStmtPos), cm.Variant.Value, name)
+								if as.Append {
+									r.errf("%s%s: nameref variable self references not allowed\n",
+										r.bashErrPrefix(r.curStmtPos), name)
+								} else {
+									r.errf("%s%s: %s: nameref variable self references not allowed\n",
+										r.bashErrPrefix(r.curStmtPos), cm.Variant.Value, name)
+								}
 								r.exit.code = 1
 								continue
 							}
