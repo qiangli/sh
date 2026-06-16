@@ -5632,7 +5632,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 							continue
 						}
 					}
-					if vr.Kind == expand.String && vr.Str != "" && !validNameRefTarget(vr.Str) {
+					if vr.Kind == expand.String && (vr.Str != "" || vr.Set) && !validNameRefTarget(vr.Str) {
 						r.errf("%s%s: `%s': invalid variable name for name reference\n",
 							r.bashErrPrefix(r.curStmtPos), cm.Variant.Value, vr.Str)
 						r.exit.code = 1
@@ -5698,8 +5698,18 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 							target = vr.Str + target
 						}
 						if !validNameRefTarget(target) {
-							r.errf("%s%s: `%s': invalid variable name for name reference\n",
-								r.bashErrPrefix(r.curStmtPos), cm.Variant.Value, target)
+							// An empty nameref value (`declare -n r=""`)
+							// is reported as a plain invalid identifier;
+							// a non-empty but malformed one keeps the
+							// "invalid variable name for name reference"
+							// wording.
+							if target == "" {
+								r.errf("%s%s: `': not a valid identifier\n",
+									r.bashErrPrefix(r.curStmtPos), cm.Variant.Value)
+							} else {
+								r.errf("%s%s: `%s': invalid variable name for name reference\n",
+									r.bashErrPrefix(r.curStmtPos), cm.Variant.Value, target)
+							}
 							r.exit.code = 1
 							continue
 						}
