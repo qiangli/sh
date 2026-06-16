@@ -80,6 +80,9 @@ func (o *overlayEnviron) normalize(name string) string {
 }
 
 func (o *overlayEnviron) Get(name string) expand.Variable {
+	if base, idx, ok := splitArrayRef(name); ok && syntax.ValidName(base) {
+		return environArrayElemAsScalar(idx, o.Get(base))
+	}
 	normalized := o.normalize(name)
 	if vr, ok := o.values[normalized]; ok {
 		return vr.Variable
@@ -88,6 +91,43 @@ func (o *overlayEnviron) Get(name string) expand.Variable {
 		return o.parent.Get(name)
 	}
 	return expand.Variable{}
+}
+
+func environArrayElemAsScalar(idx string, vr expand.Variable) expand.Variable {
+	elem := expand.Variable{
+		Kind:       expand.String,
+		Integer:    vr.Integer,
+		Upper:      vr.Upper,
+		Lower:      vr.Lower,
+		Capitalize: vr.Capitalize,
+	}
+	switch vr.Kind {
+	case expand.Indexed:
+		n, err := strconv.Atoi(idx)
+		if err != nil {
+			return elem
+		}
+		if n < 0 {
+			n = indexedNegativeOffset(vr, n)
+		}
+		if vr.IndexedSet(n) {
+			elem.Set = true
+			elem.Str = vr.List[n]
+		}
+	case expand.Associative:
+		if vr.Map != nil {
+			if s, ok := vr.Map[idx]; ok {
+				elem.Set = true
+				elem.Str = s
+			}
+		}
+	default:
+		if idx == "0" && vr.IsSet() {
+			elem.Set = true
+			elem.Str = vr.String()
+		}
+	}
+	return elem
 }
 
 func (o *overlayEnviron) Set(name string, vr expand.Variable) error {
