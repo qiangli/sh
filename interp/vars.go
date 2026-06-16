@@ -2259,7 +2259,7 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 		// numeric value (also re-parsed as arithmetic — bash 5.3
 		// honours integer-attribute math even when the prior value
 		// was stored as a literal expression like `4+1`).
-		if prev.Integer && valType != "-a" && valType != "-A" {
+		if prev.Integer && valType != "-n" && valType != "-a" && valType != "-A" {
 			arithEval := func(s string) (int, error) {
 				if s == "" {
 					return 0, nil
