@@ -4816,7 +4816,10 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				// attempting to assign. Bash reports an error and stops
 				// the loop in this case; in POSIX mode the whole
 				// non-interactive shell exits.
-				if r.lookupVar(name).ReadOnly {
+				if vr := r.lookupVar(name); vr.Kind == expand.NameRef {
+					vr.Str = field
+					r.setVar(name, vr)
+				} else if r.lookupVar(name).ReadOnly {
 					r.errf("%s%s: readonly variable\n",
 						r.bashErrPrefix(r.curStmtPos), name)
 					r.exit.code = 1
@@ -4824,8 +4827,9 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 						r.exit.exiting = true
 					}
 					break
+				} else {
+					r.setVarString(name, field)
 				}
-				r.setVarString(name, field)
 				trace.stringf("for %s in", y.Name.Value)
 				if inToken {
 					for _, item := range y.Items {

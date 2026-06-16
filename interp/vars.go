@@ -129,6 +129,10 @@ func (o *overlayEnviron) Set(name string, vr expand.Variable) error {
 		vr.ListSet = prev.ListSet
 		vr.Map = prev.Map
 	} else if prev.ReadOnly && prev.Declared() {
+		if prev.Kind == expand.NameRef && vr.Kind == expand.NameRef {
+			vr.ReadOnly = true
+			goto store
+		}
 		if !(prev.Kind == expand.NameRef && prev.Str == "" && vr.Kind == expand.String && vr.ReadOnly) {
 			return fmt.Errorf("readonly variable")
 		}
@@ -151,6 +155,7 @@ func (o *overlayEnviron) Set(name string, vr expand.Variable) error {
 		delete(o.values, normalized)
 	}
 	// modifying the entire variable
+store:
 	vr.Local = prev.Local || vr.Local
 	temp := prev.Temp || parentTemp
 	if vr.Local && !inOverlay {
