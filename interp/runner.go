@@ -6771,6 +6771,17 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 					r.namedFdAllocError(rd, arg)
 					return nil, fmt.Errorf("cannot duplicate fd")
 				}
+				// Bash 5.3 refuses `{var}>...` when var is a nameref with
+				// no target: storing the fd number sets the reference
+				// target, but a bare number is not a valid identifier, so
+				// it emits `exec: `N': not a valid identifier` and `<var>:
+				// cannot assign fd to variable` and abandons the redirect.
+				if v := r.lookupVar(name); v.Kind == expand.NameRef && v.Str == "" {
+					prefix := r.bashErrPrefix(rd.Pos())
+					r.errf("%sexec: `%d': not a valid identifier\n", prefix, targetFd)
+					r.errf("%s%s: cannot assign fd to variable\n", prefix, name)
+					return nil, fmt.Errorf("%s: cannot assign fd to variable", name)
+				}
 				namedFDVar = name
 			}
 		} else {
