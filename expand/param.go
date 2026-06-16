@@ -964,10 +964,21 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			strs = cfg.namesByPrefix(pe.Param.Value)
 			sortStrs = true
 		case pe.Index != nil && vr.Kind == Indexed:
+			if pe.Exp != nil && indirectAtOp(pe.Exp.Op) {
+				return "", fmt.Errorf("%s: invalid variable name", strings.Join(vr.IndexedValues(), " "))
+			}
 			for _, i := range vr.IndexedIndexes() {
 				strs = append(strs, strconv.Itoa(i))
 			}
 		case pe.Index != nil && vr.Kind == Associative:
+			if pe.Exp != nil && indirectAtOp(pe.Exp.Op) {
+				keys := vr.AssocKeysForDeclare()
+				vals := make([]string, len(keys))
+				for i, key := range keys {
+					vals[i] = vr.Map[key]
+				}
+				return "", fmt.Errorf("%s: invalid variable name", strings.Join(vals, " "))
+			}
 			strs = vr.AssocKeysForDeclare()
 		case orig.Kind == NameRef:
 			strs = append(strs, orig.Str)
@@ -1764,9 +1775,22 @@ func (cfg *Config) defaultPromptExpand(s string) string {
 		case '\\':
 			b.WriteByte('\\')
 		case '[':
-			b.WriteByte('\001')
+			end := promptMarkerEnd(s, i+1)
+			if end < 0 {
+				break
+			}
+			inner := cfg.defaultPromptExpand(s[i+1 : end])
+			switch inner {
+			case "":
+			case "\001":
+				b.WriteByte('\001')
+			default:
+				b.WriteByte('\001')
+				b.WriteString(inner)
+				b.WriteByte('\002')
+			}
+			i = end + 1
 		case ']':
-			b.WriteByte('\002')
 		case '0', '1', '2', '3', '4', '5', '6', '7':
 			end := i + 1
 			for end < len(s) && end < i+3 && s[end] >= '0' && s[end] <= '7' {
@@ -1782,6 +1806,15 @@ func (cfg *Config) defaultPromptExpand(s string) string {
 		}
 	}
 	return b.String()
+}
+
+func promptMarkerEnd(s string, start int) int {
+	for i := start; i+1 < len(s); i++ {
+		if s[i] == '\\' && s[i+1] == ']' {
+			return i
+		}
+	}
+	return -1
 }
 
 func (cfg *Config) expandPromptVars(s string) string {
