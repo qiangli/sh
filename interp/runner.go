@@ -5645,6 +5645,15 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 						vr.Str = ""
 					}
 				case "-n":
+					if vr.ReadOnly {
+						// Adding the nameref attribute to an existing
+						// readonly variable is rejected like any other
+						// attempt to modify it.
+						r.errf("%s%s: %s: readonly variable\n",
+							r.bashErrPrefix(r.curStmtPos), cm.Variant.Value, name)
+						r.exit.code = 1
+						continue
+					}
 					if vr.Kind == expand.Indexed || vr.Kind == expand.Associative {
 						r.errf("%s%s: %s: reference variable cannot be an array\n",
 							r.bashErrPrefix(r.curStmtPos), cm.Variant.Value, name)
