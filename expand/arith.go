@@ -424,6 +424,9 @@ func arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 		i := 0
 		for syntax.ValidName(str) {
 			vr := cfg.Env.Get(str)
+			if n, resolved := vr.Resolve(cfg.Env); n != "" {
+				vr = resolved
+			}
 			if !vr.IsSet() {
 				if cfg.NoUnset {
 					return 0, UnsetParameterError{Name: str, Message: "unbound variable"}
