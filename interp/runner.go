@@ -5521,6 +5521,12 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 						r.exit.code = 1
 						continue
 					}
+					if vr.Kind == expand.String && vr.Str != "" && !validNameRefTarget(vr.Str) {
+						r.errf("%s%s: `%s': invalid variable name for name reference\n",
+							r.bashErrPrefix(r.curStmtPos), cm.Variant.Value, vr.Str)
+						r.exit.code = 1
+						continue
+					}
 					// `typeset -n NAME` (no value) on an
 					// existing var converts it to a nameref
 					// pointing at whatever its current value
@@ -5552,7 +5558,12 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 						r.exit.code = 1
 						continue
 					}
-					if as.Value != nil {
+					if as.Value == nil {
+						r.errf("%s%s: `%s': invalid variable name for name reference\n",
+							r.bashErrPrefix(r.curStmtPos), cm.Variant.Value, "")
+						r.exit.code = 1
+						continue
+					} else {
 						target := r.literalForAssign(as.Value)
 						if as.Append {
 							target = vr.Str + target
