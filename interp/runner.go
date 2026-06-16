@@ -5457,6 +5457,8 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 					vr = expand.Variable{}
 				}
 			}
+			arrayElemDeclareOnNameref := as.Index != nil && vr.Kind == expand.NameRef &&
+				(valType == "-a" || valType == "-A" || slices.Contains(modes, "-a") || slices.Contains(modes, "-A"))
 			if valType != "-n" && (valType != "+n" || !as.Naked) {
 				resolveForAttr := valType == "-i" || valType == "-a" || valType == "-A"
 				for _, mode := range modes {
@@ -5465,7 +5467,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 						resolveForAttr = true
 					}
 				}
-				if resolveForAttr {
+				if resolveForAttr && !arrayElemDeclareOnNameref {
 					if n, resolved := vr.Resolve(r.writeEnv); n != "" {
 						name, vr = n, resolved
 					}
@@ -5589,6 +5591,16 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				}
 			} else {
 				prevForIndex := vr
+				if arrayElemDeclareOnNameref {
+					r.errf("%swarning: %s: removing nameref attribute\n",
+						r.bashErrPrefix(r.curStmtPos), name)
+					if valType == "-A" || slices.Contains(modes, "-A") {
+						vr = expand.Variable{Kind: expand.Associative}
+					} else {
+						vr = expand.Variable{Kind: expand.Indexed}
+					}
+					prevForIndex = vr
+				}
 				if valType == "-n" {
 					if as.Index != nil || as.Array != nil {
 						ref := name
