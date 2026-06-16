@@ -5561,6 +5561,12 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 						r.exit.code = 1
 						continue
 					}
+					if vr.Kind == expand.Indexed || vr.Kind == expand.Associative {
+						r.errf("%s%s: %s: reference variable cannot be an array\n",
+							r.bashErrPrefix(r.curStmtPos), cm.Variant.Value, name)
+						r.exit.code = 1
+						continue
+					}
 					if as.Value == nil {
 						r.errf("%s%s: `%s': not a valid identifier\n",
 							r.bashErrPrefix(r.curStmtPos), cm.Variant.Value, "")
