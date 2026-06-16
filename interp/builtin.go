@@ -2667,6 +2667,12 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			if len(args) > 0 {
 				arrayName = args[0]
 			}
+			if vr := r.lookupVar(arrayName); vr.Kind == expand.NameRef {
+				if _, _, ok := splitArrayRef(vr.Str); ok {
+					return failf(1, "read: `%s': not a valid identifier\n", vr.Str)
+				}
+				arrayName = vr.Str
+			}
 			// Use -1 as max to get all fields without joining the last ones.
 			values := expand.ReadFields(r.ecfg, string(line), -1, raw)
 			r.setVar(arrayName, expand.Variable{
@@ -3328,6 +3334,12 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				return failf(2, "%s: `%s': not a valid identifier\n", name, args[0])
 			}
 			arrayName = args[0]
+			if vr := r.lookupVar(arrayName); vr.Kind == expand.NameRef {
+				if _, _, ok := splitArrayRef(vr.Str); ok {
+					return failf(1, "%s: `%s': not a valid identifier\n", name, vr.Str)
+				}
+				arrayName = vr.Str
+			}
 		default:
 			return failf(2, "%s: Only one array name may be specified, %v\n", name, args)
 		}
