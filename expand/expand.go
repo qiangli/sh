@@ -3263,6 +3263,17 @@ func (cfg *Config) quotedElemFields(pe *syntax.ParamExp) ([]string, error) {
 	if err != nil || elems != nil {
 		return elems, err
 	}
+	if pe.Exp == nil && pe.Repl == nil && !pe.Excl && pe.Index == nil {
+		if vr := cfg.Env.Get(pe.Param.Value); vr.Kind == NameRef {
+			if base, idx, ok := nameRefArrayTarget(vr.Str); ok {
+				return cfg.quotedAllElemValues(&syntax.ParamExp{
+					Param: &syntax.Lit{Value: base},
+					Index: nameRefArrayTargetIndex(idx),
+					Slice: pe.Slice,
+				})
+			}
+		}
+	}
 	if pe.Exp != nil && pe.Repl == nil {
 		op := pe.Exp.Op
 		switch op {
@@ -3432,6 +3443,17 @@ func (cfg *Config) quotedAllElemValues(pe *syntax.ParamExp) ([]string, error) {
 	case "@":
 		return cfg.sliceElems(pe, cfg.Env.Get(name).List, true)
 	default:
+		if pe.Index == nil {
+			if vr := cfg.Env.Get(name); vr.Kind == NameRef {
+				if base, idx, ok := nameRefArrayTarget(vr.Str); ok {
+					return cfg.quotedAllElemValues(&syntax.ParamExp{
+						Param: &syntax.Lit{Value: base},
+						Index: nameRefArrayTargetIndex(idx),
+						Slice: pe.Slice,
+					})
+				}
+			}
+		}
 		switch nodeLit(pe.Index) {
 		case "@":
 			vr := cfg.Env.Get(name)
