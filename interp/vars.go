@@ -1055,7 +1055,11 @@ func (r *Runner) printNamerefVars() {
 	slices.Sort(names)
 	for _, name := range names {
 		vr := r.lookupVar(name)
-		r.outf("declare -n %s=%s\n", name, bashDeclareQuote(vr.Str))
+		if vr.Str == "" {
+			r.outf("declare -n %s\n", name)
+		} else {
+			r.outf("declare -n %s=%s\n", name, bashDeclareQuote(vr.Str))
+		}
 	}
 }
 
@@ -1140,6 +1144,9 @@ func formatDeclareVar(name string, vr expand.Variable, forceEmptyArrayValue bool
 		b.WriteByte(')')
 	default:
 		if !vr.Set {
+			return b.String()
+		}
+		if vr.Kind == expand.NameRef && vr.Str == "" {
 			return b.String()
 		}
 		b.WriteByte('=')
