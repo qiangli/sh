@@ -647,6 +647,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			if nameref {
 				// Skip the auto-resolve so we delete the nameref
 				// variable itself rather than its target.
+				if r.lookupVar(arg).ReadOnly {
+					r.errf("%sunset: %s: cannot unset: readonly variable\n", r.bashErrPrefix(pos), arg)
+					exit.code = 1
+					continue
+				}
 				r.delVar(arg)
 				continue
 			}
