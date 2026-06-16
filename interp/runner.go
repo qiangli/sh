@@ -5243,9 +5243,9 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 						modes = append(modes, flag)
 					case "+u", "+l", "+c":
 						modes = append(modes, flag)
-					case "+t":
-						// Bash accepts removing the trace attribute here;
-						// this interpreter does not model that attribute.
+					case "-t", "+t":
+						// Bash accepts the trace attribute here; this
+						// interpreter does not model that attribute.
 					case "-g":
 						global = true
 					case "-f", "-F":
