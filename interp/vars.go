@@ -2270,6 +2270,11 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 			valType = "-n"
 		}
 	}
+	// preserveArrayKind forces the array-element-0 store below even
+	// outside a declare-family context — used when a circular nameref
+	// rebinds onto an existing global array (see the max-nameref-depth
+	// branch), where bash keeps the array and writes element [0].
+	preserveArrayKind := false
 	if valType != "-n" {
 		// A self-referencing local nameref (`typeset -n v=v` inside a
 		// function) loops back to itself during assignment resolution.
@@ -2278,6 +2283,15 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 		if prev.Kind == expand.NameRef && prev.Str == name && name != "" {
 			r.errf("%swarning: %s: maximum nameref depth (8) exceeded\n",
 				r.bashErrPrefix(r.curStmtPos), name)
+			// Bash binds the value at the global scope. If that global
+			// variable already exists as an array, a scalar assignment
+			// lands in element [0] and keeps the array — so adopt the
+			// global variable as the target to preserve its kind rather
+			// than overwriting it with a plain scalar.
+			if g := r.lookupGlobalVar(name); g.Kind == expand.Indexed || g.Kind == expand.Associative {
+				prev = g
+				preserveArrayKind = true
+			}
 		}
 		if prev.Kind == expand.NameRef && as.Index == nil {
 			if base, idx, ok := splitArrayRef(prev.Str); ok && syntax.ValidName(base) {
@@ -2436,7 +2450,7 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 			// whole-variable assignments (`a=v`) in a declare-
 			// family context (declare/readonly/local/export), not
 			// to indexed forms or inline `v=foo cmd` calls.
-			if as.Index == nil && r.declAssignContext {
+			if as.Index == nil && (r.declAssignContext || preserveArrayKind) {
 				// `declare -a name=(elem1 elem2 …)` reaching here
 				// via string-form flattening hands us the raw
 				// `(elem1 …)` text. Bash also applies this
