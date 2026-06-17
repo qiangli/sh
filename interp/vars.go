@@ -2249,6 +2249,9 @@ func (r *Runner) assocAssignKeyLiteral(parts []syntax.WordPart) (string, bool) {
 		case *syntax.Lit:
 			b.WriteString(part.Value)
 		case *syntax.SglQuoted:
+			if part.Dollar {
+				return "", false
+			}
 			b.WriteString(part.Value)
 		case *syntax.DblQuoted:
 			s, ok := r.assocAssignKeyLiteral(part.Parts)
