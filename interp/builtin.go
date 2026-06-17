@@ -2592,6 +2592,23 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			}
 		}
 
+		// `read -a` requires an indexed array; bash refuses to read into
+		// an existing associative array.
+		if readArray {
+			arrayName := shellReplyVar
+			if len(args) > 0 {
+				arrayName = args[0]
+			}
+			if vr := r.lookupVar(arrayName); vr.Kind == expand.NameRef {
+				if _, _, ok := splitArrayRef(vr.Str); !ok {
+					arrayName = vr.Str
+				}
+			}
+			if vr := r.lookupVar(arrayName); vr.Kind == expand.Associative {
+				return failf(2, "read: %s: not an indexed array\n", arrayName)
+			}
+		}
+
 		// Resolve the reader: `-u N` opens fd N from the runner's
 		// fd table; otherwise we keep r.stdin. Swap r.stdin so
 		// readLine sees the requested source.
