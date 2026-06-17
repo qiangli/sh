@@ -2090,7 +2090,10 @@ func (cfg *Config) varInd(vr Variable, idx syntax.ArithmExpr) (string, error) {
 			}
 			return strings.Join(strs, " "), nil
 		}
-		val, err := Literal(cfg, idx.(*syntax.Word))
+		// A subscript key undergoes quote removal: an unquoted `\]` (or
+		// `\[`) in `${a[\]]}` resolves to the literal key `]`, matching the
+		// way the assignment side stored it.
+		val, err := LiteralWithQuoteRemoval(cfg, idx.(*syntax.Word))
 		if err != nil {
 			return "", err
 		}
