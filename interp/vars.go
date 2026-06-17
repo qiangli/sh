@@ -2219,7 +2219,7 @@ func bashAssocAssignKey(s string, quoted bool) string {
 			switch s[i+1] {
 			case '"', '\'', '$', '`', '\\', '[':
 				i++
-			case ']':
+			case ']', ')':
 				if !quoted {
 					i++
 				}
