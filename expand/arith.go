@@ -500,6 +500,7 @@ func arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 				return 0, fmt.Errorf("arithmetic syntax error: operand expected (error token is %q)", token)
 			}
 			return 0, &ArithmError{
+				Expr: expr,
 				Text: str,
 				Err:  fmt.Errorf("arithmetic syntax error: operand expected (error token is %q)", token),
 			}
@@ -878,7 +879,13 @@ func (cfg *Config) resolveAritLvalue(lval arithLvalue) (arithLvalue, error) {
 	if arithEmptyQuotedIndex(lval.index) && !lval.fromString && !cfg.LetArithmetic {
 		return lval, fmt.Errorf("`%s[]': not a valid identifier", lval.name)
 	}
+	// The subscript is its own arithmetic (sub)expression, not an operand
+	// of the surrounding operator (`a[$idx]++`), so reset arithmInOperand
+	// to report a re-parsed $( … ) subscript by its own expanded text.
+	prevOperand := cfg.arithmInOperand
+	cfg.arithmInOperand = false
 	index, err := Arithm(cfg, lval.index)
+	cfg.arithmInOperand = prevOperand
 	if err != nil {
 		return lval, err
 	}
