@@ -2735,7 +2735,10 @@ func (cfg *Config) substWordFields(pe *syntax.ParamExp) ([][]fieldPart, bool, er
 		if cannotAssignParam(pe.Param.Value) {
 			return nil, false, fmt.Errorf("$%s: cannot assign in this way", pe.Param.Value)
 		}
-		if err := cfg.envSet(pe.Param.Value, assignVal); err != nil {
+		// Honour an array subscript (`${a[$b]:=val}`): without it an
+		// assignment whose value splits into fields would land on element
+		// [0] of an associative array instead of the intended key.
+		if err := cfg.envSetIndex(pe.Param.Value, pe.Index, assignVal); err != nil {
 			return nil, false, err
 		}
 		return cfg.escapedLitFields(assignVal), true, nil
