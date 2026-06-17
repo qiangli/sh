@@ -1188,7 +1188,7 @@ func bashAssocKeyQuote(s string) string {
 		case 'a' <= c && c <= 'z',
 			'A' <= c && c <= 'Z',
 			'0' <= c && c <= '9',
-			c == '_', c == '.', c == '%', c == '-':
+			c == '_', c == '.', c == '%', c == '-', c == '/':
 			continue
 		default:
 			return bashDeclareQuote(s)
@@ -2231,6 +2231,19 @@ func bashAssocAssignKey(s string, quoted bool) string {
 }
 
 func (r *Runner) assocAssignKey(w *syntax.Word) string {
+	key := r.assocAssignKeyRaw(w)
+	// A subscript whose leading literal is an unquoted tilde introduces a
+	// tilde prefix (`aa[~/key]=v`); bash tilde-expands it just like the
+	// rest of the assignment word.
+	if len(w.Parts) > 0 {
+		if lit, ok := w.Parts[0].(*syntax.Lit); ok && strings.HasPrefix(lit.Value, "~") {
+			key = expand.ExpandTildeAssign(r.ecfg, key)
+		}
+	}
+	return key
+}
+
+func (r *Runner) assocAssignKeyRaw(w *syntax.Word) string {
 	if len(w.Parts) == 1 {
 		if lit, ok := w.Parts[0].(*syntax.Lit); ok {
 			return bashAssocAssignKey(lit.Value, false)

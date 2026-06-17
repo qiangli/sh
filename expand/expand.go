@@ -393,6 +393,19 @@ func LiteralWithQuoteRemoval(cfg *Config, word *syntax.Word) (string, error) {
 	return cfg.fieldJoin(field), nil
 }
 
+// ExpandTildeAssign applies assignment-context tilde expansion to s,
+// expanding a leading tilde prefix (`~`, `~/path`, `~user`, `~+`, `~-`)
+// exactly as bash does for an associative-array subscript key in an
+// assignment such as `aa[~/key]=value`. If s has no expandable tilde
+// prefix it is returned unchanged.
+func ExpandTildeAssign(cfg *Config, s string) string {
+	cfg = prepareConfig(cfg)
+	if prefix, rest := cfg.expandUser(s, false); prefix != "" {
+		return prefix + rest
+	}
+	return s
+}
+
 // LiteralForAssign is like [Literal] but applies bash's assignment-only
 // tilde expansion: a `~` (or `~user`) immediately following a `:` or `=`
 // inside an unquoted literal also expands to the user's home directory.

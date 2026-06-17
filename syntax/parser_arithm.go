@@ -198,6 +198,19 @@ func (p *Parser) arithmExprUnary(compact bool) ArithmExpr {
 		p.got(_Newl)
 	}
 
+	// In an assignment array subscript (`a[~/key]=v` or `arr=([~/key]=v)`),
+	// a leading `~` introduces an associative-array key (e.g. a tilde path),
+	// not bitwise negation. Capture the whole subscript as a raw word so the
+	// interpreter can use it literally for associative arrays and still
+	// arithmetic-evaluate it for indexed ones, mirroring bash's skipsubscript.
+	if p.tok == tilde && p.rawAssignIndex && p.assignIndexWords &&
+		p.quote == paramExpArithm && !p.lang.in(LangZsh) {
+		l := p.lit(p.pos, "~")
+		p.nextArith(compact)
+		p.appendAssignIndexWord(l)
+		return p.wordOne(l)
+	}
+
 	switch UnAritOperator(p.tok) {
 	case Not, BitNegation, Plus, Minus:
 		ue := &UnaryArithm{OpPos: p.pos, Op: UnAritOperator(p.tok)}

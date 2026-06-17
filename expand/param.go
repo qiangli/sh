@@ -1763,7 +1763,7 @@ func bashAssocKeyQuote(s string) string {
 		case 'a' <= c && c <= 'z',
 			'A' <= c && c <= 'Z',
 			'0' <= c && c <= '9',
-			c == '_', c == '.', c == '%', c == '-':
+			c == '_', c == '.', c == '%', c == '-', c == '/':
 			continue
 		default:
 			return bashDeclareQuote(s)
