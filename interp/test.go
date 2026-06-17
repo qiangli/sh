@@ -644,6 +644,15 @@ func (r *Runner) varIsSetForTest(name string, classic bool) bool {
 		if index == "@" || index == "*" {
 			return vr.IndexedCount() > 0
 		}
+		// An already-expanded subscript with a literal $( … )/`…` is an
+		// arithmetic operand error in bash, reported without re-execution.
+		if tok := expand.ArithmCmdSubstToken(index); tok != "" {
+			r.expandErr(&expand.ArithmError{
+				Text: index,
+				Err:  fmt.Errorf("arithmetic syntax error: operand expected (error token is %q)", tok),
+			})
+			return false
+		}
 		i, err := strconv.Atoi(index)
 		return err == nil && vr.IndexedSet(i)
 	case expand.Associative:
