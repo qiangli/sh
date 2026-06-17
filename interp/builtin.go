@@ -223,11 +223,19 @@ func subscriptQuotesBalanced(s string) bool {
 // scanned again via skipsubscript, so one left inside an unclosed quote
 // (`a[80's]`) is rejected as not a valid identifier.
 func (r *Runner) builtinAssignNameValid(name string) bool {
+	if opt, _ := r.bashOptByName("assoc_expand_once"); opt != nil && *opt {
+		// With assoc_expand_once the subscript was expanded once during
+		// word expansion and is taken literally — bash does not re-parse
+		// it, so a key carrying brackets (`A[$rkey]` with rkey=`]` →
+		// `A[]]`) is the literal key `]`, not an invalid reference.
+		if syntax.ValidName(name) {
+			return true
+		}
+		base, idx, ok := splitArrayRef(name)
+		return ok && idx != "" && syntax.ValidName(base)
+	}
 	if !validBuiltinAssignName(name) {
 		return false
-	}
-	if opt, _ := r.bashOptByName("assoc_expand_once"); opt != nil && *opt {
-		return true
 	}
 	if _, idx, ok := splitArrayRef(name); ok && !subscriptQuotesBalanced(idx) {
 		return false
