@@ -5821,7 +5821,17 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				if as.Index != nil && (vr.Kind == expand.Associative || valType == "-A") {
 					if w, ok := as.Index.(*syntax.Word); ok {
 						key := r.assocAssignKey(w)
-						if strings.Contains(key, "]") && !assocAssignKeyQuoted(w.Parts) {
+						// A subscript that closes its bracket early (`foo]bar`)
+						// is always invalid. A dangling open bracket (`foo[bar`)
+						// is only rejected without assoc_expand_once: with it
+						// set, the once-expanded subscript is taken literally and
+						// the stray `[` survives as part of the key.
+						expandOnce := false
+						if opt, _ := r.bashOptByName("assoc_expand_once"); opt != nil {
+							expandOnce = *opt
+						}
+						closesEarly, unbalancedOpen := assocSubscriptBracketIssue(key)
+						if closesEarly || (!expandOnce && unbalancedOpen) {
 							assignForm := name + "[" + key + "]"
 							if as.Value != nil {
 								assignForm += "=" + r.literalForAssign(as.Value)

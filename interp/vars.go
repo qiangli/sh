@@ -1400,6 +1400,36 @@ func (r *Runner) forceDelVar(name string) {
 // like `unset` to address a single array element. Returns the bare
 // variable name and the (unparsed) index expression; ok is false if
 // the input is not in the `NAME[INDEX]` form.
+// assocSubscriptBracketIssue scans key — the already quote-removed
+// subscript of a declare-family builtin target (`declare name[key]=value`)
+// — the way bash's skipsubscript does, and reports two kinds of trouble.
+//
+// closesEarly is true when a `]` drops the bracket depth to zero before the
+// end of the key (`foo]bar`, `]`), so the real closing bracket is followed
+// by junk. unbalancedOpen is true when a `[` is left open at the end
+// (`foo[bar`). Balanced nested brackets (`a[0]`) report neither.
+//
+// Builtin arguments are word-expanded before the builtin parses them, so
+// the quotes that protect brackets in a direct assignment are gone. bash
+// always rejects an early close, but only rejects a dangling open bracket
+// when assoc_expand_once is unset (with it set, the once-expanded subscript
+// is taken literally and the stray `[` survives).
+func assocSubscriptBracketIssue(key string) (closesEarly, unbalancedOpen bool) {
+	depth := 1
+	for i := 0; i < len(key); i++ {
+		switch key[i] {
+		case '[':
+			depth++
+		case ']':
+			depth--
+			if depth == 0 {
+				return true, false
+			}
+		}
+	}
+	return false, depth != 1
+}
+
 func splitArrayRef(s string) (name, idx string, ok bool) {
 	lb := strings.IndexByte(s, '[')
 	if lb <= 0 || !strings.HasSuffix(s, "]") {
