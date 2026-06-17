@@ -202,6 +202,13 @@ type Config struct {
 	// `let` builtin, whose subscript quote handling differs from
 	// arithmetic commands and arithmetic expansion.
 	LetArithmetic bool
+
+	// arithmInOperand is true while evaluating a direct operand of a
+	// binary or unary arithmetic operator. Bash reports the *whole*
+	// expression as the error text for such operands (e.g. `jv += $iv`),
+	// whereas a standalone operand or array subscript reports only its
+	// own expanded text (e.g. a re-parsed `$( … )` subscript value).
+	arithmInOperand bool
 }
 
 // UnexpectedCommandError is returned if a command substitution is encountered

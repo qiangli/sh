@@ -124,7 +124,13 @@ func (cfg *Config) arithmIndexedParamLiteral(word *syntax.Word) (string, bool, e
 	if vr.Kind == Associative {
 		return "", false, nil
 	}
+	// An array subscript is its own arithmetic (sub)expression, not an
+	// operand of the surrounding operator, so reset arithmInOperand: a
+	// re-parsed `$( … )` subscript value reports only its own text.
+	prevOperand := cfg.arithmInOperand
+	cfg.arithmInOperand = false
 	index, err := Arithm(cfg, pe.Index)
+	cfg.arithmInOperand = prevOperand
 	if err != nil {
 		return "", true, err
 	}
@@ -485,7 +491,18 @@ func arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 			}
 		}
 		if token := literalDollarArithmToken(str); token != "" {
-			return 0, fmt.Errorf("arithmetic syntax error: operand expected (error token is %q)", token)
+			// For a standalone operand (top-level expression or an array
+			// subscript) bash reports the operand's own expanded text. For
+			// a direct operand of an operator (`jv += $iv`) it reports the
+			// surrounding expression instead, so leave Text empty and let
+			// the caller print the full source expression.
+			if cfg.arithmInOperand {
+				return 0, fmt.Errorf("arithmetic syntax error: operand expected (error token is %q)", token)
+			}
+			return 0, &ArithmError{
+				Text: str,
+				Err:  fmt.Errorf("arithmetic syntax error: operand expected (error token is %q)", token),
+			}
 		}
 		n, err := atoiCheck(str)
 		if err != nil {
@@ -495,6 +512,9 @@ func arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 	case *syntax.ParenArithm:
 		return Arithm(cfg, expr.X)
 	case *syntax.UnaryArithm:
+		prevOperand := cfg.arithmInOperand
+		cfg.arithmInOperand = true
+		defer func() { cfg.arithmInOperand = prevOperand }()
 		switch expr.Op {
 		case syntax.Inc, syntax.Dec:
 			// Bash 5.3 distinguishes:
@@ -597,6 +617,9 @@ func arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 			return 0, fmt.Errorf("unsupported unary arithmetic operator: %q", expr.Op)
 		}
 	case *syntax.BinaryArithm:
+		prevOperand := cfg.arithmInOperand
+		cfg.arithmInOperand = true
+		defer func() { cfg.arithmInOperand = prevOperand }()
 		switch expr.Op {
 		case syntax.Assgn, syntax.AddAssgn, syntax.SubAssgn,
 			syntax.MulAssgn, syntax.QuoAssgn, syntax.RemAssgn,
@@ -1026,10 +1049,49 @@ func literalDollarArithmToken(s string) string {
 			// Otherwise, $name as a bare operand is an error.
 			return s[i:j]
 		}
-		// Bare $ not followed by a name start is an error.
-		return "$"
+		// Bare $ not followed by a name: for $( command substitution or
+		// ${ parameter expansion, bash reports the *entire* construct as
+		// the error token, since already-expanded text is re-parsed as a
+		// literal arithmetic operand without re-running expansions.
+		return arithmDollarSpan(s, i)
 	}
 	return ""
+}
+
+// arithmDollarSpan returns the text of a $-introduced construct starting
+// at index i in s: the balanced $( ... ) for command substitution, the
+// ${ ... } for parameter expansion, or a bare "$" otherwise.
+func arithmDollarSpan(s string, i int) string {
+	j := i + 1
+	if j >= len(s) {
+		return "$"
+	}
+	switch s[j] {
+	case '(':
+		depth := 0
+		for j < len(s) {
+			switch s[j] {
+			case '(':
+				depth++
+			case ')':
+				depth--
+				if depth == 0 {
+					return s[i : j+1]
+				}
+			}
+			j++
+		}
+		return s[i:]
+	case '{':
+		for j < len(s) && s[j] != '}' {
+			j++
+		}
+		if j < len(s) {
+			j++
+		}
+		return s[i:j]
+	}
+	return "$"
 }
 
 func arithmParseError(s string, err error) error {
