@@ -556,6 +556,17 @@ func (r *Runner) letArithm(expr syntax.ArithmExpr) int {
 		exprTextOverride = arithErr.Text
 		err = arithErr.Err
 	}
+	// A re-parsed $( … )/`…` operand reports as "<operand>: <msg>" with
+	// no `let:` framing, the same as arithmetic expansion and commands.
+	if err != nil && r.bashCompatErrors && exprTextOverride != "" {
+		if msg := err.Error(); strings.Contains(msg, "arithmetic syntax error: operand expected") &&
+			(strings.Contains(msg, "error token is \"$") || strings.Contains(msg, "error token is \"`")) {
+			err = r.bashArithmError(expr, err, false, exprTextOverride)
+			r.lastArithErr = err
+			r.expandErr(err)
+			return n
+		}
+	}
 	if err != nil && r.bashCompatErrors {
 		exprText := r.arithmSourceText(expr, false)
 		if exprTextOverride != "" {
