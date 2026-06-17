@@ -946,7 +946,10 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 		elems = []string{str}
 	}
 	joinModifiedElems := func(out []string) string {
-		if indexAllElements && nodeLit(index) == "*" && vr.Kind == Associative {
+		// A `[*]` index joins the (modified) elements with the first
+		// character of IFS, for indexed and associative arrays alike;
+		// `[@]` joins with a plain space when collapsed to a scalar.
+		if indexAllElements && nodeLit(index) == "*" {
 			return cfg.ifsJoin(out)
 		}
 		return strings.Join(out, " ")
