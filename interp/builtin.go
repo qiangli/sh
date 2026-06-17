@@ -222,17 +222,29 @@ func subscriptQuotesBalanced(s string) bool {
 // an already-expanded subscript: without assoc_expand_once the subscript is
 // scanned again via skipsubscript, so one left inside an unclosed quote
 // (`a[80's]`) is rejected as not a valid identifier.
-func (r *Runner) builtinAssignNameValid(name string) bool {
+func (r *Runner) builtinAssignNameValid(name string, quoted bool) bool {
 	if opt, _ := r.bashOptByName("assoc_expand_once"); opt != nil && *opt {
 		// With assoc_expand_once the subscript was expanded once during
 		// word expansion and is taken literally — bash does not re-parse
-		// it, so a key carrying brackets (`A[$rkey]` with rkey=`]` →
-		// `A[]]`) is the literal key `]`, not an invalid reference.
+		// it, so an unquoted target's bracket structure is known from the
+		// source word: `A[$rkey]` with rkey=`]` keeps the literal key `]`.
 		if syntax.ValidName(name) {
 			return true
 		}
 		base, idx, ok := splitArrayRef(name)
-		return ok && idx != "" && syntax.ValidName(base)
+		if !ok || idx == "" || !syntax.ValidName(base) {
+			return false
+		}
+		// A fully quoted target (`"A[$k]"`) is not recognised as an array
+		// reference at parse time; bash re-scans the once-expanded string
+		// with skipsubscript, so a subscript whose `]` closes before the
+		// end (`A[]]`) leaves trailing junk and is rejected.
+		if quoted {
+			if closesEarly, _ := assocSubscriptBracketIssue(idx); closesEarly {
+				return false
+			}
+		}
+		return true
 	}
 	if !validBuiltinAssignName(name) {
 		return false
@@ -241,6 +253,78 @@ func (r *Runner) builtinAssignNameValid(name string) bool {
 		return false
 	}
 	return true
+}
+
+// builtinTargetTokenQuoted reports whether the source token on the builtin's
+// command line whose first byte is `target[0]` and that contains target's base
+// name began with a quote. It is a best-effort source scan (mirroring
+// unsetOperandSources) used only to decide whether a once-expanded array
+// subscript should be re-scanned strictly. When the source can't be recovered
+// it returns false (lenient).
+func (r *Runner) builtinTargetQuoted(pos syntax.Pos, base string) bool {
+	offs, ok := r.sourceOffset(pos)
+	if !ok {
+		return false
+	}
+	end := offs
+	for end < len(r.bashSource) && r.bashSource[end] != '\n' {
+		end++
+	}
+	line := string(r.bashSource[offs:end])
+	i := 0
+	for i < len(line) {
+		for i < len(line) && (line[i] == ' ' || line[i] == '\t') {
+			i++
+		}
+		if i >= len(line) {
+			break
+		}
+		start := i
+		quoted := line[i] == '\'' || line[i] == '"'
+		for i < len(line) {
+			c := line[i]
+			if c == ' ' || c == '\t' {
+				break
+			}
+			switch c {
+			case '\\':
+				i += 2
+			case '\'':
+				i++
+				for i < len(line) && line[i] != '\'' {
+					i++
+				}
+				if i < len(line) {
+					i++
+				}
+			case '"':
+				i++
+				for i < len(line) {
+					if line[i] == '\\' {
+						i += 2
+						continue
+					}
+					if line[i] == '"' {
+						i++
+						break
+					}
+					i++
+				}
+			default:
+				i++
+			}
+		}
+		tok := line[start:i]
+		// A quoted target reference like "A[$k]" begins with the quote and
+		// carries the base name right after it: match `"`+base+`[`.
+		if quoted && len(tok) >= len(base)+2 &&
+			(tok[0] == '"' || tok[0] == '\'') &&
+			strings.HasPrefix(tok[1:], base) &&
+			len(tok) > len(base)+1 && tok[len(base)+1] == '[' {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *Runner) unsetBuiltinArrayElem(name, idx string) bool {
@@ -860,7 +944,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				if assignTo == "" {
 					return failf(2, "printf: -v: option requires an argument\n")
 				}
-				if !r.builtinAssignNameValid(assignTo) {
+				targetBase := assignTo
+				if b, _, ok := splitArrayRef(assignTo); ok {
+					targetBase = b
+				}
+				if !r.builtinAssignNameValid(assignTo, r.builtinTargetQuoted(pos, targetBase)) {
 					if r.bashCompatErrors {
 						return failf(1, "printf: `%s': not a valid identifier\n", assignTo)
 					}
@@ -2587,7 +2675,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 
 		args := fp.args()
 		for _, name := range args {
-			if !r.builtinAssignNameValid(name) {
+			targetBase := name
+			if b, _, ok := splitArrayRef(name); ok {
+				targetBase = b
+			}
+			if !r.builtinAssignNameValid(name, r.builtinTargetQuoted(pos, targetBase)) {
 				return failf(2, "read: `%s': not a valid identifier\n", name)
 			}
 		}
