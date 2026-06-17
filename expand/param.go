@@ -1539,7 +1539,11 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			case "K":
 				str = cfg.paramAtK(vr, name)
 			case "k":
-				str = cfg.paramAtK(vr, name)
+				if indexAllElements && nodeLit(index) == "*" {
+					str = strings.Join(cfg.paramAtKFields(vr, name), " ")
+				} else {
+					str = cfg.paramAtK(vr, name)
+				}
 			case "P":
 				str = cfg.expandPrompt(str)
 			default:
