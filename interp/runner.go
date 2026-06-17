@@ -5948,6 +5948,14 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 							prevForIndex = resolved
 						}
 					}
+					// Attributes (-i, -u, -l, -c) apply to an existing array
+					// variable even when the element assignment fails on a bad
+					// subscript; bash persists them first (`declare -i
+					// a[$badsub]=v` leaves `a` integer-tagged).
+					if (prevForIndex.Integer || prevForIndex.Upper || prevForIndex.Lower || prevForIndex.Capitalize) &&
+						(prevForIndex.Kind == expand.Indexed || prevForIndex.Kind == expand.Associative) {
+						r.setVar(name, prevForIndex)
+					}
 					r.setVarWithIndex(prevForIndex, name, as.Index, vr)
 					continue
 				}
