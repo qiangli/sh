@@ -302,6 +302,28 @@ func (cfg *Config) integerValue(value string) (string, error) {
 	return strconv.Itoa(n), nil
 }
 
+// foldCaseAttr applies a variable's `declare -u`/`-l`/`-c` case-folding
+// attribute to an assigned value, matching interp's applyCaseAttr.
+func foldCaseAttr(vr Variable, value string) string {
+	switch {
+	case vr.Upper:
+		return strings.ToUpper(value)
+	case vr.Lower:
+		return strings.ToLower(value)
+	case vr.Capitalize:
+		if value == "" {
+			return value
+		}
+		rs := []rune(value)
+		rs[0] = unicode.ToUpper(rs[0])
+		for i := 1; i < len(rs); i++ {
+			rs[i] = unicode.ToLower(rs[i])
+		}
+		return string(rs)
+	}
+	return value
+}
+
 func (cfg *Config) envSetIndex(name string, idx syntax.ArithmExpr, value string) error {
 	wenv, ok := cfg.Env.(WriteEnviron)
 	if !ok {
@@ -313,12 +335,6 @@ func (cfg *Config) envSetIndex(name string, idx syntax.ArithmExpr, value string)
 
 	vr := cfg.Env.Get(name)
 
-	// Check for special indices
-	switch nodeLit(idx) {
-	case "@", "*":
-		return fmt.Errorf("%s: cannot assign in this way", name)
-	}
-
 	// An integer-attributed array (`declare -ai`/`declare -Ai`) evaluates
 	// each assigned element value as an arithmetic expression.
 	if vr.Integer {
@@ -327,6 +343,25 @@ func (cfg *Config) envSetIndex(name string, idx syntax.ArithmExpr, value string)
 			return err
 		}
 		value = v
+	}
+
+	// Check for special indices. `@` and `*` cannot be assigned to an
+	// indexed array or scalar, but for an associative array they are
+	// ordinary literal keys (`${A[@]:=v}` sets key `@`).
+	switch nodeLit(idx) {
+	case "@", "*":
+		if vr.Kind != Associative {
+			return fmt.Errorf("%s: cannot assign in this way", name)
+		}
+		if vr.Map == nil {
+			vr.Map = make(map[string]string)
+		} else {
+			vr.Map = maps.Clone(vr.Map)
+		}
+		vr.Set = true
+		vr.Kind = Associative
+		vr.Map[nodeLit(idx)] = value
+		return wenv.Set(name, vr)
 	}
 
 	if vr.Kind == Associative {
@@ -1439,13 +1474,16 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 					return "", err
 				}
 				str = arg
-				// Reflect the integer-attribute evaluation that
-				// envSetIndex applied to the stored element, so the
-				// expansion result matches (`${a[42]=4+3}` → 7).
-				if vr.Integer && index != nil {
+				// Reflect the value-transforming attributes that the
+				// assignment applies to the stored element, so the
+				// expansion result matches: integer (`${a[42]=4+3}` → 7)
+				// and case-folding (`${A[k]=foo}` on `declare -u` → FOO).
+				if vr.Integer {
 					if v, err := cfg.integerValue(arg); err == nil {
 						str = v
 					}
+				} else {
+					str = foldCaseAttr(vr, arg)
 				}
 			}
 		case syntax.RemSmallPrefix, syntax.RemLargePrefix,
