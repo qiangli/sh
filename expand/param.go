@@ -945,6 +945,12 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 	if !indexAllElements {
 		elems = []string{str}
 	}
+	joinModifiedElems := func(out []string) string {
+		if indexAllElements && nodeLit(index) == "*" && vr.Kind == Associative {
+			return cfg.ifsJoin(out)
+		}
+		return strings.Join(out, " ")
+	}
 
 	switch {
 	case pe.Names != 0 && !pe.Excl:
@@ -1256,7 +1262,7 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			sb.WriteString(elem[last:])
 			return sb.String()
 		}
-		if indexAllElements && nodeLit(index) == "*" && !replAnchoredStart && !replAnchoredEnd {
+		if indexAllElements && nodeLit(index) == "*" && vr.Kind != Associative && !replAnchoredStart && !replAnchoredEnd {
 			target := str
 			if name == "*" {
 				target = cfg.ifsJoin(elems)
@@ -1268,7 +1274,7 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 		for i, elem := range out {
 			out[i] = replaceOne(elem)
 		}
-		str = strings.Join(out, " ")
+		str = joinModifiedElems(out)
 	case pe.Exp != nil:
 		// Bash 5.3 keeps `$'…'` ANSI-C sequences literal inside the
 		// substitute text of a default-value parameter expansion
@@ -1401,7 +1407,7 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			for i, elem := range out {
 				out[i] = cfg.removePattern(elem, arg, suffix, small)
 			}
-			str = strings.Join(out, " ")
+			str = joinModifiedElems(out)
 		case syntax.UpperFirst, syntax.UpperAll,
 			syntax.LowerFirst, syntax.LowerAll,
 			syntax.CaseToggleFirst, syntax.CaseToggleAll:
@@ -1450,7 +1456,7 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 				}
 				out[i] = string(rs)
 			}
-			str = strings.Join(out, " ")
+			str = joinModifiedElems(out)
 		case syntax.OtherParamOps:
 			if pe.Exp.Word == nil || len(pe.Exp.Word.Parts) != 1 {
 				return "", BadSubstitutionError{Node: pe}
