@@ -59,6 +59,10 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 			r.errf("%swarning: %s: circular name reference\n",
 				r.bashErrPrefix(r.curStmtPos), name)
 		},
+		OnBadArraySubscript: func(ref string) {
+			r.errf("%s%s: bad array subscript\n",
+				r.bashErrPrefix(r.curStmtPos), ref)
+		},
 		OnFormatWarning: func(msg string) {
 			// Bash 5.3 printf: numeric-conversion failures
 			// (e.g. `printf %d xyz`) print the warning and set

@@ -124,6 +124,21 @@ func (cfg *Config) arithmIndexedParamLiteral(word *syntax.Word) (string, bool, e
 	if vr.Kind == Associative {
 		return "", false, nil
 	}
+	// An empty subscript (`y[$none]` where $none is unset expands to the
+	// literal `y[]`) is rejected by bash's arithmetic evaluator while it
+	// parses the array reference's name part — before any arithmetic is
+	// evaluated. The evaluator parses the reference twice (once to resolve
+	// the variable, once to read its value), so the diagnostic fires twice
+	// and the reference evaluates to 0.
+	if word, ok := pe.Index.(*syntax.Word); ok {
+		if sub, lerr := cfg.arithmLiteral(word); lerr == nil && sub == "" {
+			if cfg.OnBadArraySubscript != nil {
+				cfg.OnBadArraySubscript(name + "[]")
+				cfg.OnBadArraySubscript(name + "[]")
+			}
+			return "0", true, nil
+		}
+	}
 	// An array subscript is its own arithmetic (sub)expression, not an
 	// operand of the surrounding operator, so reset arithmInOperand: a
 	// re-parsed `$( … )` subscript value reports only its own text.

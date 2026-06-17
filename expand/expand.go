@@ -136,6 +136,16 @@ type Config struct {
 	// "circular name reference" warning and treats the value as unset.
 	OnNameRefCircular func(name string)
 
+	// OnBadArraySubscript is called when an arithmetic array reference
+	// has an empty subscript (`y[$none]` with $none unset expands to the
+	// literal `y[]`). Bash's arithmetic evaluator parses the subscript
+	// twice — once to resolve the variable, once to read its value — and
+	// each parse reports `bad array subscript`, so this callback fires
+	// once per parse (twice for a single reference). The callback is
+	// responsible for emitting the diagnostic; the reference itself
+	// evaluates to 0. If nil, the empty subscript silently yields 0.
+	OnBadArraySubscript func(ref string)
+
 	bufferAlloc strings.Builder
 	fieldAlloc  [4]fieldPart
 	fieldsAlloc [4][]fieldPart
