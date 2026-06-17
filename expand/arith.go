@@ -1026,6 +1026,31 @@ func numericLiteralLike(s string) bool {
 	return false
 }
 
+// ArithmCmdSubstToken reports the full text of a command substitution
+// ($( … ) or `…`) found in an already-expanded arithmetic string, or ""
+// if none. Callers re-evaluating expanded array subscripts use it to
+// detect substitutions that bash treats as literal operands and never
+// re-executes. Bare $name / ${ … } are left for normal evaluation, as
+// they carry no execution and may legitimately reach arithmetic.
+func ArithmCmdSubstToken(s string) string {
+	for i := 0; i < len(s); i++ {
+		switch {
+		case s[i] == '`':
+			j := i + 1
+			for j < len(s) && s[j] != '`' {
+				j++
+			}
+			if j < len(s) {
+				j++
+			}
+			return s[i:j]
+		case s[i] == '$' && i+1 < len(s) && s[i+1] == '(':
+			return arithmDollarSpan(s, i)
+		}
+	}
+	return ""
+}
+
 func literalDollarArithmToken(s string) string {
 	for i := 0; i < len(s); i++ {
 		if s[i] != '$' {

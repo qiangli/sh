@@ -1466,6 +1466,17 @@ func (r *Runner) unsetArrayElem(name, idx string) bool {
 	vr := r.lookupVar(name)
 	switch vr.Kind {
 	case expand.Indexed:
+		// This subscript is already expanded; a residual $( … )/`…`
+		// command substitution is literal text bash treats as a failed
+		// arithmetic operand and never re-executes. Report it directly
+		// and leave the element untouched.
+		if tok := expand.ArithmCmdSubstToken(idx); tok != "" {
+			r.expandErr(&expand.ArithmError{
+				Text: idx,
+				Err:  fmt.Errorf("arithmetic syntax error: operand expected (error token is %q)", tok),
+			})
+			return false
+		}
 		n64, err := r.arithFromString(idx)
 		if err != nil {
 			r.errf("%sunset: [%s]: bad array subscript\n", r.bashErrPrefix(r.curStmtPos), idx)
