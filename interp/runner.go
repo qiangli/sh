@@ -942,6 +942,17 @@ func (r *Runner) bashArithmError(expr syntax.ArithmExpr, err error, command bool
 			return fmt.Errorf("%s: line %d: %s: %s",
 				prefix, line, exprText, bashMsg)
 		}
+		// An operand-expected error whose token is a re-parsed
+		// $(…)/${…}/`…` expansion is reported by bash directly as
+		// "<expanded operand>: <msg>" with no ((: …) command wrapper,
+		// even inside a (( )) command or builtin subscript.
+		if exprTextOverride != "" &&
+			strings.Contains(bashMsg, "arithmetic syntax error: operand expected") &&
+			(strings.Contains(bashMsg, "error token is \"$") ||
+				strings.Contains(bashMsg, "error token is \"`")) {
+			return fmt.Errorf("%s: line %d: %s: %s",
+				prefix, line, exprText, bashMsg)
+		}
 		if command {
 			if compactErrSep {
 				return fmt.Errorf("%s: line %d: ((: %s: %s",
