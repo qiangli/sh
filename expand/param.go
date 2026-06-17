@@ -1578,12 +1578,31 @@ func (cfg *Config) paramAtK(vr Variable, name string) string {
 	case Associative:
 		var parts []string
 		for _, k := range vr.AssocKeysForDeclare() {
-			parts = append(parts, bashDeclareQuote(k)+" "+bashDeclareQuote(vr.Map[k]))
+			parts = append(parts, bashParamKKeyQuote(k)+" "+bashDeclareQuote(vr.Map[k]))
 		}
 		return strings.Join(parts, " ")
 	default:
 		return bashQuoteParamQ(vr.String())
 	}
+}
+
+func bashParamKKeyQuote(s string) string {
+	if s == "" {
+		return bashDeclareQuote(s)
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case 'a' <= c && c <= 'z',
+			'A' <= c && c <= 'Z',
+			'0' <= c && c <= '9',
+			c == '_', c == '.', c == '%', c == '-', c == '=':
+			continue
+		default:
+			return bashDeclareQuote(s)
+		}
+	}
+	return s
 }
 
 // paramAtKFields implements the field-splitting form of "${arr[@]@k}":
