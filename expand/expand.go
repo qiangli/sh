@@ -2463,7 +2463,15 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 					continue
 				}
 			}
-			if elems, err := cfg.quotedReplElemFields(wp); err != nil {
+			// Pattern-substitution, pattern-removal, and
+			// case-modification applied to an unquoted `*`/`[*]` form
+			// behave like `[@]`: bash processes each element and yields
+			// them as separate fields (then word-splits each), rather
+			// than IFS-joining into one string. The joined form is only
+			// for the quoted `"${a[*]/…}"` and scalar-assignment cases.
+			// Re-aim `*` at `@` so the per-element helpers don't collapse.
+			mpe := unquotedStarModExpand(wp)
+			if elems, err := cfg.quotedReplElemFields(mpe); err != nil {
 				return nil, err
 			} else if elems != nil {
 				for i, elem := range elems {
@@ -2478,11 +2486,10 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 			// (`${a[@],,}`) and `@`-transform (`${a[@]@Q}`) on an array
 			// `[@]`/`[*]` keep their per-element structure just like the
 			// replacement operator above: each modified element is its
-			// own field for `[@]`, while `[*]` returns a single
-			// IFS-joined string. Without this they fell through to the
+			// own field for `[@]`. Without this they fell through to the
 			// generic single-string paramExp path, which joins elements
 			// with a plain space and loses the field boundaries.
-			if elems, err := cfg.quotedRemoveElemFields(wp); err != nil {
+			if elems, err := cfg.quotedRemoveElemFields(mpe); err != nil {
 				return nil, err
 			} else if elems != nil {
 				for i, elem := range elems {
@@ -2493,7 +2500,7 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 				}
 				continue
 			}
-			if elems, err := cfg.quotedCaseModElemFields(wp); err != nil {
+			if elems, err := cfg.quotedCaseModElemFields(mpe); err != nil {
 				return nil, err
 			} else if elems != nil {
 				for i, elem := range elems {
@@ -2851,6 +2858,30 @@ func (cfg *Config) substWordFields(pe *syntax.ParamExp) ([][]fieldPart, bool, er
 		}
 	}
 	return fields, true, nil
+}
+
+// unquotedStarModExpand returns a copy of pe with a `*` param or `[*]`
+// subscript rewritten to `@`, so the per-element modifier helpers treat an
+// unquoted `*`/`[*]` form like `[@]` (separate fields) instead of IFS-joining
+// into a single string. Only pattern/case modifier expansions are rewritten;
+// pe is returned unchanged otherwise.
+func unquotedStarModExpand(pe *syntax.ParamExp) *syntax.ParamExp {
+	if pe == nil || (pe.Repl == nil && pe.Exp == nil) {
+		return pe
+	}
+	starParam := pe.Param != nil && pe.Param.Value == "*"
+	starIndex := nodeLit(pe.Index) == "*"
+	if !starParam && !starIndex {
+		return pe
+	}
+	cp := *pe
+	if starParam {
+		cp.Param = &syntax.Lit{Value: "@", ValuePos: pe.Param.ValuePos, ValueEnd: pe.Param.ValueEnd}
+	}
+	if starIndex {
+		cp.Index = &syntax.Word{Parts: []syntax.WordPart{&syntax.Lit{Value: "@"}}}
+	}
+	return &cp
 }
 
 func (cfg *Config) substWordPartFields(parts []syntax.WordPart) ([][]fieldPart, error) {
