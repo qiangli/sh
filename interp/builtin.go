@@ -531,13 +531,16 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					}
 					r.out(")\n")
 				case expand.Associative:
+					// bash's `set` renders associative arrays with the
+					// same declare -p body quoting: keys quoted when they
+					// carry special characters, values always double-quoted.
 					r.outf("%s=(", name)
 					first := true
 					for _, k := range vr.AssocKeysForDeclare() {
 						if !first {
 							r.out(" ")
 						}
-						r.outf("[%s]=%s", k, bashSetQuote(vr.Map[k]))
+						r.outf("[%s]=%s", bashAssocKeyQuote(k), bashDeclareQuote(vr.Map[k]))
 						first = false
 					}
 					if !first {

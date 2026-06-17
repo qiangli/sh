@@ -2089,6 +2089,11 @@ func (r *Runner) setVarWithIndex(prev expand.Variable, name string, index syntax
 			valStr = r.integerArrayValue(valStr)
 		}
 		prev.Map[k] = valStr
+		// An array with a stored element is set, even when it was only
+		// declared (`declare -A A`) before the element assignment. The
+		// Set flag drives `set`/`${A[k]:+…}` and similar; `[[ -v A ]]`
+		// stays element-specific via varIsSetForTest.
+		prev.Set = true
 		r.setVar(name, prev)
 		return
 	}

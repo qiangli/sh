@@ -1008,7 +1008,7 @@ var runTests = []runTest{
 	},
 	{
 		`declare -A a=([foo]=bleh [bar]=qux [baz]=z); set | grep '^a='`,
-		"a=([foo]=bleh [bar]=qux [baz]=z )\n",
+		"a=([foo]=\"bleh\" [bar]=\"qux\" [baz]=\"z\" )\n",
 	},
 	{
 		`declare -A A; key='$(echo foo)'; A[$key]=1; test -v A["$key"]; echo $?`,
