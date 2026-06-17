@@ -950,6 +950,15 @@ func (r *Runner) bashArithmError(expr syntax.ArithmExpr, err error, command bool
 			strings.Contains(bashMsg, "arithmetic syntax error: operand expected") &&
 			(strings.Contains(bashMsg, "error token is \"$") ||
 				strings.Contains(bashMsg, "error token is \"`")) {
+			// Bash includes any source whitespace that trailed the
+			// operand (e.g. `[ $index ]` / `(( $index ))`) in both the
+			// reported expression and the error token.
+			if src := r.arithmSourceText(expr, true); strings.HasSuffix(src, " ") || strings.HasSuffix(src, "\t") {
+				exprText += " "
+				if q := strings.LastIndexByte(bashMsg, '"'); q >= 0 {
+					bashMsg = bashMsg[:q] + " " + bashMsg[q:]
+				}
+			}
 			return fmt.Errorf("%s: line %d: %s: %s",
 				prefix, line, exprText, bashMsg)
 		}
