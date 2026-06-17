@@ -2757,7 +2757,7 @@ var runTests = []runTest{
 	{"a[0]=0 a[1]=1; a[ ]=10; declare -p a; a[]=bad; echo after: $?", "declare -a a=([0]=\"10\" [1]=\"1\")\na[]: bad array subscript\nafter: 1\n #JUSTERR"},
 	{"a[0]=0 a[1]=1; (( a[ ]=10 )); declare -p a; let 'a[ ]=11'; declare -p a; v=' '; let \"a[\\\"$v\\\"]=12\"; declare -p a", "declare -a a=([0]=\"10\" [1]=\"1\")\ndeclare -a a=([0]=\"11\" [1]=\"1\")\ndeclare -a a=([0]=\"12\" [1]=\"1\")\n"},
 	{"declare -A a; a[0]=0 a[1]=1; v=' '; let \"a[\\\"$v\\\"]=13\"; declare -p a", "declare -A a=([1]=\"1\" [0]=\"0\" [\" \"]=\"13\" )\n"},
-	{"shopt -s assoc_expand_once; declare -A a; a[0]=0 a[1]=1; let \"a[\\\" \\\"]=11\"; v=' '; let \"a[\\\"$v\\\"]=13\"; declare -p a", "declare -A a=([1]=\"1\" [0]=\"0\" [\" \"]=\"13\" )\n"},
+	{"shopt -s assoc_expand_once; declare -A a; a[0]=0 a[1]=1; let \"a[\\\" \\\"]=11\"; v=' '; let \"a[\\\"$v\\\"]=13\"; declare -p a", "declare -A a=([1]=\"1\" [0]=\"0\" [\"\\\" \\\"\"]=\"13\" )\n"},
 	{"value='[$(echo total 0)]=1 [2]=2'; declare -a var=\"($value)\"; declare -p var", "1:9: not a valid arithmetic operator: `0`\ndeclare -a var=()\n #JUSTERR"},
 	{"arrayA=(A B C); xx='arrayA[*]'; arrayB=( ${!xx} ); echo \"${#arrayB[*]}:${arrayB[0]}:${arrayB[1]}:${arrayB[2]}\"; arrayB=( \"${!xx}\" ); echo \"${#arrayB[*]}:${arrayB[0]}:${arrayB[1]}:${arrayB[2]}\"; xx='arrayA[@]'; arrayB=( ${!xx} ); echo \"${#arrayB[*]}:${arrayB[0]}:${arrayB[1]}:${arrayB[2]}\"; arrayB=( \"${!xx}\" ); echo \"${#arrayB[*]}:${arrayB[0]}:${arrayB[1]}:${arrayB[2]}\"", "3:A:B:C\n1:A B C::\n3:A:B:C\n3:A:B:C\n"},
 	// Assignment binds lower than the ternary false branch in bash:

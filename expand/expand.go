@@ -213,6 +213,14 @@ type Config struct {
 	// arithmetic commands and arithmetic expansion.
 	LetArithmetic bool
 
+	// AssocExpandOnce mirrors the `assoc_expand_once` shell option. When
+	// set, an associative-array subscript is expanded only once: quote
+	// characters that survive a `let` argument's single word expansion
+	// (`let "a[\" \"]=…"`, whose subscript becomes the literal `" "`) are
+	// kept verbatim in the key instead of being quote-removed again. The
+	// interpreter sets this around `let` evaluation.
+	AssocExpandOnce bool
+
 	// arithmInOperand is true while evaluating a direct operand of a
 	// binary or unary arithmetic operator. Bash reports the *whole*
 	// expression as the error text for such operands (e.g. `jv += $iv`),

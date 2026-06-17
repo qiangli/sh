@@ -859,6 +859,38 @@ func (cfg *Config) resolveAritLvalue(lval arithLvalue) (arithLvalue, error) {
 		if !ok {
 			return lval, fmt.Errorf("bad array subscript")
 		}
+		// With `assoc_expand_once` set, a `let` subscript is expanded
+		// only once: quote characters that survive that single word
+		// expansion are kept verbatim in the key rather than being
+		// quote-removed a second time, so `["\" \""]` and `[" "]` are
+		// distinct keys. The surviving quotes reach us in two shapes,
+		// both of whose keys are the subscript's single double-quoted
+		// expansion (`\"` -> literal `"`, parameters expanded once):
+		//
+		//   - a re-parsed double-quoted word (`let "a[\" \"]=…"`, whose
+		//     str `a[" "]` re-parses to the index `" "`): its quotes are
+		//     syntactic, so the printed source text is the literal key.
+		//   - an escaped-quote operand (`let "a[\"$v\"]=…"`, kept raw as
+		//     the index `\"$v\"`): re-expanding it in a double-quoted
+		//     context turns `\"` into `"` and expands `$v` exactly once.
+		if cfg.LetArithmetic && cfg.AssocExpandOnce {
+			key := ""
+			if wordHasDoubleQuote(word) {
+				key = subscriptText(word)
+			} else {
+				quoted := &syntax.Word{Parts: []syntax.WordPart{
+					&syntax.DblQuoted{Parts: word.Parts},
+				}}
+				var err error
+				if key, err = Literal(cfg, quoted); err != nil {
+					return lval, err
+				}
+			}
+			lval.indexKey = key
+			lval.indexAssoc = true
+			lval.indexSet = true
+			return lval, nil
+		}
 		key, quoted, err := "", false, error(nil)
 		if !lval.fromString {
 			key, quoted, err = cfg.arithLetEscapedQuotedIndex(lval.index)

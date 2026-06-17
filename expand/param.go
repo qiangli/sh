@@ -2263,6 +2263,18 @@ func subscriptText(idx syntax.ArithmExpr) string {
 	return b.String()
 }
 
+// wordHasDoubleQuote reports whether the word contains a double-quoted
+// part — the form a `let` subscript takes once its surrounding `"…\"…\""`
+// has been word-expanded a single time (`a[\" \"]` -> `a[" "]`).
+func wordHasDoubleQuote(word *syntax.Word) bool {
+	for _, part := range word.Parts {
+		if _, ok := part.(*syntax.DblQuoted); ok {
+			return true
+		}
+	}
+	return false
+}
+
 // validNameRefTargetName reports whether s is a legal nameref target:
 // a plain identifier or an array-element reference (`arr[idx]`). Mirrors
 // interp.validNameRefTarget for the expand-side assignment path.

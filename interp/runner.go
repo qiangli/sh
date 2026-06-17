@@ -550,8 +550,13 @@ func (r *Runner) letArithm(expr syntax.ArithmExpr) int {
 	}
 	prevLetArithmetic := r.ecfg.LetArithmetic
 	r.ecfg.LetArithmetic = true
+	prevAssocExpandOnce := r.ecfg.AssocExpandOnce
+	if opt, _ := r.bashOptByName("assoc_expand_once"); opt != nil {
+		r.ecfg.AssocExpandOnce = *opt
+	}
 	n, err := expand.Arithm(r.ecfg, expr)
 	r.ecfg.LetArithmetic = prevLetArithmetic
+	r.ecfg.AssocExpandOnce = prevAssocExpandOnce
 	exprTextOverride := ""
 	if arithErr, arithExpr := innermostArithmError(err); arithErr != nil {
 		if arithExpr != nil {
