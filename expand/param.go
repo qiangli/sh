@@ -283,6 +283,25 @@ func arrayElemSet(vr Variable, idx syntax.ArithmExpr, cfg *Config) bool {
 
 // envSetIndex sets a variable value, handling array element assignment when
 // idx is not nil. Used by parameter expansion assignment operators like ${a[i]=value}.
+// integerValue evaluates value as an arithmetic expression, returning its
+// decimal string form. It mirrors the `declare -i` assignment path in interp:
+// an empty value is zero, and the result replaces the literal text so that
+// e.g. `a[42]=4+3` on an integer array stores `7`.
+func (cfg *Config) integerValue(value string) (string, error) {
+	if value == "" {
+		return "0", nil
+	}
+	expr, err := syntax.NewParser().Arithmetic(strings.NewReader(value))
+	if err != nil || expr == nil {
+		return value, err
+	}
+	n, err := Arithm(cfg, expr)
+	if err != nil {
+		return value, err
+	}
+	return strconv.Itoa(n), nil
+}
+
 func (cfg *Config) envSetIndex(name string, idx syntax.ArithmExpr, value string) error {
 	wenv, ok := cfg.Env.(WriteEnviron)
 	if !ok {
@@ -298,6 +317,16 @@ func (cfg *Config) envSetIndex(name string, idx syntax.ArithmExpr, value string)
 	switch nodeLit(idx) {
 	case "@", "*":
 		return fmt.Errorf("%s: cannot assign in this way", name)
+	}
+
+	// An integer-attributed array (`declare -ai`/`declare -Ai`) evaluates
+	// each assigned element value as an arithmetic expression.
+	if vr.Integer {
+		v, err := cfg.integerValue(value)
+		if err != nil {
+			return err
+		}
+		value = v
 	}
 
 	if vr.Kind == Associative {
@@ -1410,6 +1439,14 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 					return "", err
 				}
 				str = arg
+				// Reflect the integer-attribute evaluation that
+				// envSetIndex applied to the stored element, so the
+				// expansion result matches (`${a[42]=4+3}` → 7).
+				if vr.Integer && index != nil {
+					if v, err := cfg.integerValue(arg); err == nil {
+						str = v
+					}
+				}
 			}
 		case syntax.RemSmallPrefix, syntax.RemLargePrefix,
 			syntax.RemSmallSuffix, syntax.RemLargeSuffix:
