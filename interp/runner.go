@@ -5240,13 +5240,22 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			hasArrayFlag := slices.Contains(modes, "-a") || slices.Contains(modes, "-A") || valType == "-a" || valType == "-A"
 			switch {
 			case !hasArrayFlag:
-				// For readonly and export, plain assignments get no prefix.
-				// For declare/local/typeset, all assignments get the builtin
-				// prefix (these builtins are specifically for variable
-				// manipulation, so errors are attributed to them).
-				if cm.Variant.Value == "readonly" || cm.Variant.Value == "export" {
+				switch {
+				case as.Array != nil && !fromString && cm.Variant.Value != "local":
+					// `declare foo+=(a b)` / `typeset foo=(a b)` without an
+					// explicit -a/-A flag is an array literal: bash attributes
+					// the failure to the function name, so at top level it
+					// carries no builtin prefix. `local` is excluded because
+					// bash double-reports its readonly array failures with a
+					// `local:` prefix.
+					r.setVarArrayLiteral = true
+				case cm.Variant.Value == "readonly" || cm.Variant.Value == "export":
+					// For readonly and export, plain assignments get no prefix.
 					r.setVarStringParsed = true // suppress any prefix
-				} else {
+				default:
+					// For declare/local/typeset, plain assignments get the
+					// builtin prefix (these builtins are specifically for
+					// variable manipulation, so errors are attributed to them).
 					r.setVarFromBuiltin = cm.Variant.Value
 				}
 			case as.Array != nil && !fromString:
