@@ -1483,7 +1483,15 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 				qSet := vr.IsSet()
 				if name != "@" && name != "*" {
 					if il := nodeLit(index); il != "@" && il != "*" {
-						qSet = arrayElemSet(vr, index, cfg)
+						// A non-empty value already proves the element is
+						// set; only fall back to arrayElemSet (which
+						// re-evaluates the subscript, re-running any command
+						// substitution in it) when the value is empty.
+						if str != "" {
+							qSet = true
+						} else {
+							qSet = arrayElemSet(vr, index, cfg)
+						}
 					}
 				}
 				if !qSet {
