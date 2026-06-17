@@ -23,6 +23,7 @@ import (
 	"slices"
 	"sort"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -269,6 +270,31 @@ type Runner struct {
 	// Note that each shell only tracks its direct children;
 	// subshells do not share nor inherit the background PIDs they can wait for.
 	bgProcs []*bgProc
+
+	// coprocSeq counts coprocs started by this runner; it seeds the
+	// synthetic, unique [bgProc.coprocPid] reported in `<NAME>_PID`.
+	coprocSeq int64
+
+	// coprocFds maps a live coproc pipe fd to the array variable element
+	// it backs, so that closing the fd (e.g. `exec {fd}<&${COPROC[0]}-`)
+	// rewrites that element to "-1", the way bash marks a closed coproc
+	// descriptor. Entries are removed when the fd is closed or reaped.
+	coprocFds map[int]coprocFdRef
+
+	// coprocReg resolves a coproc's synthetic `<NAME>_PID` back to its
+	// bgProc. It is shared by pointer with subshells (unlike bgProcs,
+	// which subshells do not inherit) so that `kill $COPROC_PID` works
+	// from a background subshell — bash's coproc pid is a real OS pid that
+	// any process can signal, and this is how we reach the real child of a
+	// coprocess run as a goroutine. Lazily created by the first coproc.
+	coprocReg *coprocReg
+
+	// coprocReapedFds records coproc pipe fds released by reapCoproc during
+	// the current statement. stmtSync snapshots/restores fdTable around a
+	// redirected statement; reaping a coprocess (e.g. via `wait $PID >f`)
+	// closes its fds, and that removal must survive the restore rather than
+	// being undone. Reset at the start of each stmtSync.
+	coprocReapedFds map[int]bool
 
 	opts runnerOpts
 
@@ -589,6 +615,63 @@ type bgProc struct {
 	// coprocess is reaped, so reaping force-removes it here. Empty for
 	// non-coproc background jobs and for coprocs whose name was invalid.
 	coprocPidVar string
+
+	// coprocPid is the synthetic, runner-unique integer reported in the
+	// `<NAME>_PID` variable so scripts can `wait $COPROC_PID` /
+	// `kill $COPROC_PID`. Real bash hands out the coprocess subshell's OS
+	// PID; this runner runs the coprocess as a goroutine with no PID of
+	// its own, so we mint a stable integer here and resolve it back to
+	// this bgProc in wait/kill. Zero for non-coproc background jobs.
+	coprocPid int64
+
+	// coprocReadFd / coprocWriteFd are the logical fd numbers bound to the
+	// coproc's `${NAME[0]}` / `${NAME[1]}` array. They are released from
+	// the runner's fd tables when the coprocess is reaped so a later
+	// coproc reuses the same high fds, matching bash. Zero when unset.
+	coprocReadFd  int
+	coprocWriteFd int
+
+	// coprocReadFile / coprocWriteFile are the parent-side pipe ends to
+	// close on reap (mirroring bash closing c_rfd / c_wfd in
+	// coproc_dispose). nil for non-coproc background jobs.
+	coprocReadFile  *os.File
+	coprocWriteFile *os.File
+}
+
+// coprocFdRef identifies which coproc array element a live pipe fd
+// backs, so closing the fd can rewrite that element to "-1".
+type coprocFdRef struct {
+	varName string
+	idx     int
+}
+
+// coprocReg maps a coproc's synthetic `<NAME>_PID` to its bgProc so that
+// `wait`/`kill` can resolve it — including from a background subshell,
+// which shares this registry by pointer. Safe for concurrent use.
+type coprocReg struct {
+	mu    sync.Mutex
+	byPid map[int64]*bgProc
+}
+
+func (c *coprocReg) add(pid int64, bg *bgProc) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.byPid == nil {
+		c.byPid = make(map[int64]*bgProc)
+	}
+	c.byPid[pid] = bg
+}
+
+func (c *coprocReg) lookup(pid int64) *bgProc {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.byPid[pid]
+}
+
+func (c *coprocReg) remove(pid int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.byPid, pid)
 }
 
 // bgProcCtxKey is the context-value key under which the bg goroutine
@@ -1866,6 +1949,11 @@ func (r *Runner) subshell(background bool) *Runner {
 		fdReadTable:  maps.Clone(r.fdReadTable),
 		fdWriteTable: maps.Clone(r.fdWriteTable),
 		inheritedFds: maps.Clone(r.inheritedFds),
+
+		// Shared by pointer (not cloned): a background subshell must be
+		// able to resolve `$COPROC_PID` to the parent's coprocess so that
+		// `kill $COPROC_PID` reaches the real child.
+		coprocReg: r.coprocReg,
 
 		ulimitOverride: maps.Clone(r.ulimitOverride),
 	}
