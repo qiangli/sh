@@ -1234,7 +1234,12 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					return failf(1, "wait: pid %s is not a child of this shell\n", arg)
 				}
 				for i, candidate := range r.bgProcs {
-					if candidate.pid.Load() == pid {
+					// Match a real OS PID (published by the exec handler) or
+					// a coproc's synthetic `<NAME>_PID`. Skip coprocs already
+					// reaped so a stale entry with a reused synthetic pid
+					// doesn't shadow the live one.
+					if candidate.pid.Load() == pid ||
+						(candidate.coprocPid == pid && candidate.coprocPidVar != "") {
 						bg = candidate
 						matchedIdx = int64(i + 1)
 						break
@@ -1355,6 +1360,21 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				exit.code = 1
 				r.errf(r.bashErrPrefix(pos)+"kill: `%s': not a pid or valid job spec\n", target)
 				continue
+			}
+			// A coproc's `<NAME>_PID` is a synthetic integer, not a real OS
+			// pid; resolve it to the coprocess's real child so the signal
+			// actually reaches the running command (e.g. `kill $COPROC_PID`).
+			// The registry is shared with subshells, so this also works for
+			// the common `{ sleep 1; kill $COPROC_PID; } &` idiom.
+			if r.coprocReg != nil {
+				if bg := r.coprocReg.lookup(int64(pid)); bg != nil {
+					if bg.pidReady != nil {
+						<-bg.pidReady
+					}
+					if rp := bg.pid.Load(); rp != 0 {
+						pid = int(rp)
+					}
+				}
 			}
 			if err := sendSignal(pid, sig); err != nil {
 				exit.code = 1

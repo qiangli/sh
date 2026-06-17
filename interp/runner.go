@@ -4055,6 +4055,10 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 
 	r.curStmtPos = st.Pos()
 
+	// Track coproc fds reaped within this statement so the fdTable restore
+	// below doesn't resurrect a closed coprocess's descriptors.
+	r.coprocReapedFds = nil
+
 	oldIn, oldStdinTTYFallback, oldStdinDevTTY, oldOut, oldErr := r.stdin, r.stdinTTYFallback, r.stdinDevTTY, r.stdout, r.stderr
 	// Snapshot fdTable only when this statement has redirects that
 	// might mutate it. A coproc statement registers fds in fdTable from
@@ -4191,6 +4195,14 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 			r.fdTable = oldFdTable
 			r.fdReadTable = oldFdReadTable
 			r.fdWriteTable = oldFdWriteTable
+			// A coprocess reaped during this statement (e.g.
+			// `wait $COPROC_PID >file`) had its pipe fds closed; keep them
+			// gone so a later coproc reuses the freed high fd numbers.
+			for fd := range r.coprocReapedFds {
+				delete(r.fdTable, fd)
+				delete(r.fdReadTable, fd)
+				delete(r.fdWriteTable, fd)
+			}
 		}
 	}
 }
@@ -6234,8 +6246,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		// rather than the raw pipe fds. Mirror that numbering and register
 		// the real *os.File objects under those logical fds; the redirect
 		// layer keys off fdTable, not the OS fd, so any number works.
-		readFd := r.coprocHighFd(-1)
-		writeFd := r.coprocHighFd(readFd)
+		readFd, writeFd := r.coprocHighFds()
 		coprocReadonly := ""
 		// pidBase is the effective base name bash builds `<NAME>_PID` from
 		// (the nameref target when the coproc name resolves through one);
@@ -6277,6 +6288,14 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		// assignment follows a nameref to its target (so a nameref pointing
 		// at a readonly variable reports that target as readonly), matching
 		// bash's bind_variable.
+		// Mint a synthetic, runner-unique pid for `<NAME>_PID`. Real bash
+		// uses the coprocess subshell's OS PID; we run the coprocess as a
+		// goroutine with no PID of its own, so wait/kill resolve this
+		// integer back to the bgProc below. Based on the shell's own PID so
+		// it reads like a plausible pid; offset per coproc so concurrent
+		// coprocs never collide.
+		r.coprocSeq++
+		coprocPid := int64(os.Getpid()) + r.coprocSeq
 		coprocPidVar := ""
 		if pidBase != "" {
 			pidName := pidBase + "_PID"
@@ -6294,7 +6313,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 					r.setVar(pidTarget, expand.Variable{
 						Set:  true,
 						Kind: expand.String,
-						Str:  strconv.Itoa(os.Getpid()),
+						Str:  strconv.FormatInt(coprocPid, 10),
 					})
 				}
 			}
@@ -6312,23 +6331,57 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			r.fdWriteTable = make(map[int]io.Writer)
 		}
 		r.fdWriteTable[writeFd] = pw2
+		// Track which array element each fd backs so closing it (via a
+		// `${NAME[i]}-` move/close redirect) rewrites the element to "-1",
+		// the way bash marks a closed coproc descriptor. Only meaningful
+		// when the fd array was actually bound to a writable variable.
+		if coprocReadonly == "" && pidBase != "" {
+			if r.coprocFds == nil {
+				r.coprocFds = make(map[int]coprocFdRef)
+			}
+			r.coprocFds[readFd] = coprocFdRef{varName: pidBase, idx: 0}
+			r.coprocFds[writeFd] = coprocFdRef{varName: pidBase, idx: 1}
+		}
 
 		bg := &bgProc{
 			done:              make(chan struct{}),
 			exit:              new(exitStatus),
+			pidReady:          make(chan struct{}),
 			coprocReadonly:    coprocReadonly,
 			coprocReadonlyPos: r.curStmtPos,
 			coprocPidVar:      coprocPidVar,
+			coprocPid:         coprocPid,
+			coprocReadFd:      readFd,
+			coprocWriteFd:     writeFd,
+			coprocReadFile:    pr,
+			coprocWriteFile:   pw2,
 		}
 		r.bgProcs = append(r.bgProcs, bg)
+		if r.coprocReg == nil {
+			r.coprocReg = &coprocReg{}
+		}
+		r.coprocReg.add(coprocPid, bg)
+		// Stash the bgProc on the goroutine's ctx so the exec handler
+		// publishes the real OS PID of whatever command the coprocess
+		// runs into bg.pid (via publishBgPid). `kill $COPROC_PID` resolves
+		// the synthetic pid to that real child so the signal reaches it.
+		bgCtx := context.WithValue(ctx, bgProcCtxKey{}, bg)
 		go func() {
 			defer func() {
 				pw.Close()
 				pr2.Close()
 				*bg.exit = r2.exit
+				// Close pidReady even if the coprocess body never exec'd a
+				// real process (e.g. a pure-builtin coproc), so a waiter on
+				// the real pid doesn't hang forever.
+				select {
+				case <-bg.pidReady:
+				default:
+					close(bg.pidReady)
+				}
 				close(bg.done)
 			}()
-			r2.Run(ctx, cm.Stmt)
+			r2.Run(bgCtx, cm.Stmt)
 			r2.exit.exiting = false
 			r2.exit.discarding = false
 		}()
@@ -6358,24 +6411,38 @@ func (r *Runner) coprocSetVar(varName string, readFd, writeFd int) bool {
 	return readonly
 }
 
-// coprocHighFd picks a logical fd number for a coproc pipe end the way
-// bash's move_to_high_fd(fd, 1, 64) does: scan down from 63 and take the
-// first fd that isn't already in use. `reserved` lets the caller hold the
-// read fd while allocating the write fd so the two never collide.
-func (r *Runner) coprocHighFd(reserved int) int {
-	for n := 63; n > 3; n-- {
-		if n == reserved {
-			continue
-		}
+// coprocHighFds picks the logical read/write fd numbers a coproc exposes
+// as `${NAME[0]}` / `${NAME[1]}`. Bash's coproc setup calls sh_openpipe
+// twice — once per pipe — and sh_openpipe moves *both* ends of each pipe
+// to a high fd via move_to_high_fd(fd, 1, 64). So four fds are claimed
+// descending from 63 (read-pipe read+write, then write-pipe read+write);
+// the parent then keeps the read-pipe's read end and the write-pipe's
+// write end while the two child-facing ends in between are closed. That
+// is why a fresh coproc surfaces as `63 60`, not `63 62`. We mirror the
+// numbering: readFd is the highest free fd, writeFd the fourth one down.
+func (r *Runner) coprocHighFds() (readFd, writeFd int) {
+	used := func(n int) bool {
 		if _, ok := r.fdTable[n]; ok {
-			continue
+			return true
 		}
 		if _, ok := r.fdWriteTable[n]; ok {
-			continue
+			return true
 		}
-		return n
+		return false
 	}
-	return -1
+	next := func(below int) int {
+		for n := below; n > 3; n-- {
+			if !used(n) {
+				return n
+			}
+		}
+		return -1
+	}
+	rpipeRead := next(63)  // ${NAME[0]} — parent reads child stdout
+	rpipeWrite := next(rpipeRead - 1)
+	wpipeRead := next(rpipeWrite - 1)
+	wpipeWrite := next(wpipeRead - 1) // ${NAME[1]} — parent writes child stdin
+	return rpipeRead, wpipeWrite
 }
 
 // reapCoproc emits the diagnostics bash produces when it reaps a
@@ -6388,6 +6455,32 @@ func (r *Runner) coprocHighFd(reserved int) int {
 // between `coproc` and `wait`, which is why it fires here rather than at
 // coproc creation.
 func (r *Runner) reapCoproc(bg *bgProc) {
+	// Release the coproc's pipe fds so a later coproc reuses the same high
+	// fd numbers (bash closes c_rfd / c_wfd in coproc_dispose). Closing
+	// the parent-side ends also lets the now-idle pipe drain.
+	if bg.coprocReadFd != 0 || bg.coprocWriteFd != 0 {
+		if bg.coprocReadFile != nil {
+			bg.coprocReadFile.Close()
+		}
+		if bg.coprocWriteFile != nil {
+			bg.coprocWriteFile.Close()
+		}
+		for _, fd := range [...]int{bg.coprocReadFd, bg.coprocWriteFd} {
+			delete(r.fdTable, fd)
+			delete(r.fdReadTable, fd)
+			delete(r.fdWriteTable, fd)
+			delete(r.coprocFds, fd)
+			if r.coprocReapedFds == nil {
+				r.coprocReapedFds = make(map[int]bool)
+			}
+			r.coprocReapedFds[fd] = true
+		}
+		bg.coprocReadFd, bg.coprocWriteFd = 0, 0
+		bg.coprocReadFile, bg.coprocWriteFile = nil, nil
+	}
+	if bg.coprocPid != 0 && r.coprocReg != nil {
+		r.coprocReg.remove(bg.coprocPid)
+	}
 	if bg.coprocPidVar != "" {
 		r.forceDelVar(bg.coprocPidVar)
 		bg.coprocPidVar = ""
@@ -7381,7 +7474,27 @@ func (r *Runner) closeFd(fd int) {
 		delete(r.fdTable, fd)
 		delete(r.fdReadTable, fd)
 		delete(r.fdWriteTable, fd)
+		// If this fd backed a coproc array element, bash marks the closed
+		// descriptor as -1 in `${NAME[@]}` (e.g. after
+		// `exec {n}<&${COPROC[0]}-`). Mirror that.
+		if ref, ok := r.coprocFds[fd]; ok {
+			r.setCoprocFdElem(ref.varName, ref.idx, -1)
+			delete(r.coprocFds, fd)
+		}
 	}
+}
+
+// setCoprocFdElem rewrites element idx of the coproc fd array varName to
+// val, preserving the other element. A no-op if the variable is no longer
+// a 2-element indexed array.
+func (r *Runner) setCoprocFdElem(varName string, idx, val int) {
+	cur := r.lookupVar(varName)
+	if cur.Kind != expand.Indexed || len(cur.List) != 2 {
+		return
+	}
+	list := []string{cur.List[0], cur.List[1]}
+	list[idx] = strconv.Itoa(val)
+	r.setVar(varName, expand.Variable{Set: true, Kind: expand.Indexed, List: list})
 }
 
 func (r *Runner) readonlyNamedFdOpenSideEffect(ctx context.Context, rd *syntax.Redirect, arg string) {
