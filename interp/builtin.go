@@ -182,6 +182,59 @@ func validBuiltinAssignName(name string) bool {
 	return ok && syntax.ValidName(base) && !strings.Contains(idx, "]")
 }
 
+// subscriptQuotesBalanced reports whether every quote opened in an array
+// subscript is also closed. bash's skipsubscript honours quoting, so a
+// subscript left inside an unclosed quote (e.g. `80's`) swallows the
+// closing `]` and never forms a valid array reference.
+func subscriptQuotesBalanced(s string) bool {
+	var quote byte // 0, '\'', '"', or '`'
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch quote {
+		case '\'':
+			if c == '\'' {
+				quote = 0
+			}
+		case '"':
+			if c == '\\' {
+				i++
+			} else if c == '"' {
+				quote = 0
+			}
+		case '`':
+			if c == '`' {
+				quote = 0
+			}
+		default:
+			switch c {
+			case '\\':
+				i++
+			case '\'', '"', '`':
+				quote = c
+			}
+		}
+	}
+	return quote == 0
+}
+
+// builtinAssignNameValid validates a read/printf assignment target. Beyond
+// the basic identifier/array-reference shape, it mirrors bash's re-parse of
+// an already-expanded subscript: without assoc_expand_once the subscript is
+// scanned again via skipsubscript, so one left inside an unclosed quote
+// (`a[80's]`) is rejected as not a valid identifier.
+func (r *Runner) builtinAssignNameValid(name string) bool {
+	if !validBuiltinAssignName(name) {
+		return false
+	}
+	if opt, _ := r.bashOptByName("assoc_expand_once"); opt != nil && *opt {
+		return true
+	}
+	if _, idx, ok := splitArrayRef(name); ok && !subscriptQuotesBalanced(idx) {
+		return false
+	}
+	return true
+}
+
 func (r *Runner) unsetBuiltinArrayElem(name, idx string) bool {
 	vr := r.lookupVar(name)
 	if vr.Kind == expand.NameRef {
@@ -796,7 +849,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				if assignTo == "" {
 					return failf(2, "printf: -v: option requires an argument\n")
 				}
-				if !validBuiltinAssignName(assignTo) {
+				if !r.builtinAssignNameValid(assignTo) {
 					if r.bashCompatErrors {
 						return failf(1, "printf: `%s': not a valid identifier\n", assignTo)
 					}
@@ -2523,7 +2576,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 
 		args := fp.args()
 		for _, name := range args {
-			if !validBuiltinAssignName(name) {
+			if !r.builtinAssignNameValid(name) {
 				return failf(2, "read: `%s': not a valid identifier\n", name)
 			}
 		}
