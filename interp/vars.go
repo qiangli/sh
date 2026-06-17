@@ -2765,6 +2765,14 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 				words = append(words, r.literalForAssign(elem.Value))
 			}
 			for i := 0; i < len(words); i += 2 {
+				if words[i] == "" {
+					// An empty key is invalid for an associative array
+					// (`foo=( "" null )` -> `[""]=null`); bash rejects it
+					// and skips the pair.
+					r.errf("%s\"\": bad array subscript\n", r.bashErrPrefix(r.curStmtPos))
+					r.exit.code = 1
+					continue
+				}
 				v := ""
 				if i+1 < len(words) {
 					v = words[i+1]
