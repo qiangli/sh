@@ -2474,6 +2474,47 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 				}
 				continue
 			}
+			// Pattern-removal (`${a[@]#p}`), case-modification
+			// (`${a[@],,}`) and `@`-transform (`${a[@]@Q}`) on an array
+			// `[@]`/`[*]` keep their per-element structure just like the
+			// replacement operator above: each modified element is its
+			// own field for `[@]`, while `[*]` returns a single
+			// IFS-joined string. Without this they fell through to the
+			// generic single-string paramExp path, which joins elements
+			// with a plain space and loses the field boundaries.
+			if elems, err := cfg.quotedRemoveElemFields(wp); err != nil {
+				return nil, err
+			} else if elems != nil {
+				for i, elem := range elems {
+					if i > 0 {
+						flush()
+					}
+					splitAdd(elem)
+				}
+				continue
+			}
+			if elems, err := cfg.quotedCaseModElemFields(wp); err != nil {
+				return nil, err
+			} else if elems != nil {
+				for i, elem := range elems {
+					if i > 0 {
+						flush()
+					}
+					splitAdd(elem)
+				}
+				continue
+			}
+			if elems, err := cfg.quotedTransformElemFields(wp); err != nil {
+				return nil, err
+			} else if elems != nil {
+				for i, elem := range elems {
+					if i > 0 {
+						flush()
+					}
+					splitAdd(elem)
+				}
+				continue
+			}
 			// `${var-"$@"}` (unquoted) preserves the field
 			// structure of "$@" when the default fires. Detect
 			// that special case before falling through to the
