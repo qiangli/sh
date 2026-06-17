@@ -1346,10 +1346,19 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 		}
 		switch op {
 		case syntax.AlternateUnsetOrNull:
+			// `${param:+word}`: a non-empty value here proves the
+			// parameter is set and non-null, so the alternate applies
+			// unconditionally. Don't gate on vr.IsSet(), which reflects
+			// the whole array rather than the addressed element — an
+			// element-assigned array (`A[k]=v`) leaves the variable's
+			// Set flag false even though the element exists.
 			if str == "" {
 				break
 			}
-			fallthrough
+			if bashAlternateCommandSubstEOF(pe.Exp.Word) {
+				return "", fmt.Errorf("command substitution: line %d: unexpected EOF while looking for matching `)'", pe.Pos().Line()+2)
+			}
+			str = arg
 		case syntax.AlternateUnset:
 			if vr.IsSet() {
 				if bashAlternateCommandSubstEOF(pe.Exp.Word) {
