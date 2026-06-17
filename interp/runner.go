@@ -1056,9 +1056,46 @@ func unsetArrayOperandLiteral(word *syntax.Word) (string, bool) {
 		}
 		b.WriteString(lit.Value)
 	}
-	s := b.String()
+	s := unsetSubscriptUnescape(b.String())
 	name, _, ok := splitArrayRef(s)
 	return s, ok && syntax.ValidName(name)
+}
+
+// unsetSubscriptUnescape applies backslash quote-removal inside the
+// `[...]` subscript of a literal unset operand, leaving the bracket
+// structure itself intact. `unset A[\]]` addresses the literal key `]`
+// (the backslash quoted the bracket at assignment time), so it must here
+// too; the brackets are kept literal so the subscript is never glob- or
+// arithmetic-expanded.
+func unsetSubscriptUnescape(s string) string {
+	if !strings.ContainsRune(s, '\\') {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	depth := 0
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; c {
+		case '\\':
+			if depth > 0 && i+1 < len(s) {
+				i++
+				b.WriteByte(s[i])
+				continue
+			}
+			b.WriteByte(c)
+		case '[':
+			depth++
+			b.WriteByte(c)
+		case ']':
+			if depth > 0 {
+				depth--
+			}
+			b.WriteByte(c)
+		default:
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
 }
 
 func (r *Runner) literalForAssign(word *syntax.Word) string {
