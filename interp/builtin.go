@@ -506,7 +506,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			// prefix.
 			var names []string
 			r.writeEnv.Each(func(name string, vr expand.Variable) bool {
-				if !vr.IsSet() {
+				if !vr.IsSet() && !(vr.Kind == expand.Associative && len(vr.Map) > 0) {
 					return true
 				}
 				names = append(names, name)

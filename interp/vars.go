@@ -2089,11 +2089,11 @@ func (r *Runner) setVarWithIndex(prev expand.Variable, name string, index syntax
 			valStr = r.integerArrayValue(valStr)
 		}
 		prev.Map[k] = valStr
-		// An array with a stored element is set, even when it was only
-		// declared (`declare -A A`) before the element assignment. The
-		// Set flag drives `set`/`${A[k]:+…}` and similar; `[[ -v A ]]`
-		// stays element-specific via varIsSetForTest.
-		prev.Set = true
+		// A bare associative array expands like key "0"; assigning any
+		// other key does not make `${A-default}` see A as set.
+		if k == "0" {
+			prev.Set = true
+		}
 		r.setVar(name, prev)
 		return
 	}
@@ -2600,6 +2600,7 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 						}
 						newMap["0"] = s
 						prev.Map = newMap
+						prev.Set = true
 						return name, prev
 					}
 				}
@@ -2692,6 +2693,7 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 				newMap["0"] = newMap["0"] + s
 			}
 			prev.Map = newMap
+			prev.Set = true
 			return name, prev
 		}
 		return name, prev

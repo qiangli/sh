@@ -5278,13 +5278,13 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			switch {
 			case !hasArrayFlag:
 				switch {
-				case as.Array != nil && !fromString && cm.Variant.Value != "local":
+				case as.Array != nil && !fromString && cm.Variant.Value != "local" &&
+					cm.Variant.Value != "readonly" && cm.Variant.Value != "export":
 					// `declare foo+=(a b)` / `typeset foo=(a b)` without an
 					// explicit -a/-A flag is an array literal: bash attributes
 					// the failure to the function name, so at top level it
-					// carries no builtin prefix. `local` is excluded because
-					// bash double-reports its readonly array failures with a
-					// `local:` prefix.
+					// carries no builtin prefix. `local`, `readonly`, and
+					// `export` have their own attribution rules.
 					r.setVarArrayLiteral = true
 				case cm.Variant.Value == "readonly" || cm.Variant.Value == "export":
 					// For readonly and export, plain assignments get no prefix.
