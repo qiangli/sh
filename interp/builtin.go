@@ -1465,12 +1465,10 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				break
 			}
 			names := make([]string, 0, len(r.cmdHashTable))
-			for name := range r.cmdHashTable {
-				names = append(names, name)
+			vr := r.lookupVar("BASH_CMDS")
+			if vr.Kind == expand.Associative {
+				names = vr.AssocKeysForDeclare()
 			}
-			sort.Slice(names, func(i, j int) bool {
-				return r.cmdHashTable[names[i]].path < r.cmdHashTable[names[j]].path
-			})
 			if listOnly {
 				for _, name := range names {
 					hashListEntry(name, r.cmdHashTable[name])

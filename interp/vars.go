@@ -845,8 +845,8 @@ func (r *Runner) lookupVar(name string) expand.Variable {
 		}
 	case "BASH_CMDS":
 		vr.Kind = expand.Associative
-		// Same 128-bucket hash table as the alias table above.
-		vr.AssocBuckets = 128
+		// Bash's command hash table iterates like a 256-bucket table.
+		vr.AssocBuckets = 256
 		vr.Map = make(map[string]string, len(r.cmdHashTable))
 		for name, entry := range r.cmdHashTable {
 			vr.Map[name] = entry.path
