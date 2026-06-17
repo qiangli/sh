@@ -3590,7 +3590,31 @@ func (cfg *Config) quotedTransformElemFields(pe *syntax.ParamExp) ([]string, err
 			out[i] = bashQuoteParamQ(elem)
 		}
 		return out, nil
+	case "K":
+		if pe.Param.Value != "@" && pe.Param.Value != "*" {
+			return nil, nil
+		}
+		elems, err := cfg.sliceElems(pe, cfg.Env.Get(pe.Param.Value).List, true)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]string, len(elems))
+		for i, elem := range elems {
+			out[i] = bashQuoteParamQ(elem)
+		}
+		return out, nil
 	case "k":
+		if pe.Param.Value == "@" || pe.Param.Value == "*" {
+			elems, err := cfg.sliceElems(pe, cfg.Env.Get(pe.Param.Value).List, true)
+			if err != nil {
+				return nil, err
+			}
+			out := make([]string, len(elems))
+			for i, elem := range elems {
+				out[i] = bashQuoteParamQ(elem)
+			}
+			return out, nil
+		}
 		// "${arr[@]@k}" splits into separate key and value fields. Only
 		// the `@`/`[@]` array/positional forms split; scalars and the
 		// `*`/`[*]` forms fall through to the single-string path.
