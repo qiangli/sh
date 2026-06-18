@@ -7554,6 +7554,13 @@ func (r *Runner) functraceEnabled() bool {
 	return noOpSetOptions["functrace"]
 }
 
+func (r *Runner) errtraceEnabled() bool {
+	if enabled, ok := r.noOpSetState["errtrace"]; ok {
+		return enabled
+	}
+	return noOpSetOptions["errtrace"]
+}
+
 func (r *Runner) shouldFireDebugTrap() bool {
 	if r.trapCallbacks["DEBUG"] == "" {
 		return false

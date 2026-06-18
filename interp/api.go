@@ -940,6 +940,12 @@ func Params(args ...string) RunnerOption {
 						}
 						r.noOpSetState["functrace"] = enable
 						continue
+					case 'E':
+						if r.noOpSetState == nil {
+							r.noOpSetState = make(map[string]bool)
+						}
+						r.noOpSetState["errtrace"] = enable
+						continue
 					case 'm':
 						// Record monitor mode so fg/bg/jobs can tell
 						// whether job control is active, even though we
@@ -2002,6 +2008,18 @@ func (r *Runner) subshell(background bool) *Runner {
 	r2.Vars = make(map[string]expand.Variable)
 	r2.alias = maps.Clone(r.alias)
 	r2.trapCallbacks = maps.Clone(r.trapCallbacks)
+	// Subshells inherit the ERR trap only with errtrace (set -E), and
+	// the DEBUG/RETURN traps only with functrace (set -T); otherwise
+	// they reset to their default disposition. This keeps the ERR trap
+	// from firing for failed commands inside `$(...)`, pipeline
+	// elements, and `( ... )` (bash trap2.sub/trap3.sub).
+	if !r.errtraceEnabled() {
+		delete(r2.trapCallbacks, "ERR")
+	}
+	if !r.functraceEnabled() {
+		delete(r2.trapCallbacks, "DEBUG")
+		delete(r2.trapCallbacks, "RETURN")
+	}
 	r2.disabledBuiltins = maps.Clone(r.disabledBuiltins)
 	r2.readonlyFuncs = maps.Clone(r.readonlyFuncs)
 	r2.exportedFuncs = maps.Clone(r.exportedFuncs)
