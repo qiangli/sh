@@ -4227,7 +4227,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 	}
 
 	tracingEnabled := r.opts[optXTrace]
-	trace := r.tracer()
+	trace := r.tracer(cm.Pos())
 
 	switch cm := cm.(type) {
 	case *syntax.Block:
@@ -6559,7 +6559,11 @@ func (r *Runner) trapCallback(ctx context.Context, callback, name string) uint8 
 	}
 	oldExit := r.exit
 	r.exit = exitStatus{} // start fresh so we can capture the trap's exit
+	// Commands run from a trap handler trace one xtrace level deeper
+	// (bash replicates PS4's first char: `+` -> `++`).
+	r.xtraceLevel++
 	r.stmts(ctx, file.Stmts)
+	r.xtraceLevel--
 	trapCode := r.exit.code
 	trapExited := r.exit.exiting
 	r.exit = oldExit // traps on EXIT or ERR should not modify the result
@@ -7996,7 +8000,7 @@ func testClauseBinaryOperatorArg(arg string) bool {
 
 func (r *Runner) runTestClause(ctx context.Context, pos syntax.Pos, expr syntax.TestExpr, trace bool) {
 	if trace {
-		r.traceTestClause(expr)
+		r.traceTestClause(pos, expr)
 	}
 	r.testIntErr = ""
 	r.testArithErr = ""

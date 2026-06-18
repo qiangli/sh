@@ -220,6 +220,7 @@ type Runner struct {
 	inSource     bool
 	inTimeClause bool // suppress inner `time` keyword's output
 	handlingTrap bool // whether we're currently in a trap callback
+	xtraceLevel  int  // xtrace indirection depth (trap handlers add one)
 
 	// track if a sourced script set positional parameters
 	sourceSetParams bool

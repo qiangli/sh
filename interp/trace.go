@@ -6,7 +6,9 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
+	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/syntax"
 )
 
@@ -17,9 +19,12 @@ type tracer struct {
 	printer   *syntax.Printer
 	output    io.Writer
 	needsPlus bool
+	// plus is the expanded PS4 prefix written before each traced
+	// line (bash replicates PS4's first character to show depth).
+	plus string
 }
 
-func (r *Runner) tracer() *tracer {
+func (r *Runner) tracer(pos syntax.Pos) *tracer {
 	if !r.opts[optXTrace] {
 		return nil
 	}
@@ -38,18 +43,19 @@ func (r *Runner) tracer() *tracer {
 		printer:   syntax.NewPrinter(),
 		output:    out,
 		needsPlus: true,
+		plus:      r.xtracePrefix(pos),
 	}
 }
 
 // string writes s to tracer.buf if tracer is non-nil,
-// prepending "+" if tracer.needsPlus is true.
+// prepending the PS4 prefix if tracer.needsPlus is true.
 func (t *tracer) string(s string) {
 	if t == nil {
 		return
 	}
 
 	if t.needsPlus {
-		t.buf.WriteString("+ ")
+		t.buf.WriteString(t.plus)
 	}
 	t.needsPlus = false
 	t.buf.WriteString(s)
@@ -71,12 +77,41 @@ func (t *tracer) expr(x syntax.Node) {
 	}
 
 	if t.needsPlus {
-		t.buf.WriteString("+ ")
+		t.buf.WriteString(t.plus)
 	}
 	t.needsPlus = false
 	if err := t.printer.Print(&t.buf, x); err != nil {
 		panic(err)
 	}
+}
+
+// xtracePrefix expands PS4 for an xtrace line of a command at pos. The
+// first character of the expanded value is replicated once per level of
+// indirection (bash: `+`, `++` inside a trap), and $LINENO reflects the
+// traced command's source line.
+func (r *Runner) xtracePrefix(pos syntax.Pos) string {
+	ps4 := r.envGet("PS4")
+	if ps4 == "" {
+		ps4 = "+ "
+	}
+	depth := r.xtraceLevel + 1
+	word, err := syntax.NewParser().Document(strings.NewReader(ps4))
+	if err != nil {
+		return ps4
+	}
+	line := int(pos.Line())
+	if r.handlingTrap && r.ecfg.OverrideLineno > 0 {
+		line = r.ecfg.OverrideLineno
+	}
+	prev := r.ecfg.OverrideLineno
+	r.ecfg.OverrideLineno = line
+	expanded, err := expand.Document(r.ecfg, word)
+	r.ecfg.OverrideLineno = prev
+	if err != nil || expanded == "" {
+		return ps4
+	}
+	_, sz := utf8.DecodeRuneInString(expanded)
+	return strings.Repeat(expanded[:sz], depth) + expanded[sz:]
 }
 
 // flush writes the contents of tracer.buf to the tracer.stdout.
@@ -131,8 +166,8 @@ func (t *tracer) call(cmd string, args ...string) {
 	}
 }
 
-func (r *Runner) traceTestClause(expr syntax.TestExpr) {
-	trace := r.tracer()
+func (r *Runner) traceTestClause(pos syntax.Pos, expr syntax.TestExpr) {
+	trace := r.tracer(pos)
 	if trace == nil {
 		return
 	}
