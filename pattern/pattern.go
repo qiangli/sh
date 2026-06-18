@@ -453,21 +453,32 @@ func regexpNext(sb *strings.Builder, sl *stringLexer, mode Mode) error {
 						c = sl.next()
 						continue
 					default:
-						return &SyntaxError{msg: "charClass invalid", err: fmt.Errorf("invalid character class: %q", inner)}
+						// Unknown POSIX element: non-matching atom.
+						sb.WriteString(`\x00`)
+						sl.i += len(name) + len(":]")
+						lastEmitted = 0
+						c = sl.next()
+						continue
 					}
 				}
 			}
-			sb.WriteRune(c)
+			// sb.WriteRune(c) // REMOVED: move to default and cases
 			switch c {
 			case '\x00':
 				return &SyntaxError{msg: "[ was not matched with a closing ]"}
 			case '\\':
+				// shell \X -> Go [\\X]
+				sb.WriteString(`\\`)
 				if c = sl.next(); c != '0' {
+					if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_') {
+						sb.WriteByte('\\')
+					}
 					sb.WriteRune(c)
 					lastEmitted = c
 				}
 			case '-':
 				if lastEmitted == 0 {
+					sb.WriteString(`\-`)
 					lastEmitted = '-'
 					break
 				}
@@ -504,19 +515,20 @@ func regexpNext(sb *strings.Builder, sl *stringLexer, mode Mode) error {
 						// the regex sees `[<start>\-<end>]` —
 						// matching bash 5.3's "literal set"
 						// fallback for reversed ranges.
-						s := sb.String()
-						if strings.HasSuffix(s, "-") {
-							sb.Reset()
-							sb.WriteString(s[:len(s)-1])
-							sb.WriteString(`\-`)
-						}
+						sb.WriteString(`\-`)
 						break
 					}
 					return &SyntaxError{msg: fmt.Sprintf("invalid range: %c-%c", start, end)}
 				}
+				sb.WriteByte('-')
 			case ']':
+				sb.WriteByte(']')
 				return nil
 			default:
+				if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == ':') {
+					sb.WriteByte('\\')
+				}
+				sb.WriteRune(c)
 				lastEmitted = c
 			}
 			c = sl.next()
@@ -573,6 +585,8 @@ func bashCollatingChar(inner string) (rune, bool) {
 		return '?', false
 	case "ampersand":
 		return '&', false
+	case "ampersat":
+		return '@', false
 	case "asterisk":
 		return '*', false
 	case "circumflex":
