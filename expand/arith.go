@@ -341,6 +341,42 @@ func (cfg *Config) expandArithmDiagnosticText(s string) string {
 	return b.String()
 }
 
+// stripArithmCTLESC removes CTLESC escape bytes (control bytes below
+// 0x20) from s, mirroring bash's dequoting of arithmetic operand text.
+// Other bytes — including 0x7f (DEL) — survive. The second return is
+// true when s contained any byte that is not a valid arithmetic-name
+// character (so the operand needs the invalid-token diagnostic).
+func stripArithmCTLESC(s string) (string, bool) {
+	bad := false
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c < 0x20 {
+			bad = true
+			continue
+		}
+		if c == 0x7f {
+			bad = true
+		}
+		b.WriteByte(c)
+	}
+	return b.String(), bad
+}
+
+// leadingArithmName returns the longest prefix of s that forms a valid
+// arithmetic identifier ([A-Za-z_][A-Za-z0-9_]*), or "" if s does not
+// start with a name character.
+func leadingArithmName(s string) string {
+	if len(s) == 0 || !arithmNameStart(s[0]) {
+		return ""
+	}
+	i := 1
+	for i < len(s) && arithmNameContinue(s[i]) {
+		i++
+	}
+	return s[:i]
+}
+
 func arithmBadSingleQuotedText(expanded string) bool {
 	return strings.Contains(expanded, `\],`) && strings.Contains(expanded, `\[`)
 }
@@ -438,6 +474,25 @@ func arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 				return 0, &ArithmError{
 					Text: arithText,
 					Err:  fmt.Errorf("arithmetic syntax error: operand expected (error token is \"%s\")", text+" "),
+				}
+			}
+		}
+		// A Word operand that expands to text containing control bytes
+		// (e.g. an array subscript like `[$'x\001y\177z']`) is not a valid
+		// arithmetic token. bash removes the CTLESC escape bytes (the
+		// `\001` here), then its arithmetic lexer reads a leading
+		// identifier; the remaining byte that can neither continue a name
+		// nor form an operator (the literal `\177`) is reported as an
+		// invalid operator. The echoed expression keeps the surviving
+		// control bytes (`xy\177z`) and the error token is the unparsable
+		// remainder (`\177z`).
+		if cleaned, ctrl := stripArithmCTLESC(str); ctrl {
+			name := leadingArithmName(cleaned)
+			if rest := cleaned[len(name):]; name != "" && rest != "" {
+				return 0, &ArithmError{
+					Text: cleaned,
+					Err: fmt.Errorf("arithmetic syntax error: invalid arithmetic operator (error token is \"%s\")",
+						rest),
 				}
 			}
 		}

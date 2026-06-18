@@ -2223,18 +2223,6 @@ func (r *Runner) setFunc(name string, body *syntax.Stmt) {
 	r.Funcs[name] = body
 }
 
-func stringIndex(index syntax.ArithmExpr) bool {
-	w, ok := index.(*syntax.Word)
-	if !ok || len(w.Parts) != 1 {
-		return false
-	}
-	switch w.Parts[0].(type) {
-	case *syntax.DblQuoted, *syntax.SglQuoted:
-		return true
-	}
-	return false
-}
-
 // wordLooksLikeAssign mirrors bash's W_ASSIGNMENT check for the first
 // word of a compound assoc assignment: `name=...` (or `name+=...`)
 // words keep the subscript-required error path rather than enabling
@@ -2740,8 +2728,6 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 			valType = "-A"
 		case prev.Kind == expand.Associative:
 			valType = "-A"
-		case len(elems) > 0 && stringIndex(elems[0].Index):
-			valType = "-A" // associative
 		}
 	}
 	if valType == "-A" {

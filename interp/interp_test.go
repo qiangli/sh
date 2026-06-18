@@ -3829,7 +3829,9 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 		"c\nd\n",
 	},
 	{
-		// cheating a little; bash just did a=c
+		// Without `declare -A` this is an indexed array; the quoted
+		// subscripts are evaluated arithmetically (`x`/`y` are unset ->
+		// 0), so both assign element 0: a[0]=b then a[0]=c.
 		`a=(["x"]=b ["y"]=c); echo ${a["y"]}`,
 		"c\n",
 	},
@@ -3847,8 +3849,10 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	},
 	{`printf '<%s>\n' $'\Uffffffff'`, "<>\n"},
 	{
+		// Indexed (no `declare -A`): the quoted subscript is arithmetic,
+		// `x` and `y` are both unset -> 0, so a[0]=b and ${a['y']}=a[0]=b.
 		`a=(['x']=b); echo ${a['y']}`,
-		"\n #IGNORE bash requires -A",
+		"b\n",
 	},
 	{
 		`declare -A a=(['a  1']=' x ' ['b  2']=' y '); for v in "${a[@]}"; do echo "$v"; done | sort`,
