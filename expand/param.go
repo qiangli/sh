@@ -1594,7 +1594,14 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 				for i, elem := range elems {
 					out[i] = bashQuoteParamQ(elem)
 				}
-				str = strings.Join(out, " ")
+				// The `*`/`[*]` scalar form joins the quoted elements
+				// with the first IFS char (nothing when IFS is empty),
+				// like `"${*@Q}"`; `@`/`[@]` joins with a space.
+				if name == "*" || nodeLit(index) == "*" {
+					str = cfg.ifsJoin(out)
+				} else {
+					str = strings.Join(out, " ")
+				}
 			case "E":
 				tail := str
 				var rns []rune
