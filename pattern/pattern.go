@@ -374,6 +374,7 @@ func regexpNext(sb *strings.Builder, sl *stringLexer, mode Mode) error {
 		}
 		sb.WriteString(regexp.QuoteMeta(string(c)))
 	case '[':
+		singleBefore := sl.i == 1 || sl.last() == '/' || extGlobAltAtSegmentStart(sl.s, sl.i-1)
 		if mode&Filenames != 0 {
 			for i, c := range sl.peekRest() {
 				if i > 0 && c == ']' {
@@ -427,6 +428,9 @@ func regexpNext(sb *strings.Builder, sl *stringLexer, mode Mode) error {
 		switch c {
 		case '!', '^':
 			sb.WriteByte('^')
+			if mode&Filenames != 0 && mode&GlobLeadingDot == 0 && singleBefore {
+				sb.WriteByte('.')
+			}
 			if c = sl.next(); c == '\x00' {
 				return &SyntaxError{msg: "[ was not matched with a closing ]"}
 			}
@@ -514,15 +518,11 @@ func regexpNext(sb *strings.Builder, sl *stringLexer, mode Mode) error {
 			case '\x00':
 				return &SyntaxError{msg: "[ was not matched with a closing ]"}
 			case '\\':
-				// shell \X -> Go [\\X]
-				sb.WriteString(`\\`)
-				if c = sl.next(); c != '0' {
-					if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_') {
-						sb.WriteByte('\\')
-					}
-					sb.WriteRune(c)
-					lastEmitted = c
+				if c = sl.next(); c == '\x00' {
+					return &SyntaxError{msg: "[ was not matched with a closing ]"}
 				}
+				writeBracketLiteral(sb, c)
+				lastEmitted = c
 			case '-':
 				if lastEmitted == 0 {
 					sb.WriteString(`\-`)
@@ -531,6 +531,11 @@ func regexpNext(sb *strings.Builder, sl *stringLexer, mode Mode) error {
 				}
 				start := lastEmitted
 				end := sl.peekNext()
+				if end == '\\' {
+					if escaped, ok := escapedBracketEndpoint(sl.peekRest()); ok {
+						end = escaped
+					}
+				}
 				// Lookahead: if the next char starts a collating
 				// element `[.X.]` or equivalence class `[=X=]`,
 				// resolve it so the range check sees the actual
@@ -572,10 +577,7 @@ func regexpNext(sb *strings.Builder, sl *stringLexer, mode Mode) error {
 				sb.WriteByte(']')
 				return nil
 			default:
-				if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == ':') {
-					sb.WriteByte('\\')
-				}
-				sb.WriteRune(c)
+				writeBracketLiteral(sb, c)
 				lastEmitted = c
 			}
 			c = sl.next()
@@ -588,6 +590,21 @@ func regexpNext(sb *strings.Builder, sl *stringLexer, mode Mode) error {
 		}
 	}
 	return nil
+}
+
+func escapedBracketEndpoint(rest string) (rune, bool) {
+	if rest == "" || rest[0] != '\\' {
+		return 0, false
+	}
+	r, size := utf8.DecodeRuneInString(rest[1:])
+	return r, size > 0 && r != utf8.RuneError
+}
+
+func writeBracketLiteral(sb *strings.Builder, c rune) {
+	if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == ':') {
+		sb.WriteByte('\\')
+	}
+	sb.WriteRune(c)
 }
 
 // bashCollatingChar maps a POSIX collating-element / equivalence

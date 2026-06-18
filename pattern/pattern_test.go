@@ -123,8 +123,16 @@ var regexpTests = []struct {
 	{pat: `[^bc]`, want: `(?s)[^bc]`},
 	{pat: `[!bc]`, want: `(?s)[^bc]`},
 	{pat: `[[]`, want: `(?s)[\[]`},
-	{pat: `[\]]`, want: `(?s)[\\\]]`},
-	{pat: `[\]]`, mode: Filenames, want: `(?s)[\\\]]`},
+	{
+		pat: `[\]]`, want: `(?s)[\]]`,
+		mustMatch:    []string{"]"},
+		mustNotMatch: []string{`\`},
+	},
+	{
+		pat: `[\]]`, mode: Filenames, want: `(?s)[\]]`,
+		mustMatch:    []string{"]"},
+		mustNotMatch: []string{`\`},
+	},
 	{pat: `[]]`, want: `(?s)[]]`},
 	{pat: `[!]]`, want: `(?s)[^]]`},
 	{pat: `[^]]`, want: `(?s)[^]]`},
@@ -152,9 +160,14 @@ var regexpTests = []struct {
 	{pat: `[z-a]`, wantErr: `^invalid range: z-a$`},
 	{pat: `[a-a]`, want: `(?s)[a-a]`},
 	{
-		pat: `a[-.,:\;\ _]b`, mode: Filenames | EntireString, want: `(?s)^a[\-\.\,:\\\;\\\ _]b$`,
+		pat: `a[-.,:\;\ _]b`, mode: Filenames | EntireString, want: `(?s)^a[\-\.\,:\;\ _]b$`,
 		mustMatch:    []string{"a.b", "a,b", "a:b", "a-b", "a;b", "a b", "a_b"},
 		mustNotMatch: []string{"aab"},
+	},
+	{
+		pat: `[^a-c]*`, mode: Filenames | EntireString, want: `(?s)^[^.a-c][^/]*$`,
+		mustMatch:    []string{"d", "de"},
+		mustNotMatch: []string{".x", "a", "abc", "d/e"},
 	},
 	{
 		pat: `a@([-.,:; _])b`, mode: Filenames | EntireString | ExtendedOperators, want: `(?s)^a([\-\.\,:\;\ _])b$`,
@@ -183,6 +196,7 @@ var regexpTests = []struct {
 	{pat: `[-a]`, want: `(?s)[\-a]`},
 	{pat: `[^-a]`, want: `(?s)[^\-a]`},
 	{pat: `[a-]`, want: `(?s)[a-]`},
+	{pat: `[a-\z]`, want: `(?s)[a-z]`},
 	{pat: `[[:digit:]]`, want: `(?s)[[:digit:]]`},
 	{pat: `[[:`, wantErr: `^charClass invalid$`},
 	{pat: `[[:digit`, wantErr: `^charClass invalid$`},
