@@ -4235,7 +4235,13 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 	case *syntax.Subshell:
 		r2 := r.subshell(false)
 		r2.enclosingSubshellEnd = cm.Rparen
+		// A subshell does not inherit the parent's EXIT trap, but if
+		// it sets its own, that trap runs when the subshell exits.
+		delete(r2.trapCallbacks, "EXIT")
 		r2.stmts(ctx, cm.Stmts)
+		if cb := r2.trapCallbacks["EXIT"]; cb != "" {
+			r2.trapCallback(ctx, cb, "exit")
+		}
 		// Subshells don't exit or return from the surrounding
 		// function: `(return 5)` makes the subshell exit with
 		// status 5, but the outer function/script keeps running.
