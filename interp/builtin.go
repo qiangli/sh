@@ -1407,23 +1407,53 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 	case "setsid":
 		exit = r.runSetsid(ctx, args)
 	case "disown":
-		// The interpreter has no kernel-level job table — backgrounded `&`
-		// statements are goroutines, and nothing in the runner ever sends
-		// SIGHUP to anything at exit. bash `disown` exists to keep jobs off
-		// that table so they survive shell exit; with no table to remove from
-		// and no SIGHUP to dodge, this builtin is a structural no-op. It must
-		// still exist so `set -e` scripts that include `disown` don't abort.
+		// Backgrounded `&` statements are goroutines, not kernel jobs, and
+		// the runner never sends SIGHUP, so disown's only observable effect
+		// here is removing entries from r.bgProcs — which matters because a
+		// later argument-less `wait` blocks on every remaining bgProc. With
+		// -h (keep the job but shield it from SIGHUP) there is nothing for
+		// us to do, so the job stays waitable.
+		all, noHup := false, false
 		fp := flagParser{remaining: args}
 		for fp.more() {
 			switch flag := fp.flag(); flag {
-			case "-a", "-h", "-r":
-				// accepted; behavior is implicit (no job table to filter)
+			case "-a":
+				all = true
+			case "-h":
+				noHup = true
+			case "-r":
+				// restrict to running jobs; all ours are "running"
 			default:
 				return invalidOpt("disown", flag)
 			}
 		}
-		// Remaining positional args (job specs / PIDs) are ignored — we
-		// have no job table to look them up against.
+		specs := fp.args()
+		switch {
+		case noHup:
+			// Keep jobs in the table (we never deliver SIGHUP anyway).
+		case all:
+			r.bgProcs = nil
+		case len(specs) == 0:
+			// disown the current (most recent) job.
+			if n := len(r.bgProcs); n > 0 {
+				r.bgProcs = r.bgProcs[:n-1]
+			}
+		default:
+			// Remove the named jobs, highest index first so earlier
+			// removals don't shift the indices still to be removed.
+			var idxs []int
+			for _, spec := range specs {
+				arg := strings.TrimPrefix(spec, "%")
+				n := int(atoi(arg))
+				if n >= 1 && n <= len(r.bgProcs) {
+					idxs = append(idxs, n-1)
+				}
+			}
+			sort.Sort(sort.Reverse(sort.IntSlice(idxs)))
+			for _, i := range idxs {
+				r.bgProcs = append(r.bgProcs[:i], r.bgProcs[i+1:]...)
+			}
+		}
 	case "builtin":
 		if len(args) < 1 {
 			break
