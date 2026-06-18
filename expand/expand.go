@@ -2048,7 +2048,7 @@ func bashSingleQuote(s string) string {
 // bashQuoteParamQ quotes a single value the way bash 5.3's ${var@Q}
 // transform does: it produces a string that re-reads as the same value,
 // always wrapping a value that would otherwise need no quoting in single
-// quotes (`zzz` -> `'zzz'`, empty string -> `''`).
+// quotes; for example, `zzz` becomes `'zzz'`.
 func bashQuoteParamQ(s string) string {
 	quoted, err := syntax.Quote(s, syntax.LangBash)
 	if err != nil {
@@ -2732,6 +2732,24 @@ func paramExpDefaultWordAllowsEmpty(pe *syntax.ParamExp) bool {
 	return false
 }
 
+func (cfg *Config) paramExpSubstWordTrigger(pe *syntax.ParamExp) bool {
+	if pe == nil || pe.Param == nil || pe.Exp == nil {
+		return false
+	}
+	vr := cfg.Env.Get(pe.Param.Value)
+	switch pe.Exp.Op {
+	case syntax.DefaultUnset:
+		return !vr.IsSet()
+	case syntax.DefaultUnsetOrNull:
+		return !vr.IsSet() || vr.String() == ""
+	case syntax.AlternateUnset:
+		return vr.IsSet()
+	case syntax.AlternateUnsetOrNull:
+		return vr.IsSet() && vr.String() != ""
+	}
+	return false
+}
+
 // isSubstWithQuotedAt reports whether `pe` is a `${var-"$@"}` /
 // `${var+"$@"}` / `${var:-"$*"}`-style form whose WORD is exactly one
 // double-quoted `$@` or `$*`. The caller still asks quotedElemFields
@@ -3194,6 +3212,94 @@ func (cfg *Config) substWordPartAllElemValues(pe *syntax.ParamExp) (elems []stri
 	return nil, "", false, nil
 }
 
+func (cfg *Config) quotedSubstWordFields(pe *syntax.ParamExp) ([]string, error) {
+	if pe == nil || pe.Exp == nil || pe.Exp.Word == nil || !cfg.paramExpSubstWordTrigger(pe) {
+		return nil, nil
+	}
+	if !paramExpWordHasAt(pe.Exp.Word) {
+		return nil, nil
+	}
+	var fields [][]fieldPart
+	var curField []fieldPart
+	flush := func() {
+		if len(curField) == 0 {
+			return
+		}
+		fields = append(fields, curField)
+		curField = nil
+	}
+	for _, part := range pe.Exp.Word.Parts {
+		var inner *syntax.ParamExp
+		switch part := part.(type) {
+		case *syntax.ParamExp:
+			inner = part
+		case *syntax.DblQuoted:
+			if len(part.Parts) == 1 {
+				inner, _ = part.Parts[0].(*syntax.ParamExp)
+			}
+		}
+		if inner != nil && !inner.Excl && inner.Exp == nil &&
+			inner.Repl == nil && !inner.Length && !inner.Width && !inner.IsSet &&
+			(inner.Param.Value == "@" || nodeLit(inner.Index) == "@") {
+			elems, err := cfg.quotedElemFields(inner)
+			if err != nil {
+				return nil, err
+			}
+			if elems != nil {
+				for i, elem := range elems {
+					if i > 0 {
+						flush()
+					}
+					curField = append(curField, fieldPart{
+						quote: quoteDouble,
+						val:   elem,
+					})
+				}
+				continue
+			}
+		}
+		wfield, err := cfg.wordField([]syntax.WordPart{part}, quoteDouble)
+		if err != nil {
+			return nil, err
+		}
+		for _, fp := range wfield {
+			fp.quote = quoteDouble
+			curField = append(curField, fp)
+		}
+	}
+	flush()
+	if len(fields) == 0 && paramExpDefaultWordAllowsEmpty(pe) {
+		fields = [][]fieldPart{{{quote: quoteDouble, val: ""}}}
+	}
+	if len(fields) == 0 {
+		return nil, nil
+	}
+	return fieldStrings(fields), nil
+}
+
+func paramExpWordHasAt(word *syntax.Word) bool {
+	if word == nil {
+		return false
+	}
+	for _, part := range word.Parts {
+		switch part := part.(type) {
+		case *syntax.ParamExp:
+			if !part.Excl && part.Exp == nil && part.Repl == nil &&
+				(part.Param.Value == "@" || nodeLit(part.Index) == "@") {
+				return true
+			}
+			if part.Exp != nil && paramExpWordHasAt(part.Exp.Word) {
+				return true
+			}
+		case *syntax.DblQuoted:
+			if paramExpWordHasAt(&syntax.Word{Parts: part.Parts}) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (cfg *Config) simpleAtStarNullIFSAssign(word *syntax.Word) (string, bool) {
 	if word == nil || len(word.Parts) != 1 {
 		return "", false
@@ -3431,6 +3537,11 @@ func (cfg *Config) quotedElemFields(pe *syntax.ParamExp) ([]string, error) {
 		op := pe.Exp.Op
 		isSubstOp := op == syntax.AlternateUnset || op == syntax.AlternateUnsetOrNull ||
 			op == syntax.DefaultUnset || op == syntax.DefaultUnsetOrNull
+		if isSubstOp {
+			if elems, err := cfg.quotedSubstWordFields(pe); err != nil || elems != nil {
+				return elems, err
+			}
+		}
 		if isSubstOp && pe.Param != nil && (pe.Param.Value == "@" || pe.Param.Value == "*") {
 			vr := cfg.Env.Get(pe.Param.Value)
 			trigger := false

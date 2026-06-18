@@ -1076,6 +1076,8 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			}
 		case orig.Kind == NameRef:
 			strs = append(strs, orig.Str)
+		case pe.Index != nil && (nodeLit(pe.Index) == "@" || nodeLit(pe.Index) == "*") && !vr.IsSet():
+			return "", nil
 		case (name == "@" || name == "*") && !vr.IsSet():
 			return "", nil
 		case !vr.IsSet():

@@ -213,15 +213,25 @@ func TestFieldsParamExpSubstWordQuotedAt(t *testing.T) {
 		"1": {Set: true, Kind: String, Str: "a b"},
 		"@": {Set: true, Kind: Indexed, List: []string{"a b", "c", "d"}},
 	}}
-	for _, src := range []string{`${1+"$@"}`} {
-		word := parseWord(t, src)
+	tests := []struct {
+		src  string
+		want []string
+	}{
+		{`${1+"$@"}`, []string{"a b", "c", "d"}},
+		{`${foo:-"$@"}`, []string{"a b", "c", "d"}},
+		{`echo "${1+  $@  }"`, []string{"  a b", "c", "d  "}},
+	}
+	for _, tc := range tests {
+		word := parseWord(t, tc.src)
+		if strings.HasPrefix(tc.src, "echo ") {
+			word = parseCallArg(t, tc.src, 1)
+		}
 		got, err := Fields(cfg, word)
 		if err != nil {
-			t.Fatalf("%s: did not want error, got %v", src, err)
+			t.Fatalf("%s: did not want error, got %v", tc.src, err)
 		}
-		want := []string{"a b", "c", "d"}
-		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("%s: wanted %q, got %q", src, want, got)
+		if !reflect.DeepEqual(got, tc.want) {
+			t.Fatalf("%s: wanted %q, got %q", tc.src, tc.want, got)
 		}
 	}
 }
@@ -514,6 +524,20 @@ func TestFieldsParamExpAssignArrayElement(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestFieldsUnsetIndirectArrayKeys(t *testing.T) {
+	cfg := &Config{Env: testEnv{}}
+	for _, src := range []string{`${!A[*]}`, `${!A[@]}`, `${v=${!A[*]}}`} {
+		word := parseWord(t, src)
+		got, err := Fields(cfg, word)
+		if err != nil {
+			t.Fatalf("%s: did not want error, got %v", src, err)
+		}
+		if len(got) != 0 {
+			t.Fatalf("%s: wanted no fields, got %q", src, got)
+		}
 	}
 }
 
