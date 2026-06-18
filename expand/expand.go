@@ -3068,6 +3068,17 @@ func (cfg *Config) substWordPartFields(parts []syntax.WordPart) ([][]fieldPart, 
 			splitAdd(s[fieldStart:])
 		}
 	}
+	// emitModElems lays out the per-element result of a modifier applied
+	// to an unquoted `*`/`@` form: each element is its own field (flush
+	// between) and word-split internally via splitAdd.
+	emitModElems := func(elems []string) {
+		for i, elem := range elems {
+			if i > 0 {
+				flush()
+			}
+			splitAdd(elem)
+		}
+	}
 	for _, part := range parts {
 		switch part := part.(type) {
 		case *syntax.Lit:
@@ -3155,6 +3166,36 @@ func (cfg *Config) substWordPartFields(parts []syntax.WordPart) ([][]fieldPart, 
 				} else {
 					splitAdd(cfg.ifsJoin(elems))
 				}
+				continue
+			}
+			// Modifier expansions (`${*/}`, `${*,,}`, `${*#p}`,
+			// `${*@Q}`) on an unquoted `*`/`[*]` form keep their
+			// per-element structure like `@`, rather than joining into
+			// a single string. Re-aim `*` at `@` and reuse the
+			// per-element modifier helpers (no-op for plain scalars).
+			mpe := unquotedStarModExpand(part)
+			if elems, err := cfg.quotedReplElemFields(mpe); err != nil {
+				return nil, err
+			} else if elems != nil {
+				emitModElems(elems)
+				continue
+			}
+			if elems, err := cfg.quotedRemoveElemFields(mpe); err != nil {
+				return nil, err
+			} else if elems != nil {
+				emitModElems(elems)
+				continue
+			}
+			if elems, err := cfg.quotedCaseModElemFields(mpe); err != nil {
+				return nil, err
+			} else if elems != nil {
+				emitModElems(elems)
+				continue
+			}
+			if elems, err := cfg.quotedTransformElemFields(mpe); err != nil {
+				return nil, err
+			} else if elems != nil {
+				emitModElems(elems)
 				continue
 			}
 			val, err := Literal(cfg, &syntax.Word{Parts: []syntax.WordPart{part}})
@@ -3369,7 +3410,11 @@ func paramExpWordHasAtOrStar(word *syntax.Word) bool {
 	for _, part := range word.Parts {
 		switch part := part.(type) {
 		case *syntax.ParamExp:
-			if !part.Excl && part.Exp == nil && part.Repl == nil &&
+			// A `*`/`@` param or index counts even when it carries a
+			// modifier (`${*/}`, `${*,,}`, `${*#p}`, `${*@Q}`): those
+			// unquoted forms still expand per-element, so substWordFields
+			// must not bail out to the joined paramExp path for them.
+			if !part.Excl &&
 				(part.Param.Value == "@" || part.Param.Value == "*" ||
 					nodeLit(part.Index) == "@" || nodeLit(part.Index) == "*") {
 				return true
