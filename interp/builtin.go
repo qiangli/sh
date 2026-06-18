@@ -3571,15 +3571,24 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					return "SIG" + name
 				}
 			}
-			// Build the sort order: EXIT, then signals 1..15
-			// (HUP, INT, QUIT, ILL, …, TERM) in numeric order,
+			// Build the sort order: EXIT (signal 0) first, then
+			// every trapped real signal in ascending numeric order
+			// (so CHLD, WINCH, etc. — not just 1..15 — are listed),
 			// then ERR, DEBUG, RETURN.
-			sigOrder := []string{"EXIT"}
-			for i := 1; i <= 31; i++ {
-				if name, ok := signalNames[i]; ok {
-					sigOrder = append(sigOrder, name)
+			var sigKeys []string
+			for sig := range r.trapCallbacks {
+				switch sig {
+				case "EXIT", "ERR", "DEBUG", "RETURN":
+					continue
 				}
+				sigKeys = append(sigKeys, sig)
 			}
+			sort.Slice(sigKeys, func(i, j int) bool {
+				si, _ := signalByName(sigKeys[i])
+				sj, _ := signalByName(sigKeys[j])
+				return si < sj
+			})
+			sigOrder := append([]string{"EXIT"}, sigKeys...)
 			sigOrder = append(sigOrder, "ERR", "DEBUG", "RETURN")
 			for _, sig := range sigOrder {
 				cb, ok := r.trapCallbacks[sig]
