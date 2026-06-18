@@ -4535,20 +4535,37 @@ func pathJoin2(elem1, elem2 string) string {
 // splitting, slashes are replaced with [filepath.Separator], so that splitting
 // Unix paths on Windows works as well.
 func pathSplit(path string) []string {
-	path = unescapeGlobPathSeparators(path)
+	path = unescapeGlobLiteralPathSeparators(path)
 	path = filepath.FromSlash(path)
 	return strings.Split(path, string(filepath.Separator))
 }
 
-func unescapeGlobPathSeparators(path string) string {
+func unescapeGlobLiteralPathSeparators(path string) string {
 	if !strings.Contains(path, `\/`) {
 		return path
 	}
 	var sb strings.Builder
 	sb.Grow(len(path))
+	hasMeta := false
 	for i := 0; i < len(path); i++ {
 		if path[i] == '\\' && i+1 < len(path) && path[i+1] == '/' {
+			if hasMeta {
+				sb.WriteByte(path[i])
+			}
 			continue
+		}
+		switch path[i] {
+		case '/':
+			hasMeta = false
+		case '\\':
+			if i+1 < len(path) {
+				i++
+				sb.WriteByte('\\')
+				sb.WriteByte(path[i])
+				continue
+			}
+		case '*', '?', '[':
+			hasMeta = true
 		}
 		sb.WriteByte(path[i])
 	}

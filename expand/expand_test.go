@@ -824,7 +824,7 @@ func TestFieldsBackslashEscapedGlobPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := &Config{
-		Env:      ListEnviron("PWD=" + temp),
+		Env:      ListEnviron("PWD="+temp, `bs=\`),
 		ReadDir2: os.ReadDir,
 	}
 	tests := []struct {
@@ -833,6 +833,8 @@ func TestFieldsBackslashEscapedGlobPath(t *testing.T) {
 	}{
 		{`./tmp\/a/b/*`, []string{"./tmp/a/b/c"}},
 		{`./t\mp/a/b/*`, []string{"./tmp/a/b/c"}},
+		{`./tmp${bs}/a/b/*`, []string{"./tmp/a/b/c"}},
+		{`./tm[p]${bs}/a/b/c`, []string{`./tm[p]\/a/b/c`}},
 	}
 	for _, tc := range tests {
 		word := parseWord(t, tc.src)
