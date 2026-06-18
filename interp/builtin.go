@@ -1173,6 +1173,10 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				waitNext = true
 			case "-p":
 				pidVar = fp.value()
+			case "-f":
+				// Wait for the job to terminate (not merely stop). Our
+				// jobs only ever terminate, so this is a no-op accepted
+				// for compatibility.
 			default:
 				return invalidOpt("wait", flag)
 			}
@@ -1229,7 +1233,21 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			// returns when the bg statement spawned a real process).
 			var bg *bgProc
 			var matchedIdx int64
-			if rest, ok := strings.CutPrefix(arg, "g"); ok {
+			if strings.HasPrefix(arg, "%") {
+				// Job-control notation is allowed even without monitor
+				// mode (SUS requirement). An unknown spec is "no such
+				// job" with exit 127.
+				bg = r.resolveJobArg(arg)
+				if bg == nil {
+					return failf(127, "wait: %s: no such job\n", arg)
+				}
+				for i, c := range r.bgProcs {
+					if c == bg {
+						matchedIdx = int64(i + 1)
+						break
+					}
+				}
+			} else if rest, ok := strings.CutPrefix(arg, "g"); ok {
 				idx := atoi(rest)
 				if idx <= 0 || idx > int64(len(r.bgProcs)) {
 					return failf(1, "wait: pid %s is not a child of this shell\n", arg)
@@ -1239,7 +1257,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			} else {
 				pid, perr := strconv.ParseInt(arg, 10, 64)
 				if perr != nil {
-					return failf(1, "wait: pid %s is not a child of this shell\n", arg)
+					return failf(2, "wait: `%s': not a pid or valid job spec\n", arg)
 				}
 				for i, candidate := range r.bgProcs {
 					// Match a real OS PID (published by the exec handler) or
@@ -1358,7 +1376,30 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			return exit
 		}
 		for _, target := range remaining {
-			if strings.HasPrefix(target, "%") || strings.HasPrefix(target, "g") {
+			if strings.HasPrefix(target, "%") {
+				// Job-control notation is permitted without monitor mode
+				// (SUS). Resolve the spec to its real OS PID and signal it.
+				bg := r.resolveJobArg(target)
+				if bg == nil {
+					exit.code = 1
+					r.errf(r.bashErrPrefix(pos)+"kill: %s: no such job\n", target)
+					continue
+				}
+				if bg.pidReady != nil {
+					<-bg.pidReady
+				}
+				rp := int(bg.pid.Load())
+				if rp == 0 {
+					// pure-goroutine job with no OS pid to signal
+					continue
+				}
+				if err := sendSignal(rp, sig); err != nil {
+					exit.code = 1
+					r.errf(r.bashErrPrefix(pos)+"kill: (%d) - %v\n", rp, err)
+				}
+				continue
+			}
+			if strings.HasPrefix(target, "g") {
 				exit.code = 1
 				r.errf(r.bashErrPrefix(pos)+"kill: %s: no job control in this shell\n", target)
 				continue
@@ -4341,6 +4382,20 @@ func (r *Runner) jsonOut(v any) exitStatus {
 // coproc's synthetic `<NAME>_PID`). Returns nil when nothing matches.
 func (r *Runner) resolveJobArg(arg string) *bgProc {
 	if rest, ok := strings.CutPrefix(arg, "%"); ok {
+		switch rest {
+		case "%", "+", "":
+			// current job (most recent)
+			if len(r.bgProcs) == 0 {
+				return nil
+			}
+			return r.bgProcs[len(r.bgProcs)-1]
+		case "-":
+			// previous job
+			if len(r.bgProcs) < 2 {
+				return nil
+			}
+			return r.bgProcs[len(r.bgProcs)-2]
+		}
 		n := int(atoi(rest))
 		if n < 1 || n > len(r.bgProcs) {
 			return nil
