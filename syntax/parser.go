@@ -537,6 +537,14 @@ type Parser struct {
 	keepComments bool
 	lang         LangVariant
 
+	// mb is the LC_CTYPE multibyte charset used to advance non-UTF-8
+	// multibyte characters (e.g. Big5), mirroring bash's MB_CUR_MAX. It
+	// is resolved lazily from the process locale the first time an
+	// invalid-UTF-8 byte is seen (mbInit guards that one-shot lookup), so
+	// ASCII/UTF-8 parsing pays no cost. See mbchar.go.
+	mb     mbCharset
+	mbInit bool
+
 	stopAt []byte
 
 	recoveredErrors  int

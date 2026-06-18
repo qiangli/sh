@@ -140,14 +140,39 @@ decodeRune:
 			goto decodeRune
 		}
 	}
+	if p.r == utf8.RuneError && w == 1 {
+		// A byte that utf8.DecodeRune rejects is NOT an error in bash
+		// 5.3. Its lexer advances one character at a time with the
+		// locale's MB_CUR_MAX (lib/sh/shmbchar.c): in a UTF-8 or single
+		// -byte locale a stray byte is a single opaque character; in a
+		// legacy multibyte locale (Big5, Shift-JIS) the byte may begin a
+		// valid wide character, which mbrtowc consumes whole. We match
+		// that here so the trailing byte — even when it is 0x5C ('\') as
+		// in Big5 A3 5C — is never mistaken for an ASCII metacharacter.
+		// An invalid or incomplete sequence stays one opaque byte
+		// (MB_INVALIDCH -> clen = 1). p.r is left as RuneError for token
+		// classification; the raw bytes are preserved in litBs (and in
+		// newLit, keyed off the p.w/RuneLen mismatch).
+		if !p.mbInit {
+			p.mb = localeCharset()
+			p.mbInit = true
+		}
+		if p.mb.multibyte() {
+			// Ensure the trailing byte is buffered before measuring; a
+			// lone lead byte is a "full" (if invalid) UTF-8 encoding, so
+			// the fill above did not run for it.
+			for len(p.bs)-int(p.bsp) < 2 && p.fill() > 0 {
+			}
+			if n := p.mb.mbCharLen(p.bs[p.bsp:]); n > 1 {
+				w = n
+			}
+		}
+	}
 	if p.litBs != nil {
 		p.litBs = append(p.litBs, p.bs[p.bsp:p.bsp+uint(w)]...)
 	}
 	p.bsp += uint(w)
 	p.bquoteEscapedByte = bquoteEscapedByte
-	if p.r == utf8.RuneError && w == 1 {
-		p.posErr(p.nextPos(), "invalid UTF-8 encoding")
-	}
 	p.w = w
 	return p.r
 }
@@ -306,8 +331,9 @@ skipSpace:
 		}
 	}
 	if p.stopAt != nil && (p.spaced || p.tok == illegalTok || p.stopToken()) {
-		w := utf8.RuneLen(r)
-		if bytes.HasPrefix(p.bs[p.bsp-uint(w):], p.stopAt) {
+		// p.w is the actual byte width of r, which can differ from
+		// utf8.RuneLen(r) for an opaque non-UTF-8 byte/character.
+		if bytes.HasPrefix(p.bs[p.bsp-uint(p.w):], p.stopAt) {
 			p.r = utf8.RuneSelf
 			p.w = 1
 			p.tok = _EOF
@@ -1081,6 +1107,14 @@ func (p *Parser) newLit(r rune) {
 	case r < utf8.RuneSelf:
 		p.litBs = p.litBuf[:1]
 		p.litBs[0] = byte(r)
+	case r == utf8.RuneError && p.w != utf8.RuneLen(utf8.RuneError):
+		// An invalid/incomplete byte (p.w == 1) or a legacy multibyte
+		// character such as Big5 (p.w == 2) advanced opaquely by rune():
+		// p.r is RuneError, whose UTF-8 RuneLen would be 3, so copy the
+		// p.w raw source bytes actually consumed rather than over- or
+		// under-reading. A genuine U+FFFD has p.w == 3 and falls through
+		// to the case below.
+		p.litBs = append(p.litBuf[:0], p.bs[p.bsp-uint(p.w):p.bsp]...)
 	case r > escNewl:
 		w := utf8.RuneLen(r)
 		p.litBs = append(p.litBuf[:0], p.bs[p.bsp-uint(w):p.bsp]...)

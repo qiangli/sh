@@ -109,6 +109,37 @@ func TestParseErr(t *testing.T) {
 	}
 }
 
+// TestParseByteTransparentBytes locks in bash 5.3's byte transparency: an
+// invalid or incomplete multibyte byte is never a parse error, it is advanced
+// as a single opaque byte (lib/sh/shmbchar.c: MB_INVALIDCH -> clen=1). These
+// inputs used to be strict "invalid UTF-8 encoding" errors in errorCases.
+func TestParseByteTransparentBytes(t *testing.T) {
+	t.Parallel()
+	inputs := []string{
+		"echo \x80",
+		"\necho \x80",
+		"echo foo\x80bar",
+		"echo foo\xc3",
+		"#foo\xc3",
+		"echo a\x80",
+	}
+	for lang := range langResolvedVariants.bits() {
+		p := NewParser(Variant(lang), KeepComments(true))
+		for _, in := range inputs {
+			// Use the strict reader to also exercise the byte-at-a-time
+			// fill path through the lexer.
+			f, err := p.Parse(newStrictReader(in), "")
+			qt.Assert(t, qt.IsNil(err), qt.Commentf("lang=%s in=%q", lang, in))
+			// The stray byte must survive verbatim in the printed output
+			// (modulo the printer dropping leading/trailing blank lines).
+			var sb strings.Builder
+			qt.Assert(t, qt.IsNil(NewPrinter().Print(&sb, f)), qt.Commentf("in=%q", in))
+			qt.Assert(t, qt.Equals(strings.Trim(sb.String(), "\n"), strings.Trim(in, "\n")),
+				qt.Commentf("lang=%s in=%q", lang, in))
+		}
+	}
+}
+
 func TestParseHeredocEOFWarningEmptyDelimiter(t *testing.T) {
 	var warnings []string
 	p := NewParser(HeredocEOFWarning(func(startLine, eofLine int, stop string) {
@@ -597,48 +628,31 @@ func init() {
 }
 
 var errorCases = []errorCase{
+	// NOTE: bash 5.3 never errors on an invalid/incomplete multibyte byte
+	// — it advances one opaque byte (lib/sh/shmbchar.c: MB_INVALIDCH ->
+	// clen=1). The fork follows that, so inputs whose ONLY problem was a
+	// stray byte now parse cleanly; see TestParseByteTransparentBytes.
+	// The cases below kept an error because they are ALSO unterminated;
+	// the expected error is now that of the surrounding construct, with
+	// the stray byte absorbed into a literal.
 	errCase(
-		"echo \x80",
-		langErr("1:6: invalid UTF-8 encoding"),
-		flipConfirmAll, // common shells use bytes
-	),
-	errCase(
-		"\necho \x80",
-		langErr("2:6: invalid UTF-8 encoding"),
-		flipConfirmAll, // common shells use bytes
-	),
-	errCase(
-		"echo foo\x80bar",
-		langErr("1:9: invalid UTF-8 encoding"),
-		flipConfirmAll, // common shells use bytes
-	),
-	errCase(
-		"echo foo\xc3",
-		langErr("1:9: invalid UTF-8 encoding"),
-		flipConfirmAll, // common shells use bytes
-	),
-	errCase(
-		"#foo\xc3",
-		langErr("1:5: invalid UTF-8 encoding"),
-		flipConfirmAll, // common shells use bytes
-	),
-	errCase(
-		"echo a\x80",
-		langErr("1:7: invalid UTF-8 encoding"),
-		flipConfirmAll, // common shells use bytes
-	),
-	errCase(
+		// Heredoc whose delimiter holds a stray byte; the body never
+		// closes it, so the error is now the unclosed-heredoc one (real
+		// shells accept an unclosed heredoc at EOF, hence the flip).
 		"<<$\xc8\n$\xc8",
-		langErr("1:4: invalid UTF-8 encoding"),
-		flipConfirmAll, // common shells use bytes
+		langErr("1:1: unclosed here-document \"$\\xc8\""),
+		flipConfirmUnclosedHeredoc,
 	),
 	errCase(
 		"echo $((foo\x80bar",
-		langErr("1:12: invalid UTF-8 encoding"),
+		langErr("1:6: reached EOF without matching `$((` with `))`"),
 	),
 	errCase(
+		// The stray \x91 is now absorbed into the array literal, which
+		// is left unterminated. Only LangBash had an expectation here
+		// (POSIX fails earlier with its no-arrays error, unchanged).
 		"z=($\\\n#\\\n\\\n$#\x91\\\n",
-		langErr("4:3: invalid UTF-8 encoding", LangBash),
+		langErr("1:3: reached EOF without matching `(` with `)`", LangBash),
 	),
 	errCase(
 		`${ `,
@@ -665,28 +679,35 @@ var errorCases = []errorCase{
 		langErr("1:1: reached EOF without matching `${` with `}`", LangMirBSDKorn),
 	),
 	errCase(
+		// The stray byte is absorbed into the arithmetic body, leaving
+		// the construct unterminated; POSIX parses `((` as nested `(`.
 		"((foo\x80bar",
-		langErr("1:6: invalid UTF-8 encoding"),
+		langErr("1:1: reached EOF without matching `((` with `))`", LangBash|LangMirBSDKorn|LangBats|LangZsh),
+		langErr("1:2: reached EOF without matching `(` with `)`", LangPOSIX),
 	),
 	errCase(
 		";\x80",
-		langErr("1:2: invalid UTF-8 encoding"),
+		langErr("1:1: `;` can only immediately follow a statement"),
 	),
 	errCase(
+		// \x80 becomes an opaque byte (U+FFFD for classification): in
+		// bash mode the brace expansion runs to EOF unmatched; the other
+		// variants reject it as an invalid parameter-expansion operator.
 		"${a\x80",
-		langErr("1:4: invalid UTF-8 encoding"),
+		langErr("1:1: reached EOF without matching `${` with `}`", LangBash),
+		langErr("1:4: not a valid parameter expansion operator: `�`", LangPOSIX|LangMirBSDKorn|LangBats|LangZsh),
 	),
 	errCase(
 		"${a#\x80",
-		langErr("1:5: invalid UTF-8 encoding"),
+		langErr("1:1: reached EOF without matching `${` with `}`"),
 	),
 	errCase(
 		"${a-'\x80",
-		langErr("1:6: invalid UTF-8 encoding"),
+		langErr("1:5: reached EOF without closing quote `'`"),
 	),
 	errCase(
 		"echo $((a |\x80",
-		langErr("1:12: invalid UTF-8 encoding"),
+		langErr("1:6: reached EOF without matching `$((` with `))`"),
 	),
 	errCase(
 		"!",
