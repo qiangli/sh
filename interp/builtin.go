@@ -1263,7 +1263,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			} else {
 				pid, perr := strconv.ParseInt(arg, 10, 64)
 				if perr != nil {
-					return failf(2, "wait: `%s': not a pid or valid job spec\n", arg)
+					return failf(1, "wait: `%s': not a pid or valid job spec\n", arg)
 				}
 				for i, candidate := range r.bgProcs {
 					// Match a real OS PID (published by the exec handler) or

@@ -2191,7 +2191,7 @@ var runTests = []runTest{
 
 	// background/wait
 	{"wait", ""},
-	{"wait foo", "wait: pid foo is not a child of this shell\nexit status 1 #JUSTERR"},
+	{"wait foo", "wait: `foo': not a pid or valid job spec\nexit status 1 #JUSTERR"},
 
 	// disown — no-op (no job table to remove from, no SIGHUP to dodge)
 	{"disown", ""},
@@ -2206,7 +2206,7 @@ var runTests = []runTest{
 	// kill — argv parsing / -l listing / error paths
 	{"kill", "kill: usage: kill [-s sigspec | -n signum | -sigspec] pid | jobspec ... or kill -l [sigspec]\nexit status 2 #JUSTERR"},
 	{"kill foo", "kill: `foo': not a pid or valid job spec\nexit status 1 #JUSTERR"},
-	{"kill %1", "kill: %1: no job control in this shell\nexit status 1 #JUSTERR"},
+	{"kill %1", "kill: %1: no such job\nexit status 1 #JUSTERR"},
 	{"kill -s NOSIG 1", "kill: NOSIG: invalid signal specification\nexit status 1 #JUSTERR"},
 	{"kill -NOSIG 1", "kill: NOSIG: invalid signal specification\nexit status 1 #JUSTERR"},
 	{"kill -s", "kill: -s: option requires an argument\nexit status 2 #JUSTERR"},
@@ -4668,9 +4668,9 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	// reattach stdio; see docs/plan-punted-builtins.md.
 	{"fg", "fg: no job control\nexit status 1 #JUSTERR"},
 	{"bg", "bg: no job control\nexit status 1 #JUSTERR"},
-	{"fg %99", "fg: %99: no such job\nexit status 1 #JUSTERR"},
-	{"(echo done) & fg", "done\n"},
-	{"(exit 7) & fg; echo after=$?", "after=7\n"},
+	{"fg %99", "fg: no job control\nexit status 1 #JUSTERR"},
+	{"(echo done) & fg", "fg: no job control\nexit status 1 #JUSTERR"},
+	{"(exit 7) & fg; echo after=$?", "fg: no job control\nafter=1\n"},
 
 	// umask: per-Runner virtual mask. Reading is 4-digit octal; setting
 	// updates only the runner field, not the process.
