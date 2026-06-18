@@ -2475,11 +2475,17 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 				if err != nil {
 					return nil, err
 				}
+				// Unquoted $@: each positional parameter is a separate
+				// word that then undergoes word splitting on IFS. When
+				// IFS is unset (default whitespace), an element like
+				// "tom dick harry" must split into three words; an empty
+				// element produces no word. splitAdd handles both,
+				// keeping element boundaries via the flush() between them.
 				for i, elem := range elems {
 					if i > 0 {
 						flush()
 					}
-					curField = append(curField, fieldPart{val: elem})
+					splitAdd(elem)
 				}
 				continue
 			}
@@ -2547,7 +2553,7 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 				}
 				continue
 			}
-			if elems, err := cfg.quotedTransformElemFields(wp); err != nil {
+			if elems, err := cfg.quotedTransformElemFields(mpe); err != nil {
 				return nil, err
 			} else if elems != nil {
 				for i, elem := range elems {
@@ -3927,8 +3933,18 @@ func (cfg *Config) quotedReplElemFields(pe *syntax.ParamExp) ([]string, error) {
 		return elems, err
 	}
 	orig, replAnchoredStart, replAnchoredEnd, err := replPattern(cfg, pe.Repl.Orig, pe.Repl.All)
-	if err != nil || (orig == "" && !replAnchoredStart && !replAnchoredEnd) {
+	if err != nil {
 		return nil, nil
+	}
+	if orig == "" && !replAnchoredStart && !replAnchoredEnd {
+		// Empty replacement pattern (`${*/}`, `${a[@]/}`) is a no-op,
+		// but the per-element field structure must still be preserved
+		// rather than falling through to the generic joined paramExp
+		// path. Return the (possibly IFS-joined for `*`) elements as-is.
+		if join {
+			return []string{cfg.ifsJoin(elems)}, nil
+		}
+		return elems, nil
 	}
 	var with string
 	if pe.Repl.With != nil {
