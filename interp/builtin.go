@@ -2187,6 +2187,13 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			source:       path,
 			callerSource: oldFilename,
 			funcName:     "source",
+			// A sourced file runs in the current execution environment, but
+			// the DEBUG trap is inherited by its commands only when functrace
+			// is on (set -T / -o functrace) or the enclosing function frame
+			// is itself traced — sourcing at the top level with functrace off
+			// does not fire DEBUG for the sourced commands, matching bash.
+			debugTrace: r.functraceEnabled() ||
+				(len(r.callStack) > 0 && r.callStack[len(r.callStack)-1].debugTrace),
 		})
 		r.stmts(ctx, file.Stmts)
 		r.callStack = r.callStack[:len(r.callStack)-1]
