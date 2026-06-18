@@ -1171,7 +1171,14 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			slices.Sort(strs)
 		}
 		elems = strs
-		str = strings.Join(strs, " ")
+		// `${!name[*]}` joins the keys/indices with the first IFS char
+		// (nothing when IFS is empty), like `${name[*]}`; the `[@]` form
+		// joins with a space.
+		if nodeLit(index) == "*" {
+			str = cfg.ifsJoin(strs)
+		} else {
+			str = strings.Join(strs, " ")
+		}
 		if pe.Exp != nil && indirectDefaultOp(pe.Exp.Op) {
 			arg, err := Literal(cfg, pe.Exp.Word)
 			if err != nil {
