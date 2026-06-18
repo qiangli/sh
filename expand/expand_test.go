@@ -814,6 +814,37 @@ func TestFieldsBackslashEscapedGlobMeta(t *testing.T) {
 	}
 }
 
+func TestFieldsBackslashEscapedGlobPath(t *testing.T) {
+	temp := t.TempDir()
+	if err := os.MkdirAll(temp+"/tmp/a/b", 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(temp+"/tmp/a/b/c", nil, 0o666); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &Config{
+		Env:      ListEnviron("PWD=" + temp),
+		ReadDir2: os.ReadDir,
+	}
+	tests := []struct {
+		src  string
+		want []string
+	}{
+		{`./tmp\/a/b/*`, []string{"./tmp/a/b/c"}},
+		{`./t\mp/a/b/*`, []string{"./tmp/a/b/c"}},
+	}
+	for _, tc := range tests {
+		word := parseWord(t, tc.src)
+		got, err := Fields(cfg, word)
+		if err != nil {
+			t.Fatalf("%s: did not want error, got %v", tc.src, err)
+		}
+		if !reflect.DeepEqual(got, tc.want) {
+			t.Fatalf("%s: wanted %q, got %q", tc.src, tc.want, got)
+		}
+	}
+}
+
 type mockFileInfo struct {
 	name        string
 	typ         fs.FileMode

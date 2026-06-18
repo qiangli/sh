@@ -4535,8 +4535,39 @@ func pathJoin2(elem1, elem2 string) string {
 // splitting, slashes are replaced with [filepath.Separator], so that splitting
 // Unix paths on Windows works as well.
 func pathSplit(path string) []string {
+	path = unescapeGlobPathSeparators(path)
 	path = filepath.FromSlash(path)
 	return strings.Split(path, string(filepath.Separator))
+}
+
+func unescapeGlobPathSeparators(path string) string {
+	if !strings.Contains(path, `\/`) {
+		return path
+	}
+	var sb strings.Builder
+	sb.Grow(len(path))
+	for i := 0; i < len(path); i++ {
+		if path[i] == '\\' && i+1 < len(path) && path[i+1] == '/' {
+			continue
+		}
+		sb.WriteByte(path[i])
+	}
+	return sb.String()
+}
+
+func unescapeGlobLiteral(path string) string {
+	if !strings.ContainsRune(path, '\\') {
+		return path
+	}
+	var sb strings.Builder
+	sb.Grow(len(path))
+	for i := 0; i < len(path); i++ {
+		if path[i] == '\\' && i+1 < len(path) {
+			i++
+		}
+		sb.WriteByte(path[i])
+	}
+	return sb.String()
 }
 
 func (cfg *Config) glob(base, pat string) ([]string, error) {
@@ -4574,13 +4605,14 @@ func (cfg *Config) glob(base, pat string) ([]string, error) {
 			}
 			continue
 		case !cfg.hasGlobMeta(part):
+			litPart := unescapeGlobLiteral(part)
 			var newMatches []string
 			for _, dir := range matches {
 				match := dir
 				if !filepath.IsAbs(match) {
 					match = filepath.Join(base, match)
 				}
-				match = pathJoin2(match, part)
+				match = pathJoin2(match, litPart)
 				// We can't use [Config.ReadDir2] on the parent and match the directory
 				// entry by name, because short paths on Windows break that.
 				// Our only option is to [Config.ReadDir2] on the directory entry itself,
@@ -4602,7 +4634,7 @@ func (cfg *Config) glob(base, pat string) ([]string, error) {
 						continue // exists but not a directory
 					}
 				}
-				newMatches = append(newMatches, pathJoin2(dir, part))
+				newMatches = append(newMatches, pathJoin2(dir, litPart))
 			}
 			matches = newMatches
 			continue

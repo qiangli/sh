@@ -197,6 +197,16 @@ var regexpTests = []struct {
 	{pat: `[^-a]`, want: `(?s)[^\-a]`},
 	{pat: `[a-]`, want: `(?s)[a-]`},
 	{pat: `[a-\z]`, want: `(?s)[a-z]`},
+	{
+		pat: `[`, mode: LenientRanges | EntireString, want: `(?s)^\[$`,
+		mustMatch:    []string{"["},
+		mustNotMatch: []string{"a", ""},
+	},
+	{
+		pat: `[*`, mode: LenientRanges | EntireString, want: `(?s)^\[.*$`,
+		mustMatch:    []string{"[", "[abc"},
+		mustNotMatch: []string{"abc"},
+	},
 	{pat: `[[:digit:]]`, want: `(?s)[[:digit:]]`},
 	{pat: `[[:`, wantErr: `^charClass invalid$`},
 	{pat: `[[:digit`, wantErr: `^charClass invalid$`},

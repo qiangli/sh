@@ -385,6 +385,10 @@ func regexpNext(sb *strings.Builder, sl *stringLexer, mode Mode) error {
 				}
 			}
 		}
+		if mode&LenientRanges != 0 && !strings.ContainsRune(sl.peekRest(), ']') {
+			sb.WriteString(`\[`)
+			return nil
+		}
 		// Peek ahead: if the bracket expression contains a valid
 		// [[:name:] char class but no closing outer ], bash treats
 		// the opening [ as literal and the class name chars as a
