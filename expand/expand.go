@@ -492,7 +492,14 @@ func LiteralForAssign(cfg *Config, word *syntax.Word) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return cfg.fieldJoin(field), nil
+	s := cfg.fieldJoin(field)
+	// `var=${*:off}` (or array `[*]` slice): the star-form substring's
+	// 0x7f bytes are quoted nulls, removed when taken as an assignment
+	// value. `var="${*:off}"` (quoted) and `var=$'\177'` keep them.
+	if starSliceQuotedNull(word) {
+		s = stripQuotedNulls(s)
+	}
+	return s, nil
 }
 
 // Document expands a single shell word as if it were a here-document body.
@@ -3062,11 +3069,21 @@ func (cfg *Config) substWordFields(pe *syntax.ParamExp) ([][]fieldPart, bool, er
 				return nil, false, err
 			}
 		}
+		// `${var=${*:off}}` (or array `[*]` slice) assigns a star-form
+		// substring whose 0x7f bytes are quoted nulls, dropped on assign.
+		// When that empties the value, the unquoted expansion yields no
+		// field at all, like any empty unquoted `${var=}`.
+		if starSliceQuotedNull(pe.Exp.Word) {
+			assignVal = stripQuotedNulls(assignVal)
+		}
 		if cannotAssignParam(pe.Param.Value) {
 			return nil, false, fmt.Errorf("$%s: cannot assign in this way", pe.Param.Value)
 		}
 		if err := cfg.envSet(pe.Param.Value, assignVal); err != nil {
 			return nil, false, err
+		}
+		if assignVal == "" {
+			return nil, true, nil
 		}
 		return cfg.escapedLitFields(assignVal), true, nil
 	}

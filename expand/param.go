@@ -49,6 +49,35 @@ func stripBackslashEscapes(s string) string {
 	return b.String()
 }
 
+// starSliceQuotedNull reports whether word is an unquoted substring slice
+// of a `*`-form parameter expansion: `${*:off}` or `${name[*]:off}` (for
+// an indexed or associative array). bash joins such a slice using IFS, and
+// any literal 0x7f (DEL) bytes in the result become "quoted nulls" that are
+// removed when the value is consumed in an unquoted assignment context
+// (`var=…`, `${var=…}`). The `@`-form (`${@:off}`) and a plain literal
+// like `$'\177'` keep their 0x7f instead — see expand's dollar-at-star9
+// fidelity case.
+func starSliceQuotedNull(word *syntax.Word) bool {
+	if word == nil || len(word.Parts) != 1 {
+		return false
+	}
+	pe, ok := word.Parts[0].(*syntax.ParamExp)
+	if !ok || pe.Slice == nil || pe.Excl {
+		return false
+	}
+	if pe.Param != nil && pe.Param.Value == "*" && pe.Index == nil {
+		return true
+	}
+	return nodeLit(pe.Index) == "*"
+}
+
+func stripQuotedNulls(s string) string {
+	if !strings.ContainsRune(s, 0x7f) {
+		return s
+	}
+	return strings.ReplaceAll(s, "\x7f", "")
+}
+
 func stripParamExpLitEscapes(s string, stripSingle bool) string {
 	if !strings.ContainsRune(s, '\\') {
 		return s
@@ -1419,6 +1448,14 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 				return "", fmt.Errorf("command substitution: line %d: unexpected EOF while looking for matching `)'", pe.Pos().Line()+2)
 			}
 			return "", err
+		}
+		// An unquoted `${var=${*:off}}` (or array `[*]` slice) assigns a
+		// star-form substring whose 0x7f bytes are quoted nulls; bash drops
+		// them when storing into var, so `${var=${*:1}}` on a sole `$'\177'`
+		// assigns the empty string.
+		if (op == syntax.AssignUnset || op == syntax.AssignUnsetOrNull) &&
+			!cfg.insideDoubleQuote && starSliceQuotedNull(pe.Exp.Word) {
+			arg = stripQuotedNulls(arg)
 		}
 		starAggregateNull := false
 		if name == "*" {
