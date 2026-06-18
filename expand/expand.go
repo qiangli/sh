@@ -352,7 +352,32 @@ func (cfg *Config) envSet(name, value string) error {
 		vr.Kind = String
 		vr.Str = value
 	}
-	return wenv.Set(name, vr)
+	if err := wenv.Set(name, vr); err != nil {
+		return err
+	}
+	// A parameter-expansion side effect that reassigns IFS (e.g.
+	// `${IFS=}` or `${IFS:=-}`) must be visible to later expansions in
+	// the same word: bash joins a subsequent `"$*"` with the first
+	// character of the *new* IFS, and splits the final word on it too.
+	// cfg.ifs is a snapshot taken at the start of the Fields call, so
+	// refresh it here.
+	cfg.refreshIFS(name)
+	return nil
+}
+
+// refreshIFS re-reads cfg.ifs/cfg.ifsSet from the environment after an
+// assignment to a variable, when that variable is IFS. This keeps the
+// cached IFS in sync with side effects from `${IFS=...}` style expansions.
+func (cfg *Config) refreshIFS(name string) {
+	if name != "IFS" {
+		return
+	}
+	cfg.ifs = " \t\n"
+	cfg.ifsSet = false
+	if vr := cfg.Env.Get("IFS"); vr.IsSet() {
+		cfg.ifs = vr.String()
+		cfg.ifsSet = true
+	}
 }
 
 // literalKeepAnsiC is like [LiteralWithQuoteRemoval] but leaves `$'…'`
@@ -2600,6 +2625,7 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 				}
 				continue
 			}
+			oldIFS, oldIFSSet := cfg.ifs, cfg.ifsSet
 			val, err := cfg.paramExp(wp)
 			if err != nil {
 				return nil, err
@@ -2608,7 +2634,20 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 				emitEmpty()
 				continue
 			}
-			splitAdd(val)
+			if cfg.ifs != oldIFS {
+				// An assignment operator in this expansion (e.g.
+				// `${IFS:=-}`) changed IFS as a side effect. Bash
+				// splits the value this expansion produced using the
+				// IFS that was in effect *before* the assignment, and
+				// only applies the new IFS to subsequent word parts.
+				// Restore the old IFS just for this splitAdd.
+				newIFS, newIFSSet := cfg.ifs, cfg.ifsSet
+				cfg.ifs, cfg.ifsSet = oldIFS, oldIFSSet
+				splitAdd(val)
+				cfg.ifs, cfg.ifsSet = newIFS, newIFSSet
+			} else {
+				splitAdd(val)
+			}
 		case *syntax.CmdSubst:
 			val, err := cfg.cmdSubst(wp)
 			if err != nil {
