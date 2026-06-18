@@ -527,6 +527,14 @@ func Pattern(cfg *Config, word *syntax.Word) (string, error) {
 		return "", nil
 	}
 	cfg = prepareConfig(cfg)
+	// A glob pattern's backslashes are glob escapes, not subject to the
+	// assignment-context quote-removal that LiteralForAssign turns on.
+	// Without clearing it here, `foo="${var//\\[\\e/}"` would collapse the
+	// pattern's `\\` to `\` before matching, unlike the same expansion in a
+	// command argument. Quoted sub-parts are still escaped via QuoteMeta below.
+	prevS := cfg.stripBackslashEscapes
+	cfg.stripBackslashEscapes = false
+	defer func() { cfg.stripBackslashEscapes = prevS }()
 	field, err := cfg.wordField(word.Parts, quoteNone)
 	if err != nil {
 		return "", err
@@ -4505,6 +4513,48 @@ func (cfg *Config) expandUser(field string, moreFields bool) (prefix, rest strin
 	return u.HomeDir, rest
 }
 
+// escapeOrphanBrackets escapes any `[` in a glob pattern that does not
+// open a bracket expression with a matching `]`, matching bash's rule
+// that such a `[` is an ordinary literal character. pattern.Regexp
+// rejects an unmatched `[` outright, after which the caller treats the
+// whole pattern as non-matching; bash instead matches the literal `[`
+// (e.g. `${var//[/}` on `[hello` -> `hello`). Already-escaped `\[` and
+// well-formed bracket expressions are left untouched.
+func escapeOrphanBrackets(pat string) string {
+	if !strings.Contains(pat, "[") {
+		return pat
+	}
+	var b strings.Builder
+	b.Grow(len(pat) + 2)
+	for i := 0; i < len(pat); i++ {
+		c := pat[i]
+		if c == '\\' && i+1 < len(pat) {
+			b.WriteByte(c)
+			b.WriteByte(pat[i+1])
+			i++
+			continue
+		}
+		if c == '[' && bracketIsOrphan(pat[i+1:]) {
+			b.WriteString(`\[`)
+			continue
+		}
+		b.WriteByte(c)
+	}
+	return b.String()
+}
+
+// bracketIsOrphan reports whether a `[`, given s (the pattern text that
+// follows it), is a stray literal rather than the opener of a bracket
+// expression. bash only treats `[` as literal when there is no way to
+// close it: the remaining text contains neither a `]` (which could close
+// it) nor a further `[` (which could begin a nested `[:class:]` /
+// `[.coll.]` / `[=equiv=]` element). A malformed bracket that does
+// contain one of those — e.g. `[[:` — is left for pattern.Regexp to
+// reject as a non-match, matching bash.
+func bracketIsOrphan(s string) bool {
+	return strings.IndexByte(s, ']') < 0 && strings.IndexByte(s, '[') < 0
+}
+
 func (cfg *Config) findAllIndex(pat, name string, n int) [][]int {
 	var mode pattern.Mode
 	if cfg.ExtGlob {
@@ -4513,7 +4563,7 @@ func (cfg *Config) findAllIndex(pat, name string, n int) [][]int {
 	if cfg.NoCaseMatch {
 		mode |= pattern.NoGlobCase
 	}
-	expr, err := pattern.Regexp(pat, mode)
+	expr, err := pattern.Regexp(escapeOrphanBrackets(pat), mode)
 	if err != nil {
 		return nil
 	}
