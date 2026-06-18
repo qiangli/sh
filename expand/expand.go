@@ -93,6 +93,10 @@ type Config struct {
 	// patterns which match nothing to result in zero fields.
 	NullGlob bool
 
+	// FailGlob corresponds to the shell option which reports an error
+	// when a glob pattern has no matches.
+	FailGlob bool
+
 	// NoUnset corresponds to the shell option which treats unset variables
 	// as errors.
 	NoUnset bool
@@ -1718,6 +1722,9 @@ func FieldsSeq(cfg *Config, words ...*syntax.Word) iter.Seq2[string, error] {
 							}
 						}
 						continue
+					} else if cfg.FailGlob {
+						yield("", fmt.Errorf("no match: %s", path))
+						return true
 					}
 				}
 				if !yield(cfg.fieldJoin(field), nil) {

@@ -815,6 +815,20 @@ func TestFieldsBackslashEscapedGlobMeta(t *testing.T) {
 	}
 }
 
+func TestFieldsFailGlob(t *testing.T) {
+	cfg := &Config{
+		FailGlob: true,
+		ReadDir2: func(string) ([]fs.DirEntry, error) {
+			return []fs.DirEntry{&mockFileInfo{name: "a"}}, nil
+		},
+	}
+	word := parseWord(t, `b*`)
+	_, err := Fields(cfg, word)
+	if err == nil || err.Error() != "no match: b*" {
+		t.Fatalf("wanted failglob no-match error, got %v", err)
+	}
+}
+
 func TestFieldsBackslashEscapedGlobPath(t *testing.T) {
 	temp := t.TempDir()
 	if err := os.MkdirAll(temp+"/tmp/a/b", 0o777); err != nil {

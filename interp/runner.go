@@ -360,6 +360,9 @@ func (r *Runner) updateExpandOpts() {
 		r.ecfg.NoCaseMatch = *opt
 	}
 	r.ecfg.NullGlob = r.opts[optNullGlob]
+	if opt, _ := r.bashOptByName("failglob"); opt != nil {
+		r.ecfg.FailGlob = *opt
+	}
 	r.ecfg.NoUnset = r.opts[optNoUnset]
 	r.ecfg.ExtGlob = r.opts[optExtGlob]
 	if opt, _ := r.bashOptByName("patsub_replacement"); opt != nil {
@@ -451,6 +454,10 @@ func (r *Runner) expandErr(err error) {
 		r.exit.code = 1
 		r.lastExpandExit = exitStatus{code: 1}
 		return
+	case strings.Contains(errMsg, "no match: "):
+		r.exit.code = 1
+		r.lastExpandExit = exitStatus{code: 1}
+		return
 	case errors.As(err, &indirErr):
 		if indirErr.NonFatal {
 			// `${!var:-def}` with var unset: $? = 1, keep running.
@@ -487,6 +494,7 @@ func looksLikeExpandError(msg string) bool {
 		strings.Contains(msg, "unbound variable"),
 		strings.Contains(msg, "readonly variable"),
 		strings.Contains(msg, "bad array subscript"),
+		strings.Contains(msg, "no match: "),
 		strings.Contains(msg, "substring expression < 0"),
 		strings.Contains(msg, "cannot assign in this way"),
 		strings.Contains(msg, "parameter not set"),
