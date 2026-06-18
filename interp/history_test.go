@@ -27,7 +27,7 @@ echo "(left
 mid
 right)"
 `
-	groups := buildHistTimeline([]byte(src))
+	groups, _, _ := buildHistTimeline([]byte(src))
 	want := []string{
 		"echo one",
 		"# a comment line",

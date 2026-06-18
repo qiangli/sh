@@ -146,7 +146,9 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 				if cs.TempFile && cs.Left.Line() != cs.Right.Line() {
 					r.funsubLineOffset = 1
 				}
+				shellHist.cmdSubst.Add(1)
 				r.stmts(ctx, cs.Stmts)
+				shellHist.cmdSubst.Add(-1)
 				r.funsubLineOffset = oldFunsubLineOffset
 				reply := ""
 				if cs.ReplyVar {
@@ -201,7 +203,9 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 			} else {
 				r2.opts[optErrExit] = false
 			}
+			shellHist.cmdSubst.Add(1)
 			r2.stmts(ctx, cs.Stmts)
+			shellHist.cmdSubst.Add(-1)
 			r2.exit.exiting = false // subshells don't exit the parent shell
 			r2.exit.discarding = false
 			r2.exit.returning = false // and they swallow `return` locally
@@ -7730,6 +7734,12 @@ func (r *Runner) loopStmtsBroken(ctx context.Context, stmts []*syntax.Stmt) bool
 
 func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 	if r.stop(ctx) {
+		return
+	}
+	// Emulate bash's reader-level history recording and expansion: advance
+	// the history cursor up to this command's source line. When the line was
+	// history-expanded (the expansion ran in its place), skip the original.
+	if r.histSync(ctx, pos) {
 		return
 	}
 	// Set BASH_COMMAND to the expanded command while it executes.
