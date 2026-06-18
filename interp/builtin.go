@@ -3648,6 +3648,15 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					r.trapCallbacks = make(map[string]string)
 				}
 				r.trapCallbacks[sig] = callback
+				// A DEBUG trap set inside a function takes effect for the
+				// remainder of that function's commands, even when the
+				// frame was not otherwise traced (bash trap.tests: the
+				// `func[29] funcdebug` line).
+				if sig == "DEBUG" && callback != "" {
+					if n := len(r.callStack); n > 0 {
+						r.callStack[n-1].debugTrace = true
+					}
+				}
 				// Register an OS signal handler so the signal is
 				// delivered to this runner instead of taking its
 				// default disposition (which would kill the process).

@@ -5461,8 +5461,11 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 					case "+u", "+l", "+c":
 						modes = append(modes, flag)
 					case "-t", "+t":
-						// Bash accepts the trace attribute here; this
-						// interpreter does not model that attribute.
+						// The trace attribute. For functions (`declare -ft`)
+						// it is honoured: a traced function inherits the
+						// DEBUG/RETURN traps. Tracked via modes so the -f
+						// path sets it instead of printing the definition.
+						modes = append(modes, flag)
 					case "-g":
 						global = true
 					case "-f", "-F":
@@ -5604,6 +5607,21 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 							r.readonlyFuncs = make(map[string]bool)
 						}
 						r.readonlyFuncs[name] = true
+						continue
+					}
+					// `declare -ft NAME` sets (and `+t` clears) the trace
+					// attribute: a traced function inherits the DEBUG and
+					// RETURN traps. With an attribute flag present, declare
+					// sets the attribute rather than printing the body.
+					if slices.Contains(modes, "-t") || slices.Contains(modes, "+t") {
+						if slices.Contains(modes, "+t") {
+							delete(r.funcTrace, name)
+						} else {
+							if r.funcTrace == nil {
+								r.funcTrace = make(map[string]bool)
+							}
+							r.funcTrace[name] = true
+						}
 						continue
 					}
 					r.printFuncDecl(name, body)
@@ -7580,7 +7598,13 @@ func (r *Runner) shouldFireDebugTrap() bool {
 	if r.trapCallbacks["DEBUG"] == "" {
 		return false
 	}
-	return len(r.callStack) == 0 || r.functraceEnabled()
+	if n := len(r.callStack); n > 0 {
+		// Inside a function the DEBUG trap fires only when the frame is
+		// traced: the global functrace option, the function's own trace
+		// attribute (`declare -ft`), or a `trap ... DEBUG` set within it.
+		return r.callStack[n-1].debugTrace
+	}
+	return true
 }
 
 func (r *Runner) debugTrapLine(pos syntax.Pos) int {
@@ -7762,11 +7786,12 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 
 		// Push call stack frame.
 		r.callStack = append(r.callStack, callFrame{
-			line:     pos.Line(),
-			source:   r.filename,
-			funcName: name,
-			args:     slices.Clone(args[1:]),
-			bodyLine: body.Pos().Line(),
+			line:       pos.Line(),
+			source:     r.filename,
+			funcName:   name,
+			args:       slices.Clone(args[1:]),
+			bodyLine:   body.Pos().Line(),
+			debugTrace: r.functraceEnabled() || r.funcTrace[name],
 		})
 		r.localOptStack = append(r.localOptStack, localOptFrame{
 			opts:         r.opts,

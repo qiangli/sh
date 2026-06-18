@@ -189,6 +189,12 @@ type Runner struct {
 	// lists only these names.
 	readonlyFuncs map[string]bool
 
+	// funcTrace tracks function names given the trace attribute via
+	// `declare -ft <name>` (or `declare -tf`). A traced function
+	// inherits the DEBUG and RETURN traps even without the global
+	// `set -T` (functrace) option — see [Runner.shouldFireDebugTrap].
+	funcTrace map[string]bool
+
 	// inlineLeakFromFunc records variable names whose inline
 	// assignments leaked out of a function-scoped special-builtin
 	// invocation (`var=N return …`). The outer inline-restore
@@ -591,6 +597,13 @@ type callFrame struct {
 	// this line rather than their own, and runtime diagnostics like
 	// "not a valid identifier" surface it.
 	bodyLine uint
+	// debugTrace reports whether the DEBUG/RETURN traps fire inside
+	// this function frame. It is true when the global functrace
+	// option is set or the function carries the trace attribute
+	// (`declare -ft`), and is also turned on if a `trap ... DEBUG`
+	// command runs within the frame (which activates the trap for the
+	// remainder of that function, as bash does).
+	debugTrace bool
 }
 
 type bgProc struct {
@@ -2023,6 +2036,7 @@ func (r *Runner) subshell(background bool) *Runner {
 	}
 	r2.disabledBuiltins = maps.Clone(r.disabledBuiltins)
 	r2.readonlyFuncs = maps.Clone(r.readonlyFuncs)
+	r2.funcTrace = maps.Clone(r.funcTrace)
 	r2.exportedFuncs = maps.Clone(r.exportedFuncs)
 	// Subshells inherit "we're inside a function" so that `return`
 	// in `$(... return ...)` aborts only the subshell rather than
