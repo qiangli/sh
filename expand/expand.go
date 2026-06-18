@@ -296,6 +296,80 @@ func (cfg *Config) ifsJoin(strs []string) string {
 	return strings.Join(strs, sep)
 }
 
+// localeCharLen returns the byte width of the character at the start of bs
+// under the current LC_CTYPE charset, mirroring bash's MB_CUR_MAX-driven
+// character stepping. ASCII is one byte; in a legacy multibyte locale (Big5,
+// Shift-JIS) a valid double-byte character is two; otherwise it falls back to
+// UTF-8 decoding, where an invalid byte is a single opaque character. This is
+// what lets field splitting treat a Big5 separator like A3 5C as one unit
+// rather than seeing its 0x5C trail byte as an ASCII backslash.
+func (cfg *Config) localeCharLen(bs []byte) int {
+	if len(bs) == 0 {
+		return 0
+	}
+	if bs[0] < utf8.RuneSelf {
+		return 1
+	}
+	if n := mbCharsetCharLen(printfCTypeLocale(cfg), bs); n > 1 {
+		return n
+	}
+	_, size := utf8.DecodeRune(bs)
+	if size == 0 {
+		return 1
+	}
+	return size
+}
+
+// mbCharsetCharLen returns the byte length (>1) of the legacy multibyte
+// character at the start of bs for the named LC_CTYPE charset, or 0 when bs
+// does not begin such a character. The lead/trail byte ranges match the Big5
+// and Shift-JIS double-byte definitions; for any other (single-byte or UTF-8)
+// charset there is nothing to do and it returns 0. It mirrors bash's mbrtowc:
+// an invalid sequence yields 0 so the caller advances one opaque byte
+// (MB_INVALIDCH -> clen = 1).
+func mbCharsetCharLen(locale string, bs []byte) int {
+	if len(bs) < 2 {
+		return 0
+	}
+	b0, b1 := bs[0], bs[1]
+	switch {
+	case strings.Contains(locale, "big5"):
+		if b0 >= 0x81 && b0 <= 0xfe &&
+			((b1 >= 0x40 && b1 <= 0x7e) || (b1 >= 0xa1 && b1 <= 0xfe)) {
+			return 2
+		}
+	case strings.Contains(locale, "sjis") || strings.Contains(locale, "shift_jis") || strings.Contains(locale, "shift-jis"):
+		if ((b0 >= 0x81 && b0 <= 0x9f) || (b0 >= 0xe0 && b0 <= 0xfc)) &&
+			((b1 >= 0x40 && b1 <= 0x7e) || (b1 >= 0x80 && b1 <= 0xfc)) {
+			return 2
+		}
+	}
+	return 0
+}
+
+// ifsCharClass classifies a whole (possibly multibyte) input character,
+// given by its bytes, against IFS: whether it is an IFS character at all and,
+// if so, whether it is IFS whitespace (always a single ASCII byte) as opposed
+// to a separator. Comparing whole characters is what makes a multibyte IFS
+// separator such as Big5 A3 5C match as one unit instead of byte-by-byte.
+func (cfg *Config) ifsCharClass(charBytes string) (isIFS, isWhitespace bool) {
+	for i := 0; i < len(cfg.ifs); {
+		n := cfg.localeCharLen([]byte(cfg.ifs[i:]))
+		if cfg.ifs[i:i+n] == charBytes {
+			if len(charBytes) == 1 && isIFSWhitespaceByte(charBytes[0]) {
+				return true, true
+			}
+			return true, false
+		}
+		i += n
+	}
+	return false, false
+}
+
+func isIFSWhitespaceByte(b byte) bool {
+	return b == ' ' || b == '\t' || b == '\n' || b == '\r' || b == '\f' || b == '\v'
+}
+
 func (cfg *Config) strBuilder() *strings.Builder {
 	b := &cfg.bufferAlloc
 	b.Reset()
@@ -5272,42 +5346,36 @@ func ReadFields(cfg *Config, s string, n int, raw bool) []string {
 	}
 	var fpos []pos
 
-	// ifsSepRune classifies non-whitespace IFS chars, which behave
-	// differently to whitespace ones: each occurrence delimits
-	// exactly one field (so a leading or consecutive run produces
-	// empty fields), while whitespace runs collapse and are
-	// stripped at the edges.
-	isIFSWhitespace := func(r rune) bool {
-		return (r == ' ' || r == '\t' || r == '\n' || r == '\r' || r == '\f' || r == '\v') && cfg.ifsRune(r)
-	}
-	isIFSSeparator := func(r rune) bool {
-		return cfg.ifsRune(r) && !isIFSWhitespace(r)
-	}
-
 	// Accumulate bytes (not runes), so invalid UTF-8 fragments in
 	// the input round-trip through `read` unchanged. Positions in
 	// fpos index into this byte slice.
+	//
+	// We step one LC_CTYPE character at a time (localeCharLen), not one
+	// Go rune, so that a legacy multibyte character such as a Big5
+	// separator (A3 5C) is treated as a single unit — its 0x5C trail
+	// byte must not be mistaken for an IFS member or a backslash. Non
+	// -whitespace IFS characters each delimit exactly one field (so a
+	// leading or consecutive run produces empty fields), while
+	// whitespace IFS runs collapse and are stripped at the edges.
 	buf := make([]byte, 0, len(s))
 	infield := false
 	sawSep := false
 	esc := false
-	for i, r := range s {
-		// Determine the byte width Go's range actually consumed.
-		// utf8.RuneLen(U+FFFD) returns 3 (it's a valid codepoint),
-		// but `range` over invalid UTF-8 yields U+FFFD with a
-		// 1-byte step — re-decode at i to learn the real step.
-		_, size := utf8.DecodeRuneInString(s[i:])
+	for i := 0; i < len(s); {
+		size := cfg.localeCharLen([]byte(s[i:]))
 		if size == 0 {
 			size = 1
 		}
 		runeBytes := s[i : i+size]
-		isIFS := cfg.ifsRune(r) && (raw || !esc)
+		i += size
+		inIFS, isWS := cfg.ifsCharClass(runeBytes)
+		isIFS := inIFS && (raw || !esc)
 		if isIFS {
 			if infield {
 				fpos[len(fpos)-1].end = len(buf)
 				infield = false
 			}
-			if isIFSSeparator(r) {
+			if !isWS {
 				if sawSep || len(fpos) == 0 {
 					fpos = append(fpos, pos{start: len(buf), end: len(buf)})
 				}
@@ -5320,7 +5388,7 @@ func ReadFields(cfg *Config, s string, n int, raw bool) []string {
 			}
 			sawSep = false
 		}
-		if r == '\\' {
+		if size == 1 && runeBytes[0] == '\\' {
 			if raw || esc {
 				buf = append(buf, '\\')
 			}
