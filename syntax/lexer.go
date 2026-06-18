@@ -108,7 +108,8 @@ retry:
 			// TODO: why is this necessary to ensure correct position info?
 			p.readEOF = false
 			if p.openBquotes > 0 && bquotes < p.openBquotes &&
-				p.bsp < uint(len(p.bs)) && bquoteEscaped(p.bs[p.bsp]) {
+				p.bsp < uint(len(p.bs)) &&
+				(bquoteEscaped(p.bs[p.bsp]) || (p.bquoteDblQuoted && p.bs[p.bsp] == '"')) {
 				if bquoteEscapedByte && p.bs[p.bsp] == '`' {
 					break
 				}

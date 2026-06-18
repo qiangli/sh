@@ -570,6 +570,12 @@ type Parser struct {
 	openNodes int
 	// openBquotes is how many levels of backquotes are open at the moment.
 	openBquotes int
+	// bquoteDblQuoted reports whether the innermost open backquote command
+	// substitution was opened directly inside a double-quoted string. bash
+	// then also removes a backslash before a `"` in the backquote body, so
+	// `"`echo \"x\"`"` runs `echo "x"` (syntactic quotes) rather than
+	// passing literal quotes through.
+	bquoteDblQuoted bool
 	// openComsubs is how many `$(...)` command substitutions are open at
 	// the moment. Used to keep heredoc close-paren recovery (a body line
 	// like `EOF)` standing in for the missing terminator) from firing
@@ -1463,6 +1469,8 @@ func (p *Parser) wordPart() WordPart {
 		p.ensureNoNested(p.pos)
 		cs := &CmdSubst{Left: p.pos, Backquotes: true}
 		old := p.preNested(subCmdBckquo)
+		prevBqDbl := p.bquoteDblQuoted
+		p.bquoteDblQuoted = old.quote == dblQuotes
 		p.openBquotes++
 
 		// The lexer didn't call p.rune for us, so that it could have
@@ -1477,6 +1485,7 @@ func (p *Parser) wordPart() WordPart {
 			p.quoteErr(cs.Pos(), bckQuote)
 		}
 		p.postNested(old)
+		p.bquoteDblQuoted = prevBqDbl
 		p.openBquotes--
 		cs.Right = p.pos
 
