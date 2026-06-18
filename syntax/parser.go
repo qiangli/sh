@@ -588,7 +588,7 @@ type Parser struct {
 	// separator: `${a///a/}` parses as pattern `/a`, empty replacement.
 	paramExpReplFirst bool
 	assignIndexWords  bool
-	rawAssignIndex       bool
+	rawAssignIndex    bool
 
 	// lastBquoteEsc is how many times the last backquote token was escaped
 	lastBquoteEsc int
@@ -2501,6 +2501,9 @@ func (p *Parser) getStmt(readEnd, binCmd, fnBody bool) *Stmt {
 			// status 1. Mark it negated and let the caller see an
 			// otherwise-empty Stmt.
 			if p.lang == LangBash {
+				if readEnd {
+					p.stmtTerm(s)
+				}
 				return s
 			}
 			p.posErr(s.Pos(), `%#q cannot form a statement alone`, exclMark)
@@ -2521,6 +2524,9 @@ func (p *Parser) getStmt(readEnd, binCmd, fnBody bool) *Stmt {
 					// `! !` (or longer chains) alone — same
 					// treatment as a single `!`: empty stmt with
 					// negation applied.
+					if readEnd {
+						p.stmtTerm(s)
+					}
 					return s
 				}
 			} else {
@@ -2559,23 +2565,7 @@ func (p *Parser) getStmt(readEnd, binCmd, fnBody bool) *Stmt {
 		s.Comments, b.X.Comments = b.X.Comments, nil
 	}
 	if readEnd {
-		switch p.tok {
-		case semicolon:
-			s.Semicolon = p.pos
-			p.next()
-		case and:
-			s.Semicolon = p.pos
-			p.next()
-			s.Background = true
-		case orAnd:
-			s.Semicolon = p.pos
-			p.next()
-			s.Coprocess = true
-		case andPipe, andBang:
-			s.Semicolon = p.pos
-			p.next()
-			s.Disown = true
-		}
+		p.stmtTerm(s)
 	}
 	if len(p.accComs) > 0 && !binCmd && !fnBody {
 		c := p.accComs[0]
@@ -2585,6 +2575,26 @@ func (p *Parser) getStmt(readEnd, binCmd, fnBody bool) *Stmt {
 		}
 	}
 	return s
+}
+
+func (p *Parser) stmtTerm(s *Stmt) {
+	switch p.tok {
+	case semicolon:
+		s.Semicolon = p.pos
+		p.next()
+	case and:
+		s.Semicolon = p.pos
+		p.next()
+		s.Background = true
+	case orAnd:
+		s.Semicolon = p.pos
+		p.next()
+		s.Coprocess = true
+	case andPipe, andBang:
+		s.Semicolon = p.pos
+		p.next()
+		s.Disown = true
+	}
 }
 
 func (p *Parser) gotStmtPipe(s *Stmt, binCmd bool) *Stmt {

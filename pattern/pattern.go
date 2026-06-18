@@ -270,13 +270,15 @@ func regexpNext(sb *strings.Builder, sl *stringLexer, mode Mode) error {
 				break
 			}
 			start := sl.i - 1 // position of the operator
-			if end := extGlobEnd(sl.s, sl.i); end >= 0 {
-				inner := sl.s[sl.i+1 : end]
-				if extGlobMalformedBracket(inner) {
-					sl.i = end + 1
-					sb.WriteString(regexp.QuoteMeta(sl.s[start:sl.i]))
-					return nil
-				}
+			end := extGlobEnd(sl.s, sl.i)
+			if end < 0 {
+				break
+			}
+			inner := sl.s[sl.i+1 : end]
+			if extGlobMalformedBracket(inner) {
+				sl.i = end + 1
+				sb.WriteString(regexp.QuoteMeta(sl.s[start:sl.i]))
+				return nil
 			}
 			sb.WriteRune(sl.next()) // (
 		nestedLoop:

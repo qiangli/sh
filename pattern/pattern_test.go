@@ -166,6 +166,18 @@ var regexpTests = []struct {
 		mustMatch:    []string{"a", "b", "c"},
 		mustNotMatch: []string{".x", ".y", ".z"},
 	},
+	{
+		pat: `+(/one|/two|/three)/Step1`, mode: Filenames | EntireString | ExtendedOperators, want: `(?s)^(/one|/two|/three)+/Step1$`,
+		mustMatch:    []string{"/one/Step1", "/one/two/Step1", "/three/two/one/Step1"},
+		mustNotMatch: []string{"/four/Step1", "/one/Step2"},
+	},
+	{
+		pat: `*(/tmp|/dev|/usr)/Step1`, mode: Filenames | EntireString | ExtendedOperators, want: `(?s)^(/tmp|/dev|/usr)*/Step1$`,
+		mustMatch:    []string{"/Step1", "/tmp/Step1", "/tmp/dev/usr/Step1"},
+		mustNotMatch: []string{"/var/Step1", "/tmp/Step2"},
+	},
+	{pat: `+(`, mode: Filenames | EntireString | ExtendedOperators, want: `(?s)^\+\($`},
+	{pat: `*(`, mode: Filenames | EntireString | ExtendedOperators, want: `(?s)^([^/.][^/]*)?\($`},
 	{pat: `[aa]`, want: `(?s)[aa]`},
 	{pat: `[0-4A-Z]`, want: `(?s)[0-4A-Z]`},
 	{pat: `[-a]`, want: `(?s)[-a]`},
