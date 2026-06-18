@@ -641,7 +641,13 @@ func regexBracketSpecialQuotedText(s string) bool {
 // This is similar to Format's escape handling but adds the `\cX`
 // control-character form (consumes the next char), which printf/Format
 // preserve literally. Returns the decoded string.
-func ansiCEscape(s string) string {
+//
+// ctypeLocale is the current LC_CTYPE charset (see printfCTypeLocale): the
+// `\u`/`\U` codepoint escapes are encoded in that charset, exactly like
+// bash 5.3's lib/sh/unicode.c:u32cconv (UTF-8 locale -> UTF-8 bytes; a
+// named legacy charset like Big5 -> its bytes; an unsupported charset ->
+// the literal ISO C99 `\uXXXX` escape).
+func ansiCEscape(s, ctypeLocale string) string {
 	var sb strings.Builder
 	sb.Grow(len(s))
 	for i := 0; i < len(s); i++ {
@@ -770,7 +776,7 @@ func ansiCEscape(s string) string {
 				if c == 'x' {
 					sb.WriteByte(byte(n))
 				} else {
-					sb.WriteString(printfEncodeRune("", rune(n)))
+					sb.WriteString(printfEncodeRune(ctypeLocale, rune(n)))
 				}
 				break
 			}
@@ -790,7 +796,7 @@ func ansiCEscape(s string) string {
 			if c == 'x' {
 				sb.WriteByte(byte(n))
 			} else {
-				sb.WriteString(printfEncodeRune("", rune(n)))
+				sb.WriteString(printfEncodeRune(ctypeLocale, rune(n)))
 			}
 			i += j
 		default:
@@ -900,11 +906,18 @@ func printfCTypeLocale(cfg *Config) string {
 	return ""
 }
 
+// printfEncodeRune encodes a Unicode codepoint in the LC_CTYPE charset,
+// mirroring bash 5.3's lib/sh/unicode.c:u32cconv: a UTF-8 locale (or no
+// locale, our UTF-8 default) yields UTF-8 bytes; a named legacy charset
+// (Big5, Shift-JIS, ISO-8859) yields that charset's bytes; an unsupported
+// charset — or a codepoint the charset cannot represent — yields the
+// literal ISO C99 `\uXXXX`/`\UXXXXXXXX` escape (u32tocesc), NOT UTF-8.
 func printfEncodeRune(locale string, r rune) string {
 	if r < 0 {
 		return ""
 	}
-	if r > utf8.MaxRune && (locale == "" || strings.Contains(locale, "utf")) {
+	utf8loc := locale == "" || strings.Contains(locale, "utf")
+	if r > utf8.MaxRune && utf8loc {
 		return string(legacyUTF8(r))
 	}
 	switch {
@@ -927,7 +940,21 @@ func printfEncodeRune(locale string, r rune) string {
 			return s
 		}
 	}
-	return string(r)
+	if utf8loc {
+		return string(r)
+	}
+	// Unsupported charset, or a codepoint the charset cannot encode:
+	// bash's iconv path fails and returns the ISO C99 escape sequence.
+	return u32tocesc(r)
+}
+
+// u32tocesc renders a codepoint as bash's lib/sh/unicode.c:u32tocesc would:
+// `\uXXXX` (4 upper-hex) below U+10000, else `\UXXXXXXXX` (8 upper-hex).
+func u32tocesc(r rune) string {
+	if uint32(r) < 0x10000 {
+		return fmt.Sprintf("\\u%04X", uint32(r))
+	}
+	return fmt.Sprintf("\\U%08X", uint32(r))
 }
 
 func legacyUTF8(r rune) []byte {
@@ -1997,7 +2024,7 @@ func (cfg *Config) wordField(wps []syntax.WordPart, ql quoteLevel) ([]fieldPart,
 					fp.val = "$'" + wp.Value + "'"
 					fp.quote = quoteNone
 				} else {
-					fp.val = ansiCEscape(fp.val)
+					fp.val = ansiCEscape(fp.val, printfCTypeLocale(cfg))
 					fp.val, _, _ = strings.Cut(fp.val, "\x00") // cut the string if format included \x00
 				}
 			}
@@ -2522,7 +2549,7 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 			allowEmpty = true
 			fp := fieldPart{quote: quoteSingle, val: wp.Value}
 			if wp.Dollar {
-				fp.val = ansiCEscape(fp.val)
+				fp.val = ansiCEscape(fp.val, printfCTypeLocale(cfg))
 				fp.val, _, _ = strings.Cut(fp.val, "\x00") // cut the string if format included \x00
 			}
 			curField = append(curField, fp)
