@@ -2475,16 +2475,29 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 					}
 				}
 				if anySplit {
-					allowEmpty = true
+					// An empty "$@" inside the quotes absorbs the
+					// quoted-null that the rest of an all-empty expansion
+					// would otherwise force: "$(true)$@" yields no field,
+					// unlike "$(true)""$@" where the empty parts live in
+					// separate quote groups. Only force the field (via
+					// allowEmpty) when this word does not contain such an
+					// absorbing "$@".
+					absorbs := cfg.dblQuotedEmptyAtAbsorbs(wp.Parts)
+					producedField := false
 					for _, dqp := range wp.Parts {
 						if pe, ok := dqp.(*syntax.ParamExp); ok && quotedPartSplits(pe) {
 							if elems, err := cfg.quotedElemFields(pe); err != nil {
 								return nil, err
 							} else if elems != nil {
+								// Array/positional `@` elements are real
+								// fields even when empty (set -- "" → one
+								// empty field), so any element produced here
+								// counts.
 								for i, elem := range elems {
 									if i > 0 {
 										flush()
 									}
+									producedField = true
 									curField = append(curField, fieldPart{
 										quote: quoteDouble,
 										val:   elem,
@@ -2498,27 +2511,52 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 							return nil, err
 						}
 						for _, part := range wfield {
+							// A non-`@` part that expands to the empty string
+							// (e.g. $(true) or "$unset") contributes only a
+							// quoted-null, which an empty "$@" absorbs; only
+							// non-empty content forces a field on its own.
+							// Drop the absorbed empty part so it leaves no
+							// trailing field of its own.
+							if part.val == "" && absorbs {
+								continue
+							}
+							if part.val != "" {
+								producedField = true
+							}
 							part.quote = quoteDouble
 							curField = append(curField, part)
 						}
 					}
+					if producedField || !absorbs {
+						allowEmpty = true
+					}
 					continue
 				}
 			}
-			allowEmpty = true
 			wfield, err := cfg.wordField(wp.Parts, quoteDouble)
 			if err != nil {
 				return nil, err
 			}
 			if len(wfield) == 0 {
-				// A double-quoted string that expands to nothing ("",
-				// "$unset", …) is a quoted null: it forces a field at the
-				// current position, exactly like an empty single-quoted
+				// A double-quoted string that expands to nothing inside the
+				// same quotes as an empty "$@" yields no field at all: the
+				// empty "$@" absorbs the surrounding quoted-null rather than
+				// forcing one. This is what distinguishes "$(true)$@" (0
+				// fields) from "$(true)""$@" or ""$@ (1 field), where the
+				// empty parts live in separate quote groups. Skip without
+				// setting allowEmpty so the word produces no field.
+				if cfg.dblQuotedEmptyAtAbsorbs(wp.Parts) {
+					continue
+				}
+				// Otherwise a double-quoted string that expands to nothing
+				// ("", "$unset", …) is a quoted null: it forces a field at
+				// the current position, exactly like an empty single-quoted
 				// string ''. Without this, `$var""` where $var ends in a
-				// trailing IFS delimiter would drop the trailing empty
-				// field that the quoted null is meant to preserve.
+				// trailing IFS delimiter would drop the trailing empty field
+				// that the quoted null is meant to preserve.
 				curField = append(curField, fieldPart{quote: quoteDouble, val: ""})
 			}
+			allowEmpty = true
 			for _, part := range wfield {
 				part.quote = quoteDouble
 				curField = append(curField, part)
@@ -2753,6 +2791,29 @@ func (cfg *Config) quotedEmptyAtElidesField(parts []syntax.WordPart) bool {
 		}
 	}
 	return hasAt
+}
+
+// dblQuotedEmptyAtAbsorbs reports whether a double-quoted word whose parts
+// expanded to the empty string contains a plain empty "$@" (or "${@}"). When
+// it does, bash produces no field: the empty "$@" absorbs the quoted-null that
+// the rest of the (empty) expansion would otherwise force. This generalises
+// quotedEmptyAtElidesField to words that also contain non-parameter parts
+// expanding to nothing, e.g. an empty command substitution in "$(true)$@".
+func (cfg *Config) dblQuotedEmptyAtAbsorbs(parts []syntax.WordPart) bool {
+	for _, part := range parts {
+		pe, ok := part.(*syntax.ParamExp)
+		if !ok {
+			continue
+		}
+		if pe.Excl || pe.Exp != nil || pe.Repl != nil || pe.Slice != nil ||
+			pe.Length || pe.Width || pe.IsSet || pe.Index != nil {
+			continue
+		}
+		if pe.Param.Value == "@" && len(cfg.Env.Get("@").List) == 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func (cfg *Config) unquotedNullIFSStarFields(pe *syntax.ParamExp) ([]string, bool, error) {
