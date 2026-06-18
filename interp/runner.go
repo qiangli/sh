@@ -4859,6 +4859,11 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			} else {
 				r2.stderr = r.stderr
 			}
+			// Pipeline elements run in subshells; like `( ... )`
+			// they don't inherit the parent's EXIT trap, but a
+			// group/subshell element that sets its own runs it on
+			// exit (bash: trap4.sub).
+			delete(r2.trapCallbacks, "EXIT")
 			// bash 5.3: the last command in a pipeline runs in a
 			// subshell unless `shopt -s lastpipe` is enabled (and
 			// job control is off). Without lastpipe, assignments
@@ -4873,6 +4878,9 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			var wg sync.WaitGroup
 			wg.Go(func() {
 				r2.stmt(ctx, cm.X)
+				if cb := r2.trapCallbacks["EXIT"]; cb != "" {
+					r2.trapCallback(ctx, cb, "exit")
+				}
 				r2.exit.exiting = false // subshells don't exit the parent shell
 				r2.exit.discarding = false
 				pwDup.Close()
@@ -4889,7 +4897,11 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				r3.stdin = prDup
 				r3.stdout = r.stdout
 				r3.stderr = r.stderr
+				delete(r3.trapCallbacks, "EXIT")
 				r3.stmt(ctx, cm.Y)
+				if cb := r3.trapCallbacks["EXIT"]; cb != "" {
+					r3.trapCallback(ctx, cb, "exit")
+				}
 				r3.exit.exiting = false
 				r3.exit.discarding = false
 				r.exit = r3.exit
