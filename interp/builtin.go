@@ -2699,7 +2699,14 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		case 0:
 			// `return` with no argument returns the exit status of the
 			// last command executed in the function/sourced script.
-			exit.code = r.lastExit.code
+			// POSIX interp 1602: directly inside a signal-trap action
+			// (not a function it called), it instead yields the $? in
+			// effect when the trap was invoked.
+			if r.inSignalTrap && len(r.callStack) == r.signalTrapDepth {
+				exit.code = r.signalTrapExit
+			} else {
+				exit.code = r.lastExit.code
+			}
 		case 1:
 			n, err := strconv.Atoi(args[0])
 			if err != nil {

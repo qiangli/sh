@@ -484,6 +484,16 @@ type Runner struct {
 	sigNotify     map[string]os.Signal // signal name -> os.Signal under signal.Notify
 	sigWake       chan struct{}       // wakes a blocked wait when a signal arrives
 	hasPendingSig atomic.Bool         // fast-path: any pending signal?
+
+	// inSignalTrap and friends implement POSIX interp 1602: a `return`
+	// with no argument executed directly in a signal-trap action yields
+	// the $? in effect when the trap was invoked (signalTrapExit), not the
+	// trap's own last command. A `return` inside a function *called* from
+	// the action uses normal semantics — distinguished by comparing the
+	// call-stack depth against signalTrapDepth (the depth at trap entry).
+	inSignalTrap    bool
+	signalTrapDepth int
+	signalTrapExit  uint8
 }
 
 // exitStatus holds the state of the shell after running one command.

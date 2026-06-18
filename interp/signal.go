@@ -270,6 +270,16 @@ func (r *Runner) runSignalTrap(ctx context.Context, callback, name string) {
 		return // ignore parse errors in the callback, as trapCallback does
 	}
 	oldExit := r.exit
+	// POSIX interp 1602: a bare `return` directly in this action returns
+	// the $? in effect at trap entry. Record it and the call depth so the
+	// return builtin can tell action-level from nested-function returns.
+	oldInSig, oldDepth, oldSaved := r.inSignalTrap, r.signalTrapDepth, r.signalTrapExit
+	r.inSignalTrap = true
+	r.signalTrapDepth = len(r.callStack)
+	r.signalTrapExit = oldExit.code
+	defer func() {
+		r.inSignalTrap, r.signalTrapDepth, r.signalTrapExit = oldInSig, oldDepth, oldSaved
+	}()
 	r.exit = exitStatus{code: oldExit.code} // the handler sees the prior $?
 	r.stmts(ctx, file.Stmts)
 	if r.exit.returning || r.exit.exiting || r.exit.fatalExit ||
