@@ -4000,6 +4000,12 @@ func backgroundJobText(st *syntax.Stmt) string {
 }
 
 func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
+	// Run any trap handlers for OS signals that arrived since the last
+	// command. Doing this between statements lets an async signal (e.g.
+	// from a background `kill -USR1 $$`) interrupt even a tight loop.
+	if r.hasPendingSig.Load() {
+		r.deliverPendingSignals(ctx)
+	}
 	if r.stop(ctx) {
 		return
 	}
@@ -4015,6 +4021,7 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 			pidReady:    make(chan struct{}),
 			pidCallback: r.bgPidCallback, // see WithBgPidCallback
 			cmd:         backgroundJobText(st),
+			jobControl:  r.monitorActive(),
 		}
 		r.bgProcs = append(r.bgProcs, bg)
 		// Stash a pointer to the freshly-appended bgProc on the
@@ -4041,6 +4048,13 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 		}()
 	} else {
 		r.stmtSync(ctx, st)
+		// A synchronous self-directed `kill -SIG $$` marks its signal
+		// pending while this command runs; deliver it now, before the
+		// enclosing function returns, so a `return` in the handler unwinds
+		// the right frame (bash interp 1602).
+		if r.hasPendingSig.Load() {
+			r.deliverPendingSignals(ctx)
+		}
 	}
 	r.lastExit = r.exit
 }

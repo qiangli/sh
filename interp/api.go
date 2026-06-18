@@ -469,6 +469,21 @@ type Runner struct {
 	// arithmetic-syntax-error wording instead of "integer expected"
 	// when this is set, and the exit status is 1, not 2.
 	testArithErr string
+
+	// Signal-trap delivery (see signal.go). Lazily initialized the first
+	// time `trap` registers a handler for a real OS signal. A goroutine
+	// fed by signal.Notify records received signals in pendingSig; the
+	// command-execution loop drains them at statement boundaries and runs
+	// the corresponding trap handlers, letting their control flow
+	// (return/exit/break/continue) unwind normally. These are deliberately
+	// NOT inherited by subshells: a subshell that self-signals must send a
+	// real OS signal so the parent's Notify catches it.
+	sigMu         sync.Mutex
+	sigCh         chan os.Signal
+	pendingSig    map[string]int      // signal name -> pending count, guarded by sigMu
+	sigNotify     map[string]os.Signal // signal name -> os.Signal under signal.Notify
+	sigWake       chan struct{}       // wakes a blocked wait when a signal arrives
+	hasPendingSig atomic.Bool         // fast-path: any pending signal?
 }
 
 // exitStatus holds the state of the shell after running one command.
@@ -597,6 +612,11 @@ type bgProc struct {
 	// publishBgPid with the OS PID — embedders that want async fan-out
 	// should hand off to a goroutine themselves.
 	pidCallback func(pid int)
+
+	// jobControl records whether monitor mode (`set -m`) was active when
+	// this job was backgrounded. `fg`/`bg` refuse a job that was not
+	// started under job control, even if monitor mode is later enabled.
+	jobControl bool
 
 	// coprocReadonly names a readonly variable that a `coproc` failed to
 	// bind its fd array to. Bash defers unsetting the coproc variable
@@ -910,7 +930,16 @@ func Params(args ...string) RunnerOption {
 						}
 						r.noOpSetState["functrace"] = enable
 						continue
-					case 'h', 'H', 'v', 'm', 'P', 'p', 'B', 'b', 't':
+					case 'm':
+						// Record monitor mode so fg/bg/jobs can tell
+						// whether job control is active, even though we
+						// don't otherwise model it.
+						if r.noOpSetState == nil {
+							r.noOpSetState = make(map[string]bool)
+						}
+						r.noOpSetState["monitor"] = enable
+						continue
+					case 'h', 'H', 'v', 'P', 'p', 'B', 'b', 't':
 						continue
 					}
 					return fmt.Errorf("invalid option: %q", flag)

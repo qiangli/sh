@@ -1384,6 +1384,19 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					}
 				}
 			}
+			// A signal directed at our own $$ for which this runner owns
+			// a trap is delivered synchronously into the pending queue,
+			// rather than via the OS — relying on signal.Notify here would
+			// race with the trap firing before the next statement boundary.
+			// Subshells don't own the trap (the signal infra is not
+			// inherited), so a backgrounded `kill -SIG $$` still sends a
+			// real OS signal that the parent's Notify catches.
+			if pid == r.shellPid() {
+				if _, sname, ok := signalByNumber(int(sig)); ok && r.trapSignalActive(sname) {
+					r.markPendingSignal(sname)
+					continue
+				}
+			}
 			if err := sendSignal(pid, sig); err != nil {
 				exit.code = 1
 				r.errf(r.bashErrPrefix(pos)+"kill: (%d) - %v\n", pid, err)
@@ -2603,6 +2616,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		}
 		switch len(args) {
 		case 0:
+			// `return` with no argument returns the exit status of the
+			// last command executed in the function/sourced script.
+			exit.code = r.lastExit.code
 		case 1:
 			n, err := strconv.Atoi(args[0])
 			if err != nil {
@@ -3480,11 +3496,18 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			}
 			if reset {
 				delete(r.trapCallbacks, sig)
+				r.disableSignalTrap(sig)
 			} else {
 				if r.trapCallbacks == nil {
 					r.trapCallbacks = make(map[string]string)
 				}
 				r.trapCallbacks[sig] = callback
+				// Register an OS signal handler so the signal is
+				// delivered to this runner instead of taking its
+				// default disposition (which would kill the process).
+				// An empty callback means "ignore", which still needs
+				// the handler installed to override the default.
+				r.enableSignalTrap(sig)
 			}
 		}
 
@@ -3694,45 +3717,68 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		// bg statement spawned a real exec). Stdio is not re-attached —
 		// see docs/plan-punted-builtins.md for why.
 		//
-		// Bash distinguishes "no current job" (no-arg with empty job
-		// table) from "no such job" (arg doesn't match anything); replicate
-		// that so scripts/tests can rely on the message shape.
+		// Job-control gating must match bash even though subshells here
+		// are goroutines: refuse entirely when monitor mode is off, and
+		// refuse a job that was backgrounded before job control was
+		// enabled (`set +o monitor; cmd &; set -m; fg %1`). Without this,
+		// fg would block forever on a job it can never foreground.
+		if !r.monitorActive() {
+			return failf(1, "fg: no job control\n")
+		}
 		var bg *bgProc
+		jobIdx := 0
 		switch {
 		case len(args) == 0:
 			if len(r.bgProcs) == 0 {
-				return failf(1, "fg: no job control\n")
+				return failf(1, "fg: no current jobs\n")
 			}
-			bg = r.bgProcs[len(r.bgProcs)-1]
+			jobIdx = len(r.bgProcs)
 		case strings.HasPrefix(args[0], "%"):
 			arg := strings.TrimPrefix(args[0], "%")
-			n := int(atoi(arg))
-			if n < 1 || n > len(r.bgProcs) {
-				return failf(1, "fg: %%%s: no such job\n", arg)
+			switch arg {
+			case "%", "+", "":
+				if len(r.bgProcs) == 0 {
+					return failf(1, "fg: no current jobs\n")
+				}
+				jobIdx = len(r.bgProcs)
+			case "-":
+				if len(r.bgProcs) < 2 {
+					return failf(1, "fg: no current jobs\n")
+				}
+				jobIdx = len(r.bgProcs) - 1
+			default:
+				n := int(atoi(arg))
+				if n < 1 || n > len(r.bgProcs) {
+					return failf(1, "fg: %%%s: no such job\n", arg)
+				}
+				jobIdx = n
 			}
-			bg = r.bgProcs[n-1]
 		default:
 			if rest, ok := strings.CutPrefix(args[0], "g"); ok {
 				n := int(atoi(rest))
 				if n < 1 || n > len(r.bgProcs) {
 					return failf(1, "fg: %s: no such job\n", args[0])
 				}
-				bg = r.bgProcs[n-1]
+				jobIdx = n
 			} else {
 				pid, perr := strconv.ParseInt(args[0], 10, 64)
 				if perr != nil {
 					return failf(1, "fg: %s: no such job\n", args[0])
 				}
-				for _, candidate := range r.bgProcs {
+				for i, candidate := range r.bgProcs {
 					if candidate.pid.Load() == pid {
-						bg = candidate
+						jobIdx = i + 1
 						break
 					}
 				}
-				if bg == nil {
+				if jobIdx == 0 {
 					return failf(1, "fg: pid %s is not a child of this shell\n", args[0])
 				}
 			}
+		}
+		bg = r.bgProcs[jobIdx-1]
+		if !bg.jobControl {
+			return failf(1, "fg: job %d started without job control\n", jobIdx)
 		}
 		// If a real OS PID has been published, defensively resume it in
 		// case an external SIGSTOP left it stopped. Non-blocking: we only
