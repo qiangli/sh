@@ -2499,6 +2499,15 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 			if err != nil {
 				return nil, err
 			}
+			if len(wfield) == 0 {
+				// A double-quoted string that expands to nothing ("",
+				// "$unset", …) is a quoted null: it forces a field at the
+				// current position, exactly like an empty single-quoted
+				// string ''. Without this, `$var""` where $var ends in a
+				// trailing IFS delimiter would drop the trailing empty
+				// field that the quoted null is meant to preserve.
+				curField = append(curField, fieldPart{quote: quoteDouble, val: ""})
+			}
 			for _, part := range wfield {
 				part.quote = quoteDouble
 				curField = append(curField, part)
