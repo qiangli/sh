@@ -6561,7 +6561,18 @@ func (r *Runner) trapCallback(ctx context.Context, callback, name string) uint8 
 	r.exit = exitStatus{} // start fresh so we can capture the trap's exit
 	r.stmts(ctx, file.Stmts)
 	trapCode := r.exit.code
+	trapExited := r.exit.exiting
 	r.exit = oldExit // traps on EXIT or ERR should not modify the result
+	// An EXIT trap that itself runs `exit N` overrides the shell's
+	// (or subshell's) final status with N (bash: `exit 0` in the EXIT
+	// trap clears a prior failure).
+	if name == "exit" && trapExited {
+		r.exit.code = trapCode
+		r.exit.err = nil
+		if trapCode == 0 {
+			r.exit.fatalExit = false
+		}
+	}
 
 	return trapCode
 }
