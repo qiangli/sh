@@ -326,6 +326,17 @@ func (cfg *Config) envSet(name, value string) error {
 	if n, resolved := vr.Resolve(cfg.Env); n != "" {
 		name, vr = n, resolved
 	}
+	// An integer-attributed scalar (`declare -i`) evaluates the assigned
+	// value as an arithmetic expression, so `${a:=4+3}` stores 7 (and
+	// `declare -p a` reports it). This mirrors envSetIndex's array path
+	// and interp's `declare -i` assignment.
+	if vr.Integer {
+		if v, err := cfg.integerValue(value); err == nil {
+			value = v
+		} else {
+			return err
+		}
+	}
 	vr.Set = true
 	switch vr.Kind {
 	case Indexed:
