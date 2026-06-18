@@ -270,6 +270,32 @@ func TestFieldsQuotedAtDefaultPreservesElements(t *testing.T) {
 	}
 }
 
+func TestFieldsUnquotedStarNullIFSPreservesElements(t *testing.T) {
+	cfg := &Config{Env: testEnv{
+		"IFS": {Set: true, Kind: String, Str: ""},
+		"*":   {Set: true, Kind: Indexed, List: []string{"bob", "tom dick harry", "joe"}},
+		"a":   {Set: true, Kind: Indexed, List: []string{"bob", "tom dick harry", "joe"}},
+	}}
+	tests := []struct {
+		src  string
+		want []string
+	}{
+		{`echo $*`, []string{"bob", "tom dick harry", "joe"}},
+		{`echo ${a[*]}`, []string{"bob", "tom dick harry", "joe"}},
+		{`echo x${a[*]}y`, []string{"xbob", "tom dick harry", "joey"}},
+	}
+	for _, tc := range tests {
+		word := parseCallArg(t, tc.src, 1)
+		got, err := Fields(cfg, word)
+		if err != nil {
+			t.Fatalf("%s: did not want error, got %v", tc.src, err)
+		}
+		if !reflect.DeepEqual(got, tc.want) {
+			t.Fatalf("%s: wanted %q, got %q", tc.src, tc.want, got)
+		}
+	}
+}
+
 func TestFieldsParamExpDefaultBackslashInDoubleQuotes(t *testing.T) {
 	cfg := &Config{Env: ListEnviron("somevar=", "HOME=/usr/homes/chet")}
 	tests := []struct {

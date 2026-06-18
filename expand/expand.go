@@ -2458,6 +2458,17 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 				curField = append(curField, part)
 			}
 		case *syntax.ParamExp:
+			if elems, ok, err := cfg.unquotedNullIFSStarFields(wp); err != nil {
+				return nil, err
+			} else if ok {
+				for i, elem := range elems {
+					if i > 0 {
+						flush()
+					}
+					curField = append(curField, fieldPart{val: elem})
+				}
+				continue
+			}
 			if !wp.Excl && wp.Exp == nil && wp.Repl == nil && !wp.Length && !wp.Width && !wp.IsSet &&
 				wp.Param.Value == "@" && (!cfg.ifsSet || cfg.ifs != " \t\n") {
 				elems, err := cfg.sliceElems(wp, cfg.Env.Get("@").List, true)
@@ -2656,6 +2667,35 @@ func (cfg *Config) quotedEmptyAtElidesField(parts []syntax.WordPart) bool {
 		}
 	}
 	return hasAt
+}
+
+func (cfg *Config) unquotedNullIFSStarFields(pe *syntax.ParamExp) ([]string, bool, error) {
+	if cfg.ifs != "" || pe == nil || pe.Excl || pe.Exp != nil || pe.Repl != nil ||
+		pe.Length || pe.Width || pe.IsSet {
+		return nil, false, nil
+	}
+	switch pe.Param.Value {
+	case "*":
+		elems, err := cfg.sliceElems(pe, cfg.Env.Get("*").List, true)
+		return elems, true, err
+	}
+	switch nodeLit(pe.Index) {
+	case "*":
+		vr := cfg.Env.Get(pe.Param.Value)
+		switch vr.Kind {
+		case Indexed:
+			elems, err := cfg.sliceIndexedElems(pe, vr, false)
+			return elems, true, err
+		case Associative:
+			keys := vr.AssocKeysForDeclare()
+			elems := make([]string, len(keys))
+			for i, k := range keys {
+				elems[i] = vr.Map[k]
+			}
+			return elems, true, nil
+		}
+	}
+	return nil, false, nil
 }
 
 func paramExpDefaultWordAllowsEmpty(pe *syntax.ParamExp) bool {
