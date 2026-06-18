@@ -210,10 +210,14 @@ func (r *Runner) waitOrSignal(bg *bgProc) (interrupted bool) {
 		case <-bg.done:
 			return false
 		case <-wake:
-			if r.hasPendingSig.Load() {
+			// SIGCHLD does not interrupt wait — bash runs its trap per
+			// child death but keeps waiting. The pending CHLD trap fires
+			// at the next statement boundary. Any other trapped signal
+			// returns immediately (POSIX).
+			if name, _ := r.peekPendingSignal(); name != "" && name != "CHLD" {
 				return true
 			}
-			// spurious wake (signal already drained); keep waiting
+			// CHLD or spurious wake; keep waiting
 		}
 	}
 }
