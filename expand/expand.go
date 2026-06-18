@@ -1656,8 +1656,14 @@ func (cfg *Config) fieldJoin(parts []fieldPart) string {
 
 func (cfg *Config) escapedGlobField(parts []fieldPart) (escaped string, glob bool) {
 	sb := cfg.strBuilder()
-	for _, part := range parts {
+	bracketOpen := false
+	for i, part := range parts {
 		if part.quote > quoteNone {
+			if bracketOpen && part.val == "/" && fieldPartsCloseBracket(parts[i+1:]) {
+				sb.WriteString(`\/`)
+				glob = true
+				continue
+			}
 			sb.WriteString(pattern.QuoteMeta(part.val, 0))
 			continue
 		}
@@ -1665,6 +1671,7 @@ func (cfg *Config) escapedGlobField(parts []fieldPart) (escaped string, glob boo
 		if cfg.hasGlobMeta(part.val) {
 			glob = true
 		}
+		bracketOpen = updateGlobBracketOpen(bracketOpen, part.val)
 	}
 	if glob { // only copy the string if it will be used
 		escaped = sb.String()
@@ -1672,8 +1679,46 @@ func (cfg *Config) escapedGlobField(parts []fieldPart) (escaped string, glob boo
 	return escaped, glob
 }
 
+func fieldPartsCloseBracket(parts []fieldPart) bool {
+	for _, part := range parts {
+		if part.quote > quoteNone {
+			continue
+		}
+		for i := 0; i < len(part.val); i++ {
+			switch part.val[i] {
+			case '\\':
+				if i+1 < len(part.val) {
+					i++
+				}
+			case ']':
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func updateGlobBracketOpen(open bool, s string) bool {
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '\\':
+			if i+1 < len(s) {
+				i++
+			}
+		case '[':
+			open = true
+		case ']':
+			open = false
+		}
+	}
+	return open
+}
+
 func (cfg *Config) hasGlobMeta(s string) bool {
 	if pattern.HasMeta(s, 0) {
+		return true
+	}
+	if hasBracketGlobWithEscapedSlash(s) {
 		return true
 	}
 	if !cfg.ExtGlob {
@@ -1688,6 +1733,32 @@ func (cfg *Config) hasGlobMeta(s string) bool {
 				return true
 			}
 		}
+	}
+	return false
+}
+
+func hasBracketGlobWithEscapedSlash(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] != '[' {
+			if s[i] == '\\' && i+1 < len(s) {
+				i++
+			}
+			continue
+		}
+		for j := i + 1; j < len(s); j++ {
+			switch s[j] {
+			case '\\':
+				if j+1 < len(s) {
+					if s[j+1] == '/' {
+						return true
+					}
+					j++
+				}
+			case ']':
+				return false
+			}
+		}
+		return false
 	}
 	return false
 }
@@ -1729,6 +1800,8 @@ func FieldsSeq(cfg *Config, words ...*syntax.Word) iter.Seq2[string, error] {
 						if _, ok := err.(*pattern.SyntaxError); !ok {
 							yield("", err)
 							return true
+						} else if cfg.NullGlob && hasBracketGlobWithEscapedSlash(path) {
+							continue
 						}
 					} else if len(matches) > 0 || cfg.NullGlob {
 						for _, m := range matches {
@@ -4861,15 +4934,70 @@ func (cfg *Config) glob(base, pat string) ([]string, error) {
 		}
 		matches = newMatches
 	}
-	// Note that the results need to be sorted.
-	// TODO: above we do a BFS; if we did a DFS, the matches would already be sorted.
-	slices.Sort(matches)
+	cfg.sortGlobMatches(base, matches)
 	// Remove any empty matches left behind from "**".
 	if len(matches) > 0 && matches[0] == "" {
 		matches = matches[1:]
 	}
 	matches = cfg.filterGlobIgnore(matches)
 	return matches, nil
+}
+
+func (cfg *Config) sortGlobMatches(base string, matches []string) {
+	if cfg.Env != nil && cfg.envGet("GLOBSORT") == "nosort" {
+		return
+	}
+	globSort := ""
+	if cfg.Env != nil {
+		globSort = cfg.envGet("GLOBSORT")
+	}
+	reverse := strings.HasPrefix(globSort, "-")
+	key := strings.TrimLeft(globSort, "+-")
+	switch key {
+	case "atime", "mtime", "size":
+		type statMatch struct {
+			name string
+			info fs.FileInfo
+		}
+		statMatches := make([]statMatch, len(matches))
+		for i, match := range matches {
+			path := match
+			if !filepath.IsAbs(path) {
+				path = filepath.Join(base, path)
+			}
+			info, _ := os.Stat(path)
+			statMatches[i] = statMatch{name: match, info: info}
+		}
+		slices.SortFunc(statMatches, func(a, b statMatch) int {
+			c := cmp.Compare(a.name, b.name)
+			if a.info != nil && b.info != nil {
+				switch key {
+				case "atime", "mtime":
+					c = a.info.ModTime().Compare(b.info.ModTime())
+				case "size":
+					c = cmp.Compare(a.info.Size(), b.info.Size())
+				}
+				if c == 0 {
+					c = cmp.Compare(a.name, b.name)
+				}
+			}
+			if reverse {
+				c = -c
+			}
+			return c
+		})
+		for i, match := range statMatches {
+			matches[i] = match.name
+		}
+	case "name":
+		if reverse {
+			slices.SortFunc(matches, func(a, b string) int { return cmp.Compare(b, a) })
+		} else {
+			slices.Sort(matches)
+		}
+	default:
+		slices.Sort(matches)
+	}
 }
 
 func globAtExplicitDotAltMatches(part, name string, mode pattern.Mode) bool {
@@ -5088,9 +5216,15 @@ func (cfg *Config) globDir(base, dir string, matcher func(string) bool, wantDir 
 			if _, err := cfg.ReadDir2(filepath.Join(fullDir, info.Name())); err != nil {
 				continue
 			}
-		} else if !mode.IsDir() {
-			// Not a symlink nor a directory.
-			continue
+		} else if mode.IsDir() {
+			if info, err := info.Info(); err == nil && info.Mode().Perm()&0o111 == 0 {
+				continue
+			}
+			if _, err := os.Stat(filepath.Join(fullDir, info.Name(), ".")); err != nil {
+				continue
+			}
+		} else {
+			continue // Not a symlink nor a directory.
 		}
 		if matcher(name) {
 			matches = append(matches, pathJoin2(dir, name))

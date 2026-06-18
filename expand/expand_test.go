@@ -9,8 +9,10 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"mvdan.cc/sh/v3/syntax"
 )
@@ -829,6 +831,33 @@ func TestFieldsFailGlob(t *testing.T) {
 	}
 }
 
+func TestFieldsNullGlobInvalidBracketWithSlash(t *testing.T) {
+	cfg := &Config{
+		NullGlob: true,
+		ReadDir2: func(string) ([]fs.DirEntry, error) {
+			return nil, nil
+		},
+	}
+	word := parseWord(t, `[qwe\/qwe]`)
+	got, err := Fields(cfg, word)
+	if err != nil {
+		t.Fatalf("did not want error, got %v", err)
+	}
+	if got != nil {
+		t.Fatalf("wanted no fields, got %q", got)
+	}
+
+	word = parseWord(t, `[qwe\/`)
+	got, err = Fields(cfg, word)
+	if err != nil {
+		t.Fatalf("did not want error, got %v", err)
+	}
+	want := []string{"[qwe/"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("wanted %q, got %q", want, got)
+	}
+}
+
 func TestFieldsBackslashEscapedGlobPath(t *testing.T) {
 	temp := t.TempDir()
 	if err := os.MkdirAll(temp+"/tmp/a/b", 0o777); err != nil {
@@ -859,6 +888,86 @@ func TestFieldsBackslashEscapedGlobPath(t *testing.T) {
 		if !reflect.DeepEqual(got, tc.want) {
 			t.Fatalf("%s: wanted %q, got %q", tc.src, tc.want, got)
 		}
+	}
+}
+
+func TestGlobSort(t *testing.T) {
+	temp := t.TempDir()
+	files := []struct {
+		name string
+		size int
+	}{
+		{"mksyntax", 4},
+		{"mksignames", 7},
+		{"make_cmd.o", 11},
+		{"mailcheck.o", 13},
+		{"mksignames.o", 16},
+		{"mksyntax.dSYM", 19},
+	}
+	baseTime := time.Now().Add(-time.Hour).Round(0)
+	for i, file := range files {
+		data := strings.Repeat("x", file.size)
+		path := filepath.Join(temp, file.name)
+		if err := os.WriteFile(path, []byte(data), 0o666); err != nil {
+			t.Fatal(err)
+		}
+		mtime := baseTime.Add(time.Duration(i) * time.Second)
+		if err := os.Chtimes(path, mtime, mtime); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfg := &Config{
+		Env:      ListEnviron("PWD=" + temp),
+		ReadDir2: os.ReadDir,
+	}
+	tests := []struct {
+		globSort string
+		want     []string
+	}{
+		{"", []string{"mailcheck.o", "make_cmd.o", "mksignames", "mksignames.o", "mksyntax", "mksyntax.dSYM"}},
+		{"-name", []string{"mksyntax.dSYM", "mksyntax", "mksignames.o", "mksignames", "make_cmd.o", "mailcheck.o"}},
+		{"size", []string{"mksyntax", "mksignames", "make_cmd.o", "mailcheck.o", "mksignames.o", "mksyntax.dSYM"}},
+		{"-size", []string{"mksyntax.dSYM", "mksignames.o", "mailcheck.o", "make_cmd.o", "mksignames", "mksyntax"}},
+		{"+nonsense", []string{"mailcheck.o", "make_cmd.o", "mksignames", "mksignames.o", "mksyntax", "mksyntax.dSYM"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.globSort, func(t *testing.T) {
+			cfg.Env = ListEnviron("PWD="+temp, "GLOBSORT="+tc.globSort)
+			got, err := cfg.glob(temp, "m*")
+			if err != nil {
+				t.Fatalf("did not want error, got %v", err)
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("wanted %q, got %q", tc.want, got)
+			}
+		})
+	}
+}
+
+func TestGlobSearchableDot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix permissions")
+	}
+	temp := t.TempDir()
+	if err := os.Mkdir(filepath.Join(temp, "searchable"), 0o111); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(temp, "readable"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(filepath.Join(temp, "searchable"), 0o777)
+	defer os.Chmod(filepath.Join(temp, "readable"), 0o777)
+	cfg := &Config{
+		Env:      ListEnviron("PWD=" + temp),
+		ReadDir2: os.ReadDir,
+	}
+	got, err := cfg.glob(temp, "*/.")
+	if err != nil {
+		t.Fatalf("did not want error, got %v", err)
+	}
+	want := []string{"searchable/."}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("wanted %q, got %q", want, got)
 	}
 }
 
@@ -904,6 +1013,19 @@ var _ fs.DirEntry = (*mockFileInfo)(nil)
 
 func (fi *mockFileInfo) Name() string      { return fi.name }
 func (fi *mockFileInfo) Type() fs.FileMode { return fi.typ }
+func (fi *mockFileInfo) Info() (fs.FileInfo, error) {
+	return fileInfoDirEntry{fi}, nil
+}
+
+type fileInfoDirEntry struct {
+	*mockFileInfo
+}
+
+func (fi fileInfoDirEntry) Size() int64        { return 0 }
+func (fi fileInfoDirEntry) Mode() fs.FileMode  { return fi.typ }
+func (fi fileInfoDirEntry) ModTime() time.Time { return time.Time{} }
+func (fi fileInfoDirEntry) IsDir() bool        { return fi.typ.IsDir() }
+func (fi fileInfoDirEntry) Sys() any           { return nil }
 
 func TestAnchoredEmptyPatternSubst(t *testing.T) {
 	tests := []struct {
