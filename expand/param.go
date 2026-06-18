@@ -1773,11 +1773,14 @@ func (cfg *Config) paramAtA(vr, orig Variable, name, scalarStr string, forceLite
 			}
 			return "declare -" + flags + " " + name
 		}
-		quoted := bashSingleQuote(scalarStr)
 		if flags == "" {
-			return name + "=" + quoted
+			// A plain scalar (no attributes) is reproduced as `name=value`
+			// with the value single-quoted, falling back to ANSI-C `$'…'`
+			// quoting when it holds bytes single quotes can't represent
+			// (control characters, DEL), exactly like ${var@Q}.
+			return name + "=" + bashQuoteParamQ(scalarStr)
 		}
-		return "declare -" + flags + " " + name + "=" + quoted
+		return "declare -" + flags + " " + name + "=" + bashSingleQuote(scalarStr)
 	}
 }
 
