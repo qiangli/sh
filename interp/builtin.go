@@ -13,6 +13,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"sort"
 	"strconv"
@@ -1178,31 +1179,38 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		}
 		remaining := fp.args()
 		if waitNext {
-			// Wait for the next background job to complete.
-			for i, bg := range r.bgProcs {
+			// `wait -n [jobspec...]` waits for the NEXT of the named jobs
+			// (or, with no names, any background job) to finish, returning
+			// with $? = that job's exit status. With -p VAR it also stores
+			// the finishing job's PID into VAR (which may be an array
+			// element like A[k], handled by setVarString's array path).
+			candidates := r.bgProcs
+			if len(remaining) > 0 {
+				candidates = candidates[:0:0]
+				for _, arg := range remaining {
+					bg := r.resolveJobArg(arg)
+					if bg == nil {
+						return failf(1, "wait: %s: no such job\n", arg)
+					}
+					candidates = append(candidates, bg)
+				}
+			}
+			// Any candidate already done?
+			for _, bg := range candidates {
 				select {
 				case <-bg.done:
 					exit = *bg.exit
 					r.reapCoproc(bg)
-					if pidVar != "" {
-						r.setVarString(pidVar, "g"+strconv.Itoa(i+1))
-					}
+					r.storeWaitPid(pidVar, bg)
 					goto waitDone
 				default:
 				}
 			}
-			// None already done; wait for any one.
-			if len(r.bgProcs) > 0 {
-				// Simple approach: wait on the first unfinished one.
-				for i, bg := range r.bgProcs {
-					<-bg.done
-					exit = *bg.exit
-					r.reapCoproc(bg)
-					if pidVar != "" {
-						r.setVarString(pidVar, "g"+strconv.Itoa(i+1))
-					}
-					break
-				}
+			// None done yet; block until the first of them finishes.
+			if bg := waitAnyDone(candidates); bg != nil {
+				exit = *bg.exit
+				r.reapCoproc(bg)
+				r.storeWaitPid(pidVar, bg)
 			}
 		waitDone:
 			break
@@ -4250,6 +4258,76 @@ func (r *Runner) jsonOut(v any) exitStatus {
 	r.out(string(buf))
 	r.out("\n")
 	return exitStatus{}
+}
+
+// resolveJobArg maps a `wait`/`wait -n` argument to a background job:
+// `%N` job-spec, `gN` legacy `$!` sentinel, or a real OS PID (also a
+// coproc's synthetic `<NAME>_PID`). Returns nil when nothing matches.
+func (r *Runner) resolveJobArg(arg string) *bgProc {
+	if rest, ok := strings.CutPrefix(arg, "%"); ok {
+		n := int(atoi(rest))
+		if n < 1 || n > len(r.bgProcs) {
+			return nil
+		}
+		return r.bgProcs[n-1]
+	}
+	if rest, ok := strings.CutPrefix(arg, "g"); ok {
+		n := int(atoi(rest))
+		if n < 1 || n > len(r.bgProcs) {
+			return nil
+		}
+		return r.bgProcs[n-1]
+	}
+	pid, perr := strconv.ParseInt(arg, 10, 64)
+	if perr != nil {
+		return nil
+	}
+	for _, candidate := range r.bgProcs {
+		if candidate.pid.Load() == pid ||
+			(candidate.coprocPid == pid && candidate.coprocPidVar != "") {
+			return candidate
+		}
+	}
+	return nil
+}
+
+// storeWaitPid implements `wait -p VAR`: store the finishing job's PID
+// into VAR. The value mirrors `$!` — the real OS PID when one was
+// published, else the legacy `g<N>` sentinel. VAR may be an array
+// element (e.g. A[k]); setVarString routes that through the array path.
+func (r *Runner) storeWaitPid(pidVar string, bg *bgProc) {
+	if pidVar == "" || bg == nil {
+		return
+	}
+	if bg.pidReady != nil {
+		<-bg.pidReady
+	}
+	var val string
+	if pid := bg.pid.Load(); pid > 0 {
+		val = strconv.FormatInt(pid, 10)
+	} else {
+		for i, candidate := range r.bgProcs {
+			if candidate == bg {
+				val = "g" + strconv.Itoa(i+1)
+				break
+			}
+		}
+	}
+	r.setVarString(pidVar, val)
+}
+
+// waitAnyDone blocks until the first of the given background jobs
+// finishes and returns it (nil if the slice is empty).
+func waitAnyDone(procs []*bgProc) *bgProc {
+	if len(procs) == 0 {
+		return nil
+	}
+	cases := make([]reflect.SelectCase, len(procs))
+	for i, bg := range procs {
+		cases[i] = reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(bg.done)}
+	}
+	chosen, _, _ := reflect.Select(cases)
+	return procs[chosen]
 }
 
 func bashPrintfFormatError(err error) bool {
