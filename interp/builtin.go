@@ -3494,15 +3494,24 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		fp := flagParser{remaining: args}
 		listSignals := false
 		printTraps := false
+		printActions := false // -P: print only the action string
+		dashReset := false    // a bare "-" action (reset to default)
 		callback := "-"
+	trapFlags:
 		for fp.more() {
 			switch flag := fp.flag(); flag {
 			case "-l":
 				listSignals = true
 			case "-p":
 				printTraps = true
+			case "-P":
+				printActions = true
 			case "-":
-				// default signal
+				// A bare "-" is the reset-to-default *action*, not a
+				// flag; stop flag parsing so it isn't mistaken for the
+				// callback of `trap - SIG...`.
+				dashReset = true
+				break trapFlags
 			default:
 				r.errf("%strap: %s: invalid option\n", r.bashErrPrefix(pos), flag)
 				r.errf("trap: usage: %s\n", bashUsage["trap"])
@@ -3514,8 +3523,31 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			r.printSignalList()
 			break
 		}
+		if printTraps && printActions {
+			return failf(2, "trap: cannot specify both -p and -P\n")
+		}
 		args := fp.args()
-		if printTraps || len(args) == 0 {
+		if printActions {
+			// `trap -P SIG...` prints only the action for each named
+			// signal (no `trap -- ... SIG` wrapper).
+			if len(args) == 0 {
+				r.errf("%strap: -P requires at least one signal name\n", r.bashErrPrefix(pos))
+				r.errf("trap: usage: %s\n", bashUsage["trap"])
+				exit.code = 2
+				return exit
+			}
+			for _, a := range args {
+				sig := normalizeSignal(a)
+				if sig == "" {
+					return failf(1, "trap: %s: invalid signal specification\n", a)
+				}
+				if cb, ok := r.trapCallbacks[sig]; ok && cb != "" {
+					r.outf("%s\n", cb)
+				}
+			}
+			break
+		}
+		if !dashReset && (printTraps || len(args) == 0) {
 			// Print traps, optionally filtered by signal names
 			filter := make(map[string]bool)
 			for _, a := range args {
@@ -3562,9 +3594,18 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			}
 			break
 		}
+		if len(args) == 1 && args[0] == "" && !dashReset {
+			// `trap ''` with no signals is a no-op in bash (empty action,
+			// nothing to attach it to).
+			break
+		}
 		reset := false
-		switch len(args) {
-		case 1:
+		switch {
+		case dashReset:
+			// `trap - SIG...`: the "-" action was already consumed; the
+			// remaining args are all signal names to reset.
+			reset = true
+		case len(args) == 1:
 			// 1-arg form is just signal names — reset to default.
 			reset = true
 		default:
