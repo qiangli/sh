@@ -1626,6 +1626,12 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 						} else {
 							qSet = arrayElemSet(vr, index, cfg)
 						}
+					} else if len(elems) > 0 {
+						// `${a[@]@Q}` / `${a[*]@Q}`: an element-assigned
+						// array (`a[0]=''`) leaves vr.Set false even though
+						// elements exist, so IsSet alone wrongly reports the
+						// array unset. Any present element makes it "set".
+						qSet = true
 					}
 				}
 				if !qSet {
