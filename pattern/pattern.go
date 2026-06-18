@@ -353,7 +353,8 @@ func regexpNext(sb *strings.Builder, sl *stringLexer, mode Mode) error {
 		}
 	case '?':
 		if mode&Filenames != 0 {
-			if mode&GlobLeadingDot == 0 && extGlobAltAtSegmentStart(sl.s, sl.i-1) {
+			singleBefore := sl.i == 1 || sl.last() == '/' || extGlobAltAtSegmentStart(sl.s, sl.i-1)
+			if mode&GlobLeadingDot == 0 && singleBefore {
 				sb.WriteString(`[^/.]`)
 			} else {
 				sb.WriteString(`[^/]`)
@@ -364,7 +365,10 @@ func regexpNext(sb *strings.Builder, sl *stringLexer, mode Mode) error {
 	case '\\':
 		c = sl.next()
 		if c == '\x00' {
-			return &SyntaxError{msg: `\ at end of pattern`}
+			// A trailing backslash matches a literal backslash, as bash does
+			// (POSIX leaves it unspecified); confirmed by the glob.tests fixture.
+			sb.WriteString(`\\`)
+			return nil
 		}
 		sb.WriteString(regexp.QuoteMeta(string(c)))
 	case '[':
