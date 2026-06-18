@@ -2258,6 +2258,14 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 			curField = append(curField, fieldPart{val: s[fieldStart:]})
 		}
 	}
+	// keepTrailing is set while splitting an individual element of an
+	// unquoted `$@`/`${arr[@]}` list that is NOT the last element. Such an
+	// element is a complete word on its own, so a trailing non-whitespace
+	// IFS delimiter must still produce an empty field (the next element
+	// begins a fresh word); only the very last element's trailing
+	// delimiter is dropped. For ordinary single-word splitting this stays
+	// false so a trailing delimiter never yields a trailing empty.
+	keepTrailing := false
 	splitAdd := func(val string) {
 		// hadPrefix records whether curField had content (a lit prefix
 		// from before this splitAdd) when we hit the first IFS char.
@@ -2344,11 +2352,24 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 				// the leading-edge empty in addition to the
 				// between-delimiter empties.
 				extra = runNonWS
+			} else if keepTrailing {
+				// This element is followed by another `$@`/array word,
+				// so its trailing delimiter is not truly trailing: it
+				// produces an empty field too.
+				extra = runNonWS
 			}
 			for n := 0; n < extra; n++ {
 				emitEmpty()
 			}
 		}
+	}
+	// splitAddElem splits one element of an unquoted `$@`/`${arr[@]}` list,
+	// preserving the trailing-delimiter empty field for every element but
+	// the last so element boundaries are not collapsed.
+	splitAddElem := func(val string, last bool) {
+		keepTrailing = !last
+		splitAdd(val)
+		keepTrailing = false
 	}
 	for i, wp := range wps {
 		switch wp := wp.(type) {
@@ -2510,7 +2531,7 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 					if i > 0 {
 						flush()
 					}
-					splitAdd(elem)
+					splitAddElem(elem, i == len(elems)-1)
 				}
 				continue
 			}
@@ -2525,7 +2546,7 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 						if i > 0 {
 							flush()
 						}
-						splitAdd(elem)
+						splitAddElem(elem, i == len(elems)-1)
 					}
 					continue
 				}
@@ -2545,7 +2566,7 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 					if i > 0 {
 						flush()
 					}
-					splitAdd(elem)
+					splitAddElem(elem, i == len(elems)-1)
 				}
 				continue
 			}
@@ -2563,7 +2584,7 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 					if i > 0 {
 						flush()
 					}
-					splitAdd(elem)
+					splitAddElem(elem, i == len(elems)-1)
 				}
 				continue
 			}
@@ -2574,7 +2595,7 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 					if i > 0 {
 						flush()
 					}
-					splitAdd(elem)
+					splitAddElem(elem, i == len(elems)-1)
 				}
 				continue
 			}
@@ -2585,7 +2606,7 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 					if i > 0 {
 						flush()
 					}
-					splitAdd(elem)
+					splitAddElem(elem, i == len(elems)-1)
 				}
 				continue
 			}
