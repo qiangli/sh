@@ -384,6 +384,42 @@ func regexpNext(sb *strings.Builder, sl *stringLexer, mode Mode) error {
 				}
 			}
 		}
+		// Peek ahead: if the bracket expression contains a valid
+		// [[:name:] char class but no closing outer ], bash treats
+		// the opening [ as literal and the class name chars as a
+		// bracket expression. Handle this before writing anything.
+		if rest := sl.peekRest(); len(rest) >= 2 && rest[0] == '[' && rest[1] == ':' {
+			if j := strings.Index(rest[1:], ":]"); j > 0 {
+				name := rest[2 : 1+j] // between : and :]
+				switch name {
+				case "alnum", "alpha", "ascii", "blank", "cntrl",
+					"digit", "graph", "lower", "print", "punct",
+					"space", "upper", "word", "xdigit":
+					after := rest[1+j+2:] // after [:name:]
+					if !strings.ContainsRune(after, ']') {
+						// No closing ] for outer bracket.
+						// Write literal [ then a bracket
+						// of the class name's characters.
+						sb.WriteString(`\[`)
+						sb.WriteByte('[')
+						for _, r := range name {
+							rc := byte(r)
+							if !((rc >= 'a' && rc <= 'z') || (rc >= 'A' && rc <= 'Z') || (rc >= '0' && rc <= '9') || rc == '_' || rc == ':') {
+								sb.WriteByte('\\')
+							}
+							sb.WriteRune(r)
+						}
+						sb.WriteByte(']')
+						// Consume the [[:name:] prefix
+						sl.i += 1 + len(name) + 3 // [ + : + name + :]
+						// Remaining chars (after) are
+						// literal content — consumed
+						// by subsequent regexpNext calls.
+						return nil
+					}
+				}
+			}
+		}
 		sb.WriteRune(c)
 		if c = sl.next(); c == '\x00' {
 			return &SyntaxError{msg: "[ was not matched with a closing ]"}
@@ -440,6 +476,17 @@ func regexpNext(sb *strings.Builder, sl *stringLexer, mode Mode) error {
 				rest := sl.peekRest()
 				name, _, ok := strings.Cut(rest, ":]")
 				if !ok {
+					// [:name not properly closed with :].
+					// If there is a closing ] somewhere,
+					// the bracket is still well-formed;
+					// bash treats [ as a literal character
+					// inside the bracket expression.
+					if strings.ContainsRune(rest, ']') {
+						sb.WriteString(`\[`)
+						lastEmitted = '['
+						c = sl.next() // consume the ':'
+						continue
+					}
 					return &SyntaxError{msg: "charClass invalid", err: fmt.Errorf("[[: was not matched with a closing :]]")}
 				}
 				if strings.HasPrefix(name, ":") {
