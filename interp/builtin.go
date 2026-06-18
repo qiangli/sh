@@ -3615,7 +3615,15 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			// remaining args are all signal names to reset.
 			reset = true
 		case len(args) == 1:
-			// 1-arg form is just signal names — reset to default.
+			// 1-arg form resets the named signal to default, but only
+			// if the operand actually names a signal. A lone operand
+			// that isn't a signal is an action with no signal_spec,
+			// which bash reports as a usage error (`trap 512`).
+			if normalizeSignal(args[0]) == "" {
+				r.errf("trap: usage: %s\n", bashUsage["trap"])
+				exit.code = 2
+				return exit
+			}
 			reset = true
 		default:
 			callback = args[0]
