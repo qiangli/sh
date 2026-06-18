@@ -1220,9 +1220,15 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			break
 		}
 		if len(remaining) == 0 {
-			// Note that "wait" without arguments always returns exit status zero.
+			// "wait" without arguments returns exit status zero, unless a
+			// trapped signal interrupts it (POSIX: return >128, then run
+			// the trap at the next statement boundary).
 			for _, bg := range r.bgProcs {
-				<-bg.done
+				if r.waitOrSignal(bg) {
+					_, num := r.peekPendingSignal()
+					exit.code = uint8(128 + num)
+					return exit
+				}
 				r.reapCoproc(bg)
 			}
 			break
@@ -1275,7 +1281,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					return failf(1, "wait: pid %s is not a child of this shell\n", arg)
 				}
 			}
-			<-bg.done
+			if r.waitOrSignal(bg) {
+				_, num := r.peekPendingSignal()
+				exit.code = uint8(128 + num)
+				return exit
+			}
 			exit = *bg.exit
 			r.reapCoproc(bg)
 			if pidVar != "" {

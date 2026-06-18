@@ -167,6 +167,57 @@ func (r *Runner) nextPendingSignal() string {
 	return best
 }
 
+// peekPendingSignal returns the lowest-numbered pending signal's name and
+// number without consuming it, or ("", 0) if none are pending.
+func (r *Runner) peekPendingSignal() (string, int) {
+	r.sigMu.Lock()
+	defer r.sigMu.Unlock()
+	best := ""
+	bestNum := 1 << 30
+	for n, c := range r.pendingSig {
+		if c <= 0 {
+			continue
+		}
+		num := 1 << 29
+		if s, ok := signalByName(n); ok {
+			num = int(s)
+		}
+		if num < bestNum {
+			bestNum = num
+			best = n
+		}
+	}
+	if best == "" {
+		return "", 0
+	}
+	return best, bestNum
+}
+
+// waitOrSignal blocks until bg finishes or a trapped signal arrives, returning
+// true if a signal interrupted the wait. POSIX requires `wait` to return
+// immediately (with status >128) when a trapped signal is received; the trap
+// itself runs at the next statement boundary via deliverPendingSignals.
+func (r *Runner) waitOrSignal(bg *bgProc) (interrupted bool) {
+	r.sigMu.Lock()
+	wake := r.sigWake
+	r.sigMu.Unlock()
+	if wake == nil {
+		<-bg.done
+		return false
+	}
+	for {
+		select {
+		case <-bg.done:
+			return false
+		case <-wake:
+			if r.hasPendingSig.Load() {
+				return true
+			}
+			// spurious wake (signal already drained); keep waiting
+		}
+	}
+}
+
 // deliverPendingSignals runs the trap handlers for any signals that have
 // arrived since the last check. It is called at statement boundaries. The
 // handlers' control flow (return/exit/break/continue) is allowed to propagate
