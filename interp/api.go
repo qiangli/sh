@@ -127,6 +127,7 @@ type Runner struct {
 	// reached via paths that don't carry a Pos) use it to drive
 	// [Runner.bashErrPrefix] so the `<file>: line N:` prefix lands.
 	curStmtPos syntax.Pos
+	curStmtEnd syntax.Pos
 
 	// discardNextStmt keeps one following top-level statement skipped
 	// for bash arithmetic-expansion errors that abort the rest of a
@@ -255,6 +256,13 @@ type Runner struct {
 	// diagnostics that must preserve source spelling rather than printer
 	// output, notably arithmetic errors.
 	bashSource []byte
+
+	// stdinSource tracks source bytes that originally came from fd 0.
+	// bashy buffers stdin before parsing; reads from sourced scripts and
+	// child commands must still consume the same logical input stream.
+	stdinSourceActive     bool
+	stdinSourceOffset     int
+	stdinSourceBaseOffset int
 
 	// aliasLineOverride is non-zero while expanding a multi-stmt
 	// alias body. bashErrPrefix prefers it over the AST stmt's own
@@ -487,10 +495,10 @@ type Runner struct {
 	// real OS signal so the parent's Notify catches it.
 	sigMu         sync.Mutex
 	sigCh         chan os.Signal
-	pendingSig    map[string]int      // signal name -> pending count, guarded by sigMu
+	pendingSig    map[string]int       // signal name -> pending count, guarded by sigMu
 	sigNotify     map[string]os.Signal // signal name -> os.Signal under signal.Notify
-	sigWake       chan struct{}       // wakes a blocked wait when a signal arrives
-	hasPendingSig atomic.Bool         // fast-path: any pending signal?
+	sigWake       chan struct{}        // wakes a blocked wait when a signal arrives
+	hasPendingSig atomic.Bool          // fast-path: any pending signal?
 
 	// inSignalTrap and friends implement POSIX interp 1602: a `return`
 	// with no argument executed directly in a signal-trap action yields
@@ -1854,8 +1862,14 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 	switch node := node.(type) {
 	case *syntax.File:
 		r.filename = node.Name
+		if !r.commandString && node.Name == "" && len(r.bashSource) > 0 {
+			r.stdinSourceActive = true
+		}
 		runExitTrap = true
 		for _, stmt := range node.Stmts {
+			if r.stdinSourceActive && int(stmt.Pos().Offset()) < r.stdinSourceOffset {
+				continue
+			}
 			// Skip the tail of a physical line aborted by a readonly
 			// assignment error; resume once the source line changes.
 			if r.discardRestOfLine != 0 {
@@ -1882,8 +1896,17 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 			}
 		}
 	case *syntax.Stmt:
+		if !r.commandString && r.incrementalFilename == "" && len(r.bashSource) > 0 {
+			r.stdinSourceActive = true
+		}
+		if r.stdinSourceActive && int(node.Pos().Offset()) < r.stdinSourceOffset {
+			break
+		}
 		r.stmt(ctx, node)
 	case syntax.Command:
+		if !r.commandString && r.incrementalFilename == "" && len(r.bashSource) > 0 {
+			r.stdinSourceActive = true
+		}
 		r.cmd(ctx, node)
 	default:
 		return fmt.Errorf("node can only be File, Stmt, or Command: %T", node)

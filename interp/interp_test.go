@@ -7179,3 +7179,74 @@ func TestRunnerNonFileStdin(t *testing.T) {
 	// TODO: just like with heredocs, the first print_ok call consumes all stdin.
 	qt.Assert(t, qt.Equals(cb.String(), "a\nexec ok\nb\nexec ok\nc\nexec ok\n"))
 }
+
+func TestRunnerSourceReadConsumesBufferedStdin(t *testing.T) {
+	t.Parallel()
+
+	src := "printf 'read line\\necho got=$line\\n' >sub\nsource ./sub\npayload\necho after\n"
+	file := parse(t, nil, src)
+	tdir := t.TempDir()
+	var cb concBuffer
+	r, err := interp.New(
+		interp.Dir(tdir),
+		interp.StdIO(nil, &cb, &cb),
+		interp.WithBashSource([]byte(src)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), runnerRunTimeout)
+	defer cancel()
+	if err := r.Run(ctx, file); err != nil {
+		cb.WriteString(err.Error())
+	}
+	qt.Assert(t, qt.Equals(cb.String(), "got=payload\nafter\n"))
+}
+
+func TestRunnerExecConsumesBufferedStdin(t *testing.T) {
+	t.Parallel()
+
+	src := "consume\npayload\necho after\n"
+	file := parse(t, nil, src)
+	var cb concBuffer
+	readOneLine := func(r io.Reader) string {
+		var b strings.Builder
+		var one [1]byte
+		for {
+			n, err := r.Read(one[:])
+			if n > 0 {
+				if one[0] == '\n' {
+					break
+				}
+				b.WriteByte(one[0])
+			}
+			if err != nil {
+				break
+			}
+		}
+		return b.String()
+	}
+	r, err := interp.New(
+		interp.StdIO(nil, &cb, &cb),
+		interp.WithBashSource([]byte(src)),
+		interp.ExecHandlers(func(next interp.ExecHandlerFunc) interp.ExecHandlerFunc {
+			return func(ctx context.Context, args []string) error {
+				if args[0] != "consume" {
+					return next(ctx, args)
+				}
+				hc := interp.HandlerCtx(ctx)
+				fmt.Fprintf(hc.Stdout, "got=%s\n", readOneLine(hc.Stdin))
+				return nil
+			}
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), runnerRunTimeout)
+	defer cancel()
+	if err := r.Run(ctx, file); err != nil {
+		cb.WriteString(err.Error())
+	}
+	qt.Assert(t, qt.Equals(cb.String(), "got=payload\nafter\n"))
+}

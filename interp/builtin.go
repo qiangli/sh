@@ -2169,6 +2169,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		oldSourceSetParams := r.sourceSetParams
 		oldInSource := r.inSource
 		oldFilename := r.filename
+		oldStdinSourceBaseOffset := r.stdinSourceBaseOffset
 
 		// If we run "source file args...", set said args as parameters.
 		// Otherwise, keep the current parameters.
@@ -2182,6 +2183,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		r.sourceSetParams = false
 		r.inSource = true // know that we're inside a sourced script.
 		r.filename = path
+		if r.stdinSourceActive && r.curStmtEnd.IsValid() {
+			r.stdinSourceBaseOffset = r.stdinSourceStartOffset()
+		}
 		r.callStack = append(r.callStack, callFrame{
 			line:         pos.Line(),
 			source:       path,
@@ -2211,6 +2215,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			r.ecfg.OverrideLineno = prevLineno
 		}
 		r.filename = oldFilename
+		r.stdinSourceBaseOffset = oldStdinSourceBaseOffset
 
 		// If we modified the parameters and the sourced file didn't
 		// explicitly set them, we restore the old ones.
@@ -2876,6 +2881,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 
 		stdin := r.stdin
 		var input io.Reader = stdin
+		if !stdinSwapped {
+			if src := r.scriptStdinReader(); src != nil {
+				input = src
+			}
+		}
 		clearReadVars := func() {
 			if readArray {
 				arrayName := shellReplyVar
@@ -2898,7 +2908,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			exit.code = 1
 			return exit
 		}
-		if prompt != "" && stdin != nil && term.IsTerminal(int(stdin.Fd())) {
+		if prompt != "" && input == stdin && stdin != nil && term.IsTerminal(int(stdin.Fd())) {
 			r.out(prompt)
 		}
 		readInput := func() ([]byte, error) {
@@ -2974,19 +2984,19 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			}
 			deadline := time.Now().Add(timeout)
 			cancelGrace := func() {}
-			if stdin != nil && timeout < 10*time.Millisecond && fdReadableNow(stdin) {
+			if input == stdin && stdin != nil && timeout < 10*time.Millisecond && fdReadableNow(stdin) {
 				deadline = time.Now().Add(10 * time.Millisecond)
 				var cancel context.CancelFunc
 				readCtx, cancel = context.WithTimeout(ctx, 10*time.Millisecond)
 				cancelGrace = cancel
 			}
-			if stdin != nil && stdin.SetReadDeadline(deadline) == nil {
+			if input == stdin && stdin != nil && stdin.SetReadDeadline(deadline) == nil {
 				line, err = readInput()
 				stdin.SetReadDeadline(time.Time{})
 				cancelGrace()
 			} else {
 				cancelGrace()
-				if stdin != nil {
+				if input == stdin && stdin != nil {
 					input = &timeoutFileReader{ctx: readCtx, file: stdin, deadline: deadline}
 				}
 				line, err = readInput()
@@ -3786,7 +3796,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		var src io.Reader = r.stdin
 		switch {
 		case readFD < 0, readFD == 0:
-			// keep r.stdin
+			if stdin := r.scriptStdinReader(); stdin != nil {
+				src = stdin
+			}
 		case readFD == 1, readFD == 2:
 			return failf(2, "%s: %d: invalid file descriptor: not open for reading\n", name, readFD)
 		default:

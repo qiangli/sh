@@ -1079,6 +1079,79 @@ func (r *Runner) sourceOffset(pos syntax.Pos) (int, bool) {
 	return i, true
 }
 
+func (r *Runner) sourceLineEndOffset(line uint) int {
+	if len(r.bashSource) == 0 || line == 0 {
+		return r.stdinSourceOffset
+	}
+	curLine := uint(1)
+	for i, b := range r.bashSource {
+		if curLine == line && b == '\n' {
+			return i + 1
+		}
+		if b == '\n' {
+			curLine++
+		}
+	}
+	return len(r.bashSource)
+}
+
+func (r *Runner) stdinSourceStartOffset() int {
+	start := r.stdinSourceBaseOffset
+	if start == 0 && r.curStmtEnd.IsValid() {
+		start = r.sourceLineEndOffset(r.curStmtEnd.Line())
+	}
+	if start < r.stdinSourceOffset {
+		start = r.stdinSourceOffset
+	}
+	if start > len(r.bashSource) {
+		start = len(r.bashSource)
+	}
+	return start
+}
+
+func (r *Runner) scriptStdinReader() io.Reader {
+	return r.newScriptStdinReader(false)
+}
+
+func (r *Runner) scriptStdinLineReader() io.Reader {
+	return r.newScriptStdinReader(true)
+}
+
+func (r *Runner) newScriptStdinReader(stopAtNewline bool) io.Reader {
+	if !r.stdinSourceActive || len(r.bashSource) == 0 {
+		return nil
+	}
+	off := r.stdinSourceStartOffset()
+	limit := len(r.bashSource)
+	if stopAtNewline {
+		limit = off
+		if i := bytes.IndexByte(r.bashSource[off:], '\n'); i >= 0 {
+			limit += i + 1
+		} else {
+			limit = len(r.bashSource)
+		}
+	}
+	return &scriptStdinReader{r: r, off: off, limit: limit}
+}
+
+type scriptStdinReader struct {
+	r     *Runner
+	off   int
+	limit int
+}
+
+func (s *scriptStdinReader) Read(p []byte) (int, error) {
+	if s.off >= s.limit {
+		s.r.stdinSourceOffset = max(s.r.stdinSourceOffset, s.off)
+		return 0, io.EOF
+	}
+	src := s.r.bashSource[s.off:s.limit]
+	n := copy(p, src)
+	s.off += n
+	s.r.stdinSourceOffset = max(s.r.stdinSourceOffset, s.off)
+	return n, nil
+}
+
 func (r *Runner) fields(words ...*syntax.Word) []string {
 	strs, err := expand.Fields(r.ecfg, words...)
 	r.expandErr(err)
@@ -1294,6 +1367,9 @@ func (r *Runner) handlerCtx(ctx context.Context, kind handlerKind, pos syntax.Po
 	}
 	if r.stdin != nil { // do not leave hc.Stdin as a typed nil
 		hc.Stdin = r.stdin
+	}
+	if stdin := r.scriptStdinLineReader(); stdin != nil {
+		hc.Stdin = stdin
 	}
 	return context.WithValue(ctx, handlerCtxKey{}, hc)
 }
@@ -4072,6 +4148,7 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 	defer func() { r.keepRedirs = false }()
 
 	r.curStmtPos = st.Pos()
+	r.curStmtEnd = st.End()
 
 	// Track coproc fds reaped within this statement so the fdTable restore
 	// below doesn't resurrect a closed coprocess's descriptors.
@@ -6492,7 +6569,7 @@ func (r *Runner) coprocHighFds() (readFd, writeFd int) {
 		}
 		return -1
 	}
-	rpipeRead := next(63)  // ${NAME[0]} — parent reads child stdout
+	rpipeRead := next(63) // ${NAME[0]} — parent reads child stdout
 	rpipeWrite := next(rpipeRead - 1)
 	wpipeRead := next(rpipeWrite - 1)
 	wpipeWrite := next(wpipeRead - 1) // ${NAME[1]} — parent writes child stdin
