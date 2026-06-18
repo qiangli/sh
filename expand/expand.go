@@ -3031,7 +3031,8 @@ func (cfg *Config) substWordFields(pe *syntax.ParamExp) ([][]fieldPart, bool, er
 			return nil, false, err
 		}
 	}
-	if assignOp && cfg.ifs == " \t\n" && paramExpWordIsQuotedStar(pe.Exp.Word) {
+	quotedStar := assignOp && cfg.ifs == " \t\n" && paramExpWordIsQuotedStar(pe.Exp.Word)
+	if quotedStar {
 		elems := slices.Clone(cfg.Env.Get("*").List)
 		fields = make([][]fieldPart, len(elems))
 		for i, elem := range elems {
@@ -3075,6 +3076,15 @@ func (cfg *Config) substWordFields(pe *syntax.ParamExp) ([][]fieldPart, bool, er
 				if err != nil {
 					return nil, false, err
 				}
+			}
+			// `${v=word}` substitutes the *variable* once assigned, not the
+			// word: bash re-splits the stored string as a plain unquoted
+			// expansion, so the quoting inside `word` (e.g. an empty "$*")
+			// is consumed by the assignment and an all-whitespace result
+			// yields no field rather than a forced quoted-null. The exact
+			// `"$*"` form keeps its per-element layout, handled above.
+			if !quotedStar {
+				fields = cfg.escapedLitFields(assignVal)
 			}
 		} else {
 			var err error
