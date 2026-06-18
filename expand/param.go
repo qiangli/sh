@@ -976,7 +976,12 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			if err != nil {
 				return "", err
 			}
-			if allOp == "*" && name != "@" && (name != "*" || cfg.ifs != "") {
+			if allOp == "*" && name != "@" {
+				// `$*` / `${a[*]}` join with the first IFS char, or with
+				// nothing when IFS is empty. ifsJoin handles the empty-IFS
+				// case correctly (concatenation); a hardcoded space here
+				// would wrongly turn `${x#$*}` under IFS= into a space-
+				// separated pattern.
 				str = cfg.ifsJoin(elems)
 			} else {
 				str = strings.Join(elems, " ")
@@ -992,7 +997,12 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			for i, k := range keys {
 				elems[i] = vr.Map[k]
 			}
-			if allOp == "*" && name != "@" && (name != "*" || cfg.ifs != "") {
+			if allOp == "*" && name != "@" {
+				// `$*` / `${a[*]}` join with the first IFS char, or with
+				// nothing when IFS is empty. ifsJoin handles the empty-IFS
+				// case correctly (concatenation); a hardcoded space here
+				// would wrongly turn `${x#$*}` under IFS= into a space-
+				// separated pattern.
 				str = cfg.ifsJoin(elems)
 			} else {
 				str = strings.Join(elems, " ")
