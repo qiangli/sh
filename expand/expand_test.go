@@ -7,6 +7,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -842,6 +843,38 @@ func TestFieldsBackslashEscapedGlobPath(t *testing.T) {
 		if !reflect.DeepEqual(got, tc.want) {
 			t.Fatalf("%s: wanted %q, got %q", tc.src, tc.want, got)
 		}
+	}
+}
+
+func TestGlobLiteralUnreadableIntermediateDir(t *testing.T) {
+	cfg := &Config{
+		ReadDir2: func(path string) ([]fs.DirEntry, error) {
+			switch filepath.ToSlash(path) {
+			case "/tmp":
+				return nil, nil
+			case "/tmp/a":
+				return nil, fs.ErrPermission
+			case "/tmp/a/b":
+				return []fs.DirEntry{&mockFileInfo{name: "c"}}, nil
+			default:
+				return nil, fs.ErrNotExist
+			}
+		},
+	}
+	got, err := cfg.glob("/", "tmp/a/b/*")
+	if err != nil {
+		t.Fatalf("did not want error, got %v", err)
+	}
+	want := []string{"tmp/a/b/c"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("wanted %q, got %q", want, got)
+	}
+	got, err = cfg.glob("/", "tmp/a/*")
+	if err != nil {
+		t.Fatalf("did not want error, got %v", err)
+	}
+	if got != nil {
+		t.Fatalf("wanted no matches, got %q", got)
 	}
 }
 

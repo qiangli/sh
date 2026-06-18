@@ -4631,6 +4631,9 @@ func (cfg *Config) glob(base, pat string) ([]string, error) {
 						continue // simply doesn't exist
 					}
 					if wantDir {
+						if errors.Is(err, fs.ErrPermission) {
+							newMatches = append(newMatches, pathJoin2(dir, litPart))
+						}
 						continue // exists but not a directory
 					}
 				}
@@ -4759,6 +4762,9 @@ func (cfg *Config) glob(base, pat string) ([]string, error) {
 			}
 			newMatches, err = cfg.globDir(base, dir, matcher, wantDir, newMatches)
 			if err != nil {
+				if errors.Is(err, fs.ErrPermission) {
+					continue
+				}
 				return nil, err
 			}
 		}
