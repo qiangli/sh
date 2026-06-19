@@ -1835,6 +1835,37 @@ var runTests = []runTest{
 		"shopt -s expand_aliases; alias comment=#\ncomment text after\necho ok",
 		"ok\n",
 	},
+	// Alias-definition timing: bash expands an alias only on input read
+	// after the line that defined it. A definition and use on the same
+	// line (same parse unit) are not affected; a use on a later line is.
+	{
+		"shopt -s expand_aliases; alias al_t1='echo HI'; al_t1",
+		"\"al_t1\": executable file not found in $PATH\nexit status 127 #JUSTERR",
+	},
+	{
+		"shopt -s expand_aliases; alias al_t2='echo HI'\nal_t2",
+		"HI\n",
+	},
+	{
+		"shopt -s expand_aliases; alias al_t3='echo HI'\nx=$(al_t3); echo \"[$x]\"",
+		"[HI]\n",
+	},
+	// eval re-reads its argument as new input, so it sees an alias defined
+	// earlier on the same outer line.
+	{
+		"shopt -s expand_aliases; alias al_t4='echo HI'; eval al_t4",
+		"HI\n",
+	},
+	// An alias defined via eval becomes visible on the next outer line but
+	// not on the same one (its tokens were already read).
+	{
+		"shopt -s expand_aliases; eval 'alias al_t5=\"echo HI\"'; al_t5",
+		"\"al_t5\": executable file not found in $PATH\nexit status 127 #JUSTERR",
+	},
+	{
+		"shopt -s expand_aliases; eval 'alias al_t6=\"echo HI\"'\nal_t6",
+		"HI\n",
+	},
 
 	// case
 	{

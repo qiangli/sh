@@ -2055,7 +2055,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			if r.opts[optExpandAliases] {
 				if expanded, ok := r.expandRawAliasSource(src); ok {
 					if retry, rerr := p.Parse(strings.NewReader(expanded), ""); rerr == nil {
-						r.stmts(ctx, retry.Stmts)
+						r.withAliasReparse(r.aliasUseLine(int(pos.Line())), func() {
+							r.stmts(ctx, retry.Stmts)
+						})
 						exit = r.exit
 						break
 					}
@@ -2173,7 +2175,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			}
 			return failf(1, "eval: %v\n", err)
 		}
-		r.stmts(ctx, file.Stmts)
+		r.withAliasReparse(r.aliasUseLine(int(pos.Line())), func() {
+			r.stmts(ctx, file.Stmts)
+		})
 		exit = r.exit
 	case "source", ".":
 		// Bash 5.3: accept `-p PATH` to override the search path.
@@ -2323,7 +2327,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			debugTrace: r.functraceEnabled() ||
 				(len(r.callStack) > 0 && r.callStack[len(r.callStack)-1].debugTrace),
 		})
-		r.stmts(ctx, file.Stmts)
+		r.withAliasReparse(r.aliasUseLine(int(pos.Line())), func() {
+			r.stmts(ctx, file.Stmts)
+		})
 		r.callStack = r.callStack[:len(r.callStack)-1]
 		if r.trapCallbacks["RETURN"] != "" && (r.functraceEnabled() || len(r.callStack) == 0) {
 			prevLineno := r.ecfg.OverrideLineno
@@ -3671,7 +3677,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			if r.alias == nil {
 				r.alias = make(map[string]alias)
 			}
-			r.alias[name] = parseAliasBody(src)
+			als := parseAliasBody(src)
+			als.defLine = r.aliasDefLine(int(pos.Line()))
+			r.alias[name] = als
 		}
 	case "unalias":
 		all := false

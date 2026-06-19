@@ -296,6 +296,12 @@ func Run(ctx context.Context, opts Options) error {
 			_, _ = io.WriteString(stderr, perr.Error()+"\n")
 			continue
 		}
+		// Each input chunk is parsed by a fresh parser (line numbers
+		// restart at 1), so advance the runner's alias-timing base past
+		// the previous chunk. This keeps an alias defined on an earlier
+		// prompt expanding on a later one, while a definition and use
+		// typed on the same line still do not expand (bash semantics).
+		r.AdvanceAliasInput(strings.Count(input, "\n") + 1)
 		for _, stmt := range prog.Stmts {
 			cmdCtx, cancel := context.WithCancel(ctx)
 			runErr := r.Run(cmdCtx, stmt)
@@ -451,6 +457,12 @@ func runAssumedTTY(ctx context.Context, opts Options, r *interp.Runner, stdin io
 			_, _ = io.WriteString(stderr, perr.Error()+"\n")
 			continue
 		}
+		// Each input chunk is parsed by a fresh parser (line numbers
+		// restart at 1), so advance the runner's alias-timing base past
+		// the previous chunk. This keeps an alias defined on an earlier
+		// prompt expanding on a later one, while a definition and use
+		// typed on the same line still do not expand (bash semantics).
+		r.AdvanceAliasInput(strings.Count(input, "\n") + 1)
 		for _, stmt := range prog.Stmts {
 			cmdCtx, cancel := context.WithCancel(ctx)
 			runErr := r.Run(cmdCtx, stmt)

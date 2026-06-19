@@ -2135,7 +2135,9 @@ func (r *Runner) setVarWithIndex(prev expand.Variable, name string, index syntax
 			if r.alias == nil {
 				r.alias = make(map[string]alias)
 			}
-			r.alias[k] = parseAliasBody(valStr)
+			als := parseAliasBody(valStr)
+			als.defLine = r.aliasDefLine(int(r.curStmtPos.Line()))
+			r.alias[k] = als
 			return
 		}
 		if name == "BASH_CMDS" {

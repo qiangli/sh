@@ -4410,6 +4410,11 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		// Use a new slice, to not modify the slice in the alias map.
 		args := cm.Args
 		origCallPos := cm.Pos()
+		// Bash expands an alias only on input read after the line that
+		// defined it; a definition and use sharing a parse unit (same
+		// line) are not affected. Reconstruct that timing from effective
+		// line numbers (see aliasBase / aliasDefOverride on Runner).
+		aliasUseLine := r.aliasUseLine(int(origCallPos.Line()))
 		seenAliases := make(map[string]bool)
 		aliasExpanded := false
 		for i := 0; i < len(args); {
@@ -4422,6 +4427,9 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			}
 			als, ok := r.alias[name]
 			if !ok {
+				break
+			}
+			if als.defLine > 0 && aliasUseLine > 0 && aliasUseLine <= als.defLine {
 				break
 			}
 			seenAliases[name] = true
@@ -4445,7 +4453,9 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				}
 				prevOverride := r.aliasLineOverride
 				r.aliasLineOverride = int(cm.Pos().Line())
-				r.stmts(ctx, file.Stmts)
+				r.withAliasReparse(aliasUseLine, func() {
+					r.stmts(ctx, file.Stmts)
+				})
 				r.aliasLineOverride = prevOverride
 				return
 			}
@@ -4462,7 +4472,9 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			if als.file != nil && i == 0 {
 				prevOverride := r.aliasLineOverride
 				r.aliasLineOverride = int(cm.Pos().Line())
-				r.stmts(ctx, als.file.Stmts)
+				r.withAliasReparse(aliasUseLine, func() {
+					r.stmts(ctx, als.file.Stmts)
+				})
 				r.aliasLineOverride = prevOverride
 				return
 			}

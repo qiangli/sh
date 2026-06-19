@@ -283,6 +283,27 @@ type Runner struct {
 	// alias-body parse.
 	aliasLineOverride int
 
+	// aliasBase and aliasDefOverride implement bash's alias-definition
+	// *timing*: an alias is expanded only for input read after the line
+	// that defined it (commands on the same parse unit / same line as the
+	// definition are not affected). The runner walks a pre-parsed AST
+	// rather than reading line-by-line, so timing is reconstructed from
+	// effective line numbers:
+	//
+	//   defLine(alias) = aliasDefOverride>0 ? aliasDefOverride : aliasBase+pos.Line()
+	//   useLine(cmd)   = aliasBase + cmd.Pos().Line()
+	//   expand iff useLine > defLine
+	//
+	// aliasBase shifts a freshly re-parsed unit (eval/source bodies,
+	// successive interactive input reads) past everything read before it,
+	// so its tokens see all already-defined aliases while still honoring
+	// internal line ordering. aliasDefOverride pins aliases *defined*
+	// inside such a re-parsed unit to the outer call's line, matching
+	// bash: `eval 'alias g=...'` makes g visible on the next outer line
+	// but not on the same one.
+	aliasBase        int
+	aliasDefOverride int
+
 	// funsubLineOffset is applied to bash-style diagnostic line
 	// numbers while executing a multi-line `${ ...; }` funsub body.
 	// Bash 5.3 reports runtime command diagnostics one line later
@@ -861,6 +882,58 @@ type alias struct {
 	// statements; args is nil in this case.
 	file  *syntax.File
 	blank bool
+	// defLine is the effective input line at which this alias became
+	// defined (see [Runner.aliasDefLine]). Bash expands an alias only on
+	// input read *after* the line that defined it, so a use is expanded
+	// only when its effective line is strictly greater than defLine. Zero
+	// means "no position recorded" (e.g. an alias installed on a
+	// programmatically-built AST), in which case the timing gate is
+	// skipped and the alias always expands.
+	defLine int
+}
+
+// aliasDefLine returns the effective line to record for an alias defined
+// at AST line astLine, honoring the current alias-timing scope. See the
+// aliasBase / aliasDefOverride fields on [Runner].
+func (r *Runner) aliasDefLine(astLine int) int {
+	if r.aliasDefOverride > 0 {
+		return r.aliasDefOverride
+	}
+	return r.aliasBase + astLine
+}
+
+// aliasUseLine returns the effective line of a command at AST line astLine
+// for alias-timing comparisons.
+func (r *Runner) aliasUseLine(astLine int) int {
+	return r.aliasBase + astLine
+}
+
+// withAliasReparse runs fn while the alias-timing scope is set for a
+// freshly re-parsed unit (eval/source body) whose tokens were read just
+// after the outer command at effective line outerLine. Inside fn, uses see
+// every alias defined up to outerLine and aliases defined are pinned to
+// outerLine for outer visibility. The scope is restored afterward.
+func (r *Runner) withAliasReparse(outerLine int, fn func()) {
+	prevBase, prevOverride := r.aliasBase, r.aliasDefOverride
+	r.aliasBase = outerLine
+	r.aliasDefOverride = outerLine
+	defer func() {
+		r.aliasBase, r.aliasDefOverride = prevBase, prevOverride
+	}()
+	fn()
+}
+
+// AdvanceAliasInput marks the start of a newly-read unit of interactive
+// input spanning lineCount lines. Interactive front-ends parse each input
+// chunk independently (line numbers restart at 1), so this advances the
+// alias-timing base past the previous chunk, letting aliases defined on an
+// earlier prompt expand on later ones while a definition and use typed on
+// the same line still do not expand. Safe to call between input reads.
+func (r *Runner) AdvanceAliasInput(lineCount int) {
+	if lineCount < 1 {
+		lineCount = 1
+	}
+	r.aliasBase += lineCount
 }
 
 // New creates a new Runner, applying a number of options. If applying any of
@@ -2116,6 +2189,8 @@ func (r *Runner) subshell(background bool) *Runner {
 		stderr:               r.stderr,
 		filename:             r.filename,
 		curStmtPos:           r.curStmtPos,
+		aliasBase:            r.aliasBase,
+		aliasDefOverride:     r.aliasDefOverride,
 		enclosingSubshellEnd: r.enclosingSubshellEnd,
 		opts:                 r.opts,
 		noOpSetState:         maps.Clone(r.noOpSetState),
