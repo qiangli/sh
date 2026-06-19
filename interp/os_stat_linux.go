@@ -11,9 +11,11 @@ import (
 )
 
 func unixStatMtime(s *syscall.Stat_t) time.Time {
-	return time.Unix(s.Mtim.Sec, s.Mtim.Nsec)
+	// Stat_t timespec fields are int64 on 64-bit but int32 on 32-bit
+	// (e.g. GOARCH=386), so convert explicitly for time.Unix (wants int64).
+	return time.Unix(int64(s.Mtim.Sec), int64(s.Mtim.Nsec))
 }
 
 func unixStatAtime(s *syscall.Stat_t) time.Time {
-	return time.Unix(s.Atim.Sec, s.Atim.Nsec)
+	return time.Unix(int64(s.Atim.Sec), int64(s.Atim.Nsec))
 }

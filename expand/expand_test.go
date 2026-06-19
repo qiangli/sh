@@ -859,6 +859,9 @@ func TestFieldsNullGlobInvalidBracketWithSlash(t *testing.T) {
 }
 
 func TestFieldsBackslashEscapedGlobPath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("backslash is the path separator on windows, not a glob escape; glob results use \\")
+	}
 	temp := t.TempDir()
 	if err := os.MkdirAll(temp+"/tmp/a/b", 0o777); err != nil {
 		t.Fatal(err)
@@ -972,6 +975,9 @@ func TestGlobSearchableDot(t *testing.T) {
 }
 
 func TestGlobLiteralUnreadableIntermediateDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test uses unix-style / path separators; windows glob results use \\")
+	}
 	cfg := &Config{
 		ReadDir2: func(path string) ([]fs.DirEntry, error) {
 			switch filepath.ToSlash(path) {
