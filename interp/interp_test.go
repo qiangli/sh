@@ -6953,6 +6953,42 @@ declare --json -F f
 	}
 }
 
+func TestRunnerJsonBuiltinsPosixMode(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		src  string
+	}{
+		{"set", "set -o posix\nset --json\n"},
+		{"declare", "set -o posix\nfoo=bar\ndeclare --json -p foo\n"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			file, err := syntax.NewParser().Parse(strings.NewReader(tc.src), "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var out bytes.Buffer
+			r, err := interp.New(interp.StdIO(nil, &out, &out))
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), runnerRunTimeout)
+			defer cancel()
+			if err := r.Run(ctx, file); err == nil {
+				t.Fatalf("Run succeeded; want invalid-option failure\n%s", out.String())
+			}
+			if strings.Contains(out.String(), `"variables"`) || strings.Contains(out.String(), `"name"`) {
+				t.Fatalf("POSIX mode emitted JSON:\n%s", out.String())
+			}
+			if !strings.Contains(out.String(), "invalid option") {
+				t.Fatalf("output = %q; want invalid option", out.String())
+			}
+		})
+	}
+}
+
 func TestRunnerStructuredErrors(t *testing.T) {
 	t.Parallel()
 	src := "f(){ return 1 2; }\nf\nmissing-command\n"

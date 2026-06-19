@@ -567,7 +567,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		}
 		exit.exiting = true
 	case "set":
-		if len(args) == 1 && args[0] == "--json" {
+		if !r.opts[optPosix] && len(args) == 1 && args[0] == "--json" {
 			return r.jsonOut(map[string]any{"variables": r.variablesJSON(true)})
 		}
 		if len(args) == 2 && args[0] == "-o" && strings.HasPrefix(args[1], "-") {

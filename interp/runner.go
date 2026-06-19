@@ -5561,7 +5561,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			}
 			isFlag := !optionsEnded && (strings.HasPrefix(as.Name.Value, "-") || strings.HasPrefix(as.Name.Value, "+"))
 			if isFlag {
-				if as.Name.Value == "--json" {
+				if !r.opts[optPosix] && as.Name.Value == "--json" {
 					jsonMode = true
 					continue assignLoop
 				}
