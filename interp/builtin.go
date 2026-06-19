@@ -3789,39 +3789,46 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					return "SIG" + name
 				}
 			}
-			// Build the sort order: EXIT (signal 0) first, then
-			// every trapped real signal in ascending numeric order
-			// (so CHLD, WINCH, etc. — not just 1..15 — are listed),
-			// then ERR, DEBUG, RETURN.
 			var sigKeys []string
-			for sig := range r.trapCallbacks {
-				switch sig {
-				case "EXIT", "ERR", "DEBUG", "RETURN":
-					continue
+			if r.opts[optPosix] && len(filter) == 0 {
+				for _, e := range sortedSignalEntries() {
+					sigKeys = append(sigKeys, e.Name)
 				}
-				sigKeys = append(sigKeys, sig)
-			}
-			// Signals that were SIG_IGN at shell startup are listed as
-			// `trap -- '' SIG` even though no trap could attach to them
-			// (bash showtrap: signal_is_hard_ignored -> empty action).
-			for sig := range r.startupIgnored {
-				if _, ok := r.trapCallbacks[sig]; !ok {
+			} else {
+				// Build the sort order: EXIT (signal 0) first, then
+				// every trapped real signal in ascending numeric order
+				// (so CHLD, WINCH, etc. — not just 1..15 — are listed),
+				// then ERR, DEBUG, RETURN.
+				for sig := range r.trapCallbacks {
+					switch sig {
+					case "EXIT", "ERR", "DEBUG", "RETURN":
+						continue
+					}
 					sigKeys = append(sigKeys, sig)
 				}
+				// Signals that were SIG_IGN at shell startup are listed as
+				// `trap -- '' SIG` even though no trap could attach to them
+				// (bash showtrap: signal_is_hard_ignored -> empty action).
+				for sig := range r.startupIgnored {
+					if _, ok := r.trapCallbacks[sig]; !ok {
+						sigKeys = append(sigKeys, sig)
+					}
+				}
+				sort.Slice(sigKeys, func(i, j int) bool {
+					si, _ := signalByName(sigKeys[i])
+					sj, _ := signalByName(sigKeys[j])
+					ni, _ := signalNumber(si)
+					nj, _ := signalNumber(sj)
+					return ni < nj
+				})
 			}
-			sort.Slice(sigKeys, func(i, j int) bool {
-				si, _ := signalByName(sigKeys[i])
-				sj, _ := signalByName(sigKeys[j])
-				ni, _ := signalNumber(si)
-				nj, _ := signalNumber(sj)
-				return ni < nj
-			})
 			sigOrder := append([]string{"EXIT"}, sigKeys...)
 			sigOrder = append(sigOrder, "ERR", "DEBUG", "RETURN")
 			for _, sig := range sigOrder {
 				cb, ok := r.trapCallbacks[sig]
 				ignored := r.isStartupIgnored(sig)
-				if !ok && !ignored {
+				defaulted := r.opts[optPosix] && len(filter) == 0
+				if !ok && !ignored && !defaulted {
 					continue
 				}
 				if len(filter) > 0 && !filter[sig] {
@@ -3830,7 +3837,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				// A hard-ignored signal always prints an empty action,
 				// regardless of any stale callback string.
 				quoted := "''"
-				if !ignored {
+				if !ok && !ignored {
+					quoted = "-"
+				} else if !ignored {
 					quoted = "'" + strings.ReplaceAll(cb, "'", `'\''`) + "'"
 				}
 				r.outf("trap -- %s %s\n", quoted, sigPrefix(sig))

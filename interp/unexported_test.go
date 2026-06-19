@@ -49,6 +49,63 @@ func TestElapsedString(t *testing.T) {
 	}
 }
 
+func TestTrapPrintPosixNoArgs(t *testing.T) {
+	t.Parallel()
+
+	var want strings.Builder
+	want.WriteString("trap -- - EXIT\n")
+	for _, sig := range sortedSignalEntries() {
+		want.WriteString("trap -- - ")
+		want.WriteString(sig.Name)
+		want.WriteByte('\n')
+	}
+	want.WriteString("trap -- - ERR\n")
+	want.WriteString("trap -- - DEBUG\n")
+	want.WriteString("trap -- - RETURN\n")
+
+	for _, cmd := range []string{"trap", "trap -p"} {
+		t.Run(cmd, func(t *testing.T) {
+			t.Parallel()
+
+			file, err := syntax.NewParser().Parse(strings.NewReader("set -o posix; "+cmd), "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var stdout bytes.Buffer
+			r, err := New(StdIO(nil, &stdout, nil))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := r.Run(context.Background(), file); err != nil {
+				t.Fatal(err)
+			}
+			if got := stdout.String(); got != want.String() {
+				t.Fatalf("wrong output for %s\nwant:\n%sgot:\n%s", cmd, want.String(), got)
+			}
+		})
+	}
+}
+
+func TestTrapPrintNoArgsNonPosixUnchanged(t *testing.T) {
+	t.Parallel()
+
+	file, err := syntax.NewParser().Parse(strings.NewReader("trap; trap -p"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stdout bytes.Buffer
+	r, err := New(StdIO(nil, &stdout, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Run(context.Background(), file); err != nil {
+		t.Fatal(err)
+	}
+	if got := stdout.String(); got != "" {
+		t.Fatalf("trap no-arg output in non-posix mode:\n%s", got)
+	}
+}
+
 // TestUnsupportedHints guards against drift in the unsupportedHints map.
 // Every key must still be recognized by IsBuiltin (otherwise the dispatcher
 // won't see the name to fall into the default arm), and invoking the name
