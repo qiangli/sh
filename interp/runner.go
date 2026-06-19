@@ -7216,11 +7216,13 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 
 	// Bash: when the target word of a non-heredoc redirect expands
 	// to zero or more than one field, emit "ambiguous redirect".
+	// POSIX mode skips field splitting for redirect words, so the
+	// expanded word is always a single filename.
 	// Skip the check for here-string (`<<<`) since the entire word
 	// is treated as the body, not a filename.
 	var arg string
 	if rd.Op != syntax.WordHdoc {
-		if r.opts[optPosix] && rd.Op == syntax.RdrIn {
+		if r.opts[optPosix] {
 			arg = r.literal(rd.Word)
 		} else {
 			fields := r.fields(rd.Word)

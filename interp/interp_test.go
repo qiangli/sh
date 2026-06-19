@@ -2025,6 +2025,18 @@ var runTests = []runTest{
 		"foo\n0\n",
 	},
 	{
+		`set -o posix; x="a b"; : > $x; printf 'rc=%s file=%s\n' "$?" "$([ -f "a b" ] && echo yes || echo no)"`,
+		"rc=0 file=yes\n",
+	},
+	{
+		`set -o posix; touch f1 f2; : > f*; printf '<%s>\n' *`,
+		"<f*>\n<f1>\n<f2>\n",
+	},
+	{
+		`x="a b"; : > $x`,
+		"$x: ambiguous redirect\nexit status 1 #JUSTERR",
+	},
+	{
 		"echo foo >a; <a",
 		"",
 	},
