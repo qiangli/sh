@@ -1533,6 +1533,12 @@ func (r *Runner) setPosixMode(enabled bool) {
 	}
 	if enabled {
 		r.opts[optExpandAliases] = true
+		// POSIX mode auto-sets POSIXLY_CORRECT=y if not already set.
+		if r.writeEnv != nil && !r.writeEnv.Get("POSIXLY_CORRECT").IsSet() {
+			r.writeEnv.Set("POSIXLY_CORRECT", expand.Variable{
+				Set: true, Exported: true, Kind: expand.String, Str: "y",
+			})
+		}
 	}
 }
 
@@ -1891,6 +1897,11 @@ func (r *Runner) Reset() {
 	r.setVarString("PWD", r.Dir)
 	r.setVarString("IFS", " \t\n")
 	r.setVarString("OPTIND", "1")
+	if r.opts[optPosix] && !r.writeEnv.Get("POSIXLY_CORRECT").IsSet() {
+		r.writeEnv.Set("POSIXLY_CORRECT", expand.Variable{
+			Set: true, Exported: true, Kind: expand.String, Str: "y",
+		})
+	}
 	if r.startTime.IsZero() {
 		r.startTime = time.Now()
 	}
