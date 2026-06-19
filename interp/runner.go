@@ -4505,6 +4505,17 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				}
 			}
 		}
+		// POSIX mode parses with the POSIX language variant, where
+		// `time` is not the timing reserved word but an ordinary
+		// command word. Bash, however, keeps `time` reserved even in
+		// POSIX mode, so bare `time` reports the shell's cumulative
+		// user/system times (bashref "Bash POSIX Mode" #6) rather than
+		// running an external `time`. A `time` with arguments stays an
+		// ordinary command, matching bashy's POSIX-variant parse.
+		if r.opts[optPosix] && len(fields) == 1 && fields[0] == "time" && len(cm.Assigns) == 0 {
+			r.posixTimesReport()
+			break
+		}
 		if !r.exit.ok() && r.opts[optPosix] {
 			special := len(fields) > 0 && isPosixSpecialBuiltin(fields[0])
 			if !special && len(args) > 0 {
@@ -6377,6 +6388,15 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		r.setVarStringParsed = false
 		r.setVarArrayLiteral = false
 	case *syntax.TimeClause:
+		// bash POSIX mode (bashref "Bash POSIX Mode" #6): `time` used
+		// by itself, with no command or pipeline to time, reports the
+		// shell's cumulative user/system times rather than timing an
+		// empty command. The `-p` form (PosixFormat) keeps the regular
+		// timing report of an empty command, matching bash.
+		if cm.Stmt == nil && !cm.PosixFormat && r.opts[optPosix] {
+			r.posixTimesReport()
+			break
+		}
 		// bash 5.3 only prints timing output for the outermost
 		// `time` keyword in a stack of nested `time` clauses;
 		// inner ones are absorbed by the outer measurement.
@@ -6965,6 +6985,28 @@ func formatTIMEFORMAT(format string, real, user, sys time.Duration) string {
 		}
 	}
 	return sb.String()
+}
+
+// posixTimesReport writes the shell's cumulative user and system times to
+// stderr in the format bash uses for `time` used by itself in POSIX mode:
+//
+//	user\t<M>m<S.SS>s
+//	sys\t<M>m<S.SS>s
+//
+// This is the same accounting reported by the `times` builtin
+// (getrusage RUSAGE_SELF + RUSAGE_CHILDREN); like that builtin, the
+// values are not tracked in this pure-Go runner and report as zero.
+func (r *Runner) posixTimesReport() {
+	var user, sys time.Duration // not tracked; see the `times` builtin
+	r.errf("user\t%s\nsys\t%s\n", posixTimesString(user), posixTimesString(sys))
+}
+
+// posixTimesString formats a duration as bash does for the POSIX-mode bare
+// `time` report: minutes, then seconds to two decimal places (e.g. 0m0.00s).
+func posixTimesString(d time.Duration) string {
+	min := int(d.Minutes())
+	sec := math.Mod(d.Seconds(), 60.0)
+	return fmt.Sprintf("%dm%.2fs", min, sec)
 }
 
 func elapsedString(d time.Duration, posix bool) string {
