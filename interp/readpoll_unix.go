@@ -8,11 +8,21 @@ package interp
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"time"
 
 	"golang.org/x/sys/unix"
 )
+
+// timeoutReader wraps f in a poll/select-based reader that honours the
+// deadline. On unix this is always reliable (terminals, pipes, fifos),
+// whereas (*os.File).SetReadDeadline silently no-ops for fds not registered
+// with the runtime poller — e.g. a fifo opened via `exec 9<>p` on linux,
+// which would otherwise make `read -u 9 -t …` block past its timeout.
+func timeoutReader(ctx context.Context, f *os.File, deadline time.Time) io.Reader {
+	return &timeoutFileReader{ctx: ctx, file: f, deadline: deadline}
+}
 
 func fdReadableNow(f *os.File) bool {
 	pollFd := []unix.PollFd{{
@@ -30,63 +40,48 @@ type timeoutFileReader struct {
 }
 
 func (r *timeoutFileReader) Read(p []byte) (int, error) {
+	fd := int(r.file.Fd())
+	if fd < 0 {
+		return 0, os.ErrInvalid
+	}
 	for {
-		if err := r.ctx.Err(); err != nil {
-			if errors.Is(err, context.DeadlineExceeded) {
-				return 0, os.ErrDeadlineExceeded
-			}
+		// Propagate a real cancellation, but not a plain deadline — a passed
+		// deadline still gets one non-blocking poll below so already-buffered
+		// input is read first.
+		if err := r.ctx.Err(); err != nil && !errors.Is(err, context.DeadlineExceeded) {
 			return 0, err
 		}
-		timeout := time.Until(r.deadline)
-		if timeout <= 0 {
-			return 0, os.ErrDeadlineExceeded
+		// Wait for readability up to the deadline. A non-positive remaining
+		// still does one non-blocking poll (msec 0), so data that is already
+		// available — a here-string, or a fifo with bytes ready — is read
+		// even when the timeout is tiny or already elapsed, matching bash
+		// (ready input is consumed before a -t timeout is reported). poll(2)
+		// is used uniformly (no FD_SETSIZE limit, unlike select).
+		remaining := time.Until(r.deadline)
+		msec := remaining.Milliseconds()
+		if msec < 0 {
+			msec = 0
+		} else if msec == 0 && remaining > 0 {
+			msec = 1 // sub-millisecond remaining: round up, don't busy-spin
 		}
-		usec := timeout.Microseconds()
-		if usec == 0 {
-			usec = 1
-		}
-		fd := int(r.file.Fd())
-		if fd < 0 {
-			return 0, os.ErrInvalid
-		}
-		if fd >= unix.FD_SETSIZE {
-			msec := int(timeout / time.Millisecond)
-			if msec == 0 {
-				msec = 1
-			}
-			pollFd := []unix.PollFd{{
-				Fd:     int32(fd),
-				Events: unix.POLLIN | unix.POLLHUP | unix.POLLERR,
-			}}
-			n, err := unix.Poll(pollFd, msec)
-			if err == unix.EINTR {
-				continue
-			}
-			if err != nil {
-				return 0, err
-			}
-			if n == 0 || pollFd[0].Revents == 0 {
-				continue
-			}
-			return r.file.Read(p)
-		}
-		var rfds unix.FdSet
-		rfds.Set(fd)
-		// NsecToTimeval fills Sec/Usec with the platform-correct field
-		// types: unix.Timeval.Usec is int32 on darwin/BSD but int64 on
-		// linux, so a hand-built literal with an int32 Usec fails to
-		// compile on linux. (µs → ns for the helper.)
-		tv := unix.NsecToTimeval(usec * 1000)
-		n, err := unix.Select(fd+1, &rfds, nil, nil, &tv)
+		pollFd := []unix.PollFd{{
+			Fd:     int32(fd),
+			Events: unix.POLLIN | unix.POLLHUP | unix.POLLERR,
+		}}
+		n, err := unix.Poll(pollFd, int(msec))
 		if err == unix.EINTR {
 			continue
 		}
 		if err != nil {
 			return 0, err
 		}
-		if n == 0 || !rfds.IsSet(fd) {
-			continue
+		if n > 0 && pollFd[0].Revents != 0 {
+			// Readable (data, EOF, or hangup) — let the real read decide.
+			return r.file.Read(p)
 		}
-		return r.file.Read(p)
+		// Nothing ready; only give up once the deadline has truly passed.
+		if time.Until(r.deadline) <= 0 {
+			return 0, os.ErrDeadlineExceeded
+		}
 	}
 }

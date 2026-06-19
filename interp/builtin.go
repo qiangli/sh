@@ -3140,7 +3140,24 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				readCtx, cancel = context.WithTimeout(ctx, 10*time.Millisecond)
 				cancelGrace = cancel
 			}
-			if input == stdin && stdin != nil && stdin.SetReadDeadline(deadline) == nil {
+			// For an explicit `read -u <fd>` the fd may be a fifo/pipe whose
+			// SetReadDeadline silently no-ops on fds not registered with the
+			// runtime poller (e.g. `read -u 9 -t` on an `exec 9<>p` fifo would
+			// block forever on linux). Use the poll-based reader there. On
+			// non-unix timeoutReader returns nil and we keep SetReadDeadline.
+			// Plain stdin / here-strings / terminals keep the SetReadDeadline
+			// path, which works for them on every platform.
+			var fdReader io.Reader
+			if stdinSwapped {
+				if f, ok := input.(*os.File); ok && f != nil {
+					fdReader = timeoutReader(readCtx, f, deadline)
+				}
+			}
+			if fdReader != nil {
+				cancelGrace()
+				input = fdReader
+				line, err = readInput()
+			} else if input == stdin && stdin != nil && stdin.SetReadDeadline(deadline) == nil {
 				line, err = readInput()
 				stdin.SetReadDeadline(time.Time{})
 				cancelGrace()

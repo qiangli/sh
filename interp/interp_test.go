@@ -5520,12 +5520,25 @@ var skipOnWindows = regexp.MustCompile(`ln -s|<\(`)
 // process substitutions seemflaky on mac; see https://github.com/mvdan/sh/issues/576
 var skipOnMac = regexp.MustCompile(`>\(|<\(`)
 
+// busybox's /bin/sh is a multi-call binary: `exec -a renamed /bin/sh …`
+// invokes it with argv[0]="renamed", so it looks up a (non-existent)
+// "renamed" applet instead of running as a shell. The argv[0] assertion thus
+// holds for bash/dash but not busybox (e.g. on alpine), so skip it there.
+var skipOnBusyboxSh = regexp.MustCompile(`exec -a \w+ /bin/sh\b`)
+
+func binShIsBusybox() bool {
+	p, err := filepath.EvalSymlinks("/bin/sh")
+	return err == nil && strings.Contains(p, "busybox")
+}
+
 func skipIfUnsupported(tb testing.TB, src string) {
 	switch {
 	case runtime.GOOS == "windows" && skipOnWindows.MatchString(src):
 		tb.Skipf("skipping non-portable test on windows")
 	case runtime.GOOS == "darwin" && skipOnMac.MatchString(src):
 		tb.Skipf("skipping non-portable test on mac")
+	case skipOnBusyboxSh.MatchString(src) && binShIsBusybox():
+		tb.Skipf("skipping argv[0] test: /bin/sh is busybox (multi-call applet lookup)")
 	case strings.Contains(src, "chmod u+s") && !supportsSetIDMode(os.ModeSetuid):
 		tb.Skipf("skipping setuid mode test on filesystem without setuid support")
 	case strings.Contains(src, "chmod g+s") && !supportsSetIDMode(os.ModeSetgid):

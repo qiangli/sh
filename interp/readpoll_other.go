@@ -7,9 +7,15 @@ package interp
 
 import (
 	"context"
+	"io"
 	"os"
 	"time"
 )
+
+// timeoutReader returns nil on non-unix, signalling the caller to fall back
+// to (*os.File).SetReadDeadline, which is the reliable mechanism there
+// (e.g. Windows console/pipe handles).
+func timeoutReader(context.Context, *os.File, time.Time) io.Reader { return nil }
 
 func fdReadableNow(f *os.File) bool {
 	return false
