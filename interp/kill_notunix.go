@@ -10,23 +10,32 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"syscall"
 )
+
+type killSig struct {
+	Name   string
+	Num    int
+	Signal os.Signal
+}
+
+const defaultTermSignalNum = 15
+
+var defaultTermSignal = killSig{Name: "TERM", Num: defaultTermSignalNum, Signal: os.Kill}
 
 // killSignals on non-Unix is the small set of signals the Go runtime can
 // actually deliver via os.Process.Signal — Interrupt and Kill. SIGTERM is
-// included because scripts portably use it; it's delivered as os.Kill on
+// included because scripts portably use it; it's delivered as os.Kill where
 // Windows where there is no graceful equivalent.
 var killSignals = []struct {
 	Name string
-	Sig  syscall.Signal
+	Sig  killSig
 }{
-	{"INT", syscall.SIGINT},
-	{"KILL", syscall.SIGKILL},
-	{"TERM", syscall.SIGTERM},
+	{"INT", killSig{Name: "INT", Num: 2, Signal: os.Interrupt}},
+	{"KILL", killSig{Name: "KILL", Num: 9, Signal: os.Kill}},
+	{"TERM", defaultTermSignal},
 }
 
-func signalByName(name string) (syscall.Signal, bool) {
+func signalByName(name string) (killSig, bool) {
 	name = strings.ToUpper(name)
 	name = strings.TrimPrefix(name, "SIG")
 	for _, e := range killSignals {
@@ -34,26 +43,44 @@ func signalByName(name string) (syscall.Signal, bool) {
 			return e.Sig, true
 		}
 	}
-	return 0, false
+	return killSig{}, false
 }
 
-func signalByNumber(n int) (syscall.Signal, string, bool) {
+func signalByNumber(n int) (killSig, string, bool) {
 	if n == 0 {
-		return 0, "EXIT", true
+		return killSig{Name: "EXIT", Num: 0}, "EXIT", true
 	}
 	for _, e := range killSignals {
-		if int(e.Sig) == n {
+		if e.Sig.Num == n {
 			return e.Sig, e.Name, true
 		}
 	}
-	return 0, "", false
+	return killSig{}, "", false
 }
 
 func sortedSignalEntries() []struct {
 	Name string
-	Sig  syscall.Signal
+	Sig  killSig
 } {
 	return killSignals
+}
+
+func signalNumber(sig killSig) (int, bool) {
+	if sig.Name == "" && sig.Num != 0 {
+		return 0, false
+	}
+	return sig.Num, true
+}
+
+func signalName(sig killSig) (string, bool) {
+	if sig.Name == "" && sig.Num != 0 {
+		return "", false
+	}
+	return sig.Name, true
+}
+
+func signalForOS(sig killSig) os.Signal {
+	return sig.Signal
 }
 
 // continueIfStopped is a no-op on non-Unix: there is no SIGCONT analog,
@@ -64,33 +91,33 @@ func jobSignalPid(bg *bgProc) int {
 	return int(bg.pid.Load())
 }
 
-func signalStopsJob(sig syscall.Signal) bool { return false }
+func signalStopsJob(sig killSig) bool { return false }
 
-func signalContinuesJob(sig syscall.Signal) bool { return false }
+func signalContinuesJob(sig killSig) bool { return false }
 
 // sendSignal on non-Unix uses os.Process.Signal which only supports
 // Interrupt and Kill. SIGTERM is mapped to Kill (no graceful equivalent
 // exists on Windows). Signal 0 does an existence probe via os.FindProcess.
-func sendSignal(pid int, sig syscall.Signal) error {
+func sendSignal(pid int, sig killSig) error {
 	proc, err := os.FindProcess(pid)
 	if err != nil {
 		return err
 	}
-	switch sig {
+	switch sig.Num {
 	case 0:
 		// Best-effort existence probe; FindProcess on Windows almost
 		// always succeeds even for non-existent PIDs, so this is weak.
 		return nil
-	case syscall.SIGINT:
-		return proc.Signal(os.Interrupt)
-	case syscall.SIGKILL, syscall.SIGTERM:
+	case 2:
+		return proc.Signal(sig.Signal)
+	case 9, defaultTermSignalNum:
 		return proc.Kill()
 	default:
-		return fmt.Errorf("signal %d not supported on this platform", int(sig))
+		return fmt.Errorf("signal %d not supported on this platform", sig.Num)
 	}
 }
 
-func parseSignalSpec(spec string) (syscall.Signal, bool) {
+func parseSignalSpec(spec string) (killSig, bool) {
 	if n, err := strconv.Atoi(spec); err == nil {
 		sig, _, ok := signalByNumber(n)
 		return sig, ok

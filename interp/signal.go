@@ -66,8 +66,8 @@ func parseHardIgnore(s string) map[string]bool {
 }
 
 // hardIgnoreEnvValue serialises the signals this runner has set to real
-// SIG_IGN (`trap '' SIG`) for the BashyHardIgnoreEnv bridge, so a child shell
-// we exec treats them as ignored-on-entry. Returns "" when none are ignored.
+// SIG_IGN for the BashyHardIgnoreEnv bridge, so a child shell we exec treats
+// them as ignored-on-entry. Returns "" when none are ignored.
 func (r *Runner) hardIgnoreEnvValue() string {
 	r.sigMu.Lock()
 	defer r.sigMu.Unlock()
@@ -83,10 +83,9 @@ func (r *Runner) hardIgnoreEnvValue() string {
 }
 
 // isStartupIgnored reports whether the named real signal was SIG_IGN when this
-// process started (inherited from a parent shell's `trap '' SIG`). Bash flags
-// such signals as SIG_HARD_IGNORE: a `trap` that tries to set or reset them is
-// a silent no-op, and they are listed as `trap -- '' SIG`. Pseudo-signals are
-// never startup ignored.
+// process started. Bash flags such signals as SIG_HARD_IGNORE: a `trap` that
+// tries to set or reset them is a silent no-op, and they are listed with an
+// empty action. Pseudo-signals are never startup ignored.
 func (r *Runner) isStartupIgnored(name string) bool {
 	if _, ok := signalByName(name); !ok {
 		return false
@@ -133,17 +132,18 @@ func (r *Runner) enableSignalTrap(name string) {
 		go r.signalLoop(r.sigCh)
 	}
 	if _, exists := r.sigNotify[name]; !exists {
-		r.sigNotify[name] = sig
-		signal.Notify(r.sigCh, sig)
+		osSig := signalForOS(sig)
+		r.sigNotify[name] = osSig
+		signal.Notify(r.sigCh, osSig)
 	}
 }
 
-// ignoreSignalTrap sets a real OS SIG_IGN for the named signal, the disposition
-// `trap '' SIG` requests. Unlike a notified trap (which installs a Go handler
-// and is therefore reset to SIG_DFL across execve), a real SIG_IGN is inherited
-// as SIG_IGN by exec'd children — which is exactly how bash makes an ignored
-// signal hard-ignored in a child shell (trap.tests/trap1.sub). Pseudo-signals
-// are ignored here; the empty trapCallbacks entry alone records their state.
+// ignoreSignalTrap sets a real OS SIG_IGN for the named signal. Unlike a
+// notified trap (which installs a Go handler and is therefore reset to SIG_DFL
+// across execve), a real SIG_IGN is inherited as SIG_IGN by exec'd children,
+// which is exactly how bash makes an ignored signal hard-ignored in a child
+// shell (trap.tests/trap1.sub). Pseudo-signals are ignored here; the empty
+// trapCallbacks entry alone records their state.
 func (r *Runner) ignoreSignalTrap(name string) {
 	// SIGCHLD is reap-driven; never touch its OS disposition. A real SIG_IGN
 	// on SIGCHLD would also break child reaping (auto-reaped children make
@@ -162,7 +162,7 @@ func (r *Runner) ignoreSignalTrap(name string) {
 		r.sigIgnored = make(map[string]bool)
 	}
 	r.sigIgnored[name] = true
-	signal.Ignore(sig) // also undoes any prior signal.Notify for sig
+	signal.Ignore(signalForOS(sig)) // also undoes any prior signal.Notify for sig
 }
 
 // disableSignalTrap stops OS delivery for the named signal, restoring its
@@ -179,7 +179,7 @@ func (r *Runner) disableSignalTrap(name string) {
 	if hadNotify || hadIgnore {
 		delete(r.sigNotify, name)
 		delete(r.sigIgnored, name)
-		signal.Reset(sig)
+		signal.Reset(signalForOS(sig))
 	}
 }
 
@@ -248,7 +248,9 @@ func (r *Runner) nextPendingSignal() string {
 		}
 		num := 1 << 29
 		if s, ok := signalByName(n); ok {
-			num = int(s)
+			if n, ok := signalNumber(s); ok {
+				num = n
+			}
 		}
 		if num < bestNum {
 			bestNum = num
@@ -284,7 +286,9 @@ func (r *Runner) peekPendingSignal() (string, int) {
 		}
 		num := 1 << 29
 		if s, ok := signalByName(n); ok {
-			num = int(s)
+			if n, ok := signalNumber(s); ok {
+				num = n
+			}
 		}
 		if num < bestNum {
 			bestNum = num
@@ -366,7 +370,9 @@ func (r *Runner) runSignalTrap(ctx context.Context, callback, name string) {
 	defer func() { r.handlingTrap = wasHandling }()
 
 	if s, ok := signalByName(name); ok {
-		r.setVarString("BASH_TRAPSIG", strconv.Itoa(int(s)))
+		if n, ok := signalNumber(s); ok {
+			r.setVarString("BASH_TRAPSIG", strconv.Itoa(n))
+		}
 	}
 
 	file, err := syntax.NewParser().Parse(strings.NewReader(callback), name+" trap")

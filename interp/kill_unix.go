@@ -6,6 +6,7 @@
 package interp
 
 import (
+	"os"
 	"strconv"
 	"strings"
 	"syscall"
@@ -13,11 +14,15 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+type killSig = syscall.Signal
+
+const defaultTermSignal killSig = unix.SIGTERM
+
 // killSignals is the bash-compatible signal table for the `kill` builtin.
 // Order is the canonical numerical-ish listing bash uses for `kill -l`.
 var killSignals = []struct {
 	Name string
-	Sig  syscall.Signal
+	Sig  killSig
 }{
 	{"HUP", unix.SIGHUP},
 	{"INT", unix.SIGINT},
@@ -52,7 +57,7 @@ var killSignals = []struct {
 
 // signalByName resolves a bash-style signal name to its numeric value.
 // Case-insensitive; accepts both "TERM" and "SIGTERM".
-func signalByName(name string) (syscall.Signal, bool) {
+func signalByName(name string) (killSig, bool) {
 	name = strings.ToUpper(name)
 	name = strings.TrimPrefix(name, "SIG")
 	for _, e := range killSignals {
@@ -66,7 +71,7 @@ func signalByName(name string) (syscall.Signal, bool) {
 // signalByNumber resolves a numeric signal to a known entry. Signal 0 is the
 // POSIX "no-op probe" — returned as-is so `kill -0 PID` works for existence
 // checks even though 0 is not in the table.
-func signalByNumber(n int) (syscall.Signal, string, bool) {
+func signalByNumber(n int) (killSig, string, bool) {
 	if n == 0 {
 		return 0, "EXIT", true
 	}
@@ -81,15 +86,28 @@ func signalByNumber(n int) (syscall.Signal, string, bool) {
 // sortedSignalEntries returns the entries in numerical order for `kill -l`.
 func sortedSignalEntries() []struct {
 	Name string
-	Sig  syscall.Signal
+	Sig  killSig
 } {
 	// killSignals is already in canonical bash listing order.
 	return killSignals
 }
 
+func signalNumber(sig killSig) (int, bool) {
+	return int(sig), true
+}
+
+func signalName(sig killSig) (string, bool) {
+	_, name, ok := signalByNumber(int(sig))
+	return name, ok
+}
+
+func signalForOS(sig killSig) os.Signal {
+	return sig
+}
+
 // sendSignal delivers sig to pid. pid may be negative (process group target).
 // Signal 0 performs error checking only — useful for existence probes.
-func sendSignal(pid int, sig syscall.Signal) error {
+func sendSignal(pid int, sig killSig) error {
 	return syscall.Kill(pid, sig)
 }
 
@@ -108,18 +126,18 @@ func jobSignalPid(bg *bgProc) int {
 	return pid
 }
 
-func signalStopsJob(sig syscall.Signal) bool {
+func signalStopsJob(sig killSig) bool {
 	return sig == unix.SIGSTOP || sig == unix.SIGTSTP || sig == unix.SIGTTIN || sig == unix.SIGTTOU
 }
 
-func signalContinuesJob(sig syscall.Signal) bool {
+func signalContinuesJob(sig killSig) bool {
 	return sig == unix.SIGCONT
 }
 
 // parseSignalSpec parses the part after the leading `-` in `kill -SPEC pid…`.
 // SPEC is either a number or a name (with or without SIG prefix). Returns the
 // resolved signal, or false if the spec is not recognized.
-func parseSignalSpec(spec string) (syscall.Signal, bool) {
+func parseSignalSpec(spec string) (killSig, bool) {
 	if n, err := strconv.Atoi(spec); err == nil {
 		sig, _, ok := signalByNumber(n)
 		return sig, ok

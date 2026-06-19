@@ -1336,7 +1336,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		// not a real PID. The shared flagParser doesn't fit here because
 		// `-SIGNAME` is a whole-arg flag, not stacked short flags.
 		listOnly := false
-		sig := syscall.Signal(15) // SIGTERM
+		sig := defaultTermSignal
 		remaining := args
 	killFlags:
 		for len(remaining) > 0 {
@@ -1408,7 +1408,8 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					continue
 				}
 				if s, ok := signalByName(a); ok {
-					r.outf("%d\n", int(s))
+					n, _ := signalNumber(s)
+					r.outf("%d\n", n)
 					continue
 				}
 				exit.code = 1
@@ -1489,7 +1490,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			// inherited), so a backgrounded `kill -SIG $$` still sends a
 			// real OS signal that the parent's Notify catches.
 			if pid == r.shellPid() {
-				if _, sname, ok := signalByNumber(int(sig)); ok && r.trapSignalActive(sname) {
+				if sname, ok := signalName(sig); ok && r.trapSignalActive(sname) {
 					r.markPendingSignal(sname)
 					continue
 				}
@@ -3760,7 +3761,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			sort.Slice(sigKeys, func(i, j int) bool {
 				si, _ := signalByName(sigKeys[i])
 				sj, _ := signalByName(sigKeys[j])
-				return si < sj
+				ni, _ := signalNumber(si)
+				nj, _ := signalNumber(sj)
+				return ni < nj
 			})
 			sigOrder := append([]string{"EXIT"}, sigKeys...)
 			sigOrder = append(sigOrder, "ERR", "DEBUG", "RETURN")
