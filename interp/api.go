@@ -295,6 +295,20 @@ type Runner struct {
 	// subshells do not share nor inherit the background PIDs they can wait for.
 	bgProcs []*bgProc
 
+	// jobsReadOnly is set for command substitutions that may display the
+	// parent's job table via `jobs` but may not manipulate those jobs with
+	// `fg` or `bg`.
+	jobsReadOnly bool
+
+	// preferredJobID records a job Bash has explicitly made current, such
+	// as a stopped job continued with `kill -CONT %N` or `bg %N`.
+	preferredJobID int
+
+	// doneBgPids keeps exit statuses for completed background jobs after
+	// they leave bgProcs, so a later `wait <pid>` can still report the
+	// saved status like bash's bgpids table.
+	doneBgPids map[int64]exitStatus
+
 	// coprocSeq counts coprocs started by this runner; it seeds the
 	// synthetic, unique [bgProc.coprocPid] reported in `<NAME>_PID`.
 	coprocSeq int64
@@ -652,6 +666,20 @@ type bgProc struct {
 
 	cmd string
 
+	state atomic.Int32
+
+	ignoreNextStop atomic.Int32
+
+	ignoreNextContinue atomic.Int32
+
+	// jobID is the stable job-table number reported by `jobs`, `%N` job
+	// specs and `$!`'s "g<N>" sentinel. It is assigned the lowest free
+	// slot when a `&` background job is created and never changes while
+	// the job lives, so removing a finished job does not renumber the
+	// survivors (mirroring bash's job-table slots). Zero for coproc and
+	// process-substitution bgProcs, which are not listed as jobs.
+	jobID int
+
 	// pid is the OS PID of the last real external process this
 	// backgrounded statement spawned. Zero until set, and stays zero for
 	// pure-builtin or pure-goroutine subshells (e.g. `(true) &`,
@@ -666,6 +694,12 @@ type bgProc struct {
 	// of the "g<N>" sentinel whenever one is actually available — the
 	// usual `PID=$!; kill $PID` idiom relies on this.
 	pidReady chan struct{}
+
+	// pids records every OS PID published by this background statement.
+	// Compound commands can exec more than once after `$!` has already
+	// captured the first pid; wait must still map that pid to this job.
+	pidsMu sync.Mutex
+	pids   []int64
 
 	// pidCallback is the runner's WithBgPidCallback hook copied in at
 	// spawn time (so publishBgPid doesn't need to reach for the Runner).
@@ -719,6 +753,22 @@ type bgProc struct {
 	coprocWriteFile *os.File
 }
 
+type jobState int32
+
+const (
+	jobRunning jobState = iota
+	jobStopped
+	jobDead
+)
+
+func (bg *bgProc) setState(state jobState) {
+	bg.state.Store(int32(state))
+}
+
+func (bg *bgProc) jobState() jobState {
+	return jobState(bg.state.Load())
+}
+
 // coprocFdRef identifies which coproc array element a live pipe fd
 // backs, so closing the fd can rewrite that element to "-1".
 type coprocFdRef struct {
@@ -764,16 +814,19 @@ func (c *coprocReg) remove(pid int64) {
 type bgProcCtxKey struct{}
 
 // publishBgPid is what exec handlers call after a successful
-// exec.Start. Sets the running goroutine's bgProc.pid (last-writer
-// wins, matching bash's "$! is the last command in the pipeline"
-// semantic) and closes pidReady the first time. Safe no-op when not
-// in a backgrounded context.
+// exec.Start. Sets the running goroutine's bgProc.pid and records the
+// published pid for later `wait $!` resolution. Safe no-op when not in a
+// backgrounded context.
 func publishBgPid(ctx context.Context, pid int) {
 	bg, _ := ctx.Value(bgProcCtxKey{}).(*bgProc)
 	if bg == nil {
 		return
 	}
-	bg.pid.Store(int64(pid))
+	pid64 := int64(pid)
+	bg.pid.Store(pid64)
+	bg.pidsMu.Lock()
+	bg.pids = append(bg.pids, pid64)
+	bg.pidsMu.Unlock()
 	select {
 	case <-bg.pidReady:
 		// already closed by an earlier exec or by goroutine exit

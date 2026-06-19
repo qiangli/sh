@@ -198,6 +198,7 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 			Stderr:     hc.Stderr,
 			ExtraFiles: extraFiles,
 		}
+		prepareBackgroundJobCmd(ctx, &cmd)
 
 		err = cmd.Start()
 		// POSIX/bash: when execve fails with ENOEXEC (the file
@@ -230,6 +231,7 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 					Stderr:     hc.Stderr,
 					ExtraFiles: extraFiles,
 				}
+				prepareBackgroundJobCmd(ctx, &cmd)
 				err = cmd.Start()
 			}
 		}
@@ -259,7 +261,7 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 			})
 			defer stopf()
 
-			err = cmd.Wait()
+			err = waitExecCmd(ctx, &cmd)
 			// A reaped foreground child runs the SIGCHLD trap once, like a
 			// reaped background job (bash waitchld). Background execs are
 			// skipped here — their owning bgProc goroutine fires the trap on

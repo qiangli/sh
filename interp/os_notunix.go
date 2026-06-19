@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 
 	"mvdan.cc/sh/v3/syntax"
 )
@@ -84,6 +85,12 @@ type waitStatus struct{}
 
 func (waitStatus) Signaled() bool { return false }
 func (waitStatus) Signal() int    { return 0 }
+
+func prepareBackgroundJobCmd(ctx context.Context, cmd *exec.Cmd) {}
+
+func waitExecCmd(ctx context.Context, cmd *exec.Cmd) error {
+	return cmd.Wait()
+}
 
 func (r *Runner) inheritedFd(fd int) (*os.File, bool) {
 	return nil, false

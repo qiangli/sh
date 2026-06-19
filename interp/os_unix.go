@@ -9,6 +9,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"os/exec"
 	"os/user"
 	"strconv"
 	"sync"
@@ -136,6 +137,57 @@ func (r *Runner) unTestOwnOrGrp(ctx context.Context, op syntax.UnTestOperator, x
 }
 
 type waitStatus = syscall.WaitStatus
+
+func prepareBackgroundJobCmd(ctx context.Context, cmd *exec.Cmd) {
+	bg, _ := ctx.Value(bgProcCtxKey{}).(*bgProc)
+	if bg == nil || !bg.jobControl {
+		return
+	}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+}
+
+func waitExecCmd(ctx context.Context, cmd *exec.Cmd) error {
+	bg, _ := ctx.Value(bgProcCtxKey{}).(*bgProc)
+	if bg == nil || !bg.jobControl {
+		return cmd.Wait()
+	}
+	var status syscall.WaitStatus
+	for {
+		_, err := syscall.Wait4(cmd.Process.Pid, &status, syscall.WUNTRACED|syscall.WCONTINUED, nil)
+		if err == syscall.EINTR {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		switch {
+		case status.Stopped():
+			if bg.ignoreNextStop.Swap(0) != 0 {
+				continue
+			}
+			bg.setState(jobStopped)
+			continue
+		case status.Continued():
+			if bg.ignoreNextContinue.Swap(0) != 0 {
+				continue
+			}
+			bg.setState(jobRunning)
+			continue
+		default:
+			bg.setState(jobDead)
+			if status.Exited() && status.ExitStatus() == 0 {
+				return nil
+			}
+			if status.Signaled() {
+				return ExitStatus(128 + status.Signal())
+			}
+			if status.Exited() {
+				return ExitStatus(status.ExitStatus())
+			}
+			return ExitStatus(1)
+		}
+	}
+}
 
 // modifiedSinceAccessed reports whether the file's mtime is strictly
 // greater than its atime — bash's `-N FILE` test operator. On

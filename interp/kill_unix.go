@@ -100,6 +100,22 @@ func continueIfStopped(pid int) {
 	_ = syscall.Kill(pid, syscall.SIGCONT)
 }
 
+func jobSignalPid(bg *bgProc) int {
+	pid := int(bg.pid.Load())
+	if bg.jobControl && pid > 0 {
+		return -pid
+	}
+	return pid
+}
+
+func signalStopsJob(sig syscall.Signal) bool {
+	return sig == unix.SIGSTOP || sig == unix.SIGTSTP || sig == unix.SIGTTIN || sig == unix.SIGTTOU
+}
+
+func signalContinuesJob(sig syscall.Signal) bool {
+	return sig == unix.SIGCONT
+}
+
 // parseSignalSpec parses the part after the leading `-` in `kill -SPEC pid…`.
 // SPEC is either a number or a name (with or without SIG prefix). Returns the
 // resolved signal, or false if the spec is not recognized.

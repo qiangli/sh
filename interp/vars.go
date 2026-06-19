@@ -571,7 +571,7 @@ func (r *Runner) lookupVar(name string) expand.Variable {
 			if pid := bg.pid.Load(); pid > 0 {
 				vr.Kind, vr.Str = expand.String, strconv.FormatInt(pid, 10)
 			} else {
-				vr.Kind, vr.Str = expand.String, "g"+strconv.Itoa(n)
+				vr.Kind, vr.Str = expand.String, "g"+strconv.Itoa(bg.jobID)
 			}
 		}
 	case "?":

@@ -60,6 +60,14 @@ func sortedSignalEntries() []struct {
 // and this runner cannot suspend jobs on this platform anyway.
 func continueIfStopped(pid int) {}
 
+func jobSignalPid(bg *bgProc) int {
+	return int(bg.pid.Load())
+}
+
+func signalStopsJob(sig syscall.Signal) bool { return false }
+
+func signalContinuesJob(sig syscall.Signal) bool { return false }
+
 // sendSignal on non-Unix uses os.Process.Signal which only supports
 // Interrupt and Kill. SIGTERM is mapped to Kill (no graceful equivalent
 // exists on Windows). Signal 0 does an existence probe via os.FindProcess.

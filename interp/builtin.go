@@ -1182,6 +1182,26 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			}
 		}
 		remaining := fp.args()
+		// Sanity-check and reset the -p variable up front, matching bash
+		// (builtins/wait.def): the name must be a valid identifier (or
+		// array reference) and unbindable, else error out before waiting.
+		if pidVar != "" {
+			// Use the same assignment-target validator as read/printf so an
+			// assoc subscript carrying a literal `]` (e.g. `wait -p A[$rkey]`
+			// with rkey=`]`) is accepted, matching bash (builtins/wait.def
+			// re-parses the target like any assignment LHS).
+			targetBase := pidVar
+			if b, _, ok := splitArrayRef(pidVar); ok {
+				targetBase = b
+			}
+			if !r.builtinAssignNameValid(pidVar, r.builtinTargetQuoted(pos, targetBase)) {
+				return failf(1, "wait: `%s': not a valid identifier\n", pidVar)
+			}
+			if vr := r.lookupVar(pidVar); vr.ReadOnly {
+				return failf(1, "wait: %s: cannot unset: readonly variable\n", pidVar)
+			}
+			r.delVar(pidVar)
+		}
 		if waitNext {
 			// `wait -n [jobspec...]` waits for the NEXT of the named jobs
 			// (or, with no names, any background job) to finish, returning
@@ -1192,12 +1212,26 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			if len(remaining) > 0 {
 				candidates = candidates[:0:0]
 				for _, arg := range remaining {
+					// bash's set_waitlist reports an invalid spec but
+					// keeps scanning the rest, then waits for whatever
+					// valid jobs were named.
 					bg := r.resolveJobArg(arg)
 					if bg == nil {
-						return failf(1, "wait: %s: no such job\n", arg)
+						if strings.HasPrefix(arg, "%") {
+							r.errf("%swait: %s: no such job\n", r.bashErrPrefix(pos), arg)
+						} else {
+							r.errf("%swait: `%s': not a pid or valid job spec\n", r.bashErrPrefix(pos), arg)
+						}
+						continue
 					}
 					candidates = append(candidates, bg)
 				}
+			}
+			// With no live candidates, bash's wait_for_any_job returns
+			// -1, i.e. exit status 127.
+			if len(candidates) == 0 {
+				exit.code = 127
+				break
 			}
 			// Any candidate already done?
 			for _, bg := range candidates {
@@ -1217,6 +1251,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				r.storeWaitPid(pidVar, bg)
 			}
 		waitDone:
+			r.removeFinishedJobs()
 			break
 		}
 		if len(remaining) == 0 {
@@ -1231,6 +1266,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				}
 				r.reapCoproc(bg)
 			}
+			r.removeFinishedJobs()
 			break
 		}
 		for _, arg := range remaining {
@@ -1238,7 +1274,6 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			// return that) or a real numeric OS PID (what $! now
 			// returns when the bg statement spawned a real process).
 			var bg *bgProc
-			var matchedIdx int64
 			if strings.HasPrefix(arg, "%") {
 				// Job-control notation is allowed even without monitor
 				// mode (SUS requirement). An unknown spec is "no such
@@ -1247,38 +1282,40 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				if bg == nil {
 					return failf(127, "wait: %s: no such job\n", arg)
 				}
-				for i, c := range r.bgProcs {
-					if c == bg {
-						matchedIdx = int64(i + 1)
-						break
-					}
-				}
 			} else if rest, ok := strings.CutPrefix(arg, "g"); ok {
-				idx := atoi(rest)
-				if idx <= 0 || idx > int64(len(r.bgProcs)) {
-					return failf(1, "wait: pid %s is not a child of this shell\n", arg)
+				bg = r.resolveJobArg(arg)
+				if bg == nil {
+					return failf(1, "wait: pid %s is not a child of this shell\n", "g"+rest)
 				}
-				bg = r.bgProcs[idx-1]
-				matchedIdx = idx
 			} else {
+				// bash only treats an argument as a PID when it begins
+				// with a digit; anything else (a negative number, `+4`,
+				// garbage) is "not a pid or valid job spec".
+				if len(arg) == 0 || arg[0] < '0' || arg[0] > '9' {
+					return failf(1, "wait: `%s': not a pid or valid job spec\n", arg)
+				}
 				pid, perr := strconv.ParseInt(arg, 10, 64)
 				if perr != nil {
 					return failf(1, "wait: `%s': not a pid or valid job spec\n", arg)
 				}
-				for i, candidate := range r.bgProcs {
+				for _, candidate := range r.bgProcs {
 					// Match a real OS PID (published by the exec handler) or
 					// a coproc's synthetic `<NAME>_PID`. Skip coprocs already
 					// reaped so a stale entry with a reused synthetic pid
 					// doesn't shadow the live one.
-					if candidate.pid.Load() == pid ||
+					if candidate.matchesPid(pid) ||
 						(candidate.coprocPid == pid && candidate.coprocPidVar != "") {
 						bg = candidate
-						matchedIdx = int64(i + 1)
 						break
 					}
 				}
 				if bg == nil {
-					return failf(1, "wait: pid %s is not a child of this shell\n", arg)
+					if saved, ok := r.doneBgPids[pid]; ok {
+						exit = saved
+						delete(r.doneBgPids, pid)
+						continue
+					}
+					return failf(127, "wait: pid %s is not a child of this shell\n", arg)
 				}
 			}
 			if r.waitOrSignal(bg) {
@@ -1288,9 +1325,8 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			}
 			exit = *bg.exit
 			r.reapCoproc(bg)
-			if pidVar != "" {
-				r.setVarString(pidVar, "g"+strconv.FormatInt(matchedIdx, 10))
-			}
+			r.storeWaitPid(pidVar, bg)
+			r.removeJob(bg)
 		}
 	case "kill":
 		// Bash kill accepts: `-l [signum|name…]`, `-s NAME pid…`, `-n NUM
@@ -1398,14 +1434,24 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				if bg.pidReady != nil {
 					<-bg.pidReady
 				}
-				rp := int(bg.pid.Load())
+				rp := jobSignalPid(bg)
 				if rp == 0 {
 					// pure-goroutine job with no OS pid to signal
 					continue
 				}
 				if err := sendSignal(rp, sig); err != nil {
 					exit.code = 1
-					r.errf(r.bashErrPrefix(pos)+"kill: (%d) - %v\n", rp, err)
+					r.errf(r.bashErrPrefix(pos)+"kill: (%d) - %v\n", int(bg.pid.Load()), err)
+					continue
+				}
+				if signalStopsJob(sig) {
+					bg.ignoreNextContinue.Store(1)
+					bg.setState(jobStopped)
+				} else if signalContinuesJob(sig) {
+					bg.ignoreNextContinue.Store(0)
+					bg.ignoreNextStop.Store(1)
+					bg.setState(jobRunning)
+					r.preferredJobID = bg.jobID
 				}
 				continue
 			}
@@ -1479,30 +1525,62 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			}
 		}
 		specs := fp.args()
+		if !r.bashCompatErrors {
+			switch {
+			case noHup:
+			case all:
+				r.bgProcs = nil
+			case len(specs) == 0:
+				if jobs := r.realJobs(); len(jobs) > 0 {
+					r.removeJob(jobs[len(jobs)-1])
+				}
+			default:
+				for _, spec := range specs {
+					if bg := r.resolveJobArg(spec); bg != nil {
+						r.removeJob(bg)
+					}
+				}
+			}
+			break
+		}
 		switch {
 		case noHup:
-			// Keep jobs in the table (we never deliver SIGHUP anyway).
+			if len(specs) == 0 {
+				// Keep jobs in the table (we never deliver SIGHUP anyway).
+				break
+			}
+			for _, spec := range specs {
+				if bg := r.resolveJobArg(spec); bg == nil {
+					if _, err := strconv.ParseInt(spec, 10, 64); err != nil && !strings.HasPrefix(spec, "%") {
+						r.errf("%sdisown: warning: %s: job specification requires leading `%%'\n", r.bashErrPrefix(pos), spec)
+					}
+					exit.code = 1
+					r.errf("%sdisown: %s: no such job\n", r.bashErrPrefix(pos), spec)
+				}
+			}
 		case all:
 			r.bgProcs = nil
 		case len(specs) == 0:
 			// disown the current (most recent) job.
-			if n := len(r.bgProcs); n > 0 {
-				r.bgProcs = r.bgProcs[:n-1]
+			if jobs := r.realJobs(); len(jobs) > 0 {
+				r.removeJob(jobs[len(jobs)-1])
 			}
 		default:
-			// Remove the named jobs, highest index first so earlier
-			// removals don't shift the indices still to be removed.
-			var idxs []int
+			var remove []*bgProc
 			for _, spec := range specs {
-				arg := strings.TrimPrefix(spec, "%")
-				n := int(atoi(arg))
-				if n >= 1 && n <= len(r.bgProcs) {
-					idxs = append(idxs, n-1)
+				bg := r.resolveJobArg(spec)
+				if bg == nil {
+					if _, err := strconv.ParseInt(spec, 10, 64); err != nil && !strings.HasPrefix(spec, "%") {
+						r.errf("%sdisown: warning: %s: job specification requires leading `%%'\n", r.bashErrPrefix(pos), spec)
+					}
+					exit.code = 1
+					r.errf("%sdisown: %s: no such job\n", r.bashErrPrefix(pos), spec)
+					continue
 				}
+				remove = append(remove, bg)
 			}
-			sort.Sort(sort.Reverse(sort.IntSlice(idxs)))
-			for _, i := range idxs {
-				r.bgProcs = append(r.bgProcs[:i], r.bgProcs[i+1:]...)
+			for _, bg := range remove {
+				r.removeJob(bg)
 			}
 		}
 	case "builtin":
@@ -3975,24 +4053,46 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		r.setVar(arrayName, vr)
 
 	case "jobs":
-		for i, bg := range r.bgProcs {
-			marker := ' '
-			switch i {
-			case len(r.bgProcs) - 1:
-				marker = '+'
-			case len(r.bgProcs) - 2:
-				marker = '-'
-			}
-			cmd := bg.cmd
-			if cmd == "" {
-				cmd = "running"
-			}
-			select {
-			case <-bg.done:
-				r.outf("[%d]%c  Done                       %s\n", i+1, marker, cmd)
+		// jobs [-lnprs] [jobspec ...]
+		var long, pidOnly, runningOnly, stoppedOnly bool
+		fp := flagParser{remaining: args}
+		for fp.more() {
+			switch flag := fp.flag(); flag {
+			case "-l":
+				long = true
+			case "-p":
+				pidOnly = true
+			case "-r":
+				runningOnly = true
+			case "-s":
+				stoppedOnly = true
+			case "-n":
+				// "only changed jobs": we don't track notification
+				// state, so this lists nothing extra — accept it.
 			default:
-				r.outf("[%d]%c  Running                    %s\n", i+1, marker, cmd)
+				return invalidOpt("jobs", flag)
 			}
+		}
+		jobs := r.realJobs()
+		specs := fp.args()
+		if len(specs) > 0 {
+			for _, spec := range specs {
+				bg := r.resolveJobArg(spec)
+				if bg == nil || bg.jobID == 0 {
+					return failf(1, "jobs: %s: no such job\n", spec)
+				}
+				r.formatJob(jobs, bg, long, pidOnly)
+			}
+			break
+		}
+		for _, bg := range jobs {
+			if stoppedOnly && !jobStoppedState(bg) {
+				continue
+			}
+			if runningOnly && !jobRunningState(bg) {
+				continue
+			}
+			r.formatJob(jobs, bg, long, pidOnly)
 		}
 	case "fg":
 		// Argument forms mirror the merged `wait` logic: no args → most
@@ -4006,64 +4106,65 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		// refuse a job that was backgrounded before job control was
 		// enabled (`set +o monitor; cmd &; set -m; fg %1`). Without this,
 		// fg would block forever on a job it can never foreground.
+		fp := flagParser{remaining: args}
+		for fp.more() {
+			return invalidOpt("fg", fp.flag())
+		}
+		args = fp.args()
 		if !r.monitorActive() {
 			return failf(1, "fg: no job control\n")
 		}
+		if r.jobsReadOnly {
+			return failf(1, "fg: no current jobs\n")
+		}
 		var bg *bgProc
-		jobIdx := 0
 		switch {
 		case len(args) == 0:
-			if len(r.bgProcs) == 0 {
+			if jobs := r.realJobs(); len(jobs) == 0 {
 				return failf(1, "fg: no current jobs\n")
+			} else {
+				bg = r.currentJob(jobs)
 			}
-			jobIdx = len(r.bgProcs)
 		case strings.HasPrefix(args[0], "%"):
 			arg := strings.TrimPrefix(args[0], "%")
 			switch arg {
-			case "%", "+", "":
-				if len(r.bgProcs) == 0 {
+			case "%", "+", "", "-":
+				bg = r.resolveJobArg(args[0])
+				if bg == nil {
 					return failf(1, "fg: no current jobs\n")
 				}
-				jobIdx = len(r.bgProcs)
-			case "-":
-				if len(r.bgProcs) < 2 {
-					return failf(1, "fg: no current jobs\n")
-				}
-				jobIdx = len(r.bgProcs) - 1
 			default:
-				n := int(atoi(arg))
-				if n < 1 || n > len(r.bgProcs) {
+				bg = r.resolveJobArg(args[0])
+				if bg == nil {
 					return failf(1, "fg: %%%s: no such job\n", arg)
 				}
-				jobIdx = n
 			}
 		default:
-			if rest, ok := strings.CutPrefix(args[0], "g"); ok {
-				n := int(atoi(rest))
-				if n < 1 || n > len(r.bgProcs) {
+			if strings.HasPrefix(args[0], "g") {
+				bg = r.resolveJobArg(args[0])
+				if bg == nil {
 					return failf(1, "fg: %s: no such job\n", args[0])
 				}
-				jobIdx = n
 			} else {
 				pid, perr := strconv.ParseInt(args[0], 10, 64)
 				if perr != nil {
 					return failf(1, "fg: %s: no such job\n", args[0])
 				}
-				for i, candidate := range r.bgProcs {
-					if candidate.pid.Load() == pid {
-						jobIdx = i + 1
+				for _, candidate := range r.bgProcs {
+					if candidate.matchesPid(pid) {
+						bg = candidate
 						break
 					}
 				}
-				if jobIdx == 0 {
+				if bg == nil {
 					return failf(1, "fg: pid %s is not a child of this shell\n", args[0])
 				}
 			}
 		}
-		bg = r.bgProcs[jobIdx-1]
 		if !bg.jobControl {
-			return failf(1, "fg: job %d started without job control\n", jobIdx)
+			return failf(1, "fg: job %d started without job control\n", bg.jobID)
 		}
+		r.outf("%s\n", bg.cmd)
 		// If a real OS PID has been published, defensively resume it in
 		// case an external SIGSTOP left it stopped. Non-blocking: we only
 		// send SIGCONT when pidReady is already closed; otherwise the
@@ -4072,17 +4173,65 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		select {
 		case <-bg.pidReady:
 			if pid := bg.pid.Load(); pid > 0 {
-				continueIfStopped(int(pid))
+				sigCont, _ := signalByName("CONT")
+				_ = sendSignal(jobSignalPid(bg), sigCont)
+				bg.ignoreNextContinue.Store(0)
+				bg.ignoreNextStop.Store(1)
+				bg.setState(jobRunning)
 			}
 		default:
 		}
 		<-bg.done
 		exit = *bg.exit
+		r.removeJob(bg)
 	case "bg":
-		// In this interpreter, background jobs are already running.
-		// bg is effectively a no-op since we don't support job stopping (SIGTSTP).
-		if len(r.bgProcs) == 0 {
+		fp := flagParser{remaining: args}
+		for fp.more() {
+			return invalidOpt("bg", fp.flag())
+		}
+		args = fp.args()
+		if !r.monitorActive() {
 			return failf(1, "bg: no job control\n")
+		}
+		if r.jobsReadOnly {
+			return failf(1, "bg: no current jobs\n")
+		}
+		jobs := r.realJobs()
+		if len(args) == 0 {
+			if len(jobs) == 0 {
+				return failf(1, "bg: no current jobs\n")
+			} else {
+				args = []string{fmt.Sprintf("%%%d", r.currentJob(jobs).jobID)}
+			}
+		}
+		for _, spec := range args {
+			bg := r.resolveJobArg(spec)
+			if bg == nil {
+				exit.code = 1
+				r.errf("%sbg: %s: no such job\n", r.bashErrPrefix(pos), spec)
+				continue
+			}
+			if !jobStoppedState(bg) {
+				r.errf("%sbg: job %d already in background\n", r.bashErrPrefix(pos), bg.jobID)
+				continue
+			}
+			select {
+			case <-bg.pidReady:
+				if pid := bg.pid.Load(); pid > 0 {
+					sigCont, _ := signalByName("CONT")
+					if err := sendSignal(jobSignalPid(bg), sigCont); err != nil {
+						exit.code = 1
+						r.errf("%sbg: job %d: %v\n", r.bashErrPrefix(pos), bg.jobID, err)
+						continue
+					}
+				}
+			default:
+			}
+			bg.ignoreNextContinue.Store(0)
+			bg.ignoreNextStop.Store(1)
+			bg.setState(jobRunning)
+			r.preferredJobID = bg.jobID
+			r.outf("[%d]%c %s &\n", bg.jobID, r.jobMarker(jobs, bg), bg.cmd)
 		}
 	case "fc":
 		return r.fcBuiltin(ctx, pos, args)
@@ -4091,7 +4240,15 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 	case "history":
 		return r.historyBuiltin(pos, args)
 	case "suspend":
-		return failf(1, "suspend: not supported\n")
+		fp := flagParser{remaining: args}
+		for fp.more() {
+			switch flag := fp.flag(); flag {
+			case "-f":
+			default:
+				return invalidOpt("suspend", flag)
+			}
+		}
+		return failf(1, "suspend: cannot suspend: no job control\n")
 	case "runner-state":
 		// Agentic introspection. Emits a JSON object describing the
 		// current runner state to stdout. Subcommand selects which
@@ -4590,44 +4747,300 @@ func (r *Runner) jsonOut(v any) exitStatus {
 	return exitStatus{}
 }
 
+// realJobs returns the background jobs eligible for the `jobs` list and
+// `%N` job specs, in creation order. Coproc and process-substitution
+// bgProcs (jobID == 0) are excluded — bash tracks those separately.
+func (r *Runner) realJobs() []*bgProc {
+	var out []*bgProc
+	for _, bg := range r.bgProcs {
+		if bg.jobID > 0 {
+			out = append(out, bg)
+		}
+	}
+	return out
+}
+
+// nextJobID returns the lowest positive job number not currently in use,
+// mirroring bash reusing the lowest free job-table slot.
+func (r *Runner) nextJobID() int {
+	for n := 1; ; n++ {
+		used := false
+		for _, bg := range r.bgProcs {
+			if bg.jobID == n {
+				used = true
+				break
+			}
+		}
+		if !used {
+			return n
+		}
+	}
+}
+
+func (r *Runner) currentJob(jobs []*bgProc) *bgProc {
+	current, _ := r.currentPreviousJobs(jobs)
+	return current
+}
+
+func (r *Runner) currentPreviousJobs(jobs []*bgProc) (*bgProc, *bgProc) {
+	var stopped, running []*bgProc
+	for _, bg := range jobs {
+		switch {
+		case jobStoppedState(bg):
+			stopped = append(stopped, bg)
+		case jobRunningState(bg):
+			running = append(running, bg)
+		}
+	}
+	if len(stopped) > 0 {
+		current := stopped[len(stopped)-1]
+		if len(stopped) > 1 {
+			return current, stopped[len(stopped)-2]
+		}
+		if len(running) > 0 {
+			return current, running[len(running)-1]
+		}
+		return current, current
+	}
+	if r.preferredJobID != 0 {
+		for i := len(running) - 1; i >= 0; i-- {
+			if running[i].jobID == r.preferredJobID {
+				current := running[i]
+				for j := len(running) - 1; j >= 0; j-- {
+					if running[j] != current {
+						return current, running[j]
+					}
+				}
+				return current, current
+			}
+		}
+	}
+	if len(running) > 0 {
+		current := running[len(running)-1]
+		if len(running) > 1 {
+			return current, running[len(running)-2]
+		}
+		return current, current
+	}
+	if len(jobs) > 0 {
+		current := jobs[len(jobs)-1]
+		if len(jobs) > 1 {
+			return current, jobs[len(jobs)-2]
+		}
+		return current, current
+	}
+	return nil, nil
+}
+
+// jobMarker returns bash's current/previous markers: '+' for the current job,
+// '-' for the previous one, and a space otherwise. Stopped jobs take priority
+// over running jobs, matching jobs.c:reset_current.
+func (r *Runner) jobMarker(jobs []*bgProc, bg *bgProc) byte {
+	current, previous := r.currentPreviousJobs(jobs)
+	switch bg {
+	case current:
+		return '+'
+	case previous:
+		return '-'
+	}
+	return ' '
+}
+
+// longestSignalDesc is bash's LONGEST_SIGNAL_DESC (jobs.h): the column
+// width of the job-state word ("Running"/"Done"/…) in `jobs` output.
+const longestSignalDesc = 27
+
+// jobDone reports whether a background job has finished.
+func jobDone(bg *bgProc) bool {
+	select {
+	case <-bg.done:
+		bg.setState(jobDead)
+		return true
+	default:
+		return false
+	}
+}
+
+func jobStoppedState(bg *bgProc) bool {
+	return !jobDone(bg) && bg.jobState() == jobStopped
+}
+
+func jobRunningState(bg *bgProc) bool {
+	return !jobDone(bg) && bg.jobState() != jobStopped
+}
+
+func (bg *bgProc) pidList() []int64 {
+	bg.pidsMu.Lock()
+	defer bg.pidsMu.Unlock()
+	return slices.Clone(bg.pids)
+}
+
+func (bg *bgProc) matchesPid(pid int64) bool {
+	if bg.pid.Load() == pid {
+		return true
+	}
+	for _, p := range bg.pidList() {
+		if p == pid {
+			return true
+		}
+	}
+	return false
+}
+
+// formatJob prints one line of `jobs` output for bg, matching bash's
+// list_one_job. jobs is the ordered real-job list, used to compute the
+// current/previous markers. With pidOnly only the leader PID is printed;
+// with long the PID is shown after the marker.
+func (r *Runner) formatJob(jobs []*bgProc, bg *bgProc, long, pidOnly bool) {
+	pid := bg.pid.Load()
+	if pidOnly {
+		if pid > 0 {
+			r.outf("%d\n", pid)
+		} else {
+			r.outf("g%d\n", bg.jobID)
+		}
+		return
+	}
+	marker := r.jobMarker(jobs, bg)
+	cmd := bg.cmd
+	if cmd == "" {
+		cmd = "running"
+	}
+	state, suffix := "Running", " &"
+	if jobStoppedState(bg) {
+		state, suffix = "Stopped", ""
+	} else if jobDone(bg) {
+		// Done jobs print the command without a trailing `&`.
+		state, suffix = "Done", ""
+	}
+	if long {
+		r.outf("[%d]%c %d %-*s%s%s\n", bg.jobID, marker, pid, longestSignalDesc, state, cmd, suffix)
+		return
+	}
+	r.outf("[%d]%c  %-*s%s%s\n", bg.jobID, marker, longestSignalDesc, state, cmd, suffix)
+}
+
+// removeFinishedJobs drops completed `&` background jobs from the table.
+// This mirrors bash's mark_dead_jobs_as_notified + cleanup_dead_jobs run
+// after a `wait`: once a background job has finished and been waited for,
+// bash removes it from the job table so it no longer shows up in `jobs`
+// and its slot can be reused. Coproc / process-substitution entries
+// (jobID == 0) are left to their own reapers.
+func (r *Runner) removeFinishedJobs() {
+	kept := r.bgProcs[:0]
+	for _, bg := range r.bgProcs {
+		if bg.jobID > 0 {
+			select {
+			case <-bg.done:
+				r.saveDonePidStatus(bg)
+				continue
+			default:
+			}
+		}
+		kept = append(kept, bg)
+	}
+	for i := len(kept); i < len(r.bgProcs); i++ {
+		r.bgProcs[i] = nil
+	}
+	r.bgProcs = kept
+}
+
+func (r *Runner) removeJob(target *bgProc) {
+	if target == nil {
+		return
+	}
+	for i, bg := range r.bgProcs {
+		if bg != target {
+			continue
+		}
+		r.saveDonePidStatus(bg)
+		copy(r.bgProcs[i:], r.bgProcs[i+1:])
+		r.bgProcs[len(r.bgProcs)-1] = nil
+		r.bgProcs = r.bgProcs[:len(r.bgProcs)-1]
+		return
+	}
+}
+
+func (r *Runner) saveDonePidStatus(bg *bgProc) {
+	if bg == nil {
+		return
+	}
+	select {
+	case <-bg.done:
+	default:
+		return
+	}
+	if r.doneBgPids == nil {
+		r.doneBgPids = make(map[int64]exitStatus)
+	}
+	for _, pid := range bg.pidList() {
+		r.doneBgPids[pid] = *bg.exit
+	}
+	if pid := bg.pid.Load(); pid > 0 {
+		r.doneBgPids[pid] = *bg.exit
+	}
+}
+
 // resolveJobArg maps a `wait`/`wait -n` argument to a background job:
 // `%N` job-spec, `gN` legacy `$!` sentinel, or a real OS PID (also a
 // coproc's synthetic `<NAME>_PID`). Returns nil when nothing matches.
 func (r *Runner) resolveJobArg(arg string) *bgProc {
 	if rest, ok := strings.CutPrefix(arg, "%"); ok {
+		jobs := r.realJobs()
 		switch rest {
 		case "%", "+", "":
 			// current job (most recent)
-			if len(r.bgProcs) == 0 {
+			if len(jobs) == 0 {
 				return nil
 			}
-			return r.bgProcs[len(r.bgProcs)-1]
+			return jobs[len(jobs)-1]
 		case "-":
 			// previous job
-			if len(r.bgProcs) < 2 {
+			if len(jobs) < 2 {
 				return nil
 			}
-			return r.bgProcs[len(r.bgProcs)-2]
+			return jobs[len(jobs)-2]
 		}
-		n := int(atoi(rest))
-		if n < 1 || n > len(r.bgProcs) {
+		if strings.HasPrefix(rest, "?") {
+			needle := strings.TrimPrefix(rest, "?")
+			for i := len(jobs) - 1; i >= 0; i-- {
+				if strings.Contains(jobs[i].cmd, needle) {
+					return jobs[i]
+				}
+			}
 			return nil
 		}
-		return r.bgProcs[n-1]
+		if n64, err := strconv.ParseInt(rest, 10, 0); err == nil {
+			n := int(n64)
+			for _, bg := range jobs {
+				if bg.jobID == n {
+					return bg
+				}
+			}
+			return nil
+		}
+		for i := len(jobs) - 1; i >= 0; i-- {
+			if strings.HasPrefix(jobs[i].cmd, rest) {
+				return jobs[i]
+			}
+		}
+		return nil
 	}
 	if rest, ok := strings.CutPrefix(arg, "g"); ok {
 		n := int(atoi(rest))
-		if n < 1 || n > len(r.bgProcs) {
-			return nil
+		for _, bg := range r.bgProcs {
+			if bg.jobID == n {
+				return bg
+			}
 		}
-		return r.bgProcs[n-1]
+		return nil
 	}
 	pid, perr := strconv.ParseInt(arg, 10, 64)
 	if perr != nil {
 		return nil
 	}
 	for _, candidate := range r.bgProcs {
-		if candidate.pid.Load() == pid ||
+		if candidate.matchesPid(pid) ||
 			(candidate.coprocPid == pid && candidate.coprocPidVar != "") {
 			return candidate
 		}
@@ -4649,13 +5062,8 @@ func (r *Runner) storeWaitPid(pidVar string, bg *bgProc) {
 	var val string
 	if pid := bg.pid.Load(); pid > 0 {
 		val = strconv.FormatInt(pid, 10)
-	} else {
-		for i, candidate := range r.bgProcs {
-			if candidate == bg {
-				val = "g" + strconv.Itoa(i+1)
-				break
-			}
-		}
+	} else if bg.jobID > 0 {
+		val = "g" + strconv.Itoa(bg.jobID)
 	}
 	r.setVarString(pidVar, val)
 }
@@ -4845,6 +5253,7 @@ var bashUsage = map[string]string{
 	"shift":    "shift [n]",
 	"shopt":    "shopt [-pqsu] [-o] [optname ...]",
 	"source":   "source [-p path] filename [arguments]",
+	"suspend":  "suspend [-f]",
 	"trap":     "trap [-Plp] [[action] signal_spec ...]",
 	"type":     "type [-afptP] name [name ...]",
 	"typeset":  "typeset [-aAfFgiIlnrtux] name[=value] ... or typeset -p [-aAfFilnrtux] [name ...]",

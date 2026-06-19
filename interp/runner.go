@@ -182,6 +182,8 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 				return nil
 			}
 			r2 := r.subshell(false)
+			r2.bgProcs = r.bgProcs
+			r2.jobsReadOnly = true
 			r2.stdout = w
 			if !r.functraceEnabled() {
 				delete(r2.trapCallbacks, "DEBUG")
@@ -4080,11 +4082,28 @@ func (r *Runner) stop(ctx context.Context) bool {
 }
 
 func backgroundJobText(st *syntax.Stmt) string {
+	// Bash stores the job's command without the trailing `&`; the jobs
+	// list re-adds it only for still-running jobs (see list_one_job /
+	// print_pipeline in jobs.c). Render the statement with Background and
+	// Disown cleared so the text matches.
+	st2 := *st
+	st2.Background = false
+	st2.Disown = false
 	var buf strings.Builder
-	if err := syntax.NewPrinter(syntax.SingleLine(true)).Print(&buf, st); err != nil {
+	if err := syntax.NewPrinter(syntax.SingleLine(true)).Print(&buf, &st2); err != nil {
 		return ""
 	}
-	return buf.String()
+	s := buf.String()
+	// Bash deparses a subshell with spaces inside the parens
+	// (`( cmd )`), whereas our single-line printer emits `(cmd)`. Match
+	// bash for the common top-level subshell job; group commands
+	// (`{ cmd; }`) already render with the spaces.
+	if _, ok := st2.Cmd.(*syntax.Subshell); ok &&
+		strings.HasPrefix(s, "(") && strings.HasSuffix(s, ")") {
+		inner := strings.TrimSpace(s[1 : len(s)-1])
+		s = "( " + inner + " )"
+	}
+	return s
 }
 
 func plainPipelineSubshell(st *syntax.Stmt) (*syntax.Subshell, bool) {
@@ -4118,6 +4137,7 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 			pidCallback: r.bgPidCallback, // see WithBgPidCallback
 			cmd:         backgroundJobText(st),
 			jobControl:  r.monitorActive(),
+			jobID:       r.nextJobID(),
 		}
 		r.bgProcs = append(r.bgProcs, bg)
 		// Stash a pointer to the freshly-appended bgProc on the
@@ -4808,6 +4828,10 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			}
 			// Default mode: the error is reported but the command
 			// still runs (`VAR=7 echo ok` prints ok).
+		}
+
+		if strings.HasPrefix(fields[0], "%") {
+			fields = append([]string{"fg"}, fields...)
 		}
 
 		trace.call(fields[0], fields[1:]...)
