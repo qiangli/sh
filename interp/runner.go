@@ -5039,7 +5039,18 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			prDup.Close()
 			wg.Wait()
 			r.stdin = oldStdin
-			_ = r3 // suppress unused when lastpipe is on
+			// A process substitution spawned while expanding a pipeline
+			// element's words (e.g. `echo x | tee >(cmd)`) registers its
+			// bgProc on that element's sub-runner (r2/r3), which is otherwise
+			// discarded here. Propagate them to the parent so a later `wait`
+			// — and the parent's lifecycle — actually cover them; otherwise
+			// `... | tee >(cmd); wait` returns before cmd's output is flushed,
+			// racily losing it. subshell() starts with empty bgProcs, so these
+			// are only the pipeline's own process substitutions.
+			r.bgProcs = append(r.bgProcs, r2.bgProcs...)
+			if r3 != nil {
+				r.bgProcs = append(r.bgProcs, r3.bgProcs...)
+			}
 			// Track PIPESTATUS. mvdan/sh parses pipes left-associative,
 			// so `a | b | c` is (a | b) | c — X is the nested pipeline
 			// and runs in r2. If r2 itself ran a pipeline, its segment
