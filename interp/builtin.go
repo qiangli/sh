@@ -1336,6 +1336,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		// not a real PID. The shared flagParser doesn't fit here because
 		// `-SIGNAME` is a whole-arg flag, not stacked short flags.
 		listOnly := false
+		posixSignals := r.opts[optPosix]
 		sig := defaultTermSignal
 		remaining := args
 	killFlags:
@@ -1357,7 +1358,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					exit.code = 2
 					return exit
 				}
-				s, ok := signalByName(remaining[1])
+				s, ok := signalByNamePosix(remaining[1], posixSignals)
 				if !ok {
 					return failf(1, "kill: %s: invalid signal specification\n", remaining[1])
 				}
@@ -1380,7 +1381,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			default:
 				// -SIGNAME or -NUMBER (whole flag is the spec)
 				spec := strings.TrimPrefix(arg, "-")
-				s, ok := parseSignalSpec(spec)
+				s, ok := parseSignalSpecPosix(spec, posixSignals)
 				if !ok {
 					return failf(1, "kill: %s: invalid signal specification\n", spec)
 				}
@@ -1391,7 +1392,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		}
 		if listOnly {
 			if len(remaining) == 0 {
-				r.printSignalList()
+				r.printSignalList(posixSignals)
 				break
 			}
 			for _, a := range remaining {
@@ -1407,7 +1408,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					r.errf(r.bashErrPrefix(pos)+"kill: %s: invalid signal specification\n", a)
 					continue
 				}
-				if s, ok := signalByName(a); ok {
+				if s, ok := signalByNamePosix(a, posixSignals); ok {
 					n, _ := signalNumber(s)
 					r.outf("%d\n", n)
 					continue
@@ -3576,23 +3577,28 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		r.updateExpandOpts()
 
 	case "alias":
-		show := func(name string, als alias) {
+		posixFormat := r.opts[optPosix]
+		show := func(name string, als alias, forcePrefix bool) {
 			// Bash displays alias bodies verbatim (single-quoted),
 			// preserving the original text exactly.
-			r.outf("alias %s='%s'\n", name, aliasValue(als))
+			prefix := "alias "
+			if posixFormat && !forcePrefix {
+				prefix = ""
+			}
+			r.outf("%s%s='%s'\n", prefix, name, aliasValue(als))
 		}
 
 		// showAll lists every alias sorted by name, matching bash 5.3
 		// (which keeps its alias table sorted). Go map iteration order is
 		// nondeterministic, so without this the listing flaps run-to-run.
-		showAll := func() {
+		showAll := func(forcePrefix bool) {
 			names := make([]string, 0, len(r.alias))
 			for name := range r.alias {
 				names = append(names, name)
 			}
 			slices.Sort(names)
 			for _, name := range names {
-				show(name, r.alias[name])
+				show(name, r.alias[name], forcePrefix)
 			}
 		}
 
@@ -3601,7 +3607,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		filtered := args
 		if len(filtered) > 0 && filtered[0] == "-p" {
 			filtered = filtered[1:]
-			showAll()
+			showAll(true)
 		} else if len(filtered) > 0 && len(filtered[0]) > 1 && filtered[0][0] == '-' && !strings.Contains(filtered[0], "=") {
 			r.errf("%salias: %s: invalid option\n", r.bashErrPrefix(pos), filtered[0])
 			r.errf("alias: usage: alias [-p] [name[=value] ... ]\n")
@@ -3609,7 +3615,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			return exit
 		}
 		if len(args) == 0 {
-			showAll()
+			showAll(false)
 		}
 		for _, arg := range filtered {
 			name, src, ok := strings.Cut(arg, "=")
@@ -3620,7 +3626,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					exit.code = 1
 					continue
 				}
-				show(name, als)
+				show(name, als, len(args) > 0 && args[0] == "-p")
 				continue
 			}
 			if !validAliasName(name) {
@@ -3704,7 +3710,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			}
 		}
 		if listSignals {
-			r.printSignalList()
+			r.printSignalList(r.opts[optPosix])
 			break
 		}
 		if printTraps && printActions {
@@ -3748,6 +3754,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			// (signal 0), then numeric signals in ascending order,
 			// then ERR/DEBUG/RETURN at the end.
 			sigPrefix := func(name string) string {
+				if r.opts[optPosix] {
+					return name
+				}
 				switch name {
 				case "EXIT", "DEBUG", "ERR", "RETURN":
 					return name
@@ -4562,6 +4571,10 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		r.umask = int(mask)
 	case "export":
 		// Handle "export" when used as a simple command (e.g., IFS=: export x).
+		if len(args) == 0 && r.opts[optPosix] {
+			r.printExportVars()
+			break
+		}
 		for _, arg := range args {
 			eqIdx := strings.IndexByte(arg, '=')
 			if eqIdx >= 0 {
@@ -4588,6 +4601,10 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			}
 		}
 	case "readonly":
+		if len(args) == 0 && r.opts[optPosix] {
+			r.printReadonlyVars(true)
+			break
+		}
 		if len(args) == 1 && (args[0] == "-a" || args[0] == "-A") {
 			r.printArrayVars(args[0], true, r.opts[optPosix])
 			break
@@ -6402,7 +6419,17 @@ var signalNames = map[int]string{
 	15: "TERM",
 }
 
-func (r *Runner) printSignalList() {
+func (r *Runner) printSignalList(posix bool) {
+	if posix {
+		for i, e := range sortedSignalEntries() {
+			if i > 0 {
+				r.outf(" ")
+			}
+			r.outf("%s", e.Name)
+		}
+		r.outf("\n")
+		return
+	}
 	col := 0
 	for i := 1; i <= 15; i++ {
 		if name, ok := signalNames[i]; ok {
@@ -6416,6 +6443,21 @@ func (r *Runner) printSignalList() {
 	if col%5 != 0 {
 		r.outf("\n")
 	}
+}
+
+func signalByNamePosix(name string, posix bool) (killSig, bool) {
+	if posix && strings.HasPrefix(strings.ToUpper(name), "SIG") {
+		return defaultTermSignal, false
+	}
+	return signalByName(name)
+}
+
+func parseSignalSpecPosix(spec string, posix bool) (killSig, bool) {
+	if n, err := strconv.Atoi(spec); err == nil {
+		sig, _, ok := signalByNumber(n)
+		return sig, ok
+	}
+	return signalByNamePosix(spec, posix)
 }
 
 // normalizeSignal converts a signal specification to a canonical name.

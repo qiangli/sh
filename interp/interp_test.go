@@ -1284,8 +1284,16 @@ var runTests = []runTest{
 		"declare -x e=\"1\"\n",
 	},
 	{
+		`set -o posix; export EE=1; export | grep '^export EE='`,
+		"export EE=\"1\"\n",
+	},
+	{
 		`readonly c=immutable; declare -p c`,
 		"declare -r c=\"immutable\"\n",
+	},
+	{
+		`set -o posix; readonly RR=2; readonly | grep '^readonly RR='`,
+		"readonly RR=\"2\"\n",
 	},
 	{
 		`declare -p nonexistent 2>/dev/null; echo "exit: $?"`,
@@ -1800,6 +1808,10 @@ var runTests = []runTest{
 		"alias: foo: not found\nalias foo='echo'\nalias foo=''\n #IGNORE",
 	},
 	{
+		"set -o posix; alias zz=yy; alias; alias -p",
+		"zz='yy'\nalias zz='yy'\n",
+	},
+	{
 		"shopt -s expand_aliases; alias foo=echo\nfoo foo; foo bar",
 		"foo\nbar\n",
 	},
@@ -2220,6 +2232,7 @@ var runTests = []runTest{
 	{"kill -l | head -1", " 1) SIGHUP        2) SIGINT        3) SIGQUIT       4) SIGILL        5) SIGTRAP      \n"},
 	{"diff <(kill -l) <(trap -l)", ""},
 	{"kill -l KILL INT", "9\n2\n"},
+	{"set -o posix; set -- $(kill -l); echo \"$1 $2 $3 $4 $5\"; kill -SIGTERM 999999; echo rc=$?", "HUP INT QUIT ILL TRAP\nkill: SIGTERM: invalid signal specification\nrc=1\n"},
 
 	// setsid / nohup — usage / lookup errors. Real-subprocess delivery is
 	// covered in builtin_proc_test.go (unix-only).
@@ -3494,6 +3507,7 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	{"set -e; trap 'echo A' ERR EXIT; false; echo FAIL", "A\nA\nexit status 1"},
 	{"trap 'foobar' UNKNOWN", "trap: UNKNOWN: invalid signal specification\nexit status 2 #JUSTERR"},
 	{"trap -p NOSIG", "trap: NOSIG: invalid signal specification\nexit status 1 #JUSTERR"},
+	{"set -o posix; trap 'echo x' INT; trap -p INT", "trap -- 'echo x' INT\n"},
 	{
 		"trap -s",
 		"trap: -s: invalid option\ntrap: usage: trap [-Plp] [[action] signal_spec ...]\nexit status 2 #JUSTERR",

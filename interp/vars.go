@@ -1086,7 +1086,24 @@ func (r *Runner) printNamerefVars() {
 	}
 }
 
-func (r *Runner) printReadonlyVars() {
+func (r *Runner) printExportVars() {
+	var names []string
+	r.writeEnv.Each(func(name string, vr expand.Variable) bool {
+		if vr.Exported {
+			names = append(names, name)
+		}
+		return true
+	})
+	slices.Sort(names)
+	for _, name := range names {
+		vr := r.lookupVar(name)
+		if vr.Exported {
+			r.outf("%s\n", formatPosixAttrVar("export", name, vr))
+		}
+	}
+}
+
+func (r *Runner) printReadonlyVars(posix bool) {
 	seen := map[string]bool{}
 	r.writeEnv.Each(func(name string, vr expand.Variable) bool {
 		if vr.ReadOnly {
@@ -1107,9 +1124,20 @@ func (r *Runner) printReadonlyVars() {
 	for _, name := range names {
 		vr := r.lookupVar(name)
 		if vr.ReadOnly {
-			r.outf("%s\n", formatDeclareVar(name, vr, false))
+			if posix {
+				r.outf("%s\n", formatPosixAttrVar("readonly", name, vr))
+			} else {
+				r.outf("%s\n", formatDeclareVar(name, vr, false))
+			}
 		}
 	}
+}
+
+func formatPosixAttrVar(keyword, name string, vr expand.Variable) string {
+	if !vr.Set {
+		return keyword + " " + name
+	}
+	return keyword + " " + name + "=" + bashDeclareQuote(vr.Str)
 }
 
 // formatLocalVar renders a single variable in bash 5.3's `local`

@@ -6337,7 +6337,13 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			return
 		}
 		if !declHadNames && declQuery == "-p" && !jsonMode && cm.Variant.Value == "readonly" {
-			r.printReadonlyVars()
+			r.printReadonlyVars(r.opts[optPosix])
+		}
+		if !declHadNames && declQuery == "" && valType == "" && len(modes) == 1 && !jsonMode && cm.Variant.Value == "export" && r.opts[optPosix] {
+			r.printExportVars()
+		}
+		if !declHadNames && declQuery == "" && valType == "" && len(modes) == 1 && !jsonMode && cm.Variant.Value == "readonly" && r.opts[optPosix] {
+			r.printReadonlyVars(true)
 		}
 		// Bash `local` with no args lists every variable local to
 		// the current function scope in `name=value` form (arrays
