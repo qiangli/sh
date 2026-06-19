@@ -3600,6 +3600,14 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				}
 				sigKeys = append(sigKeys, sig)
 			}
+			// Signals that were SIG_IGN at shell startup are listed as
+			// `trap -- '' SIG` even though no trap could attach to them
+			// (bash showtrap: signal_is_hard_ignored -> empty action).
+			for sig := range r.startupIgnored {
+				if _, ok := r.trapCallbacks[sig]; !ok {
+					sigKeys = append(sigKeys, sig)
+				}
+			}
 			sort.Slice(sigKeys, func(i, j int) bool {
 				si, _ := signalByName(sigKeys[i])
 				sj, _ := signalByName(sigKeys[j])
@@ -3609,13 +3617,19 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			sigOrder = append(sigOrder, "ERR", "DEBUG", "RETURN")
 			for _, sig := range sigOrder {
 				cb, ok := r.trapCallbacks[sig]
-				if !ok {
+				ignored := r.isStartupIgnored(sig)
+				if !ok && !ignored {
 					continue
 				}
 				if len(filter) > 0 && !filter[sig] {
 					continue
 				}
-				quoted := "'" + strings.ReplaceAll(cb, "'", `'\''`) + "'"
+				// A hard-ignored signal always prints an empty action,
+				// regardless of any stale callback string.
+				quoted := "''"
+				if !ignored {
+					quoted = "'" + strings.ReplaceAll(cb, "'", `'\''`) + "'"
+				}
 				r.outf("trap -- %s %s\n", quoted, sigPrefix(sig))
 			}
 			break
@@ -3657,6 +3671,12 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			if sig == "" {
 				return failf(2, "trap: %s: invalid signal specification\n", arg)
 			}
+			// A signal ignored on entry to the shell cannot be trapped or
+			// reset; bash silently ignores the request (trap.c set_signal:
+			// SIG_HARD_IGNORE), leaving it listed as `trap -- '' SIG`.
+			if r.isStartupIgnored(sig) {
+				continue
+			}
 			if reset {
 				delete(r.trapCallbacks, sig)
 				r.disableSignalTrap(sig)
@@ -3674,12 +3694,17 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 						r.callStack[n-1].debugTrace = true
 					}
 				}
-				// Register an OS signal handler so the signal is
-				// delivered to this runner instead of taking its
-				// default disposition (which would kill the process).
-				// An empty callback means "ignore", which still needs
-				// the handler installed to override the default.
-				r.enableSignalTrap(sig)
+				// Adjust the OS disposition so the signal reaches this
+				// runner instead of taking its default action (which would
+				// kill the process). An empty callback means "ignore": set a
+				// real SIG_IGN so an exec'd child inherits it as ignored,
+				// matching bash. A non-empty callback is notified so the
+				// trap handler can run.
+				if callback == "" {
+					r.ignoreSignalTrap(sig)
+				} else {
+					r.enableSignalTrap(sig)
+				}
 			}
 		}
 

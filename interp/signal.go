@@ -7,6 +7,7 @@ import (
 	"context"
 	"os"
 	"os/signal"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -40,10 +41,63 @@ func (r *Runner) trapSignalActive(name string) bool {
 	return ok
 }
 
+// parseHardIgnore decodes the comma-separated signal-name list carried in
+// BashyHardIgnoreEnv into a set of canonical (no-SIG-prefix) names. Unknown or
+// empty entries are dropped. Returns nil when there is nothing to ignore.
+func parseHardIgnore(s string) map[string]bool {
+	if s == "" {
+		return nil
+	}
+	var set map[string]bool
+	for _, name := range strings.Split(s, ",") {
+		sig := normalizeSignal(name)
+		if sig == "" {
+			continue
+		}
+		if _, ok := signalByName(sig); !ok {
+			continue // pseudo-signals can't be hard-ignored
+		}
+		if set == nil {
+			set = make(map[string]bool)
+		}
+		set[sig] = true
+	}
+	return set
+}
+
+// hardIgnoreEnvValue serialises the signals this runner has set to real
+// SIG_IGN (`trap '' SIG`) for the BashyHardIgnoreEnv bridge, so a child shell
+// we exec treats them as ignored-on-entry. Returns "" when none are ignored.
+func (r *Runner) hardIgnoreEnvValue() string {
+	r.sigMu.Lock()
+	defer r.sigMu.Unlock()
+	if len(r.sigIgnored) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(r.sigIgnored))
+	for name := range r.sigIgnored {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return strings.Join(names, ",")
+}
+
+// isStartupIgnored reports whether the named real signal was SIG_IGN when this
+// process started (inherited from a parent shell's `trap '' SIG`). Bash flags
+// such signals as SIG_HARD_IGNORE: a `trap` that tries to set or reset them is
+// a silent no-op, and they are listed as `trap -- '' SIG`. Pseudo-signals are
+// never startup ignored.
+func (r *Runner) isStartupIgnored(name string) bool {
+	if _, ok := signalByName(name); !ok {
+		return false
+	}
+	return r.startupIgnored[name]
+}
+
 // enableSignalTrap ensures the OS signal named is delivered to this runner's
-// pending-signal queue. Called by the `trap` builtin when a handler (or the
-// empty "ignore" handler) is registered for a real signal. Pseudo-signals
-// (EXIT/ERR/DEBUG/RETURN) are not OS signals and are ignored here.
+// pending-signal queue. Called by the `trap` builtin when a non-empty handler
+// is registered for a real signal. Pseudo-signals (EXIT/ERR/DEBUG/RETURN) are
+// not OS signals and are ignored here.
 func (r *Runner) enableSignalTrap(name string) {
 	sig, ok := signalByName(name)
 	if !ok {
@@ -51,6 +105,7 @@ func (r *Runner) enableSignalTrap(name string) {
 	}
 	r.sigMu.Lock()
 	defer r.sigMu.Unlock()
+	delete(r.sigIgnored, name)
 	if r.sigNotify == nil {
 		r.sigNotify = make(map[string]os.Signal)
 		r.pendingSig = make(map[string]int)
@@ -64,6 +119,27 @@ func (r *Runner) enableSignalTrap(name string) {
 	}
 }
 
+// ignoreSignalTrap sets a real OS SIG_IGN for the named signal, the disposition
+// `trap '' SIG` requests. Unlike a notified trap (which installs a Go handler
+// and is therefore reset to SIG_DFL across execve), a real SIG_IGN is inherited
+// as SIG_IGN by exec'd children — which is exactly how bash makes an ignored
+// signal hard-ignored in a child shell (trap.tests/trap1.sub). Pseudo-signals
+// are ignored here; the empty trapCallbacks entry alone records their state.
+func (r *Runner) ignoreSignalTrap(name string) {
+	sig, ok := signalByName(name)
+	if !ok {
+		return
+	}
+	r.sigMu.Lock()
+	defer r.sigMu.Unlock()
+	delete(r.sigNotify, name)
+	if r.sigIgnored == nil {
+		r.sigIgnored = make(map[string]bool)
+	}
+	r.sigIgnored[name] = true
+	signal.Ignore(sig) // also undoes any prior signal.Notify for sig
+}
+
 // disableSignalTrap stops OS delivery for the named signal, restoring its
 // default disposition. Called by the `trap` builtin when a trap is reset.
 func (r *Runner) disableSignalTrap(name string) {
@@ -73,8 +149,11 @@ func (r *Runner) disableSignalTrap(name string) {
 	}
 	r.sigMu.Lock()
 	defer r.sigMu.Unlock()
-	if _, exists := r.sigNotify[name]; exists {
+	_, hadNotify := r.sigNotify[name]
+	_, hadIgnore := r.sigIgnored[name]
+	if hadNotify || hadIgnore {
 		delete(r.sigNotify, name)
+		delete(r.sigIgnored, name)
 		signal.Reset(sig)
 	}
 }

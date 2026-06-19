@@ -192,10 +192,20 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 			selfBin, lookupErr := os.Executable()
 			if lookupErr == nil {
 				newArgs := append([]string{selfBin, path}, args[1:]...)
+				// Re-exec'ing our own shell on a no-shebang script: carry the
+				// parent's hard-ignored signals across so the child shell
+				// treats them as ignored-on-entry, matching how bash inherits
+				// SIG_IGN through execve (trap.tests/trap1.sub).
+				reExecEnv := env
+				if hc.runner != nil {
+					if ign := hc.runner.hardIgnoreEnvValue(); ign != "" {
+						reExecEnv = append(append([]string(nil), env...), BashyHardIgnoreEnv+"="+ign)
+					}
+				}
 				cmd = exec.Cmd{
 					Path:       selfBin,
 					Args:       newArgs,
-					Env:        env,
+					Env:        reExecEnv,
 					Dir:        hc.Dir,
 					Stdin:      hc.Stdin,
 					Stdout:     hc.Stdout,

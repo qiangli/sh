@@ -33,6 +33,15 @@ import (
 
 const BashyInheritedFdsEnv = "BASHY_INHERITED_FDS"
 
+// BashyHardIgnoreEnv carries, across an exec of our own shell binary, the set
+// of signals (comma-separated bash names) that the parent shell had set to
+// SIG_IGN via `trap '' SIG`. The child treats them as ignored-on-entry, i.e.
+// hard-ignored: a `trap` on them is a silent no-op and they list as
+// `trap -- '' SIG`, matching bash's SIG_HARD_IGNORE handling (trap.c). It is an
+// internal channel — filtered out of the environment passed to grandchildren
+// and unset from the child's own variable scope so scripts never observe it.
+const BashyHardIgnoreEnv = "BASHY_HARD_IGNORE"
+
 // A Runner interprets shell programs. It can be reused, but it is not safe for
 // concurrent use. Use [New] to build a new Runner.
 //
@@ -497,8 +506,17 @@ type Runner struct {
 	sigCh         chan os.Signal
 	pendingSig    map[string]int       // signal name -> pending count, guarded by sigMu
 	sigNotify     map[string]os.Signal // signal name -> os.Signal under signal.Notify
+	sigIgnored    map[string]bool      // signal name -> set to real SIG_IGN via `trap '' SIG`
 	sigWake       chan struct{}        // wakes a blocked wait when a signal arrives
 	hasPendingSig atomic.Bool          // fast-path: any pending signal?
+
+	// startupIgnored is the set of signals that were SIG_IGN when this shell
+	// process started — inherited from a parent shell that ran `trap '' SIG`
+	// before exec'ing us (carried in via BashyHardIgnoreEnv). Bash flags these
+	// as SIG_HARD_IGNORE: a `trap` that targets them is a silent no-op and they
+	// list as `trap -- '' SIG`. Computed once at first Reset and shared (read
+	// only) with subshell clones.
+	startupIgnored map[string]bool
 
 	// inSignalTrap and friends implement POSIX interp 1602: a `return`
 	// with no argument executed directly in a signal-trap action yields
@@ -1692,6 +1710,10 @@ func (r *Runner) Reset() {
 		// updates only r.umask afterwards; the process value is never
 		// mutated by this runner.
 		r.umask = processUmask()
+		// Snapshot, once, the signals the parent shell hard-ignored before
+		// exec'ing us (carried in BashyHardIgnoreEnv). This is the shell's
+		// startup state and never changes thereafter.
+		r.startupIgnored = parseHardIgnore(r.Env.Get(BashyHardIgnoreEnv).String())
 	}
 	// reset the internal state
 	*r = Runner{
@@ -1739,6 +1761,7 @@ func (r *Runner) Reset() {
 		startTime:              r.startTime,
 		subshellLevel:          r.subshellLevel,
 		umask:                  r.umask,
+		startupIgnored:         r.startupIgnored,
 		loginShell:             r.loginShell,
 		bashCompatErrors:       r.bashCompatErrors,
 		bashSource:             slices.Clone(r.bashSource),
@@ -1767,6 +1790,11 @@ func (r *Runner) Reset() {
 	}
 	// TODO(v4): Use the supplied Env directly if it implements enough methods.
 	r.writeEnv = &overlayEnviron{parent: r.Env}
+	// The hard-ignore bridge variable is internal: consume it (already
+	// snapshotted into startupIgnored) and hide it from the script's scope.
+	if r.writeEnv.Get(BashyHardIgnoreEnv).IsSet() {
+		r.delVar(BashyHardIgnoreEnv)
+	}
 	if !r.writeEnv.Get("HOME").IsSet() {
 		home, _ := os.UserHomeDir()
 		r.setVarString("HOME", home)
@@ -2014,6 +2042,7 @@ func (r *Runner) subshell(background bool) *Runner {
 		startTime:              r.startTime,
 		subshellLevel:          r.subshellLevel + 1,
 		umask:                  r.umask,
+		startupIgnored:         r.startupIgnored,
 		loginShell:             r.loginShell,
 		bashCompatErrors:       r.bashCompatErrors,
 		auditHandler:           r.auditHandler,

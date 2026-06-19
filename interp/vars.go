@@ -425,7 +425,7 @@ func execEnv(env expand.Environ) []string {
 	if o, ok := env.(*overlayEnviron); ok && o.parent == nil {
 		for _, named := range o.values {
 			name, vr := named.Name, named.Variable
-			if name == BashyInheritedFdsEnv {
+			if name == BashyInheritedFdsEnv || name == BashyHardIgnoreEnv {
 				continue
 			}
 			if !vr.IsSet() && vr.Local && named.Prev.Exported && named.Prev.Kind == expand.String {
@@ -438,7 +438,7 @@ func execEnv(env expand.Environ) []string {
 		return list
 	}
 	for name, vr := range env.Each {
-		if name == BashyInheritedFdsEnv {
+		if name == BashyInheritedFdsEnv || name == BashyHardIgnoreEnv {
 			continue
 		}
 		if !vr.IsSet() && !vr.Local {
