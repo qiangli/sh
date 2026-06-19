@@ -35,9 +35,9 @@ const BashyInheritedFdsEnv = "BASHY_INHERITED_FDS"
 
 // BashyHardIgnoreEnv carries, across an exec of our own shell binary, the set
 // of signals (comma-separated bash names) that the parent shell had set to
-// SIG_IGN via `trap '' SIG`. The child treats them as ignored-on-entry, i.e.
+// SIG_IGN via `trap ” SIG`. The child treats them as ignored-on-entry, i.e.
 // hard-ignored: a `trap` on them is a silent no-op and they list as
-// `trap -- '' SIG`, matching bash's SIG_HARD_IGNORE handling (trap.c). It is an
+// `trap -- ” SIG`, matching bash's SIG_HARD_IGNORE handling (trap.c). It is an
 // internal channel -- filtered out of the environment passed to grandchildren
 // and unset from the child's own variable scope so scripts never observe it.
 const BashyHardIgnoreEnv = "BASHY_HARD_IGNORE"

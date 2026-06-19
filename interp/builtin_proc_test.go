@@ -23,6 +23,7 @@ import (
 	"time"
 
 	qt "github.com/go-quicktest/qt"
+	"golang.org/x/sys/unix"
 
 	"mvdan.cc/sh/v3/interp"
 	"mvdan.cc/sh/v3/syntax"
@@ -188,7 +189,7 @@ func TestSetsidNewSession(t *testing.T) {
 	qt.Assert(t, qt.IsNil(parseErr), qt.Commentf("expected numeric SID, got %q", out))
 
 	// Get our own session id via getsid(0).
-	mySID, err := syscall.Getsid(0)
+	mySID, err := unix.Getsid(0)
 	qt.Assert(t, qt.IsNil(err))
 
 	qt.Assert(t, qt.Not(qt.Equals(childSID, mySID)),
@@ -263,7 +264,7 @@ func TestNohupChildIsInNewSession(t *testing.T) {
 	qt.Assert(t, qt.IsNil(err), qt.Commentf("out: %q", out))
 	childSID, parseErr := strconv.Atoi(strings.TrimSpace(out))
 	qt.Assert(t, qt.IsNil(parseErr), qt.Commentf("expected numeric SID, got %q", out))
-	mySID, err := syscall.Getsid(0)
+	mySID, err := unix.Getsid(0)
 	qt.Assert(t, qt.IsNil(err))
 	qt.Assert(t, qt.Not(qt.Equals(childSID, mySID)),
 		qt.Commentf("nohup child SID %d should differ from runner SID %d", childSID, mySID))
