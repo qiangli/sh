@@ -4673,7 +4673,12 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	{"fg", "fg: no job control\nexit status 1 #JUSTERR"},
 	{"bg", "bg: no job control\nexit status 1 #JUSTERR"},
 	{"fg %99", "fg: no job control\nexit status 1 #JUSTERR"},
-	{"(echo done) & fg", "fg: no job control\nexit status 1 #JUSTERR"},
+	// The backgrounded subshell's stdout is routed to /dev/null: whether its
+	// "done" lands before the foreground `fg` errors and the run is captured
+	// is a race (bg jobs are goroutines here, real forks in bash — it races
+	// in bash too), so keep the captured output deterministic while still
+	// exercising fg with a backgrounded job present.
+	{"(echo done >/dev/null) & fg", "fg: no job control\nexit status 1 #JUSTERR"},
 	{"(exit 7) & fg; echo after=$?", "fg: no job control\nafter=1\n"},
 
 	// umask: per-Runner virtual mask. Reading is 4-digit octal; setting
