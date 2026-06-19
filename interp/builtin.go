@@ -758,9 +758,12 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			if i < len(operandSources) {
 				operand = operandSources[i]
 			}
-			// Bash 5.3: `unset 1bad` errors with "not a valid identifier"
-			// (exit 2) when the var-namespace is in scope. Function names
-			// are unrestricted, so `unset -f 1bad` is allowed.
+			tryFuncOnly := false
+			// Bash 5.3: in POSIX mode, bare `unset 1bad` is lenient:
+			// the invalid name cannot match a variable, so it falls
+			// through to the function namespace. Explicit variable forms
+			// still error with "not a valid identifier" (exit 2).
+			// Function names are unrestricted, so `unset -f 1bad` is allowed.
 			//
 			// Array-element form `name[index]` is valid: unset the
 			// specified element instead of the whole variable.
@@ -778,28 +781,33 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					}
 				}
 				if !syntax.ValidName(arg) {
-					if !explicitVars && strings.Contains(arg, "$(") {
+					if r.opts[optPosix] && !explicitVars && funcs && !nameref {
+						// Bare POSIX unset is both variable and function
+						// unset. An invalid variable name is simply not a
+						// variable match; try the function namespace below.
+						tryFuncOnly = true
+					} else if !explicitVars && strings.Contains(arg, "$(") {
 						for i+1 < len(args) && !syntax.ValidName(args[i+1]) {
 							i++
 						}
 						continue
-					}
-					if r.bashCompatErrors && strings.Contains(arg, "/") {
+					} else if r.bashCompatErrors && strings.Contains(arg, "/") {
+						continue
+					} else {
+						msg := fmt.Sprintf("unset: `%s': not a valid identifier\n", arg)
+						// Bash reports in-function errors at the function body brace line.
+						line := int(pos.Line())
+						if n := len(r.callStack); n > 0 && r.callStack[n-1].bodyLine > 0 {
+							line = int(r.callStack[n-1].bodyLine)
+						}
+						if prefix := r.bashErrPrefixLine(line); prefix != "" {
+							msg = prefix + msg
+						}
+						r.errf("%s", msg)
+						r.reportError("builtin", syntax.NewPos(pos.Offset(), uint(line), pos.Col()), name, msg, 2)
+						exit.code = 2
 						continue
 					}
-					msg := fmt.Sprintf("unset: `%s': not a valid identifier\n", arg)
-					// Bash reports in-function errors at the function body brace line.
-					line := int(pos.Line())
-					if n := len(r.callStack); n > 0 && r.callStack[n-1].bodyLine > 0 {
-						line = int(r.callStack[n-1].bodyLine)
-					}
-					if prefix := r.bashErrPrefixLine(line); prefix != "" {
-						msg = prefix + msg
-					}
-					r.errf("%s", msg)
-					r.reportError("builtin", syntax.NewPos(pos.Offset(), uint(line), pos.Col()), name, msg, 2)
-					exit.code = 2
-					continue
 				}
 			}
 			if nameref {
@@ -820,7 +828,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				r.delVar(arg)
 				continue
 			}
-			if vars {
+			if vars && !tryFuncOnly {
 				switch arg {
 				case "BASH_LINENO", "BASH_SOURCE":
 					r.errf("%sunset: %s: cannot unset\n", r.bashErrPrefix(pos), arg)

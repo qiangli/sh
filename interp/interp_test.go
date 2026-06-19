@@ -3238,6 +3238,18 @@ var runTests = []runTest{
 		"unset: `1bad': not a valid identifier\nunset: `2bad': not a valid identifier\nexit status 2 #JUSTERR",
 	},
 	{
+		"set -o posix; unset 1bad; echo after",
+		"after\n",
+	},
+	{
+		"set -o posix; unset -v 1bad; echo after",
+		"unset: `1bad': not a valid identifier\nexit status 2 #JUSTERR",
+	},
+	{
+		"set -o posix; export 1bad; echo after",
+		"export: invalid name \"1bad\"\nexit status 1 #JUSTERR",
+	},
+	{
 		"notinpath=1; notinpath() { echo func; }; notinpath; echo $notinpath; unset notinpath; notinpath; echo $notinpath; unset notinpath; notinpath",
 		"func\n1\nfunc\n\n\"notinpath\": executable file not found in $PATH\nexit status 127 #JUSTERR",
 	},
