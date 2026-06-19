@@ -4639,7 +4639,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		// instead of through the declare-family keyword. List the
 		// read-only variables and exit 0, matching the keyword path.
 		if len(args) == 1 && args[0] == "-p" {
-			r.printReadonlyVars()
+			r.printReadonlyVars(r.opts[optPosix])
 			break
 		}
 		for _, arg := range args {
