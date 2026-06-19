@@ -2053,6 +2053,16 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					}
 				}
 			}
+			// POSIX mode: a syntax error in the text given to eval is
+			// fatal in a non-interactive shell (POSIX.1 §2.8.1), since
+			// eval is a special builtin. Only a parse failure exits;
+			// the eval'd command's own non-zero status (e.g. `eval
+			// 'false'`) is not a syntax error and keeps running. This
+			// is the only parse-error path (the alias retry above
+			// breaks out on a successful re-parse).
+			if r.opts[optPosix] {
+				exit.exiting = true
+			}
 			// Bash 5.3 prints eval-time parse errors as
 			// `<file>: eval: line N: <text>` — `eval:` lives between
 			// the filename and `line N:`, not after it as `failf`
@@ -2561,7 +2571,14 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		if !showV && !showVV {
 			if IsBuiltin(args[0]) {
 				exit = r.builtin(ctx, pos, args[0], args[1:])
-				if args[0] == "." || args[0] == "source" {
+				// The `command` prefix strips a special builtin's POSIX
+				// status, including its "exit the shell on a usage/syntax
+				// error" behavior. `.`/`source` flag their own open/option
+				// failures via exiting; `eval` flags a parse error of its
+				// argument the same way (see the eval case above). Clear it
+				// so e.g. `command eval '( '` reports the error yet keeps
+				// the shell running.
+				if args[0] == "." || args[0] == "source" || args[0] == "eval" {
 					exit.exiting = false
 				}
 				return exit
@@ -4570,6 +4587,15 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		}
 		r.umask = int(mask)
 	case "export":
+		// In POSIX mode the parser treats `export`/`readonly` as plain
+		// commands rather than the declare-family keyword, so they reach
+		// this simple-builtin path. `-p` lists exported names and exits
+		// 0 (matching the keyword path); otherwise a leading `-p` would
+		// be misread as an invalid identifier. Mirror the keyword path,
+		// which emits no export listing here.
+		if len(args) == 1 && args[0] == "-p" {
+			break
+		}
 		// Handle "export" when used as a simple command (e.g., IFS=: export x).
 		if len(args) == 0 && r.opts[optPosix] {
 			r.printExportVars()
@@ -4607,6 +4633,13 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		}
 		if len(args) == 1 && (args[0] == "-a" || args[0] == "-A") {
 			r.printArrayVars(args[0], true, r.opts[optPosix])
+			break
+		}
+		// As with `export` above, POSIX mode routes `readonly -p` here
+		// instead of through the declare-family keyword. List the
+		// read-only variables and exit 0, matching the keyword path.
+		if len(args) == 1 && args[0] == "-p" {
+			r.printReadonlyVars()
 			break
 		}
 		for _, arg := range args {

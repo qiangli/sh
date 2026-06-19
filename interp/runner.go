@@ -3989,7 +3989,14 @@ func (r *Runner) posixSpecialBuiltinFatal(name string, args []string) {
 		return err != nil
 	}
 	switch name {
-	case "unset":
+	case "unset", "set", "export", "readonly":
+		// These reach this point only with a non-zero status (the
+		// `r.exit.code == 0` guard above filters success), and their
+		// sole non-zero exits are usage errors (an unknown `set -o`
+		// option, a bad flag) or assignment errors (`export 1bad=2`,
+		// `readonly 1bad=2`). Both are "hard" errors that abort a
+		// non-interactive POSIX shell. Listing forms (`set`, `export
+		// -p`) succeed with status 0 and never get here.
 		r.exit.exiting = true
 	case "return":
 		// "return 42 abcde" fails with "too many arguments", which
