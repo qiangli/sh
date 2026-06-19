@@ -7918,11 +7918,13 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 	// functions during command lookup. Skip the function dispatch
 	// so a function defined before POSIX mode was enabled doesn't
 	// shadow the builtin (`break`, `return`, `exit`, …).
-	if strings.ContainsRune(name, '/') {
+	if r.opts[optPosix] && strings.ContainsRune(name, '/') {
 		// Bash POSIX mode accepts function definitions whose names
-		// contain '/', but never executes them as shell functions.
-		// Keep the definition visible to function-querying builtins
-		// while sending invocations through external command lookup.
+		// contain '/', but never executes them as shell functions:
+		// invocations are sent through external command lookup. In
+		// default (non-POSIX) mode bash DOES execute a slash-named
+		// function (e.g. `function /bin/echo { …; }`), so only skip
+		// the function dispatch when POSIX mode is enabled.
 	} else if r.opts[optPosix] && isPosixSpecialBuiltin(name) && IsBuiltin(name) {
 		// fall through to builtin/exec dispatch below
 	} else if body := r.Funcs[name]; body != nil {
