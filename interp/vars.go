@@ -586,15 +586,22 @@ func (r *Runner) lookupVar(name string) expand.Variable {
 		vr.Kind, vr.Str = expand.String, strconv.Itoa(os.Getppid())
 	case "-":
 		// Bash's $- expands to the single-letter forms of all
-		// currently-set option flags. Always-on defaults (`h` —
-		// hashall, `B` — braceexpand) are surfaced too so the
-		// output is non-empty even on a fresh shell.
+		// currently-set option flags, in bash's canonical order.
+		// Always-on defaults (`h` — hashall, `B` — braceexpand)
+		// are surfaced too so the output is non-empty even on a
+		// fresh shell.
 		var sb strings.Builder
-		if r.commandString {
-			sb.WriteByte('c')
-		}
 		if r.opts[optAllExport] {
 			sb.WriteByte('a')
+		}
+		noOpEnabled := func(name string) bool {
+			if v, ok := r.noOpSetState[name]; ok {
+				return v
+			}
+			return noOpSetOptions[name]
+		}
+		if noOpEnabled("notify") {
+			sb.WriteByte('b')
 		}
 		if r.opts[optErrExit] {
 			sb.WriteByte('e')
@@ -602,11 +609,30 @@ func (r *Runner) lookupVar(name string) expand.Variable {
 		if r.opts[optNoGlob] {
 			sb.WriteByte('f')
 		}
+		sb.WriteByte('h') // hashall (always on)
+		if r.interactiveShell {
+			sb.WriteByte('i')
+		}
+		if r.opts[optKeyword] {
+			sb.WriteByte('k')
+		}
+		if r.noOpSetState["monitor"] && r.interactiveShell {
+			sb.WriteByte('m')
+		}
 		if r.opts[optNoExec] {
 			sb.WriteByte('n')
 		}
+		if noOpEnabled("privileged") {
+			sb.WriteByte('p')
+		}
+		if noOpEnabled("onecmd") {
+			sb.WriteByte('t')
+		}
 		if r.opts[optNoUnset] {
 			sb.WriteByte('u')
+		}
+		if noOpEnabled("verbose") {
+			sb.WriteByte('v')
 		}
 		if r.opts[optXTrace] {
 			sb.WriteByte('x')
@@ -615,12 +641,30 @@ func (r *Runner) lookupVar(name string) expand.Variable {
 			// pipefail has no single-letter form; bash 5.3
 			// emits nothing for it in $-.
 		}
-		sb.WriteByte('h') // hashall (always on)
-		sb.WriteByte('B') // braceexpand (always on)
-		if r.noOpSetState["physical"] {
+		if noOpEnabled("braceexpand") {
+			sb.WriteByte('B')
+		}
+		if r.opts[optNoClobber] {
+			sb.WriteByte('C')
+		}
+		if noOpEnabled("errtrace") {
+			sb.WriteByte('E')
+		}
+		if noOpEnabled("histexpand") && r.interactiveShell {
+			sb.WriteByte('H')
+		}
+		if noOpEnabled("physical") {
 			// `set -P` / `set -o physical` is accept-and-ignore, but
 			// bash surfaces it in $- once toggled on.
 			sb.WriteByte('P')
+		}
+		if noOpEnabled("functrace") {
+			sb.WriteByte('T')
+		}
+		if r.commandString {
+			sb.WriteByte('c')
+		} else if r.standardInput {
+			sb.WriteByte('s')
 		}
 		vr.Kind, vr.Str = expand.String, sb.String()
 	case "RANDOM": // not for cryptographic use

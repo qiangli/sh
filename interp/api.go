@@ -128,7 +128,9 @@ type Runner struct {
 
 	filename            string // only if Node was a File, or set for incremental runs
 	incrementalFilename string
+	interactiveShell    bool
 	commandString       bool
+	standardInput       bool
 
 	// curStmtPos is the position of the currently executing top-level
 	// statement, updated at the top of stmtSync. Error sites that have
@@ -981,6 +983,7 @@ func PromptExpand(fn func(string) string) RunnerOption {
 // but later on it should also change other behavior.
 func Interactive(enabled bool) RunnerOption {
 	return func(r *Runner) error {
+		r.interactiveShell = enabled
 		r.opts[optExpandAliases] = enabled
 		return nil
 	}
@@ -991,6 +994,15 @@ func Interactive(enabled bool) RunnerOption {
 func CommandString(enabled bool) RunnerOption {
 	return func(r *Runner) error {
 		r.commandString = enabled
+		return nil
+	}
+}
+
+// StandardInput marks the runner as executing commands read from standard
+// input. This affects dynamic shell state such as `$-`.
+func StandardInput(enabled bool) RunnerOption {
+	return func(r *Runner) error {
+		r.standardInput = enabled
 		return nil
 	}
 }
@@ -1842,7 +1854,9 @@ func (r *Runner) Reset() {
 		deterministic:          r.deterministic,
 		deterministicSeed:      r.deterministicSeed,
 		deterministicRng:       r.deterministicRng,
+		interactiveShell:       r.interactiveShell,
 		commandString:          r.commandString,
+		standardInput:          r.standardInput,
 		inheritedFds:           maps.Clone(r.inheritedFds),
 		// fdTable is intentionally not preserved across Reset; a reset
 		// runner starts with no inherited non-stdio fds.
@@ -2129,6 +2143,9 @@ func (r *Runner) subshell(background bool) *Runner {
 		deterministicRng:       r.deterministicRng,
 		randomSeeded:           r.randomSeeded,
 		randomSeed:             r.randomSeed,
+		interactiveShell:       r.interactiveShell,
+		commandString:          r.commandString,
+		standardInput:          r.standardInput,
 		// Subshells inherit open fds the way bash does. Clone the map so
 		// child mutations (close, dup) don't leak back to the parent;
 		// the underlying *os.File handles are shared (single OS fd).
