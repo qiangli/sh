@@ -1711,7 +1711,12 @@ zshPrefixLoop:
 				next == '?' || next == ':' || next == '#' || next == '%' ||
 				next == '/'
 			if !pe.Short && !isOperatorNext && p.paramNameStart() {
-				p.checkLang(pe.Pos(), langBashLike|LangMirBSDKorn, "`${!foo}`")
+				// `${!name}` parameter indirection. Bash supports it in
+				// POSIX mode too (`bash --posix`), so allow it under
+				// [LangPOSIX] — unlike the name-prefix listing forms
+				// `${!pre*}` / `${!pre@}`, which remain bash/mksh-only
+				// and are gated separately below.
+				p.checkLang(pe.Pos(), langBashLike|LangMirBSDKorn|LangPOSIX, "`${!foo}`")
 				pe.Excl = true
 			}
 		case '+':

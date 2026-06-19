@@ -2100,7 +2100,7 @@ var errorCases = []errorCase{
 	),
 	errCase(
 		"echo ${!foo[@]}",
-		langErr("1:6: `${!foo}` is a bash/mksh feature; tried parsing as LANG", LangPOSIX),
+		langErr("1:12: arrays are a bash/mksh/zsh feature; tried parsing as LANG", LangPOSIX),
 	),
 	errCase(
 		"foo << < bar",

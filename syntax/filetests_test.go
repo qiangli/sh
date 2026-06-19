@@ -3244,7 +3244,7 @@ var fileTests = []fileTestCase{
 				Index: litWord("@"),
 			}),
 		), LangBash|LangMirBSDKorn),
-		langErr2("1:1: `${!foo}` is a bash/mksh feature; tried parsing as LANG", LangPOSIX),
+		langErr2("1:15: arrays are a bash/mksh/zsh feature; tried parsing as LANG", LangPOSIX),
 	),
 	fileTest(
 		[]string{`${!foo*} ${!bar@}`},
@@ -3260,8 +3260,7 @@ var fileTests = []fileTestCase{
 				Names: NamesPrefixWords,
 			}),
 		), LangBash),
-		langErr2("1:1: `${!foo}` is a bash/mksh feature; tried parsing as LANG", LangPOSIX),
-		langErr2("1:1: `${!foo*}` is a bash feature; tried parsing as LANG", LangMirBSDKorn),
+		langErr2("1:1: `${!foo*}` is a bash feature; tried parsing as LANG", LangPOSIX|LangMirBSDKorn),
 	),
 	fileTest(
 		[]string{`${#?}`},
