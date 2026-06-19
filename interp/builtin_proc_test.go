@@ -242,6 +242,15 @@ func TestDollarBangReturnsRealPid(t *testing.T) {
 		qt.Commentf("kill -0 should report alive; out=%q", out))
 }
 
+func TestWaitPidConsumesReapedStatus(t *testing.T) {
+	if _, err := exec.LookPath("sleep"); err != nil {
+		t.Skip("no sleep on PATH:", err)
+	}
+	out, err := runScript(t, `sleep 0.1 & p=$!; wait $p; echo "rc1=$?"; wait $p 2>/dev/null; echo "rc2=$?"`)
+	qt.Assert(t, qt.IsNil(err), qt.Commentf("out: %q", out))
+	qt.Assert(t, qt.Equals(strings.TrimSpace(out), "rc1=0\nrc2=127"))
+}
+
 // TestDollarBangFallsBackToSentinel: when the backgrounded statement is
 // pure-builtin (no real exec), there's no OS PID to report. $! must
 // fall back to the legacy "g<N>" sentinel so `wait $!` (which the

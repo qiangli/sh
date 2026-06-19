@@ -5048,7 +5048,6 @@ func (r *Runner) removeJob(target *bgProc) {
 		if bg != target {
 			continue
 		}
-		r.saveDonePidStatus(bg)
 		copy(r.bgProcs[i:], r.bgProcs[i+1:])
 		r.bgProcs[len(r.bgProcs)-1] = nil
 		r.bgProcs = r.bgProcs[:len(r.bgProcs)-1]
