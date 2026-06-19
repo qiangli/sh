@@ -4087,6 +4087,14 @@ func backgroundJobText(st *syntax.Stmt) string {
 	return buf.String()
 }
 
+func plainPipelineSubshell(st *syntax.Stmt) (*syntax.Subshell, bool) {
+	if st == nil || st.Negated || st.Background || st.Coprocess || st.Disown || len(st.Redirs) > 0 {
+		return nil, false
+	}
+	subshell, ok := st.Cmd.(*syntax.Subshell)
+	return subshell, ok
+}
+
 func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 	// Run any trap handlers for OS signals that arrived since the last
 	// command. Doing this between statements lets an async signal (e.g.
@@ -4152,6 +4160,8 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 }
 
 func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
+	r.exit.noNegate = false
+
 	// keepRedirs is a per-stmt flag: only exec inside *this* stmt may
 	// set it (to opt out of restoring this stmt's redirects). Reset it
 	// at return so the next stmt starts with proper scoping. Registered
@@ -4262,6 +4272,7 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 			r.noErrExit = true
 			r.cmd(ctx, st.Cmd)
 			r.noErrExit = oldNoErrExit
+			r.exit.noNegate = r.exit.exiting || r.exit.returning || r.exit.fatalExit
 			// Clear any pending exit propagated by inner stmts
 			// under errexit; the outer `!` will set the final
 			// success/failure below.
@@ -4271,7 +4282,7 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 			r.cmd(ctx, st.Cmd)
 		}
 	}
-	if st.Negated {
+	if st.Negated && !r.exit.exiting && !r.exit.returning && !r.exit.fatalExit && !r.exit.noNegate {
 		if r.exit.ok() {
 			r.exit.code = 1
 		} else {
@@ -4328,13 +4339,11 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 	case *syntax.Subshell:
 		r2 := r.subshell(false)
 		r2.enclosingSubshellEnd = cm.Rparen
-		// A subshell does not inherit the parent's EXIT trap, but if
-		// it sets its own, that trap runs when the subshell exits.
-		delete(r2.trapCallbacks, "EXIT")
 		r2.stmts(ctx, cm.Stmts)
-		if cb := r2.trapCallbacks["EXIT"]; cb != "" {
+		if cb := r2.trapCallbacks["EXIT"]; cb != "" && !r2.inheritedExitTrap {
 			r2.trapCallback(ctx, cb, "exit")
 		}
+		r2.exit.noNegate = r2.exit.exiting || r2.exit.returning || r2.exit.fatalExit
 		// Subshells don't exit or return from the surrounding
 		// function: `(return 5)` makes the subshell exit with
 		// status 5, but the outer function/script keeps running.
@@ -4952,11 +4961,6 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			} else {
 				r2.stderr = r.stderr
 			}
-			// Pipeline elements run in subshells; like `( ... )`
-			// they don't inherit the parent's EXIT trap, but a
-			// group/subshell element that sets its own runs it on
-			// exit (bash: trap4.sub).
-			delete(r2.trapCallbacks, "EXIT")
 			// bash 5.3: the last command in a pipeline runs in a
 			// subshell unless `shopt -s lastpipe` is enabled (and
 			// job control is off). Without lastpipe, assignments
@@ -4970,8 +4974,13 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			r.stdin = prDup
 			var wg sync.WaitGroup
 			wg.Go(func() {
-				r2.stmt(ctx, cm.X)
-				if cb := r2.trapCallbacks["EXIT"]; cb != "" {
+				if subshell, ok := plainPipelineSubshell(cm.X); ok {
+					r2.enclosingSubshellEnd = subshell.Rparen
+					r2.stmts(ctx, subshell.Stmts)
+				} else {
+					r2.stmt(ctx, cm.X)
+				}
+				if cb := r2.trapCallbacks["EXIT"]; cb != "" && !r2.inheritedExitTrap {
 					r2.trapCallback(ctx, cb, "exit")
 				}
 				r2.exit.exiting = false // subshells don't exit the parent shell
@@ -4990,9 +4999,13 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				r3.stdin = prDup
 				r3.stdout = r.stdout
 				r3.stderr = r.stderr
-				delete(r3.trapCallbacks, "EXIT")
-				r3.stmt(ctx, cm.Y)
-				if cb := r3.trapCallbacks["EXIT"]; cb != "" {
+				if subshell, ok := plainPipelineSubshell(cm.Y); ok {
+					r3.enclosingSubshellEnd = subshell.Rparen
+					r3.stmts(ctx, subshell.Stmts)
+				} else {
+					r3.stmt(ctx, cm.Y)
+				}
+				if cb := r3.trapCallbacks["EXIT"]; cb != "" && !r3.inheritedExitTrap {
 					r3.trapCallback(ctx, cb, "exit")
 				}
 				r3.exit.exiting = false
@@ -6331,14 +6344,16 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		}
 		r.inTimeClause = false
 		var user, sys time.Duration // not tracked
+		// Bash writes the `time` report to the current standard error
+		// (fd 2), so a preceding `exec 2>...` redirect affects it.
 		if cm.PosixFormat {
-			r.outf("real %s\n", elapsedString(real, true))
-			r.outf("user %s\n", elapsedString(user, true))
-			r.outf("sys %s\n", elapsedString(sys, true))
+			r.errf("real %s\n", elapsedString(real, true))
+			r.errf("user %s\n", elapsedString(user, true))
+			r.errf("sys %s\n", elapsedString(sys, true))
 		} else if format := r.envGet("TIMEFORMAT"); format != "" {
-			r.outf("%s\n", formatTIMEFORMAT(format, real, user, sys))
+			r.errf("%s\n", formatTIMEFORMAT(format, real, user, sys))
 		} else {
-			r.outf("\nreal\t%s\nuser\t%s\nsys\t%s\n",
+			r.errf("\nreal\t%s\nuser\t%s\nsys\t%s\n",
 				elapsedString(real, false),
 				elapsedString(user, false),
 				elapsedString(sys, false))
@@ -7953,11 +7968,56 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 			return
 		}
 	}
+	// Bash NOTFOUND_HOOK (execute_cmd.c): a command name with no slash
+	// that is not found in $PATH invokes the `command_not_found_handle`
+	// function, if defined, with the original words, and uses its exit
+	// status. Names containing a slash bypass the hook and go straight to
+	// the exec path so they report dir/perm/ENOENT diagnostics instead.
+	if body := r.Funcs["command_not_found_handle"]; body != nil &&
+		!strings.ContainsRune(name, '/') {
+		if _, err := LookPathDir(r.Dir, r.writeEnv, name); err != nil {
+			r.call(ctx, pos, append([]string{"command_not_found_handle"}, args...))
+			return
+		}
+	}
 	r.exec(ctx, pos, args)
 }
 
 func (r *Runner) exec(ctx context.Context, pos syntax.Pos, args []string) {
 	r.execAs(ctx, pos, "", false, args)
+}
+
+// execStartError reports whether the `exec NAME` builtin would fail to
+// start NAME, returning the bash-style diagnostic tail (the part after the
+// `<file>: line N: ` prefix) and exit code. It mirrors the `command == 0`
+// branch of exec.def (no-slash names: `exec: NAME: not found` / `exec:
+// NAME: cannot execute: Is a directory`) and the shell_execve errno cases
+// for slash names (`NAME: No such file or directory` etc.). The bool is
+// false when NAME can be started, in which case execve takes over.
+func (r *Runner) execStartError(ctx context.Context, name string) (string, uint8, bool) {
+	if strings.ContainsRune(name, '/') {
+		info, err := r.stat(ctx, name)
+		if err != nil {
+			if os.IsPermission(err) {
+				return name + ": Permission denied", 126, true
+			}
+			return name + ": No such file or directory", 127, true
+		}
+		if info.IsDir() {
+			return name + ": Is a directory", 126, true
+		}
+		if runtime.GOOS != "windows" && info.Mode()&0o111 == 0 {
+			return name + ": Permission denied", 126, true
+		}
+		return "", 0, false
+	}
+	if _, err := LookPathDir(r.Dir, r.writeEnv, name); err != nil {
+		if info, serr := r.stat(ctx, name); serr == nil && info.IsDir() {
+			return "exec: " + name + ": cannot execute: Is a directory", 126, true
+		}
+		return "exec: " + name + ": not found", 127, true
+	}
+	return "", 0, false
 }
 
 // execAs is like exec but advertises argv0 to the exec handler via

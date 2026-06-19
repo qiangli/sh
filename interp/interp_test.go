@@ -4699,7 +4699,7 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	{"exec", ""},
 	{
 		"exec builtin echo foo",
-		"\"builtin\": executable file not found in $PATH\nexit status 127 #JUSTERR",
+		"exec: builtin: not found\nexit status 127 #JUSTERR",
 	},
 	{
 		"exec $GOSH_PROG 'echo foo'; echo bar",

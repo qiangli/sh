@@ -33,6 +33,11 @@ func HandlerCtx(ctx context.Context) HandlerContext {
 
 type handlerCtxKey struct{}
 
+// standardUtilsPath is the default search path used by `command -p` to
+// find the POSIX standard utilities, mirroring bash's STANDARD_UTILS_PATH
+// (config-top.h) when confstr(_CS_PATH) is unavailable.
+const standardUtilsPath = "/bin:/usr/bin:/sbin:/usr/sbin"
+
 type handlerKind int
 
 const (
@@ -139,14 +144,27 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 		path, err := LookPathDir(hc.Dir, hc.Env, args[0])
 		if err != nil {
 			if hc.runner != nil && hc.runner.bashCompatErrors {
-				// Bash 5.3 emits `<file>: line N: <cmd>: command not
-				// found` rather than the Go-error "<cmd>: executable
-				// file not found in $PATH" we'd otherwise leak.
+				// Bash 5.3: a command name containing a slash is not
+				// looked up in $PATH; it goes straight to execve, which
+				// reports the underlying errno (shell_execve in
+				// execute_cmd.c): a directory is `Is a directory` (126),
+				// a missing path is `No such file or directory` (127),
+				// and an unexecutable file is `Permission denied` (126).
+				// A bare name not found in $PATH stays `command not
+				// found` (127).
 				cmd := bashDiagnosticWord(args[0])
 				msg := fmt.Sprintf("%s%s: command not found\n",
 					hc.runner.bashErrPrefix(hc.Pos), cmd)
+				code := 127
+				if strings.ContainsAny(args[0], `/`+string(filepath.Separator)) {
+					reason, c := classifyExecPath(hc.Dir, args[0])
+					msg = fmt.Sprintf("%s%s: %s\n",
+						hc.runner.bashErrPrefix(hc.Pos), cmd, reason)
+					code = c
+				}
 				fmt.Fprint(hc.Stderr, msg)
-				hc.runner.reportError("exec", hc.Pos, args[0], msg, 127)
+				hc.runner.reportError("exec", hc.Pos, args[0], msg, uint8(code))
+				return ExitStatus(code)
 			} else {
 				msg := err.Error()
 				fmt.Fprintln(hc.Stderr, msg)
@@ -312,6 +330,81 @@ func isExecFormatError(err error) bool {
 	return strings.Contains(err.Error(), "exec format error")
 }
 
+// classifyExecPath inspects a command name that contains a slash and
+// failed PATH lookup, returning the bash-style diagnostic reason and exit
+// code that execve would have produced (shell_execve in execute_cmd.c):
+//   - missing path  -> "No such file or directory" (127, EX_NOTFOUND)
+//   - a directory   -> "Is a directory"            (126, EX_NOEXEC)
+//   - not runnable   -> "Permission denied"         (126, EX_NOEXEC)
+func classifyExecPath(dir, file string) (string, int) {
+	target := file
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(dir, file)
+	}
+	info, err := os.Stat(target)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "No such file or directory", 127
+		}
+		if os.IsPermission(err) {
+			return "Permission denied", 126
+		}
+		return "No such file or directory", 127
+	}
+	if info.IsDir() {
+		return "Is a directory", 126
+	}
+	return "Permission denied", 126
+}
+
+// checkBinaryFile mirrors bash's check_binary_file (general.c): a sample
+// is "binary" if it begins with the ELF magic, or has a NUL byte before
+// the end of its first line (first two lines if it starts with `#!`).
+func checkBinaryFile(sample []byte) bool {
+	if len(sample) >= 4 && sample[0] == 0x7f && sample[1] == 'E' && sample[2] == 'L' && sample[3] == 'F' {
+		return true
+	}
+	nline := 1
+	if len(sample) >= 2 && sample[0] == '#' && sample[1] == '!' {
+		nline = 2
+	}
+	for _, c := range sample {
+		if c == '\n' {
+			nline--
+			if nline == 0 {
+				return false
+			}
+		}
+		if c == 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// isBinarySource reports whether content should be rejected by the source
+// builtin as a binary file: check_binary_file on the first 80 bytes, or
+// more than 256 NUL bytes total (the FEVAL_BUILTIN guard in evalfile.c).
+func isBinarySource(content []byte) bool {
+	sample := content
+	if len(sample) > 80 {
+		sample = sample[:80]
+	}
+	if checkBinaryFile(sample) {
+		return true
+	}
+	nulls := 0
+	for _, c := range content {
+		if c == 0 {
+			nulls++
+			if nulls > 256 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func checkStat(dir, file string, checkExec bool) (string, error) {
 	target := file
 	if !filepath.IsAbs(target) {
@@ -325,7 +418,7 @@ func checkStat(dir, file string, checkExec bool) (string, error) {
 	if m.IsDir() {
 		return "", fmt.Errorf("is a directory")
 	}
-	if checkExec && runtime.GOOS != "windows" && m&0o111 == 0 {
+	if checkExec && runtime.GOOS != "windows" && (m&0o111 == 0 || !canExec(target)) {
 		return "", fmt.Errorf("permission denied")
 	}
 	// Return the input form (`./e`, `bin/foo`, `/abs/path`) so

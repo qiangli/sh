@@ -37,6 +37,13 @@ func mkfifo(path string, mode uint32) error {
 	return unix.Mkfifo(path, mode)
 }
 
+// canExec reports whether the current effective user may execute path.
+// Bash's PATH search uses sh_eaccess(file, X_OK) (findcmd.c), so a file
+// with the execute bit set only for other users is correctly skipped.
+func canExec(path string) bool {
+	return unix.Faccessat(unix.AT_FDCWD, path, unix.X_OK, unix.AT_EACCESS) == nil
+}
+
 // dupPipeFd duplicates a pipe file descriptor, returning a new *os.File
 // that refers to the same underlying pipe endpoint. The caller can close
 // the original fd while the duplicate remains valid. This is used to

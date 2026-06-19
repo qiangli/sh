@@ -2159,7 +2159,33 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		}
 		defer f.Close()
 		p := syntax.NewParser()
-		file, err := p.Parse(f, path)
+		var file *syntax.File
+		if r.bashCompatErrors {
+			// Bash evalfile.c: a sourced directory is `<builtin>: <path>:
+			// is a directory` (status 1); a binary file (ELF magic, a NUL
+			// in the first line, or >256 NULs total) is `<builtin>:
+			// <path>: cannot execute binary file` (status 126,
+			// EX_BINARY_FILE).
+			if info, serr := r.stat(ctx, path); serr == nil && info.IsDir() {
+				r.errf("%s%s: %s: is a directory\n", r.bashErrPrefix(pos), name, path)
+				exit.code = 1
+				return exit
+			}
+			content, rerr := io.ReadAll(f)
+			if rerr != nil {
+				r.errf("%s%s: %s: %s\n", r.bashErrPrefix(pos), name, path, bashOSError(rerr))
+				exit.code = 1
+				return exit
+			}
+			if isBinarySource(content) {
+				r.errf("%s%s: %s: cannot execute binary file\n", r.bashErrPrefix(pos), name, path)
+				exit.code = 126
+				return exit
+			}
+			file, err = p.Parse(bytes.NewReader(content), path)
+		} else {
+			file, err = p.Parse(f, path)
+		}
 		if err != nil {
 			return failf(1, "source: %v\n", err)
 		}
@@ -2391,12 +2417,31 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				argv0 = "-" + filepath.Base(args[0])
 			}
 		}
+		// Bash `exec NAME`: if NAME can't be started, print the
+		// diagnostic and either exit the shell or, with `shopt -s
+		// execfail` (no_exit_on_failed_exec), stay alive with the failure
+		// status. The redirections applied for this command are undone on
+		// the failure path (keepRedirs stays false), matching exec17.sub.
+		execfail := false
+		if opt, _ := r.bashOptByName("execfail"); opt != nil {
+			execfail = *opt
+		}
+		if tail, code, startErr := r.execStartError(ctx, args[0]); startErr {
+			r.errf("%s%s\n", r.bashErrPrefix(pos), tail)
+			r.reportError("exec", pos, args[0], tail, code)
+			exit.code = code
+			if !execfail {
+				exit.exiting = true
+			}
+			return exit
+		}
 		r.exit.exiting = true
 		r.execAs(ctx, pos, argv0, clearEnv, args)
 		exit = r.exit
 	case "command":
-		showV := false  // -v: name or path
-		showVV := false // -V: "X is a Y" description
+		showV := false      // -v: name or path
+		showVV := false     // -V: "X is a Y" description
+		useStdPath := false // -p: search the standard utility path
 		fp := flagParser{remaining: args}
 		for fp.more() {
 			switch flag := fp.flag(); flag {
@@ -2410,9 +2455,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					exit.code = 1
 					return exit
 				}
-				// bash 5.3 `-p` runs the lookup with a default PATH;
-				// we don't currently honour the override but accept
-				// the flag so scripts that rely on it don't error.
+				// bash 5.3 `-p` looks the command up using a default
+				// "standard utilities" path, ignoring the caller's
+				// $PATH, while still running it with the caller's
+				// environment (so $PATH inside the child is unchanged).
+				useStdPath = true
 			default:
 				return invalidOpt("command", flag)
 			}
@@ -2421,6 +2468,16 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		if len(args) == 0 {
 			break
 		}
+		// commandLookupEnv resolves command names for this `command`
+		// invocation. With -p it overlays the standard utilities path on
+		// top of the runner's environment; otherwise it is the runner's
+		// environment as-is.
+		lookupEnv := expand.Environ(r.writeEnv)
+		if useStdPath {
+			overlay := newOverlayEnviron(r.writeEnv, false)
+			overlay.Set("PATH", expand.Variable{Kind: expand.String, Str: standardUtilsPath})
+			lookupEnv = overlay
+		}
 		if !showV && !showVV {
 			if IsBuiltin(args[0]) {
 				exit = r.builtin(ctx, pos, args[0], args[1:])
@@ -2428,6 +2485,20 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					exit.exiting = false
 				}
 				return exit
+			}
+			if useStdPath && !strings.ContainsRune(args[0], '/') {
+				// Resolve via the standard path so the child still runs
+				// with the caller's $PATH in its environment. The program
+				// is launched under its original argv[0] (bash passes the
+				// command word, not the resolved path), so $0 inside it
+				// is the name as typed, not the absolute path.
+				if path, lerr := LookPathDir(r.Dir, lookupEnv, args[0]); lerr == nil {
+					orig := args[0]
+					args[0] = path
+					r.execAs(ctx, pos, orig, false, args)
+					exit = r.exit
+					return exit
+				}
 			}
 			r.exec(ctx, pos, args)
 			exit = r.exit
@@ -2459,7 +2530,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				r.outf("%s\n", arg)
 			} else if als, ok := r.alias[arg]; ok && r.opts[optExpandAliases] {
 				r.outf("alias %s='%s'\n", arg, aliasValue(als))
-			} else if path, err := LookPathDir(r.Dir, r.writeEnv, arg); err == nil {
+			} else if path, err := LookPathDir(r.Dir, lookupEnv, arg); err == nil {
 				r.outf("%s\n", path)
 			} else {
 				last = 1
@@ -3679,6 +3750,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			}
 			if reset {
 				delete(r.trapCallbacks, sig)
+				if sig == "EXIT" {
+					r.inheritedExitTrap = false
+				}
 				r.disableSignalTrap(sig)
 				if sig == "CHLD" {
 					r.chldTrapActive.Store(false)
@@ -3688,6 +3762,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					r.trapCallbacks = make(map[string]string)
 				}
 				r.trapCallbacks[sig] = callback
+				if sig == "EXIT" {
+					r.inheritedExitTrap = false
+				}
 				if sig == "CHLD" {
 					// SIGCHLD is reap-driven: a non-empty action fires once
 					// per reaped child; an empty action ("ignore") suppresses.

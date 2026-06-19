@@ -38,7 +38,7 @@ const BashyInheritedFdsEnv = "BASHY_INHERITED_FDS"
 // SIG_IGN via `trap '' SIG`. The child treats them as ignored-on-entry, i.e.
 // hard-ignored: a `trap` on them is a silent no-op and they list as
 // `trap -- '' SIG`, matching bash's SIG_HARD_IGNORE handling (trap.c). It is an
-// internal channel — filtered out of the environment passed to grandchildren
+// internal channel -- filtered out of the environment passed to grandchildren
 // and unset from the child's own variable scope so scripts never observe it.
 const BashyHardIgnoreEnv = "BASHY_HARD_IGNORE"
 
@@ -345,6 +345,10 @@ type Runner struct {
 	// Supported keys: EXIT, ERR, DEBUG, RETURN, and signal names like INT, TERM, etc.
 	trapCallbacks map[string]string
 
+	// inheritedExitTrap is set in subshells where EXIT is visible to
+	// `trap -p`, but reset for execution until the subshell sets it.
+	inheritedExitTrap bool
+
 	// callStack tracks function call frames for caller/BASH_SOURCE/BASH_LINENO/FUNCNAME.
 	callStack []callFrame
 
@@ -551,6 +555,7 @@ type exitStatus struct {
 	returning bool // whether the current function `return`ed
 	exiting   bool // whether the current shell is exiting
 	fatalExit bool // whether the current shell is exiting due to a fatal error; err below must not be nil
+	noNegate  bool // whether a surrounding `!` must not invert this status
 
 	// discarding qualifies exiting: a variable-assignment error in a
 	// non-interactive non-POSIX shell aborts the current top-level
@@ -1768,6 +1773,7 @@ func (r *Runner) Reset() {
 		subshellLevel:          r.subshellLevel,
 		umask:                  r.umask,
 		startupIgnored:         r.startupIgnored,
+		inheritedExitTrap:      r.inheritedExitTrap,
 		loginShell:             r.loginShell,
 		bashCompatErrors:       r.bashCompatErrors,
 		bashSource:             slices.Clone(r.bashSource),
@@ -2080,6 +2086,7 @@ func (r *Runner) subshell(background bool) *Runner {
 	r2.Vars = make(map[string]expand.Variable)
 	r2.alias = maps.Clone(r.alias)
 	r2.trapCallbacks = maps.Clone(r.trapCallbacks)
+	r2.inheritedExitTrap = r.trapCallbacks["EXIT"] != ""
 	// Subshells inherit the ERR trap only with errtrace (set -E), and
 	// the DEBUG/RETURN traps only with functrace (set -T); otherwise
 	// they reset to their default disposition. This keeps the ERR trap

@@ -17,6 +17,13 @@ func mkfifo(path string, mode uint32) error {
 	return fmt.Errorf("unsupported")
 }
 
+// canExec reports whether path is executable. On non-Unix platforms there
+// is no per-user X_OK check, so fall back to the file mode bits already
+// vetted by the caller.
+func canExec(path string) bool {
+	return true
+}
+
 // processUmask returns a Unix-style default on non-Unix platforms,
 // since Windows has no umask equivalent.
 func processUmask() int {
