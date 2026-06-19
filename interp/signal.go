@@ -94,11 +94,30 @@ func (r *Runner) isStartupIgnored(name string) bool {
 	return r.startupIgnored[name]
 }
 
+// notifyChildReaped queues one SIGCHLD trap run for a child that has just been
+// reaped, matching bash's run_sigchld_trap-per-reaped-child in waitchld
+// (jobs.c): each reaped child runs the trap once, fired at the next statement
+// boundary. A no-op when no SIGCHLD trap is active. Driving CHLD from reaps
+// rather than from the OS signal is what makes it deterministic — the kernel
+// coalesces simultaneous child deaths into a single SIGCHLD, losing traps.
+func (r *Runner) notifyChildReaped() {
+	if !r.chldTrapActive.Load() {
+		return
+	}
+	r.markPendingSignal("CHLD")
+}
+
 // enableSignalTrap ensures the OS signal named is delivered to this runner's
 // pending-signal queue. Called by the `trap` builtin when a non-empty handler
 // is registered for a real signal. Pseudo-signals (EXIT/ERR/DEBUG/RETURN) are
 // not OS signals and are ignored here.
 func (r *Runner) enableSignalTrap(name string) {
+	// SIGCHLD is driven from child reaps (notifyChildReaped), not from OS
+	// signal delivery, so it never needs an OS handler. Installing one would
+	// also risk perturbing Go's own child reaping.
+	if name == "CHLD" {
+		return
+	}
 	sig, ok := signalByName(name)
 	if !ok {
 		return
@@ -126,6 +145,12 @@ func (r *Runner) enableSignalTrap(name string) {
 // signal hard-ignored in a child shell (trap.tests/trap1.sub). Pseudo-signals
 // are ignored here; the empty trapCallbacks entry alone records their state.
 func (r *Runner) ignoreSignalTrap(name string) {
+	// SIGCHLD is reap-driven; never touch its OS disposition. A real SIG_IGN
+	// on SIGCHLD would also break child reaping (auto-reaped children make
+	// wait() fail with ECHILD on some systems).
+	if name == "CHLD" {
+		return
+	}
 	sig, ok := signalByName(name)
 	if !ok {
 		return

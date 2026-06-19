@@ -242,6 +242,15 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 			defer stopf()
 
 			err = cmd.Wait()
+			// A reaped foreground child runs the SIGCHLD trap once, like a
+			// reaped background job (bash waitchld). Background execs are
+			// skipped here — their owning bgProc goroutine fires the trap on
+			// completion, so firing here too would double-count. Gated on
+			// job-control (set -m), matching bash's foreground-child reaping.
+			if bg, _ := ctx.Value(bgProcCtxKey{}).(*bgProc); bg == nil &&
+				hc.runner != nil && hc.runner.monitorActive() {
+				hc.runner.notifyChildReaped()
+			}
 		}
 
 		switch err := err.(type) {

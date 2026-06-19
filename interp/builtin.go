@@ -3680,11 +3680,19 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			if reset {
 				delete(r.trapCallbacks, sig)
 				r.disableSignalTrap(sig)
+				if sig == "CHLD" {
+					r.chldTrapActive.Store(false)
+				}
 			} else {
 				if r.trapCallbacks == nil {
 					r.trapCallbacks = make(map[string]string)
 				}
 				r.trapCallbacks[sig] = callback
+				if sig == "CHLD" {
+					// SIGCHLD is reap-driven: a non-empty action fires once
+					// per reaped child; an empty action ("ignore") suppresses.
+					r.chldTrapActive.Store(callback != "")
+				}
 				// A DEBUG trap set inside a function takes effect for the
 				// remainder of that function's commands, even when the
 				// frame was not otherwise traced (bash trap.tests: the

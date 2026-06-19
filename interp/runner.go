@@ -4132,6 +4132,10 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 			r2.exit.exiting = false // subshells don't exit the parent shell
 			r2.exit.discarding = false
 			*bg.exit = r2.exit
+			// One reaped child -> one SIGCHLD trap run (bash waitchld).
+			// Queue before signalling done so a `wait` that unblocks here
+			// sees the pending CHLD at its next statement boundary.
+			r.notifyChildReaped()
 			close(bg.done)
 		}()
 	} else {

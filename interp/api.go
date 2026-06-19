@@ -510,6 +510,12 @@ type Runner struct {
 	sigWake       chan struct{}        // wakes a blocked wait when a signal arrives
 	hasPendingSig atomic.Bool          // fast-path: any pending signal?
 
+	// chldTrapActive mirrors whether a non-empty SIGCHLD trap is currently
+	// installed. Read from background-job goroutines and the exec handler to
+	// decide whether to queue a CHLD trap per reaped child, so it's an atomic
+	// rather than a guarded map read.
+	chldTrapActive atomic.Bool
+
 	// startupIgnored is the set of signals that were SIG_IGN when this shell
 	// process started — inherited from a parent shell that ran `trap '' SIG`
 	// before exec'ing us (carried in via BashyHardIgnoreEnv). Bash flags these
