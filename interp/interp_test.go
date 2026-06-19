@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"math/bits"
 	"os"
 	"os/exec"
@@ -5687,6 +5688,38 @@ func TestRunnerRun(t *testing.T) {
 					c.in, want, got)
 			}
 		})
+	}
+}
+
+func TestRunnerCdStatErrorReason(t *testing.T) {
+	t.Parallel()
+
+	file := parse(t, nil, "cd longname")
+	var cb concBuffer
+	r, err := interp.New(
+		interp.Dir(t.TempDir()),
+		interp.StdIO(nil, &cb, &cb),
+		interp.ExecHandlers(testExecHandler),
+		interp.StatHandler(func(ctx context.Context, name string, followSymlinks bool) (fs.FileInfo, error) {
+			return nil, &fs.PathError{
+				Op:   "stat",
+				Path: name,
+				Err:  errors.New("file name too long"),
+			}
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), runnerRunTimeout)
+	defer cancel()
+	if err := r.Run(ctx, file); err != nil {
+		cb.WriteString(err.Error())
+	}
+	want := "cd: longname: File name too long\nexit status 1"
+	if got := cb.String(); got != want {
+		t.Fatalf("wrong output:\nwant: %q\ngot:  %q", want, got)
 	}
 }
 

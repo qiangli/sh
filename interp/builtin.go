@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -6236,9 +6237,8 @@ func (r *Runner) changeDir(ctx context.Context, cmd, path string) uint8 {
 	apath := r.absPath(path)
 	info, err := r.stat(ctx, apath)
 	if err != nil {
-		// bash format: `<file>: line N: <cmd>: <path>: No such file or directory`
-		r.errf("%s%s: %s: No such file or directory\n",
-			r.bashErrPrefix(r.curStmtPos), cmd, bashDiagnosticWord(path))
+		r.errf("%s%s: %s: %s\n",
+			r.bashErrPrefix(r.curStmtPos), cmd, bashDiagnosticWord(path), cdStatErrorReason(err))
 		return 1
 	}
 	if !info.IsDir() {
@@ -6269,6 +6269,20 @@ func (r *Runner) changeDir(ctx context.Context, cmd, path string) uint8 {
 	r.setVarString("OLDPWD", r.envGet("PWD"))
 	r.setVarString("PWD", apath)
 	return 0
+}
+
+func cdStatErrorReason(err error) string {
+	if errors.Is(err, fs.ErrNotExist) {
+		return "No such file or directory"
+	}
+	if unwrapped := errors.Unwrap(err); unwrapped != nil {
+		err = unwrapped
+	}
+	msg := err.Error()
+	if msg == "" {
+		return msg
+	}
+	return strings.ToUpper(msg[:1]) + msg[1:]
 }
 
 func (r *Runner) cdpath(ctx context.Context, path string) (string, bool, bool) {
