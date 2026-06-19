@@ -1793,16 +1793,36 @@ func terminalWidth() int {
 	return c
 }
 
+// restrictedVars are the variables a restricted shell freezes so that the
+// path used to find commands cannot be redirected. Bash marks each one
+// readonly when restricted mode turns on; every later assignment, declare,
+// local, export, or unset then reports the standard "readonly variable"
+// error (with the usual builtin-name prefix where bash adds one).
+var restrictedVars = [...]string{"PATH", "SHELL", "ENV", "BASH_ENV"}
+
+// markRestrictedVarsReadonly freezes the restricted-shell variables, matching
+// bash's restricted mode. It is idempotent and a no-op until r.writeEnv has
+// been initialized (Reset re-applies it once the scope exists).
+func (r *Runner) markRestrictedVarsReadonly() {
+	if r.writeEnv == nil {
+		return
+	}
+	for _, name := range restrictedVars {
+		vr := r.lookupVar(name)
+		if vr.ReadOnly {
+			continue
+		}
+		vr.ReadOnly = true
+		r.writeEnv.Set(name, vr)
+	}
+}
+
 func (r *Runner) setVar(name string, vr expand.Variable) {
 	if base, idx, ok := splitArrayRef(name); ok && syntax.ValidName(base) && vr.Kind == expand.String {
 		w := &syntax.Word{Parts: []syntax.WordPart{
 			&syntax.Lit{Value: idx},
 		}}
 		r.setVarWithIndex(r.lookupVar(base), base, w, vr)
-		return
-	}
-	if r.opts[optRestricted] && (name == "PATH" || name == "SHELL") {
-		r.errf("%s%s: readonly variable\n", r.bashErrPrefix(r.curStmtPos), name)
 		return
 	}
 	if name == "RANDOM" && vr.IsSet() {

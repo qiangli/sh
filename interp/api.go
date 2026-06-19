@@ -1150,6 +1150,9 @@ func Params(args ...string) RunnerOption {
 					return fmt.Errorf("invalid option: %q", flag)
 				}
 				*opt = enable
+				if opt == &r.opts[optRestricted] && enable {
+					r.markRestrictedVarsReadonly()
+				}
 				continue
 			}
 			value := fp.value()
@@ -1239,6 +1242,9 @@ func Params(args ...string) RunnerOption {
 				return fmt.Errorf("restricted: invalid option name")
 			}
 			*opt = enable
+			if value == "restricted" && enable {
+				r.markRestrictedVarsReadonly()
+			}
 			if value == "posix" {
 				r.setPosixMode(enable)
 			}
@@ -1994,6 +2000,13 @@ func (r *Runner) Reset() {
 	}
 
 	r.dirStack = append(r.dirStack, r.Dir)
+
+	// A restricted shell (set via `-r`/`--restricted`/`rbash` before the
+	// first Reset) freezes PATH, SHELL, ENV, and BASH_ENV. The opts were
+	// captured during New, but writeEnv only exists now, so apply it here.
+	if r.opts[optRestricted] {
+		r.markRestrictedVarsReadonly()
+	}
 
 	r.didReset = true
 }
