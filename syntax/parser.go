@@ -2258,6 +2258,23 @@ func ValidName(val string) bool {
 	return true
 }
 
+func validFuncName(val string, lang LangVariant) bool {
+	if ValidName(val) {
+		return true
+	}
+	if !lang.in(LangPOSIX) || !strings.Contains(val, "/") {
+		return false
+	}
+	for _, r := range val {
+		switch {
+		case asciiLetter(r), asciiDigit(r), r == '_', r == '/':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 func numberLiteral[T string | []byte](val T) bool {
 	if len(val) == 0 {
 		return false
@@ -2728,7 +2745,7 @@ func (p *Parser) gotStmtPipe(s *Stmt, binCmd bool) *Stmt {
 		if p.tok == leftParen && (!p.lang.in(LangZsh) || p.r == ')') {
 			p.next()
 			p.follow(name.ValuePos, "foo(", rightParen)
-			if p.lang.in(LangPOSIX) && !ValidName(name.Value) {
+			if p.lang.in(LangPOSIX) && !validFuncName(name.Value, p.lang) {
 				p.posErr(name.Pos(), "invalid func name")
 			}
 			p.funcDecl(s, name.ValuePos, false, true, name)

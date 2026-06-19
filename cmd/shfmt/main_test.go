@@ -1,6 +1,8 @@
 // Copyright (c) 2016, Daniel Martí <mvdan@mvdan.cc>
 // See LICENSE for licensing information
 
+//go:build !plan9
+
 package main
 
 import (

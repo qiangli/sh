@@ -55,7 +55,7 @@ func mockFileOpen(ctx context.Context, path string, flags int, mode os.FileMode)
 
 func unavailableTTYOpen(ctx context.Context, path string, flags int, mode os.FileMode) (io.ReadWriteCloser, error) {
 	if path == "/dev/tty" {
-		return nil, &os.PathError{Op: "open", Path: path, Err: syscall.ENXIO}
+		return nil, &os.PathError{Op: "open", Path: path, Err: unavailableTTYErr}
 	}
 	return interp.DefaultOpenHandler()(ctx, path, flags, mode)
 }

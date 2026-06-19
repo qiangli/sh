@@ -836,6 +836,15 @@ var fileTests = []fileTestCase{
 		}),
 	),
 	fileTest(
+		[]string{"a/b() { a; }"},
+		langFile(&FuncDecl{
+			Parens: true,
+			Name:   lit("a/b"),
+			Body:   stmt(block(litStmt("a"))),
+		}),
+		flipConfirm2(LangPOSIX), // Bash --posix accepts this; dash rejects it.
+	),
+	fileTest(
 		[]string{"-foo_.,+-bar() { a; }"},
 		langFile(&FuncDecl{
 			Parens: true,

@@ -5679,6 +5679,24 @@ func TestBashCompatPosixSpecialBuiltinFuncDeclInSubshell(t *testing.T) {
 	qt.Assert(t, qt.Equals(cb.String(), "./func5.sub: line 7: `break': is a special builtin\n"))
 }
 
+func TestBashCompatPosixSlashNamedFuncDeclExternalLookup(t *testing.T) {
+	src := "set -o posix\n" +
+		"a/b() { echo RAN; }\n" +
+		"echo \"def-rc=$?\"\n" +
+		"a/b 2>&1\n" +
+		"echo \"exec-rc=$?\"\n"
+	file, err := syntax.NewParser(syntax.Variant(syntax.LangPOSIX)).Parse(strings.NewReader(src), "SH")
+	qt.Assert(t, qt.IsNil(err))
+
+	var cb bytes.Buffer
+	r, err := interp.New(interp.Dir(t.TempDir()), interp.StdIO(nil, &cb, &cb), interp.WithBashCompatErrors(true))
+	qt.Assert(t, qt.IsNil(err))
+
+	err = r.Run(context.Background(), file)
+	qt.Assert(t, qt.IsNil(err))
+	qt.Assert(t, qt.Equals(cb.String(), "def-rc=0\nSH: line 4: a/b: No such file or directory\nexec-rc=127\n"))
+}
+
 func TestBashCompatPosixTempEnvFunctionCallRestore(t *testing.T) {
 	src := "set -o posix\n" +
 		"func() { return 5; }\n" +
