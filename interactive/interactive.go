@@ -80,6 +80,11 @@ type Options struct {
 	PS1 func() string
 	PS2 func() string
 
+	// VimMode, if non-nil, reports whether vi line-editing should be active
+	// (emacs otherwise). It is consulted before each prompt so a runtime
+	// `set -o vi` / `set +o vi` toggle takes effect. Nil = emacs (the default).
+	VimMode func() bool
+
 	// PreCommand, if non-nil, is invoked before each PS1 prompt is shown.
 	// Bash's $PROMPT_COMMAND is the canonical use case.
 	PreCommand func(context.Context, *interp.Runner)
@@ -187,6 +192,7 @@ func Run(ctx context.Context, opts Options) error {
 		Stdin:             stdin,
 		Stdout:            stdout,
 		Stderr:            stderr,
+		VimMode:           opts.VimMode != nil && opts.VimMode(),
 	}
 	if !bindTTY(cfg, stdin) && opts.AssumeTTY {
 		// Virtual TTY: no kernel terminal behind the stream; the far end
@@ -236,6 +242,9 @@ func Run(ctx context.Context, opts Options) error {
 		}
 
 		rl.SetPrompt(ps1())
+		if opts.VimMode != nil {
+			rl.SetVimMode(opts.VimMode()) // honor a runtime `set -o vi` toggle
+		}
 		line, err := rl.Readline()
 		if err != nil {
 			if errors.Is(err, readline.ErrInterrupt) {

@@ -1667,6 +1667,14 @@ func (r *Runner) LangVariant() syntax.LangVariant {
 	return syntax.LangBash
 }
 
+// VimMode reports whether the vi line-editing mode is active (`set -o vi`).
+// Bash defaults to emacs editing; `set -o vi` switches to vi. The interactive
+// line editor consults this between prompts so a runtime `set -o vi`/`set +o
+// vi` toggle takes effect. Reading the absent/nil map key yields false (emacs).
+func (r *Runner) VimMode() bool {
+	return r.noOpSetState["vi"]
+}
+
 // LiveVar returns the current value of the named variable, resolved through
 // the active scope (locals, globals, and the writable environment overlay).
 // Unlike the read-only [Runner.Env] — which holds only the initial
