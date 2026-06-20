@@ -5723,6 +5723,81 @@ func TestRunnerCdStatErrorReason(t *testing.T) {
 	}
 }
 
+// TestRestrictedReadonlyTempAssign checks that a restricted shell (-r),
+// which freezes PATH/SHELL/ENV/BASH_ENV as readonly, follows bash 5.3 for
+// assignments to those variables:
+//
+//   - A readonly-var assignment that PRECEDES a command word (a temporary /
+//     assign_in_env assignment) prints the "readonly variable" error to
+//     stderr but STILL RUNS the command with the unchanged value; the
+//     command's own exit status stands (rc 0 for `echo`).
+//   - A STANDALONE readonly assignment (no command) errors and aborts the
+//     rest of the physical line in a non-interactive shell, exiting 1.
+func TestRestrictedReadonlyTempAssign(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		src        string
+		wantStdout string
+		wantStderr string
+		wantCode   uint8
+	}{
+		{
+			name:       "temp-assign PATH before command runs anyway",
+			src:        "PATH=/x echo hi",
+			wantStdout: "hi\n",
+			wantStderr: "PATH: readonly variable\n",
+			wantCode:   0,
+		},
+		{
+			name:       "temp-assign SHELL before command runs anyway",
+			src:        "SHELL=/x echo hi",
+			wantStdout: "hi\n",
+			wantStderr: "SHELL: readonly variable\n",
+			wantCode:   0,
+		},
+		{
+			name:       "export readonly errors but following command runs",
+			src:        "export PATH=/x; echo done",
+			wantStdout: "done\n",
+			wantStderr: "PATH: readonly variable\n",
+			wantCode:   0,
+		},
+		{
+			name:       "standalone readonly assignment aborts the line",
+			src:        "PATH=/x; echo after",
+			wantStdout: "",
+			wantStderr: "PATH: readonly variable\n",
+			wantCode:   1,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			file, err := syntax.NewParser().Parse(strings.NewReader(tc.src), "")
+			qt.Assert(t, qt.IsNil(err))
+
+			var stdout, stderr bytes.Buffer
+			r, err := interp.New(interp.StdIO(nil, &stdout, &stderr), interp.Params("-r"))
+			qt.Assert(t, qt.IsNil(err))
+
+			var code uint8
+			if err := r.Run(context.Background(), file); err != nil {
+				if s, ok := interp.IsExitStatus(err); ok {
+					code = s
+				} else {
+					t.Fatalf("unexpected error: %v", err)
+				}
+			}
+
+			qt.Check(t, qt.Equals(stdout.String(), tc.wantStdout))
+			qt.Check(t, qt.Equals(stderr.String(), tc.wantStderr))
+			qt.Check(t, qt.Equals(code, tc.wantCode))
+		})
+	}
+}
+
 func TestBashCompatPosixSpecialBuiltinFuncDeclInSubshell(t *testing.T) {
 	src := "( set -o posix\n" +
 		"break()\n" +
