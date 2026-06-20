@@ -2257,6 +2257,16 @@ func (r *Runner) setVarWithIndex(prev expand.Variable, name string, index syntax
 	prev.Kind = expand.Indexed
 	prev.List = list
 	prev.ListSet = listSet
+	// Assigning element 0 makes the array variable "set": `declare -a B` leaves
+	// B declared-but-unset, and `B[0]=v` must flip it so a later `${B[0]}` (or
+	// bare `${B}`/`${B-default}`, which read element 0) under `set -u` reads it
+	// instead of falsely erroring "unbound variable" (arrays via `A=()` are
+	// already set — this makes both forms consistent). Mirrors the associative
+	// rule above: assigning a non-zero index does NOT make `${B-default}` see B
+	// as set, so gate on index 0.
+	if k == 0 {
+		prev.Set = true
+	}
 	r.setVar(name, prev)
 }
 

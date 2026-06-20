@@ -2770,6 +2770,13 @@ var runTests = []runTest{
 	{"set -u; echo $((a[0] > 4)); echo after", "a: unbound variable\nexit status 1 #JUSTERR"},
 	{"set -u; a=(); echo $((a[0] > 4)); echo after", "0\nafter\n"},
 	{"set -u; a=(); echo $((a[b] > 4)); echo after", "b: unbound variable\nexit status 1 #JUSTERR"},
+	// Assigning an element makes a `declare -a` array set, so a later
+	// ${arr[i]} read under `set -u` does not falsely error (matches bash).
+	{"set -u; declare -a B; B[0]=x; echo \"[${B[0]}]\"", "[x]\n"},
+	{"set -u; declare -a B; B[0]=\"\"; echo \"[${B[0]}]\"", "[]\n"},
+	{"set -u; declare -a B; for i in 0 1; do B[$i]=v$i; done; echo \"${B[0]}|${B[1]}\"", "v0|v1\n"},
+	// A declared-but-unassigned array element is still unset under `set -u`.
+	{"set -u; declare -a B; echo \"${B[0]}\"; echo after", "B[0]: unbound variable\nexit status 1 #JUSTERR"},
 	{"a=b b=a; echo $((a + 7)); echo after", "b: expression recursion level exceeded (error token is \"b\")\nafter\n"},
 	{"x=4+; declare -i x; x+=7 y=4; echo x=$x y=$y", "bashy: line 1: 4+: 1:2: `+` must be followed by an expression\nx=4+ y=\n"},
 	{"x=8; echo $((--x++)); echo after", "++: assignment requires lvalue (error token is \"++ \")\nafter\n"},
