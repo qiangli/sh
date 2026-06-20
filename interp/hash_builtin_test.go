@@ -91,3 +91,49 @@ func TestHashBuiltin_P_missingArgs(t *testing.T) {
 		})
 	}
 }
+
+func TestHashEmptyListingPosix(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		script string
+		want   string
+	}{
+		{
+			name:   "default",
+			script: "hash",
+			want:   "hash: hash table empty\n",
+		},
+		{
+			name:   "posix",
+			script: "set -o posix; hash",
+			want:   "",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			file, err := syntax.NewParser().Parse(strings.NewReader(tc.script), "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var stdout strings.Builder
+			runner, err := interp.New(
+				interp.StdIO(nil, &stdout, nil),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := runner.Run(context.Background(), file); err != nil {
+				t.Fatal(err)
+			}
+			if got := stdout.String(); got != tc.want {
+				t.Fatalf("stdout = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
