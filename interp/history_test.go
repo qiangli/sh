@@ -167,6 +167,115 @@ fc -s aa=cc
 	}
 }
 
+func TestFcPosixEditorAndArgs(t *testing.T) {
+	run := func(t *testing.T, src string, editors *[]string) string {
+		t.Helper()
+		histReset()
+		t.Cleanup(histReset)
+		dir := t.TempDir()
+		path := filepath.Join(dir, "script.sh")
+		if err := os.WriteFile(path, []byte(src), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(src), path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		editorHandler := func(next ExecHandlerFunc) ExecHandlerFunc {
+			return func(ctx context.Context, args []string) error {
+				switch args[0] {
+				case "ed", "vi":
+					*editors = append(*editors, args[0])
+					return nil
+				}
+				return next(ctx, args)
+			}
+		}
+		var buf bytes.Buffer
+		r, err := New(Dir(dir), StdIO(nil, &buf, &buf), ExecHandlers(editorHandler))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := r.Run(context.Background(), file); err != nil {
+			t.Logf("run error: %v", err)
+		}
+		return buf.String()
+	}
+
+	for _, tt := range []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			name: "non-posix editor fallback",
+			src: `HISTFILE=/dev/null
+unset FCEDIT EDITOR
+set -o history
+echo selected
+fc
+`,
+			want: "vi",
+		},
+		{
+			name: "posix editor fallback",
+			src: `HISTFILE=/dev/null
+unset FCEDIT EDITOR
+set -o history
+set -o posix
+echo selected
+fc
+`,
+			want: "ed",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var editors []string
+			run(t, tt.src, &editors)
+			if len(editors) != 1 || editors[0] != tt.want {
+				t.Fatalf("editors = %v, want [%s]", editors, tt.want)
+			}
+		})
+	}
+
+	var editors []string
+	out := run(t, `HISTFILE=/dev/null
+set -o history
+echo base
+fc -s echo extra
+printf 'status:%s\n' "$?"
+`, &editors)
+	want := "base\necho base\nbase\nstatus:0\n"
+	if out != want {
+		t.Errorf("non-posix fc -s extra args:\n got: %q\nwant: %q", out, want)
+	}
+
+	editors = nil
+	out = run(t, `HISTFILE=/dev/null
+set -o history
+set -o posix
+echo base
+fc -s echo extra
+printf 'status:%s\n' "$?"
+`, &editors)
+	want = "base\nfc: too many arguments\nstatus:1\n"
+	if out != want {
+		t.Errorf("posix fc -s extra args:\n got: %q\nwant: %q", out, want)
+	}
+
+	editors = nil
+	out = run(t, `HISTFILE=/dev/null
+set -o history
+set -o posix
+echo base
+fc -l echo echo extra
+printf 'status:%s\n' "$?"
+`, &editors)
+	if !strings.Contains(out, "\t echo base\n") || !strings.HasSuffix(out, "status:0\n") {
+		t.Errorf("posix fc -l extra args:\n got: %q", out)
+	}
+}
+
 func TestHistoryExpansionDesignators(t *testing.T) {
 	out := runHistScript(t, `HISTFILE=/dev/null
 set -o history
