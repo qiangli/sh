@@ -47,6 +47,13 @@ type Options struct {
 	// defaults to [syntax.LangBash].
 	Lang syntax.LangVariant
 
+	// PosixMode applies POSIX behavioral parse rules on top of Lang
+	// (see [syntax.PosixMode]) without switching to the stricter
+	// LangPOSIX grammar — for a `bash --posix` style shell that keeps
+	// bash syntax. Off by default; opt-in so other consumers are
+	// unaffected.
+	PosixMode bool
+
 	// Stdin is the input source. When it is an *os.File on a TTY, the
 	// package auto-wires raw-mode handling against that fd — required for
 	// arrow keys, history navigation, and Ctrl-C. Otherwise Run falls
@@ -213,7 +220,7 @@ func Run(ctx context.Context, opts Options) error {
 
 	rl, err := readline.NewFromConfig(cfg)
 	if err != nil {
-		return runFallback(ctx, opts.Runner, stdin, stdout, stderr, lang, ps1, ps2, onRunError, opts.PreCommand)
+		return runFallback(ctx, opts.Runner, stdin, stdout, stderr, lang, opts.PosixMode, ps1, ps2, onRunError, opts.PreCommand)
 	}
 	defer rl.Close()
 
@@ -275,7 +282,7 @@ func Run(ctx context.Context, opts Options) error {
 		// probe uses a fresh parser — mirrors the cmd/bashy pattern.
 		input := line
 		for {
-			pp := syntax.NewParser(syntax.Variant(lang))
+			pp := syntax.NewParser(syntax.Variant(lang), syntax.PosixMode(opts.PosixMode))
 			_, perr := pp.Parse(strings.NewReader(input), "")
 			if perr == nil {
 				break
@@ -299,7 +306,7 @@ func Run(ctx context.Context, opts Options) error {
 			continue
 		}
 
-		parser := syntax.NewParser(syntax.Variant(lang))
+		parser := syntax.NewParser(syntax.Variant(lang), syntax.PosixMode(opts.PosixMode))
 		prog, perr := parser.Parse(strings.NewReader(input), "")
 		if perr != nil {
 			_, _ = io.WriteString(stderr, perr.Error()+"\n")
@@ -443,7 +450,7 @@ func runAssumedTTY(ctx context.Context, opts Options, r *interp.Runner, stdin io
 		// readline loop, using a fresh parser per probe.
 		input := line
 		for {
-			pp := syntax.NewParser(syntax.Variant(lang))
+			pp := syntax.NewParser(syntax.Variant(lang), syntax.PosixMode(opts.PosixMode))
 			_, perr := pp.Parse(strings.NewReader(input), "")
 			if perr == nil || !pp.Incomplete() {
 				break
@@ -460,7 +467,7 @@ func runAssumedTTY(ctx context.Context, opts Options, r *interp.Runner, stdin io
 			continue
 		}
 
-		parser := syntax.NewParser(syntax.Variant(lang))
+		parser := syntax.NewParser(syntax.Variant(lang), syntax.PosixMode(opts.PosixMode))
 		prog, perr := parser.Parse(strings.NewReader(input), "")
 		if perr != nil {
 			_, _ = io.WriteString(stderr, perr.Error()+"\n")
@@ -602,8 +609,8 @@ func (h *fileHistory) At(idx int) string {
 // that pre-existed in cmd/bashy/runInteractiveBasic and outpost's
 // shell.Session.Run prior to this package — kept here so Run() has a
 // single entry point regardless of TTY status.
-func runFallback(ctx context.Context, r *interp.Runner, stdin io.Reader, stdout, stderr io.Writer, lang syntax.LangVariant, ps1, ps2 func() string, onRunError func(error), preCommand func(context.Context, *interp.Runner)) error {
-	parser := syntax.NewParser(syntax.Variant(lang))
+func runFallback(ctx context.Context, r *interp.Runner, stdin io.Reader, stdout, stderr io.Writer, lang syntax.LangVariant, posixMode bool, ps1, ps2 func() string, onRunError func(error), preCommand func(context.Context, *interp.Runner)) error {
+	parser := syntax.NewParser(syntax.Variant(lang), syntax.PosixMode(posixMode))
 	if preCommand != nil {
 		preCommand(ctx, r)
 	}

@@ -119,6 +119,24 @@ func Variant(l LangVariant) ParserOption {
 	return func(p *Parser) { p.lang = l }
 }
 
+// PosixMode applies POSIX behavioral parse rules on top of the chosen
+// [Variant], mirroring bash's posixly_correct / `bash --posix`: bash syntax
+// (arrays, ${v:off:len}, ${v^^}, …) is still parsed, but single quotes inside
+// ${...} are treated literally and function names are validated strictly. Use
+// this with [Variant]([LangBash]) to parse exactly what `bash --posix` parses
+// — as opposed to [LangPOSIX], which is the stricter pure-POSIX grammar that
+// rejects bash extensions outright.
+func PosixMode(enabled bool) ParserOption {
+	return func(p *Parser) { p.posixMode = enabled }
+}
+
+// posixBehavior reports whether POSIX behavioral parse rules apply: either the
+// pure-POSIX grammar is selected, or [PosixMode] layered bash --posix rules on
+// top of a bash-family grammar.
+func (p *Parser) posixBehavior() bool {
+	return p.lang.in(LangPOSIX) || p.posixMode
+}
+
 func (l LangVariant) String() string {
 	switch l {
 	case langBashLegacy, LangBash:
@@ -536,6 +554,13 @@ type Parser struct {
 
 	keepComments bool
 	lang         LangVariant
+	// posixMode mirrors bash's posixly_correct: it applies POSIX *behavioral*
+	// parse rules (single quotes literal inside ${...}, stricter function
+	// names) ON TOP OF the current LangVariant, WITHOUT switching to the
+	// stricter LangPOSIX grammar. This is how `bash --posix` works — it keeps
+	// bash syntax (arrays, ${v:off:len}, ${v^^}, …) and only toggles those
+	// targeted posix rules. Set via [PosixMode].
+	posixMode bool
 
 	// mb is the LC_CTYPE multibyte charset used to advance non-UTF-8
 	// multibyte characters (e.g. Big5), mirroring bash's MB_CUR_MAX. It
@@ -798,7 +823,7 @@ func (p *Parser) postNested(s saveState) {
 }
 
 func (p *Parser) posixParamExpExpSingleQuotesLiteral() bool {
-	if !p.lang.in(LangPOSIX) || !p.paramExpExpDblQuoted {
+	if !p.posixBehavior() || !p.paramExpExpDblQuoted {
 		return false
 	}
 	switch p.paramExpExpOp {
@@ -2258,11 +2283,11 @@ func ValidName(val string) bool {
 	return true
 }
 
-func validFuncName(val string, lang LangVariant) bool {
+func validFuncName(val string, posix bool) bool {
 	if ValidName(val) {
 		return true
 	}
-	if !lang.in(LangPOSIX) || !strings.Contains(val, "/") {
+	if !posix || !strings.Contains(val, "/") {
 		return false
 	}
 	for _, r := range val {
@@ -2745,7 +2770,7 @@ func (p *Parser) gotStmtPipe(s *Stmt, binCmd bool) *Stmt {
 		if p.tok == leftParen && (!p.lang.in(LangZsh) || p.r == ')') {
 			p.next()
 			p.follow(name.ValuePos, "foo(", rightParen)
-			if p.lang.in(LangPOSIX) && !validFuncName(name.Value, p.lang) {
+			if p.posixBehavior() && !validFuncName(name.Value, p.posixBehavior()) {
 				p.posErr(name.Pos(), "invalid func name")
 			}
 			p.funcDecl(s, name.ValuePos, false, true, name)
