@@ -7,9 +7,12 @@ package interp
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
+
+	"mvdan.cc/sh/v3/syntax"
 )
 
 type killSig struct {
@@ -81,6 +84,12 @@ func signalName(sig killSig) (string, bool) {
 
 func signalForOS(sig killSig) os.Signal {
 	return sig.Signal
+}
+
+// notifyForegroundSignalDeath is a no-op on non-Unix platforms: waitStatus
+// there cannot report Signaled()/Signal()/CoreDump(), so the foreground
+// signal-death notification (#25/#26) never applies.
+func (r *Runner) notifyForegroundSignalDeath(w io.Writer, pos syntax.Pos, pid int, status waitStatus, args []string) {
 }
 
 // continueIfStopped is a no-op on non-Unix: there is no SIGCONT analog,

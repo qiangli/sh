@@ -282,6 +282,15 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 				if ctx.Err() != nil {
 					return ctx.Err()
 				}
+				// #25/#26: a foreground external command killed by a fatal
+				// signal in a non-interactive shell prints a bash-style status
+				// line to stderr in default mode; POSIX mode stays silent,
+				// deferring to wait/jobs. Background `&` jobs have their own
+				// notification path (bgProcCtxKey is non-nil for them), so only
+				// foreground execs notify here.
+				if bg, _ := ctx.Value(bgProcCtxKey{}).(*bgProc); bg == nil && hc.runner != nil {
+					hc.runner.notifyForegroundSignalDeath(hc.Stderr, hc.Pos, cmd.Process.Pid, status, args)
+				}
 				return ExitStatus(128 + status.Signal())
 			}
 			return ExitStatus(err.ExitCode())

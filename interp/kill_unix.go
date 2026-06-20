@@ -6,12 +6,15 @@
 package interp
 
 import (
+	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
 	"syscall"
 
 	"golang.org/x/sys/unix"
+	"mvdan.cc/sh/v3/syntax"
 )
 
 type killSig = syscall.Signal
@@ -99,6 +102,91 @@ func signalNumber(sig killSig) (int, bool) {
 func signalName(sig killSig) (string, bool) {
 	_, name, ok := signalByNumber(int(sig))
 	return name, ok
+}
+
+// signalDescriptions maps a canonical signal name (no "SIG" prefix, as used
+// by killSignals) to bash's human-readable description (j_strsignal /
+// siglist.c), e.g. "Segmentation fault". Note that bash 5.3 reports SIGFPE as
+// "Arithmetic exception" (not "Floating point exception"), which is what we
+// reproduce here.
+var signalDescriptions = map[string]string{
+	"HUP":    "Hangup",
+	"INT":    "Interrupt",
+	"QUIT":   "Quit",
+	"ILL":    "Illegal instruction",
+	"TRAP":   "Trace/breakpoint trap",
+	"ABRT":   "Aborted",
+	"BUS":    "Bus error",
+	"FPE":    "Arithmetic exception",
+	"KILL":   "Killed",
+	"USR1":   "User defined signal 1",
+	"SEGV":   "Segmentation fault",
+	"USR2":   "User defined signal 2",
+	"PIPE":   "Broken pipe",
+	"ALRM":   "Alarm clock",
+	"TERM":   "Terminated",
+	"CHLD":   "Child exited",
+	"CONT":   "Continued",
+	"STOP":   "Stopped (signal)",
+	"TSTP":   "Stopped",
+	"TTIN":   "Stopped (tty input)",
+	"TTOU":   "Stopped (tty output)",
+	"URG":    "Urgent I/O condition",
+	"XCPU":   "CPU time limit exceeded",
+	"XFSZ":   "File size limit exceeded",
+	"VTALRM": "Virtual timer expired",
+	"PROF":   "Profiling timer expired",
+	"WINCH":  "Window changed",
+	"IO":     "I/O possible",
+	"SYS":    "Bad system call",
+}
+
+// signalDescription returns bash's human-readable description for sig, e.g.
+// SIGSEGV -> "Segmentation fault". ok is false for signals with no known
+// description (in which case no death notification is printed).
+func signalDescription(sig killSig) (desc string, ok bool) {
+	name, ok := signalName(sig)
+	if !ok {
+		return "", false
+	}
+	desc, ok = signalDescriptions[name]
+	return desc, ok
+}
+
+// notifyForegroundSignalDeath prints bash's status line for a FOREGROUND
+// external command that was killed by a fatal signal (#25/#26), mirroring
+// jobs.c notify_of_job_status for a non-interactive shell:
+//
+//   - Only non-interactive shells notify; an interactive shell's job-control
+//     reporting is handled elsewhere, so this is a no-op when interactiveShell.
+//   - POSIX mode (`set -o posix`) stays completely silent, deferring the
+//     report to `wait`/`jobs`.
+//   - SIGINT and SIGPIPE are suppressed (bash does not announce these).
+//   - A signal that dumped core prints the prefixed form
+//     "<prog>: line N: <pid> <description> (core dumped) <cmd>"; any other
+//     terminating signal (e.g. SIGTERM) prints the bare form
+//     "<description> <cmd>". This core-dump gating reproduces every measured
+//     bash 5.3 case (SEGV/ABRT/FPE/ILL/BUS prefixed+core, TERM bare).
+//
+// The exit code (128+signal) is set by the caller and unaffected here.
+func (r *Runner) notifyForegroundSignalDeath(w io.Writer, pos syntax.Pos, pid int, status waitStatus, args []string) {
+	if r == nil || r.opts[optPosix] || r.interactiveShell {
+		return
+	}
+	sig := status.Signal()
+	if sig == unix.SIGINT || sig == unix.SIGPIPE {
+		return
+	}
+	desc, ok := signalDescription(sig)
+	if !ok {
+		return
+	}
+	cmd := strings.Join(args, " ")
+	if status.CoreDump() {
+		fmt.Fprintf(w, "%s%d %s (core dumped) %s\n", r.bashErrPrefix(pos), pid, desc, cmd)
+		return
+	}
+	fmt.Fprintf(w, "%s %s\n", desc, cmd)
 }
 
 func signalForOS(sig killSig) os.Signal {
