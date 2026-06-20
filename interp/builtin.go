@@ -1457,6 +1457,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				}
 				if signalStopsJob(sig) {
 					bg.ignoreNextContinue.Store(1)
+					if name, ok := signalName(sig); ok {
+						bg.setStopSignal("SIG" + name)
+					}
 					bg.setState(jobStopped)
 				} else if signalContinuesJob(sig) {
 					bg.ignoreNextContinue.Store(0)
@@ -4305,7 +4308,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			bg.ignoreNextStop.Store(1)
 			bg.setState(jobRunning)
 			r.preferredJobID = bg.jobID
-			r.outf("[%d]%c %s &\n", bg.jobID, r.jobMarker(jobs, bg), bg.cmd)
+			r.out(r.bgJobLine(jobs, bg))
 		}
 	case "fc":
 		return r.fcBuiltin(ctx, pos, args)
@@ -4985,6 +4988,17 @@ func (bg *bgProc) matchesPid(pid int64) bool {
 	return false
 }
 
+// bgJobLine renders the line `bg` prints when it resumes a job in the
+// background, e.g. "[1]+ sleep 10 &". #49: POSIX mode omits the
+// current/previous (+/-) marker, leaving a single space where it would
+// be ("[1] sleep 10 &"), matching bash's bg_builtin / pretty_print_job.
+func (r *Runner) bgJobLine(jobs []*bgProc, bg *bgProc) string {
+	if r.opts[optPosix] {
+		return fmt.Sprintf("[%d] %s &\n", bg.jobID, bg.cmd)
+	}
+	return fmt.Sprintf("[%d]%c %s &\n", bg.jobID, r.jobMarker(jobs, bg), bg.cmd)
+}
+
 // formatJob prints one line of `jobs` output for bg, matching bash's
 // list_one_job. jobs is the ordered real-job list, used to compute the
 // current/previous markers. With pidOnly only the leader PID is printed;
@@ -5004,12 +5018,33 @@ func (r *Runner) formatJob(jobs []*bgProc, bg *bgProc, long, pidOnly bool) {
 	if cmd == "" {
 		cmd = "running"
 	}
+	posix := r.opts[optPosix]
 	state, suffix := "Running", " &"
 	if jobStoppedState(bg) {
+		// #24: POSIX mode annotates the stop signal, e.g. "Stopped(SIGTSTP)";
+		// default mode prints the bare word "Stopped".
 		state, suffix = "Stopped", ""
+		if posix {
+			if sig := bg.getStopSignal(); sig != "" {
+				state = "Stopped(" + sig + ")"
+			}
+		}
 	} else if jobDone(bg) {
-		// Done jobs print the command without a trailing `&`.
+		// #23: Done jobs print the command without a trailing `&`. A zero
+		// exit is "Done" in both modes; a nonzero exit N is "Exit N" in
+		// default mode and "Done(N)" in POSIX mode (bash list_one_job).
 		state, suffix = "Done", ""
+		var code uint8
+		if bg.exit != nil {
+			code = bg.exit.code
+		}
+		if code != 0 {
+			if posix {
+				state = fmt.Sprintf("Done(%d)", code)
+			} else {
+				state = fmt.Sprintf("Exit %d", code)
+			}
+		}
 	}
 	if long {
 		r.outf("[%d]%c %d %-*s%s%s\n", bg.jobID, marker, pid, longestSignalDesc, state, cmd, suffix)

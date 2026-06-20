@@ -165,6 +165,9 @@ func waitExecCmd(ctx context.Context, cmd *exec.Cmd) error {
 			if bg.ignoreNextStop.Swap(0) != 0 {
 				continue
 			}
+			if name, ok := signalName(status.Signal()); ok {
+				bg.setStopSignal("SIG" + name)
+			}
 			bg.setState(jobStopped)
 			continue
 		case status.Continued():

@@ -695,6 +695,15 @@ type bgProc struct {
 
 	ignoreNextContinue atomic.Int32
 
+	// stopSignal is the SIG-prefixed name (e.g. "SIGTSTP", "SIGSTOP") of
+	// the signal that last stopped this job. Recorded so `jobs` in POSIX
+	// mode can print "Stopped(SIGTSTP)" matching bash's printable_job_status.
+	// Empty until the job is stopped, and stays empty on platforms without a
+	// job-control wait path. Guarded by stopSignalMu because the unix
+	// job-control waiter writes it from the bg goroutine while `jobs` reads it.
+	stopSignalMu sync.Mutex
+	stopSignal   string
+
 	// jobID is the stable job-table number reported by `jobs`, `%N` job
 	// specs and `$!`'s "g<N>" sentinel. It is assigned the lowest free
 	// slot when a `&` background job is created and never changes while
@@ -790,6 +799,22 @@ func (bg *bgProc) setState(state jobState) {
 
 func (bg *bgProc) jobState() jobState {
 	return jobState(bg.state.Load())
+}
+
+// setStopSignal records the SIG-prefixed name of the signal that stopped
+// this job, for POSIX-mode `jobs` reporting.
+func (bg *bgProc) setStopSignal(name string) {
+	bg.stopSignalMu.Lock()
+	bg.stopSignal = name
+	bg.stopSignalMu.Unlock()
+}
+
+// getStopSignal returns the SIG-prefixed name of the signal that last
+// stopped this job, or "" if it has never been stopped.
+func (bg *bgProc) getStopSignal() string {
+	bg.stopSignalMu.Lock()
+	defer bg.stopSignalMu.Unlock()
+	return bg.stopSignal
 }
 
 // coprocFdRef identifies which coproc array element a live pipe fd
