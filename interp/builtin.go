@@ -1824,7 +1824,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			//   hits	command
 			//      N	/path
 			if len(r.cmdHashTable) == 0 {
-				r.outf("hash: hash table empty\n")
+				if !r.opts[optPosix] {
+					r.outf("hash: hash table empty\n")
+				}
 				break
 			}
 			names := make([]string, 0, len(r.cmdHashTable))
