@@ -274,6 +274,13 @@ type Runner struct {
 	stdinSourceActive     bool
 	stdinSourceOffset     int
 	stdinSourceBaseOffset int
+	// stdinRedirected is set while a command's fd 0 is bound to an explicit
+	// input redirect (`<`, `<<`, `<<<`). It suppresses the stdin-source reader
+	// above, so a heredoc/here-string/file redirect wins over the
+	// "stdin-script commands consume subsequent lines" feature — matching bash,
+	// where `cat <<E` reads the heredoc body, not later script lines. Saved and
+	// restored around each statement's redirects like r.stdin.
+	stdinRedirected bool
 
 	// aliasLineOverride is non-zero while expanding a multi-stmt
 	// alias body. bashErrPrefix prefers it over the AST stmt's own

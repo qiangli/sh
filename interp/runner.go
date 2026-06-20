@@ -1128,7 +1128,7 @@ func (r *Runner) scriptStdinLineReader() io.Reader {
 }
 
 func (r *Runner) newScriptStdinReader(stopAtNewline bool) io.Reader {
-	if !r.stdinSourceActive || len(r.bashSource) == 0 {
+	if !r.stdinSourceActive || r.stdinRedirected || len(r.bashSource) == 0 {
 		return nil
 	}
 	off := r.stdinSourceStartOffset()
@@ -4204,6 +4204,7 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 	r.coprocReapedFds = nil
 
 	oldIn, oldStdinTTYFallback, oldStdinDevTTY, oldOut, oldErr := r.stdin, r.stdinTTYFallback, r.stdinDevTTY, r.stdout, r.stderr
+	oldStdinRedirected := r.stdinRedirected
 	// Snapshot fdTable only when this statement has redirects that
 	// might mutate it. A coproc statement registers fds in fdTable from
 	// inside cmd() itself, not via redir(), and those changes must
@@ -4336,6 +4337,7 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 		r.stdin, r.stdout, r.stderr = oldIn, oldOut, oldErr
 		r.stdinTTYFallback = oldStdinTTYFallback
 		r.stdinDevTTY = oldStdinDevTTY
+		r.stdinRedirected = oldStdinRedirected
 		if len(st.Redirs) > 0 && !persistNamedRedirs {
 			r.fdTable = oldFdTable
 			r.fdReadTable = oldFdReadTable
@@ -7163,6 +7165,10 @@ func (r *Runner) setReadFd(targetFd int, f *os.File) error {
 		r.stdin = f
 		r.stdinTTYFallback = false
 		r.stdinDevTTY = false
+		// fd 0 bound to an explicit input redirect: suppress the stdin-source
+		// reader so a heredoc/here-string/`<file` wins over the
+		// stdin-script-line-consumption feature (see stdinRedirected).
+		r.stdinRedirected = true
 	case 1, 2:
 		return fmt.Errorf("cannot use fd %d as input target", targetFd)
 	default:
@@ -7265,6 +7271,7 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 			}
 		}
 		r.stdin = pr
+		r.stdinRedirected = true // heredoc body wins over the stdin-source reader
 		return pr, nil
 	}
 

@@ -5912,6 +5912,29 @@ func TestBashCompatMalformedLengthSubstitution(t *testing.T) {
 			"./more-exp.tests: line 7: #: %: arithmetic syntax error: operand expected (error token is \"%\")\n"))
 }
 
+// A script read from stdin (File.Name=="") with bashSource set enables the
+// stdin-source line-consumption feature (commands reading fd0 consume
+// subsequent script lines, like bash). An explicit input redirect must win
+// over it: `read x <<E` reads the heredoc body, not the next script line.
+func TestStdinScriptInputRedirectBeatsLineConsumption(t *testing.T) {
+	run := func(src string) string {
+		file, err := syntax.NewParser().Parse(strings.NewReader(src), "")
+		qt.Assert(t, qt.IsNil(err))
+		var cb bytes.Buffer
+		r, err := interp.New(interp.StdIO(nil, &cb, &cb), interp.WithBashSource([]byte(src)))
+		qt.Assert(t, qt.IsNil(err))
+		_ = r.Run(context.Background(), file)
+		return cb.String()
+	}
+	// heredoc body wins (regression: previously read/cat consumed later lines)
+	qt.Assert(t, qt.Equals(run("read x <<E\nVAL\nE\necho \"[$x]\"\n"), "[VAL]\n"))
+	// here-string too
+	qt.Assert(t, qt.Equals(run("read x <<<hello\necho \"[$x]\"\n"), "[hello]\n"))
+	// but read WITHOUT a redirect still consumes the next script line (the bash
+	// stdin-script quirk): it eats `echo …`, so nothing prints.
+	qt.Assert(t, qt.Equals(run("read x\necho \"[$x]\"\n"), ""))
+}
+
 func TestBashCompatUnsetParameterCustomMessage(t *testing.T) {
 	src := "recho ${ABXD:?\"parameter unset\"}\n"
 	file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(src), "./new-exp.tests")
