@@ -2229,6 +2229,10 @@ parseOpts:
 			subs = append(subs, [2]string{specs[0][:eq], specs[0][eq+1:]})
 			specs = specs[1:]
 		}
+		if r.opts[optPosix] && len(specs) > 1 {
+			h.mu.Unlock()
+			return failf(1, "fc: too many arguments\n")
+		}
 		spec := ""
 		if len(specs) > 0 {
 			spec = specs[0]
@@ -2363,7 +2367,11 @@ parseOpts:
 	if editor == "" {
 		if editor = r.envGet("FCEDIT"); editor == "" {
 			if editor = r.envGet("EDITOR"); editor == "" {
-				editor = "vi"
+				if r.opts[optPosix] {
+					editor = "ed"
+				} else {
+					editor = "vi"
+				}
 			}
 		}
 	}
