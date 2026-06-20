@@ -1642,6 +1642,26 @@ func (r *Runner) LangVariant() syntax.LangVariant {
 	return syntax.LangBash
 }
 
+// LiveVar returns the current value of the named variable, resolved through
+// the active scope (locals, globals, and the writable environment overlay).
+// Unlike the read-only [Runner.Env] — which holds only the initial
+// environment — it reflects assignments made while the runner executes, such
+// as an interactive `PS1=...`. Returns the zero [expand.Variable] (unset) when
+// the name is not declared. Intended for embedders that must read live shell
+// state between runs, e.g. recomputing the prompt each interactive line.
+func (r *Runner) LiveVar(name string) expand.Variable {
+	// Before the first Run, Reset has not built the writable overlay yet;
+	// fall back to the initial environment so callers (e.g. the interactive
+	// prompt, shown before the first command) don't dereference a nil overlay.
+	if r.writeEnv == nil {
+		if r.Env == nil {
+			return expand.Variable{}
+		}
+		return r.Env.Get(name)
+	}
+	return r.lookupVar(name)
+}
+
 func (r *Runner) posixOptByFlag(flag byte) *bool {
 	for i, opt := range &posixOptsTable {
 		if opt.flag == flag {
