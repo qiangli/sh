@@ -286,6 +286,9 @@ var runTests = []runTest{
 	// set -e: the &&/|| exemption (failing LEFT operand) propagates through a
 	// brace group `{ }` (same env), so these don't exit — matches bash.
 	{"set -e; { test x = y && echo hi; }; echo after", "after\n"},
+	// a lone `+` ends options like `-` (must not panic on the 1-char flag).
+	{"set a b c; set + x y; echo \"$@\"", "x y\n"},
+	{"set + -; echo ok", "ok\n"},
 	{"set -e; { false && true; }; echo after", "after\n"},
 	{"set -e; { { false && true; }; }; echo nested", "nested\n"},
 	// tilde expansion in a ${param:+word} alternate word (like the :- default).

@@ -1139,6 +1139,17 @@ func Params(args ...string) RunnerOption {
 				}
 				return nil
 			}
+			if flag == "+" {
+				// A lone `+` ends option processing like `-` (without the
+				// legacy -v/-x reset): remaining args become positional
+				// parameters, and with none the parameters are unchanged.
+				// Without this, flag[1] below panics on the one-char "+"
+				// (`set + -` crashed with index out of range).
+				if args := fp.args(); len(args) > 0 {
+					r.Params = args
+				}
+				return nil
+			}
 			enable := flag[0] == '-'
 			if flag[1] != 'o' {
 				if flag[1] == 'O' {
