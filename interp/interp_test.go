@@ -645,6 +645,18 @@ var runTests = []runTest{
 	{`v=ಇಳಿಕೆಗಳು; printf '<%s> <%s>\n' "${v:0:2}" "${v:0:1}"`, "<ಇಳ> <ಇ>\n"},
 	{`shopt -s nocasematch; v=abcd; printf '%s\n' "${v//A/z}" "${v//BC/x}" "${v//[BC]/x}"`, "zbcd\naxd\naxxd\n"},
 
+	// an empty array has no element[0], so the non-colon ${a-w}/${a+w}
+	// (and [@]/[*]) forms treat it as unset, like bash 5.3
+	{`a=(); echo "${a-NO}"`, "NO\n"},
+	{`a=(); echo "${a+yes}"`, "\n"},
+	{`a=(); echo "${a[@]-NO}"`, "NO\n"},
+	{`a=(); echo ${a[@]+yes}`, "\n"},
+	{`a=(x y); echo "${a-NO}":"${a+yes}"`, "x:yes\n"},
+	{`a=([5]=v); echo "${a-NO}":"${a[@]+yes}"`, "NO:yes\n"},
+	{`declare -A m=([k]=v); echo "${m[@]+yes}":"${m-NO}"`, "yes:NO\n"},
+	// an unterminated bracket class (`[]`) is a literal `[` in bash
+	{`v='[]foo[]'; echo ${v#[]}`, "foo[]\n"},
+
 	// quoted array slicing
 	{`a=(1 2 3 4 5); echo "${a[@]:2:2}"`, "3 4\n"},
 	{`a=(1 2 3 4 5); echo "${a[*]:2:2}"`, "3 4\n"},

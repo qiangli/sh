@@ -250,6 +250,40 @@ func paramExpDefaultTriggers(op syntax.ParExpOperator, vr Variable, str string) 
 	return false
 }
 
+// paramIsSetNonColon reports whether the parameter counts as "set" for the
+// non-colon ${var-w} / ${var+w} tests. Bash treats an empty indexed or
+// associative array as UNSET here: with no element[0] there is no value to
+// address, so `a=(); ${a-w}` and `${a[@]+w}` behave as if `a` were never set.
+// (The colon forms `:-`/`:+` test the expanded string instead and are
+// unaffected.) Positional parameters ($@/$*) and specific subscripts keep
+// their existing semantics via vr.IsSet().
+func paramIsSetNonColon(vr Variable, name string, index syntax.ArithmExpr) bool {
+	if name == "@" || name == "*" {
+		return vr.IsSet()
+	}
+	switch nodeLit(index) {
+	case "@", "*":
+		// Whole-array reference: set iff the array has any element.
+		switch vr.Kind {
+		case Indexed:
+			return vr.IndexedCount() > 0
+		case Associative:
+			return len(vr.Map) > 0
+		}
+	case "":
+		// A scalar reference addresses element[0] (`${a}` == `${a[0]}`),
+		// so an array without that element is unset for this test.
+		switch vr.Kind {
+		case Indexed:
+			return vr.IndexedSet(0)
+		case Associative:
+			_, ok := vr.Map["0"]
+			return ok
+		}
+	}
+	return vr.IsSet()
+}
+
 func indirectDefaultOp(op syntax.ParExpOperator) bool {
 	switch op {
 	case syntax.AlternateUnset, syntax.AlternateUnsetOrNull,
@@ -743,7 +777,7 @@ func (cfg *Config) findReplIndex(pat, name string, n int, start, end bool) [][]i
 	// A `[` with no closing `]` is a literal `[` in bash (`${var#[}` on
 	// `[foo]` -> `foo]`), same as the patsub path in findAllIndex. Without
 	// this, pattern.Regexp rejects the unmatched `[` and the strip no-ops.
-	expr, err := pattern.Regexp(escapeOrphanBrackets(pat), mode)
+	expr, err := pattern.Regexp(escapeOrphanBrackets(escapeEmptyBracketClass(pat)), mode)
 	if err != nil {
 		return nil
 	}
@@ -1433,14 +1467,17 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 		// Expand the substitute word ONLY when it is used, so a command
 		// substitution / arithmetic side effect in `${x:-$((i++))}` does not
 		// run when x is set. These conditions mirror the `switch op` below.
+		// An empty indexed/associative array has no element[0], so the
+		// non-colon ${a-w}/${a+w} forms see it as unset (bash 5.3).
+		setNonColon := paramIsSetNonColon(vr, name, index)
 		wordNeeded := true
 		switch op {
 		case syntax.AlternateUnsetOrNull:
 			wordNeeded = str != ""
 		case syntax.AlternateUnset:
-			wordNeeded = vr.IsSet()
+			wordNeeded = setNonColon
 		case syntax.DefaultUnset:
-			wordNeeded = !vr.IsSet()
+			wordNeeded = !setNonColon
 		case syntax.DefaultUnsetOrNull:
 			wordNeeded = str == "" || starAggregateNull
 		}
@@ -1516,14 +1553,14 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			}
 			str = arg
 		case syntax.AlternateUnset:
-			if vr.IsSet() {
+			if setNonColon {
 				if bashAlternateCommandSubstEOF(pe.Exp.Word) {
 					return "", fmt.Errorf("command substitution: line %d: unexpected EOF while looking for matching `)'", pe.Pos().Line()+2)
 				}
 				str = arg
 			}
 		case syntax.DefaultUnset:
-			if vr.IsSet() {
+			if setNonColon {
 				break
 			}
 			fallthrough
@@ -2115,6 +2152,47 @@ func (cfg *Config) promptWorkingDir(base bool) string {
 	return filepath.Base(pwd)
 }
 
+// escapeEmptyBracketClass escapes a `[` that opens a bracket expression bash
+// cannot terminate because its only `]` is the literal first member: `[]`,
+// `[!]`, `[^]`. escapeOrphanBrackets skips these because it sees a `]` and
+// assumes the class closes; bash instead treats the `[` as a literal, so
+// `${v#[]}` on `[]foo[]` yields `foo[]`. Applied before escapeOrphanBrackets,
+// which then handles the remaining single-`[` orphan cases.
+func escapeEmptyBracketClass(pat string) string {
+	if !strings.Contains(pat, "[") {
+		return pat
+	}
+	var b strings.Builder
+	b.Grow(len(pat) + 2)
+	for i := 0; i < len(pat); i++ {
+		c := pat[i]
+		if c == '\\' && i+1 < len(pat) {
+			b.WriteByte(c)
+			b.WriteByte(pat[i+1])
+			i++
+			continue
+		}
+		if c == '[' {
+			rest := pat[i+1:]
+			if len(rest) > 0 && (rest[0] == '!' || rest[0] == '^') {
+				rest = rest[1:]
+			}
+			// A leading `]` is a literal member; the class still needs a
+			// further `]` to close. With none (and no `[` that could begin a
+			// nested `[:class:]` element) the `[` is an unterminated literal.
+			if len(rest) > 0 && rest[0] == ']' {
+				after := rest[1:]
+				if strings.IndexByte(after, ']') < 0 && strings.IndexByte(after, '[') < 0 {
+					b.WriteString(`\[`)
+					continue
+				}
+			}
+		}
+		b.WriteByte(c)
+	}
+	return b.String()
+}
+
 func (cfg *Config) removePattern(str, pat string, fromEnd, shortest bool) string {
 	mode := pattern.EntireString
 	if cfg.ExtGlob {
@@ -2133,7 +2211,7 @@ func (cfg *Config) removePattern(str, pat string, fromEnd, shortest bool) string
 		// A `[` with no closing `]` is a literal `[` in bash
 		// (`${var#[}` on `[foo]` -> `foo]`); without this the matcher
 		// rejects the unmatched `[` and the strip silently no-ops.
-		matcher, err := internal.ExtendedPatternMatcher(escapeOrphanBrackets(pat), mode)
+		matcher, err := internal.ExtendedPatternMatcher(escapeOrphanBrackets(escapeEmptyBracketClass(pat)), mode)
 		if err != nil {
 			return str
 		}
