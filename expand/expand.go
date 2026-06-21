@@ -4643,7 +4643,11 @@ func (cfg *Config) expandUser(field string, moreFields bool) (prefix, rest strin
 		// No tilde prefix to expand, e.g. "foo".
 		return "", field
 	}
-	i := strings.IndexByte(name, '/')
+	// The tilde-prefix login name is terminated by an unquoted '/' OR ':'
+	// (bash terminates at ':' too, in word and assignment context, since a
+	// login name can't contain ':' — the passwd separator). So `~root:foo`
+	// expands to `/root:foo`, and `~user:~:~` style assignment values work.
+	i := strings.IndexAny(name, "/:")
 	if i < 0 && moreFields {
 		// There is a tilde prefix, but followed by more fields, e.g. "~'foo'".
 		// We only proceed if an unquoted slash was found in this field, e.g. "~/'foo'".

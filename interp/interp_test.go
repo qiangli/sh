@@ -281,6 +281,11 @@ var runTests = []runTest{
 	// tilde expansion in a ${param:+word} alternate word (like the :- default).
 	{"HOME=/h; echo ${HOME:+~/z}", "/h/z\n"},
 	{"HOME=/h; echo \"${HOME:+~/z}\"", "~/z\n"},
+	// tilde login-name terminates at ':' too (bash extension), word + assign;
+	// a ':' after the '/' stays in the path.
+	{"HOME=/h; echo ~:x", "/h:x\n"},
+	{"HOME=/h; v=~:x; echo \"$v\"", "/h:x\n"},
+	{"HOME=/h; echo ~/p:q", "/h/p:q\n"},
 	{"shift a", "shift: a: numeric argument required\nexit status 2 #JUSTERR"},
 	{"shift 1 2", "shift: too many arguments\nexit status 2 #JUSTERR"},
 	{"shift -1", "shift: -1: shift count out of range\nexit status 1 #JUSTERR"},
