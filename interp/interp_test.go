@@ -649,6 +649,8 @@ var runTests = []runTest{
 	{`arr=(0 1 2 3 4 5 6 7 8 9 0 a b c d e f g h); echo ${arr[@]:3:4}`, "3 4 5 6\n"},
 	{`a=([1]=one [3]=three [7]=seven); printf '<%s>\n' "${a[@]:2:2}" "${a[@]: -5}" "${a[*]:2:2}"`, "<three>\n<seven>\n<three>\n<seven>\n<three seven>\n"},
 	{`n=0; (( (a[n]=++n)<7&&a[0] )); printf '<%s>\n' "${a[@]:1}"`, "<1>\n"},
+	// negative array subscript in arithmetic counts from the end (like ${a[-1]}).
+	{"a=(10 20 30); echo $((a[-1] + a[-2]))", "50\n"},
 	{`v=hello; echo ${v:1:-2}`, "ell\n"},
 	{`v=hello; echo ${v: -3:2}`, "ll\n"},
 	{`v=hello; echo ${v:2:}; echo ${v:2}`, "\nllo\n"},

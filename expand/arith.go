@@ -151,6 +151,17 @@ func (cfg *Config) arithmIndexedParamLiteral(word *syntax.Word) (string, bool, e
 	}
 	switch vr.Kind {
 	case Indexed:
+		// A negative subscript counts from the end, as in ${a[-1]}.
+		if index < 0 {
+			indexes := vr.IndexedIndexes()
+			if len(indexes) == 0 {
+				break
+			}
+			index = indexes[len(indexes)-1] + 1 + index
+			if index < 0 {
+				break
+			}
+		}
 		if vr.IndexedSet(index) {
 			return vr.List[index], true, nil
 		}
