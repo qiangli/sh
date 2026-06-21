@@ -296,6 +296,10 @@ var runTests = []runTest{
 	{"HOME=/h; b='c=~/src'; export \"$b\"; echo $c", "~/src\n"},
 	{"HOME=/h; readonly d=~/x; echo $d", "/h/x\n"},
 	{"HOME=/h; b='x=g*'; declare \"$b\"; echo \"$x\"", "g*\n"},
+	// the substitute word of a default/alternate/assign expansion is evaluated
+	// ONLY when used — no side effects leak when the parameter is set.
+	{"i=0; x=x; echo ${x:-$((i++))}; echo $i; echo ${undef:-$((i++))}; echo $i", "x\n0\n0\n1\n"},
+	{"i=0; v=set; echo ${v:+$((i++))}; echo $i", "0\n1\n"},
 	{"shift a", "shift: a: numeric argument required\nexit status 2 #JUSTERR"},
 	{"shift 1 2", "shift: too many arguments\nexit status 2 #JUSTERR"},
 	{"shift -1", "shift: -1: shift count out of range\nexit status 1 #JUSTERR"},

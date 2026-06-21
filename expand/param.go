@@ -1418,9 +1418,38 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			op == syntax.ErrorUnset || op == syntax.ErrorUnsetOrNull
 		isPatternOp := op == syntax.RemSmallPrefix || op == syntax.RemLargePrefix ||
 			op == syntax.RemSmallSuffix || op == syntax.RemLargeSuffix
+		// `$*`-all-null aggregate, computed before the word so the word is
+		// only expanded when actually used (see wordNeeded + the switch op).
+		starAggregateNull := false
+		if name == "*" {
+			starAggregateNull = len(vr.List) > 0
+			for _, elem := range vr.List {
+				if elem != "" {
+					starAggregateNull = false
+					break
+				}
+			}
+		}
+		// Expand the substitute word ONLY when it is used, so a command
+		// substitution / arithmetic side effect in `${x:-$((i++))}` does not
+		// run when x is set. These conditions mirror the `switch op` below.
+		wordNeeded := true
+		switch op {
+		case syntax.AlternateUnsetOrNull:
+			wordNeeded = str != ""
+		case syntax.AlternateUnset:
+			wordNeeded = vr.IsSet()
+		case syntax.DefaultUnset:
+			wordNeeded = !vr.IsSet()
+		case syntax.DefaultUnsetOrNull:
+			wordNeeded = str == "" || starAggregateNull
+		}
 		var arg string
 		var err error
 		switch {
+		case !wordNeeded:
+			// Word unused (e.g. `${x:-WORD}` with x set) — skip expansion so
+			// its command-sub / arithmetic side effects don't run.
 		case cfg.inHeredocBody && isDefaultLike:
 			arg, err = literalKeepAnsiC(cfg, pe.Exp.Word)
 		case isPatternOp:
@@ -1470,16 +1499,6 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 		if (op == syntax.AssignUnset || op == syntax.AssignUnsetOrNull) &&
 			!cfg.insideDoubleQuote && starSliceQuotedNull(pe.Exp.Word) {
 			arg = stripQuotedNulls(arg)
-		}
-		starAggregateNull := false
-		if name == "*" {
-			starAggregateNull = len(vr.List) > 0
-			for _, elem := range vr.List {
-				if elem != "" {
-					starAggregateNull = false
-					break
-				}
-			}
 		}
 		switch op {
 		case syntax.AlternateUnsetOrNull:
