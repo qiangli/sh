@@ -835,6 +835,12 @@ var runTests = []runTest{
 		"aabccc\nbccc\n",
 	},
 	{
+		// a `[` with no closing `]` is a literal `[` in strip patterns
+		// (bash); valid bracket expressions still match.
+		"v='[foo]'; echo ${v#[}; echo ${v#[f}; echo ${v#[a-z]}",
+		"foo]\noo]\n[foo]\n",
+	},
+	{
 		"shopt -s extglob; x=000987; echo ${x##*(0)}",
 		"987\n",
 	},

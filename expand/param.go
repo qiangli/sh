@@ -740,7 +740,10 @@ func (cfg *Config) findReplIndex(pat, name string, n int, start, end bool) [][]i
 	if cfg.NoCaseMatch {
 		mode |= pattern.NoGlobCase
 	}
-	expr, err := pattern.Regexp(pat, mode)
+	// A `[` with no closing `]` is a literal `[` in bash (`${var#[}` on
+	// `[foo]` -> `foo]`), same as the patsub path in findAllIndex. Without
+	// this, pattern.Regexp rejects the unmatched `[` and the strip no-ops.
+	expr, err := pattern.Regexp(escapeOrphanBrackets(pat), mode)
 	if err != nil {
 		return nil
 	}
@@ -2108,7 +2111,10 @@ func (cfg *Config) removePattern(str, pat string, fromEnd, shortest bool) string
 		}
 		splitPoints = removePatternByteSplitPoints
 	} else {
-		matcher, err := internal.ExtendedPatternMatcher(pat, mode)
+		// A `[` with no closing `]` is a literal `[` in bash
+		// (`${var#[}` on `[foo]` -> `foo]`); without this the matcher
+		// rejects the unmatched `[` and the strip silently no-ops.
+		matcher, err := internal.ExtendedPatternMatcher(escapeOrphanBrackets(pat), mode)
 		if err != nil {
 			return str
 		}
