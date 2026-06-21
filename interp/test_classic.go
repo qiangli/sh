@@ -108,8 +108,16 @@ func (p *testParser) testExprBase(fval string) syntax.TestExpr {
 		u.X = p.classicTest(op.String(), false)
 		return u
 	case syntax.TsParen:
-		pe := &syntax.ParenTest{}
 		p.next()
+		// Bash 5.3: a lone `(` with no closing `)` is the 1-arg form — `(`
+		// is a literal non-empty string (true), as in `[ ( ]`. (An empty
+		// group `( )` is still a syntax error, handled below.)
+		if p.eof {
+			return &syntax.Word{Parts: []syntax.WordPart{
+				&syntax.Lit{Value: op.String()},
+			}}
+		}
+		pe := &syntax.ParenTest{}
 		pe.X = p.classicTest(op.String(), false)
 		// Bash 5.3: `( )` with an empty body is a syntax error
 		// (the `)' is found in the place where the argument

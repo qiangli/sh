@@ -269,6 +269,10 @@ var runTests = []runTest{
 	// backslash-newline line continuation splicing a $? (special-param) token.
 	{"echo $\\\n?", "0\n"},
 	{"x=hi; echo $\\\n{x}", "hi\n"},
+	// test/[ : a lone `(` operand is the 1-arg form (literal non-empty string,
+	// true), not an unterminated group.
+	{"[ '(' ] && echo t", "t\n"},
+	{"[ '(' -e / ')' ] && echo grp", "grp\n"},
 	{"shift a", "shift: a: numeric argument required\nexit status 2 #JUSTERR"},
 	{"shift 1 2", "shift: too many arguments\nexit status 2 #JUSTERR"},
 	{"shift -1", "shift: -1: shift count out of range\nexit status 1 #JUSTERR"},
