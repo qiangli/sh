@@ -4730,6 +4730,11 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	{"echo a{à,世界}", "aà a世界\n"},
 	{"echo a{b,c}d{e,f}g", "abdeg abdfg acdeg acdfg\n"},
 	{"echo a{b{x,y},c}d", "abxd abyd acd\n"},
+	// a leading ~ in a brace-expansion result still undergoes tilde expansion
+	// (a trailing empty Lit from `{x,}` must not suppress it); empty elements
+	// are otherwise preserved.
+	{"HOME=/h; echo {~/a,~/b}", "/h/a /h/b\n"},
+	{"echo a{b,}c", "abc ac\n"},
 	{"echo a{1..", "a{1..\n"},
 	{"echo a{1..2}b{4..5}c", "a1b4c a1b5c a2b4c a2b5c\n"},
 	{"echo a{c..f}", "ac ad ae af\n"},

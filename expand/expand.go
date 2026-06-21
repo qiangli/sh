@@ -2198,7 +2198,7 @@ func (cfg *Config) wordField(wps []syntax.WordPart, ql quoteLevel) ([]fieldPart,
 		case *syntax.Lit:
 			s := wp.Value
 			if i == 0 && ql == quoteNone && !cfg.insideDoubleQuote {
-				if prefix, rest := cfg.expandUser(s, len(wps) > 1); prefix != "" {
+				if prefix, rest := cfg.expandUser(s, moreFieldsAfterFirst(wps)); prefix != "" {
 					// TODO: return two separate fieldParts,
 					// like in wordFields?
 					s = prefix + rest
@@ -2749,7 +2749,7 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 		case *syntax.Lit:
 			s := wp.Value
 			if i == 0 {
-				prefix, rest := cfg.expandUser(s, len(wps) > 1)
+				prefix, rest := cfg.expandUser(s, moreFieldsAfterFirst(wps))
 				curField = append(curField, fieldPart{
 					quote: quoteSingle,
 					val:   prefix,
@@ -4787,6 +4787,20 @@ func (cfg *Config) expandTildesAfterColons(s string) string {
 		sb.WriteString(p)
 	}
 	return sb.String()
+}
+
+// moreFieldsAfterFirst reports whether a word has a meaningful part after its
+// first — ignoring trailing empty Lit parts. Brace expansion can leave such an
+// empty Lit behind (e.g. `{~/a,}` yields [Lit("~/a"), Lit("")]); without this,
+// the empty part makes expandUser treat a leading `~` as "followed by another
+// field" and skip tilde expansion. The empty Lit still survives in the value.
+func moreFieldsAfterFirst(wps []syntax.WordPart) bool {
+	for _, wp := range wps[1:] {
+		if lit, ok := wp.(*syntax.Lit); !ok || lit.Value != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func (cfg *Config) expandUser(field string, moreFields bool) (prefix, rest string) {
