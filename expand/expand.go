@@ -296,6 +296,33 @@ func (cfg *Config) ifsJoin(strs []string) string {
 	return strings.Join(strs, sep)
 }
 
+// stripPrintfZeroFlag removes a `0` flag from a printf conversion spec like
+// `%06` or `%-0.2`, leaving the width and precision intact. Bash (and C) ignore
+// the `0` flag for string conversions (`%s`/`%b`) — `%06s` space-pads rather
+// than zero-pads, and never pads before a leading sign. The `0` flag is only the
+// `0` byte(s) in the leading flag run (`-+ #0`), not a `0` that begins the width
+// (e.g. `%60s` is width 60, untouched).
+func stripPrintfZeroFlag(fmts []byte) []byte {
+	if len(fmts) == 0 || fmts[0] != '%' {
+		return fmts
+	}
+	out := make([]byte, 0, len(fmts))
+	out = append(out, '%')
+	i := 1
+	for i < len(fmts) {
+		switch fmts[i] {
+		case '-', '+', ' ', '#':
+			out = append(out, fmts[i])
+		case '0':
+			// drop the zero flag
+		default:
+			return append(out, fmts[i:]...)
+		}
+		i++
+	}
+	return out
+}
+
 // localeCharLen returns the byte width of the character at the start of bs
 // under the current LC_CTYPE charset, mirroring bash's MB_CUR_MAX-driven
 // character stepping. ASCII is one byte; in a legacy multibyte locale (Big5,
@@ -1615,6 +1642,13 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 				c = 's'
 				fallthrough
 			case 's', 'b', 'd', 'i', 'u', 'o', 'x', 'X', 'f', 'F', 'e', 'E', 'g', 'G':
+				// Bash ignores the `0` flag for string conversions
+				// (%s/%b): `%06s` space-pads, not zero-pads, and never
+				// pads before a leading `-`. Strip it so Go's fmt does
+				// the same; numeric conversions keep the zero flag.
+				if c == 's' || c == 'b' {
+					fmts = stripPrintfZeroFlag(fmts)
+				}
 				arg := ""
 				hadArg := len(args) > 0
 				if len(args) > 0 {

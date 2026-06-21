@@ -262,6 +262,10 @@ var runTests = []runTest{
 	{"printf '[%#x][%#x][%#X][%#o]' 0 42 0 0", "[0][0x2a][0][0]"},
 	{"printf '%d %d' \\' \\\"", "0 0"},
 	{"printf '%d' \\'A", "65"},
+	// the `0` flag is ignored for string conversions (%s/%b): space-pad,
+	// never zero-pad and never before a sign; numeric keeps the zero flag.
+	{"printf '[%06s][%06s][%06.2s][%06b]' 42 -42 abcd hi", "[    42][   -42][    ab][    hi]"},
+	{"printf '[%06d][%06d]' 42 -42", "[000042][-00042]"},
 	// getopts: missing required arg reports '?' in verbose mode (no leading ':'
 	// in optstring), ':' only in silent mode.
 	{"set -- -a; getopts 'a:' o 2>/dev/null; echo \"$o/$OPTARG\"", "?/\n"},
