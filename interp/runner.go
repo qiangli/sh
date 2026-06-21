@@ -4263,31 +4263,56 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 			r.curStmtPos = syntax.NewPos(pos.Offset(), pos.Line()+1, pos.Col())
 		}
 	}
-	for _, rd := range st.Redirs {
-		cls, err := r.redir(ctx, rd)
-		if err != nil {
-			r.exit.code = 1
-			// POSIX mode: a redirection error on a special builtin
-			// (`exec 9<nosuchfile`, …) exits a non-interactive shell,
-			// even on the left side of || or &&.
-			if r.opts[optPosix] {
-				if call, ok := st.Cmd.(*syntax.CallExpr); ok && len(call.Args) > 0 &&
-					isPosixSpecialBuiltin(call.Args[0].Lit()) {
-					r.exit.exiting = true
-				}
-			}
-			break
-		}
-		if cls != nil {
-			// Skip the close when keepRedirs is set (exec). The opened
-			// file is now owned by fdTable / stdio and must outlive
-			// this stmtSync call. Read keepRedirs at defer time, not
-			// here, because exec sets it during cmd execution.
-			defer func(c io.Closer) {
+	// POSIX order is: expand the command words, THEN perform redirections.
+	// For a simple command whose arguments contain a command substitution,
+	// defer the redirections until cmd() has expanded the fields — otherwise
+	// `echo $(cat f) > f` would truncate f before $(cat f) reads it. Every
+	// other command keeps applying redirs here: only a command substitution
+	// can read a file the redirect just wrote, so there is no observable
+	// difference for the rest, and the proven path stays untouched.
+	lateRedir := false
+	if call, ok := st.Cmd.(*syntax.CallExpr); ok && len(st.Redirs) > 0 && callExprArgsHaveCmdSubst(call) {
+		lateRedir = true
+	}
+	if lateRedir {
+		r.lateRedirs = st.Redirs
+		r.lateRedirClosers = nil
+		defer func() {
+			for _, c := range r.lateRedirClosers {
 				if !r.keepRedirs && !persistNamedRedirs {
 					c.Close()
 				}
-			}(cls)
+			}
+			r.lateRedirClosers = nil
+			r.lateRedirs = nil
+		}()
+	} else {
+		for _, rd := range st.Redirs {
+			cls, err := r.redir(ctx, rd)
+			if err != nil {
+				r.exit.code = 1
+				// POSIX mode: a redirection error on a special builtin
+				// (`exec 9<nosuchfile`, …) exits a non-interactive shell,
+				// even on the left side of || or &&.
+				if r.opts[optPosix] {
+					if call, ok := st.Cmd.(*syntax.CallExpr); ok && len(call.Args) > 0 &&
+						isPosixSpecialBuiltin(call.Args[0].Lit()) {
+						r.exit.exiting = true
+					}
+				}
+				break
+			}
+			if cls != nil {
+				// Skip the close when keepRedirs is set (exec). The opened
+				// file is now owned by fdTable / stdio and must outlive
+				// this stmtSync call. Read keepRedirs at defer time, not
+				// here, because exec sets it during cmd execution.
+				defer func(c io.Closer) {
+					if !r.keepRedirs && !persistNamedRedirs {
+						c.Close()
+					}
+				}(cls)
+			}
 		}
 	}
 	r.curStmtPos = oldCurStmtPos
@@ -4517,6 +4542,30 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				} else {
 					fields = append(fields, r.fields(arg)...)
 				}
+			}
+		}
+		// Apply redirections that stmtSync deferred until after the words
+		// were expanded (POSIX order; only reached for a CallExpr whose args
+		// contain a command substitution). On failure, skip the command —
+		// the closers opened so far are owned by stmtSync's defer.
+		if r.lateRedirs != nil {
+			redirs := r.lateRedirs
+			r.lateRedirs = nil
+			for _, rd := range redirs {
+				cls, err := r.redir(ctx, rd)
+				if err != nil {
+					r.exit.code = 1
+					if r.opts[optPosix] && len(fields) > 0 && isPosixSpecialBuiltin(fields[0]) {
+						r.exit.exiting = true
+					}
+					break
+				}
+				if cls != nil {
+					r.lateRedirClosers = append(r.lateRedirClosers, cls)
+				}
+			}
+			if !r.exit.ok() {
+				return
 			}
 		}
 		// POSIX mode parses with the POSIX language variant, where
@@ -7661,6 +7710,28 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 		r.setGlobalNamedFdVarString(namedFDVar, strconv.Itoa(targetFd))
 	}
 	return f, nil
+}
+
+// callExprArgsHaveCmdSubst reports whether any argument word of the call
+// contains a command substitution (`$(…)` or backticks). Only such an
+// expansion can read a file that a redirection on the same command writes, so
+// it is the only case that needs redirections deferred until after the words
+// are expanded (the POSIX order). Scoping the late-redir path to it keeps every
+// other command on the original, proven redirection flow.
+func callExprArgsHaveCmdSubst(call *syntax.CallExpr) bool {
+	for _, w := range call.Args {
+		found := false
+		syntax.Walk(w, func(n syntax.Node) bool {
+			if _, ok := n.(*syntax.CmdSubst); ok {
+				found = true
+			}
+			return !found
+		})
+		if found {
+			return true
+		}
+	}
+	return false
 }
 
 func redirWordText(rd *syntax.Redirect) string {

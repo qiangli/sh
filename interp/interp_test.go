@@ -2013,6 +2013,12 @@ var runTests = []runTest{
 		"foo\nfoo\n",
 	},
 	{
+		// POSIX order: a command's words (here a command substitution
+		// reading f) are expanded BEFORE its redirection truncates f.
+		"echo hi >f; echo $(cat f) x >f; cat f",
+		"hi x\n",
+	},
+	{
 		"echo foo >f; echo $(<f*)",
 		"foo\n",
 	},

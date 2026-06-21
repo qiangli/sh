@@ -385,6 +385,16 @@ type Runner struct {
 	// apply to the current shell, and not just the command.
 	keepRedirs bool
 
+	// lateRedirs holds a simple command's redirections when they must be
+	// applied AFTER its words are expanded rather than before — the POSIX
+	// order (expand words, then perform redirections). stmtSync stashes them
+	// here for a CallExpr whose arguments contain a command substitution, and
+	// the CallExpr handler in cmd() applies them once the fields are expanded
+	// (so e.g. `echo $(cat f) > f` reads f before the redirect truncates it).
+	// lateRedirClosers collects the opened closers for stmtSync to close.
+	lateRedirs       []*syntax.Redirect
+	lateRedirClosers []io.Closer
+
 	// trapCallbacks maps signal/pseudo-signal names to trap handler code.
 	// Supported keys: EXIT, ERR, DEBUG, RETURN, and signal names like INT, TERM, etc.
 	trapCallbacks map[string]string
