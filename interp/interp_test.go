@@ -286,6 +286,12 @@ var runTests = []runTest{
 	{"HOME=/h; echo ~:x", "/h:x\n"},
 	{"HOME=/h; v=~:x; echo \"$v\"", "/h:x\n"},
 	{"HOME=/h; echo ~/p:q", "/h/p:q\n"},
+	// declare-family string-parsed arg: a ~ (or glob) from a parameter expansion
+	// must NOT be re-expanded; only a literal name=value assignment tilde-expands.
+	{"HOME=/h; b='c=~/src'; readonly \"$b\"; echo $c", "~/src\n"},
+	{"HOME=/h; b='c=~/src'; export \"$b\"; echo $c", "~/src\n"},
+	{"HOME=/h; readonly d=~/x; echo $d", "/h/x\n"},
+	{"HOME=/h; b='x=g*'; declare \"$b\"; echo \"$x\"", "g*\n"},
 	{"shift a", "shift: a: numeric argument required\nexit status 2 #JUSTERR"},
 	{"shift 1 2", "shift: too many arguments\nexit status 2 #JUSTERR"},
 	{"shift -1", "shift: -1: shift count out of range\nexit status 1 #JUSTERR"},

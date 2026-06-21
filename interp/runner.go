@@ -6903,12 +6903,24 @@ func (r *Runner) flattenAssigns(args []*syntax.Assign) iter.Seq2[*syntax.Assign,
 						as.Naked = true
 					} else {
 						as.Value = &syntax.Word{Parts: []syntax.WordPart{
-							&syntax.Lit{Value: val},
+							// val is already fully expanded by r.fields above
+							// (params, cmdsub, quote removal). Wrap it single-
+							// quoted so the later assignment expansion emits it
+							// verbatim and does NOT re-process it — in particular
+							// a `~` that came from a parameter expansion
+							// (`b='c=~/x'; readonly "$b"`) must NOT tilde-expand.
+							&syntax.SglQuoted{Value: val},
 						}}
 					}
 					if !as.Naked && as.Value == nil {
 						as.Value = &syntax.Word{Parts: []syntax.WordPart{
-							&syntax.Lit{Value: val},
+							// val is already fully expanded by r.fields above
+							// (params, cmdsub, quote removal). Wrap it single-
+							// quoted so the later assignment expansion emits it
+							// verbatim and does NOT re-process it — in particular
+							// a `~` that came from a parameter expansion
+							// (`b='c=~/x'; readonly "$b"`) must NOT tilde-expand.
+							&syntax.SglQuoted{Value: val},
 						}}
 					}
 				}
