@@ -381,6 +381,57 @@ func bashPrintfInt(arg string) (n int64, warnMsg string) {
 	return n, ""
 }
 
+func bashPrintfUint(arg string) (n uint64, warnMsg string) {
+	s := strings.TrimLeft(arg, " \t\n\v\f\r")
+	end := 0
+	neg := false
+	if end < len(s) && (s[end] == '+' || s[end] == '-') {
+		neg = s[end] == '-'
+		end++
+	}
+	base := 10
+	if end+1 < len(s) && s[end] == '0' && (s[end+1]|0x20) == 'x' {
+		base, end = 16, end+2
+	} else if end < len(s) && s[end] == '0' {
+		base = 8
+	}
+	digitStart := end
+	for end < len(s) {
+		c := s[end]
+		ok := false
+		switch base {
+		case 16:
+			ok = (c >= '0' && c <= '9') || ((c|0x20) >= 'a' && (c|0x20) <= 'f')
+		case 8:
+			ok = c >= '0' && c <= '7'
+		default:
+			ok = c >= '0' && c <= '9'
+		}
+		if !ok {
+			break
+		}
+		end++
+	}
+	if end <= digitStart {
+		return 0, arg + ": invalid number"
+	}
+	numStr, trailing := s[digitStart:end], s[end:]
+	n, perr := strconv.ParseUint(numStr, base, 64)
+	if perr != nil {
+		if ne, ok := perr.(*strconv.NumError); ok && ne.Err == strconv.ErrRange {
+			return ^uint64(0), arg + ": Result not representable"
+		}
+		return 0, arg + ": invalid number"
+	}
+	if neg {
+		n = -n
+	}
+	if trailing != "" {
+		return n, arg + ": invalid number"
+	}
+	return n, ""
+}
+
 // localeCharLen returns the byte width of the character at the start of bs
 // under the current LC_CTYPE charset, mirroring bash's MB_CUR_MAX-driven
 // character stepping. ASCII is one byte; in a legacy multibyte locale (Big5,
@@ -1555,6 +1606,9 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 				// int64 / float64 in Go, so they're effectively
 				// no-ops. Don't emit them into fmts (Go's format
 				// verbs don't accept these flags), just skip.
+				if i == len(format)-1 {
+					fmts = append(fmts, c)
+				}
 			case '*':
 				// `%*d` / `%.*s` / etc.: consume the next arg as
 				// the width/precision number and splice it into
@@ -1775,6 +1829,7 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 						// of a literal character. Multi-byte rune is
 						// supported.
 						var n int64
+						var u uint64
 						if arg != "" && (arg[0] == '\'' || arg[0] == '"') {
 							// Leading quote: value of the first char after it.
 							// A LONE quote (no char after) is 0, like bash —
@@ -1782,10 +1837,15 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 							if len(arg) > 1 {
 								r, _ := utf8.DecodeRuneInString(arg[1:])
 								n = int64(r)
+								u = uint64(r)
 							}
 						} else if arg != "" {
 							var wmsg string
-							n, wmsg = bashPrintfInt(arg)
+							if c == 'i' || c == 'd' {
+								n, wmsg = bashPrintfInt(arg)
+							} else {
+								u, wmsg = bashPrintfUint(arg)
+							}
 							if wmsg != "" && warn != nil {
 								warn("printf: " + wmsg)
 							}
@@ -1795,7 +1855,7 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 						if c == 'i' || c == 'd' {
 							farg = int(n)
 						} else {
-							farg = uint(n)
+							farg = u
 						}
 						if c == 'i' || c == 'u' {
 							c = 'd'
@@ -1811,7 +1871,7 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 					// C/bash: the '#' flag adds NO 0x/0X prefix for a zero
 					// value with x/X (Go's %#x of 0 is "0x0"; bash is "0").
 					if c == 'x' || c == 'X' {
-						if u, ok := farg.(uint); ok && u == 0 {
+						if u, ok := farg.(uint64); ok && u == 0 {
 							fmts = bytes.ReplaceAll(fmts, []byte{'#'}, nil)
 						}
 					}

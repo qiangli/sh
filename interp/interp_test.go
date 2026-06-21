@@ -378,6 +378,7 @@ var runTests = []runTest{
 	{"printf foo", "foo"},
 	{"printf %%", "%"},
 	{"printf %", "printf: `%': missing format character\nexit status 1 #JUSTERR"},
+	{"printf '%z'", "printf: `%z': missing format character\nexit status 1 #JUSTERR"},
 	{"printf %; echo foo", "printf: `%': missing format character\nfoo\n #IGNORE"},
 
 	// printf -v: assign formatted output to the named variable instead
@@ -470,6 +471,8 @@ var runTests = []runTest{
 	{"printf '%d' ''", "printf: : invalid number\n0exit status 1 #JUSTERR"},
 	{"printf '%d' 2>/dev/null", "0"},
 	{"printf %d,%d 010 0x10", "8,16"},
+	{"printf '%u' 18446744073709551615", "18446744073709551615"},
+	{"printf '%u %o %x %X' -1 -1 -1 -1", "18446744073709551615 1777777777777777777777 ffffffffffffffff FFFFFFFFFFFFFFFF"},
 	{"printf %c,%c,%c foo àa", "f,\xc3,\x00"}, // TODO: use a rune?
 	{"printf '%2c\\n' 65", " 6\n"},
 	{"printf '%-2c--\\n' 65", "6 --\n"},
