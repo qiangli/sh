@@ -266,6 +266,12 @@ var runTests = []runTest{
 	// never zero-pad and never before a sign; numeric keeps the zero flag.
 	{"printf '[%06s][%06s][%06.2s][%06b]' 42 -42 abcd hi", "[    42][   -42][    ab][    hi]"},
 	{"printf '[%06d][%06d]' 42 -42", "[000042][-00042]"},
+	// printf %d strtol-style parsing: longest prefix, leading-ws skip, trailing
+	// or no-digits -> "invalid number" (value = prefix or 0), overflow -> clamp.
+	{"printf '%d' 3abc", "printf: 3abc: invalid number\n3exit status 1 #JUSTERR"},
+	{"printf '%d' ' -42'", "-42"},
+	{"printf '%d' abc", "printf: abc: invalid number\n0exit status 1 #JUSTERR"},
+	{"printf '%d' 18446744073709551615", "printf: 18446744073709551615: Result not representable\n9223372036854775807exit status 1 #JUSTERR"},
 	// getopts: missing required arg reports '?' in verbose mode (no leading ':'
 	// in optstring), ':' only in silent mode.
 	{"set -- -a; getopts 'a:' o 2>/dev/null; echo \"$o/$OPTARG\"", "?/\n"},

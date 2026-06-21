@@ -323,6 +323,64 @@ func stripPrintfZeroFlag(fmts []byte) []byte {
 	return out
 }
 
+// bashPrintfInt parses a printf integer argument the way bash's strtol-based
+// %d/%i conversion does: skip leading whitespace, read the longest valid signed
+// integer prefix (decimal, 0x hex, leading-0 octal), and return a warning
+// message when the argument has no digits ("X: invalid number", value 0), has
+// trailing characters after the number ("X: invalid number", value = the
+// prefix), or overflows int64 ("X: Result not representable", value clamped to
+// the int64 limit). An empty/whitespace-only arg yields no digits.
+func bashPrintfInt(arg string) (n int64, warnMsg string) {
+	s := strings.TrimLeft(arg, " \t\n\v\f\r")
+	end := 0
+	if end < len(s) && (s[end] == '+' || s[end] == '-') {
+		end++
+	}
+	base := 10
+	if end+1 < len(s) && s[end] == '0' && (s[end+1]|0x20) == 'x' {
+		base, end = 16, end+2
+	} else if end < len(s) && s[end] == '0' {
+		base = 8
+	}
+	digitStart := end
+	for end < len(s) {
+		c := s[end]
+		ok := false
+		switch base {
+		case 16:
+			ok = (c >= '0' && c <= '9') || ((c|0x20) >= 'a' && (c|0x20) <= 'f')
+		case 8:
+			ok = c >= '0' && c <= '7'
+		default:
+			ok = c >= '0' && c <= '9'
+		}
+		if !ok {
+			break
+		}
+		end++
+	}
+	if end <= digitStart {
+		return 0, arg + ": invalid number"
+	}
+	numStr, trailing := s[:end], s[end:]
+	n, perr := strconv.ParseInt(numStr, 0, 64)
+	if perr != nil {
+		if ne, ok := perr.(*strconv.NumError); ok && ne.Err == strconv.ErrRange {
+			if strings.HasPrefix(numStr, "-") {
+				n = -1 << 63
+			} else {
+				n = 1<<63 - 1
+			}
+			return n, arg + ": Result not representable"
+		}
+		return 0, arg + ": invalid number"
+	}
+	if trailing != "" {
+		return n, arg + ": invalid number"
+	}
+	return n, ""
+}
+
 // localeCharLen returns the byte width of the character at the start of bs
 // under the current LC_CTYPE charset, mirroring bash's MB_CUR_MAX-driven
 // character stepping. ASCII is one byte; in a legacy multibyte locale (Big5,
@@ -1726,10 +1784,10 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 								n = int64(r)
 							}
 						} else if arg != "" {
-							var perr error
-							n, perr = strconv.ParseInt(arg, 0, 0)
-							if perr != nil && warn != nil {
-								warn(fmt.Sprintf("printf: %s: invalid number", arg))
+							var wmsg string
+							n, wmsg = bashPrintfInt(arg)
+							if wmsg != "" && warn != nil {
+								warn("printf: " + wmsg)
 							}
 						} else if hadArg && warn != nil {
 							warn("printf: : invalid number")
