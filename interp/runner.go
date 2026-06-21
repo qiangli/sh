@@ -4316,7 +4316,7 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 		} else {
 			r.exit.clear()
 		}
-	} else if b, ok := st.Cmd.(*syntax.BinaryCmd); ok && (b.Op == syntax.AndStmt || b.Op == syntax.OrStmt) {
+	} else if errExitExemptByAndOr(st.Cmd) {
 	} else if !r.exit.ok() && !r.noErrExit {
 		if !r.inFunc {
 			prevLineno := r.ecfg.OverrideLineno
@@ -7949,6 +7949,25 @@ func (r *Runner) selectLoop(ctx context.Context, name string, items []string, do
 			return
 		}
 	}
+}
+
+// errExitExemptByAndOr reports whether a command's non-zero exit is exempt
+// from `set -e` because it ends in an AND-OR list. Bash exempts the failing
+// left operand of `&&`/`||`, and that exemption propagates THROUGH a brace
+// group `{ …; }` (same execution environment) — so `set -e; { false && true; }`
+// does not exit. It does NOT propagate through a subshell `( … )` or a function
+// call (those are boundaries and do fire), so only BinaryCmd and Block (whose
+// last statement is itself exempt) qualify.
+func errExitExemptByAndOr(cmd syntax.Command) bool {
+	switch c := cmd.(type) {
+	case *syntax.BinaryCmd:
+		return c.Op == syntax.AndStmt || c.Op == syntax.OrStmt
+	case *syntax.Block:
+		if n := len(c.Stmts); n > 0 {
+			return errExitExemptByAndOr(c.Stmts[n-1].Cmd)
+		}
+	}
+	return false
 }
 
 func (r *Runner) loopStmtsBroken(ctx context.Context, stmts []*syntax.Stmt) bool {

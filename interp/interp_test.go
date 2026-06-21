@@ -273,6 +273,11 @@ var runTests = []runTest{
 	// true), not an unterminated group.
 	{"[ '(' ] && echo t", "t\n"},
 	{"[ '(' -e / ')' ] && echo grp", "grp\n"},
+	// set -e: the &&/|| exemption (failing LEFT operand) propagates through a
+	// brace group `{ }` (same env), so these don't exit — matches bash.
+	{"set -e; { test x = y && echo hi; }; echo after", "after\n"},
+	{"set -e; { false && true; }; echo after", "after\n"},
+	{"set -e; { { false && true; }; }; echo nested", "nested\n"},
 	{"shift a", "shift: a: numeric argument required\nexit status 2 #JUSTERR"},
 	{"shift 1 2", "shift: too many arguments\nexit status 2 #JUSTERR"},
 	{"shift -1", "shift: -1: shift count out of range\nexit status 1 #JUSTERR"},
