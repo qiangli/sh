@@ -1136,6 +1136,10 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				args = args[1:]
 				continue
 			}
+			if a == "--" { // end of options; remaining args are operands
+				args = args[1:]
+				break
+			}
 			break
 		}
 		var path string
@@ -3358,11 +3362,20 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		// retargets it; a non-identifier result like `?` is rejected.
 		// Bash reports this after the regular `illegal option`
 		// diagnostic, so defer the error past the switch below.
+		// A missing required argument signals as ':' internally. Only in
+		// SILENT mode (optstring starting ':') does bash store ':' (with
+		// OPTARG set to the option char); in verbose mode it stores '?'
+		// (with OPTARG unset) and prints a diagnostic. opt itself stays ':'
+		// below so the right diagnostic is chosen.
+		storeOpt := opt
+		if opt == ':' && diagnostics {
+			storeOpt = '?'
+		}
 		nameVar := r.lookupVar(name)
 		nameRefBadTarget := nameVar.Kind == expand.NameRef && nameVar.Str == "" &&
-			!validNameRefTarget(string(opt))
+			!validNameRefTarget(string(storeOpt))
 		if !nameRefBadTarget {
-			r.setVarString(name, string(opt))
+			r.setVarString(name, string(storeOpt))
 		}
 		// bash's getopts only surfaces the OPTARG-readonly diagnostic
 		// when it would have written to OPTARG (i.e. the default branch
@@ -3396,7 +3409,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			r.setVarString("OPTIND", strconv.FormatInt(int64(r.optState.argidx+1), 10))
 		}
 		if nameRefBadTarget {
-			r.errf("%sgetopts: `%s': not a valid identifier\n", r.bashErrPrefix(r.curStmtPos), string(opt))
+			r.errf("%sgetopts: `%s': not a valid identifier\n", r.bashErrPrefix(r.curStmtPos), string(storeOpt))
 		}
 
 		exit.oneIf(done)

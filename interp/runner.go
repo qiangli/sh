@@ -5120,8 +5120,30 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		for !r.stop(ctx) {
 			oldNoErrExit := r.noErrExit
 			r.noErrExit = true
+			// The condition runs "in the loop": break/continue used in a
+			// while/until condition act on this loop, matching bash — e.g.
+			// `while break; do …; done` breaks (0 iterations) rather than
+			// erroring "only meaningful in a loop" and looping forever.
+			oldInLoop := r.inLoop
+			r.inLoop = true
 			r.stmts(ctx, cm.Cond)
+			r.inLoop = oldInLoop
 			r.noErrExit = oldNoErrExit
+
+			// Honor a break/continue signaled from the condition (same
+			// enclosing-count semantics as loopStmtsBroken does for the body).
+			if r.contnEnclosing > 0 {
+				r.contnEnclosing--
+				if r.contnEnclosing > 0 {
+					break // continue targets an outer loop
+				}
+				r.exit.clear()
+				continue // re-evaluate the condition
+			}
+			if r.breakEnclosing > 0 {
+				r.breakEnclosing--
+				break
+			}
 
 			stop := r.exit.ok() == cm.Until
 			r.exit.clear()

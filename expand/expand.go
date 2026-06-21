@@ -1660,9 +1660,11 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 						// float conversions, so `printf '%f' "'A"` is
 						// `65.000000`.
 						var f float64
-						if len(arg) > 1 && (arg[0] == '\'' || arg[0] == '"') {
-							r, _ := utf8.DecodeRuneInString(arg[1:])
-							f = float64(r)
+						if arg != "" && (arg[0] == '\'' || arg[0] == '"') {
+							if len(arg) > 1 { // lone quote -> 0, like bash
+								r, _ := utf8.DecodeRuneInString(arg[1:])
+								f = float64(r)
+							}
 						} else if arg != "" {
 							var perr error
 							f, perr = strconv.ParseFloat(arg, 64)
@@ -1681,9 +1683,14 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 						// of a literal character. Multi-byte rune is
 						// supported.
 						var n int64
-						if len(arg) > 1 && (arg[0] == '\'' || arg[0] == '"') {
-							r, _ := utf8.DecodeRuneInString(arg[1:])
-							n = int64(r)
+						if arg != "" && (arg[0] == '\'' || arg[0] == '"') {
+							// Leading quote: value of the first char after it.
+							// A LONE quote (no char after) is 0, like bash —
+							// `printf %d \'` is 0, not an "invalid number".
+							if len(arg) > 1 {
+								r, _ := utf8.DecodeRuneInString(arg[1:])
+								n = int64(r)
+							}
 						} else if arg != "" {
 							var perr error
 							n, perr = strconv.ParseInt(arg, 0, 0)
@@ -1708,6 +1715,13 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 				if farg != nil {
 					if c == 'o' || c == 'x' || c == 'X' {
 						fmts = bytes.ReplaceAll(fmts, []byte{'+'}, nil)
+					}
+					// C/bash: the '#' flag adds NO 0x/0X prefix for a zero
+					// value with x/X (Go's %#x of 0 is "0x0"; bash is "0").
+					if c == 'x' || c == 'X' {
+						if u, ok := farg.(uint); ok && u == 0 {
+							fmts = bytes.ReplaceAll(fmts, []byte{'#'}, nil)
+						}
 					}
 					fmts = append(fmts, c)
 					start := sb.Len()

@@ -612,7 +612,14 @@ func (p *Parser) regToken(r rune) token {
 		}
 		return or
 	case '$':
-		switch p.rune() {
+		// A backslash-newline line continuation is transparent here too:
+		// `$\<newline>?` is just `$?` (bash splices it before reading the
+		// parameter). Skip any escaped newlines after the '$'.
+		r := p.rune()
+		for r == escNewl {
+			r = p.rune()
+		}
+		switch r {
 		case '\'':
 			if !p.lang.in(langBashLike | LangMirBSDKorn | LangZsh) {
 				break

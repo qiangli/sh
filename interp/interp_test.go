@@ -251,7 +251,24 @@ var runTests = []runTest{
 	{"printf", "usage: printf [-v var] format [arguments]\nexit status 2 #JUSTERR"},
 	{"break", "break: only meaningful in a `for', `while', or `until' loop\n #JUSTERR"},
 	{"continue", "continue: only meaningful in a `for', `while', or `until' loop\n #JUSTERR"},
+	// break/continue used in a loop CONDITION act on the loop (not an error).
+	{"while break; do echo x; done; echo done", "done\n"},
+	{"until break; do echo x; done; echo done", "done\n"},
+	{"for i in 1 2 3; do echo i=$i; while break; do echo no; done; done", "i=1\ni=2\ni=3\n"},
 	{"cd a b", "cd: too many arguments\nexit status 1 #JUSTERR"},
+	// `cd --` is an end-of-options marker, not an extra operand.
+	{"cd -- /; echo $PWD", "/\n"},
+	// printf: '#' flag adds no 0x/0X prefix for a zero value; lone quote is 0.
+	{"printf '[%#x][%#x][%#X][%#o]' 0 42 0 0", "[0][0x2a][0][0]"},
+	{"printf '%d %d' \\' \\\"", "0 0"},
+	{"printf '%d' \\'A", "65"},
+	// getopts: missing required arg reports '?' in verbose mode (no leading ':'
+	// in optstring), ':' only in silent mode.
+	{"set -- -a; getopts 'a:' o 2>/dev/null; echo \"$o/$OPTARG\"", "?/\n"},
+	{"set -- -a; getopts ':a:' o; echo \"$o/$OPTARG\"", ":/a\n"},
+	// backslash-newline line continuation splicing a $? (special-param) token.
+	{"echo $\\\n?", "0\n"},
+	{"x=hi; echo $\\\n{x}", "hi\n"},
 	{"shift a", "shift: a: numeric argument required\nexit status 2 #JUSTERR"},
 	{"shift 1 2", "shift: too many arguments\nexit status 2 #JUSTERR"},
 	{"shift -1", "shift: -1: shift count out of range\nexit status 1 #JUSTERR"},
