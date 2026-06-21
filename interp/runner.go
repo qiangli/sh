@@ -6933,6 +6933,14 @@ func (r *Runner) flattenAssigns(args []*syntax.Assign) iter.Seq2[*syntax.Assign,
 					name = field
 					ok = false
 				}
+				// `+=` append form in a string-parsed arg
+				// (`typeset 'sx+=bar'`): strip the trailing `+`
+				// from the name and mark the assignment as append,
+				// matching the literal `declare sx+=bar` parse.
+				if ok && strings.HasSuffix(name, "+") {
+					name = name[:len(name)-1]
+					as.Append = true
+				}
 				as.Name = &syntax.Lit{Value: name}
 				if !ok {
 					as.Naked = true

@@ -289,6 +289,13 @@ var runTests = []runTest{
 	// a lone `+` ends options like `-` (must not panic on the 1-char flag).
 	{"set a b c; set + x y; echo \"$@\"", "x y\n"},
 	{"set + -; echo ok", "ok\n"},
+	// declare/typeset string-parsed `+=` append form (`typeset 'sx+=bar'`).
+	{"sx=foo; typeset 'sx+=bar'; echo $sx", "foobar\n"},
+	{"declare -i k=5; declare 'k+=3'; echo $k", "8\n"},
+	// subscript-unsetting a declared (set or unset) scalar is an error;
+	// a truly undeclared name is a no-op.
+	{"declare undef; unset -v 'undef[1]'", "unset: undef: not an array variable\nexit status 1 #JUSTERR"},
+	{"unset -v 'never[1]'; echo $?", "0\n"},
 	{"set -e; { false && true; }; echo after", "after\n"},
 	{"set -e; { { false && true; }; }; echo nested", "nested\n"},
 	// tilde expansion in a ${param:+word} alternate word (like the :- default).

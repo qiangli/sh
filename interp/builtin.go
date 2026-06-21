@@ -340,10 +340,16 @@ func (r *Runner) unsetBuiltinArrayElem(name, idx string) bool {
 			vr = r.lookupVar(name)
 		}
 	}
-	if vr.Kind == expand.String && vr.IsSet() {
-		if n, err := r.arithFromString(idx); err == nil && n == 0 {
-			r.delVar(name)
-			return true
+	if vr.Kind == expand.String {
+		// A declared scalar — set OR declared-but-unset (`declare undef`) — is
+		// not an array, so subscript-unsetting it errors in bash. (A truly
+		// undeclared name has Kind != String and falls through to a no-op.)
+		// Exception: a set scalar with `[0]` deletes the whole variable.
+		if vr.IsSet() {
+			if n, err := r.arithFromString(idx); err == nil && n == 0 {
+				r.delVar(name)
+				return true
+			}
 		}
 		r.errf("%sunset: %s: not an array variable\n", r.bashErrPrefix(r.curStmtPos), name)
 		return false
@@ -361,10 +367,16 @@ func (r *Runner) unsetBuiltinArrayElem(name, idx string) bool {
 
 func (r *Runner) unsetStringArrayElem(name, idx string) bool {
 	vr := r.lookupVar(name)
-	if vr.Kind == expand.String && vr.IsSet() {
-		if n, err := r.arithFromString(idx); err == nil && n == 0 {
-			r.delVar(name)
-			return true
+	if vr.Kind == expand.String {
+		// A declared scalar — set OR declared-but-unset (`declare undef`) — is
+		// not an array, so subscript-unsetting it errors in bash. (A truly
+		// undeclared name has Kind != String and falls through to a no-op.)
+		// Exception: a set scalar with `[0]` deletes the whole variable.
+		if vr.IsSet() {
+			if n, err := r.arithFromString(idx); err == nil && n == 0 {
+				r.delVar(name)
+				return true
+			}
 		}
 		r.errf("%sunset: %s: not an array variable\n", r.bashErrPrefix(r.curStmtPos), name)
 		return false
