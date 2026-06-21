@@ -31,3 +31,24 @@ func TestPosixModeKeepsBashExtensions(t *testing.T) {
 	mustParse(Variant(LangBash), PosixMode(true)) // bash --posix: STILL ok (the fix)
 	mustReject(Variant(LangPOSIX))                // strict posix grammar: rejected
 }
+
+// bash --posix keeps the bash extension allowing non-POSIX function names
+// (hyphens, dots): `test-hyphen() {}` runs under `bash --posix`. Only the pure
+// LangPOSIX grammar restricts function names to POSIX "names".
+func TestPosixModeAllowsNonPosixFuncNames(t *testing.T) {
+	t.Parallel()
+	const src = `test-hyphen() { :; }`
+	parse := func(opts ...ParserOption) error {
+		_, err := NewParser(opts...).Parse(strings.NewReader(src), "")
+		return err
+	}
+	if err := parse(Variant(LangBash)); err != nil {
+		t.Fatalf("bash: %v", err)
+	}
+	if err := parse(Variant(LangBash), PosixMode(true)); err != nil {
+		t.Fatalf("bash --posix should accept hyphen func names: %v", err)
+	}
+	if err := parse(Variant(LangPOSIX)); err == nil {
+		t.Fatal("LangPOSIX should reject a hyphen func name")
+	}
+}

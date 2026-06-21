@@ -2770,7 +2770,11 @@ func (p *Parser) gotStmtPipe(s *Stmt, binCmd bool) *Stmt {
 		if p.tok == leftParen && (!p.lang.in(LangZsh) || p.r == ')') {
 			p.next()
 			p.follow(name.ValuePos, "foo(", rightParen)
-			if p.posixBehavior() && !validFuncName(name.Value, p.posixBehavior()) {
+			// Only the pure-POSIX grammar restricts function names to POSIX
+			// "names". bash's posix MODE keeps the bash extension that allows
+			// hyphens, dots, etc. (`test-hyphen() {}` runs under `bash --posix`),
+			// so don't reject those when posixMode is layered on a bash grammar.
+			if p.lang.in(LangPOSIX) && !validFuncName(name.Value, true) {
 				p.posErr(name.Pos(), "invalid func name")
 			}
 			p.funcDecl(s, name.ValuePos, false, true, name)
