@@ -156,6 +156,17 @@ func (p *testParser) testExprBase(fval string) syntax.TestExpr {
 				&syntax.Lit{Value: op.String()},
 			}}
 		}
+		// Bash 5.3: when a unary operator is followed by `-a` or `-o`
+		// (which double as the binary AND/OR operators) AND there are
+		// more tokens after that, resolve the ambiguity in favor of the
+		// binary interpretation: the unary operator becomes the 1-arg
+		// form (literal non-empty string) and -a/-o acts as the binary
+		// operator. Covers `[ -z -a ] ]` (exit 0) and `[ -z -a -a ]`.
+		if (p.val == "-a" || p.val == "-o") && len(p.rem) > 0 {
+			return &syntax.Word{Parts: []syntax.WordPart{
+				&syntax.Lit{Value: op.String()},
+			}}
+		}
 		u.X = p.followWord(op.String())
 		return u
 	}

@@ -2702,6 +2702,15 @@ var runTests = []runTest{
 		"[ a -a ]",
 		"[: argument expected\nexit status 2 #JUSTERR",
 	},
+	// Bash 5.3: when a unary operator is followed by -a/-o with more
+	// tokens remaining, -a/-o is resolved as the binary AND/OR rather
+	// than the operand of the unary op (Oils builtin-bracket__022).
+	{"[ -z -a ] ]", ""},
+	{"[ -z -a -a ]", ""},
+	{"test -z -a ]", ""},
+	{"test -z -a -a", ""},
+	{"[ -z -o ] ]", ""},
+	{"[ -z -o -o ]", ""},
 	{"[ a ]", ""},
 	{"[ -n ]", ""},
 	{"[ '-n' ]", ""},
