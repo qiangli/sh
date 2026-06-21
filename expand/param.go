@@ -109,7 +109,7 @@ func (cfg *Config) literalParamExpWord(word *syntax.Word, innerDoubleQuoted bool
 		return "", nil
 	}
 	var sb strings.Builder
-	for _, part := range word.Parts {
+	for i, part := range word.Parts {
 		switch part := part.(type) {
 		case *syntax.SglQuoted:
 			if cfg.insideDoubleQuote {
@@ -130,16 +130,27 @@ func (cfg *Config) literalParamExpWord(word *syntax.Word, innerDoubleQuoted bool
 			}
 			sb.WriteString(val)
 		case *syntax.Lit:
+			val := part.Value
+			// Tilde-expand a leading unquoted `~`/`~user` in an alternate
+			// word, e.g. `${x:+~/path}`, matching wordField's expandUser (the
+			// `:-` default word already does this via Literal). Guarded to the
+			// first part of a genuinely unquoted word so the other callers
+			// (double-quoted contexts) are unaffected.
+			if i == 0 && !cfg.insideDoubleQuote && !innerDoubleQuoted {
+				if prefix, rest := cfg.expandUser(val, len(word.Parts) > 1); prefix != "" {
+					val = prefix + rest
+				}
+			}
 			if innerDoubleQuoted {
 				if cfg.insideDoubleQuote {
-					sb.WriteString(stripBackslashEscapes(part.Value))
+					sb.WriteString(stripBackslashEscapes(val))
 				} else {
-					sb.WriteString(stripParamExpLitEscapes(part.Value, false))
+					sb.WriteString(stripParamExpLitEscapes(val, false))
 				}
 			} else if !cfg.insideDoubleQuote {
-				sb.WriteString(stripBackslashEscapes(part.Value))
+				sb.WriteString(stripBackslashEscapes(val))
 			} else {
-				sb.WriteString(stripParamExpLitEscapes(part.Value, false))
+				sb.WriteString(stripParamExpLitEscapes(val, false))
 			}
 		default:
 			val, err := Literal(cfg, &syntax.Word{Parts: []syntax.WordPart{part}})

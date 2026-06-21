@@ -278,6 +278,9 @@ var runTests = []runTest{
 	{"set -e; { test x = y && echo hi; }; echo after", "after\n"},
 	{"set -e; { false && true; }; echo after", "after\n"},
 	{"set -e; { { false && true; }; }; echo nested", "nested\n"},
+	// tilde expansion in a ${param:+word} alternate word (like the :- default).
+	{"HOME=/h; echo ${HOME:+~/z}", "/h/z\n"},
+	{"HOME=/h; echo \"${HOME:+~/z}\"", "~/z\n"},
 	{"shift a", "shift: a: numeric argument required\nexit status 2 #JUSTERR"},
 	{"shift 1 2", "shift: too many arguments\nexit status 2 #JUSTERR"},
 	{"shift -1", "shift: -1: shift count out of range\nexit status 1 #JUSTERR"},
