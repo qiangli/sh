@@ -2879,6 +2879,14 @@ var runTests = []runTest{
 	{"set -u; declare -a B; for i in 0 1; do B[$i]=v$i; done; echo \"${B[0]}|${B[1]}\"", "v0|v1\n"},
 	// A declared-but-unassigned array element is still unset under `set -u`.
 	{"set -u; declare -a B; echo \"${B[0]}\"; echo after", "B[0]: unbound variable\nexit status 1 #JUSTERR"},
+	// Reading a SET non-zero element under `set -u` must not falsely error,
+	// even when element 0 was never assigned (the array's scalar value is
+	// unset but the addressed element is set). Regression for a[2]=z.
+	{"set -u; a[2]=z; echo \"${a[2]}\"", "z\n"},
+	{"set -u; declare -A m; m[k]=v; echo \"${m[k]}\"", "v\n"},
+	// A genuinely-unset element still errors, set array or not.
+	{"set -u; a[0]=x; echo \"${a[5]}\"; echo after", "a[5]: unbound variable\nexit status 1 #JUSTERR"},
+	{"set -u; declare -A m; m[k]=v; echo \"${m[no]}\"; echo after", "m[no]: unbound variable\nexit status 1 #JUSTERR"},
 	{"a=b b=a; echo $((a + 7)); echo after", "b: expression recursion level exceeded (error token is \"b\")\nafter\n"},
 	{"x=4+; declare -i x; x+=7 y=4; echo x=$x y=$y", "bashy: line 1: 4+: 1:2: `+` must be followed by an expression\nx=4+ y=\n"},
 	{"x=8; echo $((--x++)); echo after", "++: assignment requires lvalue (error token is \"++ \")\nafter\n"},

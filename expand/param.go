@@ -962,7 +962,18 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			cfg.OnNameRefCircular(pe.Param.Value)
 		}
 	}
-	if cfg.NoUnset && !vr.IsSet() && !overridingUnset(pe) &&
+	// For a subscripted read (`${a[i]}`), nounset must test whether THAT
+	// element is set, not whether the whole array is: vr.IsSet() reflects
+	// only the array's scalar (element-0) value, so `set -u; a[2]=z; echo
+	// ${a[2]}` wrongly tripped "unbound variable" even though a[2] is set.
+	// Only evaluate the element under set -u — arrayElemSet evaluates the
+	// subscript, and doing so unconditionally would double-evaluate a
+	// side-effecting index like `${a[i++]}`.
+	addressedSet := vr.IsSet()
+	if cfg.NoUnset && index != nil && nodeLit(index) != "@" && nodeLit(index) != "*" {
+		addressedSet = arrayElemSet(vr, index, cfg)
+	}
+	if cfg.NoUnset && !addressedSet && !overridingUnset(pe) &&
 		!(orig.Kind == NameRef && index != nil && vr.Kind == Indexed) &&
 		nodeLit(index) != "@" && nodeLit(index) != "*" {
 		if index != nil {
