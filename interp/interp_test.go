@@ -255,7 +255,7 @@ var runTests = []runTest{
 	{"while break; do echo x; done; echo done", "done\n"},
 	{"until break; do echo x; done; echo done", "done\n"},
 	{"for i in 1 2 3; do echo i=$i; while break; do echo no; done; done", "i=1\ni=2\ni=3\n"},
-	{"cd a b", "cd: too many arguments\nexit status 1 #JUSTERR"},
+	{"cd a b", "cd: too many arguments\nexit status 2 #JUSTERR"},
 	// `cd --` is an end-of-options marker, not an extra operand.
 	{"cd -- /; echo $PWD", "/\n"},
 	// printf: '#' flag adds no 0x/0X prefix for a zero value; lone quote is 0.

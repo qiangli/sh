@@ -1129,6 +1129,12 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				exit.fatal(err) // perhaps overly dramatic?
 				return exit
 			}
+		} else if !filepath.IsAbs(pwd) {
+			// Logical pwd: $PWD is authoritative only when it is an
+			// absolute pathname. A clobbered/relative $PWD (e.g.
+			// `PWD=foo; pwd`) must NOT be echoed back — bash falls back to
+			// the tracked current directory.
+			pwd = r.Dir
 		}
 		r.outf("%s\n", pwd)
 	case "cd":
@@ -1138,13 +1144,24 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			return exit
 		}
 		// bash's `cd` accepts `-L` (logical, default), `-P`
-		// (physical — resolve symlinks via the real filesystem)
-		// and `-@` (extended attributes; not meaningful here).
-		// We accept and ignore all three options since our
-		// path resolution is already filesystem-backed.
+		// (physical — resolve symlinks so $PWD names the real dir),
+		// `-e`, and `-@` (extended attributes; not meaningful here).
+		// `-L`/`-P` are last-one-wins; under `-P` we resolve the
+		// target's symlinks so $PWD is the physical path (bash:
+		// `cd -P symlink` leaves PWD at the link's target).
+		physical := false
 		for len(args) > 0 {
 			a := args[0]
-			if a == "-L" || a == "-P" || a == "-e" || a == "-@" {
+			switch a {
+			case "-P":
+				physical = true
+				args = args[1:]
+				continue
+			case "-L":
+				physical = false
+				args = args[1:]
+				continue
+			case "-e", "-@":
 				args = args[1:]
 				continue
 			}
@@ -1182,7 +1199,16 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				printPath = printCdpath
 			}
 		default:
-			return failf(1, "cd: too many arguments\n")
+			// bash returns 2 for a cd usage error (too many operands).
+			return failf(2, "cd: too many arguments\n")
+		}
+		// Under `-P`, resolve the target's symlinks so the runner's Dir
+		// and $PWD become the physical path (bash semantics). EvalSymlinks
+		// hits the real filesystem, matching `pwd -P` below.
+		if physical && path != "" {
+			if resolved, err := filepath.EvalSymlinks(r.absPath(path)); err == nil {
+				path = resolved
+			}
 		}
 		exit.code = r.changeDir(ctx, "cd", path)
 		if printPath && exit.code == 0 {
@@ -6328,8 +6354,10 @@ func (r *Runner) changeDir(ctx context.Context, cmd, path string) uint8 {
 	if len(r.dirStack) > 0 {
 		r.dirStack[len(r.dirStack)-1] = apath
 	}
-	r.setVarString("OLDPWD", r.envGet("PWD"))
-	r.setVarString("PWD", apath)
+	// bash keeps both PWD and OLDPWD exported across every cd (they show
+	// up in `env` and in child process environments).
+	r.setExportedVarString("OLDPWD", r.envGet("PWD"))
+	r.setExportedVarString("PWD", apath)
 	return 0
 }
 

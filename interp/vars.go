@@ -1597,6 +1597,13 @@ func (r *Runner) setVarString(name, value string) {
 	r.setVar(name, expand.Variable{Set: true, Kind: expand.String, Str: value})
 }
 
+// setExportedVarString sets a scalar variable and marks it exported, so it
+// appears in the environment of child processes / `env`. bash keeps PWD and
+// OLDPWD exported across every cd; setVarString alone leaves them unexported.
+func (r *Runner) setExportedVarString(name, value string) {
+	r.setVar(name, expand.Variable{Set: true, Exported: true, Kind: expand.String, Str: value})
+}
+
 func (r *Runner) setIgnoreEOFOption(enable bool) {
 	if r.noOpSetState == nil {
 		r.noOpSetState = make(map[string]bool)
