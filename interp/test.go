@@ -5,9 +5,11 @@ package interp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
+	resyntax "regexp/syntax"
 	"strconv"
 	"strings"
 
@@ -46,6 +48,40 @@ func arithErrMsg(err error, s string) string {
 		}
 	}
 	return "arithmetic syntax error: operand expected (error token is \"" + tok + "\")"
+}
+
+// bashRegexErrMsg returns the bash 5.3 wording for an invalid `=~`
+// regular expression. Bash uses POSIX regcomp diagnostics; the Go
+// regexp engine reports its own wording. We map the Go error code to
+// the closest POSIX-shaped reason and frame it as bash does:
+//
+//	invalid regular expression `<pat>': <reason>
+func bashRegexErrMsg(err error, pat string) string {
+	reason := err.Error()
+	var rerr *resyntax.Error
+	if errors.As(err, &rerr) {
+		switch rerr.Code {
+		case resyntax.ErrMissingRepeatArgument, resyntax.ErrInvalidRepeatOp:
+			reason = "Repetition not preceded by valid expression"
+		case resyntax.ErrMissingBracket:
+			reason = "Unmatched [, [^, [:, [., or [="
+		case resyntax.ErrMissingParen:
+			reason = "Unmatched ( or \\("
+		case resyntax.ErrUnexpectedParen:
+			reason = "Unmatched ) or \\)"
+		case resyntax.ErrTrailingBackslash:
+			reason = "Trailing backslash"
+		case resyntax.ErrInvalidCharRange:
+			reason = "Invalid range end"
+		case resyntax.ErrInvalidRepeatSize:
+			reason = "Invalid content of \\{\\}"
+		case resyntax.ErrInvalidCharClass:
+			reason = "Invalid character class"
+		case resyntax.ErrInvalidEscape:
+			reason = "Invalid back reference"
+		}
+	}
+	return "invalid regular expression `" + pat + "': " + reason
 }
 
 // arithFromString parses s as a bash arithmetic expression and
@@ -249,7 +285,7 @@ func (r *Runner) binTest(ctx context.Context, op syntax.BinTestOperator, x, y st
 		}
 		re, err := regexp.Compile(pat)
 		if err != nil {
-			r.errf("[[: %s\n", err)
+			r.errf("[[: %s\n", bashRegexErrMsg(err, y))
 			r.exit.code = 2
 			return false
 		}

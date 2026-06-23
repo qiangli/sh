@@ -2619,7 +2619,7 @@ var runTests = []runTest{
 	},
 	{
 		"[[ a =~ [ ]]",
-		"[[: error parsing regexp: missing closing ]: `[`\nexit status 2 #JUSTERR",
+		"[[: invalid regular expression `[': Unmatched [, [^, [:, [., or [=\nexit status 2 #JUSTERR",
 	},
 	{
 		"[[ a__b__c =~ _*(b_*) ]]; echo ${BASH_REMATCH[0]}; echo ${BASH_REMATCH[1]}",
