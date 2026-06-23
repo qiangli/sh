@@ -520,6 +520,10 @@ func arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 				}
 				break
 			}
+			if vr.Kind == Associative {
+				str = vr.Map["0"]
+				break
+			}
 			val := vr.String()
 			if val == "" {
 				break
@@ -654,10 +658,14 @@ func arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 				}
 				return 0, fmt.Errorf("arithmetic syntax error: operand expected (error token is %q)", tail)
 			}
+			lval, err := cfg.resolveAritLvalueName(lval)
+			if err != nil {
+				return 0, err
+			}
 			if !syntax.ValidName(lval.name) {
 				return 0, fmt.Errorf("attempted assignment to non-variable (error token is %q)", op)
 			}
-			lval, err := cfg.resolveAritLvalue(lval)
+			lval, err = cfg.resolveAritLvalue(lval)
 			if err != nil {
 				return 0, err
 			}
@@ -889,7 +897,11 @@ func arithEmptyDoubleQuotedWord(expr syntax.ArithmExpr) bool {
 
 func (cfg *Config) getAritLvalue(lval arithLvalue) (int64, error) {
 	if lval.index == nil {
-		return atoi(cfg.envGet(lval.name)), nil
+		vr := cfg.Env.Get(lval.name)
+		if cfg.NoUnset && !vr.Declared() {
+			return 0, UnsetParameterError{Name: lval.name, Message: "unbound variable"}
+		}
+		return atoi(vr.String()), nil
 	}
 	if !lval.indexSet {
 		var err error
@@ -1135,6 +1147,13 @@ func numericLiteralLike(s string) bool {
 	}
 	if strings.Contains(s, "#") {
 		return true
+	}
+	if s[0] >= '0' && s[0] <= '9' {
+		for i := 1; i < len(s); i++ {
+			if arithmNameStart(s[i]) || s[i] == '_' {
+				return true
+			}
+		}
 	}
 	if len(s) > 1 && s[0] == '0' {
 		for i := 1; i < len(s); i++ {
@@ -1459,6 +1478,9 @@ func binArit(op syntax.BinAritOperator, x, y int) (int, error) {
 	case syntax.Shr:
 		return x >> uint(y), nil
 	case syntax.Shl:
+		if y < 0 {
+			y &= strconv.IntSize - 1
+		}
 		return x << uint(y), nil
 	case syntax.AndArit:
 		return oneIf(x != 0 && y != 0), nil
