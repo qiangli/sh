@@ -329,6 +329,17 @@ func (r *Runner) builtinTargetQuoted(pos syntax.Pos, base string) bool {
 	return false
 }
 
+// unsetIdentLikeStart reports whether c could begin a (possibly malformed)
+// variable identifier — a letter, digit, or underscore. Bash's `unset` only
+// emits "not a valid identifier" for such names; names led by other
+// punctuation fall through to the function namespace instead.
+func unsetIdentLikeStart(c byte) bool {
+	return c == '_' ||
+		(c >= 'a' && c <= 'z') ||
+		(c >= 'A' && c <= 'Z') ||
+		(c >= '0' && c <= '9')
+}
+
 func (r *Runner) unsetBuiltinArrayElem(name, idx string) bool {
 	vr := r.lookupVar(name)
 	if vr.Kind == expand.NameRef {
@@ -344,12 +355,14 @@ func (r *Runner) unsetBuiltinArrayElem(name, idx string) bool {
 		// A declared scalar — set OR declared-but-unset (`declare undef`) — is
 		// not an array, so subscript-unsetting it errors in bash. (A truly
 		// undeclared name has Kind != String and falls through to a no-op.)
-		// Exception: a set scalar with `[0]` deletes the whole variable.
-		if vr.IsSet() {
-			if n, err := r.arithFromString(idx); err == nil && n == 0 {
+		// Exception: subscript `[0]` aliases the scalar itself, so bash treats
+		// `unset name[0]` as unsetting the whole variable (a no-op when unset)
+		// and returns success; any non-zero subscript is the error case.
+		if n, err := r.arithFromString(idx); err == nil && n == 0 {
+			if vr.IsSet() {
 				r.delVar(name)
-				return true
 			}
+			return true
 		}
 		r.errf("%sunset: %s: not an array variable\n", r.bashErrPrefix(r.curStmtPos), name)
 		return false
@@ -371,12 +384,15 @@ func (r *Runner) unsetStringArrayElem(name, idx string) bool {
 		// A declared scalar — set OR declared-but-unset (`declare undef`) — is
 		// not an array, so subscript-unsetting it errors in bash. (A truly
 		// undeclared name has Kind != String and falls through to a no-op.)
-		// Exception: a set scalar with `[0]` deletes the whole variable.
-		if vr.IsSet() {
-			if n, err := r.arithFromString(idx); err == nil && n == 0 {
+		// Exception: subscript `[0]` aliases the scalar itself, so bash treats
+		// `unset name[0]` as unsetting the whole variable (a no-op when unset)
+		// and returns success; any non-zero subscript is the error case. The
+		// subscript may carry quotes (`name["key"]`), so strip them first.
+		if n, err := r.arithFromString(r.unsetStringSubscript(idx)); err == nil && n == 0 {
+			if vr.IsSet() {
 				r.delVar(name)
-				return true
 			}
+			return true
 		}
 		r.errf("%sunset: %s: not an array variable\n", r.bashErrPrefix(r.curStmtPos), name)
 		return false
@@ -798,6 +814,15 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 						// Bare POSIX unset is both variable and function
 						// unset. An invalid variable name is simply not a
 						// variable match; try the function namespace below.
+						tryFuncOnly = true
+					} else if funcs && !nameref && !explicitVars && len(arg) > 0 && !unsetIdentLikeStart(arg[0]) {
+						// Bash only reports "not a valid identifier" for names
+						// that look like a botched variable name — those that
+						// begin with a letter, digit, or underscore (`1bad`,
+						// `invalid-name`). A name that can't even begin an
+						// identifier (pure punctuation such as `%`) is treated
+						// as a non-match: bare unset falls through to the
+						// function namespace, so `unset %` silently exits 0.
 						tryFuncOnly = true
 					} else if !explicitVars && strings.Contains(arg, "$(") {
 						for i+1 < len(args) && !syntax.ValidName(args[i+1]) {
