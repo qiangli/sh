@@ -78,6 +78,57 @@ func (r *Runner) arithFromString(s string) (int64, error) {
 	return int64(n), nil
 }
 
+// tildeLiteral expands a raw word literal that is entirely a tilde
+// prefix (`~`, `~/path`, `~+`, `~-`, `~user`) to the matching home /
+// directory. expand.Literal already performs this expansion, but it
+// leaves a bare `~` intact when the relevant variable is set but empty;
+// bash inside [[ ]] expands it to the empty string, so resolve the
+// env-backed prefixes directly and fall back to expand.Literal for the
+// remaining forms (e.g. ~user) and for an unexpandable tilde.
+func (r *Runner) tildeLiteral(raw string) string {
+	name := raw[1:]
+	rest := ""
+	if i := strings.IndexByte(name, '/'); i >= 0 {
+		rest = name[i:]
+		name = name[:i]
+	}
+	switch name {
+	case "":
+		if vr := r.lookupVar("HOME"); vr.IsSet() {
+			return vr.String() + rest
+		}
+	case "+":
+		if vr := r.lookupVar("PWD"); vr.IsSet() {
+			return vr.String() + rest
+		}
+	case "-":
+		if vr := r.lookupVar("OLDPWD"); vr.IsSet() {
+			return vr.String() + rest
+		}
+	}
+	return r.literal(&syntax.Word{Parts: []syntax.WordPart{
+		&syntax.Lit{Value: raw},
+	}})
+}
+
+// testTildeWholeWord expands word when it is a single unquoted literal
+// that is entirely a tilde prefix. It returns the expanded text, which
+// callers treat as the operand's literal value: as a plain string on
+// the left of a comparison, and with its glob/regex metacharacters
+// quoted on the right of a [[ ]] pattern (==/!=) or =~ comparison
+// (matching bash, which never re-parses a tilde expansion as a pattern).
+// ok is false when word is not a lone tilde-prefix literal.
+func (r *Runner) testTildeWholeWord(word *syntax.Word) (string, bool) {
+	if word == nil || len(word.Parts) != 1 {
+		return "", false
+	}
+	lit, ok := word.Parts[0].(*syntax.Lit)
+	if !ok || !strings.HasPrefix(lit.Value, "~") {
+		return "", false
+	}
+	return r.tildeLiteral(lit.Value), true
+}
+
 // non-empty string is true, empty string is false
 func (r *Runner) bashTest(ctx context.Context, expr syntax.TestExpr, classic bool) string {
 	switch x := expr.(type) {
@@ -86,6 +137,9 @@ func (r *Runner) bashTest(ctx context.Context, expr syntax.TestExpr, classic boo
 			// In the classic "test" mode, we already expanded and
 			// split the list of words, so don't redo that work.
 			return r.document(x)
+		}
+		if v, ok := r.testTildeWholeWord(x); ok {
+			return v
 		}
 		return r.literal(x)
 	case *syntax.ParenTest:
@@ -117,7 +171,16 @@ func (r *Runner) bashTest(ctx context.Context, expr syntax.TestExpr, classic boo
 					return "1"
 				}
 			} else { // [[
+				if v, ok := r.testTildeWholeWord(x.X.(*syntax.Word)); ok {
+					str = v
+				}
 				pat := r.pattern(yw)
+				// A tilde-expanded right-hand operand is a literal
+				// string, not a fresh glob pattern (bash never
+				// re-parses the home directory for metacharacters).
+				if v, ok := r.testTildeWholeWord(yw); ok {
+					pat = pattern.QuoteMeta(v, 0)
+				}
 				matchStr := str
 				// nocasematch: case-insensitive pattern matching
 				if opt, _ := r.bashOptByName("nocasematch"); opt != nil && *opt {
@@ -140,6 +203,12 @@ func (r *Runner) bashTest(ctx context.Context, expr syntax.TestExpr, classic boo
 			if yw, ok := x.Y.(*syntax.Word); ok {
 				if s, err := expand.RegexPattern(r.ecfg, yw); err == nil {
 					yStr = s
+				}
+				// A tilde-expanded regex operand matches literally:
+				// the home directory's regex metacharacters (e.g. a
+				// HOME of `^a$`) are quoted, matching bash.
+				if v, tildeOK := r.testTildeWholeWord(yw); tildeOK {
+					yStr = regexp.QuoteMeta(v)
 				}
 			}
 		}
