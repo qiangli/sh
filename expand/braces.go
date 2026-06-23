@@ -70,7 +70,7 @@ func bracesSeqRec(word *syntax.Word, yield func(*syntax.Word) bool) bool {
 		// after prepending `left` to its Parts.
 		expand := func(next *syntax.Word) bool {
 			return bracesSeqRec(next, func(w *syntax.Word) bool {
-				w.Parts = append(append([]syntax.WordPart(nil), left...), w.Parts...)
+				w.Parts = mergeAdjacentLits(append(append([]syntax.WordPart(nil), left...), w.Parts...))
 				return yield(w)
 			})
 		}
@@ -148,7 +148,26 @@ func bracesSeqRec(word *syntax.Word, yield func(*syntax.Word) bool) bool {
 			}
 			return true
 		}
+		onlyEmptyElems := true
 		for _, elem := range br.Elems {
+			if hasMeaningfulParts(elem.Parts) {
+				onlyEmptyElems = false
+				break
+			}
+		}
+		emptyElemYielded := false
+		for _, elem := range br.Elems {
+			// Bash 5.3 treats an empty brace-list element as zero text.
+			// When the entire resulting word would be empty and this list
+			// also has non-empty alternatives, the empty results are elided:
+			// `{X,,Y,}` becomes `X Y`. If every alternative is empty,
+			// bash still leaves one empty word, so collapse duplicates.
+			if !hasMeaningfulParts(elem.Parts) && !hasMeaningfulParts(left) && !hasMeaningfulParts(rest) {
+				if !onlyEmptyElems || emptyElemYielded {
+					continue
+				}
+				emptyElemYielded = true
+			}
 			next := *word
 			next.Parts = append(append([]syntax.WordPart(nil), elem.Parts...), rest...)
 			if !expand(&next) {
@@ -157,7 +176,7 @@ func bracesSeqRec(word *syntax.Word, yield func(*syntax.Word) bool) bool {
 		}
 		return true
 	}
-	return yield(&syntax.Word{Parts: left})
+	return yield(&syntax.Word{Parts: mergeAdjacentLits(left)})
 }
 
 // hasLeadingZero reports whether the literal carries a leading zero
@@ -172,4 +191,34 @@ func hasLeadingZero(s string) bool {
 		s = s[1:]
 	}
 	return len(s) > 1 && s[0] == '0'
+}
+
+func mergeAdjacentLits(parts []syntax.WordPart) []syntax.WordPart {
+	var out []syntax.WordPart
+	for _, part := range parts {
+		lit, ok := part.(*syntax.Lit)
+		if !ok || len(out) == 0 {
+			out = append(out, part)
+			continue
+		}
+		prev, ok := out[len(out)-1].(*syntax.Lit)
+		if !ok {
+			out = append(out, part)
+			continue
+		}
+		merged := *prev
+		merged.Value += lit.Value
+		out[len(out)-1] = &merged
+	}
+	return out
+}
+
+func hasMeaningfulParts(parts []syntax.WordPart) bool {
+	for _, part := range parts {
+		lit, ok := part.(*syntax.Lit)
+		if !ok || lit.Value != "" {
+			return true
+		}
+	}
+	return false
 }
