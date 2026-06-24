@@ -149,11 +149,11 @@ var interactiveTests = []struct {
 	{
 		pairs: []string{
 			"echo *; :\n",
-			"main.go main_test.go\n$ ",
+			"dbracket_test.go main.go main_test.go\n$ ",
 			"echo *\n",
-			"main.go main_test.go\n$ ",
+			"dbracket_test.go main.go main_test.go\n$ ",
 			"shopt -s globstar; echo **\n",
-			"main.go main_test.go\n$ ",
+			"dbracket_test.go main.go main_test.go\n$ ",
 		},
 	},
 	{
