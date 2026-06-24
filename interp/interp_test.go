@@ -344,6 +344,14 @@ var runTests = []runTest{
 		"for i in 1; do continue 1 2; done",
 		"continue: too many arguments\nexit status 2 #JUSTERR",
 	},
+	{
+		"for i in a b c; do echo $i; continue 1 2 3; done; echo --",
+		"a\ncontinue: too many arguments\n--\n",
+	},
+	{
+		"echo pipestatus ${PIPESTATUS[@]}\nfalse\necho pipestatus ${PIPESTATUS[@]}\nexit 55 | (exit 44)\necho pipestatus ${PIPESTATUS[@]}\ntrue\necho pipestatus ${PIPESTATUS[@]}",
+		"pipestatus\npipestatus 1\npipestatus 55 44\npipestatus 0\n",
+	},
 	{"false; a=b", ""},
 	{"false; false &", ""},
 	{
@@ -2032,13 +2040,13 @@ var runTests = []runTest{
 	},
 
 	// return
-	{"return", "return: can only `return' from a function or sourced script\nexit status 1 #JUSTERR"},
+	{"return", "return: can only `return' from a function or sourced script\nexit status 2 #JUSTERR"},
 	{"f() { return; }; f", ""},
 	{"f() { return 2; }; f", "exit status 2"},
 	{"f() { echo foo; return; echo bar; }; f", "foo\n"},
 	{"f1() { :; }; f2() { f1; return; }; f2", ""},
 	{"echo 'return' >a; source ./a", ""},
-	{"echo 'return' >a; source ./a; return", "return: can only `return' from a function or sourced script\nexit status 1 #JUSTERR"},
+	{"echo 'return' >a; source ./a; return", "return: can only `return' from a function or sourced script\nexit status 2 #JUSTERR"},
 	{"echo 'return 2' >a; source ./a", "exit status 2"},
 	{"echo 'echo foo; return; echo bar' >a; source ./a", "foo\n"},
 

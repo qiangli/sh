@@ -1094,6 +1094,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			exit.exiting = true
 			return exit
 		default:
+			r.breakEnclosing = 1
 			return failf(2, "%s: too many arguments\n", name)
 		}
 	case "pwd":
@@ -2923,7 +2924,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			return exit
 		}
 		if !r.inFunc && !r.inSource {
-			return failf(1, "return: can only `return' from a function or sourced script\n")
+			return failf(2, "return: can only `return' from a function or sourced script\n")
 		}
 		switch len(args) {
 		case 0:

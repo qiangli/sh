@@ -4219,6 +4219,14 @@ func plainPipelineSubshell(st *syntax.Stmt) (*syntax.Subshell, bool) {
 	return subshell, ok
 }
 
+func stmtIsPipeline(st *syntax.Stmt) bool {
+	if st == nil {
+		return false
+	}
+	bc, ok := st.Cmd.(*syntax.BinaryCmd)
+	return ok && (bc.Op == syntax.Pipe || bc.Op == syntax.PipeAll)
+}
+
 func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 	// Run any trap handlers for OS signals that arrived since the last
 	// command. Doing this between statements lets an async signal (e.g.
@@ -4282,6 +4290,9 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 		}
 	}
 	r.lastExit = r.exit
+	if !stmtIsPipeline(st) {
+		r.pipeStatus = []string{strconv.Itoa(int(r.exit.code))}
+	}
 }
 
 func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {

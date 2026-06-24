@@ -913,8 +913,6 @@ func (r *Runner) lookupVar(name string) expand.Variable {
 		vr.Kind = expand.Indexed
 		if r.pipeStatus != nil {
 			vr.List = r.pipeStatus
-		} else {
-			vr.List = []string{strconv.Itoa(int(r.lastExit.code))}
 		}
 	case "DIRSTACK":
 		// Bash exposes DIRSTACK with the top-of-stack at index 0,
