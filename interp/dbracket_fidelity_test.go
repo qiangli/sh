@@ -85,6 +85,15 @@ func TestDbracketFidelity(t *testing.T) {
 				"echo regex=$?\n",
 			want: "regex=0\nregex=0\nregex=1\nregex=0\n",
 		},
+		// dbracket__029.sh — quoted numeric operands are still
+		// arithmetic values in [[ ]] comparisons; the quote marks
+		// themselves are not part of the arithmetic expression.
+		{
+			name: "029_quoted_arithmetic_operands",
+			in: "[[ \"3\" -eq \"3\" ]] && echo true\n" +
+				"[[ '3' -eq '3' ]] && echo true\n",
+			want: "true\ntrue\n",
+		},
 	}
 
 	for _, tc := range cases {
@@ -112,5 +121,32 @@ func TestDbracketFidelity(t *testing.T) {
 				t.Fatalf("wrong output in %q:\nwant: %q\ngot:  %q", tc.in, tc.want, got)
 			}
 		})
+	}
+}
+
+func TestDbracketBashCompatDiagnostics(t *testing.T) {
+	t.Parallel()
+
+	src := "[[ foo.py =~ * ]]\n"
+	file, err := syntax.NewParser().Parse(strings.NewReader(src), "./s")
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+
+	var cb lockedBuffer
+	r, err := New(StdIO(nil, &cb, &cb), WithBashCompatErrors(true), WithBashSource([]byte(src)))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := r.Run(ctx, file); err != nil {
+		cb.Write([]byte(err.Error()))
+	}
+
+	want := "./s: line 1: [[: invalid regular expression `*': Repetition not preceded by valid expression\nexit status 2"
+	if got := cb.String(); got != want {
+		t.Fatalf("wrong output:\nwant: %q\ngot:  %q", want, got)
 	}
 }

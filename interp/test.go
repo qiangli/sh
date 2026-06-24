@@ -250,7 +250,7 @@ func (r *Runner) bashTest(ctx context.Context, expr syntax.TestExpr, classic boo
 		}
 		if !classic {
 			switch x.Op {
-			case syntax.TsEql, syntax.TsNeq, syntax.TsLeq, syntax.TsGeq, syntax.TsLss, syntax.TsGtr:
+			case syntax.TsBefore, syntax.TsAfter:
 				if xw, ok := x.X.(*syntax.Word); ok {
 					if src := r.sourceTextRange(xw.Pos(), xw.End(), false); src != "" {
 						xStr = src
@@ -285,7 +285,7 @@ func (r *Runner) binTest(ctx context.Context, op syntax.BinTestOperator, x, y st
 		}
 		re, err := regexp.Compile(pat)
 		if err != nil {
-			r.errf("[[: %s\n", bashRegexErrMsg(err, y))
+			r.errf("%s[[: %s\n", r.bashErrPrefix(r.curStmtPos), bashRegexErrMsg(err, y))
 			r.exit.code = 2
 			return false
 		}
