@@ -309,6 +309,95 @@ func TestFieldsUnquotedStarNullIFSPreservesElements(t *testing.T) {
 	}
 }
 
+func TestFieldsBash53WordSplitSpecialParams(t *testing.T) {
+	tests := []struct {
+		name string
+		env  testEnv
+		src  string
+		want []string
+	}{
+		{
+			name: "null IFS prefix at",
+			env: testEnv{
+				"IFS":           {Set: true, Kind: String, Str: ""},
+				"gLwbmGzS_var1": {Set: true, Kind: String, Str: "1"},
+				"gLwbmGzS_var2": {Set: true, Kind: String, Str: "2"},
+			},
+			src:  `${!gLwbmGzS_@}`,
+			want: []string{"gLwbmGzS_var1", "gLwbmGzS_var2"},
+		},
+		{
+			name: "null IFS prefix star",
+			env: testEnv{
+				"IFS":           {Set: true, Kind: String, Str: ""},
+				"gLwbmGzS_var1": {Set: true, Kind: String, Str: "1"},
+				"gLwbmGzS_var2": {Set: true, Kind: String, Str: "2"},
+			},
+			src:  `${!gLwbmGzS_*}`,
+			want: []string{"gLwbmGzS_var1gLwbmGzS_var2"},
+		},
+		{
+			name: "null IFS array keys at",
+			env: testEnv{
+				"IFS": {Set: true, Kind: String, Str: ""},
+				"a":   {Set: true, Kind: Indexed, List: []string{"v1", "v2", "v3"}},
+			},
+			src:  `${!a[@]}`,
+			want: []string{"0", "1", "2"},
+		},
+		{
+			name: "null IFS array keys star",
+			env: testEnv{
+				"IFS": {Set: true, Kind: String, Str: ""},
+				"a":   {Set: true, Kind: Indexed, List: []string{"v1", "v2", "v3"}},
+			},
+			src:  `${!a[*]}`,
+			want: []string{"0 1 2"},
+		},
+		{
+			name: "null IFS star drops trailing empty",
+			env: testEnv{
+				"IFS": {Set: true, Kind: String, Str: ""},
+				"*":   {Set: true, Kind: Indexed, List: []string{"a b", "c", ""}},
+			},
+			src:  `echo $*`,
+			want: []string{"a b", "c"},
+		},
+		{
+			name: "custom IFS at preserves middle empty",
+			env: testEnv{
+				"IFS": {Set: true, Kind: String, Str: "zx"},
+				"@":   {Set: true, Kind: Indexed, List: []string{"one", "", "two"}},
+			},
+			src:  `echo $@`,
+			want: []string{"one", "", "two"},
+		},
+		{
+			name: "quoted empties preserve split boundaries",
+			env: testEnv{
+				"A": {Set: true, Kind: String, Str: "   abc   def   "},
+			},
+			src:  `echo ""$A""`,
+			want: []string{"", "abc", "def", ""},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			word := parseWord(t, tc.src)
+			if strings.HasPrefix(tc.src, "echo ") {
+				word = parseCallArg(t, tc.src, 1)
+			}
+			got, err := Fields(&Config{Env: tc.env}, word)
+			if err != nil {
+				t.Fatalf("%s: did not want error, got %v", tc.src, err)
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("%s: wanted %q, got %q", tc.src, tc.want, got)
+			}
+		})
+	}
+}
+
 func TestFieldsParamExpDefaultBackslashInDoubleQuotes(t *testing.T) {
 	cfg := &Config{Env: ListEnviron("somevar=", "HOME=/usr/homes/chet")}
 	tests := []struct {
