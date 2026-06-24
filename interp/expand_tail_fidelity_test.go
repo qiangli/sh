@@ -44,14 +44,14 @@ func TestExpandTailBuiltinFidelity(t *testing.T) {
 			// inside `eval` discards only the eval'd command list — bash
 			// contains the DISCARD within eval, which returns status 1,
 			// so the enclosing function keeps running (the `status=1`
-			// echo and the later global read both execute). (bash reports
-			// the error at the eval-call line 5; our eval re-parses the
-			// payload with fresh positions and reports line 1.)
+			// echo and the later global read both execute). bash reports
+			// the error at the eval-call line (line 5); with the merged
+			// eval-line-offset fix our eval now anchors to that line too.
 			name: "builtin-vars__016",
 			in: "f() {\n\tlocal x=local\n\treadonly x\n\techo $x\n" +
 				"\teval 'x=bar'\n\techo status=$?\n}\nx=global\nf\necho $x",
 			want: "local\n" +
-				"./s: line 1: x: readonly variable\n" +
+				"./s: line 5: x: readonly variable\n" +
 				"status=1\n" +
 				"global\n",
 		},
