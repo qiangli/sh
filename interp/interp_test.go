@@ -6274,6 +6274,63 @@ func TestBashCompatExecInvalidOptionUsage(t *testing.T) {
 			"exec: usage: exec [-cl] [-a name] [command [argument ...]] [redirection ...]\n"))
 }
 
+func TestBashCompatReadonlyAssignErrexitExits(t *testing.T) {
+	// A standalone assignment to a readonly variable is fatal under
+	// `set -e`: bash prints the diagnostic and exits the shell without
+	// running the next command (builtin-vars.test.sh). Without errexit
+	// the same assignment only discards the rest of the physical line
+	// and execution continues.
+	t.Run("errexit-exits", func(t *testing.T) {
+		src := "set -o errexit\nreadonly foo=bar\nfoo=eggs\necho \"status=$?\"\n"
+		file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(src), "./vars.tests")
+		qt.Assert(t, qt.IsNil(err))
+		var cb bytes.Buffer
+		r, err := interp.New(interp.StdIO(nil, &cb, &cb), interp.WithBashCompatErrors(true), interp.WithBashSource([]byte(src)))
+		qt.Assert(t, qt.IsNil(err))
+		err = r.Run(context.Background(), file)
+		qt.Assert(t, qt.ErrorMatches(err, "exit status 1"))
+		qt.Assert(t, qt.Equals(cb.String(), "./vars.tests: line 3: foo: readonly variable\n"))
+	})
+	t.Run("no-errexit-continues", func(t *testing.T) {
+		src := "readonly foo=bar\nfoo=eggs\necho next\n"
+		file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(src), "./vars.tests")
+		qt.Assert(t, qt.IsNil(err))
+		var cb bytes.Buffer
+		r, err := interp.New(interp.StdIO(nil, &cb, &cb), interp.WithBashCompatErrors(true), interp.WithBashSource([]byte(src)))
+		qt.Assert(t, qt.IsNil(err))
+		err = r.Run(context.Background(), file)
+		qt.Assert(t, qt.IsNil(err))
+		qt.Assert(t, qt.Equals(cb.String(), "./vars.tests: line 2: foo: readonly variable\nnext\n"))
+	})
+}
+
+func TestBashCompatShoptLongOptionInvalid(t *testing.T) {
+	// bash's `shopt` getopt only accepts -p/-q/-s/-u/-o (and a bare
+	// `--` to end options). Any `--xxx` long form (`--set`, `--unset`,
+	// `--foo`) is rejected as `shopt: --: invalid option` with usage
+	// (arith.test.sh `shopt --set strict_arith`). A lone `--` is still
+	// the valid end-of-options marker.
+	src := "shopt --set strict_arith\nshopt -- extglob\n"
+	file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(src), "./arith.tests")
+	qt.Assert(t, qt.IsNil(err))
+
+	var cb bytes.Buffer
+	r, err := interp.New(
+		interp.StdIO(nil, &cb, &cb),
+		interp.WithBashCompatErrors(true),
+		interp.WithBashSource([]byte(src)),
+	)
+	qt.Assert(t, qt.IsNil(err))
+
+	err = r.Run(context.Background(), file)
+	// The last command (`shopt -- extglob`, an unset query) exits 1.
+	qt.Assert(t, qt.ErrorMatches(err, "exit status 1"))
+	qt.Assert(t, qt.Equals(cb.String(),
+		"./arith.tests: line 1: shopt: --: invalid option\n"+
+			"shopt: usage: shopt [-pqsu] [-o] [optname ...]\n"+
+			"extglob             \toff\n"))
+}
+
 func TestBashCompatUnsetInvalidPathName(t *testing.T) {
 	src := "unset /bin/sh\nunset invalid-name\n"
 	file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(src), "./errors.tests")

@@ -163,7 +163,12 @@ func TestArrayElementUnsetAndSetnessFidelity(t *testing.T) {
 		},
 		{
 			name: "shopt_long_set_strict_array",
-			in: "case $SH in bash) ;; *) shopt --set strict_array ;; esac\n" +
+			// bash rejects `shopt --set` (the `--set`/`--unset` long
+			// forms are OSH-only). As a bash drop-in we are `bash`,
+			// so the OSH-only line is skipped and the array
+			// reassignment behaves exactly like bash.
+			in: "SH=bash\n" +
+				"case $SH in bash) ;; *) shopt --set strict_array ;; esac\n" +
 				"s1=hello\n" +
 				"s2=world\n" +
 				"eval 's1=(1 2 3 4)'\n" +

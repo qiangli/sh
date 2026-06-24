@@ -1030,6 +1030,13 @@ func (r *Runner) bashArithmError(expr syntax.ArithmExpr, err error, command bool
 		}
 		line = int(r.curStmtPos.Line())
 	}
+	// A multi-line `(( ))` command reports against its closing `))`
+	// line. The ArithmCmd dispatch parks curStmtPos at the command end
+	// for exactly this purpose, so prefer it when it lands on a later
+	// line than the expression itself (single-line forms are unchanged).
+	if command && r.curStmtPos.IsValid() && int(r.curStmtPos.Line()) > line {
+		line = int(r.curStmtPos.Line())
+	}
 	if exprTextOverride != "" && r.curStmtPos.IsValid() {
 		line = int(r.curStmtPos.Line())
 	}
@@ -4880,8 +4887,15 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 					// loop, but not the whole script. A real exit
 					// propagating out of an expansion (`v=${ exit 2; }`)
 					// already carries its own flags; leave it alone.
+					//
+					// Under `set -e` the failed assignment is fatal and
+					// exits the shell unconditionally (bash applies this
+					// even inside an if/while condition, an `&&`/`||`
+					// list, or after `!` — the usual errexit exemptions
+					// do not apply to readonly-assignment errors), so
+					// don't downgrade it to a rest-of-line discard.
 					r.exit.exiting = true
-					if !r.opts[optPosix] {
+					if !r.opts[optPosix] && !r.opts[optErrExit] {
 						r.exit.discarding = true
 						// A standalone assignment to a readonly variable
 						// also aborts the remaining statements on the same
@@ -5636,7 +5650,17 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			trace.string(" ))")
 			trace.newLineFlush()
 		}
-		r.exit.oneIf(r.arithm(cm.X) == 0)
+		// A `(( ))` command that spans several physical lines reports
+		// an arithmetic error against its *closing* `))` line, not the
+		// opening `((` (arith.test.sh: `(( a = 3 + 4  # comment\n))`
+		// errors on the `))` line). Point curStmtPos at the command's
+		// end for the duration of the evaluation; single-line forms are
+		// unaffected since start and end share a line.
+		oldArithStmtPos := r.curStmtPos
+		r.curStmtPos = cm.End()
+		exitZero := r.arithm(cm.X) == 0
+		r.curStmtPos = oldArithStmtPos
+		r.exit.oneIf(exitZero)
 	case *syntax.LetClause:
 		var val int
 		exprs := cm.Exprs
