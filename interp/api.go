@@ -334,7 +334,11 @@ type Runner struct {
 	// reset to zero across a function-body call, since a function
 	// invoked from eval reports its own definition line, not the
 	// eval call's. See the eval builtin and the function dispatch.
+	// evalExec is non-zero whenever such a body is running, which also
+	// redirects a few builtin-attributed diagnostics (array-conversion)
+	// to `eval`.
 	evalLineOffset int
+	evalExec       int
 
 	// bgProcs holds all background shells spawned by this runner.
 	// Their PIDs are 1-indexed, from 1 to len(bgProcs), with a "g" prefix

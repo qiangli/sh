@@ -467,6 +467,13 @@ func (r *Runner) expandErr(err error) {
 		r.exit.code = 1
 		r.lastExpandExit = exitStatus{code: 1}
 		return
+	case strings.Contains(errMsg, "substring expression < 0"):
+		// Bash: a substring/offset expansion error (`${a[@]:1:-3}`)
+		// skips the current simple command without changing $?
+		// (the error is a non-fatal diagnostic; $? stays 0).
+		// Subsequent commands on the same physical line still run.
+		r.exit.exiting = true
+		return
 	case errors.As(err, &indirErr):
 		if indirErr.NonFatal {
 			// `${!var:-def}` with var unset: $? = 1, keep running.

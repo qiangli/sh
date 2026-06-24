@@ -2092,12 +2092,17 @@ func (r *Runner) setVar(name string, vr expand.Variable) {
 			// that fails to convert is attributed by bash 5.3 to the
 			// variable alone, with no builtin prefix; the builtin-prefixed
 			// line only accompanies the function-attributed report.
-			if r.setVarArrayLiteral && len(r.callStack) == 0 {
+			// When the assignment runs from an `eval` body, bash instead
+			// attributes the failure to the `eval` builtin.
+			if r.setVarArrayLiteral && len(r.callStack) == 0 && r.evalExec == 0 {
 				r.errf("%s%s: %s\n", r.bashErrPrefix(r.curStmtPos), name, convErr)
 			} else {
 				builtin := r.setVarFromBuiltin
 				if builtin == "" {
 					builtin = "declare"
+				}
+				if r.evalExec > 0 {
+					builtin = "eval"
 				}
 				r.errf("%s%s: %s: %s\n", r.bashErrPrefix(r.curStmtPos), builtin, name, convErr)
 			}
