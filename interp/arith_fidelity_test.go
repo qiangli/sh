@@ -25,12 +25,40 @@ func TestArithFidelity(t *testing.T) {
 			want:  "47\n",
 		},
 		{
-			input: "echo $((a + x42))\necho status=$?\necho $((a + 42x))",
-			want:  "0\nstatus=0\nvalue too great for base (error token is \"42x\")\n",
+			input: "echo $((a + x42))\necho status=$?\necho $((a + 42x))\necho status=$?",
+			want:  "0\nstatus=0\nvalue too great for base (error token is \"42x\")\nstatus=1\n",
 		},
 		{
 			input: "foo=bar\nxbar=42\necho $(( x$foo++ ))\necho xbar=$xbar",
 			want:  "42\nxbar=43\n",
+		},
+		{
+			input: "foo=bar\nxbar[5]=42\necho $(( x$foo[5]++ ))\necho 'xbar[5]='${xbar[5]}",
+			want:  "42\nxbar[5]=43\n",
+		},
+		{
+			input: "(( 1[2] = 3 ))\necho status=$?\n(( a[1][2] = 3 ))\necho status=$?",
+			want:  "arithmetic syntax error: invalid arithmetic operator (error token is \"[2] = 3 \")\nstatus=1\narithmetic syntax error: invalid arithmetic operator (error token is \"[2] = 3 \")\nstatus=1\n",
+		},
+		{
+			input: "a=(1 2 3)\necho $(( a[1] ))\necho $(( a[1][1] ))\necho status=$?",
+			want:  "2\narithmetic syntax error: invalid arithmetic operator (error token is \"[1] \")\nstatus=1\n",
+		},
+		{
+			input: "echo $(( '1' + 2))\necho status=$?",
+			want:  "arithmetic syntax error: operand expected (error token is \"'1' \")\nstatus=1\n",
+		},
+		{
+			input: "a=(a b c d e f)\necho slice ${a[@]: }\necho status=$?\necho slice ${a[@]: : }\necho status=$?\necho slice ${a[@]:: }\necho status=$?",
+			want:  "slice a b c d e f\nstatus=0\nslice\nstatus=0\nslice\nstatus=0\n",
+		},
+		{
+			input: "a=(1 2 3)\na[]=42\necho status=$?\necho ${a[@]}\necho ${a[]}\necho status=$?",
+			want:  "a[]: bad array subscript\nstatus=1\n1 2 3\nbad substitution\nstatus=1\n",
+		},
+		{
+			input: "echo $(( 1 + 2.3 ))",
+			want:  "arithmetic syntax error: invalid arithmetic operator (error token is \".3\")\nexit status 1",
 		},
 		{
 			input: "echo $(( 5 << 1 ))\necho $(( 5 << 0 ))\necho $(( 5 << -1 ))",
