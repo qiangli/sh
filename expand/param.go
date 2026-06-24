@@ -2641,9 +2641,15 @@ func (cfg *Config) varInd(vr Variable, idx syntax.ArithmExpr) (string, error) {
 		// A subscript key undergoes quote removal: an unquoted `\]` (or
 		// `\[`) in `${a[\]]}` resolves to the literal key `]`, matching the
 		// way the assignment side stored it.
-		val, err := LiteralWithQuoteRemoval(cfg, idx.(*syntax.Word))
-		if err != nil {
-			return "", err
+		val := ""
+		if word, ok := idx.(*syntax.Word); ok {
+			var err error
+			val, err = LiteralWithQuoteRemoval(cfg, word)
+			if err != nil {
+				return "", err
+			}
+		} else {
+			val = compactArithmText(idx)
 		}
 		if val == "" {
 			return "", fmt.Errorf("[%s]: bad array subscript", subscriptText(idx))
@@ -2714,6 +2720,29 @@ func subscriptText(idx syntax.ArithmExpr) string {
 	var b strings.Builder
 	syntax.NewPrinter().Print(&b, idx)
 	return b.String()
+}
+
+func compactArithmText(expr syntax.ArithmExpr) string {
+	switch x := expr.(type) {
+	case *syntax.Word:
+		return x.Lit()
+	case *syntax.BinaryArithm:
+		return compactArithmText(x.X) + x.Op.String() + compactArithmText(x.Y)
+	case *syntax.UnaryArithm:
+		if x.Post {
+			return compactArithmText(x.X) + x.Op.String()
+		}
+		return x.Op.String() + compactArithmText(x.X)
+	case *syntax.ParenArithm:
+		return "(" + compactArithmText(x.X) + ")"
+	case *syntax.FlagsArithm:
+		if x.Flags == nil {
+			return compactArithmText(x.X)
+		}
+		return "(" + x.Flags.Value + ")" + compactArithmText(x.X)
+	default:
+		return subscriptText(expr)
+	}
 }
 
 // wordHasDoubleQuote reports whether the word contains a double-quoted
