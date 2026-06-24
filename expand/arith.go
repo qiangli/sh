@@ -155,10 +155,16 @@ func (cfg *Config) arithmIndexedParamLiteral(word *syntax.Word) (string, bool, e
 		if index < 0 {
 			indexes := vr.IndexedIndexes()
 			if len(indexes) == 0 {
+				if cfg.OnBadArraySubscript != nil {
+					cfg.OnBadArraySubscript(name)
+				}
 				break
 			}
 			index = indexes[len(indexes)-1] + 1 + index
 			if index < 0 {
+				if cfg.OnBadArraySubscript != nil {
+					cfg.OnBadArraySubscript(name)
+				}
 				break
 			}
 		}

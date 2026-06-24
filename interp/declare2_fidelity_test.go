@@ -75,6 +75,36 @@ func TestDeclare2Fidelity(t *testing.T) {
 			`arr=(1 2 3); eval -- "$(arr=(); arr[3]=; arr[4]=foo; declare -p arr)"; for i in {0..4}; do echo "arr[$i]: ${arr[$i]+set ... [}${arr[$i]-unset}${arr[$i]+]}"; done`,
 			"arr[0]: unset\narr[1]: unset\narr[2]: unset\narr[3]: set ... []\narr[4]: set ... [foo]\n",
 		},
+		// array-assign__008: arithmetic side effects in indexed
+		// subscripts are preserved instead of being overwritten by the
+		// final element assignment.
+		{
+			`echo assign=$(( z[0] = 42 )); a[a[0]=1]=X; declare -p a; a[ a[2]=3 ]=Y; declare -p a; echo ---; a[ a[0]+=1 ]+=X; declare -p a`,
+			"assign=42\ndeclare -a a=([0]=\"1\" [1]=\"X\")\ndeclare -a a=([0]=\"1\" [1]=\"X\" [2]=\"3\" [3]=\"Y\")\n---\ndeclare -a a=([0]=\"2\" [1]=\"X\" [2]=\"3X\" [3]=\"Y\")\n",
+		},
+		// array-assign__010: declare rejects whitespace-bearing
+		// subscripts, but the arithmetic subscript side effect remains.
+		{
+			`declare a[a[0]=1]=X; declare -p a; declare a[ a[2]=3 ]=Y; declare -p a`,
+			"declare -a a=([0]=\"1\" [1]=\"X\")\ndeclare: `a[': not a valid identifier\ndeclare: `]=Y': not a valid identifier\ndeclare -a a=([0]=\"1\" [1]=\"X\" [2]=\"3\")\n",
+		},
+		// array__009 and array__077: an out-of-range negative
+		// subscript reports an error but expands to an empty string.
+		{
+			`a=(1 '2 3'); printf '[%s]\n' "${a[-1]}" "${a[-2]}" "${a[-5]}"`,
+			"a: bad array subscript\n[2 3]\n[1]\n[]\n",
+		},
+		{
+			`a=(x); echo "[${a[-2]}]"; echo $?; echo "[$((a[-2]))]"; echo $?`,
+			"a: bad array subscript\n[]\n0\na: bad array subscript\n[0]\n0\n",
+		},
+		// array-literal__010: compound-assignment RHS values expand
+		// before mutations, while later explicit indexes see earlier
+		// elements installed by the same literal.
+		{
+			`a=(old1 old2 old3); a=("${a[2]}" "${a[0]}" "${a[1]}" "${a[2]}" "${a[0]}"); declare -p a; a=(old1 old2 old3); old1=101 old2=102 old3=103; new1=201 new2=202 new3=203; a+=([0]=new1 [1]=new2 [2]=new3 [5]="${a[2]}" [a[0]]="${a[0]}" [a[1]]="${a[1]}"); declare -p a`,
+			"declare -a a=([0]=\"old3\" [1]=\"old1\" [2]=\"old2\" [3]=\"old3\" [4]=\"old1\")\ndeclare -a a=([0]=\"new1\" [1]=\"new2\" [2]=\"new3\" [5]=\"old3\" [201]=\"old1\" [202]=\"old2\")\n",
+		},
 
 		// builtin-vars__026: a name that cannot even begin a variable
 		// identifier (pure punctuation) is not a botched identifier; bare

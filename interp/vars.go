@@ -1702,7 +1702,7 @@ func (r *Runner) setVarString(name, value string) {
 		w := &syntax.Word{Parts: []syntax.WordPart{
 			&syntax.Lit{Value: idx},
 		}}
-		r.setVarWithIndex(r.lookupVar(base), base, w, expand.Variable{Set: true, Kind: expand.String, Str: value})
+		r.setVarWithIndex(r.lookupVar(base), base, w, expand.Variable{Set: true, Kind: expand.String, Str: value}, false)
 		return
 	}
 	r.setVar(name, expand.Variable{Set: true, Kind: expand.String, Str: value})
@@ -1940,7 +1940,7 @@ func (r *Runner) setVar(name string, vr expand.Variable) {
 		w := &syntax.Word{Parts: []syntax.WordPart{
 			&syntax.Lit{Value: idx},
 		}}
-		r.setVarWithIndex(r.lookupVar(base), base, w, vr)
+		r.setVarWithIndex(r.lookupVar(base), base, w, vr, false)
 		return
 	}
 	if name == "RANDOM" && vr.IsSet() {
@@ -2272,7 +2272,7 @@ func (r *Runner) rawAssignIndexArithError(rawText string, err error) error {
 		prefix, r.curStmtPos.Line(), text, token)
 }
 
-func (r *Runner) setVarWithIndex(prev expand.Variable, name string, index syntax.ArithmExpr, vr expand.Variable) {
+func (r *Runner) setVarWithIndex(prev expand.Variable, name string, index syntax.ArithmExpr, vr expand.Variable, appendValue bool) {
 	if vr.Kind == expand.String && index == nil {
 		// When assigning a string to an array, fall back to the
 		// zero value for the index.
@@ -2306,15 +2306,7 @@ func (r *Runner) setVarWithIndex(prev expand.Variable, name string, index syntax
 	// is non-nil; nested arrays are forbidden.
 	valStr := vr.Str
 
-	var list []string
-	var listSet map[int]bool
 	switch prev.Kind {
-	case expand.String:
-		list = append(list, prev.Str)
-	case expand.Indexed:
-		// TODO: only clone when inside a subshell and getting a var from outside for the first time
-		list = slices.Clone(prev.List)
-		listSet = prev.CloneListSet()
 	case expand.Associative:
 		// if the existing variable is already an AssocArray, try our
 		// best to convert the key to a string
@@ -2404,6 +2396,21 @@ func (r *Runner) setVarWithIndex(prev expand.Variable, name string, index syntax
 		r.exit.code = 1
 		return
 	}
+	// The arithmetic subscript can itself mutate the target array, as
+	// in `a[a[0]=1]=X`. Re-read the target after evaluating the index
+	// so the final element write merges with those side effects instead
+	// of replacing them with the pre-evaluation snapshot.
+	prev = r.lookupVar(name)
+	var list []string
+	var listSet map[int]bool
+	switch prev.Kind {
+	case expand.String:
+		list = append(list, prev.Str)
+	case expand.Indexed:
+		// TODO: only clone when inside a subshell and getting a var from outside for the first time
+		list = slices.Clone(prev.List)
+		listSet = prev.CloneListSet()
+	}
 	if k < 0 {
 		// Bash 5.3 accepts negative indices as offsets from the
 		// end of the array: `a[-1]` targets the last element.
@@ -2430,6 +2437,15 @@ func (r *Runner) setVarWithIndex(prev expand.Variable, name string, index syntax
 	}
 	for len(list) < k+1 {
 		list = append(list, "")
+	}
+	if appendValue {
+		if prev.Integer {
+			cur, _ := strconv.Atoi(r.integerArrayValue(list[k]))
+			rhs, _ := strconv.Atoi(r.integerArrayValue(valStr))
+			valStr = strconv.Itoa(cur + rhs)
+		} else {
+			valStr = list[k] + valStr
+		}
 	}
 	list[k] = valStr
 	if listSet != nil {
@@ -2785,6 +2801,11 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 				arithAssignErr(s, err)
 				return name, prev
 			}
+			if as.Append && as.Index != nil && prev.Kind == expand.Indexed {
+				prev.Kind = expand.String
+				prev.Str = strconv.Itoa(rhs)
+				return name, prev
+			}
 			if as.Append {
 				curStr := prev.Str
 				// For indexed arrays the integer-flag bumps each
@@ -2938,20 +2959,12 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 			}
 		case expand.Indexed:
 			// `arr[i]+=s` appends `s` onto the existing element
-			// at index `i`. setVarWithIndex receives vr.Str and
-			// writes it into list[k] for us, so seed the scalar
-			// with the prior element's value here.
+			// at index `i`. Leave subscript evaluation and current
+			// value lookup to setVarWithIndex so side effects in the
+			// subscript happen exactly once.
 			if as.Index != nil {
-				k := r.arithm(as.Index)
-				if k < 0 {
-					k = indexedNegativeOffset(prev, k)
-				}
-				var cur string
-				if prev.IndexedSet(k) {
-					cur = prev.List[k]
-				}
 				prev.Kind = expand.String
-				prev.Str = cur + s
+				prev.Str = s
 				return name, prev
 			}
 			// Bare `arr+=s` (no index) targets element 0, per
@@ -3143,31 +3156,16 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 		}
 		return name, prev
 	}
-	// Evaluate values for each array element.
+	// Expand all RHS values before modifying the array. Bash delays
+	// explicit subscript arithmetic until each element is installed,
+	// so earlier elements in the same literal are visible to later
+	// indexes, but RHS parameter expansions still see the original
+	// array.
 	elemValues := make([]struct {
-		index  int
-		values []string
-		append bool // [idx]+=value
+		indexExpr syntax.ArithmExpr
+		values    []string
+		append    bool // [idx]+=value
 	}, len(elems))
-	var index, maxIndex int
-	// Prev's list grows the working buffer when this is a +=-style
-	// outer assignment OR any element uses [idx]+=value (we need to
-	// read the previous element's value before appending).
-	// Inherit prev.List only for an outer-`+=` assignment. Per-element
-	// `[i]+=value` inside a fresh `x=(...)` appends onto whatever the
-	// new array has accumulated so far, not onto the previous value
-	// (bash 5.3 behavior — confirmed against `x=(1 2 [2]+=7 4 5)`).
-	needPrev := as.Append
-	// `arr+=( … )` starts implicit indexes at the existing length —
-	// bash appends new elements to the tail rather than overlaying
-	// position 0. Explicit `[i]=…` still overrides this baseline.
-	if as.Append && prev.Kind == expand.Indexed {
-		index = len(prev.List)
-	}
-	nextSet := make(map[int]bool)
-	if as.Append && prev.Kind == expand.Indexed {
-		nextSet = prev.DenseListSet()
-	}
 	for i, elem := range elems {
 		if elem.Index != nil {
 			if idx, bad := literalBadIndexedAssignSubscript(elem.Index); bad {
@@ -3180,40 +3178,14 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 						r.bashErrPrefix(r.curStmtPos), val)
 				}
 				r.exit.code = 1
-				elemValues[i].index = index
 				break
 			}
-			// Index resets our index with a literal value.
-			var ok bool
-			index, ok = r.arithmCompoundArrayIndex(elem.Index)
-			if !ok {
-				prev.Kind = expand.Indexed
-				prev.List = []string{}
-				prev.ListSet = nil
-				prev.Str = ""
-				return name, prev
-			}
-			if index < 0 {
-				// Bash 5.3 treats `arr[-1]=v` as an offset
-				// from the end of the existing list.
-				index = indexedNegativeOffset(prev, index)
-				if index < 0 {
-					r.errf("%s[%s]=%s: bad array subscript\n",
-						r.bashErrPrefix(r.curStmtPos), r.arithmSourceText(elem.Index, false), r.literalForAssign(elem.Value))
-					r.exit.code = 1
-					elemValues[i].index = 0
-					break
-				}
-			}
+			elemValues[i].indexExpr = elem.Index
 			elemValues[i].values = []string{r.literalForAssign(elem.Value)}
 			elemValues[i].append = elem.Append
 		} else {
-			// Implicit index, advancing for every word.
 			elemValues[i].values = r.fields(elem.Value)
 		}
-		elemValues[i].index = index
-		index += len(elemValues[i].values)
-		maxIndex = max(maxIndex, index)
 	}
 	// Integer attribute on an array (`typeset -i arr; arr=(1+2 3+4)`)
 	// evaluates each element value as an arithmetic expression. Apply
@@ -3237,17 +3209,51 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 			}
 		}
 	}
-	if needPrev {
-		maxIndex = max(maxIndex, len(prev.List))
-	}
-	// Flatten down the values.
-	strs := make([]string, maxIndex)
-	if needPrev {
+
+	var index int
+	strs := []string{}
+	nextSet := make(map[int]bool)
+	if as.Append && prev.Kind == expand.Indexed {
+		index = len(prev.List)
+		strs = make([]string, len(prev.List))
 		copy(strs, prev.List)
+		nextSet = prev.DenseListSet()
+	}
+	work := prev
+	work.Kind = expand.Indexed
+	work.Str = ""
+	work.List = strs
+	work.ListSet = nextSet
+	publishWork := func() {
+		_ = r.writeEnv.Set(name, work)
 	}
 	for _, ev := range elemValues {
+		if ev.indexExpr != nil {
+			publishWork()
+			var ok bool
+			index, ok = r.arithmCompoundArrayIndex(ev.indexExpr)
+			if !ok {
+				prev.Kind = expand.Indexed
+				prev.List = []string{}
+				prev.ListSet = nil
+				prev.Str = ""
+				return name, prev
+			}
+			if index < 0 {
+				index = indexedNegativeOffset(work, index)
+				if index < 0 {
+					r.errf("%s[%s]=%s: bad array subscript\n",
+						r.bashErrPrefix(r.curStmtPos), r.arithmSourceText(ev.indexExpr, false), strings.Join(ev.values, " "))
+					r.exit.code = 1
+					break
+				}
+			}
+		}
 		for i, str := range ev.values {
-			elemIndex := ev.index + i
+			elemIndex := index + i
+			for len(strs) <= elemIndex {
+				strs = append(strs, "")
+			}
 			if ev.append && i == 0 {
 				if prev.Integer {
 					// Integer-attribute arrays: `[k]+=N` adds
@@ -3262,6 +3268,9 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 			strs[elemIndex] = str
 			nextSet[elemIndex] = true
 		}
+		index += len(ev.values)
+		work.List = strs
+		work.ListSet = nextSet
 	}
 	if !as.Append {
 		prev.Kind = expand.Indexed
