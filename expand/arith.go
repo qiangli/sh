@@ -436,6 +436,34 @@ func expandedAssocSubscriptError(s string) error {
 
 func Arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 	cfg = prepareConfig(cfg)
+	_, topWord := expr.(*syntax.Word)
+	if !cfg.arithmDynamicReparse && !cfg.LetArithmetic && !topWord {
+		text, dynamic, err := cfg.dynamicArithmText(expr)
+		if err != nil {
+			return 0, err
+		}
+		if dynamic {
+			file, perr := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader("(("+text+"))"), "")
+			if perr != nil {
+				return 0, &ArithmError{Text: text, Err: arithmParseError(text, perr)}
+			}
+			if len(file.Stmts) == 1 {
+				if ac, ok := file.Stmts[0].Cmd.(*syntax.ArithmCmd); ok && ac.X != nil {
+					prev := cfg.arithmDynamicReparse
+					cfg.arithmDynamicReparse = true
+					n, err := Arithm(cfg, ac.X)
+					cfg.arithmDynamicReparse = prev
+					if err != nil {
+						if _, ok := err.(*ArithmError); ok {
+							return 0, err
+						}
+						return 0, &ArithmError{Expr: ac.X, Text: text, Err: err}
+					}
+					return n, nil
+				}
+			}
+		}
+	}
 	if cfg.arithmParamValues != nil {
 		return arithm(cfg, expr)
 	}
@@ -447,6 +475,129 @@ func Arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 	cfg.arithmParamValues = values
 	defer func() { cfg.arithmParamValues = prev }()
 	return arithm(cfg, expr)
+}
+
+func (cfg *Config) dynamicArithmText(expr syntax.ArithmExpr) (string, bool, error) {
+	switch expr := expr.(type) {
+	case nil:
+		return "", false, nil
+	case *syntax.Word:
+		if src, ok := cfg.arithmIndexedWordSource(expr); ok {
+			return src, false, nil
+		}
+		if dynamicArithmWord(expr) {
+			str, err := Literal(cfg, expr)
+			return str, true, err
+		}
+		return arithmWordSource(expr), false, nil
+	case *syntax.ParenArithm:
+		x, dyn, err := cfg.dynamicArithmText(expr.X)
+		if err != nil {
+			return "", false, err
+		}
+		return "(" + x + ")", dyn, nil
+	case *syntax.UnaryArithm:
+		x, dyn, err := cfg.dynamicArithmText(expr.X)
+		if err != nil {
+			return "", false, err
+		}
+		if expr.Post {
+			return x + expr.Op.String(), dyn, nil
+		}
+		return expr.Op.String() + x, dyn, nil
+	case *syntax.BinaryArithm:
+		x, dynX, err := cfg.dynamicArithmText(expr.X)
+		if err != nil {
+			return "", false, err
+		}
+		y, dynY, err := cfg.dynamicArithmText(expr.Y)
+		if err != nil {
+			return "", false, err
+		}
+		return x + " " + expr.Op.String() + " " + y, dynX || dynY, nil
+	default:
+		panic(fmt.Sprintf("unexpected arithm expr: %T", expr))
+	}
+}
+
+func (cfg *Config) arithmIndexedWordSource(word *syntax.Word) (string, bool) {
+	if word == nil || len(word.Parts) != 1 {
+		return "", false
+	}
+	pe, ok := word.Parts[0].(*syntax.ParamExp)
+	if !ok || pe.Param == nil || pe.NestedParam != nil || pe.Index == nil ||
+		pe.Slice != nil || pe.Repl != nil || pe.Exp != nil ||
+		pe.Length || pe.Width || pe.Excl || pe.Names != 0 {
+		return "", false
+	}
+	var index string
+	if word, ok := pe.Index.(*syntax.Word); ok {
+		index = arithmWordSource(word)
+	} else {
+		var err error
+		index, _, err = cfg.dynamicArithmText(pe.Index)
+		if err != nil {
+			return "", false
+		}
+	}
+	return pe.Param.Value + "[" + index + "]", true
+}
+
+func dynamicArithmWord(word *syntax.Word) bool {
+	for _, part := range word.Parts {
+		switch part := part.(type) {
+		case *syntax.ParamExp:
+			if part.Dollar.IsValid() {
+				return true
+			}
+		case *syntax.DblQuoted:
+			return true
+		case *syntax.CmdSubst, *syntax.ArithmExp:
+			return true
+		}
+	}
+	return false
+}
+
+func arithmWordSource(word *syntax.Word) string {
+	if word == nil {
+		return ""
+	}
+	if len(word.Parts) == 1 {
+		switch part := word.Parts[0].(type) {
+		case *syntax.Lit:
+			return part.Value
+		case *syntax.SglQuoted:
+			return "'" + part.Value + "'"
+		case *syntax.DblQuoted:
+			return `"` + arithmWordPartsSource(part.Parts) + `"`
+		}
+	}
+	return arithmWordPartsSource(word.Parts)
+}
+
+func arithmWordPartsSource(parts []syntax.WordPart) string {
+	var b strings.Builder
+	for _, part := range parts {
+		switch part := part.(type) {
+		case *syntax.Lit:
+			b.WriteString(part.Value)
+		case *syntax.SglQuoted:
+			b.WriteByte('\'')
+			b.WriteString(part.Value)
+			b.WriteByte('\'')
+		case *syntax.DblQuoted:
+			b.WriteByte('"')
+			b.WriteString(arithmWordPartsSource(part.Parts))
+			b.WriteByte('"')
+		case *syntax.ParamExp:
+			if part.Param != nil && part.Dollar.IsValid() {
+				b.WriteByte('$')
+				b.WriteString(part.Param.Value)
+			}
+		}
+	}
+	return b.String()
 }
 
 func arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
