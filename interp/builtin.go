@@ -618,53 +618,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			// indexed arrays and associative arrays via the same
 			// rules as `declare -p`'s output minus the `declare -X`
 			// prefix.
-			var names []string
-			r.writeEnv.Each(func(name string, vr expand.Variable) bool {
-				if !vr.IsSet() && !(vr.Kind == expand.Associative && len(vr.Map) > 0) {
-					return true
-				}
-				names = append(names, name)
-				return true
-			})
-			sort.Strings(names)
-			for _, name := range names {
-				vr := r.writeEnv.Get(name)
-				switch vr.Kind {
-				case expand.Indexed:
-					r.outf("%s=(", name)
-					first := true
-					for _, i := range vr.IndexedIndexes() {
-						if !first {
-							r.out(" ")
-						}
-						first = false
-						r.outf("[%d]=%s", i, bashSetQuote(vr.List[i]))
-					}
-					if !first {
-						r.out(" ")
-					}
-					r.out(")\n")
-				case expand.Associative:
-					// bash's `set` renders associative arrays with the
-					// same declare -p body quoting: keys quoted when they
-					// carry special characters, values always double-quoted.
-					r.outf("%s=(", name)
-					first := true
-					for _, k := range vr.AssocKeysForDeclare() {
-						if !first {
-							r.out(" ")
-						}
-						r.outf("[%s]=%s", bashAssocKeyQuote(k), bashDeclareQuote(vr.Map[k]))
-						first = false
-					}
-					if !first {
-						r.out(" ")
-					}
-					r.out(")\n")
-				default:
-					r.outf("%s=%s\n", name, bashSetQuote(vr.Str))
-				}
-			}
+			r.printSetVars()
 			break
 		}
 		prevHistOn := r.noOpSetState["history"]

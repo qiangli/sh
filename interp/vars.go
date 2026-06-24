@@ -995,6 +995,58 @@ func (r *Runner) printLocalVars() {
 	}
 }
 
+func (r *Runner) printSetVars() {
+	var names []string
+	seen := map[string]bool{}
+	r.writeEnv.Each(func(name string, vr expand.Variable) bool {
+		if !vr.IsSet() && !(vr.Kind == expand.Associative && len(vr.Map) > 0) {
+			return true
+		}
+		if seen[name] {
+			return true
+		}
+		seen[name] = true
+		names = append(names, name)
+		return true
+	})
+	slices.Sort(names)
+	for _, name := range names {
+		vr := r.writeEnv.Get(name)
+		switch vr.Kind {
+		case expand.Indexed:
+			r.outf("%s=(", name)
+			first := true
+			for _, i := range vr.IndexedIndexes() {
+				if !first {
+					r.out(" ")
+				}
+				first = false
+				r.outf("[%d]=%s", i, bashSetQuote(vr.List[i]))
+			}
+			if !first {
+				r.out(" ")
+			}
+			r.out(")\n")
+		case expand.Associative:
+			r.outf("%s=(", name)
+			first := true
+			for _, k := range vr.AssocKeysForDeclare() {
+				if !first {
+					r.out(" ")
+				}
+				r.outf("[%s]=%s", bashAssocKeyQuote(k), bashDeclareQuote(vr.Map[k]))
+				first = false
+			}
+			if !first {
+				r.out(" ")
+			}
+			r.out(")\n")
+		default:
+			r.outf("%s=%s\n", name, bashSetQuote(vr.Str))
+		}
+	}
+}
+
 // printArrayVars writes every variable of the requested array kind
 // (`-A` associative, `-a` indexed) to stdout in declare -p format,
 // sorted by name. Built-in bash arrays (BASH_ALIASES, BASH_CMDS,
@@ -1128,6 +1180,65 @@ func (r *Runner) printNamerefVars() {
 			r.outf("declare -n %s=%s\n", name, bashDeclareQuote(vr.Str))
 		}
 	}
+}
+
+func (r *Runner) printDeclareVars(modes []string) {
+	var names []string
+	r.writeEnv.Each(func(name string, vr expand.Variable) bool {
+		if vr.Declared() && declareVarMatchesModes(vr, modes) {
+			names = append(names, name)
+		}
+		return true
+	})
+	slices.Sort(names)
+	for _, name := range names {
+		vr := r.lookupVar(name)
+		if vr.Declared() && declareVarMatchesModes(vr, modes) {
+			r.outf("%s\n", formatDeclareVar(name, vr, false))
+		}
+	}
+}
+
+func declareVarMatchesModes(vr expand.Variable, modes []string) bool {
+	for _, mode := range modes {
+		switch mode {
+		case "-n":
+			if vr.Kind != expand.NameRef {
+				return false
+			}
+		case "-r":
+			if !vr.ReadOnly {
+				return false
+			}
+		case "-x":
+			if !vr.Exported {
+				return false
+			}
+		case "-a":
+			if vr.Kind != expand.Indexed {
+				return false
+			}
+		case "-A":
+			if vr.Kind != expand.Associative {
+				return false
+			}
+		case "-i":
+			if !vr.Integer {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func declareQueryHasFilter(modes []string) bool {
+	for _, mode := range modes {
+		switch mode {
+		case "-n", "-r", "-x", "-a", "-A", "-i":
+			return true
+		}
+	}
+	return false
 }
 
 func (r *Runner) printExportVars() {
