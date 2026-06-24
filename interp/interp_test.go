@@ -3971,6 +3971,14 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 		"<flip>\n<qux qix>\ndeclare -A a=([six]=\"6\" [\"foo bar\"]=\"qux qix\" )\n",
 	},
 	{
+		`declare -A a=([1+2]=c); echo ${a[1+2]}`,
+		"c\n",
+	},
+	{
+		`declare -A assoc=([i]=string [i+1]=string+1); printf 'assoc[i]=%s\n' "${assoc[i]}"; printf 'assoc[i+1]=%s\n' "${assoc[i+1]}"; assoc[i+1]+=X; printf 'assoc[i+1]=%s\n' "${assoc[i+1]}"`,
+		"assoc[i]=string\nassoc[i+1]=string+1\nassoc[i+1]=string+1X\n",
+	},
+	{
 		`touch afo; declare -A a=([foo]=one [bar]=two); unset a[foo]; declare -p a; declare -A c; c[foo]=one; c[bar]=two; unset c[foo]; declare -p c; b=(zero one); unset b[0]; declare -p b`,
 		"declare -A a=([bar]=\"two\" )\ndeclare -A c=([bar]=\"two\" )\ndeclare -a b=([1]=\"one\")\n",
 	},

@@ -2141,13 +2141,14 @@ func (r *Runner) setVarWithIndex(prev expand.Variable, name string, index syntax
 			r.exit.code = 1
 			return
 		}
-		w, ok := index.(*syntax.Word)
+		k, ok := r.assocAssignIndexKey(index)
 		if !ok {
 			return
 		}
-		k := r.assocAssignKey(w)
 		if name == "BASH_ALIASES" || name == "BASH_CMDS" {
-			k = r.literal(w)
+			if w, ok := index.(*syntax.Word); ok {
+				k = r.literal(w)
+			}
 		}
 		if name == "BASH_ALIASES" {
 			if !validAliasName(k) {
@@ -2386,6 +2387,19 @@ func (r *Runner) assocAssignKey(w *syntax.Word) string {
 		}
 	}
 	return key
+}
+
+func (r *Runner) assocAssignIndexKey(expr syntax.ArithmExpr) (string, bool) {
+	if w, ok := expr.(*syntax.Word); ok {
+		return r.assocAssignKey(w), true
+	}
+	key := r.arithmSourceText(expr, false)
+	if key == "" {
+		var b strings.Builder
+		syntax.NewPrinter().Print(&b, expr)
+		key = b.String()
+	}
+	return key, key != ""
 }
 
 func (r *Runner) assocAssignKeyRaw(w *syntax.Word) string {
@@ -2773,9 +2787,8 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 			// onto the existing value at key `k`. setVarWithIndex
 			// receives vr.Str and writes it to map[k] for us.
 			if as.Index != nil {
-				w, ok := as.Index.(*syntax.Word)
+				k, ok := r.assocAssignIndexKey(as.Index)
 				if ok {
-					k := r.assocAssignKey(w)
 					prev.Kind = expand.String
 					if prev.Integer {
 						cur, _ := strconv.Atoi(r.integerArrayValue(prev.Map[k]))
