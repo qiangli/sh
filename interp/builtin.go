@@ -2212,9 +2212,16 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			}
 			return failf(1, "eval: %v\n", err)
 		}
+		// Bash anchors eval'd code to the absolute script line where it
+		// physically sits: an `eval` on line N reports a runtime error
+		// in its (line-1-based) body at N+line-1. Accumulate so nested
+		// evals stack correctly.
+		oldEvalLineOffset := r.evalLineOffset
+		r.evalLineOffset += int(pos.Line()) - 1
 		r.withAliasReparse(r.aliasUseLine(int(pos.Line())), func() {
 			r.stmts(ctx, file.Stmts)
 		})
+		r.evalLineOffset = oldEvalLineOffset
 		exit = r.exit
 	case "source", ".":
 		// Bash 5.3: accept `-p PATH` to override the search path.

@@ -134,11 +134,22 @@ func TestDeclare2Fidelity(t *testing.T) {
 			"declare -p foo=bar; echo status=$?; a=b; declare -p a foo=bar; echo status=$?",
 			"declare: foo=bar: not found\nstatus=1\ndeclare -- a=\"b\"\ndeclare: foo=bar: not found\nstatus=1\n",
 		},
-		// assign-extended__013: explicit `declare -p` names are filtered
-		// by attribute flags like bash 5.3.
+		// assign-extended__013: a no-name `declare -p` with an
+		// attribute-selecting flag filters the full listing to the
+		// variables carrying that attribute (`declare -pn` lists only
+		// namerefs, `declare -pr` only readonly, `declare -px` only
+		// exported).
+		{
+			"test_var1=111; readonly test_var2=222; export test_var3=333; declare -n test_var4=test_var1; echo '[declare -pn]'; declare -pn | grep -E '^declare -. test_var'; echo '[declare -pr]'; declare -pr | grep -E '^declare -. test_var'; echo '[declare -px]'; declare -px | grep -E '^declare -. test_var'",
+			"[declare -pn]\ndeclare -n test_var4=\"test_var1\"\n[declare -pr]\ndeclare -r test_var2=\"222\"\n[declare -px]\ndeclare -x test_var3=\"333\"\n",
+		},
+		// assign-extended__015: once explicit names are supplied, bash 5.3
+		// ignores the -n/-r/-x attribute flags for selection and prints
+		// every named variable that exists, with a "not found" diagnostic
+		// (exit 1) for the names that do not.
 		{
 			"test_var1=111; readonly test_var2=222; export test_var3=333; declare -n test_var4=test_var1; echo '[declare -pn]'; declare -pn test_var{0..5}; echo '[declare -pr]'; declare -pr test_var{0..5}; echo '[declare -px]'; declare -px test_var{0..5}",
-			"[declare -pn]\ndeclare -n test_var4=\"test_var1\"\n[declare -pr]\ndeclare -r test_var2=\"222\"\n[declare -px]\ndeclare -x test_var3=\"333\"\n",
+			"[declare -pn]\ndeclare: test_var0: not found\ndeclare -- test_var1=\"111\"\ndeclare -r test_var2=\"222\"\ndeclare -x test_var3=\"333\"\ndeclare -n test_var4=\"test_var1\"\ndeclare: test_var5: not found\n[declare -pr]\ndeclare: test_var0: not found\ndeclare -- test_var1=\"111\"\ndeclare -r test_var2=\"222\"\ndeclare -x test_var3=\"333\"\ndeclare -n test_var4=\"test_var1\"\ndeclare: test_var5: not found\n[declare -px]\ndeclare: test_var0: not found\ndeclare -- test_var1=\"111\"\ndeclare -r test_var2=\"222\"\ndeclare -x test_var3=\"333\"\ndeclare -n test_var4=\"test_var1\"\ndeclare: test_var5: not found\nexit status 1",
 		},
 		// assign__045: readonly -a/-A on a fresh name sets readonly only;
 		// it must not create an empty array. Existing arrays are preserved.

@@ -317,6 +317,25 @@ type Runner struct {
 	// than the physical AST position in that form.
 	funsubLineOffset int
 
+	// assignNamerefName, when non-empty, overrides the variable name
+	// used in a readonly-variable diagnostic from an array or
+	// indexed-element assignment made through a nameref. Bash is
+	// asymmetric here: a scalar nameref assignment (`r=5`) reports the
+	// resolved target name, but an array append or element store
+	// (`r+=(4)`, `r[0]=9`) reports the nameref name as written. It is
+	// set narrowly around the assignment and cleared immediately after.
+	assignNamerefName string
+
+	// evalLineOffset is added to bash-style diagnostic line numbers
+	// while executing the body of an `eval` (parsed from a string).
+	// Bash keeps eval'd code anchored to the absolute script line
+	// where it physically sits, so an `eval` on line N reports a
+	// runtime error in its (line-1-based) body at N+line-1. It is
+	// reset to zero across a function-body call, since a function
+	// invoked from eval reports its own definition line, not the
+	// eval call's. See the eval builtin and the function dispatch.
+	evalLineOffset int
+
 	// bgProcs holds all background shells spawned by this runner.
 	// Their PIDs are 1-indexed, from 1 to len(bgProcs), with a "g" prefix
 	// to distinguish them from real PIDs on the host operating system.
