@@ -5155,7 +5155,11 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	},
 	{
 		"getopts a a:b",
-		"getopts: `a:b': not a valid identifier\nexit status 2 #JUSTERR",
+		"getopts: `a:b': not a valid identifier\nexit status 1 #JUSTERR",
+	},
+	{
+		"set -- -c foo -h; getopts 'hc:' opt-; echo status=$? opt=$opt OPTARG=$OPTARG OPTIND=$OPTIND",
+		"getopts: `opt-': not a valid identifier\nstatus=1 opt= OPTARG=foo OPTIND=3\n #JUSTERR",
 	},
 	{
 		"getopts abc opt -a; echo $opt; $optarg",
@@ -5208,6 +5212,14 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	{
 		"a() { while getopts abc: opt; do echo $opt $OPTARG; done }; a -a -b -c arg",
 		"a\nb\nc arg\n",
+	},
+	{
+		"while getopts 'hc:' opt; do echo '-'; done; echo OPTIND=$OPTIND; set -- -h -c foo x y z; while getopts 'hc:' opt; do echo '-'; done; echo OPTIND=$OPTIND; set --; while getopts 'hc:' opt; do echo '-'; done; echo OPTIND=$OPTIND",
+		"OPTIND=1\n-\n-\nOPTIND=4\nOPTIND=1\n",
+	},
+	{
+		"set -- -a; while getopts 'ab:' opt; do echo '.'; done; echo OPTIND=$OPTIND; set -- -c -d -e foo; while getopts 'cde:' opt; do echo '-'; done; echo OPTIND=$OPTIND; set -- -f; while getopts 'f:' opt; do echo '_'; done; echo OPTIND=$OPTIND",
+		".\nOPTIND=2\n-\n-\nOPTIND=5\nOPTIND=2\n",
 	},
 	// mapfile
 	{

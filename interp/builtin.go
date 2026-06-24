@@ -3367,12 +3367,14 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		}
 		// Invalid identifier: bash still advances getopts' internal
 		// state (so the caller's subsequent `shift $((OPTIND-1))`
-		// works) but refuses the assignment and returns rc=2.
+		// works) but refuses the assignment and returns rc=1.
 		if invalidName {
-			r.optState.next(optstr, args)
-			optind := r.optState.argidx + 1
-			r.setVarString("OPTIND", strconv.Itoa(optind))
-			return failf(2, "getopts: `%s': not a valid identifier\n", name)
+			_, optarg, _ := r.optState.next(optstr, args)
+			if optarg != "" {
+				r.setVarString("OPTARG", optarg)
+			}
+			r.setVarString("OPTIND", strconv.Itoa(r.optState.argidx+1))
+			return failf(1, "getopts: `%s': not a valid identifier\n", name)
 		}
 		// Diagnostics fire unless the optstring starts with ':' (silent
 		// mode) or the caller sets OPTERR=0 — the latter being bash's
@@ -3431,9 +3433,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				r.setVarString("OPTARG", optarg)
 			}
 		}
-		if optind-1 != r.optState.argidx {
-			r.setVarString("OPTIND", strconv.FormatInt(int64(r.optState.argidx+1), 10))
-		}
+		r.setVarString("OPTIND", strconv.FormatInt(int64(r.optState.argidx+1), 10))
 		if nameRefBadTarget {
 			r.errf("%sgetopts: `%s': not a valid identifier\n", r.bashErrPrefix(r.curStmtPos), string(storeOpt))
 		}
@@ -6478,6 +6478,8 @@ type getopts struct {
 
 func (g *getopts) next(optstr string, args []string) (opt rune, optarg string, done bool) {
 	if len(args) == 0 || g.argidx >= len(args) {
+		g.argidx = len(args)
+		g.runeidx = 0
 		return '?', "", true
 	}
 	arg := []rune(args[g.argidx])
