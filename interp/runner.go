@@ -1006,6 +1006,11 @@ func (r *Runner) bashArithmError(expr syntax.ArithmExpr, err error, command bool
 		exprText = strings.TrimRight(exprText, " \t")
 		compactErrSep = true
 	}
+	if command &&
+		strings.Contains(bashMsg, "arithmetic syntax error in expression") &&
+		strings.Contains(bashMsg, "error token is") {
+		compactErrSep = true
+	}
 	// If the inner message already carries its own "(error token is ...)"
 	// suffix (e.g. the "attempted assignment to non-variable" path for
 	// `7++` / `7=4`), skip appending our outer copy — bash emits one
