@@ -1731,6 +1731,18 @@ var errorCases = []errorCase{
 		langErr("1:6: not a valid test operator: `b`", LangBash|LangMirBSDKorn|LangZsh),
 	),
 	errCase(
+		// A unary operator must not swallow the `]]` terminator as its
+		// operand; report the operator as missing its argument instead.
+		"[[ -z ]]",
+		langErr("1:4: `-z` must be followed by a word", LangBash|LangMirBSDKorn|LangZsh),
+	),
+	errCase(
+		// A redirection-shaped token (`3<`) where a binary operator was
+		// expected reports the literal fd, not the internal token name.
+		"[[ a 3< b ]]",
+		langErr("1:6: not a valid test operator: `3`", LangBash|LangMirBSDKorn|LangZsh),
+	),
+	errCase(
 		"[[ a b$x c ]]",
 		langErr("1:6: test operator words must consist of a single literal", LangBash|LangMirBSDKorn|LangZsh),
 	),

@@ -1055,6 +1055,19 @@ func (p *Parser) followWordTok(tok token, pos Pos) *Word {
 	return w
 }
 
+// testFollowWord reads the operand word of a `[[ ]]` test operator. An
+// unquoted `]]` here is the conditional terminator, not an operand, so we
+// report the operator as missing its argument rather than consuming `]]`
+// as the operand and then failing to find the closing `]]`. A bare `<` or
+// `>` (redirection token) already terminates an operand this way; `]]`
+// did not, so e.g. `[[ -z ]]` mis-parsed.
+func (p *Parser) testFollowWord(tok token, pos Pos) *Word {
+	if p.tok == _LitWord && p.val == "]]" {
+		p.followErr(pos, tok, noQuote("a word"))
+	}
+	return p.followWordTok(tok, pos)
+}
+
 func (p *Parser) emptyHdocWord(pos Pos) *Word {
 	return p.wordOne(&Lit{ValuePos: pos, ValueEnd: pos})
 }
@@ -3216,6 +3229,11 @@ func (p *Parser) testExprBinary(pastAndOr bool) TestExpr {
 		return left
 	case _Lit:
 		p.curErr("test operator words must consist of a single literal")
+	case _LitRedir:
+		// A redirection-shaped token such as `3<` cannot be a binary
+		// test operator; report the literal (its leading fd digits)
+		// rather than the internal token name.
+		p.curErr("not a valid test operator: %#q", p.val)
 	default:
 		p.curErr("not a valid test operator: %#q", p.tok)
 	}
@@ -3245,7 +3263,7 @@ func (p *Parser) testExprBinary(pastAndOr bool) TestExpr {
 				AndTest, OrTest, dblRightBrack)
 		}
 		p.next()
-		b.Y = p.followWordTok(token(b.Op), b.OpPos)
+		b.Y = p.testFollowWord(token(b.Op), b.OpPos)
 	}
 	return b
 }
@@ -3278,6 +3296,11 @@ func (p *Parser) testExprNotBody() TestExpr {
 		// `<` / `>` as string-compare binary primaries.
 	case _Lit:
 		p.curErr("test operator words must consist of a single literal")
+	case _LitRedir:
+		// A redirection-shaped token such as `3<` cannot be a binary
+		// test operator; report the literal (its leading fd digits)
+		// rather than the internal token name.
+		p.curErr("not a valid test operator: %#q", p.val)
 	default:
 		p.curErr("not a valid test operator: %#q", p.tok)
 	}
@@ -3302,7 +3325,7 @@ func (p *Parser) testExprNotBody() TestExpr {
 			AndTest, OrTest, dblRightBrack)
 	}
 	p.next()
-	b.Y = p.followWordTok(token(b.Op), b.OpPos)
+	b.Y = p.testFollowWord(token(b.Op), b.OpPos)
 	return b
 }
 
@@ -3342,7 +3365,7 @@ func (p *Parser) testExprUnary() TestExpr {
 		tsFdTerm, tsEmpStr, tsNempStr, tsOptSet, tsVarSet, tsRefVar:
 		u := &UnaryTest{OpPos: p.pos, Op: UnTestOperator(p.tok)}
 		p.next()
-		u.X = p.followWordTok(token(u.Op), u.OpPos)
+		u.X = p.testFollowWord(token(u.Op), u.OpPos)
 		return u
 	case leftParen:
 		pe := &ParenTest{Lparen: p.pos}
