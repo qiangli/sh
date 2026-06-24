@@ -727,6 +727,128 @@ func TestParamSliceNegativeLength(t *testing.T) {
 	}
 }
 
+func TestBash53VarOpFidelityCluster(t *testing.T) {
+	tests := []struct {
+		name string
+		env  testEnv
+		src  string
+		want []string
+	}{
+		{
+			name: "uppercase sharp s",
+			env:  testEnv{"s": {Set: true, Kind: String, Str: "ß"}},
+			src:  `${s@u}:${s@U}:${s^}:${s^^}`,
+			want: []string{"ẞ:ẞ:ẞ:ẞ"},
+		},
+		{
+			name: "quoted unset at transform no fields",
+			env:  testEnv{},
+			src:  `"${u[@]@Q}"`,
+			want: nil,
+		},
+		{
+			name: "quoted indexed transform fields",
+			env:  testEnv{"a": {Set: true, Kind: Indexed, List: []string{"1", "2", "3"}}},
+			src:  `"${a[@]@Q}"`,
+			want: []string{"'1'", "'2'", "'3'"},
+		},
+		{
+			name: "quoted indexed star transform joins",
+			env:  testEnv{"a": {Set: true, Kind: Indexed, List: []string{"1", "2", "3"}}},
+			src:  `"${a[*]@Q}"`,
+			want: []string{"'1' '2' '3'"},
+		},
+		{
+			name: "quoted indexed prompt transform fields",
+			env:  testEnv{"a": {Set: true, Kind: Indexed, List: []string{"1", "2", "3"}}},
+			src:  `"${a[@]@P}"`,
+			want: []string{"1", "2", "3"},
+		},
+		{
+			name: "quoted indexed attribute transform fields",
+			env:  testEnv{"a": {Set: true, Kind: Indexed, List: []string{"1", "2", "3"}}},
+			src:  `"${a[@]@a}"`,
+			want: []string{"a", "a", "a"},
+		},
+		{
+			name: "positional attribute transform empty",
+			env:  testEnv{"@": {Set: true, Kind: Indexed, List: []string{"1", "2", "3"}}},
+			src:  `${@@a}`,
+			want: nil,
+		},
+		{
+			name: "quoted assoc transform fields",
+			env: testEnv{"A": {
+				Set: true, Kind: Associative,
+				Map: map[string]string{"a": "hello", "b": "world", "c": "osh", "d": "ysh"},
+			}},
+			src:  `"${A[@]@P}"`,
+			want: []string{"ysh", "osh", "world", "hello"},
+		},
+		{
+			name: "quoted assoc star attribute transform joins",
+			env: testEnv{"A": {
+				Set: true, Kind: Associative,
+				Map: map[string]string{"a": "hello", "b": "world", "c": "osh", "d": "ysh"},
+			}},
+			src:  `"${A[*]@a}"`,
+			want: []string{"A A A A"},
+		},
+		{
+			name: "quoted empty aggregate default",
+			env:  testEnv{"a": {Set: true, Kind: Indexed, List: []string{"", ""}}},
+			src:  `"${a[@]:-with-colon}"`,
+			want: []string{"", ""},
+		},
+		{
+			name: "quoted empty star aggregate default",
+			env:  testEnv{"a": {Set: true, Kind: Indexed, List: []string{"", ""}}},
+			src:  `"${a[*]:-with-colon}"`,
+			want: []string{" "},
+		},
+		{
+			name: "unquoted empty star aggregate default ifs empty",
+			env:  testEnv{"IFS": {Set: true, Kind: String, Str: ""}, "a": {Set: true, Kind: Indexed, List: []string{"", ""}}},
+			src:  `${a[*]:-empty}`,
+			want: nil,
+		},
+		{
+			name: "indirect empty star aggregate default ifs empty",
+			env: testEnv{
+				"IFS": {Set: true, Kind: String, Str: ""},
+				"ref": {Set: true, Kind: String, Str: "a[*]"},
+				"a":   {Set: true, Kind: Indexed, List: []string{"", ""}},
+			},
+			src:  `"${!ref:-with-colon}"`,
+			want: []string{""},
+		},
+		{
+			name: "assoc scalar at q and p empty",
+			env:  testEnv{"A": {Set: true, Kind: Associative, Map: map[string]string{"x": "y"}}},
+			src:  `${A@P}:${A@Q}`,
+			want: []string{":"},
+		},
+		{
+			name: "patsub caret in bracket is literal",
+			env:  testEnv{"pat": {Set: true, Kind: String, Str: "[^]]"}, "s": {Set: true, Kind: String, Str: "ab^cd^"}},
+			src:  `${s//$pat/z}`,
+			want: []string{"ab^cd^"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			word := parseCallArg(t, "echo "+tc.src, 1)
+			got, err := Fields(&Config{Env: tc.env}, word)
+			if err != nil {
+				t.Fatalf("%s: did not want error, got %v", tc.src, err)
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("%s: wanted %q, got %q", tc.src, tc.want, got)
+			}
+		})
+	}
+}
+
 type testEnv map[string]Variable
 
 func (e testEnv) Get(name string) Variable {

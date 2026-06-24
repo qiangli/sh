@@ -3258,6 +3258,20 @@ func (cfg *Config) paramExpSubstWordTrigger(pe *syntax.ParamExp) bool {
 		return false
 	}
 	vr := cfg.Env.Get(pe.Param.Value)
+	if (nodeLit(pe.Index) == "@" || nodeLit(pe.Index) == "*") && vr.Kind == Indexed {
+		set := vr.IndexedCount() > 0
+		nonNull := indexedDefaultOrNullHasValue(vr)
+		switch pe.Exp.Op {
+		case syntax.DefaultUnset:
+			return !set
+		case syntax.DefaultUnsetOrNull:
+			return !nonNull
+		case syntax.AlternateUnset:
+			return set
+		case syntax.AlternateUnsetOrNull:
+			return nonNull
+		}
+	}
 	setNonColon := paramIsSetNonColon(cfg, vr, pe.Param.Value, pe.Index)
 	str := vr.String()
 	if pe.Index != nil {
@@ -3331,12 +3345,9 @@ func (cfg *Config) substWordFields(pe *syntax.ParamExp) ([][]fieldPart, bool, er
 	allIndexedNonNull := false
 	if (nodeLit(pe.Index) == "@" || nodeLit(pe.Index) == "*") && cfg.Env.Get(pe.Param.Value).Kind == Indexed {
 		allIndexed = true
-		for _, elem := range cfg.Env.Get(pe.Param.Value).IndexedValues() {
-			allIndexedSet = true
-			if elem != "" {
-				allIndexedNonNull = true
-			}
-		}
+		vr := cfg.Env.Get(pe.Param.Value)
+		allIndexedSet = vr.IndexedCount() > 0
+		allIndexedNonNull = indexedDefaultOrNullHasValue(vr)
 	}
 	if !allIndexed && !paramExpWordHasQuotedPart(pe.Exp.Word) && !paramExpWordHasAtOrStar(pe.Exp.Word) {
 		if !litOnly || !strings.Contains(lit.Value, "\\") {
@@ -4111,8 +4122,17 @@ func (cfg *Config) escapedLitFields(s string) [][]fieldPart {
 // references pass this cheap pre-filter but are filtered out by
 // [Config.quotedElemFields] returning nil.
 func quotedPartSplits(pe *syntax.ParamExp) bool {
-	if pe == nil || pe.Exp != nil || pe.Repl != nil || pe.Length || pe.Width || pe.IsSet {
+	if pe == nil || pe.Repl != nil || pe.Length || pe.Width || pe.IsSet {
 		return false
+	}
+	if pe.Exp != nil {
+		switch pe.Exp.Op {
+		case syntax.AlternateUnset, syntax.AlternateUnsetOrNull,
+			syntax.DefaultUnset, syntax.DefaultUnsetOrNull:
+		default:
+			return false
+		}
+		return pe.Param != nil && pe.Param.Value == "@" || nodeLit(pe.Index) == "@"
 	}
 	if pe.Param != nil && pe.Param.Value == "@" {
 		return true
@@ -4227,7 +4247,8 @@ func (cfg *Config) quotedElemFields(pe *syntax.ParamExp) ([]string, error) {
 	if pe.Exp != nil && pe.Repl == nil {
 		op := pe.Exp.Op
 		switch op {
-		case syntax.DefaultUnset, syntax.DefaultUnsetOrNull:
+		case syntax.DefaultUnset, syntax.DefaultUnsetOrNull,
+			syntax.AlternateUnset, syntax.AlternateUnsetOrNull:
 			defaultElems := func() ([]string, error) {
 				if pe.Exp.Word == nil {
 					return []string{""}, nil
@@ -4272,22 +4293,62 @@ func (cfg *Config) quotedElemFields(pe *syntax.ParamExp) ([]string, error) {
 			case "@":
 				vr := cfg.Env.Get(pe.Param.Value)
 				if vr.Kind == Indexed {
-					if op == syntax.DefaultUnset && vr.IndexedCount() > 0 || op == syntax.DefaultUnsetOrNull && indexedDefaultOrNullHasValue(vr) {
-						return cfg.sliceIndexedElems(pe, vr, false)
+					switch op {
+					case syntax.DefaultUnset:
+						if vr.IndexedCount() > 0 {
+							return cfg.sliceIndexedElems(pe, vr, false)
+						}
+						return defaultElems()
+					case syntax.DefaultUnsetOrNull:
+						if indexedDefaultOrNullHasValue(vr) {
+							return cfg.sliceIndexedElems(pe, vr, false)
+						}
+						return defaultElems()
+					case syntax.AlternateUnset:
+						if vr.IndexedCount() > 0 {
+							return defaultElems()
+						}
+						return []string{}, nil
+					case syntax.AlternateUnsetOrNull:
+						if indexedDefaultOrNullHasValue(vr) {
+							return defaultElems()
+						}
+						return []string{}, nil
 					}
-					return defaultElems()
 				}
 			case "*":
 				vr := cfg.Env.Get(pe.Param.Value)
 				if vr.Kind == Indexed {
-					if op == syntax.DefaultUnset && vr.IndexedCount() > 0 || op == syntax.DefaultUnsetOrNull && indexedDefaultOrNullHasValue(vr) {
-						elems, err := cfg.sliceIndexedElems(pe, vr, false)
-						if err != nil {
-							return nil, err
+					switch op {
+					case syntax.DefaultUnset:
+						if vr.IndexedCount() > 0 {
+							elems, err := cfg.sliceIndexedElems(pe, vr, false)
+							if err != nil {
+								return nil, err
+							}
+							return []string{cfg.ifsJoin(elems)}, nil
 						}
-						return []string{cfg.ifsJoin(elems)}, nil
+						return defaultElems()
+					case syntax.DefaultUnsetOrNull:
+						if indexedDefaultOrNullHasValue(vr) {
+							elems, err := cfg.sliceIndexedElems(pe, vr, false)
+							if err != nil {
+								return nil, err
+							}
+							return []string{cfg.ifsJoin(elems)}, nil
+						}
+						return defaultElems()
+					case syntax.AlternateUnset:
+						if vr.IndexedCount() > 0 {
+							return defaultElems()
+						}
+						return []string{}, nil
+					case syntax.AlternateUnsetOrNull:
+						if indexedDefaultOrNullHasValue(vr) {
+							return defaultElems()
+						}
+						return []string{}, nil
 					}
-					return defaultElems()
 				}
 			}
 		}
@@ -4466,6 +4527,36 @@ func (cfg *Config) quotedTransformElemFields(pe *syntax.ParamExp) ([]string, err
 			out[i] = bashQuoteParamQ(elem)
 		}
 		return out, nil
+	case "P":
+		elems, join, err := cfg.quotedModElemValues(pe)
+		if err != nil || elems == nil {
+			return nil, err
+		}
+		out := make([]string, len(elems))
+		for i, elem := range elems {
+			out[i] = cfg.expandPrompt(elem)
+		}
+		if join {
+			return []string{cfg.ifsJoin(out)}, nil
+		}
+		return out, nil
+	case "a":
+		if pe.Param.Value == "@" || pe.Param.Value == "*" {
+			return []string{""}, nil
+		}
+		elems, join, err := cfg.quotedModElemValues(pe)
+		if err != nil || elems == nil {
+			return nil, err
+		}
+		flag := cfg.Env.Get(pe.Param.Value).Flags()
+		out := make([]string, len(elems))
+		for i := range out {
+			out[i] = flag
+		}
+		if join {
+			return []string{cfg.ifsJoin(out)}, nil
+		}
+		return out, nil
 	case "K":
 		if pe.Param.Value != "@" && pe.Param.Value != "*" {
 			return nil, nil
@@ -4524,6 +4615,19 @@ func (cfg *Config) quotedModElemValues(pe *syntax.ParamExp) ([]string, bool, err
 				elems, err := cfg.sliceIndexedElems(pe, vr, false)
 				return elems, false, err
 			}
+		} else if vr.Kind == Associative {
+			switch nodeLit(pe.Index) {
+			case "*", "@":
+				keys := vr.AssocKeysForDeclare()
+				elems := make([]string, len(keys))
+				for i, k := range keys {
+					elems[i] = vr.Map[k]
+				}
+				return elems, nodeLit(pe.Index) == "*", nil
+			}
+		}
+		if !cfg.Env.Get(pe.Param.Value).IsSet() && nodeLit(pe.Index) == "@" {
+			return []string{}, false, nil
 		}
 	}
 	elems, err := cfg.quotedAllElemValues(pe)
