@@ -4166,6 +4166,7 @@ func (r *Runner) bashErrPrefixLine(line int) string {
 		line = r.aliasLineOverride
 	}
 	line += r.funsubLineOffset
+	line += r.evalLineOffset
 	return fmt.Sprintf("%s: line %d: ", name, line)
 }
 
@@ -4826,8 +4827,16 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 					roTarget = resolved
 				}
 				wasReadOnly := roTarget.ReadOnly
+				// Bash reports a readonly array append/element store made
+				// through a nameref under the nameref name as written
+				// (`r+=(4)` -> `r: readonly variable`), unlike a scalar
+				// assignment which reports the resolved target.
+				if prev.Kind == expand.NameRef && (as.Array != nil || as.Index != nil) {
+					r.assignNamerefName = as.Name.Value
+				}
 				name, vr := r.assignVal(name, prev, as, "")
 				r.setVarWithIndex(prevForIndex, name, as.Index, vr, as.Append)
+				r.assignNamerefName = ""
 				if !r.exit.ok() && !r.exit.exiting && !r.exit.returning && !r.exit.fatalExit {
 					// Bash: an assignment-statement error (readonly
 					// variable, bad subscript, …) exits a POSIX-mode
@@ -6035,11 +6044,6 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				continue
 			}
 			if declQuery == "-p" {
-				queryModes := modes
-				switch valType {
-				case "-n", "-a", "-A", "-i":
-					queryModes = append(queryModes, valType)
-				}
 				queryName := name
 				if as.Value != nil {
 					queryName += "=" + r.literalForAssign(as.Value)
@@ -6082,17 +6086,23 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 					r.outf("%s\n", formatDeclareVar(name, currentLocal, false))
 					continue
 				}
-				// declare -p name: print variable with attributes.
+				// declare -p name: print variable with attributes. With
+				// explicit names bash 5.3 ignores the -n/-r/-x/-a/-A/-i
+				// attribute flags for selection — those only filter the
+				// no-name listing — so every named variable that exists
+				// is printed regardless of its own attributes.
 				vr := r.lookupVar(name)
 				if !vr.Declared() {
-					if cm.Variant.Value != "readonly" && cm.Variant.Value != "export" &&
-						!declareQueryHasFilter(queryModes) {
+					if cm.Variant.Value != "readonly" && cm.Variant.Value != "export" {
 						r.errf(r.bashErrPrefix(r.curStmtPos)+"%s: %s: not found\n", cm.Variant.Value, queryName)
 						r.exit.code = 1
 					}
 					continue
 				}
-				if !declareVarMatchesModes(vr, queryModes) {
+				// `readonly -p NAME` / `export -p NAME` print nothing when
+				// explicit names are supplied; only their no-name form
+				// lists matching variables.
+				if cm.Variant.Value == "readonly" || cm.Variant.Value == "export" {
 					continue
 				}
 				// An integer nameref whose value assignment was rejected
@@ -6646,14 +6656,20 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			r.exit = r.jsonOut(map[string]any{"variables": r.variablesJSON(false)})
 			return
 		}
-		if !declHadNames && declQuery == "-p" && !jsonMode && cm.Variant.Value == "declare" {
-			r.printDeclareVars(modes)
+		// `declare -p` with an attribute-selecting flag but no names
+		// filters the listing to variables carrying that attribute
+		// (bash: `declare -pn` lists only namerefs, `declare -pr` only
+		// readonly, etc.). The -n/-i selectors live in valType, so fold
+		// them into the mode filter; -a/-A are handled by the dedicated
+		// array path below, so skip the generic listing for those.
+		if !declHadNames && declQuery == "-p" && !jsonMode && cm.Variant.Value == "declare" && valType != "-a" && valType != "-A" {
+			r.printDeclareVars(declareListFilterModes(modes, valType))
 		}
 		if !declHadNames && declQuery == "-p" && !jsonMode && cm.Variant.Value == "readonly" {
 			r.printReadonlyVars(r.opts[optPosix])
 		}
-		if !declHadNames && declQuery == "-p" && !jsonMode && cm.Variant.Value == "export" {
-			r.printDeclareVars(append(modes, "-x"))
+		if !declHadNames && declQuery == "-p" && !jsonMode && cm.Variant.Value == "export" && valType != "-a" && valType != "-A" {
+			r.printDeclareVars(declareListFilterModes(append(slices.Clone(modes), "-x"), valType))
 		}
 		if !declHadNames && declQuery == "" && valType == "" && len(modes) == 1 && !jsonMode && cm.Variant.Value == "export" && r.opts[optPosix] {
 			r.printExportVars()
@@ -8457,6 +8473,11 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 		// their own body line numbers.
 		oldOverrideLineno := r.ecfg.OverrideLineno
 		r.ecfg.OverrideLineno = 0
+		// A function called from within `eval` reports diagnostics at
+		// its own body line, not the eval call's line, so the eval
+		// line offset does not leak into the function body.
+		oldEvalLineOffset := r.evalLineOffset
+		r.evalLineOffset = 0
 
 		// Push call stack frame.
 		r.callStack = append(r.callStack, callFrame{
@@ -8510,6 +8531,7 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 		r.inFunc = oldInFunc
 		r.optState = oldOptState
 		r.ecfg.OverrideLineno = oldOverrideLineno
+		r.evalLineOffset = oldEvalLineOffset
 		r.exit.returning = false
 		return
 	}

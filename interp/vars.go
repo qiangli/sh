@@ -1035,6 +1035,14 @@ func (r *Runner) printLocalVars() {
 	slices.Sort(names)
 	for _, name := range names {
 		nv := overlay.values[name]
+		// Only variables that are genuinely local to the current
+		// function scope are listed. A background/pipe subshell
+		// flattens the entire parent environment into values (see
+		// newOverlayEnviron), so non-local globals appear here with
+		// Local=false; bash lists only the locals.
+		if !nv.Variable.Local {
+			continue
+		}
 		if !nv.Variable.IsSet() {
 			continue
 		}
@@ -1278,14 +1286,16 @@ func declareVarMatchesModes(vr expand.Variable, modes []string) bool {
 	return true
 }
 
-func declareQueryHasFilter(modes []string) bool {
-	for _, mode := range modes {
-		switch mode {
-		case "-n", "-r", "-x", "-a", "-A", "-i":
-			return true
-		}
+// declareListFilterModes folds a declare-family valType flag that
+// selects variables by attribute (-n nameref, -i integer) into the
+// mode filter used by the no-name `declare -p` listing. -a/-A are
+// handled by printArrayVars and intentionally excluded here.
+func declareListFilterModes(modes []string, valType string) []string {
+	switch valType {
+	case "-n", "-i":
+		return append(slices.Clone(modes), valType)
 	}
-	return false
+	return modes
 }
 
 func (r *Runner) printExportVars() {
@@ -2144,6 +2154,13 @@ func (r *Runner) setVar(name string, vr expand.Variable) {
 			// function: bash attributes to the function name.
 			inner = r.callStack[len(r.callStack)-1].funcName + ": "
 		}
+		// A readonly array append/element store through a nameref is
+		// reported by bash under the nameref name as written, not the
+		// resolved target (see r.assignNamerefName).
+		displayName := name
+		if r.assignNamerefName != "" {
+			displayName = r.assignNamerefName
+		}
 		// An array-literal assignment failing on a readonly variable
 		// through `local` is reported twice by bash: once for the
 		// failed assignment, once from the builtin. `readonly`/`export`
@@ -2151,9 +2168,9 @@ func (r *Runner) setVar(name string, vr expand.Variable) {
 		if r.setVarFromBuiltin == "local" &&
 			(vr.Kind == expand.Indexed || vr.Kind == expand.Associative) &&
 			strings.Contains(err.Error(), "readonly") {
-			r.errf("%s%s: %v\n", r.bashErrPrefix(r.curStmtPos), name, err)
+			r.errf("%s%s: %v\n", r.bashErrPrefix(r.curStmtPos), displayName, err)
 		}
-		r.errf("%s%s%s: %v\n", r.bashErrPrefix(r.curStmtPos), inner, name, err)
+		r.errf("%s%s%s: %v\n", r.bashErrPrefix(r.curStmtPos), inner, displayName, err)
 		r.exit.code = 1
 		return
 	}
