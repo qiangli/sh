@@ -173,6 +173,10 @@ func TestArithFidelityBashSource(t *testing.T) {
 			input: "s='12 34'\necho '12 34' $(( s[0] )) $(( s[1] ))\necho status=$?",
 			want:  "./s: line 2: 12 34: arithmetic syntax error in expression (error token is \"34\")\nstatus=1\n",
 		},
+		{
+			input: "a=('1 3' 5)\nb=(1 2 3)\nc=('1' '3 5')\nd=('1' '3 6')\n\n(( a == b ))\necho status=$?\n\n(( a == c ))\necho status=$?\n\n(( a == d ))\necho status=$?",
+			want:  "./s: line 6: ((: 1 3: arithmetic syntax error in expression (error token is \"3\")\nstatus=1\n./s: line 9: ((: 1 3: arithmetic syntax error in expression (error token is \"3\")\nstatus=1\n./s: line 12: ((: 1 3: arithmetic syntax error in expression (error token is \"3\")\nstatus=1\n",
+		},
 	}
 
 	for _, tt := range tests {
