@@ -4949,7 +4949,13 @@ func bracketIsOrphan(s string) bool {
 }
 
 func (cfg *Config) findAllIndex(pat, name string, n int) [][]int {
+	if strings.Contains(pat, "[") && strings.Contains(pat, "-") {
+		return findReplIndexBytes(pat, name, n, false, false)
+	}
 	var mode pattern.Mode
+	if strings.Contains(pat, "-") {
+		mode |= pattern.LenientRanges
+	}
 	if cfg.ExtGlob {
 		mode |= pattern.ExtendedOperators
 	}
@@ -4958,6 +4964,9 @@ func (cfg *Config) findAllIndex(pat, name string, n int) [][]int {
 	}
 	expr, err := pattern.Regexp(escapeOrphanBrackets(pat), mode)
 	if err != nil {
+		if strings.Contains(pat, "-") {
+			return findReplIndexBytes(pat, name, n, false, false)
+		}
 		return nil
 	}
 	rx := regexp.MustCompile(expr)

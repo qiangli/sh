@@ -926,8 +926,36 @@ var runTests = []runTest{
 		"àÉñ bAr\nàÉñ bAr\n",
 	},
 	{
+		"empty=; x=x; echo ${x@K} ${empty@K} ${undef@K} ${x@K}; echo ${x@k} ${empty@k} ${undef@k} ${x@k}",
+		"'x' '' 'x'\n'x' '' 'x'\n",
+	},
+	{
 		"a=(àÉñ bAr); echo ${a[@]^}; echo ${a[*],,}",
 		"ÀÉñ BAr\nàéñ bar\n",
+	},
+	{
+		`declare -A A=([x]=y); echo x=${!A[@]@a}; echo invalid=${!A@a}`,
+		"x=\ninvalid=\n",
+	},
+	{
+		`set -- "" ""; IFS=; echo argv=${*:-minus}; echo argv=${*:+plus}; echo "argv=${*:-minus}"; echo "argv=${*:+plus}"`,
+		"argv=\nargv=plus\nargv=minus\nargv=\n",
+	},
+	{
+		`a=(); echo "${a[0]-no-colon}"; ref=a; echo "${!ref-no-colon}"; ref='a[@]'; echo "${!ref-no-colon}"`,
+		"no-colon\nno-colon\nno-colon\n",
+	},
+	{
+		`LC_ALL=C; s='_μ_ and _μ_'; echo ${s//_?_/foo}; LC_ALL=en_US.UTF-8; echo ${s//_?_/foo}`,
+		"_μ_ and _μ_\nfoo and foo\n",
+	},
+	{
+		`LC_ALL=en_US.UTF-8; s=$'\U00010000'; echo ${#s}; LC_ALL=C; echo ${#s}`,
+		"1\n4\n",
+	},
+	{
+		`program='^++--hello.,world<>[]'; program=${program//[^'><+-.,[]']}; echo "$program"; pat='[^]]'; s='ab^cd^'; echo ${s//$pat/z}`,
+		"++--.,<>[]\nzzzzzz\n",
 	},
 	{
 		"INTERP_X_1=a INTERP_X_2=b; echo ${!INTERP_X_*}",
