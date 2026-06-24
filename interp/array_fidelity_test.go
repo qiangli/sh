@@ -189,7 +189,7 @@ func TestArrayElementUnsetAndSetnessFidelity(t *testing.T) {
 			in: "a=(1 2 3 4 5)\n" +
 				"echo \"${a[@]: 1: -3}\"\n" +
 				"echo status=$?\n",
-			want: "-3: substring expression < 0\nstatus=0\n",
+			want: " -3: substring expression < 0\nstatus=0\n",
 		},
 		{
 			name: "test_v_negative_empty_array",

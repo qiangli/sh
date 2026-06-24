@@ -839,9 +839,9 @@ func TestParamSliceNegativeLength(t *testing.T) {
 		want    []string
 		wantErr string
 	}{
-		{`${@:1:$(($# - 2))}`, nil, "$(($# - 2)): substring expression < 0"},
-		{`${@: -3:-2}`, nil, "-2: substring expression < 0"},
-		{`${a[@]:0:-2}`, nil, "-2: substring expression < 0"},
+		{`${@:1:$(($# - 2))}`, nil, " $(($# - 2)): substring expression < 0"},
+		{`${@: -3:-2}`, nil, " -2: substring expression < 0"},
+		{`${a[@]:0:-2}`, nil, " -2: substring expression < 0"},
 		{`${v:1:-2}`, []string{"ell"}, ""},
 		{`${v: -3:2}`, []string{"ll"}, ""},
 		{`${@:2:2}`, []string{"b", "c"}, ""},

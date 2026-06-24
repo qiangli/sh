@@ -469,6 +469,19 @@ func (o *overlayEnviron) Each(f func(name string, vr expand.Variable) bool) {
 	}
 }
 
+func (o *overlayEnviron) collectNames(seen map[string]bool) map[string]bool {
+	if seen == nil {
+		seen = map[string]bool{}
+	}
+	for n := range o.values {
+		seen[n] = true
+	}
+	if p, ok := o.parent.(*overlayEnviron); ok {
+		p.collectNames(seen)
+	}
+	return seen
+}
+
 func execEnv(env expand.Environ) []string {
 	list := make([]string, 0, 64)
 	if o, ok := env.(*overlayEnviron); ok && o.parent == nil {
@@ -2298,7 +2311,7 @@ func (r *Runner) arithmCompoundArrayIndex(expr syntax.ArithmExpr) (int, bool) {
 		}
 		prefix := r.filename
 		if prefix == "" {
-			prefix = "bashy"
+			prefix = "bash"
 		}
 		err = fmt.Errorf("%s: line %d: %s: arithmetic syntax error: invalid arithmetic operator (error token is %q)",
 			prefix, r.curStmtPos.Line(), text, token)
@@ -2323,7 +2336,7 @@ func (r *Runner) arithmCompoundArrayIndex(expr syntax.ArithmExpr) (int, bool) {
 				}
 				prefix := r.filename
 				if prefix == "" {
-					prefix = "bashy"
+					prefix = "bash"
 				}
 				line := int(r.curStmtPos.Line())
 				err = fmt.Errorf("%s: line %d: %s: arithmetic syntax error in expression (error token is %q)",
@@ -2348,7 +2361,7 @@ func (r *Runner) rawAssignIndexArithError(rawText string, err error) error {
 	}
 	prefix := r.filename
 	if prefix == "" {
-		prefix = "bashy"
+		prefix = "bash"
 	}
 	if !strings.Contains(err.Error(), "not a valid arithmetic operator") {
 		return fmt.Errorf("%s: line %d: %s: %s", prefix, r.curStmtPos.Line(), text, err)
@@ -2884,7 +2897,7 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 				}
 				prefix := r.filename
 				if prefix == "" {
-					prefix = "bashy"
+					prefix = "bash"
 				}
 				r.expandErr(fmt.Errorf("%s: line %d: %s: %s",
 					prefix, as.Value.Pos().Line(), s, err))

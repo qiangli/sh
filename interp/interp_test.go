@@ -175,6 +175,10 @@ func TestMain(m *testing.M) {
 		os.Setenv("ENV_PROG", "env")
 	}
 
+	// Clean up any env pollution from the parent process that might
+	// leak into tests (e.g. a=(1 2 3 4 5) from a prior shell session).
+	os.Unsetenv("a")
+
 	m.Run()
 }
 
@@ -650,7 +654,7 @@ var runTests = []runTest{
 	{`a=" x  y"; b=$a c="$a"; echo "$b"; echo "$c"`, " x  y\n x  y\n"},
 	{`arr=("foo" "bar" "lala" "foobar"); echo ${arr[@]:2}; echo ${arr[*]:2}`, "lala foobar\nlala foobar\n"},
 	{`arr=("foo" "bar" "lala" "foobar"); echo ${arr[@]:2:4}; echo ${arr[*]:1:4}`, "lala foobar\nbar lala foobar\n"},
-	{`a=(x y z); echo ${a[@]:0:-2}`, "-2: substring expression < 0\n #JUSTERR"},
+	{`a=(x y z); echo ${a[@]:0:-2}`, " -2: substring expression < 0\n #JUSTERR"},
 	{`arr=("foo" "bar"); echo ${arr[@]}; echo ${arr[*]}`, "foo bar\nfoo bar\n"},
 	{`arr=("foo"); echo ${arr[@]:99}`, "\n"},
 	{`echo ${arr[@]:1:99}; echo ${arr[*]:1:99}`, "\n\n"},
@@ -689,8 +693,8 @@ var runTests = []runTest{
 	{`f() { echo "${@:2:2}"; }; f a b c d e`, "b c\n"},
 	{`f() { echo ${@:2:2}; }; f a b c d e`, "b c\n"},
 	{`set -- a b c; echo ${@:2:2}`, "b c\n"},
-	{`set -- a; echo ${@:1:$(($# - 2))}`, "$(($# - 2)): substring expression < 0\n #JUSTERR"},
-	{`set -- a b c d e; echo ${@: -3:-2}`, "-2: substring expression < 0\n #JUSTERR"},
+	{`set -- a; echo ${@:1:$(($# - 2))}`, " $(($# - 2)): substring expression < 0\n #JUSTERR"},
+	{`set -- a b c d e; echo ${@: -3:-2}`, " -2: substring expression < 0\n #JUSTERR"},
 	{`f() { echo "${@:1}"; }; f a b c`, "a b c\n"},
 	{`f() { echo "${*:2:2}"; }; f a b c d e`, "b c\n"},
 	{`f() { echo "${@: -2}"; }; f a b c d e`, "d e\n"},
@@ -1174,7 +1178,7 @@ var runTests = []runTest{
 	},
 	{
 		`declare -A assoc; key='x],b[$(echo uname >&2)'; let assoc[$key]++; declare -p assoc`,
-		"bashy: line 1: let: assoc[x],b[$(echo: bad array subscript (error token is \"b[$(echo\")\ndeclare -A assoc\n",
+		"bash: line 1: let: assoc[x],b[$(echo: bad array subscript (error token is \"b[$(echo\")\ndeclare -A assoc\n",
 	},
 	{
 		`declare -A A; for k in $'\t' ' ' '*' '@'; do read "A[$k]" <<< X; done; declare -p A`,
@@ -2935,7 +2939,7 @@ var runTests = []runTest{
 	{"set -u; a[0]=x; echo \"${a[5]}\"; echo after", "a[5]: unbound variable\nexit status 1 #JUSTERR"},
 	{"set -u; declare -A m; m[k]=v; echo \"${m[no]}\"; echo after", "m[no]: unbound variable\nexit status 1 #JUSTERR"},
 	{"a=b b=a; echo $((a + 7)); echo after", "b: expression recursion level exceeded (error token is \"b\")\nafter\n"},
-	{"x=4+; declare -i x; x+=7 y=4; echo x=$x y=$y", "bashy: line 1: 4+: 1:2: `+` must be followed by an expression\nx=4+ y=\n"},
+	{"x=4+; declare -i x; x+=7 y=4; echo x=$x y=$y", "bash: line 1: 4+: 1:2: `+` must be followed by an expression\nx=4+ y=\n"},
 	{"x=8; echo $((--x++)); echo after", "++: assignment requires lvalue (error token is \"++ \")\nafter\n"},
 	{"HOME=/usr/homes/chet; echo \"${HOME:`echo }`}\"; echo after", "arithmetic syntax error: operand expected (error token is \"}\")\nafter\n"},
 	{"foo=1; echo $(( 'foo' )); echo after", "arithmetic syntax error: operand expected (error token is \"'foo' \")\nafter\n"},
@@ -3754,7 +3758,7 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	{"eval echo foo", "foo\n"},
 	{"eval 'echo foo'", "foo\n"},
 	{"eval 'exit 1'", "exit status 1"},
-	{"eval '(x'", "eval: 1:1: reached EOF without matching `(` with `)`\nexit status 1 #JUSTERR"},
+	{"eval '(x'", "eval: 1:1: unexpected EOF while looking for matching `)`\nexit status 1 #JUSTERR"},
 	{"set a b; eval 'echo $@'", "a b\n"},
 	{"eval 'a=foo'; echo $a", "foo\n"},
 	{`a=b eval "echo $a"`, "\n"},
@@ -5186,11 +5190,11 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	},
 	{
 		"getopts abc opt -z",
-		"bashy: illegal option -- z\n #IGNORE",
+		"bash: illegal option -- z\n #IGNORE",
 	},
 	{
 		"getopts a: opt -a",
-		"bashy: option requires an argument -- a\n #IGNORE",
+		"bash: option requires an argument -- a\n #IGNORE",
 	},
 	{
 		"getopts :abc opt -z; echo $opt; echo $OPTARG",

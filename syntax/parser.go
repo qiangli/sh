@@ -1125,7 +1125,11 @@ func (p *Parser) quoteErr(lpos Pos, quote token) {
 }
 
 func (p *Parser) matchingErr(lpos Pos, left, right token) {
-	p.posErr(lpos, "reached %#q without matching %#q with %#q", p.tok, left, right)
+	if p.tok == _EOF {
+		p.posErr(lpos, "unexpected EOF while looking for matching %#q", right)
+	} else {
+		p.posErr(lpos, "reached %#q without matching %#q with %#q", p.tok, left, right)
+	}
 }
 
 func (p *Parser) matched(lpos Pos, left, right token) Pos {
