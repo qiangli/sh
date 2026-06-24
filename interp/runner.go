@@ -4280,6 +4280,9 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 			}
 		}
 	}
+	oldRedirMoveCloseFds := r.redirMoveCloseFds
+	r.redirMoveCloseFds = nil
+	defer func() { r.redirMoveCloseFds = oldRedirMoveCloseFds }()
 	// bash 5.3 caps the number of here-documents per simple command
 	// (the historical compile-time limit, 16). Beyond that bash
 	// rejects the entire command with "maximum here-document count
@@ -4337,6 +4340,11 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 			r.lateRedirs = nil
 		}()
 	} else {
+		oldStmtTraceOutput := r.stmtTraceOutput
+		if _, ok := st.Cmd.(*syntax.CallExpr); ok && len(st.Redirs) > 0 {
+			r.stmtTraceOutput = r.xtraceOutput()
+			defer func() { r.stmtTraceOutput = oldStmtTraceOutput }()
+		}
 		for _, rd := range st.Redirs {
 			cls, err := r.redir(ctx, rd)
 			if err != nil {
@@ -4421,6 +4429,11 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 			// `wait $COPROC_PID >file`) had its pipe fds closed; keep them
 			// gone so a later coproc reuses the freed high fd numbers.
 			for fd := range r.coprocReapedFds {
+				delete(r.fdTable, fd)
+				delete(r.fdReadTable, fd)
+				delete(r.fdWriteTable, fd)
+			}
+			for fd := range r.redirMoveCloseFds {
 				delete(r.fdTable, fd)
 				delete(r.fdReadTable, fd)
 				delete(r.fdWriteTable, fd)
@@ -7471,9 +7484,6 @@ func (r *Runner) fdCaps(fd int) (read *os.File, write io.Writer, ok bool) {
 		}
 		return nil, nil, false
 	}
-	if _, inherited := r.inheritedFd(fd); inherited {
-		ok = true
-	}
 	if r.fdTable != nil {
 		if f, exists := r.fdTable[fd]; exists {
 			ok = true
@@ -7767,6 +7777,10 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 		}
 		if closeSource && sourceFd != targetFd {
 			r.closeFd(sourceFd)
+			if r.redirMoveCloseFds == nil {
+				r.redirMoveCloseFds = make(map[int]bool)
+			}
+			r.redirMoveCloseFds[sourceFd] = true
 		}
 		if namedFDVar != "" {
 			r.setGlobalNamedFdVarString(namedFDVar, strconv.Itoa(targetFd))
@@ -7803,6 +7817,10 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 		}
 		if closeSource && sourceFd != targetFd {
 			r.closeFd(sourceFd)
+			if r.redirMoveCloseFds == nil {
+				r.redirMoveCloseFds = make(map[int]bool)
+			}
+			r.redirMoveCloseFds[sourceFd] = true
 		}
 		if namedFDVar != "" {
 			r.setGlobalNamedFdVarString(namedFDVar, strconv.Itoa(targetFd))
@@ -7835,11 +7853,15 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 	if r.opts[optNoClobber] {
 		switch rd.Op {
 		case syntax.RdrOut, syntax.RdrAll:
-			if _, err := r.stat(ctx, arg); err == nil {
-				r.errf("%s%s: cannot overwrite existing file\n", r.bashErrPrefix(rd.Word.Pos()), arg)
-				return nil, fmt.Errorf("%s: cannot overwrite existing file", arg)
+			info, err := r.stat(ctx, arg)
+			if err == nil {
+				if info.Mode().IsRegular() {
+					r.errf("%s%s: cannot overwrite existing file\n", r.bashErrPrefix(rd.Word.Pos()), arg)
+					return nil, fmt.Errorf("%s: cannot overwrite existing file", arg)
+				}
+			} else {
+				mode = os.O_WRONLY | os.O_CREATE | os.O_EXCL
 			}
-			mode = os.O_WRONLY | os.O_CREATE | os.O_EXCL
 		}
 	}
 	f, err := r.open(ctx, arg, mode, 0o644, true)

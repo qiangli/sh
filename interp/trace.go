@@ -29,6 +29,19 @@ func (r *Runner) tracer(pos syntax.Pos) *tracer {
 		return nil
 	}
 
+	out := r.xtraceOutput()
+	if r.stmtTraceOutput != nil {
+		out = r.stmtTraceOutput
+	}
+	return &tracer{
+		printer:   syntax.NewPrinter(),
+		output:    out,
+		needsPlus: true,
+		plus:      r.xtracePrefix(pos),
+	}
+}
+
+func (r *Runner) xtraceOutput() io.Writer {
 	out := r.stderr
 	// Honor BASH_XTRACEFD — if it's set to a numeric fd that is
 	// currently open, route xtrace output there instead of stderr.
@@ -39,12 +52,7 @@ func (r *Runner) tracer(pos syntax.Pos) *tracer {
 			}
 		}
 	}
-	return &tracer{
-		printer:   syntax.NewPrinter(),
-		output:    out,
-		needsPlus: true,
-		plus:      r.xtracePrefix(pos),
-	}
+	return out
 }
 
 // string writes s to tracer.buf if tracer is non-nil,

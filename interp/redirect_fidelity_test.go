@@ -85,6 +85,31 @@ func TestRunnerBash53RedirectCluster(t *testing.T) {
 			in:   "read a 3<<EOF <&3\nabc\nEOF\necho [$a]",
 			want: "[abc]\n",
 		},
+		{
+			name: "bad_fd_seven_with_imported_ambient_fd",
+			in:   "echo hi 1>&7",
+			want: "7: Bad file descriptor\nexit status 1",
+		},
+		{
+			name: "noclobber_allows_dev_null",
+			in:   "set -o noclobber\nprintf ok >/dev/null\necho status=$?",
+			want: "status=0\n",
+		},
+		{
+			name: "noclobber_clobber_operator_still_overwrites",
+			in:   "echo XX >| c.txt\nset -o noclobber\necho YY > c.txt\necho status=$?\ncat c.txt\necho ZZ >| c.txt\ncat c.txt",
+			want: "c.txt: cannot overwrite existing file\nstatus=1\nXX\nZZ\n",
+		},
+		{
+			name: "scoped_fd_move_restores_closed_source",
+			in:   "exec 6>&- 7>&-\nexec 7> f.txt\n: 6>&7 7>&-\necho hello >&7\n: 6>&7-\necho world >&7\nexec 7>&-\ncat f.txt",
+			want: "7: Bad file descriptor\nhello\n",
+		},
+		{
+			name: "xtrace_preserves_command_order",
+			in:   "set -x\nprintf aaaa > /dev/null 2> test_osh\nset +x\ncat test_osh",
+			want: "+ printf aaaa\n+ set +x\n",
+		},
 	}
 
 	for _, tt := range tests {
@@ -102,6 +127,7 @@ func TestRunnerBash53RedirectCluster(t *testing.T) {
 				interp.Dir(t.TempDir()),
 				interp.StdIO(nil, &cb, &cb),
 				interp.ExecHandlers(testExecHandler),
+				interp.WithInheritedFds([]int{7}),
 			)
 			if err != nil {
 				t.Fatal(err)
