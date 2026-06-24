@@ -1990,7 +1990,7 @@ var errorCases = []errorCase{
 	),
 	errCase(
 		"echo ${foo[]}",
-		langErr("1:11: `[` must be followed by an expression", LangBash|LangMirBSDKorn|LangZsh),
+		langErr("1:11: `[` must be followed by an expression", LangMirBSDKorn|LangZsh),
 		flipConfirm(LangMirBSDKorn), // TODO: why is this valid?
 	),
 	errCase(

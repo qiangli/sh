@@ -2564,6 +2564,9 @@ func (cfg *Config) varInd(vr Variable, idx syntax.ArithmExpr) (string, error) {
 		case "*", "@":
 			return strings.Join(vr.IndexedValues(), " "), nil
 		}
+		if emptyLiteralIndex(idx) && cfg.curParam.Param != nil {
+			return "", BadSubstitutionError{Node: cfg.curParam}
+		}
 		if text, ok := singleQuotedWhitespaceIndex(idx); ok {
 			return "", &ArithmError{
 				Text: "'" + text + "'",
@@ -2651,6 +2654,15 @@ func (cfg *Config) varInd(vr Variable, idx syntax.ArithmExpr) (string, error) {
 		return vr.Map[val], nil
 	}
 	return "", nil
+}
+
+func emptyLiteralIndex(idx syntax.ArithmExpr) bool {
+	word, ok := idx.(*syntax.Word)
+	if !ok || len(word.Parts) != 1 {
+		return false
+	}
+	lit, ok := word.Parts[0].(*syntax.Lit)
+	return ok && lit.Value == ""
 }
 
 func singleQuotedWhitespaceIndex(idx syntax.ArithmExpr) (string, bool) {

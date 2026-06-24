@@ -275,6 +275,11 @@ func (p *Parser) arithmExprValue(compact bool) ArithmExpr {
 			x = p.wordOne(l)
 			break
 		}
+		if !ValidName(l.Value) {
+			p.appendArithmBracketSuffix(l, compact)
+			x = p.wordOne(l)
+			break
+		}
 		pe := &ParamExp{Short: true, Param: l}
 		pe.Index = p.eitherIndex()
 		x = p.wordOne(pe)
@@ -296,6 +301,43 @@ func (p *Parser) arithmExprValue(compact bool) ArithmExpr {
 	}
 	if !compact {
 		p.got(_Newl)
+	}
+
+	if p.tok == leftBrack {
+		switch w := x.(type) {
+		case *Word:
+			if len(w.Parts) == 1 {
+				if pe, ok := w.Parts[0].(*ParamExp); ok && pe.Param != nil && pe.Index != nil {
+					l := &Lit{
+						ValuePos: pe.Pos(),
+						ValueEnd: pe.End(),
+						Value:    arithmParamExpText(pe),
+					}
+					p.appendArithmBracketSuffix(l, compact)
+					x = p.wordOne(l)
+					break
+				}
+			}
+			l := &Lit{ValuePos: p.pos, ValueEnd: p.pos}
+			p.appendArithmBracketSuffix(l, compact)
+			w.Parts = append(w.Parts, l)
+		}
+	}
+	if p.tok == period {
+		if w, ok := x.(*Word); ok && arithmWordAllDigits(w) {
+			if len(w.Parts) == 1 {
+				if l, ok := w.Parts[0].(*Lit); ok {
+					l.Value += "."
+					l.ValueEnd = posAddCol(p.pos, 1)
+					p.nextArith(compact)
+					if p.tok == _LitWord && !p.spaced {
+						next := p.getLit()
+						l.Value += next.Value
+						l.ValueEnd = next.ValueEnd
+					}
+				}
+			}
+		}
 	}
 
 	if !compact && !p.spaced && p.tok == hash {
@@ -328,6 +370,81 @@ func (p *Parser) arithmExprValue(compact bool) ArithmExpr {
 		return u
 	}
 	return x
+}
+
+func (p *Parser) appendArithmBracketSuffix(l *Lit, compact bool) {
+	for p.tok == leftBrack {
+		lpos := p.pos
+		depth := 0
+		for {
+			sep := ""
+			if p.spaced {
+				sep = " "
+			}
+			text := p.tok.String()
+			if p.tok == _LitWord {
+				next := p.getLit()
+				l.Value += sep + next.Value
+				l.ValueEnd = next.ValueEnd
+			} else {
+				if text == "" {
+					return
+				}
+				if p.tok == leftBrack {
+					depth++
+				}
+				if p.tok == rightBrack {
+					depth--
+				}
+				l.Value += sep + text
+				l.ValueEnd = posAddCol(p.pos, len(text))
+				p.nextArith(compact)
+			}
+			if depth == 0 || p.tok == _EOF {
+				if depth > 0 {
+					p.posErr(lpos, "%#q must follow a name like a[i]", leftBrack)
+				}
+				break
+			}
+		}
+	}
+}
+
+func arithmParamExpText(pe *ParamExp) string {
+	if pe == nil || pe.Param == nil {
+		return ""
+	}
+	text := pe.Param.Value
+	if pe.Index != nil {
+		text += "[" + arithmExprText(pe.Index) + "]"
+	}
+	return text
+}
+
+func arithmExprText(expr ArithmExpr) string {
+	switch expr := expr.(type) {
+	case *Word:
+		var b strings.Builder
+		for _, part := range expr.Parts {
+			switch part := part.(type) {
+			case *Lit:
+				b.WriteString(part.Value)
+			case *ParamExp:
+				b.WriteString(arithmParamExpText(part))
+			}
+		}
+		return b.String()
+	case *BinaryArithm:
+		return arithmExprText(expr.X) + expr.Op.String() + arithmExprText(expr.Y)
+	case *UnaryArithm:
+		if expr.Post {
+			return arithmExprText(expr.X) + expr.Op.String()
+		}
+		return expr.Op.String() + arithmExprText(expr.X)
+	case *ParenArithm:
+		return "(" + arithmExprText(expr.X) + ")"
+	}
+	return ""
 }
 
 func (p *Parser) appendAssignIndexWord(l *Lit) {

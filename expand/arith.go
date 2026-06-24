@@ -434,6 +434,34 @@ func expandedAssocSubscriptError(s string) error {
 	}
 }
 
+func arithmInvalidSubscriptChain(s string) (string, bool) {
+	first := strings.IndexByte(s, '[')
+	if first < 0 {
+		return "", false
+	}
+	if isAllDigits(s[:first]) {
+		return s[first:], true
+	}
+	depth := 0
+	for i := first; i < len(s); i++ {
+		switch s[i] {
+		case '[':
+			if depth == 0 && i == first+1 {
+				return s[i:], true
+			}
+			depth++
+		case ']':
+			if depth > 0 {
+				depth--
+				if depth == 0 && i+1 < len(s) && s[i+1] == '[' {
+					return s[i+1:], true
+				}
+			}
+		}
+	}
+	return "", false
+}
+
 func Arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 	cfg = prepareConfig(cfg)
 	_, topWord := expr.(*syntax.Word)
@@ -576,6 +604,25 @@ func arithmWordSource(word *syntax.Word) string {
 	return arithmWordPartsSource(word.Parts)
 }
 
+func arithmExprStaticText(expr syntax.ArithmExpr) string {
+	switch expr := expr.(type) {
+	case nil:
+		return ""
+	case *syntax.Word:
+		return arithmWordSource(expr)
+	case *syntax.ParenArithm:
+		return "(" + arithmExprStaticText(expr.X) + ")"
+	case *syntax.UnaryArithm:
+		if expr.Post {
+			return arithmExprStaticText(expr.X) + expr.Op.String()
+		}
+		return expr.Op.String() + arithmExprStaticText(expr.X)
+	case *syntax.BinaryArithm:
+		return arithmExprStaticText(expr.X) + " " + expr.Op.String() + " " + arithmExprStaticText(expr.Y)
+	}
+	return ""
+}
+
 func arithmWordPartsSource(parts []syntax.WordPart) string {
 	var b strings.Builder
 	for _, part := range parts {
@@ -626,7 +673,9 @@ func arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 		}
 		if sqText, ok := arithmSingleQuotedText(expr); ok {
 			expanded := cfg.expandArithmDiagnosticText(sqText)
-			if arithmBadSingleQuotedText(expanded) ||
+			trimmed := strings.TrimSpace(sqText)
+			quotedNumeric := !cfg.LetArithmetic && trimmed != "" && trimmed[0] >= '0' && trimmed[0] <= '9'
+			if arithmBadSingleQuotedText(expanded) || quotedNumeric ||
 				(syntax.ValidName(sqText) && cfg.Env.Get(sqText).IsSet()) {
 				text := "'" + expanded + "'"
 				arithText := text
@@ -686,6 +735,13 @@ func arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 		}
 		if strings.TrimSpace(str) == "}" {
 			return 0, fmt.Errorf("arithmetic syntax error: operand expected (error token is %q)", "}")
+		}
+		if token, ok := arithmInvalidSubscriptChain(str); ok {
+			return 0, &ArithmError{
+				Text: str,
+				Err: fmt.Errorf("arithmetic syntax error: invalid arithmetic operator (error token is \"%s \")",
+					token),
+			}
 		}
 		// Bash re-parses the literal text of a Word-shaped arith
 		// operand as an arithmetic expression when it contains
@@ -1243,6 +1299,9 @@ func atoi(s string) int64 {
 func atoiCheck(s string) (int64, error) {
 	orig := s
 	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, '.'); i >= 0 && i > 0 && s[0] >= '0' && s[0] <= '9' {
+		return 0, fmt.Errorf("arithmetic syntax error: invalid arithmetic operator (error token is %q)", s[i:])
+	}
 	base := int64(10)
 	switch {
 	case strings.HasPrefix(s, "0x") || strings.HasPrefix(s, "0X"):
@@ -1483,9 +1542,29 @@ func (cfg *Config) assgnArit(b *syntax.BinaryArithm) (int, error) {
 	if !ok {
 		return 0, fmt.Errorf("attempted assignment to non-variable")
 	}
+	if lval.word != nil {
+		if text := arithmWordSource(lval.word); strings.Contains(text, "][") {
+			if token, ok := arithmInvalidSubscriptChain(text); ok {
+				errToken := token + " " + b.Op.String() + " " + arithmExprStaticText(b.Y) + " "
+				return 0, &ArithmError{
+					Text: text,
+					Err: fmt.Errorf("arithmetic syntax error: invalid arithmetic operator (error token is \"%s\")",
+						errToken),
+				}
+			}
+		}
+	}
 	lval, err := cfg.resolveAritLvalueName(lval)
 	if err != nil {
 		return 0, err
+	}
+	if token, ok := arithmInvalidSubscriptChain(lval.name); ok {
+		errToken := token + " " + b.Op.String() + " " + arithmExprStaticText(b.Y) + " "
+		return 0, &ArithmError{
+			Text: lval.name,
+			Err: fmt.Errorf("arithmetic syntax error: invalid arithmetic operator (error token is \"%s\")",
+				errToken),
+		}
 	}
 	if !syntax.ValidName(lval.name) {
 		return 0, fmt.Errorf("attempted assignment to non-variable")

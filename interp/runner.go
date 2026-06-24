@@ -416,6 +416,9 @@ func (r *Runner) expandErr(err error) {
 	if strings.Contains(errMsg, "arithmetic syntax error: invalid arithmetic operator") {
 		r.lastExpandExit = exitStatus{code: 1}
 	}
+	if looksLikeArithExpandError(errMsg) {
+		r.lastExpandExit = exitStatus{code: 1}
+	}
 	if strings.Contains(errMsg, `operand expected (error token is """ ")`) {
 		r.exit.code = 1
 		r.exit.exiting = true
@@ -505,6 +508,21 @@ func looksLikeExpandError(msg string) bool {
 		strings.Contains(msg, "not a valid identifier"),
 		strings.Contains(msg, "invalid variable name"):
 		return true
+	}
+	return false
+}
+
+func looksLikeArithExpandError(msg string) bool {
+	switch {
+	case strings.Contains(msg, "invalid integer constant"),
+		strings.Contains(msg, "value too great for base"),
+		strings.Contains(msg, "invalid number"):
+		return true
+	}
+	const quotedTokenPrefix = "error token is \"'"
+	if idx := strings.Index(msg, quotedTokenPrefix); idx >= 0 {
+		idx += len(quotedTokenPrefix)
+		return idx < len(msg) && msg[idx] >= '0' && msg[idx] <= '9'
 	}
 	return false
 }

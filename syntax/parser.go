@@ -1857,7 +1857,7 @@ zshPrefixLoop:
 		pe.Slice = &Slice{}
 		colonPos := p.pos
 		p.quote = paramExpArithm
-		if p.next(); p.tok != colon {
+		if p.next(); p.tok != colon && p.tok != rightBrace {
 			if pe.Param != nil && pe.Param.Value == "#" && p.tok == perc {
 				pe.Slice.Offset = p.wordOne(p.lit(p.pos, "%"))
 				p.next()
@@ -2209,8 +2209,12 @@ func (p *Parser) eitherIndexBlank(blankOK bool) ArithmExpr {
 		p.tok, p.val = _LitWord, p.tok.String()
 	}
 	if p.lang == LangBash && p.tok == rightBrack &&
-		p.pos.Offset() > lpos.Offset()+1 {
-		expr := ArithmExpr(p.wordOne(p.lit(p.pos, " ")))
+		(blankOK || p.pos.Offset() > lpos.Offset()+1) {
+		val := ""
+		if p.pos.Offset() > lpos.Offset()+1 {
+			val = " "
+		}
+		expr := ArithmExpr(p.wordOne(p.lit(p.pos, val)))
 		p.quote = old
 		p.assignIndexWords = oldAssignIndexWords
 		p.matchedArithm(lpos, leftBrack, rightBrack)

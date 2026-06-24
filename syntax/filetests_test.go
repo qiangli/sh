@@ -404,8 +404,7 @@ var fileTests = []fileTestCase{
 			Op: Gtr,
 			X:  litWord("1.2"),
 			Y:  litWord("0.3"),
-		}), LangZsh),
-		langErr2("1:4: floating point arithmetic is a zsh feature; tried parsing as LANG", LangBash|LangMirBSDKorn),
+		}), LangBash|LangMirBSDKorn|LangZsh),
 	),
 	fileTest(
 		[]string{
