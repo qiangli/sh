@@ -464,7 +464,7 @@ func (p *Parser) appendAssignIndexWord(l *Lit) {
 		if p.spaced {
 			sep = " "
 		}
-		if p.tok == _LitWord {
+		if p.tok.isLit() {
 			next := p.getLit()
 			l.Value += sep + next.Value
 			l.ValueEnd = next.ValueEnd

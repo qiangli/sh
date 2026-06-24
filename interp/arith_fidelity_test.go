@@ -76,6 +76,38 @@ echo $(( "$x" * 3 ))`,
 			input: "base=16\necho $(( ${base}#a ))\nzero=0\necho $(( ${zero}11 ))\necho $(( ${zero}xAB ))",
 			want:  "10\n9\n171\n",
 		},
+		{
+			input: `a=(0 1 2 3 4)
+unset a[1]
+unset a[4]
+echo "${a[@]}"
+echo -1 ${a[-1]}
+echo -2 ${a[-2]}
+echo -3 ${a[-3]}
+echo -4 ${a[-4]}
+echo -5 ${a[-5]}
+a[-1]+=0
+echo ${a[@]}
+(( a[-1] += 42 ))
+echo ${a[@]}`,
+			want: "0 2 3\n-1 3\n-2 2\n-3\n-4 0\na: bad array subscript\n-5\n0 2 30\n0 2 72\n",
+		},
+		{
+			input: "a=(1 2 3 4 5)\necho ${a[@]: 1: -3}",
+			want:  " -3: substring expression < 0\n",
+		},
+		{
+			input: "a[5 # 1]=x\necho status=$? len=${#a[@]}",
+			want:  "./s: line 1: 5 # 1: arithmetic syntax error: invalid arithmetic operator (error token is \"# 1\")\nstatus=1 len=0\n",
+		},
+		{
+			input: "a=(x)\na['2']=x\necho status=$? len=${#a[@]}\na[0]=x\necho status=$? len=${#a[@]}\na[3 + '4']=x\necho status=$? len=${#a[@]}",
+			want:  "arithmetic syntax error: operand expected (error token is \"'2' \")\nstatus=1 len=1\nstatus=0 len=1\narithmetic syntax error: operand expected (error token is \"'4' \")\nstatus=1 len=1\n",
+		},
+		{
+			input: "hello=100\na=([hello]=1 [hello]+=2)\nprintf 'keys: '; printf '<%s>\\n' \"${!a[@]}\"\nprintf 'vals: '; printf '<%s>\\n' \"${a[@]}\"\na=([100]=1 2 3 4 [5]=a b c d)\nprintf 'keys:'; for k in \"${!a[@]}\"; do printf ' <%s>' \"$k\"; done; echo\nprintf 'vals:'; for v in \"${a[@]}\"; do printf ' <%s>' \"$v\"; done; echo",
+			want:  "keys: <100>\nvals: <12>\nkeys: <5> <6> <7> <8> <100> <101> <102> <103>\nvals: <a> <b> <c> <d> <1> <2> <3> <4>\n",
+		},
 	}
 
 	for _, tt := range tests {

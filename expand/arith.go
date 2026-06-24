@@ -1222,7 +1222,14 @@ func (cfg *Config) resolveAritLvalue(lval arithLvalue) (arithLvalue, error) {
 		return lval, err
 	}
 	if index < 0 {
-		return lval, fmt.Errorf("bad array subscript")
+		vr := cfg.Env.Get(lval.name)
+		if vr.Kind != Indexed {
+			return lval, fmt.Errorf("bad array subscript")
+		}
+		index = indexedNegativeOffset(vr, index)
+		if index < 0 {
+			return lval, fmt.Errorf("bad array subscript")
+		}
 	}
 	lval.indexValue = index
 	lval.indexSet = true
@@ -1254,6 +1261,9 @@ func (cfg *Config) setAritLvalue(lval arithLvalue, val int64) error {
 		vr.Set = true
 		vr.Map[lval.indexKey] = strconv.FormatInt(val, 10)
 		return wenv.Set(lval.name, vr)
+	}
+	if lval.indexValue < 0 {
+		return fmt.Errorf("bad array subscript")
 	}
 	if vr.Kind == String && vr.Str != "" {
 		vr.List = []string{vr.Str}
