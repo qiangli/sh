@@ -2119,7 +2119,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			if r.bashCompatErrors && errors.As(err, &pe) {
 				name := r.filename
 				if name == "" {
-					name = "bashy"
+					name = "bash"
 				}
 				text := pe.Text
 				// The parser stamps "from `(' command on line N"
@@ -3458,7 +3458,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			scriptName = r.filename
 		}
 		if scriptName == "" {
-			scriptName = "bashy"
+			scriptName = "bash"
 		}
 		switch {
 		case opt == '?' && diagnostics && !done:

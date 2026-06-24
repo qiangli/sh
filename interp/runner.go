@@ -404,7 +404,7 @@ func (r *Runner) expandErr(err error) {
 		if strings.HasPrefix(errMsg, "command substitution: ") {
 			prefix := r.filename
 			if prefix == "" {
-				prefix = "bashy"
+				prefix = "bash"
 			}
 			errMsg = prefix + ": " + errMsg
 		} else if errors.As(err, &unsetParam) || looksLikeExpandError(errMsg) {
@@ -587,7 +587,7 @@ func (r *Runner) letArithm(expr syntax.ArithmExpr) int {
 	if exprText, token, ok := r.malformedLetAssocSubscript(expr); ok {
 		prefix := r.filename
 		if prefix == "" {
-			prefix = "bashy"
+			prefix = "bash"
 		}
 		err := fmt.Errorf("%s: line %d: let: %s: bad array subscript (error token is %q)",
 			prefix, expr.Pos().Line(), exprText, token)
@@ -649,7 +649,7 @@ func (r *Runner) letArithm(expr syntax.ArithmExpr) int {
 		}
 		prefix := r.filename
 		if prefix == "" {
-			prefix = "bashy"
+			prefix = "bash"
 		}
 		if msg := err.Error(); strings.HasPrefix(msg, `"`) &&
 			strings.Contains(msg, ": arithmetic syntax error") {
@@ -1017,7 +1017,7 @@ func (r *Runner) bashArithmError(expr syntax.ArithmExpr, err error, command bool
 	}
 	prefix := r.filename
 	if prefix == "" {
-		prefix = "bashy"
+		prefix = "bash"
 	}
 	line := 0
 	if expr != nil {
@@ -4170,7 +4170,7 @@ func (r *Runner) bashErrPrefixLine(line int) string {
 	}
 	name := r.filename
 	if name == "" {
-		name = "bashy"
+		name = "bash"
 	}
 	// When executing a multi-stmt alias body the AST positions are
 	// from the alias-body parse (line N within the body), not from
