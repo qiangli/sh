@@ -688,6 +688,9 @@ func arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 				if syntax.ValidName(sqText) && cfg.Env.Get(sqText).IsSet() {
 					arithText += " "
 				}
+				if cfg.arithmInOperand {
+					return 0, fmt.Errorf("arithmetic syntax error: operand expected (error token is \"%s\")", text+" ")
+				}
 				return 0, &ArithmError{
 					Text: arithText,
 					Err:  fmt.Errorf("arithmetic syntax error: operand expected (error token is \"%s\")", text+" "),
@@ -743,10 +746,14 @@ func arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 			return 0, fmt.Errorf("arithmetic syntax error: operand expected (error token is %q)", "}")
 		}
 		if token, ok := arithmInvalidSubscriptChain(str); ok {
+			err := fmt.Errorf("arithmetic syntax error: invalid arithmetic operator (error token is \"%s \")",
+				token)
+			if cfg.arithmInOperand {
+				return 0, err
+			}
 			return 0, &ArithmError{
-				Text: str,
-				Err: fmt.Errorf("arithmetic syntax error: invalid arithmetic operator (error token is \"%s \")",
-					token),
+				Text: str + " ",
+				Err:  err,
 			}
 		}
 		// Bash re-parses the literal text of a Word-shaped arith
@@ -1563,7 +1570,7 @@ func (cfg *Config) assgnArit(b *syntax.BinaryArithm) (int, error) {
 			if token, ok := arithmInvalidSubscriptChain(text); ok {
 				errToken := token + " " + b.Op.String() + " " + arithmExprStaticText(b.Y) + " "
 				return 0, &ArithmError{
-					Text: text,
+					Text: arithmExprStaticText(b) + " ",
 					Err: fmt.Errorf("arithmetic syntax error: invalid arithmetic operator (error token is \"%s\")",
 						errToken),
 				}
@@ -1577,7 +1584,7 @@ func (cfg *Config) assgnArit(b *syntax.BinaryArithm) (int, error) {
 	if token, ok := arithmInvalidSubscriptChain(lval.name); ok {
 		errToken := token + " " + b.Op.String() + " " + arithmExprStaticText(b.Y) + " "
 		return 0, &ArithmError{
-			Text: lval.name,
+			Text: arithmExprStaticText(b) + " ",
 			Err: fmt.Errorf("arithmetic syntax error: invalid arithmetic operator (error token is \"%s\")",
 				errToken),
 		}

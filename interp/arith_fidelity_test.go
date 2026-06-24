@@ -137,3 +137,73 @@ echo ${a[@]}`,
 		})
 	}
 }
+
+func TestArithFidelityBashSource(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{
+			input: "echo $(( '1' + '2' * 3 ))\necho status=$?\n\necho $(( '1 + 2' * 3 ))\necho status=$?",
+			want:  "./s: line 1: '1' + '2' * 3 : arithmetic syntax error: operand expected (error token is \"'1' \")\nstatus=1\n./s: line 4: '1 + 2' * 3 : arithmetic syntax error: operand expected (error token is \"'1 + 2' \")\nstatus=1\n",
+		},
+		{
+			input: "echo $(( '1' + 2))",
+			want:  "./s: line 1: '1' + 2: arithmetic syntax error: operand expected (error token is \"'1' \")\nexit status 1",
+		},
+		{
+			input: "set -u\n(( undef1++ ))\n(( ++undef2 ))\necho \"[$undef1][$undef2]\"",
+			want:  "./s: line 2: undef1: unbound variable\nexit status 1",
+		},
+		{
+			input: "(( 1[2] = 3 ))\necho status=$?\n(( a[1][2] = 3 ))\necho status=$?",
+			want:  "./s: line 1: ((: 1[2] = 3 : arithmetic syntax error: invalid arithmetic operator (error token is \"[2] = 3 \")\nstatus=1\n./s: line 3: ((: a[1][2] = 3 : arithmetic syntax error: invalid arithmetic operator (error token is \"[2] = 3 \")\nstatus=1\n",
+		},
+		{
+			input: "a=(1 2 3)\necho $(( a[1] ))\necho $(( a[1][1] ))",
+			want:  "2\n./s: line 3: a[1][1] : arithmetic syntax error: invalid arithmetic operator (error token is \"[1] \")\nexit status 1",
+		},
+		{
+			input: "echo $(( 2**-1 * 5 ))",
+			want:  "./s: line 1: 2**-1 * 5 : exponent less than 0 (error token is \"* 5 \")\n",
+		},
+		{
+			input: "s='12 34'\necho '12 34' $(( s[0] )) $(( s[1] ))\necho status=$?",
+			want:  "./s: line 2: 12 34: arithmetic syntax error in expression (error token is \"34\")\nstatus=1\n",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run("", func(t *testing.T) {
+			t.Parallel()
+
+			parser := syntax.NewParser(syntax.Variant(syntax.LangBash))
+			file, err := parser.Parse(bytes.NewReader([]byte(tt.input)), "./s")
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			var buf bytes.Buffer
+			r, err := New(
+				Dir(t.TempDir()),
+				StdIO(nil, &buf, &buf),
+				WithBashCompatErrors(true),
+				WithBashSource([]byte(tt.input)),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := r.Run(ctx, file); err != nil {
+				buf.WriteString(err.Error())
+			}
+			if got := buf.String(); got != tt.want {
+				t.Fatalf("wrong output in %q:\nwant: %q\ngot:  %q", tt.input, tt.want, got)
+			}
+		})
+	}
+}
