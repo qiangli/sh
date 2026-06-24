@@ -2162,10 +2162,64 @@ func escapedQuotedAssignIndex(expr syntax.ArithmExpr) (string, bool) {
 }
 
 func (r *Runner) arithmCompoundArrayIndex(expr syntax.ArithmExpr) (int, bool) {
+	rawText := ""
+	if word, ok := expr.(*syntax.Word); ok && len(word.Parts) == 1 {
+		if _, ok := word.Parts[0].(*syntax.Lit); ok {
+			rawText = word.Lit()
+			if strings.ContainsAny(rawText, "'#") {
+				if strings.Contains(rawText, "#") {
+					err := r.rawAssignIndexArithError(rawText, fmt.Errorf("not a valid arithmetic operator"))
+					r.lastArithErr = err
+					r.expandErr(err)
+					return 0, false
+				}
+				if parsed, perr := syntax.NewParser(syntax.Variant(syntax.LangBash)).Arithmetic(strings.NewReader(rawText)); perr == nil {
+					expr = parsed
+				} else {
+					err := r.rawAssignIndexArithError(rawText, perr)
+					r.lastArithErr = err
+					r.expandErr(err)
+					return 0, false
+				}
+			}
+		}
+	} else if text := r.arithmSourceText(expr, false); strings.ContainsAny(text, "'#") {
+		rawText = text
+		if strings.Contains(rawText, "#") {
+			err := r.rawAssignIndexArithError(rawText, fmt.Errorf("not a valid arithmetic operator"))
+			r.lastArithErr = err
+			r.expandErr(err)
+			return 0, false
+		}
+		if parsed, perr := syntax.NewParser(syntax.Variant(syntax.LangBash)).Arithmetic(strings.NewReader(text)); perr == nil {
+			expr = parsed
+		} else {
+			err := r.rawAssignIndexArithError(text, perr)
+			r.lastArithErr = err
+			r.expandErr(err)
+			return 0, false
+		}
+	}
 	n, err := expand.Arithm(r.ecfg, expr)
 	if err == nil {
 		r.lastArithErr = nil
 		return n, true
+	}
+	if rawText != "" && strings.Contains(err.Error(), "not a valid arithmetic operator") {
+		text := strings.TrimSpace(rawText)
+		token := text
+		if i := strings.IndexByte(text, '#'); i >= 0 {
+			token = text[i:]
+		}
+		prefix := r.filename
+		if prefix == "" {
+			prefix = "bashy"
+		}
+		err = fmt.Errorf("%s: line %d: %s: arithmetic syntax error: invalid arithmetic operator (error token is %q)",
+			prefix, r.curStmtPos.Line(), text, token)
+		r.lastArithErr = err
+		r.expandErr(err)
+		return n, false
 	}
 	if r.bashCompatErrors {
 		if arithErr, arithExpr := innermostArithmError(err); arithErr != nil {
@@ -2199,6 +2253,23 @@ func (r *Runner) arithmCompoundArrayIndex(expr syntax.ArithmExpr) (int, bool) {
 	r.lastArithErr = err
 	r.expandErr(err)
 	return n, false
+}
+
+func (r *Runner) rawAssignIndexArithError(rawText string, err error) error {
+	text := strings.TrimSpace(rawText)
+	token := text
+	if i := strings.IndexByte(text, '#'); i >= 0 {
+		token = text[i:]
+	}
+	prefix := r.filename
+	if prefix == "" {
+		prefix = "bashy"
+	}
+	if !strings.Contains(err.Error(), "not a valid arithmetic operator") {
+		return fmt.Errorf("%s: line %d: %s: %s", prefix, r.curStmtPos.Line(), text, err)
+	}
+	return fmt.Errorf("%s: line %d: %s: arithmetic syntax error: invalid arithmetic operator (error token is %q)",
+		prefix, r.curStmtPos.Line(), text, token)
 }
 
 func (r *Runner) setVarWithIndex(prev expand.Variable, name string, index syntax.ArithmExpr, vr expand.Variable) {
@@ -2328,8 +2399,8 @@ func (r *Runner) setVarWithIndex(prev expand.Variable, name string, index syntax
 		r.exit.code = 1
 		return
 	}
-	k := r.arithm(index)
-	if r.lastArithErr != nil {
+	k, ok := r.arithmCompoundArrayIndex(index)
+	if !ok {
 		r.exit.code = 1
 		return
 	}
