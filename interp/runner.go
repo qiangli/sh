@@ -4383,7 +4383,7 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 	// can read a file the redirect just wrote, so there is no observable
 	// difference for the rest, and the proven path stays untouched.
 	lateRedir := false
-	if len(st.Redirs) > 0 && commandHasCmdSubst(st.Cmd) {
+	if _, ok := st.Cmd.(*syntax.TestClause); !ok && len(st.Redirs) > 0 && commandHasCmdSubst(st.Cmd) {
 		lateRedir = true
 	}
 	if lateRedir {

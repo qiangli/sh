@@ -270,4 +270,7 @@ func TestMeta(t *testing.T) {
 				tc.pat, got, tc.wantQuote)
 		}
 	}
+	if got, want := QuoteMeta("()|@+!", ExtendedOperators), `\(\)\|\@\+\!`; got != want {
+		t.Errorf("QuoteMeta extglob got %q, wanted %q", got, want)
+	}
 }

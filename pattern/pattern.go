@@ -736,6 +736,11 @@ loop:
 		case '*', '?', '[', '\\':
 			needsEscaping = true
 			break loop
+		case '@', '+', '!', '(', ')', '|':
+			if mode&ExtendedOperators != 0 {
+				needsEscaping = true
+				break loop
+			}
 		}
 	}
 	if !needsEscaping { // short-cut without a string copy
@@ -746,6 +751,10 @@ loop:
 		switch r {
 		case '*', '?', '[', '\\':
 			sb.WriteByte('\\')
+		case '@', '+', '!', '(', ')', '|':
+			if mode&ExtendedOperators != 0 {
+				sb.WriteByte('\\')
+			}
 		}
 		sb.WriteRune(r)
 	}

@@ -6,6 +6,9 @@ package interp
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -94,6 +97,20 @@ func TestDbracketFidelity(t *testing.T) {
 				"[[ '3' -eq '3' ]] && echo true\n",
 			want: "true\ntrue\n",
 		},
+		// dbracket__047.sh — quoted parentheses on the rhs are
+		// literals even after extglob is enabled; only the unquoted
+		// leading `*` remains pattern syntax.
+		{
+			name: "047_quoted_parens_with_extglob",
+			in: "if [[ 'foo()' == *\\(\\) ]]; then echo match1; fi\n" +
+				"if [[ 'foo()' == *'()' ]]; then echo match2; fi\n" +
+				"if [[ 'foo()' == '*()' ]]; then echo match3; fi\n" +
+				"shopt -s extglob\n" +
+				"if [[ 'foo()' == *\\(\\) ]]; then echo match1; fi\n" +
+				"if [[ 'foo()' == *'()' ]]; then echo match2; fi\n" +
+				"if [[ 'foo()' == '*()' ]]; then echo match3; fi\n",
+			want: "match1\nmatch2\nmatch1\nmatch2\n",
+		},
 	}
 
 	for _, tc := range cases {
@@ -121,6 +138,54 @@ func TestDbracketFidelity(t *testing.T) {
 				t.Fatalf("wrong output in %q:\nwant: %q\ngot:  %q", tc.in, tc.want, got)
 			}
 		})
+	}
+}
+
+func TestDbracketRedirectWithCommandSubstitution(t *testing.T) {
+	t.Parallel()
+
+	src := "[[ $(stdout_stderr.py) == STDOUT ]] 2>x.txt\necho $?\n"
+	file, err := syntax.NewParser().Parse(strings.NewReader(src), "")
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+
+	tdir := t.TempDir()
+	var cb lockedBuffer
+	r, err := New(
+		Dir(tdir),
+		StdIO(nil, &cb, &cb),
+		ExecHandlers(func(next ExecHandlerFunc) ExecHandlerFunc {
+			return func(ctx context.Context, args []string) error {
+				if len(args) > 0 && args[0] == "stdout_stderr.py" {
+					hc := HandlerCtx(ctx)
+					fmt.Fprintln(hc.Stdout, "STDOUT")
+					fmt.Fprintln(hc.Stderr, "STDERR")
+					return nil
+				}
+				return next(ctx, args)
+			}
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := r.Run(ctx, file); err != nil {
+		cb.Write([]byte(err.Error()))
+	}
+
+	if got, want := cb.String(), "0\n"; got != want {
+		t.Fatalf("wrong output:\nwant: %q\ngot:  %q", want, got)
+	}
+	bs, err := os.ReadFile(filepath.Join(tdir, "x.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(bs), "STDERR\n"; got != want {
+		t.Fatalf("wrong redirected stderr:\nwant: %q\ngot:  %q", want, got)
 	}
 }
 
