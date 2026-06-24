@@ -1,6 +1,9 @@
 package syntax
 
-import "strings"
+import (
+	"strings"
+	"unicode/utf8"
+)
 
 // compact specifies whether we allow spaces between expressions.
 // This is true for let
@@ -11,7 +14,36 @@ func (p *Parser) arithmExpr(compact bool) ArithmExpr {
 // These function names are inspired by Bash's expr.c
 
 func (p *Parser) arithmExprComma(compact bool) ArithmExpr {
-	return p.arithmExprBinary(compact, p.arithmExprAssign, Comma)
+	value := p.arithmExprBinary(compact, p.arithmExprAssign, Comma)
+	if value != nil && p.tok == hash {
+		lit := p.arithmHashLit(p.pos, compact)
+		return &BinaryArithm{
+			OpPos: lit.ValuePos,
+			Op:    HashArit,
+			X:     value,
+			Y:     p.wordOne(lit),
+		}
+	}
+	return value
+}
+
+func (p *Parser) arithmHashLit(pos Pos, compact bool) *Lit {
+	var b strings.Builder
+	b.WriteByte('#')
+	for p.r != utf8.RuneSelf {
+		if p.r == ')' && p.peek() == ')' {
+			break
+		}
+		b.WriteRune(p.r)
+		if p.r == '\n' || p.r == '\r' {
+			p.rune()
+			break
+		}
+		p.rune()
+	}
+	lit := p.lit(pos, b.String())
+	p.nextArith(compact)
+	return lit
 }
 
 func (p *Parser) arithmExprAssign(compact bool) ArithmExpr {
