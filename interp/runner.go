@@ -516,7 +516,8 @@ func looksLikeArithExpandError(msg string) bool {
 	switch {
 	case strings.Contains(msg, "invalid integer constant"),
 		strings.Contains(msg, "value too great for base"),
-		strings.Contains(msg, "invalid number"):
+		strings.Contains(msg, "invalid number"),
+		strings.Contains(msg, "arithmetic syntax error in expression"):
 		return true
 	}
 	const quotedTokenPrefix = "error token is \"'"
@@ -535,6 +536,9 @@ func (r *Runner) arithm(expr syntax.ArithmExpr) int {
 			// Bash reports arithmetic assignments to readonly vars
 			// as a plain variable diagnostic, not as an arithmetic
 			// expression error with an error token.
+		} else if errors.As(err, &unsetParam) {
+			// nounset failures in ((...)) are plain parameter
+			// diagnostics, and abort before later arithmetic commands.
 		} else if arithErr, arithExpr := innermostArithmError(err); arithErr != nil && !errors.As(err, &unsetParam) {
 			if arithExpr == nil {
 				arithExpr = expr
@@ -864,6 +868,16 @@ func (r *Runner) bashArithmError(expr syntax.ArithmExpr, err error, command bool
 	exprText := printArithm(expr)
 	if exprTextOverride != "" {
 		exprText = exprTextOverride
+		if command {
+			exprText = strings.TrimRight(exprText, " \t")
+		}
+	}
+	if strings.Contains(bashMsg, "not a valid arithmetic operator") {
+		token := strings.TrimSpace(exprText)
+		if fields := strings.Fields(token); len(fields) > 0 {
+			token = fields[len(fields)-1]
+		}
+		bashMsg = fmt.Sprintf("arithmetic syntax error in expression (error token is %q)", token)
 	}
 	if !command && strings.Contains(bashMsg, "error token is \"$") {
 		exprText = strings.ReplaceAll(exprText, `\$`, "$")
@@ -931,6 +945,17 @@ func (r *Runner) bashArithmError(expr syntax.ArithmExpr, err error, command bool
 					tokenText = strings.TrimPrefix(strings.TrimSpace(printArithm(b.Y)), "-")
 				}
 			}
+		case syntax.Mul, syntax.Add,
+			syntax.Shl, syntax.Shr, syntax.Lss, syntax.Gtr, syntax.Leq, syntax.Geq,
+			syntax.Eql, syntax.Neq, syntax.And, syntax.Xor, syntax.Or,
+			syntax.AndArit, syntax.OrArit, syntax.XorBool:
+			if strings.Contains(bashMsg, "exponent less than 0") {
+				tokenText = r.sourceTextRange(b.OpPos, b.Y.End(), true)
+				if tokenText == "" {
+					tokenText = b.Op.String() + " " + printArithm(b.Y)
+				}
+				exactToken = true
+			}
 		case syntax.Sub:
 			if command && strings.Contains(bashMsg, "arithmetic syntax error: operand expected") &&
 				arithEmptyDoubleQuotedWord(b.Y) {
@@ -991,7 +1016,8 @@ func (r *Runner) bashArithmError(expr syntax.ArithmExpr, err error, command bool
 		// directly, without the `((: ... :` command wrapper. Verified
 		// patch handed across the scope wall in QUOTEARRAY-BLOCKERS.md.
 		if command && exprTextOverride != "" &&
-			strings.Contains(bashMsg, "arithmetic syntax error: invalid arithmetic operator") {
+			strings.Contains(bashMsg, "arithmetic syntax error: invalid arithmetic operator") &&
+			strings.ContainsAny(exprTextOverride, "$`") {
 			return fmt.Errorf("%s: line %d: %s: %s",
 				prefix, line, exprText, bashMsg)
 		}
