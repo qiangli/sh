@@ -158,6 +158,26 @@ func TestDeclare2Fidelity(t *testing.T) {
 			"zz_assign_plain=111; readonly zz_assign_ro=222; export zz_assign_ex=333; declare | grep '^zz_assign_'; readonly | grep '^declare -r zz_assign_ro='; export | grep '^declare -x zz_assign_ex='",
 			"zz_assign_ex=333\nzz_assign_plain=111\nzz_assign_ro=222\ndeclare -r zz_assign_ro=\"222\"\ndeclare -x zz_assign_ex=\"333\"\n",
 		},
+		// assign__014: a command-prefix assignment for readonly is
+		// visible to command substitutions, but unrelated prefix vars
+		// do not remain as shell variables for later RHS expansion.
+		{
+			"FOO=foo readonly v=$(missing_assign014 FOO); echo v=$v; FOO=foo readonly v2=$FOO; echo v2=$v2",
+			"\"missing_assign014\": executable file not found in $PATH\nv=\nv2=\n",
+		},
+		// assign__025: unsetting a function call's temporary binding
+		// uncovers the pre-call global, not an empty value.
+		{
+			"f(){ echo z=$z; z=mutated-temp; echo z=$z; unset z; echo z=$z; }; z=global; z=temp-binding f; echo z=$z",
+			"z=temp-binding\nz=mutated-temp\nz=global\nz=global\n",
+		},
+		// assign__038/__040: command substitutions in declaration and
+		// bare-assignment RHS words run before a trailing stderr
+		// redirect is applied.
+		{
+			"readonly r=$(missing_assign038) 2>/dev/null\necho done\nb=$(missing_assign040) 2>/dev/null\necho after",
+			"\"missing_assign038\": executable file not found in $PATH\ndone\n\"missing_assign040\": executable file not found in $PATH\nafter\n",
+		},
 	}
 
 	p := syntax.NewParser()

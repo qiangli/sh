@@ -356,7 +356,7 @@ func (o *overlayEnviron) unsetTemp(name string, restoreLocal bool) bool {
 			return false
 		}
 		switch {
-		case restoreLocal && cur.Prev.Local:
+		case restoreLocal && cur.Prev.Declared():
 			o.values[normalized] = namedVariable{Name: name, Variable: cur.Prev}
 		case restoreLocal && cur.Variable.Local && cur.Variable.Exported:
 			o.values[normalized] = namedVariable{Name: name, Variable: expand.Variable{Exported: true}}
