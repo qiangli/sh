@@ -763,7 +763,7 @@ func Pattern(cfg *Config, word *syntax.Word) (string, error) {
 	sb := cfg.strBuilder()
 	for _, part := range field {
 		if part.quote > quoteNone {
-			sb.WriteString(pattern.QuoteMeta(part.val, 0))
+			sb.WriteString(pattern.QuoteMeta(part.val, pattern.ExtendedOperators))
 		} else {
 			sb.WriteString(part.val)
 		}
