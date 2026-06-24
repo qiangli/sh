@@ -5876,6 +5876,15 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				continue
 			}
 			if declQuery == "-p" {
+				queryModes := modes
+				switch valType {
+				case "-n", "-a", "-A", "-i":
+					queryModes = append(queryModes, valType)
+				}
+				queryName := name
+				if as.Value != nil {
+					queryName += "=" + r.literalForAssign(as.Value)
+				}
 				if as.Index != nil {
 					ref := r.inlineArrayAssignName(as)
 					r.errf(r.bashErrPrefix(r.curStmtPos)+"%s: %s: not found\n", cm.Variant.Value, ref)
@@ -5917,8 +5926,14 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				// declare -p name: print variable with attributes.
 				vr := r.lookupVar(name)
 				if !vr.Declared() {
-					r.errf(r.bashErrPrefix(r.curStmtPos)+"%s: %s: not found\n", cm.Variant.Value, name)
-					r.exit.code = 1
+					if cm.Variant.Value != "readonly" && cm.Variant.Value != "export" &&
+						!declareQueryHasFilter(queryModes) {
+						r.errf(r.bashErrPrefix(r.curStmtPos)+"%s: %s: not found\n", cm.Variant.Value, queryName)
+						r.exit.code = 1
+					}
+					continue
+				}
+				if !declareVarMatchesModes(vr, queryModes) {
 					continue
 				}
 				// An integer nameref whose value assignment was rejected
@@ -6040,21 +6055,31 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				}
 				switch valType {
 				case "-A":
-					// `declare -A NAME` (no value) declares an
-					// empty associative array; the variable is
-					// "declared" but `[[ -v NAME ]]` is still
-					// false until an element is assigned.
-					vr.Kind = expand.Associative
+					if cm.Variant.Value == "readonly" && !vr.Declared() &&
+						as.Value == nil && as.Array == nil && as.Index == nil {
+						vr.Kind = expand.String
+					} else {
+						// `declare -A NAME` (no value) declares an
+						// empty associative array; the variable is
+						// "declared" but `[[ -v NAME ]]` is still
+						// false until an element is assigned.
+						vr.Kind = expand.Associative
+					}
 				case "-a":
-					// `declare -a NAME` (no value) declares an
-					// empty indexed array even when NAME was
-					// previously unset. Like -A, this is a
-					// declaration without setting the value.
-					vr.Kind = expand.Indexed
-					if vr.Set && vr.List == nil {
-						vr.List = []string{vr.Str}
-						vr.ListSet = nil
-						vr.Str = ""
+					if cm.Variant.Value == "readonly" && !vr.Declared() &&
+						as.Value == nil && as.Array == nil && as.Index == nil {
+						vr.Kind = expand.String
+					} else {
+						// `declare -a NAME` (no value) declares an
+						// empty indexed array even when NAME was
+						// previously unset. Like -A, this is a
+						// declaration without setting the value.
+						vr.Kind = expand.Indexed
+						if vr.Set && vr.List == nil {
+							vr.List = []string{vr.Str}
+							vr.ListSet = nil
+							vr.Str = ""
+						}
 					}
 				case "-n":
 					if vr.ReadOnly {
@@ -6326,6 +6351,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 						r.errf("%s%s: %s: readonly variable\n",
 							r.bashErrPrefix(r.curStmtPos), cm.Variant.Value, name)
 						r.exit.code = 1
+						continue assignLoop
 					}
 				case "-u":
 					vr.Upper, vr.Lower, vr.Capitalize = true, false, false
@@ -6440,8 +6466,14 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			r.exit = r.jsonOut(map[string]any{"variables": r.variablesJSON(false)})
 			return
 		}
+		if !declHadNames && declQuery == "-p" && !jsonMode && cm.Variant.Value == "declare" {
+			r.printDeclareVars(modes)
+		}
 		if !declHadNames && declQuery == "-p" && !jsonMode && cm.Variant.Value == "readonly" {
 			r.printReadonlyVars(r.opts[optPosix])
+		}
+		if !declHadNames && declQuery == "-p" && !jsonMode && cm.Variant.Value == "export" {
+			r.printDeclareVars(append(modes, "-x"))
 		}
 		if !declHadNames && declQuery == "" && valType == "" && len(modes) == 1 && !jsonMode && cm.Variant.Value == "export" && r.opts[optPosix] {
 			r.printExportVars()
@@ -6454,6 +6486,23 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		// rendered as `name=([0]="..." [1]="...")`).
 		if !declHadNames && cm.Variant.Value == "local" && r.inFunc {
 			r.printLocalVars()
+		}
+		if !declHadNames && declQuery == "" && valType == "" && len(modes) == 0 && !jsonMode && cm.Variant.Value == "declare" {
+			r.printSetVars()
+			names := make([]string, 0, len(r.Funcs))
+			for name := range r.Funcs {
+				names = append(names, name)
+			}
+			slices.Sort(names)
+			for _, name := range names {
+				r.printFuncDecl(name, r.Funcs[name])
+			}
+		}
+		if !declHadNames && declQuery == "" && valType == "" && len(modes) == 1 && !jsonMode && cm.Variant.Value == "export" && !r.opts[optPosix] {
+			r.printDeclareVars(modes)
+		}
+		if !declHadNames && declQuery == "" && valType == "" && len(modes) == 1 && !jsonMode && cm.Variant.Value == "readonly" && !r.opts[optPosix] {
+			r.printDeclareVars(modes)
 		}
 		// `typeset -n` / `declare -n` with no name lists every
 		// nameref variable in `declare -n NAME="target"` form.

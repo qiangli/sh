@@ -97,6 +97,37 @@ func TestDeclare2Fidelity(t *testing.T) {
 			"s=abc; unset 's[0]'; echo status:$?; echo ${s-unset}",
 			"status:0\nunset\n",
 		},
+
+		// assign-extended__012: query-mode words with `=` are looked up
+		// literally for diagnostics; they are not declarations.
+		{
+			"declare -p foo=bar; echo status=$?; a=b; declare -p a foo=bar; echo status=$?",
+			"declare: foo=bar: not found\nstatus=1\ndeclare -- a=\"b\"\ndeclare: foo=bar: not found\nstatus=1\n",
+		},
+		// assign-extended__013: explicit `declare -p` names are filtered
+		// by attribute flags like bash 5.3.
+		{
+			"test_var1=111; readonly test_var2=222; export test_var3=333; declare -n test_var4=test_var1; echo '[declare -pn]'; declare -pn test_var{0..5}; echo '[declare -pr]'; declare -pr test_var{0..5}; echo '[declare -px]'; declare -px test_var{0..5}",
+			"[declare -pn]\ndeclare -n test_var4=\"test_var1\"\n[declare -pr]\ndeclare -r test_var2=\"222\"\n[declare -px]\ndeclare -x test_var3=\"333\"\n",
+		},
+		// assign__045: readonly -a/-A on a fresh name sets readonly only;
+		// it must not create an empty array. Existing arrays are preserved.
+		{
+			"declare -a arr1; readonly -a arr2; declare -A dict1; readonly -A dict2; declare -p arr1 arr2 dict1 dict2",
+			"declare -a arr1\ndeclare -r arr2\ndeclare -A dict1\ndeclare -r dict2\n",
+		},
+		// assign-extended__035: `typeset +r r=value` on a readonly var
+		// reports the failed readonly mutation once and leaves it unchanged.
+		{
+			"readonly r=r1; echo r=$r; typeset +r r=r2; echo r=$r",
+			"r=r1\ntypeset: r: readonly variable\nr=r1\n",
+		},
+		// assign-extended__007/__008: no-arg declare/export/readonly
+		// list variables instead of falling through to an empty result.
+		{
+			"zz_assign_plain=111; readonly zz_assign_ro=222; export zz_assign_ex=333; declare | grep '^zz_assign_'; readonly | grep '^declare -r zz_assign_ro='; export | grep '^declare -x zz_assign_ex='",
+			"zz_assign_ex=333\nzz_assign_plain=111\nzz_assign_ro=222\ndeclare -r zz_assign_ro=\"222\"\ndeclare -x zz_assign_ex=\"333\"\n",
+		},
 	}
 
 	p := syntax.NewParser()
