@@ -186,10 +186,10 @@ func TestArithFidelityBashSource(t *testing.T) {
 			// bash echoes the offending token verbatim between literal
 			// double quotes without escaping control bytes, so the
 			// trailing newline of a comment-to-end-of-line token prints
-			// raw rather than as `\n`. (bash reports the second error at
-			// line 10, the closing `))`; our curStmtPos-based error
-			// prefix reports the opening line 9.)
-			want: "6\n./s: line 6: \n1 + 2  # not a comment\n: arithmetic syntax error: invalid arithmetic operator (error token is \"# not a comment\n\")\n./s: line 9: ((: a = 3 + 4  # comment\n: arithmetic syntax error: invalid arithmetic operator (error token is \"# comment\n\")\n[]\n",
+			// raw rather than as `\n`. A multi-line `(( ))` command
+			// reports against its closing `))` line (line 10), not the
+			// opening `((` — matched here.
+			want: "6\n./s: line 6: \n1 + 2  # not a comment\n: arithmetic syntax error: invalid arithmetic operator (error token is \"# not a comment\n\")\n./s: line 10: ((: a = 3 + 4  # comment\n: arithmetic syntax error: invalid arithmetic operator (error token is \"# comment\n\")\n[]\n",
 		},
 		{
 			// A single-quoted RHS operand is never a valid arithmetic
