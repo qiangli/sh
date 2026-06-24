@@ -368,6 +368,15 @@ func (r *Runner) unsetBuiltinArrayElem(name, idx string) bool {
 		return false
 	}
 	if vr.Kind == expand.Associative {
+		if strings.ContainsAny(idx, "'\"\\") {
+			if w, ok := r.arrayTargetIndex(idx).(*syntax.Word); ok {
+				idx = r.assocAssignKey(w)
+			}
+		} else if len(idx) > 1 && idx[0] == '$' && syntax.ValidName(idx[1:]) {
+			if keyVar := r.lookupVar(idx[1:]); keyVar.IsSet() {
+				idx = keyVar.String()
+			}
+		}
 		if _, ok := vr.Map[idx]; ok {
 			delete(vr.Map, idx)
 			vr.Set = true

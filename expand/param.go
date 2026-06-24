@@ -355,7 +355,7 @@ func arrayElemSet(vr Variable, idx syntax.ArithmExpr, cfg *Config) bool {
 	}
 	switch vr.Kind {
 	case Associative:
-		key, err := LiteralWithQuoteRemoval(cfg, idx.(*syntax.Word))
+		key, err := assocSubscriptKey(cfg, idx)
 		if err != nil {
 			return false
 		}
@@ -634,7 +634,7 @@ func validIndirectName(name string) bool {
 	return name != ""
 }
 
-func splitIndirectArrayRef(ref string) (base string, index *syntax.Word, ok bool) {
+func splitIndirectArrayRef(ref string) (base string, index syntax.ArithmExpr, ok bool) {
 	base, rest, ok := strings.Cut(ref, "[")
 	if !ok || !strings.HasSuffix(rest, "]") || !syntax.ValidName(base) {
 		return "", nil, false
@@ -643,9 +643,7 @@ func splitIndirectArrayRef(ref string) (base string, index *syntax.Word, ok bool
 	if idx == "" {
 		return "", nil, false
 	}
-	return base, &syntax.Word{Parts: []syntax.WordPart{
-		&syntax.Lit{Value: idx},
-	}}, true
+	return base, nameRefArrayTargetIndex(idx), true
 }
 
 func cannotAssignParam(name string) bool {
@@ -1710,12 +1708,21 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			op == syntax.ErrorUnset || op == syntax.ErrorUnsetOrNull
 		isPatternOp := op == syntax.RemSmallPrefix || op == syntax.RemLargePrefix ||
 			op == syntax.RemSmallSuffix || op == syntax.RemLargeSuffix
-		// `$*`-all-null aggregate, computed before the word so the word is
-		// only expanded when actually used (see wordNeeded + the switch op).
+		// All-null aggregate, computed before the word so the word is only
+		// expanded when actually used (see wordNeeded + the switch op).
 		starAggregateNull := false
-		if cfg.insideDoubleQuote && name == "*" {
-			starAggregateNull = len(vr.List) > 0
-			for _, elem := range vr.List {
+		if cfg.insideDoubleQuote && (name == "*" || index != nil && (nodeLit(index) == "@" || nodeLit(index) == "*")) {
+			var values []string
+			switch vr.Kind {
+			case Indexed:
+				values = vr.IndexedValues()
+			case Associative:
+				for _, key := range vr.AssocKeysForDeclare() {
+					values = append(values, vr.Map[key])
+				}
+			}
+			starAggregateNull = len(values) > 0
+			for _, elem := range values {
 				if elem != "" {
 					starAggregateNull = false
 					break
@@ -2644,15 +2651,9 @@ func (cfg *Config) varInd(vr Variable, idx syntax.ArithmExpr) (string, error) {
 		// A subscript key undergoes quote removal: an unquoted `\]` (or
 		// `\[`) in `${a[\]]}` resolves to the literal key `]`, matching the
 		// way the assignment side stored it.
-		val := ""
-		if word, ok := idx.(*syntax.Word); ok {
-			var err error
-			val, err = LiteralWithQuoteRemoval(cfg, word)
-			if err != nil {
-				return "", err
-			}
-		} else {
-			val = compactArithmText(idx)
+		val, err := assocSubscriptKey(cfg, idx)
+		if err != nil {
+			return "", err
 		}
 		if val == "" {
 			return "", fmt.Errorf("[%s]: bad array subscript", subscriptText(idx))
@@ -2660,6 +2661,13 @@ func (cfg *Config) varInd(vr Variable, idx syntax.ArithmExpr) (string, error) {
 		return vr.Map[val], nil
 	}
 	return "", nil
+}
+
+func assocSubscriptKey(cfg *Config, idx syntax.ArithmExpr) (string, error) {
+	if word, ok := idx.(*syntax.Word); ok {
+		return Literal(cfg, word)
+	}
+	return compactArithmText(idx), nil
 }
 
 func emptyLiteralIndex(idx syntax.ArithmExpr) bool {

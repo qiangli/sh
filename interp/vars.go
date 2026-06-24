@@ -81,7 +81,7 @@ func (o *overlayEnviron) normalize(name string) string {
 
 func (o *overlayEnviron) Get(name string) expand.Variable {
 	if base, idx, ok := splitArrayRef(name); ok && syntax.ValidName(base) {
-		return environArrayElemAsScalar(idx, o.Get(base))
+		return environArrayElemAsScalar(idx, o.Get(base), o)
 	}
 	normalized := o.normalize(name)
 	if vr, ok := o.values[normalized]; ok {
@@ -95,7 +95,7 @@ func (o *overlayEnviron) Get(name string) expand.Variable {
 
 func (o *overlayEnviron) ResolveNameRef(name string) expand.Variable {
 	if base, idx, ok := splitArrayRef(name); ok && syntax.ValidName(base) {
-		return environArrayElemAsScalar(idx, o.ResolveNameRef(base))
+		return environArrayElemAsScalar(idx, o.ResolveNameRef(base), o)
 	}
 	normalized := o.normalize(name)
 	if vr, ok := o.values[normalized]; ok {
@@ -113,7 +113,7 @@ func (o *overlayEnviron) ResolveNameRef(name string) expand.Variable {
 	return expand.Variable{}
 }
 
-func environArrayElemAsScalar(idx string, vr expand.Variable) expand.Variable {
+func environArrayElemAsScalar(idx string, vr expand.Variable, env expand.Environ) expand.Variable {
 	elem := expand.Variable{
 		Kind:       expand.String,
 		Integer:    vr.Integer,
@@ -136,6 +136,7 @@ func environArrayElemAsScalar(idx string, vr expand.Variable) expand.Variable {
 		}
 	case expand.Associative:
 		if vr.Map != nil {
+			idx = environAssocSubscriptKey(idx, env)
 			if s, ok := vr.Map[idx]; ok {
 				elem.Set = true
 				elem.Str = s
@@ -148,6 +149,54 @@ func environArrayElemAsScalar(idx string, vr expand.Variable) expand.Variable {
 		}
 	}
 	return elem
+}
+
+func environAssocSubscriptKey(idx string, env expand.Environ) string {
+	expr := parseArrayTargetIndex(idx)
+	word, ok := expr.(*syntax.Word)
+	if !ok {
+		return idx
+	}
+	key, ok := environAssocSubscriptWord(word, env)
+	if !ok {
+		return idx
+	}
+	return key
+}
+
+func environAssocSubscriptWord(word *syntax.Word, env expand.Environ) (string, bool) {
+	var b strings.Builder
+	for _, part := range word.Parts {
+		switch part := part.(type) {
+		case *syntax.Lit:
+			b.WriteString(part.Value)
+		case *syntax.SglQuoted:
+			if part.Dollar {
+				return "", false
+			}
+			b.WriteString(part.Value)
+		case *syntax.DblQuoted:
+			s, ok := environAssocSubscriptParts(part.Parts, env)
+			if !ok {
+				return "", false
+			}
+			b.WriteString(s)
+		case *syntax.ParamExp:
+			if part.Param == nil || part.NestedParam != nil || part.Index != nil ||
+				part.Slice != nil || part.Repl != nil || part.Exp != nil ||
+				part.Length || part.Width || part.Excl || part.Names != 0 {
+				return "", false
+			}
+			b.WriteString(env.Get(part.Param.Value).String())
+		default:
+			return "", false
+		}
+	}
+	return bashAssocAssignKey(b.String(), false), true
+}
+
+func environAssocSubscriptParts(parts []syntax.WordPart, env expand.Environ) (string, bool) {
+	return environAssocSubscriptWord(&syntax.Word{Parts: parts}, env)
 }
 
 func (o *overlayEnviron) Set(name string, vr expand.Variable) error {
@@ -1699,13 +1748,32 @@ func (r *Runner) unsetArrayElem(name, idx string) bool {
 
 func (r *Runner) setVarString(name, value string) {
 	if base, idx, ok := splitArrayRef(name); ok && syntax.ValidName(base) {
-		w := &syntax.Word{Parts: []syntax.WordPart{
-			&syntax.Lit{Value: idx},
-		}}
-		r.setVarWithIndex(r.lookupVar(base), base, w, expand.Variable{Set: true, Kind: expand.String, Str: value}, false)
+		r.setVarWithIndex(r.lookupVar(base), base, r.arrayTargetIndex(idx), expand.Variable{Set: true, Kind: expand.String, Str: value}, false)
 		return
 	}
 	r.setVar(name, expand.Variable{Set: true, Kind: expand.String, Str: value})
+}
+
+func (r *Runner) arrayTargetIndex(idx string) syntax.ArithmExpr {
+	return parseArrayTargetIndex(idx)
+}
+
+func parseArrayTargetIndex(idx string) syntax.ArithmExpr {
+	if !strings.ContainsAny(idx, "$'\"`\\") {
+		return &syntax.Word{Parts: []syntax.WordPart{
+			&syntax.Lit{Value: idx},
+		}}
+	}
+	src := "x[" + idx + "]=_"
+	parser := syntax.NewParser(syntax.Variant(syntax.LangBash))
+	if file, err := parser.Parse(strings.NewReader(src), ""); err == nil && len(file.Stmts) == 1 {
+		if call, ok := file.Stmts[0].Cmd.(*syntax.CallExpr); ok && len(call.Assigns) == 1 && call.Assigns[0].Index != nil {
+			return call.Assigns[0].Index
+		}
+	}
+	return &syntax.Word{Parts: []syntax.WordPart{
+		&syntax.Lit{Value: idx},
+	}}
 }
 
 // setExportedVarString sets a scalar variable and marks it exported, so it
@@ -1937,10 +2005,7 @@ func (r *Runner) markRestrictedVarsReadonly() {
 
 func (r *Runner) setVar(name string, vr expand.Variable) {
 	if base, idx, ok := splitArrayRef(name); ok && syntax.ValidName(base) && vr.Kind == expand.String {
-		w := &syntax.Word{Parts: []syntax.WordPart{
-			&syntax.Lit{Value: idx},
-		}}
-		r.setVarWithIndex(r.lookupVar(base), base, w, vr, false)
+		r.setVarWithIndex(r.lookupVar(base), base, r.arrayTargetIndex(idx), vr, false)
 		return
 	}
 	if name == "RANDOM" && vr.IsSet() {
@@ -2500,6 +2565,7 @@ func (r *Runner) arrayElemAsScalar(idx string, vr expand.Variable) expand.Variab
 		}
 	case expand.Associative:
 		if vr.Map != nil {
+			idx = r.assocArrayElemKey(idx)
 			if s, ok := vr.Map[idx]; ok {
 				elem.Set = true
 				elem.Str = s
@@ -2512,6 +2578,14 @@ func (r *Runner) arrayElemAsScalar(idx string, vr expand.Variable) expand.Variab
 		}
 	}
 	return elem
+}
+
+func (r *Runner) assocArrayElemKey(idx string) string {
+	w, ok := r.arrayTargetIndex(idx).(*syntax.Word)
+	if !ok {
+		return idx
+	}
+	return r.assocAssignKey(w)
 }
 
 func (r *Runner) integerArrayValue(s string) string {
