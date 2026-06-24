@@ -1322,6 +1322,13 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			for i, k := range keys {
 				elems[i] = vr.Map[k]
 			}
+			if pe.Slice != nil {
+				var err error
+				elems, err = cfg.sliceAssocElems(pe, elems)
+				if err != nil {
+					return "", err
+				}
+			}
 			if allOp == "*" && name != "@" {
 				// `$*` / `${a[*]}` join with the first IFS char, or with
 				// nothing when IFS is empty. ifsJoin handles the empty-IFS
@@ -1385,7 +1392,8 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			}
 			strs = cfg.namesByPrefix(pe.Param.Value)
 			sortStrs = true
-		case pe.Index != nil && vr.Kind == Indexed:
+		case pe.Index != nil && vr.Kind == Indexed &&
+			(nodeLit(pe.Index) == "@" || nodeLit(pe.Index) == "*"):
 			if pe.Exp != nil && indirectAtOp(pe.Exp.Op) {
 				lit := ""
 				if pe.Exp.Word != nil && len(pe.Exp.Word.Parts) == 1 {

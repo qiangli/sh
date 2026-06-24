@@ -86,7 +86,7 @@ func TestArrayElementUnsetAndSetnessFidelity(t *testing.T) {
 		},
 		{
 			name: "empty_array_element_default",
-			in: "argv.py() { python - \"$@\" <<'PY'\n" +
+			in: "argv.py() { python3 - \"$@\" <<'PY'\n" +
 				"import sys\n" +
 				"print(sys.argv[1:])\n" +
 				"PY\n" +
@@ -94,6 +94,102 @@ func TestArrayElementUnsetAndSetnessFidelity(t *testing.T) {
 				"single=('')\n" +
 				"argv.py ${single[@]:-none} x \"${single[@]:-none}\"\n",
 			want: "['none', 'x', 'none']\n",
+		},
+		{
+			name: "assoc_unquoted_keys_split",
+			in: "argv.py() { python3 - \"$@\" <<'PY'\n" +
+				"import sys\n" +
+				"print(sys.argv[1:])\n" +
+				"PY\n" +
+				"}\n" +
+				"declare -A A\n" +
+				"A['X X']='xx'\n" +
+				"A['Y Y']='yy'\n" +
+				"argv.py \"${A[*]}\"\n" +
+				"argv.py \"${!A[*]}\"\n" +
+				"argv.py ${A[@]}\n" +
+				"argv.py ${!A[@]}\n",
+			want: "['xx yy']\n['X X Y Y']\n['xx', 'yy']\n['X', 'X', 'Y', 'Y']\n",
+		},
+		{
+			name: "assoc_slice_values",
+			in: "argv.py() { python3 - \"$@\" <<'PY'\n" +
+				"import sys\n" +
+				"print(sys.argv[1:])\n" +
+				"PY\n" +
+				"}\n" +
+				"declare -A a\n" +
+				"a[xx]=1\n" +
+				"a[yy]=2\n" +
+				"a[zz]=3\n" +
+				"a[aa]=4\n" +
+				"a[bb]=5\n" +
+				"argv.py ${a[@]: 0: 3}\n" +
+				"argv.py ${a[@]: 1: 3}\n" +
+				"argv.py ${a[@]: 2: 3}\n" +
+				"argv.py ${a[@]: 3: 3}\n" +
+				"argv.py ${a[@]: 4: 3}\n" +
+				"argv.py ${a[@]: 5: 3}\n",
+			want: "['4', '1', '3']\n['4', '1', '3']\n['1', '3', '5']\n['3', '5', '2']\n['5', '2']\n['2']\n",
+		},
+		{
+			name: "assoc_literal_append_residue",
+			in: "argv.py() { python3 - \"$@\" <<'PY'\n" +
+				"import sys\n" +
+				"print(sys.argv[1:])\n" +
+				"PY\n" +
+				"}\n" +
+				"declare -A a\n" +
+				"hello=100\n" +
+				"a=([hello]=1 [hello]+=2)\n" +
+				"printf 'keys: '; argv.py \"${!a[@]}\"\n" +
+				"printf 'vals: '; argv.py \"${a[@]}\"\n" +
+				"a+=([hello]+=:34 [hello]+=:56)\n" +
+				"printf 'keys: '; argv.py \"${!a[@]}\"\n" +
+				"printf 'vals: '; argv.py \"${a[@]}\"\n",
+			want: "keys: ['hello']\nvals: ['2']\nkeys: ['hello']\nvals: ['2:34:56']\n",
+		},
+		{
+			name: "indexed_subscript_indirect",
+			in: "argv.py() { python3 - \"$@\" <<'PY'\n" +
+				"import sys\n" +
+				"print(sys.argv[1:])\n" +
+				"PY\n" +
+				"}\n" +
+				"foo=bar\n" +
+				"a=('1 2' foo '2 3')\n" +
+				"argv.py \"${!a[1]}\"\n",
+			want: "['bar']\n",
+		},
+		{
+			name: "shopt_long_set_strict_array",
+			in: "case $SH in bash) ;; *) shopt --set strict_array ;; esac\n" +
+				"s1=hello\n" +
+				"s2=world\n" +
+				"eval 's1=(1 2 3 4)'\n" +
+				"echo status=$?\n" +
+				"declare -p s1\n" +
+				"eval 's2+=(1 2 3 4)'\n" +
+				"echo status=$?\n" +
+				"declare -p s2\n",
+			want: "status=0\ndeclare -a s1=([0]=\"1\" [1]=\"2\" [2]=\"3\" [3]=\"4\")\nstatus=0\ndeclare -a s2=([0]=\"world\" [1]=\"1\" [2]=\"2\" [3]=\"3\" [4]=\"4\")\n",
+		},
+		{
+			name: "array_prefix_assignment_env_string",
+			in:   "A=a B=(b b) true\n" + "echo status=$?\n",
+			want: "status=0\n",
+		},
+		{
+			name: "negative_array_slice_status",
+			in: "a=(1 2 3 4 5)\n" +
+				"echo \"${a[@]: 1: -3}\"\n" +
+				"echo status=$?\n",
+			want: " -3: substring expression < 0\nstatus=0\n",
+		},
+		{
+			name: "test_v_negative_empty_array",
+			in:   "e=()\n[[ -v e[-1] ]] && echo yes\n",
+			want: "e: bad array subscript\nexit status 1",
 		},
 	}
 

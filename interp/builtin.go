@@ -3441,6 +3441,17 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		exit.oneIf(done)
 
 	case "shopt":
+		longSetCompat := false
+		for i, arg := range args {
+			switch arg {
+			case "--set":
+				args[i] = "-s"
+				longSetCompat = true
+			case "--unset":
+				args[i] = "-u"
+				longSetCompat = true
+			}
+		}
 		mode := ""
 		sawSet := false
 		sawUnset := false
@@ -3453,9 +3464,15 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			case "-s":
 				sawSet = true
 				mode = flag
+			case "--set":
+				sawSet = true
+				mode = "-s"
 			case "-u":
 				sawUnset = true
 				mode = flag
+			case "--unset":
+				sawUnset = true
+				mode = "-u"
 			case "-o":
 				posixOpts = true
 			case "-p":
@@ -3608,6 +3625,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				opt, supported = r.bashOptByName(arg)
 			}
 			if opt == nil {
+				if longSetCompat && arg == "strict_array" && (mode == "-s" || mode == "-u") {
+					continue
+				}
 				// Bash 5.3 distinguishes the two `shopt` namespaces:
 				// `shopt NAME` → "invalid shell option name"
 				// `shopt -o NAME` → "invalid option name"

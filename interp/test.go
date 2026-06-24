@@ -762,6 +762,10 @@ func (r *Runner) varIsSetForTest(name string, classic bool) bool {
 		i := int(i64)
 		if err == nil && i < 0 {
 			i = indexedNegativeOffset(vr, i)
+			if i < 0 {
+				r.errf("%s%s: bad array subscript\n", r.bashErrPrefix(r.curStmtPos), base)
+				return false
+			}
 		}
 		return err == nil && vr.IndexedSet(i)
 	case expand.Associative:
