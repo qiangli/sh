@@ -758,9 +758,16 @@ func (r *Runner) varIsSetForTest(name string, classic bool) bool {
 			})
 			return false
 		}
-		i, err := strconv.Atoi(index)
+		i64, err := r.arithFromString(index)
+		i := int(i64)
+		if err == nil && i < 0 {
+			i = indexedNegativeOffset(vr, i)
+		}
 		return err == nil && vr.IndexedSet(i)
 	case expand.Associative:
+		if opt, _ := r.bashOptByName("assoc_expand_once"); opt == nil || !*opt {
+			index = r.expandAssocTestArrayIndex(index)
+		}
 		_, ok := vr.Map[index]
 		return ok
 	case expand.String, expand.NameRef:
@@ -768,6 +775,14 @@ func (r *Runner) varIsSetForTest(name string, classic bool) bool {
 	default:
 		return false
 	}
+}
+
+func (r *Runner) expandAssocTestArrayIndex(index string) string {
+	w, ok := r.arrayTargetIndex(index).(*syntax.Word)
+	if !ok {
+		return index
+	}
+	return r.literal(w)
 }
 
 func (r *Runner) expandClassicTestArrayIndex(index string) string {

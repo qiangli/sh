@@ -4264,7 +4264,7 @@ func (cfg *Config) quotedElemFields(pe *syntax.ParamExp) ([]string, error) {
 			case "@":
 				vr := cfg.Env.Get(pe.Param.Value)
 				if vr.Kind == Indexed {
-					if vr.IndexedSet(0) {
+					if op == syntax.DefaultUnset && vr.IndexedCount() > 0 || op == syntax.DefaultUnsetOrNull && indexedDefaultOrNullHasValue(vr) {
 						return cfg.sliceIndexedElems(pe, vr, false)
 					}
 					return defaultElems()
@@ -4272,7 +4272,7 @@ func (cfg *Config) quotedElemFields(pe *syntax.ParamExp) ([]string, error) {
 			case "*":
 				vr := cfg.Env.Get(pe.Param.Value)
 				if vr.Kind == Indexed {
-					if vr.IndexedSet(0) {
+					if op == syntax.DefaultUnset && vr.IndexedCount() > 0 || op == syntax.DefaultUnsetOrNull && indexedDefaultOrNullHasValue(vr) {
 						elems, err := cfg.sliceIndexedElems(pe, vr, false)
 						if err != nil {
 							return nil, err
@@ -4371,6 +4371,18 @@ func (cfg *Config) quotedElemFields(pe *syntax.ParamExp) ([]string, error) {
 		}
 	}
 	return nil, nil
+}
+
+func indexedDefaultOrNullHasValue(vr Variable) bool {
+	if vr.IndexedCount() > 1 {
+		return true
+	}
+	for _, i := range vr.IndexedIndexes() {
+		if vr.List[i] != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func (cfg *Config) quotedAllElemValues(pe *syntax.ParamExp) ([]string, error) {
