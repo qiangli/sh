@@ -889,8 +889,16 @@ func (r *Runner) bashArithmError(expr syntax.ArithmExpr, err error, command bool
 		}
 		bashMsg = fmt.Sprintf("arithmetic syntax error in expression (error token is %q)", token)
 	}
+	// Bash's error token is the unparsed remainder of the expression from
+	// the point parsing failed. When a single-quoted operand leads the
+	// expression (`'1' + 2`), that remainder is the whole text, so widen
+	// the token to exprText. But when the bad operand sits mid-expression
+	// — e.g. the RHS of `A['y'] = 'y'`, where parsing succeeds through the
+	// `=` — bash reports just that operand (`'y' `), which the inner
+	// ArithmError already carries; leave it intact.
 	if strings.Contains(bashMsg, "arithmetic syntax error: operand expected") &&
-		strings.Contains(bashMsg, "error token is \"'") && strings.Contains(exprText, "'") {
+		strings.Contains(bashMsg, "error token is \"'") && strings.Contains(exprText, "'") &&
+		strings.HasPrefix(strings.TrimLeft(exprText, " \t"), "'") {
 		if start := strings.Index(bashMsg, "error token is \""); start >= 0 {
 			tokenStart := start + len("error token is \"")
 			if tokenEnd := strings.IndexByte(bashMsg[tokenStart:], '"'); tokenEnd >= 0 {
@@ -7692,6 +7700,21 @@ func (badFdWriter) Write([]byte) (int, error) {
 }
 
 func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, error) {
+	// Bash reports a failed-open redirection error at the line of the
+	// redirect operator, not the enclosing statement's first line. This
+	// only shows up on compound commands whose redirect sits on a later
+	// line, e.g. `while ...; do ...; done < missing`, where bash points at
+	// the `done <` line rather than the `while` line. r.open() is the sole
+	// consumer of curStmtPos reachable from here (every other error in this
+	// function already uses rd.Pos()/rd.Word.Pos()), so steering it at the
+	// operator position fixes the message without affecting anything else.
+	// The subshell branch in stmtSync applies its own empirical line+1
+	// quirk for while/for redirects, so leave curStmtPos alone there.
+	if r.subshellLevel == 0 && rd.OpPos.IsValid() {
+		oldStmtPos := r.curStmtPos
+		r.curStmtPos = rd.OpPos
+		defer func() { r.curStmtPos = oldStmtPos }()
+	}
 	// Heredoc operator (`<<TAG`, `<<-TAG`) with an empty body
 	// parses to rd.Hdoc == nil. Still route an empty reader to
 	// stdin so the consumer (`read`, `cat`, …) sees EOF cleanly

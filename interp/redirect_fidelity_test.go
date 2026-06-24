@@ -144,3 +144,70 @@ func TestRunnerBash53RedirectCluster(t *testing.T) {
 		})
 	}
 }
+
+// TestRunnerBash53RedirectErrorLine checks that a failed-open redirect on a
+// compound command is reported at the line of the redirect operator (bash 5.3),
+// not the first line of the statement. A `while … done < missing` redirect sits
+// on the `done` line, which bash uses for the "No such file or directory" error.
+func TestRunnerBash53RedirectErrorLine(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			// The redirect is on line 4 (`done < no-such`); bash points
+			// the error there, not at the `while` on line 2.
+			name: "while_compound_redirect_uses_operator_line",
+			in:   "set -o errexit\nwhile read line; do\n echo $line\ndone < no-such-file.txt\necho after",
+			want: "./s: line 4: no-such-file.txt: No such file or directory\nexit status 1",
+		},
+		{
+			// A for loop behaves the same: the redirect on line 4 is the
+			// reported line, not the `for` header on line 2.
+			name: "for_compound_redirect_uses_operator_line",
+			in:   "set -e\nfor x in 1 2; do\n echo $x\ndone < no-such-file.txt",
+			want: "./s: line 4: no-such-file.txt: No such file or directory\nexit status 1",
+		},
+		{
+			// A simple command keeps reporting on its own (single) line.
+			name: "simple_command_redirect_line",
+			in:   "set -e\ncat < no-such-file.txt",
+			want: "./s: line 2: no-such-file.txt: No such file or directory\nexit status 1",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			file, err := syntax.NewParser().Parse(strings.NewReader(tt.in), "./s")
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			var cb concBuffer
+			r, err := interp.New(
+				interp.Dir(t.TempDir()),
+				interp.StdIO(nil, &cb, &cb),
+				interp.WithBashCompatErrors(true),
+				interp.WithBashSource([]byte(tt.in)),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), runnerRunTimeout)
+			defer cancel()
+			if err := r.Run(ctx, file); err != nil {
+				cb.WriteString(err.Error())
+			}
+
+			if got := cb.String(); got != tt.want {
+				t.Fatalf("wrong output in %q:\nwant: %q\ngot:  %q", tt.in, tt.want, got)
+			}
+		})
+	}
+}

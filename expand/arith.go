@@ -681,8 +681,15 @@ func arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 			expanded := cfg.expandArithmDiagnosticText(sqText)
 			trimmed := strings.TrimSpace(sqText)
 			quotedNumeric := !cfg.LetArithmetic && trimmed != "" && trimmed[0] >= '0' && trimmed[0] <= '9'
+			// A single-quoted operand is never a valid arithmetic token.
+			// Bash errors on it in genuine expression contexts — the
+			// operand of an operator (`(( v = 'y' ))`, `'1' + 2`) — but an
+			// array subscript coerces a quoted name to 0 (`a=(['x']=b)`),
+			// so restrict the bare-name case to arithmInOperand. The
+			// numeric/bad-text/set-name cases bash rejects everywhere.
 			if arithmBadSingleQuotedText(expanded) || quotedNumeric ||
-				(syntax.ValidName(sqText) && cfg.Env.Get(sqText).IsSet()) {
+				(syntax.ValidName(sqText) && cfg.Env.Get(sqText).IsSet()) ||
+				(syntax.ValidName(sqText) && cfg.arithmInOperand) {
 				text := "'" + expanded + "'"
 				arithText := text
 				if syntax.ValidName(sqText) && cfg.Env.Get(sqText).IsSet() {

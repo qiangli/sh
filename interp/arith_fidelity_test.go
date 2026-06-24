@@ -185,6 +185,20 @@ func TestArithFidelityBashSource(t *testing.T) {
 			input: "echo $((\n1 +\n2 + \\\n3\n))\necho $((\n1 + 2  # not a comment\n))\n(( a = 3 + 4  # comment\n))\necho [$a]",
 			want:  "6\n./s: line 6: \n1 + 2  # not a comment\n: arithmetic syntax error: invalid arithmetic operator (error token is \"# not a comment\\n\")\n./s: line 9: ((: a = 3 + 4  # comment\n: arithmetic syntax error: invalid arithmetic operator (error token is \"# comment\\n\")\n[]\n",
 		},
+		{
+			// A single-quoted RHS operand is never a valid arithmetic
+			// token, so bash errors and never assigns A['y']. The error
+			// token is just the failing operand (parsing succeeds through
+			// the `A['y'] =` lvalue).
+			input: "declare -A A\nA['x']=42\n(( x = A['x'] ))\n(( A['y'] = 'y' ))\necho $x ${A['y']}",
+			want:  "./s: line 4: ((: A['y'] = 'y' : arithmetic syntax error: operand expected (error token is \"'y' \")\n42\n",
+		},
+		{
+			// Same rule for a single-quoted name even when it is unset:
+			// `(( v = 'y' ))` with y unset is an operand error, not 0.
+			input: "(( v = 'y' ))\necho status=$? v=[$v]",
+			want:  "./s: line 1: ((: v = 'y' : arithmetic syntax error: operand expected (error token is \"'y' \")\nstatus=1 v=[]\n",
+		},
 	}
 
 	for _, tt := range tests {
