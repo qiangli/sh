@@ -36,6 +36,18 @@ func TestArithFidelity(t *testing.T) {
 			input: "echo $(( 5 << 1 ))\necho $(( 5 << 0 ))\necho $(( 5 << -1 ))",
 			want:  "10\n5\n-9223372036854775808\n",
 		},
+		{
+			input: `echo $(( "1 + 2" * 3 ))
+echo $(( "1+2" * 3 ))
+x='1 + 2'
+echo $(( $x * 3 ))
+echo $(( "$x" * 3 ))`,
+			want: "7\n7\n7\n7\n",
+		},
+		{
+			input: "base=16\necho $(( ${base}#a ))\nzero=0\necho $(( ${zero}11 ))\necho $(( ${zero}xAB ))",
+			want:  "10\n9\n171\n",
+		},
 	}
 
 	for _, tt := range tests {

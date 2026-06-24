@@ -231,6 +231,10 @@ type Config struct {
 	// whereas a standalone operand or array subscript reports only its
 	// own expanded text (e.g. a re-parsed `$( … )` subscript value).
 	arithmInOperand bool
+
+	// arithmDynamicReparse prevents the Bash-style dynamic arithmetic
+	// reparse from recursively reparsing the expression it just produced.
+	arithmDynamicReparse bool
 }
 
 // UnexpectedCommandError is returned if a command substitution is encountered

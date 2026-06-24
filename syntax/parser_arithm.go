@@ -298,6 +298,17 @@ func (p *Parser) arithmExprValue(compact bool) ArithmExpr {
 		p.got(_Newl)
 	}
 
+	if !compact && !p.spaced && p.tok == hash {
+		if w, ok := x.(*Word); ok {
+			l := p.lit(p.pos, "#")
+			w.Parts = append(w.Parts, l)
+			p.nextArith(false)
+			if p.tok == _LitWord && !p.spaced {
+				w.Parts = append(w.Parts, p.getLit())
+			}
+		}
+	}
+
 	// we want real nil, not (*Word)(nil) as that
 	// sets the type to non-nil and then x != nil
 	if p.tok == addAdd || p.tok == subSub {
