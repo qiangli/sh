@@ -24,6 +24,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -7320,6 +7321,107 @@ func (r *Runner) setWriteFd(targetFd int, w io.Writer) error {
 	return nil
 }
 
+func (r *Runner) dupFd(targetFd, sourceFd int, rd *syntax.Redirect) error {
+	if targetFd == sourceFd {
+		return nil
+	}
+	read, write, ok := r.fdCaps(sourceFd)
+	if !ok {
+		r.errf("%s%s: Bad file descriptor\n", r.bashErrPrefix(rd.Word.Pos()), redirWordText(rd))
+		return fmt.Errorf("%s: Bad file descriptor", redirWordText(rd))
+	}
+	r.bindFdCaps(targetFd, read, write)
+	return nil
+}
+
+func (r *Runner) fdCaps(fd int) (read *os.File, write io.Writer, ok bool) {
+	switch fd {
+	case 0:
+		if r.stdin != nil {
+			return r.stdin, nil, true
+		}
+		return nil, nil, false
+	case 1:
+		if r.stdout != nil {
+			return nil, r.stdout, true
+		}
+		return nil, nil, false
+	case 2:
+		if r.stderr != nil {
+			return nil, r.stderr, true
+		}
+		return nil, nil, false
+	}
+	if _, inherited := r.inheritedFd(fd); inherited {
+		ok = true
+	}
+	if r.fdTable != nil {
+		if f, exists := r.fdTable[fd]; exists {
+			ok = true
+			if r.fdReadTable[fd] {
+				read = f
+			}
+		}
+	}
+	if r.fdWriteTable != nil {
+		if w, exists := r.fdWriteTable[fd]; exists {
+			ok = true
+			write = w
+		}
+	}
+	return read, write, ok
+}
+
+func (r *Runner) bindFdCaps(targetFd int, read *os.File, write io.Writer) {
+	switch targetFd {
+	case 0:
+		r.stdin = read
+		r.stdinTTYFallback = false
+		r.stdinDevTTY = false
+		r.stdinRedirected = true
+	case 1:
+		if write != nil {
+			r.stdout = write
+		} else {
+			r.stdout = badFdWriter{}
+		}
+	case 2:
+		if write != nil {
+			r.stderr = write
+		} else {
+			r.stderr = badFdWriter{}
+		}
+	default:
+		if read != nil {
+			if r.fdTable == nil {
+				r.fdTable = make(map[int]*os.File)
+			}
+			r.fdTable[targetFd] = read
+			if r.fdReadTable == nil {
+				r.fdReadTable = make(map[int]bool)
+			}
+			r.fdReadTable[targetFd] = true
+		} else {
+			delete(r.fdTable, targetFd)
+			delete(r.fdReadTable, targetFd)
+		}
+		if write != nil {
+			if r.fdWriteTable == nil {
+				r.fdWriteTable = make(map[int]io.Writer)
+			}
+			r.fdWriteTable[targetFd] = write
+		} else {
+			delete(r.fdWriteTable, targetFd)
+		}
+	}
+}
+
+type badFdWriter struct{}
+
+func (badFdWriter) Write([]byte) (int, error) {
+	return 0, syscall.EBADF
+}
+
 func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, error) {
 	// Heredoc operator (`<<TAG`, `<<-TAG`) with an empty body
 	// parses to rd.Hdoc == nil. Still route an empty reader to
@@ -7497,20 +7599,10 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 		// >&M — point the target fd at whatever fd M references.
 		switch arg {
 		case "-":
-			// Closing form: >&- removes the fd binding rather than
-			// pointing it elsewhere. For default (stdout) we plug
-			// io.Discard; for stderr we plug io.Discard too; for
-			// fdTable entries we delete the entry.
-			switch targetFd {
-			case -1, 1:
-				r.stdout = io.Discard
-			case 2:
-				r.stderr = io.Discard
-			default:
-				delete(r.fdTable, targetFd)
-				delete(r.fdReadTable, targetFd)
-				delete(r.fdWriteTable, targetFd)
+			if targetFd == -1 {
+				targetFd = 1
 			}
+			r.closeFd(targetFd)
 			return nil, nil
 		}
 		closeSource := false
@@ -7518,18 +7610,9 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 			closeSource = true
 			arg = strings.TrimSuffix(arg, "-")
 		}
-		var w io.Writer
-		sourceFd := -1
-		switch arg {
-		case "1":
-			w = r.stdout
-			sourceFd = 1
-		case "2":
-			w = r.stderr
-			sourceFd = 2
-		default:
-			n, err := strconv.Atoi(arg)
-			if err != nil && targetFd == -1 {
+		sourceFd, err := strconv.Atoi(arg)
+		if err != nil {
+			if targetFd == -1 {
 				f, err := r.open(ctx, arg, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644, true)
 				if err != nil {
 					return nil, err
@@ -7538,34 +7621,32 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 				r.stderr = f
 				return f, nil
 			}
-			if err == nil && n < 0 {
-				// Bash: negative fd in `>&N` is an
-				// "ambiguous redirect" before any open.
-				r.errf("%s%s: ambiguous redirect\n", r.bashErrPrefix(rd.Pos()), arg)
-				return nil, fmt.Errorf("ambiguous redirect")
-			}
+			f, err := r.open(ctx, arg, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644, true)
 			if err != nil {
-				return nil, fmt.Errorf("unhandled %v arg: %q", rd.Op, arg)
+				return nil, err
 			}
-			ok := false
-			if r.fdWriteTable != nil {
-				w, ok = r.fdWriteTable[n]
+			if err := r.setWriteFd(targetFd, f); err != nil {
+				f.Close()
+				return nil, err
 			}
-			if !ok {
-				if _, inherited := r.inheritedFd(n); inherited && r.fdWriteTable != nil {
-					w, ok = r.fdWriteTable[n]
-				}
+			if namedFDVar != "" {
+				r.setGlobalNamedFdVarString(namedFDVar, strconv.Itoa(targetFd))
 			}
-			if !ok {
-				r.errf("%s%s: Bad file descriptor\n", r.bashErrPrefix(rd.Word.Pos()), redirWordText(rd))
-				return nil, fmt.Errorf("%s: Bad file descriptor", redirWordText(rd))
-			}
-			sourceFd = n
+			return f, nil
 		}
-		if err := r.setWriteFd(targetFd, w); err != nil {
+		if sourceFd < 0 {
+			// Bash: negative fd in `>&N` is an "ambiguous
+			// redirect" before any open.
+			r.errf("%s%s: ambiguous redirect\n", r.bashErrPrefix(rd.Pos()), arg)
+			return nil, fmt.Errorf("ambiguous redirect")
+		}
+		if targetFd == -1 {
+			targetFd = 1
+		}
+		if err := r.dupFd(targetFd, sourceFd, rd); err != nil {
 			return nil, err
 		}
-		if closeSource {
+		if closeSource && sourceFd != targetFd {
 			r.closeFd(sourceFd)
 		}
 		if namedFDVar != "" {
@@ -7575,14 +7656,10 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 	case syntax.DplIn:
 		// <&M — point the target input fd at fd M's reader.
 		if arg == "-" {
-			switch targetFd {
-			case -1, 0:
-				r.stdin = nil
-			default:
-				delete(r.fdTable, targetFd)
-				delete(r.fdReadTable, targetFd)
-				delete(r.fdWriteTable, targetFd)
+			if targetFd == -1 {
+				targetFd = 0
 			}
+			r.closeFd(targetFd)
 			return nil, nil
 		}
 		closeSource := false
@@ -7590,46 +7667,22 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 			closeSource = true
 			arg = strings.TrimSuffix(arg, "-")
 		}
-		var f *os.File
-		sourceFd := -1
-		switch arg {
-		case "0":
-			f = r.stdin
-			sourceFd = 0
-		default:
-			n, err := strconv.Atoi(arg)
-			if err == nil && n < 0 {
-				// Bash: negative fd in `<&N` is an
-				// "ambiguous redirect".
-				r.errf("%s%s: ambiguous redirect\n", r.bashErrPrefix(rd.Pos()), arg)
-				return nil, fmt.Errorf("ambiguous redirect")
-			}
-			if err != nil {
-				return nil, fmt.Errorf("unhandled %v arg: %q", rd.Op, arg)
-			}
-			var ok bool
-			f, ok = r.fdTable[n]
-			if ok && !r.fdReadTable[n] {
-				ok = false
-			}
-			if !ok {
-				if _, inherited := r.inheritedFd(n); inherited {
-					f, ok = r.fdTable[n]
-					if ok && !r.fdReadTable[n] {
-						ok = false
-					}
-				}
-			}
-			if !ok {
-				r.errf("%s%s: Bad file descriptor\n", r.bashErrPrefix(rd.Word.Pos()), redirWordText(rd))
-				return nil, fmt.Errorf("%s: Bad file descriptor", redirWordText(rd))
-			}
-			sourceFd = n
+		sourceFd, err := strconv.Atoi(arg)
+		if err != nil {
+			return nil, fmt.Errorf("unhandled %v arg: %q", rd.Op, arg)
 		}
-		if err := r.setReadFd(targetFd, f); err != nil {
+		if sourceFd < 0 {
+			// Bash: negative fd in `<&N` is an "ambiguous redirect".
+			r.errf("%s%s: ambiguous redirect\n", r.bashErrPrefix(rd.Pos()), arg)
+			return nil, fmt.Errorf("ambiguous redirect")
+		}
+		if targetFd == -1 {
+			targetFd = 0
+		}
+		if err := r.dupFd(targetFd, sourceFd, rd); err != nil {
 			return nil, err
 		}
-		if closeSource {
+		if closeSource && sourceFd != targetFd {
 			r.closeFd(sourceFd)
 		}
 		if namedFDVar != "" {
