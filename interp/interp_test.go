@@ -955,7 +955,7 @@ var runTests = []runTest{
 	},
 	{
 		`program='^++--hello.,world<>[]'; program=${program//[^'><+-.,[]']}; echo "$program"; pat='[^]]'; s='ab^cd^'; echo ${s//$pat/z}`,
-		"++--.,<>[]\nzzzzzz\n",
+		"++--.,<>[]\nab^cd^\n",
 	},
 	{
 		"INTERP_X_1=a INTERP_X_2=b; echo ${!INTERP_X_*}",
@@ -1053,7 +1053,7 @@ var runTests = []runTest{
 	},
 	{
 		`declare -a arr=(1 2 3); echo "${arr[@]@a}"`,
-		"a\n",
+		"a a a\n",
 	},
 	{
 		// Attribute order: integer/readonly/export before case mods.

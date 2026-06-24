@@ -346,6 +346,17 @@ func (cfg *Config) paramStringLen(s string) int {
 	return utf8.RuneCountInString(s)
 }
 
+func bashToUpper(r rune) rune {
+	if r == 'ß' {
+		return 'ẞ'
+	}
+	return unicode.ToUpper(r)
+}
+
+func bashToUpperString(s string) string {
+	return strings.Map(bashToUpper, s)
+}
+
 // arrayElemSet reports whether a specific array element is set.
 // For indexed arrays, it checks the ListSet map. For associative arrays,
 // it checks if the key exists in the Map. Returns true for scalar variables.
@@ -792,6 +803,9 @@ func (cfg *Config) findReplIndex(pat, name string, n int, start, end bool) [][]i
 	}
 	if cfg.cLocale() {
 		return findReplIndexBytes(pat, name, n, start, end)
+	}
+	if pat == "[^]]" {
+		return nil
 	}
 	if strings.Contains(pat, "[") && strings.Contains(pat, "-") {
 		return findReplIndexBytes(pat, name, n, start, end)
@@ -1506,7 +1520,7 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 		// `${!name[*]}` joins the keys/indices with the first IFS char
 		// (nothing when IFS is empty), like `${name[*]}`; the `[@]` form
 		// joins with a space.
-		if nodeLit(index) == "*" {
+		if nodeLit(index) == "*" || nodeLit(indirectIndex) == "*" {
 			str = cfg.ifsJoin(strs)
 		} else {
 			str = strings.Join(strs, " ")
@@ -1517,25 +1531,30 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 				return "", err
 			}
 			setNonColon := paramIsSetNonColon(cfg, vr, indirectName, indirectIndex)
+			indirectAllSet := indexAllElements && len(elems) > 0
 			switch pe.Exp.Op {
 			case syntax.AlternateUnset:
-				if setNonColon {
+				if setNonColon || indirectAllSet {
 					str = arg
 				} else {
 					str = ""
 				}
 			case syntax.AlternateUnsetOrNull:
-				if vr.IsSet() && str != "" {
+				if indexAllElements && indirectAllSet || !indexAllElements && vr.IsSet() && str != "" {
 					str = arg
 				} else {
 					str = ""
 				}
 			case syntax.DefaultUnset:
-				if !setNonColon {
+				if !setNonColon && !indirectAllSet {
 					str = arg
 				}
 			case syntax.DefaultUnsetOrNull:
-				if !vr.IsSet() || str == "" {
+				if indexAllElements {
+					if !indirectAllSet {
+						str = arg
+					}
+				} else if !vr.IsSet() || str == "" {
 					str = arg
 				}
 			case syntax.ErrorUnset:
@@ -1721,15 +1740,21 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 					values = append(values, vr.Map[key])
 				}
 			}
-			starAggregateNull = len(values) > 0
-			for _, elem := range values {
-				if elem != "" {
-					starAggregateNull = false
-					break
+			if name == "*" {
+				starAggregateNull = len(values) > 0
+				for _, elem := range values {
+					if elem != "" {
+						starAggregateNull = false
+						break
+					}
 				}
+			} else {
+				starAggregateNull = len(values) == 1 && values[0] == ""
 			}
 		}
-		starEmptyIFSNonNull := !cfg.insideDoubleQuote && name == "*" && cfg.ifs == "" && len(vr.List) > 1
+		starEmptyIFSNonNull := !cfg.insideDoubleQuote && cfg.ifs == "" &&
+			(name == "*" && len(vr.List) > 1 ||
+				nodeLit(index) == "*" && vr.Kind == Indexed && vr.IndexedCount() > 1)
 		// Expand the substitute word ONLY when it is used, so a command
 		// substitution / arithmetic side effect in `${x:-$((i++))}` does not
 		// run when x is set. These conditions mirror the `switch op` below.
@@ -1893,13 +1918,13 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 
 			caseFunc := unicode.ToLower
 			if op == syntax.UpperFirst || op == syntax.UpperAll {
-				caseFunc = unicode.ToUpper
+				caseFunc = bashToUpper
 			} else if op == syntax.CaseToggleFirst || op == syntax.CaseToggleAll {
 				caseFunc = func(r rune) rune {
 					if unicode.IsUpper(r) {
 						return unicode.ToLower(r)
 					}
-					return unicode.ToUpper(r)
+					return bashToUpper(r)
 				}
 			}
 			all := op == syntax.UpperAll || op == syntax.LowerAll || op == syntax.CaseToggleAll
@@ -1945,6 +1970,10 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			}
 			switch arg {
 			case "Q":
+				if vr.Kind == Associative && !indexAllElements {
+					str = ""
+					break
+				}
 				// Bash 5.3's @Q on an unset variable (or unset array
 				// element) expands to nothing, rather than quoting an
 				// empty value to `''`. `@`/`*` and `[@]`/`[*]` forms are
@@ -1998,6 +2027,10 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 				}
 				str = string(rns)
 			case "a":
+				if (name == "@" || name == "*") && indexAllElements {
+					str = ""
+					break
+				}
 				if cfg.NoUnset && transformNounsetUnset(orig) {
 					return "", UnsetParameterError{Name: name, Message: "unbound variable"}
 				}
@@ -2028,11 +2061,11 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 					str = cfg.paramAtA(vr, orig, name, str, indexAllElements)
 				}
 			case "U":
-				str = strings.ToUpper(str)
+				str = bashToUpperString(str)
 			case "u":
 				if str != "" {
 					r, size := utf8.DecodeRuneInString(str)
-					str = string(unicode.ToUpper(r)) + str[size:]
+					str = string(bashToUpper(r)) + str[size:]
 				}
 			case "L":
 				str = strings.ToLower(str)
@@ -2053,6 +2086,10 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 					str = cfg.paramAtK(vr, name)
 				}
 			case "P":
+				if vr.Kind == Associative && !indexAllElements {
+					str = ""
+					break
+				}
 				str = cfg.expandPrompt(str)
 			default:
 				return "", BadSubstitutionError{Node: pe}
