@@ -529,6 +529,16 @@ type Runner struct {
 	// and later `echo >&4` within the same shell/subshell.
 	fdWriteTable map[int]io.Writer
 
+	// stmtTraceOutput snapshots xtrace output before a simple command's
+	// own redirections are applied. Bash traces `cmd 2>file` to the
+	// shell's current xtrace sink, not to file.
+	stmtTraceOutput io.Writer
+
+	// redirMoveCloseFds tracks source fds closed by N>&M- or N<&M- while
+	// applying a statement's redirects. Bash keeps those source closes
+	// after the statement's redirection frame is restored.
+	redirMoveCloseFds map[int]bool
+
 	inheritedFds map[int]bool
 
 	// ulimitOverride records pseudo-set values from `ulimit -X N`
