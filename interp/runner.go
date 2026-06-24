@@ -4245,14 +4245,6 @@ func plainPipelineSubshell(st *syntax.Stmt) (*syntax.Subshell, bool) {
 	return subshell, ok
 }
 
-func stmtIsPipeline(st *syntax.Stmt) bool {
-	if st == nil {
-		return false
-	}
-	bc, ok := st.Cmd.(*syntax.BinaryCmd)
-	return ok && (bc.Op == syntax.Pipe || bc.Op == syntax.PipeAll)
-}
-
 func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 	// Run any trap handlers for OS signals that arrived since the last
 	// command. Doing this between statements lets an async signal (e.g.
@@ -4316,9 +4308,30 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 		}
 	}
 	r.lastExit = r.exit
-	if !stmtIsPipeline(st) {
+	if stmtUpdatesPipeStatus(st) {
 		r.pipeStatus = []string{strconv.Itoa(int(r.exit.code))}
 	}
+}
+
+// stmtUpdatesPipeStatus reports whether finishing st should overwrite
+// PIPESTATUS with the single status of st. Bash sets PIPESTATUS for simple
+// commands, subshells, and "simple-like" compounds ([[ ]], (( )), declare,
+// …), but leaves it untouched for command-list compounds (if/for/while/
+// until/case/{ }) and for &&/|| lists: those delegate to whichever inner
+// command actually ran last (so `if false; then …; fi` reports PIPESTATUS
+// of the failed condition, and a no-match `case` leaves it empty). Real
+// pipelines set the multi-element array in cmd(), so they're excluded too.
+func stmtUpdatesPipeStatus(st *syntax.Stmt) bool {
+	if st == nil {
+		return false
+	}
+	switch st.Cmd.(type) {
+	case *syntax.BinaryCmd, // pipelines set it in cmd(); &&/|| delegate
+		*syntax.Block, *syntax.IfClause, *syntax.ForClause,
+		*syntax.WhileClause, *syntax.CaseClause:
+		return false
+	}
+	return true
 }
 
 func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
@@ -4404,13 +4417,20 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 	// POSIX order is: expand the command words, THEN perform redirections.
 	// For a simple command whose arguments contain a command substitution,
 	// defer the redirections until cmd() has expanded the fields — otherwise
-	// `echo $(cat f) > f` would truncate f before $(cat f) reads it. Every
-	// other command keeps applying redirs here: only a command substitution
-	// can read a file the redirect just wrote, so there is no observable
-	// difference for the rest, and the proven path stays untouched.
+	// `echo $(cat f) > f` would truncate f before $(cat f) reads it. Only the
+	// command types that expand words/assignment RHS before redirecting and
+	// then call applyLateRedirs (CallExpr, DeclClause) opt in; every other
+	// command applies redirs up-front. This matters for commands whose own
+	// body runs a command substitution under the redirect, e.g.
+	// `(( a = $(cmd) )) 2>err`: bash captures cmd's stderr into err, so the
+	// redirect must be active before the arithmetic evaluates — deferring it
+	// to a late path that ArithmCmd never drains would silently drop it.
 	lateRedir := false
-	if _, ok := st.Cmd.(*syntax.TestClause); !ok && len(st.Redirs) > 0 && commandHasCmdSubst(st.Cmd) {
-		lateRedir = true
+	if len(st.Redirs) > 0 && commandHasCmdSubst(st.Cmd) {
+		switch st.Cmd.(type) {
+		case *syntax.CallExpr, *syntax.DeclClause:
+			lateRedir = true
+		}
 	}
 	if lateRedir {
 		r.lateRedirs = st.Redirs
