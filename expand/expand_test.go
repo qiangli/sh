@@ -373,6 +373,62 @@ func TestFieldsBash53WordSplitSpecialParams(t *testing.T) {
 			want: []string{"one", "", "two"},
 		},
 		{
+			// Unquoted $* behaves like $@: a non-whitespace IFS keeps
+			// the empty positional parameter as its own field rather
+			// than IFS-joining the elements into one string.
+			name: "custom IFS star preserves middle empty",
+			env: testEnv{
+				"IFS": {Set: true, Kind: String, Str: "zx"},
+				"*":   {Set: true, Kind: Indexed, List: []string{"one", "", "two"}},
+			},
+			src:  `echo $*`,
+			want: []string{"one", "", "two"},
+		},
+		{
+			// Null IFS drops the empty parameters but keeps the word
+			// boundaries between them, so the `=` prefix and suffix do
+			// not glue into a single `==` field (bash 5.3).
+			name: "null IFS at empties drop keep boundaries",
+			env: testEnv{
+				"IFS": {Set: true, Kind: String, Str: ""},
+				"@":   {Set: true, Kind: Indexed, List: []string{"", "", "", "", ""}},
+			},
+			src:  `echo =$@=`,
+			want: []string{"=", "="},
+		},
+		{
+			name: "null IFS star empties drop keep boundaries",
+			env: testEnv{
+				"IFS": {Set: true, Kind: String, Str: ""},
+				"*":   {Set: true, Kind: Indexed, List: []string{"", "", "", "", ""}},
+			},
+			src:  `echo =$*=`,
+			want: []string{"=", "="},
+		},
+		{
+			// A non-whitespace IFS keeps each empty parameter as its
+			// own field: five empties with `=` glued onto the first and
+			// last give five fields.
+			name: "custom IFS at empties kept as fields",
+			env: testEnv{
+				"IFS": {Set: true, Kind: String, Str: "x"},
+				"@":   {Set: true, Kind: Indexed, List: []string{"", "", "", "", ""}},
+			},
+			src:  `echo =$@=`,
+			want: []string{"=", "", "", "", "="},
+		},
+		{
+			// All-empty positional params under whitespace/null IFS
+			// produce no fields at all.
+			name: "null IFS at all empty drops to nothing",
+			env: testEnv{
+				"IFS": {Set: true, Kind: String, Str: ""},
+				"@":   {Set: true, Kind: Indexed, List: []string{"", "", ""}},
+			},
+			src:  `echo $@`,
+			want: nil,
+		},
+		{
 			name: "quoted empties preserve split boundaries",
 			env: testEnv{
 				"A": {Set: true, Kind: String, Str: "   abc   def   "},

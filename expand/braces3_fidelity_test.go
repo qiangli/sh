@@ -37,6 +37,61 @@ func TestBraces3Fidelity(t *testing.T) {
 		}
 	})
 
+	// bash keeps the empty fields of `{X,,Y,}` only when a quoted
+	// empty suffix makes each result a quoted null word.
+	t.Run("QuotedEmptySuffixKeepsBareEmpties", func(t *testing.T) {
+		word := parseCallArg(t, `printf '%s\n' {X,,Y,}''`, 2)
+		got, err := Fields(nil, word)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := []string{"X", "", "Y", ""}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("want %q, got %q", want, got)
+		}
+	})
+
+	// An all-empty brace list expands to nothing in bash: every
+	// alternative is a null word and is elided, leaving no fields.
+	t.Run("AllEmptyListExpandsToNothing", func(t *testing.T) {
+		word := parseCallArg(t, `printf '%s\n' {,,}`, 2)
+		got, err := Fields(nil, word)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := []string(nil)
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("want %q, got %q", want, got)
+		}
+	})
+
+	// An empty alternative followed by an unquoted empty parameter is
+	// dropped (field splitting removes it), but a quoted empty
+	// parameter survives as an empty field.
+	t.Run("UnquotedEmptyParamSuffixElides", func(t *testing.T) {
+		word := parseCallArg(t, `printf '%s\n' {a,}$undef`, 2)
+		got, err := Fields(&Config{Env: ListEnviron("")}, word)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := []string{"a"}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("want %q, got %q", want, got)
+		}
+	})
+
+	t.Run("QuotedEmptyParamSuffixKeeps", func(t *testing.T) {
+		word := parseCallArg(t, `printf '%s\n' {a,}"$undef"`, 2)
+		got, err := Fields(&Config{Env: ListEnviron("")}, word)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := []string{"a", ""}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("want %q, got %q", want, got)
+		}
+	})
+
 	t.Run("BraceResultLeadingTilde", func(t *testing.T) {
 		word := parseCallArg(t, "echo {foo~,~}/bar", 1)
 		got, err := Fields(&Config{Env: ListEnviron("HOME=/home/bob")}, word)

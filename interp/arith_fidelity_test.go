@@ -183,7 +183,13 @@ func TestArithFidelityBashSource(t *testing.T) {
 		},
 		{
 			input: "echo $((\n1 +\n2 + \\\n3\n))\necho $((\n1 + 2  # not a comment\n))\n(( a = 3 + 4  # comment\n))\necho [$a]",
-			want:  "6\n./s: line 6: \n1 + 2  # not a comment\n: arithmetic syntax error: invalid arithmetic operator (error token is \"# not a comment\\n\")\n./s: line 9: ((: a = 3 + 4  # comment\n: arithmetic syntax error: invalid arithmetic operator (error token is \"# comment\\n\")\n[]\n",
+			// bash echoes the offending token verbatim between literal
+			// double quotes without escaping control bytes, so the
+			// trailing newline of a comment-to-end-of-line token prints
+			// raw rather than as `\n`. (bash reports the second error at
+			// line 10, the closing `))`; our curStmtPos-based error
+			// prefix reports the opening line 9.)
+			want: "6\n./s: line 6: \n1 + 2  # not a comment\n: arithmetic syntax error: invalid arithmetic operator (error token is \"# not a comment\n\")\n./s: line 9: ((: a = 3 + 4  # comment\n: arithmetic syntax error: invalid arithmetic operator (error token is \"# comment\n\")\n[]\n",
 		},
 	}
 

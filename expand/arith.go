@@ -993,9 +993,13 @@ func arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 			return oneIf((left != 0) != (right != 0)), nil
 		case syntax.HashArit:
 			token := arithmExprStaticText(expr.Y)
+			// bash echoes the offending token verbatim between literal
+			// double quotes; it does not escape control bytes. A token
+			// that runs to end of line (`2 # comment`) therefore keeps
+			// its trailing newline rather than printing `\n`.
 			return 0, &ArithmError{
 				Expr: expr,
-				Err:  fmt.Errorf("arithmetic syntax error: invalid arithmetic operator (error token is %q)", token),
+				Err:  fmt.Errorf("arithmetic syntax error: invalid arithmetic operator (error token is \"%s\")", token),
 			}
 		}
 		left, err := Arithm(cfg, expr.X)

@@ -2224,6 +2224,28 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		})
 		r.evalLineOffset, r.evalExec = prevEvalOffset, prevEvalExec
 		exit = r.exit
+		// A variable-assignment error inside the eval'd text (e.g.
+		// assigning to a readonly variable) discards the eval'd command
+		// list, but bash 5.3 contains that DISCARD within eval: eval
+		// simply returns a non-zero status and the surrounding
+		// function/script keeps running. Convert the discard back to a
+		// plain non-zero exit so it does not abort eval's caller. A real
+		// `exit` carries `exiting` without `discarding` and still
+		// propagates; POSIX mode never sets `discarding` for these
+		// errors, so its fatal-exit behaviour is preserved.
+		if exit.discarding {
+			exit.exiting = false
+			exit.discarding = false
+			// A standalone readonly assignment also records its physical
+			// line so the rest of that line is skipped, but the line
+			// belongs to the eval'd payload, not the outer script;
+			// clear it so it cannot spuriously skip an outer statement
+			// sharing that line number.
+			r.discardRestOfLine = 0
+			if exit.code == 0 {
+				exit.code = 1
+			}
+		}
 	case "source", ".":
 		// Bash 5.3: accept `-p PATH` to override the search path.
 		var pathOverride string

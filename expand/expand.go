@@ -2111,7 +2111,6 @@ func FieldsSeq(cfg *Config, words ...*syntax.Word) iter.Seq2[string, error] {
 				continue
 			}
 			var fields []string
-			nonEmpty := false
 			for w, err := range BracesSeq(cfg, &word) {
 				if err != nil {
 					yield("", err)
@@ -2126,22 +2125,27 @@ func FieldsSeq(cfg *Config, words ...*syntax.Word) iter.Seq2[string, error] {
 				// that begins with identifier chars into a
 				// single `$varsuffix` ParamExp.
 				mergeIdentAfterParamExp(w)
+				// bash drops a brace-expanded word that is a
+				// genuine "null" word — one with no quoted or
+				// literal text — from the output entirely, even
+				// when no non-empty alternative exists: `{,,}` →
+				// nothing, `{X,,Y,}` → `X Y`. A quoted empty
+				// keeps its field, so `{X,,Y,}''` → `X '' Y ''`.
+				// Words that expand to empty via an unquoted
+				// parameter are already pruned by field splitting
+				// (wfields is empty there).
+				quoted := hasQuotedPart(w.Parts)
 				wfields, err := expandWordFields(w)
 				if err != nil {
 					yield("", err)
 					return
 				}
 				for _, field := range wfields {
-					if field != "" {
-						nonEmpty = true
+					if field == "" && !quoted {
+						continue
 					}
 					fields = append(fields, field)
 				}
-			}
-			if nonEmpty {
-				fields = slices.DeleteFunc(fields, func(field string) bool {
-					return field == ""
-				})
 			}
 			if !yieldFields(fields) {
 				return
@@ -3000,22 +3004,27 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 				continue
 			}
 			if !wp.Excl && wp.Exp == nil && wp.Repl == nil && !wp.Length && !wp.Width && !wp.IsSet &&
-				wp.Param.Value == "@" && (!cfg.ifsSet || cfg.ifs != " \t\n") {
-				elems, err := cfg.sliceElems(wp, cfg.Env.Get("@").List, true)
+				(wp.Param.Value == "@" || wp.Param.Value == "*") && (!cfg.ifsSet || cfg.ifs != " \t\n") {
+				elems, err := cfg.sliceElems(wp, cfg.Env.Get(wp.Param.Value).List, true)
 				if err != nil {
 					return nil, err
 				}
-				// Unquoted $@: each positional parameter is a separate
-				// word that then undergoes word splitting on IFS. When
-				// IFS is unset (default whitespace), an element like
-				// "tom dick harry" must split into three words; an empty
-				// element produces no word. splitAdd handles both,
-				// keeping element boundaries via the flush() between them.
+				// Unquoted $@/$*: each positional parameter is a separate
+				// word that then undergoes word splitting on IFS. (Unquoted
+				// $* behaves like $@ here; the IFS-first-char join is only
+				// for the quoted "$*".) A non-empty element like
+				// "tom dick harry" splits into three words. An empty element
+				// produces a field only when IFS holds a non-whitespace
+				// character (`IFS=x` → empties kept); with whitespace-only or
+				// null IFS the empty element is dropped, matching bash 5.3.
+				ifsHasNonWS := strings.ContainsFunc(cfg.ifs, func(r rune) bool {
+					return r != ' ' && r != '\t' && r != '\n'
+				})
 				for i, elem := range elems {
 					if i > 0 {
 						flush()
 					}
-					splitAddElem(elem, i == len(elems)-1, true)
+					splitAddElem(elem, i == len(elems)-1, ifsHasNonWS)
 				}
 				continue
 			}
@@ -3135,7 +3144,15 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 			if err != nil {
 				return nil, err
 			}
-			if val == "" && paramExpDefaultWordAllowsEmpty(wp) {
+			// A quoted-empty default/alternate word (`${x-""}`, `${x+""}`,
+			// `${x+"$scalar"}`) forces an empty field only when the
+			// substitution actually fires; the firing case is already
+			// handled by substWordFields above, so reaching here means it
+			// did not fire. Guard on the trigger so a non-firing alternate
+			// whose word happens to be a quoted null (e.g. `${!x+"${!x}"}`
+			// with the indirect target unset) elides like any unquoted
+			// empty rather than leaving a spurious empty field.
+			if val == "" && paramExpDefaultWordAllowsEmpty(wp) && cfg.paramExpSubstWordTrigger(wp) {
 				emitEmpty()
 				continue
 			}
@@ -3247,11 +3264,11 @@ func (cfg *Config) unquotedNullIFSStarFields(pe *syntax.ParamExp) ([]string, boo
 		pe.Length || pe.Width || pe.IsSet {
 		return nil, false, nil
 	}
-	switch pe.Param.Value {
-	case "*":
-		elems, err := cfg.sliceElems(pe, cfg.Env.Get("*").List, true)
-		return elems, true, err
-	}
+	// Bare `$*` (no array subscript) is handled by the shared unquoted
+	// $@/$* per-element path, which keeps the field boundaries between
+	// positional parameters: with null IFS, `=$*=` over five empty
+	// params is `= =` (two fields), not `==`. Falling through here would
+	// instead trim the elements and merge the prefix/suffix.
 	switch nodeLit(pe.Index) {
 	case "*":
 		vr := cfg.Env.Get(pe.Param.Value)
@@ -3359,12 +3376,55 @@ func paramExpDefaultWordAllowsEmpty(pe *syntax.ParamExp) bool {
 	return false
 }
 
+// indirectSubstTarget resolves the variable a `${!ref...}` indirect
+// expansion points at, returning the target variable, its name, and any
+// array subscript. Callers test whether the *target* (not the reference
+// itself) is set, which is what governs whether a default/alternate word
+// fires. ok is false when there is no resolvable scalar/array target
+// (empty or invalid reference value).
+func (cfg *Config) indirectSubstTarget(pe *syntax.ParamExp) (Variable, string, syntax.ArithmExpr, bool) {
+	orig := cfg.Env.Get(pe.Param.Value)
+	if orig.Kind == NameRef {
+		name := orig.Str
+		if base, idx, ok := splitIndirectArrayRef(name); ok {
+			return cfg.Env.Get(base), base, idx, true
+		}
+		return cfg.Env.Get(name), name, nil, true
+	}
+	str := orig.String()
+	if pe.Index != nil {
+		if val, err := cfg.varInd(orig, pe.Index); err == nil {
+			str = val
+		}
+	}
+	if str == "" || !validIndirectName(str) {
+		return Variable{}, "", nil, false
+	}
+	if base, idx, ok := splitIndirectArrayRef(str); ok {
+		return cfg.Env.Get(base), base, idx, true
+	}
+	return cfg.Env.Get(str), str, nil, true
+}
+
 func (cfg *Config) paramExpSubstWordTrigger(pe *syntax.ParamExp) bool {
 	if pe == nil || pe.Param == nil || pe.Exp == nil {
 		return false
 	}
 	vr := cfg.Env.Get(pe.Param.Value)
-	if (nodeLit(pe.Index) == "@" || nodeLit(pe.Index) == "*") && vr.Kind == Indexed {
+	name := pe.Param.Value
+	index := pe.Index
+	if pe.Excl {
+		// Indirect expansion: a default/alternate word fires based on
+		// whether the variable the reference points at is set, not the
+		// reference itself. `${!ref+word}` with the target unset must
+		// not fire (and so leaves no field).
+		target, targetName, targetIndex, ok := cfg.indirectSubstTarget(pe)
+		if !ok {
+			return false
+		}
+		vr, name, index = target, targetName, targetIndex
+	}
+	if (nodeLit(index) == "@" || nodeLit(index) == "*") && vr.Kind == Indexed {
 		set := vr.IndexedCount() > 0
 		nonNull := indexedDefaultOrNullHasValue(vr)
 		switch pe.Exp.Op {
@@ -3378,10 +3438,10 @@ func (cfg *Config) paramExpSubstWordTrigger(pe *syntax.ParamExp) bool {
 			return nonNull
 		}
 	}
-	setNonColon := paramIsSetNonColon(cfg, vr, pe.Param.Value, pe.Index)
+	setNonColon := paramIsSetNonColon(cfg, vr, name, index)
 	str := vr.String()
-	if pe.Index != nil {
-		if val, err := cfg.varInd(vr, pe.Index); err == nil {
+	if index != nil {
+		if val, err := cfg.varInd(vr, index); err == nil {
 			str = val
 		}
 	}
@@ -3478,10 +3538,21 @@ func (cfg *Config) substWordFields(pe *syntax.ParamExp) ([][]fieldPart, bool, er
 			trigger = !allIndexedSet || !allIndexedNonNull
 		}
 	} else {
-		setNonColon := paramIsSetNonColon(cfg, vr, pe.Param.Value, pe.Index)
-		str := vr.String()
-		if pe.Index != nil {
-			if val, err := cfg.varInd(vr, pe.Index); err == nil {
+		// For an indirect `${!ref...word}`, the substitution fires based
+		// on the variable the reference points at, not the reference
+		// itself; resolve that target for the set/null test.
+		tvr, tname, tindex := vr, pe.Param.Value, pe.Index
+		if pe.Excl {
+			target, targetName, targetIndex, ok := cfg.indirectSubstTarget(pe)
+			if !ok {
+				return nil, false, nil
+			}
+			tvr, tname, tindex = target, targetName, targetIndex
+		}
+		setNonColon := paramIsSetNonColon(cfg, tvr, tname, tindex)
+		str := tvr.String()
+		if tindex != nil {
+			if val, err := cfg.varInd(tvr, tindex); err == nil {
 				str = val
 			}
 		}
