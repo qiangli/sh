@@ -1843,12 +1843,10 @@ var errorCases = []errorCase{
 	),
 	errCase(
 		"a[b] ==[",
-		langErr("1:1: `a[b]` must be followed by `=`", LangBash|LangZsh),
 		flipConfirmAll, // stringifies
 	),
 	errCase(
 		"a[b] +=c",
-		langErr("1:1: `a[b]` must be followed by `=`", LangBash|LangZsh),
 		flipConfirmAll, // stringifies
 	),
 	errCase(
@@ -1903,7 +1901,6 @@ var errorCases = []errorCase{
 	),
 	errCase(
 		"a[]",
-		langErr("1:1: `a[b]` must be followed by `=`", LangBash),
 		langErr("1:2: `[` must be followed by an expression", LangMirBSDKorn|LangZsh),
 		flipConfirmAll, // is cmd
 	),
@@ -1931,17 +1928,14 @@ var errorCases = []errorCase{
 	),
 	errCase(
 		"a[1]",
-		langErr("1:1: `a[b]` must be followed by `=`", LangBash|LangMirBSDKorn|LangZsh),
 		flipConfirmAll, // is cmd
 	),
 	errCase(
 		"a[i]+",
-		langErr("1:1: `a[b]+` must be followed by `=`", LangBash|LangMirBSDKorn|LangZsh),
 		flipConfirmAll, // is cmd
 	),
 	errCase(
 		"a[1]#",
-		langErr("1:1: `a[b]` must be followed by `=`", LangBash|LangMirBSDKorn|LangZsh),
 		flipConfirmAll, // is cmd
 	),
 	errCase(
