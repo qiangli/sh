@@ -42,7 +42,7 @@ func TestBashDbracketParseError(t *testing.T) {
 		{
 			name: "extra_unary_arg",
 			src:  "[[ -z '>' -- ]]\n",
-			want: "./s: line 1: syntax error in conditional expression\n" +
+			want: "./s: line 1: syntax error in conditional expression: unexpected token `--'\n" +
 				"./s: line 1: syntax error near `--'\n" +
 				"./s: line 1: `[[ -z '>' -- ]]'",
 		},
@@ -62,7 +62,7 @@ func TestBashDbracketParseError(t *testing.T) {
 		{
 			name: "fd_redirection_operator",
 			src:  "[[ a 3< b ]]\n",
-			want: "./s: line 1: unexpected token `3<', conditional binary operator expected\n" +
+			want: "./s: line 1: unexpected token `3', conditional binary operator expected\n" +
 				"./s: line 1: syntax error near `3<'\n" +
 				"./s: line 1: `[[ a 3< b ]]'",
 		},

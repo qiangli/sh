@@ -156,13 +156,31 @@ func dbracketFirstDiagnostic(pe syntax.ParseError, stmt string) string {
 		}
 		if len(fields) >= 4 && fields[0] == "[[" {
 			if fields[1] == "-z" || fields[1] == "-n" {
-				return "syntax error in conditional expression"
+				return fmt.Sprintf("syntax error in conditional expression: unexpected token `%s'", fields[3])
 			}
-			return fmt.Sprintf("unexpected token `%s', conditional binary operator expected", fields[2])
+			return fmt.Sprintf("unexpected token `%s', conditional binary operator expected", condBinOpToken(fields[2]))
 		}
 		return "conditional binary operator expected"
 	}
 	return text
+}
+
+// condBinOpToken returns the fragment bash names as the "unexpected
+// token" when it finds tok where a conditional binary operator was
+// expected. A redirection-shaped token such as `3<` / `3>` is reported
+// by its leading file-descriptor digits alone (`3`), even though the
+// "syntax error near" line still echoes the whole `3<`.
+func condBinOpToken(tok string) string {
+	for i := 0; i < len(tok); i++ {
+		if tok[i] >= '0' && tok[i] <= '9' {
+			continue
+		}
+		if i > 0 && (tok[i] == '<' || tok[i] == '>') {
+			return tok[:i]
+		}
+		break
+	}
+	return tok
 }
 
 func dbracketNearToken(pe syntax.ParseError, stmt string) string {
