@@ -222,3 +222,20 @@ func hasMeaningfulParts(parts []syntax.WordPart) bool {
 	}
 	return false
 }
+
+// hasQuotedPart reports whether the word contains an explicitly quoted
+// part. bash keeps a brace-expanded word that produces an empty field
+// only when it carries such quoting (a quoted null like a brace list
+// followed by an empty single-quoted string); otherwise the empty field
+// is elided. An unquoted parameter that expands to nothing (a brace list
+// followed by an unset $var) is dropped, so the presence of a
+// non-literal part alone is not enough.
+func hasQuotedPart(parts []syntax.WordPart) bool {
+	for _, part := range parts {
+		switch part.(type) {
+		case *syntax.SglQuoted, *syntax.DblQuoted:
+			return true
+		}
+	}
+	return false
+}
