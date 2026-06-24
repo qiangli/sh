@@ -3523,6 +3523,10 @@ done <<< 2`,
 		"inherit_errexit     \toff\nexit status 1",
 	},
 	{
+		"shopt -- extglob",
+		"extglob             \toff\nexit status 1",
+	},
+	{
 		"shopt -o -s pipefail; shopt -o pipefail | grep -q 'on$'",
 		"",
 	},
