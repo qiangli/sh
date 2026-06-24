@@ -2751,7 +2751,13 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 	// splitAddElem splits one element of an unquoted `$@`/`${arr[@]}` list,
 	// preserving the trailing-delimiter empty field for every element but
 	// the last so element boundaries are not collapsed.
-	splitAddElem := func(val string, last bool) {
+	splitAddElem := func(val string, last bool, preserveEmpty bool) {
+		if val == "" {
+			if preserveEmpty && !last {
+				emitEmpty()
+			}
+			return
+		}
 		keepTrailing = !last
 		splitAdd(val)
 		keepTrailing = false
@@ -2939,11 +2945,29 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 			if elems, ok, err := cfg.unquotedNullIFSStarFields(wp); err != nil {
 				return nil, err
 			} else if ok {
+				for len(elems) > 0 && elems[len(elems)-1] == "" {
+					elems = elems[:len(elems)-1]
+				}
 				for i, elem := range elems {
 					if i > 0 {
 						flush()
 					}
 					curField = append(curField, fieldPart{val: elem})
+				}
+				continue
+			}
+			if elems, join, ok, err := cfg.unquotedIndirectElemFields(wp); err != nil {
+				return nil, err
+			} else if ok {
+				if join {
+					splitAdd(strings.Join(elems, " "))
+				} else {
+					for i, elem := range elems {
+						if i > 0 {
+							flush()
+						}
+						curField = append(curField, fieldPart{val: elem})
+					}
 				}
 				continue
 			}
@@ -2963,7 +2987,7 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 					if i > 0 {
 						flush()
 					}
-					splitAddElem(elem, i == len(elems)-1)
+					splitAddElem(elem, i == len(elems)-1, true)
 				}
 				continue
 			}
@@ -2978,7 +3002,7 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 						if i > 0 {
 							flush()
 						}
-						splitAddElem(elem, i == len(elems)-1)
+						splitAddElem(elem, i == len(elems)-1, false)
 					}
 					continue
 				}
@@ -2998,7 +3022,7 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 					if i > 0 {
 						flush()
 					}
-					splitAddElem(elem, i == len(elems)-1)
+					splitAddElem(elem, i == len(elems)-1, false)
 				}
 				continue
 			}
@@ -3016,7 +3040,7 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 					if i > 0 {
 						flush()
 					}
-					splitAddElem(elem, i == len(elems)-1)
+					splitAddElem(elem, i == len(elems)-1, false)
 				}
 				continue
 			}
@@ -3027,7 +3051,7 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 					if i > 0 {
 						flush()
 					}
-					splitAddElem(elem, i == len(elems)-1)
+					splitAddElem(elem, i == len(elems)-1, false)
 				}
 				continue
 			}
@@ -3038,7 +3062,7 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 					if i > 0 {
 						flush()
 					}
-					splitAddElem(elem, i == len(elems)-1)
+					splitAddElem(elem, i == len(elems)-1, false)
 				}
 				continue
 			}
@@ -3217,6 +3241,58 @@ func (cfg *Config) unquotedNullIFSStarFields(pe *syntax.ParamExp) ([]string, boo
 		}
 	}
 	return nil, false, nil
+}
+
+func (cfg *Config) unquotedIndirectElemFields(pe *syntax.ParamExp) (elems []string, join bool, ok bool, err error) {
+	if pe == nil || !pe.Excl || pe.Exp != nil || pe.Repl != nil ||
+		pe.Length || pe.Width || pe.IsSet {
+		return nil, false, false, nil
+	}
+	switch pe.Names {
+	case syntax.NamesPrefixWords:
+		return cfg.namesByPrefix(pe.Param.Value), false, true, nil
+	case syntax.NamesPrefix:
+		if cfg.ifs != "" {
+			return nil, false, false, nil
+		}
+		return []string{cfg.ifsJoin(cfg.namesByPrefix(pe.Param.Value))}, false, true, nil
+	}
+	switch nodeLit(pe.Index) {
+	case "@":
+		vr := cfg.Env.Get(pe.Param.Value)
+		if _, resolved := vr.Resolve(cfg.Env); resolved.IsSet() {
+			vr = resolved
+		}
+		switch vr.Kind {
+		case Indexed:
+			keys := make([]string, 0, vr.IndexedCount())
+			for _, key := range vr.IndexedIndexes() {
+				keys = append(keys, strconv.Itoa(key))
+			}
+			return keys, false, true, nil
+		case Associative:
+			return vr.AssocKeysForDeclare(), false, true, nil
+		}
+	case "*":
+		if cfg.ifs != "" {
+			return nil, false, false, nil
+		}
+		vr := cfg.Env.Get(pe.Param.Value)
+		if _, resolved := vr.Resolve(cfg.Env); resolved.IsSet() {
+			vr = resolved
+		}
+		switch vr.Kind {
+		case Indexed:
+			keys := make([]string, 0, vr.IndexedCount())
+			for _, key := range vr.IndexedIndexes() {
+				keys = append(keys, strconv.Itoa(key))
+			}
+			return keys, true, true, nil
+		case Associative:
+			return vr.AssocKeysForDeclare(), true, true, nil
+		}
+	}
+	return nil, false, false, nil
 }
 
 func paramExpDefaultWordAllowsEmpty(pe *syntax.ParamExp) bool {
