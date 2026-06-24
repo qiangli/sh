@@ -94,7 +94,7 @@ echo ${a[@]}`,
 		},
 		{
 			input: "a=(1 2 3 4 5)\necho ${a[@]: 1: -3}",
-			want:  "a: -3: substring expression < 0\n",
+			want:  "-3: substring expression < 0\n",
 		},
 		{
 			input: "a[5 # 1]=x\necho status=$? len=${#a[@]}",

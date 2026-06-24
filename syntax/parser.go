@@ -731,6 +731,43 @@ func (p *Parser) wordAnyNumber() *Word {
 	return w
 }
 
+// assignAsWord converts a Naked array assignment parse (from getAssign
+// when needEqual=true and no = follows) back into a regular word token.
+// Bracket content is wrapped in a [DblQuoted] part so that spaces in the
+// subscript are not IFS-split — matching bash where a[b c] is one word.
+func (p *Parser) assignAsWord(as *Assign) *Word {
+	var parts []WordPart
+	parts = append(parts, as.Name)
+	if as.Index != nil {
+		parts = append(parts, &Lit{Value: "[", ValuePos: as.Name.ValueEnd})
+		var idxBuf strings.Builder
+		p.printArithmExpr(&idxBuf, as.Index)
+		idxText := idxBuf.String()
+		parts = append(parts, &DblQuoted{
+			Left:  as.Name.ValueEnd,
+			Right: as.Name.ValueEnd, // approximate
+			Parts: []WordPart{&Lit{Value: idxText}},
+		})
+		parts = append(parts, &Lit{Value: "]"})
+	}
+	if as.Append {
+		parts = append(parts, &Lit{Value: "+"})
+	}
+	return &Word{Parts: parts}
+}
+
+// printArithmExpr serializes an arithmetic expression back to source
+// text using the shell syntax printer.
+func (p *Parser) printArithmExpr(w io.Writer, expr ArithmExpr) {
+	printer := NewPrinter()
+	switch e := expr.(type) {
+	case *Word:
+		printer.Print(w, e)
+	default:
+		printer.Print(w, e)
+	}
+}
+
 func (p *Parser) wordOne(part WordPart) *Word {
 	if len(p.wordBatch) == 0 {
 		p.wordBatch = make([]wordAlloc, 32)
@@ -2362,11 +2399,11 @@ func (p *Parser) getAssign(needEqual bool) *Assign {
 		p.rawAssignIndex = oldRawAssignIndex
 		if p.spaced || p.stopToken() {
 			if needEqual {
-				p.followErr(as.Pos(), "a[b]", assgn)
-			} else {
 				as.Naked = true
 				return as
 			}
+			as.Naked = true
+			return as
 		}
 		if p.tok == assgnParen {
 			if !p.lang.in(langBashLike | LangZsh) {
@@ -2386,6 +2423,13 @@ func (p *Parser) getAssign(needEqual bool) *Assign {
 				p.pos = posAddCol(p.pos, 1)
 			}
 			if len(p.val) < 1 || p.val[0] != '=' {
+				if needEqual {
+					as.Naked = true
+					if len(p.val) == 0 {
+						p.next()
+					}
+					return as
+				}
 				if as.Append {
 					p.followErr(as.Pos(), "a[b]+", assgn)
 				} else {
@@ -3625,7 +3669,12 @@ func (p *Parser) callExpr(s *Stmt, w *Word, assign bool) {
 		ce.Args = ce.Args[:0]
 	}
 	if assign {
-		ce.Assigns = append(ce.Assigns, p.getAssign(true))
+		as := p.getAssign(true)
+		if as != nil && as.Naked {
+			ce.Args = append(ce.Args, p.assignAsWord(as))
+		} else if as != nil {
+			ce.Assigns = append(ce.Assigns, as)
+		}
 	}
 loop:
 	for {
@@ -3635,7 +3684,12 @@ loop:
 			break loop
 		case _LitWord:
 			if len(ce.Args) == 0 && p.hasValidIdent() {
-				ce.Assigns = append(ce.Assigns, p.getAssign(true))
+				as := p.getAssign(true)
+				if as != nil && as.Naked {
+					ce.Args = append(ce.Args, p.assignAsWord(as))
+				} else if as != nil {
+					ce.Assigns = append(ce.Assigns, as)
+				}
 				break
 			}
 			if evalArrayAssignmentArg := len(ce.Args) > 0 && ce.Args[0].Lit() == "eval" &&
@@ -3664,7 +3718,12 @@ loop:
 			ce.Args = append(ce.Args, w)
 		case _Lit:
 			if len(ce.Args) == 0 && p.hasValidIdent() {
-				ce.Assigns = append(ce.Assigns, p.getAssign(true))
+				as := p.getAssign(true)
+				if as != nil && as.Naked {
+					ce.Args = append(ce.Args, p.assignAsWord(as))
+				} else if as != nil {
+					ce.Assigns = append(ce.Assigns, as)
+				}
 				break
 			}
 			ce.Args = append(ce.Args, p.wordAnyNumber())
