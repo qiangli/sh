@@ -41,13 +41,13 @@ func runAll() error {
 	}
 
 	if *command != "" {
-		return run(r, strings.NewReader(*command), "")
+		return run(r, strings.NewReader(*command), "bash")
 	}
 	if flag.NArg() == 0 {
 		if term.IsTerminal(int(os.Stdin.Fd())) {
 			return runInteractive(r, os.Stdin, os.Stdout, os.Stderr)
 		}
-		return run(r, os.Stdin, "")
+		return run(r, os.Stdin, "bash")
 	}
 	for _, path := range flag.Args() {
 		if err := runPath(r, path); err != nil {
