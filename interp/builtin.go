@@ -2212,9 +2212,13 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			}
 			return failf(1, "eval: %v\n", err)
 		}
+		prevEvalOffset, prevEvalExec := r.evalLineOffset, r.evalExec
+		r.evalLineOffset += int(pos.Line()) - 1
+		r.evalExec++
 		r.withAliasReparse(r.aliasUseLine(int(pos.Line())), func() {
 			r.stmts(ctx, file.Stmts)
 		})
+		r.evalLineOffset, r.evalExec = prevEvalOffset, prevEvalExec
 		exit = r.exit
 	case "source", ".":
 		// Bash 5.3: accept `-p PATH` to override the search path.

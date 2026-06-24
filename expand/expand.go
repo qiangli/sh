@@ -4940,10 +4940,11 @@ func (cfg *Config) sliceElems(pe *syntax.ParamExp, elems []string, positional bo
 				}
 				return nil, fmt.Errorf("%s: substring expression < 0", name)
 			}
+			name := pe.Param.Value
 			if text := arithmExprText(pe.Slice.Length); text != "" {
-				return nil, fmt.Errorf(" %s: substring expression < 0", text)
+				return nil, fmt.Errorf("%s: %s: substring expression < 0", name, text)
 			}
-			return nil, fmt.Errorf(" %d: substring expression < 0", length)
+			return nil, fmt.Errorf("%s: %d: substring expression < 0", name, length)
 		}
 		elems = elems[:slicePos(length)]
 	}
@@ -4986,10 +4987,11 @@ func (cfg *Config) sliceIndexedElems(pe *syntax.ParamExp, vr Variable, positiona
 			return nil, err
 		}
 		if length < 0 {
+			name := pe.Param.Value
 			if text := arithmExprText(pe.Slice.Length); text != "" {
-				return nil, fmt.Errorf(" %s: substring expression < 0", text)
+				return nil, fmt.Errorf("%s: %s: substring expression < 0", name, text)
 			}
-			return nil, fmt.Errorf(" %d: substring expression < 0", length)
+			return nil, fmt.Errorf("%s: %d: substring expression < 0", name, length)
 		}
 		if length < len(indexes) {
 			indexes = indexes[:length]
@@ -5032,10 +5034,11 @@ func (cfg *Config) sliceAssocElems(pe *syntax.ParamExp, elems []string) ([]strin
 			return elems, err
 		}
 		if length < 0 {
+			name := pe.Param.Value
 			if text := arithmExprText(pe.Slice.Length); text != "" {
-				return nil, fmt.Errorf(" %s: substring expression < 0", text)
+				return nil, fmt.Errorf("%s: %s: substring expression < 0", name, text)
 			}
-			return nil, fmt.Errorf(" %d: substring expression < 0", length)
+			return nil, fmt.Errorf("%s: %d: substring expression < 0", name, length)
 		}
 		if length < len(elems) {
 			elems = elems[:length]

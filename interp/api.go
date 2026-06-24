@@ -317,6 +317,16 @@ type Runner struct {
 	// than the physical AST position in that form.
 	funsubLineOffset int
 
+	// evalLineOffset is applied to bash-style diagnostic line numbers
+	// while executing the statements parsed from an `eval` argument.
+	// Bash counts the eval body's lines from the `eval` call site, so
+	// a runtime error reports `<eval line> + <body line> - 1` rather
+	// than the body-relative AST line. evalExec is non-zero whenever
+	// such a body is running, which also redirects a few builtin-
+	// attributed diagnostics (array-conversion) to `eval`.
+	evalLineOffset int
+	evalExec       int
+
 	// bgProcs holds all background shells spawned by this runner.
 	// Their PIDs are 1-indexed, from 1 to len(bgProcs), with a "g" prefix
 	// to distinguish them from real PIDs on the host operating system.
