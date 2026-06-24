@@ -3299,7 +3299,9 @@ func (cfg *Config) unquotedIndirectElemFields(pe *syntax.ParamExp) (elems []stri
 			}
 			return keys, false, true, nil
 		case Associative:
-			return vr.AssocKeysForDeclare(), false, true, nil
+			// Unquoted ${!A[@]} yields one word per key, and each
+			// key still undergoes normal IFS splitting.
+			return vr.AssocKeysForDeclare(), true, true, nil
 		}
 	case "*":
 		if cfg.ifs != "" {
@@ -4526,6 +4528,9 @@ func (cfg *Config) quotedElemFields(pe *syntax.ParamExp) ([]string, error) {
 			for i, k := range keys {
 				elems[i] = vr.Map[k]
 			}
+			if pe.Slice != nil {
+				return cfg.sliceAssocElems(pe, elems)
+			}
 			return elems, nil
 		case Unknown:
 			if !vr.IsSet() {
@@ -4592,6 +4597,9 @@ func (cfg *Config) quotedAllElemValues(pe *syntax.ParamExp) ([]string, error) {
 				elems := make([]string, len(keys))
 				for i, k := range keys {
 					elems[i] = vr.Map[k]
+				}
+				if pe.Slice != nil {
+					return cfg.sliceAssocElems(pe, elems)
 				}
 				return elems, nil
 			}
@@ -4990,6 +4998,48 @@ func (cfg *Config) sliceIndexedElems(pe *syntax.ParamExp, vr Variable, positiona
 	elems := make([]string, len(indexes))
 	for i, index := range indexes {
 		elems[i] = vr.List[index]
+	}
+	return elems, nil
+}
+
+func (cfg *Config) sliceAssocElems(pe *syntax.ParamExp, elems []string) ([]string, error) {
+	if pe.Slice == nil {
+		return elems, nil
+	}
+	start := 0
+	if pe.Slice.Offset != nil {
+		offset, err := Arithm(cfg, pe.Slice.Offset)
+		if err != nil {
+			return elems, err
+		}
+		if offset < 0 {
+			offset = len(elems) + offset
+			if offset < 0 {
+				offset = len(elems)
+			}
+		} else if offset > 0 {
+			offset--
+		}
+		if offset > len(elems) {
+			offset = len(elems)
+		}
+		start = offset
+	}
+	elems = elems[start:]
+	if pe.Slice.Length != nil {
+		length, err := Arithm(cfg, pe.Slice.Length)
+		if err != nil {
+			return elems, err
+		}
+		if length < 0 {
+			if text := arithmExprText(pe.Slice.Length); text != "" {
+				return nil, fmt.Errorf(" %s: substring expression < 0", text)
+			}
+			return nil, fmt.Errorf(" %d: substring expression < 0", length)
+		}
+		if length < len(elems) {
+			elems = elems[:length]
+		}
 	}
 	return elems, nil
 }

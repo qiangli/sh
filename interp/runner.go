@@ -1304,6 +1304,32 @@ func (r *Runner) literalForAssign(word *syntax.Word) string {
 	return str
 }
 
+func (r *Runner) arrayAssignEnvValue(as *syntax.Assign) string {
+	var b strings.Builder
+	b.WriteByte('(')
+	for i, elem := range as.Array.Elems {
+		if i > 0 {
+			b.WriteByte(' ')
+		}
+		if elem.Index != nil {
+			b.WriteByte('[')
+			if w, ok := elem.Index.(*syntax.Word); ok {
+				b.WriteString(r.literal(w))
+			} else {
+				b.WriteString(r.arithmSourceText(elem.Index, false))
+			}
+			b.WriteByte(']')
+			if elem.Append {
+				b.WriteByte('+')
+			}
+			b.WriteByte('=')
+		}
+		b.WriteString(r.literalForAssign(elem.Value))
+	}
+	b.WriteByte(')')
+	return b.String()
+}
+
 func (r *Runner) integerArrayAssignWithArithSuffix(cm *syntax.CallExpr, args []*syntax.Word) bool {
 	if len(cm.Assigns) != 1 || len(args) != 1 {
 		return false
@@ -4901,7 +4927,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 
 		assignFailed := false
 		for _, as := range cm.Assigns {
-			if as.Index != nil || as.Array != nil {
+			if as.Index != nil {
 				r.errf("%s`%s': not a valid identifier\n",
 					r.bashErrPrefix(r.curStmtPos), r.inlineArrayAssignName(as))
 				assignFailed = true
@@ -4931,17 +4957,21 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			}
 
 			var vr expand.Variable
-			// A command-prefix assignment to an empty-target nameref
-			// whose value is not a valid identifier (`r=/ cmd` with
-			// `declare -n r` in scope) is stored literally in the temp
-			// environment by bash rather than retargeting the nameref
-			// and failing. `$r` then expands to the raw value; a later
-			// `declare -n r` re-validates and reports the bad target.
-			if prev.Kind == expand.NameRef && prev.Str == "" && as.Value != nil &&
-				!validNameRefTarget(r.literalForAssign(as.Value)) {
-				vr = expand.Variable{Set: true, Kind: expand.String, Str: r.literalForAssign(as.Value)}
+			if as.Array != nil {
+				vr = expand.Variable{Set: true, Kind: expand.String, Str: r.arrayAssignEnvValue(as)}
 			} else {
-				name, vr = r.assignVal(name, prev, as, "")
+				// A command-prefix assignment to an empty-target nameref
+				// whose value is not a valid identifier (`r=/ cmd` with
+				// `declare -n r` in scope) is stored literally in the temp
+				// environment by bash rather than retargeting the nameref
+				// and failing. `$r` then expands to the raw value; a later
+				// `declare -n r` re-validates and reports the bad target.
+				if prev.Kind == expand.NameRef && prev.Str == "" && as.Value != nil &&
+					!validNameRefTarget(r.literalForAssign(as.Value)) {
+					vr = expand.Variable{Set: true, Kind: expand.String, Str: r.literalForAssign(as.Value)}
+				} else {
+					name, vr = r.assignVal(name, prev, as, "")
+				}
 			}
 			// Inline command vars are always exported.
 			vr.Exported = true

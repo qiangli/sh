@@ -3200,7 +3200,13 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 			k := r.assocAssignKey(w)
 			v := r.literalForAssign(elem.Value)
 			if elem.Append {
-				if prev.Integer {
+				if !as.Append {
+					// Bash 5.3's compound associative assignment has a
+					// residue bug: a [k]+=v element in a non-append
+					// literal stores v, ignoring any earlier [k]=old in
+					// the same literal. Outer a+=(...) still appends to
+					// the existing map and earlier elements.
+				} else if prev.Integer {
 					cur, _ := strconv.Atoi(r.integerArrayValue(amap[k]))
 					rhs, _ := strconv.Atoi(r.integerArrayValue(v))
 					v = strconv.Itoa(cur + rhs)
