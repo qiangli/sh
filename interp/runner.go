@@ -416,6 +416,9 @@ func (r *Runner) expandErr(err error) {
 	if strings.Contains(errMsg, "arithmetic syntax error: invalid arithmetic operator") {
 		r.lastExpandExit = exitStatus{code: 1}
 	}
+	if strings.Contains(errMsg, "exponent less than 0") {
+		r.lastExpandExit = exitStatus{code: 1}
+	}
 	if looksLikeArithExpandError(errMsg) {
 		r.lastExpandExit = exitStatus{code: 1}
 	}
@@ -879,6 +882,15 @@ func (r *Runner) bashArithmError(expr syntax.ArithmExpr, err error, command bool
 		}
 		bashMsg = fmt.Sprintf("arithmetic syntax error in expression (error token is %q)", token)
 	}
+	if strings.Contains(bashMsg, "arithmetic syntax error: operand expected") &&
+		strings.Contains(bashMsg, "error token is \"'") && strings.Contains(exprText, "'") {
+		if start := strings.Index(bashMsg, "error token is \""); start >= 0 {
+			tokenStart := start + len("error token is \"")
+			if tokenEnd := strings.IndexByte(bashMsg[tokenStart:], '"'); tokenEnd >= 0 {
+				bashMsg = bashMsg[:tokenStart] + exprText + bashMsg[tokenStart+tokenEnd:]
+			}
+		}
+	}
 	if !command && strings.Contains(bashMsg, "error token is \"$") {
 		exprText = strings.ReplaceAll(exprText, `\$`, "$")
 		if start := strings.Index(bashMsg, "error token is \""); start >= 0 {
@@ -996,6 +1008,13 @@ func (r *Runner) bashArithmError(expr syntax.ArithmExpr, err error, command bool
 	if expr != nil {
 		line = int(expr.Pos().Line())
 	}
+	if !command && r.curStmtPos.IsValid() {
+		if expr != nil && expr.Pos().IsValid() && expr.Pos().Line() > r.curStmtPos.Line() &&
+			!strings.HasPrefix(exprText, "\n") {
+			exprText = "\n" + exprText
+		}
+		line = int(r.curStmtPos.Line())
+	}
 	if exprTextOverride != "" && r.curStmtPos.IsValid() {
 		line = int(r.curStmtPos.Line())
 	}
@@ -1042,6 +1061,10 @@ func (r *Runner) bashArithmError(expr syntax.ArithmExpr, err error, command bool
 				prefix, line, exprText, bashMsg)
 		}
 		if command {
+			if strings.HasSuffix(exprText, "\n") {
+				return fmt.Errorf("%s: line %d: ((: %s: %s",
+					prefix, line, exprText, bashMsg)
+			}
 			if compactErrSep {
 				return fmt.Errorf("%s: line %d: ((: %s: %s",
 					prefix, line, exprText, bashMsg)

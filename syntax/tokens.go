@@ -310,6 +310,7 @@ const (
 	AndArit   = BinAritOperator(andAnd)   // &&
 	OrArit    = BinAritOperator(orOr)     // ||
 	XorBool   = BinAritOperator(dblCaret) // ^^
+	HashArit  = BinAritOperator(hash)     // #
 	Comma     = BinAritOperator(comma)    // ,
 	TernQuest = BinAritOperator(quest)    // ?
 	TernColon = BinAritOperator(colon)    // :

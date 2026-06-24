@@ -991,6 +991,12 @@ func arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 				return 0, err
 			}
 			return oneIf((left != 0) != (right != 0)), nil
+		case syntax.HashArit:
+			token := arithmExprStaticText(expr.Y)
+			return 0, &ArithmError{
+				Expr: expr,
+				Err:  fmt.Errorf("arithmetic syntax error: invalid arithmetic operator (error token is %q)", token),
+			}
 		}
 		left, err := Arithm(cfg, expr.X)
 		if err != nil {

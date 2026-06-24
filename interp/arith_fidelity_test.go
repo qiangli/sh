@@ -108,6 +108,10 @@ echo ${a[@]}`,
 			input: "hello=100\na=([hello]=1 [hello]+=2)\nprintf 'keys: '; printf '<%s>\\n' \"${!a[@]}\"\nprintf 'vals: '; printf '<%s>\\n' \"${a[@]}\"\na=([100]=1 2 3 4 [5]=a b c d)\nprintf 'keys:'; for k in \"${!a[@]}\"; do printf ' <%s>' \"$k\"; done; echo\nprintf 'vals:'; for v in \"${a[@]}\"; do printf ' <%s>' \"$v\"; done; echo",
 			want:  "keys: <100>\nvals: <12>\nkeys: <5> <6> <7> <8> <100> <101> <102> <103>\nvals: <a> <b> <c> <d> <1> <2> <3> <4>\n",
 		},
+		{
+			input: "[[ 12345678909 = $(( 1 << 30 )) ]]\necho eq=$?\n[[ 12345678909 = 12345678909 ]]\necho eq=$?\n[ 12345678909 -gt $(( 1 << 30 )) ]\necho greater=$?\n[[ 12345678909 -gt $(( 1 << 30 )) ]]\necho greater=$?\n[[ 12345678909 -ge $(( 1 << 30 )) ]]\necho ge=$?\n[[ 12345678909 -ge 12345678909 ]]\necho ge=$?\n[[ 12345678909 -le $(( 1 << 30 )) ]]\necho le=$?\n[[ 12345678909 -le 12345678909 ]]\necho le=$?",
+			want:  "eq=1\neq=0\ngreater=0\ngreater=0\nge=0\nge=0\nle=1\nle=0\n",
+		},
 	}
 
 	for _, tt := range tests {
@@ -147,11 +151,11 @@ func TestArithFidelityBashSource(t *testing.T) {
 	}{
 		{
 			input: "echo $(( '1' + '2' * 3 ))\necho status=$?\n\necho $(( '1 + 2' * 3 ))\necho status=$?",
-			want:  "./s: line 1: '1' + '2' * 3 : arithmetic syntax error: operand expected (error token is \"'1' \")\nstatus=1\n./s: line 4: '1 + 2' * 3 : arithmetic syntax error: operand expected (error token is \"'1 + 2' \")\nstatus=1\n",
+			want:  "./s: line 1: '1' + '2' * 3 : arithmetic syntax error: operand expected (error token is \"'1' + '2' * 3 \")\nstatus=1\n./s: line 4: '1 + 2' * 3 : arithmetic syntax error: operand expected (error token is \"'1 + 2' * 3 \")\nstatus=1\n",
 		},
 		{
 			input: "echo $(( '1' + 2))",
-			want:  "./s: line 1: '1' + 2: arithmetic syntax error: operand expected (error token is \"'1' \")\nexit status 1",
+			want:  "./s: line 1: '1' + 2: arithmetic syntax error: operand expected (error token is \"'1' + 2\")\nexit status 1",
 		},
 		{
 			input: "set -u\n(( undef1++ ))\n(( ++undef2 ))\necho \"[$undef1][$undef2]\"",
@@ -167,11 +171,15 @@ func TestArithFidelityBashSource(t *testing.T) {
 		},
 		{
 			input: "echo $(( 2**-1 * 5 ))",
-			want:  "./s: line 1: 2**-1 * 5 : exponent less than 0 (error token is \"* 5 \")\n",
+			want:  "./s: line 1: 2**-1 * 5 : exponent less than 0 (error token is \"* 5 \")\nexit status 1",
 		},
 		{
 			input: "s='12 34'\necho '12 34' $(( s[0] )) $(( s[1] ))\necho status=$?",
 			want:  "./s: line 2: 12 34: arithmetic syntax error in expression (error token is \"34\")\nstatus=1\n",
+		},
+		{
+			input: "echo $((\n1 +\n2 + \\\n3\n))\necho $((\n1 + 2  # not a comment\n))\n(( a = 3 + 4  # comment\n))\necho [$a]",
+			want:  "6\n./s: line 6: \n1 + 2  # not a comment\n: arithmetic syntax error: invalid arithmetic operator (error token is \"# not a comment\\n\")\n./s: line 9: ((: a = 3 + 4  # comment\n: arithmetic syntax error: invalid arithmetic operator (error token is \"# comment\\n\")\n[]\n",
 		},
 	}
 
