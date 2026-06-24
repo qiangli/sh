@@ -257,7 +257,7 @@ func paramExpDefaultTriggers(op syntax.ParExpOperator, vr Variable, str string) 
 // (The colon forms `:-`/`:+` test the expanded string instead and are
 // unaffected.) Positional parameters ($@/$*) and specific subscripts keep
 // their existing semantics via vr.IsSet().
-func paramIsSetNonColon(vr Variable, name string, index syntax.ArithmExpr) bool {
+func paramIsSetNonColon(cfg *Config, vr Variable, name string, index syntax.ArithmExpr) bool {
 	if name == "@" || name == "*" {
 		return vr.IsSet()
 	}
@@ -279,6 +279,11 @@ func paramIsSetNonColon(vr Variable, name string, index syntax.ArithmExpr) bool 
 		case Associative:
 			_, ok := vr.Map["0"]
 			return ok
+		}
+	default:
+		switch vr.Kind {
+		case Indexed, Associative:
+			return arrayElemSet(vr, index, cfg)
 		}
 	}
 	return vr.IsSet()
@@ -316,6 +321,27 @@ func nodeLit(node syntax.Node) string {
 		return word.Lit()
 	}
 	return ""
+}
+
+func (cfg *Config) cLocale() bool {
+	if cfg == nil || cfg.Env == nil {
+		return false
+	}
+	locale := cfg.envGet("LC_ALL")
+	if locale == "" {
+		locale = cfg.envGet("LC_CTYPE")
+	}
+	if locale == "" {
+		locale = cfg.envGet("LANG")
+	}
+	return locale == "C" || locale == "POSIX"
+}
+
+func (cfg *Config) paramStringLen(s string) int {
+	if cfg.cLocale() {
+		return len(s)
+	}
+	return utf8.RuneCountInString(s)
 }
 
 // arrayElemSet reports whether a specific array element is set.
@@ -764,12 +790,21 @@ func (cfg *Config) findReplIndex(pat, name string, n int, start, end bool) [][]i
 		}
 		return nil
 	}
+	if cfg.cLocale() {
+		return findReplIndexBytes(pat, name, n, start, end)
+	}
+	if strings.Contains(pat, "[") && strings.Contains(pat, "-") {
+		return findReplIndexBytes(pat, name, n, start, end)
+	}
 	if !start && !end {
 		return cfg.findAllIndex(pat, name, n)
 	}
 	var mode pattern.Mode
 	if cfg.ExtGlob {
 		mode |= pattern.ExtendedOperators
+	}
+	if strings.Contains(pat, "-") {
+		mode |= pattern.LenientRanges
 	}
 	if cfg.NoCaseMatch {
 		mode |= pattern.NoGlobCase
@@ -795,6 +830,166 @@ func (cfg *Config) findReplIndex(pat, name string, n int, start, end bool) [][]i
 		return [][]int{{loc[2], loc[3]}}
 	}
 	return nil
+}
+
+func findReplIndexBytes(pat, name string, n int, start, end bool) [][]int {
+	if start {
+		for j := len(name); j >= 0; j-- {
+			if bytePatternMatch([]byte(pat), []byte(name[:j])) {
+				return [][]int{{0, j}}
+			}
+		}
+		return nil
+	}
+	if end {
+		for i := 0; i <= len(name); i++ {
+			if bytePatternMatch([]byte(pat), []byte(name[i:])) {
+				return [][]int{{i, len(name)}}
+			}
+		}
+		return nil
+	}
+	var locs [][]int
+	for i := 0; i <= len(name); i++ {
+		best := -1
+		for j := len(name); j >= i; j-- {
+			if bytePatternMatch([]byte(pat), []byte(name[i:j])) {
+				best = j
+				break
+			}
+		}
+		if best < 0 {
+			continue
+		}
+		locs = append(locs, []int{i, best})
+		if n > 0 && len(locs) >= n {
+			break
+		}
+		if best == i {
+			continue
+		}
+		i = best - 1
+	}
+	return locs
+}
+
+func bytePatternMatch(pat, name []byte) bool {
+	for len(pat) > 0 {
+		switch p := pat[0]; p {
+		case '*':
+			for len(pat) > 1 && pat[1] == '*' {
+				pat = pat[1:]
+			}
+			if len(pat) == 1 {
+				return true
+			}
+			pat = pat[1:]
+			for i := 0; i <= len(name); i++ {
+				if bytePatternMatch(pat, name[i:]) {
+					return true
+				}
+			}
+			return false
+		case '?':
+			if len(name) == 0 {
+				return false
+			}
+			pat = pat[1:]
+			name = name[1:]
+		case '[':
+			ok, consumed, matched := byteBracketMatch(pat, name)
+			if !ok {
+				return false
+			}
+			if !matched {
+				return false
+			}
+			pat = pat[consumed:]
+			name = name[1:]
+		case '\\':
+			if len(pat) == 1 {
+				p = '\\'
+				pat = pat[1:]
+			} else {
+				p = pat[1]
+				pat = pat[2:]
+			}
+			if len(name) == 0 || name[0] != p {
+				return false
+			}
+			name = name[1:]
+		default:
+			if len(name) == 0 || name[0] != p {
+				return false
+			}
+			pat = pat[1:]
+			name = name[1:]
+		}
+	}
+	return len(name) == 0
+}
+
+func byteBracketMatch(pat, name []byte) (ok bool, consumed int, matched bool) {
+	if len(name) == 0 || len(pat) < 3 || pat[0] != '[' {
+		return false, 0, false
+	}
+	i := 1
+	neg := false
+	if pat[i] == '!' || pat[i] == '^' {
+		neg = true
+		i++
+	}
+	if i >= len(pat) {
+		return false, 0, false
+	}
+	b := name[0]
+	in := false
+	first := true
+	for i < len(pat) {
+		if pat[i] == ']' && !first {
+			if neg {
+				in = !in
+			}
+			return true, i + 1, in
+		}
+		start := pat[i]
+		if start == '\\' && i+1 < len(pat) {
+			i++
+			start = pat[i]
+			if start == '[' && i+2 < len(pat) && pat[i+1] == ']' && pat[i+2] == ']' {
+				if b == '[' || b == ']' {
+					in = true
+				}
+				if neg {
+					in = !in
+				}
+				return true, i + 3, in
+			}
+		}
+		if i+2 < len(pat) && pat[i+1] == '-' && pat[i+2] != ']' {
+			end := pat[i+2]
+			if end == '\\' && i+3 < len(pat) {
+				end = pat[i+3]
+				if start <= end && start <= b && b <= end {
+					in = true
+				}
+				i += 4
+			} else {
+				if start <= end && start <= b && b <= end {
+					in = true
+				}
+				i += 3
+			}
+			first = false
+			continue
+		}
+		if b == start {
+			in = true
+		}
+		i++
+		first = false
+	}
+	return false, 0, false
 }
 
 // replSegment is one piece of a ${var/pat/repl} replacement template. When
@@ -908,6 +1103,34 @@ func replHasMatch(segs []replSegment) bool {
 		}
 	}
 	return false
+}
+
+func (cfg *Config) indirectAtValue(name, op string) string {
+	if !syntax.ValidName(name) {
+		return ""
+	}
+	vr := cfg.Env.Get(name)
+	switch op {
+	case "a":
+		return vr.Flags()
+	case "A":
+		if !vr.Declared() {
+			return ""
+		}
+		return cfg.paramAtA(vr, vr, name, vr.String(), false)
+	case "Q":
+		if !vr.IsSet() {
+			return ""
+		}
+		return bashQuoteParamQ(vr.String())
+	case "P":
+		if !vr.IsSet() {
+			return ""
+		}
+		return cfg.expandPrompt(vr.String())
+	default:
+		return ""
+	}
 }
 
 func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
@@ -1127,7 +1350,7 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 		switch nodeLit(index) {
 		case "@", "*":
 		default:
-			n = utf8.RuneCountInString(str)
+			n = cfg.paramStringLen(str)
 		}
 		str = strconv.Itoa(n)
 	case pe.Excl:
@@ -1137,7 +1360,9 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 		var strs []string
 		indirectName := name
 		indirectOrig := vr
+		indirectIndex := index
 		applyMod := false
+		indirectAtApplied := false
 		sortStrs := false
 		switch {
 		case pe.Names != 0:
@@ -1148,19 +1373,37 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			sortStrs = true
 		case pe.Index != nil && vr.Kind == Indexed:
 			if pe.Exp != nil && indirectAtOp(pe.Exp.Op) {
-				return "", fmt.Errorf("%s: invalid variable name", strings.Join(vr.IndexedValues(), " "))
+				lit := ""
+				if pe.Exp.Word != nil && len(pe.Exp.Word.Parts) == 1 {
+					if part, ok := pe.Exp.Word.Parts[0].(*syntax.Lit); ok {
+						lit = part.Value
+					}
+				}
+				keys := vr.IndexedIndexes()
+				for _, i := range keys {
+					key := strconv.Itoa(i)
+					strs = append(strs, cfg.indirectAtValue(key, lit))
+				}
+				indirectAtApplied = true
+				break
 			}
 			for _, i := range vr.IndexedIndexes() {
 				strs = append(strs, strconv.Itoa(i))
 			}
 		case pe.Index != nil && vr.Kind == Associative:
 			if pe.Exp != nil && indirectAtOp(pe.Exp.Op) {
-				keys := vr.AssocKeysForDeclare()
-				vals := make([]string, len(keys))
-				for i, key := range keys {
-					vals[i] = vr.Map[key]
+				lit := ""
+				if pe.Exp.Word != nil && len(pe.Exp.Word.Parts) == 1 {
+					if part, ok := pe.Exp.Word.Parts[0].(*syntax.Lit); ok {
+						lit = part.Value
+					}
 				}
-				return "", fmt.Errorf("%s: invalid variable name", strings.Join(vals, " "))
+				keys := vr.AssocKeysForDeclare()
+				for _, key := range keys {
+					strs = append(strs, cfg.indirectAtValue(key, lit))
+				}
+				indirectAtApplied = true
+				break
 			}
 			strs = vr.AssocKeysForDeclare()
 		case orig.Kind == NameRef && pe.Index != nil && nodeLit(pe.Index) != "@" && nodeLit(pe.Index) != "*":
@@ -1202,6 +1445,7 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 				vr = cfg.Env.Get(base)
 				indirectName = base
 				indirectOrig = vr
+				indirectIndex = idx
 				switch vr.Kind {
 				case Indexed:
 					switch nodeLit(idx) {
@@ -1272,9 +1516,10 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			if err != nil {
 				return "", err
 			}
+			setNonColon := paramIsSetNonColon(cfg, vr, indirectName, indirectIndex)
 			switch pe.Exp.Op {
 			case syntax.AlternateUnset:
-				if vr.IsSet() {
+				if setNonColon {
 					str = arg
 				} else {
 					str = ""
@@ -1286,7 +1531,7 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 					str = ""
 				}
 			case syntax.DefaultUnset:
-				if !vr.IsSet() {
+				if !setNonColon {
 					str = arg
 				}
 			case syntax.DefaultUnsetOrNull:
@@ -1309,7 +1554,7 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 				}
 			}
 		}
-		if pe.Exp != nil && indirectAtOp(pe.Exp.Op) {
+		if pe.Exp != nil && indirectAtOp(pe.Exp.Op) && !indirectAtApplied {
 			if pe.Exp.Word == nil || len(pe.Exp.Word.Parts) != 1 {
 				return "", BadSubstitutionError{Node: pe}
 			}
@@ -1355,7 +1600,7 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 		}
 	case pe.Width:
 		// mksh's ${%var}: character width of the string value.
-		str = strconv.Itoa(utf8.RuneCountInString(str))
+		str = strconv.Itoa(cfg.paramStringLen(str))
 	case pe.IsSet:
 		// Zsh's ${+var}: 1 if set, 0 if unset.
 		if vr.IsSet() {
@@ -1466,7 +1711,7 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 		// `$*`-all-null aggregate, computed before the word so the word is
 		// only expanded when actually used (see wordNeeded + the switch op).
 		starAggregateNull := false
-		if name == "*" {
+		if cfg.insideDoubleQuote && name == "*" {
 			starAggregateNull = len(vr.List) > 0
 			for _, elem := range vr.List {
 				if elem != "" {
@@ -1475,22 +1720,23 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 				}
 			}
 		}
+		starEmptyIFSNonNull := !cfg.insideDoubleQuote && name == "*" && cfg.ifs == "" && len(vr.List) > 1
 		// Expand the substitute word ONLY when it is used, so a command
 		// substitution / arithmetic side effect in `${x:-$((i++))}` does not
 		// run when x is set. These conditions mirror the `switch op` below.
 		// An empty indexed/associative array has no element[0], so the
 		// non-colon ${a-w}/${a+w} forms see it as unset (bash 5.3).
-		setNonColon := paramIsSetNonColon(vr, name, index)
+		setNonColon := paramIsSetNonColon(cfg, vr, name, index)
 		wordNeeded := true
 		switch op {
 		case syntax.AlternateUnsetOrNull:
-			wordNeeded = str != ""
+			wordNeeded = str != "" || starEmptyIFSNonNull
 		case syntax.AlternateUnset:
 			wordNeeded = setNonColon
 		case syntax.DefaultUnset:
 			wordNeeded = !setNonColon
 		case syntax.DefaultUnsetOrNull:
-			wordNeeded = str == "" || starAggregateNull
+			wordNeeded = str == "" && !starEmptyIFSNonNull || starAggregateNull
 		}
 		var arg string
 		var err error
@@ -1556,7 +1802,7 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			// the whole array rather than the addressed element — an
 			// element-assigned array (`A[k]=v`) leaves the variable's
 			// Set flag false even though the element exists.
-			if str == "" {
+			if str == "" && !starEmptyIFSNonNull {
 				break
 			}
 			if bashAlternateCommandSubstEOF(pe.Exp.Word) {
@@ -1576,7 +1822,7 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			}
 			fallthrough
 		case syntax.DefaultUnsetOrNull:
-			if str == "" || starAggregateNull {
+			if str == "" && !starEmptyIFSNonNull || starAggregateNull {
 				str = arg
 			}
 		case syntax.ErrorUnset:
@@ -1782,8 +2028,16 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			case "L":
 				str = strings.ToLower(str)
 			case "K":
+				if !vr.IsSet() {
+					str = ""
+					break
+				}
 				str = cfg.paramAtK(vr, name)
 			case "k":
+				if !vr.IsSet() {
+					str = ""
+					break
+				}
 				if indexAllElements && nodeLit(index) == "*" {
 					str = strings.Join(cfg.paramAtKFields(vr, name), " ")
 				} else {
