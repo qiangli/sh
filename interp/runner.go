@@ -4712,7 +4712,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				}
 				wasReadOnly := roTarget.ReadOnly
 				name, vr := r.assignVal(name, prev, as, "")
-				r.setVarWithIndex(prevForIndex, name, as.Index, vr)
+				r.setVarWithIndex(prevForIndex, name, as.Index, vr, as.Append)
 				if !r.exit.ok() && !r.exit.exiting && !r.exit.returning && !r.exit.fatalExit {
 					// Bash: an assignment-statement error (readonly
 					// variable, bad subscript, …) exits a POSIX-mode
@@ -6254,6 +6254,27 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				if as.Index != nil && valType == "-A" {
 					prevForIndex.Kind = expand.Associative
 				}
+				if as.Index != nil && cm.Variant.Value == "declare" && valType != "-A" {
+					spacedOpen := as.Index.Pos().Offset() > as.Name.End().Offset()+1
+					spacedClose := as.Value != nil && as.Value.Pos().Offset() > as.Index.End().Offset()+2
+					if spacedOpen || spacedClose {
+						// Bash does not treat whitespace-bearing
+						// array subscripts as a single declare
+						// operand, but the arithmetic subscript is
+						// still evaluated and can mutate the array.
+						r.arithmCompoundArrayIndex(as.Index)
+						r.errf("%s%s: `%s[': not a valid identifier\n",
+							r.bashErrPrefix(r.curStmtPos), cm.Variant.Value, name)
+						tail := "]"
+						if as.Value != nil {
+							tail += "=" + r.literalForAssign(as.Value)
+						}
+						r.errf("%s%s: `%s': not a valid identifier\n",
+							r.bashErrPrefix(r.curStmtPos), cm.Variant.Value, tail)
+						r.exit.code = 1
+						continue
+					}
+				}
 				if as.Index != nil && (vr.Kind == expand.Associative || valType == "-A") {
 					if w, ok := as.Index.(*syntax.Word); ok {
 						key := r.assocAssignKey(w)
@@ -6315,7 +6336,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 						(prevForIndex.Kind == expand.Indexed || prevForIndex.Kind == expand.Associative) {
 						r.setVar(name, prevForIndex)
 					}
-					r.setVarWithIndex(prevForIndex, name, as.Index, vr)
+					r.setVarWithIndex(prevForIndex, name, as.Index, vr, as.Append)
 					continue
 				}
 			}

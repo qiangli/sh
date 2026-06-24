@@ -2304,7 +2304,15 @@ func (cfg *Config) wordField(wps []syntax.WordPart, ql quoteLevel) ([]fieldPart,
 				cfg.insideDoubleQuote = prevQuote
 			}
 			if err != nil {
-				return nil, err
+				if strings.Contains(err.Error(), "bad array subscript") {
+					if cfg.OnBadArraySubscript != nil {
+						ref, _, _ := strings.Cut(err.Error(), ": bad array subscript")
+						cfg.OnBadArraySubscript(ref)
+					}
+					val = ""
+				} else {
+					return nil, err
+				}
 			}
 			field = append(field, fieldPart{val: val})
 		case *syntax.CmdSubst:
