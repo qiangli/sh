@@ -2084,6 +2084,17 @@ var runTests = []runTest{
 		"12 34\n",
 	},
 	{
+		// A `[[ ]]` test whose final `]]` abuts the closing backtick of
+		// the enclosing backquote command substitution must still close
+		// the test (bash 5.3). Single-operand form is the regressing one.
+		"echo a `[[ -n x ]] && echo y` b",
+		"a y b\n",
+	},
+	{
+		`echo "a ` + "`[[ x ]]`" + ` b"`,
+		"a  b\n",
+	},
+	{
 		`mkdir d; [[ $(cd d && pwd) == "$(pwd)" ]]`,
 		"exit status 1",
 	},

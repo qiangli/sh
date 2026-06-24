@@ -4131,6 +4131,14 @@ var fileTests = []fileTestCase{
 		), LangBash|LangMirBSDKorn|LangZsh),
 	),
 	fileTest(
+		// A `[[ ]]` whose closing `]]` abuts the backtick that ends the
+		// enclosing backquote command substitution: the `]]` must still
+		// close the test rather than glue onto the backtick.
+		[]string{"$([[ a ]])", "`[[ a ]]`"},
+		langFile(call(word(cmdSubst(stmt(&TestClause{X: litWord("a")})))),
+			LangBash|LangMirBSDKorn|LangZsh),
+	),
+	fileTest(
 		[]string{"[[ a > b ]]"},
 		langFile(&TestClause{X: &BinaryTest{
 			Op: TsAfter,

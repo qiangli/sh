@@ -1287,7 +1287,14 @@ loop:
 			}
 			break loop
 		case '`':
-			if p.quote != subCmdBckquo {
+			// A backtick that closes the enclosing backquote command
+			// substitution terminates the current word (_LitWord); one
+			// that opens a new substitution keeps the word going (_Lit).
+			// Besides the direct subCmdBckquo state, we are also closing
+			// when nested in another construct (e.g. `[[ ]]`, arithmetic)
+			// inside a backquote sub: openBquotes>0 with an unescaped
+			// backtick. An escaped (nested-opening) backtick keeps _Lit.
+			if p.quote != subCmdBckquo && !(p.openBquotes > 0 && !p.bquoteEscapedByte) {
 				tok = _Lit
 			}
 			break loop
