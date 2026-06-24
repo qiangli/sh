@@ -1942,6 +1942,31 @@ func splitAssignmentField(field string) (name, value string, ok bool) {
 	return field[:eq], field[eq+1:], true
 }
 
+func declareOperandNames(fields []string) map[string]bool {
+	names := make(map[string]bool)
+	optionsEnded := false
+	for _, field := range fields {
+		if !optionsEnded && field == "--" {
+			optionsEnded = true
+			continue
+		}
+		if !optionsEnded && (strings.HasPrefix(field, "-") || strings.HasPrefix(field, "+")) {
+			continue
+		}
+		name := field
+		if n, _, ok := splitAssignmentField(field); ok {
+			name = strings.TrimSuffix(n, "+")
+		}
+		if base, _, ok := splitArrayRef(name); ok {
+			name = base
+		}
+		if syntax.ValidName(name) {
+			names[name] = true
+		}
+	}
+	return names
+}
+
 func (r *Runner) inlineArrayAssignName(as *syntax.Assign) string {
 	name := as.Name.Value
 	if as.Index != nil {
@@ -4316,7 +4341,7 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 	// can read a file the redirect just wrote, so there is no observable
 	// difference for the rest, and the proven path stays untouched.
 	lateRedir := false
-	if call, ok := st.Cmd.(*syntax.CallExpr); ok && len(st.Redirs) > 0 && callExprArgsHaveCmdSubst(call) {
+	if len(st.Redirs) > 0 && commandHasCmdSubst(st.Cmd) {
 		lateRedir = true
 	}
 	if lateRedir {
@@ -4589,27 +4614,13 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				}
 			}
 		}
-		// Apply redirections that stmtSync deferred until after the words
-		// were expanded (POSIX order; only reached for a CallExpr whose args
-		// contain a command substitution). On failure, skip the command —
-		// the closers opened so far are owned by stmtSync's defer.
-		if r.lateRedirs != nil {
-			redirs := r.lateRedirs
-			r.lateRedirs = nil
-			for _, rd := range redirs {
-				cls, err := r.redir(ctx, rd)
-				if err != nil {
-					r.exit.code = 1
-					if r.opts[optPosix] && len(fields) > 0 && isPosixSpecialBuiltin(fields[0]) {
-						r.exit.exiting = true
-					}
-					break
-				}
-				if cls != nil {
-					r.lateRedirClosers = append(r.lateRedirClosers, cls)
-				}
-			}
-			if !r.exit.ok() {
+		// Apply redirections that stmtSync deferred until after command
+		// substitutions in the simple command were expanded (POSIX order).
+		// On failure, skip the command; closers opened so far are owned by
+		// stmtSync's defer.
+		assignmentOnlyWithLateAssigns := len(fields) == 0 && len(cm.Assigns) > 0 && r.lateRedirs != nil
+		if !assignmentOnlyWithLateAssigns {
+			if !r.applyLateRedirs(ctx, fields) {
 				return
 			}
 		}
@@ -4801,6 +4812,9 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			// we need to surface that last exit code.
 			if r.exit.ok() {
 				r.exit = r.lastExpandExit
+			}
+			if assignmentOnlyWithLateAssigns {
+				r.applyLateRedirs(ctx, fields)
 			}
 			break
 		}
@@ -5006,6 +5020,18 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 					}
 				}
 			}
+		}
+		if persistInline && (fields[0] == "export" || fields[0] == "readonly") {
+			operands := declareOperandNames(fields[1:])
+			kept := restores[:0]
+			for _, restore := range restores {
+				if operands[restore.name] {
+					kept = append(kept, restore)
+					continue
+				}
+				r.restoreInlineVar(restore.name, restore.vr)
+			}
+			restores = kept
 		}
 		if !persistInline {
 			// Outer (non-persist) inline restore: skip names
@@ -5632,6 +5658,13 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		oldDeclCtx := r.declAssignContext
 		r.declAssignContext = true
 		defer func() { r.declAssignContext = oldDeclCtx }()
+		if r.lateRedirs != nil {
+			// A declaration clause expands assignment RHS words as it
+			// processes each operand. Bash applies redirects after those
+			// expansions, so leave the redirect pending until the first
+			// operand has had a chance to run command substitutions.
+			defer r.applyLateRedirs(ctx, []string{cm.Variant.Value})
+		}
 	assignLoop:
 		for as, fromString := range r.flattenAssigns(cm.Args) {
 			// Bash attributes assignment failures from a declare-
@@ -7887,26 +7920,45 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 	return f, nil
 }
 
-// callExprArgsHaveCmdSubst reports whether any argument word of the call
-// contains a command substitution (`$(…)` or backticks). Only such an
-// expansion can read a file that a redirection on the same command writes, so
-// it is the only case that needs redirections deferred until after the words
-// are expanded (the POSIX order). Scoping the late-redir path to it keeps every
-// other command on the original, proven redirection flow.
-func callExprArgsHaveCmdSubst(call *syntax.CallExpr) bool {
-	for _, w := range call.Args {
-		found := false
-		syntax.Walk(w, func(n syntax.Node) bool {
-			if _, ok := n.(*syntax.CmdSubst); ok {
-				found = true
+// commandHasCmdSubst reports whether a command contains a command
+// substitution (`$(...)` or backticks). Only such an expansion can read or
+// write observable state before redirections on the same statement are
+// applied, so it is the only case that needs redirections deferred until after
+// expansion (the POSIX order).
+func commandHasCmdSubst(cmd syntax.Command) bool {
+	if cmd == nil {
+		return false
+	}
+	found := false
+	syntax.Walk(cmd, func(n syntax.Node) bool {
+		if _, ok := n.(*syntax.CmdSubst); ok {
+			found = true
+		}
+		return !found
+	})
+	return found
+}
+
+func (r *Runner) applyLateRedirs(ctx context.Context, fields []string) bool {
+	if r.lateRedirs == nil {
+		return true
+	}
+	redirs := r.lateRedirs
+	r.lateRedirs = nil
+	for _, rd := range redirs {
+		cls, err := r.redir(ctx, rd)
+		if err != nil {
+			r.exit.code = 1
+			if r.opts[optPosix] && len(fields) > 0 && isPosixSpecialBuiltin(fields[0]) {
+				r.exit.exiting = true
 			}
-			return !found
-		})
-		if found {
-			return true
+			break
+		}
+		if cls != nil {
+			r.lateRedirClosers = append(r.lateRedirClosers, cls)
 		}
 	}
-	return false
+	return r.exit.ok()
 }
 
 func redirWordText(rd *syntax.Redirect) string {
