@@ -3246,15 +3246,22 @@ func (cfg *Config) paramExpSubstWordTrigger(pe *syntax.ParamExp) bool {
 		return false
 	}
 	vr := cfg.Env.Get(pe.Param.Value)
+	setNonColon := paramIsSetNonColon(cfg, vr, pe.Param.Value, pe.Index)
+	str := vr.String()
+	if pe.Index != nil {
+		if val, err := cfg.varInd(vr, pe.Index); err == nil {
+			str = val
+		}
+	}
 	switch pe.Exp.Op {
 	case syntax.DefaultUnset:
-		return !vr.IsSet()
+		return !setNonColon
 	case syntax.DefaultUnsetOrNull:
-		return !vr.IsSet() || vr.String() == ""
+		return !setNonColon || str == ""
 	case syntax.AlternateUnset:
-		return vr.IsSet()
+		return setNonColon
 	case syntax.AlternateUnsetOrNull:
-		return vr.IsSet() && vr.String() != ""
+		return setNonColon && str != ""
 	}
 	return false
 }
@@ -3342,19 +3349,26 @@ func (cfg *Config) substWordFields(pe *syntax.ParamExp) ([][]fieldPart, bool, er
 			trigger = !allIndexedSet || !allIndexedNonNull
 		}
 	} else {
+		setNonColon := paramIsSetNonColon(cfg, vr, pe.Param.Value, pe.Index)
+		str := vr.String()
+		if pe.Index != nil {
+			if val, err := cfg.varInd(vr, pe.Index); err == nil {
+				str = val
+			}
+		}
 		switch op {
 		case syntax.DefaultUnset:
-			trigger = !vr.IsSet()
+			trigger = !setNonColon
 		case syntax.DefaultUnsetOrNull:
-			trigger = !vr.IsSet() || vr.String() == ""
+			trigger = !setNonColon || str == ""
 		case syntax.AlternateUnset:
-			trigger = vr.IsSet()
+			trigger = setNonColon
 		case syntax.AlternateUnsetOrNull:
-			trigger = vr.IsSet() && vr.String() != ""
+			trigger = setNonColon && str != ""
 		case syntax.AssignUnset:
-			trigger = !vr.IsSet()
+			trigger = !setNonColon
 		case syntax.AssignUnsetOrNull:
-			trigger = !vr.IsSet() || vr.String() == ""
+			trigger = !setNonColon || str == ""
 		}
 	}
 	if !trigger {

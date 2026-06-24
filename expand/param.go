@@ -255,10 +255,22 @@ func paramExpDefaultTriggers(op syntax.ParExpOperator, vr Variable, str string) 
 // associative array as UNSET here: with no element[0] there is no value to
 // address, so `a=(); ${a-w}` and `${a[@]+w}` behave as if `a` were never set.
 // (The colon forms `:-`/`:+` test the expanded string instead and are
-// unaffected.) Positional parameters ($@/$*) and specific subscripts keep
-// their existing semantics via vr.IsSet().
-func paramIsSetNonColon(vr Variable, name string, index syntax.ArithmExpr) bool {
+// unaffected.) Positional parameters ($@/$*) use the parameter's aggregate
+// set state; specific subscripts test the addressed element.
+func paramIsSetNonColon(cfg *Config, vr Variable, name string, index syntax.ArithmExpr) bool {
 	if name == "@" || name == "*" {
+		return vr.IsSet()
+	}
+	if index == nil {
+		// A scalar reference addresses element[0] (`${a}` == `${a[0]}`),
+		// so an array without that element is unset for this test.
+		switch vr.Kind {
+		case Indexed:
+			return vr.IndexedSet(0)
+		case Associative:
+			_, ok := vr.Map["0"]
+			return ok
+		}
 		return vr.IsSet()
 	}
 	switch nodeLit(index) {
@@ -270,16 +282,8 @@ func paramIsSetNonColon(vr Variable, name string, index syntax.ArithmExpr) bool 
 		case Associative:
 			return len(vr.Map) > 0
 		}
-	case "":
-		// A scalar reference addresses element[0] (`${a}` == `${a[0]}`),
-		// so an array without that element is unset for this test.
-		switch vr.Kind {
-		case Indexed:
-			return vr.IndexedSet(0)
-		case Associative:
-			_, ok := vr.Map["0"]
-			return ok
-		}
+	default:
+		return arrayElemSet(vr, index, cfg)
 	}
 	return vr.IsSet()
 }
@@ -327,14 +331,14 @@ func arrayElemSet(vr Variable, idx syntax.ArithmExpr, cfg *Config) bool {
 	}
 	switch vr.Kind {
 	case Associative:
-		key, err := Literal(cfg, idx.(*syntax.Word))
+		key, err := LiteralWithQuoteRemoval(cfg, idx.(*syntax.Word))
 		if err != nil {
 			return false
 		}
 		_, ok := vr.Map[key]
 		return ok
 	case Indexed:
-		i, err := Arithm(cfg, idx)
+		i, err := Arithm(cfg, indexedQuotedLiteralIndex(idx))
 		if err != nil {
 			return false
 		}
@@ -1480,7 +1484,7 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 		// run when x is set. These conditions mirror the `switch op` below.
 		// An empty indexed/associative array has no element[0], so the
 		// non-colon ${a-w}/${a+w} forms see it as unset (bash 5.3).
-		setNonColon := paramIsSetNonColon(vr, name, index)
+		setNonColon := paramIsSetNonColon(cfg, vr, name, index)
 		wordNeeded := true
 		switch op {
 		case syntax.AlternateUnsetOrNull:

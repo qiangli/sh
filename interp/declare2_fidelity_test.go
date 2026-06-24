@@ -69,6 +69,13 @@ func TestDeclare2Fidelity(t *testing.T) {
 			"0\n0\n",
 		},
 
+		// assign-extended: eval -- "$(declare -p arr)" must restore a
+		// sparse indexed array, including explicitly set empty elements.
+		{
+			`arr=(1 2 3); eval -- "$(arr=(); arr[3]=; arr[4]=foo; declare -p arr)"; for i in {0..4}; do echo "arr[$i]: ${arr[$i]+set ... [}${arr[$i]-unset}${arr[$i]+]}"; done`,
+			"arr[0]: unset\narr[1]: unset\narr[2]: unset\narr[3]: set ... []\narr[4]: set ... [foo]\n",
+		},
+
 		// builtin-vars__026: a name that cannot even begin a variable
 		// identifier (pure punctuation) is not a botched identifier; bare
 		// `unset` silently falls through to the function namespace and exits 0.
