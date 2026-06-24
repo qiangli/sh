@@ -14,7 +14,6 @@ func TestBraces3Fidelity(t *testing.T) {
 	t.Parallel()
 
 	t.Run("ParamElemWithSuffix", func(t *testing.T) {
-		t.Skip("requires field elision change outside expand/braces.go; see BRACES-BLOCKERS.md")
 		word := parseCallArg(t, "echo {$a,b}_{c,d}", 1)
 		got, err := Fields(&Config{Env: ListEnviron("a=A")}, word)
 		if err != nil {

@@ -960,7 +960,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				}
 				if !r.builtinAssignNameValid(assignTo, r.builtinTargetQuoted(pos, targetBase)) {
 					if r.bashCompatErrors {
-						return failf(1, "printf: `%s': not a valid identifier\n", assignTo)
+						return failf(2, "printf: `%s': not a valid identifier\n", assignTo)
 					}
 					return failf(1, "printf: %q: not a valid identifier\n", assignTo)
 				}
@@ -2446,6 +2446,12 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					r.testIntErr = ""
 					exit.code = 2
 				}
+				return exit
+			}
+			if r.bashCompatErrors && args[0] == "-n" {
+				r.errf("%s%s: %s: binary operator expected\n",
+					r.bashErrPrefix(pos), name, args[1])
+				exit.code = 2
 				return exit
 			}
 			if r.bashCompatErrors && args[0] == "-v" {

@@ -979,8 +979,13 @@ func ansiCEscape(s, ctypeLocale string) string {
 				if closer < len(s) && s[closer] == '}' {
 					i = closer
 				} else {
-					// Unclosed — stop on first non-hex char.
+					// Bash leaves unclosed brace-form escapes literal.
+					sb.WriteByte('\\')
+					sb.WriteByte(c)
+					sb.WriteByte('{')
+					sb.WriteString(digits)
 					i = end - 1
+					break
 				}
 				if digits == "" {
 					sb.WriteByte(0)
@@ -2053,11 +2058,11 @@ func FieldsSeq(cfg *Config, words ...*syntax.Word) iter.Seq2[string, error] {
 	cfg = prepareConfig(cfg)
 	dir := cfg.envGet("PWD")
 	return func(yield func(string, error) bool) {
-		expandWord := func(w *syntax.Word) (stop bool) {
+		expandWordFields := func(w *syntax.Word) ([]string, error) {
+			var fields []string
 			wfields, err := cfg.wordFields(w.Parts)
 			if err != nil {
-				yield("", err)
-				return true
+				return nil, err
 			}
 			for _, field := range wfields {
 				path, doGlob := cfg.escapedGlobField(field)
@@ -2069,37 +2074,44 @@ func FieldsSeq(cfg *Config, words ...*syntax.Word) iter.Seq2[string, error] {
 						// We avoid [errors.As] as it allocates,
 						// and we know that [Config.glob] returns [pattern.Regexp] errors without wrapping.
 						if _, ok := err.(*pattern.SyntaxError); !ok {
-							yield("", err)
-							return true
+							return nil, err
 						} else if cfg.NullGlob && hasBracketGlobWithEscapedSlash(path) {
 							continue
 						}
 					} else if len(matches) > 0 || cfg.NullGlob {
-						for _, m := range matches {
-							if !yield(m, nil) {
-								return true
-							}
-						}
+						fields = append(fields, matches...)
 						continue
 					} else if cfg.FailGlob {
-						yield("", fmt.Errorf("no match: %s", path))
-						return true
+						return nil, fmt.Errorf("no match: %s", path)
 					}
 				}
-				if !yield(cfg.fieldJoin(field), nil) {
-					return true
+				fields = append(fields, cfg.fieldJoin(field))
+			}
+			return fields, nil
+		}
+		yieldFields := func(fields []string) bool {
+			for _, field := range fields {
+				if !yield(field, nil) {
+					return false
 				}
 			}
-			return false
+			return true
 		}
 		for _, word := range words {
 			word := *word // make a copy, since SplitBraces replaces the Parts slice
 			if !syntax.SplitBraces(&word) {
-				if expandWord(&word) {
+				fields, err := expandWordFields(&word)
+				if err != nil {
+					yield("", err)
+					return
+				}
+				if !yieldFields(fields) {
 					return
 				}
 				continue
 			}
+			var fields []string
+			nonEmpty := false
 			for w, err := range BracesSeq(cfg, &word) {
 				if err != nil {
 					yield("", err)
@@ -2114,9 +2126,25 @@ func FieldsSeq(cfg *Config, words ...*syntax.Word) iter.Seq2[string, error] {
 				// that begins with identifier chars into a
 				// single `$varsuffix` ParamExp.
 				mergeIdentAfterParamExp(w)
-				if expandWord(w) {
+				wfields, err := expandWordFields(w)
+				if err != nil {
+					yield("", err)
 					return
 				}
+				for _, field := range wfields {
+					if field != "" {
+						nonEmpty = true
+					}
+					fields = append(fields, field)
+				}
+			}
+			if nonEmpty {
+				fields = slices.DeleteFunc(fields, func(field string) bool {
+					return field == ""
+				})
+			}
+			if !yieldFields(fields) {
+				return
 			}
 		}
 	}
