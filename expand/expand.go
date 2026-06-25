@@ -4356,6 +4356,9 @@ func (cfg *Config) quotedElemFields(pe *syntax.ParamExp) ([]string, error) {
 				trigger = vr.IsSet() && vr.String() != ""
 			}
 			if !trigger {
+				if op == syntax.AlternateUnset || op == syntax.AlternateUnsetOrNull {
+					return []string{}, nil
+				}
 				return cfg.quotedAllElemValues(pe)
 			}
 		}
@@ -4442,11 +4445,26 @@ func (cfg *Config) quotedElemFields(pe *syntax.ParamExp) ([]string, error) {
 			switch pe.Param.Value {
 			case "@":
 				vr := cfg.Env.Get("@")
+				if op == syntax.AlternateUnset || op == syntax.AlternateUnsetOrNull {
+					// Reached only when the alternate fires (the not-fired
+					// case already returned via quotedAllElemValues above),
+					// so the result is the substitute word, not the
+					// positional parameters. Without this, a single CTLNUL
+					// positional (`set -- $'\177'`) leaked the parameter's
+					// 0x7f byte instead of expanding the word.
+					return defaultElems()
+				}
 				if vr.IsSet() && len(vr.List) > 0 {
 					return cfg.sliceElems(pe, vr.List, true)
 				}
 				return defaultElems()
 			case "*":
+				if op == syntax.AlternateUnset || op == syntax.AlternateUnsetOrNull {
+					// As with "@": the alternate only reaches here when it
+					// fires, so expand the word rather than re-joining the
+					// positional parameters (which would leak a CTLNUL).
+					return defaultElems()
+				}
 				vr := cfg.Env.Get("*")
 				set := len(vr.List) > 0
 				nonNull := false
@@ -4493,6 +4511,14 @@ func (cfg *Config) quotedElemFields(pe *syntax.ParamExp) ([]string, error) {
 						if indexedDefaultOrNullHasValue(vr) {
 							return defaultElems()
 						}
+						// `:+` not fired (the joined value is null): bash
+						// expands to the same fields as the bare
+						// `"${arr[@]}"`: one empty field per null element,
+						// nothing for an empty array. Returning []string{}
+						// dropped the field entirely.
+						if vr.IndexedCount() > 0 {
+							return cfg.sliceIndexedElems(pe, vr, false)
+						}
 						return []string{}, nil
 					}
 				}
@@ -4526,6 +4552,16 @@ func (cfg *Config) quotedElemFields(pe *syntax.ParamExp) ([]string, error) {
 					case syntax.AlternateUnsetOrNull:
 						if indexedDefaultOrNullHasValue(vr) {
 							return defaultElems()
+						}
+						// `:+` not fired: mirror the bare `"${arr[*]}"`,
+						// which joins the (null) elements into a single
+						// field. An empty array yields nothing.
+						if vr.IndexedCount() > 0 {
+							elems, err := cfg.sliceIndexedElems(pe, vr, false)
+							if err != nil {
+								return nil, err
+							}
+							return []string{cfg.ifsJoin(elems)}, nil
 						}
 						return []string{}, nil
 					}

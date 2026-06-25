@@ -826,6 +826,73 @@ func TestFieldsParamExpAlternateQuotedEmptyAfterSplit(t *testing.T) {
 	}
 }
 
+func TestFieldsParamExpDollarAtStarAlternate(t *testing.T) {
+	tests := []struct {
+		name string
+		env  testEnv
+		src  string
+		want []string
+	}{
+		{
+			name: "ctlnul_at_alternate",
+			env:  testEnv{"@": {Set: true, Kind: Indexed, List: []string{"\x7f"}}},
+			src:  `recho "${@:+nonnull}"`,
+			want: []string{"nonnull"},
+		},
+		{
+			name: "ctlnul_star_alternate",
+			env:  testEnv{"*": {Set: true, Kind: Indexed, List: []string{"\x7f"}}},
+			src:  `recho "${*:+nonnull}"`,
+			want: []string{"nonnull"},
+		},
+		{
+			name: "null_array_star_alternate",
+			env: testEnv{
+				"myvar": {Set: true, Kind: Indexed, List: []string{""}, ListSet: map[int]bool{0: true}},
+			},
+			src:  `recho "${myvar[*]:+nonnull}"`,
+			want: []string{""},
+		},
+		{
+			name: "null_array_at_alternate",
+			env: testEnv{
+				"myvar": {Set: true, Kind: Indexed, List: []string{""}, ListSet: map[int]bool{0: true}},
+			},
+			src:  `recho "${myvar[@]:+nonnull}"`,
+			want: []string{""},
+		},
+		{
+			name: "nonnull_array_star_alternate",
+			env: testEnv{
+				"myvar": {Set: true, Kind: Indexed, List: []string{"x"}, ListSet: map[int]bool{0: true}},
+			},
+			src:  `recho "${myvar[*]:+nonnull}"`,
+			want: []string{"nonnull"},
+		},
+		{
+			name: "nonnull_array_at_alternate",
+			env: testEnv{
+				"myvar": {Set: true, Kind: Indexed, List: []string{"x"}, ListSet: map[int]bool{0: true}},
+			},
+			src:  `recho "${myvar[@]:+nonnull}"`,
+			want: []string{"nonnull"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &Config{Env: tc.env}
+			word := parseCallArg(t, tc.src, 1)
+			got, err := Fields(cfg, word)
+			if err != nil {
+				t.Fatalf("did not want error, got %v", err)
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("wanted %q, got %q", tc.want, got)
+			}
+		})
+	}
+}
+
 func TestParamSliceNegativeLength(t *testing.T) {
 	env := testEnv{
 		"#": {Set: true, Kind: String, Str: "1"},
