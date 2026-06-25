@@ -116,18 +116,20 @@ func TestBraces3Fidelity(t *testing.T) {
 		}
 	})
 
-	t.Run("BacktickCharRangeDocumentsParserGap", func(t *testing.T) {
+	t.Run("BacktickCharRangeReportsBashSubstitutionError", func(t *testing.T) {
 		word := &syntax.Word{Parts: []syntax.WordPart{lit("-{z..A}-")}}
 		syntax.SplitBraces(word)
-		var got []*syntax.Word
+		var gotErr error
 		for w, err := range BracesSeq(nil, word) {
 			if err != nil {
-				t.Fatal(err)
+				gotErr = err
+				break
 			}
-			got = append(got, w)
+			_ = w
 		}
-		if len(got) != int('z'-'A'+1) {
-			t.Fatalf("expected z..A engine expansion, got %d words", len(got))
+		want := "bad substitution: no closing \"`\" in `-"
+		if gotErr == nil || gotErr.Error() != want {
+			t.Fatalf("want error %q, got %v", want, gotErr)
 		}
 	})
 }

@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/go-quicktest/qt"
 	"mvdan.cc/sh/v3/interp"
+	"mvdan.cc/sh/v3/syntax"
 )
 
 // Each test has an even number of strings, which form input-output pairs for
@@ -247,6 +249,70 @@ func TestInteractive(t *testing.T) {
 				t.Fatalf("want error %q, got: %v", tc.wantErr, err)
 			}
 		})
+	}
+}
+
+func TestBashScriptParseError(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		src  string
+		want string
+	}{
+		{
+			src:  "case\nin esac\n",
+			want: "./s: line 1: syntax error near unexpected token `newline'\n./s: line 1: `case'",
+		},
+		{
+			src:  "$(echo f)$(echo or) i in a b c; do echo $i; done\n",
+			want: "./s: line 1: syntax error near unexpected token `do'\n./s: line 1: `$(echo f)$(echo or) i in a b c; do echo $i; done'",
+		},
+		{
+			src:  "echo -n $'\\c'' | show_bytes\n",
+			want: "./s: line 1: unexpected EOF while looking for matching `''",
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run("", func(t *testing.T) {
+			t.Parallel()
+			_, err := syntax.NewParser().Parse(strings.NewReader(tt.src), "./s")
+			if err == nil {
+				t.Fatal("expected parse error")
+			}
+			got, ok := bashScriptParseError(err, []byte(tt.src), "./s")
+			if !ok {
+				t.Fatalf("error was not reformatted: %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("want %q, got %q", tt.want, got)
+			}
+		})
+	}
+}
+
+func TestBashScriptParseErrorWithHeredocWarning(t *testing.T) {
+	t.Parallel()
+
+	src := "fun() {\n  cat << \"$@\"\nhi\n1\n}\nfun\n"
+	var warnings []string
+	parser := syntax.NewParser(syntax.HeredocEOFWarning(func(startLine, eofLine int, stop string) {
+		warnings = append(warnings, fmt.Sprintf(
+			"./s: line %d: warning: here-document at line %d delimited by end-of-file (wanted `%s')",
+			eofLine, startLine, stop))
+	}))
+	_, err := parser.Parse(strings.NewReader(src), "./s")
+	if err == nil {
+		t.Fatal("expected parse error")
+	}
+	got, ok := bashScriptParseError(err, []byte(src), "./s")
+	if !ok {
+		t.Fatalf("error was not reformatted: %v", err)
+	}
+	got = strings.Join(append(warnings, got), "\n")
+	want := "./s: line 6: warning: here-document at line 2 delimited by end-of-file (wanted `$@')\n" +
+		"./s: line 7: syntax error: unexpected end of file from `{' command on line 1"
+	if got != want {
+		t.Fatalf("want %q, got %q", want, got)
 	}
 }
 

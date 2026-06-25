@@ -83,12 +83,33 @@ func run(r *interp.Runner, reader io.Reader, name string) error {
 	if err != nil {
 		return err
 	}
-	prog, err := syntax.NewParser().Parse(strings.NewReader(string(src)), name)
+	var hdocWarnings []string
+	parser := syntax.NewParser(syntax.HeredocEOFWarning(func(startLine, eofLine int, stop string) {
+		hdocWarnings = append(hdocWarnings, fmt.Sprintf(
+			"%s: line %d: warning: here-document at line %d delimited by end-of-file (wanted `%s')",
+			name, eofLine, startLine, stop))
+	}))
+	prog, err := parser.Parse(strings.NewReader(string(src)), name)
 	if err != nil {
-		if msg, ok := bashDbracketParseError(err, src, name); ok {
+		if msg, ok := bashScriptParseError(err, src, name); ok {
+			if len(hdocWarnings) > 0 {
+				msg = strings.Join(append(hdocWarnings, msg), "\n")
+			}
 			return errors.New(msg)
 		}
+		if msg, ok := bashDbracketParseError(err, src, name); ok {
+			if len(hdocWarnings) > 0 {
+				msg = strings.Join(append(hdocWarnings, msg), "\n")
+			}
+			return errors.New(msg)
+		}
+		if len(hdocWarnings) > 0 {
+			return errors.New(strings.Join(append(hdocWarnings, err.Error()), "\n"))
+		}
 		return err
+	}
+	if len(hdocWarnings) > 0 {
+		fmt.Fprintln(os.Stderr, strings.Join(hdocWarnings, "\n"))
 	}
 	r.Reset()
 	if err := interp.WithBashSource(src)(r); err != nil {
@@ -96,6 +117,41 @@ func run(r *interp.Runner, reader io.Reader, name string) error {
 	}
 	ctx := context.Background()
 	return r.Run(ctx, prog)
+}
+
+func bashScriptParseError(err error, src []byte, name string) (string, bool) {
+	var pe syntax.ParseError
+	if !errors.As(err, &pe) {
+		return "", false
+	}
+	if name == "" {
+		name = "bash"
+	}
+	line := int(pe.Pos.Line())
+	srcLine := sourceLine(src, line)
+	switch {
+	case pe.Text == "`case` must be followed by a word":
+		return bashParseTwoLine(name, line, "syntax error near unexpected token `newline'", srcLine), true
+	case pe.Text == "`do` can only be used in a loop":
+		return bashParseTwoLine(name, line, "syntax error near unexpected token `do'", srcLine), true
+	case pe.Text == "unexpected EOF while looking for matching `}'":
+		eofLine := strings.Count(string(src), "\n") + 1
+		return fmt.Sprintf("%s: line %d: syntax error: unexpected end of file from `{' command on line %d",
+			name, eofLine, line), true
+	case strings.HasPrefix(pe.Text, "reached EOF without closing quote `"):
+		quote := "'"
+		if strings.Contains(pe.Text, "`\"`") {
+			quote = "\""
+		} else if strings.Contains(pe.Text, "\"`\"") {
+			quote = "`"
+		}
+		return fmt.Sprintf("%s: line %d: unexpected EOF while looking for matching `%s'", name, line, quote), true
+	}
+	return "", false
+}
+
+func bashParseTwoLine(name string, line int, msg, srcLine string) string {
+	return fmt.Sprintf("%s: line %d: %s\n%s: line %d: `%s'", name, line, msg, name, line, srcLine)
 }
 
 func bashDbracketParseError(err error, src []byte, name string) (string, bool) {

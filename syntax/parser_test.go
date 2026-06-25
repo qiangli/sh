@@ -237,6 +237,22 @@ func TestParseHeredocBackquoteDelim(t *testing.T) {
 	qt.Assert(t, qt.IsTrue(hasComsub), qt.Commentf("hdoc parts: %#v", hdoc.Parts))
 }
 
+func TestParseHeredocQuotedDollarAtDelimiter(t *testing.T) {
+	t.Parallel()
+
+	var gotStart, gotEOF int
+	var gotStop string
+	p := NewParser(HeredocEOFWarning(func(startLine, eofLine int, stop string) {
+		gotStart, gotEOF, gotStop = startLine, eofLine, stop
+	}))
+	src := "fun() {\n  cat << \"$@\"\nhi\n1\n}\nfun\n"
+	_, err := p.Parse(strings.NewReader(src), "./s")
+	qt.Assert(t, qt.IsNotNil(err))
+	qt.Assert(t, qt.Equals(gotStart, 2))
+	qt.Assert(t, qt.Equals(gotEOF, 6))
+	qt.Assert(t, qt.Equals(gotStop, "$@"))
+}
+
 // Closing a `$(...)` while here-documents opened inside it are still
 // pending triggers bash 5.3's "command substitution: N unterminated
 // here-document" warning; their bodies are then read from the lines

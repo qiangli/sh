@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"iter"
 	"strconv"
+	"strings"
 
 	"mvdan.cc/sh/v3/syntax"
 )
@@ -50,9 +51,28 @@ func BracesSeq(cfg *Config, word *syntax.Word) iter.Seq2[*syntax.Word, error] {
 				yield(nil, fmt.Errorf("brace expansion would exceed %d elements", limit))
 				return false
 			}
+			if text, ok := generatedBackquoteWord(w); ok {
+				yield(nil, fmt.Errorf("bad substitution: no closing \"`\" in %s", text))
+				return false
+			}
 			return yield(w, nil)
 		})
 	}
+}
+
+func generatedBackquoteWord(word *syntax.Word) (string, bool) {
+	var text string
+	for _, part := range word.Parts {
+		lit, ok := part.(*syntax.Lit)
+		if !ok {
+			return "", false
+		}
+		text += lit.Value
+	}
+	if i := strings.IndexByte(text, '`'); i >= 0 && i+1 < len(text) {
+		return text[i:], true
+	}
+	return "", false
 }
 
 // bracesSeqRec yields each fully-expanded word descended from word.

@@ -1434,6 +1434,21 @@ func (p *Parser) ensureNoNested(pos Pos) {
 	}
 }
 
+func (p *Parser) hdocLiteralParam() WordPart {
+	if !p.forbidNested || p.quote != dblQuotes || p.tok != dollar {
+		return nil
+	}
+	pos := p.pos
+	switch p.r {
+	case '@', '*', '#', '?', '$', '!', '-', '0':
+		val := "$" + string(p.r)
+		p.rune()
+		p.next()
+		return p.lit(pos, val)
+	}
+	return nil
+}
+
 func (p *Parser) wordPart() WordPart {
 	switch p.tok {
 	case _Lit, _LitWord, _LitRedir:
@@ -1493,6 +1508,9 @@ func (p *Parser) wordPart() WordPart {
 		p.ensureNoNested(p.pos)
 		return p.cmdSubst()
 	case dollar:
+		if lit := p.hdocLiteralParam(); lit != nil {
+			return lit
+		}
 		pe := p.paramExp()
 		if pe == nil { // was not actually a parameter expansion, like: "foo$"
 			l := p.lit(p.pos, "$")
