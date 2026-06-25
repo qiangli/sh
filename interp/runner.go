@@ -1294,15 +1294,21 @@ func (r *Runner) literal(word *syntax.Word) string {
 }
 
 // unsetQuotedSubscriptSource recovers the raw source of an `unset` operand
-// that is an array reference `name[subscript]` whose subscript carries a
-// quote (`a['$key']`, `a["$key"]`, `a["foo"]`). Such a quote makes bash
-// treat the whole token as a valid array reference: it suppresses word
-// splitting and pins the key to a single expansion (a single-quoted
-// subscript stays literal). Expanding the word as a field instead would
-// strip the quotes and leave a bare `$key` that the subscript handler then
-// re-expands, so the raw source must reach unset intact. Operands with an
-// unquoted subscript still go through field expansion (word splitting), and
-// a whole-token quote (`'a[$key]'`) is left to the quoted-operand path.
+// that is an *associative* array reference `name[subscript]` whose subscript
+// carries a quote (`a['$key']`, `a["$key"]`, `a["foo"]`). Such a quote makes
+// bash treat the whole token as a valid array reference: it suppresses word
+// splitting and pins the key to a single expansion (a single-quoted subscript
+// stays literal). Expanding the word as a field instead would strip the quotes
+// and leave a bare `$key` that the subscript handler then re-expands, so the
+// raw source must reach unset intact.
+//
+// This applies only to associative arrays: an *indexed* array subscript is
+// arithmetic, so `unset a["$subscript"]` must feed the (single) expansion of
+// the subscript to the arithmetic evaluator — which reports "operand expected"
+// without re-running an embedded `$(…)` — rather than be recovered as a literal
+// key. Operands with an unquoted subscript still go through field expansion
+// (word splitting), and a whole-token quote (`'a[$key]'`) is left to the
+// quoted-operand path.
 func (r *Runner) unsetQuotedSubscriptSource(word *syntax.Word) (string, bool) {
 	src := r.sourceTextRange(word.Pos(), word.End(), false)
 	if src == "" {
@@ -1313,6 +1319,9 @@ func (r *Runner) unsetQuotedSubscriptSource(word *syntax.Word) (string, bool) {
 		return "", false
 	}
 	if !strings.ContainsAny(idx, `'"`) {
+		return "", false
+	}
+	if r.lookupVar(name).Kind != expand.Associative {
 		return "", false
 	}
 	return src, true
