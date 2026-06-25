@@ -1284,6 +1284,7 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 
 		indexAllElements bool // true if var has been accessed with * or @ index
 		callVarInd       = true
+		assocElemSet     bool
 	)
 
 	switch nodeLit(index) {
@@ -1342,10 +1343,21 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 		}
 	}
 	if callVarInd {
-		var err error
-		str, err = cfg.varInd(vr, index)
-		if err != nil {
-			return "", err
+		if vr.Kind == Associative && index != nil {
+			key, err := assocSubscriptKey(cfg, index)
+			if err != nil {
+				return "", err
+			}
+			if key == "" {
+				return "", fmt.Errorf("[%s]: bad array subscript", subscriptText(index))
+			}
+			str, assocElemSet = vr.Map[key]
+		} else {
+			var err error
+			str, err = cfg.varInd(vr, index)
+			if err != nil {
+				return "", err
+			}
 		}
 	}
 	if !indexAllElements {
@@ -1768,7 +1780,15 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 		// run when x is set. These conditions mirror the `switch op` below.
 		// An empty indexed/associative array has no element[0], so the
 		// non-colon ${a-w}/${a+w} forms see it as unset (bash 5.3).
-		setNonColon := paramIsSetNonColon(cfg, vr, name, index)
+		setNonColon := false
+		if op != syntax.OtherParamOps {
+			if vr.Kind == Associative && index != nil &&
+				nodeLit(index) != "@" && nodeLit(index) != "*" {
+				setNonColon = assocElemSet
+			} else {
+				setNonColon = paramIsSetNonColon(cfg, vr, name, index)
+			}
+		}
 		wordNeeded := true
 		switch op {
 		case syntax.AlternateUnsetOrNull:
@@ -1978,10 +1998,6 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			}
 			switch arg {
 			case "Q":
-				if vr.Kind == Associative && !indexAllElements {
-					str = ""
-					break
-				}
 				// Bash 5.3's @Q on an unset variable (or unset array
 				// element) expands to nothing, rather than quoting an
 				// empty value to `''`. `@`/`*` and `[@]`/`[*]` forms are
@@ -1990,11 +2006,16 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 				qSet := vr.IsSet()
 				if name != "@" && name != "*" {
 					if il := nodeLit(index); il != "@" && il != "*" {
-						// A non-empty value already proves the element is
-						// set; only fall back to arrayElemSet (which
-						// re-evaluates the subscript, re-running any command
-						// substitution in it) when the value is empty.
-						if str != "" {
+						if vr.Kind == Associative {
+							qSet = str != ""
+							if !qSet {
+								qSet = assocElemSet
+							}
+						} else if str != "" {
+							// A non-empty value already proves the element is
+							// set; only fall back to arrayElemSet (which
+							// re-evaluates the subscript, re-running any command
+							// substitution in it) when the value is empty.
 							qSet = true
 						} else {
 							qSet = arrayElemSet(vr, index, cfg)
@@ -2710,7 +2731,7 @@ func (cfg *Config) varInd(vr Variable, idx syntax.ArithmExpr) (string, error) {
 
 func assocSubscriptKey(cfg *Config, idx syntax.ArithmExpr) (string, error) {
 	if word, ok := idx.(*syntax.Word); ok {
-		return Literal(cfg, word)
+		return LiteralWithQuoteRemoval(cfg, word)
 	}
 	return compactArithmText(idx), nil
 }

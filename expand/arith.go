@@ -1381,6 +1381,11 @@ func atoiCheck(s string) (int64, error) {
 		if err != nil && numericLiteralLike(orig) {
 			return 0, fmt.Errorf("value too great for base (error token is %q)", orig)
 		}
+		if err != nil {
+			if u, uerr := strconv.ParseUint(s, int(base), 64); uerr == nil {
+				return int64(u), nil
+			}
+		}
 		return n, nil
 	}
 	n, ok := bashBaseAtoi(s, base)
