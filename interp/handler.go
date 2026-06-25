@@ -93,14 +93,6 @@ type HandlerContext struct {
 	ExecClearEnv bool
 }
 
-// DryRun reports whether the runner's non-POSIX `dryrun` option is currently on
-// (see [EnableDryRunOption]). Exec and open handlers read it to report-and-skip
-// instead of executing/mutating. It is always false unless a host enabled the
-// option, and tracks `set -o dryrun` / `set +o dryrun` at runtime.
-func (hc HandlerContext) DryRun() bool {
-	return hc.runner != nil && hc.runner.dryRun
-}
-
 // CallHandlerFunc is a handler which runs on every [syntax.CallExpr].
 // It is called once variable assignments and field expansion have occurred.
 // The context includes a [HandlerContext] value.
