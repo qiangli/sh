@@ -7691,6 +7691,12 @@ func (r *Runner) dupFd(targetFd, sourceFd int, rd *syntax.Redirect) error {
 		return nil
 	}
 	read, write, ok := r.fdCaps(sourceFd)
+	// `>&N` requires the source fd be open for output; a closed/never-opened
+	// fd, or one open only for input (e.g. an inherited read-only fd dup'd via
+	// `>&N`), is EBADF — exactly as bash.
+	if rd.Op == syntax.DplOut {
+		ok = ok && write != nil
+	}
 	if !ok {
 		r.errf("%s%s: Bad file descriptor\n", r.bashErrPrefix(rd.Word.Pos()), redirWordText(rd))
 		return fmt.Errorf("%s: Bad file descriptor", redirWordText(rd))
