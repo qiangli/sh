@@ -2722,6 +2722,10 @@ func (r *Runner) setFunc(name string, body *syntax.Stmt) {
 		r.Funcs = make(map[string]*syntax.Stmt, 4)
 	}
 	r.Funcs[name] = body
+	if r.funcSources == nil {
+		r.funcSources = make(map[string]string, 4)
+	}
+	r.funcSources[name] = r.filename
 }
 
 // wordLooksLikeAssign mirrors bash's W_ASSIGNMENT check for the first

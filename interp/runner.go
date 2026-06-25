@@ -8727,11 +8727,15 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 		// line offset does not leak into the function body.
 		oldEvalLineOffset := r.evalLineOffset
 		r.evalLineOffset = 0
+		oldFilename := r.filename
+		if source := r.funcSources[name]; source != "" {
+			r.filename = source
+		}
 
 		// Push call stack frame.
 		r.callStack = append(r.callStack, callFrame{
 			line:       pos.Line(),
-			source:     r.filename,
+			source:     oldFilename,
 			funcName:   name,
 			args:       slices.Clone(args[1:]),
 			bodyLine:   body.Pos().Line(),
@@ -8781,6 +8785,7 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 		r.optState = oldOptState
 		r.ecfg.OverrideLineno = oldOverrideLineno
 		r.evalLineOffset = oldEvalLineOffset
+		r.filename = oldFilename
 		r.exit.returning = false
 		return
 	}
