@@ -2494,7 +2494,7 @@ var fileTests = []fileTestCase{
 				lit(" baz"),
 			)),
 		), LangPOSIX),
-		langErr2("1:17: reached EOF without closing quote `'`", LangBash),
+		langErr2("1:17: unexpected EOF while looking for matching `''", LangBash),
 	),
 	fileTest(
 		[]string{`${foo:=<"bar"}`},

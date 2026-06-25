@@ -290,6 +290,23 @@ func TestBashScriptParseError(t *testing.T) {
 	}
 }
 
+func TestRunQuoteEOFAbortsWithoutSourceLine(t *testing.T) {
+	t.Parallel()
+
+	var out strings.Builder
+	runner, err := interp.New(interp.StdIO(nil, &out, &out))
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = run(runner, strings.NewReader("echo -n $'\\c'' | show_bytes\n"), "./s")
+	if got, want := fmt.Sprint(err), "./s: line 1: unexpected EOF while looking for matching `''"; got != want {
+		t.Fatalf("want error %q, got %q", want, got)
+	}
+	if got := out.String(); got != "" {
+		t.Fatalf("unexpected output: %q", got)
+	}
+}
+
 func TestBashScriptParseErrorWithHeredocWarning(t *testing.T) {
 	t.Parallel()
 
