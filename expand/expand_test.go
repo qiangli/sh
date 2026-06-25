@@ -189,6 +189,33 @@ func TestFieldsIdempotency(t *testing.T) {
 	}
 }
 
+func TestFieldsMultibyteIFS(t *testing.T) {
+	cfg := &Config{Env: ListEnviron("a=AéB", "IFS=é")}
+	word := parseWord(t, `$a`)
+
+	type result struct {
+		fields []string
+		err    error
+	}
+	done := make(chan result, 1)
+	go func() {
+		got, err := Fields(cfg, word)
+		done <- result{got, err}
+	}()
+
+	select {
+	case got := <-done:
+		if got.err != nil {
+			t.Fatalf("did not want error, got %v", got.err)
+		}
+		if want := []string{"A", "B"}; !reflect.DeepEqual(got.fields, want) {
+			t.Fatalf("wanted %q, got %q", want, got.fields)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("field splitting with multibyte IFS did not terminate")
+	}
+}
+
 func TestFieldsParamExpSubstWordQuotes(t *testing.T) {
 	cfg := &Config{Env: ListEnviron("A=aaa bbb ccc")}
 	tests := []struct {
