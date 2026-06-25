@@ -434,6 +434,19 @@ func (o *overlayEnviron) setNearestLocal(name string, vr expand.Variable) (bool,
 	return p.setNearestLocal(name, vr)
 }
 
+func (o *overlayEnviron) setAttrsBypassReadonly(name string, update func(*expand.Variable)) bool {
+	normalized := o.normalize(name)
+	if cur, ok := o.values[normalized]; ok {
+		update(&cur.Variable)
+		o.values[normalized] = cur
+		return true
+	}
+	if p, ok := o.parent.(*overlayEnviron); ok {
+		return p.setAttrsBypassReadonly(name, update)
+	}
+	return false
+}
+
 // unsetLocalFromChild implements bash's default `unset` semantics for
 // a variable that is local to a *previous* function scope: the local
 // is removed entirely, uncovering the variable beneath (an outer local

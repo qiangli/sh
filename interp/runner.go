@@ -4787,18 +4787,36 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			if als.raw != "" {
 				break
 			}
-			// Multi-stmt alias (`alias foo=$'echo a\necho b'`):
-			// execute the parsed file in place of the surrounding
-			// call. Only kicks in when the alias word is at i==0
-			// (alias position); otherwise treat it as plain text.
-			// Override the runtime line so diagnostics
-			// (`command not found`, etc.) report bash's invocation
-			// line rather than the line within the alias body.
+			// Keyword or multi-stmt alias (`alias e=export`,
+			// `alias foo=$'echo a\necho b'`): execute the parsed file
+			// in place of the surrounding call. Only kicks in when the
+			// alias word is at i==0 (alias position); otherwise treat it
+			// as plain text. If the alias has a suffix, reparse the alias
+			// text plus that suffix so keyword aliases like
+			// `alias e=export; e x=$y` keep their declaration operands.
 			if als.file != nil && i == 0 {
+				file := als.file
+				if i+1 < len(args) {
+					var src strings.Builder
+					src.WriteString(aliasValue(als))
+					if src.Len() > 0 && !strings.HasSuffix(src.String(), " ") && !strings.HasSuffix(src.String(), "\t") {
+						src.WriteByte(' ')
+					}
+					syntax.NewPrinter().Print(&src, &syntax.CallExpr{Args: args[i+1:]})
+					p := syntax.NewParser()
+					var err error
+					file, err = p.Parse(strings.NewReader(src.String()), "")
+					if err != nil {
+						break
+					}
+				}
+				// Override the runtime line so diagnostics
+				// (`command not found`, etc.) report bash's invocation
+				// line rather than the line within the alias body.
 				prevOverride := r.aliasLineOverride
 				r.aliasLineOverride = int(cm.Pos().Line())
 				r.withAliasReparse(aliasUseLine, func() {
-					r.stmts(ctx, als.file.Stmts)
+					r.stmts(ctx, file.Stmts)
 				})
 				r.aliasLineOverride = prevOverride
 				return
@@ -6117,7 +6135,15 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 					if jsonMode {
 						r.exit = r.jsonOut(r.functionJSON(name))
 					} else {
-						r.outf("%s\n", name)
+						if opt, _ := r.bashOptByName("extdebug"); opt != nil && *opt {
+							filename := r.filename
+							if filename == "" {
+								filename = "bash"
+							}
+							r.outf("%s %d %s\n", name, body.Pos().Line(), filename)
+						} else {
+							r.outf("%s\n", name)
+						}
 					}
 				} else {
 					r.exit.code = 1
@@ -6269,9 +6295,27 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 					continue
 				}
 				// `readonly -p NAME` / `export -p NAME` print nothing when
-				// explicit names are supplied; only their no-name form
-				// lists matching variables.
+				// explicit names are supplied; only their no-name form lists
+				// matching variables. They still apply their attribute to
+				// existing operands, so `readonly -p local; export -p local;
+				// local -p local` shows the local as `declare -rx`.
 				if cm.Variant.Value == "readonly" || cm.Variant.Value == "export" {
+					if o, ok := r.writeEnv.(*overlayEnviron); ok {
+						o.setAttrsBypassReadonly(name, func(vr *expand.Variable) {
+							if cm.Variant.Value == "readonly" {
+								vr.ReadOnly = true
+							} else {
+								vr.Exported = true
+							}
+						})
+					} else {
+						if cm.Variant.Value == "readonly" {
+							vr.ReadOnly = true
+						} else {
+							vr.Exported = true
+						}
+						r.setVar(name, vr)
+					}
 					continue
 				}
 				// An integer nameref whose value assignment was rejected

@@ -143,6 +143,19 @@ func TestDeclare2Fidelity(t *testing.T) {
 			"test_var1=111; readonly test_var2=222; export test_var3=333; declare -n test_var4=test_var1; echo '[declare -pn]'; declare -pn | grep -E '^declare -. test_var'; echo '[declare -pr]'; declare -pr | grep -E '^declare -. test_var'; echo '[declare -px]'; declare -px | grep -E '^declare -. test_var'",
 			"[declare -pn]\ndeclare -n test_var4=\"test_var1\"\n[declare -pr]\ndeclare -r test_var2=\"222\"\n[declare -px]\ndeclare -x test_var3=\"333\"\n",
 		},
+		// assign-extended__004: with extdebug enabled, per-name
+		// declare -F includes the function definition line and source.
+		{
+			"shopt -s extdebug\nadd() { :; }\ndeclare -F\necho\ndeclare -F add",
+			"declare -f add\n\nadd 2 bash\n",
+		},
+		// assign-extended__010: explicit readonly/export -p operands print
+		// nothing, but still mark existing local operands; local -p then
+		// shows the merged -rx flags.
+		{
+			"f(){ local test_var5=555; readonly -p test_var5; export -p test_var5; local -p test_var5; }; f",
+			"declare -rx test_var5=\"555\"\n",
+		},
 		// assign-extended__015: once explicit names are supplied, bash 5.3
 		// ignores the -n/-r/-x attribute flags for selection and prints
 		// every named variable that exists, with a "not found" diagnostic
@@ -181,6 +194,13 @@ func TestDeclare2Fidelity(t *testing.T) {
 		{
 			"f(){ echo z=$z; z=mutated-temp; echo z=$z; unset z; echo z=$z; }; z=global; z=temp-binding f; echo z=$z",
 			"z=temp-binding\nz=mutated-temp\nz=global\nz=global\n",
+		},
+		// assign__029: alias-expanded declaration builtins must keep
+		// following name=value words as declaration operands, not execute
+		// bare `export`/`readonly` and treat the words as lost suffixes.
+		{
+			"shopt -s expand_aliases\nwords='a b c'\nalias e=export\nalias r=readonly\ne ex=$words\nr ro=$words\nprintf '[%q, %q]\\n' \"$ex\" \"$ro\"",
+			"[a\\ b\\ c, a\\ b\\ c]\n",
 		},
 		// assign__038/__040: command substitutions in declaration and
 		// bare-assignment RHS words run before a trailing stderr
