@@ -132,7 +132,7 @@ func environArrayElemAsScalar(idx string, vr expand.Variable, env expand.Environ
 		}
 		if vr.IndexedSet(n) {
 			elem.Set = true
-			elem.Str = vr.List[n]
+			elem.Str = vr.IndexedElem(n)
 		}
 	case expand.Associative:
 		if vr.Map != nil {
@@ -1089,7 +1089,7 @@ func (r *Runner) printSetVars() {
 					r.out(" ")
 				}
 				first = false
-				r.outf("[%d]=%s", i, bashSetQuote(vr.List[i]))
+				r.outf("[%d]=%s", i, bashSetQuote(vr.IndexedElem(i)))
 			}
 			if !first {
 				r.out(" ")
@@ -1397,7 +1397,7 @@ func formatDeclareVar(name string, vr expand.Variable, forceEmptyArrayValue bool
 				b.WriteByte(' ')
 			}
 			first = false
-			fmt.Fprintf(&b, "[%d]=%s", i, bashDeclareQuote(vr.List[i]))
+			fmt.Fprintf(&b, "[%d]=%s", i, bashDeclareQuote(vr.IndexedElem(i)))
 		}
 		b.WriteByte(')')
 	case expand.Associative:
@@ -1472,7 +1472,7 @@ func variableJSON(name string, vr expand.Variable) map[string]any {
 		obj["kind"] = "indexed"
 		values := make(map[string]string, vr.IndexedCount())
 		for _, i := range vr.IndexedIndexes() {
-			values[strconv.Itoa(i)] = vr.List[i]
+			values[strconv.Itoa(i)] = vr.IndexedElem(i)
 		}
 		obj["value"] = values
 	case expand.Associative:
@@ -1743,17 +1743,22 @@ func (r *Runner) unsetArrayElem(name, idx string) bool {
 				return false
 			}
 		}
-		if n >= len(vr.List) {
+		if !vr.IndexedSet(n) {
 			return true
 		}
 		set := vr.DenseListSet()
 		delete(set, n)
-		vr.List[n] = ""
-		for len(vr.List) > 0 && !set[len(vr.List)-1] {
-			vr.List = vr.List[:len(vr.List)-1]
+		if n < len(vr.List) {
+			vr.List[n] = ""
+			for len(vr.List) > 0 && !set[len(vr.List)-1] {
+				vr.List = vr.List[:len(vr.List)-1]
+			}
+		} else if vr.ListMap != nil {
+			vr.ListMap = vr.CloneListMap()
+			delete(vr.ListMap, n)
 		}
 		vr.ListSet = set
-		if len(vr.List) == 0 {
+		if len(vr.List) == 0 && len(vr.ListMap) == 0 {
 			vr.ListSet = nil
 		}
 	case expand.Associative:
@@ -2541,23 +2546,30 @@ func (r *Runner) setVarWithIndex(prev expand.Variable, name string, index syntax
 	// so the final element write merges with those side effects instead
 	// of replacing them with the pre-evaluation snapshot.
 	prev = r.lookupVar(name)
-	var list []string
-	var listSet map[int]bool
+	// Build a working indexed copy of the variable; SetIndexed below chooses
+	// dense or sparse storage so a huge subscript does not balloon the slice.
+	work := prev
+	work.Kind = expand.Indexed
+	work.Str = ""
 	switch prev.Kind {
 	case expand.String:
-		list = append(list, prev.Str)
+		work.List = []string{prev.Str}
+		work.ListSet = nil
+		work.ListMap = nil
 	case expand.Indexed:
 		// TODO: only clone when inside a subshell and getting a var from outside for the first time
-		list = slices.Clone(prev.List)
-		listSet = prev.CloneListSet()
+		work.List = slices.Clone(prev.List)
+		work.ListSet = prev.CloneListSet()
+		work.ListMap = prev.CloneListMap()
+	default:
+		work.List = nil
+		work.ListSet = nil
+		work.ListMap = nil
 	}
 	if k < 0 {
 		// Bash 5.3 accepts negative indices as offsets from the
 		// end of the array: `a[-1]` targets the last element.
-		prevForOffset := prev
-		prevForOffset.List = list
-		prevForOffset.ListSet = listSet
-		k = indexedNegativeOffset(prevForOffset, k)
+		k = indexedNegativeOffset(work, k)
 		if k < 0 {
 			idxText := r.arithmSourceText(index, false)
 			if idxText == "" {
@@ -2575,34 +2587,18 @@ func (r *Runner) setVarWithIndex(prev expand.Variable, name string, index syntax
 		r.dirStack[len(r.dirStack)-1-k] = valStr
 		return
 	}
-	for len(list) < k+1 {
-		list = append(list, "")
-	}
 	if appendValue {
+		cur := work.IndexedElem(k)
 		if prev.Integer {
-			cur, _ := strconv.Atoi(r.integerArrayValue(list[k]))
+			c, _ := strconv.Atoi(r.integerArrayValue(cur))
 			rhs, _ := strconv.Atoi(r.integerArrayValue(valStr))
-			valStr = strconv.Itoa(cur + rhs)
+			valStr = strconv.Itoa(c + rhs)
 		} else {
-			valStr = list[k] + valStr
+			valStr = cur + valStr
 		}
 	}
-	list[k] = valStr
-	if listSet != nil {
-		listSet[k] = true
-	} else if k >= len(prev.List) {
-		listSet = prev.DenseListSet()
-		if listSet == nil {
-			listSet = make(map[int]bool)
-			if prev.Kind == expand.String {
-				listSet[0] = true
-			}
-		}
-		listSet[k] = true
-	}
-	prev.Kind = expand.Indexed
-	prev.List = list
-	prev.ListSet = listSet
+	work.SetIndexed(k, valStr)
+	prev = work
 	// Assigning element 0 makes the array variable "set": `declare -a B` leaves
 	// B declared-but-unset, and `B[0]=v` must flip it so a later `${B[0]}` (or
 	// bare `${B}`/`${B-default}`, which read element 0) under `set -u` reads it
@@ -2636,7 +2632,7 @@ func (r *Runner) arrayElemAsScalar(idx string, vr expand.Variable) expand.Variab
 		}
 		if vr.IndexedSet(n) {
 			elem.Set = true
-			elem.Str = vr.List[n]
+			elem.Str = vr.IndexedElem(n)
 		}
 	case expand.Associative:
 		if vr.Map != nil {
@@ -2971,13 +2967,13 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 						k = indexedNegativeOffset(prev, k)
 					}
 					if prev.IndexedSet(k) {
-						curStr = prev.List[k]
+						curStr = prev.IndexedElem(k)
 					} else {
 						curStr = ""
 					}
 				case prev.Kind == expand.Indexed:
 					if len(prev.List) > 0 {
-						curStr = prev.List[0]
+						curStr = prev.IndexedElem(0)
 					} else {
 						curStr = ""
 					}
@@ -3373,20 +3369,23 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 		}
 	}
 
+	// `work` accumulates the elements via SetIndexed, which picks dense or
+	// sparse (overlay) storage so a huge subscript does not balloon the slice.
 	var index int
-	strs := []string{}
-	nextSet := make(map[int]bool)
-	if as.Append && prev.Kind == expand.Indexed {
-		index = len(prev.List)
-		strs = make([]string, len(prev.List))
-		copy(strs, prev.List)
-		nextSet = prev.DenseListSet()
-	}
 	work := prev
 	work.Kind = expand.Indexed
 	work.Str = ""
-	work.List = strs
-	work.ListSet = nextSet
+	work.List = nil
+	work.ListSet = nil
+	work.ListMap = nil
+	if as.Append && prev.Kind == expand.Indexed {
+		work.List = slices.Clone(prev.List)
+		work.ListSet = prev.CloneListSet()
+		work.ListMap = prev.CloneListMap()
+		if idxs := prev.IndexedIndexes(); len(idxs) > 0 {
+			index = idxs[len(idxs)-1] + 1
+		}
+	}
 	// Only an append (`a+=(…)`) mutates in place and makes earlier
 	// elements visible to later subscript arithmetic; a plain assignment
 	// keeps the old value live (and publishing it would leak the name into
@@ -3405,6 +3404,7 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 				prev.Kind = expand.Indexed
 				prev.List = []string{}
 				prev.ListSet = nil
+				prev.ListMap = nil
 				prev.Str = ""
 				return name, prev
 			}
@@ -3420,61 +3420,54 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 		}
 		for i, str := range ev.values {
 			elemIndex := index + i
-			for len(strs) <= elemIndex {
-				strs = append(strs, "")
-			}
 			if ev.append && i == 0 {
+				cur := work.IndexedElem(elemIndex)
 				if prev.Integer {
 					// Integer-attribute arrays: `[k]+=N` adds
 					// arithmetically rather than concatenating.
-					cur, _ := strconv.Atoi(strs[elemIndex])
+					c, _ := strconv.Atoi(cur)
 					rhs, _ := strconv.Atoi(str)
-					str = strconv.Itoa(cur + rhs)
+					str = strconv.Itoa(c + rhs)
 				} else {
-					str = strs[elemIndex] + str
+					str = cur + str
 				}
 			}
-			strs[elemIndex] = str
-			nextSet[elemIndex] = true
+			work.SetIndexed(elemIndex, str)
 		}
 		index += len(ev.values)
-		work.List = strs
-		work.ListSet = nextSet
 	}
 	if !as.Append {
-		prev.Kind = expand.Indexed
-		prev.List = strs
-		prev.ListSet = nextSet
-		return name, prev
+		return name, work
 	}
 	switch prev.Kind {
-	case expand.Unknown:
-		prev.Kind = expand.Indexed
-		prev.List = strs
-		prev.ListSet = nextSet
+	case expand.Unknown, expand.Indexed:
+		// For Indexed, work was seeded with the prior elements above, so it
+		// already replaces the previous array rather than concatenating.
+		return name, work
 	case expand.String:
-		prev.Kind = expand.Indexed
 		// String → Indexed: keep a set prior scalar at index 0 and
 		// shift the new elements above it. A declared-but-unset
 		// scalar (`declare a`) has no element to preserve.
+		origScalar := prev.Str
+		prev.Kind = expand.Indexed
+		prev.Str = ""
 		if prevWasSet {
-			prev.List = append([]string{prev.Str}, strs...)
-			shifted := make(map[int]bool, len(nextSet)+1)
-			shifted[0] = true
-			for i := range nextSet {
-				shifted[i+1] = true
+			shifted := prev
+			shifted.List = nil
+			shifted.ListSet = nil
+			shifted.ListMap = nil
+			shifted.SetIndexed(0, origScalar)
+			for _, i := range work.IndexedIndexes() {
+				shifted.SetIndexed(i+1, work.IndexedElem(i))
 			}
-			prev.ListSet = shifted
+			prev.List = shifted.List
+			prev.ListSet = shifted.ListSet
+			prev.ListMap = shifted.ListMap
 		} else {
-			prev.List = strs
-			prev.ListSet = nextSet
+			prev.List = work.List
+			prev.ListSet = work.ListSet
+			prev.ListMap = work.ListMap
 		}
-	case expand.Indexed:
-		// strs was sized to include prev.List (needPrev=true) and
-		// already contains its values via the initial copy, so we
-		// replace prev.List with strs rather than concatenating.
-		prev.List = strs
-		prev.ListSet = nextSet
 	case expand.Associative:
 		// TODO
 	default:
