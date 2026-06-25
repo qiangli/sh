@@ -97,6 +97,17 @@ func TestDbracketFidelity(t *testing.T) {
 				"[[ '3' -eq '3' ]] && echo true\n",
 			want: "true\ntrue\n",
 		},
+		// dbracket__048.sh — regex compile error inside `||` does
+		// not leak exit status 2 when the fallback arm succeeds.
+		// bash still prints the regex error to stderr, but the
+		// overall [[ ]] compound test is true and exits 0.
+		{
+			name: "048_regex_error_or_true",
+			in: "[[ foo =~ * || -n x ]]\n" +
+				"echo status=$?\n",
+			want: "[[: invalid regular expression `*': Repetition not preceded by valid expression\n" +
+				"status=0\n",
+		},
 		// dbracket__047.sh — quoted parentheses on the rhs are
 		// literals even after extglob is enabled; only the unquoted
 		// leading `*` remains pattern syntax.
@@ -213,5 +224,36 @@ func TestDbracketBashCompatDiagnostics(t *testing.T) {
 	want := "./s: line 1: [[: invalid regular expression `*': Repetition not preceded by valid expression\nexit status 2"
 	if got := cb.String(); got != want {
 		t.Fatalf("wrong output:\nwant: %q\ngot:  %q", want, got)
+	}
+}
+
+func TestDbracketRegexErrorOrTrue(t *testing.T) {
+	t.Parallel()
+
+	src := "[[ foo =~ * || -n x ]]\necho status=$?\n"
+	file, err := syntax.NewParser().Parse(strings.NewReader(src), "./s")
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+
+	var cb lockedBuffer
+	r, err := New(StdIO(nil, &cb, &cb), WithBashCompatErrors(true), WithBashSource([]byte(src)))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	runErr := r.Run(ctx, file)
+	if runErr != nil {
+		cb.Write([]byte(runErr.Error()))
+	}
+
+	want := "./s: line 1: [[: invalid regular expression `*': Repetition not preceded by valid expression\nstatus=0\n"
+	if got := cb.String(); got != want {
+		t.Fatalf("wrong output:\nwant: %q\ngot:  %q", want, got)
+	}
+	if runErr != nil {
+		t.Fatalf("expected nil error (exit 0), got: %v", runErr)
 	}
 }
