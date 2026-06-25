@@ -196,6 +196,16 @@ func TestArrayElementUnsetAndSetnessFidelity(t *testing.T) {
 			in:   "e=()\n[[ -v e[-1] ]] && echo yes\n",
 			want: "e: bad array subscript\nexit status 1",
 		},
+		{
+			name: "integer_indexed_element_append",
+			in: "declare -ai iarr=(1 2 3)\n" +
+				"iarr[0]+=2\n" +
+				"declare -p iarr\n" +
+				"iarr+=(4 5 6)\n" +
+				"declare -p iarr\n",
+			want: "declare -ai iarr=([0]=\"3\" [1]=\"2\" [2]=\"3\")\n" +
+				"declare -ai iarr=([0]=\"3\" [1]=\"2\" [2]=\"3\" [3]=\"4\" [4]=\"5\" [5]=\"6\")\n",
+		},
 	}
 
 	for _, tc := range cases {

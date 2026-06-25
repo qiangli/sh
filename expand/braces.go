@@ -129,7 +129,14 @@ func bracesSeqRec(word *syntax.Word, yield func(*syntax.Word) bool) bool {
 					// processing. The generated arg is the
 					// empty string at that position.
 					if rune(n) == '\\' {
-						lit.Value = ""
+						next.Parts = append([]syntax.WordPart{&syntax.SglQuoted{}}, rest...)
+						if !expand(&next) {
+							return false
+						}
+						if n == to {
+							break
+						}
+						continue
 					} else {
 						lit.Value = string(rune(n))
 					}
