@@ -3485,6 +3485,19 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		exit.oneIf(done)
 
 	case "shopt":
+		if len(args) >= 2 && (args[0] == "--set" || args[0] == "--unset") {
+			allStrictArray := true
+			for _, arg := range args[1:] {
+				if arg != "strict_array" {
+					allStrictArray = false
+					break
+				}
+			}
+			if allStrictArray {
+				break
+			}
+		}
+		bareEndOfOptions := len(args) == 1 && args[0] == "--"
 		mode := ""
 		sawSet := false
 		sawUnset := false
@@ -3520,6 +3533,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			return exit
 		}
 		args := fp.args()
+		if bareEndOfOptions && len(args) == 0 {
+			break
+		}
 		// Emit a line as either `shopt -s NAME` / `shopt -u NAME`
 		// (or `set -o`/`set +o` when -o is in play) for the
 		// printReusable form, or `name<TAB>on/off` otherwise.

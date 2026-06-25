@@ -6328,7 +6328,7 @@ func TestBashCompatShoptLongOptionInvalid(t *testing.T) {
 	// `--foo`) is rejected as `shopt: --: invalid option` with usage
 	// (arith.test.sh `shopt --set strict_arith`). A lone `--` is still
 	// the valid end-of-options marker.
-	src := "shopt --set strict_arith\nshopt -- extglob\n"
+	src := "shopt --\nshopt --set strict_arith\nshopt -- extglob\n"
 	file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(src), "./arith.tests")
 	qt.Assert(t, qt.IsNil(err))
 
@@ -6344,7 +6344,7 @@ func TestBashCompatShoptLongOptionInvalid(t *testing.T) {
 	// The last command (`shopt -- extglob`, an unset query) exits 1.
 	qt.Assert(t, qt.ErrorMatches(err, "exit status 1"))
 	qt.Assert(t, qt.Equals(cb.String(),
-		"./arith.tests: line 1: shopt: --: invalid option\n"+
+		"./arith.tests: line 2: shopt: --: invalid option\n"+
 			"shopt: usage: shopt [-pqsu] [-o] [optname ...]\n"+
 			"extglob             \toff\n"))
 }
