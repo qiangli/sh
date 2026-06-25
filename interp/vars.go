@@ -2364,6 +2364,12 @@ func (r *Runner) arithmCompoundArrayIndex(expr syntax.ArithmExpr) (int, bool) {
 		return n, false
 	}
 	if r.bashCompatErrors {
+		if rawText != "" {
+			err = r.bashRawAssignIndexArithError(expr, rawText, err)
+			r.lastArithErr = err
+			r.expandErr(err)
+			return n, false
+		}
 		if arithErr, arithExpr := innermostArithmError(err); arithErr != nil {
 			if arithExpr != nil {
 				expr = arithExpr
@@ -2395,6 +2401,33 @@ func (r *Runner) arithmCompoundArrayIndex(expr syntax.ArithmExpr) (int, bool) {
 	r.lastArithErr = err
 	r.expandErr(err)
 	return n, false
+}
+
+func (r *Runner) bashRawAssignIndexArithError(expr syntax.ArithmExpr, rawText string, err error) error {
+	if arithErr, _ := innermostArithmError(err); arithErr != nil {
+		err = arithErr.Err
+	}
+	text := strings.TrimSpace(rawText)
+	msg := err.Error()
+	if strings.Contains(msg, "arithmetic syntax error: operand expected") &&
+		strings.Contains(msg, "error token is") {
+		if start := strings.Index(msg, "error token is \""); start >= 0 {
+			tokenStart := start + len("error token is \"")
+			if tokenEnd := strings.IndexByte(msg[tokenStart:], '"'); tokenEnd >= 0 {
+				token := strings.TrimSpace(msg[tokenStart : tokenStart+tokenEnd])
+				msg = msg[:tokenStart] + token + msg[tokenStart+tokenEnd:]
+			}
+		}
+	}
+	prefix := r.filename
+	if prefix == "" {
+		prefix = "bash"
+	}
+	line := int(r.curStmtPos.Line())
+	if line == 0 && expr != nil {
+		line = int(expr.Pos().Line())
+	}
+	return fmt.Errorf("%s: line %d: %s: %s", prefix, line, text, msg)
 }
 
 func (r *Runner) rawAssignIndexArithError(rawText string, err error) error {
