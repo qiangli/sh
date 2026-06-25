@@ -138,6 +138,14 @@ func bashScriptParseError(err error, src []byte, name string) (string, bool) {
 		eofLine := strings.Count(string(src), "\n") + 1
 		return fmt.Sprintf("%s: line %d: syntax error: unexpected end of file from `{' command on line %d",
 			name, eofLine, line), true
+	case strings.HasPrefix(pe.Text, "unexpected EOF while looking for matching `"):
+		if strings.HasSuffix(pe.Text, "'") {
+			quote := strings.TrimSuffix(strings.TrimPrefix(pe.Text, "unexpected EOF while looking for matching `"), "'")
+			switch quote {
+			case "'", `"`, "`":
+				return fmt.Sprintf("%s: line %d: %s", name, line, pe.Text), true
+			}
+		}
 	case strings.HasPrefix(pe.Text, "reached EOF without closing quote `"):
 		quote := "'"
 		if strings.Contains(pe.Text, "`\"`") {

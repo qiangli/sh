@@ -1121,6 +1121,10 @@ func (p *Parser) stmtEnd(n Node, start, end string) Pos {
 }
 
 func (p *Parser) quoteErr(lpos Pos, quote token) {
+	if p.tok == _EOF {
+		p.posErr(lpos, "unexpected EOF while looking for matching \x60%s'", quote)
+		return
+	}
 	p.posErr(lpos, "reached %#q without closing quote %#q", p.tok, quote)
 }
 

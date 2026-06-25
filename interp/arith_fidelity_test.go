@@ -13,8 +13,10 @@ func TestArithFidelity(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		input string
-		want  string
+		input    string
+		want     string
+		checkErr bool
+		wantErr  string
 	}{
 		{
 			input: "set -u\n(( undef1++ ))\n(( ++undef2 ))\necho \"[$undef1][$undef2]\"",
@@ -113,8 +115,10 @@ echo ${a[@]}`,
 			want:  "keys: <100>\nvals: <12>\nkeys: <5> <6> <7> <8> <100> <101> <102> <103>\nvals: <a> <b> <c> <d> <1> <2> <3> <4>\n",
 		},
 		{
-			input: "[[ 12345678909 = $(( 1 << 30 )) ]]\necho eq=$?\n[[ 12345678909 = 12345678909 ]]\necho eq=$?\n[ 12345678909 -gt $(( 1 << 30 )) ]\necho greater=$?\n[[ 12345678909 -gt $(( 1 << 30 )) ]]\necho greater=$?\n[[ 12345678909 -ge $(( 1 << 30 )) ]]\necho ge=$?\n[[ 12345678909 -ge 12345678909 ]]\necho ge=$?\n[[ 12345678909 -le $(( 1 << 30 )) ]]\necho le=$?\n[[ 12345678909 -le 12345678909 ]]\necho le=$?",
-			want:  "eq=1\neq=0\ngreater=0\ngreater=0\nge=0\nge=0\nle=1\nle=0\n",
+			input:    "[[ 12345678909 = $(( 1 << 30 )) ]]\necho eq=$?\n[[ 12345678909 = 12345678909 ]]\necho eq=$?\n[ 12345678909 -gt $(( 1 << 30 )) ]\necho greater=$?\n[[ 12345678909 -gt $(( 1 << 30 )) ]]\necho greater=$?\n[[ 12345678909 -ge $(( 1 << 30 )) ]]\necho ge=$?\n[[ 12345678909 -ge 12345678909 ]]\necho ge=$?\n[[ 12345678909 -le $(( 1 << 30 )) ]]\necho le=$?\n[[ 12345678909 -le 12345678909 ]]\necho le=$?",
+			want:     "eq=1\neq=0\ngreater=0\ngreater=0\nge=0\nge=0\nle=1\nle=0\n",
+			checkErr: true,
+			wantErr:  "",
 		},
 	}
 
@@ -136,11 +140,17 @@ echo ${a[@]}`,
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			if err := r.Run(ctx, file); err != nil {
-				buf.WriteString(err.Error())
+			err = r.Run(ctx, file)
+			gotErr := ""
+			if err != nil {
+				gotErr = err.Error()
+				buf.WriteString(gotErr)
 			}
 			if got := buf.String(); got != tt.want {
 				t.Fatalf("wrong output in %q:\nwant: %q\ngot:  %q", tt.input, tt.want, got)
+			}
+			if tt.checkErr && gotErr != tt.wantErr {
+				t.Fatalf("wrong error in %q:\nwant: %q\ngot:  %q", tt.input, tt.wantErr, gotErr)
 			}
 		})
 	}

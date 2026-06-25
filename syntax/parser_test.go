@@ -719,7 +719,7 @@ var errorCases = []errorCase{
 	),
 	errCase(
 		"${a-'\x80",
-		langErr("1:5: reached EOF without closing quote `'`"),
+		langErr("1:5: unexpected EOF while looking for matching `''"),
 	),
 	errCase(
 		"echo $((a |\x80",
@@ -806,15 +806,15 @@ var errorCases = []errorCase{
 	),
 	errCase(
 		"'",
-		langErr("1:1: reached EOF without closing quote `'`"),
+		langErr("1:1: unexpected EOF while looking for matching `''"),
 	),
 	errCase(
 		`"`,
-		langErr("1:1: reached EOF without closing quote `\"`"),
+		langErr("1:1: unexpected EOF while looking for matching `\"'"),
 	),
 	errCase(
 		`'\''`,
-		langErr("1:4: reached EOF without closing quote `'`"),
+		langErr("1:4: unexpected EOF while looking for matching `''"),
 	),
 	errCase(
 		";",
@@ -860,7 +860,7 @@ var errorCases = []errorCase{
 	),
 	errCase(
 		"`",
-		langErr("1:1: reached EOF without closing quote \"`\""),
+		langErr("1:1: unexpected EOF while looking for matching ``'"),
 	),
 	errCase(
 		";;",
@@ -919,23 +919,23 @@ var errorCases = []errorCase{
 	),
 	errCase(
 		"foo'",
-		langErr("1:4: reached EOF without closing quote `'`"),
+		langErr("1:4: unexpected EOF while looking for matching `''"),
 	),
 	errCase(
 		`foo"`,
-		langErr("1:4: reached EOF without closing quote `\"`"),
+		langErr("1:4: unexpected EOF while looking for matching `\"'"),
 	),
 	errCase(
 		`"foo`,
-		langErr("1:1: reached EOF without closing quote `\"`"),
+		langErr("1:1: unexpected EOF while looking for matching `\"'"),
 	),
 	errCase(
 		`"foobar\`,
-		langErr("1:1: reached EOF without closing quote `\"`"),
+		langErr("1:1: unexpected EOF while looking for matching `\"'"),
 	),
 	errCase(
 		`"foo\a`,
-		langErr("1:1: reached EOF without closing quote `\"`"),
+		langErr("1:1: unexpected EOF while looking for matching `\"'"),
 	),
 	errCase(
 		"foo()",
@@ -1134,11 +1134,11 @@ var errorCases = []errorCase{
 	),
 	errCase(
 		"'foo' '",
-		langErr("1:7: reached EOF without closing quote `'`"),
+		langErr("1:7: unexpected EOF while looking for matching `''"),
 	),
 	errCase(
 		"'foo\n' '",
-		langErr("2:3: reached EOF without closing quote `'`"),
+		langErr("2:3: unexpected EOF while looking for matching `''"),
 	),
 	errCase(
 		"while",
@@ -1265,7 +1265,7 @@ var errorCases = []errorCase{
 	),
 	errCase(
 		`echo $(($(a"`,
-		langErr("1:12: reached EOF without closing quote `\"`"),
+		langErr("1:12: unexpected EOF while looking for matching `\"'"),
 	),
 	errCase(
 		"echo $((`echo 0`",
@@ -1277,7 +1277,7 @@ var errorCases = []errorCase{
 	),
 	errCase(
 		`echo $((a'`,
-		langErr("1:10: reached EOF without closing quote `'`"),
+		langErr("1:10: unexpected EOF while looking for matching `''"),
 	),
 	errCase(
 		`echo $((a b"`,
@@ -1563,7 +1563,7 @@ var errorCases = []errorCase{
 	),
 	errCase(
 		"\"`\"",
-		langErr("1:3: reached EOF without closing quote `\"`"),
+		langErr("1:3: unexpected EOF while looking for matching `\"'"),
 	),
 	errCase(
 		"`\"`",
@@ -1571,7 +1571,7 @@ var errorCases = []errorCase{
 	),
 	errCase(
 		"`\\```",
-		langErr("1:3: reached EOF without closing quote \"`\""),
+		langErr("1:3: unexpected EOF while looking for matching ``'"),
 	),
 	errCase(
 		"`{\nfoo`",
@@ -1966,11 +1966,11 @@ var errorCases = []errorCase{
 	),
 	errCase(
 		"echo $'",
-		langErr("1:6: reached EOF without closing quote `'`", LangBash|LangMirBSDKorn|LangZsh),
+		langErr("1:6: unexpected EOF while looking for matching `''", LangBash|LangMirBSDKorn|LangZsh),
 	),
 	errCase(
 		`echo $"`,
-		langErr("1:6: reached EOF without closing quote `\"`", LangBash|LangMirBSDKorn),
+		langErr("1:6: unexpected EOF while looking for matching `\"'", LangBash|LangMirBSDKorn),
 	),
 	errCase(
 		"echo @(",
@@ -2124,7 +2124,7 @@ var errorCases = []errorCase{
 	),
 	errCase(
 		"a=$c\n'",
-		langErr("2:1: reached EOF without closing quote `'`"),
+		langErr("2:1: unexpected EOF while looking for matching `''"),
 	),
 	errCase(
 		"echo ${!foo[@]}",
