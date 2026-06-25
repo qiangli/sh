@@ -35,7 +35,7 @@ func main() {
 }
 
 func runAll() error {
-	r, err := interp.New(interp.Interactive(true), interp.StdIO(os.Stdin, os.Stdout, os.Stderr), interp.WithBashCompatErrors(true))
+	r, err := interp.New(interp.Env(nil), interp.Interactive(true), interp.StdIO(os.Stdin, os.Stdout, os.Stderr), interp.WithBashCompatErrors(true))
 	if err != nil {
 		return err
 	}

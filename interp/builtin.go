@@ -2142,6 +2142,13 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					if tok := offendingToken(src, pe.Pos); tok != "" {
 						text = fmt.Sprintf("syntax error near unexpected token `%s'", tok)
 					}
+				case text == "unexpected EOF while looking for matching `}'" && strings.HasSuffix(src, "\\"):
+					if openLine := firstBraceLine(src); openLine > 0 {
+						absLine := int(pos.Line()) + openLine - 1
+						text = fmt.Sprintf(
+							"syntax error: unexpected end of file from `{' command on line %d",
+							absLine)
+					}
 				case strings.HasPrefix(text, "reached EOF without matching"):
 					// Bash phrases unclosed brace/paren EOFs as
 					// "unexpected EOF while looking for matching `X'".

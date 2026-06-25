@@ -2908,7 +2908,7 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 				arithAssignErr(s, err)
 				return name, prev
 			}
-			if as.Append && as.Index != nil && prev.Kind == expand.Indexed {
+			if as.Append && prev.Kind == expand.Indexed {
 				prev.Kind = expand.String
 				prev.Str = strconv.Itoa(rhs)
 				return name, prev

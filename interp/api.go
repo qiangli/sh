@@ -23,6 +23,7 @@ import (
 	"slices"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -1057,6 +1058,7 @@ func New(opts ...RunnerOption) (*Runner, error) {
 			WithDeterministic(seed)(r)
 		}
 	}
+	r.importExportedFuncs()
 	if r.auditLog == nil {
 		if path := r.Env.Get("BASHY_AUDIT_LOG").String(); path != "" {
 			f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o666)
@@ -1067,6 +1069,40 @@ func New(opts ...RunnerOption) (*Runner, error) {
 		}
 	}
 	return r, nil
+}
+
+func (r *Runner) importExportedFuncs() {
+	r.Env.Each(func(name string, vr expand.Variable) bool {
+		if !vr.IsSet() || vr.Kind != expand.String {
+			return true
+		}
+		fname, ok := strings.CutPrefix(name, "BASH_FUNC_")
+		if !ok {
+			return true
+		}
+		fname, ok = strings.CutSuffix(fname, "%%")
+		if !ok || !validExportedFuncName(fname) || !validBashFuncName(fname) {
+			return true
+		}
+		body := vr.Str
+		if !strings.HasPrefix(body, "()") {
+			return true
+		}
+		src := fname + " " + body
+		file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(src), "")
+		if err != nil || len(file.Stmts) != 1 {
+			return true
+		}
+		fd, ok := file.Stmts[0].Cmd.(*syntax.FuncDecl)
+		if !ok || fd.Name.Value != fname {
+			return true
+		}
+		if r.Funcs == nil {
+			r.Funcs = make(map[string]*syntax.Stmt)
+		}
+		r.Funcs[fname] = fd.Body
+		return true
+	})
 }
 
 // RunnerOption can be passed to [New] to alter a [Runner]'s behaviour.

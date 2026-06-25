@@ -5168,7 +5168,8 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				}
 			}
 		}
-		if persistInline && (fields[0] == "export" || fields[0] == "readonly") {
+		if persistInline && (fields[0] == "export" || fields[0] == "readonly") &&
+			!r.opts[optPosix] && !inFuncScope {
 			operands := declareOperandNames(fields[1:])
 			kept := restores[:0]
 			for _, restore := range restores {

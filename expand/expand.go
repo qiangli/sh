@@ -978,14 +978,17 @@ func ansiCEscape(s, ctypeLocale string) string {
 				closer := end
 				if closer < len(s) && s[closer] == '}' {
 					i = closer
-				} else {
-					// Bash leaves unclosed brace-form escapes literal.
+				} else if c != 'x' {
 					sb.WriteByte('\\')
 					sb.WriteByte(c)
 					sb.WriteByte('{')
 					sb.WriteString(digits)
 					i = end - 1
 					break
+				} else if digits == "" && end < len(s) {
+					i = end
+				} else {
+					i = end - 1
 				}
 				if digits == "" {
 					sb.WriteByte(0)
