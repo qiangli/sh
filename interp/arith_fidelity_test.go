@@ -65,6 +65,10 @@ func TestArithFidelity(t *testing.T) {
 			want:  "10\n5\n-9223372036854775808\n",
 		},
 		{
+			input: "echo $(( 4611686018427387904 << 1 ))\necho $(( -9223372036854775808 << 0 ))",
+			want:  "-9223372036854775808\n-9223372036854775808\n",
+		},
+		{
 			input: `echo $(( "1 + 2" * 3 ))
 echo $(( "1+2" * 3 ))
 x='1 + 2'
@@ -160,6 +164,10 @@ func TestArithFidelityBashSource(t *testing.T) {
 		{
 			input: "set -u\n(( undef1++ ))\n(( ++undef2 ))\necho \"[$undef1][$undef2]\"",
 			want:  "./s: line 2: undef1: unbound variable\nexit status 1",
+		},
+		{
+			input: "A='3 + 5'\necho $((4 ? : $A))\necho after",
+			want:  "./s: line 2: 4 ? : 3 + 5 : expression expected (error token is \": 3 + 5 \")\nafter\n",
 		},
 		{
 			input: "(( 1[2] = 3 ))\necho status=$?\n(( a[1][2] = 3 ))\necho status=$?",

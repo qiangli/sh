@@ -938,6 +938,13 @@ func (r *Runner) bashArithmError(expr syntax.ArithmExpr, err error, command bool
 			if word, _ := b2.X.(*syntax.Word); arithWordEmpty(word) {
 				left := branchText(b.X)
 				right := branchText(b2.Y)
+				if exprTextOverride != "" {
+					if _, after, ok := strings.Cut(exprTextOverride, "?"); ok {
+						if _, afterColon, ok := strings.Cut(after, ":"); ok {
+							right = strings.TrimSpace(afterColon)
+						}
+					}
+				}
 				exprText = strings.TrimSpace(left+" ? : "+right) + " "
 				bashMsg = "expression expected"
 				tokenText = ": " + right + " "

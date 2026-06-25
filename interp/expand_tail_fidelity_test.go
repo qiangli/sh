@@ -40,6 +40,17 @@ func TestExpandTailBuiltinFidelity(t *testing.T) {
 			want: "\\uZ \\u{03bc \\z\n",
 		},
 		{
+			name: "ifs_default_star_join_after_unset",
+			in:   "IFS=:\nset -- a b c d e\nunset IFS\necho \"$*\"",
+			want: "a b c d e\n",
+		},
+		{
+			name: "brace_char_range_backslash_empty_field",
+			in:   "echo {a..A}\necho {A..a}",
+			want: "a ` _ ^ ]  [ Z Y X W V U T S R Q P O N M L K J I H G F E D C B A\n" +
+				"A B C D E F G H I J K L M N O P Q R S T U V W X Y Z [  ] ^ _ ` a\n",
+		},
+		{
 			// builtin-vars__016: a readonly-variable assignment error
 			// inside `eval` discards only the eval'd command list — bash
 			// contains the DISCARD within eval, which returns status 1,

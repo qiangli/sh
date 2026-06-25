@@ -178,7 +178,7 @@ var interactiveTests = []struct {
 			"(x\n",
 			"> ",
 		},
-		wantErr: "1:1: unexpected EOF while looking for matching `)`",
+		wantErr: "1:1: unexpected EOF while looking for matching `)'",
 	},
 	{
 		pairs: []string{
