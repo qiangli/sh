@@ -746,6 +746,7 @@ var runTests = []runTest{
 	{"[[ $SRANDOM -eq $SRANDOM ]]", "exit status 1"}, // 1 in 2**32 chance of a collision,
 	{"RANDOM=42; echo $RANDOM $RANDOM", "17772 26794\n"},
 	{"RANDOM=42; for i in 1 2 3 4 5 6; do echo -n \"$RANDOM \"; done; echo; RANDOM=42; for i in 1 2 3 4 5 6; do echo -n \"$((RANDOM)) \"; done; echo", "17772 26794 1435 24388 11074 32198 \n17772 26794 1435 24388 11074 32198 \n"},
+	{"RANDOM=42; for i in {1..40}; do ((d1[$RANDOM%6+1 + $RANDOM%6+1]++)); done; RANDOM=42; for i in {1..40}; do ((d2[RANDOM%6+1 + RANDOM%6+1]++)); done; [[ ${d1[*]} == ${d2[*]} ]] && echo ok", "ok\n"},
 	{"RANDOM=42; echo $RANDOM ${ echo $RANDOM; }", "17772 26794\n"},
 
 	// 64-bit-value arithmetic comparisons. The lexical `<` works regardless of

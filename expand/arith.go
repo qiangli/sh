@@ -499,6 +499,9 @@ func arithmInvalidSubscriptChain(s string) (string, bool) {
 
 func Arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 	cfg = prepareConfig(cfg)
+	if cfg.arithmParamValues != nil {
+		return arithm(cfg, expr)
+	}
 	_, topWord := expr.(*syntax.Word)
 	if !cfg.arithmDynamicReparse && !cfg.LetArithmetic && !topWord {
 		text, dynamic, err := cfg.dynamicArithmText(expr)
@@ -526,9 +529,6 @@ func Arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 				}
 			}
 		}
-	}
-	if cfg.arithmParamValues != nil {
-		return arithm(cfg, expr)
 	}
 	values, err := cfg.snapshotArithmParams(expr)
 	if err != nil {
@@ -597,11 +597,7 @@ func (cfg *Config) arithmIndexedWordSource(word *syntax.Word) (string, bool) {
 	if word, ok := pe.Index.(*syntax.Word); ok {
 		index = arithmWordSource(word)
 	} else {
-		var err error
-		index, _, err = cfg.dynamicArithmText(pe.Index)
-		if err != nil {
-			return "", false
-		}
+		index = arithmExprStaticText(pe.Index)
 	}
 	return pe.Param.Value + "[" + index + "]", true
 }
