@@ -479,6 +479,7 @@ func (r *Runner) expandErr(err error) {
 		// skips the current simple command without changing $?
 		// (the error is a non-fatal diagnostic; $? stays 0).
 		// Subsequent commands on the same physical line still run.
+		r.expandRunExit = exitStatus{code: 1}
 		r.exit.exiting = true
 		return
 	case errors.As(err, &indirErr):
@@ -4385,6 +4386,7 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 	if r.stop(ctx) {
 		return
 	}
+	r.expandRunExit = exitStatus{}
 	r.exit = exitStatus{}
 	if st.Background || st.Disown {
 		r2 := r.subshell(true)
