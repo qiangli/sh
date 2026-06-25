@@ -1768,7 +1768,17 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 		// run when x is set. These conditions mirror the `switch op` below.
 		// An empty indexed/associative array has no element[0], so the
 		// non-colon ${a-w}/${a+w} forms see it as unset (bash 5.3).
-		setNonColon := paramIsSetNonColon(cfg, vr, name, index)
+		// paramIsSetNonColon evaluates the array subscript (arrayElemSet ->
+		// Arithm), so a side-effecting index like `${a[i++]#x}` would be
+		// double-evaluated if we computed it unconditionally. Only the
+		// non-colon `+`/`-` ops actually consume setNonColon, so compute it
+		// lazily for them alone; every other op (pattern removal, case mod,
+		// substring, the colon `:+`/`:-` forms) ignores it.
+		setNonColon := false
+		switch op {
+		case syntax.AlternateUnset, syntax.DefaultUnset:
+			setNonColon = paramIsSetNonColon(cfg, vr, name, index)
+		}
 		wordNeeded := true
 		switch op {
 		case syntax.AlternateUnsetOrNull:

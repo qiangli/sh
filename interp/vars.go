@@ -3269,11 +3269,16 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 		}
 		return name, prev
 	}
-	// Expand all RHS values before modifying the array. Bash delays
-	// explicit subscript arithmetic until each element is installed,
-	// so earlier elements in the same literal are visible to later
-	// indexes, but RHS parameter expansions still see the original
-	// array.
+	// Expand all RHS values before modifying the array. For a plain
+	// (non-append) `a=(…)`, bash evaluates each element's explicit
+	// subscript arithmetic against the array's value from *before* this
+	// compound assignment — `a=([0]=7); a=([0]=10 [a[0]+5]=99)` stores 99
+	// at index 12 (7+5), not 15 — so we leave the old value in the env and
+	// publish nothing mid-loop. For an append `a+=(…)`, bash mutates the
+	// array in place, so earlier elements ARE visible to later subscripts;
+	// only then do we publish the running array. Publishing on a plain
+	// assignment both gave the wrong index and leaked the name into the
+	// global scope for `local -a foo=([0]=v)`.
 	elemValues := make([]struct {
 		indexExpr syntax.ArithmExpr
 		values    []string
@@ -3337,8 +3342,14 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 	work.Str = ""
 	work.List = strs
 	work.ListSet = nextSet
+	// Only an append (`a+=(…)`) mutates in place and makes earlier
+	// elements visible to later subscript arithmetic; a plain assignment
+	// keeps the old value live (and publishing it would leak the name into
+	// the wrong scope for a `local` declaration).
 	publishWork := func() {
-		_ = r.writeEnv.Set(name, work)
+		if as.Append {
+			_ = r.writeEnv.Set(name, work)
+		}
 	}
 	for _, ev := range elemValues {
 		if ev.indexExpr != nil {
