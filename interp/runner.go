@@ -9029,7 +9029,7 @@ func (r *Runner) runTestClause(ctx context.Context, pos syntax.Pos, expr syntax.
 		r.errf("%s[[: %s: %s\n", r.bashErrPrefix(pos), r.testIntErr, r.testArithErr)
 		r.testIntErr = ""
 		r.testArithErr = ""
-		r.exit.code = 1
+		r.exit.oneIf(result == "")
 	} else if r.testIntErr != "" {
 		r.errf(r.bashErrPrefix(pos)+"[[: %s: integer expected\n", r.testIntErr)
 		r.testIntErr = ""

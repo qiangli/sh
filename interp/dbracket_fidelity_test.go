@@ -257,3 +257,36 @@ func TestDbracketRegexErrorOrTrue(t *testing.T) {
 		t.Fatalf("expected nil error (exit 0), got: %v", runErr)
 	}
 }
+
+func TestDbracketArithErrorOrStatus(t *testing.T) {
+	t.Parallel()
+
+	src := "[[ 1 -eq + || -n x ]]\n" +
+		"echo status=$?\n" +
+		"[[ 0 -eq 1 || 2 -eq + ]]\n" +
+		"echo status=$?\n"
+	file, err := syntax.NewParser().Parse(strings.NewReader(src), "./s")
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+
+	var cb lockedBuffer
+	r, err := New(StdIO(nil, &cb, &cb), WithBashCompatErrors(true), WithBashSource([]byte(src)))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := r.Run(ctx, file); err != nil {
+		cb.Write([]byte(err.Error()))
+	}
+
+	want := "./s: line 1: [[: +: arithmetic syntax error: operand expected (error token is \"+\")\n" +
+		"status=0\n" +
+		"./s: line 3: [[: +: arithmetic syntax error: operand expected (error token is \"+\")\n" +
+		"status=1\n"
+	if got := cb.String(); got != want {
+		t.Fatalf("wrong output:\nwant: %q\ngot:  %q", want, got)
+	}
+}
