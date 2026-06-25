@@ -654,7 +654,7 @@ var runTests = []runTest{
 	{`a=" x  y"; b=$a c="$a"; echo "$b"; echo "$c"`, " x  y\n x  y\n"},
 	{`arr=("foo" "bar" "lala" "foobar"); echo ${arr[@]:2}; echo ${arr[*]:2}`, "lala foobar\nlala foobar\n"},
 	{`arr=("foo" "bar" "lala" "foobar"); echo ${arr[@]:2:4}; echo ${arr[*]:1:4}`, "lala foobar\nbar lala foobar\n"},
-	{`a=(x y z); echo ${a[@]:0:-2}`, " -2: substring expression < 0\n #JUSTERR"},
+	{`a=(x y z); echo ${a[@]:0:-2}`, "-2: substring expression < 0\n #JUSTERR"},
 	{`arr=("foo" "bar"); echo ${arr[@]}; echo ${arr[*]}`, "foo bar\nfoo bar\n"},
 	{`arr=("foo"); echo ${arr[@]:99}`, "\n"},
 	{`echo ${arr[@]:1:99}; echo ${arr[*]:1:99}`, "\n\n"},
@@ -668,6 +668,10 @@ var runTests = []runTest{
 	{`v=hello; echo ${v:2:}; echo ${v:2}`, "\nllo\n"},
 	{`v=ಇಳಿಕೆಗಳು; printf '<%s> <%s>\n' "${v:0:2}" "${v:0:1}"`, "<ಇಳ> <ಇ>\n"},
 	{`shopt -s nocasematch; v=abcd; printf '%s\n' "${v//A/z}" "${v//BC/x}" "${v//[BC]/x}"`, "zbcd\naxd\naxxd\n"},
+	// In the C locale the byte matcher must honour POSIX character
+	// classes inside brackets, so `${z//[[:alnum:]_]}` strips everything
+	// but the separators.
+	{`LC_ALL=C; z='a1;b2;c3'; echo "${z//[[:alnum:]_]}"`, ";;\n"},
 
 	// an empty array has no element[0], so the non-colon ${a-w}/${a+w}
 	// (and [@]/[*]) forms treat it as unset, like bash 5.3
@@ -693,8 +697,8 @@ var runTests = []runTest{
 	{`f() { echo "${@:2:2}"; }; f a b c d e`, "b c\n"},
 	{`f() { echo ${@:2:2}; }; f a b c d e`, "b c\n"},
 	{`set -- a b c; echo ${@:2:2}`, "b c\n"},
-	{`set -- a; echo ${@:1:$(($# - 2))}`, " $(($# - 2)): substring expression < 0\n #JUSTERR"},
-	{`set -- a b c d e; echo ${@: -3:-2}`, " -2: substring expression < 0\n #JUSTERR"},
+	{`set -- a; echo ${@:1:$(($# - 2))}`, "$(($# - 2)): substring expression < 0\n #JUSTERR"},
+	{`set -- a b c d e; echo ${@: -3:-2}`, "-2: substring expression < 0\n #JUSTERR"},
 	{`f() { echo "${@:1}"; }; f a b c`, "a b c\n"},
 	{`f() { echo "${*:2:2}"; }; f a b c d e`, "b c\n"},
 	{`f() { echo "${@: -2}"; }; f a b c d e`, "d e\n"},
@@ -2967,6 +2971,10 @@ var runTests = []runTest{
 	// rejects at expansion time.
 	{"echo ${x!y} second; echo after: $?", "bad substitution\nafter: 1\n"},
 	{"echo ${#foo%} second; echo after: $?", "bad substitution\nafter: 1\n"},
+	// Bash does not support zsh-style nested ${...}/$(...); it parses
+	// them at face value and rejects them at expansion time.
+	{`c=""; echo ${c//${$(($#-1))}/x/}; echo after: $?`, "bad substitution\nafter: 1\n"},
+	{"echo ${$(cmd)} second; echo after: $?", "bad substitution\nafter: 1\n"},
 	// Indirection through an unset variable: fatal when bare (covered
 	// above), non-fatal with $? = 1 when a default-style op follows.
 	{"echo ${!var:-unset}; echo after: $?", "var: invalid indirect expansion\nafter: 1\n"},
