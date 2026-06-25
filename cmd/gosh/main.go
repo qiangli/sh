@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 
 	"golang.org/x/term"
@@ -35,7 +36,13 @@ func main() {
 }
 
 func runAll() error {
-	r, err := interp.New(interp.Env(nil), interp.Interactive(true), interp.StdIO(os.Stdin, os.Stdout, os.Stderr), interp.WithBashCompatErrors(true))
+	r, err := interp.New(
+		interp.Env(nil),
+		interp.Interactive(true),
+		interp.StdIO(os.Stdin, os.Stdout, os.Stderr),
+		interp.WithBashCompatErrors(true),
+		interp.WithInheritedFds(inheritedFdsFromEnv()),
+	)
 	if err != nil {
 		return err
 	}
@@ -55,6 +62,20 @@ func runAll() error {
 		}
 	}
 	return nil
+}
+
+func inheritedFdsFromEnv() []int {
+	var fds []int
+	for _, part := range strings.Split(os.Getenv(interp.BashyInheritedFdsEnv), ",") {
+		if part == "" {
+			continue
+		}
+		fd, err := strconv.Atoi(part)
+		if err == nil && fd >= 3 {
+			fds = append(fds, fd)
+		}
+	}
+	return fds
 }
 
 func run(r *interp.Runner, reader io.Reader, name string) error {

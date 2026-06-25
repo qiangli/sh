@@ -76,15 +76,9 @@ func (r *Runner) inheritedFd(fd int) (*os.File, bool) {
 	r.fdTable[fd] = f
 	flags, err := unix.FcntlInt(uintptr(fd), unix.F_GETFL, 0)
 	if err != nil {
-		if r.fdReadTable == nil {
-			r.fdReadTable = make(map[int]bool)
-		}
-		if r.fdWriteTable == nil {
-			r.fdWriteTable = make(map[int]io.Writer)
-		}
-		r.fdReadTable[fd] = true
-		r.fdWriteTable[fd] = f
-		return f, true
+		delete(r.fdTable, fd)
+		f.Close()
+		return nil, false
 	}
 	switch flags & unix.O_ACCMODE {
 	case unix.O_RDONLY:

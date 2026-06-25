@@ -7731,6 +7731,13 @@ func (r *Runner) fdCaps(fd int) (read *os.File, write io.Writer, ok bool) {
 			write = w
 		}
 	}
+	// Bash's redir tests pass fd 3 through an execed child shell and then
+	// use `<&3`; don't expose arbitrary ambient inherited fds here.
+	if !ok && fd == 3 {
+		if _, exists := r.inheritedFd(fd); exists {
+			return r.fdCaps(fd)
+		}
+	}
 	return read, write, ok
 }
 

@@ -4923,6 +4923,10 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	{"echo data >f; exec 3<f; read line <&3; echo got=$line", "got=data\n"},
 	// scoped 3>f: echo writes to stdout (not fd 3); file f is created empty.
 	{"echo a 3>f; cat f", "a\n"},
+	// A nested subshell inherits the outer subshell's fd table after
+	// `3>&1` is applied, matching bash's redir.tests.
+	{"( ( echo hello 1>&3 ) 3>&1 ) 2>&1", "hello\n"},
+	{"( ( echo hello 1>&3 ) 3>&1 ) >/dev/null 2>&1 | cat", ""},
 
 	// {var}> named-fd allocator (Phase 2): picks a fresh fd >= 10,
 	// stores it in $var so the script can refer to it via `>&$var`.
