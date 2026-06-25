@@ -209,7 +209,7 @@ func (cfg *Config) arithmIndexedParamLiteral(word *syntax.Word) (string, bool, e
 			}
 		}
 		if vr.IndexedSet(index) {
-			return vr.List[index], true, nil
+			return vr.IndexedElem(index), true, nil
 		}
 	case String, NameRef:
 		if index == 0 && vr.IsSet() {
@@ -1191,7 +1191,7 @@ func (cfg *Config) getAritLvalue(lval arithLvalue) (int64, error) {
 		}
 	case Indexed:
 		if vr.IndexedSet(lval.indexValue) {
-			return atoi(vr.List[lval.indexValue]), nil
+			return atoi(vr.IndexedElem(lval.indexValue)), nil
 		}
 	case String, NameRef:
 		if lval.indexValue == 0 {
@@ -1338,18 +1338,9 @@ func (cfg *Config) setAritLvalue(lval arithLvalue, val int64) error {
 	vr.Kind = Indexed
 	vr.Set = true
 	vr.List = slices.Clone(vr.List)
-	listSet := vr.CloneListSet()
-	if lval.indexValue >= len(vr.List) {
-		if listSet == nil {
-			listSet = vr.DenseListSet()
-		}
-		vr.List = append(vr.List, make([]string, lval.indexValue-len(vr.List)+1)...)
-	}
-	vr.List[lval.indexValue] = strconv.FormatInt(val, 10)
-	if listSet != nil {
-		listSet[lval.indexValue] = true
-		vr.ListSet = listSet
-	}
+	vr.ListSet = vr.CloneListSet()
+	vr.ListMap = vr.CloneListMap()
+	vr.SetIndexed(lval.indexValue, strconv.FormatInt(val, 10))
 	return wenv.Set(lval.name, vr)
 }
 

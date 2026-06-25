@@ -5,6 +5,7 @@ package expand
 
 import (
 	"cmp"
+	"maps"
 	"runtime"
 	"slices"
 	"strings"
@@ -115,7 +116,8 @@ type Variable struct {
 	Kind ValueKind
 
 	Str     string            // Used when Kind is String or NameRef.
-	List    []string          // Used when Kind is Indexed.
+	List    []string          // Used when Kind is Indexed; holds the dense prefix [0,len(List)).
+	ListMap map[int]string    // Used when Kind is Indexed; sparse overlay for indices >= maxDenseIndex.
 	ListSet map[int]bool      // Used when Kind is Indexed and sparse; nil means every List index is set.
 	Map     map[string]string // Used when Kind is Associative.
 
@@ -222,10 +224,32 @@ func (v Variable) String() string {
 		return v.Str
 	case Indexed:
 		if v.IndexedSet(0) {
-			return v.List[0]
+			return v.IndexedElem(0)
 		}
 	case Associative:
 		// nothing to do
+	}
+	return ""
+}
+
+// maxDenseIndex bounds how far the dense List slice may grow. Indices at or
+// above it are kept in the sparse ListMap overlay instead, so that a single
+// huge subscript (bash stores indexed arrays sparsely, e.g. `a[0x7000004E]=x`)
+// does not force a multi-gigabyte dense allocation. The invariant is that List
+// only ever covers [0,maxDenseIndex) and ListMap only ever holds keys
+// >= maxDenseIndex, so the two never overlap.
+const maxDenseIndex = 1 << 20
+
+// IndexedElem returns the value at array index i for an indexed array,
+// consulting the sparse ListMap overlay for indices beyond the dense List
+// prefix. It does not check whether the index is set; callers that care should
+// guard with [Variable.IndexedSet].
+func (v Variable) IndexedElem(i int) string {
+	if i >= 0 && i < len(v.List) {
+		return v.List[i]
+	}
+	if v.ListMap != nil {
+		return v.ListMap[i]
 	}
 	return ""
 }
@@ -234,10 +258,13 @@ func (v Variable) String() string {
 // A nil ListSet preserves the historical dense-array representation: every
 // in-range List entry is considered set, including empty-string elements.
 func (v Variable) IndexedSet(index int) bool {
-	if v.Kind != Indexed || index < 0 || index >= len(v.List) {
+	if v.Kind != Indexed || index < 0 {
 		return false
 	}
-	return v.ListSet == nil || v.ListSet[index]
+	if v.ListSet == nil {
+		return index < len(v.List)
+	}
+	return v.ListSet[index]
 }
 
 // IndexedIndexes returns the set indexes for an indexed array in ascending
@@ -255,7 +282,7 @@ func (v Variable) IndexedIndexes() []int {
 	}
 	indexes := make([]int, 0, len(v.ListSet))
 	for i, ok := range v.ListSet {
-		if ok && i >= 0 && i < len(v.List) {
+		if ok && i >= 0 {
 			indexes = append(indexes, i)
 		}
 	}
@@ -269,9 +296,52 @@ func (v Variable) IndexedValues() []string {
 	indexes := v.IndexedIndexes()
 	values := make([]string, len(indexes))
 	for i, index := range indexes {
-		values[i] = v.List[index]
+		values[i] = v.IndexedElem(index)
 	}
 	return values
+}
+
+// SetIndexed assigns value to array index i, choosing dense slice storage for
+// small indices and the sparse ListMap overlay for huge ones so that a large
+// index does not force a multi-gigabyte dense allocation. It maintains ListSet
+// and preserves the historical "nil ListSet means fully dense" fast path while
+// the write merely extends a contiguous array. The receiver's List, ListSet
+// and ListMap must already be owned (cloned) by the caller when shared.
+func (v *Variable) SetIndexed(i int, value string) {
+	if i < 0 {
+		return
+	}
+	if i < maxDenseIndex {
+		// A contiguous extend or in-range overwrite keeps the array dense,
+		// so the nil-ListSet fast path can be preserved.
+		if v.ListSet == nil && i <= len(v.List) {
+			if i == len(v.List) {
+				v.List = append(v.List, value)
+			} else {
+				v.List[i] = value
+			}
+			return
+		}
+		// A gap or an already-sparse array needs an explicit set map.
+		if v.ListSet == nil {
+			v.ListSet = v.DenseListSet()
+		}
+		if i >= len(v.List) {
+			v.List = append(v.List, make([]string, i-len(v.List)+1)...)
+		}
+		v.List[i] = value
+		v.ListSet[i] = true
+		return
+	}
+	// Huge index: store in the sparse overlay instead of padding List.
+	if v.ListSet == nil {
+		v.ListSet = v.DenseListSet()
+	}
+	if v.ListMap == nil {
+		v.ListMap = make(map[int]string)
+	}
+	v.ListMap[i] = value
+	v.ListSet[i] = true
 }
 
 // IndexedCount returns the number of set elements in an indexed array.
@@ -291,6 +361,14 @@ func (v Variable) CloneListSet() map[int]bool {
 		}
 	}
 	return clone
+}
+
+// CloneListMap returns a copy of the sparse indexed-array overlay map.
+func (v Variable) CloneListMap() map[int]string {
+	if v.ListMap == nil {
+		return nil
+	}
+	return maps.Clone(v.ListMap)
 }
 
 // DenseListSet returns a sparse set map with every current List index marked

@@ -1787,6 +1787,9 @@ func applyCaseAttr(vr *expand.Variable) {
 		for i, v := range vr.List {
 			vr.List[i] = fold(v)
 		}
+		for i, v := range vr.ListMap {
+			vr.ListMap[i] = fold(v)
+		}
 	case expand.Associative:
 		for k, v := range vr.Map {
 			vr.Map[k] = fold(v)
@@ -8250,7 +8253,7 @@ func (r *Runner) namedFdVarString(name string) string {
 		if vr.Kind == expand.Indexed {
 			i, err := strconv.Atoi(index)
 			if err == nil && vr.IndexedSet(i) {
-				return vr.List[i]
+				return vr.IndexedElem(i)
 			}
 		}
 		if vr.Kind == expand.Associative && vr.Map != nil {
@@ -8276,19 +8279,10 @@ func (r *Runner) setGlobalNamedFdVarString(name, value string) {
 			if vr.Kind != expand.Indexed {
 				vr = expand.Variable{Set: true, Kind: expand.Indexed}
 			}
-			oldLen := len(vr.List)
-			listSet := vr.CloneListSet()
-			if listSet == nil && i >= oldLen {
-				listSet = vr.DenseListSet()
-			}
-			for len(vr.List) <= i {
-				vr.List = append(vr.List, "")
-			}
-			vr.List[i] = value
-			if listSet != nil {
-				listSet[i] = true
-				vr.ListSet = listSet
-			}
+			vr.List = slices.Clone(vr.List)
+			vr.ListSet = vr.CloneListSet()
+			vr.ListMap = vr.CloneListMap()
+			vr.SetIndexed(i, value)
 			r.setVar(base, vr)
 			r.setGlobalVar(base, vr)
 			return
@@ -8955,6 +8949,16 @@ func (r *Runner) envDigest() string {
 		fmt.Fprintf(h, "%s\x00%d\x00%t\x00%t\x00%t\x00%t\x00%s\x00", name, vr.Kind, vr.Set, vr.Exported, vr.ReadOnly, vr.Integer, vr.Str)
 		for i, v := range vr.List {
 			fmt.Fprintf(h, "%d\x00%s\x00", i, v)
+		}
+		if len(vr.ListMap) > 0 {
+			idxs := make([]int, 0, len(vr.ListMap))
+			for i := range vr.ListMap {
+				idxs = append(idxs, i)
+			}
+			slices.Sort(idxs)
+			for _, i := range idxs {
+				fmt.Fprintf(h, "%d\x00%s\x00", i, vr.ListMap[i])
+			}
 		}
 		if len(vr.Map) > 0 {
 			keys := make([]string, 0, len(vr.Map))

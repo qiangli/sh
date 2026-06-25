@@ -521,21 +521,9 @@ func (cfg *Config) envSetIndex(name string, idx syntax.ArithmExpr, value string)
 	vr.Kind = Indexed
 	vr.Set = true
 	vr.List = slices.Clone(vr.List)
-	listSet := vr.CloneListSet()
-
-	// Grow array if needed
-	if i >= len(vr.List) {
-		if listSet == nil {
-			listSet = vr.DenseListSet()
-		}
-		vr.List = append(vr.List, make([]string, i-len(vr.List)+1)...)
-	}
-
-	vr.List[i] = value
-	if listSet != nil {
-		listSet[i] = true
-		vr.ListSet = listSet
-	}
+	vr.ListSet = vr.CloneListSet()
+	vr.ListMap = vr.CloneListMap()
+	vr.SetIndexed(i, value)
 
 	return wenv.Set(name, vr)
 }
@@ -2213,7 +2201,7 @@ func (cfg *Config) paramAtK(vr Variable, name string) string {
 	case Indexed:
 		var parts []string
 		for _, i := range vr.IndexedIndexes() {
-			parts = append(parts, strconv.Itoa(i)+" "+bashDeclareQuote(vr.List[i]))
+			parts = append(parts, strconv.Itoa(i)+" "+bashDeclareQuote(vr.IndexedElem(i)))
 		}
 		return strings.Join(parts, " ")
 	case Associative:
@@ -2256,7 +2244,7 @@ func (cfg *Config) paramAtKFields(vr Variable, name string) []string {
 	case Indexed:
 		var out []string
 		for _, i := range vr.IndexedIndexes() {
-			out = append(out, strconv.Itoa(i), vr.List[i])
+			out = append(out, strconv.Itoa(i), vr.IndexedElem(i))
 		}
 		return out
 	case Associative:
@@ -2335,7 +2323,7 @@ func declareArray(name string, vr Variable, forceLiteral bool) string {
 				b.WriteByte(' ')
 			}
 			first = false
-			fmt.Fprintf(&b, "[%d]=%s", i, bashDeclareQuote(vr.List[i]))
+			fmt.Fprintf(&b, "[%d]=%s", i, bashDeclareQuote(vr.IndexedElem(i)))
 		}
 		b.WriteByte(')')
 	case Associative:
@@ -2717,7 +2705,7 @@ func (cfg *Config) varInd(vr Variable, idx syntax.ArithmExpr) (string, error) {
 			}
 			for i := start; ; i += step {
 				if vr.IndexedSet(i) {
-					vals = append(vals, vr.List[i])
+					vals = append(vals, vr.IndexedElem(i))
 				}
 				if i == end {
 					break
@@ -2748,7 +2736,7 @@ func (cfg *Config) varInd(vr Variable, idx syntax.ArithmExpr) (string, error) {
 			}
 		}
 		if vr.IndexedSet(i) {
-			return vr.List[i], nil
+			return vr.IndexedElem(i), nil
 		}
 		if cfg.NoUnset {
 			idxText := nodeLit(idx)

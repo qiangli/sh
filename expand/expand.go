@@ -4675,7 +4675,7 @@ func indexedDefaultOrNullHasValue(vr Variable) bool {
 		return true
 	}
 	for _, i := range vr.IndexedIndexes() {
-		if vr.List[i] != "" {
+		if vr.IndexedElem(i) != "" {
 			return true
 		}
 	}
@@ -5121,7 +5121,7 @@ func (cfg *Config) sliceIndexedElems(pe *syntax.ParamExp, vr Variable, positiona
 	}
 	elems := make([]string, len(indexes))
 	for i, index := range indexes {
-		elems[i] = vr.List[index]
+		elems[i] = vr.IndexedElem(index)
 	}
 	return elems, nil
 }
