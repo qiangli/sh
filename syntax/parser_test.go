@@ -645,45 +645,45 @@ var errorCases = []errorCase{
 	),
 	errCase(
 		"echo $((foo\x80bar",
-		langErr("1:6: unexpected EOF while looking for matching `))`"),
+		langErr("1:6: unexpected EOF while looking for matching `))'"),
 	),
 	errCase(
 		// The stray \x91 is now absorbed into the array literal, which
 		// is left unterminated. Only LangBash had an expectation here
 		// (POSIX fails earlier with its no-arrays error, unchanged).
 		"z=($\\\n#\\\n\\\n$#\x91\\\n",
-		langErr("1:3: unexpected EOF while looking for matching `)`", LangBash),
+		langErr("1:3: unexpected EOF while looking for matching `)'", LangBash),
 	),
 	errCase(
 		`${ `,
-		langErr("1:1: unexpected EOF while looking for matching `}`", LangMirBSDKorn),
+		langErr("1:1: unexpected EOF while looking for matching `}'", LangMirBSDKorn),
 	),
 	errCase(
 		`${ foo;`,
-		langErr("1:1: unexpected EOF while looking for matching `}`", LangMirBSDKorn),
+		langErr("1:1: unexpected EOF while looking for matching `}'", LangMirBSDKorn),
 	),
 	errCase(
 		`${ foo }`,
-		langErr("1:1: unexpected EOF while looking for matching `}`", LangMirBSDKorn),
+		langErr("1:1: unexpected EOF while looking for matching `}'", LangMirBSDKorn),
 	),
 	errCase(
 		`${|`,
-		langErr("1:1: unexpected EOF while looking for matching `}`", LangMirBSDKorn),
+		langErr("1:1: unexpected EOF while looking for matching `}'", LangMirBSDKorn),
 	),
 	errCase(
 		`${|foo;`,
-		langErr("1:1: unexpected EOF while looking for matching `}`", LangMirBSDKorn),
+		langErr("1:1: unexpected EOF while looking for matching `}'", LangMirBSDKorn),
 	),
 	errCase(
 		`${|foo }`,
-		langErr("1:1: unexpected EOF while looking for matching `}`", LangMirBSDKorn),
+		langErr("1:1: unexpected EOF while looking for matching `}'", LangMirBSDKorn),
 	),
 	errCase(
 		// The stray byte is absorbed into the arithmetic body, leaving
 		// the construct unterminated; POSIX parses `((` as nested `(`.
 		"((foo\x80bar",
-		langErr("1:1: unexpected EOF while looking for matching `))`", LangBash|LangMirBSDKorn|LangBats|LangZsh),
-		langErr("1:2: unexpected EOF while looking for matching `)`", LangPOSIX),
+		langErr("1:1: unexpected EOF while looking for matching `))'", LangBash|LangMirBSDKorn|LangBats|LangZsh),
+		langErr("1:2: unexpected EOF while looking for matching `)'", LangPOSIX),
 	),
 	errCase(
 		";\x80",
@@ -694,12 +694,12 @@ var errorCases = []errorCase{
 		// bash mode the brace expansion runs to EOF unmatched; the other
 		// variants reject it as an invalid parameter-expansion operator.
 		"${a\x80",
-		langErr("1:1: unexpected EOF while looking for matching `}`", LangBash),
+		langErr("1:1: unexpected EOF while looking for matching `}'", LangBash),
 		langErr("1:4: not a valid parameter expansion operator: `�`", LangPOSIX|LangMirBSDKorn|LangBats|LangZsh),
 	),
 	errCase(
 		"${a#\x80",
-		langErr("1:1: unexpected EOF while looking for matching `}`"),
+		langErr("1:1: unexpected EOF while looking for matching `}'"),
 	),
 	errCase(
 		"${a-'\x80",
@@ -707,7 +707,7 @@ var errorCases = []errorCase{
 	),
 	errCase(
 		"echo $((a |\x80",
-		langErr("1:6: unexpected EOF while looking for matching `))`"),
+		langErr("1:6: unexpected EOF while looking for matching `))'"),
 	),
 	errCase(
 		"!",
@@ -824,19 +824,19 @@ var errorCases = []errorCase{
 	errCase(
 		"{",
 		langErr("1:1: `{` must be followed by a statement list"),
-		langErr("1:1: unexpected EOF while looking for matching `}`", LangZsh|LangMirBSDKorn),
+		langErr("1:1: unexpected EOF while looking for matching `}'", LangZsh|LangMirBSDKorn),
 	),
 	errCase(
 		"{ foo;",
-		langErr("1:1: unexpected EOF while looking for matching `}`"),
+		langErr("1:1: unexpected EOF while looking for matching `}'"),
 	),
 	errCase(
 		"{ foo; #}",
-		langErr("1:1: unexpected EOF while looking for matching `}`"),
+		langErr("1:1: unexpected EOF while looking for matching `}'"),
 	),
 	errCase(
 		"(x",
-		langErr("1:1: unexpected EOF while looking for matching `)`"),
+		langErr("1:1: unexpected EOF while looking for matching `)'"),
 	),
 	errCase(
 		")",
@@ -852,7 +852,7 @@ var errorCases = []errorCase{
 	),
 	errCase(
 		"( foo;",
-		langErr("1:1: unexpected EOF while looking for matching `)`"),
+		langErr("1:1: unexpected EOF while looking for matching `)'"),
 	),
 	errCase(
 		"&",
@@ -889,17 +889,17 @@ var errorCases = []errorCase{
 	errCase(
 		"foo(",
 		langErr("1:1: `foo(` must be followed by `)`", LangPOSIX|LangBash|LangMirBSDKorn|LangBats),
-		langErr("1:4: unexpected EOF while looking for matching `)`", LangZsh),
+		langErr("1:4: unexpected EOF while looking for matching `)'", LangZsh),
 	),
 	errCase(
 		"foo(bar",
 		langErr("1:1: `foo(` must be followed by `)`", LangPOSIX|LangBash|LangMirBSDKorn|LangBats),
-		langErr("1:4: unexpected EOF while looking for matching `)`", LangZsh),
+		langErr("1:4: unexpected EOF while looking for matching `)'", LangZsh),
 	),
 	errCase(
 		"à(",
 		langErr("1:1: `foo(` must be followed by `)`", LangPOSIX|LangBash|LangMirBSDKorn|LangBats),
-		langErr("1:3: unexpected EOF while looking for matching `)`", LangZsh),
+		langErr("1:3: unexpected EOF while looking for matching `)'", LangZsh),
 	),
 	errCase(
 		"foo'",
@@ -929,11 +929,11 @@ var errorCases = []errorCase{
 	errCase(
 		"foo() {",
 		langErr("1:7: `{` must be followed by a statement list"),
-		langErr("1:7: unexpected EOF while looking for matching `}`", LangZsh|LangMirBSDKorn),
+		langErr("1:7: unexpected EOF while looking for matching `}'", LangZsh|LangMirBSDKorn),
 	),
 	errCase(
 		"foo() { bar;",
-		langErr("1:7: unexpected EOF while looking for matching `}`"),
+		langErr("1:7: unexpected EOF while looking for matching `}'"),
 	),
 	errCase(
 		"foo-bar() { x; }",
@@ -946,7 +946,7 @@ var errorCases = []errorCase{
 	errCase(
 		"echo foo(",
 		langErr("1:9: a command can only contain words and redirects; encountered `(`", LangPOSIX|LangBash|LangMirBSDKorn|LangBats),
-		langErr("1:9: unexpected EOF while looking for matching `)`", LangZsh),
+		langErr("1:9: unexpected EOF while looking for matching `)'", LangZsh),
 	),
 	errCase(
 		"echo &&",
@@ -1181,7 +1181,7 @@ var errorCases = []errorCase{
 	errCase(
 		"for i in 1 2 (",
 		langErr("1:14: word list can only contain words"),
-		langErr("1:14: unexpected EOF while looking for matching `)`", LangZsh),
+		langErr("1:14: unexpected EOF while looking for matching `)'", LangZsh),
 	),
 	errCase(
 		"for i in 1 2 3; do echo $i;",
@@ -1229,23 +1229,23 @@ var errorCases = []errorCase{
 	),
 	errCase(
 		"echo $(foo",
-		langErr("1:6: unexpected EOF while looking for matching `)`"),
+		langErr("1:6: unexpected EOF while looking for matching `)'"),
 	),
 	errCase(
 		"echo $((foo",
-		langErr("1:6: unexpected EOF while looking for matching `))`"),
+		langErr("1:6: unexpected EOF while looking for matching `))'"),
 	),
 	errCase(
 		`echo $((\`,
-		langErr("1:6: unexpected EOF while looking for matching `))`"),
+		langErr("1:6: unexpected EOF while looking for matching `))'"),
 	),
 	errCase(
 		`echo $((o\`,
-		langErr("1:6: unexpected EOF while looking for matching `))`"),
+		langErr("1:6: unexpected EOF while looking for matching `))'"),
 	),
 	errCase(
 		`echo $((foo\a`,
-		langErr("1:6: unexpected EOF while looking for matching `))`"),
+		langErr("1:6: unexpected EOF while looking for matching `))'"),
 	),
 	errCase(
 		`echo $(($(a"`,
@@ -1253,7 +1253,7 @@ var errorCases = []errorCase{
 	),
 	errCase(
 		"echo $((`echo 0`",
-		langErr("1:6: unexpected EOF while looking for matching `))`"),
+		langErr("1:6: unexpected EOF while looking for matching `))'"),
 	),
 	errCase(
 		`echo $((& $(`,
@@ -1330,7 +1330,7 @@ var errorCases = []errorCase{
 	),
 	errCase(
 		"echo ${foo",
-		langErr("1:6: unexpected EOF while looking for matching `}`"),
+		langErr("1:6: unexpected EOF while looking for matching `}'"),
 	),
 	errCase(
 		"echo ${à}",
@@ -1343,17 +1343,17 @@ var errorCases = []errorCase{
 	),
 	errCase(
 		"echo ${foo-bar",
-		langErr("1:6: unexpected EOF while looking for matching `}`"),
+		langErr("1:6: unexpected EOF while looking for matching `}'"),
 	),
 	errCase(
 		"#foo\n{ bar;",
-		langErr("2:1: unexpected EOF while looking for matching `}`"),
+		langErr("2:1: unexpected EOF while looking for matching `}'"),
 	),
 	errCase(
 		`echo "foo${bar"`,
 		// Bash scans bad substitutions to the matching `}`, past the
 		// closing quote, and only hits EOF.
-		langErr("1:10: unexpected EOF while looking for matching `}`", LangBash),
+		langErr("1:10: unexpected EOF while looking for matching `}'", LangBash),
 		langErr("1:15: not a valid parameter expansion operator: `\"`", LangPOSIX|LangMirBSDKorn|LangBats|LangZsh),
 	),
 	errCase(
@@ -1364,22 +1364,22 @@ var errorCases = []errorCase{
 	errCase(
 		"echo ${+",
 		langErr("1:6: `${+foo}` is a zsh feature; tried parsing as LANG"),
-		langErr("1:6: unexpected EOF while looking for matching `}`", LangZsh),
+		langErr("1:6: unexpected EOF while looking for matching `}'", LangZsh),
 	),
 	errCase(
 		"echo ${#${",
 		langErr("1:9: nested parameter expansions are a zsh feature; tried parsing as LANG"),
-		langErr("1:9: unexpected EOF while looking for matching `}`", LangZsh),
+		langErr("1:9: unexpected EOF while looking for matching `}'", LangZsh),
 	),
 	errCase(
 		"echo ${#$(",
 		langErr("1:9: nested parameter expansions are a zsh feature; tried parsing as LANG"),
-		langErr("1:9: unexpected EOF while looking for matching `)`", LangZsh),
+		langErr("1:9: unexpected EOF while looking for matching `)'", LangZsh),
 	),
 	errCase(
 		"echo ${(",
 		langErr("1:6: parameter expansion flags are a zsh feature; tried parsing as LANG"),
-		langErr("1:8: unexpected EOF while looking for matching `)`", LangZsh),
+		langErr("1:8: unexpected EOF while looking for matching `)'", LangZsh),
 	),
 	errCase(
 		"echo $$(foo)",
@@ -1387,7 +1387,7 @@ var errorCases = []errorCase{
 	),
 	errCase(
 		"echo ${##",
-		langErr("1:6: unexpected EOF while looking for matching `}`"),
+		langErr("1:6: unexpected EOF while looking for matching `}'"),
 	),
 	errCase(
 		"echo ${#<}",
@@ -1444,7 +1444,7 @@ var errorCases = []errorCase{
 	),
 	errCase(
 		"echo ${${nested}[@]",
-		langErr("1:6: unexpected EOF while looking for matching `}`", LangZsh),
+		langErr("1:6: unexpected EOF while looking for matching `}'", LangZsh),
 	),
 	errCase(
 		"echo ${*[@]} ${*[*]}",
@@ -1612,8 +1612,8 @@ var errorCases = []errorCase{
 	),
 	errCase(
 		"((foo",
-		langErr("1:1: unexpected EOF while looking for matching `))`", LangBash|LangMirBSDKorn|LangZsh),
-		langErr("1:2: unexpected EOF while looking for matching `)`", LangPOSIX),
+		langErr("1:1: unexpected EOF while looking for matching `))'", LangBash|LangMirBSDKorn|LangZsh),
+		langErr("1:2: unexpected EOF while looking for matching `)'", LangPOSIX),
 	),
 	errCase(
 		"echo ((foo",
@@ -1679,7 +1679,7 @@ var errorCases = []errorCase{
 	),
 	errCase(
 		"[[ a",
-		langErr("1:1: unexpected EOF while looking for matching `]]`", LangBash|LangMirBSDKorn|LangZsh),
+		langErr("1:1: unexpected EOF while looking for matching `]]'", LangBash|LangMirBSDKorn|LangZsh),
 	),
 	errCase(
 		"[[ a ||",
@@ -1704,7 +1704,7 @@ var errorCases = []errorCase{
 	),
 	errCase(
 		"[[ -f a",
-		langErr("1:1: unexpected EOF while looking for matching `]]`", LangBash|LangMirBSDKorn|LangZsh),
+		langErr("1:1: unexpected EOF while looking for matching `]]'", LangBash|LangMirBSDKorn|LangZsh),
 	),
 	errCase(
 		"[[ -n\na ]]",
@@ -1720,11 +1720,11 @@ var errorCases = []errorCase{
 	),
 	errCase(
 		"[[ a -nt b",
-		langErr("1:1: unexpected EOF while looking for matching `]]`", LangBash|LangMirBSDKorn|LangZsh),
+		langErr("1:1: unexpected EOF while looking for matching `]]'", LangBash|LangMirBSDKorn|LangZsh),
 	),
 	errCase(
 		"[[ a =~ b",
-		langErr("1:1: unexpected EOF while looking for matching `]]`", LangBash|LangZsh),
+		langErr("1:1: unexpected EOF while looking for matching `]]'", LangBash|LangZsh),
 	),
 	errCase(
 		"[[ a b c ]]",
@@ -1797,7 +1797,7 @@ var errorCases = []errorCase{
 	errCase(
 		"local (",
 		langErr("1:7: `local` must be followed by names or assignments", LangBash),
-		langErr("1:7: unexpected EOF while looking for matching `)`", LangZsh),
+		langErr("1:7: unexpected EOF while looking for matching `)'", LangZsh),
 	),
 	errCase(
 		"declare 0=${o}",
@@ -1810,7 +1810,7 @@ var errorCases = []errorCase{
 	errCase(
 		"export ab=$0(",
 		langErr("1:13: `export` must be followed by names or assignments", LangBash),
-		langErr("1:13: unexpected EOF while looking for matching `)`", LangZsh),
+		langErr("1:13: unexpected EOF while looking for matching `)'", LangZsh),
 	),
 	errCase(
 		"declare {x,y}=(1 2)",
@@ -1897,7 +1897,7 @@ var errorCases = []errorCase{
 	),
 	errCase(
 		"a[b",
-		langErr("1:2: unexpected EOF while looking for matching `]`", LangBash|LangMirBSDKorn|LangZsh),
+		langErr("1:2: unexpected EOF while looking for matching `]'", LangBash|LangMirBSDKorn|LangZsh),
 	),
 	errCase(
 		"a[]",
@@ -1940,7 +1940,7 @@ var errorCases = []errorCase{
 	),
 	errCase(
 		"echo $[foo",
-		langErr("1:6: unexpected EOF while looking for matching `]`", LangBash),
+		langErr("1:6: unexpected EOF while looking for matching `]'", LangBash),
 	),
 	errCase(
 		"echo $'",
@@ -1952,11 +1952,11 @@ var errorCases = []errorCase{
 	),
 	errCase(
 		"echo @(",
-		langErr("1:6: unexpected EOF while looking for matching `)`", LangBash|LangMirBSDKorn),
+		langErr("1:6: unexpected EOF while looking for matching `)'", LangBash|LangMirBSDKorn),
 	),
 	errCase(
 		"echo @(a",
-		langErr("1:6: unexpected EOF while looking for matching `)`", LangBash|LangMirBSDKorn),
+		langErr("1:6: unexpected EOF while looking for matching `)'", LangBash|LangMirBSDKorn),
 	),
 	errCase(
 		"echo @([abc)])",
@@ -1968,7 +1968,7 @@ var errorCases = []errorCase{
 	),
 	errCase(
 		"time { foo;",
-		langErr("1:6: unexpected EOF while looking for matching `}`", LangBash|LangMirBSDKorn|LangZsh),
+		langErr("1:6: unexpected EOF while looking for matching `}'", LangBash|LangMirBSDKorn|LangZsh),
 	),
 	errCase(
 		"time ! foo",
@@ -2001,15 +2001,15 @@ var errorCases = []errorCase{
 	),
 	errCase(
 		"echo ${a/\n",
-		langErr("1:6: unexpected EOF while looking for matching `}`", LangBash|LangMirBSDKorn),
+		langErr("1:6: unexpected EOF while looking for matching `}'", LangBash|LangMirBSDKorn),
 	),
 	errCase(
 		"echo ${a/''",
-		langErr("1:6: unexpected EOF while looking for matching `}`", LangBash|LangMirBSDKorn),
+		langErr("1:6: unexpected EOF while looking for matching `}'", LangBash|LangMirBSDKorn),
 	),
 	errCase(
 		"echo ${a-\n",
-		langErr("1:6: unexpected EOF while looking for matching `}`", LangBash|LangMirBSDKorn),
+		langErr("1:6: unexpected EOF while looking for matching `}'", LangBash|LangMirBSDKorn),
 	),
 	errCase(
 		"echo ${foo:",
@@ -2021,7 +2021,7 @@ var errorCases = []errorCase{
 	),
 	errCase(
 		"echo ${foo:1",
-		langErr("1:6: unexpected EOF while looking for matching `}`", LangBash|LangMirBSDKorn),
+		langErr("1:6: unexpected EOF while looking for matching `}'", LangBash|LangMirBSDKorn),
 	),
 	errCase(
 		"echo ${foo:1:",
@@ -2029,31 +2029,31 @@ var errorCases = []errorCase{
 	),
 	errCase(
 		"echo ${foo:1:2",
-		langErr("1:6: unexpected EOF while looking for matching `}`", LangBash|LangMirBSDKorn),
+		langErr("1:6: unexpected EOF while looking for matching `}'", LangBash|LangMirBSDKorn),
 	),
 	errCase(
 		"echo ${foo:h",
-		langErr("1:6: unexpected EOF while looking for matching `}`", LangZsh),
+		langErr("1:6: unexpected EOF while looking for matching `}'", LangZsh),
 	),
 	errCase(
 		"echo ${foo,",
-		langErr("1:6: unexpected EOF while looking for matching `}`", LangBash),
+		langErr("1:6: unexpected EOF while looking for matching `}'", LangBash),
 	),
 	errCase(
 		"echo ${foo@",
-		langErr("1:6: unexpected EOF while looking for matching `}`", LangBash),
+		langErr("1:6: unexpected EOF while looking for matching `}'", LangBash),
 	),
 	errCase(
 		"echo ${foo@Q",
-		langErr("1:6: unexpected EOF while looking for matching `}`", LangBash),
+		langErr("1:6: unexpected EOF while looking for matching `}'", LangBash),
 	),
 	errCase(
 		"for ((;;",
-		langErr("1:5: unexpected EOF while looking for matching `))`", LangBash),
+		langErr("1:5: unexpected EOF while looking for matching `))'", LangBash),
 	),
 	errCase(
 		"for ((;;0000000",
-		langErr("1:5: unexpected EOF while looking for matching `))`", LangBash),
+		langErr("1:5: unexpected EOF while looking for matching `))'", LangBash),
 	),
 	errCase(
 		"echo <(",
@@ -2416,7 +2416,7 @@ func TestParseDocumentError(t *testing.T) {
 	in := "foo $("
 	p := NewParser()
 	_, err := p.Document(strings.NewReader(in))
-	want := "1:5: unexpected EOF while looking for matching `)`"
+	want := "1:5: unexpected EOF while looking for matching `)'"
 	got := fmt.Sprintf("%v", err)
 	if got != want {
 		t.Fatalf("Expected %q as an error, but got %q", want, got)

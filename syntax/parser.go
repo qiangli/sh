@@ -1126,7 +1126,11 @@ func (p *Parser) quoteErr(lpos Pos, quote token) {
 
 func (p *Parser) matchingErr(lpos Pos, left, right token) {
 	if p.tok == _EOF {
-		p.posErr(lpos, "unexpected EOF while looking for matching %#q", right)
+		// bash renders this as "matching `}'" — open backtick, close
+		// apostrophe (the interp/builtin.go EOF messages hardcode the
+		// same). %#q would Go-backquote both sides ("`}`"), which the
+		// arith/posixexp/exportfunc fixtures flag.
+		p.posErr(lpos, "unexpected EOF while looking for matching \x60%s'", right)
 	} else {
 		p.posErr(lpos, "reached %#q without matching %#q with %#q", p.tok, left, right)
 	}

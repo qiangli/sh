@@ -3758,7 +3758,7 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	{"eval echo foo", "foo\n"},
 	{"eval 'echo foo'", "foo\n"},
 	{"eval 'exit 1'", "exit status 1"},
-	{"eval '(x'", "eval: 1:1: unexpected EOF while looking for matching `)`\nexit status 1 #JUSTERR"},
+	{"eval '(x'", "eval: 1:1: unexpected EOF while looking for matching `)'\nexit status 1 #JUSTERR"},
 	{"set a b; eval 'echo $@'", "a b\n"},
 	{"eval 'a=foo'; echo $a", "foo\n"},
 	{`a=b eval "echo $a"`, "\n"},
