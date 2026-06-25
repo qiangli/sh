@@ -91,6 +91,16 @@ func TestRunnerBash53RedirectCluster(t *testing.T) {
 			want: "7: Bad file descriptor\nexit status 1",
 		},
 		{
+			name: "dpl_out_to_unopened_fd_is_bad_fd",
+			in:   "echo hi >&3",
+			want: "3: Bad file descriptor\nexit status 1",
+		},
+		{
+			name: "dpl_out_to_closed_fd_is_bad_fd",
+			in:   "exec 4>&-\necho hi >&4",
+			want: "4: Bad file descriptor\nexit status 1",
+		},
+		{
 			name: "noclobber_allows_dev_null",
 			in:   "set -o noclobber\nprintf ok >/dev/null\necho status=$?",
 			want: "status=0\n",
