@@ -8983,9 +8983,13 @@ func (r *Runner) runTestClause(ctx context.Context, pos syntax.Pos, expr syntax.
 		r.errf(r.bashErrPrefix(pos)+"[[: %s: integer expected\n", r.testIntErr)
 		r.testIntErr = ""
 		r.exit.code = 2
-	} else if result == "" && r.exit.ok() {
-		// Preserve exit status code 2 for regex errors, etc.
-		r.exit.code = 1
+	} else if result == "" {
+		if r.exit.ok() {
+			r.exit.code = 1
+		}
+		// Otherwise preserve exit status code 2 for regex errors, etc.
+	} else {
+		r.exit.code = 0
 	}
 }
 
