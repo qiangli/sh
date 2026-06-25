@@ -248,21 +248,6 @@ func (r *Runner) bashTest(ctx context.Context, expr syntax.TestExpr, classic boo
 				}
 			}
 		}
-		if !classic {
-			switch x.Op {
-			case syntax.TsBefore, syntax.TsAfter:
-				if xw, ok := x.X.(*syntax.Word); ok {
-					if src := r.sourceTextRange(xw.Pos(), xw.End(), false); src != "" {
-						xStr = src
-					}
-				}
-				if yw, ok := x.Y.(*syntax.Word); ok {
-					if src := r.sourceTextRange(yw.Pos(), yw.End(), false); src != "" {
-						yStr = src
-					}
-				}
-			}
-		}
 		if r.binTest(ctx, x.Op, xStr, yStr, classic) {
 			return "1"
 		}

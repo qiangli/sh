@@ -206,6 +206,16 @@ func TestArrayElementUnsetAndSetnessFidelity(t *testing.T) {
 			want: "declare -ai iarr=([0]=\"3\" [1]=\"2\" [2]=\"3\")\n" +
 				"declare -ai iarr=([0]=\"3\" [1]=\"2\" [2]=\"3\" [3]=\"4\" [4]=\"5\" [5]=\"6\")\n",
 		},
+		{
+			name: "array16_sparse_length_test",
+			in: "unset -v a\n" +
+				"a[1]=set\n" +
+				"[[ -v a ]] ; echo $?\n" +
+				"[[ -v a[1] ]] ; echo $?\n" +
+				"[[ -v a[@] ]] ; echo $?\n" +
+				"[[ ${#a[@]} > 0 ]]; echo $?\n",
+			want: "1\n0\n0\n0\n",
+		},
 	}
 
 	for _, tc := range cases {
