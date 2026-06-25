@@ -62,9 +62,31 @@ func TestQuoteArrayFidelity(t *testing.T) {
 		{
 			// `unset -v a['$key']`: the single-quoted subscript pins the
 			// key to the literal `$key` (no expansion), so the element set
-			// by `a['$key']=2` is removed and the array is left empty.
+			// by `a['$key']=2` is removed and the array is left empty. The
+			// raw-source recovery applies only because `a` is associative.
 			input: "declare -A a\nkey='$(echo foo)'\na['$key']=2\nunset -v a['$key']\ndeclare -p a",
 			want:  "declare -A a=()\n",
+		},
+		{
+			// SECURITY (array32.sub line 29): `unset` of an *indexed* array
+			// element whose subscript is a quoted command substitution must
+			// NOT recover the raw source as a literal key (which would print
+			// `["$subscript"]: bad array subscript`) and must NOT run the
+			// embedded `$(…)`. The subscript is fed to the arithmetic
+			// evaluator instead, so the injection never executes and the
+			// existing element is left untouched.
+			input: "subscript='$(echo INJECTION! >&2 ; echo 0)'\na[0]=hi\nunset a[\"$subscript\"]\ndeclare -p a",
+			want:  "./s: line 3: $(echo INJECTION! >&2 ; echo 0): arithmetic syntax error: operand expected (error token is \"$(echo INJECTION! >&2 ; echo 0)\")\ndeclare -a a=([0]=\"hi\")\n",
+		},
+		{
+			// assoc.tests (assoc16.sub line 55): an explicit `${A[$(…)]}`
+			// parameter expansion inside `$(( … ))` is snapshotted and
+			// expanded exactly once — the command substitution in the
+			// subscript runs a single time (one `stderr`), not twice. The
+			// key `Darwin` resolves to `7*6`, which the surrounding
+			// arithmetic evaluates to 42.
+			input: "declare -A A\nA[Darwin]=7*6\necho $(( ${A[$(echo Darwin; echo stderr >&2)]} ))",
+			want:  "stderr\n42\n",
 		},
 	}
 

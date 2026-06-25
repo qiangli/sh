@@ -122,6 +122,17 @@ func (cfg *Config) arithmIndexedParamLiteral(word *syntax.Word) (string, bool, e
 		return "", true, UnsetParameterError{Name: name, Message: "unbound variable"}
 	}
 	if vr.Kind == Associative {
+		// Only a *bare* associative reference (`assoc[$key]`, no leading
+		// `$`/`${…}`) needs this special handling. An explicit parameter
+		// expansion (`${assoc[$key]}`, Dollar set) was already expanded
+		// exactly once by snapshotArithmParams, so re-expanding the
+		// subscript here would run an embedded `$(…)` key a second time
+		// (e.g. `$(( ${A[$(echo … >&2)]} ))` emitting the side effect
+		// twice). Leave that form to arithmLiteral, which reuses the
+		// snapshot value.
+		if pe.Dollar.IsValid() {
+			return "", false, nil
+		}
 		// An associative array reference resolves its subscript to a
 		// literal string key (one round of parameter/command expansion),
 		// then looks the key up and yields its value for arithmetic
