@@ -2324,7 +2324,7 @@ func (cfg *Config) wordField(wps []syntax.WordPart, ql quoteLevel) ([]fieldPart,
 			// would. The flag is per-cfg and restored after.
 			var val string
 			var err error
-			if cfg.tildeInAssign && !wp.Excl && wp.Exp == nil && wp.Repl == nil && wp.Param.Value == "*" {
+			if cfg.tildeInAssign && !wp.Excl && wp.Exp == nil && wp.Repl == nil && wp.Param != nil && wp.Param.Value == "*" {
 				elems, err := cfg.sliceElems(wp, cfg.Env.Get(wp.Param.Value).List, true)
 				if err != nil {
 					return nil, err
@@ -2977,6 +2977,12 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 				curField = append(curField, part)
 			}
 		case *syntax.ParamExp:
+			if wp.BadSubst != nil {
+				// A deferred bad substitution has no parameter name;
+				// surface the error before any code dereferences it.
+				_, err := cfg.paramExp(wp)
+				return nil, err
+			}
 			if elems, ok, err := cfg.unquotedNullIFSStarFields(wp); err != nil {
 				return nil, err
 			} else if ok {
@@ -3218,7 +3224,7 @@ func (cfg *Config) quotedEmptyAtElidesField(parts []syntax.WordPart) bool {
 	hasAt := false
 	for _, part := range parts {
 		pe, ok := part.(*syntax.ParamExp)
-		if !ok || pe.Excl || pe.Exp != nil || pe.Repl != nil || pe.Slice != nil ||
+		if !ok || pe.BadSubst != nil || pe.Excl || pe.Exp != nil || pe.Repl != nil || pe.Slice != nil ||
 			pe.Length || pe.Width || pe.IsSet || pe.Index != nil {
 			return false
 		}
@@ -4154,7 +4160,7 @@ func paramExpWordHasAtOrStar(word *syntax.Word) bool {
 			// modifier (`${*/}`, `${*,,}`, `${*#p}`, `${*@Q}`): those
 			// unquoted forms still expand per-element, so substWordFields
 			// must not bail out to the joined paramExp path for them.
-			if !part.Excl &&
+			if !part.Excl && part.Param != nil &&
 				(part.Param.Value == "@" || part.Param.Value == "*" ||
 					nodeLit(part.Index) == "@" || nodeLit(part.Index) == "*") {
 				return true
@@ -4302,7 +4308,7 @@ func (cfg *Config) escapedLitFields(s string) [][]fieldPart {
 // references pass this cheap pre-filter but are filtered out by
 // [Config.quotedElemFields] returning nil.
 func quotedPartSplits(pe *syntax.ParamExp) bool {
-	if pe == nil || pe.Repl != nil || pe.Length || pe.Width || pe.IsSet {
+	if pe == nil || pe.BadSubst != nil || pe.Repl != nil || pe.Length || pe.Width || pe.IsSet {
 		return false
 	}
 	if pe.Exp != nil {
@@ -4324,7 +4330,7 @@ func quotedPartSplits(pe *syntax.ParamExp) bool {
 }
 
 func (cfg *Config) quotedElemFields(pe *syntax.ParamExp) ([]string, error) {
-	if pe == nil || pe.Length || pe.Width || pe.IsSet {
+	if pe == nil || pe.BadSubst != nil || pe.Length || pe.Width || pe.IsSet {
 		return nil, nil
 	}
 	// Default/alternate substitution (`${var-WORD}`, `${var+WORD}`,
@@ -4730,11 +4736,14 @@ func (cfg *Config) quotedTransformElemFields(pe *syntax.ParamExp) ([]string, err
 		if pe.Param.Value == "@" || pe.Param.Value == "*" {
 			return []string{""}, nil
 		}
+		flag := cfg.Env.Get(pe.Param.Value).Flags()
 		elems, join, err := cfg.quotedModElemValues(pe)
 		if err != nil || elems == nil {
 			return nil, err
 		}
-		flag := cfg.Env.Get(pe.Param.Value).Flags()
+		if len(elems) == 0 && nodeLit(pe.Index) == "@" && flag != "" {
+			return []string{flag}, nil
+		}
 		out := make([]string, len(elems))
 		for i := range out {
 			out[i] = flag
@@ -5012,13 +5021,13 @@ func (cfg *Config) sliceElems(pe *syntax.ParamExp, elems []string, positional bo
 				if text := arithmExprText(pe.Slice.Length); text != "" {
 					name = text
 				}
-				return nil, fmt.Errorf(" %s: substring expression < 0", name)
+				return nil, fmt.Errorf("%s: substring expression < 0", name)
 			}
 			name := pe.Param.Value
 			if text := arithmExprText(pe.Slice.Length); text != "" {
-				return nil, fmt.Errorf(" %s: substring expression < 0", text)
+				return nil, fmt.Errorf("%s: substring expression < 0", text)
 			}
-			return nil, fmt.Errorf(" %s: %d: substring expression < 0", name, length)
+			return nil, fmt.Errorf("%s: %d: substring expression < 0", name, length)
 		}
 		elems = elems[:slicePos(length)]
 	}
@@ -5063,9 +5072,9 @@ func (cfg *Config) sliceIndexedElems(pe *syntax.ParamExp, vr Variable, positiona
 		if length < 0 {
 			name := pe.Param.Value
 			if text := arithmExprText(pe.Slice.Length); text != "" {
-				return nil, fmt.Errorf(" %s: substring expression < 0", text)
+				return nil, fmt.Errorf("%s: substring expression < 0", text)
 			}
-			return nil, fmt.Errorf(" %s: %d: substring expression < 0", name, length)
+			return nil, fmt.Errorf("%s: %d: substring expression < 0", name, length)
 		}
 		if length < len(indexes) {
 			indexes = indexes[:length]
@@ -5110,9 +5119,9 @@ func (cfg *Config) sliceAssocElems(pe *syntax.ParamExp, elems []string) ([]strin
 		if length < 0 {
 			name := pe.Param.Value
 			if text := arithmExprText(pe.Slice.Length); text != "" {
-				return nil, fmt.Errorf(" %s: substring expression < 0", text)
+				return nil, fmt.Errorf("%s: substring expression < 0", text)
 			}
-			return nil, fmt.Errorf(" %s: %d: substring expression < 0", name, length)
+			return nil, fmt.Errorf("%s: %d: substring expression < 0", name, length)
 		}
 		if length < len(elems) {
 			elems = elems[:length]
@@ -5311,7 +5320,7 @@ func bracketIsOrphan(s string) bool {
 
 func (cfg *Config) findAllIndex(pat, name string, n int) [][]int {
 	if strings.Contains(pat, "[") && strings.Contains(pat, "-") {
-		return findReplIndexBytes(pat, name, n, false, false)
+		return findReplIndexBytes(pat, name, n, false, false, cfg.NoCaseMatch)
 	}
 	var mode pattern.Mode
 	if strings.Contains(pat, "-") {
@@ -5326,7 +5335,7 @@ func (cfg *Config) findAllIndex(pat, name string, n int) [][]int {
 	expr, err := pattern.Regexp(escapeOrphanBrackets(pat), mode)
 	if err != nil {
 		if strings.Contains(pat, "-") {
-			return findReplIndexBytes(pat, name, n, false, false)
+			return findReplIndexBytes(pat, name, n, false, false, cfg.NoCaseMatch)
 		}
 		return nil
 	}

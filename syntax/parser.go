@@ -1809,6 +1809,22 @@ zshPrefixLoop:
 			}
 		}
 	}
+	// Bash does not support zsh-style nested parameter expansions like
+	// `${${x}}` or `${$(cmd)}`; it parses them at face value and rejects
+	// them at expansion time as a bad substitution. Capture the raw
+	// remainder so the runner can emit that same runtime diagnostic.
+	if !pe.Short && p.lang == LangBash && p.r == '$' {
+		if p1 := p.peek(); p1 == '{' || p1 == '(' {
+			// Record an empty parameter name so the expansion keeps the
+			// usual non-nil Param invariant; the runner reports the bad
+			// substitution before the name is ever read. The raw
+			// remainder (the nested `$...`) is captured verbatim, so
+			// reset the pending token to avoid prefixing it with `${`.
+			pe.Param = p.lit(p.nextPos(), "")
+			p.tok = illegalTok
+			return p.deferBadSubst(pe, old)
+		}
+	}
 	if pe = p.paramExpParameter(pe); pe == nil {
 		p.quote = old
 		return nil // just "$"

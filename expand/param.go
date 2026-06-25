@@ -802,13 +802,13 @@ func (cfg *Config) findReplIndex(pat, name string, n int, start, end bool) [][]i
 		return nil
 	}
 	if cfg.cLocale() {
-		return findReplIndexBytes(pat, name, n, start, end)
+		return findReplIndexBytes(pat, name, n, start, end, cfg.NoCaseMatch)
 	}
 	if pat == "[^]]" {
 		return nil
 	}
 	if strings.Contains(pat, "[") && strings.Contains(pat, "-") {
-		return findReplIndexBytes(pat, name, n, start, end)
+		return findReplIndexBytes(pat, name, n, start, end, cfg.NoCaseMatch)
 	}
 	if !start && !end {
 		return cfg.findAllIndex(pat, name, n)
@@ -846,10 +846,10 @@ func (cfg *Config) findReplIndex(pat, name string, n int, start, end bool) [][]i
 	return nil
 }
 
-func findReplIndexBytes(pat, name string, n int, start, end bool) [][]int {
+func findReplIndexBytes(pat, name string, n int, start, end, nocase bool) [][]int {
 	if start {
 		for j := len(name); j >= 0; j-- {
-			if bytePatternMatch([]byte(pat), []byte(name[:j])) {
+			if bytePatternMatch([]byte(pat), []byte(name[:j]), nocase) {
 				return [][]int{{0, j}}
 			}
 		}
@@ -857,7 +857,7 @@ func findReplIndexBytes(pat, name string, n int, start, end bool) [][]int {
 	}
 	if end {
 		for i := 0; i <= len(name); i++ {
-			if bytePatternMatch([]byte(pat), []byte(name[i:])) {
+			if bytePatternMatch([]byte(pat), []byte(name[i:]), nocase) {
 				return [][]int{{i, len(name)}}
 			}
 		}
@@ -867,7 +867,7 @@ func findReplIndexBytes(pat, name string, n int, start, end bool) [][]int {
 	for i := 0; i <= len(name); i++ {
 		best := -1
 		for j := len(name); j >= i; j-- {
-			if bytePatternMatch([]byte(pat), []byte(name[i:j])) {
+			if bytePatternMatch([]byte(pat), []byte(name[i:j]), nocase) {
 				best = j
 				break
 			}
@@ -887,7 +887,7 @@ func findReplIndexBytes(pat, name string, n int, start, end bool) [][]int {
 	return locs
 }
 
-func bytePatternMatch(pat, name []byte) bool {
+func bytePatternMatch(pat, name []byte, nocase bool) bool {
 	for len(pat) > 0 {
 		switch p := pat[0]; p {
 		case '*':
@@ -899,7 +899,7 @@ func bytePatternMatch(pat, name []byte) bool {
 			}
 			pat = pat[1:]
 			for i := 0; i <= len(name); i++ {
-				if bytePatternMatch(pat, name[i:]) {
+				if bytePatternMatch(pat, name[i:], nocase) {
 					return true
 				}
 			}
@@ -911,7 +911,7 @@ func bytePatternMatch(pat, name []byte) bool {
 			pat = pat[1:]
 			name = name[1:]
 		case '[':
-			ok, consumed, matched := byteBracketMatch(pat, name)
+			ok, consumed, matched := byteBracketMatch(pat, name, nocase)
 			if !ok {
 				return false
 			}
@@ -928,12 +928,12 @@ func bytePatternMatch(pat, name []byte) bool {
 				p = pat[1]
 				pat = pat[2:]
 			}
-			if len(name) == 0 || name[0] != p {
+			if len(name) == 0 || !byteEqual(name[0], p, nocase) {
 				return false
 			}
 			name = name[1:]
 		default:
-			if len(name) == 0 || name[0] != p {
+			if len(name) == 0 || !byteEqual(name[0], p, nocase) {
 				return false
 			}
 			pat = pat[1:]
@@ -943,7 +943,7 @@ func bytePatternMatch(pat, name []byte) bool {
 	return len(name) == 0
 }
 
-func byteBracketMatch(pat, name []byte) (ok bool, consumed int, matched bool) {
+func byteBracketMatch(pat, name []byte, nocase bool) (ok bool, consumed int, matched bool) {
 	if len(name) == 0 || len(pat) < 3 || pat[0] != '[' {
 		return false, 0, false
 	}
@@ -956,9 +956,10 @@ func byteBracketMatch(pat, name []byte) (ok bool, consumed int, matched bool) {
 	if i >= len(pat) {
 		return false, 0, false
 	}
-	b := name[0]
+	b := foldByte(name[0], nocase)
 	in := false
 	first := true
+scan:
 	for i < len(pat) {
 		if pat[i] == ']' && !first {
 			if neg {
@@ -971,7 +972,7 @@ func byteBracketMatch(pat, name []byte) (ok bool, consumed int, matched bool) {
 			i++
 			start = pat[i]
 			if start == '[' && i+2 < len(pat) && pat[i+1] == ']' && pat[i+2] == ']' {
-				if b == '[' || b == ']' {
+				if byteEqual(b, '[', nocase) || byteEqual(b, ']', nocase) {
 					in = true
 				}
 				if neg {
@@ -980,10 +981,23 @@ func byteBracketMatch(pat, name []byte) (ok bool, consumed int, matched bool) {
 				return true, i + 3, in
 			}
 		}
+		if start == '[' && i+3 < len(pat) && pat[i+1] == ':' {
+			for j := i + 2; j+1 < len(pat); j++ {
+				if pat[j] == ':' && pat[j+1] == ']' {
+					if byteClassMatch(string(pat[i+2:j]), b) {
+						in = true
+					}
+					i = j + 2
+					first = false
+					continue scan
+				}
+			}
+		}
 		if i+2 < len(pat) && pat[i+1] == '-' && pat[i+2] != ']' {
-			end := pat[i+2]
+			start = foldByte(start, nocase)
+			end := foldByte(pat[i+2], nocase)
 			if end == '\\' && i+3 < len(pat) {
-				end = pat[i+3]
+				end = foldByte(pat[i+3], nocase)
 				if start <= end && start <= b && b <= end {
 					in = true
 				}
@@ -997,13 +1011,55 @@ func byteBracketMatch(pat, name []byte) (ok bool, consumed int, matched bool) {
 			first = false
 			continue
 		}
-		if b == start {
+		if byteEqual(b, start, nocase) {
 			in = true
 		}
 		i++
 		first = false
 	}
 	return false, 0, false
+}
+
+func foldByte(b byte, nocase bool) byte {
+	if nocase && 'A' <= b && b <= 'Z' {
+		return b + 'a' - 'A'
+	}
+	return b
+}
+
+func byteEqual(a, b byte, nocase bool) bool {
+	return foldByte(a, nocase) == foldByte(b, nocase)
+}
+
+func byteClassMatch(class string, b byte) bool {
+	switch class {
+	case "alnum":
+		return '0' <= b && b <= '9' || 'a' <= b && b <= 'z' || 'A' <= b && b <= 'Z'
+	case "alpha":
+		return 'a' <= b && b <= 'z' || 'A' <= b && b <= 'Z'
+	case "digit":
+		return '0' <= b && b <= '9'
+	case "lower":
+		return 'a' <= b && b <= 'z'
+	case "upper":
+		return 'A' <= b && b <= 'Z'
+	case "xdigit":
+		return '0' <= b && b <= '9' || 'a' <= b && b <= 'f' || 'A' <= b && b <= 'F'
+	case "blank":
+		return b == ' ' || b == '\t'
+	case "space":
+		return b == ' ' || b == '\t' || b == '\n' || b == '\r' || b == '\v' || b == '\f'
+	case "punct":
+		return 0x21 <= b && b <= 0x2f || 0x3a <= b && b <= 0x40 ||
+			0x5b <= b && b <= 0x60 || 0x7b <= b && b <= 0x7e
+	case "cntrl":
+		return b < 0x20 || b == 0x7f
+	case "graph":
+		return 0x21 <= b && b <= 0x7e
+	case "print":
+		return 0x20 <= b && b <= 0x7e
+	}
+	return false
 }
 
 // replSegment is one piece of a ${var/pat/repl} replacement template. When
@@ -1404,7 +1460,7 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			}
 			strs = cfg.namesByPrefix(pe.Param.Value)
 			sortStrs = true
-		case pe.Index != nil && vr.Kind == Indexed &&
+		case pe.Exp == nil && pe.Index != nil && vr.Kind == Indexed &&
 			(nodeLit(pe.Index) == "@" || nodeLit(pe.Index) == "*"):
 			if pe.Exp != nil && indirectAtOp(pe.Exp.Op) {
 				lit := ""

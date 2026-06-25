@@ -1367,13 +1367,19 @@ var errorCases = []errorCase{
 		langErr("1:6: unexpected EOF while looking for matching `}'", LangZsh),
 	),
 	errCase(
+		// Bash does not support zsh nested parameter expansions; it
+		// parses `${...}` at face value and only rejects the nested
+		// form as a bad substitution at expansion time, so the parse
+		// error here is the unclosed outer expansion at EOF.
 		"echo ${#${",
 		langErr("1:9: nested parameter expansions are a zsh feature; tried parsing as LANG"),
+		langErr("1:6: unexpected EOF while looking for matching `}'", LangBash),
 		langErr("1:9: unexpected EOF while looking for matching `}'", LangZsh),
 	),
 	errCase(
 		"echo ${#$(",
 		langErr("1:9: nested parameter expansions are a zsh feature; tried parsing as LANG"),
+		langErr("1:6: unexpected EOF while looking for matching `}'", LangBash),
 		langErr("1:9: unexpected EOF while looking for matching `)'", LangZsh),
 	),
 	errCase(
