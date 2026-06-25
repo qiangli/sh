@@ -201,3 +201,8 @@ func modifiedSinceAccessed(info os.FileInfo) bool {
 	}
 	return mtim.After(atim)
 }
+
+// closeOnExecFd marks fd close-on-exec so it does not leak into spawned
+// children. Unix passes the int fd straight to syscall.CloseOnExec; the
+// !unix build is a no-op (Windows wants a syscall.Handle) — see os_notunix.go.
+func closeOnExecFd(fd int) { syscall.CloseOnExec(fd) }

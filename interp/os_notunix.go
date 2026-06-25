@@ -95,3 +95,7 @@ func waitExecCmd(ctx context.Context, cmd *exec.Cmd) error {
 func (r *Runner) inheritedFd(fd int) (*os.File, bool) {
 	return nil, false
 }
+
+// closeOnExecFd is a no-op off unix: Windows/plan9 don't expose the int-fd
+// close-on-exec primitive (syscall.CloseOnExec there takes a Handle).
+func closeOnExecFd(int) {}

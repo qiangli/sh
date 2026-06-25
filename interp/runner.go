@@ -7718,7 +7718,7 @@ func (r *Runner) closeUnmanagedInheritedFdsOnExec() {
 		if _, ok := r.fdWriteTable[fd]; ok {
 			continue
 		}
-		syscall.CloseOnExec(fd)
+		closeOnExecFd(fd)
 	}
 }
 
