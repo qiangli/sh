@@ -51,6 +51,13 @@ func TestExpandTailBuiltinFidelity(t *testing.T) {
 				"A B C D E F G H I J K L M N O P Q R S T U V W X Y Z [  ] ^ _ ` a\n",
 		},
 		{
+			name: "brace_char_range_backtick_with_suffix",
+			in:   "echo -{z..A}-\necho -{z..A..2}-",
+			want: "./s: line 1: bad substitution: no closing \"`\" in `-\n" +
+				"./s: line 2: bad substitution: no closing \"`\" in `-\n" +
+				"exit status 1",
+		},
+		{
 			// builtin-vars__016: a readonly-variable assignment error
 			// inside `eval` discards only the eval'd command list — bash
 			// contains the DISCARD within eval, which returns status 1,

@@ -455,6 +455,10 @@ func (r *Runner) expandErr(err error) {
 			r.exit.exiting = true
 		}
 		return
+	case strings.Contains(errMsg, "bad substitution"):
+		r.exit.code = 1
+		r.lastExpandExit = exitStatus{code: 1}
+		return
 	case strings.Contains(errMsg, "invalid variable name"),
 		strings.Contains(errMsg, "not a valid identifier"):
 		// errors6.sub lines 40-56 and nameref default-assignment to an
@@ -7613,6 +7617,21 @@ func (r *Runner) execExtraFiles() ([]*os.File, string) {
 		fds = append(fds, strconv.Itoa(fd))
 	}
 	return extra, strings.Join(fds, ",")
+}
+
+func (r *Runner) closeUnmanagedInheritedFdsOnExec() {
+	for fd := range r.inheritedFds {
+		if fd < 3 {
+			continue
+		}
+		if _, ok := r.fdTable[fd]; ok {
+			continue
+		}
+		if _, ok := r.fdWriteTable[fd]; ok {
+			continue
+		}
+		syscall.CloseOnExec(fd)
+	}
 }
 
 // setReadFd binds f as a readable source for the given target fd.

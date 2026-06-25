@@ -196,6 +196,7 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 		if inheritedFds != "" {
 			env = append(env, BashyInheritedFdsEnv+"="+inheritedFds)
 		}
+		hc.runner.closeUnmanagedInheritedFdsOnExec()
 		cmd := exec.Cmd{
 			Path:       path,
 			Args:       cmdArgs,
