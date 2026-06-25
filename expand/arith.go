@@ -122,7 +122,36 @@ func (cfg *Config) arithmIndexedParamLiteral(word *syntax.Word) (string, bool, e
 		return "", true, UnsetParameterError{Name: name, Message: "unbound variable"}
 	}
 	if vr.Kind == Associative {
-		return "", false, nil
+		// An associative array reference resolves its subscript to a
+		// literal string key (one round of parameter/command expansion),
+		// then looks the key up and yields its value for arithmetic
+		// evaluation. Unlike an indexed subscript, the expanded text is
+		// NOT re-parsed as arithmetic — so a key value that happens to
+		// contain `]`, `[`, or `$(...)` (e.g. `assoc[$key]` where
+		// `key='x],b[$(echo …)'`) is treated as an opaque key rather than
+		// triggering further command substitution or subscript parsing.
+		word, ok := pe.Index.(*syntax.Word)
+		if !ok {
+			return "", false, nil
+		}
+		switch nodeLit(word) {
+		case "*", "@":
+			return "", false, nil
+		}
+		// Expand the subscript with Literal directly (not arithmLiteral):
+		// the latter snapshots a `$key` ParamExp into a bare `~` literal,
+		// which Literal would then tilde-expand. Bash applies no tilde
+		// expansion to the result of a subscript's parameter expansion, so
+		// the key must match how the assignment path (resolveAritLvalue)
+		// computed it — a plain Literal of the original index word.
+		key, lerr := Literal(cfg, word)
+		if lerr != nil {
+			return "", true, lerr
+		}
+		if val, ok := vr.Map[key]; ok {
+			return val, true, nil
+		}
+		return "0", true, nil
 	}
 	// An empty subscript (`y[$none]` where $none is unset expands to the
 	// literal `y[]`) is rejected by bash's arithmetic evaluator while it
