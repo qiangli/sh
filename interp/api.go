@@ -256,6 +256,7 @@ type Runner struct {
 	lastExit exitStatus
 
 	lastExpandExit exitStatus // used to surface exit statuses while expanding fields
+	expandRunExit  exitStatus // expansion failures which affect Run but not $?
 
 	// lastArithErr captures the most recent error from r.arithm so
 	// callers (notably the C-style for-loop) can detect arithmetic
@@ -2249,6 +2250,7 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 	}
 	r.fillExpandConfig(ctx)
 	r.exit = exitStatus{}
+	r.expandRunExit = exitStatus{}
 	r.filename = r.incrementalFilename
 	runExitTrap := false
 	switch node := node.(type) {
@@ -2331,6 +2333,9 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 		return err
 	}
 	if code := r.exit.code; code != 0 {
+		return ExitStatus(code)
+	}
+	if code := r.expandRunExit.code; code != 0 {
 		return ExitStatus(code)
 	}
 	return nil

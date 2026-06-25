@@ -77,6 +77,13 @@ func TestAssignArrayDiagnosticsFidelity(t *testing.T) {
 				"done=0\n",
 		},
 		{
+			name: "negative_substring_final_status",
+			in: "a=(1 2 3 4 5)\n" +
+				"echo \"${a[@]: 1: -3}\"\n",
+			want: "s: line 2:  -3: substring expression < 0\n" +
+				"exit status 1",
+		},
+		{
 			name: "exp8_invalid_indexed_subscript_leaves_empty_array",
 			in: "array=( [$'x\\001y\\177z']=foo )\n" +
 				"declare -p array\n",
