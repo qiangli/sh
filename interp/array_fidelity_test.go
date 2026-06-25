@@ -397,3 +397,70 @@ func TestCompoundArraySubscriptScopeFidelity(t *testing.T) {
 		})
 	}
 }
+
+// TestArrayExpandOnceIndexedSubscriptsFidelity covers array32.sub from bash's
+// suite: with array_expand_once, an indexed subscript that expands once to a
+// literal command substitution is an arithmetic operand error and must not run
+// the embedded command.
+func TestArrayExpandOnceIndexedSubscriptsFidelity(t *testing.T) {
+	t.Parallel()
+
+	in := "export subscript='$(echo INJECTION! >&2 ; echo 0)'\n" +
+		"shopt -s array_expand_once\n" +
+		"printf -v a[\"$subscript\"] %s hi\n" +
+		"declare -p a\n" +
+		"unset a\n" +
+		"printf -v \"a[$subscript]\" %s hi\n" +
+		"declare -p a\n" +
+		"unset -v a\n" +
+		"read a[\"$subscript\"] <<<hi\n" +
+		"declare -p a\n" +
+		"declare -a a\n" +
+		"read a[\"$subscript\"] <<<hi\n" +
+		"declare -p a\n" +
+		"unset -v a\n" +
+		"declare -a a\n" +
+		"declare -i a[\"$subscript\"]=42\n" +
+		"declare -p a\n" +
+		"unset -v a\n" +
+		"a=( [$subscript]=hi )\n" +
+		"declare -p a\n" +
+		"declare -a a\n" +
+		"a=( [$subscript]=hi )\n" +
+		"declare -p a\n"
+	want := "arithmetic syntax error: operand expected (error token is \"$(echo INJECTION! >&2 ; echo 0)\")\n" +
+		"declare: a: not found\n" +
+		"arithmetic syntax error: operand expected (error token is \"$(echo INJECTION! >&2 ; echo 0)\")\n" +
+		"declare: a: not found\n" +
+		"arithmetic syntax error: operand expected (error token is \"$(echo INJECTION! >&2 ; echo 0)\")\n" +
+		"declare: a: not found\n" +
+		"arithmetic syntax error: operand expected (error token is \"$(echo INJECTION! >&2 ; echo 0)\")\n" +
+		"declare -a a\n" +
+		"arithmetic syntax error: operand expected (error token is \"$(echo INJECTION! >&2 ; echo 0)\")\n" +
+		"declare -ai a\n" +
+		"arithmetic syntax error: operand expected (error token is \"$(echo INJECTION! >&2 ; echo 0)\")\n" +
+		"declare -a a=()\n" +
+		"arithmetic syntax error: operand expected (error token is \"$(echo INJECTION! >&2 ; echo 0)\")\n" +
+		"declare -a a=()\n"
+
+	file, err := syntax.NewParser().Parse(strings.NewReader(in), "./array32.sub")
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+
+	var cb lockedBuffer
+	r, err := New(StdIO(nil, &cb, &cb))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := r.Run(ctx, file); err != nil {
+		cb.Write([]byte(err.Error()))
+	}
+
+	if got := cb.String(); got != want {
+		t.Fatalf("wrong output:\nwant: %q\ngot:  %q", want, got)
+	}
+}
