@@ -503,6 +503,17 @@ type Runner struct {
 	// (and the legacy TestRunnerRun tests) keep the old "<name>: <msg>
 	// <arg>" wording without the line prefix.
 	bashCompatErrors bool
+	// dryRun is the bashy-only `set -o dryrun` option's state, readable by
+	// handlers via [HandlerContext.DryRun]. dryRunOpt gates whether the option
+	// is recognized at all — only hosts that pass [EnableDryRunOption] (i.e.
+	// bashy, and not under --posix) accept `set -o dryrun`; everywhere else
+	// (the pure bash drop-in, gosh) it errors like any unknown option.
+	dryRun    bool
+	dryRunOpt bool
+	// orig* snapshot the construction-time dry-run state so Reset (which rebuilds
+	// the Runner) restores it — dryRunOpt persists; dryRun returns to its initial.
+	origDryRun    bool
+	origDryRunOpt bool
 	// handlingDebugTrap prevents DEBUG traps from recursively firing
 	// for commands inside the DEBUG trap itself while still allowing
 	// DEBUG to run inside other trap handlers such as RETURN.
@@ -1442,6 +1453,21 @@ func OpenHandler(f OpenHandlerFunc) RunnerOption {
 	}
 }
 
+// EnableDryRunOption turns on the non-POSIX `set -o dryrun` shell option,
+// initialized to enabled. When on, `set -o dryrun` / `set +o dryrun` toggle the
+// runner's dry-run flag, which exec/open handlers read via [HandlerContext.DryRun]
+// to print-and-skip instead of executing. Hosts that do not pass this option
+// (the pure bash drop-in, gosh, anything under --posix) reject `set -o dryrun`
+// as an unknown option, exactly like Bash — so bash conformance is unaffected.
+// The option is deliberately kept out of `set -o` listings and SHELLOPTS.
+func EnableDryRunOption(enabled bool) RunnerOption {
+	return func(r *Runner) error {
+		r.dryRunOpt = true
+		r.dryRun = enabled
+		return nil
+	}
+}
+
 // ReadDirHandler sets the read directory handler. See [ReadDirHandlerFunc] for more info.
 //
 // Deprecated: use [ReadDirHandler2].
@@ -1731,6 +1757,12 @@ func WithDeterministic(seed int64) RunnerOption {
 }
 
 func (r *Runner) posixOptByName(name string) *bool {
+	// Bashy-only `set -o dryrun`, recognized only when EnableDryRunOption was
+	// passed (never in the pure bash drop-in or under --posix). Kept out of
+	// posixOptsTable so it never appears in `set -o` listings or SHELLOPTS.
+	if name == "dryrun" && r.dryRunOpt {
+		return &r.dryRun
+	}
 	for i, opt := range &posixOptsTable {
 		if opt.name == name {
 			return &r.opts[i]
@@ -1993,6 +2025,8 @@ func (r *Runner) Reset() {
 		r.origDir = r.Dir
 		r.origParams = r.Params
 		r.origOpts = r.opts
+		r.origDryRun = r.dryRun
+		r.origDryRunOpt = r.dryRunOpt
 		r.origNoOpSetState = maps.Clone(r.noOpSetState)
 		r.origStdin = r.stdin
 		r.origStdout = r.stdout
@@ -2043,6 +2077,8 @@ func (r *Runner) Reset() {
 		Dir:          r.origDir,
 		Params:       r.origParams,
 		opts:         r.origOpts,
+		dryRun:       r.origDryRun,
+		dryRunOpt:    r.origDryRunOpt,
 		noOpSetState: maps.Clone(r.origNoOpSetState),
 		stdin:        r.origStdin,
 		stdout:       r.origStdout,
@@ -2051,6 +2087,8 @@ func (r *Runner) Reset() {
 		origDir:          r.origDir,
 		origParams:       r.origParams,
 		origOpts:         r.origOpts,
+		origDryRun:       r.origDryRun,
+		origDryRunOpt:    r.origDryRunOpt,
 		origNoOpSetState: maps.Clone(r.origNoOpSetState),
 		origStdin:        r.origStdin,
 		origStdout:       r.origStdout,
