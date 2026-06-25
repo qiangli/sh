@@ -3232,6 +3232,9 @@ func (cfg *Config) quotedEmptyAtElidesField(parts []syntax.WordPart) bool {
 		if pe.Param.Value == "*" {
 			return false
 		}
+		if pe.Param.Value == "RANDOM" {
+			return false
+		}
 		if cfg.Env.Get(pe.Param.Value).String() != "" {
 			return false
 		}
@@ -4416,7 +4419,7 @@ func (cfg *Config) quotedElemFields(pe *syntax.ParamExp) ([]string, error) {
 	if err != nil || elems != nil {
 		return elems, err
 	}
-	if pe.Exp == nil && pe.Repl == nil && !pe.Excl && pe.Index == nil {
+	if pe.Exp == nil && pe.Repl == nil && !pe.Excl && pe.Index == nil && pe.Param.Value != "RANDOM" {
 		if vr := cfg.Env.Get(pe.Param.Value); vr.Kind == NameRef {
 			if base, idx, ok := nameRefArrayTarget(vr.Str); ok {
 				return cfg.quotedAllElemValues(&syntax.ParamExp{
