@@ -87,6 +87,11 @@ type Runner struct {
 	Vars  map[string]expand.Variable
 	Funcs map[string]*syntax.Stmt
 
+	// funcSources records the script name active when a function was
+	// defined. Bash reports runtime diagnostics in a function body against
+	// the definition source, not necessarily the caller's source.
+	funcSources map[string]string
+
 	alias map[string]alias
 
 	// callHandler is a function allowing to replace a simple command's
@@ -1113,6 +1118,10 @@ func (r *Runner) importExportedFuncs() {
 			r.Funcs = make(map[string]*syntax.Stmt)
 		}
 		r.Funcs[fname] = fd.Body
+		if r.funcSources == nil {
+			r.funcSources = make(map[string]string)
+		}
+		r.funcSources[fname] = r.filename
 		return true
 	})
 }
@@ -2102,7 +2111,8 @@ func (r *Runner) Reset() {
 		// `BASH_FUNC_*` env imports run at construction time and the
 		// resulting functions are part of the initial shell state,
 		// not per-Run scratch state.
-		Funcs: r.Funcs,
+		Funcs:       r.Funcs,
+		funcSources: r.funcSources,
 
 		dirStack: r.dirStack[:0],
 		usedNew:  r.usedNew,
@@ -2445,6 +2455,7 @@ func (r *Runner) subshell(background bool) *Runner {
 	r2.writeEnv = newOverlayEnviron(r.writeEnv, background)
 	// Funcs are copied, since they might be modified.
 	r2.Funcs = maps.Clone(r.Funcs)
+	r2.funcSources = maps.Clone(r.funcSources)
 	r2.Vars = make(map[string]expand.Variable)
 	r2.alias = maps.Clone(r.alias)
 	r2.trapCallbacks = maps.Clone(r.trapCallbacks)
