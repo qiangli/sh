@@ -395,6 +395,9 @@ func (r *Runner) expandErr(err error) {
 			errMsg = src + ": bad substitution"
 		}
 	}
+	if r.bashCompatErrors && strings.Contains(errMsg, "substring expression < 0") {
+		errMsg = r.rewriteSubstringLengthError(errMsg)
+	}
 	// Bash 5.3 prefixes expansion errors (`$(( ))`, `${!x}`,
 	// `let`, etc.) with the standard `<file>: line N:` framing.
 	// The wrapper isn't applied when the error already carries
@@ -491,6 +494,45 @@ func (r *Runner) expandErr(err error) {
 	}
 	r.exit.code = 1
 	r.exit.exiting = true
+}
+
+func (r *Runner) rewriteSubstringLengthError(errMsg string) string {
+	expr, ok := strings.CutSuffix(errMsg, ": substring expression < 0")
+	if !ok || expr == "" || len(r.bashSource) == 0 || !r.curStmtPos.IsValid() {
+		return errMsg
+	}
+	lineStart := 0
+	for line := uint(1); line < r.curStmtPos.Line() && lineStart < len(r.bashSource); lineStart++ {
+		if r.bashSource[lineStart] == '\n' {
+			line++
+		}
+	}
+	if lineStart > len(r.bashSource) {
+		return errMsg
+	}
+	lineEnd := lineStart
+	for lineEnd < len(r.bashSource) && r.bashSource[lineEnd] != '\n' {
+		lineEnd++
+	}
+	line := string(r.bashSource[lineStart:lineEnd])
+	needle := ":" + expr + "}"
+	if strings.Contains(line, needle) {
+		return errMsg
+	}
+	for i := 0; i < len(line); i++ {
+		if line[i] != ':' {
+			continue
+		}
+		j := i + 1
+		for j < len(line) && (line[j] == ' ' || line[j] == '\t') {
+			j++
+		}
+		if !strings.HasPrefix(line[j:], expr+"}") {
+			continue
+		}
+		return line[i+1:j] + expr + ": substring expression < 0"
+	}
+	return errMsg
 }
 
 // looksLikeExpandError covers the wordings produced by [expand.Arithm]
