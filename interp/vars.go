@@ -3307,16 +3307,13 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 		}
 		return name, prev
 	}
-	// Expand all RHS values before modifying the array. For a plain
-	// (non-append) `a=(…)`, bash evaluates each element's explicit
-	// subscript arithmetic against the array's value from *before* this
-	// compound assignment — `a=([0]=7); a=([0]=10 [a[0]+5]=99)` stores 99
-	// at index 12 (7+5), not 15 — so we leave the old value in the env and
-	// publish nothing mid-loop. For an append `a+=(…)`, bash mutates the
-	// array in place, so earlier elements ARE visible to later subscripts;
-	// only then do we publish the running array. Publishing on a plain
-	// assignment both gave the wrong index and leaked the name into the
-	// global scope for `local -a foo=([0]=v)`.
+	// Expand all RHS values before modifying the array. Explicit subscript
+	// arithmetic is evaluated later, while applying elements, because bash
+	// lets a later subscript see earlier elements from the same compound
+	// assignment (`a=([0]=1+2+3 [a[0]]=10)`). For non-append assignments we
+	// expose that in-progress array only during subscript evaluation and
+	// restore the previous binding immediately after, so declarations like
+	// `local -a foo=([0]=v)` don't publish the value before assignVal returns.
 	elemValues := make([]struct {
 		indexExpr syntax.ArithmExpr
 		values    []string
@@ -3386,21 +3383,33 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 			index = idxs[len(idxs)-1] + 1
 		}
 	}
-	// Only an append (`a+=(…)`) mutates in place and makes earlier
-	// elements visible to later subscript arithmetic; a plain assignment
-	// keeps the old value live (and publishing it would leak the name into
-	// the wrong scope for a `local` declaration).
 	publishWork := func() {
+		work.Set = true
 		if as.Append {
 			_ = r.writeEnv.Set(name, work)
 		}
 	}
+	withWorkVisible := func(fn func() bool) bool {
+		if as.Append {
+			publishWork()
+			return fn()
+		}
+		if name == "" {
+			return fn()
+		}
+		saved := r.writeEnv.Get(name)
+		_ = r.writeEnv.Set(name, work)
+		ok := fn()
+		_ = r.writeEnv.Set(name, saved)
+		return ok
+	}
 	for _, ev := range elemValues {
 		if ev.indexExpr != nil {
-			publishWork()
 			var ok bool
-			index, ok = r.arithmCompoundArrayIndex(ev.indexExpr)
-			if !ok {
+			if !withWorkVisible(func() bool {
+				index, ok = r.arithmCompoundArrayIndex(ev.indexExpr)
+				return ok
+			}) {
 				prev.Kind = expand.Indexed
 				prev.List = []string{}
 				prev.ListSet = nil

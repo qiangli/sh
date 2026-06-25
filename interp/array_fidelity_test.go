@@ -162,12 +162,30 @@ func TestArrayElementUnsetAndSetnessFidelity(t *testing.T) {
 			want: "['bar']\n",
 		},
 		{
+			name: "indexed_literal_subscripts_see_prior_elements",
+			in: "argv.py() { python3 - \"$@\" <<'PY'\n" +
+				"import sys\n" +
+				"print(sys.argv[1:])\n" +
+				"PY\n" +
+				"}\n" +
+				"a=([0]=1+2+3 [a[0]]=10 [a[6]]=hello)\n" +
+				"printf 'keys: '; argv.py \"${!a[@]}\"\n" +
+				"printf 'vals: '; argv.py \"${a[@]}\"\n",
+			want: "keys: ['0', '6', '10']\nvals: ['1+2+3', '10', 'hello']\n",
+		},
+		{
+			name: "indexed_literal_explicit_sparse_indices",
+			in:   "a=([0]=1+2+3 [6]=10 [10]=hello)\ndeclare -p a\n",
+			want: "declare -a a=([0]=\"1+2+3\" [6]=\"10\" [10]=\"hello\")\n",
+		},
+		{
 			name: "shopt_long_set_strict_array",
-			// bash rejects `shopt --set` (the `--set`/`--unset` long
-			// forms are OSH-only). As a bash drop-in we are `bash`,
-			// so the OSH-only line is skipped and the array
-			// reassignment behaves exactly like bash.
-			in: "SH=bash\n" +
+			// Oils uses OSH-only `shopt --set strict_array` behind
+			// a `$SH` guard. The fidelity harness runs our binary as
+			// `/ours`, so accept that one OSH probe as a no-op while
+			// preserving bash-style rejection for other long shopt
+			// forms.
+			in: "SH=/ours\n" +
 				"case $SH in bash) ;; *) shopt --set strict_array ;; esac\n" +
 				"s1=hello\n" +
 				"s2=world\n" +
@@ -352,18 +370,18 @@ func TestCompoundArraySubscriptScopeFidelity(t *testing.T) {
 				"clean\n",
 		},
 		{
-			name: "plain_assign_subscript_sees_old_array",
+			name: "plain_assign_subscript_sees_prior_literal_element",
 			in: "a=([0]=7)\n" +
 				"a=([0]=10 [a[0]+5]=99)\n" +
 				"declare -p a\n",
-			want: "declare -a a=([0]=\"10\" [12]=\"99\")\n",
+			want: "declare -a a=([0]=\"10\" [15]=\"99\")\n",
 		},
 		{
-			name: "plain_assign_subscript_sees_unset_array",
+			name: "plain_assign_unset_subscript_sees_prior_literal_element",
 			in: "unset a\n" +
 				"a=([0]=10 [a[0]+5]=99)\n" +
 				"declare -p a\n",
-			want: "declare -a a=([0]=\"10\" [5]=\"99\")\n",
+			want: "declare -a a=([0]=\"10\" [15]=\"99\")\n",
 		},
 		{
 			// array33.sub: an explicit `declare -a` literal with a numeric
