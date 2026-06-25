@@ -902,7 +902,14 @@ func (r *Runner) bashArithmError(expr syntax.ArithmExpr, err error, command bool
 		if start := strings.Index(bashMsg, "error token is \""); start >= 0 {
 			tokenStart := start + len("error token is \"")
 			if tokenEnd := strings.IndexByte(bashMsg[tokenStart:], '"'); tokenEnd >= 0 {
-				bashMsg = bashMsg[:tokenStart] + exprText + bashMsg[tokenStart+tokenEnd:]
+				newToken := exprText
+				// In `(( ... ))` command mode bash appends a trailing
+				// space to the echoed error token (`'assoc[…]++' `); the
+				// `$(( ... ))` expansion form does not (`'1' + 2`).
+				if command && !strings.HasSuffix(newToken, " ") {
+					newToken += " "
+				}
+				bashMsg = bashMsg[:tokenStart] + newToken + bashMsg[tokenStart+tokenEnd:]
 			}
 		}
 	}
@@ -1068,9 +1075,19 @@ func (r *Runner) bashArithmError(expr syntax.ArithmExpr, err error, command bool
 		// malformed assoc key): bash reports the expanded token text
 		// directly, without the `((: ... :` command wrapper. Verified
 		// patch handed across the scope wall in QUOTEARRAY-BLOCKERS.md.
+		// The override is the echoed expansion of a subscript whose value
+		// was a malformed array reference: either it still carries the
+		// `$(…)`/`…` it was expanded from, or — when that value held no
+		// `$`/backtick — its `[`/`]` were backslash-escaped by
+		// arithmQuoteMalformedIndexText (e.g. `0\],b\[1` from `$index`).
+		// A literal-source chain like `1[2] = 3` keeps the `((: … :`
+		// wrapper, so distinguish on those signatures rather than the
+		// bare presence of brackets.
 		if command && exprTextOverride != "" &&
 			strings.Contains(bashMsg, "arithmetic syntax error: invalid arithmetic operator") &&
-			strings.ContainsAny(exprTextOverride, "$`") {
+			(strings.ContainsAny(exprTextOverride, "$`") ||
+				strings.Contains(exprTextOverride, `\[`) ||
+				strings.Contains(exprTextOverride, `\]`)) {
 			return fmt.Errorf("%s: line %d: %s: %s",
 				prefix, line, exprText, bashMsg)
 		}
@@ -1274,6 +1291,31 @@ func (r *Runner) literal(word *syntax.Word) string {
 	str, err := expand.Literal(r.ecfg, word)
 	r.expandErr(err)
 	return str
+}
+
+// unsetQuotedSubscriptSource recovers the raw source of an `unset` operand
+// that is an array reference `name[subscript]` whose subscript carries a
+// quote (`a['$key']`, `a["$key"]`, `a["foo"]`). Such a quote makes bash
+// treat the whole token as a valid array reference: it suppresses word
+// splitting and pins the key to a single expansion (a single-quoted
+// subscript stays literal). Expanding the word as a field instead would
+// strip the quotes and leave a bare `$key` that the subscript handler then
+// re-expands, so the raw source must reach unset intact. Operands with an
+// unquoted subscript still go through field expansion (word splitting), and
+// a whole-token quote (`'a[$key]'`) is left to the quoted-operand path.
+func (r *Runner) unsetQuotedSubscriptSource(word *syntax.Word) (string, bool) {
+	src := r.sourceTextRange(word.Pos(), word.End(), false)
+	if src == "" {
+		return "", false
+	}
+	name, idx, ok := splitArrayRef(src)
+	if !ok || !syntax.ValidName(name) {
+		return "", false
+	}
+	if !strings.ContainsAny(idx, `'"`) {
+		return "", false
+	}
+	return src, true
 }
 
 func unsetArrayOperandLiteral(word *syntax.Word) (string, bool) {
@@ -4737,6 +4779,8 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			for _, arg := range args[1:] {
 				if lit, ok := unsetArrayOperandLiteral(arg); ok {
 					fields = append(fields, lit)
+				} else if src, ok := r.unsetQuotedSubscriptSource(arg); ok {
+					fields = append(fields, src)
 				} else {
 					fields = append(fields, r.fields(arg)...)
 				}

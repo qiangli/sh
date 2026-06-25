@@ -84,6 +84,31 @@ func bashRegexErrMsg(err error, pat string) string {
 	return "invalid regular expression `" + pat + "': " + reason
 }
 
+// arithCmpOperand returns the operand text to feed to the arithmetic
+// evaluator for a `[[ ]]` integer comparison. When the operand is an
+// array reference (`name[subscript]`) its raw source is returned so the
+// evaluator performs the single subscript expansion bash does; any other
+// operand is expanded as usual.
+func (r *Runner) arithCmpOperand(ctx context.Context, expr syntax.TestExpr) string {
+	if w, ok := expr.(*syntax.Word); ok {
+		if src := r.sourceTextRange(w.Pos(), w.End(), false); src != "" && isArrayRefSource(src) {
+			return src
+		}
+	}
+	return r.bashTest(ctx, expr, false)
+}
+
+// isArrayRefSource reports whether s has the textual shape of an array
+// element reference: a valid identifier, then `[`, then a subscript, then
+// a closing `]`.
+func isArrayRefSource(s string) bool {
+	open := strings.IndexByte(s, '[')
+	if open <= 0 || !strings.HasSuffix(s, "]") {
+		return false
+	}
+	return syntax.ValidName(s[:open])
+}
+
 // arithFromString parses s as a bash arithmetic expression and
 // returns its int64 value. Empty input is treated as 0 (bash behaves
 // the same way). Unset / non-numeric tokens that don't parse as a
@@ -228,6 +253,24 @@ func (r *Runner) bashTest(ctx context.Context, expr syntax.TestExpr, classic boo
 				}
 			}
 			return ""
+		case syntax.TsEql, syntax.TsNeq, syntax.TsLeq, syntax.TsGeq, syntax.TsLss, syntax.TsGtr:
+			// `[[ ]]` evaluates these operands as arithmetic. For an
+			// array reference like `assoc[$key]` bash hands the raw
+			// token to its arithmetic evaluator, which expands the
+			// subscript exactly once: an associative key keeps any `]`,
+			// `[`, or `$(…)` text verbatim instead of triggering further
+			// command substitution or subscript re-parsing. Pre-expanding
+			// the whole word here would lose that structure, so feed the
+			// raw source of an array-reference operand straight to the
+			// arithmetic evaluator and let it do the single expansion.
+			if !classic {
+				xStr := r.arithCmpOperand(ctx, x.X)
+				yStr := r.arithCmpOperand(ctx, x.Y)
+				if r.binTest(ctx, x.Op, xStr, yStr, classic) {
+					return "1"
+				}
+				return ""
+			}
 		}
 		xStr := r.bashTest(ctx, x.X, classic)
 		yStr := r.bashTest(ctx, x.Y, classic)
@@ -754,8 +797,16 @@ func (r *Runner) varIsSetForTest(name string, classic bool) bool {
 		}
 		return err == nil && vr.IndexedSet(i)
 	case expand.Associative:
-		if opt, _ := r.bashOptByName("assoc_expand_once"); opt == nil || !*opt {
-			index = r.expandAssocTestArrayIndex(index)
+		// In `[[ ]]` the operand word — and so its subscript — was already
+		// expanded once when computing the test string, so re-expanding
+		// here would run a `$(…)` key a second time or strip a single-
+		// quoted `'$key'` down to its parameter value. Only the classic
+		// `test`/`[` path, whose operand reaches us unexpanded, needs the
+		// single subscript expansion.
+		if classic {
+			if opt, _ := r.bashOptByName("assoc_expand_once"); opt == nil || !*opt {
+				index = r.expandAssocTestArrayIndex(index)
+			}
 		}
 		_, ok := vr.Map[index]
 		return ok
