@@ -1769,6 +1769,9 @@ func (r *Runner) unsetArrayElem(name, idx string) bool {
 
 func (r *Runner) setVarString(name, value string) {
 	if base, idx, ok := splitArrayRef(name); ok && syntax.ValidName(base) {
+		if r.arrayExpandOnceIndexedSubscriptErr(idx) {
+			return
+		}
 		r.setVarWithIndex(r.lookupVar(base), base, r.arrayTargetIndex(idx), expand.Variable{Set: true, Kind: expand.String, Str: value}, false)
 		return
 	}
@@ -1795,6 +1798,42 @@ func parseArrayTargetIndex(idx string) syntax.ArithmExpr {
 	return &syntax.Word{Parts: []syntax.WordPart{
 		&syntax.Lit{Value: idx},
 	}}
+}
+
+func (r *Runner) arrayExpandOnceEnabled() bool {
+	opt, _ := r.bashOptByName("array_expand_once")
+	return opt != nil && *opt
+}
+
+func (r *Runner) arrayExpandOnceIndexedSubscriptErr(idx string) bool {
+	if !r.arrayExpandOnceEnabled() {
+		return false
+	}
+	tok := expand.ArithmCmdSubstToken(idx)
+	if tok == "" {
+		return false
+	}
+	r.expandErr(&expand.ArithmError{
+		Text: idx,
+		Err:  fmt.Errorf("arithmetic syntax error: operand expected (error token is %q)", tok),
+	})
+	r.exit.code = 1
+	return true
+}
+
+func (r *Runner) arrayExpandOnceIndexExprErr(index syntax.ArithmExpr) bool {
+	if !r.arrayExpandOnceEnabled() {
+		return false
+	}
+	w, ok := index.(*syntax.Word)
+	if !ok {
+		return false
+	}
+	idx, ok := r.assocAssignKeyLiteral(w.Parts)
+	if !ok {
+		return false
+	}
+	return r.arrayExpandOnceIndexedSubscriptErr(idx)
 }
 
 // setExportedVarString sets a scalar variable and marks it exported, so it
@@ -2487,6 +2526,9 @@ func (r *Runner) setVarWithIndex(prev expand.Variable, name string, index syntax
 		r.errf("%s%s: arithmetic syntax error: operand expected (error token is \"%s\")\n",
 			r.bashErrPrefix(r.curStmtPos), quoted, quoted)
 		r.exit.code = 1
+		return
+	}
+	if r.arrayExpandOnceIndexExprErr(index) {
 		return
 	}
 	k, ok := r.arithmCompoundArrayIndex(index)
@@ -3286,6 +3328,9 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 	}, len(elems))
 	for i, elem := range elems {
 		if elem.Index != nil {
+			if r.arrayExpandOnceIndexExprErr(elem.Index) {
+				break
+			}
 			if idx, bad := literalBadIndexedAssignSubscript(elem.Index); bad {
 				val := r.literalForAssign(elem.Value)
 				if idx == "*" || idx == "@" {
