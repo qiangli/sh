@@ -223,6 +223,13 @@ func TestArithFidelityBashSource(t *testing.T) {
 			input: "(( v = 'y' ))\necho status=$? v=[$v]",
 			want:  "./s: line 1: ((: v = 'y' : arithmetic syntax error: operand expected (error token is \"'y' \")\nstatus=1 v=[]\n",
 		},
+		// arith__042 — large integer comparisons in [[ ]] and [ ].
+		// 12345678909 > 2^31-1; both [[ ]] (arithmetic eval) and [ ]
+		// (strconv.ParseInt) must handle it without overflow.
+		{
+			input: "[[ 12345678909 = $(( 1 << 30 )) ]]\necho eq=$?\n[[ 12345678909 = 12345678909 ]]\necho eq=$?\n[ 12345678909 -gt $(( 1 << 30 )) ]\necho greater=$?\n[[ 12345678909 -gt $(( 1 << 30 )) ]]\necho greater=$?\n[[ 12345678909 -ge $(( 1 << 30 )) ]]\necho ge=$?\n[[ 12345678909 -ge 12345678909 ]]\necho ge=$?\n[[ 12345678909 -le $(( 1 << 30 )) ]]\necho le=$?\n[[ 12345678909 -le 12345678909 ]]\necho le=$?",
+			want:  "eq=1\neq=0\ngreater=0\ngreater=0\nge=0\nge=0\nle=1\nle=0\n",
+		},
 	}
 
 	for _, tt := range tests {
