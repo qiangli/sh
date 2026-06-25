@@ -235,3 +235,165 @@ func TestArrayElementUnsetAndSetnessFidelity(t *testing.T) {
 		})
 	}
 }
+
+// TestArraySubscriptSideEffectOnceFidelity covers array10.sub from bash's
+// suite: a side-effecting subscript (`$((count++))` / `count++`) combined with
+// a suffix word operator (`,,`, `/`, `:N`, `#?`) must evaluate the index only
+// once. A stray paramIsSetNonColon/arrayElemSet call used to re-evaluate it,
+// doubling the post-increment.
+func TestArraySubscriptSideEffectOnceFidelity(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "case_mod_post_increment",
+			in: "days=({Mon,Tues,Wednes,Thurs,Fri,Satur,Sun}day)\n" +
+				"count=0\n" +
+				"echo \"${days[${count}],,}, ${days[$((count++))],,}, ${days[$((count++))],,}\"\n",
+			want: "monday, monday, tuesday\n",
+		},
+		{
+			name: "prefix_removal_post_increment",
+			in: "days=({Mon,Tues,Wednes,Thurs,Fri,Satur,Sun}day)\n" +
+				"count=0\n" +
+				"echo ${days[$((count++))]#?}\n" +
+				"echo ${days[$((count++))]#?}\n" +
+				"echo ${days[$((count++))]#?}\n",
+			want: "onday\nuesday\nednesday\n",
+		},
+		{
+			name: "substring_bare_increment",
+			in: "days=({Mon,Tues,Wednes,Thurs,Fri,Satur,Sun}day)\n" +
+				"count=0\n" +
+				"echo ${days[count++]:2}\n" +
+				"echo ${days[count++]:2}\n" +
+				"echo ${days[count++]:2}\n",
+			want: "nday\nesday\ndnesday\n",
+		},
+		{
+			name: "colon_default_post_increment",
+			in: "a=(x y z)\n" +
+				"i=0\n" +
+				"echo ${a[i++]:-foo}\n" +
+				"echo i=$i\n",
+			want: "x\ni=1\n",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			file, err := syntax.NewParser().Parse(strings.NewReader(tc.in), "")
+			if err != nil {
+				t.Fatalf("parse error: %v", err)
+			}
+
+			var cb lockedBuffer
+			r, err := New(StdIO(nil, &cb, &cb))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := r.Run(ctx, file); err != nil {
+				cb.Write([]byte(err.Error()))
+			}
+
+			if got := cb.String(); got != tc.want {
+				t.Fatalf("wrong output in %q:\nwant: %q\ngot:  %q", tc.in, tc.want, got)
+			}
+		})
+	}
+}
+
+// TestCompoundArraySubscriptScopeFidelity covers array29.sub: a `local -a
+// foo=([0]=v)` element assignment must not leak an empty `foo` into the global
+// scope (a later `local -A foo=(…)` in another function then wrongly tripped
+// "cannot convert indexed to associative array"). It also pins the bash rule
+// that a plain (non-append) compound assignment evaluates explicit subscript
+// arithmetic against the array's pre-assignment value, while an append makes
+// earlier elements visible.
+func TestCompoundArraySubscriptScopeFidelity(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			// `local -a foo=([0]=v)` in pv2 must not leave a global `foo`
+			// behind; otherwise pv3's `local -A foo` sees a stray indexed
+			// global and refuses the associative declaration.
+			name: "local_indexed_subscript_no_global_leak",
+			in: "pv2() { local -a foo=( [0]=hello ); declare -p foo; }\n" +
+				"pv2\n" +
+				"pv3() { local -A foo=( v world ); declare -p foo; }\n" +
+				"pv3\n" +
+				"if declare -p foo >/dev/null 2>&1; then echo LEAKED; else echo clean; fi\n",
+			want: "declare -a foo=([0]=\"hello\")\n" +
+				"declare -A foo=([v]=\"world\" )\n" +
+				"clean\n",
+		},
+		{
+			name: "plain_assign_subscript_sees_old_array",
+			in: "a=([0]=7)\n" +
+				"a=([0]=10 [a[0]+5]=99)\n" +
+				"declare -p a\n",
+			want: "declare -a a=([0]=\"10\" [12]=\"99\")\n",
+		},
+		{
+			name: "plain_assign_subscript_sees_unset_array",
+			in: "unset a\n" +
+				"a=([0]=10 [a[0]+5]=99)\n" +
+				"declare -p a\n",
+			want: "declare -a a=([0]=\"10\" [5]=\"99\")\n",
+		},
+		{
+			// array33.sub: an explicit `declare -a` literal with a numeric
+			// subscript on an associative variable must still trip the
+			// conversion error. Premature publishing of the partial indexed
+			// array used to overwrite prev's kind before the check, silently
+			// converting it.
+			name: "declare_indexed_literal_on_assoc_rejected",
+			in: "declare -A A=([1]=1)\n" +
+				"declare -a A=([2]=2)\n" +
+				"declare -p A\n",
+			want: "A: cannot convert associative to indexed array\n" +
+				"declare -A A=([1]=\"1\" )\n",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			file, err := syntax.NewParser().Parse(strings.NewReader(tc.in), "")
+			if err != nil {
+				t.Fatalf("parse error: %v", err)
+			}
+
+			var cb lockedBuffer
+			r, err := New(StdIO(nil, &cb, &cb))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := r.Run(ctx, file); err != nil {
+				cb.Write([]byte(err.Error()))
+			}
+
+			if got := cb.String(); got != tc.want {
+				t.Fatalf("wrong output in %q:\nwant: %q\ngot:  %q", tc.in, tc.want, got)
+			}
+		})
+	}
+}
