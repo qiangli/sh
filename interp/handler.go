@@ -536,8 +536,16 @@ func lookPathDirMode(cwd string, env expand.Environ, file string, find findAny, 
 		var path string
 		switch elem {
 		case "", ".":
-			// otherwise "foo" won't be "./foo"
-			path = lookPathJoin(".", file, windows)
+			// Bash reports a command found via an empty or "." PATH
+			// element as "./name" (findcmd.c). filepath.Join(".", name)
+			// would clean the "./" away, so build it directly; this also
+			// guarantees the result carries a slash, which `type -p`/`-P`
+			// and command-path output rely on.
+			if windows {
+				path = lookPathJoin(".", file, windows)
+			} else {
+				path = "./" + file
+			}
 		default:
 			path = lookPathJoin(elem, file, windows)
 		}
