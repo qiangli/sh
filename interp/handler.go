@@ -182,6 +182,8 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 			}
 			return ExitStatus(127)
 		}
+		execPath := shellPathToOS(hc.Dir, path)
+		execDir := shellPathToOS(hc.Dir, hc.Dir)
 		cmdArgs := args
 		if hc.ExecAs != "" {
 			cmdArgs = append([]string{hc.ExecAs}, args[1:]...)
@@ -217,10 +219,10 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 			}
 		}
 		cmd := exec.Cmd{
-			Path:       path,
+			Path:       execPath,
 			Args:       cmdArgs,
 			Env:        env,
-			Dir:        hc.Dir,
+			Dir:        execDir,
 			Stdin:      execStdin,
 			Stdout:     hc.Stdout,
 			Stderr:     hc.Stderr,
@@ -238,7 +240,7 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 		if err != nil && isExecFormatError(err) {
 			selfBin, lookupErr := os.Executable()
 			if lookupErr == nil {
-				newArgs := append([]string{selfBin, path}, args[1:]...)
+				newArgs := append([]string{selfBin, execPath}, args[1:]...)
 				// Re-exec'ing our own shell on a no-shebang script: carry the
 				// parent's hard-ignored signals across so the child shell
 				// treats them as ignored-on-entry, matching how bash inherits
@@ -253,7 +255,7 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 					Path:       selfBin,
 					Args:       newArgs,
 					Env:        reExecEnv,
-					Dir:        hc.Dir,
+					Dir:        execDir,
 					Stdin:      execStdin,
 					Stdout:     hc.Stdout,
 					Stderr:     hc.Stderr,
@@ -264,9 +266,9 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 			}
 		}
 		if err != nil && hc.runner != nil && hc.runner.bashCompatErrors {
-			scriptPath := path
-			if !filepath.IsAbs(scriptPath) {
-				scriptPath = filepath.Join(hc.Dir, scriptPath)
+			scriptPath := execPath
+			if !shellPathAbs(scriptPath) {
+				scriptPath = shellPathJoinAbs(hc.Dir, scriptPath)
 			}
 			if interp, ok := missingShebangInterpreter(scriptPath); ok {
 				fmt.Fprintf(hc.Stderr, "%s: %s: %s: bad interpreter: No such file or directory\n",
@@ -346,8 +348,8 @@ func missingShebangInterpreter(path string) (string, bool) {
 		return "", false
 	}
 	interp := fields[0]
-	if filepath.IsAbs(interp) {
-		if _, err := os.Stat(interp); err == nil {
+	if shellPathAbs(interp) {
+		if _, err := os.Stat(shellPathToOS(path, interp)); err == nil {
 			return "", false
 		}
 		return interp, true
@@ -377,9 +379,7 @@ func isExecFormatError(err error) bool {
 //   - not runnable   -> "Permission denied"         (126, EX_NOEXEC)
 func classifyExecPath(dir, file string) (string, int) {
 	target := file
-	if !filepath.IsAbs(target) {
-		target = filepath.Join(dir, file)
-	}
+	target = shellPathJoinAbs(dir, target)
 	info, err := os.Stat(target)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -446,9 +446,7 @@ func isBinarySource(content []byte) bool {
 
 func checkStat(dir, file string, checkExec bool) (string, error) {
 	target := file
-	if !filepath.IsAbs(target) {
-		target = filepath.Join(dir, file)
-	}
+	target = shellPathJoinAbs(dir, target)
 	info, err := os.Stat(target)
 	if err != nil {
 		return "", err
@@ -637,8 +635,8 @@ func DefaultOpenHandler() OpenHandlerFunc {
 			// the workaround here seems to still be required for Wine as of 10.14.
 			// TODO(mvdan): Why? Is this Wine's fault?
 			flag &^= os.O_TRUNC
-		} else if path != "" && !filepath.IsAbs(path) {
-			path = filepath.Join(mc.Dir, path)
+		} else {
+			path = shellPathJoinAbs(mc.Dir, path)
 		}
 		return os.OpenFile(path, flag, perm)
 	}
@@ -669,6 +667,7 @@ func DefaultReadDirHandler() ReadDirHandlerFunc {
 // It uses [os.ReadDir].
 func DefaultReadDirHandler2() ReadDirHandlerFunc2 {
 	return func(ctx context.Context, path string) ([]fs.DirEntry, error) {
+		path = shellPathJoinAbs(handlerDir(ctx), path)
 		return os.ReadDir(path)
 	}
 }
@@ -681,10 +680,19 @@ type StatHandlerFunc func(ctx context.Context, name string, followSymlinks bool)
 // It makes use of [os.Stat] and [os.Lstat], depending on followSymlinks.
 func DefaultStatHandler() StatHandlerFunc {
 	return func(ctx context.Context, path string, followSymlinks bool) (fs.FileInfo, error) {
+		path = shellPathJoinAbs(handlerDir(ctx), path)
 		if !followSymlinks {
 			return os.Lstat(path)
 		} else {
 			return os.Stat(path)
 		}
 	}
+}
+
+func handlerDir(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	hc, _ := ctx.Value(handlerCtxKey{}).(HandlerContext)
+	return hc.Dir
 }
