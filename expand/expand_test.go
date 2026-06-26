@@ -41,6 +41,20 @@ func parseCallArg(t *testing.T, src string, index int) *syntax.Word {
 	return call.Args[index]
 }
 
+func parseCallArgBashPosix(t *testing.T, src string, index int) *syntax.Word {
+	t.Helper()
+	p := syntax.NewParser(syntax.Variant(syntax.LangBash), syntax.PosixMode(true))
+	file, err := p.Parse(strings.NewReader(src), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	call, ok := file.Stmts[0].Cmd.(*syntax.CallExpr)
+	if !ok {
+		t.Fatalf("wanted call expression, got %T", file.Stmts[0].Cmd)
+	}
+	return call.Args[index]
+}
+
 func TestConfigNils(t *testing.T) {
 	os.Setenv("EXPAND_GLOBAL", "value")
 	tests := []struct {
@@ -546,6 +560,53 @@ func TestFieldsParamExpAssignSingleQuotesInDoubleQuotes(t *testing.T) {
 	want := []string{"'bar'"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("wanted %q, got %q", want, got)
+	}
+}
+
+func TestFieldsParamExpPosixSingleQuotesLiteralInDoubleQuotes(t *testing.T) {
+	tests := []struct {
+		name       string
+		src        string
+		env        testEnv
+		wantAssign string
+	}{
+		{
+			name: "alternate",
+			src:  `echo "${a+'x'}"`,
+			env: testEnv{
+				"a": {Set: true, Kind: String, Str: "set"},
+			},
+		},
+		{
+			name: "default",
+			src:  `echo "${a-'x'}"`,
+			env:  testEnv{},
+		},
+		{
+			name:       "assign",
+			src:        `echo "${a='x'}"`,
+			env:        testEnv{},
+			wantAssign: "'x'",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &Config{Env: tc.env, Posix: true}
+			word := parseCallArgBashPosix(t, tc.src, 1)
+			got, err := Fields(cfg, word)
+			if err != nil {
+				t.Fatalf("did not want error, got %v", err)
+			}
+			want := []string{"'x'"}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("wanted %q, got %q", want, got)
+			}
+			if tc.wantAssign != "" {
+				if got := cfg.Env.Get("a").String(); got != tc.wantAssign {
+					t.Fatalf("assigned a = %q, want %q", got, tc.wantAssign)
+				}
+			}
+		})
 	}
 }
 

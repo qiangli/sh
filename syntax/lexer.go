@@ -545,6 +545,14 @@ func (p *Parser) peekTwo() (byte, byte) {
 	return p.bs[p.bsp], p.bs[p.bsp+1]
 }
 
+func (p *Parser) nextNonEscNewl() rune {
+	r := p.rune()
+	for r == escNewl {
+		r = p.rune()
+	}
+	return r
+}
+
 func (p *Parser) regToken(r rune) token {
 	switch r {
 	case '\'':
@@ -558,12 +566,14 @@ func (p *Parser) regToken(r rune) token {
 		// properly handle backslashes in the lexer.
 		return bckQuote
 	case '&':
-		switch p.rune() {
+		r = p.nextNonEscNewl()
+		switch r {
 		case '&':
 			p.rune()
 			return andAnd
 		case '>':
-			switch p.rune() {
+			r = p.nextNonEscNewl()
+			switch r {
 			case '|':
 				p.rune()
 				return rdrAllClob
@@ -573,7 +583,8 @@ func (p *Parser) regToken(r rune) token {
 					return rdrAllClob
 				}
 			case '>':
-				switch p.rune() {
+				r = p.nextNonEscNewl()
+				switch r {
 				case '|':
 					p.rune()
 					return appAllClob
@@ -599,7 +610,8 @@ func (p *Parser) regToken(r rune) token {
 		}
 		return and
 	case '|':
-		switch p.rune() {
+		r = p.nextNonEscNewl()
+		switch r {
 		case '|':
 			p.rune()
 			return orOr
@@ -669,9 +681,10 @@ func (p *Parser) regToken(r rune) token {
 		p.rune()
 		return rightParen
 	case ';':
-		switch p.rune() {
+		r = p.nextNonEscNewl()
+		switch r {
 		case ';':
-			if p.rune() == '&' && p.lang.in(langBashLike) {
+			if p.nextNonEscNewl() == '&' && p.lang.in(langBashLike) {
 				p.rune()
 				return dblSemiAnd
 			}
@@ -691,9 +704,11 @@ func (p *Parser) regToken(r rune) token {
 		}
 		return semicolon
 	case '<':
-		switch p.rune() {
+		r = p.nextNonEscNewl()
+		switch r {
 		case '<':
-			switch p.rune() {
+			r = p.nextNonEscNewl()
+			switch r {
 			case '-':
 				p.rune()
 				return dashHdoc
@@ -717,9 +732,11 @@ func (p *Parser) regToken(r rune) token {
 		}
 		return rdrIn
 	case '>':
-		switch p.rune() {
+		r = p.nextNonEscNewl()
+		switch r {
 		case '>':
-			switch p.rune() {
+			r = p.nextNonEscNewl()
+			switch r {
 			case '|':
 				p.rune()
 				return appClob
@@ -732,7 +749,8 @@ func (p *Parser) regToken(r rune) token {
 				if !p.lang.in(LangZsh) {
 					break
 				}
-				switch p.rune() {
+				r = p.nextNonEscNewl()
+				switch r {
 				case '|':
 					p.rune()
 					return appAllClob // >>&| is an alias for &>>|
@@ -744,7 +762,7 @@ func (p *Parser) regToken(r rune) token {
 			}
 			return appOut
 		case '&':
-			r = p.rune()
+			r = p.nextNonEscNewl()
 			if p.lang.in(LangZsh) {
 				switch r {
 				case '|':
@@ -823,7 +841,8 @@ func (p *Parser) dqToken(r rune) token {
 		// properly handle backslashes in the lexer.
 		return bckQuote
 	case '$':
-		switch p.rune() {
+		r := p.nextNonEscNewl()
+		switch r {
 		case '{':
 			p.rune()
 			return dollBrace
@@ -857,7 +876,8 @@ func (p *Parser) paramToken(r rune) token {
 		p.rune()
 		return rightBrace
 	case ':':
-		switch p.rune() {
+		r = p.nextNonEscNewl()
+		switch r {
 		case '+':
 			p.rune()
 			return colPlus
@@ -894,13 +914,13 @@ func (p *Parser) paramToken(r rune) token {
 		p.rune()
 		return assgn
 	case '%':
-		if p.rune() == '%' {
+		if p.nextNonEscNewl() == '%' {
 			p.rune()
 			return dblPerc
 		}
 		return perc
 	case '#':
-		if p.rune() == '#' {
+		if p.nextNonEscNewl() == '#' {
 			p.rune()
 			return dblHash
 		}
@@ -912,25 +932,25 @@ func (p *Parser) paramToken(r rune) token {
 		p.rune()
 		return rightBrack
 	case '/':
-		if p.rune() == '/' {
+		if p.nextNonEscNewl() == '/' {
 			p.rune()
 			return dblSlash
 		}
 		return slash
 	case '^':
-		if p.rune() == '^' {
+		if p.nextNonEscNewl() == '^' {
 			p.rune()
 			return dblCaret
 		}
 		return caret
 	case ',':
-		if p.rune() == ',' {
+		if p.nextNonEscNewl() == ',' {
 			p.rune()
 			return dblComma
 		}
 		return comma
 	case '~':
-		if p.rune() == '~' {
+		if p.nextNonEscNewl() == '~' {
 			p.rune()
 			return peDblTilde
 		}
@@ -954,13 +974,13 @@ func (p *Parser) paramToken(r rune) token {
 func (p *Parser) arithmToken(r rune) token {
 	switch r {
 	case '!':
-		if p.rune() == '=' {
+		if p.nextNonEscNewl() == '=' {
 			p.rune()
 			return nequal
 		}
 		return exclMark
 	case '=':
-		if p.rune() == '=' {
+		if p.nextNonEscNewl() == '=' {
 			p.rune()
 			return equal
 		}
@@ -975,9 +995,10 @@ func (p *Parser) arithmToken(r rune) token {
 		p.rune()
 		return rightParen
 	case '&':
-		switch p.rune() {
+		r = p.nextNonEscNewl()
+		switch r {
 		case '&':
-			if p.rune() == '=' && p.lang.in(LangZsh) {
+			if p.nextNonEscNewl() == '=' && p.lang.in(LangZsh) {
 				p.rune()
 				return andBoolAssgn
 			}
@@ -988,9 +1009,10 @@ func (p *Parser) arithmToken(r rune) token {
 		}
 		return and
 	case '|':
-		switch p.rune() {
+		r = p.nextNonEscNewl()
+		switch r {
 		case '|':
-			if p.rune() == '=' && p.lang.in(LangZsh) {
+			if p.nextNonEscNewl() == '=' && p.lang.in(LangZsh) {
 				p.rune()
 				return orBoolAssgn
 			}
@@ -1001,9 +1023,10 @@ func (p *Parser) arithmToken(r rune) token {
 		}
 		return or
 	case '<':
-		switch p.rune() {
+		r = p.nextNonEscNewl()
+		switch r {
 		case '<':
-			if p.rune() == '=' {
+			if p.nextNonEscNewl() == '=' {
 				p.rune()
 				return shlAssgn
 			}
@@ -1014,9 +1037,10 @@ func (p *Parser) arithmToken(r rune) token {
 		}
 		return rdrIn
 	case '>':
-		switch p.rune() {
+		r = p.nextNonEscNewl()
+		switch r {
 		case '>':
-			if p.rune() == '=' {
+			if p.nextNonEscNewl() == '=' {
 				p.rune()
 				return shrAssgn
 			}
@@ -1027,7 +1051,8 @@ func (p *Parser) arithmToken(r rune) token {
 		}
 		return rdrOut
 	case '+':
-		switch p.rune() {
+		r = p.nextNonEscNewl()
+		switch r {
 		case '+':
 			p.rune()
 			return addAdd
@@ -1037,7 +1062,8 @@ func (p *Parser) arithmToken(r rune) token {
 		}
 		return plus
 	case '-':
-		switch p.rune() {
+		r = p.nextNonEscNewl()
+		switch r {
 		case '-':
 			p.rune()
 			return subSub
@@ -1047,15 +1073,16 @@ func (p *Parser) arithmToken(r rune) token {
 		}
 		return minus
 	case '%':
-		if p.rune() == '=' {
+		if p.nextNonEscNewl() == '=' {
 			p.rune()
 			return remAssgn
 		}
 		return perc
 	case '*':
-		switch p.rune() {
+		r = p.nextNonEscNewl()
+		switch r {
 		case '*':
-			if p.rune() == '=' && p.lang.in(LangZsh) {
+			if p.nextNonEscNewl() == '=' && p.lang.in(LangZsh) {
 				p.rune()
 				return powAssgn
 			}
@@ -1066,15 +1093,16 @@ func (p *Parser) arithmToken(r rune) token {
 		}
 		return star
 	case '/':
-		if p.rune() == '=' {
+		if p.nextNonEscNewl() == '=' {
 			p.rune()
 			return quoAssgn
 		}
 		return slash
 	case '^':
-		switch p.rune() {
+		r = p.nextNonEscNewl()
+		switch r {
 		case '^':
-			if p.rune() == '=' && p.lang.in(LangZsh) {
+			if p.nextNonEscNewl() == '=' && p.lang.in(LangZsh) {
 				p.rune()
 				return xorBoolAssgn
 			}

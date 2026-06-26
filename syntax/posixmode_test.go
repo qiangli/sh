@@ -52,3 +52,136 @@ func TestPosixModeAllowsNonPosixFuncNames(t *testing.T) {
 		t.Fatal("LangPOSIX should reject a hyphen func name")
 	}
 }
+
+func TestLineContinuationInsideOperators(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		src   string
+		check func(*testing.T, *File)
+	}{
+		{"reserved word", "i\\\nf true; then :; fi", func(t *testing.T, file *File) {
+			if _, ok := file.Stmts[0].Cmd.(*IfClause); !ok {
+				t.Fatalf("wanted IfClause, got %T", file.Stmts[0].Cmd)
+			}
+		}},
+		{"and operator", ": &\\\n& :", func(t *testing.T, file *File) {
+			bin, ok := file.Stmts[0].Cmd.(*BinaryCmd)
+			if !ok {
+				t.Fatalf("wanted BinaryCmd, got %T", file.Stmts[0].Cmd)
+			}
+			if bin.Op != AndStmt {
+				t.Fatalf("wanted && operator, got %s", bin.Op)
+			}
+		}},
+		{"or operator", ": |\\\n| :", func(t *testing.T, file *File) {
+			bin, ok := file.Stmts[0].Cmd.(*BinaryCmd)
+			if !ok {
+				t.Fatalf("wanted BinaryCmd, got %T", file.Stmts[0].Cmd)
+			}
+			if bin.Op != OrStmt {
+				t.Fatalf("wanted || operator, got %s", bin.Op)
+			}
+		}},
+		{"append redirection", ": >\\\n> out", func(t *testing.T, file *File) {
+			redirs := file.Stmts[0].Redirs
+			if len(redirs) != 1 || redirs[0].Op != AppOut {
+				t.Fatalf("wanted >> redirect, got %#v", redirs)
+			}
+			if got := redirs[0].Word.Lit(); got != "out" {
+				t.Fatalf("redirect word = %q, want out", got)
+			}
+		}},
+		{"clobber redirection", ": >\\\n| out", func(t *testing.T, file *File) {
+			redirs := file.Stmts[0].Redirs
+			if len(redirs) != 1 || redirs[0].Op != RdrClob {
+				t.Fatalf("wanted >| redirect, got %#v", redirs)
+			}
+			if got := redirs[0].Word.Lit(); got != "out" {
+				t.Fatalf("redirect word = %q, want out", got)
+			}
+		}},
+		{"duplicate input redirection", ": <\\\n& 0", func(t *testing.T, file *File) {
+			redirs := file.Stmts[0].Redirs
+			if len(redirs) != 1 || redirs[0].Op != DplIn {
+				t.Fatalf("wanted <& redirect, got %#v", redirs)
+			}
+			if got := redirs[0].Word.Lit(); got != "0" {
+				t.Fatalf("redirect word = %q, want 0", got)
+			}
+		}},
+		{"duplicate output redirection", ": >\\\n& 1", func(t *testing.T, file *File) {
+			redirs := file.Stmts[0].Redirs
+			if len(redirs) != 1 || redirs[0].Op != DplOut {
+				t.Fatalf("wanted >& redirect, got %#v", redirs)
+			}
+			if got := redirs[0].Word.Lit(); got != "1" {
+				t.Fatalf("redirect word = %q, want 1", got)
+			}
+		}},
+		{"heredoc operator", "cat <\\\n<EOF\nbody\nEOF\n", func(t *testing.T, file *File) {
+			redirs := file.Stmts[0].Redirs
+			if len(redirs) != 1 || redirs[0].Op != Hdoc {
+				t.Fatalf("wanted << redirect, got %#v", redirs)
+			}
+			if got := redirs[0].Word.Lit(); got != "EOF" {
+				t.Fatalf("heredoc word = %q, want EOF", got)
+			}
+		}},
+		{"parameter operator", "echo ${a:\\\n-1}", func(t *testing.T, file *File) {
+			call := file.Stmts[0].Cmd.(*CallExpr)
+			pe := call.Args[1].Parts[0].(*ParamExp)
+			if pe.Exp == nil || pe.Exp.Op != DefaultUnsetOrNull {
+				t.Fatalf("wanted :- expansion, got %#v", pe.Exp)
+			}
+			if got := pe.Exp.Word.Lit(); got != "1" {
+				t.Fatalf("expansion word = %q, want 1", got)
+			}
+		}},
+		{"arithmetic operator", "echo $((1 >\\\n> 1))", func(t *testing.T, file *File) {
+			call := file.Stmts[0].Cmd.(*CallExpr)
+			arith := call.Args[1].Parts[0].(*ArithmExp)
+			bin, ok := arith.X.(*BinaryArithm)
+			if !ok {
+				t.Fatalf("wanted BinaryArithm, got %T", arith.X)
+			}
+			if bin.Op != Shr {
+				t.Fatalf("wanted >> arithmetic operator, got %s", bin.Op)
+			}
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			file, err := NewParser(Variant(LangBash)).Parse(strings.NewReader(tc.src), "")
+			if err != nil {
+				t.Fatalf("parse failed: %v", err)
+			}
+			tc.check(t, file)
+		})
+	}
+}
+
+func TestPosixModeParamExpSingleQuotesLiteral(t *testing.T) {
+	t.Parallel()
+	tests := []string{
+		`echo "${a+'x'}"`,
+		`echo "${a-'x'}"`,
+		`echo "${a='x'}"`,
+	}
+	for _, src := range tests {
+		t.Run(src, func(t *testing.T) {
+			t.Parallel()
+			file, err := NewParser(Variant(LangBash), PosixMode(true)).Parse(strings.NewReader(src), "")
+			if err != nil {
+				t.Fatalf("parse failed: %v", err)
+			}
+			call := file.Stmts[0].Cmd.(*CallExpr)
+			dq := call.Args[1].Parts[0].(*DblQuoted)
+			pe := dq.Parts[0].(*ParamExp)
+			if got := pe.Exp.Word.Lit(); got != "'x'" {
+				t.Fatalf("single quotes should be literal text, got %q", got)
+			}
+		})
+	}
+}
