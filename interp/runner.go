@@ -7608,6 +7608,10 @@ func elapsedString(d time.Duration, posix bool) string {
 func (r *Runner) stmts(ctx context.Context, stmts []*syntax.Stmt) {
 	for _, stmt := range stmts {
 		r.stmt(ctx, stmt)
+		// Propagate a pending break/continue out of a compound body (brace
+		// group, if/case body) so the rest of the list is skipped. Safe across
+		// function bodies: call() resets the loop-control state at the function
+		// boundary, so a function is a break/continue boundary as bash requires.
 		if r.loopControlPending() {
 			return
 		}
@@ -8668,10 +8672,22 @@ func (r *Runner) loopStmtsBroken(ctx context.Context, stmts []*syntax.Stmt) bool
 		r.stmt(ctx, stmt)
 		if r.contnEnclosing > 0 {
 			r.contnEnclosing--
+			if !oldInLoop {
+				// `continue N` with N beyond the loop nesting continues the
+				// outermost loop; no outer loop remains to consume the rest, so
+				// clamp instead of leaking a pending continue past the loop.
+				r.contnEnclosing = 0
+				return false
+			}
 			return r.contnEnclosing > 0
 		}
 		if r.breakEnclosing > 0 {
 			r.breakEnclosing--
+			if !oldInLoop {
+				// `break N` with N beyond the nesting breaks all enclosing
+				// loops; clamp so no pending break leaks past the outermost one.
+				r.breakEnclosing = 0
+			}
 			return true
 		}
 	}
@@ -8785,7 +8801,15 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 			r.trapCallback(ctx, r.trapCallbacks["DEBUG"], "debug")
 			r.ecfg.OverrideLineno = prevLineno
 		}
+		// A shell function is a break/continue boundary: `break`/`continue`
+		// inside the function is scoped to the function's own loops, NOT the
+		// caller's (bash: `f(){ break; }; for i in 1 2 3 4 5; do f; done; echo $i`
+		// prints 5). Reset the loop-control state across the body so a stray
+		// loop-control can't leak out to the caller's loop.
+		oldBreakEnc, oldContnEnc := r.breakEnclosing, r.contnEnclosing
+		r.breakEnclosing, r.contnEnclosing = 0, 0
 		r.stmt(ctx, body)
+		r.breakEnclosing, r.contnEnclosing = oldBreakEnc, oldContnEnc
 		if r.exit.exiting && r.trapCallbacks["EXIT"] != "" {
 			r.exitTrapCallStack = slices.Clone(r.callStack)
 		}
