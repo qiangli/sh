@@ -270,6 +270,43 @@ func TestDisabledBuiltinNohupFallsThroughToExternal(t *testing.T) {
 		qt.Commentf("external nohup must run the command; got %q", out))
 }
 
+// TestCompgenActionFlags covers the compgen action flags added for bash
+// fidelity: the -W literal word-list mode and the -v/-e shorthands, plus the
+// two exit-code contracts (no candidates → 1, invalid action → 2). The
+// FS/PATH/etc-backed shorthands (-f/-d/-c/-u/-g/-s) are validated against real
+// bash 5.3 in the umbrella's container diff rather than re-derived here.
+func TestCompgenActionFlags(t *testing.T) {
+	contains := func(src, want string) {
+		t.Helper()
+		out, _ := runScript(t, src)
+		qt.Assert(t, qt.IsTrue(strings.Contains(out, want)),
+			qt.Commentf("src %q out %q want %q", src, out, want))
+	}
+	notContains := func(src, bad string) {
+		t.Helper()
+		out, _ := runScript(t, src)
+		qt.Assert(t, qt.IsFalse(strings.Contains(out, bad)),
+			qt.Commentf("src %q out %q should not contain %q", src, out, bad))
+	}
+	exact := func(src, want string) {
+		t.Helper()
+		out, _ := runScript(t, src)
+		qt.Assert(t, qt.Equals(strings.TrimSpace(out), want), qt.Commentf("src %q", src))
+	}
+
+	// -W: literal word list, prefix-filtered (a distinct mode, not an -A type).
+	contains(`compgen -W "alpha beta gamma alef" a`, "alpha")
+	contains(`compgen -W "alpha beta gamma alef" a`, "alef")
+	notContains(`compgen -W "alpha beta gamma" a`, "beta")
+	// -v: shell variables; -e: exported only.
+	contains(`zvarx=1; compgen -v zvar`, "zvarx")
+	exact(`export ZEXPORTED=1; compgen -e ZEXPORTED`, "ZEXPORTED")
+	exact(`ZLOCAL=1; compgen -e ZLOCAL; echo "rc=$?"`, "rc=1") // set but not exported
+	// Exit-code contracts.
+	exact(`compgen -W "x y" zzz; echo "rc=$?"`, "rc=1")           // no candidates → 1
+	exact(`compgen -A bogus x 2>/dev/null; echo "rc=$?"`, "rc=2") // invalid action → 2
+}
+
 // TestDollarBangReturnsRealPid is the canonical regression test for the
 // PID=$!; kill $PID bash idiom. Before the fix, $! returned a "g1"
 // sentinel that the kill builtin (correctly) rejected as a non-PID.

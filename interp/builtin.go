@@ -4546,6 +4546,8 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		prefix := ""
 		filter := ""
 		word := ""
+		wordList := ""
+		wordListGiven := false
 		for i := 0; i < len(args); i++ {
 			arg := args[i]
 			switch arg {
@@ -4590,31 +4592,71 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				actionType = "alias"
 			case "-b":
 				actionType = "builtin"
+			case "-c":
+				actionType = "command"
+			case "-d":
+				actionType = "directory"
+			case "-e":
+				actionType = "export"
+			case "-f":
+				actionType = "file"
+			case "-g":
+				actionType = "group"
+			case "-j":
+				actionType = "job"
 			case "-k":
 				actionType = "keyword"
+			case "-s":
+				actionType = "service"
+			case "-u":
+				actionType = "user"
+			case "-v":
+				actionType = "variable"
+			case "-W":
+				// -W <wordlist>: a distinct mode — complete from a literal
+				// IFS-split word list (the most common completion idiom), not
+				// an -A action type.
+				if i+1 >= len(args) {
+					return invalidOpt("compgen", arg)
+				}
+				wordList = args[i+1]
+				wordListGiven = true
+				i++
 			case "-r", "-D":
 				return invalidOpt("compgen", arg)
 			default:
-				// COMPLETENESS GAP (tracked): bash's compgen also accepts the
-				// convenience action flags -c (commands), -f (files), -v
-				// (variables), -d (directories), -e (exported vars), -g
-				// (groups), -j (jobs), -s (services), -u (users) — each a
-				// shorthand for -A <type> and mechanical to add (map to
-				// actionType, like -a/-b/-k above) — plus -W <wordlist>:
-				// complete from a literal IFS-split word list (the most common
-				// completion idiom; a distinct mode that splits + prefix-filters
-				// the list, not an -A type). These currently fall through to
-				// invalidOpt below. Tracked in
-				// bashy/docs/builtin-vs-external-conformance.md.
 				if strings.HasPrefix(arg, "-") {
 					return invalidOpt("compgen", arg)
 				}
 				word = arg
 			}
 		}
-		names, ok := r.compgenNames(actionType)
+		var names []string
+		ok := true
+		switch {
+		case wordListGiven:
+			// IFS-split the literal list; the word-prefix filter below
+			// narrows it to candidates starting with `word`.
+			names = r.compgenWordList(wordList)
+		case actionType == "file" || actionType == "directory":
+			// Path-aware: candidates already start with `word` (dir prefix +
+			// matching entries), so the generic prefix filter still applies.
+			names = r.compgenFiles(ctx, pos, word, actionType == "directory")
+		case actionType == "command":
+			names = r.compgenCommands(ctx, pos)
+		case actionType == "user", actionType == "group", actionType == "service":
+			names = r.compgenEtc(ctx, actionType)
+		case actionType == "job":
+			// bash completes active job names here; this runner's bg "jobs"
+			// are goroutines without stable names, so there is nothing to
+			// complete (correct when no jobs exist).
+			names = nil
+		default:
+			names, ok = r.compgenNames(actionType)
+		}
 		if !ok {
-			return failf(1, "compgen: %s: invalid action name\n", actionType)
+			// bash exits 2 for an unknown action name (usage error).
+			return failf(2, "compgen: %s: invalid action name\n", actionType)
 		}
 		var out []string
 		for _, n := range names {
@@ -4634,6 +4676,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			for _, n := range out {
 				r.outf("%s\n", n)
 			}
+		}
+		// bash: compgen exits 1 when no candidates were generated, 0 otherwise —
+		// a contract completion scripts branch on (`compgen … || <no matches>`).
+		if len(out) == 0 {
+			exit.code = 1
 		}
 	case "complete", "compopt":
 		if name == "compopt" {
@@ -5839,8 +5886,152 @@ func (r *Runner) compgenNames(actionType string) ([]string, bool) {
 		})
 		slices.Sort(names)
 		return names, true
+	case "export":
+		var names []string
+		r.writeEnv.Each(func(n string, vr expand.Variable) bool {
+			if vr.Exported {
+				names = append(names, n)
+			}
+			return true
+		})
+		slices.Sort(names)
+		return names, true
 	}
 	return nil, false
+}
+
+// compgenWordList implements `compgen -W <list>`: split the literal list on the
+// current IFS (default space/tab/newline; an explicit empty IFS yields one
+// word, matching bash). The caller's word-prefix filter then narrows it.
+func (r *Runner) compgenWordList(s string) []string {
+	ifs := " \t\n"
+	if v := r.writeEnv.Get("IFS"); v.IsSet() {
+		ifs = v.String()
+	}
+	if ifs == "" {
+		if s == "" {
+			return nil
+		}
+		return []string{s}
+	}
+	return strings.FieldsFunc(s, func(c rune) bool { return strings.ContainsRune(ifs, c) })
+}
+
+// compgenFiles implements `compgen -f` / `compgen -d`: path-aware completion of
+// filenames (or directories only) under the directory part of `word`. The
+// returned candidates already carry `word`'s directory prefix, so they start
+// with `word` and pass the caller's generic prefix filter unchanged.
+func (r *Runner) compgenFiles(ctx context.Context, pos syntax.Pos, word string, dirsOnly bool) []string {
+	dirPart, basePart, outPrefix := ".", word, ""
+	if i := strings.LastIndex(word, "/"); i >= 0 {
+		dirPart = word[:i]
+		if dirPart == "" {
+			dirPart = "/"
+		}
+		basePart = word[i+1:]
+		outPrefix = word[:i+1]
+	}
+	entries, err := r.readDirHandler(r.handlerCtx(ctx, handlerKindReadDir, pos), r.absPath(dirPart))
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasPrefix(name, basePart) {
+			continue
+		}
+		if dirsOnly && !e.IsDir() {
+			continue
+		}
+		out = append(out, outPrefix+name)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// compgenCommands implements `compgen -c`: the names runnable as a command —
+// shell keywords, builtins, functions, aliases, and the executables found on
+// PATH. (Liberal like bash: every regular file in a PATH dir is listed.)
+func (r *Runner) compgenCommands(ctx context.Context, pos syntax.Pos) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(names ...string) {
+		for _, n := range names {
+			if n != "" && !seen[n] {
+				seen[n] = true
+				out = append(out, n)
+			}
+		}
+	}
+	add(bashKeywordNames()...)
+	add(bashBuiltinNames()...)
+	for n := range r.Funcs {
+		add(n)
+	}
+	for n := range r.alias {
+		add(n)
+	}
+	for _, dir := range filepath.SplitList(r.writeEnv.Get("PATH").String()) {
+		if dir == "" {
+			dir = "."
+		}
+		entries, err := r.readDirHandler(r.handlerCtx(ctx, handlerKindReadDir, pos), r.absPath(dir))
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if !e.IsDir() {
+				add(e.Name())
+			}
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// compgenEtc implements `compgen -u` / `-g` / `-s`: user / group / service
+// names read from the system databases (/etc/passwd, /etc/group,
+// /etc/services). Empty when the file is absent (e.g. on Windows) — the same
+// graceful degradation bash shows on a host without those databases.
+func (r *Runner) compgenEtc(ctx context.Context, actionType string) []string {
+	path := map[string]string{
+		"user":    "/etc/passwd",
+		"group":   "/etc/group",
+		"service": "/etc/services",
+	}[actionType]
+	f, err := r.open(ctx, path, os.O_RDONLY, 0, false)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	seen := map[string]bool{}
+	var out []string
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		var field string
+		if actionType == "service" {
+			fields := strings.Fields(line)
+			if len(fields) == 0 {
+				continue
+			}
+			field = fields[0]
+		} else if i := strings.IndexByte(line, ':'); i >= 0 {
+			field = line[:i]
+		} else {
+			field = line
+		}
+		if field != "" && !seen[field] {
+			seen[field] = true
+			out = append(out, field)
+		}
+	}
+	slices.Sort(out)
+	return out
 }
 
 func (r *Runner) completeBuiltin(pos syntax.Pos, args []string) exitStatus {
