@@ -120,6 +120,46 @@ func TestRunnerBash53RedirectCluster(t *testing.T) {
 			in:   "set -x\nprintf aaaa > /dev/null 2> test_osh\nset +x\ncat test_osh",
 			want: "+ printf aaaa\n+ set +x\n",
 		},
+		{
+			name: "posix_redirections_apply_left_to_right",
+			in:   "set -o posix\nsh -c 'printf err >&2' 2>&1 >/dev/null",
+			want: "err",
+		},
+		{
+			name: "posix_redirection_only_expansion_is_subshell_scoped",
+			in:   "set -o posix\n: > foo\n< ${x=foo}\nprintf '<%s> status=%s\\n' \"$x\" \"$?\"",
+			want: "<> status=0\n",
+		},
+		{
+			name: "posix_inout_stdout_writes_file",
+			in:   "set -o posix\n: > f\nprintf abc 1<>f\ncat f",
+			want: "abc",
+		},
+		{
+			name: "posix_inout_stdin_can_write_then_read_same_fd",
+			in:   "set -o posix\nprintf abc > f\nexec 0<>f\nprintf X >&0\nread -r -N 2 v <&0\nprintf '<%s>\\n' \"$v\"",
+			want: "<bc>\n",
+		},
+		{
+			name: "posix_closed_input_cat_fails",
+			in:   "set -o posix\nread v <&-\nprintf 'status=%s\\n' \"$?\"",
+			want: "status=1\n",
+		},
+		{
+			name: "posix_closed_output_cat_fails",
+			in:   "set -o posix\nprintf x > f\ncat f >&-\nprintf 'status=%s\\n' \"$?\"",
+			want: "status=1\n",
+		},
+		{
+			name: "posix_redirection_operand_quote_removal",
+			in:   "set -o posix\n: > 'quoted file'\ncat < 'quoted file'",
+			want: "",
+		},
+		{
+			name: "posix_input_dup_from_write_only_fd_fails",
+			in:   "set -o posix\nexec 8>f\ncat <&8\nprintf 'status=%s\\n' \"$?\"",
+			want: "8: Bad file descriptor\nstatus=1\n",
+		},
 	}
 
 	for _, tt := range tests {

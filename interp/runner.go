@@ -24,7 +24,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -4574,6 +4573,25 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 		r.exit.exiting = true
 		return
 	}
+	if st.Cmd == nil && len(st.Redirs) > 0 {
+		r2 := r.subshell(false)
+		var closers []io.Closer
+		for _, rd := range st.Redirs {
+			cls, err := r2.redir(ctx, rd)
+			if err != nil {
+				r2.exit.code = 1
+				break
+			}
+			if cls != nil {
+				closers = append(closers, cls)
+			}
+		}
+		for _, c := range closers {
+			c.Close()
+		}
+		r.exit = r2.exit
+		return
+	}
 	oldCurStmtPos := r.curStmtPos
 	// bash quirk, encoded empirically: a redirection failure on a
 	// while/for compound INSIDE a subshell is reported one line past
@@ -7828,6 +7846,9 @@ func (r *Runner) setReadFd(targetFd int, f *os.File) error {
 		// reader so a heredoc/here-string/`<file` wins over the
 		// stdin-script-line-consumption feature (see stdinRedirected).
 		r.stdinRedirected = true
+		if r.fdWriteTable != nil {
+			delete(r.fdWriteTable, 0)
+		}
 	case 1, 2:
 		return fmt.Errorf("cannot use fd %d as input target", targetFd)
 	default:
@@ -7855,8 +7876,20 @@ func (r *Runner) setWriteFd(targetFd int, w io.Writer) error {
 	switch targetFd {
 	case -1, 1:
 		r.stdout = w
+		if r.fdTable != nil {
+			delete(r.fdTable, 1)
+		}
+		if r.fdReadTable != nil {
+			delete(r.fdReadTable, 1)
+		}
 	case 2:
 		r.stderr = w
+		if r.fdTable != nil {
+			delete(r.fdTable, 2)
+		}
+		if r.fdReadTable != nil {
+			delete(r.fdReadTable, 2)
+		}
 	case 0:
 		return fmt.Errorf("cannot use fd 0 as output target")
 	default:
@@ -7888,6 +7921,54 @@ func (r *Runner) setWriteFd(targetFd int, w io.Writer) error {
 	return nil
 }
 
+func (r *Runner) bindReadWriteFd(targetFd int, f *os.File) error {
+	switch targetFd {
+	case -1, 0:
+		r.stdin = f
+		r.stdinTTYFallback = false
+		r.stdinDevTTY = false
+		r.stdinRedirected = true
+		if r.fdWriteTable == nil {
+			r.fdWriteTable = make(map[int]io.Writer)
+		}
+		r.fdWriteTable[0] = f
+	case 1:
+		r.stdout = f
+		if r.fdTable == nil {
+			r.fdTable = make(map[int]*os.File)
+		}
+		r.fdTable[1] = f
+		if r.fdReadTable == nil {
+			r.fdReadTable = make(map[int]bool)
+		}
+		r.fdReadTable[1] = true
+	case 2:
+		r.stderr = f
+		if r.fdTable == nil {
+			r.fdTable = make(map[int]*os.File)
+		}
+		r.fdTable[2] = f
+		if r.fdReadTable == nil {
+			r.fdReadTable = make(map[int]bool)
+		}
+		r.fdReadTable[2] = true
+	default:
+		if r.fdTable == nil {
+			r.fdTable = make(map[int]*os.File)
+		}
+		r.fdTable[targetFd] = f
+		if r.fdReadTable == nil {
+			r.fdReadTable = make(map[int]bool)
+		}
+		r.fdReadTable[targetFd] = true
+		if r.fdWriteTable == nil {
+			r.fdWriteTable = make(map[int]io.Writer)
+		}
+		r.fdWriteTable[targetFd] = f
+	}
+	return nil
+}
+
 func (r *Runner) dupFd(targetFd, sourceFd int, rd *syntax.Redirect) error {
 	if targetFd == sourceFd {
 		return nil
@@ -7898,6 +7979,9 @@ func (r *Runner) dupFd(targetFd, sourceFd int, rd *syntax.Redirect) error {
 	// `>&N`), is EBADF — exactly as bash.
 	if rd.Op == syntax.DplOut {
 		ok = ok && write != nil
+	}
+	if rd.Op == syntax.DplIn && targetFd == 0 {
+		ok = ok && read != nil
 	}
 	if !ok {
 		r.errf("%s%s: Bad file descriptor\n", r.bashErrPrefix(rd.Word.Pos()), redirWordText(rd))
@@ -7910,18 +7994,39 @@ func (r *Runner) dupFd(targetFd, sourceFd int, rd *syntax.Redirect) error {
 func (r *Runner) fdCaps(fd int) (read *os.File, write io.Writer, ok bool) {
 	switch fd {
 	case 0:
+		write := io.Writer(nil)
+		if r.fdWriteTable != nil {
+			write = r.fdWriteTable[0]
+		}
 		if r.stdin != nil {
-			return r.stdin, nil, true
+			return r.stdin, write, true
+		}
+		if write != nil {
+			return nil, write, true
 		}
 		return nil, nil, false
 	case 1:
+		var read *os.File
+		if r.fdTable != nil && r.fdReadTable[1] {
+			read = r.fdTable[1]
+		}
 		if r.stdout != nil {
-			return nil, r.stdout, true
+			return read, r.stdout, true
+		}
+		if read != nil {
+			return read, nil, true
 		}
 		return nil, nil, false
 	case 2:
+		var read *os.File
+		if r.fdTable != nil && r.fdReadTable[2] {
+			read = r.fdTable[2]
+		}
 		if r.stderr != nil {
-			return nil, r.stderr, true
+			return read, r.stderr, true
+		}
+		if read != nil {
+			return read, nil, true
 		}
 		return nil, nil, false
 	}
@@ -7956,17 +8061,51 @@ func (r *Runner) bindFdCaps(targetFd int, read *os.File, write io.Writer) {
 		r.stdinTTYFallback = false
 		r.stdinDevTTY = false
 		r.stdinRedirected = true
+		if write != nil {
+			if r.fdWriteTable == nil {
+				r.fdWriteTable = make(map[int]io.Writer)
+			}
+			r.fdWriteTable[0] = write
+		} else if r.fdWriteTable != nil {
+			delete(r.fdWriteTable, 0)
+		}
 	case 1:
 		if write != nil {
 			r.stdout = write
 		} else {
 			r.stdout = badFdWriter{}
 		}
+		if read != nil {
+			if r.fdTable == nil {
+				r.fdTable = make(map[int]*os.File)
+			}
+			r.fdTable[1] = read
+			if r.fdReadTable == nil {
+				r.fdReadTable = make(map[int]bool)
+			}
+			r.fdReadTable[1] = true
+		} else {
+			delete(r.fdTable, 1)
+			delete(r.fdReadTable, 1)
+		}
 	case 2:
 		if write != nil {
 			r.stderr = write
 		} else {
 			r.stderr = badFdWriter{}
+		}
+		if read != nil {
+			if r.fdTable == nil {
+				r.fdTable = make(map[int]*os.File)
+			}
+			r.fdTable[2] = read
+			if r.fdReadTable == nil {
+				r.fdReadTable = make(map[int]bool)
+			}
+			r.fdReadTable[2] = true
+		} else {
+			delete(r.fdTable, 2)
+			delete(r.fdReadTable, 2)
 		}
 	default:
 		if read != nil {
@@ -7996,7 +8135,7 @@ func (r *Runner) bindFdCaps(targetFd int, read *os.File, write io.Writer) {
 type badFdWriter struct{}
 
 func (badFdWriter) Write([]byte) (int, error) {
-	return 0, syscall.EBADF
+	return 0, ExitStatus(1)
 }
 
 func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, error) {
@@ -8338,20 +8477,16 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 		if err != nil {
 			return nil, err
 		}
-		if err := r.setReadFd(targetFd, stdin); err != nil {
-			return nil, err
-		}
 		if rd.Op == syntax.RdrInOut {
 			writeFd := targetFd
 			if writeFd == -1 {
 				writeFd = 0
 			}
-			if writeFd >= 3 {
-				if r.fdWriteTable == nil {
-					r.fdWriteTable = make(map[int]io.Writer)
-				}
-				r.fdWriteTable[writeFd] = stdin
+			if err := r.bindReadWriteFd(writeFd, stdin); err != nil {
+				return nil, err
 			}
+		} else if err := r.setReadFd(targetFd, stdin); err != nil {
+			return nil, err
 		}
 		if targetFd == -1 || targetFd == 0 {
 			r.stdinTTYFallback = ttyFallback
@@ -8530,10 +8665,25 @@ func (r *Runner) closeFd(fd int) {
 	switch fd {
 	case 0:
 		r.stdin = nil
+		if r.fdWriteTable != nil {
+			delete(r.fdWriteTable, 0)
+		}
 	case 1:
-		r.stdout = io.Discard
+		r.stdout = badFdWriter{}
+		if r.fdTable != nil {
+			delete(r.fdTable, 1)
+		}
+		if r.fdReadTable != nil {
+			delete(r.fdReadTable, 1)
+		}
 	case 2:
-		r.stderr = io.Discard
+		r.stderr = badFdWriter{}
+		if r.fdTable != nil {
+			delete(r.fdTable, 2)
+		}
+		if r.fdReadTable != nil {
+			delete(r.fdReadTable, 2)
+		}
 	default:
 		delete(r.fdTable, fd)
 		delete(r.fdReadTable, fd)
