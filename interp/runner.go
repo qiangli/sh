@@ -5222,13 +5222,17 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		}
 		if assignFailed {
 			if r.opts[optPosix] {
-				if isPosixSpecialBuiltin(fields[0]) {
+				// POSIX mode: a variable-assignment error (e.g. to a
+				// readonly variable) in a command prefix exits a
+				// NON-INTERACTIVE shell, for ANY command — special or
+				// regular. Verified against bash 5.3 (`readonly a=a;
+				// a=b true` exits, not just `a=b :`) and the yash
+				// error-p suite. An interactive shell is spared: the
+				// command is skipped and the shell continues (status 1).
+				if !r.interactiveShell {
 					r.exit.exiting = true
 					break
 				}
-				// POSIX mode, non-special command: the command is
-				// not executed; the shell continues with status 1
-				// (bash follows ksh93 here rather than strict POSIX).
 				for _, restore := range restores {
 					r.restoreInlineVar(restore.name, restore.vr)
 				}
