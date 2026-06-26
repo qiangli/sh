@@ -164,7 +164,7 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 				msg := fmt.Sprintf("%s%s: command not found\n",
 					hc.runner.bashErrPrefix(hc.Pos), cmd)
 				code := 127
-				if strings.ContainsAny(args[0], `/`+string(filepath.Separator)) {
+				if lookPathHasPath(args[0], runtime.GOOS == "windows") {
 					reason, c := classifyExecPath(hc.Dir, args[0])
 					msg = fmt.Sprintf("%s%s: %s\n",
 						hc.runner.bashErrPrefix(hc.Pos), cmd, reason)
@@ -518,20 +518,20 @@ func LookPathDir(cwd string, env expand.Environ, file string) (string, error) {
 type findAny = func(dir string, file string, exts []string) (string, error)
 
 func lookPathDir(cwd string, env expand.Environ, file string, find findAny) (string, error) {
+	return lookPathDirMode(cwd, env, file, find, runtime.GOOS == "windows")
+}
+
+func lookPathDirMode(cwd string, env expand.Environ, file string, find findAny, windows bool) (string, error) {
 	if find == nil {
 		panic("no find function found")
 	}
 
-	pathList := filepath.SplitList(env.Get("PATH").String())
+	pathList := splitLookPath(env.Get("PATH").String(), windows)
 	if len(pathList) == 0 {
 		pathList = []string{""}
 	}
-	chars := `/`
-	if runtime.GOOS == "windows" {
-		chars = `:\/`
-	}
-	exts := pathExts(env)
-	if strings.ContainsAny(file, chars) {
+	exts := pathExtsMode(env, windows)
+	if lookPathHasPath(file, windows) {
 		return find(cwd, file, exts)
 	}
 	for _, elem := range pathList {
@@ -539,15 +539,39 @@ func lookPathDir(cwd string, env expand.Environ, file string, find findAny) (str
 		switch elem {
 		case "", ".":
 			// otherwise "foo" won't be "./foo"
-			path = "." + string(filepath.Separator) + file
+			path = lookPathJoin(".", file, windows)
 		default:
-			path = filepath.Join(elem, file)
+			path = lookPathJoin(elem, file, windows)
 		}
 		if f, err := find(cwd, path, exts); err == nil {
 			return f, nil
 		}
 	}
 	return "", fmt.Errorf("%q: executable file not found in $PATH", file)
+}
+
+func splitLookPath(path string, windows bool) []string {
+	if windows && runtime.GOOS != "windows" {
+		return strings.Split(path, ";")
+	}
+	return filepath.SplitList(path)
+}
+
+func lookPathHasPath(file string, windows bool) bool {
+	if windows {
+		return strings.ContainsAny(file, `:\/`)
+	}
+	return strings.Contains(file, `/`)
+}
+
+func lookPathJoin(dir, file string, windows bool) string {
+	if !windows || runtime.GOOS == "windows" {
+		return filepath.Join(dir, file)
+	}
+	if strings.HasSuffix(dir, `\`) || strings.HasSuffix(dir, `/`) {
+		return dir + file
+	}
+	return dir + `\` + file
 }
 
 // scriptFromPathDir is similar to [LookPathDir], with the difference that it looks
@@ -557,7 +581,11 @@ func scriptFromPathDir(cwd string, env expand.Environ, file string) (string, err
 }
 
 func pathExts(env expand.Environ) []string {
-	if runtime.GOOS != "windows" {
+	return pathExtsMode(env, runtime.GOOS == "windows")
+}
+
+func pathExtsMode(env expand.Environ, windows bool) []string {
+	if !windows {
 		return nil
 	}
 	pathext := env.Get("PATHEXT").String()
