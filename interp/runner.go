@@ -5434,21 +5434,25 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				return
 			}
 			// Duplicate pipe fds for use by the goroutines, then close
-			// the originals. This ensures the parent process does not
-			// hold extra references to the pipe, so that:
+			// the originals when the duplicates are distinct. On Unix this
+			// ensures the parent process does not hold extra references to the pipe, so that:
 			//   - EOF propagates when the writer closes its end
 			//   - SIGPIPE is delivered when the reader closes its end
 			// Builtins and external commands in the goroutines use the
 			// duplicated fds, which remain valid until explicitly closed.
+			// Non-Unix dupPipeFd may return the same *os.File; keep those
+			// originals open so in-process pipeline commands don't inherit
+			// already-closed pipe endpoints. Hold for human Windows verify:
+			// cat | tr | head should not report "file already closed".
 			// See https://github.com/mvdan/sh/issues/1142
-			pwDup, err := dupPipeFd(pw)
+			pwDup, pwDistinct, err := dupPipeFd(pw)
 			if err != nil {
 				pw.Close()
 				pr.Close()
 				r.exit.fatal(err)
 				return
 			}
-			prDup, err := dupPipeFd(pr)
+			prDup, prDistinct, err := dupPipeFd(pr)
 			if err != nil {
 				pw.Close()
 				pr.Close()
@@ -5456,8 +5460,12 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				r.exit.fatal(err)
 				return
 			}
-			pw.Close()
-			pr.Close()
+			if pwDistinct {
+				pw.Close()
+			}
+			if prDistinct {
+				pr.Close()
+			}
 
 			r2 := r.subshell(true)
 			r2.stdout = pwDup

@@ -2427,6 +2427,12 @@ var runTests = []runTest{
 		"a=1 b=2 c=3 d=4 e=5 : | a=1 b=2 c=3 d=4 e=5 : | a=1 b=2 c=3 d=4 e=5 : | a=1 b=2 c=3 d=4 e=5 :",
 		"",
 	},
+	{
+		// Windows hold: this all-in-process pipeline should not inherit an
+		// already-closed pipe endpoint from the parent lifecycle candidate.
+		"printf 'foo\\nbar\\n' >f; cat f | tr -s o | head -1",
+		"fo\n",
+	},
 
 	// background/wait
 	{"wait", ""},

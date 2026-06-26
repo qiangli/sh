@@ -37,8 +37,8 @@ func setProcessUmask(mask int) {}
 // dupPipeFd is a no-op on non-unix platforms; the original pipe fd is
 // returned. Pipelines will still run, but EOF/SIGPIPE propagation is
 // best-effort because the parent retains the original fd reference.
-func dupPipeFd(f *os.File) (*os.File, error) {
-	return f, nil
+func dupPipeFd(f *os.File) (*os.File, bool, error) {
+	return f, false, nil
 }
 
 // access attempts to emulate [unix.Access] on Windows.
