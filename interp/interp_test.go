@@ -1482,6 +1482,18 @@ var runTests = []runTest{
 		"",
 	},
 	{
+		"while false; do :; done; echo $?",
+		"0\n",
+	},
+	{
+		"i=0; while [ $i -lt 1 ]; do i=$((i + 1)); false; done; echo $?",
+		"1\n",
+	},
+	{
+		"i=0; while [ $i -lt 2 ]; do i=$((i + 1)); [ $i -eq 1 ]; done; echo $?",
+		"1\n",
+	},
+	{
 		"while GOSH_CMD=print_fail $GOSH_PROG; do echo foo; done",
 		"exec fail\n",
 	},
@@ -1502,6 +1514,18 @@ var runTests = []runTest{
 	{
 		"until true; do echo foo; done",
 		"",
+	},
+	{
+		"until true; do :; done; echo $?",
+		"0\n",
+	},
+	{
+		"i=0; until [ $i -ge 1 ]; do i=$((i + 1)); false; done; echo $?",
+		"1\n",
+	},
+	{
+		"i=0; until [ $i -ge 2 ]; do i=$((i + 1)); [ $i -eq 1 ]; done; echo $?",
+		"1\n",
 	},
 	{
 		"until false; do exit 1; done",

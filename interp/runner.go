@@ -5507,6 +5507,8 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			r.cmd(ctx, cm.Else)
 		}
 	case *syntax.WhileClause:
+		var lastBodyExit exitStatus
+		bodyRan := false
 		for !r.stop(ctx) {
 			oldNoErrExit := r.noErrExit
 			r.noErrExit = true
@@ -5535,9 +5537,19 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				break
 			}
 
-			stop := r.exit.ok() == cm.Until
+			if r.exit.ok() == cm.Until {
+				if bodyRan && !r.exit.exiting && !r.exit.returning && !r.exit.fatalExit {
+					r.exit = lastBodyExit
+				} else {
+					r.exit.clear()
+				}
+				break
+			}
 			r.exit.clear()
-			if stop || r.loopStmtsBroken(ctx, cm.Do) {
+			broken := r.loopStmtsBroken(ctx, cm.Do)
+			bodyRan = true
+			lastBodyExit = r.exit
+			if broken {
 				break
 			}
 		}
