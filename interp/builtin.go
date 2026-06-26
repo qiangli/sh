@@ -3868,14 +3868,17 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			break
 		}
 		if !dashReset && (printTraps || len(args) == 0) {
-			// Print traps, optionally filtered by signal names
-			filter := make(map[string]bool)
+			// Print traps, optionally filtered by signal names. When
+			// signal operands are given, bash prints them in the order
+			// they were supplied on the command line (duplicates included),
+			// not in its internal numeric order.
+			var filterOrder []string
 			for _, a := range args {
 				sig := normalizeSignal(a)
 				if sig == "" {
 					return failf(1, "trap: %s: invalid signal specification\n", a)
 				}
-				filter[sig] = true
+				filterOrder = append(filterOrder, sig)
 			}
 			// bash prints `trap -- 'CMD' SIGNAME` with the body in
 			// single-quotes (`'`) and the signal name prefixed with
@@ -3894,8 +3897,13 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					return "SIG" + name
 				}
 			}
+			// In POSIX mode, `trap -p` lists *every* signal (defaults shown
+			// as `trap -- - SIG`); a bare `trap` (no -p) lists only the
+			// non-default traps, exactly as in non-POSIX mode. bash gates the
+			// full default dump on the -p flag, not merely on POSIX mode.
+			fullList := r.opts[optPosix] && printTraps
 			var sigKeys []string
-			if r.opts[optPosix] && len(filter) == 0 {
+			if fullList {
 				for _, e := range sortedSignalEntries() {
 					sigKeys = append(sigKeys, e.Name)
 				}
@@ -3927,16 +3935,19 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					return ni < nj
 				})
 			}
-			sigOrder := append([]string{"EXIT"}, sigKeys...)
-			sigOrder = append(sigOrder, "ERR", "DEBUG", "RETURN")
-			for _, sig := range sigOrder {
+			// With explicit signal operands, iterate them in the order
+			// given (bash showtrap loops over the supplied specs); otherwise
+			// use EXIT, ascending real signals, then ERR/DEBUG/RETURN.
+			iterOrder := append([]string{"EXIT"}, sigKeys...)
+			iterOrder = append(iterOrder, "DEBUG", "ERR", "RETURN")
+			if len(filterOrder) > 0 {
+				iterOrder = filterOrder
+			}
+			for _, sig := range iterOrder {
 				cb, ok := r.trapCallbacks[sig]
 				ignored := r.isStartupIgnored(sig)
-				defaulted := r.opts[optPosix] && len(filter) == 0
+				defaulted := fullList
 				if !ok && !ignored && !defaulted {
-					continue
-				}
-				if len(filter) > 0 && !filter[sig] {
 					continue
 				}
 				// A hard-ignored signal always prints an empty action,
@@ -3956,11 +3967,30 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			// nothing to attach it to).
 			break
 		}
+		unsignedDecimal := func(s string) bool {
+			if s == "" {
+				return false
+			}
+			for _, c := range s {
+				if c < '0' || c > '9' {
+					return false
+				}
+			}
+			return true
+		}
 		reset := false
 		switch {
 		case dashReset:
 			// `trap - SIG...`: the "-" action was already consumed; the
 			// remaining args are all signal names to reset.
+			reset = true
+		case unsignedDecimal(args[0]) && normalizeSignal(args[0]) != "":
+			// POSIX: a numeric first operand that names a valid signal means
+			// every operand is a condition to reset to default — `trap 2 QUIT`
+			// resets signals 2 and QUIT, it does not install "2" as the action
+			// for QUIT. bash applies this in both POSIX and default modes. A
+			// numeric operand that is *not* a valid signal (`trap 512 QUIT`) is
+			// still an action, so it falls through to the default case.
 			reset = true
 		case len(args) == 1:
 			// 1-arg form resets the named signal to default, but only

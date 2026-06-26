@@ -52,22 +52,33 @@ func TestElapsedString(t *testing.T) {
 func TestTrapPrintPosixNoArgs(t *testing.T) {
 	t.Parallel()
 
-	var want strings.Builder
-	want.WriteString("trap -- - EXIT\n")
+	// bash --posix prints the full default-disposition list only for `trap
+	// -p`; a bare `trap` lists only the non-default traps (so nothing when
+	// none are set), exactly as in non-POSIX mode. The full dump is gated on
+	// the -p flag, not merely on POSIX mode.
+	var fullList strings.Builder
+	fullList.WriteString("trap -- - EXIT\n")
 	for _, sig := range sortedSignalEntries() {
-		want.WriteString("trap -- - ")
-		want.WriteString(sig.Name)
-		want.WriteByte('\n')
+		fullList.WriteString("trap -- - ")
+		fullList.WriteString(sig.Name)
+		fullList.WriteByte('\n')
 	}
-	want.WriteString("trap -- - ERR\n")
-	want.WriteString("trap -- - DEBUG\n")
-	want.WriteString("trap -- - RETURN\n")
+	fullList.WriteString("trap -- - DEBUG\n")
+	fullList.WriteString("trap -- - ERR\n")
+	fullList.WriteString("trap -- - RETURN\n")
 
-	for _, cmd := range []string{"trap", "trap -p"} {
-		t.Run(cmd, func(t *testing.T) {
+	tests := []struct {
+		cmd  string
+		want string
+	}{
+		{"trap", ""},
+		{"trap -p", fullList.String()},
+	}
+	for _, tc := range tests {
+		t.Run(tc.cmd, func(t *testing.T) {
 			t.Parallel()
 
-			file, err := syntax.NewParser().Parse(strings.NewReader("set -o posix; "+cmd), "")
+			file, err := syntax.NewParser().Parse(strings.NewReader("set -o posix; "+tc.cmd), "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -79,8 +90,61 @@ func TestTrapPrintPosixNoArgs(t *testing.T) {
 			if err := r.Run(context.Background(), file); err != nil {
 				t.Fatal(err)
 			}
-			if got := stdout.String(); got != want.String() {
-				t.Fatalf("wrong output for %s\nwant:\n%sgot:\n%s", cmd, want.String(), got)
+			if got := stdout.String(); got != tc.want {
+				t.Fatalf("wrong output for %s\nwant:\n%sgot:\n%s", tc.cmd, tc.want, got)
+			}
+		})
+	}
+}
+
+// TestTrapNumericFirstOperandResets covers the POSIX rule that a numeric first
+// operand naming a valid signal makes every operand a condition to reset to
+// default — `trap 2 QUIT` resets signals 2 and QUIT rather than installing "2"
+// as the action for QUIT. bash applies this in both POSIX and default modes.
+func TestTrapNumericFirstOperandResets(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			"reset-two-signals",
+			"trap 'echo trapped' INT QUIT; trap 2 QUIT; trap -p INT QUIT",
+			"",
+		},
+		{
+			"invalid-number-is-action",
+			"trap 512 QUIT; trap -p QUIT",
+			"trap -- '512' SIGQUIT\n",
+		},
+		{
+			// bash prints filtered `trap -p` operands in the order given,
+			// not in numeric order (TERM=15 listed before QUIT=3 here).
+			"filtered-print-keeps-operand-order",
+			"trap 'x' TERM QUIT; trap -p TERM QUIT",
+			"trap -- 'x' SIGTERM\ntrap -- 'x' SIGQUIT\n",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			file, err := syntax.NewParser().Parse(strings.NewReader(tc.src), "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var stdout bytes.Buffer
+			r, err := New(StdIO(nil, &stdout, nil))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := r.Run(context.Background(), file); err != nil {
+				t.Fatal(err)
+			}
+			if got := stdout.String(); got != tc.want {
+				t.Fatalf("wrong output for %q\nwant:\n%sgot:\n%s", tc.src, tc.want, got)
 			}
 		})
 	}
