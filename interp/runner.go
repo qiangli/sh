@@ -5365,6 +5365,9 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			r.noErrExit = true
 			r.stmt(ctx, cm.X)
 			r.noErrExit = oldNoErrExit
+			if r.loopControlPending() {
+				return
+			}
 			if r.exit.ok() == (cm.Op == syntax.AndStmt) {
 				r.stmt(ctx, cm.Y)
 			}
@@ -5497,10 +5500,13 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		r.noErrExit = true
 		r.stmts(ctx, cm.Cond)
 		r.noErrExit = oldNoErrExit
+		if r.loopControlPending() {
+			return
+		}
 
 		if r.exit.ok() {
 			r.stmts(ctx, cm.Then)
-			break
+			return
 		}
 		r.exit.clear()
 		if cm.Else != nil {
@@ -5888,6 +5894,9 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				continue
 			}
 			r.stmts(ctx, ci.Stmts)
+			if r.loopControlPending() {
+				return
+			}
 			switch ci.Op {
 			case syntax.Fallthrough:
 				// `;&` — fall into the next item's body unless we're
@@ -7599,6 +7608,9 @@ func elapsedString(d time.Duration, posix bool) string {
 func (r *Runner) stmts(ctx context.Context, stmts []*syntax.Stmt) {
 	for _, stmt := range stmts {
 		r.stmt(ctx, stmt)
+		if r.loopControlPending() {
+			return
+		}
 	}
 }
 
@@ -8664,6 +8676,10 @@ func (r *Runner) loopStmtsBroken(ctx context.Context, stmts []*syntax.Stmt) bool
 		}
 	}
 	return false
+}
+
+func (r *Runner) loopControlPending() bool {
+	return r.breakEnclosing > 0 || r.contnEnclosing > 0
 }
 
 func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
