@@ -135,6 +135,7 @@ type Runner struct {
 	filename            string // only if Node was a File, or set for incremental runs
 	incrementalFilename string
 	interactiveShell    bool
+	mirrorUmask         bool
 	commandString       bool
 	standardInput       bool
 
@@ -1191,6 +1192,20 @@ func PromptExpand(fn func(string) string) RunnerOption {
 // Interactive configures the interpreter to behave like an interactive shell,
 // akin to Bash. Currently, this only enables the expansion of aliases,
 // but later on it should also change other behavior.
+// MirrorUmask makes the `umask` builtin also set the process-wide umask via
+// [syscall.Umask], so external commands (e.g. `mkdir`) honour the shell's
+// umask. This is OFF by default because the library supports many Runners per
+// process and the process umask is global; a standalone shell binary running
+// ONE Runner per process (e.g. the bashy drop-in) enables it for POSIX
+// fidelity. Subshells do not propagate it, so a goroutine subshell can't
+// clobber the parent's process umask.
+func MirrorUmask(enabled bool) RunnerOption {
+	return func(r *Runner) error {
+		r.mirrorUmask = enabled
+		return nil
+	}
+}
+
 func Interactive(enabled bool) RunnerOption {
 	return func(r *Runner) error {
 		r.interactiveShell = enabled
@@ -2184,6 +2199,7 @@ func (r *Runner) Reset() {
 		interactiveShell:       r.interactiveShell,
 		commandString:          r.commandString,
 		standardInput:          r.standardInput,
+		mirrorUmask:            r.mirrorUmask,
 		inheritedFds:           maps.Clone(r.inheritedFds),
 		// fdTable is intentionally not preserved across Reset; a reset
 		// runner starts with no inherited non-stdio fds.

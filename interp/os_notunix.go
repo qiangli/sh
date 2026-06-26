@@ -31,6 +31,9 @@ func processUmask() int {
 	return 0o022
 }
 
+// setProcessUmask is a no-op on non-unix platforms (no umask equivalent).
+func setProcessUmask(mask int) {}
+
 // dupPipeFd is a no-op on non-unix platforms; the original pipe fd is
 // returned. Pipelines will still run, but EOF/SIGPIPE propagation is
 // best-effort because the parent retains the original fd reference.

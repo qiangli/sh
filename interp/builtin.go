@@ -4750,6 +4750,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		symRes := parseSymbolicUmask(args[0], r.umask)
 		if symRes.ok {
 			r.umask = symRes.mask
+			if r.mirrorUmask {
+				setProcessUmask(r.umask)
+			}
 			break
 		}
 		if symRes.kind != "" {
@@ -4766,6 +4769,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			return failf(1, "umask: %s: octal number out of range\n", args[0])
 		}
 		r.umask = int(mask)
+		if r.mirrorUmask {
+			setProcessUmask(r.umask)
+		}
 	case "export":
 		// In POSIX mode the parser treats `export`/`readonly` as plain
 		// commands rather than the declare-family keyword, so they reach

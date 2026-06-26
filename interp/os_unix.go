@@ -34,6 +34,15 @@ func processUmask() int {
 	return m
 }
 
+// setProcessUmask sets the process-wide umask. Used only when MirrorUmask is
+// enabled (a standalone shell binary, one Runner per process) so external
+// commands honour the shell's umask.
+func setProcessUmask(mask int) {
+	umaskMu.Lock()
+	defer umaskMu.Unlock()
+	syscall.Umask(mask)
+}
+
 func mkfifo(path string, mode uint32) error {
 	return unix.Mkfifo(path, mode)
 }
