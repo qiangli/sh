@@ -217,6 +217,59 @@ func TestNohupNoTTYInheritsStdio(t *testing.T) {
 		qt.Commentf("nohup.out should not be created when stdout is not a tty"))
 }
 
+// TestDisabledBuiltinNohupFallsThroughToExternal covers BOTH paths of the
+// fork's nohup builtin: kept as a builtin (the AgentOS / matrix-shell default,
+// for in-process detach across a closed SSH session) and disabled via
+// [interp.WithDisabledBuiltins] (the programmatic `enable -n`, how the pure
+// `bash` drop-in stays strict bash 5.3 — which has no nohup builtin). It also
+// asserts the disabled state survives Reset (bashy calls Reset before each run;
+// preserving disabledBuiltins there was the fix that made the drop-in work).
+func TestDisabledBuiltinNohupFallsThroughToExternal(t *testing.T) {
+	runOut := func(t *testing.T, src string, reset bool, opts ...interp.RunnerOption) string {
+		t.Helper()
+		file, err := syntax.NewParser().Parse(strings.NewReader(src), "")
+		qt.Assert(t, qt.IsNil(err))
+		buf := &safeBuf{}
+		base := []interp.RunnerOption{interp.StdIO(nil, buf, buf)}
+		r, err := interp.New(append(base, opts...)...)
+		qt.Assert(t, qt.IsNil(err))
+		if reset {
+			r.Reset() // mirror bashy's run() path; disabled set must survive
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = r.Run(ctx, file)
+		return strings.TrimSpace(buf.String())
+	}
+
+	// Internal: default fork behavior — nohup is a builtin.
+	qt.Assert(t, qt.Equals(runOut(t, "type -t nohup", false), "builtin"))
+
+	// External: WithDisabledBuiltins makes it fall through to PATH. type -t is
+	// "file" when /usr/bin/nohup exists, "" when absent — never "builtin".
+	dis := interp.WithDisabledBuiltins("nohup")
+	got := runOut(t, "type -t nohup", false, dis)
+	qt.Assert(t, qt.Not(qt.Equals(got, "builtin")),
+		qt.Commentf("disabled nohup must not report builtin; got %q", got))
+
+	// Critical regression: the disabled state survives Reset (preserving
+	// disabledBuiltins in Reset is the fix that made the bash drop-in work).
+	qt.Assert(t, qt.Equals(runOut(t, "type -t nohup", true, dis),
+		runOut(t, "type -t nohup", false, dis)),
+		qt.Commentf("WithDisabledBuiltins must survive Reset (bashy resets before each run)"))
+
+	// Functional: with a real external nohup present, the disabled path must
+	// still RUN the command (do its job, not just reclassify). Non-tty stdout
+	// (a buffer) means nohup inherits it per POSIX, so output lands here.
+	if _, err := exec.LookPath("nohup"); err != nil {
+		t.Skip("no external nohup on PATH:", err)
+	}
+	qt.Assert(t, qt.Equals(runOut(t, "type -t nohup", false, dis), "file"))
+	out := runOut(t, "nohup sh -c 'echo hello'", false, dis)
+	qt.Assert(t, qt.IsTrue(strings.Contains(out, "hello")),
+		qt.Commentf("external nohup must run the command; got %q", out))
+}
+
 // TestDollarBangReturnsRealPid is the canonical regression test for the
 // PID=$!; kill $PID bash idiom. Before the fix, $! returned a "g1"
 // sentinel that the kill builtin (correctly) rejected as a non-PID.

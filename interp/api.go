@@ -1478,6 +1478,30 @@ func EnableDryRunOption(enabled bool) RunnerOption {
 	}
 }
 
+// WithDisabledBuiltins marks the named builtins as disabled at runner
+// construction, exactly as `enable -n <name>` would at runtime: they fall
+// through to PATH lookup and `type`/`command -v` report them as external (or
+// not-found). This is the programmatic form of `enable -n` and is how a strict
+// drop-in suppresses fork-only builtins it adds for embedders. For example the
+// pure `bash` binary disables the fork's `nohup`/`setsid` so they resolve to
+// the real external commands like bash 5.3 (and, where absent — e.g. setsid on
+// macOS — report "not found", matching bash on that platform), while the
+// AgentOS / matrix-shell embedders keep them as builtins for in-process detach.
+func WithDisabledBuiltins(names ...string) RunnerOption {
+	return func(r *Runner) error {
+		if len(names) == 0 {
+			return nil
+		}
+		if r.disabledBuiltins == nil {
+			r.disabledBuiltins = make(map[string]bool)
+		}
+		for _, n := range names {
+			r.disabledBuiltins[n] = true
+		}
+		return nil
+	}
+}
+
 // ReadDirHandler sets the read directory handler. See [ReadDirHandlerFunc] for more info.
 //
 // Deprecated: use [ReadDirHandler2].
@@ -2113,6 +2137,11 @@ func (r *Runner) Reset() {
 		// not per-Run scratch state.
 		Funcs:       r.Funcs,
 		funcSources: r.funcSources,
+
+		// disabledBuiltins (`enable -n`, or WithDisabledBuiltins at
+		// construction) is part of the shell's persistent state, not per-Run
+		// scratch — preserve it across Reset like funcs/aliases.
+		disabledBuiltins: r.disabledBuiltins,
 
 		dirStack: r.dirStack[:0],
 		usedNew:  r.usedNew,
