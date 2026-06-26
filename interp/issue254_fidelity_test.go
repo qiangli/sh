@@ -59,6 +59,31 @@ func TestIssue254ArithProbeStatus(t *testing.T) {
 	}
 }
 
+func TestIssue254ArithShiftFalseTestDoesNotLatchExit(t *testing.T) {
+	t.Parallel()
+
+	src := "y=$(( 1 << 1 ))\n" +
+		"[[ 1 -le 0 ]]\n" +
+		"true\n"
+	file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(bytes.NewReader([]byte(src)), "./s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := New(
+		Env(expand.ListEnviron()),
+		WithBashCompatErrors(true),
+		WithBashSource([]byte(src)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := r.Run(ctx, file); err != nil {
+		t.Fatalf("Run returned error after final true: %v", err)
+	}
+}
+
 func TestIssue254FunctionDiagnosticUsesDefinitionSource(t *testing.T) {
 	t.Parallel()
 
