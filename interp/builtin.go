@@ -6735,9 +6735,7 @@ func absPath(dir, path string) string {
 	if path == "" {
 		return ""
 	}
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(dir, path)
-	}
+	path = shellPathJoinAbs(dir, path)
 	return filepath.Clean(path) // TODO: this clean is likely unnecessary
 }
 
