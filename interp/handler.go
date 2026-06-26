@@ -197,12 +197,31 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 			env = append(env, BashyInheritedFdsEnv+"="+inheritedFds)
 		}
 		hc.runner.closeUnmanagedInheritedFdsOnExec()
+		// If stdin is the in-memory script-source reader, back it with a
+		// seekable temp file: os/exec eagerly drains a non-File stdin, which
+		// would consume the next script line even for a command that never
+		// reads stdin (e.g. `echo`). With a real fd the child reads only what
+		// it wants; afterwards advance the consumed offset by its actual read
+		// position so a reading command (`cat`) still consumes the script.
+		execStdin := hc.Stdin
+		if sr, ok := hc.Stdin.(*scriptStdinReader); ok && hc.runner != nil {
+			if f, base := sr.seekableFile(); f != nil {
+				execStdin = f
+				defer func() {
+					if pos, serr := f.Seek(0, io.SeekCurrent); serr == nil {
+						hc.runner.stdinSourceOffset = max(hc.runner.stdinSourceOffset, base+int(pos))
+					}
+					f.Close()
+					os.Remove(f.Name())
+				}()
+			}
+		}
 		cmd := exec.Cmd{
 			Path:       path,
 			Args:       cmdArgs,
 			Env:        env,
 			Dir:        hc.Dir,
-			Stdin:      hc.Stdin,
+			Stdin:      execStdin,
 			Stdout:     hc.Stdout,
 			Stderr:     hc.Stderr,
 			ExtraFiles: extraFiles,
@@ -235,7 +254,7 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 					Args:       newArgs,
 					Env:        reExecEnv,
 					Dir:        hc.Dir,
-					Stdin:      hc.Stdin,
+					Stdin:      execStdin,
 					Stdout:     hc.Stdout,
 					Stderr:     hc.Stderr,
 					ExtraFiles: extraFiles,

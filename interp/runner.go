@@ -1328,6 +1328,31 @@ func (s *scriptStdinReader) Read(p []byte) (int, error) {
 	return n, nil
 }
 
+// seekableFile materializes the script-stdin slice as a seekable temp file so an
+// EXTERNAL command can be given a real fd. os/exec eagerly drains a non-File
+// stdin reader, which would consume the slice even for a command that never
+// reads stdin (e.g. `echo`) — silently swallowing the next script line. With a
+// real fd the child reads only what it wants; the caller then advances
+// stdinSourceOffset by the child's actual read position. Returns the file plus
+// the absolute source offset its start corresponds to.
+func (s *scriptStdinReader) seekableFile() (*os.File, int) {
+	f, err := os.CreateTemp("", "bashy-stdin-src-")
+	if err != nil {
+		return nil, 0
+	}
+	if _, err := f.Write(s.r.bashSource[s.off:s.limit]); err != nil {
+		f.Close()
+		os.Remove(f.Name())
+		return nil, 0
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		f.Close()
+		os.Remove(f.Name())
+		return nil, 0
+	}
+	return f, s.off
+}
+
 func (r *Runner) fields(words ...*syntax.Word) []string {
 	strs, err := expand.Fields(r.ecfg, words...)
 	r.expandErr(err)
