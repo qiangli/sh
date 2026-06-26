@@ -144,6 +144,14 @@ func IsBuiltin(name string) bool {
 	return false
 }
 
+func isKeyword(word string) bool {
+	switch word {
+	case "elif", "{", "}":
+		return true
+	}
+	return syntax.IsKeyword(word)
+}
+
 // TODO: atoi is duplicated in the expand package.
 
 // atoi is like [strconv.ParseInt](s, 10, 64), but it ignores errors and trims whitespace.
@@ -1673,7 +1681,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				}
 				continue
 			}
-			matches := r.typeMatches(arg, skipFuncs)
+			matches := r.typeMatches(arg, skipFuncs, r.writeEnv)
 			// -p: only print path if no non-file match exists.
 			if mode == "-p" {
 				var pathMatch string
@@ -2310,7 +2318,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			// it to look for the sourced script in the current directory.
 			if havePathOverride || (r.opts[optPosix] && !strings.Contains(args[0], "/")) {
 				r.errf("%s%s: %s: file not found\n", r.bashErrPrefix(pos), name, args[0])
-				if r.opts[optPosix] {
+				if r.opts[optPosix] && !r.interactiveShell {
 					exit.exiting = true
 				}
 				exit.code = 1
@@ -2325,7 +2333,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		f, err := r.open(ctx, path, os.O_RDONLY, 0, r.bashCompatErrors)
 		if err != nil {
 			if r.bashCompatErrors {
-				if r.opts[optPosix] {
+				if r.opts[optPosix] && !r.interactiveShell {
 					exit.exiting = true
 				}
 				exit.code = 1
@@ -2358,9 +2366,21 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				exit.code = 126
 				return exit
 			}
+			if r.noOpSetState["verbose"] {
+				r.errf("%s", content)
+			}
 			file, err = p.Parse(bytes.NewReader(content), path)
 		} else {
-			file, err = p.Parse(f, path)
+			if r.noOpSetState["verbose"] {
+				content, rerr := io.ReadAll(f)
+				if rerr != nil {
+					return failf(1, "source: %v\n", rerr)
+				}
+				r.errf("%s", content)
+				file, err = p.Parse(bytes.NewReader(content), path)
+			} else {
+				file, err = p.Parse(f, path)
+			}
 		}
 		if err != nil {
 			return failf(1, "source: %v\n", err)
@@ -2699,7 +2719,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		for _, arg := range args {
 			last = 0
 			if showVV {
-				ms := r.typeMatches(arg, false)
+				ms := r.typeMatches(arg, false, lookupEnv)
 				if len(ms) == 0 {
 					r.errf(r.bashErrPrefix(pos)+"command: %s: not found\n", arg)
 					last = 1
@@ -2717,7 +2737,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			}
 			// -v: minimal form. Functions/builtins/keywords print the
 			// name; files print the path.
-			if syntax.IsKeyword(arg) || r.Funcs[arg] != nil || IsBuiltin(arg) {
+			if isKeyword(arg) || r.Funcs[arg] != nil || (IsBuiltin(arg) && !r.disabledBuiltins[arg]) {
 				r.outf("%s\n", arg)
 			} else if als, ok := r.alias[arg]; ok && r.opts[optExpandAliases] {
 				r.outf("alias %s='%s'\n", arg, aliasValue(als))
@@ -6217,9 +6237,9 @@ func (r *Runner) completeBuiltin(pos syntax.Pos, args []string) exitStatus {
 // typeMatches returns all resolutions of arg, in bash priority order.
 // skipFuncs corresponds to `type -f` (suppress function matches);
 // alias matches are only included when [optExpandAliases] is set.
-func (r *Runner) typeMatches(arg string, skipFuncs bool) []typeMatch {
+func (r *Runner) typeMatches(arg string, skipFuncs bool, env expand.Environ) []typeMatch {
 	var ms []typeMatch
-	if syntax.IsKeyword(arg) {
+	if isKeyword(arg) {
 		ms = append(ms, typeMatch{
 			kind: "keyword",
 			desc: fmt.Sprintf("%s is a shell keyword", arg),
@@ -6266,7 +6286,7 @@ func (r *Runner) typeMatches(arg string, skipFuncs bool) []typeMatch {
 			desc: fmt.Sprintf("%s is hashed (%s)", arg, entry.path),
 			path: entry.path,
 		})
-	} else if path, err := LookPathDir(r.Dir, r.writeEnv, arg); err == nil {
+	} else if path, err := LookPathDir(r.Dir, env, arg); err == nil {
 		ms = append(ms, typeMatch{
 			kind: "file",
 			desc: fmt.Sprintf("%s is %s", arg, path),
