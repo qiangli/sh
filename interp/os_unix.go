@@ -59,13 +59,13 @@ func canExec(path string) bool {
 // the original fd while the duplicate remains valid. This is used to
 // ensure the parent process does not hold extra pipe fd references during
 // pipeline execution, which would prevent EOF/SIGPIPE propagation.
-func dupPipeFd(f *os.File) (*os.File, error) {
+func dupPipeFd(f *os.File) (*os.File, bool, error) {
 	newFd, err := syscall.Dup(int(f.Fd()))
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	syscall.CloseOnExec(newFd)
-	return os.NewFile(uintptr(newFd), f.Name()+"-dup"), nil
+	return os.NewFile(uintptr(newFd), f.Name()+"-dup"), true, nil
 }
 
 func (r *Runner) inheritedFd(fd int) (*os.File, bool) {
