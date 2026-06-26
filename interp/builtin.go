@@ -1191,15 +1191,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			// bash returns 2 for a cd usage error (too many operands).
 			return failf(2, "cd: too many arguments\n")
 		}
-		// Under `-P`, resolve the target's symlinks so the runner's Dir
-		// and $PWD become the physical path (bash semantics). EvalSymlinks
-		// hits the real filesystem, matching `pwd -P` below.
-		if physical && path != "" {
-			if resolved, err := filepath.EvalSymlinks(r.absPath(path)); err == nil {
-				path = resolved
-			}
-		}
-		exit.code = r.changeDir(ctx, "cd", path)
+		exit.code = r.changeDir(ctx, "cd", path, physical)
 		if printPath && exit.code == 0 {
 			r.outf("%s\n", path)
 		}
@@ -6567,12 +6559,21 @@ func (r *Runner) readLineFrom(ctx context.Context, stdin io.Reader, raw bool, de
 	}
 }
 
-func (r *Runner) changeDir(ctx context.Context, cmd, path string) uint8 {
+func (r *Runner) changeDir(ctx context.Context, cmd, path string, physical ...bool) uint8 {
 	if path == "" {
 		r.errf("%s%s: empty directory path\n", r.bashErrPrefix(r.curStmtPos), cmd)
 		return 1
 	}
-	apath := r.absPath(path)
+	phys := false
+	if len(physical) > 0 {
+		phys = physical[0]
+	}
+	apath, err := r.resolveCdPath(ctx, path, phys)
+	if err != nil {
+		r.errf("%s%s: %s: %s\n",
+			r.bashErrPrefix(r.curStmtPos), cmd, bashDiagnosticWord(path), cdStatErrorReason(err))
+		return 1
+	}
 	info, err := r.stat(ctx, apath)
 	if err != nil {
 		r.errf("%s%s: %s: %s\n",
@@ -6611,6 +6612,79 @@ func (r *Runner) changeDir(ctx context.Context, cmd, path string) uint8 {
 	return 0
 }
 
+// resolveCdPath resolves a pathname for cd/pushd/popd by walking each
+// component of the operand. Under physical mode, symlinks are resolved at each
+// step and the current directory is resolved to its physical path before
+// handling relative paths. This matches `bash --posix` behaviour: non-existing
+// or non-directory intermediate components cause an immediate error.
+func (r *Runner) resolveCdPath(ctx context.Context, path string, physical bool) (string, error) {
+	// Determine the base directory for relative paths.
+	base := r.Dir
+	if physical {
+		if resolved, err := filepath.EvalSymlinks(base); err == nil {
+			base = resolved
+		}
+	}
+	if filepath.IsAbs(path) {
+		base = "/"
+	}
+	parts := splitPathOperand(path)
+	if len(parts) == 0 {
+		return base, nil
+	}
+	current := base
+	for _, part := range parts {
+		current = joinNoClean(current, part)
+		info, err := r.stat(ctx, current)
+		if err != nil {
+			return "", err
+		}
+		if !info.IsDir() {
+			return "", fmt.Errorf("Not a directory")
+		}
+		if physical && info.Mode()&os.ModeSymlink != 0 {
+			if resolved, err := filepath.EvalSymlinks(current); err == nil {
+				current = resolved
+			}
+		}
+	}
+	return filepath.Clean(current), nil
+}
+
+// joinNoClean joins a directory and a path component without [filepath.Clean]
+// normalization. This preserves ".." and "." components so they can be checked
+// individually.
+func joinNoClean(dir, comp string) string {
+	if dir == "" {
+		return comp
+	}
+	if comp == "" {
+		return dir
+	}
+	return dir + string(filepath.Separator) + comp
+}
+
+// splitPathOperand splits a path operand into its components without cleaning.
+// e.g. "./file/../dev" → [".", "file", "..", "dev"].
+func splitPathOperand(path string) []string {
+	if path == "" || path == "/" {
+		return nil
+	}
+	abs := filepath.IsAbs(path)
+	parts := strings.Split(path, string(filepath.Separator))
+	var result []string
+	for _, p := range parts {
+		if p == "" {
+			continue
+		}
+		result = append(result, p)
+	}
+	if abs && len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
 func cdStatErrorReason(err error) string {
 	if errors.Is(err, fs.ErrNotExist) {
 		return "No such file or directory"
@@ -6638,10 +6712,14 @@ func (r *Runner) cdpath(ctx context.Context, path string) (string, bool, bool) {
 		if base == "" {
 			base = "."
 		}
-		candidate := absPath(r.absPath(base), path)
+		candidate := joinNoClean(r.absPath(base), path)
 		info, err := r.stat(ctx, candidate)
 		if err == nil && info.IsDir() && r.access(ctx, candidate, access_X_OK) == nil {
-			return candidate, elem != "" && elem != ".", true
+			printPath := elem != ""
+			if !r.opts[optPosix] && elem == "." {
+				printPath = false
+			}
+			return candidate, printPath, true
 		}
 	}
 	return "", false, false

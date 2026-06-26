@@ -7798,3 +7798,225 @@ func TestRunnerExecConsumesBufferedStdin(t *testing.T) {
 	}
 	qt.Assert(t, qt.Equals(cb.String(), "got=payload\nafter\n"))
 }
+
+func TestCdPosixComponent(t *testing.T) {
+	t.Parallel()
+
+	runCd := func(t *testing.T, tdir, src string, opts ...interp.RunnerOption) string {
+		t.Helper()
+		p := syntax.NewParser()
+		file := parse(t, p, src)
+		var cb strings.Builder
+		baseOpts := []interp.RunnerOption{
+			interp.Dir(tdir),
+			interp.StdIO(nil, &cb, &cb),
+			interp.ExecHandlers(testExecHandler),
+			interp.Params("-o", "posix"),
+		}
+		baseOpts = append(baseOpts, opts...)
+		r, err := interp.New(baseOpts...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), runnerRunTimeout)
+		defer cancel()
+		if err := r.Run(ctx, file); err != nil {
+			cb.WriteString(err.Error() + "\n")
+		}
+		return cb.String()
+	}
+
+	// non-directory file in operand component (-L)
+	t.Run("non-directory-component-L", func(t *testing.T) {
+		t.Parallel()
+		tdir := t.TempDir()
+		os.MkdirAll(filepath.Join(tdir, "dev"), 0o755)
+		os.WriteFile(filepath.Join(tdir, "file"), []byte("x"), 0o644)
+		got := runCd(t, tdir, "cd -L ./file/../dev; echo status=$?")
+		qt.Assert(t, qt.IsTrue(strings.Contains(got, "Not a directory")))
+	})
+
+	// non-directory file in operand component (-P)
+	t.Run("non-directory-component-P", func(t *testing.T) {
+		t.Parallel()
+		tdir := t.TempDir()
+		os.MkdirAll(filepath.Join(tdir, "dev"), 0o755)
+		os.WriteFile(filepath.Join(tdir, "file"), []byte("x"), 0o644)
+		got := runCd(t, tdir, "cd -P ./file/../dev; echo status=$?")
+		qt.Assert(t, qt.IsTrue(strings.Contains(got, "Not a directory")))
+	})
+
+	// non-existing file in operand component (-L)
+	t.Run("nonexistent-component-L", func(t *testing.T) {
+		t.Parallel()
+		tdir := t.TempDir()
+		os.MkdirAll(filepath.Join(tdir, "dev"), 0o755)
+		got := runCd(t, tdir, "cd -L ./_no_such_file_/../dev; echo status=$?")
+		qt.Assert(t, qt.IsTrue(strings.Contains(got, "No such file or directory")))
+	})
+
+	// non-existing file in operand component (-P)
+	t.Run("nonexistent-component-P", func(t *testing.T) {
+		t.Parallel()
+		tdir := t.TempDir()
+		os.MkdirAll(filepath.Join(tdir, "dev"), 0o755)
+		got := runCd(t, tdir, "cd -P ./_no_such_file_/../dev; echo status=$?")
+		qt.Assert(t, qt.IsTrue(strings.Contains(got, "No such file or directory")))
+	})
+
+	// CDPATH: found in cd path (-L)
+	t.Run("cdpath-found-L", func(t *testing.T) {
+		t.Parallel()
+		tdir := t.TempDir()
+		cdpath1 := filepath.Join(tdir, "cdpath1")
+		os.MkdirAll(filepath.Join(cdpath1, "foo"), 0o755)
+		got := runCd(t, tdir, "CDPATH="+cdpath1+":; cd -L foo >/dev/null; echo status=$?; echo PWD=$PWD")
+		qt.Assert(t, qt.IsTrue(strings.Contains(got, "status=0")))
+	})
+
+	// CDPATH: found in cd path (-P) with symlinks resolved
+	t.Run("cdpath-found-P", func(t *testing.T) {
+		t.Parallel()
+		tdir := t.TempDir()
+		cdpath1 := filepath.Join(tdir, "cdpath1")
+		os.MkdirAll(filepath.Join(cdpath1, "foo"), 0o755)
+		got := runCd(t, tdir, "CDPATH="+cdpath1+":; cd -P foo >/dev/null; echo status=$?")
+		qt.Assert(t, qt.IsTrue(strings.Contains(got, "status=0")))
+	})
+
+	// CDPATH: found in dot cd path (-L), should print in POSIX mode
+	t.Run("cdpath-dot-L", func(t *testing.T) {
+		t.Parallel()
+		tdir := t.TempDir()
+		os.MkdirAll(filepath.Join(tdir, "dev"), 0o755)
+		got := runCd(t, tdir, "CDPATH=.:; cd -L dev; echo status=$?")
+		qt.Assert(t, qt.IsTrue(strings.Contains(got, "status=0")))
+		qt.Assert(t, qt.IsTrue(strings.Contains(got, tdir+"/dev\n")))
+	})
+
+	// CDPATH: found in dot cd path (-P), should print in POSIX mode
+	t.Run("cdpath-dot-P", func(t *testing.T) {
+		t.Parallel()
+		tdir := t.TempDir()
+		os.MkdirAll(filepath.Join(tdir, "dev"), 0o755)
+		got := runCd(t, tdir, "CDPATH=.:; cd -P dev; echo status=$?")
+		qt.Assert(t, qt.IsTrue(strings.Contains(got, "status=0")))
+		qt.Assert(t, qt.IsTrue(strings.Contains(got, tdir+"/dev\n")))
+	})
+
+	// symlink resolution in old PWD under -P
+	t.Run("symlink-in-old-PWD-P", func(t *testing.T) {
+		t.Parallel()
+		tdir := t.TempDir()
+		cdpath2 := filepath.Join(tdir, "cdpath2")
+		os.MkdirAll(filepath.Join(cdpath2, "foo"), 0o755)
+		os.MkdirAll(filepath.Join(cdpath2, "dev"), 0o755)
+		os.Symlink(filepath.Join("cdpath2", "foo"), filepath.Join(tdir, "link"))
+		got := runCd(t, tdir, "cd -L link && cd -P ./../dev/. && printf 'PWD=%s\\n' \"$PWD\"")
+		// On macOS /var is a symlink to /private/var, so the physical
+		// PWD may include the /private prefix.
+		physTdir := tdir
+		if r, err := filepath.EvalSymlinks(tdir); err == nil {
+			physTdir = r
+		}
+		qt.Assert(t, qt.IsTrue(strings.Contains(got, "PWD="+physTdir+"/cdpath2/dev\n")))
+	})
+
+	// default operand is HOME (-L)
+	t.Run("default-HOME-L", func(t *testing.T) {
+		t.Parallel()
+		tdir := t.TempDir()
+		os.MkdirAll(filepath.Join(tdir, "homedir"), 0o755)
+		got := runCd(t, tdir, "HOME="+tdir+"/homedir; cd -L; echo status=$?; pwd")
+		qt.Assert(t, qt.IsTrue(strings.Contains(got, "status=0")))
+		qt.Assert(t, qt.IsTrue(strings.Contains(got, tdir+"/homedir")))
+	})
+
+	// default operand is HOME (-P)
+	t.Run("default-HOME-P", func(t *testing.T) {
+		t.Parallel()
+		tdir := t.TempDir()
+		os.MkdirAll(filepath.Join(tdir, "homedir"), 0o755)
+		got := runCd(t, tdir, "HOME="+tdir+"/homedir; cd -P; echo status=$?; pwd")
+		qt.Assert(t, qt.IsTrue(strings.Contains(got, "status=0")))
+		qt.Assert(t, qt.IsTrue(strings.Contains(got, tdir+"/homedir")))
+	})
+
+	// cd path ending with slash (-L)
+	t.Run("cdpath-slash-L", func(t *testing.T) {
+		t.Parallel()
+		tdir := t.TempDir()
+		os.MkdirAll(filepath.Join(tdir, "dev"), 0o755)
+		got := runCd(t, tdir, "CDPATH=/; cd -L dev; echo status=$?")
+		qt.Assert(t, qt.IsTrue(strings.Contains(got, "status=0")))
+	})
+
+	// cd path ending with slash (-P)
+	t.Run("cdpath-slash-P", func(t *testing.T) {
+		t.Parallel()
+		tdir := t.TempDir()
+		os.MkdirAll(filepath.Join(tdir, "dev"), 0o755)
+		got := runCd(t, tdir, "CDPATH=/; cd -P dev; echo status=$?")
+		qt.Assert(t, qt.IsTrue(strings.Contains(got, "status=0")))
+	})
+
+	// cd paths ignored for absolute operand (-L)
+	t.Run("cdpath-ignored-abs-L", func(t *testing.T) {
+		t.Parallel()
+		tdir := t.TempDir()
+		cdpath1 := filepath.Join(tdir, "cdpath1")
+		os.MkdirAll(cdpath1, 0o755)
+		got := runCd(t, tdir, "CDPATH="+cdpath1+":; cd -L /; echo status=$?; pwd")
+		qt.Assert(t, qt.IsTrue(strings.Contains(got, "status=0")))
+		qt.Assert(t, qt.IsTrue(strings.Contains(got, "/\n")))
+	})
+
+	// cd paths ignored for absolute operand (-P)
+	t.Run("cdpath-ignored-abs-P", func(t *testing.T) {
+		t.Parallel()
+		tdir := t.TempDir()
+		cdpath1 := filepath.Join(tdir, "cdpath1")
+		os.MkdirAll(cdpath1, 0o755)
+		got := runCd(t, tdir, "CDPATH="+cdpath1+":; cd -P /; echo status=$?; pwd")
+		qt.Assert(t, qt.IsTrue(strings.Contains(got, "status=0")))
+		qt.Assert(t, qt.IsTrue(strings.Contains(got, "/\n")))
+	})
+
+	// directory not found with unset CDPATH (-L)
+	t.Run("not-found-unset-cdpath-L", func(t *testing.T) {
+		t.Parallel()
+		tdir := t.TempDir()
+		got := runCd(t, tdir, "unset CDPATH; cd -L _no_such_path_; echo status=$?")
+		qt.Assert(t, qt.IsTrue(strings.Contains(got, "No such file or directory")))
+	})
+
+	// directory not found with unset CDPATH (-P)
+	t.Run("not-found-unset-cdpath-P", func(t *testing.T) {
+		t.Parallel()
+		tdir := t.TempDir()
+		got := runCd(t, tdir, "unset CDPATH; cd -P _no_such_path_; echo status=$?")
+		qt.Assert(t, qt.IsTrue(strings.Contains(got, "No such file or directory")))
+	})
+
+	// found in empty cd path (-L), no print for empty entry
+	t.Run("cdpath-empty-L", func(t *testing.T) {
+		t.Parallel()
+		tdir := t.TempDir()
+		cdpath1 := filepath.Join(tdir, "cdpath1")
+		os.MkdirAll(filepath.Join(cdpath1, "foo"), 0o755)
+		os.MkdirAll(filepath.Join(tdir, "dev"), 0o755)
+		got := runCd(t, tdir, "CDPATH="+cdpath1+"::; cd -L dev; echo status=$?; pwd")
+		qt.Assert(t, qt.IsTrue(strings.Contains(got, "status=0")))
+	})
+
+	// found in empty cd path (-P), no print for empty entry
+	t.Run("cdpath-empty-P", func(t *testing.T) {
+		t.Parallel()
+		tdir := t.TempDir()
+		cdpath1 := filepath.Join(tdir, "cdpath1")
+		os.MkdirAll(filepath.Join(cdpath1, "foo"), 0o755)
+		os.MkdirAll(filepath.Join(tdir, "dev"), 0o755)
+		got := runCd(t, tdir, "CDPATH="+cdpath1+"::; cd -P dev; echo status=$?; pwd")
+		qt.Assert(t, qt.IsTrue(strings.Contains(got, "status=0")))
+	})
+}
