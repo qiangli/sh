@@ -756,6 +756,12 @@ func Pattern(cfg *Config, word *syntax.Word) (string, error) {
 	prevS := cfg.stripBackslashEscapes
 	cfg.stripBackslashEscapes = false
 	defer func() { cfg.stripBackslashEscapes = prevS }()
+	// Tilde expansion in a pattern word (${var#~path}) happens even when
+	// the enclosing parameter expansion is inside double quotes. Temporarily
+	// clear insideDoubleQuote so expandUser in wordField fires.
+	prevQuote := cfg.insideDoubleQuote
+	cfg.insideDoubleQuote = false
+	defer func() { cfg.insideDoubleQuote = prevQuote }()
 	field, err := cfg.wordField(word.Parts, quoteNone)
 	if err != nil {
 		return "", err

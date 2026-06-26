@@ -1832,7 +1832,7 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 		// treats a missing assoc key as unset for ${a[k]+w}).
 		setNonColon := false
 		switch op {
-		case syntax.AlternateUnset, syntax.DefaultUnset:
+		case syntax.AlternateUnset, syntax.DefaultUnset, syntax.AssignUnset:
 			if vr.Kind == Associative && index != nil &&
 				nodeLit(index) != "@" && nodeLit(index) != "*" {
 				setNonColon = assocElemSet
@@ -1850,6 +1850,14 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			wordNeeded = !setNonColon
 		case syntax.DefaultUnsetOrNull:
 			wordNeeded = str == "" && !starEmptyIFSNonNull || starAggregateNull
+		case syntax.AssignUnset:
+			wordNeeded = !setNonColon
+		case syntax.AssignUnsetOrNull:
+			wordNeeded = str == "" && !starEmptyIFSNonNull || starAggregateNull
+		case syntax.ErrorUnset:
+			wordNeeded = !vr.IsSet()
+		case syntax.ErrorUnsetOrNull:
+			wordNeeded = str == ""
 		}
 		var arg string
 		var err error
