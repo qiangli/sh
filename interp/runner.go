@@ -4631,9 +4631,23 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 				// POSIX mode: a redirection error on a special builtin
 				// (`exec 9<nosuchfile`, …) exits a non-interactive shell,
 				// even on the left side of || or &&.
-				if r.opts[optPosix] {
-					if call, ok := st.Cmd.(*syntax.CallExpr); ok && len(call.Args) > 0 &&
-						isPosixSpecialBuiltin(call.Args[0].Lit()) {
+				if r.opts[optPosix] && !r.interactiveShell {
+					// A redirection error on a special built-in is fatal to a
+					// non-interactive POSIX shell (interactive is spared).
+					// readonly/export/… parse as DeclClause, not CallExpr, so
+					// check both shapes for the command name.
+					var cmdName string
+					switch c := st.Cmd.(type) {
+					case *syntax.CallExpr:
+						if len(c.Args) > 0 {
+							cmdName = c.Args[0].Lit()
+						}
+					case *syntax.DeclClause:
+						if c.Variant != nil {
+							cmdName = c.Variant.Value
+						}
+					}
+					if isPosixSpecialBuiltin(cmdName) {
 						r.exit.exiting = true
 					}
 				}
