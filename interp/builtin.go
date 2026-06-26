@@ -4595,6 +4595,17 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			case "-r", "-D":
 				return invalidOpt("compgen", arg)
 			default:
+				// COMPLETENESS GAP (tracked): bash's compgen also accepts the
+				// convenience action flags -c (commands), -f (files), -v
+				// (variables), -d (directories), -e (exported vars), -g
+				// (groups), -j (jobs), -s (services), -u (users) — each a
+				// shorthand for -A <type> and mechanical to add (map to
+				// actionType, like -a/-b/-k above) — plus -W <wordlist>:
+				// complete from a literal IFS-split word list (the most common
+				// completion idiom; a distinct mode that splits + prefix-filters
+				// the list, not an -A type). These currently fall through to
+				// invalidOpt below. Tracked in
+				// bashy/docs/builtin-vs-external-conformance.md.
 				if strings.HasPrefix(arg, "-") {
 					return invalidOpt("compgen", arg)
 				}
