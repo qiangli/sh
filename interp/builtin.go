@@ -1141,22 +1141,30 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		physical := false
 		for len(args) > 0 {
 			a := args[0]
-			switch a {
-			case "-P":
-				physical = true
-				args = args[1:]
-				continue
-			case "-L":
-				physical = false
-				args = args[1:]
-				continue
-			case "-e", "-@":
-				args = args[1:]
-				continue
-			}
 			if a == "--" { // end of options; remaining args are operands
 				args = args[1:]
 				break
+			}
+			if len(a) > 1 && a[0] == '-' && a != "-" {
+				valid := true
+				for _, opt := range a[1:] {
+					switch opt {
+					case 'P':
+						physical = true
+					case 'L':
+						physical = false
+					case 'e', '@':
+					default:
+						valid = false
+					}
+					if !valid {
+						break
+					}
+				}
+				if valid {
+					args = args[1:]
+					continue
+				}
 			}
 			break
 		}
@@ -6678,7 +6686,7 @@ func (r *Runner) resolveCdPath(ctx context.Context, path string, physical bool) 
 		if !info.IsDir() {
 			return "", fmt.Errorf("Not a directory")
 		}
-		if physical && info.Mode()&os.ModeSymlink != 0 {
+		if physical {
 			if resolved, err := filepath.EvalSymlinks(current); err == nil {
 				current = resolved
 			}
@@ -6736,7 +6744,9 @@ func cdStatErrorReason(err error) string {
 }
 
 func (r *Runner) cdpath(ctx context.Context, path string) (string, bool, bool) {
-	if path == "" || filepath.IsAbs(path) || strings.ContainsRune(path, filepath.Separator) {
+	if path == "" || filepath.IsAbs(path) || path == "." || path == ".." ||
+		strings.HasPrefix(path, "."+string(filepath.Separator)) ||
+		strings.HasPrefix(path, ".."+string(filepath.Separator)) {
 		return "", false, false
 	}
 	cdpath := r.envGet("CDPATH")
@@ -6748,7 +6758,7 @@ func (r *Runner) cdpath(ctx context.Context, path string) (string, bool, bool) {
 		if base == "" {
 			base = "."
 		}
-		candidate := joinNoClean(r.absPath(base), path)
+		candidate := filepath.Clean(joinNoClean(r.absPath(base), path))
 		info, err := r.stat(ctx, candidate)
 		if err == nil && info.IsDir() && r.access(ctx, candidate, access_X_OK) == nil {
 			printPath := elem != ""
