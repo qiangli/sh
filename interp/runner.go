@@ -5264,13 +5264,13 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		}
 		if assignFailed {
 			if r.opts[optPosix] {
-				if isPosixSpecialBuiltin(fields[0]) {
+				if isPosixSpecialBuiltin(fields[0]) && !r.interactiveShell {
 					r.exit.exiting = true
 					break
 				}
-				// POSIX mode, non-special command: the command is
-				// not executed; the shell continues with status 1
-				// (bash follows ksh93 here rather than strict POSIX).
+				// Otherwise bash 5.3 --posix spares the shell (special builtin in an
+				// interactive shell, OR any non-special command in either mode): skip
+				// the command and continue with status 1. Verified vs the live oracle.
 				for _, restore := range restores {
 					r.restoreInlineVar(restore.name, restore.vr)
 				}
