@@ -3449,7 +3449,7 @@ var runTests = []runTest{
 	},
 	{"set -n; echo foo", ""},
 	{"set -n; [ wrong", ""},
-	{"set -n; set +n; echo foo", ""},
+	{"set -n; set +n; echo foo", "foo\n"},
 	{
 		"set -o foobar",
 		"set: foobar: invalid option name\nexit status 2 #JUSTERR",
@@ -3467,6 +3467,45 @@ var runTests = []runTest{
 		"set -o allexport\n",
 	},
 	{`set - foobar; echo $@; set -; echo $@`, "foobar\nfoobar\n"},
+
+	// set -o with single-letter abbreviations (POSIX conformance).
+	// Turn on with long name, turn off with short name via -o.
+	{`set -o allexport; set +o a; [[ -o allexport ]]`, "exit status 1"},
+	{`set -o allexport; set +o a; VAR=val; echo $VAR`, "val\n"},
+	{`set -o noglob; set +o f; [[ -o noglob ]]`, "exit status 1"},
+	{`set -o noglob; set +o f; echo foo*`, "foo*\n"},
+	{`set -o noexec; set +o n; [[ -o noexec ]]`, "exit status 1"},
+	{`set -o noexec; set +o n; echo executed`, "executed\n"},
+	{`set -o nounset; set +o u; [[ -o nounset ]]`, "exit status 1"},
+	{`set -o xtrace; set +o x; [[ -o xtrace ]]`, "+ set +o x\nexit status 1"},
+	{`set -o errexit; set +o e; [[ -o errexit ]]`, "exit status 1"},
+
+	// Turn on with short name via -o (single-letter abbreviation).
+	{`set -o a; [[ -o allexport ]]`, ""},
+	{`set -o f; [[ -o noglob ]]`, ""},
+	{`set -o n; [[ -o noexec ]]`, ""},
+	{`set -o u; [[ -o nounset ]]`, ""},
+	{`set -o e; [[ -o errexit ]]`, ""},
+	{`set -o C; [[ -o noclobber ]]`, ""},
+
+	// Turn on then off with short name via -o.
+	{`set -o C; set +o C; [[ -o noclobber ]]`, "exit status 1"},
+
+	// set +/-flag (short flag form) for accept-and-ignore options.
+	{`set -b; [[ $- = *b* ]]`, ""},
+	{`set +b; [[ $- = *b* ]]`, "exit status 1"},
+	{`set -v; [[ $- = *v* ]]`, ""},
+	{`set +v; [[ $- = *v* ]]`, "exit status 1"},
+
+	// set +/-flag for core POSIX options (short flag form).
+	{`set -C; [[ -o noclobber ]]`, ""},
+	{`set +C; [[ -o noclobber ]]`, "exit status 1"},
+
+	// set -o <long_name> for accept-and-ignore options.
+	{`set -o notify; [[ $- = *b* ]]`, ""},
+	{`set +o notify; [[ $- = *b* ]]`, "exit status 1"},
+	{`set -o verbose; [[ $- = *v* ]]`, ""},
+	{`set +o verbose; [[ $- = *v* ]]`, "exit status 1"},
 
 	// unset
 	{

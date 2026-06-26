@@ -465,6 +465,11 @@ type Runner struct {
 	// script most recently asserted.
 	noOpSetState map[string]bool
 
+	// bypassNoExec is set when a POSIX special builtin (e.g. `set`)
+	// executes under `set -n` (noexec). Special builtins must execute
+	// even when noexec is on, so they can toggle the option back off.
+	bypassNoExec bool
+
 	// settingIgnoreEOFOption is true while set/shopt is synchronizing
 	// IGNOREEOF from the ignoreeof option, not from a user assignment.
 	settingIgnoreEOFOption bool
@@ -1265,29 +1270,14 @@ func Params(args ...string) RunnerOption {
 				if opt == nil {
 					// Accept-and-ignore single-letter options
 					// that bash supports but we don't model.
-					switch flag[1] {
-					case 'T':
+					if flag[1] == 'h' {
+						continue // hashall is always on
+					}
+					if name, ok := noOpSetFlagToName[flag[1]]; ok {
 						if r.noOpSetState == nil {
 							r.noOpSetState = make(map[string]bool)
 						}
-						r.noOpSetState["functrace"] = enable
-						continue
-					case 'E':
-						if r.noOpSetState == nil {
-							r.noOpSetState = make(map[string]bool)
-						}
-						r.noOpSetState["errtrace"] = enable
-						continue
-					case 'm':
-						// Record monitor mode so fg/bg/jobs can tell
-						// whether job control is active, even though we
-						// don't otherwise model it.
-						if r.noOpSetState == nil {
-							r.noOpSetState = make(map[string]bool)
-						}
-						r.noOpSetState["monitor"] = enable
-						continue
-					case 'h', 'H', 'v', 'P', 'p', 'B', 'b', 't':
+						r.noOpSetState[name] = enable
 						continue
 					}
 					return fmt.Errorf("invalid option: %q", flag)
@@ -1365,7 +1355,15 @@ func Params(args ...string) RunnerOption {
 			}
 			opt := r.posixOptByName(value)
 			if opt == nil {
-				if _, ok := noOpSetOptions[value]; ok {
+				noOpName := value
+				// Map single-letter flags to no-op option names for
+				// accept-and-ignore options (e.g. `set -o b` → notify).
+				if len(value) == 1 {
+					if mapped, ok := noOpSetFlagToName[value[0]]; ok {
+						noOpName = mapped
+					}
+				}
+				if _, ok := noOpSetOptions[noOpName]; ok {
 					// accept-and-ignore: remember the toggle so
 					// subsequent `set -o` listings echo back what
 					// the script asserted, but don't otherwise act
@@ -1802,6 +1800,11 @@ func (r *Runner) posixOptByName(name string) *bool {
 			return &r.opts[i]
 		}
 	}
+	// POSIX allows set -o <name> where name is the single-letter abbreviation
+	// as well as the long option name (e.g. `set -o a` == `set -o allexport`).
+	if len(name) == 1 {
+		return r.posixOptByFlag(name[0])
+	}
 	return nil
 }
 
@@ -1947,6 +1950,23 @@ var noOpSetOptions = map[string]bool{
 	"onecmd":               false,
 	"errtrace":             false, // set -E, listed by bash
 	"nolog":                false, // listed by bash
+}
+
+// noOpSetFlagToName maps single-letter option flags to their
+// accept-and-ignore long-name counterparts. Used by both the
+// short-flag path (`set -b`) and the long-name path (`set -o b`).
+var noOpSetFlagToName = map[byte]string{
+	'b': "notify",
+	'v': "verbose",
+	'h': "hashall",
+	'H': "histexpand",
+	'B': "braceexpand",
+	'P': "physical",
+	'p': "privileged",
+	't': "onecmd",
+	'E': "errtrace",
+	'T': "functrace",
+	'm': "monitor",
 }
 
 var bashOptsTable = [...]bashOpt{
