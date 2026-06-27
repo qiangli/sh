@@ -156,6 +156,14 @@ func TestRunnerBash53RedirectCluster(t *testing.T) {
 			want: "",
 		},
 		{
+			// Redirections take effect left-to-right: `1>&-` closes fd 1,
+			// so the following `2>&1` dups an already-closed fd and must
+			// report EBADF (bash 5.3), not silently succeed.
+			name: "closed_output_fd_dup_in_order_is_bad_fd",
+			in:   "echo - 1>/dev/null 3>&1 2>&3 3>&- ; { 1>&- 2>&1 ; }",
+			want: "1: Bad file descriptor\nexit status 1",
+		},
+		{
 			name: "posix_input_dup_from_write_only_fd_fails",
 			in:   "set -o posix\nexec 8>f\ncat <&8\nprintf 'status=%s\\n' \"$?\"",
 			want: "8: Bad file descriptor\nstatus=1\n",

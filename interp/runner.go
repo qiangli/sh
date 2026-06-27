@@ -8052,7 +8052,10 @@ func (r *Runner) fdCaps(fd int) (read *os.File, write io.Writer, ok bool) {
 		if r.fdTable != nil && r.fdReadTable[1] {
 			read = r.fdTable[1]
 		}
-		if r.stdout != nil {
+		// A badFdWriter is the sentinel for a closed output slot (`1>&-`);
+		// treat it as not-open so a later `2>&1` dup'ing it reports EBADF,
+		// matching bash's order-of-appearance fd handling.
+		if r.stdout != nil && !isClosedFdWriter(r.stdout) {
 			return read, r.stdout, true
 		}
 		if read != nil {
@@ -8064,7 +8067,7 @@ func (r *Runner) fdCaps(fd int) (read *os.File, write io.Writer, ok bool) {
 		if r.fdTable != nil && r.fdReadTable[2] {
 			read = r.fdTable[2]
 		}
-		if r.stderr != nil {
+		if r.stderr != nil && !isClosedFdWriter(r.stderr) {
 			return read, r.stderr, true
 		}
 		if read != nil {
@@ -8178,6 +8181,14 @@ type badFdWriter struct{}
 
 func (badFdWriter) Write([]byte) (int, error) {
 	return 0, ExitStatus(1)
+}
+
+// isClosedFdWriter reports whether w is the badFdWriter sentinel the runner
+// installs into r.stdout/r.stderr to model a closed output fd (`N>&-`). Such a
+// slot must behave as EBADF for any later dup of that fd.
+func isClosedFdWriter(w io.Writer) bool {
+	_, ok := w.(badFdWriter)
+	return ok
 }
 
 func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, error) {
