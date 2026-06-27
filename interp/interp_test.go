@@ -2959,6 +2959,10 @@ var runTests = []runTest{
 	{"echo $((+++7)); echo $((++ + 7)); echo $((---7)); echo $((-- - 7))", "7\n7\n-7\n-7\n"},
 	{"a=1; echo $((4+++a)); echo $a; a=1; echo $((4---a)); echo $a", "6\n2\n4\n0\n"},
 	{"readonly xx=5; echo $((xx=5)); echo $?", "xx: readonly variable\n1\n"},
+	// POSIX mode: an arithmetic assignment to a readonly variable is a
+	// fatal variable-assignment error for a non-interactive shell, so the
+	// trailing command never runs.
+	{"set -o posix; readonly xx=5; echo $((xx=5)); echo unreached", "xx: readonly variable\nexit status 1 #JUSTERR"},
 	{"x=1; ((x=2, y=x)); echo $x $y", "2 2\n"},
 	{"x=(456 123); (( x[1] < x && (x=x[1], x[1]=$x) )); echo ${x[@]}", "123 456\n"},
 	{"x=(456 123); (( x[1] < x[0] && (x[0]=x[1], x[1]=$x) )); echo ${x[@]}", "123 456\n"},
@@ -3509,6 +3513,10 @@ var runTests = []runTest{
 	{`set +b; [[ $- = *b* ]]`, "exit status 1"},
 	{`set -v; [[ $- = *v* ]]`, ""},
 	{`set +v; [[ $- = *v* ]]`, "exit status 1"},
+	// hashall (h) defaults on and tracks set -h/+h in $-.
+	{`[[ $- = *h* ]]`, ""},
+	{`set +h; [[ $- = *h* ]]`, "exit status 1"},
+	{`set +h; set -h; [[ $- = *h* ]]`, ""},
 
 	// set +/-flag for core POSIX options (short flag form).
 	{`set -C; [[ -o noclobber ]]`, ""},
@@ -5571,6 +5579,18 @@ var runTestsUnix = []runTest{
 	{
 		"set -e; echo foo >/shouldnotexist/file; echo foo",
 		"open /shouldnotexist/file: no such file or directory\nexit status 1 #JUSTERR",
+	},
+	{
+		// A redirection error on a command with no command word still
+		// fails the command, so errexit exits the shell.
+		"set -e; </shouldnotexist/file; echo foo",
+		"open /shouldnotexist/file: no such file or directory\nexit status 1 #JUSTERR",
+	},
+	{
+		// ... but it's exempt as the left operand of || (errexit only
+		// acts on the final status of the list).
+		"set -e; </shouldnotexist/file || echo handled; echo foo",
+		"open /shouldnotexist/file: no such file or directory\nhandled\nfoo\n #JUSTERR",
 	},
 
 	// process substitution; named pipes (fifos) are a TODO for windows

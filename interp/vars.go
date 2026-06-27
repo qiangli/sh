@@ -684,7 +684,9 @@ func (r *Runner) lookupVar(name string) expand.Variable {
 		if r.opts[optNoGlob] {
 			sb.WriteByte('f')
 		}
-		sb.WriteByte('h') // hashall (always on)
+		if noOpEnabled("hashall") {
+			sb.WriteByte('h')
+		}
 		if r.interactiveShell {
 			sb.WriteByte('i')
 		}

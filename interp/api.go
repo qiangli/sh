@@ -1293,10 +1293,9 @@ func Params(args ...string) RunnerOption {
 				opt := r.posixOptByFlag(flag[1])
 				if opt == nil {
 					// Accept-and-ignore single-letter options
-					// that bash supports but we don't model.
-					if flag[1] == 'h' {
-						continue // hashall is always on
-					}
+					// that bash supports but we don't model. The
+					// on/off state is still tracked (in
+					// noOpSetState) so it surfaces in $-.
 					if name, ok := noOpSetFlagToName[flag[1]]; ok {
 						if r.noOpSetState == nil {
 							r.noOpSetState = make(map[string]bool)

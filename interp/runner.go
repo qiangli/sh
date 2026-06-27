@@ -446,6 +446,12 @@ func (r *Runner) expandErr(err error) {
 			if !r.opts[optPosix] {
 				r.exit.discarding = true
 			}
+		} else if r.opts[optPosix] && !r.interactiveShell {
+			// POSIX mode: a readonly-assignment error inside arithmetic
+			// (`$((v=1))`) is a fatal variable-assignment error for a
+			// non-interactive shell, even though the default runner only
+			// fails the expansion and keeps going.
+			r.exit.exiting = true
 		}
 		return
 	case errors.As(err, &badSubst):
@@ -4605,6 +4611,21 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 			c.Close()
 		}
 		r.exit = r2.exit
+		// A redirection error on a command with no command word still
+		// fails the command; honor the ERR trap and errexit the same way
+		// a normal command failure would, unless we're in an
+		// errexit-exempt context (condition, left of &&/||, negated).
+		if !r.exit.ok() && !r.noErrExit && !st.Negated {
+			if !r.inFunc {
+				prevLineno := r.ecfg.OverrideLineno
+				r.ecfg.OverrideLineno = int(st.Pos().Line())
+				r.trapCallback(ctx, r.trapCallbacks["ERR"], "error")
+				r.ecfg.OverrideLineno = prevLineno
+			}
+			if r.opts[optErrExit] {
+				r.exit.exiting = true
+			}
+		}
 		return
 	}
 	oldCurStmtPos := r.curStmtPos
