@@ -7393,7 +7393,9 @@ func (r *Runner) trapCallback(ctx context.Context, callback, name string) uint8 
 	}()
 
 	p := syntax.NewParser()
-	// TODO: do this parsing when "trap" is called?
+	// The action is re-parsed on every invocation, so the trap text is
+	// re-evaluated against the alias and variable state in effect each time
+	// it fires rather than parsed once when `trap` was called.
 	file, err := p.Parse(strings.NewReader(callback), name+" trap")
 	if err != nil {
 		r.errf(name+"trap: %v\n", err)
@@ -7405,7 +7407,11 @@ func (r *Runner) trapCallback(ctx context.Context, callback, name string) uint8 
 	// Commands run from a trap handler trace one xtrace level deeper
 	// (bash replicates PS4's first char: `+` -> `++`).
 	r.xtraceLevel++
-	r.stmts(ctx, file.Stmts)
+	// Anchor alias timing at the current statement so aliases defined before
+	// the trap fires expand in the re-parsed body (see runSignalTrap).
+	r.withAliasReparse(int(r.curStmtPos.Line()), func() {
+		r.stmts(ctx, file.Stmts)
+	})
 	r.xtraceLevel--
 	trapCode := r.exit.code
 	trapExited := r.exit.exiting

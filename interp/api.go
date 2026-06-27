@@ -625,6 +625,15 @@ type Runner struct {
 	sigWake       chan struct{}        // wakes a blocked wait when a signal arrives
 	hasPendingSig atomic.Bool          // fast-path: any pending signal?
 
+	// sigParent links a foreground subshell back to the runner it runs
+	// inline within (nil for the top-level shell and for background/async
+	// subshells, which run in their own goroutine). A foreground subshell's
+	// $$ is the parent shell's PID, so a self-directed `kill -SIG $$` whose
+	// trap the parent owns must be delivered synchronously into the parent's
+	// pending queue rather than via a racy OS signal — see
+	// [Runner.owningSignalRunner] and the kill builtin.
+	sigParent *Runner
+
 	// chldTrapActive mirrors whether a non-empty SIGCHLD trap is currently
 	// installed. Read from background-job goroutines and the exec handler to
 	// decide whether to queue a CHLD trap per reaped child, so it's an atomic
@@ -2553,6 +2562,13 @@ func (r *Runner) subshell(background bool) *Runner {
 	r2.noErrExit = r.noErrExit
 
 	r2.dirStack = append(r2.dirBootstrap[:0], r.dirStack...)
+	// A foreground subshell runs inline in the parent's goroutine, so it can
+	// reach back into the parent's pending-signal queue. Background/async
+	// subshells run concurrently and must keep using a real OS signal, so
+	// they leave sigParent nil.
+	if !background {
+		r2.sigParent = r
+	}
 	r2.fillExpandConfig(r.ectx)
 	r2.didReset = true
 	return r2

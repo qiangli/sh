@@ -41,6 +41,21 @@ func (r *Runner) trapSignalActive(name string) bool {
 	return ok
 }
 
+// owningSignalRunner returns the runner whose installed OS handler owns the
+// named signal: this runner if it owns it, otherwise the nearest foreground
+// ancestor (a self-directed `kill -SIG $$` inside a foreground subshell targets
+// the parent shell's PID, so the parent's trap is the one that fires). Returns
+// nil when no runner in the chain has an active handler, in which case the
+// signal must be sent via the OS to take its default disposition.
+func (r *Runner) owningSignalRunner(name string) *Runner {
+	for cur := r; cur != nil; cur = cur.sigParent {
+		if cur.trapSignalActive(name) {
+			return cur
+		}
+	}
+	return nil
+}
+
 // parseHardIgnore decodes the comma-separated signal-name list carried in
 // BashyHardIgnoreEnv into a set of canonical (no-SIG-prefix) names. Unknown or
 // empty entries are dropped. Returns nil when there is nothing to ignore.
@@ -391,7 +406,15 @@ func (r *Runner) runSignalTrap(ctx context.Context, callback, name string) {
 		r.inSignalTrap, r.signalTrapDepth, r.signalTrapExit = oldInSig, oldDepth, oldSaved
 	}()
 	r.exit = exitStatus{code: oldExit.code} // the handler sees the prior $?
-	r.stmts(ctx, file.Stmts)
+	// The action is re-parsed and re-run on every delivery, so it must see
+	// the alias definitions in effect now (when the trap fires), not be
+	// suppressed by alias-timing against the freshly-parsed body's line 1.
+	// Anchor the timing at the currently-executing statement so every alias
+	// defined before this point expands (bash trap-p: "command is evaluated
+	// each time trap is executed").
+	r.withAliasReparse(int(r.curStmtPos.Line()), func() {
+		r.stmts(ctx, file.Stmts)
+	})
 	if r.exit.returning || r.exit.exiting || r.exit.fatalExit ||
 		r.breakEnclosing > 0 || r.contnEnclosing > 0 {
 		return // let the handler's control flow unwind the interrupted code

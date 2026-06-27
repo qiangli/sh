@@ -1534,17 +1534,22 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					}
 				}
 			}
-			// A signal directed at our own $$ for which this runner owns
-			// a trap is delivered synchronously into the pending queue,
+			// A signal directed at our own $$ for which this runner (or a
+			// foreground parent it runs inline within) owns a trap is
+			// delivered synchronously into that runner's pending queue,
 			// rather than via the OS — relying on signal.Notify here would
 			// race with the trap firing before the next statement boundary.
-			// Subshells don't own the trap (the signal infra is not
-			// inherited), so a backgrounded `kill -SIG $$` still sends a
-			// real OS signal that the parent's Notify catches.
+			// A `(kill -SIG $$)` foreground subshell thus reliably fires the
+			// parent's trap once the subshell finishes. Background subshells
+			// run in their own goroutine (sigParent nil), so a backgrounded
+			// `kill -SIG $$` still sends a real OS signal that the parent's
+			// Notify catches.
 			if pid == r.shellPid() {
-				if sname, ok := signalName(sig); ok && r.trapSignalActive(sname) {
-					r.markPendingSignal(sname)
-					continue
+				if sname, ok := signalName(sig); ok {
+					if owner := r.owningSignalRunner(sname); owner != nil {
+						owner.markPendingSignal(sname)
+						continue
+					}
 				}
 			}
 			if err := sendSignal(pid, sig); err != nil {

@@ -150,6 +150,64 @@ func TestTrapNumericFirstOperandResets(t *testing.T) {
 	}
 }
 
+// TestTrapActionReEvaluated covers two POSIX trap-p requirements: the trap
+// action is re-parsed and re-evaluated on every delivery (so an alias defined
+// after `trap` is set still expands when the trap fires), and a single trap may
+// be invoked more than once, including across a foreground subshell that
+// self-signals $$ — whose trap the parent owns and fires once the subshell
+// finishes.
+func TestTrapActionReEvaluated(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			// The alias body changes between deliveries; each fire re-reads it.
+			"alias-evaluated-each-time",
+			"trap X USR1\n" +
+				"alias X='echo 1'\n" +
+				"kill -s USR1 $$\n" +
+				"alias X='echo 2'\n" +
+				"kill -s USR1 $$\n",
+			"1\n2\n",
+		},
+		{
+			// The same trap fires three times, the middle one driven from a
+			// foreground subshell whose `kill -s USR1 $$` targets the parent.
+			"invoked-more-than-once",
+			"trap 'echo trapped' USR1\n" +
+				"kill -s USR1 $$\n" +
+				"(kill -s USR1 $$)\n" +
+				"kill -s USR1 $$\n",
+			"trapped\ntrapped\ntrapped\n",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			file, err := syntax.NewParser().Parse(strings.NewReader("set -o posix\n"+tc.src), "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var stdout bytes.Buffer
+			r, err := New(StdIO(nil, &stdout, nil))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := r.Run(context.Background(), file); err != nil {
+				t.Fatal(err)
+			}
+			if got := stdout.String(); got != tc.want {
+				t.Fatalf("wrong output for %q\nwant:\n%sgot:\n%s", tc.src, tc.want, got)
+			}
+		})
+	}
+}
+
 func TestTrapPrintNoArgsNonPosixUnchanged(t *testing.T) {
 	t.Parallel()
 
