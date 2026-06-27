@@ -264,9 +264,10 @@ func (p *Parser) arithmExprValue(compact bool) ArithmExpr {
 		switch p.tok {
 		case semicolon:
 			// Only a C-style for loop (`for (( -- ; ++; -- ))`)
-			// legitimately ends an arithmetic expression at `;`;
-			// bash accepts the parse and errors at runtime.
-			if p.quote != arithmExprCmd {
+			// legitimately ends an arithmetic expression at `;`; `let`
+			// also accepts it (bash parses `let --;` and errors at
+			// runtime, not parse time).
+			if p.quote != arithmExprCmd && p.quote != arithmExprLet {
 				p.followErr(ue.OpPos, ue.Op, noQuote("a literal"))
 			}
 			ue.X = p.wordOne(&Lit{ValuePos: p.pos, ValueEnd: p.pos})
@@ -275,6 +276,16 @@ func (p *Parser) arithmExprValue(compact bool) ArithmExpr {
 		case plus, minus:
 			ue.X = p.arithmExprUnary(compact)
 		default:
+			// In a `let` word, a bare `++`/`--` with no operand that ends
+			// the word (newline, `&`, `|`, …) is not a parse error in bash:
+			// `let` evaluates its arguments as arithmetic at runtime, so the
+			// missing operand surfaces as a runtime "expression expected".
+			// Emit an empty operand and defer, matching the `_EOF` arm above
+			// (which is why `let --` at EOF / via `-c` already worked).
+			if p.quote == arithmExprLet && p.stopToken() {
+				ue.X = p.wordOne(&Lit{ValuePos: p.pos, ValueEnd: p.pos})
+				break
+			}
 			if p.tok != _LitWord {
 				p.followErr(ue.OpPos, ue.Op, noQuote("a literal"))
 			}
