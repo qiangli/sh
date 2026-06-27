@@ -4939,6 +4939,18 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		aliasUseLine := r.aliasUseLine(int(origCallPos.Line()))
 		seenAliases := make(map[string]bool)
 		aliasExpanded := false
+		// Variable-assignment prefixes (`a=A b`) apply to the
+		// command that results from alias expansion. The reparse
+		// paths below run a freshly parsed file and `return`, so the
+		// surrounding cm.Assigns would otherwise be dropped; prepend
+		// their source text so they attach to the first command, as
+		// bash does (`a=A b` with `alias b='b=B cmd'` -> `a=A b=B cmd`).
+		var assignSrc string
+		if len(cm.Assigns) > 0 {
+			var ab strings.Builder
+			syntax.NewPrinter().Print(&ab, &syntax.CallExpr{Assigns: cm.Assigns})
+			assignSrc = ab.String()
+		}
 		for i := 0; i < len(args); {
 			if !r.opts[optExpandAliases] {
 				break
@@ -4958,6 +4970,10 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			aliasExpanded = true
 			if als.raw != "" && i == 0 {
 				var src strings.Builder
+				if assignSrc != "" {
+					src.WriteString(assignSrc)
+					src.WriteByte(' ')
+				}
 				src.WriteString(als.raw)
 				if als.blank {
 					src.WriteByte(' ')
@@ -4993,13 +5009,19 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			// `alias e=export; e x=$y` keep their declaration operands.
 			if als.file != nil && i == 0 {
 				file := als.file
-				if i+1 < len(args) {
+				if i+1 < len(args) || assignSrc != "" {
 					var src strings.Builder
-					src.WriteString(aliasValue(als))
-					if src.Len() > 0 && !strings.HasSuffix(src.String(), " ") && !strings.HasSuffix(src.String(), "\t") {
+					if assignSrc != "" {
+						src.WriteString(assignSrc)
 						src.WriteByte(' ')
 					}
-					syntax.NewPrinter().Print(&src, &syntax.CallExpr{Args: args[i+1:]})
+					src.WriteString(aliasValue(als))
+					if i+1 < len(args) {
+						if src.Len() > 0 && !strings.HasSuffix(src.String(), " ") && !strings.HasSuffix(src.String(), "\t") {
+							src.WriteByte(' ')
+						}
+						syntax.NewPrinter().Print(&src, &syntax.CallExpr{Args: args[i+1:]})
+					}
 					p := syntax.NewParser()
 					var err error
 					file, err = p.Parse(strings.NewReader(src.String()), "")
