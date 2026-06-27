@@ -3536,6 +3536,8 @@ var runTests = []runTest{
 	{`set +o notify; [[ $- = *b* ]]`, "exit status 1"},
 	{`set -o verbose; [[ $- = *v* ]]`, ""},
 	{`set +o verbose; [[ $- = *v* ]]`, "exit status 1"},
+	{`set -o b; [[ $- = *b* ]]`, ""},
+	{`set -o b; set +o b; [[ $- = *b* ]]`, "exit status 1"},
 
 	// unset
 	{
