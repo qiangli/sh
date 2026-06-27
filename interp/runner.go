@@ -4452,6 +4452,12 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 	r.exit = exitStatus{}
 	if st.Background || st.Disown {
 		r2 := r.subshell(true)
+		if r.opts[optPosix] {
+			f, err := os.Open(os.DevNull)
+			if err == nil {
+				r2.stdin = f
+			}
+		}
 		st2 := *st
 		st2.Background = false
 		st2.Disown = false
