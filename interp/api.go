@@ -240,13 +240,13 @@ type Runner struct {
 	// >0 to break or continue out of N enclosing loops
 	breakEnclosing, contnEnclosing int
 
-	inLoop       bool
-	inFunc       bool
-	inSource     bool
-	inTimeClause bool // suppress inner `time` keyword's output
-	handlingTrap bool // whether we're currently in a trap callback
+	inLoop        bool
+	inFunc        bool
+	inSource      bool
+	inTimeClause  bool       // suppress inner `time` keyword's output
+	handlingTrap  bool       // whether we're currently in a trap callback
 	trapEntryExit exitStatus // exit status upon entering the current trap
-	xtraceLevel  int  // xtrace indirection depth (trap handlers add one)
+	xtraceLevel   int        // xtrace indirection depth (trap handlers add one)
 
 	// track if a sourced script set positional parameters
 	sourceSetParams bool
@@ -1820,7 +1820,6 @@ func WithPosixMode(enabled bool) RunnerOption {
 	}
 }
 
-
 func (r *Runner) posixOptByName(name string) *bool {
 	// Bashy-only `set -o dryrun`, recognized only when EnableDryRunOption was
 	// passed (never in the pure bash drop-in or under --posix). Kept out of
@@ -2367,6 +2366,7 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 				r.exit.discarding = false
 				r.exit.exiting = false
 			}
+			r.verboseStmt(stmt)
 			r.stmt(ctx, stmt)
 			// A DISCARD only aborts the top-level command it
 			// occurred in; the next one still runs.
@@ -2389,6 +2389,7 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 		if r.stdinSourceActive && int(node.Pos().Offset()) < r.stdinSourceOffset {
 			break
 		}
+		r.verboseStmt(node)
 		r.stmt(ctx, node)
 	case syntax.Command:
 		if !r.commandString && r.incrementalFilename == "" && len(r.bashSource) > 0 {
@@ -2432,6 +2433,20 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 		return ExitStatus(code)
 	}
 	return nil
+}
+
+func (r *Runner) verboseStmt(stmt *syntax.Stmt) {
+	if stmt == nil || !r.noOpSetState["verbose"] || len(r.bashSource) == 0 {
+		return
+	}
+	src := r.sourceTextRange(stmt.Pos(), stmt.End(), false)
+	if src == "" {
+		return
+	}
+	r.errf("%s", src)
+	if !strings.HasSuffix(src, "\n") {
+		r.errf("\n")
+	}
 }
 
 // Exited reports whether the last Run call should exit an entire shell. This
