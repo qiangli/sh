@@ -69,6 +69,34 @@ func TestExpandTailBuiltinFidelity(t *testing.T) {
 				"\" 2 \"\n",
 		},
 		{
+			name: "quote-p_line_continuation_arithmetic_expansion",
+			in: "echo \\\n" +
+				"$\\\n" +
+				"\\\n" +
+				"(\\\n" +
+				"\\\n" +
+				"(\\\n" +
+				"\\\n" +
+				"1\\\n" +
+				"\\\n" +
+				" \\\n" +
+				" + \\\n" +
+				" \\\n" +
+				"2\\\n" +
+				"\\\n" +
+				")\\\n" +
+				"\\\n" +
+				")",
+			want: "3\n",
+		},
+		{
+			name: "spaced_cmdsub_subshell_is_not_arithmetic",
+			in:   "echo $( (1 + 2) )\necho after",
+			want: "./s: line 1: 1: command not found\n" +
+				"\n" +
+				"after\n",
+		},
+		{
 			// builtin-vars__016: a readonly-variable assignment error
 			// inside `eval` discards only the eval'd command list — bash
 			// contains the DISCARD within eval, which returns status 1,

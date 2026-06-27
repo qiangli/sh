@@ -2595,6 +2595,9 @@ func (cfg *Config) cmdSubst(cs *syntax.CmdSubst) (string, error) {
 	if cfg.CmdSubst == nil {
 		return "", UnexpectedCommandError{Node: cs}
 	}
+	if val, ok, err := cfg.continuedArithmCmdSubst(cs); ok || err != nil {
+		return val, err
+	}
 	var undo func()
 	if cfg.inHeredocBody && cs.Backquotes {
 		undo = heredocBackquoteDblQuote(cs)
@@ -2627,6 +2630,76 @@ func (cfg *Config) cmdSubst(cs *syntax.CmdSubst) (string, error) {
 		return out, nil
 	}
 	return strings.TrimRight(out, "\n"), nil
+}
+
+func (cfg *Config) continuedArithmCmdSubst(cs *syntax.CmdSubst) (string, bool, error) {
+	// Line continuations can hide the second opening paren from the parser's
+	// arithmetic-expansion fast path, leaving $((...)) shaped like $( (...)).
+	if cs.Backquotes || cs.TempFile || cs.ReplyVar || len(cs.Stmts) != 1 {
+		return "", false, nil
+	}
+	sub, ok := cs.Stmts[0].Cmd.(*syntax.Subshell)
+	if !ok || len(sub.Stmts) != 1 || !cs.Left.IsValid() || !sub.Lparen.IsValid() {
+		return "", false, nil
+	}
+	if sub.Lparen.Line() <= cs.Left.Line()+1 {
+		return "", false, nil
+	}
+	stmt := sub.Stmts[0]
+	call, ok := stmt.Cmd.(*syntax.CallExpr)
+	if !ok || len(call.Assigns) > 0 || len(stmt.Redirs) > 0 || len(call.Args) == 0 ||
+		stmt.Negated || stmt.Background || stmt.Coprocess || stmt.Disown {
+		return "", false, nil
+	}
+
+	var b strings.Builder
+	continued := false
+	for i, arg := range call.Args {
+		if len(arg.Parts) != 1 {
+			return "", false, nil
+		}
+		lit, ok := arg.Parts[0].(*syntax.Lit)
+		if !ok || !lit.ValuePos.IsValid() || !lit.ValueEnd.IsValid() {
+			return "", false, nil
+		}
+		if lit.ValueEnd.Line() > lit.ValuePos.Line() {
+			continued = true
+		}
+		if i > 0 {
+			b.WriteByte(' ')
+		}
+		b.WriteString(lit.Value)
+	}
+	if !continued {
+		return "", false, nil
+	}
+
+	expr, ok := continuedArithmExpr(b.String())
+	if !ok {
+		return "", false, nil
+	}
+	n, err := Arithm(cfg, expr)
+	if err != nil {
+		return "", true, &ArithmError{Expr: expr, Err: err}
+	}
+	return strconv.Itoa(n), true, nil
+}
+
+func continuedArithmExpr(text string) (syntax.ArithmExpr, bool) {
+	parser := syntax.NewParser(syntax.Variant(syntax.LangPOSIX))
+	file, err := parser.Parse(strings.NewReader("echo $(("+text+"))"), "")
+	if err != nil || len(file.Stmts) != 1 {
+		return nil, false
+	}
+	call, ok := file.Stmts[0].Cmd.(*syntax.CallExpr)
+	if !ok || len(call.Args) != 2 || len(call.Args[1].Parts) != 1 {
+		return nil, false
+	}
+	arithm, ok := call.Args[1].Parts[0].(*syntax.ArithmExp)
+	if !ok || arithm.X == nil {
+		return nil, false
+	}
+	return arithm.X, true
 }
 
 func heredocBackquoteDblQuote(cs *syntax.CmdSubst) func() {
