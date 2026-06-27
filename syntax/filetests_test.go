@@ -3297,6 +3297,36 @@ var fileTests = []fileTestCase{
 		langSkip(LangZsh),
 	),
 	fileTest(
+		// `${#=x}`, `${#+x}`, `${#%x}` carry an operand, so `#` is the
+		// special parameter `$#` and the rune is its expansion operator —
+		// not a malformed (empty-operand) length substitution.
+		[]string{`${#=foo} ${#+bar} ${#%baz}`},
+		langFile(call(
+			word(&ParamExp{
+				Param: lit("#"),
+				Exp: &Expansion{
+					Op:   AssignUnset,
+					Word: litWord("foo"),
+				},
+			}),
+			word(&ParamExp{
+				Param: lit("#"),
+				Exp: &Expansion{
+					Op:   AlternateUnset,
+					Word: litWord("bar"),
+				},
+			}),
+			word(&ParamExp{
+				Param: lit("#"),
+				Exp: &Expansion{
+					Op:   RemSmallSuffix,
+					Word: litWord("baz"),
+				},
+			}),
+		)),
+		langSkip(LangZsh),
+	),
+	fileTest(
 		// $! is the last bg PID; ${!-x}, ${!?x}, ${!:-x} apply
 		// default/error/null-default operators to it, and must NOT
 		// be parsed as the bash/mksh ${!name} indirection form.

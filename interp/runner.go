@@ -461,6 +461,21 @@ func (r *Runner) expandErr(err error) {
 		r.exit.code = 1
 		r.lastExpandExit = exitStatus{code: 1}
 		return
+	case strings.Contains(errMsg, "cannot assign in this way"):
+		// Bash: assigning to a positional or special parameter via
+		// `${1=x}`, `${@=x}`, or `${!=x}` is an error that sets $? = 1 and
+		// discards the rest of the current physical line before resuming at
+		// the next line (the same in POSIX and default modes). The pure-Go
+		// default runner is more lenient and keeps running the rest of the
+		// line, so only abort it under bash-compatible error reporting.
+		r.exit.code = 1
+		r.lastExpandExit = exitStatus{code: 1}
+		if r.bashCompatErrors {
+			r.exit.exiting = true
+			r.exit.discarding = true
+			r.discardRestOfLine = r.curStmtPos.Line()
+		}
+		return
 	case strings.Contains(errMsg, "invalid variable name"),
 		strings.Contains(errMsg, "not a valid identifier"):
 		// errors6.sub lines 40-56 and nameref default-assignment to an

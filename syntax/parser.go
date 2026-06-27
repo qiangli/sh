@@ -1894,9 +1894,19 @@ zshPrefixLoop:
 		p.curErr("cannot combine multiple parameter expansion operators")
 	}
 	if pe.Param != nil && pe.Param.Value == "#" {
+		// `${#OP}` with no operand (a bare `${#=}`, `${#+}`, `${#%}`, or
+		// `${#/}`) is a malformed length substitution that bash rejects as
+		// a bad substitution. When an operand follows (`${#=x}`, `${#+x}`,
+		// `${#%x}`, `${#/x}`) the `#` is instead the special parameter `$#`
+		// and OP its expansion operator, so leave Names unset and let the
+		// regular operator parsing below build that expansion. paramToken
+		// has already consumed the operator, so p.r is the next rune: `}`
+		// means an empty operand.
 		switch p.tok {
 		case slash, perc, assgn, plus:
-			pe.Names = NamesPrefix
+			if p.r == '}' {
+				pe.Names = NamesPrefix
+			}
 		}
 	}
 	switch p.tok {

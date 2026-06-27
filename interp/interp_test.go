@@ -2992,6 +2992,13 @@ var runTests = []runTest{
 	{"set -- a b c d op; echo ${!#}; v=bad-var; echo ${!v}; echo after", "op\nbad-var: invalid variable name\nafter\n"},
 	{"set -- a 'b c' d; foo=@; printf '<%s>\\n' ${!foo}; printf 'Q<%s>\\n' \"${!foo}\"", "<a>\n<b>\n<c>\n<d>\nQ<a>\nQ<b c>\nQ<d>\n"},
 	{"set -- a b c d e; echo ${6=arg6}; echo after", "$6: cannot assign in this way\nafter\n"},
+	// `${#OP}` with an operand is the special parameter `$#` followed by
+	// an expansion operator, not a malformed length operator: `=` leaves
+	// the (always-set) count untouched, `+` substitutes the alternate, and
+	// `%` trims a non-matching suffix.
+	{"set -- a b c; echo ${#=x}", "3\n"},
+	{"set -- a b c; echo ${#+alt}", "alt\n"},
+	{"set -- a b c; echo ${#%x}", "3\n"},
 	{"set -u; echo $9", "$9: unbound variable\nexit status 1 #JUSTERR"},
 	{"set -u; echo ${9}", "9: unbound variable\nexit status 1 #JUSTERR"},
 	{"v=abcde; echo ${v/#a/ab}; echo ${v/%?/last}; av=(abcd efgh); echo ${av[1]/#?/xx}; echo ${av[1]/%??/za}", "abbcde\nabcdlast\nxxfgh\nefza\n"},
@@ -6193,6 +6200,33 @@ func TestBashCompatMalformedLengthSubstitution(t *testing.T) {
 			"./more-exp.tests: line 5: ${#+}: bad substitution\n"+
 			"./more-exp.tests: line 6: ${#1xyz}: bad substitution\n"+
 			"./more-exp.tests: line 7: #: %: arithmetic syntax error: operand expected (error token is \"%\")\n"))
+}
+
+// Assigning to a positional or special parameter (`${1=x}`, `${@=x}`,
+// `${!=x}`) is an error: bash prints the diagnostic, sets $? = 1, and
+// discards the rest of the current physical line before resuming at the
+// next line. With bash-compatible error reporting we match that, so the
+// remaining statements on the erroring line are skipped while a later
+// line still runs.
+func TestBashCompatCannotAssignSpecialParam(t *testing.T) {
+	src := "echo ${1=x} skipped; echo also-skipped\n" +
+		"echo next-line ${#}\n"
+	file, err := syntax.NewParser().Parse(strings.NewReader(src), "./assign.tests")
+	qt.Assert(t, qt.IsNil(err))
+
+	var cb bytes.Buffer
+	r, err := interp.New(
+		interp.StdIO(nil, &cb, &cb),
+		interp.WithBashCompatErrors(true),
+		interp.WithBashSource([]byte(src)),
+	)
+	qt.Assert(t, qt.IsNil(err))
+
+	err = r.Run(context.Background(), file)
+	qt.Assert(t, qt.IsNil(err))
+	qt.Assert(t, qt.Equals(cb.String(),
+		"./assign.tests: line 1: $1: cannot assign in this way\n"+
+			"next-line 0\n"))
 }
 
 // A script read from stdin (File.Name=="") with bashSource set enables the
