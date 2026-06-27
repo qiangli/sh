@@ -2767,7 +2767,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			if isKeyword(arg) || r.Funcs[arg] != nil || (IsBuiltin(arg) && !r.disabledBuiltins[arg]) {
 				r.outf("%s\n", arg)
 			} else if als, ok := r.alias[arg]; ok && r.opts[optExpandAliases] {
-				r.outf("alias %s='%s'\n", arg, aliasValue(als))
+				r.outf("alias %s='%s'\n", arg, strings.ReplaceAll(aliasValue(als), "'", `'\''`))
 			} else if path, err := LookPathDir(r.Dir, lookupEnv, arg); err == nil {
 				r.outf("%s\n", path)
 			} else {
@@ -3775,7 +3775,10 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			if posixFormat && !forcePrefix {
 				prefix = ""
 			}
-			r.outf("%s%s='%s'\n", prefix, name, aliasValue(als))
+			// Bash quotes alias bodies with sh_single_quote(): wrap in
+			// single quotes, escaping any embedded `'` as `'\''` so the
+			// printed form re-parses (e.g. `eval alias "$(alias a)"`).
+			r.outf("%s%s='%s'\n", prefix, name, strings.ReplaceAll(aliasValue(als), "'", `'\''`))
 		}
 
 		// showAll lists every alias sorted by name, matching bash 5.3
