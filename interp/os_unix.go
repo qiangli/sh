@@ -43,6 +43,22 @@ func setProcessUmask(mask int) {
 	syscall.Umask(mask)
 }
 
+// syncUmaskForChild ensures the process umask matches the shell's virtual
+// mask before launching an external child command. Fork carries the process
+// umask into the child; we restore the previous umask immediately after
+// [cmd.Start] returns so the Go runtime and other goroutines stay unaffected.
+// Returns a function that restores the old umask.
+func syncUmaskForChild(mask int) (restore func()) {
+	umaskMu.Lock()
+	old := syscall.Umask(mask)
+	umaskMu.Unlock()
+	return func() {
+		umaskMu.Lock()
+		syscall.Umask(old)
+		umaskMu.Unlock()
+	}
+}
+
 func mkfifo(path string, mode uint32) error {
 	return unix.Mkfifo(path, mode)
 }
