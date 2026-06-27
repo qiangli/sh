@@ -1406,7 +1406,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					exit.code = 2
 					return exit
 				}
-				s, ok := signalByNamePosix(remaining[1], posixSignals)
+				// bash's `-s` sigspec accepts a name OR a number (incl. 0,
+				// the null signal: `kill -s 0 $$` checks process existence),
+				// same as the bare `-NAME`/`-NUM` form below — so use the
+				// number-or-name parser, not the name-only lookup.
+				s, ok := parseSignalSpecPosix(remaining[1], posixSignals)
 				if !ok {
 					return failf(1, "kill: %s: invalid signal specification\n", remaining[1])
 				}
