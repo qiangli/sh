@@ -5318,6 +5318,10 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 		":\na\n",
 	},
 	{
+		"readonly OPTARG && getopts a: opt -a foo; echo status:$?; echo ${OPTARG-unset}",
+		"OPTARG: readonly variable\nstatus:1\nunset\n",
+	},
+	{
 		"getopts abc opt foo -a; echo $opt; echo $OPTIND",
 		"?\n1\n",
 	},
