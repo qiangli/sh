@@ -4554,6 +4554,7 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 	var oldFdTable map[int]*os.File
 	var oldFdReadTable map[int]bool
 	var oldFdWriteTable map[int]io.Writer
+	var modifiedFds []int
 	if len(st.Redirs) > 0 {
 		oldFdTable = maps.Clone(r.fdTable)
 		oldFdReadTable = maps.Clone(r.fdReadTable)
@@ -4719,6 +4720,56 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 				}(cls)
 			}
 		}
+		if len(st.Redirs) > 0 && !lateRedir {
+			// Find modified fds in fdTable
+			for fd, file := range r.fdTable {
+				oldFile, existed := oldFdTable[fd]
+				if !existed || oldFile != file {
+					modifiedFds = append(modifiedFds, fd)
+				}
+			}
+			for fd := range oldFdTable {
+				if _, exists := r.fdTable[fd]; !exists {
+					modifiedFds = append(modifiedFds, fd)
+				}
+			}
+			// Find modified fds in fdReadTable
+			for fd, read := range r.fdReadTable {
+				oldRead, existed := oldFdReadTable[fd]
+				if !existed || oldRead != read {
+					modifiedFds = append(modifiedFds, fd)
+				}
+			}
+			for fd := range oldFdReadTable {
+				if _, exists := r.fdReadTable[fd]; !exists {
+					modifiedFds = append(modifiedFds, fd)
+				}
+			}
+			// Find modified fds in fdWriteTable
+			for fd, write := range r.fdWriteTable {
+				oldWrite, existed := oldFdWriteTable[fd]
+				if !existed || oldWrite != write {
+					modifiedFds = append(modifiedFds, fd)
+				}
+			}
+			for fd := range oldFdWriteTable {
+				if _, exists := r.fdWriteTable[fd]; !exists {
+					modifiedFds = append(modifiedFds, fd)
+				}
+			}
+
+			if len(modifiedFds) > 0 {
+				uniqueFds := make(map[int]bool)
+				var dedup []int
+				for _, fd := range modifiedFds {
+					if !uniqueFds[fd] {
+						uniqueFds[fd] = true
+						dedup = append(dedup, fd)
+					}
+				}
+				modifiedFds = dedup
+			}
+		}
 	}
 	r.curStmtPos = oldCurStmtPos
 	if r.exit.ok() && st.Cmd != nil {
@@ -4769,9 +4820,43 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 		r.stdinDevTTY = oldStdinDevTTY
 		r.stdinRedirected = oldStdinRedirected
 		if len(st.Redirs) > 0 && !persistNamedRedirs {
-			r.fdTable = oldFdTable
-			r.fdReadTable = oldFdReadTable
-			r.fdWriteTable = oldFdWriteTable
+			if lateRedir {
+				r.fdTable = oldFdTable
+				r.fdReadTable = oldFdReadTable
+				r.fdWriteTable = oldFdWriteTable
+			} else {
+				for _, fd := range modifiedFds {
+					// Restore fdTable
+					if oldFile, existed := oldFdTable[fd]; existed {
+						if r.fdTable == nil {
+							r.fdTable = make(map[int]*os.File)
+						}
+						r.fdTable[fd] = oldFile
+					} else if r.fdTable != nil {
+						delete(r.fdTable, fd)
+					}
+
+					// Restore fdReadTable
+					if oldRead, existed := oldFdReadTable[fd]; existed {
+						if r.fdReadTable == nil {
+							r.fdReadTable = make(map[int]bool)
+						}
+						r.fdReadTable[fd] = oldRead
+					} else if r.fdReadTable != nil {
+						delete(r.fdReadTable, fd)
+					}
+
+					// Restore fdWriteTable
+					if oldWrite, existed := oldFdWriteTable[fd]; existed {
+						if r.fdWriteTable == nil {
+							r.fdWriteTable = make(map[int]io.Writer)
+						}
+						r.fdWriteTable[fd] = oldWrite
+					} else if r.fdWriteTable != nil {
+						delete(r.fdWriteTable, fd)
+					}
+				}
+			}
 			// A coprocess reaped during this statement (e.g.
 			// `wait $COPROC_PID >file`) had its pipe fds closed; keep them
 			// gone so a later coproc reuses the freed high fd numbers.
