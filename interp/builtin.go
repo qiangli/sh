@@ -1159,6 +1159,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		// target's symlinks so $PWD is the physical path (bash:
 		// `cd -P symlink` leaves PWD at the link's target).
 		physical := false
+		exitOnError := false
 		for len(args) > 0 {
 			a := args[0]
 			if a == "--" { // end of options; remaining args are operands
@@ -1173,7 +1174,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 						physical = true
 					case 'L':
 						physical = false
-					case 'e', '@':
+					case 'e':
+						exitOnError = true
+					case '@':
 					default:
 						valid = false
 					}
@@ -1220,6 +1223,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			return failf(2, "cd: too many arguments\n")
 		}
 		exit.code = r.changeDir(ctx, "cd", path, physical)
+		if exitOnError && exit.code != 0 {
+			exit.code = 2
+		}
 		if printPath && exit.code == 0 {
 			r.outf("%s\n", path)
 		}
