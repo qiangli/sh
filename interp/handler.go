@@ -161,22 +161,15 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 				// A bare name not found in $PATH stays `command not
 				// found` (127).
 				cmd := bashDiagnosticWord(args[0])
+				msg := fmt.Sprintf("%s%s: command not found\n",
+					hc.runner.bashErrPrefix(hc.Pos), cmd)
 				code := 127
-				reason := "command not found"
 				if lookPathHasPath(args[0], runtime.GOOS == "windows") {
-					reason, code = classifyExecPath(hc.Dir, args[0])
-				} else if !hc.Env.Get("PATH").IsSet() {
-					// Bash: with PATH unset (not merely empty), a bare
-					// name missing from the implicit current-directory
-					// search is handed to execve as the name itself,
-					// which fails with ENOENT — reported as `No such file
-					// or directory` (127), not `command not found`. An
-					// empty PATH string keeps the `command not found`
-					// wording (findcmd.c / execute_disk_command).
-					reason = "No such file or directory"
+					reason, c := classifyExecPath(hc.Dir, args[0])
+					msg = fmt.Sprintf("%s%s: %s\n",
+						hc.runner.bashErrPrefix(hc.Pos), cmd, reason)
+					code = c
 				}
-				msg := fmt.Sprintf("%s%s: %s\n",
-					hc.runner.bashErrPrefix(hc.Pos), cmd, reason)
 				fmt.Fprint(hc.Stderr, msg)
 				hc.runner.reportError("exec", hc.Pos, args[0], msg, uint8(code))
 				return ExitStatus(code)
