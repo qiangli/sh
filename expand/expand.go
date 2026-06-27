@@ -2595,6 +2595,11 @@ func (cfg *Config) cmdSubst(cs *syntax.CmdSubst) (string, error) {
 	if cfg.CmdSubst == nil {
 		return "", UnexpectedCommandError{Node: cs}
 	}
+	var undo func()
+	if cfg.inHeredocBody && cs.Backquotes {
+		undo = heredocBackquoteDblQuote(cs)
+		defer undo()
+	}
 	// Bash 5.3 funsub `${ cmd; }` and mksh's valsub `${|cmd;}` run the
 	// body in the *caller's* scope rather than a subshell, so any
 	// recursive expansion inside the body shares this cfg's stack-
@@ -2622,6 +2627,76 @@ func (cfg *Config) cmdSubst(cs *syntax.CmdSubst) (string, error) {
 		return out, nil
 	}
 	return strings.TrimRight(out, "\n"), nil
+}
+
+func heredocBackquoteDblQuote(cs *syntax.CmdSubst) func() {
+	type restore struct {
+		word  *syntax.Word
+		parts []syntax.WordPart
+	}
+	var restores []restore
+	syntax.Walk(cs, func(node syntax.Node) bool {
+		word, ok := node.(*syntax.Word)
+		if !ok {
+			return true
+		}
+		parts, changed := heredocBackquoteDblQuoteParts(word.Parts)
+		if !changed {
+			return true
+		}
+		restores = append(restores, restore{word: word, parts: word.Parts})
+		word.Parts = parts
+		return true
+	})
+	return func() {
+		for i := len(restores) - 1; i >= 0; i-- {
+			restores[i].word.Parts = restores[i].parts
+		}
+	}
+}
+
+func heredocBackquoteDblQuoteParts(parts []syntax.WordPart) ([]syntax.WordPart, bool) {
+	var out []syntax.WordPart
+	changed := false
+	for _, part := range parts {
+		lit, ok := part.(*syntax.Lit)
+		if !ok || !strings.Contains(lit.Value, "\\\"") {
+			out = append(out, part)
+			continue
+		}
+		s := lit.Value
+		start := 0
+		litChanged := false
+		for {
+			left := strings.Index(s[start:], "\\\"")
+			if left < 0 {
+				break
+			}
+			left += start
+			right := strings.Index(s[left+2:], "\\\"")
+			if right < 0 {
+				break
+			}
+			right += left + 2
+			if left > start {
+				out = append(out, &syntax.Lit{Value: s[start:left]})
+			}
+			out = append(out, &syntax.DblQuoted{
+				Parts: []syntax.WordPart{&syntax.Lit{Value: s[left+2 : right]}},
+			})
+			litChanged = true
+			start = right + 2
+		}
+		if litChanged {
+			if start < len(s) {
+				out = append(out, &syntax.Lit{Value: s[start:]})
+			}
+			changed = true
+		} else {
+			out = append(out, part)
+		}
+	}
+	return out, changed
 }
 
 func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {

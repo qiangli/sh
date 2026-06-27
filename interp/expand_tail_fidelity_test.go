@@ -58,6 +58,17 @@ func TestExpandTailBuiltinFidelity(t *testing.T) {
 				"exit status 1",
 		},
 		{
+			name: "posix_cmdsub_heredoc_backquote_escaped_quotes",
+			in: "printf '<%s>\\n' `printf '%s\\n' \\\"1\\\"`\n" +
+				"cat <<END\n" +
+				"`printf '%s\\n' \\\"1\\\"`\n" +
+				"\" `printf '%s\\n' \\\"2\\\"` \"\n" +
+				"END",
+			want: "<\"1\">\n" +
+				"1\n" +
+				"\" 2 \"\n",
+		},
+		{
 			// builtin-vars__016: a readonly-variable assignment error
 			// inside `eval` discards only the eval'd command list — bash
 			// contains the DISCARD within eval, which returns status 1,
