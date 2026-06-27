@@ -164,12 +164,15 @@ func TestLineContinuationInsideOperators(t *testing.T) {
 
 func TestPosixModeParamExpSingleQuotesLiteral(t *testing.T) {
 	t.Parallel()
-	tests := []string{
-		`echo "${a+'x'}"`,
-		`echo "${a-'x'}"`,
-		`echo "${a='x'}"`,
+	tests := map[string]string{
+		`echo "${a+'x'}"`:   "'x'",
+		`echo "${a+$'\t'}"`: "$'\\t'",
+		`echo "${a-'x'}"`:   "'x'",
+		`echo "${a-$'\t'}"`: "$'\\t'",
+		`echo "${a='x'}"`:   "'x'",
+		`echo "${a=$'\t'}"`: "$'\\t'",
 	}
-	for _, src := range tests {
+	for src, want := range tests {
 		t.Run(src, func(t *testing.T) {
 			t.Parallel()
 			file, err := NewParser(Variant(LangBash), PosixMode(true)).Parse(strings.NewReader(src), "")
@@ -179,8 +182,8 @@ func TestPosixModeParamExpSingleQuotesLiteral(t *testing.T) {
 			call := file.Stmts[0].Cmd.(*CallExpr)
 			dq := call.Args[1].Parts[0].(*DblQuoted)
 			pe := dq.Parts[0].(*ParamExp)
-			if got := pe.Exp.Word.Lit(); got != "'x'" {
-				t.Fatalf("single quotes should be literal text, got %q", got)
+			if got := pe.Exp.Word.Lit(); got != want {
+				t.Fatalf("single quotes should be literal text, want %q, got %q", want, got)
 			}
 		})
 	}

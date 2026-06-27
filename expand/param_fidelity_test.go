@@ -54,3 +54,21 @@ func TestAlternateQuotedNullFiresOnlyWhenTriggered(t *testing.T) {
 		})
 	}
 }
+
+func TestPosixAssignSubstWordPreservesQuotedBackslash(t *testing.T) {
+	t.Parallel()
+
+	word := parseCallArg(t, `printf '%s\n' ${d=a"\\"c}`, 2)
+	env := testEnv{}
+	got, err := Fields(&Config{Env: env, Posix: true}, word)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{`a\c`}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("fields: want %#v, got %#v", want, got)
+	}
+	if got := env.Get("d").String(); got != `a\c` {
+		t.Fatalf("assigned value: want %q, got %q", `a\c`, got)
+	}
+}

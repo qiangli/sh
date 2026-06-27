@@ -3599,7 +3599,7 @@ func (cfg *Config) substWordFields(pe *syntax.ParamExp) ([][]fieldPart, bool, er
 	if litOnly && !assignOp {
 		return cfg.escapedLitFields(lit.Value), true, nil
 	}
-	if assignOp && !paramExpWordHasAtOrStar(pe.Exp.Word) {
+	if assignOp && !cfg.Posix && !paramExpWordHasAtOrStar(pe.Exp.Word) {
 		assignVal, err := LiteralWithQuoteRemoval(cfg, pe.Exp.Word)
 		if err != nil {
 			return nil, false, err
@@ -3697,7 +3697,7 @@ func (cfg *Config) substWordFields(pe *syntax.ParamExp) ([][]fieldPart, bool, er
 				return nil, false, err
 			}
 		}
-		if err := cfg.envSet(pe.Param.Value, assignVal); err != nil {
+		if err := cfg.envSetIndex(pe.Param.Value, pe.Index, assignVal); err != nil {
 			return nil, false, err
 		}
 	}

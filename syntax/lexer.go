@@ -263,7 +263,13 @@ func (p *Parser) nextKeepSpaces() {
 			} else {
 				p.tok = p.regToken(r)
 			}
-		case '`', '"', '$':
+		case '$':
+			if p.posixParamExpExpSingleQuotesLiteral() && p.peek() == '\'' {
+				p.advanceParamExpDollarSglLiteral(r)
+			} else {
+				p.tok = p.regToken(r)
+			}
+		case '`', '"':
 			p.tok = p.regToken(r)
 		case '<', '>':
 			if p.lang.in(langBashLike|LangZsh) && p.peek() == '(' {
@@ -1261,6 +1267,22 @@ loop:
 		firstReplChar = false
 	}
 	p.tok, p.val = tok, p.endLit()
+}
+
+func (p *Parser) advanceParamExpDollarSglLiteral(r rune) {
+	p.newLit(r)
+	r = p.rune() // opening single quote
+	for ; r != utf8.RuneSelf; r = p.rune() {
+		if r == '\\' {
+			p.rune()
+			continue
+		}
+		if r == '\'' {
+			p.rune()
+			break
+		}
+	}
+	p.tok, p.val = _LitWord, p.endLit()
 }
 
 // zshNumRange peeks at the bytes after '<' to check for a zsh numeric
