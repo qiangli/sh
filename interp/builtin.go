@@ -4867,15 +4867,24 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 	case "export":
 		// In POSIX mode the parser treats `export`/`readonly` as plain
 		// commands rather than the declare-family keyword, so they reach
-		// this simple-builtin path. `-p` lists exported names and exits
-		// 0 (matching the keyword path); otherwise a leading `-p` would
-		// be misread as an invalid identifier. Mirror the keyword path,
-		// which emits no export listing here.
-		if len(args) == 1 && args[0] == "-p" {
+		// this simple-builtin path. Parse the leading `-p` option and a
+		// `--` end-of-options separator before treating the rest as
+		// name[=value] operands.
+		printMode := false
+		for len(args) > 0 {
+			if args[0] == "-p" {
+				printMode = true
+				args = args[1:]
+				continue
+			}
+			if args[0] == "--" {
+				args = args[1:]
+			}
 			break
 		}
-		// Handle "export" when used as a simple command (e.g., IFS=: export x).
-		if len(args) == 0 && r.opts[optPosix] {
+		// `export -p`, or a bare `export` in POSIX mode, lists the
+		// exported variables in a form re-readable by the shell.
+		if printMode || (len(args) == 0 && r.opts[optPosix]) {
 			r.printExportVars()
 			break
 		}
