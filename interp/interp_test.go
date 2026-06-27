@@ -56,6 +56,49 @@ func parse(tb testing.TB, parser *syntax.Parser, src string) *syntax.File {
 	return file
 }
 
+func TestRunnerPosixVerboseSource(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+	}{
+		{
+			name: "short",
+			src:  "set -v\n",
+		},
+		{
+			name: "long",
+			src:  "set -o verbose\n",
+		},
+	}
+	body := "echo 1\necho 2\nif true; then\necho 3\nfi\n"
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			src := tt.src + body
+			file := parse(t, syntax.NewParser(syntax.Variant(syntax.LangPOSIX)), src)
+			var stdout, stderr bytes.Buffer
+			r, err := interp.New(
+				interp.StdIO(nil, &stdout, &stderr),
+				interp.WithBashSource([]byte(src)),
+				interp.WithPosixMode(true),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), runnerRunTimeout)
+			defer cancel()
+			if err := r.Run(ctx, file); err != nil {
+				t.Fatal(err)
+			}
+			if got, want := stdout.String(), "1\n2\n3\n"; got != want {
+				t.Fatalf("stdout mismatch:\n got: %q\nwant: %q", got, want)
+			}
+			if got := stderr.String(); got != body {
+				t.Fatalf("stderr mismatch:\n got: %q\nwant: %q", got, body)
+			}
+		})
+	}
+}
+
 func BenchmarkRun(b *testing.B) {
 	b.ReportAllocs()
 
