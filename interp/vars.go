@@ -838,6 +838,14 @@ func (r *Runner) lookupVar(name string) expand.Variable {
 		if _, h := terminalSize(); h > 0 {
 			vr.Kind, vr.Str = expand.String, strconv.Itoa(h)
 		}
+	case "LINENO":
+		vr.Kind = expand.String
+		vr.ReadOnly = true
+		if r.curStmtPos.IsValid() {
+			vr.Str = strconv.FormatUint(uint64(r.curStmtPos.Line()), 10)
+		} else {
+			vr.Str = "0"
+		}
 	case "HOSTTYPE":
 		vr.Kind, vr.Str = expand.String, runtime.GOARCH
 	case "MACHTYPE":
