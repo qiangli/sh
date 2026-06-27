@@ -3773,6 +3773,12 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		if len(filtered) > 0 && filtered[0] == "-p" {
 			filtered = filtered[1:]
 			showAll(true)
+			if len(filtered) > 0 && filtered[0] == "--" {
+				filtered = filtered[1:]
+			}
+		} else if len(filtered) > 0 && filtered[0] == "--" {
+			// bash accepts `--` as an option terminator: `alias -- name=val`.
+			filtered = filtered[1:]
 		} else if len(filtered) > 0 && len(filtered[0]) > 1 && filtered[0][0] == '-' && !strings.Contains(filtered[0], "=") {
 			r.errf("%salias: %s: invalid option\n", r.bashErrPrefix(pos), filtered[0])
 			r.errf("alias: usage: alias [-p] [name[=value] ... ]\n")
