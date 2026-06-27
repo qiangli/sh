@@ -199,6 +199,23 @@ func environAssocSubscriptParts(parts []syntax.WordPart, env expand.Environ) (st
 	return environAssocSubscriptWord(&syntax.Word{Parts: parts}, env)
 }
 
+func (r *Runner) shellArgv0() string {
+	switch {
+	case r.argv0 != "":
+		return r.argv0
+	case r.filename != "":
+		if r.opts[optPosix] && r.filename == "bash" && len(r.bashSource) > 0 {
+			return "sh"
+		}
+		return r.filename
+	default:
+		if r.opts[optPosix] {
+			return "sh"
+		}
+		return "bashy"
+	}
+}
+
 func (o *overlayEnviron) Set(name string, vr expand.Variable) error {
 	normalized := o.normalize(name)
 	prev, inOverlay := o.values[normalized]
@@ -800,15 +817,7 @@ func (r *Runner) lookupVar(name string) expand.Variable {
 	case "BASH_SUBSHELL":
 		vr.Kind, vr.Str = expand.String, strconv.Itoa(r.subshellLevel)
 	case "BASH_ARGV0":
-		vr.Kind = expand.String
-		switch {
-		case r.argv0 != "":
-			vr.Str = r.argv0
-		case r.filename != "":
-			vr.Str = r.filename
-		default:
-			vr.Str = "bashy"
-		}
+		vr.Kind, vr.Str = expand.String, r.shellArgv0()
 	case "GROUPS":
 		gid := os.Getgid()
 		vr.Kind = expand.Indexed
@@ -971,15 +980,7 @@ func (r *Runner) lookupVar(name string) expand.Variable {
 			vr.Map[name] = entry.path
 		}
 	case "0":
-		vr.Kind = expand.String
-		switch {
-		case r.argv0 != "":
-			vr.Str = r.argv0
-		case r.filename != "":
-			vr.Str = r.filename
-		default:
-			vr.Str = "bashy"
-		}
+		vr.Kind, vr.Str = expand.String, r.shellArgv0()
 	case "1", "2", "3", "4", "5", "6", "7", "8", "9":
 		if i := int(name[0] - '1'); i < len(r.Params) {
 			vr.Kind = expand.String
