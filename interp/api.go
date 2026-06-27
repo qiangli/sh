@@ -1395,8 +1395,8 @@ func Params(args ...string) RunnerOption {
 					if r.noOpSetState == nil {
 						r.noOpSetState = make(map[string]bool)
 					}
-					r.noOpSetState[value] = enable
-					if value == "ignoreeof" {
+					r.noOpSetState[noOpName] = enable
+					if noOpName == "ignoreeof" {
 						r.setIgnoreEOFOption(enable)
 					}
 					continue
