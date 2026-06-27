@@ -5263,12 +5263,12 @@ func (cfg *Config) expandUser(field string, moreFields bool) (prefix, rest strin
 		// to use cfg.Env, and we always want to check "HOME" first.
 
 		if vr := cfg.Env.Get("HOME"); vr.IsSet() {
-			return vr.String(), rest
+			return tildePrefixJoin(vr.String(), rest)
 		}
 
 		if runtime.GOOS == "windows" {
 			if vr := cfg.Env.Get("USERPROFILE"); vr.IsSet() {
-				return vr.String(), rest
+				return tildePrefixJoin(vr.String(), rest)
 			}
 		}
 		return "", field
@@ -5280,11 +5280,11 @@ func (cfg *Config) expandUser(field string, moreFields bool) (prefix, rest strin
 	switch name {
 	case "+":
 		if vr := cfg.Env.Get("PWD"); vr.IsSet() {
-			return vr.String(), rest
+			return tildePrefixJoin(vr.String(), rest)
 		}
 	case "-":
 		if vr := cfg.Env.Get("OLDPWD"); vr.IsSet() {
-			return vr.String(), rest
+			return tildePrefixJoin(vr.String(), rest)
 		}
 	}
 
@@ -5302,7 +5302,7 @@ func (cfg *Config) expandUser(field string, moreFields bool) (prefix, rest strin
 				idx = len(ds.List) - 1 - idx
 			}
 			if idx >= 0 && idx < len(ds.List) {
-				return ds.List[idx], rest
+				return tildePrefixJoin(ds.List[idx], rest)
 			}
 		}
 	}
@@ -5311,14 +5311,21 @@ func (cfg *Config) expandUser(field string, moreFields bool) (prefix, rest strin
 	// os/user. There isn't a way to lookup user home dirs without cgo.
 
 	if vr := cfg.Env.Get("HOME " + name); vr.IsSet() {
-		return vr.String(), rest
+		return tildePrefixJoin(vr.String(), rest)
 	}
 
 	u, err := user.Lookup(name)
 	if err != nil {
 		return "", field
 	}
-	return u.HomeDir, rest
+	return tildePrefixJoin(u.HomeDir, rest)
+}
+
+func tildePrefixJoin(prefix, rest string) (string, string) {
+	if strings.HasSuffix(prefix, "/") && strings.HasPrefix(rest, "/") {
+		rest = rest[1:]
+	}
+	return prefix, rest
 }
 
 // escapeOrphanBrackets escapes any `[` in a glob pattern that does not
