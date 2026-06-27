@@ -21,6 +21,7 @@ import (
 )
 
 var command = flag.String("c", "", "command to be executed")
+var posix = flag.Bool("posix", false, "run in POSIX mode")
 
 func main() {
 	flag.Parse()
@@ -36,13 +37,17 @@ func main() {
 }
 
 func runAll() error {
-	r, err := interp.New(
+	opts := []interp.RunnerOption{
 		interp.Env(nil),
 		interp.Interactive(true),
 		interp.StdIO(os.Stdin, os.Stdout, os.Stderr),
 		interp.WithBashCompatErrors(true),
 		interp.WithInheritedFds(inheritedFdsFromEnv()),
-	)
+	}
+	if *posix {
+		opts = append(opts, interp.WithPosixMode(true))
+	}
+	r, err := interp.New(opts...)
 	if err != nil {
 		return err
 	}
@@ -84,11 +89,17 @@ func run(r *interp.Runner, reader io.Reader, name string) error {
 		return err
 	}
 	var hdocWarnings []string
-	parser := syntax.NewParser(syntax.HeredocEOFWarning(func(startLine, eofLine int, stop string) {
-		hdocWarnings = append(hdocWarnings, fmt.Sprintf(
-			"%s: line %d: warning: here-document at line %d delimited by end-of-file (wanted `%s')",
-			name, eofLine, startLine, stop))
-	}))
+	parserOpts := []syntax.ParserOption{
+		syntax.HeredocEOFWarning(func(startLine, eofLine int, stop string) {
+			hdocWarnings = append(hdocWarnings, fmt.Sprintf(
+				"%s: line %d: warning: here-document at line %d delimited by end-of-file (wanted `%s')",
+				name, eofLine, startLine, stop))
+		}),
+	}
+	if *posix {
+		parserOpts = append(parserOpts, syntax.Variant(syntax.LangPOSIX))
+	}
+	parser := syntax.NewParser(parserOpts...)
 	prog, err := parser.Parse(strings.NewReader(string(src)), name)
 	if err != nil {
 		if msg, ok := bashScriptParseError(err, src, name); ok {
@@ -317,7 +328,11 @@ func runPath(r *interp.Runner, path string) error {
 }
 
 func runInteractive(r *interp.Runner, stdin io.Reader, stdout, stderr io.Writer) error {
-	parser := syntax.NewParser()
+	var parserOpts []syntax.ParserOption
+	if *posix {
+		parserOpts = append(parserOpts, syntax.Variant(syntax.LangPOSIX))
+	}
+	parser := syntax.NewParser(parserOpts...)
 	fmt.Fprintf(stdout, "$ ")
 	for stmts, err := range parser.InteractiveSeq(stdin) {
 		if err != nil {

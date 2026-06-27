@@ -245,6 +245,7 @@ type Runner struct {
 	inSource     bool
 	inTimeClause bool // suppress inner `time` keyword's output
 	handlingTrap bool // whether we're currently in a trap callback
+	trapEntryExit exitStatus // exit status upon entering the current trap
 	xtraceLevel  int  // xtrace indirection depth (trap handlers add one)
 
 	// track if a sourced script set positional parameters
@@ -1810,6 +1811,15 @@ func WithDeterministic(seed int64) RunnerOption {
 		return nil
 	}
 }
+
+// WithPosixMode sets the runner's POSIX mode.
+func WithPosixMode(enabled bool) RunnerOption {
+	return func(r *Runner) error {
+		r.setPosixMode(enabled)
+		return nil
+	}
+}
+
 
 func (r *Runner) posixOptByName(name string) *bool {
 	// Bashy-only `set -o dryrun`, recognized only when EnableDryRunOption was

@@ -7439,6 +7439,11 @@ func (r *Runner) trapCallback(ctx context.Context, callback, name string) uint8 
 		return 0
 	}
 	oldExit := r.exit
+	oldTrapEntryExit := r.trapEntryExit
+	r.trapEntryExit = oldExit
+	defer func() {
+		r.trapEntryExit = oldTrapEntryExit
+	}()
 	r.exit = exitStatus{} // start fresh so we can capture the trap's exit
 	// Commands run from a trap handler trace one xtrace level deeper
 	// (bash replicates PS4's first char: `+` -> `++`).
