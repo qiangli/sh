@@ -6003,6 +6003,9 @@ func ReadFields(cfg *Config, s string, n int, raw bool) []string {
 		i += size
 		inIFS, isWS := cfg.ifsCharClass(runeBytes)
 		isIFS := inIFS && (raw || !esc)
+		if !raw && size == 1 && runeBytes[0] == '\\' && !esc {
+			isIFS = false
+		}
 		if isIFS {
 			if infield {
 				fpos[len(fpos)-1].end = len(buf)
