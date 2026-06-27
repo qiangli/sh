@@ -599,9 +599,16 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 	case "false":
 		exit.code = 1
 	case "exit":
+		if len(args) >= 2 && args[0] == "--" {
+			args = args[1:]
+		}
 		switch len(args) {
 		case 0:
-			exit = r.lastExit
+			if r.handlingTrap {
+				exit = r.trapEntryExit
+			} else {
+				exit = r.lastExit
+			}
 		case 1:
 			n, err := strconv.Atoi(args[0])
 			if err != nil {
