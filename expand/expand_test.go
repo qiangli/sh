@@ -521,6 +521,77 @@ func TestFieldsParamExpDefaultBackslashInDoubleQuotes(t *testing.T) {
 	}
 }
 
+func TestTildeExpansionHomeTrailingSlash(t *testing.T) {
+	tests := []struct {
+		name string
+		env  string
+		src  string
+		want []string
+	}{
+		{
+			name: "trailing slash",
+			env:  "HOME=/foo/bar/",
+			src:  `echo ~ ~/~`,
+			want: []string{"/foo/bar/", "/foo/bar/~"},
+		},
+		{
+			name: "root",
+			env:  "HOME=/",
+			src:  `echo ~ ~/foo`,
+			want: []string{"/", "/foo"},
+		},
+		{
+			name: "double slash",
+			env:  "HOME=//",
+			src:  `echo ~ ~/foo`,
+			want: []string{"//", "//foo"},
+		},
+		{
+			name: "assignment",
+			env:  "HOME=/foo/bar/",
+			src:  `a=~/ b=~/baz`,
+			want: []string{"/foo/bar/", "/foo/bar/baz"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &Config{Env: ListEnviron(tc.env)}
+			if strings.Contains(tc.src, "=") {
+				p := syntax.NewParser()
+				file, err := p.Parse(strings.NewReader(tc.src), "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				call := file.Stmts[0].Cmd.(*syntax.CallExpr)
+				var got []string
+				for _, as := range call.Assigns {
+					s, err := LiteralForAssign(cfg, as.Value)
+					if err != nil {
+						t.Fatalf("%s: did not want error, got %v", tc.src, err)
+					}
+					got = append(got, s)
+				}
+				if !reflect.DeepEqual(got, tc.want) {
+					t.Fatalf("%s: wanted %q, got %q", tc.src, tc.want, got)
+				}
+				return
+			}
+			var got []string
+			for i := range tc.want {
+				word := parseCallArg(t, tc.src, i+1)
+				fields, err := Fields(cfg, word)
+				if err != nil {
+					t.Fatalf("%s: did not want error, got %v", tc.src, err)
+				}
+				got = append(got, fields...)
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("%s: wanted %q, got %q", tc.src, tc.want, got)
+			}
+		})
+	}
+}
+
 func TestFieldsParamExpDefaultBackslashFields(t *testing.T) {
 	cfg := &Config{Env: ListEnviron("HOME=/usr/homes/chet")}
 	tests := []struct {
