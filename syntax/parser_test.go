@@ -943,6 +943,19 @@ var errorCases = []errorCase{
 		flipConfirm(LangMirBSDKorn), // TODO: some variants allow a missing body
 	),
 	errCase(
+		// bash requires a compound command as the function body; a simple
+		// command is a syntax error. dash/POSIX and mksh accept it as an
+		// extension, so they parse cleanly (no error expected for them).
+		"f() echo bar",
+		langErr("1:5: a function body must be a compound command", LangBash|LangBats),
+	),
+	errCase(
+		// Reserved words that introduce non-compound commands (`time`,
+		// `declare`, `let`, `coproc`, ...) are likewise rejected as bodies.
+		"f() time echo bar",
+		langErr("1:5: a function body must be a compound command", LangBash|LangBats),
+	),
+	errCase(
 		"foo() {",
 		langErr("1:7: `{` must be followed by a statement list"),
 		langErr("1:7: unexpected EOF while looking for matching `}'", LangZsh|LangMirBSDKorn),

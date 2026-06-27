@@ -3881,9 +3881,37 @@ func (p *Parser) funcDecl(s *Stmt, pos Pos, long, withParens bool, names ...*Lit
 		fd.Names = names
 	}
 	p.got(_Newl)
-	// TODO: reject any body which isn't a compound command, like a quoted word
+	// Bash (and bats, which is bash-based) require a function body to be a
+	// compound command: a group `{ …; }`, subshell `( … )`, if/for/while/
+	// until/case/select, arithmetic command `(( … ))`, or test clause
+	// `[[ … ]]`. A simple command (or a pipeline, `declare`/`let`/`time`/
+	// `coproc`, a negation, etc.) is a syntax error, matching bash — even
+	// in bash's POSIX mode. Other variants (POSIX sh/dash, mksh) accept a
+	// simple-command body as an extension, so leave them unchanged.
+	// An empty body (a terminator or EOF here) is reported by the
+	// getStmt call below as "must be followed by a statement"; only flag
+	// a present-but-non-compound body.
+	if p.lang.in(langBashLike) && !p.stopToken() && !p.startsCompoundCommand() {
+		p.curErr("a function body must be a compound command")
+	}
 	if fd.Body = p.getStmt(false, false, true); fd.Body == nil {
 		p.followErr(fd.Pos(), "foo()", noQuote("a statement"))
 	}
 	s.Cmd = fd
+}
+
+// startsCompoundCommand reports whether the current token begins a compound
+// command: a group, subshell, if/for/while/until/case/select, arithmetic
+// command, or test clause. Bash requires a function body to be one of these.
+func (p *Parser) startsCompoundCommand() bool {
+	switch p.tok {
+	case leftParen, dblLeftParen:
+		return true
+	case _LitWord:
+		switch p.val {
+		case "{", "if", "for", "while", "until", "case", "select", "[[":
+			return true
+		}
+	}
+	return false
 }
