@@ -7695,6 +7695,27 @@ func TestRunnerFilename(t *testing.T) {
 	}
 }
 
+func TestRunnerPosixStdinArgv0(t *testing.T) {
+	t.Parallel()
+
+	src := "func() { printf '%s\\n' \"${0##*/}\"; }\nfunc\nfunc 1\n"
+	file, _ := syntax.NewParser(syntax.Variant(syntax.LangPOSIX)).Parse(strings.NewReader(src), "bash")
+	var b bytes.Buffer
+	r, _ := interp.New(
+		interp.StdIO(nil, &b, &b),
+		interp.WithPosixMode(true),
+		interp.WithBashSource([]byte(src)),
+	)
+	ctx, cancel := context.WithTimeout(context.Background(), runnerRunTimeout)
+	defer cancel()
+	if err := r.Run(ctx, file); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := b.String(), "sh\nsh\n"; got != want {
+		t.Fatalf("\nwant: %q\ngot:  %q", want, got)
+	}
+}
+
 func TestRunnerEnvNoModify(t *testing.T) {
 	t.Parallel()
 
