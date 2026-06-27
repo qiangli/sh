@@ -694,9 +694,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			args = args[1:]
 		}
 		n := 1
+		operand := ""
 		switch len(args) {
 		case 0:
 		case 1:
+			operand = args[0]
 			n2, err := strconv.Atoi(args[0])
 			if err != nil {
 				return failf(2, "shift: %s: numeric argument required\n", args[0])
@@ -704,19 +706,22 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			if n2 < 0 {
 				return failf(1, "shift: %s: shift count out of range\n", args[0])
 			}
-			if n2 > len(r.Params) {
-				// Out of range: silent error by default; with
-				// `shopt -s shift_verbose` or in POSIX mode, emit
-				// a diagnostic.
-				if opt, _ := r.bashOptByName("shift_verbose"); (opt != nil && *opt) || r.opts[optPosix] {
-					return failf(1, "shift: %s: shift count out of range\n", args[0])
-				}
-				exit.code = 1
-				return exit
-			}
 			n = n2
 		default:
 			return failf(2, "shift: too many arguments\n")
+		}
+		if n > len(r.Params) {
+			// Out of range: silent error by default; with
+			// `shopt -s shift_verbose` or in POSIX mode, emit
+			// a diagnostic.
+			if opt, _ := r.bashOptByName("shift_verbose"); (opt != nil && *opt) || r.opts[optPosix] {
+				if operand == "" {
+					return failf(1, "shift: shift count out of range\n")
+				}
+				return failf(1, "shift: %s: shift count out of range\n", operand)
+			}
+			exit.code = 1
+			return exit
 		}
 		if n >= len(r.Params) {
 			r.Params = nil

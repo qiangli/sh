@@ -3256,6 +3256,10 @@ var runTests = []runTest{
 		"b c\n",
 	},
 	{
+		"shift; echo after: $?",
+		"after: 1\n",
+	},
+	{
 		"shift 2; set a b c; shift 2; echo $@",
 		"c\n",
 	},
@@ -4515,6 +4519,7 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	{"readonly v=a; command readonly v=foo; echo after: $?; echo $v", "v: readonly variable\nafter: 1\na\n"},
 	// POSIX mode implies shift_verbose.
 	{"set -o posix; command shift 2; echo after: $?", "shift: 2: shift count out of range\nafter: 1\n"},
+	{"set -o posix; command shift; echo after: $?", "shift: shift count out of range\nafter: 1\n"},
 	{"readonly -p | grep '^declare -r SHELLOPTS='", "declare -r SHELLOPTS=\"braceexpand:hashall:interactive-comments\"\n"},
 	{
 		"a=b; a=c; echo $a; readonly a; a=d",
