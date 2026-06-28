@@ -228,7 +228,7 @@ func execReplace(ctx context.Context, path string, args, env []string, stdin any
 			return false, nil
 		}
 		if int(f.Fd()) != entry.fd {
-			if err := syscall.Dup2(int(f.Fd()), entry.fd); err != nil {
+			if err := dupFD(int(f.Fd()), entry.fd); err != nil {
 				return true, err
 			}
 		}
@@ -239,7 +239,7 @@ func execReplace(ctx context.Context, path string, args, env []string, stdin any
 				continue
 			}
 			if int(f.Fd()) != fd {
-				if err := syscall.Dup2(int(f.Fd()), fd); err != nil {
+				if err := dupFD(int(f.Fd()), fd); err != nil {
 					return true, err
 				}
 			}
