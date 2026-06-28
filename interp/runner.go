@@ -5047,6 +5047,16 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 						break
 					}
 				}
+				// A blank/empty alias whose body parses to nothing and
+				// that has no suffix (`alias b=' '; b`, `alias a=; a`)
+				// leaves no command at all — like a blank line it must
+				// preserve $? rather than reset it to 0 (POSIX 2.9.1).
+				// r.exit was reset at statement entry, so restore the
+				// prior status from lastExit.
+				if len(file.Stmts) == 0 {
+					r.exit = r.lastExit
+					return
+				}
 				// Override the runtime line so diagnostics
 				// (`command not found`, etc.) report bash's invocation
 				// line rather than the line within the alias body.
@@ -5069,6 +5079,19 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			prevOverride := r.aliasLineOverride
 			r.aliasLineOverride = int(origCallPos.Line())
 			defer func() { r.aliasLineOverride = prevOverride }()
+		}
+		// A blank/empty alias (`alias b=' '`, `alias a=`) that consumes
+		// the entire command leaves no command name and no assignments.
+		// Like a blank line it is not a command at all, so it must
+		// preserve $? rather than run an empty command (which would reset
+		// $? to 0). POSIX 2.9.1: only a command with a word or an
+		// assignment completes with its own status. r.exit was reset to 0
+		// at statement entry, so restore the prior status from lastExit.
+		// (Any redirects on the statement have already been applied by
+		// stmtSync.)
+		if aliasExpanded && len(args) == 0 && len(cm.Assigns) == 0 {
+			r.exit = r.lastExit
+			return
 		}
 		if r.integerArrayAssignWithArithSuffix(cm, args) {
 			return
