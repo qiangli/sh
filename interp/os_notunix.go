@@ -100,6 +100,10 @@ func waitExecCmd(ctx context.Context, cmd *exec.Cmd) error {
 	return cmd.Wait()
 }
 
+func execReplace(ctx context.Context, path string, args, env []string, stdin any, stdout any, stderr any) (bool, error) {
+	return false, nil
+}
+
 func (r *Runner) inheritedFd(fd int) (*os.File, bool) {
 	return nil, false
 }

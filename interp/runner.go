@@ -9300,7 +9300,7 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 }
 
 func (r *Runner) exec(ctx context.Context, pos syntax.Pos, args []string) {
-	r.execAs(ctx, pos, "", false, args)
+	r.execAs(ctx, pos, "", false, false, args)
 }
 
 // execStartError reports whether the `exec NAME` builtin would fail to
@@ -9340,7 +9340,7 @@ func (r *Runner) execStartError(ctx context.Context, name string) (string, uint8
 // [HandlerContext.ExecAs], so handlers can launch the spawned process
 // under a different argv[0] (the "exec -a NAME CMD" form in bash).
 // An empty argv0 means no override.
-func (r *Runner) execAs(ctx context.Context, pos syntax.Pos, argv0 string, clearEnv bool, args []string) {
+func (r *Runner) execAs(ctx context.Context, pos syntax.Pos, argv0 string, clearEnv bool, replace bool, args []string) {
 	hashed := false
 	if len(args) > 0 {
 		name := args[0]
@@ -9403,6 +9403,11 @@ func (r *Runner) execAs(ctx context.Context, pos syntax.Pos, argv0 string, clear
 	if clearEnv {
 		hc := HandlerCtx(hctx)
 		hc.ExecClearEnv = true
+		hctx = context.WithValue(hctx, handlerCtxKey{}, hc)
+	}
+	if replace && r.subshellLevel == 0 {
+		hc := HandlerCtx(hctx)
+		hc.ExecReplace = true
 		hctx = context.WithValue(hctx, handlerCtxKey{}, hc)
 	}
 	r.emitAudit("exec", pos, args, false)

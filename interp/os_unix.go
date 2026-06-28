@@ -7,6 +7,7 @@ package interp
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -209,6 +210,45 @@ func waitExecCmd(ctx context.Context, cmd *exec.Cmd) error {
 			return ExitStatus(1)
 		}
 	}
+}
+
+func execReplace(ctx context.Context, path string, args, env []string, stdin any, stdout any, stderr any) (bool, error) {
+	hc := HandlerCtx(ctx)
+	files := []struct {
+		fd int
+		v  any
+	}{
+		{0, stdin},
+		{1, stdout},
+		{2, stderr},
+	}
+	for _, entry := range files {
+		f, ok := entry.v.(*os.File)
+		if !ok {
+			return false, nil
+		}
+		if int(f.Fd()) != entry.fd {
+			if err := syscall.Dup2(int(f.Fd()), entry.fd); err != nil {
+				return true, err
+			}
+		}
+	}
+	if hc.runner != nil {
+		for fd, f := range hc.runner.fdTable {
+			if fd < 3 || f == nil {
+				continue
+			}
+			if int(f.Fd()) != fd {
+				if err := syscall.Dup2(int(f.Fd()), fd); err != nil {
+					return true, err
+				}
+			}
+		}
+	}
+	if len(args) == 0 {
+		return true, fmt.Errorf("exec: empty argument list")
+	}
+	return true, syscall.Exec(path, args, env)
 }
 
 // modifiedSinceAccessed reports whether the file's mtime is strictly

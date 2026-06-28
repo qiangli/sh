@@ -1572,6 +1572,18 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 						owner.markPendingSignal(sname)
 						continue
 					}
+					if cb, ok := r.trapCallbacks[sname]; ok {
+						if cb == "" {
+							continue
+						}
+						// Background subshells inherit the trap table but not
+						// the parent's signal.Notify ownership. Fall through to
+						// a real OS signal so the foreground parent receives it.
+					} else if sig != 0 {
+						exit.code = uint8(128 + int(sig))
+						exit.exiting = true
+						return exit
+					}
 				}
 			}
 			if err := sendSignal(pid, sig); err != nil {
@@ -2661,13 +2673,13 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			r.errf("%s%s\n", r.bashErrPrefix(pos), tail)
 			r.reportError("exec", pos, args[0], tail, code)
 			exit.code = code
-			if !execfail {
+			if !execfail && !r.interactiveShell {
 				exit.exiting = true
 			}
 			return exit
 		}
 		r.exit.exiting = true
-		r.execAs(ctx, pos, argv0, clearEnv, args)
+		r.execAs(ctx, pos, argv0, clearEnv, true, args)
 		exit = r.exit
 	case "command":
 		showV := false      // -v: name or path
@@ -2733,7 +2745,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				if path, lerr := LookPathDir(r.Dir, lookupEnv, args[0]); lerr == nil {
 					orig := args[0]
 					args[0] = path
-					r.execAs(ctx, pos, orig, false, args)
+					r.execAs(ctx, pos, orig, false, false, args)
 					exit = r.exit
 					return exit
 				}
@@ -3968,10 +3980,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					return "SIG" + name
 				}
 			}
-			// In POSIX mode, `trap -p` lists *every* signal (defaults shown
-			// as `trap -- - SIG`); a bare `trap` (no -p) lists only the
-			// non-default traps, exactly as in non-POSIX mode. bash gates the
-			// full default dump on the -p flag, not merely on POSIX mode.
+			// In POSIX mode, `trap -p` lists every signal (defaults shown as
+			// `trap -- - SIG`); a bare `trap` (no -p) lists only the
+			// non-default traps, as does default bash mode.
 			fullList := r.opts[optPosix] && printTraps
 			var sigKeys []string
 			if fullList {

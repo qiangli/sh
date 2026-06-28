@@ -91,6 +91,10 @@ type HandlerContext struct {
 	// ExecClearEnv is set for "exec -c", requesting that the spawned
 	// process starts with an empty environment.
 	ExecClearEnv bool
+
+	// ExecReplace is set for the exec builtin, requesting that the default
+	// handler replace the current process rather than fork and wait.
+	ExecReplace bool
 }
 
 // DryRun reports whether the runner's non-POSIX `dryrun` option is currently on
@@ -216,6 +220,11 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 					f.Close()
 					os.Remove(f.Name())
 				}()
+			}
+		}
+		if hc.ExecReplace {
+			if replaced, err := execReplace(ctx, execPath, cmdArgs, env, execStdin, hc.Stdout, hc.Stderr); replaced {
+				return err
 			}
 		}
 		cmd := exec.Cmd{
