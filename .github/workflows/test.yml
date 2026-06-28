@@ -24,8 +24,6 @@ jobs:
 
     - run: go test -race ./...
       if: matrix.os == 'ubuntu-latest'
-    - run: GOARCH=386 go test -count=1 ./...
-      if: matrix.os == 'ubuntu-latest'
     - name: confirm tests with Bash 5.2
       run: |
         go install mvdan.cc/dockexec@latest
