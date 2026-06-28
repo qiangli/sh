@@ -269,6 +269,19 @@ type Runner struct {
 	lastExpandExit exitStatus // used to surface exit statuses while expanding fields
 	expandRunExit  exitStatus // expansion failures which affect Run but not $?
 
+	// outErr records the most recent error from r.out/r.outf (a builtin's
+	// standard-output write). Bash fails an output builtin whose stdout write
+	// hits a closed fd (`echo >&-`) with a non-zero exit; the builtin
+	// dispatcher inspects this after running each builtin.
+	outErr error
+
+	// stdinClosed marks fd 0 as explicitly closed (`cmd <&-`). r.stdin is
+	// nil in that case (as for "no stdin"), but a closed fd must make a
+	// spawned command's read fail with EBADF rather than read an empty
+	// /dev/null, so the exec handler synthesizes a genuinely closed
+	// descriptor. Saved/restored around each statement's redirects.
+	stdinClosed bool
+
 	// lastArithErr captures the most recent error from r.arithm so
 	// callers (notably the C-style for-loop) can detect arithmetic
 	// failures and abort, matching bash 5.3 — a runtime arith error

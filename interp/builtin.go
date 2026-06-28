@@ -545,7 +545,39 @@ func scanUnsetOperandSources(line string) []unsetOperandSource {
 	return operands
 }
 
+// writeErrChecked is the set of builtins that, like bash's sh_chkwrite
+// callers, report a standard-output write failure to a closed descriptor
+// (`echo >&-`) and exit non-zero. Builtins outside this set (e.g. `help`)
+// fail their write silently, matching bash.
+var writeErrChecked = map[string]bool{
+	"echo":   true,
+	"printf": true,
+}
+
 func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args []string) (exit exitStatus) {
+	// Bash fails a builtin whose standard-output write fails on a closed or
+	// broken descriptor (`echo >&-`, `printf x >&-`): it reports a write
+	// error and exits non-zero rather than silently succeeding. Track writes
+	// performed during this builtin and surface the failure if it otherwise
+	// would have succeeded. The flag is saved/restored so a nested builtin
+	// (`builtin echo`, `command echo`) reports independently.
+	prevOutErr := r.outErr
+	r.outErr = nil
+	defer func() {
+		// Bash checks for output write errors only in the builtins that call
+		// sh_chkwrite (echo, printf): a write to a closed descriptor (EBADF:
+		// `echo >&-`) is reported and exits non-zero. Other output builtins
+		// (e.g. `help >&-`) fail silently, so the check is scoped to that set.
+		// A broken pipe (EPIPE: `echo foo | false`) is bash's SIGPIPE case —
+		// the writer dies silently and the status comes from the pipeline — so
+		// it is excluded by isClosedFdWriteErr.
+		if writeErrChecked[name] && isClosedFdWriteErr(r.outErr) &&
+			exit.code == 0 && !exit.exiting && !exit.returning {
+			r.errf("%s%s: write error: Bad file descriptor\n", r.bashErrPrefix(pos), name)
+			exit.code = 1
+		}
+		r.outErr = prevOutErr
+	}()
 	// failf emits a user-fault error and sets the exit code. When
 	// [WithBashCompatErrors] is on, the message is prefixed with
 	// "<filename>: line <N>: " so bash 5.3's test suite output matches.

@@ -1317,29 +1317,18 @@ func (r *Runner) stdinSourceStartOffset() int {
 	return start
 }
 
+// scriptStdinReader returns a reader over the unconsumed tail of the script
+// source for a command reading fd 0 (bash's stdin-script quirk), or nil when
+// the feature is inactive. It exposes everything remaining; a command reading
+// to EOF (`cat`) drains it all while one reading nothing consumes none — the
+// exec handler backs it with a seekable fd and advances the consumed offset by
+// the child's actual read position.
 func (r *Runner) scriptStdinReader() io.Reader {
-	return r.newScriptStdinReader(false)
-}
-
-func (r *Runner) scriptStdinLineReader() io.Reader {
-	return r.newScriptStdinReader(true)
-}
-
-func (r *Runner) newScriptStdinReader(stopAtNewline bool) io.Reader {
 	if !r.stdinSourceActive || r.stdinRedirected || len(r.bashSource) == 0 {
 		return nil
 	}
 	off := r.stdinSourceStartOffset()
-	limit := len(r.bashSource)
-	if stopAtNewline {
-		limit = off
-		if i := bytes.IndexByte(r.bashSource[off:], '\n'); i >= 0 {
-			limit += i + 1
-		} else {
-			limit = len(r.bashSource)
-		}
-	}
-	return &scriptStdinReader{r: r, off: off, limit: limit}
+	return &scriptStdinReader{r: r, off: off, limit: len(r.bashSource)}
 }
 
 type scriptStdinReader struct {
@@ -1393,6 +1382,12 @@ func (r *Runner) fields(words ...*syntax.Word) []string {
 
 func (r *Runner) literal(word *syntax.Word) string {
 	str, err := expand.Literal(r.ecfg, word)
+	r.expandErr(err)
+	return str
+}
+
+func (r *Runner) literalWithQuoteRemoval(word *syntax.Word) string {
+	str, err := expand.LiteralWithQuoteRemoval(r.ecfg, word)
 	r.expandErr(err)
 	return str
 }
@@ -1660,19 +1655,34 @@ func (r *Runner) handlerCtx(ctx context.Context, kind handlerKind, pos syntax.Po
 	}
 	if r.stdin != nil { // do not leave hc.Stdin as a typed nil
 		hc.Stdin = r.stdin
+	} else if r.stdinClosed {
+		// fd 0 was explicitly closed (`<&-`): hand the command a closed
+		// descriptor so its read fails with EBADF rather than reading an
+		// empty /dev/null.
+		hc.Stdin = badFdReader{}
 	}
-	if stdin := r.scriptStdinLineReader(); stdin != nil {
+	if stdin := r.scriptStdinReader(); stdin != nil {
+		// An external command reading fd 0 consumes the rest of the script
+		// source (bash's stdin-script quirk). It is backed by a seekable
+		// temp file in the exec handler, so a command that reads to EOF
+		// (`cat`) drains every remaining line while one that reads nothing
+		// (`echo`) consumes none — the consumed offset is advanced by the
+		// child's actual read position, not capped to a single line.
 		hc.Stdin = stdin
 	}
 	return context.WithValue(ctx, handlerCtxKey{}, hc)
 }
 
 func (r *Runner) out(s string) {
-	io.WriteString(r.stdout, s)
+	if _, err := io.WriteString(r.stdout, s); err != nil {
+		r.outErr = err
+	}
 }
 
 func (r *Runner) outf(format string, a ...any) {
-	fmt.Fprintf(r.stdout, format, a...)
+	if _, err := fmt.Fprintf(r.stdout, format, a...); err != nil {
+		r.outErr = err
+	}
 }
 
 func (r *Runner) errf(format string, a ...any) {
@@ -4565,6 +4575,7 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 
 	oldIn, oldStdinTTYFallback, oldStdinDevTTY, oldOut, oldErr := r.stdin, r.stdinTTYFallback, r.stdinDevTTY, r.stdout, r.stderr
 	oldStdinRedirected := r.stdinRedirected
+	oldStdinClosed := r.stdinClosed
 	// Snapshot fdTable only when this statement has redirects that
 	// might mutate it. A coproc statement registers fds in fdTable from
 	// inside cmd() itself, not via redir(), and those changes must
@@ -4615,6 +4626,7 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 	}
 	if st.Cmd == nil && len(st.Redirs) > 0 {
 		r2 := r.subshell(false)
+		r2.lastExpandExit = exitStatus{}
 		var closers []io.Closer
 		for _, rd := range st.Redirs {
 			cls, err := r2.redir(ctx, rd)
@@ -4630,6 +4642,15 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 			c.Close()
 		}
 		r.exit = r2.exit
+		// POSIX 2.9.1: a command with only redirections and no command
+		// word completes with the exit status of the last command
+		// substitution performed while expanding the redirect operands
+		// (`>/dev/null$(exit 17)` exits 17). If the redirects themselves
+		// succeeded and ran no command substitution, lastExpandExit is
+		// zero, leaving the success status untouched.
+		if r.exit.ok() {
+			r.exit = r2.lastExpandExit
+		}
 		// A redirection error on a command with no command word still
 		// fails the command; honor the ERR trap and errexit the same way
 		// a normal command failure would, unless we're in an
@@ -4837,6 +4858,7 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 		r.stdinTTYFallback = oldStdinTTYFallback
 		r.stdinDevTTY = oldStdinDevTTY
 		r.stdinRedirected = oldStdinRedirected
+		r.stdinClosed = oldStdinClosed
 		if len(st.Redirs) > 0 && !persistNamedRedirs {
 			if lateRedir {
 				r.fdTable = oldFdTable
@@ -5711,6 +5733,21 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			} else {
 				r2.stderr = r.stderr
 			}
+			// POSIX: the first command of a pipeline keeps the shell's
+			// standard input. When the script itself is being read from
+			// stdin (bash's stdin-script quirk), that means the first
+			// command consumes subsequent script lines (`cat | tail` reads
+			// the lines after the pipeline). subshell() does not propagate
+			// the stdin-source state, so hand it to the first element's
+			// runner explicitly and fold its consumed offset back into the
+			// parent afterwards so the parent skips the lines the command
+			// ate. Only X (the left side / first command) gets this; Y and
+			// any inner Y read from the pipe.
+			r2.bashSource = r.bashSource
+			r2.stdinSourceActive = r.stdinSourceActive
+			r2.stdinSourceOffset = r.stdinSourceOffset
+			r2.stdinSourceBaseOffset = r.stdinSourceBaseOffset
+			r2.curStmtEnd = r.curStmtEnd
 			// bash 5.3: the last command in a pipeline runs in a
 			// subshell unless `shopt -s lastpipe` is enabled (and
 			// job control is off). Without lastpipe, assignments
@@ -5765,6 +5802,9 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			prDup.Close()
 			wg.Wait()
 			r.stdin = oldStdin
+			// Fold back any script-source input the first command consumed so
+			// the parent's Run loop skips those now-eaten lines.
+			r.stdinSourceOffset = max(r.stdinSourceOffset, r2.stdinSourceOffset)
 			// A process substitution spawned while expanding a pipeline
 			// element's words (e.g. `echo x | tee >(cmd)`) registers its
 			// bgProc on that element's sub-runner (r2/r3), which is otherwise
@@ -8080,6 +8120,7 @@ func (r *Runner) setReadFd(targetFd int, f *os.File) error {
 	switch targetFd {
 	case -1, 0:
 		r.stdin = f
+		r.stdinClosed = false
 		r.stdinTTYFallback = false
 		r.stdinDevTTY = false
 		// fd 0 bound to an explicit input redirect: suppress the stdin-source
@@ -8301,6 +8342,7 @@ func (r *Runner) bindFdCaps(targetFd int, read *os.File, write io.Writer) {
 	switch targetFd {
 	case 0:
 		r.stdin = read
+		r.stdinClosed = false
 		r.stdinTTYFallback = false
 		r.stdinDevTTY = false
 		r.stdinRedirected = true
@@ -8381,6 +8423,27 @@ func (badFdWriter) Write([]byte) (int, error) {
 	return 0, ExitStatus(1)
 }
 
+// badFdReader is the sentinel the runner installs as a command's standard
+// input when fd 0 has been explicitly closed (`cmd <&-`). A plain reading
+// builtin sees an immediate error; the exec handler recognizes it and hands
+// the spawned process a genuinely closed descriptor so its read fails with
+// EBADF, exactly as bash leaves the inherited fd closed.
+type badFdReader struct{}
+
+func (badFdReader) Read([]byte) (int, error) {
+	return 0, ExitStatus(1)
+}
+
+// isClosedFdWriteErr reports whether a builtin's standard-output write failed
+// because the descriptor is closed — the badFdWriter sentinel installed by
+// `N>&-` returns the ExitStatus error. A broken pipe (EPIPE) from a real pipe
+// write is deliberately excluded: that is bash's silent SIGPIPE case, not a
+// reported write error.
+func isClosedFdWriteErr(err error) bool {
+	_, ok := err.(ExitStatus)
+	return ok
+}
+
 // isClosedFdWriter reports whether w is the badFdWriter sentinel the runner
 // installs into r.stdout/r.stderr to model a closed output fd (`N>&-`). Such a
 // slot must behave as EBADF for any later dup of that fd.
@@ -8446,6 +8509,7 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 			}
 		}
 		r.stdin = pr
+		r.stdinClosed = false
 		r.stdinRedirected = true // heredoc body wins over the stdin-source reader
 		return pr, nil
 	}
@@ -8453,13 +8517,16 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 	// Bash: when the target word of a non-heredoc redirect expands
 	// to zero or more than one field, emit "ambiguous redirect".
 	// POSIX mode skips field splitting for redirect words, so the
-	// expanded word is always a single filename.
+	// expanded word is always a single filename. Quote removal still
+	// applies, so an unquoted backslash escape (`<\i'n'"0"` → `in0`)
+	// or trailing `\` is collapsed in the filename operand — without it
+	// the literal `\in0` would be opened (and fail).
 	// Skip the check for here-string (`<<<`) since the entire word
 	// is treated as the body, not a filename.
 	var arg string
 	if rd.Op != syntax.WordHdoc {
 		if r.opts[optPosix] {
-			arg = r.literal(rd.Word)
+			arg = r.literalWithQuoteRemoval(rd.Word)
 		} else {
 			fields := r.fields(rd.Word)
 			if len(fields) != 1 {
@@ -8916,6 +8983,11 @@ func (r *Runner) closeFd(fd int) {
 	switch fd {
 	case 0:
 		r.stdin = nil
+		// Mark fd 0 as genuinely closed (not merely absent) so a spawned
+		// command reading stdin fails with EBADF, and suppress the
+		// stdin-source script reader from re-supplying input.
+		r.stdinClosed = true
+		r.stdinRedirected = true
 		if r.fdWriteTable != nil {
 			delete(r.fdWriteTable, 0)
 		}

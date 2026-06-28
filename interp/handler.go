@@ -210,6 +210,18 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 		// it wants; afterwards advance the consumed offset by its actual read
 		// position so a reading command (`cat`) still consumes the script.
 		execStdin := hc.Stdin
+		if _, ok := hc.Stdin.(badFdReader); ok {
+			// fd 0 was explicitly closed (`cmd <&-`). Give the child a
+			// genuinely closed descriptor — the read end of a pipe whose
+			// both ends are closed — so its read fails with EBADF, the way
+			// bash leaves the inherited fd closed. A fresh pipe is created
+			// per exec to avoid handing out a stale, possibly-reused fd.
+			if pr, pw, perr := os.Pipe(); perr == nil {
+				pr.Close()
+				pw.Close()
+				execStdin = pr
+			}
+		}
 		if sr, ok := hc.Stdin.(*scriptStdinReader); ok && hc.runner != nil {
 			if f, base := sr.seekableFile(); f != nil {
 				execStdin = f
