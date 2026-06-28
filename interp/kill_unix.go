@@ -24,42 +24,11 @@ func sigNum(s killSig) int     { return int(s) }
 
 const defaultTermSignal killSig = unix.SIGTERM
 
-// killSignals is the bash-compatible signal table for the `kill` builtin.
-// Order is the canonical numerical-ish listing bash uses for `kill -l`.
-var killSignals = []struct {
-	Name string
-	Sig  killSig
-}{
-	{"HUP", unix.SIGHUP},
-	{"INT", unix.SIGINT},
-	{"QUIT", unix.SIGQUIT},
-	{"ILL", unix.SIGILL},
-	{"TRAP", unix.SIGTRAP},
-	{"ABRT", unix.SIGABRT},
-	{"BUS", unix.SIGBUS},
-	{"FPE", unix.SIGFPE},
-	{"KILL", unix.SIGKILL},
-	{"USR1", unix.SIGUSR1},
-	{"SEGV", unix.SIGSEGV},
-	{"USR2", unix.SIGUSR2},
-	{"PIPE", unix.SIGPIPE},
-	{"ALRM", unix.SIGALRM},
-	{"TERM", unix.SIGTERM},
-	{"CHLD", unix.SIGCHLD},
-	{"CONT", unix.SIGCONT},
-	{"STOP", unix.SIGSTOP},
-	{"TSTP", unix.SIGTSTP},
-	{"TTIN", unix.SIGTTIN},
-	{"TTOU", unix.SIGTTOU},
-	{"URG", unix.SIGURG},
-	{"XCPU", unix.SIGXCPU},
-	{"XFSZ", unix.SIGXFSZ},
-	{"VTALRM", unix.SIGVTALRM},
-	{"PROF", unix.SIGPROF},
-	{"WINCH", unix.SIGWINCH},
-	{"IO", unix.SIGIO},
-	{"SYS", unix.SIGSYS},
-}
+// killSignals is the bash-compatible signal table for the `kill` builtin, in the
+// canonical numerical listing order bash uses for `kill -l`. It is defined
+// per-OS (kill_signals_linux.go / kill_signals_other.go) because the signal set
+// differs by platform — Linux carries SIGSTKFLT/SIGPWR and the realtime signals
+// SIGRTMIN..SIGRTMAX, which the BSDs/Darwin do not.
 
 // signalByName resolves a bash-style signal name to its numeric value.
 // Case-insensitive; accepts both "TERM" and "SIGTERM".
