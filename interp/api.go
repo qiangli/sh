@@ -677,10 +677,11 @@ type exitStatus struct {
 	code uint8
 
 	// TODO: consider an enum, as only one of these should be set at a time
-	returning bool // whether the current function `return`ed
-	exiting   bool // whether the current shell is exiting
-	fatalExit bool // whether the current shell is exiting due to a fatal error; err below must not be nil
-	noNegate  bool // whether a surrounding `!` must not invert this status
+	returning     bool // whether the current function `return`ed
+	exiting       bool // whether the current shell is exiting
+	fatalExit     bool // whether the current shell is exiting due to a fatal error; err below must not be nil
+	noNegate      bool // whether a surrounding `!` must not invert this status
+	errexitExempt bool // whether this failure inherited an errexit exemption
 
 	// discarding qualifies exiting: a variable-assignment error in a
 	// non-interactive non-POSIX shell aborts the current top-level

@@ -360,6 +360,7 @@ var runTests = []runTest{
 	{"unset -v 'never[1]'; echo $?", "0\n"},
 	{"set -e; { false && true; }; echo after", "after\n"},
 	{"set -e; { { false && true; }; }; echo nested", "nested\n"},
+	{"set -e; if true; then false && true; fi; echo reached", "reached\n"},
 	// tilde expansion in a ${param:+word} alternate word (like the :- default).
 	{"HOME=/h; echo ${HOME:+~/z}", "/h/z\n"},
 	{"HOME=/h; echo \"${HOME:+~/z}\"", "~/z\n"},
@@ -438,6 +439,7 @@ var runTests = []runTest{
 	{"exit 1 2", "exit: too many arguments\nexit status 2 #JUSTERR"},
 	{"f() { return a; }; f", "return: a: numeric argument required\nexit status 2 #JUSTERR"},
 	{"f() { return a; echo bad; }; f; echo after:$?", "return: a: numeric argument required\nafter:2\n #JUSTERR"},
+	{"f() { return -- 56; echo bad; }; f", "exit status 56"},
 	{"return 1 2", "return: too many arguments\nexit status 2 #JUSTERR"},
 
 	// echo
@@ -4560,6 +4562,8 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	{"readonly foo=bar; readonly bar=foo; export foo bar; echo $bar", "foo\n"},
 	// Assigning to a readonly variable via the export/readonly
 	// builtins fails with status 1 and keeps the old value.
+	{"a='1  *  2'; command command export A=$a; printf \"%s\\n\" \"$A\"", "1  *  2\n"},
+	{"a='1  *  2'; command command readonly A=$a; printf \"%s\\n\" \"$A\"", "1  *  2\n"},
 	{"readonly v=a; command export v=foo; echo after: $?; echo $v", "v: readonly variable\nafter: 1\na\n"},
 	{"readonly v=a; command readonly v=foo; echo after: $?; echo $v", "v: readonly variable\nafter: 1\na\n"},
 	// POSIX mode implies shift_verbose.

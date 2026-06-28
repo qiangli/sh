@@ -3015,6 +3015,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			return exit
 		}
 	case "return":
+		if len(args) > 0 && args[0] == "--" {
+			args = args[1:]
+		}
 		if len(args) > 1 {
 			msg := r.bashErrPrefix(pos) + "return: too many arguments"
 			r.errf("%s\n", msg)

@@ -4815,7 +4815,7 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 		} else {
 			r.exit.clear()
 		}
-	} else if errExitExemptByAndOr(st.Cmd) {
+	} else if errExitExemptByAndOr(st.Cmd) || r.exit.errexitExempt {
 	} else if !r.exit.ok() && !r.noErrExit {
 		if !r.inFunc {
 			prevLineno := r.ecfg.OverrideLineno
@@ -4890,6 +4890,29 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 			}
 		}
 	}
+}
+
+func (r *Runner) commandPrefixDeclArgs(args []*syntax.Word) (string, []string, bool) {
+	i := 0
+	for i < len(args) && args[i].Lit() == "command" {
+		i++
+	}
+	if i == 0 || i >= len(args) {
+		return "", nil, false
+	}
+	name := args[i].Lit()
+	if name != "export" && name != "readonly" {
+		return "", nil, false
+	}
+	bargs := make([]string, 0, len(args)-i-1)
+	for _, arg := range args[i+1:] {
+		field := r.literalForAssign(arg)
+		if _, _, ok := splitAssignmentField(field); !ok {
+			return "", nil, false
+		}
+		bargs = append(bargs, field)
+	}
+	return name, bargs, len(bargs) > 0
 }
 
 func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
@@ -5094,6 +5117,10 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			return
 		}
 		if r.integerArrayAssignWithArithSuffix(cm, args) {
+			return
+		}
+		if name, bargs, ok := r.commandPrefixDeclArgs(args); ok {
+			r.exit = r.builtin(ctx, cm.Args[0].Pos(), name, bargs)
 			return
 		}
 		r.lastExpandExit = exitStatus{}
@@ -5780,6 +5807,9 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 
 		if r.exit.ok() {
 			r.stmts(ctx, cm.Then)
+			if !r.exit.ok() && stmtsEndErrexitExempt(cm.Then) {
+				r.exit.errexitExempt = true
+			}
 			return
 		}
 		r.exit.clear()
@@ -7109,6 +7139,9 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 								if err != nil {
 									r.errf("%s%s: %v\n", r.bashErrPrefix(r.curStmtPos), name, err)
 									r.exit.code = 1
+									if r.opts[optPosix] && !r.interactiveShell && !r.opts[optRestricted] {
+										r.exit.exiting = true
+									}
 								}
 								continue
 							}
@@ -7116,6 +7149,10 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 					}
 				}
 				r.setVar(name, vr)
+				if (cm.Variant.Value == "readonly" || cm.Variant.Value == "export") &&
+					!r.exit.ok() && r.opts[optPosix] && !r.interactiveShell && !r.opts[optRestricted] {
+					r.exit.exiting = true
+				}
 			}
 		}
 		// Handle declare -F/-f with no arguments: list all functions.
@@ -9088,6 +9125,13 @@ func errExitExemptByAndOr(cmd syntax.Command) bool {
 		if n := len(c.Stmts); n > 0 {
 			return errExitExemptByAndOr(c.Stmts[n-1].Cmd)
 		}
+	}
+	return false
+}
+
+func stmtsEndErrexitExempt(stmts []*syntax.Stmt) bool {
+	if n := len(stmts); n > 0 {
+		return errExitExemptByAndOr(stmts[n-1].Cmd)
 	}
 	return false
 }
