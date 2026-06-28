@@ -5445,6 +5445,10 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		}
 		if assignFailed {
 			if r.opts[optPosix] {
+				if r.subshellLevel > 0 && !r.interactiveShell {
+					r.exit.exiting = true
+					break
+				}
 				if isPosixSpecialBuiltin(fields[0]) && !r.interactiveShell {
 					r.exit.exiting = true
 					break
