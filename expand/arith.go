@@ -20,6 +20,11 @@ type ArithmError struct {
 	Expr syntax.ArithmExpr
 	Text string
 	Err  error
+	// Standalone marks an error from a top-level `$(( ))` / `$[ ]` word part (as
+	// opposed to an array subscript or a nested operand). Bash 5.3 treats a
+	// *parse* error in a standalone arithmetic expansion as fatal to the command,
+	// so the runner fires that only for this shape.
+	Standalone bool
 }
 
 func (e *ArithmError) Error() string { return e.Err.Error() }

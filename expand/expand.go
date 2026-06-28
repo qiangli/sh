@@ -2365,7 +2365,7 @@ func (cfg *Config) wordField(wps []syntax.WordPart, ql quoteLevel) ([]fieldPart,
 		case *syntax.ArithmExp:
 			n, err := Arithm(cfg, wp.X)
 			if err != nil {
-				return nil, &ArithmError{Expr: wp.X, Err: err}
+				return nil, &ArithmError{Expr: wp.X, Err: err, Standalone: true}
 			}
 			field = append(field, fieldPart{val: strconv.Itoa(n)})
 		case *syntax.ProcSubst:
@@ -3342,7 +3342,7 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 		case *syntax.ArithmExp:
 			n, err := Arithm(cfg, wp.X)
 			if err != nil {
-				return nil, &ArithmError{Expr: wp.X, Err: err}
+				return nil, &ArithmError{Expr: wp.X, Err: err, Standalone: true}
 			}
 			splitAdd(strconv.Itoa(n))
 		case *syntax.ProcSubst:

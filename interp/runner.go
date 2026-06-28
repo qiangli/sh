@@ -373,6 +373,21 @@ func (r *Runner) updateExpandOpts() {
 	r.ecfg.Posix = r.opts[optPosix]
 }
 
+// standaloneArithParseError reports whether err is a parse/syntax error from a
+// top-level `$(( ))` expansion (ArithmError.Standalone) — as opposed to an array
+// subscript, a malformed length substitution, or arithmetic recursion. Bash 5.3
+// makes such a parse error fatal to the command (status 1).
+func standaloneArithParseError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var ae *expand.ArithmError
+	if errors.As(err, &ae) && ae.Standalone {
+		return strings.Contains(ae.Error(), "arithmetic syntax error")
+	}
+	return false
+}
+
 func (r *Runner) expandErr(err error) {
 	if err == nil {
 		return
@@ -5148,6 +5163,14 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		r.lastExpandExit = exitStatus{}
 		fields, expandErr := expand.Fields(r.ecfg, args...)
 		r.expandErr(expandErr)
+		if standaloneArithParseError(expandErr) {
+			// A standalone `$(( ))` PARSE error (e.g. `echo $((--))`) is fatal to
+			// the command in bash 5.3: status 1, the command does not run. Array
+			// subscripts, malformed length substitutions, and arithmetic recursion
+			// stay non-fatal (they have their own bash-faithful handling).
+			r.exit.code = 1
+			return
+		}
 		if expandErr != nil && strings.Contains(expandErr.Error(), "bad array subscript") &&
 			!strings.HasPrefix(expandErr.Error(), "[") {
 			fields = fields[:0]
