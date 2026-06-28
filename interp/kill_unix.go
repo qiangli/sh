@@ -19,6 +19,9 @@ import (
 
 type killSig = syscall.Signal
 
+func sigIsZero(s killSig) bool { return s == 0 }
+func sigNum(s killSig) int     { return int(s) }
+
 const defaultTermSignal killSig = unix.SIGTERM
 
 // killSignals is the bash-compatible signal table for the `kill` builtin.

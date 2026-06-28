@@ -21,6 +21,9 @@ type killSig struct {
 	Signal os.Signal
 }
 
+func sigIsZero(s killSig) bool { return s.Num == 0 }
+func sigNum(s killSig) int     { return s.Num }
+
 const defaultTermSignalNum = 15
 
 var defaultTermSignal = killSig{Name: "TERM", Num: defaultTermSignalNum, Signal: os.Kill}

@@ -1611,8 +1611,8 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 						// Background subshells inherit the trap table but not
 						// the parent's signal.Notify ownership. Fall through to
 						// a real OS signal so the foreground parent receives it.
-					} else if sig != 0 {
-						exit.code = uint8(128 + int(sig))
+					} else if !sigIsZero(sig) {
+						exit.code = uint8(128 + sigNum(sig))
 						exit.exiting = true
 						return exit
 					}
