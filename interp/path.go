@@ -54,6 +54,11 @@ func shellPathToOSMode(dir, path string, windows bool) string {
 	if len(path) >= 2 && isWindowsDriveLetter(path[0]) && path[1] == ':' {
 		return windowsClean(path)
 	}
+	// MSYS/Git-Bash drive convention: /c or /c/... -> C:\... — the way every
+	// Windows dev tool spells a drive as a POSIX path, so scripts stay portable.
+	if drive, rest, ok := msysDrivePath(path); ok {
+		return windowsClean(drive + ":" + rest)
+	}
 	if !strings.HasPrefix(path, "/") && !strings.HasPrefix(path, `\`) {
 		return path
 	}
@@ -87,4 +92,21 @@ func isWindowsDriveLetter(c byte) bool {
 
 func isWindowsSlash(c byte) bool {
 	return c == '/' || c == '\\'
+}
+
+// msysDrivePath recognizes the MSYS/Git-Bash drive convention "/c" or "/c/...":
+// a leading forward slash, a drive letter, then end-of-string or a slash. It
+// returns the UPPERCASE drive letter and the remainder beginning with "/"
+// ("/c" -> "C","/"; "/c/Users" -> "C","/Users"). A bare "/foo" is left to the
+// volume-prepend fallback (it is not a drive reference).
+func msysDrivePath(path string) (drive, rest string, ok bool) {
+	if len(path) >= 2 && path[0] == '/' && isWindowsDriveLetter(path[1]) &&
+		(len(path) == 2 || isWindowsSlash(path[2])) {
+		r := path[2:]
+		if r == "" {
+			r = "/"
+		}
+		return string(path[1] &^ 0x20), r, true // &^0x20 = ASCII upper
+	}
+	return "", "", false
 }

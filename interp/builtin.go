@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"slices"
 	"sort"
 	"strconv"
@@ -6780,6 +6781,26 @@ func (r *Runner) changeDir(ctx context.Context, cmd, path string, physical ...bo
 // handling relative paths. This matches `bash --posix` behaviour: non-existing
 // or non-directory intermediate components cause an immediate error.
 func (r *Runner) resolveCdPath(ctx context.Context, path string, physical bool) (string, error) {
+	// On Windows, map a drive/MSYS path (/c/foo, C:\foo) to an OS path and, when
+	// it is absolute, resolve it directly — the POSIX base="/" + split/join below
+	// does not understand Windows drive roots (filepath.IsAbs("/c/x") is false).
+	if runtime.GOOS == "windows" {
+		if osp := shellPathToOSMode(r.Dir, path, true); filepath.IsAbs(osp) {
+			info, err := r.stat(ctx, osp)
+			if err != nil {
+				return "", err
+			}
+			if !info.IsDir() {
+				return "", fmt.Errorf("Not a directory")
+			}
+			if physical {
+				if resolved, err := filepath.EvalSymlinks(osp); err == nil {
+					osp = resolved
+				}
+			}
+			return osp, nil
+		}
+	}
 	// Determine the base directory for relative paths.
 	base := r.Dir
 	if physical {

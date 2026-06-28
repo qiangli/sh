@@ -56,6 +56,38 @@ func TestShellPathWindowsRootTranslation(t *testing.T) {
 			wantOS:      `C:\bin\sh`,
 			wantAbsPath: `C:\bin\sh`,
 		},
+		{
+			name:        "msys drive /c maps to C:",
+			dir:         `C:\work`,
+			path:        `/c/Users/Lern`,
+			wantAbs:     true,
+			wantOS:      `C:\Users\Lern`,
+			wantAbsPath: `C:\Users\Lern`,
+		},
+		{
+			name:        "msys drive /d maps to D: regardless of cwd",
+			dir:         `C:\work`,
+			path:        `/d/foo/bar`,
+			wantAbs:     true,
+			wantOS:      `D:\foo\bar`,
+			wantAbsPath: `D:\foo\bar`,
+		},
+		{
+			name:        "msys bare /c is the drive root",
+			dir:         `C:\work`,
+			path:        `/c`,
+			wantAbs:     true,
+			wantOS:      `C:\`,
+			wantAbsPath: `C:\`,
+		},
+		{
+			name:        "single-letter dir under root is not a drive ref",
+			dir:         `C:\work`,
+			path:        `/bin`,
+			wantAbs:     true,
+			wantOS:      `C:\bin`,
+			wantAbsPath: `C:\bin`,
+		},
 	}
 
 	for _, tt := range tests {
