@@ -733,7 +733,7 @@ func QuoteMeta(pat string, mode Mode) string {
 loop:
 	for _, r := range pat {
 		switch r {
-		case '*', '?', '[', '\\':
+		case '*', '?', '[', ']', '\\':
 			needsEscaping = true
 			break loop
 		case '@', '+', '!', '(', ')', '|':
@@ -749,7 +749,7 @@ loop:
 	var sb strings.Builder
 	for _, r := range pat {
 		switch r {
-		case '*', '?', '[', '\\':
+		case '*', '?', '[', ']', '\\':
 			sb.WriteByte('\\')
 		case '@', '+', '!', '(', ')', '|':
 			if mode&ExtendedOperators != 0 {
