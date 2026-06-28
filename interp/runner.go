@@ -5159,10 +5159,6 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				fields = append(fields, argFields...)
 			}
 		}
-		if expandErr != nil && strings.Contains(expandErr.Error(), "arithmetic syntax error") {
-			r.exit.code = 1
-			break
-		}
 		if len(args) > 1 && args[0].Lit() == "unset" {
 			fields = []string{"unset"}
 			for _, arg := range args[1:] {
