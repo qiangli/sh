@@ -1877,6 +1877,13 @@ func (r *Runner) setIgnoreEOFOption(enable bool) {
 		r.noOpSetState = make(map[string]bool)
 	}
 	r.noOpSetState["ignoreeof"] = enable
+	// When `-o ignoreeof` is applied via [Params] at construction time (before
+	// the first [Runner.Reset]), the variable environment is not set up yet, so
+	// the IGNOREEOF assignment below would nil-panic. Record the option state
+	// only; Reset re-applies the variable once writeEnv exists.
+	if r.writeEnv == nil {
+		return
+	}
 	r.settingIgnoreEOFOption = true
 	if enable {
 		r.setVarString("IGNOREEOF", "10")

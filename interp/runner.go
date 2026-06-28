@@ -434,6 +434,18 @@ func (r *Runner) expandErr(err error) {
 	}
 	switch {
 	case errors.As(err, &expand.UnsetParameterError{}):
+		if r.interactiveShell {
+			// Bash: an unset-parameter expansion error (`${a?}`,
+			// `${a:?}`) is fatal for a non-interactive shell but
+			// merely prints the diagnostic, sets $? = 1, and aborts
+			// the current command in an interactive shell — the shell
+			// keeps reading input.
+			r.exit.code = 1
+			r.lastExpandExit = exitStatus{code: 1}
+			r.exit.exiting = true
+			r.exit.discarding = true
+			return
+		}
 	case strings.Contains(errMsg, "readonly variable"):
 		r.exit.code = 1
 		// Bash: a variable-assignment error during word expansion
@@ -5247,7 +5259,11 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 					// do not apply to readonly-assignment errors), so
 					// don't downgrade it to a rest-of-line discard.
 					r.exit.exiting = true
-					if !r.opts[optPosix] && !r.opts[optErrExit] {
+					if (!r.opts[optPosix] || r.interactiveShell) && !r.opts[optErrExit] {
+						// An assignment error spares an interactive shell
+						// even in POSIX mode: the current command is
+						// discarded (DISCARD longjmp) but the shell keeps
+						// reading input rather than exiting.
 						r.exit.discarding = true
 						// A standalone assignment to a readonly variable
 						// also aborts the remaining statements on the same
@@ -5863,7 +5879,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 					r.errf("%s%s: readonly variable\n",
 						r.bashErrPrefix(r.curStmtPos), name)
 					r.exit.code = 1
-					if r.opts[optPosix] {
+					if r.opts[optPosix] && !r.interactiveShell {
 						r.exit.exiting = true
 					}
 					break

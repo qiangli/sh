@@ -237,6 +237,10 @@ type Runner struct {
 	// reassignments of BASH_ARGV0.
 	argv0 string
 
+	// origArgv0 preserves an explicitly configured argv0 (see [WithArgv0])
+	// across [Runner.Reset], which otherwise zeroes the live argv0.
+	origArgv0 string
+
 	// >0 to break or continue out of N enclosing loops
 	breakEnclosing, contnEnclosing int
 
@@ -1680,6 +1684,20 @@ func WithIncrementalFilename(name string) RunnerOption {
 	}
 }
 
+// WithArgv0 sets the shell's $0 (and initial $BASH_ARGV0) explicitly,
+// independent of the filename used for error-message prefixes. A standalone
+// shell uses this for the `-s` / stdin / interactive invocation forms, where
+// bash reports $0 as the name the shell was invoked with (argv[0]) even though
+// no script file is being run. The value survives [Runner.Reset]; user code can
+// still override it at runtime by assigning to $BASH_ARGV0.
+func WithArgv0(name string) RunnerOption {
+	return func(r *Runner) error {
+		r.argv0 = name
+		r.origArgv0 = name
+		return nil
+	}
+}
+
 func WithInheritedFds(fds []int) RunnerOption {
 	return func(r *Runner) error {
 		if len(fds) == 0 {
@@ -2170,6 +2188,11 @@ func (r *Runner) Reset() {
 		stdout:       r.origStdout,
 		stderr:       r.origStderr,
 
+		// Restore an explicitly configured $0 (see [WithArgv0]); a plain
+		// runner leaves both empty so the filename-based default applies.
+		argv0:     r.origArgv0,
+		origArgv0: r.origArgv0,
+
 		origDir:          r.origDir,
 		origParams:       r.origParams,
 		origOpts:         r.origOpts,
@@ -2287,6 +2310,13 @@ func (r *Runner) Reset() {
 	// captured during New, but writeEnv only exists now, so apply it here.
 	if r.opts[optRestricted] {
 		r.markRestrictedVarsReadonly()
+	}
+
+	// `-o ignoreeof` set via [Params] at construction is recorded in
+	// noOpSetState but its IGNOREEOF variable was deferred (writeEnv did not
+	// exist yet); apply it now that the variable environment is ready.
+	if r.noOpSetState["ignoreeof"] {
+		r.setIgnoreEOFOption(true)
 	}
 
 	r.didReset = true
