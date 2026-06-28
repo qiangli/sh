@@ -46,3 +46,19 @@ jobs:
       run: diff <(echo -n) <(gofmt -s -d .)
     - if: matrix.os == 'ubuntu-latest' && matrix.go-version == '1.26.x'
       run: go vet ./...
+
+  # Build (not test) sh natively on Windows: validates the Windows toolchain path
+  # for real (killSig, the /c/ path mapping, etc.). The interp test suite hangs on
+  # a Windows runner (readline/PTY), so the test-run stays deferred.
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+    - uses: actions/checkout@v5
+    - uses: actions/setup-go@v6
+      with:
+        go-version: 1.26.x
+        cache: false
+    - run: go build ./...
+    - run: cd moreinterp && go build ./...
+    - run: go vet ./...
