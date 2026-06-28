@@ -3344,7 +3344,7 @@ func (cfg *Config) wordFields(wps []syntax.WordPart) ([][]fieldPart, error) {
 			if err != nil {
 				return nil, &ArithmError{Expr: wp.X, Err: err}
 			}
-			curField = append(curField, fieldPart{val: strconv.Itoa(n)})
+			splitAdd(strconv.Itoa(n))
 		case *syntax.ProcSubst:
 			path, err := cfg.ProcSubst(wp)
 			if err != nil {

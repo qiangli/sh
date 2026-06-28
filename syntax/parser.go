@@ -321,13 +321,35 @@ func (p *Parser) StmtsSeq(r io.Reader) iter.Seq2[*Stmt, error] {
 	p.f = &File{}
 	p.src = r
 	return func(yield func(*Stmt, error) bool) {
+		var pending []*Stmt
+		flush := func(err error) bool {
+			for _, stmt := range pending {
+				if !yield(stmt, err) {
+					return false
+				}
+			}
+			pending = pending[:0]
+			return true
+		}
 		p.rune()
 		p.next()
-		p.stmts(yield)
+		p.stmts(func(stmt *Stmt, err error) bool {
+			if stmt == nil {
+				return flush(err) && yield(nil, err)
+			}
+			if len(p.heredocs) > p.buriedHdocs {
+				pending = append(pending, stmt)
+				return true
+			}
+			return flush(err) && yield(stmt, err)
+		})
 		if p.err == nil {
 			// EOF immediately after heredoc word so no newline to
 			// trigger the parsing error.
 			p.doHeredocs()
+		}
+		if !flush(p.err) {
+			return
 		}
 		if p.err != nil {
 			// Yield any final error from the parser.
@@ -1735,6 +1757,9 @@ func (p *Parser) paramExp() *ParamExp {
 		Dollar: p.pos,
 		Short:  p.tok == dollar,
 	}
+	if !pe.Short {
+		p.skipEscNewl()
+	}
 	if !pe.Short && p.r == '(' {
 		p.checkLang(pe.Pos(), LangZsh, `parameter expansion flags`)
 		// For now, for simplicity, we parse flags as just a literal.
@@ -1847,6 +1872,7 @@ zshPrefixLoop:
 			return p.deferBadSubst(pe, old)
 		}
 	}
+	p.skipEscNewl()
 	if pe = p.paramExpParameter(pe); pe == nil {
 		p.quote = old
 		return nil // just "$"
@@ -1863,6 +1889,7 @@ zshPrefixLoop:
 		p.next()
 		return pe
 	}
+	p.skipEscNewl()
 	// Index expressions like ${foo[1]}. Note that expansion suffixes can be combined,
 	// like ${foo[@]//replace/with}.
 	if p.r == '[' {
@@ -2040,6 +2067,12 @@ zshPrefixLoop:
 	return pe
 }
 
+func (p *Parser) skipEscNewl() {
+	for p.r == escNewl {
+		p.rune()
+	}
+}
+
 // badSubstRemainder consumes the raw remainder of a parameter
 // expansion up to its matching `}` for operators which bash accepts
 // at parse time but rejects at expansion time, such as `${x!y}` or
@@ -2088,6 +2121,11 @@ func (p *Parser) deferBadSubst(pe *ParamExp, old quoteState) *ParamExp {
 
 func (p *Parser) paramNameStart() bool {
 	r := p.peek()
+	if r == '\\' {
+		if p1, p2 := p.peekTwo(); p1 == '\\' && (p2 == '\n' || p2 == '\r') {
+			r = 'a'
+		}
+	}
 	if r == utf8.RuneSelf || singleRuneParam(r) || paramNameRune(r) || r == '"' {
 		p.rune()
 		return true
