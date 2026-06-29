@@ -139,7 +139,13 @@ func IsBuiltin(name string) bool {
 		// Agentic extensions — bashy-specific introspection. Surfaces
 		// runner state as JSON so harnesses can observe and assert on
 		// what the shell is doing. See docs/agentic-extensions.md.
-		"runner-state":
+		"runner-state",
+
+		// Agentic extension — "alter working directory": run one command
+		// with the cwd temporarily set to DIR, without changing the shell's
+		// own cwd (unlike cd/pushd). Bashy-only; suppressed in the pure bash
+		// drop-in. See docs/agentic-tooling-modernization.md.
+		"awd":
 		return true
 	}
 	return false
@@ -1262,6 +1268,53 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		if printPath && exit.code == 0 {
 			r.outf("%s\n", path)
 		}
+	case "awd":
+		// awd DIR [--] command [args...] — "alter working directory": run the
+		// command with the cwd temporarily set to DIR, then fully restore the
+		// shell's cwd (and PWD/OLDPWD/dirStack), so the change is ephemeral
+		// (unlike cd/pushd, which persist). Lets an agent run a one-off command
+		// elsewhere without the `cd x && cmd` state leak that strands the next
+		// command in the wrong directory.
+		if len(args) == 0 {
+			return failf(2, "awd: usage: awd directory [--] command [args...]\n")
+		}
+		dir := args[0]
+		args = args[1:]
+		if len(args) > 0 && args[0] == "--" {
+			args = args[1:]
+		}
+		if len(args) == 0 {
+			return failf(2, "awd: command required\n")
+		}
+		// Snapshot the live cwd state so it can be restored verbatim.
+		savedDir := r.Dir
+		savedPWD := r.envGet("PWD")
+		savedOLDPWD := r.envGet("OLDPWD")
+		savedTop := ""
+		if len(r.dirStack) > 0 {
+			savedTop = r.dirStack[len(r.dirStack)-1]
+		}
+		// Reuse changeDir for cd-identical validation + error wording (it sets
+		// r.Dir/PWD/OLDPWD/dirStack); the deferred restore is what makes it
+		// ephemeral.
+		if code := r.changeDir(ctx, "awd", dir); code != 0 {
+			exit.code = code
+			return exit
+		}
+		defer func() {
+			r.Dir = savedDir
+			if len(r.dirStack) > 0 {
+				r.dirStack[len(r.dirStack)-1] = savedTop
+			}
+			r.setExportedVarString("PWD", savedPWD)
+			r.setExportedVarString("OLDPWD", savedOLDPWD)
+		}()
+		// Run the command word through the normal dispatch path (handles
+		// functions, builtins, and external commands uniformly) on the already
+		// post-expansion argv. Propagate its full exit (code + exiting/returning
+		// so `awd dir exit 3` / `return` behave).
+		r.call(ctx, pos, args)
+		exit = r.exit
 	case "wait":
 		fp := flagParser{remaining: args}
 		waitNext := false
