@@ -5850,6 +5850,13 @@ func dirStackIndex(length int, sign byte, idx int) int {
 	return idx
 }
 
+// BuiltinNames returns the names of all POSIX and Bash builtins this
+// interpreter implements — the same set `compgen -b` reports. The slice is
+// freshly allocated, so callers may sort or mutate it freely.
+func BuiltinNames() []string {
+	return bashBuiltinNames()
+}
+
 func bashBuiltinNames() []string {
 	return []string{
 		".", ":", "[", "alias", "bg", "bind", "break", "builtin",
