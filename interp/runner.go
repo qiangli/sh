@@ -4489,6 +4489,7 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 	r.exit = exitStatus{}
 	if st.Background || st.Disown {
 		r2 := r.subshell(true)
+		r2.inheritedBang = r.lastBangProc()
 		if r.opts[optPosix] {
 			f, err := os.Open(os.DevNull)
 			if err == nil {
@@ -4548,6 +4549,13 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 	if stmtUpdatesPipeStatus(st) {
 		r.pipeStatus = []string{strconv.Itoa(int(r.exit.code))}
 	}
+}
+
+func (r *Runner) lastBangProc() *bgProc {
+	if n := len(r.bgProcs); n > 0 {
+		return r.bgProcs[n-1]
+	}
+	return r.inheritedBang
 }
 
 // stmtUpdatesPipeStatus reports whether finishing st should overwrite
@@ -8106,18 +8114,44 @@ func (r *Runner) allocateFd() (int, bool) {
 	return -1, false
 }
 
-func (r *Runner) execExtraFiles() ([]*os.File, string) {
+func (r *Runner) execExtraFiles() ([]*os.File, string, func()) {
 	var extra []*os.File
 	var fds []string
+	var cleanup []func()
 	for fd := 3; ; fd++ {
 		f, ok := r.fdTable[fd]
+		if !ok {
+			if w, wok := r.fdWriteTable[fd].(*os.File); wok {
+				f, ok = w, true
+			} else if w, wok := r.fdWriteTable[fd]; wok {
+				pr, pw, err := os.Pipe()
+				if err != nil {
+					break
+				}
+				done := make(chan struct{})
+				go func() {
+					_, _ = io.Copy(w, pr)
+					_ = pr.Close()
+					close(done)
+				}()
+				f, ok = pw, true
+				cleanup = append(cleanup, func() {
+					_ = pw.Close()
+					<-done
+				})
+			}
+		}
 		if !ok {
 			break
 		}
 		extra = append(extra, f)
 		fds = append(fds, strconv.Itoa(fd))
 	}
-	return extra, strings.Join(fds, ",")
+	return extra, strings.Join(fds, ","), func() {
+		for _, fn := range cleanup {
+			fn()
+		}
+	}
 }
 
 func (r *Runner) closeUnmanagedInheritedFdsOnExec() {

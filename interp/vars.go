@@ -657,9 +657,9 @@ func (r *Runner) lookupVar(name string) expand.Variable {
 		// can't hang. Falls back to the legacy "g<N>" sentinel when
 		// no real exec ever happened — `wait g<N>` still works against
 		// that for pure-builtin backgrounds.
-		if n := len(r.bgProcs); n > 0 {
-			bg := r.bgProcs[n-1]
+		if bg := r.lastBangProc(); bg != nil {
 			<-bg.pidReady
+			vr.Set = true
 			if pid := bg.pid.Load(); pid > 0 {
 				vr.Kind, vr.Str = expand.String, strconv.FormatInt(pid, 10)
 			} else {

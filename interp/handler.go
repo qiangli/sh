@@ -192,7 +192,8 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 		if hc.ExecAs != "" {
 			cmdArgs = append([]string{hc.ExecAs}, args[1:]...)
 		}
-		extraFiles, inheritedFds := hc.runner.execExtraFiles()
+		extraFiles, inheritedFds, closeExtraFiles := hc.runner.execExtraFiles()
+		defer closeExtraFiles()
 		var env []string
 		if hc.ExecClearEnv {
 			env = []string{}

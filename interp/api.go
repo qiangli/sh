@@ -374,6 +374,12 @@ type Runner struct {
 	// subshells do not share nor inherit the background PIDs they can wait for.
 	bgProcs []*bgProc
 
+	// inheritedBang is the caller's most recent background job, visible
+	// only through $! in subshells. It is intentionally not waitable by
+	// this runner; bash lets a subshell expand $! from its parent but
+	// still reports "not a child of this shell" for wait $!.
+	inheritedBang *bgProc
+
 	// jobsReadOnly is set for command substitutions that may display the
 	// parent's job table via `jobs` but may not manipulate those jobs with
 	// `fg` or `bg`.
@@ -2557,6 +2563,7 @@ func (r *Runner) subshell(background bool) *Runner {
 		exit:                 r.exit,
 		lastExit:             r.lastExit,
 		bgPidCallback:        r.bgPidCallback,
+		inheritedBang:        r.lastBangProc(),
 		cmdHashTable:         maps.Clone(r.cmdHashTable),
 
 		origStdout: r.origStdout, // used for process substitutions
