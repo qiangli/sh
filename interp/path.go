@@ -69,6 +69,37 @@ func shellPathToOSMode(dir, path string, windows bool) string {
 	return windowsClean(vol + path)
 }
 
+func shellPathFromOS(path string) string {
+	return shellPathFromOSMode(path, runtime.GOOS == "windows")
+}
+
+func shellPathFromOSMode(path string, windows bool) string {
+	if !windows || path == "" {
+		return path
+	}
+	p := strings.ReplaceAll(path, `\`, "/")
+	if len(p) >= 2 && isWindowsDriveLetter(p[0]) && p[1] == ':' {
+		rest := p[2:]
+		if rest == "" {
+			rest = "/"
+		} else if rest[0] != '/' {
+			rest = "/" + rest
+		}
+		drive := p[0]
+		if 'A' <= drive && drive <= 'Z' {
+			drive += 'a' - 'A'
+		}
+		return "/" + string(drive) + rest
+	}
+	if strings.HasPrefix(p, "//") {
+		return p
+	}
+	if strings.HasPrefix(p, "/") {
+		return p
+	}
+	return p
+}
+
 func windowsClean(path string) string {
 	if runtime.GOOS == "windows" {
 		return filepath.Clean(filepath.FromSlash(path))

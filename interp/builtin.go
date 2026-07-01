@@ -1172,17 +1172,18 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		pwd := r.envGet("PWD")
 		if evalSymlinks {
 			var err error
-			pwd, err = filepath.EvalSymlinks(pwd)
+			pwd, err = filepath.EvalSymlinks(shellPathToOS(r.Dir, pwd))
 			if err != nil {
 				exit.fatal(err) // perhaps overly dramatic?
 				return exit
 			}
-		} else if !filepath.IsAbs(pwd) {
+			pwd = shellPathFromOS(pwd)
+		} else if !shellPathAbs(pwd) {
 			// Logical pwd: $PWD is authoritative only when it is an
 			// absolute pathname. A clobbered/relative $PWD (e.g.
 			// `PWD=foo; pwd`) must NOT be echoed back — bash falls back to
 			// the tracked current directory.
-			pwd = r.Dir
+			pwd = shellPathFromOS(r.Dir)
 		}
 		r.outf("%s\n", pwd)
 	case "cd":
@@ -6831,7 +6832,7 @@ func (r *Runner) changeDir(ctx context.Context, cmd, path string, physical ...bo
 	// bash keeps both PWD and OLDPWD exported across every cd (they show
 	// up in `env` and in child process environments).
 	r.setExportedVarString("OLDPWD", r.envGet("PWD"))
-	r.setExportedVarString("PWD", apath)
+	r.setExportedVarString("PWD", shellPathFromOS(apath))
 	return 0
 }
 

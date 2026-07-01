@@ -105,6 +105,29 @@ func TestShellPathWindowsRootTranslation(t *testing.T) {
 	}
 }
 
+func TestShellPathWindowsFromOSTranslation(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		path string
+		want string
+	}{
+		{name: "drive root", path: `C:\`, want: "/c/"},
+		{name: "drive path", path: `C:\Users\Lern`, want: "/c/Users/Lern"},
+		{name: "lowercase drive", path: `d:\work\repo`, want: "/d/work/repo"},
+		{name: "mixed slash drive", path: `E:/tmp/file`, want: "/e/tmp/file"},
+		{name: "unc path", path: `\\server\share\dir`, want: "//server/share/dir"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shellPathFromOSMode(tt.path, true); got != tt.want {
+				t.Fatalf("wrong shell path:\nwant: %q\ngot:  %q", tt.want, got)
+			}
+		})
+	}
+}
+
 func TestShellPathPosixTranslation(t *testing.T) {
 	t.Parallel()
 

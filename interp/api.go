@@ -2279,7 +2279,7 @@ func (r *Runner) Reset() {
 	}
 	if !r.writeEnv.Get("HOME").IsSet() {
 		home, _ := os.UserHomeDir()
-		r.setVarString("HOME", home)
+		r.setVarString("HOME", shellPathFromOS(home))
 	}
 	if !r.writeEnv.Get("UID").IsSet() {
 		r.setVar("UID", expand.Variable{
@@ -2305,7 +2305,7 @@ func (r *Runner) Reset() {
 			Str:      strconv.Itoa(os.Getgid()),
 		})
 	}
-	r.setVarString("PWD", r.Dir)
+	r.setVarString("PWD", shellPathFromOS(r.Dir))
 	r.setVarString("IFS", " \t\n")
 	r.setVarString("OPTIND", "1")
 	if r.opts[optPosix] && !r.writeEnv.Get("POSIXLY_CORRECT").IsSet() {
