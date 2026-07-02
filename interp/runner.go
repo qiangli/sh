@@ -4606,11 +4606,13 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 	var oldFdTable map[int]*os.File
 	var oldFdReadTable map[int]bool
 	var oldFdWriteTable map[int]io.Writer
+	var oldFdClosedTable map[int]bool
 	var modifiedFds []int
 	if len(st.Redirs) > 0 {
 		oldFdTable = maps.Clone(r.fdTable)
 		oldFdReadTable = maps.Clone(r.fdReadTable)
 		oldFdWriteTable = maps.Clone(r.fdWriteTable)
+		oldFdClosedTable = maps.Clone(r.fdClosedTable)
 	}
 	persistNamedRedirs := false
 	varredirClose := false
@@ -4819,6 +4821,18 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 					modifiedFds = append(modifiedFds, fd)
 				}
 			}
+			// Find modified fds in fdClosedTable
+			for fd, closed := range r.fdClosedTable {
+				oldClosed, existed := oldFdClosedTable[fd]
+				if !existed || oldClosed != closed {
+					modifiedFds = append(modifiedFds, fd)
+				}
+			}
+			for fd := range oldFdClosedTable {
+				if _, exists := r.fdClosedTable[fd]; !exists {
+					modifiedFds = append(modifiedFds, fd)
+				}
+			}
 
 			if len(modifiedFds) > 0 {
 				uniqueFds := make(map[int]bool)
@@ -4887,6 +4901,7 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 				r.fdTable = oldFdTable
 				r.fdReadTable = oldFdReadTable
 				r.fdWriteTable = oldFdWriteTable
+				r.fdClosedTable = oldFdClosedTable
 			} else {
 				for _, fd := range modifiedFds {
 					// Restore fdTable
@@ -4918,6 +4933,16 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 					} else if r.fdWriteTable != nil {
 						delete(r.fdWriteTable, fd)
 					}
+
+					// Restore fdClosedTable
+					if oldClosed, existed := oldFdClosedTable[fd]; existed {
+						if r.fdClosedTable == nil {
+							r.fdClosedTable = make(map[int]bool)
+						}
+						r.fdClosedTable[fd] = oldClosed
+					} else if r.fdClosedTable != nil {
+						delete(r.fdClosedTable, fd)
+					}
 				}
 			}
 			// A coprocess reaped during this statement (e.g.
@@ -4927,11 +4952,20 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 				delete(r.fdTable, fd)
 				delete(r.fdReadTable, fd)
 				delete(r.fdWriteTable, fd)
+				delete(r.fdClosedTable, fd)
 			}
 			for fd := range r.redirMoveCloseFds {
 				delete(r.fdTable, fd)
 				delete(r.fdReadTable, fd)
 				delete(r.fdWriteTable, fd)
+				if r.inheritedFds[fd] {
+					if r.fdClosedTable == nil {
+						r.fdClosedTable = make(map[int]bool)
+					}
+					r.fdClosedTable[fd] = true
+				} else {
+					delete(r.fdClosedTable, fd)
+				}
 			}
 		}
 	}
@@ -7498,6 +7532,10 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		}
 		r.fdTable[readFd] = pr
 		r.fdTable[writeFd] = pw2
+		if r.fdClosedTable != nil {
+			delete(r.fdClosedTable, readFd)
+			delete(r.fdClosedTable, writeFd)
+		}
 		if r.fdReadTable == nil {
 			r.fdReadTable = make(map[int]bool)
 		}
@@ -8194,6 +8232,9 @@ func (r *Runner) setReadFd(targetFd int, f *os.File) error {
 			r.fdTable = make(map[int]*os.File)
 		}
 		r.fdTable[targetFd] = f
+		if r.fdClosedTable != nil {
+			delete(r.fdClosedTable, targetFd)
+		}
 		if r.fdReadTable == nil {
 			r.fdReadTable = make(map[int]bool)
 		}
@@ -8236,6 +8277,9 @@ func (r *Runner) setWriteFd(targetFd int, w io.Writer) error {
 				r.fdTable = make(map[int]*os.File)
 			}
 			r.fdTable[targetFd] = f
+			if r.fdClosedTable != nil {
+				delete(r.fdClosedTable, targetFd)
+			}
 			if r.fdWriteTable == nil {
 				r.fdWriteTable = make(map[int]io.Writer)
 			}
@@ -8249,6 +8293,9 @@ func (r *Runner) setWriteFd(targetFd int, w io.Writer) error {
 			r.fdWriteTable = make(map[int]io.Writer)
 		}
 		r.fdWriteTable[targetFd] = w
+		if r.fdClosedTable != nil {
+			delete(r.fdClosedTable, targetFd)
+		}
 		if r.fdTable != nil {
 			delete(r.fdTable, targetFd)
 		}
@@ -8295,6 +8342,9 @@ func (r *Runner) bindReadWriteFd(targetFd int, f *os.File) error {
 			r.fdTable = make(map[int]*os.File)
 		}
 		r.fdTable[targetFd] = f
+		if r.fdClosedTable != nil {
+			delete(r.fdClosedTable, targetFd)
+		}
 		if r.fdReadTable == nil {
 			r.fdReadTable = make(map[int]bool)
 		}
@@ -8369,6 +8419,9 @@ func (r *Runner) fdCaps(fd int) (read *os.File, write io.Writer, ok bool) {
 		if read != nil {
 			return read, nil, true
 		}
+		return nil, nil, false
+	}
+	if r.fdClosedTable != nil && fd >= 3 && r.fdClosedTable[fd] {
 		return nil, nil, false
 	}
 	if r.fdTable != nil {
@@ -8450,6 +8503,9 @@ func (r *Runner) bindFdCaps(targetFd int, read *os.File, write io.Writer) {
 			delete(r.fdReadTable, 2)
 		}
 	default:
+		if r.fdClosedTable != nil {
+			delete(r.fdClosedTable, targetFd)
+		}
 		if read != nil {
 			if r.fdTable == nil {
 				r.fdTable = make(map[int]*os.File)
@@ -9074,6 +9130,14 @@ func (r *Runner) closeFd(fd int) {
 		if ref, ok := r.coprocFds[fd]; ok {
 			r.setCoprocFdElem(ref.varName, ref.idx, -1)
 			delete(r.coprocFds, fd)
+			delete(r.fdClosedTable, fd)
+			return
+		}
+		if r.inheritedFds[fd] {
+			if r.fdClosedTable == nil {
+				r.fdClosedTable = make(map[int]bool)
+			}
+			r.fdClosedTable[fd] = true
 		}
 	}
 }

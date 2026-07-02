@@ -16,9 +16,10 @@ func TestRunnerBash53RedirectCluster(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name string
-		in   string
-		want string
+		name         string
+		in           string
+		want         string
+		inheritedFds []int
 	}{
 		{
 			name: "dpl_in_and_dpl_out_equivalent_for_output_fd",
@@ -99,6 +100,22 @@ func TestRunnerBash53RedirectCluster(t *testing.T) {
 			name: "dpl_out_to_closed_fd_is_bad_fd",
 			in:   "exec 4>&-\necho hi >&4",
 			want: "4: Bad file descriptor\nexit status 1",
+		},
+		{
+			name:         "dpl_in_from_shell_closed_inherited_fd_three_is_bad_fd",
+			in:           "exec 3<&-\n<&3",
+			want:         "3: Bad file descriptor\nexit status 1",
+			inheritedFds: []int{3, 7},
+		},
+		{
+			name: "coproc_fds_do_not_poison_closed_fd_table",
+			in:   "coproc { echo FOO; }\nread x <&${COPROC[0]}\necho $x\nexec {fd}<&${COPROC[0]}-\nexec {fd}>&${COPROC[1]}-\necho ${COPROC[0]} ${COPROC[1]}",
+			want: "FOO\n-1 -1\n",
+		},
+		{
+			name: "closed_fd_mark_is_cleared_on_reopen",
+			in:   "exec 4>&-\nexec 4>&1\necho FOO >&4",
+			want: "FOO\n",
 		},
 		{
 			name: "noclobber_allows_dev_null",
@@ -185,7 +202,7 @@ func TestRunnerBash53RedirectCluster(t *testing.T) {
 				interp.Dir(t.TempDir()),
 				interp.StdIO(nil, &cb, &cb),
 				interp.ExecHandlers(testExecHandler),
-				interp.WithInheritedFds([]int{7}),
+				interp.WithInheritedFds(redirectTestInheritedFds(tt.inheritedFds)),
 			)
 			if err != nil {
 				t.Fatal(err)
@@ -201,6 +218,17 @@ func TestRunnerBash53RedirectCluster(t *testing.T) {
 			}
 		})
 	}
+}
+
+// redirectTestInheritedFds returns the fds a redirect fidelity case should
+// inherit as open. Cases default to fd 7 (the historical fixture); a case may
+// override to simulate other inherited-open descriptors — e.g. fd 3, which the
+// Go runtime holds open on Linux, so `exec 3<&-` then `<&3` must still error.
+func redirectTestInheritedFds(fds []int) []int {
+	if fds == nil {
+		return []int{7}
+	}
+	return fds
 }
 
 // TestRunnerBash53RedirectErrorLine checks that a failed-open redirect on a

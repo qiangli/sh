@@ -599,6 +599,10 @@ type Runner struct {
 	// cannot be represented in fdTable but bash still allows `exec 4>&1`
 	// and later `echo >&4` within the same shell/subshell.
 	fdWriteTable map[int]io.Writer
+	// fdClosedTable records inherited non-stdio descriptors explicitly
+	// closed by the shell. This keeps lazy inherited-fd lookup from
+	// resurrecting a descriptor the script has logically closed.
+	fdClosedTable map[int]bool
 
 	// stmtTraceOutput snapshots xtrace output before a simple command's
 	// own redirections are applied. Bash traces `cmd 2>file` to the
@@ -2589,10 +2593,11 @@ func (r *Runner) subshell(background bool) *Runner {
 		// Subshells inherit open fds the way bash does. Clone the map so
 		// child mutations (close, dup) don't leak back to the parent;
 		// the underlying *os.File handles are shared (single OS fd).
-		fdTable:      maps.Clone(r.fdTable),
-		fdReadTable:  maps.Clone(r.fdReadTable),
-		fdWriteTable: maps.Clone(r.fdWriteTable),
-		inheritedFds: maps.Clone(r.inheritedFds),
+		fdTable:       maps.Clone(r.fdTable),
+		fdReadTable:   maps.Clone(r.fdReadTable),
+		fdWriteTable:  maps.Clone(r.fdWriteTable),
+		fdClosedTable: maps.Clone(r.fdClosedTable),
+		inheritedFds:  maps.Clone(r.inheritedFds),
 
 		// Shared by pointer (not cloned): a background subshell must be
 		// able to resolve `$COPROC_PID` to the parent's coprocess so that
