@@ -73,6 +73,7 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 			r.lastExpandExit = exitStatus{code: 1}
 		},
 		CmdSubst: func(w io.Writer, cs *syntax.CmdSubst) error {
+			r.lastExpandCmdSubst = true
 			switch len(cs.Stmts) {
 			case 0: // nothing to do
 				return nil
@@ -5204,6 +5205,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			return
 		}
 		r.lastExpandExit = exitStatus{}
+		r.lastExpandCmdSubst = false
 		fields, expandErr := expand.Fields(r.ecfg, args...)
 		r.expandErr(expandErr)
 		if standaloneArithParseError(expandErr) {
@@ -5459,6 +5461,9 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				r.applyLateRedirs(ctx, fields)
 			}
 			break
+		}
+		if r.lastExpandCmdSubst {
+			r.lastExit = r.lastExpandExit
 		}
 
 		type restoreVar struct {
@@ -5827,14 +5832,15 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			r.stdin = prDup
 			var wg sync.WaitGroup
 			wg.Go(func() {
+				xctx := context.WithValue(ctx, bgNonPrimaryPidCtxKey{}, true)
 				if subshell, ok := plainPipelineSubshell(cm.X); ok {
 					r2.enclosingSubshellEnd = subshell.Rparen
-					r2.stmts(ctx, subshell.Stmts)
+					r2.stmts(xctx, subshell.Stmts)
 				} else {
-					r2.stmt(ctx, cm.X)
+					r2.stmt(xctx, cm.X)
 				}
 				if cb := r2.trapCallbacks["EXIT"]; cb != "" && !r2.inheritedExitTrap {
-					r2.trapCallback(ctx, cb, "exit")
+					r2.trapCallback(xctx, cb, "exit")
 				}
 				r2.exit.exiting = false // subshells don't exit the parent shell
 				r2.exit.discarding = false
@@ -8403,6 +8409,11 @@ func (r *Runner) fdCaps(fd int) (read *os.File, write io.Writer, ok bool) {
 		// treat it as not-open so a later `2>&1` dup'ing it reports EBADF,
 		// matching bash's order-of-appearance fd handling.
 		if r.stdout != nil && !isClosedFdWriter(r.stdout) {
+			if read == nil {
+				if f := dupReadablePipeFile(r.stdout); f != nil {
+					read = f
+				}
+			}
 			return read, r.stdout, true
 		}
 		if read != nil {
@@ -8415,6 +8426,11 @@ func (r *Runner) fdCaps(fd int) (read *os.File, write io.Writer, ok bool) {
 			read = r.fdTable[2]
 		}
 		if r.stderr != nil && !isClosedFdWriter(r.stderr) {
+			if read == nil {
+				if f := dupReadablePipeFile(r.stderr); f != nil {
+					read = f
+				}
+			}
 			return read, r.stderr, true
 		}
 		if read != nil {
@@ -8437,6 +8453,11 @@ func (r *Runner) fdCaps(fd int) (read *os.File, write io.Writer, ok bool) {
 		if w, exists := r.fdWriteTable[fd]; exists {
 			ok = true
 			write = w
+			if read == nil {
+				if f := dupReadablePipeFile(w); f != nil {
+					read = f
+				}
+			}
 		}
 	}
 	// Bash's redir tests pass fd 3 through an execed child shell and then
@@ -8564,6 +8585,18 @@ func isClosedFdWriteErr(err error) bool {
 func isClosedFdWriter(w io.Writer) bool {
 	_, ok := w.(badFdWriter)
 	return ok
+}
+
+func dupReadablePipeFile(w io.Writer) *os.File {
+	f, ok := w.(*os.File)
+	if !ok {
+		return nil
+	}
+	info, err := f.Stat()
+	if err != nil || info.Mode()&os.ModeNamedPipe == 0 {
+		return nil
+	}
+	return f
 }
 
 func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, error) {

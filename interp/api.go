@@ -266,8 +266,9 @@ type Runner struct {
 	exit     exitStatus
 	lastExit exitStatus
 
-	lastExpandExit exitStatus // used to surface exit statuses while expanding fields
-	expandRunExit  exitStatus // expansion failures which affect Run but not $?
+	lastExpandExit     exitStatus // used to surface exit statuses while expanding fields
+	lastExpandCmdSubst bool       // whether lastExpandExit came from a command substitution
+	expandRunExit      exitStatus // expansion failures which affect Run but not $?
 
 	// outErr records the most recent error from r.out/r.outf (a builtin's
 	// standard-output write). Bash fails an output builtin whose stdout write
@@ -973,6 +974,10 @@ func (c *coprocReg) remove(pid int64) {
 // path entirely.
 type bgProcCtxKey struct{}
 
+// bgNonPrimaryPidCtxKey marks background pipeline elements whose child PIDs
+// belong to the job for wait/cleanup purposes, but must not replace $!.
+type bgNonPrimaryPidCtxKey struct{}
+
 // publishBgPid is what exec handlers call after a successful
 // exec.Start. Sets the running goroutine's bgProc.pid and records the
 // published pid for later `wait $!` resolution. Safe no-op when not in a
@@ -983,10 +988,13 @@ func publishBgPid(ctx context.Context, pid int) {
 		return
 	}
 	pid64 := int64(pid)
-	bg.pid.Store(pid64)
 	bg.pidsMu.Lock()
 	bg.pids = append(bg.pids, pid64)
 	bg.pidsMu.Unlock()
+	if nonPrimary, _ := ctx.Value(bgNonPrimaryPidCtxKey{}).(bool); nonPrimary {
+		return
+	}
+	bg.pid.Store(pid64)
 	select {
 	case <-bg.pidReady:
 		// already closed by an earlier exec or by goroutine exit
