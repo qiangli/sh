@@ -4013,6 +4013,61 @@ func (cfg *Config) substWordPartFields(parts []syntax.WordPart) ([][]fieldPart, 
 					}
 					continue
 				}
+			} else {
+				anySplit := false
+				for _, dqp := range part.Parts {
+					pe, ok := dqp.(*syntax.ParamExp)
+					if !ok || !quotedPartSplits(pe) {
+						continue
+					}
+					if elems, err := cfg.quotedElemFields(pe); err != nil {
+						return nil, err
+					} else if elems != nil {
+						anySplit = true
+						break
+					}
+				}
+				if anySplit {
+					absorbs := cfg.dblQuotedEmptyAtAbsorbs(part.Parts)
+					producedField := false
+					for _, dqp := range part.Parts {
+						if pe, ok := dqp.(*syntax.ParamExp); ok && quotedPartSplits(pe) {
+							if elems, err := cfg.quotedElemFields(pe); err != nil {
+								return nil, err
+							} else if elems != nil {
+								for i, elem := range elems {
+									if i > 0 {
+										flush()
+									}
+									producedField = true
+									curField = append(curField, fieldPart{
+										quote: quoteDouble,
+										val:   elem,
+									})
+								}
+								continue
+							}
+						}
+						wfield, err := cfg.wordField([]syntax.WordPart{dqp}, quoteDouble)
+						if err != nil {
+							return nil, err
+						}
+						for _, part := range wfield {
+							if part.val == "" && absorbs {
+								continue
+							}
+							if part.val != "" {
+								producedField = true
+							}
+							part.quote = quoteDouble
+							curField = append(curField, part)
+						}
+					}
+					if producedField || !absorbs {
+						allowEmpty = true
+					}
+					continue
+				}
 			}
 			allowEmpty = true
 			wfield, err := cfg.wordField(part.Parts, quoteDouble)
@@ -4036,7 +4091,7 @@ func (cfg *Config) substWordPartFields(parts []syntax.WordPart) ([][]fieldPart, 
 							}
 							curField = append(curField, fieldPart{val: elem})
 						}
-					case !cfg.ifsSet || cfg.ifs != " \t\n":
+					case cfg.ifs != " \t\n":
 						curField = append(curField, fieldPart{quote: quoteSingle, val: strings.Join(elems, " ")})
 					default:
 						splitAdd(strings.Join(elems, " "))
@@ -4061,7 +4116,7 @@ func (cfg *Config) substWordPartFields(parts []syntax.WordPart) ([][]fieldPart, 
 							}
 							curField = append(curField, fieldPart{val: elem})
 						}
-					case !cfg.ifsSet || cfg.ifs != " \t\n":
+					case cfg.ifs != " \t\n":
 						curField = append(curField, fieldPart{quote: quoteSingle, val: strings.Join(elems, " ")})
 					default:
 						splitAdd(strings.Join(elems, " "))
@@ -4186,6 +4241,49 @@ func (cfg *Config) quotedSubstWordFields(pe *syntax.ParamExp) ([]string, error) 
 		case *syntax.DblQuoted:
 			if len(part.Parts) == 1 {
 				inner, _ = part.Parts[0].(*syntax.ParamExp)
+			} else {
+				anySplit := false
+				for _, dqp := range part.Parts {
+					pe, ok := dqp.(*syntax.ParamExp)
+					if !ok || !quotedPartSplits(pe) {
+						continue
+					}
+					if elems, err := cfg.quotedElemFields(pe); err != nil {
+						return nil, err
+					} else if elems != nil {
+						anySplit = true
+						break
+					}
+				}
+				if anySplit {
+					for _, dqp := range part.Parts {
+						if pe, ok := dqp.(*syntax.ParamExp); ok && quotedPartSplits(pe) {
+							if elems, err := cfg.quotedElemFields(pe); err != nil {
+								return nil, err
+							} else if elems != nil {
+								for i, elem := range elems {
+									if i > 0 {
+										flush()
+									}
+									curField = append(curField, fieldPart{
+										quote: quoteDouble,
+										val:   elem,
+									})
+								}
+								continue
+							}
+						}
+						wfield, err := cfg.wordField([]syntax.WordPart{dqp}, quoteDouble)
+						if err != nil {
+							return nil, err
+						}
+						for _, fp := range wfield {
+							fp.quote = quoteDouble
+							curField = append(curField, fp)
+						}
+					}
+					continue
+				}
 			}
 		}
 		if inner != nil && !inner.Excl && inner.Exp == nil &&

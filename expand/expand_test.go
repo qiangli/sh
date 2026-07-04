@@ -254,8 +254,10 @@ func TestFieldsParamExpSubstWordQuotes(t *testing.T) {
 
 func TestFieldsParamExpSubstWordQuotedAt(t *testing.T) {
 	cfg := &Config{Env: testEnv{
-		"1": {Set: true, Kind: String, Str: "a b"},
-		"@": {Set: true, Kind: Indexed, List: []string{"a b", "c", "d"}},
+		"IFS": {Set: true, Kind: String, Str: " \t\n"},
+		"1":   {Set: true, Kind: String, Str: "a b"},
+		"@":   {Set: true, Kind: Indexed, List: []string{"a b", "c", "d"}},
+		"*":   {Set: true, Kind: Indexed, List: []string{"a b", "c", "d"}},
 	}}
 	tests := []struct {
 		src  string
@@ -263,6 +265,11 @@ func TestFieldsParamExpSubstWordQuotedAt(t *testing.T) {
 	}{
 		{`${1+"$@"}`, []string{"a b", "c", "d"}},
 		{`${foo:-"$@"}`, []string{"a b", "c", "d"}},
+		{`${foo-"x$@y"}`, []string{"xa b", "c", "dy"}},
+		{`${foo:-"x$@y"}`, []string{"xa b", "c", "dy"}},
+		{`${1+"x$@y"}`, []string{"xa b", "c", "dy"}},
+		{`${1:+"x$@y"}`, []string{"xa b", "c", "dy"}},
+		{`${foo-"x$*y"}`, []string{"xa b c dy"}},
 		{`echo "${1+  $@  }"`, []string{"  a b", "c", "d  "}},
 	}
 	for _, tc := range tests {
@@ -277,6 +284,22 @@ func TestFieldsParamExpSubstWordQuotedAt(t *testing.T) {
 		if !reflect.DeepEqual(got, tc.want) {
 			t.Fatalf("%s: wanted %q, got %q", tc.src, tc.want, got)
 		}
+	}
+}
+
+func TestFieldsParamExpSubstWordUnquotedAt(t *testing.T) {
+	cfg := &Config{Env: testEnv{
+		"IFS": {Set: true, Kind: String, Str: " \t\n"},
+		"@":   {Set: true, Kind: Indexed, List: []string{"a", "bb", "c"}},
+	}}
+	word := parseWord(t, `${foo-x$@y}`)
+	got, err := Fields(cfg, word)
+	if err != nil {
+		t.Fatalf("did not want error, got %v", err)
+	}
+	want := []string{"xa", "bb", "cy"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("wanted %q, got %q", want, got)
 	}
 }
 
