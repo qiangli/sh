@@ -132,6 +132,16 @@ func (r *Runner) enableSignalTrap(name string) {
 	if name == "CHLD" {
 		return
 	}
+	// SIGURG is used by the Go runtime for goroutine async-preemption. A
+	// signal.Notify handler for it catches the runtime's OWN internal preemption
+	// signals — they cannot be distinguished from an external SIGURG once
+	// notified (a documented Go limitation) — which would fire the shell's trap
+	// thousands of times per second and corrupt any harness that traps signal 23
+	// (e.g. the VSC-PCTS TCM). A pure-Go shell therefore cannot deliver SIGURG
+	// traps: record the trap (so `trap -p` shows it) but install no OS handler.
+	if name == "URG" {
+		return
+	}
 	sig, ok := signalByName(name)
 	if !ok {
 		return

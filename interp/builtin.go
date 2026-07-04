@@ -7210,9 +7210,11 @@ func normalizeSignal(s string) string {
 	if _, ok := signalByName(s); ok {
 		return s
 	}
-	// Check by number
+	// Check by number — use the full platform signal table (signalByNumber),
+	// not the legacy 0–15 signalNames map, so trap accepts every signal kill
+	// does (e.g. 28=WINCH, 29=IO, 30=PWR, 31=SYS on Linux).
 	if n, err := strconv.Atoi(s); err == nil {
-		if name, ok := signalNames[n]; ok {
+		if _, name, ok := signalByNumber(n); ok {
 			return name
 		}
 	}
