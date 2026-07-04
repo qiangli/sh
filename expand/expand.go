@@ -5887,6 +5887,12 @@ func (cfg *Config) glob(base, pat string) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
+		if !cfg.DotGlob && globStartsPositiveBracket(part) {
+			match := matcher
+			matcher = func(name string) bool {
+				return !strings.HasPrefix(name, ".") && match(name)
+			}
+		}
 		var newMatches []string
 		for _, dir := range matches {
 			if !cfg.GlobSkipDots && strings.HasPrefix(part, ".") {
@@ -5921,6 +5927,17 @@ func (cfg *Config) glob(base, pat string) ([]string, error) {
 	}
 	matches = cfg.filterGlobIgnore(matches)
 	return matches, nil
+}
+
+func globStartsPositiveBracket(part string) bool {
+	if !strings.HasPrefix(part, "[") || len(part) < 3 {
+		return false
+	}
+	switch part[1] {
+	case '!', '^':
+		return false
+	}
+	return strings.ContainsRune(part[1:], ']')
 }
 
 func (cfg *Config) sortGlobMatches(base string, matches []string) {

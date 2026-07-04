@@ -1303,6 +1303,43 @@ func Test_glob(t *testing.T) {
 	}
 }
 
+func TestGlobLeadingPositiveBracketDotfile(t *testing.T) {
+	cfg := &Config{
+		ReadDir2: func(string) ([]fs.DirEntry, error) {
+			return []fs.DirEntry{
+				// The filenames here are sorted, just like [io/fs.ReadDirFS].
+				&mockFileInfo{name: ".match.580"},
+				&mockFileInfo{name: "a.b"},
+				&mockFileInfo{name: "x"},
+				&mockFileInfo{name: "x.match.580"},
+			}, nil
+		},
+	}
+
+	tests := []struct {
+		pat  string
+		want []string
+	}{
+		{"[.]match.580", nil},
+		{"[--0]match.580", nil},
+		{"[.x]match.580", nil},
+		{"[xy].match.580", []string{"x.match.580"}},
+		{"a[.]b", []string{"a.b"}},
+		{"[x]", []string{"x"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.pat, func(t *testing.T) {
+			got, err := cfg.glob("/", tc.pat)
+			if err != nil {
+				t.Fatalf("did not want error, got %v", err)
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("wanted %q, got %q", tc.want, got)
+			}
+		})
+	}
+}
+
 func TestFieldsBackslashEscapedGlobMeta(t *testing.T) {
 	cfg := &Config{
 		ReadDir2: func(string) ([]fs.DirEntry, error) {
