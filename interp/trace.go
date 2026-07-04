@@ -47,12 +47,30 @@ func (r *Runner) xtraceOutput() io.Writer {
 	// currently open, route xtrace output there instead of stderr.
 	if s := r.envGet("BASH_XTRACEFD"); s != "" {
 		if fd, err := strconv.Atoi(s); err == nil {
-			if f, ok := r.fdTable[fd]; ok && f != nil {
-				out = f
+			if w := r.xtraceSink(fd); w != nil {
+				out = w
 			}
 		}
 	}
 	return out
+}
+
+// xtraceSink resolves an fd number to the writer BASH_XTRACEFD should
+// send xtrace to. Bash honors any open descriptor: one the script opened
+// itself (`exec 7>file`, tracked in the fd tables) as well as one merely
+// inherited from the parent (`BASH_XTRACEFD=7 sh -x … 7>file`), so we
+// look past r.fdTable to r.fdWriteTable and, finally, an inherited fd.
+func (r *Runner) xtraceSink(fd int) io.Writer {
+	if f, ok := r.fdTable[fd]; ok && f != nil {
+		return f
+	}
+	if w, ok := r.fdWriteTable[fd]; ok && w != nil {
+		return w
+	}
+	if f, ok := r.inheritedFd(fd); ok {
+		return f
+	}
+	return nil
 }
 
 // string writes s to tracer.buf if tracer is non-nil,
