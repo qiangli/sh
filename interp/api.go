@@ -1289,7 +1289,14 @@ func Params(args ...string) RunnerOption {
 		for fp.more() {
 			flag := fp.flag()
 			if flag == "-" {
-				// TODO: implement "The -x and -v options are turned off."
+				// POSIX: a lone `-` ends option processing and, as a
+				// special case, turns off the -x and -v options. Remaining
+				// args become positional parameters (unchanged if none).
+				r.opts[optXTrace] = false
+				if r.noOpSetState == nil {
+					r.noOpSetState = make(map[string]bool)
+				}
+				r.noOpSetState["verbose"] = false
 				if args := fp.args(); len(args) > 0 {
 					r.Params = args
 				}

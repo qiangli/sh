@@ -8053,6 +8053,14 @@ func (r *Runner) stmts(ctx context.Context, stmts []*syntax.Stmt) {
 		if r.loopControlPending() {
 			return
 		}
+		// Stop the list once `exit`/`return` has fired. Outside a trap this is
+		// a no-op (stop() already neutralises later statements), but inside a
+		// trap body — where stop() deliberately ignores the script-level
+		// `exiting` flag — it ensures an `exit N` in the trap terminates the
+		// body instead of letting a trailing command reset the status.
+		if r.exit.exiting || r.exit.returning {
+			return
+		}
 	}
 }
 
