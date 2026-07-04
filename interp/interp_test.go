@@ -5449,6 +5449,11 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 var runTestsUnix = []runTest{
 	{"[[ -n $PPID && $PPID -ge 0 ]]", ""}, // can be 0 if running as the init process
 
+	{
+		`mkdir d1 d2; echo 'echo ERROR' >d1/s; echo 'echo OK' >d2/s; chmod a=wx d1/s; chmod a=r d2/s; PATH=$PWD/d1:$PWD/d2:$PATH; . s`,
+		"OK\n",
+	},
+
 	// exec -a NAME CMD overrides argv[0] of the spawned process; the
 	// shell does not return (so "unreached" is never printed).
 	{

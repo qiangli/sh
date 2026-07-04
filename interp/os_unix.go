@@ -71,6 +71,11 @@ func canExec(path string) bool {
 	return unix.Faccessat(unix.AT_FDCWD, path, unix.X_OK, unix.AT_EACCESS) == nil
 }
 
+// canRead reports whether the current effective user may read path.
+func canRead(path string) bool {
+	return unix.Faccessat(unix.AT_FDCWD, path, unix.R_OK, unix.AT_EACCESS) == nil
+}
+
 // dupPipeFd duplicates a pipe file descriptor, returning a new *os.File
 // that refers to the same underlying pipe endpoint. The caller can close
 // the original fd while the duplicate remains valid. This is used to

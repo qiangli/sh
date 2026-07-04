@@ -4490,6 +4490,7 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 	if st.Background || st.Disown {
 		r2 := r.subshell(true)
 		r2.inheritedBang = r.lastBangProc()
+		r2.ignoreAsyncListSignals()
 		if r.opts[optPosix] {
 			f, err := os.Open(os.DevNull)
 			if err == nil {

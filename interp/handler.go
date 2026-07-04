@@ -530,6 +530,19 @@ func findFile(dir, file string, _ []string) (string, error) {
 	return checkStat(dir, file, false)
 }
 
+// findReadableFile returns the path to an existing readable file.
+func findReadableFile(dir, file string, _ []string) (string, error) {
+	path, err := checkStat(dir, file, false)
+	if err != nil {
+		return "", err
+	}
+	target := shellPathJoinAbs(dir, path)
+	if runtime.GOOS != "windows" && !canRead(target) {
+		return "", fmt.Errorf("permission denied")
+	}
+	return path, nil
+}
+
 // LookPath is deprecated; see [LookPathDir].
 func LookPath(env expand.Environ, file string) (string, error) {
 	return LookPathDir(env.Get("PWD").String(), env, file)
@@ -613,9 +626,13 @@ func lookPathJoin(dir, file string, windows bool) string {
 }
 
 // scriptFromPathDir is similar to [LookPathDir], with the difference that it looks
-// for both executable and non-executable files.
+// for readable scripts rather than executable programs.
 func scriptFromPathDir(cwd string, env expand.Environ, file string) (string, error) {
-	return lookPathDir(cwd, env, file, findFile)
+	windows := runtime.GOOS == "windows"
+	if lookPathHasPath(file, windows) {
+		return findFile(cwd, file, pathExtsMode(env, windows))
+	}
+	return lookPathDir(cwd, env, file, findReadableFile)
 }
 
 func pathExts(env expand.Environ) []string {

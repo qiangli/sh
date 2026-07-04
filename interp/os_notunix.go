@@ -25,6 +25,13 @@ func canExec(path string) bool {
 	return true
 }
 
+// canRead reports whether path is readable. On non-Unix platforms there
+// is no portable effective-user R_OK check here, so fall back to the file
+// mode bits already vetted by the caller.
+func canRead(path string) bool {
+	return true
+}
+
 // processUmask returns a Unix-style default on non-Unix platforms,
 // since Windows has no umask equivalent.
 func processUmask() int {

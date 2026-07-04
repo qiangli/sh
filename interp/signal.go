@@ -22,6 +22,24 @@ func (r *Runner) monitorActive() bool {
 	return r.noOpSetState["monitor"]
 }
 
+// ignoreAsyncListSignals applies POSIX 2.11 asynchronous-list signal
+// defaults to a background runner when job control is disabled: SIGINT and
+// SIGQUIT start ignored, but a trap command inside the async list may still
+// replace or reset that disposition.
+func (r *Runner) ignoreAsyncListSignals() {
+	if r.monitorActive() {
+		return
+	}
+	if r.trapCallbacks == nil {
+		r.trapCallbacks = make(map[string]string)
+	}
+	for _, sig := range [...]string{"INT", "QUIT"} {
+		if _, ok := r.trapCallbacks[sig]; !ok {
+			r.trapCallbacks[sig] = ""
+		}
+	}
+}
+
 // shellPid returns the PID this runner reports as $$, so the kill builtin can
 // recognize a self-directed signal.
 func (r *Runner) shellPid() int {
