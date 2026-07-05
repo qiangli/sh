@@ -4325,6 +4325,13 @@ func (r *Runner) posixSpecialBuiltinFatal(name string, args []string) {
 	if r.exit.code == 0 || r.exit.exiting {
 		return
 	}
+	// POSIX 2.8.1: an error in a special built-in causes a *non-interactive*
+	// shell to exit; an interactive shell reports the error and carries on
+	// (e.g. `unset` of a readonly variable typed at the prompt must not kill
+	// the session). bash matches this.
+	if r.interactiveShell {
+		return
+	}
 	badNumericArg := func() bool {
 		if len(args) == 0 {
 			return false
