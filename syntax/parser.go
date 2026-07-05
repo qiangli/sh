@@ -899,7 +899,15 @@ func (p *Parser) unquotedWordBytes(w *Word) ([]byte, bool) {
 	buf := make([]byte, 0, 4)
 	didUnquote := false
 	for _, wp := range w.Parts {
-		buf, didUnquote = p.unquotedWordPart(buf, wp, false)
+		var quoted bool
+		buf, quoted = p.unquotedWordPart(buf, wp, false)
+		// POSIX: if ANY part of the here-document delimiter word is
+		// quoted, the body is not expanded. Accumulate quotedness
+		// across parts rather than letting a later unquoted part (e.g.
+		// the "foo" in `<<''foo`) clobber an earlier quoted one.
+		if quoted {
+			didUnquote = true
+		}
 	}
 	return buf, didUnquote
 }

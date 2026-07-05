@@ -6,6 +6,9 @@ package interp
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -164,6 +167,33 @@ func TestUmaskNumericAndFlags(t *testing.T) {
 			got := runUmaskPosix(t, tc.src)
 			qt.Assert(t, qt.Equals(got, tc.want))
 		})
+	}
+}
+
+// TestRedirectFileModeBase verifies that a file-creating redirect uses
+// base mode 0666 (as bash does), not 0644 — so a group/other-write bit
+// the umask permits survives. Regression for VSC-PCTS #378, where
+// `umask 025; cat > f` created 0640 instead of bash's 0642 because the
+// redirect open passed 0644.
+func TestRedirectFileModeBase(t *testing.T) {
+	dir := t.TempDir()
+	// The kernel also applies this process's real umask on top of the
+	// Runner's virtual mask, so fold it into the expectation rather than
+	// mutating the process-wide umask (which would race other tests).
+	proc := processUmask()
+	for i, mask := range []int{0, 0o002, 0o022, 0o025, 0o026, 0o077} {
+		name := filepath.Join(dir, fmt.Sprintf("f%d", i))
+		src := fmt.Sprintf("umask %04o; : > %q", mask, name)
+		f, err := syntax.NewParser().Parse(strings.NewReader(src), "")
+		qt.Assert(t, qt.IsNil(err))
+		r, err := New(StdIO(strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}))
+		qt.Assert(t, qt.IsNil(err))
+		qt.Assert(t, qt.IsNil(r.Run(context.Background(), f)))
+		info, err := os.Stat(name)
+		qt.Assert(t, qt.IsNil(err))
+		want := os.FileMode(0o666 &^ mask &^ proc)
+		qt.Check(t, qt.Equals(info.Mode().Perm(), want),
+			qt.Commentf("umask %04o", mask))
 	}
 }
 

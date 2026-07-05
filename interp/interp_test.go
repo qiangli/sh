@@ -361,6 +361,14 @@ var runTests = []runTest{
 	{"set -e; { false && true; }; echo after", "after\n"},
 	{"set -e; { { false && true; }; }; echo nested", "nested\n"},
 	{"set -e; if true; then false && true; fi; echo reached", "reached\n"},
+	// ...and through for/while/until/case compound commands whose final
+	// body command is the errexit-exempt left operand of `&&`/`||`.
+	{"set -e; for i in a; do false && :; done; echo reached", "reached\n"},
+	{"set -e; while :; do false && :; break; done; echo reached", "reached\n"},
+	{"set -e; case x in x) false && : ;; esac; echo reached", "reached\n"},
+	// but a genuinely-failing final body command still exits under set -e.
+	{"set -e; for i in a; do false; done; echo reached", "exit status 1"},
+	{"set -e; case x in x) false ;; esac; echo reached", "exit status 1"},
 	// tilde expansion in a ${param:+word} alternate word (like the :- default).
 	{"HOME=/h; echo ${HOME:+~/z}", "/h/z\n"},
 	{"HOME=/h; echo \"${HOME:+~/z}\"", "~/z\n"},
@@ -2411,6 +2419,17 @@ var runTests = []runTest{
 	{
 		"cat <<\\EOF\n\\$FUNCNAME\nEOF",
 		"\\$FUNCNAME\n",
+	},
+	{
+		// POSIX: if ANY part of the delimiter word is quoted, the
+		// here-document body is not expanded. A quoted part followed
+		// by an unquoted one (`<<''EOF`, `<<E''OF`) must still count.
+		"cat <<''EOF\n${x} $((1+1)) $(echo hi)\nEOF",
+		"${x} $((1+1)) $(echo hi)\n",
+	},
+	{
+		"cat <<E''OF\n${x} $((1+1))\nEOF",
+		"${x} $((1+1))\n",
 	},
 	{
 		"cat <<EOF\nfoo\\\"bar\\baz\nEOF",

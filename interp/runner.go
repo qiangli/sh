@@ -5975,6 +5975,13 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				break
 			}
 		}
+		// If the loop's final body command was errexit-exempt (the left
+		// operand of an `&&`/`||`), that exemption propagates to the
+		// loop's own non-zero status so `set -e` does not exit — matching
+		// bash's IfClause handling above.
+		if !r.exit.ok() && bodyRan && stmtsEndErrexitExempt(cm.Do) {
+			r.exit.errexitExempt = true
+		}
 	case *syntax.ForClause:
 		switch y := cm.Loop.(type) {
 		case *syntax.WordIter:
@@ -6146,6 +6153,11 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				}
 			}
 		}
+		// An errexit-exempt final body command (left of `&&`/`||`)
+		// propagates its exemption to the loop's own non-zero status.
+		if !r.exit.ok() && stmtsEndErrexitExempt(cm.Do) {
+			r.exit.errexitExempt = true
+		}
 	case *syntax.FuncDecl:
 		// POSIX mode: a function name that shadows a special
 		// builtin (`return`, `break`, `export`, etc.) is a fatal
@@ -6310,6 +6322,9 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				continue
 			}
 			r.stmts(ctx, ci.Stmts)
+			if !r.exit.ok() && stmtsEndErrexitExempt(ci.Stmts) {
+				r.exit.errexitExempt = true
+			}
 			if r.loopControlPending() {
 				return
 			}
@@ -8810,7 +8825,7 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 		sourceFd, err := strconv.Atoi(arg)
 		if err != nil {
 			if targetFd == -1 {
-				f, err := r.open(ctx, arg, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644, true)
+				f, err := r.open(ctx, arg, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o666, true)
 				if err != nil {
 					return nil, err
 				}
@@ -8818,7 +8833,7 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 				r.stderr = f
 				return f, nil
 			}
-			f, err := r.open(ctx, arg, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644, true)
+			f, err := r.open(ctx, arg, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o666, true)
 			if err != nil {
 				return nil, err
 			}
@@ -8932,7 +8947,7 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 			}
 		}
 	}
-	f, err := r.open(ctx, arg, mode, 0o644, true)
+	f, err := r.open(ctx, arg, mode, 0o666, true)
 	if err != nil {
 		return nil, err
 	}
@@ -9202,7 +9217,7 @@ func (r *Runner) readonlyNamedFdOpenSideEffect(ctx context.Context, rd *syntax.R
 	default:
 		return
 	}
-	f, err := r.open(ctx, arg, mode, 0o644, false)
+	f, err := r.open(ctx, arg, mode, 0o666, false)
 	if err == nil {
 		f.Close()
 	}
