@@ -8065,69 +8065,58 @@ func (r *Runner) stmts(ctx context.Context, stmts []*syntax.Stmt) {
 }
 
 func (r *Runner) hdocReader(rd *syntax.Redirect) (*os.File, error) {
-	pr, pw, err := os.Pipe()
-	if err != nil {
-		return nil, err
-	}
-	// Empty heredoc body (`<<EOF\nEOF`): nothing to write, just
-	// close the writer so the reader hits EOF immediately.
-	if rd.Hdoc == nil {
-		pw.Close()
-		return pr, nil
-	}
-	// We write to the pipe in a new goroutine,
-	// as pipe writes may block once the buffer gets full.
-	// We still construct and buffer the entire heredoc first,
-	// as doing it concurrently would lead to different semantics and be racy.
-	quoted := quotedHdocDelimiter(rd.Word)
-	if rd.Op != syntax.DashHdoc {
-		hdoc := rd.Hdoc.Lit()
-		if !quoted {
-			hdoc = r.document(rd.Hdoc)
-		}
-		go func() {
-			pw.WriteString(hdoc)
-			pw.Close()
-		}()
-		return pr, nil
-	}
-	var buf bytes.Buffer
-	var cur []syntax.WordPart
-	flushLine := func() {
-		if buf.Len() > 0 {
-			buf.WriteByte('\n')
-		}
-		word := &syntax.Word{Parts: cur}
-		if quoted {
-			buf.WriteString(word.Lit())
+	// Build the entire here-document body up front, then serve it from a
+	// descriptor. On unix that descriptor is an unlinked temp file rather
+	// than a pipe fed by a goroutine: a pipe+goroutine races with the
+	// consuming process under load (os.File fd lifecycle under GC), which
+	// intermittently truncated a command's output to empty. A plain file is
+	// deterministic and matches how bash materialises here-docs.
+	var body []byte
+	if rd.Hdoc != nil {
+		quoted := quotedHdocDelimiter(rd.Word)
+		if rd.Op != syntax.DashHdoc {
+			if quoted {
+				body = []byte(rd.Hdoc.Lit())
+			} else {
+				body = []byte(r.document(rd.Hdoc))
+			}
 		} else {
-			buf.WriteString(r.document(word))
-		}
-		cur = cur[:0]
-	}
-	for _, wp := range rd.Hdoc.Parts {
-		lit, ok := wp.(*syntax.Lit)
-		if !ok {
-			cur = append(cur, wp)
-			continue
-		}
-		first := true
-		for part := range strings.SplitSeq(lit.Value, "\n") {
-			if !first {
-				flushLine()
+			var buf bytes.Buffer
+			var cur []syntax.WordPart
+			flushLine := func() {
+				if buf.Len() > 0 {
+					buf.WriteByte('\n')
+				}
+				word := &syntax.Word{Parts: cur}
+				if quoted {
+					buf.WriteString(word.Lit())
+				} else {
+					buf.WriteString(r.document(word))
+				}
 				cur = cur[:0]
 			}
-			first = false
-			part = strings.TrimLeft(part, "\t")
-			cur = append(cur, &syntax.Lit{Value: part})
+			for _, wp := range rd.Hdoc.Parts {
+				lit, ok := wp.(*syntax.Lit)
+				if !ok {
+					cur = append(cur, wp)
+					continue
+				}
+				first := true
+				for part := range strings.SplitSeq(lit.Value, "\n") {
+					if !first {
+						flushLine()
+						cur = cur[:0]
+					}
+					first = false
+					part = strings.TrimLeft(part, "\t")
+					cur = append(cur, &syntax.Lit{Value: part})
+				}
+			}
+			flushLine()
+			body = buf.Bytes()
 		}
 	}
-	flushLine()
-	go func() {
-		pw.Write(buf.Bytes())
-		pw.Close()
-	}()
-	return pr, nil
+	return hdocServe(body)
 }
 
 func quotedHdocDelimiter(word *syntax.Word) bool {

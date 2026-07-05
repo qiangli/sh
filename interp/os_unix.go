@@ -276,3 +276,28 @@ func modifiedSinceAccessed(info os.FileInfo) bool {
 // children. Unix passes the int fd straight to syscall.CloseOnExec; the
 // !unix build is a no-op (Windows wants a syscall.Handle) — see os_notunix.go.
 func closeOnExecFd(fd int) { syscall.CloseOnExec(fd) }
+
+// hdocServe materialises a here-document body as a readable descriptor. It
+// writes the body to a temp file, unlinks it immediately (the open fd keeps
+// the data valid and the inode is reclaimed once all descriptors close), and
+// rewinds it. Using a real file instead of a pipe+goroutine makes here-doc
+// delivery deterministic — a goroutine-fed pipe races with the consuming
+// process under load and could truncate its output to empty.
+func hdocServe(body []byte) (*os.File, error) {
+	f, err := os.CreateTemp("", "bashy-hdoc-")
+	if err != nil {
+		return nil, err
+	}
+	os.Remove(f.Name())
+	if len(body) > 0 {
+		if _, err := f.Write(body); err != nil {
+			f.Close()
+			return nil, err
+		}
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		f.Close()
+		return nil, err
+	}
+	return f, nil
+}

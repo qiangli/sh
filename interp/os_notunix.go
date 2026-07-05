@@ -118,3 +118,18 @@ func (r *Runner) inheritedFd(fd int) (*os.File, bool) {
 // closeOnExecFd is a no-op off unix: Windows/plan9 don't expose the int-fd
 // close-on-exec primitive (syscall.CloseOnExec there takes a Handle).
 func closeOnExecFd(int) {}
+
+// hdocServe delivers a here-document body over a pipe. Non-unix platforms
+// cannot unlink an open file, so the temp-file approach used on unix isn't
+// available; the pipe+goroutine is retained here.
+func hdocServe(body []byte) (*os.File, error) {
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		return nil, err
+	}
+	go func() {
+		pw.Write(body)
+		pw.Close()
+	}()
+	return pr, nil
+}
