@@ -6014,8 +6014,17 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			items := r.Params // for i; do ...
 
 			inToken := y.InPos.IsValid()
+			// Bash: on the loop's first iteration, `$?` reflects the last
+			// command substitution in the `in` word list (`for i in $(…)`)
+			// until the body runs a command. Capture it here.
+			forHadCmdSubst := false
+			var forExitCode uint8
 			if inToken {
+				r.lastExpandExit = exitStatus{}
+				r.lastExpandCmdSubst = false
 				items = r.fields(y.Items...) // for i in ...; do ...
+				forHadCmdSubst = r.lastExpandCmdSubst
+				forExitCode = r.lastExpandExit.code
 			}
 
 			if cm.Select {
@@ -6023,6 +6032,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				break
 			}
 
+			firstIter := true
 			for _, field := range items {
 				if r.exit.exiting || r.exit.returning || r.exit.fatalExit {
 					break
@@ -6068,6 +6078,11 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 					trace.string(` "$@"`)
 				}
 				trace.newLineFlush()
+				if firstIter && forHadCmdSubst {
+					r.exit.code = forExitCode
+					r.lastExit.code = forExitCode
+				}
+				firstIter = false
 				if r.loopStmtsBroken(ctx, cm.Do) {
 					break
 				}
@@ -6284,8 +6299,18 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		// Case subject undergoes full quote-removal (per POSIX): an
 		// unquoted `\X` collapses to `X` so it can be compared against
 		// patterns that have their own backslash semantics.
+		// Bash: inside the matched body, `$?` reflects the last command
+		// substitution in the case subject word until a command in the
+		// body actually runs — pattern matching does not change it. A
+		// command substitution reports its status via lastExpandExit
+		// (r.exit.code stays whatever it was before the case), so capture
+		// it here before pattern evaluation overwrites the shared state.
+		r.lastExpandExit = exitStatus{}
+		r.lastExpandCmdSubst = false
 		subj, err := expand.LiteralWithQuoteRemoval(r.ecfg, cm.Word)
 		r.expandErr(err)
+		subjectHadCmdSubst := r.lastExpandCmdSubst
+		subjectExitCode := r.lastExpandExit.code
 		str := subj
 		noCaseMatch := false
 		if opt, _ := r.bashOptByName("nocasematch"); opt != nil && *opt {
@@ -6320,6 +6345,14 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			}
 			if !matched {
 				continue
+			}
+			// Restore the case subject's `$?` (from a command substitution
+			// in the subject word) for the body's first command, unless a
+			// fallthrough already ran a prior body which leaves its own
+			// status. `$?` reads r.lastExit, so update that. Matches bash.
+			if subjectHadCmdSubst && !fallthroughActive {
+				r.exit.code = subjectExitCode
+				r.lastExit.code = subjectExitCode
 			}
 			r.stmts(ctx, ci.Stmts)
 			if !r.exit.ok() && stmtsEndErrexitExempt(ci.Stmts) {

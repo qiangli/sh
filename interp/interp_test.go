@@ -369,6 +369,13 @@ var runTests = []runTest{
 	// but a genuinely-failing final body command still exits under set -e.
 	{"set -e; for i in a; do false; done; echo reached", "exit status 1"},
 	{"set -e; case x in x) false ;; esac; echo reached", "exit status 1"},
+	// $? inside a case/for body reflects the last command substitution in
+	// the subject / `in` word until the body runs a command (VSC-PCTS #352).
+	{"case $(echo a; exit 99) in a) echo $? ;; esac", "99\n"},
+	{`case $(exit 5) in "") echo $? ;; esac`, "5\n"},
+	{"for i in $(echo x; exit 33); do echo $?; break; done", "33\n"},
+	{"for i in $(echo x y; exit 5); do echo $?; done", "5\n0\n"},
+	{"false; case x in x) echo $? ;; esac", "1\n"}, // no cmdsubst: prior $?
 	// tilde expansion in a ${param:+word} alternate word (like the :- default).
 	{"HOME=/h; echo ${HOME:+~/z}", "/h/z\n"},
 	{"HOME=/h; echo \"${HOME:+~/z}\"", "~/z\n"},
