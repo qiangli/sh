@@ -5,6 +5,7 @@ package interp_test
 
 import (
 	"context"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -13,7 +14,12 @@ import (
 )
 
 func TestRunnerBash53RedirectCluster(t *testing.T) {
-	t.Parallel()
+	// Not t.Parallel: these cases assert on process-global fd NUMBERS (3/7/8)
+	// and open real descriptors via `exec N>file`. In the goroutine-subshell
+	// model all simulated processes share one OS fd table, so a concurrent
+	// test's transient exec fd can appear at an asserted number and flake this
+	// suite (seen only under CI's 2-core `-race`). Run it in the sequential
+	// phase where no parallel test is active.
 
 	tests := []struct {
 		name         string
@@ -190,7 +196,8 @@ func TestRunnerBash53RedirectCluster(t *testing.T) {
 	for _, tt := range tests {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
+			// Serial within the suite too — see the note on the parent: fd
+			// numbers are process-global, so subtests must not overlap.
 
 			file, err := syntax.NewParser().Parse(strings.NewReader(tt.in), "")
 			if err != nil {
@@ -207,6 +214,14 @@ func TestRunnerBash53RedirectCluster(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			// Reclaim descriptors opened by earlier subtests' runners before
+			// asserting on specific fd numbers. interp closes redirect/exec
+			// fds via the *os.File finalizer (no deterministic close API — see
+			// Runner.Reset), so a prior subtest's fd can still occupy e.g. fd 7
+			// until GC runs. -race delays finalization enough to flake the
+			// bad-fd assertions; force a collection so the fd table is clean.
+			runtime.GC()
+			runtime.GC()
 			ctx, cancel := context.WithTimeout(context.Background(), runnerRunTimeout)
 			defer cancel()
 			if err := r.Run(ctx, file); err != nil {

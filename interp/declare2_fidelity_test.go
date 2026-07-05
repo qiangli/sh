@@ -40,7 +40,10 @@ func (b *syncBuffer) String() string {
 // stdout+stderr, and a script whose final command exits non-zero appends the
 // "exit status N" line that interp.Runner.Run reports as its error.
 func TestDeclare2Fidelity(t *testing.T) {
-	t.Parallel()
+	// Not t.Parallel: several cases pipe a builtin into an external `grep`
+	// (`declare -pr | grep …`), so they fork subprocesses and depend on the
+	// process fd table. Under CI's 2-core -race a concurrent test's exec can
+	// truncate the piped output; run this fidelity suite serially.
 
 	cases := []struct {
 		in, want string
@@ -219,7 +222,6 @@ func TestDeclare2Fidelity(t *testing.T) {
 			if err != nil {
 				t.Fatalf("parse: %v", err)
 			}
-			t.Parallel()
 
 			var buf syncBuffer
 			r, err := New(Dir(t.TempDir()), StdIO(nil, &buf, &buf))

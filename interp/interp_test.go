@@ -7971,7 +7971,10 @@ func TestAssignValNilIndex(t *testing.T) {
 }
 
 func TestRunnerNonFileStdin(t *testing.T) {
-	t.Parallel()
+	// Not t.Parallel: this re-execs $GOSH_PROG and asserts exact stdin
+	// draining. In the goroutine-subshell model the process fd table is
+	// shared, so a concurrent test's exec can perturb stdin/fd state and
+	// flake this case (seen only under CI's 2-core -race). Run it serially.
 
 	var cb concBuffer
 	r, err := interp.New(interp.StdIO(strings.NewReader("a\nb\nc\n"), &cb, &cb))
