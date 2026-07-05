@@ -8468,9 +8468,13 @@ func (r *Runner) fdCaps(fd int) (read *os.File, write io.Writer, ok bool) {
 			}
 		}
 	}
-	// Bash's redir tests pass fd 3 through an execed child shell and then
-	// use `<&3`; don't expose arbitrary ambient inherited fds here.
-	if !ok && fd == 3 {
+	// Resolve any REGISTERED inherited descriptor (via WithInheritedFds /
+	// the binary's startup fd discovery) so a dup like `1>&9` works when the
+	// fd was passed in by an `exec … 9>file`. inheritedFd() only succeeds for
+	// fds in r.inheritedFds, so an un-registered ambient fd still reports
+	// EBADF — matching bash, which exposes exactly the descriptors open at
+	// exec time.
+	if !ok && fd >= 3 {
 		if _, exists := r.inheritedFd(fd); exists {
 			return r.fdCaps(fd)
 		}
