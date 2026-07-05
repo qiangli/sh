@@ -249,15 +249,42 @@ func execReplace(ctx context.Context, path string, args, env []string, stdin any
 		}
 	}
 	if hc.runner != nil {
+		// Place every registered redirect fd at its target number for the
+		// exec'd process, e.g. `exec sh in 9>out 7>err 4<data` must hand
+		// sh descriptors 9, 7 and 4. Two hazards make the naive
+		// "dup each source onto its target" loop wrong:
+		//   1. fdTable iteration order is unspecified, and one entry's
+		//      target may be another entry's still-live source, so a dup
+		//      can clobber a descriptor not yet moved.
+		//   2. a source that already sits at its target number is left
+		//      untouched, but os.OpenFile set O_CLOEXEC on it, so it would
+		//      be closed by the execve and never reach the command.
+		// Copy all sources to private high descriptors first (above every
+		// target), then dup each into place — dupFD (Dup2/Dup3 with flags
+		// 0) leaves the target without close-on-exec, covering hazard 2.
+		base := 3
+		for fd := range hc.runner.fdTable {
+			if fd >= base {
+				base = fd + 1
+			}
+		}
+		type placement struct{ tmp, target int }
+		var places []placement
 		for fd, f := range hc.runner.fdTable {
 			if fd < 3 || f == nil {
 				continue
 			}
-			if int(f.Fd()) != fd {
-				if err := dupFD(int(f.Fd()), fd); err != nil {
-					return true, err
-				}
+			tmp, err := unix.FcntlInt(f.Fd(), unix.F_DUPFD_CLOEXEC, base)
+			if err != nil {
+				return true, err
 			}
+			places = append(places, placement{int(tmp), fd})
+		}
+		for _, p := range places {
+			if err := dupFD(p.tmp, p.target); err != nil {
+				return true, err
+			}
+			_ = unix.Close(p.tmp)
 		}
 	}
 	if len(args) == 0 {
