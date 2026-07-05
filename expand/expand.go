@@ -5616,6 +5616,31 @@ func bracketIsOrphan(s string) bool {
 	return strings.IndexByte(s, ']') < 0 && strings.IndexByte(s, '[') < 0
 }
 
+// escapeGlobTrailingBracket literal-izes a path component that ends in an
+// unescaped `[` with no way to close it, but only when the component is
+// already a glob (contains `*`, `?`, or another `[`). Bash matches such a
+// trailing `[` as a literal character inside an otherwise-globbing
+// component (e.g. `test.d*[` matches a directory named `dir[`), yet leaves
+// a component whose only special character is that `[` a plain literal so
+// nullglob does not remove it.
+func escapeGlobTrailingBracket(part string) string {
+	if !strings.HasSuffix(part, "[") {
+		return part
+	}
+	body := part[:len(part)-1]
+	backslashes := 0
+	for i := len(body) - 1; i >= 0 && body[i] == '\\'; i-- {
+		backslashes++
+	}
+	if backslashes%2 == 1 {
+		return part // the trailing `[` is already escaped as `\[`
+	}
+	if !strings.ContainsAny(body, "*?[") {
+		return part // sole special char is the orphan `[`: stays literal
+	}
+	return body + `\[`
+}
+
 func (cfg *Config) findAllIndex(pat, name string, n int) [][]int {
 	if strings.Contains(pat, "[") && strings.Contains(pat, "-") {
 		return findReplIndexBytes(pat, name, n, false, false, cfg.NoCaseMatch)
@@ -5883,7 +5908,15 @@ func (cfg *Config) glob(base, pat string) ([]string, error) {
 		if cfg.ExtGlob {
 			mode |= pattern.ExtendedOperators
 		}
-		matcher, err := internal.ExtendedPatternMatcher(part, mode)
+		// A path component ending in an unescaped `[` with no `]` to close
+		// it (e.g. the trailing `[` of `test.d*[` matching a directory
+		// literally named `dir[`) has a literal trailing `[` in bash, but
+		// pattern translation would treat it as an unterminated bracket and
+		// never match. Literal-ize it — but only when the component is
+		// otherwise already a glob, so a component whose sole special
+		// character is the orphan `[` stays a plain literal (and is not
+		// subject to nullglob removal), matching bash.
+		matcher, err := internal.ExtendedPatternMatcher(escapeGlobTrailingBracket(part), mode)
 		if err != nil {
 			return nil, err
 		}

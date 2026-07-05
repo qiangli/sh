@@ -1447,6 +1447,48 @@ func TestFieldsBackslashEscapedGlobPath(t *testing.T) {
 	}
 }
 
+// TestFieldsGlobOrphanTrailingBracket covers VSC-PCTS #575: a path
+// component ending in a `[` with no closing `]` has a literal trailing `[`
+// in bash when the component is otherwise a glob, so `d*[` matches a
+// directory literally named `dir[`. Previously bashy translated the
+// trailing `[` as an unterminated bracket and matched nothing.
+func TestFieldsGlobOrphanTrailingBracket(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("[ and ] are not valid characters in Windows filenames")
+	}
+	temp := t.TempDir()
+	// A directory literally named "dir[" holding a file named "]f".
+	if err := os.MkdirAll(temp+"/dir[", 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(temp+"/dir[/]f", nil, 0o666); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &Config{
+		Env:      ListEnviron("PWD=" + temp),
+		ReadDir2: os.ReadDir,
+	}
+	tests := []struct {
+		src  string
+		want []string
+	}{
+		{`./d*[/]f`, []string{"./dir[/]f"}},
+		{`./di?[/]f`, []string{"./dir[/]f"}},
+		{`./d*[/]*`, []string{"./dir[/]f"}},
+		{`./dir[/]f`, []string{"./dir[/]f"}}, // fully literal path
+	}
+	for _, tc := range tests {
+		word := parseWord(t, tc.src)
+		got, err := Fields(cfg, word)
+		if err != nil {
+			t.Fatalf("%s: did not want error, got %v", tc.src, err)
+		}
+		if !reflect.DeepEqual(got, tc.want) {
+			t.Fatalf("%s: wanted %q, got %q", tc.src, tc.want, got)
+		}
+	}
+}
+
 func TestGlobSort(t *testing.T) {
 	temp := t.TempDir()
 	files := []struct {
