@@ -82,11 +82,21 @@ func canRead(path string) bool {
 // ensure the parent process does not hold extra pipe fd references during
 // pipeline execution, which would prevent EOF/SIGPIPE propagation.
 func dupPipeFd(f *os.File) (*os.File, bool, error) {
-	newFd, err := syscall.Dup(int(f.Fd()))
+	// Duplicate the fd with close-on-exec set ATOMICALLY (fcntl
+	// F_DUPFD_CLOEXEC). The previous two-step syscall.Dup + CloseOnExec left
+	// a window in which the new fd had no CLOEXEC: an os/exec fork running in
+	// another goroutine (pipelines/subshells execute concurrently and share
+	// the process fd table) that landed in that window inherited this pipe
+	// endpoint. The leaked write end kept a pipe from ever reaching EOF, and
+	// under sustained load intermittently corrupted an unrelated child's I/O
+	// — e.g. a command's redirected output coming out empty. ForkLock
+	// serialises the dup against concurrent forks as belt-and-suspenders.
+	syscall.ForkLock.RLock()
+	defer syscall.ForkLock.RUnlock()
+	newFd, err := unix.FcntlInt(f.Fd(), unix.F_DUPFD_CLOEXEC, 0)
 	if err != nil {
 		return nil, false, err
 	}
-	syscall.CloseOnExec(newFd)
 	return os.NewFile(uintptr(newFd), f.Name()+"-dup"), true, nil
 }
 
