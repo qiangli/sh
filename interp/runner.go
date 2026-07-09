@@ -24,6 +24,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -8633,6 +8634,27 @@ func (badFdReader) Read([]byte) (int, error) {
 func isClosedFdWriteErr(err error) bool {
 	_, ok := err.(ExitStatus)
 	return ok
+}
+
+func shouldReportWriteErr(name string, err error) bool {
+	if err == nil {
+		return false
+	}
+	if writeErrChecked[name] && isClosedFdWriteErr(err) {
+		return true
+	}
+	return pipeWriteErrChecked[name] && (isClosedFdWriteErr(err) || isBrokenPipeWriteErr(err))
+}
+
+func isBrokenPipeWriteErr(err error) bool {
+	return errors.Is(err, syscall.EPIPE)
+}
+
+func writeErrDiagnostic(err error) string {
+	if isBrokenPipeWriteErr(err) {
+		return "Broken pipe"
+	}
+	return "Bad file descriptor"
 }
 
 // isClosedFdWriter reports whether w is the badFdWriter sentinel the runner

@@ -561,6 +561,17 @@ var writeErrChecked = map[string]bool{
 	"printf": true,
 }
 
+// pipeWriteErrChecked is the POSIX special/listing builtin subset whose
+// standard-output write errors are observable when SIGPIPE is ignored. In the
+// common `builtin | consumer` case bash dies from SIGPIPE silently, so keep
+// the broader EPIPE check away from echo/printf and other output builtins.
+var pipeWriteErrChecked = map[string]bool{
+	"export":   true,
+	"readonly": true,
+	"set":      true,
+	"times":    true,
+}
+
 func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args []string) (exit exitStatus) {
 	// Bash fails a builtin whose standard-output write fails on a closed or
 	// broken descriptor (`echo >&-`, `printf x >&-`): it reports a write
@@ -575,12 +586,14 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		// sh_chkwrite (echo, printf): a write to a closed descriptor (EBADF:
 		// `echo >&-`) is reported and exits non-zero. Other output builtins
 		// (e.g. `help >&-`) fail silently, so the check is scoped to that set.
-		// A broken pipe (EPIPE: `echo foo | false`) is bash's SIGPIPE case —
-		// the writer dies silently and the status comes from the pipeline — so
-		// it is excluded by isClosedFdWriteErr.
-		if writeErrChecked[name] && isClosedFdWriteErr(r.outErr) &&
+		// A broken pipe (EPIPE: `echo foo | false`) is usually bash's SIGPIPE
+		// case — the writer dies silently and the status comes from the
+		// pipeline — so the generic check remains limited to closed fds. POSIX
+		// also requires a few special/listing builtins to report write errors
+		// when SIGPIPE is ignored; cover that narrower class separately.
+		if shouldReportWriteErr(name, r.outErr) &&
 			exit.code == 0 && !exit.exiting && !exit.returning {
-			r.errf("%s%s: write error: Bad file descriptor\n", r.bashErrPrefix(pos), name)
+			r.errf("%s%s: write error: %s\n", r.bashErrPrefix(pos), name, writeErrDiagnostic(r.outErr))
 			exit.code = 1
 		}
 		r.outErr = prevOutErr

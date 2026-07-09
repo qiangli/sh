@@ -20,6 +20,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -6143,6 +6144,53 @@ func TestRunnerCdStatErrorReason(t *testing.T) {
 	want := "cd: longname: File name too long\nexit status 1"
 	if got := cb.String(); got != want {
 		t.Fatalf("wrong output:\nwant: %q\ngot:  %q", want, got)
+	}
+}
+
+type epipeWriter struct{}
+
+func (epipeWriter) Write([]byte) (int, error) {
+	return 0, syscall.EPIPE
+}
+
+func TestPosixListingBuiltinsReportBrokenPipe(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		src  string
+	}{
+		{"export", "export FOO=bar; command export -p"},
+		{"readonly", "readonly RO=bar; command readonly -p"},
+		{"set", "FOO=bar; command set"},
+		{"times", "command times"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			file := parse(t, syntax.NewParser(), tc.src)
+			var stderr bytes.Buffer
+			r, err := interp.New(
+				interp.StdIO(nil, epipeWriter{}, &stderr),
+				interp.WithPosixMode(true),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), runnerRunTimeout)
+			defer cancel()
+			err = r.Run(ctx, file)
+			code, ok := interp.IsExitStatus(err)
+			if !ok || code == 0 {
+				t.Fatalf("exit status = %v, %v; want non-zero", code, ok)
+			}
+			want := tc.name + ": write error: Broken pipe\n"
+			if got := stderr.String(); got != want {
+				t.Fatalf("stderr mismatch:\nwant: %q\ngot:  %q", want, got)
+			}
+		})
 	}
 }
 
