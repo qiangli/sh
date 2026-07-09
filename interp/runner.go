@@ -4512,6 +4512,7 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 	r.exit = exitStatus{}
 	if st.Background || st.Disown {
 		r2 := r.subshell(true)
+		r2.asyncList = true
 		r2.inheritedBang = r.lastBangProc()
 		r2.ignoreAsyncListSignals()
 		if r.opts[optPosix] {
@@ -4993,6 +4994,47 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 			}
 		}
 	}
+}
+
+func (r *Runner) checkFuncDeclRedirs(ctx context.Context, body *syntax.Stmt) bool {
+	if body == nil || len(body.Redirs) == 0 {
+		return true
+	}
+	oldIn, oldOut, oldErr := r.stdin, r.stdout, r.stderr
+	oldStdinTTYFallback := r.stdinTTYFallback
+	oldStdinDevTTY := r.stdinDevTTY
+	oldStdinRedirected := r.stdinRedirected
+	oldStdinClosed := r.stdinClosed
+	oldFdTable := maps.Clone(r.fdTable)
+	oldFdReadTable := maps.Clone(r.fdReadTable)
+	oldFdWriteTable := maps.Clone(r.fdWriteTable)
+	oldFdClosedTable := maps.Clone(r.fdClosedTable)
+	var closers []io.Closer
+	defer func() {
+		for _, cls := range closers {
+			cls.Close()
+		}
+		r.stdin, r.stdout, r.stderr = oldIn, oldOut, oldErr
+		r.stdinTTYFallback = oldStdinTTYFallback
+		r.stdinDevTTY = oldStdinDevTTY
+		r.stdinRedirected = oldStdinRedirected
+		r.stdinClosed = oldStdinClosed
+		r.fdTable = oldFdTable
+		r.fdReadTable = oldFdReadTable
+		r.fdWriteTable = oldFdWriteTable
+		r.fdClosedTable = oldFdClosedTable
+	}()
+	for _, rd := range body.Redirs {
+		cls, err := r.redir(ctx, rd)
+		if err != nil {
+			r.exit.code = 1
+			return false
+		}
+		if cls != nil {
+			closers = append(closers, cls)
+		}
+	}
+	return true
 }
 
 func (r *Runner) commandPrefixDeclArgs(args []*syntax.Word) (string, []string, bool) {
@@ -5626,17 +5668,11 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		}
 		if assignFailed {
 			if r.opts[optPosix] {
-				if r.subshellLevel > 0 && !r.interactiveShell {
+				if !r.interactiveShell {
 					r.exit.exiting = true
 					break
 				}
-				if isPosixSpecialBuiltin(fields[0]) && !r.interactiveShell {
-					r.exit.exiting = true
-					break
-				}
-				// Otherwise bash 5.3 --posix spares the shell (special builtin in an
-				// interactive shell, OR any non-special command in either mode): skip
-				// the command and continue with status 1. Verified vs the live oracle.
+				// Interactive POSIX shells skip the command and continue with status 1.
 				for _, restore := range restores {
 					r.restoreInlineVar(restore.name, restore.vr)
 				}
@@ -6235,6 +6271,9 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			r.errf("%s%s: readonly function\n",
 				r.bashErrPrefix(cm.End()), name)
 			r.exit.code = 1
+			return
+		}
+		if !r.checkFuncDeclRedirs(ctx, cm.Body) {
 			return
 		}
 		r.setFunc(name, cm.Body)

@@ -1631,8 +1631,24 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				continue
 			}
 			if strings.HasPrefix(target, "g") {
-				exit.code = 1
-				r.errf(r.bashErrPrefix(pos)+"kill: %s: no job control in this shell\n", target)
+				bg := r.resolveJobArg(target)
+				if bg == nil {
+					exit.code = 1
+					r.errf(r.bashErrPrefix(pos)+"kill: (%s) - No such process\n", target)
+					continue
+				}
+				if bg.pidReady != nil {
+					<-bg.pidReady
+				}
+				rp := jobSignalPid(bg)
+				if rp == 0 {
+					continue
+				}
+				if err := sendSignal(rp, sig); err != nil {
+					exit.code = 1
+					r.errf(r.bashErrPrefix(pos)+"kill: (%s) - %v\n", target, err)
+					continue
+				}
 				continue
 			}
 			pid, err := strconv.Atoi(target)
@@ -1676,9 +1692,14 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 						if cb == "" {
 							continue
 						}
-						// Background subshells inherit the trap table but not
-						// the parent's signal.Notify ownership. Fall through to
-						// a real OS signal so the foreground parent receives it.
+						if r.asyncList {
+							r.markPendingSignal(sname)
+							continue
+						}
+						// Background subshells outside asynchronous-list
+						// handling inherit the trap table but not the parent's
+						// signal.Notify ownership. Fall through to a real OS
+						// signal so the foreground parent receives it.
 					} else if !sigIsZero(sig) {
 						exit.code = uint8(128 + sigNum(sig))
 						exit.exiting = true

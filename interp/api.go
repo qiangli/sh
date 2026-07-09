@@ -459,6 +459,11 @@ type Runner struct {
 	// `trap -p`, but reset for execution until the subshell sets it.
 	inheritedExitTrap bool
 
+	// asyncList marks a runner executing a POSIX asynchronous list (`cmd &`).
+	// Such runners get SIGINT/SIGQUIT ignored by default while job control is
+	// disabled; external commands launched from them must inherit that state.
+	asyncList bool
+
 	// callStack tracks function call frames for caller/BASH_SOURCE/BASH_LINENO/FUNCNAME.
 	callStack []callFrame
 

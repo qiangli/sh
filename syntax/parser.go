@@ -2764,6 +2764,9 @@ func (p *Parser) getStmt(readEnd, binCmd, fnBody bool) *Stmt {
 	if s = p.gotStmtPipe(s, false); s == nil || p.err != nil {
 		return nil
 	}
+	if fnBody {
+		return s
+	}
 	// instead of using recursion, iterate manually
 	for p.tok == andAnd || p.tok == orOr {
 		if binCmd {

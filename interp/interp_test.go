@@ -804,6 +804,8 @@ var runTests = []runTest{
 	{"f() { echo $v; }; v=x; v+=y f; f", "xy\nx\n"},
 	{"f() { echo $v; }; declare -n v=v2; v2=x; v=y f; f", "y\nx\n"},
 	{"f() { echo ${v[@]}; }; v=(e1 e2); v=y f; f", "y\ne1 e2\n"},
+	{"f() { echo bad; } 3>/dev/null/abc && f; echo status:$?", "open /dev/null/abc: not a directory\nstatus:1\n"},
+	{"f() { echo hi; } >out; echo def:$?; f; echo after; printf 'file:'; cat out", "def:0\nafter\nfile:hi\n"},
 	{`f() { local v=x; unset v; declare -p v; }; v=g; f; v=t f`, "declare -- v\ndeclare -x v\n"},
 	{`a=bcde; f1() { a=3 readonly a; echo f1:$a; }; a=7 f1; echo "global:$a"; set -o posix; a=7 f1; echo "global:$a"`, "f1:3\nglobal:bcde\nf1:3\nglobal:3\n"},
 
@@ -2581,6 +2583,11 @@ var runTests = []runTest{
 	{"false & pid=$!; wait $pid", "exit status 1"},
 	{"{ sleep 0.01; true; } & pid=$!; wait $pid", ""},
 	{"{ sleep 0.01; false; } & pid=$!; wait $pid", "exit status 1"},
+	{"set -o posix; sleep 0.1 & pid=$!; kill -s INT $pid; kill -s QUIT $pid; wait $pid; echo status:$?", "status:0\n"},
+	{
+		"set -o posix; (trap 'echo got INT' INT; trap - QUIT; kill -s INT $$; echo after INT; kill -s QUIT $$; echo after QUIT) & wait $!; echo status:$?",
+		"got INT\nafter INT\nstatus:131\n",
+	},
 	{"(true) & ok=$!; (false) & fail=$!; wait $ok $fail", "exit status 1"},
 	{"(true) & ok=$!; (false) & ignore=$!; wait $ok", ""},
 	{"echo foo | true | false & wait $!", "exit status 1"},
@@ -4636,6 +4643,10 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	{
 		"VAR=4; readonly VAR; VAR=7 echo ok; echo status:$?",
 		"VAR: readonly variable\nok\nstatus:0\n",
+	},
+	{
+		"set -o posix; VAR=4; readonly VAR; VAR=7 echo ok; echo after",
+		"VAR: readonly variable\nexit status 1 #JUSTERR",
 	},
 	{
 		"set -k; export HOME=/foo/bar; c=7; HOME=/a/b/c echo $HOME c=9; echo $c",
