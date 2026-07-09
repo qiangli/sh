@@ -2203,10 +2203,10 @@ func (r *Runner) Reset() {
 		// updates only r.umask afterwards; the process value is never
 		// mutated by this runner.
 		r.umask = processUmask()
-		// Snapshot, once, the signals the parent shell hard-ignored before
-		// exec'ing us (carried in BashyHardIgnoreEnv). This is the shell's
-		// startup state and never changes thereafter.
-		r.startupIgnored = parseHardIgnore(r.Env.Get(BashyHardIgnoreEnv).String())
+		// Snapshot, once, the signals that were ignored on shell entry. The
+		// environment bridge covers self re-execs; the OS disposition snapshot
+		// covers a real parent that exec'd us with SIG_IGN inherited.
+		r.startupIgnored = startupIgnoredSignals(r.Env.Get(BashyHardIgnoreEnv).String())
 	}
 	// reset the internal state
 	*r = Runner{
