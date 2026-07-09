@@ -5,6 +5,7 @@ package interp
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -17,6 +18,8 @@ import (
 )
 
 var childSignalStartMu sync.Mutex
+
+var errReadInterrupted = errors.New("read interrupted by signal")
 
 type asyncExecSignal struct {
 	name string
@@ -327,6 +330,12 @@ func (r *Runner) wakeSignalWaiters() {
 	case wake <- struct{}{}:
 	default:
 	}
+}
+
+func (r *Runner) signalWakeChan() <-chan struct{} {
+	r.sigMu.Lock()
+	defer r.sigMu.Unlock()
+	return r.sigWake
 }
 
 // nextPendingSignal pops the lowest-numbered pending signal name, or "" if

@@ -3464,7 +3464,19 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				line, err = readInput()
 			}
 		} else {
+			if input == stdin && stdin != nil {
+				if wake := r.signalWakeChan(); wake != nil {
+					if fdReader := signalReader(readCtx, stdin, wake); fdReader != nil {
+						input = fdReader
+					}
+				}
+			}
 			line, err = readInput()
+		}
+		if errors.Is(err, errReadInterrupted) {
+			clearReadVars()
+			exit.code = 1
+			return exit
 		}
 		if isReadTimeout(err) {
 			clearReadVars()

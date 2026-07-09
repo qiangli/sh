@@ -24,6 +24,10 @@ func timeoutReader(ctx context.Context, f *os.File, deadline time.Time) io.Reade
 	return &timeoutFileReader{ctx: ctx, file: f, deadline: deadline}
 }
 
+func signalReader(ctx context.Context, f *os.File, wake <-chan struct{}) io.Reader {
+	return &timeoutFileReader{ctx: ctx, file: f, wake: wake}
+}
+
 func fdReadableNow(f *os.File) bool {
 	pollFd := []unix.PollFd{{
 		Fd:     int32(f.Fd()),
@@ -37,6 +41,7 @@ type timeoutFileReader struct {
 	ctx      context.Context
 	file     *os.File
 	deadline time.Time
+	wake     <-chan struct{}
 }
 
 func (r *timeoutFileReader) Read(p []byte) (int, error) {
@@ -57,12 +62,15 @@ func (r *timeoutFileReader) Read(p []byte) (int, error) {
 		// even when the timeout is tiny or already elapsed, matching bash
 		// (ready input is consumed before a -t timeout is reported). poll(2)
 		// is used uniformly (no FD_SETSIZE limit, unlike select).
-		remaining := time.Until(r.deadline)
-		msec := remaining.Milliseconds()
-		if msec < 0 {
-			msec = 0
-		} else if msec == 0 && remaining > 0 {
-			msec = 1 // sub-millisecond remaining: round up, don't busy-spin
+		msec := 100
+		if !r.deadline.IsZero() {
+			remaining := time.Until(r.deadline)
+			msec = int(remaining.Milliseconds())
+			if msec < 0 {
+				msec = 0
+			} else if msec == 0 && remaining > 0 {
+				msec = 1 // sub-millisecond remaining: round up, don't busy-spin
+			}
 		}
 		pollFd := []unix.PollFd{{
 			Fd:     int32(fd),
@@ -79,8 +87,15 @@ func (r *timeoutFileReader) Read(p []byte) (int, error) {
 			// Readable (data, EOF, or hangup) — let the real read decide.
 			return r.file.Read(p)
 		}
+		if r.wake != nil {
+			select {
+			case <-r.wake:
+				return 0, errReadInterrupted
+			default:
+			}
+		}
 		// Nothing ready; only give up once the deadline has truly passed.
-		if time.Until(r.deadline) <= 0 {
+		if !r.deadline.IsZero() && time.Until(r.deadline) <= 0 {
 			return 0, os.ErrDeadlineExceeded
 		}
 	}

@@ -7,11 +7,31 @@ package interp
 
 import (
 	"bytes"
+	"os"
+	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"mvdan.cc/sh/v3/syntax"
 )
+
+type readySignalWriter struct {
+	buf   bytes.Buffer
+	ready chan struct{}
+}
+
+func (w *readySignalWriter) Write(p []byte) (int, error) {
+	n, err := w.buf.Write(p)
+	if strings.Contains(w.buf.String(), "ready\n") {
+		select {
+		case <-w.ready:
+		default:
+			close(w.ready)
+		}
+	}
+	return n, err
+}
 
 // fabricateWaitStatus builds a syscall.WaitStatus reporting a termination by
 // sig, with the core-dump bit optionally set. Both Linux and the BSDs (macOS)
@@ -23,6 +43,51 @@ func fabricateWaitStatus(sig syscall.Signal, core bool) waitStatus {
 		v |= 0x80
 	}
 	return syscall.WaitStatus(v)
+}
+
+func TestReadInterruptedByTrappedSignal(t *testing.T) {
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pr.Close()
+	defer pw.Close()
+
+	file, err := syntax.NewParser().Parse(strings.NewReader(
+		"trap 'echo USR1 received' USR1\n"+
+			"echo ready\n"+
+			"read x || read x\n"+
+			"echo got:$x\n"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := &readySignalWriter{ready: make(chan struct{})}
+	r, err := New(StdIO(pr, out, out))
+	if err != nil {
+		t.Fatal(err)
+	}
+	errc := make(chan error, 1)
+	go func() {
+		errc <- r.Run(t.Context(), file)
+	}()
+	select {
+	case <-out.ready:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("shell did not reach read; output so far: %q", out.buf.String())
+	}
+	if err := syscall.Kill(os.Getpid(), syscall.SIGUSR1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pw.WriteString("input\n"); err != nil {
+		t.Fatal(err)
+	}
+	pw.Close()
+	if err := <-errc; err != nil {
+		t.Fatal(err)
+	}
+	if got, want := out.buf.String(), "ready\nUSR1 received\ngot:input\n"; got != want {
+		t.Fatalf("output mismatch\n got: %q\nwant: %q", got, want)
+	}
 }
 
 // TestForegroundSignalDeathNotify covers #25/#26: a foreground external

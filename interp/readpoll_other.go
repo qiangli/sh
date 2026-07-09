@@ -17,6 +17,8 @@ import (
 // (e.g. Windows console/pipe handles).
 func timeoutReader(context.Context, *os.File, time.Time) io.Reader { return nil }
 
+func signalReader(context.Context, *os.File, <-chan struct{}) io.Reader { return nil }
+
 func fdReadableNow(f *os.File) bool {
 	return false
 }
