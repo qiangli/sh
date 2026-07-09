@@ -2202,6 +2202,20 @@ func fieldsAllAssignments(fields []string) bool {
 	return true
 }
 
+func fieldsPromotableAssignments(fields []string, args []*syntax.Word) bool {
+	if !fieldsAllAssignments(fields) {
+		return false
+	}
+	if len(fields) == len(args) {
+		for _, arg := range args {
+			if !wordLooksLikeAssign(arg) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 func splitAssignmentField(field string) (name, value string, ok bool) {
 	eq := strings.IndexByte(field, '=')
 	if eq <= 0 || !syntax.ValidName(field[:eq]) {
@@ -5293,7 +5307,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		// keeps the brace-expanded `{a,b}=value` case (no leading
 		// assigns) on the cmd path so it errors as bash 3.x did.
 		setK := r.opts[optKeyword]
-		if (len(cm.Assigns) > 0 || setK) && len(fields) > 0 && fieldsAllAssignments(fields) {
+		if (len(cm.Assigns) > 0 || setK) && len(fields) > 0 && fieldsPromotableAssignments(fields, args) {
 			assignPlain := func(name string, vr expand.Variable) bool {
 				r.setVar(name, vr)
 				if !r.exit.ok() && !r.exit.exiting && !r.exit.returning && !r.exit.fatalExit {

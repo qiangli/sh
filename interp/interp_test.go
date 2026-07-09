@@ -6194,6 +6194,50 @@ func TestPosixListingBuiltinsReportBrokenPipe(t *testing.T) {
 	}
 }
 
+func TestPosixQuotedEqualsCommandAfterAssignment(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("requires executing a script with '=' in its filename")
+	}
+
+	tdir := t.TempDir()
+	cmdPath := filepath.Join(tdir, "var=753")
+	if err := os.WriteFile(cmdPath, []byte("#!/bin/sh\necho var=753 executed\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	src := `PATH=.:$PATH
+"var=753"
+var'=753'
+var\=753
+x=y "var=753"
+x=y var'=753'
+x=y var\=753
+`
+	file := parse(t, syntax.NewParser(), src)
+	var stdout, stderr bytes.Buffer
+	r, err := interp.New(
+		interp.Dir(tdir),
+		interp.StdIO(nil, &stdout, &stderr),
+		interp.WithPosixMode(true),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), runnerRunTimeout)
+	defer cancel()
+	if err := r.Run(ctx, file); err != nil {
+		t.Fatal(err)
+	}
+	want := strings.Repeat("var=753 executed\n", 6)
+	if got := stdout.String(); got != want {
+		t.Fatalf("stdout mismatch:\nwant: %q\ngot:  %q", want, got)
+	}
+	if got := stderr.String(); got != "" {
+		t.Fatalf("stderr = %q, want empty", got)
+	}
+}
+
 // TestRestrictedReadonlyTempAssign checks that a restricted shell (-r),
 // which freezes PATH/SHELL/ENV/BASH_ENV as readonly, follows bash 5.3 for
 // assignments to those variables:
