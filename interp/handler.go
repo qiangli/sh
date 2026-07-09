@@ -256,7 +256,7 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 		if hc.runner != nil {
 			restoreUmask = syncUmaskForChild(hc.runner.umask)
 		}
-		err = cmd.Start()
+		err = hc.runner.startExecCmd(ctx, &cmd)
 		restoreUmask()
 		// POSIX/bash: when execve fails with ENOEXEC (the file
 		// has no shebang and isn't a recognised binary), the
@@ -293,7 +293,7 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 				if hc.runner != nil {
 					restoreUmask = syncUmaskForChild(hc.runner.umask)
 				}
-				err = cmd.Start()
+				err = hc.runner.startExecCmd(ctx, &cmd)
 				restoreUmask()
 			}
 		}

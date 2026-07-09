@@ -64,6 +64,18 @@ func runScript(t *testing.T, src string) (string, error) {
 	return buf.String(), runErr
 }
 
+func TestAsyncListExternalCommandIgnoresIntQuitWithoutJobControl(t *testing.T) {
+	if _, err := os.Stat("/bin/sh"); err != nil {
+		t.Skip("no /bin/sh:", err)
+	}
+	out, err := runScript(t, `set +m
+/bin/sh -c 'trap - INT QUIT; kill -INT $$; kill -QUIT $$; printf "survived\n"' &
+wait $!
+echo "rc=$?"`)
+	qt.Assert(t, qt.IsNil(err), qt.Commentf("out: %q", out))
+	qt.Assert(t, qt.Equals(out, "survived\nrc=0\n"))
+}
+
 func TestKillSendsRealSignal(t *testing.T) {
 	sleepBin, err := exec.LookPath("sleep")
 	if err != nil {

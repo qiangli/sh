@@ -6,13 +6,22 @@ package interp
 import (
 	"context"
 	"os"
+	"os/exec"
 	"os/signal"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"mvdan.cc/sh/v3/syntax"
 )
+
+var childSignalStartMu sync.Mutex
+
+type asyncExecSignal struct {
+	name string
+	sig  os.Signal
+}
 
 // monitorActive reports whether job-control monitor mode (`set -m` / `set -o
 // monitor`) is currently in effect. A non-interactive shell defaults to off;
@@ -38,6 +47,48 @@ func (r *Runner) ignoreAsyncListSignals() {
 			r.trapCallbacks[sig] = ""
 		}
 	}
+}
+
+func (r *Runner) asyncIgnoredSignalsForExec(ctx context.Context) []asyncExecSignal {
+	bg, _ := ctx.Value(bgProcCtxKey{}).(*bgProc)
+	if bg == nil || bg.jobControl {
+		return nil
+	}
+	var ignored []asyncExecSignal
+	for _, name := range [...]string{"INT", "QUIT"} {
+		if cb, ok := r.trapCallbacks[name]; !ok || cb != "" {
+			continue
+		}
+		if sig, ok := signalByName(name); ok {
+			ignored = append(ignored, asyncExecSignal{name: name, sig: signalForOS(sig)})
+		}
+	}
+	return ignored
+}
+
+// startExecCmd starts cmd after applying POSIX asynchronous-list signal
+// inheritance. Go exposes no per-child pre-exec signal-disposition hook, so the
+// runner serializes this narrow fork/exec window and temporarily sets SIG_IGN
+// for the signals that `cmd &` defaults introduced.
+func (r *Runner) startExecCmd(ctx context.Context, cmd *exec.Cmd) error {
+	ignored := r.asyncIgnoredSignalsForExec(ctx)
+	if len(ignored) == 0 {
+		return cmd.Start()
+	}
+	childSignalStartMu.Lock()
+	defer childSignalStartMu.Unlock()
+	for _, item := range ignored {
+		signal.Ignore(item.sig)
+	}
+	err := cmd.Start()
+	for _, item := range ignored {
+		if r.startupIgnored[item.name] || r.sigIgnored[item.name] {
+			signal.Ignore(item.sig)
+		} else {
+			restoreExecSignal(item.sig)
+		}
+	}
+	return err
 }
 
 // shellPid returns the PID this runner reports as $$, so the kill builtin can
