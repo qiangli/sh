@@ -2275,7 +2275,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			// 'false'`) is not a syntax error and keeps running. This
 			// is the only parse-error path (the alias retry above
 			// breaks out on a successful re-parse).
-			if r.opts[optPosix] {
+			if r.opts[optPosix] && !r.interactiveShell {
 				exit.exiting = true
 			}
 			// Bash 5.3 prints eval-time parse errors as
