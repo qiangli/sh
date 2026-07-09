@@ -2584,6 +2584,11 @@ var runTests = []runTest{
 	{"{ sleep 0.01; true; } & pid=$!; wait $pid", ""},
 	{"{ sleep 0.01; false; } & pid=$!; wait $pid", "exit status 1"},
 	{"set -o posix; sleep 0.1 & pid=$!; kill -s INT $pid; kill -s QUIT $pid; wait $pid; echo status:$?", "status:0\n"},
+	{"set -o posix; trap 'echo foo' EXIT >/dev/null & wait $!", "foo\n"},
+	{
+		"set -o posix; kill() (trap 'sleep 0' EXIT; (trap 'sleep 0' EXIT; (trap 'sleep 0' EXIT; command kill \"$@\"))); trap X USR1; alias X='echo 1'; kill -s USR1 $$; alias X='echo 2'; kill -s USR1 $$",
+		"1\n2\n",
+	},
 	{
 		"set -o posix; (trap 'echo got INT' INT; trap - QUIT; kill -s INT $$; echo after INT; kill -s QUIT $$; echo after QUIT) & wait $!; echo status:$?",
 		"got INT\nafter INT\nstatus:131\n",

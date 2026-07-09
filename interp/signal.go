@@ -497,10 +497,7 @@ func (r *Runner) runSignalTrap(ctx context.Context, callback, name string) {
 	// The action is re-parsed and re-run on every delivery, so it must see
 	// the alias definitions in effect now (when the trap fires), not be
 	// suppressed by alias-timing against the freshly-parsed body's line 1.
-	// Anchor the timing at the currently-executing statement so every alias
-	// defined before this point expands (bash trap-p: "command is evaluated
-	// each time trap is executed").
-	r.withAliasReparse(int(r.curStmtPos.Line()), func() {
+	r.withAliasReparse(r.trapAliasReparseLine(), func() {
 		r.stmts(ctx, file.Stmts)
 	})
 	if r.exit.returning || r.exit.exiting || r.exit.fatalExit ||

@@ -4551,6 +4551,9 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 				}
 			}()
 			r2.Run(bgCtx, &st2)
+			if cb := r2.trapCallbacks["EXIT"]; cb != "" && !r2.inheritedExitTrap {
+				r2.trapCallback(bgCtx, cb, "exit")
+			}
 			r2.exit.exiting = false // subshells don't exit the parent shell
 			r2.exit.discarding = false
 			*bg.exit = r2.exit
@@ -7857,9 +7860,9 @@ func (r *Runner) trapCallback(ctx context.Context, callback, name string) uint8 
 	// Commands run from a trap handler trace one xtrace level deeper
 	// (bash replicates PS4's first char: `+` -> `++`).
 	r.xtraceLevel++
-	// Anchor alias timing at the current statement so aliases defined before
-	// the trap fires expand in the re-parsed body (see runSignalTrap).
-	r.withAliasReparse(int(r.curStmtPos.Line()), func() {
+	// Anchor alias timing at trap delivery so aliases already defined expand
+	// in the re-parsed body (see runSignalTrap).
+	r.withAliasReparse(r.trapAliasReparseLine(), func() {
 		r.stmts(ctx, file.Stmts)
 	})
 	r.xtraceLevel--

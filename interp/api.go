@@ -1074,6 +1074,19 @@ func (r *Runner) withAliasReparse(outerLine int, fn func()) {
 	fn()
 }
 
+func (r *Runner) trapAliasReparseLine() int {
+	line := r.aliasUseLine(int(r.curStmtPos.Line()))
+	for _, als := range r.alias {
+		if als.defLine >= line {
+			line = als.defLine + 1
+		}
+	}
+	if line < 1 {
+		line = 1
+	}
+	return line
+}
+
 // AdvanceAliasInput marks the start of a newly-read unit of interactive
 // input spanning lineCount lines. Interactive front-ends parse each input
 // chunk independently (line numbers restart at 1), so this advances the
