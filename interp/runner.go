@@ -5123,6 +5123,13 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		// line) are not affected. Reconstruct that timing from effective
 		// line numbers (see aliasBase / aliasDefOverride on Runner).
 		aliasUseLine := r.aliasUseLine(int(origCallPos.Line()))
+		if r.opts[optExpandAliases] && r.aliasReparseDepth == 0 &&
+			len(cm.Assigns) == 0 && len(args) > 0 && r.aliasStartsCompound(args[0].Lit(), aliasUseLine) {
+			if file, ok := r.aliasReparsePhysicalLine(origCallPos, aliasUseLine); ok {
+				r.runAliasReparseFile(ctx, cm.Pos(), aliasUseLine, file)
+				return
+			}
+		}
 		seenAliases := make(map[string]bool)
 		aliasExpanded := false
 		// Variable-assignment prefixes (`a=A b`) apply to the
@@ -5172,15 +5179,16 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				}
 				p := syntax.NewParser()
 				file, err := p.Parse(strings.NewReader(src.String()), "")
+				if r.aliasStartsCompound(name, aliasUseLine) {
+					if retry, ok := r.aliasReparsePhysicalLine(origCallPos, aliasUseLine); ok {
+						file = retry
+						err = nil
+					}
+				}
 				if err != nil {
 					break
 				}
-				prevOverride := r.aliasLineOverride
-				r.aliasLineOverride = int(cm.Pos().Line())
-				r.withAliasReparse(aliasUseLine, func() {
-					r.stmts(ctx, file.Stmts)
-				})
-				r.aliasLineOverride = prevOverride
+				r.runAliasReparseFile(ctx, cm.Pos(), aliasUseLine, file)
 				return
 			}
 			if als.raw != "" {
@@ -6232,9 +6240,6 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			r.exit.errexitExempt = true
 		}
 	case *syntax.FuncDecl:
-		// POSIX mode: a function name that shadows a special
-		// builtin (`return`, `break`, `export`, etc.) is a fatal
-		// error. Reject before stashing in the function table.
 		name := cm.Name.Value
 		// Bash 5.3 defers non-identifier function-name checks from
 		// parse time to runtime. `function sys$read` parses cleanly
@@ -6252,17 +6257,6 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			r.exit.code = 1
 			return
 		}
-		if r.opts[optPosix] && isPosixSpecialBuiltin(name) {
-			errPos := cm.End()
-			if r.enclosingSubshellEnd.IsValid() {
-				errPos = r.enclosingSubshellEnd
-			}
-			r.errf("%s`%s': is a special builtin\n",
-				r.bashErrPrefix(errPos), name)
-			r.exit.code = 1
-			r.exit.exiting = true
-			return
-		}
 		// Bash rejects redefinition of a readonly function with
 		// `<file>: line N: NAME: readonly function`, reported at the
 		// end of the rejected definition (closing brace), not its
@@ -6271,9 +6265,6 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			r.errf("%s%s: readonly function\n",
 				r.bashErrPrefix(cm.End()), name)
 			r.exit.code = 1
-			return
-		}
-		if !r.checkFuncDeclRedirs(ctx, cm.Body) {
 			return
 		}
 		r.setFunc(name, cm.Body)
@@ -7916,6 +7907,175 @@ func (r *Runner) expandRawAliasSource(src string) (string, bool) {
 	}
 	b.WriteString(src[i:])
 	return b.String(), true
+}
+
+func (r *Runner) runAliasReparseFile(ctx context.Context, pos syntax.Pos, aliasUseLine int, file *syntax.File) {
+	prevOverride := r.aliasLineOverride
+	r.aliasLineOverride = int(pos.Line())
+	r.aliasReparseDepth++
+	r.withAliasReparse(aliasUseLine, func() {
+		r.stmts(ctx, file.Stmts)
+	})
+	r.aliasReparseDepth--
+	r.aliasLineOverride = prevOverride
+}
+
+func (r *Runner) aliasStartsCompound(name string, aliasUseLine int) bool {
+	als, ok := r.alias[name]
+	if !ok || als.defLine > 0 && aliasUseLine > 0 && aliasUseLine <= als.defLine {
+		return false
+	}
+	src := strings.TrimLeft(aliasValue(als), " \t\r\n")
+	for _, kw := range []string{"for", "case"} {
+		if src == kw || strings.HasPrefix(src, kw+" ") || strings.HasPrefix(src, kw+"\t") ||
+			strings.HasPrefix(src, kw+"\n") || strings.HasPrefix(src, kw+";") {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *Runner) aliasReparsePhysicalLine(pos syntax.Pos, aliasUseLine int) (*syntax.File, bool) {
+	if len(r.bashSource) == 0 || !pos.IsValid() {
+		return nil, false
+	}
+	start, ok := r.sourceOffset(pos)
+	if !ok {
+		return nil, false
+	}
+	end := r.sourceLineEndOffset(pos.Line())
+	if end <= start || end > len(r.bashSource) {
+		return nil, false
+	}
+	src, ok := r.expandAliasSourceLine(string(r.bashSource[start:end]), aliasUseLine)
+	if !ok {
+		return nil, false
+	}
+	file, err := syntax.NewParser().Parse(strings.NewReader(src), "")
+	if err != nil {
+		return nil, false
+	}
+	r.stdinSourceOffset = max(r.stdinSourceOffset, end)
+	r.discardRestOfLine = pos.Line()
+	return file, true
+}
+
+func (r *Runner) expandAliasSourceLine(src string, aliasUseLine int) (string, bool) {
+	var b strings.Builder
+	inSgl, inDbl := false, false
+	changed := false
+	candidate := true
+	for i := 0; i < len(src); {
+		c := src[i]
+		if inSgl {
+			b.WriteByte(c)
+			i++
+			if c == '\'' {
+				inSgl = false
+			}
+			continue
+		}
+		if inDbl {
+			b.WriteByte(c)
+			i++
+			if c == '\\' && i < len(src) {
+				b.WriteByte(src[i])
+				i++
+			} else if c == '"' {
+				inDbl = false
+			}
+			continue
+		}
+		switch c {
+		case '\'':
+			inSgl = true
+			b.WriteByte(c)
+			candidate = false
+			i++
+			continue
+		case '"':
+			inDbl = true
+			b.WriteByte(c)
+			candidate = false
+			i++
+			continue
+		case '\\':
+			b.WriteByte(c)
+			candidate = false
+			i++
+			if i < len(src) {
+				b.WriteByte(src[i])
+				i++
+			}
+			continue
+		case ' ', '\t', '\n', '\r':
+			b.WriteByte(c)
+			i++
+			continue
+		case ';', '&', '|', '(':
+			b.WriteByte(c)
+			candidate = true
+			i++
+			continue
+		}
+		if !aliasNameStart(c) {
+			b.WriteByte(c)
+			candidate = false
+			i++
+			continue
+		}
+		j := i + 1
+		for j < len(src) && aliasNameChar(src[j]) {
+			j++
+		}
+		name := src[i:j]
+		if !candidate {
+			b.WriteString(name)
+			i = j
+			continue
+		}
+		als, ok := r.alias[name]
+		if !ok || als.defLine > 0 && aliasUseLine > 0 && aliasUseLine <= als.defLine {
+			b.WriteString(name)
+			candidate = false
+			i = j
+			continue
+		}
+		repl := aliasValue(als)
+		b.WriteString(repl)
+		if als.blank {
+			b.WriteByte(' ')
+		}
+		i = j
+		changed = true
+		candidate = aliasReplacementLeavesCommandPosition(repl, als.blank)
+	}
+	return b.String(), changed
+}
+
+func aliasReplacementLeavesCommandPosition(src string, blank bool) bool {
+	if blank {
+		return true
+	}
+	for i := len(src) - 1; i >= 0; i-- {
+		switch src[i] {
+		case ' ', '\t', '\n', '\r':
+			continue
+		case ';', '&', '|', '(':
+			return true
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func aliasNameStart(c byte) bool {
+	return c == '_' || 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z'
+}
+
+func aliasNameChar(c byte) bool {
+	return aliasNameStart(c) || '0' <= c && c <= '9'
 }
 
 // flattenAssigns yields each effective syntax.Assign from a declare-

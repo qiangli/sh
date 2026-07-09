@@ -2879,11 +2879,21 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		for _, arg := range args {
 			last = 0
 			if showVV {
+				if r.opts[optPosix] && IsBuiltin(arg) && !isPosixSpecialBuiltin(arg) && !r.disabledBuiltins[arg] {
+					if path, err := LookPathDir(r.Dir, lookupEnv, arg); err == nil {
+						r.outf("%s is %s\n", arg, path)
+						continue
+					}
+				}
 				ms := r.typeMatches(arg, false, lookupEnv)
 				if len(ms) == 0 {
 					r.errf(r.bashErrPrefix(pos)+"command: %s: not found\n", arg)
 					last = 1
 					continue
+				}
+				if r.opts[optPosix] && ms[0].kind == "file" && strings.ContainsRune(arg, '/') && !filepath.IsAbs(ms[0].path) {
+					ms[0].path = r.absPath(ms[0].path)
+					ms[0].desc = fmt.Sprintf("%s is %s", arg, ms[0].path)
 				}
 				r.outf("%s\n", ms[0].desc)
 				// bash's `command -V <fn>` also dumps the body
@@ -2897,11 +2907,20 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			}
 			// -v: minimal form. Functions/builtins/keywords print the
 			// name; files print the path.
-			if isKeyword(arg) || r.Funcs[arg] != nil || (IsBuiltin(arg) && !r.disabledBuiltins[arg]) {
+			if r.opts[optPosix] && IsBuiltin(arg) && !isPosixSpecialBuiltin(arg) && !r.disabledBuiltins[arg] {
+				if path, err := LookPathDir(r.Dir, lookupEnv, arg); err == nil {
+					r.outf("%s\n", path)
+				} else {
+					r.outf("%s\n", arg)
+				}
+			} else if isKeyword(arg) || r.Funcs[arg] != nil || (IsBuiltin(arg) && !r.disabledBuiltins[arg]) {
 				r.outf("%s\n", arg)
 			} else if als, ok := r.alias[arg]; ok && r.opts[optExpandAliases] {
 				r.outf("alias %s='%s'\n", arg, strings.ReplaceAll(aliasValue(als), "'", `'\''`))
 			} else if path, err := LookPathDir(r.Dir, lookupEnv, arg); err == nil {
+				if r.opts[optPosix] && strings.ContainsRune(arg, '/') && !filepath.IsAbs(path) {
+					path = r.absPath(path)
+				}
 				r.outf("%s\n", path)
 			} else {
 				last = 1

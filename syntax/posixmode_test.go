@@ -53,6 +53,22 @@ func TestPosixModeAllowsNonPosixFuncNames(t *testing.T) {
 	}
 }
 
+func TestPosixModeAllowsExportReadonlyFunctionNames(t *testing.T) {
+	parse := func(src string) error {
+		p := NewParser(Variant(LangBash), PosixMode(true))
+		_, err := p.Parse(strings.NewReader(src), "")
+		return err
+	}
+	for _, src := range []string{
+		"export() { :; }\n",
+		"readonly() { :; }\n",
+	} {
+		if err := parse(src); err != nil {
+			t.Fatalf("bash --posix should accept %q as a function declaration: %v", src, err)
+		}
+	}
+}
+
 func TestLineContinuationInsideOperators(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

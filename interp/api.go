@@ -316,6 +316,7 @@ type Runner struct {
 	// the source script rather than the body-relative line in the
 	// alias-body parse.
 	aliasLineOverride int
+	aliasReparseDepth int
 
 	// aliasBase and aliasDefOverride implement bash's alias-definition
 	// *timing*: an alias is expanded only for input read after the line
@@ -1084,6 +1085,12 @@ func (r *Runner) AdvanceAliasInput(lineCount int) {
 		lineCount = 1
 	}
 	r.aliasBase += lineCount
+}
+
+// ConsumedSourceOffset reports how far into the original bash source the
+// runner has consumed input while executing parsed statements.
+func (r *Runner) ConsumedSourceOffset() int {
+	return r.stdinSourceOffset
 }
 
 // New creates a new Runner, applying a number of options. If applying any of
@@ -2577,6 +2584,7 @@ func (r *Runner) subshell(background bool) *Runner {
 		stderr:               r.stderr,
 		filename:             r.filename,
 		curStmtPos:           r.curStmtPos,
+		aliasReparseDepth:    r.aliasReparseDepth,
 		aliasBase:            r.aliasBase,
 		aliasDefOverride:     r.aliasDefOverride,
 		enclosingSubshellEnd: r.enclosingSubshellEnd,

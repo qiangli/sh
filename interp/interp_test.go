@@ -6324,13 +6324,14 @@ func TestRestrictedReadonlyTempAssign(t *testing.T) {
 	}
 }
 
-func TestBashCompatPosixSpecialBuiltinFuncDeclInSubshell(t *testing.T) {
+func TestPosixSpecialBuiltinFuncDeclDoesNotOverride(t *testing.T) {
 	src := "( set -o posix\n" +
 		"break()\n" +
 		"{\n" +
 		"echo hi\n" +
 		"}\n" +
-		"echo after\n" +
+		"for i in 1; do break; echo bad; done\n" +
+		"echo after:$?\n" +
 		")\n"
 	file, err := syntax.NewParser().Parse(strings.NewReader(src), "./func5.sub")
 	qt.Assert(t, qt.IsNil(err))
@@ -6340,8 +6341,28 @@ func TestBashCompatPosixSpecialBuiltinFuncDeclInSubshell(t *testing.T) {
 	qt.Assert(t, qt.IsNil(err))
 
 	err = r.Run(context.Background(), file)
-	qt.Assert(t, qt.ErrorMatches(err, "exit status 1"))
-	qt.Assert(t, qt.Equals(cb.String(), "./func5.sub: line 7: `break': is a special builtin\n"))
+	qt.Assert(t, qt.IsNil(err))
+	qt.Assert(t, qt.Equals(cb.String(), "after:0\n"))
+}
+
+func TestFunctionRedirsApplyOnCallNotDefinition(t *testing.T) {
+	src := "func(){ echo bad; } <_no_such_file_\n" +
+		"echo def:$?\n" +
+		"func\n" +
+		"echo call:$?\n"
+	file, err := syntax.NewParser().Parse(strings.NewReader(src), "func-redir")
+	qt.Assert(t, qt.IsNil(err))
+
+	var cb bytes.Buffer
+	r, err := interp.New(interp.StdIO(nil, &cb, &cb), interp.WithBashCompatErrors(true))
+	qt.Assert(t, qt.IsNil(err))
+
+	err = r.Run(context.Background(), file)
+	qt.Assert(t, qt.IsNil(err))
+	qt.Assert(t, qt.StringContains(cb.String(), "def:0\n"))
+	qt.Assert(t, qt.StringContains(cb.String(), "_no_such_file_"))
+	qt.Assert(t, qt.StringContains(cb.String(), "call:1\n"))
+	qt.Assert(t, qt.IsFalse(strings.Contains(cb.String(), "bad\n")))
 }
 
 func TestBashCompatPosixSlashNamedFuncDeclExternalLookup(t *testing.T) {
@@ -7481,6 +7502,55 @@ func TestRunnerIncremental(t *testing.T) {
 	}
 	if got := b.String(); got != want {
 		t.Fatalf("\nwant: %q\ngot:  %q", want, got)
+	}
+}
+
+func TestRunnerSourceAliasCompoundLine(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		src  string
+		want string
+	}{
+		{
+			src:  "set -o posix\nalias forx='for x in 1; ' fory='for y in 2; do echo $y;' for='\n do' dn='\n done'\nforx for echo $x; dn\nfory dn\n",
+			want: "1\n2\n",
+		},
+		{
+			src:  "set -o posix\nalias c='case a ' case='\n in a) :' in=\nc case X; echo A; esac\n",
+			want: "A\n",
+		},
+	}
+	for _, tt := range tests {
+		parser := syntax.NewParser(syntax.RecoverErrors(32))
+		var stmts []*syntax.Stmt
+		for stmt, err := range parser.StmtsSeq(strings.NewReader(tt.src)) {
+			if stmt != nil {
+				stmts = append(stmts, stmt)
+			}
+			if err != nil {
+				continue
+			}
+		}
+		var b bytes.Buffer
+		r, err := interp.New(interp.StdIO(nil, &b, &b), interp.WithBashSource([]byte(tt.src)), interp.WithIncrementalFilename(""))
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), runnerRunTimeout)
+		for _, stmt := range stmts {
+			if consumed := r.ConsumedSourceOffset(); consumed > int(stmt.Pos().Offset()) {
+				continue
+			}
+			err = r.Run(ctx, stmt)
+			if !errors.As(err, new(interp.ExitStatus)) && err != nil {
+				b.WriteString(err.Error())
+			}
+		}
+		cancel()
+		if got := b.String(); got != tt.want {
+			t.Fatalf("input: %q\nwant: %q\ngot:  %q", tt.src, tt.want, got)
+		}
 	}
 }
 
