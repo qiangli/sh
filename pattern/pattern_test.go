@@ -213,6 +213,16 @@ var regexpTests = []struct {
 	{pat: `[[:wrong:]]`, want: `(?s)[\x00]`},
 	{pat: `[[=x=]]`, want: `(?s)[x]`},
 	{pat: `[[.x.]]`, want: `(?s)[x]`},
+	{
+		pat: `[[:alpha:]]`, mode: Locale | EntireString, want: `(?s)^[\p{L}]$`,
+		mustMatch:    []string{"a", "Ä"},
+		mustNotMatch: []string{"1", "-"},
+	},
+	{
+		pat: `[[=a=]]`, mode: Locale | EntireString, want: `(?s)^[aAàÀáÁâÂãÃäÄåÅāĀăĂąĄ]$`,
+		mustMatch:    []string{"a", "A", "ä", "Ä"},
+		mustNotMatch: []string{"b", "ö"},
+	},
 }
 
 func TestRegexp(t *testing.T) {

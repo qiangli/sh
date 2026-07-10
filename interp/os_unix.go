@@ -44,11 +44,9 @@ func setProcessUmask(mask int) {
 	syscall.Umask(mask)
 }
 
-// syncUmaskForChild ensures the process umask matches the shell's virtual
-// mask before launching an external child command. Fork carries the process
-// umask into the child; we restore the previous umask immediately after
-// [cmd.Start] returns so the Go runtime and other goroutines stay unaffected.
-// Returns a function that restores the old umask.
+// syncUmaskForChild sets the process umask to mask and returns a function that
+// restores the old value. Prefer startExecCmdWithUmask for child launches so
+// the set/fork/restore sequence is atomic with respect to other runners.
 func syncUmaskForChild(mask int) (restore func()) {
 	umaskMu.Lock()
 	old := syscall.Umask(mask)
@@ -58,6 +56,23 @@ func syncUmaskForChild(mask int) (restore func()) {
 		syscall.Umask(old)
 		umaskMu.Unlock()
 	}
+}
+
+// startExecCmdWithUmask starts cmd while the process umask is set to mask.
+// The process umask is global, so hold umaskMu across cmd.Start's fork/exec
+// window; otherwise a concurrent child launch can restore an older umask
+// between our set and the fork.
+func (r *Runner) startExecCmdWithUmask(ctx context.Context, cmd *exec.Cmd, mask int) error {
+	umaskMu.Lock()
+	old := syscall.Umask(mask)
+	err := r.startExecCmd(ctx, cmd)
+	syscall.Umask(old)
+	umaskMu.Unlock()
+	return err
+}
+
+func refreshFileTimesNow(file *os.File, path string) error {
+	return unix.Futimes(int(file.Fd()), nil)
 }
 
 func mkfifo(path string, mode uint32) error {

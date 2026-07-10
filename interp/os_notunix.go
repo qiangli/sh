@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"time"
 
 	"mvdan.cc/sh/v3/syntax"
 )
@@ -44,6 +45,15 @@ func setProcessUmask(mask int) {}
 // syncUmaskForChild is a no-op on non-unix platforms.
 func syncUmaskForChild(mask int) (restore func()) {
 	return func() {}
+}
+
+func (r *Runner) startExecCmdWithUmask(ctx context.Context, cmd *exec.Cmd, mask int) error {
+	return r.startExecCmd(ctx, cmd)
+}
+
+func refreshFileTimesNow(file *os.File, path string) error {
+	now := time.Now()
+	return os.Chtimes(path, now, now)
 }
 
 // dupPipeFd is a no-op on non-unix platforms; the original pipe fd is

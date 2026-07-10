@@ -60,6 +60,7 @@ const (
 	GlobLeadingDot                     // let wildcards match leading dots in filenames; shopt "dotglob"
 	ExtendedOperators                  // support extended pattern matching operators; shopt "extglob" for pathname expansion
 	LenientRanges                      // accept reversed bracket ranges (`[a-Z]`) as literal sets — bash 5.3 glob behavior
+	Locale                             // honor non-C locale character classes and equivalence classes
 )
 
 // Regexp turns a shell pattern into a regular expression that can be used with
@@ -465,10 +466,14 @@ func regexpNext(sb *strings.Builder, sl *stringLexer, mode Mode) error {
 				if !ok {
 					return &SyntaxError{msg: "charClass invalid", err: fmt.Errorf("collating feature %q not closed", "["+string(openChar))}
 				}
-				cr, _ := bashCollatingChar(inner)
+				cr, equiv := bashCollatingChar(inner)
 				if cr != 0 {
-					sb.WriteString(regexp.QuoteMeta(string(cr)))
-					lastEmitted = cr
+					if openChar == '=' && equiv && mode&Locale != 0 {
+						lastEmitted = writeLocaleEquivalence(sb, cr)
+					} else {
+						sb.WriteString(regexp.QuoteMeta(string(cr)))
+						lastEmitted = cr
+					}
 				}
 				// step past `[<X>...<X>]`
 				sl.i += 1 + len(inner) + len(closeSeq)
@@ -503,7 +508,11 @@ func regexpNext(sb *strings.Builder, sl *stringLexer, mode Mode) error {
 					case "alnum", "alpha", "ascii", "blank", "cntrl",
 						"digit", "graph", "lower", "print", "punct",
 						"space", "upper", "word", "xdigit":
-						sb.WriteString("[:" + inner + ":]")
+						if mode&Locale != 0 {
+							sb.WriteString(localeCharClass(inner))
+						} else {
+							sb.WriteString("[:" + inner + ":]")
+						}
 						sl.i += len(name) + len(":]")
 						c = sl.next()
 						continue
@@ -605,10 +614,30 @@ func escapedBracketEndpoint(rest string) (rune, bool) {
 }
 
 func writeBracketLiteral(sb *strings.Builder, c rune) {
+	if c >= utf8.RuneSelf {
+		sb.WriteRune(c)
+		return
+	}
 	if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == ':') {
 		sb.WriteByte('\\')
 	}
 	sb.WriteRune(c)
+}
+
+func localeCharClass(name string) string {
+	switch name {
+	case "alnum":
+		return `\p{L}[:digit:]`
+	case "alpha":
+		return `\p{L}`
+	case "lower":
+		return `\p{Ll}`
+	case "upper":
+		return `\p{Lu}`
+	case "word":
+		return `\p{L}[:digit:]_`
+	}
+	return "[:" + name + ":]"
 }
 
 // bashCollatingChar maps a POSIX collating-element / equivalence
@@ -625,7 +654,7 @@ func writeBracketLiteral(sb *strings.Builder, c rune) {
 func bashCollatingChar(inner string) (rune, bool) {
 	// Single character (including `-`, `+`, etc.) maps directly.
 	if r, n := utf8.DecodeRuneInString(inner); n == len(inner) && r != utf8.RuneError {
-		return r, false
+		return r, true
 	}
 	// Bash's standard symbolic collating-element names (C locale).
 	switch inner {
@@ -675,6 +704,40 @@ func bashCollatingChar(inner string) (rune, bool) {
 		return ';', false
 	}
 	return 0, false
+}
+
+func writeLocaleEquivalence(sb *strings.Builder, r rune) rune {
+	chars := localeEquivalenceChars(r)
+	var last rune
+	for _, c := range chars {
+		writeBracketLiteral(sb, c)
+		last = c
+	}
+	return last
+}
+
+func localeEquivalenceChars(r rune) string {
+	switch r {
+	case 'a', 'A', 'à', 'À', 'á', 'Á', 'â', 'Â', 'ã', 'Ã', 'ä', 'Ä', 'å', 'Å', 'ā', 'Ā', 'ă', 'Ă', 'ą', 'Ą':
+		return "aAàÀáÁâÂãÃäÄåÅāĀăĂąĄ"
+	case 'c', 'C', 'ç', 'Ç', 'ć', 'Ć', 'ĉ', 'Ĉ', 'ċ', 'Ċ', 'č', 'Č':
+		return "cCçÇćĆĉĈċĊčČ"
+	case 'e', 'E', 'è', 'È', 'é', 'É', 'ê', 'Ê', 'ë', 'Ë', 'ē', 'Ē', 'ĕ', 'Ĕ', 'ė', 'Ė', 'ę', 'Ę', 'ě', 'Ě':
+		return "eEèÈéÉêÊëËēĒĕĔėĖęĘěĚ"
+	case 'i', 'I', 'ì', 'Ì', 'í', 'Í', 'î', 'Î', 'ï', 'Ï', 'ĩ', 'Ĩ', 'ī', 'Ī', 'ĭ', 'Ĭ', 'į', 'Į':
+		return "iIìÌíÍîÎïÏĩĨīĪĭĬįĮ"
+	case 'n', 'N', 'ñ', 'Ñ', 'ń', 'Ń', 'ņ', 'Ņ', 'ň', 'Ň':
+		return "nNñÑńŃņŅňŇ"
+	case 'o', 'O', 'ò', 'Ò', 'ó', 'Ó', 'ô', 'Ô', 'õ', 'Õ', 'ö', 'Ö', 'ø', 'Ø', 'ō', 'Ō', 'ŏ', 'Ŏ', 'ő', 'Ő':
+		return "oOòÒóÓôÔõÕöÖøØōŌŏŎőŐ"
+	case 's', 'S', 'ś', 'Ś', 'ŝ', 'Ŝ', 'ş', 'Ş', 'š', 'Š', 'ß':
+		return "sSśŚŝŜşŞšŠß"
+	case 'u', 'U', 'ù', 'Ù', 'ú', 'Ú', 'û', 'Û', 'ü', 'Ü', 'ũ', 'Ũ', 'ū', 'Ū', 'ŭ', 'Ŭ', 'ů', 'Ů', 'ű', 'Ű', 'ų', 'Ų':
+		return "uUùÙúÚûÛüÜũŨūŪŭŬůŮűŰųŲ"
+	case 'y', 'Y', 'ý', 'Ý', 'ÿ', 'Ÿ', 'ŷ', 'Ŷ':
+		return "yYýÝÿŸŷŶ"
+	}
+	return string(r)
 }
 
 func charClass(s string) (string, error) {

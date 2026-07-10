@@ -6428,7 +6428,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 						pat = strings.ToLower(pat)
 						matchStr = strings.ToLower(matchStr)
 					}
-					if match(pat, matchStr) {
+					if r.match(pat, matchStr) {
 						matched = true
 						break
 					}
@@ -8237,13 +8237,44 @@ func assocAssignKeyQuoted(parts []syntax.WordPart) bool {
 	return false
 }
 
-func match(pat, name string) bool {
+func (r *Runner) match(pat, name string) bool {
 	if !utf8.ValidString(pat) {
 		return internal.BytePatternMatch([]byte(pat), []byte(name))
 	}
-	matcher, err := internal.ExtendedPatternMatcher(pat, pattern.EntireString|pattern.ExtendedOperators|pattern.LenientRanges)
+	mode := pattern.EntireString | pattern.ExtendedOperators | pattern.LenientRanges
+	if r.localePatternMode() {
+		mode |= pattern.Locale
+	}
+	matcher, err := internal.ExtendedPatternMatcher(pat, mode)
 	_ = err // TODO: report these errors
 	return matcher != nil && matcher(name)
+}
+
+func (r *Runner) localePatternMode() bool {
+	collate := r.localeCategory("LC_COLLATE")
+	ctype := r.localeCategory("LC_CTYPE")
+	return nonCLocale(collate) || nonCLocale(ctype)
+}
+
+func (r *Runner) localeCategory(category string) string {
+	if v := r.lookupVar("LC_ALL"); v.IsSet() && v.String() != "" {
+		return v.String()
+	}
+	if v := r.lookupVar(category); v.IsSet() && v.String() != "" {
+		return v.String()
+	}
+	if v := r.lookupVar("LANG"); v.IsSet() && v.String() != "" {
+		return v.String()
+	}
+	return ""
+}
+
+func nonCLocale(locale string) bool {
+	switch strings.ToLower(locale) {
+	case "", "c", "posix":
+		return false
+	}
+	return true
 }
 
 // formatTIMEFORMAT renders the durations against bash's TIMEFORMAT
@@ -9271,6 +9302,13 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 	if err != nil {
 		return nil, err
 	}
+	if mode&(os.O_WRONLY|os.O_RDWR) != 0 {
+		if file, ok := f.(*os.File); ok {
+			if info, statErr := file.Stat(); statErr == nil && info.Mode()&os.ModeNamedPipe != 0 {
+				f = fifoWriteFile{File: file, path: arg}
+			}
+		}
+	}
 	switch rd.Op {
 	case syntax.RdrIn, syntax.RdrInOut:
 		_, ttyFallback := f.(*ttyFallbackFile)
@@ -10209,6 +10247,20 @@ type borrowedFile struct {
 }
 
 func (f borrowedFile) Close() error { return nil }
+
+type fifoWriteFile struct {
+	*os.File
+	path string
+}
+
+func (f fifoWriteFile) Close() error {
+	// POSIX requires writes through a FIFO to update its mtime/ctime.
+	// Linux pipe writes leave the FIFO node timestamps untouched, so refresh
+	// them when a shell-managed write redirection is closed.
+	_ = refreshFileTimesNow(f.File, f.path)
+	err := f.File.Close()
+	return err
+}
 
 func (r *Runner) open(ctx context.Context, path string, flags int, mode os.FileMode, print bool) (io.ReadWriteCloser, error) {
 	// Apply this Runner's virtual umask when creating a file. The

@@ -248,7 +248,7 @@ func (r *Runner) bashTest(ctx context.Context, expr syntax.TestExpr, classic boo
 					pat = strings.ToLower(pat)
 					matchStr = strings.ToLower(matchStr)
 				}
-				if match(pat, matchStr) == (x.Op != syntax.TsNoMatch) {
+				if r.match(pat, matchStr) == (x.Op != syntax.TsNoMatch) {
 					return "1"
 				}
 			}

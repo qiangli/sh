@@ -252,12 +252,11 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 		}
 		prepareBackgroundJobCmd(ctx, &cmd)
 
-		restoreUmask := func() {}
 		if hc.runner != nil {
-			restoreUmask = syncUmaskForChild(hc.runner.umask)
+			err = hc.runner.startExecCmdWithUmask(ctx, &cmd, hc.runner.umask)
+		} else {
+			err = cmd.Start()
 		}
-		err = hc.runner.startExecCmd(ctx, &cmd)
-		restoreUmask()
 		// POSIX/bash: when execve fails with ENOEXEC (the file
 		// has no shebang and isn't a recognised binary), the
 		// shell falls back to running the file as a shell
@@ -289,12 +288,11 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 					ExtraFiles: extraFiles,
 				}
 				prepareBackgroundJobCmd(ctx, &cmd)
-				restoreUmask = func() {}
 				if hc.runner != nil {
-					restoreUmask = syncUmaskForChild(hc.runner.umask)
+					err = hc.runner.startExecCmdWithUmask(ctx, &cmd, hc.runner.umask)
+				} else {
+					err = cmd.Start()
 				}
-				err = hc.runner.startExecCmd(ctx, &cmd)
-				restoreUmask()
 			}
 		}
 		if err != nil && hc.runner != nil && hc.runner.bashCompatErrors {
