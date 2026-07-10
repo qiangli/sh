@@ -1116,6 +1116,23 @@ func (r *Runner) ConsumedSourceOffset() int {
 	return r.stdinSourceOffset
 }
 
+// RunAliasExpandedSourceLine expands aliases on one physical bash source line
+// and runs it if the expanded line parses successfully. It is used by callers
+// that parse incrementally and need bash's POSIX command-substitution rule:
+// aliases are expanded while parsing $(...), so an alias body can provide the
+// closing ')'.
+func (r *Runner) RunAliasExpandedSourceLine(ctx context.Context, line int) bool {
+	if line <= 0 || !r.opts[optExpandAliases] || len(r.bashSource) == 0 {
+		return false
+	}
+	pos := syntax.NewPos(uint(r.sourceLineEndOffset(uint(line-1))), uint(line), 1)
+	if file, ok := r.aliasReparsePhysicalLine(pos, r.aliasUseLine(line)); ok {
+		r.runAliasReparseFile(ctx, pos, r.aliasUseLine(line), file)
+		return true
+	}
+	return false
+}
+
 // New creates a new Runner, applying a number of options. If applying any of
 // the options results in an error, it is returned.
 //

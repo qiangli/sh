@@ -5155,6 +5155,13 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				return
 			}
 		}
+		if r.opts[optExpandAliases] && r.aliasReparseDepth == 0 &&
+			!cm.End().IsValid() && r.sourcePhysicalLineContains(origCallPos, "$(") {
+			if file, ok := r.aliasReparsePhysicalLine(origCallPos, aliasUseLine); ok {
+				r.runAliasReparseFile(ctx, cm.Pos(), aliasUseLine, file)
+				return
+			}
+		}
 		seenAliases := make(map[string]bool)
 		aliasExpanded := false
 		// Variable-assignment prefixes (`a=A b`) apply to the
@@ -8011,13 +8018,36 @@ func (r *Runner) aliasReparsePhysicalLine(pos syntax.Pos, aliasUseLine int) (*sy
 	return file, true
 }
 
+func (r *Runner) sourcePhysicalLineContains(pos syntax.Pos, needle string) bool {
+	if len(r.bashSource) == 0 || !pos.IsValid() {
+		return false
+	}
+	start, ok := r.sourceOffset(pos)
+	if !ok {
+		return false
+	}
+	end := r.sourceLineEndOffset(pos.Line())
+	return start < end && end <= len(r.bashSource) &&
+		strings.Contains(string(r.bashSource[start:end]), needle)
+}
+
 func (r *Runner) expandAliasSourceLine(src string, aliasUseLine int) (string, bool) {
 	var b strings.Builder
 	inSgl, inDbl := false, false
+	comsubDepth := 0
+	comsubFromDbl := false
 	changed := false
 	candidate := true
 	for i := 0; i < len(src); {
 		c := src[i]
+		if inDbl && comsubDepth == 0 && c == '$' && i+1 < len(src) && src[i+1] == '(' {
+			b.WriteString("$(")
+			i += 2
+			comsubDepth = 1
+			comsubFromDbl = true
+			candidate = true
+			continue
+		}
 		if inSgl {
 			b.WriteByte(c)
 			i++
@@ -8026,7 +8056,7 @@ func (r *Runner) expandAliasSourceLine(src string, aliasUseLine int) (string, bo
 			}
 			continue
 		}
-		if inDbl {
+		if inDbl && comsubDepth == 0 {
 			b.WriteByte(c)
 			i++
 			if c == '\\' && i < len(src) {
@@ -8038,6 +8068,18 @@ func (r *Runner) expandAliasSourceLine(src string, aliasUseLine int) (string, bo
 			continue
 		}
 		switch c {
+		case '$':
+			b.WriteByte(c)
+			i++
+			if i < len(src) && src[i] == '(' {
+				b.WriteByte(src[i])
+				i++
+				comsubDepth++
+				candidate = true
+			} else {
+				candidate = false
+			}
+			continue
 		case '\'':
 			inSgl = true
 			b.WriteByte(c)
@@ -8065,8 +8107,23 @@ func (r *Runner) expandAliasSourceLine(src string, aliasUseLine int) (string, bo
 			continue
 		case ';', '&', '|', '(':
 			b.WriteByte(c)
+			if c == '(' && comsubDepth > 0 {
+				comsubDepth++
+			}
 			candidate = true
 			i++
+			continue
+		case ')':
+			b.WriteByte(c)
+			candidate = false
+			i++
+			if comsubDepth > 0 {
+				comsubDepth--
+				if comsubDepth == 0 && comsubFromDbl {
+					inDbl = true
+					comsubFromDbl = false
+				}
+			}
 			continue
 		}
 		if !aliasNameStart(c) {
@@ -8097,11 +8154,45 @@ func (r *Runner) expandAliasSourceLine(src string, aliasUseLine int) (string, bo
 		if als.blank {
 			b.WriteByte(' ')
 		}
+		if comsubDepth > 0 {
+			if n := aliasReplacementComsubCloseCount(repl); n > 0 {
+				comsubDepth -= min(comsubDepth, n)
+				if comsubDepth == 0 && comsubFromDbl {
+					inDbl = true
+					comsubFromDbl = false
+				}
+			}
+		}
 		i = j
 		changed = true
 		candidate = aliasReplacementLeavesCommandPosition(repl, als.blank)
 	}
 	return b.String(), changed
+}
+
+func aliasReplacementComsubCloseCount(src string) int {
+	unmatched := 0
+	for i := 0; i < len(src); i++ {
+		switch src[i] {
+		case '\\':
+			i++
+		case '\'', '"':
+			quote := src[i]
+			for i++; i < len(src) && src[i] != quote; i++ {
+				if quote == '"' && src[i] == '\\' {
+					i++
+				}
+			}
+		case '(':
+			unmatched--
+		case ')':
+			unmatched++
+		}
+	}
+	if unmatched < 0 {
+		return 0
+	}
+	return unmatched
 }
 
 func aliasReplacementLeavesCommandPosition(src string, blank bool) bool {

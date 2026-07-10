@@ -7587,6 +7587,36 @@ func TestRunnerSourceAliasCompoundLine(t *testing.T) {
 	}
 }
 
+func TestRunnerCommandSubstAliasClosesPhysicalLine(t *testing.T) {
+	t.Parallel()
+
+	src := "shopt -s expand_aliases\n" +
+		"set -o posix\n" +
+		"alias short='echo ok 8 )'\n" +
+		"echo \"$( short \"\n"
+	parser := syntax.NewParser(syntax.RecoverErrors(32), syntax.Variant(syntax.LangBash))
+	file, err := parser.Parse(strings.NewReader(src), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var b bytes.Buffer
+	r, err := interp.New(
+		interp.StdIO(nil, &b, &b),
+		interp.WithBashSource([]byte(src)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), runnerRunTimeout)
+	defer cancel()
+	if err := r.Run(ctx, file); !errors.As(err, new(interp.ExitStatus)) && err != nil {
+		t.Fatal(err)
+	}
+	if got, want := b.String(), "ok 8 \n"; got != want {
+		t.Fatalf("\nwant: %q\ngot:  %q", want, got)
+	}
+}
+
 func TestRunnerResetFields(t *testing.T) {
 	t.Parallel()
 
