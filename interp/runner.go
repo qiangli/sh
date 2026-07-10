@@ -24,7 +24,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -8936,7 +8935,7 @@ func shouldReportWriteErr(name string, err error) bool {
 }
 
 func isBrokenPipeWriteErr(err error) bool {
-	return errors.Is(err, syscall.EPIPE)
+	return isPlatformBrokenPipeWriteErr(err)
 }
 
 func writeErrDiagnostic(err error) string {
