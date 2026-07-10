@@ -4541,7 +4541,7 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 			done:             make(chan struct{}),
 			exit:             new(exitStatus),
 			pidReady:         make(chan struct{}),
-			publishPidToBang: isSimpleCallStmt(&st2),
+			publishPidToBang: isSimpleCallStmt(&st2) || isPipelineStmt(&st2),
 			pidCallback:      r.bgPidCallback, // see WithBgPidCallback
 			cmd:              backgroundJobText(st),
 			jobControl:       r.monitorActive(),
@@ -4612,6 +4612,14 @@ func isSimpleCallStmt(st *syntax.Stmt) bool {
 	}
 	_, ok := st.Cmd.(*syntax.CallExpr)
 	return ok
+}
+
+func isPipelineStmt(st *syntax.Stmt) bool {
+	if st == nil {
+		return false
+	}
+	bin, ok := st.Cmd.(*syntax.BinaryCmd)
+	return ok && (bin.Op == syntax.Pipe || bin.Op == syntax.PipeAll)
 }
 
 // stmtUpdatesPipeStatus reports whether finishing st should overwrite

@@ -1711,13 +1711,12 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 						if signalDefaultDoesNotTerminate(sig) {
 							// Avoid sending these self-directed defaults to
 							// the real Go process. Ignored/continue defaults
-							// are successful no-ops; stop defaults are
-							// modeled only for foreground subshells targeting
-							// the parent $$, where a following CONT resumes
-							// the parent in real shells.
-							if !signalStopsJob(sig) || r.sigParent != nil {
-								continue
-							}
+							// are successful no-ops. Stop defaults must not
+							// become an exit status either: a real shell
+							// resumes after a later CONT and keeps running
+							// the script, while stopping this Go process
+							// would suspend all in-process runners.
+							continue
 						}
 						exit.code = uint8(128 + sigNum(sig))
 						exit.exiting = true
