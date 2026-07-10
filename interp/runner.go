@@ -6295,6 +6295,26 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			r.exit.code = 1
 			return
 		}
+		// POSIX mode: defining a function whose name is a POSIX special
+		// builtin (`break`, `return`, `export`, …) is a fatal error —
+		// POSIX interpretation 383, which bash 5.3 enforces only when
+		// posixly_correct (execute_cmd.c execute_intern_function sets the
+		// special-builtin bit `if (posixly_correct)`, general.c
+		// valid_function_word then errors). bashy targets POSIX
+		// certification, so it MUST conform when posix is indicated; in
+		// the default (non-posix) mode bash allows the definition, so this
+		// is gated on optPosix. Reject before stashing in the func table.
+		if r.opts[optPosix] && isPosixSpecialBuiltin(name) {
+			errPos := cm.End()
+			if r.enclosingSubshellEnd.IsValid() {
+				errPos = r.enclosingSubshellEnd
+			}
+			r.errf("%s`%s': is a special builtin\n",
+				r.bashErrPrefix(errPos), name)
+			r.exit.code = 1
+			r.exit.exiting = true
+			return
+		}
 		// Bash rejects redefinition of a readonly function with
 		// `<file>: line N: NAME: readonly function`, reported at the
 		// end of the rejected definition (closing brace), not its

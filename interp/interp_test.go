@@ -6353,14 +6353,18 @@ func TestRestrictedReadonlyTempAssign(t *testing.T) {
 	}
 }
 
-func TestPosixSpecialBuiltinFuncDeclDoesNotOverride(t *testing.T) {
+func TestPosixSpecialBuiltinFuncDeclInSubshell(t *testing.T) {
+	// POSIX interpretation 383: defining a function named after a special
+	// builtin is a fatal error in posix mode (bash 5.3 general.c
+	// valid_function_word, gated on posixly_correct). The whole subshell
+	// aborts, so `echo after` never runs. bashy conforms to POSIX when posix
+	// is indicated — see the FuncDecl handler in runner.go.
 	src := "( set -o posix\n" +
 		"break()\n" +
 		"{\n" +
 		"echo hi\n" +
 		"}\n" +
-		"for i in 1; do break; echo bad; done\n" +
-		"echo after:$?\n" +
+		"echo after\n" +
 		")\n"
 	file, err := syntax.NewParser().Parse(strings.NewReader(src), "./func5.sub")
 	qt.Assert(t, qt.IsNil(err))
@@ -6369,9 +6373,10 @@ func TestPosixSpecialBuiltinFuncDeclDoesNotOverride(t *testing.T) {
 	r, err := interp.New(interp.StdIO(nil, &cb, &cb), interp.WithBashCompatErrors(true))
 	qt.Assert(t, qt.IsNil(err))
 
-	err = r.Run(context.Background(), file)
-	qt.Assert(t, qt.IsNil(err))
-	qt.Assert(t, qt.Equals(cb.String(), "after:0\n"))
+	// A special-builtin function definition aborts the subshell; the runner
+	// surfaces it as a non-nil error and never prints "after".
+	_ = r.Run(context.Background(), file)
+	qt.Assert(t, qt.Equals(cb.String(), "./func5.sub: line 7: `break': is a special builtin\n"))
 }
 
 func TestFunctionRedirsApplyOnCallNotDefinition(t *testing.T) {
