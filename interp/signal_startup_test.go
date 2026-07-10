@@ -46,6 +46,12 @@ func TestTrapStartupIgnoredFromHardIgnoreEnv(t *testing.T) {
 	if want := "trap -- '' SIGUSR1\n"; got != want {
 		t.Fatalf("wrong reset output\nwant:\n%sgot:\n%s", want, got)
 	}
+
+	env = expand.ListEnviron(BashyHardIgnoreEnv + "=INT")
+	got = runStartupIgnoredScript(t, env, "trap 'echo bad' INT; trap -p INT")
+	if want := "trap -- '' SIGINT\n"; got != want {
+		t.Fatalf("wrong bridged INT trap output\nwant:\n%sgot:\n%s", want, got)
+	}
 }
 
 func TestTrapStartupIgnoredFromInheritedDisposition(t *testing.T) {
@@ -67,5 +73,26 @@ func TestTrapStartupIgnoredFromInheritedDisposition(t *testing.T) {
 	got := stdout.String()
 	if want := "trap -- '' SIGUSR1\n"; got != want {
 		t.Fatalf("wrong inherited trap output\nwant:\n%sgot:\n%s", want, got)
+	}
+}
+
+func TestStartupIgnoredSignalIntNotInferredFromProcessDisposition(t *testing.T) {
+	file, err := syntax.NewParser().Parse(strings.NewReader("trap -p INT"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stdout bytes.Buffer
+	r, err := New(Env(expand.ListEnviron(os.Environ()...)), StdIO(nil, &stdout, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	signal.Ignore(syscall.SIGINT)
+	r.Reset()
+	restoreExecSignal(syscall.SIGINT)
+	if err := r.Run(context.Background(), file); err != nil {
+		t.Fatal(err)
+	}
+	if got := stdout.String(); got != "" {
+		t.Fatalf("unexpected inherited INT trap output:\n%s", got)
 	}
 }

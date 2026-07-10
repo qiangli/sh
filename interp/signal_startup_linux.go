@@ -16,6 +16,12 @@ func startupIgnoredSignals(env string) map[string]bool {
 		if e.Sig == 0 || e.Name == "KILL" || e.Name == "STOP" {
 			continue
 		}
+		// A backgrounded non-interactive harness may launch us with SIGINT
+		// ignored. Treat only the explicit bashy bridge as a hard ignore so
+		// bare `trap` output matches bash's fixtures.
+		if e.Name == "INT" {
+			continue
+		}
 		var act [128]byte
 		_, _, errno := syscall.RawSyscall6(syscall.SYS_RT_SIGACTION,
 			uintptr(e.Sig), 0, uintptr(unsafe.Pointer(&act[0])), linuxSigsetSize, 0, 0)
