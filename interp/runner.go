@@ -4329,6 +4329,19 @@ func (r *Runner) invokesSpecialBuiltin(name string) bool {
 	return r.Funcs[name] == nil
 }
 
+func (r *Runner) posixRegularBuiltinNeedsPath(name string) bool {
+	if !r.opts[optPosix] {
+		return false
+	}
+	switch name {
+	case "echo", "pwd":
+		_, err := LookPathDir(r.Dir, r.writeEnv, name)
+		return err != nil
+	default:
+		return false
+	}
+}
+
 // posixSpecialBuiltinFatal upgrades certain special-builtin failures
 // to a shell exit in POSIX mode (POSIX 1003.1 § 2.8.1). Bash limits
 // this to "hard" errors: any unset failure (readonly variable, bad
@@ -4525,22 +4538,26 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 		st2.Background = false
 		st2.Disown = false
 		bg := &bgProc{
-			done:        make(chan struct{}),
-			exit:        new(exitStatus),
-			pidReady:    make(chan struct{}),
-			pidCallback: r.bgPidCallback, // see WithBgPidCallback
-			cmd:         backgroundJobText(st),
-			jobControl:  r.monitorActive(),
-			jobID:       r.nextJobID(),
+			done:             make(chan struct{}),
+			exit:             new(exitStatus),
+			pidReady:         make(chan struct{}),
+			publishPidToBang: isSimpleCallStmt(&st2),
+			pidCallback:      r.bgPidCallback, // see WithBgPidCallback
+			cmd:              backgroundJobText(st),
+			jobControl:       r.monitorActive(),
+			jobID:            r.nextJobID(),
 		}
 		r.bgProcs = append(r.bgProcs, bg)
 		// Stash a pointer to the freshly-appended bgProc on the
 		// goroutine's ctx so the exec handlers (DefaultExecHandler,
 		// runDetachedExec) can publish the real OS PID into it via
 		// publishBgPid. `$!` reads that PID back via bgProc.pidReady.
-		bgCtx := context.WithValue(ctx, bgProcCtxKey{}, bg)
+		bgCtx, cancel := context.WithCancel(ctx)
+		bg.cancel = cancel
+		bgCtx = context.WithValue(bgCtx, bgProcCtxKey{}, bg)
 		go func() {
 			defer func() {
+				cancel()
 				// Ensure pidReady is closed even if no real exec ever
 				// happened (e.g. `(true) &`). The reader of `$!` waits
 				// on this channel — leaving it open would hang forever.
@@ -4556,6 +4573,9 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 			}
 			r2.exit.exiting = false // subshells don't exit the parent shell
 			r2.exit.discarding = false
+			if n := bg.killedSignal.Load(); n > 0 {
+				r2.exit = exitStatus{code: uint8(128 + n)}
+			}
 			*bg.exit = r2.exit
 			// One reaped child -> one SIGCHLD trap run (bash waitchld).
 			// Queue before signalling done so a `wait` that unblocks here
@@ -4584,6 +4604,14 @@ func (r *Runner) lastBangProc() *bgProc {
 		return r.bgProcs[n-1]
 	}
 	return r.inheritedBang
+}
+
+func isSimpleCallStmt(st *syntax.Stmt) bool {
+	if st == nil {
+		return false
+	}
+	_, ok := st.Cmd.(*syntax.CallExpr)
+	return ok
 }
 
 // stmtUpdatesPipeStatus reports whether finishing st should overwrite
@@ -7688,11 +7716,17 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		// publishes the real OS PID of whatever command the coprocess
 		// runs into bg.pid (via publishBgPid). `kill $COPROC_PID` resolves
 		// the synthetic pid to that real child so the signal reaches it.
-		bgCtx := context.WithValue(ctx, bgProcCtxKey{}, bg)
+		bgCtx, cancel := context.WithCancel(ctx)
+		bg.cancel = cancel
+		bgCtx = context.WithValue(bgCtx, bgProcCtxKey{}, bg)
 		go func() {
 			defer func() {
+				cancel()
 				pw.Close()
 				pr2.Close()
+				if n := bg.killedSignal.Load(); n > 0 {
+					r2.exit = exitStatus{code: uint8(128 + n)}
+				}
 				*bg.exit = r2.exit
 				// Close pidReady even if the coprocess body never exec'd a
 				// real process (e.g. a pure-builtin coproc), so a waiter on
@@ -9834,7 +9868,7 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 		r.exit.returning = false
 		return
 	}
-	if IsBuiltin(name) && !r.disabledBuiltins[name] {
+	if IsBuiltin(name) && !r.disabledBuiltins[name] && !r.posixRegularBuiltinNeedsPath(name) {
 		r.emitAudit("builtin", pos, args, true)
 		r.exit = r.builtin(ctx, pos, name, args[1:])
 		if r.opts[optPosix] {

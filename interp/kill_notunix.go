@@ -107,6 +107,8 @@ func signalStopsJob(sig killSig) bool { return false }
 
 func signalContinuesJob(sig killSig) bool { return false }
 
+func signalDefaultDoesNotTerminate(sig killSig) bool { return false }
+
 // sendSignal on non-Unix uses os.Process.Signal which only supports
 // Interrupt and Kill. SIGTERM is mapped to Kill (no graceful equivalent
 // exists on Windows). Signal 0 does an existence probe via os.FindProcess.

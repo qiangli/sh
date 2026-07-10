@@ -2590,6 +2590,10 @@ var runTests = []runTest{
 		"1\n2\n",
 	},
 	{
+		"set -o posix; fn() { true; return; }; trap 'fn; echo trapped $?' USR1; (exit 19); (kill -s USR1 $$; exit 19); :",
+		"trapped 19\n",
+	},
+	{
 		"set -o posix; (trap 'echo got INT' INT; trap - QUIT; kill -s INT $$; echo after INT; kill -s QUIT $$; echo after QUIT) & wait $!; echo status:$?",
 		"got INT\nafter INT\nstatus:131\n",
 	},
@@ -5499,6 +5503,18 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 
 var runTestsUnix = []runTest{
 	{"[[ -n $PPID && $PPID -ge 0 ]]", ""}, // can be 0 if running as the init process
+	{
+		"kill -s CHLD $$; echo chld:$?; kill -s CONT $$; echo cont:$?; kill -s URG $$; echo urg:$?",
+		"chld:0\ncont:0\nurg:0\n",
+	},
+	{
+		"for sig in STOP TSTP TTIN TTOU; do (kill -s $sig $$; status=$?; kill -s CONT $$; exit $status); echo $sig:$?; done",
+		"STOP:0\nTSTP:0\nTTIN:0\nTTOU:0\n",
+	},
+	{
+		"while kill -s 0 $$; do :; done & kill -s USR1 $!; wait $!; s=$?; [ $s -gt 128 ] && echo signaled",
+		"signaled\n",
+	},
 
 	{
 		`mkdir d1 d2; echo 'echo ERROR' >d1/s; echo 'echo OK' >d2/s; chmod a=wx d1/s; chmod a=r d2/s; PATH=$PWD/d1:$PWD/d2:$PATH; . s`,
@@ -5672,6 +5688,14 @@ var runTestsUnix = []runTest{
 	{
 		"PATH=; bash -c 'echo foo'",
 		"\"bash\": executable file not found in $PATH\nexit status 127 #JUSTERR",
+	},
+	{
+		"set -o posix; PATH=; echo not printed",
+		"\"echo\": executable file not found in $PATH\nexit status 127 #JUSTERR",
+	},
+	{
+		"mkdir empty-path; set -o posix; PATH=./empty-path pwd",
+		"\"pwd\": executable file not found in $PATH\nexit status 127 #JUSTERR",
 	},
 	{
 		"cd /; sure/is/missing",

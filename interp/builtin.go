@@ -1604,11 +1604,14 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					continue
 				}
 				if bg.pidReady != nil {
-					<-bg.pidReady
+					select {
+					case <-bg.pidReady:
+					default:
+					}
 				}
 				rp := jobSignalPid(bg)
 				if rp == 0 {
-					// pure-goroutine job with no OS pid to signal
+					r.killSyntheticBg(bg, sig)
 					continue
 				}
 				if err := sendSignal(rp, sig); err != nil {
@@ -1638,10 +1641,14 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					continue
 				}
 				if bg.pidReady != nil {
-					<-bg.pidReady
+					select {
+					case <-bg.pidReady:
+					default:
+					}
 				}
 				rp := jobSignalPid(bg)
 				if rp == 0 {
+					r.killSyntheticBg(bg, sig)
 					continue
 				}
 				if err := sendSignal(rp, sig); err != nil {
@@ -1701,6 +1708,17 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 						// signal.Notify ownership. Fall through to a real OS
 						// signal so the foreground parent receives it.
 					} else if !sigIsZero(sig) {
+						if signalDefaultDoesNotTerminate(sig) {
+							// Avoid sending these self-directed defaults to
+							// the real Go process. Ignored/continue defaults
+							// are successful no-ops; stop defaults are
+							// modeled only for foreground subshells targeting
+							// the parent $$, where a following CONT resumes
+							// the parent in real shells.
+							if !signalStopsJob(sig) || r.sigParent != nil {
+								continue
+							}
+						}
 						exit.code = uint8(128 + sigNum(sig))
 						exit.exiting = true
 						return exit
@@ -3175,10 +3193,10 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		case 0:
 			// `return` with no argument returns the exit status of the
 			// last command executed in the function/sourced script.
-			// POSIX interp 1602: directly inside a signal-trap action
-			// (not a function it called), it instead yields the $? in
-			// effect when the trap was invoked.
-			if r.inSignalTrap && len(r.callStack) == r.signalTrapDepth {
+			// POSIX interp 1602: inside a signal-trap action, including a
+			// function it calls, it instead yields the $? in effect when
+			// the trap was invoked.
+			if r.inSignalTrap {
 				exit.code = r.signalTrapExit
 			} else {
 				exit.code = r.lastExit.code
@@ -5521,6 +5539,33 @@ func (r *Runner) removeJob(target *bgProc) {
 		r.bgProcs[len(r.bgProcs)-1] = nil
 		r.bgProcs = r.bgProcs[:len(r.bgProcs)-1]
 		return
+	}
+}
+
+func (r *Runner) killSyntheticBg(bg *bgProc, sig killSig) {
+	if bg == nil || sigIsZero(sig) {
+		return
+	}
+	if signalStopsJob(sig) {
+		bg.ignoreNextContinue.Store(1)
+		if name, ok := signalName(sig); ok {
+			bg.setStopSignal("SIG" + name)
+		}
+		bg.setState(jobStopped)
+		return
+	}
+	if signalContinuesJob(sig) {
+		bg.ignoreNextContinue.Store(0)
+		bg.ignoreNextStop.Store(1)
+		bg.setState(jobRunning)
+		r.preferredJobID = bg.jobID
+		return
+	}
+	if signalDefaultDoesNotTerminate(sig) {
+		return
+	}
+	if bg.killedSignal.CompareAndSwap(0, int32(sigNum(sig))) && bg.cancel != nil {
+		bg.cancel()
 	}
 }
 

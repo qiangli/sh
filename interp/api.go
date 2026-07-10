@@ -808,6 +808,10 @@ type bgProc struct {
 
 	cmd string
 
+	cancel context.CancelFunc
+
+	killedSignal atomic.Int32
+
 	state atomic.Int32
 
 	ignoreNextStop atomic.Int32
@@ -845,6 +849,12 @@ type bgProc struct {
 	// of the "g<N>" sentinel whenever one is actually available — the
 	// usual `PID=$!; kill $PID` idiom relies on this.
 	pidReady chan struct{}
+
+	// publishPidToBang controls whether the first real exec PID should be
+	// exposed through $!. Simple external-command backgrounds want that;
+	// compound shell jobs keep the synthetic g<N> handle so signals target
+	// the whole in-process job, not one inner child.
+	publishPidToBang bool
 
 	// pids records every OS PID published by this background statement.
 	// Compound commands can exec more than once after `$!` has already
@@ -997,7 +1007,7 @@ func publishBgPid(ctx context.Context, pid int) {
 	bg.pidsMu.Lock()
 	bg.pids = append(bg.pids, pid64)
 	bg.pidsMu.Unlock()
-	if nonPrimary, _ := ctx.Value(bgNonPrimaryPidCtxKey{}).(bool); nonPrimary {
+	if nonPrimary, _ := ctx.Value(bgNonPrimaryPidCtxKey{}).(bool); nonPrimary || !bg.publishPidToBang {
 		return
 	}
 	bg.pid.Store(pid64)

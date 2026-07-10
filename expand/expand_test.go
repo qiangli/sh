@@ -1604,6 +1604,41 @@ func TestGlobLiteralUnreadableIntermediateDir(t *testing.T) {
 	}
 }
 
+func TestGlobNoSearchIntermediateDirBeforeGlob(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test uses unix-style / path separators; windows glob results use \\")
+	}
+	cfg := &Config{
+		ReadDir2: func(path string) ([]fs.DirEntry, error) {
+			switch filepath.ToSlash(path) {
+			case "/tmp":
+				return []fs.DirEntry{&mockFileInfo{name: "foo", typ: os.ModeDir | 0o755}}, nil
+			case "/tmp/foo":
+				return []fs.DirEntry{&mockFileInfo{name: "no_search_dir", typ: os.ModeDir | 0o600}}, nil
+			case "/tmp/foo/no_search_dir":
+				return []fs.DirEntry{&mockFileInfo{name: "file"}}, nil
+			default:
+				return nil, fs.ErrNotExist
+			}
+		},
+	}
+	got, err := cfg.glob("/", "tmp/foo/no_search_d*r/file")
+	if err != nil {
+		t.Fatalf("did not want error, got %v", err)
+	}
+	if got != nil {
+		t.Fatalf("wanted no matches, got %q", got)
+	}
+	got, err = cfg.glob("/", "tmp/foo/no_search_d*r/f*e")
+	if err != nil {
+		t.Fatalf("did not want error, got %v", err)
+	}
+	want := []string{"tmp/foo/no_search_dir/file"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("wanted %q, got %q", want, got)
+	}
+}
+
 type mockFileInfo struct {
 	name        string
 	typ         fs.FileMode

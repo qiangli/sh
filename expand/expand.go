@@ -5865,7 +5865,7 @@ func (cfg *Config) glob(base, pat string) ([]string, error) {
 				if cfg.DotGlob {
 					rx = rxGlobStarDotGlob.MatchString
 				}
-				newMatches, _ = cfg.globDir(base, dir, rx, wantDir, newMatches)
+				newMatches, _ = cfg.globDir(base, dir, rx, wantDir, true, newMatches)
 				for _, match := range slices.Backward(newMatches) {
 					stack = append(stack, match)
 				}
@@ -5943,7 +5943,12 @@ func (cfg *Config) glob(base, pat string) ([]string, error) {
 					newMatches = append(newMatches, pathJoin2(dir, ".."))
 				}
 			}
-			newMatches, err = cfg.globDir(base, dir, matcher, wantDir, newMatches)
+			needSearch := true
+			if wantDir && i+1 < len(parts) {
+				next := parts[i+1]
+				needSearch = next == "" || next == "." || next == ".." || !cfg.hasGlobMeta(next)
+			}
+			newMatches, err = cfg.globDir(base, dir, matcher, wantDir, needSearch, newMatches)
 			if err != nil {
 				if errors.Is(err, fs.ErrPermission) {
 					continue
@@ -6223,7 +6228,7 @@ func globIgnorePathnameBlocked(pat string) bool {
 	return false
 }
 
-func (cfg *Config) globDir(base, dir string, matcher func(string) bool, wantDir bool, matches []string) ([]string, error) {
+func (cfg *Config) globDir(base, dir string, matcher func(string) bool, wantDir, needSearch bool, matches []string) ([]string, error) {
 	fullDir := dir
 	if !filepath.IsAbs(dir) {
 		fullDir = filepath.Join(base, dir)
@@ -6247,11 +6252,13 @@ func (cfg *Config) globDir(base, dir string, matcher func(string) bool, wantDir 
 				continue
 			}
 		} else if mode.IsDir() {
-			if info, err := info.Info(); err == nil && info.Mode().Perm()&0o111 == 0 {
-				continue
-			}
-			if _, err := os.Stat(filepath.Join(fullDir, info.Name(), ".")); err != nil {
-				continue
+			if needSearch {
+				if info, err := info.Info(); err == nil && info.Mode().Perm()&0o111 == 0 {
+					continue
+				}
+				if _, err := os.Stat(filepath.Join(fullDir, info.Name(), ".")); err != nil {
+					continue
+				}
 			}
 		} else {
 			continue // Not a symlink nor a directory.

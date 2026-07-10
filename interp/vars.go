@@ -658,7 +658,10 @@ func (r *Runner) lookupVar(name string) expand.Variable {
 		// no real exec ever happened — `wait g<N>` still works against
 		// that for pure-builtin backgrounds.
 		if bg := r.lastBangProc(); bg != nil {
-			<-bg.pidReady
+			select {
+			case <-bg.pidReady:
+			case <-time.After(250 * time.Millisecond):
+			}
 			vr.Set = true
 			if pid := bg.pid.Load(); pid > 0 {
 				vr.Kind, vr.Str = expand.String, strconv.FormatInt(pid, 10)

@@ -194,6 +194,10 @@ func signalContinuesJob(sig killSig) bool {
 	return sig == unix.SIGCONT
 }
 
+func signalDefaultDoesNotTerminate(sig killSig) bool {
+	return sig == unix.SIGCHLD || sig == unix.SIGCONT || sig == unix.SIGURG || signalStopsJob(sig)
+}
+
 // parseSignalSpec parses the part after the leading `-` in `kill -SPEC pid…`.
 // SPEC is either a number or a name (with or without SIG prefix). Returns the
 // resolved signal, or false if the spec is not recognized.
