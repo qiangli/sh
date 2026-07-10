@@ -19,6 +19,7 @@ import (
 type readySignalWriter struct {
 	buf   bytes.Buffer
 	ready chan struct{}
+	trap  chan struct{}
 }
 
 func (w *readySignalWriter) Write(p []byte) (int, error) {
@@ -28,6 +29,13 @@ func (w *readySignalWriter) Write(p []byte) (int, error) {
 		case <-w.ready:
 		default:
 			close(w.ready)
+		}
+	}
+	if strings.Contains(w.buf.String(), "USR1 received\n") {
+		select {
+		case <-w.trap:
+		default:
+			close(w.trap)
 		}
 	}
 	return n, err
@@ -61,7 +69,7 @@ func TestReadInterruptedByTrappedSignal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out := &readySignalWriter{ready: make(chan struct{})}
+	out := &readySignalWriter{ready: make(chan struct{}), trap: make(chan struct{})}
 	r, err := New(StdIO(pr, out, out))
 	if err != nil {
 		t.Fatal(err)
@@ -77,6 +85,11 @@ func TestReadInterruptedByTrappedSignal(t *testing.T) {
 	}
 	if err := syscall.Kill(os.Getpid(), syscall.SIGUSR1); err != nil {
 		t.Fatal(err)
+	}
+	select {
+	case <-out.trap:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("shell did not run USR1 trap; output so far: %q", out.buf.String())
 	}
 	if _, err := pw.WriteString("input\n"); err != nil {
 		t.Fatal(err)

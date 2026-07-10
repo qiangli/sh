@@ -7365,12 +7365,13 @@ func TestReadTimeoutFromFdWithoutDeadline(t *testing.T) {
 
 	file := parse(t, nil, `
 mkfifo p
-exec 9<>p
-printf 'from-fd\n' >&9
+{ printf 'from-fd\n'; sleep 0.2; } >p &
+exec 9<p
 read -u 9 -t 0.1 x
 printf '%s:%s\n' "$?" "$x"
 read -u 9 -t 0.001 y
 printf '%s:%s\n' "$?" "${y:-empty}"
+wait
 `)
 	var stdout bytes.Buffer
 	r, _ := interp.New(
