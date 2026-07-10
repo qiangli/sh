@@ -1903,6 +1903,10 @@ var runTests = []runTest{
 		"cd: /tmp/bashy-does-not-exist: No such file or directory\nstatus:1\n #JUSTERR",
 	},
 	{
+		`old=$PWD; unset OLDPWD; cd -; echo status:$?; [[ $PWD == "$old" ]]`,
+		"cd: OLDPWD not set\nstatus:1\n #JUSTERR",
+	},
+	{
 		`readonly PWD; cd /; echo status:$?`,
 		"PWD: readonly variable\nstatus:1\n #JUSTERR",
 	},
@@ -4655,7 +4659,7 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	},
 	{
 		"set -o posix; VAR=4; readonly VAR; VAR=7 echo ok; echo after",
-		"VAR: readonly variable\nexit status 1 #JUSTERR",
+		"VAR: readonly variable\nafter\n",
 	},
 	{
 		"set -k; export HOME=/foo/bar; c=7; HOME=/a/b/c echo $HOME c=9; echo $c",

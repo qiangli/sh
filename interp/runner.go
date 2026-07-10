@@ -5708,11 +5708,17 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		}
 		if assignFailed {
 			if r.opts[optPosix] {
-				if !r.interactiveShell {
+				if r.subshellLevel > 0 && !r.interactiveShell {
 					r.exit.exiting = true
 					break
 				}
-				// Interactive POSIX shells skip the command and continue with status 1.
+				if isPosixSpecialBuiltin(fields[0]) && !r.interactiveShell {
+					r.exit.exiting = true
+					break
+				}
+				// Bash 5.3's default build is not STRICT_POSIX: a temporary
+				// assignment error before a non-special command discards the
+				// command and continues with status 1.
 				for _, restore := range restores {
 					r.restoreInlineVar(restore.name, restore.vr)
 				}
