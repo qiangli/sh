@@ -4328,19 +4328,6 @@ func (r *Runner) invokesSpecialBuiltin(name string) bool {
 	return r.Funcs[name] == nil
 }
 
-func (r *Runner) posixRegularBuiltinNeedsPath(name string) bool {
-	if !r.opts[optPosix] {
-		return false
-	}
-	switch name {
-	case "echo", "pwd":
-		_, err := LookPathDir(r.Dir, r.writeEnv, name)
-		return err != nil
-	default:
-		return false
-	}
-}
-
 // posixSpecialBuiltinFatal upgrades certain special-builtin failures
 // to a shell exit in POSIX mode (POSIX 1003.1 § 2.8.1). Bash limits
 // this to "hard" errors: any unset failure (readonly variable, bad
@@ -9933,7 +9920,7 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 		r.exit.returning = false
 		return
 	}
-	if IsBuiltin(name) && !r.disabledBuiltins[name] && !r.posixRegularBuiltinNeedsPath(name) {
+	if IsBuiltin(name) && !r.disabledBuiltins[name] {
 		r.emitAudit("builtin", pos, args, true)
 		r.exit = r.builtin(ctx, pos, name, args[1:])
 		if r.opts[optPosix] {
