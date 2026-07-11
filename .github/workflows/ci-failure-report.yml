@@ -1,0 +1,74 @@
+name: ci-failure-report
+
+on:
+  workflow_run:
+    workflows: [Test]
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  report:
+    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+    runs-on: ubuntu-latest
+    env:
+      COLLECTOR_REPO: qiangli/dhnt-ci-failures
+      GH_TOKEN: ${{ secrets.CI_FAILURE_TOKEN }}
+      SOURCE_REPO: ${{ github.repository }}
+      WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
+      RUN_URL: ${{ github.event.workflow_run.html_url }}
+      RUN_ID: ${{ github.event.workflow_run.id }}
+      RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+      HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+      HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+      EVENT_NAME: ${{ github.event.workflow_run.event }}
+      ACTOR: ${{ github.event.workflow_run.actor.login }}
+    steps:
+      - name: Report missing token
+        if: ${{ env.GH_TOKEN == '' }}
+        run: echo "::warning::CI_FAILURE_TOKEN is not configured; skipping CI failure report"
+
+      - name: Create or update collector issue
+        if: ${{ env.GH_TOKEN != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          title="CI failure: ${SOURCE_REPO} / ${WORKFLOW_NAME}"
+          body="$(mktemp)"
+          cat >"$body" <<EOF
+          Failed workflow run:
+
+          - Source repo: ${SOURCE_REPO}
+          - Workflow: ${WORKFLOW_NAME}
+          - Event: ${EVENT_NAME}
+          - Branch: ${HEAD_BRANCH}
+          - SHA: ${HEAD_SHA}
+          - Actor: ${ACTOR}
+          - Run: ${RUN_URL}
+          - Run id: ${RUN_ID}
+          - Attempt: ${RUN_ATTEMPT}
+          EOF
+
+          issue="$(
+            TITLE="$title" gh issue list \
+              --repo "$COLLECTOR_REPO" \
+              --state open \
+              --label ci-failure \
+              --limit 100 \
+              --json number,title \
+              --jq '.[] | select(.title == env.TITLE) | .number' |
+              head -n1
+          )"
+
+          if [[ -n "$issue" ]]; then
+            gh issue comment "$issue" --repo "$COLLECTOR_REPO" --body-file "$body"
+          else
+            gh issue create \
+              --repo "$COLLECTOR_REPO" \
+              --title "$title" \
+              --body-file "$body" \
+              --label ci-failure \
+              --label automated
+          fi
