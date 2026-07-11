@@ -1671,12 +1671,14 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			// the common `{ sleep 1; kill $COPROC_PID; } &` idiom.
 			if r.coprocReg != nil {
 				if bg := r.coprocReg.lookup(int64(pid)); bg != nil {
-					if bg.pidReady != nil {
-						<-bg.pidReady
+					if rp := bg.publishedSignalPid(); rp != 0 {
+						if err := sendSignal(int(rp), sig); err != nil {
+							exit.code = 1
+							r.errf(r.bashErrPrefix(pos)+"kill: (%d) - %v\n", int(rp), err)
+						}
 					}
-					if rp := bg.pid.Load(); rp != 0 {
-						pid = int(rp)
-					}
+					r.killSyntheticBg(bg, sig)
+					continue
 				}
 			}
 			// A signal directed at our own $$ for which this runner (or a
@@ -5429,6 +5431,17 @@ func (bg *bgProc) matchesPid(pid int64) bool {
 		}
 	}
 	return false
+}
+
+func (bg *bgProc) publishedSignalPid() int64 {
+	if pid := int64(jobSignalPid(bg)); pid != 0 {
+		return pid
+	}
+	pids := bg.pidList()
+	if len(pids) == 0 {
+		return 0
+	}
+	return pids[len(pids)-1]
 }
 
 // bgJobLine renders the line `bg` prints when it resumes a job in the

@@ -5134,6 +5134,10 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 		"coproc CO { read line; echo got=$line; }; echo hi >&${CO[1]}; read out <&${CO[0]}; echo $out",
 		"got=hi\n",
 	},
+	{
+		"coproc CO { /bin/sleep 2; }; { sleep 0.05; kill $CO_PID; } & wait $CO_PID; echo status:$?",
+		"status:143\n",
+	},
 
 	// numbered fds (Phase 2): persistent assignment via exec, scoped via
 	// plain redirect, dup forms with N >= 3 on either side. See
