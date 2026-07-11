@@ -3192,7 +3192,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			// POSIX interp 1602: inside a signal-trap action, including a
 			// function it calls, it instead yields the $? in effect when
 			// the trap was invoked.
-			if r.inSignalTrap && len(r.callStack) == r.signalTrapDepth {
+			if r.inSignalTrap && len(r.callStack) >= r.signalTrapDepth {
 				exit.code = r.signalTrapExit
 			} else {
 				exit.code = r.lastExit.code
