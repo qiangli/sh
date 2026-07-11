@@ -350,6 +350,7 @@ func (r *Runner) updateExpandOpts() {
 		r.ecfg.ReadDir2 = nil
 	} else {
 		r.ecfg.ReadDir2 = func(s string) ([]fs.DirEntry, error) {
+			s = shellPathJoinAbs(r.Dir, s)
 			return r.readDirHandler(r.handlerCtx(r.ectx, handlerKindReadDir, todoPos), s)
 		}
 	}

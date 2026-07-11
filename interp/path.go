@@ -125,18 +125,20 @@ func isWindowsSlash(c byte) bool {
 	return c == '/' || c == '\\'
 }
 
-// msysDrivePath recognizes the MSYS/Git-Bash drive convention "/c" or "/c/...":
-// a leading forward slash, a drive letter, then end-of-string or a slash. It
-// returns the UPPERCASE drive letter and the remainder beginning with "/"
-// ("/c" -> "C","/"; "/c/Users" -> "C","/Users"). A bare "/foo" is left to the
-// volume-prepend fallback (it is not a drive reference).
+// msysDrivePath recognizes the MSYS/Git-Bash drive convention "/c" or "/c/...".
+// It also accepts the backslash form "\c\..." which Go can produce on Windows
+// when globbing joins an MSYS-style PWD with a relative pattern. It returns the
+// UPPERCASE drive letter and the remainder beginning with "/" ("/c" -> "C","/";
+// "/c/Users" -> "C","/Users"). A bare "/foo" is left to the volume-prepend
+// fallback (it is not a drive reference).
 func msysDrivePath(path string) (drive, rest string, ok bool) {
-	if len(path) >= 2 && path[0] == '/' && isWindowsDriveLetter(path[1]) &&
+	if len(path) >= 2 && isWindowsSlash(path[0]) && isWindowsDriveLetter(path[1]) &&
 		(len(path) == 2 || isWindowsSlash(path[2])) {
 		r := path[2:]
 		if r == "" {
 			r = "/"
 		}
+		r = strings.ReplaceAll(r, `\`, "/")
 		return string(path[1] &^ 0x20), r, true // &^0x20 = ASCII upper
 	}
 	return "", "", false

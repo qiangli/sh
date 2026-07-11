@@ -81,6 +81,14 @@ func TestShellPathWindowsRootTranslation(t *testing.T) {
 			wantAbsPath: `C:\`,
 		},
 		{
+			name:        "msys backslash form maps to drive",
+			dir:         `/c/Users/liqiang/.config/bashy`,
+			path:        `\c\Users\liqiang\.config\bashy`,
+			wantAbs:     true,
+			wantOS:      `C:\Users\liqiang\.config\bashy`,
+			wantAbsPath: `C:\Users\liqiang\.config\bashy`,
+		},
+		{
 			name:        "single-letter dir under root is not a drive ref",
 			dir:         `C:\work`,
 			path:        `/bin`,
