@@ -1699,14 +1699,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 						if cb == "" {
 							continue
 						}
-						if r.asyncList {
-							r.markPendingSignal(sname)
-							continue
-						}
-						// Background subshells outside asynchronous-list
-						// handling inherit the trap table but not the parent's
-						// signal.Notify ownership. Fall through to a real OS
-						// signal so the foreground parent receives it.
+						// Background subshells inherit the trap table but not
+						// the parent's signal.Notify ownership. Fall through to
+						// a real OS signal so the foreground parent receives it.
 					} else if !sigIsZero(sig) {
 						if signalDefaultDoesNotTerminate(sig) {
 							// Avoid sending these self-directed defaults to
@@ -3195,7 +3190,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			// POSIX interp 1602: inside a signal-trap action, including a
 			// function it calls, it instead yields the $? in effect when
 			// the trap was invoked.
-			if r.inSignalTrap {
+			if r.inSignalTrap && len(r.callStack) == r.signalTrapDepth {
 				exit.code = r.signalTrapExit
 			} else {
 				exit.code = r.lastExit.code

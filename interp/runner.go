@@ -4459,6 +4459,10 @@ func (r *Runner) stop(ctx context.Context) bool {
 	return false
 }
 
+func (r *Runner) canReturn() bool {
+	return r.inFunc || r.inSource || (r.inSignalTrap && r.signalTrapDepth > 0)
+}
+
 func backgroundJobText(st *syntax.Stmt) string {
 	// Bash stores the job's command without the trailing `&`; the jobs
 	// list re-adds it only for still-running jobs (see list_one_job /
@@ -6048,6 +6052,13 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			r.stmts(ctx, cm.Cond)
 			r.inLoop = oldInLoop
 			r.noErrExit = oldNoErrExit
+
+			// A signal trap can interrupt the condition itself. Preserve
+			// return/exit/fatal control flow before normal while/until status
+			// handling clears the condition status for the next iteration.
+			if r.exit.returning || r.exit.exiting || r.exit.fatalExit {
+				return
+			}
 
 			// Honor a break/continue signaled from the condition (same
 			// enclosing-count semantics as loopStmtsBroken does for the body).

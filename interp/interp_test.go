@@ -2598,6 +2598,10 @@ var runTests = []runTest{
 		"trapped 19\n",
 	},
 	{
+		"trap 'return 0' USR1; loop() { kill -s USR1 $$; while :; do :; done; }; get_loop_exit() { loop; echo exit=$?; }; get_loop_exit",
+		"exit=0\n",
+	},
+	{
 		"set -o posix; (trap 'echo got INT' INT; trap - QUIT; kill -s INT $$; echo after INT; kill -s QUIT $$; echo after QUIT) & wait $!; echo status:$?",
 		"got INT\nafter INT\nstatus:131\n",
 	},
