@@ -2593,9 +2593,22 @@ var runTests = []runTest{
 		"set -o posix; kill() (trap 'sleep 0' EXIT; (trap 'sleep 0' EXIT; (trap 'sleep 0' EXIT; command kill \"$@\"))); trap X USR1; alias X='echo 1'; kill -s USR1 $$; alias X='echo 2'; kill -s USR1 $$",
 		"1\n2\n",
 	},
+	// POSIX interp 1602 applies to the trap action itself, NOT to functions the
+	// action calls: fn's bare `return` yields the status of `true` (0), not the
+	// $? in effect when the trap fired (19). Verified against bash 5.3 in both
+	// default and posix mode; this case previously asserted "trapped 19", which
+	// bash does not produce, and the code was widened to match it — regressing
+	// the bash-5.3 trap fixture (tests/trap9.sub). See the next case.
 	{
 		"set -o posix; fn() { true; return; }; trap 'fn; echo trapped $?' USR1; (exit 19); (kill -s USR1 $$; exit 19); :",
-		"trapped 19\n",
+		"trapped 0\n",
+	},
+	// bash-5.3 tests/trap9.sub, posix interp 1602: the `return` in `check` does
+	// not end execution of the trap action, and yields false's status (1), so
+	// `check && echo B || echo A` prints A.
+	{
+		"check() { false; return; }; handle() { check && echo B || echo A; }; trap handle USR1; kill -USR1 $$",
+		"A\n",
 	},
 	{
 		"trap 'return 0' USR1; loop() { kill -s USR1 $$; while :; do :; done; }; get_loop_exit() { loop; echo exit=$?; }; get_loop_exit",

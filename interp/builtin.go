@@ -3189,10 +3189,25 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		case 0:
 			// `return` with no argument returns the exit status of the
 			// last command executed in the function/sourced script.
-			// POSIX interp 1602: inside a signal-trap action, including a
-			// function it calls, it instead yields the $? in effect when
-			// the trap was invoked.
-			if r.inSignalTrap && len(r.callStack) >= r.signalTrapDepth {
+			// POSIX interp 1602: in the trap action ITSELF it instead yields
+			// the $? in effect when the trap was invoked.
+			//
+			// The depth test must be `==`, not `>=`: the special status applies
+			// only at the trap action's own frame, NOT inside functions the
+			// action calls. Verified against bash 5.3 (both default and posix):
+			//
+			//	fn() { true; return; }
+			//	trap 'fn; echo trapped $?' USR1   # (exit 19) beforehand
+			//	=> "trapped 0"   -- fn's bare return yields true's 0, not 19
+			//
+			//	check() { false; return; }
+			//	handle() { check && echo B || echo A; }
+			//	trap handle USR1                  # bash-5.3 tests/trap9.sub
+			//	=> "A"           -- check's bare return yields false's 1
+			//
+			// Widening this to `>=` makes every function called during a trap
+			// action return the trap's saved status, which fails trap9.sub.
+			if r.inSignalTrap && len(r.callStack) == r.signalTrapDepth {
 				exit.code = r.signalTrapExit
 			} else {
 				exit.code = r.lastExit.code
