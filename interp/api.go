@@ -1182,7 +1182,11 @@ func New(opts ...RunnerOption) (*Runner, error) {
 	r.importExportedFuncs()
 	if r.auditLog == nil {
 		if path := r.Env.Get("BASHY_AUDIT_LOG").String(); path != "" {
-			f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o666)
+			// 0600: an audit log records what was executed and must not be
+			// readable or writable by other users (it can carry command lines and
+			// argument values). A world-writable audit trail cannot be trusted as
+			// evidence — cf. NIST 800-53 AU-9, protection of audit information.
+			f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 			if err != nil {
 				return nil, err
 			}

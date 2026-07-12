@@ -7789,6 +7789,39 @@ func TestRunnerAuditLog(t *testing.T) {
 	}
 }
 
+// The BASHY_AUDIT_LOG file records what was executed, so it must not be readable
+// or writable by other users — a world-accessible audit trail is not evidence
+// (NIST 800-53 AU-9).
+func TestBashyAuditLogFileIsOwnerOnly(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX file modes not applicable")
+	}
+	t.Parallel()
+	// A short path: the value is a filename, not a socket, so length is not a
+	// constraint here, but keep it in the test's own temp dir.
+	logPath := filepath.Join(t.TempDir(), "audit.log")
+	file, err := syntax.NewParser().Parse(strings.NewReader("true"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := interp.New(interp.Env(expand.ListEnviron("BASHY_AUDIT_LOG=" + logPath)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), runnerRunTimeout)
+	defer cancel()
+	if err := r.Run(ctx, file); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	fi, err := os.Stat(logPath)
+	if err != nil {
+		t.Fatalf("audit log not created: %v", err)
+	}
+	if perm := fi.Mode().Perm(); perm&0o077 != 0 {
+		t.Fatalf("audit log mode %#o is accessible to group/other", perm)
+	}
+}
+
 func TestRunnerJsonBuiltins(t *testing.T) {
 	t.Parallel()
 	src := `
