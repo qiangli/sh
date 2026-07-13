@@ -10426,12 +10426,58 @@ func (r *Runner) open(ctx context.Context, path string, flags int, mode os.FileM
 	return nil, err
 }
 
+// statVirtualFd resolves a /dev/fd/N pseudo-path (N>=3) to the *os.File bashy
+// holds for that descriptor and returns its fstat result. bashy tracks
+// redirected descriptors as Go file objects (r.fdTable for reads,
+// r.fdWriteTable for writes) rather than dup'ing them to real numbered OS fds,
+// so a plain os.Stat("/dev/fd/6") has no real fd to resolve on Linux (where
+// /dev/fd is /proc/self/fd). File-type tests like `test -p /dev/fd/6` must
+// therefore inspect bashy's own descriptor. fds 0/1/2 are the process's real
+// descriptors and are left to the filesystem. ok=false means "fall through";
+// ok=true with os.ErrNotExist means the /dev/fd descriptor is closed.
+func (r *Runner) statVirtualFd(name string) (fs.FileInfo, bool, error) {
+	const prefix = "/dev/fd/"
+	if !strings.HasPrefix(name, prefix) {
+		return nil, false, nil
+	}
+	fd, err := strconv.Atoi(name[len(prefix):])
+	if err != nil || fd < 3 {
+		return nil, false, nil
+	}
+	// reads live in fdTable (*os.File); writes live in fdWriteTable, possibly
+	// wrapped (e.g. fifoWriteFile, which embeds *os.File and so promotes Stat).
+	var statter interface {
+		Stat() (fs.FileInfo, error)
+	}
+	if rf := r.fdTable[fd]; rf != nil {
+		statter = rf
+	} else if w, ok := r.fdWriteTable[fd]; ok {
+		statter, _ = w.(interface {
+			Stat() (fs.FileInfo, error)
+		})
+	}
+	if statter == nil {
+		// Not a bashy-managed descriptor (closed, or an unregistered real fd):
+		// fall through to the filesystem, which correctly reports a closed
+		// /dev/fd/N as nonexistent.
+		return nil, false, nil
+	}
+	info, statErr := statter.Stat()
+	return info, true, statErr
+}
+
 func (r *Runner) stat(ctx context.Context, name string) (fs.FileInfo, error) {
+	if info, ok, err := r.statVirtualFd(name); ok {
+		return info, err
+	}
 	path := absPath(r.Dir, name)
 	return r.statHandler(ctx, path, true)
 }
 
 func (r *Runner) lstat(ctx context.Context, name string) (fs.FileInfo, error) {
+	if info, ok, err := r.statVirtualFd(name); ok {
+		return info, err
+	}
 	path := absPath(r.Dir, name)
 	return r.statHandler(ctx, path, false)
 }
