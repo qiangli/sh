@@ -1511,6 +1511,36 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			if !strings.HasPrefix(arg, "-") || arg == "-" {
 				break
 			}
+			// -s<SPEC> / -n<NUM> are the attached-argument forms of `-s SPEC`
+			// and `-n NUM` (e.g. `kill -sHUP` == `kill -s HUP`, `kill -n9` ==
+			// `kill -n 9`), which bash's getopt-style kill accepts; the
+			// exact-match switch below only handles the detached forms. Signal
+			// names in the -NAME form are upper-case and the -NUM form is all
+			// digits, so a lowercase "-s"/"-n" prefix is unambiguously the
+			// option, not a signal spec.
+			if len(arg) > 2 && strings.HasPrefix(arg, "-s") {
+				spec := arg[2:]
+				s, ok := parseSignalSpecPosix(spec, posixSignals)
+				if !ok {
+					return failf(1, "kill: %s: invalid signal specification\n", spec)
+				}
+				sig = s
+				remaining = remaining[1:]
+				continue
+			}
+			if len(arg) > 2 && strings.HasPrefix(arg, "-n") {
+				n, err := strconv.Atoi(arg[2:])
+				if err != nil {
+					return failf(2, "kill: -n requires a signal number\n")
+				}
+				s, _, ok := signalByNumber(n)
+				if !ok {
+					return failf(1, "kill: %d: invalid signal specification\n", n)
+				}
+				sig = s
+				remaining = remaining[1:]
+				continue
+			}
 			switch arg {
 			case "--":
 				remaining = remaining[1:]
