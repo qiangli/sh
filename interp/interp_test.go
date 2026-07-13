@@ -6402,6 +6402,77 @@ func TestPosixSpecialBuiltinFuncDeclInSubshell(t *testing.T) {
 	qt.Assert(t, qt.Equals(cb.String(), "./func5.sub: line 7: `break': is a special builtin\n"))
 }
 
+func TestFuncNameGatingBash53Final(t *testing.T) {
+	t.Parallel()
+	// Released bash 5.3 (general.c valid_function_word) rejects a function
+	// name word carrying W_HASDOLLAR or W_QUOTED in the default mode:
+	// `function sys$read`, `<(:) ()`, and `'a b c' ()` all fail with
+	// "not a valid identifier" reported at the definition's closing brace,
+	// while `function a=2` and `function 11111` define callable functions.
+	// bash-5.3-rc2 still accepted the quoted and procsub-shaped names
+	// ("allow quotes for now", W_HASDOLLAR only) and rc2's tests/func.right
+	// encodes that abandoned behavior; the release reverted it
+	// (W_HASDOLLAR|W_QUOTED, the old check tagged "/*TAG: bash-5.4 */").
+	// This pins the released-5.3 semantics so a conformance run against an
+	// rc2 fixture tree cannot masquerade as an engine regression again.
+	src := "function a=2\n" +
+		"{\n" +
+		"\tprintf 'FUNCNAME: %s\\n' $FUNCNAME\n" +
+		"}\n" +
+		"function 11111\n" +
+		"{\n" +
+		"\tprintf 'FUNCNAME: %s\\n' $FUNCNAME\n" +
+		"}\n" +
+		"a\\=2\n" +
+		"11111\n" +
+		"function sys$read\n" +
+		"{\n" +
+		"\techo x\n" +
+		"}\n" +
+		"echo st:$?\n" +
+		"<(:) ()\n" +
+		"{\n" +
+		"\techo $FUNCNAME\n" +
+		"}\n" +
+		"echo st2:$?\n" +
+		"\\<\\(:\\)\n" +
+		"type '<(:)'\n" +
+		"echo st3:$?\n" +
+		"'a b c' ()\n" +
+		"{\n" +
+		"\techo x\n" +
+		"}\n" +
+		"echo st4:$?\n" +
+		"a\\ b\\ c\n" +
+		"type 'a b c'\n" +
+		"echo st5:$?\n"
+	file, err := syntax.NewParser().Parse(strings.NewReader(src), "./func5x.sub")
+	qt.Assert(t, qt.IsNil(err))
+
+	var cb bytes.Buffer
+	r, err := interp.New(interp.StdIO(nil, &cb, &cb), interp.WithBashCompatErrors(true))
+	qt.Assert(t, qt.IsNil(err))
+
+	err = r.Run(context.Background(), file)
+	qt.Assert(t, qt.IsNil(err))
+	// Byte-identical to GNU bash 5.3.15(1)-release on the same script.
+	want := "FUNCNAME: a=2\n" +
+		"FUNCNAME: 11111\n" +
+		"./func5x.sub: line 14: `sys$read': not a valid identifier\n" +
+		"st:1\n" +
+		"./func5x.sub: line 19: `<(:)': not a valid identifier\n" +
+		"st2:1\n" +
+		"./func5x.sub: line 21: <(:): command not found\n" +
+		"./func5x.sub: line 22: type: <(:): not found\n" +
+		"st3:1\n" +
+		"./func5x.sub: line 27: `'a b c'': not a valid identifier\n" +
+		"st4:1\n" +
+		"./func5x.sub: line 29: a b c: command not found\n" +
+		"./func5x.sub: line 30: type: a b c: not found\n" +
+		"st5:1\n"
+	qt.Assert(t, qt.Equals(cb.String(), want))
+}
+
 func TestFunctionRedirsApplyOnCallNotDefinition(t *testing.T) {
 	src := "func(){ echo bad; } <_no_such_file_\n" +
 		"echo def:$?\n" +
