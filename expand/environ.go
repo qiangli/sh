@@ -82,6 +82,23 @@ const (
 	// about a variable, such as exporting it, without changing its value at all.
 	KeepValue
 
+	// Object describes a variable holding a live Go value, kept in
+	// [Variable.Obj]. It is an extension of the bash++ dialect
+	// ([syntax.LangBashPP]) and is never produced when interpreting any other
+	// language variant; see [Config.Lang].
+	//
+	// Objects exist so that a value can cross between the shell and Go code
+	// without a lossy trip through a string. Wherever the shell needs a
+	// string — a command argument, a `$foo` expansion, a comparison — the
+	// value is coerced with [Variable.String], which renders it as JSON. That
+	// same rendering is what an external binary receives, so a program which
+	// only understands strings sees a plain JSON document and a Go caller
+	// which understands more sees the original value.
+	//
+	// Note that Obj is not deep-copied when a Variable is copied, so an object
+	// is shared, not snapshotted, by an assignment or a subshell.
+	Object
+
 	// Deprecated: use [Unknown], as tracking whether or not a variable is set
 	// is now done via [Variable.Set].
 	// Otherwise it was impossible to describe an unset variable with a known kind
@@ -116,6 +133,7 @@ type Variable struct {
 	Kind ValueKind
 
 	Str     string            // Used when Kind is String or NameRef.
+	Obj     any               // Used when Kind is Object; see [Object].
 	List    []string          // Used when Kind is Indexed; holds the dense prefix [0,len(List)).
 	ListMap map[int]string    // Used when Kind is Indexed; sparse overlay for indices >= maxDenseIndex.
 	ListSet map[int]bool      // Used when Kind is Indexed and sparse; nil means every List index is set.
@@ -222,6 +240,10 @@ func (v Variable) String() string {
 	switch v.Kind {
 	case String:
 		return v.Str
+	case Object:
+		// An object's string coercion is its JSON encoding; this is what
+		// `$foo` expands to and what an external binary is handed.
+		return ObjectString(v.Obj)
 	case Indexed:
 		if v.IndexedSet(0) {
 			return v.IndexedElem(0)

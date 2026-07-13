@@ -169,6 +169,21 @@ type Config struct {
 	// flips this whenever the posix shell option changes.
 	Posix bool
 
+	// Lang selects the shell dialect whose expansion semantics to follow.
+	// It is the expand-side half of the dialect seam: until now only the
+	// parser knew about [syntax.LangVariant], so behavioral extensions had
+	// nowhere to hang.
+	//
+	// The zero value is [syntax.LangBash], which is also what every variant
+	// other than [syntax.LangBashPP] resolves to here — expansion does not
+	// vary between bash, POSIX, mksh and zsh in this package, so the only
+	// distinction it draws is bash++ or not. See [Config.bashPP].
+	//
+	// Under [syntax.LangBashPP], object-valued variables ([Object]) are
+	// available. Under any other value they are not, and the observable
+	// behaviour is byte-for-byte what it was before this field existed.
+	Lang syntax.LangVariant
+
 	// stripBackslashEscapes, when true, makes the literal-part
 	// expansion perform POSIX quote-removal on unquoted backslash
 	// escapes (\X → X). This is what bash does when expanding a

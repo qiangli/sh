@@ -14,11 +14,12 @@ func _() {
 	_ = x[Indexed-3]
 	_ = x[Associative-4]
 	_ = x[KeepValue-5]
+	_ = x[Object-6]
 }
 
-const _ValueKind_name = "UnknownStringNameRefIndexedAssociativeKeepValue"
+const _ValueKind_name = "UnknownStringNameRefIndexedAssociativeKeepValueObject"
 
-var _ValueKind_index = [...]uint8{0, 7, 13, 20, 27, 38, 47}
+var _ValueKind_index = [...]uint8{0, 7, 13, 20, 27, 38, 47, 53}
 
 func (i ValueKind) String() string {
 	idx := int(i) - 0
