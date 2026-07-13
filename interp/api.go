@@ -125,6 +125,12 @@ type Runner struct {
 	ecfg *expand.Config
 	ectx context.Context // just so that Runner.Subshell can use it again
 
+	// dialect is the shell language variant the runner implements, and the
+	// interp-side half of the dialect seam. The zero value is
+	// [syntax.LangBash]; only [syntax.LangBashPP] changes any behaviour.
+	// See [Lang].
+	dialect syntax.LangVariant
+
 	// didReset remembers whether the runner has ever been reset. This is
 	// used so that Reset is automatically called when running any program
 	// or node for the first time on a Runner.
@@ -1975,7 +1981,7 @@ func (r *Runner) LangVariant() syntax.LangVariant {
 	if r.opts[optPosix] {
 		return syntax.LangPOSIX
 	}
-	return syntax.LangBash
+	return r.Dialect()
 }
 
 // VimMode reports whether the vi line-editing mode is active (`set -o vi`).
@@ -2269,6 +2275,10 @@ func (r *Runner) Reset() {
 		readDirHandler: r.readDirHandler,
 		statHandler:    r.statHandler,
 		bgPidCallback:  r.bgPidCallback,
+
+		// The dialect is fixed at construction by [Lang] and is not
+		// per-Run scratch state; a runner does not change language.
+		dialect: r.dialect,
 
 		// These can be set by functions like [Dir] or [Params], but
 		// builtins can overwrite them; reset the fields to whatever the
@@ -2633,6 +2643,7 @@ func (r *Runner) subshell(background bool) *Runner {
 		aliasDefOverride:     r.aliasDefOverride,
 		enclosingSubshellEnd: r.enclosingSubshellEnd,
 		opts:                 r.opts,
+		dialect:              r.dialect,
 		noOpSetState:         maps.Clone(r.noOpSetState),
 		tempEnv:              maps.Clone(r.tempEnv),
 		usedNew:              r.usedNew,

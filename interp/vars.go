@@ -512,6 +512,21 @@ func (o *overlayEnviron) collectNames(seen map[string]bool) map[string]bool {
 	return seen
 }
 
+// execEnvValue renders vr as the bytes a child process should receive for it.
+//
+// This is the OS boundary. A shell variable is a string everywhere else, so for
+// every kind but [expand.Object] the value is already what the child needs. An
+// object holds a live Go value, which a separate process cannot be handed, so it
+// is serialized to JSON on the way out — the child sees a plain string, and one
+// it can parse, rather than the empty Str field the value would otherwise
+// collapse to.
+func execEnvValue(vr expand.Variable) string {
+	if vr.Kind == expand.Object {
+		return vr.String() // JSON; see [expand.ObjectString]
+	}
+	return vr.Str
+}
+
 func execEnv(env expand.Environ) []string {
 	list := make([]string, 0, 64)
 	if o, ok := env.(*overlayEnviron); ok && o.parent == nil {
@@ -523,8 +538,8 @@ func execEnv(env expand.Environ) []string {
 			if !vr.IsSet() && vr.Local && named.Prev.Exported && named.Prev.Kind == expand.String {
 				list = append(list, name+"="+named.Prev.String())
 			}
-			if vr.Exported && (vr.Kind == expand.String || vr.Kind == expand.NameRef) {
-				list = append(list, name+"="+vr.Str)
+			if vr.Exported && (vr.Kind == expand.String || vr.Kind == expand.NameRef || vr.Kind == expand.Object) {
+				list = append(list, name+"="+execEnvValue(vr))
 			}
 		}
 		return list
@@ -548,8 +563,8 @@ func execEnv(env expand.Environ) []string {
 				}
 			}
 		}
-		if vr.Exported && (vr.Kind == expand.String || vr.Kind == expand.NameRef) {
-			list = append(list, name+"="+vr.Str)
+		if vr.Exported && (vr.Kind == expand.String || vr.Kind == expand.NameRef || vr.Kind == expand.Object) {
+			list = append(list, name+"="+execEnvValue(vr))
 		}
 	}
 	return list
@@ -1137,9 +1152,22 @@ func (r *Runner) printSetVars() {
 			}
 			r.out(")\n")
 		default:
-			r.outf("%s=%s\n", name, bashSetQuote(vr.Str))
+			// An object lists as the string it coerces to (its JSON), not
+			// as the empty Str field it does not use.
+			r.outf("%s=%s\n", name, bashSetQuote(scalarValue(vr)))
 		}
 	}
+}
+
+// scalarValue is the string a scalar-shaped variable presents as to the shell:
+// its own Str, except for an [expand.Object], which coerces to JSON. Use it
+// wherever a variable is rendered back out as shell text, so that an object
+// reads as its value rather than as an empty string.
+func scalarValue(vr expand.Variable) string {
+	if vr.Kind == expand.Object {
+		return vr.String()
+	}
+	return vr.Str
 }
 
 // printArrayVars writes every variable of the requested array kind
@@ -1453,7 +1481,7 @@ func formatDeclareVar(name string, vr expand.Variable, forceEmptyArrayValue bool
 			return b.String()
 		}
 		b.WriteByte('=')
-		b.WriteString(bashDeclareQuote(vr.Str))
+		b.WriteString(bashDeclareQuote(scalarValue(vr)))
 	}
 	return b.String()
 }

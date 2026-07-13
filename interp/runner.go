@@ -54,7 +54,8 @@ const (
 func (r *Runner) fillExpandConfig(ctx context.Context) {
 	r.ectx = ctx
 	r.ecfg = &expand.Config{
-		Env: expandEnv{r},
+		Env:  expandEnv{r},
+		Lang: r.Dialect(),
 		OnNameRefCircular: func(name string) {
 			r.errf("%swarning: %s: circular name reference\n",
 				r.bashErrPrefix(r.curStmtPos), name)
