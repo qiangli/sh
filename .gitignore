@@ -19,3 +19,7 @@ bin/
 # ycode local artifacts
 .agents/
 .gfy-out/
+
+# bashy local scratch (issue register, weave/gate state) — fleet work-tracking,
+# kept local so this OSS fork stays brand-neutral and free of absolute paths.
+.bashy/
