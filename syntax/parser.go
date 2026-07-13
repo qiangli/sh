@@ -84,12 +84,32 @@ const (
 	// At this time, [Variant] does not support LangAuto.
 	LangAuto
 
+	// LangBashPP corresponds to bash++, a strict superset of [LangBash] used
+	// by the bashy shell. Its grammar is Bash's, byte for byte: at this level
+	// it adds no keywords, operators, or parse rules, so any input parses and
+	// prints identically under LangBash and LangBashPP. It exists so that the
+	// layers above the parser — [mvdan.cc/sh/v3/expand] and
+	// [mvdan.cc/sh/v3/interp] — have a dialect to gate behavioral extensions
+	// on, such as object-valued variables. Consumers which do not opt in stay
+	// on [LangBash] and are unaffected.
+	//
+	// It is declared after [LangAuto] so that the pre-existing variant bits
+	// keep their values.
+	//
+	// Its string representation is "bashpp".
+	LangBashPP
+
 	// langBashLegacy is what [LangBash] used to be, when it was zero.
 	// We still support it for the sake of backwards compatibility.
 	langBashLegacy LangVariant = 0
 
 	// langResolvedVariants contains all known variants except [LangAuto],
 	// which is meant to resolve to another variant.
+	//
+	// [LangBashPP] is deliberately absent: the table-driven tests iterate over
+	// this set expecting one distinct grammar per bit, and bash++ shares
+	// Bash's grammar exactly. TestBashPPMatchesBash covers it instead, by
+	// asserting the two variants agree over the whole corpus.
 	langResolvedVariants = LangBash | LangPOSIX | LangMirBSDKorn | LangBats | LangZsh
 
 	// langResolvedVariantsCount is langResolvedVariants.count() as a constant.
@@ -98,7 +118,12 @@ const (
 	langResolvedVariantsCount = 5
 
 	// langBashLike contains Bash plus all variants which are extensions of it.
-	langBashLike = LangBash | LangBats
+	langBashLike = LangBash | LangBats | LangBashPP
+
+	// langBashExact contains the variants whose grammar is Bash's exactly.
+	// It backs the parse rules which are Bash-only among the bash-like
+	// variants, i.e. those which [LangBats] deliberately does not share.
+	langBashExact = LangBash | LangBashPP
 )
 
 // Variant changes the shell language variant that the parser will
@@ -110,7 +135,7 @@ func Variant(l LangVariant) ParserOption {
 	switch l {
 	case langBashLegacy:
 		l = LangBash
-	case LangBash, LangPOSIX, LangMirBSDKorn, LangBats, LangZsh:
+	case LangBash, LangPOSIX, LangMirBSDKorn, LangBats, LangZsh, LangBashPP:
 	case LangAuto:
 		panic("LangAuto is not supported by the parser at this time")
 	default:
@@ -149,6 +174,8 @@ func (l LangVariant) String() string {
 		return "bats"
 	case LangZsh:
 		return "zsh"
+	case LangBashPP:
+		return "bashpp"
 	case LangAuto:
 		return "auto"
 	}
@@ -167,6 +194,8 @@ func (l *LangVariant) Set(s string) error {
 		*l = LangBats
 	case "zsh":
 		*l = LangZsh
+	case "bashpp", "bash++":
+		*l = LangBashPP
 	case "auto":
 		*l = LangAuto
 	default:
@@ -1100,7 +1129,7 @@ func (p *Parser) followStmts(left string, lpos Pos, stops ...string) ([]*Stmt, [
 		if p.recoverError() {
 			return []*Stmt{{Position: recoveredPos}}, nil
 		}
-		if left == "(" && p.tok == _EOF && p.lang.in(LangBash) {
+		if left == "(" && p.tok == _EOF && p.lang.in(langBashExact) {
 			// Bash 5.3 reports an empty subshell running into
 			// end-of-file as an EOF error pointing back at the `(`
 			// line, like the heredoc-EOF case in [Parser.subshell].
@@ -1868,7 +1897,7 @@ zshPrefixLoop:
 	// `${${x}}` or `${$(cmd)}`; it parses them at face value and rejects
 	// them at expansion time as a bad substitution. Capture the raw
 	// remainder so the runner can emit that same runtime diagnostic.
-	if !pe.Short && p.lang == LangBash && p.r == '$' {
+	if !pe.Short && p.lang.in(langBashExact) && p.r == '$' {
 		if p1 := p.peek(); p1 == '{' || p1 == '(' {
 			// Record an empty parameter name so the expansion keeps the
 			// usual non-nil Param invariant; the runner reports the bad
@@ -1921,7 +1950,7 @@ zshPrefixLoop:
 		return pe
 	}
 	if p.tok != _EOF && (pe.Length || pe.Width || pe.IsSet) {
-		if p.lang == LangBash {
+		if p.lang.in(langBashExact) {
 			// Bash defers `${#foo%}` and friends to expansion
 			// time, rejecting them as a bad substitution there.
 			return p.deferBadSubst(pe, old)
@@ -2033,7 +2062,7 @@ zshPrefixLoop:
 			pe.Names = ParNamesOperator(p.tok)
 			p.next()
 		case p.tok == star && !pe.Excl:
-			if p.lang == LangBash {
+			if p.lang.in(langBashExact) {
 				return p.deferBadSubst(pe, old)
 			}
 			p.curErr("not a valid parameter expansion operator: %#q", p.tok)
@@ -2059,7 +2088,7 @@ zshPrefixLoop:
 				p.curErr("nested parameter expansion cannot be followed by a word")
 			}
 		} else {
-			if p.lang == LangBash {
+			if p.lang.in(langBashExact) {
 				// Bash scans to the matching `}` and rejects the
 				// whole expansion at expansion time (`${x!y}`).
 				return p.deferBadSubst(pe, old)
@@ -2335,7 +2364,7 @@ func (p *Parser) eitherIndexBlank(blankOK bool) ArithmExpr {
 	p.quote = paramExpArithm
 	p.assignIndexWords = true
 	p.next()
-	if p.rawAssignIndex && p.lang == LangBash {
+	if p.rawAssignIndex && p.lang.in(langBashExact) {
 		switch p.tok {
 		case rightBrack:
 			val := ""
@@ -2360,7 +2389,7 @@ func (p *Parser) eitherIndexBlank(blankOK bool) ArithmExpr {
 	case star, at, perc, exclMark:
 		p.tok, p.val = _LitWord, p.tok.String()
 	}
-	if p.lang == LangBash && p.tok == rightBrack &&
+	if p.lang.in(langBashExact) && p.tok == rightBrack &&
 		(blankOK || p.pos.Offset() > lpos.Offset()+1) {
 		val := ""
 		if p.pos.Offset() > lpos.Offset()+1 {
@@ -2645,7 +2674,7 @@ func (p *Parser) getAssign(needEqual bool) *Assign {
 }
 
 func (p *Parser) arrayElemIndex() bool {
-	if p.lang != LangBash {
+	if !p.lang.in(langBashExact) {
 		return true
 	}
 	i := int(p.pos.Offset()) - int(p.offs) + 1
@@ -2727,7 +2756,7 @@ func (p *Parser) getStmt(readEnd, binCmd, fnBody bool) *Stmt {
 			// just the negation), so the stmt resolves to exit
 			// status 1. Mark it negated and let the caller see an
 			// otherwise-empty Stmt.
-			if p.lang == LangBash {
+			if p.lang.in(langBashExact) {
 				if readEnd {
 					p.stmtTerm(s)
 				}
@@ -2739,7 +2768,7 @@ func (p *Parser) getStmt(readEnd, binCmd, fnBody bool) *Stmt {
 			// bash 5.3 allows `! ! cmd` (`! true` semantics on the
 			// inner `!`, then outer negation flips again). Each
 			// additional `!` toggles s.Negated.
-			if p.lang == LangBash {
+			if p.lang.in(langBashExact) {
 				s.Negated = !s.Negated
 				for {
 					if _, ok := p.gotRsrv("!"); !ok {
@@ -2867,7 +2896,7 @@ func (p *Parser) gotStmtPipe(s *Stmt, binCmd bool) *Stmt {
 		case "esac":
 			p.curErr("%#q can only be used to end a `case`", p.val)
 		case "!":
-			if !s.Negated && p.lang == LangBash {
+			if !s.Negated && p.lang.in(langBashExact) {
 				// bash 5.3 accepts `time ! cmd`, `! ! cmd`, and
 				// other contexts where a `!` precedes the inner
 				// statement after a controlling keyword. Consume
@@ -2974,7 +3003,7 @@ func (p *Parser) gotStmtPipe(s *Stmt, binCmd bool) *Stmt {
 			// Reconstruct the source text of the word as the name
 			// and let the interpreter validate it. Other languages
 			// still reject at parse time.
-			if p.lang.in(LangBash) {
+			if p.lang.in(langBashExact) {
 				name := funcNameWordText(w)
 				if name == "" {
 					p.posErr(w.Pos(), "invalid func name")
@@ -3591,7 +3620,7 @@ func (p *Parser) timeClause(s *Stmt) {
 	// bash 5.3 also accepts `--` as an end-of-options marker right
 	// after `time` / `time -p` *when* another statement follows.
 	// `time --` alone keeps treating `--` as the body command.
-	if p.lang == LangBash && p.tok == _LitWord && p.val == "--" {
+	if p.lang.in(langBashExact) && p.tok == _LitWord && p.val == "--" {
 		save := p.pos
 		p.next()
 		if p.stopToken() {
@@ -3733,7 +3762,7 @@ func (p *Parser) bashFuncDecl(s *Stmt) {
 	// error to runtime. Read each name as a Word and stringify it so
 	// the interpreter can validate the literal text later. Only Bash
 	// has this deferral; other languages still reject at parse time.
-	if p.lang.in(LangBash) {
+	if p.lang.in(langBashExact) {
 		for p.tok != _Newl && p.tok != semicolon && p.tok != _EOF &&
 			p.tok != leftBrace && !(p.tok == _LitWord && p.val == "{") &&
 			p.tok != leftParen {

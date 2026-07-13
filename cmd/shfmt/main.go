@@ -472,7 +472,7 @@ func editorConfigLangs(l syntax.LangVariant) []string {
 	// We can later consider others like [[mksh]] or [[posix-shell]],
 	// just consider what list of languages the EditorConfig spec might eventually use.
 	switch l {
-	case syntax.LangBash, syntax.LangBats:
+	case syntax.LangBash, syntax.LangBats, syntax.LangBashPP:
 		return []string{"shell", "bash"}
 	case syntax.LangZsh:
 		return []string{"shell", "zsh"}

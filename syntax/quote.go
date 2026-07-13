@@ -133,7 +133,7 @@ func Quote(s string, lang LangVariant) (string, error) {
 				// emits for non-printable bytes and invalid UTF-8
 				// fragments. Other languages keep the historical
 				// \xXX form.
-				if lang.in(LangBash) {
+				if lang.in(langBashExact) {
 					fmt.Fprintf(&b, "\\%03o", rem[0])
 				} else {
 					fmt.Fprintf(&b, "\\x%02x", rem[0])
@@ -176,7 +176,7 @@ func Quote(s string, lang LangVariant) (string, error) {
 	// Bash 5.3 `${var@Q}` and `printf %q` form for strings containing
 	// single quotes: close-quote, backslash-escape the quote, reopen.
 	// e.g. `a'b` -> `'a'\''b'`.
-	if lang.in(LangBash) {
+	if lang.in(langBashExact) {
 		b.WriteByte('\'')
 		for _, r := range s {
 			if r == '\'' {
