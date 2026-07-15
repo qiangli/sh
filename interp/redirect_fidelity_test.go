@@ -93,9 +93,19 @@ func TestRunnerBash53RedirectCluster(t *testing.T) {
 			want: "[abc]\n",
 		},
 		{
-			name: "bad_fd_seven_with_imported_ambient_fd",
-			in:   "echo hi 1>&7",
-			want: "7: Bad file descriptor\nexit status 1",
+			// fd 7 is NOT among the shell's tracked descriptors, so `1>&7`
+			// must report EBADF — even if the process happens to inherit an
+			// ambient OS fd 7 (as GitHub's macOS runners do). Register no
+			// inherited fds here so the verdict comes from the shell's own fd
+			// table (inheritedFd() short-circuits an un-registered fd before it
+			// ever probes the real descriptor); with the default [7] the test
+			// would instead F_GETFL the ambient fd and spuriously succeed. This
+			// is bash-faithful: bash exposes only the descriptors it opened or
+			// inherited-and-tracked, not whatever is coincidentally open.
+			name:         "bad_fd_seven_with_imported_ambient_fd",
+			in:           "echo hi 1>&7",
+			inheritedFds: []int{},
+			want:         "7: Bad file descriptor\nexit status 1",
 		},
 		{
 			name: "dpl_out_to_unopened_fd_is_bad_fd",
