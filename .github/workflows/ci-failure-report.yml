@@ -1,12 +1,19 @@
 name: ci-failure-report
 
+# Files/updates a collector issue in qiangli/dhnt-ci-failures on a failed CI run
+# and emits a repository_dispatch (ci-failure-filed) to the collector, which wakes
+# the auto-fix pipeline (a collector workflow calls the cloudbox CI-failure webhook).
+# See dhnt/docs/ci-failure-autofix-pipeline.md. Token: dhnt-ci-failures-token,
+# carried here as the Actions secret CI_FAILURE_TOKEN.
+
 on:
   workflow_run:
-    workflows: [Test]
+    workflows: [test]
     types: [completed]
 
 permissions:
   contents: read
+  issues: write
 
 jobs:
   report:
@@ -14,6 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       COLLECTOR_REPO: qiangli/dhnt-ci-failures
+      REPAIR_DISPATCH_EVENT: ci-failure-filed
       GH_TOKEN: ${{ secrets.CI_FAILURE_TOKEN }}
       SOURCE_REPO: ${{ github.repository }}
       WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
@@ -27,17 +35,20 @@ jobs:
     steps:
       - name: Report missing token
         if: ${{ env.GH_TOKEN == '' }}
-        run: echo "::warning::CI_FAILURE_TOKEN is not configured; skipping CI failure report"
+        run: echo "::warning::CI_FAILURE_TOKEN is not configured; skipping CI failure report. Sync it from the dhnt-ci-failures-token secret (Metadata:Read, Issues:Read+Write, Contents:Write on the collector)."
 
-      - name: Create or update collector issue
+      - name: Create or update collector issue, then dispatch
         if: ${{ env.GH_TOKEN != '' }}
         shell: bash
         run: |
           set -euo pipefail
 
+          gh label create ci-failure --repo "$COLLECTOR_REPO" --color D93F0B --description "Filed CI failure" >/dev/null 2>&1 || true
+          gh label create automated  --repo "$COLLECTOR_REPO" --color 5319E7 --description "Created by automation" >/dev/null 2>&1 || true
+
           title="CI failure: ${SOURCE_REPO} / ${WORKFLOW_NAME}"
           body="$(mktemp)"
-          cat >"$body" <<EOF
+          cat >"$body" <<BODY
           Failed workflow run:
 
           - Source repo: ${SOURCE_REPO}
@@ -49,26 +60,28 @@ jobs:
           - Run: ${RUN_URL}
           - Run id: ${RUN_ID}
           - Attempt: ${RUN_ATTEMPT}
-          EOF
+          BODY
 
           issue="$(
-            TITLE="$title" gh issue list \
-              --repo "$COLLECTOR_REPO" \
-              --state open \
-              --label ci-failure \
-              --limit 100 \
-              --json number,title \
-              --jq '.[] | select(.title == env.TITLE) | .number' |
-              head -n1
+            TITLE="$title" gh issue list --repo "$COLLECTOR_REPO" --state open --label ci-failure \
+              --limit 100 --json number,title --jq '.[] | select(.title == env.TITLE) | .number' | head -n1
           )"
 
           if [[ -n "$issue" ]]; then
             gh issue comment "$issue" --repo "$COLLECTOR_REPO" --body-file "$body"
+            issue_number="$issue"
           else
-            gh issue create \
-              --repo "$COLLECTOR_REPO" \
-              --title "$title" \
-              --body-file "$body" \
-              --label ci-failure \
-              --label automated
+            issue_url="$(gh issue create --repo "$COLLECTOR_REPO" --title "$title" --body-file "$body" --label ci-failure --label automated)"
+            issue_number="${issue_url##*/}"
           fi
+
+          gh api --method POST "repos/${COLLECTOR_REPO}/dispatches" \
+            -f event_type="$REPAIR_DISPATCH_EVENT" \
+            -f "client_payload[source_repo]=$SOURCE_REPO" \
+            -f "client_payload[workflow]=$WORKFLOW_NAME" \
+            -f "client_payload[branch]=$HEAD_BRANCH" \
+            -f "client_payload[sha]=$HEAD_SHA" \
+            -f "client_payload[run_id]=$RUN_ID" \
+            -f "client_payload[run_url]=$RUN_URL" \
+            -f "client_payload[collector_issue]=$issue_number" \
+            || echo "::warning::filed issue #${issue_number} but could not dispatch ${REPAIR_DISPATCH_EVENT} (grant Contents:Write on the collector)."
