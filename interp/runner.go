@@ -6321,6 +6321,14 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		// certification, so it MUST conform when posix is indicated; in
 		// the default (non-posix) mode bash allows the definition, so this
 		// is gated on optPosix. Reject before stashing in the func table.
+		// Strict POSIX mode (yash -p builtins-p) instead requires the
+		// definition to be accepted silently — no diagnostic, exit status
+		// untouched — while invoking the name still runs the special
+		// builtin (see the optPosix fall-through in Runner.call). Skip
+		// the rejection and drop the definition on the floor.
+		if r.opts[optPosix] && r.strictPosix && isPosixSpecialBuiltin(name) {
+			return
+		}
 		if r.opts[optPosix] && isPosixSpecialBuiltin(name) {
 			errPos := cm.End()
 			if r.enclosingSubshellEnd.IsValid() {
