@@ -552,6 +552,15 @@ type Runner struct {
 	// (and the legacy TestRunnerRun tests) keep the old "<name>: <msg>
 	// <arg>" wording without the line prefix.
 	bashCompatErrors bool
+	// strictPosix, when true, applies strict POSIX semantics where bash
+	// deliberately deviates from the standard even in --posix mode: an
+	// assignment error on any command kills a non-interactive shell,
+	// functions cannot override special builtins, regular builtins
+	// require a PATH hit, and `return` in a trap defaults to the
+	// pre-trap exit status. Set via [WithStrictPosix] by hosts invoked
+	// as `sh` (bashy's argv[0]=sh path). Default off: plain bash and
+	// `bash --posix` fidelity is unchanged.
+	strictPosix bool
 	// dryRun is the bashy-only `set -o dryrun` option's state, readable by
 	// handlers via [HandlerContext.DryRun]. dryRunOpt gates whether the option
 	// is recognized at all — only hosts that pass [EnableDryRunOption] (i.e.
@@ -1765,6 +1774,18 @@ func WithBashCompatErrors(on bool) RunnerOption {
 	}
 }
 
+// WithStrictPosix enables strict POSIX semantics in the areas where bash
+// deviates from the standard even under --posix (see the strictPosix
+// field). Hosts that present themselves as a POSIX `sh` (e.g. bashy when
+// argv[0] is "sh") opt in; it implies nothing about parsing — combine
+// with [WithPosixMode] for `sh` behavior.
+func WithStrictPosix(on bool) RunnerOption {
+	return func(r *Runner) error {
+		r.strictPosix = on
+		return nil
+	}
+}
+
 // WithBashSource provides the original script bytes for bash-compatible
 // diagnostics that need source-preserved snippets. The runner copies src so
 // callers may reuse their buffer after applying the option.
@@ -2334,6 +2355,7 @@ func (r *Runner) Reset() {
 		inheritedExitTrap:      r.inheritedExitTrap,
 		loginShell:             r.loginShell,
 		bashCompatErrors:       r.bashCompatErrors,
+		strictPosix:            r.strictPosix,
 		bashSource:             slices.Clone(r.bashSource),
 		auditHandler:           r.auditHandler,
 		auditLog:               r.auditLog,
@@ -2662,6 +2684,7 @@ func (r *Runner) subshell(background bool) *Runner {
 		startupIgnored:         r.startupIgnored,
 		loginShell:             r.loginShell,
 		bashCompatErrors:       r.bashCompatErrors,
+		strictPosix:            r.strictPosix,
 		auditHandler:           r.auditHandler,
 		auditLog:               r.auditLog,
 		structuredErrorHandler: r.structuredErrorHandler,
