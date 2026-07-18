@@ -2925,7 +2925,15 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			if showVV {
 				if r.opts[optPosix] && IsBuiltin(arg) && !isPosixSpecialBuiltin(arg) && !r.disabledBuiltins[arg] {
 					if path, err := LookPathDir(r.Dir, lookupEnv, arg); err == nil {
-						r.outf("%s is %s\n", arg, path)
+						// POSIX `command -v` reports the PATH resolution of a
+						// regular builtin (asserted by yash command-p), and -V
+						// output must both contain that pathname (command-p
+						// "output of describing non-special built-in (-V)")
+						// and identify the name as a built-in — yash test-p's
+						// preamble probes `command -V test` and SKIPS the whole
+						// suite unless the output matches *built[-]in*. Print
+						// both facts; -V wording is unspecified by POSIX.
+						r.outf("%s is a regular built-in at %s\n", arg, path)
 						continue
 					}
 				}
