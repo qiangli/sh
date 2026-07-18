@@ -5713,6 +5713,10 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			restores = append(restores, restoreVar{name: as.name, vr: prev, wasTemp: wasTemp})
 		}
 		if assignFailed {
+			if r.strictPosix && !r.interactiveShell {
+				r.exit.exiting = true
+				break
+			}
 			if r.opts[optPosix] {
 				if r.subshellLevel > 0 && !r.interactiveShell {
 					r.exit.exiting = true
