@@ -9899,6 +9899,19 @@ func (r *Runner) loopControlPending() bool {
 	return r.breakEnclosing > 0 || r.contnEnclosing > 0
 }
 
+// isStrictPosixIntrinsic reports whether name is an intrinsic utility —
+// the POSIX.1-2024 (Issue 8) category of utilities that, like special
+// builtins, may be invoked without a PATH search. The list mirrors yash's
+// builtins-p.tst "intrinsic built-in ... can be invoked without $PATH"
+// cases. In strict POSIX mode every other builtin is PATH-gated.
+func isStrictPosixIntrinsic(name string) bool {
+	switch name {
+	case "alias", "bg", "cd", "command", "fc", "fg", "getopts", "hash", "jobs", "kill", "read", "type", "ulimit", "umask", "unalias", "wait":
+		return true
+	}
+	return false
+}
+
 func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 	if r.stop(ctx) {
 		return
@@ -10043,6 +10056,15 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 		return
 	}
 	if IsBuiltin(name) && !r.disabledBuiltins[name] {
+		// Strict POSIX: non-special, non-intrinsic builtins must be found in PATH.
+		if r.strictPosix && !isPosixSpecialBuiltin(name) && !isStrictPosixIntrinsic(name) {
+			if _, err := LookPathDir(r.Dir, r.writeEnv, name); err != nil {
+				r.errf("%s%s: command not found\n", r.bashErrPrefix(pos), name)
+				r.exit.code = 127
+				return
+			}
+		}
+
 		r.emitAudit("builtin", pos, args, true)
 		r.exit = r.builtin(ctx, pos, name, args[1:])
 		if r.opts[optPosix] {
