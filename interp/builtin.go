@@ -3237,9 +3237,19 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			//
 			// Widening this to `>=` makes every function called during a trap
 			// action return the trap's saved status, which fails trap9.sub.
-			if r.inSignalTrap && len(r.callStack) == r.signalTrapDepth {
+			//
+			// Under strictPosix (yash return-p:148) the widening IS the
+			// specified behavior: a bare `return` anywhere during a trap
+			// action — including inside functions the action calls — yields
+			// the $? from just before the action began. trapCallback-driven
+			// actions (EXIT/ERR/DEBUG/RETURN) record that status in
+			// trapEntryExit; signal actions record it in signalTrapExit.
+			switch {
+			case r.inSignalTrap && (len(r.callStack) == r.signalTrapDepth || r.strictPosix):
 				exit.code = r.signalTrapExit
-			} else {
+			case r.strictPosix && r.handlingTrap:
+				exit.code = r.trapEntryExit.code
+			default:
 				exit.code = r.lastExit.code
 			}
 		case 1:
