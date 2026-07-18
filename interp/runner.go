@@ -9899,8 +9899,11 @@ func (r *Runner) loopControlPending() bool {
 	return r.breakEnclosing > 0 || r.contnEnclosing > 0
 }
 
-// isStrictPosixIntrinsic reports whether name is an intrinsic utility (POSIX 1003.1).
-// In strict POSIX mode, these utilities do not require a PATH search.
+// isStrictPosixIntrinsic reports whether name is an intrinsic utility —
+// the POSIX.1-2024 (Issue 8) category of utilities that, like special
+// builtins, may be invoked without a PATH search. The list mirrors yash's
+// builtins-p.tst "intrinsic built-in ... can be invoked without $PATH"
+// cases. In strict POSIX mode every other builtin is PATH-gated.
 func isStrictPosixIntrinsic(name string) bool {
 	switch name {
 	case "alias", "bg", "cd", "command", "fc", "fg", "getopts", "hash", "jobs", "kill", "read", "type", "ulimit", "umask", "unalias", "wait":
