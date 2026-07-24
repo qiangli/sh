@@ -1243,6 +1243,35 @@ func TestBash53VarOpFidelityCluster(t *testing.T) {
 	}
 }
 
+func TestPromptTransformBangPosixMode(t *testing.T) {
+	tests := []struct {
+		name  string
+		posix bool
+		value string
+		want  []string
+	}{
+		{name: "default bare bang", value: "!", want: []string{"!"}},
+		{name: "default escaped bang", value: `\!`, want: []string{"1"}},
+		{name: "posix bare bang", posix: true, value: "!", want: []string{"1"}},
+		{name: "posix escaped bang", posix: true, value: `\!`, want: []string{"1"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			word := parseCallArg(t, `echo "${v@P}"`, 1)
+			got, err := Fields(&Config{
+				Env:   testEnv{"v": {Set: true, Kind: String, Str: tc.value}},
+				Posix: tc.posix,
+			}, word)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("Fields() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 type testEnv map[string]Variable
 
 func (e testEnv) Get(name string) Variable {

@@ -2420,7 +2420,11 @@ func (cfg *Config) defaultPromptExpand(s string) string {
 	var b strings.Builder
 	for i := 0; i < len(s); i++ {
 		if s[i] == '!' {
-			b.WriteByte('1')
+			if cfg.Posix {
+				b.WriteByte('1')
+			} else {
+				b.WriteByte('!')
+			}
 			continue
 		}
 		if s[i] != '\\' {
