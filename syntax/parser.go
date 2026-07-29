@@ -1164,10 +1164,6 @@ func (p *Parser) testFollowWord(tok token, pos Pos) *Word {
 	return p.followWordTok(tok, pos)
 }
 
-func (p *Parser) emptyHdocWord(pos Pos) *Word {
-	return p.wordOne(&Lit{ValuePos: pos, ValueEnd: pos})
-}
-
 func (p *Parser) stmtEnd(n Node, start, end string) Pos {
 	pos, ok := p.gotRsrv(end)
 	if !ok {
@@ -2722,11 +2718,12 @@ func (p *Parser) doRedirect(s *Stmt) {
 		old := p.quote
 		p.quote, p.forbidNested = hdocWord, true
 		p.heredocs = append(p.heredocs, r)
-		if p.heredocEOFWarning != nil && p.lang.in(langBashLike) && (p.tok == _Newl || p.tok == _EOF) {
-			r.Word = p.emptyHdocWord(posAddCol(r.OpPos, len(r.Op.String())))
-		} else {
-			r.Word = p.followWordTok(token(r.Op), r.OpPos)
-		}
+		// An empty delimiter (`<<` with nothing but a newline or EOF
+		// after it) is a syntax error even under HeredocEOFWarning:
+		// bash 5.3 reports "syntax error near unexpected token
+		// `newline'" and exits 2. The warning is only for a heredoc
+		// with a real delimiter whose body runs off the end of input.
+		r.Word = p.followWordTok(token(r.Op), r.OpPos)
 		p.quote, p.forbidNested = old, false
 		if p.tok == _Newl {
 			if len(p.accComs) > 0 {
@@ -2895,6 +2892,10 @@ func (p *Parser) gotStmtPipe(s *Stmt, binCmd bool) *Stmt {
 			p.curErr(`%#q can only be used to end a loop`, p.val)
 		case "esac":
 			p.curErr("%#q can only be used to end a `case`", p.val)
+		case "in":
+			// `for`/`case` consume their own `in`, so reaching here means
+			// it was used as a command name -- a syntax error in bash.
+			p.curErr("%#q can only be used in a `for` or `case`", p.val)
 		case "!":
 			if !s.Negated && p.lang.in(langBashExact) {
 				// bash 5.3 accepts `time ! cmd`, `! ! cmd`, and

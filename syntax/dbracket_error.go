@@ -4,6 +4,7 @@
 package syntax
 
 import (
+	"bytes"
 	"errors"
 	"strconv"
 	"strings"
@@ -38,6 +39,30 @@ func DbracketParseError(err error, src []byte, name string) (msg string, ok bool
 		return "", false
 	}
 	prefix := name + ": line " + strconv.Itoa(stmtLine) + ": "
+
+	// A `[[` that never reached its `]]`. Bash reports these as a pair --
+	// a diagnostic plus the generic unclosed-command line -- with no echo
+	// of the source line, and it blames the end of input rather than the
+	// `[[`. An expression left dangling mid-operator is a different shape
+	// and is handled by dbracketFirstDiagnostic instead.
+	if pe.Incomplete {
+		fields := strings.Fields(strings.TrimSpace(stmt))
+		eofLine := bytes.Count(src, []byte("\n")) + 1
+		if strings.TrimSpace(dbracketLine(src, eofLine)) != "" {
+			eofLine++
+		}
+		unclosed := name + ": line " + strconv.Itoa(eofLine) +
+			": syntax error: unexpected end of file from `[[' command on line " +
+			strconv.Itoa(stmtLine)
+		switch {
+		case pe.Text == "`[[` must be followed by an expression" && len(fields) == 1:
+			return name + ": line " + strconv.Itoa(eofLine) +
+				": unexpected token `EOF' in conditional command\n" + unclosed, true
+		case pe.Text == "unexpected EOF while looking for matching `]]'" && len(fields) != 2:
+			return prefix + "unexpected EOF while looking for `]]'\n" + unclosed, true
+		}
+	}
+
 	near := dbracketNearToken(pe, stmt)
 	var b strings.Builder
 	if first := dbracketFirstDiagnostic(pe, stmt); first != "" {
@@ -85,6 +110,23 @@ func dbracketFirstDiagnostic(pe ParseError, stmt string) string {
 	trim := strings.TrimSpace(stmt)
 	fields := strings.Fields(trim)
 	switch {
+	// End of input inside `[[ ... ]]`. Bash names the newline token it
+	// reached, and which diagnostic it picks depends on what the
+	// expression was still waiting for:
+	//
+	//	[[ a      an operand, so a binary operator was expected
+	//	[[ -n     an argument for a unary operator
+	//	[[ a ==   an argument for a binary operator
+	//
+	// A complete expression merely missing its `]]` (`[[ a == b`) is a
+	// different shape entirely and is left alone here.
+	case pe.Incomplete && text == "unexpected EOF while looking for matching `]]'" && len(fields) == 2:
+		return "unexpected token `newline', conditional binary operator expected"
+	case pe.Incomplete && strings.Contains(text, "must be followed by a word") && len(fields) == 2:
+		return "unexpected argument `newline' to conditional unary operator"
+	case pe.Incomplete && strings.Contains(text, "must be followed by a word") && len(fields) == 3 &&
+		strings.HasSuffix(trim, fields[2]):
+		return "unexpected argument `newline' to conditional binary operator"
 	case text == "`[[` must be followed by an expression" && strings.HasPrefix(trim, "[[ &&"):
 		return "unexpected token `&&' in conditional command"
 	case text == "`[[` must be followed by an expression":
@@ -108,6 +150,12 @@ func dbracketFirstDiagnostic(pe ParseError, stmt string) string {
 			if fields[1] == "-z" || fields[1] == "-n" {
 				return "syntax error in conditional expression: unexpected token `" + fields[3] + "'"
 			}
+			return "unexpected token `" + condBinOpToken(fields[2]) + "', conditional binary operator expected"
+		}
+		// `[[ a ]` -- the operand is followed by something that is not a
+		// binary operator and the expression ends there. Bash still names
+		// the offending token.
+		if len(fields) == 3 && fields[0] == "[[" {
 			return "unexpected token `" + condBinOpToken(fields[2]) + "', conditional binary operator expected"
 		}
 		return "conditional binary operator expected"
@@ -146,6 +194,14 @@ func dbracketNearToken(pe ParseError, stmt string) string {
 		if len(fields) >= 3 {
 			return strings.Trim(fields[2], "'\"")
 		}
+		// `[[ -n` -- the dangling unary operator is the last field.
+		if len(fields) == 2 {
+			return strings.Trim(fields[1], "'\"")
+		}
+	}
+	// `[[ a` -- the dangling operand bash reports as the near token.
+	if pe.Incomplete && text == "unexpected EOF while looking for matching `]]'" && len(fields) == 2 {
+		return strings.Trim(fields[1], "'\"")
 	}
 	if strings.Contains(text, "not a valid test operator") && len(fields) >= 3 {
 		if len(fields) == 3 && fields[2] == "]]" {
