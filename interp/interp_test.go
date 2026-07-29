@@ -3588,7 +3588,9 @@ var runTests = []runTest{
 	},
 	{"set -n; echo foo", ""},
 	{"set -n; [ wrong", ""},
-	{"set -n; set +n; echo foo", "foo\n"},
+	// One-way: the `set +n` is itself never executed. Verified against
+	// bash 5.3, which prints nothing and exits 0.
+	{"set -n; set +n; echo foo", ""},
 	{
 		"set -o foobar",
 		"set: foobar: invalid option name\nexit status 2 #JUSTERR",
@@ -3613,8 +3615,11 @@ var runTests = []runTest{
 	{`set -o allexport; set +o a; VAR=val; echo $VAR`, "val\n"},
 	{`set -o noglob; set +o f; [[ -o noglob ]]`, "exit status 1"},
 	{`set -o noglob; set +o f; echo foo*`, "foo*\n"},
-	{`set -o noexec; set +o n; [[ -o noexec ]]`, "exit status 1"},
-	{`set -o noexec; set +o n; echo executed`, "executed\n"},
+	// noexec is the exception to the +o pattern above: once it is on
+	// nothing else is executed, so the `set +o n` meant to turn it back
+	// off never runs. Bash 5.3 prints nothing and exits 0 for both.
+	{`set -o noexec; set +o n; [[ -o noexec ]]`, ""},
+	{`set -o noexec; set +o n; echo executed`, ""},
 	{`set -o nounset; set +o u; [[ -o nounset ]]`, "exit status 1"},
 	{`set -o xtrace; set +o x; [[ -o xtrace ]]`, "+ set +o x\nexit status 1"},
 	{`set -o errexit; set +o e; [[ -o errexit ]]`, "exit status 1"},

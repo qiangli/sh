@@ -4307,17 +4307,6 @@ func isPosixSpecialBuiltin(name string) bool {
 	return false
 }
 
-// isSpecialBuiltinStmt reports whether st is a simple command that invokes
-// a POSIX special builtin. Used to bypass `set -n` (noexec) for commands
-// that must execute even when the shell is in noexec mode.
-func (r *Runner) isSpecialBuiltinStmt(st *syntax.Stmt) bool {
-	call, ok := st.Cmd.(*syntax.CallExpr)
-	if !ok || len(call.Args) == 0 {
-		return false
-	}
-	return isPosixSpecialBuiltin(call.Args[0].Lit())
-}
-
 // invokesSpecialBuiltin reports whether [Runner.call] will dispatch name as a
 // POSIX special builtin, rather than as a shell function shadowing that name.
 func (r *Runner) invokesSpecialBuiltin(name string) bool {
@@ -4454,7 +4443,22 @@ func (r *Runner) stop(ctx context.Context) bool {
 		r.exit.fatal(err)
 		return true
 	}
-	if r.opts[optNoExec] && !r.bypassNoExec {
+	// noexec is checked before anything is dispatched, so once it is in
+	// effect nothing else runs — not even a POSIX special builtin. That
+	// makes it one-way: the `set +n` that would turn it back off is
+	// itself never executed. Bash distinguishes the two ways in:
+	//
+	//	                interactive        non-interactive
+	//	  cmdline -n    does not execute   does not execute
+	//	  set -n        ignored            one-way stop
+	//
+	// so an interactive shell ignores `set -n` (the option still shows
+	// up in `$-` and `set -o`, it just has no effect) but still honours
+	// a `-n` given on the command line.
+	if r.cmdlineNoExec {
+		return true
+	}
+	if r.opts[optNoExec] && !r.interactiveShell {
 		return true
 	}
 	return false
@@ -4503,12 +4507,6 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 	// from a background `kill -USR1 $$`) interrupt even a tight loop.
 	if r.hasPendingSig.Load() {
 		r.deliverPendingSignals(ctx)
-	}
-	// POSIX special builtins execute even under `set -n` (noexec).
-	// This allows `set +o noexec` or `set +o n` to exit noexec mode.
-	if r.opts[optNoExec] && r.isSpecialBuiltinStmt(st) {
-		r.bypassNoExec = true
-		defer func() { r.bypassNoExec = false }()
 	}
 	if r.stop(ctx) {
 		return

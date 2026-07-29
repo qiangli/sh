@@ -141,9 +141,15 @@ type Runner struct {
 	filename            string // only if Node was a File, or set for incremental runs
 	incrementalFilename string
 	interactiveShell    bool
-	mirrorUmask         bool
-	commandString       bool
-	standardInput       bool
+
+	// cmdlineNoExec records that noexec was requested as a command-line
+	// flag (`bash -n`) rather than via `set -n`. Bash honours that form
+	// even in an interactive shell, and no `set +n` can clear it — see
+	// [Runner.stop].
+	cmdlineNoExec bool
+	mirrorUmask   bool
+	commandString bool
+	standardInput bool
 
 	// curStmtPos is the position of the currently executing top-level
 	// statement, updated at the top of stmtSync. Error sites that have
@@ -502,11 +508,6 @@ type Runner struct {
 	// remember the value so `set -o` listings echo back what the
 	// script most recently asserted.
 	noOpSetState map[string]bool
-
-	// bypassNoExec is set when a POSIX special builtin (e.g. `set`)
-	// executes under `set -n` (noexec). Special builtins must execute
-	// even when noexec is on, so they can toggle the option back off.
-	bypassNoExec bool
 
 	// settingIgnoreEOFOption is true while set/shopt is synchronizing
 	// IGNOREEOF from the ignoreeof option, not from a user assignment.
@@ -1327,6 +1328,17 @@ func Interactive(enabled bool) RunnerOption {
 	return func(r *Runner) error {
 		r.interactiveShell = enabled
 		r.opts[optExpandAliases] = enabled
+		return nil
+	}
+}
+
+// CommandLineNoExec marks noexec as having been requested by a `-n`
+// command-line flag rather than by `set -n`. Bash honours that form even
+// in an interactive shell, and no later `set +n` can clear it. Callers
+// should still set the [optNoExec] option so `$-` and `set -o` report it.
+func CommandLineNoExec(enabled bool) RunnerOption {
+	return func(r *Runner) error {
+		r.cmdlineNoExec = enabled
 		return nil
 	}
 }
@@ -2364,6 +2376,7 @@ func (r *Runner) Reset() {
 		deterministicSeed:      r.deterministicSeed,
 		deterministicRng:       r.deterministicRng,
 		interactiveShell:       r.interactiveShell,
+		cmdlineNoExec:          r.cmdlineNoExec,
 		commandString:          r.commandString,
 		standardInput:          r.standardInput,
 		mirrorUmask:            r.mirrorUmask,
@@ -2694,6 +2707,7 @@ func (r *Runner) subshell(background bool) *Runner {
 		randomSeeded:           r.randomSeeded,
 		randomSeed:             r.randomSeed,
 		interactiveShell:       r.interactiveShell,
+		cmdlineNoExec:          r.cmdlineNoExec,
 		commandString:          r.commandString,
 		standardInput:          r.standardInput,
 		// Subshells inherit open fds the way bash does. Clone the map so
