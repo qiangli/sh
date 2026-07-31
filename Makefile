@@ -1,4 +1,4 @@
-.PHONY: build tidy clean test help
+.PHONY: build tidy clean test help fmtcheck hooks
 
 BIN_DIR := bin
 CMDS := gosh shfmt
@@ -30,3 +30,10 @@ help:
 	@echo "Usage: make [target]"
 	@echo ""
 	@sed -n 's/^## //p' $(MAKEFILE_LIST) | column -t -s ':'
+
+fmtcheck:  ## gofmt gate — reports unformatted files, never rewrites them
+	@./scripts/fmtcheck.sh
+
+hooks:  ## install the pre-push formatting gate
+	@git config core.hooksPath scripts/hooks
+	@echo "hooks installed: core.hooksPath=scripts/hooks"

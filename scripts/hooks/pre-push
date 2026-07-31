@@ -1,0 +1,17 @@
+#!/bin/sh
+# pre-push — the formatting gate.
+#
+# Install once per clone:
+#   git config core.hooksPath scripts/hooks
+# Bypass in an emergency with: git push --no-verify
+#
+# The gate is not inlined here: scripts/fmtcheck.sh is the same script
+# `make fmtcheck` runs, so the automatic and manual paths cannot drift.
+#
+# It REPORTS and never rewrites. gofmt changes doc-comment text as well as
+# whitespace — a pair of ASCII single-quotes becomes a curly closing quote —
+# so which files take its output is a decision, not an automation. Read that
+# script's header before making it auto-fix.
+set -eu
+cd "$(git rev-parse --show-toplevel)"
+exec ./scripts/fmtcheck.sh
