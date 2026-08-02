@@ -4544,6 +4544,9 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 		// publishBgPid. `$!` reads that PID back via bgProc.pidReady.
 		bgCtx, cancel := context.WithCancel(ctx)
 		bg.cancel = cancel
+		// With a JobCarrier configured, give the job a real kernel PID
+		// as its identity before it starts running; see WithJobCarrier.
+		r.attachCarrier(bgCtx, bg)
 		bgCtx = context.WithValue(bgCtx, bgProcCtxKey{}, bg)
 		go func() {
 			defer func() {
@@ -4563,6 +4566,10 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 			}
 			r2.exit.exiting = false // subshells don't exit the parent shell
 			r2.exit.discarding = false
+			// Reap the job's carrier process (if any) before sealing the
+			// exit status below, so a kill of the carrier racing with
+			// natural completion still lands as 128+signal.
+			bg.reapCarrier()
 			if n := bg.killedSignal.Load(); n > 0 {
 				r2.exit = exitStatus{code: uint8(128 + n)}
 			}

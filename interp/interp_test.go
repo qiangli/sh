@@ -149,6 +149,12 @@ func TestMain(m *testing.M) {
 			fmt.Println(os.Getpid())
 			time.Sleep(time.Hour)
 			os.Exit(0)
+		case "carrier":
+			// Job-carrier stand-in for testCarrier: block until stdin
+			// reaches EOF (or a signal kills us), then exit cleanly. The
+			// stdin pipe ties our lifetime to the test binary's.
+			io.Copy(io.Discard, os.Stdin)
+			os.Exit(0)
 		case "foo_null_bar":
 			fmt.Println("foo\x00bar")
 			os.Exit(0)

@@ -521,6 +521,12 @@ type Runner struct {
 	// here are goroutines, not OS processes.
 	bgPidCallback func(pid int)
 
+	// jobCarrier, when non-nil, supplies one kernel-visible carrier
+	// process per background job, whose real PID becomes the job's
+	// identity in `$!`/`jobs`/`wait`. Set via [WithJobCarrier]; nil
+	// runners keep the opaque "g<N>" handles.
+	jobCarrier JobCarrier
+
 	// pipeStatus tracks exit codes from the last pipeline for PIPESTATUS.
 	pipeStatus []string
 
@@ -884,6 +890,19 @@ type bgProc struct {
 	// publishBgPid with the OS PID — embedders that want async fan-out
 	// should hand off to a goroutine themselves.
 	pidCallback func(pid int)
+
+	// carrier is the kernel-visible stand-in process that gives this job
+	// a real OS PID (see [WithJobCarrier]). Nil when the runner has no
+	// JobCarrier configured or starting one failed, in which case the
+	// job keeps the legacy synthetic identity. Set before the job
+	// goroutine starts and never reassigned.
+	carrier CarrierProcess
+
+	// carrierReaped is set (before Terminate) by reapCarrier once the
+	// job itself has finished, so the carrier watcher goroutine can tell
+	// a shell-initiated teardown from an external kill that must be
+	// relayed to the job as 128+signal.
+	carrierReaped atomic.Bool
 
 	// jobControl records whether monitor mode (`set -m`) was active when
 	// this job was backgrounded. `fg`/`bg` refuse a job that was not
@@ -2308,6 +2327,7 @@ func (r *Runner) Reset() {
 		readDirHandler: r.readDirHandler,
 		statHandler:    r.statHandler,
 		bgPidCallback:  r.bgPidCallback,
+		jobCarrier:     r.jobCarrier,
 
 		// The dialect is fixed at construction by [Lang] and is not
 		// per-Run scratch state; a runner does not change language.
@@ -2685,6 +2705,7 @@ func (r *Runner) subshell(background bool) *Runner {
 		exit:                 r.exit,
 		lastExit:             r.lastExit,
 		bgPidCallback:        r.bgPidCallback,
+		jobCarrier:           r.jobCarrier,
 		inheritedBang:        r.lastBangProc(),
 		cmdHashTable:         maps.Clone(r.cmdHashTable),
 
