@@ -4537,49 +4537,58 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 			jobControl:       r.monitorActive(),
 			jobID:            r.nextJobID(),
 		}
-		r.bgProcs = append(r.bgProcs, bg)
-		// Stash a pointer to the freshly-appended bgProc on the
-		// goroutine's ctx so the exec handlers (DefaultExecHandler,
-		// runDetachedExec) can publish the real OS PID into it via
-		// publishBgPid. `$!` reads that PID back via bgProc.pidReady.
 		bgCtx, cancel := context.WithCancel(ctx)
 		bg.cancel = cancel
 		// With a JobCarrier configured, give the job a real kernel PID
 		// as its identity before it starts running; see WithJobCarrier.
-		r.attachCarrier(bgCtx, bg)
-		bgCtx = context.WithValue(bgCtx, bgProcCtxKey{}, bg)
-		go func() {
-			defer func() {
-				cancel()
-				// Ensure pidReady is closed even if no real exec ever
-				// happened (e.g. `(true) &`). The reader of `$!` waits
-				// on this channel — leaving it open would hang forever.
-				select {
-				case <-bg.pidReady:
-				default:
-					close(bg.pidReady)
+		// The seam fails closed: a host that opted in must never see a
+		// synthetic g<N> identity, so a carrier that cannot be started
+		// means the job is not created at all — the statement fails like
+		// a shell whose fork failed, and `$!` keeps its previous value.
+		if err := r.attachCarrier(bgCtx, r2, bg); err != nil {
+			cancel()
+			r.errf("%s%v\n", r.bashErrPrefix(st.Pos()), err)
+			r.exit = exitStatus{code: 1}
+		} else {
+			r.bgProcs = append(r.bgProcs, bg)
+			// Stash a pointer to the freshly-appended bgProc on the
+			// goroutine's ctx so the exec handlers (DefaultExecHandler,
+			// runDetachedExec) can publish the real OS PID into it via
+			// publishBgPid. `$!` reads that PID back via bgProc.pidReady.
+			bgCtx = context.WithValue(bgCtx, bgProcCtxKey{}, bg)
+			go func() {
+				defer func() {
+					cancel()
+					// Ensure pidReady is closed even if no real exec ever
+					// happened (e.g. `(true) &`). The reader of `$!` waits
+					// on this channel — leaving it open would hang forever.
+					select {
+					case <-bg.pidReady:
+					default:
+						close(bg.pidReady)
+					}
+				}()
+				r2.Run(bgCtx, &st2)
+				if cb := r2.trapCallbacks["EXIT"]; cb != "" && !r2.inheritedExitTrap {
+					r2.trapCallback(bgCtx, cb, "exit")
 				}
+				r2.exit.exiting = false // subshells don't exit the parent shell
+				r2.exit.discarding = false
+				// Reap the job's carrier process (if any) before sealing the
+				// exit status below, so a kill of the carrier racing with
+				// natural completion still lands as 128+signal.
+				bg.reapCarrier()
+				if n := bg.killedSignal.Load(); n > 0 {
+					r2.exit = exitStatus{code: uint8(128 + n)}
+				}
+				*bg.exit = r2.exit
+				// One reaped child -> one SIGCHLD trap run (bash waitchld).
+				// Queue before signalling done so a `wait` that unblocks here
+				// sees the pending CHLD at its next statement boundary.
+				r.notifyChildReaped()
+				close(bg.done)
 			}()
-			r2.Run(bgCtx, &st2)
-			if cb := r2.trapCallbacks["EXIT"]; cb != "" && !r2.inheritedExitTrap {
-				r2.trapCallback(bgCtx, cb, "exit")
-			}
-			r2.exit.exiting = false // subshells don't exit the parent shell
-			r2.exit.discarding = false
-			// Reap the job's carrier process (if any) before sealing the
-			// exit status below, so a kill of the carrier racing with
-			// natural completion still lands as 128+signal.
-			bg.reapCarrier()
-			if n := bg.killedSignal.Load(); n > 0 {
-				r2.exit = exitStatus{code: uint8(128 + n)}
-			}
-			*bg.exit = r2.exit
-			// One reaped child -> one SIGCHLD trap run (bash waitchld).
-			// Queue before signalling done so a `wait` that unblocks here
-			// sees the pending CHLD at its next statement boundary.
-			r.notifyChildReaped()
-			close(bg.done)
-		}()
+		}
 	} else {
 		r.stmtSync(ctx, st)
 		// A synchronous self-directed `kill -SIG $$` marks its signal

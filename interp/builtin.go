@@ -2634,11 +2634,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			prevDebugTrap := r.trapCallbacks["DEBUG"]
 			r.ecfg.OverrideLineno = int(pos.Line())
 			if !r.functraceEnabled() && len(r.callStack) == 0 {
-				delete(r.trapCallbacks, "DEBUG")
+				r.removeTrapCallback("DEBUG")
 			}
 			r.trapCallback(ctx, r.trapCallbacks["RETURN"], "return")
 			if prevDebugTrap != "" {
-				r.trapCallbacks["DEBUG"] = prevDebugTrap
+				r.setTrapCallback("DEBUG", prevDebugTrap)
 			}
 			r.ecfg.OverrideLineno = prevLineno
 		}
@@ -4339,7 +4339,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				continue
 			}
 			if reset {
-				delete(r.trapCallbacks, sig)
+				r.removeTrapCallback(sig)
 				if sig == "EXIT" {
 					r.inheritedExitTrap = false
 				}
@@ -4348,10 +4348,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					r.chldTrapActive.Store(false)
 				}
 			} else {
-				if r.trapCallbacks == nil {
-					r.trapCallbacks = make(map[string]string)
-				}
-				r.trapCallbacks[sig] = callback
+				r.setTrapCallback(sig, callback)
 				if sig == "EXIT" {
 					r.inheritedExitTrap = false
 				}

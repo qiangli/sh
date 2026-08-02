@@ -42,6 +42,8 @@ func (r *Runner) ignoreAsyncListSignals() {
 	if r.monitorActive() {
 		return
 	}
+	r.sigMu.Lock()
+	defer r.sigMu.Unlock()
 	if r.trapCallbacks == nil {
 		r.trapCallbacks = make(map[string]string)
 	}
@@ -50,6 +52,28 @@ func (r *Runner) ignoreAsyncListSignals() {
 			r.trapCallbacks[sig] = ""
 		}
 	}
+}
+
+// setTrapCallback and removeTrapCallback are the only mutation paths for
+// trapCallbacks once a runner is executing. The map is otherwise confined
+// to the runner's own goroutine, but a background job with a carrier (see
+// carrier.go) has a watcher goroutine classifying relayed signals via
+// carrierSignalDisposition, which reads the map under sigMu — so every
+// concurrent-time write must hold sigMu too. Same-goroutine reads (trap
+// delivery, `trap -p`, subshell cloning) stay lock-free.
+func (r *Runner) setTrapCallback(name, callback string) {
+	r.sigMu.Lock()
+	if r.trapCallbacks == nil {
+		r.trapCallbacks = make(map[string]string)
+	}
+	r.trapCallbacks[name] = callback
+	r.sigMu.Unlock()
+}
+
+func (r *Runner) removeTrapCallback(name string) {
+	r.sigMu.Lock()
+	delete(r.trapCallbacks, name)
+	r.sigMu.Unlock()
 }
 
 func (r *Runner) asyncIgnoredSignalsForExec(ctx context.Context) []asyncExecSignal {

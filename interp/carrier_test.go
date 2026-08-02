@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"mvdan.cc/sh/v3/interp"
 )
@@ -264,17 +265,120 @@ func (failingCarrier) StartCarrier(ctx context.Context) (interp.CarrierProcess, 
 	return nil, errors.New("carrier unavailable")
 }
 
-// TestJobCarrierStartFailure checks that a failing carrier degrades to
-// the legacy synthetic handle instead of breaking job control.
+// TestJobCarrierStartFailure checks that the seam fails closed: with a
+// carrier configured, a StartCarrier error must not degrade to the
+// synthetic g<N> identity. The job never runs, the statement fails with
+// a diagnostic and $? = 1, and $! keeps its previous (unset) value.
 func TestJobCarrierStartFailure(t *testing.T) {
 	t.Parallel()
 	out := runCarrierScript(t, failingCarrier{}, `
-{ exit 5; } &
-p=$!
-wait "$p"
-echo "st=$? pid=$p"
+{ echo ran; exit 5; } &
+echo "st=$?"
+[ -z "$!" ] && echo no-bang
+wait
+echo "wait=$?"
 `)
-	if got := strings.TrimSpace(out); got != "st=5 pid=g1" {
+	if strings.Contains(out, "ran") {
+		t.Fatalf("job ran despite carrier failure:\n%s", out)
+	}
+	if !strings.Contains(out, "carrier unavailable") {
+		t.Fatalf("missing carrier diagnostic:\n%s", out)
+	}
+	for _, want := range []string{"st=1", "no-bang", "wait=0"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q in output:\n%s", want, out)
+		}
+	}
+}
+
+// badPidCarrier hands out an in-process fake carrier whose Pid is
+// nonpositive, recording whether the runner reaps it.
+type badPidCarrier struct {
+	terminated chan struct{}
+	waited     chan struct{}
+	once       sync.Once
+}
+
+type badPidProc struct{ c *badPidCarrier }
+
+func (c *badPidCarrier) StartCarrier(ctx context.Context) (interp.CarrierProcess, error) {
+	return badPidProc{c}, nil
+}
+
+func (p badPidProc) Pid() int { return 0 }
+
+func (p badPidProc) Wait() int {
+	<-p.c.terminated
+	close(p.c.waited)
+	return 0
+}
+
+func (p badPidProc) Terminate() {
+	p.c.once.Do(func() { close(p.c.terminated) })
+}
+
+// TestJobCarrierBadPid checks that a carrier reporting a nonpositive
+// PID also fails the job closed — no synthetic identity, nonzero
+// status, diagnostic — and that the useless carrier is still reaped
+// (Terminate then Wait).
+func TestJobCarrierBadPid(t *testing.T) {
+	t.Parallel()
+	c := &badPidCarrier{
+		terminated: make(chan struct{}),
+		waited:     make(chan struct{}),
+	}
+	out := runCarrierScript(t, c, `
+{ echo ran; } &
+echo "st=$?"
+[ -z "$!" ] && echo no-bang
+`)
+	if strings.Contains(out, "ran") {
+		t.Fatalf("job ran despite bad carrier pid:\n%s", out)
+	}
+	if !strings.Contains(out, "invalid carrier pid 0") {
+		t.Fatalf("missing carrier diagnostic:\n%s", out)
+	}
+	for _, want := range []string{"st=1", "no-bang"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q in output:\n%s", want, out)
+		}
+	}
+	select {
+	case <-c.waited:
+	case <-time.After(runnerRunTimeout):
+		t.Fatal("bad-pid carrier was not reaped")
+	}
+}
+
+// deadCarrier hands out a fake carrier that is already dead of the
+// given signal: Wait returns the signal number immediately. It models
+// an external kill landing before the background runner is ready.
+type deadCarrier struct{ sig int }
+
+type deadCarrierProc struct{ sig int }
+
+func (c deadCarrier) StartCarrier(ctx context.Context) (interp.CarrierProcess, error) {
+	return deadCarrierProc{c.sig}, nil
+}
+
+func (p deadCarrierProc) Pid() int   { return os.Getpid() }
+func (p deadCarrierProc) Wait() int  { return p.sig }
+func (p deadCarrierProc) Terminate() {}
+
+// TestJobCarrierPreReadyTrappedSignal checks that a catchable signal
+// relayed before the background runner has run a single statement is
+// still delivered through the pending-signal machinery: the job's
+// inherited TERM trap runs and controls the exit status, instead of the
+// job dying as 128+15.
+func TestJobCarrierPreReadyTrappedSignal(t *testing.T) {
+	t.Parallel()
+	out := runCarrierScript(t, deadCarrier{sig: 15}, `
+trap "echo trapped; exit 23" TERM
+{ while :; do :; done; } &
+wait "$!"
+echo "st=$?"
+`)
+	if got := strings.TrimSpace(out); got != "trapped\nst=23" {
 		t.Fatalf("unexpected output:\n%s", out)
 	}
 }

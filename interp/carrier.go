@@ -3,7 +3,10 @@
 
 package interp
 
-import "context"
+import (
+	"context"
+	"fmt"
+)
 
 // A JobCarrier supplies kernel-visible stand-in processes ("carriers")
 // for background jobs. This interpreter runs asynchronous lists
@@ -53,21 +56,48 @@ type CarrierProcess interface {
 // like any real shell child.
 //
 // The carrier is a signal proxy, not the job itself. A signal that
-// terminates the carrier is relayed to the job: the runner cancels the
-// job's context — killing any external child it is currently running —
-// and the job's exit status becomes 128+signal (e.g. 143 for SIGTERM,
-// 137 for SIGKILL), matching a real shell child. When the job finishes
-// first, the runner reaps the carrier via [CarrierProcess.Terminate].
-// PIDs of external processes the job spawns are still recorded, so
+// terminates the carrier is relayed to the job according to the job's
+// own disposition for that signal at that moment, like a signal
+// arriving at a real shell child:
+//
+//   - Trapped (a non-empty `trap` action, set inside the async list or
+//     inherited from the parent shell): the signal is queued into the
+//     job's pending-signal machinery and the trap action runs at the
+//     job's next statement boundary. The action decides the job's fate —
+//     it may `exit`, or return and leave the job running. This works
+//     even for a signal relayed before the job has started running.
+//   - Ignored (`trap ” SIG`, a signal hard-ignored at shell startup, or
+//     SIGINT/SIGQUIT's default ignore in an asynchronous list without
+//     job control): the job keeps running, unaffected.
+//   - Default — and always for the uncatchable SIGKILL and SIGSTOP —
+//     the signal terminates the job: the runner cancels the job's
+//     context (killing any external child it is currently running) and
+//     the job's exit status becomes 128+signal (e.g. 143 for SIGTERM,
+//     137 for SIGKILL), matching a real shell child.
+//
+// The carrier process itself always keeps its default dispositions:
+// external `kill` decides the job's fate by killing the carrier, and
+// the relay above happens when the runner reaps it. One consequence is
+// that a job that survives a signal (trapped or ignored) has lost its
+// carrier and with it its kernel identity — it can no longer be probed
+// or signaled externally, though `wait` and `jobs` still resolve it.
+// When the job finishes first, the runner reaps the carrier via
+// [CarrierProcess.Terminate] before sealing the exit status, so a
+// racing external kill either lands fully or is cleanly ignored. PIDs
+// of external processes the job spawns are still recorded, so
 // `wait`/`kill` on those also resolve to the job.
 //
-// If StartCarrier fails, the job silently degrades to the legacy "g<N>"
-// handle — the behavior runners without this option always have.
-// Embedders that do not opt in keep those opaque handles and cannot
-// claim strict process semantics for `$!`. Coprocs keep their existing
-// synthetic `<NAME>_PID` and process substitutions are not jobs; neither
-// uses a carrier. The option is ignored under `set -o dryrun` and in
-// deterministic mode, which must not observe real PIDs.
+// Opting in is a strict contract: the runner never falls back to a
+// synthetic identity. If StartCarrier fails, or hands back a carrier
+// with a nonpositive PID, the job is not started at all — the runner
+// prints a diagnostic to stderr and the asynchronous statement fails
+// with exit status 1, like a shell whose fork failed; `$!` keeps its
+// previous value. Embedders that do not opt in keep the opaque "g<N>"
+// handles and cannot claim strict process semantics for `$!`. Coprocs
+// keep their existing synthetic `<NAME>_PID` and process substitutions
+// are not jobs; neither uses a carrier. The option is ignored under
+// `set -o dryrun` and in deterministic mode, which must not observe
+// real PIDs.
 //
 // With a carrier configured, [WithBgPidCallback] fires once per
 // background job with the carrier PID, rather than once per external
@@ -82,26 +112,38 @@ func WithJobCarrier(c JobCarrier) RunnerOption {
 // attachCarrier gives bg a kernel-visible identity via the runner's
 // JobCarrier, if any. Called from the parent goroutine after bg.cancel
 // is set and before the job goroutine starts, so the identity is fixed
-// from birth and `$!` never blocks on pidReady. No-op (leaving the
-// legacy g<N> handle) when no carrier is configured or starting one
-// fails.
-func (r *Runner) attachCarrier(ctx context.Context, bg *bgProc) {
+// from birth and `$!` never blocks on pidReady. job is the runner that
+// will execute the asynchronous list; carrier signals are relayed into
+// its trap machinery. A nil return with no carrier configured (or in
+// dryrun/deterministic mode) keeps the legacy g<N> handle; a non-nil
+// error means the job must not run at all — the host opted into real
+// kernel identities, so there is no identity to degrade to.
+func (r *Runner) attachCarrier(ctx context.Context, job *Runner, bg *bgProc) error {
 	if r.jobCarrier == nil || r.dryRun || r.deterministic {
-		return
+		return nil
 	}
 	cp, err := r.jobCarrier.StartCarrier(ctx)
-	if err != nil || cp == nil {
-		return
+	if err != nil {
+		if cp != nil {
+			go func() {
+				cp.Terminate()
+				cp.Wait()
+			}()
+		}
+		return fmt.Errorf("job carrier: %v", err)
+	}
+	if cp == nil {
+		return fmt.Errorf("job carrier: no carrier process")
 	}
 	pid := cp.Pid()
 	if pid <= 0 {
 		// A carrier without a usable PID is of no use; reap it and
-		// degrade to the synthetic handle.
+		// report the failure.
 		go func() {
 			cp.Terminate()
 			cp.Wait()
 		}()
-		return
+		return fmt.Errorf("job carrier: invalid carrier pid %d", pid)
 	}
 	bg.carrier = cp
 	// The carrier PID is the job's identity for its whole life: publish
@@ -119,15 +161,63 @@ func (r *Runner) attachCarrier(ctx context.Context, bg *bgProc) {
 			return // the job finished first; reapCarrier tore this down
 		}
 		// The carrier died under a live job: relay the terminating
-		// signal as 128+sig and cancel the job, killing any external
-		// child it is currently running. A carrier that somehow exits
-		// normally still cancels the job — it must not outlive its
-		// kernel identity.
+		// signal per the job's current disposition for it. A trapped
+		// signal is queued so the job's own trap machinery runs the
+		// action at its next statement boundary (safe even before the
+		// job goroutine has started running); an ignored signal leaves
+		// the job untouched; a default-disposition signal — or a
+		// carrier that somehow exits normally, which must not outlive
+		// its kernel identity — kills the job as 128+signal.
 		if sig > 0 {
+			switch name, disp := job.carrierSignalDisposition(sig); disp {
+			case carrierSigTrapped:
+				job.markPendingSignal(name)
+				return
+			case carrierSigIgnored:
+				return
+			}
 			bg.killedSignal.CompareAndSwap(0, int32(sig))
 		}
 		bg.cancel()
 	}()
+	return nil
+}
+
+// carrierSigDisposition classifies how a job handles a signal relayed
+// from its dead carrier: run a trap action, ignore it, or die.
+type carrierSigDisposition int
+
+const (
+	carrierSigDefault carrierSigDisposition = iota
+	carrierSigIgnored
+	carrierSigTrapped
+)
+
+// carrierSignalDisposition reports the job runner's current disposition
+// for the arrival of signal number num, and the signal's canonical
+// name. Called from the carrier watcher goroutine while the job may be
+// concurrently changing its traps, so the trapCallbacks read is guarded
+// by sigMu (see setTrapCallback). Unknown signals — and SIGKILL and
+// SIGSTOP, which are uncatchable no matter what `trap` recorded — are
+// always default.
+func (r *Runner) carrierSignalDisposition(num int) (string, carrierSigDisposition) {
+	_, name, ok := signalByNumber(num)
+	if !ok || name == "KILL" || name == "STOP" {
+		return name, carrierSigDefault
+	}
+	if r.startupIgnored[name] {
+		return name, carrierSigIgnored
+	}
+	r.sigMu.Lock()
+	defer r.sigMu.Unlock()
+	cb, ok := r.trapCallbacks[name]
+	switch {
+	case !ok:
+		return name, carrierSigDefault
+	case cb == "":
+		return name, carrierSigIgnored
+	}
+	return name, carrierSigTrapped
 }
 
 // reapCarrier tears down the job's carrier process once the job itself

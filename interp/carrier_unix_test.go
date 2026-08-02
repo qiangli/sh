@@ -9,6 +9,7 @@ import (
 	"bufio"
 	"context"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
 	"sync"
@@ -88,6 +89,90 @@ echo "st=$?"
 			waitPidsGone(t, c.startedPids())
 		})
 	}
+}
+
+// TestJobCarrierTrappedTermRunsTrap checks that an external TERM aimed
+// at the job's carrier PID is relayed into the job's trap machinery: the
+// async list's own `trap ... TERM` action runs and controls the output
+// and exit status, instead of the job dying as 143. The ready file makes
+// the external kill deterministic — it only fires once the trap is
+// installed.
+func TestJobCarrierTrappedTermRunsTrap(t *testing.T) {
+	t.Parallel()
+	c := new(testCarrier)
+	out := runCarrierScript(t, c, killBinPrelude+`
+{ trap "echo trapped; exit 23" TERM; : >ready; while :; do :; done; } &
+p=$!
+while [ ! -e ready ]; do :; done
+"$K" -TERM "$p"
+wait "$p"
+echo "st=$?"
+`, interp.Dir(t.TempDir()))
+	if got := strings.TrimSpace(out); got != "trapped\nst=23" {
+		t.Fatalf("unexpected output:\n%s", out)
+	}
+	waitPidsGone(t, c.startedPids())
+}
+
+// TestJobCarrierIgnoredTermStaysAlive checks that an external TERM
+// relayed to a job that ignores it (`trap ” TERM`) leaves the job
+// running: it still completes its own work and exits with its own
+// status. The kill-0 loop waits until the carrier is reaped, so the
+// relay decision has been made before the job is released.
+//
+// Deliberately not parallel: `trap ” TERM` sets a process-wide real
+// SIG_IGN (so exec'd children inherit it, as bash's children do), which
+// a concurrently-started carrier in another test would inherit — its
+// external `kill -TERM` would then do nothing. Sequential tests never
+// overlap the parallel ones, and the deferred restore undoes the
+// SIG_IGN before they run. signal.Reset alone is not enough: the Go
+// runtime leaves the kernel disposition at SIG_IGN when resetting an
+// Ignored signal, which would make later-started carriers inherit
+// SIG_IGN (external TERM tests hang) and later-constructed runners see
+// TERM as hard-ignored at startup. A Notify+Stop round-trip forces the
+// runtime's own handler back in, so children inherit SIG_DFL again.
+func TestJobCarrierIgnoredTermStaysAlive(t *testing.T) {
+	defer func() {
+		ch := make(chan os.Signal, 1)
+		signal.Notify(ch, syscall.SIGTERM)
+		signal.Stop(ch)
+	}()
+	c := new(testCarrier)
+	out := runCarrierScript(t, c, killBinPrelude+`
+{ trap '' TERM; : >ready; until [ -e go ]; do :; done; echo alive; exit 5; } &
+p=$!
+while [ ! -e ready ]; do :; done
+"$K" -TERM "$p"
+while "$K" -0 "$p" 2>/dev/null; do :; done
+: >go
+wait "$p"
+echo "st=$?"
+`, interp.Dir(t.TempDir()))
+	if got := strings.TrimSpace(out); got != "alive\nst=5" {
+		t.Fatalf("unexpected output:\n%s", out)
+	}
+	waitPidsGone(t, c.startedPids())
+}
+
+// TestJobCarrierUncatchableKill checks that SIGKILL terminates the job
+// as 137 even when the script recorded a trap for it: KILL is
+// uncatchable, so the relay must never route it into the trap
+// machinery.
+func TestJobCarrierUncatchableKill(t *testing.T) {
+	t.Parallel()
+	c := new(testCarrier)
+	out := runCarrierScript(t, c, killBinPrelude+`
+{ trap "echo nope" KILL; : >ready; while :; do :; done; } &
+p=$!
+while [ ! -e ready ]; do :; done
+"$K" -KILL "$p"
+wait "$p"
+echo "st=$?"
+`, interp.Dir(t.TempDir()))
+	if got := strings.TrimSpace(out); got != "st=137" {
+		t.Fatalf("unexpected output:\n%s", out)
+	}
+	waitPidsGone(t, c.startedPids())
 }
 
 // TestJobCarrierConcurrentJobs starts several concurrent pure-builtin
