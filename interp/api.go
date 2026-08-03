@@ -1725,6 +1725,12 @@ func stdinFile(r io.Reader) (*os.File, error) {
 	switch r := r.(type) {
 	case *os.File:
 		return r, nil
+	case fifoWriteFile:
+		// A <> redirect on a FIFO is wrapped so Close can refresh the FIFO
+		// node's timestamps. Keep using the same O_RDWR descriptor for stdin;
+		// copying the wrapper through an os.Pipe both loses its write side and
+		// leaves a goroutine blocked forever on the FIFO.
+		return r.File, nil
 	case nil:
 		return nil, nil
 	default:
