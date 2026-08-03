@@ -35,6 +35,43 @@ func runStartupIgnoredScript(t *testing.T, env expand.Environ, src string) strin
 	return stdout.String()
 }
 
+type recordingSignalHost struct {
+	ignored []string
+}
+
+func (*recordingSignalHost) ResetDefault(int, string) {}
+
+func (h *recordingSignalHost) IgnoreStartup(_ int, name string) {
+	h.ignored = append(h.ignored, name)
+}
+
+func TestBridgedStartupIgnoreIsRestoredOnlyByOptInHost(t *testing.T) {
+	file, err := syntax.NewParser().Parse(strings.NewReader(
+		"trap 'echo bad' USR1; trap - USR1; kill -s USR1 $$; echo after"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stdout bytes.Buffer
+	host := &recordingSignalHost{}
+	r, err := New(
+		Env(expand.ListEnviron(BashyHardIgnoreEnv+"=USR1")),
+		StdIO(nil, &stdout, nil),
+		WithSignalResetter(host),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Run(context.Background(), file); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.Join(host.ignored, ","), "USR1"; got != want {
+		t.Fatalf("startup ignores restored = %q, want %q", got, want)
+	}
+	if got, want := stdout.String(), "after\n"; got != want {
+		t.Fatalf("startup-ignored signal was made mutable\n got: %q\nwant: %q", got, want)
+	}
+}
+
 func TestTrapStartupIgnoredFromHardIgnoreEnv(t *testing.T) {
 	env := expand.ListEnviron(BashyHardIgnoreEnv + "=USR1")
 	got := runStartupIgnoredScript(t, env, "trap 'echo bad' USR1; trap -p USR1")

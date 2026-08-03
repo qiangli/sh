@@ -49,6 +49,14 @@ type SignalResetter interface {
 	ResetDefault(num int, name string)
 }
 
+// StartupSignalIgnorer is an optional extension implemented by standalone
+// signal hosts. When the process-boundary sideband says a signal was ignored
+// on entry, the runner asks the host to restore SIG_IGN before any script can
+// try to trap or reset it. Embedded hosts remain untouched unless they opt in.
+type StartupSignalIgnorer interface {
+	IgnoreStartup(num int, name string)
+}
+
 // WithSignalResetter makes `trap - SIG` restore a real OS default signal
 // disposition through s. Only a host that owns the whole process — a
 // standalone POSIX shell — should opt in; see [SignalResetter] for why the
@@ -84,6 +92,31 @@ func (OSSignalResetter) ResetDefault(num int, name string) {
 		return
 	}
 	restoreExecSignal(signalForOS(sig))
+}
+
+// IgnoreStartup implements [StartupSignalIgnorer].
+func (OSSignalResetter) IgnoreStartup(num int, name string) {
+	sig, ok := signalByName(name)
+	if !ok {
+		return
+	}
+	signal.Ignore(signalForOS(sig))
+}
+
+func (r *Runner) restoreBridgedStartupIgnores() {
+	ignorer, ok := r.sigReset.(StartupSignalIgnorer)
+	if !ok {
+		return
+	}
+	for name := range r.startupIgnored {
+		sig, ok := signalByName(name)
+		if !ok {
+			continue
+		}
+		if num, ok := signalNumber(sig); ok {
+			ignorer.IgnoreStartup(num, name)
+		}
+	}
 }
 
 type asyncExecSignal struct {

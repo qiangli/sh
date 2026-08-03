@@ -1723,6 +1723,12 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			// Notify catches.
 			if pid == r.shellPid() {
 				if sname, ok := signalName(sig); ok {
+					if r.isStartupIgnored(sname) {
+						// POSIX: a signal ignored on entry to a
+						// non-interactive shell stays ignored, even
+						// after an attempted trap/reset.
+						continue
+					}
 					if owner := r.owningSignalRunner(sname); owner != nil {
 						owner.markPendingSignal(sname)
 						continue

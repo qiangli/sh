@@ -2332,6 +2332,10 @@ func (r *Runner) Reset() {
 		// environment bridge covers self re-execs; the OS disposition snapshot
 		// covers a real parent that exec'd us with SIG_IGN inherited.
 		r.startupIgnored = startupIgnoredSignals(r.Env.Get(BashyHardIgnoreEnv).String())
+		// A standalone host re-applies the bridged dispositions here. The Go
+		// runtime may have replaced inherited SIG_IGN before main; the explicit
+		// sideband is the supported provenance across that boundary.
+		r.restoreBridgedStartupIgnores()
 	}
 	// reset the internal state
 	*r = Runner{
