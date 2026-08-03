@@ -105,6 +105,17 @@ func (hc HandlerContext) DryRun() bool {
 	return hc.runner != nil && hc.runner.dryRun
 }
 
+// Umask reports the Runner's current virtual file-creation mask. Custom
+// in-process command handlers use this value to apply the same permissions an
+// external command would inherit at the fork boundary, without changing the
+// process-wide umask shared by other Runners.
+func (hc HandlerContext) Umask() os.FileMode {
+	if hc.runner == nil {
+		return 0
+	}
+	return os.FileMode(hc.runner.umask)
+}
+
 // CallHandlerFunc is a handler which runs on every [syntax.CallExpr].
 // It is called once variable assignments and field expansion have occurred.
 // The context includes a [HandlerContext] value.

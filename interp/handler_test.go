@@ -72,6 +72,37 @@ func execPrint(next interp.ExecHandlerFunc) interp.ExecHandlerFunc {
 	}
 }
 
+func TestHandlerContextUmaskTracksBuiltin(t *testing.T) {
+	var got []os.FileMode
+	capture := func(next interp.ExecHandlerFunc) interp.ExecHandlerFunc {
+		return func(ctx context.Context, args []string) error {
+			if args[0] == "capture-umask" {
+				got = append(got, interp.HandlerCtx(ctx).Umask())
+				return nil
+			}
+			return next(ctx, args)
+		}
+	}
+	file, err := syntax.NewParser().Parse(strings.NewReader(
+		"capture-umask; umask 077; capture-umask; umask 006; capture-umask"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner, err := interp.New(interp.ExecHandlers(capture))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.Run(context.Background(), file); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("captured %d masks, want 3", len(got))
+	}
+	if got[1] != 0o077 || got[2] != 0o006 {
+		t.Fatalf("masks after builtin = %#o, %#o; want 0077, 0006", got[1], got[2])
+	}
+}
+
 func execExitStatus5(next interp.ExecHandlerFunc) interp.ExecHandlerFunc {
 	return func(ctx context.Context, args []string) error {
 		return interp.ExitStatus(5)
