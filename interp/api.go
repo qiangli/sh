@@ -527,6 +527,13 @@ type Runner struct {
 	// runners keep the opaque "g<N>" handles.
 	jobCarrier JobCarrier
 
+	// sigReset, when non-nil, is asked to restore a real OS default
+	// signal disposition (SIG_DFL) whenever `trap - SIG` resets a signal
+	// the shell had made non-default. Set via [WithSignalResetter]; nil
+	// runners never mutate the host process's global signal dispositions
+	// toward a terminating default, which is the safe embedded default.
+	sigReset SignalResetter
+
 	// pipeStatus tracks exit codes from the last pipeline for PIPESTATUS.
 	pipeStatus []string
 
@@ -2337,6 +2344,7 @@ func (r *Runner) Reset() {
 		statHandler:    r.statHandler,
 		bgPidCallback:  r.bgPidCallback,
 		jobCarrier:     r.jobCarrier,
+		sigReset:       r.sigReset,
 
 		// The dialect is fixed at construction by [Lang] and is not
 		// per-Run scratch state; a runner does not change language.
@@ -2715,6 +2723,7 @@ func (r *Runner) subshell(background bool) *Runner {
 		lastExit:             r.lastExit,
 		bgPidCallback:        r.bgPidCallback,
 		jobCarrier:           r.jobCarrier,
+		sigReset:             r.sigReset,
 		inheritedBang:        r.lastBangProc(),
 		cmdHashTable:         maps.Clone(r.cmdHashTable),
 

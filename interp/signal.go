@@ -21,6 +21,71 @@ var childSignalStartMu sync.Mutex
 
 var errReadInterrupted = errors.New("read interrupted by signal")
 
+// A SignalResetter restores a signal's real OS default disposition
+// (SIG_DFL) when the shell resets it with `trap - SIG`.
+//
+// This interpreter is an embeddable library: by default it never returns
+// a signal to a process-terminating default disposition, because a shell
+// script must not be able to kill the process that hosts it. A signal the
+// script ignores with an empty-action trap is set to a real SIG_IGN (so exec'd
+// children inherit it), but `trap - SIG` only tears down the shell's own
+// Go-level handler — it does not re-arm the terminating default. That is
+// safe for embedders, but it diverges from POSIX: a standalone shell that
+// ignores USR2 and then runs `trap - USR2` must again be killed by a later
+// SIGUSR2 under its default disposition.
+//
+// A host that presents itself as a standalone POSIX shell — such as the
+// `bashy` CLI — closes that gap by opting in with [WithSignalResetter].
+// The runner then calls ResetDefault whenever `trap - SIG` resets a real
+// signal the shell had made non-default (ignored via an empty action or trapped
+// via a handler), asking the host to install SIG_DFL for it so a
+// subsequently-delivered signal takes its default action. num is the
+// platform signal number and name is its canonical (no-"SIG") name.
+//
+// [OSSignalResetter] is the ready-made implementation the standalone host
+// wires in; embedders that never opt in keep the safe default and are
+// never terminated by a signal their script reset.
+type SignalResetter interface {
+	ResetDefault(num int, name string)
+}
+
+// WithSignalResetter makes `trap - SIG` restore a real OS default signal
+// disposition through s. Only a host that owns the whole process — a
+// standalone POSIX shell — should opt in; see [SignalResetter] for why the
+// default is to leave process-global dispositions untouched. The bashy CLI
+// wires this as interp.WithSignalResetter(interp.OSSignalResetter{}).
+func WithSignalResetter(s SignalResetter) RunnerOption {
+	return func(r *Runner) error {
+		r.sigReset = s
+		return nil
+	}
+}
+
+// OSSignalResetter is the standalone-host [SignalResetter]: it installs the
+// process's real SIG_DFL for the reset signal at the OS level.
+//
+// os/signal cannot express this. signal.Ignore sets SIG_IGN, but a later
+// signal.Reset does not undo it (once Ignore clears the runtime's
+// "handling" bit, Reset is a no-op and the disposition stays SIG_IGN), and
+// even for a trapped signal Reset only reinstalls Go's own runtime handler,
+// which silently swallows an un-notified _SigNotify signal like SIGUSR2
+// rather than taking its default terminating action. ResetDefault instead
+// reuses restoreExecSignal, which on linux/darwin issues a raw rt_sigaction
+// installing SIG_DFL directly; a delivered SIGUSR2 then terminates the
+// process as POSIX requires. On other platforms restoreExecSignal falls
+// back to signal.Reset, so the true default cannot be guaranteed there —
+// acceptable, as the standalone bashy CLI targets linux and darwin.
+type OSSignalResetter struct{}
+
+// ResetDefault implements [SignalResetter].
+func (OSSignalResetter) ResetDefault(num int, name string) {
+	sig, ok := signalByName(name)
+	if !ok {
+		return
+	}
+	restoreExecSignal(signalForOS(sig))
+}
+
 type asyncExecSignal struct {
 	name string
 	sig  os.Signal
@@ -294,13 +359,27 @@ func (r *Runner) disableSignalTrap(name string) {
 		return
 	}
 	r.sigMu.Lock()
-	defer r.sigMu.Unlock()
 	_, hadNotify := r.sigNotify[name]
 	_, hadIgnore := r.sigIgnored[name]
 	if hadNotify || hadIgnore {
 		delete(r.sigNotify, name)
 		delete(r.sigIgnored, name)
 		signal.Reset(signalForOS(sig))
+	}
+	sigReset := r.sigReset
+	r.sigMu.Unlock()
+	// signal.Reset above tears down the shell's Go-level handler but does
+	// not, on its own, re-arm a terminating SIG_DFL after a `trap ''`
+	// SIG_IGN. A standalone host opts in via WithSignalResetter to restore
+	// the real OS default disposition, so a signal delivered after
+	// `trap - SIG` again takes its default action (POSIX). Embedded hosts
+	// leave sigReset nil and are never terminated by a reset they didn't
+	// ask to re-arm. Run outside sigMu: the host callback touches process
+	// signal state, not this runner's maps.
+	if sigReset != nil && (hadNotify || hadIgnore) {
+		if num, ok := signalNumber(sig); ok {
+			sigReset.ResetDefault(num, name)
+		}
 	}
 }
 

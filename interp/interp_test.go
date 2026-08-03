@@ -155,6 +155,26 @@ func TestMain(m *testing.M) {
 			// stdin pipe ties our lifetime to the test binary's.
 			io.Copy(io.Discard, os.Stdin)
 			os.Exit(0)
+		case "sig_reset_default":
+			// Standalone-shell repro for VSC-PCTS TP712: ignore then reset
+			// SIGUSR2 with the OS-default reset seam opted in, announce
+			// readiness, then block on read. A SIGUSR2 delivered now must
+			// terminate us under the restored default disposition. Driven by
+			// TestTrapResetRestoresOSDefault.
+			const src = "trap '' USR2\ntrap - USR2\necho ready\nread x\n"
+			file, err := syntax.NewParser().Parse(strings.NewReader(src), "")
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+			runner, _ := interp.New(
+				interp.StdIO(os.Stdin, os.Stdout, os.Stderr),
+				interp.WithSignalResetter(interp.OSSignalResetter{}),
+			)
+			if err := runner.Run(context.Background(), file); err != nil {
+				os.Exit(1)
+			}
+			os.Exit(0)
 		case "foo_null_bar":
 			fmt.Println("foo\x00bar")
 			os.Exit(0)
