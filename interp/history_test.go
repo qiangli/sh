@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/syntax"
 )
 
@@ -164,6 +165,40 @@ fc -s aa=cc
 		"echo cc bb\ncc bb\n"
 	if out != want {
 		t.Errorf("histignore/fc:\n got: %q\nwant: %q", out, want)
+	}
+}
+
+func TestInteractiveHistoryFeedsFc(t *testing.T) {
+	histReset()
+	t.Cleanup(histReset)
+
+	var out bytes.Buffer
+	r, err := New(
+		Env(expand.ListEnviron("HISTFILE=/dev/null", "HOME="+t.TempDir())),
+		StdIO(nil, &out, &out),
+		Interactive(true),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.EnableInteractiveHistory()
+	runLine := func(src string) {
+		t.Helper()
+		r.RecordInteractiveHistory(src)
+		file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(src), "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := r.Run(context.Background(), file); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	runLine("echo marker")
+	runLine("fc -l")
+	want := "marker\n1\t echo marker\n"
+	if out.String() != want {
+		t.Fatalf("interactive fc -l:\n got: %q\nwant: %q", out.String(), want)
 	}
 }
 

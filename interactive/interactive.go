@@ -188,6 +188,7 @@ func Run(ctx context.Context, opts Options) error {
 	if opts.Greeting != "" {
 		_, _ = io.WriteString(stdout, opts.Greeting)
 	}
+	r.EnableInteractiveHistory()
 
 	cfg := &readline.Config{
 		Prompt:            ps1(),
@@ -292,6 +293,7 @@ func Run(ctx context.Context, opts Options) error {
 		if input == "" {
 			continue
 		}
+		r.RecordInteractiveHistory(input)
 
 		parser := syntax.NewParser(syntax.Variant(lang), syntax.PosixMode(opts.PosixMode))
 		prog, perr := parser.Parse(strings.NewReader(input), "")
@@ -460,6 +462,7 @@ func runAssumedTTY(ctx context.Context, opts Options, r *interp.Runner, stdin io
 		if input == "" {
 			continue
 		}
+		r.RecordInteractiveHistory(input)
 
 		parser := syntax.NewParser(syntax.Variant(lang), syntax.PosixMode(opts.PosixMode))
 		prog, perr := parser.Parse(strings.NewReader(input), "")

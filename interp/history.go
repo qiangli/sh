@@ -283,6 +283,34 @@ func (r *Runner) histSetExpand(on bool) {
 	}
 }
 
+// EnableInteractiveHistory enables the reader-level history used by the
+// history and fc builtins. Interactive front-ends call this once before their
+// read-eval loop; non-interactive embedders retain the existing opt-in
+// behavior through `set -o history`.
+func (r *Runner) EnableInteractiveHistory() {
+	// Interactive front-ends need history before their first call to Run.
+	// Initialise the runner's writable environment now so HISTFILE,
+	// HISTCONTROL, and HISTIGNORE can be resolved safely while recording the
+	// first input line. Run would otherwise perform this Reset itself.
+	if r.writeEnv == nil {
+		r.Reset()
+	}
+	r.histSetEnabled(true, syntax.Pos{})
+}
+
+// RecordInteractiveHistory records one complete input unit before it is
+// executed. Bash's reader adds the current line before dispatch, which lets fc
+// exclude its own invocation while still seeing every preceding command.
+func (r *Runner) RecordInteractiveHistory(input string) {
+	h := shellHist
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if !h.enabled {
+		return
+	}
+	h.addLine(r, input)
+}
+
 // addLine records one reader line, applying HISTCONTROL and HISTIGNORE,
 // and updates hist_last_line_added.
 func (h *histState) addLine(r *Runner, text string) {
