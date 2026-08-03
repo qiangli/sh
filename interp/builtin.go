@@ -3517,6 +3517,27 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		}
 		var line []byte
 		var err error
+		// A trapped signal may arrive while read is blocked. Bash runs the
+		// trap immediately and, when the handler completes normally, resumes
+		// the same read rather than returning a failed builtin. This matters
+		// for callers which arrange input only after delivering the signal
+		// (the POSIX conformance shape). Keep the retry local to read: wait(1)
+		// and other interruptible builtins have their own status contract.
+		readThroughSignals := func() ([]byte, error) {
+			var accumulated []byte
+			for {
+				part, readErr := readInput()
+				accumulated = append(accumulated, part...)
+				if !errors.Is(readErr, errReadInterrupted) {
+					return accumulated, readErr
+				}
+				r.deliverPendingSignals(ctx)
+				if r.exit.returning || r.exit.exiting || r.exit.fatalExit ||
+					r.breakEnclosing > 0 || r.contnEnclosing > 0 {
+					return accumulated, errReadInterrupted
+				}
+			}
+		}
 		if timeout > 0 {
 			if r.stdinTTYFallback || r.stdinDevTTY {
 				clearReadVars()
@@ -3547,9 +3568,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			if fdReader != nil {
 				cancelGrace()
 				input = fdReader
-				line, err = readInput()
+				line, err = readThroughSignals()
 			} else if input == stdin && stdin != nil && stdin.SetReadDeadline(deadline) == nil {
-				line, err = readInput()
+				line, err = readThroughSignals()
 				stdin.SetReadDeadline(time.Time{})
 				cancelGrace()
 			} else {
@@ -3557,7 +3578,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				if input == stdin && stdin != nil {
 					input = &timeoutFileReader{ctx: readCtx, file: stdin, deadline: deadline}
 				}
-				line, err = readInput()
+				line, err = readThroughSignals()
 			}
 		} else {
 			if input == stdin && stdin != nil {
@@ -3567,7 +3588,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					}
 				}
 			}
-			line, err = readInput()
+			line, err = readThroughSignals()
 		}
 		if errors.Is(err, errReadInterrupted) {
 			clearReadVars()

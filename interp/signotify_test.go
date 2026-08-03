@@ -64,7 +64,7 @@ func TestReadInterruptedByTrappedSignal(t *testing.T) {
 	file, err := syntax.NewParser().Parse(strings.NewReader(
 		"trap 'echo USR1 received' USR1\n"+
 			"echo ready\n"+
-			"read x || read x\n"+
+			"read x\n"+
 			"echo got:$x\n"), "")
 	if err != nil {
 		t.Fatal(err)
