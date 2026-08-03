@@ -82,10 +82,13 @@ type CarrierProcess interface {
 // carrier and with it its kernel identity — it can no longer be probed
 // or signaled externally, though `wait` and `jobs` still resolve it.
 // When the job finishes first, the runner reaps the carrier via
-// [CarrierProcess.Terminate] before sealing the exit status, so a
-// racing external kill either lands fully or is cleanly ignored. PIDs
-// of external processes the job spawns are still recorded, so
-// `wait`/`kill` on those also resolve to the job.
+// [CarrierProcess.Terminate] and waits for its [CarrierProcess.Wait] to
+// return before sealing the exit status, so a racing external kill
+// either lands fully or is cleanly ignored, and by the time `wait`
+// unblocks the carrier PID is truly gone — a following `kill -0 $!` sees
+// no such process rather than a lingering carrier. PIDs of external
+// processes the job spawns are still recorded, so `wait`/`kill` on those
+// also resolve to the job.
 //
 // Opting in is a strict contract: the runner never falls back to a
 // synthetic identity. If StartCarrier fails, or hands back a carrier
@@ -146,6 +149,7 @@ func (r *Runner) attachCarrier(ctx context.Context, job *Runner, bg *bgProc) err
 		return fmt.Errorf("job carrier: invalid carrier pid %d", pid)
 	}
 	bg.carrier = cp
+	bg.carrierDone = make(chan struct{})
 	// The carrier PID is the job's identity for its whole life: publish
 	// it to `$!` now, and force publishPidToBang off so later exec PIDs
 	// only accumulate in bg.pids without displacing it.
@@ -156,7 +160,12 @@ func (r *Runner) attachCarrier(ctx context.Context, job *Runner, bg *bgProc) err
 		bg.pidCallback(pid)
 	}
 	go func() {
+		// Wait is the sole caller (per the CarrierProcess contract); its
+		// return means the carrier has exited and been reaped. Signalling
+		// carrierDone here is what lets reapCarrier guarantee the kernel PID
+		// is gone before `wait` unblocks.
 		sig := cp.Wait()
+		defer close(bg.carrierDone)
 		if bg.carrierReaped.Load() {
 			return // the job finished first; reapCarrier tore this down
 		}
@@ -225,10 +234,20 @@ func (r *Runner) carrierSignalDisposition(num int) (string, carrierSigDispositio
 // read that seals the exit status, so an external kill racing with
 // natural completion either lands as 128+signal or is cleanly ignored —
 // never half-applied.
+//
+// It blocks until the carrier has been fully reaped (the watcher's
+// [CarrierProcess.Wait] has returned), not merely asked to exit. That
+// synchronization closes a lifecycle race: without it `wait` on a
+// naturally-completed job could unblock while the carrier lingered as a
+// zombie, so a following `kill -0 $!` still saw the PID and a retrying
+// `wait` loop hit "pid is not a child". Terminate then Wait keeps the
+// single-Wait contract — the watcher goroutine owns the only Wait call —
+// while giving reapCarrier a happens-before edge on the reap.
 func (bg *bgProc) reapCarrier() {
 	if bg.carrier == nil {
 		return
 	}
 	bg.carrierReaped.Store(true)
 	bg.carrier.Terminate()
+	<-bg.carrierDone
 }

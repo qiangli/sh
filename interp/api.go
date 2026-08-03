@@ -904,6 +904,15 @@ type bgProc struct {
 	// relayed to the job as 128+signal.
 	carrierReaped atomic.Bool
 
+	// carrierDone is closed by the carrier watcher goroutine once
+	// [CarrierProcess.Wait] has returned — i.e. the carrier process has
+	// exited AND been reaped by the OS. reapCarrier blocks on it after
+	// Terminate so that when the job goroutine seals the exit status (and
+	// `wait` unblocks), the carrier's kernel PID is truly gone: a racing
+	// `kill -0 $!` sees ESRCH rather than a lingering zombie. Nil unless a
+	// carrier was attached; created in attachCarrier alongside carrier.
+	carrierDone chan struct{}
+
 	// jobControl records whether monitor mode (`set -m`) was active when
 	// this job was backgrounded. `fg`/`bg` refuse a job that was not
 	// started under job control, even if monitor mode is later enabled.

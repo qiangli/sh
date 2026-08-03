@@ -383,6 +383,110 @@ echo "st=$?"
 	}
 }
 
+// reapOrderCarrier hands out an in-process fake carrier whose Wait
+// return — the moment the OS considers the carrier reaped — is gated by
+// the test. It models a carrier that exits promptly on Terminate but is
+// only reaped a controllable instant later, so a test can pin the engine
+// contract that `wait` on a naturally completed carrier-backed job does
+// not unblock until the carrier has been fully reaped.
+type reapOrderCarrier struct {
+	terminated chan struct{} // closed by Terminate: the job asked the carrier to exit
+	release    chan struct{} // closed by the test: lets Wait return (carrier reaped)
+	waited     chan struct{} // closed once Wait has returned
+	once       sync.Once
+}
+
+type reapOrderProc struct{ c *reapOrderCarrier }
+
+func (c *reapOrderCarrier) StartCarrier(ctx context.Context) (interp.CarrierProcess, error) {
+	return reapOrderProc{c}, nil
+}
+
+func (p reapOrderProc) Pid() int { return os.Getpid() }
+
+func (p reapOrderProc) Wait() int {
+	<-p.c.terminated
+	<-p.c.release
+	close(p.c.waited)
+	return 0
+}
+
+func (p reapOrderProc) Terminate() {
+	p.c.once.Do(func() { close(p.c.terminated) })
+}
+
+// TestJobCarrierWaitBlocksUntilReaped is the deterministic regression for
+// the lifecycle race behind the TET wait loop: when the job completes
+// naturally, `wait` must not return until the carrier has been Terminated
+// AND reaped (its single Wait has returned). Otherwise the carrier
+// lingers as a live PID after `wait` unblocks, a following `kill -0 $!`
+// still sees it, and a retrying `wait` loop hits "pid is not a child".
+func TestJobCarrierWaitBlocksUntilReaped(t *testing.T) {
+	t.Parallel()
+	c := &reapOrderCarrier{
+		terminated: make(chan struct{}),
+		release:    make(chan struct{}),
+		waited:     make(chan struct{}),
+	}
+	done := make(chan string, 1)
+	go func() {
+		done <- runCarrierScript(t, c, "{ :; } & wait; echo reaped")
+	}()
+
+	// The job body runs instantly, so the runner Terminates the carrier
+	// right away — but the reap (Wait's return) is still gated by us.
+	select {
+	case <-c.terminated:
+	case <-time.After(runnerRunTimeout):
+		t.Fatal("carrier was never terminated")
+	}
+
+	// Until we let Wait return, `wait` must stay blocked. If the script
+	// finishes here, the engine unblocked `wait` while the carrier PID was
+	// still alive — exactly the race this fix closes.
+	select {
+	case out := <-done:
+		t.Fatalf("wait returned before the carrier was reaped; output: %q", out)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(c.release) // allow the single Wait to return: carrier reaped
+
+	select {
+	case out := <-done:
+		if got := strings.TrimSpace(out); got != "reaped" {
+			t.Fatalf("unexpected output: %q", got)
+		}
+	case <-time.After(runnerRunTimeout):
+		t.Fatal("wait never returned after the carrier was reaped")
+	}
+	// The reap strictly preceded wait's return, so waited is already closed.
+	select {
+	case <-c.waited:
+	default:
+		t.Fatal("carrier Wait did not complete before wait returned")
+	}
+}
+
+// TestJobCarrierWaitLoopNoRace runs the exact TET reproduction loop
+// against the real re-exec carrier: once `wait` on a naturally completed
+// job returns, `kill -0` must no longer see the carrier, so the loop
+// terminates cleanly without ever emitting "not a child". Repeated to
+// shake out any residual scheduling race.
+func TestJobCarrierWaitLoopNoRace(t *testing.T) {
+	t.Parallel()
+	for i := range 20 {
+		out := runCarrierScript(t, new(testCarrier), `
+( : ) & p=$!
+while kill -s 0 "$p" 2>/dev/null; do wait "$p"; done
+echo done
+`)
+		if got := strings.TrimSpace(out); got != "done" {
+			t.Fatalf("iteration %d: unexpected output:\n%s", i, out)
+		}
+	}
+}
+
 // TestNoJobCarrierKeepsSyntheticHandles pins the default behavior for
 // embedders that do not opt in: pure-builtin jobs keep the opaque g<N>
 // handle for $!, jobs -p, and wait.
