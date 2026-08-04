@@ -7,14 +7,15 @@ package interp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
-	"os/user"
 	"strconv"
 	"sync"
 	"syscall"
+	"time"
 
 	"golang.org/x/sys/unix"
 	"mvdan.cc/sh/v3/syntax"
@@ -164,7 +165,7 @@ func (r *Runner) inheritedFd(fd int) (*os.File, bool) {
 // but it also takes into account the current user's role.
 func (r *Runner) access(ctx context.Context, path string, mode uint32) error {
 	// TODO(v4): "access" may need to become part of a handler, like "open" or "stat".
-	return unix.Access(path, mode)
+	return unix.Faccessat(unix.AT_FDCWD, path, mode, unix.AT_EACCESS)
 }
 
 // unTestOwnOrGrp implements the -O and -G unary tests. If the file does not
@@ -174,16 +175,96 @@ func (r *Runner) unTestOwnOrGrp(ctx context.Context, op syntax.UnTestOperator, x
 	if err != nil {
 		return false
 	}
-	u, err := user.Current()
-	if err != nil {
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
 		return false
 	}
 	if op == syntax.TsUsrOwn {
-		uid, _ := strconv.Atoi(u.Uid)
-		return uint32(uid) == info.Sys().(*syscall.Stat_t).Uid
+		euid := uint32(os.Geteuid())
+		return euid == stat.Uid
 	}
-	gid, _ := strconv.Atoi(u.Gid)
-	return uint32(gid) == info.Sys().(*syscall.Stat_t).Gid
+	fileGid := stat.Gid
+	if uint32(os.Getegid()) == fileGid || uint32(os.Getgid()) == fileGid {
+		return true
+	}
+	if gids, err := os.Getgroups(); err == nil {
+		for _, g := range gids {
+			if uint32(g) == fileGid {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func userGroups() []string {
+	seen := make(map[int]bool)
+	var list []string
+	add := func(g int) {
+		if g >= 0 && !seen[g] {
+			seen[g] = true
+			list = append(list, strconv.Itoa(g))
+		}
+	}
+	add(os.Getgid())
+	add(os.Getegid())
+	if gids, err := os.Getgroups(); err == nil {
+		for _, g := range gids {
+			add(g)
+		}
+	}
+	return list
+}
+
+func openPath(ctx context.Context, path string, flag int, perm os.FileMode) (io.ReadWriteCloser, error) {
+	info, err := os.Lstat(path)
+	if err == nil && info.Mode()&os.ModeNamedPipe != 0 {
+		return openFifoWithContext(ctx, path, flag, perm)
+	}
+	f, err := os.OpenFile(path, flag, perm)
+	if err != nil && isFIFOError(err) {
+		return openFifoWithContext(ctx, path, flag, perm)
+	}
+	return f, err
+}
+
+func isFIFOError(err error) bool {
+	var pe *os.PathError
+	if errors.As(err, &pe) {
+		return pe.Err == unix.ENXIO
+	}
+	return false
+}
+
+func openFifoWithContext(ctx context.Context, path string, flags int, perm os.FileMode) (io.ReadWriteCloser, error) {
+	nonblockFlags := flags | unix.O_NONBLOCK | unix.O_CLOEXEC
+	ticker := time.NewTicker(5 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, &os.PathError{Op: "open", Path: path, Err: err}
+		}
+		fd, err := unix.Open(path, nonblockFlags, uint32(perm))
+		if err == nil {
+			fl, err := unix.FcntlInt(uintptr(fd), unix.F_GETFL, 0)
+			if err == nil {
+				_, _ = unix.FcntlInt(uintptr(fd), unix.F_SETFL, fl&^unix.O_NONBLOCK)
+			}
+			return os.NewFile(uintptr(fd), path), nil
+		}
+
+		if err == unix.ENXIO && flags&(os.O_WRONLY|os.O_RDWR) != 0 {
+			select {
+			case <-ctx.Done():
+				return nil, &os.PathError{Op: "open", Path: path, Err: ctx.Err()}
+			case <-ticker.C:
+				continue
+			}
+		}
+
+		return nil, &os.PathError{Op: "open", Path: path, Err: err}
+	}
 }
 
 type waitStatus = syscall.WaitStatus

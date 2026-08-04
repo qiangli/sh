@@ -8,8 +8,10 @@ package interp
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
+	"strconv"
 	"time"
 
 	"mvdan.cc/sh/v3/syntax"
@@ -96,6 +98,14 @@ func (r *Runner) access(ctx context.Context, path string, mode uint32) error {
 func (r *Runner) unTestOwnOrGrp(ctx context.Context, op syntax.UnTestOperator, x string) bool {
 	r.errf("unsupported unary test op: %v\n", op)
 	return false
+}
+
+func userGroups() []string {
+	return []string{strconv.Itoa(os.Getgid())}
+}
+
+func openPath(ctx context.Context, path string, flag int, perm os.FileMode) (io.ReadWriteCloser, error) {
+	return os.OpenFile(path, flag, perm)
 }
 
 // modifiedSinceAccessed reports whether the file's mtime is strictly

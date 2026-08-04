@@ -704,7 +704,7 @@ func DefaultOpenHandler() OpenHandlerFunc {
 		} else {
 			path = shellPathJoinAbs(mc.Dir, path)
 		}
-		return os.OpenFile(path, flag, perm)
+		return openPath(ctx, path, flag, perm)
 	}
 }
 

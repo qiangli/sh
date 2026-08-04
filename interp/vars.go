@@ -837,10 +837,9 @@ func (r *Runner) lookupVar(name string) expand.Variable {
 	case "BASH_ARGV0":
 		vr.Kind, vr.Str = expand.String, r.shellArgv0()
 	case "GROUPS":
-		gid := os.Getgid()
 		vr.Kind = expand.Indexed
 		vr.ReadOnly = true
-		vr.List = []string{strconv.Itoa(gid)}
+		vr.List = userGroups()
 	case "HOSTNAME":
 		h, _ := os.Hostname()
 		vr.Kind, vr.Str = expand.String, h
