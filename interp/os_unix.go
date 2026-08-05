@@ -237,6 +237,9 @@ func isFIFOError(err error) bool {
 }
 
 func openFifoWithContext(ctx context.Context, path string, flags int, perm os.FileMode) (io.ReadWriteCloser, error) {
+	if flags&unix.O_ACCMODE == unix.O_RDONLY {
+		return openReadFifoWithContext(ctx, path, flags, perm)
+	}
 	nonblockFlags := flags | unix.O_NONBLOCK | unix.O_CLOEXEC
 	ticker := time.NewTicker(5 * time.Millisecond)
 	defer ticker.Stop()
@@ -264,6 +267,38 @@ func openFifoWithContext(ctx context.Context, path string, flags int, perm os.Fi
 		}
 
 		return nil, &os.PathError{Op: "open", Path: path, Err: err}
+	}
+}
+
+func openReadFifoWithContext(ctx context.Context, path string, flags int, perm os.FileMode) (io.ReadWriteCloser, error) {
+	type result struct {
+		fd  int
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		fd, err := unix.Open(path, flags|unix.O_CLOEXEC, uint32(perm))
+		done <- result{fd, err}
+	}()
+	select {
+	case res := <-done:
+		if res.err != nil {
+			return nil, &os.PathError{Op: "open", Path: path, Err: res.err}
+		}
+		return os.NewFile(uintptr(res.fd), path), nil
+	case <-ctx.Done():
+		// A blocking read-side FIFO open is the only portable way to preserve
+		// the writer rendezvous. Connect a temporary writer to release it so
+		// cancellation does not leak the opener goroutine.
+		guard, _ := unix.Open(path, unix.O_WRONLY|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+		res := <-done
+		if guard >= 0 {
+			_ = unix.Close(guard)
+		}
+		if res.err == nil {
+			_ = unix.Close(res.fd)
+		}
+		return nil, &os.PathError{Op: "open", Path: path, Err: ctx.Err()}
 	}
 }
 

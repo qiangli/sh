@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,6 +18,79 @@ import (
 
 	"mvdan.cc/sh/v3/syntax"
 )
+
+// TestFIFOReadOpenWaitsForWriter covers the FIFO rendezvous used when the
+// shell sources a named pipe. A read-only open must not expose EOF merely
+// because its writer has not connected yet.
+func TestFIFOReadOpenWaitsForWriter(t *testing.T) {
+	dir := t.TempDir()
+	fifoPath := filepath.Join(dir, "source.fifo")
+	if err := mkfifo(fifoPath, 0o600); err != nil {
+		t.Fatalf("mkfifo failed: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	readResult := make(chan struct {
+		data string
+		err  error
+	}, 1)
+	go func() {
+		f, err := openPath(ctx, fifoPath, os.O_RDONLY, 0)
+		if err != nil {
+			readResult <- struct {
+				data string
+				err  error
+			}{err: err}
+			return
+		}
+		defer f.Close()
+		data, err := io.ReadAll(f)
+		readResult <- struct {
+			data string
+			err  error
+		}{string(data), err}
+	}()
+
+	// Ensure the reader reaches the open before the writer. This is the order
+	// that exposed the premature EOF in bash-5.3's source6.sub fixture.
+	time.Sleep(25 * time.Millisecond)
+	writer, err := openPath(ctx, fifoPath, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatalf("open writer: %v", err)
+	}
+	if _, err := io.WriteString(writer, "echo four - OK\n"); err != nil {
+		t.Fatalf("write FIFO: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close writer: %v", err)
+	}
+
+	result := <-readResult
+	if result.err != nil {
+		t.Fatalf("read FIFO: %v", result.err)
+	}
+	if want := "echo four - OK\n"; result.data != want {
+		t.Fatalf("FIFO contents = %q, want %q", result.data, want)
+	}
+}
+
+func TestFIFOReadOpenContextCancel(t *testing.T) {
+	dir := t.TempDir()
+	fifoPath := filepath.Join(dir, "no_writer.fifo")
+	if err := mkfifo(fifoPath, 0o600); err != nil {
+		t.Fatalf("mkfifo failed: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	f, err := openPath(ctx, fifoPath, os.O_RDONLY, 0)
+	if f != nil {
+		f.Close()
+	}
+	if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context error, got %v", err)
+	}
+}
 
 // TestFIFOOpenContextCancel verifies that opening a FIFO for writing when no reader
 // is connected respects context cancellation and returns ctx.Err() rather than blocking forever.
