@@ -103,9 +103,10 @@ func TestTrapResetRestoresOSDefault(t *testing.T) {
 	}
 }
 
-func TestStandaloneTerminalStopDefault(t *testing.T) {
+func startStandaloneSignalDefault(t *testing.T) (*exec.Cmd, int) {
+	t.Helper()
 	cmd := exec.Command(os.Args[0])
-	cmd.Env = append(os.Environ(), "GOSH_CMD=sig_stop_default")
+	cmd.Env = append(os.Environ(), "GOSH_CMD=sig_default")
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -114,19 +115,53 @@ func TestStandaloneTerminalStopDefault(t *testing.T) {
 		t.Fatal(err)
 	}
 	pid := cmd.Process.Pid
-	defer func() {
-		_ = syscall.Kill(pid, syscall.SIGCONT)
-		_ = syscall.Kill(pid, syscall.SIGKILL)
-		var ws syscall.WaitStatus
-		_, _ = syscall.Wait4(pid, &ws, 0, nil)
-	}()
 	sc := bufio.NewScanner(stdout)
 	if !sc.Scan() || strings.TrimSpace(sc.Text()) != "ready" {
 		t.Fatal("standalone child never reported ready")
 	}
-	if err := syscall.Kill(pid, syscall.SIGTTIN); err != nil {
-		t.Fatal(err)
+	return cmd, pid
+}
+
+func TestStandaloneSignalDefaults(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sig  syscall.Signal
+		stop bool
+	}{
+		{"ABRT", syscall.SIGABRT, false},
+		{"USR1", syscall.SIGUSR1, false},
+		{"TSTP", syscall.SIGTSTP, true},
+		{"TTIN", syscall.SIGTTIN, true},
+		{"TTOU", syscall.SIGTTOU, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd, pid := startStandaloneSignalDefault(t)
+			defer func() {
+				_ = syscall.Kill(pid, syscall.SIGCONT)
+				_ = syscall.Kill(pid, syscall.SIGKILL)
+				_, _ = cmd.Process.Wait()
+			}()
+			if err := syscall.Kill(pid, tc.sig); err != nil {
+				t.Fatal(err)
+			}
+			if !tc.stop {
+				state, err := cmd.Process.Wait()
+				if err != nil {
+					t.Fatal(err)
+				}
+				ws, ok := state.Sys().(syscall.WaitStatus)
+				if !ok || !ws.Signaled() || ws.Signal() != tc.sig {
+					t.Fatalf("wait status = %v, want signal %s", state.Sys(), tc.sig)
+				}
+				return
+			}
+			waitStandaloneStopped(t, pid, tc.sig)
+		})
 	}
+}
+
+func waitStandaloneStopped(t *testing.T, pid int, sig syscall.Signal) {
+	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		var ws syscall.WaitStatus
@@ -135,13 +170,13 @@ func TestStandaloneTerminalStopDefault(t *testing.T) {
 			t.Fatal(err)
 		}
 		if got == pid {
-			if !ws.Stopped() || ws.StopSignal() != syscall.SIGTTIN {
-				t.Fatalf("child did not stop for SIGTTIN: status=%v", ws)
+			if !ws.Stopped() || ws.StopSignal() != sig {
+				t.Fatalf("child did not stop for %s: status=%v", sig, ws)
 			}
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("child did not enter the stopped state for SIGTTIN")
+			t.Fatalf("child did not enter the stopped state for %s", sig)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}

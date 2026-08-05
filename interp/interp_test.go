@@ -175,7 +175,7 @@ func TestMain(m *testing.M) {
 				os.Exit(1)
 			}
 			os.Exit(0)
-		case "sig_stop_default":
+		case "sig_default":
 			// A separate process group makes terminal-stop defaults observable;
 			// an orphaned group is required by POSIX to ignore these signals.
 			_ = syscall.Setpgid(0, 0)

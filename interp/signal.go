@@ -65,12 +65,19 @@ type StartupSignalIgnorer interface {
 func WithSignalResetter(s SignalResetter) RunnerOption {
 	return func(r *Runner) error {
 		r.sigReset = s
-		// The Go runtime installs handlers for the terminal stop signals even
-		// when a program has not requested them. A standalone shell owns its
-		// process boundary and must expose their kernel default action so an
-		// external job-control observer can see it stop.
+		// The Go runtime installs handlers for several POSIX signals before
+		// main. A standalone shell owns its process boundary and must expose
+		// their kernel default actions: an external observer must see signal
+		// termination (WIFSIGNALED), not a Go traceback plus exit status 2, and
+		// must see terminal-stop signals enter WIFSTOPPED. Do not reset CHLD,
+		// which drives child reaping, or URG, which the Go runtime uses for
+		// asynchronous preemption. Embedded runners do not opt in here.
 		if _, ok := s.(OSSignalResetter); ok {
-			for _, name := range [...]string{"TSTP", "TTIN", "TTOU"} {
+			for _, name := range [...]string{
+				"HUP", "INT", "QUIT", "ILL", "TRAP", "ABRT", "BUS", "FPE",
+				"USR1", "SEGV", "USR2", "PIPE", "ALRM", "TERM",
+				"TSTP", "TTIN", "TTOU", "XCPU", "XFSZ",
+			} {
 				if sig, found := signalByName(name); found {
 					restoreExecSignal(signalForOS(sig))
 				}
