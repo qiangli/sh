@@ -65,6 +65,17 @@ type StartupSignalIgnorer interface {
 func WithSignalResetter(s SignalResetter) RunnerOption {
 	return func(r *Runner) error {
 		r.sigReset = s
+		// The Go runtime installs handlers for the terminal stop signals even
+		// when a program has not requested them. A standalone shell owns its
+		// process boundary and must expose their kernel default action so an
+		// external job-control observer can see it stop.
+		if _, ok := s.(OSSignalResetter); ok {
+			for _, name := range [...]string{"TSTP", "TTIN", "TTOU"} {
+				if sig, found := signalByName(name); found {
+					restoreExecSignal(signalForOS(sig))
+				}
+			}
+		}
 		return nil
 	}
 }

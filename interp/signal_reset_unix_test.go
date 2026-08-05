@@ -102,3 +102,47 @@ func TestTrapResetRestoresOSDefault(t *testing.T) {
 		t.Fatal("child hung after SIGUSR2; trap reset did not restore the OS default")
 	}
 }
+
+func TestStandaloneTerminalStopDefault(t *testing.T) {
+	cmd := exec.Command(os.Args[0])
+	cmd.Env = append(os.Environ(), "GOSH_CMD=sig_stop_default")
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	pid := cmd.Process.Pid
+	defer func() {
+		_ = syscall.Kill(pid, syscall.SIGCONT)
+		_ = syscall.Kill(pid, syscall.SIGKILL)
+		var ws syscall.WaitStatus
+		_, _ = syscall.Wait4(pid, &ws, 0, nil)
+	}()
+	sc := bufio.NewScanner(stdout)
+	if !sc.Scan() || strings.TrimSpace(sc.Text()) != "ready" {
+		t.Fatal("standalone child never reported ready")
+	}
+	if err := syscall.Kill(pid, syscall.SIGTTIN); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var ws syscall.WaitStatus
+		got, err := syscall.Wait4(pid, &ws, syscall.WNOHANG|syscall.WUNTRACED, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got == pid {
+			if !ws.Stopped() || ws.StopSignal() != syscall.SIGTTIN {
+				t.Fatalf("child did not stop for SIGTTIN: status=%v", ws)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("child did not enter the stopped state for SIGTTIN")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
