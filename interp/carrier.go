@@ -49,11 +49,11 @@ type CarrierProcess interface {
 
 // WithJobCarrier gives background jobs a kernel-visible identity. For
 // each asynchronous list (`cmd &`, including `a | b &`) the runner
-// starts one carrier process via c and uses its real PID — instead of
-// the synthetic "g<N>" handle — as the job's identity everywhere a PID
-// is visible: `$!`, `jobs -p`/`jobs -l`, `wait <pid>`, and `wait -p`.
-// External tools can then probe the job (`kill -0 $pid`) and signal it
-// like any real shell child.
+// starts one carrier process via c. Builtin-only and compound jobs use
+// its real PID instead of the synthetic "g<N>" handle. When a simple
+// external command starts, its actual child PID replaces the carrier in
+// `$!`, `jobs`, and `wait`, matching a forked shell and ensuring signals
+// reach the process doing the work rather than only its proxy.
 //
 // The carrier is a signal proxy, not the job itself. A signal that
 // terminates the carrier is relayed to the job according to the job's
@@ -77,10 +77,11 @@ type CarrierProcess interface {
 //
 // The carrier process itself always keeps its default dispositions:
 // external `kill` decides the job's fate by killing the carrier, and
-// the relay above happens when the runner reaps it. One consequence is
-// that a job that survives a signal (trapped or ignored) has lost its
-// carrier and with it its kernel identity — it can no longer be probed
-// or signaled externally, though `wait` and `jobs` still resolve it.
+// the relay above happens when the runner reaps it. One consequence for
+// a carrier-identified compound job is that a job which survives a
+// signal (trapped or ignored) has lost its carrier and with it its kernel
+// identity — it can no longer be probed or signaled externally, though
+// `wait` and `jobs` still resolve it.
 // When the job finishes first, the runner reaps the carrier via
 // [CarrierProcess.Terminate] and waits for its [CarrierProcess.Wait] to
 // return before sealing the exit status, so a racing external kill
@@ -150,12 +151,15 @@ func (r *Runner) attachCarrier(ctx context.Context, job *Runner, bg *bgProc) err
 	}
 	bg.carrier = cp
 	bg.carrierDone = make(chan struct{})
-	// The carrier PID is the job's identity for its whole life: publish
-	// it to `$!` now, and force publishPidToBang off so later exec PIDs
-	// only accumulate in bg.pids without displacing it.
-	bg.publishPidToBang = false
+	// The carrier is the immediate fallback identity for compound and
+	// builtin-only jobs.  A simple external command (or the primary process
+	// of a pipeline) replaces it with the real child PID in publishBgPid.
+	// Signalling that child directly preserves the kernel lifecycle a real
+	// shell exposes and avoids leaving it alive behind a dead proxy.
 	bg.pid.Store(int64(pid))
-	close(bg.pidReady)
+	if !bg.publishPidToBang {
+		close(bg.pidReady)
+	}
 	if bg.pidCallback != nil {
 		bg.pidCallback(pid)
 	}

@@ -898,11 +898,11 @@ type bgProc struct {
 	// should hand off to a goroutine themselves.
 	pidCallback func(pid int)
 
-	// carrier is the kernel-visible stand-in process that gives this job
-	// a real OS PID (see [WithJobCarrier]). Nil when the runner has no
-	// JobCarrier configured or starting one failed, in which case the
-	// job keeps the legacy synthetic identity. Set before the job
-	// goroutine starts and never reassigned.
+	// carrier is the kernel-visible fallback process that gives a job with
+	// no external child a real OS PID (see [WithJobCarrier]). A simple
+	// external child replaces it as the published pid once exec starts.
+	// Nil when no carrier was configured or starting one failed. Set before
+	// the job goroutine starts and never reassigned.
 	carrier CarrierProcess
 
 	// carrierReaped is set (before Terminate) by reapCarrier once the
@@ -1068,7 +1068,10 @@ func publishBgPid(ctx context.Context, pid int) {
 	default:
 		close(bg.pidReady)
 	}
-	if bg.pidCallback != nil {
+	// With a carrier configured the callback already published that stable
+	// job identity from attachCarrier. Replacing `$!` for a simple external
+	// command must not turn the documented once-per-job callback into two.
+	if bg.pidCallback != nil && bg.carrier == nil {
 		bg.pidCallback(pid)
 	}
 }

@@ -62,6 +62,39 @@ echo "term=$?"
 	waitPidsGone(t, c.startedPids())
 }
 
+// TestJobCarrierBuiltinKillExternalChild checks the ordinary shell idiom where
+// $! names the real external child, rather than a proxy carrier. Killing and
+// waiting for it must not leave the child alive behind a dead carrier.
+func TestJobCarrierBuiltinKillExternalChild(t *testing.T) {
+	t.Parallel()
+	c := new(testCarrier)
+	out := runCarrierScript(t, c, `
+sleep 30 &
+p=$!
+echo "p=$p"
+kill "$p"
+wait "$p"
+echo "st=$?"
+`)
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) != 2 || !strings.HasPrefix(lines[0], "p=") || lines[1] != "st=143" {
+		t.Fatalf("unexpected output:\n%s", out)
+	}
+	pid, err := strconv.Atoi(strings.TrimPrefix(lines[0], "p="))
+	if err != nil {
+		t.Fatalf("invalid child PID in %q: %v", lines[0], err)
+	}
+	for _, carrierPID := range c.startedPids() {
+		if pid == carrierPID {
+			t.Fatalf("$! exposed proxy carrier PID %d instead of external child", pid)
+		}
+	}
+	if pidLive(pid) {
+		t.Fatalf("external child PID %d survived kill + wait", pid)
+	}
+	waitPidsGone(t, c.startedPids())
+}
+
 // TestJobCarrierExternalTermAndKill checks the 128+signal status mapping
 // for pure-builtin compound jobs killed externally: TERM -> 143 and
 // KILL (uncatchable) -> 137.
