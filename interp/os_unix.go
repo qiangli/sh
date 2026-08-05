@@ -7,7 +7,6 @@ package interp
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -221,19 +220,10 @@ func openPath(ctx context.Context, path string, flag int, perm os.FileMode) (io.
 	if err == nil && info.Mode()&os.ModeNamedPipe != 0 {
 		return openFifoWithContext(ctx, path, flag, perm)
 	}
-	f, err := os.OpenFile(path, flag, perm)
-	if err != nil && isFIFOError(err) {
-		return openFifoWithContext(ctx, path, flag, perm)
-	}
-	return f, err
-}
-
-func isFIFOError(err error) bool {
-	var pe *os.PathError
-	if errors.As(err, &pe) {
-		return pe.Err == unix.ENXIO
-	}
-	return false
+	// ENXIO is not FIFO-specific. In particular, /dev/tty returns it when
+	// the process has no controlling terminal; retrying that as a FIFO open
+	// turns the immediate error into an infinite wait.
+	return os.OpenFile(path, flag, perm)
 }
 
 func openFifoWithContext(ctx context.Context, path string, flags int, perm os.FileMode) (io.ReadWriteCloser, error) {

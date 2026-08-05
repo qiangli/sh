@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/sys/unix"
 	"mvdan.cc/sh/v3/syntax"
 )
 
@@ -89,6 +90,27 @@ func TestFIFOReadOpenContextCancel(t *testing.T) {
 	}
 	if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context error, got %v", err)
+	}
+}
+
+func TestOpenPathDoesNotTreatENXIOAsFIFO(t *testing.T) {
+	f, probeErr := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+	if probeErr == nil {
+		f.Close()
+		t.Skip("process has a controlling terminal")
+	}
+	if !errors.Is(probeErr, unix.ENXIO) {
+		t.Skipf("/dev/tty does not report ENXIO on this host: %v", probeErr)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	opened, err := openPath(ctx, "/dev/tty", os.O_RDWR, 0)
+	if opened != nil {
+		opened.Close()
+	}
+	if !errors.Is(err, unix.ENXIO) {
+		t.Fatalf("openPath error = %v, want ENXIO (not a FIFO context error)", err)
 	}
 }
 
