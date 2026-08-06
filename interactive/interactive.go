@@ -308,9 +308,22 @@ func Run(ctx context.Context, opts Options) error {
 		// typed on the same line still do not expand (bash semantics).
 		r.AdvanceAliasInput(strings.Count(input, "\n") + 1)
 		for _, stmt := range prog.Stmts {
-			cmdCtx, cancel := context.WithCancel(ctx)
-			runErr := r.Run(cmdCtx, stmt)
-			cancel()
+			// Run the statement under ctx directly. A per-statement
+			// context.WithCancel(ctx) here used to be cancelled the instant
+			// Run returned — which for `cmd &`/coproc is as soon as the job
+			// is launched, not when it finishes. context.WithCancel
+			// propagates cancellation to every descendant context, and a
+			// background job's own context is one such descendant (see
+			// interp.Runner.stmt), so that immediate cancel tore the job
+			// down before — or while — it was still running: no trap,
+			// signal, or explicit kill involved, just an interactive
+			// `sleep 1 &` dying on the spot. Nothing here relies on
+			// per-statement cancellation (Ctrl-C reaches a running external
+			// command through the terminal directly, per the comment on
+			// ctrlCFilter below); ctx's own cancellation — a real shutdown —
+			// still reaches every job through the ordinary parent-child
+			// context chain.
+			runErr := r.Run(ctx, stmt)
 			if runErr != nil && !isExitStatus(runErr) {
 				onRunError(runErr)
 			}
@@ -477,9 +490,10 @@ func runAssumedTTY(ctx context.Context, opts Options, r *interp.Runner, stdin io
 		// typed on the same line still do not expand (bash semantics).
 		r.AdvanceAliasInput(strings.Count(input, "\n") + 1)
 		for _, stmt := range prog.Stmts {
-			cmdCtx, cancel := context.WithCancel(ctx)
-			runErr := r.Run(cmdCtx, stmt)
-			cancel()
+			// Run under ctx directly, not a per-statement derivative — see
+			// the comment in Run above; the same background-job-survival
+			// reasoning applies here.
+			runErr := r.Run(ctx, stmt)
 			if runErr != nil && !isExitStatus(runErr) {
 				onRunError(runErr)
 			}
@@ -627,9 +641,10 @@ func runFallback(ctx context.Context, r *interp.Runner, stdin io.Reader, stdout,
 		default:
 		}
 		for _, stmt := range stmts {
-			cmdCtx, cancel := context.WithCancel(ctx)
-			runErr := r.Run(cmdCtx, stmt)
-			cancel()
+			// Run under ctx directly, not a per-statement derivative — see
+			// the comment in Run above; the same background-job-survival
+			// reasoning applies here.
+			runErr := r.Run(ctx, stmt)
 			if runErr != nil && !isExitStatus(runErr) {
 				onRunError(runErr)
 			}
