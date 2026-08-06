@@ -4556,6 +4556,13 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 			// runDetachedExec) can publish the real OS PID into it via
 			// publishBgPid. `$!` reads that PID back via bgProc.pidReady.
 			bgCtx = context.WithValue(bgCtx, bgProcCtxKey{}, bg)
+			if !bg.publishPidToBang {
+				select {
+				case <-bg.pidReady:
+				default:
+					close(bg.pidReady)
+				}
+			}
 			go func() {
 				defer func() {
 					cancel()
@@ -5584,6 +5591,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			if assignmentOnlyWithLateAssigns {
 				r.applyLateRedirs(ctx, fields)
 			}
+			releaseBgPid(ctx)
 			break
 		}
 		if r.lastExpandCmdSubst {
