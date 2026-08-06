@@ -47,6 +47,29 @@ type CarrierProcess interface {
 	Terminate()
 }
 
+// CarrierWaitState is one observable carrier process state. A terminal state
+// means the process has exited and been reaped. A stopped state is
+// non-terminal: WaitState must be called again after the process is continued
+// or terminated to perform the final reap.
+type CarrierWaitState struct {
+	Signal  int
+	Stopped bool
+}
+
+// StopAwareCarrierProcess is the optional extension for hosts which can
+// observe child stops (for example with waitpid(WUNTRACED) on Unix). The
+// ordinary os/exec Cmd.Wait only returns for terminal states, so it cannot
+// relay SIGSTOP/SIGTSTP delivered to a carrier while the represented shell job
+// is still running. Hosts implementing this extension let the runner react to
+// a stop promptly, then terminate and reap the carrier.
+//
+// WaitState has the same single-waiter rule as CarrierProcess.Wait. The runner
+// uses one API or the other, never both.
+type StopAwareCarrierProcess interface {
+	CarrierProcess
+	WaitState() CarrierWaitState
+}
+
 // WithJobCarrier gives background jobs a kernel-visible identity. For
 // each asynchronous list (`cmd &`, including `a | b &`) the runner
 // starts one carrier process via c and uses its real PID instead of the
@@ -165,7 +188,27 @@ func (r *Runner) attachCarrier(ctx context.Context, job *Runner, bg *bgProc) err
 		// return means the carrier has exited and been reaped. Signalling
 		// carrierDone here is what lets reapCarrier guarantee the kernel PID
 		// is gone before `wait` unblocks.
-		sig := cp.Wait()
+		sig := 0
+		if stopAware, ok := cp.(StopAwareCarrierProcess); ok {
+			for {
+				state := stopAware.WaitState()
+				if !state.Stopped {
+					sig = state.Signal
+					break
+				}
+				// A stopped carrier cannot reach another wait state by itself.
+				// Preserve the stop as the job's status, cancel the represented
+				// job immediately, then wait until Terminate makes the carrier
+				// terminal and the host reaps it.
+				if !bg.carrierReaped.Load() {
+					bg.killedSignal.CompareAndSwap(0, int32(state.Signal))
+					bg.cancel()
+				}
+				cp.Terminate()
+			}
+		} else {
+			sig = cp.Wait()
+		}
 		defer close(bg.carrierDone)
 		if bg.carrierReaped.Load() {
 			return // the job finished first; reapCarrier tore this down

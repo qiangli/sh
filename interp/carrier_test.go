@@ -468,6 +468,61 @@ func TestJobCarrierWaitBlocksUntilReaped(t *testing.T) {
 	}
 }
 
+type stopAwareProc struct {
+	states     chan interp.CarrierWaitState
+	terminated chan struct{}
+	termOnce   sync.Once
+}
+
+func (p *stopAwareProc) Pid() int { return 4242 }
+func (p *stopAwareProc) Wait() int {
+	panic("Wait called on stop-aware carrier")
+}
+func (p *stopAwareProc) WaitState() interp.CarrierWaitState { return <-p.states }
+func (p *stopAwareProc) Terminate() {
+	p.termOnce.Do(func() { close(p.terminated) })
+}
+
+type stopAwareCarrier struct{ proc *stopAwareProc }
+
+func (c stopAwareCarrier) StartCarrier(context.Context) (interp.CarrierProcess, error) {
+	return c.proc, nil
+}
+
+// TestJobCarrierStopCancelsBeforeTerminalReap pins the ed timeout regression:
+// a host which observes a stopped carrier must not wait for an ordinary
+// terminal-only process Wait while the represented job keeps running.
+func TestJobCarrierStopCancelsBeforeTerminalReap(t *testing.T) {
+	p := &stopAwareProc{
+		states:     make(chan interp.CarrierWaitState, 2),
+		terminated: make(chan struct{}),
+	}
+	p.states <- interp.CarrierWaitState{Signal: 20, Stopped: true}
+	runDone := make(chan string, 1)
+	go func() {
+		runDone <- runCarrierScript(t, stopAwareCarrier{p}, `{ while :; do :; done; } & wait $!; echo "st=$?"`)
+	}()
+	select {
+	case <-p.terminated:
+	case <-time.After(time.Second):
+		t.Fatal("stopped carrier did not cancel the job and request termination")
+	}
+	select {
+	case out := <-runDone:
+		t.Fatalf("wait returned before stopped carrier was terminally reaped: %q", out)
+	case <-time.After(50 * time.Millisecond):
+	}
+	p.states <- interp.CarrierWaitState{}
+	select {
+	case out := <-runDone:
+		if got := strings.TrimSpace(out); got != "st=148" {
+			t.Fatalf("unexpected output: %q", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("wait did not return after stopped carrier was reaped")
+	}
+}
+
 // TestJobCarrierWaitLoopNoRace runs the exact TET reproduction loop
 // against the real re-exec carrier: once `wait` on a naturally completed
 // job returns, `kill -0` must no longer see the carrier, so the loop
