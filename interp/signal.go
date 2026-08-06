@@ -21,6 +21,21 @@ var childSignalStartMu sync.Mutex
 
 var errReadInterrupted = errors.New("read interrupted by signal")
 
+// isRuntimeSignal reports whether the named signal is a synchronous fault
+// owned by the Go runtime. These signals cannot be safely reset, trapped, or
+// ignored from user code because the Go runtime relies on its own handlers
+// for panic / stack-overflow / fault recovery. On Linux the runtime installs
+// sigaction handlers; on Darwin it complements Mach exception ports with
+// signal handlers. Disturbing either would lose Go's fault-to-panic
+// conversion and turn recoverable faults into process death.
+func isRuntimeSignal(name string) bool {
+	switch name {
+	case "BUS", "FPE", "ILL", "SEGV", "TRAP":
+		return true
+	}
+	return false
+}
+
 // A SignalResetter restores a signal's real OS default disposition
 // (SIG_DFL) when the shell resets it with `trap - SIG`.
 //
@@ -74,8 +89,8 @@ func WithSignalResetter(s SignalResetter) RunnerOption {
 		// asynchronous preemption. Embedded runners do not opt in here.
 		if _, ok := s.(OSSignalResetter); ok {
 			for _, name := range [...]string{
-				"HUP", "INT", "QUIT", "ILL", "TRAP", "ABRT", "BUS", "FPE",
-				"USR1", "SEGV", "USR2", "PIPE", "ALRM", "TERM",
+				"HUP", "INT", "QUIT", "ABRT",
+				"USR1", "USR2", "PIPE", "ALRM", "TERM",
 				"TSTP", "TTIN", "TTOU", "XCPU", "XFSZ",
 			} {
 				if sig, found := signalByName(name); found {
@@ -127,6 +142,9 @@ func (r *Runner) restoreBridgedStartupIgnores() {
 		return
 	}
 	for name := range r.startupIgnored {
+		if isRuntimeSignal(name) {
+			continue
+		}
 		sig, ok := signalByName(name)
 		if !ok {
 			continue
@@ -354,6 +372,16 @@ func (r *Runner) enableSignalTrap(name string) {
 	if name == "URG" {
 		return
 	}
+	// Synchronous fault signals (BUS, FPE, ILL, SEGV, TRAP) are owned by the
+	// Go runtime for panic / stack-overflow / fault recovery. A signal.Notify
+	// handler cannot distinguish a kill(2)-delivered signal from a real fault
+	// (on Linux both take the same sigaction path), so installing one would
+	// steal fault deliveries from the runtime and turn a recoverable nil-pointer
+	// dereference into process death. Record the trap (so `trap -p` shows it)
+	// but install no OS handler.
+	if isRuntimeSignal(name) {
+		return
+	}
 	sig, ok := signalByName(name)
 	if !ok {
 		return
@@ -388,6 +416,11 @@ func (r *Runner) ignoreSignalTrap(name string) {
 	if name == "CHLD" {
 		return
 	}
+	// Runtime-owned synchronous fault signals must not have their OS
+	// disposition changed. See isRuntimeSignal and enableSignalTrap.
+	if isRuntimeSignal(name) {
+		return
+	}
 	sig, ok := signalByName(name)
 	if !ok {
 		return
@@ -405,6 +438,11 @@ func (r *Runner) ignoreSignalTrap(name string) {
 // disableSignalTrap stops OS delivery for the named signal, restoring its
 // default disposition. Called by the `trap` builtin when a trap is reset.
 func (r *Runner) disableSignalTrap(name string) {
+	// Runtime-owned synchronous fault signals must not have their OS
+	// disposition changed. See isRuntimeSignal and enableSignalTrap.
+	if isRuntimeSignal(name) {
+		return
+	}
 	sig, ok := signalByName(name)
 	if !ok {
 		return
