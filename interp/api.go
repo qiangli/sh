@@ -898,9 +898,10 @@ type bgProc struct {
 	// should hand off to a goroutine themselves.
 	pidCallback func(pid int)
 
-	// carrier is the kernel-visible fallback process that gives a job with
-	// no external child a real OS PID (see [WithJobCarrier]). A simple
-	// external child replaces it as the published pid once exec starts.
+	// carrier is the kernel-visible stand-in process that gives this job
+	// a real OS PID (see [WithJobCarrier]). Its PID remains the job identity
+	// even when the goroutine starts an external child: signals must enter
+	// through the carrier so the job can relay them and preserve wait status.
 	// Nil when no carrier was configured or starting one failed. Set before
 	// the job goroutine starts and never reassigned.
 	carrier CarrierProcess

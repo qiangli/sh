@@ -47,13 +47,37 @@ type CarrierProcess interface {
 	Terminate()
 }
 
+// CarrierWaitState is one observable carrier process state. A terminal state
+// means the process has exited and been reaped. A stopped state is
+// non-terminal: WaitState must be called again after the process is continued
+// or terminated to perform the final reap.
+type CarrierWaitState struct {
+	Signal  int
+	Stopped bool
+}
+
+// StopAwareCarrierProcess is the optional extension for hosts which can
+// observe child stops (for example with waitpid(WUNTRACED) on Unix). The
+// ordinary os/exec Cmd.Wait only returns for terminal states, so it cannot
+// relay SIGSTOP/SIGTSTP delivered to a carrier while the represented shell job
+// is still running. Hosts implementing this extension let the runner treat a
+// stopped carrier as the corresponding default-disposition signal promptly;
+// the runner then calls Terminate and keeps calling WaitState until the carrier
+// has been reaped.
+//
+// WaitState has the same single-waiter rule as CarrierProcess.Wait. The runner
+// uses one API or the other, never both.
+type StopAwareCarrierProcess interface {
+	CarrierProcess
+	WaitState() CarrierWaitState
+}
+
 // WithJobCarrier gives background jobs a kernel-visible identity. For
 // each asynchronous list (`cmd &`, including `a | b &`) the runner
-// starts one carrier process via c. Builtin-only and compound jobs use
-// its real PID instead of the synthetic "g<N>" handle. When a simple
-// external command starts, its actual child PID replaces the carrier in
-// `$!`, `jobs`, and `wait`, matching a forked shell and ensuring signals
-// reach the process doing the work rather than only its proxy.
+// starts one carrier process via c and uses its real PID instead of the
+// synthetic "g<N>" handle. That identity is stable for the job's lifetime:
+// external children remain implementation details, and signals sent to `$!`
+// enter through the carrier's relay and wait-status machinery.
 //
 // The carrier is a signal proxy, not the job itself. A signal that
 // terminates the carrier is relayed to the job according to the job's
@@ -78,8 +102,8 @@ type CarrierProcess interface {
 // The carrier process itself always keeps its default dispositions:
 // external `kill` decides the job's fate by killing the carrier, and
 // the relay above happens when the runner reaps it. One consequence for
-// a carrier-identified compound job is that a job which survives a
-// signal (trapped or ignored) has lost its carrier and with it its kernel
+// a job which survives a signal (trapped or ignored) has lost its carrier
+// and with it its kernel
 // identity — it can no longer be probed or signaled externally, though
 // `wait` and `jobs` still resolve it.
 // When the job finishes first, the runner reaps the carrier via
@@ -151,15 +175,13 @@ func (r *Runner) attachCarrier(ctx context.Context, job *Runner, bg *bgProc) err
 	}
 	bg.carrier = cp
 	bg.carrierDone = make(chan struct{})
-	// The carrier is the immediate fallback identity for compound and
-	// builtin-only jobs.  A simple external command (or the primary process
-	// of a pipeline) replaces it with the real child PID in publishBgPid.
-	// Signalling that child directly preserves the kernel lifecycle a real
-	// shell exposes and avoids leaving it alive behind a dead proxy.
+	// The carrier PID is the job's identity for its whole life. Later exec
+	// PIDs are retained for cancellation and wait lookup, but must not replace
+	// `$!`: doing so bypasses the carrier's signal relay and loses the shell
+	// job's stop/termination status.
+	bg.publishPidToBang = false
 	bg.pid.Store(int64(pid))
-	if !bg.publishPidToBang {
-		close(bg.pidReady)
-	}
+	close(bg.pidReady)
 	if bg.pidCallback != nil {
 		bg.pidCallback(pid)
 	}
@@ -168,7 +190,27 @@ func (r *Runner) attachCarrier(ctx context.Context, job *Runner, bg *bgProc) err
 		// return means the carrier has exited and been reaped. Signalling
 		// carrierDone here is what lets reapCarrier guarantee the kernel PID
 		// is gone before `wait` unblocks.
-		sig := cp.Wait()
+		sig := 0
+		if stopAware, ok := cp.(StopAwareCarrierProcess); ok {
+			for {
+				state := stopAware.WaitState()
+				if !state.Stopped {
+					sig = state.Signal
+					break
+				}
+				// A stopped carrier cannot reach another wait state by itself.
+				// Preserve the first stop signal as the job's status, tear down
+				// the represented job immediately, then continue waiting until
+				// Terminate has made the carrier terminal and reaped it.
+				if !bg.carrierReaped.Load() {
+					bg.killedSignal.CompareAndSwap(0, int32(state.Signal))
+					bg.cancel()
+				}
+				cp.Terminate()
+			}
+		} else {
+			sig = cp.Wait()
+		}
 		defer close(bg.carrierDone)
 		if bg.carrierReaped.Load() {
 			return // the job finished first; reapCarrier tore this down

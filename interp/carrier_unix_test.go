@@ -10,6 +10,7 @@ import (
 	"context"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -62,20 +63,22 @@ echo "term=$?"
 	waitPidsGone(t, c.startedPids())
 }
 
-// TestJobCarrierBuiltinKillExternalChild checks the ordinary shell idiom where
-// $! names the real external child, rather than a proxy carrier. Killing and
-// waiting for it must not leave the child alive behind a dead carrier.
-func TestJobCarrierBuiltinKillExternalChild(t *testing.T) {
+// TestJobCarrierExternalChildKeepsJobIdentity checks that an external command
+// does not displace the carrier PID from $!. Signals must enter through the
+// carrier so the job records the signal wait status and cancels the real child.
+func TestJobCarrierExternalChildKeepsJobIdentity(t *testing.T) {
 	t.Parallel()
 	c := new(testCarrier)
+	dir := t.TempDir()
 	out := runCarrierScript(t, c, `
-sleep 30 &
+sh -c 'echo $$ > child.pid; exec sleep 30' &
 p=$!
+while [ ! -s child.pid ]; do :; done
 echo "p=$p"
 kill "$p"
 wait "$p"
 echo "st=$?"
-`)
+`, interp.Dir(dir))
 	lines := strings.Split(strings.TrimSpace(out), "\n")
 	if len(lines) != 2 || !strings.HasPrefix(lines[0], "p=") || lines[1] != "st=143" {
 		t.Fatalf("unexpected output:\n%s", out)
@@ -84,13 +87,23 @@ echo "st=$?"
 	if err != nil {
 		t.Fatalf("invalid child PID in %q: %v", lines[0], err)
 	}
-	for _, carrierPID := range c.startedPids() {
-		if pid == carrierPID {
-			t.Fatalf("$! exposed proxy carrier PID %d instead of external child", pid)
-		}
+	started := c.startedPids()
+	if len(started) != 1 || pid != started[0] {
+		t.Fatalf("$! = %d, want stable carrier PID from %v", pid, started)
 	}
-	if pidLive(pid) {
-		t.Fatalf("external child PID %d survived kill + wait", pid)
+	childBytes, err := os.ReadFile(filepath.Join(dir, "child.pid"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	childPID, err := strconv.Atoi(strings.TrimSpace(string(childBytes)))
+	if err != nil {
+		t.Fatalf("invalid child pid %q: %v", childBytes, err)
+	}
+	if childPID == pid {
+		t.Fatalf("external child unexpectedly shares carrier PID %d", pid)
+	}
+	if pidLive(childPID) {
+		t.Fatalf("external child PID %d survived carrier signal + wait", childPID)
 	}
 	waitPidsGone(t, c.startedPids())
 }
