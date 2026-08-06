@@ -1076,6 +1076,24 @@ func publishBgPid(ctx context.Context, pid int) {
 	}
 }
 
+// releaseBgPid tells the background job machinery that this execution
+// path will not produce a real OS PID (e.g. it is a builtin or function).
+// It closes pidReady so that `$!` does not block waiting for one.
+func releaseBgPid(ctx context.Context) {
+	bg, _ := ctx.Value(bgProcCtxKey{}).(*bgProc)
+	if bg == nil {
+		return
+	}
+	if nonPrimary, _ := ctx.Value(bgNonPrimaryPidCtxKey{}).(bool); nonPrimary || !bg.publishPidToBang {
+		return
+	}
+	select {
+	case <-bg.pidReady:
+	default:
+		close(bg.pidReady)
+	}
+}
+
 type alias struct {
 	// text is the literal alias body exactly as supplied (the part
 	// after `=`, including any trailing whitespace). Bash stores and

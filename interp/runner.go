@@ -9968,6 +9968,7 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 	} else if r.opts[optPosix] && isPosixSpecialBuiltin(name) && IsBuiltin(name) {
 		// fall through to builtin/exec dispatch below
 	} else if body := r.Funcs[name]; body != nil {
+		releaseBgPid(ctx)
 		// Honor $FUNCNEST: when set to a positive integer, bash aborts
 		// once nesting reaches that depth. An unset, empty, zero, or
 		// non-numeric value disables the limit.
@@ -10073,12 +10074,14 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 		// Strict POSIX: non-special, non-intrinsic builtins must be found in PATH.
 		if r.strictPosix && !isPosixSpecialBuiltin(name) && !isStrictPosixIntrinsic(name) {
 			if _, err := LookPathDir(r.Dir, r.writeEnv, name); err != nil {
+				releaseBgPid(ctx)
 				r.errf("%s%s: command not found\n", r.bashErrPrefix(pos), name)
 				r.exit.code = 127
 				return
 			}
 		}
 
+		releaseBgPid(ctx)
 		r.emitAudit("builtin", pos, args, true)
 		r.exit = r.builtin(ctx, pos, name, args[1:])
 		if r.opts[optPosix] {
@@ -10089,6 +10092,7 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 	// autocd: if command not found but is a directory, cd to it.
 	if opt, _ := r.bashOptByName("autocd"); opt != nil && *opt {
 		if info, err := r.stat(ctx, name); err == nil && info.IsDir() {
+			releaseBgPid(ctx)
 			r.exit = r.builtin(ctx, pos, "cd", []string{name})
 			return
 		}
@@ -10101,6 +10105,7 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 	if body := r.Funcs["command_not_found_handle"]; body != nil &&
 		!strings.ContainsRune(name, '/') {
 		if _, err := LookPathDir(r.Dir, r.writeEnv, name); err != nil {
+			releaseBgPid(ctx)
 			r.call(ctx, pos, append([]string{"command_not_found_handle"}, args...))
 			return
 		}
