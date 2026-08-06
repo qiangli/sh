@@ -1,12 +1,12 @@
 package interp_test
 
 import (
+	"context"
+	"mvdan.cc/sh/v3/interp"
+	"mvdan.cc/sh/v3/syntax"
 	"strings"
 	"testing"
 	"time"
-	"context"
-	"mvdan.cc/sh/v3/syntax"
-	"mvdan.cc/sh/v3/interp"
 )
 
 // TestBgPidTimeouts exercises constructs that previously caused a 250ms timeout
@@ -26,7 +26,7 @@ func TestBgPidTimeouts(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			start := time.Now()
-			
+
 			p, err := syntax.NewParser().Parse(strings.NewReader(tc.script), "")
 			if err != nil {
 				t.Fatal(err)
@@ -38,9 +38,9 @@ func TestBgPidTimeouts(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			
+
 			elapsed := time.Since(start)
-			// A timeout would cause elapsed > 250ms. 
+			// A timeout would cause elapsed > 250ms.
 			// We check against 200ms to be safe.
 			if elapsed > 200*time.Millisecond {
 				t.Fatalf("took %v, expected <200ms (likely hit pidReady timeout)", elapsed)
