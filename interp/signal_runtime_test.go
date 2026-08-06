@@ -59,52 +59,49 @@ func TestIsRuntimeSignalClassification(t *testing.T) {
 	}
 }
 
-// TestRuntimeSignalTrapNoOSEffect verifies that enableSignalTrap,
-// ignoreSignalTrap, and disableSignalTrap are no-ops for runtime-owned
-// synchronous fault signals — they must never install, ignore, or reset an OS
-// disposition for signals the Go runtime owns.
-func TestRuntimeSignalTrapNoOSEffect(t *testing.T) {
-	t.Parallel()
-
+// TestSynchronousFaultSignalTrappable verifies that the POSIX synchronous
+// fault signals (BUS, FPE, ILL, SEGV, TRAP) are first-class trappable signals:
+// enableSignalTrap installs a real signal.Notify handler, ignoreSignalTrap sets
+// SIG_IGN, and disableSignalTrap tears a prior trap down. A pure-Go shell must
+// catch a kill(2)-delivered instance via the handler (Go's runtime still
+// recovers genuine CPU faults on its own), so that `trap '...' BUS; kill -BUS
+// $$` runs the trap instead of faulting the interpreter (VSC-PCTS TP712/713/714).
+// Reverts the e42746db guard that made these operations no-ops.
+func TestSynchronousFaultSignalTrappable(t *testing.T) {
+	// These calls install real OS dispositions for the test process, so do
+	// not run them concurrently with other signal tests.
 	runtimeNames := []string{"BUS", "FPE", "ILL", "SEGV", "TRAP"}
 
 	for _, name := range runtimeNames {
-		// Use a fresh runner for each signal so the maps start empty.
+		// enableSignalTrap installs a signal.Notify handler.
 		r := &Runner{}
-		// An embedded runner has no sigReset, so it never toggles OS defaults.
-
-		// enableSignalTrap must NOT install an OS handler.
 		r.enableSignalTrap(name)
 		r.sigMu.Lock()
 		_, hasNotify := r.sigNotify[name]
-		_, hasIgnore := r.sigIgnored[name]
 		r.sigMu.Unlock()
-		if hasNotify {
-			t.Errorf("enableSignalTrap(%q) installed a signal.Notify handler on a runtime-owned signal", name)
-		}
-		if hasIgnore {
-			t.Errorf("enableSignalTrap(%q) cleared a prior ignore on a runtime-owned signal", name)
+		if !hasNotify {
+			t.Errorf("enableSignalTrap(%q) did not install a signal.Notify handler", name)
 		}
 
-		// ignoreSignalTrap must NOT set SIG_IGN.
+		// ignoreSignalTrap sets SIG_IGN.
 		r = &Runner{}
 		r.ignoreSignalTrap(name)
 		r.sigMu.Lock()
-		_, hasIgnore = r.sigIgnored[name]
+		_, hasIgnore := r.sigIgnored[name]
 		r.sigMu.Unlock()
-		if hasIgnore {
-			t.Errorf("ignoreSignalTrap(%q) set SIG_IGN on a runtime-owned signal", name)
+		if !hasIgnore {
+			t.Errorf("ignoreSignalTrap(%q) did not set SIG_IGN", name)
 		}
 
-		// disableSignalTrap must NOT reset the OS disposition.
+		// disableSignalTrap tears down a prior trap.
 		r = &Runner{}
 		r.sigNotify = map[string]os.Signal{name: syscall.SIGSEGV} // simulate prior trap
 		r.disableSignalTrap(name)
 		r.sigMu.Lock()
 		_, stillHasNotify := r.sigNotify[name]
 		r.sigMu.Unlock()
-		if !stillHasNotify {
-			t.Errorf("disableSignalTrap(%q) removed the entry but must leave it untouched", name)
+		if stillHasNotify {
+			t.Errorf("disableSignalTrap(%q) did not remove the handler", name)
 		}
 	}
 }

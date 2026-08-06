@@ -372,16 +372,6 @@ func (r *Runner) enableSignalTrap(name string) {
 	if name == "URG" {
 		return
 	}
-	// Synchronous fault signals (BUS, FPE, ILL, SEGV, TRAP) are owned by the
-	// Go runtime for panic / stack-overflow / fault recovery. A signal.Notify
-	// handler cannot distinguish a kill(2)-delivered signal from a real fault
-	// (on Linux both take the same sigaction path), so installing one would
-	// steal fault deliveries from the runtime and turn a recoverable nil-pointer
-	// dereference into process death. Record the trap (so `trap -p` shows it)
-	// but install no OS handler.
-	if isRuntimeSignal(name) {
-		return
-	}
 	sig, ok := signalByName(name)
 	if !ok {
 		return
@@ -416,11 +406,6 @@ func (r *Runner) ignoreSignalTrap(name string) {
 	if name == "CHLD" {
 		return
 	}
-	// Runtime-owned synchronous fault signals must not have their OS
-	// disposition changed. See isRuntimeSignal and enableSignalTrap.
-	if isRuntimeSignal(name) {
-		return
-	}
 	sig, ok := signalByName(name)
 	if !ok {
 		return
@@ -438,11 +423,6 @@ func (r *Runner) ignoreSignalTrap(name string) {
 // disableSignalTrap stops OS delivery for the named signal, restoring its
 // default disposition. Called by the `trap` builtin when a trap is reset.
 func (r *Runner) disableSignalTrap(name string) {
-	// Runtime-owned synchronous fault signals must not have their OS
-	// disposition changed. See isRuntimeSignal and enableSignalTrap.
-	if isRuntimeSignal(name) {
-		return
-	}
 	sig, ok := signalByName(name)
 	if !ok {
 		return

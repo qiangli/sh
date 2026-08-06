@@ -173,12 +173,22 @@ func (r *Runner) attachCarrier(ctx context.Context, job *Runner, bg *bgProc) err
 	}
 	bg.carrier = cp
 	bg.carrierDone = make(chan struct{})
-	// The carrier PID is the job's identity for its whole life. Later exec
-	// PIDs are retained for cancellation and wait lookup, but must not replace
-	// `$!`: doing so bypasses the carrier's signal relay and loses the shell
-	// job's stop/termination status.
-	bg.publishPidToBang = false
+	// The carrier PID seeds the job identity so `$!` is available without
+	// blocking on pidReady even for a job that never execs (a brace group or
+	// builtin-only list). For a simple-call or pipeline background job the
+	// caller leaves publishPidToBang true, so publishBgPid overrides bg.pid
+	// with the real exec'd command PID once it starts — POSIX requires `$!`
+	// to be that command's PID (VSC-PCTS TP306/307/461/462). Compound
+	// commands keep the carrier PID as their identity (analogous to bash's
+	// forked subshell). `wait $!`/`kill $!` resolve either PID via
+	// bgProc.matchesPid, which scans bg.pids.
 	bg.pid.Store(int64(pid))
+	// The carrier PID is also an entry in bg.pids so that wait/kill can
+	// resolve the job by the carrier PID even after publishBgPid overwrites
+	// bg.pid with the exec'd command's PID.
+	bg.pidsMu.Lock()
+	bg.pids = append(bg.pids, int64(pid))
+	bg.pidsMu.Unlock()
 	close(bg.pidReady)
 	if bg.pidCallback != nil {
 		bg.pidCallback(pid)
