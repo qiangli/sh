@@ -154,6 +154,54 @@ func TestParamRemovePatternInvalidByte(t *testing.T) {
 	}
 }
 
+// TestParamRemovePatternLocaleClass checks that ${var#[[:upper:]]}-style
+// POSIX-class prefix/suffix removal honors a declared non-C locale (both
+// UTF-8 and single-byte ISO-8859-1 text), while still leaving the C/POSIX
+// and unset defaults ASCII-only. This is a pure Go string comparison against
+// hardcoded locale tables, not a call into the host's C library, so no
+// locale-availability skip is needed.
+func TestParamRemovePatternLocaleClass(t *testing.T) {
+	tests := []struct {
+		name string
+		env  string
+		src  string
+		want string
+	}{
+		{"utf8 upper prefix stripped", "LC_ALL=de_DE.UTF-8", `${x#[[:upper:]]}`, "test"},
+		{"c locale upper prefix kept", "LC_ALL=C", `${x#[[:upper:]]}`, "Étest"},
+		{"unset locale upper prefix kept", "", `${x#[[:upper:]]}`, "Étest"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			env := []string{`x=Étest`}
+			if tc.env != "" {
+				env = append(env, tc.env)
+			}
+			cfg := &Config{Env: ListEnviron(env...)}
+			word := parseWord(t, tc.src)
+			got, err := Literal(cfg, word)
+			if err != nil {
+				t.Fatalf("did not want error, got %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("wanted %q, got %q", tc.want, got)
+			}
+		})
+	}
+
+	// ISO-8859-1 stores É as the single raw byte 0xC9, not valid UTF-8 on
+	// its own; the locale-aware matcher must still recognize it as upper.
+	cfg := &Config{Env: ListEnviron("x=\xc9test", "LC_ALL=de_DE.ISO-8859-1")}
+	word := parseWord(t, `${x#[[:upper:]]}`)
+	got, err := Literal(cfg, word)
+	if err != nil {
+		t.Fatalf("did not want error, got %v", err)
+	}
+	if want := "test"; got != want {
+		t.Fatalf("wanted %q, got %q", want, got)
+	}
+}
+
 func TestDocumentParamExpDefaultQuoteRemoval(t *testing.T) {
 	cfg := &Config{Env: ListEnviron("P=A")}
 	word := parseWord(t, `${P+\"$P\"}`)

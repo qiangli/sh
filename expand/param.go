@@ -339,6 +339,35 @@ func (cfg *Config) cLocale() bool {
 	return locale == "C" || locale == "POSIX"
 }
 
+// localeCategory resolves the named LC_* category following bash's
+// LC_ALL > category > LANG precedence (mirrors interp.Runner.localeCategory).
+func (cfg *Config) localeCategory(category string) string {
+	if cfg == nil || cfg.Env == nil {
+		return ""
+	}
+	if v := cfg.envGet("LC_ALL"); v != "" {
+		return v
+	}
+	if v := cfg.envGet(category); v != "" {
+		return v
+	}
+	return cfg.envGet("LANG")
+}
+
+// localePatternMode reports whether LC_COLLATE or LC_CTYPE names a locale
+// other than C/POSIX (or unset), in which case pattern matching should
+// honor non-C character classes and equivalence classes ([pattern.Locale]).
+func (cfg *Config) localePatternMode() bool {
+	nonC := func(locale string) bool {
+		switch strings.ToLower(locale) {
+		case "", "c", "posix":
+			return false
+		}
+		return true
+	}
+	return nonC(cfg.localeCategory("LC_COLLATE")) || nonC(cfg.localeCategory("LC_CTYPE"))
+}
+
 func (cfg *Config) paramStringLen(s string) int {
 	if cfg.cLocale() {
 		return len(s)
@@ -2601,6 +2630,20 @@ func (cfg *Config) removePattern(str, pat string, fromEnd, shortest bool) string
 	if cfg.ExtGlob {
 		mode |= pattern.ExtendedOperators
 	}
+	localeMode := cfg.localePatternMode()
+	if localeMode {
+		mode |= pattern.Locale
+	}
+	// In a declared non-C, single-byte locale (e.g. de_DE.ISO-8859-1),
+	// every byte is one character whose codepoint equals its byte
+	// value: widen an invalid-UTF-8 pattern into runes so it flows
+	// through the regexp-based matcher (bracket expressions, POSIX
+	// classes, ranges) below rather than falling back to the
+	// byte-blind matcher, which cannot see "[...]" at all.
+	widen := localeMode && internal.SingleByteLocale(cfg.localeCategory("LC_CTYPE"))
+	if widen {
+		pat = internal.WidenLatin1(pat)
+	}
 	match := func(s string) bool {
 		return false
 	}
@@ -2619,6 +2662,13 @@ func (cfg *Config) removePattern(str, pat string, fromEnd, shortest bool) string
 			return str
 		}
 		match = func(s string) bool {
+			if widen {
+				// Widen the candidate substring too, so raw
+				// single-byte text compares against the widened
+				// pattern as real characters instead of RuneError
+				// stand-ins.
+				s = internal.WidenLatin1(s)
+			}
 			return matcher(s)
 		}
 	}

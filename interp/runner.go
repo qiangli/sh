@@ -8388,12 +8388,28 @@ func assocAssignKeyQuoted(parts []syntax.WordPart) bool {
 }
 
 func (r *Runner) match(pat, name string) bool {
-	if !utf8.ValidString(pat) {
-		return internal.BytePatternMatch([]byte(pat), []byte(name))
-	}
 	mode := pattern.EntireString | pattern.ExtendedOperators | pattern.LenientRanges
-	if r.localePatternMode() {
+	localeMode := r.localePatternMode()
+	if localeMode {
 		mode |= pattern.Locale
+	}
+	// In a declared non-C, single-byte locale (MB_CUR_MAX==1, e.g.
+	// de_DE.ISO-8859-1 — as opposed to a UTF-8 or legacy multi-byte
+	// charset like Big5/Shift-JIS) every byte is one character whose
+	// codepoint equals its byte value, so a byte that fails UTF-8
+	// decoding is ordinary Latin-1 text, not corrupt binary data.
+	// Widening it into a rune lets bracket expressions, POSIX classes,
+	// and equivalence classes see it as a real character instead of
+	// falling back to a matcher that can't see "[...]" at all. Outside
+	// such a locale (including the default, unset one, and a UTF-8
+	// charset such as "C.UTF-8"), keep the byte-blind fallback so
+	// unrelated cases like matching a stray UTF-8 continuation byte
+	// against multi-byte text keep working at the byte level.
+	if localeMode && internal.SingleByteLocale(r.localeCategory("LC_CTYPE")) {
+		pat = internal.WidenLatin1(pat)
+		name = internal.WidenLatin1(name)
+	} else if !utf8.ValidString(pat) {
+		return internal.BytePatternMatch([]byte(pat), []byte(name))
 	}
 	matcher, err := internal.ExtendedPatternMatcher(pat, mode)
 	_ = err // TODO: report these errors
