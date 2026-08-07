@@ -6,7 +6,6 @@
 package interp
 
 import (
-	"bytes"
 	"context"
 	"os"
 	"os/signal"
@@ -28,7 +27,7 @@ func TestTP714TrapAfterIgnoreCatchesSignal(t *testing.T) {
 		signal.Reset(syscall.SIGUSR1)
 	}()
 
-	var buf bytes.Buffer
+	var buf lockedBuffer
 	r, err := New(StdIO(strings.NewReader(""), &buf, &buf))
 	if err != nil {
 		t.Fatal(err)
@@ -79,7 +78,7 @@ func TestTP714TrapFiresDuringBlockedRead(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var buf bytes.Buffer
+	var buf lockedBuffer
 	r, err := New(StdIO(pr, &buf, &buf))
 	if err != nil {
 		t.Fatal(err)
@@ -190,7 +189,7 @@ func TestTP714IgnoreToTrapReadInterrupt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var buf bytes.Buffer
+	var buf lockedBuffer
 	r, err := New(StdIO(pr, &buf, &buf))
 	if err != nil {
 		t.Fatal(err)
