@@ -104,7 +104,11 @@ func WithSignalResetter(s SignalResetter) RunnerOption {
 					if osSignalIgnored(signalForOS(sig)) {
 						continue
 					}
-					restoreExecSignal(signalForOS(sig))
+					// Keep os/signal's bookkeeping synchronized with the
+					// standalone default reset. A raw sigaction here leaves the
+					// runtime believing its handler is installed, so a later
+					// signal.Notify can leave SIG_DFL active (TP714).
+					signal.Reset(signalForOS(sig))
 				}
 			}
 		}
@@ -415,6 +419,9 @@ func (r *Runner) enableSignalTrap(name string) {
 			delete(r.sigIgnoredPreReset, name)
 		}
 		r.sigNotify[name] = osSig
+		// Synchronize the Go runtime before installing a new trap. This is
+		// needed after both the standalone startup reset and trap '' SIG.
+		signal.Reset(osSig)
 		signal.Notify(r.sigCh, osSig)
 	}
 }
