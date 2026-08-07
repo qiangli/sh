@@ -1757,6 +1757,46 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					}
 				}
 			}
+			// A numeric PID that belongs to a background job (carrier
+			// identity or an exec'd child) must update the job's state
+			// machine just like %N and gN targets do. This closes a
+			// wait-status lifecycle race for VSC-PCTS TP429: without it
+			// the runner can neither set killedSignal nor cancel the
+			// job's context when the OS signal arrives at a child PID,
+			// relying solely on the carrier watcher or exec-handler
+			// reaping to infer the signal. The resolveJobArg table
+			// already matches numeric PIDs to bgProcs via matchesPid.
+			if bg := r.resolveJobArg(target); bg != nil {
+				if bg.pidReady != nil {
+					select {
+					case <-bg.pidReady:
+					default:
+					}
+				}
+				rp := jobSignalPid(bg)
+				if rp == 0 {
+					r.killSyntheticBg(bg, sig)
+					continue
+				}
+				if err := sendSignal(rp, sig); err != nil {
+					exit.code = 1
+					r.errf(r.bashErrPrefix(pos)+"kill: (%d) - %v\n", int(bg.pid.Load()), err)
+					continue
+				}
+				if signalStopsJob(sig) {
+					bg.ignoreNextContinue.Store(1)
+					if name, ok := signalName(sig); ok {
+						bg.setStopSignal("SIG" + name)
+					}
+					bg.setState(jobStopped)
+				} else if signalContinuesJob(sig) {
+					bg.ignoreNextContinue.Store(0)
+					bg.ignoreNextStop.Store(1)
+					bg.setState(jobRunning)
+					r.preferredJobID = bg.jobID
+				}
+				continue
+			}
 			if err := sendSignal(pid, sig); err != nil {
 				exit.code = 1
 				r.errf(r.bashErrPrefix(pos)+"kill: (%d) - %v\n", pid, err)

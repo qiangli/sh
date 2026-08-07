@@ -2,11 +2,6 @@ package interp_test
 
 import (
 	"context"
-	"errors"
-	"fmt"
-	"io"
-	"os"
-	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -15,67 +10,76 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 )
 
-// testCarrier2 re-execs for carrier mode like testCarrier in carrier_test.go
-type testCarrier2 struct{}
-
-type testCarrierProc2 struct {
-	cmd   *exec.Cmd
-	stdin io.Closer
-}
-
-func (c testCarrier2) StartCarrier(ctx context.Context) (interp.CarrierProcess, error) {
-	cmd := exec.Command(os.Getenv("GOSH_PROG"))
-	cmd.Env = append(os.Environ(), "GOSH_CMD=carrier")
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return nil, err
-	}
-	if err := cmd.Start(); err != nil {
-		return nil, err
-	}
-	return &testCarrierProc2{cmd: cmd, stdin: stdin}, nil
-}
-
-func (p *testCarrierProc2) Pid() int { return p.cmd.Process.Pid }
-func (p *testCarrierProc2) Wait() int {
-	_ = p.cmd.Wait()
-	return carrierExitSignal(p.cmd.ProcessState)
-}
-func (p *testCarrierProc2) Terminate() {
-	p.stdin.Close()
-	_ = p.cmd.Process.Kill()
-}
-
 func TestTP429CarrierWaitAfterSignal(t *testing.T) {
-	c := testCarrier2{}
-	src := `set +m
+	tests := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			// Simple-call background: $! resolves to the exec'd child
+			// PID after publishBgPid closes pidReady.
+			name: "simple-kill-term",
+			src: `set +m
 sleep 10 &
 pid=$!
 kill -TERM $pid
 wait $pid
-echo "rc=$?"`
-	file, err := syntax.NewParser().Parse(strings.NewReader(src), "")
-	if err != nil {
-		t.Fatal(err)
+echo "rc=$?"`,
+			want: "rc=143",
+		},
+		{
+			// Compound command: publishPidToBang is false, so $! is
+			// the carrier PID — deterministic identity regardless of
+			// timing. This exercises the carrier-watcher relay path
+			// where the kill builtin targets a numeric PID that lives
+			// inside bgProc.pids (the carrier PID).
+			name: "compound-kill-term",
+			src: `set +m
+{ sleep 10; } &
+pid=$!
+kill -TERM $pid
+wait $pid
+echo "rc=$?"`,
+			want: "rc=143",
+		},
+		{
+			// SIGKILL is uncatchable; the exit status must be
+			// 128+9=137 regardless of signal disposition.
+			name: "compound-kill-kill",
+			src: `set +m
+{ sleep 10; } &
+pid=$!
+kill -KILL $pid
+wait $pid
+echo "rc=$?"`,
+			want: "rc=137",
+		},
 	}
-	var buf concBuffer
-	r, err := interp.New(
-		interp.WithJobCarrier(c),
-		interp.StdIO(nil, &buf, &buf),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	runErr := r.Run(ctx, file)
-	out := buf.String()
-	t.Logf("output: %q, runErr: %v", out, runErr)
 
-	// We expect rc=143 (128+15=SIGTERM)
-	if !strings.Contains(out, "rc=143") {
-		t.Errorf("expected rc=143 in output, got: %q", out)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := new(testCarrier)
+			file, err := syntax.NewParser().Parse(strings.NewReader(tt.src), "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var buf concBuffer
+			r, err := interp.New(
+				interp.WithJobCarrier(c),
+				interp.StdIO(nil, &buf, &buf),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			runErr := r.Run(ctx, file)
+			out := strings.TrimSpace(buf.String())
+			t.Logf("output: %q, runErr: %v", out, runErr)
+			if out != tt.want {
+				t.Errorf("expected %q, got %q", tt.want, out)
+			}
+		})
 	}
-	_ = errors.New
-	_ = fmt.Sprintf
 }
