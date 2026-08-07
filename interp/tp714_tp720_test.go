@@ -138,7 +138,7 @@ func TestTP714TrapFiresDuringBlockedRead(t *testing.T) {
 func TestTP720StandaloneResetSkipsInheritedIgnore(t *testing.T) {
 	setOSIgnore(syscall.SIGUSR1)
 	defer func() {
-		signal.Reset(syscall.SIGUSR1)
+		restoreExecSignal(syscall.SIGUSR1)
 	}()
 
 	if !osSignalIgnored(syscall.SIGUSR1) {
@@ -149,8 +149,95 @@ func TestTP720StandaloneResetSkipsInheritedIgnore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// WithSignalResetter installed SIG_DFL for PIPE via raw sigaction,
+	// bypassing Go's internal tracking. Re-enable Go's runtime handler
+	// by forcing the handling flag off (Ignore) then on (Notify).
+	{
+		ch := make(chan os.Signal, 1)
+		signal.Ignore(syscall.SIGPIPE)
+		signal.Notify(ch, syscall.SIGPIPE)
+		signal.Reset(syscall.SIGPIPE)
+	}
 
 	if !osSignalIgnored(syscall.SIGUSR1) {
 		t.Fatal("WithSignalResetter cleared an inherited SIG_IGN disposition")
+	}
+}
+
+// TestTP714IgnoreToTrapReadInterrupt verifies that after ignoring a signal
+// and then trapping it, a blocking read is interrupted by the signal, the
+// trap fires, and the read resumes. This covers the VSC boundary scenario
+// where stdout must not close before the trap handler executes.
+func TestTP714IgnoreToTrapReadInterrupt(t *testing.T) {
+	defer func() {
+		restoreExecSignal(syscall.SIGUSR1)
+	}()
+
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pr.Close()
+	defer pw.Close()
+
+	src := "trap '' USR1\n" +
+		"trap 'echo caught' USR1\n" +
+		"echo ready\n" +
+		"read x\n" +
+		"echo got:$x\n"
+	file, err := syntax.NewParser().Parse(strings.NewReader(src), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	r, err := New(StdIO(pr, &buf, &buf))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	errc := make(chan error, 1)
+	go func() { errc <- r.Run(context.Background(), file) }()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if strings.Contains(buf.String(), "ready\n") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !strings.Contains(buf.String(), "ready\n") {
+		t.Fatalf("shell did not reach read; output: %q", buf.String())
+	}
+
+	if err := syscall.Kill(os.Getpid(), syscall.SIGUSR1); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline = time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if strings.Contains(buf.String(), "caught\n") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	if _, err := pw.WriteString("data\n"); err != nil {
+		t.Fatal(err)
+	}
+	pw.Close()
+
+	select {
+	case <-errc:
+	case <-time.After(5 * time.Second):
+		t.Fatal("run timed out")
+	}
+
+	result := buf.String()
+	if !strings.Contains(result, "caught") {
+		t.Errorf("trap did not fire after ignore->trap + external signal\noutput: %q", result)
+	}
+	if !strings.Contains(result, "got:data") {
+		t.Errorf("read did not resume after trap\noutput: %q", result)
 	}
 }

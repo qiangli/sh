@@ -390,7 +390,7 @@ func (r *Runner) enableSignalTrap(name string) {
 	defer r.sigMu.Unlock()
 	if r.sigIgnored[name] {
 		// TP714: record that this signal was ignored so the Notify block
-		// below knows to signal.Reset before signal.Notify.
+		// below knows to restoreExecSignal before signal.Notify.
 		if r.sigIgnoredPreReset == nil {
 			r.sigIgnoredPreReset = make(map[string]bool)
 		}
@@ -406,6 +406,14 @@ func (r *Runner) enableSignalTrap(name string) {
 	}
 	if _, exists := r.sigNotify[name]; !exists {
 		osSig := signalForOS(sig)
+		if r.sigIgnoredPreReset[name] {
+			// TP714: signal.Ignore clears Go's internal handling bit,
+			// after which signal.Notify cannot re-enable delivery on
+			// some platforms. Call restoreExecSignal to reinstall
+			// SIG_DFL via raw sigaction before Notify.
+			restoreExecSignal(osSig)
+			delete(r.sigIgnoredPreReset, name)
+		}
 		r.sigNotify[name] = osSig
 		signal.Notify(r.sigCh, osSig)
 	}

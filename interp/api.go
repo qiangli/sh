@@ -686,7 +686,7 @@ type Runner struct {
 	pendingSig         map[string]int       // signal name -> pending count, guarded by sigMu
 	sigNotify          map[string]os.Signal // signal name -> os.Signal under signal.Notify
 	sigIgnored         map[string]bool      // signal name -> set to real SIG_IGN via `trap '' SIG`
-	sigIgnoredPreReset map[string]bool      // TP714: signal was ignored before enableSignalTrap; needs Reset before Notify
+	sigIgnoredPreReset map[string]bool      // TP714: signal was ignored before enableSignalTrap; needs restoreExecSignal before Notify
 	sigWake            chan struct{}        // wakes a blocked wait when a signal arrives
 	hasPendingSig      atomic.Bool          // fast-path: any pending signal?
 
