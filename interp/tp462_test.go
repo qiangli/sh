@@ -1,0 +1,203 @@
+// Copyright (c) 2026, the outset authors
+// See LICENSE for licensing information
+
+//go:build unix
+
+package interp_test
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"os/exec"
+	"strings"
+	"testing"
+	"time"
+
+	"mvdan.cc/sh/v3/interp"
+	"mvdan.cc/sh/v3/syntax"
+)
+
+// testCarrier462 is a minimal carrier for testing.
+type testCarrier462 struct{}
+
+type testCarrierProc462 struct {
+	cmd   *exec.Cmd
+	stdin *os.File
+}
+
+func (c testCarrier462) StartCarrier(ctx context.Context) (interp.CarrierProcess, error) {
+	cmd := exec.Command("sleep", "30")
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	return &testCarrierProc462{cmd: cmd}, nil
+}
+
+func (p *testCarrierProc462) Pid() int { return p.cmd.Process.Pid }
+func (p *testCarrierProc462) Wait() int {
+	err := p.cmd.Wait()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			if exitErr.ProcessState != nil {
+				if ws, ok := exitErr.ProcessState.Sys().(interface{ Signal() int }); ok {
+					return ws.Signal()
+				}
+			}
+		}
+	}
+	return 0
+}
+func (p *testCarrierProc462) Terminate() {
+	_ = p.cmd.Process.Kill()
+}
+
+// TestTP462DollarBangMultipleJobs verifies that $! correctly tracks the PID
+// of each background job when multiple asynchronous jobs are started.
+func TestTP462DollarBangMultipleJobs(t *testing.T) {
+	src := `sleep 30 &
+pid1=$!
+sleep 30 &
+pid2=$!
+echo "pid1=$pid1 pid2=$pid2"
+[ "$pid1" != "$pid2" ] && echo "distinct"
+[ -n "$pid1" ] && [ -n "$pid2" ] && echo "nonempty"`
+	file, err := syntax.NewParser().Parse(strings.NewReader(src), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf concBuffer
+	r, err := interp.New(
+		interp.WithJobCarrier(testCarrier462{}),
+		interp.StdIO(nil, &buf, &buf),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := r.Run(ctx, file); err != nil {
+		t.Logf("run error: %v", err)
+	}
+	out := buf.String()
+	fmt.Printf("TP462 output: %q\n", out)
+	if !strings.Contains(out, "distinct") {
+		t.Errorf("pid1 and pid2 are the same\noutput: %q", out)
+	}
+	if !strings.Contains(out, "nonempty") {
+		t.Errorf("pid1 or pid2 is empty\noutput: %q", out)
+	}
+}
+
+// TestTP462DollarBangWaitMultipleJobs verifies that wait works correctly
+// for multiple background jobs with distinct PIDs.
+func TestTP462DollarBangWaitMultipleJobs(t *testing.T) {
+	src := `true &
+pid1=$!
+true &
+pid2=$!
+wait $pid1
+echo "rc1=$?"
+wait $pid2
+echo "rc2=$?"`
+	file, err := syntax.NewParser().Parse(strings.NewReader(src), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf concBuffer
+	r, err := interp.New(
+		interp.StdIO(nil, &buf, &buf),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := r.Run(ctx, file); err != nil {
+		t.Logf("run error: %v", err)
+	}
+	out := buf.String()
+	fmt.Printf("TP462 wait output: %q\n", out)
+	if !strings.Contains(out, "rc1=0") {
+		t.Errorf("wait $pid1 failed\noutput: %q", out)
+	}
+	if !strings.Contains(out, "rc2=0") {
+		t.Errorf("wait $pid2 failed\noutput: %q", out)
+	}
+}
+
+// TestTP462DollarBangAsyncLists tests the POSIX "asynchronous list" form
+// where & applies to a compound command. $! should be available and correct.
+func TestTP462DollarBangAsyncLists(t *testing.T) {
+	src := `{ sleep 30; } &
+pid1=$!
+{ sleep 30; } &
+pid2=$!
+echo "pid1=$pid1 pid2=$pid2"
+if [ "$pid1" = "$pid2" ]; then
+  echo "SAME_PID"
+else
+  echo "DISTINCT_PIDS"
+fi`
+	file, err := syntax.NewParser().Parse(strings.NewReader(src), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf concBuffer
+	r, err := interp.New(
+		interp.WithJobCarrier(testCarrier462{}),
+		interp.StdIO(nil, &buf, &buf),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := r.Run(ctx, file); err != nil {
+		t.Logf("run error: %v", err)
+	}
+	out := buf.String()
+	fmt.Printf("TP462 async lists output: %q\n", out)
+	if strings.Contains(out, "SAME_PID") {
+		t.Errorf("compound command bg jobs got same PID\noutput: %q", out)
+	}
+	if !strings.Contains(out, "DISTINCT_PIDS") {
+		t.Errorf("compound command bg jobs did not get distinct PIDs\noutput: %q", out)
+	}
+}
+
+// TestTP462DollarBangPipeline tests $! after a backgrounded pipeline.
+func TestTP462DollarBangPipeline(t *testing.T) {
+	src := `sleep 30 | cat &
+pid1=$!
+sleep 30 | cat &
+pid2=$!
+echo "pid1=$pid1 pid2=$pid2"
+if [ "$pid1" = "$pid2" ]; then
+  echo "SAME_PID"
+else
+  echo "DISTINCT_PIDS"
+fi`
+	file, err := syntax.NewParser().Parse(strings.NewReader(src), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf concBuffer
+	r, err := interp.New(
+		interp.WithJobCarrier(testCarrier462{}),
+		interp.StdIO(nil, &buf, &buf),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := r.Run(ctx, file); err != nil {
+		t.Logf("run error: %v", err)
+	}
+	out := buf.String()
+	fmt.Printf("TP462 pipeline output: %q\n", out)
+	if strings.Contains(out, "SAME_PID") {
+		t.Errorf("pipeline bg jobs got same PID\noutput: %q", out)
+	}
+}

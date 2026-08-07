@@ -13,3 +13,15 @@ import (
 func restoreExecSignal(sig os.Signal) {
 	signal.Reset(sig)
 }
+
+// setOSIgnore installs SIG_IGN via os/signal on platforms without raw
+// sigaction access. signal.Notify may not re-enable delivery after this;
+// TP714 is best-effort on unsupported platforms (see linux/darwin builds).
+func setOSIgnore(sig os.Signal) {
+	signal.Ignore(sig)
+}
+
+// osSignalIgnored checks Go's signal state on unsupported platforms.
+func osSignalIgnored(sig os.Signal) bool {
+	return signal.Ignored(sig)
+}

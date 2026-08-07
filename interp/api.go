@@ -681,13 +681,14 @@ type Runner struct {
 	// (return/exit/break/continue) unwind normally. These are deliberately
 	// NOT inherited by subshells: a subshell that self-signals must send a
 	// real OS signal so the parent's Notify catches it.
-	sigMu         sync.Mutex
-	sigCh         chan os.Signal
-	pendingSig    map[string]int       // signal name -> pending count, guarded by sigMu
-	sigNotify     map[string]os.Signal // signal name -> os.Signal under signal.Notify
-	sigIgnored    map[string]bool      // signal name -> set to real SIG_IGN via `trap '' SIG`
-	sigWake       chan struct{}        // wakes a blocked wait when a signal arrives
-	hasPendingSig atomic.Bool          // fast-path: any pending signal?
+	sigMu              sync.Mutex
+	sigCh              chan os.Signal
+	pendingSig         map[string]int       // signal name -> pending count, guarded by sigMu
+	sigNotify          map[string]os.Signal // signal name -> os.Signal under signal.Notify
+	sigIgnored         map[string]bool      // signal name -> set to real SIG_IGN via `trap '' SIG`
+	sigIgnoredPreReset map[string]bool      // TP714: signal was ignored before enableSignalTrap; needs Reset before Notify
+	sigWake            chan struct{}        // wakes a blocked wait when a signal arrives
+	hasPendingSig      atomic.Bool          // fast-path: any pending signal?
 
 	// sigParent links a foreground subshell back to the runner it runs
 	// inline within (nil for the top-level shell and for background/async

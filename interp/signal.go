@@ -94,6 +94,16 @@ func WithSignalResetter(s SignalResetter) RunnerOption {
 				"TSTP", "TTIN", "TTOU", "XCPU", "XFSZ",
 			} {
 				if sig, found := signalByName(name); found {
+					// TP720: do not reset a signal that is currently SIG_IGN
+					// at the OS level. It was inherited from the parent
+					// process and POSIX requires it stay ignored. Checking
+					// the real OS disposition (not signal.Ignored, which
+					// only tracks signals set via os/signal.Ignore) is
+					// necessary because this reset loop runs before Reset()
+					// computes startupIgnored.
+					if osSignalIgnored(signalForOS(sig)) {
+						continue
+					}
 					restoreExecSignal(signalForOS(sig))
 				}
 			}
@@ -378,6 +388,14 @@ func (r *Runner) enableSignalTrap(name string) {
 	}
 	r.sigMu.Lock()
 	defer r.sigMu.Unlock()
+	if r.sigIgnored[name] {
+		// TP714: record that this signal was ignored so the Notify block
+		// below knows to signal.Reset before signal.Notify.
+		if r.sigIgnoredPreReset == nil {
+			r.sigIgnoredPreReset = make(map[string]bool)
+		}
+		r.sigIgnoredPreReset[name] = true
+	}
 	delete(r.sigIgnored, name)
 	if r.sigNotify == nil {
 		r.sigNotify = make(map[string]os.Signal)
