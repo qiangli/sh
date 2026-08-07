@@ -410,6 +410,13 @@ func (r *Runner) enableSignalTrap(name string) {
 	}
 	if _, exists := r.sigNotify[name]; !exists {
 		osSig := signalForOS(sig)
+		restoredDisposition := false
+		if disposition, ok := r.sigIgnoredRestore[name]; ok {
+			restoreSignalDisposition(osSig, disposition)
+			delete(r.sigIgnoredRestore, name)
+			delete(r.sigIgnoredPreReset, name)
+			restoredDisposition = true
+		}
 		if r.sigIgnoredPreReset[name] {
 			// TP714: signal.Ignore clears Go's internal handling bit,
 			// after which signal.Notify cannot re-enable delivery on
@@ -421,7 +428,9 @@ func (r *Runner) enableSignalTrap(name string) {
 		r.sigNotify[name] = osSig
 		// Synchronize the Go runtime before installing a new trap. This is
 		// needed after both the standalone startup reset and trap '' SIG.
-		signal.Reset(osSig)
+		if !restoredDisposition {
+			signal.Reset(osSig)
+		}
 		signal.Notify(r.sigCh, osSig)
 	}
 }
@@ -458,6 +467,12 @@ func (r *Runner) ignoreSignalTrap(name string) {
 		// `trap '' BUS; trap action BUS` (VSC TP714). A raw SIG_IGN gives
 		// exec'd children the required inherited disposition while retaining
 		// the runtime handler needed when the shell starts trapping again.
+		if disposition, ok := saveSignalDisposition(osSig); ok {
+			if r.sigIgnoredRestore == nil {
+				r.sigIgnoredRestore = make(map[string]signalDisposition)
+			}
+			r.sigIgnoredRestore[name] = disposition
+		}
 		setOSIgnore(osSig)
 		return
 	}

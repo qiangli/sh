@@ -12,6 +12,28 @@ import (
 	"unsafe"
 )
 
+type signalDisposition [128]byte
+
+func saveSignalDisposition(sig os.Signal) (signalDisposition, bool) {
+	var disposition signalDisposition
+	s, ok := sig.(syscall.Signal)
+	if !ok {
+		return disposition, false
+	}
+	_, _, errno := syscall.RawSyscall6(syscall.SYS_RT_SIGACTION,
+		uintptr(s), 0, uintptr(unsafe.Pointer(&disposition[0])), linuxSigsetSize, 0, 0)
+	return disposition, errno == 0
+}
+
+func restoreSignalDisposition(sig os.Signal, disposition signalDisposition) {
+	s, ok := sig.(syscall.Signal)
+	if !ok {
+		return
+	}
+	_, _, _ = syscall.RawSyscall6(syscall.SYS_RT_SIGACTION,
+		uintptr(s), uintptr(unsafe.Pointer(&disposition[0])), 0, linuxSigsetSize, 0, 0)
+}
+
 func restoreExecSignal(sig os.Signal) {
 	s, ok := sig.(syscall.Signal)
 	if !ok {

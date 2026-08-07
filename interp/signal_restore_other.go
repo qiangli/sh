@@ -10,6 +10,11 @@ import (
 	"os/signal"
 )
 
+type signalDisposition struct{}
+
+func saveSignalDisposition(os.Signal) (signalDisposition, bool) { return signalDisposition{}, false }
+func restoreSignalDisposition(os.Signal, signalDisposition)     {}
+
 func restoreExecSignal(sig os.Signal) {
 	signal.Reset(sig)
 }
