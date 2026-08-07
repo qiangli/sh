@@ -92,6 +92,9 @@ func TestSynchronousFaultSignalTrappable(t *testing.T) {
 		if !hasIgnore {
 			t.Errorf("ignoreSignalTrap(%q) did not set SIG_IGN", name)
 		}
+		if !osSignalIgnored(signalForOS(signalByNameMust(name))) {
+			t.Errorf("ignoreSignalTrap(%q) did not install OS SIG_IGN", name)
+		}
 
 		// disableSignalTrap tears down a prior trap.
 		r = &Runner{}
@@ -104,6 +107,14 @@ func TestSynchronousFaultSignalTrappable(t *testing.T) {
 			t.Errorf("disableSignalTrap(%q) did not remove the handler", name)
 		}
 	}
+}
+
+func signalByNameMust(name string) killSig {
+	sig, ok := signalByName(name)
+	if !ok {
+		panic("missing test signal: " + name)
+	}
+	return sig
 }
 
 // TestRuntimeSignalWithSignalResetterListBounds verifies that none of the

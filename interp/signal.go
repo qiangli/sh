@@ -443,7 +443,18 @@ func (r *Runner) ignoreSignalTrap(name string) {
 		r.sigIgnored = make(map[string]bool)
 	}
 	r.sigIgnored[name] = true
-	signal.Ignore(signalForOS(sig)) // also undoes any prior signal.Notify for sig
+	osSig := signalForOS(sig)
+	if isRuntimeSignal(name) {
+		// Do not call signal.Ignore for a Go runtime-owned fault signal.
+		// signal.Ignore clears the runtime's internal delivery bit; a later
+		// signal.Notify then cannot reliably restore delivery after
+		// `trap '' BUS; trap action BUS` (VSC TP714). A raw SIG_IGN gives
+		// exec'd children the required inherited disposition while retaining
+		// the runtime handler needed when the shell starts trapping again.
+		setOSIgnore(osSig)
+		return
+	}
+	signal.Ignore(osSig) // also undoes any prior signal.Notify for sig
 }
 
 // disableSignalTrap stops OS delivery for the named signal, restoring its
