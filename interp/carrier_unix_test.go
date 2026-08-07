@@ -63,10 +63,10 @@ echo "term=$?"
 	waitPidsGone(t, c.startedPids())
 }
 
-// TestJobCarrierExternalChildKeepsJobIdentity checks that an external command
-// does not displace the carrier PID from $!. Signals must enter through the
-// carrier so the job records the signal wait status and cancels the real child.
-func TestJobCarrierExternalChildKeepsJobIdentity(t *testing.T) {
+// TestJobCarrierExternalChildPublishesPID checks that a simple external
+// command displaces the carrier seed in $!. wait/kill still resolve the PID
+// through the job registry so signal status and child cleanup are preserved.
+func TestJobCarrierExternalChildPublishesPID(t *testing.T) {
 	t.Parallel()
 	c := new(testCarrier)
 	dir := t.TempDir()
@@ -87,10 +87,6 @@ echo "st=$?"
 	if err != nil {
 		t.Fatalf("invalid child PID in %q: %v", lines[0], err)
 	}
-	started := c.startedPids()
-	if len(started) != 1 || pid != started[0] {
-		t.Fatalf("$! = %d, want stable carrier PID from %v", pid, started)
-	}
 	childBytes, err := os.ReadFile(filepath.Join(dir, "child.pid"))
 	if err != nil {
 		t.Fatal(err)
@@ -99,8 +95,8 @@ echo "st=$?"
 	if err != nil {
 		t.Fatalf("invalid child pid %q: %v", childBytes, err)
 	}
-	if childPID == pid {
-		t.Fatalf("external child unexpectedly shares carrier PID %d", pid)
+	if childPID != pid {
+		t.Fatalf("$! = %d, want external child PID %d", pid, childPID)
 	}
 	if pidLive(childPID) {
 		t.Fatalf("external child PID %d survived carrier signal + wait", childPID)

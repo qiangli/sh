@@ -89,6 +89,37 @@ echo "pid1=$pid1 pid2=$pid2"
 	}
 }
 
+// TestTP462DollarBangMatchesExternalPID covers the timing-sensitive part of
+// TP462: expanding $! immediately after starting a simple external command
+// must return that command's PID, not the job carrier's PID.
+func TestTP462DollarBangMatchesExternalPID(t *testing.T) {
+	dir := t.TempDir()
+	pidFile := dir + "/pid"
+	src := fmt.Sprintf(`sh -c 'echo $$ > %q' &
+background_pid=$!
+wait "$background_pid"
+read reported_pid < %q
+printf 'background=%%s reported=%%s\n' "$background_pid" "$reported_pid"
+[ "$background_pid" = "$reported_pid" ]`, pidFile, pidFile)
+	file, err := syntax.NewParser().Parse(strings.NewReader(src), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf concBuffer
+	r, err := interp.New(
+		interp.WithJobCarrier(testCarrier462{}),
+		interp.StdIO(nil, &buf, &buf),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := r.Run(ctx, file); err != nil {
+		t.Fatalf("run: %v\noutput: %q", err, buf.String())
+	}
+}
+
 // TestTP462DollarBangWaitMultipleJobs verifies that wait works correctly
 // for multiple background jobs with distinct PIDs.
 func TestTP462DollarBangWaitMultipleJobs(t *testing.T) {
