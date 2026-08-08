@@ -156,11 +156,24 @@ func (r *Runner) restoreBridgedStartupIgnores() {
 		return
 	}
 	for name := range r.startupIgnored {
-		if isRuntimeSignal(name) {
-			continue
-		}
 		sig, ok := signalByName(name)
 		if !ok {
+			continue
+		}
+		if isRuntimeSignal(name) {
+			// A synchronous fault signal (BUS/FPE/ILL/SEGV/TRAP) that was
+			// SIG_IGN on entry: the Go runtime overrode the inherited
+			// SIG_IGN with its own fault handler before main, so a later
+			// kill(2) (SI_USER) delivery reaches that handler and aborts
+			// the process with a traceback instead of being ignored
+			// (VSC-PCTS TP720). POSIX requires an ignored-on-entry signal
+			// to stay ignored and untrappable. Reinstall a real SIG_IGN at
+			// the OS level so a kill-delivered fault is discarded by the
+			// kernel; a genuine hardware fault still terminates, matching
+			// bash. Use the raw SIG_IGN (not signal.Ignore) so the
+			// runtime's own bookkeeping is left untouched, exactly as
+			// ignoreSignalTrap does for these signals.
+			setOSIgnore(signalForOS(sig))
 			continue
 		}
 		if num, ok := signalNumber(sig); ok {

@@ -70,6 +70,7 @@ func TestIsRuntimeSignalClassification(t *testing.T) {
 func TestSynchronousFaultSignalTrappable(t *testing.T) {
 	// These calls install real OS dispositions for the test process, so do
 	// not run them concurrently with other signal tests.
+	guardRuntimeSignalDispositions(t)
 	runtimeNames := []string{"BUS", "FPE", "ILL", "SEGV", "TRAP"}
 
 	for _, name := range runtimeNames {
@@ -105,6 +106,45 @@ func TestSynchronousFaultSignalTrappable(t *testing.T) {
 		r.sigMu.Unlock()
 		if stillHasNotify {
 			t.Errorf("disableSignalTrap(%q) did not remove the handler", name)
+		}
+	}
+}
+
+// TestRestoreBridgedStartupIgnoresRuntimeSignals verifies that a synchronous
+// fault signal (BUS/FPE/ILL/SEGV/TRAP) marked SIG_IGN on entry is reinstalled
+// as a real OS-level SIG_IGN, so a later kill(2)/SI_USER delivery is discarded
+// by the kernel rather than reaching Go's runtime fault handler and aborting
+// the process with a traceback (VSC-PCTS TP720). It only sets and probes
+// dispositions; it never raises these signals.
+func TestRestoreBridgedStartupIgnoresRuntimeSignals(t *testing.T) {
+	// This sets real OS dispositions for the test process, so do not run it
+	// concurrently with other signal tests.
+	guardRuntimeSignalDispositions(t)
+	runtimeNames := []string{"BUS", "FPE", "ILL", "SEGV", "TRAP"}
+
+	for _, name := range runtimeNames {
+		r := &Runner{
+			sigReset:       OSSignalResetter{},
+			startupIgnored: map[string]bool{name: true},
+		}
+		r.restoreBridgedStartupIgnores()
+		if !osSignalIgnored(signalForOS(signalByNameMust(name))) {
+			t.Errorf("restoreBridgedStartupIgnores did not install OS SIG_IGN for %q", name)
+		}
+	}
+}
+
+// guardRuntimeSignalDispositions snapshots the OS dispositions of the five
+// synchronous fault signals and restores them when the test finishes. A test
+// that installs a real OS SIG_IGN for these signals must call this: otherwise
+// the leaked disposition is later sampled by a fresh Runner into
+// startupIgnored and corrupts unrelated tests (e.g. TestTrapPrint*). On
+// platforms without raw-sigaction save support the snapshot is a no-op.
+func guardRuntimeSignalDispositions(t *testing.T) {
+	for _, name := range []string{"BUS", "FPE", "ILL", "SEGV", "TRAP"} {
+		sig := signalForOS(signalByNameMust(name))
+		if disp, ok := saveSignalDisposition(sig); ok {
+			t.Cleanup(func() { restoreSignalDisposition(sig, disp) })
 		}
 	}
 }
