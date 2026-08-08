@@ -8719,18 +8719,17 @@ func (r *Runner) execExtraFiles() ([]*os.File, string, func()) {
 	}
 }
 
-func (r *Runner) closeUnmanagedInheritedFdsOnExec() {
-	for fd := range r.inheritedFds {
-		if fd < 3 {
-			continue
+// closeClosedInheritedFdsOnExec prevents an inherited descriptor explicitly
+// closed by the shell from reaching an external command. Registered inherited
+// descriptors which have not been referenced by a redirect still belong to the
+// shell and must remain open: in particular they can be sparse (for example,
+// only fd 8), which cannot be represented by exec.Cmd.ExtraFiles without
+// inventing the missing descriptors below it.
+func (r *Runner) closeClosedInheritedFdsOnExec() {
+	for fd := range r.fdClosedTable {
+		if fd >= 3 && r.inheritedFds[fd] {
+			closeOnExecFd(fd)
 		}
-		if _, ok := r.fdTable[fd]; ok {
-			continue
-		}
-		if _, ok := r.fdWriteTable[fd]; ok {
-			continue
-		}
-		closeOnExecFd(fd)
 	}
 }
 

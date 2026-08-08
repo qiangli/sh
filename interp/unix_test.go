@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/creack/pty"
+	"golang.org/x/sys/unix"
 	"mvdan.cc/sh/v3/interp"
 )
 
@@ -147,6 +148,85 @@ func TestRunnerTerminalExec(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+// TestRunnerTerminalExecInheritedSparseFD compares external terminal commands
+// under bash and gosh, then checks Bashy's sparse inherited-FD path. FD 8 has
+// no open shell-managed descriptors below it: this is the shape inherited from
+// a parent that has kept a terminal on a high descriptor.
+func TestRunnerTerminalExecInheritedSparseFD(t *testing.T) {
+	const script = "tty >/dev/null && /bin/echo terminal"
+
+	run := func(t *testing.T, cmd *exec.Cmd) string {
+		t.Helper()
+		primary, secondary, err := pty.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer primary.Close()
+		defer secondary.Close()
+		cmd.Stdin = secondary
+		cmd.Stdout = secondary
+		cmd.Stderr = secondary
+		// Install the already-open terminal at its real sparse descriptor,
+		// rather than using ExtraFiles (which would manufacture fds 3 through
+		// 7). This test is deliberately not parallel: the fd-table change
+		// lasts only through cmd.Start and is restored before reading output.
+		oldFD8, oldErr := unix.Dup(8)
+		if err := unix.Dup2(int(secondary.Fd()), 8); err != nil {
+			t.Fatal(err)
+		}
+		if err := cmd.Start(); err != nil {
+			if oldErr == nil {
+				_ = unix.Dup2(oldFD8, 8)
+				_ = unix.Close(oldFD8)
+			} else {
+				_ = unix.Close(8)
+			}
+			t.Fatal(err)
+		}
+		if oldErr == nil {
+			_ = unix.Dup2(oldFD8, 8)
+			_ = unix.Close(oldFD8)
+		} else {
+			_ = unix.Close(8)
+		}
+		got, err := bufio.NewReader(primary).ReadString('\n')
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := cmd.Wait(); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+
+	goshCmd := func(src string) *exec.Cmd {
+		gotCmd := exec.Command(os.Getenv("GOSH_PROG"), src)
+		gotCmd.Env = append(os.Environ(), interp.BashyInheritedFdsEnv+"=8")
+		return gotCmd
+	}
+	want := run(t, exec.Command("bash", "-c", script))
+	got := run(t, goshCmd(script))
+	if got != want {
+		t.Fatalf("external command output differs with inherited sparse FD 8:\nwant: %q\n got: %q", want, got)
+	}
+
+	// The first external command does not mention fd 8. It must not make
+	// that already-open terminal disappear before the later external command
+	// receives it. This is the sparse-fd path which ExtraFiles cannot encode.
+	got = run(t, goshCmd("tty >/dev/null && GOSH_CMD=fd8_is_terminal $GOSH_PROG"))
+	if got != "terminal\r\n" {
+		t.Fatalf("external command lost inherited terminal fd 8: got %q", got)
+	}
+
+	// An explicit shell close must override inheritance and remain effective
+	// across a preceding external command; otherwise the raw ambient fd would
+	// leak into children even though the shell considers it closed.
+	got = run(t, goshCmd("exec 8>&-; /bin/true; GOSH_CMD=fd8_is_terminal $GOSH_PROG"))
+	if got != "not-terminal\r\n" {
+		t.Fatalf("explicitly closed inherited fd 8 leaked to external command: got %q", got)
 	}
 }
 

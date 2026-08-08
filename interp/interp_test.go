@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/go-quicktest/qt"
+	"golang.org/x/term"
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/internal"
 	"mvdan.cc/sh/v3/interp"
@@ -155,6 +156,13 @@ func TestMain(m *testing.M) {
 			// stdin pipe ties our lifetime to the test binary's.
 			io.Copy(io.Discard, os.Stdin)
 			os.Exit(0)
+		case "fd8_is_terminal":
+			if term.IsTerminal(8) {
+				fmt.Println("terminal")
+			} else {
+				fmt.Println("not-terminal")
+			}
+			os.Exit(0)
 		case "sig_reset_default":
 			// Standalone-shell repro for VSC-PCTS TP712: ignore then reset
 			// SIGUSR2 with the OS-default reset seam opted in, announce
@@ -204,6 +212,14 @@ func TestMain(m *testing.M) {
 		runner, _ := interp.New(
 			interp.StdIO(os.Stdin, os.Stdout, os.Stderr),
 			interp.ExecHandlers(testExecHandler),
+			// TestRunnerTerminalExecInheritedSparseFD passes FD 8 through
+			// this re-exec boundary, as the standalone shell does.
+			interp.WithInheritedFds(func() []int {
+				if os.Getenv(interp.BashyInheritedFdsEnv) == "8" {
+					return []int{8}
+				}
+				return nil
+			}()),
 		)
 		ctx := context.Background()
 		if err := runner.Run(ctx, file); err != nil {

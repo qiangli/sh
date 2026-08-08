@@ -214,7 +214,7 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 		if inheritedFds != "" {
 			env = append(env, BashyInheritedFdsEnv+"="+inheritedFds)
 		}
-		hc.runner.closeUnmanagedInheritedFdsOnExec()
+		hc.runner.closeClosedInheritedFdsOnExec()
 		// If stdin is the in-memory script-source reader, back it with a
 		// seekable temp file: os/exec eagerly drains a non-File stdin, which
 		// would consume the next script line even for a command that never
