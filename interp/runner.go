@@ -4518,7 +4518,11 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 		r2.asyncList = true
 		r2.inheritedBang = r.lastBangProc()
 		r2.ignoreAsyncListSignals()
-		if r.opts[optPosix] {
+		// POSIX 2.11: an asynchronous list's stdin defaults to /dev/null
+		// whenever job control is not enabled (bash does this in default
+		// mode too, not only in POSIX mode). An explicit redirection on the
+		// command still overrides this default below.
+		if !r.monitorActive() {
 			f, err := os.Open(os.DevNull)
 			if err == nil {
 				r2.stdin = f
