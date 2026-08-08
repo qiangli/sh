@@ -5223,6 +5223,10 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	// exercising fg with a backgrounded job present.
 	{"(echo done >/dev/null) & fg", "fg: no job control\nexit status 1 #JUSTERR"},
 	{"(exit 7) & fg; echo after=$?", "fg: no job control\nafter=1\n"},
+	// POSIX 2.11: without job control, an asynchronous list reads from a
+	// /dev/null-like input unless the command supplies an explicit redirect.
+	// This is also Bash's default-mode behavior (VSC-PCTS TP460).
+	{"echo leaked >f; exec <f; cat & wait", ""},
 
 	// umask: per-Runner virtual mask. Reading is 4-digit octal; setting
 	// updates only the runner field, not the process.
