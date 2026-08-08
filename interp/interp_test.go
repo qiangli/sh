@@ -5227,6 +5227,8 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	// /dev/null-like input unless the command supplies an explicit redirect.
 	// This is also Bash's default-mode behavior (VSC-PCTS TP460).
 	{"echo leaked >f; exec <f; cat & wait", ""},
+	{"echo piped | (cat & wait)", "piped\n"},
+	{"for x in 1 2; do { read line; echo $line; } & wait; done <<'EOF'\na\nb\nEOF", "a\nb\n"},
 
 	// umask: per-Runner virtual mask. Reading is 4-digit octal; setting
 	// updates only the runner field, not the process.

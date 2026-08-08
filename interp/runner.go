@@ -4522,7 +4522,7 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 		// whenever job control is not enabled (bash does this in default
 		// mode too, not only in POSIX mode). An explicit redirection on the
 		// command still overrides this default below.
-		if !r.monitorActive() {
+		if !r.monitorActive() && !r.asyncStdinExplicit {
 			f, err := os.Open(os.DevNull)
 			if err == nil {
 				r2.stdin = f
@@ -4679,6 +4679,8 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 
 	oldIn, oldStdinTTYFallback, oldStdinDevTTY, oldOut, oldErr := r.stdin, r.stdinTTYFallback, r.stdinDevTTY, r.stdout, r.stderr
 	oldStdinRedirected := r.stdinRedirected
+	oldAsyncStdinExplicit := r.asyncStdinExplicit
+	defer func() { r.asyncStdinExplicit = oldAsyncStdinExplicit }()
 	oldStdinClosed := r.stdinClosed
 	// Snapshot fdTable only when this statement has redirects that
 	// might mutate it. A coproc statement registers fds in fdTable from
@@ -5969,7 +5971,10 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				lastpipe = true
 			}
 			oldStdin := r.stdin
+			oldStdinRedirected := r.stdinRedirected
 			r.stdin = prDup
+			r.stdinRedirected = true
+			r.asyncStdinExplicit = true
 			var wg sync.WaitGroup
 			wg.Go(func() {
 				xctx := context.WithValue(ctx, bgNonPrimaryPidCtxKey{}, true)
@@ -5996,6 +6001,8 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				// with no Each enumeration) still resolve variables.
 				r3 = r.subshell(false)
 				r3.stdin = prDup
+				r3.stdinRedirected = true
+				r3.asyncStdinExplicit = true
 				r3.stdout = r.stdout
 				r3.stderr = r.stderr
 				if subshell, ok := plainPipelineSubshell(cm.Y); ok {
@@ -6014,6 +6021,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			prDup.Close()
 			wg.Wait()
 			r.stdin = oldStdin
+			r.stdinRedirected = oldStdinRedirected
 			// Fold back any script-source input the first command consumed so
 			// the parent's Run loop skips those now-eaten lines.
 			r.stdinSourceOffset = max(r.stdinSourceOffset, r2.stdinSourceOffset)
@@ -8741,6 +8749,7 @@ func (r *Runner) setReadFd(targetFd int, f *os.File) error {
 		// reader so a heredoc/here-string/`<file` wins over the
 		// stdin-script-line-consumption feature (see stdinRedirected).
 		r.stdinRedirected = true
+		r.asyncStdinExplicit = true
 		if r.fdWriteTable != nil {
 			delete(r.fdWriteTable, 0)
 		}
@@ -8832,6 +8841,7 @@ func (r *Runner) bindReadWriteFd(targetFd int, f *os.File) error {
 		r.stdinTTYFallback = false
 		r.stdinDevTTY = false
 		r.stdinRedirected = true
+		r.asyncStdinExplicit = true
 		if r.fdWriteTable == nil {
 			r.fdWriteTable = make(map[int]io.Writer)
 		}
@@ -8994,6 +9004,7 @@ func (r *Runner) bindFdCaps(targetFd int, read *os.File, write io.Writer) {
 		r.stdinTTYFallback = false
 		r.stdinDevTTY = false
 		r.stdinRedirected = true
+		r.asyncStdinExplicit = true
 		if write != nil {
 			if r.fdWriteTable == nil {
 				r.fdWriteTable = make(map[int]io.Writer)
@@ -9195,6 +9206,7 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 		r.stdin = pr
 		r.stdinClosed = false
 		r.stdinRedirected = true // heredoc body wins over the stdin-source reader
+		r.asyncStdinExplicit = true
 		return pr, nil
 	}
 
@@ -9679,6 +9691,7 @@ func (r *Runner) closeFd(fd int) {
 		// stdin-source script reader from re-supplying input.
 		r.stdinClosed = true
 		r.stdinRedirected = true
+		r.asyncStdinExplicit = true
 		if r.fdWriteTable != nil {
 			delete(r.fdWriteTable, 0)
 		}

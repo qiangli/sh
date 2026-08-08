@@ -320,6 +320,12 @@ type Runner struct {
 	// where `cat <<E` reads the heredoc body, not later script lines. Saved and
 	// restored around each statement's redirects like r.stdin.
 	stdinRedirected bool
+	// asyncStdinExplicit is true only while fd 0 comes from syntax enclosing
+	// the command being evaluated (a redirect, heredoc, or pipeline). Unlike
+	// stdinRedirected it does not persist after `exec <file`: POSIX still gives
+	// a later asynchronous list /dev/null unless that list's syntax supplies
+	// stdin of its own.
+	asyncStdinExplicit bool
 
 	// aliasLineOverride is non-zero while expanding a multi-stmt
 	// alias body. bashErrPrefix prefers it over the AST stmt's own
@@ -2738,6 +2744,7 @@ func (r *Runner) subshell(background bool) *Runner {
 		readDirHandler:       r.readDirHandler,
 		statHandler:          r.statHandler,
 		stdin:                r.stdin,
+		asyncStdinExplicit:   r.asyncStdinExplicit,
 		stdinTTYFallback:     r.stdinTTYFallback,
 		stdinDevTTY:          r.stdinDevTTY,
 		stdout:               r.stdout,
