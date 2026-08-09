@@ -305,7 +305,10 @@ func (r *Runner) builtinTargetQuoted(pos syntax.Pos, base string) bool {
 			}
 			switch c {
 			case '\\':
-				i += 2
+				i++
+				if i < len(line) {
+					i++
+				}
 			case '\'':
 				i++
 				for i < len(line) && line[i] != '\'' {
@@ -318,7 +321,10 @@ func (r *Runner) builtinTargetQuoted(pos syntax.Pos, base string) bool {
 				i++
 				for i < len(line) {
 					if line[i] == '\\' {
-						i += 2
+						i++
+						if i < len(line) {
+							i++
+						}
 						continue
 					}
 					if line[i] == '"' {

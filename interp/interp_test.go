@@ -1338,6 +1338,14 @@ var runTests = []runTest{
 		"read: `A[]]': not a valid identifier\nexit status 2 #JUSTERR",
 	},
 	{
+		"IFS= read -r value \\\n<<< value\nprintf '%s\\n' \"$value\"",
+		"value\n",
+	},
+	{
+		"read -r first \"sec\\\nond\" <<< 'one two'\nprintf '%s|%s\\n' \"$first\" \"$second\"",
+		"one|two\n",
+	},
+	{
 		`declare -A A; for k in $'\t' ' ' '*' '@'; do printf -v "A[$k]" %s X; done; declare -p A`,
 		"declare -A A=([$'\\t']=\"X\" [\"*\"]=\"X\" [\" \"]=\"X\" [\"@\"]=\"X\" )\n",
 	},
