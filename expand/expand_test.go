@@ -251,6 +251,29 @@ func TestFieldsIdempotency(t *testing.T) {
 	}
 }
 
+func TestFieldsLegacyBacktickAdjacentLiteral(t *testing.T) {
+	p := syntax.NewParser(syntax.Variant(syntax.LangBash))
+	file, err := p.Parse(strings.NewReader("got=`capture echo \\\\$\\`expr 1 + 1\\``\n"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	outerCall := file.Stmts[0].Cmd.(*syntax.CallExpr)
+	outerSub := outerCall.Assigns[0].Value.Parts[0].(*syntax.CmdSubst)
+	capture := outerSub.Stmts[0].Cmd.(*syntax.CallExpr)
+	word := capture.Args[2]
+	cfg := &Config{CmdSubst: func(w io.Writer, _ *syntax.CmdSubst) error {
+		_, err := io.WriteString(w, "2\n")
+		return err
+	}}
+	got, err := Fields(cfg, word)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"$2"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Fields() = %q, want %q (args=%d parts=%d)", got, want, len(capture.Args), len(word.Parts))
+	}
+}
+
 func TestFieldsMultibyteIFS(t *testing.T) {
 	cfg := &Config{Env: ListEnviron("a=AéB", "IFS=é")}
 	word := parseWord(t, `$a`)

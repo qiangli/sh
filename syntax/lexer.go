@@ -1344,7 +1344,11 @@ loop:
 			// when nested in another construct (e.g. `[[ ]]`, arithmetic)
 			// inside a backquote sub: openBquotes>0 with an unescaped
 			// backtick. An escaped (nested-opening) backtick keeps _Lit.
-			if p.quote != subCmdBckquo && !(p.openBquotes > 0 && !p.bquoteEscapedByte) {
+			if p.quote == subCmdBckquo {
+				if p.bquoteEscapedByte {
+					tok = _Lit
+				}
+			} else if !(p.openBquotes > 0 && !p.bquoteEscapedByte) {
 				tok = _Lit
 			}
 			break loop

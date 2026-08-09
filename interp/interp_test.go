@@ -6281,6 +6281,29 @@ func TestPrintfPlusLeadingFormat(t *testing.T) {
 	}
 }
 
+func TestLegacyBacktickIndirectExpansion(t *testing.T) {
+	src := "set -- one payload tail\n" +
+		"n=1\n" +
+		"capture() { printf '%s|%s|%s' \"$#\" \"$1\" \"$2\"; }\n" +
+		"args=`capture echo \\\\$\\`expr $n + 1\\``\n" +
+		"got=`eval echo \\\\$\\`expr $n + 1\\``\n" +
+		"printf 'args=<%s> got=<%s> status=%s\\n' \"$args\" \"$got\" \"$?\"\n"
+	file := parse(t, nil, src)
+	var cb concBuffer
+	r, err := interp.New(interp.StdIO(nil, &cb, &cb))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), runnerRunTimeout)
+	defer cancel()
+	if err := r.Run(ctx, file); err != nil {
+		cb.WriteString(err.Error())
+	}
+	if got, want := cb.String(), "args=<2|echo|$2> got=<payload> status=0\n"; got != want {
+		t.Fatalf("legacy nested backtick expansion: want %q, got %q", want, got)
+	}
+}
+
 func TestRunnerCdStatErrorReason(t *testing.T) {
 	t.Parallel()
 
