@@ -1019,6 +1019,8 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		// stdout. Multiple -v flags are illegal; -v requires a name.
 		var assignTo string
 		fp := flagParser{remaining: args}
+		var formatArgs []string
+	parsePrintfFlags:
 		for fp.more() {
 			switch flag := fp.flag(); flag {
 			case "-v":
@@ -1042,10 +1044,24 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					}
 				}
 			default:
+				// A leading '+' cannot be a printf option; it is the
+				// format operand (and any remaining args are arguments).
+				if flag[0] == '+' {
+					if fp.current != "" {
+						flag += fp.current[1:]
+						fp.current = ""
+					}
+					formatArgs = append([]string{flag}, fp.args()...)
+					break parsePrintfFlags
+				}
 				return invalidOpt("printf", flag)
 			}
 		}
-		args = fp.args()
+		if formatArgs == nil {
+			args = fp.args()
+		} else {
+			args = formatArgs
+		}
 		if len(args) == 0 {
 			if r.bashCompatErrors {
 				// Bash emits the bare `printf: usage: ...` line for

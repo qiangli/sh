@@ -559,6 +559,21 @@ var runTests = []runTest{
 	// printf -- ends option parsing so a format starting with - works.
 	{`printf -- '-x: %s\n' world`, "-x: world\n"},
 
+	// printf: a format operand beginning with '+' is not an option.
+	{"printf +3", "+3"},
+	{"printf +2", "+2"},
+	{"printf +1", "+1"},
+	{`printf +\`, `+\`},
+	{`printf '+3: %s\n' world`, "+3: world\n"},
+	{"printf +%s foo", "+foo"},
+	{"printf -v out +3; echo \"$out\"", "+3\n"},
+	{`printf -v out '+3: %s\n' world; echo "$out"`, "+3: world\n\n"},
+	{`printf -- '+3: %s\n' world`, "+3: world\n"},
+	{"printf -v out -- +3; echo \"$out\"", "+3\n"},
+	// Invalid minus options are still rejected with the usual diagnostic.
+	{"printf -x", "printf: invalid option \"-x\"\nexit status 2 #JUSTERR"},
+	{"printf -3", "printf: invalid option \"-3\"\nexit status 2 #JUSTERR"},
+
 	// bash 5.3 funsub ${ cmd; }: runs body in caller's scope (no
 	// subshell), captures stdout. Distinct from $(...) which subshells.
 	{`v=${ echo hi; }; echo "$v"`, "hi\n"},
@@ -6234,6 +6249,33 @@ func TestRunnerRun(t *testing.T) {
 				}
 				t.Fatalf("wrong output in %q:\nwant: %q\ngot:  %q",
 					c.in, want, got)
+			}
+		})
+	}
+}
+
+func TestPrintfPlusLeadingFormat(t *testing.T) {
+	tests := []runTest{
+		{in: "printf +3", want: "+3"},
+		{in: `printf '+3: %s\n' world`, want: "+3: world\n"},
+		{in: `printf -v out +3; printf '%s' "$out"`, want: "+3"},
+		{in: `printf -- '+3: %s\n' world`, want: "+3: world\n"},
+	}
+	for _, test := range tests {
+		t.Run(test.in, func(t *testing.T) {
+			file := parse(t, nil, test.in)
+			var cb concBuffer
+			r, err := interp.New(interp.StdIO(nil, &cb, &cb))
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), runnerRunTimeout)
+			defer cancel()
+			if err := r.Run(ctx, file); err != nil {
+				cb.WriteString(err.Error())
+			}
+			if got := cb.String(); got != test.want {
+				t.Fatalf("want %q, got %q", test.want, got)
 			}
 		})
 	}
