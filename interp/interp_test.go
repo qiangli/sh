@@ -1338,14 +1338,6 @@ var runTests = []runTest{
 		"read: `A[]]': not a valid identifier\nexit status 2 #JUSTERR",
 	},
 	{
-		"IFS= read -r value \\\n<<< value\nprintf '%s\\n' \"$value\"",
-		"value\n",
-	},
-	{
-		"read -r first \"sec\\\nond\" <<< 'one two'\nprintf '%s|%s\\n' \"$first\" \"$second\"",
-		"one|two\n",
-	},
-	{
 		`declare -A A; for k in $'\t' ' ' '*' '@'; do printf -v "A[$k]" %s X; done; declare -p A`,
 		"declare -A A=([$'\\t']=\"X\" [\"*\"]=\"X\" [\" \"]=\"X\" [\"@\"]=\"X\" )\n",
 	},
@@ -6762,6 +6754,50 @@ func TestStdinScriptInputRedirectBeatsLineConsumption(t *testing.T) {
 	// but read WITHOUT a redirect still consumes the next script line (the bash
 	// stdin-script quirk): it eats `echo …`, so nothing prints.
 	qt.Assert(t, qt.Equals(run("read x\necho \"[$x]\"\n"), ""))
+}
+
+// builtinTargetQuoted scans the original source line — only available when
+// WithBashSource is set — to decide whether a read/printf/wait target token
+// was quoted. When a target ends a physical line with a backslash (a line
+// continuation, outside or inside double quotes) the escape scan must not
+// advance past the end of the line. It previously did `i += 2`, slicing
+// `line[start:i]` out of bounds and panicking; e.g. `read -r x \` on the
+// terminal physical line panicked while bash printed the read value.
+func TestBashSourceTargetQuotedTerminalBackslash(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			// terminal backslash-newline outside quotes (line continuation).
+			name: "unquoted",
+			src:  "IFS= read -r x \\\n<<< hi\nprintf '%s\\n' \"$x\"\n",
+			want: "hi\n",
+		},
+		{
+			// terminal backslash-newline inside double quotes.
+			name: "double-quoted",
+			src:  "read -r first \"sec\\\nond\" <<< 'one two'\nprintf '%s|%s\\n' \"$first\" \"$second\"\n",
+			want: "one|two\n",
+		},
+	}
+	run := func(src string) string {
+		file, err := syntax.NewParser().Parse(strings.NewReader(src), "./read.tests")
+		qt.Assert(t, qt.IsNil(err))
+		var cb bytes.Buffer
+		r, err := interp.New(interp.StdIO(nil, &cb, &cb), interp.WithBashSource([]byte(src)))
+		qt.Assert(t, qt.IsNil(err))
+		if err := r.Run(context.Background(), file); err != nil {
+			cb.WriteString(err.Error())
+		}
+		return cb.String()
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			qt.Assert(t, qt.Equals(run(tc.src), tc.want))
+		})
+	}
 }
 
 func TestBashCompatUnsetParameterCustomMessage(t *testing.T) {
