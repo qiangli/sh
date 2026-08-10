@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/interp"
 	"mvdan.cc/sh/v3/syntax"
 )
@@ -100,6 +101,117 @@ func TestHandlerContextUmaskTracksBuiltin(t *testing.T) {
 	}
 	if got[1] != 0o077 || got[2] != 0o006 {
 		t.Fatalf("masks after builtin = %#o, %#o; want 0077, 0006", got[1], got[2])
+	}
+}
+
+// signalIgnoredProbe records one [interp.HandlerContext.SignalIgnored]
+// snapshot: the trap-disposition spellings for PIPE alongside the always-off
+// cases (an invalid name and the uncatchable/pseudo signals) that must read
+// false regardless of trap state.
+type signalIgnoredProbe struct {
+	bare, sigPrefixed, numeric bool
+	invalid, exit, kill, stop  bool
+}
+
+func recordSignalIgnoredProbe(hc interp.HandlerContext) signalIgnoredProbe {
+	return signalIgnoredProbe{
+		bare:        hc.SignalIgnored("PIPE"),
+		sigPrefixed: hc.SignalIgnored("SIGPIPE"),
+		numeric:     hc.SignalIgnored(strconv.Itoa(int(syscall.SIGPIPE))),
+		invalid:     hc.SignalIgnored("NOSUCHSIG"),
+		exit:        hc.SignalIgnored("EXIT"),
+		kill:        hc.SignalIgnored("KILL"),
+		stop:        hc.SignalIgnored("STOP"),
+	}
+}
+
+// TestHandlerContextSignalIgnored exercises [interp.HandlerContext.SignalIgnored]
+// across the trap-disposition states for SIGPIPE: default (no trap),
+// explicitly ignored via an empty trap action (checked via the bare,
+// SIG-prefixed, and numeric spellings), caught via a non-empty handler, and
+// reset via trap-dash. Alongside every probe it also confirms an invalid
+// name and the always-uncatchable/pseudo signals (KILL, STOP, EXIT) read
+// false regardless of PIPE's own state. It then checks that a subshell
+// inherits an ignored disposition, and that the subshell can independently
+// reset it.
+func TestHandlerContextSignalIgnored(t *testing.T) {
+	var got []signalIgnoredProbe
+	mw := func(next interp.ExecHandlerFunc) interp.ExecHandlerFunc {
+		return func(ctx context.Context, args []string) error {
+			if args[0] != "probe" {
+				return next(ctx, args)
+			}
+			got = append(got, recordSignalIgnoredProbe(interp.HandlerCtx(ctx)))
+			return nil
+		}
+	}
+	script := `
+probe                         # 0: default
+trap '' PIPE
+probe                         # 1: ignored via empty trap action
+trap 'echo caught' PIPE
+probe                         # 2: caught
+trap - PIPE
+probe                         # 3: reset
+trap '' PIPE
+( probe )                     # 4: subshell inherits ignored
+( trap - PIPE; probe )        # 5: subshell resets
+`
+	file, err := syntax.NewParser().Parse(strings.NewReader(script), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner, err := interp.New(interp.ExecHandlers(mw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.Run(context.Background(), file); err != nil {
+		t.Fatal(err)
+	}
+	ignored := signalIgnoredProbe{bare: true, sigPrefixed: true, numeric: true}
+	notIgnored := signalIgnoredProbe{}
+	want := []signalIgnoredProbe{notIgnored, ignored, notIgnored, notIgnored, ignored, notIgnored}
+	if len(got) != len(want) {
+		t.Fatalf("captured %d probes, want %d\n got: %+v\nwant: %+v", len(got), len(want), got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("probe[%d]: got %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}
+
+// TestHandlerContextSignalIgnoredHardIgnore checks that a signal carried in
+// via [interp.BashyHardIgnoreEnv] (the SIG_HARD_IGNORE bridge across an exec
+// of our own shell binary, see [interp.Runner.isStartupIgnored]) reports
+// ignored from the very start — with no trap installed — and that the
+// disposition is inherited by a subshell.
+func TestHandlerContextSignalIgnoredHardIgnore(t *testing.T) {
+	var got []bool
+	mw := func(next interp.ExecHandlerFunc) interp.ExecHandlerFunc {
+		return func(ctx context.Context, args []string) error {
+			if args[0] != "probe" {
+				return next(ctx, args)
+			}
+			got = append(got, interp.HandlerCtx(ctx).SignalIgnored("PIPE"))
+			return nil
+		}
+	}
+	file, err := syntax.NewParser().Parse(strings.NewReader("probe; ( probe )"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := expand.ListEnviron(interp.BashyHardIgnoreEnv + "=PIPE")
+	runner, err := interp.New(interp.ExecHandlers(mw), interp.Env(env))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.Run(context.Background(), file); err != nil {
+		t.Fatal(err)
+	}
+	want := []bool{true, true}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("hard-ignore probes = %v, want %v", got, want)
 	}
 }
 

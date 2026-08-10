@@ -116,6 +116,48 @@ func (hc HandlerContext) Umask() os.FileMode {
 	return os.FileMode(hc.runner.umask)
 }
 
+// SignalIgnored reports whether the named signal currently has the ignored
+// disposition — either set via an empty "trap SIG" action, or inherited
+// as startup-ignored (see [Runner.isStartupIgnored]) — mirroring
+// [Runner.carrierSignalDisposition]. It returns false for:
+//   - a nil HandlerContext.runner;
+//   - an unrecognized name, including the pseudo-signals EXIT/ERR/DEBUG/
+//     RETURN, which normalize but have no real signal disposition;
+//   - KILL and STOP, which are always uncatchable regardless of trap state;
+//   - the default disposition (no trap installed) and a caught disposition
+//     (a non-empty trap handler).
+//
+// The name accepts bare ("PIPE"), SIG-prefixed ("SIGPIPE"), and numeric
+// specs, normalized through the same logic the trap builtin uses. No
+// mutable trap state is exposed; the trapCallbacks read is guarded by
+// sigMu, matching the existing pattern in carrier.go.
+//
+// ExecHandlers use this to decide whether to propagate SIG_IGN to a spawned
+// child process: an ignored disposition is inherited across execve, while a
+// caught disposition is reset to the default.
+func (hc HandlerContext) SignalIgnored(name string) bool {
+	if hc.runner == nil {
+		return false
+	}
+	sig := normalizeSignal(name)
+	if sig == "" {
+		return false
+	}
+	if _, ok := signalByName(sig); !ok {
+		return false
+	}
+	if sig == "KILL" || sig == "STOP" {
+		return false
+	}
+	if hc.runner.isStartupIgnored(sig) {
+		return true
+	}
+	hc.runner.sigMu.Lock()
+	defer hc.runner.sigMu.Unlock()
+	cb, ok := hc.runner.trapCallbacks[sig]
+	return ok && cb == ""
+}
+
 // CallHandlerFunc is a handler which runs on every [syntax.CallExpr].
 // It is called once variable assignments and field expansion have occurred.
 // The context includes a [HandlerContext] value.
