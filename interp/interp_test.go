@@ -1948,6 +1948,18 @@ var runTests = []runTest{
 		"pwd: -a: invalid option\nexit status 2 #JUSTERR",
 	},
 	{
+		`actual=$(pwd -P); PWD=/; [[ $(pwd -P) == "$actual" ]]`,
+		"",
+	},
+	{
+		`actual=$(pwd -P); PWD="$actual/."; [[ $(pwd -L) == "$actual" ]]`,
+		"",
+	},
+	{
+		`actual=$(pwd -P); PWD="$actual/child/.."; [[ $(pwd -L) == "$actual" ]]`,
+		"",
+	},
+	{
 		`mkdir a; ln -s a b; [[ "$(cd a && pwd -P)" == "$(cd b && pwd -P)" ]]`,
 		"",
 	},
