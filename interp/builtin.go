@@ -1205,20 +1205,16 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			args = args[1:]
 		}
 		pwd := r.envGet("PWD")
-		if evalSymlinks {
+		if evalSymlinks || !validLogicalPWD(pwd) {
 			var err error
-			pwd, err = filepath.EvalSymlinks(shellPathToOS(r.Dir, pwd))
+			// Physical mode is defined by the invocation's actual working
+			// directory, not by the possibly stale or user-modified PWD.
+			pwd, err = filepath.EvalSymlinks(r.Dir)
 			if err != nil {
 				exit.fatal(err) // perhaps overly dramatic?
 				return exit
 			}
 			pwd = shellPathFromOS(pwd)
-		} else if !shellPathAbs(pwd) {
-			// Logical pwd: $PWD is authoritative only when it is an
-			// absolute pathname. A clobbered/relative $PWD (e.g.
-			// `PWD=foo; pwd`) must NOT be echoed back — bash falls back to
-			// the tracked current directory.
-			pwd = shellPathFromOS(r.Dir)
 		}
 		r.outf("%s\n", pwd)
 	case "cd":
@@ -6108,6 +6104,21 @@ func setDirStackTopFirst(r *Runner, topFirst []string) {
 	for i, d := range topFirst {
 		r.dirStack[len(topFirst)-1-i] = d
 	}
+}
+
+// validLogicalPWD reports whether PWD is eligible for pwd -L. POSIX permits
+// the logical value only when it is absolute and contains no dot or dot-dot
+// pathname components; otherwise pwd must fall back to physical resolution.
+func validLogicalPWD(pwd string) bool {
+	if !shellPathAbs(pwd) {
+		return false
+	}
+	for _, component := range strings.Split(pwd, "/") {
+		if component == "." || component == ".." {
+			return false
+		}
+	}
+	return true
 }
 
 func dirStackIndex(length int, sign byte, idx int) int {
