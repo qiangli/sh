@@ -1960,6 +1960,10 @@ var runTests = []runTest{
 		"",
 	},
 	{
+		`root=$PWD; mkdir real; ln -s real link; cd link; PWD=/; [[ $(pwd -L) == "$root/link" ]]`,
+		"",
+	},
+	{
 		`mkdir a; ln -s a b; [[ "$(cd a && pwd -P)" == "$(cd b && pwd -P)" ]]`,
 		"",
 	},
