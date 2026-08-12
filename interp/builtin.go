@@ -2108,17 +2108,32 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				return exit
 			}
 		}
-		if clearHash {
-			clear(r.cmdHashTable)
-			break
-		}
 		remaining := fp.args()
+		if len(remaining) == 0 && (deleteNames || printPath) {
+			option := "-t"
+			if deleteNames {
+				option = "-d"
+			}
+			return failf(1, "hash: %s: option requires an argument\n", option)
+		}
+		if len(remaining) == 0 && explicitPath != "" {
+			r.errf("%shash: -p: option requires an argument\n", r.bashErrPrefix(pos))
+			r.errf("hash: usage: %s\n", bashUsage["hash"])
+			exit.code = 2
+			return exit
+		}
 		if enabled, ok := r.noOpSetState["hashall"]; ok && !enabled &&
 			(len(remaining) > 0 || explicitPath != "" || printPath || deleteNames) {
 			return failf(1, "hash: hashing disabled\n")
 		}
 		hashListEntry := func(name string, entry cmdHashEntry) {
 			r.outf("builtin hash -p %s %s\n", entry.path, name)
+		}
+		if clearHash {
+			clear(r.cmdHashTable)
+			if len(remaining) == 0 {
+				break
+			}
 		}
 		if deleteNames {
 			if len(remaining) == 0 {
@@ -2135,9 +2150,6 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			break
 		}
 		if printPath {
-			if len(remaining) == 0 {
-				break
-			}
 			for _, name := range remaining {
 				entry, ok := r.cmdHashTable[name]
 				if !ok {
@@ -2182,12 +2194,6 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			break
 		}
 		// Cache specific commands.
-		if explicitPath != "" && len(remaining) == 0 {
-			r.errf("%shash: -p: option requires an argument\n", r.bashErrPrefix(pos))
-			r.errf("hash: usage: %s\n", bashUsage["hash"])
-			exit.code = 2
-			return exit
-		}
 		for _, name := range remaining {
 			var path string
 			if explicitPath != "" {

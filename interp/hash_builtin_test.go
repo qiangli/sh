@@ -63,9 +63,10 @@ func TestHashBuiltin_P_missingArgs(t *testing.T) {
 			script: "hash -p",
 			want:   "hash: -p: option requires an argument",
 		},
-		// `hash -p <path>` with no names is NOT an error in bash 5.3:
-		// it falls through to listing mode (rc=0, "hash table empty"
-		// on stdout when the table is empty) — covered separately.
+		{
+			script: "hash -p /bin/echo",
+			want:   "hash: -p: option requires an argument",
+		},
 	}
 
 	for _, tc := range tests {
@@ -87,6 +88,38 @@ func TestHashBuiltin_P_missingArgs(t *testing.T) {
 			_ = runner.Run(ctx, file) // ignore error; we check stderr
 			if !strings.Contains(stderr.String(), tc.want) {
 				t.Fatalf("stderr = %q, want substring %q", stderr.String(), tc.want)
+			}
+		})
+	}
+}
+
+func TestHashBuiltinTargetOptionsNeedNames(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name, script, wantErr, wantOut string
+	}{
+		{"target", "hash -t; printf 'status=%s\\n' \"$?\"", "hash: -t: option requires an argument\n", "status=1\n"},
+		{"clear_then_target", "hash -r -t missing; printf 'status=%s\\n' \"$?\"", "hash: missing: not found\n", "status=1\n"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var stdout, stderr strings.Builder
+			runner, err := interp.New(interp.StdIO(nil, &stdout, &stderr))
+			if err != nil {
+				t.Fatal(err)
+			}
+			file, err := syntax.NewParser().Parse(strings.NewReader(tc.script), "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := runner.Run(context.Background(), file); err != nil {
+				t.Fatal(err)
+			}
+			if got := stderr.String(); !strings.Contains(got, tc.wantErr) {
+				t.Fatalf("stderr = %q, want substring %q", got, tc.wantErr)
+			}
+			if got := stdout.String(); got != tc.wantOut {
+				t.Fatalf("stdout = %q, want %q", got, tc.wantOut)
 			}
 		})
 	}
