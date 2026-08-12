@@ -137,6 +137,25 @@ func TestKillExistenceProbe(t *testing.T) {
 	}
 }
 
+func TestKillSignalSpecThenNegativePidTarget(t *testing.T) {
+	// Regression: once a signal has been established via `-s`/`-n`, a later
+	// dash-prefixed argument must not be reinterpreted as another signal
+	// spec — it may be a negative pid naming a process group instead. Real
+	// bash 5.3's kill_builtin (builtins/kill.def) only guards the *bare*
+	// -SIGSPEC form with `saw_signal == 0`; `-s`/`-n` themselves don't gate
+	// that check, so `kill -s TERM -99999999` targets process group
+	// 99999999 rather than erroring. Before the fix, this builtin's flag
+	// loop kept treating every dash-prefixed argument as a candidate flag
+	// and reported "99999999: invalid signal specification" instead.
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("process-group signalling behavior is unix-specific")
+	}
+	out, err := runScript(t, "kill -s TERM -99999999 || echo dead")
+	qt.Assert(t, qt.IsNil(err), qt.Commentf("out: %q", out))
+	qt.Assert(t, qt.IsFalse(strings.Contains(out, "invalid signal specification")), qt.Commentf("out: %q", out))
+	qt.Assert(t, qt.IsTrue(strings.Contains(out, "dead")), qt.Commentf("out: %q", out))
+}
+
 func TestKillCustomSignal(t *testing.T) {
 	sleepBin, err := exec.LookPath("sleep")
 	if err != nil {

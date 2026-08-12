@@ -1527,6 +1527,12 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		listOnly := false
 		posixSignals := r.opts[optPosix]
 		sig := defaultTermSignal
+		// sawSignal tracks whether a signal has already been established via
+		// -s/-n or a bare -SIGSPEC/-NUM flag. Once true, a later dash-prefixed
+		// argument is no longer eligible for the bare-form reinterpretation
+		// below — it is left for the target loop, since it may be a negative
+		// pid naming a process group (e.g. `kill -s TERM -1234`).
+		sawSignal := false
 		remaining := args
 	killFlags:
 		for len(remaining) > 0 {
@@ -1548,6 +1554,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					return failf(1, "kill: %s: invalid signal specification\n", spec)
 				}
 				sig = s
+				sawSignal = true
 				remaining = remaining[1:]
 				continue
 			}
@@ -1561,6 +1568,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					return failf(1, "kill: %d: invalid signal specification\n", n)
 				}
 				sig = s
+				sawSignal = true
 				remaining = remaining[1:]
 				continue
 			}
@@ -1586,6 +1594,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					return failf(1, "kill: %s: invalid signal specification\n", remaining[1])
 				}
 				sig = s
+				sawSignal = true
 				remaining = remaining[2:]
 			case "-n":
 				if len(remaining) < 2 {
@@ -1600,15 +1609,25 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					return failf(1, "kill: %d: invalid signal specification\n", n)
 				}
 				sig = s
+				sawSignal = true
 				remaining = remaining[2:]
 			default:
-				// -SIGNAME or -NUMBER (whole flag is the spec)
+				// -SIGNAME or -NUMBER (whole flag is the spec). Bash only
+				// reinterprets a dash-prefixed argument as a bare signal spec
+				// the first time (see kill.def: `saw_signal == 0`) — once a
+				// signal is already set, later dash-prefixed arguments are
+				// left alone since they may be negative pids naming a
+				// process group (`kill -s TERM -1234`).
+				if sawSignal {
+					break killFlags
+				}
 				spec := strings.TrimPrefix(arg, "-")
 				s, ok := parseSignalSpecPosix(spec, posixSignals)
 				if !ok {
 					return failf(1, "kill: %s: invalid signal specification\n", spec)
 				}
 				sig = s
+				sawSignal = true
 				remaining = remaining[1:]
 				break killFlags
 			}
