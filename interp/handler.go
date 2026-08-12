@@ -411,6 +411,13 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 			// did not start
 			fmt.Fprintf(hc.Stderr, "%v\n", err)
 			return ExitStatus(127)
+		case *os.PathError:
+			// The program was found but execve could not start it (for
+			// example, because the host denies execution). This is a command
+			// failure, not a fatal interpreter error: bash reports it and
+			// continues with the next command.
+			fmt.Fprintln(hc.Stderr, err)
+			return ExitStatus(126)
 		default:
 			return err
 		}

@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -227,6 +228,86 @@ func TestRunnerTerminalExecInheritedSparseFD(t *testing.T) {
 	got = run(t, goshCmd("exec 8>&-; /bin/true; GOSH_CMD=fd8_is_terminal $GOSH_PROG"))
 	if got != "not-terminal\r\n" {
 		t.Fatalf("explicitly closed inherited fd 8 leaked to external command: got %q", got)
+	}
+}
+
+// TestRunnerExternalTerminalTools checks the shell-owned boundary shared by
+// terminal-aware system tools. The tools themselves remain host providers:
+// this only compares the environment, session, and controlling terminal they
+// receive when launched through gosh with those received through bash.
+func TestRunnerExternalTerminalTools(t *testing.T) {
+	for _, name := range []string{"logname", "mesg", "write"} {
+		if _, err := exec.LookPath(name); err != nil {
+			t.Skipf("%s not available: %v", name, err)
+		}
+	}
+	// Some sandboxed hosts permit a shell to invoke write but deny the Go
+	// process that backs the interpreter from doing so. That is a host policy,
+	// rather than a terminal/session result, so do not compare providers there.
+	if err := exec.Command("write", "__gosh_no_such_login__").Run(); err != nil {
+		if _, exited := err.(*exec.ExitError); !exited {
+			t.Skipf("write cannot be launched by this host: %v", err)
+		}
+	}
+
+	const script = `
+for tool in logname mesg write; do
+	case $tool in
+	logname) logname ;;
+	mesg) mesg ;;
+	write) write __gosh_no_such_login__ ;;
+	esac
+	printf '<%s:%s>\n' "$tool" "$?"
+done
+`
+	run := func(t *testing.T, cmd *exec.Cmd) string {
+		t.Helper()
+		primary, err := pty.Start(cmd)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, readErr := io.ReadAll(primary)
+		if closeErr := primary.Close(); closeErr != nil {
+			t.Fatal(closeErr)
+		}
+		if err := cmd.Wait(); err != nil {
+			t.Fatalf("%v; output: %q", err, got)
+		}
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		return string(got)
+	}
+
+	want := run(t, exec.Command("bash", "-c", script))
+	got := run(t, exec.Command(os.Getenv("GOSH_PROG"), script))
+	if got != want {
+		t.Fatalf("terminal-aware system tools differ across the shell boundary:\nwant: %q\n got: %q", want, got)
+	}
+}
+
+// TestRunnerExecStartFailureContinues verifies that a kernel exec failure is
+// an ordinary command failure. A FIFO with execute permission passes shell
+// lookup but cannot be executed, so it isolates that launch boundary without
+// depending on a particular system utility.
+func TestRunnerExecStartFailureContinues(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "not-a-program")
+	if err := unix.Mkfifo(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	file := parse(t, nil, "./not-a-program; echo survived")
+	var out strings.Builder
+	r, err := interp.New(interp.Dir(dir), interp.StdIO(nil, &out, &out))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Run(context.Background(), file); err != nil {
+		t.Fatalf("runner stopped after an exec failure: %v; output: %q", err, out.String())
+	}
+	if !strings.Contains(out.String(), "survived\n") {
+		t.Fatalf("later command did not run after an exec failure: %q", out.String())
 	}
 }
 
