@@ -1,7 +1,7 @@
 // Copyright (c) 2026, the outpost authors
 // See LICENSE for licensing information
 
-//go:build unix && !linux
+//go:build unix && !linux && !darwin
 
 package interp
 
