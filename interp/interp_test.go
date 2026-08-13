@@ -2133,6 +2133,18 @@ var runTests = []runTest{
 		"zz='yy'\nalias zz='yy'\n",
 	},
 	{
+		"alias -p -x; echo status=$?",
+		"alias: -x: invalid option\nalias: usage: alias [-p] [name[=value] ... ]\nstatus=2\n #JUSTERR",
+	},
+	{
+		"alias -pp; echo status=$?",
+		"status=0\n",
+	},
+	{
+		"alias interp_alias=one; alias -p interp_alias; echo status=$?",
+		"alias interp_alias='one'\nstatus=0\n",
+	},
+	{
 		"shopt -s expand_aliases; alias foo=echo\nfoo foo; foo bar",
 		"foo\nbar\n",
 	},

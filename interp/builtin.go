@@ -4160,23 +4160,36 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			}
 		}
 
-		// `alias -p` prints all aliases (same as no args). Reject
-		// any other `-X` option with bash 5.3's wording + usage.
+		// `alias -p` prints all aliases (same as no args). Parse every
+		// option before printing: Bash accepts repeated `-p`, but a later
+		// invalid option is still an option (not an alias name), even when
+		// it contains `=`. A name beginning with `-` requires `--`.
 		filtered := args
-		if len(filtered) > 0 && filtered[0] == "-p" {
-			filtered = filtered[1:]
-			showAll(true)
-			if len(filtered) > 0 && filtered[0] == "--" {
+		printAll := false
+		for len(filtered) > 0 {
+			arg := filtered[0]
+			if arg == "--" {
 				filtered = filtered[1:]
+				break
 			}
-		} else if len(filtered) > 0 && filtered[0] == "--" {
-			// bash accepts `--` as an option terminator: `alias -- name=val`.
+			if len(arg) <= 1 || arg[0] != '-' {
+				break
+			}
+			for i := 1; i < len(arg); i++ {
+				if arg[i] == 'p' {
+					printAll = true
+					continue
+				}
+				r.errf("%salias: -%c: invalid option\n", r.bashErrPrefix(pos), arg[i])
+				r.errf("alias: usage: alias [-p] [name[=value] ... ]\n")
+				exit.code = 2
+				return exit
+			}
 			filtered = filtered[1:]
-		} else if len(filtered) > 0 && len(filtered[0]) > 1 && filtered[0][0] == '-' && !strings.Contains(filtered[0], "=") {
-			r.errf("%salias: %s: invalid option\n", r.bashErrPrefix(pos), filtered[0])
-			r.errf("alias: usage: alias [-p] [name[=value] ... ]\n")
-			exit.code = 2
-			return exit
+		}
+		if printAll {
+			showAll(true)
+			break
 		}
 		if len(args) == 0 {
 			showAll(false)
@@ -4190,7 +4203,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					exit.code = 1
 					continue
 				}
-				show(name, als, len(args) > 0 && args[0] == "-p")
+				show(name, als, false)
 				continue
 			}
 			if !validAliasName(name) {
