@@ -4140,6 +4140,12 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			if posixFormat && !forcePrefix {
 				prefix = ""
 			}
+			// A leading-dash alias name must remain reparsable as output.
+			// Bash inserts its option terminator whenever it emits the
+			// GNU-style "alias " prefix.
+			if prefix != "" && strings.HasPrefix(name, "-") {
+				prefix += "-- "
+			}
 			// Bash quotes alias bodies with sh_single_quote(): wrap in
 			// single quotes, escaping any embedded `'` as `'\''` so the
 			// printed form re-parses (e.g. `eval alias "$(alias a)"`).

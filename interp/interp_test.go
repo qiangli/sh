@@ -2145,6 +2145,10 @@ var runTests = []runTest{
 		"alias interp_alias='one'\nstatus=0\n",
 	},
 	{
+		"alias -- -x=one; alias -- -x; alias -p; eval \"$(alias -- -x)\"; alias -- -x",
+		"alias -- -x='one'\nalias -- -x='one'\nalias -- -x='one'\n",
+	},
+	{
 		"shopt -s expand_aliases; alias foo=echo\nfoo foo; foo bar",
 		"foo\nbar\n",
 	},
