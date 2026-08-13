@@ -1209,7 +1209,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			// PWD is an ordinary shell variable and can be reassigned without
 			// changing the shell's logical current-directory state. Keep that
 			// state in r.Dir, as cd does, rather than trusting the variable.
-			pwd = r.Dir
+			pwd = shellPathFromOS(r.Dir)
 		} else {
 			var err error
 			// Physical mode is defined by the invocation's actual working
