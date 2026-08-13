@@ -225,7 +225,12 @@ func TestRunnerTerminalExecInheritedSparseFD(t *testing.T) {
 	// An explicit shell close must override inheritance and remain effective
 	// across a preceding external command; otherwise the raw ambient fd would
 	// leak into children even though the shell considers it closed.
-	got = run(t, goshCmd("exec 8>&-; /bin/true; GOSH_CMD=fd8_is_terminal $GOSH_PROG"))
+	truePath, err := exec.LookPath("true")
+	if err != nil {
+		t.Fatal(err)
+	}
+	truePath = "'" + strings.ReplaceAll(truePath, "'", "'\"'\"'") + "'"
+	got = run(t, goshCmd("exec 8>&-; "+truePath+"; GOSH_CMD=fd8_is_terminal $GOSH_PROG"))
 	if got != "not-terminal\r\n" {
 		t.Fatalf("explicitly closed inherited fd 8 leaked to external command: got %q", got)
 	}
