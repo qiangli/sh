@@ -2141,6 +2141,10 @@ var runTests = []runTest{
 		"foo\n",
 	},
 	{
+		"alias interp_unalias=echo; unalias -- interp_unalias; alias interp_unalias; echo status=$?",
+		"alias: interp_unalias: not found\nstatus=1\n #JUSTERR",
+	},
+	{
 		"shopt -s expand_aliases; alias echo='echo a'\necho b c",
 		"a b c\n",
 	},
@@ -5287,6 +5291,7 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	{"umask 022; umask +xwr; umask -S", "u=rwx,g=rwx,o=rwx\n"},
 	{"umask 999", "umask: 999: octal number out of range\nexit status 1"},
 	{"umask -i", "umask: -i: invalid option\numask: usage: umask [-p] [-S] [mode]\nexit status 2 #JUSTERR"},
+	{"umask 022; umask --; umask", "0022\n0022\n"},
 
 	// logout from a non-login shell errors with the bash-compatible
 	// message. The login-shell success path is covered in
@@ -5522,6 +5527,10 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	{
 		"getopts a a:b",
 		"getopts: `a:b': not a valid identifier\nexit status 1 #JUSTERR",
+	},
+	{
+		"set -- -a; getopts -- a opt; echo status=$? opt=$opt OPTIND=$OPTIND",
+		"status=0 opt=a OPTIND=2\n",
 	},
 	{
 		"set -- -c foo -h; getopts 'hc:' opt-; echo status=$? opt=$opt OPTARG=$OPTARG OPTIND=$OPTIND",

@@ -3783,6 +3783,12 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		}
 
 	case "getopts":
+		// Like other shell builtins, getopts accepts -- to end its own
+		// option parsing before its optstring. Without it, a normal
+		// optstring such as "a" was incorrectly diagnosed as an option.
+		if len(args) > 0 && args[0] == "--" {
+			args = args[1:]
+		}
 		// bash rejects any leading `-X` flag with an "invalid option"
 		// diagnostic, even though our own optstring may legitimately
 		// start with `-` (no, it can't — only `:` is special in bash).
@@ -4211,6 +4217,10 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 	case "unalias":
 		all := false
 		for len(args) > 0 && len(args[0]) > 1 && args[0][0] == '-' {
+			if args[0] == "--" {
+				args = args[1:]
+				break
+			}
 			switch args[0] {
 			case "-a":
 				all = true
@@ -5146,6 +5156,10 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		symbolic := false
 		printFlag := false
 		for len(args) > 0 {
+			if args[0] == "--" {
+				args = args[1:]
+				break
+			}
 			if args[0] == "-S" || args[0] == "-p" {
 				flag := args[0]
 				args = args[1:]
