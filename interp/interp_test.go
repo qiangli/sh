@@ -8864,6 +8864,9 @@ func TestCdPosixComponent(t *testing.T) {
 }
 
 func TestCdPwdPosixSymlinkSemantics(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("requires symbolic links")
+	}
 	t.Parallel()
 
 	tdir := t.TempDir()
