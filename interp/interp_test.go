@@ -4083,6 +4083,9 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 		"trap: -s: invalid option\ntrap: usage: trap [-Plp] [[action] signal_spec ...]\nexit status 2 #JUSTERR",
 	},
 	{"set -T; f(){\n:\n}\ntrap 'echo return:$LINENO' RETURN; f", "return:1\n"},
+	{"f(){ trap 'echo return:$LINENO' RETURN; }; f", "return:1\n"},
+	{"trap 'echo OUT_RETURN' RETURN; f(){ :; }; f", ""},
+	{"trap 'echo OUT_RETURN' RETURN; f(){ trap - RETURN; }; f; trap -p RETURN", "trap -- 'echo OUT_RETURN' RETURN\n"},
 	{"f(){ caller 0; }; f", "1 main \n"},
 	{"g(){ caller 0; caller 1; }; f(){ g; }; f", "1 f \n1 main \n"},
 	// TODO: our builtin appears to not receive the piped bytes?

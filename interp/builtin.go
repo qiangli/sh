@@ -2723,7 +2723,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			r.stmts(ctx, file.Stmts)
 		})
 		r.callStack = r.callStack[:len(r.callStack)-1]
-		if r.trapCallbacks["RETURN"] != "" && (r.functraceEnabled() || len(r.callStack) == 0) {
+		if r.trapCallbacks["RETURN"] != "" {
 			prevLineno := r.ecfg.OverrideLineno
 			prevDebugTrap := r.trapCallbacks["DEBUG"]
 			r.ecfg.OverrideLineno = int(pos.Line())

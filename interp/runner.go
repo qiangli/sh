@@ -10046,18 +10046,26 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 		}
 
 		// Push call stack frame.
+		frameDebugTrace := r.functraceEnabled() || r.funcTrace[name]
 		r.callStack = append(r.callStack, callFrame{
 			line:       pos.Line(),
 			source:     oldFilename,
 			funcName:   name,
 			args:       slices.Clone(args[1:]),
 			bodyLine:   body.Pos().Line(),
-			debugTrace: r.functraceEnabled() || r.funcTrace[name],
+			debugTrace: frameDebugTrace,
 		})
 		r.localOptStack = append(r.localOptStack, localOptFrame{
 			opts:         r.opts,
 			noOpSetState: maps.Clone(r.noOpSetState),
 		})
+
+		// Shell functions inherit the RETURN trap if function tracing is on
+		// globally or on individually for this function.
+		oldReturnTrap := r.trapCallbacks["RETURN"]
+		if !frameDebugTrace {
+			delete(r.trapCallbacks, "RETURN")
+		}
 
 		// Functions run in a nested scope.
 		// Note that [Runner.exec] below does something similar.
@@ -10085,11 +10093,18 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 
 		r.writeEnv = origEnv
 
-		if r.functraceEnabled() {
+		if r.trapCallbacks["RETURN"] != "" {
 			prevLineno := r.ecfg.OverrideLineno
 			r.ecfg.OverrideLineno = int(body.Pos().Line())
 			r.trapCallback(ctx, r.trapCallbacks["RETURN"], "return")
 			r.ecfg.OverrideLineno = prevLineno
+		}
+		if !frameDebugTrace {
+			if r.trapCallbacks["RETURN"] == "" {
+				if oldReturnTrap != "" {
+					r.trapCallbacks["RETURN"] = oldReturnTrap
+				}
+			}
 		}
 		r.callStack = r.callStack[:len(r.callStack)-1]
 		if n := len(r.localOptStack); n > 0 {
