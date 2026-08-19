@@ -1222,6 +1222,19 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			pwd = shellPathFromOS(pwd)
 		}
 		r.outf("%s\n", pwd)
+		// POSIX requires pwd -P to update PWD to the physical path. This
+		// deliberately leaves OLDPWD alone, as Bash's setpwd does.
+		if evalSymlinks && r.opts[optPosix] {
+			pwdVar := r.lookupVar("PWD")
+			if pwdVar.ReadOnly {
+				r.errf("%sPWD: readonly variable\n", r.bashErrPrefix(pos))
+				exit.code = 1
+				return exit
+			}
+			r.setVar("PWD", expand.Variable{
+				Set: true, Exported: pwdVar.Exported, Kind: expand.String, Str: pwd,
+			})
+		}
 	case "cd":
 		if r.opts[optRestricted] {
 			r.errf("%scd: restricted\n", r.bashErrPrefix(pos))

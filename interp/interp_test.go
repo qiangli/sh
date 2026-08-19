@@ -8862,3 +8862,58 @@ func TestCdPosixComponent(t *testing.T) {
 		qt.Assert(t, qt.IsTrue(strings.Contains(got, "status=0")))
 	})
 }
+
+func TestCdPwdPosixSymlinkSemantics(t *testing.T) {
+	t.Parallel()
+
+	tdir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tdir, "real", "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(tdir, "cdroot", "target"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("real", filepath.Join(tdir, "relative")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(tdir, "real"), filepath.Join(tdir, "absolute")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(tdir, "cdroot"), filepath.Join(tdir, "cdpath")); err != nil {
+		t.Fatal(err)
+	}
+
+	const src = `
+root=$PWD
+cd relative/sub
+logical=$PWD old=$OLDPWD
+pwd -L >/dev/null
+test "$PWD" = "$logical" && test "$OLDPWD" = "$old" || exit 1
+pwd -P >/dev/null
+physical=$PWD
+test "$PWD" = "$(pwd -P)" && test "$OLDPWD" = "$old" || exit 1
+cd "$root"
+cd absolute/sub
+test "$PWD" = "$root/absolute/sub" || exit 1
+cd "$root"
+CDPATH="$root/cdpath"
+cd -P target >/dev/null
+test "$PWD" = "$(pwd -P)" && test "$OLDPWD" = "$root" || exit 1
+`
+	file := parse(t, syntax.NewParser(syntax.Variant(syntax.LangPOSIX)), src)
+	var output bytes.Buffer
+	r, err := interp.New(
+		interp.Dir(tdir),
+		interp.StdIO(nil, &output, &output),
+		interp.ExecHandlers(testExecHandler),
+		interp.WithPosixMode(true),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), runnerRunTimeout)
+	defer cancel()
+	if err := r.Run(ctx, file); err != nil {
+		t.Fatalf("run failed: %v\noutput: %s", err, output.String())
+	}
+}
