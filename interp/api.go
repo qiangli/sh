@@ -2070,10 +2070,12 @@ func (r *Runner) setPosixMode(enabled bool) {
 	}
 	if enabled {
 		r.opts[optExpandAliases] = true
-		// POSIX mode auto-sets POSIXLY_CORRECT=y if not already set.
+		// POSIX mode auto-sets POSIXLY_CORRECT=y if not already set. Bash
+		// creates this as a shell variable, not an exported environment
+		// variable; an inherited exported value keeps its attribute.
 		if r.writeEnv != nil && !r.writeEnv.Get("POSIXLY_CORRECT").IsSet() {
 			r.writeEnv.Set("POSIXLY_CORRECT", expand.Variable{
-				Set: true, Exported: true, Kind: expand.String, Str: "y",
+				Set: true, Kind: expand.String, Str: "y",
 			})
 		}
 	}
@@ -2508,12 +2510,15 @@ func (r *Runner) Reset() {
 			Str:      strconv.Itoa(os.Getgid()),
 		})
 	}
-	r.setVarString("PWD", shellPathFromOS(r.Dir))
+	// bash auto-exports PWD even when it has to synthesize the variable at
+	// startup (variables.c:set_pwd). External utilities such as make rely on
+	// recipes inheriting the shell's current directory through PWD.
+	r.setExportedVarString("PWD", shellPathFromOS(r.Dir))
 	r.setVarString("IFS", " \t\n")
 	r.setVarString("OPTIND", "1")
 	if r.opts[optPosix] && !r.writeEnv.Get("POSIXLY_CORRECT").IsSet() {
 		r.writeEnv.Set("POSIXLY_CORRECT", expand.Variable{
-			Set: true, Exported: true, Kind: expand.String, Str: "y",
+			Set: true, Kind: expand.String, Str: "y",
 		})
 	}
 	if r.startTime.IsZero() {
