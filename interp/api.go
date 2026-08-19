@@ -1397,6 +1397,25 @@ func Interactive(enabled bool) RunnerOption {
 	}
 }
 
+// initModeSetOptionDefaults applies the option defaults that depend on
+// whether the shell is interactive. GNU bash initializes history, history
+// expansion, and line editing only for interactive shells; job control stays
+// off until the host successfully enables it for a controlling terminal.
+// Preserve any explicit Params setting applied before the first Reset.
+func (r *Runner) initModeSetOptionDefaults() {
+	if r.noOpSetState == nil {
+		r.noOpSetState = make(map[string]bool)
+	}
+	for _, name := range [...]string{"emacs", "histexpand", "history"} {
+		if _, explicit := r.noOpSetState[name]; !explicit {
+			r.noOpSetState[name] = r.interactiveShell
+		}
+	}
+	if _, explicit := r.noOpSetState["monitor"]; !explicit {
+		r.noOpSetState["monitor"] = false
+	}
+}
+
 // CommandLineNoExec marks noexec as having been requested by a `-n`
 // command-line flag rather than by `set -n`. Bash honours that form even
 // in an interactive shell, and no later `set +n` can clear it. Callers
@@ -2186,17 +2205,18 @@ var posixOptsTable = [...]posixOpt{
 // pass but which we silently accept without any runtime effect. This is
 // the long-name set; the short-flag set is in
 // [posixOptByFlag] / [Params].
-// noOpSetOptions maps each `set -o NAME` we accept-and-ignore to its
-// default state in bash 5.3 (true = on, false = off). The state isn't
-// tracked per-runner; the value just lets the listing form match bash.
+// noOpSetOptions maps each `set -o NAME` we accept-and-ignore to its bash 5.3
+// noninteractive fallback (true = on, false = off). Options whose defaults
+// depend on shell mode are materialized per runner by
+// [Runner.initModeSetOptionDefaults] before the first Reset.
 var noOpSetOptions = map[string]bool{
-	"history":              true, // on by default
-	"histexpand":           true, // alias for history
-	"hashall":              true, // bash's listing uses "hashall", not "hashcmds"
+	"history":              false, // enabled during interactive startup
+	"histexpand":           false, // enabled during interactive startup
+	"hashall":              true,  // bash's listing uses "hashall", not "hashcmds"
 	"verbose":              false,
-	"monitor":              true, // job control on in bash by default
+	"monitor":              false, // enabled explicitly after acquiring a tty
 	"vi":                   false,
-	"emacs":                true, // bash defaults emacs editor on
+	"emacs":                false, // enabled during interactive startup
 	"interactive-comments": true,
 	"ignoreeof":            false,
 	"physical":             false,
@@ -2333,6 +2353,7 @@ func (r *Runner) Reset() {
 		panic("use interp.New to construct a Runner")
 	}
 	if !r.didReset {
+		r.initModeSetOptionDefaults()
 		r.origDir = r.Dir
 		r.origParams = r.Params
 		r.origOpts = r.opts
