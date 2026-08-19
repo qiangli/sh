@@ -2137,6 +2137,14 @@ func (r *Runner) LiveVar(name string) expand.Variable {
 	return r.lookupVar(name)
 }
 
+// SetLastArgument sets Bash's special `_` variable. Embedders use this after
+// performing their own startup bookkeeping commands, which must not replace
+// the shell's initial `_` value or its inherited export attribute before user
+// code begins.
+func (r *Runner) SetLastArgument(value string, exported bool) {
+	r.setVar("_", expand.Variable{Set: true, Exported: exported, Kind: expand.String, Str: value})
+}
+
 func (r *Runner) posixOptByFlag(flag byte) *bool {
 	for i, opt := range &posixOptsTable {
 		if opt.flag == flag {

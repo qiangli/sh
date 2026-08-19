@@ -5470,6 +5470,9 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			fields = nil
 		}
 		if len(fields) == 0 {
+			// execute_cmd.c:execute_simple_command calls bind_lastarg(NULL)
+			// for an assignment/redirection-only simple command.
+			defer r.setVarString("_", "")
 			for _, as := range cm.Assigns {
 				name := as.Name.Value
 
@@ -9970,6 +9973,12 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 	if r.stop(ctx) {
 		return
 	}
+	// Bash binds `_` to the last expanded word of every simple command,
+	// after that command finishes. Doing this with a defer is important for
+	// functions: commands in the function body may update `_`, but the
+	// function invocation's own last argument wins when it returns.
+	lastArg := args[len(args)-1]
+	defer r.setVarString("_", lastArg)
 	// Emulate bash's reader-level history recording and expansion: advance
 	// the history cursor up to this command's source line. When the line was
 	// history-expanded (the expansion ran in its place), skip the original.

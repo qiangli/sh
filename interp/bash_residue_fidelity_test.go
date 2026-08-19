@@ -49,6 +49,24 @@ func TestBashResidueFidelity(t *testing.T) {
 			want: "exportfunc ok 1\n",
 		},
 		{
+			name: "execute_cmd last argument underscore",
+			in: "printf 'initial=<%s>\\n' \"$_\"\n" +
+				": a b; printf 'builtin=<%s>\\n' \"$_\"\n" +
+				"f() { printf 'entry=<%s>\\n' \"$_\"; : x y; printf 'body=<%s>\\n' \"$_\"; }; f c d\n" +
+				"printf 'function=<%s>\\n' \"$_\"\n" +
+				"( : m n ); printf 'subshell=<%s>\\n' \"$_\"\n" +
+				": p q | : r s; printf 'pipeline=<%s>\\n' \"$_\"\n" +
+				"x=1; printf 'assignment=<%s>\\n' \"$_\"",
+			want: "initial=<>\n" +
+				"builtin=<b>\n" +
+				"entry=<b>\n" +
+				"body=<y>\n" +
+				"function=<d>\n" +
+				"subshell=<d>\n" +
+				"pipeline=<d>\n" +
+				"assignment=<>\n",
+		},
+		{
 			name: "assoc16.sub single quoted subscript transform",
 			in: "declare -A A\n" +
 				"A[\"Darwin\"]=darjeeling\n" +
@@ -75,6 +93,8 @@ func TestBashResidueFidelity(t *testing.T) {
 			opts := []RunnerOption{Dir(t.TempDir()), StdIO(nil, &buf, &buf), WithBashCompatErrors(true)}
 			if strings.Contains(tt.name, "exportfunc.tests") {
 				opts = append(opts, Env(expand.ListEnviron("BASH_FUNC_foo%%=() { echo exportfunc ok 1; }")))
+			} else if strings.Contains(tt.name, "last argument underscore") {
+				opts = append(opts, Env(expand.ListEnviron()))
 			}
 			r, err := New(opts...)
 			if err != nil {

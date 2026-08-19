@@ -253,6 +253,10 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 		} else {
 			env = hc.runner.execEnvWithFuncs()
 		}
+		// GNU Bash always injects `_` into an external command's environment
+		// as the resolved command pathname, even though `_` is not exported as
+		// a shell variable (variables.c:put_command_name_into_env).
+		env = setExecEnvValue(env, "_", path)
 		if inheritedFds != "" {
 			env = append(env, BashyInheritedFdsEnv+"="+inheritedFds)
 		}
@@ -422,6 +426,17 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 			return err
 		}
 	}
+}
+
+func setExecEnvValue(env []string, name, value string) []string {
+	prefix := name + "="
+	for i, kv := range env {
+		if strings.HasPrefix(kv, prefix) {
+			env[i] = prefix + value
+			return env
+		}
+	}
+	return append(env, prefix+value)
 }
 
 func missingShebangInterpreter(path string) (string, bool) {
