@@ -7628,8 +7628,12 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			r.errf("real %s\n", elapsedString(real, true))
 			r.errf("user %s\n", elapsedString(user, true))
 			r.errf("sys %s\n", elapsedString(sys, true))
-		} else if format := r.envGet("TIMEFORMAT"); format != "" {
-			r.errf("%s\n", formatTIMEFORMAT(format, real, user, sys))
+		} else if tf := r.lookupVar("TIMEFORMAT"); tf.Set {
+			format := tf.String()
+			output := formatTIMEFORMAT(format, real, user, sys)
+			if output != "" {
+				r.errf("%s\n", output)
+			}
 		} else {
 			r.errf("\nreal\t%s\nuser\t%s\nsys\t%s\n",
 				elapsedString(real, false),
