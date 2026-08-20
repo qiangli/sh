@@ -2531,14 +2531,8 @@ func (r *Runner) Reset() {
 			Str:      strconv.Itoa(os.Geteuid()),
 		})
 	}
-	if !r.writeEnv.Get("GID").IsSet() {
-		r.setVar("GID", expand.Variable{
-			Set:      true,
-			Kind:     expand.String,
-			ReadOnly: true,
-			Str:      strconv.Itoa(os.Getgid()),
-		})
-	}
+	// Bash has no special GID variable: unlike UID and EUID, GID is neither
+	// initialized nor readonly, so scripts may freely assign to it.
 	// bash auto-exports PWD even when it has to synthesize the variable at
 	// startup (variables.c:set_pwd). External utilities such as make rely on
 	// recipes inheriting the shell's current directory through PWD.

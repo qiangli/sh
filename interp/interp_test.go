@@ -5824,14 +5824,18 @@ var runTestsUnix = []runTest{
 		`unset EUID`,
 		"unset: EUID: cannot unset: readonly variable\nexit status 1 #IGNORE",
 	},
-	// GID is not set in bash
+	// GID is not a special shell variable in bash.
 	{
 		`unset GID`,
-		"unset: GID: cannot unset: readonly variable\nexit status 1 #IGNORE",
+		"",
+	},
+	{
+		`GID=123; echo $GID`,
+		"123\n",
 	},
 	{
 		`[[ -z $GID ]] && echo "GID not set"`,
-		"exit status 1 #JUSTERR #IGNORE",
+		"GID not set\n",
 	},
 
 	// Unix-y PATH
