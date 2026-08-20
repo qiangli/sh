@@ -2995,6 +2995,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				showVV = true
 			case "-p":
 				if r.opts[optRestricted] {
+					releaseBgPid(ctx)
 					r.errf("%scommand: -p: restricted\n", r.bashErrPrefix(pos))
 					exit.code = 1
 					return exit
@@ -3005,11 +3006,13 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				// environment (so $PATH inside the child is unchanged).
 				useStdPath = true
 			default:
+				releaseBgPid(ctx)
 				return invalidOpt("command", flag)
 			}
 		}
 		args := fp.args()
 		if len(args) == 0 {
+			releaseBgPid(ctx)
 			break
 		}
 		// commandLookupEnv resolves command names for this `command`
@@ -3024,6 +3027,14 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		}
 		if !showV && !showVV {
 			if IsBuiltin(args[0]) {
+				// command and the process-spawning builtins may still publish
+				// the actual background child PID. All other builtin targets
+				// are terminal in-process operations.
+				switch args[0] {
+				case "command", "exec", "nohup", "setsid":
+				default:
+					releaseBgPid(ctx)
+				}
 				exit = r.builtin(ctx, pos, args[0], args[1:])
 				// The `command` prefix strips a special builtin's POSIX
 				// status, including its "exit the shell on a usage/syntax
@@ -3055,6 +3066,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			exit = r.exit
 			return exit
 		}
+		releaseBgPid(ctx)
 		last := uint8(0)
 		for _, arg := range args {
 			last = 0

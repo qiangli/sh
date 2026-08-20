@@ -10264,7 +10264,12 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 			}
 		}
 
-		releaseBgPid(ctx)
+		// `command` is a transparent wrapper when its operand resolves to an
+		// external command. Keep pidReady open until that nested dispatch either
+		// publishes the OS child PID or reaches a terminal non-exec branch.
+		if name != "command" {
+			releaseBgPid(ctx)
+		}
 		r.emitAudit("builtin", pos, args, true)
 		r.exit = r.builtin(ctx, pos, name, args[1:])
 		if r.opts[optPosix] {

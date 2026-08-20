@@ -120,6 +120,63 @@ printf 'background=%%s reported=%%s\n' "$background_pid" "$reported_pid"
 	}
 }
 
+// TestTP462CommandPrefixDollarBangMatchesExternalPID verifies that the
+// transparent command builtin does not publish its in-process/carrier PID
+// before the external child has started. Nested command wrappers must retain
+// the same behavior.
+func TestTP462CommandPrefixDollarBangMatchesExternalPID(t *testing.T) {
+	for _, prefix := range []string{"command ", "command command "} {
+		t.Run(strings.TrimSpace(prefix), func(t *testing.T) {
+			dir := t.TempDir()
+			pidFile := dir + "/pid"
+			src := fmt.Sprintf(`%ssh -c 'echo $$ > %q' &
+background_pid=$!
+wait "$background_pid"
+read reported_pid < %q
+[ "$background_pid" = "$reported_pid" ]`, prefix, pidFile, pidFile)
+			file, err := syntax.NewParser().Parse(strings.NewReader(src), "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var buf concBuffer
+			r, err := interp.New(
+				interp.WithJobCarrier(testCarrier462{}),
+				interp.StdIO(nil, &buf, &buf),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			if err := r.Run(ctx, file); err != nil {
+				t.Fatalf("run: %v\noutput: %q", err, buf.String())
+			}
+		})
+	}
+}
+
+func TestTP462CommandQueryReleasesDollarBang(t *testing.T) {
+	file, err := syntax.NewParser().Parse(strings.NewReader(
+		"command -v sh >/dev/null & wait \"$!\"",
+	), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf concBuffer
+	r, err := interp.New(
+		interp.WithJobCarrier(testCarrier462{}),
+		interp.StdIO(nil, &buf, &buf),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := r.Run(ctx, file); err != nil {
+		t.Fatalf("run: %v\noutput: %q", err, buf.String())
+	}
+}
+
 // TestTP462DollarBangWaitMultipleJobs verifies that wait works correctly
 // for multiple background jobs with distinct PIDs.
 func TestTP462DollarBangWaitMultipleJobs(t *testing.T) {
