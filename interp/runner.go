@@ -10360,6 +10360,21 @@ func (r *Runner) execAs(ctx context.Context, pos syntax.Pos, argv0 string, clear
 				return
 			}
 		}
+		// With hashall enabled (the default), bash remembers the resolved
+		// location of every PATH-searched external command after its first
+		// invocation. Explicit paths are never entered in the table.
+		hashall := true
+		if enabled, ok := r.noOpSetState["hashall"]; ok {
+			hashall = enabled
+		}
+		if _, ok := r.cmdHashTable[name]; !ok && hashall && !strings.ContainsRune(name, '/') {
+			if path, err := LookPathDir(r.Dir, r.writeEnv, name); err == nil {
+				if r.cmdHashTable == nil {
+					r.cmdHashTable = make(map[string]cmdHashEntry)
+				}
+				r.cmdHashTable[name] = cmdHashEntry{path: path}
+			}
+		}
 		if entry, ok := r.cmdHashTable[args[0]]; ok && !hashed {
 			hashed = true
 			entry.hits++

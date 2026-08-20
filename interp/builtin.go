@@ -573,6 +573,7 @@ var writeErrChecked = map[string]bool{
 // the broader EPIPE check away from echo/printf and other output builtins.
 var pipeWriteErrChecked = map[string]bool{
 	"export":   true,
+	"hash":     true,
 	"readonly": true,
 	"set":      true,
 	"times":    true,

@@ -2297,6 +2297,11 @@ func (r *Runner) setVar(name string, vr expand.Variable) {
 		r.exit.code = 1
 		return
 	}
+	// Bash invalidates remembered command locations on every successful
+	// PATH assignment, including a temporary assignment before a command.
+	if name == "PATH" {
+		clear(r.cmdHashTable)
+	}
 }
 
 func (r *Runner) rejectDeclareConversion(name string, prev, vr expand.Variable) bool {

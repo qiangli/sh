@@ -6417,6 +6417,7 @@ func TestPosixListingBuiltinsReportBrokenPipe(t *testing.T) {
 		{"export", "export FOO=bar; command export -p"},
 		{"readonly", "readonly RO=bar; command readonly -p"},
 		{"set", "FOO=bar; command set"},
+		{"hash", "hash -p /bin/sh sh; command hash"},
 		{"times", "command times"},
 	}
 	for _, tc := range tests {
