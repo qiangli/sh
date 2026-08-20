@@ -7521,7 +7521,9 @@ func (g *getopts) next(optstr string, args []string) (opt rune, optarg string, d
 	hasRest := g.runeidx+1 < len(opts)
 
 	i := strings.IndexRune(optstr, opt)
-	if i < 0 {
+	// A colon in optstr controls diagnostics or marks the preceding option
+	// as requiring an argument; it is never an option character itself.
+	if opt == ':' || i < 0 {
 		// invalid option — advance past this letter so we don't loop forever
 		if hasRest {
 			g.runeidx++

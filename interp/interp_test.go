@@ -5674,6 +5674,10 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 		"?\nz\n",
 	},
 	{
+		"getopts : opt -:; echo $opt; echo $OPTARG",
+		"?\n:\n",
+	},
+	{
 		"getopts :a: opt -a; echo $opt; echo $OPTARG",
 		":\na\n",
 	},
