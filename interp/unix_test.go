@@ -236,6 +236,39 @@ func TestRunnerTerminalExecInheritedSparseFD(t *testing.T) {
 	}
 }
 
+// TestRunnerTerminalExecVirtualSparseFD covers a descriptor created by the
+// interpreted shell itself, rather than one inherited ambiently at startup.
+// The nested process must receive it at fd 8 even though virtual fds 3..7 are
+// absent. Terminal harnesses use this shape to save fd 0 before feeding a
+// nested shell through a pipe, then restore the terminal with `exec 0<&8`.
+func TestRunnerTerminalExecVirtualSparseFD(t *testing.T) {
+	primary, secondary, err := pty.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer primary.Close()
+	defer secondary.Close()
+
+	cmd := exec.Command(os.Getenv("GOSH_PROG"),
+		"exec 8<&0; GOSH_CMD=fd8_is_terminal $GOSH_PROG")
+	cmd.Stdin = secondary
+	cmd.Stdout = secondary
+	cmd.Stderr = secondary
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := bufio.NewReader(primary).ReadString('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	if got != "terminal\r\n" {
+		t.Fatalf("external command lost virtual sparse terminal fd 8: got %q", got)
+	}
+}
+
 // TestRunnerExternalTerminalTools checks the shell-owned boundary shared by
 // terminal-aware system tools. The tools themselves remain host providers:
 // this only compares the environment, session, and controlling terminal they

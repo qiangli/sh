@@ -8692,7 +8692,15 @@ func (r *Runner) execExtraFiles() ([]*os.File, string, func()) {
 	var extra []*os.File
 	var fds []string
 	var cleanup []func()
-	for fd := 3; ; fd++ {
+	maxFD := 2
+	for fd := range r.fdTable {
+		maxFD = max(maxFD, fd)
+	}
+	for fd := range r.fdWriteTable {
+		maxFD = max(maxFD, fd)
+	}
+	var closedSlot *os.File
+	for fd := 3; fd <= maxFD; fd++ {
 		f, ok := r.fdTable[fd]
 		if !ok {
 			if w, wok := r.fdWriteTable[fd].(*os.File); wok {
@@ -8716,7 +8724,20 @@ func (r *Runner) execExtraFiles() ([]*os.File, string, func()) {
 			}
 		}
 		if !ok {
-			break
+			// exec.Cmd.ExtraFiles maps slice entry i to child fd 3+i,
+			// so a virtual sparse fd such as 8 still needs entries for
+			// 3 through 7. A non-nil closed *os.File reports fd -1 to
+			// os.StartProcess; Unix forkExec closes that child slot rather
+			// than inventing an open descriptor there.
+			if closedSlot == nil {
+				closedSlot, _ = os.Open(os.DevNull)
+				if closedSlot == nil {
+					break
+				}
+				_ = closedSlot.Close()
+			}
+			extra = append(extra, closedSlot)
+			continue
 		}
 		extra = append(extra, f)
 		fds = append(fds, strconv.Itoa(fd))
