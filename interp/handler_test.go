@@ -61,6 +61,15 @@ func unavailableTTYOpen(ctx context.Context, path string, flags int, mode os.Fil
 	return interp.DefaultOpenHandler()(ctx, path, flags, mode)
 }
 
+var errTTYUnavailable = errors.New("unavailable")
+
+func unavailableTTYOpenFixedErr(ctx context.Context, path string, flags int, mode os.FileMode) (io.ReadWriteCloser, error) {
+	if path == "/dev/tty" {
+		return nil, &os.PathError{Op: "open", Path: path, Err: errTTYUnavailable}
+	}
+	return interp.DefaultOpenHandler()(ctx, path, flags, mode)
+}
+
 func blocklistGlob(ctx context.Context, path string) ([]fs.FileInfo, error) {
 	return nil, fmt.Errorf("blocklisted: glob")
 }
@@ -522,20 +531,28 @@ var modCases = []struct {
 		want: "body of foo\nbar\n",
 	},
 	{
-		name: "OpenDevTTYFallbackIsTerminal",
+		name: "OpenDevTTYNoTerminalFailsRedirect",
 		opts: []interp.RunnerOption{
-			interp.OpenHandler(unavailableTTYOpen),
+			interp.OpenHandler(unavailableTTYOpenFixedErr),
 		},
 		src:  "test -t 0 < /dev/tty; echo $?",
-		want: "0\n",
+		want: "open /dev/tty: unavailable\n1\n",
 	},
 	{
-		name: "OpenDevTTYFallbackReadTimeout",
+		name: "OpenDevTTYNoTerminalFailsRead",
 		opts: []interp.RunnerOption{
-			interp.OpenHandler(unavailableTTYOpen),
+			interp.OpenHandler(unavailableTTYOpenFixedErr),
 		},
 		src:  "a=4; read -t 0.000001 a < /dev/tty; echo $? ${a:-unset}",
-		want: "142 unset\n",
+		want: "open /dev/tty: unavailable\n1 4\n",
+	},
+	{
+		name: "OpenDevTTYNoTerminalLeavesExecFdClosed",
+		opts: []interp.RunnerOption{
+			interp.OpenHandler(unavailableTTYOpenFixedErr),
+		},
+		src:  "exec 4</dev/tty; echo exec=$?; read a <&4; echo read=$?",
+		want: "open /dev/tty: unavailable\nexec=1\n4: Bad file descriptor\nread=1\n",
 	},
 	{
 		name: "CallReplaceWithBlank",

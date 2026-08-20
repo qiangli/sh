@@ -316,6 +316,40 @@ func TestRunnerExecStartFailureContinues(t *testing.T) {
 	}
 }
 
+func TestRunnerDevTTYFallbackOnTerminal(t *testing.T) {
+	t.Parallel()
+
+	const src = "test -t 0 < /dev/tty; printf 'test=%s ' $?; " +
+		"a=4; read -t 0.000001 a < /dev/tty; printf 'read=%s %s\\n' $? ${a:-unset}"
+	primary, secondary, err := pty.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer primary.Close()
+
+	r, err := interp.New(
+		interp.StdIO(secondary, secondary, secondary),
+		interp.OpenHandler(unavailableTTYOpen),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		if err := r.Run(context.Background(), parse(t, nil, src)); err != nil {
+			t.Error(err)
+		}
+		secondary.Close()
+	}()
+
+	got, err := bufio.NewReader(primary).ReadString('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "test=0 read=142 unset\r\n"; got != want {
+		t.Fatalf("want %q, got %q", want, got)
+	}
+}
+
 // TestRunnerTerminalTestHighFd verifies that terminal tests resolve the
 // runner-owned descriptor tables for fds created by shell redirections.
 func TestRunnerTerminalTestHighFd(t *testing.T) {

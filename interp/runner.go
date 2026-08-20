@@ -28,6 +28,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"golang.org/x/term"
+
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/internal"
 	"mvdan.cc/sh/v3/pattern"
@@ -10462,6 +10464,18 @@ type ttyFallbackFile struct {
 	write *os.File
 }
 
+func (r *Runner) onTerminal() bool {
+	for _, f := range [...]any{r.stdin, r.stdout, r.stderr} {
+		if _, ok := f.(*ttyFallbackFile); ok {
+			return true
+		}
+		if f, ok := f.(interface{ Fd() uintptr }); ok && term.IsTerminal(int(f.Fd())) {
+			return true
+		}
+	}
+	return false
+}
+
 func (f *ttyFallbackFile) Read(p []byte) (int, error) {
 	return f.read.Read(p)
 }
@@ -10528,7 +10542,10 @@ func (r *Runner) open(ctx context.Context, path string, flags int, mode os.FileM
 	case nil:
 		return f, nil
 	case *os.PathError:
-		if path == "/dev/tty" && flags&os.O_WRONLY == 0 {
+		// Preserve the embedder fallback only while the runner is actually
+		// attached to a terminal. With no terminal, Bash reports the failed
+		// /dev/tty redirection instead of fabricating a readable descriptor.
+		if path == "/dev/tty" && flags&os.O_WRONLY == 0 && r.onTerminal() {
 			read, write, pipeErr := os.Pipe()
 			if pipeErr == nil {
 				return &ttyFallbackFile{read: read, write: write}, nil
