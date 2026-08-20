@@ -235,13 +235,11 @@ type Runner struct {
 	// `set -T` (functrace) option — see [Runner.shouldFireDebugTrap].
 	funcTrace map[string]bool
 
-	// inlineLeakFromFunc records variable names whose inline
-	// assignments leaked out of a function-scoped special-builtin
-	// invocation (`var=N return …`). The outer inline-restore
-	// loop checks this map and skips restoring affected names
-	// so the leaked value survives. Cleared by callers after
-	// they handle their own restore.
-	inlineLeakFromFunc map[string]bool
+	// inlineRestoreFrames tracks active command-prefix assignment restore
+	// scopes. A special builtin nested inside a function can mark the exact
+	// enclosing frame whose restore must be skipped when its assignment
+	// leaks outward.
+	inlineRestoreFrames []*inlineRestoreFrame
 
 	// tempEnv records variable names bound by inline assignments for
 	// the in-flight call (`a=4 foo`). Bash lets `local a` (no value)

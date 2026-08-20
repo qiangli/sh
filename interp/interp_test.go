@@ -954,6 +954,16 @@ var runTests = []runTest{
 	{"f() { echo $v; }; v=x; v+=y f; f", "xy\nx\n"},
 	{"f() { echo $v; }; declare -n v=v2; v2=x; v=y f; f", "y\nx\n"},
 	{"f() { echo ${v[@]}; }; v=(e1 e2); v=y f; f", "y\ne1 e2\n"},
+	// A value leaked by a nested POSIX special builtin belongs to the
+	// outer function call's temporary binding. An unrelated inline function
+	// call in between must restore its own value rather than consuming the
+	// stale leak marker.
+	{
+		"set -o posix; inner() { x=inner export x; }; g() { :; }; " +
+			"outer() { inner; x=next g; printf 'inside=%s\\n' \"$x\"; }; " +
+			"x=outer outer; printf 'after=%s\\n' \"$x\"",
+		"inside=inner\nafter=inner\n",
+	},
 	{"f() { echo bad; } 3>/dev/null/abc && f; echo status:$?", "open /dev/null/abc: not a directory\nstatus:1\n"},
 	{"f() { echo hi; } >out; echo def:$?; f; echo after; printf 'file:'; cat out", "def:0\nafter\nfile:hi\n"},
 	{`f() { local v=x; unset v; declare -p v; }; v=g; f; v=t f`, "declare -- v\ndeclare -x v\n"},

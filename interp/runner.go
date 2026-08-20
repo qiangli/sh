@@ -1622,6 +1622,28 @@ func (r *Runner) restoreInlineVar(name string, vr expand.Variable) {
 	r.setVar(name, vr)
 }
 
+type inlineRestoreFrame struct {
+	restores map[string]bool
+	leaked   map[string]bool
+}
+
+// markEnclosingInlineLeak marks the nearest active outer command-prefix
+// restore for name. The current frame belongs to the special builtin which
+// caused the leak, so it is intentionally excluded from the search.
+func (r *Runner) markEnclosingInlineLeak(name string) {
+	for i := len(r.inlineRestoreFrames) - 2; i >= 0; i-- {
+		frame := r.inlineRestoreFrames[i]
+		if !frame.restores[name] {
+			continue
+		}
+		if frame.leaked == nil {
+			frame.leaked = make(map[string]bool)
+		}
+		frame.leaked[name] = true
+		return
+	}
+}
+
 // expandEnviron exposes [Runner]'s variables to the expand package.
 type expandEnv struct {
 	r *Runner
@@ -5865,6 +5887,11 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			}
 			r.tempEnv = m
 		}
+		restoreFrame := &inlineRestoreFrame{restores: make(map[string]bool, len(restores))}
+		for _, restore := range restores {
+			restoreFrame.restores[restore.name] = true
+		}
+		r.inlineRestoreFrames = append(r.inlineRestoreFrames, restoreFrame)
 		r.call(ctx, callPos, fields)
 		r.tempEnv = savedTempEnv
 		// Bash POSIX mode (or inside a function): assignments
@@ -5905,22 +5932,11 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			restores = kept
 		}
 		if !persistInline {
-			// Outer (non-persist) inline restore: skip names
-			// that an inner function-scoped special builtin
-			// already leaked outward — restoring would clobber
-			// the leaked value.
 			for _, restore := range restores {
-				if r.inlineLeakFromFunc[restore.name] {
+				if restoreFrame.leaked[restore.name] {
 					continue
 				}
 				r.restoreInlineVar(restore.name, restore.vr)
-			}
-			// Clear the leak flags once the immediate caller has
-			// had its chance to consume them. Commands still running
-			// inside the callee must leave the marker for the caller's
-			// restore loop.
-			if len(restores) > 0 || !r.inFunc {
-				r.inlineLeakFromFunc = nil
 			}
 		} else if r.inFunc && fields[0] == "return" {
 			// `var=N return …` inside a function: bash 5.3 leaks
@@ -5932,10 +5948,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				vr := r.lookupVar(restore.name)
 				if vr.IsSet() {
 					r.setGlobalVarString(restore.name, vr.String())
-					if r.inlineLeakFromFunc == nil {
-						r.inlineLeakFromFunc = make(map[string]bool)
-					}
-					r.inlineLeakFromFunc[restore.name] = true
+					r.markEnclosingInlineLeak(restore.name)
 				}
 			}
 		} else if r.inFunc && r.opts[optPosix] && (fields[0] == "export" || fields[0] == "readonly") {
@@ -5953,12 +5966,10 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				if !restore.wasTemp {
 					continue
 				}
-				if r.inlineLeakFromFunc == nil {
-					r.inlineLeakFromFunc = make(map[string]bool)
-				}
-				r.inlineLeakFromFunc[restore.name] = true
+				r.markEnclosingInlineLeak(restore.name)
 			}
 		}
+		r.inlineRestoreFrames = r.inlineRestoreFrames[:len(r.inlineRestoreFrames)-1]
 	case *syntax.BinaryCmd:
 		switch cm.Op {
 		case syntax.AndStmt, syntax.OrStmt:
