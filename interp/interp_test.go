@@ -6418,6 +6418,91 @@ func TestRunnerRun(t *testing.T) {
 	}
 }
 
+func TestRunnerInheritedUnsetRestoredAfterFunctionTemp(t *testing.T) {
+	for _, mode := range []string{"default", "posix"} {
+		for _, inherited := range []bool{false, true} {
+			name := fmt.Sprintf("%s/inherited=%t", mode, inherited)
+			t.Run(name, func(t *testing.T) {
+				prefix := ""
+				if mode == "posix" {
+					prefix = "set -o posix; "
+				}
+				src := prefix + "outer() { unset LC_ALL; " +
+					"LC_CTYPE=C; export LC_CTYPE; LC_ALL=POSIX probe; observe; }; " +
+					"outer; observe"
+				env := expand.ListEnviron()
+				if inherited {
+					env = expand.ListEnviron("LC_ALL=POSIX")
+				}
+				file := parse(t, nil, src)
+				var stdout, stderr bytes.Buffer
+				r, err := interp.New(
+					interp.Env(env),
+					interp.StdIO(nil, &stdout, &stderr),
+					interp.ExecHandlers(localeTempProbeHandler),
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := r.Run(context.Background(), file); err != nil {
+					t.Fatal(err)
+				}
+				want := "LC_ALL_set=false LC_CTYPE=<C>\nLC_ALL_set=false LC_CTYPE=<C>\n"
+				if got := stdout.String(); got != want {
+					t.Fatalf("stdout mismatch:\nwant: %q\ngot:  %q\nstderr: %q", want, got, stderr.String())
+				}
+			})
+		}
+	}
+}
+
+func TestRunnerInheritedUnsetByTemporaryUnset(t *testing.T) {
+	for _, mode := range []string{"default", "posix"} {
+		t.Run(mode, func(t *testing.T) {
+			prefix := ""
+			if mode == "posix" {
+				prefix = "set -o posix; "
+			}
+			file := parse(t, nil, prefix+"outer() { unset LC_ALL; LC_ALL=temp unset LC_ALL; observe; }; outer; observe")
+			var stdout bytes.Buffer
+			r, err := interp.New(
+				interp.Env(expand.ListEnviron("LC_ALL=POSIX")),
+				interp.StdIO(nil, &stdout, nil),
+				interp.ExecHandlers(localeTempProbeHandler),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := r.Run(context.Background(), file); err != nil {
+				t.Fatal(err)
+			}
+			want := "LC_ALL_set=false LC_CTYPE=<>\nLC_ALL_set=false LC_CTYPE=<>\n"
+			if got := stdout.String(); got != want {
+				t.Fatalf("stdout mismatch:\nwant: %q\ngot:  %q", want, got)
+			}
+		})
+	}
+}
+
+func localeTempProbeHandler(next interp.ExecHandlerFunc) interp.ExecHandlerFunc {
+	return func(ctx context.Context, args []string) error {
+		hc := interp.HandlerCtx(ctx)
+		switch args[0] {
+		case "probe":
+			vr := hc.Env.Get("LC_ALL")
+			if !vr.IsSet() || vr.String() != "POSIX" {
+				return fmt.Errorf("probe LC_ALL: got set=%t value=%q, want set POSIX", vr.IsSet(), vr.String())
+			}
+			return nil
+		case "observe":
+			fmt.Fprintf(hc.Stdout, "LC_ALL_set=%t LC_CTYPE=<%s>\n",
+				hc.Env.Get("LC_ALL").IsSet(), hc.Env.Get("LC_CTYPE").String())
+			return nil
+		}
+		return next(ctx, args)
+	}
+}
+
 func TestPrintfPlusLeadingFormat(t *testing.T) {
 	tests := []runTest{
 		{in: "printf +3", want: "+3"},

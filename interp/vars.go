@@ -380,7 +380,11 @@ func (o *overlayEnviron) unsetTemp(name string, restoreLocal bool) bool {
 		case !restoreLocal && cur.Variable.Local:
 			o.values[normalized] = namedVariable{Name: name, Variable: expand.Variable{Local: true}}
 		default:
-			delete(o.values, normalized)
+			if o.parent != nil && o.parent.Get(name).Declared() {
+				o.values[normalized] = namedVariable{Name: name}
+			} else {
+				delete(o.values, normalized)
+			}
 		}
 		return true
 	}
@@ -398,6 +402,12 @@ func (o *overlayEnviron) restoreTemp(name string, prev expand.Variable) bool {
 		if cur.Temp {
 			if prev.Declared() {
 				o.values[normalized] = namedVariable{Name: name, Variable: prev}
+			} else if o.parent != nil && o.parent.Get(name).Declared() {
+				// Keep an explicit unset entry when deleting this overlay's
+				// temporary value would uncover an inherited variable. The
+				// command-prefix assignment must restore the unset state it
+				// observed, not the immutable parent environment beneath it.
+				o.values[normalized] = namedVariable{Name: name}
 			} else {
 				delete(o.values, normalized)
 			}
