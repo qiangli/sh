@@ -1804,30 +1804,34 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			// run in their own goroutine (sigParent nil), so a backgrounded
 			// `kill -SIG $$` still sends a real OS signal that the parent's
 			// Notify catches.
-			if pid == r.shellPid() {
+			var replacement *execReplacementAttempt
+			replacementPid := 0
+			if r.asyncList && r.execReplacement != nil {
+				replacement = r.execReplacement.current.Load()
+				if replacement != nil {
+					<-replacement.ready
+					replacementPid = int(replacement.pid.Load())
+				}
+			}
+			if pid == r.shellPid() || replacementPid > 0 && pid == replacementPid {
 				// A top-level exec with live in-process background jobs cannot
 				// use execve without destroying those jobs. While its external
 				// replacement is proxied, asynchronous children still see $$ as
 				// that replacement's process identity, just as after a real
 				// execve. Route both probes and signals to the replacement child.
-				if r.asyncList && r.execReplacement != nil {
-					replacement := r.execReplacement.current.Load()
-					if replacement != nil {
-						if bg, _ := ctx.Value(bgProcCtxKey{}).(*bgProc); bg != nil {
-							replacement.observer.Store(bg)
-						}
-						<-replacement.ready
-						target := int(replacement.pid.Load())
-						if target == 0 {
-							exit.code = 1
-							continue
-						}
-						if err := sendSignal(target, sig); err != nil {
-							exit.code = 1
-							r.errf(r.bashErrPrefix(pos)+"kill: (%d) - %v\n", target, err)
-						}
+				if replacement != nil {
+					if bg, _ := ctx.Value(bgProcCtxKey{}).(*bgProc); bg != nil {
+						replacement.observer.Store(bg)
+					}
+					if replacementPid == 0 {
+						exit.code = 1
 						continue
 					}
+					if err := sendSignal(replacementPid, sig); err != nil {
+						exit.code = 1
+						r.errf(r.bashErrPrefix(pos)+"kill: (%d) - %v\n", replacementPid, err)
+					}
+					continue
 				}
 				if sname, ok := signalName(sig); ok {
 					if r.isStartupIgnored(sname) {

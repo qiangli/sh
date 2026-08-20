@@ -492,6 +492,9 @@ type Runner struct {
 	// Such runners get SIGINT/SIGQUIT ignored by default while job control is
 	// disabled; external commands launched from them must inherit that state.
 	asyncList bool
+	// asyncProc is the job record owning this asynchronous runner. It is
+	// inherited by foreground subshells nested inside the async list.
+	asyncProc *bgProc
 
 	// callStack tracks function call frames for caller/BASH_SOURCE/BASH_LINENO/FUNCNAME.
 	callStack []callFrame
@@ -2846,6 +2849,7 @@ func (r *Runner) subshell(background bool) *Runner {
 		startTime:              r.startTime,
 		subshellLevel:          r.subshellLevel + 1,
 		asyncList:              r.asyncList,
+		asyncProc:              r.asyncProc,
 		umask:                  r.umask,
 		startupIgnored:         r.startupIgnored,
 		loginShell:             r.loginShell,

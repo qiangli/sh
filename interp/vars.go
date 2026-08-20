@@ -690,7 +690,19 @@ func (r *Runner) lookupVar(name string) expand.Variable {
 		if r.deterministic {
 			vr.Kind, vr.Str = expand.String, strconv.Itoa(int(r.deterministicSeed&0x7fff))
 		} else {
-			vr.Kind, vr.Str = expand.String, strconv.Itoa(os.Getpid())
+			pid := int64(os.Getpid())
+			if r.asyncList && r.execReplacement != nil {
+				if replacement := r.execReplacement.current.Load(); replacement != nil {
+					<-replacement.ready
+					if replacementPid := replacement.pid.Load(); replacementPid > 0 {
+						pid = replacementPid
+						if r.asyncProc != nil {
+							replacement.observer.Store(r.asyncProc)
+						}
+					}
+				}
+			}
+			vr.Kind, vr.Str = expand.String, strconv.FormatInt(pid, 10)
 		}
 	case "PPID":
 		vr.Kind, vr.Str = expand.String, strconv.Itoa(os.Getppid())

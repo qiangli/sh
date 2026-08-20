@@ -222,6 +222,10 @@ func TestMain(m *testing.M) {
 		case "bg_self_signal_exec":
 			marker := os.Getenv("GOSH_MARKER")
 			sig := os.Getenv("GOSH_SIGNAL")
+			killCommand := "kill"
+			if os.Getenv("GOSH_EXTERNAL_KILL") != "" {
+				killCommand = "/bin/kill"
+			}
 			delay := os.Getenv("GOSH_DELAY")
 			if delay != "" {
 				delay = "/bin/sleep " + delay + "; "
@@ -235,7 +239,7 @@ func TestMain(m *testing.M) {
 				sig = "TERM"
 				execCommand = `/bin/sh -c 'trap "exit 7" TERM; while :; do /bin/sleep 1; done'`
 			}
-			src := fmt.Sprintf(`(printf S > %q; %skill -s %s $$; printf '%%s' "$?" >> %q) & exec %s`, marker, delay, sig, marker, execCommand)
+			src := fmt.Sprintf(`(printf S > %q; %s%s -s %s $$; printf '%%s' "$?" >> %q) & exec %s`, marker, delay, killCommand, sig, marker, execCommand)
 			file, err := syntax.NewParser().Parse(strings.NewReader(src), "")
 			if err != nil {
 				fmt.Fprintln(os.Stderr, err)

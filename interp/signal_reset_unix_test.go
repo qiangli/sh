@@ -165,12 +165,15 @@ func TestBackgroundSelfSignalSurvivesExecReplacement(t *testing.T) {
 		name, signal, delay string
 		wantSignal          syscall.Signal
 		wantExit            int
+		external            bool
 	}{
 		{name: "term", signal: "TERM", delay: "0.05", wantSignal: syscall.SIGTERM},
 		{name: "term_immediate", signal: "TERM", wantSignal: syscall.SIGTERM},
 		{name: "handled_term", signal: "HANDLED", delay: "0.05", wantExit: 7},
 		{name: "probe", signal: "0", delay: "0.05"},
 		{name: "probe_immediate", signal: "0"},
+		{name: "external_term", signal: "TERM", delay: "0.05", wantSignal: syscall.SIGTERM, external: true},
+		{name: "external_probe", signal: "0", delay: "0.05", external: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			marker := t.TempDir() + "/kill-status"
@@ -183,6 +186,9 @@ func TestBackgroundSelfSignalSurvivesExecReplacement(t *testing.T) {
 				"GOSH_SIGNAL="+tc.signal,
 				"GOSH_DELAY="+tc.delay,
 			)
+			if tc.external {
+				cmd.Env = append(cmd.Env, "GOSH_EXTERNAL_KILL=1")
+			}
 			if err := cmd.Start(); err != nil {
 				t.Fatal(err)
 			}

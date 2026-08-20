@@ -4545,6 +4545,7 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 			jobControl:       r.monitorActive(),
 			jobID:            r.nextJobID(),
 		}
+		r2.asyncProc = bg
 		bgCtx, cancel := context.WithCancel(ctx)
 		bg.cancel = cancel
 		// With a JobCarrier configured, give the job a real kernel PID

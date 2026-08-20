@@ -473,7 +473,9 @@ func relayExecReplacementSignal(sig syscall.Signal) error {
 	}
 	// Signal delivery is asynchronous. Do not let a normal ExitStatus return
 	// race ahead and turn WIFSIGNALED into an ordinary 128+N process exit.
-	select {}
+	for {
+		time.Sleep(time.Hour)
+	}
 }
 
 // modifiedSinceAccessed reports whether the file's mtime is strictly
