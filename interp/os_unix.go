@@ -83,7 +83,8 @@ func mkfifo(path string, mode uint32) error {
 // Bash's PATH search uses sh_eaccess(file, X_OK) (findcmd.c), so a file
 // with the execute bit set only for other users is correctly skipped.
 func canExec(path string) bool {
-	return unix.Faccessat(unix.AT_FDCWD, path, unix.X_OK, unix.AT_EACCESS) == nil
+	err := unix.Faccessat(unix.AT_FDCWD, path, unix.X_OK, unix.AT_EACCESS)
+	return accessLongFile(path, unix.X_OK, err) == nil
 }
 
 // canRead reports whether the current effective user may read path.

@@ -70,6 +70,27 @@ func statLongPath(path string, original error) (fs.FileInfo, error) {
 	return file.Stat()
 }
 
+func accessLongFile(path string, mode uint32, original error) error {
+	if !errors.Is(original, unix.ENAMETOOLONG) {
+		return original
+	}
+	file, err := openLongPath(path, 0)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	return unix.Faccessat(int(file.Fd()), "", mode, unix.AT_EACCESS|unix.AT_EMPTY_PATH)
+}
+
+func openLongExecPath(path string) (*os.File, bool, error) {
+	_, err := os.Stat(path)
+	if !errors.Is(err, unix.ENAMETOOLONG) {
+		return nil, false, nil
+	}
+	file, err := openLongPath(path, 0)
+	return file, true, err
+}
+
 func accessLongPath(path string, mode uint32, original error) error {
 	if !errors.Is(original, unix.ENAMETOOLONG) {
 		return original
