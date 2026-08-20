@@ -146,6 +146,28 @@ func TestMain(m *testing.M) {
 		case "print_fail":
 			fmt.Printf("exec fail\n")
 			os.Exit(1)
+		case "relative_exec_identity":
+			fmt.Printf("argv0=%s\nunderscore=%s\n", os.Args[0], os.Getenv("_"))
+			os.Exit(0)
+		case "relative_exec_script":
+			if len(os.Args) < 2 {
+				os.Exit(2)
+			}
+			src, err := os.ReadFile(os.Args[1])
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+			file, err := syntax.NewParser().Parse(bytes.NewReader(src), os.Args[1])
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+			runner, err := interp.New(interp.StdIO(os.Stdin, os.Stdout, os.Stderr))
+			if err != nil || runner.Run(context.Background(), file) != nil {
+				os.Exit(1)
+			}
+			os.Exit(0)
 		case "pid_and_hang":
 			fmt.Println(os.Getpid())
 			time.Sleep(time.Hour)
