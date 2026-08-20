@@ -247,16 +247,6 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 			return ExitStatus(127)
 		}
 		execPath := shellPathToOS(lookupDir, path)
-		scriptPath := execPath
-		if lookupDir != hc.Dir {
-			// On Linux, a retained cwd is represented by /proc/self/fd/N.
-			// os/exec resolves a relative Cmd.Path before applying Cmd.Dir,
-			// so a relative explicit path or PATH entry would otherwise be
-			// interpreted from the host process's cwd. Anchor only the path
-			// passed to execve; argv[0], diagnostics, and the exported "_"
-			// value keep the spelling the shell resolved.
-			execPath = anchorExecPath(lookupDir, execPath)
-		}
 		envCommandPath := path
 		if lookupDir != hc.Dir && strings.HasPrefix(path, lookupDir+"/") {
 			envCommandPath = shellPathJoinAbs(hc.Dir, strings.TrimPrefix(path, lookupDir+"/"))
@@ -271,24 +261,6 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 			return ExitStatus(1)
 		}
 		defer closeExtraFiles()
-		// A retained Linux cwd is addressed through /proc/self/fd/N. A shebang
-		// interpreter reopens that pathname after execve, when the runner's
-		// close-on-exec cwd descriptor would normally be gone. Export a private
-		// duplicate in the next ExtraFiles slot and rewrite only the internal
-		// exec path to its stable child descriptor number. The ENOEXEC fallback
-		// continues to receive scriptPath, preserving the shell-visible spelling.
-		var retainedExecDir *os.File
-		if lookupDir != hc.Dir && hc.runner.dirFile != nil {
-			retainedExecDir, err = dupRunnerDir(hc.runner.dirFile)
-			if err != nil {
-				fmt.Fprintln(hc.Stderr, err)
-				return ExitStatus(1)
-			}
-			defer retainedExecDir.Close()
-			childFD := 3 + len(extraFiles)
-			extraFiles = append(extraFiles, retainedExecDir)
-			execPath = anchorExecPath(fmt.Sprintf("/proc/self/fd/%d", childFD), path)
-		}
 		var env []string
 		if hc.ExecClearEnv {
 			env = []string{}
@@ -365,7 +337,7 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 		if err != nil && isExecFormatError(err) {
 			selfBin, lookupErr := os.Executable()
 			if lookupErr == nil {
-				newArgs := append([]string{selfBin, scriptPath}, args[1:]...)
+				newArgs := append([]string{selfBin, execPath}, args[1:]...)
 				// Re-exec'ing our own shell on a no-shebang script: carry the
 				// parent's hard-ignored signals across so the child shell
 				// treats them as ignored-on-entry, matching how bash inherits
@@ -487,20 +459,6 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 			return err
 		}
 	}
-}
-
-// anchorExecPath makes a relative executable path relative to dir without
-// cleaning either operand. In particular, dir may be /proc/self/fd/N and path
-// may begin with ../; the kernel must follow the fd symlink before resolving
-// that parent component.
-func anchorExecPath(dir, path string) string {
-	if shellPathAbs(path) {
-		return path
-	}
-	if strings.HasSuffix(dir, "/") {
-		return dir + path
-	}
-	return dir + "/" + path
 }
 
 // execCancelSignal returns the signal which caused a background job's
@@ -653,7 +611,7 @@ func isBinarySource(content []byte) bool {
 
 func checkStat(dir, file string, checkExec bool) (string, error) {
 	target := file
-	target = lookupStatPath(dir, target)
+	target = shellPathJoinAbs(dir, target)
 	info, err := os.Stat(target)
 	if err != nil {
 		return "", err
@@ -670,16 +628,6 @@ func checkStat(dir, file string, checkExec bool) (string, error) {
 	// the path as it appeared in $PATH rather than the absolute
 	// form derived from the runner's cwd.
 	return file, nil
-}
-
-// lookupStatPath preserves relative parent components when dir is the retained
-// Linux cwd handle. filepath.Join would clean /proc/self/fd/N/../program into
-// /proc/self/fd/program before the kernel can follow the N symlink.
-func lookupStatPath(dir, path string) string {
-	if strings.HasPrefix(dir, "/proc/self/fd/") && !shellPathAbs(path) {
-		return anchorExecPath(dir, path)
-	}
-	return shellPathJoinAbs(dir, path)
 }
 
 func winHasExt(file string) bool {
