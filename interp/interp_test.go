@@ -202,6 +202,14 @@ func TestMain(m *testing.M) {
 			}
 			fmt.Printf("%s found\n", pathProg)
 			os.Exit(0)
+		case "getwd":
+			wd, err := os.Getwd()
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+			fmt.Println(wd)
+			os.Exit(0)
 		}
 		r := strings.NewReader(os.Args[1])
 		file, err := syntax.NewParser().Parse(r, "")

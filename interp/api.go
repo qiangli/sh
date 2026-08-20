@@ -71,6 +71,11 @@ type Runner struct {
 	// absolute path. It can only be set via [Dir].
 	Dir string
 
+	// dirFile retains the directory inode represented by Dir. An external
+	// command inherits a shell's open cwd even if the pathname is later renamed,
+	// made unsearchable, or grows beyond the kernel's pathname limit.
+	dirFile *os.File
+
 	// tempDir is either $TMPDIR from [Runner.Env], or [os.TempDir].
 	tempDir string
 
@@ -2405,6 +2410,7 @@ func (r *Runner) Reset() {
 		// sideband is the supported provenance across that boundary.
 		r.restoreBridgedStartupIgnores()
 	}
+	oldDirFile := r.dirFile
 	// reset the internal state
 	*r = Runner{
 		Env:            r.Env,
@@ -2492,6 +2498,9 @@ func (r *Runner) Reset() {
 		inheritedFds:           maps.Clone(r.inheritedFds),
 		// fdTable is intentionally not preserved across Reset; a reset
 		// runner starts with no inherited non-stdio fds.
+	}
+	if oldDirFile != nil {
+		_ = oldDirFile.Close()
 	}
 	// Ensure we stop referencing any pointers before we reuse bgProcs.
 	clear(r.bgProcs)
@@ -2763,8 +2772,11 @@ func (r *Runner) subshell(background bool) *Runner {
 	}
 	// Keep in sync with the Runner type. Manually copy fields, to not copy
 	// sensitive ones like [errgroup.Group], and to do deep copies of slices.
+	r.ensureDirFile(r.Dir)
+	dirFile, _ := dupRunnerDir(r.dirFile)
 	r2 := &Runner{
 		Dir:                  r.Dir,
+		dirFile:              dirFile,
 		tempDir:              r.tempDir,
 		Params:               r.Params,
 		callHandler:          r.callHandler,

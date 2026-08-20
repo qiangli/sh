@@ -36,6 +36,7 @@ func TestPwdBeyondPathMax(t *testing.T) {
 	}
 	qt.Assert(t, qt.IsNil(unix.Mkdirat(fd, "target", 0o755)))
 	qt.Assert(t, qt.IsNil(unix.Symlinkat("target", fd, "link")))
+	qt.Assert(t, qt.IsNil(unix.Symlinkat(os.Getenv("GOSH_PROG"), fd, "local-gosh")))
 	fileFD, err := unix.Openat(fd, "regular", unix.O_CREAT|unix.O_WRONLY|unix.O_CLOEXEC, 0o644)
 	qt.Assert(t, qt.IsNil(err))
 	qt.Assert(t, qt.IsNil(unix.Close(fileFD)))
@@ -54,21 +55,34 @@ done
 pwd -L
 pwd -P
 printf 'PWD=%%s\n' "$PWD"
+GOSH_CMD=getwd "$GOSH_PROG"
+GOSH_CMD=getwd ./local-gosh
+printf 'redirect\n' >out.stdout
+IFS= read -r line <out.stdout || exit 74
+[ "$line" = redirect ] || exit 75
+./missing-command 2>missing.err
+[ "$?" -eq 127 ] || exit 76
+IFS= read -r missing <missing.err || exit 77
+case $missing in
+	*"No such file or directory"*) ;;
+	*) exit 78 ;;
+esac
 cd .. || exit 71
 cd %s || exit 72
 cd -P link || exit 73
 pwd -L
 pwd -P
 printf 'PWD=%%s\n' "$PWD"
+GOSH_CMD=getwd "$GOSH_PROG"
 `, depth, component, component)
 	file, err := syntax.NewParser(syntax.Variant(syntax.LangPOSIX)).Parse(strings.NewReader(src), "")
 	qt.Assert(t, qt.IsNil(err))
 	var output bytes.Buffer
-	runner, err := interp.New(interp.Dir(root), interp.StdIO(nil, &output, &output), interp.WithPosixMode(true))
+	runner, err := interp.New(interp.Dir(root), interp.StdIO(nil, &output, &output), interp.WithPosixMode(true), interp.WithBashCompatErrors(true))
 	qt.Assert(t, qt.IsNil(err))
 	err = runner.Run(context.Background(), file)
 	qt.Assert(t, qt.IsNil(err), qt.Commentf("output: %s", output.String()))
-	qt.Assert(t, qt.Equals(output.String(), want+"\n"+want+"\nPWD="+want+"\n"+wantTarget+"\n"+wantTarget+"\nPWD="+wantTarget+"\n"))
+	qt.Assert(t, qt.Equals(output.String(), want+"\n"+want+"\nPWD="+want+"\n"+want+"\n"+want+"\n"+wantTarget+"\n"+wantTarget+"\nPWD="+wantTarget+"\n"+wantTarget+"\n"))
 	_, err = os.Stat(want)
 	qt.Assert(t, qt.ErrorMatches(err, `.*file name too long.*`))
 }

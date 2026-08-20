@@ -1359,6 +1359,8 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		}
 		// Snapshot the live cwd state so it can be restored verbatim.
 		savedDir := r.Dir
+		r.ensureDirFile(savedDir)
+		savedDirFile, _ := dupRunnerDir(r.dirFile)
 		savedPWD := r.envGet("PWD")
 		savedOLDPWD := r.envGet("OLDPWD")
 		savedTop := ""
@@ -1373,7 +1375,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			return exit
 		}
 		defer func() {
+			if r.dirFile != nil {
+				_ = r.dirFile.Close()
+			}
 			r.Dir = savedDir
+			r.dirFile = savedDirFile
 			if len(r.dirStack) > 0 {
 				r.dirStack[len(r.dirStack)-1] = savedTop
 			}
@@ -7197,6 +7203,7 @@ func (r *Runner) changeDir(ctx context.Context, cmd, path string, physical ...bo
 		r.errf("%sPWD: readonly variable\n", r.bashErrPrefix(r.curStmtPos))
 		return 1
 	}
+	r.replaceDirFile(apath)
 	r.Dir = apath
 	// Keep the top of the directory stack in sync with the current
 	// dir so `pushd`/`popd`/`dirs` see the cd's effect. Bash treats

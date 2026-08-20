@@ -7,11 +7,14 @@ package interp_test
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -233,6 +236,64 @@ func TestRunnerTerminalExecInheritedSparseFD(t *testing.T) {
 	got = run(t, goshCmd("exec 8>&-; "+truePath+"; GOSH_CMD=fd8_is_terminal $GOSH_PROG"))
 	if got != "not-terminal\r\n" {
 		t.Fatalf("explicitly closed inherited fd 8 leaked to external command: got %q", got)
+	}
+}
+
+func TestExternalCommandKeepsRenamedWorkingDirectory(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux provides a child-safe /proc/self/fd cwd handle")
+	}
+	root := t.TempDir()
+	old := filepath.Join(root, "old")
+	newPath := filepath.Join(root, "new")
+	if err := os.Mkdir(old, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	src := fmt.Sprintf(`cd %q
+mv %q %q
+GOSH_CMD=getwd "$GOSH_PROG"
+`, old, old, newPath)
+	file := parse(t, nil, src)
+	var output bytes.Buffer
+	runner, err := interp.New(interp.StdIO(nil, &output, &output))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.Run(context.Background(), file); err != nil {
+		t.Fatalf("run: %v; output: %s", err, output.String())
+	}
+	if got, want := output.String(), newPath+"\n"; got != want {
+		t.Fatalf("output = %q, want %q", got, want)
+	}
+}
+
+func TestAwdRestoresRenamedWorkingDirectory(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux provides a child-safe /proc/self/fd cwd handle")
+	}
+	root := t.TempDir()
+	old := filepath.Join(root, "old")
+	newPath := filepath.Join(root, "new")
+	other := filepath.Join(root, "other")
+	for _, dir := range []string{old, other} {
+		if err := os.Mkdir(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	src := fmt.Sprintf(`awd %q mv %q %q
+GOSH_CMD=getwd "$GOSH_PROG"
+`, other, old, newPath)
+	file := parse(t, nil, src)
+	var output bytes.Buffer
+	runner, err := interp.New(interp.Dir(old), interp.StdIO(nil, &output, &output))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.Run(context.Background(), file); err != nil {
+		t.Fatalf("run: %v; output: %s", err, output.String())
+	}
+	if got, want := output.String(), newPath+"\n"; got != want {
+		t.Fatalf("output = %q, want %q", got, want)
 	}
 }
 

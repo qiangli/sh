@@ -206,7 +206,14 @@ type ExecHandlerFunc func(ctx context.Context, args []string) error
 func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 	return func(ctx context.Context, args []string) error {
 		hc := HandlerCtx(ctx)
-		path, err := LookPathDir(hc.Dir, hc.Env, args[0])
+		execDir := shellPathToOS(hc.Dir, hc.Dir)
+		lookupDir := hc.Dir
+		if hc.runner != nil {
+			hc.runner.ensureDirFile(execDir)
+			execDir = runnerExecDir(hc.runner, execDir)
+			lookupDir = shellPathFromOS(execDir)
+		}
+		path, err := LookPathDir(lookupDir, hc.Env, args[0])
 		if err != nil {
 			if hc.runner != nil && hc.runner.bashCompatErrors {
 				// Bash 5.3: a command name containing a slash is not
@@ -222,7 +229,7 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 					hc.runner.bashErrPrefix(hc.Pos), cmd)
 				code := 127
 				if lookPathHasPath(args[0], runtime.GOOS == "windows") {
-					reason, c := classifyExecPath(hc.Dir, args[0])
+					reason, c := classifyExecPath(lookupDir, args[0])
 					msg = fmt.Sprintf("%s%s: %s\n",
 						hc.runner.bashErrPrefix(hc.Pos), cmd, reason)
 					code = c
@@ -239,8 +246,11 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 			}
 			return ExitStatus(127)
 		}
-		execPath := shellPathToOS(hc.Dir, path)
-		execDir := shellPathToOS(hc.Dir, hc.Dir)
+		execPath := shellPathToOS(lookupDir, path)
+		envCommandPath := path
+		if lookupDir != hc.Dir && strings.HasPrefix(path, lookupDir+"/") {
+			envCommandPath = shellPathJoinAbs(hc.Dir, strings.TrimPrefix(path, lookupDir+"/"))
+		}
 		cmdArgs := args
 		if hc.ExecAs != "" {
 			cmdArgs = append([]string{hc.ExecAs}, args[1:]...)
@@ -260,7 +270,7 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 		// GNU Bash always injects `_` into an external command's environment
 		// as the resolved command pathname, even though `_` is not exported as
 		// a shell variable (variables.c:put_command_name_into_env).
-		env = setExecEnvValue(env, "_", path)
+		env = setExecEnvValue(env, "_", envCommandPath)
 		if inheritedFds != "" {
 			env = append(env, BashyInheritedFdsEnv+"="+inheritedFds)
 		}

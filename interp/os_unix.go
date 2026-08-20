@@ -234,11 +234,25 @@ func openPathAt(ctx context.Context, dir, path string, flags int, perm os.FileMo
 	if dir == "" || shellPathAbs(path) {
 		return openPath(ctx, shellPathJoinAbs(dir, path), flags, perm)
 	}
-	dirFD, err := unix.Open(dir, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
-	if err != nil {
-		return nil, &os.PathError{Op: "open", Path: path, Err: err}
+	dirFD := -1
+	closeDirFD := false
+	hc := HandlerCtx(ctx)
+	if hc.runner != nil && hc.Dir == dir {
+		hc.runner.ensureDirFile(dir)
 	}
-	defer unix.Close(dirFD)
+	if hc.runner != nil && hc.Dir == dir && hc.runner.dirFile != nil {
+		dirFD = int(hc.runner.dirFile.Fd())
+	} else {
+		var err error
+		dirFD, err = unix.Open(dir, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+		if err != nil {
+			return nil, &os.PathError{Op: "open", Path: path, Err: err}
+		}
+		closeDirFD = true
+	}
+	if closeDirFD {
+		defer unix.Close(dirFD)
+	}
 	open := func(flags int, perm uint32) (int, error) {
 		return unix.Openat(dirFD, path, flags, perm)
 	}

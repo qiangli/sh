@@ -186,6 +186,7 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 				return nil
 			}
 			r2 := r.subshell(false)
+			defer r2.closeDirFile()
 			r2.bgProcs = r.bgProcs
 			r2.jobsReadOnly = true
 			r2.stdout = w
@@ -261,6 +262,7 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 			}
 			r.bgProcs = append(r.bgProcs, bg)
 			go func() {
+				defer r2.closeDirFile()
 				defer func() {
 					*bg.exit = r2.exit
 					close(bg.done)
@@ -4553,6 +4555,7 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 		// a shell whose fork failed, and `$!` keeps its previous value.
 		if err := r.attachCarrier(bgCtx, r2, bg); err != nil {
 			cancel()
+			r2.closeDirFile()
 			r.errf("%s%v\n", r.bashErrPrefix(st.Pos()), err)
 			r.exit = exitStatus{code: 1}
 		} else {
@@ -4570,6 +4573,7 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 				}
 			}
 			go func() {
+				defer r2.closeDirFile()
 				defer func() {
 					cancel()
 					// Ensure pidReady is closed even if no real exec ever
@@ -4757,6 +4761,7 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 	}
 	if st.Cmd == nil && len(st.Redirs) > 0 {
 		r2 := r.subshell(false)
+		defer r2.closeDirFile()
 		r2.lastExpandExit = exitStatus{}
 		var closers []io.Closer
 		for _, rd := range st.Redirs {
@@ -5177,6 +5182,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		r.stmts(ctx, cm.Stmts)
 	case *syntax.Subshell:
 		r2 := r.subshell(false)
+		defer r2.closeDirFile()
 		r2.enclosingSubshellEnd = cm.Rparen
 		r2.stmts(ctx, cm.Stmts)
 		if cb := r2.trapCallbacks["EXIT"]; cb != "" && !r2.inheritedExitTrap {
@@ -6026,6 +6032,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			r.asyncStdinExplicit = true
 			var wg sync.WaitGroup
 			wg.Go(func() {
+				defer r2.closeDirFile()
 				xctx := context.WithValue(ctx, bgNonPrimaryPidCtxKey{}, true)
 				if subshell, ok := plainPipelineSubshell(cm.X); ok {
 					r2.enclosingSubshellEnd = subshell.Rparen
@@ -6049,6 +6056,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				// supply a sparse parent env (e.g. expand.FuncEnviron
 				// with no Each enumeration) still resolve variables.
 				r3 = r.subshell(false)
+				defer r3.closeDirFile()
 				r3.stdin = prDup
 				r3.stdinRedirected = true
 				r3.asyncStdinExplicit = true
@@ -7859,6 +7867,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		bg.cancel = cancel
 		bgCtx = context.WithValue(bgCtx, bgProcCtxKey{}, bg)
 		go func() {
+			defer r2.closeDirFile()
 			defer func() {
 				cancel()
 				pw.Close()
