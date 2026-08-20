@@ -135,6 +135,8 @@ func execReplace(ctx context.Context, path string, args, env []string, stdin any
 	return false, nil
 }
 
+func relayExecReplacementSignal(sig int) error { return ExitStatus(128 + sig) }
+
 func (r *Runner) inheritedFd(fd int) (*os.File, bool) {
 	return nil, false
 }

@@ -160,6 +160,81 @@ func TestStandaloneSignalDefaults(t *testing.T) {
 	}
 }
 
+func TestBackgroundSelfSignalSurvivesExecReplacement(t *testing.T) {
+	for _, tc := range []struct {
+		name, signal, delay string
+		wantSignal          syscall.Signal
+		wantExit            int
+	}{
+		{name: "term", signal: "TERM", delay: "0.05", wantSignal: syscall.SIGTERM},
+		{name: "term_immediate", signal: "TERM", wantSignal: syscall.SIGTERM},
+		{name: "handled_term", signal: "HANDLED", delay: "0.05", wantExit: 7},
+		{name: "probe", signal: "0", delay: "0.05"},
+		{name: "probe_immediate", signal: "0"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			marker := t.TempDir() + "/kill-status"
+			cmd := exec.Command(os.Args[0])
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+			cmd.Env = append(os.Environ(),
+				"GOSH_CMD=bg_self_signal_exec",
+				"GOSH_MARKER="+marker,
+				"GOSH_SIGNAL="+tc.signal,
+				"GOSH_DELAY="+tc.delay,
+			)
+			if err := cmd.Start(); err != nil {
+				t.Fatal(err)
+			}
+			done := make(chan error, 1)
+			go func() { done <- cmd.Wait() }()
+			select {
+			case err := <-done:
+				if tc.wantSignal != 0 {
+					var ee *exec.ExitError
+					if !errors.As(err, &ee) {
+						t.Fatalf("replacement exited normally: %v", err)
+					}
+					ws := ee.Sys().(syscall.WaitStatus)
+					if !ws.Signaled() || ws.Signal() != tc.wantSignal {
+						t.Fatalf("wait status = %v, want signal %s", ws, tc.wantSignal)
+					}
+				} else if tc.wantExit != 0 {
+					var ee *exec.ExitError
+					if !errors.As(err, &ee) || ee.ExitCode() != tc.wantExit {
+						t.Fatalf("replacement exit = %v, want %d", err, tc.wantExit)
+					}
+				} else if err != nil {
+					t.Fatalf("probe replacement: %v", err)
+				}
+			case <-time.After(2 * time.Second):
+				_ = cmd.Process.Kill()
+				got, _ := os.ReadFile(marker)
+				t.Fatalf("replacement did not complete; marker=%q", got)
+			}
+			got, err := os.ReadFile(marker)
+			if err != nil {
+				t.Fatalf("background job did not survive exec: %v", err)
+			}
+			if string(got) != "S0" {
+				t.Fatalf("kill status = %q, want S0", got)
+			}
+		})
+	}
+}
+
+func TestUnrelatedBackgroundDoesNotDelayExecReplacement(t *testing.T) {
+	cmd := exec.Command(os.Args[0])
+	cmd.Env = append(os.Environ(), "GOSH_CMD=bg_unrelated_exec")
+	started := time.Now()
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("exec replacement waited for unrelated background job: %v", elapsed)
+	}
+}
+
 func waitStandaloneStopped(t *testing.T, pid int, sig syscall.Signal) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)

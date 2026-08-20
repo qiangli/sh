@@ -4631,6 +4631,21 @@ func (r *Runner) lastBangProc() *bgProc {
 	return r.inheritedBang
 }
 
+func (r *Runner) hasLiveBackgroundJobs() bool {
+	for _, bg := range r.bgProcs {
+		if bg == nil {
+			continue
+		}
+		select {
+		case <-bg.done:
+			continue
+		default:
+			return true
+		}
+	}
+	return false
+}
+
 func isSimpleCallStmt(st *syntax.Stmt) bool {
 	if st == nil {
 		return false

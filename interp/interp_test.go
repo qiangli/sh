@@ -219,6 +219,51 @@ func TestMain(m *testing.M) {
 			fmt.Println("ready")
 			time.Sleep(time.Hour)
 			os.Exit(0)
+		case "bg_self_signal_exec":
+			marker := os.Getenv("GOSH_MARKER")
+			sig := os.Getenv("GOSH_SIGNAL")
+			delay := os.Getenv("GOSH_DELAY")
+			if delay != "" {
+				delay = "/bin/sleep " + delay + "; "
+			}
+			duration := "5"
+			execCommand := "/bin/sleep " + duration
+			if sig == "0" {
+				duration = "0.2"
+				execCommand = "/bin/sleep " + duration
+			} else if sig == "HANDLED" {
+				sig = "TERM"
+				execCommand = `/bin/sh -c 'trap "exit 7" TERM; while :; do /bin/sleep 1; done'`
+			}
+			src := fmt.Sprintf(`(printf S > %q; %skill -s %s $$; printf '%%s' "$?" >> %q) & exec %s`, marker, delay, sig, marker, execCommand)
+			file, err := syntax.NewParser().Parse(strings.NewReader(src), "")
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+			runner, _ := interp.New(
+				interp.StdIO(os.Stdin, os.Stdout, os.Stderr),
+				interp.WithSignalResetter(interp.OSSignalResetter{}),
+			)
+			if err := runner.Run(context.Background(), file); err != nil {
+				var status interp.ExitStatus
+				if errors.As(err, &status) {
+					os.Exit(int(status))
+				}
+				os.Exit(1)
+			}
+			os.Exit(0)
+		case "bg_unrelated_exec":
+			file, err := syntax.NewParser().Parse(strings.NewReader(
+				`/bin/sleep 5 & exec /usr/bin/true`), "")
+			if err != nil {
+				os.Exit(1)
+			}
+			runner, _ := interp.New(interp.StdIO(os.Stdin, os.Stdout, os.Stderr))
+			if err := runner.Run(context.Background(), file); err != nil {
+				os.Exit(1)
+			}
+			os.Exit(0)
 		case "foo_null_bar":
 			fmt.Println("foo\x00bar")
 			os.Exit(0)

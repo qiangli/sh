@@ -350,10 +350,19 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 				}()
 			}
 		}
-		if hc.ExecReplace {
+		proxyReplace := hc.ExecReplace && hc.runner != nil && hc.runner.hasLiveBackgroundJobs()
+		if hc.ExecReplace && !proxyReplace {
 			if replaced, err := execReplace(ctx, execPath, cmdArgs, env, execStdin, hc.Stdout, hc.Stderr); replaced {
 				return err
 			}
+		}
+		var replacement *execReplacementAttempt
+		if proxyReplace {
+			replacement = &execReplacementAttempt{ready: make(chan struct{})}
+			hc.runner.execReplacement.current.Store(replacement)
+			defer func() {
+				hc.runner.execReplacement.current.CompareAndSwap(replacement, nil)
+			}()
 		}
 		cmd := exec.Cmd{
 			Path:       execPath,
@@ -410,6 +419,12 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 				}
 			}
 		}
+		if replacement != nil {
+			if err == nil {
+				replacement.pid.Store(int64(cmd.Process.Pid))
+			}
+			close(replacement.ready)
+		}
 		if err != nil && hc.runner != nil && hc.runner.bashCompatErrors {
 			scriptPath := execPath
 			if !shellPathAbs(scriptPath) {
@@ -437,6 +452,14 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 			defer stopf()
 
 			err = waitExecCmd(ctx, &cmd)
+			if replacement != nil {
+				// A real shell's asynchronous child which addressed $$ survives
+				// execve. Let that particular in-process observer finish its
+				// post-kill bookkeeping before this host exits.
+				if bg := replacement.observer.Load(); bg != nil {
+					<-bg.done
+				}
+			}
 			if bg, _ := ctx.Value(bgProcCtxKey{}).(*bgProc); bg != nil && bg.execReplacing.Load() {
 				// The carrier may have died to deliver a signal, but an exec'd
 				// child can catch that signal and choose its own exit status. Save
@@ -466,13 +489,15 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 				hc.runner.notifyChildReaped()
 			}
 		}
-
 		switch err := err.(type) {
 		case *exec.ExitError:
 			// Windows and Plan9 do not have support for [syscall.WaitStatus]
 			// with methods like Signaled and Signal, so for those, [waitStatus] is a no-op.
 			// Note: [waitStatus] is an alias [syscall.WaitStatus]
 			if status, ok := err.Sys().(waitStatus); ok && status.Signaled() {
+				if proxyReplace {
+					return relayExecReplacementSignal(status.Signal())
+				}
 				if ctx.Err() != nil {
 					return ctx.Err()
 				}

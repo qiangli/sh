@@ -106,6 +106,10 @@ type Runner struct {
 	// execHandler is responsible for executing programs. It must not be nil.
 	execHandler ExecHandlerFunc
 
+	// execReplacement is shared with in-process subshells so an asynchronous
+	// `kill $$` can address a foreground command standing in for `exec`.
+	execReplacement *execReplacementState
+
 	// execMiddlewares grows with calls to [ExecHandlers],
 	// and is used to construct execHandler when Reset is first called.
 	// The slice is needed to preserve the relative order of middlewares.
@@ -988,6 +992,20 @@ type bgProc struct {
 	coprocWriteFile *os.File
 }
 
+// execReplacementState is shared by a shell and all of its in-process
+// subshells. When a top-level exec must be proxied because live background
+// jobs cannot survive execve, pid is the external command which now owns the
+// shell's semantic process identity.
+type execReplacementState struct {
+	current atomic.Pointer[execReplacementAttempt]
+}
+
+type execReplacementAttempt struct {
+	ready    chan struct{}
+	pid      atomic.Int64
+	observer atomic.Pointer[bgProc]
+}
+
 type jobState int32
 
 const (
@@ -1236,10 +1254,11 @@ func (r *Runner) RunAliasExpandedSourceLine(ctx context.Context, line int) bool 
 // standard output writer means that the output will be discarded.
 func New(opts ...RunnerOption) (*Runner, error) {
 	r := &Runner{
-		usedNew:        true,
-		openHandler:    DefaultOpenHandler(),
-		readDirHandler: DefaultReadDirHandler2(),
-		statHandler:    DefaultStatHandler(),
+		usedNew:         true,
+		execReplacement: new(execReplacementState),
+		openHandler:     DefaultOpenHandler(),
+		readDirHandler:  DefaultReadDirHandler2(),
+		statHandler:     DefaultStatHandler(),
 	}
 	r.dirStack = r.dirBootstrap[:0]
 	// turn "on" the default Bash options
@@ -2375,6 +2394,9 @@ func (r *Runner) Reset() {
 		panic("use interp.New to construct a Runner")
 	}
 	if !r.didReset {
+		if r.execReplacement == nil {
+			r.execReplacement = new(execReplacementState)
+		}
 		r.initModeSetOptionDefaults()
 		r.origDir = r.Dir
 		r.origParams = r.Params
@@ -2479,8 +2501,9 @@ func (r *Runner) Reset() {
 		// scratch — preserve it across Reset like funcs/aliases.
 		disabledBuiltins: r.disabledBuiltins,
 
-		dirStack: r.dirStack[:0],
-		usedNew:  r.usedNew,
+		dirStack:        r.dirStack[:0],
+		usedNew:         r.usedNew,
+		execReplacement: r.execReplacement,
 
 		promptExpand:           r.promptExpand,
 		startTime:              r.startTime,
@@ -2822,6 +2845,7 @@ func (r *Runner) subshell(background bool) *Runner {
 		promptExpand:           r.promptExpand,
 		startTime:              r.startTime,
 		subshellLevel:          r.subshellLevel + 1,
+		asyncList:              r.asyncList,
 		umask:                  r.umask,
 		startupIgnored:         r.startupIgnored,
 		loginShell:             r.loginShell,
@@ -2835,6 +2859,7 @@ func (r *Runner) subshell(background bool) *Runner {
 		deterministicRng:       r.deterministicRng,
 		randomSeeded:           r.randomSeeded,
 		randomSeed:             r.randomSeed,
+		execReplacement:        r.execReplacement,
 		interactiveShell:       r.interactiveShell,
 		cmdlineNoExec:          r.cmdlineNoExec,
 		commandString:          r.commandString,

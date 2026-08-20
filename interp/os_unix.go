@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strconv"
 	"sync"
 	"syscall"
@@ -460,6 +461,19 @@ func execReplace(ctx context.Context, path string, args, env []string, stdin any
 		return true, fmt.Errorf("exec: empty argument list")
 	}
 	return true, syscall.Exec(path, args, env)
+}
+
+func relayExecReplacementSignal(sig syscall.Signal) error {
+	// execve resets caught dispositions to default. Do the same before
+	// relaying a proxied replacement child's terminal signal to the shell
+	// host, so its parent observes WIFSIGNALED rather than a normal 128+N exit.
+	signal.Reset(sig)
+	if err := syscall.Kill(os.Getpid(), sig); err != nil {
+		return err
+	}
+	// Signal delivery is asynchronous. Do not let a normal ExitStatus return
+	// race ahead and turn WIFSIGNALED into an ordinary 128+N process exit.
+	select {}
 }
 
 // modifiedSinceAccessed reports whether the file's mtime is strictly
