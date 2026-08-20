@@ -163,6 +163,42 @@ echo "st=$?"
 	waitPidsGone(t, c.startedPids())
 }
 
+// TestJobCarrierExecMiddlewareStatusWins checks that the status returned by
+// the outermost ExecHandler remains authoritative. DefaultExecHandler can
+// observe the raw child status, but middleware is allowed to translate or
+// handle that result before returning it to the Runner.
+func TestJobCarrierExecMiddlewareStatusWins(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"Rewrite", interp.NewExitStatus(9), "9"},
+		{"Swallow", nil, "0"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := new(testCarrier)
+			translateStatus := func(next interp.ExecHandlerFunc) interp.ExecHandlerFunc {
+				return func(ctx context.Context, args []string) error {
+					_ = next(ctx, args)
+					return tc.err
+				}
+			}
+			out := runCarrierScript(t, c, `
+{ exec /bin/sh -c 'exit 7'; } &
+p=$!
+wait "$p"
+echo "st=$?"
+`, interp.ExecHandlers(translateStatus))
+			if got, want := strings.TrimSpace(out), "st="+tc.want; got != want {
+				t.Fatalf("exec middleware status = %q, want %q", got, want)
+			}
+			waitPidsGone(t, c.startedPids())
+		})
+	}
+}
+
 // TestJobCarrierExternalChildPublishesPID checks that a simple external
 // command displaces the carrier seed in $!. wait/kill still resolve the PID
 // through the job registry so signal status and child cleanup are preserved.

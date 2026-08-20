@@ -10433,10 +10433,12 @@ func (r *Runner) execAs(ctx context.Context, pos syntax.Pos, argv0 string, clear
 		}
 	}
 	handlerErr := r.execHandler(hctx, args)
-	if replacingBg != nil && replacingBg.execResult.Load() == 0 {
-		// Custom handlers do not expose an os.ProcessState. Their ordinary
-		// ExitStatus return is nevertheless the completed exec command's
-		// authoritative status; fatal errors still use the carrier signal.
+	if replacingBg != nil {
+		// The outermost handler's ordinary status is authoritative: middleware
+		// may translate or handle the raw status saved by DefaultExecHandler.
+		// Leave that raw status intact only for fatal errors such as carrier
+		// cancellation, where it preserves the replacement child's actual wait
+		// result after the carrier delivered its signal.
 		var builtinExit errBuiltinExitStatus
 		var externalExit ExitStatus
 		switch {
