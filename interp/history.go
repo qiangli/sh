@@ -2364,9 +2364,9 @@ parseOpts:
 		h.mu.Unlock()
 		for k, j := range idxs {
 			if numbering {
-				r.outf("%d\t %s\n", base+j, entries[k])
+				r.outf("%d\t%s\n", base+j, entries[k])
 			} else {
-				r.outf("\t %s\n", entries[k])
+				r.outf("\t%s\n", entries[k])
 			}
 		}
 		return exit
@@ -2375,8 +2375,14 @@ parseOpts:
 	// Edit-and-rerun: write the range to a temp file, run the editor on
 	// it, then echo and execute the (possibly edited) commands.
 	selected := make([]string, 0, histend-histbeg+1)
-	for j := histbeg; j <= histend; j++ {
-		selected = append(selected, h.list[j])
+	if reverse {
+		for j := histend; j >= histbeg; j-- {
+			selected = append(selected, h.list[j])
+		}
+	} else {
+		for j := histbeg; j <= histend; j++ {
+			selected = append(selected, h.list[j])
+		}
 	}
 	h.mu.Unlock()
 

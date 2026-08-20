@@ -160,8 +160,8 @@ fc -nl -1
 fc -s aa=cc
 `)
 	want := "aa bb\n" +
-		"1\t echo aa bb\n" +
-		"\t echo aa bb\n" +
+		"1\techo aa bb\n" +
+		"\techo aa bb\n" +
 		"echo cc bb\ncc bb\n"
 	if out != want {
 		t.Errorf("histignore/fc:\n got: %q\nwant: %q", out, want)
@@ -196,7 +196,7 @@ func TestInteractiveHistoryFeedsFc(t *testing.T) {
 
 	runLine("echo marker")
 	runLine("fc -l")
-	want := "marker\n1\t echo marker\n"
+	want := "marker\n1\techo marker\n"
 	if out.String() != want {
 		t.Fatalf("interactive fc -l:\n got: %q\nwant: %q", out.String(), want)
 	}
@@ -306,8 +306,67 @@ echo base
 fc -l echo echo extra
 printf 'status:%s\n' "$?"
 `, &editors)
-	if !strings.Contains(out, "\t echo base\n") || !strings.HasSuffix(out, "status:0\n") {
+	if !strings.Contains(out, "\techo base\n") || !strings.HasSuffix(out, "status:0\n") {
 		t.Errorf("posix fc -l extra args:\n got: %q", out)
+	}
+}
+
+func TestFcReverseEditRange(t *testing.T) {
+	histReset()
+	t.Cleanup(histReset)
+	dir := t.TempDir()
+	const src = `HISTFILE=/dev/null
+set -o history
+: one
+: two
+: three
+fc -e capture -1 -3
+`
+	path := filepath.Join(dir, "script.sh")
+	if err := os.WriteFile(path, []byte(src), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(src), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var edited string
+	captureEditor := func(next ExecHandlerFunc) ExecHandlerFunc {
+		return func(ctx context.Context, args []string) error {
+			if args[0] != "capture" {
+				return next(ctx, args)
+			}
+			if len(args) != 2 {
+				t.Fatalf("capture args = %q, want editor and file", args)
+			}
+			data, err := os.ReadFile(args[1])
+			if err != nil {
+				return err
+			}
+			edited = string(data)
+			return nil
+		}
+	}
+	r, err := New(Dir(dir), ExecHandlers(captureEditor))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Run(context.Background(), file); err != nil {
+		t.Fatal(err)
+	}
+	if want := ": three\n: two\n: one\n"; edited != want {
+		t.Fatalf("edited commands = %q, want %q", edited, want)
+	}
+}
+
+func TestFcListSeparatesNumberWithOneTab(t *testing.T) {
+	out := runHistScript(t, `HISTFILE=/dev/null
+set -o history
+: one
+fc -l -1 -1
+`)
+	if want := "1\t: one\n"; out != want {
+		t.Fatalf("fc listing = %q, want %q", out, want)
 	}
 }
 
