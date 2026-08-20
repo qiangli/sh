@@ -8688,15 +8688,38 @@ func (r *Runner) allocateFd() (int, bool) {
 	return -1, false
 }
 
-func (r *Runner) execExtraFiles() ([]*os.File, string, func()) {
+func (r *Runner) effectiveNofileLimit() int {
+	if r.ulimitOverride != nil {
+		if value := r.ulimitOverride["-n"]; value != "" {
+			if limit, err := strconv.Atoi(value); err == nil && limit > 0 {
+				return limit
+			}
+		}
+	}
+	if limit, ok := nofileLimit(); ok && limit <= uint64(^uint(0)>>1) {
+		return int(limit)
+	}
+	// An unlimited or unavailable platform limit must not allow an
+	// attacker-controlled redirect number to drive an unbounded allocation.
+	return 1 << 20
+}
+
+func (r *Runner) execExtraFiles() ([]*os.File, string, func(), error) {
 	var extra []*os.File
 	var fds []string
 	var cleanup []func()
 	maxFD := 2
+	limit := r.effectiveNofileLimit()
 	for fd := range r.fdTable {
+		if fd < 0 || fd >= limit {
+			return nil, "", func() {}, fmt.Errorf("file descriptor %d exceeds open-files limit %d", fd, limit)
+		}
 		maxFD = max(maxFD, fd)
 	}
 	for fd := range r.fdWriteTable {
+		if fd < 0 || fd >= limit {
+			return nil, "", func() {}, fmt.Errorf("file descriptor %d exceeds open-files limit %d", fd, limit)
+		}
 		maxFD = max(maxFD, fd)
 	}
 	var closedSlot *os.File
@@ -8746,7 +8769,7 @@ func (r *Runner) execExtraFiles() ([]*os.File, string, func()) {
 		for _, fn := range cleanup {
 			fn()
 		}
-	}
+	}, nil
 }
 
 // closeClosedInheritedFdsOnExec prevents an inherited descriptor explicitly
@@ -9338,6 +9361,20 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 			}
 			targetFd = n
 		}
+	}
+	// dup2-style redirections can only target descriptors below
+	// RLIMIT_NOFILE. Reject them before recording a sparse virtual fd;
+	// otherwise a later external command would need an attacker-sized
+	// ExtraFiles slice to preserve its numeric position. Bash treats closing
+	// an out-of-range descriptor as a successful no-op, so retain that case.
+	closingFd := (rd.Op == syntax.DplOut || rd.Op == syntax.DplIn) && arg == "-"
+	if targetFd >= r.effectiveNofileLimit() && !closingFd {
+		label := strconv.Itoa(targetFd)
+		if rd.Op == syntax.DplOut || rd.Op == syntax.DplIn {
+			label = redirWordText(rd)
+		}
+		r.errf("%s%s: Bad file descriptor\n", r.bashErrPrefix(rd.Word.Pos()), label)
+		return nil, fmt.Errorf("%s: Bad file descriptor", label)
 	}
 	switch rd.Op {
 	case syntax.WordHdoc:

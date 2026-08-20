@@ -16,7 +16,10 @@ func TestExecExtraFilesIncludesWriteOnlyFds(t *testing.T) {
 	defer w.Close()
 
 	runner := &Runner{fdWriteTable: map[int]io.Writer{3: w}}
-	extra, inherited, cleanup := runner.execExtraFiles()
+	extra, inherited, cleanup, err := runner.execExtraFiles()
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer cleanup()
 	if inherited != "3" {
 		t.Fatalf("inherited fds = %q, want 3", inherited)
@@ -29,7 +32,10 @@ func TestExecExtraFilesIncludesWriteOnlyFds(t *testing.T) {
 func TestExecExtraFilesBridgesWriteOnlyNonFileFds(t *testing.T) {
 	var out strings.Builder
 	runner := &Runner{fdWriteTable: map[int]io.Writer{3: &out}}
-	extra, inherited, cleanup := runner.execExtraFiles()
+	extra, inherited, cleanup, err := runner.execExtraFiles()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if inherited != "3" {
 		t.Fatalf("inherited fds = %q, want 3", inherited)
 	}
