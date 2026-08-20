@@ -53,11 +53,13 @@ while [ "$i" -lt %d ]; do
 done
 pwd -L
 pwd -P
+printf 'PWD=%%s\n' "$PWD"
 cd .. || exit 71
 cd %s || exit 72
 cd -P link || exit 73
 pwd -L
 pwd -P
+printf 'PWD=%%s\n' "$PWD"
 `, depth, component, component)
 	file, err := syntax.NewParser(syntax.Variant(syntax.LangPOSIX)).Parse(strings.NewReader(src), "")
 	qt.Assert(t, qt.IsNil(err))
@@ -66,7 +68,7 @@ pwd -P
 	qt.Assert(t, qt.IsNil(err))
 	err = runner.Run(context.Background(), file)
 	qt.Assert(t, qt.IsNil(err), qt.Commentf("output: %s", output.String()))
-	qt.Assert(t, qt.Equals(output.String(), want+"\n"+want+"\n"+wantTarget+"\n"+wantTarget+"\n"))
+	qt.Assert(t, qt.Equals(output.String(), want+"\n"+want+"\nPWD="+want+"\n"+wantTarget+"\n"+wantTarget+"\nPWD="+wantTarget+"\n"))
 	_, err = os.Stat(want)
 	qt.Assert(t, qt.ErrorMatches(err, `.*file name too long.*`))
 }
