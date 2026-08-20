@@ -577,6 +577,7 @@ var pipeWriteErrChecked = map[string]bool{
 	"readonly": true,
 	"set":      true,
 	"times":    true,
+	"umask":    true,
 }
 
 func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args []string) (exit exitStatus) {

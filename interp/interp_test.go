@@ -6455,6 +6455,7 @@ func TestPosixListingBuiltinsReportBrokenPipe(t *testing.T) {
 		{"set", "FOO=bar; command set"},
 		{"hash", "hash -p /bin/sh sh; command hash"},
 		{"times", "command times"},
+		{"umask", "command umask"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
