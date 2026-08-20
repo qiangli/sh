@@ -4665,12 +4665,34 @@ func stmtUpdatesPipeStatus(st *syntax.Stmt) bool {
 func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 	r.exit.noNegate = false
 
-	// keepRedirs is a per-stmt flag: only exec inside *this* stmt may
-	// set it (to opt out of restoring this stmt's redirects). Reset it
-	// at return so the next stmt starts with proper scoping. Registered
-	// first so it fires LAST (LIFO) — the file-close defers below still
-	// see the in-stmt value and skip closing for exec's persistent fds.
-	defer func() { r.keepRedirs = false }()
+	scopeIndex := len(r.redirScopes)
+	r.redirScopes = append(r.redirScopes, redirScope{
+		hasRedirs: len(st.Redirs) > 0,
+		closeAt:   -1,
+	})
+	// Registered first so it fires LAST (LIFO) — file-close defers below
+	// still see whether exec made this scope persistent.
+	defer func() { r.redirScopes = r.redirScopes[:scopeIndex] }()
+	defer func() {
+		for _, closer := range r.redirScopes[scopeIndex].boundaryClosers {
+			closer.Close()
+		}
+	}()
+	persistNamedRedirs := false
+	keepRedirs := func() bool { return r.redirScopes[scopeIndex].persist }
+	closeOrTransfer := func(closer io.Closer) {
+		if persistNamedRedirs {
+			return
+		}
+		if !keepRedirs() {
+			closer.Close()
+			return
+		}
+		if boundary := r.redirScopes[scopeIndex].closeAt; boundary >= 0 {
+			r.redirScopes[boundary].boundaryClosers = append(
+				r.redirScopes[boundary].boundaryClosers, closer)
+		}
+	}
 
 	r.curStmtPos = st.Pos()
 	r.curStmtEnd = st.End()
@@ -4699,7 +4721,6 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 		oldFdWriteTable = maps.Clone(r.fdWriteTable)
 		oldFdClosedTable = maps.Clone(r.fdClosedTable)
 	}
-	persistNamedRedirs := false
 	varredirClose := false
 	if opt, _ := r.bashOptByName("varredir_close"); opt != nil {
 		varredirClose = *opt
@@ -4815,9 +4836,7 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 		r.lateRedirClosers = nil
 		defer func() {
 			for _, c := range r.lateRedirClosers {
-				if !r.keepRedirs && !persistNamedRedirs {
-					c.Close()
-				}
+				closeOrTransfer(c)
 			}
 			r.lateRedirClosers = nil
 			r.lateRedirs = nil
@@ -4858,14 +4877,12 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 				break
 			}
 			if cls != nil {
-				// Skip the close when keepRedirs is set (exec). The opened
+				// Skip the close when exec persisted this redirection scope. The opened
 				// file is now owned by fdTable / stdio and must outlive
-				// this stmtSync call. Read keepRedirs at defer time, not
+				// this stmtSync call. Read the scope at defer time, not
 				// here, because exec sets it during cmd execution.
 				defer func(c io.Closer) {
-					if !r.keepRedirs && !persistNamedRedirs {
-						c.Close()
-					}
+					closeOrTransfer(c)
 				}(cls)
 			}
 		}
@@ -4975,7 +4992,7 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 			r.exit.exiting = true
 		}
 	}
-	if !r.keepRedirs {
+	if !keepRedirs() {
 		r.stdin, r.stdout, r.stderr = oldIn, oldOut, oldErr
 		r.stdinTTYFallback = oldStdinTTYFallback
 		r.stdinDevTTY = oldStdinDevTTY
@@ -5053,6 +5070,33 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 				}
 			}
 		}
+	}
+}
+
+type redirScope struct {
+	hasRedirs       bool
+	persist         bool
+	closeAt         int
+	boundaryClosers []io.Closer
+}
+
+// persistCurrentRedirs marks the exec statement itself and propagates that
+// persistence through enclosing statements which have no redirects of their
+// own. The first enclosing redirected command is a boundary: bash restores
+// that command's pre-redirection descriptors even when its function body runs
+// exec with another redirect.
+func (r *Runner) persistCurrentRedirs() {
+	last := len(r.redirScopes) - 1
+	if last < 0 {
+		return
+	}
+	r.redirScopes[last].persist = true
+	for i := last - 1; i >= 0; i-- {
+		if r.redirScopes[i].hasRedirs {
+			r.redirScopes[last].closeAt = i
+			break
+		}
+		r.redirScopes[i].persist = true
 	}
 }
 

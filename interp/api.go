@@ -456,9 +456,10 @@ type Runner struct {
 
 	optState getopts
 
-	// keepRedirs is used so that "exec" can make any redirections
-	// apply to the current shell, and not just the command.
-	keepRedirs bool
+	// redirScopes tracks nested statement cleanup. An exec redirection inside
+	// a function must persist through enclosing function-call statements, but
+	// must stop at an enclosing command which has its own temporary redirects.
+	redirScopes []redirScope
 
 	// lateRedirs holds a simple command's redirections when they must be
 	// applied AFTER its words are expanded rather than before — the POSIX

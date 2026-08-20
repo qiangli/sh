@@ -2922,7 +2922,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			if argv0 != "" {
 				return failf(2, "exec: -a requires a command to execute\n")
 			}
-			r.keepRedirs = true
+			r.persistCurrentRedirs()
 			break
 		}
 		if loginShell {
@@ -2936,7 +2936,8 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		// diagnostic and either exit the shell or, with `shopt -s
 		// execfail` (no_exit_on_failed_exec), stay alive with the failure
 		// status. The redirections applied for this command are undone on
-		// the failure path (keepRedirs stays false), matching exec17.sub.
+		// the failure path (no redirection scope is persisted), matching
+		// exec17.sub.
 		execfail := false
 		if opt, _ := r.bashOptByName("execfail"); opt != nil {
 			execfail = *opt

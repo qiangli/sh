@@ -269,6 +269,53 @@ func TestRunnerTerminalExecVirtualSparseFD(t *testing.T) {
 	}
 }
 
+// TestRunnerTerminalExecFunctionPersistentFD covers the VSC terminal restore
+// shape: an asynchronous test-purpose function calls a helper whose bare exec
+// redirects stdin from a saved terminal descriptor. The redirect must outlive
+// the helper function call, just as it does in bash.
+func TestRunnerTerminalExecFunctionPersistentFD(t *testing.T) {
+	primary, secondary, err := pty.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer primary.Close()
+	defer secondary.Close()
+
+	script := `
+		exec 8<&0
+		restore() {
+			if test -t 0; then return 0
+			elif test -t 8; then exec 0<&8
+			else return 1
+			fi
+		}
+		tp() {
+			restore || return
+			if test -t 0; then echo terminal-after-return
+			else echo lost-after-return
+			fi
+		}
+		tp & wait
+	`
+	cmd := exec.Command(os.Getenv("GOSH_PROG"), script)
+	cmd.Stdin = secondary
+	cmd.Stdout = secondary
+	cmd.Stderr = secondary
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := bufio.NewReader(primary).ReadString('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	if got != "terminal-after-return\r\n" {
+		t.Fatalf("function-local exec redirect did not persist: got %q", got)
+	}
+}
+
 // TestRunnerExternalTerminalTools checks the shell-owned boundary shared by
 // terminal-aware system tools. The tools themselves remain host providers:
 // this only compares the environment, session, and controlling terminal they
