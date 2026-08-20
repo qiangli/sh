@@ -2363,10 +2363,17 @@ parseOpts:
 		}
 		h.mu.Unlock()
 		for k, j := range idxs {
+			// Bash reserves a one-character column after the tab for the
+			// history entry's modified marker. POSIX mode suppresses that
+			// indication entirely.
+			marker := " "
+			if r.opts[optPosix] {
+				marker = ""
+			}
 			if numbering {
-				r.outf("%d\t%s\n", base+j, entries[k])
+				r.outf("%d\t%s%s\n", base+j, marker, entries[k])
 			} else {
-				r.outf("\t%s\n", entries[k])
+				r.outf("\t%s%s\n", marker, entries[k])
 			}
 		}
 		return exit

@@ -160,8 +160,8 @@ fc -nl -1
 fc -s aa=cc
 `)
 	want := "aa bb\n" +
-		"1\techo aa bb\n" +
-		"\techo aa bb\n" +
+		"1\t echo aa bb\n" +
+		"\t echo aa bb\n" +
 		"echo cc bb\ncc bb\n"
 	if out != want {
 		t.Errorf("histignore/fc:\n got: %q\nwant: %q", out, want)
@@ -196,7 +196,7 @@ func TestInteractiveHistoryFeedsFc(t *testing.T) {
 
 	runLine("echo marker")
 	runLine("fc -l")
-	want := "marker\n1\techo marker\n"
+	want := "marker\n1\t echo marker\n"
 	if out.String() != want {
 		t.Fatalf("interactive fc -l:\n got: %q\nwant: %q", out.String(), want)
 	}
@@ -359,13 +359,16 @@ fc -e capture -1 -3
 	}
 }
 
-func TestFcListSeparatesNumberWithOneTab(t *testing.T) {
+func TestFcListPosixOmitsModifiedMarker(t *testing.T) {
 	out := runHistScript(t, `HISTFILE=/dev/null
+HISTIGNORE='fc*'
+set -o posix
 set -o history
 : one
 fc -l -1 -1
+fc -nl -1 -1
 `)
-	if want := "1\t: one\n"; out != want {
+	if want := "1\t: one\n\t: one\n"; out != want {
 		t.Fatalf("fc listing = %q, want %q", out, want)
 	}
 }
