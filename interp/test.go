@@ -719,6 +719,18 @@ func (r *Runner) unTest(ctx context.Context, op syntax.UnTestOperator, x string,
 			f = r.stdout
 		case 2:
 			f = r.stderr
+		default:
+			// Descriptors 3 and up are tracked as Go files in the runner's
+			// virtual descriptor tables, rather than at matching process fd
+			// numbers. Resolve those tables so saved terminal descriptors such
+			// as `exec 3<&0` work with `test -t 3`.
+			if fd >= 3 && int64(int(fd)) == fd {
+				if rf := r.fdTable[int(fd)]; rf != nil {
+					f = rf
+				} else if wf, ok := r.fdWriteTable[int(fd)]; ok {
+					f = wf
+				}
+			}
 		}
 		if _, ok := f.(*ttyFallbackFile); ok {
 			return true

@@ -316,6 +316,47 @@ func TestRunnerExecStartFailureContinues(t *testing.T) {
 	}
 }
 
+// TestRunnerTerminalTestHighFd verifies that terminal tests resolve the
+// runner-owned descriptor tables for fds created by shell redirections.
+func TestRunnerTerminalTestHighFd(t *testing.T) {
+	t.Parallel()
+
+	primary, secondary, err := pty.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer primary.Close()
+
+	file := parse(t, nil, `
+		exec 3<&0 4>&1
+		for n in 0 1 2 3 4 5; do if [ -t $n ]; then printf %s "$n"; fi; done
+		exec 3<&- 4>&-
+		if [ -t 3 ]; then printf X; fi
+		if [ -t 4 ]; then printf Y; fi
+		echo end
+	`)
+	r, err := interp.New(interp.StdIO(secondary, secondary, secondary))
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		if err := r.Run(context.Background(), file); err != nil {
+			t.Error(err)
+		}
+	}()
+
+	got, err := bufio.NewReader(primary).ReadString('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "01234end\r\n"; got != want {
+		t.Fatalf("want %q, got %q", want, got)
+	}
+	if err := secondary.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func shortPathName(path string) (string, error) {
 	panic("only works on windows")
 }
