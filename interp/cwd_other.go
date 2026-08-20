@@ -11,6 +11,10 @@ func openRunnerDir(path string) (*os.File, error) {
 	return nil, nil
 }
 
+func openRunnerDirAt(file *os.File, path string) (*os.File, bool, error) {
+	return nil, false, nil
+}
+
 func dupRunnerDir(file *os.File) (*os.File, error) {
 	return nil, nil
 }

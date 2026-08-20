@@ -57,6 +57,7 @@ pwd -P
 printf 'PWD=%%s\n' "$PWD"
 GOSH_CMD=getwd "$GOSH_PROG"
 GOSH_CMD=getwd ./local-gosh
+printf 'GLOB=<%%s>\n' *
 printf 'redirect\n' >out.stdout
 IFS= read -r line <out.stdout || exit 74
 [ "$line" = redirect ] || exit 75
@@ -82,7 +83,7 @@ GOSH_CMD=getwd "$GOSH_PROG"
 	qt.Assert(t, qt.IsNil(err))
 	err = runner.Run(context.Background(), file)
 	qt.Assert(t, qt.IsNil(err), qt.Commentf("output: %s", output.String()))
-	qt.Assert(t, qt.Equals(output.String(), want+"\n"+want+"\nPWD="+want+"\n"+want+"\n"+want+"\n"+wantTarget+"\n"+wantTarget+"\nPWD="+wantTarget+"\n"+wantTarget+"\n"))
+	qt.Assert(t, qt.Equals(output.String(), want+"\n"+want+"\nPWD="+want+"\n"+want+"\n"+want+"\nGLOB=<link>\nGLOB=<local-gosh>\nGLOB=<regular>\nGLOB=<target>\n"+wantTarget+"\n"+wantTarget+"\nPWD="+wantTarget+"\n"+wantTarget+"\n"))
 	_, err = os.Stat(want)
 	qt.Assert(t, qt.ErrorMatches(err, `.*file name too long.*`))
 }

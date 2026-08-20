@@ -837,7 +837,30 @@ func DefaultReadDirHandler() ReadDirHandlerFunc {
 // It uses [os.ReadDir].
 func DefaultReadDirHandler2() ReadDirHandlerFunc2 {
 	return func(ctx context.Context, path string) ([]fs.DirEntry, error) {
-		path = shellPathJoinAbs(handlerDir(ctx), path)
+		if ctx == nil {
+			return os.ReadDir(path)
+		}
+		hc, ok := ctx.Value(handlerCtxKey{}).(HandlerContext)
+		if !ok {
+			return os.ReadDir(path)
+		}
+		if hc.runner != nil {
+			hc.runner.ensureDirFile(hc.Dir)
+			relative := path
+			if shellPathAbs(path) {
+				if rel, err := filepath.Rel(hc.Dir, path); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+					relative = rel
+				} else {
+					relative = ""
+				}
+			}
+			if relative != "" {
+				if entries, ok, err := readRunnerDir(hc.runner.dirFile, relative); ok {
+					return entries, err
+				}
+			}
+		}
+		path = shellPathJoinAbs(hc.Dir, path)
 		return os.ReadDir(path)
 	}
 }
