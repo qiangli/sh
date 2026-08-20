@@ -6852,8 +6852,7 @@ type symbolicUmaskResult struct {
 // clauses separated by commas; each clause is `[who][op]perms` where
 // `who` is any combination of `u`, `g`, `o`, `a` (default `a`),
 // `op` is `=`, `+`, or `-`, and `perms` is any combination of
-// `r`, `w`, `x`, conditional `X`, or permission-copy tokens `u`, `g`,
-// `o`. Additional
+// `r`, `w`, `x`, or permission-copy tokens `u`, `g`, `o`. Additional
 // operators may appear in the permissions tail, e.g. `u+w=r+x`; they
 // are applied left-to-right. On failure, returns kind="" for "looks
 // octal" so caller can try numeric parse, or "character"/"operator"
@@ -6874,9 +6873,6 @@ func parseSymbolicUmask(s string, current int) symbolicUmaskResult {
 		return symbolicUmaskResult{}
 	}
 	mask := current
-	// Bash evaluates X against the permissions granted at the start of the
-	// entire symbolic operand, not against the progressively updated mask.
-	frozenExec := (^current) & 0o111
 	for _, clause := range strings.Split(s, ",") {
 		if clause == "" {
 			return symbolicUmaskResult{badChar: ',', kind: "character"}
@@ -6952,11 +6948,7 @@ func parseSymbolicUmask(s string, current int) symbolicUmaskResult {
 					perms |= (^mask >> 3) & 7
 				case 'o':
 					perms |= (^mask >> 0) & 7
-				case 'X':
-					if frozenExec != 0 {
-						perms |= 1
-					}
-				case 's', 't':
+				case 's', 't', 'X':
 					// Ignore permission bits that don't fit in umask.
 				default:
 					return symbolicUmaskResult{badChar: clause[i], kind: "character"}

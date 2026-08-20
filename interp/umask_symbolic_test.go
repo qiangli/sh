@@ -41,7 +41,7 @@ func runUmaskPosix(t *testing.T, src string) string {
 // umask only accepted numeric masks).
 //
 // The grammar is one or more comma-separated `[who][op]perms` clauses:
-// who ∈ {u,g,o,a} (default a), op ∈ {+,-,=}, perms ∈ {r,w,x,X} plus the
+// who ∈ {u,g,o,a} (default a), op ∈ {+,-,=}, perms ∈ {r,w,x} plus the
 // copy tokens {u,g,o}. Operands mutate the current mask (relative to its
 // granted-permission complement); a numeric operand replaces it. We read
 // the result back with `umask -S` so the assertion is on the granted
@@ -89,10 +89,6 @@ func TestUmaskSymbolic(t *testing.T) {
 		{"a+r", "umask 777; umask 'a+r'; umask -S", "u=r,g=r,o=r\n"},
 		{"a+w", "umask 777; umask 'a+w'; umask -S", "u=w,g=w,o=w\n"},
 		{"a+x", "umask 777; umask 'a+x'; umask -S", "u=x,g=x,o=x\n"},
-		{"a+X-with-exec", "umask 077; umask 'a+X'; umask -S", "u=rwx,g=x,o=x\n"},
-		{"a+X-without-exec", "umask 777; umask 'a+X'; umask -S", "u=,g=,o=\n"},
-		{"a-X-with-exec", "umask 666; umask 'a-X'; umask -S", "u=,g=,o=\n"},
-		{"a=X-with-exec", "umask 022; umask 'a=X'; umask -S", "u=x,g=x,o=x\n"},
 		{"a+rw", "umask 777; umask 'a+rw'; umask -S", "u=rw,g=rw,o=rw\n"},
 		{"a+xr", "umask 777; umask 'a+xr'; umask -S", "u=rx,g=rx,o=rx\n"},
 		{"a+wx", "umask 777; umask 'a+wx'; umask -S", "u=wx,g=wx,o=wx\n"},
@@ -126,9 +122,6 @@ func TestUmaskSymbolic(t *testing.T) {
 		// multiple comma-separated clauses
 		{"multi-clause", "umask 777; umask 'u=r+w,g=wx,o+xr'; umask -S", "u=rw,g=wx,o=rx\n"},
 		{"u=rwx,u-w", "umask 777; umask 'u=rwx,u-w'; umask -S", "u=rx,g=,o=\n"},
-		// X is evaluated against permissions at the start of the entire
-		// operand, not against execute bits granted by an earlier clause.
-		{"u+x,a+X-frozen", "umask 777; umask 'u+x,a+X'; umask -S", "u=x,g=,o=\n"},
 
 		// permission-copy tokens (perms = another triad's granted bits)
 		{"g=u", "umask 177; umask 'g=u'; umask -S", "u=rw,g=rw,o=\n"},
