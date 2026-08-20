@@ -63,6 +63,32 @@ echo "term=$?"
 	waitPidsGone(t, c.startedPids())
 }
 
+// TestJobCarrierTermReachesCompoundExternalChild pins the distinction between
+// the requested job signal and generic runner cancellation. A compound async
+// job publishes its carrier as $!, so TERM first reaches the carrier. The
+// watcher must forward TERM to the external child; sending INT instead leaves
+// an INT-ignoring child alive until the two-second KILL fallback, allowing it
+// to mutate state after the parent considers the job terminated.
+func TestJobCarrierTermReachesCompoundExternalChild(t *testing.T) {
+	t.Parallel()
+	c := new(testCarrier)
+	dir := t.TempDir()
+	out := runCarrierScript(t, c, `
+{
+	/bin/sh -c 'trap "" INT; trap ": > term; exit 0" TERM; : > ready; while :; do :; done'
+} &
+p=$!
+while [ ! -e ready ]; do :; done
+kill -TERM "$p"
+wait "$p" 2>/dev/null || :
+if [ -e term ]; then echo forwarded; else echo lost; fi
+`, interp.Dir(dir))
+	if got := strings.TrimSpace(out); got != "forwarded" {
+		t.Fatalf("carrier TERM did not reach compound job child:\n%s", out)
+	}
+	waitPidsGone(t, c.startedPids())
+}
+
 // TestJobCarrierExternalChildPublishesPID checks that a simple external
 // command displaces the carrier seed in $!. wait/kill still resolve the PID
 // through the job registry so signal status and child cleanup are preserved.

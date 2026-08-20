@@ -374,9 +374,9 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 					_ = cmd.Process.Signal(os.Kill)
 					return
 				}
-				_ = cmd.Process.Signal(os.Interrupt)
+				_ = cmd.Process.Signal(execCancelSignal(ctx))
 				// TODO: don't sleep in this goroutine if the program
-				// stops itself with the interrupt above.
+				// stops itself with the signal above.
 				time.Sleep(killTimeout)
 				_ = cmd.Process.Signal(os.Kill)
 			})
@@ -430,6 +430,24 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 			return err
 		}
 	}
+}
+
+// execCancelSignal returns the signal which caused a background job's
+// carrier to cancel its in-process runner. Ordinary context cancellation
+// retains the historical interrupt-first shutdown, but a carrier signal must
+// reach the represented external child unchanged. In particular, translating
+// TERM into INT lets an INT-ignoring child run for killTimeout before KILL,
+// long enough to mutate state after the shell has reported a successful kill.
+func execCancelSignal(ctx context.Context) os.Signal {
+	bg, _ := ctx.Value(bgProcCtxKey{}).(*bgProc)
+	if bg != nil {
+		if n := int(bg.killedSignal.Load()); n > 0 {
+			if sig, _, ok := signalByNumber(n); ok {
+				return signalForOS(sig)
+			}
+		}
+	}
+	return os.Interrupt
 }
 
 func setExecEnvValue(env []string, name, value string) []string {
