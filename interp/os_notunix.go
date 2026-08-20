@@ -108,6 +108,10 @@ func openPath(ctx context.Context, path string, flag int, perm os.FileMode) (io.
 	return os.OpenFile(path, flag, perm)
 }
 
+func openPathAt(ctx context.Context, dir, path string, flag int, perm os.FileMode) (io.ReadWriteCloser, error) {
+	return openPath(ctx, shellPathJoinAbs(dir, path), flag, perm)
+}
+
 // modifiedSinceAccessed reports whether the file's mtime is strictly
 // greater than its atime — bash's `-N FILE` test operator. atime is not
 // portably available off unix; report false.

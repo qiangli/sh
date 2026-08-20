@@ -796,10 +796,9 @@ func DefaultOpenHandler() OpenHandlerFunc {
 			// the workaround here seems to still be required for Wine as of 10.14.
 			// TODO(mvdan): Why? Is this Wine's fault?
 			flag &^= os.O_TRUNC
-		} else {
-			path = shellPathJoinAbs(mc.Dir, path)
+			return openPath(ctx, path, flag, perm)
 		}
-		return openPath(ctx, path, flag, perm)
+		return openPathAt(ctx, mc.Dir, path, flag, perm)
 	}
 }
 

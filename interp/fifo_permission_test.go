@@ -76,6 +76,59 @@ func TestFIFOReadOpenWaitsForWriter(t *testing.T) {
 	}
 }
 
+func TestDefaultOpenHandlerPreservesLongRelativePath(t *testing.T) {
+	root := t.TempDir()
+	rootFD, err := unix.Open(root, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fds := []int{rootFD}
+	var components []string
+	var relative string
+	for len(relative) < unix.PathMax-len(root)-32 {
+		component := strings.Repeat("d", 200)
+		if err := unix.Mkdirat(fds[len(fds)-1], component, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		fd, err := unix.Openat(fds[len(fds)-1], component, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fds = append(fds, fd)
+		components = append(components, component)
+		if relative == "" {
+			relative = component
+		} else {
+			relative += "/" + component
+		}
+	}
+	relative += "/result"
+	t.Cleanup(func() {
+		_ = unix.Unlinkat(fds[len(fds)-1], "result", 0)
+		for i := len(components) - 1; i >= 0; i-- {
+			_ = unix.Close(fds[i+1])
+			_ = unix.Unlinkat(fds[i], components[i], unix.AT_REMOVEDIR)
+		}
+		_ = unix.Close(fds[0])
+	})
+
+	if len(relative) >= unix.PathMax {
+		t.Fatalf("relative path length = %d, want less than PATH_MAX %d", len(relative), unix.PathMax)
+	}
+	if len(filepath.Join(root, relative)) < unix.PathMax {
+		t.Fatalf("absolute path length = %d, want at least PATH_MAX %d", len(filepath.Join(root, relative)), unix.PathMax)
+	}
+
+	ctx := context.WithValue(context.Background(), handlerCtxKey{}, HandlerContext{Dir: root})
+	f, err := DefaultOpenHandler()(ctx, relative, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		t.Fatalf("open valid relative path: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestFIFOReadOpenContextCancel(t *testing.T) {
 	dir := t.TempDir()
 	fifoPath := filepath.Join(dir, "no_writer.fifo")
