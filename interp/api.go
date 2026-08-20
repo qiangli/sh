@@ -855,6 +855,14 @@ type bgProc struct {
 
 	killedSignal atomic.Int32
 
+	// execReplacing records that this asynchronous shell reached `exec` and
+	// execResult stores the replacement child's terminal status plus one (so
+	// zero means no result). A pure-Go subshell cannot execve over its shared
+	// host process, but wait must still report the replacement child's actual
+	// status if it handles a signal delivered through the carrier.
+	execReplacing atomic.Bool
+	execResult    atomic.Int32
+
 	state atomic.Int32
 
 	ignoreNextStop atomic.Int32

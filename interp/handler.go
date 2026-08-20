@@ -393,6 +393,25 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 			defer stopf()
 
 			err = waitExecCmd(ctx, &cmd)
+			if bg, _ := ctx.Value(bgProcCtxKey{}).(*bgProc); bg != nil && bg.execReplacing.Load() {
+				// The carrier may have died to deliver a signal, but an exec'd
+				// child can catch that signal and choose its own exit status. Save
+				// the actual wait result before the context-cancellation path below
+				// translates a signaled child back into ctx.Err().
+				code := -1
+				switch waitErr := err.(type) {
+				case nil:
+					code = 0
+				case *exec.ExitError:
+					code = waitErr.ExitCode()
+					if status, ok := waitErr.Sys().(waitStatus); ok && status.Signaled() {
+						code = 128 + int(status.Signal())
+					}
+				}
+				if code >= 0 {
+					bg.execResult.Store(int32(code) + 1)
+				}
+			}
 			// A reaped foreground child runs the SIGCHLD trap once, like a
 			// reaped background job (bash waitchld). Background execs are
 			// skipped here — their owning bgProc goroutine fires the trap on

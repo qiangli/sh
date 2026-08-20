@@ -89,6 +89,80 @@ if [ -e term ]; then echo forwarded; else echo lost; fi
 	waitPidsGone(t, c.startedPids())
 }
 
+// TestJobCarrierExecChildTermStatus checks that an exec-replaced asynchronous
+// shell reports the external child's final status. The carrier receives TERM
+// first, but if the exec'd child catches it, its chosen status must win over
+// the carrier's provisional 128+TERM. An unhandled TERM remains 143.
+func TestJobCarrierExecChildTermStatus(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, trap, want string
+	}{
+		{"HandledZero", `trap "exit 0" TERM; `, "0"},
+		{"HandledSeven", `trap "exit 7" TERM; `, "7"},
+		{"Default", "", "143"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := new(testCarrier)
+			dir := t.TempDir()
+			src := `
+{
+	exec /bin/sh -c 'trap "" INT; ` + tc.trap + `: > ready; while :; do :; done'
+} &
+p=$!
+while [ ! -e ready ]; do :; done
+kill -s 0 "$p"
+kill "$p"
+wait "$p"
+echo "st=$?"
+			`
+			out := runCarrierScript(t, c, src, interp.Dir(dir))
+			if got, want := strings.TrimSpace(out), "st="+tc.want; got != want {
+				t.Fatalf("exec child signal status = %q, want %q", got, want)
+			}
+			waitPidsGone(t, c.startedPids())
+		})
+	}
+}
+
+// TestJobCarrierLateSignalDoesNotOverrideExecResult pins the other side of
+// the carrier race: once an exec-replacement child has reached a terminal
+// status, a signal that reaches only the still-live proxy is too late to
+// rewrite that status. A real exec'd process is already a zombie or gone at
+// this point; GNU bash likewise retains the child's status for `wait`.
+func TestJobCarrierLateSignalDoesNotOverrideExecResult(t *testing.T) {
+	t.Parallel()
+	c := new(testCarrier)
+	lateSignal := func(next interp.ExecHandlerFunc) interp.ExecHandlerFunc {
+		return func(ctx context.Context, args []string) error {
+			err := next(ctx, args) // the replacement child has exited 7
+			pids := c.startedPids()
+			if len(pids) != 1 {
+				t.Fatalf("started carrier PIDs = %v, want one", pids)
+			}
+			if err := syscall.Kill(pids[0], syscall.SIGTERM); err != nil {
+				t.Fatalf("late carrier TERM: %v", err)
+			}
+			select {
+			case <-ctx.Done(): // watcher stored killedSignal before canceling
+			case <-time.After(runnerRunTimeout):
+				t.Fatal("late carrier TERM was not observed")
+			}
+			return err
+		}
+	}
+	out := runCarrierScript(t, c, `
+{ exec /bin/sh -c 'exit 7'; } &
+p=$!
+wait "$p"
+echo "st=$?"
+`, interp.ExecHandlers(lateSignal))
+	if got := strings.TrimSpace(out); got != "st=7" {
+		t.Fatalf("late carrier signal rewrote exec result: %q", got)
+	}
+	waitPidsGone(t, c.startedPids())
+}
+
 // TestJobCarrierExternalChildPublishesPID checks that a simple external
 // command displaces the carrier seed in $!. wait/kill still resolve the PID
 // through the job registry so signal status and child cleanup are preserved.

@@ -4595,7 +4595,9 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 				// exit status below, so a kill of the carrier racing with
 				// natural completion still lands as 128+signal.
 				bg.reapCarrier()
-				if n := bg.killedSignal.Load(); n > 0 {
+				if result := bg.execResult.Load(); result > 0 {
+					r2.exit = exitStatus{code: uint8(result - 1)}
+				} else if n := bg.killedSignal.Load(); n > 0 {
 					r2.exit = exitStatus{code: uint8(128 + n)}
 				}
 				*bg.exit = r2.exit
@@ -10423,7 +10425,30 @@ func (r *Runner) execAs(ctx context.Context, pos syntax.Pos, argv0 string, clear
 		hctx = context.WithValue(hctx, handlerCtxKey{}, hc)
 	}
 	r.emitAudit("exec", pos, args, false)
-	r.exit.fromHandlerError(r.execHandler(hctx, args))
+	var replacingBg *bgProc
+	if replace {
+		replacingBg, _ = ctx.Value(bgProcCtxKey{}).(*bgProc)
+		if replacingBg != nil {
+			replacingBg.execReplacing.Store(true)
+		}
+	}
+	handlerErr := r.execHandler(hctx, args)
+	if replacingBg != nil && replacingBg.execResult.Load() == 0 {
+		// Custom handlers do not expose an os.ProcessState. Their ordinary
+		// ExitStatus return is nevertheless the completed exec command's
+		// authoritative status; fatal errors still use the carrier signal.
+		var builtinExit errBuiltinExitStatus
+		var externalExit ExitStatus
+		switch {
+		case handlerErr == nil:
+			replacingBg.execResult.Store(1)
+		case errors.As(handlerErr, &builtinExit):
+			replacingBg.execResult.Store(int32(exitStatus(builtinExit).code) + 1)
+		case errors.As(handlerErr, &externalExit):
+			replacingBg.execResult.Store(int32(externalExit) + 1)
+		}
+	}
+	r.exit.fromHandlerError(handlerErr)
 }
 
 func (r *Runner) emitAudit(kind string, pos syntax.Pos, args []string, isBuiltin bool) {
