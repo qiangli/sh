@@ -10330,6 +10330,7 @@ func (r *Runner) execAs(ctx context.Context, pos syntax.Pos, argv0 string, clear
 	hashed := false
 	if len(args) > 0 {
 		name := args[0]
+		newlyHashed := false
 		if entry, ok := r.cmdHashTable[name]; ok {
 			checkHash := false
 			if opt, _ := r.bashOptByName("checkhash"); opt != nil {
@@ -10372,10 +10373,11 @@ func (r *Runner) execAs(ctx context.Context, pos syntax.Pos, argv0 string, clear
 				if r.cmdHashTable == nil {
 					r.cmdHashTable = make(map[string]cmdHashEntry)
 				}
-				r.cmdHashTable[name] = cmdHashEntry{path: path}
+				r.cmdHashTable[name] = cmdHashEntry{path: path, hits: 1}
+				newlyHashed = true
 			}
 		}
-		if entry, ok := r.cmdHashTable[args[0]]; ok && !hashed {
+		if entry, ok := r.cmdHashTable[args[0]]; ok && !hashed && !newlyHashed {
 			hashed = true
 			entry.hits++
 			r.cmdHashTable[args[0]] = entry

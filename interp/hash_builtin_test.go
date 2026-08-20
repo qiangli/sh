@@ -152,6 +152,45 @@ func TestHashBuiltinAutomaticallyCachesCommands(t *testing.T) {
 	}
 }
 
+func TestHashBuiltinFirstLookupPreservesHandlerCommandName(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	exe := filepath.Join(dir, "handled-command")
+	if err := os.WriteFile(exe, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout strings.Builder
+	var handledName string
+	runner, err := interp.New(
+		interp.StdIO(nil, &stdout, nil),
+		interp.ExecHandlers(func(next interp.ExecHandlerFunc) interp.ExecHandlerFunc {
+			return func(ctx context.Context, args []string) error {
+				handledName = args[0]
+				return nil
+			}
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := `PATH=` + dir + `; handled-command; hash -t handled-command`
+	file, err := syntax.NewParser().Parse(strings.NewReader(script), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.Run(context.Background(), file); err != nil {
+		t.Fatal(err)
+	}
+	if handledName != "handled-command" {
+		t.Fatalf("handler command = %q, want original name", handledName)
+	}
+	if got, want := stdout.String(), exe+"\n"; got != want {
+		t.Fatalf("stdout = %q, want %q", got, want)
+	}
+}
+
 func TestHashBuiltinDisabledDoesNotCacheCommands(t *testing.T) {
 	t.Parallel()
 
