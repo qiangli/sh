@@ -572,6 +572,7 @@ var writeErrChecked = map[string]bool{
 // common `builtin | consumer` case bash dies from SIGPIPE silently, so keep
 // the broader EPIPE check away from echo/printf and other output builtins.
 var pipeWriteErrChecked = map[string]bool{
+	"alias":    true,
 	"export":   true,
 	"hash":     true,
 	"readonly": true,

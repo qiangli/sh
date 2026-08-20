@@ -6503,6 +6503,7 @@ func TestPosixListingBuiltinsReportBrokenPipe(t *testing.T) {
 		name string
 		src  string
 	}{
+		{"alias", "alias alias_epipe=true; command alias alias_epipe"},
 		{"export", "export FOO=bar; command export -p"},
 		{"readonly", "readonly RO=bar; command readonly -p"},
 		{"set", "FOO=bar; command set"},
