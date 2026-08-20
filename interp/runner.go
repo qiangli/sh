@@ -4633,6 +4633,7 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 		}
 	} else {
 		r.stmtSync(ctx, st)
+		r.applyPipelineWriteFailure()
 		// A synchronous self-directed `kill -SIG $$` marks its signal
 		// pending while this command runs; deliver it now, before the
 		// enclosing function returns, so a `return` in the handler unwinds
@@ -6024,9 +6025,11 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			}
 
 			r2 := r.subshell(true)
-			r2.stdout = pwDup
+			r2.pipelineOutput = true
+			pipeOut := &pipelineWriter{w: pwDup, runner: r2}
+			r2.stdout = pipeOut
 			if cm.Op == syntax.PipeAll {
-				r2.stderr = pwDup
+				r2.stderr = pipeOut
 			} else {
 				r2.stderr = r.stderr
 			}

@@ -298,6 +298,16 @@ func (r *Runner) trapSignalActive(name string) bool {
 	return ok
 }
 
+// pipelineSIGPIPEIgnored reports the inherited ignore disposition used by an
+// in-process pipeline child. A caught trap is reset to default in that child,
+// while an empty trap and a hard ignore remain ignored.
+func (r *Runner) pipelineSIGPIPEIgnored() bool {
+	r.sigMu.Lock()
+	callback, set := r.trapCallbacks["PIPE"]
+	r.sigMu.Unlock()
+	return r.startupIgnored["PIPE"] || (set && callback == "")
+}
+
 // owningSignalRunner returns the runner whose installed OS handler owns the
 // named signal: this runner if it owns it, otherwise the nearest foreground
 // ancestor (a self-directed `kill -SIG $$` inside a foreground subshell targets

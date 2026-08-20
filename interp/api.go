@@ -130,6 +130,14 @@ type Runner struct {
 	stdinDevTTY      bool
 	stdout           io.Writer
 	stderr           io.Writer
+	// pipelineOutput marks a runner executing the in-process left side of a
+	// pipeline. Builtin writes on that side need thread-local SIGPIPE handling:
+	// unlike an external child, the simulated subshell shares our process and
+	// must not leak its writer signal into the enclosing shell's traps.
+	pipelineOutput bool
+	// pipelineWriteBroken is set by pipelineWriter when an in-process
+	// pipeline child sees EPIPE on stdout or on stderr under |&.
+	pipelineWriteBroken atomic.Bool
 
 	ecfg *expand.Config
 	ectx context.Context // just so that Runner.Subshell can use it again
@@ -2822,6 +2830,7 @@ func (r *Runner) subshell(background bool) *Runner {
 		stdinDevTTY:          r.stdinDevTTY,
 		stdout:               r.stdout,
 		stderr:               r.stderr,
+		pipelineOutput:       r.pipelineOutput,
 		filename:             r.filename,
 		curStmtPos:           r.curStmtPos,
 		aliasReparseDepth:    r.aliasReparseDepth,
@@ -2925,6 +2934,7 @@ func (r *Runner) subshell(background bool) *Runner {
 	if !background {
 		r2.sigParent = r
 	}
+	rebindPipelineWriters(r2)
 	r2.fillExpandConfig(r.ectx)
 	r2.didReset = true
 	return r2

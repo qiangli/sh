@@ -352,7 +352,7 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 		}
 		proxyReplace := hc.ExecReplace && hc.runner != nil && hc.runner.hasLiveBackgroundJobs()
 		if hc.ExecReplace && !proxyReplace {
-			if replaced, err := execReplace(ctx, execPath, cmdArgs, env, execStdin, hc.Stdout, hc.Stderr); replaced {
+			if replaced, err := execReplace(ctx, execPath, cmdArgs, env, execStdin, unwrapPipelineWriter(hc.Stdout), unwrapPipelineWriter(hc.Stderr)); replaced {
 				return err
 			}
 		}
@@ -370,8 +370,8 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 			Env:        env,
 			Dir:        execDir,
 			Stdin:      execStdin,
-			Stdout:     hc.Stdout,
-			Stderr:     hc.Stderr,
+			Stdout:     unwrapPipelineWriter(hc.Stdout),
+			Stderr:     unwrapPipelineWriter(hc.Stderr),
 			ExtraFiles: extraFiles,
 		}
 		prepareBackgroundJobCmd(ctx, &cmd)
@@ -407,8 +407,8 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 					Env:        reExecEnv,
 					Dir:        execDir,
 					Stdin:      execStdin,
-					Stdout:     hc.Stdout,
-					Stderr:     hc.Stderr,
+					Stdout:     unwrapPipelineWriter(hc.Stdout),
+					Stderr:     unwrapPipelineWriter(hc.Stderr),
 					ExtraFiles: extraFiles,
 				}
 				prepareBackgroundJobCmd(ctx, &cmd)
