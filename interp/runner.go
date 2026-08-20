@@ -10139,12 +10139,19 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 		return
 	}
 	if IsBuiltin(name) && !r.disabledBuiltins[name] {
-		// Strict POSIX: non-special, non-intrinsic builtins must be found in PATH.
+		// Strict POSIX: non-special, non-intrinsic builtins must be found in
+		// PATH. A custom exec handler may provide utilities without an
+		// on-disk executable, so let the handler chain resolve a miss. The
+		// default handler will still report command-not-found.
 		if r.strictPosix && !isPosixSpecialBuiltin(name) && !isStrictPosixIntrinsic(name) {
 			if _, err := LookPathDir(r.Dir, r.writeEnv, name); err != nil {
-				releaseBgPid(ctx)
-				r.errf("%s%s: command not found\n", r.bashErrPrefix(pos), name)
-				r.exit.code = 127
+				if r.customExecHandler {
+					r.exec(ctx, pos, args)
+				} else {
+					releaseBgPid(ctx)
+					r.errf("%s%s: command not found\n", r.bashErrPrefix(pos), name)
+					r.exit.code = 127
+				}
 				return
 			}
 		}

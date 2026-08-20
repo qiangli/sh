@@ -100,6 +100,9 @@ type Runner struct {
 
 	// execHandler is responsible for executing programs. It must not be nil.
 	execHandler ExecHandlerFunc
+	// customExecHandler records that execHandler includes host-provided
+	// command resolution, which may expose utilities without filesystem paths.
+	customExecHandler bool
 
 	// execMiddlewares grows with calls to [ExecHandlers],
 	// and is used to construct execHandler when Reset is first called.
@@ -1654,6 +1657,7 @@ func CallHandler(f CallHandlerFunc) RunnerOption {
 func ExecHandler(f ExecHandlerFunc) RunnerOption {
 	return func(r *Runner) error {
 		r.execHandler = f
+		r.customExecHandler = true
 		return nil
 	}
 }
@@ -1675,6 +1679,7 @@ func ExecHandler(f ExecHandlerFunc) RunnerOption {
 func ExecHandlers(middlewares ...func(next ExecHandlerFunc) ExecHandlerFunc) RunnerOption {
 	return func(r *Runner) error {
 		r.execMiddlewares = append(r.execMiddlewares, middlewares...)
+		r.customExecHandler = r.customExecHandler || len(middlewares) > 0
 		return nil
 	}
 }
@@ -2406,16 +2411,17 @@ func (r *Runner) Reset() {
 	}
 	// reset the internal state
 	*r = Runner{
-		Env:            r.Env,
-		tempDir:        r.tempDir,
-		callHandler:    r.callHandler,
-		execHandler:    r.execHandler,
-		openHandler:    r.openHandler,
-		readDirHandler: r.readDirHandler,
-		statHandler:    r.statHandler,
-		bgPidCallback:  r.bgPidCallback,
-		jobCarrier:     r.jobCarrier,
-		sigReset:       r.sigReset,
+		Env:               r.Env,
+		tempDir:           r.tempDir,
+		callHandler:       r.callHandler,
+		execHandler:       r.execHandler,
+		customExecHandler: r.customExecHandler,
+		openHandler:       r.openHandler,
+		readDirHandler:    r.readDirHandler,
+		statHandler:       r.statHandler,
+		bgPidCallback:     r.bgPidCallback,
+		jobCarrier:        r.jobCarrier,
+		sigReset:          r.sigReset,
 
 		// The dialect is fixed at construction by [Lang] and is not
 		// per-Run scratch state; a runner does not change language.
@@ -2774,6 +2780,7 @@ func (r *Runner) subshell(background bool) *Runner {
 		Params:               r.Params,
 		callHandler:          r.callHandler,
 		execHandler:          r.execHandler,
+		customExecHandler:    r.customExecHandler,
 		openHandler:          r.openHandler,
 		readDirHandler:       r.readDirHandler,
 		statHandler:          r.statHandler,

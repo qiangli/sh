@@ -171,3 +171,52 @@ func TestStrictPosixRegularBuiltinsGated(t *testing.T) {
 		})
 	}
 }
+
+// TestStrictPosixRegularBuiltinVirtualProvider covers embedders whose command
+// providers are registered as ExecHandler middleware rather than represented
+// by executables on disk. A failed filesystem PATH lookup must reach that
+// provider instead of being rejected by the builtin dispatcher.
+func TestStrictPosixRegularBuiltinVirtualProvider(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"echo", "printf", "pwd", "test", "true", "false"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			file, err := syntax.NewParser().Parse(strings.NewReader(name+" x\n"), "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var providerArgs []string
+			provider := func(next ExecHandlerFunc) ExecHandlerFunc {
+				return func(ctx context.Context, args []string) error {
+					providerArgs = append([]string(nil), args...)
+					return nil
+				}
+			}
+			var stderr bytes.Buffer
+			r, err := New(
+				WithStrictPosix(true),
+				StdIO(nil, nil, &stderr),
+				Dir(dir),
+				Env(expand.ListEnviron("PATH=/definitely/missing")),
+				ExecHandlers(provider),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Hosts reuse runners and recipes commonly create subshells; the
+			// virtual-resolution marker must survive both transitions.
+			r.Reset()
+			r = r.Subshell()
+			if err := r.Run(context.Background(), file); err != nil {
+				t.Fatalf("run error: %v; stderr=%q", err, stderr.String())
+			}
+			if len(providerArgs) == 0 || providerArgs[0] != name {
+				t.Fatalf("virtual provider args=%q, want command %q", providerArgs, name)
+			}
+			if stderr.Len() != 0 {
+				t.Fatalf("unexpected stderr: %q", stderr.String())
+			}
+		})
+	}
+}
