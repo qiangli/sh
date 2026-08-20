@@ -1964,6 +1964,18 @@ var runTests = []runTest{
 		"",
 	},
 	{
+		`pwd -- ignored >/dev/null; [[ $? == 0 ]]`,
+		"",
+	},
+	{
+		`pwd ignored >/dev/null 2>&1; [[ $? == 0 ]] && pwd --invalid >/dev/null 2>&1; [[ $? == 2 ]]`,
+		"",
+	},
+	{
+		`mkdir real; ln -s real link; cd link; [[ $(pwd -LP) == "$(pwd -P)" && $(pwd -PL) == "$PWD" ]]`,
+		"",
+	},
+	{
 		`mkdir a; ln -s a b; [[ "$(cd a && pwd -P)" == "$(cd b && pwd -P)" ]]`,
 		"",
 	},

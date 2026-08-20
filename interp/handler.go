@@ -845,7 +845,11 @@ func DefaultStatHandler() StatHandlerFunc {
 		if !followSymlinks {
 			return os.Lstat(path)
 		} else {
-			return os.Stat(path)
+			info, err := os.Stat(path)
+			if err != nil {
+				return statLongPath(path, err)
+			}
+			return info, nil
 		}
 	}
 }

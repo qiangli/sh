@@ -1194,13 +1194,33 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 	case "pwd":
 		evalSymlinks := false
 		for len(args) > 0 {
-			switch args[0] {
-			case "-L":
-				evalSymlinks = false
-			case "-P":
-				evalSymlinks = true
-			default:
-				return failf(2, "pwd: %s: invalid option\n", args[0])
+			arg := args[0]
+			if arg == "--" {
+				args = nil
+				break
+			}
+			if len(arg) < 2 || arg[0] != '-' {
+				break
+			}
+			if arg[1] == '-' {
+				return failf(2, "pwd: %s: invalid option\n", arg)
+			}
+			valid := true
+			for _, flag := range arg[1:] {
+				switch flag {
+				case 'L':
+					evalSymlinks = false
+				case 'P':
+					evalSymlinks = true
+				default:
+					valid = false
+				}
+				if !valid {
+					break
+				}
+			}
+			if !valid {
+				return failf(2, "pwd: %s: invalid option\n", arg)
 			}
 			args = args[1:]
 		}
@@ -1214,7 +1234,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			var err error
 			// Physical mode is defined by the invocation's actual working
 			// directory, not by the possibly stale or user-modified PWD.
-			pwd, err = filepath.EvalSymlinks(r.Dir)
+			pwd, err = evalPhysicalPath(r.Dir)
 			if err != nil {
 				exit.fatal(err) // perhaps overly dramatic?
 				return exit
@@ -7219,7 +7239,7 @@ func (r *Runner) resolveCdPath(ctx context.Context, path string, physical bool) 
 	// Determine the base directory for relative paths.
 	base := r.Dir
 	if physical {
-		if resolved, err := filepath.EvalSymlinks(base); err == nil {
+		if resolved, err := evalPhysicalPath(base); err == nil {
 			base = resolved
 		}
 	}
@@ -7241,12 +7261,20 @@ func (r *Runner) resolveCdPath(ctx context.Context, path string, physical bool) 
 			return "", fmt.Errorf("Not a directory")
 		}
 		if physical {
-			if resolved, err := filepath.EvalSymlinks(current); err == nil {
+			if resolved, err := evalPhysicalPath(current); err == nil {
 				current = resolved
 			}
 		}
 	}
 	return filepath.Clean(current), nil
+}
+
+func evalPhysicalPath(path string) (string, error) {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return physicalLongPath(path, err)
+	}
+	return resolved, nil
 }
 
 // joinNoClean joins a directory and a path component without [filepath.Clean]

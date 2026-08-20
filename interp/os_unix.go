@@ -164,7 +164,11 @@ func (r *Runner) inheritedFd(fd int) (*os.File, bool) {
 // but it also takes into account the current user's role.
 func (r *Runner) access(ctx context.Context, path string, mode uint32) error {
 	// TODO(v4): "access" may need to become part of a handler, like "open" or "stat".
-	return unix.Faccessat(unix.AT_FDCWD, path, mode, unix.AT_EACCESS)
+	err := unix.Faccessat(unix.AT_FDCWD, path, mode, unix.AT_EACCESS)
+	if err != nil {
+		return accessLongPath(path, mode, err)
+	}
+	return nil
 }
 
 // unTestOwnOrGrp implements the -O and -G unary tests. If the file does not
