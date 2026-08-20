@@ -27,9 +27,9 @@ func TestCommandPrefixPreservesExternalCommandIdentity(t *testing.T) {
 	if err := os.Symlink(self, program); err != nil {
 		t.Fatal(err)
 	}
-	src := "PATH=" + dir +
+	src := "PATH=" + dir + ";" +
 		" GOSH_PROG=1 GOSH_CMD=relative_exec_identity identity-program;" +
-		" PATH=" + dir +
+		" GOSH_PROG=1 GOSH_CMD=relative_exec_identity identity-program;" +
 		" GOSH_PROG=1 GOSH_CMD=relative_exec_identity command identity-program"
 	file, err := syntax.NewParser().Parse(strings.NewReader(src), "command-identity")
 	if err != nil {
@@ -44,7 +44,7 @@ func TestCommandPrefixPreservesExternalCommandIdentity(t *testing.T) {
 		t.Fatalf("run: %v; output=%q", err, output.String())
 	}
 	want := "argv0=identity-program\nunderscore=" + program + "\n"
-	if got := output.String(); got != want+want {
-		t.Fatalf("output=%q, want two identical command results %q", got, want)
+	if got := output.String(); got != want+want+want {
+		t.Fatalf("output=%q, want three identical command results %q", got, want)
 	}
 }

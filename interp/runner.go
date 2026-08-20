@@ -10375,6 +10375,9 @@ func (r *Runner) execAs(ctx context.Context, pos syntax.Pos, argv0 string, clear
 						r.cmdHashTable[name] = cmdHashEntry{path: path}
 						hashed = true
 						args = append([]string{path}, args[1:]...)
+						if argv0 == "" {
+							argv0 = name
+						}
 					}
 				} else {
 					msg := fmt.Sprintf("%s%s: No such file or directory\n",
@@ -10419,6 +10422,13 @@ func (r *Runner) execAs(ctx context.Context, pos syntax.Pos, argv0 string, clear
 				return
 			}
 			args = append([]string{entry.path}, args[1:]...)
+			// A hash hit changes where execve finds the program, not the
+			// command name supplied as argv[0]. Utilities commonly use argv[0]
+			// in diagnostics, so exposing the cached absolute path makes a
+			// second invocation observably differ from the first.
+			if argv0 == "" {
+				argv0 = name
+			}
 		}
 	}
 	if r.opts[optRestricted] && !hashed && len(args) > 0 && strings.Contains(args[0], "/") {
