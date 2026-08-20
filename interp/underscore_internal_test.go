@@ -16,6 +16,11 @@ func TestSetExecEnvValue(t *testing.T) {
 	}{
 		{name: "append", env: []string{"A=1"}, want: []string{"A=1", "_=/bin/probe"}},
 		{name: "replace", env: []string{"_=parent", "A=1"}, want: []string{"_=/bin/probe", "A=1"}},
+		{
+			name: "replace and deduplicate",
+			env:  []string{"_=inherited", "A=1", "_=overlay"},
+			want: []string{"_=/bin/probe", "A=1"},
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

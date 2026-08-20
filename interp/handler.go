@@ -434,13 +434,22 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 
 func setExecEnvValue(env []string, name, value string) []string {
 	prefix := name + "="
-	for i, kv := range env {
+	found := false
+	out := env[:0]
+	for _, kv := range env {
 		if strings.HasPrefix(kv, prefix) {
-			env[i] = prefix + value
-			return env
+			if found {
+				continue
+			}
+			kv = prefix + value
+			found = true
 		}
+		out = append(out, kv)
 	}
-	return append(env, prefix+value)
+	if !found {
+		out = append(out, prefix+value)
+	}
+	return out
 }
 
 func missingShebangInterpreter(path string) (string, bool) {
