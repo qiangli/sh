@@ -22,3 +22,7 @@ func dupRunnerDir(file *os.File) (*os.File, error) {
 func runnerExecDir(r *Runner, fallback string) string {
 	return fallback
 }
+
+func runnerPhysicalDir(r *Runner, fallback string) string {
+	return fallback
+}

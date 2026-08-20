@@ -56,3 +56,14 @@ func runnerExecDir(r *Runner, fallback string) string {
 	}
 	return path
 }
+
+func runnerPhysicalDir(r *Runner, fallback string) string {
+	if r.dirFile == nil {
+		return fallback
+	}
+	path := fmt.Sprintf("/proc/self/fd/%d", r.dirFile.Fd())
+	if resolved, err := os.Readlink(path); err == nil {
+		return resolved
+	}
+	return fallback
+}

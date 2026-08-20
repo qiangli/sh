@@ -8698,6 +8698,27 @@ func TestCdPosixComponent(t *testing.T) {
 		return cb.String()
 	}
 
+	// Physical cd resolves relative operands from the live directory, even if
+	// another process renamed that directory and made PWD stale.
+	t.Run("physical-current-directory-renamed", func(t *testing.T) {
+		t.Parallel()
+		if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+			t.Skip("requires a live directory path from a retained descriptor")
+		}
+		tdir := t.TempDir()
+		got := runCd(t, tdir, `
+mkdir old
+cd -P old
+mv ../old ../new
+cd -P .
+printf 'status=%s\nPWD=%s\nOLDPWD=%s\n' "$?" "$PWD" "$OLDPWD"
+`)
+		physicalDir, err := filepath.EvalSymlinks(tdir)
+		qt.Assert(t, qt.IsNil(err))
+		qt.Assert(t, qt.Equals(got, "status=0\nPWD="+filepath.Join(physicalDir, "new")+
+			"\nOLDPWD="+filepath.Join(physicalDir, "old")+"\n"))
+	})
+
 	// non-directory file in operand component (-L)
 	t.Run("non-directory-component-L", func(t *testing.T) {
 		t.Parallel()

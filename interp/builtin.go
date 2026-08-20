@@ -7247,7 +7247,11 @@ func (r *Runner) resolveCdPath(ctx context.Context, path string, physical bool) 
 	// Determine the base directory for relative paths.
 	base := r.Dir
 	if physical {
-		if resolved, err := evalPhysicalPath(base); err == nil {
+		// PWD (and therefore r.Dir) can become stale when another process
+		// renames the directory we are in. Physical cd must start from the
+		// live directory inode, not its old logical name.
+		physicalBase := runnerPhysicalDir(r, base)
+		if resolved, err := evalPhysicalPath(physicalBase); err == nil {
 			base = resolved
 		}
 	}
