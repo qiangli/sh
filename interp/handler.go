@@ -33,6 +33,11 @@ func HandlerCtx(ctx context.Context) HandlerContext {
 
 type handlerCtxKey struct{}
 
+// execReplacingCtxKey marks the one handler invocation produced by an exec
+// builtin. A bgProc-wide flag is insufficient for pipelines: a concurrently
+// running non-exec component must not overwrite the replacement's result.
+type execReplacingCtxKey struct{}
+
 // standardUtilsPath is the default search path used by `command -p` to
 // find the POSIX standard utilities, mirroring bash's STANDARD_UTILS_PATH
 // (config-top.h) when confstr(_CS_PATH) is unavailable.
@@ -460,23 +465,26 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 					<-bg.done
 				}
 			}
-			if bg, _ := ctx.Value(bgProcCtxKey{}).(*bgProc); bg != nil && bg.execReplacing.Load() {
-				// The carrier may have died to deliver a signal, but an exec'd
-				// child can catch that signal and choose its own exit status. Save
-				// the actual wait result before the context-cancellation path below
-				// translates a signaled child back into ctx.Err().
-				code := -1
-				switch waitErr := err.(type) {
-				case nil:
-					code = 0
-				case *exec.ExitError:
-					code = waitErr.ExitCode()
-					if status, ok := waitErr.Sys().(waitStatus); ok && status.Signaled() {
-						code = 128 + int(status.Signal())
+			if bg, _ := ctx.Value(bgProcCtxKey{}).(*bgProc); bg != nil {
+				replacing, _ := ctx.Value(execReplacingCtxKey{}).(bool)
+				if replacing {
+					// The carrier may have died to deliver a signal, but an exec'd
+					// child can catch that signal and choose its own exit status. Save
+					// the actual wait result before the context-cancellation path below
+					// translates a signaled child back into ctx.Err().
+					code := -1
+					switch waitErr := err.(type) {
+					case nil:
+						code = 0
+					case *exec.ExitError:
+						code = waitErr.ExitCode()
+						if status, ok := waitErr.Sys().(waitStatus); ok && status.Signaled() {
+							code = 128 + int(status.Signal())
+						}
 					}
-				}
-				if code >= 0 {
-					bg.execResult.Store(int32(code) + 1)
+					if code >= 0 {
+						bg.execResult.Store(int32(code) + 1)
+					}
 				}
 			}
 			// A reaped foreground child runs the SIGCHLD trap once, like a

@@ -63,6 +63,125 @@ echo "term=$?"
 	waitPidsGone(t, c.startedPids())
 }
 
+// TestAsyncPipelineResetIntQuitExecInheritance pins a pipeline-specific
+// signal inheritance race. The asynchronous list defaults INT/QUIT to
+// ignored, but the last pipeline component explicitly resets each signal
+// before replacing itself with an external command. The represented job must
+// honor that reset even while the left component is starting concurrently
+// with the asynchronous-list ignore.
+func TestAsyncPipelineResetIntQuitExecInheritance(t *testing.T) {
+	c := new(testCarrier)
+	out := runCarrierScript(t, c, killBinPrelude+`
+for sig in INT QUIT; do
+	/bin/sleep 1 | (trap - "$sig"; : >"ready.$sig"; exec /bin/cat >/dev/null) &
+	p=$!
+	while [ ! -e "ready.$sig" ]; do :; done
+	/bin/sleep 0.05
+	"$K" -"$sig" "$p"
+	wait "$p"
+	echo "$?"
+done
+`, interp.Dir(t.TempDir()))
+	if got := strings.Fields(out); len(got) != 2 || got[0] != "130" || got[1] != "131" {
+		t.Fatalf("reset pipeline statuses = %q, want [130 131]", got)
+	}
+	waitPidsGone(t, c.startedPids())
+}
+
+// TestAsyncPipelineResetChildHandledSignal keeps the replacement child's
+// actual status authoritative when it installs its own handler after the
+// shell reset. The reset only determines the disposition inherited at exec;
+// it must not blindly force 128+signal over the child's handled exit.
+func TestAsyncPipelineResetChildHandledSignal(t *testing.T) {
+	c := new(testCarrier)
+	out := runCarrierScript(t, c, killBinPrelude+`
+/bin/sleep 1 | (trap - INT; exec /bin/sh -c 'trap "exit 7" INT; : >childready; while :; do :; done') &
+p=$!
+while [ ! -e childready ]; do :; done
+"$K" -INT "$p"
+wait "$p"
+echo "$?"
+`, interp.Dir(t.TempDir()))
+	if got := strings.TrimSpace(out); got != "7" {
+		t.Fatalf("handled reset-pipeline status = %q, want 7", got)
+	}
+	waitPidsGone(t, c.startedPids())
+}
+
+// TestAsyncCompoundImplicitIntQuitRemainIgnored guards the ordinary bash
+// rule on the other side of the pipeline reset case: without an explicit
+// reset in the asynchronous runner, INT and QUIT remain ignored.
+func TestAsyncCompoundImplicitIntQuitRemainIgnored(t *testing.T) {
+	c := new(testCarrier)
+	out := runCarrierScript(t, c, killBinPrelude+`
+for sig in INT QUIT; do
+	{ : >"ready.$sig"; /bin/sleep 0.1; } &
+	p=$!
+	while [ ! -e "ready.$sig" ]; do :; done
+	"$K" -"$sig" "$p"
+	wait "$p"
+	echo "$?"
+done
+`, interp.Dir(t.TempDir()))
+	if got := strings.Fields(out); len(got) != 2 || got[0] != "0" || got[1] != "0" {
+		t.Fatalf("implicit compound statuses = %q, want [0 0]", got)
+	}
+	waitPidsGone(t, c.startedPids())
+}
+
+// TestNestedAsyncReinstallsImplicitIntIgnore checks that a fresh inner
+// asynchronous list replaces an inherited explicit-reset marker with its own
+// POSIX implicit ignore. The inner external command therefore survives INT.
+func TestNestedAsyncReinstallsImplicitIntIgnore(t *testing.T) {
+	c := new(testCarrier)
+	out := runCarrierScript(t, c, killBinPrelude+`
+(
+	trap - INT
+	/bin/sleep 0.2 &
+	p=$!
+	/bin/sleep 0.05
+	"$K" -INT "$p"
+	wait "$p"
+	echo "$?"
+) &
+wait
+`, interp.Dir(t.TempDir()))
+	if got := strings.TrimSpace(out); got != "0" {
+		t.Fatalf("nested async INT status = %q, want 0", got)
+	}
+	waitPidsGone(t, c.startedPids())
+}
+
+// TestCompoundNestedPipelineDoesNotReplaceCarrierSignalOwner checks that a
+// nested pipeline cannot leave its last component's traps as the disposition
+// owner for the surrounding compound job.
+func TestCompoundNestedPipelineDoesNotReplaceCarrierSignalOwner(t *testing.T) {
+	defer func() {
+		ch := make(chan os.Signal, 1)
+		signal.Notify(ch, syscall.SIGTERM)
+		signal.Stop(ch)
+	}()
+	c := new(testCarrier)
+	out := runCarrierScript(t, c, killBinPrelude+`
+{
+	/bin/sleep 0.05 | (trap '' TERM; /bin/cat >/dev/null)
+	: >ready
+	while [ ! -e go ]; do :; done
+} &
+p=$!
+while [ ! -e ready ]; do :; done
+"$K" -TERM "$p"
+/bin/sleep 0.05
+: >go
+wait "$p"
+echo "$?"
+`, interp.Dir(t.TempDir()))
+	if got := strings.TrimSpace(out); got != "143" {
+		t.Fatalf("compound nested-pipeline TERM status = %q, want 143", got)
+	}
+	waitPidsGone(t, c.startedPids())
+}
+
 // TestJobCarrierTermReachesCompoundExternalChild pins the distinction between
 // the requested job signal and generic runner cancellation. A compound async
 // job publishes its carrier as $!, so TERM first reaches the carrier. The

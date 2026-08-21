@@ -489,6 +489,11 @@ type Runner struct {
 	// trapCallbacks maps signal/pseudo-signal names to trap handler code.
 	// Supported keys: EXIT, ERR, DEBUG, RETURN, and signal names like INT, TERM, etc.
 	trapCallbacks map[string]string
+	// asyncDefaultIgnored records INT/QUIT ignores injected by an
+	// asynchronous-list default. asyncDefaultReset records an explicit
+	// `trap -` which changed that inherited ignore back to default.
+	asyncDefaultIgnored map[string]bool
+	asyncDefaultReset   map[string]bool
 
 	// inheritedExitTrap is set in subshells where EXIT is visible to
 	// `trap -p`, but reset for execution until the subshell sets it.
@@ -940,6 +945,19 @@ type bgProc struct {
 	// Nil when no carrier was configured or starting one failed. Set before
 	// the job goroutine starts and never reassigned.
 	carrier CarrierProcess
+	// carrierSignalRunner is the runner whose signal disposition represents
+	// the externally visible job. It normally points at the asynchronous-list
+	// runner; a pipeline publishes its last component instead, matching the
+	// process denoted by `$!` in bash.
+	carrierSignalRunner atomic.Pointer[Runner]
+	// carrierPipelineSignalOwner restricts runner publication to jobs whose
+	// top-level asynchronous statement is itself a pipeline. The CAS prevents
+	// nested pipelines inside its last component from replacing that owner.
+	carrierPipelineSignalOwner bool
+	carrierSignalPublished     atomic.Bool
+	// carrierResetSignal records a carrier signal whose last pipeline runner
+	// had explicitly reset an asynchronous-list INT/QUIT ignore.
+	carrierResetSignal atomic.Int32
 
 	// carrierReaped is set (before Terminate) by reapCarrier once the
 	// job itself has finished, so the carrier watcher goroutine can tell
@@ -1094,6 +1112,24 @@ type bgProcCtxKey struct{}
 // bgNonPrimaryPidCtxKey marks background pipeline elements whose child PIDs
 // belong to the job for wait/cleanup purposes, but must not replace $!.
 type bgNonPrimaryPidCtxKey struct{}
+
+// publishBgSignalRunner selects the runner whose traps classify a signal
+// delivered through the job carrier. Only the primary (last) pipeline
+// component may replace the asynchronous-list runner; left-side components
+// execute concurrently but do not determine the pipeline's disposition.
+func publishBgSignalRunner(ctx context.Context, r *Runner) {
+	bg, _ := ctx.Value(bgProcCtxKey{}).(*bgProc)
+	if bg == nil || !bg.carrierPipelineSignalOwner {
+		return
+	}
+	if nonPrimary, _ := ctx.Value(bgNonPrimaryPidCtxKey{}).(bool); nonPrimary {
+		return
+	}
+	if !bg.carrierSignalPublished.CompareAndSwap(false, true) {
+		return
+	}
+	bg.carrierSignalRunner.Store(r)
+}
 
 // publishBgPid is what exec handlers call after a successful
 // exec.Start. Sets the running goroutine's bgProc.pid and records the
@@ -2898,6 +2934,8 @@ func (r *Runner) subshell(background bool) *Runner {
 	r2.Vars = make(map[string]expand.Variable)
 	r2.alias = maps.Clone(r.alias)
 	r2.trapCallbacks = maps.Clone(r.trapCallbacks)
+	r2.asyncDefaultIgnored = maps.Clone(r.asyncDefaultIgnored)
+	r2.asyncDefaultReset = maps.Clone(r.asyncDefaultReset)
 	r2.inheritedExitTrap = r.trapCallbacks["EXIT"] != ""
 	// Subshells inherit the ERR trap only with errtrace (set -E), and
 	// the DEBUG/RETURN traps only with functrace (set -T); otherwise

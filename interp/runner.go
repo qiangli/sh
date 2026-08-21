@@ -4558,14 +4558,15 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 		st2.Background = false
 		st2.Disown = false
 		bg := &bgProc{
-			done:             make(chan struct{}),
-			exit:             new(exitStatus),
-			pidReady:         make(chan struct{}),
-			publishPidToBang: isSimpleCallStmt(&st2) || isPipelineStmt(&st2),
-			pidCallback:      r.bgPidCallback, // see WithBgPidCallback
-			cmd:              backgroundJobText(st),
-			jobControl:       r.monitorActive(),
-			jobID:            r.nextJobID(),
+			done:                       make(chan struct{}),
+			exit:                       new(exitStatus),
+			pidReady:                   make(chan struct{}),
+			publishPidToBang:           isSimpleCallStmt(&st2) || isPipelineStmt(&st2),
+			pidCallback:                r.bgPidCallback, // see WithBgPidCallback
+			cmd:                        backgroundJobText(st),
+			jobControl:                 r.monitorActive(),
+			jobID:                      r.nextJobID(),
+			carrierPipelineSignalOwner: isPipelineStmt(&st2),
 		}
 		r2.asyncProc = bg
 		bgCtx, cancel := context.WithCancel(ctx)
@@ -6081,6 +6082,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			})
 			var r3 *Runner
 			if lastpipe {
+				publishBgSignalRunner(ctx, r)
 				r.stmt(ctx, cm.Y)
 			} else {
 				// background=false: r3 lazily walks up to r.writeEnv,
@@ -6094,6 +6096,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				r3.asyncStdinExplicit = true
 				r3.stdout = r.stdout
 				r3.stderr = r.stderr
+				publishBgSignalRunner(ctx, r3)
 				if subshell, ok := plainPipelineSubshell(cm.Y); ok {
 					r3.enclosingSubshellEnd = subshell.Rparen
 					r3.stmts(ctx, subshell.Stmts)
@@ -10476,6 +10479,7 @@ func (r *Runner) execAs(ctx context.Context, pos syntax.Pos, argv0 string, clear
 		replacingBg, _ = ctx.Value(bgProcCtxKey{}).(*bgProc)
 		if replacingBg != nil {
 			replacingBg.execReplacing.Store(true)
+			hctx = context.WithValue(hctx, execReplacingCtxKey{}, true)
 		}
 	}
 	handlerErr := r.execHandler(hctx, args)
@@ -10487,13 +10491,19 @@ func (r *Runner) execAs(ctx context.Context, pos syntax.Pos, argv0 string, clear
 		// result after the carrier delivered its signal.
 		var builtinExit errBuiltinExitStatus
 		var externalExit ExitStatus
-		switch {
-		case handlerErr == nil:
-			replacingBg.execResult.Store(1)
-		case errors.As(handlerErr, &builtinExit):
-			replacingBg.execResult.Store(int32(exitStatus(builtinExit).code) + 1)
-		case errors.As(handlerErr, &externalExit):
-			replacingBg.execResult.Store(int32(externalExit) + 1)
+		preserveResetSignal := false
+		if n := replacingBg.carrierResetSignal.Load(); n > 0 {
+			preserveResetSignal = replacingBg.execResult.Load() == 129+n
+		}
+		if !(preserveResetSignal && errors.Is(handlerErr, context.Canceled)) {
+			switch {
+			case handlerErr == nil:
+				replacingBg.execResult.Store(1)
+			case errors.As(handlerErr, &builtinExit):
+				replacingBg.execResult.Store(int32(exitStatus(builtinExit).code) + 1)
+			case errors.As(handlerErr, &externalExit):
+				replacingBg.execResult.Store(int32(externalExit) + 1)
+			}
 		}
 	}
 	r.exit.fromHandlerError(handlerErr)

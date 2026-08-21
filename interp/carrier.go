@@ -172,6 +172,7 @@ func (r *Runner) attachCarrier(ctx context.Context, job *Runner, bg *bgProc) err
 		return fmt.Errorf("job carrier: invalid carrier pid %d", pid)
 	}
 	bg.carrier = cp
+	bg.carrierSignalRunner.Store(job)
 	bg.carrierDone = make(chan struct{})
 	// The carrier PID seeds the job identity (bg.pid) as a stand-in so a
 	// compound job that never execs (a brace group or builtin-only list)
@@ -239,12 +240,20 @@ func (r *Runner) attachCarrier(ctx context.Context, job *Runner, bg *bgProc) err
 		// carrier that somehow exits normally, which must not outlive
 		// its kernel identity — kills the job as 128+signal.
 		if sig > 0 {
-			switch name, disp := job.carrierSignalDisposition(sig); disp {
+			signalRunner := bg.carrierSignalRunner.Load()
+			if signalRunner == nil {
+				signalRunner = job
+			}
+			name, disp := signalRunner.carrierSignalDisposition(sig)
+			switch disp {
 			case carrierSigTrapped:
-				job.markPendingSignal(name)
+				signalRunner.markPendingSignal(name)
 				return
 			case carrierSigIgnored:
 				return
+			}
+			if signalRunner.asyncSignalExplicitlyReset(name) {
+				bg.carrierResetSignal.CompareAndSwap(0, int32(sig))
 			}
 			bg.killedSignal.CompareAndSwap(0, int32(sig))
 		}

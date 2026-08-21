@@ -14,6 +14,7 @@ import (
 	"math/bits"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -181,7 +182,15 @@ func TestMain(m *testing.M) {
 		case "carrier":
 			// Job-carrier stand-in for testCarrier: block until stdin
 			// reaches EOF (or a signal kills us), then exit cleanly. The
-			// stdin pipe ties our lifetime to the test binary's.
+			// stdin pipe ties our lifetime to the test binary's. Mirror the
+			// production carrier's explicit INT/QUIT relay and readiness byte.
+			carrierSignals := make(chan os.Signal, 1)
+			signal.Notify(carrierSignals, syscall.SIGINT, syscall.SIGQUIT)
+			go func() {
+				sig := <-carrierSignals
+				os.Exit(128 + int(sig.(syscall.Signal)))
+			}()
+			fmt.Print("R")
 			io.Copy(io.Discard, os.Stdin)
 			os.Exit(0)
 		case "fd8_is_terminal":

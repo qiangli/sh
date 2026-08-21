@@ -41,8 +41,26 @@ func (c *testCarrier) StartCarrier(ctx context.Context) (interp.CarrierProcess, 
 	if err != nil {
 		return nil, err
 	}
-	if err := cmd.Start(); err != nil {
+	ready, err := cmd.StdoutPipe()
+	if err != nil {
+		stdin.Close()
 		return nil, err
+	}
+	if err := cmd.Start(); err != nil {
+		stdin.Close()
+		return nil, err
+	}
+	var marker [1]byte
+	_, readyErr := io.ReadFull(ready, marker[:])
+	_ = ready.Close()
+	if readyErr != nil || marker[0] != 'R' {
+		stdin.Close()
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		if readyErr != nil {
+			return nil, readyErr
+		}
+		return nil, errors.New("invalid carrier readiness marker")
 	}
 	c.mu.Lock()
 	c.pids = append(c.pids, cmd.Process.Pid)

@@ -208,9 +208,14 @@ func (r *Runner) ignoreAsyncListSignals() {
 	if r.trapCallbacks == nil {
 		r.trapCallbacks = make(map[string]string)
 	}
+	if r.asyncDefaultIgnored == nil {
+		r.asyncDefaultIgnored = make(map[string]bool)
+	}
 	for _, sig := range [...]string{"INT", "QUIT"} {
 		if _, ok := r.trapCallbacks[sig]; !ok {
 			r.trapCallbacks[sig] = ""
+			r.asyncDefaultIgnored[sig] = true
+			delete(r.asyncDefaultReset, sig)
 		}
 	}
 }
@@ -227,14 +232,46 @@ func (r *Runner) setTrapCallback(name, callback string) {
 	if r.trapCallbacks == nil {
 		r.trapCallbacks = make(map[string]string)
 	}
+	delete(r.asyncDefaultIgnored, name)
+	delete(r.asyncDefaultReset, name)
 	r.trapCallbacks[name] = callback
 	r.sigMu.Unlock()
 }
 
 func (r *Runner) removeTrapCallback(name string) {
 	r.sigMu.Lock()
+	if r.asyncDefaultIgnored[name] {
+		if r.asyncDefaultReset == nil {
+			r.asyncDefaultReset = make(map[string]bool)
+		}
+		r.asyncDefaultReset[name] = true
+	}
+	delete(r.asyncDefaultIgnored, name)
 	delete(r.trapCallbacks, name)
 	r.sigMu.Unlock()
+}
+
+func (r *Runner) asyncSignalExplicitlyReset(name string) bool {
+	r.sigMu.Lock()
+	defer r.sigMu.Unlock()
+	return r.asyncDefaultReset[name]
+}
+
+func (r *Runner) asyncResetSignalsForExec(ctx context.Context) []asyncExecSignal {
+	bg, _ := ctx.Value(bgProcCtxKey{}).(*bgProc)
+	if bg == nil || bg.jobControl {
+		return nil
+	}
+	var reset []asyncExecSignal
+	for _, name := range [...]string{"INT", "QUIT"} {
+		if !r.asyncDefaultReset[name] {
+			continue
+		}
+		if sig, ok := signalByName(name); ok {
+			reset = append(reset, asyncExecSignal{name: name, sig: signalForOS(sig)})
+		}
+	}
+	return reset
 }
 
 func (r *Runner) asyncIgnoredSignalsForExec(ctx context.Context) []asyncExecSignal {
@@ -260,13 +297,20 @@ func (r *Runner) asyncIgnoredSignalsForExec(ctx context.Context) []asyncExecSign
 // for the signals that `cmd &` defaults introduced.
 func (r *Runner) startExecCmd(ctx context.Context, cmd *exec.Cmd) error {
 	ignored := r.asyncIgnoredSignalsForExec(ctx)
-	if len(ignored) == 0 {
-		return cmd.Start()
-	}
+	reset := r.asyncResetSignalsForExec(ctx)
 	childSignalStartMu.Lock()
 	defer childSignalStartMu.Unlock()
 	for _, item := range ignored {
 		signal.Ignore(item.sig)
+	}
+	resetChans := make([]chan os.Signal, len(reset))
+	resetSaved := make([]signalDisposition, len(reset))
+	resetSavedOK := make([]bool, len(reset))
+	for i, item := range reset {
+		resetSaved[i], resetSavedOK[i] = saveSignalDisposition(item.sig)
+		restoreExecSignal(item.sig)
+		resetChans[i] = make(chan os.Signal, 1)
+		signal.Notify(resetChans[i], item.sig)
 	}
 	err := cmd.Start()
 	for _, item := range ignored {
@@ -274,6 +318,12 @@ func (r *Runner) startExecCmd(ctx context.Context, cmd *exec.Cmd) error {
 			signal.Ignore(item.sig)
 		} else {
 			restoreExecSignal(item.sig)
+		}
+	}
+	for i, item := range reset {
+		signal.Stop(resetChans[i])
+		if resetSavedOK[i] {
+			restoreSignalDisposition(item.sig, resetSaved[i])
 		}
 	}
 	return err

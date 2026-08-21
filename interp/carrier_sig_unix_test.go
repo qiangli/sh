@@ -13,8 +13,13 @@ import (
 // carrierExitSignal maps a reaped carrier's process state to the number
 // of the signal that terminated it, or 0 for a normal exit.
 func carrierExitSignal(ps *os.ProcessState) int {
-	if ws, ok := ps.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
-		return int(ws.Signal())
+	if ws, ok := ps.Sys().(syscall.WaitStatus); ok {
+		if ws.Signaled() {
+			return int(ws.Signal())
+		}
+		if code := ws.ExitStatus(); code > 128 && code < 256 {
+			return code - 128
+		}
 	}
 	return 0
 }
