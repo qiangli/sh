@@ -88,6 +88,37 @@ func TestRunnerGlobUsesRetainedCwdHandle(t *testing.T) {
 	}
 }
 
+func TestRunnerGlobRequiresSearchPermissionAfterCd(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory search permission")
+	}
+	root := t.TempDir()
+	working := filepath.Join(root, "working")
+	if err := os.Mkdir(working, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var stdout bytes.Buffer
+	runner, err := interp.New(interp.Dir(root), interp.StdIO(nil, &stdout, &stdout))
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := syntax.NewParser().Parse(strings.NewReader(`
+cd working
+mkdir -m a=x searchable
+mkdir -m a=r readable
+printf '<%s>\n' */.
+`), "glob-search-permission")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.Run(context.Background(), file); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := stdout.String(), "<searchable/.>\n"; got != want {
+		t.Fatalf("glob output = %q, want %q", got, want)
+	}
+}
+
 func TestRunnerSubshellsDoNotLeakCwdHandles(t *testing.T) {
 	fdDir := "/proc/self/fd"
 	if runtime.GOOS == "darwin" {

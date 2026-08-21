@@ -70,6 +70,12 @@ type Config struct {
 	// Use [os.ReadDir] to use the filesystem directly.
 	ReadDir2 func(string) ([]fs.DirEntry, error)
 
+	// IsSearchable reports whether a directory may be traversed by the
+	// effective user. If nil, globbing falls back to portable permission-bit
+	// and filesystem probes. Interpreters should provide an access(2)-backed
+	// implementation so readable and searchable directories stay distinct.
+	IsSearchable func(string) bool
+
 	// GlobStar corresponds to the shell option which allows globbing with "**".
 	GlobStar bool
 
@@ -6268,11 +6274,18 @@ func (cfg *Config) globDir(base, dir string, matcher func(string) bool, wantDir,
 			}
 		} else if mode.IsDir() {
 			if needSearch {
-				if info, err := info.Info(); err == nil && info.Mode().Perm()&0o111 == 0 {
-					continue
-				}
-				if _, err := os.Stat(filepath.Join(fullDir, info.Name(), ".")); err != nil {
-					continue
+				candidate := filepath.Join(fullDir, info.Name())
+				if cfg.IsSearchable != nil {
+					if !cfg.IsSearchable(candidate) {
+						continue
+					}
+				} else {
+					if info, err := info.Info(); err == nil && info.Mode().Perm()&0o111 == 0 {
+						continue
+					}
+					if _, err := os.Stat(filepath.Join(candidate, ".")); err != nil {
+						continue
+					}
 				}
 			}
 		} else {

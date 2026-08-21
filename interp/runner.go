@@ -358,6 +358,10 @@ func (r *Runner) updateExpandOpts() {
 			s = shellPathJoinAbs(r.Dir, s)
 			return r.readDirHandler(r.handlerCtx(r.ectx, handlerKindReadDir, todoPos), s)
 		}
+		r.ecfg.IsSearchable = func(s string) bool {
+			s = shellPathJoinAbs(r.Dir, s)
+			return r.access(r.ectx, s, access_X_OK) == nil
+		}
 	}
 	r.ecfg.GlobStar = r.opts[optGlobStar]
 	if opt, _ := r.bashOptByName("globskipdots"); opt != nil {

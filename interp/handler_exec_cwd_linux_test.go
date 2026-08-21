@@ -8,6 +8,7 @@ package interp_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -88,6 +89,40 @@ func TestDefaultExecHandlerResolvesRelativeProgramsFromRunnerDir(t *testing.T) {
 				t.Fatalf("output=%q, want %q", got, want)
 			}
 		})
+	}
+}
+
+func TestDefaultExecHandlerBadInterpreterKeepsShellPath(t *testing.T) {
+	root := t.TempDir()
+	working := filepath.Join(root, "working")
+	if err := os.Mkdir(working, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	program := filepath.Join(root, "bad-interpreter")
+	if err := os.WriteFile(program, []byte("#!/definitely/missing/interpreter\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	runner, err := interp.New(
+		interp.Dir(working),
+		interp.StdIO(nil, &output, &output),
+		interp.WithBashCompatErrors(true),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := syntax.NewParser().Parse(strings.NewReader("../bad-interpreter"), "bad-script")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = runner.Run(context.Background(), file)
+	var status interp.ExitStatus
+	if !errors.As(err, &status) || status != 126 {
+		t.Fatalf("status = %v, want 126; output=%q", err, output.String())
+	}
+	want := "bad-script: ../bad-interpreter: /definitely/missing/interpreter: bad interpreter: No such file or directory\n"
+	if got := output.String(); got != want {
+		t.Fatalf("output = %q, want %q", got, want)
 	}
 }
 

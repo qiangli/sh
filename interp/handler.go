@@ -262,6 +262,7 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 			// value keep the spelling the shell resolved.
 			execPath = anchorExecPath(lookupDir, execPath)
 		}
+		diagnosticScriptPath := execPath
 		longExecFile, longExecPath, err := openLongExecPath(execPath)
 		if err != nil {
 			fmt.Fprintln(hc.Stderr, err)
@@ -269,6 +270,7 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 		}
 		if longExecFile != nil {
 			defer longExecFile.Close()
+			diagnosticScriptPath = fmt.Sprintf("/proc/self/fd/%d", longExecFile.Fd())
 		}
 		envCommandPath := path
 		if lookupDir != hc.Dir && strings.HasPrefix(path, lookupDir+"/") {
@@ -431,11 +433,7 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 			close(replacement.ready)
 		}
 		if err != nil && hc.runner != nil && hc.runner.bashCompatErrors {
-			scriptPath := execPath
-			if !shellPathAbs(scriptPath) {
-				scriptPath = shellPathJoinAbs(hc.Dir, scriptPath)
-			}
-			if interp, ok := missingShebangInterpreter(scriptPath); ok {
+			if interp, ok := missingShebangInterpreter(diagnosticScriptPath); ok {
 				fmt.Fprintf(hc.Stderr, "%s: %s: %s: bad interpreter: No such file or directory\n",
 					hc.runner.filename, args[0], interp)
 				return ExitStatus(126)
