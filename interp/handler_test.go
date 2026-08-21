@@ -190,6 +190,53 @@ trap '' PIPE
 	}
 }
 
+func TestPipelineDupOutputToInputPreservesPipeType(t *testing.T) {
+	t.Parallel()
+
+	pipeTypes := make(chan bool, 1)
+	mw := func(next interp.ExecHandlerFunc) interp.ExecHandlerFunc {
+		return func(ctx context.Context, args []string) error {
+			hc := interp.HandlerCtx(ctx)
+			switch args[0] {
+			case "probe-pipe-stdin":
+				f, ok := hc.Stdin.(*os.File)
+				if !ok {
+					pipeTypes <- false
+					return nil
+				}
+				info, err := f.Stat()
+				pipeTypes <- err == nil && info.Mode()&os.ModeNamedPipe != 0
+				return nil
+			case "drain-stdin":
+				_, err := io.Copy(io.Discard, hc.Stdin)
+				return err
+			}
+			return next(ctx, args)
+		}
+	}
+	file, err := syntax.NewParser().Parse(strings.NewReader(
+		"(probe-pipe-stdin <&1 >left) | drain-stdin"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner, err := interp.New(interp.Dir(t.TempDir()), interp.ExecHandlers(mw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.Run(context.Background(), file); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case isPipe := <-pipeTypes:
+		if isPipe {
+			return
+		}
+		t.Fatal("probe stdin is not the duplicated pipeline output")
+	default:
+		t.Fatal("probe was not run after duplicating pipeline output to stdin")
+	}
+}
+
 // TestHandlerContextSignalIgnoredHardIgnore checks that a signal carried in
 // via [interp.BashyHardIgnoreEnv] (the SIG_HARD_IGNORE bridge across an exec
 // of our own shell binary, see [interp.Runner.isStartupIgnored]) reports

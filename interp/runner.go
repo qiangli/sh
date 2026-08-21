@@ -9273,6 +9273,7 @@ func isClosedFdWriter(w io.Writer) bool {
 }
 
 func dupReadablePipeFile(w io.Writer) *os.File {
+	w = unwrapPipelineWriter(w)
 	f, ok := w.(*os.File)
 	if !ok {
 		return nil
