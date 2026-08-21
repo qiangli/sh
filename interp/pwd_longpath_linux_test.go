@@ -61,6 +61,9 @@ printf 'GLOB=<%%s>\n' *
 printf 'redirect\n' >out.stdout
 IFS= read -r line <out.stdout || exit 74
 [ "$line" = redirect ] || exit 75
+[ -r regular ] || exit 79
+[ -w regular ] || exit 80
+[ ! -x regular ] || exit 81
 ./missing-command 2>missing.err
 [ "$?" -eq 127 ] || exit 76
 IFS= read -r missing <missing.err || exit 77

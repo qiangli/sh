@@ -92,15 +92,7 @@ func openLongExecPath(path string) (*os.File, bool, error) {
 }
 
 func accessLongPath(path string, mode uint32, original error) error {
-	if !errors.Is(original, unix.ENAMETOOLONG) {
-		return original
-	}
-	dir, err := openLongDir(path)
-	if err != nil {
-		return err
-	}
-	defer dir.Close()
-	return unix.Faccessat(int(dir.Fd()), ".", mode, unix.AT_EACCESS)
+	return accessLongFile(path, mode, original)
 }
 
 func physicalLongPath(path string, original error) (string, error) {
