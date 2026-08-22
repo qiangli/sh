@@ -8,6 +8,7 @@ package interp_test
 import (
 	"bufio"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"runtime"
@@ -300,6 +301,45 @@ func TestUnrelatedBackgroundDoesNotDelayExecReplacement(t *testing.T) {
 	}
 	if elapsed := time.Since(started); elapsed > 2*time.Second {
 		t.Fatalf("exec replacement waited for unrelated background job: %v", elapsed)
+	}
+}
+
+func TestParentSignalReachesExecReplacement(t *testing.T) {
+	marker := t.TempDir() + "/handled"
+	cmd := exec.Command(os.Args[0])
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd.Stderr = os.Stderr
+	cmd.Env = append(os.Environ(), "GOSH_CMD=proxy_external_signal", "GOSH_MARKER="+marker)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = cmd.Process.Kill()
+		_, _ = cmd.Process.Wait()
+	}()
+	ready := make([]byte, 5)
+	if _, err := io.ReadFull(stdout, ready); err != nil || string(ready) != "ready" {
+		t.Fatalf("replacement readiness = %q, %v", ready, err)
+	}
+	if err := syscall.Kill(cmd.Process.Pid, syscall.SIGUSR1); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		var ee *exec.ExitError
+		if !errors.As(err, &ee) || ee.ExitCode() != 7 {
+			t.Fatalf("replacement exit = %v, want 7", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("replacement did not react to parent signal")
+	}
+	if got, err := os.ReadFile(marker); err != nil || string(got) != "handled" {
+		t.Fatalf("replacement signal marker = %q, %v", got, err)
 	}
 }
 

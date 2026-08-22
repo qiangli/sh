@@ -442,10 +442,13 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 		if err == nil {
 			publishBgPid(ctx, cmd.Process.Pid)
 			stopReplacementStopWatch := func() {}
+			stopReplacementSignalForward := func() {}
 			if proxyReplace {
 				stopReplacementStopWatch = watchExecReplacementStops(cmd.Process.Pid)
+				stopReplacementSignalForward = forwardExecReplacementSignals(cmd.Process.Pid)
 			}
 			defer stopReplacementStopWatch()
+			defer func() { stopReplacementSignalForward() }()
 			stopf := context.AfterFunc(ctx, func() {
 				if killTimeout <= 0 || runtime.GOOS == "windows" {
 					_ = cmd.Process.Signal(os.Kill)
@@ -460,6 +463,12 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 			defer stopf()
 
 			err = waitExecCmd(ctx, &cmd)
+			// Stop intercepting the proxy's signals before translating the
+			// replacement's terminal wait status below. Otherwise relaying the
+			// child's death signal back to this process is caught here and sent
+			// to an already-dead child instead of reaching the proxy's parent.
+			stopReplacementSignalForward()
+			stopReplacementSignalForward = func() {}
 			if replacement != nil {
 				// A real shell's asynchronous child which addressed $$ survives
 				// execve. Let that particular in-process observer finish its

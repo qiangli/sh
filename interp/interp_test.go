@@ -281,6 +281,34 @@ func TestMain(m *testing.M) {
 				os.Exit(1)
 			}
 			os.Exit(0)
+		case "proxy_external_signal":
+			marker := os.Getenv("GOSH_MARKER")
+			src := fmt.Sprintf(`/bin/sleep 1 >/dev/null 2>&1 & exec /usr/bin/env GOSH_CMD=signal_child GOSH_MARKER=%q %q`, marker, os.Args[0])
+			file, err := syntax.NewParser().Parse(strings.NewReader(src), "")
+			if err != nil {
+				os.Exit(1)
+			}
+			runner, _ := interp.New(
+				interp.StdIO(os.Stdin, os.Stdout, os.Stderr),
+				interp.WithSignalResetter(interp.OSSignalResetter{}),
+			)
+			if err := runner.Run(context.Background(), file); err != nil {
+				var status interp.ExitStatus
+				if errors.As(err, &status) {
+					os.Exit(int(status))
+				}
+				os.Exit(1)
+			}
+			os.Exit(0)
+		case "signal_child":
+			ch := make(chan os.Signal, 1)
+			signal.Notify(ch, syscall.SIGUSR1)
+			fmt.Print("ready")
+			<-ch
+			if err := os.WriteFile(os.Getenv("GOSH_MARKER"), []byte("handled"), 0o600); err != nil {
+				os.Exit(1)
+			}
+			os.Exit(7)
 		case "foo_null_bar":
 			fmt.Println("foo\x00bar")
 			os.Exit(0)
