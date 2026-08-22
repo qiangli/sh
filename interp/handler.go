@@ -441,6 +441,11 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 		}
 		if err == nil {
 			publishBgPid(ctx, cmd.Process.Pid)
+			stopReplacementStopWatch := func() {}
+			if proxyReplace {
+				stopReplacementStopWatch = watchExecReplacementStops(cmd.Process.Pid)
+			}
+			defer stopReplacementStopWatch()
 			stopf := context.AfterFunc(ctx, func() {
 				if killTimeout <= 0 || runtime.GOOS == "windows" {
 					_ = cmd.Process.Signal(os.Kill)

@@ -254,10 +254,14 @@ func TestMain(m *testing.M) {
 				fmt.Fprintln(os.Stderr, err)
 				os.Exit(1)
 			}
-			runner, _ := interp.New(
+			opts := []interp.RunnerOption{
 				interp.StdIO(os.Stdin, os.Stdout, os.Stderr),
 				interp.WithSignalResetter(interp.OSSignalResetter{}),
-			)
+			}
+			if os.Getenv("GOSH_JOB_CARRIER") != "" {
+				opts = append(opts, interp.WithJobCarrier(new(testCarrier)))
+			}
+			runner, _ := interp.New(opts...)
 			if err := runner.Run(context.Background(), file); err != nil {
 				var status interp.ExitStatus
 				if errors.As(err, &status) {

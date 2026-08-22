@@ -11,7 +11,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"os/signal"
 	"strconv"
 	"sync"
 	"syscall"
@@ -467,7 +466,10 @@ func relayExecReplacementSignal(sig syscall.Signal) error {
 	// execve resets caught dispositions to default. Do the same before
 	// relaying a proxied replacement child's terminal signal to the shell
 	// host, so its parent observes WIFSIGNALED rather than a normal 128+N exit.
-	signal.Reset(sig)
+	// Use the raw reset seam: signal.Reset cannot reliably overwrite the raw
+	// dispositions installed by OSSignalResetter and can leave a Go runtime
+	// handler silently swallowing the relay, leaving the shell asleep forever.
+	restoreExecSignal(sig)
 	if err := syscall.Kill(os.Getpid(), sig); err != nil {
 		return err
 	}

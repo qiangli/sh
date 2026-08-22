@@ -10,6 +10,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -166,6 +167,7 @@ func TestBackgroundSelfSignalSurvivesExecReplacement(t *testing.T) {
 		wantSignal          syscall.Signal
 		wantExit            int
 		external            bool
+		carrier             bool
 	}{
 		{name: "term", signal: "TERM", delay: "0.05", wantSignal: syscall.SIGTERM},
 		{name: "term_immediate", signal: "TERM", wantSignal: syscall.SIGTERM},
@@ -174,6 +176,11 @@ func TestBackgroundSelfSignalSurvivesExecReplacement(t *testing.T) {
 		{name: "probe_immediate", signal: "0"},
 		{name: "external_term", signal: "TERM", delay: "0.05", wantSignal: syscall.SIGTERM, external: true},
 		{name: "external_probe", signal: "0", delay: "0.05", external: true},
+		{name: "carrier_term", signal: "TERM", delay: "0.05", wantSignal: syscall.SIGTERM, carrier: true},
+		{name: "carrier_usr1", signal: "USR1", delay: "0.05", wantSignal: syscall.SIGUSR1, carrier: true},
+		{name: "carrier_usr2", signal: "USR2", delay: "0.05", wantSignal: syscall.SIGUSR2, carrier: true},
+		{name: "carrier_handled_term", signal: "HANDLED", delay: "0.05", wantExit: 7, carrier: true},
+		{name: "carrier_probe", signal: "0", delay: "0.05", carrier: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			marker := t.TempDir() + "/kill-status"
@@ -188,6 +195,9 @@ func TestBackgroundSelfSignalSurvivesExecReplacement(t *testing.T) {
 			)
 			if tc.external {
 				cmd.Env = append(cmd.Env, "GOSH_EXTERNAL_KILL=1")
+			}
+			if tc.carrier {
+				cmd.Env = append(cmd.Env, "GOSH_JOB_CARRIER=1")
 			}
 			if err := cmd.Start(); err != nil {
 				t.Fatal(err)
@@ -226,6 +236,58 @@ func TestBackgroundSelfSignalSurvivesExecReplacement(t *testing.T) {
 				t.Fatalf("kill status = %q, want S0", got)
 			}
 		})
+	}
+}
+
+func TestBackgroundSelfStopSurvivesExecReplacement(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux waitid stop relay")
+	}
+	marker := t.TempDir() + "/kill-status"
+	cmd := exec.Command(os.Args[0])
+	cmd.Env = append(os.Environ(),
+		"GOSH_CMD=bg_self_signal_exec",
+		"GOSH_MARKER="+marker,
+		"GOSH_SIGNAL=STOP",
+		"GOSH_DELAY=0.05",
+		"GOSH_JOB_CARRIER=1",
+	)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = syscall.Kill(cmd.Process.Pid, syscall.SIGCONT)
+		_ = cmd.Process.Kill()
+		_, _ = cmd.Process.Wait()
+	}()
+
+	stopped := make(chan syscall.WaitStatus, 1)
+	go func() {
+		var status syscall.WaitStatus
+		_, _ = syscall.Wait4(cmd.Process.Pid, &status, syscall.WUNTRACED, nil)
+		stopped <- status
+	}()
+	select {
+	case status := <-stopped:
+		if !status.Stopped() || status.StopSignal() != syscall.SIGSTOP {
+			t.Fatalf("replacement proxy status = %v, want stopped by SIGSTOP", status)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("replacement proxy did not mirror child stop")
+	}
+	if err := syscall.Kill(cmd.Process.Pid, syscall.SIGCONT); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		got, err := os.ReadFile(marker)
+		if err == nil && string(got) == "S0" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("background signal marker = %q, %v; want S0", got, err)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
