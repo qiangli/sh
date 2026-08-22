@@ -2687,6 +2687,21 @@ func (r *Runner) SetLastExitStatus(status uint8) {
 	r.lastExit = exitStatus{code: status}
 }
 
+// ExpandDocument expands src as one shell word using the runner's current
+// variable scope and command-substitution machinery. It performs no field
+// splitting or pathname expansion. Calls must be synchronous with [Runner.Run].
+func (r *Runner) ExpandDocument(ctx context.Context, src string) (string, error) {
+	if !r.didReset {
+		r.Reset()
+	}
+	r.fillExpandConfig(ctx)
+	word, err := syntax.NewParser(syntax.Variant(r.Dialect())).Document(strings.NewReader(src))
+	if err != nil {
+		return "", err
+	}
+	return expand.Document(r.ecfg, word)
+}
+
 // Run interprets a node, which can be a [*File], [*Stmt], or [Command]. If a non-nil
 // error is returned, it will typically contain a command's exit status, which
 // can be retrieved with [IsExitStatus].
