@@ -152,6 +152,108 @@ func TestInteractiveForegroundJobOwnsTerminal(t *testing.T) {
 	}
 }
 
+// TestInteractiveForegroundJobSurvivesUnmonitoredSignals is the `set +m`
+// counterpart to TestInteractiveForegroundJobOwnsTerminal. With job control
+// off, prepareForegroundJobCmd never creates a new process group for the
+// foreground child (see os_unix.go), so it shares the shell's own pgrp; a
+// terminal INTR/QUIT then target the shell process too, not just the child.
+// The helper first runs an unmonitored asynchronous external job, exercising
+// the exact-disposition restore before the foreground guard is installed.
+func TestInteractiveForegroundJobSurvivesUnmonitoredSignals(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		control  byte
+		pipeline bool
+	}{
+		{"INTSimple", 3, false},
+		{"QUITSimple", 28, false},
+		{"INTPipeline", 3, true},
+		{"QUITPipeline", 28, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			testInteractiveForegroundJobSurvivesUnmonitoredSignal(t, tc.control, tc.pipeline)
+		})
+	}
+}
+
+func testInteractiveForegroundJobSurvivesUnmonitoredSignal(t *testing.T, control byte, pipeline bool) {
+	t.Helper()
+	cmd := exec.Command(os.Getenv("GOSH_PROG"))
+	cmd.Env = append(os.Environ(), "GOSH_CMD=foreground_job_shell_unmonitored")
+	if pipeline {
+		cmd.Env = append(cmd.Env, "GOSH_PIPELINE=1")
+	}
+	primary, err := pty.Start(cmd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer primary.Close()
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- cmd.Wait() }()
+	processDone := false
+	var processErr error
+
+	lines := make(chan string, 16)
+	go func() {
+		scanner := bufio.NewScanner(primary)
+		for scanner.Scan() {
+			lines <- scanner.Text() + "\n"
+		}
+		close(lines)
+	}()
+
+	var output strings.Builder
+	waitFor := func(want string, timeout time.Duration) {
+		t.Helper()
+		deadline := time.NewTimer(timeout)
+		defer deadline.Stop()
+		for !strings.Contains(output.String(), want) {
+			select {
+			case line, ok := <-lines:
+				if !ok {
+					t.Fatalf("PTY closed before %q; output=%q", want, output.String())
+				}
+				output.WriteString(line)
+			case <-deadline.C:
+				t.Fatalf("timed out waiting for %q; output=%q", want, output.String())
+			case err := <-waitDone:
+				processDone = true
+				processErr = err
+				waitDone = nil
+				if err != nil {
+					t.Fatalf("interactive helper exited before %q: %v; output=%q", want, err, output.String())
+				}
+			}
+		}
+	}
+
+	waitFor("ready\n", 5*time.Second)
+	if _, err := primary.Write([]byte{control}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The child deliberately remains alive for 300ms after acknowledging the
+	// interrupt. Its completion marker must precede the next prompt, and the
+	// shell itself must not have died from the same terminal SIGINT.
+	waitFor("caught\n", 5*time.Second)
+	waitFor("PROMPT\n", 5*time.Second)
+	if !processDone {
+		processErr = <-waitDone
+	}
+	if processErr != nil {
+		t.Fatalf("interactive helper: %v; output=%q", processErr, output.String())
+	}
+	got := output.String()
+	for _, marker := range []string{"caught\n", "done\n", "PROMPT\n"} {
+		if !strings.Contains(got, marker) {
+			t.Fatalf("missing %q from output %q", marker, got)
+		}
+	}
+	if strings.Index(got, "done\n") > strings.Index(got, "PROMPT\n") {
+		t.Fatalf("prompt preceded foreground child completion: %q", got)
+	}
+}
+
 func TestRunnerTerminalExec(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
