@@ -34,6 +34,16 @@ type testCarrierProc struct {
 	stdin io.Closer
 }
 
+type ignoredSignalCarrier struct {
+	*testCarrier
+	snapshots chan []string
+}
+
+func (c *ignoredSignalCarrier) StartCarrierWithIgnoredSignals(ctx context.Context, ignored []string) (interp.CarrierProcess, error) {
+	c.snapshots <- append([]string(nil), ignored...)
+	return c.testCarrier.StartCarrier(ctx)
+}
+
 func (c *testCarrier) StartCarrier(ctx context.Context) (interp.CarrierProcess, error) {
 	cmd := exec.Command(os.Getenv("GOSH_PROG"))
 	cmd.Env = append(os.Environ(), "GOSH_CMD=carrier")

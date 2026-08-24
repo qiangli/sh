@@ -6,6 +6,7 @@ package interp
 import (
 	"context"
 	"fmt"
+	"sort"
 )
 
 // A JobCarrier supplies kernel-visible stand-in processes ("carriers")
@@ -28,6 +29,16 @@ type JobCarrier interface {
 	// startup but should not tie the carrier's lifetime to it — the
 	// runner reaps carriers explicitly via [CarrierProcess.Terminate].
 	StartCarrier(ctx context.Context) (CarrierProcess, error)
+}
+
+// IgnoredSignalJobCarrier is the optional carrier extension for hosts whose
+// helper process must explicitly reconstruct ignored dispositions after exec.
+// ignored contains canonical signal names without the "SIG" prefix, captured
+// from the background runner before it starts. The slice belongs to the
+// callee. Hosts which inherit SIG_IGN naturally can implement JobCarrier only.
+type IgnoredSignalJobCarrier interface {
+	JobCarrier
+	StartCarrierWithIgnoredSignals(ctx context.Context, ignored []string) (CarrierProcess, error)
 }
 
 // CarrierProcess is one live carrier obtained from [JobCarrier.StartCarrier].
@@ -97,13 +108,12 @@ type StopAwareCarrierProcess interface {
 //     the job's exit status becomes 128+signal (e.g. 143 for SIGTERM,
 //     137 for SIGKILL), matching a real shell child.
 //
-// The carrier process itself always keeps its default dispositions:
-// external `kill` decides the job's fate by killing the carrier, and
-// the relay above happens when the runner reaps it. One consequence for
-// a job which survives a signal (trapped or ignored) has lost its carrier
-// and with it its kernel
-// identity — it can no longer be probed or signaled externally, though
-// `wait` and `jobs` still resolve it.
+// A basic JobCarrier keeps its default dispositions: external `kill` decides
+// the job's fate by killing the carrier, and the relay above happens when the
+// runner reaps it. An IgnoredSignalJobCarrier may instead preserve the
+// dispositions ignored when the background runner starts, keeping carrier
+// identity for those signals. A disposition changed later by the job can
+// still outlive a dead carrier; `wait` and `jobs` continue to resolve it.
 // When the job finishes first, the runner reaps the carrier via
 // [CarrierProcess.Terminate] and waits for its [CarrierProcess.Wait] to
 // return before sealing the exit status, so a racing external kill
@@ -148,7 +158,13 @@ func (r *Runner) attachCarrier(ctx context.Context, job *Runner, bg *bgProc) err
 	if r.jobCarrier == nil || r.dryRun || r.deterministic {
 		return nil
 	}
-	cp, err := r.jobCarrier.StartCarrier(ctx)
+	var cp CarrierProcess
+	var err error
+	if aware, ok := r.jobCarrier.(IgnoredSignalJobCarrier); ok {
+		cp, err = aware.StartCarrierWithIgnoredSignals(ctx, job.carrierIgnoredSignalNames())
+	} else {
+		cp, err = r.jobCarrier.StartCarrier(ctx)
+	}
 	if err != nil {
 		if cp != nil {
 			go func() {
@@ -260,6 +276,29 @@ func (r *Runner) attachCarrier(ctx context.Context, job *Runner, bg *bgProc) err
 		bg.cancel()
 	}()
 	return nil
+}
+
+// carrierIgnoredSignalNames snapshots the real signals the new background
+// runner currently treats as ignored. It includes explicit empty traps,
+// startup hard ignores, and the implicit INT/QUIT ignores applied to an
+// asynchronous list without job control.
+func (r *Runner) carrierIgnoredSignalNames() []string {
+	seen := make(map[string]bool)
+	var names []string
+	for _, entry := range killSignals {
+		num, ok := signalNumber(entry.Sig)
+		if !ok {
+			continue
+		}
+		name, disposition := r.carrierSignalDisposition(num)
+		if disposition != carrierSigIgnored || seen[name] {
+			continue
+		}
+		seen[name] = true
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // carrierSigDisposition classifies how a job handles a signal relayed

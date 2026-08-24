@@ -41,6 +41,39 @@ func waitPidsGone(t *testing.T, pids []int) {
 	}
 }
 
+func TestJobCarrierReceivesIgnoredSignalSnapshot(t *testing.T) {
+	defer signal.Reset(syscall.SIGTERM)
+	c := &ignoredSignalCarrier{
+		testCarrier: new(testCarrier),
+		snapshots:   make(chan []string, 1),
+	}
+	out := runCarrierScript(t, c, `
+trap '' TERM
+trap ':' HUP
+{ :; } &
+wait
+trap - TERM HUP
+`, interp.WithSignalResetter(interp.OSSignalResetter{}))
+	if out != "" {
+		t.Fatalf("unexpected output: %q", out)
+	}
+	got := <-c.snapshots
+	contains := func(name string) bool {
+		for _, candidate := range got {
+			if candidate == name {
+				return true
+			}
+		}
+		return false
+	}
+	if !contains("TERM") || !contains("INT") || !contains("QUIT") {
+		t.Fatalf("ignored snapshot = %v, want TERM plus async INT/QUIT", got)
+	}
+	if contains("HUP") {
+		t.Fatalf("ignored snapshot = %v, caught HUP must not be included", got)
+	}
+}
+
 // TestJobCarrierExternalKill0 checks that an external `kill -0 $!` sees
 // a live kernel PID for a job with no external process of its own, and
 // that the PID is gone once the job has been waited for.
