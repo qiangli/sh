@@ -152,27 +152,46 @@ func TestInteractiveForegroundJobOwnsTerminal(t *testing.T) {
 	}
 }
 
-// TestInteractiveForegroundJobSurvivesUnmonitoredIntr is the `set +m`
+// TestInteractiveForegroundJobSurvivesUnmonitoredSignals is the `set +m`
 // counterpart to TestInteractiveForegroundJobOwnsTerminal. With job control
 // off, prepareForegroundJobCmd never creates a new process group for the
 // foreground child (see os_unix.go), so it shares the shell's own pgrp; a
-// terminal INTR then targets the shell process too, not just the child. Real
-// bash survives that because an interactive shell always keeps SIGINT caught
-// regardless of job control (see guardUnmonitoredForegroundInt in
-// signal.go); before that guard existed, gosh had no OS-level handler for
-// SIGINT here and the kernel's default disposition killed the shell process
-// outright, so it never reached "PROMPT". This reproduces the public S77
-// mailx interrupt-reducer divergence (job-control-off J2-J6 stages) without
-// any licensed suite or PTY provider beyond the pure-Go creack/pty already
-// used by the sibling test.
-func TestInteractiveForegroundJobSurvivesUnmonitoredIntr(t *testing.T) {
+// terminal INTR/QUIT then target the shell process too, not just the child.
+// The helper first runs an unmonitored asynchronous external job, exercising
+// the exact-disposition restore before the foreground guard is installed.
+func TestInteractiveForegroundJobSurvivesUnmonitoredSignals(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		control  byte
+		pipeline bool
+	}{
+		{"INTSimple", 3, false},
+		{"QUITSimple", 28, false},
+		{"INTPipeline", 3, true},
+		{"QUITPipeline", 28, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			testInteractiveForegroundJobSurvivesUnmonitoredSignal(t, tc.control, tc.pipeline)
+		})
+	}
+}
+
+func testInteractiveForegroundJobSurvivesUnmonitoredSignal(t *testing.T, control byte, pipeline bool) {
+	t.Helper()
 	cmd := exec.Command(os.Getenv("GOSH_PROG"))
 	cmd.Env = append(os.Environ(), "GOSH_CMD=foreground_job_shell_unmonitored")
+	if pipeline {
+		cmd.Env = append(cmd.Env, "GOSH_PIPELINE=1")
+	}
 	primary, err := pty.Start(cmd)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer primary.Close()
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- cmd.Wait() }()
+	processDone := false
+	var processErr error
 
 	lines := make(chan string, 16)
 	go func() {
@@ -197,12 +216,19 @@ func TestInteractiveForegroundJobSurvivesUnmonitoredIntr(t *testing.T) {
 				output.WriteString(line)
 			case <-deadline.C:
 				t.Fatalf("timed out waiting for %q; output=%q", want, output.String())
+			case err := <-waitDone:
+				processDone = true
+				processErr = err
+				waitDone = nil
+				if err != nil {
+					t.Fatalf("interactive helper exited before %q: %v; output=%q", want, err, output.String())
+				}
 			}
 		}
 	}
 
 	waitFor("ready\n", 5*time.Second)
-	if _, err := primary.Write([]byte{3}); err != nil {
+	if _, err := primary.Write([]byte{control}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -211,8 +237,11 @@ func TestInteractiveForegroundJobSurvivesUnmonitoredIntr(t *testing.T) {
 	// shell itself must not have died from the same terminal SIGINT.
 	waitFor("caught\n", 5*time.Second)
 	waitFor("PROMPT\n", 5*time.Second)
-	if err := cmd.Wait(); err != nil {
-		t.Fatalf("interactive helper: %v; output=%q", err, output.String())
+	if !processDone {
+		processErr = <-waitDone
+	}
+	if processErr != nil {
+		t.Fatalf("interactive helper: %v; output=%q", processErr, output.String())
 	}
 	got := output.String()
 	for _, marker := range []string{"caught\n", "done\n", "PROMPT\n"} {

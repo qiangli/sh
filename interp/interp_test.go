@@ -229,11 +229,11 @@ func TestMain(m *testing.M) {
 			time.Sleep(time.Hour)
 			os.Exit(0)
 		case "foreground_job_child":
-			// Keep running after terminal INTR. The PTY job-control test must
-			// distinguish terminal delivery to this foreground command from
+			// Keep running after terminal INTR/QUIT. The PTY job-control tests
+			// must distinguish delivery to this foreground command from
 			// delivery to the shell which is waiting for it.
 			interrupt := make(chan os.Signal, 1)
-			signal.Notify(interrupt, syscall.SIGINT)
+			signal.Notify(interrupt, syscall.SIGINT, syscall.SIGQUIT)
 			fmt.Println("ready")
 			<-interrupt
 			fmt.Println("caught")
@@ -256,14 +256,16 @@ func TestMain(m *testing.M) {
 			}
 			os.Exit(0)
 		case "foreground_job_shell_unmonitored":
-			// Same shape as foreground_job_shell, but with job control off
-			// (`set +m`): the foreground child then shares the shell's own
-			// process group (no setpgid), so terminal SIGINT is delivered to
-			// the shell too, not just the child. An interactive shell must
-			// still survive that: driven by
-			// TestInteractiveForegroundJobSurvivesUnmonitoredIntr.
-			file, err := syntax.NewParser().Parse(strings.NewReader(
-				`set +m; GOSH_CMD=foreground_job_child "$GOSH_PROG"; printf 'PROMPT\n'`), "")
+			// First complete an unmonitored asynchronous external job. Its
+			// temporary POSIX INT/QUIT ignores must not poison Go's signal
+			// bookkeeping before the following foreground command or pipeline.
+			foreground := `GOSH_CMD=foreground_job_child "$GOSH_PROG"`
+			if os.Getenv("GOSH_PIPELINE") != "" {
+				foreground = `/usr/bin/true | ` + foreground
+			}
+			src := `set +m; GOSH_CMD=exit_0 "$GOSH_PROG" & wait $!; ` +
+				foreground + `; printf 'PROMPT\n'`
+			file, err := syntax.NewParser().Parse(strings.NewReader(src), "")
 			if err != nil {
 				fmt.Fprintln(os.Stderr, err)
 				os.Exit(1)

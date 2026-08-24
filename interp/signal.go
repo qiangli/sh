@@ -195,14 +195,14 @@ func (r *Runner) monitorActive() bool {
 	return r.noOpSetState["monitor"]
 }
 
-// guardUnmonitoredForegroundInt keeps an interactive shell alive across a
-// terminal SIGINT delivered while it runs a foreground external command
+// guardUnmonitoredForegroundSignals keeps an interactive shell alive across
+// terminal SIGINT/SIGQUIT delivered while it runs a foreground external command
 // without job control. Real bash always keeps SIGINT caught while
 // interactive — independent of monitor mode or any user `trap` — so it
 // survives a terminal-delivered SIGINT even when `set +m` leaves the
 // foreground child in the shell's own process group (no setpgid happens in
 // prepareForegroundJobCmd/prepareBackgroundJobCmd once job control is off),
-// which means the terminal's SIGINT targets the shell too. With job control
+// which means the terminal signals target the shell too. With job control
 // on, prepareForegroundJobCmd instead hands the terminal's controlling
 // process group to the child, so the shell's own pgrp never receives the
 // signal and this guard is unnecessary there.
@@ -210,12 +210,11 @@ func (r *Runner) monitorActive() bool {
 // The returned func tears the guard down; it is always non-nil and safe to
 // defer unconditionally, including when no guard was installed.
 //
-// A real trap or a hard/explicit ignore for INT is already protective and
-// takes priority, so this only fills the gap left when neither is set. Like
-// bash's own default interactive handler, the guard runs no trap: it simply
-// discards what it catches, which is enough to keep the process off SIGINT's
-// terminating default disposition.
-func (r *Runner) guardUnmonitoredForegroundInt(ctx context.Context) func() {
+// A real trap or a hard/explicit ignore is already protective and takes
+// priority independently for each signal, so this only fills gaps left when
+// neither is set. Like bash's default interactive handlers, the guard runs no
+// trap: it simply keeps the process off the terminating default dispositions.
+func (r *Runner) guardUnmonitoredForegroundSignals(ctx context.Context) func() {
 	noop := func() {}
 	if r == nil || !r.interactiveShell || r.monitorActive() {
 		return noop
@@ -223,32 +222,34 @@ func (r *Runner) guardUnmonitoredForegroundInt(ctx context.Context) func() {
 	if bg, _ := ctx.Value(bgProcCtxKey{}).(*bgProc); bg != nil {
 		return noop
 	}
-	if r.pipelineOutput || ctx.Value(pipelineExecCtxKey{}) != nil {
-		return noop
+	var guarded []os.Signal
+	for _, name := range [...]string{"INT", "QUIT"} {
+		if r.isStartupIgnored(name) || r.trapSignalActive(name) {
+			continue
+		}
+		r.sigMu.Lock()
+		ignored := r.sigIgnored[name]
+		r.sigMu.Unlock()
+		if ignored {
+			continue
+		}
+		if sig, ok := signalByName(name); ok {
+			guarded = append(guarded, signalForOS(sig))
+		}
 	}
-	if r.isStartupIgnored("INT") || r.trapSignalActive("INT") {
-		return noop
-	}
-	r.sigMu.Lock()
-	ignored := r.sigIgnored["INT"]
-	r.sigMu.Unlock()
-	if ignored {
-		return noop
-	}
-	sig, ok := signalByName("INT")
-	if !ok {
+	if len(guarded) == 0 {
 		return noop
 	}
 	ch := make(chan os.Signal, 8)
 	done := make(chan struct{})
-	signal.Notify(ch, signalForOS(sig))
+	signal.Notify(ch, guarded...)
 	go func() {
 		for {
 			select {
 			case <-ch:
-				// Discarded: matches bash's default interactive SIGINT
-				// handling, which runs no trap when none is set and only
-				// keeps the process off the terminating default action.
+				// Discarded: matches bash's default interactive handling,
+				// which runs no trap when none is set and only keeps the
+				// process off the terminating default action.
 			case <-done:
 				return
 			}
@@ -365,8 +366,16 @@ func (r *Runner) startExecCmd(ctx context.Context, cmd *exec.Cmd) error {
 	reset := r.asyncResetSignalsForExec(ctx)
 	childSignalStartMu.Lock()
 	defer childSignalStartMu.Unlock()
-	for _, item := range ignored {
+	ignoredSaved := make([]signalDisposition, len(ignored))
+	ignoredSavedOK := make([]bool, len(ignored))
+	for i, item := range ignored {
+		// Preserve the exact process-global disposition around the narrow
+		// fork/exec window. signal.Ignore tells os/exec that SIG_IGN must be
+		// inherited rather than reset in the child; setOSIgnore makes that
+		// kernel disposition explicit without relying on Go bookkeeping.
+		ignoredSaved[i], ignoredSavedOK[i] = saveSignalDisposition(item.sig)
 		signal.Ignore(item.sig)
+		setOSIgnore(item.sig)
 	}
 	resetChans := make([]chan os.Signal, len(reset))
 	resetSaved := make([]signalDisposition, len(reset))
@@ -378,9 +387,17 @@ func (r *Runner) startExecCmd(ctx context.Context, cmd *exec.Cmd) error {
 		signal.Notify(resetChans[i], item.sig)
 	}
 	err := cmd.Start()
-	for _, item := range ignored {
-		if r.startupIgnored[item.name] || r.sigIgnored[item.name] {
-			signal.Ignore(item.sig)
+	for i, item := range ignored {
+		// Undo signal.Ignore's process-global Go bookkeeping before restoring
+		// the exact raw disposition. Without this Reset, a later Notify guard
+		// can leave the OS signal ignored even though sigaction says default.
+		signal.Reset(item.sig)
+		if ignoredSavedOK[i] {
+			restoreSignalDisposition(item.sig, ignoredSaved[i])
+		} else if r.startupIgnored[item.name] || r.sigIgnored[item.name] {
+			// Unsupported platforms cannot snapshot raw sigaction bytes. Keep
+			// the semantic fallback, including inherited and user ignores.
+			setOSIgnore(item.sig)
 		} else {
 			restoreExecSignal(item.sig)
 		}
