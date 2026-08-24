@@ -1113,6 +1113,10 @@ type bgProcCtxKey struct{}
 // belong to the job for wait/cleanup purposes, but must not replace $!.
 type bgNonPrimaryPidCtxKey struct{}
 
+// pipelineExecCtxKey keeps foreground terminal handoff out of pipelines until
+// the interpreter can create and manage one kernel process group per pipeline.
+type pipelineExecCtxKey struct{}
+
 // publishBgSignalRunner selects the runner whose traps classify a signal
 // delivered through the job carrier. Only the primary (last) pipeline
 // component may replace the asynchronous-list runner; left-side components

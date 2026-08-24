@@ -228,6 +228,33 @@ func TestMain(m *testing.M) {
 			fmt.Println("ready")
 			time.Sleep(time.Hour)
 			os.Exit(0)
+		case "foreground_job_child":
+			// Keep running after terminal INTR. The PTY job-control test must
+			// distinguish terminal delivery to this foreground command from
+			// delivery to the shell which is waiting for it.
+			interrupt := make(chan os.Signal, 1)
+			signal.Notify(interrupt, syscall.SIGINT)
+			fmt.Println("ready")
+			<-interrupt
+			fmt.Println("caught")
+			time.Sleep(300 * time.Millisecond)
+			fmt.Println("done")
+			os.Exit(0)
+		case "foreground_job_shell":
+			file, err := syntax.NewParser().Parse(strings.NewReader(
+				`set -m; GOSH_CMD=foreground_job_child "$GOSH_PROG"; printf 'PROMPT\n'`), "")
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+			runner, err := interp.New(
+				interp.Interactive(true),
+				interp.StdIO(os.Stdin, os.Stdout, os.Stderr),
+			)
+			if err != nil || runner.Run(context.Background(), file) != nil {
+				os.Exit(1)
+			}
+			os.Exit(0)
 		case "bg_self_signal_exec":
 			marker := os.Getenv("GOSH_MARKER")
 			sig := os.Getenv("GOSH_SIGNAL")

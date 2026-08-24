@@ -6071,6 +6071,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			wg.Go(func() {
 				defer r2.closeDirFile()
 				xctx := context.WithValue(ctx, bgNonPrimaryPidCtxKey{}, true)
+				xctx = context.WithValue(xctx, pipelineExecCtxKey{}, true)
 				if subshell, ok := plainPipelineSubshell(cm.X); ok {
 					r2.enclosingSubshellEnd = subshell.Rparen
 					r2.stmts(xctx, subshell.Stmts)
@@ -6087,7 +6088,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			var r3 *Runner
 			if lastpipe {
 				publishBgSignalRunner(ctx, r)
-				r.stmt(ctx, cm.Y)
+				r.stmt(context.WithValue(ctx, pipelineExecCtxKey{}, true), cm.Y)
 			} else {
 				// background=false: r3 lazily walks up to r.writeEnv,
 				// matching `(...)` subshell semantics so callers that
@@ -6103,9 +6104,9 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				publishBgSignalRunner(ctx, r3)
 				if subshell, ok := plainPipelineSubshell(cm.Y); ok {
 					r3.enclosingSubshellEnd = subshell.Rparen
-					r3.stmts(ctx, subshell.Stmts)
+					r3.stmts(context.WithValue(ctx, pipelineExecCtxKey{}, true), subshell.Stmts)
 				} else {
-					r3.stmt(ctx, cm.Y)
+					r3.stmt(context.WithValue(ctx, pipelineExecCtxKey{}, true), cm.Y)
 				}
 				if cb := r3.trapCallbacks["EXIT"]; cb != "" && !r3.inheritedExitTrap {
 					r3.trapCallback(ctx, cb, "exit")

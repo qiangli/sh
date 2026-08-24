@@ -17,12 +17,19 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+	"golang.org/x/term"
 	"mvdan.cc/sh/v3/syntax"
 )
 
 // umaskMu serializes the read-then-restore dance for [syscall.Umask],
 // which is process-wide and has no native read-only access.
 var umaskMu sync.Mutex
+
+// foregroundTTYMu covers the brief SIGTTOU-ignore window around tcsetpgrp.
+// Signal dispositions are process-wide, and a shell which has just handed its
+// terminal to a child is itself in a background process group when it takes
+// the terminal back.
+var foregroundTTYMu sync.Mutex
 
 // processUmask returns the current process umask without permanently
 // changing it. It briefly sets the umask to 0 to read the prior value,
@@ -348,6 +355,65 @@ func prepareBackgroundJobCmd(ctx context.Context, cmd *exec.Cmd) {
 		return
 	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+}
+
+// foregroundJobTTY is the terminal handoff for one simple foreground command.
+// Pipelines deliberately opt out: their in-process representation does not
+// yet have one kernel process group to hand to the terminal.
+type foregroundJobTTY struct {
+	fd        int
+	shellPgrp int
+}
+
+func prepareForegroundJobCmd(ctx context.Context, r *Runner, cmd *exec.Cmd) *foregroundJobTTY {
+	if bg, _ := ctx.Value(bgProcCtxKey{}).(*bgProc); bg != nil {
+		return nil
+	}
+	if r == nil || !r.monitorActive() || r.pipelineOutput || ctx.Value(pipelineExecCtxKey{}) != nil {
+		return nil
+	}
+	stdin := r.origStdin
+	if stdin == nil || !term.IsTerminal(int(stdin.Fd())) {
+		return nil
+	}
+	fd := int(stdin.Fd())
+	shellPgrp := syscall.Getpgrp()
+	foreground, err := unix.IoctlGetInt(fd, unix.TIOCGPGRP)
+	if err != nil || foreground != shellPgrp {
+		// This is either not our controlling terminal or another shell owns
+		// it. Do not create a group we cannot safely foreground.
+		return nil
+	}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	return &foregroundJobTTY{fd: fd, shellPgrp: shellPgrp}
+}
+
+func (j *foregroundJobTTY) giveTo(pgrp int) error {
+	return j.setForeground(pgrp)
+}
+
+func (j *foregroundJobTTY) restore() {
+	_ = j.setForeground(j.shellPgrp)
+}
+
+func (j *foregroundJobTTY) setForeground(pgrp int) error {
+	foregroundTTYMu.Lock()
+	defer foregroundTTYMu.Unlock()
+	old, saved := saveSignalDisposition(syscall.SIGTTOU)
+	// Bypass os/signal.Ignore: it also mutates the Go runtime's signal
+	// bookkeeping, which a raw disposition restore cannot undo.
+	setOSIgnore(syscall.SIGTTOU)
+	// TIOCSPGRP receives a pointer to the process-group ID on both Linux
+	// and Darwin (unlike the integer-valued ioctl requests).
+	err := unix.IoctlSetPointerInt(j.fd, unix.TIOCSPGRP, pgrp)
+	if saved {
+		restoreSignalDisposition(syscall.SIGTTOU, old)
+	} else {
+		// A failed snapshot must not turn this short critical section into a
+		// process-wide permanent ignore.
+		restoreExecSignal(syscall.SIGTTOU)
+	}
+	return err
 }
 
 func waitExecCmd(ctx context.Context, cmd *exec.Cmd) error {

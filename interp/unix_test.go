@@ -17,6 +17,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/creack/pty"
 	"golang.org/x/sys/unix"
@@ -83,6 +84,71 @@ func TestRunnerTerminalStdIO(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestInteractiveForegroundJobOwnsTerminal verifies the public job-control
+// boundary used by interactive consumers: terminal INTR belongs to the
+// foreground external command, and the shell does not advance to its next
+// prompt until that command exits. The helper child handles SIGINT and stays
+// alive briefly, which exposes the old failure where the shell kept terminal
+// ownership and re-prompted immediately.
+func TestInteractiveForegroundJobOwnsTerminal(t *testing.T) {
+	cmd := exec.Command(os.Getenv("GOSH_PROG"))
+	cmd.Env = append(os.Environ(), "GOSH_CMD=foreground_job_shell")
+	primary, err := pty.Start(cmd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer primary.Close()
+
+	lines := make(chan string, 16)
+	go func() {
+		scanner := bufio.NewScanner(primary)
+		for scanner.Scan() {
+			lines <- scanner.Text() + "\n"
+		}
+		close(lines)
+	}()
+
+	var output strings.Builder
+	waitFor := func(want string, timeout time.Duration) {
+		t.Helper()
+		deadline := time.NewTimer(timeout)
+		defer deadline.Stop()
+		for !strings.Contains(output.String(), want) {
+			select {
+			case line, ok := <-lines:
+				if !ok {
+					t.Fatalf("PTY closed before %q; output=%q", want, output.String())
+				}
+				output.WriteString(line)
+			case <-deadline.C:
+				t.Fatalf("timed out waiting for %q; output=%q", want, output.String())
+			}
+		}
+	}
+
+	waitFor("ready\n", 5*time.Second)
+	if _, err := primary.Write([]byte{3}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The child deliberately remains alive for 300ms after acknowledging the
+	// interrupt. Its completion marker must precede the next prompt.
+	waitFor("caught\n", 5*time.Second)
+	waitFor("PROMPT\n", 5*time.Second)
+	if err := cmd.Wait(); err != nil {
+		t.Fatalf("interactive helper: %v; output=%q", err, output.String())
+	}
+	got := output.String()
+	for _, marker := range []string{"caught\n", "done\n", "PROMPT\n"} {
+		if !strings.Contains(got, marker) {
+			t.Fatalf("missing %q from output %q", marker, got)
+		}
+	}
+	if strings.Index(got, "done\n") > strings.Index(got, "PROMPT\n") {
+		t.Fatalf("prompt preceded foreground child completion: %q", got)
 	}
 }
 

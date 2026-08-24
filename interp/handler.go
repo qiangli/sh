@@ -382,6 +382,7 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 			ExtraFiles: extraFiles,
 		}
 		prepareBackgroundJobCmd(ctx, &cmd)
+		foregroundTTY := prepareForegroundJobCmd(ctx, hc.runner, &cmd)
 
 		if hc.runner != nil {
 			err = hc.runner.startExecCmdWithUmask(ctx, &cmd, hc.runner.umask)
@@ -419,6 +420,7 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 					ExtraFiles: extraFiles,
 				}
 				prepareBackgroundJobCmd(ctx, &cmd)
+				foregroundTTY = prepareForegroundJobCmd(ctx, hc.runner, &cmd)
 				if hc.runner != nil {
 					err = hc.runner.startExecCmdWithUmask(ctx, &cmd, hc.runner.umask)
 				} else {
@@ -440,6 +442,17 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 			}
 		}
 		if err == nil {
+			if foregroundTTY != nil {
+				if handoffErr := foregroundTTY.giveTo(cmd.Process.Pid); handoffErr != nil {
+					// The child is already in its own process group. Leaving it
+					// behind the shell's foreground group can make a terminal read
+					// stop forever, so fail closed instead of waiting on it.
+					_ = cmd.Process.Kill()
+					_ = cmd.Wait()
+					return handoffErr
+				}
+				defer foregroundTTY.restore()
+			}
 			publishBgPid(ctx, cmd.Process.Pid)
 			stopReplacementStopWatch := func() {}
 			stopReplacementSignalForward := func() {}
