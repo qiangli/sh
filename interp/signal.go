@@ -195,6 +195,71 @@ func (r *Runner) monitorActive() bool {
 	return r.noOpSetState["monitor"]
 }
 
+// guardUnmonitoredForegroundInt keeps an interactive shell alive across a
+// terminal SIGINT delivered while it runs a foreground external command
+// without job control. Real bash always keeps SIGINT caught while
+// interactive — independent of monitor mode or any user `trap` — so it
+// survives a terminal-delivered SIGINT even when `set +m` leaves the
+// foreground child in the shell's own process group (no setpgid happens in
+// prepareForegroundJobCmd/prepareBackgroundJobCmd once job control is off),
+// which means the terminal's SIGINT targets the shell too. With job control
+// on, prepareForegroundJobCmd instead hands the terminal's controlling
+// process group to the child, so the shell's own pgrp never receives the
+// signal and this guard is unnecessary there.
+//
+// The returned func tears the guard down; it is always non-nil and safe to
+// defer unconditionally, including when no guard was installed.
+//
+// A real trap or a hard/explicit ignore for INT is already protective and
+// takes priority, so this only fills the gap left when neither is set. Like
+// bash's own default interactive handler, the guard runs no trap: it simply
+// discards what it catches, which is enough to keep the process off SIGINT's
+// terminating default disposition.
+func (r *Runner) guardUnmonitoredForegroundInt(ctx context.Context) func() {
+	noop := func() {}
+	if r == nil || !r.interactiveShell || r.monitorActive() {
+		return noop
+	}
+	if bg, _ := ctx.Value(bgProcCtxKey{}).(*bgProc); bg != nil {
+		return noop
+	}
+	if r.pipelineOutput || ctx.Value(pipelineExecCtxKey{}) != nil {
+		return noop
+	}
+	if r.isStartupIgnored("INT") || r.trapSignalActive("INT") {
+		return noop
+	}
+	r.sigMu.Lock()
+	ignored := r.sigIgnored["INT"]
+	r.sigMu.Unlock()
+	if ignored {
+		return noop
+	}
+	sig, ok := signalByName("INT")
+	if !ok {
+		return noop
+	}
+	ch := make(chan os.Signal, 8)
+	done := make(chan struct{})
+	signal.Notify(ch, signalForOS(sig))
+	go func() {
+		for {
+			select {
+			case <-ch:
+				// Discarded: matches bash's default interactive SIGINT
+				// handling, which runs no trap when none is set and only
+				// keeps the process off the terminating default action.
+			case <-done:
+				return
+			}
+		}
+	}()
+	return func() {
+		signal.Stop(ch)
+		close(done)
+	}
+}
+
 // ignoreAsyncListSignals applies POSIX 2.11 asynchronous-list signal
 // defaults to a background runner when job control is disabled: SIGINT and
 // SIGQUIT start ignored, but a trap command inside the async list may still

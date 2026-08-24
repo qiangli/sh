@@ -383,6 +383,12 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 		}
 		prepareBackgroundJobCmd(ctx, &cmd)
 		foregroundTTY := prepareForegroundJobCmd(ctx, hc.runner, &cmd)
+		// Job control off leaves this command in the shell's own pgrp (see
+		// prepareForegroundJobCmd), so a terminal SIGINT reaches the shell
+		// too; guard it for the run's full extent, including the ENOEXEC
+		// self-reexec fallback below and the wait further down.
+		stopIntGuard := hc.runner.guardUnmonitoredForegroundInt(ctx)
+		defer stopIntGuard()
 
 		if hc.runner != nil {
 			err = hc.runner.startExecCmdWithUmask(ctx, &cmd, hc.runner.umask)
