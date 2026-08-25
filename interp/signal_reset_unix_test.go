@@ -147,13 +147,28 @@ func TestStandaloneSignalDefaults(t *testing.T) {
 				t.Fatal(err)
 			}
 			if !tc.stop {
-				state, err := cmd.Process.Wait()
-				if err != nil {
-					t.Fatal(err)
-				}
-				ws, ok := state.Sys().(syscall.WaitStatus)
-				if !ok || !ws.Signaled() || ws.Signal() != tc.sig {
-					t.Fatalf("wait status = %v, want signal %s", state.Sys(), tc.sig)
+				waited := make(chan struct {
+					state *os.ProcessState
+					err   error
+				}, 1)
+				go func() {
+					state, err := cmd.Process.Wait()
+					waited <- struct {
+						state *os.ProcessState
+						err   error
+					}{state, err}
+				}()
+				select {
+				case result := <-waited:
+					if result.err != nil {
+						t.Fatal(result.err)
+					}
+					ws, ok := result.state.Sys().(syscall.WaitStatus)
+					if !ok || !ws.Signaled() || ws.Signal() != tc.sig {
+						t.Fatalf("wait status = %v, want signal %s", result.state.Sys(), tc.sig)
+					}
+				case <-time.After(2 * time.Second):
+					t.Fatalf("child did not take the default action for %s", tc.sig)
 				}
 				return
 			}

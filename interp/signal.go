@@ -105,10 +105,14 @@ func WithSignalResetter(s SignalResetter) RunnerOption {
 						continue
 					}
 					// Keep os/signal's bookkeeping synchronized with the
-					// standalone default reset. A raw sigaction here leaves the
-					// runtime believing its handler is installed, so a later
-					// signal.Notify can leave SIG_DFL active (TP714).
-					signal.Reset(signalForOS(sig))
+					// standalone default reset, then install the real kernel
+					// default. signal.Reset deliberately keeps handlingSig set
+					// for signals whose handlers Go installs at startup, which
+					// would make a later signal.Notify incorrectly believe the
+					// handler was still active. Ignore clears that bookkeeping;
+					// ResetDefault immediately replaces SIG_IGN with SIG_DFL.
+					signal.Ignore(signalForOS(sig))
+					s.ResetDefault(int(sigNum(sig)), name)
 				}
 			}
 		}

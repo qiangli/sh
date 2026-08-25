@@ -9,10 +9,28 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"unsafe"
+	_ "unsafe" // required by go:linkname
 )
 
-type signalDisposition [16]byte
+// signalDisposition matches Darwin's public struct sigaction, which is the
+// shape accepted by libc sigaction: handler, 32-bit mask, and 32-bit flags.
+// The kernel's private struct __sigaction additionally carries a trampoline;
+// calling SYS_SIGACTION directly would have to manufacture that private field.
+type signalDisposition struct {
+	handler uintptr
+	mask    uint32
+	flags   int32
+}
+
+// runtimeSigaction uses the Go runtime's existing cgo-free libc trampoline.
+// Darwin's exported syscall.Syscall family cannot call sigaction by syscall
+// number (its first argument is a libc function pointer), while the runtime
+// already owns the exact per-architecture bridge and public ABI conversion.
+// Keep this declaration byte-for-byte compatible with runtime.usigactiont and
+// runtime.sigaction.
+//
+//go:linkname runtimeSigaction runtime.sigaction
+func runtimeSigaction(sig uint32, new, old *signalDisposition)
 
 func saveSignalDisposition(sig os.Signal) (signalDisposition, bool) {
 	var disposition signalDisposition
@@ -20,9 +38,8 @@ func saveSignalDisposition(sig os.Signal) (signalDisposition, bool) {
 	if !ok {
 		return disposition, false
 	}
-	_, _, errno := syscall.RawSyscall(syscall.SYS_SIGACTION,
-		uintptr(s), 0, uintptr(unsafe.Pointer(&disposition[0])))
-	return disposition, errno == 0
+	runtimeSigaction(uint32(s), nil, &disposition)
+	return disposition, true
 }
 
 func restoreSignalDisposition(sig os.Signal, disposition signalDisposition) {
@@ -30,8 +47,7 @@ func restoreSignalDisposition(sig os.Signal, disposition signalDisposition) {
 	if !ok {
 		return
 	}
-	_, _, _ = syscall.RawSyscall(syscall.SYS_SIGACTION,
-		uintptr(s), uintptr(unsafe.Pointer(&disposition[0])), 0)
+	runtimeSigaction(uint32(s), &disposition, nil)
 }
 
 func restoreExecSignal(sig os.Signal) {
@@ -40,45 +56,27 @@ func restoreExecSignal(sig os.Signal) {
 		signal.Reset(sig)
 		return
 	}
-	var act [16]byte
-	_, _, errno := syscall.RawSyscall(syscall.SYS_SIGACTION,
-		uintptr(s), uintptr(unsafe.Pointer(&act[0])), 0)
-	if errno != 0 {
-		signal.Reset(sig)
-	}
+	// A zero handler is SIG_DFL. Use libc so Darwin supplies the private
+	// trampoline required at the kernel boundary.
+	runtimeSigaction(uint32(s), &signalDisposition{}, nil)
 }
 
-// setOSIgnore installs SIG_IGN for sig at the OS level via a raw sigaction
-// syscall, WITHOUT going through os/signal.Ignore. See the linux build for
-// the full rationale (VSC-PCTS TP714).
+// setOSIgnore installs SIG_IGN for sig at the OS level without changing the
+// os/signal package's bookkeeping. This is required for ignored-on-entry
+// synchronous fault signals: a kill-delivered fault must be discarded while
+// a genuine hardware fault remains owned by the Go runtime.
 func setOSIgnore(sig os.Signal) {
 	s, ok := sig.(syscall.Signal)
 	if !ok {
 		signal.Ignore(sig)
 		return
 	}
-	var act [16]byte
-	*(*uintptr)(unsafe.Pointer(&act[0])) = 1 // SIG_IGN
-	_, _, errno := syscall.RawSyscall(syscall.SYS_SIGACTION,
-		uintptr(s), uintptr(unsafe.Pointer(&act[0])), 0)
-	if errno != 0 {
-		signal.Ignore(sig)
-	}
+	runtimeSigaction(uint32(s), &signalDisposition{handler: 1}, nil)
 }
 
-// osSignalIgnored reports whether the signal's real OS disposition is
-// currently SIG_IGN. See the linux build for the full rationale
-// (VSC-PCTS TP720).
+// osSignalIgnored reports the real Darwin disposition, including SIG_IGN
+// inherited across exec before os/signal has updated its bookkeeping.
 func osSignalIgnored(sig os.Signal) bool {
-	s, ok := sig.(syscall.Signal)
-	if !ok {
-		return signal.Ignored(sig)
-	}
-	var oldAct [16]byte
-	_, _, errno := syscall.RawSyscall(syscall.SYS_SIGACTION,
-		uintptr(s), 0, uintptr(unsafe.Pointer(&oldAct[0])))
-	if errno != 0 {
-		return false
-	}
-	return *(*uintptr)(unsafe.Pointer(&oldAct[0])) == 1 // SIG_IGN
+	disposition, ok := saveSignalDisposition(sig)
+	return ok && disposition.handler == 1
 }

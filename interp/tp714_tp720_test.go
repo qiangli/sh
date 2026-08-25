@@ -8,6 +8,7 @@ package interp
 import (
 	"context"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strings"
 	"syscall"
@@ -135,10 +136,20 @@ func TestTP714TrapFiresDuringBlockedRead(t *testing.T) {
 // level. The reset loop probes the OS disposition before calling
 // restoreExecSignal.
 func TestTP720StandaloneResetSkipsInheritedIgnore(t *testing.T) {
+	if os.Getenv("GOSH_TP720_SIGNAL_CHILD") == "" {
+		testBinary, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command(testBinary, "-test.run=^TestTP720StandaloneResetSkipsInheritedIgnore$")
+		cmd.Env = append(os.Environ(), "GOSH_PROG=", "GOSH_TP720_SIGNAL_CHILD=1")
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("isolated TP720 signal check: %v\n%s", err, output)
+		}
+		return
+	}
+
 	setOSIgnore(syscall.SIGUSR1)
-	defer func() {
-		restoreExecSignal(syscall.SIGUSR1)
-	}()
 
 	if !osSignalIgnored(syscall.SIGUSR1) {
 		t.Fatal("precondition: USR1 should be SIG_IGN")
@@ -148,16 +159,6 @@ func TestTP720StandaloneResetSkipsInheritedIgnore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// WithSignalResetter installed SIG_DFL for PIPE via raw sigaction,
-	// bypassing Go's internal tracking. Re-enable Go's runtime handler
-	// by forcing the handling flag off (Ignore) then on (Notify).
-	{
-		ch := make(chan os.Signal, 1)
-		signal.Ignore(syscall.SIGPIPE)
-		signal.Notify(ch, syscall.SIGPIPE)
-		signal.Reset(syscall.SIGPIPE)
-	}
-
 	if !osSignalIgnored(syscall.SIGUSR1) {
 		t.Fatal("WithSignalResetter cleared an inherited SIG_IGN disposition")
 	}

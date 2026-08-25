@@ -9,6 +9,7 @@ import (
 	"bufio"
 	"context"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strconv"
@@ -42,7 +43,18 @@ func waitPidsGone(t *testing.T, pids []int) {
 }
 
 func TestJobCarrierReceivesIgnoredSignalSnapshot(t *testing.T) {
-	defer signal.Reset(syscall.SIGTERM)
+	if os.Getenv("GOSH_CARRIER_SIGNAL_CHILD") == "" {
+		testBinary, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command(testBinary, "-test.run=^TestJobCarrierReceivesIgnoredSignalSnapshot$")
+		cmd.Env = append(os.Environ(), "GOSH_PROG=", "GOSH_CARRIER_SIGNAL_CHILD=1")
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("isolated carrier signal check: %v\n%s", err, output)
+		}
+		return
+	}
 	c := &ignoredSignalCarrier{
 		testCarrier: new(testCarrier),
 		snapshots:   make(chan []string, 1),
