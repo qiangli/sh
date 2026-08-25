@@ -999,34 +999,47 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 	case "echo":
 		xpgOpt, _ := r.bashOptByName("xpg_echo")
 		newline, doExpand := true, xpgOpt != nil && *xpgOpt
-	echoOpts:
-		for len(args) > 0 {
-			arg := args[0]
-			if len(arg) < 2 || arg[0] != '-' {
-				break echoOpts
+		// Issue 7 does not define any echo options. Outside XSI, only an
+		// initial operand exactly equal to -n enters an
+		// implementation-defined region; choose Bash's BSD behavior there.
+		// In the opt-in XSI mode -n remains an operand and escapes are
+		// interpreted. Keep Bash's broader -n/-e/-E option parser confined
+		// to the non-strict path.
+		if r.strictPosix {
+			if !doExpand && len(args) > 0 && args[0] == "-n" {
+				newline = false
+				args = args[1:]
 			}
-			// Validate all chars are echo flags (n, e, E).
-			valid := true
-			for _, c := range arg[1:] {
-				if c != 'n' && c != 'e' && c != 'E' {
-					valid = false
-					break
+		} else {
+		echoOpts:
+			for len(args) > 0 {
+				arg := args[0]
+				if len(arg) < 2 || arg[0] != '-' {
+					break echoOpts
 				}
-			}
-			if !valid {
-				break echoOpts
-			}
-			for _, c := range arg[1:] {
-				switch c {
-				case 'n':
-					newline = false
-				case 'e':
-					doExpand = true
-				case 'E':
-					doExpand = false
+				// Validate all chars are echo flags (n, e, E).
+				valid := true
+				for _, c := range arg[1:] {
+					if c != 'n' && c != 'e' && c != 'E' {
+						valid = false
+						break
+					}
 				}
+				if !valid {
+					break echoOpts
+				}
+				for _, c := range arg[1:] {
+					switch c {
+					case 'n':
+						newline = false
+					case 'e':
+						doExpand = true
+					case 'E':
+						doExpand = false
+					}
+				}
+				args = args[1:]
 			}
-			args = args[1:]
 		}
 		for i, arg := range args {
 			if i > 0 {
