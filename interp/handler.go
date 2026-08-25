@@ -481,13 +481,13 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 			})
 			defer stopf()
 
-			err = waitExecCmd(ctx, &cmd)
-			// Fold this external child's CPU into the enclosing `time`
-			// clause's accumulator, if one is active. cmd.ProcessState is
-			// populated by cmd.Wait(); it is nil when a job-control wait
-			// reaps via Wait4 instead, in which case this is a no-op.
+			var childUser, childSys time.Duration
+			err, childUser, childSys = waitExecCmd(ctx, &cmd)
+			// Fold this external child's CPU into the enclosing `time` clause.
+			// waitExecCmd reports it from ProcessState on the ordinary path and
+			// directly from Wait4 rusage on the Unix job-control path.
 			if hc.runner != nil {
-				hc.runner.accumulateChildCPU(cmd.ProcessState)
+				hc.runner.accumulateChildCPU(childUser, childSys)
 			}
 			// Stop intercepting the proxy's signals before translating the
 			// replacement's terminal wait status below. Otherwise relaying the

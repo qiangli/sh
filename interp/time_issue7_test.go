@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -72,7 +73,7 @@ func TestTimeIssue7Interface(t *testing.T) {
 	t.Run("accumulate_nil_processstate_is_noop", func(t *testing.T) {
 		t.Parallel()
 		r := &Runner{timing: &timingScope{}}
-		r.accumulateChildCPU(nil) // must not panic or add
+		r.accumulateChildCPU(0, 0) // must not panic or add
 		if user, sys := r.timing.total(); user != 0 || sys != 0 {
 			t.Errorf("want 0/0 after nil ProcessState, got %v/%v", user, sys)
 		}
@@ -86,7 +87,8 @@ func TestTimeIssue7Interface(t *testing.T) {
 		cmd := exec.Command(os.Getenv("GOSH_PROG"))
 		cmd.Env = append(os.Environ(), "GOSH_CMD=exit_0")
 		_ = cmd.Run()
-		r.accumulateChildCPU(cmd.ProcessState) // must not panic
+		user, sys := processStateCPUTimes(cmd.ProcessState)
+		r.accumulateChildCPU(user, sys) // must not panic
 	})
 }
 
@@ -175,6 +177,13 @@ func TestTimeIssue7Pipeline(t *testing.T) {
 	}
 }
 
+func TestTimeIssue7NestedPipelinePrintsOnlyOuterReport(t *testing.T) {
+	_, stderr := runTimeScript(t, "time -p { time -p :; } | :\n")
+	if got := strings.Count(stderr, "real "); got != 1 {
+		t.Fatalf("nested time in pipeline printed %d reports, want 1: %q", got, stderr)
+	}
+}
+
 // TestTimeIssue7ExternalChild folds a real external child's CPU through the
 // same accumulateChildCPU seam the exec handler uses, verifying the
 // ProcessState path (not just the shell-process delta) contributes CPU.
@@ -196,10 +205,42 @@ func TestTimeIssue7ExternalChild(t *testing.T) {
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("burn_cpu helper failed: %v", err)
 	}
-	r.accumulateChildCPU(cmd.ProcessState)
+	childUser, childSys := processStateCPUTimes(cmd.ProcessState)
+	r.accumulateChildCPU(childUser, childSys)
 	user, sys := scope.total()
 	if user+sys <= 0 {
 		t.Fatalf("external child CPU not accumulated: user=%v sys=%v", user, sys)
+	}
+}
+
+func TestTimeIssue7ExternalChildThroughShell(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("bounded external-child CPU integration is Unix-scoped")
+	}
+	_, stderr := runTimeScript(t, `time -p env GOSH_CMD=burn_cpu "$GOSH_PROG"`+"\n")
+	m := posixTimeLine.FindStringSubmatch(stderr)
+	if m == nil {
+		t.Fatalf("external child report is not POSIX -p format: %q", stderr)
+	}
+	user, _ := strconv.ParseFloat(m[2], 64)
+	sys, _ := strconv.ParseFloat(m[3], 64)
+	if user+sys <= 0 {
+		t.Fatalf("external child CPU was not reported: user=%s sys=%s", m[2], m[3])
+	}
+}
+
+func TestTimeIssue7PreservesExternalStatuses(t *testing.T) {
+	stdout, stderr := runTimeScript(t, `time -p env GOSH_CMD=exit_5 "$GOSH_PROG"; echo status=$?`+"\n")
+	if stdout != "status=5\n" {
+		t.Fatalf("timed external exit status = stdout %q, stderr %q", stdout, stderr)
+	}
+	if strings.Count(stderr, "real ") != 1 {
+		t.Fatalf("timed external command emitted malformed report: %q", stderr)
+	}
+
+	stdout, stderr = runTimeScript(t, "time -p profile_b_missing_time_command; echo status=$?\n")
+	if stdout != "status=127\n" {
+		t.Fatalf("timed missing-command status = stdout %q, stderr %q", stdout, stderr)
 	}
 }
 

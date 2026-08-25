@@ -416,19 +416,22 @@ func (j *foregroundJobTTY) setForeground(pgrp int) error {
 	return err
 }
 
-func waitExecCmd(ctx context.Context, cmd *exec.Cmd) error {
+func waitExecCmd(ctx context.Context, cmd *exec.Cmd) (err error, user, sys time.Duration) {
 	bg, _ := ctx.Value(bgProcCtxKey{}).(*bgProc)
 	if bg == nil || !bg.jobControl {
-		return cmd.Wait()
+		err = cmd.Wait()
+		user, sys = processStateCPUTimes(cmd.ProcessState)
+		return err, user, sys
 	}
 	var status syscall.WaitStatus
 	for {
-		_, err := syscall.Wait4(cmd.Process.Pid, &status, syscall.WUNTRACED|syscall.WCONTINUED, nil)
+		var usage syscall.Rusage
+		_, err := syscall.Wait4(cmd.Process.Pid, &status, syscall.WUNTRACED|syscall.WCONTINUED, &usage)
 		if err == syscall.EINTR {
 			continue
 		}
 		if err != nil {
-			return err
+			return err, 0, 0
 		}
 		switch {
 		case status.Stopped():
@@ -448,16 +451,18 @@ func waitExecCmd(ctx context.Context, cmd *exec.Cmd) error {
 			continue
 		default:
 			bg.setState(jobDead)
+			user = time.Duration(usage.Utime.Nano())
+			sys = time.Duration(usage.Stime.Nano())
 			if status.Exited() && status.ExitStatus() == 0 {
-				return nil
+				return nil, user, sys
 			}
 			if status.Signaled() {
-				return ExitStatus(128 + status.Signal())
+				return ExitStatus(128 + status.Signal()), user, sys
 			}
 			if status.Exited() {
-				return ExitStatus(status.ExitStatus())
+				return ExitStatus(status.ExitStatus()), user, sys
 			}
-			return ExitStatus(1)
+			return ExitStatus(1), user, sys
 		}
 	}
 }

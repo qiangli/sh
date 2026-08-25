@@ -2911,7 +2911,8 @@ func (r *Runner) subshell(background bool) *Runner {
 		// which runs on a subshell copy of this runner) still fold their
 		// CPU into the one scope that will print the report. The scope is
 		// nil outside a `time` clause. See timingScope.
-		timing: r.timing,
+		inTimeClause: r.inTimeClause,
+		timing:       r.timing,
 
 		origStdout: r.origStdout, // used for process substitutions
 

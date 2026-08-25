@@ -50,13 +50,19 @@ func (t *timingScope) total() (user, sys time.Duration) {
 	return t.user, t.sys
 }
 
-// accumulateChildCPU adds an external child's CPU usage to the runner's
-// active timing scope, if any. ps may be nil (e.g. a job-control wait that
-// reaps via Wait4 without populating ProcessState); the call is then a
-// no-op, an honest under-count rather than a fabricated value.
-func (r *Runner) accumulateChildCPU(ps *os.ProcessState) {
-	if ps == nil || r.timing == nil {
+// processStateCPUTimes extracts CPU use from the ordinary os/exec wait path.
+func processStateCPUTimes(ps *os.ProcessState) (user, sys time.Duration) {
+	if ps == nil {
+		return 0, 0
+	}
+	return ps.UserTime(), ps.SystemTime()
+}
+
+// accumulateChildCPU adds one external child's measured CPU usage to the
+// runner's active timing scope, if any.
+func (r *Runner) accumulateChildCPU(user, sys time.Duration) {
+	if r.timing == nil {
 		return
 	}
-	r.timing.add(ps.UserTime(), ps.SystemTime())
+	r.timing.add(user, sys)
 }

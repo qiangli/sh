@@ -138,8 +138,10 @@ func (*foregroundJobTTY) giveTo(int) error { return nil }
 
 func (*foregroundJobTTY) restore() {}
 
-func waitExecCmd(ctx context.Context, cmd *exec.Cmd) error {
-	return cmd.Wait()
+func waitExecCmd(ctx context.Context, cmd *exec.Cmd) (err error, user, sys time.Duration) {
+	err = cmd.Wait()
+	user, sys = processStateCPUTimes(cmd.ProcessState)
+	return err, user, sys
 }
 
 func execReplace(ctx context.Context, path string, args, env []string, stdin any, stdout any, stderr any) (bool, error) {

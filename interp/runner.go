@@ -7704,8 +7704,13 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		// bash 5.3 only prints timing output for the outermost
 		// `time` keyword in a stack of nested `time` clauses;
 		// inner ones are absorbed by the outer measurement.
-		outer := !r.inTimeClause
+		priorInTimeClause, priorTiming := r.inTimeClause, r.timing
+		outer := !priorInTimeClause
 		r.inTimeClause = true
+		defer func() {
+			r.inTimeClause = priorInTimeClause
+			r.timing = priorTiming
+		}()
 		// The outermost clause owns the CPU accounting. It samples the
 		// shell process's own CPU (getrusage RUSAGE_SELF / GetProcessTimes)
 		// around the timed clause — which covers builtins and the
@@ -7731,8 +7736,6 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		if !outer {
 			break
 		}
-		r.inTimeClause = false
-		r.timing = nil
 		var user, sys time.Duration
 		// Shell-process CPU delta (fail-closed: only counted if both
 		// samples succeeded; on unsupported targets this stays zero and we
