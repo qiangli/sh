@@ -16,11 +16,21 @@ test processes and a real pseudo-terminal. The tests cannot pass with a fake
 PID, an already-closed completion channel, a state-only transition, or a
 missing terminal handoff.
 
+A host that supplies a `ProcessGroupCarrierProcess` strengthens this boundary:
+the carrier advertises a stable process group before the asynchronous job
+starts, every external pipeline component joins it, and `jobs -p`, job-spec
+signals, `bg`, and `fg` retain that one identity even when a short-lived child
+exits while another component is starting. If the group is stopped, the
+runner records the stopped job and asks the carrier to continue only its proxy
+leader; the real children remain stopped until the shell or caller resumes the
+job. Bashy's Unix CLI carrier implements this optional contract.
+
 ## Explicit residuals
 
-- The interpreter's pipelines still combine in-process runners and separately
-  started external processes; they do not yet create one kernel process group
-  for the entire pipeline. Pipeline job control therefore remains partial.
+- Without an opted-in `ProcessGroupCarrierProcess`, pipelines still combine
+  in-process runners and separately started external processes; they do not
+  create one kernel process group for the entire pipeline. Pipeline job
+  control therefore remains partial for those embedders.
 - Pure-builtin and compound asynchronous jobs remain goroutines. A carrier can
   give them a kernel-visible identity, but it does not move their in-process
   terminal I/O into another process group; `fg` fails closed when no proven
