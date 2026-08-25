@@ -989,6 +989,10 @@ type bgProc struct {
 	// exits. Zero means no proven OS process group (for example a synthetic
 	// goroutine or a carrier-backed pure builtin).
 	pgrp atomic.Int64
+	// pgrpFixed is set before the job goroutine starts when its carrier
+	// advertises a stable process group. External children join that group
+	// and must not replace it with their own process-group identity.
+	pgrpFixed bool
 
 	// coprocReadonly names a readonly variable that a `coproc` failed to
 	// bind its fd array to. Bash defers unsetting the coproc variable

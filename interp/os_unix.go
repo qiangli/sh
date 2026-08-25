@@ -354,11 +354,18 @@ func prepareBackgroundJobCmd(ctx context.Context, cmd *exec.Cmd) {
 	if bg == nil || !bg.jobControl {
 		return
 	}
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	attr := &syscall.SysProcAttr{Setpgid: true}
+	if bg.pgrpFixed {
+		attr.Pgid = int(bg.pgrp.Load())
+	}
+	cmd.SysProcAttr = attr
 }
 
 func recordBackgroundProcessGroup(bg *bgProc, pid int, nonPrimary bool) {
 	if bg == nil || !bg.jobControl || pid <= 0 {
+		return
+	}
+	if bg.pgrpFixed {
 		return
 	}
 	pgrp, err := syscall.Getpgid(pid)
