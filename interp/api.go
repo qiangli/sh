@@ -984,6 +984,11 @@ type bgProc struct {
 	// this job was backgrounded. `fg`/`bg` refuse a job that was not
 	// started under job control, even if monitor mode is later enabled.
 	jobControl bool
+	// pgrp is the kernel process-group identity of an external job. Record it
+	// while the child is alive so jobs/fg/bg retain the ID after its leader
+	// exits. Zero means no proven OS process group (for example a synthetic
+	// goroutine or a carrier-backed pure builtin).
+	pgrp atomic.Int64
 
 	// coprocReadonly names a readonly variable that a `coproc` failed to
 	// bind its fd array to. Bash defers unsetting the coproc variable
@@ -1154,7 +1159,9 @@ func publishBgPid(ctx context.Context, pid int) {
 	bg.pidsMu.Lock()
 	bg.pids = append(bg.pids, pid64)
 	bg.pidsMu.Unlock()
-	if nonPrimary, _ := ctx.Value(bgNonPrimaryPidCtxKey{}).(bool); nonPrimary || !bg.publishPidToBang {
+	nonPrimary, _ := ctx.Value(bgNonPrimaryPidCtxKey{}).(bool)
+	recordBackgroundProcessGroup(bg, pid, nonPrimary)
+	if nonPrimary || !bg.publishPidToBang {
 		return
 	}
 	bg.pid.Store(pid64)

@@ -4901,8 +4901,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		// Argument forms mirror the merged `wait` logic: no args → most
 		// recent bgProc; %N → bash job-spec; gN → legacy $! sentinel;
 		// bare integer → real OS PID (since `$!` now returns one when the
-		// bg statement spawned a real exec). Stdio is not re-attached —
-		// see docs/plan-punted-builtins.md for why.
+		// bg statement spawned a real exec). On Unix, an external job has a
+		// recorded process group which is given the controlling terminal for
+		// the duration of the foreground wait.
 		//
 		// Job-control gating must match bash even though subshells here
 		// are goroutines: refuse entirely when monitor mode is off, and
@@ -4971,23 +4972,56 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			return failf(1, "fg: job %d started without job control\n", bg.jobID)
 		}
 		r.outf("%s\n", bg.cmd)
-		// If a real OS PID has been published, defensively resume it in
-		// case an external SIGSTOP left it stopped. Non-blocking: we only
-		// send SIGCONT when pidReady is already closed; otherwise the
-		// goroutine has not exec'd anything yet and there's nothing to
-		// resume.
+		// A completed synthetic fixture has no terminal ownership to change;
+		// preserve its recorded status. Real jobs wait for PID publication so
+		// fg cannot race ahead of exec and block forever behind SIGTTIN.
 		select {
 		case <-bg.pidReady:
-			if pid := bg.pid.Load(); pid > 0 {
-				sigCont, _ := signalByName("CONT")
-				_ = sendSignal(jobSignalPid(bg), sigCont)
-				bg.ignoreNextContinue.Store(0)
-				bg.ignoreNextStop.Store(1)
-				bg.setState(jobRunning)
-			}
-		default:
+		case <-bg.done:
+		case <-ctx.Done():
+			return failf(1, "fg: %v\n", ctx.Err())
 		}
-		<-bg.done
+		if jobDone(bg) {
+			exit = *bg.exit
+			r.removeJob(bg)
+			break
+		}
+		pid := bg.pid.Load()
+		if pid <= 0 {
+			// The portable default uses synthetic goroutine jobs. It retains the
+			// historical wait/status seam but cannot claim terminal foregrounding.
+			<-bg.done
+			exit = *bg.exit
+			r.removeJob(bg)
+			break
+		}
+		pgrp := int(bg.pgrp.Load())
+		tty, err := foregroundExistingJob(r, pgrp)
+		if err != nil {
+			return failf(1, "fg: %v\n", err)
+		}
+		sigCont, _ := signalByName("CONT")
+		if err := sendSignal(-pgrp, sigCont); err != nil {
+			_ = tty.restore()
+			if jobDone(bg) {
+				exit = *bg.exit
+				r.removeJob(bg)
+				break
+			}
+			return failf(1, "fg: job %d: %v\n", bg.jobID, err)
+		}
+		bg.ignoreNextContinue.Store(0)
+		bg.ignoreNextStop.Store(1)
+		bg.setState(jobRunning)
+		select {
+		case <-bg.done:
+		case <-ctx.Done():
+			_ = tty.restore()
+			return failf(1, "fg: %v\n", ctx.Err())
+		}
+		if err := tty.restore(); err != nil {
+			return failf(1, "fg: restore controlling terminal: %v\n", err)
+		}
 		exit = *bg.exit
 		r.removeJob(bg)
 	case "bg":
@@ -5822,6 +5856,9 @@ func (r *Runner) bgJobLine(jobs []*bgProc, bg *bgProc) string {
 // with long the PID is shown after the marker.
 func (r *Runner) formatJob(jobs []*bgProc, bg *bgProc, long, pidOnly bool) {
 	pid := bg.pid.Load()
+	if pgrp := bg.pgrp.Load(); pgrp > 0 {
+		pid = pgrp
+	}
 	if pidOnly {
 		if pid > 0 {
 			r.outf("%d\n", pid)

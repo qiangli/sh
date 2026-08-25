@@ -457,7 +457,7 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 					_ = cmd.Wait()
 					return handoffErr
 				}
-				defer foregroundTTY.restore()
+				defer func() { _ = foregroundTTY.restore() }()
 			}
 			publishBgPid(ctx, cmd.Process.Pid)
 			stopReplacementStopWatch := func() {}

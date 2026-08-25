@@ -127,6 +127,8 @@ func (waitStatus) Signal() int    { return 0 }
 
 func prepareBackgroundJobCmd(ctx context.Context, cmd *exec.Cmd) {}
 
+func recordBackgroundProcessGroup(bg *bgProc, pid int, nonPrimary bool) {}
+
 // Foreground terminal process groups are a Unix job-control facility.
 type foregroundJobTTY struct{}
 
@@ -134,9 +136,13 @@ func prepareForegroundJobCmd(ctx context.Context, r *Runner, cmd *exec.Cmd) *for
 	return nil
 }
 
+func foregroundExistingJob(r *Runner, pgrp int) (*foregroundJobTTY, error) {
+	return nil, fmt.Errorf("foreground job control is unsupported on this platform")
+}
+
 func (*foregroundJobTTY) giveTo(int) error { return nil }
 
-func (*foregroundJobTTY) restore() {}
+func (*foregroundJobTTY) restore() error { return nil }
 
 func waitExecCmd(ctx context.Context, cmd *exec.Cmd) (err error, user, sys time.Duration) {
 	err = cmd.Wait()

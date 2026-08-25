@@ -269,6 +269,37 @@ func TestMain(m *testing.M) {
 				os.Exit(1)
 			}
 			os.Exit(0)
+		case "job_control_stop_child":
+			jobControlStopChild()
+			os.Exit(0)
+		case "job_control_tty_child":
+			jobControlTTYChild()
+			os.Exit(0)
+		case "job_control_delay":
+			time.Sleep(250 * time.Millisecond)
+			os.Exit(0)
+		case "job_control_bg_shell":
+			runJobControlTestShell(`set -m
+GOSH_CMD=job_control_stop_child "$GOSH_PROG" &
+GOSH_CMD=job_control_delay "$GOSH_PROG"
+printf 'JOBS_P='; jobs -p
+printf 'JOBS_L='; jobs -l
+bg %1
+wait %1
+printf 'BG_STATUS=%s\n' "$?"
+`)
+			os.Exit(0)
+		case "job_control_fg_shell":
+			runJobControlTestShell(`set -m
+GOSH_CMD=job_control_tty_child "$GOSH_PROG" &
+GOSH_CMD=job_control_delay "$GOSH_PROG"
+printf 'JOBS_P='; jobs -p
+printf 'JOBS_L='; jobs -l
+fg %1
+printf 'FG_STATUS=%s\n' "$?"
+`)
+			jobControlReportShellForeground()
+			os.Exit(0)
 		case "foreground_job_shell_unmonitored":
 			// First complete an unmonitored asynchronous external job. Its
 			// temporary POSIX INT/QUIT ignores must not poison Go's signal
@@ -464,6 +495,32 @@ func TestMain(m *testing.M) {
 	os.Unsetenv("a")
 
 	m.Run()
+}
+
+func runJobControlTestShell(src string) {
+	file, err := syntax.NewParser(syntax.PosixMode(true)).Parse(strings.NewReader(src), "")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	runner, err := interp.New(
+		interp.Interactive(true),
+		interp.WithPosixMode(true),
+		interp.WithStrictPosix(true),
+		interp.StdIO(os.Stdin, os.Stdout, os.Stderr),
+	)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if err := runner.Run(context.Background(), file); err != nil {
+		var status interp.ExitStatus
+		if errors.As(err, &status) {
+			os.Exit(int(status))
+		}
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 }
 
 func checkBash() bool {

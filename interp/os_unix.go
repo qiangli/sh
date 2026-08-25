@@ -357,12 +357,47 @@ func prepareBackgroundJobCmd(ctx context.Context, cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 }
 
+func recordBackgroundProcessGroup(bg *bgProc, pid int, nonPrimary bool) {
+	if bg == nil || !bg.jobControl || pid <= 0 {
+		return
+	}
+	pgrp, err := syscall.Getpgid(pid)
+	if err != nil || pgrp <= 0 {
+		return
+	}
+	// A non-primary pipeline process may seed the group identity, but the
+	// primary process always wins when it publishes.
+	if !nonPrimary || bg.pgrp.Load() == 0 {
+		bg.pgrp.Store(int64(pgrp))
+	}
+}
+
 // foregroundJobTTY is the terminal handoff for one simple foreground command.
 // Pipelines deliberately opt out: their in-process representation does not
 // yet have one kernel process group to hand to the terminal.
 type foregroundJobTTY struct {
 	fd        int
 	shellPgrp int
+}
+
+func runnerForegroundJobTTY(r *Runner) (*foregroundJobTTY, error) {
+	if r == nil || !r.monitorActive() {
+		return nil, fmt.Errorf("job control is not enabled")
+	}
+	stdin := r.origStdin
+	if stdin == nil || !term.IsTerminal(int(stdin.Fd())) {
+		return nil, fmt.Errorf("no controlling terminal")
+	}
+	fd := int(stdin.Fd())
+	shellPgrp := syscall.Getpgrp()
+	foreground, err := unix.IoctlGetInt(fd, unix.TIOCGPGRP)
+	if err != nil {
+		return nil, fmt.Errorf("get foreground process group: %w", err)
+	}
+	if foreground != shellPgrp {
+		return nil, fmt.Errorf("shell does not own the controlling terminal")
+	}
+	return &foregroundJobTTY{fd: fd, shellPgrp: shellPgrp}, nil
 }
 
 func prepareForegroundJobCmd(ctx context.Context, r *Runner, cmd *exec.Cmd) *foregroundJobTTY {
@@ -372,28 +407,36 @@ func prepareForegroundJobCmd(ctx context.Context, r *Runner, cmd *exec.Cmd) *for
 	if r == nil || !r.monitorActive() || r.pipelineOutput || ctx.Value(pipelineExecCtxKey{}) != nil {
 		return nil
 	}
-	stdin := r.origStdin
-	if stdin == nil || !term.IsTerminal(int(stdin.Fd())) {
-		return nil
-	}
-	fd := int(stdin.Fd())
-	shellPgrp := syscall.Getpgrp()
-	foreground, err := unix.IoctlGetInt(fd, unix.TIOCGPGRP)
-	if err != nil || foreground != shellPgrp {
+	tty, err := runnerForegroundJobTTY(r)
+	if err != nil {
 		// This is either not our controlling terminal or another shell owns
 		// it. Do not create a group we cannot safely foreground.
 		return nil
 	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	return &foregroundJobTTY{fd: fd, shellPgrp: shellPgrp}
+	return tty
+}
+
+func foregroundExistingJob(r *Runner, pgrp int) (*foregroundJobTTY, error) {
+	if pgrp <= 0 {
+		return nil, fmt.Errorf("job has no process group")
+	}
+	tty, err := runnerForegroundJobTTY(r)
+	if err != nil {
+		return nil, err
+	}
+	if err := tty.giveTo(pgrp); err != nil {
+		return nil, fmt.Errorf("give terminal to process group %d: %w", pgrp, err)
+	}
+	return tty, nil
 }
 
 func (j *foregroundJobTTY) giveTo(pgrp int) error {
 	return j.setForeground(pgrp)
 }
 
-func (j *foregroundJobTTY) restore() {
-	_ = j.setForeground(j.shellPgrp)
+func (j *foregroundJobTTY) restore() error {
+	return j.setForeground(j.shellPgrp)
 }
 
 func (j *foregroundJobTTY) setForeground(pgrp int) error {

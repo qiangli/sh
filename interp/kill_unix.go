@@ -180,8 +180,10 @@ func continueIfStopped(pid int) {
 
 func jobSignalPid(bg *bgProc) int {
 	pid := int(bg.pid.Load())
-	if bg.jobControl && pid > 0 {
-		return -pid
+	if bg.jobControl {
+		if pgrp := int(bg.pgrp.Load()); pgrp > 0 {
+			return -pgrp
+		}
 	}
 	return pid
 }
