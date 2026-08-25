@@ -2315,7 +2315,12 @@ parseOpts:
 		}
 		command := h.list[idx]
 		for _, s := range subs {
-			command = strings.ReplaceAll(command, s[0], s[1])
+			if r.opts[optPosix] {
+				// Issue 7 specifies replacement of the first occurrence.
+				command = strings.Replace(command, s[0], s[1], 1)
+			} else {
+				command = strings.ReplaceAll(command, s[0], s[1])
+			}
 		}
 		// Replace the recorded `fc -s` line with the re-executed
 		// command, so consecutive substitutions chain.
@@ -2413,10 +2418,16 @@ parseOpts:
 			if r.opts[optPosix] {
 				marker = ""
 			}
+			lines := strings.Split(entries[k], "\n")
 			if numbering {
-				r.outf("%d\t%s%s\n", base+j, marker, entries[k])
+				r.outf("%d\t%s%s\n", base+j, marker, lines[0])
 			} else {
-				r.outf("\t%s%s\n", marker, entries[k])
+				r.outf("\t%s%s\n", marker, lines[0])
+			}
+			// POSIX requires every continuation line of a multi-line
+			// history entry to carry its own tab prefix.
+			for _, line := range lines[1:] {
+				r.outf("\t%s\n", line)
 			}
 		}
 		return exit
@@ -2450,10 +2461,10 @@ parseOpts:
 	editor := ename
 	if editor == "" {
 		if editor = r.envGet("FCEDIT"); editor == "" {
-			if editor = r.envGet("EDITOR"); editor == "" {
-				if r.opts[optPosix] {
-					editor = "ed"
-				} else {
+			if r.opts[optPosix] {
+				editor = "ed"
+			} else {
+				if editor = r.envGet("EDITOR"); editor == "" {
 					editor = "vi"
 				}
 			}

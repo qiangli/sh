@@ -263,6 +263,18 @@ fc
 `,
 			want: "ed",
 		},
+		{
+			name: "posix ignores EDITOR fallback",
+			src: `HISTFILE=/dev/null
+unset FCEDIT
+EDITOR=vi
+set -o history
+set -o posix
+echo selected
+fc
+`,
+			want: "ed",
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			var editors []string
@@ -327,6 +339,35 @@ func TestFcIssue7FormValidation(t *testing.T) {
 				t.Fatalf("%s output = %q", src, out)
 			}
 		})
+	}
+}
+
+func TestFcIssue7FirstSubstitutionAndMultilineListing(t *testing.T) {
+	const src = `HISTFILE=/dev/null
+set -o history
+set -o posix
+echo aa aa
+fc -s aa=bb echo
+`
+	out := runHistScript(t, src)
+	if want := "aa aa\necho bb aa\nbb aa\n"; out != want {
+		t.Fatalf("first substitution output = %q, want %q", out, want)
+	}
+
+	histReset()
+	t.Cleanup(histReset)
+	shellHist.mu.Lock()
+	shellHist.list = []string{"first line\nsecond line"}
+	shellHist.base = 1
+	shellHist.mu.Unlock()
+	var buf bytes.Buffer
+	r, err := New(WithPosixMode(true), StdIO(nil, &buf, &buf))
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := r.fcBuiltin(context.Background(), syntax.Pos{}, []string{"-ln", "1", "1"})
+	if status.code != 0 || buf.String() != "\tfirst line\n\tsecond line\n" {
+		t.Fatalf("multiline listing: status=%d output=%q", status.code, buf.String())
 	}
 }
 
