@@ -306,8 +306,27 @@ echo base
 fc -l echo echo extra
 printf 'status:%s\n' "$?"
 `, &editors)
-	if !strings.Contains(out, "\techo base\n") || !strings.HasSuffix(out, "status:0\n") {
+	if !strings.Contains(out, "fc: too many arguments\n") || !strings.HasSuffix(out, "status:1\n") {
 		t.Errorf("posix fc -l extra args:\n got: %q", out)
+	}
+}
+
+func TestFcIssue7FormValidation(t *testing.T) {
+	for _, src := range []string{
+		"fc -l one two three",
+		"fc -n one",
+		"fc -ls one",
+		"fc -se ed one",
+		"fc -s one two",
+		"fc -s a=b c=d one",
+		"fc -e ed one two three",
+	} {
+		t.Run(strings.ReplaceAll(src, " ", "_"), func(t *testing.T) {
+			out := runHistScript(t, "HISTFILE=/dev/null\nset -o history\nset -o posix\necho one\n"+src+"\nprintf 'status:%s\\n' \"$?\"\n")
+			if !strings.Contains(out, "fc:") || !strings.HasSuffix(out, "status:1\n") {
+				t.Fatalf("%s output = %q", src, out)
+			}
+		})
 	}
 }
 

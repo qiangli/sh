@@ -2117,6 +2117,7 @@ func (r *Runner) fcBuiltin(ctx context.Context, pos syntax.Pos, args []string) (
 	}
 
 	numbering, reverse, listing, execute := true, false, false, false
+	seenN, seenR, seenL, seenS, seenE := false, false, false, false, false
 	ename := ""
 	i := 0
 parseOpts:
@@ -2135,14 +2136,19 @@ parseOpts:
 		for j := 1; j < len(a); j++ {
 			switch a[j] {
 			case 'n':
+				seenN = true
 				numbering = false
 			case 'l':
+				seenL = true
 				listing = true
 			case 'r':
+				seenR = true
 				reverse = true
 			case 's':
+				seenS = true
 				execute = true
 			case 'e':
+				seenE = true
 				if j+1 < len(a) {
 					ename = a[j+1:]
 				} else if i+1 < len(args) {
@@ -2162,9 +2168,46 @@ parseOpts:
 	}
 	specs := args[i:]
 
+	editorDash := seenE && ename == "-"
 	if ename == "-" {
 		execute = true
 		ename = ""
+	}
+
+	// Issue 7 defines three distinct forms. Bash accepts mixtures and surplus
+	// operands as extensions, but the sh/POSIX route must reject them rather
+	// than silently reinterpret or ignore them.
+	if r.opts[optPosix] {
+		usage := func() exitStatus { return failf(1, "fc: invalid POSIX usage\n") }
+		tooMany := func() exitStatus { return failf(1, "fc: too many arguments\n") }
+		switch {
+		case seenS || editorDash:
+			if seenL || seenN || seenR || (seenS && seenE) {
+				return usage()
+			}
+			if len(specs) > 2 {
+				return tooMany()
+			}
+			// The two-operand execution form is [old=new] [first]. Without
+			// an '=' the first operand is already the command selector.
+			if len(specs) == 2 && !strings.Contains(specs[0], "=") {
+				return tooMany()
+			}
+		case seenL:
+			if seenE || seenS {
+				return usage()
+			}
+			if len(specs) > 2 {
+				return tooMany()
+			}
+		default:
+			if seenN || seenS {
+				return usage()
+			}
+			if len(specs) > 2 {
+				return tooMany()
+			}
+		}
 	}
 
 	h := shellHist

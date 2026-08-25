@@ -4914,6 +4914,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			return invalidOpt("fg", fp.flag())
 		}
 		args = fp.args()
+		if len(args) > 1 {
+			return failf(1, "fg: too many arguments\n")
+		}
 		if !r.monitorActive() {
 			return failf(1, "fg: no job control\n")
 		}
