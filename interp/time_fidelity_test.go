@@ -6,6 +6,7 @@ package interp
 import (
 	"bytes"
 	"context"
+	"io"
 	"regexp"
 	"strings"
 	"testing"
@@ -16,13 +17,18 @@ import (
 
 func runTimeScript(t *testing.T, src string) (stdout, stderr string) {
 	t.Helper()
+	return runTimeScriptWithInput(t, src, nil)
+}
+
+func runTimeScriptWithInput(t *testing.T, src string, stdin io.Reader) (stdout, stderr string) {
+	t.Helper()
 	file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(src), "s")
 	if err != nil {
 		t.Fatalf("parse error: %v", err)
 	}
 	var outBuf, errBuf bytes.Buffer
 	r, err := New(
-		StdIO(nil, &outBuf, &errBuf),
+		StdIO(stdin, &outBuf, &errBuf),
 	)
 	if err != nil {
 		t.Fatal(err)

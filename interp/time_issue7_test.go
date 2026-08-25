@@ -128,6 +128,36 @@ func TestTimeIssue7ProcessCPUTimes(t *testing.T) {
 
 var posixTimeLine = regexp.MustCompile(`^real (\d+\.\d\d)\nuser (\d+\.\d\d)\nsys (\d+\.\d\d)\n$`)
 
+func TestTimeIssue7CommandInterface(t *testing.T) {
+	t.Run("dash_p_writes_posix_format_to_stderr", func(t *testing.T) {
+		stdout, stderr := runTimeScript(t, "time -p true\n")
+		if stdout != "" || !posixTimeLine.MatchString(stderr) {
+			t.Fatalf("time -p true: stdout=%q stderr=%q", stdout, stderr)
+		}
+	})
+
+	t.Run("exit_status_is_utility_status", func(t *testing.T) {
+		stdout, stderr := runTimeScript(t, "time -p false\nprintf 'status=%s\n' \"$?\"")
+		if stdout != "status=1\n" || !posixTimeLine.MatchString(stderr) {
+			t.Fatalf("time -p false: stdout=%q stderr=%q", stdout, stderr)
+		}
+	})
+
+	t.Run("missing_utility_status_is_127", func(t *testing.T) {
+		stdout, stderr := runTimeScript(t, "time -p profile_b_missing_time_command\nprintf 'status=%s\n' \"$?\"")
+		if stdout != "status=127\n" || !strings.Contains(stderr, "profile_b_missing_time_command") || !strings.Contains(stderr, "real ") {
+			t.Fatalf("time missing utility: stdout=%q stderr=%q", stdout, stderr)
+		}
+	})
+
+	t.Run("standard_input_is_not_used_by_time", func(t *testing.T) {
+		stdout, stderr := runTimeScriptWithInput(t, "time -p true\nIFS= read -r line\nprintf '<%s>\\n' \"$line\"", strings.NewReader("stdin sentinel\n"))
+		if stdout != "<stdin sentinel>\n" || !posixTimeLine.MatchString(stderr) {
+			t.Fatalf("stdin preservation: stdout=%q stderr=%q", stdout, stderr)
+		}
+	})
+}
+
 // TestTimeIssue7ShellCPU runs a CPU-heavy in-process loop (arithmetic
 // builtin — no external process) under `time -p` and asserts the reported
 // user/sys are no longer hardcoded to zero. In-process work is captured by

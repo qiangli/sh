@@ -1269,6 +1269,20 @@ func TestKillIssue7Interface(t *testing.T) {
 		}
 	})
 
+	t.Run("dash_s_signal_name_is_case_insensitive", func(t *testing.T) {
+		got := runIssue7Command(t, "loop() { while true; do :; done; }; loop &\nkill -s term $!\nwait $!\nprintf '%s\n' \"$?\"", false)
+		if got.stdout != "143\n" || got.stderr != "" || got.status != 0 {
+			t.Fatalf("case-insensitive -s: got %#v", got)
+		}
+	})
+
+	t.Run("dash_s_zero_checks_existence_without_terminating", func(t *testing.T) {
+		got := runIssue7Command(t, "loop() { while true; do :; done; }; loop & p=$!\nkill -s 0 $p\nprintf 'probe=%s\n' \"$?\"\nkill -s TERM $p\nwait $p\nprintf 'wait=%s\n' \"$?\"", false)
+		if got.stdout != "probe=0\nwait=143\n" || got.stderr != "" || got.status != 0 {
+			t.Fatalf("null signal: got %#v", got)
+		}
+	})
+
 	t.Run("dash_signal_name", func(t *testing.T) {
 		got := runIssue7Command(t, "loop() { while true; do :; done; }; loop &\nkill -TERM $!\nwait $!\nprintf '%s\n' \"$?\"", false)
 		if got.stdout != "143\n" || got.stderr != "" || got.status != 0 {
@@ -1290,6 +1304,18 @@ func TestKillIssue7Interface(t *testing.T) {
 		}
 	})
 
+	t.Run("dash_l_stdout_format_is_signal_names_only", func(t *testing.T) {
+		got := runIssue7Command(t, "kill -l\nIFS= read -r line\nprintf '<%s>\\n' \"$line\"", false)
+		if !strings.Contains(got.stdout, "TERM") || !strings.HasSuffix(got.stdout, "\n<stdin sentinel>\n") || got.stderr != "" || got.status != 0 {
+			t.Fatalf("signal list/stdin: got %#v", got)
+		}
+		for _, field := range strings.Fields(strings.TrimSuffix(strings.TrimSuffix(got.stdout, "<stdin sentinel>\n"), "\n")) {
+			if field != strings.ToUpper(field) || strings.HasPrefix(field, "SIG") {
+				t.Fatalf("signal list field %q is not POSIX name format; full result %#v", field, got)
+			}
+		}
+	})
+
 	t.Run("dash_l_with_exit_status_operand", func(t *testing.T) {
 		got := runIssue7Command(t, "kill -l 143", false)
 		if got.stdout != "TERM\n" || got.stderr != "" || got.status != 0 {
@@ -1308,6 +1334,20 @@ func TestKillIssue7Interface(t *testing.T) {
 		got := runIssue7Command(t, "kill 999999", false)
 		if got.stdout != "" || got.status != 1 {
 			t.Fatalf("unknown pid: got %#v", got)
+		}
+	})
+
+	t.Run("job_id_operand_signals_current_shell_job", func(t *testing.T) {
+		got := runIssue7Command(t, "loop() { while true; do :; done; }; loop &\nkill -s TERM %1\nwait %1\nprintf '%s\n' \"$?\"", false)
+		if got.stdout != "143\n" || got.stderr != "" || got.status != 0 {
+			t.Fatalf("job id operand: got %#v", got)
+		}
+	})
+
+	t.Run("dash_dash_allows_negative_pid_operand", func(t *testing.T) {
+		got := runIssue7Command(t, "kill -s 0 -- -999999\nprintf '%s\n' \"$?\"", false)
+		if got.stdout != "1\n" || got.stderr == "" || strings.Contains(got.stderr, "invalid signal specification") || got.status != 0 {
+			t.Fatalf("negative pid operand: got %#v", got)
 		}
 	})
 
@@ -1334,10 +1374,38 @@ func TestWaitIssue7Interface(t *testing.T) {
 		}
 	})
 
+	t.Run("multiple_operands_return_status_of_last", func(t *testing.T) {
+		got := runIssue7Command(t, "false & p1=$!\ntrue & p2=$!\nwait $p1 $p2\nprintf '%s\n' \"$?\"", false)
+		if got.stdout != "0\n" || got.stderr != "" || got.status != 0 {
+			t.Fatalf("multiple operands: got %#v", got)
+		}
+	})
+
+	t.Run("completed_status_is_retained_until_requested", func(t *testing.T) {
+		got := runIssue7Command(t, "false & p=$!\ntrue\nwait $p\nprintf '%s\n' \"$?\"", false)
+		if got.stdout != "1\n" || got.stderr != "" || got.status != 0 {
+			t.Fatalf("retained status: got %#v", got)
+		}
+	})
+
 	t.Run("bash_compat_unknown_operand_is_diagnostic_failure", func(t *testing.T) {
 		got := runIssue7Command(t, "wait 999999\nprintf '%s\n' \"$?\"", false)
 		if got.stdout != "127\n" || !strings.Contains(got.stderr, "not a child of this shell") || got.status != 0 {
 			t.Fatalf("unknown operand: got %#v", got)
+		}
+	})
+
+	t.Run("unknown_last_operand_returns_127", func(t *testing.T) {
+		got := runIssue7Command(t, "true & p=$!\nwait $p 999999\nprintf '%s\n' \"$?\"", false)
+		if got.stdout != "127\n" || !strings.Contains(got.stderr, "not a child of this shell") || got.status != 0 {
+			t.Fatalf("unknown last operand: got %#v", got)
+		}
+	})
+
+	t.Run("standard_input_and_output_are_not_used", func(t *testing.T) {
+		got := runIssue7Command(t, "true &\nwait >/dev/null\nIFS= read -r line\nprintf '<%s>\\n' \"$line\"", false)
+		if got.stdout != "<stdin sentinel>\n" || got.stderr != "" || got.status != 0 {
+			t.Fatalf("stdio preservation: got %#v", got)
 		}
 	})
 }
