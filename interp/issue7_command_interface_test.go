@@ -1253,3 +1253,107 @@ func TestUmaskIssue7Interface(t *testing.T) {
 		}
 	})
 }
+
+func TestKillIssue7Interface(t *testing.T) {
+	t.Run("default_signal_terminates_job", func(t *testing.T) {
+		got := runIssue7Command(t, "loop() { while true; do :; done; }; loop &\nkill $!\nwait $!\nprintf '%s\n' \"$?\"", false)
+		if got.stdout != "143\n" || got.stderr != "" || got.status != 0 {
+			t.Fatalf("default kill: got %#v", got)
+		}
+	})
+
+	t.Run("dash_s_signal_name", func(t *testing.T) {
+		got := runIssue7Command(t, "loop() { while true; do :; done; }; loop &\nkill -s TERM $!\nwait $!\nprintf '%s\n' \"$?\"", false)
+		if got.stdout != "143\n" || got.stderr != "" || got.status != 0 {
+			t.Fatalf("dash s: got %#v", got)
+		}
+	})
+
+	t.Run("dash_signal_name", func(t *testing.T) {
+		got := runIssue7Command(t, "loop() { while true; do :; done; }; loop &\nkill -TERM $!\nwait $!\nprintf '%s\n' \"$?\"", false)
+		if got.stdout != "143\n" || got.stderr != "" || got.status != 0 {
+			t.Fatalf("dash name: got %#v", got)
+		}
+	})
+
+	t.Run("dash_signal_number", func(t *testing.T) {
+		got := runIssue7Command(t, "loop() { while true; do :; done; }; loop &\nkill -15 $!\nwait $!\nprintf '%s\n' \"$?\"", false)
+		if got.stdout != "143\n" || got.stderr != "" || got.status != 0 {
+			t.Fatalf("dash number: got %#v", got)
+		}
+	})
+
+	t.Run("dash_l_lists_signals", func(t *testing.T) {
+		got := runIssue7Command(t, "kill -l", false)
+		if !strings.Contains(got.stdout, "TERM") || got.stderr != "" || got.status != 0 {
+			t.Fatalf("dash l: got %#v", got)
+		}
+	})
+
+	t.Run("dash_l_with_exit_status_operand", func(t *testing.T) {
+		got := runIssue7Command(t, "kill -l 143", false)
+		if got.stdout != "TERM\n" || got.stderr != "" || got.status != 0 {
+			t.Fatalf("dash l operand: got %#v", got)
+		}
+	})
+
+	t.Run("invalid_signal_is_diagnostic_failure", func(t *testing.T) {
+		got := runIssue7Command(t, "kill -s INVALID 999999", false)
+		if got.stdout != "" || !strings.Contains(got.stderr, "invalid signal specification") || got.status != 1 {
+			t.Fatalf("invalid signal: got %#v", got)
+		}
+	})
+
+	t.Run("unknown_pid_is_diagnostic_failure", func(t *testing.T) {
+		got := runIssue7Command(t, "kill 999999", false)
+		if got.stdout != "" || got.status != 1 {
+			t.Fatalf("unknown pid: got %#v", got)
+		}
+	})
+
+	t.Run("bash_extension_dash_n_signal_number", func(t *testing.T) {
+		got := runIssue7Command(t, "loop() { while true; do :; done; }; loop &\nkill -n 15 $!\nwait $!\nprintf '%s\n' \"$?\"", false)
+		if got.stdout != "143\n" || got.stderr != "" || got.status != 0 {
+			t.Fatalf("bash -n: got %#v", got)
+		}
+	})
+}
+
+func TestWaitIssue7Interface(t *testing.T) {
+	t.Run("zero_operands_waits_for_all_background_jobs", func(t *testing.T) {
+		got := runIssue7Command(t, "true &\nwait\nprintf '%s\n' \"$?\"", false)
+		if got.stdout != "0\n" || got.stderr != "" || got.status != 0 {
+			t.Fatalf("zero operands: got %#v", got)
+		}
+	})
+
+	t.Run("one_operand_returns_exit_status_of_job", func(t *testing.T) {
+		got := runIssue7Command(t, "false &\nwait $!\nprintf '%s\n' \"$?\"", false)
+		if got.stdout != "1\n" || got.stderr != "" || got.status != 0 {
+			t.Fatalf("one operand: got %#v", got)
+		}
+	})
+
+	t.Run("bash_compat_unknown_operand_is_diagnostic_failure", func(t *testing.T) {
+		got := runIssue7Command(t, "wait 999999\nprintf '%s\n' \"$?\"", false)
+		if got.stdout != "127\n" || !strings.Contains(got.stderr, "not a child of this shell") || got.status != 0 {
+			t.Fatalf("unknown operand: got %#v", got)
+		}
+	})
+}
+
+func TestWaitBashExtensions(t *testing.T) {
+	t.Run("bash_extension_dash_n_waits_for_next", func(t *testing.T) {
+		got := runIssue7Command(t, "loop() { while true; do :; done; }; loop &\ntrue &\nwait -n\nprintf '%s\n' \"$?\"\nkill $!", false)
+		if got.stdout != "0\n" || got.stderr != "" || got.status != 0 {
+			t.Fatalf("bash -n: got %#v", got)
+		}
+	})
+
+	t.Run("bash_extension_dash_p_saves_pid", func(t *testing.T) {
+		got := runIssue7Command(t, "true &\nwait -p mypid $!\nif [ -n \"$mypid\" ]; then printf 'ok\n'; fi", false)
+		if got.stdout != "ok\n" || got.stderr != "" || got.status != 0 {
+			t.Fatalf("bash -p: got %#v", got)
+		}
+	})
+}
