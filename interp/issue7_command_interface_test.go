@@ -31,7 +31,7 @@ type issue7CommandResult struct {
 func runIssue7Command(t *testing.T, src string, xsiEcho bool, extraEnv ...string) issue7CommandResult {
 	t.Helper()
 	pathDir := t.TempDir()
-	for _, name := range []string{"echo", "false", "printf", "pwd", "true", "utilx"} {
+	for _, name := range []string{"echo", "false", "printf", "pwd", "test", "[", "true", "utilx"} {
 		path := filepath.Join(pathDir, name)
 		if runtime.GOOS == "windows" {
 			path += ".EXE"
@@ -866,6 +866,382 @@ func TestPwdIssue7Interface(t *testing.T) {
 
 	t.Run("standard_input_is_not_used", func(t *testing.T) {
 		got := runIssue7Command(t, "pwd >/dev/null\nIFS= read -r line\nprintf '<%s>\\n' \"$line\"", false)
+		if got.stdout != "<stdin sentinel>\n" || got.stderr != "" || got.status != 0 {
+			t.Fatalf("stdin preservation: got %#v", got)
+		}
+	})
+}
+
+func TestPrintfIssue7Interface(t *testing.T) {
+	t.Run("format_operand_is_required", func(t *testing.T) {
+		got := runIssue7Command(t, "printf", false)
+		if got.stdout != "" || got.stderr == "" || got.status != 2 {
+			t.Fatalf("bare printf: got %#v, want usage diagnostic and status 2", got)
+		}
+	})
+
+	t.Run("no_conversions_writes_format_verbatim_with_escapes", func(t *testing.T) {
+		got := runIssue7Command(t, "printf 'x\\ty\\n'", false)
+		if got.stdout != "x\ty\n" || got.stderr != "" || got.status != 0 {
+			t.Fatalf("format escapes: got %#v", got)
+		}
+	})
+
+	t.Run("octal_escape_in_format_is_a_byte", func(t *testing.T) {
+		got := runIssue7Command(t, "printf '\\101\\102\\n'", false)
+		if got.stdout != "AB\n" || got.stderr != "" || got.status != 0 {
+			t.Fatalf("octal escape: got %#v", got)
+		}
+	})
+
+	t.Run("format_is_reused_until_arguments_are_consumed", func(t *testing.T) {
+		got := runIssue7Command(t, "printf '<%s>' a b c\nprintf '\\n'", false)
+		if got.stdout != "<a><b><c>\n" || got.stderr != "" || got.status != 0 {
+			t.Fatalf("format reuse: got %#v", got)
+		}
+	})
+
+	t.Run("missing_arguments_default_to_empty_string_and_zero", func(t *testing.T) {
+		got := runIssue7Command(t, "printf '%s=%d\\n' foo", false)
+		if got.stdout != "foo=0\n" || got.stderr != "" || got.status != 0 {
+			t.Fatalf("missing arguments: got %#v", got)
+		}
+	})
+
+	t.Run("numeric_conversions_honor_flags_width_and_precision", func(t *testing.T) {
+		got := runIssue7Command(t, "printf '%o|%x|%+d|%.3d|%5s|%-5s|\\n' 8 255 5 5 hi hi", false)
+		want := "10|ff|+5|005|   hi|hi   |\n"
+		if got.stdout != want || got.stderr != "" || got.status != 0 {
+			t.Fatalf("numeric conversions: got %#v, want stdout %q", got, want)
+		}
+	})
+
+	t.Run("percent_c_writes_first_byte_only", func(t *testing.T) {
+		got := runIssue7Command(t, "printf '[%c]\\n' abc", false)
+		if got.stdout != "[a]\n" || got.stderr != "" || got.status != 0 {
+			t.Fatalf("percent-c: got %#v", got)
+		}
+	})
+
+	t.Run("percent_c_empty_or_missing_argument_writes_a_null_byte", func(t *testing.T) {
+		// The first character of the argument is written; for an empty
+		// (or absent) argument that first "character" is the terminating
+		// NUL, so bash emits a single NUL byte. The first conversion here
+		// has an empty operand, the second has none at all.
+		got := runIssue7Command(t, "printf '[%c][%c]\\n' ''", false)
+		if got.stdout != "[\x00][\x00]\n" || got.stderr != "" || got.status != 0 {
+			t.Fatalf("empty percent-c: got %#v, want a NUL byte in each pair", got)
+		}
+	})
+
+	t.Run("percent_c_empty_argument_is_padded_to_field_width", func(t *testing.T) {
+		got := runIssue7Command(t, "printf '[%3c]\\n' ''", false)
+		if got.stdout != "[  \x00]\n" || got.stderr != "" || got.status != 0 {
+			t.Fatalf("empty padded percent-c: got %#v", got)
+		}
+	})
+
+	t.Run("percent_b_interprets_argument_escapes", func(t *testing.T) {
+		got := runIssue7Command(t, "printf '%b\\n' 'a\\tb\\0101'", false)
+		if got.stdout != "a\tbA\n" || got.stderr != "" || got.status != 0 {
+			t.Fatalf("percent-b escapes: got %#v", got)
+		}
+	})
+
+	t.Run("percent_b_backslash_c_stops_all_output", func(t *testing.T) {
+		got := runIssue7Command(t, "printf 'x%by\\n' 'mid\\ctail'", false)
+		if got.stdout != "xmid" || got.stderr != "" || got.status != 0 {
+			t.Fatalf("percent-b backslash-c: got %#v", got)
+		}
+	})
+
+	t.Run("leading_quote_yields_codeset_value", func(t *testing.T) {
+		got := runIssue7Command(t, "printf '%d %d\\n' '\"A' \"'B\"", false)
+		if got.stdout != "65 66\n" || got.stderr != "" || got.status != 0 {
+			t.Fatalf("quote-prefixed numeric: got %#v", got)
+		}
+	})
+
+	t.Run("percent_percent_is_a_literal_percent", func(t *testing.T) {
+		got := runIssue7Command(t, "printf '%d%%\\n' 50", false)
+		if got.stdout != "50%\n" || got.stderr != "" || got.status != 0 {
+			t.Fatalf("literal percent: got %#v", got)
+		}
+	})
+
+	t.Run("invalid_number_diagnoses_and_fails_but_still_emits", func(t *testing.T) {
+		got := runIssue7Command(t, "printf '%d\\n' abc", false)
+		if got.stdout != "0\n" || !strings.Contains(got.stderr, "invalid number") || got.status != 1 {
+			t.Fatalf("invalid number: got %#v", got)
+		}
+	})
+
+	t.Run("standard_output_error_is_diagnostic_failure", func(t *testing.T) {
+		got := runIssue7Command(t, "printf value >&-", false)
+		if got.stdout != "" || !strings.Contains(got.stderr, "write error") || got.status == 0 {
+			t.Fatalf("closed stdout: got %#v", got)
+		}
+	})
+
+	t.Run("standard_input_is_not_used", func(t *testing.T) {
+		got := runIssue7Command(t, "printf 'value\\n'\nIFS= read -r line\nprintf '<%s>\\n' \"$line\"", false)
+		if got.stdout != "value\n<stdin sentinel>\n" || got.stderr != "" || got.status != 0 {
+			t.Fatalf("stdin preservation: got %#v", got)
+		}
+	})
+}
+
+func TestReadIssue7Interface(t *testing.T) {
+	t.Run("splits_on_IFS_and_last_variable_absorbs_the_remainder", func(t *testing.T) {
+		src := "read a b c <<'EOF'\np q r s\nEOF\nprintf '<%s><%s><%s>\\n' \"$a\" \"$b\" \"$c\""
+		got := runIssue7Command(t, src, false)
+		if got.stdout != "<p><q><r s>\n" || got.stderr != "" || got.status != 0 {
+			t.Fatalf("field splitting: got %#v", got)
+		}
+	})
+
+	t.Run("excess_names_are_set_to_empty", func(t *testing.T) {
+		src := "read a b c <<'EOF'\nonly two\nEOF\nprintf '<%s><%s><%s>\\n' \"$a\" \"$b\" \"$c\""
+		got := runIssue7Command(t, src, false)
+		if got.stdout != "<only><two><>\n" || got.stderr != "" || got.status != 0 {
+			t.Fatalf("excess names: got %#v", got)
+		}
+	})
+
+	t.Run("leading_and_trailing_IFS_whitespace_is_stripped", func(t *testing.T) {
+		src := "read a <<'EOF'\n  spaced  value  \nEOF\nprintf '[%s]\\n' \"$a\""
+		got := runIssue7Command(t, src, false)
+		if got.stdout != "[spaced  value]\n" || got.stderr != "" || got.status != 0 {
+			t.Fatalf("IFS trimming: got %#v", got)
+		}
+	})
+
+	t.Run("custom_IFS_from_environment_delimits_fields", func(t *testing.T) {
+		src := "IFS=: read a b <<'EOF'\nx:y:z\nEOF\nprintf '<%s><%s>\\n' \"$a\" \"$b\""
+		got := runIssue7Command(t, src, false)
+		if got.stdout != "<x><y:z>\n" || got.stderr != "" || got.status != 0 {
+			t.Fatalf("custom IFS: got %#v", got)
+		}
+	})
+
+	t.Run("backslash_escapes_and_joins_lines_by_default", func(t *testing.T) {
+		// Backslash-newline is a line continuation; backslash before an
+		// ordinary character is an escape that the shell removes.
+		cont := "read a <<'EOF'\nfirst\\\nsecond\nEOF\nprintf '<%s>\\n' \"$a\""
+		got := runIssue7Command(t, cont, false)
+		if got.stdout != "<firstsecond>\n" || got.stderr != "" || got.status != 0 {
+			t.Fatalf("line continuation: got %#v", got)
+		}
+		esc := "read a <<'EOF'\nq\\tr\nEOF\nprintf '<%s>\\n' \"$a\""
+		got = runIssue7Command(t, esc, false)
+		if got.stdout != "<qtr>\n" || got.stderr != "" || got.status != 0 {
+			t.Fatalf("backslash escape: got %#v", got)
+		}
+	})
+
+	t.Run("dash_r_treats_backslash_literally", func(t *testing.T) {
+		src := "read -r a <<'EOF'\nq\\tr\nEOF\nprintf '<%s>\\n' \"$a\""
+		got := runIssue7Command(t, src, false)
+		if got.stdout != "<q\\tr>\n" || got.stderr != "" || got.status != 0 {
+			t.Fatalf("raw mode: got %#v", got)
+		}
+	})
+
+	t.Run("dash_r_does_not_join_a_trailing_backslash_line", func(t *testing.T) {
+		src := "read -r a <<'EOF'\nfirst\\\nsecond\nEOF\nprintf '<%s>\\n' \"$a\""
+		got := runIssue7Command(t, src, false)
+		if got.stdout != "<first\\>\n" || got.stderr != "" || got.status != 0 {
+			t.Fatalf("raw continuation: got %#v", got)
+		}
+	})
+
+	t.Run("unterminated_final_line_is_assigned_with_nonzero_status", func(t *testing.T) {
+		// EOF before any delimiter still assigns what was read, but the
+		// status reflects the incomplete line.
+		src := "printf 'partial' | { read a; st=$?; printf '<%s>%s\\n' \"$a\" \"$st\"; }"
+		got := runIssue7Command(t, src, false)
+		if got.stdout != "<partial>1\n" || got.stderr != "" || got.status != 0 {
+			t.Fatalf("unterminated line: got %#v", got)
+		}
+	})
+
+	t.Run("no_name_operand_assigns_the_line_to_REPLY_unmodified", func(t *testing.T) {
+		src := "read <<'EOF'\n  keep both edges  \nEOF\nprintf '[%s]\\n' \"$REPLY\""
+		got := runIssue7Command(t, src, false)
+		if got.stdout != "[  keep both edges  ]\n" || got.stderr != "" || got.status != 0 {
+			t.Fatalf("REPLY default: got %#v", got)
+		}
+	})
+
+	t.Run("invalid_name_operand_is_diagnostic_failure", func(t *testing.T) {
+		got := runIssue7Command(t, "read 1bad <<'EOF'\nvalue\nEOF", false)
+		if got.stdout != "" || !strings.Contains(got.stderr, "not a valid identifier") || got.status != 2 {
+			t.Fatalf("invalid name: got %#v", got)
+		}
+	})
+
+	t.Run("reads_from_standard_input", func(t *testing.T) {
+		got := runIssue7Command(t, "read a\nprintf '<%s>\\n' \"$a\"", false)
+		if got.stdout != "<stdin sentinel>\n" || got.stderr != "" || got.status != 0 {
+			t.Fatalf("stdin source: got %#v", got)
+		}
+	})
+}
+
+func TestTestIssue7Interface(t *testing.T) {
+	t.Run("zero_arguments_is_false", func(t *testing.T) {
+		got := runIssue7Command(t, "test\nprintf '%s\\n' \"$?\"", false)
+		if got.stdout != "1\n" || got.stderr != "" || got.status != 0 {
+			t.Fatalf("zero args: got %#v", got)
+		}
+	})
+
+	t.Run("one_argument_is_true_when_not_null", func(t *testing.T) {
+		got := runIssue7Command(t, "test abc\nprintf '%s ' \"$?\"\ntest ''\nprintf '%s\\n' \"$?\"", false)
+		if got.stdout != "0 1\n" || got.stderr != "" || got.status != 0 {
+			t.Fatalf("one arg: got %#v", got)
+		}
+	})
+
+	t.Run("two_argument_negation_and_unary_primary", func(t *testing.T) {
+		src := "test ! ''\nprintf '%s ' \"$?\"\ntest ! abc\nprintf '%s ' \"$?\"\n" +
+			"test -n abc\nprintf '%s ' \"$?\"\ntest -z ''\nprintf '%s\\n' \"$?\""
+		got := runIssue7Command(t, src, false)
+		if got.stdout != "0 1 0 0\n" || got.stderr != "" || got.status != 0 {
+			t.Fatalf("two args: got %#v", got)
+		}
+	})
+
+	t.Run("three_argument_string_binary_primaries", func(t *testing.T) {
+		src := "test a = a\nprintf '%s ' \"$?\"\ntest a = b\nprintf '%s ' \"$?\"\n" +
+			"test a != b\nprintf '%s\\n' \"$?\""
+		got := runIssue7Command(t, src, false)
+		if got.stdout != "0 1 0\n" || got.stderr != "" || got.status != 0 {
+			t.Fatalf("string binaries: got %#v", got)
+		}
+	})
+
+	t.Run("integer_binary_primaries", func(t *testing.T) {
+		src := "test 3 -gt 2\nprintf '%s ' \"$?\"\ntest 2 -ge 2\nprintf '%s ' \"$?\"\n" +
+			"test 1 -eq 1\nprintf '%s ' \"$?\"\ntest 1 -ne 1\nprintf '%s\\n' \"$?\""
+		got := runIssue7Command(t, src, false)
+		if got.stdout != "0 0 0 1\n" || got.stderr != "" || got.status != 0 {
+			t.Fatalf("integer binaries: got %#v", got)
+		}
+	})
+
+	t.Run("non_integer_operand_is_diagnostic_error", func(t *testing.T) {
+		got := runIssue7Command(t, "test 3 -eq abc", false)
+		if got.stdout != "" || !strings.Contains(got.stderr, "integer expected") || got.status != 2 {
+			t.Fatalf("integer expected: got %#v", got)
+		}
+	})
+
+	t.Run("file_primaries_reflect_the_filesystem", func(t *testing.T) {
+		base, dir1, _ := issue7Dirs(t)
+		file := filepath.Join(base, "regular")
+		if err := os.WriteFile(file, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		missing := filepath.Join(base, "absent")
+		src := "test -d \"$DIR\"\nprintf '%s ' \"$?\"\ntest -f \"$FILE\"\nprintf '%s ' \"$?\"\n" +
+			"test -e \"$FILE\"\nprintf '%s ' \"$?\"\ntest -e \"$MISSING\"\nprintf '%s\\n' \"$?\""
+		got := runIssue7Command(t, src, false,
+			"DIR="+dir1, "FILE="+file, "MISSING="+missing)
+		if got.stdout != "0 0 0 1\n" || got.stderr != "" || got.status != 0 {
+			t.Fatalf("file primaries: got %#v", got)
+		}
+	})
+
+	t.Run("obsolescent_binary_logic_and_grouping", func(t *testing.T) {
+		src := "test abc -a xyz\nprintf '%s ' \"$?\"\ntest abc -a ''\nprintf '%s ' \"$?\"\n" +
+			"test '' -o xyz\nprintf '%s ' \"$?\"\ntest '(' abc ')'\nprintf '%s\\n' \"$?\""
+		got := runIssue7Command(t, src, false)
+		if got.stdout != "0 1 0 0\n" || got.stderr != "" || got.status != 0 {
+			t.Fatalf("logic and grouping: got %#v", got)
+		}
+	})
+
+	t.Run("bracket_form_requires_closing_bracket", func(t *testing.T) {
+		ok := runIssue7Command(t, "[ abc ]\nprintf '%s\\n' \"$?\"", false)
+		if ok.stdout != "0\n" || ok.stderr != "" || ok.status != 0 {
+			t.Fatalf("closed bracket: got %#v", ok)
+		}
+		bad := runIssue7Command(t, "[ abc", false)
+		if bad.stdout != "" || !strings.Contains(bad.stderr, "missing `]'") || bad.status != 2 {
+			t.Fatalf("missing bracket: got %#v", bad)
+		}
+	})
+
+	t.Run("standard_input_is_not_used", func(t *testing.T) {
+		got := runIssue7Command(t, "test -n x\nIFS= read -r line\nprintf '<%s>\\n' \"$line\"", false)
+		if got.stdout != "<stdin sentinel>\n" || got.stderr != "" || got.status != 0 {
+			t.Fatalf("stdin preservation: got %#v", got)
+		}
+	})
+}
+
+func TestUmaskIssue7Interface(t *testing.T) {
+	t.Run("no_operand_writes_reusable_octal_mask", func(t *testing.T) {
+		got := runIssue7Command(t, "umask 0027\numask", false)
+		if got.stdout != "0027\n" || got.stderr != "" || got.status != 0 {
+			t.Fatalf("octal display: got %#v", got)
+		}
+	})
+
+	t.Run("dash_S_writes_symbolic_mask", func(t *testing.T) {
+		got := runIssue7Command(t, "umask 0022\numask -S", false)
+		if got.stdout != "u=rwx,g=rx,o=rx\n" || got.stderr != "" || got.status != 0 {
+			t.Fatalf("symbolic display: got %#v", got)
+		}
+	})
+
+	t.Run("octal_output_round_trips_as_a_mask_operand", func(t *testing.T) {
+		src := "umask 0077\nsaved=$(umask)\numask 0000\numask \"$saved\"\numask"
+		got := runIssue7Command(t, src, false)
+		if got.stdout != "0077\n" || got.stderr != "" || got.status != 0 {
+			t.Fatalf("octal round trip: got %#v", got)
+		}
+	})
+
+	t.Run("symbolic_output_round_trips_as_a_mask_operand", func(t *testing.T) {
+		src := "umask 0027\nsaved=$(umask -S)\numask 0000\numask \"$saved\"\numask"
+		got := runIssue7Command(t, src, false)
+		if got.stdout != "0027\n" || got.stderr != "" || got.status != 0 {
+			t.Fatalf("symbolic round trip: got %#v", got)
+		}
+	})
+
+	t.Run("symbolic_operand_updates_the_mask", func(t *testing.T) {
+		got := runIssue7Command(t, "umask 0022\numask u=rwx,g=,o=\numask", false)
+		if got.stdout != "0077\n" || got.stderr != "" || got.status != 0 {
+			t.Fatalf("symbolic set: got %#v", got)
+		}
+	})
+
+	t.Run("invalid_octal_is_diagnostic_failure", func(t *testing.T) {
+		got := runIssue7Command(t, "umask 888", false)
+		if got.stdout != "" || !strings.Contains(got.stderr, "octal number out of range") || got.status != 1 {
+			t.Fatalf("invalid octal: got %#v", got)
+		}
+	})
+
+	t.Run("invalid_symbolic_is_diagnostic_failure", func(t *testing.T) {
+		got := runIssue7Command(t, "umask u=q", false)
+		if got.stdout != "" || !strings.Contains(got.stderr, "invalid symbolic mode") || got.status != 1 {
+			t.Fatalf("invalid symbolic: got %#v", got)
+		}
+	})
+
+	t.Run("invalid_option_is_usage_error", func(t *testing.T) {
+		got := runIssue7Command(t, "umask -z", false)
+		if got.stdout != "" || !strings.Contains(got.stderr, "invalid option") || got.status != 2 {
+			t.Fatalf("invalid option: got %#v", got)
+		}
+	})
+
+	t.Run("standard_input_is_not_used", func(t *testing.T) {
+		got := runIssue7Command(t, "umask 0022\nIFS= read -r line\nprintf '<%s>\\n' \"$line\"", false)
 		if got.stdout != "<stdin sentinel>\n" || got.stderr != "" || got.status != 0 {
 			t.Fatalf("stdin preservation: got %#v", got)
 		}
