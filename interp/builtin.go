@@ -3609,7 +3609,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				targetBase = b
 			}
 			if !r.builtinAssignNameValid(name, r.builtinTargetQuoted(pos, targetBase)) {
-				return failf(2, "read: `%s': not a valid identifier\n", name)
+				return failf(1, "read: `%s': not a valid identifier\n", name)
 			}
 		}
 

@@ -1535,7 +1535,7 @@ var runTests = []runTest{
 	},
 	{
 		`declare -A A; read 'A[]]' <<< X`,
-		"read: `A[]]': not a valid identifier\nexit status 2 #JUSTERR",
+		"read: `A[]]': not a valid identifier\nexit status 1 #JUSTERR",
 	},
 	{
 		`declare -A A; for k in $'\t' ' ' '*' '@'; do printf -v "A[$k]" %s X; done; declare -p A`,
@@ -5567,7 +5567,7 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	},
 	{
 		"read 0ab",
-		"read: `0ab': not a valid identifier\nexit status 2 #JUSTERR",
+		"read: `0ab': not a valid identifier\nexit status 1 #JUSTERR",
 	},
 	{
 		"read <<< foo; echo $REPLY",

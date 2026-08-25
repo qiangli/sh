@@ -923,18 +923,18 @@ func TestPrintfIssue7Interface(t *testing.T) {
 		}
 	})
 
-	t.Run("percent_c_empty_or_missing_argument_writes_a_null_byte", func(t *testing.T) {
-		// The first character of the argument is written; for an empty
-		// (or absent) argument that first "character" is the terminating
-		// NUL, so bash emits a single NUL byte. The first conversion here
-		// has an empty operand, the second has none at all.
+	t.Run("bash_compat_percent_c_empty_or_missing_argument_writes_a_null_byte", func(t *testing.T) {
+		// POSIX permits either no output or a NUL for an empty %c operand.
+		// Bash 5.3 chooses NUL for both an empty and a missing operand.
 		got := runIssue7Command(t, "printf '[%c][%c]\\n' ''", false)
 		if got.stdout != "[\x00][\x00]\n" || got.stderr != "" || got.status != 0 {
 			t.Fatalf("empty percent-c: got %#v, want a NUL byte in each pair", got)
 		}
 	})
 
-	t.Run("percent_c_empty_argument_is_padded_to_field_width", func(t *testing.T) {
+	t.Run("bash_compat_percent_c_empty_argument_pads_the_null_byte", func(t *testing.T) {
+		// This pins Bash 5.3's allowed choice for the POSIX-unspecified
+		// empty-string %c case, including its interaction with field width.
 		got := runIssue7Command(t, "printf '[%3c]\\n' ''", false)
 		if got.stdout != "[  \x00]\n" || got.stderr != "" || got.status != 0 {
 			t.Fatalf("empty padded percent-c: got %#v", got)
@@ -1055,9 +1055,9 @@ func TestReadIssue7Interface(t *testing.T) {
 		}
 	})
 
-	t.Run("unterminated_final_line_is_assigned_with_nonzero_status", func(t *testing.T) {
-		// EOF before any delimiter still assigns what was read, but the
-		// status reflects the incomplete line.
+	t.Run("bash_compat_unterminated_non_text_line_is_assigned_with_nonzero_status", func(t *testing.T) {
+		// POSIX specifies read input as a text file, so an unterminated final
+		// line is outside that domain. This pins Bash 5.3's behavior there.
 		src := "printf 'partial' | { read a; st=$?; printf '<%s>%s\\n' \"$a\" \"$st\"; }"
 		got := runIssue7Command(t, src, false)
 		if got.stdout != "<partial>1\n" || got.stderr != "" || got.status != 0 {
@@ -1065,7 +1065,9 @@ func TestReadIssue7Interface(t *testing.T) {
 		}
 	})
 
-	t.Run("no_name_operand_assigns_the_line_to_REPLY_unmodified", func(t *testing.T) {
+	t.Run("bash_extension_no_name_operand_assigns_REPLY_unmodified", func(t *testing.T) {
+		// POSIX requires at least one variable operand. Omitting it and using
+		// REPLY is a Bash extension retained for Bash 5.3 compatibility.
 		src := "read <<'EOF'\n  keep both edges  \nEOF\nprintf '[%s]\\n' \"$REPLY\""
 		got := runIssue7Command(t, src, false)
 		if got.stdout != "[  keep both edges  ]\n" || got.stderr != "" || got.status != 0 {
@@ -1073,9 +1075,11 @@ func TestReadIssue7Interface(t *testing.T) {
 		}
 	})
 
-	t.Run("invalid_name_operand_is_diagnostic_failure", func(t *testing.T) {
+	t.Run("bash_compat_invalid_name_operand_is_diagnostic_failure", func(t *testing.T) {
+		// POSIX only specifies valid variable-name operands. Bash diagnoses an
+		// invalid name and returns 1 in both default and POSIX modes.
 		got := runIssue7Command(t, "read 1bad <<'EOF'\nvalue\nEOF", false)
-		if got.stdout != "" || !strings.Contains(got.stderr, "not a valid identifier") || got.status != 2 {
+		if got.stdout != "" || !strings.Contains(got.stderr, "not a valid identifier") || got.status != 1 {
 			t.Fatalf("invalid name: got %#v", got)
 		}
 	})
@@ -1182,7 +1186,9 @@ func TestTestIssue7Interface(t *testing.T) {
 }
 
 func TestUmaskIssue7Interface(t *testing.T) {
-	t.Run("no_operand_writes_reusable_octal_mask", func(t *testing.T) {
+	t.Run("bash_compat_default_octal_style_is_reusable", func(t *testing.T) {
+		// POSIX leaves the default output style unspecified but requires its
+		// output to be reusable as a subsequent umask operand. Bash uses octal.
 		got := runIssue7Command(t, "umask 0027\numask", false)
 		if got.stdout != "0027\n" || got.stderr != "" || got.status != 0 {
 			t.Fatalf("octal display: got %#v", got)
