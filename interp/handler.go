@@ -53,6 +53,21 @@ const (
 	handlerKindReadDir             // [ReadDirHandlerFunc2]
 )
 
+// closedExecFile returns an *os.File whose descriptor has already been
+// closed. os/exec treats its invalid descriptor as a request to leave the
+// corresponding child fd closed, rather than synthesizing /dev/null or a
+// live copy pipe for a nil or generic Reader/Writer.
+func closedExecFile() (*os.File, error) {
+	f, err := os.Open(os.DevNull)
+	if err != nil {
+		return nil, err
+	}
+	if err := f.Close(); err != nil {
+		return nil, err
+	}
+	return f, nil
+}
+
 // HandlerContext is the data passed to all the handler functions via [context.WithValue].
 // It contains some of the current state of the [Runner].
 type HandlerContext struct {
@@ -335,14 +350,31 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 		execStdin := hc.Stdin
 		if _, ok := hc.Stdin.(badFdReader); ok {
 			// fd 0 was explicitly closed (`cmd <&-`). Give the child a
-			// genuinely closed descriptor — the read end of a pipe whose
-			// both ends are closed — so its read fails with EBADF, the way
-			// bash leaves the inherited fd closed. A fresh pipe is created
-			// per exec to avoid handing out a stale, possibly-reused fd.
-			if pr, pw, perr := os.Pipe(); perr == nil {
-				pr.Close()
-				pw.Close()
-				execStdin = pr
+			// genuinely closed descriptor so its read fails with EBADF, the
+			// way bash leaves the inherited fd closed.
+			execStdin, err = closedExecFile()
+			if err != nil {
+				fmt.Fprintln(hc.Stderr, err)
+				return ExitStatus(1)
+			}
+		}
+		execStdout := unwrapPipelineWriter(hc.Stdout)
+		if isClosedFdWriter(hc.Stdout) {
+			// Passing badFdWriter directly makes os/exec create a live pipe
+			// and copy into the sentinel. The child then incorrectly observes
+			// fd 1 as open until it writes. Pass an invalid *os.File instead;
+			// os/exec represents that as a descriptor closed before execve.
+			execStdout, err = closedExecFile()
+			if err != nil {
+				fmt.Fprintln(hc.Stderr, err)
+				return ExitStatus(1)
+			}
+		}
+		execStderr := unwrapPipelineWriter(hc.Stderr)
+		if isClosedFdWriter(hc.Stderr) {
+			execStderr, err = closedExecFile()
+			if err != nil {
+				return ExitStatus(1)
 			}
 		}
 		if sr, ok := hc.Stdin.(*scriptStdinReader); ok && hc.runner != nil {
@@ -359,7 +391,7 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 		}
 		proxyReplace := hc.ExecReplace && hc.runner != nil && hc.runner.hasLiveBackgroundJobs()
 		if hc.ExecReplace && !proxyReplace {
-			if replaced, err := execReplace(ctx, execPath, cmdArgs, env, execStdin, unwrapPipelineWriter(hc.Stdout), unwrapPipelineWriter(hc.Stderr)); replaced {
+			if replaced, err := execReplace(ctx, execPath, cmdArgs, env, execStdin, execStdout, execStderr); replaced {
 				return err
 			}
 		}
@@ -377,8 +409,8 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 			Env:        env,
 			Dir:        execDir,
 			Stdin:      execStdin,
-			Stdout:     unwrapPipelineWriter(hc.Stdout),
-			Stderr:     unwrapPipelineWriter(hc.Stderr),
+			Stdout:     execStdout,
+			Stderr:     execStderr,
 			ExtraFiles: extraFiles,
 		}
 		prepareBackgroundJobCmd(ctx, &cmd)
@@ -421,8 +453,8 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 					Env:        reExecEnv,
 					Dir:        execDir,
 					Stdin:      execStdin,
-					Stdout:     unwrapPipelineWriter(hc.Stdout),
-					Stderr:     unwrapPipelineWriter(hc.Stderr),
+					Stdout:     execStdout,
+					Stderr:     execStderr,
 					ExtraFiles: extraFiles,
 				}
 				prepareBackgroundJobCmd(ctx, &cmd)

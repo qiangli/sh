@@ -532,6 +532,14 @@ func execReplace(ctx context.Context, path string, args, env []string, stdin any
 		if !ok {
 			return false, nil
 		}
+		if f.Fd() == ^uintptr(0) {
+			// A closed standard descriptor is represented by an invalid
+			// *os.File. Preserve that state across a true exec replacement.
+			if err := unix.Close(entry.fd); err != nil && err != unix.EBADF {
+				return true, err
+			}
+			continue
+		}
 		if int(f.Fd()) != entry.fd {
 			if err := dupFD(int(f.Fd()), entry.fd); err != nil {
 				return true, err
