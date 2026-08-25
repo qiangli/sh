@@ -482,6 +482,13 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 			defer stopf()
 
 			err = waitExecCmd(ctx, &cmd)
+			// Fold this external child's CPU into the enclosing `time`
+			// clause's accumulator, if one is active. cmd.ProcessState is
+			// populated by cmd.Wait(); it is nil when a job-control wait
+			// reaps via Wait4 instead, in which case this is a no-op.
+			if hc.runner != nil {
+				hc.runner.accumulateChildCPU(cmd.ProcessState)
+			}
 			// Stop intercepting the proxy's signals before translating the
 			// replacement's terminal wait status below. Otherwise relaying the
 			// child's death signal back to this process is caught here and sent

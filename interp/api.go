@@ -274,10 +274,11 @@ type Runner struct {
 	inLoop        bool
 	inFunc        bool
 	inSource      bool
-	inTimeClause  bool       // suppress inner `time` keyword's output
-	handlingTrap  bool       // whether we're currently in a trap callback
-	trapEntryExit exitStatus // exit status upon entering the current trap
-	xtraceLevel   int        // xtrace indirection depth (trap handlers add one)
+	inTimeClause  bool         // suppress inner `time` keyword's output
+	timing        *timingScope // CPU accumulator for the outermost `time` clause
+	handlingTrap  bool         // whether we're currently in a trap callback
+	trapEntryExit exitStatus   // exit status upon entering the current trap
+	xtraceLevel   int          // xtrace indirection depth (trap handlers add one)
 
 	// track if a sourced script set positional parameters
 	sourceSetParams bool
@@ -2904,6 +2905,13 @@ func (r *Runner) subshell(background bool) *Runner {
 		sigReset:             r.sigReset,
 		inheritedBang:        r.lastBangProc(),
 		cmdHashTable:         maps.Clone(r.cmdHashTable),
+
+		// Share the outermost `time` clause's CPU accumulator so external
+		// children launched inside a subshell or pipeline stage (each of
+		// which runs on a subshell copy of this runner) still fold their
+		// CPU into the one scope that will print the report. The scope is
+		// nil outside a `time` clause. See timingScope.
+		timing: r.timing,
 
 		origStdout: r.origStdout, // used for process substitutions
 

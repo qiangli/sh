@@ -7706,6 +7706,23 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		// inner ones are absorbed by the outer measurement.
 		outer := !r.inTimeClause
 		r.inTimeClause = true
+		// The outermost clause owns the CPU accounting. It samples the
+		// shell process's own CPU (getrusage RUSAGE_SELF / GetProcessTimes)
+		// around the timed clause — which covers builtins and the
+		// goroutine-based subshells this pure-Go runner uses — and installs
+		// a shared scope into which every external child's CPU is folded as
+		// it is reaped (see accumulateChildCPU). Nested clauses reuse the
+		// same scope, so no child's CPU is counted twice.
+		var (
+			scope               *timingScope
+			selfUser0, selfSys0 time.Duration
+			selfSampled         bool
+		)
+		if outer {
+			scope = &timingScope{}
+			r.timing = scope
+			selfUser0, selfSys0, selfSampled = processCPUTimes()
+		}
 		start := time.Now()
 		if cm.Stmt != nil {
 			r.stmt(ctx, cm.Stmt)
@@ -7715,7 +7732,26 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			break
 		}
 		r.inTimeClause = false
-		var user, sys time.Duration // not tracked
+		r.timing = nil
+		var user, sys time.Duration
+		// Shell-process CPU delta (fail-closed: only counted if both
+		// samples succeeded; on unsupported targets this stays zero and we
+		// report only the external-child CPU rather than a fabricated
+		// figure).
+		if selfSampled {
+			if selfUser1, selfSys1, ok := processCPUTimes(); ok {
+				if d := selfUser1 - selfUser0; d > 0 {
+					user += d
+				}
+				if d := selfSys1 - selfSys0; d > 0 {
+					sys += d
+				}
+			}
+		}
+		// External-child CPU accumulated during the clause.
+		childUser, childSys := scope.total()
+		user += childUser
+		sys += childSys
 		// Bash writes the `time` report to the current standard error
 		// (fd 2), so a preceding `exec 2>...` redirect affects it.
 		if cm.PosixFormat {

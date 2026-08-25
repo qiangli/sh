@@ -139,6 +139,20 @@ func TestMain(m *testing.M) {
 		switch os.Getenv("GOSH_CMD") {
 		case "exit_0":
 			os.Exit(0)
+		case "burn_cpu":
+			// A real external child that consumes measurable user CPU, then
+			// exits cleanly. Drives TestTimeIssue7ExternalChild, which folds
+			// this process's ProcessState CPU through the same seam the exec
+			// handler uses for the `time` keyword.
+			deadline := time.Now().Add(50 * time.Millisecond)
+			x := 1
+			for time.Now().Before(deadline) {
+				for i := 0; i < 100000; i++ {
+					x = (x*1664525 + 1013904223) & 0x7fffffff
+				}
+			}
+			fmt.Fprint(io.Discard, x)
+			os.Exit(0)
 		case "exit_5":
 			os.Exit(5)
 		case "print_ok":
