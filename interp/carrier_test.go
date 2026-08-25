@@ -526,6 +526,57 @@ func (c stopAwareCarrier) StartCarrier(context.Context) (interp.CarrierProcess, 
 	return c.proc, nil
 }
 
+type groupStopAwareProc struct {
+	*stopAwareProc
+	resumed chan struct{}
+	once    sync.Once
+}
+
+func (p *groupStopAwareProc) ProcessGroupID() int { return p.Pid() }
+func (p *groupStopAwareProc) ResumeProcessGroupLeader() error {
+	p.once.Do(func() { close(p.resumed) })
+	return nil
+}
+
+type groupStopAwareCarrier struct{ proc *groupStopAwareProc }
+
+func (c groupStopAwareCarrier) StartCarrier(context.Context) (interp.CarrierProcess, error) {
+	return c.proc, nil
+}
+
+func TestJobCarrierGroupStopPreservesJobForResume(t *testing.T) {
+	base := &stopAwareProc{
+		states:     make(chan interp.CarrierWaitState, 2),
+		terminated: make(chan struct{}),
+	}
+	p := &groupStopAwareProc{stopAwareProc: base, resumed: make(chan struct{})}
+	p.states <- interp.CarrierWaitState{Signal: 21, Stopped: true}
+	runDone := make(chan string, 1)
+	go func() {
+		runDone <- runCarrierScript(t, groupStopAwareCarrier{p},
+			`{ while :; do :; done; } & wait $!; echo "st=$?"`, interp.Params("-m"))
+	}()
+	select {
+	case <-p.resumed:
+	case <-time.After(time.Second):
+		t.Fatal("grouped carrier proxy was not resumed after stop")
+	}
+	select {
+	case <-p.terminated:
+		t.Fatal("grouped carrier stop canceled the represented job")
+	default:
+	}
+	p.states <- interp.CarrierWaitState{Signal: 15}
+	select {
+	case out := <-runDone:
+		if got := strings.TrimSpace(out); got != "st=143" {
+			t.Fatalf("unexpected output after terminal carrier state: %q", got)
+		}
+	case <-time.After(runnerRunTimeout):
+		t.Fatal("grouped carrier job did not finish after terminal state")
+	}
+}
+
 // TestJobCarrierStopCancelsBeforeTerminalReap pins the ed timeout regression:
 // a host which observes a stopped carrier must not wait for an ordinary
 // terminal-only process Wait while the represented job keeps running.

@@ -68,6 +68,10 @@ type CarrierProcess interface {
 type ProcessGroupCarrierProcess interface {
 	CarrierProcess
 	ProcessGroupID() int
+	// ResumeProcessGroupLeader continues the carrier proxy itself after a
+	// group-directed job-control stop. It must not continue the rest of the
+	// process group; bg/fg or an explicit signal owns that transition.
+	ResumeProcessGroupLeader() error
 }
 
 // CarrierWaitState is one observable carrier process state. A terminal state
@@ -255,6 +259,20 @@ func (r *Runner) attachCarrier(ctx context.Context, job *Runner, bg *bgProc) err
 				if !state.Stopped {
 					sig = state.Signal
 					break
+				}
+				// A grouped carrier is a stable proxy leader, not the job's
+				// executable body. Keep the real children stopped, record that
+				// state for jobs/bg/fg, and resume only the proxy so its watcher
+				// can observe the next wait state. Ungrouped carriers retain the
+				// historical cancel-and-reap behavior below.
+				if grouped, ok := cp.(ProcessGroupCarrierProcess); ok && bg.pgrpFixed {
+					if _, name, ok := signalByNumber(state.Signal); ok {
+						bg.setStopSignal("SIG" + name)
+					}
+					bg.setState(jobStopped)
+					if err := grouped.ResumeProcessGroupLeader(); err == nil {
+						continue
+					}
 				}
 				// A stopped carrier cannot reach another wait state by itself.
 				// Preserve the stop as the job's status, cancel the represented

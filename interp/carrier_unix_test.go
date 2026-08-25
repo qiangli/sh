@@ -26,6 +26,9 @@ import (
 type testProcessGroupCarrierProc struct{ *testCarrierProc }
 
 func (p *testProcessGroupCarrierProc) ProcessGroupID() int { return p.Pid() }
+func (p *testProcessGroupCarrierProc) ResumeProcessGroupLeader() error {
+	return syscall.Kill(p.Pid(), syscall.SIGCONT)
+}
 
 func newTestProcessGroupCarrier() *testCarrier {
 	return &testCarrier{
