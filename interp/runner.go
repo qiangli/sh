@@ -261,6 +261,7 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 				cmd:      "process substitution",
 			}
 			r.bgProcs = append(r.bgProcs, bg)
+			r.lastBang = bg
 			go func() {
 				defer r2.closeDirFile()
 				defer func() {
@@ -4588,6 +4589,7 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 			r.exit = exitStatus{code: 1}
 		} else {
 			r.bgProcs = append(r.bgProcs, bg)
+			r.lastBang = bg
 			// Stash a pointer to the freshly-appended bgProc on the
 			// goroutine's ctx so the exec handlers (DefaultExecHandler,
 			// runDetachedExec) can publish the real OS PID into it via
@@ -4654,6 +4656,11 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 }
 
 func (r *Runner) lastBangProc() *bgProc {
+	if r.lastBang != nil {
+		return r.lastBang
+	}
+	// Keep manually assembled runners and older internal fixtures working;
+	// normal execution assigns lastBang when it appends the job.
 	if n := len(r.bgProcs); n > 0 {
 		return r.bgProcs[n-1]
 	}
@@ -6131,8 +6138,14 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			// racily losing it. subshell() starts with empty bgProcs, so these
 			// are only the pipeline's own process substitutions.
 			r.bgProcs = append(r.bgProcs, r2.bgProcs...)
+			if n := len(r2.bgProcs); n > 0 {
+				r.lastBang = r2.bgProcs[n-1]
+			}
 			if r3 != nil {
 				r.bgProcs = append(r.bgProcs, r3.bgProcs...)
+				if n := len(r3.bgProcs); n > 0 {
+					r.lastBang = r3.bgProcs[n-1]
+				}
 			}
 			// Track PIPESTATUS. mvdan/sh parses pipes left-associative,
 			// so `a | b | c` is (a | b) | c — X is the nested pipeline
@@ -7934,6 +7947,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			coprocWriteFile:   pw2,
 		}
 		r.bgProcs = append(r.bgProcs, bg)
+		r.lastBang = bg
 		if r.coprocReg == nil {
 			r.coprocReg = &coprocReg{}
 		}

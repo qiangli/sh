@@ -6,11 +6,14 @@ package interp
 import (
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/syntax"
@@ -30,6 +33,11 @@ type issue7CommandResult struct {
 // extraEnv entries are appended to the fixed base environment.
 func runIssue7Command(t *testing.T, src string, xsiEcho bool, extraEnv ...string) issue7CommandResult {
 	t.Helper()
+	return runIssue7CommandWithInput(t, src, xsiEcho, strings.NewReader("stdin sentinel\n"), extraEnv...)
+}
+
+func runIssue7CommandWithInput(t *testing.T, src string, xsiEcho bool, stdin io.Reader, extraEnv ...string) issue7CommandResult {
+	t.Helper()
 	pathDir := t.TempDir()
 	for _, name := range []string{"echo", "false", "printf", "pwd", "test", "[", "true", "utilx"} {
 		path := filepath.Join(pathDir, name)
@@ -40,7 +48,10 @@ func runIssue7Command(t *testing.T, src string, xsiEcho bool, extraEnv ...string
 			t.Fatal(err)
 		}
 	}
-	file, err := syntax.NewParser(syntax.Variant(syntax.LangPOSIX)).Parse(strings.NewReader(src), "")
+	file, err := syntax.NewParser(
+		syntax.Variant(syntax.LangBash),
+		syntax.PosixMode(true),
+	).Parse(strings.NewReader(src), "")
 	if err != nil {
 		t.Fatalf("parse %q: %v", src, err)
 	}
@@ -53,12 +64,13 @@ func runIssue7Command(t *testing.T, src string, xsiEcho bool, extraEnv ...string
 		"LC_CTYPE=C",
 		"LC_MESSAGES=C",
 		"NLSPATH=",
+		"POSIXLY_CORRECT=1",
 	}
 	env = append(env, extraEnv...)
 	r, err := New(
 		WithPosixMode(true),
 		WithStrictPosix(true),
-		StdIO(strings.NewReader("stdin sentinel\n"), &stdout, &stderr),
+		StdIO(stdin, &stdout, &stderr),
 		Env(expand.ListEnviron(env...)),
 	)
 	if err != nil {
@@ -1257,42 +1269,43 @@ func TestUmaskIssue7Interface(t *testing.T) {
 func TestKillIssue7Interface(t *testing.T) {
 	t.Run("default_signal_terminates_job", func(t *testing.T) {
 		got := runIssue7Command(t, "loop() { while true; do :; done; }; loop &\nkill $!\nwait $!\nprintf '%s\n' \"$?\"", false)
-		if got.stdout != "143\n" || got.stderr != "" || got.status != 0 {
+		if !issue7SignaledStatus(got.stdout) || got.stderr != "" || got.status != 0 {
 			t.Fatalf("default kill: got %#v", got)
 		}
 	})
 
 	t.Run("dash_s_signal_name", func(t *testing.T) {
 		got := runIssue7Command(t, "loop() { while true; do :; done; }; loop &\nkill -s TERM $!\nwait $!\nprintf '%s\n' \"$?\"", false)
-		if got.stdout != "143\n" || got.stderr != "" || got.status != 0 {
+		if !issue7SignaledStatus(got.stdout) || got.stderr != "" || got.status != 0 {
 			t.Fatalf("dash s: got %#v", got)
 		}
 	})
 
 	t.Run("dash_s_signal_name_is_case_insensitive", func(t *testing.T) {
 		got := runIssue7Command(t, "loop() { while true; do :; done; }; loop &\nkill -s term $!\nwait $!\nprintf '%s\n' \"$?\"", false)
-		if got.stdout != "143\n" || got.stderr != "" || got.status != 0 {
+		if !issue7SignaledStatus(got.stdout) || got.stderr != "" || got.status != 0 {
 			t.Fatalf("case-insensitive -s: got %#v", got)
 		}
 	})
 
 	t.Run("dash_s_zero_checks_existence_without_terminating", func(t *testing.T) {
 		got := runIssue7Command(t, "loop() { while true; do :; done; }; loop & p=$!\nkill -s 0 $p\nprintf 'probe=%s\n' \"$?\"\nkill -s TERM $p\nwait $p\nprintf 'wait=%s\n' \"$?\"", false)
-		if got.stdout != "probe=0\nwait=143\n" || got.stderr != "" || got.status != 0 {
+		lines := strings.Split(strings.TrimSpace(got.stdout), "\n")
+		if len(lines) != 2 || lines[0] != "probe=0" || !strings.HasPrefix(lines[1], "wait=") || !issue7SignaledStatus(strings.TrimPrefix(lines[1], "wait=")+"\n") || got.stderr != "" || got.status != 0 {
 			t.Fatalf("null signal: got %#v", got)
 		}
 	})
 
 	t.Run("dash_signal_name", func(t *testing.T) {
 		got := runIssue7Command(t, "loop() { while true; do :; done; }; loop &\nkill -TERM $!\nwait $!\nprintf '%s\n' \"$?\"", false)
-		if got.stdout != "143\n" || got.stderr != "" || got.status != 0 {
+		if !issue7SignaledStatus(got.stdout) || got.stderr != "" || got.status != 0 {
 			t.Fatalf("dash name: got %#v", got)
 		}
 	})
 
 	t.Run("dash_signal_number", func(t *testing.T) {
 		got := runIssue7Command(t, "loop() { while true; do :; done; }; loop &\nkill -15 $!\nwait $!\nprintf '%s\n' \"$?\"", false)
-		if got.stdout != "143\n" || got.stderr != "" || got.status != 0 {
+		if !issue7SignaledStatus(got.stdout) || got.stderr != "" || got.status != 0 {
 			t.Fatalf("dash number: got %#v", got)
 		}
 	})
@@ -1332,14 +1345,14 @@ func TestKillIssue7Interface(t *testing.T) {
 
 	t.Run("unknown_pid_is_diagnostic_failure", func(t *testing.T) {
 		got := runIssue7Command(t, "kill 999999", false)
-		if got.stdout != "" || got.status != 1 {
+		if got.stdout != "" || got.stderr == "" || got.status != 1 {
 			t.Fatalf("unknown pid: got %#v", got)
 		}
 	})
 
 	t.Run("job_id_operand_signals_current_shell_job", func(t *testing.T) {
 		got := runIssue7Command(t, "loop() { while true; do :; done; }; loop &\nkill -s TERM %1\nwait %1\nprintf '%s\n' \"$?\"", false)
-		if got.stdout != "143\n" || got.stderr != "" || got.status != 0 {
+		if !issue7SignaledStatus(got.stdout) || got.stderr != "" || got.status != 0 {
 			t.Fatalf("job id operand: got %#v", got)
 		}
 	})
@@ -1353,10 +1366,22 @@ func TestKillIssue7Interface(t *testing.T) {
 
 	t.Run("bash_extension_dash_n_signal_number", func(t *testing.T) {
 		got := runIssue7Command(t, "loop() { while true; do :; done; }; loop &\nkill -n 15 $!\nwait $!\nprintf '%s\n' \"$?\"", false)
-		if got.stdout != "143\n" || got.stderr != "" || got.status != 0 {
+		if !issue7SignaledStatus(got.stdout) || got.stderr != "" || got.status != 0 {
 			t.Fatalf("bash -n: got %#v", got)
 		}
 	})
+
+	t.Run("bash_compat_term_status_is_128_plus_15", func(t *testing.T) {
+		got := runIssue7Command(t, "loop() { while true; do :; done; }; loop &\nkill -s TERM $!\nwait $!\nprintf '%s\n' \"$?\"", false)
+		if got.stdout != "143\n" || got.stderr != "" || got.status != 0 {
+			t.Fatalf("Bash TERM status: got %#v", got)
+		}
+	})
+}
+
+func issue7SignaledStatus(stdout string) bool {
+	n, err := strconv.Atoi(strings.TrimSpace(stdout))
+	return err == nil && n > 128
 }
 
 func TestWaitIssue7Interface(t *testing.T) {
@@ -1381,7 +1406,7 @@ func TestWaitIssue7Interface(t *testing.T) {
 		}
 	})
 
-	t.Run("completed_status_is_retained_until_requested", func(t *testing.T) {
+	t.Run("job_remains_waitable_across_foreground_command", func(t *testing.T) {
 		got := runIssue7Command(t, "false & p=$!\ntrue\nwait $p\nprintf '%s\n' \"$?\"", false)
 		if got.stdout != "1\n" || got.stderr != "" || got.status != 0 {
 			t.Fatalf("retained status: got %#v", got)
@@ -1403,17 +1428,88 @@ func TestWaitIssue7Interface(t *testing.T) {
 	})
 
 	t.Run("standard_input_and_output_are_not_used", func(t *testing.T) {
-		got := runIssue7Command(t, "true &\nwait >/dev/null\nIFS= read -r line\nprintf '<%s>\\n' \"$line\"", false)
+		got := runIssue7Command(t, "true & p=$!\nwait \"$p\"\nIFS= read -r line\nprintf '<%s>\\n' \"$line\"", false)
 		if got.stdout != "<stdin sentinel>\n" || got.stderr != "" || got.status != 0 {
 			t.Fatalf("stdio preservation: got %#v", got)
 		}
 	})
 }
 
+func TestWaitIssue7CompletedStatusIsRetainedUntilRequested(t *testing.T) {
+	done := make(chan struct{})
+	close(done)
+	pidReady := make(chan struct{})
+	close(pidReady)
+	bg := &bgProc{
+		done:     done,
+		exit:     &exitStatus{code: 7},
+		pidReady: pidReady,
+		jobID:    1,
+	}
+	bg.pid.Store(4242)
+	r := &Runner{bgProcs: []*bgProc{bg}}
+
+	// Reaping a completed job from the active table must first preserve its
+	// status in Bashy's retained-PID table. A later POSIX `wait pid` consumes
+	// that exact status even though the job is no longer active.
+	r.removeFinishedJobs()
+	if len(r.bgProcs) != 0 {
+		t.Fatalf("completed job remains active: %#v", r.bgProcs)
+	}
+	got := r.builtin(context.Background(), syntax.Pos{}, "wait", []string{"4242"})
+	if got.code != 7 || got.exiting || got.returning {
+		t.Fatalf("wait retained status: got %#v, want code 7", got)
+	}
+	if _, ok := r.doneBgPids[4242]; ok {
+		t.Fatal("wait did not consume the retained PID status")
+	}
+}
+
+func TestWaitIssue7ZeroOperandsBlocksUntilAllJobsComplete(t *testing.T) {
+	done := make(chan struct{})
+	pidReady := make(chan struct{})
+	close(pidReady)
+	bg := &bgProc{
+		done:     done,
+		exit:     new(exitStatus),
+		pidReady: pidReady,
+		jobID:    1,
+	}
+	r := &Runner{bgProcs: []*bgProc{bg}}
+	started := make(chan struct{})
+	result := make(chan exitStatus, 1)
+	go func() {
+		close(started)
+		result <- r.builtin(context.Background(), syntax.Pos{}, "wait", nil)
+	}()
+	<-started
+
+	select {
+	case got := <-result:
+		t.Fatalf("wait returned before background completion: %#v", got)
+	case <-time.After(25 * time.Millisecond):
+	}
+	close(done)
+	select {
+	case got := <-result:
+		if got.code != 0 || got.exiting || got.returning {
+			t.Fatalf("wait after completion: got %#v, want code 0", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("wait did not return after background completion")
+	}
+}
+
 func TestWaitBashExtensions(t *testing.T) {
 	t.Run("bash_extension_dash_n_waits_for_next", func(t *testing.T) {
-		got := runIssue7Command(t, "loop() { while true; do :; done; }; loop &\ntrue &\nwait -n\nprintf '%s\n' \"$?\"\nkill $!", false)
-		if got.stdout != "0\n" || got.stderr != "" || got.status != 0 {
+		src := "loop() { while true; do :; done; }; loop & long=$!\n" +
+			"true & recent=$!\nwait -n\nwait_status=$?\n" +
+			"if [ \"$!\" = \"$recent\" ]; then bang=stable; else bang=changed; fi\n" +
+			"kill \"$long\"\nwait \"$long\"\ncleanup=$?\n" +
+			"printf 'status=%s bang=%s cleanup=%s\\n' \"$wait_status\" \"$bang\" \"$cleanup\""
+		got := runIssue7Command(t, src, false)
+		fields := strings.Fields(strings.TrimSpace(got.stdout))
+		if len(fields) != 3 || fields[0] != "status=0" || fields[1] != "bang=stable" || !strings.HasPrefix(fields[2], "cleanup=") || !issue7SignaledStatus(strings.TrimPrefix(fields[2], "cleanup=")+"\n") || got.stderr != "" || got.status != 0 {
 			t.Fatalf("bash -n: got %#v", got)
 		}
 	})
@@ -1422,6 +1518,28 @@ func TestWaitBashExtensions(t *testing.T) {
 		got := runIssue7Command(t, "true &\nwait -p mypid $!\nif [ -n \"$mypid\" ]; then printf 'ok\n'; fi", false)
 		if got.stdout != "ok\n" || got.stderr != "" || got.status != 0 {
 			t.Fatalf("bash -p: got %#v", got)
+		}
+	})
+
+	t.Run("process_substitution_replaces_bang", func(t *testing.T) {
+		src := "loop() { while true; do :; done; }; loop & old=$!\n" +
+			"IFS= read -r value < <(printf 'value\\n')\nprocess_sub=$!\n" +
+			"if [ \"$process_sub\" != \"$old\" ]; then changed=yes; else changed=no; fi\n" +
+			"kill \"$old\"\nwait \"$old\"\nprintf 'value=%s changed=%s\\n' \"$value\" \"$changed\""
+		got := runIssue7Command(t, src, false)
+		if got.stdout != "value=value changed=yes\n" || got.stderr != "" || got.status != 0 {
+			t.Fatalf("process-substitution $!: got %#v", got)
+		}
+	})
+
+	t.Run("coprocess_replaces_bang", func(t *testing.T) {
+		src := "loop() { while true; do :; done; }; loop & old=$!\n" +
+			"coproc C { true; }; coprocess=$!\n" +
+			"if [ \"$coprocess\" != \"$old\" ]; then changed=yes; else changed=no; fi\n" +
+			"kill \"$old\"\nwait \"$old\"\nprintf 'changed=%s\\n' \"$changed\""
+		got := runIssue7Command(t, src, false)
+		if got.stdout != "changed=yes\n" || got.stderr != "" || got.status != 0 {
+			t.Fatalf("coprocess $!: got %#v", got)
 		}
 	})
 }

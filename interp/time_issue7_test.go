@@ -130,30 +130,30 @@ var posixTimeLine = regexp.MustCompile(`^real (\d+\.\d\d)\nuser (\d+\.\d\d)\nsys
 
 func TestTimeIssue7CommandInterface(t *testing.T) {
 	t.Run("dash_p_writes_posix_format_to_stderr", func(t *testing.T) {
-		stdout, stderr := runTimeScript(t, "time -p true\n")
-		if stdout != "" || !posixTimeLine.MatchString(stderr) {
-			t.Fatalf("time -p true: stdout=%q stderr=%q", stdout, stderr)
+		got := runIssue7Command(t, "time -p true\n", false)
+		if got.stdout != "" || !posixTimeLine.MatchString(got.stderr) || got.status != 0 {
+			t.Fatalf("time -p true: got %#v", got)
 		}
 	})
 
 	t.Run("exit_status_is_utility_status", func(t *testing.T) {
-		stdout, stderr := runTimeScript(t, "time -p false\nprintf 'status=%s\n' \"$?\"")
-		if stdout != "status=1\n" || !posixTimeLine.MatchString(stderr) {
-			t.Fatalf("time -p false: stdout=%q stderr=%q", stdout, stderr)
+		got := runIssue7Command(t, "time -p false\nprintf 'status=%s\n' \"$?\"", false)
+		if got.stdout != "status=1\n" || !posixTimeLine.MatchString(got.stderr) || got.status != 0 {
+			t.Fatalf("time -p false: got %#v", got)
 		}
 	})
 
 	t.Run("missing_utility_status_is_127", func(t *testing.T) {
-		stdout, stderr := runTimeScript(t, "time -p profile_b_missing_time_command\nprintf 'status=%s\n' \"$?\"")
-		if stdout != "status=127\n" || !strings.Contains(stderr, "profile_b_missing_time_command") || !strings.Contains(stderr, "real ") {
-			t.Fatalf("time missing utility: stdout=%q stderr=%q", stdout, stderr)
+		got := runIssue7Command(t, "time -p profile_b_missing_time_command\nprintf 'status=%s\n' \"$?\"", false)
+		if got.stdout != "status=127\n" || !strings.Contains(got.stderr, "profile_b_missing_time_command") || !strings.Contains(got.stderr, "real ") || got.status != 0 {
+			t.Fatalf("time missing utility: got %#v", got)
 		}
 	})
 
 	t.Run("standard_input_is_not_used_by_time", func(t *testing.T) {
-		stdout, stderr := runTimeScriptWithInput(t, "time -p true\nIFS= read -r line\nprintf '<%s>\\n' \"$line\"", strings.NewReader("stdin sentinel\n"))
-		if stdout != "<stdin sentinel>\n" || !posixTimeLine.MatchString(stderr) {
-			t.Fatalf("stdin preservation: stdout=%q stderr=%q", stdout, stderr)
+		got := runIssue7CommandWithInput(t, "time -p true\nIFS= read -r line\nprintf '<%s>\\n' \"$line\"", false, strings.NewReader("stdin sentinel\n"))
+		if got.stdout != "<stdin sentinel>\n" || !posixTimeLine.MatchString(got.stderr) || got.status != 0 {
+			t.Fatalf("stdin preservation: got %#v", got)
 		}
 	})
 }

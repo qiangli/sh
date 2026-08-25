@@ -410,6 +410,11 @@ type Runner struct {
 	// subshells do not share nor inherit the background PIDs they can wait for.
 	bgProcs []*bgProc
 
+	// lastBang is the most recently started asynchronous job. Unlike bgProcs,
+	// it is deliberately retained after wait reaps that job: Bash keeps $!
+	// unchanged until another asynchronous job is started.
+	lastBang *bgProc
+
 	// inheritedBang is the caller's most recent background job, visible
 	// only through $! in subshells. It is intentionally not waitable by
 	// this runner; bash lets a subshell expand $! from its parent but
@@ -2586,6 +2591,7 @@ func (r *Runner) Reset() {
 	// Ensure we stop referencing any pointers before we reuse bgProcs.
 	clear(r.bgProcs)
 	r.bgProcs = r.bgProcs[:0]
+	r.lastBang = nil
 
 	if r.Vars == nil {
 		r.Vars = make(map[string]expand.Variable)
