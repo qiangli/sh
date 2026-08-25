@@ -4562,6 +4562,7 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 		st2 := *st
 		st2.Background = false
 		st2.Disown = false
+		waitForExternalLaunch := r.jobCarrier != nil && r.isLiteralExternalCallStmt(&st2)
 		bg := &bgProc{
 			done:                       make(chan struct{}),
 			exit:                       new(exitStatus),
@@ -4638,6 +4639,20 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 				r.notifyChildReaped()
 				close(bg.done)
 			}()
+			// A real shell forks an asynchronous simple command before it
+			// resumes the parent list. The Go runner must preserve that launch
+			// boundary: otherwise the parent can run its next statements before
+			// the background goroutine has even called exec. pidReady is closed
+			// after the external process starts (or when a failed launch exits).
+			// Keep this narrow to literal external calls under the CLI's job
+			// carrier; builtins, functions, and long-running jobs remain async.
+			if waitForExternalLaunch {
+				select {
+				case <-bg.pidReady:
+					yieldExternalLaunch()
+				case <-ctx.Done():
+				}
+			}
 		}
 	} else {
 		r.stmtSync(ctx, st)
@@ -4713,6 +4728,18 @@ func (r *Runner) isFastOutputBuiltinStmt(st *syntax.Stmt) bool {
 		return false
 	}
 	return lit.Value == "echo" || lit.Value == "printf"
+}
+
+func (r *Runner) isLiteralExternalCallStmt(st *syntax.Stmt) bool {
+	call, ok := st.Cmd.(*syntax.CallExpr)
+	if !ok || len(call.Args) == 0 || len(call.Args[0].Parts) != 1 {
+		return false
+	}
+	lit, ok := call.Args[0].Parts[0].(*syntax.Lit)
+	if !ok || r.Funcs[lit.Value] != nil {
+		return false
+	}
+	return !IsBuiltin(lit.Value) || r.disabledBuiltins[lit.Value]
 }
 
 func isSimpleCallStmt(st *syntax.Stmt) bool {
