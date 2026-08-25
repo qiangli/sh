@@ -25,8 +25,10 @@ import (
 // kills the process; Wait reaps it and maps a signal death to its number
 // via carrierExitSignal (build-tagged, 0 on non-unix).
 type testCarrier struct {
-	mu   sync.Mutex
-	pids []int // every carrier PID handed out, for leak checks
+	mu        sync.Mutex
+	pids      []int // every carrier PID handed out, for leak checks
+	configure func(*exec.Cmd)
+	wrap      func(*testCarrierProc) interp.CarrierProcess
 }
 
 type testCarrierProc struct {
@@ -47,6 +49,9 @@ func (c *ignoredSignalCarrier) StartCarrierWithIgnoredSignals(ctx context.Contex
 func (c *testCarrier) StartCarrier(ctx context.Context) (interp.CarrierProcess, error) {
 	cmd := exec.Command(os.Getenv("GOSH_PROG"))
 	cmd.Env = append(os.Environ(), "GOSH_CMD=carrier")
+	if c.configure != nil {
+		c.configure(cmd)
+	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -75,7 +80,11 @@ func (c *testCarrier) StartCarrier(ctx context.Context) (interp.CarrierProcess, 
 	c.mu.Lock()
 	c.pids = append(c.pids, cmd.Process.Pid)
 	c.mu.Unlock()
-	return &testCarrierProc{cmd: cmd, stdin: stdin}, nil
+	proc := &testCarrierProc{cmd: cmd, stdin: stdin}
+	if c.wrap != nil {
+		return c.wrap(proc), nil
+	}
+	return proc, nil
 }
 
 func (p *testCarrierProc) Pid() int { return p.cmd.Process.Pid }

@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,6 +22,53 @@ import (
 
 	"mvdan.cc/sh/v3/interp"
 )
+
+type testProcessGroupCarrierProc struct{ *testCarrierProc }
+
+func (p *testProcessGroupCarrierProc) ProcessGroupID() int { return p.Pid() }
+
+func newTestProcessGroupCarrier() *testCarrier {
+	return &testCarrier{
+		configure: func(cmd *exec.Cmd) {
+			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		},
+		wrap: func(proc *testCarrierProc) interp.CarrierProcess {
+			return &testProcessGroupCarrierProc{testCarrierProc: proc}
+		},
+	}
+}
+
+var carrierPipelineIdentity = regexp.MustCompile(`(?:LEFT|RIGHT) pid=([0-9]+) pgrp=([0-9]+)`)
+
+func TestJobCarrierOwnsStablePipelineProcessGroup(t *testing.T) {
+	c := newTestProcessGroupCarrier()
+	out := runCarrierScript(t, c, `
+set -m
+/bin/sh -c 'p=$$; g=$(/bin/ps -o pgid= -p "$p" | tr -d " "); echo "LEFT pid=$p pgrp=$g" >&2; sleep 1' |
+  /bin/sh -c 'p=$$; g=$(/bin/ps -o pgid= -p "$p" | tr -d " "); echo "RIGHT pid=$p pgrp=$g" >&2; sleep 1' &
+j=$(jobs -p)
+wait
+echo "JOBS_P=$j"
+`)
+	started := c.startedPids()
+	if len(started) != 1 {
+		t.Fatalf("carrier pids = %v, want one; output:\n%s", started, out)
+	}
+	wantGroup := strconv.Itoa(started[0])
+	matches := carrierPipelineIdentity.FindAllStringSubmatch(out, -1)
+	if len(matches) != 2 {
+		t.Fatalf("pipeline identities missing:\n%s", out)
+	}
+	for _, match := range matches {
+		if match[2] != wantGroup {
+			t.Fatalf("child pid %s joined pgrp %s, want carrier group %s:\n%s", match[1], match[2], wantGroup, out)
+		}
+	}
+	if !strings.Contains(out, "JOBS_P="+wantGroup+"\n") {
+		t.Fatalf("jobs -p did not publish carrier group %s:\n%s", wantGroup, out)
+	}
+	waitPidsGone(t, started)
+}
 
 // killBinPrelude locates the real kill binary, bypassing the builtin, so
 // scripts can exercise the "an external process signals the job" path.

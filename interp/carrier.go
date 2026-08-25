@@ -58,6 +58,18 @@ type CarrierProcess interface {
 	Terminate()
 }
 
+// ProcessGroupCarrierProcess is the optional job-control extension for a
+// carrier which is the stable leader of its own operating-system process
+// group. ProcessGroupID must remain positive and usable until Terminate is
+// called. When monitor mode is active, the runner places every external child
+// of the represented job in this group, so pipelines, jobs -p, and job-spec
+// signals share one kernel identity even when a short-lived pipeline child
+// exits while its siblings are still starting.
+type ProcessGroupCarrierProcess interface {
+	CarrierProcess
+	ProcessGroupID() int
+}
+
 // CarrierWaitState is one observable carrier process state. A terminal state
 // means the process has exited and been reaped. A stopped state is
 // non-terminal: WaitState must be called again after the process is continued
@@ -186,6 +198,20 @@ func (r *Runner) attachCarrier(ctx context.Context, job *Runner, bg *bgProc) err
 			cp.Wait()
 		}()
 		return fmt.Errorf("job carrier: invalid carrier pid %d", pid)
+	}
+	if bg.jobControl {
+		if grouped, ok := cp.(ProcessGroupCarrierProcess); ok {
+			pgrp := grouped.ProcessGroupID()
+			if pgrp <= 0 {
+				go func() {
+					cp.Terminate()
+					cp.Wait()
+				}()
+				return fmt.Errorf("job carrier: invalid process group %d", pgrp)
+			}
+			bg.pgrp.Store(int64(pgrp))
+			bg.pgrpFixed = true
+		}
 	}
 	bg.carrier = cp
 	bg.carrierSignalRunner.Store(job)
