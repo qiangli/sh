@@ -561,10 +561,14 @@ func scanUnsetOperandSources(line string) []unsetOperandSource {
 // writeErrChecked is the set of builtins that, like bash's sh_chkwrite
 // callers, report a standard-output write failure to a closed descriptor
 // (`echo >&-`) and exit non-zero. Builtins outside this set (e.g. `help`)
-// fail their write silently, matching bash.
+// fail their write silently, matching bash. cd only writes when printing
+// the new directory (`cd -`, CDPATH): bash still changes the directory and
+// reports the write error with a failure status.
 var writeErrChecked = map[string]bool{
+	"cd":     true,
 	"echo":   true,
 	"printf": true,
+	"pwd":    true,
 }
 
 // pipeWriteErrChecked is the POSIX special/listing builtin subset whose
@@ -1348,6 +1352,12 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		case 0:
 			path = r.envGet("HOME")
 			if path == "" {
+				// bash 5.3: an unset HOME is an error, while a HOME set to
+				// the empty string makes `cd` a silent no-op (POSIX leaves
+				// both cases implementation-defined).
+				if r.lookupVar("HOME").IsSet() {
+					return exit
+				}
 				r.errf("%scd: HOME not set\n", r.bashErrPrefix(r.curStmtPos))
 				exit.code = 1
 				return exit
@@ -2211,9 +2221,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				// `hash -d NAME`: forget specific name.
 				deleteNames = true
 			default:
+				// bash 5.3 treats an unknown hash option as a usage error
+				// with EX_USAGE (2), in and out of POSIX mode.
 				r.errf("%shash: %s: invalid option\n", r.bashErrPrefix(pos), flag)
 				r.errf("hash: usage: %s\n", bashUsage["hash"])
-				exit.code = 1
+				exit.code = 2
 				return exit
 			}
 		}
@@ -2325,6 +2337,15 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				}
 				path = explicitPath
 			} else {
+				// bash 5.3 hashes only PATH-searched externals: a name that
+				// resolves to a shell function or an enabled builtin, or that
+				// contains a slash, is silently skipped with success — POSIX
+				// likewise says built-ins shall not be reported by hash.
+				// An explicit `hash -p path name` still caches any name.
+				if r.Funcs[name] != nil || (IsBuiltin(name) && !r.disabledBuiltins[name]) ||
+					strings.ContainsRune(name, '/') {
+					continue
+				}
 				p, err := LookPathDir(r.Dir, r.writeEnv, name)
 				if err != nil {
 					r.errf(r.bashErrPrefix(pos)+"hash: %s: not found\n", name)
@@ -3135,9 +3156,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			return exit
 		}
 		releaseBgPid(ctx)
-		last := uint8(0)
+		// bash 5.3 exits 0 when any of the -v/-V operands resolved and 1 only
+		// when none did (POSIX specifies a single command_name; bash's
+		// any-found rule governs multiple names, in and out of POSIX mode).
+		foundAny := false
 		for _, arg := range args {
-			last = 0
 			if showVV {
 				if r.opts[optPosix] && IsBuiltin(arg) && !isPosixSpecialBuiltin(arg) && !r.disabledBuiltins[arg] {
 					if path, err := LookPathDir(r.Dir, lookupEnv, arg); err == nil {
@@ -3150,15 +3173,16 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 						// suite unless the output matches *built[-]in*. Print
 						// both facts; -V wording is unspecified by POSIX.
 						r.outf("%s is a regular built-in at %s\n", arg, path)
+						foundAny = true
 						continue
 					}
 				}
 				ms := r.typeMatches(arg, false, lookupEnv)
 				if len(ms) == 0 {
 					r.errf(r.bashErrPrefix(pos)+"command: %s: not found\n", arg)
-					last = 1
 					continue
 				}
+				foundAny = true
 				if r.opts[optPosix] && ms[0].kind == "file" && strings.ContainsRune(arg, '/') && !filepath.IsAbs(ms[0].path) {
 					ms[0].path = r.absPath(ms[0].path)
 					ms[0].desc = fmt.Sprintf("%s is %s", arg, ms[0].path)
@@ -3181,20 +3205,24 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				} else {
 					r.outf("%s\n", arg)
 				}
+				foundAny = true
 			} else if isKeyword(arg) || r.Funcs[arg] != nil || (IsBuiltin(arg) && !r.disabledBuiltins[arg]) {
 				r.outf("%s\n", arg)
+				foundAny = true
 			} else if als, ok := r.alias[arg]; ok && r.opts[optExpandAliases] {
 				r.outf("alias %s='%s'\n", arg, strings.ReplaceAll(aliasValue(als), "'", `'\''`))
+				foundAny = true
 			} else if path, err := LookPathDir(r.Dir, lookupEnv, arg); err == nil {
 				if r.opts[optPosix] && strings.ContainsRune(arg, '/') && !filepath.IsAbs(path) {
 					path = r.absPath(path)
 				}
 				r.outf("%s\n", path)
-			} else {
-				last = 1
+				foundAny = true
 			}
 		}
-		exit.code = last
+		if !foundAny {
+			exit.code = 1
+		}
 	case "dirs":
 		// `dirs +N` / `dirs -N` selects a single entry. `-v` adds
 		// "index<TAB>dir" line-per-entry. `-p` is line-per-entry.
@@ -7247,7 +7275,8 @@ func (r *Runner) readLineFrom(ctx context.Context, stdin io.Reader, raw bool, de
 
 func (r *Runner) changeDir(ctx context.Context, cmd, path string, physical ...bool) uint8 {
 	if path == "" {
-		r.errf("%s%s: empty directory path\n", r.bashErrPrefix(r.curStmtPos), cmd)
+		// bash 5.3's wording for an empty directory operand.
+		r.errf("%s%s: null directory\n", r.bashErrPrefix(r.curStmtPos), cmd)
 		return 1
 	}
 	phys := false
