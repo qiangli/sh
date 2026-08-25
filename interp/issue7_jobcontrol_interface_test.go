@@ -13,6 +13,13 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 )
 
+// These tests exercise the POSIX command grammar, selection, formatting, and
+// the interpreter's synthetic job-state seams. They deliberately do not claim
+// real job-control effects: the fixtures have no process group or controlling
+// terminal, and therefore cannot prove SIGCONT delivery, process-group IDs,
+// terminal foreground handoff, resumed terminal I/O, or waiting for a live
+// foreground job. Those effects require separate PTY/process integration
+// evidence and remain unverified here.
 func runIssue7JobCommand(t *testing.T, src string, jobs ...*bgProc) issue7CommandResult {
 	t.Helper()
 	file, err := syntax.NewParser(
@@ -47,14 +54,14 @@ func runIssue7JobCommand(t *testing.T, src string, jobs ...*bgProc) issue7Comman
 	return issue7CommandResult{stdout.String(), stderr.String(), status}
 }
 
-func TestJobsIssue7Interface(t *testing.T) {
+func TestJobsIssue7ParserAndFormatting(t *testing.T) {
 	t.Run("empty_table_and_required_options", func(t *testing.T) {
 		got := runIssue7JobCommand(t, "jobs\njobs -l\njobs -p")
 		if got != (issue7CommandResult{}) {
 			t.Fatalf("empty jobs table: %#v", got)
 		}
 	})
-	t.Run("pid_and_long_forms_select_job_id", func(t *testing.T) {
+	t.Run("synthetic_pid_and_long_formatting", func(t *testing.T) {
 		job := stoppedBg(1, "worker", "SIGTSTP")
 		job.pid.Store(4242)
 		got := runIssue7JobCommand(t, "jobs -p %1\njobs -l %1", job)
@@ -78,8 +85,8 @@ func TestJobsIssue7Interface(t *testing.T) {
 	})
 }
 
-func TestBgIssue7Interface(t *testing.T) {
-	t.Run("resumes_named_stopped_job", func(t *testing.T) {
+func TestBgIssue7SyntheticState(t *testing.T) {
+	t.Run("marks_named_synthetic_job_running", func(t *testing.T) {
 		job := stoppedBg(1, "worker", "SIGTSTP")
 		job.jobControl = true
 		job.pidReady = make(chan struct{})
@@ -112,8 +119,8 @@ func TestBgIssue7Interface(t *testing.T) {
 	})
 }
 
-func TestFgIssue7Interface(t *testing.T) {
-	t.Run("waits_for_selected_job_and_returns_status", func(t *testing.T) {
+func TestFgIssue7ParserAndCompletedStatus(t *testing.T) {
+	t.Run("completed_synthetic_job_propagates_status", func(t *testing.T) {
 		job := doneBg(1, "worker", 7)
 		job.jobControl = true
 		job.pidReady = make(chan struct{})
