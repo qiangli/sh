@@ -925,6 +925,13 @@ type bgProc struct {
 	// usual `PID=$!; kill $PID` idiom relies on this.
 	pidReady chan struct{}
 
+	// finishBeforeFileReturn marks fast output builtins whose goroutine must
+	// finish before a top-level File run returns. A standalone Go shell exits
+	// immediately after Run, so otherwise `echo ... &` can be discarded before
+	// its redirected output is written. Blocking builtins and external jobs
+	// deliberately remain detached.
+	finishBeforeFileReturn bool
+
 	// publishPidToBang controls whether the first real exec PID should be
 	// exposed through $!. Simple external-command backgrounds want that;
 	// compound shell jobs keep the synthetic g<N> handle so signals target
@@ -2812,6 +2819,7 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 		r.trapCallback(ctx, r.trapCallbacks["EXIT"], "exit")
 		r.callStack = oldCallStack
 		r.exitTrapCallStack = nil
+		r.finishBackgroundOutputBuiltins(ctx)
 	}
 	maps.Insert(r.Vars, r.writeEnv.Each)
 	// Return the first of: a fatal error, a non-fatal handler error, or the exit code.

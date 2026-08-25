@@ -4566,6 +4566,7 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 			done:                       make(chan struct{}),
 			exit:                       new(exitStatus),
 			pidReady:                   make(chan struct{}),
+			finishBeforeFileReturn:     r.isFastOutputBuiltinStmt(&st2),
 			publishPidToBang:           isSimpleCallStmt(&st2) || isPipelineStmt(&st2),
 			pidCallback:                r.bgPidCallback, // see WithBgPidCallback
 			cmd:                        backgroundJobText(st),
@@ -4680,6 +4681,38 @@ func (r *Runner) hasLiveBackgroundJobs() bool {
 		}
 	}
 	return false
+}
+
+// finishBackgroundOutputBuiltins prevents a standalone shell process from
+// exiting before a fast, builtin-only background write has reached its sink.
+// This is deliberately narrow: external jobs and potentially blocking
+// builtins retain asynchronous return behavior.
+func (r *Runner) finishBackgroundOutputBuiltins(ctx context.Context) {
+	for _, bg := range r.bgProcs {
+		if bg == nil || !bg.finishBeforeFileReturn {
+			continue
+		}
+		select {
+		case <-bg.done:
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+func (r *Runner) isFastOutputBuiltinStmt(st *syntax.Stmt) bool {
+	call, ok := st.Cmd.(*syntax.CallExpr)
+	if !ok || len(call.Args) == 0 || len(call.Args[0].Parts) != 1 {
+		return false
+	}
+	lit, ok := call.Args[0].Parts[0].(*syntax.Lit)
+	if !ok {
+		return false
+	}
+	if r.disabledBuiltins[lit.Value] || r.Funcs[lit.Value] != nil {
+		return false
+	}
+	return lit.Value == "echo" || lit.Value == "printf"
 }
 
 func isSimpleCallStmt(st *syntax.Stmt) bool {
