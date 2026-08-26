@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,6 +18,23 @@ import (
 	"mvdan.cc/sh/v3/interp"
 	"mvdan.cc/sh/v3/syntax"
 )
+
+type lockedBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.b.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.b.String()
+}
 
 // TestBackgroundJobSurvivesStatementBoundary pins the VSC ps/SIGTTIN
 // conformance hang (Bashy issue: an interactive `ps.ex` test set wedges with
@@ -37,7 +55,7 @@ import (
 // cancellation between them fails it exactly the way the wedge did.
 func TestBackgroundJobSurvivesStatementBoundary(t *testing.T) {
 	input := strings.NewReader("sleep 0.1; echo done &\nwait $!\necho status=$?\nexit 0\n")
-	var stdout, stderr bytes.Buffer
+	var stdout, stderr lockedBuffer
 	r, err := interp.New(
 		interp.Interactive(true),
 		interp.StdIO(strings.NewReader(""), &stdout, &stderr),

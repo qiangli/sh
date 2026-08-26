@@ -237,7 +237,7 @@ func TestMain(m *testing.M) {
 		case "sig_default":
 			// A separate process group makes terminal-stop defaults observable;
 			// an orphaned group is required by POSIX to ignore these signals.
-			_ = syscall.Setpgid(0, 0)
+			setTestProcessGroup()
 			_, _ = interp.New(interp.WithSignalResetter(interp.OSSignalResetter{}))
 			fmt.Println("ready")
 			time.Sleep(time.Hour)
@@ -397,7 +397,7 @@ printf 'FG_STATUS=%s\n' "$?"
 			os.Exit(0)
 		case "signal_child":
 			ch := make(chan os.Signal, 1)
-			signal.Notify(ch, syscall.SIGUSR1)
+			notifyTestUserSignal(ch)
 			fmt.Print("ready")
 			<-ch
 			if err := os.WriteFile(os.Getenv("GOSH_MARKER"), []byte("handled"), 0o600); err != nil {
@@ -6830,7 +6830,7 @@ x=y var\=753
 	ctx, cancel := context.WithTimeout(context.Background(), runnerRunTimeout)
 	defer cancel()
 	if err := r.Run(ctx, file); err != nil {
-		t.Fatal(err)
+		t.Fatalf("run: %v; stdout=%q stderr=%q", err, stdout.String(), stderr.String())
 	}
 	want := strings.Repeat("var=753 executed\n", 6)
 	if got := stdout.String(); got != want {

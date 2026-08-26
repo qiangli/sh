@@ -16,10 +16,12 @@ func startupIgnoredSignals(env string) map[string]bool {
 		if e.Sig == 0 || e.Name == "KILL" || e.Name == "STOP" {
 			continue
 		}
-		// A backgrounded non-interactive harness may launch us with SIGINT
-		// ignored. Treat only the explicit bashy bridge as a hard ignore so
-		// bare `trap` output matches bash's fixtures.
-		if e.Name == "INT" {
+		// A non-interactive Go harness may launch us with SIGINT or SIGPIPE
+		// ignored for its own process plumbing. Neither disposition has
+		// trustworthy shell-entry provenance here. Treat only the explicit
+		// bashy bridge as a hard ignore for these two signals so embedded
+		// runners and bare `trap` output are deterministic.
+		if e.Name == "INT" || e.Name == "PIPE" {
 			continue
 		}
 		var act [128]byte

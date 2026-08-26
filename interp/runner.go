@@ -10517,7 +10517,7 @@ func (r *Runner) execAs(ctx context.Context, pos syntax.Pos, argv0 string, clear
 			if opt, _ := r.bashOptByName("checkhash"); opt != nil {
 				checkHash = *opt
 			}
-			if _, err := os.Stat(entry.path); err != nil && os.IsNotExist(err) {
+			if _, err := r.stat(ctx, entry.path); err != nil && os.IsNotExist(err) {
 				if checkHash {
 					delete(r.cmdHashTable, name)
 					if path, err := LookPathDir(r.Dir, r.writeEnv, name); err == nil {

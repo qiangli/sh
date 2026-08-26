@@ -5,6 +5,7 @@ package interp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -235,6 +236,7 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 		}
 		path, err := LookPathDir(lookupDir, hc.Env, args[0])
 		if err != nil {
+			err = shellVisibleLookupError(err, lookupDir, hc.Dir)
 			if hc.runner != nil && hc.runner.bashCompatErrors {
 				// Bash 5.3: a command name containing a slash is not
 				// looked up in $PATH; it goes straight to execve, which
@@ -606,6 +608,26 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 			return err
 		}
 	}
+}
+
+// shellVisibleLookupError removes the retained Linux cwd descriptor from a
+// lookup diagnostic. The descriptor is an implementation detail: a command
+// after `cd /` must report `/missing`, not `/proc/self/fd/N/missing`.
+func shellVisibleLookupError(err error, lookupDir, shellDir string) error {
+	if lookupDir == shellDir {
+		return err
+	}
+	var pathErr *os.PathError
+	if !errors.As(err, &pathErr) {
+		return err
+	}
+	prefix := strings.TrimSuffix(lookupDir, "/") + "/"
+	if !strings.HasPrefix(pathErr.Path, prefix) {
+		return err
+	}
+	visible := *pathErr
+	visible.Path = shellPathJoinAbs(shellDir, strings.TrimPrefix(pathErr.Path, prefix))
+	return &visible
 }
 
 // anchorExecPath makes a relative executable path relative to dir without

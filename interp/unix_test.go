@@ -9,6 +9,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -581,6 +582,11 @@ done
 			t.Fatal(err)
 		}
 		got, readErr := io.ReadAll(primary)
+		// Linux PTYs report EIO, rather than EOF, after the slave side exits.
+		// Both mean that all terminal output has been consumed.
+		if errors.Is(readErr, unix.EIO) {
+			readErr = nil
+		}
 		if closeErr := primary.Close(); closeErr != nil {
 			t.Fatal(closeErr)
 		}
