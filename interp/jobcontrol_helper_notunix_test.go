@@ -18,3 +18,5 @@ func unsupportedJobControlTestHelper() {
 func jobControlStopChild()             { unsupportedJobControlTestHelper() }
 func jobControlTTYChild()              { unsupportedJobControlTestHelper() }
 func jobControlReportShellForeground() { unsupportedJobControlTestHelper() }
+
+func jobControlRunRedirectedShell() { unsupportedJobControlTestHelper() }

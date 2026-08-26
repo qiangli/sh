@@ -134,3 +134,22 @@ func TestFgIssue7OwnsTerminalReadsWaitsAndRestores(t *testing.T) {
 		t.Fatalf("invalid restored process group %q: %v", restored[1], err)
 	}
 }
+
+func TestFgUsesControllingTerminalWhenStdinIsRedirected(t *testing.T) {
+	primary, cmd, cancel := startJobControlPTY(t, "job_control_redirected_parent")
+	defer cancel()
+	defer primary.Close()
+	data, readErr := io.ReadAll(primary)
+	waitErr := cmd.Wait()
+	if readErr != nil && !errors.Is(readErr, io.EOF) &&
+		!strings.Contains(strings.ToLower(readErr.Error()), "input/output error") {
+		t.Fatal(readErr)
+	}
+	if waitErr != nil {
+		t.Fatalf("redirected job-control helper: %v; output=%q", waitErr, data)
+	}
+	out := normalizePTYOutput(string(data))
+	if !strings.Contains(out, "REDIRECTED_FG_STATUS=0\n") {
+		t.Fatalf("fg did not use /dev/tty with redirected stdin:\n%s", out)
+	}
+}

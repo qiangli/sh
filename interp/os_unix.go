@@ -383,8 +383,9 @@ func recordBackgroundProcessGroup(bg *bgProc, pid int, nonPrimary bool) {
 // Pipelines deliberately opt out: their in-process representation does not
 // yet have one kernel process group to hand to the terminal.
 type foregroundJobTTY struct {
-	fd        int
-	shellPgrp int
+	fd          int
+	restorePgrp int
+	closeFD     bool
 }
 
 func runnerForegroundJobTTY(r *Runner) (*foregroundJobTTY, error) {
@@ -392,19 +393,40 @@ func runnerForegroundJobTTY(r *Runner) (*foregroundJobTTY, error) {
 		return nil, fmt.Errorf("job control is not enabled")
 	}
 	stdin := r.origStdin
-	if stdin == nil || !term.IsTerminal(int(stdin.Fd())) {
-		return nil, fmt.Errorf("no controlling terminal")
+	fd := -1
+	closeFD := false
+	stdinIsTTY := stdin != nil && term.IsTerminal(int(stdin.Fd()))
+	if stdinIsTTY {
+		fd = int(stdin.Fd())
+	} else {
+		var err error
+		fd, err = unix.Open("/dev/tty", unix.O_RDWR|unix.O_CLOEXEC, 0)
+		if err != nil {
+			return nil, fmt.Errorf("no controlling terminal")
+		}
+		closeFD = true
 	}
-	fd := int(stdin.Fd())
 	shellPgrp := syscall.Getpgrp()
 	foreground, err := unix.IoctlGetInt(fd, unix.TIOCGPGRP)
 	if err != nil {
+		if closeFD {
+			_ = unix.Close(fd)
+		}
 		return nil, fmt.Errorf("get foreground process group: %w", err)
 	}
-	if foreground != shellPgrp {
+	if stdinIsTTY && foreground != shellPgrp {
 		return nil, fmt.Errorf("shell does not own the controlling terminal")
 	}
-	return &foregroundJobTTY{fd: fd, shellPgrp: shellPgrp}, nil
+	// A noninteractive shell may enable monitor mode while its stdin and
+	// output are redirected. Bash still uses /dev/tty for fg in that case.
+	// Preserve the process group which owned that terminal (typically the
+	// fixture harness) so the redirected shell does not strand the PTY on its
+	// own process group when it exits.
+	restorePgrp := shellPgrp
+	if !stdinIsTTY {
+		restorePgrp = foreground
+	}
+	return &foregroundJobTTY{fd: fd, restorePgrp: restorePgrp, closeFD: closeFD}, nil
 }
 
 func prepareForegroundJobCmd(ctx context.Context, r *Runner, cmd *exec.Cmd) *foregroundJobTTY {
@@ -439,11 +461,27 @@ func foregroundExistingJob(r *Runner, pgrp int) (*foregroundJobTTY, error) {
 }
 
 func (j *foregroundJobTTY) giveTo(pgrp int) error {
-	return j.setForeground(pgrp)
+	err := j.setForeground(pgrp)
+	if err != nil {
+		j.close()
+	}
+	return err
 }
 
 func (j *foregroundJobTTY) restore() error {
-	return j.setForeground(j.shellPgrp)
+	err := j.setForeground(j.restorePgrp)
+	if closeErr := j.close(); err == nil {
+		err = closeErr
+	}
+	return err
+}
+
+func (j *foregroundJobTTY) close() error {
+	if !j.closeFD {
+		return nil
+	}
+	j.closeFD = false
+	return unix.Close(j.fd)
 }
 
 func (j *foregroundJobTTY) setForeground(pgrp int) error {

@@ -300,6 +300,16 @@ printf 'FG_STATUS=%s\n' "$?"
 `)
 			jobControlReportShellForeground()
 			os.Exit(0)
+		case "job_control_redirected_parent":
+			jobControlRunRedirectedShell()
+			os.Exit(0)
+		case "job_control_redirected_shell":
+			runJobControlTestShell(`set -m
+GOSH_CMD=job_control_delay "$GOSH_PROG" &
+fg %%
+printf 'REDIRECTED_FG_STATUS=%s\n' "$?"
+`)
+			os.Exit(0)
 		case "foreground_job_shell_unmonitored":
 			// First complete an unmonitored asynchronous external job. Its
 			// temporary POSIX INT/QUIT ignores must not poison Go's signal

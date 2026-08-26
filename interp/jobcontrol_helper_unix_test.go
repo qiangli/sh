@@ -9,12 +9,26 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strings"
 	"syscall"
 
 	"golang.org/x/sys/unix"
 )
+
+func jobControlRunRedirectedShell() {
+	cmd := exec.Command(os.Getenv("GOSH_PROG"))
+	cmd.Env = append(os.Environ(), "GOSH_CMD=job_control_redirected_shell")
+	cmd.Stdin = nil
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Run(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
 
 func jobControlStopChild() {
 	fmt.Printf("STOP_ID pid=%d pgrp=%d\n", os.Getpid(), syscall.Getpgrp())
