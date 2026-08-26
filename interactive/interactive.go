@@ -121,6 +121,11 @@ type Options struct {
 	// Defaults to "exit".
 	EOFPrompt string
 
+	// ConfigureReadline, when non-nil, may adjust the line editor immediately
+	// before it is constructed. It lets CLI consumers select optional readline
+	// behavior without changing the defaults shared by other embedders.
+	ConfigureReadline func(*readline.Config)
+
 	// OnEOF, if non-nil, is consulted when stdin signals EOF (Ctrl-D
 	// on an empty line, or the input source running out). Returning
 	// true keeps the loop alive — the caller is responsible for any
@@ -201,6 +206,9 @@ func Run(ctx context.Context, opts Options) error {
 		Stdout:            stdout,
 		Stderr:            stderr,
 		VimMode:           opts.VimMode != nil && opts.VimMode(),
+	}
+	if opts.ConfigureReadline != nil {
+		opts.ConfigureReadline(cfg)
 	}
 	if !bindTTY(cfg, stdin) && opts.AssumeTTY {
 		// Virtual TTY: no kernel terminal behind the stream; the far end
