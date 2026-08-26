@@ -5856,7 +5856,11 @@ func (r *Runner) bgJobLine(jobs []*bgProc, bg *bgProc) string {
 // with long the PID is shown after the marker.
 func (r *Runner) formatJob(jobs []*bgProc, bg *bgProc, long, pidOnly bool) {
 	pid := bg.pid.Load()
-	if pgrp := bg.pgrp.Load(); pgrp > 0 {
+	// A one-command job has the command PID as both `$!` and the observable
+	// `jobs -p` identity in Bash. Our carrier remains the real process-group
+	// leader internally, but exposing it here makes those two shell interfaces
+	// disagree. Pipelines still publish their stable carrier group.
+	if pgrp := bg.pgrp.Load(); pgrp > 0 && len(bg.pidList()) > 2 {
 		pid = pgrp
 	}
 	if pidOnly {

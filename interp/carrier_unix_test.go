@@ -73,6 +73,24 @@ echo "JOBS_P=$j"
 	waitPidsGone(t, started)
 }
 
+func TestJobCarrierSingleCommandJobsPIDMatchesDollarBang(t *testing.T) {
+	c := newTestProcessGroupCarrier()
+	out := runCarrierScript(t, c, `
+set -m
+sleep 30 &
+p=$!
+j=$(jobs -p %+)
+echo "bang=$p jobs=$j"
+kill "$p"
+wait "$p" 2>/dev/null
+`)
+	fields := strings.Fields(strings.TrimSpace(out))
+	if len(fields) != 2 || strings.TrimPrefix(fields[0], "bang=") != strings.TrimPrefix(fields[1], "jobs=") {
+		t.Fatalf("$! and jobs -p disagree:\n%s", out)
+	}
+	waitPidsGone(t, c.startedPids())
+}
+
 // killBinPrelude locates the real kill binary, bypassing the builtin, so
 // scripts can exercise the "an external process signals the job" path.
 const killBinPrelude = `K=/bin/kill; [ -x "$K" ] || K=/usr/bin/kill` + "\n"
