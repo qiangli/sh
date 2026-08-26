@@ -4604,7 +4604,20 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 					close(bg.pidReady)
 				}
 			}
+			// launched marks the point where the background goroutine has
+			// been scheduled and begun running — the Go analogue of fork()
+			// returning in the parent. It closes unconditionally before any
+			// work that could block (redirection setup can open a FIFO and
+			// wait for a peer, e.g. `cat <fifo &`). waitForExternalLaunch
+			// below must rendezvous on this, not on bg.pidReady: pidReady
+			// only closes once the real exec has happened, which can be
+			// arbitrarily delayed by that same blocking redirection setup,
+			// and gating the parent on it can deadlock when the parent's own
+			// next statement is what would unblock the redirection (e.g. the
+			// writer side of that FIFO).
+			launched := make(chan struct{})
 			go func() {
+				close(launched)
 				defer r2.closeDirFile()
 				defer func() {
 					cancel()
@@ -4642,13 +4655,13 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 			// A real shell forks an asynchronous simple command before it
 			// resumes the parent list. The Go runner must preserve that launch
 			// boundary: otherwise the parent can run its next statements before
-			// the background goroutine has even called exec. pidReady is closed
-			// after the external process starts (or when a failed launch exits).
+			// the background goroutine has even started. Rendezvous on
+			// `launched`, not bg.pidReady — see its comment above for why.
 			// Keep this narrow to literal external calls under the CLI's job
 			// carrier; builtins, functions, and long-running jobs remain async.
 			if waitForExternalLaunch {
 				select {
-				case <-bg.pidReady:
+				case <-launched:
 					yieldExternalLaunch()
 				case <-ctx.Done():
 				}
