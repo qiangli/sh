@@ -126,6 +126,12 @@ type Options struct {
 	// behavior without changing the defaults shared by other embedders.
 	ConfigureReadline func(*readline.Config)
 
+	// PlainTerminal uses the existing cooked-terminal loop instead of entering
+	// readline raw mode. Terminal echo supplies the input transcript, while the
+	// shell writes prompts without cursor-control sequences. The default keeps
+	// readline editing enabled.
+	PlainTerminal bool
+
 	// OnEOF, if non-nil, is consulted when stdin signals EOF (Ctrl-D
 	// on an empty line, or the input source running out). Returning
 	// true keeps the loop alive — the caller is responsible for any
@@ -194,6 +200,9 @@ func Run(ctx context.Context, opts Options) error {
 		_, _ = io.WriteString(stdout, opts.Greeting)
 	}
 	r.EnableInteractiveHistory()
+	if opts.PlainTerminal {
+		return runFallback(ctx, r, stdin, stdout, stderr, lang, opts.PosixMode, ps1, ps2, onRunError, opts.PreCommand)
+	}
 
 	cfg := &readline.Config{
 		Prompt:            ps1(),

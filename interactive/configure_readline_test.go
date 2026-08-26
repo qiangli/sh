@@ -34,3 +34,20 @@ func TestConfigureReadlineRunsBeforeConstruction(t *testing.T) {
 	qt.Assert(t, qt.IsNil(err))
 	qt.Check(t, qt.IsTrue(called))
 }
+
+func TestPlainTerminalSkipsReadlineConfiguration(t *testing.T) {
+	r, err := interp.New(interp.Interactive(true), interp.StdIO(strings.NewReader(""), io.Discard, io.Discard))
+	qt.Assert(t, qt.IsNil(err))
+
+	err = Run(context.Background(), Options{
+		Runner:        r,
+		Stdin:         strings.NewReader(""),
+		Stdout:        io.Discard,
+		Stderr:        io.Discard,
+		PlainTerminal: true,
+		ConfigureReadline: func(*readline.Config) {
+			t.Fatal("plain terminal unexpectedly constructed readline")
+		},
+	})
+	qt.Assert(t, qt.IsNil(err))
+}
