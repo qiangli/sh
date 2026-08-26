@@ -704,21 +704,21 @@ func TestKillTimeout(t *testing.T) {
 	}{
 		// killed immediately
 		{
-			`sh -c "trap 'echo trapped; exit 0' INT; echo ready; for i in \$(seq 1 100); do sleep 0.01; done"`,
+			`sh -c "trap 'echo trapped; exit 0' INT; echo ready; i=0; while [ \$i -lt 100 ]; do sleep 0.01; i=\$((i+1)); done"`,
 			"",
 			-1,
 			true,
 		},
 		// interrupted first, and stops itself in time
 		{
-			`sh -c "trap 'echo trapped; exit 0' INT; echo ready; for i in \$(seq 1 100); do sleep 0.01; done"`,
+			`sh -c "trap 'echo trapped; exit 0' INT; echo ready; i=0; while [ \$i -lt 100 ]; do sleep 0.01; i=\$((i+1)); done"`,
 			"trapped\n",
 			time.Second,
 			false,
 		},
 		// interrupted first, but does not stop itself in time
 		{
-			`sh -c "trap 'echo trapped; for i in \$(seq 1 100); do sleep 0.01; done' INT; echo ready; for i in \$(seq 1 100); do sleep 0.01; done"`,
+			`sh -c "trap 'echo trapped; i=0; while [ \$i -lt 100 ]; do sleep 0.01; i=\$((i+1)); done' INT; echo ready; i=0; while [ \$i -lt 100 ]; do sleep 0.01; i=\$((i+1)); done"`,
 			"trapped\n",
 			20 * time.Millisecond,
 			true,

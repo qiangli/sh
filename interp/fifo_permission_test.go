@@ -85,8 +85,9 @@ func TestDefaultOpenHandlerPreservesLongRelativePath(t *testing.T) {
 	fds := []int{rootFD}
 	var components []string
 	var relative string
-	for len(relative) < unix.PathMax-len(root)-32 {
-		component := strings.Repeat("d", 200)
+	for len(filepath.Join(root, relative, "result")) < unix.PathMax {
+		need := unix.PathMax - len(filepath.Join(root, relative, "result"))
+		component := strings.Repeat("d", min(200, need))
 		if err := unix.Mkdirat(fds[len(fds)-1], component, 0o700); err != nil {
 			t.Fatal(err)
 		}
