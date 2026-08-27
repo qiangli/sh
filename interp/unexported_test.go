@@ -41,11 +41,48 @@ func TestElapsedString(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.in.String(), func(t *testing.T) {
-			got := elapsedString(tc.in, tc.posix)
+			got := elapsedString(tc.in, tc.posix, ".")
 			if got != tc.want {
 				t.Fatalf("wanted %q, got %q", tc.want, got)
 			}
 		})
+	}
+}
+
+func TestCarriedLocaleDecimalPoint(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		locale string
+		want   string
+		ok     bool
+	}{
+		{"C", ".", true},
+		{"POSIX", ".", true},
+		{"de_DE.iso88591", ",", true},
+		{"de_DE.ISO8859-1", ",", true},
+		{"de_DE.ISO-8859-1", ",", true},
+		{"de_CH.ISO-8859-1", "", false},
+		{"de_DE.UTF-8", "", false},
+		{"fr_FR.ISO-8859-1", "", false},
+		{"de_DE", "", false},
+		{"", "", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.locale, func(t *testing.T) {
+			got, ok := carriedLocaleDecimalPoint(tc.locale)
+			if got != tc.want || ok != tc.ok {
+				t.Fatalf("carriedLocaleDecimalPoint(%q) = %q, %v; want %q, %v",
+					tc.locale, got, ok, tc.want, tc.ok)
+			}
+		})
+	}
+}
+
+func TestWithDecimalPointString(t *testing.T) {
+	t.Parallel()
+	if got, want := withDecimalPoint("1.25", "٫"), "1٫25"; got != want {
+		t.Fatalf("withDecimalPoint = %q, want %q", got, want)
 	}
 }
 

@@ -4576,6 +4576,12 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 			carrierPipelineSignalOwner: isPipelineStmt(&st2),
 		}
 		r2.asyncProc = bg
+		// The job runner's signal dispositions represent the job even
+		// without a carrier: the kill builtin consults them to honor the
+		// SIG_IGN a fork-based shell's async children inherit (POSIX 2.11).
+		// attachCarrier stores the same runner; a background pipeline later
+		// replaces it with its last component via publishBgSignalRunner.
+		bg.carrierSignalRunner.Store(r2)
 		bgCtx, cancel := context.WithCancel(ctx)
 		bg.cancel = cancel
 		// With a JobCarrier configured, give the job a real kernel PID
@@ -7843,21 +7849,22 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		sys += childSys
 		// Bash writes the `time` report to the current standard error
 		// (fd 2), so a preceding `exec 2>...` redirect affects it.
+		decpoint := r.localeDecimalPoint()
 		if cm.PosixFormat {
-			r.errf("real %s\n", elapsedString(real, true))
-			r.errf("user %s\n", elapsedString(user, true))
-			r.errf("sys %s\n", elapsedString(sys, true))
+			r.errf("real %s\n", elapsedString(real, true, decpoint))
+			r.errf("user %s\n", elapsedString(user, true, decpoint))
+			r.errf("sys %s\n", elapsedString(sys, true, decpoint))
 		} else if tf := r.lookupVar("TIMEFORMAT"); tf.Set {
 			format := tf.String()
-			output := formatTIMEFORMAT(format, real, user, sys)
+			output := formatTIMEFORMAT(format, real, user, sys, decpoint)
 			if output != "" {
 				r.errf("%s\n", output)
 			}
 		} else {
 			r.errf("\nreal\t%s\nuser\t%s\nsys\t%s\n",
-				elapsedString(real, false),
-				elapsedString(user, false),
-				elapsedString(sys, false))
+				elapsedString(real, false, decpoint),
+				elapsedString(user, false, decpoint),
+				elapsedString(sys, false, decpoint))
 		}
 	case *syntax.CoprocClause:
 		// Coproc runs a command in the background with stdin/stdout connected via pipes.
@@ -8688,16 +8695,16 @@ func nonCLocale(locale string) bool {
 // (mins+secs) prefix and a 0-3 precision digit; `%P` for %CPU; `%%`
 // for literal `%`; backslash escapes `\n` `\t` `\\` `\?` mapped to
 // their C equivalents (with unknown sequences emitted verbatim).
-func formatTIMEFORMAT(format string, real, user, sys time.Duration) string {
+func formatTIMEFORMAT(format string, real, user, sys time.Duration, decpoint string) string {
 	var sb strings.Builder
 	emit := func(d time.Duration, longForm bool, prec int) {
 		if longForm {
 			min := int(d.Minutes())
 			sec := math.Mod(d.Seconds(), 60.0)
-			fmt.Fprintf(&sb, "%dm%.*fs", min, prec, sec)
+			sb.WriteString(withDecimalPoint(fmt.Sprintf("%dm%.*fs", min, prec, sec), decpoint))
 			return
 		}
-		fmt.Fprintf(&sb, "%.*f", prec, d.Seconds())
+		sb.WriteString(withDecimalPoint(fmt.Sprintf("%.*f", prec, d.Seconds()), decpoint))
 	}
 	for i := 0; i < len(format); i++ {
 		switch format[i] {
@@ -8785,13 +8792,51 @@ func posixTimesString(d time.Duration) string {
 	return fmt.Sprintf("%dm%.2fs", min, sec)
 }
 
-func elapsedString(d time.Duration, posix bool) string {
+func elapsedString(d time.Duration, posix bool, decpoint string) string {
 	if posix {
-		return fmt.Sprintf("%.2f", d.Seconds())
+		return withDecimalPoint(fmt.Sprintf("%.2f", d.Seconds()), decpoint)
 	}
 	min := int(d.Minutes())
 	sec := math.Mod(d.Seconds(), 60.0)
-	return fmt.Sprintf("%dm%.3fs", min, sec)
+	return withDecimalPoint(fmt.Sprintf("%dm%.3fs", min, sec), decpoint)
+}
+
+// withDecimalPoint swaps the Go-formatted "." radix for the locale's decimal
+// point. Timing reports are the one place POSIX requires the shell itself to
+// honor LC_NUMERIC ("the radix character of the current locale"); bash prints
+// them through locale_decpoint (timeval.c mkfmt).
+func withDecimalPoint(s, decpoint string) string {
+	if decpoint == "." {
+		return s
+	}
+	return strings.ReplaceAll(s, ".", decpoint)
+}
+
+// carriedLocaleDecimalPoint resolves only locale definitions whose numeric
+// data this pure-Go runner carries itself. It deliberately does not infer a
+// radix from a language or territory: for example, de_CH is not de_DE, and
+// German locales do not all share the same radix. Keep this bounded until the
+// runner carries more complete locale data.
+func carriedLocaleDecimalPoint(locale string) (string, bool) {
+	switch strings.ToLower(locale) {
+	case "c", "posix":
+		return ".", true
+	case "de_de.iso-8859-1", "de_de.iso8859-1", "de_de.iso88591":
+		return ",", true
+	default:
+		return "", false
+	}
+}
+
+// localeDecimalPoint resolves the radix character for the shell's timing
+// reports from the carried locale data, using the POSIX LC_NUMERIC
+// precedence implemented by localeCategory. Unsupported or unset locales use
+// Go's C-locale formatting rather than guessing.
+func (r *Runner) localeDecimalPoint() string {
+	if point, ok := carriedLocaleDecimalPoint(r.localeCategory("LC_NUMERIC")); ok {
+		return point
+	}
+	return "."
 }
 
 func (r *Runner) stmts(ctx context.Context, stmts []*syntax.Stmt) {

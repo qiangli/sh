@@ -565,10 +565,11 @@ func scanUnsetOperandSources(line string) []unsetOperandSource {
 // the new directory (`cd -`, CDPATH): bash still changes the directory and
 // reports the write error with a failure status.
 var writeErrChecked = map[string]bool{
-	"cd":     true,
-	"echo":   true,
-	"printf": true,
-	"pwd":    true,
+	"cd":      true,
+	"command": true, // bash's command.def reports -v/-V output write failures via sh_chkwrite
+	"echo":    true,
+	"printf":  true,
+	"pwd":     true,
 }
 
 // pipeWriteErrChecked is the POSIX special/listing builtin subset whose
@@ -1733,7 +1734,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					if n > 128 {
 						n -= 128
 					}
-					if _, name, ok := signalByNumber(n); ok && name != "EXIT" {
+					// signalByNumber maps 0 to the pseudo-signal EXIT,
+					// which bash 5.3 does print for `kill -l 0` (a normal
+					// exit status carries no terminating signal). 128
+					// itself is not adjusted and stays invalid, as in bash.
+					if _, name, ok := signalByNumber(n); ok {
 						r.outf("%s\n", name)
 						continue
 					}
@@ -1777,6 +1782,12 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					r.killSyntheticBg(bg, sig)
 					continue
 				}
+				if asyncJobInheritedIgnore(bg, sig) {
+					// The exec'd child of an async list would hold the
+					// inherited SIG_IGN in a fork-based shell; the kernel
+					// would discard this delivery. Successful no-op.
+					continue
+				}
 				if err := sendSignal(rp, sig); err != nil {
 					exit.code = 1
 					r.errf(r.bashErrPrefix(pos)+"kill: (%d) - %v\n", int(bg.pid.Load()), err)
@@ -1812,6 +1823,12 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				rp := jobSignalPid(bg)
 				if rp == 0 {
 					r.killSyntheticBg(bg, sig)
+					continue
+				}
+				if asyncJobInheritedIgnore(bg, sig) {
+					// The exec'd child of an async list would hold the
+					// inherited SIG_IGN in a fork-based shell; the kernel
+					// would discard this delivery. Successful no-op.
 					continue
 				}
 				if err := sendSignal(rp, sig); err != nil {
@@ -1937,6 +1954,12 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				rp := jobSignalPid(bg)
 				if rp == 0 {
 					r.killSyntheticBg(bg, sig)
+					continue
+				}
+				if asyncJobInheritedIgnore(bg, sig) {
+					// The exec'd child of an async list would hold the
+					// inherited SIG_IGN in a fork-based shell; the kernel
+					// would discard this delivery. Successful no-op.
 					continue
 				}
 				if err := sendSignal(rp, sig); err != nil {
@@ -5951,8 +5974,37 @@ func (r *Runner) removeJob(target *bgProc) {
 	}
 }
 
+// asyncJobInheritedIgnore reports whether sig would have been inherited as
+// SIG_IGN by the processes of bg's asynchronous list — POSIX 2.11's implicit
+// SIGINT/SIGQUIT ignore when job control is off. A fork-based shell sets
+// SIG_IGN in the child before exec, so the kernel discards a later kill of
+// those signals; the pure-Go runner cannot pre-set a child's disposition for
+// every delivery path, so its own kill builtin must treat the delivery as a
+// successful no-op instead. A trap inside the async list that replaces or
+// resets the disposition clears asyncDefaultIgnored (see setTrapCallback /
+// removeTrapCallback), restoring raw delivery.
+func asyncJobInheritedIgnore(bg *bgProc, sig killSig) bool {
+	if bg == nil || bg.jobControl {
+		return false
+	}
+	name, ok := signalName(sig)
+	if !ok || (name != "INT" && name != "QUIT") {
+		return false
+	}
+	job := bg.carrierSignalRunner.Load()
+	if job == nil {
+		return false
+	}
+	job.sigMu.Lock()
+	defer job.sigMu.Unlock()
+	return job.asyncDefaultIgnored[name]
+}
+
 func (r *Runner) killSyntheticBg(bg *bgProc, sig killSig) {
 	if bg == nil || sigIsZero(sig) {
+		return
+	}
+	if asyncJobInheritedIgnore(bg, sig) {
 		return
 	}
 	if signalStopsJob(sig) {
