@@ -84,8 +84,9 @@ func TestKillListZeroPrintsExit(t *testing.T) {
 }
 
 // POSIX.upe/time assertions 814/816/819: the `time -p` report must use the
-// radix character of the current locale (LC_ALL > LC_NUMERIC > LANG), so
-// de_DE prints "0,00" where POSIX prints "0.00".
+// radix character of the current locale (LC_ALL > LC_NUMERIC > LANG). The
+// runner carries the Profile D de_DE ISO-8859-1 definition; it must not infer
+// the same radix for other German locales such as de_CH.
 func TestTimePosixLocaleRadix(t *testing.T) {
 	t.Parallel()
 	commaRe := regexp.MustCompile(`(?m)^real \d+,\d\d$`)
@@ -107,6 +108,19 @@ func TestTimePosixLocaleRadix(t *testing.T) {
 		interp.Env(expand.ListEnviron("LC_NUMERIC=de_DE.iso88591")))
 	if status != 0 || !commaRe.MatchString(stderr) {
 		t.Fatalf("LC_NUMERIC time -p stderr = %q status %d, want comma radix", stderr, status)
+	}
+
+	for _, locale := range []string{
+		"de_CH.ISO-8859-1",
+		"de_DE.UTF-8",
+		"fr_FR.ISO-8859-1",
+	} {
+		_, stderr, status = runProfileDScript(t, "time -p true",
+			interp.Env(expand.ListEnviron("LC_ALL="+locale)))
+		if status != 0 || !dotRe.MatchString(stderr) {
+			t.Fatalf("unsupported locale %s time -p stderr = %q status %d, want dot fallback",
+				locale, stderr, status)
+		}
 	}
 }
 

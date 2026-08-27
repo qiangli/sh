@@ -8695,7 +8695,7 @@ func nonCLocale(locale string) bool {
 // (mins+secs) prefix and a 0-3 precision digit; `%P` for %CPU; `%%`
 // for literal `%`; backslash escapes `\n` `\t` `\\` `\?` mapped to
 // their C equivalents (with unknown sequences emitted verbatim).
-func formatTIMEFORMAT(format string, real, user, sys time.Duration, decpoint byte) string {
+func formatTIMEFORMAT(format string, real, user, sys time.Duration, decpoint string) string {
 	var sb strings.Builder
 	emit := func(d time.Duration, longForm bool, prec int) {
 		if longForm {
@@ -8792,7 +8792,7 @@ func posixTimesString(d time.Duration) string {
 	return fmt.Sprintf("%dm%.2fs", min, sec)
 }
 
-func elapsedString(d time.Duration, posix bool, decpoint byte) string {
+func elapsedString(d time.Duration, posix bool, decpoint string) string {
 	if posix {
 		return withDecimalPoint(fmt.Sprintf("%.2f", d.Seconds()), decpoint)
 	}
@@ -8805,48 +8805,38 @@ func elapsedString(d time.Duration, posix bool, decpoint byte) string {
 // point. Timing reports are the one place POSIX requires the shell itself to
 // honor LC_NUMERIC ("the radix character of the current locale"); bash prints
 // them through locale_decpoint (timeval.c mkfmt).
-func withDecimalPoint(s string, decpoint byte) string {
-	if decpoint == '.' {
+func withDecimalPoint(s, decpoint string) string {
+	if decpoint == "." {
 		return s
 	}
-	return strings.ReplaceAll(s, ".", string(decpoint))
+	return strings.ReplaceAll(s, ".", decpoint)
 }
 
-// commaDecimalLanguages lists the language codes whose glibc locales use ","
-// as LC_NUMERIC decimal_point. A pure-Go runner cannot query libc's locale
-// database, so the radix is derived from the locale name; languages outside
-// the table keep ".". This covers the certification suite's non-English
-// locale (de_DE) and the common European comma-radix locales.
-var commaDecimalLanguages = map[string]bool{
-	"az": true, "be": true, "bg": true, "bs": true, "ca": true, "cs": true,
-	"da": true, "de": true, "el": true, "es": true, "et": true, "eu": true,
-	"fi": true, "fr": true, "gl": true, "hr": true, "hu": true, "hy": true,
-	"id": true, "is": true, "it": true, "ka": true, "kk": true, "lt": true,
-	"lv": true, "mk": true, "nb": true, "nl": true, "nn": true, "no": true,
-	"pl": true, "pt": true, "ro": true, "ru": true, "sk": true, "sl": true,
-	"sq": true, "sr": true, "sv": true, "tr": true, "uk": true, "uz": true,
-	"vi": true,
+// carriedLocaleDecimalPoint resolves only locale definitions whose numeric
+// data this pure-Go runner carries itself. It deliberately does not infer a
+// radix from a language or territory: for example, de_CH is not de_DE, and
+// German locales do not all share the same radix. Keep this bounded until the
+// runner carries more complete locale data.
+func carriedLocaleDecimalPoint(locale string) (string, bool) {
+	switch strings.ToLower(locale) {
+	case "c", "posix":
+		return ".", true
+	case "de_de.iso-8859-1", "de_de.iso8859-1", "de_de.iso88591":
+		return ",", true
+	default:
+		return "", false
+	}
 }
 
 // localeDecimalPoint resolves the radix character for the shell's timing
-// reports from the environment, using the POSIX LC_NUMERIC precedence:
-// LC_ALL, then LC_NUMERIC, then LANG. "C"/"POSIX" and unknown locales
-// resolve to ".".
-func (r *Runner) localeDecimalPoint() byte {
-	for _, name := range [...]string{"LC_ALL", "LC_NUMERIC", "LANG"} {
-		locale := r.envGet(name)
-		if locale == "" {
-			continue
-		}
-		lang, _, _ := strings.Cut(locale, ".")
-		lang, _, _ = strings.Cut(lang, "@")
-		lang, _, _ = strings.Cut(lang, "_")
-		if commaDecimalLanguages[strings.ToLower(lang)] {
-			return ','
-		}
-		return '.'
+// reports from the carried locale data, using the POSIX LC_NUMERIC
+// precedence implemented by localeCategory. Unsupported or unset locales use
+// Go's C-locale formatting rather than guessing.
+func (r *Runner) localeDecimalPoint() string {
+	if point, ok := carriedLocaleDecimalPoint(r.localeCategory("LC_NUMERIC")); ok {
+		return point
 	}
-	return '.'
+	return "."
 }
 
 func (r *Runner) stmts(ctx context.Context, stmts []*syntax.Stmt) {
