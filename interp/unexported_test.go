@@ -41,7 +41,7 @@ func TestElapsedString(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.in.String(), func(t *testing.T) {
-			got := elapsedString(tc.in, tc.posix)
+			got := elapsedString(tc.in, tc.posix, '.')
 			if got != tc.want {
 				t.Fatalf("wanted %q, got %q", tc.want, got)
 			}
