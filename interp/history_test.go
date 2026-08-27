@@ -433,6 +433,19 @@ fc -nl -1 -1
 	}
 }
 
+func TestFcIssue7ReexecutionReturnsCommandStatus(t *testing.T) {
+	out := runHistScript(t, `HISTFILE=/dev/null
+set -o history
+set -o posix
+false
+fc -s false
+printf 'status:%s\n' "$?"
+`)
+	if want := "false\nstatus:1\n"; out != want {
+		t.Fatalf("fc -s status propagation = %q, want %q", out, want)
+	}
+}
+
 func TestHistoryExpansionDesignators(t *testing.T) {
 	out := runHistScript(t, `HISTFILE=/dev/null
 set -o history
