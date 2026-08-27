@@ -582,9 +582,44 @@ func TestCommandIssue7Interface(t *testing.T) {
 		if runtime.GOOS == "windows" {
 			t.Skip("the standard utilities path is a POSIX notion")
 		}
-		got := runIssue7Command(t, "command -p -v true", false)
+		// -p must ignore the caller's $PATH entirely and consult
+		// standardUtilsPath instead; /nonexistent proves that.
+		got := runIssue7Command(t, "command -p -v true", false, "PATH=/nonexistent")
 		if got.stdout != "/bin/true\n" && got.stdout != "/usr/bin/true\n" {
 			t.Fatalf("command -p -v: got %#v", got)
+		}
+		if got.stderr != "" || got.status != 0 {
+			t.Fatalf("command -p -v: got %#v", got)
+		}
+	})
+
+	// Issue 7: command -p's standard utilities path is Bashy product
+	// contract, not just an upstream POSIX default. Bashy owns a stable
+	// /opt/bashy/bin prefix that must resolve before any host-provided
+	// utility of the same name, so embedders get deterministic behavior
+	// regardless of what the host distro ships in /bin, /usr/bin, /sbin,
+	// or /usr/sbin.
+	t.Run("dash_p_resolves_bashy_prefix_before_host", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("the standard utilities path is a POSIX notion")
+		}
+		bashyDir := t.TempDir()
+		fixture := filepath.Join(bashyDir, "true")
+		if err := os.WriteFile(fixture, nil, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		orig := standardUtilsPath
+		// Keep the real host segments after the fixture prefix: /bin/true
+		// (or /usr/bin/true) genuinely exists on the test host, so a
+		// resolution to the fixture path only happens if the Bashy
+		// prefix truly takes precedence, never falling through to host.
+		standardUtilsPath = bashyDir + ":/bin:/usr/bin:/sbin:/usr/sbin"
+		t.Cleanup(func() { standardUtilsPath = orig })
+
+		got := runIssue7Command(t, "command -p -v true", false, "PATH=/nonexistent")
+		want := fixture + "\n"
+		if got.stdout != want {
+			t.Fatalf("command -p -v: got %#v, want stdout %q (Bashy prefix fixture, not a host /bin or /usr/bin copy)", got, want)
 		}
 		if got.stderr != "" || got.status != 0 {
 			t.Fatalf("command -p -v: got %#v", got)

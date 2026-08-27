@@ -41,8 +41,14 @@ type execReplacingCtxKey struct{}
 
 // standardUtilsPath is the default search path used by `command -p` to
 // find the POSIX standard utilities, mirroring bash's STANDARD_UTILS_PATH
-// (config-top.h) when confstr(_CS_PATH) is unavailable.
-const standardUtilsPath = "/bin:/usr/bin:/sbin:/usr/sbin"
+// (config-top.h) when confstr(_CS_PATH) is unavailable. Bashy owns the
+// leading /opt/bashy/bin segment: its bundled coreutils resolve before any
+// host-provided binaries of the same name, giving `command -p` a stable,
+// platform-portable result regardless of what the host distro ships in
+// /bin, /usr/bin, /sbin, or /usr/sbin. It is a var rather than a const
+// solely so tests can point it at a fixture directory instead of the real
+// path.
+var standardUtilsPath = "/opt/bashy/bin:/bin:/usr/bin:/sbin:/usr/sbin"
 
 type handlerKind int
 
