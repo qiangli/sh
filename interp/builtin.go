@@ -5852,6 +5852,13 @@ func (bg *bgProc) pidList() []int64 {
 }
 
 func (bg *bgProc) matchesPid(pid int64) bool {
+	// Zero and negative kill operands select a process group; they are not
+	// process identities. A carrier-free asynchronous job has bg.pid == 0,
+	// so accepting zero here makes `kill 0` target that one synthetic job
+	// instead of the caller's process group.
+	if pid <= 0 {
+		return false
+	}
 	if bg.pid.Load() == pid {
 		return true
 	}

@@ -156,6 +156,55 @@ func TestKillSignalSpecThenNegativePidTarget(t *testing.T) {
 	qt.Assert(t, qt.IsTrue(strings.Contains(out, "dead")), qt.Commentf("out: %q", out))
 }
 
+func TestKillIssue7SignalSpellingsAndExitStatus(t *testing.T) {
+	out, err := runScript(t, `
+printf 'status=%s\n' "$(kill -l 131)"
+printf 'mixed=%s\n' "$(kill -l urG)"
+printf 'upper=%s\n' "$(kill -l URG)"
+`)
+	qt.Assert(t, qt.IsNil(err), qt.Commentf("out: %q", out))
+	lines := strings.Fields(out)
+	qt.Assert(t, qt.HasLen(lines, 3), qt.Commentf("out: %q", out))
+	qt.Assert(t, qt.Equals(lines[0], "status=QUIT"), qt.Commentf("out: %q", out))
+	qt.Assert(t, qt.Equals(lines[1], strings.Replace(lines[2], "upper=", "mixed=", 1)), qt.Commentf("out: %q", out))
+}
+
+func TestKillZeroTargetsCallingProcessGroup(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("process-group signalling behavior is unix-specific")
+	}
+	dir := t.TempDir()
+	parentMarker := filepath.Join(dir, "parent")
+	childMarker := filepath.Join(dir, "child")
+	readyMarker := filepath.Join(dir, "ready")
+	script := `
+trap 'printf x > "$KILL_PARENT_MARKER"; exit 0' TERM
+"$GOSH_PROG" 'trap '\''printf x > "$KILL_CHILD_MARKER"; exit 0'\'' TERM
+printf x > "$KILL_READY_MARKER"
+while :; do /bin/sleep 30; done' &
+while [ ! -f "$KILL_READY_MARKER" ]; do /bin/sleep 0.05; done
+kill 0
+/bin/sleep 3
+exit 99
+`
+	cmd := exec.Command(os.Args[0], script)
+	cmd.Env = append(os.Environ(),
+		"GOSH_PROG="+os.Args[0],
+		"KILL_PARENT_MARKER="+parentMarker,
+		"KILL_CHILD_MARKER="+childMarker,
+		"KILL_READY_MARKER="+readyMarker,
+	)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("kill 0 process-group helper: %v; output=%q", err, out)
+	}
+	for _, marker := range []string{parentMarker, childMarker} {
+		if _, err := os.Stat(marker); err != nil {
+			t.Fatalf("process-group member did not catch SIGTERM (%s): %v", filepath.Base(marker), err)
+		}
+	}
+}
+
 func TestKillCustomSignal(t *testing.T) {
 	sleepBin, err := exec.LookPath("sleep")
 	if err != nil {
