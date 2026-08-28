@@ -2842,6 +2842,8 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		oldSourceSetParams := r.sourceSetParams
 		oldInSource := r.inSource
 		oldFilename := r.filename
+		oldArgv0 := r.argv0
+		callerArgv0 := r.shellArgv0()
 		oldStdinSourceBaseOffset := r.stdinSourceBaseOffset
 
 		// If we run "source file args...", set said args as parameters.
@@ -2855,6 +2857,10 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		// parameters.
 		r.sourceSetParams = false
 		r.inSource = true // know that we're inside a sourced script.
+		// A sourced file executes in the current shell environment, so it
+		// must retain the caller's $0. Keep filename separate: it identifies
+		// the sourced file for diagnostics and BASH_SOURCE.
+		r.argv0 = callerArgv0
 		r.filename = path
 		if r.stdinSourceActive && r.curStmtEnd.IsValid() {
 			r.stdinSourceBaseOffset = r.stdinSourceStartOffset()
@@ -2890,6 +2896,12 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			r.ecfg.OverrideLineno = prevLineno
 		}
 		r.filename = oldFilename
+		// BASH_ARGV0 assignments made by the sourced file persist. Otherwise
+		// restore the unset state so later direct Run calls still derive $0
+		// from their own script filename.
+		if r.argv0 == callerArgv0 {
+			r.argv0 = oldArgv0
+		}
 		r.stdinSourceBaseOffset = oldStdinSourceBaseOffset
 
 		// If we modified the parameters and the sourced file didn't

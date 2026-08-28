@@ -8746,6 +8746,46 @@ func TestRunnerFilename(t *testing.T) {
 	}
 }
 
+func TestRunnerSourcePreservesArgv0(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "dual-use-guard")
+	src := "case \"$0\" in */dual-use-guard) printf direct;; *) printf 'sourced:%s' \"$0\";; esac\n"
+	if err := os.WriteFile(path, []byte(src), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	run := func(t *testing.T, name, input, filename, want string, opts ...interp.RunnerOption) {
+		t.Helper()
+		file, err := syntax.NewParser().Parse(strings.NewReader(input), filename)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var b bytes.Buffer
+		r, err := interp.New(append([]interp.RunnerOption{
+			interp.Dir(dir), interp.StdIO(nil, &b, &b),
+		}, opts...)...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), runnerRunTimeout)
+		defer cancel()
+		if err := r.Run(ctx, file); err != nil {
+			t.Fatal(err)
+		}
+		if got := b.String(); got != want {
+			t.Fatalf("%s: want %q, got %q", name, want, got)
+		}
+	}
+
+	// Direct script execution still derives $0 from its script path.
+	run(t, "direct", src, path, "direct")
+	// Command-string and interactive shells retain their invocation name
+	// when they source a dual-use file.
+	run(t, "command-string", ". ./dual-use-guard", "/bin/zsh", "sourced:/bin/zsh")
+	run(t, "interactive", ". ./dual-use-guard", "", "sourced:/bin/zsh", interp.WithArgv0("/bin/zsh"))
+}
+
 func TestRunnerPosixStdinArgv0(t *testing.T) {
 	t.Parallel()
 
