@@ -10465,7 +10465,13 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 	}
 	if IsBuiltin(name) && !r.disabledBuiltins[name] {
 		// Strict POSIX: non-special, non-intrinsic builtins must be found in PATH.
-		if r.strictPosix && !isPosixSpecialBuiltin(name) && !isStrictPosixIntrinsic(name) {
+		// `builtin` is Bash's explicit in-process dispatcher, not a utility
+		// resolved through PATH. Bash keeps it available in POSIX mode even
+		// when PATH is unset; its operand is then dispatched directly as a
+		// builtin as well. Keep this Bash extension distinct from the POSIX
+		// intrinsic-utility classification above while preserving that lookup
+		// contract.
+		if r.strictPosix && name != "builtin" && !isPosixSpecialBuiltin(name) && !isStrictPosixIntrinsic(name) {
 			if _, err := LookPathDir(r.Dir, r.writeEnv, name); err != nil {
 				releaseBgPid(ctx)
 				r.errf("%s%s: command not found\n", r.bashErrPrefix(pos), name)

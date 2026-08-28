@@ -6,6 +6,8 @@ package interp
 import (
 	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -73,7 +75,7 @@ func TestStrictPosixIntrinsicClassification(t *testing.T) {
 			t.Errorf("%q classified both intrinsic and special", name)
 		}
 	}
-	for _, name := range []string{"echo", "printf", "pwd", "test", "true", "false", ":", "break", "eval", "exec", "exit", "export", "readonly", "return", "set", "shift", "times", "trap", "unset"} {
+	for _, name := range []string{"builtin", "echo", "printf", "pwd", "test", "true", "false", ":", "break", "eval", "exec", "exit", "export", "readonly", "return", "set", "shift", "times", "trap", "unset"} {
 		if isStrictPosixIntrinsic(name) {
 			t.Errorf("isStrictPosixIntrinsic(%q) = true, want false", name)
 		}
@@ -146,6 +148,43 @@ func TestStrictPosixIntrinsicsRunWithoutPath(t *testing.T) {
 				t.Fatalf("intrinsic %s gated behind PATH: code=%d stderr=%q", name, code, stderr)
 			}
 		})
+	}
+}
+
+// TestStrictPosixBuiltinDispatcherRunsWithoutPath covers Bash's explicit
+// builtin dispatcher. It is a Bash extension rather than a POSIX intrinsic,
+// but Bash keeps it in-process and PATH-independent in POSIX mode. This also
+// matters for executable facades for shell builtins, whose body is equivalent
+// to `builtin cd ...`.
+func TestStrictPosixBuiltinDispatcherRunsWithoutPath(t *testing.T) {
+	t.Parallel()
+	home := t.TempDir()
+	target := filepath.Join(home, "target")
+	if err := os.Mkdir(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	file, err := syntax.NewParser().Parse(strings.NewReader(
+		`unset PATH; builtin cd "$HOME/target"; builtin printf '%s\n' "$PWD"`), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	r, err := New(
+		WithStrictPosix(true),
+		StdIO(nil, &stdout, &stderr),
+		Dir(home),
+		Env(expand.ListEnviron("HOME="+home)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Run(context.Background(), file); err != nil {
+		t.Fatalf("builtin dispatcher with no PATH: %v; stdout=%q stderr=%q", err, stdout.String(), stderr.String())
+	}
+	if r.Dir != target || stderr.String() != "" || stdout.String() != target+"\n" {
+		t.Fatalf("builtin dispatcher with no PATH: dir=%q stdout=%q stderr=%q; want %q, %q, empty",
+			r.Dir, stdout.String(), stderr.String(), target, target+"\n")
 	}
 }
 
