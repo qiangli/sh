@@ -529,6 +529,9 @@ func (r *Runner) notifyChildReaped() {
 // is registered for a real signal. Pseudo-signals (EXIT/ERR/DEBUG/RETURN) are
 // not OS signals and are ignored here.
 func (r *Runner) enableSignalTrap(name string) {
+	if r.isStartupIgnored(name) {
+		return
+	}
 	// SIGCHLD is driven from child reaps (notifyChildReaped), not from OS
 	// signal delivery, so it never needs an OS handler. Installing one would
 	// also risk perturbing Go's own child reaping.
@@ -601,6 +604,9 @@ func (r *Runner) enableSignalTrap(name string) {
 // shell (trap.tests/trap1.sub). Pseudo-signals are ignored here; the empty
 // trapCallbacks entry alone records their state.
 func (r *Runner) ignoreSignalTrap(name string) {
+	if r.isStartupIgnored(name) {
+		return
+	}
 	// SIGCHLD is reap-driven; never touch its OS disposition. A real SIG_IGN
 	// on SIGCHLD would also break child reaping (auto-reaped children make
 	// wait() fail with ECHILD on some systems).
@@ -641,6 +647,9 @@ func (r *Runner) ignoreSignalTrap(name string) {
 // disableSignalTrap stops OS delivery for the named signal, restoring its
 // default disposition. Called by the `trap` builtin when a trap is reset.
 func (r *Runner) disableSignalTrap(name string) {
+	if r.isStartupIgnored(name) {
+		return
+	}
 	sig, ok := signalByName(name)
 	if !ok {
 		return

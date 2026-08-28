@@ -8,8 +8,10 @@ package interp
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
@@ -88,6 +90,38 @@ func TestTrapStartupIgnoredFromHardIgnoreEnv(t *testing.T) {
 	got = runStartupIgnoredScript(t, env, "trap 'echo bad' INT; trap -p INT")
 	if want := "trap -- '' SIGINT\n"; got != want {
 		t.Fatalf("wrong bridged INT trap output\nwant:\n%sgot:\n%s", want, got)
+	}
+}
+
+func TestTrapStartupIgnoredInSourcedFile(t *testing.T) {
+	source := filepath.Join(t.TempDir(), "ignored-traps.sh")
+	if err := os.WriteFile(source, []byte(
+		"trap 'echo trapped' INT QUIT\n"+"trap - INT QUIT\n"+"kill -INT $$\n"+"kill -QUIT $$\n"+"echo sourced-after\n",
+	), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, posix := range []bool{true, false} {
+		var stdout bytes.Buffer
+		r, err := New(
+			Env(expand.ListEnviron(BashyHardIgnoreEnv+"=INT,QUIT")),
+			StdIO(nil, &stdout, nil),
+			WithPosixMode(posix),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		file, err := syntax.NewParser().Parse(strings.NewReader(
+			fmt.Sprintf(". %q\necho outer-after\n", source)), "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := r.Run(context.Background(), file); err != nil {
+			t.Fatalf("posix=%v: %v", posix, err)
+		}
+		if got, want := stdout.String(), "sourced-after\nouter-after\n"; got != want {
+			t.Fatalf("posix=%v: sourced hard ignores changed\n got: %q\nwant: %q", posix, got, want)
+		}
 	}
 }
 
