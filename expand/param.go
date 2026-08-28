@@ -2800,13 +2800,20 @@ func (cfg *Config) varInd(vr Variable, idx syntax.ArithmExpr) (string, error) {
 		if vr.IndexedSet(i) {
 			return vr.IndexedElem(i), nil
 		}
-		if cfg.NoUnset {
+		// A default/alternate operator deliberately handles an absent element,
+		// so nounset must not preempt it.  curParam can also be nil during the
+		// quoted-substitution trigger probe; that probe must observe the missing
+		// value rather than dereference a nonexistent expansion context.
+		if cfg.NoUnset && cfg.curParam != nil && !overridingUnset(cfg.curParam) {
 			idxText := nodeLit(idx)
 			if idxText == "" {
 				idxText = strconv.Itoa(i)
 			}
-			errName := cfg.curParam.Param.Value
-			if cfg.curParam.Index != nil {
+			errName := ""
+			if cfg.curParam.Param != nil {
+				errName = cfg.curParam.Param.Value
+			}
+			if cfg.curParam.Index != nil && errName != "" {
 				errName = fmt.Sprintf("%s[%s]", errName, idxText)
 			}
 			return "", UnsetParameterError{

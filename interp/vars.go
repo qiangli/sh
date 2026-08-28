@@ -949,6 +949,19 @@ func (r *Runner) lookupVar(name string) expand.Variable {
 		}
 	case "BASH_SOURCE":
 		vr.Kind = expand.Indexed
+		// A Bash 5.3 command string has no top-level source entry. Functions
+		// defined by -c do have one entry per function frame, each carrying the
+		// command's argv0; unlike a file script there is no trailing main frame.
+		if r.commandString {
+			if len(r.callStack) > 0 {
+				sources := make([]string, len(r.callStack))
+				for i, f := range r.callStack {
+					sources[len(r.callStack)-1-i] = f.source
+				}
+				vr.List = sources
+			}
+			break
+		}
 		if len(r.callStack) > 0 {
 			sources := make([]string, len(r.callStack)+1)
 			for i, f := range r.callStack {
@@ -960,6 +973,11 @@ func (r *Runner) lookupVar(name string) expand.Variable {
 			}
 			sources[len(r.callStack)] = outer
 			vr.List = sources
+		} else if r.filename != "" {
+			// A file-backed top-level script has one BASH_SOURCE element even
+			// before it enters a function.  Command strings and stdin have no
+			// filename and therefore keep Bash's empty array.
+			vr.List = []string{r.filename}
 		}
 	case "BASH_LINENO":
 		vr.Kind = expand.Indexed

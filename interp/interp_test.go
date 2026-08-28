@@ -7180,6 +7180,39 @@ func TestStdinScriptInputRedirectBeatsLineConsumption(t *testing.T) {
 	qt.Assert(t, qt.Equals(run("read x\necho \"[$x]\"\n"), ""))
 }
 
+func TestBashSourceTopLevelAndNounsetDefault(t *testing.T) {
+	run := func(name, src string) string {
+		t.Helper()
+		file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(src), name)
+		qt.Assert(t, qt.IsNil(err))
+		var cb bytes.Buffer
+		r, err := interp.New(interp.StdIO(nil, &cb, &cb), interp.Params("-u"))
+		qt.Assert(t, qt.IsNil(err))
+		qt.Assert(t, qt.IsNil(r.Run(context.Background(), file)))
+		return cb.String()
+	}
+
+	src := `printf 'top=<%s> n=%s\n' "${BASH_SOURCE[0]:-default}" "${#BASH_SOURCE[@]}"
+f() { printf 'func=<%s>|<%s> n=%s\n' "${BASH_SOURCE[0]:-default}" "${BASH_SOURCE[1]:-default}" "${#BASH_SOURCE[@]}"; }
+f
+`
+	qt.Assert(t, qt.Equals(run("/work/script.sh", src),
+		"top=</work/script.sh> n=1\nfunc=</work/script.sh>|</work/script.sh> n=2\n"))
+	// bash -c and stdin have no BASH_SOURCE element; the indexed default is
+	// nevertheless nounset-safe and expands rather than panicking.
+	qt.Assert(t, qt.Equals(run("", `printf '<%s> n=%s\n' "${BASH_SOURCE[0]:-default}" "${#BASH_SOURCE[@]}"`),
+		"<default> n=0\n"))
+
+	commandSrc := `printf '<%s> n=%s\n' "${BASH_SOURCE[0]:-default}" "${#BASH_SOURCE[@]}"; f() { printf 'f=<%s> n=%s argv0=<%s>\n' "${BASH_SOURCE[0]:-default}" "${#BASH_SOURCE[@]}" "$0"; }; f`
+	file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(commandSrc), "bash")
+	qt.Assert(t, qt.IsNil(err))
+	var cb bytes.Buffer
+	r, err := interp.New(interp.StdIO(nil, &cb, &cb), interp.Params("-u"), interp.CommandString(true))
+	qt.Assert(t, qt.IsNil(err))
+	qt.Assert(t, qt.IsNil(r.Run(context.Background(), file)))
+	qt.Assert(t, qt.Equals(cb.String(), "<default> n=0\nf=<bash> n=1 argv0=<bash>\n"))
+}
+
 // builtinTargetQuoted scans the original source line — only available when
 // WithBashSource is set — to decide whether a read/printf/wait target token
 // was quoted. When a target ends a physical line with a backslash (a line
