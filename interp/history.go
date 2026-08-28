@@ -2273,7 +2273,19 @@ parseOpts:
 				return idx
 			}
 			n -= h.base
-			if n < 0 || n >= idx {
+			// Bash's fc_gethnum treats the newest selectable index as
+			// already out of range, so `fc -l 3 1` over a three-command
+			// history clamps 3 down to the oldest entry and lists only
+			// command 1. POSIX Issue 7 has no such exclusion: any command
+			// number that `fc -l` displays is a valid first/last operand,
+			// and a first newer than last must list in reverse. This is a
+			// deliberate POSIX-over-Bash divergence, so keep bash's
+			// exclusive bound whenever POSIX mode is off.
+			outOfRange := n < 0 || n >= idx
+			if r.opts[optPosix] {
+				outOfRange = n < 0 || n > idx
+			}
+			if outOfRange {
 				if first {
 					return 0
 				}

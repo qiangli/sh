@@ -419,6 +419,79 @@ fc -e capture -1 -3
 	}
 }
 
+// TestFcIssue7ListRangeSelectsNewestCommand pairs POSIX mode against bash mode
+// over the same three-command history. POSIX Issue 7 treats every command
+// number that `fc -l` displays as a valid first/last operand, so naming the
+// newest one selects it -- and a first newer than last lists in reverse. Bash's
+// fc_gethnum instead treats the newest selectable index as out of range and
+// silently clamps it to the oldest entry. The bash-mode expectations below were
+// captured from GNU Bash 5.3.15 running the same script, so they must not be
+// "fixed" to match the POSIX column.
+func TestFcIssue7ListRangeSelectsNewestCommand(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		cmd       string
+		wantPosix string
+		// wantBash is real GNU Bash 5.3 output; bash pads with an extra
+		// space for the omitted modified-command marker.
+		wantBash string
+	}{
+		{
+			name:      "reverse range from newest",
+			cmd:       "fc -l 3 1",
+			wantPosix: "3\t: three\n2\t: two\n1\t: one\n",
+			wantBash:  "1\t : one\n",
+		},
+		{
+			name:      "newest as both endpoints",
+			cmd:       "fc -l 3 3",
+			wantPosix: "3\t: three\n",
+			wantBash:  "1\t : one\n2\t : two\n3\t : three\n",
+		},
+		{
+			name:      "newest as lone operand",
+			cmd:       "fc -l 3",
+			wantPosix: "3\t: three\n",
+			wantBash:  "1\t : one\n2\t : two\n3\t : three\n",
+		},
+		{
+			// Ranges that stay below the newest command agree in both
+			// modes; the divergence is confined to the newest number.
+			name:      "reverse range below newest",
+			cmd:       "fc -l 2 1",
+			wantPosix: "2\t: two\n1\t: one\n",
+			wantBash:  "2\t : two\n1\t : one\n",
+		},
+		{
+			name:      "forward range",
+			cmd:       "fc -l 1 3",
+			wantPosix: "1\t: one\n2\t: two\n3\t: three\n",
+			wantBash:  "1\t : one\n2\t : two\n3\t : three\n",
+		},
+		{
+			// Out of range past the newest command still clamps in both
+			// modes: 4 is not a displayed command number.
+			name:      "past newest still clamps",
+			cmd:       "fc -l 4 1",
+			wantPosix: "1\t: one\n",
+			wantBash:  "1\t : one\n",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			script := func(posix string) string {
+				return "HISTFILE=/dev/null\nHISTIGNORE='fc*'\n" + posix +
+					"set -o history\n: one\n: two\n: three\n" + tc.cmd + "\n"
+			}
+			if got := runHistScript(t, script("set -o posix\n")); got != tc.wantPosix {
+				t.Errorf("posix %s:\n got: %q\nwant: %q", tc.cmd, got, tc.wantPosix)
+			}
+			if got := runHistScript(t, script("")); got != tc.wantBash {
+				t.Errorf("bash %s:\n got: %q\nwant: %q", tc.cmd, got, tc.wantBash)
+			}
+		})
+	}
+}
+
 func TestFcListPosixOmitsModifiedMarker(t *testing.T) {
 	out := runHistScript(t, `HISTFILE=/dev/null
 HISTIGNORE='fc*'

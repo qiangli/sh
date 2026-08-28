@@ -28,8 +28,42 @@ history-record replacement, editor failure, and re-executed command status.
 The principal evidence is `TestFcPosixEditorAndArgs`,
 `TestFcIssue7FormValidation`,
 `TestFcIssue7FirstSubstitutionAndMultilineListing`,
-`TestFcReverseEditRange`, `TestFcListPosixOmitsModifiedMarker`, and
-`TestFcIssue7ReexecutionReturnsCommandStatus`.
+`TestFcReverseEditRange`, `TestFcListPosixOmitsModifiedMarker`,
+`TestFcIssue7ReexecutionReturnsCommandStatus`, and
+`TestFcIssue7ListRangeSelectsNewestCommand`.
+
+## Deliberate POSIX-over-Bash divergence: newest command number
+
+Bash's `fc_gethnum` bounds a positive command number against the newest
+selectable history index *exclusively*. Naming that newest number therefore
+falls out of range and is silently clamped -- to the oldest entry for `first`,
+to the newest for `last`. Over a three-command history, real GNU Bash 5.3
+prints:
+
+```text
+$ fc -l 3 1
+1	 : one
+$ fc -l 3 3
+1	 : one
+2	 : two
+3	 : three
+```
+
+POSIX Issue 7 imposes no such exclusion. `first` and `last` are command
+numbers "displayed with the `-l` option", and a `first` newer than `last`
+lists the range in reverse. Command 3 is displayed by `fc -l`, so `fc -l 3 1`
+must list 3, 2, 1 and `fc -l 3 3` must list only command 3.
+
+`interp/history.go` resolves this in favor of the standard **only when POSIX
+mode is on**: the bound is inclusive (`n > idx`) under `set -o posix` and stays
+exclusive (`n >= idx`) otherwise. Bash mode is left byte-for-byte identical to
+GNU Bash 5.3, since this engine's default route is a Bash drop-in and the
+clamp is observable Bash behavior rather than a defect. Numbers genuinely past
+the newest command (`fc -l 4 1` above) still clamp in both modes.
+
+`TestFcIssue7ListRangeSelectsNewestCommand` asserts both columns of this
+divergence in one table; its bash-mode expectations were captured from GNU
+Bash 5.3.15 and must not be re-aligned to the POSIX column.
 
 ## Profile D result
 
