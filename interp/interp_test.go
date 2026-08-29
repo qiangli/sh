@@ -5697,6 +5697,19 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 		"a\nexec ok\nb\nexec ok\nc\nexec ok\n",
 	},
 	{
+		// <<- strips tabs only at the beginning of a physical line. A tab
+		// after an expanded parameter remains an IFS separator for read.
+		"left=aa; right=bb; while read -r re input expected status; do printf '%s|%s|%s|%s\\n' \"$re\" \"$input\" \"$expected\" \"$status\"; done <<-EOF\n\tpattern\t$left\t$right\t0\nEOF",
+		"pattern|aa|bb|0\n",
+	},
+	{
+		// POSIX expr GA142's authority row places two near-RE_DUP_MAX
+		// expanded fields next to literal tab separators. Keep the exact
+		// long four-field shape which exposed expansion-boundary stripping.
+		"dup_max=255; longstr=; i=0; while [ \"$i\" -lt 254 ]; do longstr=${longstr}a; i=$((i + 1)); done; while read -r re input expected status; do printf '%s|%s|%s|%s\\n' \"$re\" \"${#input}\" \"${#expected}\" \"$status\"; done <<-EOF\n\t\\(a\\{1,$dup_max\\}\\)\t$longstr\t$longstr\t0\nEOF",
+		"\\(a\\{1,255\\}\\)|254|254|0\n",
+	},
+	{
 		"echo file1 >f; echo file2 >>f; while read a; do echo $a; done <f",
 		"file1\nfile2\n",
 	},

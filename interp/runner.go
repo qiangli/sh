@@ -8879,6 +8879,7 @@ func (r *Runner) hdocReader(rd *syntax.Redirect) (*os.File, error) {
 		} else {
 			var buf bytes.Buffer
 			var cur []syntax.WordPart
+			atLineStart := true
 			flushLine := func() {
 				if buf.Len() > 0 {
 					buf.WriteByte('\n')
@@ -8895,6 +8896,10 @@ func (r *Runner) hdocReader(rd *syntax.Redirect) (*os.File, error) {
 				lit, ok := wp.(*syntax.Lit)
 				if !ok {
 					cur = append(cur, wp)
+					// Even an expansion which later produces an empty string is
+					// syntactically part of the line. Tabs in a following literal
+					// are therefore not leading tabs eligible for <<- stripping.
+					atLineStart = false
 					continue
 				}
 				first := true
@@ -8902,9 +8907,15 @@ func (r *Runner) hdocReader(rd *syntax.Redirect) (*os.File, error) {
 					if !first {
 						flushLine()
 						cur = cur[:0]
+						atLineStart = true
 					}
 					first = false
-					part = strings.TrimLeft(part, "\t")
+					if atLineStart {
+						part = strings.TrimLeft(part, "\t")
+					}
+					if part != "" {
+						atLineStart = false
+					}
 					cur = append(cur, &syntax.Lit{Value: part})
 				}
 			}
