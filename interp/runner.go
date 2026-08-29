@@ -10986,6 +10986,13 @@ func (r *Runner) statVirtualFd(name string) (fs.FileInfo, bool, error) {
 	if err != nil || fd < 3 {
 		return nil, false, nil
 	}
+	// The shell may close an inherited descriptor without closing the
+	// embedding Go process's descriptor. Never fall through to /dev/fd in that
+	// case: it would expose the host descriptor after `exec N>&-` and make file
+	// tests report a descriptor that is closed in the shell's own fd view.
+	if r.fdClosedTable[fd] {
+		return nil, true, os.ErrNotExist
+	}
 	// reads live in fdTable (*os.File); writes live in fdWriteTable, possibly
 	// wrapped (e.g. fifoWriteFile, which embeds *os.File and so promotes Stat).
 	var statter interface {
