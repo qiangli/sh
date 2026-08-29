@@ -11,6 +11,8 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+func currentWorkingDir() (string, error) { return os.Getwd() }
+
 func openRunnerDir(path string) (*os.File, error) {
 	return os.Open(path)
 }

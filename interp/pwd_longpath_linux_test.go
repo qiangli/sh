@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -16,6 +17,41 @@ import (
 	"mvdan.cc/sh/v3/interp"
 	"mvdan.cc/sh/v3/syntax"
 )
+
+func TestRunnerColdStartBeyondPathMax(t *testing.T) {
+	const helperEnv = "SH_COLD_LONG_CWD_HELPER"
+	const component = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	const depth = 60
+	if root := os.Getenv(helperEnv); root != "" {
+		fd, err := unix.Open(root, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+		qt.Assert(t, qt.IsNil(err))
+		for range depth {
+			if err := unix.Mkdirat(fd, component, 0o755); err != nil && err != unix.EEXIST {
+				t.Fatal(err)
+			}
+			next, err := unix.Openat(fd, component, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+			qt.Assert(t, qt.IsNil(err))
+			qt.Assert(t, qt.IsNil(unix.Close(fd)))
+			fd = next
+		}
+		qt.Assert(t, qt.IsNil(unix.Fchdir(fd)))
+		qt.Assert(t, qt.IsNil(unix.Close(fd)))
+		qt.Assert(t, qt.IsNil(os.Unsetenv("PWD")))
+		runner, err := interp.New()
+		qt.Assert(t, qt.IsNil(err))
+		if len(runner.Dir) <= unix.PathMax {
+			t.Fatalf("cold-start cwd length = %d, want over PATH_MAX %d", len(runner.Dir), unix.PathMax)
+		}
+		return
+	}
+
+	root := t.TempDir()
+	cmd := exec.Command(os.Args[0], "-test.run=^TestRunnerColdStartBeyondPathMax$")
+	cmd.Env = append(os.Environ(), "GOSH_PROG=", helperEnv+"="+root)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("cold-start helper: %v\n%s", err, output)
+	}
+}
 
 func TestPwdBeyondPathMax(t *testing.T) {
 	root := t.TempDir()

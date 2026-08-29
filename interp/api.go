@@ -1446,7 +1446,7 @@ func Env(env expand.Environ) RunnerOption {
 func Dir(path string) RunnerOption {
 	return func(r *Runner) error {
 		if path == "" {
-			path, err := os.Getwd()
+			path, err := currentWorkingDir()
 			if err != nil {
 				return fmt.Errorf("could not get current dir: %w", err)
 			}

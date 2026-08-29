@@ -6,9 +6,14 @@
 package interp
 
 import (
+	"bufio"
 	"os"
+	"os/exec"
+	"runtime"
+	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
 
 // TestIsRuntimeSignalClassification verifies that only the five synchronous
@@ -188,5 +193,107 @@ func TestRuntimeSignalWithSignalResetterListBounds(t *testing.T) {
 		if inList[name] {
 			t.Errorf("runtime-managed signal %q must not appear in the WithSignalResetter reset list", name)
 		}
+	}
+}
+
+func TestStandaloneRuntimeSignalDefaults(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux runtime signal relay")
+	}
+	const helperEnv = "SH_RUNTIME_DEFAULT_HELPER"
+	if name := os.Getenv(helperEnv); name != "" {
+		_, err := New(
+			Env(nil),
+			WithSignalResetter(OSSignalResetter{}),
+			WithStandaloneSignalDefaults(),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = os.Stdout.WriteString("ready\n")
+		select {}
+	}
+
+	for _, name := range []string{"BUS", "FPE", "ILL", "SEGV", "TRAP"} {
+		t.Run(name, func(t *testing.T) {
+			sig := signalByNameMust(name)
+			cmd := exec.Command(os.Args[0], "-test.run=^TestStandaloneRuntimeSignalDefaults$")
+			cmd.Env = append(os.Environ(), "GOSH_PROG=", helperEnv+"="+name)
+			stdout, err := cmd.StdoutPipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var stderr strings.Builder
+			cmd.Stderr = &stderr
+			if err := cmd.Start(); err != nil {
+				t.Fatal(err)
+			}
+			if line, err := bufio.NewReader(stdout).ReadString('\n'); err != nil || line != "ready\n" {
+				waitErr := cmd.Wait()
+				t.Fatalf("helper readiness = %q, %v; wait=%v stderr=%q", line, err, waitErr, stderr.String())
+			}
+			if err := cmd.Process.Signal(sig); err != nil {
+				t.Fatal(err)
+			}
+			err = cmd.Wait()
+			exitErr, ok := err.(*exec.ExitError)
+			if !ok {
+				t.Fatalf("wait error = %v, want signal death", err)
+			}
+			status, ok := exitErr.Sys().(syscall.WaitStatus)
+			if !ok || !status.Signaled() || status.Signal() != sig {
+				t.Fatalf("wait status = %#v, want signal %s; stderr=%q", exitErr.Sys(), name, stderr.String())
+			}
+			if stderr.Len() != 0 {
+				t.Fatalf("signal default emitted diagnostics: %q", stderr.String())
+			}
+		})
+	}
+}
+
+func TestStandaloneRuntimeSignalInheritedIgnore(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux runtime signal relay")
+	}
+	const helperEnv = "SH_RUNTIME_IGNORE_HELPER"
+	if name := os.Getenv(helperEnv); name != "" {
+		_, err := New(
+			Env(nil),
+			WithSignalResetter(OSSignalResetter{}),
+			WithStandaloneSignalDefaults(),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = os.Stdout.WriteString("ready\n")
+		select {}
+	}
+
+	for _, name := range []string{"BUS", "FPE", "ILL", "SEGV"} {
+		t.Run(name, func(t *testing.T) {
+			sig := signalByNameMust(name)
+			cmd := exec.Command(os.Args[0], "-test.run=^TestStandaloneRuntimeSignalInheritedIgnore$")
+			cmd.Env = append(os.Environ(), "GOSH_PROG=", helperEnv+"="+name, BashyHardIgnoreEnv+"="+name)
+			stdout, err := cmd.StdoutPipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := cmd.Start(); err != nil {
+				t.Fatal(err)
+			}
+			if line, err := bufio.NewReader(stdout).ReadString('\n'); err != nil || line != "ready\n" {
+				waitErr := cmd.Wait()
+				t.Fatalf("helper readiness = %q, %v; wait=%v", line, err, waitErr)
+			}
+			if err := cmd.Process.Signal(sig); err != nil {
+				t.Fatal(err)
+			}
+			time.Sleep(25 * time.Millisecond)
+			if err := cmd.Process.Signal(syscall.Signal(0)); err != nil {
+				t.Fatalf("hard-ignored %s terminated helper: %v", name, err)
+			}
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+		})
 	}
 }

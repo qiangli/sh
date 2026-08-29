@@ -120,6 +120,37 @@ func WithSignalResetter(s SignalResetter) RunnerOption {
 	}
 }
 
+// WithStandaloneSignalDefaults makes kill-delivered synchronous fault
+// signals take their native default action when no shell trap or ignore owns
+// them. The Go runtime otherwise turns externally delivered BUS/FPE/ILL/SEGV
+// into a traceback and exit status 2, which is not a shell process's POSIX
+// wait status. Genuine CPU faults remain owned by the Go runtime and still
+// become Go panics; os/signal only redirects asynchronously delivered faults.
+// Linux provides this distinction reliably. The option is currently a no-op
+// on other platforms, where the runtime may classify an external fault as a
+// synchronous one before os/signal can observe it.
+//
+// This option owns process-global signal state and is therefore only for a
+// standalone shell process with one top-level Runner. Embedded users must not
+// enable it. A standalone host should also provide [WithSignalResetter].
+func WithStandaloneSignalDefaults() RunnerOption {
+	return func(r *Runner) error {
+		names := standaloneRuntimeDefaultSignalNames()
+		if len(names) == 0 {
+			return nil
+		}
+		r.sigMu.Lock()
+		defer r.sigMu.Unlock()
+		r.ensureSignalLoopLocked()
+		for _, name := range names {
+			if sig, ok := signalByName(name); ok {
+				signal.Notify(r.sigCh, signalForOS(sig))
+			}
+		}
+		return nil
+	}
+}
+
 // OSSignalResetter is the standalone-host [SignalResetter]: it installs the
 // process's real SIG_DFL for the reset signal at the OS level.
 //
@@ -563,13 +594,7 @@ func (r *Runner) enableSignalTrap(name string) {
 		r.sigIgnoredPreReset[name] = true
 	}
 	delete(r.sigIgnored, name)
-	if r.sigNotify == nil {
-		r.sigNotify = make(map[string]os.Signal)
-		r.pendingSig = make(map[string]int)
-		r.sigCh = make(chan os.Signal, 32)
-		r.sigWake = make(chan struct{}, 1)
-		go r.signalLoop(r.sigCh)
-	}
+	r.ensureSignalLoopLocked()
 	if _, exists := r.sigNotify[name]; !exists {
 		osSig := signalForOS(sig)
 		restoredDisposition := false
@@ -595,6 +620,17 @@ func (r *Runner) enableSignalTrap(name string) {
 		}
 		signal.Notify(r.sigCh, osSig)
 	}
+}
+
+func (r *Runner) ensureSignalLoopLocked() {
+	if r.sigNotify != nil {
+		return
+	}
+	r.sigNotify = make(map[string]os.Signal)
+	r.pendingSig = make(map[string]int)
+	r.sigCh = make(chan os.Signal, 32)
+	r.sigWake = make(chan struct{}, 1)
+	go r.signalLoop(r.sigCh)
 }
 
 // ignoreSignalTrap sets a real OS SIG_IGN for the named signal. Unlike a
@@ -697,6 +733,13 @@ func (r *Runner) signalLoop(ch chan os.Signal) {
 		}
 		r.sigMu.Unlock()
 		if name == "" {
+			// A standalone runner subscribes to runtime-owned fault signals
+			// even while no shell trap owns them. os/signal sends only
+			// asynchronously generated instances here; a genuine CPU fault
+			// remains on the runtime's synchronous panic path.
+			if relayRuntimeDefaultSignal(sig) {
+				continue
+			}
 			continue
 		}
 		r.hasPendingSig.Store(true)

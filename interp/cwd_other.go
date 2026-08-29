@@ -7,6 +7,8 @@ package interp
 
 import "os"
 
+func currentWorkingDir() (string, error) { return os.Getwd() }
+
 func openRunnerDir(path string) (*os.File, error) {
 	return nil, nil
 }

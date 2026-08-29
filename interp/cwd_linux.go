@@ -13,6 +13,19 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+func currentWorkingDir() (string, error) {
+	path, err := os.Getwd()
+	if err == nil || !errors.Is(err, unix.ENAMETOOLONG) {
+		return path, err
+	}
+	// Linux getcwd(2) rejects a result beyond PATH_MAX even though the
+	// process still has a perfectly usable cwd inode. procfs readlink does
+	// not impose that pathname limit, and os.Readlink grows its buffer until
+	// the complete target is returned. This is the cold-start counterpart to
+	// the retained dirFile used after the runner has changed directory.
+	return os.Readlink("/proc/self/cwd")
+}
+
 func openRunnerDir(path string) (*os.File, error) {
 	fd, err := unix.Open(path, unix.O_PATH|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
 	if errors.Is(err, unix.ENAMETOOLONG) {
