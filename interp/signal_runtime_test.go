@@ -115,6 +115,44 @@ func TestSynchronousFaultSignalTrappable(t *testing.T) {
 	}
 }
 
+// TestSignalSubscriptionDrainKeepsQueuedDeliveryCallbacks exercises teardown
+// under a queue larger than the old central delivery buffer. A transition must
+// neither deadlock on sigMu nor lose/reclassify deliveries already accepted by
+// the old subscription.
+func TestSignalSubscriptionDrainKeepsQueuedDeliveryCallbacks(t *testing.T) {
+	const deliveries = 256
+	r := &Runner{}
+	r.sigMu.Lock()
+	r.ensureSignalLoopLocked()
+	sub := signalSubscription{
+		ch:       make(chan os.Signal, deliveries),
+		done:     make(chan struct{}),
+		finished: make(chan struct{}),
+		callback: "old action",
+	}
+	r.sigNotifyCh = map[string]signalSubscription{"USR1": sub}
+	r.sigMu.Unlock()
+	for range deliveries {
+		sub.ch <- syscall.SIGUSR1
+	}
+	go r.forwardSignalSubscription("USR1", sub)
+
+	r.sigMu.Lock()
+	stopped := r.stopSignalSubscriptionLocked("USR1")
+	r.sigMu.Unlock()
+	r.waitSignalSubscription(stopped)
+
+	for i := range deliveries {
+		name, callback := r.nextPendingSignal()
+		if name != "USR1" || callback != "old action" {
+			t.Fatalf("delivery %d = (%q, %q), want (USR1, old action)", i, name, callback)
+		}
+	}
+	if name, callback := r.nextPendingSignal(); name != "" || callback != "" {
+		t.Fatalf("extra delivery = (%q, %q)", name, callback)
+	}
+}
+
 // TestRestoreBridgedStartupIgnoresRuntimeSignals verifies that a synchronous
 // fault signal (BUS/FPE/ILL/SEGV/TRAP) marked SIG_IGN on entry is reinstalled
 // as a real OS-level SIG_IGN, so a later kill(2)/SI_USER delivery is discarded

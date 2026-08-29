@@ -144,7 +144,11 @@ func WithStandaloneSignalDefaults() RunnerOption {
 		r.ensureSignalLoopLocked()
 		for _, name := range names {
 			if sig, ok := signalByName(name); ok {
-				signal.Notify(r.sigCh, signalForOS(sig))
+				if r.standaloneDefaults == nil {
+					r.standaloneDefaults = make(map[string]bool)
+				}
+				r.standaloneDefaults[name] = true
+				r.startSignalSubscriptionLocked(name, signalForOS(sig), "", true)
 			}
 		}
 		return nil
@@ -220,6 +224,25 @@ func (r *Runner) restoreBridgedStartupIgnores() {
 type asyncExecSignal struct {
 	name string
 	sig  os.Signal
+}
+
+// signalDelivery carries the disposition that owned a signal when os/signal
+// received it. Signal handlers run asynchronously, so consulting trapCallbacks
+// later would incorrectly apply a newer trap (or a trap installed after an
+// ignored/default delivery) to an older signal.
+type signalDelivery struct {
+	name          string
+	callback      string
+	sig           os.Signal
+	defaultAction bool
+}
+
+type signalSubscription struct {
+	ch            chan os.Signal
+	done          chan struct{}
+	finished      chan struct{}
+	callback      string
+	defaultAction bool
 }
 
 // monitorActive reports whether job-control monitor mode (`set -m` / `set -o
@@ -584,7 +607,7 @@ func (r *Runner) enableSignalTrap(name string) {
 		return
 	}
 	r.sigMu.Lock()
-	defer r.sigMu.Unlock()
+	oldSub := r.stopSignalSubscriptionLocked(name)
 	if r.sigIgnored[name] {
 		// TP714: record that this signal was ignored so the Notify block
 		// below knows to restoreExecSignal before signal.Notify.
@@ -595,31 +618,27 @@ func (r *Runner) enableSignalTrap(name string) {
 	}
 	delete(r.sigIgnored, name)
 	r.ensureSignalLoopLocked()
-	if _, exists := r.sigNotify[name]; !exists {
-		osSig := signalForOS(sig)
-		restoredDisposition := false
-		if disposition, ok := r.sigIgnoredRestore[name]; ok {
-			restoreSignalDisposition(osSig, disposition)
-			delete(r.sigIgnoredRestore, name)
-			delete(r.sigIgnoredPreReset, name)
-			restoredDisposition = true
-		}
-		if r.sigIgnoredPreReset[name] {
-			// TP714: signal.Ignore clears Go's internal handling bit,
-			// after which signal.Notify cannot re-enable delivery on
-			// some platforms. Call restoreExecSignal to reinstall
-			// SIG_DFL via raw sigaction before Notify.
-			restoreExecSignal(osSig)
-			delete(r.sigIgnoredPreReset, name)
-		}
-		r.sigNotify[name] = osSig
-		// Synchronize the Go runtime before installing a new trap. This is
-		// needed after both the standalone startup reset and trap '' SIG.
-		if !restoredDisposition {
-			signal.Reset(osSig)
-		}
-		signal.Notify(r.sigCh, osSig)
+	osSig := signalForOS(sig)
+	if disposition, ok := r.sigIgnoredRestore[name]; ok {
+		restoreSignalDisposition(osSig, disposition)
+		delete(r.sigIgnoredRestore, name)
+		delete(r.sigIgnoredPreReset, name)
 	}
+	if r.sigIgnoredPreReset[name] {
+		// TP714: signal.Ignore clears Go's internal handling bit,
+		// after which signal.Notify cannot re-enable delivery on
+		// some platforms. Call restoreExecSignal to reinstall
+		// SIG_DFL via raw sigaction before Notify.
+		restoreExecSignal(osSig)
+		delete(r.sigIgnoredPreReset, name)
+	}
+	// Synchronize the Go runtime before installing a new trap. This is
+	// needed after both the standalone startup reset and trap '' SIG.
+	signal.Reset(osSig)
+	r.sigNotify[name] = osSig
+	r.startSignalSubscriptionLocked(name, osSig, r.trapCallbacks[name], false)
+	r.sigMu.Unlock()
+	r.waitSignalSubscription(oldSub)
 }
 
 func (r *Runner) ensureSignalLoopLocked() {
@@ -628,9 +647,69 @@ func (r *Runner) ensureSignalLoopLocked() {
 	}
 	r.sigNotify = make(map[string]os.Signal)
 	r.pendingSig = make(map[string]int)
-	r.sigCh = make(chan os.Signal, 32)
+	r.pendingSigCallback = make(map[string][]string)
 	r.sigWake = make(chan struct{}, 1)
-	go r.signalLoop(r.sigCh)
+}
+
+// startSignalSubscriptionLocked gives each OS subscription its own channel
+// and snapshots the disposition that owns deliveries from that channel. This
+// keeps a queued signal from being interpreted using a later trap setting.
+func (r *Runner) startSignalSubscriptionLocked(name string, sig os.Signal, callback string, defaultAction bool) {
+	ch := make(chan os.Signal, 1)
+	done := make(chan struct{})
+	finished := make(chan struct{})
+	if r.sigNotifyCh == nil {
+		r.sigNotifyCh = make(map[string]signalSubscription)
+	}
+	sub := signalSubscription{ch: ch, done: done, finished: finished, callback: callback, defaultAction: defaultAction}
+	r.sigNotifyCh[name] = sub
+	signal.Notify(ch, sig)
+	go r.forwardSignalSubscription(name, sub)
+}
+
+// stopSignalSubscriptionLocked stops future notifications and asks the
+// subscription worker to drain anything already queued with its original
+// disposition. It only changes subscription state; callers must wait for the
+// returned worker after releasing sigMu, since a draining worker enqueues into
+// the same mutex.
+func (r *Runner) stopSignalSubscriptionLocked(name string) *signalSubscription {
+	sub, ok := r.sigNotifyCh[name]
+	if !ok {
+		return nil
+	}
+	signal.Stop(sub.ch)
+	close(sub.done)
+	delete(r.sigNotifyCh, name)
+	return &sub
+}
+
+func (r *Runner) waitSignalSubscription(sub *signalSubscription) {
+	if sub != nil {
+		<-sub.finished
+	}
+}
+
+// forwardSignalSubscription never holds sigMu while waiting for a channel.
+// Once stopped, signal.Stop guarantees no new OS delivery and the worker drains
+// its buffered channel before declaring itself finished, retaining the callback
+// snapshot attached to each delivery.
+func (r *Runner) forwardSignalSubscription(name string, sub signalSubscription) {
+	defer close(sub.finished)
+	for {
+		select {
+		case sig := <-sub.ch:
+			r.handleSignalDelivery(signalDelivery{name: name, callback: sub.callback, sig: sig, defaultAction: sub.defaultAction})
+		case <-sub.done:
+			for {
+				select {
+				case sig := <-sub.ch:
+					r.handleSignalDelivery(signalDelivery{name: name, callback: sub.callback, sig: sig, defaultAction: sub.defaultAction})
+				default:
+					return
+				}
+			}
+		}
+	}
 }
 
 // ignoreSignalTrap sets a real OS SIG_IGN for the named signal. Unlike a
@@ -654,7 +733,7 @@ func (r *Runner) ignoreSignalTrap(name string) {
 		return
 	}
 	r.sigMu.Lock()
-	defer r.sigMu.Unlock()
+	oldSub := r.stopSignalSubscriptionLocked(name)
 	delete(r.sigNotify, name)
 	if r.sigIgnored == nil {
 		r.sigIgnored = make(map[string]bool)
@@ -675,9 +754,13 @@ func (r *Runner) ignoreSignalTrap(name string) {
 			r.sigIgnoredRestore[name] = disposition
 		}
 		setOSIgnore(osSig)
+		r.sigMu.Unlock()
+		r.waitSignalSubscription(oldSub)
 		return
 	}
 	signal.Ignore(osSig) // also undoes any prior signal.Notify for sig
+	r.sigMu.Unlock()
+	r.waitSignalSubscription(oldSub)
 }
 
 // disableSignalTrap stops OS delivery for the named signal, restoring its
@@ -693,12 +776,14 @@ func (r *Runner) disableSignalTrap(name string) {
 	r.sigMu.Lock()
 	_, hadNotify := r.sigNotify[name]
 	_, hadIgnore := r.sigIgnored[name]
+	oldSub := r.stopSignalSubscriptionLocked(name)
 	if hadNotify || hadIgnore {
 		delete(r.sigNotify, name)
 		delete(r.sigIgnored, name)
 		signal.Reset(signalForOS(sig))
 	}
 	sigReset := r.sigReset
+	standaloneDefault := r.standaloneDefaults[name]
 	r.sigMu.Unlock()
 	// signal.Reset above tears down the shell's Go-level handler but does
 	// not, on its own, re-arm a terminating SIG_DFL after a `trap ''`
@@ -713,38 +798,27 @@ func (r *Runner) disableSignalTrap(name string) {
 			sigReset.ResetDefault(num, name)
 		}
 	}
+	if standaloneDefault {
+		r.sigMu.Lock()
+		r.ensureSignalLoopLocked()
+		r.startSignalSubscriptionLocked(name, signalForOS(sig), "", true)
+		r.sigMu.Unlock()
+	}
+	r.waitSignalSubscription(oldSub)
 }
 
-// signalLoop records every received OS signal in the pending queue and wakes
-// any blocked wait. It runs until the channel is closed (never, in practice;
-// the process exits first).
-func (r *Runner) signalLoop(ch chan os.Signal) {
-	for sig := range ch {
-		r.sigMu.Lock()
-		name := ""
-		for n, s := range r.sigNotify {
-			if s == sig {
-				name = n
-				break
-			}
-		}
-		if name != "" {
-			r.pendingSig[name]++
-		}
-		r.sigMu.Unlock()
-		if name == "" {
-			// A standalone runner subscribes to runtime-owned fault signals
-			// even while no shell trap owns them. os/signal sends only
-			// asynchronously generated instances here; a genuine CPU fault
-			// remains on the runtime's synchronous panic path.
-			if relayRuntimeDefaultSignal(sig) {
-				continue
-			}
-			continue
-		}
-		r.hasPendingSig.Store(true)
-		r.wakeSignalWaiters()
+// handleSignalDelivery records a receipt-time delivery and wakes any blocked
+// wait. A standalone runner relays a fault signal that arrived under its
+// native-default subscription; a later trap must not turn that delivery into a
+// trap action.
+func (r *Runner) handleSignalDelivery(delivery signalDelivery) {
+	if delivery.defaultAction {
+		// os/signal sends only asynchronously generated instances here; a
+		// genuine CPU fault remains on the runtime's synchronous panic path.
+		relayRuntimeDefaultSignal(delivery.sig)
+		return
 	}
+	r.queuePendingSignal(delivery.name, delivery.callback)
 }
 
 // markPendingSignal queues a synchronously-delivered signal (a self-directed
@@ -752,10 +826,22 @@ func (r *Runner) signalLoop(ch chan os.Signal) {
 // handler without relying on OS signal delivery, which would race.
 func (r *Runner) markPendingSignal(name string) {
 	r.sigMu.Lock()
+	callback := r.trapCallbacks[name]
+	r.sigMu.Unlock()
+	r.queuePendingSignal(name, callback)
+
+}
+
+func (r *Runner) queuePendingSignal(name, callback string) {
+	r.sigMu.Lock()
 	if r.pendingSig == nil {
 		r.pendingSig = make(map[string]int)
 	}
+	if r.pendingSigCallback == nil {
+		r.pendingSigCallback = make(map[string][]string)
+	}
 	r.pendingSig[name]++
+	r.pendingSigCallback[name] = append(r.pendingSigCallback[name], callback)
 	r.sigMu.Unlock()
 	r.hasPendingSig.Store(true)
 	r.wakeSignalWaiters()
@@ -780,9 +866,9 @@ func (r *Runner) signalWakeChan() <-chan struct{} {
 	return r.sigWake
 }
 
-// nextPendingSignal pops the lowest-numbered pending signal name, or "" if
-// none remain, and updates the fast-path flag.
-func (r *Runner) nextPendingSignal() string {
+// nextPendingSignal pops the lowest-numbered pending signal and its
+// receipt-time callback, or ("", "") if none remain.
+func (r *Runner) nextPendingSignal() (string, string) {
 	r.sigMu.Lock()
 	defer r.sigMu.Unlock()
 	best := ""
@@ -804,7 +890,17 @@ func (r *Runner) nextPendingSignal() string {
 	}
 	if best != "" {
 		r.pendingSig[best]--
+		callbacks := r.pendingSigCallback[best]
+		if len(callbacks) > 0 {
+			callback := callbacks[0]
+			r.pendingSigCallback[best] = callbacks[1:]
+			return r.finishPendingSignalLocked(best), callback
+		}
 	}
+	return r.finishPendingSignalLocked(best), ""
+}
+
+func (r *Runner) finishPendingSignalLocked(best string) string {
 	any := false
 	for _, c := range r.pendingSig {
 		if c > 0 {
@@ -885,13 +981,9 @@ func (r *Runner) deliverPendingSignals(ctx context.Context) {
 		return
 	}
 	for {
-		name := r.nextPendingSignal()
+		name, cb := r.nextPendingSignal()
 		if name == "" {
 			return
-		}
-		cb, ok := r.trapCallbacks[name]
-		if !ok {
-			continue // trap was reset after the signal arrived
 		}
 		r.runSignalTrap(ctx, cb, name)
 		if r.exit.returning || r.exit.exiting || r.exit.fatalExit ||
