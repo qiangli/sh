@@ -1,0 +1,182 @@
+.TH BASHY-BUILTINS 1 "August 2026" "Bashy" "POSIX Shell Commands"
+.SH NAME
+alias, bg, cd, command, fc, fg, getopts, jobs, unalias \- Bashy POSIX shell built-ins
+.SH SYNOPSIS
+.B alias
+.RI [ alias-name [= string ]...]
+.br
+.B bg
+.RI [ job-id ...]
+.br
+.B cd
+.RB [ -L | -P ]
+.RI [ directory ]
+.br
+.B command
+.RB [ -pVv ]
+.I command-name
+.RI [ argument ...]
+.br
+.B fc
+.RB [ -r ]
+.RB [ -e
+.IR editor ]
+.RI [ first [ last ]]
+.br
+.B fc -l
+.RB [ -nr ]
+.RI [ first [ last ]]
+.br
+.B fc -s
+.RI [ old = new ]
+.RI [ first ]
+.br
+.B fg
+.RI [ job-id ]
+.br
+.B getopts
+.I optstring name
+.RI [ argument ...]
+.br
+.B jobs
+.RB [ -l | -p ]
+.RI [ job-id ...]
+.br
+.B unalias
+.RB [ -a ]
+.RI [ alias-name ...]
+.SH DESCRIPTION
+These utilities are built into the Bashy shell because they read or modify the
+current shell execution environment.  They implement the POSIX.1 Issue 7
+interfaces; shell state changed by a separate process cannot affect its parent.
+.TP
+.B alias
+With operands, define or display aliases.  With no operands, write all alias
+definitions in a form suitable for re-entry to the shell.  Alias replacement is
+performed while shell input is tokenized and does not apply inside quoted text.
+.TP
+.B bg
+Resume each selected stopped job in the background.  With no operand, select
+the current job.  Job control must be enabled and each
+.I job-id
+must identify a job in the current shell.
+.TP
+.B cd
+Change the current working directory.  With no operand, use
+.BR HOME .
+.B -L
+uses the logical path maintained in
+.BR PWD ;
+.B -P
+resolves symbolic links physically.  A successful change updates
+.B PWD
+and
+.BR OLDPWD .
+If the directory is not absolute and is not found relative to the current
+directory, the shell searches
+.BR CDPATH .
+.TP
+.B command
+Execute
+.I command-name
+while suppressing shell-function lookup.  The
+.B -p
+option uses the implementation's standard utility path.
+.B -v
+writes the word that would be used to invoke the command;
+.B -V
+writes a more descriptive identification.  The inquiry forms do not execute
+the command.
+.TP
+.B fc
+List, edit, or re-execute commands from the current interactive history.
+.B -l
+lists entries,
+.B -r
+reverses their order,
+.B -n
+omits numbers, and
+.BI -e " editor"
+selects the editor.  An editor name of
+.B -
+executes the selected commands without editing.
+.B -s
+re-executes one entry after applying an optional first
+.I old=new
+substitution.  History operands may be numbers or command prefixes.
+.TP
+.B fg
+Move the selected job to the foreground, continue it if stopped, and wait for
+it.  With no operand, select the current job.  Job control must be enabled.
+.TP
+.B getopts
+Parse positional parameters, or the explicitly supplied
+.IR argument s,
+one option per invocation.  The shell writes the option letter to
+.IR name ,
+the option argument to
+.B OPTARG
+when applicable, and advances
+.BR OPTIND .
+A leading colon in
+.I optstring
+selects silent error reporting.  Setting
+.B OPTIND
+to 1 restarts a scan.
+.TP
+.B jobs
+Report jobs known to the current shell.
+.B -l
+includes process IDs;
+.B -p
+writes only process-group leader IDs.  Operands restrict the report to the
+named jobs.
+.TP
+.B unalias
+Remove each named alias.
+.B -a
+removes all aliases.  A missing alias is an error unless all aliases are being
+removed.
+.SH OPERANDS
+A
+.I job-id
+uses the shell job-control notation described by POSIX, including
+.BR %%
+for the current job and
+.B %-
+for the previous job.  Names, history designators, option strings, and pathnames
+are interpreted by the individual utility as described above.
+.SH ENVIRONMENT
+.BR CDPATH ,
+.BR HOME ,
+.BR OLDPWD ,
+.BR PATH ,
+and
+.B PWD
+affect the applicable built-ins.  The history editor for
+.B fc
+is selected from
+.B FCEDIT
+when
+.B -e
+is omitted.  Locale variables affect diagnostics and character processing.
+.SH EXIT STATUS
+Each utility returns zero when the requested operation succeeds and greater
+than zero on an invalid option or operand, unavailable job or command, failed
+directory change, history failure, or other error.  An executed command's
+status is returned by
+.BR command ,
+.BR fc ,
+and
+.B fg
+where applicable.
+.SH NOTES
+These are special or regular built-ins of the running shell.  Invoking a
+same-named external program, when one exists, is not equivalent because it
+cannot update aliases, jobs, history, positional-option state, or the working
+directory of the calling shell.
+.SH SEE ALSO
+.BR sh (1),
+.BR bashy (1)
+.SH STANDARDS
+POSIX.1-2008, 2016 Edition (Issue 7).
