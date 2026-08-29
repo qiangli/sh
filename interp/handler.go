@@ -286,6 +286,14 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 			execPath = anchorExecPath(lookupDir, execPath)
 		}
 		diagnosticScriptPath := execPath
+		if !shellPathAbs(diagnosticScriptPath) {
+			// Cmd.Start resolves a relative executable against Cmd.Dir, but
+			// missingShebangInterpreter runs in this process. Anchor the
+			// diagnostic read to the runner's logical directory as well;
+			// otherwise Darwin's ENOENT for a missing shebang interpreter can
+			// leak as the raw os/exec error whenever the host cwd differs.
+			diagnosticScriptPath = shellPathJoinAbs(lookupDir, diagnosticScriptPath)
+		}
 		longExecFile, longExecPath, err := openLongExecPath(execPath)
 		if err != nil {
 			fmt.Fprintln(hc.Stderr, err)
