@@ -608,6 +608,13 @@ var runTests = []runTest{
 	{"trap '(exit 1); exit' EXIT; (exit 2); exit", "exit status 2"},
 	{"trap '(exit 1)' EXIT; (exit 2)", "exit status 2"},
 	{"set -e; ! false | false | true ; ! true | true | false ; echo reached", "reached\n"},
+	// A return in a pipeline's subshell controls that pipeline's status, but
+	// must not return from the enclosing function in the parent shell.
+	{"f() { echo foo | return 5; echo pipeline=$?; }; f; echo alive", "pipeline=5\nalive\n"},
+	// With lastpipe enabled, bash runs the final pipeline component in the
+	// current shell, so an assignment-only component persists afterwards.
+	{"shopt -s lastpipe; unset bar; echo g h i | bar=7; echo after: $bar", "after: 7\n"},
+	{"shopt -s lastpipe; unset foo bar; echo a b c | read foo; echo after 1: foo = $foo; unset tot; declare -i tot; printf '%d\\n' 1 2 3 | while read foo; do tot+=$foo; done; echo after 2: tot = $tot; unset bar; echo g h i | bar=7; echo after: $bar", "after 1: foo = a b c\nafter 2: tot = 6\nafter: 7\n"},
 	{"printf", "usage: printf [-v var] format [arguments]\nexit status 2 #JUSTERR"},
 	{"break", "break: only meaningful in a `for', `while', or `until' loop\n #JUSTERR"},
 	{"continue", "continue: only meaningful in a `for', `while', or `until' loop\n #JUSTERR"},

@@ -6199,6 +6199,11 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				}
 				r3.exit.exiting = false
 				r3.exit.discarding = false
+				// Like an explicit `( ... )` subshell, a pipeline component
+				// cannot return from a function in its parent shell. Keep the
+				// numeric status produced by `return N`, but consume the control
+				// transfer at this subshell boundary.
+				r3.exit.returning = false
 				r.exit = r3.exit
 			}
 			prDup.Close()
