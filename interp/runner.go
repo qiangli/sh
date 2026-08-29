@@ -10066,12 +10066,15 @@ func (r *Runner) closeFd(fd int) {
 			delete(r.fdClosedTable, fd)
 			return
 		}
-		if r.inheritedFds[fd] {
-			if r.fdClosedTable == nil {
-				r.fdClosedTable = make(map[int]bool)
-			}
-			r.fdClosedTable[fd] = true
+		// An explicit close owns the shell's descriptor view even when the
+		// embedding Go process has an unregistered fd at the same number.
+		// Record it unconditionally so /dev/fd/N and later duplication cannot
+		// fall through to that host descriptor. Every bind/reopen path clears
+		// this marker.
+		if r.fdClosedTable == nil {
+			r.fdClosedTable = make(map[int]bool)
 		}
+		r.fdClosedTable[fd] = true
 	}
 }
 

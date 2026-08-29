@@ -20,7 +20,11 @@ func TestStatVirtualFdHonorsShellClosedDescriptor(t *testing.T) {
 	defer hostFile.Close()
 
 	fd := int(hostFile.Fd())
-	runner := &Runner{fdClosedTable: map[int]bool{fd: true}}
+	runner := &Runner{}
+	runner.closeFd(fd)
+	if !runner.fdClosedTable[fd] {
+		t.Fatal("explicit close did not record an unregistered live host fd")
+	}
 	info, ok, err := runner.statVirtualFd(fmt.Sprintf("/dev/fd/%d", fd))
 	if !ok {
 		t.Fatal("shell-closed descriptor fell through to the live host fd")
