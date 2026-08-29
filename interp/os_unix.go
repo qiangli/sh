@@ -557,6 +557,15 @@ func waitExecCmd(ctx context.Context, cmd *exec.Cmd) (err error, user, sys time.
 
 func execReplace(ctx context.Context, path string, args, env []string, stdin any, stdout any, stderr any) (bool, error) {
 	hc := HandlerCtx(ctx)
+	// syscall.Exec has no directory argument. The Runner keeps its working
+	// directory in-process, so after a shell `cd` it can differ from the Go
+	// process's cwd. A true replacement in that state would silently execute
+	// from the wrong directory and, in particular, skip a chdir failure that a
+	// normal child launch must report. Fall back to exec.Cmd, whose Dir applies
+	// the logical cwd without mutating the embedding process.
+	if !execReplaceCwdMatches(hc.Dir) {
+		return false, nil
+	}
 	files := []struct {
 		fd int
 		v  any
@@ -627,6 +636,18 @@ func execReplace(ctx context.Context, path string, args, env []string, stdin any
 		return true, fmt.Errorf("exec: empty argument list")
 	}
 	return true, syscall.Exec(path, args, env)
+}
+
+func execReplaceCwdMatches(dir string) bool {
+	if dir == "" {
+		return false
+	}
+	processDir, err := os.Stat(".")
+	if err != nil {
+		return false
+	}
+	logicalDir, err := os.Stat(dir)
+	return err == nil && os.SameFile(processDir, logicalDir)
 }
 
 func relayExecReplacementSignal(sig syscall.Signal) error {
