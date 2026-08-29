@@ -1989,9 +1989,17 @@ func WithBashCompatErrors(on bool) RunnerOption {
 // field). Hosts that present themselves as a POSIX `sh` (e.g. bashy when
 // argv[0] is "sh") opt in; it implies nothing about parsing — combine
 // with [WithPosixMode] for `sh` behavior.
+//
+// POSIX leaves echo operands containing backslashes implementation-defined.
+// Strict mode selects the historical System V behavior, which is also the XSI
+// behavior, by enabling xpg_echo. This remains an ordinary shell option so an
+// embedding host or script can subsequently change it.
 func WithStrictPosix(on bool) RunnerOption {
 	return func(r *Runner) error {
 		r.strictPosix = on
+		if xpgEcho, supported := r.bashOptByName("xpg_echo"); supported {
+			*xpgEcho = on
+		}
 		return nil
 	}
 }

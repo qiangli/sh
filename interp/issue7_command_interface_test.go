@@ -194,10 +194,18 @@ func TestEchoIssue7Interface(t *testing.T) {
 		}
 	})
 
-	t.Run("implementation_defined_regions_choose_bsd_dash_n_and_literal_backslash", func(t *testing.T) {
+	t.Run("implementation_defined_regions_choose_system_v_behavior", func(t *testing.T) {
 		got := runIssue7Command(t, "echo -n prompt\necho 'a\\tb'", false)
-		if got.stdout != "prompta\\tb\n" || got.stderr != "" || got.status != 0 {
+		if got.stdout != "-n prompt\na\tb\n" || got.stderr != "" || got.status != 0 {
 			t.Fatalf("implementation-defined echo behavior: got %#v", got)
+		}
+	})
+
+	t.Run("strict_default_converts_octal_nul_and_newline", func(t *testing.T) {
+		got := runIssue7Command(t, "echo 'abcd\\000efgh\\012ijkl'", false)
+		want := "abcd\x00efgh\nijkl\n"
+		if got.stdout != want || got.stderr != "" || got.status != 0 {
+			t.Fatalf("strict echo octal escapes: got %#v, want stdout %q and success", got, want)
 		}
 	})
 
