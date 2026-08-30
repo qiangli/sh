@@ -3,6 +3,8 @@ package interp
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -199,6 +201,239 @@ func TestInteractiveHistoryFeedsFc(t *testing.T) {
 	want := "marker\n1\t echo marker\n"
 	if out.String() != want {
 		t.Fatalf("interactive fc -l:\n got: %q\nwant: %q", out.String(), want)
+	}
+}
+
+func newInteractiveHistoryRunner(t *testing.T, posix bool, handler ExecHandlerFunc) (*Runner, *bytes.Buffer, *bytes.Buffer, string) {
+	t.Helper()
+	histReset()
+	t.Cleanup(histReset)
+	dir := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	opts := []RunnerOption{
+		Dir(dir),
+		Env(expand.ListEnviron("HISTFILE=/dev/null", "HOME="+dir)),
+		StdIO(nil, &stdout, &stderr),
+		Interactive(true),
+	}
+	if posix {
+		opts = append(opts, WithPosixMode(true))
+	}
+	if handler != nil {
+		opts = append(opts, ExecHandler(handler))
+	}
+	r, err := New(opts...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.EnableInteractiveHistory()
+	return r, &stdout, &stderr, dir
+}
+
+func runInteractiveHistoryLine(t *testing.T, r *Runner, posix bool, src string) {
+	t.Helper()
+	r.RecordInteractiveHistory(src)
+	file, err := syntax.NewParser(
+		syntax.Variant(syntax.LangBash),
+		syntax.PosixMode(posix),
+	).Parse(strings.NewReader(src), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Run(context.Background(), file); err != nil {
+		t.Fatalf("run %q: %v", src, err)
+	}
+}
+
+func TestFcIssue7InteractiveListingDefaultsAndRanges(t *testing.T) {
+	t.Run("default sixteen without numbers", func(t *testing.T) {
+		r, stdout, _, _ := newInteractiveHistoryRunner(t, true, nil)
+		for i := 1; i <= 18; i++ {
+			runInteractiveHistoryLine(t, r, true, fmt.Sprintf(": command-%02d", i))
+		}
+		runInteractiveHistoryLine(t, r, true, "fc -ln")
+
+		var want strings.Builder
+		for i := 3; i <= 18; i++ {
+			fmt.Fprintf(&want, "\t: command-%02d\n", i)
+		}
+		if got := stdout.String(); got != want.String() {
+			t.Fatalf("fc -ln output = %q, want %q", got, want.String())
+		}
+	})
+
+	for _, tc := range []struct {
+		name string
+		cmd  string
+		want string
+	}{
+		{"first defaults through newest", "fc -l 2", "2\t: two\n3\t: three\n"},
+		{"forward range", "fc -l 1 3", "1\t: one\n2\t: two\n3\t: three\n"},
+		{"reverse operands", "fc -l 3 1", "3\t: three\n2\t: two\n1\t: one\n"},
+		{"reverse option", "fc -lr 1 3", "3\t: three\n2\t: two\n1\t: one\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, stdout, _, _ := newInteractiveHistoryRunner(t, true, nil)
+			for _, command := range []string{": one", ": two", ": three"} {
+				runInteractiveHistoryLine(t, r, true, command)
+			}
+			runInteractiveHistoryLine(t, r, true, tc.cmd)
+			if got := stdout.String(); got != tc.want {
+				t.Fatalf("%s output = %q, want %q", tc.cmd, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestFcIssue7InteractiveSubstitutionRedirectsAndHistory(t *testing.T) {
+	r, stdout, stderr, dir := newInteractiveHistoryRunner(t, true, nil)
+	runInteractiveHistoryLine(t, r, true, "printf 'before\\n'")
+	runInteractiveHistoryLine(t, r, true, "fc -s before=after >result 2>trace")
+	runInteractiveHistoryLine(t, r, true, "fc -ln 1 -1")
+
+	result, err := os.ReadFile(filepath.Join(dir, "result"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	trace, err := os.ReadFile(filepath.Join(dir, "trace"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(result), "after\n"; got != want {
+		t.Fatalf("executed command output = %q, want %q", got, want)
+	}
+	if got, want := string(trace), "printf 'after\\n'\n"; got != want {
+		t.Fatalf("fc diagnostic output = %q, want %q", got, want)
+	}
+	if got, want := stderr.String(), ""; got != want {
+		t.Fatalf("unredirected stderr = %q, want empty", got)
+	}
+	wantOut := "before\n" +
+		"\tprintf 'before\\n'\n" +
+		"\tprintf 'after\\n'\n"
+	if got := stdout.String(); got != wantOut {
+		t.Fatalf("history output = %q, want %q", got, wantOut)
+	}
+}
+
+func TestFcIssue7InteractiveSubstitutionSelectorContainingEquals(t *testing.T) {
+	r, stdout, stderr, _ := newInteractiveHistoryRunner(t, true, nil)
+	runInteractiveHistoryLine(t, r, true, "mode=value printf 'old selected\\n'")
+	runInteractiveHistoryLine(t, r, true, "printf 'old latest\\n'")
+	runInteractiveHistoryLine(t, r, true, "fc -s old=new mode=value")
+
+	if got, want := stdout.String(), "old selected\nold latest\nnew selected\n"; got != want {
+		t.Fatalf("stdout = %q, want %q", got, want)
+	}
+	if got, want := stderr.String(), "mode=value printf 'new selected\\n'\n"; got != want {
+		t.Fatalf("stderr = %q, want %q", got, want)
+	}
+}
+
+func TestFcBashInteractiveMultipleSubstitutions(t *testing.T) {
+	r, stdout, stderr, _ := newInteractiveHistoryRunner(t, false, nil)
+	runInteractiveHistoryLine(t, r, false, "printf 'aa cc\\n'")
+	runInteractiveHistoryLine(t, r, false, "fc -s aa=bb cc=dd")
+
+	if got, want := stdout.String(), "aa cc\nbb dd\n"; got != want {
+		t.Fatalf("stdout = %q, want %q", got, want)
+	}
+	if got, want := stderr.String(), "printf 'bb dd\\n'\n"; got != want {
+		t.Fatalf("stderr = %q, want %q", got, want)
+	}
+}
+
+func TestFcIssue7InteractiveEditorSelectionRedirectsAndHistory(t *testing.T) {
+	var editors []string
+	handler := func(ctx context.Context, args []string) error {
+		if args[0] != "explicit-editor" && args[0] != "variable-editor" && args[0] != "ed" {
+			return NewExitStatus(127)
+		}
+		editors = append(editors, args[0])
+		if _, err := io.WriteString(HandlerCtx(ctx).Stdout, "editor output\n"); err != nil {
+			return err
+		}
+		return os.WriteFile(args[1], []byte("printf 'edited\\n'\n"), 0o600)
+	}
+	r, stdout, stderr, dir := newInteractiveHistoryRunner(t, true, handler)
+	runInteractiveHistoryLine(t, r, true, "FCEDIT=variable-editor")
+	runInteractiveHistoryLine(t, r, true, "printf 'original\\n'")
+	runInteractiveHistoryLine(t, r, true, "fc -e explicit-editor -1 >result 2>trace")
+	runInteractiveHistoryLine(t, r, true, "fc -ln 1 -1")
+
+	if got, want := strings.Join(editors, ","), "explicit-editor"; got != want {
+		t.Fatalf("editors = %q, want %q", got, want)
+	}
+	result, err := os.ReadFile(filepath.Join(dir, "result"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	trace, err := os.ReadFile(filepath.Join(dir, "trace"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(result), "editor output\nedited\n"; got != want {
+		t.Fatalf("redirected stdout = %q, want %q", got, want)
+	}
+	if got, want := string(trace), "printf 'edited\\n'\n"; got != want {
+		t.Fatalf("redirected stderr = %q, want %q", got, want)
+	}
+	if got, want := stderr.String(), ""; got != want {
+		t.Fatalf("unredirected stderr = %q, want empty", got)
+	}
+	wantOut := "original\n" +
+		"\tFCEDIT=variable-editor\n" +
+		"\tprintf 'original\\n'\n" +
+		"\tprintf 'edited\\n'\n"
+	if got := stdout.String(); got != wantOut {
+		t.Fatalf("history output = %q, want %q", got, wantOut)
+	}
+}
+
+func TestFcIssue7InteractiveEditorSelection(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup string
+		fc    string
+		want  string
+	}{
+		{
+			name:  "option before variable",
+			setup: "FCEDIT=variable-editor",
+			fc:    "fc -e explicit-editor",
+			want:  "explicit-editor",
+		},
+		{
+			name:  "variable before default",
+			setup: "FCEDIT=variable-editor",
+			fc:    "fc",
+			want:  "variable-editor",
+		},
+		{
+			name: "standard default",
+			fc:   "fc",
+			want: "ed",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var editors []string
+			handler := func(_ context.Context, args []string) error {
+				if args[0] != "explicit-editor" && args[0] != "variable-editor" && args[0] != "ed" {
+					return NewExitStatus(127)
+				}
+				editors = append(editors, args[0])
+				return os.WriteFile(args[1], []byte(": edited\n"), 0o600)
+			}
+			r, _, _, _ := newInteractiveHistoryRunner(t, true, handler)
+			if tc.setup != "" {
+				runInteractiveHistoryLine(t, r, true, tc.setup)
+			}
+			runInteractiveHistoryLine(t, r, true, ": selected")
+			runInteractiveHistoryLine(t, r, true, tc.fc)
+			if got := strings.Join(editors, ","); got != tc.want {
+				t.Fatalf("editors = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 
