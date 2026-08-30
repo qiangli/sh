@@ -2304,7 +2304,15 @@ parseOpts:
 	if execute {
 		// fc -s [pat=rep ...] [command]: re-execute with substitutions.
 		var subs [][2]string
-		for len(specs) > 0 {
+		maxSubs := len(specs)
+		if r.opts[optPosix] {
+			// Issue 7 defines one optional old=new operand followed by an
+			// optional first operand. Once that substitution is consumed, a
+			// selector containing '=' must remain a selector. Bash accepts
+			// multiple substitutions as an extension outside POSIX mode.
+			maxSubs = min(maxSubs, 1)
+		}
+		for len(specs) > 0 && len(subs) < maxSubs {
 			eq := strings.Index(specs[0], "=")
 			if eq < 0 {
 				break
