@@ -309,8 +309,8 @@ func TestFcIssue7InteractiveSubstitutionRedirectsAndHistory(t *testing.T) {
 		t.Fatalf("unredirected stderr = %q, want empty", got)
 	}
 	wantOut := "before\n" +
-		"\tprintf 'before\\n'\n" +
-		"\tprintf 'after\\n'\n"
+		"printf 'before\\n'\n" +
+		"printf 'after\\n'\n"
 	if got := stdout.String(); got != wantOut {
 		t.Fatalf("history output = %q, want %q", got, wantOut)
 	}
@@ -382,9 +382,9 @@ func TestFcIssue7InteractiveEditorSelectionRedirectsAndHistory(t *testing.T) {
 		t.Fatalf("unredirected stderr = %q, want empty", got)
 	}
 	wantOut := "original\n" +
-		"\tFCEDIT=variable-editor\n" +
-		"\tprintf 'original\\n'\n" +
-		"\tprintf 'edited\\n'\n"
+		"FCEDIT=variable-editor\n" +
+		"printf 'original\\n'\n" +
+		"printf 'edited\\n'\n"
 	if got := stdout.String(); got != wantOut {
 		t.Fatalf("history output = %q, want %q", got, wantOut)
 	}

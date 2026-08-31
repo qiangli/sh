@@ -5,6 +5,7 @@ package interp
 import (
 	"context"
 	"io"
+	"os"
 	"strings"
 	"testing"
 
@@ -56,5 +57,57 @@ func TestS88InteractiveCommandPreservesTTYStdin(t *testing.T) {
 				t.Fatalf("foreground child stdin = %T, want terminal fd", childStdin)
 			}
 		})
+	}
+}
+
+// TestFcWriteS88PreservesExplicitStdinForChildCommands is a suite-free public
+// reducer for the fc:22 and write:22 boundary: an explicit runner stdin stream
+// (such as a pipe carrying editor commands or message lines) must be preserved
+// for child processes rather than being overwritten by scriptStdinReader.
+func TestFcWriteS88PreservesExplicitStdinForChildCommands(t *testing.T) {
+	dataPipeReader, dataPipeWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dataPipeReader.Close()
+	defer dataPipeWriter.Close()
+
+	go func() {
+		_, _ = dataPipeWriter.WriteString("payload line\n")
+		_ = dataPipeWriter.Close()
+	}()
+
+	const src = "public-child-probe\n"
+	file, err := syntax.NewParser().Parse(strings.NewReader(src), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var childStdin io.Reader
+	capture := func(next ExecHandlerFunc) ExecHandlerFunc {
+		return func(ctx context.Context, args []string) error {
+			childStdin = HandlerCtx(ctx).Stdin
+			return nil
+		}
+	}
+
+	r, err := New(
+		StdIO(dataPipeReader, io.Discard, io.Discard),
+		WithBashSource([]byte(src)),
+		ExecHandlers(capture),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := r.Run(context.Background(), file); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, ok := childStdin.(*scriptStdinReader); ok {
+		t.Fatalf("child stdin was overwritten by scriptStdinReader, want explicit data pipe")
+	}
+	if childStdin != dataPipeReader {
+		t.Fatalf("child stdin = %T %v, want explicit data pipe reader %v", childStdin, childStdin, dataPipeReader)
 	}
 }

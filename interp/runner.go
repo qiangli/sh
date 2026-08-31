@@ -1709,8 +1709,7 @@ func (r *Runner) handlerCtx(ctx context.Context, kind handlerKind, pos syntax.Po
 		// descriptor so its read fails with EBADF rather than reading an
 		// empty /dev/null.
 		hc.Stdin = badFdReader{}
-	}
-	if stdin := r.scriptStdinReader(); stdin != nil {
+	} else if stdin := r.scriptStdinReader(); stdin != nil {
 		// An external command reading fd 0 consumes the rest of the script
 		// source (bash's stdin-script quirk). It is backed by a seekable
 		// temp file in the exec handler, so a command that reads to EOF

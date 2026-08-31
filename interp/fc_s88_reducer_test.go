@@ -132,7 +132,7 @@ func TestFcS88EditorDrivenFromShellStdin(t *testing.T) {
 	if code := runFcReducerLine(t, r, "fc -ln"); code != 0 {
 		t.Fatalf("fc -ln status = %d, want 0", code)
 	}
-	wantHist := "\techo hello world\n\techo hello goodbye\n"
+	wantHist := "echo hello world\necho hello goodbye\n"
 	if got := stdout.String(); got != wantHist {
 		t.Fatalf("history = %q, want %q", got, wantHist)
 	}
@@ -181,10 +181,10 @@ func TestFcS88MisroutedEditorTranscriptSignature(t *testing.T) {
 	if code := runFcReducerLine(t, r, "fc -ln"); code != 0 {
 		t.Fatalf("fc -ln status = %d, want 0", code)
 	}
-	wantHist := "\techo hello world\n" +
-		"\techo hello world\n" +
-		"\ts/world/goodbye/\n" +
-		"\tq\n"
+	wantHist := "echo hello world\n" +
+		"echo hello world\n" +
+		"s/world/goodbye/\n" +
+		"q\n"
 	if got := stdout.String(); got != wantHist {
 		t.Fatalf("history = %q, want %q", got, wantHist)
 	}
