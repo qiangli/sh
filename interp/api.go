@@ -28,6 +28,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"golang.org/x/term"
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/syntax"
 )
@@ -2763,7 +2764,7 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 	switch node := node.(type) {
 	case *syntax.File:
 		r.filename = node.Name
-		if !r.commandString && node.Name == "" && len(r.bashSource) > 0 {
+		if r.stdinSourceEligible() && node.Name == "" && len(r.bashSource) > 0 {
 			r.stdinSourceActive = true
 		}
 		runExitTrap = true
@@ -2798,7 +2799,7 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 			}
 		}
 	case *syntax.Stmt:
-		if !r.commandString && r.incrementalFilename == "" && len(r.bashSource) > 0 {
+		if r.stdinSourceEligible() && r.incrementalFilename == "" && len(r.bashSource) > 0 {
 			r.stdinSourceActive = true
 		}
 		if r.stdinSourceActive && int(node.Pos().Offset()) < r.stdinSourceOffset {
@@ -2807,7 +2808,7 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 		r.verboseStmt(node)
 		r.stmt(ctx, node)
 	case syntax.Command:
-		if !r.commandString && r.incrementalFilename == "" && len(r.bashSource) > 0 {
+		if r.stdinSourceEligible() && r.incrementalFilename == "" && len(r.bashSource) > 0 {
 			r.stdinSourceActive = true
 		}
 		r.cmd(ctx, node)
@@ -2849,6 +2850,17 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 		return ExitStatus(code)
 	}
 	return nil
+}
+
+// stdinSourceEligible reports whether commands should receive the unread
+// script tail as fd 0. A terminal must retain its descriptor identity for
+// foreground utilities such as mesg; replacing it with a temporary script
+// file preserves bytes but destroys isatty and controlling-session semantics.
+func (r *Runner) stdinSourceEligible() bool {
+	if r.commandString || r.interactiveShell {
+		return false
+	}
+	return r.stdin == nil || !term.IsTerminal(int(r.stdin.Fd()))
 }
 
 func (r *Runner) verboseStmt(stmt *syntax.Stmt) {
