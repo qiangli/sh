@@ -9,12 +9,10 @@ Wave 1 closure.
 
 ## Revisions examined
 
-The suite-free reducer below was run against sh revision `98bd69cc`
-(the frozen S88 launch SUT) with a clean tree. The current workspace is
-that same revision; the only workspace delta produced by this session is
-the reducer itself (`interp/fc_s88_reducer_test.go`) and this document,
-neither of which alters product code. One run therefore covers both the
-frozen revision and the current workspace.
+The interpreter reducer was run against sh revision `98bd69cc` (the frozen
+S88 launch SUT). A test-only interactive boundary reducer was then added and
+run at `8d8b13a85bdc2c71474eeeaa7426528fdde9961b` on `novidesign.local` with
+Go 1.26.5. Neither revision changes product behavior.
 
 ## The reducer
 
@@ -48,15 +46,30 @@ fixture text, or journal content is read or reconstructed:
   half. The complete S82 F-then-R signature is reproduced with zero `fc`
   defect involved.
 
-Both tests are green at `98bd69cc` (including `-race -count=5`), as are
-the focused fc/history tests, the full `interp` package, and
-`moreinterp`. **No product red was reproduced, so no code patch is made.**
+- **`TestFcS88EditorSessionThroughInteractivePTY` (packaged boundary).**
+  `interactive.Run` drives the real readline loop over a kernel PTY. The
+  reducer waits for a fake editor's readiness marker before sending the edit
+  transcript, proving that readline yields the terminal while the editor owns
+  it; it then observes the edited command return through and execute in the
+  packaged interactive shell. The PTY harness also answers readline's ANSI
+  cursor-position queries, as a real terminal emulator does, so initialization
+  cannot be mistaken for an `fc` failure.
+
+The two interpreter tests and the interactive PTY reducer are green at the
+revisions above. The authoritative focused Novi commands were:
+
+```text
+GOTOOLCHAIN=go1.26.5 go test ./interactive -run '^TestFcS88EditorSessionThroughInteractivePTY$' -count=1 -v
+GOTOOLCHAIN=go1.26.5 go test ./interp -run '^TestFcS88' -count=1 -v
+```
+
+**No product red was reproduced, so no product-code patch is made.**
 
 ## Identity mapping
 
 | Identity | Journal class | Disposition | Evidence |
 | --- | --- | --- | --- |
-| fc TP 4 | FAIL | fixture-owned | S82 journal records the transcript feeding `s/world/goodbye/` and `q` to the shell; reducer test A proves the conformant editor session at the same revision; reducer test B reproduces this FAIL signature from the misroute alone. |
+| fc TP 4 | FAIL | fixture-owned | S82 journal records the transcript feeding `s/world/goodbye/` and `q` to the shell; the PTY reducer proves packaged interactive ownership handoff, interpreter test A proves the conformant editor session, and test B reproduces this FAIL signature from the misroute alone. |
 | fc TP 5 | FAIL | fixture-owned | Same as TP 4. |
 | fc TP 7 | FAIL | fixture-owned | Same as TP 4. |
 | fc TP 8 | UNRESOLVED | fixture-owned (downstream) | Reducer test B: post-misroute history pollution makes later history-consuming assertions diverge with a conformant shell. |
@@ -88,15 +101,12 @@ with a conformant shell.
 
 ## Authority boundary
 
-The licensed fixture and journal bytes were not read, copied, or
-reconstructed. Consequently the classification granularity is the S82
-journal record (which identities failed, and the recorded misroute
-signature) plus the reducer's causal demonstration. Confirming each
-individual TP's assertion text against its fixture bytes would require
-suite access and is authority-blocked; it cannot change the behavioral
-ownership established here, because both possible shell-side outcomes —
-the conformant editor session and the conformant misroute response — are
-now pinned by public-behavior tests at the same revision.
+The licensed fixture and journal bytes were not read, copied, or reconstructed.
+The classification granularity is the retained public S82 result record (the
+identities and recorded misroute signature) plus the causal public-behavior
+reducers. The packaged PTY test closes the previously unmeasured
+readline-to-editor ownership boundary; the interpreter tests pin both possible
+shell-side outcomes after that boundary.
 
 Corroborating record: the earlier paired Profile D run
 (`docs/profile-d-fc-disposition-2026-08-27.md`) shows 28 PASS / 24
@@ -105,12 +115,8 @@ control when the harness delivers its transcripts successfully.
 
 ## Honest residuals
 
-- The reducer exercises the interpreter layer: the runner's stdin is
-  handed to the editor and the edited result is executed. The upstream
-  delivery path — pty line discipline and the `interactive/` readline
-  loop that the packaged CLI wraps around this runner — is not exercised
-  here; if future journal evidence showed the transcript being consumed
-  before the editor spawns, that layer would need its own reducer.
+- The focused reducers establish ownership of the retained misroute signature;
+  they do not replace the next complete 117-set Profile D acceptance arm.
 - The misroute reproduction surfaced a cosmetic divergence outside fc
   scope: a slash-containing missing command reports a Go-style
   `stat ...: no such file or directory` diagnostic rather than Bash's
