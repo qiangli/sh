@@ -78,18 +78,17 @@ printf '%s\n' S88_EDITOR_DONE >&2
 	changed := make(chan struct{}, 1)
 	go func() {
 		buf := make([]byte, 4096)
-		answeredCPR := false
+		answeredCPR := 0
 		for {
 			n, readErr := master.Read(buf)
 			if n > 0 {
 				mu.Lock()
 				_, _ = transcript.Write(buf[:n])
-				asksCPR := !answeredCPR && strings.Contains(transcript.String(), "\x1b[6n")
-				if asksCPR {
-					answeredCPR = true
-				}
+				requestedCPR := strings.Count(transcript.String(), "\x1b[6n")
+				answersDue := requestedCPR - answeredCPR
+				answeredCPR = requestedCPR
 				mu.Unlock()
-				if asksCPR {
+				for range answersDue {
 					// readline expects its terminal emulator to answer the ANSI
 					// cursor-position query. This PTY test is that emulator.
 					_, _ = master.Write([]byte("\x1b[1;1R"))
