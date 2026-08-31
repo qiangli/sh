@@ -2441,21 +2441,11 @@ parseOpts:
 			lines := strings.Split(entries[k], "\n")
 			if numbering {
 				r.outf("%d\t%s%s\n", base+j, marker, lines[0])
-			} else if r.opts[optPosix] {
-				// -n suppresses the listing field, not merely its digits.  In
-				// POSIX mode the command text therefore starts in column one;
-				// a leading tab would become part of the observable line and can
-				// make an exact unnumbered-command comparison fail.
-				r.outf("%s\n", lines[0])
 			} else {
 				r.outf("\t%s%s\n", marker, lines[0])
 			}
 			for _, line := range lines[1:] {
-				if numbering || !r.opts[optPosix] {
-					r.outf("\t%s\n", line)
-				} else {
-					r.outf("%s\n", line)
-				}
+				r.outf("\t%s\n", line)
 			}
 		}
 		return exit
