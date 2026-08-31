@@ -255,7 +255,7 @@ func TestFcIssue7InteractiveListingDefaultsAndRanges(t *testing.T) {
 
 		var want strings.Builder
 		for i := 3; i <= 18; i++ {
-			fmt.Fprintf(&want, "\t: command-%02d\n", i)
+			fmt.Fprintf(&want, ": command-%02d\n", i)
 		}
 		if got := stdout.String(); got != want.String() {
 			t.Fatalf("fc -ln output = %q, want %q", got, want.String())
@@ -601,7 +601,7 @@ fc -s aa=bb echo
 		t.Fatal(err)
 	}
 	status := r.fcBuiltin(context.Background(), syntax.Pos{}, []string{"-ln", "1", "1"})
-	if status.code != 0 || buf.String() != "\tfirst line\n\tsecond line\n" {
+	if status.code != 0 || buf.String() != "first line\nsecond line\n" {
 		t.Fatalf("multiline listing: status=%d output=%q", status.code, buf.String())
 	}
 }
@@ -736,8 +736,26 @@ set -o history
 fc -l -1 -1
 fc -nl -1 -1
 `)
-	if want := "1\t: one\n\t: one\n"; out != want {
+	if want := "1\t: one\n: one\n"; out != want {
 		t.Fatalf("fc listing = %q, want %q", out, want)
+	}
+}
+
+// TestFcS88PosixNoNumberListingBytes is a public, suite-free reducer for the
+// exact comparison boundary: -n removes the complete numbering field, so both
+// an explicit range and the default range expose command bodies at byte zero.
+func TestFcS88PosixNoNumberListingBytes(t *testing.T) {
+	out := runHistScript(t, `HISTFILE=/dev/null
+HISTIGNORE='fc*'
+set -o posix
+set -o history
+: public-alpha
+: public-beta
+fc -l -n 1 2
+fc -l -n
+`)
+	if want := ": public-alpha\n: public-beta\n: public-alpha\n: public-beta\n"; out != want {
+		t.Fatalf("fc -l -n bytes = %q, want %q", out, want)
 	}
 }
 
