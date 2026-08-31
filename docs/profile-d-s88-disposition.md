@@ -10,9 +10,10 @@ Wave 1 closure.
 ## Revisions examined
 
 The interpreter reducer was run against sh revision `98bd69cc` (the frozen
-S88 launch SUT). A test-only interactive boundary reducer was then added and
+S88 launch SUT). A PTY-only interactive boundary reducer was then added and
 run at `8d8b13a85bdc2c71474eeeaa7426528fdde9961b` on `novidesign.local` with
-Go 1.26.5. Neither revision changes product behavior.
+Go 1.26.5. A later public non-TTY `sh -i` reducer exposed the product-owned
+boundary that those tests missed; this revision repairs it.
 
 ## The reducer
 
@@ -34,7 +35,7 @@ fixture text, or journal content is read or reconstructed:
   Issue 7 editor-session requirement the S82 F cases could exercise
   holds.
 
-- **`TestFcS88MisroutedEditorTranscriptSignature` (fixture-owned
+- **`TestFcS88MisroutedEditorTranscriptSignature` (misroute
   signature).** The same transcript is instead delivered as shell command
   input after the editor has already exited without consuming it. A fully
   conformant shell has no choice here: `s/world/goodbye/` and `q` are
@@ -55,6 +56,17 @@ fixture text, or journal content is read or reconstructed:
   cursor-position queries, as a real terminal emulator does, so initialization
   cannot be mistaken for an `fc` failure.
 
+- **`TestFcS88EditorConsumesNonTTYInteractiveInput` (failing packaged
+  boundary).** The certification-shaped input is supplied to interactive
+  `sh -i` through a pipe: `echo hello world`, `fc -e ed`, then the classic
+  `s/world/goodbye/`, `w`, `q` editor transcript. The old fallback loop let
+  the streaming parser read beyond the `fc` command before executing it, so
+  `ed` saw EOF and the shell later ran `w` and `q` as commands. GNU Bash lets
+  `ed` consume those lines. The repaired loop reads exactly one physical line
+  at a time, accumulates only parser-required continuations, executes the
+  complete command, and leaves all later pipe bytes for the command that owns
+  stdin. The reducer now observes `hello goodbye` and no misrouted commands.
+
 The two interpreter tests and the interactive PTY reducer are green at the
 revisions above. The authoritative focused Novi commands were:
 
@@ -63,50 +75,50 @@ GOTOOLCHAIN=go1.26.5 go test ./interactive -run '^TestFcS88EditorSessionThroughI
 GOTOOLCHAIN=go1.26.5 go test ./interp -run '^TestFcS88' -count=1 -v
 ```
 
-**No product red was reproduced, so no product-code patch is made.**
+**A product red was reproduced in the non-TTY interactive front end and is
+fixed by bounding its reads at command-line ownership transitions.**
 
 ## Identity mapping
 
 | Identity | Journal class | Disposition | Evidence |
 | --- | --- | --- | --- |
-| fc TP 4 | FAIL | fixture-owned | S82 journal records the transcript feeding `s/world/goodbye/` and `q` to the shell; the PTY reducer proves packaged interactive ownership handoff, interpreter test A proves the conformant editor session, and test B reproduces this FAIL signature from the misroute alone. |
-| fc TP 5 | FAIL | fixture-owned | Same as TP 4. |
-| fc TP 7 | FAIL | fixture-owned | Same as TP 4. |
-| fc TP 8 | UNRESOLVED | fixture-owned (downstream) | Reducer test B: post-misroute history pollution makes later history-consuming assertions diverge with a conformant shell. |
-| fc TP 10 | FAIL | fixture-owned | Same as TP 4. |
-| fc TP 11 | FAIL | fixture-owned | Same as TP 4. |
-| fc TP 17 | FAIL | fixture-owned | Same as TP 4. |
-| fc TP 18 | FAIL | fixture-owned | Same as TP 4. |
-| fc TP 19 | FAIL | fixture-owned | Same as TP 4. |
-| fc TP 21 | FAIL | fixture-owned | Same as TP 4. |
-| fc TP 22 | FAIL | fixture-owned | Same as TP 4. |
-| fc TP 26 | FAIL | fixture-owned | Same as TP 4. |
-| fc TP 27 | UNRESOLVED | fixture-owned (downstream) | Same as TP 8. |
-| fc TP 28 | FAIL | fixture-owned | Same as TP 4. |
-| fc TP 29 | FAIL | fixture-owned | Same as TP 4. |
-| fc TP 30 | UNRESOLVED | fixture-owned (downstream) | Same as TP 8. |
-| fc TP 31 | FAIL | fixture-owned | Same as TP 4. |
-| fc TP 32 | FAIL | fixture-owned | Same as TP 4. |
-| fc TP 33 | FAIL | fixture-owned | Same as TP 4. |
-| fc TP 34 | FAIL | fixture-owned | Same as TP 4. |
+| fc TP 4 | FAIL | product-fixed | The non-TTY reducer reproduces the parser-owned editor-input misroute and proves the bounded-read repair lets `ed` consume the transcript. |
+| fc TP 5 | FAIL | product-fixed | Same as TP 4. |
+| fc TP 7 | FAIL | product-fixed | Same as TP 4. |
+| fc TP 8 | UNRESOLVED | product-fixed (downstream) | The repair prevents the misrouted transcript from polluting history, removing the causal source of the later divergence. |
+| fc TP 10 | FAIL | product-fixed | Same as TP 4. |
+| fc TP 11 | FAIL | product-fixed | Same as TP 4. |
+| fc TP 17 | FAIL | product-fixed | Same as TP 4. |
+| fc TP 18 | FAIL | product-fixed | Same as TP 4. |
+| fc TP 19 | FAIL | product-fixed | Same as TP 4. |
+| fc TP 21 | FAIL | product-fixed | Same as TP 4. |
+| fc TP 22 | FAIL | product-fixed | Same as TP 4. |
+| fc TP 26 | FAIL | product-fixed | Same as TP 4. |
+| fc TP 27 | UNRESOLVED | product-fixed (downstream) | Same as TP 8. |
+| fc TP 28 | FAIL | product-fixed | Same as TP 4. |
+| fc TP 29 | FAIL | product-fixed | Same as TP 4. |
+| fc TP 30 | UNRESOLVED | product-fixed (downstream) | Same as TP 8. |
+| fc TP 31 | FAIL | product-fixed | Same as TP 4. |
+| fc TP 32 | FAIL | product-fixed | Same as TP 4. |
+| fc TP 33 | FAIL | product-fixed | Same as TP 4. |
+| fc TP 34 | FAIL | product-fixed | Same as TP 4. |
 
-No identity is classified product-fixed: the S85 Wave 1 repair included
-in `98bd69cc` (POSIX single-substitution selector parsing,
-`interp: parse POSIX fc substitution selector`) is adjacent hardening
-with its own focused tests, but no journal evidence ties it causally to
-any of these twenty identities, whose recorded signature is the editor
-transcript misroute. No identity is still-open: each has a recorded
-journal signature and a causal suite-free reproduction of that signature
-with a conformant shell.
+All twenty identities are classified product-fixed by the same non-TTY input
+ownership repair: the seventeen FAIL identities are the direct editor-input
+misroute and the three UNRESOLVED identities are its history-pollution
+downstream. The earlier S85 selector repair remains adjacent hardening rather
+than the causal fix for this cluster. No identity remains open, subject to the
+next Profile D acceptance arm.
 
 ## Authority boundary
 
 The licensed fixture and journal bytes were not read, copied, or reconstructed.
 The classification granularity is the retained public S82 result record (the
 identities and recorded misroute signature) plus the causal public-behavior
-reducers. The packaged PTY test closes the previously unmeasured
-readline-to-editor ownership boundary; the interpreter tests pin both possible
-shell-side outcomes after that boundary.
+reducers. The packaged PTY test closes the readline-to-editor boundary; the
+non-TTY reducer closes the fallback-parser-to-editor boundary that actually
+failed; and the interpreter tests pin both possible outcomes after the
+boundary.
 
 Corroborating record: the earlier paired Profile D run
 (`docs/profile-d-fc-disposition-2026-08-27.md`) shows 28 PASS / 24
@@ -115,8 +127,9 @@ control when the harness delivers its transcripts successfully.
 
 ## Honest residuals
 
-- The focused reducers establish ownership of the retained misroute signature;
-  they do not replace the next complete 117-set Profile D acceptance arm.
+- The focused reducers establish ownership and repair of the retained misroute
+  signature; they do not replace the next complete 117-set Profile D acceptance
+  arm.
 - The misroute reproduction surfaced a cosmetic divergence outside fc
   scope: a slash-containing missing command reports a Go-style
   `stat ...: no such file or directory` diagnostic rather than Bash's

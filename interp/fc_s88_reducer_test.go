@@ -29,11 +29,13 @@ import (
 //     proves the product side with a real ed(1) driven from the
 //     runner's stdin.
 //
-//   - Fixture-owned signature: when the same transcript lines instead
+//   - Misroute signature: when the same transcript lines instead
 //     arrive on the shell's command input after the editor has already
 //     exited, a fully conformant shell must execute them as commands,
 //     fail with 127, and record them in history, which then corrupts
-//     every later history-consuming assertion.
+//     every later history-consuming assertion. The interpreter does the
+//     right thing after the misroute; the non-TTY interactive front end
+//     used to cause it by reading ahead of the command being executed.
 //     TestFcS88MisroutedEditorTranscriptSignature reproduces exactly
 //     the journal's FAIL-then-UNRESOLVED signature with no fc defect
 //     involved.
@@ -136,8 +138,8 @@ func TestFcS88EditorDrivenFromShellStdin(t *testing.T) {
 	}
 }
 
-// TestFcS88MisroutedEditorTranscriptSignature is the fixture-owned half
-// of the reducer: the same transcript delivered as shell command input
+// TestFcS88MisroutedEditorTranscriptSignature is the diagnostic half of
+// the reducer: the same transcript delivered as shell command input
 // (the editor having exited without consuming it) must yield the S82
 // journal signature - 127s for the ed commands, followed by history
 // listings that no longer match any expectation formed before the

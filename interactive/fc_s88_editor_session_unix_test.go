@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -158,5 +159,58 @@ printf '%s\n' S88_EDITOR_DONE >&2
 		if !strings.Contains(got, marker) {
 			t.Fatalf("transcript missing %q: %q", marker, got)
 		}
+	}
+}
+
+// TestFcS88EditorConsumesNonTTYInteractiveInput reproduces the certification
+// boundary directly: `sh -i` may receive interactive input from a pipe rather
+// than a terminal, and fc's editor must consume the lines following the fc
+// command before the shell parser reads them as later commands.
+func TestFcS88EditorConsumesNonTTYInteractiveInput(t *testing.T) {
+	if _, err := exec.LookPath("ed"); err != nil {
+		t.Skipf("ed not found: %v", err)
+	}
+
+	stdin, input, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stdin.Close()
+	go func() {
+		_, _ = input.WriteString("echo hello world\nfc -e ed\ns/world/goodbye/\nw\nq\n")
+		_ = input.Close()
+	}()
+
+	dir := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	runner, err := interp.New(
+		interp.Dir(dir),
+		interp.Env(expand.ListEnviron("HOME="+dir, "HISTFILE=/dev/null", "PATH=/bin:/usr/bin")),
+		interp.StdIO(stdin, &stdout, &stderr),
+		interp.Interactive(true),
+		interp.WithPosixMode(true),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = Run(context.Background(), Options{
+		Runner:        runner,
+		PosixMode:     true,
+		PlainTerminal: true,
+		Stdin:         stdin,
+		Stdout:        &stdout,
+		Stderr:        &stderr,
+		PS1:           func() string { return "" },
+		PS2:           func() string { return "" },
+	})
+	if err != nil {
+		t.Fatalf("interactive run: %v; stdout=%q stderr=%q", err, stdout.String(), stderr.String())
+	}
+	if got := stdout.String(); !strings.Contains(got, "hello goodbye\n") {
+		t.Fatalf("stdout = %q, want edited command output", got)
+	}
+	if got := stderr.String(); got != "echo hello goodbye\n" {
+		t.Fatalf("stderr = %q, want only fc's edited-command trace", got)
 	}
 }

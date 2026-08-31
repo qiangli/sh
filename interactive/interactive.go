@@ -638,26 +638,49 @@ func (h *fileHistory) At(idx int) string {
 // shell.Session.Run prior to this package — kept here so Run() has a
 // single entry point regardless of TTY status.
 func runFallback(ctx context.Context, r *interp.Runner, stdin io.Reader, stdout, stderr io.Writer, lang syntax.LangVariant, posixMode bool, ps1, ps2 func() string, onRunError func(error), preCommand func(context.Context, *interp.Runner)) error {
-	parser := syntax.NewParser(syntax.Variant(lang), syntax.PosixMode(posixMode))
+	r.EnableInteractiveHistory()
 	if preCommand != nil {
 		preCommand(ctx, r)
 	}
 	_, _ = io.WriteString(stdout, ps1())
-	for stmts, err := range parser.InteractiveSeq(stdin) {
-		if err != nil {
+	for {
+		var input string
+		var prog *syntax.File
+		for {
+			line, err := readInteractiveLine(stdin)
+			if err != nil && line == "" {
+				if errors.Is(err, io.EOF) {
+					return nil
+				}
+				return err
+			}
+			input += line
+
+			parser := syntax.NewParser(syntax.Variant(lang), syntax.PosixMode(posixMode))
+			prog, err = parser.Parse(strings.NewReader(input), "")
+			if err == nil {
+				break
+			}
+			if parser.Incomplete() {
+				_, _ = io.WriteString(stdout, ps2())
+				continue
+			}
 			_, _ = io.WriteString(stderr, err.Error()+"\n")
 			return err
 		}
-		if parser.Incomplete() {
-			_, _ = io.WriteString(stdout, ps2())
-			continue
-		}
+
 		select {
 		case <-ctx.Done():
 			return nil
 		default:
 		}
-		for _, stmt := range stmts {
+		r.RecordInteractiveHistory(strings.TrimSuffix(input, "\n"))
+		lineCount := strings.Count(input, "\n")
+		if !strings.HasSuffix(input, "\n") {
+			lineCount++
+		}
+		r.AdvanceAliasInput(max(lineCount, 1))
+		for _, stmt := range prog.Stmts {
 			// Run under ctx directly, not a per-statement derivative — see
 			// the comment in Run above; the same background-job-survival
 			// reasoning applies here.
@@ -674,7 +697,30 @@ func runFallback(ctx context.Context, r *interp.Runner, stdin io.Reader, stdout,
 		}
 		_, _ = io.WriteString(stdout, ps1())
 	}
-	return nil
+}
+
+// readInteractiveLine reads exactly through one newline. In particular, it
+// must not use a buffered reader: any following bytes can belong to a command
+// that takes ownership of stdin before the next shell prompt, such as the
+// editor launched by fc.
+func readInteractiveLine(r io.Reader) (string, error) {
+	var line strings.Builder
+	var one [1]byte
+	for {
+		n, err := r.Read(one[:])
+		if n > 0 {
+			line.WriteByte(one[0])
+			if one[0] == '\n' {
+				return line.String(), nil
+			}
+		}
+		if err != nil {
+			if line.Len() > 0 {
+				return line.String(), nil
+			}
+			return "", err
+		}
+	}
 }
 
 // isExitStatus reports whether err is just a non-zero command exit code
