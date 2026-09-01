@@ -680,8 +680,6 @@ type Parser struct {
 	assignIndexWords  bool
 	rawAssignIndex    bool
 	nakedAssignIndex  bool
-	nakedAssignBadPos Pos
-	nakedAssignBadMsg string
 
 	// lastBquoteEsc is how many times the last backquote token was escaped
 	lastBquoteEsc int
@@ -2436,11 +2434,13 @@ func (p *Parser) eitherIndexBlank(blankOK bool) ArithmExpr {
 	expr := p.followArithm(leftBrack, lpos)
 	if p.nakedAssignIndex {
 		text := arithmExprText(expr)
-		if (strings.HasPrefix(text, "*") || strings.HasPrefix(text, "@")) && len(text) > 1 {
-			p.badNakedAssignIndex(lpos, "not a valid arithmetic expression")
-		}
 		if p.tok != rightBrack {
-			p.badNakedAssignIndex(p.pos, "not a valid arithmetic expression")
+			// The subscript is not valid arithmetic. That is NOT a parse
+			// error: bash scans to the matching bracket and only complains
+			// when it EVALUATES the subscript, so `a[b[c]d]=e` is a runtime
+			// "syntax error in expression" with status 1, not a rejected
+			// script. Recover the raw text as one literal and let the
+			// interpreter report it (bash-5.3 tests/arith.tests line 358).
 			lit := &Lit{ValuePos: lpos, ValueEnd: p.pos, Value: text}
 			depth := 0
 			for p.tok != _EOF {
@@ -2474,13 +2474,6 @@ func (p *Parser) eitherIndexBlank(blankOK bool) ArithmExpr {
 	p.assignIndexWords = oldAssignIndexWords
 	p.matchedArithm(lpos, leftBrack, rightBrack)
 	return expr
-}
-
-func (p *Parser) badNakedAssignIndex(pos Pos, msg string) {
-	if p.nakedAssignBadMsg == "" {
-		p.nakedAssignBadPos = pos
-		p.nakedAssignBadMsg = msg
-	}
 }
 
 func (p *Parser) zshSubFlags() *FlagsArithm {
@@ -2616,8 +2609,6 @@ func (p *Parser) getAssign(needEqual bool) *Assign {
 		oldNakedAssignIndex := p.nakedAssignIndex
 		p.rawAssignIndex = true
 		p.nakedAssignIndex = needEqual
-		p.nakedAssignBadPos = Pos{}
-		p.nakedAssignBadMsg = ""
 		as.Index = p.eitherIndex()
 		p.rawAssignIndex = oldRawAssignIndex
 		p.nakedAssignIndex = oldNakedAssignIndex
@@ -2630,10 +2621,6 @@ func (p *Parser) getAssign(needEqual bool) *Assign {
 			return as
 		}
 		if p.tok == assgnParen {
-			if p.nakedAssignBadMsg != "" {
-				p.posErr(p.nakedAssignBadPos, "%s", p.nakedAssignBadMsg)
-				return nil
-			}
 			if !p.lang.in(langBashLike | LangZsh) {
 				p.curErr("arrays cannot be nested")
 				return nil
@@ -2663,10 +2650,6 @@ func (p *Parser) getAssign(needEqual bool) *Assign {
 				} else {
 					p.followErr(as.Pos(), "a[b]", assgn)
 				}
-				return nil
-			}
-			if p.nakedAssignBadMsg != "" {
-				p.posErr(p.nakedAssignBadPos, "%s", p.nakedAssignBadMsg)
 				return nil
 			}
 			p.pos = posAddCol(p.pos, 1)

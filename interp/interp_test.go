@@ -7186,7 +7186,8 @@ func TestStdinScriptInputRedirectBeatsLineConsumption(t *testing.T) {
 		file, err := syntax.NewParser().Parse(strings.NewReader(src), "")
 		qt.Assert(t, qt.IsNil(err))
 		var cb bytes.Buffer
-		r, err := interp.New(interp.StdIO(nil, &cb, &cb), interp.WithBashSource([]byte(src)))
+		r, err := interp.New(interp.StdIO(nil, &cb, &cb), interp.WithBashSource([]byte(src)),
+			interp.WithStdinScript(true))
 		qt.Assert(t, qt.IsNil(err))
 		_ = r.Run(context.Background(), file)
 		return cb.String()
@@ -9054,6 +9055,7 @@ func TestRunnerSourceReadConsumesBufferedStdin(t *testing.T) {
 		interp.Dir(tdir),
 		interp.StdIO(nil, &cb, &cb),
 		interp.WithBashSource([]byte(src)),
+		interp.WithStdinScript(true),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -9092,6 +9094,7 @@ func TestRunnerExecConsumesBufferedStdin(t *testing.T) {
 	r, err := interp.New(
 		interp.StdIO(nil, &cb, &cb),
 		interp.WithBashSource([]byte(src)),
+		interp.WithStdinScript(true),
 		interp.ExecHandlers(func(next interp.ExecHandlerFunc) interp.ExecHandlerFunc {
 			return func(ctx context.Context, args []string) error {
 				if args[0] != "consume" {

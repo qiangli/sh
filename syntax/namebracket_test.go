@@ -107,8 +107,16 @@ func TestNameBracketStreamingAndWordSemantics(t *testing.T) {
 	}
 }
 
-func TestNameBracketInvalidAssignmentStillErrors(t *testing.T) {
+// TestNameBracketInvalidAssignmentDefersToRuntime pins the other half of the
+// boundary. A subscript that is not valid arithmetic is NOT a parse error, even
+// with an `=` following: bash 5.3 scans to the matching bracket and complains
+// only when it EVALUATES the subscript, so each of these is a runtime
+// "arithmetic syntax error" with status 1 and the rest of the script still
+// runs. (Verified against GNU bash 5.3.15; interp reproduces the diagnostics,
+// and tests/arith.tests line 358 covers `a[b[c]d]=e`.)
+func TestNameBracketInvalidAssignmentDefersToRuntime(t *testing.T) {
 	for _, src := range []string{
+		`a[b[c]d]=e`,
 		`a[[]int]=x`,
 		`a[map[string]int]=x`,
 		`a[*T]=x`,
@@ -116,8 +124,16 @@ func TestNameBracketInvalidAssignmentStillErrors(t *testing.T) {
 		`a[[x]]=x`,
 	} {
 		t.Run(src, func(t *testing.T) {
-			if _, err := NewParser().Parse(iotest.OneByteReader(strings.NewReader(src)), ""); err == nil {
-				t.Fatalf("invalid arithmetic assignment unexpectedly parsed: %s", src)
+			f, err := NewParser().Parse(iotest.OneByteReader(strings.NewReader(src)), "")
+			if err != nil {
+				t.Fatalf("%s: bash accepts this at parse time: %v", src, err)
+			}
+			call, ok := f.Stmts[0].Cmd.(*CallExpr)
+			if !ok || len(call.Assigns) != 1 {
+				t.Fatalf("%s: want one assignment, got %#v", src, f.Stmts[0].Cmd)
+			}
+			if call.Assigns[0].Index == nil {
+				t.Fatalf("%s: assignment lost its subscript", src)
 			}
 		})
 	}

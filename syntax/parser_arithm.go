@@ -307,7 +307,9 @@ func (p *Parser) arithmExprValue(compact bool) ArithmExpr {
 		x = pe
 	case leftBrack:
 		if p.nakedAssignIndex {
-			p.badNakedAssignIndex(p.pos, "not a valid arithmetic expression")
+			// A bracket where an operand belongs: recover the raw text as a
+			// literal. If this turns out to be an assignment subscript, bash
+			// reports it when evaluating, not when parsing.
 			l := &Lit{ValuePos: p.pos, ValueEnd: p.pos}
 			p.appendArithmBracketSuffix(l, compact)
 			x = p.wordOne(l)

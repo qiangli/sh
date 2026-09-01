@@ -330,6 +330,13 @@ type Runner struct {
 	stdinSourceActive     bool
 	stdinSourceOffset     int
 	stdinSourceBaseOffset int
+	// stdinScript reports that the bytes in bashSource were read FROM fd 0 —
+	// `bash < script`. Only then does the stdin-script quirk apply, so it
+	// cannot be inferred from an unnamed *syntax.File: an embedder that parses
+	// an unnamed script while handing the runner an unrelated stdin pipe (an
+	// editor transcript, message lines) has a stdin that is data, not source.
+	// Set with [WithStdinScript].
+	stdinScript bool
 	// stdinRedirected is set while a command's fd 0 is bound to an explicit
 	// input redirect (`<`, `<<`, `<<<`). It suppresses the stdin-source reader
 	// above, so a heredoc/here-string/file redirect wins over the
@@ -2015,6 +2022,25 @@ func WithBashSource(src []byte) RunnerOption {
 	}
 }
 
+// WithStdinScript declares that the bytes given to [WithBashSource] were read
+// from the runner's stdin — the `bash < script` case. Bash keeps ONE logical
+// input stream there, so a command that reads fd 0 consumes the script's own
+// unread tail:
+//
+//	$ bash < input-line.sh          # input-line.sh runs `bash ./sub` ...
+//	before calling ./sub
+//	line read by ./sub was `this line for input-line.sh'
+//
+// This cannot be inferred from an unnamed [*syntax.File]: an embedder may parse
+// an unnamed script while the runner's stdin carries unrelated data. Leave it
+// off unless fd 0 really is where the script came from.
+func WithStdinScript(on bool) RunnerOption {
+	return func(r *Runner) error {
+		r.stdinScript = on
+		return nil
+	}
+}
+
 // WithIncrementalFilename sets the filename used for bash-compatible
 // diagnostics when [Runner.Run] is called incrementally with a [*syntax.Stmt]
 // or [syntax.Command] instead of a full [*syntax.File].
@@ -2599,6 +2625,7 @@ func (r *Runner) Reset() {
 		bashCompatErrors:       r.bashCompatErrors,
 		strictPosix:            r.strictPosix,
 		bashSource:             slices.Clone(r.bashSource),
+		stdinScript:            r.stdinScript,
 		auditHandler:           r.auditHandler,
 		auditLog:               r.auditLog,
 		structuredErrorHandler: r.structuredErrorHandler,
@@ -2857,10 +2884,35 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 // foreground utilities such as mesg; replacing it with a temporary script
 // file preserves bytes but destroys isatty and controlling-session semantics.
 func (r *Runner) stdinSourceEligible() bool {
-	if r.commandString || r.interactiveShell {
+	if !r.stdinScript || r.commandString || r.interactiveShell {
 		return false
 	}
-	return r.stdin == nil || !term.IsTerminal(int(r.stdin.Fd()))
+	return !isTerminalFile(r.stdin)
+}
+
+// isTerminalFile reports whether f is a terminal WITHOUT calling f.Fd().
+//
+// os.File.Fd detaches the descriptor from the runtime poller and puts it back
+// into blocking mode, which silently disables SetReadDeadline on that file
+// forever after. `read` cancels a blocked stdin read by setting a read
+// deadline from a context.AfterFunc, so a single isatty probe on r.stdin was
+// enough to make an interrupted `read` block until EOF instead of returning.
+// SyscallConn.Control hands out the same descriptor without that side effect.
+func isTerminalFile(f *os.File) bool {
+	if f == nil {
+		return false
+	}
+	rc, err := f.SyscallConn()
+	if err != nil {
+		return false
+	}
+	isTTY := false
+	if err := rc.Control(func(fd uintptr) {
+		isTTY = term.IsTerminal(int(fd))
+	}); err != nil {
+		return false
+	}
+	return isTTY
 }
 
 func (r *Runner) verboseStmt(stmt *syntax.Stmt) {

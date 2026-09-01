@@ -1709,7 +1709,12 @@ func (r *Runner) handlerCtx(ctx context.Context, kind handlerKind, pos syntax.Po
 		// descriptor so its read fails with EBADF rather than reading an
 		// empty /dev/null.
 		hc.Stdin = badFdReader{}
-	} else if stdin := r.scriptStdinReader(); stdin != nil {
+	}
+	// The script-stdin reader OVERRIDES r.stdin: when the script came from
+	// fd 0 (see [WithStdinScript]), r.stdin is that same descriptor, already
+	// drained by the parser — the unread tail lives in bashSource. It is gated
+	// on stdinScript, so an embedder's explicit stdin stream is never replaced.
+	if stdin := r.scriptStdinReader(); stdin != nil {
 		// An external command reading fd 0 consumes the rest of the script
 		// source (bash's stdin-script quirk). It is backed by a seekable
 		// temp file in the exec handler, so a command that reads to EOF
@@ -6134,6 +6139,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			// ate. Only X (the left side / first command) gets this; Y and
 			// any inner Y read from the pipe.
 			r2.bashSource = r.bashSource
+			r2.stdinScript = r.stdinScript
 			r2.stdinSourceActive = r.stdinSourceActive
 			r2.stdinSourceOffset = r.stdinSourceOffset
 			r2.stdinSourceBaseOffset = r.stdinSourceBaseOffset

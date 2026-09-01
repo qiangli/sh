@@ -3728,7 +3728,10 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			exit.code = 1
 			return exit
 		}
-		if prompt != "" && input == stdin && stdin != nil && term.IsTerminal(int(stdin.Fd())) {
+		// isTerminalFile, not stdin.Fd(): probing with Fd would detach stdin
+		// from the runtime poller and break the SetReadDeadline this same
+		// builtin relies on for -t and for context cancellation.
+		if prompt != "" && input == stdin && isTerminalFile(stdin) {
 			r.out(prompt)
 		}
 		readInput := func() ([]byte, error) {

@@ -2409,11 +2409,54 @@ func escapedQuotedAssignIndex(expr syntax.ArithmExpr) (string, bool) {
 	return strings.TrimSuffix(strings.TrimPrefix(lit.Value, `\"`), `\"`), true
 }
 
+// bashIndexArithmSyntaxError reports bash's diagnostic for a subscript whose
+// text is not a complete arithmetic expression, or "" when it is fine.
+//
+// The parser deliberately accepts such a subscript (`a[b[c]d]=e`): bash scans
+// to the matching bracket and only complains when it EVALUATES the subscript.
+// Reproduce that evaluation by re-parsing the text the way $(( )) is parsed,
+// which — unlike [syntax.Parser.Arithmetic] — refuses trailing junk. bash's
+// error token is the unparsed remainder from the failure point, and the
+// wording splits on whether an operand or an operator was the problem.
+func bashIndexArithmSyntaxError(text string) string {
+	const prefix = "$(("
+	src := prefix + text + "))"
+	_, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(src), "")
+	if err == nil {
+		return ""
+	}
+	pe, ok := err.(syntax.ParseError)
+	if !ok {
+		return ""
+	}
+	off := int(pe.Pos.Offset()) - len(prefix)
+	token := text
+	if off >= 0 && off < len(text) {
+		token = text[off:]
+	}
+	if strings.Contains(pe.Text, "not a valid arithmetic operator") {
+		return fmt.Sprintf("%s: arithmetic syntax error in expression (error token is %q)", text, token)
+	}
+	return fmt.Sprintf("%s: arithmetic syntax error: operand expected (error token is %q)", text, token)
+}
+
 func (r *Runner) arithmCompoundArrayIndex(expr syntax.ArithmExpr) (int, bool) {
 	rawText := ""
 	if word, ok := expr.(*syntax.Word); ok && len(word.Parts) == 1 {
 		if _, ok := word.Parts[0].(*syntax.Lit); ok {
 			rawText = word.Lit()
+			if !strings.ContainsAny(rawText, "'#") {
+				if msg := bashIndexArithmSyntaxError(rawText); msg != "" {
+					prefix := r.filename
+					if prefix == "" {
+						prefix = "bash"
+					}
+					err := fmt.Errorf("%s: line %d: %s", prefix, r.curStmtPos.Line(), msg)
+					r.lastArithErr = err
+					r.expandErr(err)
+					return 0, false
+				}
+			}
 			if strings.ContainsAny(rawText, "'#") {
 				if strings.Contains(rawText, "#") {
 					err := r.rawAssignIndexArithError(rawText, fmt.Errorf("not a valid arithmetic operator"))
