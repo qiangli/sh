@@ -4,8 +4,10 @@
 package syntax
 
 import (
+	"bytes"
 	"strings"
 	"testing"
+	"testing/iotest"
 )
 
 // TestNameBracketCommandPositionMatchesBash pins the fix for the
@@ -56,10 +58,18 @@ func TestNameBracketCommandPositionMatchesBash(t *testing.T) {
 		{`ls a[[]b]`, false, "argument position was never affected"},
 	}
 
-	for _, variant := range []LangVariant{LangBash, LangPOSIX} {
+	variants := []struct {
+		name string
+		opts []ParserOption
+	}{
+		{"bash", []ParserOption{Variant(LangBash)}},
+		{"bash-posix", []ParserOption{Variant(LangBash), PosixMode(true)}},
+		{"posix", []ParserOption{Variant(LangPOSIX)}},
+	}
+	for _, variant := range variants {
 		for _, tc := range tests {
-			t.Run(variant.String()+"/"+tc.src, func(t *testing.T) {
-				_, err := NewParser(Variant(variant)).Parse(strings.NewReader(tc.src), "")
+			t.Run(variant.name+"/"+tc.src, func(t *testing.T) {
+				_, err := NewParser(variant.opts...).Parse(strings.NewReader(tc.src), "")
 				if tc.wantErr && err == nil {
 					t.Fatalf("%s: expected a parse error (%s)", tc.src, tc.why)
 				}
@@ -71,13 +81,55 @@ func TestNameBracketCommandPositionMatchesBash(t *testing.T) {
 	}
 }
 
+func TestNameBracketStreamingAndWordSemantics(t *testing.T) {
+	for _, src := range []string{
+		`f[[]int]`,
+		`f[map[string]int]`,
+		`f[*T]`,
+		`f[[]]`,
+		`f[[x]]`,
+		`f[$x]`,
+		`f[$(printf x)]`,
+	} {
+		t.Run(src, func(t *testing.T) {
+			f, err := NewParser().Parse(iotest.OneByteReader(strings.NewReader(src)), "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got bytes.Buffer
+			if err := NewPrinter().Print(&got, f); err != nil {
+				t.Fatal(err)
+			}
+			if got.String() != src+"\n" {
+				t.Fatalf("ordinary glob word changed meaning: got %q, want %q", got.String(), src+"\n")
+			}
+		})
+	}
+}
+
+func TestNameBracketInvalidAssignmentStillErrors(t *testing.T) {
+	for _, src := range []string{
+		`a[[]int]=x`,
+		`a[map[string]int]=x`,
+		`a[*T]=x`,
+		`a[[]]=x`,
+		`a[[x]]=x`,
+	} {
+		t.Run(src, func(t *testing.T) {
+			if _, err := NewParser().Parse(iotest.OneByteReader(strings.NewReader(src)), ""); err == nil {
+				t.Fatalf("invalid arithmetic assignment unexpectedly parsed: %s", src)
+			}
+		})
+	}
+}
+
 // TestNameBracketAssignmentStillParsesAsAssignment guards the half of the fix a
 // verdict-only test cannot see: an assignment must still be an ASSIGNMENT, not
 // merely something that parses. Accepting `a[0]=1` as a command word would pass
 // the table above while silently changing the program's meaning.
 func TestNameBracketAssignmentStillParsesAsAssignment(t *testing.T) {
 	for _, src := range []string{`a[0]=1`, `a[i]=x`, `a[i]+=x`, `a[b[c]]=1`} {
-		f, err := NewParser().Parse(strings.NewReader(src), "")
+		f, err := NewParser().Parse(iotest.OneByteReader(strings.NewReader(src)), "")
 		if err != nil {
 			t.Fatalf("%s: %v", src, err)
 		}

@@ -306,7 +306,14 @@ func (p *Parser) arithmExprValue(compact bool) ArithmExpr {
 		}
 		x = pe
 	case leftBrack:
-		p.curErr("%#q must follow a name like a[i]", p.tok)
+		if p.nakedAssignIndex {
+			p.badNakedAssignIndex(p.pos, "not a valid arithmetic expression")
+			l := &Lit{ValuePos: p.pos, ValueEnd: p.pos}
+			p.appendArithmBracketSuffix(l, compact)
+			x = p.wordOne(l)
+		} else {
+			p.curErr("%#q must follow a name like a[i]", p.tok)
+		}
 	case colon:
 		p.curErr("ternary operator missing %#q before %#q", quest, colon)
 	case _LitWord:

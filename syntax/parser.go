@@ -679,6 +679,9 @@ type Parser struct {
 	paramExpReplFirst bool
 	assignIndexWords  bool
 	rawAssignIndex    bool
+	nakedAssignIndex  bool
+	nakedAssignBadPos Pos
+	nakedAssignBadMsg string
 
 	// lastBquoteEsc is how many times the last backquote token was escaped
 	lastBquoteEsc int
@@ -784,27 +787,53 @@ func (p *Parser) wordAnyNumber() *Word {
 
 // assignAsWord converts a Naked array assignment parse (from getAssign
 // when needEqual=true and no = follows) back into a regular word token.
-// Bracket content is wrapped in a [DblQuoted] part so that spaces in the
-// subscript are not IFS-split — matching bash where a[b c] is one word.
+// The bracket content stays unquoted: for a non-assignment, brackets retain
+// their ordinary glob meaning. Word boundaries are already represented by
+// the AST, so spaces recovered inside the candidate do not split the word.
 func (p *Parser) assignAsWord(as *Assign) *Word {
-	var parts []WordPart
-	parts = append(parts, as.Name)
+	if index, ok := as.Index.(*Word); ok {
+		parts := []WordPart{
+			as.Name,
+			&Lit{Value: "[", ValuePos: as.Name.ValueEnd, ValueEnd: posAddCol(as.Name.ValueEnd, 1)},
+		}
+		parts = append(parts, index.Parts...)
+		parts = append(parts, &Lit{Value: "]", ValuePos: index.End(), ValueEnd: posAddCol(index.End(), 1)})
+		if as.Append {
+			parts = append(parts, &Lit{Value: "+"})
+		}
+		return &Word{Parts: parts}
+	}
+
+	var src strings.Builder
+	src.WriteString(as.Name.Value)
 	if as.Index != nil {
-		parts = append(parts, &Lit{Value: "[", ValuePos: as.Name.ValueEnd})
-		var idxBuf strings.Builder
-		p.printArithmExpr(&idxBuf, as.Index)
-		idxText := idxBuf.String()
-		parts = append(parts, &DblQuoted{
-			Left:  as.Name.ValueEnd,
-			Right: as.Name.ValueEnd, // approximate
-			Parts: []WordPart{&Lit{Value: idxText}},
-		})
-		parts = append(parts, &Lit{Value: "]"})
+		src.WriteByte('[')
+		p.printArithmExpr(&src, as.Index)
+		src.WriteByte(']')
 	}
 	if as.Append {
-		parts = append(parts, &Lit{Value: "+"})
+		src.WriteByte('+')
 	}
-	return &Word{Parts: parts}
+
+	// Re-lex the recovered source as a word, not as an assignment candidate.
+	// This restores the ordinary word-part semantics of expansions and glob
+	// brackets. Spaces inside the candidate are represented by multiple Words
+	// by WordsSeq; join those parts back into the single word Bash keeps here.
+	wordParser := NewParser(Variant(p.lang), PosixMode(p.posixMode))
+	var parts []WordPart
+	for word, err := range wordParser.WordsSeq(strings.NewReader(src.String())) {
+		if err != nil {
+			break
+		}
+		if len(parts) > 0 {
+			parts = append(parts, &Lit{Value: " "})
+		}
+		parts = append(parts, word.Parts...)
+	}
+	if len(parts) > 0 {
+		return &Word{Parts: parts}
+	}
+	return p.wordOne(p.lit(as.Name.ValuePos, src.String()))
 }
 
 // printArithmExpr serializes an arithmetic expression back to source
@@ -2373,6 +2402,13 @@ func (p *Parser) eitherIndexBlank(blankOK bool) ArithmExpr {
 			p.matchedArithm(lpos, leftBrack, rightBrack)
 			return expr
 		case star, at:
+			if p.nakedAssignIndex {
+				// Until the closing bracket is followed by '=', this is an
+				// ordinary command word. Keep parsing so forms such as
+				// f[*T] can recover as words; a bare [*] or [@] remains a
+				// valid array subscript below.
+				break
+			}
 			expr := ArithmExpr(p.wordOne(p.lit(p.pos, p.tok.String())))
 			p.next()
 			p.quote = old
@@ -2398,10 +2434,53 @@ func (p *Parser) eitherIndexBlank(blankOK bool) ArithmExpr {
 		return expr
 	}
 	expr := p.followArithm(leftBrack, lpos)
+	if p.nakedAssignIndex {
+		text := arithmExprText(expr)
+		if (strings.HasPrefix(text, "*") || strings.HasPrefix(text, "@")) && len(text) > 1 {
+			p.badNakedAssignIndex(lpos, "not a valid arithmetic expression")
+		}
+		if p.tok != rightBrack {
+			p.badNakedAssignIndex(p.pos, "not a valid arithmetic expression")
+			lit := &Lit{ValuePos: lpos, ValueEnd: p.pos, Value: text}
+			depth := 0
+			for p.tok != _EOF {
+				if p.tok == rightBrack && depth == 0 {
+					break
+				}
+				sep := ""
+				if p.spaced {
+					sep = " "
+				}
+				if p.tok.isLit() {
+					next := p.getLit()
+					lit.Value += sep + next.Value
+					lit.ValueEnd = next.ValueEnd
+					continue
+				}
+				tok := p.tok
+				lit.Value += sep + tok.String()
+				lit.ValueEnd = posAddCol(p.pos, len(tok.String()))
+				if tok == leftBrack {
+					depth++
+				} else if tok == rightBrack {
+					depth--
+				}
+				p.nextArith(false)
+			}
+			expr = p.wordOne(lit)
+		}
+	}
 	p.quote = old
 	p.assignIndexWords = oldAssignIndexWords
 	p.matchedArithm(lpos, leftBrack, rightBrack)
 	return expr
+}
+
+func (p *Parser) badNakedAssignIndex(pos Pos, msg string) {
+	if p.nakedAssignBadMsg == "" {
+		p.nakedAssignBadPos = pos
+		p.nakedAssignBadMsg = msg
+	}
 }
 
 func (p *Parser) zshSubFlags() *FlagsArithm {
@@ -2534,9 +2613,14 @@ func (p *Parser) getAssign(needEqual bool) *Assign {
 		p.rune()
 		p.pos = posAddCol(p.pos, 1)
 		oldRawAssignIndex := p.rawAssignIndex
+		oldNakedAssignIndex := p.nakedAssignIndex
 		p.rawAssignIndex = true
+		p.nakedAssignIndex = needEqual
+		p.nakedAssignBadPos = Pos{}
+		p.nakedAssignBadMsg = ""
 		as.Index = p.eitherIndex()
 		p.rawAssignIndex = oldRawAssignIndex
+		p.nakedAssignIndex = oldNakedAssignIndex
 		if p.spaced || p.stopToken() {
 			if needEqual {
 				as.Naked = true
@@ -2546,6 +2630,10 @@ func (p *Parser) getAssign(needEqual bool) *Assign {
 			return as
 		}
 		if p.tok == assgnParen {
+			if p.nakedAssignBadMsg != "" {
+				p.posErr(p.nakedAssignBadPos, "%s", p.nakedAssignBadMsg)
+				return nil
+			}
 			if !p.lang.in(langBashLike | LangZsh) {
 				p.curErr("arrays cannot be nested")
 				return nil
@@ -2575,6 +2663,10 @@ func (p *Parser) getAssign(needEqual bool) *Assign {
 				} else {
 					p.followErr(as.Pos(), "a[b]", assgn)
 				}
+				return nil
+			}
+			if p.nakedAssignBadMsg != "" {
+				p.posErr(p.nakedAssignBadPos, "%s", p.nakedAssignBadMsg)
 				return nil
 			}
 			p.pos = posAddCol(p.pos, 1)
