@@ -7,7 +7,7 @@ status: todo
 priority: p0
 created: 2026-08-31T23:33:22.020951Z
 assignee: s88-getconf-hash
-sprint: 88
+sprint: 100
 ---
 
 Investigate hash:9 using only public-safe metadata, Issue 7 authority,
