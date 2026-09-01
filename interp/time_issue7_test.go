@@ -177,7 +177,7 @@ func TestTimeIssue7ShellCPU(t *testing.T) {
 	user, _ := strconv.ParseFloat(m[2], 64)
 	sys, _ := strconv.ParseFloat(m[3], 64)
 	if user+sys <= 0 {
-		t.Fatalf("time -p reported zero CPU for a 3M-iteration loop: user=%s sys=%s", m[2], m[3])
+		t.Fatalf("time -p reported zero CPU for a 200k-iteration loop: user=%s sys=%s", m[2], m[3])
 	}
 }
 

@@ -33,7 +33,17 @@ func runTimeScriptWithInput(t *testing.T, src string, stdin io.Reader) (stdout, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// The `time` tests deliberately burn CPU so the report is non-zero, and
+	// the race detector makes the interpreter roughly an order of magnitude
+	// slower. At a flat 10s a loop sized to be measurable natively times out
+	// under -race on a shared runner, and the deadline error lands in the
+	// captured stderr — so the test fails on FORMAT, blaming the shell for the
+	// harness's budget. Scale the deadline with the build instead.
+	timeout := 10 * time.Second
+	if raceEnabled {
+		timeout = 90 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	if err := r.Run(ctx, file); err != nil {
 		errBuf.WriteString(err.Error())
