@@ -5,7 +5,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        go-version: [1.26.x]
+        go-version: [1.27.x]
         # TODO(next sprint): re-add windows-latest. The interp test suite
         # currently hangs on windows (10m timeout); deferred for a focused
         # windows-specific debugging pass. Linux + macOS + alpine are green.
@@ -16,7 +16,7 @@ jobs:
     - uses: actions/checkout@v5
     - uses: actions/setup-go@v6
       with:
-        go-version-file: go.mod
+        go-version: ${{ matrix.go-version }}
         cache: false
 
     - run: go test ./...
@@ -33,7 +33,7 @@ jobs:
     # Test that we can build for platforms that we can't currently test on.
     # Windows is build-validated here (catches regressions like the killSig fix);
     # its interp test suite hangs on a real runner, so the test-run stays deferred.
-    - if: matrix.os == 'ubuntu-latest' && matrix.go-version == '1.26.x'
+    - if: matrix.os == 'ubuntu-latest' && matrix.go-version == '1.27.x'
       run: |
         GOOS=windows GOARCH=amd64 go build ./...
         GOOS=windows GOARCH=arm64 go build ./...
@@ -42,9 +42,9 @@ jobs:
 
     # Static checks from this point forward. Only run on one Go version and on
     # Linux, since it's the fastest platform, and the tools behave the same.
-    - if: matrix.os == 'ubuntu-latest' && matrix.go-version == '1.26.x'
+    - if: matrix.os == 'ubuntu-latest' && matrix.go-version == '1.27.x'
       run: diff <(echo -n) <(gofmt -s -d .)
-    - if: matrix.os == 'ubuntu-latest' && matrix.go-version == '1.26.x'
+    - if: matrix.os == 'ubuntu-latest' && matrix.go-version == '1.27.x'
       run: go vet ./...
 
   # Build (not test) sh natively on Windows: validates the Windows toolchain path
@@ -57,7 +57,7 @@ jobs:
     - uses: actions/checkout@v5
     - uses: actions/setup-go@v6
       with:
-        go-version-file: go.mod
+        go-version: 1.27.x
         cache: false
     - run: go build ./...
     - run: cd moreinterp && go build ./...

@@ -9,7 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	_ "unsafe" // required by go:linkname
+	"unsafe"
 )
 
 // signalDisposition matches Darwin's public struct sigaction, which is the
@@ -22,15 +22,15 @@ type signalDisposition struct {
 	flags   int32
 }
 
-// runtimeSigaction uses the Go runtime's existing cgo-free libc trampoline.
-// Darwin's exported syscall.Syscall family cannot call sigaction by syscall
-// number (its first argument is a libc function pointer), while the runtime
-// already owns the exact per-architecture bridge and public ABI conversion.
-// Keep this declaration byte-for-byte compatible with runtime.usigactiont and
-// runtime.sigaction.
-//
-//go:linkname runtimeSigaction runtime.sigaction
-func runtimeSigaction(sig uint32, new, old *signalDisposition)
+// darwinSigaction calls the Darwin sigaction system call directly. This keeps
+// the shell cgo-free without depending on private Go runtime symbols, whose
+// linkname availability is intentionally not part of Go's compatibility
+// contract.
+func darwinSigaction(sig syscall.Signal, new, old *signalDisposition) bool {
+	_, _, errno := syscall.RawSyscall(syscall.SYS_SIGACTION,
+		uintptr(sig), uintptr(unsafe.Pointer(new)), uintptr(unsafe.Pointer(old)))
+	return errno == 0
+}
 
 func saveSignalDisposition(sig os.Signal) (signalDisposition, bool) {
 	var disposition signalDisposition
@@ -38,8 +38,7 @@ func saveSignalDisposition(sig os.Signal) (signalDisposition, bool) {
 	if !ok {
 		return disposition, false
 	}
-	runtimeSigaction(uint32(s), nil, &disposition)
-	return disposition, true
+	return disposition, darwinSigaction(s, nil, &disposition)
 }
 
 func restoreSignalDisposition(sig os.Signal, disposition signalDisposition) {
@@ -47,7 +46,7 @@ func restoreSignalDisposition(sig os.Signal, disposition signalDisposition) {
 	if !ok {
 		return
 	}
-	runtimeSigaction(uint32(s), &disposition, nil)
+	darwinSigaction(s, &disposition, nil)
 }
 
 func restoreExecSignal(sig os.Signal) {
@@ -58,7 +57,9 @@ func restoreExecSignal(sig os.Signal) {
 	}
 	// A zero handler is SIG_DFL. Use libc so Darwin supplies the private
 	// trampoline required at the kernel boundary.
-	runtimeSigaction(uint32(s), &signalDisposition{}, nil)
+	if !darwinSigaction(s, &signalDisposition{}, nil) {
+		signal.Reset(sig)
+	}
 }
 
 // setOSIgnore installs SIG_IGN for sig at the OS level without changing the
@@ -71,7 +72,9 @@ func setOSIgnore(sig os.Signal) {
 		signal.Ignore(sig)
 		return
 	}
-	runtimeSigaction(uint32(s), &signalDisposition{handler: 1}, nil)
+	if !darwinSigaction(s, &signalDisposition{handler: 1}, nil) {
+		signal.Ignore(sig)
+	}
 }
 
 // osSignalIgnored reports the real Darwin disposition, including SIG_IGN
