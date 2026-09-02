@@ -164,11 +164,10 @@ func WithStandaloneSignalDefaults() RunnerOption {
 // even for a trapped signal Reset only reinstalls Go's own runtime handler,
 // which silently swallows an un-notified _SigNotify signal like SIGUSR2
 // rather than taking its default terminating action. ResetDefault instead
-// reuses restoreExecSignal, which on linux/darwin issues a raw rt_sigaction
-// installing SIG_DFL directly; a delivered SIGUSR2 then terminates the
-// process as POSIX requires. On other platforms restoreExecSignal falls
-// back to signal.Reset, so the true default cannot be guaranteed there —
-// acceptable, as the standalone bashy CLI targets linux and darwin.
+// reuses restoreExecSignal, which on Linux issues a raw rt_sigaction and on
+// Darwin calls libc sigaction so its private kernel trampoline is supplied. A
+// delivered SIGUSR2 then terminates the process as POSIX requires. Other
+// platforms fall back to signal.Reset.
 type OSSignalResetter struct{}
 
 // ResetDefault implements [SignalResetter].

@@ -9,28 +9,23 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"unsafe"
 )
 
 // signalDisposition matches Darwin's public struct sigaction, which is the
-// shape accepted by libc sigaction: handler, 32-bit mask, and 32-bit flags.
-// The kernel's private struct __sigaction additionally carries a trampoline;
-// calling SYS_SIGACTION directly would have to manufacture that private field.
+// shape accepted by libc sigaction. libc supplies the private kernel
+// trampoline field that a direct SYS_SIGACTION call cannot safely construct.
 type signalDisposition struct {
 	handler uintptr
 	mask    uint32
 	flags   int32
 }
 
-// darwinSigaction calls the Darwin sigaction system call directly. This keeps
-// the shell cgo-free without depending on private Go runtime symbols, whose
-// linkname availability is intentionally not part of Go's compatibility
-// contract.
-func darwinSigaction(sig syscall.Signal, new, old *signalDisposition) bool {
-	_, _, errno := syscall.RawSyscall(syscall.SYS_SIGACTION,
-		uintptr(sig), uintptr(unsafe.Pointer(new)), uintptr(unsafe.Pointer(old)))
-	return errno == 0
-}
+// libcSigaction is implemented by the small architecture-specific assembly
+// trampolines beside this file. Keeping the bridge here avoids cgo and avoids
+// the unsupported runtime.sigaction linkname removed by Go 1.27.
+func libcSigaction(sig uint32, new, old *signalDisposition) int32
+
+//go:cgo_import_dynamic libc_sigaction sigaction "/usr/lib/libSystem.B.dylib"
 
 func saveSignalDisposition(sig os.Signal) (signalDisposition, bool) {
 	var disposition signalDisposition
@@ -38,26 +33,18 @@ func saveSignalDisposition(sig os.Signal) (signalDisposition, bool) {
 	if !ok {
 		return disposition, false
 	}
-	return disposition, darwinSigaction(s, nil, &disposition)
+	return disposition, libcSigaction(uint32(s), nil, &disposition) == 0
 }
 
 func restoreSignalDisposition(sig os.Signal, disposition signalDisposition) {
-	s, ok := sig.(syscall.Signal)
-	if !ok {
-		return
+	if s, ok := sig.(syscall.Signal); ok {
+		libcSigaction(uint32(s), &disposition, nil)
 	}
-	darwinSigaction(s, &disposition, nil)
 }
 
 func restoreExecSignal(sig os.Signal) {
 	s, ok := sig.(syscall.Signal)
-	if !ok {
-		signal.Reset(sig)
-		return
-	}
-	// A zero handler is SIG_DFL. Use libc so Darwin supplies the private
-	// trampoline required at the kernel boundary.
-	if !darwinSigaction(s, &signalDisposition{}, nil) {
+	if !ok || libcSigaction(uint32(s), &signalDisposition{}, nil) != 0 {
 		signal.Reset(sig)
 	}
 }
@@ -68,11 +55,7 @@ func restoreExecSignal(sig os.Signal) {
 // a genuine hardware fault remains owned by the Go runtime.
 func setOSIgnore(sig os.Signal) {
 	s, ok := sig.(syscall.Signal)
-	if !ok {
-		signal.Ignore(sig)
-		return
-	}
-	if !darwinSigaction(s, &signalDisposition{handler: 1}, nil) {
+	if !ok || libcSigaction(uint32(s), &signalDisposition{handler: 1}, nil) != 0 {
 		signal.Ignore(sig)
 	}
 }
