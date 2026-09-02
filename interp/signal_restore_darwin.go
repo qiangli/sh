@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"unsafe"
 )
 
 // signalDisposition matches Darwin's public struct sigaction, which is the
@@ -20,12 +21,24 @@ type signalDisposition struct {
 	flags   int32
 }
 
-// libcSigaction is implemented by the small architecture-specific assembly
-// trampolines beside this file. Keeping the bridge here avoids cgo and avoids
-// the unsupported runtime.sigaction linkname removed by Go 1.27.
-func libcSigaction(sig uint32, new, old *signalDisposition) int32
+// syscallPtr is the standard library's supported Darwin libc-call boundary.
+// Unlike a direct assembly CALL, it moves onto the runtime-managed system
+// stack and informs the scheduler around the blocking foreign call.
+//
+//go:linkname syscallPtr syscall.syscallPtr
+func syscallPtr(fn, a1, a2, a3 uintptr) (r1, r2 uintptr, err syscall.Errno)
+
+// libcSigactionAddr is the only architecture-specific assembly needed: it
+// returns the dynamically imported symbol's address without calling it.
+func libcSigactionAddr() uintptr
 
 //go:cgo_import_dynamic libc_sigaction sigaction "/usr/lib/libSystem.B.dylib"
+
+func libcSigaction(sig uint32, new, old *signalDisposition) int32 {
+	r1, _, _ := syscallPtr(libcSigactionAddr(), uintptr(sig),
+		uintptr(unsafe.Pointer(new)), uintptr(unsafe.Pointer(old)))
+	return int32(r1)
+}
 
 func saveSignalDisposition(sig os.Signal) (signalDisposition, bool) {
 	var disposition signalDisposition
