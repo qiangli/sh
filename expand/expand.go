@@ -268,13 +268,17 @@ func (u UnexpectedCommandError) Error() string {
 	return fmt.Sprintf("unexpected command substitution at %s", u.Node.Pos())
 }
 
-var zeroConfig = &Config{}
-
 // TODO: note that prepareConfig is modifying the user's config in place,
 // which doesn't feel right - we should make a copy.
 
 func prepareConfig(cfg *Config) *Config {
-	cfg = cmp.Or(cfg, zeroConfig)
+	// A nil config is common for helpers such as Literal. It must not resolve
+	// to a package-global *Config: prepareConfig fills derived fields below,
+	// and concurrent callers would otherwise race while mutating that shared
+	// zero value.
+	if cfg == nil {
+		cfg = &Config{}
+	}
 	cfg.Env = cmp.Or(cfg.Env, FuncEnviron(func(string) string { return "" }))
 
 	cfg.ifs = " \t\n"
