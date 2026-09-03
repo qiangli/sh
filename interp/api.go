@@ -116,6 +116,10 @@ type Runner struct {
 	// site. It is preserved across [Runner.Reset] alongside Funcs for the same
 	// reason bashPPFuncScopes is.
 	bashPPFuncs map[string]*bashPPFunc
+	// bashPPTypes and bashPPMethods are the runner-local named-type namespace.
+	// They persist with the session and are cloned for subshell isolation.
+	bashPPTypes   map[string]bashPPType
+	bashPPMethods map[string]map[string]*bashPPFunc
 	// bashPPClosures is the registry a function-literal value refers to. A
 	// closure cannot be stored in a shell variable directly — variables hold
 	// strings, and a subshell copies them as bytes — so the variable holds a
@@ -2682,6 +2686,8 @@ func (r *Runner) Reset() {
 		// scope is per-Run scratch and is rebuilt below.
 		bashPPFuncScopes: r.bashPPFuncScopes,
 		bashPPFuncs:      r.bashPPFuncs,
+		bashPPTypes:      r.bashPPTypes,
+		bashPPMethods:    r.bashPPMethods,
 		bashPPClosures:   r.bashPPClosures,
 		bashPPTools:      r.bashPPTools,
 
@@ -2750,6 +2756,12 @@ func (r *Runner) Reset() {
 		}
 		if r.bashPPFuncScopes == nil {
 			r.bashPPFuncScopes = make(map[string]*bashPPScope)
+		}
+		if r.bashPPTypes == nil {
+			r.bashPPTypes = make(map[string]bashPPType)
+		}
+		if r.bashPPMethods == nil {
+			r.bashPPMethods = make(map[string]map[string]*bashPPFunc)
 		}
 	}
 	// The hard-ignore bridge variable is internal: consume it (already
@@ -3155,6 +3167,7 @@ func (r *Runner) subshell(background bool) *Runner {
 	r2.Funcs = maps.Clone(r.Funcs)
 	r2.funcSources = maps.Clone(r.funcSources)
 	r2.bashPPImports = maps.Clone(r.bashPPImports)
+	r2.bashPPTypes = maps.Clone(r.bashPPTypes)
 	// A subshell gets a private copy of the typed bindings, exactly as it
 	// gets a private copy of the shell's variables. One cloner does the live
 	// scope and every captured closure together so that the aliasing between
@@ -3174,6 +3187,16 @@ func (r *Runner) subshell(background bool) *Runner {
 			r2.bashPPFuncs = make(map[string]*bashPPFunc, len(r.bashPPFuncs))
 			for name, fn := range r.bashPPFuncs {
 				r2.bashPPFuncs[name] = fn.cloned(cloner)
+			}
+		}
+		if r.bashPPMethods != nil {
+			r2.bashPPMethods = make(map[string]map[string]*bashPPFunc, len(r.bashPPMethods))
+			for typ, methods := range r.bashPPMethods {
+				copyMethods := make(map[string]*bashPPFunc, len(methods))
+				for name, fn := range methods {
+					copyMethods[name] = fn.cloned(cloner)
+				}
+				r2.bashPPMethods[typ] = copyMethods
 			}
 		}
 		// The closure registry is copied INDEX FOR INDEX: a handle already

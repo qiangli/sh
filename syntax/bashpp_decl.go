@@ -3,6 +3,8 @@
 
 package syntax
 
+import "strings"
+
 // The Bash++ untyped declaration: `var x = 1` and `const K = 2`.
 //
 // WHERE THE DECISION IS MADE, AND WHY IT IS MADE THERE.
@@ -141,6 +143,31 @@ func bashppTypeDecl(ce *CallExpr, redirs []*Redirect) *BashPPDecl {
 		return nil
 	}
 	return &BashPPDecl{Site: m.Site, Kw: kw, Name: name, DeclType: typ, Alias: alias, End_: typeWord.End()}
+}
+
+// bashppTypedVarDecl recognizes the named scalar and pointer declarations
+// needed to construct receiver values: `var v T = 1` and `var p *T`.
+func bashppTypedVarDecl(ce *CallExpr, redirs []*Redirect) *BashPPDecl {
+	if ce == nil || len(ce.Assigns) != 0 || len(redirs) != 0 || (len(ce.Args) != 3 && len(ce.Args) != 5) {
+		return nil
+	}
+	kw, name, typ := bashppBareLit(ce.Args[0]), bashppBareLit(ce.Args[1]), bashppBareLit(ce.Args[2])
+	if kw == nil || kw.Value != "var" || name == nil || !bashppIsIdent(name.Value) || typ == nil {
+		return nil
+	}
+	base := strings.TrimPrefix(typ.Value, "*")
+	if !bashppIsIdent(base) || strings.HasPrefix(base, "*") {
+		return nil
+	}
+	var init []*Word
+	if len(ce.Args) == 5 {
+		eq := bashppBareLit(ce.Args[3])
+		if eq == nil || eq.Value != "=" || !bashppSupportedValue(ce.Args[4]) {
+			return nil
+		}
+		init = ce.Args[4:5:5]
+	}
+	return &BashPPDecl{Site: StartVar, Kw: kw, Name: name, DeclType: typ, Init: init, End_: ce.Args[len(ce.Args)-1].End()}
 }
 
 // bashppBareLit returns the word's sole literal part, or nil when the word is

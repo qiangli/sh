@@ -101,6 +101,12 @@ func (r *Runner) setBashPPMode(enabled bool) {
 		if r.bashPPFuncScopes == nil {
 			r.bashPPFuncScopes = make(map[string]*bashPPScope)
 		}
+		if r.bashPPTypes == nil {
+			r.bashPPTypes = make(map[string]bashPPType)
+		}
+		if r.bashPPMethods == nil {
+			r.bashPPMethods = make(map[string]map[string]*bashPPFunc)
+		}
 	} else {
 		r.dialect = syntax.LangBash
 	}

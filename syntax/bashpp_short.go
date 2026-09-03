@@ -39,7 +39,13 @@ func bashppShortDecl(ce *CallExpr, redirs []*Redirect) *BashPPShortDecl {
 	if m.Site != StartShortDecl || m.Class != ClassE {
 		return nil
 	}
-	return &BashPPShortDecl{Lhs: lhs, Rhs: rhs, Class: ClassE, OpPos: ce.Args[op].Pos()}
+	d := &BashPPShortDecl{Lhs: lhs, Rhs: rhs, Class: ClassE, OpPos: ce.Args[op].Pos()}
+	if len(rhs) == 1 {
+		if lit := bashppBareLit(rhs[0]); lit != nil && strings.Contains(lit.Value, ".") && bashppSelector(lit.Value) {
+			d.MethodValue = bashppSelectorLits(lit)
+		}
+	}
+	return d
 }
 
 func bashppShortLHS(words []*Word) ([]*Lit, bool) {
@@ -135,6 +141,9 @@ func bashppSupportedValue(w *Word) bool {
 		}
 	}
 	text := bashppWordText(w)
+	if strings.Contains(text, ".") && bashppSelector(text) {
+		return true
+	}
 	if open := strings.IndexByte(text, '{'); open >= 0 {
 		return strings.HasSuffix(text, "}") && bashppCompositeType(text[:open]) &&
 			bashppBalanced(text[open:], '{', '}')

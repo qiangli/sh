@@ -1535,7 +1535,16 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 		if cmd.FuncLit != nil {
 			p.bashppFuncLit(cmd.FuncLit)
 		}
+		if cmd.PointerMethodExpr && len(cmd.Fun) == 2 {
+			p.writeLit("(*")
+			p.writeLit(cmd.Fun[0].Value)
+			p.writeLit(").")
+			p.writeLit(cmd.Fun[1].Value)
+		}
 		for i, fun := range cmd.Fun {
+			if cmd.PointerMethodExpr {
+				break
+			}
 			if i > 0 {
 				p.writeLit(".")
 			}
@@ -1554,6 +1563,18 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 		p.writeLit(")")
 	case *BashPPFuncDecl:
 		p.spacedString(cmd.Kw.Value, cmd.Kw.Pos())
+		if cmd.Receiver != nil {
+			p.space()
+			p.writeLit("(")
+			p.writeLit(cmd.Receiver.Name.Value)
+			p.writeLit(" ")
+			if cmd.Receiver.Pointer {
+				p.writeLit("*")
+			}
+			p.writeLit(cmd.Receiver.RecvType.Value)
+			p.writeLit(")")
+			p.space()
+		}
 		p.spacedString(cmd.Name.Value, cmd.Name.Pos())
 		p.bashppSignature(cmd.Params, cmd.Results, cmd.ResLparen)
 		p.wantSpace = spaceRequired

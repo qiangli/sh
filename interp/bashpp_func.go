@@ -49,6 +49,20 @@ type bashPPFunc struct {
 	// identity: the same closure may be copied to other names, and a later
 	// binding of this one does not rename it.
 	bound string
+	// receiver is set on a resolved method call or method value. The method
+	// declaration itself keeps it nil; resolution clones the function and
+	// binds either a copied value cell or the addressable pointer cell.
+	receiver *bashPPCell
+	// skipArgs is one for a method expression T.M(v, ...), where v supplies
+	// the receiver rather than the first ordinary parameter.
+	skipArgs int
+}
+
+// bashPPType is one script-local named type. Aliases intentionally cannot own
+// methods, matching Go's receiver declaration rule.
+type bashPPType struct {
+	underlying string
+	alias      bool
 }
 
 // name is what diagnostics call the function. A literal has none, so it is
@@ -84,6 +98,7 @@ func (f *bashPPFunc) results() []*syntax.BashPPField {
 func (f *bashPPFunc) cloned(c *bashPPCloner) *bashPPFunc {
 	copied := *f
 	copied.scope = c.clone(f.scope)
+	copied.receiver = c.cloneCell(f.receiver)
 	return &copied
 }
 
@@ -119,8 +134,12 @@ func (r *Runner) bashPPMakeClosure(lit *syntax.BashPPFuncLit) (*bashPPFunc, expa
 	if r.bashPPScope != nil {
 		fn.scope = r.bashPPScope.snapshot()
 	}
+	return fn, r.bashPPStoreFunc(fn)
+}
+
+func (r *Runner) bashPPStoreFunc(fn *bashPPFunc) expand.Variable {
 	r.bashPPClosures = append(r.bashPPClosures, fn)
-	return fn, expand.Variable{
+	return expand.Variable{
 		Set:  true,
 		Kind: expand.String,
 		Str:  bashPPFuncHandlePrefix + strconv.Itoa(len(r.bashPPClosures)-1),
@@ -179,14 +198,65 @@ func (r *Runner) bashPPFuncDecl(d *syntax.BashPPFuncDecl) {
 		r.exit = exitStatus{code: 2}
 		return
 	}
+	if d.Receiver != nil {
+		r.bashPPMethodDecl(d)
+		return
+	}
 	if r.bashPPFuncs == nil {
 		r.bashPPFuncs = make(map[string]*bashPPFunc, 4)
+	}
+	if _, exists := r.bashPPFuncs[name]; exists {
+		r.errf("function %s redeclared in this session\n", name)
+		r.exit.code = 2
+		return
 	}
 	var captured *bashPPScope
 	if r.bashPPScope != nil {
 		captured = r.bashPPScope.snapshot()
 	}
 	r.bashPPFuncs[name] = &bashPPFunc{decl: d, scope: captured}
+}
+
+func (r *Runner) bashPPMethodDecl(d *syntax.BashPPFuncDecl) {
+	recv := d.Receiver
+	for _, field := range append(append([]*syntax.BashPPField(nil), d.Params...), d.Results...) {
+		for _, name := range field.Names {
+			if name.Value == recv.Name.Value && name.Value != "_" {
+				r.errf("receiver %s redeclared in method signature\n", recv.Name.Value)
+				r.exit.code = 2
+				return
+			}
+		}
+	}
+	typ, ok := r.bashPPTypes[recv.RecvType.Value]
+	if !ok {
+		r.errf("invalid receiver type %s (type is not declared in this session)\n", recv.RecvType.Value)
+		r.exit.code = 2
+		return
+	}
+	if typ.alias {
+		r.errf("invalid receiver type %s (cannot define methods on an alias)\n", recv.RecvType.Value)
+		r.exit.code = 2
+		return
+	}
+	if r.bashPPMethods == nil {
+		r.bashPPMethods = make(map[string]map[string]*bashPPFunc)
+	}
+	methods := r.bashPPMethods[recv.RecvType.Value]
+	if methods == nil {
+		methods = make(map[string]*bashPPFunc)
+		r.bashPPMethods[recv.RecvType.Value] = methods
+	}
+	if _, exists := methods[d.Name.Value]; exists {
+		r.errf("method %s.%s redeclared in this session\n", recv.RecvType.Value, d.Name.Value)
+		r.exit.code = 2
+		return
+	}
+	var captured *bashPPScope
+	if r.bashPPScope != nil {
+		captured = r.bashPPScope.snapshot()
+	}
+	methods[d.Name.Value] = &bashPPFunc{decl: d, scope: captured}
 }
 
 // bashPPLookupFunc resolves a call's callee to a callable function: a literal
@@ -200,6 +270,59 @@ func (r *Runner) bashPPLookupFunc(c *syntax.BashPPCall) (*bashPPFunc, bool) {
 	if c.FuncLit != nil {
 		fn, _ := r.bashPPMakeClosure(c.FuncLit)
 		return fn, true
+	}
+	if len(c.Fun) == 2 {
+		owner, method := c.Fun[0].Value, c.Fun[1].Value
+		// A local value is always considered before an import binding. This is
+		// deterministic even when the import registry contains the same name.
+		if _, localType := r.bashPPTypes[owner]; !localType {
+			if cell := r.bashPPScope.lookup(owner); cell != nil {
+				if cell.typeName == "" {
+					r.errf("%s.%s: %s is a local value with no methods\n", owner, method, owner)
+					r.exit.code = 2
+					return nil, false
+				}
+				return r.bashPPBindMethod(cell, method, true)
+			}
+		}
+		// T.M(v, ...) selects from T's method set; (*T).M(p, ...) records the
+		// pointer method-expression spelling on the call node.
+		if _, localType := r.bashPPTypes[owner]; localType {
+			methods := r.bashPPMethods[owner]
+			fn := methods[method]
+			if fn == nil || (fn.decl.Receiver.Pointer && !c.PointerMethodExpr) {
+				r.errf("%s.%s is not in the method set of %s\n", owner, method, owner)
+				r.exit.code = 2
+				return nil, false
+			}
+			if len(c.Args) == 0 {
+				r.errf("not enough arguments in call to method expression %s.%s\n", owner, method)
+				r.exit.code = 2
+				return nil, false
+			}
+			cell := r.bashPPCellForWord(c.Args[0])
+			if cell == nil || cell.typeName != owner || cell.pointer != c.PointerMethodExpr {
+				r.errf("cannot use first argument as %s receiver in %s.%s\n", owner, owner, method)
+				r.exit.code = 2
+				return nil, false
+			}
+			bound := *fn
+			if fn.decl.Receiver.Pointer {
+				bound.receiver = cell
+			} else {
+				if cell.pointer && cell.nilPointer {
+					r.errf("value method %s called using nil *%s pointer\n", method, owner)
+					r.exit.code = 2
+					return nil, false
+				}
+				copyCell := *cell
+				copyCell.pointer, copyCell.nilPointer = false, false
+				bound.receiver = &copyCell
+			}
+			bound.skipArgs = 1
+			return &bound, true
+		}
+		return nil, false
 	}
 	if len(c.Fun) != 1 {
 		return nil, false
@@ -215,6 +338,46 @@ func (r *Runner) bashPPLookupFunc(c *syntax.BashPPCall) (*bashPPFunc, bool) {
 		return r.bashPPClosure(vr.Str)
 	}
 	return nil, false
+}
+
+func (r *Runner) bashPPCellForWord(w *syntax.Word) *bashPPCell {
+	if w == nil || len(w.Parts) != 1 || r.bashPPScope == nil {
+		return nil
+	}
+	lit, ok := w.Parts[0].(*syntax.Lit)
+	if !ok || !syntax.ValidName(lit.Value) {
+		return nil
+	}
+	return r.bashPPScope.lookup(lit.Value)
+}
+
+func (r *Runner) bashPPBindMethod(cell *bashPPCell, method string, addressable bool) (*bashPPFunc, bool) {
+	fn := r.bashPPMethods[cell.typeName][method]
+	if fn == nil {
+		r.errf("type %s has no method %s\n", cell.typeName, method)
+		r.exit.code = 2
+		return nil, false
+	}
+	ptrRecv := fn.decl.Receiver.Pointer
+	if ptrRecv && !cell.pointer && !addressable {
+		r.errf("method %s has pointer receiver and requires an addressable %s\n", method, cell.typeName)
+		r.exit.code = 2
+		return nil, false
+	}
+	if !ptrRecv && cell.pointer && cell.nilPointer {
+		r.errf("value method %s called using nil *%s pointer\n", method, cell.typeName)
+		r.exit.code = 2
+		return nil, false
+	}
+	bound := *fn
+	if ptrRecv {
+		bound.receiver = cell
+	} else {
+		copyCell := *cell
+		copyCell.pointer, copyCell.nilPointer = false, false
+		bound.receiver = &copyCell
+	}
+	return &bound, true
 }
 
 // bashPPCallArgValues evaluates each call argument to a single string. Values
@@ -272,7 +435,11 @@ func (r *Runner) bashPPCallValues(c *syntax.BashPPCall, fn *bashPPFunc) ([]strin
 		r.exit = exitStatus{code: 2}
 		return nil, false
 	}
-	return r.bashPPCallArgValues(c), true
+	args := r.bashPPCallArgValues(c)
+	if fn.skipArgs > 0 {
+		args = args[fn.skipArgs:]
+	}
+	return args, true
 }
 
 // bashPPExprValue evaluates the small expression vocabulary admitted by the
@@ -337,6 +504,15 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 	r.writeEnv = &overlayEnviron{parent: r.writeEnv, funcScope: true}
 	origScope := r.bashPPScope
 	r.bashPPScope = newBashPPScope(fn.scope)
+	if fn.decl != nil && fn.decl.Receiver != nil && fn.receiver != nil {
+		recv := fn.decl.Receiver
+		if recv.Pointer {
+			r.bashPPScope.entries[recv.Name.Value] = fn.receiver
+		} else {
+			copyCell := *fn.receiver
+			r.bashPPScope.entries[recv.Name.Value] = &copyCell
+		}
+	}
 	r.callStack = append(r.callStack, callFrame{funcName: fn.name()})
 	deferMark := len(r.bashPPDeferStack)
 	oldReturn := r.bashPPReturn
@@ -365,6 +541,14 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 		}
 		_ = r.bashPPScope.declare(param.name,
 			expand.Variable{Set: true, Kind: expand.String, Str: args[i]}, false)
+		if base := strings.TrimPrefix(param.declared, "*"); base != "" {
+			if _, ok := r.bashPPTypes[base]; ok {
+				cell := r.bashPPScope.lookup(param.name)
+				cell.typeName = base
+				cell.pointer = strings.HasPrefix(param.declared, "*")
+				cell.nilPointer = cell.pointer && args[i] == ""
+			}
+		}
 	}
 	resultNames := bashppResultNames(fn.results())
 	for _, name := range resultNames {
@@ -417,6 +601,7 @@ func (r *Runner) bashPPShortDeclCall(ctx context.Context, d *syntax.BashPPShortD
 		r.exit = exitStatus{code: 2}
 		return
 	}
+	resultTypes := bashppResultTypes(fn.results())
 	for i, lhs := range d.Lhs {
 		if !syntax.ValidName(lhs.Value) {
 			r.errf("invalid variable name: %q\n", lhs.Value)
@@ -424,6 +609,16 @@ func (r *Runner) bashPPShortDeclCall(ctx context.Context, d *syntax.BashPPShortD
 			return
 		}
 		r.bashPPDeclareName(lhs.Value, expand.Variable{Set: true, Kind: expand.String, Str: results[i]})
+		if i < len(resultTypes) {
+			declared := resultTypes[i]
+			base := strings.TrimPrefix(declared, "*")
+			if _, ok := r.bashPPTypes[base]; ok {
+				cell := r.bashPPScope.lookup(lhs.Value)
+				cell.typeName = base
+				cell.pointer = strings.HasPrefix(declared, "*")
+				cell.nilPointer = cell.pointer && results[i] == ""
+			}
+		}
 	}
 }
 
@@ -525,6 +720,9 @@ func (r *Runner) bashPPDeferStmt(ctx context.Context, d *syntax.BashPPDefer) {
 		}
 		entry.fn, entry.args = fn, args
 	} else {
+		if r.exit.code != 0 {
+			return
+		}
 		entry.args = r.bashPPCallArgValues(d.Call)
 	}
 	r.bashPPDeferStack = append(r.bashPPDeferStack, entry)
@@ -694,6 +892,24 @@ func bashppResultNames(fields []*syntax.BashPPField) []string {
 		}
 	}
 	return names
+}
+
+func bashppResultTypes(fields []*syntax.BashPPField) []string {
+	var types []string
+	for _, f := range fields {
+		declared := ""
+		if f.FieldType != nil {
+			declared = f.FieldType.Value
+		}
+		count := len(f.Names)
+		if count == 0 {
+			count = 1
+		}
+		for range count {
+			types = append(types, declared)
+		}
+	}
+	return types
 }
 
 // bashppResultCount is the number of values a function returns.

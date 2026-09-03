@@ -45,7 +45,21 @@ import (
 // [BashPPFuncDecl]; because the shape is Class R, a malformation past the
 // commit point is reported as a parse error rather than rewound.
 func (p *Parser) bashppFuncForm(ce *CallExpr) Command {
-	if ce == nil || len(ce.Assigns) != 0 || len(ce.Args) != 2 || p.tok != leftParen {
+	if ce == nil || len(ce.Assigns) != 0 || p.tok != leftParen {
+		return nil
+	}
+	if len(ce.Args) == 1 {
+		kw := bashppBareLit(ce.Args[0])
+		// Use source positions rather than p.spaced here: callExpr has already
+		// advanced into the token, so the lexer spacing bit describes the next
+		// boundary. A receiver requires whitespace after func; func(...) stays
+		// the literal/classic-function ambiguity handled elsewhere.
+		if kw == nil || kw.Value != "func" || p.pos.Offset() == kw.End().Offset() {
+			return nil
+		}
+		return p.bashppMethodForm(kw)
+	}
+	if len(ce.Args) != 2 {
 		return nil
 	}
 	kw := bashppBareLit(ce.Args[0])
@@ -68,6 +82,105 @@ func (p *Parser) bashppFuncForm(ce *CallExpr) Command {
 	fd.ResLparen, fd.ResRparen = sig.resLparen, sig.resRparen
 	fd.Body = p.bashppFuncBody("func "+name.Value, sig.rparen)
 	return fd
+}
+
+// bashppMethodForm parses `func (r T) M(...)` and `func (r *T) M(...)`.
+// The receiver opening is spaced from func, so it cannot collide with the
+// classic shell definition `func() { ... }`.
+func (p *Parser) bashppMethodForm(kw *Lit) Command {
+	recv := &BashPPReceiver{Lparen: p.pos}
+	p.next()
+	nameWord := p.getWord()
+	typeWord := p.getWord()
+	recv.Name = bashppBareLit(nameWord)
+	typ := bashppBareLit(typeWord)
+	if recv.Name == nil || !bashppIsIdent(recv.Name.Value) || typ == nil {
+		p.posErr(recv.Lparen, "method receiver must be one name and one named type")
+		return nil
+	}
+	typeName := typ.Value
+	if strings.HasPrefix(typeName, "*") {
+		recv.Pointer = true
+		typeName = strings.TrimPrefix(typeName, "*")
+	}
+	if !bashppIsIdent(typeName) || (recv.Pointer && strings.HasPrefix(typeName, "*")) {
+		p.posErr(typ.Pos(), "invalid method receiver type")
+		return nil
+	}
+	recv.RecvType = &Lit{ValuePos: posAddCol(typ.Pos(), len(typ.Value)-len(typeName)), ValueEnd: typ.End(), Value: typeName}
+	if p.tok != rightParen {
+		p.followErr(recv.Lparen, "func (receiver", rightParen)
+	}
+	recv.Rparen = p.pos
+	p.next()
+	methodWord := p.getWord()
+	method := bashppBareLit(methodWord)
+	if method == nil || !bashppIsIdent(method.Value) || p.tok != leftParen || p.spaced {
+		p.posErr(recv.Rparen, "method declaration requires a name and signature")
+		return nil
+	}
+	d := &BashPPFuncDecl{Kw: kw, Name: method, Receiver: recv}
+	p.bashppRegisterFunc(method.Value)
+	sig := p.bashppSignature("func (" + recv.Name.Value + " " + typ.Value + ") " + method.Value)
+	d.Params, d.Results = sig.params, sig.results
+	d.Lparen, d.Rparen = sig.lparen, sig.rparen
+	d.ResLparen, d.ResRparen = sig.resLparen, sig.resRparen
+	d.Body = p.bashppFuncBody("method "+method.Value, sig.rparen)
+	return d
+}
+
+// bashppPointerMethodExpr parses the Class-R method expression
+// `(*T).M(receiver, args...)` from a statement-opening parenthesis.
+func (p *Parser) bashppPointerMethodExpr() Command {
+	if p.tok != leftParen || p.r != '*' {
+		return nil
+	}
+	txn := p.beginBashPPTxn()
+	exprLparen := p.pos
+	p.next()
+	typeWord := p.getWord()
+	typ := bashppBareLit(typeWord)
+	if typ == nil || !strings.HasPrefix(typ.Value, "*") || !bashppIsIdent(strings.TrimPrefix(typ.Value, "*")) || p.tok != rightParen {
+		txn.rollback(p)
+		return nil
+	}
+	typeName := strings.TrimPrefix(typ.Value, "*")
+	exprRparen := p.pos
+	p.next()
+	methodWord := p.getWord()
+	method := bashppBareLit(methodWord)
+	if method == nil || !strings.HasPrefix(method.Value, ".") || !bashppIsIdent(strings.TrimPrefix(method.Value, ".")) || p.tok != leftParen || p.spaced {
+		txn.rollback(p)
+		return nil
+	}
+	methodName := strings.TrimPrefix(method.Value, ".")
+	callLparen := p.pos
+	p.next()
+	args, ellipsis, ok := p.bashppCallArgs()
+	if !ok || p.tok != rightParen {
+		txn.rollback(p)
+		return nil
+	}
+	rparen := p.pos
+	p.next()
+	if !bashppCallTerminator(p.tok) {
+		txn.rollback(p)
+		return nil
+	}
+	txn.commit(p)
+	typePos := posAddCol(typ.Pos(), 1)
+	methodPos := posAddCol(method.Pos(), 1)
+	return &BashPPCall{
+		Fun: []*Lit{
+			{ValuePos: typePos, ValueEnd: typ.End(), Value: typeName},
+			{ValuePos: methodPos, ValueEnd: method.End(), Value: methodName},
+		},
+		Args: args, Ellipsis: ellipsis, PointerMethodExpr: true,
+		Lparen: callLparen, Rparen: rparen, MethodExprLparen: exprLparen, MethodExprRparen: exprRparen,
+		FuncLit: nil,
+		// The outer expression parenthesis is represented by the boolean and
+		// reconstructed by the printer; callLparen remains the argument list.
+	}
 }
 
 // bashppRegisterFunc records name as a callable Bash++ function for the rest
@@ -322,9 +435,8 @@ func bashppEllipsisElem(lit *Lit) (*Lit, bool) {
 }
 
 // bashppTypeName reports whether s is a supported type spelling: a bare
-// identifier or a dotted selector (`time.Duration`). Composite types — slices,
-// maps, pointers — are deliberately excluded from P3-A; their spellings tangle
-// with the shell's glob and brace tokens and are left to a later tranche.
+// identifier, dotted selector (`time.Duration`), or the pointer to a named
+// type needed by P3-C. Other composite types remain a later tranche.
 func bashppTypeName(s string) bool {
 	// `func` is the one reserved word admitted as a type spelling, and it is
 	// the WHOLE spelling: P3-B gives a function value the bare type `func`
@@ -335,6 +447,9 @@ func bashppTypeName(s string) bool {
 	// is the same latitude every other type spelling gets in this phase.
 	if s == "func" {
 		return true
+	}
+	if strings.HasPrefix(s, "*") {
+		return bashppIsIdent(strings.TrimPrefix(s, "*"))
 	}
 	if !bashppSelector(s) {
 		return false

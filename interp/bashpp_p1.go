@@ -6,6 +6,7 @@ package interp
 import (
 	"bytes"
 	"context"
+	"strings"
 
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/syntax"
@@ -70,13 +71,33 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 		// outermost block; give it one rather than binding nowhere.
 		r.bashPPScope = newBashPPScope(nil)
 	}
+	if d.Site == syntax.StartTypeDecl {
+		if r.bashPPTypes == nil {
+			r.bashPPTypes = make(map[string]bashPPType)
+		}
+		if _, exists := r.bashPPTypes[name]; exists {
+			r.errf("%stype %s redeclared in this session\n", r.bashErrPrefix(d.Pos()), name)
+			r.exit = exitStatus{code: 2}
+			return
+		}
+		if d.DeclType == nil {
+			r.errf("%stype %s has no underlying type\n", r.bashErrPrefix(d.Pos()), name)
+			r.exit = exitStatus{code: 2}
+			return
+		}
+	}
+	if d.Site == syntax.StartVar && d.DeclType != nil {
+		base := strings.TrimPrefix(d.DeclType.Value, "*")
+		if _, ok := r.bashPPTypes[base]; !ok && !bashPPBuiltinType(base) {
+			r.errf("%sundefined type: %s\n", r.bashErrPrefix(d.Pos()), base)
+			r.exit = exitStatus{code: 2}
+			return
+		}
+	}
 
-	// The typed forms are not claimed by the parser yet, so DeclType is nil on
-	// every node that reaches this from source. It is read here rather than
-	// ignored because the zero value it implies is already the answer: a bare
-	// `var x int` has no initializer, and [Runner.bashPPValue] gives an empty
-	// Init the zero value. When the typed site lands, what changes is the
-	// zero value's KIND, which is the one thing DeclType will then name.
+	// DeclType is also the in-process identity source for P3-C receiver values.
+	// The visible scalar stays in the ordinary shell variable below; the named
+	// type and pointer bits are attached to its lexical cell after declaration.
 	vr := r.bashPPValue(ctx, d.Init)
 	// A declaration which shadows an exported shell variable inherits the
 	// export, so the child process and the script agree on the value. It does
@@ -91,7 +112,31 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 	if err := r.bashPPScope.declare(name, vr, d.Site == syntax.StartConst); err != nil {
 		r.errf("%s%v\n", r.bashErrPrefix(d.Pos()), err)
 		r.exit = exitStatus{code: 2}
+		return
 	}
+	if d.Site == syntax.StartTypeDecl {
+		r.bashPPTypes[name] = bashPPType{underlying: d.DeclType.Value, alias: d.Alias}
+	}
+	if d.Site == syntax.StartVar && d.DeclType != nil {
+		spelling := d.DeclType.Value
+		pointer := strings.HasPrefix(spelling, "*")
+		base := strings.TrimPrefix(spelling, "*")
+		if _, named := r.bashPPTypes[base]; named {
+			cell := r.bashPPScope.lookup(name)
+			cell.typeName, cell.pointer = base, pointer
+			cell.nilPointer = pointer && len(d.Init) == 0
+		}
+	}
+}
+
+func bashPPBuiltinType(name string) bool {
+	switch name {
+	case "bool", "byte", "complex64", "complex128", "error", "float32", "float64",
+		"int", "int8", "int16", "int32", "int64", "rune", "string",
+		"uint", "uint8", "uint16", "uint32", "uint64", "uintptr":
+		return true
+	}
+	return false
 }
 
 // bashPPShortDecl evaluates `x := 42` and `x, y := f()`.
@@ -127,6 +172,26 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 		fn, vr := r.bashPPMakeClosure(d.FuncLit)
 		fn.bound = name
 		r.bashPPDeclareName(name, vr)
+		return
+	}
+	if len(d.MethodValue) > 0 {
+		if len(d.Lhs) != 1 {
+			r.errf("assignment mismatch: %d variable(s) but 1 value(s)\n", len(d.Lhs))
+			r.exit = exitStatus{code: 2}
+			return
+		}
+		call := &syntax.BashPPCall{Fun: d.MethodValue}
+		fn, ok := r.bashPPLookupFunc(call)
+		if !ok {
+			if r.exit.code == 0 {
+				r.errf("bash++: selector %s.%s is not a method value\n", d.MethodValue[0].Value, d.MethodValue[len(d.MethodValue)-1].Value)
+				r.exit.code = 2
+			}
+			return
+		}
+		vr := r.bashPPStoreFunc(fn)
+		fn.bound = d.Lhs[0].Value
+		r.bashPPDeclareName(d.Lhs[0].Value, vr)
 		return
 	}
 	// `x := f(1)` / `a, b := f()` binds a typed function's results. It is
@@ -227,6 +292,9 @@ func (r *Runner) bashPPCall(ctx context.Context, c *syntax.BashPPCall) {
 			return
 		}
 		r.bashPPInvoke(ctx, fn, args)
+		return
+	}
+	if r.exit.code != 0 {
 		return
 	}
 	if r.bashPPEnabled() && !r.PosixMode() && len(c.Fun) >= 1 {
