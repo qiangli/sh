@@ -151,6 +151,13 @@ var bashppAcceptedShapes = []string{
 	"var x = 1",
 	"const K = 2",
 
+	// The same shapes with a different name and a different value. These are
+	// the entries that make the gate check a LICENCE rather than a string: the
+	// published rows spell `x`/`1` and `K`/`2`, and a licence bound to bytes
+	// would report both of these as unlisted divergences. See bashppDeclShape.
+	"var counter = 42",
+	"const Retries = 0",
+
 	// The same shapes ending at each terminator bashppShapeBoundary accepts,
 	// which is what a real script looks like.
 	"var x = 1; echo done",
@@ -183,6 +190,16 @@ func bashppSharedCorpus(t *testing.T) []string {
 		inputs = append(inputs, c.in)
 	}
 	inputs = append(inputs, bashppAcceptedShapes...)
+	// The near-misses belong in the gate too, and not only in their own test.
+	// They are the inputs a widened grammar or a loosened name check would
+	// start claiming, and the gate is where such a claim shows up as an
+	// UNLISTED DIVERGENCE with the shape named — which is a far more useful
+	// failure than a bare inequality. The rejection evidence reaches the
+	// corpus this way as well, since bashppUnsupportedDeclBodies carries it.
+	for _, tc := range bashppUnsupportedDeclBodies {
+		inputs = append(inputs, tc.in)
+	}
+	inputs = append(inputs, bashppRejectionEvidence...)
 	if len(inputs) < 500 {
 		t.Fatalf("corpus looks too small to be meaningful: %d inputs", len(inputs))
 	}
@@ -260,7 +277,7 @@ func TestBashPPMatchesBash(t *testing.T) {
 			continue
 		}
 
-		hits := bashppCommandSites(bashFile, in)
+		hits := bashppCommandSites(bashFile, ppFile, in)
 
 		// A Class R verdict at a command position of an input bash just
 		// ACCEPTED is a contradiction: Class R means bash rejects the shape.

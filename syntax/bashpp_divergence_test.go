@@ -68,9 +68,12 @@ type bashppDivergenceRow struct {
 	corpusID string
 
 	// shape is the shape as the design of record spells it, and as day1Cases
-	// records it — the two are checked equal. Attribution is exact against it
-	// (see bashppAttribute), so the row licenses this shape and no other; it
-	// also drives the escape check.
+	// records it — the two are checked equal. It is a REPRESENTATIVE of the
+	// shape rather than the only string the row covers: what the row licenses
+	// is whatever the parser makes of this text, so `var x = 1` licenses
+	// `var counter = 42` (the same shape, a different name and value) and does
+	// not license `var x = "a b"` (a different shape). See bashppAttribute and
+	// bashppDeclShape. It also drives the escape check.
 	shape string
 
 	// site is the start site the shape opens. Cross-checked against day1Cases.
@@ -141,19 +144,86 @@ func bashppShapeBoundary(rest string) bool {
 	return false
 }
 
-// bashppAttribute returns the published rows that attribute hit h EXACTLY: same
-// start site, and the row's shape spans the whole command at the hit.
+// bashppDeclShape reduces a declaration the parser CLAIMED to the shape it is,
+// discarding the parts that are not shape: the declared name and the
+// initializer's value.
 //
-// Sharing a start site is deliberately not enough. `x := 42` and `x := <-ch`
-// both open StartShortDecl and both measure Class E, but only the first is
-// published; licensing the second because the first exists would let an
-// unmeasured shape diverge under a row that does not describe it, which is the
-// closed-row contract failing open. Returning no row is the fail-safe answer:
-// the caller reports the divergence as unlisted and the gate fails.
+// This is the vocabulary the allowlist is written in. `var x = 1` and
+// `var counter = 42` are the same shape and share one row, because the corpus
+// measured a shape rather than a string; `var x = "a b"` is a different shape
+// and would need its own row and its own corpus run. Everything the grammar in
+// bashpp_decl.go can distinguish appears here, so widening that grammar
+// changes a signature and forces the row question to be asked rather than
+// answered by accident.
+func bashppDeclShape(d *BashPPDecl) string {
+	shape := d.Kw.Value + " IDENT"
+	if d.DeclType != nil {
+		shape += " TYPE"
+	}
+	switch len(d.Init) {
+	case 0:
+	case 1:
+		shape += " = " + bashppInitKind(d.Init[0])
+	default:
+		shape += " = <multi>"
+	}
+	return shape
+}
+
+// bashppRowShape is the shape a published row describes, taken from what the
+// parser makes of the row's own source rather than from a second reading of it.
+//
+// Deriving it this way is what BINDS THE LICENCE TO THE ACCEPTED SHAPE. A row
+// can only license what the dispatch actually produces for the row's own text,
+// so a row cannot describe a shape the parser does not claim, and the parser
+// cannot claim a shape by matching a row it does not really implement. The two
+// halves are the same computation run on two inputs.
+func bashppRowShape(row bashppDivergenceRow) (string, bool) {
+	f, err := bashppParse(LangBashPP, row.shape)
+	if err != nil {
+		return "", false
+	}
+	d, ok := bashppFirstDecl(f)
+	if !ok {
+		return "", false
+	}
+	return bashppDeclShape(d), true
+}
+
+// bashppAttribute returns the published rows that attribute hit h EXACTLY.
+//
+// There are two kinds of hit and they are attributed differently, because a
+// claimed shape and an unclaimed one are different objects.
+//
+// A hit the parser CLAIMED carries the declaration it produced, and is
+// attributed by that declaration's shape (see [bashppDeclShape]). This is the
+// exact form of the licence: the row must describe the shape the parser built,
+// not merely a string the input begins with. `var x = 1 extra` is not claimed
+// at all, so it never reaches here; `var x = "a b"` would be claimed only if
+// the grammar were widened, and would then be unlicensed until a row named it.
+//
+// A hit the parser did NOT claim — every `:=` and call site today — cannot have
+// a shape, so it keeps the textual rule: the row's shape must span the whole
+// command at the hit. Sharing a start site is deliberately not enough there
+// either. `x := 42` and `x := <-ch` both open StartShortDecl and both measure
+// Class E, but only the first is published; licensing the second because the
+// first exists would let an unmeasured shape diverge under a row that does not
+// describe it, which is the closed-row contract failing open.
+//
+// Returning no row is the fail-safe answer in both cases: the caller reports
+// the divergence as unlisted and the gate fails.
 func bashppAttribute(h bashppSiteHit) []bashppDivergenceRow {
 	var out []bashppDivergenceRow
 	for _, row := range bashppAllowedDivergences {
 		if row.site != h.match.Site {
+			continue
+		}
+		if h.decl != nil {
+			rowShape, ok := bashppRowShape(row)
+			if !ok || rowShape != bashppDeclShape(h.decl) {
+				continue
+			}
+			out = append(out, row)
 			continue
 		}
 		rest, ok := strings.CutPrefix(h.src, row.shape)
@@ -171,6 +241,13 @@ type bashppSiteHit struct {
 	offset uint
 	src    string // the source from the command position, bounded
 	match  StartSiteMatch
+
+	// decl is the declaration LangBashPP actually claimed at this offset, or
+	// nil when it claimed nothing. It is taken from the bashpp parse rather
+	// than re-derived from src, so attribution asks what the parser DID rather
+	// than what the source looks like — the two answers are allowed to differ,
+	// and when they do, the parser's is the one that changed a script.
+	decl *BashPPDecl
 }
 
 func (h bashppSiteHit) String() string {
@@ -179,7 +256,7 @@ func (h bashppSiteHit) String() string {
 }
 
 // bashppCommandSites reports every Bash++ start site recognized at a REAL bash
-// command position of src.
+// command position of src, together with whatever LangBashPP claimed there.
 //
 // The positions are taken from the LangBash parse rather than guessed, which
 // is what makes the attribution honest: a *CallExpr's first argument is
@@ -187,7 +264,13 @@ func (h bashppSiteHit) String() string {
 // parser.go's gotStmtPipe will consult RecognizeStartSite. Compound commands
 // are not scanned because no Day-1 site opens at one — `if` is deliberately not
 // a Day-1 site, see bashppAllowedDivergences.
-func bashppCommandSites(f *File, src string) []bashppSiteHit {
+//
+// ppFile is the LangBashPP parse of the same source, and may be nil when there
+// is none. It supplies the claimed declaration at each offset, so that a
+// licence is checked against the node the parser built rather than against the
+// bytes it was built from.
+func bashppCommandSites(f, ppFile *File, src string) []bashppSiteHit {
+	claimed := bashppDeclsByOffset(ppFile)
 	var out []bashppSiteHit
 	Walk(f, func(n Node) bool {
 		call, ok := n.(*CallExpr)
@@ -200,7 +283,26 @@ func bashppCommandSites(f *File, src string) []bashppSiteHit {
 		}
 		rest := src[off:]
 		if m := RecognizeStartSite(rest); m.Site != StartNone {
-			out = append(out, bashppSiteHit{offset: off, src: boundedSrc(rest), match: m})
+			out = append(out, bashppSiteHit{
+				offset: off, src: boundedSrc(rest), match: m, decl: claimed[off],
+			})
+		}
+		return true
+	})
+	return out
+}
+
+// bashppDeclsByOffset indexes every declaration LangBashPP claimed, by the
+// offset of its keyword — which is the same offset the bash parse reports for
+// the command word, and so the key both halves agree on.
+func bashppDeclsByOffset(f *File) map[uint]*BashPPDecl {
+	out := map[uint]*BashPPDecl{}
+	if f == nil {
+		return out
+	}
+	Walk(f, func(n Node) bool {
+		if d, ok := n.(*BashPPDecl); ok {
+			out[d.Pos().Offset()] = d
 		}
 		return true
 	})
@@ -509,7 +611,11 @@ func TestBashPPCommandSitesFindShapes(t *testing.T) {
 				// parse it, the row and the engine disagree.
 				t.Fatalf("LangBash rejected Class E shape %q: %v", row.shape, err)
 			}
-			hits := bashppCommandSites(f, row.shape)
+			ppFile, err := bashppParse(LangBashPP, row.shape)
+			if err != nil {
+				t.Fatalf("LangBashPP rejected Class E shape %q: %v", row.shape, err)
+			}
+			hits := bashppCommandSites(f, ppFile, row.shape)
 			if len(hits) == 0 {
 				t.Fatalf("no start site found at any command position of %q; "+
 					"a real divergence here would be misreported as unlisted", row.shape)
@@ -520,6 +626,141 @@ func TestBashPPCommandSitesFindShapes(t *testing.T) {
 			}
 			if len(named) == 0 {
 				t.Fatalf("published shape %q licensed nothing", row.shape)
+			}
+		})
+	}
+}
+
+// TestBashPPAcceptedShapesAreLicensed closes the loop the rejected first
+// tranche left open: the set of shapes the parser CLAIMS and the set of shapes
+// the allowlist LICENSES must be the same set.
+//
+// Two independent things went wrong when they were only informally related.
+// The dispatch claimed shapes no row describes — `var x = 1,` and `var x = {1}`
+// are four-word bash commands whose last word is not a Go expression, and
+// `var if = 1` names something Go reserves — while the licence itself was a
+// byte prefix, so it could neither notice nor refuse them. A prefix answers
+// "does this text start like the row"; the question that matters is "is this
+// the shape the row was measured for".
+//
+// So the licence is bound to the shape the parser actually built (see
+// [bashppDeclShape]), and this test asserts the correspondence both ways:
+//
+//   - every accepted declaration is named by a published Class E row, so
+//     nothing is claimed that the compatibility table has not published; and
+//   - every published row whose own shape the parser claims agrees with it, so
+//     the table cannot describe a shape the dispatch does not implement.
+//
+// Widening [bashppInitKind] without publishing a row fails the first half.
+// Publishing a row for a shape the dispatch does not build fails the second.
+func TestBashPPAcceptedShapesAreLicensed(t *testing.T) {
+	t.Parallel()
+
+	rowShapes := map[string][]string{} // shape -> corpus ids
+	for _, row := range bashppAllowedDivergences {
+		if shape, ok := bashppRowShape(row); ok {
+			rowShapes[shape] = append(rowShapes[shape], row.corpusID)
+		}
+	}
+	if len(rowShapes) == 0 {
+		t.Fatal("no published row describes a shape the parser claims; either " +
+			"the dispatch stopped claiming anything or the allowlist stopped " +
+			"describing it, and both look like a pass from the outside")
+	}
+
+	t.Run("every accepted shape is published", func(t *testing.T) {
+		for _, tc := range bashppAcceptedDecls {
+			f, err := bashppParse(LangBashPP, tc.in)
+			if err != nil {
+				t.Errorf("LangBashPP rejected %q: %v", tc.in, err)
+				continue
+			}
+			d, ok := bashppFirstDecl(f)
+			if !ok {
+				t.Errorf("input %q is listed as accepted but was not claimed", tc.in)
+				continue
+			}
+			shape := bashppDeclShape(d)
+			if len(rowShapes[shape]) == 0 {
+				t.Errorf("input %q is claimed as shape %q, which no published row "+
+					"describes; a claimed Class E shape without a row is an "+
+					"unlicensed divergence waiting to happen. Measure the shape "+
+					"into bashpp-tests/tools/startsites and publish the row, or "+
+					"narrow the grammar in bashpp_decl.go so it is not claimed.",
+					tc.in, shape)
+			}
+		}
+	})
+
+	t.Run("every claimed row shape is licensed end to end", func(t *testing.T) {
+		// Not a restatement of the above: this runs the real licensing path —
+		// recognizer, command-position scan, attribution — rather than
+		// comparing signatures directly, so a row that matches on paper and
+		// fails in the gate is still caught.
+		for _, row := range bashppAllowedDivergences {
+			if _, ok := bashppRowShape(row); !ok {
+				continue // the parser does not claim this row's shape
+			}
+			bashFile, err := bashppParse(LangBash, row.shape)
+			if err != nil {
+				t.Errorf("LangBash rejected Class E shape %q: %v", row.shape, err)
+				continue
+			}
+			ppFile, err := bashppParse(LangBashPP, row.shape)
+			if err != nil {
+				t.Errorf("LangBashPP rejected Class E shape %q: %v", row.shape, err)
+				continue
+			}
+			if diff := bashppTreeDiff(bashFile, ppFile); diff == "" {
+				t.Errorf("row %q claims shape %q diverges, but the two parses are "+
+					"identical; the row licenses nothing", row.corpusID, row.shape)
+				continue
+			}
+			hits := bashppCommandSites(bashFile, ppFile, row.shape)
+			named, unlicensed := bashppLicense(hits)
+			if len(unlicensed) != 0 || len(named) == 0 {
+				t.Errorf("row %q shape %q: named %v, unlicensed %v",
+					row.corpusID, row.shape, bashppRowIDs(named), unlicensed)
+			}
+		}
+	})
+}
+
+// TestBashPPRejectedShapesClaimNothing is the executable form of the rejection
+// evidence that sent the first tranche back.
+//
+// Each input below is an ORDINARY BASH COMMAND that the first cut of the
+// dispatch turned into a *BashPPDecl. They fall into two groups and the groups
+// fail for different reasons, which is why both are listed:
+//
+//   - a Go reserved word where a name belongs. `var if = 1`, `var type = 1`
+//     and `const return = 1` are not unsupported declarations, they are not
+//     declarations at all; Go has no such identifier. An arity-plus-identifier
+//     test that reuses the shell's notion of a name accepts every one of them.
+//   - a last word that is not a Go expression. `var x = 1,` and `var x = {1}`
+//     have the supported ARITY and nothing else, which is precisely what an
+//     arity check cannot see.
+//
+// Claiming any of them changes what a working script does at a site bash
+// accepts today, which is the one outcome Class E forbids. The assertion here
+// is the narrow one — nothing was claimed;
+// TestBashPPUnsupportedDeclBodyStaysShell separately asserts the whole tree,
+// positions and printed bytes stay identical to LangBash in every reader and
+// POSIX configuration.
+func TestBashPPRejectedShapesClaimNothing(t *testing.T) {
+	t.Parallel()
+
+	for _, in := range bashppRejectionEvidence {
+		t.Run(in, func(t *testing.T) {
+			t.Parallel()
+			f, err := bashppParse(LangBashPP, in)
+			if err != nil {
+				t.Fatalf("LangBashPP rejected %q: %v; a Class E near-miss must "+
+					"fall back silently, never diagnose", in, err)
+			}
+			if d, ok := bashppFirstDecl(f); ok {
+				t.Fatalf("input %q was claimed as %q; it is an ordinary bash "+
+					"command and must stay one", in, bashppDeclShape(d))
 			}
 		})
 	}

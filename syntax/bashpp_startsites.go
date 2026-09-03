@@ -109,8 +109,12 @@ func recognizeKeywordDecl(s string) StartSiteMatch {
 			continue
 		}
 		// An identifier must follow. Without one this is a plain command
-		// invocation and must stay shell.
-		if name := leadingIdent(rest); name == "" {
+		// invocation and must stay shell. A Go keyword is not an identifier,
+		// so `var if = 1` and `const return = 1` are refused here rather than
+		// downstream: no phase of Bash++ can ever declare a name Go reserves,
+		// while bash runs both today as ordinary commands.
+		name := leadingIdent(rest)
+		if name == "" || isGoReservedWord(name) {
 			continue
 		}
 		return StartSiteMatch{Site: site, Class: ClassE, Bounded: true}
@@ -158,6 +162,12 @@ func recognizeGoCall(s string) StartSiteMatch {
 	if ident == "" {
 		return noMatch
 	}
+	// A callee is an identifier too, so a Go keyword cannot head one: `if(x)`
+	// is not a Go call and must not be claimed as one.
+	head, _, _ := strings.Cut(ident, ".")
+	if isGoReservedWord(head) {
+		return noMatch
+	}
 	rest := s[len(ident):]
 	if !strings.HasPrefix(rest, "(") {
 		return noMatch
@@ -189,7 +199,9 @@ func cutShortDeclLhs(s string) (string, bool) {
 	rest := s
 	for {
 		name := leadingIdent(rest)
-		if name == "" {
+		// Same rule as the keyword declarations: a Go keyword cannot be a
+		// declaration target, so `if := 1` is a shell command and nothing else.
+		if name == "" || isGoReservedWord(name) {
 			return "", false
 		}
 		rest = strings.TrimLeft(rest[len(name):], " \t")
@@ -248,3 +260,29 @@ func isIdentByte(c byte, first bool) bool {
 	}
 	return false
 }
+
+// goReservedWords is the complete set of Go keywords, as of the Go 1.x
+// specification's "Keywords" section. All 25 are listed rather than only the
+// ones a Day-1 shape could plausibly collide with, because the closed set is
+// the specification's and a hand-picked subset would be a second, drifting
+// answer to a question Go has already answered.
+//
+// WHY THE RECOGNIZER CARES. A Go keyword is not an identifier, so `var if = 1`
+// is not a declaration in any phase of Bash++ — it is not a Go region that
+// happens to be unsupported, it is not a Go region at all. Bash, meanwhile,
+// runs it today as a three-argument command. Letting the recognizer fire there
+// would put a shape that can never be claimed onto the Class E ledger, and the
+// dispatch would have to refuse it a second time to avoid changing what a
+// working script does. One refusal, at the point where the name is required to
+// be an identifier, is the whole of it.
+var goReservedWords = map[string]bool{
+	"break": true, "case": true, "chan": true, "const": true, "continue": true,
+	"default": true, "defer": true, "else": true, "fallthrough": true, "for": true,
+	"func": true, "go": true, "goto": true, "if": true, "import": true,
+	"interface": true, "map": true, "package": true, "range": true, "return": true,
+	"select": true, "struct": true, "switch": true, "type": true, "var": true,
+}
+
+// isGoReservedWord reports whether s is a Go keyword and therefore may never
+// be used as a declared name, a short-declaration target or a callee.
+func isGoReservedWord(s string) bool { return goReservedWords[s] }

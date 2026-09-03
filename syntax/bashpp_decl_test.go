@@ -96,6 +96,41 @@ func bashppCheckIdentical(t *testing.T, in string) {
 	}
 }
 
+// bashppRejectionEvidence is the evidence that sent the first tranche of this
+// story back, kept as its own list so it cannot be lost in the larger one.
+//
+// Every entry is an ORDINARY BASH COMMAND that the first cut of the dispatch
+// claimed as a *BashPPDecl. The first three name something Go reserves, so
+// they are not declarations in any phase — `if`, `type` and `return` are
+// keywords, not identifiers, and no amount of later implementation makes them
+// declarable. The last two have the supported ARITY and a last word that is
+// not a Go expression at all, which is exactly what an arity check cannot see.
+//
+// They are exercised twice: [TestBashPPRejectedShapesClaimNothing] asserts the
+// narrow claim (nothing was claimed), and they are folded into
+// bashppUnsupportedDeclBodies below so the full identity assertion — AST,
+// positions, printed bytes, both readers, both POSIX settings — covers them
+// too. They also reach the compatibility gate through bashppSharedCorpus.
+var bashppRejectionEvidence = []string{
+	"var if = 1",
+	"var type = 1",
+	"const return = 1",
+	"var x = 1,",
+	"var x = {1}",
+}
+
+// bashppGoKeywords is every Go keyword, spelled out here rather than read from
+// the production set, so that the test and the implementation are two
+// independent statements of the same list. A keyword dropped from
+// goReservedWords fails TestBashPPReservedNamesStayShell instead of silently
+// becoming declarable.
+var bashppGoKeywords = []string{
+	"break", "case", "chan", "const", "continue", "default", "defer", "else",
+	"fallthrough", "for", "func", "go", "goto", "if", "import", "interface",
+	"map", "package", "range", "return", "select", "struct", "switch", "type",
+	"var",
+}
+
 // bashppUnsupportedDeclBodies are the shapes that open like a Day-1 var/const
 // declaration and are not one. Every entry must parse, print and position
 // EXACTLY as LangBash does; claiming any of them would change what a working
@@ -132,6 +167,45 @@ var bashppUnsupportedDeclBodies = []struct{ name, in string }{
 	{"expanded name", "var $x = 1"},
 	{"quoted name", `var "x" = 1`},
 	{"flag-shaped name", "var -x = 1"},
+
+	// REJECTION EVIDENCE, GROUP ONE: a Go reserved word where the name goes.
+	// Go has no identifier `if`, so `var if = 1` is not an unsupported
+	// declaration — it is not a declaration. Bash runs all three today as
+	// three-argument commands, so claiming them breaks working scripts at a
+	// site no phase can ever legitimately claim. The full keyword sweep is
+	// TestBashPPReservedNamesStayShell; these are the reported witnesses.
+	{"reserved name if", "var if = 1"},
+	{"reserved name type", "var type = 1"},
+	{"reserved name return", "const return = 1"},
+	{"reserved name as short decl target", "if := 1"},
+
+	// REJECTION EVIDENCE, GROUP TWO: the right arity, and a last word that is
+	// not a Go expression. This is the group an arity check cannot see, and
+	// the reason bashppInitKind spells the initializer grammar out.
+	{"trailing comma value", "var x = 1,"},
+	{"braced value", "var x = {1}"},
+
+	// The rest of the initializer grammar's boundary, each falling back in
+	// silence. See bashppInitKind for why every one of these is deferred
+	// rather than merely unimplemented: a shape with no published Class E row
+	// has no licence to diverge.
+	{"string value", `var x = "a b"`},
+	{"single-quoted value", "var x = 'q'"},
+	{"float value", "var x = 1.5"},
+	{"hex value", "var x = 0x1f"},
+	{"leading-zero value", "var x = 007"},
+	{"underscore-separated value", "var x = 1_000"},
+	{"negative value", "var x = -1"},
+	{"flag-shaped value", "var x = -f"},
+	{"identifier value", "var x = y"},
+	{"expanded value", "var x = $y"},
+	{"braced expansion value", "var x = ${y}"},
+	{"command substitution value", "var x = $(id)"},
+	{"backquoted value", "var x = `id`"},
+	{"glob value", "var x = *"},
+	{"path value", "var x = a/b"},
+	{"assignment-shaped value", "var x = a=b"},
+	{"empty string value", `var x = ""`},
 
 	// The published escapes. These work by making the position not a Bash++
 	// command position at all, so they must be identical whatever the body.
@@ -224,7 +298,7 @@ var bashppAcceptedDecls = []bashppAcceptedDecl{
 		// trailing blank, and each part still points at its own bytes. This is
 		// the case that catches a node built from token counts instead of from
 		// the words the parser produced.
-		in: "var   longName   =   value  ", site: StartVar, kw: "var", name: "longName", init: "value",
+		in: "var   longName   =   12345  ", site: StartVar, kw: "var", name: "longName", init: "12345",
 		declStart: 0, declEnd: 26,
 		kwStart: 0, kwEnd: 3,
 		nameStart: 6, nameEnd: 14,
@@ -240,14 +314,23 @@ var bashppAcceptedDecls = []bashppAcceptedDecl{
 		initStart: 16, initEnd: 17,
 	},
 	{
-		// An initializer that is not a bare literal. The word is carried
-		// UNEVALUATED, exactly as the parser built it, because P1 classifies
-		// and does not interpret — the evaluator is a separate story.
-		in: `var x = "a b"`, site: StartVar, kw: "var", name: "x", init: "",
-		declStart: 0, declEnd: 13,
+		// A multi-digit value, to pin that it is the initializer's KIND and not
+		// its bytes that the grammar and the divergence licence turn on. `1`
+		// is the published row's value; `42` is the same shape, licensed by
+		// the same row, and must be claimed identically.
+		in: "const Retries = 42", site: StartConst, kw: "const", name: "Retries", init: "42",
+		declStart: 0, declEnd: 18,
+		kwStart: 0, kwEnd: 5,
+		nameStart: 6, nameEnd: 13,
+		initStart: 16, initEnd: 18,
+	},
+	{
+		// Zero, the one decimal literal that may begin with `0`.
+		in: "var x = 0", site: StartVar, kw: "var", name: "x", init: "0",
+		declStart: 0, declEnd: 9,
 		kwStart: 0, kwEnd: 3,
 		nameStart: 4, nameEnd: 5,
-		initStart: 8, initEnd: 13,
+		initStart: 8, initEnd: 9,
 	},
 }
 
@@ -401,8 +484,8 @@ func TestBashPPDeclPrint(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"var x = 1", "var x = 1\n"},
 		{"const K = 2", "const K = 2\n"},
-		{"var   longName   =   value  ", "var longName = value\n"},
-		{`var x = "a b"`, "var x = \"a b\"\n"},
+		{"var   longName   =   12345  ", "var longName = 12345\n"},
+		{"const Retries = 42", "const Retries = 42\n"},
 		{"var x = 1; echo done", "var x = 1\necho done\n"},
 		{"var x = 1 | cat", "var x = 1 | cat\n"},
 		{"if true; then var x = 1; fi", "if true; then var x = 1; fi\n"},
@@ -473,5 +556,104 @@ func TestBashPPDeclOnlyInBashPP(t *testing.T) {
 				t.Fatalf("%v produced a %T; the dispatch must be LangBashPP-only", lang, d)
 			}
 		})
+	}
+}
+
+// TestBashPPReservedNamesStayShell sweeps the whole Go keyword set rather than
+// only the three keywords the rejection named.
+//
+// The reported witnesses were `if`, `type` and `return`, and fixing exactly
+// those three would have left twenty-two more ways to claim a command that is
+// not a declaration. The list is what Go's specification says it is, so the
+// sweep is cheap and the alternative — a hand-picked subset that looked
+// plausible — is how the first three got through.
+//
+// `const` and `var` are in the sweep too, which is not a curiosity: `var var =
+// 1` and `var const = 1` are ordinary bash commands, and a name check that
+// only refused OTHER keywords would still claim them.
+func TestBashPPReservedNamesStayShell(t *testing.T) {
+	t.Parallel()
+
+	for _, kw := range bashppGoKeywords {
+		for _, decl := range []string{"var", "const"} {
+			in := decl + " " + kw + " = 1"
+			t.Run(in, func(t *testing.T) {
+				t.Parallel()
+				// The recognizer must not fire either. The two gates answer
+				// different questions, but a name Go reserves fails both: no
+				// phase of Bash++ can ever open a region there, so leaving the
+				// site on the Class E ledger would owe the table a row for a
+				// shape that can never be claimed.
+				if got := RecognizeStartSite(in); got.Site != StartNone {
+					t.Errorf("RecognizeStartSite(%q) = %v; %q is a Go keyword and "+
+						"can never be a declared name", in, got.Site, kw)
+				}
+				f, err := bashppParse(LangBashPP, in)
+				if err != nil {
+					t.Fatalf("LangBashPP rejected %q: %v", in, err)
+				}
+				if d, ok := bashppFirstDecl(f); ok {
+					t.Fatalf("%q was claimed as %q; it is an ordinary bash command",
+						in, bashppDeclShape(d))
+				}
+				bashppCheckIdentical(t, in)
+			})
+		}
+	}
+}
+
+// TestBashPPInitGrammarIsClosed pins the Day-1 initializer grammar directly,
+// below the parser, so a change to it is a deliberate edit to a table rather
+// than a side effect noticed later in a compatibility gate.
+//
+// The accepted column is the whole of what this story implements: a Go decimal
+// integer literal, and nothing else. The rejected column is not a list of
+// mistakes — every entry is a form Bash++ will plausibly support one day, and
+// each is refused TODAY because the licence to diverge is granted per measured
+// shape and no row names it yet. See bashppInitKind.
+func TestBashPPInitGrammarIsClosed(t *testing.T) {
+	t.Parallel()
+
+	accepted := []string{"0", "1", "9", "42", "1234567890"}
+	rejected := []string{
+		"", "007", "0x1f", "0b1", "0o7", "1_000", "-1", "+1", "1.5", "1e3",
+		"1,", "{1}", "a", "true", "false", "nil", "x1", "1x", "1a", "*", "-f",
+	}
+
+	for _, s := range accepted {
+		if !bashppIsDecimalInt(s) {
+			t.Errorf("bashppIsDecimalInt(%q) = false, want true", s)
+		}
+	}
+	for _, s := range rejected {
+		if bashppIsDecimalInt(s) {
+			t.Errorf("bashppIsDecimalInt(%q) = true, want false", s)
+		}
+	}
+
+	// And the same answers through the word-level entry point the dispatch
+	// actually calls, which additionally refuses anything that is not a bare
+	// literal — a quote or an expansion means the shell is doing something the
+	// Go grammar has no reading of.
+	for _, tc := range []struct{ in, want string }{
+		{"var x = 1", "INT"},
+		{"var x = 0", "INT"},
+		{"var x = 42", "INT"},
+		{`var x = "1"`, ""},
+		{"var x = $y", ""},
+		{"var x = 1,", ""},
+		{"var x = {1}", ""},
+	} {
+		f, err := bashppParse(LangBash, tc.in)
+		if err != nil {
+			t.Fatalf("LangBash rejected %q: %v", tc.in, err)
+		}
+		call, ok := f.Stmts[0].Cmd.(*CallExpr)
+		if !ok || len(call.Args) != 4 {
+			t.Fatalf("%q did not parse as a four-word command", tc.in)
+		}
+		if got := bashppInitKind(call.Args[3]); got != tc.want {
+			t.Errorf("bashppInitKind of the value in %q = %q, want %q", tc.in, got, tc.want)
+		}
 	}
 }

@@ -79,6 +79,13 @@ func bashppUntypedDecl(ce *CallExpr, redirs []*Redirect) *BashPPDecl {
 	if eq.Value != "=" || !bashppIsIdent(name.Value) {
 		return nil
 	}
+	// The initializer must be one the Day-1 grammar actually spells out. An
+	// arity check alone claimed `var x = 1,` and `var x = {1}` — four-word
+	// commands whose fourth word is not a Go expression at all — which is the
+	// same Class E mistake as committing on a prefix, made one word later.
+	if bashppInitKind(ce.Args[3]) == "" {
+		return nil
+	}
 
 	// Gate one: the decision table decides whether a Go region opens at all.
 	// Asking it rather than re-testing the keyword here is what keeps a single
@@ -128,12 +135,101 @@ func bashppBareLit(w *Word) *Lit {
 // of its input, so it accepts `x` out of `x-y`, which would let `var x-y = 1`
 // — a perfectly ordinary bash command — be claimed on the strength of its
 // first byte.
+//
+// Go keywords are excluded, because Go excludes them: `if`, `type` and
+// `return` are not identifiers, so `var if = 1` is not an unsupported
+// declaration, it is not a declaration at all. Bash runs all three today as
+// ordinary three-argument commands, so claiming them would change what a
+// working script does at a site no phase can ever legitimately claim. The
+// check is duplicated in [RecognizeStartSite] rather than only here on
+// purpose: the two gates answer different questions, and a shape that can
+// never be a Go region should not reach the second gate as a Class E hit.
 func bashppIsIdent(s string) bool {
-	if s == "" {
+	if s == "" || isGoReservedWord(s) {
 		return false
 	}
 	for i := 0; i < len(s); i++ {
 		if !isIdentByte(s[i], i == 0) {
+			return false
+		}
+	}
+	return true
+}
+
+// THE DAY-1 INITIALIZER GRAMMAR, in full:
+//
+//	Init  ::= IntLit
+//	IntLit ::= "0" | ("1"…"9") {"0"…"9"}
+//
+// That is the whole of it, and the narrowness is the point rather than an
+// omission to be tidied up later.
+//
+// WHY A GRAMMAR AND NOT A WORD COUNT. The first cut of this dispatch checked
+// only that the command had four words, which meant the fourth word could be
+// anything the shell can spell. `var x = 1,` and `var x = {1}` are ordinary
+// bash commands whose last argument is not a Go expression in any reading, and
+// both were claimed. A Class E site may only be claimed for a body Bash++
+// actually supports, and "some word" is not a body; the grammar is what makes
+// "supported" a decidable question instead of an arity coincidence.
+//
+// WHY ONLY INTEGERS. The published Class E rows for the untyped form are
+// `var x = 1` and `const K = 2` — decimal integers, and nothing else. A
+// divergence is licensed by the row that names its shape, so claiming a string
+// or a float initializer would be claiming a shape no row describes and no
+// corpus run measured. The remedy for widening it is to measure the shape into
+// bashpp-tests/tools/startsites and publish the row, not to loosen this
+// function; TestBashPPAcceptedShapesAreLicensed fails if the two drift apart.
+//
+// Deliberately absent, each falling back to the shell in silence:
+//
+//   - string, rune and float literals — `var x = "a b"`, `var x = 'q'`,
+//     `var x = 1.5`. Unmeasured, hence unlicensed; the `:=` site has a
+//     published string row but the `var` site does not, and a row licenses its
+//     own shape.
+//   - non-decimal and separated integers — `0x1f`, `0b1`, `007`, `1_000`.
+//     `007` is the sharpest of these: Go reads it as octal and the shell reads
+//     it as the characters `007`, so the two languages disagree about the
+//     value of a shape that is Class E in bash today.
+//   - signed values — `-1`, `+1`. A leading `-` is also how a bash command
+//     spells a flag, so `var x = -f` and `var x = -1` are the same shape to
+//     the shell.
+//   - anything with an expansion, a quote or a glob in it, which
+//     [bashppBareLit] already refuses one layer up.
+
+// bashppInitKind names the Day-1 initializer form w takes, or returns the
+// empty string when w is not an initializer this phase supports.
+//
+// The kind, rather than the value, is what the compatibility gate matches a
+// published row against: `var x = 1` and `var counter = 42` are one shape and
+// one row, while `var x = "a b"` is a different shape and would need its own.
+func bashppInitKind(w *Word) string {
+	lit := bashppBareLit(w)
+	if lit == nil {
+		return ""
+	}
+	if !bashppIsDecimalInt(lit.Value) {
+		return ""
+	}
+	return "INT"
+}
+
+// bashppIsDecimalInt reports whether s is a Go decimal_lit with no underscores.
+//
+// Leading zeros are refused rather than tolerated: `007` is octal in Go and the
+// literal characters `007` in the shell, so a shape the two languages read
+// differently is exactly the shape a Class E site must not claim.
+func bashppIsDecimalInt(s string) bool {
+	if s == "" {
+		return false
+	}
+	if s == "0" {
+		return true
+	}
+	if s[0] < '1' || s[0] > '9' {
+		return false
+	}
+	for i := 1; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
 			return false
 		}
 	}
