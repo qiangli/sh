@@ -8,15 +8,20 @@ import "strings"
 // This file is the Bash++ start-site DECISION TABLE, extracted from the parser
 // rather than embedded in it.
 //
-// What it is: the predicate the command-position dispatch will consult to
-// decide whether a Go region opens here. Keeping it separate is not tidiness.
-// It makes the decision unit-testable against the measured corpus in
-// bashpp-tests/tools/startsites WITHOUT a parser, and it reduces the eventual
-// edit to certification-owned parser.go to a single call.
+// What it is: the predicate the command-position dispatch consults to decide
+// whether a Go region opens here. Keeping it separate is not tidiness. It makes
+// the decision unit-testable against the measured corpus in
+// bashpp-tests/tools/startsites WITHOUT a parser, and it keeps the edit to
+// certification-owned parser.go down to the dispatch calls that ask it.
 //
-// What it is NOT: the wired dispatch. Nothing calls RecognizeStartSite yet.
-// Until parser.go is edited, Bash++ recognizes nothing and LangBashPP remains
-// byte-identical to LangBash, exactly as its doc comment promises.
+// What it is NOT: the dispatch itself. RecognizeStartSite answers "does a Go
+// region open here"; whether a particular body is one Bash++ supports is a
+// SECOND question, decided where the completed command is reclassified — see
+// bashppUntypedDecl/bashppTypeDecl in bashpp_decl.go, bashppShortDecl in
+// bashpp_short.go, and bashppFuncForm/bashppDeferForm in bashpp_func.go, each
+// of which consults this table and then applies its own body gate. Because the
+// P1 sites are now wired, LangBashPP diverges from LangBash exactly at the
+// published Class E rows and nowhere else (TestBashPPMatchesBash).
 //
 // THE BOUNDED-LOOKAHEAD PROPERTY, and why it is load-bearing.
 //
