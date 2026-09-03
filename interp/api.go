@@ -106,7 +106,7 @@ type Runner struct {
 	bashPPFuncScopes map[string]*bashPPScope
 	// bashPPImports is the import namespace for this runner session. The
 	// evaluator is deliberately package-private and replaceable in tests and
-	// alternate native adapters without exposing an interpreter ABI.
+	// alternate toolchain adapters without exposing an evaluator ABI.
 	bashPPImports map[string]string
 	bashPPTools   bashPPToolchain
 
@@ -2736,10 +2736,8 @@ func (r *Runner) Reset() {
 		r.bashPPScope = newBashPPScope(nil)
 		r.bashPPImports = make(map[string]string)
 		if r.bashPPTools.eval == nil {
-			// The capability policy, not the bare toolchain. It is
-			// what enforces the P2 import-time classification and
-			// the no-silent-fallback rule; selecting the native
-			// evaluator directly here would bypass both.
+			// The capability policy, not the bare toolchain adapter. It
+			// enforces P2 import-time classification before dispatch.
 			r.bashPPTools.eval = newPolicyBashPPEvaluator()
 		}
 		if r.bashPPFuncScopes == nil {

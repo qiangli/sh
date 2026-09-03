@@ -11,6 +11,7 @@ import (
 	"sync"
 	"testing"
 
+	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/syntax"
 )
 
@@ -145,6 +146,66 @@ func TestBashPPResolveVendorAndGOPATH(t *testing.T) {
 		req := nativeResolveRequest(app, "GOWORK=off", "GO111MODULE=off", "GOPATH="+root)
 		if got, err := (nativeBashPPEvaluator{}).Resolve(context.Background(), req, "example.com/dep/pkg"); err != nil || got != "legacy" {
 			t.Fatalf("Resolve = %q, %v", got, err)
+		}
+	})
+}
+
+func TestBashPPWorkspaceVendorAndGOPATHExecuteThroughShellRunner(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds fixture packages with the reviewed toolchain")
+	}
+	run := func(t *testing.T, dir, src string, env ...string) string {
+		t.Helper()
+		base := os.Environ()
+		for _, entry := range env {
+			name, value, _ := strings.Cut(entry, "=")
+			base = setEnvString(base, name, value)
+		}
+		var out, stderr bytes.Buffer
+		r, err := New(Dir(dir), StdIO(nil, &out, &stderr), Env(expand.ListEnviron(base...)), Lang(syntax.LangBashPP))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := r.Run(context.Background(), parseBashPPInternal(t, src)); err != nil {
+			t.Fatalf("run: %v: %s", err, stderr.String())
+		}
+		return out.String()
+	}
+
+	t.Run("workspace use and replace", func(t *testing.T) {
+		root := t.TempDir()
+		work := filepath.Join(root, "go.work")
+		writeImportFixture(t, root, "go.work", "go 1.25\n\nuse (\n ./app\n ./used\n)\n\nreplace example.com/replaced => ./replacement\n")
+		writeImportFixture(t, root, "app/go.mod", "module example.com/app\n\ngo 1.25\n\nrequire example.com/replaced v0.0.0\n")
+		writeImportFixture(t, root, "used/go.mod", "module example.com/used\n\ngo 1.25\n")
+		writeImportFixture(t, root, "used/pkg/pkg.go", "package usedpkg\nimport \"fmt\"\nfunc Print() { fmt.Println(\"used\") }\n")
+		writeImportFixture(t, root, "replacement/go.mod", "module example.com/replaced\n\ngo 1.25\n")
+		writeImportFixture(t, root, "replacement/pkg/pkg.go", "package replacedpkg\nimport \"fmt\"\nfunc Print() { fmt.Println(\"replaced\") }\n")
+		src := "import (\n u \"example.com/used/pkg\"\n r \"example.com/replaced/pkg\"\n)\nu.Print()\nr.Print()\n"
+		if got := run(t, filepath.Join(root, "app"), src, "GOWORK="+work, "GO111MODULE=on"); got != "used\nreplaced\n" {
+			t.Fatalf("output %q", got)
+		}
+	})
+
+	t.Run("vendor", func(t *testing.T) {
+		root := t.TempDir()
+		writeImportFixture(t, root, "go.mod", "module example.com/app\n\ngo 1.25\n\nrequire example.com/dep v1.0.0\n")
+		writeImportFixture(t, root, "vendor/modules.txt", "# example.com/dep v1.0.0\n## explicit; go 1.25\nexample.com/dep/pkg\n")
+		writeImportFixture(t, root, "vendor/example.com/dep/pkg/pkg.go", "package vendored\nimport \"fmt\"\nfunc Print() { fmt.Println(\"vendor\") }\n")
+		if got := run(t, root, "import \"example.com/dep/pkg\"\nvendored.Print()\n", "GOWORK=off", "GO111MODULE=on", "GOFLAGS=-mod=vendor"); got != "vendor\n" {
+			t.Fatalf("output %q", got)
+		}
+	})
+
+	t.Run("gopath", func(t *testing.T) {
+		root := t.TempDir()
+		app := filepath.Join(root, "src", "app")
+		writeImportFixture(t, root, "src/example.com/dep/pkg/pkg.go", "package legacy\nimport \"fmt\"\nfunc Print() { fmt.Println(\"gopath\") }\n")
+		if err := os.MkdirAll(app, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if got := run(t, app, "import \"example.com/dep/pkg\"\nlegacy.Print()\n", "GOWORK=off", "GO111MODULE=off", "GOPATH="+root); got != "gopath\n" {
+			t.Fatalf("output %q", got)
 		}
 	})
 }

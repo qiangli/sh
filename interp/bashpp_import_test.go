@@ -2,6 +2,7 @@ package interp_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -39,6 +40,39 @@ func TestBashPPStdlibImportSelectorCalls(t *testing.T) {
 	run("Println(\"dot\")\n")
 	if got := out.String(); got != "incremental\nalias\ndot\n" {
 		t.Fatalf("output %q", got)
+	}
+}
+
+func TestBashPPForcedShellImportEndToEnd(t *testing.T) {
+	for _, src := range []string{`command import "fmt"`, `"import" "fmt"`} {
+		t.Run(src, func(t *testing.T) {
+			var argv []string
+			handleImport := func(next interp.ExecHandlerFunc) interp.ExecHandlerFunc {
+				return func(ctx context.Context, args []string) error {
+					if args[0] == "import" {
+						argv = append([]string(nil), args...)
+						fmt.Fprintln(interp.HandlerCtx(ctx).Stdout, "shell-import")
+						return nil
+					}
+					return next(ctx, args)
+				}
+			}
+			f, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(src), "forced.bpp")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, claimed := f.Stmts[0].Cmd.(*syntax.BashPPImport); claimed {
+				t.Fatal("forced shell form was claimed as a Bash++ import")
+			}
+			var out strings.Builder
+			r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP), interp.ExecHandlers(handleImport))
+			if err := r.Run(context.Background(), f); err != nil {
+				t.Fatal(err)
+			}
+			if strings.Join(argv, "|") != "import|fmt" || out.String() != "shell-import\n" {
+				t.Fatalf("argv=%q output=%q", argv, out.String())
+			}
+		})
 	}
 }
 
