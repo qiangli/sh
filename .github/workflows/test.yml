@@ -19,11 +19,17 @@ jobs:
         go-version: ${{ matrix.go-version }}
         cache: false
 
-    # Darwin signal dispositions are process-global. Run its tests serially so
-    # unrelated t.Parallel cases cannot reset a disposition while a signal
-    # conformance case owns it (Go 1.27 detects that race as an inconsistent
-    # signal-receiver state).
-    - run: go test -parallel=1 ./...
+    # Darwin signal dispositions are process-global. Isolate the large interp
+    # suite into bounded processes so signal conformance cases cannot leave
+    # runtime receiver state that affects hundreds of later tests. Every test
+    # still runs; the regexes partition Test* names and examples run last.
+    - name: Test with isolated Darwin signal state
+      run: |
+        go list ./... | grep -v '/interp$' | xargs go test
+        for group in 'A-E' 'F-J' 'K-O' 'P-T' 'U-Z'; do
+          go test ./interp -run "^Test[$group]"
+        done
+        go test ./interp -run '^Example'
       if: matrix.os == 'macos-latest'
     - run: go test ./...
       if: matrix.os != 'macos-latest'
