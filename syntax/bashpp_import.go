@@ -45,7 +45,7 @@ func bashppImportAlias(name string) bool {
 // Rejection restores the ordinary Bash parser byte-for-byte.
 func (p *Parser) bashppImportGroup(ce *CallExpr) Command {
 	if ce == nil || len(ce.Assigns) != 0 || len(ce.Args) != 1 ||
-		(p.tok != leftParen && p.tok != _Newl) || (p.tok == leftParen && !p.spaced) {
+		(p.tok != leftParen && p.tok != _Newl) {
 		return nil
 	}
 	kw := bashppBareLit(ce.Args[0])
@@ -108,6 +108,9 @@ func (p *Parser) bashppImportGroup(ce *CallExpr) Command {
 			return nil
 		}
 		specs = append(specs, &BashPPImportSpec{Comments: specComments, Alias: alias, Path: path})
+		if p.tok == rightParen {
+			continue
+		}
 		if p.tok != _Newl && p.tok != semicolon {
 			txn.rollback(p)
 			return nil

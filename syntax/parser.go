@@ -3040,7 +3040,7 @@ func (p *Parser) gotStmtPipe(s *Stmt, binCmd bool) *Stmt {
 		}
 		name := p.lit(p.pos, p.val)
 		p.next()
-		if p.lang.in(LangBashPP) && p.tok == leftParen && p.spaced {
+		if p.lang.in(LangBashPP) && p.tok == leftParen {
 			if cmd := p.bashppImportGroup(&CallExpr{Args: []*Word{p.wordOne(name)}}); cmd != nil {
 				s.Cmd = cmd
 				break

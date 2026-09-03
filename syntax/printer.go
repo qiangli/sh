@@ -1500,8 +1500,13 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 		p.incLevel()
 		for _, spec := range cmd.Specs {
 			p.comments(spec.Comments...)
-			p.newlines(spec.Pos())
-			p.spacePad(spec.Pos())
+			if spec.Pos().Line() <= p.line {
+				p.newline(spec.Pos())
+				p.indent()
+			} else {
+				p.newlines(spec.Pos())
+				p.spacePad(spec.Pos())
+			}
 			if spec.Alias != nil {
 				p.spacedString(spec.Alias.Value, spec.Alias.Pos())
 				p.space()
@@ -1515,9 +1520,15 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 		if len(cmd.Specs) == 0 && len(cmd.Last) == 0 {
 			p.wantSpace = spaceNotRequired
 		}
-		p.newlines(cmd.Rparen)
-		p.spacePad(cmd.Rparen)
+		if len(cmd.Specs) > 0 && cmd.Rparen.Line() <= p.line {
+			p.newline(cmd.Rparen)
+			p.indent()
+		} else {
+			p.newlines(cmd.Rparen)
+			p.spacePad(cmd.Rparen)
+		}
 		p.writeLit(")")
+		p.wantSpace = spaceRequired
 	default:
 		panic(fmt.Sprintf("syntax.Printer: unexpected node type %T", cmd))
 	}

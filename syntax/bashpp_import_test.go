@@ -44,7 +44,7 @@ func TestBashPPImportFallbackExact(t *testing.T) {
 		`import`, `"import" "fmt"`, `import fmt`, `import 'fmt'`, `import "$pkg"`,
 		`import if "fmt"`, `import f "fmt" extra`,
 		`X=1 import "fmt"`, `import "fmt" >out`, `import "bad path"`,
-		`import ("fmt")`, "import \"fmt\\nlog\"", `import "fmt\\"`,
+		"import \"fmt\\nlog\"", `import "fmt\\"`,
 		`import "./fmt"`, `import "../fmt"`, `import "/tmp/x"`, `import "local/pkg"`,
 		`import "fmt/"`, `import "fmt//x"`, `import "C:fmt"`,
 		`import "cmd/go"`, `import "internal/abi"`, `import "net/http/internal"`,
@@ -147,6 +147,54 @@ func TestBashPPGroupedImportCanonicalPrint(t *testing.T) {
 		}
 		if got := out.String(); got != test.want {
 			t.Fatalf("print %q: got %q, want %q", test.src, got, test.want)
+		}
+	}
+}
+
+func TestBashPPGroupedImportSameLineParsePrintReparse(t *testing.T) {
+	for _, test := range []struct {
+		src, want string
+	}{
+		{`import ("fmt")`, "import (\n\t\"fmt\"\n)\n"},
+		{`import ("fmt";)`, "import (\n\t\"fmt\"\n)\n"},
+		{`import ("fmt"; "log")`, "import (\n\t\"fmt\"\n\t\"log\"\n)\n"},
+		{`import ("fmt") # after`, "import (\n\t\"fmt\"\n) # after\n"},
+	} {
+		for _, oneByte := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/oneByte=%t", test.src, oneByte), func(t *testing.T) {
+				parse := func(src string) *File {
+					var rd interface{ Read([]byte) (int, error) } = strings.NewReader(src)
+					if oneByte {
+						rd = &oneByteReader{r: strings.NewReader(src)}
+					}
+					f, err := NewParser(Variant(LangBashPP), KeepComments(true)).Parse(rd, "")
+					if err != nil {
+						t.Fatalf("parse %q: %v", src, err)
+					}
+					if len(f.Stmts) != 1 {
+						t.Fatalf("parse %q: got %d statements, want 1", src, len(f.Stmts))
+					}
+					if _, ok := f.Stmts[0].Cmd.(*BashPPImport); !ok {
+						t.Fatalf("parse %q: got %T, want *BashPPImport", src, f.Stmts[0].Cmd)
+					}
+					return f
+				}
+				print := func(f *File) string {
+					var out bytes.Buffer
+					if err := NewPrinter().Print(&out, f); err != nil {
+						t.Fatal(err)
+					}
+					return out.String()
+				}
+
+				got := print(parse(test.src))
+				if got != test.want {
+					t.Fatalf("print %q: got %q, want %q", test.src, got, test.want)
+				}
+				if got2 := print(parse(got)); got2 != got {
+					t.Fatalf("print-reparse is not idempotent: first %q, second %q", got, got2)
+				}
+			})
 		}
 	}
 }
