@@ -18,6 +18,8 @@ func TestBashPPImportExactShapes(t *testing.T) {
 		"import\n(\n\t\"fmt\"\n)", `import ()`, "import (\n\t\"fmt\";\n)",
 		`import "net/http"`, `import "crypto/x509"`, `import "testing/fstest"`,
 		`import "syscall/js"`, `import "unsafe"`, `import f "\x66mt"`,
+		`import "example.com/local/pkg"`, `import p "local/pkg"`,
+		`import _ "example.com/sideeffect"`, `import . "example.com/dot"`,
 	} {
 		for _, chunk := range []int{0, 1} {
 			var rd interface{ Read([]byte) (int, error) } = strings.NewReader(src)
@@ -45,11 +47,9 @@ func TestBashPPImportFallbackExact(t *testing.T) {
 		`import if "fmt"`, `import f "fmt" extra`,
 		`X=1 import "fmt"`, `import "fmt" >out`, `import "bad path"`,
 		"import \"fmt\\nlog\"", `import "fmt\\"`,
-		`import "./fmt"`, `import "../fmt"`, `import "/tmp/x"`, `import "local/pkg"`,
+		`import "./fmt"`, `import "../fmt"`, `import "/tmp/x"`,
 		`import "fmt/"`, `import "fmt//x"`, `import "C:fmt"`,
-		`import "cmd/go"`, `import "internal/abi"`, `import "net/http/internal"`,
-		`import "vendor/golang.org/x/net/http2"`, `import "net/http/http_test"`,
-		"import (\n\t\"fmt\"\n\t\"local/pkg\"\n)", "import (\n\t\"fmt\" extra\n)",
+		"import (\n\t\"fmt\" extra\n)",
 		`import (; "fmt")`, "import (\n\t\"fmt\";;\n)", "import (\n\t\"fmt\" \"log\"\n)",
 	}
 	for _, src := range shapes {
@@ -91,9 +91,9 @@ func TestGo127StdlibAllowlistProvenanceAndNearMisses(t *testing.T) {
 		t.Fatalf("unreviewed Go 1.27 import allowlist checksum: %s", got)
 	}
 
-	// Mutate every reviewed name across every excluded namespace class. This
-	// makes additions and adjacent spellings fail closed, including under the
-	// parser's most adversarial one-byte input schedule.
+	// Mutate every reviewed name across excluded namespace classes. P2C admits
+	// valid non-standard paths into the typed AST, while the reviewed standard
+	// library inventory itself remains exact.
 	for _, path := range go127StdlibImports {
 		for _, near := range []string{
 			"/" + path, "./" + path, "../" + path,
@@ -103,7 +103,9 @@ func TestGo127StdlibAllowlistProvenanceAndNearMisses(t *testing.T) {
 			if isGo127StdlibImport(near) {
 				t.Fatalf("near miss %q unexpectedly allowed (from %q)", near, path)
 			}
-			assertImportFallbackExact(t, `import "`+near+`"`, true)
+			if strings.HasPrefix(near, "/") || strings.HasPrefix(near, "./") || strings.HasPrefix(near, "../") {
+				assertImportFallbackExact(t, `import "`+near+`"`, true)
+			}
 		}
 	}
 }

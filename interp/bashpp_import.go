@@ -14,8 +14,10 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	pathpkg "path"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -85,22 +87,68 @@ func (nativeBashPPEvaluator) Resolve(ctx context.Context, req bashPPEvalRequest,
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, req.Stderr
 	if err := cmd.Run(); err != nil {
-		return "", err
+		return "", fmt.Errorf("bash++ import %q: go list: %w", path, err)
 	}
 	var info struct {
 		Name     string
 		Standard bool
+		Dir      string
 	}
 	if err := json.Unmarshal(out.Bytes(), &info); err != nil {
 		return "", fmt.Errorf("go list %q: %w", path, err)
 	}
-	if !info.Standard {
-		return "", fmt.Errorf("bash++ import %q: package is not in the selected Go standard library", path)
+	if info.Standard && !syntax.BashPPStdlibImportAllowed(path) {
+		return "", fmt.Errorf("bash++ import %q: package is not in the reviewed Go standard library", path)
 	}
 	if !syntax.ValidName(info.Name) {
 		return "", fmt.Errorf("bash++ import %q: invalid package name %q", path, info.Name)
 	}
+	if err := validateBashPPImportVisibility(req.Dir, info.Dir, path); err != nil {
+		return "", err
+	}
 	return info.Name, nil
+}
+
+func validateBashPPImportVisibility(importerDir, packageDir, importPath string) error {
+	for _, elem := range strings.Split(importPath, "/") {
+		if elem == "." || elem == ".." {
+			return fmt.Errorf("bash++ import %q: path traversal is not allowed", importPath)
+		}
+		if elem == "vendor" {
+			return fmt.Errorf("bash++ import %q: vendor packages must be imported by their canonical path", importPath)
+		}
+	}
+	cleanImporter, err := filepath.EvalSymlinks(importerDir)
+	if err != nil {
+		return fmt.Errorf("bash++ import %q: resolve importer directory: %w", importPath, err)
+	}
+	cleanPackage, err := filepath.EvalSymlinks(packageDir)
+	if err != nil {
+		return fmt.Errorf("bash++ import %q: resolve package directory: %w", importPath, err)
+	}
+	for current := filepath.Clean(cleanPackage); ; current = filepath.Dir(current) {
+		elem := filepath.Base(current)
+		if elem != "internal" && elem != "vendor" {
+			parent := filepath.Dir(current)
+			if parent == current {
+				break
+			}
+			continue
+		}
+		root := filepath.Dir(current)
+		if !pathWithin(root, cleanImporter) {
+			return fmt.Errorf("bash++ import %q: use of %s package outside allowed tree %q", importPath, elem, root)
+		}
+		if root == current {
+			break
+		}
+	}
+	return nil
+}
+
+func pathWithin(root, name string) bool {
+	rel, err := filepath.Rel(root, name)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 func (nativeBashPPEvaluator) Call(ctx context.Context, req bashPPEvalRequest) error {
@@ -113,6 +161,7 @@ func (nativeBashPPEvaluator) Call(ctx context.Context, req bashPPEvalRequest) er
 			dotPaths = append(dotPaths, importedPath)
 		}
 	}
+	sort.Strings(dotPaths)
 	hasDot := len(dotPaths) > 0
 	path, named := req.Imports[req.Selector[0]]
 	if len(req.Selector) < 2 && !hasDot {
@@ -147,7 +196,13 @@ func (nativeBashPPEvaluator) Call(ctx context.Context, req bashPPEvalRequest) er
 			importSpecs = append(importSpecs, &ast.ImportSpec{Name: ast.NewIdent("."), Path: &ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(dotPath)}})
 		}
 	}
-	for name, importedPath := range req.Imports {
+	names := make([]string, 0, len(req.Imports))
+	for name := range req.Imports {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		importedPath := req.Imports[name]
 		if strings.HasPrefix(name, "_:") {
 			importSpecs = append(importSpecs, &ast.ImportSpec{Name: ast.NewIdent("_"), Path: &ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(importedPath)}})
 		}
@@ -161,7 +216,7 @@ func (nativeBashPPEvaluator) Call(ctx context.Context, req bashPPEvalRequest) er
 	if err := format.Node(&src, token.NewFileSet(), file); err != nil {
 		return fmt.Errorf("bash++: construct selector call: %w", err)
 	}
-	f, err := os.CreateTemp("", "bashpp-*.go")
+	f, err := os.CreateTemp(req.Dir, "bashpp-*.go")
 	if err != nil {
 		return err
 	}
@@ -348,6 +403,10 @@ func (r *Runner) bashPPImport(ctx context.Context, imp *syntax.BashPPImport) {
 		path, err := strconv.Unquote(`"` + pathText + `"`)
 		if err != nil {
 			r.exit.fatal(fmt.Errorf("bash++: invalid interpreted import path: %w", err))
+			return
+		}
+		if pathpkg.Clean(path) != path || strings.HasPrefix(path, "/") || filepath.IsAbs(path) {
+			r.exit.fatal(fmt.Errorf("bash++ import %q: path traversal or absolute paths are not allowed", path))
 			return
 		}
 		name, err := r.bashPPTools.eval.Resolve(ctx, req, path)

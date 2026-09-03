@@ -3,6 +3,8 @@ package syntax
 import (
 	"slices"
 	"strconv"
+
+	"golang.org/x/mod/module"
 )
 
 //go:generate go run gen_go127stdlib.go
@@ -31,7 +33,7 @@ func bashppImport(ce *CallExpr, redirs []*Redirect) *BashPPImport {
 		return nil
 	}
 	path, err := strconv.Unquote(`"` + q.Parts[0].(*Lit).Value + `"`)
-	if err != nil || !isGo127StdlibImport(path) {
+	if err != nil || !validBashPPImportPath(path) {
 		return nil
 	}
 	return &BashPPImport{Site: StartImport, Class: ClassE, Kw: kw, Alias: alias, Path: q}
@@ -103,7 +105,7 @@ func (p *Parser) bashppImportGroup(ce *CallExpr) Command {
 			return nil
 		}
 		text, err := strconv.Unquote(`"` + path.Parts[0].(*Lit).Value + `"`)
-		if err != nil || !isGo127StdlibImport(text) {
+		if err != nil || !validBashPPImportPath(text) {
 			txn.rollback(p)
 			return nil
 		}
@@ -148,4 +150,14 @@ func exactGoImportString(w *Word) (*DblQuoted, bool) {
 func isGo127StdlibImport(path string) bool {
 	_, ok := slices.BinarySearch(go127StdlibImports[:], path)
 	return ok
+}
+
+// BashPPStdlibImportAllowed reports whether path is in the reviewed Go 1.27
+// standard-library inventory. The interpreter uses this after go list has
+// identified a package as standard; non-standard packages are instead subject
+// to the selected module, workspace, vendor, or GOPATH resolver.
+func BashPPStdlibImportAllowed(path string) bool { return isGo127StdlibImport(path) }
+
+func validBashPPImportPath(path string) bool {
+	return module.CheckImportPath(path) == nil
 }
