@@ -12,11 +12,12 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 )
 
-// These tests construct the P1 nodes DIRECTLY rather than parsing source,
-// because nothing can parse them yet: the command-position dispatch in
-// parser.go is held behind the certification freeze. Building the nodes by
-// hand is what lets the evaluation be tested before the wiring exists, so that
-// when the wiring lands it is one call rather than a call plus a design.
+// These tests construct the P1 nodes DIRECTLY rather than parsing source.
+// The command-position dispatch in parser.go is wired now, but building the
+// nodes by hand is still what pins the EVALUATION semantics on their own:
+// a regression in the syntax-layer dispatch cannot mask one here, and vice
+// versa. The parsed end-to-end path is covered by bashpp_test.go and
+// bashpp_umbrella_test.go.
 
 func bashPPRunner(t *testing.T) *Runner {
 	t.Helper()

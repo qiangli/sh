@@ -19,11 +19,14 @@ import (
 // one `case` arm per node in the existing command type switch, each a single
 // call into this file.
 //
-// [Runner.bashPPDeclare] is now reached from source: the parser claims the
-// untyped `var x = 1` / `const K = 2` shape (see sh/syntax/bashpp_decl.go) and
-// runner.go dispatches it. The remaining three nodes have no start site the
-// parser claims yet, so they stay unreachable from source and their tests
-// build the nodes by hand.
+// Every P1 node is now reached from source: the parser claims the var/const
+// declarations (sh/syntax/bashpp_decl.go), the `type` bodies and the `:=`
+// short declarations (sh/syntax/bashpp_short.go), and the Go-form call, and
+// runner.go dispatches each to its arm below. [Runner.bashPPIf] alone remains
+// unreachable from source — brace-form `if` is a recorded Day-1 deferral (see
+// sh/syntax/bashpp_braceif_decision.go) — and its runner arm exists only so a
+// hand-built tree receives the owner's diagnostic rather than the generic
+// "unhandled command node" fallback.
 //
 // ONE VALUE MODEL, NOT TWO. `:=` binds through the existing expand.Object
 // machinery whenever the value is structured. Introducing a second
@@ -34,9 +37,10 @@ import (
 // and would inevitably answer at least one differently.
 
 // Every function below takes a ctx it may not use. That is deliberate: these
-// are the bodies of the four `case` arms owed to runner.go's command type
-// switch, which is passed a ctx, and a uniform signature keeps each arm a
-// single call. P3 onwards, where a call actually executes a body, will use it.
+// are the bodies of the `case` arms in runner.go's command type switch, which
+// is passed a ctx, and a uniform signature keeps each arm a single call. The
+// arms that execute a body — the call path, via the typed-function machinery
+// in bashpp_func.go and the eval toolchain — do use it.
 //
 // bashPPDeclare evaluates var, const and type declarations.
 //
@@ -47,9 +51,10 @@ import (
 // by `declare` would be a lie, and the shell already knows how to refuse that.
 func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 	if !r.objectsEnabled() {
-		// Unreachable while dispatch is unwired, and a fail-safe once it is:
-		// a Bash++ node in a runner that has extensions off is a bug in the
-		// caller, not an input error, so it must be loud rather than silent.
+		// Fail-safe: a Bash++ node can only be parsed under LangBashPP, so one
+		// reaching a runner that has extensions off is a bug in the caller —
+		// a dialect mismatch between parser and runner, or a hand-built tree —
+		// not an input error, so it must be loud rather than silent.
 		r.errf("bash++ declaration evaluated with extensions disabled\n")
 		r.exit = exitStatus{code: 2}
 		return
@@ -186,12 +191,12 @@ func (r *Runner) bashPPValue(ctx context.Context, words []*syntax.Word) expand.V
 
 // bashPPCall evaluates a Go call in command position.
 //
-// P1 recognizes the SHAPE but implements no call semantics: user functions
-// arrive in P3 and the builtin set is not settled. Reporting that honestly is
-// the whole job here. Every shape reaching this node is Class R — already a
-// bash syntax error — so a diagnostic takes nothing away from any working
-// script, which is exactly why a diagnostic is permitted here and forbidden on
-// a Class E shape.
+// A call resolves in order: a typed function declared in this session (P3-A),
+// then an imported selector via the eval toolchain, and finally an honest
+// diagnostic for a shape no phase implements. Every shape reaching this node
+// is Class R — already a bash syntax error — so a diagnostic takes nothing
+// away from any working script, which is exactly why a diagnostic is
+// permitted here and forbidden on a Class E shape.
 func (r *Runner) bashPPCall(ctx context.Context, c *syntax.BashPPCall) {
 	// A call to a typed function declared in this session runs the function.
 	// It is checked before the external eval toolchain so a user's own `func`
