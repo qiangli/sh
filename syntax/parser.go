@@ -3052,6 +3052,12 @@ func (p *Parser) gotStmtPipe(s *Stmt, binCmd bool) *Stmt {
 		name := p.lit(p.pos, p.val)
 		p.next()
 		if p.lang.in(LangBashPP) && p.tok == leftParen {
+			if cmd := p.bashppFuncForm(&CallExpr{Args: []*Word{p.wordOne(name)}}); cmd != nil {
+				s.Cmd = cmd
+				break
+			}
+		}
+		if p.lang.in(LangBashPP) && p.tok == leftParen {
 			if cmd := p.bashppImportGroup(&CallExpr{Args: []*Word{p.wordOne(name)}}); cmd != nil {
 				s.Cmd = cmd
 				break
@@ -3122,6 +3128,12 @@ func (p *Parser) gotStmtPipe(s *Stmt, binCmd bool) *Stmt {
 		}
 		p.callExpr(s, w, false)
 	case leftParen:
+		if p.lang.in(LangBashPP) {
+			if cmd := p.bashppPointerMethodExpr(); cmd != nil {
+				s.Cmd = cmd
+				break
+			}
+		}
 		if p.r == ')' {
 			p.rune()
 			fpos := p.pos
@@ -4068,6 +4080,15 @@ loop:
 			return
 		}
 		if decl := bashppShortDecl(ce, s.Redirs); decl != nil {
+			if len(decl.MethodValue) > 0 {
+				for _, name := range decl.Lhs {
+					p.bashppRegisterFunc(name.Value)
+				}
+			}
+			s.Cmd = decl
+			return
+		}
+		if decl := bashppTypedVarDecl(ce, s.Redirs); decl != nil {
 			s.Cmd = decl
 			return
 		}

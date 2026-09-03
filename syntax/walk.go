@@ -192,6 +192,7 @@ func Walk(node Node, f func(Node) bool) {
 	case *BashPPShortDecl:
 		walkList(node.Lhs, f)
 		walkList(node.Rhs, f)
+		walkList(node.MethodValue, f)
 		if node.Call != nil {
 			Walk(node.Call, f)
 		}
@@ -218,6 +219,9 @@ func Walk(node Node, f func(Node) bool) {
 	case *BashPPFuncDecl:
 		walkNilable(node.Kw, f)
 		walkNilable(node.Name, f)
+		if node.Receiver != nil {
+			Walk(node.Receiver, f)
+		}
 		for _, field := range node.Params {
 			Walk(field, f)
 		}
@@ -241,6 +245,9 @@ func Walk(node Node, f func(Node) bool) {
 	case *BashPPField:
 		walkList(node.Names, f)
 		walkNilable(node.FieldType, f)
+	case *BashPPReceiver:
+		walkNilable(node.Name, f)
+		walkNilable(node.RecvType, f)
 	case *BashPPReturn:
 		walkNilable(node.Kw, f)
 		walkList(node.Results, f)

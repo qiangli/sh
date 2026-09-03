@@ -149,11 +149,8 @@ var bashppUnsupportedDeclBodies = []struct{ name, in string }{
 	{"no value", "var x ="},
 	{"const bare", "const"},
 
-	// TYPED forms. This story implements the UNTYPED declaration only, so a
-	// type annotation is an unsupported body and must fall back — not be
-	// half-claimed, and not diagnosed.
-	{"typed with value", "var x int = 1"},
-	{"typed without value", "var x int"},
+	// Typed const remains outside the receiver value surface. Typed var forms
+	// are now claimed by Sprint 114 P3-C and covered in bashpp_method_test.go.
 	{"const typed", "const K int = 2"},
 
 	// The separator is not `=`.

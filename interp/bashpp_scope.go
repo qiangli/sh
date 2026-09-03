@@ -49,6 +49,12 @@ import (
 // the snapshot and the live scope name the same cell.
 type bashPPCell struct {
 	vr expand.Variable
+	// typeName is non-empty for a value of a script-declared named type.
+	// Pointer/nilPointer retain identity in-process; the visible shell value
+	// remains vr, so typed values never need a lossy JSON representation.
+	typeName   string
+	pointer    bool
+	nilPointer bool
 	// constant marks a `const` binding. It is kept beside vr.ReadOnly rather
 	// than derived from it because the shell's readonly machinery is what
 	// vr.ReadOnly drives, and the two answer to different owners: `declare -r`
@@ -147,15 +153,22 @@ func (c *bashPPCloner) clone(s *bashPPScope) *bashPPScope {
 	c.scopes[s] = out
 	out.parent = c.clone(s.parent)
 	for name, cell := range s.entries {
-		copied, ok := c.cells[cell]
-		if !ok {
-			dup := *cell
-			copied = &dup
-			c.cells[cell] = copied
-		}
-		out.entries[name] = copied
+		out.entries[name] = c.cloneCell(cell)
 	}
 	return out
+}
+
+func (c *bashPPCloner) cloneCell(cell *bashPPCell) *bashPPCell {
+	if cell == nil {
+		return nil
+	}
+	if copied, ok := c.cells[cell]; ok {
+		return copied
+	}
+	dup := *cell
+	copied := &dup
+	c.cells[cell] = copied
+	return copied
 }
 
 // bashPPPushScope enters a new lexical block, returning the function that

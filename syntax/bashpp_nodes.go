@@ -229,6 +229,12 @@ type BashPPShortDecl struct {
 	// }()` — Call carries the invocation and FuncLit stays nil, because what
 	// is bound is the call's result rather than the function.
 	FuncLit *BashPPFuncLit
+
+	// MethodValue is set for a selector captured as a value, `f := v.M`.
+	// Rhs retains the original word for compatibility; this field records the
+	// selector structure so neither the printer nor interpreter must split
+	// source text to rediscover it.
+	MethodValue []*Lit
 }
 
 func (d *BashPPShortDecl) Pos() Pos {
@@ -270,6 +276,12 @@ type BashPPCall struct {
 	// slice to a variadic parameter instead of one more argument. Go allows it
 	// only on the final argument, so one position on the call is enough.
 	Ellipsis Pos
+
+	// PointerMethodExpr records the exact `(*T).M` callee spelling. Fun still
+	// contains T,M so selector resolution remains uniform.
+	PointerMethodExpr bool
+	MethodExprLparen  Pos
+	MethodExprRparen  Pos
 
 	Lparen Pos
 	Rparen Pos
@@ -315,6 +327,9 @@ func (s *BashPPImportSpec) Pos() Pos {
 func (s *BashPPImportSpec) End() Pos { return s.Path.End() }
 
 func (c *BashPPCall) Pos() Pos {
+	if c.MethodExprLparen.IsValid() {
+		return c.MethodExprLparen
+	}
 	if len(c.Fun) > 0 {
 		return c.Fun[0].Pos()
 	}
@@ -412,17 +427,32 @@ func (f *BashPPField) End() Pos {
 // from a working script. That is why the signature may be parsed forward
 // without a transaction: a malformed body is a bash syntax error either way.
 type BashPPFuncDecl struct {
-	Kw      *Lit           // the literal "func"
-	Name    *Lit           // the declared function name
-	Params  []*BashPPField // the parameter groups, in source order
-	Results []*BashPPField // the result groups, or nil when there are none
-	Body    *Block         // the braced body
+	Kw       *Lit            // the literal "func"
+	Name     *Lit            // the declared function name
+	Receiver *BashPPReceiver // nil for an ordinary function
+	Params   []*BashPPField  // the parameter groups, in source order
+	Results  []*BashPPField  // the result groups, or nil when there are none
+	Body     *Block          // the braced body
 
 	Lparen    Pos // ( opening the parameter list
 	Rparen    Pos // ) closing the parameter list
 	ResLparen Pos // ( opening a parenthesised result list, else invalid
 	ResRparen Pos // ) closing a parenthesised result list, else invalid
 }
+
+// BashPPReceiver is the single receiver of a method declaration. Basic
+// named-type receivers are the Sprint 114 surface; embedding, interfaces and
+// generic receivers remain deliberately outside this node's grammar.
+type BashPPReceiver struct {
+	Name     *Lit
+	RecvType *Lit
+	Pointer  bool
+	Lparen   Pos
+	Rparen   Pos
+}
+
+func (r *BashPPReceiver) Pos() Pos { return r.Lparen }
+func (r *BashPPReceiver) End() Pos { return posAddCol(r.Rparen, 1) }
 
 func (d *BashPPFuncDecl) Pos() Pos { return d.Kw.Pos() }
 func (d *BashPPFuncDecl) End() Pos {
