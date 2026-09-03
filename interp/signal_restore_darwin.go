@@ -28,14 +28,15 @@ type signalDisposition struct {
 //go:linkname syscallPtr syscall.syscallPtr
 func syscallPtr(fn, a1, a2, a3 uintptr) (r1, r2 uintptr, err syscall.Errno)
 
-// libcSigactionAddr is the only architecture-specific assembly needed: it
-// returns the dynamically imported symbol's address without calling it.
-func libcSigactionAddr() uintptr
+// sigactionTrampolineAddr returns an ABI0 assembly trampoline. syscallPtr
+// invokes that trampoline through runtime.libcCall; the trampoline then calls
+// libc sigaction using the platform C ABI.
+func sigactionTrampolineAddr() uintptr
 
 //go:cgo_import_dynamic libc_sigaction sigaction "/usr/lib/libSystem.B.dylib"
 
 func libcSigaction(sig uint32, new, old *signalDisposition) int32 {
-	r1, _, _ := syscallPtr(libcSigactionAddr(), uintptr(sig),
+	r1, _, _ := syscallPtr(sigactionTrampolineAddr(), uintptr(sig),
 		uintptr(unsafe.Pointer(new)), uintptr(unsafe.Pointer(old)))
 	return int32(r1)
 }
