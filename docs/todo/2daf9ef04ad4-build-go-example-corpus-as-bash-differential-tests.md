@@ -3,12 +3,11 @@ id: 2daf9ef04ad4
 kind: task
 title: Build Go example corpus as Bash++ differential tests
 seq: 1
-status: assigned
+status: todo
 priority: p1
 created: 2026-08-07T04:54:28.411321Z
-weave: 31
-assignee: qiangli
-sprint: 113
+assignee: unassigned
+sprint: 118
 ---
 
 Create a durable Bash++ language-coverage corpus from the complete official Tour

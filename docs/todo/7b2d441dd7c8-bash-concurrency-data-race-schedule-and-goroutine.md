@@ -7,7 +7,7 @@ status: todo
 priority: p1
 created: 2026-08-07T14:15:00Z
 assignee: unassigned
-sprint: 113
+sprint: 115
 ---
 
 Before shipping the next Bash++ feature that adds shared-memory concurrency,
