@@ -104,6 +104,11 @@ type Runner struct {
 	// whatever happens to be in scope at the call, which is precisely the
 	// dynamic binding this scope chain exists to avoid.
 	bashPPFuncScopes map[string]*bashPPScope
+	// bashPPImports is the import namespace for this runner session. The
+	// evaluator is deliberately package-private and replaceable in tests and
+	// alternate native adapters without exposing an interpreter ABI.
+	bashPPImports map[string]string
+	bashPPTools   bashPPToolchain
 
 	// funcSources records the script name active when a function was
 	// defined. Bash reports runtime diagnostics in a function body against
@@ -2644,6 +2649,7 @@ func (r *Runner) Reset() {
 		// is preserved exactly as far as Funcs is. The runner's own current
 		// scope is per-Run scratch and is rebuilt below.
 		bashPPFuncScopes: r.bashPPFuncScopes,
+		bashPPTools:      r.bashPPTools,
 
 		// disabledBuiltins (`enable -n`, or WithDisabledBuiltins at
 		// construction) is part of the shell's persistent state, not per-Run
@@ -2702,6 +2708,10 @@ func (r *Runner) Reset() {
 		// The script's outermost block. Every other dialect leaves this nil,
 		// which is what turns the hooks in vars.go into a single nil check.
 		r.bashPPScope = newBashPPScope(nil)
+		r.bashPPImports = make(map[string]string)
+		if r.bashPPTools.eval == nil {
+			r.bashPPTools.eval = nativeBashPPEvaluator{}
+		}
 		if r.bashPPFuncScopes == nil {
 			r.bashPPFuncScopes = make(map[string]*bashPPScope)
 		}
@@ -3041,6 +3051,7 @@ func (r *Runner) subshell(background bool) *Runner {
 		enclosingSubshellEnd: r.enclosingSubshellEnd,
 		opts:                 r.opts,
 		dialect:              r.dialect,
+		bashPPTools:          r.bashPPTools,
 		origDialect:          r.origDialect,
 		noOpSetState:         maps.Clone(r.noOpSetState),
 		tempEnv:              maps.Clone(r.tempEnv),
@@ -3106,6 +3117,7 @@ func (r *Runner) subshell(background bool) *Runner {
 	// Funcs are copied, since they might be modified.
 	r2.Funcs = maps.Clone(r.Funcs)
 	r2.funcSources = maps.Clone(r.funcSources)
+	r2.bashPPImports = maps.Clone(r.bashPPImports)
 	// A subshell gets a private copy of the typed bindings, exactly as it
 	// gets a private copy of the shell's variables. One cloner does the live
 	// scope and every captured closure together so that the aliasing between

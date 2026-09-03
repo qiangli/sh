@@ -4,6 +4,7 @@
 package interp
 
 import (
+	"bytes"
 	"context"
 
 	"mvdan.cc/sh/v3/expand"
@@ -182,6 +183,26 @@ func (r *Runner) bashPPValue(ctx context.Context, words []*syntax.Word) expand.V
 // script, which is exactly why a diagnostic is permitted here and forbidden on
 // a Class E shape.
 func (r *Runner) bashPPCall(ctx context.Context, c *syntax.BashPPCall) {
+	if r.bashPPEnabled() && !r.PosixMode() && len(c.Fun) >= 2 {
+		req, err := r.bashPPEvalRequest()
+		if err == nil {
+			req.Selector = make([]string, len(c.Fun))
+			for i, lit := range c.Fun {
+				req.Selector[i] = lit.Value
+			}
+			req.Args = make([]string, len(c.Args))
+			for i, arg := range c.Args {
+				var b bytes.Buffer
+				_ = syntax.NewPrinter().Print(&b, arg)
+				req.Args[i] = b.String()
+			}
+			err = r.bashPPTools.eval.Call(ctx, req)
+		}
+		if err != nil {
+			r.exit.fatal(err)
+		}
+		return
+	}
 	name := ""
 	for i, lit := range c.Fun {
 		if i > 0 {

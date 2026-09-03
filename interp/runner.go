@@ -5332,6 +5332,8 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		r.bashPPShortDecl(ctx, cm)
 	case *syntax.BashPPCall:
 		r.bashPPCall(ctx, cm)
+	case *syntax.BashPPImport:
+		r.bashPPImport(ctx, cm)
 	case *syntax.Subshell:
 		r2 := r.subshell(false)
 		defer r2.closeDirFile()

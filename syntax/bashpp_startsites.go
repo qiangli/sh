@@ -82,6 +82,9 @@ func RecognizeStartSite(src string) StartSiteMatch {
 	if m := recognizeKeywordDecl(s); m.Site != StartNone {
 		return m
 	}
+	if recognizeImportPrefix(s) {
+		return StartSiteMatch{Site: StartImport, Class: ClassE, Bounded: true}
+	}
 	if m := recognizeShortDecl(s); m.Site != StartNone {
 		return m
 	}
@@ -89,6 +92,22 @@ func RecognizeStartSite(src string) StartSiteMatch {
 		return m
 	}
 	return noMatch
+}
+
+func recognizeImportPrefix(s string) bool {
+	rest, ok := cutKeyword(s, "import")
+	if !ok {
+		return false
+	}
+	if strings.HasPrefix(rest, `"`) {
+		return true
+	}
+	alias := leadingIdent(rest)
+	if alias == "" || alias == "_" || isGoReservedWord(alias) {
+		return false
+	}
+	rest = strings.TrimLeft(rest[len(alias):], " \t")
+	return strings.HasPrefix(rest, `"`)
 }
 
 // recognizeKeywordDecl handles var, const and type.

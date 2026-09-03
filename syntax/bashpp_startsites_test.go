@@ -146,7 +146,6 @@ func TestStartSiteNearMiss(t *testing.T) {
 func TestStartSiteLaterPhasesStayShell(t *testing.T) {
 	t.Parallel()
 	later := []string{
-		`import "fmt"`,        // P2
 		`func f(x int) int {`, // P3
 		`defer cleanup`,       // P3
 		`go worker(a, b)`,     // P4
@@ -165,6 +164,14 @@ func TestStartSiteLaterPhasesStayShell(t *testing.T) {
 					src, got.Site)
 			}
 		})
+	}
+}
+
+func TestStartSiteImport(t *testing.T) {
+	for _, src := range []string{`import "fmt"`, `import f "fmt"`} {
+		if got := RecognizeStartSite(src); got.Site != StartImport || got.Class != ClassE || !got.Bounded {
+			t.Fatalf("RecognizeStartSite(%q) = %#v", src, got)
+		}
 	}
 }
 

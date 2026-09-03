@@ -258,6 +258,7 @@ var nodeByName = map[string]reflect.Type{
 	"BashPPDecl":      reflect.TypeFor[syntax.BashPPDecl](),
 	"BashPPShortDecl": reflect.TypeFor[syntax.BashPPShortDecl](),
 	"BashPPCall":      reflect.TypeFor[syntax.BashPPCall](),
+	"BashPPImport":    reflect.TypeFor[syntax.BashPPImport](),
 
 	"UnaryArithm":  reflect.TypeFor[syntax.UnaryArithm](),
 	"BinaryArithm": reflect.TypeFor[syntax.BinaryArithm](),

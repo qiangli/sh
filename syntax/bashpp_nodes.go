@@ -42,6 +42,7 @@ const (
 	StartShortDecl // x := 42 · x, y := f()
 	StartGoCall    // f(1, 2) · x.y.z() · clear(m)
 	StartGoIf      // if err != nil { … }
+	StartImport    // import "path" · import alias "path"
 )
 
 func (s StartSite) String() string {
@@ -58,6 +59,8 @@ func (s StartSite) String() string {
 		return "call"
 	case StartGoIf:
 		return "if"
+	case StartImport:
+		return "import"
 	}
 	return "none"
 }
@@ -83,6 +86,8 @@ func (s *StartSite) UnmarshalText(b []byte) error {
 		*s = StartGoCall
 	case "if":
 		*s = StartGoIf
+	case "import":
+		*s = StartImport
 	default:
 		return fmt.Errorf("unknown Bash++ start site: %q", b)
 	}
@@ -216,6 +221,19 @@ type BashPPCall struct {
 	Rparen Pos
 }
 
+// BashPPImport imports one standard-library package into the Runner-local
+// Bash++ namespace. P2A deliberately supports only the two exact Go forms.
+type BashPPImport struct {
+	Site  StartSite
+	Class SiteClass
+	Kw    *Lit
+	Alias *Lit // nil means the package's declared name
+	Path  *DblQuoted
+}
+
+func (i *BashPPImport) Pos() Pos { return i.Kw.Pos() }
+func (i *BashPPImport) End() Pos { return i.Path.End() }
+
 func (c *BashPPCall) Pos() Pos {
 	if len(c.Fun) > 0 {
 		return c.Fun[0].Pos()
@@ -257,3 +275,4 @@ func (*BashPPDecl) commandNode()      {}
 func (*BashPPShortDecl) commandNode() {}
 func (*BashPPCall) commandNode()      {}
 func (*BashPPIf) commandNode()        {}
+func (*BashPPImport) commandNode()    {}
