@@ -122,6 +122,22 @@ func TestBashPPSetOptionListing(t *testing.T) {
 	qt.Assert(t, qt.IsTrue(bashppIdx < braceIdx))
 }
 
+func TestBashPPShoptPOSIXOptionListingAndToggle(t *testing.T) {
+	t.Parallel()
+	var out strings.Builder
+	r := bashPPRunner(t, &out)
+	bashPPRun(t, r, `shopt -s -o bashpp; shopt -o bashpp; shopt -p -o bashpp`)
+	qt.Assert(t, qt.Equals(r.Dialect(), syntax.LangBashPP))
+	qt.Assert(t, qt.IsTrue(strings.Contains(out.String(), "bashpp") && strings.Contains(out.String(), "\ton")),
+		qt.Commentf("shopt -o output:\n%s", out.String()))
+	qt.Assert(t, qt.IsTrue(strings.Contains(out.String(), "set -o bashpp")),
+		qt.Commentf("shopt -p -o output:\n%s", out.String()))
+
+	out.Reset()
+	bashPPRun(t, r, `shopt -u -o bashpp; shopt -q -o bashpp; true`)
+	qt.Assert(t, qt.Equals(r.Dialect(), syntax.LangBash))
+}
+
 // TestBashPPSetOptionReset proves Reset restores the construction-time dialect,
 // discarding any runtime `set -o bashpp` / `set +o bashpp` toggle — the option
 // is per-shell scratch state, not part of the runner's fixed configuration.

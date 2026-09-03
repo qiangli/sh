@@ -4198,6 +4198,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					}
 					list = append(list, oentry{name, on})
 				}
+				list = append(list, oentry{"bashpp", r.bashPPEnabled()})
 				sort.Slice(list, func(i, j int) bool { return list[i].name < list[j].name })
 				for _, e := range list {
 					if (e.enabled && !showSet) || (!e.enabled && !showUnset) {
@@ -4231,6 +4232,21 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		for _, arg := range args {
 			opt, supported := (*bool)(nil), true
 			if posixOpts {
+				if arg == "bashpp" {
+					if mode == "-s" || mode == "-u" {
+						r.setBashPPMode(mode == "-s")
+						continue
+					}
+					state := r.bashPPEnabled()
+					if quiet {
+						if !state {
+							exit.code = 1
+						}
+						continue
+					}
+					emitOpt(arg, state, true)
+					continue
+				}
 				opt = r.posixOptByName(arg)
 				if opt == nil {
 					if defaultOn, ok := noOpSetOptions[arg]; ok {
@@ -6658,7 +6674,7 @@ readonly: readonly [-aAf] [name[=value] ...] or readonly -p
 }
 
 func bashSetOptNames() []string {
-	var names []string
+	names := []string{"bashpp"}
 	for _, opt := range posixOptsTable {
 		if opt.name != "" && opt.name != "restricted" {
 			names = append(names, opt.name)
