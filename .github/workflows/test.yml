@@ -19,7 +19,14 @@ jobs:
         go-version: ${{ matrix.go-version }}
         cache: false
 
+    # Darwin signal dispositions are process-global. Run its tests serially so
+    # unrelated t.Parallel cases cannot reset a disposition while a signal
+    # conformance case owns it (Go 1.27 detects that race as an inconsistent
+    # signal-receiver state).
+    - run: go test -parallel=1 ./...
+      if: matrix.os == 'macos-latest'
     - run: go test ./...
+      if: matrix.os != 'macos-latest'
     - run: cd moreinterp && go test ./...
 
     - run: go test -race ./...
