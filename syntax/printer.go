@@ -1478,11 +1478,27 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 		p.writeLit(")")
 	case *BashPPImport:
 		p.spacedString(cmd.Kw.Value, cmd.Kw.Pos())
-		if cmd.Alias != nil {
-			p.spacedString(cmd.Alias.Value, cmd.Alias.Pos())
+		if cmd.Path != nil {
+			if cmd.Alias != nil {
+				p.spacedString(cmd.Alias.Value, cmd.Alias.Pos())
+			}
+			p.space()
+			p.dblQuoted(cmd.Path)
+			break
 		}
-		p.space()
-		p.dblQuoted(cmd.Path)
+		p.spacedString("(", cmd.Lparen)
+		for _, spec := range cmd.Specs {
+			p.newline(spec.Pos())
+			p.incLevel()
+			if spec.Alias != nil {
+				p.spacedString(spec.Alias.Value, spec.Alias.Pos())
+			}
+			p.space()
+			p.dblQuoted(spec.Path)
+			p.decLevel()
+		}
+		p.newline(cmd.Rparen)
+		p.writeLit(")")
 	default:
 		panic(fmt.Sprintf("syntax.Printer: unexpected node type %T", cmd))
 	}

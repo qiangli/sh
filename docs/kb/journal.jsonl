@@ -4,3 +4,4 @@
 {"op":"validate","slug":"replay-reader-bytes-when-rolling-back-streaming-parser-probes","tool":"codex-gpt5.6-sol-s","host":"dragon","episode":"weave-issue-19","at":"2026-09-03T11:37:54.556142Z"}
 {"op":"validate","slug":"replay-reader-bytes-when-rolling-back-streaming-parser-probes","tool":"codex-gpt5.6-sol-v","host":"dragon","episode":"weave-issue-22","at":"2026-09-03T12:27:59.615613Z"}
 {"op":"validate","slug":"replay-reader-bytes-when-rolling-back-streaming-parser-probes","tool":"codex-gpt5.6-sol-x","host":"dragon","episode":"weave-issue-24","at":"2026-09-03T12:56:42.775131Z"}
+{"op":"validate","slug":"replay-reader-bytes-when-rolling-back-streaming-parser-probes","tool":"codex:gpt-5.6-sol-y","host":"dragon","episode":"weave-issue-25","at":"2026-09-03T13:18:20.646411Z"}

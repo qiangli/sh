@@ -72,7 +72,7 @@ func TestBashPPDeclRoundTrip(t *testing.T) {
 }
 
 func TestBashPPFormsRoundTrip(t *testing.T) {
-	for _, src := range []string{"x := 42\n", "x, y := 1, 2\n", "f(1, 2)\n", "x.y.z()\n", "import f \"fmt\"\n"} {
+	for _, src := range []string{"x := 42\n", "x, y := 1, 2\n", "f(1, 2)\n", "x.y.z()\n", "import f \"fmt\"\n", "import (\nf \"fmt\"\n_ \"embed\"\n)\n"} {
 		t.Run(src, func(t *testing.T) {
 			f, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(src), "")
 			if err != nil {

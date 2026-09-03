@@ -104,11 +104,21 @@ func (nativeBashPPEvaluator) Resolve(ctx context.Context, req bashPPEvalRequest,
 }
 
 func (nativeBashPPEvaluator) Call(ctx context.Context, req bashPPEvalRequest) error {
-	if len(req.Selector) < 2 {
+	if len(req.Selector) == 0 {
 		return errors.New("bash++: selector call requires an imported package")
 	}
-	path, ok := req.Imports[req.Selector[0]]
-	if !ok {
+	var dotPaths []string
+	for name, importedPath := range req.Imports {
+		if strings.HasPrefix(name, ".:") {
+			dotPaths = append(dotPaths, importedPath)
+		}
+	}
+	hasDot := len(dotPaths) > 0
+	path, named := req.Imports[req.Selector[0]]
+	if len(req.Selector) < 2 && !hasDot {
+		return errors.New("bash++: selector call requires an imported package")
+	}
+	if len(req.Selector) >= 2 && !named {
 		return fmt.Errorf("bash++: package %s is not imported", req.Selector[0])
 	}
 	if !token.IsIdentifier(req.Selector[0]) || token.Lookup(req.Selector[0]).IsKeyword() {
@@ -129,10 +139,21 @@ func (nativeBashPPEvaluator) Call(ctx context.Context, req bashPPEvalRequest) er
 		}
 		args[i] = expr
 	}
+	var importSpecs []ast.Spec
+	if named {
+		importSpecs = append(importSpecs, &ast.ImportSpec{Name: ast.NewIdent(req.Selector[0]), Path: &ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(path)}})
+	} else {
+		for _, dotPath := range dotPaths {
+			importSpecs = append(importSpecs, &ast.ImportSpec{Name: ast.NewIdent("."), Path: &ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(dotPath)}})
+		}
+	}
+	for name, importedPath := range req.Imports {
+		if strings.HasPrefix(name, "_:") {
+			importSpecs = append(importSpecs, &ast.ImportSpec{Name: ast.NewIdent("_"), Path: &ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(importedPath)}})
+		}
+	}
 	file := &ast.File{Name: ast.NewIdent("main"), Decls: []ast.Decl{
-		&ast.GenDecl{Tok: token.IMPORT, Specs: []ast.Spec{&ast.ImportSpec{
-			Name: ast.NewIdent(req.Selector[0]), Path: &ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(path)},
-		}}},
+		&ast.GenDecl{Tok: token.IMPORT, Specs: importSpecs},
 		&ast.FuncDecl{Name: ast.NewIdent("main"), Type: &ast.FuncType{Params: &ast.FieldList{}},
 			Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ExprStmt{X: &ast.CallExpr{Fun: selector, Args: args}}}}},
 	}}
@@ -313,42 +334,57 @@ func (r *Runner) bashPPImport(ctx context.Context, imp *syntax.BashPPImport) {
 		r.exit.fatal(err)
 		return
 	}
-	pathText := imp.Path.Parts[0].(*syntax.Lit).Value
-	path, err := strconv.Unquote(`"` + pathText + `"`)
-	if err != nil { // The syntax parser has already validated this invariant.
-		r.exit.fatal(fmt.Errorf("bash++: invalid interpreted import path: %w", err))
-		return
+	specs := imp.Specs
+	if imp.Path != nil {
+		specs = []*syntax.BashPPImportSpec{{Alias: imp.Alias, Path: imp.Path}}
 	}
-	name, err := r.bashPPTools.eval.Resolve(ctx, req, path)
-	if err != nil {
-		r.exit.fatal(err)
-		return
-	}
-	if imp.Alias != nil {
-		name = imp.Alias.Value
-	}
-	if oldPath, exists := r.bashPPImports[name]; exists {
-		if oldPath == path {
-			return
-		}
-		r.exit.fatal(fmt.Errorf("bash++: import name %s already refers to %q", name, oldPath))
-		return
-	}
-	for oldName, oldPath := range r.bashPPImports {
-		if oldPath == path {
-			r.exit.fatal(fmt.Errorf("bash++: import path %q already uses name %s", path, oldName))
-			return
-		}
-	}
-	next := make(map[string]string, len(r.bashPPImports)+1)
+	next := make(map[string]string, len(r.bashPPImports)+len(specs))
 	for k, v := range r.bashPPImports {
 		next[k] = v
 	}
-	next[name] = path
+	for _, spec := range specs {
+		pathText := spec.Path.Parts[0].(*syntax.Lit).Value
+		path, err := strconv.Unquote(`"` + pathText + `"`)
+		if err != nil {
+			r.exit.fatal(fmt.Errorf("bash++: invalid interpreted import path: %w", err))
+			return
+		}
+		name, err := r.bashPPTools.eval.Resolve(ctx, req, path)
+		if err != nil {
+			r.exit.fatal(err)
+			return
+		}
+		if spec.Alias != nil {
+			name = spec.Alias.Value
+		}
+		key := name
+		if name == "_" || name == "." {
+			key = name + ":" + path
+		}
+		if oldPath, exists := next[key]; exists {
+			if oldPath == path {
+				continue
+			}
+			r.exit.fatal(fmt.Errorf("bash++: import name %s already refers to %q", name, oldPath))
+			return
+		}
+		for oldName, oldPath := range next {
+			if oldPath == path {
+				r.exit.fatal(fmt.Errorf("bash++: import path %q already uses name %s", path, oldName))
+				return
+			}
+		}
+		next[key] = path
+	}
 	r.bashPPImports = next
 }
 
 func (r *Runner) shellFallbackImport(ctx context.Context, imp *syntax.BashPPImport) {
+	if imp.Path == nil {
+		r.errf("bash++ grouped import evaluated with extensions disabled\n")
+		r.exit = exitStatus{code: 2}
+		return
+	}
 	call := &syntax.CallExpr{Args: []*syntax.Word{{Parts: []syntax.WordPart{imp.Kw}}}}
 	if imp.Alias != nil {
 		call.Args = append(call.Args, &syntax.Word{Parts: []syntax.WordPart{imp.Alias}})

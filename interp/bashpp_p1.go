@@ -183,7 +183,7 @@ func (r *Runner) bashPPValue(ctx context.Context, words []*syntax.Word) expand.V
 // script, which is exactly why a diagnostic is permitted here and forbidden on
 // a Class E shape.
 func (r *Runner) bashPPCall(ctx context.Context, c *syntax.BashPPCall) {
-	if r.bashPPEnabled() && !r.PosixMode() && len(c.Fun) >= 2 {
+	if r.bashPPEnabled() && !r.PosixMode() && len(c.Fun) >= 1 {
 		req, err := r.bashPPEvalRequest()
 		if err == nil {
 			req.Selector = make([]string, len(c.Fun))

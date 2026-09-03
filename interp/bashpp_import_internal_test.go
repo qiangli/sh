@@ -93,6 +93,30 @@ func TestBashPPImportRegistryContract(t *testing.T) {
 	}
 }
 
+func TestBashPPGroupedImportIsAtomicAndUsesGoAliases(t *testing.T) {
+	eval := &recordingBashPPEval{resolved: map[string]string{"fmt": "fmt", "log": "log", "embed": "embed"}}
+	r := newInjectedBashPPRunner(t, eval)
+	run := func(src string) error { return r.Run(context.Background(), parseBashPPInternal(t, src)) }
+	if err := run("import (\n f \"fmt\"\n _ \"embed\"\n . \"log\"\n)\n"); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"f": "fmt", "_:embed": "embed", ".:log": "log"}
+	if !maps.Equal(r.bashPPImports, want) {
+		t.Fatalf("imports %#v, want %#v", r.bashPPImports, want)
+	}
+	before := maps.Clone(r.bashPPImports)
+	if err := run("import (\n j \"encoding/json\"\n f \"log\"\n)\n"); err == nil {
+		t.Fatal("expected grouped alias collision")
+	}
+	if !maps.Equal(r.bashPPImports, before) {
+		t.Fatalf("failed group mutated registry: %#v", r.bashPPImports)
+	}
+	r.Reset()
+	if len(r.bashPPImports) != 0 {
+		t.Fatalf("Reset retained group: %#v", r.bashPPImports)
+	}
+}
+
 func TestBashPPImportUsesInterpretedPath(t *testing.T) {
 	eval := &recordingBashPPEval{resolved: map[string]string{"fmt": "fmt"}}
 	r := newInjectedBashPPRunner(t, eval)

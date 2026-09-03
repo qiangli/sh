@@ -221,18 +221,41 @@ type BashPPCall struct {
 	Rparen Pos
 }
 
-// BashPPImport imports one standard-library package into the Runner-local
-// Bash++ namespace. P2A deliberately supports only the two exact Go forms.
+// BashPPImport imports one or more standard-library packages into the
+// Runner-local Bash++ namespace.
 type BashPPImport struct {
-	Site  StartSite
-	Class SiteClass
-	Kw    *Lit
-	Alias *Lit // nil means the package's declared name
-	Path  *DblQuoted
+	Site   StartSite
+	Class  SiteClass
+	Kw     *Lit
+	Alias  *Lit                // nil means the package's declared name (single form)
+	Path   *DblQuoted          // non-nil in the single form
+	Specs  []*BashPPImportSpec // non-nil in the grouped form
+	Lparen Pos
+	Rparen Pos
 }
 
 func (i *BashPPImport) Pos() Pos { return i.Kw.Pos() }
-func (i *BashPPImport) End() Pos { return i.Path.End() }
+func (i *BashPPImport) End() Pos {
+	if i.Path != nil {
+		return i.Path.End()
+	}
+	return posAddCol(i.Rparen, 1)
+}
+
+// BashPPImportSpec is one exact Go import specification. Alias may be a Go
+// identifier, _ or .; nil requests the package's declared name.
+type BashPPImportSpec struct {
+	Alias *Lit
+	Path  *DblQuoted
+}
+
+func (s *BashPPImportSpec) Pos() Pos {
+	if s.Alias != nil {
+		return s.Alias.Pos()
+	}
+	return s.Path.Pos()
+}
+func (s *BashPPImportSpec) End() Pos { return s.Path.End() }
 
 func (c *BashPPCall) Pos() Pos {
 	if len(c.Fun) > 0 {

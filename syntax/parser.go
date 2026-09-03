@@ -3040,6 +3040,12 @@ func (p *Parser) gotStmtPipe(s *Stmt, binCmd bool) *Stmt {
 		}
 		name := p.lit(p.pos, p.val)
 		p.next()
+		if p.lang.in(LangBashPP) && p.tok == leftParen && p.spaced {
+			if cmd := p.bashppImportGroup(&CallExpr{Args: []*Word{p.wordOne(name)}}); cmd != nil {
+				s.Cmd = cmd
+				break
+			}
+		}
 		if p.lang.in(LangBashPP) && p.tok == leftParen && !p.spaced {
 			if cmd := p.bashppParenForm(&CallExpr{Args: []*Word{p.wordOne(name)}}); cmd != nil {
 				s.Cmd = cmd
@@ -3989,6 +3995,10 @@ loop:
 			p.curErr("%#q can only be used to open an arithmetic cmd", p.tok)
 		case leftParen:
 			if p.lang.in(LangBashPP) {
+				if cmd := p.bashppImportGroup(ce); cmd != nil {
+					s.Cmd = cmd
+					return
+				}
 				if cmd := p.bashppParenForm(ce); cmd != nil {
 					s.Cmd = cmd
 					return

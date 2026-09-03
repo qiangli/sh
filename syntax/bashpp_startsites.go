@@ -102,8 +102,12 @@ func recognizeImportPrefix(s string) bool {
 	if strings.HasPrefix(rest, `"`) {
 		return true
 	}
+	if strings.HasPrefix(rest, "_") || strings.HasPrefix(rest, ".") {
+		rest = strings.TrimLeft(rest[1:], " \t")
+		return strings.HasPrefix(rest, `"`)
+	}
 	alias := leadingIdent(rest)
-	if alias == "" || alias == "_" || isGoReservedWord(alias) {
+	if alias == "" || isGoReservedWord(alias) {
 		return false
 	}
 	rest = strings.TrimLeft(rest[len(alias):], " \t")

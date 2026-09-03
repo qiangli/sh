@@ -197,6 +197,10 @@ func Walk(node Node, f func(Node) bool) {
 	case *BashPPImport:
 		Walk(node.Kw, f)
 		walkNilable(node.Alias, f)
+		walkNilable(node.Path, f)
+		walkList(node.Specs, f)
+	case *BashPPImportSpec:
+		walkNilable(node.Alias, f)
 		Walk(node.Path, f)
 	default:
 		panic(fmt.Sprintf("syntax.Walk: unexpected node type %T", node))
