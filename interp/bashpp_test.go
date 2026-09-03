@@ -38,6 +38,13 @@ func bashPPRun(tb testing.TB, r *interp.Runner, src string) {
 	_ = r.Run(context.Background(), f)
 }
 
+func TestBashPPParsedShortDeclarationEvaluates(t *testing.T) {
+	var out strings.Builder
+	r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP))
+	bashPPRun(t, r, "x := 42; y, z := 1, 2; printf '%s:%s:%s' \"$x\" \"$y\" \"$z\"")
+	qt.Assert(t, qt.Equals(out.String(), "42:1:2"))
+}
+
 // TestBashPPDialectGate proves that LangBashPP gates the feature: the very same
 // call succeeds under bash++ and is refused under every other dialect, and under
 // POSIX mode.

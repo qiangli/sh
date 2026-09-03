@@ -5328,6 +5328,10 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		r.stmts(ctx, cm.Stmts)
 	case *syntax.BashPPDecl:
 		r.bashPPDeclare(ctx, cm)
+	case *syntax.BashPPShortDecl:
+		r.bashPPShortDecl(ctx, cm)
+	case *syntax.BashPPCall:
+		r.bashPPCall(ctx, cm)
 	case *syntax.Subshell:
 		r2 := r.subshell(false)
 		defer r2.closeDirFile()

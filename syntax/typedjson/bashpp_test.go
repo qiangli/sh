@@ -70,3 +70,26 @@ func TestBashPPDeclRoundTrip(t *testing.T) {
 		})
 	}
 }
+
+func TestBashPPFormsRoundTrip(t *testing.T) {
+	for _, src := range []string{"x := 42\n", "x, y := 1, 2\n", "f(1, 2)\n", "x.y.z()\n"} {
+		t.Run(src, func(t *testing.T) {
+			f, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(src), "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var enc strings.Builder
+			if err := typedjson.Encode(&enc, f); err != nil {
+				t.Fatal(err)
+			}
+			node, err := typedjson.Decode(strings.NewReader(enc.String()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var out strings.Builder
+			if err := syntax.NewPrinter().Print(&out, node); err != nil || out.String() != src {
+				t.Fatalf("print %q: %v", out.String(), err)
+			}
+		})
+	}
+}

@@ -3040,6 +3040,12 @@ func (p *Parser) gotStmtPipe(s *Stmt, binCmd bool) *Stmt {
 		}
 		name := p.lit(p.pos, p.val)
 		p.next()
+		if p.lang.in(LangBashPP) && p.tok == leftParen && !p.spaced {
+			if cmd := p.bashppParenForm(&CallExpr{Args: []*Word{p.wordOne(name)}}); cmd != nil {
+				s.Cmd = cmd
+				break
+			}
+		}
 		// In zsh, ( after a word is a glob qualifier unless followed
 		// immediately by ), which is the func declaration syntax.
 		if p.tok == leftParen && (!p.lang.in(LangZsh) || p.r == ')') {
@@ -3073,6 +3079,12 @@ func (p *Parser) gotStmtPipe(s *Stmt, binCmd bool) *Stmt {
 			break
 		}
 		w := p.wordAnyNumber()
+		if p.lang.in(LangBashPP) && p.tok == leftParen && !p.spaced {
+			if cmd := p.bashppParenForm(&CallExpr{Args: []*Word{w}}); cmd != nil {
+				s.Cmd = cmd
+				break
+			}
+		}
 		if p.got(leftParen) {
 			// Bash 5.3 accepts `<(:) ()` / `'a b' ()` etc. at parse
 			// time and emits "not a valid identifier" at runtime.
@@ -3976,6 +3988,12 @@ loop:
 		case dblLeftParen:
 			p.curErr("%#q can only be used to open an arithmetic cmd", p.tok)
 		case leftParen:
+			if p.lang.in(LangBashPP) {
+				if cmd := p.bashppParenForm(ce); cmd != nil {
+					s.Cmd = cmd
+					return
+				}
+			}
 			if p.lang.in(LangZsh) && p.r != ')' {
 				ce.Args = append(ce.Args, p.wordAnyNumber())
 				break
@@ -4003,6 +4021,10 @@ loop:
 	// unsupported body is handed back untouched, so LangBashPP stays identical
 	// to LangBash everywhere it does not claim a shape.
 	if p.lang.in(LangBashPP) {
+		if decl := bashppShortDecl(ce, s.Redirs); decl != nil {
+			s.Cmd = decl
+			return
+		}
 		if decl := bashppTypeDecl(ce, s.Redirs); decl != nil {
 			s.Cmd = decl
 			return

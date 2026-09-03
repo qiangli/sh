@@ -188,6 +188,12 @@ func Walk(node Node, f func(Node) bool) {
 		walkNilable(node.Name, f)
 		walkNilable(node.DeclType, f)
 		walkList(node.Init, f)
+	case *BashPPShortDecl:
+		walkList(node.Lhs, f)
+		walkList(node.Rhs, f)
+	case *BashPPCall:
+		walkList(node.Fun, f)
+		walkList(node.Args, f)
 	default:
 		panic(fmt.Sprintf("syntax.Walk: unexpected node type %T", node))
 	}

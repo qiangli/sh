@@ -1446,6 +1446,36 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 			p.spacedString("=", Pos{})
 			p.wordJoin(cmd.Init)
 		}
+	case *BashPPShortDecl:
+		for i, lhs := range cmd.Lhs {
+			if i > 0 {
+				p.writeLit(",")
+			}
+			p.spacedString(lhs.Value, lhs.Pos())
+		}
+		p.spacedString(":=", cmd.OpPos)
+		p.space()
+		for i, rhs := range cmd.Rhs {
+			if i > 0 {
+				p.writeLit(", ")
+			}
+			p.word(rhs)
+		}
+	case *BashPPCall:
+		for i, fun := range cmd.Fun {
+			if i > 0 {
+				p.writeLit(".")
+			}
+			p.writeLit(fun.Value)
+		}
+		p.writeLit("(")
+		for i, arg := range cmd.Args {
+			if i > 0 {
+				p.writeLit(", ")
+			}
+			p.word(arg)
+		}
+		p.writeLit(")")
 	default:
 		panic(fmt.Sprintf("syntax.Printer: unexpected node type %T", cmd))
 	}
