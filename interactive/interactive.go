@@ -46,6 +46,10 @@ type Options struct {
 	// Lang selects the parser variant (Bash, POSIX, mksh, …). Zero
 	// defaults to [syntax.LangBash].
 	Lang syntax.LangVariant
+	// LangFunc, when non-nil, selects the parser variant before each statement.
+	// It supports shells whose dialect can change at runtime. Lang remains the
+	// construction-time fallback and preserves compatibility for all callers.
+	LangFunc func(*interp.Runner) syntax.LangVariant
 
 	// PosixMode applies POSIX behavioral parse rules on top of Lang
 	// (see [syntax.PosixMode]) without switching to the stricter
@@ -139,6 +143,53 @@ type Options struct {
 	// shell." nudge driven by IGNOREEOF. Returning false (the
 	// default) exits cleanly.
 	OnEOF func() bool
+}
+
+func currentLang(opts Options, r *interp.Runner, fallback syntax.LangVariant) syntax.LangVariant {
+	if opts.LangFunc != nil {
+		if lang := opts.LangFunc(r); lang != 0 {
+			return lang
+		}
+	}
+	return fallback
+}
+
+func runInput(ctx context.Context, opts Options, r *interp.Runner, input string, fallback syntax.LangVariant, stderr io.Writer, onRunError func(error)) (error, bool) {
+	cursor := 0
+	for cursor < len(input) {
+		lang := currentLang(opts, r, fallback)
+		parser := syntax.NewParser(syntax.Variant(lang), syntax.PosixMode(opts.PosixMode))
+		restart := false
+		for stmt, perr := range parser.StmtsSeq(strings.NewReader(input[cursor:])) {
+			if perr != nil {
+				_, _ = io.WriteString(stderr, perr.Error()+"\n")
+				return perr, false
+			}
+			if stmt == nil {
+				continue
+			}
+			end := int(stmt.End().Offset())
+			if stmt.Semicolon.IsValid() {
+				end = int(stmt.Semicolon.Offset()) + 1
+			}
+			cursor = min(cursor+max(end, 1), len(input))
+			runErr := r.Run(ctx, stmt)
+			if runErr != nil && !isExitStatus(runErr) {
+				onRunError(runErr)
+			}
+			if r.Exited() {
+				return runErr, true
+			}
+			if currentLang(opts, r, fallback) != lang {
+				restart = true
+				break
+			}
+		}
+		if !restart {
+			return nil, false
+		}
+	}
+	return nil, false
 }
 
 // Run starts the interactive read-edit-execute loop. It blocks until the
@@ -290,7 +341,7 @@ func Run(ctx context.Context, opts Options) error {
 		// probe uses a fresh parser — mirrors the cmd/bashy pattern.
 		input := line
 		for {
-			pp := syntax.NewParser(syntax.Variant(lang), syntax.PosixMode(opts.PosixMode))
+			pp := syntax.NewParser(syntax.Variant(currentLang(opts, r, lang)), syntax.PosixMode(opts.PosixMode))
 			_, perr := pp.Parse(strings.NewReader(input), "")
 			if perr == nil {
 				break
@@ -312,41 +363,14 @@ func Run(ctx context.Context, opts Options) error {
 		}
 		r.RecordInteractiveHistory(input)
 
-		parser := syntax.NewParser(syntax.Variant(lang), syntax.PosixMode(opts.PosixMode))
-		prog, perr := parser.Parse(strings.NewReader(input), "")
-		if perr != nil {
-			_, _ = io.WriteString(stderr, perr.Error()+"\n")
-			continue
-		}
 		// Each input chunk is parsed by a fresh parser (line numbers
 		// restart at 1), so advance the runner's alias-timing base past
 		// the previous chunk. This keeps an alias defined on an earlier
 		// prompt expanding on a later one, while a definition and use
 		// typed on the same line still do not expand (bash semantics).
 		r.AdvanceAliasInput(strings.Count(input, "\n") + 1)
-		for _, stmt := range prog.Stmts {
-			// Run the statement under ctx directly. A per-statement
-			// context.WithCancel(ctx) here used to be cancelled the instant
-			// Run returned — which for `cmd &`/coproc is as soon as the job
-			// is launched, not when it finishes. context.WithCancel
-			// propagates cancellation to every descendant context, and a
-			// background job's own context is one such descendant (see
-			// interp.Runner.stmt), so that immediate cancel tore the job
-			// down before — or while — it was still running: no trap,
-			// signal, or explicit kill involved, just an interactive
-			// `sleep 1 &` dying on the spot. Nothing here relies on
-			// per-statement cancellation (Ctrl-C reaches a running external
-			// command through the terminal directly, per the comment on
-			// ctrlCFilter below); ctx's own cancellation — a real shutdown —
-			// still reaches every job through the ordinary parent-child
-			// context chain.
-			runErr := r.Run(ctx, stmt)
-			if runErr != nil && !isExitStatus(runErr) {
-				onRunError(runErr)
-			}
-			if r.Exited() {
-				return runErr
-			}
+		if runErr, exited := runInput(ctx, opts, r, input, lang, stderr, onRunError); exited {
+			return runErr
 		}
 	}
 }
