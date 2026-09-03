@@ -10,10 +10,13 @@ import "fmt"
 // without touching a single line the certification workstream owns, which
 // keeps the shared-file diff down to the dispatch call itself.
 //
-// None of these nodes can appear in a tree yet. Nothing constructs them until
-// the command-position dispatch is wired into parser.go, which is held. They
-// are compiled and unit-tested here so that when the wiring lands it is one
-// call, not a design.
+// The P1 command-position dispatch is wired into parser.go, so every node below
+// except BashPPIf is now constructed from real input: the var/const/type
+// declarations, the := short declarations, the Go-form call, import, func,
+// return and defer. BashPPIf alone stays unconstructed by design — brace-form
+// `if` cannot be decided by the bounded-lookahead recognizer and is deferred;
+// see bashpp_braceif_decision.go. The node, its enum and its interpreter stub
+// are kept ready for the different mechanism a later sprint will need.
 //
 // Two rules from the design of record govern every node below, and both are
 // easy to violate later:
