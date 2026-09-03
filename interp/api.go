@@ -2736,7 +2736,11 @@ func (r *Runner) Reset() {
 		r.bashPPScope = newBashPPScope(nil)
 		r.bashPPImports = make(map[string]string)
 		if r.bashPPTools.eval == nil {
-			r.bashPPTools.eval = nativeBashPPEvaluator{}
+			// The capability policy, not the bare toolchain. It is
+			// what enforces the P2 import-time classification and
+			// the no-silent-fallback rule; selecting the native
+			// evaluator directly here would bypass both.
+			r.bashPPTools.eval = newPolicyBashPPEvaluator()
 		}
 		if r.bashPPFuncScopes == nil {
 			r.bashPPFuncScopes = make(map[string]*bashPPScope)
