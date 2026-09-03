@@ -67,9 +67,10 @@ type bashppDivergenceRow struct {
 	// of the row: an allowed divergence that cannot be named is not allowed.
 	corpusID string
 
-	// shape is the shape as the design of record spells it. It is used to name
-	// a divergence precisely when the diverging input literally opens with it,
-	// and to drive the escape check.
+	// shape is the shape as the design of record spells it, and as day1Cases
+	// records it — the two are checked equal. Attribution is exact against it
+	// (see bashppAttribute), so the row licenses this shape and no other; it
+	// also drives the escape check.
 	shape string
 
 	// site is the start site the shape opens. Cross-checked against day1Cases.
@@ -118,14 +119,48 @@ var bashppAllowedDivergences = []bashppDivergenceRow{
 	{"short-multi-three", "x, y, z := 1, 2, 3", StartShortDecl, "a literal tuple has no parens: command `x,` with arguments"},
 }
 
-// bashppRowsForSite returns the published rows that license a divergence at
-// site, or nil when nothing does.
-func bashppRowsForSite(site StartSite) []bashppDivergenceRow {
+// bashppShapeBoundary reports whether rest — the source that immediately
+// follows a published shape at a hit — ENDS that shape rather than continuing
+// it into a different one.
+//
+// It is what makes attribution exact rather than merely prefix-shaped. Without
+// it, `var x = 1` would attribute `var x = 1 extra` (a four-word command, a
+// different shape) and `x := 42` would attribute `x := 421` (a different
+// literal). Both are shapes nobody measured, so neither may borrow a row.
+func bashppShapeBoundary(rest string) bool {
+	rest = strings.TrimLeft(rest, " \t")
+	if rest == "" {
+		return true
+	}
+	switch rest[0] {
+	// The shell terminators, plus `#`: past any of these the command — and so
+	// the shape — is over, and what follows is somebody else's problem.
+	case ';', '&', '|', '\n', '\r', '#', ')':
+		return true
+	}
+	return false
+}
+
+// bashppAttribute returns the published rows that attribute hit h EXACTLY: same
+// start site, and the row's shape spans the whole command at the hit.
+//
+// Sharing a start site is deliberately not enough. `x := 42` and `x := <-ch`
+// both open StartShortDecl and both measure Class E, but only the first is
+// published; licensing the second because the first exists would let an
+// unmeasured shape diverge under a row that does not describe it, which is the
+// closed-row contract failing open. Returning no row is the fail-safe answer:
+// the caller reports the divergence as unlisted and the gate fails.
+func bashppAttribute(h bashppSiteHit) []bashppDivergenceRow {
 	var out []bashppDivergenceRow
 	for _, row := range bashppAllowedDivergences {
-		if row.site == site {
-			out = append(out, row)
+		if row.site != h.match.Site {
+			continue
 		}
+		rest, ok := strings.CutPrefix(h.src, row.shape)
+		if !ok || !bashppShapeBoundary(rest) {
+			continue
+		}
+		out = append(out, row)
 	}
 	return out
 }
@@ -204,33 +239,36 @@ func boundedSrc(s string) string {
 // bashppLicense decides whether a set of recognized sites licenses a
 // divergence, and names the rows that do.
 //
-// A hit is licensed only when it is Class E AND a published row covers its
-// site. When the source at the hit literally opens with a row's shape, that
-// row alone is named — the precise, traceable case. Otherwise every row
-// sharing the site is named, which still points the reader at the table
-// entries that could be responsible.
+// A hit is licensed only when BOTH hold:
+//
+//   - it is Class E — Class R ground is bash syntax errors, which need no
+//     license and get none; and
+//   - a published row attributes it exactly, per bashppAttribute.
+//
+// The second condition is the closed-row contract, and it is the reason this
+// function exists at all. An earlier form licensed any Class E hit that merely
+// SHARED a start site with some published row, which let a shape nobody
+// measured — a new := right-hand side, say — diverge and pass under a row that
+// describes a different shape. A table that licenses shapes it does not list is
+// not a table.
+//
+// So an unmeasured shape at an already-listed site fails exactly like a shape
+// at an unlisted site does, and the remedy is the same: measure it into
+// bashpp-tests/tools/startsites, add the row, and let
+// TestBashPPDivergenceTableTraceable check the citation. Widening the matcher
+// is not a remedy.
 //
 // Any hit that is not licensed, and the absence of hits altogether, are both
 // reported so the caller can fail: an unnamed divergence is a failure by
 // construction.
 func bashppLicense(hits []bashppSiteHit) (named []bashppDivergenceRow, unlicensed []bashppSiteHit) {
 	for _, h := range hits {
-		rows := bashppRowsForSite(h.match.Site)
+		rows := bashppAttribute(h)
 		if h.match.Class != ClassE || len(rows) == 0 {
 			unlicensed = append(unlicensed, h)
 			continue
 		}
-		matched := false
-		for _, row := range rows {
-			if strings.HasPrefix(h.src, row.shape) {
-				named = append(named, row)
-				matched = true
-				break
-			}
-		}
-		if !matched {
-			named = append(named, rows...)
-		}
+		named = append(named, rows...)
 	}
 	return named, unlicensed
 }
@@ -364,7 +402,7 @@ func TestBashPPEscapesRestoreBash(t *testing.T) {
 func TestBashPPLicenseRejectsUnlisted(t *testing.T) {
 	t.Parallel()
 
-	t.Run("class E at a published site is licensed", func(t *testing.T) {
+	t.Run("a published Class E shape is licensed", func(t *testing.T) {
 		hits := []bashppSiteHit{{src: "x := 42", match: StartSiteMatch{Site: StartShortDecl, Class: ClassE, Bounded: true}}}
 		named, unlicensed := bashppLicense(hits)
 		if len(unlicensed) != 0 {
@@ -381,6 +419,54 @@ func TestBashPPLicenseRejectsUnlisted(t *testing.T) {
 		if len(named) != 0 || len(unlicensed) != 1 {
 			t.Fatalf("Class R hit licensed by %v; only Class E rows may license a divergence",
 				bashppRowIDs(named))
+		}
+	})
+
+	t.Run("an unlisted shape at a listed site is never licensed", func(t *testing.T) {
+		// The failure mode this whole function exists to prevent. StartShortDecl
+		// is a listed site and `x := <-ch` measures Class E just as `x := 42`
+		// does, but a channel receive is a P4 shape that no Day-1 row describes.
+		// Sharing a site with a published row must not lend it that row's
+		// license, or the closed set is not closed.
+		hits := []bashppSiteHit{{src: "x := <-ch", match: StartSiteMatch{Site: StartShortDecl, Class: ClassE, Bounded: true}}}
+		named, unlicensed := bashppLicense(hits)
+		if len(named) != 0 || len(unlicensed) != 1 {
+			t.Fatalf("unmeasured shape %q licensed by %v; a row licenses its own "+
+				"shape, not every shape at its site", hits[0].src, bashppRowIDs(named))
+		}
+	})
+
+	t.Run("a shape a row merely prefixes is never licensed", func(t *testing.T) {
+		// `x := 421` opens with the published shape `x := 42` byte for byte, and
+		// `var x = 1 extra` opens with `var x = 1`. Neither IS the published
+		// shape, so prefix-matching alone would license two shapes nobody
+		// measured. This is what bashppShapeBoundary is for.
+		for _, src := range []string{"x := 421", "var x = 1 extra"} {
+			site := StartShortDecl
+			if strings.HasPrefix(src, "var") {
+				site = StartVar
+			}
+			hits := []bashppSiteHit{{src: src, match: StartSiteMatch{Site: site, Class: ClassE, Bounded: true}}}
+			named, unlicensed := bashppLicense(hits)
+			if len(named) != 0 || len(unlicensed) != 1 {
+				t.Errorf("input %q licensed by %v; it only starts like a published "+
+					"shape, it is not one", src, bashppRowIDs(named))
+			}
+		}
+	})
+
+	t.Run("a published shape ending at a terminator is licensed", func(t *testing.T) {
+		// The other side of the boundary rule: exactness must not mean the shape
+		// has to be the entire input. A published shape followed by `;`, `&`,
+		// `|`, a newline or a comment is still that shape, and a real corpus
+		// input is usually longer than one command.
+		for _, src := range []string{"x := 42", "x := 42; echo done", "x := 42 # note", "x := 42 | cat"} {
+			hits := []bashppSiteHit{{src: src, match: StartSiteMatch{Site: StartShortDecl, Class: ClassE, Bounded: true}}}
+			named, unlicensed := bashppLicense(hits)
+			if len(unlicensed) != 0 || len(named) != 1 || named[0].corpusID != "short-scalar-int" {
+				t.Errorf("input %q named %v (unlicensed %v), want exactly [short-scalar-int]",
+					src, bashppRowIDs(named), unlicensed)
+			}
 		}
 	})
 

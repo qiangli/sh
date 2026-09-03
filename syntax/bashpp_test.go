@@ -167,7 +167,8 @@ func bashppSharedCorpus(t *testing.T) []string {
 //     node positions and printed bytes must be identical unless a published
 //     Class E row licenses a divergence at a real bash command position. The
 //     licensing rows live in bashpp_divergence_test.go and each names a corpus
-//     id. AN UNLISTED DIVERGENCE IS A FAILURE.
+//     id; the row must name the diverging SHAPE, not merely share its start
+//     site. AN UNLISTED DIVERGENCE IS A FAILURE.
 //  3. ADDITIVE ONLY — for an input LangBash rejects, LangBashPP may accept it;
 //     that is Class R ground and no working script occupies it. But the
 //     acceptance must still be attributable to a recognized start site, so a
@@ -247,10 +248,12 @@ func TestBashPPMatchesBash(t *testing.T) {
 			t.Errorf("UNLISTED DIVERGENCE for input %q:\n"+
 				"  %s\n"+
 				"  Recognized sites: %v (unlicensed: %v)\n"+
-				"  LangBashPP may only parse differently from LangBash at a\n"+
-				"  published Class E row. Either this divergence is a regression,\n"+
-				"  or the shape belongs in bashppAllowedDivergences with a corpus\n"+
-				"  id that verify-day1-table.sh can trace to baseline.tsv.",
+				"  LangBashPP may only parse differently from LangBash where a\n"+
+				"  published Class E row names THIS SHAPE — sharing a start site\n"+
+				"  with a published row is not a license. Either this divergence\n"+
+				"  is a regression, or the shape belongs in\n"+
+				"  bashppAllowedDivergences with a corpus id that\n"+
+				"  verify-day1-table.sh can trace to baseline.tsv.",
 				in, diff, hits, unlicensed)
 			continue
 		}
