@@ -3,10 +3,25 @@
 
 package syntax
 
-import "strings"
+import (
+	"errors"
+	"strings"
+	"unicode/utf8"
+)
 
-// Parsing of the Bash++ P3-A ("typed functions") command-position sites:
-// `func name(…) … { … }`, `defer f(x)` and the func-body `return`.
+// Parsing of the Bash++ function sites: the P3-A ("typed functions")
+// command-position declarations — `func name(…) … { … }`, `defer f(x)` and
+// the func-body `return` — and the P3-B additions, function LITERALS and
+// VARIADIC parameter lists.
+//
+// THE FOUR LITERAL SITES, and the one that is not claimed. A literal appears
+// wherever a value does: bound by `:=`, invoked immediately, deferred, or
+// returned. Each is claimed on a prefix bash rejects — `f := func(`,
+// `defer func(`, `return func(`, and a command-position `func(` whose
+// parameter list is NOT empty. The exception is `func() { … }` at a command
+// position, which is the bash definition of a function named `func` and stays
+// shell: only the `(` after the matching `}` could tell the two apart, and
+// that is unbounded lookahead. See [recognizeFuncLit].
 //
 // WHY THESE COMMIT FORWARD RATHER THAN TRANSACTIONALLY. The keyword-led
 // declarations in bashpp_decl.go consume nothing on speculation because they
@@ -45,51 +60,112 @@ func (p *Parser) bashppFuncForm(ce *CallExpr) Command {
 		return nil
 	}
 
-	fd := &BashPPFuncDecl{Kw: kw, Name: name, Lparen: p.pos}
+	fd := &BashPPFuncDecl{Kw: kw, Name: name}
+	p.bashppRegisterFunc(name.Value)
+	sig := p.bashppSignature("func " + name.Value)
+	fd.Params, fd.Results = sig.params, sig.results
+	fd.Lparen, fd.Rparen = sig.lparen, sig.rparen
+	fd.ResLparen, fd.ResRparen = sig.resLparen, sig.resRparen
+	fd.Body = p.bashppFuncBody("func "+name.Value, sig.rparen)
+	return fd
+}
+
+// bashppRegisterFunc records name as a callable Bash++ function for the rest
+// of the parse. It is what makes the ZERO-argument call `name()` recognizable:
+// with arguments a call is unambiguous, but `name()` is also the prefix of a
+// classic shell function definition, so only a name already known to be a
+// Bash++ function may claim it — see [Parser.bashppParenForm]. Registering
+// before the body is parsed is what lets a function recurse.
+func (p *Parser) bashppRegisterFunc(name string) {
 	if p.bashppFuncNames == nil {
 		p.bashppFuncNames = make(map[string]bool)
 	}
-	// Register before parsing the body so recursion and zero-argument calls in
-	// that body are recognized while the declaration is still being read.
-	p.bashppFuncNames[name.Value] = true
+	p.bashppFuncNames[name] = true
+}
+
+// bashppSig is a parsed Go-form signature: the parameter list, the optional
+// results, and the positions of the parentheses that delimit them.
+type bashppSig struct {
+	params    []*BashPPField
+	results   []*BashPPField
+	lparen    Pos
+	rparen    Pos
+	resLparen Pos
+	resRparen Pos
+}
+
+// bashppSignature parses `(params) results` with the parser sitting on the
+// opening parenthesis. what names the construct for diagnostics, e.g.
+// `func pick` or the bare `func` of a literal.
+//
+// The declaration and the literal share it deliberately: a literal's signature
+// is the same grammar as a declaration's, and two copies would be two places
+// for the variadic rules to drift apart.
+func (p *Parser) bashppSignature(what string) bashppSig {
+	sig := bashppSig{lparen: p.pos}
 	p.next()
-	fd.Params = p.bashppFieldList(fd.Lparen, false)
+	sig.params = p.bashppFieldList(sig.lparen, false)
 	if p.tok != rightParen {
-		p.followErr(fd.Lparen, "func "+name.Value+"(", rightParen)
+		p.followErr(sig.lparen, what+"(", rightParen)
 	}
-	fd.Rparen = p.pos
+	sig.rparen = p.pos
 	p.next()
 
 	// Results are optional: none, a single bare type, or a parenthesised list.
 	switch {
 	case p.tok == leftParen:
-		fd.ResLparen = p.pos
+		sig.resLparen = p.pos
 		p.next()
-		fd.Results = p.bashppFieldList(fd.ResLparen, true)
+		sig.results = p.bashppFieldList(sig.resLparen, true)
 		if p.tok != rightParen {
-			p.followErr(fd.ResLparen, "func "+name.Value+"() (", rightParen)
+			p.followErr(sig.resLparen, what+"() (", rightParen)
 		}
-		fd.ResRparen = p.pos
+		sig.resRparen = p.pos
 		p.next()
 	case p.tok == _LitWord && p.val != "{":
 		typ := p.lit(p.pos, p.val)
 		if !bashppTypeName(typ.Value) {
 			p.posErr(typ.Pos(), "func result must be a type name")
 		}
-		fd.Results = []*BashPPField{{FieldType: typ}}
+		sig.results = []*BashPPField{{FieldType: typ}}
 		p.next()
 	}
+	return sig
+}
 
+// bashppFuncBody parses the braced body of a declaration or a literal, with
+// the func depth raised so that a `return` inside it is the Go-form one.
+func (p *Parser) bashppFuncBody(what string, after Pos) *Block {
 	p.got(_Newl)
 	if !(p.tok == _LitWord && p.val == "{") {
-		p.followErr(fd.Rparen, "func "+name.Value+"()", noQuote("a { } body"))
+		p.followErr(after, what+"()", noQuote("a { } body"))
 	}
 	p.bashppFuncDepth++
 	var body Stmt
 	p.block(&body)
 	p.bashppFuncDepth--
-	fd.Body, _ = body.Cmd.(*Block)
-	return fd
+	block, _ := body.Cmd.(*Block)
+	return block
+}
+
+// bashppFuncLit parses a function literal with the parser sitting on the `(`
+// that opens its parameter list, kw being the `func` already consumed.
+//
+// Like [Parser.bashppFuncForm] it commits forward rather than transactionally,
+// and for the same reason: every site that reaches it — `f := func(`,
+// `defer func(`, `return func(`, and the command-position `func(` with a
+// parameter or a result — is a shape stock bash rejects outright, so there is
+// no working script to protect and a malformed literal is a syntax error
+// either way. What differs is only WHOSE diagnostic the user sees, and Go's is
+// the more useful one here.
+func (p *Parser) bashppFuncLit(kw *Lit) *BashPPFuncLit {
+	lit := &BashPPFuncLit{Kw: kw}
+	sig := p.bashppSignature("func")
+	lit.Params, lit.Results = sig.params, sig.results
+	lit.Lparen, lit.Rparen = sig.lparen, sig.rparen
+	lit.ResLparen, lit.ResRparen = sig.resLparen, sig.resRparen
+	lit.Body = p.bashppFuncBody("func", sig.rparen)
+	return lit
 }
 
 // bashppFieldList reads a comma-separated Go-form parameter or result list up to
@@ -122,71 +198,127 @@ func (p *Parser) bashppFieldList(open Pos, result bool) []*BashPPField {
 	if len(cur) > 0 {
 		segs = append(segs, cur)
 	}
-	fields, ok := bashppResolveFields(segs, result)
-	if !ok {
+	fields, err := bashppResolveFields(segs, result)
+	switch {
+	case err == nil:
+	case err == errBashppFieldList:
 		kind := "parameter"
 		if result {
 			kind = "result"
 		}
 		p.posErr(open, "malformed func %s list", kind)
+	default:
+		p.posErr(open, "%v", err)
 	}
 	return fields
 }
+
+// errBashppFieldList is the generic "this is not a signature we spell" verdict,
+// reported as a malformed list. A field-list rule with a Go diagnostic of its
+// own — the only-final rule for `...` — returns that message instead, because
+// "malformed parameter list" would send a reader looking for a typo that is
+// not there.
+var errBashppFieldList = errors.New("malformed func field list")
+
+// errBashppEllipsisFinal is Go's own wording for a variadic group that is not
+// last, which is the mistake a reader is most likely to make once `...` exists.
+var errBashppEllipsisFinal = errors.New("can only use ... with final parameter")
 
 // bashppResolveFields turns the comma-separated word groups of a signature into
 // [BashPPField]s, applying Go's rule that a trailing type distributes back over
 // the names that precede it, plus the Bash++ extension that a run of bare
 // parameter names with no type at all is an untyped group.
-func bashppResolveFields(segs [][]*Lit, result bool) ([]*BashPPField, bool) {
+func bashppResolveFields(segs [][]*Lit, result bool) ([]*BashPPField, error) {
 	var fields []*BashPPField
 	var pending []*Lit
 	sawType := false
+	sawVariadic := false
 	for _, seg := range segs {
+		// A `...T` group ends the list. Go allows the variadic parameter only
+		// last, and allows it only ONE name — `func f(a, b ...int)` shares the
+		// type across both names and is rejected by the gc front end with the
+		// message reused here — so both rules are checked where the group is
+		// built rather than left to a later pass that would have to
+		// reconstruct which group carried the dots.
+		if last := seg[len(seg)-1]; strings.HasPrefix(last.Value, "...") {
+			if result || sawVariadic || len(seg) > 2 || len(pending) > 0 {
+				return nil, errBashppEllipsisFinal
+			}
+			elem, ok := bashppEllipsisElem(last)
+			if !ok {
+				return nil, errBashppFieldList
+			}
+			field := &BashPPField{FieldType: elem, Ellipsis: last.Pos()}
+			if len(seg) == 2 {
+				if !bashppIsIdent(seg[0].Value) {
+					return nil, errBashppFieldList
+				}
+				field.Names = []*Lit{seg[0]}
+			}
+			fields = append(fields, field)
+			sawType, sawVariadic = true, true
+			continue
+		}
+		if sawVariadic {
+			return nil, errBashppEllipsisFinal
+		}
 		switch len(seg) {
 		case 1:
 			pending = append(pending, seg[0])
 		case 2:
 			name, typ := seg[0], seg[1]
 			if !bashppTypeName(typ.Value) {
-				return nil, false
+				return nil, errBashppFieldList
 			}
 			names := append(pending, name)
 			for _, n := range names {
 				if !bashppIsIdent(n.Value) {
-					return nil, false
+					return nil, errBashppFieldList
 				}
 			}
 			fields = append(fields, &BashPPField{Names: names, FieldType: typ})
 			pending = nil
 			sawType = true
 		default:
-			return nil, false
+			return nil, errBashppFieldList
 		}
 	}
 	if len(pending) == 0 {
-		return fields, true
+		return fields, nil
 	}
 	// Trailing bare identifiers. After a typed group they are a mixed
 	// named/unnamed list, which Go rejects; with no type anywhere they are
 	// either unnamed result types or untyped parameter names.
 	if sawType {
-		return nil, false
+		return nil, errBashppFieldList
 	}
 	if result {
 		for _, t := range pending {
 			if !bashppTypeName(t.Value) {
-				return nil, false
+				return nil, errBashppFieldList
 			}
 			fields = append(fields, &BashPPField{FieldType: t})
 		}
-		return fields, true
+		return fields, nil
 	}
 	for _, n := range pending {
 		if !bashppIsIdent(n.Value) {
-			return nil, false
+			return nil, errBashppFieldList
 		}
 	}
-	return append(fields, &BashPPField{Names: pending}), true
+	return append(fields, &BashPPField{Names: pending}), nil
+}
+
+// bashppEllipsisElem splits a `...T` word into the element type T, positioned
+// where T was written so the printer and every diagnostic point at the type
+// rather than at the dots.
+func bashppEllipsisElem(lit *Lit) (*Lit, bool) {
+	name := strings.TrimPrefix(lit.Value, "...")
+	if !bashppTypeName(name) {
+		return nil, false
+	}
+	pos := posAddCol(lit.ValuePos, 3)
+	return &Lit{ValuePos: pos, ValueEnd: posAddCol(pos, len(name)), Value: name}, true
 }
 
 // bashppTypeName reports whether s is a supported type spelling: a bare
@@ -194,6 +326,16 @@ func bashppResolveFields(segs [][]*Lit, result bool) ([]*BashPPField, bool) {
 // maps, pointers — are deliberately excluded from P3-A; their spellings tangle
 // with the shell's glob and brace tokens and are left to a later tranche.
 func bashppTypeName(s string) bool {
+	// `func` is the one reserved word admitted as a type spelling, and it is
+	// the WHOLE spelling: P3-B gives a function value the bare type `func`
+	// rather than Go's full `func(int) error`, whose parentheses and commas
+	// would have to survive the shell's word splitting inside a signature that
+	// is itself parenthesised. A parameter or result typed `func` holds a
+	// closure; the argument and result types it accepts are unchecked, which
+	// is the same latitude every other type spelling gets in this phase.
+	if s == "func" {
+		return true
+	}
 	if !bashppSelector(s) {
 		return false
 	}
@@ -205,16 +347,34 @@ func bashppTypeName(s string) bool {
 // `defer f` and stopped at `(`. The call itself is recognized by the shared
 // paren-form machinery, so an unsupported argument rewinds to the shell exactly
 // as a bare call would, keeping `defer cleanup` and other Class E shapes shell.
+//
+// `defer func(…) { … }()` — a deferred closure — is the same site with a
+// literal in callee position. It cannot rewind, because the literal commits
+// forward like every other one; that costs nothing, since the parenthesis
+// after `defer func` is a bash syntax error whatever follows it.
 func (p *Parser) bashppDeferForm(ce *CallExpr) Command {
 	if ce == nil || len(ce.Assigns) != 0 || len(ce.Args) != 2 || p.tok != leftParen || p.spaced {
 		return nil
 	}
 	kw := bashppBareLit(ce.Args[0])
 	name := bashppBareLit(ce.Args[1])
-	if kw == nil || kw.Value != "defer" || name == nil || !bashppSelector(name.Value) {
+	if kw == nil || kw.Value != "defer" || name == nil {
 		return nil
 	}
-	if RecognizeStartSite(kw.Value+" "+name.Value+"(").Site != StartDefer {
+	// The peek byte is part of the probe because `defer func()` and
+	// `defer func(n int)` differ only past the parenthesis, and the table
+	// answers about the literal from the byte that follows it.
+	if RecognizeStartSite(kw.Value+" "+name.Value+"("+p.bashppPeekByte()).Site != StartDefer {
+		return nil
+	}
+	if name.Value == "func" {
+		call := p.bashppLitCall(p.bashppFuncLit(name))
+		if call == nil {
+			return nil
+		}
+		return &BashPPDefer{Kw: kw, Call: call}
+	}
+	if !bashppSelector(name.Value) {
 		return nil
 	}
 	cmd := p.bashppParenForm(&CallExpr{Args: []*Word{ce.Args[1]}})
@@ -223,6 +383,119 @@ func (p *Parser) bashppDeferForm(ce *CallExpr) Command {
 		return nil
 	}
 	return &BashPPDefer{Kw: kw, Call: call}
+}
+
+// bashppFuncLitForm claims the sites at which a function literal may stand,
+// with the parser sitting on the `(` that opens the literal's parameter list
+// and ce holding the words already collected:
+//
+//	func(n int) { … }(1)            an immediately invoked literal
+//	greet := func(who string) { … } a literal bound to a name
+//	n := func() int { … }()         a literal invoked into a binding
+//	return func(n int) int { … }    a literal escaping its factory
+//
+// `defer func() { … }()` is the fifth, and belongs to [Parser.bashppDeferForm]
+// because `defer` reaches the dispatch first.
+//
+// It returns nil for every other shape, including the bare `func(` at a
+// command position with an empty parameter list, which stays the bash function
+// definition it is today — see [recognizeFuncLit].
+func (p *Parser) bashppFuncLitForm(ce *CallExpr) Command {
+	kw := bashppBareLit(ce.Args[len(ce.Args)-1])
+	if kw == nil || kw.Value != "func" {
+		return nil
+	}
+	switch {
+	case len(ce.Args) == 1:
+		// A command position. Only the recognizer decides whether the region
+		// opens here, because this is the one literal site that competes with
+		// a shape bash accepts.
+		if RecognizeStartSite("func("+p.bashppPeekByte()).Site != StartFuncLit {
+			return nil
+		}
+		call := p.bashppLitCall(p.bashppFuncLit(kw))
+		if call == nil {
+			return nil
+		}
+		return call
+	case len(ce.Args) == 2 && bashppLitValue(ce.Args[0]) == "return":
+		// `return func(…) { … }`, which is how a closure escapes the function
+		// that built it. It is claimed only inside a committed func body: a
+		// `return` outside one is the shell builtin, which is Class E, and
+		// nothing about it may change.
+		if p.bashppFuncDepth == 0 {
+			return nil
+		}
+		ret := bashppBareLit(ce.Args[0])
+		return &BashPPReturn{Kw: ret, FuncLit: p.bashppFuncLit(kw)}
+	case len(ce.Args) >= 3 && bashppLitValue(ce.Args[len(ce.Args)-2]) == ":=":
+		lhs, ok := bashppShortLHS(ce.Args[:len(ce.Args)-2])
+		if !ok {
+			return nil
+		}
+		opPos := ce.Args[len(ce.Args)-2].Pos()
+		lit := p.bashppFuncLit(kw)
+		if p.tok == leftParen && !p.spaced {
+			// `n := func() int { … }()` binds the RESULT of the call, so the
+			// node carries the invocation and not the function.
+			call := p.bashppLitCall(lit)
+			if call == nil {
+				return nil
+			}
+			return &BashPPShortDecl{Lhs: lhs, Class: ClassR, OpPos: opPos, Call: call}
+		}
+		// A name bound to a literal is callable with no arguments from here
+		// on, which is the whole point of binding it; see
+		// [Parser.bashppRegisterFunc] for why that has to be recorded.
+		for _, name := range lhs {
+			p.bashppRegisterFunc(name.Value)
+		}
+		return &BashPPShortDecl{Lhs: lhs, Class: ClassR, OpPos: opPos, FuncLit: lit}
+	}
+	return nil
+}
+
+// bashppLitValue is the bare literal text of w, or "" when w is not one.
+func bashppLitValue(w *Word) string {
+	if lit := bashppBareLit(w); lit != nil {
+		return lit.Value
+	}
+	return ""
+}
+
+// bashppPeekByte is the one byte past the parser's current token, as a string,
+// or "" at end of input. It exists so a recognizer probe can be assembled from
+// the same lookahead the streaming lexer already holds, without reading ahead.
+func (p *Parser) bashppPeekByte() string {
+	if p.r >= utf8.RuneSelf {
+		return ""
+	}
+	return string(p.r)
+}
+
+// bashppLitCall parses the `(args)` that immediately invokes a literal.
+//
+// A literal at these sites must be called: Go has no bare-literal statement
+// either, and the sites that do NOT require an invocation — `greet := func…`,
+// `return func…` — never reach here.
+func (p *Parser) bashppLitCall(lit *BashPPFuncLit) *BashPPCall {
+	if p.tok != leftParen {
+		p.posErr(lit.Pos(), "func literal must be called or bound to a name")
+		return nil
+	}
+	lparen := p.pos
+	p.next()
+	args, ellipsis, ok := p.bashppCallArgs()
+	if !ok || p.tok != rightParen {
+		p.posErr(lparen, "malformed func literal argument list")
+		return nil
+	}
+	rparen := p.pos
+	p.next()
+	return &BashPPCall{
+		FuncLit: lit, Args: args, Ellipsis: ellipsis,
+		Lparen: lparen, Rparen: rparen,
+	}
 }
 
 // bashppReturn reclassifies a completed `return …` command as a Go-form return,

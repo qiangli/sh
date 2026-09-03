@@ -195,7 +195,13 @@ func Walk(node Node, f func(Node) bool) {
 		if node.Call != nil {
 			Walk(node.Call, f)
 		}
+		if node.FuncLit != nil {
+			Walk(node.FuncLit, f)
+		}
 	case *BashPPCall:
+		if node.FuncLit != nil {
+			Walk(node.FuncLit, f)
+		}
 		walkList(node.Fun, f)
 		walkList(node.Args, f)
 	case *BashPPImport:
@@ -221,12 +227,26 @@ func Walk(node Node, f func(Node) bool) {
 		if node.Body != nil {
 			Walk(node.Body, f)
 		}
+	case *BashPPFuncLit:
+		walkNilable(node.Kw, f)
+		for _, field := range node.Params {
+			Walk(field, f)
+		}
+		for _, field := range node.Results {
+			Walk(field, f)
+		}
+		if node.Body != nil {
+			Walk(node.Body, f)
+		}
 	case *BashPPField:
 		walkList(node.Names, f)
 		walkNilable(node.FieldType, f)
 	case *BashPPReturn:
 		walkNilable(node.Kw, f)
 		walkList(node.Results, f)
+		if node.FuncLit != nil {
+			Walk(node.FuncLit, f)
+		}
 	case *BashPPDefer:
 		walkNilable(node.Kw, f)
 		if node.Call != nil {

@@ -261,6 +261,7 @@ var nodeByName = map[string]reflect.Type{
 	"BashPPImport":     reflect.TypeFor[syntax.BashPPImport](),
 	"BashPPImportSpec": reflect.TypeFor[syntax.BashPPImportSpec](),
 	"BashPPFuncDecl":   reflect.TypeFor[syntax.BashPPFuncDecl](),
+	"BashPPFuncLit":    reflect.TypeFor[syntax.BashPPFuncLit](),
 	"BashPPField":      reflect.TypeFor[syntax.BashPPField](),
 	"BashPPReturn":     reflect.TypeFor[syntax.BashPPReturn](),
 	"BashPPDefer":      reflect.TypeFor[syntax.BashPPDefer](),

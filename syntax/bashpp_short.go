@@ -274,6 +274,13 @@ func (p *Parser) bashppParenForm(ce *CallExpr) Command {
 	if ce == nil || len(ce.Assigns) != 0 || len(ce.Args) == 0 || p.tok != leftParen || p.spaced {
 		return nil
 	}
+	// A `func` in callee position is a function LITERAL, not a call to
+	// something named func — `func` is a Go keyword and can never be a callee.
+	// It is claimed here rather than at a fourth call site in parser.go
+	// because every literal site reaches this same point.
+	if cmd := p.bashppFuncLitForm(ce); cmd != nil {
+		return cmd
+	}
 	var name *Lit
 	var lhs []*Lit
 	var opPos Pos
@@ -308,7 +315,7 @@ func (p *Parser) bashppParenForm(ce *CallExpr) Command {
 	txn := p.beginBashPPTxn()
 	lparen := p.pos
 	p.next()
-	args, ok := p.bashppCallArgs()
+	args, ellipsis, ok := p.bashppCallArgs()
 	if !ok || p.tok != rightParen {
 		txn.rollback(p)
 		return nil
@@ -320,9 +327,21 @@ func (p *Parser) bashppParenForm(ce *CallExpr) Command {
 		return nil
 	}
 	txn.commit(p)
-	call := &BashPPCall{Fun: bashppSelectorLits(name), Args: args, Lparen: lparen, Rparen: rparen}
+	call := &BashPPCall{
+		Fun: bashppSelectorLits(name), Args: args, Ellipsis: ellipsis,
+		Lparen: lparen, Rparen: rparen,
+	}
 	if !short {
 		return call
+	}
+	// A name bound from a call may hold a closure — that is the factory idiom,
+	// `next := counter()` — so it joins the callable names for the rest of the
+	// parse. The claim is narrow in practice: it only decides the ZERO-argument
+	// `next()`, which bash rejects outright, and the call form still rewinds
+	// when a body follows, so `next() { … }` and `next() ( … )` stay the shell
+	// function definitions they are today.
+	for _, lit := range lhs {
+		p.bashppRegisterFunc(lit.Value)
 	}
 	var text strings.Builder
 	text.WriteString(name.Value)
@@ -332,6 +351,9 @@ func (p *Parser) bashppParenForm(ce *CallExpr) Command {
 			text.WriteString(", ")
 		}
 		text.WriteString(bashppWordText(arg))
+	}
+	if ellipsis.IsValid() {
+		text.WriteString("...")
 	}
 	text.WriteByte(')')
 	rhs := &Word{Parts: []WordPart{&Lit{ValuePos: name.Pos(), ValueEnd: call.End(), Value: text.String()}}}
@@ -346,28 +368,68 @@ func bashppCallTerminator(tok token) bool {
 	return false
 }
 
-func (p *Parser) bashppCallArgs() ([]*Word, bool) {
+// bashppCallArgs reads a call's argument list up to the closing parenthesis,
+// returning the position of a trailing `...` when the final argument spreads a
+// slice into a variadic parameter. Go allows the dots only on the last
+// argument, so one position describes the whole list.
+func (p *Parser) bashppCallArgs() ([]*Word, Pos, bool) {
 	if p.tok == rightParen {
-		return nil, true
+		return nil, Pos{}, true
 	}
 	var args []*Word
 	for {
 		w := p.getWord()
 		if w == nil {
-			return nil, false
+			return nil, Pos{}, false
 		}
 		clean, comma := bashppTrimComma(w)
+		clean, ellipsis := bashppTrimEllipsis(clean)
 		if !bashppCallArg(clean) {
-			return nil, false
+			return nil, Pos{}, false
 		}
 		args = append(args, clean)
+		if ellipsis.IsValid() && (comma || p.tok != rightParen) {
+			// `f(xs..., y)` — the dots were not on the final argument.
+			return nil, Pos{}, false
+		}
 		if p.tok == rightParen {
-			return args, !comma
+			return args, ellipsis, !comma
 		}
 		if !comma {
-			return nil, false
+			return nil, Pos{}, false
 		}
 	}
+}
+
+// bashppTrimEllipsis splits a trailing `...` off an argument word, returning
+// the word without it and the position the dots occupied. It mirrors
+// [bashppTrimComma]: both peel a piece of punctuation the shell lexer has
+// glued onto the end of a word, and both must leave the word's own positions
+// intact so the printer can put the source back together.
+func bashppTrimEllipsis(w *Word) (*Word, Pos) {
+	if w == nil || len(w.Parts) == 0 {
+		return w, Pos{}
+	}
+	last, ok := w.Parts[len(w.Parts)-1].(*Lit)
+	if !ok || !strings.HasSuffix(last.Value, "...") {
+		return w, Pos{}
+	}
+	if last.Value == "..." && len(w.Parts) == 1 {
+		// A bare `...` spreads nothing; leave it to the shell.
+		return w, Pos{}
+	}
+	pos := posAddCol(last.ValueEnd, -3)
+	copyWord := *w
+	copyWord.Parts = append([]WordPart(nil), w.Parts...)
+	copyLit := *last
+	copyLit.Value = strings.TrimSuffix(copyLit.Value, "...")
+	copyLit.ValueEnd = pos
+	if copyLit.Value == "" {
+		copyWord.Parts = copyWord.Parts[:len(copyWord.Parts)-1]
+	} else {
+		copyWord.Parts[len(copyWord.Parts)-1] = &copyLit
+	}
+	return &copyWord, pos
 }
 
 func bashppCallArg(w *Word) bool {

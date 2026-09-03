@@ -49,6 +49,7 @@ const (
 	StartFunc      // func name(a int) int { … }
 	StartDefer     // defer f(x)
 	StartReturn    // return · return a, b (only inside a func body)
+	StartFuncLit   // func(a int) int { … }(1) — a function literal
 )
 
 func (s StartSite) String() string {
@@ -73,6 +74,8 @@ func (s StartSite) String() string {
 		return "defer"
 	case StartReturn:
 		return "return"
+	case StartFuncLit:
+		return "funclit"
 	}
 	return "none"
 }
@@ -106,6 +109,8 @@ func (s *StartSite) UnmarshalText(b []byte) error {
 		*s = StartDefer
 	case "return":
 		*s = StartReturn
+	case "funclit":
+		*s = StartFuncLit
 	default:
 		return fmt.Errorf("unknown Bash++ start site: %q", b)
 	}
@@ -216,6 +221,14 @@ type BashPPShortDecl struct {
 	// to Lhs positionally, rather than re-deriving the call from Rhs's text.
 	// It is nil for every scalar/tuple/composite right-hand side.
 	Call *BashPPCall
+
+	// FuncLit is set when the right-hand side is a function literal bound to
+	// a name, `greet := func(who string) { … }`. Rhs is empty then: a closure
+	// has no word spelling to re-expand, and the literal's own body is the
+	// value. When the literal is immediately invoked — `n := func() int { …
+	// }()` — Call carries the invocation and FuncLit stays nil, because what
+	// is bound is the call's result rather than the function.
+	FuncLit *BashPPFuncLit
 }
 
 func (d *BashPPShortDecl) Pos() Pos {
@@ -229,6 +242,9 @@ func (d *BashPPShortDecl) End() Pos {
 	if len(d.Rhs) > 0 {
 		return d.Rhs[len(d.Rhs)-1].End()
 	}
+	if d.FuncLit != nil {
+		return d.FuncLit.End()
+	}
 	return posAddCol(d.OpPos, 2)
 }
 
@@ -240,8 +256,21 @@ func (d *BashPPShortDecl) End() Pos {
 // disambiguator the whole Day-1 set leans on, and it is why `go build ./...`
 // keeps running the Go toolchain while `go worker(a, b)` does not.
 type BashPPCall struct {
-	Fun    []*Lit  // the selector chain: x.y.z is three literals
-	Args   []*Word // the arguments, unevaluated
+	Fun  []*Lit  // the selector chain: x.y.z is three literals
+	Args []*Word // the arguments, unevaluated
+
+	// FuncLit is set when the callee is a function literal rather than a
+	// name, which is what an immediately invoked literal — `func(n int) {
+	// … }(1)` — is. Fun is empty exactly then, so the two are alternatives
+	// and never both set; a reader asks which one is nil rather than
+	// re-deriving the shape from the source.
+	FuncLit *BashPPFuncLit
+
+	// Ellipsis is the position of the `...` in `f(xs...)`, which passes a
+	// slice to a variadic parameter instead of one more argument. Go allows it
+	// only on the final argument, so one position on the call is enough.
+	Ellipsis Pos
+
 	Lparen Pos
 	Rparen Pos
 }
@@ -289,6 +318,9 @@ func (c *BashPPCall) Pos() Pos {
 	if len(c.Fun) > 0 {
 		return c.Fun[0].Pos()
 	}
+	if c.FuncLit != nil {
+		return c.FuncLit.Pos()
+	}
 	return c.Lparen
 }
 func (c *BashPPCall) End() Pos { return posAddCol(c.Rparen, 1) }
@@ -332,11 +364,29 @@ func (i *BashPPIf) End() Pos {
 type BashPPField struct {
 	Names     []*Lit // the declared identifiers, empty for an unnamed result type
 	FieldType *Lit   // the declared type, or nil for an untyped parameter
+
+	// Ellipsis is the position of the `...` in a variadic parameter group,
+	// `func f(head string, rest ...int)`, and is invalid for every other
+	// group. It is a POSITION rather than a bool because the printer must put
+	// the dots back where they were written, and because Go's only-final rule
+	// is reported against the offending group's own source column.
+	//
+	// FieldType stays the ELEMENT type (`int` above), as it is in go/ast: the
+	// parameter's own type is a slice of it, and spelling the element type is
+	// what lets the arity check and the diagnostics talk about the same name
+	// the script wrote.
+	Ellipsis Pos
 }
+
+// Variadic reports whether the group is the `...T` form.
+func (f *BashPPField) Variadic() bool { return f.Ellipsis.IsValid() }
 
 func (f *BashPPField) Pos() Pos {
 	if len(f.Names) > 0 {
 		return f.Names[0].Pos()
+	}
+	if f.Ellipsis.IsValid() {
+		return f.Ellipsis
 	}
 	if f.FieldType != nil {
 		return f.FieldType.Pos()
@@ -382,6 +432,51 @@ func (d *BashPPFuncDecl) End() Pos {
 	return posAddCol(d.Rparen, 1)
 }
 
+// BashPPFuncLit is a Go function literal: an unnamed function written where a
+// value is expected.
+//
+//	greet := func(who string) { echo "hi $who" }
+//	func(n int) { echo $n }(1)
+//	defer func() { echo done }()
+//	return func(extra int) int { return $((base + extra)) }
+//
+// WHY IT IS NOT A COMMAND. A bare literal is not a statement in Go either; a
+// literal always appears as a value — bound by `:=`, invoked immediately,
+// deferred, or returned. Each of those sites owns a field pointing here, so
+// the tree records WHICH site the literal occupied instead of leaving a
+// free-floating node whose meaning a reader would have to infer from context.
+//
+// THE ONE SHAPE THAT IS NOT CLAIMED. `func() { … }` at a command position is
+// the bash function definition of a function NAMED `func`, and it is legal
+// shell today. Only the trailing `()` after the matching `}` tells the two
+// apart, which is unbounded lookahead of exactly the kind
+// bashpp_startsites.go forbids. So a command-position literal must carry a
+// parameter — `func(n int) { … }(1)` — and the parameterless invocation is
+// spelled `_ := func() { … }()`, where the `:=` prefix already commits the
+// region. Every other literal site is unambiguous from its prefix.
+type BashPPFuncLit struct {
+	Kw      *Lit           // the literal "func"
+	Params  []*BashPPField // the parameter groups, in source order
+	Results []*BashPPField // the result groups, or nil when there are none
+	Body    *Block         // the braced body
+
+	Lparen    Pos // ( opening the parameter list
+	Rparen    Pos // ) closing the parameter list
+	ResLparen Pos // ( opening a parenthesised result list, else invalid
+	ResRparen Pos // ) closing a parenthesised result list, else invalid
+}
+
+func (l *BashPPFuncLit) Pos() Pos { return l.Kw.Pos() }
+func (l *BashPPFuncLit) End() Pos {
+	if l.Body != nil {
+		return l.Body.End()
+	}
+	if l.ResRparen.IsValid() {
+		return posAddCol(l.ResRparen, 1)
+	}
+	return posAddCol(l.Rparen, 1)
+}
+
 // BashPPReturn is a Go-form return inside a func body: `return`, `return a, b`.
 //
 // It is only ever constructed inside a Bash++ func body, where the parser
@@ -392,12 +487,21 @@ func (d *BashPPFuncDecl) End() Pos {
 type BashPPReturn struct {
 	Kw      *Lit    // the literal "return"
 	Results []*Word // the returned values, or nil for a bare return
+
+	// FuncLit is set when the single returned value is a function literal,
+	// `return func(n int) int { … }`. That is how a closure ESCAPES the
+	// function that built it — the factory idiom — and it needs its own field
+	// because a literal has no word spelling for Results to hold.
+	FuncLit *BashPPFuncLit
 }
 
 func (r *BashPPReturn) Pos() Pos { return r.Kw.Pos() }
 func (r *BashPPReturn) End() Pos {
 	if len(r.Results) > 0 {
 		return r.Results[len(r.Results)-1].End()
+	}
+	if r.FuncLit != nil {
+		return r.FuncLit.End()
 	}
 	return r.Kw.End()
 }
