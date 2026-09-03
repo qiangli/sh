@@ -85,6 +85,22 @@ func (r *Runner) bashPPEnabled() bool {
 func (r *Runner) setBashPPMode(enabled bool) {
 	if enabled {
 		r.dialect = syntax.LangBashPP
+		// A runner constructed as Classic Bash has no Bash++ state. Runtime
+		// activation is used by interactive clients, so initialize the same
+		// package-private evaluator and session namespace Reset would have
+		// installed had Bash++ been selected at construction time.
+		if r.bashPPScope == nil {
+			r.bashPPScope = newBashPPScope(nil)
+		}
+		if r.bashPPImports == nil {
+			r.bashPPImports = make(map[string]string)
+		}
+		if r.bashPPTools.eval == nil {
+			r.bashPPTools.eval = newPolicyBashPPEvaluator()
+		}
+		if r.bashPPFuncScopes == nil {
+			r.bashPPFuncScopes = make(map[string]*bashPPScope)
+		}
 	} else {
 		r.dialect = syntax.LangBash
 	}

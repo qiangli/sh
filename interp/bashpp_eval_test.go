@@ -4,7 +4,6 @@
 package interp
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"strings"
@@ -41,8 +40,8 @@ func TestBashPPCapabilityPolicyTable(t *testing.T) {
 		want       bashPPPolicy
 		name       string
 	}{
-		{capInterpreted, policyInterpret, "reviewed pure-Go stdlib"},
-		{capNativeOnly, policyFallbackExplicit, "pure-Go local module/workspace/vendor/GOPATH"},
+		{capReviewedStdlib, policyToolchain, "reviewed pure-Go stdlib"},
+		{capExternalPureGo, policyToolchain, "pure-Go local module/workspace/vendor/GOPATH"},
 		{capCgo, policyRefuse, "cgo-required"},
 		{capCompiledOnly, policyRefuse, "compiled/export-only"},
 		{capNotBuildable, policyRefuse, "package main/no buildable files/platform mismatch"},
@@ -74,10 +73,10 @@ func TestBashPPClassification(t *testing.T) {
 	}{
 		{"reviewed stdlib", "fmt",
 			bashPPPackageFacts{Name: "fmt", Standard: true, Dir: "/goroot/src/fmt", GoFiles: []string{"print.go"}},
-			capInterpreted},
+			capReviewedStdlib},
 		{"local module", "example.com/m/greet",
 			bashPPPackageFacts{Name: "greet", Dir: "/w/greet", GoFiles: []string{"greet.go"}},
-			capNativeOnly},
+			capExternalPureGo},
 		{"cgo required", "example.com/m/cgopkg",
 			bashPPPackageFacts{Name: "cgopkg", Dir: "/w/cgopkg", GoFiles: []string{"a.go"}, CgoFiles: []string{"c.go"}},
 			capCgo},
@@ -110,16 +109,39 @@ func TestBashPPClassification(t *testing.T) {
 	}
 }
 
-// decliningInterpreter stands in for an adopted in-process evaluator. It
-// records whether it was consulted so the dispatch order can be asserted.
-type decliningInterpreter struct {
-	consulted int
-	err       error
-}
-
-func (d *decliningInterpreter) Call(ctx context.Context, req bashPPEvalRequest) error {
-	d.consulted++
-	return d.err
+func TestBashPPAllRefusedClassesFailAtImportThroughRunner(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		facts bashPPPackageFacts
+		want  string
+	}{
+		{"cgo", bashPPPackageFacts{Name: "p", Dir: "/p", CgoFiles: []string{"p.go"}}, "requires cgo"},
+		{"compiled-only", bashPPPackageFacts{Name: "p"}, "no Go source"},
+		{"package-main", bashPPPackageFacts{Name: "main", Dir: "/p", GoFiles: []string{"main.go"}}, "not importable"},
+		{"no-buildable", bashPPPackageFacts{Name: "p", Dir: "/p", IgnoredGoFiles: []string{"p_plan9.go"}}, "not importable"},
+		{"missing", bashPPPackageFacts{Error: &struct{ Err string }{Err: "missing"}}, "could not be resolved"},
+		{"unreviewed-stdlib", bashPPPackageFacts{Name: "abi", Standard: true, Dir: "/goroot/src/internal/abi", GoFiles: []string{"abi.go"}}, "reviewed Go standard library"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			facts := test.facts
+			path := "example.com/p"
+			if test.name == "unreviewed-stdlib" {
+				path = "internal/abi"
+			}
+			native := &recordingNative{}
+			policy := &policyBashPPEvaluator{toolchain: native, facts: func(context.Context, bashPPEvalRequest, string) (bashPPPackageFacts, error) {
+				return facts, nil
+			}}
+			r := newInjectedBashPPRunner(t, policy)
+			err := r.Run(context.Background(), parseBashPPInternal(t, "import \""+path+"\"\necho reached\n"))
+			if err == nil || (test.want != "" && !strings.Contains(err.Error(), test.want)) {
+				t.Fatalf("error = %v, want %q", err, test.want)
+			}
+			if len(r.bashPPImports) != 0 || native.calls != 0 {
+				t.Fatalf("refusal mutated state or called adapter: imports=%#v calls=%d", r.bashPPImports, native.calls)
+			}
+		})
+	}
 }
 
 type recordingNative struct {
@@ -135,76 +157,22 @@ func (n *recordingNative) Call(context.Context, bashPPEvalRequest) error {
 	return n.err
 }
 
-// TestBashPPCallFallbackIsAnnounced pins rule 2: moving from the in-process
-// evaluator to the reviewed toolchain is never silent.
-func TestBashPPCallFallbackIsAnnounced(t *testing.T) {
-	var stderr bytes.Buffer
-	interpreted := &decliningInterpreter{err: errBashPPNotInterpretable}
+// TestBashPPPolicyUsesOneReplaceableToolchain pins the honest evaluator
+// contract: Bash++ nodes are interpreted by the shell, while Go calls are
+// executed exactly once by the package-private adapter selected by policy.
+func TestBashPPPolicyUsesOneReplaceableToolchain(t *testing.T) {
 	native := &recordingNative{}
-	e := &policyBashPPEvaluator{interpreted: interpreted, native: native}
-	req := bashPPEvalRequest{Selector: []string{"fmt", "Println"}, Stderr: &stderr}
-	if err := e.Call(context.Background(), req); err != nil {
-		t.Fatal(err)
-	}
-	if interpreted.consulted != 1 {
-		t.Fatalf("interpreter consulted %d times, want 1", interpreted.consulted)
-	}
-	if native.calls != 1 {
-		t.Fatalf("native called %d times, want 1", native.calls)
-	}
-	if got := stderr.String(); !strings.Contains(got, "fmt.Println") || !strings.Contains(got, "reviewed Go toolchain") {
-		t.Fatalf("fallback was not announced: %q", got)
-	}
-}
-
-// TestBashPPCallFailureIsNotRetriedNatively is the other half of the decline
-// contract. A call that RAN and failed is the program's result; re-running it
-// on the toolchain would execute the user's code twice.
-func TestBashPPCallFailureIsNotRetriedNatively(t *testing.T) {
-	var stderr bytes.Buffer
-	boom := errors.New("boom")
-	interpreted := &decliningInterpreter{err: boom}
-	native := &recordingNative{}
-	e := &policyBashPPEvaluator{interpreted: interpreted, native: native}
-	err := e.Call(context.Background(), bashPPEvalRequest{Selector: []string{"fmt", "Println"}, Stderr: &stderr})
-	if !errors.Is(err, boom) {
-		t.Fatalf("error = %v, want boom", err)
-	}
-	if native.calls != 0 {
-		t.Fatalf("native ran after a genuine interpreter failure (%d calls)", native.calls)
-	}
-	if stderr.Len() != 0 {
-		t.Fatalf("a real failure was reported as a fallback: %q", stderr.String())
-	}
-}
-
-// TestBashPPNoInterpreterIsQuietlyNative records the CURRENT state: no
-// in-process evaluator is adopted, so the reviewed toolchain is the engine the
-// policy selects for everything. That is not a per-call downgrade, so it is
-// not announced per call -- announcing would add a line to the output of every
-// Bash++ program whose behavior had not changed. See
-// docs/P2-EVALUATOR-BLOCKERS.md.
-func TestBashPPNoInterpreterIsQuietlyNative(t *testing.T) {
-	native := &recordingNative{}
-	e := &policyBashPPEvaluator{native: native}
-	if e.interpreted != nil {
-		t.Fatal("this test describes the no-interpreter state")
-	}
-	var stderr bytes.Buffer
-	if err := e.Call(context.Background(), bashPPEvalRequest{Selector: []string{"fmt", "Println"}, Stderr: &stderr}); err != nil {
+	e := &policyBashPPEvaluator{toolchain: native}
+	if err := e.Call(context.Background(), bashPPEvalRequest{Selector: []string{"fmt", "Println"}}); err != nil {
 		t.Fatal(err)
 	}
 	if native.calls != 1 {
 		t.Fatalf("native calls = %d, want 1", native.calls)
 	}
-	if stderr.Len() != 0 {
-		t.Fatalf("announced a downgrade that did not happen: %q", stderr.String())
-	}
 }
 
 // TestBashPPDefaultEvaluatorIsThePolicy pins the wiring. Selecting the native
-// toolchain directly would bypass both import-time classification and the
-// no-silent-fallback rule.
+// adapter directly would bypass import-time capability classification.
 func TestBashPPDefaultEvaluatorIsThePolicy(t *testing.T) {
 	r, err := New(Lang(syntax.LangBashPP))
 	if err != nil {
@@ -233,7 +201,7 @@ func TestBashPPCallHonoursCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	native := &recordingNative{}
-	e := &policyBashPPEvaluator{native: native}
+	e := &policyBashPPEvaluator{toolchain: native}
 	if err := e.Call(ctx, bashPPEvalRequest{Selector: []string{"fmt", "Println"}}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v, want context.Canceled", err)
 	}

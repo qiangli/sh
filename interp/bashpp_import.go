@@ -45,7 +45,7 @@ type bashPPEvaluator interface {
 // bashPPToolchain is deliberately package-private. The zero value selects the
 // Go toolchain which built this package, never an unrelated executable found
 // first on PATH. Tests may inject the exact evaluator and identity under
-// review without exposing a second interpreter API to embedders.
+// review without exposing an evaluator API to embedders.
 type bashPPToolchain struct {
 	goBinary  string
 	goRoot    string
@@ -163,7 +163,7 @@ func (nativeBashPPEvaluator) Call(ctx context.Context, req bashPPEvalRequest) er
 	}
 	sort.Strings(dotPaths)
 	hasDot := len(dotPaths) > 0
-	path, named := req.Imports[req.Selector[0]]
+	_, named := req.Imports[req.Selector[0]]
 	if len(req.Selector) < 2 && !hasDot {
 		return errors.New("bash++: selector call requires an imported package")
 	}
@@ -181,17 +181,27 @@ func (nativeBashPPEvaluator) Call(ctx context.Context, req bashPPEvalRequest) er
 		selector = &ast.SelectorExpr{X: selector, Sel: ast.NewIdent(part)}
 	}
 	args := make([]ast.Expr, len(req.Args))
+	usedImports := map[string]bool{req.Selector[0]: named}
 	for i, text := range req.Args {
 		expr, err := parser.ParseExpr(text)
 		if err != nil {
 			return fmt.Errorf("bash++: invalid Go argument %d: %w", i+1, err)
 		}
 		args[i] = expr
+		ast.Inspect(expr, func(node ast.Node) bool {
+			sel, ok := node.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			if ident, ok := sel.X.(*ast.Ident); ok {
+				_, imported := req.Imports[ident.Name]
+				usedImports[ident.Name] = imported
+			}
+			return true
+		})
 	}
 	var importSpecs []ast.Spec
-	if named {
-		importSpecs = append(importSpecs, &ast.ImportSpec{Name: ast.NewIdent(req.Selector[0]), Path: &ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(path)}})
-	} else {
+	if !named {
 		for _, dotPath := range dotPaths {
 			importSpecs = append(importSpecs, &ast.ImportSpec{Name: ast.NewIdent("."), Path: &ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(dotPath)}})
 		}
@@ -205,6 +215,8 @@ func (nativeBashPPEvaluator) Call(ctx context.Context, req bashPPEvalRequest) er
 		importedPath := req.Imports[name]
 		if strings.HasPrefix(name, "_:") {
 			importSpecs = append(importSpecs, &ast.ImportSpec{Name: ast.NewIdent("_"), Path: &ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(importedPath)}})
+		} else if usedImports[name] {
+			importSpecs = append(importSpecs, &ast.ImportSpec{Name: ast.NewIdent(name), Path: &ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(importedPath)}})
 		}
 	}
 	file := &ast.File{Name: ast.NewIdent("main"), Decls: []ast.Decl{
@@ -238,12 +250,21 @@ func (nativeBashPPEvaluator) Call(ctx context.Context, req bashPPEvalRequest) er
 	build.Dir, build.Env = req.Dir, req.Env
 	build.Stdout, build.Stderr = req.Stdout, req.Stderr
 	if err := build.Run(); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		return err
 	}
 	cmd := exec.CommandContext(ctx, bin)
 	cmd.Dir, cmd.Env = req.Dir, req.Env
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = req.Stdin, req.Stdout, req.Stderr
-	return cmd.Run()
+	if err := cmd.Run(); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		return err
+	}
+	return nil
 }
 
 func (r *Runner) bashPPEvalRequest() (bashPPEvalRequest, error) {

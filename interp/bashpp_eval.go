@@ -7,10 +7,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os/exec"
-	"strings"
 
 	"mvdan.cc/sh/v3/syntax"
 )
@@ -32,11 +30,10 @@ import (
 //     policyRefuse, so a class someone forgets to wire up declines to run
 //     instead of quietly reaching the toolchain.
 //
-//  2. NO SILENT SEMANTIC FALLBACK.  Whenever execution moves from the
-//     in-process interpreted evaluator to the reviewed native toolchain, the
-//     transition is announced on stderr.  A fallback nobody can observe is
-//     indistinguishable from the evaluator having been chosen by accident,
-//     which is precisely the failure the design warned about.
+//  2. ONE REVIEWED ENGINE. The production evaluator is the pinned Go
+//     toolchain adapter. "Interpreted" in the Bash++ plan means that the
+//     Bash++ shell interpreter dispatches the typed node; it does not promise
+//     an unsafe in-process Go interpreter.
 
 // bashPPCapability classifies an import path by what an evaluator can actually
 // do with it. Classification is derived from `go list -json` facts, never from
@@ -47,16 +44,15 @@ const (
 	// capUnknown is the zero value and is deliberately first: an
 	// unclassified package must refuse, not execute.
 	capUnknown bashPPCapability = iota
-	// capInterpreted is a reviewed pure-Go standard-library package, which
-	// the in-process evaluator may run without any toolchain.
-	capInterpreted
-	// capNativeOnly is pure Go and buildable, but outside the in-process
-	// evaluator's reviewed inventory: local-module, workspace, vendor and
-	// GOPATH packages land here.
-	capNativeOnly
+	// capReviewedStdlib is in the reviewed pure-Go standard-library
+	// inventory and may run through the reviewed toolchain adapter.
+	capReviewedStdlib
+	// capExternalPureGo is pure Go and buildable outside the standard
+	// library: local-module, workspace, vendor and GOPATH packages land here.
+	capExternalPureGo
 	// capCgo requires cgo.
 	capCgo
-	// capCompiledOnly has no Go source available to interpret or rebuild.
+	// capCompiledOnly has no Go source available to build.
 	capCompiledOnly
 	// capNotBuildable is `package main`, a package with no buildable Go
 	// files, or one excluded by build constraints on this platform.
@@ -77,11 +73,9 @@ const (
 	// policyRefuse is the zero value, so the default for anything
 	// unclassified is to decline. See rule 1 above.
 	policyRefuse bashPPPolicy = iota
-	// policyInterpret runs the call in-process, with no toolchain.
-	policyInterpret
-	// policyFallbackExplicit runs the call on the reviewed native
-	// toolchain, after announcing the transition. See rule 2 above.
-	policyFallbackExplicit
+	// policyToolchain permits the reviewed Go toolchain adapter to resolve
+	// and execute the package.
+	policyToolchain
 )
 
 // bashPPPolicyFor is the single decision table. It is a pure function of the
@@ -89,13 +83,8 @@ const (
 // or a network.
 func bashPPPolicyFor(c bashPPCapability) bashPPPolicy {
 	switch c {
-	case capInterpreted:
-		return policyInterpret
-	case capNativeOnly:
-		// Pure Go and buildable, just not in the in-process inventory.
-		// The reviewed toolchain is a policy-approved fallback for it,
-		// and the transition is announced.
-		return policyFallbackExplicit
+	case capReviewedStdlib, capExternalPureGo:
+		return policyToolchain
 	case capCgo, capCompiledOnly, capNotBuildable, capUnreviewedStdlib, capMissing, capUnknown:
 		return policyRefuse
 	}
@@ -114,7 +103,7 @@ func (c bashPPCapability) refusal() string {
 		// than inheriting a dependency the project has ruled out.
 		return "package requires cgo, which this pure-Go shell does not provide"
 	case capCompiledOnly:
-		return "package has no Go source available to interpret or build"
+		return "package has no Go source available to build"
 	case capNotBuildable:
 		return "package is not importable: it is package main, has no buildable Go files, or is excluded on this platform"
 	case capUnreviewedStdlib:
@@ -138,6 +127,8 @@ type bashPPPackageFacts struct {
 	Incomplete     bool
 	Error          *struct{ Err string }
 }
+
+type bashPPFactsLoader func(context.Context, bashPPEvalRequest, string) (bashPPPackageFacts, error)
 
 // classifyBashPPPackage maps go list facts onto a capability class.
 //
@@ -179,11 +170,11 @@ func classifyBashPPPackage(f bashPPPackageFacts, path string) bashPPCapability {
 	}
 	if f.Standard {
 		if syntax.BashPPStdlibImportAllowed(path) {
-			return capInterpreted
+			return capReviewedStdlib
 		}
 		return capUnreviewedStdlib
 	}
-	return capNativeOnly
+	return capExternalPureGo
 }
 
 // bashPPGoListFacts runs `go list -json` for one import path.
@@ -205,33 +196,10 @@ func bashPPGoListFacts(ctx context.Context, req bashPPEvalRequest, path string) 
 	return facts, nil
 }
 
-// bashPPInterpreter is the seam an in-process, toolchain-free evaluator plugs
-// into. It is intentionally NARROWER than [bashPPEvaluator]: an interpreter
-// only ever executes a call whose package already passed import-time policy,
-// so it has no Resolve of its own.
-//
-// It is currently unimplemented, and that is a recorded outcome rather than an
-// oversight. The Yaegi time-box the design authorised was run and expired on
-// measured evidence: see docs/P2-EVALUATOR-BLOCKERS.md. Keeping the seam here,
-// with no implementation behind it, is what makes the absence visible and
-// keeps the eventual adapter a package-private file rather than an API change.
-type bashPPInterpreter interface {
-	// Call runs a selector call in-process. It returns
-	// errBashPPNotInterpretable, and must have written nothing to
-	// req.Stdout, when it cannot run this particular call.
-	Call(context.Context, bashPPEvalRequest) error
-}
-
-// errBashPPNotInterpretable is how an interpreter declines a call it cannot
-// run, as distinct from a call that ran and failed. The two must not be
-// conflated: declining is dispatched onward, whereas a genuine failure is the
-// program's result and is returned unchanged.
-var errBashPPNotInterpretable = errors.New("bash++: call is not available to the in-process evaluator")
-
 // policyBashPPEvaluator is the evaluator the runner uses by default. It owns
-// the capability decision and delegates execution: to the in-process
-// interpreter where one exists and the policy allows it, and otherwise to the
-// reviewed native toolchain, announced.
+// the capability decision and delegates permitted execution to one replaceable
+// package-private adapter. Production installs [nativeBashPPEvaluator], the
+// reviewed Go toolchain adapter.
 //
 // It holds NO per-session mutable state. That is deliberate and load-bearing:
 // the capability decision is taken at import time and the import registry is
@@ -241,13 +209,12 @@ var errBashPPNotInterpretable = errors.New("bash++: call is not available to the
 // isolation tests forbid, because bashPPToolchain.eval is an interface value
 // shared by every subshell.
 type policyBashPPEvaluator struct {
-	// interpreted is nil while no in-process evaluator is adopted.
-	interpreted bashPPInterpreter
-	native      bashPPEvaluator
+	toolchain bashPPEvaluator
+	facts     bashPPFactsLoader
 }
 
 func newPolicyBashPPEvaluator() *policyBashPPEvaluator {
-	return &policyBashPPEvaluator{native: nativeBashPPEvaluator{}}
+	return &policyBashPPEvaluator{toolchain: nativeBashPPEvaluator{}, facts: bashPPGoListFacts}
 }
 
 // Resolve classifies the package and applies the policy.
@@ -259,16 +226,17 @@ func newPolicyBashPPEvaluator() *policyBashPPEvaluator {
 // place, and under `set -e` it aborts at the wrong statement. The registry is
 // only ever populated with packages that passed policy.
 func (e *policyBashPPEvaluator) Resolve(ctx context.Context, req bashPPEvalRequest, path string) (string, error) {
-	facts, err := bashPPGoListFacts(ctx, req, path)
+	load := e.facts
+	if load == nil {
+		load = bashPPGoListFacts
+	}
+	facts, err := load(ctx, req, path)
 	if err != nil {
 		return "", err
 	}
 	capability := classifyBashPPPackage(facts, path)
-	switch bashPPPolicyFor(capability) {
-	case policyRefuse:
+	if bashPPPolicyFor(capability) != policyToolchain {
 		return "", fmt.Errorf("bash++ import %q: %s", path, capability.refusal())
-	case policyFallbackExplicit:
-		e.announce(req, fmt.Sprintf("import %q", path))
 	}
 	if !syntax.ValidName(facts.Name) {
 		return "", fmt.Errorf("bash++ import %q: invalid package name %q", path, facts.Name)
@@ -279,44 +247,10 @@ func (e *policyBashPPEvaluator) Resolve(ctx context.Context, req bashPPEvalReque
 	return facts.Name, nil
 }
 
-// announce writes the mandatory no-silent-fallback notice. Rule 2.
-//
-// It is silent while no interpreter is adopted, and that is the rule applied
-// correctly rather than an exemption from it. Rule 2 exists to make a
-// per-call SEMANTIC DOWNGRADE visible: this call would have been interpreted,
-// and was not. With no interpreter adopted there is no downgrade to report —
-// the reviewed toolchain is the engine the policy selects for everything, a
-// fact that belongs in docs/bashpp-p2-evaluator-decision.md and not on stderr
-// before every line of every script. Announcing unconditionally would also
-// change Classic-visible output for programs whose behavior did not change.
-func (e *policyBashPPEvaluator) announce(req bashPPEvalRequest, what string) {
-	if e.interpreted == nil || req.Stderr == nil {
-		return
-	}
-	fmt.Fprintf(req.Stderr, "bash++: %s: not available to the in-process evaluator; using the reviewed Go toolchain\n", what)
-}
-
-// Call executes a selector call, preferring the in-process interpreter.
-//
-// A package whose specific symbol the interpreter declines is still a semantic
-// fallback, so it is announced too: the package passed policy, but this call
-// is not one the interpreter can run.
+// Call executes a selector call with the reviewed, replaceable adapter.
 func (e *policyBashPPEvaluator) Call(ctx context.Context, req bashPPEvalRequest) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if e.interpreted != nil {
-		switch err := e.interpreted.Call(ctx, req); {
-		case err == nil:
-			return nil
-		case errors.Is(err, errBashPPNotInterpretable):
-			e.announce(req, strings.Join(req.Selector, "."))
-		default:
-			// A real failure from a call that actually ran is the
-			// program's result. Retrying it natively would run the
-			// user's code a second time.
-			return err
-		}
-	}
-	return e.native.Call(ctx, req)
+	return e.toolchain.Call(ctx, req)
 }

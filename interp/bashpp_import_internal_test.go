@@ -93,6 +93,69 @@ func TestBashPPImportRegistryContract(t *testing.T) {
 	}
 }
 
+func TestBashPPInteractiveImportIsActuallyIdempotent(t *testing.T) {
+	eval := &recordingBashPPEval{resolved: map[string]string{"fmt": "fmt"}}
+	r := newInjectedBashPPRunner(t, eval)
+	// Interactive clients parse and Run one statement at a time. Exercise
+	// separate syntax trees and Run calls, not two imports in one file.
+	for range 2 {
+		if err := r.Run(context.Background(), parseBashPPInternal(t, "import \"fmt\"\n")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := r.bashPPImports; len(got) != 1 || got["fmt"] != "fmt" {
+		t.Fatalf("imports %#v", got)
+	}
+	if err := r.Run(context.Background(), parseBashPPInternal(t, "fmt.Println(\"still-live\")\n")); err != nil {
+		t.Fatal(err)
+	}
+	eval.mu.Lock()
+	defer eval.mu.Unlock()
+	if len(eval.calls) != 1 || eval.calls[0].Imports["fmt"] != "fmt" {
+		t.Fatalf("calls %#v", eval.calls)
+	}
+}
+
+func TestBashPPLiveEnableInitializesEvaluatorAndNamespace(t *testing.T) {
+	r, err := New(StdIO(nil, io.Discard, io.Discard))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The input is parsed as an interactive Bash++ client would parse it;
+	// execution starts in Classic Bash and activates the dialect live.
+	if err := r.Run(context.Background(), parseBashPPInternal(t, "set -o bashpp\n")); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := r.bashPPTools.eval.(*policyBashPPEvaluator); !ok {
+		t.Fatalf("live enable installed %T, want policy evaluator", r.bashPPTools.eval)
+	}
+	eval := &recordingBashPPEval{resolved: map[string]string{"fmt": "fmt"}}
+	r.bashPPTools = bashPPToolchain{goBinary: "/reviewed/go", eval: eval}
+	if err := r.Run(context.Background(), parseBashPPInternal(t, "import \"fmt\"\nfmt.Println(\"live\")\n")); err != nil {
+		t.Fatal(err)
+	}
+	if r.bashPPScope == nil || r.bashPPImports["fmt"] != "fmt" || len(eval.calls) != 1 {
+		t.Fatalf("live state scope=%p imports=%#v calls=%d", r.bashPPScope, r.bashPPImports, len(eval.calls))
+	}
+}
+
+func TestBashPPSubshellImportLifecycleThroughRunner(t *testing.T) {
+	eval := &recordingBashPPEval{resolved: map[string]string{"fmt": "fmt", "log": "log"}}
+	r := newInjectedBashPPRunner(t, eval)
+	if err := r.Run(context.Background(), parseBashPPInternal(t,
+		"import \"fmt\"\n(\nimport \"log\"\nfmt.Println(\"child\")\n)\nfmt.Println(\"parent\")\n")); err != nil {
+		t.Fatal(err)
+	}
+	if len(r.bashPPImports) != 1 || r.bashPPImports["fmt"] != "fmt" {
+		t.Fatalf("child namespace leaked: %#v", r.bashPPImports)
+	}
+	eval.mu.Lock()
+	defer eval.mu.Unlock()
+	if len(eval.calls) != 2 || eval.calls[0].Imports["log"] != "log" || eval.calls[1].Imports["log"] != "" {
+		t.Fatalf("subshell call namespaces %#v", eval.calls)
+	}
+}
+
 func TestBashPPGroupedImportIsAtomicAndUsesGoAliases(t *testing.T) {
 	eval := &recordingBashPPEval{resolved: map[string]string{"fmt": "fmt", "log": "log", "embed": "embed"}}
 	r := newInjectedBashPPRunner(t, eval)
@@ -196,6 +259,25 @@ func TestNativeBashPPEvaluatorRejectsArgumentInjection(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "invalid Go argument") {
 		t.Fatalf("got %v", err)
+	}
+}
+
+func TestNativeBashPPEvaluatorImportsPackagesUsedByArguments(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds a Go program")
+	}
+	dir := t.TempDir()
+	var stdout, stderr strings.Builder
+	req := nativeResolveRequest(dir, "GOWORK=off")
+	req.Stdout, req.Stderr = &stdout, &stderr
+	req.Imports = map[string]string{"fmt": "fmt", "os": "os"}
+	req.Selector = []string{"fmt", "Fprintln"}
+	req.Args = []string{"os.Stdout", `"argument-import"`}
+	if err := (nativeBashPPEvaluator{}).Call(context.Background(), req); err != nil {
+		t.Fatalf("call: %v: %s", err, stderr.String())
+	}
+	if stdout.String() != "argument-import\n" || stderr.String() != "" {
+		t.Fatalf("stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}
 }
 
