@@ -85,6 +85,12 @@ func RecognizeStartSite(src string) StartSiteMatch {
 	if recognizeImportPrefix(s) {
 		return StartSiteMatch{Site: StartImport, Class: ClassE, Bounded: true}
 	}
+	if recognizeFuncDecl(s) {
+		return StartSiteMatch{Site: StartFunc, Class: ClassR, Bounded: true}
+	}
+	if recognizeDefer(s) {
+		return StartSiteMatch{Site: StartDefer, Class: ClassR, Bounded: true}
+	}
 	if m := recognizeShortDecl(s); m.Site != StartNone {
 		return m
 	}
@@ -112,6 +118,51 @@ func recognizeImportPrefix(s string) bool {
 	}
 	rest = strings.TrimLeft(rest[len(alias):], " \t")
 	return strings.HasPrefix(rest, `"`)
+}
+
+// recognizeFuncDecl handles a Go-form function declaration: `func name(`.
+//
+// Always Class R. `func` is an ordinary command word in bash, so `func name (`
+// is two words before a `(`, which is only legal as the function-definition
+// form `name ()` where the name is the FIRST word — it is not here. A NAME is
+// required between the keyword and the `(`: `func(` with no name is the bash
+// function definition `func() { … }` and must stay shell, exactly as `f()`
+// does at [recognizeGoCall].
+func recognizeFuncDecl(s string) bool {
+	rest, ok := cutKeyword(s, "func")
+	if !ok {
+		return false
+	}
+	name := leadingIdent(rest)
+	if name == "" || isGoReservedWord(name) {
+		return false
+	}
+	rest = strings.TrimLeft(rest[len(name):], " \t")
+	return strings.HasPrefix(rest, "(")
+}
+
+// recognizeDefer handles the Go-call form of defer: `defer f(` / `defer x.y(`.
+//
+// `defer` splits like `:=` does, but only one half is claimable. `defer f(x)`
+// is Class R — the parenthesis after `defer f` is a bash syntax error, as it is
+// after any two command words — so claiming it takes nothing away. `defer
+// cleanup` and bare `defer` are Class E commands bash runs today and must keep
+// running, so the signal is precisely the trailing `(` on a selector callee.
+func recognizeDefer(s string) bool {
+	rest, ok := cutKeyword(s, "defer")
+	if !ok {
+		return false
+	}
+	ident := leadingSelector(rest)
+	if ident == "" {
+		return false
+	}
+	head, _, _ := strings.Cut(ident, ".")
+	if isGoReservedWord(head) {
+		return false
+	}
+	rest = rest[len(ident):]
+	return strings.HasPrefix(rest, "(")
 }
 
 // recognizeKeywordDecl handles var, const and type.

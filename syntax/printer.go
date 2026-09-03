@@ -397,6 +397,29 @@ func (p *Printer) semiOrNewl(s string, pos Pos) {
 	p.wantSpace = spaceRequired
 }
 
+// bashppFields prints a Go-form parameter or result list, e.g. `a, b int, c
+// string`. It writes exact bytes rather than driving the pending-space model so
+// the signature reads the same regardless of the surrounding positions.
+func (p *Printer) bashppFields(fields []*BashPPField) {
+	for i, f := range fields {
+		if i > 0 {
+			p.writeLit(", ")
+		}
+		for j, n := range f.Names {
+			if j > 0 {
+				p.writeLit(", ")
+			}
+			p.writeLit(n.Value)
+		}
+		if f.FieldType != nil {
+			if len(f.Names) > 0 {
+				p.writeLit(" ")
+			}
+			p.writeLit(f.FieldType.Value)
+		}
+	}
+}
+
 func (p *Printer) writeLit(s string) {
 	// If p.tabWriter is nil, this is the nested printer being used to print
 	// <<- heredoc bodies, so the parent printer will add the escape bytes
@@ -1476,6 +1499,41 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 			p.word(arg)
 		}
 		p.writeLit(")")
+	case *BashPPFuncDecl:
+		p.spacedString(cmd.Kw.Value, cmd.Kw.Pos())
+		p.spacedString(cmd.Name.Value, cmd.Name.Pos())
+		p.writeLit("(")
+		p.bashppFields(cmd.Params)
+		p.writeLit(")")
+		if len(cmd.Results) > 0 {
+			p.writeLit(" ")
+			if cmd.ResLparen.IsValid() {
+				p.writeLit("(")
+				p.bashppFields(cmd.Results)
+				p.writeLit(")")
+			} else {
+				p.bashppFields(cmd.Results)
+			}
+		}
+		p.wantSpace = spaceRequired
+		if cmd.Body != nil {
+			p.command(cmd.Body, nil)
+		}
+	case *BashPPReturn:
+		p.spacedString(cmd.Kw.Value, cmd.Kw.Pos())
+		for i, res := range cmd.Results {
+			if i > 0 {
+				p.writeLit(",")
+			}
+			p.space()
+			p.word(res)
+		}
+	case *BashPPDefer:
+		p.spacedString(cmd.Kw.Value, cmd.Kw.Pos())
+		p.wantSpace = spaceRequired
+		if cmd.Call != nil {
+			p.command(cmd.Call, nil)
+		}
 	case *BashPPImport:
 		p.spacedString(cmd.Kw.Value, cmd.Kw.Pos())
 		if cmd.Path != nil {

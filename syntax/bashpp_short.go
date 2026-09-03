@@ -295,7 +295,13 @@ func (p *Parser) bashppParenForm(ce *CallExpr) Command {
 	} else {
 		return nil
 	}
-	if name == nil || !bashppSelector(name.Value) || (!short && !strings.Contains(name.Value, ".") && p.r == ')') {
+	if name == nil || !bashppSelector(name.Value) {
+		return nil
+	}
+	if !short && !strings.Contains(name.Value, ".") && p.r == ')' && !p.bashppFuncNames[name.Value] {
+		// `f()` is also the prefix of a classic shell function definition.
+		// Only a previously declared Bash++ function makes the zero-argument
+		// call unambiguous; calls with arguments remain unambiguous Class R.
 		return nil
 	}
 
@@ -329,7 +335,7 @@ func (p *Parser) bashppParenForm(ce *CallExpr) Command {
 	}
 	text.WriteByte(')')
 	rhs := &Word{Parts: []WordPart{&Lit{ValuePos: name.Pos(), ValueEnd: call.End(), Value: text.String()}}}
-	return &BashPPShortDecl{Lhs: lhs, Rhs: []*Word{rhs}, Class: ClassR, OpPos: opPos}
+	return &BashPPShortDecl{Lhs: lhs, Rhs: []*Word{rhs}, Class: ClassR, OpPos: opPos, Call: call}
 }
 
 func bashppCallTerminator(tok token) bool {
@@ -370,6 +376,42 @@ func bashppCallArg(w *Word) bool {
 	}
 	if l := bashppBareLit(w); l != nil {
 		return bashppIsIdent(l.Value)
+	}
+	// A call that actually runs needs to pass values, not only literals, so a
+	// parameter expansion (`$x`), an arithmetic expansion (`$((n-1))`) or a
+	// quoted word carrying one is a valid argument. Command and process
+	// substitution stay excluded: they run a command, and the published call
+	// grammar keeps a Class R argument list side-effect-free, so `f($(x))`
+	// rolls back to the shell rather than being claimed.
+	return bashppArgWordSafe(w)
+}
+
+// bashppArgWordSafe reports whether every part of w is a value-producing form
+// that does not execute a command. It is recursive so a double-quoted word is
+// only safe when its own parts are.
+func bashppArgWordSafe(w *Word) bool {
+	if len(w.Parts) == 0 {
+		return false
+	}
+	for _, part := range w.Parts {
+		if !bashppArgPartSafe(part) {
+			return false
+		}
+	}
+	return true
+}
+
+func bashppArgPartSafe(part WordPart) bool {
+	switch part := part.(type) {
+	case *Lit, *SglQuoted, *ParamExp, *ArithmExp:
+		return true
+	case *DblQuoted:
+		for _, inner := range part.Parts {
+			if !bashppArgPartSafe(inner) {
+				return false
+			}
+		}
+		return true
 	}
 	return false
 }

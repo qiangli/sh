@@ -652,6 +652,16 @@ type Parser struct {
 	// A non-zero number means that we require certain tokens or words before
 	// reaching EOF, used for [Parser.Incomplete].
 	openNodes int
+	// bashppFuncDepth counts the Bash++ func bodies currently open. A `return`
+	// is only a Go-form [BashPPReturn] while this is non-zero; everywhere else
+	// it stays the ordinary shell builtin, which is Class E. It is saved and
+	// zeroed across a nested shell function or subshell body so a `return` there
+	// keeps its shell meaning.
+	bashppFuncDepth int
+	// bashppFuncNames records declarations seen so far, allowing unambiguous
+	// zero-argument calls (`f()`) without stealing classic `f() { ... }` shell
+	// definitions from the parser.
+	bashppFuncNames map[string]bool
 	// openBquotes is how many levels of backquotes are open at the moment.
 	openBquotes int
 	// bquoteDblQuoted reports whether the innermost open backquote command
@@ -725,6 +735,7 @@ func (p *Parser) reset() {
 	p.err, p.readErr, p.readEOF = nil, nil, false
 	p.quote, p.forbidNested = noState, false
 	p.openNodes = 0
+	p.bashppFuncNames = nil
 	p.recoveredErrors = 0
 	p.heredocs, p.buriedHdocs = p.heredocs[:0], 0
 	p.hdocStops = nil
@@ -3173,7 +3184,12 @@ func (p *Parser) subshell(s *Stmt) {
 	sub := &Subshell{Lparen: p.pos}
 	old := p.preNested(subCmd)
 	p.next()
+	// A subshell is a fresh execution context: a `return` inside it belongs to
+	// no enclosing Bash++ func, so the Go-form depth does not cross the `(`.
+	savedFuncDepth := p.bashppFuncDepth
+	p.bashppFuncDepth = 0
 	sub.Stmts, sub.Last = p.followStmts("(", sub.Lparen)
+	p.bashppFuncDepth = savedFuncDepth
 	p.postNested(old)
 	if p.err == nil && p.tok == _EOF && p.heredocEOFWarning != nil && p.hdocEOFLine != 0 {
 		// A here-document inside this subshell ran to end-of-file
@@ -3995,6 +4011,14 @@ loop:
 			p.curErr("%#q can only be used to open an arithmetic cmd", p.tok)
 		case leftParen:
 			if p.lang.in(LangBashPP) {
+				if cmd := p.bashppFuncForm(ce); cmd != nil {
+					s.Cmd = cmd
+					return
+				}
+				if cmd := p.bashppDeferForm(ce); cmd != nil {
+					s.Cmd = cmd
+					return
+				}
 				if cmd := p.bashppImportGroup(ce); cmd != nil {
 					s.Cmd = cmd
 					return
@@ -4037,6 +4061,10 @@ loop:
 		}
 		if imp := bashppImport(ce, s.Redirs); imp != nil {
 			s.Cmd = imp
+			return
+		}
+		if ret := p.bashppReturn(ce, s.Redirs); ret != nil {
+			s.Cmd = ret
 			return
 		}
 		if decl := bashppShortDecl(ce, s.Redirs); decl != nil {
@@ -4107,9 +4135,15 @@ func (p *Parser) funcDecl(s *Stmt, pos Pos, long, withParens bool, names ...*Lit
 	if p.lang.in(langBashLike) && !p.stopToken() && !p.startsCompoundCommand() {
 		p.curErr("a function body must be a compound command")
 	}
+	// A `return` inside a nested shell function is that function's own shell
+	// return, not the enclosing Bash++ func's Go-form return, so drop the Go
+	// depth across the body and restore it after.
+	savedFuncDepth := p.bashppFuncDepth
+	p.bashppFuncDepth = 0
 	if fd.Body = p.getStmt(false, false, true); fd.Body == nil {
 		p.followErr(fd.Pos(), "foo()", noQuote("a statement"))
 	}
+	p.bashppFuncDepth = savedFuncDepth
 	s.Cmd = fd
 }
 

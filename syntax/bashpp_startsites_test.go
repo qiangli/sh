@@ -146,8 +146,7 @@ func TestStartSiteNearMiss(t *testing.T) {
 func TestStartSiteLaterPhasesStayShell(t *testing.T) {
 	t.Parallel()
 	later := []string{
-		`func f(x int) int {`, // P3
-		`defer cleanup`,       // P3
+		`defer cleanup`,       // P3-A: the plain command form stays shell (Class E)
 		`go worker(a, b)`,     // P4
 		`ch <- v`,             // P4
 		`select {`,            // P4
@@ -162,6 +161,50 @@ func TestStartSiteLaterPhasesStayShell(t *testing.T) {
 				t.Fatalf("RecognizeStartSite(%q) = %v, want StartNone: "+
 					"an unimplemented phase must fall back to shell, never claim the shape",
 					src, got.Site)
+			}
+		})
+	}
+}
+
+// TestStartSiteFuncDefer covers the P3-A start sites. Both are Class R: a
+// `func name(` and a `defer f(` are bash syntax errors, so claiming them takes
+// nothing away, while the bare `defer cleanup` and the anonymous `func()`
+// function-definition shapes must stay shell.
+func TestStartSiteFuncDefer(t *testing.T) {
+	t.Parallel()
+	claims := []struct {
+		src  string
+		want StartSite
+	}{
+		{`func f(x int) int {`, StartFunc},
+		{`func f() {`, StartFunc},
+		{`func run(a, b) {`, StartFunc},
+		{`defer f(x)`, StartDefer},
+		{`defer f()`, StartDefer},
+		{`defer pkg.Close(h)`, StartDefer},
+	}
+	for _, tc := range claims {
+		t.Run(tc.src, func(t *testing.T) {
+			got := RecognizeStartSite(tc.src)
+			if got.Site != tc.want || got.Class != ClassR || !got.Bounded {
+				t.Fatalf("RecognizeStartSite(%q) = %#v, want %v/R/bounded", tc.src, got, tc.want)
+			}
+		})
+	}
+	stayShell := []string{
+		`func`,          // bare keyword
+		`func()`,        // anonymous function definition, Class E
+		`func () {`,     // spaced anonymous definition
+		`func if(x) {`,  // a Go keyword cannot be a func name
+		`defer`,         // bare command
+		`defer cleanup`, // plain command form, Class E
+		// The Go-form defer call is additive; a shell command named `defer`
+		// remains covered by the plain-command near miss above.
+	}
+	for _, src := range stayShell {
+		t.Run("shell/"+src, func(t *testing.T) {
+			if got := RecognizeStartSite(src); got.Site != StartNone {
+				t.Fatalf("RecognizeStartSite(%q) = %v, want StartNone", src, got.Site)
 			}
 		})
 	}

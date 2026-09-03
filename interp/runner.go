@@ -5332,6 +5332,12 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		r.bashPPShortDecl(ctx, cm)
 	case *syntax.BashPPCall:
 		r.bashPPCall(ctx, cm)
+	case *syntax.BashPPFuncDecl:
+		r.bashPPFuncDecl(cm)
+	case *syntax.BashPPReturn:
+		r.bashPPReturnStmt(ctx, cm)
+	case *syntax.BashPPDefer:
+		r.bashPPDeferStmt(ctx, cm)
 	case *syntax.BashPPImport:
 		r.bashPPImport(ctx, cm)
 	case *syntax.Subshell:
@@ -5680,6 +5686,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			// for an assignment/redirection-only simple command.
 			defer r.setVarString("_", "")
 			for _, as := range cm.Assigns {
+				as = r.bashPPRewriteAssign(as)
 				name := as.Name.Value
 
 				prev := r.lookupVar(name)
@@ -5843,6 +5850,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 
 		assignFailed := false
 		for _, as := range cm.Assigns {
+			as = r.bashPPRewriteAssign(as)
 			if as.Index != nil {
 				r.errf("%s`%s': not a valid identifier\n",
 					r.bashErrPrefix(r.curStmtPos), r.inlineArrayAssignName(as))

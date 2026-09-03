@@ -110,6 +110,25 @@ type Runner struct {
 	bashPPImports map[string]string
 	bashPPTools   bashPPToolchain
 
+	// bashPPFuncs holds the Go-form (typed) functions declared with `func`,
+	// each paired with the lexical scope captured where it was defined so the
+	// body's free identifiers close over their definition site, not the call
+	// site. It is preserved across [Runner.Reset] alongside Funcs for the same
+	// reason bashPPFuncScopes is.
+	bashPPFuncs map[string]*bashPPFunc
+	// bashPPDeferStack is the LIFO stack of deferred calls awaiting the return
+	// of the func invocations currently on the call stack. Each invocation
+	// remembers the stack length it entered at and runs everything pushed above
+	// that mark, in reverse, as it unwinds.
+	bashPPDeferStack []bashPPDeferred
+	// bashPPReturn carries a Go-form return across the body's statement loop:
+	// active is set by a [syntax.BashPPReturn] and consumed by the invoker.
+	bashPPReturn bashPPReturnState
+	// bashPPFuncActive is non-zero while a Go-form function body is running;
+	// it lets ordinary assignment dispatch give bare identifier expressions
+	// their Go meaning without changing shell assignments elsewhere.
+	bashPPFuncActive int
+
 	// funcSources records the script name active when a function was
 	// defined. Bash reports runtime diagnostics in a function body against
 	// the definition source, not necessarily the caller's source.
@@ -2655,6 +2674,7 @@ func (r *Runner) Reset() {
 		// is preserved exactly as far as Funcs is. The runner's own current
 		// scope is per-Run scratch and is rebuilt below.
 		bashPPFuncScopes: r.bashPPFuncScopes,
+		bashPPFuncs:      r.bashPPFuncs,
 		bashPPTools:      r.bashPPTools,
 
 		// disabledBuiltins (`enable -n`, or WithDisabledBuiltins at
@@ -3130,13 +3150,19 @@ func (r *Runner) subshell(background bool) *Runner {
 	// scope and every captured closure together so that the aliasing between
 	// them survives; see [bashPPCloner]. Sharing instead of copying would be
 	// a data race for a background subshell, which runs in its own goroutine.
-	if r.bashPPScope != nil || len(r.bashPPFuncScopes) > 0 {
+	if r.bashPPScope != nil || len(r.bashPPFuncScopes) > 0 || len(r.bashPPFuncs) > 0 {
 		cloner := newBashPPCloner()
 		r2.bashPPScope = cloner.clone(r.bashPPScope)
 		if r.bashPPFuncScopes != nil {
 			r2.bashPPFuncScopes = make(map[string]*bashPPScope, len(r.bashPPFuncScopes))
 			for name, scope := range r.bashPPFuncScopes {
 				r2.bashPPFuncScopes[name] = cloner.clone(scope)
+			}
+		}
+		if r.bashPPFuncs != nil {
+			r2.bashPPFuncs = make(map[string]*bashPPFunc, len(r.bashPPFuncs))
+			for name, fn := range r.bashPPFuncs {
+				r2.bashPPFuncs[name] = &bashPPFunc{decl: fn.decl, scope: cloner.clone(fn.scope)}
 			}
 		}
 	}

@@ -191,6 +191,9 @@ func Walk(node Node, f func(Node) bool) {
 	case *BashPPShortDecl:
 		walkList(node.Lhs, f)
 		walkList(node.Rhs, f)
+		if node.Call != nil {
+			Walk(node.Call, f)
+		}
 	case *BashPPCall:
 		walkList(node.Fun, f)
 		walkList(node.Args, f)
@@ -205,6 +208,29 @@ func Walk(node Node, f func(Node) bool) {
 		walkComments(node.Comments, f)
 		walkNilable(node.Alias, f)
 		Walk(node.Path, f)
+	case *BashPPFuncDecl:
+		walkNilable(node.Kw, f)
+		walkNilable(node.Name, f)
+		for _, field := range node.Params {
+			Walk(field, f)
+		}
+		for _, field := range node.Results {
+			Walk(field, f)
+		}
+		if node.Body != nil {
+			Walk(node.Body, f)
+		}
+	case *BashPPField:
+		walkList(node.Names, f)
+		walkNilable(node.FieldType, f)
+	case *BashPPReturn:
+		walkNilable(node.Kw, f)
+		walkList(node.Results, f)
+	case *BashPPDefer:
+		walkNilable(node.Kw, f)
+		if node.Call != nil {
+			Walk(node.Call, f)
+		}
 	default:
 		panic(fmt.Sprintf("syntax.Walk: unexpected node type %T", node))
 	}

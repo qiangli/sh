@@ -43,6 +43,9 @@ const (
 	StartGoCall    // f(1, 2) · x.y.z() · clear(m)
 	StartGoIf      // if err != nil { … }
 	StartImport    // import "path" · import alias "path"
+	StartFunc      // func name(a int) int { … }
+	StartDefer     // defer f(x)
+	StartReturn    // return · return a, b (only inside a func body)
 )
 
 func (s StartSite) String() string {
@@ -61,6 +64,12 @@ func (s StartSite) String() string {
 		return "if"
 	case StartImport:
 		return "import"
+	case StartFunc:
+		return "func"
+	case StartDefer:
+		return "defer"
+	case StartReturn:
+		return "return"
 	}
 	return "none"
 }
@@ -88,6 +97,12 @@ func (s *StartSite) UnmarshalText(b []byte) error {
 		*s = StartGoIf
 	case "import":
 		*s = StartImport
+	case "func":
+		*s = StartFunc
+	case "defer":
+		*s = StartDefer
+	case "return":
+		*s = StartReturn
 	default:
 		return fmt.Errorf("unknown Bash++ start site: %q", b)
 	}
@@ -191,6 +206,13 @@ type BashPPShortDecl struct {
 	Rhs   []*Word // the right-hand side, unevaluated
 	Class SiteClass
 	OpPos Pos // position of :=
+
+	// Call is set when the right-hand side is a Go-form call, e.g.
+	// `x := f(1)` or `config, err := readConfig("c")`. It carries the parsed
+	// call so the interpreter can invoke a typed function and bind its results
+	// to Lhs positionally, rather than re-deriving the call from Rhs's text.
+	// It is nil for every scalar/tuple/composite right-hand side.
+	Call *BashPPCall
 }
 
 func (d *BashPPShortDecl) Pos() Pos {
@@ -295,6 +317,108 @@ func (i *BashPPIf) End() Pos {
 	return i.If
 }
 
+// BashPPField is one group of a Go-form parameter or result list: `a, b int`,
+// a lone untyped parameter name, or a bare result type.
+//
+// Names carries the identifiers a group declares — several when a type is
+// shared, as in `a, b int`. FieldType is the group's declared type, or nil for an
+// untyped parameter (a Bash++ extension over Go, `func f(a, b)`). An unnamed
+// result — `func f() (int, error)` — is a group with an empty Names and the
+// type in FieldType, which is what keeps the result arity queryable from the tree
+// without re-reading whether each word was a name or a type.
+type BashPPField struct {
+	Names     []*Lit // the declared identifiers, empty for an unnamed result type
+	FieldType *Lit   // the declared type, or nil for an untyped parameter
+}
+
+func (f *BashPPField) Pos() Pos {
+	if len(f.Names) > 0 {
+		return f.Names[0].Pos()
+	}
+	if f.FieldType != nil {
+		return f.FieldType.Pos()
+	}
+	return Pos{}
+}
+func (f *BashPPField) End() Pos {
+	if f.FieldType != nil {
+		return f.FieldType.End()
+	}
+	if len(f.Names) > 0 {
+		return f.Names[len(f.Names)-1].End()
+	}
+	return Pos{}
+}
+
+// BashPPFuncDecl is a Go-form typed function declaration:
+//
+//	func name(a int, b string) (int, error) { … }
+//
+// Every shape reaching this node is Class R — `func name(…)` is two command
+// words before a `(`, which bash rejects, so claiming it takes nothing away
+// from a working script. That is why the signature may be parsed forward
+// without a transaction: a malformed body is a bash syntax error either way.
+type BashPPFuncDecl struct {
+	Kw      *Lit           // the literal "func"
+	Name    *Lit           // the declared function name
+	Params  []*BashPPField // the parameter groups, in source order
+	Results []*BashPPField // the result groups, or nil when there are none
+	Body    *Block         // the braced body
+
+	Lparen    Pos // ( opening the parameter list
+	Rparen    Pos // ) closing the parameter list
+	ResLparen Pos // ( opening a parenthesised result list, else invalid
+	ResRparen Pos // ) closing a parenthesised result list, else invalid
+}
+
+func (d *BashPPFuncDecl) Pos() Pos { return d.Kw.Pos() }
+func (d *BashPPFuncDecl) End() Pos {
+	if d.Body != nil {
+		return d.Body.End()
+	}
+	return posAddCol(d.Rparen, 1)
+}
+
+// BashPPReturn is a Go-form return inside a func body: `return`, `return a, b`.
+//
+// It is only ever constructed inside a Bash++ func body, where the parser
+// tracks that it is within a committed Go region; a `return` anywhere else
+// stays the ordinary shell builtin, which is Class E. Results is nil for a bare
+// return, which yields the function's named results (or its last status when it
+// declares none).
+type BashPPReturn struct {
+	Kw      *Lit    // the literal "return"
+	Results []*Word // the returned values, or nil for a bare return
+}
+
+func (r *BashPPReturn) Pos() Pos { return r.Kw.Pos() }
+func (r *BashPPReturn) End() Pos {
+	if len(r.Results) > 0 {
+		return r.Results[len(r.Results)-1].End()
+	}
+	return r.Kw.End()
+}
+
+// BashPPDefer is a Go-form deferred call: `defer f(x)`.
+//
+// `defer` is an ordinary command word in bash, so `defer cleanup` runs a
+// command today and must keep doing so (Class E). Only the Go-call form
+// `defer f(x)` — already a bash syntax error, hence Class R — is claimed, which
+// is what lets an existing script that shells out to a program named `defer`
+// keep working untouched.
+type BashPPDefer struct {
+	Kw   *Lit        // the literal "defer"
+	Call *BashPPCall // the deferred call
+}
+
+func (d *BashPPDefer) Pos() Pos { return d.Kw.Pos() }
+func (d *BashPPDefer) End() Pos {
+	if d.Call != nil {
+		return d.Call.End()
+	}
+	return d.Kw.End()
+}
+
 // The Command marker methods. Declaring them here rather than in nodes.go is
 // what lets this whole file merge without touching a certification-owned file.
 func (*BashPPDecl) commandNode()      {}
@@ -302,3 +426,6 @@ func (*BashPPShortDecl) commandNode() {}
 func (*BashPPCall) commandNode()      {}
 func (*BashPPIf) commandNode()        {}
 func (*BashPPImport) commandNode()    {}
+func (*BashPPFuncDecl) commandNode()  {}
+func (*BashPPReturn) commandNode()    {}
+func (*BashPPDefer) commandNode()     {}

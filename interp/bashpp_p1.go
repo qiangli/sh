@@ -101,14 +101,24 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 		r.exit = exitStatus{code: 2}
 		return
 	}
+	if r.bashPPScope == nil {
+		r.bashPPScope = newBashPPScope(nil)
+	}
+	// `x := f(1)` / `a, b := f()` binds a typed function's results. It is
+	// handled before the tuple arity check below because a call's single text
+	// Rhs never matches a multi-name left-hand side; the real arity check is
+	// against the function's declared results, done inside.
+	if d.Call != nil {
+		if fn, ok := r.bashPPLookupFunc(d.Call); ok {
+			r.bashPPShortDeclCall(ctx, d, fn)
+			return
+		}
+	}
 	if len(d.Lhs) != 1 && len(d.Lhs) != len(d.Rhs) {
 		r.errf("assignment mismatch: %d variable(s) but %d value(s)\n",
 			len(d.Lhs), len(d.Rhs))
 		r.exit = exitStatus{code: 2}
 		return
-	}
-	if r.bashPPScope == nil {
-		r.bashPPScope = newBashPPScope(nil)
 	}
 	if len(d.Lhs) == 1 {
 		name := d.Lhs[0].Value
@@ -183,6 +193,13 @@ func (r *Runner) bashPPValue(ctx context.Context, words []*syntax.Word) expand.V
 // script, which is exactly why a diagnostic is permitted here and forbidden on
 // a Class E shape.
 func (r *Runner) bashPPCall(ctx context.Context, c *syntax.BashPPCall) {
+	// A call to a typed function declared in this session runs the function.
+	// It is checked before the external eval toolchain so a user's own `func`
+	// always wins over a same-named tool binding.
+	if fn, ok := r.bashPPLookupFunc(c); ok {
+		r.bashPPInvoke(ctx, fn, r.bashPPCallArgValues(c))
+		return
+	}
 	if r.bashPPEnabled() && !r.PosixMode() && len(c.Fun) >= 1 {
 		req, err := r.bashPPEvalRequest()
 		if err == nil {
