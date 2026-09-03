@@ -45,6 +45,17 @@ func Lang(l syntax.LangVariant) RunnerOption {
 	}
 }
 
+// HideBashPPOption keeps Bash++ out of option enumeration while retaining its
+// parser and interpreter dialect. It is used when an outer compatibility
+// harness selects Bash++ for the measured process without changing Classic
+// option-list output.
+func HideBashPPOption() RunnerOption {
+	return func(r *Runner) error {
+		r.hideBashPPOption = true
+		return nil
+	}
+}
+
 // Dialect reports the shell language variant the runner implements, as set by
 // [Lang]. The zero value is reported as [syntax.LangBash].
 func (r *Runner) Dialect() syntax.LangVariant {

@@ -716,7 +716,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			return r.jsonOut(map[string]any{"variables": r.variablesJSON(true)})
 		}
 		if len(args) == 2 && args[0] == "-o" && strings.HasPrefix(args[1], "-") {
-			for _, name := range bashSetOptNames() {
+			for _, name := range r.bashSetOptNames() {
 				status := "off"
 				if opt := r.posixOptByName(name); opt != nil && *opt {
 					status = "on"
@@ -4198,7 +4198,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					}
 					list = append(list, oentry{name, on})
 				}
-				list = append(list, oentry{"bashpp", r.bashPPEnabled()})
+				if r.bashPPEnabled() && !r.hideBashPPOption {
+					list = append(list, oentry{"bashpp", true})
+				}
 				sort.Slice(list, func(i, j int) bool { return list[i].name < list[j].name })
 				for _, e := range list {
 					if (e.enabled && !showSet) || (!e.enabled && !showUnset) {
@@ -6673,8 +6675,11 @@ readonly: readonly [-aAf] [name[=value] ...] or readonly -p
 `
 }
 
-func bashSetOptNames() []string {
-	names := []string{"bashpp"}
+func (r *Runner) bashSetOptNames() []string {
+	var names []string
+	if r.bashPPEnabled() && !r.hideBashPPOption {
+		names = append(names, "bashpp")
+	}
 	for _, opt := range posixOptsTable {
 		if opt.name != "" && opt.name != "restricted" {
 			names = append(names, opt.name)
@@ -6711,7 +6716,7 @@ func (r *Runner) compgenNames(actionType string) ([]string, bool) {
 		slices.Sort(names)
 		return names, true
 	case "setopt":
-		return bashSetOptNames(), true
+		return r.bashSetOptNames(), true
 	case "builtin", "enabled":
 		return bashBuiltinNames(), true
 	case "keyword":

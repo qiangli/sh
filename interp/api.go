@@ -167,8 +167,9 @@ type Runner struct {
 	// `set +o bashpp` toggle it live between [syntax.LangBash] and
 	// [syntax.LangBashPP]; origDialect snapshots the construction-time value so
 	// Reset restores it.
-	dialect     syntax.LangVariant
-	origDialect syntax.LangVariant
+	dialect          syntax.LangVariant
+	origDialect      syntax.LangVariant
+	hideBashPPOption bool
 
 	// didReset remembers whether the runner has ever been reset. This is
 	// used so that Reset is automatically called when running any program
@@ -1700,7 +1701,9 @@ func Params(args ...string) RunnerOption {
 				// The bashpp dialect toggle is a bashy extension kept out
 				// of posixOptsTable (so it stays out of SHELLOPTS), but it
 				// is reported here so its live state is observable.
-				list = append(list, oentry{"bashpp", r.bashPPEnabled()})
+				if r.bashPPEnabled() && !r.hideBashPPOption {
+					list = append(list, oentry{"bashpp", true})
+				}
 				sort.Slice(list, func(i, j int) bool { return list[i].name < list[j].name })
 				for _, e := range list {
 					r.printOptLine(e.name, e.enabled, true)
@@ -1728,7 +1731,9 @@ func Params(args ...string) RunnerOption {
 				}
 				// See the `set -o` branch above: the bashpp toggle is
 				// reported in the reusable form too.
-				list = append(list, oentry{"bashpp", r.bashPPEnabled()})
+				if r.bashPPEnabled() && !r.hideBashPPOption {
+					list = append(list, oentry{"bashpp", true})
+				}
 				sort.Slice(list, func(i, j int) bool { return list[i].name < list[j].name })
 				for _, e := range list {
 					setFlag := "+o"
@@ -2604,8 +2609,9 @@ func (r *Runner) Reset() {
 		// The dialect is fixed at construction by [Lang]; a runtime `set -o
 		// bashpp` may have changed r.dialect since, so Reset restores the
 		// construction-time value from origDialect (mirroring dryRun).
-		dialect:     r.origDialect,
-		origDialect: r.origDialect,
+		dialect:          r.origDialect,
+		origDialect:      r.origDialect,
+		hideBashPPOption: r.hideBashPPOption,
 
 		// These can be set by functions like [Dir] or [Params], but
 		// builtins can overwrite them; reset the fields to whatever the
@@ -3053,6 +3059,7 @@ func (r *Runner) subshell(background bool) *Runner {
 		dialect:              r.dialect,
 		bashPPTools:          r.bashPPTools,
 		origDialect:          r.origDialect,
+		hideBashPPOption:     r.hideBashPPOption,
 		noOpSetState:         maps.Clone(r.noOpSetState),
 		tempEnv:              maps.Clone(r.tempEnv),
 		usedNew:              r.usedNew,

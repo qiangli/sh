@@ -97,16 +97,18 @@ func TestBashPPSetOptionListing(t *testing.T) {
 
 	// Human form (`set -o`): a padded `name<tab>on/off` line. A plain-bash
 	// runner reports it off; after `set -o bashpp` it reports on.
-	qt.Assert(t, qt.Equals(line()("set -o"), "bashpp         \toff"))
+	qt.Assert(t, qt.Equals(line()("set -o"), ""))
 	qt.Assert(t, qt.Equals(line()("set -o bashpp; set -o"), "bashpp         \ton"))
 
 	// Reusable form (`set +o`): a `set {-o,+o} bashpp` line, off then on.
-	qt.Assert(t, qt.Equals(line()("set +o"), "set +o bashpp"))
+	qt.Assert(t, qt.Equals(line()("set +o"), ""))
 	qt.Assert(t, qt.Equals(line()("set -o bashpp; set +o"), "set -o bashpp"))
 
 	// A runner constructed in the dialect reports it on out of the box.
 	qt.Assert(t, qt.Equals(
 		line(interp.Lang(syntax.LangBashPP))("set +o"), "set -o bashpp"))
+	qt.Assert(t, qt.Equals(
+		line(interp.Lang(syntax.LangBashPP), interp.HideBashPPOption())("set +o"), ""))
 
 	// bashpp is sorted into the alphabetical listing, right before braceexpand.
 	full := func(script string) string {
@@ -115,8 +117,8 @@ func TestBashPPSetOptionListing(t *testing.T) {
 		bashPPRun(t, r, script)
 		return out.String()
 	}
-	got := full("set +o")
-	bashppIdx := strings.Index(got, "set +o bashpp")
+	got := full("set -o bashpp; set +o")
+	bashppIdx := strings.Index(got, "set -o bashpp")
 	braceIdx := strings.Index(got, "braceexpand")
 	qt.Assert(t, qt.IsTrue(bashppIdx >= 0 && braceIdx >= 0))
 	qt.Assert(t, qt.IsTrue(bashppIdx < braceIdx))
