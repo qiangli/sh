@@ -4,10 +4,12 @@
 package syntax
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/go-quicktest/qt"
+	"github.com/google/go-cmp/cmp"
 )
 
 // TestBashPPVariant covers the variant's plumbing: it is accepted by the
@@ -40,20 +42,96 @@ func TestBashPPVariant(t *testing.T) {
 	qt.Assert(t, qt.IsFalse(LangBats.in(langBashExact)))
 }
 
-// TestBashPPMatchesBash is the byte-identical gate. bash++ is a strict superset
-// of Bash which, at this level, adds no syntax at all — so for every input in
-// the shared corpus, parsing under LangBashPP must produce the same AST and the
-// same printed bytes as parsing under LangBash, and must agree on whether the
-// input is an error at all.
-//
-// This is what lets the interpreter gate behaviour on the dialect without any
-// risk to the LangBash consumers: at the syntax layer, the two are the same
-// language.
-func TestBashPPMatchesBash(t *testing.T) {
-	t.Parallel()
+// bashppParse parses in under lang, with comments kept so that a divergence in
+// comment placement cannot hide.
+func bashppParse(lang LangVariant, in string) (*File, error) {
+	p := NewParser(Variant(lang), KeepComments(true))
+	return p.Parse(strings.NewReader(in), "")
+}
 
-	// Every input the parser tests know about: the valid corpus, the error
-	// corpus, and the printer's own cases.
+func bashppPrint(f *File) (string, error) {
+	var sb strings.Builder
+	err := NewPrinter().Print(&sb, f)
+	return sb.String(), err
+}
+
+// bashppNodeOffsets flattens every node's start and end offset. cmpOpt ignores
+// positions, so identical ASTs still have to be shown to sit at identical
+// offsets — a Bash++ region that consumed a different amount of source would
+// otherwise compare equal.
+func bashppNodeOffsets(f *File) []uint {
+	var out []uint
+	Walk(f, func(n Node) bool {
+		if n != nil {
+			out = append(out, n.Pos().Offset(), n.End().Offset())
+		}
+		return true
+	})
+	return out
+}
+
+// bashppTreeDiff describes how two successful parses differ, or returns "" when
+// they are identical in AST, node positions and printed bytes.
+func bashppTreeDiff(bashFile, ppFile *File) string {
+	if diff := cmp.Diff(bashFile, ppFile, cmpOpt); diff != "" {
+		return "AST differs (-bash +bashpp):\n" + diff
+	}
+	if !slices.Equal(bashppNodeOffsets(bashFile), bashppNodeOffsets(ppFile)) {
+		return "node positions differ"
+	}
+	bashOut, bashErr := bashppPrint(bashFile)
+	ppOut, ppErr := bashppPrint(ppFile)
+	if (bashErr == nil) != (ppErr == nil) {
+		return "printing differs: bash err=" + errText(bashErr) + " bashpp err=" + errText(ppErr)
+	}
+	if bashOut != ppOut {
+		return "printed bytes differ: bash " + bashppQuoted(bashOut) + " bashpp " + bashppQuoted(ppOut)
+	}
+	return ""
+}
+
+// bashppErrDiff compares two parse errors, ignoring the language name the
+// message embeds, and returns "" when they say the same thing.
+func bashppErrDiff(bashErr, ppErr error) string {
+	bashMsg := strings.ReplaceAll(bashErr.Error(), "bashpp", "")
+	bashMsg = strings.ReplaceAll(bashMsg, "bash", "")
+	ppMsg := strings.ReplaceAll(ppErr.Error(), "bashpp", "")
+	ppMsg = strings.ReplaceAll(ppMsg, "bash", "")
+	if bashMsg == ppMsg {
+		return ""
+	}
+	return "bash err " + bashppQuoted(bashErr.Error()) + " != bashpp err " + bashppQuoted(ppErr.Error())
+}
+
+// bashppParseDiff is the whole-input comparison in one call: "" means LangBash
+// and LangBashPP agree completely, including on whether the input is an error.
+func bashppParseDiff(t *testing.T, in string) string {
+	t.Helper()
+	bashFile, bashErr := bashppParse(LangBash, in)
+	ppFile, ppErr := bashppParse(LangBashPP, in)
+	switch {
+	case (bashErr == nil) != (ppErr == nil):
+		return "bash err=" + errText(bashErr) + " but bashpp err=" + errText(ppErr)
+	case bashErr != nil:
+		return bashppErrDiff(bashErr, ppErr)
+	default:
+		return bashppTreeDiff(bashFile, ppFile)
+	}
+}
+
+func errText(err error) string {
+	if err == nil {
+		return "<nil>"
+	}
+	return err.Error()
+}
+
+func bashppQuoted(s string) string { return "\"" + s + "\"" }
+
+// bashppSharedCorpus is every input the parser tests know about: the valid
+// corpus, the error corpus, and the printer's own cases.
+func bashppSharedCorpus(t *testing.T) []string {
+	t.Helper()
 	var inputs []string
 	for _, cs := range [][]fileTestCase{fileTests, fileTestsNoPrint, fileTestsKeepComments} {
 		for _, c := range cs {
@@ -69,62 +147,128 @@ func TestBashPPMatchesBash(t *testing.T) {
 	if len(inputs) < 500 {
 		t.Fatalf("corpus looks too small to be meaningful: %d inputs", len(inputs))
 	}
+	return inputs
+}
 
-	parse := func(lang LangVariant, in string) (*File, error) {
-		p := NewParser(Variant(lang), KeepComments(true))
-		return p.Parse(strings.NewReader(in), "")
-	}
-	print := func(f *File) (string, error) {
-		var sb strings.Builder
-		err := NewPrinter().Print(&sb, f)
-		return sb.String(), err
-	}
-	// cmpOpt ignores positions, so compare them separately: identical syntax
-	// means every node must start and end at the same offset too.
-	positions := func(f *File) []uint {
-		var out []uint
-		Walk(f, func(n Node) bool {
-			if n != nil {
-				out = append(out, n.Pos().Offset(), n.End().Offset())
-			}
-			return true
-		})
-		return out
-	}
+// TestBashPPMatchesBash is the compatibility gate, and it is the executable
+// form of the Bash++ compatibility contract rather than a blanket identity
+// claim.
+//
+// It used to assert that LangBashPP produced byte-identical ASTs to LangBash
+// for every input in the shared corpus. That was true only while the
+// command-position dispatch was absent; the dispatch breaks it BY DESIGN, at
+// the published Class E sites and nowhere else. Deleting or weakening the test
+// at that point would discard the only gate that can tell a designed
+// divergence from a regression, so the claim is re-expressed instead:
+//
+//  1. NEVER LOSE — if LangBash parses an input, LangBashPP must parse it too.
+//     Bash++ is a superset and may never reject a script bash accepts.
+//  2. MEANING PRESERVED, OR NAMED — for an input LangBash parses, the ASTs,
+//     node positions and printed bytes must be identical unless a published
+//     Class E row licenses a divergence at a real bash command position. The
+//     licensing rows live in bashpp_divergence_test.go and each names a corpus
+//     id. AN UNLISTED DIVERGENCE IS A FAILURE.
+//  3. ADDITIVE ONLY — for an input LangBash rejects, LangBashPP may accept it;
+//     that is Class R ground and no working script occupies it. But the
+//     acceptance must still be attributable to a recognized start site, so a
+//     parser bug cannot hide behind "purely additive". If both reject, the
+//     diagnostics must still agree.
+//
+// While the dispatch is absent every input takes the identical path, and the
+// counts logged at the end say so. The licensing machinery is exercised
+// independently by TestBashPPLicenseRejectsUnlisted so that it cannot pass
+// vacuously in the meantime.
+func TestBashPPMatchesBash(t *testing.T) {
+	t.Parallel()
 
+	inputs := bashppSharedCorpus(t)
+
+	var identical, licensed, additive, rejected int
 	for _, in := range inputs {
-		bashFile, bashErr := parse(LangBash, in)
-		ppFile, ppErr := parse(LangBashPP, in)
+		bashFile, bashErr := bashppParse(LangBash, in)
+		ppFile, ppErr := bashppParse(LangBashPP, in)
 
-		// Agree on error-ness, and on the error text.
-		if (bashErr == nil) != (ppErr == nil) {
-			t.Errorf("input %q: bash err=%v but bashpp err=%v", in, bashErr, ppErr)
-			continue
-		}
 		if bashErr != nil {
-			// The message embeds the language name, so compare the rest.
-			bashMsg := strings.ReplaceAll(bashErr.Error(), "bash", "")
-			ppMsg := strings.ReplaceAll(ppErr.Error(), "bashpp", "")
-			if bashMsg != ppMsg {
-				t.Errorf("input %q: bash err %q != bashpp err %q", in, bashErr, ppErr)
+			// Rule 3 — bash rejects, so this is purely additive ground.
+			if ppErr != nil {
+				if diff := bashppErrDiff(bashErr, ppErr); diff != "" {
+					t.Errorf("input %q: %s", in, diff)
+				}
+				rejected++
+				continue
 			}
+			hits := bashppLineSites(in)
+			if len(hits) == 0 {
+				t.Errorf("UNATTRIBUTABLE ACCEPTANCE for input %q:\n"+
+					"  LangBash rejects it (%v) but LangBashPP accepts it, and no\n"+
+					"  Bash++ start site was recognized anywhere in it. Additive\n"+
+					"  behaviour must come from a start site; this is a parser bug\n"+
+					"  or a recognizer the start-site table does not describe.",
+					in, bashErr)
+				continue
+			}
+			additive++
 			continue
 		}
 
-		// Same AST, down to the node positions.
-		qt.Check(t, qt.CmpEquals(ppFile, bashFile, cmpOpt),
-			qt.Commentf("AST differs for input %q", in))
-		qt.Check(t, qt.DeepEquals(positions(ppFile), positions(bashFile)),
-			qt.Commentf("node positions differ for input %q", in))
-
-		// Same printed bytes.
-		bashOut, err := print(bashFile)
-		qt.Assert(t, qt.IsNil(err))
-		ppOut, err := print(ppFile)
-		qt.Assert(t, qt.IsNil(err))
-		if bashOut != ppOut {
-			t.Errorf("input %q: bash printed %q but bashpp printed %q", in, bashOut, ppOut)
+		// Rule 1 — bash accepts, so bash++ must accept.
+		if ppErr != nil {
+			t.Errorf("REGRESSION for input %q:\n"+
+				"  LangBash parses it but LangBashPP rejects it (%v).\n"+
+				"  Bash++ is a strict superset; no class licenses losing a script\n"+
+				"  bash accepts.", in, ppErr)
+			continue
 		}
+
+		hits := bashppCommandSites(bashFile, in)
+
+		// A Class R verdict at a command position of an input bash just
+		// ACCEPTED is a contradiction: Class R means bash rejects the shape.
+		// The recognizer and the measured corpus disagree, and the table is
+		// what is wrong, not the input.
+		for _, h := range hits {
+			if h.match.Class == ClassR {
+				t.Errorf("TABLE CONTRADICTION for input %q:\n"+
+					"  LangBash parses this input, yet the start-site table calls\n"+
+					"  %s Class R — i.e. claims bash rejects it.\n"+
+					"  Re-measure the corpus or fix the recognizer.", in, h)
+			}
+		}
+
+		diff := bashppTreeDiff(bashFile, ppFile)
+		if diff == "" {
+			identical++
+			continue
+		}
+
+		// Rule 2 — a divergence needs a published Class E row.
+		named, unlicensed := bashppLicense(hits)
+		if len(named) == 0 || len(unlicensed) > 0 {
+			t.Errorf("UNLISTED DIVERGENCE for input %q:\n"+
+				"  %s\n"+
+				"  Recognized sites: %v (unlicensed: %v)\n"+
+				"  LangBashPP may only parse differently from LangBash at a\n"+
+				"  published Class E row. Either this divergence is a regression,\n"+
+				"  or the shape belongs in bashppAllowedDivergences with a corpus\n"+
+				"  id that verify-day1-table.sh can trace to baseline.tsv.",
+				in, diff, hits, unlicensed)
+			continue
+		}
+		licensed++
+		t.Logf("licensed divergence for input %q at published row(s) %v", in, bashppRowIDs(named))
+	}
+
+	t.Logf("bash/bashpp corpus: %d inputs — %d identical, %d licensed divergences, "+
+		"%d additive acceptances, %d rejected by both",
+		len(inputs), identical, licensed, additive, rejected)
+
+	// The gate must never be able to report success without having compared
+	// anything. This is the cheap guard against a corpus that silently stops
+	// being collected.
+	if identical == 0 {
+		t.Errorf("not one input compared identical across %d inputs; the gate is "+
+			"almost certainly not running against the corpus it thinks it is",
+			len(inputs))
 	}
 }
 
