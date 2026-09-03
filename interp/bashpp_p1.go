@@ -109,6 +109,26 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 	if r.bashPPScope == nil {
 		r.bashPPScope = newBashPPScope(nil)
 	}
+	// `greet := func(who string) { … }` binds the FUNCTION, not a call's
+	// results, so it is answered before the call and tuple paths: there is one
+	// value, it is the closure, and it captures the scope at this point.
+	if d.FuncLit != nil {
+		if len(d.Lhs) != 1 {
+			r.errf("assignment mismatch: %d variable(s) but 1 value(s)\n", len(d.Lhs))
+			r.exit = exitStatus{code: 2}
+			return
+		}
+		name := d.Lhs[0].Value
+		if !syntax.ValidName(name) {
+			r.errf("invalid variable name: %q\n", name)
+			r.exit = exitStatus{code: 2}
+			return
+		}
+		fn, vr := r.bashPPMakeClosure(d.FuncLit)
+		fn.bound = name
+		r.bashPPDeclareName(name, vr)
+		return
+	}
 	// `x := f(1)` / `a, b := f()` binds a typed function's results. It is
 	// handled before the tuple arity check below because a call's single text
 	// Rhs never matches a multi-name left-hand side; the real arity check is
@@ -202,7 +222,11 @@ func (r *Runner) bashPPCall(ctx context.Context, c *syntax.BashPPCall) {
 	// It is checked before the external eval toolchain so a user's own `func`
 	// always wins over a same-named tool binding.
 	if fn, ok := r.bashPPLookupFunc(c); ok {
-		r.bashPPInvoke(ctx, fn, r.bashPPCallArgValues(c))
+		args, ok := r.bashPPCallValues(c, fn)
+		if !ok {
+			return
+		}
+		r.bashPPInvoke(ctx, fn, args)
 		return
 	}
 	if r.bashPPEnabled() && !r.PosixMode() && len(c.Fun) >= 1 {

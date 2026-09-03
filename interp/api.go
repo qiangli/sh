@@ -116,6 +116,13 @@ type Runner struct {
 	// site. It is preserved across [Runner.Reset] alongside Funcs for the same
 	// reason bashPPFuncScopes is.
 	bashPPFuncs map[string]*bashPPFunc
+	// bashPPClosures is the registry a function-literal value refers to. A
+	// closure cannot be stored in a shell variable directly — variables hold
+	// strings, and a subshell copies them as bytes — so the variable holds a
+	// handle into this slice and the closure itself stays with the runner,
+	// where [bashPPCloner] can copy it alongside the scopes it captured. It is
+	// preserved across [Runner.Reset] for the same reason bashPPFuncs is.
+	bashPPClosures []*bashPPFunc
 	// bashPPDeferStack is the LIFO stack of deferred calls awaiting the return
 	// of the func invocations currently on the call stack. Each invocation
 	// remembers the stack length it entered at and runs everything pushed above
@@ -2675,6 +2682,7 @@ func (r *Runner) Reset() {
 		// scope is per-Run scratch and is rebuilt below.
 		bashPPFuncScopes: r.bashPPFuncScopes,
 		bashPPFuncs:      r.bashPPFuncs,
+		bashPPClosures:   r.bashPPClosures,
 		bashPPTools:      r.bashPPTools,
 
 		// disabledBuiltins (`enable -n`, or WithDisabledBuiltins at
@@ -3152,7 +3160,8 @@ func (r *Runner) subshell(background bool) *Runner {
 	// scope and every captured closure together so that the aliasing between
 	// them survives; see [bashPPCloner]. Sharing instead of copying would be
 	// a data race for a background subshell, which runs in its own goroutine.
-	if r.bashPPScope != nil || len(r.bashPPFuncScopes) > 0 || len(r.bashPPFuncs) > 0 {
+	if r.bashPPScope != nil || len(r.bashPPFuncScopes) > 0 || len(r.bashPPFuncs) > 0 ||
+		len(r.bashPPClosures) > 0 {
 		cloner := newBashPPCloner()
 		r2.bashPPScope = cloner.clone(r.bashPPScope)
 		if r.bashPPFuncScopes != nil {
@@ -3164,7 +3173,17 @@ func (r *Runner) subshell(background bool) *Runner {
 		if r.bashPPFuncs != nil {
 			r2.bashPPFuncs = make(map[string]*bashPPFunc, len(r.bashPPFuncs))
 			for name, fn := range r.bashPPFuncs {
-				r2.bashPPFuncs[name] = &bashPPFunc{decl: fn.decl, scope: cloner.clone(fn.scope)}
+				r2.bashPPFuncs[name] = fn.cloned(cloner)
+			}
+		}
+		// The closure registry is copied INDEX FOR INDEX: a handle already
+		// held in a variable the subshell inherited must keep naming the same
+		// function, and the same cloner keeps each closure's captured cells
+		// aliased to the subshell's copy of the scope rather than the parent's.
+		if len(r.bashPPClosures) > 0 {
+			r2.bashPPClosures = make([]*bashPPFunc, len(r.bashPPClosures))
+			for i, fn := range r.bashPPClosures {
+				r2.bashPPClosures[i] = fn.cloned(cloner)
 			}
 		}
 	}

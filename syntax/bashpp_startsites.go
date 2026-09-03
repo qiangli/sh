@@ -93,6 +93,9 @@ func RecognizeStartSite(src string) StartSiteMatch {
 	if recognizeFuncDecl(s) {
 		return StartSiteMatch{Site: StartFunc, Class: ClassR, Bounded: true}
 	}
+	if recognizeFuncLit(s) {
+		return StartSiteMatch{Site: StartFuncLit, Class: ClassR, Bounded: true}
+	}
 	if recognizeDefer(s) {
 		return StartSiteMatch{Site: StartDefer, Class: ClassR, Bounded: true}
 	}
@@ -158,6 +161,15 @@ func recognizeDefer(s string) bool {
 	if !ok {
 		return false
 	}
+	// `defer func(…) { … }()` defers a literal instead of a named call. The
+	// EMPTY parameter list is claimable here although it is not at a command
+	// position: `defer func()` puts the parenthesis after two words, which
+	// bash rejects however the list is spelled, so the shape that forces
+	// unbounded lookahead at a command position — the bash function
+	// definition `func() { … }` — cannot occur after `defer`.
+	if lit, _ := bashppFuncLitPrefix(rest); lit {
+		return true
+	}
 	ident := leadingSelector(rest)
 	if ident == "" {
 		return false
@@ -168,6 +180,48 @@ func recognizeDefer(s string) bool {
 	}
 	rest = rest[len(ident):]
 	return strings.HasPrefix(rest, "(")
+}
+
+// recognizeFuncLit handles a function literal at a COMMAND position, which is
+// the immediately-invoked form: `func(n int) { … }(1)`.
+//
+// The empty parameter list is deliberately excluded, and the exclusion is a
+// compatibility requirement rather than a simplification. `func() { … }` is
+// the bash definition of a function NAMED `func`, which stock bash accepts
+// today, so the two shapes are told apart only by the `(` after the matching
+// `}` — unbounded lookahead of exactly the kind this file exists to forbid.
+// A literal with a parameter — `func(n int)` — is a bash syntax error whatever
+// follows, so it commits on the prefix alone. A parameterless invocation is
+// written `_ := func() { … }()` or bound first, where the `:=` has already
+// opened the region; that is also why the result type is not consulted here,
+// since the parser holds only the one byte past the parenthesis and could not
+// reach a `func() int` verdict even if the table offered one.
+func recognizeFuncLit(s string) bool {
+	lit, empty := bashppFuncLitPrefix(s)
+	return lit && !empty
+}
+
+// bashppFuncLitPrefix reports whether s opens a function literal, and whether
+// its parameter list is empty. The two answers are separate because the empty
+// list is claimable at some sites and not at others; see [recognizeFuncLit].
+func bashppFuncLitPrefix(s string) (isLit, emptyParams bool) {
+	if !strings.HasPrefix(s, "func") {
+		return false, false
+	}
+	rest := strings.TrimLeft(s[len("func"):], " \t")
+	if !strings.HasPrefix(rest, "(") {
+		return false, false
+	}
+	rest = strings.TrimLeft(rest[1:], " \t")
+	if rest == "" {
+		// The list is still open at the lookahead budget; the fail-safe answer
+		// is shell.
+		return false, false
+	}
+	if !strings.HasPrefix(rest, ")") {
+		return true, false
+	}
+	return true, true
 }
 
 // recognizeKeywordDecl handles var, const and type.

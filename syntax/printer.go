@@ -397,6 +397,37 @@ func (p *Printer) semiOrNewl(s string, pos Pos) {
 	p.wantSpace = spaceRequired
 }
 
+// bashppSignature prints `(params) results`, shared by the declaration and the
+// literal so a signature reads the same wherever it was written.
+func (p *Printer) bashppSignature(params, results []*BashPPField, resLparen Pos) {
+	p.writeLit("(")
+	p.bashppFields(params)
+	p.writeLit(")")
+	if len(results) == 0 {
+		return
+	}
+	p.writeLit(" ")
+	if resLparen.IsValid() {
+		p.writeLit("(")
+		p.bashppFields(results)
+		p.writeLit(")")
+		return
+	}
+	p.bashppFields(results)
+}
+
+// bashppFuncLit prints a function literal: `func(a int) int { … }`. The body
+// goes through the ordinary block printer, so a closure indents exactly as the
+// braces around it would anywhere else.
+func (p *Printer) bashppFuncLit(lit *BashPPFuncLit) {
+	p.spacedString(lit.Kw.Value, lit.Kw.Pos())
+	p.bashppSignature(lit.Params, lit.Results, lit.ResLparen)
+	p.wantSpace = spaceRequired
+	if lit.Body != nil {
+		p.command(lit.Body, nil)
+	}
+}
+
 // bashppFields prints a Go-form parameter or result list, e.g. `a, b int, c
 // string`. It writes exact bytes rather than driving the pending-space model so
 // the signature reads the same regardless of the surrounding positions.
@@ -411,8 +442,14 @@ func (p *Printer) bashppFields(fields []*BashPPField) {
 			}
 			p.writeLit(n.Value)
 		}
-		if f.FieldType != nil {
+		if f.Variadic() {
 			if len(f.Names) > 0 {
+				p.writeLit(" ")
+			}
+			p.writeLit("...")
+		}
+		if f.FieldType != nil {
+			if len(f.Names) > 0 && !f.Variadic() {
 				p.writeLit(" ")
 			}
 			p.writeLit(f.FieldType.Value)
@@ -1477,14 +1514,27 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 			p.spacedString(lhs.Value, lhs.Pos())
 		}
 		p.spacedString(":=", cmd.OpPos)
-		p.space()
-		for i, rhs := range cmd.Rhs {
-			if i > 0 {
-				p.writeLit(", ")
+		switch {
+		case cmd.FuncLit != nil:
+			p.bashppFuncLit(cmd.FuncLit)
+		case cmd.Call != nil && cmd.Call.FuncLit != nil:
+			// A literal invoked into a binding has no word spelling for Rhs;
+			// the call node is the source of record for both.
+			p.space()
+			p.command(cmd.Call, nil)
+		default:
+			p.space()
+			for i, rhs := range cmd.Rhs {
+				if i > 0 {
+					p.writeLit(", ")
+				}
+				p.word(rhs)
 			}
-			p.word(rhs)
 		}
 	case *BashPPCall:
+		if cmd.FuncLit != nil {
+			p.bashppFuncLit(cmd.FuncLit)
+		}
 		for i, fun := range cmd.Fun {
 			if i > 0 {
 				p.writeLit(".")
@@ -1498,29 +1548,23 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 			}
 			p.word(arg)
 		}
+		if cmd.Ellipsis.IsValid() {
+			p.writeLit("...")
+		}
 		p.writeLit(")")
 	case *BashPPFuncDecl:
 		p.spacedString(cmd.Kw.Value, cmd.Kw.Pos())
 		p.spacedString(cmd.Name.Value, cmd.Name.Pos())
-		p.writeLit("(")
-		p.bashppFields(cmd.Params)
-		p.writeLit(")")
-		if len(cmd.Results) > 0 {
-			p.writeLit(" ")
-			if cmd.ResLparen.IsValid() {
-				p.writeLit("(")
-				p.bashppFields(cmd.Results)
-				p.writeLit(")")
-			} else {
-				p.bashppFields(cmd.Results)
-			}
-		}
+		p.bashppSignature(cmd.Params, cmd.Results, cmd.ResLparen)
 		p.wantSpace = spaceRequired
 		if cmd.Body != nil {
 			p.command(cmd.Body, nil)
 		}
 	case *BashPPReturn:
 		p.spacedString(cmd.Kw.Value, cmd.Kw.Pos())
+		if cmd.FuncLit != nil {
+			p.bashppFuncLit(cmd.FuncLit)
+		}
 		for i, res := range cmd.Results {
 			if i > 0 {
 				p.writeLit(",")

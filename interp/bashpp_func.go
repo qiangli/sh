@@ -6,13 +6,22 @@ package interp
 import (
 	"context"
 	"strconv"
+	"strings"
 
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/syntax"
 )
 
-// Evaluation of the Bash++ P3-A ("typed functions") nodes: `func` declarations,
-// `return`, and `defer`.
+// Evaluation of the Bash++ function nodes: the P3-A ("typed functions")
+// declarations, `return` and `defer`, and the P3-B function LITERALS,
+// closures and VARIADIC parameters.
+//
+// ONE INVOKER, TWO SPELLINGS. A literal is not a second kind of function: it
+// is a [bashPPFunc] whose signature came from a [syntax.BashPPFuncLit] instead
+// of a declaration, so parameter binding, results, defers and status bridging
+// are the same code for both. What a literal adds is WHEN the lexical scope is
+// captured — at each evaluation of the literal, not once per name — which is
+// what makes two closures from the same factory hold different cells.
 //
 // TWO NAMESPACES, ALREADY RECONCILED. A Bash++ func binds its parameters and
 // named results as TYPED lexical bindings, not as a second kind of shell
@@ -23,12 +32,114 @@ import (
 // closure over an outer `var` observes writes for the same reason. Only the
 // func's own locals live in the shell function scope pushed alongside.
 
-// bashPPFunc is a registered Go-form function: its declaration and the lexical
-// scope captured where it was defined, which its body's free identifiers close
-// over rather than resolving them at the call site.
+// bashPPFunc is a callable Go-form function: its signature and body, plus the
+// lexical scope captured where it was written, which its body's free
+// identifiers close over rather than resolving them at the call site.
+//
+// A named declaration and a function literal are the same thing to every
+// caller — same binding rules, same results, same defers — so they are one
+// type with two spellings rather than two types with one duplicated invoker.
+// Exactly one of decl and lit is set.
 type bashPPFunc struct {
 	decl  *syntax.BashPPFuncDecl
+	lit   *syntax.BashPPFuncLit
 	scope *bashPPScope
+	// bound is the name a literal was bound to by `:=`, kept only so that a
+	// diagnostic can say which function the script means. It is not an
+	// identity: the same closure may be copied to other names, and a later
+	// binding of this one does not rename it.
+	bound string
+}
+
+// name is what diagnostics call the function. A literal has none, so it is
+// described by where it came from rather than given a fabricated identifier a
+// reader would then look for in the script.
+func (f *bashPPFunc) name() string {
+	switch {
+	case f.decl != nil:
+		return f.decl.Name.Value
+	case f.bound != "":
+		return f.bound
+	}
+	return "func literal"
+}
+
+func (f *bashPPFunc) params() []*syntax.BashPPField {
+	if f.decl != nil {
+		return f.decl.Params
+	}
+	return f.lit.Params
+}
+
+func (f *bashPPFunc) results() []*syntax.BashPPField {
+	if f.decl != nil {
+		return f.decl.Results
+	}
+	return f.lit.Results
+}
+
+// cloned copies f for a subshell, deep-copying its captured scope through the
+// shared cloner so the aliasing between closures, and between a closure and the
+// live scope, survives the copy.
+func (f *bashPPFunc) cloned(c *bashPPCloner) *bashPPFunc {
+	copied := *f
+	copied.scope = c.clone(f.scope)
+	return &copied
+}
+
+func (f *bashPPFunc) body() *syntax.Block {
+	if f.decl != nil {
+		return f.decl.Body
+	}
+	return f.lit.Body
+}
+
+// bashPPFuncHandlePrefix marks a string value as a reference into the runner's
+// closure registry.
+//
+// WHY A HANDLE AND NOT A VALUE. A closure is a Go pointer with a captured
+// scope; the shell's value model is strings, and every path a variable takes —
+// expansion, `execve`, a subshell's private copy — assumes it can carry the
+// value as bytes. A handle keeps that assumption true: the bytes are what the
+// shell moves around, while the function itself stays on the runner, where the
+// subshell cloner can copy it with the rest of the typed state. The prefix is
+// deliberately unmistakable rather than opaque, so `echo $f` shows a reader
+// what they are holding instead of a bare integer.
+const bashPPFuncHandlePrefix = "func@bashpp:"
+
+// bashPPMakeClosure evaluates a function literal to a callable value,
+// capturing the lexical scope AT THIS MOMENT.
+//
+// The capture is per EVALUATION, not per literal: a literal written inside a
+// loop body yields a different closure each time round, over that iteration's
+// cells. That is Go's rule, and it is why the registry is appended to rather
+// than memoized on the syntax node.
+func (r *Runner) bashPPMakeClosure(lit *syntax.BashPPFuncLit) (*bashPPFunc, expand.Variable) {
+	fn := &bashPPFunc{lit: lit}
+	if r.bashPPScope != nil {
+		fn.scope = r.bashPPScope.snapshot()
+	}
+	r.bashPPClosures = append(r.bashPPClosures, fn)
+	return fn, expand.Variable{
+		Set:  true,
+		Kind: expand.String,
+		Str:  bashPPFuncHandlePrefix + strconv.Itoa(len(r.bashPPClosures)-1),
+	}
+}
+
+// bashPPClosure resolves a handle back to the closure it names. An unknown or
+// malformed handle is simply not a function, which is what lets an ordinary
+// string variable share the namespace without ever being mistaken for one.
+func (r *Runner) bashPPClosure(value string) (*bashPPFunc, bool) {
+	rest, ok := strings.CutPrefix(value, bashPPFuncHandlePrefix)
+	if !ok {
+		return nil, false
+	}
+	i, err := strconv.Atoi(rest)
+	if err != nil || i < 0 || i >= len(r.bashPPClosures) {
+		return nil, false
+	}
+	return r.bashPPClosures[i], true
 }
 
 // bashPPDeferred is one entry on the deferred-call stack: the call to run when
@@ -37,6 +148,11 @@ type bashPPFunc struct {
 // when the defer statement executes" rule.
 type bashPPDeferred struct {
 	call *syntax.BashPPCall
+	// fn is the function resolved AT DEFER TIME, which matters for a closure:
+	// `defer f(1)` must run the f that was current when the defer executed,
+	// not whatever f names when the frame unwinds. It is nil when the deferred
+	// callee is an ordinary shell command.
+	fn   *bashPPFunc
 	args []string
 }
 
@@ -73,26 +189,90 @@ func (r *Runner) bashPPFuncDecl(d *syntax.BashPPFuncDecl) {
 	r.bashPPFuncs[name] = &bashPPFunc{decl: d, scope: captured}
 }
 
-// bashPPLookupFunc resolves a single-name call selector to a registered typed
-// function. A dotted selector (`pkg.Fn`) is never a local function.
+// bashPPLookupFunc resolves a call's callee to a callable function: a literal
+// in callee position, a function declared with `func`, or a name bound to a
+// closure. A dotted selector (`pkg.Fn`) is never a local function.
+//
+// A literal is EVALUATED here, which is the correct moment: `func(n int) { …
+// }(1)` captures the scope at the point of the call, exactly as the same
+// literal bound to a name captures it at the point of the binding.
 func (r *Runner) bashPPLookupFunc(c *syntax.BashPPCall) (*bashPPFunc, bool) {
+	if c.FuncLit != nil {
+		fn, _ := r.bashPPMakeClosure(c.FuncLit)
+		return fn, true
+	}
 	if len(c.Fun) != 1 {
 		return nil, false
 	}
-	fn, ok := r.bashPPFuncs[c.Fun[0].Value]
-	return fn, ok
+	name := c.Fun[0].Value
+	if fn, ok := r.bashPPFuncs[name]; ok {
+		return fn, true
+	}
+	// A closure held in a variable is callable by that variable's name, which
+	// is what makes `greet := func(…) { … }; greet(x)` and a returned factory
+	// closure work without a second call syntax.
+	if vr := r.lookupVar(name); vr.Kind == expand.String {
+		return r.bashPPClosure(vr.Str)
+	}
+	return nil, false
 }
 
 // bashPPCallArgValues evaluates each call argument to a single string. Values
 // follow the dialect's existing convention that a bare word is its own literal
 // and an expansion is expanded, exactly as a `:=` right-hand side does, so
 // `f($x)` passes the value of x while `f(x)` passes the string "x".
+//
+// A trailing `...` spreads its argument instead of passing it: `f(xs...)`
+// hands the elements of xs to a variadic parameter, one argument each.
 func (r *Runner) bashPPCallArgValues(c *syntax.BashPPCall) []string {
-	args := make([]string, len(c.Args))
+	args := make([]string, 0, len(c.Args))
 	for i, w := range c.Args {
-		args[i] = r.bashPPExprValue(w)
+		if c.Ellipsis.IsValid() && i == len(c.Args)-1 {
+			args = append(args, r.bashPPSpreadValues(w)...)
+			break
+		}
+		args = append(args, r.bashPPExprValue(w))
 	}
 	return args
+}
+
+// bashPPSpreadValues expands the `xs...` argument into the values it passes.
+//
+// The spread reads the NAMED variable rather than the word's expansion because
+// that is the only spelling that can carry more than one value: `$xs` has
+// already been joined into a single string by the time an expansion is done,
+// so spreading it would pass one argument no matter how many elements it held.
+// An indexed variable — which is what a variadic parameter binds — spreads
+// element by element; a scalar spreads as itself; an unset name spreads as
+// nothing, so forwarding an empty variadic parameter passes zero arguments.
+func (r *Runner) bashPPSpreadValues(w *syntax.Word) []string {
+	if len(w.Parts) == 1 {
+		if lit, ok := w.Parts[0].(*syntax.Lit); ok && syntax.ValidName(lit.Value) {
+			vr := r.lookupVar(lit.Value)
+			switch {
+			case !vr.IsSet():
+				return nil
+			case vr.Kind == expand.Indexed:
+				return append([]string(nil), vr.List...)
+			case vr.Kind == expand.String:
+				return []string{vr.Str}
+			}
+		}
+	}
+	return []string{r.bashPPExprValue(w)}
+}
+
+// bashPPCallValues evaluates a call's arguments for fn, refusing a spread the
+// callee cannot accept. Go rejects `f(xs...)` when f is not variadic, and so
+// does this: silently passing the elements would make the two spellings mean
+// the same thing and hide the mistake.
+func (r *Runner) bashPPCallValues(c *syntax.BashPPCall, fn *bashPPFunc) ([]string, bool) {
+	if c.Ellipsis.IsValid() && !bashppVariadic(fn.params()) {
+		r.errf("cannot use ... in call to non-variadic %s\n", fn.name())
+		r.exit = exitStatus{code: 2}
+		return nil, false
+	}
+	return r.bashPPCallArgValues(c), true
 }
 
 // bashPPExprValue evaluates the small expression vocabulary admitted by the
@@ -135,15 +315,12 @@ func (r *Runner) bashPPRewriteAssign(as *syntax.Assign) *syntax.Assign {
 // of values succeeds with status 0, while a result-less function keeps the
 // body's last status (or the code named by a bash-style `return n`).
 func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string) []string {
-	decl := fn.decl
-	params := bashppParamNames(decl.Params)
-	if len(args) != len(params) {
-		r.errf("%s: expected %d argument(s), got %d\n", decl.Name.Value, len(params), len(args))
-		r.exit = exitStatus{code: 2}
+	params := bashppParams(fn.params())
+	if !r.bashPPCheckArgs(fn, params, args) {
 		return nil
 	}
 	if limit, _ := strconv.Atoi(r.envGet("FUNCNEST")); limit > 0 && len(r.callStack) >= limit {
-		r.errf("%s: maximum function nesting level exceeded (%d)\n", decl.Name.Value, limit)
+		r.errf("%s: maximum function nesting level exceeded (%d)\n", fn.name(), limit)
 		r.exit.code = 1
 		return nil
 	}
@@ -160,7 +337,7 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 	r.writeEnv = &overlayEnviron{parent: r.writeEnv, funcScope: true}
 	origScope := r.bashPPScope
 	r.bashPPScope = newBashPPScope(fn.scope)
-	r.callStack = append(r.callStack, callFrame{funcName: decl.Name.Value})
+	r.callStack = append(r.callStack, callFrame{funcName: fn.name()})
 	deferMark := len(r.bashPPDeferStack)
 	oldReturn := r.bashPPReturn
 	r.bashPPReturn = bashPPReturnState{}
@@ -170,21 +347,37 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 	// Parameters and named results are typed bindings; a shell assignment in
 	// the body writes through to them, which is what lets a named result be
 	// set with `n=5` and read back by a bare return.
-	for i, name := range params {
-		_ = r.bashPPScope.declare(name, expand.Variable{Set: true, Kind: expand.String, Str: args[i]}, false)
+	//
+	// The variadic parameter binds the REMAINING arguments as an indexed
+	// variable, so the body reads them with the array spellings the shell
+	// already has — `${rest[@]}`, `${#rest[@]}` — and can forward them with
+	// `rest...`. Zero remaining arguments still bind the name, to an empty
+	// list: a variadic parameter is never unset, exactly as a nil slice in Go
+	// is still a slice.
+	for i, param := range params {
+		if param.variadic {
+			if param.name != "" {
+				rest := append([]string(nil), args[i:]...)
+				_ = r.bashPPScope.declare(param.name,
+					expand.Variable{Set: true, Kind: expand.Indexed, List: rest}, false)
+			}
+			break
+		}
+		_ = r.bashPPScope.declare(param.name,
+			expand.Variable{Set: true, Kind: expand.String, Str: args[i]}, false)
 	}
-	resultNames := bashppResultNames(decl.Results)
+	resultNames := bashppResultNames(fn.results())
 	for _, name := range resultNames {
 		if name != "" {
 			_ = r.bashPPScope.declare(name, expand.Variable{Set: true, Kind: expand.String, Str: ""}, false)
 		}
 	}
 
-	if decl.Body != nil {
-		r.stmts(ctx, decl.Body.Stmts)
+	if body := fn.body(); body != nil {
+		r.stmts(ctx, body.Stmts)
 	}
 
-	results := r.bashPPFinishResults(decl, resultNames)
+	results := r.bashPPFinishResults(fn, resultNames)
 
 	// Deferred calls run as the frame unwinds, in reverse of the order they
 	// were deferred, unless a hard shell `exit` is terminating everything.
@@ -210,7 +403,11 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 // and binds its results to the left-hand names positionally, reporting an arity
 // mismatch against the function's actual results rather than the call's text.
 func (r *Runner) bashPPShortDeclCall(ctx context.Context, d *syntax.BashPPShortDecl, fn *bashPPFunc) {
-	results := r.bashPPInvoke(ctx, fn, r.bashPPCallArgValues(d.Call))
+	args, ok := r.bashPPCallValues(d.Call, fn)
+	if !ok {
+		return
+	}
+	results := r.bashPPInvoke(ctx, fn, args)
 	if r.exit.err != nil {
 		return
 	}
@@ -232,8 +429,8 @@ func (r *Runner) bashPPShortDeclCall(ctx context.Context, d *syntax.BashPPShortD
 
 // bashPPFinishResults reconciles what a function returns with what it declared,
 // setting the exit status as a side effect and reporting an arity mismatch.
-func (r *Runner) bashPPFinishResults(decl *syntax.BashPPFuncDecl, resultNames []string) []string {
-	count := bashppResultCount(decl.Results)
+func (r *Runner) bashPPFinishResults(fn *bashPPFunc, resultNames []string) []string {
+	count := bashppResultCount(fn.results())
 	ret := r.bashPPReturn
 
 	// A result-less function keeps shell semantics for `return`: a bare return
@@ -245,7 +442,7 @@ func (r *Runner) bashPPFinishResults(decl *syntax.BashPPFuncDecl, resultNames []
 				r.exit.code = code
 			}
 		} else if ret.active && len(ret.values) > 1 {
-			r.errf("%s: too many return values for a function with no results\n", decl.Name.Value)
+			r.errf("%s: too many return values for a function with no results\n", fn.name())
 			r.exit.code = 2
 		}
 		return nil
@@ -255,7 +452,7 @@ func (r *Runner) bashPPFinishResults(decl *syntax.BashPPFuncDecl, resultNames []
 	if ret.active && len(ret.values) > 0 {
 		if len(ret.values) != count {
 			r.errf("%s: returned %d value(s) but declared %d result(s)\n",
-				decl.Name.Value, len(ret.values), count)
+				fn.name(), len(ret.values), count)
 			r.exit.code = 2
 			return nil
 		}
@@ -286,6 +483,16 @@ func (r *Runner) bashPPFinishResults(decl *syntax.BashPPFuncDecl, resultNames []
 // bashPPReturnStmt evaluates a Go-form return, recording its values and
 // unwinding the body through the shell's existing return machinery.
 func (r *Runner) bashPPReturnStmt(ctx context.Context, ret *syntax.BashPPReturn) {
+	if ret.FuncLit != nil {
+		// `return func(…) { … }` — the factory idiom. The closure captures the
+		// frame that is about to unwind, which is exactly what makes it useful:
+		// the cells stay alive because the capture holds them, not because the
+		// frame does.
+		_, vr := r.bashPPMakeClosure(ret.FuncLit)
+		r.bashPPReturn = bashPPReturnState{active: true, values: []string{vr.Str}}
+		r.exit.returning = true
+		return
+	}
 	vals := make([]string, len(ret.Results))
 	for i, w := range ret.Results {
 		vals[i] = r.bashPPExprValue(w)
@@ -307,10 +514,20 @@ func (r *Runner) bashPPDeferStmt(ctx context.Context, d *syntax.BashPPDefer) {
 		r.exit.code = 2
 		return
 	}
-	r.bashPPDeferStack = append(r.bashPPDeferStack, bashPPDeferred{
-		call: d.Call,
-		args: r.bashPPCallArgValues(d.Call),
-	})
+	// Both the function and its arguments are fixed HERE, as Go fixes them:
+	// a literal is captured now, and a name resolves to the function it names
+	// now, so a later rebinding cannot change which cleanup runs.
+	entry := bashPPDeferred{call: d.Call}
+	if fn, ok := r.bashPPLookupFunc(d.Call); ok {
+		args, ok := r.bashPPCallValues(d.Call, fn)
+		if !ok {
+			return
+		}
+		entry.fn, entry.args = fn, args
+	} else {
+		entry.args = r.bashPPCallArgValues(d.Call)
+	}
+	r.bashPPDeferStack = append(r.bashPPDeferStack, entry)
 }
 
 // bashPPRunDefers runs the deferred calls pushed above mark, most recent first,
@@ -329,12 +546,13 @@ func (r *Runner) bashPPRunDefers(ctx context.Context, mark int) {
 	for i := len(pending) - 1; i >= 0; i-- {
 		d := pending[i]
 		r.exit = exitStatus{}
-		if fn, ok := r.bashPPLookupFunc(d.call); ok {
-			r.bashPPInvoke(ctx, fn, d.args)
-		} else {
+		if d.fn != nil {
+			r.bashPPInvoke(ctx, d.fn, d.args)
+		} else if len(d.call.Fun) > 0 {
 			// A deferred call to something that is not a typed function runs as an
 			// ordinary command, which is what makes `defer log(...)` reach a shell
-			// helper of that name.
+			// helper of that name. A literal always resolves to a function above,
+			// so the selector is present whenever this branch is reached.
 			r.call(ctx, d.call.Pos(), append([]string{d.call.Fun[len(d.call.Fun)-1].Value}, d.args...))
 		}
 		// Cleanup failures are observable. Keep the first failure in execution
@@ -351,15 +569,115 @@ func (r *Runner) bashPPRunDefers(ctx context.Context, mark int) {
 	}
 }
 
-// bashppParamNames flattens a parameter list into its declared names in order.
-func bashppParamNames(fields []*syntax.BashPPField) []string {
-	var names []string
+// bashPPParam is one parameter slot: the name it binds, the type it declares,
+// and whether it is the variadic one. Flattening the field groups into slots
+// once is what keeps the arity check, the binding loop and the diagnostics
+// counting the same things.
+type bashPPParam struct {
+	name     string
+	declared string
+	variadic bool
+}
+
+// bashppParams flattens a parameter list into one slot per declared name, plus
+// a slot for an unnamed variadic group — `func f(...int)` — which accepts
+// arguments without binding them.
+func bashppParams(fields []*syntax.BashPPField) []bashPPParam {
+	var params []bashPPParam
 	for _, f := range fields {
+		declared := ""
+		if f.FieldType != nil {
+			declared = f.FieldType.Value
+		}
+		if f.Variadic() {
+			name := ""
+			if len(f.Names) > 0 {
+				name = f.Names[0].Value
+			}
+			params = append(params, bashPPParam{name: name, declared: declared, variadic: true})
+			continue
+		}
 		for _, n := range f.Names {
-			names = append(names, n.Value)
+			params = append(params, bashPPParam{name: n.Value, declared: declared})
 		}
 	}
-	return names
+	return params
+}
+
+// bashppVariadic reports whether a parameter list ends in a `...T` group.
+func bashppVariadic(fields []*syntax.BashPPField) bool {
+	return len(fields) > 0 && fields[len(fields)-1].Variadic()
+}
+
+// bashPPCheckArgs applies the call's arity and type rules, reporting the first
+// failure and returning false.
+//
+// ARITY. A non-variadic function takes exactly its parameters. A variadic one
+// takes at least its fixed parameters and any number beyond them, including
+// none — which is why the two are worded differently: "expected 2" and
+// "expected at least 2" tell a reader which rule they broke.
+func (r *Runner) bashPPCheckArgs(fn *bashPPFunc, params []bashPPParam, args []string) bool {
+	fixed := len(params)
+	variadic := fixed > 0 && params[fixed-1].variadic
+	if variadic {
+		fixed--
+	}
+	switch {
+	case variadic && len(args) < fixed:
+		r.errf("%s: expected at least %d argument(s), got %d\n", fn.name(), fixed, len(args))
+		r.exit = exitStatus{code: 2}
+		return false
+	case !variadic && len(args) != fixed:
+		r.errf("%s: expected %d argument(s), got %d\n", fn.name(), fixed, len(args))
+		r.exit = exitStatus{code: 2}
+		return false
+	}
+	for i, arg := range args {
+		param := params[min(i, len(params)-1)]
+		if r.bashPPValueFits(param.declared, arg) {
+			continue
+		}
+		where := param.name
+		if where == "" {
+			where = strconv.Itoa(i + 1)
+		}
+		r.errf("%s: cannot use %q as %s value for parameter %s\n",
+			fn.name(), arg, param.declared, where)
+		r.exit = exitStatus{code: 2}
+		return false
+	}
+	return true
+}
+
+// bashPPValueFits reports whether value is admissible for a parameter declared
+// with the given type.
+//
+// It is deliberately NARROW. Values in this dialect are strings, so a type is
+// checked only where the string form has an unambiguous membership test: the
+// numeric and boolean types, and `func`, whose values are the runner's own
+// closure handles and therefore exactly recognizable. Every other spelling —
+// `string`, a dotted selector, a name the script declared with `type` — is
+// accepted, because guessing at a membership rule for it would reject values
+// the phase has no way to construct an opinion about. An untyped parameter
+// (`func f(v)`) declares nothing and so admits everything.
+func (r *Runner) bashPPValueFits(declared, value string) bool {
+	switch declared {
+	case "int", "int8", "int16", "int32", "int64":
+		_, err := strconv.ParseInt(value, 10, 64)
+		return err == nil
+	case "uint", "uint8", "uint16", "uint32", "uint64", "uintptr":
+		_, err := strconv.ParseUint(value, 10, 64)
+		return err == nil
+	case "float32", "float64":
+		_, err := strconv.ParseFloat(value, 64)
+		return err == nil
+	case "bool":
+		return value == "true" || value == "false"
+	case "func":
+		_, ok := r.bashPPClosure(value)
+		return ok
+	}
+	return true
 }
 
 // bashppResultNames lists one entry per result slot: the name for a named
