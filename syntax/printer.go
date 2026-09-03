@@ -1437,6 +1437,9 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 		p.spacedString(cmd.Kw.Value, cmd.Kw.Pos())
 		p.spacedString(cmd.Name.Value, cmd.Name.Pos())
 		if cmd.DeclType != nil {
+			if cmd.Alias {
+				p.spacedString("=", Pos{})
+			}
 			p.spacedString(cmd.DeclType.Value, cmd.DeclType.Pos())
 		}
 		if len(cmd.Init) > 0 {

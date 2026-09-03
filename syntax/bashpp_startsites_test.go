@@ -49,6 +49,7 @@ var day1Cases = []startSiteCase{
 	{"decl-var-bare", "var x int", StartVar, ClassE},
 	{"decl-const", "const K = 2", StartConst, ClassE},
 	{"decl-const-typed", "const K int = 2", StartConst, ClassE},
+	{"decl-type-bare", "type T int", StartTypeDecl, ClassE},
 	{"decl-type-alias", "type ID = string", StartTypeDecl, ClassE},
 	{"prefix-type-struct", "type T struct {", StartTypeDecl, ClassE},
 

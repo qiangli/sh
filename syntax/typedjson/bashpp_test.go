@@ -35,6 +35,8 @@ func TestBashPPDeclRoundTrip(t *testing.T) {
 	for _, src := range []string{
 		"var x = 1\n",
 		"const K = 2\n",
+		"type T int\n",
+		"type ID = string\n",
 		"echo before\nvar x = 1\necho after\n",
 		"if true; then var x = 1; fi\n",
 	} {

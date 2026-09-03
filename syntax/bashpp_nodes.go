@@ -152,6 +152,7 @@ type BashPPDecl struct {
 	Kw       *Lit      // the literal "var", "const" or "type" as written
 	Name     *Lit      // the declared identifier
 	DeclType *Lit      // the declared type, or nil when inferred
+	Alias    bool      // whether a type declaration uses the `=` alias form
 	Init     []*Word   // the initializer, or nil for a bare declaration
 
 	// End_ is the end of the declaration, which for a multi-line type

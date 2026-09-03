@@ -4003,6 +4003,10 @@ loop:
 	// unsupported body is handed back untouched, so LangBashPP stays identical
 	// to LangBash everywhere it does not claim a shape.
 	if p.lang.in(LangBashPP) {
+		if decl := bashppTypeDecl(ce, s.Redirs); decl != nil {
+			s.Cmd = decl
+			return
+		}
 		if decl := bashppUntypedDecl(ce, s.Redirs); decl != nil {
 			s.Cmd = decl
 			return

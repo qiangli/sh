@@ -111,6 +111,38 @@ func bashppUntypedDecl(ce *CallExpr, redirs []*Redirect) *BashPPDecl {
 	}
 }
 
+// bashppTypeDecl recognizes the deliberately small type surface supported by
+// this tranche. A type body is one bare identifier, optionally preceded by an
+// alias marker; unsupported bodies remain ordinary shell commands.
+func bashppTypeDecl(ce *CallExpr, redirs []*Redirect) *BashPPDecl {
+	if ce == nil || len(ce.Assigns) > 0 || len(redirs) > 0 || len(ce.Args) < 3 || len(ce.Args) > 4 {
+		return nil
+	}
+	kw := bashppBareLit(ce.Args[0])
+	name := bashppBareLit(ce.Args[1])
+	if kw == nil || kw.Value != "type" || name == nil || !bashppIsIdent(name.Value) {
+		return nil
+	}
+	alias := false
+	typeWord := ce.Args[2]
+	if len(ce.Args) == 4 {
+		eq := bashppBareLit(ce.Args[2])
+		if eq == nil || eq.Value != "=" {
+			return nil
+		}
+		alias, typeWord = true, ce.Args[3]
+	}
+	typ := bashppBareLit(typeWord)
+	if typ == nil || !bashppIsIdent(typ.Value) {
+		return nil
+	}
+	m := RecognizeStartSite(kw.Value + " " + name.Value)
+	if m.Site != StartTypeDecl {
+		return nil
+	}
+	return &BashPPDecl{Site: m.Site, Kw: kw, Name: name, DeclType: typ, Alias: alias, End_: typeWord.End()}
+}
+
 // bashppBareLit returns the word's sole literal part, or nil when the word is
 // anything else.
 //

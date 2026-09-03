@@ -106,6 +106,7 @@ var bashppAllowedDivergences = []bashppDivergenceRow{
 	{"decl-var-bare", "var x int", StartVar, "simple_command: command `var` with arguments"},
 	{"decl-const", "const K = 2", StartConst, "command `const` with arguments"},
 	{"decl-const-typed", "const K int = 2", StartConst, "command `const` with arguments"},
+	{"decl-type-bare", "type T int", StartTypeDecl, "command `type` (a bash builtin) with arguments"},
 	{"decl-type-alias", "type ID = string", StartTypeDecl, "command `type` (a bash builtin) with arguments"},
 	{"prefix-type-struct", "type T struct {", StartTypeDecl, "a complete simple_command; `{` is an ordinary word in argument position"},
 
@@ -158,6 +159,9 @@ func bashppShapeBoundary(rest string) bool {
 func bashppDeclShape(d *BashPPDecl) string {
 	shape := d.Kw.Value + " IDENT"
 	if d.DeclType != nil {
+		if d.Alias {
+			shape += " ="
+		}
 		shape += " TYPE"
 	}
 	switch len(d.Init) {
