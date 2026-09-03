@@ -128,8 +128,46 @@ func errText(err error) string {
 
 func bashppQuoted(s string) string { return "\"" + s + "\"" }
 
+// bashppAcceptedShapes is the Bash++ half of the shared corpus: the shapes the
+// parser actually claims today.
+//
+// Until the command-position dispatch landed, the shared corpus was the bash
+// parser's own corpus and nothing else, so every input compared identical and
+// the licensing branch of TestBashPPMatchesBash was never reached. A gate that
+// only ever exercises its "no divergence" path cannot tell a working allowlist
+// from a broken one — the same shape of vacuous success the bounded-lookahead
+// work hit three times — so the claimed shapes are corpus inputs like any
+// other, and the gate now requires the licensed count to be nonzero.
+//
+// Every entry must be attributable to a published Class E row by exact shape.
+// That is not a formality: it is the reason each line here is a shape the
+// corpus in bashpp-tests/tools/startsites measured against stock bash, rather
+// than a shape that merely looks like one. The longer entries exist to put a
+// claimed shape at command positions other than the start of the input — after
+// a keyword, inside a substitution, inside a function body — because the
+// dispatch fires at all of them and attribution has to survive all of them.
+var bashppAcceptedShapes = []string{
+	// The two published untyped declarations, bare.
+	"var x = 1",
+	"const K = 2",
+
+	// The same shapes ending at each terminator bashppShapeBoundary accepts,
+	// which is what a real script looks like.
+	"var x = 1; echo done",
+	"var x = 1 | cat",
+	"var x = 1 # note",
+	"const K = 2\nvar x = 1",
+
+	// Command positions that are not the start of the input.
+	"if true; then var x = 1; fi",
+	"echo $(var x = 1)",
+	"f() { const K = 2; }",
+	"while false; do const K = 2; done",
+}
+
 // bashppSharedCorpus is every input the parser tests know about: the valid
-// corpus, the error corpus, and the printer's own cases.
+// corpus, the error corpus, the printer's own cases, and the Bash++ shapes the
+// parser claims.
 func bashppSharedCorpus(t *testing.T) []string {
 	t.Helper()
 	var inputs []string
@@ -144,6 +182,7 @@ func bashppSharedCorpus(t *testing.T) []string {
 	for _, c := range printTests {
 		inputs = append(inputs, c.in)
 	}
+	inputs = append(inputs, bashppAcceptedShapes...)
 	if len(inputs) < 500 {
 		t.Fatalf("corpus looks too small to be meaningful: %d inputs", len(inputs))
 	}
@@ -272,6 +311,20 @@ func TestBashPPMatchesBash(t *testing.T) {
 		t.Errorf("not one input compared identical across %d inputs; the gate is "+
 			"almost certainly not running against the corpus it thinks it is",
 			len(inputs))
+	}
+
+	// And it must never report success without having exercised the licensing
+	// branch. While the dispatch was absent every input took the identical
+	// path, so a broken allowlist and a working one produced the same report;
+	// now that LangBashPP claims shapes, at least one input must reach rule 2
+	// and be named by a published row. Zero here means either the dispatch
+	// stopped claiming anything or bashppAcceptedShapes stopped reaching the
+	// corpus, and both look exactly like a pass from the outside.
+	if licensed == 0 {
+		t.Errorf("not one licensed divergence across %d inputs, though LangBashPP "+
+			"claims %d shapes; rule 2 of the compatibility contract was never "+
+			"exercised, so this run cannot distinguish a working allowlist from "+
+			"a broken one", len(inputs), len(bashppAcceptedShapes))
 	}
 }
 

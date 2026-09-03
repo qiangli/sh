@@ -255,6 +255,7 @@ var nodeByName = map[string]reflect.Type{
 	"TimeClause":   reflect.TypeFor[syntax.TimeClause](),
 	"CoprocClause": reflect.TypeFor[syntax.CoprocClause](),
 	"TestDecl":     reflect.TypeFor[syntax.TestDecl](),
+	"BashPPDecl":   reflect.TypeFor[syntax.BashPPDecl](),
 
 	"UnaryArithm":  reflect.TypeFor[syntax.UnaryArithm](),
 	"BinaryArithm": reflect.TypeFor[syntax.BinaryArithm](),
@@ -312,7 +313,12 @@ func decodeValue(val reflect.Value, enc any) error {
 			val.Set(reflect.Append(val, elem))
 		}
 	case string:
-		if val.Kind() == reflect.Uint32 {
+		// Small enums go out as their string form (see encodeValue), so they
+		// have to come back through the matching TextUnmarshaler. Uint8 is
+		// listed alongside Uint32 because the Bash++ node enums are uint8;
+		// without it they decode via SetString and panic on a non-string kind.
+		switch val.Kind() {
+		case reflect.Uint8, reflect.Uint32:
 			u, ok := val.Addr().Interface().(encoding.TextUnmarshaler)
 			if !ok {
 				return fmt.Errorf("cannot decode string into %s", val.Type())

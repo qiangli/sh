@@ -3997,6 +3997,17 @@ loop:
 	if len(ce.Args) == 0 {
 		ce.Args = nil
 	}
+	// The Bash++ command-position dispatch. It runs here, after the command is
+	// complete and its terminator reached, precisely so that nothing has been
+	// consumed on the strength of a prefix; see sh/syntax/bashpp_decl.go. An
+	// unsupported body is handed back untouched, so LangBashPP stays identical
+	// to LangBash everywhere it does not claim a shape.
+	if p.lang.in(LangBashPP) {
+		if decl := bashppUntypedDecl(ce, s.Redirs); decl != nil {
+			s.Cmd = decl
+			return
+		}
+	}
 	s.Cmd = ce
 }
 

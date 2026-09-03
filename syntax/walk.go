@@ -178,6 +178,16 @@ func Walk(node Node, f func(Node) bool) {
 	case *TestDecl:
 		Walk(node.Description, f)
 		Walk(node.Body, f)
+	case *BashPPDecl:
+		// The Bash++ nodes live in bashpp_nodes.go, but Walk is the one place
+		// they cannot: a Command the visitor does not know reaches the panic
+		// below. Only *BashPPDecl is listed because only it can appear in a
+		// tree today; the remaining P1 nodes join it with the stories that
+		// wire their dispatch.
+		walkNilable(node.Kw, f)
+		walkNilable(node.Name, f)
+		walkNilable(node.DeclType, f)
+		walkList(node.Init, f)
 	default:
 		panic(fmt.Sprintf("syntax.Walk: unexpected node type %T", node))
 	}

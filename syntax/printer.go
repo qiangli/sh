@@ -1428,6 +1428,21 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 		p.word(cmd.Description)
 		p.space()
 		p.stmt(cmd.Body)
+	case *BashPPDecl:
+		// Printed from the node's own positions rather than from the source
+		// it came from, which is what makes the printer the second reader of
+		// the classification instead of a second classifier. `=` carries no
+		// position of its own — the node does not record one — so it is
+		// written at whatever column the surrounding words leave it.
+		p.spacedString(cmd.Kw.Value, cmd.Kw.Pos())
+		p.spacedString(cmd.Name.Value, cmd.Name.Pos())
+		if cmd.DeclType != nil {
+			p.spacedString(cmd.DeclType.Value, cmd.DeclType.Pos())
+		}
+		if len(cmd.Init) > 0 {
+			p.spacedString("=", Pos{})
+			p.wordJoin(cmd.Init)
+		}
 	default:
 		panic(fmt.Sprintf("syntax.Printer: unexpected node type %T", cmd))
 	}

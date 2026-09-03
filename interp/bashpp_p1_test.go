@@ -58,10 +58,10 @@ func TestBashPPDeclareBare(t *testing.T) {
 	t.Parallel()
 	r := bashPPRunner(t)
 	r.bashPPDeclare(context.Background(), &syntax.BashPPDecl{
-		Site: syntax.StartVar,
-		Kw:   lit("var"),
-		Name: lit("x"),
-		Type: lit("int"),
+		Site:     syntax.StartVar,
+		Kw:       lit("var"),
+		Name:     lit("x"),
+		DeclType: lit("int"),
 	})
 	if got := r.lookupVar("x").Str; got != "" {
 		t.Fatalf("bare declaration gave %q, want the empty string", got)

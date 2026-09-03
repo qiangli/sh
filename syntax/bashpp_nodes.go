@@ -3,6 +3,8 @@
 
 package syntax
 
+import "fmt"
+
 // This file holds the Bash++ P1 ("Day-1") typed nodes. It is deliberately a
 // separate file from nodes.go: the nodes can be declared, reviewed and merged
 // without touching a single line the certification workstream owns, which
@@ -60,6 +62,33 @@ func (s StartSite) String() string {
 	return "none"
 }
 
+// UnmarshalText is the inverse of [StartSite.String], and exists because
+// sh/syntax/typedjson encodes a node's small enums by their string form so the
+// wire format survives new values being added. Without the inverse, a tree
+// containing a Bash++ node encodes cleanly and then fails to decode, which is
+// the worst place to discover a missing method.
+func (s *StartSite) UnmarshalText(b []byte) error {
+	switch string(b) {
+	case "none":
+		*s = StartNone
+	case "var":
+		*s = StartVar
+	case "const":
+		*s = StartConst
+	case "type":
+		*s = StartTypeDecl
+	case ":=":
+		*s = StartShortDecl
+	case "call":
+		*s = StartGoCall
+	case "if":
+		*s = StartGoIf
+	default:
+		return fmt.Errorf("unknown Bash++ start site: %q", b)
+	}
+	return nil
+}
+
 // SiteClass is the compatibility class of a start site, as measured against
 // stock bash 5.3 by bashpp-tests/tools/startsites and published in the design
 // of record.
@@ -90,18 +119,40 @@ func (c SiteClass) String() string {
 	return "?"
 }
 
+// UnmarshalText is the inverse of [SiteClass.String]; see
+// [StartSite.UnmarshalText] for why it exists.
+func (c *SiteClass) UnmarshalText(b []byte) error {
+	switch string(b) {
+	case "R":
+		*c = ClassR
+	case "E":
+		*c = ClassE
+	default:
+		return fmt.Errorf("unknown Bash++ site class: %q", b)
+	}
+	return nil
+}
+
 // BashPPDecl is a Go declaration in command position: var, const or type.
 //
 // It covers the three keyword-led Day-1 sites, which share a shape (keyword,
 // name, optional type, optional value) and differ only in the keyword. They
 // are one node rather than three because the interpreter treats them
 // identically apart from mutability, which Kw already records.
+//
+// DeclType is spelled that way rather than the obvious `Type` because
+// sh/syntax/typedjson reserves a `Type` key on every tagged node to carry the
+// node's own type name, and builds its encoding struct by reflection: a node
+// field called Type collides with it and panics reflect.StructOf. That is not
+// a hypothetical — it is what wiring the dispatch turned up the first time a
+// BashPPDecl could reach an encoder — and it is worth a line here because the
+// collision is invisible until a tree containing one is serialized.
 type BashPPDecl struct {
-	Site StartSite // StartVar, StartConst or StartTypeDecl
-	Kw   *Lit      // the literal "var", "const" or "type" as written
-	Name *Lit      // the declared identifier
-	Type *Lit      // the declared type, or nil when inferred
-	Init []*Word   // the initializer, or nil for a bare declaration
+	Site     StartSite // StartVar, StartConst or StartTypeDecl
+	Kw       *Lit      // the literal "var", "const" or "type" as written
+	Name     *Lit      // the declared identifier
+	DeclType *Lit      // the declared type, or nil when inferred
+	Init     []*Word   // the initializer, or nil for a bare declaration
 
 	// End_ is the end of the declaration, which for a multi-line type
 	// declaration is the closing brace rather than the end of Init.
@@ -116,8 +167,8 @@ func (d *BashPPDecl) End() Pos {
 	if len(d.Init) > 0 {
 		return d.Init[len(d.Init)-1].End()
 	}
-	if d.Type != nil {
-		return d.Type.End()
+	if d.DeclType != nil {
+		return d.DeclType.End()
 	}
 	return d.Name.End()
 }
