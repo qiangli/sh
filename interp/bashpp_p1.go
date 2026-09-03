@@ -14,13 +14,15 @@ import (
 //
 // Like its counterpart in sh/syntax, this file is deliberately separate from
 // runner.go: the evaluation can be written, reviewed and merged without
-// touching a line the certification workstream owns. What remains owed to
-// runner.go is four `case` arms in the existing command type switch, each a
-// single call into this file.
+// touching a line the certification workstream owns. What runner.go owns is
+// one `case` arm per node in the existing command type switch, each a single
+// call into this file.
 //
-// Nothing here runs yet. The nodes cannot appear in a tree until the parser
-// dispatch is wired, so these functions are unreachable by construction, and
-// their unit tests build the nodes directly rather than parsing source.
+// [Runner.bashPPDeclare] is now reached from source: the parser claims the
+// untyped `var x = 1` / `const K = 2` shape (see sh/syntax/bashpp_decl.go) and
+// runner.go dispatches it. The remaining three nodes have no start site the
+// parser claims yet, so they stay unreachable from source and their tests
+// build the nodes by hand.
 //
 // ONE VALUE MODEL, NOT TWO. `:=` binds through the existing expand.Object
 // machinery whenever the value is structured. Introducing a second
@@ -57,14 +59,32 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 		r.exit = exitStatus{code: 2}
 		return
 	}
+	if r.bashPPScope == nil {
+		// A runner which reached a Bash++ node without Reset having built the
+		// outermost block; give it one rather than binding nowhere.
+		r.bashPPScope = newBashPPScope(nil)
+	}
 
+	// The typed forms are not claimed by the parser yet, so DeclType is nil on
+	// every node that reaches this from source. It is read here rather than
+	// ignored because the zero value it implies is already the answer: a bare
+	// `var x int` has no initializer, and [Runner.bashPPValue] gives an empty
+	// Init the zero value. When the typed site lands, what changes is the
+	// zero value's KIND, which is the one thing DeclType will then name.
 	vr := r.bashPPValue(ctx, d.Init)
-	r.setVar(name, vr)
-
-	if d.Site == syntax.StartConst {
-		prev := r.lookupVar(name)
-		prev.ReadOnly = true
-		r.setVar(name, prev)
+	// A declaration which shadows an exported shell variable inherits the
+	// export, so the child process and the script agree on the value. It does
+	// not export a name the shell was not already exporting: a Go declaration
+	// is a local, and locals do not cross execve.
+	if prev := r.writeEnv.Get(name); prev.Exported {
+		vr.Exported = true
+	}
+	// `const` marks the cell readonly as well as refusing assignment through
+	// the scope, so the shell's own readonly paths — `unset`, `declare -r` —
+	// see it too; a const those could quietly reassign would be a lie.
+	if err := r.bashPPScope.declare(name, vr, d.Site == syntax.StartConst); err != nil {
+		r.errf("%s%v\n", r.bashErrPrefix(d.Pos()), err)
+		r.exit = exitStatus{code: 2}
 	}
 }
 
@@ -86,6 +106,9 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 		r.exit = exitStatus{code: 2}
 		return
 	}
+	if r.bashPPScope == nil {
+		r.bashPPScope = newBashPPScope(nil)
+	}
 	if len(d.Lhs) == 1 {
 		name := d.Lhs[0].Value
 		if !syntax.ValidName(name) {
@@ -93,7 +116,7 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 			r.exit = exitStatus{code: 2}
 			return
 		}
-		r.setVar(name, r.bashPPValue(ctx, d.Rhs))
+		r.bashPPDeclareName(name, r.bashPPValue(ctx, d.Rhs))
 		return
 	}
 	for i, lhs := range d.Lhs {
@@ -102,7 +125,22 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 			r.exit = exitStatus{code: 2}
 			return
 		}
-		r.setVar(lhs.Value, r.bashPPValue(ctx, d.Rhs[i:i+1]))
+		r.bashPPDeclareName(lhs.Value, r.bashPPValue(ctx, d.Rhs[i:i+1]))
+	}
+}
+
+// bashPPDeclareName binds one name in the innermost block, reporting a
+// redeclaration the way the keyword forms do. `:=` differs from `var` in Go by
+// permitting a redeclaration when at least one name on the left is new, which
+// is a rule about the whole left-hand side and so belongs to the site that has
+// one; this is only the per-name half the two forms share.
+func (r *Runner) bashPPDeclareName(name string, vr expand.Variable) {
+	if prev := r.writeEnv.Get(name); prev.Exported {
+		vr.Exported = true
+	}
+	if err := r.bashPPScope.declare(name, vr, false); err != nil {
+		r.errf("%v\n", err)
+		r.exit = exitStatus{code: 2}
 	}
 }
 
@@ -117,18 +155,21 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 func (r *Runner) bashPPValue(ctx context.Context, words []*syntax.Word) expand.Variable {
 	switch len(words) {
 	case 0:
-		// A bare declaration: `var x int`. The zero value is the empty string,
-		// which is also what the shell gives an unset-but-declared variable,
-		// so nothing downstream has to special-case it.
-		return expand.Variable{Kind: expand.String, Str: ""}
+		// A bare declaration: `var x int`. The zero value is the empty
+		// string. Set is true all the same — a declared identifier holds its
+		// zero value, it is not absent — so `${x-fallback}` yields the empty
+		// string rather than the fallback, and execEnv does not treat the
+		// binding as an unset name to be scrubbed from the child's
+		// environment.
+		return expand.Variable{Set: true, Kind: expand.String, Str: ""}
 	case 1:
-		return expand.Variable{Kind: expand.String, Str: r.literal(words[0])}
+		return expand.Variable{Set: true, Kind: expand.String, Str: r.literal(words[0])}
 	default:
 		strs := make([]string, len(words))
 		for i, w := range words {
 			strs[i] = r.literal(w)
 		}
-		return expand.Variable{Kind: expand.Indexed, List: strs}
+		return expand.Variable{Set: true, Kind: expand.Indexed, List: strs}
 	}
 }
 

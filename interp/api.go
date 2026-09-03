@@ -93,6 +93,18 @@ type Runner struct {
 	Vars  map[string]expand.Variable
 	Funcs map[string]*syntax.Stmt
 
+	// bashPPScope is the innermost Bash++ lexical block, or nil when the
+	// runner is not in the bash++ dialect. Nil is the fast path every other
+	// dialect takes: the read/write hooks in vars.go are one nil check.
+	bashPPScope *bashPPScope
+	// bashPPFuncScopes records, per function name, the lexical environment
+	// visible where the function was defined. It is preserved across
+	// [Runner.Reset] for the same reason Funcs is: a function that survives a
+	// reset without its closure would resolve its free identifiers against
+	// whatever happens to be in scope at the call, which is precisely the
+	// dynamic binding this scope chain exists to avoid.
+	bashPPFuncScopes map[string]*bashPPScope
+
 	// funcSources records the script name active when a function was
 	// defined. Bash reports runtime diagnostics in a function body against
 	// the definition source, not necessarily the caller's source.
@@ -2606,6 +2618,11 @@ func (r *Runner) Reset() {
 		Funcs:       r.Funcs,
 		funcSources: r.funcSources,
 
+		// A function's captured Bash++ scope is part of the function, so it
+		// is preserved exactly as far as Funcs is. The runner's own current
+		// scope is per-Run scratch and is rebuilt below.
+		bashPPFuncScopes: r.bashPPFuncScopes,
+
 		// disabledBuiltins (`enable -n`, or WithDisabledBuiltins at
 		// construction) is part of the shell's persistent state, not per-Run
 		// scratch — preserve it across Reset like funcs/aliases.
@@ -2659,6 +2676,14 @@ func (r *Runner) Reset() {
 	}
 	// TODO(v4): Use the supplied Env directly if it implements enough methods.
 	r.writeEnv = &overlayEnviron{parent: r.Env}
+	if r.Dialect() == syntax.LangBashPP {
+		// The script's outermost block. Every other dialect leaves this nil,
+		// which is what turns the hooks in vars.go into a single nil check.
+		r.bashPPScope = newBashPPScope(nil)
+		if r.bashPPFuncScopes == nil {
+			r.bashPPFuncScopes = make(map[string]*bashPPScope)
+		}
+	}
 	// The hard-ignore bridge variable is internal: consume it (already
 	// snapshotted into startupIgnored) and hide it from the script's scope.
 	if r.writeEnv.Get(BashyHardIgnoreEnv).IsSet() {
@@ -3058,6 +3083,21 @@ func (r *Runner) subshell(background bool) *Runner {
 	// Funcs are copied, since they might be modified.
 	r2.Funcs = maps.Clone(r.Funcs)
 	r2.funcSources = maps.Clone(r.funcSources)
+	// A subshell gets a private copy of the typed bindings, exactly as it
+	// gets a private copy of the shell's variables. One cloner does the live
+	// scope and every captured closure together so that the aliasing between
+	// them survives; see [bashPPCloner]. Sharing instead of copying would be
+	// a data race for a background subshell, which runs in its own goroutine.
+	if r.bashPPScope != nil || len(r.bashPPFuncScopes) > 0 {
+		cloner := newBashPPCloner()
+		r2.bashPPScope = cloner.clone(r.bashPPScope)
+		if r.bashPPFuncScopes != nil {
+			r2.bashPPFuncScopes = make(map[string]*bashPPScope, len(r.bashPPFuncScopes))
+			for name, scope := range r.bashPPFuncScopes {
+				r2.bashPPFuncScopes[name] = cloner.clone(scope)
+			}
+		}
+	}
 	r2.Vars = make(map[string]expand.Variable)
 	r2.alias = maps.Clone(r.alias)
 	r2.trapCallbacks = maps.Clone(r.trapCallbacks)

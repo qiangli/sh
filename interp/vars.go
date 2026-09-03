@@ -585,7 +585,7 @@ func execEnv(env expand.Environ) []string {
 // Used when spawning a child process so a `${THIS_SH} -c '<name>'`
 // invocation can re-import the function on startup.
 func (r *Runner) execEnvWithFuncs() []string {
-	list := execEnv(r.writeEnv)
+	list := execEnv(r.bashPPEnv())
 	for _, name := range []string{"BASHOPTS", "SHELLOPTS"} {
 		if !r.writeEnv.Get(name).Exported {
 			continue
@@ -659,6 +659,15 @@ func (r *Runner) lookupVar(name string) expand.Variable {
 		// Bash treats this as "unset"; return the zero value
 		// instead of crashing.
 		return expand.Variable{}
+	}
+	// A typed binding is the authority for its name while it is in scope; see
+	// sh/interp/bashpp_scope.go. This is the read path expansion takes, so
+	// putting the check here is what keeps `$x` and expandEnv.Get from being
+	// able to disagree with each other.
+	if r.bashPPScope != nil {
+		if cell := r.bashPPScope.lookup(name); cell != nil {
+			return cell.vr
+		}
 	}
 	var vr expand.Variable
 	switch name {
@@ -1693,6 +1702,24 @@ func (r *Runner) bashShoptEnabled(name string) bool {
 }
 
 func (r *Runner) delVar(name string) {
+	// A declaration cannot be undeclared. Go has no `unset`, and letting one
+	// through would leave the name bound-but-unset in a block that still owns
+	// it, so a later `var x = 1` in the same block would fail as a
+	// redeclaration of something the script believes it deleted. A `const` is
+	// refused one layer earlier still, by the unset builtin's own readonly
+	// check — which is what `const` marking the variable readonly buys.
+	if r.bashPPScope != nil {
+		if cell := r.bashPPScope.lookup(name); cell != nil {
+			kind := "var"
+			if cell.constant {
+				kind = "const"
+			}
+			r.errf("%sunset: %s: cannot unset a bash++ %s declaration\n",
+				r.bashErrPrefix(r.curStmtPos), name, kind)
+			r.exit.code = 1
+			return
+		}
+	}
 	if o, ok := r.writeEnv.(*overlayEnviron); ok && r.tempEnv[name] {
 		restoreLocal := !r.opts[optPosix]
 		if o.unsetTemp(name, restoreLocal) {
@@ -2170,6 +2197,28 @@ func (r *Runner) markRestrictedVarsReadonly() {
 }
 
 func (r *Runner) setVar(name string, vr expand.Variable) {
+	// An ordinary shell assignment to a name a `var` declaration bound writes
+	// THROUGH to that binding rather than creating a shell variable beside
+	// it. Two stores for one name is the failure this whole file exists to
+	// prevent: expansion would read the typed cell while an external command
+	// read the shell one.
+	if r.bashPPScope != nil {
+		if cell := r.bashPPScope.lookup(name); cell != nil {
+			if cell.constant {
+				r.errf("%s%s: cannot assign to const\n",
+					r.bashErrPrefix(r.curStmtPos), name)
+				r.exit.code = 1
+				return
+			}
+			// Attributes belong to the declaration, not to the assignment:
+			// a binding which shadows an exported shell variable keeps
+			// reaching child processes after `x=5`.
+			vr.Exported = vr.Exported || cell.vr.Exported
+			vr.ReadOnly = cell.vr.ReadOnly
+			cell.vr = vr
+			return
+		}
+	}
 	if base, idx, ok := splitArrayRef(name); ok && syntax.ValidName(base) && vr.Kind == expand.String {
 		r.setVarWithIndex(r.lookupVar(base), base, r.arrayTargetIndex(idx), vr, false)
 		return
@@ -2862,6 +2911,16 @@ func (r *Runner) setFunc(name string, body *syntax.Stmt) {
 		r.funcSources = make(map[string]string, 4)
 	}
 	r.funcSources[name] = r.filename
+	// Capture the lexical environment the definition was written in. The
+	// snapshot shares cells but not the enclosing block's name map, so the
+	// function sees later WRITES to what it closed over and never sees later
+	// DECLARATIONS beside it; see [bashPPScope.snapshot].
+	if r.bashPPScope != nil {
+		if r.bashPPFuncScopes == nil {
+			r.bashPPFuncScopes = make(map[string]*bashPPScope, 4)
+		}
+		r.bashPPFuncScopes[name] = r.bashPPScope.snapshot()
+	}
 }
 
 // wordLooksLikeAssign mirrors bash's W_ASSIGNMENT check for the first

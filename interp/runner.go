@@ -1687,7 +1687,7 @@ func (e expandEnv) Set(name string, vr expand.Variable) error {
 }
 
 func (e expandEnv) Each(fn func(name string, vr expand.Variable) bool) {
-	e.r.writeEnv.Each(fn)
+	e.r.bashPPEnv().Each(fn)
 }
 
 var todoPos syntax.Pos // for handlerCtx callers where we don't yet have a position
@@ -1696,7 +1696,10 @@ func (r *Runner) handlerCtx(ctx context.Context, kind handlerKind, pos syntax.Po
 	hc := HandlerContext{
 		runner: r,
 		kind:   kind,
-		Env:    &overlayEnviron{parent: r.writeEnv},
+		// Layered over the typed bindings rather than over writeEnv alone, so
+		// a handler reading HandlerCtx.Env sees the same value for a name
+		// that the script's own `$name` does.
+		Env:    &overlayEnviron{parent: r.bashPPEnv()},
 		Dir:    r.Dir,
 		Pos:    pos,
 		Stdout: r.stdout,
@@ -5315,7 +5318,16 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 
 	switch cm := cm.(type) {
 	case *syntax.Block:
+		// `{ ...; }` is a Go block in the bash++ dialect: a `var` declared
+		// inside it is gone at the closing brace. Shell assignments in the
+		// same braces keep bash's lifetime, which is why only the typed
+		// scope is pushed here.
+		if r.bashPPScope != nil {
+			defer r.bashPPPushScope()()
+		}
 		r.stmts(ctx, cm.Stmts)
+	case *syntax.BashPPDecl:
+		r.bashPPDeclare(ctx, cm)
 	case *syntax.Subshell:
 		r2 := r.subshell(false)
 		defer r2.closeDirFile()
@@ -6265,6 +6277,13 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		}
 
 		if r.exit.ok() {
+			// The branch body is a block. `else` reaches here too: the
+			// parser models it as an IfClause with an empty Cond whose Then
+			// holds the else body, so one push gives then and else the
+			// distinct scopes Go gives them.
+			if r.bashPPScope != nil {
+				defer r.bashPPPushScope()()
+			}
 			r.stmts(ctx, cm.Then)
 			if !r.exit.ok() && stmtsEndErrexitExempt(cm.Then) {
 				r.exit.errexitExempt = true
@@ -6722,7 +6741,17 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				r.exit.code = subjectExitCode
 				r.lastExit.code = subjectExitCode
 			}
-			r.stmts(ctx, ci.Stmts)
+			// Each clause is its own block, and a `;&` fallthrough runs the
+			// next one in a block of its own too — so the scope is pushed
+			// inside the item loop and popped before the next item rather
+			// than deferred to the end of the case.
+			if r.bashPPScope != nil {
+				leave := r.bashPPPushScope()
+				r.stmts(ctx, ci.Stmts)
+				leave()
+			} else {
+				r.stmts(ctx, ci.Stmts)
+			}
 			if !r.exit.ok() && stmtsEndErrexitExempt(ci.Stmts) {
 				r.exit.errexitExempt = true
 			}
@@ -10279,6 +10308,14 @@ func (r *Runner) loopStmtsBroken(ctx context.Context, stmts []*syntax.Stmt) bool
 	oldInLoop := r.inLoop
 	r.inLoop = true
 	defer func() { r.inLoop = oldInLoop }()
+	// Every loop body — while, until, for-in, C-style and select — runs one
+	// iteration through here, so this is the one place a per-iteration block
+	// has to be pushed. Fresh cells each time is what lets a closure defined
+	// in the body capture ITS iteration rather than the loop's last one, and
+	// what lets the body redeclare the same identifiers on the next pass.
+	if r.bashPPScope != nil {
+		defer r.bashPPPushScope()()
+	}
 	for _, stmt := range stmts {
 		r.stmt(ctx, stmt)
 		if r.contnEnclosing > 0 {
@@ -10433,6 +10470,19 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 		// Note that [Runner.exec] below does something similar.
 		origEnv := r.writeEnv
 		r.writeEnv = &overlayEnviron{parent: r.writeEnv, funcScope: true}
+		// A function body's free identifiers resolve where the function was
+		// DEFINED, not where it is called; r.bashPPFuncScopes holds that
+		// environment. A function defined outside the dialect, or imported
+		// from BASH_FUNC_*, has no capture and falls back to the caller's
+		// scope, which is the only environment it could have meant.
+		origBashPPScope := r.bashPPScope
+		if r.bashPPScope != nil {
+			captured := r.bashPPFuncScopes[name]
+			if captured == nil {
+				captured = origBashPPScope
+			}
+			r.bashPPScope = newBashPPScope(captured)
+		}
 
 		if r.shouldFireDebugTrap() {
 			prevLineno := r.ecfg.OverrideLineno
@@ -10454,6 +10504,7 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 		}
 
 		r.writeEnv = origEnv
+		r.bashPPScope = origBashPPScope
 
 		if r.trapCallbacks["RETURN"] != "" {
 			prevLineno := r.ecfg.OverrideLineno

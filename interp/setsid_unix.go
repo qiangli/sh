@@ -66,7 +66,7 @@ func runDetachedExec(ctx context.Context, r *Runner, label string, args []string
 	cmd := exec.Cmd{
 		Path:   path,
 		Args:   args,
-		Env:    execEnv(r.writeEnv),
+		Env:    execEnv(r.bashPPEnv()),
 		Dir:    r.Dir,
 		Stdin:  r.stdin,
 		Stdout: r.stdout,

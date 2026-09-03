@@ -63,8 +63,15 @@ func TestBashPPDeclareBare(t *testing.T) {
 		Name:     lit("x"),
 		DeclType: lit("int"),
 	})
-	if got := r.lookupVar("x").Str; got != "" {
-		t.Fatalf("bare declaration gave %q, want the empty string", got)
+	vr := r.lookupVar("x")
+	if vr.Str != "" {
+		t.Fatalf("bare declaration gave %q, want the empty string", vr.Str)
+	}
+	// The zero value is a VALUE. If Set were false the binding would be
+	// indistinguishable from an absent name: `${x-fallback}` would take the
+	// fallback, and execEnv would scrub the name out of a child's environment.
+	if !vr.IsSet() {
+		t.Fatal("a bare declaration is not set; its zero value must be a value, not an absence")
 	}
 }
 
