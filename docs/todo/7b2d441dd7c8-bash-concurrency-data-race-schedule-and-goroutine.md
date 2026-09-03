@@ -4,10 +4,10 @@ kind: task
 title: Bash++ concurrency data-race, schedule, and goroutine-leak gate
 seq: 2
 status: todo
-priority: p2
+priority: p1
 created: 2026-08-07T14:15:00Z
 assignee: unassigned
-sprint: 98
+sprint: 113
 ---
 
 Before shipping the next Bash++ feature that adds shared-memory concurrency,
