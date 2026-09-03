@@ -10,6 +10,7 @@ import (
 	"io"
 	"io/fs"
 	"io/ioutil"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -34,10 +35,26 @@ func HandlerCtx(ctx context.Context) HandlerContext {
 
 type handlerCtxKey struct{}
 
+// devNetworkRedirectCtxKey marks an open made for a shell redirection. Bash's
+// /dev/tcp and /dev/udp pseudo-paths are redirection-only; in particular,
+// `source /dev/tcp/...` remains an ordinary file open. Keeping this marker on
+// the context also lets custom OpenHandlers retain their normal authority over
+// the operation while DefaultOpenHandler provides Bash's default behavior.
+type devNetworkRedirectCtxKey struct{}
+
 // execReplacingCtxKey marks the one handler invocation produced by an exec
 // builtin. A bgProc-wide flag is insufficient for pipelines: a concurrently
 // running non-exec component must not overwrite the replacement's result.
 type execReplacingCtxKey struct{}
+
+func (r *Runner) devNetworkRedirectsEnabled() bool {
+	switch r.Dialect() {
+	case syntax.LangBash, syntax.LangBashPP, syntax.LangBats:
+		return true
+	default:
+		return false
+	}
+}
 
 // standardUtilsPath is the default search path used by `command -p` to
 // find the POSIX standard utilities, mirroring bash's STANDARD_UTILS_PATH
@@ -1023,11 +1040,17 @@ type OpenHandlerFunc func(ctx context.Context, path string, flag int, perm os.Fi
 // TODO: paths passed to [OpenHandlerFunc] should be cleaned.
 
 // DefaultOpenHandler returns the [OpenHandlerFunc] used by default.
-// It uses [os.OpenFile] to open files.
+// It uses [os.OpenFile] to open files and net.Dialer for Bash's marked
+// /dev/tcp and /dev/udp redirection pseudo-paths.
 //
 // For the sake of portability, /dev/null opens NUL on Windows.
 func DefaultOpenHandler() OpenHandlerFunc {
 	return func(ctx context.Context, path string, flag int, perm os.FileMode) (io.ReadWriteCloser, error) {
+		if ctx.Value(devNetworkRedirectCtxKey{}) != nil {
+			if network, address, ok := devNetworkRedirect(path); ok {
+				return openDevNetwork(ctx, path, network, address)
+			}
+		}
 		mc := HandlerCtx(ctx)
 		if runtime.GOOS == "windows" && path == "/dev/null" {
 			path = "NUL"
@@ -1038,6 +1061,67 @@ func DefaultOpenHandler() OpenHandlerFunc {
 			return openPath(ctx, path, flag, perm)
 		}
 		return openPathAt(ctx, mc.Dir, path, flag, perm)
+	}
+}
+
+// devNetworkRedirect recognizes Bash's /dev/{tcp,udp}/HOST/PORT paths. The
+// port is deliberately left as text: net.Dial accepts both numeric ports and
+// the service names that Bash accepts through getaddrinfo.
+func devNetworkRedirect(path string) (network, address string, ok bool) {
+	for _, network = range [...]string{"tcp", "udp"} {
+		prefix := "/dev/" + network + "/"
+		if !strings.HasPrefix(path, prefix) {
+			continue
+		}
+		host, port, found := strings.Cut(path[len(prefix):], "/")
+		if !found || host == "" || port == "" || strings.Contains(port, "/") {
+			return "", "", false
+		}
+		return network, net.JoinHostPort(host, port), true
+	}
+	return "", "", false
+}
+
+// openDevNetwork connects a Bash network pseudo-path without involving a
+// subprocess. File returns a duplicate descriptor, which lets the existing
+// numbered-fd tables preserve a bidirectional `exec N<>/dev/tcp/...` exactly
+// as they do for ordinary files.
+func openDevNetwork(ctx context.Context, path, network, address string) (io.ReadWriteCloser, error) {
+	conn, err := (&net.Dialer{}).DialContext(ctx, network, address)
+	if err != nil {
+		return nil, &os.PathError{Op: "connect", Path: path, Err: err}
+	}
+	fileConn, ok := conn.(interface{ File() (*os.File, error) })
+	if !ok {
+		_ = conn.Close()
+		return nil, &os.PathError{Op: "connect", Path: path, Err: fmt.Errorf("%s connection has no file descriptor", network)}
+	}
+	f, err := fileConn.File()
+	closeErr := conn.Close()
+	if err != nil {
+		return nil, &os.PathError{Op: "connect", Path: path, Err: err}
+	}
+	if closeErr != nil {
+		_ = f.Close()
+		return nil, &os.PathError{Op: "connect", Path: path, Err: closeErr}
+	}
+	return f, nil
+}
+
+// devNetworkErrorReason unwraps net.OpError and os.SyscallError down to the
+// portable syscall wording ("connection refused", "network is unreachable",
+// and so on), matching Bash instead of Go's full dial operation string.
+func devNetworkErrorReason(err error) string {
+	for {
+		next := errors.Unwrap(err)
+		if next == nil {
+			message := err.Error()
+			if message == "" {
+				return message
+			}
+			return strings.ToUpper(message[:1]) + message[1:]
+		}
+		err = next
 	}
 }
 

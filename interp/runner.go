@@ -9875,6 +9875,15 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 			}
 		}
 	}
+	// Bash's /dev/tcp and /dev/udp are shell redirection pseudo-paths,
+	// rather than filesystem entries. Mark this call so DefaultOpenHandler can
+	// implement them while ordinary opens (such as `source /dev/tcp/...`) keep
+	// their regular file semantics. This follows the runner dialect rather than
+	// the live POSIX option so `bash --posix` keeps Bash's pseudo-paths while a
+	// strict POSIX runner treats the operand as an ordinary file.
+	if r.devNetworkRedirectsEnabled() {
+		ctx = context.WithValue(ctx, devNetworkRedirectCtxKey{}, true)
+	}
 	f, err := r.open(ctx, arg, mode, 0o666, true)
 	if err != nil {
 		return nil, err
@@ -11020,10 +11029,22 @@ func (r *Runner) open(ctx context.Context, path string, flags int, mode os.FileM
 
 	f, err := r.openHandler(r.handlerCtx(ctx, handlerKindOpen, todoPos), path, flags, mode)
 	// TODO: support wrapped PathError returned from openHandler.
-	switch err.(type) {
+	switch err := err.(type) {
 	case nil:
 		return f, nil
 	case *os.PathError:
+		_, _, networkPath := devNetworkRedirect(path)
+		if err.Op == "connect" && networkPath && ctx.Value(devNetworkRedirectCtxKey{}) != nil {
+			// GNU Bash reports the failed connect separately before naming the
+			// /dev/tcp or /dev/udp operand. Keep the ordinary redirection error
+			// path below for all filesystem failures and custom OpenHandlers.
+			if print {
+				reason := devNetworkErrorReason(err)
+				r.errf("%sconnect: %s\n", r.bashErrPrefix(r.curStmtPos), reason)
+				r.errf("%s%s: %s\n", r.bashErrPrefix(r.curStmtPos), path, reason)
+			}
+			return nil, err
+		}
 		// Preserve the embedder fallback only while the runner is actually
 		// attached to a terminal. With no terminal, Bash reports the failed
 		// /dev/tty redirection instead of fabricating a readable descriptor.
