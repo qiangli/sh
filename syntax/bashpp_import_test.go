@@ -15,6 +15,7 @@ func TestBashPPImportExactShapes(t *testing.T) {
 		`import "fmt"`, `import f "fmt"`, `import "encoding/json"`,
 		`import _ "fmt"`, `import . "fmt"`,
 		"import (\n\t\"fmt\"\n\tf \"log\"\n\t_ \"embed\"\n)",
+		"import\n(\n\t\"fmt\"\n)", `import ()`, "import (\n\t\"fmt\";\n)",
 		`import "net/http"`, `import "crypto/x509"`, `import "testing/fstest"`,
 		`import "syscall/js"`, `import "unsafe"`, `import f "\x66mt"`,
 	} {
@@ -49,6 +50,7 @@ func TestBashPPImportFallbackExact(t *testing.T) {
 		`import "cmd/go"`, `import "internal/abi"`, `import "net/http/internal"`,
 		`import "vendor/golang.org/x/net/http2"`, `import "net/http/http_test"`,
 		"import (\n\t\"fmt\"\n\t\"local/pkg\"\n)", "import (\n\t\"fmt\" extra\n)",
+		`import (; "fmt")`, "import (\n\t\"fmt\";;\n)", "import (\n\t\"fmt\" \"log\"\n)",
 	}
 	for _, src := range shapes {
 		assertImportFallbackExact(t, src, false)
@@ -108,27 +110,64 @@ func TestGo127StdlibAllowlistProvenanceAndNearMisses(t *testing.T) {
 
 func TestBashPPImportClassicAndPOSIXNeverClaim(t *testing.T) {
 	for _, lang := range []LangVariant{LangBash, LangPOSIX} {
-		for _, src := range []string{`import "fmt"`, `import f "fmt"`, "import (\n\t\"fmt\"\n)"} {
-			f, err := NewParser(Variant(lang)).Parse(strings.NewReader(src), "")
-			if err == nil && len(f.Stmts) > 0 {
-				if _, ok := f.Stmts[0].Cmd.(*BashPPImport); ok {
-					t.Fatalf("%v claimed %q", lang, src)
+		for _, src := range []string{`import "fmt"`, `import f "fmt"`, "import (\n\t\"fmt\"\n)", "import\n(\n\t\"fmt\"\n)"} {
+			want, wantErr := NewParser(Variant(lang)).Parse(strings.NewReader(src), "")
+			got, gotErr := NewParser(Variant(lang)).Parse(&oneByteReader{r: strings.NewReader(src)}, "")
+			if !reflect.DeepEqual(got, want) || fmt.Sprint(gotErr) != fmt.Sprint(wantErr) ||
+				reflect.TypeOf(gotErr) != reflect.TypeOf(wantErr) {
+				t.Fatalf("%v one-byte parse differs for %q: normal=%#v err=%T %v; one-byte=%#v err=%T %v",
+					lang, src, want, wantErr, wantErr, got, gotErr, gotErr)
+			}
+			for _, f := range []*File{want, got} {
+				if len(f.Stmts) > 0 {
+					if _, ok := f.Stmts[0].Cmd.(*BashPPImport); ok {
+						t.Fatalf("%v claimed %q", lang, src)
+					}
 				}
 			}
 		}
 	}
 }
 
+func TestBashPPGroupedImportCanonicalPrint(t *testing.T) {
+	for _, test := range []struct {
+		src, want string
+	}{
+		{"import\n(\n\t\"fmt\"\n)\n", "import (\n\t\"fmt\"\n)\n"},
+		{"import ()\n", "import ()\n"},
+		{"import (\n\t\"fmt\";\n)\n", "import (\n\t\"fmt\"\n)\n"},
+	} {
+		f, err := NewParser(Variant(LangBashPP)).Parse(strings.NewReader(test.src), "")
+		if err != nil {
+			t.Fatalf("parse %q: %v", test.src, err)
+		}
+		var out bytes.Buffer
+		if err := NewPrinter().Print(&out, f); err != nil {
+			t.Fatalf("print %q: %v", test.src, err)
+		}
+		if got := out.String(); got != test.want {
+			t.Fatalf("print %q: got %q, want %q", test.src, got, test.want)
+		}
+	}
+}
+
 func TestBashPPImportPrintWalk(t *testing.T) {
-	f, err := NewParser(Variant(LangBashPP)).Parse(strings.NewReader("import (\n\tf \"fmt\"\n\t_ \"embed\"\n)\n"), "")
+	src := "import\n# between\n(\n# first\n\"fmt\" # inline\n# second\nf \"log\"\n# last\n)\n"
+	f, err := NewParser(Variant(LangBashPP), KeepComments(true)).Parse(strings.NewReader(src), "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	if err := NewPrinter().Print(&out, f); err != nil || out.String() != "import (\nf \"fmt\"\n_ \"embed\"\n)\n" {
+	want := "import\n# between\n(\n\t# first\n\t\"fmt\" # inline\n\t# second\n\tf \"log\"\n\t# last\n)\n"
+	if err := NewPrinter().Print(&out, f); err != nil || out.String() != want {
 		t.Fatalf("%q %v", out.String(), err)
 	}
-	seen, specs := false, 0
+	imp := f.Stmts[0].Cmd.(*BashPPImport)
+	if len(imp.Comments) != 1 || len(imp.Specs) != 2 || len(imp.Specs[0].Comments) != 1 ||
+		len(imp.Specs[1].Comments) != 2 || len(imp.Last) != 1 {
+		t.Fatalf("comments were not retained in typed nodes: %#v", imp)
+	}
+	seen, specs, comments := false, 0, 0
 	Walk(f, func(n Node) bool {
 		if _, ok := n.(*BashPPImport); ok {
 			seen = true
@@ -136,9 +175,12 @@ func TestBashPPImportPrintWalk(t *testing.T) {
 		if _, ok := n.(*BashPPImportSpec); ok {
 			specs++
 		}
+		if _, ok := n.(*Comment); ok {
+			comments++
+		}
 		return true
 	})
-	if !seen || specs != 2 {
+	if !seen || specs != 2 || comments != 5 {
 		t.Fatal("walk missed BashPPImport")
 	}
 }

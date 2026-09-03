@@ -1486,18 +1486,37 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 			p.dblQuoted(cmd.Path)
 			break
 		}
-		p.spacedString("(", cmd.Lparen)
+		if len(cmd.Comments) > 0 {
+			p.comments(cmd.Comments...)
+			p.flushComments()
+			p.newlines(cmd.Lparen)
+			p.spacePad(cmd.Lparen)
+			p.writeLit("(")
+			p.wantSpace = spaceRequired
+		} else {
+			p.spacedString("(", cmd.Lparen)
+		}
+		p.advanceLine(cmd.Lparen.Line())
+		p.incLevel()
 		for _, spec := range cmd.Specs {
-			p.newline(spec.Pos())
-			p.incLevel()
+			p.comments(spec.Comments...)
+			p.newlines(spec.Pos())
+			p.spacePad(spec.Pos())
 			if spec.Alias != nil {
 				p.spacedString(spec.Alias.Value, spec.Alias.Pos())
+				p.space()
 			}
-			p.space()
 			p.dblQuoted(spec.Path)
-			p.decLevel()
+			p.wantSpace = spaceRequired
 		}
-		p.newline(cmd.Rparen)
+		p.comments(cmd.Last...)
+		p.flushComments()
+		p.decLevel()
+		if len(cmd.Specs) == 0 && len(cmd.Last) == 0 {
+			p.wantSpace = spaceNotRequired
+		}
+		p.newlines(cmd.Rparen)
+		p.spacePad(cmd.Rparen)
 		p.writeLit(")")
 	default:
 		panic(fmt.Sprintf("syntax.Printer: unexpected node type %T", cmd))

@@ -198,8 +198,11 @@ func Walk(node Node, f func(Node) bool) {
 		Walk(node.Kw, f)
 		walkNilable(node.Alias, f)
 		walkNilable(node.Path, f)
+		walkComments(node.Comments, f)
 		walkList(node.Specs, f)
+		walkComments(node.Last, f)
 	case *BashPPImportSpec:
+		walkComments(node.Comments, f)
 		walkNilable(node.Alias, f)
 		Walk(node.Path, f)
 	default:

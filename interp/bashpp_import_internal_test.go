@@ -111,6 +111,20 @@ func TestBashPPGroupedImportIsAtomicAndUsesGoAliases(t *testing.T) {
 	if !maps.Equal(r.bashPPImports, before) {
 		t.Fatalf("failed group mutated registry: %#v", r.bashPPImports)
 	}
+	for _, src := range []string{
+		"import (\n . \"fmt\"\n . \"fmt\"\n)\n",
+		"import (\n _ \"embed\"\n _ \"embed\"\n)\n",
+		"import (\n f \"fmt\"\n other \"fmt\"\n)\n",
+	} {
+		duplicateRunner := newInjectedBashPPRunner(t, eval)
+		err := duplicateRunner.Run(context.Background(), parseBashPPInternal(t, src))
+		if err == nil || !strings.Contains(err.Error(), "duplicate import path") {
+			t.Fatalf("duplicate group %q: %v", src, err)
+		}
+		if len(duplicateRunner.bashPPImports) != 0 {
+			t.Fatalf("duplicate group mutated registry: %#v", duplicateRunner.bashPPImports)
+		}
+	}
 	r.Reset()
 	if len(r.bashPPImports) != 0 {
 		t.Fatalf("Reset retained group: %#v", r.bashPPImports)

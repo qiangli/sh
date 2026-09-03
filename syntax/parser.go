@@ -4031,6 +4031,10 @@ loop:
 	// unsupported body is handed back untouched, so LangBashPP stays identical
 	// to LangBash everywhere it does not claim a shape.
 	if p.lang.in(LangBashPP) {
+		if cmd := p.bashppImportGroup(ce); cmd != nil {
+			s.Cmd = cmd
+			return
+		}
 		if imp := bashppImport(ce, s.Redirs); imp != nil {
 			s.Cmd = imp
 			return

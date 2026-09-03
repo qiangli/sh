@@ -44,7 +44,8 @@ func bashppImportAlias(name string) bool {
 // bashppImportGroup transactionally recognizes an exact Go import block.
 // Rejection restores the ordinary Bash parser byte-for-byte.
 func (p *Parser) bashppImportGroup(ce *CallExpr) Command {
-	if ce == nil || len(ce.Assigns) != 0 || len(ce.Args) != 1 || p.tok != leftParen || !p.spaced {
+	if ce == nil || len(ce.Assigns) != 0 || len(ce.Args) != 1 ||
+		(p.tok != leftParen && p.tok != _Newl) || (p.tok == leftParen && !p.spaced) {
 		return nil
 	}
 	kw := bashppBareLit(ce.Args[0])
@@ -52,16 +53,31 @@ func (p *Parser) bashppImportGroup(ce *CallExpr) Command {
 		return nil
 	}
 	txn := p.beginBashPPTxn()
-	lparen := p.pos
-	p.next()
-	var specs []*BashPPImportSpec
-	for {
-		for p.tok == _Newl || p.tok == semicolon {
+	var comments []Comment
+	if p.tok == _Newl {
+		for p.tok == _Newl {
 			p.next()
 		}
+		if p.tok != leftParen {
+			txn.rollback(p)
+			return nil
+		}
+		comments, p.accComs = p.accComs, nil
+	}
+	lparen := p.pos
+	p.next()
+	for p.tok == _Newl {
+		p.next()
+	}
+	var specs []*BashPPImportSpec
+	var last []Comment
+	for {
 		if p.tok == rightParen {
+			last, p.accComs = p.accComs, nil
 			break
 		}
+		specComments := p.accComs
+		p.accComs = nil
 		first := p.getWord()
 		if first == nil {
 			txn.rollback(p)
@@ -91,10 +107,14 @@ func (p *Parser) bashppImportGroup(ce *CallExpr) Command {
 			txn.rollback(p)
 			return nil
 		}
-		specs = append(specs, &BashPPImportSpec{Alias: alias, Path: path})
+		specs = append(specs, &BashPPImportSpec{Comments: specComments, Alias: alias, Path: path})
 		if p.tok != _Newl && p.tok != semicolon {
 			txn.rollback(p)
 			return nil
+		}
+		p.next()
+		for p.tok == _Newl {
+			p.next()
 		}
 	}
 	rparen := p.pos
@@ -104,7 +124,10 @@ func (p *Parser) bashppImportGroup(ce *CallExpr) Command {
 		return nil
 	}
 	txn.commit(p)
-	return &BashPPImport{Site: StartImport, Class: ClassR, Kw: kw, Specs: specs, Lparen: lparen, Rparen: rparen}
+	return &BashPPImport{
+		Site: StartImport, Class: ClassR, Kw: kw, Comments: comments,
+		Specs: specs, Last: last, Lparen: lparen, Rparen: rparen,
+	}
 }
 
 func exactGoImportString(w *Word) (*DblQuoted, bool) {

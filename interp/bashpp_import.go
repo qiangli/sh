@@ -342,6 +342,7 @@ func (r *Runner) bashPPImport(ctx context.Context, imp *syntax.BashPPImport) {
 	for k, v := range r.bashPPImports {
 		next[k] = v
 	}
+	groupPaths := make(map[string]struct{}, len(specs))
 	for _, spec := range specs {
 		pathText := spec.Path.Parts[0].(*syntax.Lit).Value
 		path, err := strconv.Unquote(`"` + pathText + `"`)
@@ -357,6 +358,11 @@ func (r *Runner) bashPPImport(ctx context.Context, imp *syntax.BashPPImport) {
 		if spec.Alias != nil {
 			name = spec.Alias.Value
 		}
+		if _, exists := groupPaths[path]; exists {
+			r.exit.fatal(fmt.Errorf("bash++: duplicate import path %q", path))
+			return
+		}
+		groupPaths[path] = struct{}{}
 		key := name
 		if name == "_" || name == "." {
 			key = name + ":" + path

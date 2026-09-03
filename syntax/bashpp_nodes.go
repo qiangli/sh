@@ -224,14 +224,16 @@ type BashPPCall struct {
 // BashPPImport imports one or more standard-library packages into the
 // Runner-local Bash++ namespace.
 type BashPPImport struct {
-	Site   StartSite
-	Class  SiteClass
-	Kw     *Lit
-	Alias  *Lit                // nil means the package's declared name (single form)
-	Path   *DblQuoted          // non-nil in the single form
-	Specs  []*BashPPImportSpec // non-nil in the grouped form
-	Lparen Pos
-	Rparen Pos
+	Site     StartSite
+	Class    SiteClass
+	Kw       *Lit
+	Alias    *Lit                // nil means the package's declared name (single form)
+	Path     *DblQuoted          // non-nil in the single form
+	Comments []Comment           // comments between the keyword and grouped form
+	Specs    []*BashPPImportSpec // non-nil in the grouped form
+	Last     []Comment           // comments before the closing parenthesis
+	Lparen   Pos
+	Rparen   Pos
 }
 
 func (i *BashPPImport) Pos() Pos { return i.Kw.Pos() }
@@ -245,8 +247,9 @@ func (i *BashPPImport) End() Pos {
 // BashPPImportSpec is one exact Go import specification. Alias may be a Go
 // identifier, _ or .; nil requests the package's declared name.
 type BashPPImportSpec struct {
-	Alias *Lit
-	Path  *DblQuoted
+	Comments []Comment
+	Alias    *Lit
+	Path     *DblQuoted
 }
 
 func (s *BashPPImportSpec) Pos() Pos {
