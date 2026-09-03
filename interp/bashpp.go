@@ -54,6 +54,44 @@ func (r *Runner) Dialect() syntax.LangVariant {
 	return r.dialect
 }
 
+// bashPPEnabled reports whether the bash++ dialect is currently live on this
+// runner. It is the state half of the runtime `set -o bashpp` seam; the
+// reporting half surfaces it in `set -o` / `set +o` listings. It follows the
+// effective dialect, so it reflects both the construction-time [Lang] choice
+// and any later `set -o bashpp` / `set +o bashpp` toggle.
+func (r *Runner) bashPPEnabled() bool {
+	return r.Dialect() == syntax.LangBashPP
+}
+
+// setBashPPMode toggles the bash++ dialect at runtime. This is purely the
+// interp-side behavioral gate: because bash++'s grammar is identical to Bash's
+// (see [Lang]), flipping between [syntax.LangBash] and [syntax.LangBashPP]
+// never implies a reparse or any parser dispatch. Enabling makes
+// object-valued variables live — still subject to POSIX orthogonality in
+// [Runner.objectsEnabled], which keeps them off under `set -o posix` — while
+// disabling returns the runner to plain Bash. It is orthogonal to POSIX mode:
+// neither toggle touches the other.
+func (r *Runner) setBashPPMode(enabled bool) {
+	if enabled {
+		r.dialect = syntax.LangBashPP
+	} else {
+		r.dialect = syntax.LangBash
+	}
+	if r.ecfg != nil {
+		r.ecfg.Lang = r.dialect
+	}
+}
+
+// PosixMode reports whether the runner is in POSIX mode, as enabled by
+// [WithPosixMode], the `--posix` command-line flag, or a runtime `set -o
+// posix`. It is the read side of the interpreter's POSIX state, orthogonal to
+// the bash++ dialect ([Runner.Dialect]): a runner may be in POSIX mode and the
+// bash++ dialect at once, though object-valued variables stay disabled while
+// POSIX mode is on.
+func (r *Runner) PosixMode() bool {
+	return r.opts[optPosix]
+}
+
 // objectsEnabled reports whether object-valued variables are live on this
 // runner. It requires the bash++ dialect, and it is off under `set -o posix`:
 // POSIX mode is the shell promising to be nothing but a POSIX shell, so the

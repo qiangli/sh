@@ -158,8 +158,12 @@ type Runner struct {
 	// dialect is the shell language variant the runner implements, and the
 	// interp-side half of the dialect seam. The zero value is
 	// [syntax.LangBash]; only [syntax.LangBashPP] changes any behaviour.
-	// See [Lang].
-	dialect syntax.LangVariant
+	// See [Lang]. It is normally fixed at construction, but `set -o bashpp` /
+	// `set +o bashpp` toggle it live between [syntax.LangBash] and
+	// [syntax.LangBashPP]; origDialect snapshots the construction-time value so
+	// Reset restores it.
+	dialect     syntax.LangVariant
+	origDialect syntax.LangVariant
 
 	// didReset remembers whether the runner has ever been reset. This is
 	// used so that Reset is automatically called when running any program
@@ -1658,6 +1662,14 @@ func Params(args ...string) RunnerOption {
 				}
 				continue
 			}
+			if value == "bashpp" {
+				// Live dialect toggle. It changes only interp-side
+				// behaviour (object-valued variables); the grammar is
+				// unchanged, so no reparse or dispatch is implied.
+				// Orthogonal to `set -o posix`.
+				r.setBashPPMode(enable)
+				continue
+			}
 			if value == "" && enable {
 				// `set -o` (no name): bash lists all options
 				// including no-op aliases (history, hashall,
@@ -1680,6 +1692,10 @@ func Params(args ...string) RunnerOption {
 					}
 					list = append(list, oentry{n, on})
 				}
+				// The bashpp dialect toggle is a bashy extension kept out
+				// of posixOptsTable (so it stays out of SHELLOPTS), but it
+				// is reported here so its live state is observable.
+				list = append(list, oentry{"bashpp", r.bashPPEnabled()})
 				sort.Slice(list, func(i, j int) bool { return list[i].name < list[j].name })
 				for _, e := range list {
 					r.printOptLine(e.name, e.enabled, true)
@@ -1705,6 +1721,9 @@ func Params(args ...string) RunnerOption {
 					}
 					list = append(list, oentry{n, on})
 				}
+				// See the `set -o` branch above: the bashpp toggle is
+				// reported in the reusable form too.
+				list = append(list, oentry{"bashpp", r.bashPPEnabled()})
 				sort.Slice(list, func(i, j int) bool { return list[i].name < list[j].name })
 				for _, e := range list {
 					setFlag := "+o"
@@ -2523,6 +2542,7 @@ func (r *Runner) Reset() {
 		r.origDir = r.Dir
 		r.origParams = r.Params
 		r.origOpts = r.opts
+		r.origDialect = r.dialect
 		r.origDryRun = r.dryRun
 		r.origDryRunOpt = r.dryRunOpt
 		r.origNoOpSetState = maps.Clone(r.noOpSetState)
@@ -2576,9 +2596,11 @@ func (r *Runner) Reset() {
 		jobCarrier:     r.jobCarrier,
 		sigReset:       r.sigReset,
 
-		// The dialect is fixed at construction by [Lang] and is not
-		// per-Run scratch state; a runner does not change language.
-		dialect: r.dialect,
+		// The dialect is fixed at construction by [Lang]; a runtime `set -o
+		// bashpp` may have changed r.dialect since, so Reset restores the
+		// construction-time value from origDialect (mirroring dryRun).
+		dialect:     r.origDialect,
+		origDialect: r.origDialect,
 
 		// These can be set by functions like [Dir] or [Params], but
 		// builtins can overwrite them; reset the fields to whatever the
@@ -3019,6 +3041,7 @@ func (r *Runner) subshell(background bool) *Runner {
 		enclosingSubshellEnd: r.enclosingSubshellEnd,
 		opts:                 r.opts,
 		dialect:              r.dialect,
+		origDialect:          r.origDialect,
 		noOpSetState:         maps.Clone(r.noOpSetState),
 		tempEnv:              maps.Clone(r.tempEnv),
 		usedNew:              r.usedNew,
