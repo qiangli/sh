@@ -5362,7 +5362,11 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				r.bashPPTaskFailed = r.exit.code != 0
 				r.bashPPTaskFailCode = r.exit.code
 			}
-			if r.bashPPConcurrent != nil {
+			// A failing command is not a safe launch-handshake point: if it is
+			// the function's terminal command, task completion must record and
+			// propagate cancellation before waking the owner. If later shell code
+			// recovers the status, that later successful command can wake it.
+			if r.bashPPConcurrent != nil && !r.bashPPTaskFailed {
 				r.bashPPConcurrent.arm(r.bashPPTaskState)
 			}
 		}()

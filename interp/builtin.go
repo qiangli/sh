@@ -587,6 +587,12 @@ var pipeWriteErrChecked = map[string]bool{
 }
 
 func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args []string) (exit exitStatus) {
+	// These builtins can wait on context-aware I/O or child state. Announce the
+	// blocking edge before entering it so the `go` launch handshake cannot
+	// deadlock an owner whose next statement supplies the wakeup or failure.
+	if r.bashPPGoTask && r.bashPPConcurrent != nil && (name == "read" || name == "wait") {
+		r.bashPPConcurrent.arm(r.bashPPTaskState)
+	}
 	// Bash fails a builtin whose standard-output write fails on a closed or
 	// broken descriptor (`echo >&-`, `printf x >&-`): it reports a write
 	// error and exits non-zero rather than silently succeeding. Track writes

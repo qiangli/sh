@@ -3224,6 +3224,11 @@ func (r *Runner) subshell(background bool) *Runner {
 	// it with a goroutine. Channel handles are deliberately not serializable.
 	r2.bashPPConcurrent = r.bashPPConcurrent
 	r2.bashPPChanBoundary = r.bashPPConcurrent != nil
+	// Shell-copy descendants of a task remain inside that task's capability
+	// and cancellation boundary. They may not regain process-signal or exec
+	// replacement authority merely by entering `( ... )` or a pipeline stage.
+	r2.bashPPGoTask = r.bashPPGoTask
+	r2.bashPPTaskState = r.bashPPTaskState
 	// Funcs are copied, since they might be modified.
 	r2.Funcs = maps.Clone(r.Funcs)
 	r2.funcSources = maps.Clone(r.funcSources)

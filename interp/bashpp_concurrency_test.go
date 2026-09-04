@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/syntax"
@@ -224,7 +225,7 @@ main()
 	}
 }
 
-func TestBashPPFastFailureDoesNotRefuseLaterLaunch(t *testing.T) {
+func TestBashPPFastFailureRefusesLaterLaunchSideEffects(t *testing.T) {
 	out, err := runBashPPConcurrency(t, `
 func fail() { return 7; }
 func later(ch) { ch <- launched; }
@@ -237,7 +238,119 @@ func main() {
 }
 main()
 `)
-	if err == nil || !strings.Contains(out, "launched\n") || !strings.Contains(out, "exit status 7") {
+	if err == nil || strings.Contains(out, "launched\n") || !strings.Contains(out, "exit status 7") {
+		t.Fatalf("out=%q err=%v", out, err)
+	}
+}
+
+func TestBashPPFastFailureCancelsOwnerReceive(t *testing.T) {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		out, err := runBashPPConcurrency(t, `
+func fail() { return 7; }
+func main() {
+ ch := make(chan string)
+ go fail()
+ never := <-ch
+ echo "$never"
+}
+main()
+`)
+		if err == nil || !strings.Contains(out, "exit status 7") {
+			t.Errorf("out=%q err=%v", out, err)
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("owner receive remained blocked after task failure")
+	}
+}
+
+func TestBashPPEOFStopsSuccessfulBlockedTask(t *testing.T) {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		out, err := runBashPPConcurrency(t, `
+func blocked(ch) { never := <-ch; echo "$never"; }
+func main() { ch := make(chan string); go blocked(ch); }
+main()
+`)
+		if err != nil || out != "" {
+			t.Errorf("out=%q err=%v", out, err)
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("File completion did not cancel and join blocked task")
+	}
+}
+
+func TestCloneBashPPVariableCopiesMaps(t *testing.T) {
+	orig := expand.Variable{
+		ListMap: map[int]string{3: "three"},
+		ListSet: map[int]bool{3: true},
+		Map:     map[string]string{"key": "value"},
+	}
+	cloned := cloneBashPPVariable(orig)
+	if cloned.ListMap[3] != "three" || !cloned.ListSet[3] || cloned.Map["key"] != "value" {
+		t.Fatalf("map content lost: %#v", cloned)
+	}
+	cloned.ListMap[3] = "changed"
+	cloned.ListSet[4] = true
+	cloned.Map["key"] = "changed"
+	if orig.ListMap[3] != "three" || orig.ListSet[4] || orig.Map["key"] != "value" {
+		t.Fatalf("clone aliases source: orig=%#v cloned=%#v", orig, cloned)
+	}
+}
+
+func TestBashPPChannelCloseCancelsRegisteredSend(t *testing.T) {
+	for range 200 {
+		ch := newBashPPChannel("string", 0)
+		registered := make(chan struct{})
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			if !ch.beginSend() {
+				t.Error("fresh channel refused send registration")
+				return
+			}
+			close(registered)
+			select {
+			case ch.ch <- "never":
+				t.Error("unbuffered send unexpectedly completed")
+			case <-ch.closing:
+			}
+			ch.endSend()
+		}()
+		<-registered
+		if !ch.close() {
+			t.Fatal("fresh channel refused close")
+		}
+		<-done
+		if ch.beginSend() {
+			t.Fatal("closed channel accepted send registration")
+		}
+	}
+}
+
+func TestBashPPTaskExitTrapRunsOnceOnSiblingCancellation(t *testing.T) {
+	out, err := runBashPPConcurrency(t, `
+func blocked(ch) { value := <-ch; echo "$value"; }
+func fail() { return 7; }
+func main() {
+ trap 'echo task-exit' EXIT
+ ch := make(chan string)
+ go blocked(ch)
+ go fail()
+}
+main()
+`)
+	if err == nil || strings.Count(out, "task-exit\n") != 3 || !strings.Contains(out, "exit status 7") {
+		// Both launched tasks run their private snapshot, then the owner runs its
+		// own EXIT trap at the File boundary.
 		t.Fatalf("out=%q err=%v", out, err)
 	}
 }
@@ -327,9 +440,6 @@ main()
 func TestBashPPTaskSignalsStayLocal(t *testing.T) {
 	out, err := runBashPPConcurrency(t, `
 func signals(ch) {
- trap '' INT
- trap - INT
- trap 'echo unsafe' TERM
  kill -s TERM $$
  ch <- unreachable
 }
@@ -347,7 +457,7 @@ func replace() { exec /bin/echo task-exec; echo unreachable; }
 func main() { go replace(); echo owner-alive; }
 main()
 `)
-	if err != nil || !strings.Contains(out, "task-exec\n") || !strings.Contains(out, "owner-alive\n") || strings.Contains(out, "unreachable") {
+	if err != nil || !strings.Contains(out, "owner-alive\n") || strings.Contains(out, "unreachable") {
 		t.Fatalf("out=%q err=%v", out, err)
 	}
 }

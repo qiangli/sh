@@ -188,20 +188,23 @@ func (c *bashPPCloner) cloneCell(cell *bashPPCell) *bashPPCell {
 func cloneBashPPVariable(vr expand.Variable) expand.Variable {
 	vr.List = append([]string(nil), vr.List...)
 	if vr.ListMap != nil {
-		vr.ListMap = make(map[int]string, len(vr.ListMap))
-		for key, value := range vr.ListMap {
+		src := vr.ListMap
+		vr.ListMap = make(map[int]string, len(src))
+		for key, value := range src {
 			vr.ListMap[key] = value
 		}
 	}
 	if vr.ListSet != nil {
-		vr.ListSet = make(map[int]bool, len(vr.ListSet))
-		for key, value := range vr.ListSet {
+		src := vr.ListSet
+		vr.ListSet = make(map[int]bool, len(src))
+		for key, value := range src {
 			vr.ListSet[key] = value
 		}
 	}
 	if vr.Map != nil {
-		vr.Map = make(map[string]string, len(vr.Map))
-		for key, value := range vr.Map {
+		src := vr.Map
+		vr.Map = make(map[string]string, len(src))
+		for key, value := range src {
 			vr.Map[key] = value
 		}
 	}

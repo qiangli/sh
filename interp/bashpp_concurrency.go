@@ -25,8 +25,53 @@ const (
 )
 
 type bashPPChannel struct {
-	elem string
-	ch   chan string
+	elem    string
+	ch      chan string
+	mu      sync.Mutex
+	changed *sync.Cond
+	closing chan struct{}
+	closed  bool
+	active  int
+}
+
+func newBashPPChannel(elem string, capacity int) *bashPPChannel {
+	c := &bashPPChannel{elem: elem, ch: make(chan string, capacity), closing: make(chan struct{})}
+	c.changed = sync.NewCond(&c.mu)
+	return c
+}
+
+func (c *bashPPChannel) beginSend() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return false
+	}
+	c.active++
+	return true
+}
+
+func (c *bashPPChannel) endSend() {
+	c.mu.Lock()
+	c.active--
+	if c.active == 0 {
+		c.changed.Broadcast()
+	}
+	c.mu.Unlock()
+}
+
+func (c *bashPPChannel) close() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return false
+	}
+	c.closed = true
+	close(c.closing)
+	for c.active != 0 {
+		c.changed.Wait()
+	}
+	close(c.ch)
+	return true
 }
 
 type bashPPObjectCloneKey struct {
@@ -171,7 +216,8 @@ type bashPPTaskFailure struct {
 
 type bashPPTaskState struct {
 	ordinal uint64
-	armed   bool
+	ready   chan struct{}
+	once    sync.Once
 }
 
 // One dynamic structured task group belongs to one owning File Run. Unlike a
@@ -183,7 +229,6 @@ type bashPPConcurrent struct {
 	ctx      context.Context
 	cancel   context.CancelFunc
 	active   int
-	sealed   bool
 	quiesced bool
 	failures []bashPPTaskFailure
 	nextTask uint64
@@ -213,76 +258,62 @@ func (r *Runner) bashPPConcurrency(ctx context.Context) *bashPPConcurrent {
 func (c *bashPPConcurrent) add() (*bashPPTaskState, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.quiesced {
+	if c.quiesced || c.ctx.Err() != nil {
 		return nil, false
 	}
 	ordinal := c.nextTask
 	c.nextTask++
 	c.active++
-	state := &bashPPTaskState{ordinal: ordinal}
+	state := &bashPPTaskState{ordinal: ordinal, ready: make(chan struct{})}
 	c.tasks[ordinal] = state
 	return state, true
-}
-
-func (c *bashPPConcurrent) maybeCancelLocked() {
-	if !c.sealed || len(c.failures) == 0 {
-		return
-	}
-	primary := c.failures[0].ordinal
-	for i := 1; i < len(c.failures); i++ {
-		if c.failures[i].ordinal < primary {
-			primary = c.failures[i].ordinal
-		}
-	}
-	for ordinal, task := range c.tasks {
-		if ordinal < primary && !task.armed {
-			return
-		}
-	}
-	c.cancel()
 }
 
 func (c *bashPPConcurrent) arm(task *bashPPTaskState) {
 	if task == nil {
 		return
 	}
-	c.mu.Lock()
-	task.armed = true
-	c.maybeCancelLocked()
-	c.mu.Unlock()
+	task.once.Do(func() { close(task.ready) })
 }
 
 func (c *bashPPConcurrent) armed(task *bashPPTaskState) bool {
-	c.mu.Lock()
-	armed := task == nil || task.armed
-	c.mu.Unlock()
-	return armed
+	if task == nil {
+		return true
+	}
+	select {
+	case <-task.ready:
+		return true
+	default:
+		return false
+	}
 }
 
 func (c *bashPPConcurrent) done(ordinal uint64, f *bashPPTaskFailure) {
 	c.mu.Lock()
+	state := c.tasks[ordinal]
 	if f != nil {
 		c.failures = append(c.failures, *f)
-		// Do not let a very fast task make later syntactic go statements in
-		// the still-evaluating owner schedule-dependent. Once the File owner
-		// seals registration, the first observed concrete failure cancels the
-		// remaining task tree.
+		// Failure is a structured-concurrency cancellation point, not something
+		// deferred until the owner reaches EOF. The launch handshake makes this
+		// deterministic: the owner cannot pass this task's `go` statement until
+		// its first command has either completed or committed to a cancellable
+		// block.
+		c.cancel()
 	}
 	delete(c.tasks, ordinal)
 	c.active--
-	c.maybeCancelLocked()
-	if c.active == 0 && c.sealed {
-		c.quiesced = true
+	if c.active == 0 {
 		c.changed.Broadcast()
 	}
 	c.mu.Unlock()
+	// Always release a launcher, including snapshot failures, empty functions,
+	// and panics before the first semantic command.
+	c.arm(state)
 }
 
 func (c *bashPPConcurrent) stopAndJoin() *bashPPTaskFailure {
 	c.cancel()
 	c.mu.Lock()
-	c.sealed = true
-	c.maybeCancelLocked()
 	for c.active != 0 {
 		c.changed.Wait()
 	}
@@ -372,7 +403,7 @@ func (r *Runner) bashPPMakeChan(ctx context.Context, d *syntax.BashPPShortDecl) 
 		r.exit.code = 2
 		return
 	}
-	c.chans[h] = &bashPPChannel{elem: d.MakeChan.ChanType.Elem.Value, ch: make(chan string, capacity)}
+	c.chans[h] = newBashPPChannel(d.MakeChan.ChanType.Elem.Value, capacity)
 	c.mu.Unlock()
 	r.bashPPDeclareName(d.Lhs[0].Value, expand.Variable{Set: true, Kind: expand.String, Str: h})
 }
@@ -391,14 +422,17 @@ func (r *Runner) bashPPSend(ctx context.Context, s *syntax.BashPPSend) {
 	if r.bashPPConcurrent != nil {
 		r.bashPPConcurrent.arm(r.bashPPTaskState)
 	}
-	defer func() {
-		if recover() != nil {
-			r.errf("bash++: send on closed channel\n")
-			r.exit.code = 2
-		}
-	}()
+	if !c.beginSend() {
+		r.errf("bash++: send on closed channel\n")
+		r.exit.code = 2
+		return
+	}
+	defer c.endSend()
 	select {
 	case c.ch <- v:
+	case <-c.closing:
+		r.errf("bash++: send on closed channel\n")
+		r.exit.code = 2
 	case <-r.bashPPTaskContext(ctx).Done():
 		r.bashPPTaskCanceled = true
 		r.exit.code = 1
@@ -441,13 +475,10 @@ func (r *Runner) bashPPClose(cl *syntax.BashPPClose) {
 	if !ok {
 		return
 	}
-	defer func() {
-		if recover() != nil {
-			r.errf("bash++: close of closed channel\n")
-			r.exit.code = 2
-		}
-	}()
-	close(c.ch)
+	if !c.close() {
+		r.errf("bash++: close of closed channel\n")
+		r.exit.code = 2
+	}
 }
 
 // bashPPTaskSnapshot is the explicit task boundary. subshell(true) clones
@@ -521,13 +552,26 @@ func (r *Runner) bashPPTaskSnapshot(ordinal uint64) (*Runner, error) {
 	if child.stdin, err = dup(r.stdin); err != nil {
 		return child, err
 	}
+	if child.origStdin, err = dup(r.origStdin); err != nil {
+		return child, err
+	}
 	if f, ok := r.stdout.(*os.File); ok {
 		if child.stdout, err = dup(f); err != nil {
 			return child, err
 		}
 	}
+	if f, ok := r.origStdout.(*os.File); ok {
+		if child.origStdout, err = dup(f); err != nil {
+			return child, err
+		}
+	}
 	if f, ok := r.stderr.(*os.File); ok {
 		if child.stderr, err = dup(f); err != nil {
+			return child, err
+		}
+	}
+	if f, ok := r.origStderr.(*os.File); ok {
+		if child.origStderr, err = dup(f); err != nil {
 			return child, err
 		}
 	}
@@ -567,6 +611,25 @@ func (r *Runner) bashPPTaskSnapshot(ordinal uint64) (*Runner, error) {
 
 func (r *Runner) closeBashPPTaskResources() {
 	r.stopSignalSubscriptions()
+	// Background jobs, coprocs, and process substitutions created by this task
+	// inherit its group context. Cancel and join them before releasing their fd
+	// owners; otherwise a File Run could return while task descendants still
+	// use the cloned runner.
+	for _, bg := range r.bgProcs {
+		if bg != nil && bg.cancel != nil {
+			bg.cancel()
+		}
+	}
+	for _, bg := range r.bgProcs {
+		if bg == nil {
+			continue
+		}
+		<-bg.done
+		if bg.coprocPid != 0 {
+			r.reapCoproc(bg)
+		}
+	}
+	r.bgProcs = nil
 	for _, file := range r.bashPPTaskFiles {
 		_ = file.Close()
 	}
@@ -594,8 +657,8 @@ func (r *Runner) bashPPGo(ctx context.Context, g *syntax.BashPPGo) {
 	c := r.bashPPConcurrency(ctx)
 	state, ok := c.add()
 	if !ok {
-		r.errf("bash++: cannot start task after task group quiesced\n")
-		r.exit.code = 1
+		// A prior child failure owns the eventual File status. A syntactically
+		// later launch observes cancellation and has no side effects.
 		return
 	}
 	ordinal := state.ordinal
@@ -614,6 +677,17 @@ func (r *Runner) bashPPGo(ctx context.Context, g *syntax.BashPPGo) {
 			if x := recover(); x != nil {
 				failure = &bashPPTaskFailure{ordinal: ordinal, code: 2, text: fmt.Sprintf("panic: %v", x)}
 			}
+			// A task is a terminal shell lifetime. Run its private EXIT snapshot
+			// once even when group cancellation has already fired; cleanup traps
+			// must not be skipped merely because a sibling failed.
+			func() {
+				defer func() {
+					if x := recover(); x != nil && failure == nil {
+						failure = &bashPPTaskFailure{ordinal: ordinal, code: 2, text: fmt.Sprintf("EXIT trap panic: %v", x)}
+					}
+				}()
+				child.trapCallback(context.WithoutCancel(c.ctx), child.trapCallbacks["EXIT"], "exit")
+			}()
 			child.closeBashPPTaskResources()
 			c.done(ordinal, failure)
 		}()
@@ -630,6 +704,11 @@ func (r *Runner) bashPPGo(ctx context.Context, g *syntax.BashPPGo) {
 			failure = &bashPPTaskFailure{ordinal: ordinal, code: code, text: fmt.Sprintf("exit status %d", code)}
 		}
 	}()
+	// Deterministic launch handshake: a nonblocking first command completes
+	// before the owner advances, while a known blocking operation announces
+	// itself immediately before it blocks. This preserves useful concurrency
+	// without allowing a fast failure to race later side effects.
+	<-state.ready
 }
 
 func (r *Runner) bashPPWait(ctx context.Context) {
@@ -637,12 +716,10 @@ func (r *Runner) bashPPWait(ctx context.Context) {
 	if c == nil || r.bashPPGoTask {
 		return
 	}
-	if ctx.Err() != nil {
-		c.cancel()
-	}
+	// EOF is the structured lifetime boundary. Successful blocked tasks must
+	// not keep a File Run alive forever.
+	c.cancel()
 	c.mu.Lock()
-	c.sealed = true
-	c.maybeCancelLocked()
 	for c.active != 0 {
 		c.changed.Wait()
 	}
@@ -664,6 +741,8 @@ func (r *Runner) bashPPWait(ctx context.Context) {
 func (r *Runner) bashPPSelect(ctx context.Context, s *syntax.BashPPSelect) {
 	var cases []reflect.SelectCase
 	var arms []*syntax.BashPPSelectCase
+	var sends []*bashPPChannel
+	closingCases := make(map[int]bool)
 	var def *syntax.BashPPSelectCase
 	for _, arm := range s.Cases {
 		if arm.Default {
@@ -699,7 +778,21 @@ func (r *Runner) bashPPSelect(ctx context.Context, s *syntax.BashPPSelect) {
 				r.exit.code = 2
 				return
 			}
+			if !c.beginSend() {
+				for _, prior := range sends {
+					prior.endSend()
+				}
+				r.errf("bash++: send on closed channel\n")
+				r.exit.code = 2
+				return
+			}
+			sends = append(sends, c)
 			cases = append(cases, reflect.SelectCase{Dir: reflect.SelectSend, Chan: reflect.ValueOf(c.ch), Send: reflect.ValueOf(v)})
+			arms = append(arms, arm)
+			cases = append(cases, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(c.closing)})
+			arms = append(arms, nil)
+			closingCases[len(cases)-1] = true
+			continue
 		default:
 			r.errf("invalid select case\n")
 			r.exit.code = 2
@@ -707,6 +800,11 @@ func (r *Runner) bashPPSelect(ctx context.Context, s *syntax.BashPPSelect) {
 		}
 		arms = append(arms, arm)
 	}
+	defer func() {
+		for _, c := range sends {
+			c.endSend()
+		}
+	}()
 	if def != nil {
 		cases = append(cases, reflect.SelectCase{Dir: reflect.SelectDefault})
 		arms = append(arms, def)
@@ -719,16 +817,15 @@ func (r *Runner) bashPPSelect(ctx context.Context, s *syntax.BashPPSelect) {
 		r.exit.code = 1
 		return
 	}
-	defer func() {
-		if recover() != nil {
-			r.errf("bash++: send on closed channel\n")
-			r.exit.code = 2
-		}
-	}()
 	if r.bashPPConcurrent != nil {
 		r.bashPPConcurrent.arm(r.bashPPTaskState)
 	}
 	i, v, open := reflect.Select(cases)
+	if closingCases[i] {
+		r.errf("bash++: send on closed channel\n")
+		r.exit.code = 2
+		return
+	}
 	if def == nil && i == len(arms) {
 		r.bashPPTaskCanceled = true
 		r.exit.code = 1
