@@ -585,6 +585,13 @@ func (r *Runner) enableSignalTrap(name string) {
 	if r.isStartupIgnored(name) {
 		return
 	}
+	// KILL and STOP are recorded in trapCallbacks for bash-compatible
+	// reporting, but the kernel never permits a handler for either signal.
+	// In particular, do not strand a forwarder on a signal.Notify channel
+	// which can never receive a delivery.
+	if name == "KILL" || name == "STOP" {
+		return
+	}
 	// SIGCHLD is driven from child reaps (notifyChildReaped), not from OS
 	// signal delivery, so it never needs an OS handler. Installing one would
 	// also risk perturbing Go's own child reaping.
@@ -740,6 +747,11 @@ func (r *Runner) ignoreSignalTrap(name string) {
 	if r.isStartupIgnored(name) {
 		return
 	}
+	// Preserve the trap metadata while leaving the impossible OS disposition
+	// untouched for signals which cannot be caught or ignored.
+	if name == "KILL" || name == "STOP" {
+		return
+	}
 	// SIGCHLD is reap-driven; never touch its OS disposition. A real SIG_IGN
 	// on SIGCHLD would also break child reaping (auto-reaped children make
 	// wait() fail with ECHILD on some systems).
@@ -785,6 +797,9 @@ func (r *Runner) ignoreSignalTrap(name string) {
 // default disposition. Called by the `trap` builtin when a trap is reset.
 func (r *Runner) disableSignalTrap(name string) {
 	if r.isStartupIgnored(name) {
+		return
+	}
+	if name == "KILL" || name == "STOP" {
 		return
 	}
 	sig, ok := signalByName(name)
