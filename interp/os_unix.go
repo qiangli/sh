@@ -294,6 +294,11 @@ func openFifoWithContextFunc(ctx context.Context, path string, flags int, perm o
 			return nil, &os.PathError{Op: "open", Path: path, Err: err}
 		}
 		fd, err := open(nonblockFlags, uint32(perm))
+		if err == unix.EINTR {
+			// Same SIGURG interruption as the read side. Retry immediately:
+			// the loop's own ctx check above is the exit.
+			continue
+		}
 		if err == nil {
 			fl, err := unix.FcntlInt(uintptr(fd), unix.F_GETFL, 0)
 			if err == nil {
@@ -322,8 +327,21 @@ func openReadFifoWithContext(ctx context.Context, path string, flags int, perm o
 	}
 	done := make(chan result, 1)
 	go func() {
-		fd, err := open(flags|unix.O_CLOEXEC, uint32(perm))
-		done <- result{fd, err}
+		for {
+			fd, err := open(flags|unix.O_CLOEXEC, uint32(perm))
+			// The Go runtime preempts goroutines with SIGURG, so a blocking
+			// FIFO open is routinely interrupted long before a writer
+			// arrives. The raw openat/open below is not the retrying
+			// os.Open, so EINTR reaches us verbatim; reporting it would fail
+			// the open precisely when it was waiting correctly. Retry unless
+			// the caller has given up, in which case the cancellation branch
+			// releases this goroutine with its own guard writer.
+			if err == unix.EINTR && ctx.Err() == nil {
+				continue
+			}
+			done <- result{fd, err}
+			return
+		}
 	}()
 	select {
 	case res := <-done:

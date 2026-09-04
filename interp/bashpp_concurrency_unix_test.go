@@ -42,6 +42,61 @@ main()
 	}
 }
 
+// TestBashPPGoFIFORedirectWaitsForTheWriter pins the rendezvous itself,
+// independently of the scheduler.
+//
+// TestBashPPGoArmsBeforeBlockingFIFORedirect above only caught the missing
+// rendezvous at GOMAXPROCS=1; with more procs the writer usually reached the
+// FIFO before the task read it, so a descriptor that could not wait still
+// looked correct. Here the owner is delayed past the task's open, which is the
+// ordering the FIFO exists to survive: a task that opened with O_NONBLOCK sees
+// end-of-file at once, writes nothing, and closes the only read end — and the
+// owner's own open then blocks forever with no reader. So the failure mode is
+// a hang, and the test bounds it rather than inheriting the package timeout.
+func TestBashPPGoFIFORedirectWaitsForTheWriter(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rendezvous.fifo")
+	sink := filepath.Join(dir, "sink")
+	if err := syscall.Mkfifo(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	src := `
+func reader(ack) { /bin/cat < ` + path + ` > ` + sink + `; ack <- ok; }
+func main() {
+ ack := make(chan string)
+ go reader(ack)
+ /bin/sleep 0.2
+ echo ready > ` + path + `
+ <-ack
+}
+main()
+`
+	type result struct {
+		out string
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		out, err := runBashPPConcurrency(t, src)
+		done <- result{out, err}
+	}()
+	select {
+	case res := <-done:
+		if res.err != nil {
+			t.Fatalf("out=%q err=%v", res.out, res.err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("FIFO redirect never joined the writer: the task took a descriptor that reads EOF, then closed the only read end")
+	}
+	got, err := os.ReadFile(sink)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "ready\n" {
+		t.Fatalf("sink = %q, want %q", got, "ready\n")
+	}
+}
+
 func TestBashPPTaskReadArmsAfterAvailablePrefix(t *testing.T) {
 	read, write, err := os.Pipe()
 	if err != nil {

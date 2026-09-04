@@ -519,19 +519,56 @@ func (r *Runner) bashPPTaskOpen(ctx context.Context, path string, flags int, mod
 			err := fmt.Errorf("FIFO input is unavailable inside a Bash++ task")
 			return nil, reportOpenError(err)
 		}
+		// The probe CLASSIFIED this object; it did not join its rendezvous.
+		// O_NONBLOCK is what let the probe run before the task armed, and on a
+		// FIFO that flag does not defer the wait, it cancels it: the open
+		// succeeds with no peer and the descriptor reads end-of-file instead
+		// of waiting for a writer. Clearing O_NONBLOCK afterwards cannot
+		// recover a rendezvous that never happened — a task handed that
+		// descriptor finishes immediately on empty input, and its own writer
+		// is then left blocking on an open that no longer has a reader.
+		//
+		// Record which object the probe reached, arm, and open it again for
+		// real. The blocking open IS the rendezvous, which is what makes the
+		// launch handshake true here rather than merely early.
+		want, identityErr := bashPPTaskFifoIdentityOf(file)
+		_ = file.Close()
+		if identityErr != nil {
+			return nil, reportOpenError(identityErr)
+		}
 		if !r.bashPPArmBeforeBlock(ctx) {
-			_ = file.Close()
 			return nil, r.bashPPTaskContext(ctx).Err()
 		}
-		if err := r.bashPPTaskContext(ctx).Err(); err != nil {
-			_ = file.Close()
+		taskCtx := r.bashPPTaskContext(ctx)
+		if err := taskCtx.Err(); err != nil {
 			return nil, err
 		}
-		if err := bashPPTaskSourceClearNonblock(file); err != nil {
-			_ = file.Close()
+		opened, err := bashPPTaskFifoOpen(taskCtx, r.dirFile, r.Dir, path, flags, mode)
+		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				r.bashPPTaskCanceled = true
+				return nil, err
+			}
 			return nil, reportOpenError(err)
 		}
-		return file, nil
+		// Re-opening by path reintroduces the window the probe was written to
+		// close, so prove the second open reached the first one's object
+		// rather than a replacement swapped in behind it.
+		got, err := bashPPTaskFifoIdentityOf(opened)
+		if err != nil {
+			_ = opened.Close()
+			return nil, reportOpenError(err)
+		}
+		if got != want {
+			_ = opened.Close()
+			err := fmt.Errorf("FIFO was replaced while the task was arming")
+			return nil, reportOpenError(err)
+		}
+		if err := taskCtx.Err(); err != nil {
+			_ = opened.Close()
+			return nil, err
+		}
+		return opened, nil
 	}
 	if err := bashPPTaskSourceClearNonblock(file); err != nil {
 		_ = file.Close()
