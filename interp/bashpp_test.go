@@ -6,6 +6,7 @@ package interp_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os/exec"
 	"strings"
 	"testing"
@@ -148,6 +149,27 @@ func TestBashPPObjectRoundTrip(t *testing.T) {
 	qt.Assert(t, qt.IsFalse(ok))
 }
 
+func TestBashPPSetObjectMutationFailsClosedAtCoercion(t *testing.T) {
+	t.Parallel()
+
+	type holder struct {
+		Value any `json:"value"`
+	}
+	orig := &holder{Value: []int{1, 2}}
+
+	var out strings.Builder
+	r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP))
+	qt.Assert(t, qt.IsNil(r.SetObject("OBJ", orig)))
+
+	got, ok := r.Object("OBJ")
+	qt.Assert(t, qt.IsTrue(ok))
+	qt.Assert(t, qt.Equals(got, any(orig)))
+
+	orig.Value = orig
+	bashPPRun(t, r, `echo "$OBJ"`)
+	qt.Assert(t, qt.Equals(out.String(), expand.ObjectString(make(chan int))+"\n"))
+}
+
 // TestBashPPObjectCoercion covers the "coerce to string for bash commands" half:
 // wherever the shell needs a string, the object is one.
 func TestBashPPObjectCoercion(t *testing.T) {
@@ -207,6 +229,25 @@ func TestBashPPObjectCrossesOSBoundary(t *testing.T) {
 	qt.Assert(t, qt.IsNil(r2.SetObject("SECRET", map[string]any{"k": "v"})))
 	bashPPRun(t, r2, `env`)
 	qt.Assert(t, qt.IsFalse(strings.Contains(out2.String(), "SECRET=")))
+}
+
+func TestBashPPLargeObjectCrossesOSBoundaryIntact(t *testing.T) {
+	t.Parallel()
+
+	if _, err := exec.LookPath("wc"); err != nil {
+		t.Skipf("need the wc binary: %v", err)
+	}
+
+	payload := strings.Repeat("x", 200_000)
+	wantBytes := len(expand.ObjectString(payload))
+	var out strings.Builder
+	r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP))
+	qt.Assert(t, qt.IsNil(r.SetObject("OBJ", payload)))
+
+	// printf is the shell builtin, while wc is a real external process. Its
+	// count proves the complete JSON string crossed the process boundary.
+	bashPPRun(t, r, `printf %s "$OBJ" | wc -c`)
+	qt.Assert(t, qt.Equals(strings.TrimSpace(out.String()), fmt.Sprint(wantBytes)))
 }
 
 // TestBashPPLangBashUnaffected is the no-regression gate: for any script which
