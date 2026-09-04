@@ -117,7 +117,7 @@ func bashppUntypedDecl(ce *CallExpr, redirs []*Redirect) *BashPPDecl {
 // this tranche. A type body is one bare identifier, optionally preceded by an
 // alias marker; unsupported bodies remain ordinary shell commands.
 func bashppTypeDecl(ce *CallExpr, redirs []*Redirect) *BashPPDecl {
-	if ce == nil || len(ce.Assigns) > 0 || len(redirs) > 0 || len(ce.Args) < 3 || len(ce.Args) > 4 {
+	if ce == nil || len(ce.Assigns) > 0 || len(redirs) > 0 || len(ce.Args) < 3 {
 		return nil
 	}
 	kw := bashppBareLit(ce.Args[0])
@@ -128,11 +128,35 @@ func bashppTypeDecl(ce *CallExpr, redirs []*Redirect) *BashPPDecl {
 	alias := false
 	typeWord := ce.Args[2]
 	if len(ce.Args) == 4 {
-		eq := bashppBareLit(ce.Args[2])
-		if eq == nil || eq.Value != "=" {
+		if ce.Args[2].Lit() != "=" {
 			return nil
 		}
 		alias, typeWord = true, ce.Args[3]
+	}
+	if !alias && len(ce.Args) >= 7 && ce.Args[2].Lit() == "struct" &&
+		ce.Args[3].Lit() == "{" && ce.Args[len(ce.Args)-1].Lit() == "}" {
+		body := ce.Args[4 : len(ce.Args)-1]
+		if len(body)%2 != 0 {
+			return nil
+		}
+		fields := make([]*BashPPField, 0, len(body)/2)
+		for i := 0; i < len(body); i += 2 {
+			fieldName, fieldType := bashppBareLit(body[i]), bashppTypeLit(body[i+1])
+			if fieldName == nil || !bashppIsIdent(fieldName.Value) || fieldType == nil {
+				return nil
+			}
+			fields = append(fields, &BashPPField{Names: []*Lit{fieldName}, FieldType: fieldType})
+		}
+		m := RecognizeStartSite(kw.Value + " " + name.Value)
+		if m.Site != StartTypeDecl {
+			return nil
+		}
+		return &BashPPDecl{Site: m.Site, Kw: kw, Name: name, DeclType: bashppBareLit(ce.Args[2]),
+			StructFields: fields, Lbrace: ce.Args[3].Pos(), Rbrace: ce.Args[len(ce.Args)-1].Pos(),
+			End_: ce.Args[len(ce.Args)-1].End()}
+	}
+	if len(ce.Args) > 4 {
+		return nil
 	}
 	typ := bashppBareLit(typeWord)
 	if typ == nil || !bashppIsIdent(typ.Value) {
@@ -143,6 +167,17 @@ func bashppTypeDecl(ce *CallExpr, redirs []*Redirect) *BashPPDecl {
 		return nil
 	}
 	return &BashPPDecl{Site: m.Site, Kw: kw, Name: name, DeclType: typ, Alias: alias, End_: typeWord.End()}
+}
+
+func bashppTypeLit(w *Word) *Lit {
+	if lit := bashppBareLit(w); lit != nil && bashppCompositeType(lit.Value) {
+		return lit
+	}
+	text := bashppWordText(w)
+	if !bashppCompositeType(text) {
+		return nil
+	}
+	return &Lit{ValuePos: w.Pos(), ValueEnd: w.End(), Value: text}
 }
 
 // bashppTypedVarDecl recognizes the named scalar and pointer declarations

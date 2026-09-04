@@ -5339,6 +5339,8 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		r.bashPPDeclare(ctx, cm)
 	case *syntax.BashPPShortDecl:
 		r.bashPPShortDecl(ctx, cm)
+	case *syntax.BashPPAssign:
+		r.bashPPAssign(ctx, cm)
 	case *syntax.BashPPCall:
 		r.bashPPCall(ctx, cm)
 	case *syntax.BashPPFuncDecl:

@@ -35,11 +35,16 @@ type bashPPEvalRequest struct {
 	Imports  map[string]string
 	Selector []string
 	Args     []string
+	Results  int
 }
 
 type bashPPEvaluator interface {
 	Resolve(context.Context, bashPPEvalRequest, string) (string, error)
 	Call(context.Context, bashPPEvalRequest) error
+}
+
+type bashPPValuesEvaluator interface {
+	Values(context.Context, bashPPEvalRequest) ([]any, error)
 }
 
 // bashPPToolchain is deliberately package-private. The zero value selects the
@@ -265,6 +270,83 @@ func (nativeBashPPEvaluator) Call(ctx context.Context, req bashPPEvalRequest) er
 		return err
 	}
 	return nil
+}
+
+func (nativeBashPPEvaluator) Values(ctx context.Context, req bashPPEvalRequest) ([]any, error) {
+	if len(req.Selector) < 2 || req.Results < 1 {
+		return nil, errors.New("bash++: value call requires an imported selector and result names")
+	}
+	path, ok := req.Imports[req.Selector[0]]
+	if !ok {
+		return nil, fmt.Errorf("bash++: package %s is not imported", req.Selector[0])
+	}
+	for _, part := range req.Selector {
+		if !token.IsIdentifier(part) || token.Lookup(part).IsKeyword() {
+			return nil, fmt.Errorf("bash++: invalid selector %q", part)
+		}
+	}
+	var src strings.Builder
+	src.WriteString("package main\nimport (\nbashppjson \"encoding/json\"\nbashppos \"os\"\n")
+	src.WriteString(req.Selector[0])
+	src.WriteByte(' ')
+	src.WriteString(strconv.Quote(path))
+	src.WriteString("\n)\nfunc main() {\n")
+	for i := 0; i < req.Results; i++ {
+		if i > 0 {
+			src.WriteByte(',')
+		}
+		fmt.Fprintf(&src, "bashppv%d", i)
+	}
+	src.WriteString(" := ")
+	src.WriteString(strings.Join(req.Selector, "."))
+	src.WriteByte('(')
+	src.WriteString(strings.Join(req.Args, ","))
+	src.WriteString(")\n_ = bashppjson.NewEncoder(bashppos.Stdout).Encode([]any{")
+	for i := 0; i < req.Results; i++ {
+		if i > 0 {
+			src.WriteByte(',')
+		}
+		fmt.Fprintf(&src, "bashppv%d", i)
+	}
+	src.WriteString("})\n}\n")
+	formatted, err := format.Source([]byte(src.String()))
+	if err != nil {
+		return nil, fmt.Errorf("bash++: construct value call: %w", err)
+	}
+	f, err := os.CreateTemp(req.Dir, "bashpp-values-*.go")
+	if err != nil {
+		return nil, err
+	}
+	name := f.Name()
+	defer os.Remove(name)
+	if _, err := f.Write(formatted); err != nil {
+		f.Close()
+		return nil, err
+	}
+	if err := f.Close(); err != nil {
+		return nil, err
+	}
+	bin := name + ".bin"
+	if runtime.GOOS == "windows" {
+		bin += ".exe"
+	}
+	defer os.Remove(bin)
+	build := exec.CommandContext(ctx, req.Go, "build", "-o", bin, name)
+	build.Dir, build.Env, build.Stdout, build.Stderr = req.Dir, req.Env, req.Stdout, req.Stderr
+	if err := build.Run(); err != nil {
+		return nil, err
+	}
+	var stdout bytes.Buffer
+	cmd := exec.CommandContext(ctx, bin)
+	cmd.Dir, cmd.Env, cmd.Stdin, cmd.Stdout, cmd.Stderr = req.Dir, req.Env, req.Stdin, &stdout, req.Stderr
+	if err := cmd.Run(); err != nil {
+		return nil, err
+	}
+	var values []any
+	if err := json.Unmarshal(stdout.Bytes(), &values); err != nil {
+		return nil, fmt.Errorf("bash++: decode value call: %w", err)
+	}
+	return values, nil
 }
 
 func (r *Runner) bashPPEvalRequest() (bashPPEvalRequest, error) {

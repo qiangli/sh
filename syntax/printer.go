@@ -1506,10 +1506,26 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 			}
 			p.spacedString(cmd.DeclType.Value, cmd.DeclType.Pos())
 		}
+		if len(cmd.StructFields) > 0 {
+			p.spacedString("{", cmd.Lbrace)
+			for i, field := range cmd.StructFields {
+				if i > 0 {
+					p.writeLit(";")
+				}
+				p.spacedString(field.Names[0].Value, field.Names[0].Pos())
+				p.spacedString(field.FieldType.Value, field.FieldType.Pos())
+			}
+			p.spacedString("}", cmd.Rbrace)
+		}
 		if len(cmd.Init) > 0 {
 			p.spacedString("=", Pos{})
 			p.wordJoin(cmd.Init)
 		}
+	case *BashPPAssign:
+		p.word(cmd.Target)
+		p.spacedString("=", cmd.Eq)
+		p.space()
+		p.word(cmd.Value)
 	case *BashPPShortDecl:
 		for i, lhs := range cmd.Lhs {
 			if i > 0 {

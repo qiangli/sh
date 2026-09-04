@@ -182,6 +182,12 @@ type BashPPDecl struct {
 	DeclType *Lit      // the declared type, or nil when inferred
 	Alias    bool      // whether a type declaration uses the `=` alias form
 	Init     []*Word   // the initializer, or nil for a bare declaration
+	// StructFields is non-empty for the closed Bash# struct declaration
+	// surface, `type T struct { Name string; ... }`. DeclType is the `struct`
+	// literal in that form; the braces retain their source positions.
+	StructFields []*BashPPField
+	Lbrace       Pos
+	Rbrace       Pos
 
 	// End_ is the end of the declaration, which for a multi-line type
 	// declaration is the closing brace rather than the end of Init.
@@ -201,6 +207,19 @@ func (d *BashPPDecl) End() Pos {
 	}
 	return d.Name.End()
 }
+
+// BashPPAssign is a Go-form assignment used by Bash# deep-readonly checks.
+// Target and Value remain words so the AST preserves quote structure and byte
+// positions; the interpreter parses their deliberately small expression
+// grammar only after the node has passed the Bash++/POSIX runtime gates.
+type BashPPAssign struct {
+	Target *Word
+	Eq     Pos
+	Value  *Word
+}
+
+func (a *BashPPAssign) Pos() Pos { return a.Target.Pos() }
+func (a *BashPPAssign) End() Pos { return a.Value.End() }
 
 // BashPPShortDecl is a Go short variable declaration: x := 42, x, y := f().
 //
@@ -571,6 +590,7 @@ func (d *BashPPDefer) End() Pos {
 // what lets this whole file merge without touching a certification-owned file.
 func (*BashPPDecl) commandNode()      {}
 func (*BashPPShortDecl) commandNode() {}
+func (*BashPPAssign) commandNode()    {}
 func (*BashPPCall) commandNode()      {}
 func (*BashPPIf) commandNode()        {}
 func (*BashPPImport) commandNode()    {}

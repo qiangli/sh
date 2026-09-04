@@ -49,6 +49,9 @@ import (
 // the snapshot and the live scope name the same cell.
 type bashPPCell struct {
 	vr expand.Variable
+	// object is shared by every alias of one structured value. Deep readonly
+	// is an attribute of this identity rather than of one variable spelling.
+	object *bashPPObjectIdentity
 	// typeName is non-empty for a value of a script-declared named type.
 	// Pointer/nilPointer retain identity in-process; the visible shell value
 	// remains vr, so typed values never need a lossy JSON representation.
@@ -129,14 +132,16 @@ func (s *bashPPScope) snapshot() *bashPPScope {
 // it inside one. Memoizing on the ORIGINAL pointer reproduces the aliasing
 // graph exactly, one edge at a time.
 type bashPPCloner struct {
-	scopes map[*bashPPScope]*bashPPScope
-	cells  map[*bashPPCell]*bashPPCell
+	scopes  map[*bashPPScope]*bashPPScope
+	cells   map[*bashPPCell]*bashPPCell
+	objects map[*bashPPObjectIdentity]*bashPPObjectIdentity
 }
 
 func newBashPPCloner() *bashPPCloner {
 	return &bashPPCloner{
-		scopes: make(map[*bashPPScope]*bashPPScope),
-		cells:  make(map[*bashPPCell]*bashPPCell),
+		scopes:  make(map[*bashPPScope]*bashPPScope),
+		cells:   make(map[*bashPPCell]*bashPPCell),
+		objects: make(map[*bashPPObjectIdentity]*bashPPObjectIdentity),
 	}
 }
 
@@ -166,6 +171,15 @@ func (c *bashPPCloner) cloneCell(cell *bashPPCell) *bashPPCell {
 		return copied
 	}
 	dup := *cell
+	if cell.object != nil {
+		if object := c.objects[cell.object]; object != nil {
+			dup.object = object
+		} else {
+			objectCopy := *cell.object
+			dup.object = &objectCopy
+			c.objects[cell.object] = dup.object
+		}
+	}
 	copied := &dup
 	c.cells[cell] = copied
 	return copied

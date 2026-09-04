@@ -5,6 +5,7 @@ package syntax
 
 import (
 	"bytes"
+	goparser "go/parser"
 	"io"
 	"strings"
 )
@@ -46,6 +47,118 @@ func bashppShortDecl(ce *CallExpr, redirs []*Redirect) *BashPPShortDecl {
 		}
 	}
 	return d
+}
+
+// bashppCompositeCommandDepth reports an open, supported composite region in
+// a completed command prefix. It is used only to carry newlines/semicolons as
+// expression whitespace; everything else remains on the ordinary shell path.
+func bashppCompositeCommandDepth(ce *CallExpr) int {
+	if ce == nil || len(ce.Assigns) != 0 {
+		return 0
+	}
+	words := ce.Args
+	eligible := len(words) >= 4 && words[0].Lit() == "type" &&
+		bashppIsIdent(words[1].Lit()) && words[2].Lit() == "struct" && words[3].Lit() == "{"
+	if !eligible {
+		for i, w := range words {
+			if w.Lit() == ":=" && i > 0 && i+1 < len(words) {
+				lhs, ok := bashppShortLHS(words[:i])
+				eligible = ok && len(lhs) > 0 && strings.Contains(bashppWordText(words[i+1]), "{")
+				break
+			}
+		}
+	}
+	if !eligible {
+		return 0
+	}
+	depth := 0
+	for _, w := range words {
+		for _, part := range w.Parts {
+			if lit, ok := part.(*Lit); ok {
+				depth += strings.Count(lit.Value, "{") - strings.Count(lit.Value, "}")
+			}
+		}
+	}
+	return depth
+}
+
+func bashppCompositeCommandComplete(ce *CallExpr) bool {
+	return bashppShortDecl(ce, nil) != nil || bashppTypeDecl(ce, nil) != nil
+}
+
+func bashppAssign(ce *CallExpr, redirs []*Redirect) *BashPPAssign {
+	if ce == nil || len(ce.Assigns) != 0 || len(redirs) != 0 || len(ce.Args) < 3 {
+		return nil
+	}
+	eq := -1
+	for i, w := range ce.Args {
+		if w.Lit() == "=" {
+			if eq >= 0 {
+				return nil
+			}
+			eq = i
+		}
+	}
+	if eq < 1 || eq+1 >= len(ce.Args) {
+		return nil
+	}
+	for i := 1; i < eq; i++ {
+		if ce.Args[i-1].End() != ce.Args[i].Pos() {
+			return nil
+		}
+	}
+	target := bashppConcatWords(ce.Args[:eq])
+	text := bashppWordText(target)
+	value := ce.Args[eq+1]
+	if len(ce.Args) > eq+2 {
+		value = bashppJoinWords(ce.Args[eq+1:])
+	}
+	if !bashppSupportedValue(value) {
+		return nil
+	}
+	if !bashppMutationTarget(text) && !(bashppIsIdent(text) && strings.Contains(bashppWordText(value), "{")) {
+		return nil
+	}
+	return &BashPPAssign{Target: target, Eq: ce.Args[eq].Pos(), Value: value}
+}
+
+func bashppConcatWords(words []*Word) *Word {
+	parts := make([]WordPart, 0, len(words)*2)
+	for _, word := range words {
+		parts = append(parts, word.Parts...)
+	}
+	return &Word{Parts: parts}
+}
+
+func bashppMutationTarget(s string) bool {
+	if _, err := goparser.ParseExpr(s); err != nil {
+		return false
+	}
+	root := leadingIdent(s)
+	if !bashppIsIdent(root) || len(root) == len(s) {
+		return false
+	}
+	rest := s[len(root):]
+	for rest != "" {
+		switch rest[0] {
+		case '.':
+			rest = rest[1:]
+			part := leadingIdent(rest)
+			if !bashppIsIdent(part) {
+				return false
+			}
+			rest = rest[len(part):]
+		case '[':
+			close := strings.IndexByte(rest, ']')
+			if close < 2 {
+				return false
+			}
+			rest = rest[close+1:]
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func bashppShortLHS(words []*Word) ([]*Lit, bool) {
@@ -141,12 +254,19 @@ func bashppSupportedValue(w *Word) bool {
 		}
 	}
 	text := bashppWordText(w)
+	if bashppIsIdent(text) {
+		return true
+	}
 	if strings.Contains(text, ".") && bashppSelector(text) {
 		return true
 	}
 	if open := strings.IndexByte(text, '{'); open >= 0 {
-		return strings.HasSuffix(text, "}") && bashppCompositeType(text[:open]) &&
-			bashppBalanced(text[open:], '{', '}')
+		if !strings.HasSuffix(text, "}") || !bashppCompositeType(text[:open]) ||
+			!bashppBalanced(text[open:], '{', '}') {
+			return false
+		}
+		_, err := goparser.ParseExpr(text)
+		return err == nil
 	}
 	if open := strings.IndexByte(text, '['); open > 0 {
 		return strings.HasSuffix(text, "]") && bashppSelector(text[:open]) &&
@@ -167,7 +287,7 @@ func bashppCompositeType(s string) bool {
 	}
 	close := strings.IndexByte(s, ']')
 	return close > len("map[") && bashppSelector(s[len("map["):close]) &&
-		bashppSelector(s[close+1:])
+		bashppCompositeType(s[close+1:])
 }
 
 func bashppNonemptyTypeArgs(s string) bool {
