@@ -276,6 +276,33 @@ func Walk(node Node, f func(Node) bool) {
 		if node.Call != nil {
 			Walk(node.Call, f)
 		}
+	case *BashPPGo:
+		walkNilable(node.Kw, f)
+		walkNilable(node.Call, f)
+	case *BashPPChanType:
+		walkNilable(node.Elem, f)
+	case *BashPPMakeChan:
+		walkNilable(node.Make, f)
+		walkNilable(node.Type, f)
+		walkNilable(node.Capacity, f)
+	case *BashPPSend:
+		walkNilable(node.Chan, f)
+		walkNilable(node.Value, f)
+	case *BashPPReceive:
+		walkNilable(node.Chan, f)
+	case *BashPPClose:
+		walkNilable(node.Kw, f)
+		walkNilable(node.Chan, f)
+	case *BashPPSelect:
+		walkList(node.Cases, f)
+	case *BashPPSelectCase:
+		walkNilable(node.Comm, f)
+		walkList(node.Stmts, f)
+		walkComments(node.Last, f)
+	case *BashPPRange:
+		walkList(node.Names, f)
+		walkNilable(node.Chan, f)
+		walkNilable(node.Body, f)
 	default:
 		panic(fmt.Sprintf("syntax.Walk: unexpected node type %T", node))
 	}
