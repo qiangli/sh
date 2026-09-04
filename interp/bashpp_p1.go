@@ -6,6 +6,7 @@ package interp
 import (
 	"bytes"
 	"context"
+	"strconv"
 	"strings"
 
 	"mvdan.cc/sh/v3/expand"
@@ -203,6 +204,13 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 			r.bashPPShortDeclCall(ctx, d, fn)
 			return
 		}
+		// `err := recover()` is the spelling a recovering defer is written
+		// with, so the predeclared functions bind their results here exactly
+		// as a declared function's do.
+		if name := bashPPPredeclaredCall(d.Call); name != "" {
+			r.bashPPShortDeclPredeclared(d, name)
+			return
+		}
 	}
 	if len(d.Lhs) != 1 && len(d.Lhs) != len(d.Rhs) {
 		r.errf("assignment mismatch: %d variable(s) but %d value(s)\n",
@@ -228,6 +236,36 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 		}
 		r.bashPPDeclareName(lhs.Value, r.bashPPValue(ctx, d.Rhs[i:i+1]))
 	}
+}
+
+// bashPPShortDeclPredeclared binds the results of a predeclared call to the
+// names on the left of `:=`, preserving the status the call set — which for
+// `recover` is how a script tells "recovered the empty string" from "there was
+// nothing to recover".
+func (r *Runner) bashPPShortDeclPredeclared(d *syntax.BashPPShortDecl, name string) {
+	// A call that produced no values leaves nothing to bind — `panic(v)`
+	// abandons the declaration along with the rest of the statement, and a
+	// diagnosed call has already reported itself.
+	results, ok := r.bashPPPredeclared(name, d.Call, r.bashPPCallArgValues(d.Call))
+	if !ok {
+		return
+	}
+	if len(d.Lhs) != len(results) {
+		r.errf("assignment mismatch: %d variable(s) but %d value(s)\n",
+			len(d.Lhs), len(results))
+		r.exit = exitStatus{code: 2}
+		return
+	}
+	status := r.exit
+	for i, lhs := range d.Lhs {
+		if !syntax.ValidName(lhs.Value) {
+			r.errf("invalid variable name: %q\n", lhs.Value)
+			r.exit = exitStatus{code: 2}
+			return
+		}
+		r.bashPPDeclareName(lhs.Value, expand.Variable{Set: true, Kind: expand.String, Str: results[i]})
+	}
+	r.exit = status
 }
 
 // bashPPDeclareName binds one name in the innermost block, reporting a
@@ -297,25 +335,21 @@ func (r *Runner) bashPPCall(ctx context.Context, c *syntax.BashPPCall) {
 	if r.exit.code != 0 {
 		return
 	}
-	if r.bashPPEnabled() && !r.PosixMode() && len(c.Fun) >= 1 {
-		req, err := r.bashPPEvalRequest()
-		if err == nil {
-			req.Selector = make([]string, len(c.Fun))
-			for i, lit := range c.Fun {
-				req.Selector[i] = lit.Value
-			}
-			req.Args = make([]string, len(c.Args))
-			for i, arg := range c.Args {
-				var b bytes.Buffer
-				_ = syntax.NewPrinter().Print(&b, arg)
-				req.Args[i] = b.String()
-			}
-			err = r.bashPPTools.eval.Call(ctx, req)
+	// `panic` and `recover` are predeclared, so they answer only where the
+	// session declared nothing of that name — the lookup above already had its
+	// chance, exactly as a Go declaration shadows a predeclared identifier.
+	// They are dialect state like every other extension, so POSIX mode and the
+	// Classic dialect see the same "not implemented" diagnostic as any other
+	// Go form, never a panic.
+	if r.bashPPEnabled() && !r.PosixMode() {
+		if name := bashPPPredeclaredCall(c); name != "" {
+			r.bashPPPredeclared(name, c, r.bashPPCallArgValues(c))
+			return
 		}
-		if err != nil {
-			r.exit.fatal(err)
+		if len(c.Fun) >= 1 {
+			r.bashPPEvalSelector(ctx, c, nil)
+			return
 		}
-		return
 	}
 	name := ""
 	for i, lit := range c.Fun {
@@ -326,6 +360,40 @@ func (r *Runner) bashPPCall(ctx context.Context, c *syntax.BashPPCall) {
 	}
 	r.errf("bash++: %s(...) is recognized but not implemented in this phase\n", name)
 	r.exit = exitStatus{code: 127}
+}
+
+// bashPPEvalSelector dispatches a call through the import evaluator.
+//
+// values is nil for a direct call, whose arguments the evaluator receives as
+// the Go source the script wrote. A DEFERRED call passes the values it captured
+// when the defer ran instead, rendered back as Go literals: Go fixes a deferred
+// call's arguments at the defer, so re-reading the script's words as the frame
+// unwinds would hand the package whatever the variables hold by then.
+func (r *Runner) bashPPEvalSelector(ctx context.Context, c *syntax.BashPPCall, values []string) {
+	req, err := r.bashPPEvalRequest()
+	if err == nil {
+		req.Selector = make([]string, len(c.Fun))
+		for i, lit := range c.Fun {
+			req.Selector[i] = lit.Value
+		}
+		if values != nil {
+			req.Args = make([]string, len(values))
+			for i, value := range values {
+				req.Args[i] = strconv.Quote(value)
+			}
+		} else {
+			req.Args = make([]string, len(c.Args))
+			for i, arg := range c.Args {
+				var b bytes.Buffer
+				_ = syntax.NewPrinter().Print(&b, arg)
+				req.Args[i] = b.String()
+			}
+		}
+		err = r.bashPPTools.eval.Call(ctx, req)
+	}
+	if err != nil {
+		r.exit.fatal(err)
+	}
 }
 
 // bashPPIf is a placeholder so the node has an owner from the start.

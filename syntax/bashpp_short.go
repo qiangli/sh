@@ -314,7 +314,7 @@ func (p *Parser) bashppParenForm(ce *CallExpr) Command {
 	if name == nil || !bashppSelector(name.Value) {
 		return nil
 	}
-	if !short && !strings.Contains(name.Value, ".") && p.r == ')' && !p.bashppFuncNames[name.Value] {
+	if !short && !strings.Contains(name.Value, ".") && p.r == ')' && !p.bashppCallable(name.Value) {
 		// `f()` is also the prefix of a classic shell function definition.
 		// Only a previously declared Bash++ function makes the zero-argument
 		// call unambiguous; calls with arguments remain unambiguous Class R.
