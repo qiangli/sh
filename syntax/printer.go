@@ -454,6 +454,10 @@ func (p *Printer) bashppFields(fields []*BashPPField) {
 			}
 			p.writeLit(f.FieldType.Value)
 		}
+		if f.Default != nil {
+			p.writeLit(" = ")
+			p.word(f.Default)
+		}
 	}
 }
 
@@ -1517,9 +1521,9 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 		switch {
 		case cmd.FuncLit != nil:
 			p.bashppFuncLit(cmd.FuncLit)
-		case cmd.Call != nil && cmd.Call.FuncLit != nil:
-			// A literal invoked into a binding has no word spelling for Rhs;
-			// the call node is the source of record for both.
+		case cmd.Call != nil:
+			// A call is the source of record for named arguments (and for an
+			// invoked literal, which has no word spelling in Rhs at all).
 			p.space()
 			p.command(cmd.Call, nil)
 		default:
@@ -1551,9 +1555,14 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 			p.writeLit(fun.Value)
 		}
 		p.writeLit("(")
+		positional := len(cmd.Args) - len(cmd.ArgNames)
 		for i, arg := range cmd.Args {
 			if i > 0 {
 				p.writeLit(", ")
+			}
+			if i >= positional {
+				p.writeLit(cmd.ArgNames[i-positional].Value)
+				p.writeLit(": ")
 			}
 			p.word(arg)
 		}

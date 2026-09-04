@@ -197,6 +197,11 @@ func (r *Runner) bashPPFuncDecl(d *syntax.BashPPFuncDecl) {
 		return
 	}
 	name := d.Name.Value
+	if required := bashppRequiredAfterDefault(d.Params); required != "" {
+		r.errf("BASHPP-EDEFAULT-ORDER: required parameter %q follows a default parameter\n", required)
+		r.exit = exitStatus{code: 2}
+		return
+	}
 	if !syntax.ValidName(name) {
 		r.errf("invalid function name: %q\n", name)
 		r.exit = exitStatus{code: 2}
@@ -434,16 +439,85 @@ func (r *Runner) bashPPSpreadValues(w *syntax.Word) []string {
 // does this: silently passing the elements would make the two spellings mean
 // the same thing and hide the mistake.
 func (r *Runner) bashPPCallValues(c *syntax.BashPPCall, fn *bashPPFunc) ([]string, bool) {
+	if required := bashppRequiredAfterDefault(fn.params()); required != "" {
+		r.errf("BASHPP-EDEFAULT-ORDER: required parameter %q follows a default parameter\n", required)
+		r.exit = exitStatus{code: 2}
+		return nil, false
+	}
 	if c.Ellipsis.IsValid() && !bashppVariadic(fn.params()) {
 		r.errf("cannot use ... in call to non-variadic %s\n", fn.name())
 		r.exit = exitStatus{code: 2}
 		return nil, false
 	}
 	args := r.bashPPCallArgValues(c)
+	names := c.ArgNames
+	positional := len(args) - len(names)
 	if fn.skipArgs > 0 {
 		args = args[fn.skipArgs:]
+		positional -= fn.skipArgs
+	}
+	if len(names) > 0 || bashppHasDefaults(fn.params()) {
+		return r.bashPPBindCall(fn, args, names, positional)
 	}
 	return args, true
+}
+
+// bashPPBindCall applies the Bash# positional-then-named/default binding
+// contract. It is deliberately entered only when a call uses a name or the
+// signature has a default, so the established P3 arity diagnostics remain
+// byte-for-byte unchanged for ordinary Go-form calls.
+func (r *Runner) bashPPBindCall(fn *bashPPFunc, supplied []string, names []*syntax.Lit, positional int) ([]string, bool) {
+	params := bashppParams(fn.params())
+	fail := func(format string, args ...any) ([]string, bool) {
+		r.errf(format, args...)
+		r.exit = exitStatus{code: 2}
+		return nil, false
+	}
+	if positional > len(params) {
+		return fail("BASHPP-EARG-COUNT: %s accepts at most %d arguments; got %d\n",
+			fn.name(), len(params), len(supplied))
+	}
+	seen := make(map[string]bool, len(names))
+	for _, name := range names {
+		if seen[name.Value] {
+			return fail("BASHPP-EKWARG-DUPLICATE: argument %q is supplied more than once\n", name.Value)
+		}
+		seen[name.Value] = true
+	}
+	byName := make(map[string]int, len(params))
+	for i, param := range params {
+		if param.name != "" {
+			byName[param.name] = i
+		}
+	}
+	for _, name := range names {
+		if _, ok := byName[name.Value]; !ok {
+			return fail("BASHPP-EKWARG-UNKNOWN: %s has no parameter named %q\n", fn.name(), name.Value)
+		}
+	}
+	values := make([]string, len(params))
+	bound := make([]bool, len(params))
+	for i := 0; i < positional; i++ {
+		values[i], bound[i] = supplied[i], true
+	}
+	for i, name := range names {
+		index := byName[name.Value]
+		if bound[index] {
+			return fail("BASHPP-EARG-DUPLICATE-BINDING: parameter %q is supplied positionally and by name\n", name.Value)
+		}
+		values[index], bound[index] = supplied[positional+i], true
+	}
+	for i, param := range params {
+		if bound[i] {
+			continue
+		}
+		if param.defaultValue != nil {
+			values[i], bound[i] = r.bashPPExprValue(param.defaultValue), true
+			continue
+		}
+		return fail("BASHPP-EARG-MISSING: %s requires argument %q\n", fn.name(), param.name)
+	}
+	return values, true
 }
 
 // bashPPExprValue evaluates the small expression vocabulary admitted by the
@@ -479,6 +553,30 @@ func (r *Runner) bashPPRewriteAssign(as *syntax.Assign) *syntax.Assign {
 		Dollar: lit.Pos(), Short: true, Param: lit,
 	}}}
 	return &cp
+}
+
+// bashPPRewriteCommandArgs gives bare identifiers their Go-form expression
+// meaning inside a typed function body. The command name remains a shell word;
+// subsequent words which name live lexical bindings become short parameter
+// expansions for this invocation only.
+func (r *Runner) bashPPRewriteCommandArgs(args []*syntax.Word) []*syntax.Word {
+	if r.bashPPFuncActive == 0 || len(args) < 2 {
+		return args
+	}
+	out := append([]*syntax.Word(nil), args...)
+	for i, word := range out[1:] {
+		if len(word.Parts) != 1 {
+			continue
+		}
+		lit, ok := word.Parts[0].(*syntax.Lit)
+		if !ok || !syntax.ValidName(lit.Value) || !r.lookupVar(lit.Value).IsSet() {
+			continue
+		}
+		out[i+1] = &syntax.Word{Parts: []syntax.WordPart{&syntax.ParamExp{
+			Dollar: lit.Pos(), Short: true, Param: lit,
+		}}}
+	}
+	return out
 }
 
 // bashPPInvoke calls a typed function with already-evaluated arguments and
@@ -938,9 +1036,10 @@ func (r *Runner) bashPPRunDefers(ctx context.Context, mark int) {
 // once is what keeps the arity check, the binding loop and the diagnostics
 // counting the same things.
 type bashPPParam struct {
-	name     string
-	declared string
-	variadic bool
+	name         string
+	declared     string
+	variadic     bool
+	defaultValue *syntax.Word
 }
 
 // bashppParams flattens a parameter list into one slot per declared name, plus
@@ -962,10 +1061,33 @@ func bashppParams(fields []*syntax.BashPPField) []bashPPParam {
 			continue
 		}
 		for _, n := range f.Names {
-			params = append(params, bashPPParam{name: n.Value, declared: declared})
+			params = append(params, bashPPParam{name: n.Value, declared: declared, defaultValue: f.Default})
 		}
 	}
 	return params
+}
+
+func bashppHasDefaults(fields []*syntax.BashPPField) bool {
+	for _, field := range fields {
+		if field.Default != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func bashppRequiredAfterDefault(fields []*syntax.BashPPField) string {
+	sawDefault := false
+	for _, field := range fields {
+		if field.Default != nil {
+			sawDefault = true
+			continue
+		}
+		if sawDefault && !field.Variadic() && len(field.Names) > 0 {
+			return field.Names[0].Value
+		}
+	}
+	return ""
 }
 
 // bashppVariadic reports whether a parameter list ends in a `...T` group.

@@ -74,9 +74,15 @@ func (p *Parser) bashppFuncForm(ce *CallExpr) Command {
 		return nil
 	}
 
+	txn := p.beginBashPPTxn()
 	fd := &BashPPFuncDecl{Kw: kw, Name: name}
-	p.bashppRegisterFunc(name.Value)
 	sig := p.bashppSignature("func " + name.Value)
+	if sig.nearMiss {
+		txn.rollback(p)
+		return nil
+	}
+	txn.commit(p)
+	p.bashppRegisterFunc(name.Value)
 	fd.Params, fd.Results = sig.params, sig.results
 	fd.Lparen, fd.Rparen = sig.lparen, sig.rparen
 	fd.ResLparen, fd.ResRparen = sig.resLparen, sig.resRparen
@@ -156,7 +162,7 @@ func (p *Parser) bashppPointerMethodExpr() Command {
 	methodName := strings.TrimPrefix(method.Value, ".")
 	callLparen := p.pos
 	p.next()
-	args, ellipsis, ok := p.bashppCallArgs()
+	args, argNames, ellipsis, ok := p.bashppCallArgs()
 	if !ok || p.tok != rightParen {
 		txn.rollback(p)
 		return nil
@@ -175,7 +181,7 @@ func (p *Parser) bashppPointerMethodExpr() Command {
 			{ValuePos: typePos, ValueEnd: typ.End(), Value: typeName},
 			{ValuePos: methodPos, ValueEnd: method.End(), Value: methodName},
 		},
-		Args: args, Ellipsis: ellipsis, PointerMethodExpr: true,
+		Args: args, ArgNames: argNames, Ellipsis: ellipsis, PointerMethodExpr: true,
 		Lparen: callLparen, Rparen: rparen, MethodExprLparen: exprLparen, MethodExprRparen: exprRparen,
 		FuncLit: nil,
 		// The outer expression parenthesis is represented by the boolean and
@@ -229,6 +235,7 @@ type bashppSig struct {
 	rparen    Pos
 	resLparen Pos
 	resRparen Pos
+	nearMiss  bool
 }
 
 // bashppSignature parses `(params) results` with the parser sitting on the
@@ -241,7 +248,7 @@ type bashppSig struct {
 func (p *Parser) bashppSignature(what string) bashppSig {
 	sig := bashppSig{lparen: p.pos}
 	p.next()
-	sig.params = p.bashppFieldList(sig.lparen, false)
+	sig.params, sig.nearMiss = p.bashppFieldList(sig.lparen, false)
 	if p.tok != rightParen {
 		p.followErr(sig.lparen, what+"(", rightParen)
 	}
@@ -253,13 +260,15 @@ func (p *Parser) bashppSignature(what string) bashppSig {
 	case p.tok == leftParen:
 		sig.resLparen = p.pos
 		p.next()
-		sig.results = p.bashppFieldList(sig.resLparen, true)
+		var nearMiss bool
+		sig.results, nearMiss = p.bashppFieldList(sig.resLparen, true)
+		sig.nearMiss = sig.nearMiss || nearMiss
 		if p.tok != rightParen {
 			p.followErr(sig.resLparen, what+"() (", rightParen)
 		}
 		sig.resRparen = p.pos
 		p.next()
-	case p.tok == _LitWord && p.val != "{":
+	case p.tok == _LitWord && !strings.HasPrefix(p.val, "{"):
 		typ := p.lit(p.pos, p.val)
 		if !bashppTypeName(typ.Value) {
 			p.posErr(typ.Pos(), "func result must be a type name")
@@ -274,6 +283,11 @@ func (p *Parser) bashppSignature(what string) bashppSig {
 // the func depth raised so that a `return` inside it is the Go-form one.
 func (p *Parser) bashppFuncBody(what string, after Pos) *Block {
 	p.got(_Newl)
+	if p.tok == _LitWord && p.val == "{}" {
+		pos := p.pos
+		p.next()
+		return &Block{Lbrace: pos, Rbrace: posAddCol(pos, 1)}
+	}
 	if !(p.tok == _LitWord && p.val == "{") {
 		p.followErr(after, what+"()", noQuote("a { } body"))
 	}
@@ -308,9 +322,15 @@ func (p *Parser) bashppFuncLit(kw *Lit) *BashPPFuncLit {
 // bashppFieldList reads a comma-separated Go-form parameter or result list up to
 // the closing parenthesis. result selects how bare identifiers resolve: as
 // unnamed result types when true, and as untyped parameter names when false.
-func (p *Parser) bashppFieldList(open Pos, result bool) []*BashPPField {
-	var segs [][]*Lit
-	var cur []*Lit
+func (p *Parser) bashppFieldList(open Pos, result bool) ([]*BashPPField, bool) {
+	type segment struct {
+		lits   []*Lit
+		def    *Word
+		equals Pos
+	}
+	var segs []segment
+	var cur segment
+	nearMiss := false
 	for {
 		p.got(_Newl)
 		if p.tok == rightParen || p.tok == _EOF {
@@ -326,16 +346,65 @@ func (p *Parser) bashppFieldList(open Pos, result bool) []*BashPPField {
 		if lit == nil {
 			p.posErr(w.Pos(), "func parameter must be a name or type")
 		}
-		cur = append(cur, lit)
+		if lit.Value == "==" {
+			nearMiss = true
+		}
+		if !result && lit.Value == "=" {
+			if cur.def != nil || len(cur.lits) == 0 {
+				p.posErr(lit.Pos(), "malformed func parameter list")
+			}
+			cur.equals = lit.Pos()
+			def := p.getWord()
+			if def == nil {
+				p.posErr(lit.Pos(), "default parameter requires a value")
+			}
+			def, comma = bashppTrimComma(def)
+			if !bashppCallArg(def) {
+				p.posErr(def.Pos(), "default parameter must be a value")
+			}
+			cur.def = def
+		} else {
+			cur.lits = append(cur.lits, lit)
+		}
 		if comma {
 			segs = append(segs, cur)
-			cur = nil
+			cur = segment{}
 		}
 	}
-	if len(cur) > 0 {
+	if len(cur.lits) > 0 || cur.def != nil {
 		segs = append(segs, cur)
 	}
-	fields, err := bashppResolveFields(segs, result)
+	var fields []*BashPPField
+	var err error
+	var plain [][]*Lit
+	flush := func() {
+		if err != nil || len(plain) == 0 {
+			return
+		}
+		var resolved []*BashPPField
+		resolved, err = bashppResolveFields(plain, result)
+		fields = append(fields, resolved...)
+		plain = nil
+	}
+	for _, seg := range segs {
+		if seg.def == nil {
+			plain = append(plain, seg.lits)
+			continue
+		}
+		flush()
+		if err != nil {
+			break
+		}
+		if len(seg.lits) != 2 || !bashppIsIdent(seg.lits[0].Value) || !bashppTypeName(seg.lits[1].Value) {
+			err = errBashppFieldList
+			break
+		}
+		fields = append(fields, &BashPPField{
+			Names: seg.lits[:1], FieldType: seg.lits[1],
+			Default: seg.def, Equals: seg.equals,
+		})
+	}
+	flush()
 	switch {
 	case err == nil:
 	case err == errBashppFieldList:
@@ -347,7 +416,7 @@ func (p *Parser) bashppFieldList(open Pos, result bool) []*BashPPField {
 	default:
 		p.posErr(open, "%v", err)
 	}
-	return fields
+	return fields, nearMiss
 }
 
 // errBashppFieldList is the generic "this is not a signature we spell" verdict,
@@ -624,7 +693,7 @@ func (p *Parser) bashppLitCall(lit *BashPPFuncLit) *BashPPCall {
 	}
 	lparen := p.pos
 	p.next()
-	args, ellipsis, ok := p.bashppCallArgs()
+	args, argNames, ellipsis, ok := p.bashppCallArgs()
 	if !ok || p.tok != rightParen {
 		p.posErr(lparen, "malformed func literal argument list")
 		return nil
@@ -632,7 +701,7 @@ func (p *Parser) bashppLitCall(lit *BashPPFuncLit) *BashPPCall {
 	rparen := p.pos
 	p.next()
 	return &BashPPCall{
-		FuncLit: lit, Args: args, Ellipsis: ellipsis,
+		FuncLit: lit, Args: args, ArgNames: argNames, Ellipsis: ellipsis,
 		Lparen: lparen, Rparen: rparen,
 	}
 }

@@ -204,6 +204,7 @@ func Walk(node Node, f func(Node) bool) {
 			Walk(node.FuncLit, f)
 		}
 		walkList(node.Fun, f)
+		walkList(node.ArgNames, f)
 		walkList(node.Args, f)
 	case *BashPPImport:
 		Walk(node.Kw, f)
@@ -245,6 +246,7 @@ func Walk(node Node, f func(Node) bool) {
 	case *BashPPField:
 		walkList(node.Names, f)
 		walkNilable(node.FieldType, f)
+		walkNilable(node.Default, f)
 	case *BashPPReceiver:
 		walkNilable(node.Name, f)
 		walkNilable(node.RecvType, f)
