@@ -38,6 +38,38 @@ kill_group() {
 	done
 }
 
+stop_watcher() {
+	local pid=${1:-} i state
+	[ -n "$pid" ] || return 0
+	kill -TERM "$pid" 2>/dev/null || true
+	for i in 1 2 3 4 5 6 7 8 9 10; do
+		state=$(ps -o stat= -p "$pid" 2>/dev/null || true)
+		[ -z "$state" ] && break
+		case "$state" in Z*) break ;; esac
+		sleep 0.1
+	done
+	kill -KILL "$pid" 2>/dev/null || true
+	wait "$pid" 2>/dev/null || true
+}
+
+start_watcher() {
+	local seconds=$1 target=$2 marker=$3
+	# The watchdog is a single Perl process: stopping it cannot orphan a sleep
+	# subprocess. Its target lives in a separate session/process group.
+	perl -e '
+		my ($seconds, $target, $marker) = @ARGV;
+		sleep $seconds;
+		if (kill 0, -$target) {
+			open my $fh, ">", $marker or die "open $marker: $!";
+			print {$fh} "timeout\n";
+			close $fh;
+			kill "TERM", -$target;
+			sleep 5;
+			kill "KILL", -$target if kill 0, -$target;
+		}
+	' "$seconds" "$target" "$marker" &
+}
+
 # The outer invocation puts the entire gate under one deadline. The internal
 # process traps TERM/INT/HUP and cleans up any nested command group before it
 # exits, so the nested setsid groups cannot escape the global watchdog.
@@ -47,30 +79,33 @@ if ((!internal)); then
 	((discovery_only)) && args+=(--discovery-only)
 	marker=$(mktemp "${TMPDIR:-/tmp}/bashpp-race-global.XXXXXX")
 	rm -f "$marker"
+	global_pid=
+	watcher=
+	global_abort() {
+		local code=$1
+		trap - HUP INT TERM
+		stop_watcher "$watcher"
+		if [ -n "$global_pid" ]; then
+			kill_group "$global_pid"
+			wait "$global_pid" 2>/dev/null || true
+		fi
+		rm -f "$marker"
+		exit "$code"
+	}
+	trap 'global_abort 129' HUP
+	trap 'global_abort 130' INT
+	trap 'global_abort 143' TERM
 	perl -MPOSIX=setsid -e 'setsid() >= 0 or die "setsid: $!"; exec @ARGV or die "exec: $!"' \
 		/bin/bash "$0" "${args[@]}" &
 	global_pid=$!
-	global_abort() {
-		kill_group "$global_pid"
-		wait "$global_pid" 2>/dev/null || true
-		rm -f "$marker"
-		exit 130
-	}
-	trap global_abort HUP INT TERM
-	(
-		sleep "$global_seconds"
-		if kill -0 "$global_pid" 2>/dev/null; then
-			printf 'timeout\n' >"$marker"
-			kill_group "$global_pid"
-		fi
-	) &
+	start_watcher "$global_seconds" "$global_pid" "$marker"
 	watcher=$!
 	set +e
 	wait "$global_pid"
 	status=$?
 	set -e
-	kill "$watcher" 2>/dev/null || true
-	wait "$watcher" 2>/dev/null || true
+	stop_watcher "$watcher"
+	watcher=
 	if [ -f "$marker" ]; then
 		printf 'ERROR: Bash++ race/lifecycle gate exceeded global %ss deadline\n' "$global_seconds" | tee -a "$evidence"
 		status=124
@@ -91,7 +126,10 @@ export GOMEMLIMIT=${GOMEMLIMIT:-2GiB}
 
 tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/bashpp-race-gate.XXXXXX")
 active_pid=
+active_watcher=
 cleanup_active() {
+	stop_watcher "$active_watcher"
+	active_watcher=
 	if [ -n "$active_pid" ]; then
 		kill_group "$active_pid"
 		wait "$active_pid" 2>/dev/null || true
@@ -109,7 +147,7 @@ trap 'exit 143' TERM
 run_bounded() {
 	local seconds=$1 label=$2 output=$3 measure=$4
 	shift 4
-	local marker=$tmpdir/timeout watcher status=0
+	local marker=$tmpdir/timeout status=0
 	rm -f "$output" "$marker"
 	[ -n "$label" ] && log "command: $label (outer_timeout=${seconds}s)"
 	if ((measure)) && [ "$(uname -s)" = Darwin ]; then
@@ -123,21 +161,15 @@ run_bounded() {
 			"$@" >"$output" 2>&1 &
 	fi
 	active_pid=$!
-	(
-		sleep "$seconds"
-		if kill -0 "$active_pid" 2>/dev/null; then
-			printf 'timeout\n' >"$marker"
-			kill_group "$active_pid"
-		fi
-	) &
-	watcher=$!
+	start_watcher "$seconds" "$active_pid" "$marker"
+	active_watcher=$!
 	set +e
 	wait "$active_pid"
 	status=$?
 	set -e
 	active_pid=
-	kill "$watcher" 2>/dev/null || true
-	wait "$watcher" 2>/dev/null || true
+	stop_watcher "$active_watcher"
+	active_watcher=
 	if [ -n "$label" ]; then tee -a "$evidence" <"$output"; fi
 	if [ -f "$marker" ]; then
 		log "ERROR: $label exceeded ${seconds}s"

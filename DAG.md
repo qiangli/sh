@@ -65,8 +65,10 @@ not impose a separate RSS ceiling; the sprint manager supplies the hard 3 GiB
 process-tree ceiling for the final acceptance run. A 15-minute global gate
 deadline leaves headroom inside the CI job's 30-minute limit for other steps.
 Use `scripts/bashpp-race-gate.sh --discovery-only` to validate package and
-focused-test discovery without launching race tests. The CI job gives this
-bounded gate enough time to emit its own diagnostics.
+focused-test discovery without launching race tests. Run
+`scripts/bashpp-race-gate-signal-self-test.sh` to send TERM during discovery
+and assert the gate and its captured descendants are reaped. The CI job gives
+this bounded gate enough time to emit its own diagnostics.
 Effects: read, write
 
 ```bash
