@@ -158,56 +158,14 @@ func cloneBashPPTaskVariable(vr expand.Variable, objects *bashPPObjectCloner) (e
 }
 
 func cloneBashPPTaskCells(r *Runner, objects *bashPPObjectCloner) error {
-	seenScopes := make(map[*bashPPScope]bool)
-	seenCells := make(map[*bashPPCell]bool)
-	var visit func(*bashPPScope) error
-	visit = func(scope *bashPPScope) error {
-		if scope == nil || seenScopes[scope] {
-			return nil
-		}
-		seenScopes[scope] = true
-		if err := visit(scope.parent); err != nil {
+	return r.bashPPWalkCells(func(cell *bashPPCell) error {
+		copy, err := cloneBashPPTaskVariable(cell.vr, objects)
+		if err != nil {
 			return err
 		}
-		for _, cell := range scope.entries {
-			if seenCells[cell] {
-				continue
-			}
-			seenCells[cell] = true
-			copy, err := cloneBashPPTaskVariable(cell.vr, objects)
-			if err != nil {
-				return err
-			}
-			cell.vr = copy
-		}
+		cell.vr = copy
 		return nil
-	}
-	if err := visit(r.bashPPScope); err != nil {
-		return err
-	}
-	for _, scope := range r.bashPPFuncScopes {
-		if err := visit(scope); err != nil {
-			return err
-		}
-	}
-	for _, fn := range r.bashPPFuncs {
-		if err := visit(fn.scope); err != nil {
-			return err
-		}
-	}
-	for _, methods := range r.bashPPMethods {
-		for _, fn := range methods {
-			if err := visit(fn.scope); err != nil {
-				return err
-			}
-		}
-	}
-	for _, fn := range r.bashPPClosures {
-		if err := visit(fn.scope); err != nil {
-			return err
-		}
-	}
-	return nil
+	})
 }
 
 type bashPPTaskFailure struct {
@@ -463,6 +421,113 @@ func (r *Runner) bashPPArmBeforeBlock(ctx context.Context) bool {
 		return false
 	}
 	return true
+}
+
+// bashPPTaskOpen acquires a filesystem descriptor without ever blocking on a
+// pathname that races to a FIFO. Task opens deliberately fail closed for
+// custom handlers: the OpenHandler contract does not promise cancellation or
+// honor O_NONBLOCK, so invoking one could strand the structured File join.
+func (r *Runner) bashPPTaskOpen(ctx context.Context, path string, flags int, mode os.FileMode, print, requireRegular bool) (io.ReadWriteCloser, error) {
+	if !r.bashPPGoTask {
+		return r.open(ctx, path, flags, mode, print)
+	}
+	reportOpenError := func(err error) error {
+		if print {
+			reason := err
+			if pathErr, ok := err.(*os.PathError); ok {
+				reason = pathErr.Err
+			}
+			r.errf("%s%s: %v\n", r.bashErrPrefix(r.curStmtPos), path, reason)
+		}
+		return err
+	}
+	if r.bashPPCustomOpen {
+		err := fmt.Errorf("custom open handlers are unavailable inside a Bash++ task")
+		return nil, reportOpenError(err)
+	}
+	// DialContext is cancellation-aware. Network pseudo-paths have no
+	// descriptor to probe, so this is their exact potential-block boundary.
+	if ctx.Value(devNetworkRedirectCtxKey{}) != nil {
+		if _, _, ok := devNetworkRedirect(path); ok {
+			if !r.bashPPArmBeforeBlock(ctx) {
+				return nil, r.bashPPTaskContext(ctx).Err()
+			}
+			f, err := r.open(ctx, path, flags, mode, print)
+			if err != nil {
+				return nil, err
+			}
+			if err := r.bashPPTaskContext(ctx).Err(); err != nil {
+				_ = f.Close()
+				return nil, err
+			}
+			return f, nil
+		}
+	}
+	if flags&os.O_CREATE != 0 {
+		mode &^= os.FileMode(r.umask)
+	}
+	file, supported, err := bashPPTaskProbeOpen(r.Dir, path, flags, mode)
+	if !supported {
+		err := fmt.Errorf("task file opens are unavailable on this platform")
+		return nil, reportOpenError(err)
+	}
+	if err != nil {
+		return nil, reportOpenError(err)
+	}
+	fifo := false
+	if err := r.bashPPTaskContext(ctx).Err(); err != nil {
+		if file != nil {
+			_ = file.Close()
+		}
+		return nil, err
+	}
+	if file != nil {
+		info, err := file.Stat()
+		if err != nil {
+			_ = file.Close()
+			return nil, reportOpenError(err)
+		}
+		fifo = info.Mode()&os.ModeNamedPipe != 0
+		if requireRegular && !info.Mode().IsRegular() {
+			_ = file.Close()
+			if fifo {
+				err := fmt.Errorf("FIFO input is unavailable inside a Bash++ task")
+				return nil, reportOpenError(err)
+			}
+			err := fmt.Errorf("non-regular input is unavailable inside a Bash++ task")
+			return nil, reportOpenError(err)
+		}
+		if !fifo && !info.Mode().IsRegular() {
+			_ = file.Close()
+			err := fmt.Errorf("non-regular file is unavailable inside a Bash++ task")
+			return nil, reportOpenError(err)
+		}
+	}
+	if fifo {
+		if requireRegular {
+			_ = file.Close()
+			err := fmt.Errorf("FIFO input is unavailable inside a Bash++ task")
+			return nil, reportOpenError(err)
+		}
+		if !r.bashPPArmBeforeBlock(ctx) {
+			_ = file.Close()
+			return nil, r.bashPPTaskContext(ctx).Err()
+		}
+		if err := r.bashPPTaskContext(ctx).Err(); err != nil {
+			_ = file.Close()
+			return nil, err
+		}
+		if err := bashPPTaskSourceClearNonblock(file); err != nil {
+			_ = file.Close()
+			return nil, reportOpenError(err)
+		}
+		return file, nil
+	}
+	if err := bashPPTaskSourceClearNonblock(file); err != nil {
+		_ = file.Close()
+		return nil, reportOpenError(err)
+	}
+	return file, nil
 }
 
 func (r *Runner) bashPPChannel(w *syntax.Word) (*bashPPChannel, bool) {
@@ -933,6 +998,13 @@ func (r *Runner) bashPPPruneIssuedHandles(c *bashPPConcurrent) {
 			}
 		}
 	}
+	r.bashPPVisitPersistentCells(func(cell *bashPPCell) {
+		for handle := range candidates {
+			if variableContainsString(cell.vr, handle) {
+				retained[handle] = struct{}{}
+			}
+		}
+	})
 	p.handles = retained
 	p.mu.Unlock()
 }
@@ -962,40 +1034,86 @@ func variableContainsString(vr expand.Variable, needle string) bool {
 // Persistent closures retain lexical cells across Files. Revoke the completed
 // group's capabilities without disturbing any other captured state.
 func (r *Runner) bashPPClearChannelRefs(owner *bashPPConcurrent) {
+	r.bashPPVisitPersistentCells(func(cell *bashPPCell) {
+		if cell.channelOwner == owner {
+			cell.channel, cell.channelOwner = nil, nil
+		}
+	})
+}
+
+func (r *Runner) bashPPWalkCells(fn func(*bashPPCell) error) error {
 	seenScopes := make(map[*bashPPScope]bool)
 	seenCells := make(map[*bashPPCell]bool)
-	var visit func(*bashPPScope)
-	visit = func(scope *bashPPScope) {
+	visitCell := func(cell *bashPPCell) error {
+		if cell == nil || seenCells[cell] {
+			return nil
+		}
+		seenCells[cell] = true
+		return fn(cell)
+	}
+	var visit func(*bashPPScope) error
+	visit = func(scope *bashPPScope) error {
 		if scope == nil || seenScopes[scope] {
-			return
+			return nil
 		}
 		seenScopes[scope] = true
-		visit(scope.parent)
+		if err := visit(scope.parent); err != nil {
+			return err
+		}
 		for _, cell := range scope.entries {
-			if seenCells[cell] {
-				continue
-			}
-			seenCells[cell] = true
-			if cell.channelOwner == owner {
-				cell.channel, cell.channelOwner = nil, nil
+			if err := visitCell(cell); err != nil {
+				return err
 			}
 		}
+		return nil
 	}
-	visit(r.bashPPScope)
+	visitFunc := func(f *bashPPFunc) error {
+		if f == nil {
+			return nil
+		}
+		if err := visit(f.scope); err != nil {
+			return err
+		}
+		return visitCell(f.receiver)
+	}
+	if err := visit(r.bashPPScope); err != nil {
+		return err
+	}
 	for _, scope := range r.bashPPFuncScopes {
-		visit(scope)
+		if err := visit(scope); err != nil {
+			return err
+		}
 	}
-	for _, fn := range r.bashPPFuncs {
-		visit(fn.scope)
+	for _, f := range r.bashPPFuncs {
+		if err := visitFunc(f); err != nil {
+			return err
+		}
 	}
 	for _, methods := range r.bashPPMethods {
-		for _, fn := range methods {
-			visit(fn.scope)
+		for _, f := range methods {
+			if err := visitFunc(f); err != nil {
+				return err
+			}
 		}
 	}
-	for _, fn := range r.bashPPClosures {
-		visit(fn.scope)
+	for _, f := range r.bashPPClosures {
+		if err := visitFunc(f); err != nil {
+			return err
+		}
 	}
+	for _, deferred := range r.bashPPDeferStack {
+		if err := visitFunc(deferred.fn); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *Runner) bashPPVisitPersistentCells(fn func(*bashPPCell)) {
+	_ = r.bashPPWalkCells(func(cell *bashPPCell) error {
+		fn(cell)
+		return nil
+	})
 }
 
 func (r *Runner) bashPPSelect(ctx context.Context, s *syntax.BashPPSelect) {

@@ -4893,14 +4893,6 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 	var oldFdClosedTable map[int]bool
 	var modifiedFds []int
 	if len(st.Redirs) > 0 {
-		if r.bashPPGoTask && r.bashPPConcurrent != nil {
-			// Opening a FIFO or another context-aware redirect can block before
-			// command dispatch. Release the launch handshake before entering that
-			// path so the owner can execute the peer operation.
-			if !r.bashPPArmBeforeBlock(ctx) {
-				return
-			}
-		}
 		oldFdTable = maps.Clone(r.fdTable)
 		oldFdReadTable = maps.Clone(r.fdReadTable)
 		oldFdWriteTable = maps.Clone(r.fdWriteTable)
@@ -9820,6 +9812,9 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 		r.errf("%s%s: Bad file descriptor\n", r.bashErrPrefix(rd.Word.Pos()), label)
 		return nil, fmt.Errorf("%s: Bad file descriptor", label)
 	}
+	openFile := func(path string, flags int, mode os.FileMode, print bool) (io.ReadWriteCloser, error) {
+		return r.bashPPTaskOpen(ctx, path, flags, mode, print, false)
+	}
 	switch rd.Op {
 	case syntax.WordHdoc:
 		pr, pw, err := os.Pipe()
@@ -9868,7 +9863,7 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 		sourceFd, err := strconv.Atoi(arg)
 		if err != nil {
 			if targetFd == -1 {
-				f, err := r.open(ctx, arg, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o666, true)
+				f, err := openFile(arg, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o666, true)
 				if err != nil {
 					return nil, err
 				}
@@ -9876,7 +9871,7 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 				r.stderr = f
 				return f, nil
 			}
-			f, err := r.open(ctx, arg, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o666, true)
+			f, err := openFile(arg, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o666, true)
 			if err != nil {
 				return nil, err
 			}
@@ -9999,7 +9994,7 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, err
 	if r.devNetworkRedirectsEnabled() {
 		ctx = context.WithValue(ctx, devNetworkRedirectCtxKey{}, true)
 	}
-	f, err := r.open(ctx, arg, mode, 0o666, true)
+	f, err := openFile(arg, mode, 0o666, true)
 	if err != nil {
 		return nil, err
 	}

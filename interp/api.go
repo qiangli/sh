@@ -162,6 +162,7 @@ type Runner struct {
 	bashPPTaskFailed    bool
 	bashPPTaskFailCode  uint8
 	bashPPLogicalDepth  int
+	bashPPCustomOpen    bool
 
 	// funcSources records the script name active when a function was
 	// defined. Bash reports runtime diagnostics in a function body against
@@ -1901,6 +1902,7 @@ func ExecHandlers(middlewares ...func(next ExecHandlerFunc) ExecHandlerFunc) Run
 func OpenHandler(f OpenHandlerFunc) RunnerOption {
 	return func(r *Runner) error {
 		r.openHandler = f
+		r.bashPPCustomOpen = true
 		return nil
 	}
 }
@@ -2665,6 +2667,7 @@ func (r *Runner) Reset() {
 		callHandler:        r.callHandler,
 		execHandler:        r.execHandler,
 		openHandler:        r.openHandler,
+		bashPPCustomOpen:   r.bashPPCustomOpen,
 		readDirHandler:     r.readDirHandler,
 		statHandler:        r.statHandler,
 		bgPidCallback:      r.bgPidCallback,
@@ -3143,6 +3146,7 @@ func (r *Runner) subshell(background bool) *Runner {
 		callHandler:          r.callHandler,
 		execHandler:          r.execHandler,
 		openHandler:          r.openHandler,
+		bashPPCustomOpen:     r.bashPPCustomOpen,
 		readDirHandler:       r.readDirHandler,
 		statHandler:          r.statHandler,
 		stdin:                r.stdin,

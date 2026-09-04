@@ -590,11 +590,6 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 	// These builtins can wait on context-aware I/O or child state. Announce the
 	// blocking edge before entering it so the `go` launch handshake cannot
 	// deadlock an owner whose next statement supplies the wakeup or failure.
-	if name == "read" || name == "wait" || name == "mapfile" || name == "readarray" {
-		if !r.bashPPArmBeforeBlock(ctx) {
-			return r.exit
-		}
-	}
 	defer r.bashPPLockLogicalOutput(name)()
 	// Bash fails a builtin whose standard-output write fails on a closed or
 	// broken descriptor (`echo >&-`, `printf x >&-`): it reports a write
@@ -1535,6 +1530,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				}
 			}
 			// None done yet; block until the first of them finishes.
+			if !r.bashPPArmBeforeBlock(ctx) {
+				return r.exit
+			}
 			if bg := waitAnyDone(candidates); bg != nil {
 				exit = *bg.exit
 				r.reapCoproc(bg)
@@ -1548,6 +1546,17 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			// "wait" without arguments returns exit status zero, unless a
 			// trapped signal interrupts it (POSIX: return >128, then run
 			// the trap at the next statement boundary).
+			needArm := false
+			for _, bg := range r.bgProcs {
+				select {
+				case <-bg.done:
+				default:
+					needArm = true
+				}
+			}
+			if needArm && !r.bashPPArmBeforeBlock(ctx) {
+				return r.exit
+			}
 			for _, bg := range r.bgProcs {
 				if r.waitOrSignal(bg) {
 					_, num := r.peekPendingSignal()
@@ -1606,6 +1615,13 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 						continue
 					}
 					return failf(127, "wait: pid %s is not a child of this shell\n", arg)
+				}
+			}
+			select {
+			case <-bg.done:
+			default:
+				if !r.bashPPArmBeforeBlock(ctx) {
+					return r.exit
 				}
 			}
 			if r.waitOrSignal(bg) {
@@ -2791,22 +2807,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			}
 			path = args[0]
 		}
-		if r.bashPPGoTask {
-			// Opening a FIFO has no context-aware portable primitive. A task
-			// must never enter an uninterruptible open which can strand the
-			// File join after sibling cancellation, so fail closed before open.
-			if info, statErr := r.stat(ctx, path); statErr == nil && !info.Mode().IsRegular() {
-				if info.Mode()&os.ModeNamedPipe != 0 {
-					return failf(2, "source: FIFO input is unavailable inside a Bash++ task\n")
-				}
-				return failf(2, "source: non-regular input is unavailable inside a Bash++ task\n")
-			}
-		}
 		// In bash-compat mode, let r.open print its own bash-shaped
 		// `<file>: line N: <path>: No such file or directory` line and
 		// avoid stacking a redundant `source: ` prefix on top. Outside
 		// compat mode, keep the legacy "source: <go-error>" wording.
-		f, err := r.open(ctx, path, os.O_RDONLY, 0, r.bashCompatErrors)
+		f, err := r.bashPPTaskOpen(ctx, path, os.O_RDONLY, 0, r.bashCompatErrors, true)
 		if err != nil {
 			if r.bashCompatErrors {
 				if r.opts[optPosix] && !r.interactiveShell {
@@ -2816,6 +2821,12 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				return exit
 			}
 			return failf(1, "source: %v\n", err)
+		}
+		if r.bashPPGoTask && r.bashPPTaskContext(ctx).Err() != nil {
+			_ = f.Close()
+			r.bashPPTaskCanceled = true
+			r.exit.fatal(r.bashPPTaskContext(ctx).Err())
+			return r.exit
 		}
 		defer f.Close()
 		p := syntax.NewParser()
@@ -3875,8 +3886,14 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			if fdReader != nil {
 				cancelGrace()
 				input = fdReader
+				if !r.bashPPArmBeforeBlock(ctx) {
+					return r.exit
+				}
 				line, err = readThroughSignals()
 			} else if input == stdin && stdin != nil && stdin.SetReadDeadline(deadline) == nil {
+				if !r.bashPPArmBeforeBlock(ctx) {
+					return r.exit
+				}
 				line, err = readThroughSignals()
 				stdin.SetReadDeadline(time.Time{})
 				cancelGrace()
@@ -3884,6 +3901,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				cancelGrace()
 				if input == stdin && stdin != nil {
 					input = &timeoutFileReader{ctx: readCtx, file: stdin, deadline: deadline}
+				}
+				if !r.bashPPArmBeforeBlock(ctx) {
+					return r.exit
 				}
 				line, err = readThroughSignals()
 			}
@@ -3894,6 +3914,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 						input = fdReader
 					}
 				}
+			}
+			if !r.bashPPArmBeforeBlock(ctx) {
+				return r.exit
 			}
 			line, err = readThroughSignals()
 		}

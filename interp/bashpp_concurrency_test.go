@@ -2,8 +2,12 @@ package interp
 
 import (
 	"context"
+	"errors"
+	"io"
 	"os"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -789,8 +793,152 @@ func TestBashPPFileBoundaryPrunesHistoryAndClosureChannels(t *testing.T) {
 	}
 	r.bashPPConcurrent = nil
 	r.bashPPPruneIssuedHandles(nil)
+	if len(r.bashPPIssuedHandles.handles) != 1 {
+		t.Fatalf("captured defense history was pruned while reachable: %#v", r.bashPPIssuedHandles.handles)
+	}
+	cell.vr.Str = ""
+	r.bashPPPruneIssuedHandles(nil)
 	if len(r.bashPPIssuedHandles.handles) != 0 {
-		t.Fatalf("unreachable defense history retained: %#v", r.bashPPIssuedHandles.handles)
+		t.Fatalf("cleared defense history retained: %#v", r.bashPPIssuedHandles.handles)
+	}
+}
+
+func TestBashPPGoFailFastOperationsDoNotReleaseLaterTask(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing-input")
+	tests := []struct {
+		name string
+		body string
+	}{
+		{"read option", "read -Z value"},
+		{"mapfile option", "mapfile -Z values"},
+		{"missing redirect", ": < " + missing},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := runBashPPConcurrency(t, `
+func bad() { `+tc.body+`; }
+func later() { echo escaped; }
+func main() { go bad(); go later(); }
+main()
+`)
+			if err == nil || strings.Contains(out, "escaped") {
+				t.Fatalf("fail-fast operation released later task: out=%q err=%v", out, err)
+			}
+		})
+	}
+}
+
+func TestCloneBashPPTaskCellsClonesReceiverObjects(t *testing.T) {
+	parentObject := map[string]any{"value": "parent"}
+	parentFn := &bashPPFunc{receiver: &bashPPCell{vr: expand.Variable{
+		Set: true, Kind: expand.Object, Obj: parentObject,
+	}}}
+	cloner := newBashPPCloner()
+	childFn := parentFn.cloned(cloner)
+	child := &Runner{bashPPFuncs: map[string]*bashPPFunc{"bound": childFn}}
+	if err := cloneBashPPTaskCells(child, newBashPPObjectCloner()); err != nil {
+		t.Fatal(err)
+	}
+	childObject := childFn.receiver.vr.Obj.(map[string]any)
+	childObject["value"] = "child"
+	if got := parentObject["value"]; got != "parent" {
+		t.Fatalf("task receiver mutation escaped snapshot: %v", got)
+	}
+}
+
+func TestBashPPFileBoundaryRetainsMethodReceiverHandleDefense(t *testing.T) {
+	var out strings.Builder
+	r, err := New(Lang(syntax.LangBashPP), StdIO(nil, &out, &out))
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := func(src string) error {
+		f, parseErr := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(src), "method-handle.bpp")
+		if parseErr != nil {
+			t.Fatal(parseErr)
+		}
+		return r.Run(context.Background(), f)
+	}
+	if err := run(`
+type Token string
+func (v Token) Use() { /usr/bin/echo "$v"; }
+func main() {
+ var token Token = hello
+ saved := token.Use
+}
+main()
+`); err != nil {
+		t.Fatalf("first run: out=%q err=%v", out.String(), err)
+	}
+	var receiver *bashPPCell
+	closureIndex := -1
+	for i, fn := range r.bashPPClosures {
+		if fn.receiver != nil && fn.receiver.vr.Str == "hello" {
+			receiver = fn.receiver
+			closureIndex = i
+		}
+	}
+	if receiver == nil {
+		t.Fatal("actual bound method receiver was not retained in closure registry")
+	}
+	// Ordinary typing correctly refuses converting a live channel capability
+	// into Token. Seed the defense-only state after creating a real bound
+	// method so this regression isolates persistent receiver graph traversal.
+	owner := newBashPPConcurrent(context.Background())
+	defer owner.cancel()
+	handle := bashPPChanHandlePrefix + "method-receiver"
+	receiver.vr.Str = handle
+	receiver.channel = newBashPPChannel("string", 0)
+	receiver.channelOwner = owner
+	r.bashPPIssuedHandles = &bashPPHandleProvenance{handles: map[string]struct{}{handle: {}}}
+	r.bashPPClearChannelRefs(owner)
+	r.bashPPPruneIssuedHandles(nil)
+	if receiver.channel != nil || receiver.channelOwner != nil || len(r.bashPPIssuedHandles.handles) != 1 {
+		t.Fatalf("persistent receiver root was not revoked and retained: receiver=%#v handles=%#v", receiver, r.bashPPIssuedHandles.handles)
+	}
+	if err := run(`/usr/bin/true`); err != nil {
+		t.Fatalf("later Run failed before retained invocation: out=%q err=%v", out.String(), err)
+	}
+	r.bashPPInvoke(context.Background(), r.bashPPClosures[closureIndex], nil)
+	if r.exit.code == 0 || !strings.Contains(out.String(), "cannot cross an exec boundary") {
+		t.Fatalf("retained method receiver leaked handle: out=%q exit=%v", out.String(), r.exit)
+	}
+}
+
+func TestBashPPTaskCustomOpenFailsClosedBeforeHandler(t *testing.T) {
+	for _, tc := range []struct{ body string }{
+		{"source virtual.bpp"},
+		{": > virtual.out"},
+	} {
+		t.Run(tc.body, func(t *testing.T) {
+			var calls atomic.Int32
+			var out strings.Builder
+			r, err := New(
+				Lang(syntax.LangBashPP),
+				StdIO(nil, &out, &out),
+				OpenHandler(func(context.Context, string, int, os.FileMode) (io.ReadWriteCloser, error) {
+					calls.Add(1)
+					return nil, errors.New("unexpected custom open")
+				}),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(`
+func load() { `+tc.body+`; }
+func later() { echo escaped; }
+func main() { go load(); go later(); }
+main()
+`), "custom-open.bpp")
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = r.Run(context.Background(), f)
+			if err == nil || calls.Load() != 0 || strings.Contains(out.String(), "escaped") ||
+				strings.Count(out.String(), "custom open handlers are unavailable") != 1 {
+				t.Fatalf("out=%q err=%v custom calls=%d", out.String(), err, calls.Load())
+			}
+		})
 	}
 }
 
