@@ -116,10 +116,15 @@ fi
 
 : >"$evidence"
 log() { printf '%s\n' "$*" | tee -a "$evidence"; }
-go_bin=${GO:-go}
-go_path=$(command -v "$go_bin")
+go_path=$(command -v "${GO:-go}")
 go_dir=$(dirname "$go_path")
-export PATH="/bin:/usr/bin:$go_dir:$PATH"
+# Resolve the toolchain ONCE and invoke it by absolute path. The gate adds
+# /bin and /usr/bin so the bounded commands always find a base userland, but
+# those directories may hold a distro `go` (the GitHub ubuntu runners ship
+# one); prepending them ahead of the selected toolchain silently downgraded
+# the gate to that older Go and failed on the module's language floor.
+go_bin=$go_path
+export PATH="$go_dir:/bin:/usr/bin:$PATH"
 # GOMEMLIMIT bounds the Go heap, not total process-tree RSS. CI records peak
 # RSS; the sprint manager supplies the separate hard 3 GiB process-tree cap.
 export GOMEMLIMIT=${GOMEMLIMIT:-2GiB}
