@@ -2593,6 +2593,12 @@ func (r *Runner) Reset() {
 	// parked forever. standaloneDefaults is configuration established by an
 	// option, so retain it and recreate its subscriptions after the replacement.
 	r.stopSignalSubscriptions()
+	// A Reset is an ownership boundary. Cancel every blocked channel operation
+	// and join every task before replacing the runner and its registry.
+	if r.bashPPConcurrent != nil {
+		r.bashPPConcurrent.stopAndJoin()
+		r.bashPPConcurrent = nil
+	}
 	standaloneDefaults := maps.Clone(r.standaloneDefaults)
 	if !r.didReset {
 		if r.execReplacement == nil {

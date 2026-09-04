@@ -1740,12 +1740,20 @@ func (r *Runner) out(s string) {
 }
 
 func (r *Runner) outf(format string, a ...any) {
+	if r.bashPPConcurrent != nil {
+		r.bashPPConcurrent.ioMu.Lock()
+		defer r.bashPPConcurrent.ioMu.Unlock()
+	}
 	if _, err := fmt.Fprintf(r.stdout, format, a...); err != nil {
 		r.outErr = err
 	}
 }
 
 func (r *Runner) errf(format string, a ...any) {
+	if r.bashPPConcurrent != nil {
+		r.bashPPConcurrent.ioMu.Lock()
+		defer r.bashPPConcurrent.ioMu.Unlock()
+	}
 	fmt.Fprintf(r.stderr, format, a...)
 }
 
@@ -10800,6 +10808,22 @@ func (r *Runner) execAs(ctx context.Context, pos syntax.Pos, argv0 string, clear
 		r.reportError("exec", pos, args[0], msg, 1)
 		r.exit.code = 1
 		return
+	}
+	if r.bashPPConcurrent != nil {
+		for _, arg := range args {
+			if bashPPHasRuntimeHandle(arg) {
+				r.errf("bash++: channel handles cannot cross an exec boundary\n")
+				r.exit.code = 2
+				return
+			}
+		}
+		for _, vr := range r.bashPPEnv().Each {
+			if vr.Exported && bashPPHasRuntimeHandle(vr.String()) {
+				r.errf("bash++: channel handles cannot cross an exec boundary\n")
+				r.exit.code = 2
+				return
+			}
+		}
 	}
 	hctx := r.handlerCtx(ctx, handlerKindExec, pos)
 	if argv0 != "" {
