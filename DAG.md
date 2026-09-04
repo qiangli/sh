@@ -53,6 +53,28 @@ Effects: read
 go test -race ./... -skip 'TestRunnerRunConfirm|TestParseConfirm'
 ```
 
+### bashpp-race-gate
+Bash++ race/lifecycle gate. Records toolchain, package and test discovery,
+the broad unsafe-oracle audit, focused schedule runs, and the complete race
+suite in `artifacts/bashpp-race-gate.txt`. The real Bash compatibility corpus
+remains the separate `confirm` task because it needs the external Bash oracle.
+The gate defaults `GOMEMLIMIT` to 2 GiB, gives each `go test` an explicit
+timeout plus an outer watchdog, and records portable `/usr/bin/time` peak-RSS
+evidence. `GOMEMLIMIT` bounds the Go heap, not total process-tree RSS. CI does
+not impose a separate RSS ceiling; the sprint manager supplies the hard 3 GiB
+process-tree ceiling for the final acceptance run. A 15-minute global gate
+deadline leaves headroom inside the CI job's 30-minute limit for other steps.
+Use `scripts/bashpp-race-gate.sh --discovery-only` to validate package and
+focused-test discovery without launching race tests. Run
+`scripts/bashpp-race-gate-signal-self-test.sh` to send TERM during discovery
+and assert the gate and its captured descendants are reaped. The CI job gives
+this bounded gate enough time to emit its own diagnostics.
+Effects: read, write
+
+```bash
+make bashpp-race-gate
+```
+
 ### confirm
 The canonical "behaves like real Bash 5.3" oracle: the same script table is run
 by `gosh` and by a dockerized Bash, and outputs/exit codes are diffed. Needs

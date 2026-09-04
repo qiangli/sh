@@ -7,7 +7,9 @@ package interp_test
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -22,6 +24,79 @@ import (
 
 	"mvdan.cc/sh/v3/interp"
 )
+
+// lineObserver provides a bounded, synchronized readiness oracle for tests
+// where the runner writes output concurrently with the test reading it. A
+// plain bytes.Buffer is not safe for that hand-off and races under -race.
+type lineObserver struct {
+	mu       sync.Mutex
+	buf      bytes.Buffer // bashpp-racegate:safe-synchronized
+	offset   int
+	lines    chan string
+	overflow error
+}
+
+var errLineObserverOverflow = errors.New("line observer capacity exceeded")
+
+func newLineObserver(size int) *lineObserver {
+	return &lineObserver{lines: make(chan string, size)}
+}
+
+func (o *lineObserver) Write(p []byte) (int, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	n, err := o.buf.Write(p)
+	for {
+		b := o.buf.Bytes()[o.offset:]
+		i := bytes.IndexByte(b, '\n')
+		if i < 0 {
+			return n, err
+		}
+		line := string(append([]byte(nil), b[:i+1]...))
+		o.offset += i + 1
+		select {
+		case o.lines <- line:
+		default:
+			o.overflow = errLineObserverOverflow
+			return n, o.overflow
+		}
+	}
+}
+
+func (o *lineObserver) Err() error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.overflow
+}
+
+func (o *lineObserver) ReadLine(t *testing.T, d time.Duration) string {
+	t.Helper()
+	select {
+	case line := <-o.lines:
+		return line
+	case <-time.After(d):
+		t.Fatalf("timed out waiting for observed line; buffered=%q", o.String())
+		return ""
+	}
+}
+
+func (o *lineObserver) String() string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.buf.String()
+}
+
+func TestLineObserverReportsOverflow(t *testing.T) {
+	o := newLineObserver(1)
+	input := []byte("first\nsecond\n")
+	n, err := o.Write(input)
+	if n != len(input) || !errors.Is(err, errLineObserverOverflow) {
+		t.Fatalf("Write = (%d, %v), want (%d, %v)", n, err, len(input), errLineObserverOverflow)
+	}
+	if !errors.Is(o.Err(), errLineObserverOverflow) {
+		t.Fatalf("Err = %v, want %v", o.Err(), errLineObserverOverflow)
+	}
+}
 
 type testProcessGroupCarrierProc struct{ *testCarrierProc }
 
@@ -629,7 +704,7 @@ wait "$d"; echo "$?"
 	if len(pids) != 4 {
 		t.Fatalf("want 4 pids, got %q", first)
 	}
-	seen := make(map[string]bool)
+	seen := make(map[string]bool) // bashpp-racegate:safe-private
 	var wg sync.WaitGroup
 	for _, pid := range pids {
 		if !numericPidRe.MatchString(pid) {
@@ -671,28 +746,19 @@ wait "$d"; echo "$?"
 func TestJobCarrierCancelReapsCarrier(t *testing.T) {
 	t.Parallel()
 	c := new(testCarrier)
-	pr, pw, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	r, err := interp.New(interp.WithJobCarrier(c), interp.StdIO(nil, pw, pw))
+	out := newLineObserver(8)
+	r, err := interp.New(interp.WithJobCarrier(c), interp.StdIO(nil, out, out))
 	if err != nil {
 		t.Fatal(err)
 	}
 	file := parse(t, nil, `{ sleep 30; } & echo "$!"; wait "$!"; echo after`)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	runDone := make(chan struct{})
+	runDone := make(chan error, 1)
 	go func() {
-		defer close(runDone)
-		defer pw.Close()
-		r.Run(ctx, file) // error (if any) is irrelevant; we cancel it
+		runDone <- r.Run(ctx, file)
 	}()
-	br := bufio.NewReader(pr)
-	line, err := br.ReadString('\n')
-	if err != nil {
-		t.Fatalf("reading pid: %v", err)
-	}
+	line := out.ReadLine(t, runnerRunTimeout)
 	pid, err := strconv.Atoi(strings.TrimSpace(line))
 	if err != nil {
 		t.Fatalf("parsing pid %q: %v", line, err)
@@ -702,9 +768,15 @@ func TestJobCarrierCancelReapsCarrier(t *testing.T) {
 	}
 	cancel()
 	select {
-	case <-runDone:
+	case runErr := <-runDone:
+		if runErr != nil && !errors.Is(runErr, context.Canceled) {
+			t.Fatalf("Run after cancellation: %v", runErr)
+		}
 	case <-time.After(runnerRunTimeout):
-		t.Fatal("Run did not return after context cancellation")
+		t.Fatalf("Run did not return after context cancellation; output=%q", out.String())
+	}
+	if err := out.Err(); err != nil {
+		t.Fatalf("output observer: %v", err)
 	}
 	waitPidsGone(t, c.startedPids())
 }

@@ -213,7 +213,7 @@ func TestFIFOBackgroundJobRedirectCancel(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 	defer cancel()
 
-	var stdout, stderr bytes.Buffer
+	var stdout, stderr bytes.Buffer // bashpp-racegate:safe-private
 	r, err := New(StdIO(nil, &stdout, &stderr), Dir(dir))
 	if err != nil {
 		t.Fatalf("New failed: %v", err)
@@ -236,7 +236,7 @@ func TestFIFOBackgroundJobRedirectCancel(t *testing.T) {
 // TestSupplementaryGroupsResolution verifies that $GROUPS array variable resolves
 // the user's groups on Unix systems.
 func TestSupplementaryGroupsResolution(t *testing.T) {
-	var stdout bytes.Buffer
+	var stdout bytes.Buffer // bashpp-racegate:safe-private
 	r, err := New(StdIO(nil, &stdout, nil))
 	if err != nil {
 		t.Fatalf("New failed: %v", err)

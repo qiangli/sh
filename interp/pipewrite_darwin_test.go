@@ -38,7 +38,7 @@ func TestDarwinNestedPipelineSIGPIPEIsolation(t *testing.T) {
 		}
 		cmd.Env = append(cmd.Env, item)
 	}
-	var stdout, stderr bytes.Buffer
+	var stdout, stderr bytes.Buffer // bashpp-racegate:safe-private
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {

@@ -21,7 +21,7 @@ import (
 
 type lockedBuffer struct {
 	mu sync.Mutex
-	b  bytes.Buffer
+	b  bytes.Buffer // bashpp-racegate:safe-synchronized
 }
 
 func (b *lockedBuffer) Write(p []byte) (int, error) {

@@ -75,7 +75,7 @@ echo line1=$line1 line2=$line2
 	if err != nil {
 		t.Fatal(err)
 	}
-	var stdout, stderr bytes.Buffer
+	var stdout, stderr bytes.Buffer // bashpp-racegate:safe-private
 	runner, err := New(
 		Params("--", fifo),
 		StdIO(nil, &stdout, &stderr),

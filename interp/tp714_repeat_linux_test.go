@@ -59,7 +59,7 @@ echo successfully read input
 	if err != nil {
 		t.Fatal(err)
 	}
-	var stderr strings.Builder
+	var stderr strings.Builder // bashpp-racegate:safe-private
 	cmd.Stderr = &stderr
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)

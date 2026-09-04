@@ -43,7 +43,7 @@ type cgCase struct {
 
 // cgRegisteredCases is appended to by platform-specific files' init(), so unix
 // rows (carrier, real fds) join the table without a second harness.
-var cgRegisteredCases []cgCase
+var cgRegisteredCases []cgCase // bashpp-racegate:safe-private
 
 // cgRegister adds platform-specific rows to the adversarial table.
 func cgRegister(c ...cgCase) { cgRegisteredCases = append(cgRegisteredCases, c...) }

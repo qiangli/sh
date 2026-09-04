@@ -120,7 +120,7 @@ type cgAllowRule struct {
 // carries its rationale. Adding a match here is a deliberate act with a paper
 // trail; raising a numeric budget is not, which is exactly why no numeric
 // budget exists.
-var cgGoroutineAllowlist = []cgAllowRule{
+var cgGoroutineAllowlist = []cgAllowRule{ // bashpp-racegate:safe-private
 	{
 		name:   "runtime-internal",
 		reason: "GC workers, the sysmon monitor, finalizer and bgsweep goroutines are owned by the Go runtime and are never ours to reap.",
@@ -230,7 +230,7 @@ func cgDrainToBaseline(t *testing.T, base int, what string, deadline time.Durati
 			return
 		}
 		if time.Now().After(end) {
-			var b strings.Builder
+			var b strings.Builder // bashpp-racegate:safe-private
 			fmt.Fprintf(&b, "cgDrainToBaseline: %q left %d suspect goroutine(s) "+
 				"(baseline %d) that did not drain within %s — this is a real leak, "+
 				"reported WITH creation sites:\n\n", what, len(susp), base, deadline)
@@ -315,7 +315,7 @@ func (d *cgLeakDetector) Check(t *testing.T) {
 	}
 
 	if len(leaked) > 0 {
-		var b strings.Builder
+		var b strings.Builder // bashpp-racegate:safe-private
 		fmt.Fprintf(&b, "goroutine leak: %d goroutine(s) survived the focused run and\n"+
 			"are not on the named runtime allowlist. Each is reported WITH its\n"+
 			"creation site so it is actionable:\n\n", len(leaked))
@@ -382,7 +382,7 @@ func cgIndent(s, prefix string) string {
 // cgAllowlistLegend prints the named allowlist and each entry's reason, so a
 // leak report is self-documenting about what WAS excused and why.
 func cgAllowlistLegend() string {
-	var b strings.Builder
+	var b strings.Builder // bashpp-racegate:safe-private
 	b.WriteString("runtime allowlist in effect (named, with reasons — NOT a count threshold):\n")
 	for _, r := range cgGoroutineAllowlist {
 		fmt.Fprintf(&b, "  - %s: %s\n", r.name, r.reason)
@@ -440,7 +440,7 @@ func (m *cgMatrix) report() string {
 		}
 		return m.rows[i].repeat < m.rows[j].repeat
 	})
-	var b strings.Builder
+	var b strings.Builder // bashpp-racegate:safe-private
 	b.WriteString("schedule matrix actually executed (GOMAXPROCS x repetitions):\n")
 	for _, r := range m.rows {
 		fmt.Fprintf(&b, "  GOMAXPROCS=%d (NumCPU=%d)  repeat=%d  cases=%d\n",
@@ -467,7 +467,7 @@ type cgQuarantineEntry struct {
 
 // cgQuarantine is the live quarantine list. Empty is the correct, healthy
 // state: nothing is quarantined today. An entry here is a debt with a due date.
-var cgQuarantine = []cgQuarantineEntry{}
+var cgQuarantine = []cgQuarantineEntry{} // bashpp-racegate:safe-private
 
 // cgIsQuarantined reports whether an adversarial case name is currently
 // quarantined, so the runner can skip-with-report rather than run it.
