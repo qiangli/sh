@@ -120,6 +120,10 @@ func runCarrierScript(t *testing.T, carrier interp.JobCarrier, src string, opts 
 	if err != nil {
 		t.Fatal(err)
 	}
+	// This helper owns a terminal runner: callers only receive its completed
+	// output, never the Runner for incremental reuse. Reset releases any OS
+	// signal subscriptions installed by the script before the helper returns.
+	defer r.Reset()
 	ctx, cancel := context.WithTimeout(context.Background(), runnerRunTimeout)
 	defer cancel()
 	if err := r.Run(ctx, file); err != nil {

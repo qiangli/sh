@@ -4641,7 +4641,16 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 			go func() {
 				close(launched)
 				defer r2.closeDirFile()
-				defer func() {
+				cleaned := false
+				cleanup := func() {
+					if cleaned {
+						return
+					}
+					cleaned = true
+					// A background runner is a terminal subshell: unlike a
+					// caller-owned Runner, it cannot be Reset. Join its trap
+					// forwarders before publishing completion through bg.done.
+					r2.stopSignalSubscriptions()
 					cancel()
 					// Ensure pidReady is closed even if no real exec ever
 					// happened (e.g. `(true) &`). The reader of `$!` waits
@@ -4651,7 +4660,10 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 					default:
 						close(bg.pidReady)
 					}
-				}()
+				}
+				// Preserve cleanup if execution or an EXIT trap panics before the
+				// normal completion path reaches bg.done.
+				defer cleanup()
 				r2.Run(bgCtx, &st2)
 				if cb := r2.trapCallbacks["EXIT"]; cb != "" && !r2.inheritedExitTrap {
 					r2.trapCallback(bgCtx, cb, "exit")
@@ -4672,6 +4684,7 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 				// Queue before signalling done so a `wait` that unblocks here
 				// sees the pending CHLD at its next statement boundary.
 				r.notifyChildReaped()
+				cleanup()
 				close(bg.done)
 			}()
 			// A real shell forks an asynchronous simple command before it

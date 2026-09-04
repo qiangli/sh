@@ -231,6 +231,124 @@ func TestRunnerResetStopsSignalSubscriptions(t *testing.T) {
 	}
 }
 
+// TestBackgroundRunnerStopsSignalSubscriptions verifies the other ownership
+// boundary: an async-list runner is an internal terminal subshell, not an
+// incrementally reusable Runner. A trap installed inside that list must be
+// joined when its background job completes, while the parent's own trap state
+// remains available for later incremental Runs.
+func TestBackgroundRunnerStopsSignalSubscriptions(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	returned := make(chan struct{})
+	r, err := New(ExecHandlers(func(next ExecHandlerFunc) ExecHandlerFunc {
+		return func(ctx context.Context, args []string) error {
+			if args[0] != "block" {
+				return next(ctx, args)
+			}
+			close(started)
+			<-release
+			close(returned)
+			return nil
+		}
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := syntax.NewParser().Parse(strings.NewReader(`
+trap ':' TERM
+{ trap ':' USR1; block; } &
+`), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Run(context.Background(), file); err != nil {
+		t.Fatal(err)
+	}
+	if len(r.bgProcs) != 1 {
+		t.Fatalf("background jobs = %d, want 1", len(r.bgProcs))
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("background job did not start")
+	}
+	child := r.bgProcs[0].carrierSignalRunner.Load()
+	if child == nil {
+		t.Fatal("background job has no signal runner")
+	}
+	child.sigMu.Lock()
+	sub, ok := child.sigNotifyCh["USR1"]
+	if !ok {
+		child.sigMu.Unlock()
+		t.Fatal("background runner did not install USR1 subscription")
+	}
+	close(release)
+	<-returned
+	select {
+	case <-r.bgProcs[0].done:
+		child.sigMu.Unlock()
+		t.Fatal("background completion published before signal cleanup")
+	case <-time.After(50 * time.Millisecond):
+	}
+	child.sigMu.Unlock()
+	select {
+	case <-r.bgProcs[0].done:
+	case <-time.After(time.Second):
+		t.Fatal("background job did not complete after signal cleanup unblocked")
+	}
+	select {
+	case <-sub.finished:
+	default:
+		t.Fatal("background completion published before signal forwarder joined")
+	}
+	child.sigMu.Lock()
+	childSubs := len(child.sigNotifyCh)
+	child.sigMu.Unlock()
+	if childSubs != 0 {
+		t.Fatalf("terminal background runner retained %d signal subscription(s)", childSubs)
+	}
+
+	// The parent remains incrementally reusable; its trap was not torn down
+	// merely because a child job ended.
+	r.sigMu.Lock()
+	_, parentHasTERM := r.sigNotifyCh["TERM"]
+	r.sigMu.Unlock()
+	if !parentHasTERM {
+		t.Fatal("background cleanup removed the parent's incremental TERM trap")
+	}
+	r.Reset()
+}
+
+// TestUncatchableSignalTrapsDoNotSubscribe verifies that bash-compatible trap
+// metadata for KILL and STOP does not create impossible OS subscriptions or
+// ignored dispositions. Resetting such metadata must remain a no-op too.
+func TestUncatchableSignalTrapsDoNotSubscribe(t *testing.T) {
+	for _, name := range []string{"KILL", "STOP"} {
+		t.Run(name, func(t *testing.T) {
+			r := &Runner{trapCallbacks: map[string]string{name: ":"}}
+			r.enableSignalTrap(name)
+			if got := r.trapCallbacks[name]; got != ":" {
+				t.Fatalf("trap action = %q, want preserved metadata", got)
+			}
+			r.trapCallbacks[name] = ""
+			r.ignoreSignalTrap(name)
+			if got := r.trapCallbacks[name]; got != "" {
+				t.Fatalf("ignore action = %q, want preserved metadata", got)
+			}
+			r.disableSignalTrap(name)
+			if len(r.sigNotifyCh) != 0 {
+				t.Fatalf("uncatchable signal created %d subscription(s)", len(r.sigNotifyCh))
+			}
+			if _, ok := r.sigNotify[name]; ok {
+				t.Fatal("uncatchable signal recorded as notified")
+			}
+			if _, ok := r.sigIgnored[name]; ok {
+				t.Fatal("uncatchable signal recorded as ignored")
+			}
+		})
+	}
+}
+
 // TestRestoreBridgedStartupIgnoresRuntimeSignals verifies that a synchronous
 // fault signal (BUS/FPE/ILL/SEGV/TRAP) marked SIG_IGN on entry is reinstalled
 // as a real OS-level SIG_IGN, so a later kill(2)/SI_USER delivery is discarded
