@@ -74,7 +74,12 @@ start_watcher() {
 # process traps TERM/INT/HUP and cleans up any nested command group before it
 # exits, so the nested setsid groups cannot escape the global watchdog.
 if ((!internal)); then
-	global_seconds=${BASHPP_RACE_GLOBAL_TIMEOUT_SECONDS:-900}
+	# set -e aborts the gate at the FIRST lane that times out, so the worst
+	# realistic run is every lane finishing plus one ceiling, not the sum of
+	# every ceiling. This stays comfortably inside the workflow's own
+	# timeout-minutes so the gate always reports before the job is killed —
+	# a job-level kill produces no evidence at all.
+	global_seconds=${BASHPP_RACE_GLOBAL_TIMEOUT_SECONDS:-1800}
 	args=(--internal)
 	((discovery_only)) && args+=(--discovery-only)
 	marker=$(mktemp "${TMPDIR:-/tmp}/bashpp-race-global.XXXXXX")
@@ -237,14 +242,31 @@ if ((discovery_only)); then
 	exit 0
 fi
 
+# Compile the race build BEFORE the timed lanes. A lane's bound asks "did
+# this hang?", and -race compilation of ./interp is minutes of honest work
+# that answers nothing about that question; counting it made the bound a
+# measure of the runner's build speed. Warmed here, the lane timers below
+# measure EXECUTION.
+run_bounded 300 "race build" "$tmpdir/racebuild" 0 \
+	"$go_bin" test -race -run '^$' ./interp
+
+# Bounds are set from measurement with real headroom, not from the dev box's
+# wall clock. Measured here after warming: 114s/94s/94s for the focused lanes
+# and 99s for the whole race suite. The previous 150s outer bound sat 1.3x
+# over the slowest of those AND included the build, so CI reported TIME on a
+# lane that had not hung — and a lane reported as TIME says nothing at all,
+# which is the failure this gate exists to prevent. What the bound must catch
+# is a lifecycle leak that never terminates; that is unbounded, so a generous
+# ceiling catches it exactly as well as a tight one and stops manufacturing
+# false timeouts on slower hardware.
 for procs in 1 2 4; do
-	run_bounded 150 \
-		"GOMAXPROCS=$procs go test -race -timeout=2m -count=3 -run '$focused_re' ./interp" \
+	run_bounded 420 \
+		"GOMAXPROCS=$procs go test -race -timeout=6m -count=3 -run '$focused_re' ./interp" \
 		"$tmpdir/focused.$procs" 1 env GOMAXPROCS="$procs" \
-		"$go_bin" test -race -timeout=2m -count=3 -run "$focused_re" ./interp
+		"$go_bin" test -race -timeout=6m -count=3 -run "$focused_re" ./interp
 done
-run_bounded 420 \
-	"go test -race -timeout=6m ./... -skip 'TestRunnerRunConfirm|TestParseConfirm'" \
-	"$tmpdir/all" 1 "$go_bin" test -race -timeout=6m ./... \
+run_bounded 600 \
+	"go test -race -timeout=8m ./... -skip 'TestRunnerRunConfirm|TestParseConfirm'" \
+	"$tmpdir/all" 1 "$go_bin" test -race -timeout=8m ./... \
 	-skip 'TestRunnerRunConfirm|TestParseConfirm'
 log "gate: PASS"
