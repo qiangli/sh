@@ -324,7 +324,7 @@ func (p *Parser) bashppParenForm(ce *CallExpr) Command {
 	txn := p.beginBashPPTxn()
 	lparen := p.pos
 	p.next()
-	args, ellipsis, ok := p.bashppCallArgs()
+	args, argNames, ellipsis, ok := p.bashppCallArgs()
 	if !ok || p.tok != rightParen {
 		txn.rollback(p)
 		return nil
@@ -337,7 +337,7 @@ func (p *Parser) bashppParenForm(ce *CallExpr) Command {
 	}
 	txn.commit(p)
 	call := &BashPPCall{
-		Fun: bashppSelectorLits(name), Args: args, Ellipsis: ellipsis,
+		Fun: bashppSelectorLits(name), Args: args, ArgNames: argNames, Ellipsis: ellipsis,
 		Lparen: lparen, Rparen: rparen,
 	}
 	if !short {
@@ -381,31 +381,57 @@ func bashppCallTerminator(tok token) bool {
 // returning the position of a trailing `...` when the final argument spreads a
 // slice into a variadic parameter. Go allows the dots only on the last
 // argument, so one position describes the whole list.
-func (p *Parser) bashppCallArgs() ([]*Word, Pos, bool) {
+func (p *Parser) bashppCallArgs() ([]*Word, []*Lit, Pos, bool) {
 	if p.tok == rightParen {
-		return nil, Pos{}, true
+		return nil, nil, Pos{}, true
 	}
 	var args []*Word
+	var names []*Lit
+	named := false
 	for {
 		w := p.getWord()
 		if w == nil {
-			return nil, Pos{}, false
+			return nil, nil, Pos{}, false
 		}
 		clean, comma := bashppTrimComma(w)
+		var name *Lit
+		if lit := bashppBareLit(clean); lit != nil && strings.HasSuffix(lit.Value, ":") {
+			value := strings.TrimSuffix(lit.Value, ":")
+			if comma || !bashppIsIdent(value) {
+				return nil, nil, Pos{}, false
+			}
+			name = &Lit{ValuePos: lit.Pos(), ValueEnd: posAddCol(lit.End(), -1), Value: value}
+			clean = p.getWord()
+			if clean == nil {
+				return nil, nil, Pos{}, false
+			}
+			clean, comma = bashppTrimComma(clean)
+			named = true
+		} else if named {
+			// Bash# follows Python's positional-before-named rule. Shapes which
+			// reverse it are outside the accepted grammar and remain shell input.
+			return nil, nil, Pos{}, false
+		}
 		clean, ellipsis := bashppTrimEllipsis(clean)
 		if !bashppCallArg(clean) {
-			return nil, Pos{}, false
+			return nil, nil, Pos{}, false
+		}
+		if name != nil && ellipsis.IsValid() {
+			return nil, nil, Pos{}, false
 		}
 		args = append(args, clean)
+		if name != nil {
+			names = append(names, name)
+		}
 		if ellipsis.IsValid() && (comma || p.tok != rightParen) {
 			// `f(xs..., y)` — the dots were not on the final argument.
-			return nil, Pos{}, false
+			return nil, nil, Pos{}, false
 		}
 		if p.tok == rightParen {
-			return args, ellipsis, !comma
+			return args, names, ellipsis, !comma
 		}
 		if !comma {
-			return nil, Pos{}, false
+			return nil, nil, Pos{}, false
 		}
 	}
 }

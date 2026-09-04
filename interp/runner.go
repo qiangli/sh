@@ -5570,6 +5570,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		}
 		r.lastExpandExit = exitStatus{}
 		r.lastExpandCmdSubst = false
+		args = r.bashPPRewriteCommandArgs(args)
 		fields, expandErr := expand.Fields(r.ecfg, args...)
 		r.expandErr(expandErr)
 		if standaloneArithParseError(expandErr) {

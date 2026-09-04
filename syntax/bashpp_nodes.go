@@ -265,6 +265,12 @@ type BashPPCall struct {
 	Fun  []*Lit  // the selector chain: x.y.z is three literals
 	Args []*Word // the arguments, unevaluated
 
+	// ArgNames names the trailing named arguments in source order. Since the
+	// grammar requires positional arguments first, Args[:len(Args)-len(ArgNames)]
+	// are positional and each remaining Args entry pairs with an ArgNames entry.
+	// This compact form avoids nil placeholders in the public/JSON AST.
+	ArgNames []*Lit
+
 	// FuncLit is set when the callee is a function literal rather than a
 	// name, which is what an immediately invoked literal — `func(n int) {
 	// … }(1)` — is. Fun is empty exactly then, so the two are alternatives
@@ -379,6 +385,8 @@ func (i *BashPPIf) End() Pos {
 type BashPPField struct {
 	Names     []*Lit // the declared identifiers, empty for an unnamed result type
 	FieldType *Lit   // the declared type, or nil for an untyped parameter
+	Default   *Word  // the value after `=`, nil for a required parameter
+	Equals    Pos    // position of `=` when Default is non-nil
 
 	// Ellipsis is the position of the `...` in a variadic parameter group,
 	// `func f(head string, rest ...int)`, and is invalid for every other
@@ -409,6 +417,9 @@ func (f *BashPPField) Pos() Pos {
 	return Pos{}
 }
 func (f *BashPPField) End() Pos {
+	if f.Default != nil {
+		return f.Default.End()
+	}
 	if f.FieldType != nil {
 		return f.FieldType.End()
 	}
