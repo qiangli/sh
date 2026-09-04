@@ -416,6 +416,20 @@ func (p *Printer) bashppSignature(params, results []*BashPPField, resLparen Pos)
 	p.bashppFields(results)
 }
 
+// bashppMakeChan prints `make(chan T)` or `make(chan T, n)`. It is not part of
+// the command switch because a channel constructor is a VALUE: it appears only
+// as the right-hand side of a short declaration, never as a statement.
+func (p *Printer) bashppMakeChan(mk *BashPPMakeChan) {
+	p.spacedString(mk.Make.Value, mk.Make.Pos())
+	p.writeLit("(chan ")
+	p.writeLit(mk.ChanType.Elem.Value)
+	if mk.Capacity != nil {
+		p.writeLit(", ")
+		p.word(mk.Capacity)
+	}
+	p.writeLit(")")
+}
+
 // bashppFuncLit prints a function literal: `func(a int) int { … }`. The body
 // goes through the ordinary block printer, so a closure indents exactly as the
 // braces around it would anywhere else.
@@ -1203,6 +1217,11 @@ func (p *Printer) stmt(s *Stmt) {
 		// share the same flush-the-operator convention.
 		if p.spaceRedirects && r.Op != DplIn && r.Op != DplOut && r.Op != Hdoc && r.Op != DashHdoc {
 			p.space()
+		} else if s.Cmd == nil && r.BashPPKeepSpace {
+			// Keep a commandless `< -file` distinct from the Bash++ receive
+			// `<-file` when reparsed. A command-prefixed redirect is already
+			// unambiguous and retains the base formatter's compact spelling.
+			p.space()
 		} else {
 			p.wantSpace = spaceRequired
 		}
@@ -1552,6 +1571,12 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 			// invoked literal, which has no word spelling in Rhs at all).
 			p.space()
 			p.command(cmd.Call, nil)
+		case cmd.Recv != nil:
+			p.space()
+			p.command(cmd.Recv, nil)
+		case cmd.MakeChan != nil:
+			p.space()
+			p.bashppMakeChan(cmd.MakeChan)
 		default:
 			p.space()
 			for i, rhs := range cmd.Rhs {
@@ -1656,8 +1681,25 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 		p.writeLit(")")
 	case *BashPPSelect:
 		p.writeLit("select {")
+		// Canonicalize the first arm and every body onto their own line on the
+		// first print. Depending on source positions here makes compact input
+		// require two formatting passes to reach a fixed point.
+		p.wantNewline = len(cmd.Cases) > 0
 		for _, arm := range cmd.Cases {
+			var before, after []Comment
+			for _, c := range arm.Comments {
+				if arm.Pos().After(c.Pos()) {
+					before = append(before, c)
+				} else {
+					after = append(after, c)
+				}
+			}
+			if len(before) > 0 {
+				p.wantSpace = spaceRequired
+			}
+			p.comments(before...)
 			p.newlines(arm.Pos())
+			p.spacePad(arm.Pos())
 			if arm.Default {
 				p.writeLit("default:")
 			} else {
@@ -1665,19 +1707,34 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 				p.command(arm.Comm, nil)
 				p.writeLit(":")
 			}
+			if len(after) > 0 {
+				p.wantSpace = spaceRequired
+			}
+			p.comments(after...)
+			p.wantNewline = true
 			p.nestedStmts(arm.Stmts, arm.Last, cmd.Rbrace)
+			// A following case/default must not be glued to the final command
+			// in this arm. Force the same newline that Go's implicit semicolon
+			// requires; this also keeps an empty arm distinct from the next one.
+			p.wantNewline = true
 		}
 		p.newlines(cmd.Rbrace)
 		p.writeLit("}")
 	case *BashPPRange:
-		p.writeLit("for ")
+		p.writeLit("for")
+		// `for range ch { … }` discards the received values, so it has no
+		// names and must grow neither a `:=` nor the space before one.
 		for i, name := range cmd.Names {
 			if i > 0 {
-				p.writeLit(", ")
+				p.writeLit(",")
 			}
+			p.writeLit(" ")
 			p.writeLit(name.Value)
 		}
-		p.writeLit(" := range ")
+		if len(cmd.Names) > 0 {
+			p.writeLit(" :=")
+		}
+		p.writeLit(" range ")
 		p.word(cmd.Chan)
 		p.space()
 		p.command(cmd.Body, nil)
