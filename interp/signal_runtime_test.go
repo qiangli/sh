@@ -373,12 +373,24 @@ func TestStandaloneRuntimeSignalInheritedIgnore(t *testing.T) {
 	}
 	const helperEnv = "SH_RUNTIME_IGNORE_HELPER"
 	if name := os.Getenv(helperEnv); name != "" {
-		_, err := New(
+		r, err := New(
 			Env(nil),
 			WithSignalResetter(OSSignalResetter{}),
 			WithStandaloneSignalDefaults(),
 		)
 		if err != nil {
+			t.Fatal(err)
+		}
+		// Run forces the initial Reset after the standalone option has
+		// installed its default-action subscriptions. The Reset must preserve
+		// the bridged SIG_IGN instead of recreating a signal.Notify relay that
+		// overwrites it. Do this before announcing readiness so the parent can
+		// only signal us after crossing the real Runner lifecycle boundary.
+		file, err := syntax.NewParser().Parse(strings.NewReader(":"), "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := r.Run(context.Background(), file); err != nil {
 			t.Fatal(err)
 		}
 		_, _ = os.Stdout.WriteString("ready\n")

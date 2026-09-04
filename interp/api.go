@@ -2749,6 +2749,15 @@ func (r *Runner) Reset() {
 		r.sigMu.Lock()
 		r.ensureSignalLoopLocked()
 		for name := range r.standaloneDefaults {
+			// An ignored-on-entry signal is immutable to the shell. In
+			// particular, restoreBridgedStartupIgnores installed a raw SIG_IGN
+			// for runtime fault signals above; signal.Notify would overwrite
+			// that disposition with the Go handler. Keep the standalone-default
+			// configuration metadata, but do not subscribe while the startup
+			// hard-ignore owns the signal.
+			if r.startupIgnored[name] {
+				continue
+			}
 			sig, ok := signalByName(name)
 			if !ok {
 				continue
