@@ -196,6 +196,30 @@ func (p *Parser) bashppRegisterFunc(name string) {
 	p.bashppFuncNames[name] = true
 }
 
+// bashppPredeclaredFunc reports whether name is one of Go's predeclared
+// functions that Bash++ implements. They are callable without a declaration,
+// so they answer the zero-argument question [Parser.bashppRegisterFunc] answers
+// for a declared name: `recover()` is a call, not the head of a shell function
+// definition.
+//
+// The claim stays as narrow as the declared-name one. A body still rewinds the
+// transaction — `recover() { …; }` is the shell function it has always been,
+// because [bashppCallTerminator] admits only a statement end after the closing
+// parenthesis — so what is claimed is exactly the shape bash rejects today.
+func bashppPredeclaredFunc(name string) bool {
+	switch name {
+	case "panic", "recover":
+		return true
+	}
+	return false
+}
+
+// bashppCallable reports whether a bare `name()` may be read as a Bash++ call:
+// either a function declared earlier in this parse, or a predeclared one.
+func (p *Parser) bashppCallable(name string) bool {
+	return p.bashppFuncNames[name] || (p.lang.in(LangBashPP) && bashppPredeclaredFunc(name))
+}
+
 // bashppSig is a parsed Go-form signature: the parameter list, the optional
 // results, and the positions of the parentheses that delimit them.
 type bashppSig struct {

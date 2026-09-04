@@ -4474,6 +4474,15 @@ func (r *Runner) stop(ctx context.Context) bool {
 	if r.exit.returning {
 		return true
 	}
+	// A Bash++ panic halts everything until a deferred call recovers it or it
+	// terminates the shell. It is checked here, rather than left to the
+	// `returning` flag alone, because a panic must keep unwinding across the
+	// boundaries that consume a `return` — a shell function, a funsub — and
+	// the one place every statement passes through is the only place that can
+	// promise it. See interp/bashpp_panic.go.
+	if r.bashPPPanicHalts() {
+		return true
+	}
 	if !r.handlingTrap && r.exit.exiting {
 		return true
 	}
@@ -10564,7 +10573,14 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 		r.ecfg.OverrideLineno = oldOverrideLineno
 		r.evalLineOffset = oldEvalLineOffset
 		r.filename = oldFilename
-		r.exit.returning = false
+		if r.bashPPPanicking() {
+			// A panic ABANDONS this frame rather than returning from it, so
+			// the rule that a function consumes its own `return` does not
+			// apply: the unwind continues into the caller.
+			r.bashPPUnwind()
+		} else {
+			r.exit.returning = false
+		}
 		return
 	}
 	if IsBuiltin(name) && !r.disabledBuiltins[name] {

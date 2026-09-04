@@ -139,6 +139,15 @@ type Runner struct {
 	// it lets ordinary assignment dispatch give bare identifier expressions
 	// their Go meaning without changing shell assignments elsewhere.
 	bashPPFuncActive int
+	// bashPPPanic is the panic currently unwinding this shell, if any. It is
+	// deliberately NOT copied into a subshell: a panic is scoped to the shell
+	// that raised it, exactly as a Go panic is scoped to its goroutine.
+	bashPPPanic bashPPPanicState
+	// bashPPDeferDepth is the call-stack depth a DIRECTLY deferred invocation
+	// runs at, or zero when no deferred call is running. It is the whole of
+	// Go's "recover was not called directly by a deferred function" rule: a
+	// recover succeeds only where len(callStack) equals it.
+	bashPPDeferDepth int
 
 	// funcSources records the script name active when a function was
 	// defined. Bash reports runtime diagnostics in a function body against

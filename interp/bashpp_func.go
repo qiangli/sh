@@ -171,8 +171,12 @@ type bashPPDeferred struct {
 	// `defer f(1)` must run the f that was current when the defer executed,
 	// not whatever f names when the frame unwinds. It is nil when the deferred
 	// callee is an ordinary shell command.
-	fn   *bashPPFunc
-	args []string
+	fn *bashPPFunc
+	// predeclared names the Bash++ predeclared function deferred, when the
+	// callee is one: `defer panic(v)`. It is resolved at defer time like fn,
+	// so a later declaration shadowing the name cannot change what unwinds.
+	predeclared string
+	args        []string
 }
 
 // bashPPReturnState carries a Go-form return out through the body's statement
@@ -492,33 +496,12 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 		return nil
 	}
 
-	// Save the caller's execution context. The func runs with its own shell
-	// function scope (so `local` and non-`local` assignments behave as in a
-	// shell function) and its own typed scope chained to the captured
-	// definition scope (so closures resolve where they were written).
-	oldParams := r.Params
-	r.Params = args
-	oldInFunc := r.inFunc
-	r.inFunc = true
-	origEnv := r.writeEnv
-	r.writeEnv = &overlayEnviron{parent: r.writeEnv, funcScope: true}
-	origScope := r.bashPPScope
-	r.bashPPScope = newBashPPScope(fn.scope)
-	if fn.decl != nil && fn.decl.Receiver != nil && fn.receiver != nil {
-		recv := fn.decl.Receiver
-		if recv.Pointer {
-			r.bashPPScope.entries[recv.Name.Value] = fn.receiver
-		} else {
-			copyCell := *fn.receiver
-			r.bashPPScope.entries[recv.Name.Value] = &copyCell
-		}
-	}
-	r.callStack = append(r.callStack, callFrame{funcName: fn.name()})
-	deferMark := len(r.bashPPDeferStack)
-	oldReturn := r.bashPPReturn
-	r.bashPPReturn = bashPPReturnState{}
-	r.bashPPFuncActive++
-	defer func() { r.bashPPFuncActive-- }()
+	// Save the caller's execution context and restore it with a defer, so
+	// that EVERY exit path — a return, a panic unwinding through this frame,
+	// a hard exit, a host-level failure — leaves the caller's params, scope,
+	// environment and call stack exactly as they were. See [bashPPFrame].
+	frame := r.bashPPEnterFrame(fn, args)
+	defer frame.leave()
 
 	// Parameters and named results are typed bindings; a shell assignment in
 	// the body writes through to them, which is what lets a named result be
@@ -561,26 +544,124 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 		r.stmts(ctx, body.Stmts)
 	}
 
-	results := r.bashPPFinishResults(fn, resultNames)
+	// Results are settled BEFORE the deferred calls run, as Go sets a
+	// function's results before running its defers. That ordering is what
+	// lets a deferred call change a NAMED result — including the recovering
+	// defer, whose whole job is to replace the value an abandoned frame would
+	// otherwise have failed to produce.
+	results := r.bashPPSettleResults(fn, resultNames)
 
-	// Deferred calls run as the frame unwinds, in reverse of the order they
-	// were deferred, unless a hard shell `exit` is terminating everything.
+	// Deferred calls run as the frame unwinds — on a normal return and on a
+	// panic alike, which is the point of them — but not through a hard shell
+	// `exit`, which is terminating everything.
 	if !r.exit.exiting {
-		r.bashPPRunDefers(ctx, deferMark)
+		r.bashPPRunDefers(ctx, frame.deferMark)
 	} else {
-		r.bashPPDeferStack = r.bashPPDeferStack[:deferMark]
+		r.bashPPDeferStack = r.bashPPDeferStack[:frame.deferMark]
 	}
 
-	r.writeEnv = origEnv
-	r.bashPPScope = origScope
-	r.callStack = r.callStack[:len(r.callStack)-1]
-	r.Params = oldParams
-	r.inFunc = oldInFunc
-	r.bashPPReturn = oldReturn
+	// An explicit `exit` reached while a panic was unwinding terminates the
+	// script with the status it named, and the panic is neither reported nor
+	// propagated: the shell is leaving on purpose, not crashing.
+	if r.bashPPPanicSettledByExit() {
+		return nil
+	}
+	if r.bashPPPanicking() {
+		// The frame was abandoned, not returned from: it has no results, and
+		// the panic continues into the caller unless this was the last frame
+		// that could have recovered it.
+		if r.bashPPFuncActive == 1 {
+			r.bashPPPanicTerminate()
+		} else {
+			r.bashPPUnwind()
+		}
+		return nil
+	}
+	// A named result may have been reassigned by a deferred call, so it is
+	// read here rather than trusted from before the defers ran.
+	results = r.bashPPFinalResults(results, resultNames)
 	// A Go-form return is consumed at the func boundary, exactly as a shell
 	// function's `return` is in [Runner.call]; it must not unwind the caller.
 	r.exit.returning = false
 	return results
+}
+
+// bashPPFrame is one Go-form invocation's saved caller state.
+//
+// It exists so that entering and leaving a frame are ONE decision each rather
+// than a dozen assignments repeated per exit path. Every field here is
+// something a body can change and a caller must not observe changed; leaving
+// restores all of them, and because it is called through a defer it restores
+// them even on the paths that do not reach the end of the invoker.
+type bashPPFrame struct {
+	r          *Runner
+	params     []string
+	inFunc     bool
+	writeEnv   expand.WriteEnviron
+	scope      *bashPPScope
+	callDepth  int
+	deferMark  int
+	ret        bashPPReturnState
+	deferDepth int
+}
+
+// bashPPEnterFrame pushes the frame fn's body runs in: its own shell function
+// scope (so `local` and non-`local` assignments behave as in a shell function),
+// its own typed scope chained to the captured definition scope (so closures
+// resolve where they were written), its own positional parameters, and its own
+// mark on the deferred-call stack.
+func (r *Runner) bashPPEnterFrame(fn *bashPPFunc, args []string) *bashPPFrame {
+	frame := &bashPPFrame{
+		r:          r,
+		params:     r.Params,
+		inFunc:     r.inFunc,
+		writeEnv:   r.writeEnv,
+		scope:      r.bashPPScope,
+		callDepth:  len(r.callStack),
+		deferMark:  len(r.bashPPDeferStack),
+		ret:        r.bashPPReturn,
+		deferDepth: r.bashPPDeferDepth,
+	}
+	r.Params = args
+	r.inFunc = true
+	r.writeEnv = &overlayEnviron{parent: r.writeEnv, funcScope: true}
+	r.bashPPScope = newBashPPScope(fn.scope)
+	if fn.decl != nil && fn.decl.Receiver != nil && fn.receiver != nil {
+		recv := fn.decl.Receiver
+		if recv.Pointer {
+			r.bashPPScope.entries[recv.Name.Value] = fn.receiver
+		} else {
+			copyCell := *fn.receiver
+			r.bashPPScope.entries[recv.Name.Value] = &copyCell
+		}
+	}
+	r.callStack = append(r.callStack, callFrame{funcName: fn.name()})
+	r.bashPPReturn = bashPPReturnState{}
+	r.bashPPFuncActive++
+	return frame
+}
+
+// leave restores the caller's execution context.
+//
+// It is deliberately tolerant about depth: it truncates the call and defer
+// stacks back to where the frame began rather than popping a fixed count, so a
+// frame abandoned mid-unwind cannot leave a deeper stack behind or pop one
+// entry too many.
+func (f *bashPPFrame) leave() {
+	r := f.r
+	r.writeEnv = f.writeEnv
+	r.bashPPScope = f.scope
+	if len(r.callStack) > f.callDepth {
+		r.callStack = r.callStack[:f.callDepth]
+	}
+	if len(r.bashPPDeferStack) > f.deferMark {
+		r.bashPPDeferStack = r.bashPPDeferStack[:f.deferMark]
+	}
+	r.Params = f.params
+	r.inFunc = f.inFunc
+	r.bashPPReturn = f.ret
+	r.bashPPDeferDepth = f.deferDepth
+	r.bashPPFuncActive--
 }
 
 // bashPPShortDeclCall invokes a typed function for `x := f()` / `a, b := g()`
@@ -592,7 +673,10 @@ func (r *Runner) bashPPShortDeclCall(ctx context.Context, d *syntax.BashPPShortD
 		return
 	}
 	results := r.bashPPInvoke(ctx, fn, args)
-	if r.exit.err != nil {
+	// A call abandoned by panic or hard termination produced no values. Do not
+	// turn that control transfer into a secondary assignment-mismatch error;
+	// the caller's frame must get the original unwind unchanged.
+	if r.bashPPPanicking() || r.exit.exiting || r.exit.fatalExit || r.exit.err != nil {
 		return
 	}
 	if len(d.Lhs) != len(results) {
@@ -622,9 +706,17 @@ func (r *Runner) bashPPShortDeclCall(ctx context.Context, d *syntax.BashPPShortD
 	}
 }
 
-// bashPPFinishResults reconciles what a function returns with what it declared,
+// bashPPSettleResults reconciles what a function returns with what it declared,
 // setting the exit status as a side effect and reporting an arity mismatch.
-func (r *Runner) bashPPFinishResults(fn *bashPPFunc, resultNames []string) []string {
+//
+// It runs BEFORE the frame's deferred calls, and for a NAMED result that
+// matters twice over: the returned value is written into the result's binding,
+// so a deferred call sees what is being returned and can replace it, and
+// [Runner.bashPPFinalResults] then reads the binding back after the defers
+// have had their say. That is Go's rule — "the deferred functions run after
+// the result parameters are set" — expressed in the only two places that can
+// observe it.
+func (r *Runner) bashPPSettleResults(fn *bashPPFunc, resultNames []string) []string {
 	count := bashppResultCount(fn.results())
 	ret := r.bashPPReturn
 
@@ -651,6 +743,11 @@ func (r *Runner) bashPPFinishResults(fn *bashPPFunc, resultNames []string) []str
 			r.exit.code = 2
 			return nil
 		}
+		for i, name := range resultNames {
+			if name != "" && i < len(ret.values) {
+				r.setVarString(name, ret.values[i])
+			}
+		}
 		r.exit.clear()
 		return ret.values
 	}
@@ -672,6 +769,23 @@ func (r *Runner) bashPPFinishResults(fn *bashPPFunc, resultNames []string) []str
 		out = append(out, "")
 	}
 	r.exit.clear()
+	return out
+}
+
+// bashPPFinalResults is what the caller actually receives, read after the
+// frame's deferred calls have run.
+//
+// Only a NAMED result is re-read. An unnamed result has no binding a deferred
+// call could reach, in Go or here, so its settled value is final; re-reading a
+// name that does not exist would replace it with an empty string.
+func (r *Runner) bashPPFinalResults(settled []string, resultNames []string) []string {
+	out := settled
+	for i, name := range resultNames {
+		if name == "" || i >= len(out) {
+			continue
+		}
+		out[i] = r.envGet(name)
+	}
 	return out
 }
 
@@ -723,6 +837,9 @@ func (r *Runner) bashPPDeferStmt(ctx context.Context, d *syntax.BashPPDefer) {
 		if r.exit.code != 0 {
 			return
 		}
+		// A predeclared callee is resolved here for the same reason a declared
+		// one is: what the defer names is fixed now, not at unwind time.
+		entry.predeclared = bashPPPredeclaredCall(d.Call)
 		entry.args = r.bashPPCallArgValues(d.Call)
 	}
 	r.bashPPDeferStack = append(r.bashPPDeferStack, entry)
@@ -732,33 +849,82 @@ func (r *Runner) bashPPDeferStmt(ctx context.Context, d *syntax.BashPPDefer) {
 // then trims the stack back to mark. A return in flight is paused across the
 // defers and resumes afterwards, matching Go, where a deferred call runs even
 // as the function is returning.
+//
+// A PANIC IN FLIGHT IS ALSO PAUSED, in a different sense: it stays recorded,
+// because that is what a deferred call recovers, but the halt it imposes is
+// lifted for the duration of each call, because otherwise no cleanup would run
+// at all. If a deferred call recovers, the loop keeps going with the panic
+// gone; if one panics itself, the new panic replaces the old and the remaining
+// cleanups still run, exactly as Go keeps unwinding.
 func (r *Runner) bashPPRunDefers(ctx context.Context, mark int) {
-	pending := r.bashPPDeferStack[mark:]
-	// Detach so a deferred call which itself defers cannot grow the slice we
-	// are iterating.
+	// Copy before truncating: merely slicing would retain the backing array, so
+	// a deferred call which itself defers could overwrite an entry we have not
+	// run yet when append reuses that capacity.
+	pending := append([]bashPPDeferred(nil), r.bashPPDeferStack[mark:]...)
 	r.bashPPDeferStack = r.bashPPDeferStack[:mark]
 	savedReturning := r.exit.returning
 	r.exit.returning = false
+	savedDeferDepth := r.bashPPDeferDepth
+	// A call this frame deferred runs one frame deeper than this one, and that
+	// depth is the whole of recover's "called directly by a deferred function"
+	// rule; see [Runner.bashPPRecover].
+	r.bashPPDeferDepth = len(r.callStack) + 1
+	defer func() {
+		r.bashPPDeferDepth = savedDeferDepth
+		r.bashPPPanic.running = false
+	}()
 	var failed exitStatus
 	deferFailed := false
 	for i := len(pending) - 1; i >= 0; i-- {
 		d := pending[i]
 		r.exit = exitStatus{}
-		if d.fn != nil {
+		// A cleanup runs even while a panic is unwinding — that is the whole
+		// point of it — so the panic stops halting statements for the length
+		// of this call, without ceasing to be recoverable by it.
+		r.bashPPPanic.running = r.bashPPPanic.active
+		switch {
+		case d.fn != nil:
 			r.bashPPInvoke(ctx, d.fn, d.args)
-		} else if len(d.call.Fun) > 0 {
+		case d.predeclared != "":
+			// `defer panic(v)` and `defer recover()`. The latter is the shape
+			// Go documents as not working, and it does not work here either,
+			// for the reason it does not there: recover IS the deferred call,
+			// so nothing deferred it in turn — see [Runner.bashPPRecover].
+			r.bashPPPredeclared(d.predeclared, d.call, d.args)
+		case len(d.call.Fun) > 1:
+			// A deferred SELECTOR is dispatched exactly as a direct one is,
+			// through the import evaluator, so `defer fmt.Println(x)` reaches
+			// the package rather than a shell command named after the final
+			// selector element. Its arguments were evaluated at defer time and
+			// are handed over as values, so the call the evaluator makes is the
+			// one the defer described.
+			r.bashPPEvalSelector(ctx, d.call, d.args)
+		case len(d.call.Fun) > 0:
 			// A deferred call to something that is not a typed function runs as an
 			// ordinary command, which is what makes `defer log(...)` reach a shell
-			// helper of that name. A literal always resolves to a function above,
-			// so the selector is present whenever this branch is reached.
-			r.call(ctx, d.call.Pos(), append([]string{d.call.Fun[len(d.call.Fun)-1].Value}, d.args...))
+			// helper of that name.
+			r.call(ctx, d.call.Pos(), append([]string{d.call.Fun[0].Value}, d.args...))
+		}
+		// An explicit `exit` inside a cleanup terminates the script there and
+		// then: the remaining cleanups do not run, and any panic in flight is
+		// discarded rather than reported, the precedence `os.Exit` has over a
+		// panic in Go.
+		r.bashPPPanic.running = false
+		if r.exit.exiting || r.exit.fatalExit {
+			r.bashPPPanicSettledByExit()
+			return
 		}
 		// Cleanup failures are observable. Keep the first failure in execution
 		// order while still running every remaining defer, then restore the
 		// enclosing function's return status when all cleanups succeeded.
-		if !deferFailed && (!r.exit.ok() || r.exit.err != nil || r.exit.fatalExit) {
+		if !deferFailed && (!r.exit.ok() || r.exit.err != nil) {
 			failed, deferFailed = r.exit, true
 		}
+	}
+	if r.bashPPPanicking() {
+		// The frame is still being abandoned; its status is the panic's, not
+		// the last cleanup's.
+		return
 	}
 	if deferFailed {
 		r.exit = failed
