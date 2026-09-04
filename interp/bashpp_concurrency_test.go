@@ -527,3 +527,133 @@ func TestBashPPTaskObjectCloneRejectsCycle(t *testing.T) {
 		t.Fatalf("cycle clone error = %v", err)
 	}
 }
+
+func TestBashPPSelectReleasesSendBeforeArmAndOnError(t *testing.T) {
+	for _, src := range []string{
+		`func main() { ch := make(chan string, 1); select { case ch <- ok: close(ch); } }; main()`,
+		`func main() { ch := make(chan string); select { case ch <- ok: echo no; case missing <- bad: echo no; }; close(ch); }; main()`,
+	} {
+		done := make(chan struct{})
+		go func() { _, _ = runBashPPConcurrency(t, src); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("select leaked a send registration")
+		}
+	}
+}
+
+func TestBashPPChannelTypeExistenceAndReceiveIdentity(t *testing.T) {
+	out, err := runBashPPConcurrency(t, `func main() { ch := make(chan Missing); }; main()`)
+	if err == nil || !strings.Contains(out, "undefined element type: Missing") {
+		t.Fatalf("out=%q err=%v", out, err)
+	}
+
+	out, err = runBashPPConcurrency(t, `
+type Small int8
+func (v Small) Show() { echo "typed:$v"; }
+func main() { ch := make(chan Small, 1); ch <- 7; value := <-ch; value.Show(); }
+main()
+`)
+	if err != nil || out != "typed:7\n" {
+		t.Fatalf("named receive identity: out=%q err=%v", out, err)
+	}
+
+	r := &Runner{bashPPScope: newBashPPScope(nil), bashPPTypes: map[string]bashPPType{
+		"Named": {underlying: "int8"},
+		"Alias": {underlying: "uint8", alias: true},
+		"Color": {underlying: "enum", members: []string{"Red", "Green"}},
+	}}
+	for _, tc := range []struct {
+		typ, good, bad, identity string
+	}{
+		{"Named", "127", "128", "Named"},
+		{"Alias", "255", "-1", ""},
+		{"Color", "Red", "Blue", "Color"},
+	} {
+		if !r.bashPPValueFits(tc.typ, tc.good) || r.bashPPValueFits(tc.typ, tc.bad) {
+			t.Errorf("independent %s validation failed", tc.typ)
+		}
+		if err := r.bashPPScope.declare(tc.typ, expand.Variable{Set: true}, false); err != nil {
+			t.Fatal(err)
+		}
+		r.bashPPSetReceivedType(tc.typ, tc.typ)
+		if got := r.bashPPScope.lookup(tc.typ).typeName; got != tc.identity {
+			t.Errorf("received %s identity = %q, want %q", tc.typ, got, tc.identity)
+		}
+	}
+}
+
+func TestBashPPKnownCapabilityCannotExfiltrateOrCrossLaterExec(t *testing.T) {
+	out, _ := runBashPPConcurrency(t, `
+func main() {
+ ch := make(chan string, 1)
+	 ( echo "prefix-${ch}-suffix" )
+	 echo "$(echo prefix-${ch}-suffix)"
+	 echo "$ch" | /bin/cat
+}
+
+main()
+`)
+	if strings.Count(out, "channel handles cannot cross a shell-copy boundary") < 1 {
+		t.Fatalf("shell-copy exfiltration was not rejected: %q", out)
+	}
+
+	var later strings.Builder
+	r, _ := New(Lang(syntax.LangBashPP), StdIO(nil, &later, &later))
+	parse := func(src string) *syntax.File {
+		f, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(src), "stale-exec.bpp")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return f
+	}
+	if err := r.Run(context.Background(), parse(`func setup() { ch := make(chan string, 1); export SAVED=$ch; }; setup()`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Run(context.Background(), parse(`/bin/echo "prefix-${SAVED}-suffix"`)); err == nil ||
+		!strings.Contains(later.String(), "channel handles cannot cross an exec boundary") {
+		t.Fatalf("stale capability crossed exec: out=%q err=%v", later.String(), err)
+	}
+	innocent, err := runBashPPConcurrency(t, `/bin/echo chan@bashpp:not-issued`)
+	if err != nil || innocent != "chan@bashpp:not-issued\n" {
+		t.Fatalf("innocent prefix rejected: out=%q err=%v", innocent, err)
+	}
+}
+
+func TestBashPPCanceledTaskDoesNotPromoteTransientFailure(t *testing.T) {
+	for range 80 {
+		out, err := runBashPPConcurrency(t, `
+func transient(ch) { false; value := <-ch; echo "$value"; }
+func seven() { return 7; }
+func main() { ch := make(chan string); go transient(ch); go seven(); }
+main()
+`)
+		if err == nil || !strings.Contains(out, "exit status 7") || strings.Contains(out, "exit status 1") {
+			t.Fatalf("out=%q err=%v", out, err)
+		}
+	}
+}
+
+func TestBashPPUnseededTaskGetsPrivateRNG(t *testing.T) {
+	r, err := New(Lang(syntax.LangBashPP))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Reset()
+	r.bashPPConcurrent = newBashPPConcurrent(context.Background())
+	defer r.bashPPConcurrent.cancel()
+	a, err := r.bashPPTaskSnapshot(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.closeBashPPTaskResources()
+	b, err := r.bashPPTaskSnapshot(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.closeBashPPTaskResources()
+	if !a.randomSeeded || !b.randomSeeded || a.randomSeed == b.randomSeed {
+		t.Fatalf("task RNGs not private: a=%d/%v b=%d/%v", a.randomSeed, a.randomSeeded, b.randomSeed, b.randomSeeded)
+	}
+}

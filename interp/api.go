@@ -150,15 +150,16 @@ type Runner struct {
 	bashPPDeferDepth int
 	// bashPPConcurrent is intentionally runner-session local.  It is shared
 	// only by Bash++ go tasks, never by shell copies such as subshells.
-	bashPPConcurrent   *bashPPConcurrent
-	bashPPGoTask       bool
-	bashPPChanBoundary bool
-	bashPPFileRun      bool
-	bashPPTaskFiles    []*os.File
-	bashPPTaskState    *bashPPTaskState
-	bashPPTaskCanceled bool
-	bashPPTaskFailed   bool
-	bashPPTaskFailCode uint8
+	bashPPConcurrent    *bashPPConcurrent
+	bashPPIssuedHandles *bashPPHandleProvenance
+	bashPPGoTask        bool
+	bashPPChanBoundary  bool
+	bashPPFileRun       bool
+	bashPPTaskFiles     []*os.File
+	bashPPTaskState     *bashPPTaskState
+	bashPPTaskCanceled  bool
+	bashPPTaskFailed    bool
+	bashPPTaskFailCode  uint8
 
 	// funcSources records the script name active when a function was
 	// defined. Bash reports runtime diagnostics in a function body against
@@ -2717,12 +2718,13 @@ func (r *Runner) Reset() {
 		// A function's captured Bash++ scope is part of the function, so it
 		// is preserved exactly as far as Funcs is. The runner's own current
 		// scope is per-Run scratch and is rebuilt below.
-		bashPPFuncScopes: r.bashPPFuncScopes,
-		bashPPFuncs:      r.bashPPFuncs,
-		bashPPTypes:      r.bashPPTypes,
-		bashPPMethods:    r.bashPPMethods,
-		bashPPClosures:   r.bashPPClosures,
-		bashPPTools:      r.bashPPTools,
+		bashPPFuncScopes:    r.bashPPFuncScopes,
+		bashPPFuncs:         r.bashPPFuncs,
+		bashPPTypes:         r.bashPPTypes,
+		bashPPMethods:       r.bashPPMethods,
+		bashPPClosures:      r.bashPPClosures,
+		bashPPTools:         r.bashPPTools,
+		bashPPIssuedHandles: r.bashPPIssuedHandles,
 
 		// disabledBuiltins (`enable -n`, or WithDisabledBuiltins at
 		// construction) is part of the shell's persistent state, not per-Run
@@ -3223,6 +3225,7 @@ func (r *Runner) subshell(background bool) *Runner {
 	// A shell copy is a process boundary, even though this interpreter models
 	// it with a goroutine. Channel handles are deliberately not serializable.
 	r2.bashPPConcurrent = r.bashPPConcurrent
+	r2.bashPPIssuedHandles = r.bashPPIssuedHandles
 	r2.bashPPChanBoundary = r.bashPPConcurrent != nil
 	// Shell-copy descendants of a task remain inside that task's capability
 	// and cancellation boundary. They may not regain process-signal or exec

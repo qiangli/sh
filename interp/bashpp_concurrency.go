@@ -14,6 +14,7 @@ import (
 	"os"
 	"reflect"
 	"strconv"
+	"strings"
 	"sync"
 
 	"mvdan.cc/sh/v3/expand"
@@ -219,6 +220,11 @@ type bashPPTaskState struct {
 	ordinal uint64
 	ready   chan struct{}
 	once    sync.Once
+}
+
+type bashPPHandleProvenance struct {
+	mu      sync.RWMutex
+	handles map[string]struct{}
 }
 
 // One dynamic structured task group belongs to one owning File Run. Unlike a
@@ -446,6 +452,12 @@ func (r *Runner) bashPPMakeChan(ctx context.Context, d *syntax.BashPPShortDecl) 
 		return
 	}
 	capacity := 0
+	elem := d.MakeChan.ChanType.Elem.Value
+	if _, ok := r.bashPPTypes[elem]; !ok && !bashPPBuiltinType(elem) {
+		r.errf("make(chan): undefined element type: %s\n", elem)
+		r.exit.code = 2
+		return
+	}
 	if d.MakeChan.Capacity != nil {
 		var err error
 		capacity, err = strconv.Atoi(r.literal(d.MakeChan.Capacity))
@@ -464,7 +476,7 @@ func (r *Runner) bashPPMakeChan(ctx context.Context, d *syntax.BashPPShortDecl) 
 		r.exit.code = 2
 		return
 	}
-	c.chans[h] = newBashPPChannel(d.MakeChan.ChanType.Elem.Value, capacity)
+	c.chans[h] = newBashPPChannel(elem, capacity)
 	c.mu.Unlock()
 	r.bashPPDeclareName(d.Lhs[0].Value, expand.Variable{Set: true, Kind: expand.String, Str: h})
 }
@@ -524,11 +536,32 @@ func (r *Runner) bashPPReceive(ctx context.Context, recv *syntax.BashPPReceive, 
 			return v, open
 		}
 		r.bashPPDeclareName(lhs[0].Value, expand.Variable{Set: true, Kind: expand.String, Str: v})
+		r.bashPPSetReceivedType(lhs[0].Value, c.elem)
 		if len(lhs) == 2 {
 			r.bashPPDeclareName(lhs[1].Value, expand.Variable{Set: true, Kind: expand.String, Str: strconv.FormatBool(open)})
 		}
 	}
 	return v, open
+}
+
+func (r *Runner) bashPPSetReceivedType(name, elem string) {
+	typ, ok := r.bashPPTypes[elem]
+	if !ok || r.bashPPScope == nil {
+		return
+	}
+	for typ.alias {
+		elem = typ.underlying
+		typ, ok = r.bashPPTypes[elem]
+		if !ok {
+			// An alias of a builtin has that builtin's identity, represented by
+			// the empty typeName used for ordinary scalar cells.
+			elem = ""
+			break
+		}
+	}
+	if cell := r.bashPPScope.lookup(name); cell != nil {
+		cell.typeName = elem
+	}
 }
 
 func (r *Runner) bashPPClose(cl *syntax.BashPPClose) {
@@ -569,6 +602,14 @@ func (r *Runner) bashPPTaskSnapshot(ordinal uint64) (*Runner, error) {
 		child.deterministicRng = mathrand.NewPCG(seed, seed^0xd1b54a32d192ed03)
 	}
 	child.randomSeed = r.randomSeed + uint32(ordinal+1)*0x9e37
+	if !r.randomSeeded && !r.deterministic {
+		var seed [4]byte
+		if _, err := cryptorand.Read(seed[:]); err != nil {
+			return child, fmt.Errorf("task random seed: %w", err)
+		}
+		child.randomSeeded = true
+		child.randomSeed = uint32(seed[0]) | uint32(seed[1])<<8 | uint32(seed[2])<<16 | uint32(seed[3])<<24
+	}
 	// Jobs and coprocs are owned by the task that creates them. An owner's
 	// existing jobs are not waitable or mutable from a child task.
 	child.bgProcs, child.lastBang, child.inheritedBang = nil, nil, nil
@@ -732,6 +773,11 @@ func (r *Runner) bashPPGo(ctx context.Context, g *syntax.BashPPGo) {
 		return
 	}
 	child.bashPPTaskState = state
+	if c.ctx.Err() != nil {
+		child.closeBashPPTaskResources()
+		c.done(ordinal, nil)
+		return
+	}
 	go func() {
 		var failure *bashPPTaskFailure
 		defer func() {
@@ -752,16 +798,19 @@ func (r *Runner) bashPPGo(ctx context.Context, g *syntax.BashPPGo) {
 			child.closeBashPPTaskResources()
 			c.done(ordinal, failure)
 		}()
+		if c.ctx.Err() != nil {
+			return
+		}
 		child.bashPPCall(c.ctx, g.Call)
 		code := child.exit.code
-		if child.bashPPTaskCanceled && child.bashPPTaskFailed {
-			code = child.bashPPTaskFailCode
+		canceled := child.bashPPTaskCanceled || errors.Is(child.exit.err, context.Canceled) || errors.Is(child.exit.err, context.DeadlineExceeded) || c.ctx.Err() != nil
+		if canceled {
+			return
 		}
 		if code != 0 && child.trapCallbacks["ERR"] != "" {
 			child.trapCallback(c.ctx, child.trapCallbacks["ERR"], "error")
 		}
-		canceled := !child.bashPPTaskFailed && (child.bashPPTaskCanceled || errors.Is(child.exit.err, context.Canceled) || errors.Is(child.exit.err, context.DeadlineExceeded))
-		if code != 0 && !canceled {
+		if code != 0 {
 			failure = &bashPPTaskFailure{ordinal: ordinal, code: code, text: fmt.Sprintf("exit status %d", code)}
 		}
 	}()
@@ -786,6 +835,29 @@ func (r *Runner) bashPPWait(ctx context.Context) {
 	}
 	c.quiesced = true
 	failure := c.primaryFailureLocked()
+	if r.bashPPIssuedHandles == nil {
+		r.bashPPIssuedHandles = &bashPPHandleProvenance{}
+	}
+	p := r.bashPPIssuedHandles
+	p.mu.Lock()
+	candidates := make(map[string]struct{}, len(p.handles)+len(c.chans))
+	for handle := range p.handles {
+		candidates[handle] = struct{}{}
+	}
+	for handle := range c.chans {
+		candidates[handle] = struct{}{}
+	}
+	retained := make(map[string]struct{})
+	for _, vr := range r.bashPPEnv().Each {
+		value := vr.String()
+		for handle := range candidates {
+			if strings.Contains(value, handle) {
+				retained[handle] = struct{}{}
+			}
+		}
+	}
+	p.handles = retained
+	p.mu.Unlock()
 	c.mu.Unlock()
 	if failure != nil {
 		r.errf("bash++: task failed: %s\n", failure.text)
@@ -802,7 +874,19 @@ func (r *Runner) bashPPWait(ctx context.Context) {
 func (r *Runner) bashPPSelect(ctx context.Context, s *syntax.BashPPSelect) {
 	var cases []reflect.SelectCase
 	var arms []*syntax.BashPPSelectCase
+	var caseElems []string
 	var sends []*bashPPChannel
+	released := false
+	releaseSends := func() {
+		if released {
+			return
+		}
+		released = true
+		for _, c := range sends {
+			c.endSend()
+		}
+	}
+	defer releaseSends()
 	closingCases := make(map[int]bool)
 	var def *syntax.BashPPSelectCase
 	for _, arm := range s.Cases {
@@ -817,6 +901,7 @@ func (r *Runner) bashPPSelect(ctx context.Context, s *syntax.BashPPSelect) {
 				return
 			}
 			cases = append(cases, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(c.ch)})
+			caseElems = append(caseElems, c.elem)
 		case *syntax.BashPPShortDecl:
 			if comm.Recv == nil {
 				r.errf("invalid select receive declaration\n")
@@ -828,6 +913,7 @@ func (r *Runner) bashPPSelect(ctx context.Context, s *syntax.BashPPSelect) {
 				return
 			}
 			cases = append(cases, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(c.ch)})
+			caseElems = append(caseElems, c.elem)
 		case *syntax.BashPPSend:
 			c, ok := r.bashPPChannel(comm.Chan)
 			if !ok {
@@ -840,9 +926,7 @@ func (r *Runner) bashPPSelect(ctx context.Context, s *syntax.BashPPSelect) {
 				return
 			}
 			if !c.beginSend() {
-				for _, prior := range sends {
-					prior.endSend()
-				}
+				releaseSends()
 				r.errf("bash++: send on closed channel\n")
 				r.exit.code = 2
 				return
@@ -850,8 +934,10 @@ func (r *Runner) bashPPSelect(ctx context.Context, s *syntax.BashPPSelect) {
 			sends = append(sends, c)
 			cases = append(cases, reflect.SelectCase{Dir: reflect.SelectSend, Chan: reflect.ValueOf(c.ch), Send: reflect.ValueOf(v)})
 			arms = append(arms, arm)
+			caseElems = append(caseElems, "")
 			cases = append(cases, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(c.closing)})
 			arms = append(arms, nil)
+			caseElems = append(caseElems, "")
 			closingCases[len(cases)-1] = true
 			continue
 		default:
@@ -861,14 +947,10 @@ func (r *Runner) bashPPSelect(ctx context.Context, s *syntax.BashPPSelect) {
 		}
 		arms = append(arms, arm)
 	}
-	defer func() {
-		for _, c := range sends {
-			c.endSend()
-		}
-	}()
 	if def != nil {
 		cases = append(cases, reflect.SelectCase{Dir: reflect.SelectDefault})
 		arms = append(arms, def)
+		caseElems = append(caseElems, "")
 	}
 	if def == nil {
 		cases = append(cases, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(r.bashPPTaskContext(ctx).Done())})
@@ -882,6 +964,7 @@ func (r *Runner) bashPPSelect(ctx context.Context, s *syntax.BashPPSelect) {
 		r.bashPPConcurrent.arm(r.bashPPTaskState)
 	}
 	i, v, open := reflect.Select(cases)
+	releaseSends()
 	if closingCases[i] {
 		r.errf("bash++: send on closed channel\n")
 		r.exit.code = 2
@@ -906,6 +989,7 @@ func (r *Runner) bashPPSelect(ctx context.Context, s *syntax.BashPPSelect) {
 			text = v.String()
 		}
 		r.bashPPDeclareName(decl.Lhs[0].Value, expand.Variable{Set: true, Kind: expand.String, Str: text})
+		r.bashPPSetReceivedType(decl.Lhs[0].Value, caseElems[i])
 		if len(decl.Lhs) == 2 {
 			r.bashPPDeclareName(decl.Lhs[1].Value, expand.Variable{Set: true, Kind: expand.String, Str: strconv.FormatBool(open)})
 		}
@@ -930,6 +1014,7 @@ func (r *Runner) bashPPRange(ctx context.Context, rng *syntax.BashPPRange) {
 			leave := r.bashPPPushScope()
 			if len(rng.Names) == 1 {
 				r.bashPPDeclareName(rng.Names[0].Value, expand.Variable{Set: true, Kind: expand.String, Str: v})
+				r.bashPPSetReceivedType(rng.Names[0].Value, c.elem)
 			}
 			r.cmd(r.bashPPTaskContext(ctx), rng.Body)
 			leave()
@@ -946,11 +1031,24 @@ func (r *Runner) bashPPRange(ctx context.Context, rng *syntax.BashPPRange) {
 
 func (r *Runner) bashPPHasRuntimeHandle(value string) bool {
 	c := r.bashPPConcurrent
-	if c == nil {
-		return false
+	if c != nil {
+		c.mu.Lock()
+		for handle := range c.chans {
+			if strings.Contains(value, handle) {
+				c.mu.Unlock()
+				return true
+			}
+		}
+		c.mu.Unlock()
 	}
-	c.mu.Lock()
-	_, ok := c.chans[value]
-	c.mu.Unlock()
-	return ok
+	if p := r.bashPPIssuedHandles; p != nil {
+		p.mu.RLock()
+		defer p.mu.RUnlock()
+		for handle := range p.handles {
+			if strings.Contains(value, handle) {
+				return true
+			}
+		}
+	}
+	return false
 }

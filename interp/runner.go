@@ -4890,6 +4890,12 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 	var oldFdClosedTable map[int]bool
 	var modifiedFds []int
 	if len(st.Redirs) > 0 {
+		if r.bashPPGoTask && r.bashPPConcurrent != nil {
+			// Opening a FIFO or another context-aware redirect can block before
+			// command dispatch. Release the launch handshake before entering that
+			// path so the owner can execute the peer operation.
+			r.bashPPConcurrent.arm(r.bashPPTaskState)
+		}
 		oldFdTable = maps.Clone(r.fdTable)
 		oldFdReadTable = maps.Clone(r.fdReadTable)
 		oldFdWriteTable = maps.Clone(r.fdWriteTable)
@@ -5629,6 +5635,15 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		args = r.bashPPRewriteCommandArgs(args)
 		fields, expandErr := expand.Fields(r.ecfg, args...)
 		r.expandErr(expandErr)
+		if r.bashPPChanBoundary {
+			for _, field := range fields {
+				if r.bashPPHasRuntimeHandle(field) {
+					r.errf("bash++: channel handles cannot cross a shell-copy boundary\n")
+					r.exit.code = 2
+					return
+				}
+			}
+		}
 		if standaloneArithParseError(expandErr) {
 			// A standalone `$(( ))` PARSE error (e.g. `echo $((--))`) is fatal to
 			// the command in bash 5.3: status 1, the command does not run. Array
@@ -10816,7 +10831,7 @@ func (r *Runner) execAs(ctx context.Context, pos syntax.Pos, argv0 string, clear
 		r.exit.code = 1
 		return
 	}
-	if r.bashPPConcurrent != nil {
+	if r.bashPPConcurrent != nil || r.bashPPIssuedHandles != nil {
 		for _, arg := range args {
 			if r.bashPPHasRuntimeHandle(arg) {
 				r.errf("bash++: channel handles cannot cross an exec boundary\n")
