@@ -324,6 +324,13 @@ type Redirect struct {
 	N     *Lit  // fd>, or {varname}> in Bash
 	Word  *Word // >word
 	Hdoc  *Word // here-document body
+
+	// BashPPKeepSpace records a separator that is semantically significant
+	// only inside a Bash++ function: `< -ch` is a shell redirect, while
+	// `<-ch` is a channel receive. It is parser-owned formatting metadata;
+	// keeping it on the AST lets partial-node printing and typed-JSON round
+	// trips preserve that distinction without relying on an ancestor node.
+	BashPPKeepSpace bool
 }
 
 func (r *Redirect) Pos() Pos {

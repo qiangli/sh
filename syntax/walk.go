@@ -303,6 +303,7 @@ func Walk(node Node, f func(Node) bool) {
 		walkList(node.Cases, f)
 	case *BashPPSelectCase:
 		walkNilable(node.Comm, f)
+		walkComments(node.Comments, f)
 		walkList(node.Stmts, f)
 		walkComments(node.Last, f)
 	case *BashPPRange:

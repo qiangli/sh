@@ -96,3 +96,32 @@ func TestBashPPChanRoundTrip(t *testing.T) {
 		t.Fatalf("select default arm after JSON round trip = %#v", sel.Cases[2])
 	}
 }
+
+// TestBashPPRedirectSpacingRoundTrip ensures the AST-carried distinction
+// between a shell redirect and a channel receive survives serialization. This
+// matters when callers print a decoded function body or statement in isolation.
+func TestBashPPRedirectSpacingRoundTrip(t *testing.T) {
+	const src = "func f() {\n\t< -file\n}\n"
+	f, err := syntax.NewParser(
+		syntax.Variant(syntax.LangBashPP), syntax.KeepComments(true),
+	).Parse(strings.NewReader(src), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var data bytes.Buffer
+	if err := Encode(&data, f); err != nil {
+		t.Fatal(err)
+	}
+	n, err := Decode(bytes.NewReader(data.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stmt := n.(*syntax.File).Stmts[0].Cmd.(*syntax.BashPPFuncDecl).Body.Stmts[0]
+	var out strings.Builder
+	if err := syntax.NewPrinter().Print(&out, stmt); err != nil {
+		t.Fatal(err)
+	}
+	if out.String() != "< -file" {
+		t.Fatalf("decoded redirect statement = %q, want %q", out.String(), "< -file")
+	}
+}

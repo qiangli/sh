@@ -275,6 +275,37 @@ func TestBashPPChanSelectCompactRoundTrip(t *testing.T) {
 	})
 }
 
+// TestBashPPChanSelectCommentsRoundTrip keeps comments with the construct they
+// document while canonicalizing a compact select. In particular, a comment
+// after the opening brace is pre-arm, comments after colons remain on their
+// headers, and a command's trailing comment remains on that command.
+func TestBashPPChanSelectCommentsRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	const src = "func f() { select { # before\n" +
+		"case <-ch: # recv\n" +
+		"echo x # body\n" +
+		"default: # def\n" +
+		"echo y\n" +
+		"} }\n"
+	const want = "func f() { select { # before\n" +
+		"\tcase <-ch:         # recv\n" +
+		"\t\techo x            # body\n" +
+		"\tdefault:           # def\n" +
+		"\t\techo y\n" +
+		"\t};}\n"
+	f, err := bashppParse(LangBashPP, src)
+	qt.Assert(t, qt.IsNil(err))
+	out, err := bashppPrint(f)
+	qt.Assert(t, qt.IsNil(err))
+	qt.Assert(t, qt.Equals(out, want))
+	again, err := bashppParse(LangBashPP, out)
+	qt.Assert(t, qt.IsNil(err))
+	out2, err := bashppPrint(again)
+	qt.Assert(t, qt.IsNil(err))
+	qt.Assert(t, qt.Equals(out2, out))
+}
+
 // TestBashPPChanFormsWalkComplete asserts every new node is reachable from
 // Walk. A node the visitor cannot see is invisible to shfmt's simplifier, to
 // typedjson's encoder and to every consumer that traverses the tree, and the
@@ -406,6 +437,9 @@ func TestBashPPChanFormsInertInBashAndPOSIX(t *testing.T) {
 	stmt = again.Stmts[0].Cmd.(*BashPPFuncDecl).Body.Stmts[0]
 	qt.Assert(t, qt.IsNil(stmt.Cmd))
 	qt.Assert(t, qt.HasLen(stmt.Redirs, 1))
+	var fragment strings.Builder
+	qt.Assert(t, qt.IsNil(NewPrinter().Print(&fragment, stmt)))
+	qt.Assert(t, qt.Equals(fragment.String(), "< -file"))
 }
 
 // TestBashPPChanRecognizersRollBack is the gate that matters most, and the one

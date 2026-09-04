@@ -748,12 +748,13 @@ func (s *BashPPSelect) Pos() Pos { return s.Select }
 func (s *BashPPSelect) End() Pos { return posAddCol(s.Rbrace, 1) }
 
 type BashPPSelectCase struct {
-	Case    Pos
-	Default bool
-	Comm    Command
-	Colon   Pos
-	Stmts   []*Stmt
-	Last    []Comment
+	Case     Pos
+	Default  bool
+	Comm     Command
+	Colon    Pos
+	Comments []Comment
+	Stmts    []*Stmt
+	Last     []Comment
 }
 
 func (c *BashPPSelectCase) Pos() Pos { return c.Case }

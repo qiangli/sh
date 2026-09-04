@@ -2827,6 +2827,10 @@ func (p *Parser) doRedirect(s *Stmt) {
 	default:
 		r.Word = p.followWordTok(token(r.Op), r.OpPos)
 	}
+	if p.lang.in(LangBashPP) && p.bashppFuncDepth > 0 && r.Op == RdrIn &&
+		r.Word != nil && r.Word.Pos().Offset() != r.OpPos.Offset()+1 && bashppLeadingDash(r.Word) {
+		r.BashPPKeepSpace = true
+	}
 }
 
 func (p *Parser) getStmt(readEnd, binCmd, fnBody bool) *Stmt {

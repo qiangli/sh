@@ -63,6 +63,7 @@ func (p *Parser) bashppSelect(stmt *Stmt) bool {
 // statements. It returns nil for anything else, which rewinds the whole select.
 func (p *Parser) bashppSelectArm() *BashPPSelectCase {
 	arm := &BashPPSelectCase{Case: p.pos}
+	arm.Comments, p.accComs = p.accComs, nil
 	switch {
 	case p.tok == _LitWord && p.val == "default:":
 		arm.Default = true
@@ -77,6 +78,13 @@ func (p *Parser) bashppSelectArm() *BashPPSelectCase {
 		arm.Comm, arm.Colon = comm, colon
 	default:
 		return nil
+	}
+	// A comment lexed while advancing beyond the colon belongs to the arm
+	// header only when it shares the colon's source line. Later comments stay
+	// accumulated for the first body statement.
+	for len(p.accComs) > 0 && p.accComs[0].Pos().Line() == arm.Colon.Line() {
+		arm.Comments = append(arm.Comments, p.accComs[0])
+		p.accComs = p.accComs[1:]
 	}
 	// The same stop set the enum switch uses, so an arm body ends where the
 	// next arm or the closing brace begins.
