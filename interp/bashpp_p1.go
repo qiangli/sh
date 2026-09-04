@@ -234,6 +234,17 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 			r.bashPPShortDeclPredeclared(d, name)
 			return
 		}
+		// The typed process boundary's inbound half: `r, err := run(...)`,
+		// `out, err := capture(...)` (predeclared like panic/recover), then
+		// the explicit `v, err := json.Decode(...)`, which must be answered
+		// before the generic imported-selector delegation hands it to the
+		// toolchain. See bashpp_capture.go.
+		if r.bashPPShortDeclCapture(ctx, d) {
+			return
+		}
+		if r.bashPPShortDeclDecode(ctx, d) {
+			return
+		}
 		if r.bashPPShortDeclImported(ctx, d) {
 			return
 		}
@@ -445,6 +456,9 @@ func (r *Runner) bashPPCall(ctx context.Context, c *syntax.BashPPCall) {
 	if r.bashPPEnabled() && !r.PosixMode() {
 		if name := bashPPPredeclaredCall(c); name != "" {
 			r.bashPPPredeclared(name, c, r.bashPPCallArgValues(c))
+			return
+		}
+		if r.bashPPCaptureCommandPosition(c) {
 			return
 		}
 		if len(c.Fun) >= 1 {

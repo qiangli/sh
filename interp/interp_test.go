@@ -134,8 +134,23 @@ let i=(2 + 3)
 
 var hasBash53 bool
 
+// isFuzzWorker reports whether this process is a `go test -fuzz` worker. The
+// fuzz coordinator re-executes the test binary AFTER TestMain has exported
+// GOSH_PROG into the environment, so without this check a worker would take
+// the gosh re-exec path below, try to parse its -test.* flags as a shell
+// script, and die before fuzzing ("fuzzing process terminated without
+// fuzzing").
+func isFuzzWorker() bool {
+	for _, arg := range os.Args[1:] {
+		if strings.HasPrefix(arg, "-test.fuzzworker") {
+			return true
+		}
+	}
+	return false
+}
+
 func TestMain(m *testing.M) {
-	if os.Getenv("GOSH_PROG") != "" {
+	if os.Getenv("GOSH_PROG") != "" && !isFuzzWorker() {
 		switch os.Getenv("GOSH_CMD") {
 		case "exit_0":
 			os.Exit(0)
