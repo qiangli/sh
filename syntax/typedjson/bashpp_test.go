@@ -72,7 +72,7 @@ func TestBashPPDeclRoundTrip(t *testing.T) {
 }
 
 func TestBashPPFormsRoundTrip(t *testing.T) {
-	for _, src := range []string{"x := 42\n", "x, y := 1, 2\n", "f(1, 2)\n", "x.y.z()\n", "import f \"fmt\"\n", "import (\n\tf \"fmt\"\n\t_ \"embed\"\n)\n", "type Config struct { Name string; Ports []int }\n", `cfg["ports"][0] = 8080` + "\n"} {
+	for _, src := range []string{"x := 42\n", "x, y := 1, 2\n", "f(1, 2)\n", "x.y.z()\n", "import f \"fmt\"\n", "import (\n\tf \"fmt\"\n\t_ \"embed\"\n)\n", "type Config struct { Name string; Ports []int }\n", "type Color enum { Red; Green }\nfunc label(c Color) string {\n\tswitch c {\n\tcase Red:\n\t\treturn \"red\"\n\tcase Green:\n\t\treturn \"green\"\n\t}\n}\n", `cfg["ports"][0] = 8080` + "\n"} {
 		t.Run(src, func(t *testing.T) {
 			f, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(src), "")
 			if err != nil {

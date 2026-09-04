@@ -155,6 +155,24 @@ func bashppTypeDecl(ce *CallExpr, redirs []*Redirect) *BashPPDecl {
 			StructFields: fields, Lbrace: ce.Args[3].Pos(), Rbrace: ce.Args[len(ce.Args)-1].Pos(),
 			End_: ce.Args[len(ce.Args)-1].End()}
 	}
+	if !alias && len(ce.Args) >= 6 && ce.Args[2].Lit() == "enum" &&
+		ce.Args[3].Lit() == "{" && ce.Args[len(ce.Args)-1].Lit() == "}" {
+		members := make([]*Lit, 0, len(ce.Args)-5)
+		for _, word := range ce.Args[4 : len(ce.Args)-1] {
+			member := bashppBareLit(word)
+			if member == nil || strings.ContainsAny(member.Value, ",:") {
+				return nil
+			}
+			members = append(members, member)
+		}
+		m := RecognizeStartSite(kw.Value + " " + name.Value)
+		if m.Site != StartTypeDecl {
+			return nil
+		}
+		return &BashPPDecl{Site: m.Site, Kw: kw, Name: name, DeclType: bashppBareLit(ce.Args[2]),
+			EnumMembers: members, Lbrace: ce.Args[3].Pos(), Rbrace: ce.Args[len(ce.Args)-1].Pos(),
+			End_: ce.Args[len(ce.Args)-1].End()}
+	}
 	if len(ce.Args) > 4 {
 		return nil
 	}

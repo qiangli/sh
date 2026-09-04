@@ -63,6 +63,7 @@ type bashPPFunc struct {
 type bashPPType struct {
 	underlying string
 	alias      bool
+	members    []string
 }
 
 // name is what diagnostics call the function. A literal has none, so it is
@@ -207,6 +208,9 @@ func (r *Runner) bashPPFuncDecl(d *syntax.BashPPFuncDecl) {
 		r.exit = exitStatus{code: 2}
 		return
 	}
+	if !r.bashPPCheckEnumSwitches(d) {
+		return
+	}
 	if d.Receiver != nil {
 		r.bashPPMethodDecl(d)
 		return
@@ -224,6 +228,59 @@ func (r *Runner) bashPPFuncDecl(d *syntax.BashPPFuncDecl) {
 		captured = r.bashPPScope.snapshot()
 	}
 	r.bashPPFuncs[name] = &bashPPFunc{decl: d, scope: captured}
+}
+
+// bashPPCheckEnumSwitches validates exhaustiveness when the function is
+// declared, rather than waiting for a call. That gives an uncalled function
+// the same fail-closed behavior as a compiled enum switch.
+func (r *Runner) bashPPCheckEnumSwitches(d *syntax.BashPPFuncDecl) bool {
+	types := make(map[string]string)
+	for _, field := range d.Params {
+		if field.FieldType == nil {
+			continue
+		}
+		for _, name := range field.Names {
+			types[name.Value] = field.FieldType.Value
+		}
+	}
+	var checkStmts func([]*syntax.Stmt) bool
+	checkStmts = func(stmts []*syntax.Stmt) bool {
+		for _, stmt := range stmts {
+			sw, ok := stmt.Cmd.(*syntax.BashPPSwitch)
+			if !ok {
+				continue
+			}
+			expr := sw.Expr.Lit()
+			typ := r.bashPPTypes[types[expr]]
+			if len(typ.members) > 0 {
+				covered := make(map[string]bool)
+				hasDefault := false
+				for _, arm := range sw.Arms {
+					if arm.Member == nil {
+						hasDefault = true
+					} else {
+						covered[arm.Member.Value] = true
+					}
+				}
+				if !hasDefault {
+					for _, member := range typ.members {
+						if !covered[member] {
+							r.errf("BASHPP-EENUM-NONEXHAUSTIVE: switch on %s is missing member %s or a default arm\n", types[expr], member)
+							r.exit = exitStatus{code: 2}
+							return false
+						}
+					}
+				}
+			}
+			for _, arm := range sw.Arms {
+				if !checkStmts(arm.Stmts) {
+					return false
+				}
+			}
+		}
+		return true
+	}
+	return d.Body == nil || checkStmts(d.Body.Stmts)
 }
 
 func (r *Runner) bashPPMethodDecl(d *syntax.BashPPFuncDecl) {

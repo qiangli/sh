@@ -5343,12 +5343,16 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		r.bashPPAssign(ctx, cm)
 	case *syntax.BashPPCall:
 		r.bashPPCall(ctx, cm)
+	case *syntax.BashPPCommandCall:
+		r.bashPPCommandCall(ctx, cm)
 	case *syntax.BashPPFuncDecl:
 		r.bashPPFuncDecl(cm)
 	case *syntax.BashPPReturn:
 		r.bashPPReturnStmt(ctx, cm)
 	case *syntax.BashPPDefer:
 		r.bashPPDeferStmt(ctx, cm)
+	case *syntax.BashPPSwitch:
+		r.bashPPSwitch(ctx, cm)
 	case *syntax.BashPPImport:
 		r.bashPPImport(ctx, cm)
 	case *syntax.BashPPIf:

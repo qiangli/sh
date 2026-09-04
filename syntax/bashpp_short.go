@@ -58,7 +58,8 @@ func bashppCompositeCommandDepth(ce *CallExpr) int {
 	}
 	words := ce.Args
 	eligible := len(words) >= 4 && words[0].Lit() == "type" &&
-		bashppIsIdent(words[1].Lit()) && words[2].Lit() == "struct" && words[3].Lit() == "{"
+		bashppIsIdent(words[1].Lit()) &&
+		(words[2].Lit() == "struct" || words[2].Lit() == "enum") && words[3].Lit() == "{"
 	if !eligible {
 		for i, w := range words {
 			if w.Lit() == ":=" && i > 0 && i+1 < len(words) {

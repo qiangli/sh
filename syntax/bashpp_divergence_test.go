@@ -109,6 +109,7 @@ var bashppAllowedDivergences = []bashppDivergenceRow{
 	{"decl-type-bare", "type T int", StartTypeDecl, "command `type` (a bash builtin) with arguments"},
 	{"decl-type-alias", "type ID = string", StartTypeDecl, "command `type` (a bash builtin) with arguments"},
 	{"prefix-type-struct", "type T struct {", StartTypeDecl, "a complete simple_command; `{` is an ordinary word in argument position"},
+	{"sharp-enum", "type Color enum { Red; Green }", StartTypeDecl, "command `type` with enum words and separators"},
 
 	// The := site splits across both classes. Only the Class E half is listed;
 	// the Class R half is free and unlisted, which is the distinction the
@@ -157,6 +158,9 @@ func bashppShapeBoundary(rest string) bool {
 // changes a signature and forces the row question to be asked rather than
 // answered by accident.
 func bashppDeclShape(d *BashPPDecl) string {
+	if d.DeclType != nil && d.DeclType.Value == "enum" {
+		return "type IDENT enum { MEMBERS }"
+	}
 	shape := d.Kw.Value + " IDENT"
 	if d.DeclType != nil {
 		if d.Alias {

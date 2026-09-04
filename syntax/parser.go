@@ -2965,6 +2965,10 @@ func (p *Parser) gotStmtPipe(s *Stmt, binCmd bool) *Stmt {
 			p.forClause(s)
 		case "case":
 			p.caseClause(s)
+		case "switch":
+			if p.lang.in(LangBashPP) && p.bashppFuncDepth > 0 {
+				p.bashppSwitch(s)
+			}
 		// TODO(zsh): { try-list } "always" { always-list }
 		case "}":
 			p.curErr(`%#q can only be used to close a block`, rightBrace)
@@ -4055,6 +4059,19 @@ loop:
 			p.curErr("%#q can only be used to open an arithmetic cmd", p.tok)
 		case leftParen:
 			if p.lang.in(LangBashPP) {
+				nested := len(ce.Args) > 1
+				for _, arg := range ce.Args[:len(ce.Args)-1] {
+					if arg.Lit() == ":=" || arg.Lit() == "defer" || arg.Lit() == "return" {
+						nested = false
+					}
+				}
+				if nested {
+					last := ce.Args[len(ce.Args)-1]
+					if call, ok := p.bashppParenForm(&CallExpr{Args: []*Word{last}}).(*BashPPCall); ok {
+						s.Cmd = &BashPPCommandCall{Before: ce.Args[:len(ce.Args)-1], Call: call}
+						return
+					}
+				}
 				if cmd := p.bashppFuncForm(ce); cmd != nil {
 					s.Cmd = cmd
 					return

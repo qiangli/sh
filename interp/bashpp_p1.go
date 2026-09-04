@@ -86,6 +86,22 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 			r.exit = exitStatus{code: 2}
 			return
 		}
+		if d.DeclType.Value == "enum" {
+			seen := make(map[string]bool, len(d.EnumMembers))
+			for _, member := range d.EnumMembers {
+				if !syntax.ValidName(member.Value) {
+					r.errf("BASHPP-EENUM-MEMBER: enum member %q must be an identifier\n", member.Value)
+					r.exit = exitStatus{code: 2}
+					return
+				}
+				if seen[member.Value] {
+					r.errf("BASHPP-EENUM-DUPLICATE: enum %s declares member %q more than once\n", name, member.Value)
+					r.exit = exitStatus{code: 2}
+					return
+				}
+				seen[member.Value] = true
+			}
+		}
 	}
 	if d.Site == syntax.StartVar && d.DeclType != nil {
 		base := strings.TrimPrefix(d.DeclType.Value, "*")
@@ -116,7 +132,11 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 		return
 	}
 	if d.Site == syntax.StartTypeDecl {
-		r.bashPPTypes[name] = bashPPType{underlying: d.DeclType.Value, alias: d.Alias}
+		members := make([]string, len(d.EnumMembers))
+		for i, member := range d.EnumMembers {
+			members[i] = member.Value
+		}
+		r.bashPPTypes[name] = bashPPType{underlying: d.DeclType.Value, alias: d.Alias, members: members}
 	}
 	if d.Site == syntax.StartVar && d.DeclType != nil {
 		spelling := d.DeclType.Value
@@ -200,6 +220,9 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 	// Rhs never matches a multi-name left-hand side; the real arity check is
 	// against the function's declared results, done inside.
 	if d.Call != nil {
+		if r.bashPPEnumConstruct(d) {
+			return
+		}
 		if fn, ok := r.bashPPLookupFunc(d.Call); ok {
 			r.bashPPShortDeclCall(ctx, d, fn)
 			return
@@ -251,6 +274,69 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 		}
 		r.bashPPDeclareName(lhs.Value, r.bashPPValue(ctx, d.Rhs[i:i+1]))
 	}
+}
+
+// bashPPEnumConstruct evaluates `v := Color(Member)`. Enum values keep their
+// member spelling in the ordinary shell cell while the lexical cell carries
+// the named type, matching the existing named-scalar representation.
+func (r *Runner) bashPPEnumConstruct(d *syntax.BashPPShortDecl) bool {
+	if d.Call == nil || len(d.Call.Fun) != 1 || len(d.Lhs) != 1 {
+		return false
+	}
+	name := d.Call.Fun[0].Value
+	typ, ok := r.bashPPTypes[name]
+	if !ok || typ.underlying != "enum" {
+		return false
+	}
+	args := r.bashPPCallArgValues(d.Call)
+	value := ""
+	if len(args) == 1 {
+		value = args[0]
+	}
+	valid := false
+	for _, member := range typ.members {
+		if member == value {
+			valid = true
+			break
+		}
+	}
+	if !valid {
+		r.errf("BASHPP-EENUM-VALUE: %s is not a member of %s\n", value, name)
+		r.exit = exitStatus{code: 2}
+		return true
+	}
+	r.bashPPDeclareName(d.Lhs[0].Value, expand.Variable{Set: true, Kind: expand.String, Str: value})
+	if cell := r.bashPPScope.lookup(d.Lhs[0].Value); cell != nil {
+		cell.typeName = name
+	}
+	return true
+}
+
+func (r *Runner) bashPPSwitch(ctx context.Context, sw *syntax.BashPPSwitch) {
+	if !r.objectsEnabled() {
+		r.errf("bash++ switch evaluated with extensions disabled\n")
+		r.exit = exitStatus{code: 2}
+		return
+	}
+	value := r.bashPPExprValue(sw.Expr)
+	var fallback *syntax.BashPPSwitchArm
+	for _, arm := range sw.Arms {
+		if arm.Member == nil {
+			fallback = arm
+			continue
+		}
+		if arm.Member.Value == value {
+			fallback = arm
+			break
+		}
+	}
+	if fallback == nil {
+		return
+	}
+	if r.bashPPScope != nil {
+		defer r.bashPPPushScope()()
+	}
+	r.stmts(ctx, fallback.Stmts)
 }
 
 // bashPPShortDeclPredeclared binds the results of a predeclared call to the
@@ -375,6 +461,30 @@ func (r *Runner) bashPPCall(ctx context.Context, c *syntax.BashPPCall) {
 	}
 	r.errf("bash++: %s(...) is recognized but not implemented in this phase\n", name)
 	r.exit = exitStatus{code: 127}
+}
+
+func (r *Runner) bashPPCommandCall(ctx context.Context, c *syntax.BashPPCommandCall) {
+	fn, ok := r.bashPPLookupFunc(c.Call)
+	if !ok {
+		if r.exit.code == 0 {
+			r.errf("bash++: nested call is not a declared function\n")
+			r.exit = exitStatus{code: 127}
+		}
+		return
+	}
+	args, ok := r.bashPPCallValues(c.Call, fn)
+	if !ok {
+		return
+	}
+	results := r.bashPPInvoke(ctx, fn, args)
+	if r.exit.code != 0 || r.exit.exiting || r.exit.returning {
+		return
+	}
+	words := append([]*syntax.Word(nil), c.Before...)
+	for _, result := range results {
+		words = append(words, &syntax.Word{Parts: []syntax.WordPart{&syntax.SglQuoted{Value: result}}})
+	}
+	r.cmd(ctx, &syntax.CallExpr{Args: words})
 }
 
 // bashPPEvalSelector dispatches a call through the import evaluator.

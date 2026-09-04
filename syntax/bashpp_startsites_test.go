@@ -52,6 +52,7 @@ var day1Cases = []startSiteCase{
 	{"decl-type-bare", "type T int", StartTypeDecl, ClassE},
 	{"decl-type-alias", "type ID = string", StartTypeDecl, ClassE},
 	{"prefix-type-struct", "type T struct {", StartTypeDecl, ClassE},
+	{"sharp-enum", "type Color enum { Red; Green }", StartTypeDecl, ClassE},
 
 	// := splits across BOTH classes. This is the single most useful thing the
 	// measured corpus produced, and it is invisible to inspection.
@@ -127,14 +128,7 @@ func TestStartSiteNearMiss(t *testing.T) {
 
 // TWO GATES, NOT ONE — this test found the distinction by failing.
 //
-// `type Color enum { Red }` is the Bash# enum syntax, which no phase has
-// implemented. It was listed here as unsupported and the recognizer claimed it
-// anyway. The recognizer was right: the shape opens at `type`, which IS a
-// Day-1 start site, and only the BODY is unsupported. "Does a Go region open
-// here" and "is this particular form supported" are separate questions decided
-// at separate points, and the unsupported-form case belongs to the second.
-//
-// This matters beyond the one row. Any construct sharing a start site with a
+// Any construct sharing a start site with a
 // supported form cannot be rejected by the recognizer at all, so its fallback
 // must be enforced where the body is parsed. A reviewer checking only this
 // test would conclude the fallback is covered when it is not.
