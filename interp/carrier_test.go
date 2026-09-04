@@ -182,7 +182,7 @@ wait
 	if len(lines) != 8 {
 		t.Fatalf("want 8 pids, got:\n%s", out)
 	}
-	seen := make(map[string]bool)
+	seen := make(map[string]bool) // bashpp-racegate:safe-private
 	for _, pid := range lines {
 		if !numericPidRe.MatchString(pid) {
 			t.Fatalf("$! = %q, want a real numeric PID", pid)

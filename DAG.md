@@ -58,7 +58,13 @@ Bash++ race/lifecycle gate. Records toolchain, package and test discovery,
 the broad unsafe-oracle audit, focused schedule runs, and the complete race
 suite in `artifacts/bashpp-race-gate.txt`. The real Bash compatibility corpus
 remains the separate `confirm` task because it needs the external Bash oracle.
-The CI job gives this bounded gate enough time to emit its own diagnostics.
+The gate defaults `GOMEMLIMIT` to 2 GiB, gives each `go test` an explicit
+timeout plus an outer watchdog, and records portable `/usr/bin/time` peak-RSS
+evidence. `GOMEMLIMIT` bounds the Go heap, not total process-tree RSS; CI or the
+sprint manager must also apply an external job/process-tree memory ceiling.
+Use `scripts/bashpp-race-gate.sh --discovery-only` to validate package and
+focused-test discovery without launching race tests. The CI job gives this
+bounded gate enough time to emit its own diagnostics.
 Effects: read, write
 
 ```bash

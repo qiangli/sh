@@ -9,6 +9,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -28,11 +29,14 @@ import (
 // where the runner writes output concurrently with the test reading it. A
 // plain bytes.Buffer is not safe for that hand-off and races under -race.
 type lineObserver struct {
-	mu     sync.Mutex
-	buf    bytes.Buffer
-	offset int
-	lines  chan string
+	mu       sync.Mutex
+	buf      bytes.Buffer // bashpp-racegate:safe-synchronized
+	offset   int
+	lines    chan string
+	overflow error
 }
+
+var errLineObserverOverflow = errors.New("line observer capacity exceeded")
 
 func newLineObserver(size int) *lineObserver {
 	return &lineObserver{lines: make(chan string, size)}
@@ -53,8 +57,16 @@ func (o *lineObserver) Write(p []byte) (int, error) {
 		select {
 		case o.lines <- line:
 		default:
+			o.overflow = errLineObserverOverflow
+			return n, o.overflow
 		}
 	}
+}
+
+func (o *lineObserver) Err() error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.overflow
 }
 
 func (o *lineObserver) ReadLine(t *testing.T, d time.Duration) string {
@@ -72,6 +84,18 @@ func (o *lineObserver) String() string {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	return o.buf.String()
+}
+
+func TestLineObserverReportsOverflow(t *testing.T) {
+	o := newLineObserver(1)
+	input := []byte("first\nsecond\n")
+	n, err := o.Write(input)
+	if n != len(input) || !errors.Is(err, errLineObserverOverflow) {
+		t.Fatalf("Write = (%d, %v), want (%d, %v)", n, err, len(input), errLineObserverOverflow)
+	}
+	if !errors.Is(o.Err(), errLineObserverOverflow) {
+		t.Fatalf("Err = %v, want %v", o.Err(), errLineObserverOverflow)
+	}
 }
 
 type testProcessGroupCarrierProc struct{ *testCarrierProc }
@@ -680,7 +704,7 @@ wait "$d"; echo "$?"
 	if len(pids) != 4 {
 		t.Fatalf("want 4 pids, got %q", first)
 	}
-	seen := make(map[string]bool)
+	seen := make(map[string]bool) // bashpp-racegate:safe-private
 	var wg sync.WaitGroup
 	for _, pid := range pids {
 		if !numericPidRe.MatchString(pid) {

@@ -26,7 +26,7 @@ func runStartupIgnoredScript(t *testing.T, env expand.Environ, src string) strin
 	if err != nil {
 		t.Fatal(err)
 	}
-	var stdout bytes.Buffer
+	var stdout bytes.Buffer // bashpp-racegate:safe-private
 	r, err := New(Env(env), StdIO(nil, &stdout, nil))
 	if err != nil {
 		t.Fatal(err)
@@ -53,7 +53,7 @@ func TestBridgedStartupIgnoreIsRestoredOnlyByOptInHost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var stdout bytes.Buffer
+	var stdout bytes.Buffer // bashpp-racegate:safe-private
 	host := &recordingSignalHost{}
 	r, err := New(
 		Env(expand.ListEnviron(BashyHardIgnoreEnv+"=USR1")),
@@ -102,7 +102,7 @@ func TestTrapStartupIgnoredInSourcedFile(t *testing.T) {
 	}
 
 	for _, posix := range []bool{true, false} {
-		var stdout bytes.Buffer
+		var stdout bytes.Buffer // bashpp-racegate:safe-private
 		r, err := New(
 			Env(expand.ListEnviron(BashyHardIgnoreEnv+"=INT,QUIT")),
 			StdIO(nil, &stdout, nil),
@@ -130,7 +130,7 @@ func TestTrapStartupIgnoredFromInheritedDisposition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var stdout bytes.Buffer
+	var stdout bytes.Buffer // bashpp-racegate:safe-private
 	r, err := New(Env(expand.ListEnviron(os.Environ()...)), StdIO(nil, &stdout, nil))
 	if err != nil {
 		t.Fatal(err)
@@ -152,7 +152,7 @@ func TestStartupIgnoredSignalIntNotInferredFromProcessDisposition(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	var stdout bytes.Buffer
+	var stdout bytes.Buffer // bashpp-racegate:safe-private
 	r, err := New(Env(expand.ListEnviron(os.Environ()...)), StdIO(nil, &stdout, nil))
 	if err != nil {
 		t.Fatal(err)
