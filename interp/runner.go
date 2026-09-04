@@ -4681,10 +4681,16 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 			// `launched`, not bg.pidReady — see its comment above for why.
 			// Keep this narrow to literal external calls under the CLI's job
 			// carrier; builtins, functions, and long-running jobs remain async.
+			//
+			// The boundary ends here. It orders the fork, never the child's
+			// work: bash makes no part of an asynchronous command's effect
+			// visible to the next statement, and a sleep that tried to buy the
+			// child a head start would be both a conformance deviation and a
+			// race. `$!` still names the exec'd child because it waits on
+			// bg.pidReady, which is a real rendezvous rather than a delay.
 			if waitForExternalLaunch {
 				select {
 				case <-launched:
-					yieldExternalLaunch()
 				case <-ctx.Done():
 				}
 			}

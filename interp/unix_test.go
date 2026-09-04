@@ -331,6 +331,28 @@ func TestRunnerTerminalExec(t *testing.T) {
 func TestRunnerTerminalExecInheritedSparseFD(t *testing.T) {
 	const script = "tty >/dev/null && /bin/echo terminal"
 
+	// A closed *os.File reports fd -1 to os.StartProcess, and Unix forkExec
+	// closes that child slot rather than inventing a descriptor there. That is
+	// how ExtraFiles expresses a SPARSE fd 8: slots 3 through 7 are closed in
+	// the child, not manufactured. It is the same mechanism the runner's own
+	// execExtraFiles uses to hand a sparse fd to an external command.
+	//
+	// Never place fd 8 by dup2'ing over descriptor 8 of the test process
+	// itself. A process does not own an arbitrary descriptor number just
+	// because it can name it: on darwin the Go runtime's signal pipe
+	// (sigNoteSetup, taken at the first signal.Notify) can be sitting there,
+	// and hijacking it makes the blocked read inside signal_recv return a byte
+	// no sigsend ever queued. The runtime then throws "signal_recv:
+	// inconsistent state" and takes the whole test binary down, arbitrarily
+	// far from this test.
+	closedSlot, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := closedSlot.Close(); err != nil {
+		t.Fatal(err)
+	}
+
 	run := func(t *testing.T, cmd *exec.Cmd) string {
 		t.Helper()
 		primary, secondary, err := pty.Open()
@@ -342,28 +364,13 @@ func TestRunnerTerminalExecInheritedSparseFD(t *testing.T) {
 		cmd.Stdin = secondary
 		cmd.Stdout = secondary
 		cmd.Stderr = secondary
-		// Install the already-open terminal at its real sparse descriptor,
-		// rather than using ExtraFiles (which would manufacture fds 3 through
-		// 7). This test is deliberately not parallel: the fd-table change
-		// lasts only through cmd.Start and is restored before reading output.
-		oldFD8, oldErr := unix.Dup(8)
-		if err := unix.Dup2(int(secondary.Fd()), 8); err != nil {
-			t.Fatal(err)
+		// Child fds 3..7 closed, child fd 8 = the already-open terminal.
+		cmd.ExtraFiles = []*os.File{
+			closedSlot, closedSlot, closedSlot, closedSlot, closedSlot,
+			secondary,
 		}
 		if err := cmd.Start(); err != nil {
-			if oldErr == nil {
-				_ = unix.Dup2(oldFD8, 8)
-				_ = unix.Close(oldFD8)
-			} else {
-				_ = unix.Close(8)
-			}
 			t.Fatal(err)
-		}
-		if oldErr == nil {
-			_ = unix.Dup2(oldFD8, 8)
-			_ = unix.Close(oldFD8)
-		} else {
-			_ = unix.Close(8)
 		}
 		got, err := bufio.NewReader(primary).ReadString('\n')
 		if err != nil {
