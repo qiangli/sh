@@ -11,6 +11,7 @@ vendor/
 bin/
 /gosh
 /shfmt
+artifacts/
 
 # Claude Code session artifacts
 .claude/

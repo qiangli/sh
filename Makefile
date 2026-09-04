@@ -1,4 +1,4 @@
-.PHONY: build tidy clean test help fmtcheck hooks
+.PHONY: build tidy clean test bashpp-race-gate help fmtcheck hooks
 
 BIN_DIR := bin
 CMDS := gosh shfmt
@@ -14,6 +14,10 @@ build:
 ## test: Run all Go tests
 test:
 	go test ./...
+
+## bashpp-race-gate: Run the Bash++ race/lifecycle gate and write local evidence
+bashpp-race-gate:
+	@./scripts/bashpp-race-gate.sh
 
 ## tidy: Run go mod tidy, gofmt, and go vet
 tidy:

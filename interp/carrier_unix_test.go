@@ -7,6 +7,7 @@ package interp_test
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"os"
 	"os/exec"
@@ -22,6 +23,56 @@ import (
 
 	"mvdan.cc/sh/v3/interp"
 )
+
+// lineObserver provides a bounded, synchronized readiness oracle for tests
+// where the runner writes output concurrently with the test reading it. A
+// plain bytes.Buffer is not safe for that hand-off and races under -race.
+type lineObserver struct {
+	mu     sync.Mutex
+	buf    bytes.Buffer
+	offset int
+	lines  chan string
+}
+
+func newLineObserver(size int) *lineObserver {
+	return &lineObserver{lines: make(chan string, size)}
+}
+
+func (o *lineObserver) Write(p []byte) (int, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	n, err := o.buf.Write(p)
+	for {
+		b := o.buf.Bytes()[o.offset:]
+		i := bytes.IndexByte(b, '\n')
+		if i < 0 {
+			return n, err
+		}
+		line := string(append([]byte(nil), b[:i+1]...))
+		o.offset += i + 1
+		select {
+		case o.lines <- line:
+		default:
+		}
+	}
+}
+
+func (o *lineObserver) ReadLine(t *testing.T, d time.Duration) string {
+	t.Helper()
+	select {
+	case line := <-o.lines:
+		return line
+	case <-time.After(d):
+		t.Fatalf("timed out waiting for observed line; buffered=%q", o.String())
+		return ""
+	}
+}
+
+func (o *lineObserver) String() string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.buf.String()
+}
 
 type testProcessGroupCarrierProc struct{ *testCarrierProc }
 
@@ -671,11 +722,8 @@ wait "$d"; echo "$?"
 func TestJobCarrierCancelReapsCarrier(t *testing.T) {
 	t.Parallel()
 	c := new(testCarrier)
-	pr, pw, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	r, err := interp.New(interp.WithJobCarrier(c), interp.StdIO(nil, pw, pw))
+	out := newLineObserver(8)
+	r, err := interp.New(interp.WithJobCarrier(c), interp.StdIO(nil, out, out))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -685,14 +733,9 @@ func TestJobCarrierCancelReapsCarrier(t *testing.T) {
 	runDone := make(chan struct{})
 	go func() {
 		defer close(runDone)
-		defer pw.Close()
 		r.Run(ctx, file) // error (if any) is irrelevant; we cancel it
 	}()
-	br := bufio.NewReader(pr)
-	line, err := br.ReadString('\n')
-	if err != nil {
-		t.Fatalf("reading pid: %v", err)
-	}
+	line := out.ReadLine(t, runnerRunTimeout)
 	pid, err := strconv.Atoi(strings.TrimSpace(line))
 	if err != nil {
 		t.Fatalf("parsing pid %q: %v", line, err)
@@ -704,7 +747,7 @@ func TestJobCarrierCancelReapsCarrier(t *testing.T) {
 	select {
 	case <-runDone:
 	case <-time.After(runnerRunTimeout):
-		t.Fatal("Run did not return after context cancellation")
+		t.Fatalf("Run did not return after context cancellation; output=%q", out.String())
 	}
 	waitPidsGone(t, c.startedPids())
 }

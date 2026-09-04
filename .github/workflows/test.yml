@@ -11,7 +11,9 @@ jobs:
         # windows-specific debugging pass. Linux + macOS + alpine are green.
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
+    # The Linux race/lifecycle gate runs a bounded schedule matrix plus the
+    # complete race suite; keep CI from killing it before its own diagnostics.
+    timeout-minutes: 30
     steps:
     - uses: actions/checkout@v5
     - uses: actions/setup-go@v6
@@ -35,8 +37,15 @@ jobs:
       if: matrix.os != 'macos-latest'
     - run: cd moreinterp && go test ./...
 
-    - run: go test -race ./...
+    - name: Bash++ race lifecycle gate
+      run: make bashpp-race-gate
       if: matrix.os == 'ubuntu-latest'
+    - uses: actions/upload-artifact@v4
+      if: matrix.os == 'ubuntu-latest' && always()
+      with:
+        name: bashpp-race-gate-${{ matrix.os }}-${{ matrix.go-version }}
+        path: artifacts/bashpp-race-gate.txt
+        if-no-files-found: error
     - name: confirm tests with Bash 5.2
       run: |
         go install mvdan.cc/dockexec@latest

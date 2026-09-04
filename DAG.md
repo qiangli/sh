@@ -53,6 +53,18 @@ Effects: read
 go test -race ./... -skip 'TestRunnerRunConfirm|TestParseConfirm'
 ```
 
+### bashpp-race-gate
+Bash++ race/lifecycle gate. Records toolchain, package and test discovery,
+the broad unsafe-oracle audit, focused schedule runs, and the complete race
+suite in `artifacts/bashpp-race-gate.txt`. The real Bash compatibility corpus
+remains the separate `confirm` task because it needs the external Bash oracle.
+The CI job gives this bounded gate enough time to emit its own diagnostics.
+Effects: read, write
+
+```bash
+make bashpp-race-gate
+```
+
 ### confirm
 The canonical "behaves like real Bash 5.3" oracle: the same script table is run
 by `gosh` and by a dockerized Bash, and outputs/exit codes are diffed. Needs
