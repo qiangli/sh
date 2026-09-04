@@ -5,10 +5,14 @@ package interp
 
 import (
 	"context"
+	cryptorand "crypto/rand"
+	"encoding/hex"
+	"errors"
 	"fmt"
+	mathrand "math/rand/v2"
+	"os"
 	"reflect"
 	"strconv"
-	"strings"
 	"sync"
 
 	"mvdan.cc/sh/v3/expand"
@@ -25,9 +29,149 @@ type bashPPChannel struct {
 	ch   chan string
 }
 
+type bashPPObjectCloneKey struct {
+	kind uint8
+	ptr  uintptr
+}
+
+type bashPPObjectCloner struct {
+	active map[bashPPObjectCloneKey]bool
+	done   map[bashPPObjectCloneKey]any
+}
+
+func newBashPPObjectCloner() *bashPPObjectCloner {
+	return &bashPPObjectCloner{
+		active: make(map[bashPPObjectCloneKey]bool),
+		done:   make(map[bashPPObjectCloneKey]any),
+	}
+}
+
+func (c *bashPPObjectCloner) clone(value any) (any, error) {
+	switch value := value.(type) {
+	case nil, bool, string, float32, float64,
+		int, int8, int16, int32, int64,
+		uint, uint8, uint16, uint32, uint64:
+		return value, nil
+	case map[string]any:
+		key := bashPPObjectCloneKey{kind: 1, ptr: reflect.ValueOf(value).Pointer()}
+		if c.active[key] {
+			return nil, fmt.Errorf("cyclic Bash++ object")
+		}
+		if done, ok := c.done[key]; ok {
+			return done, nil
+		}
+		out := make(map[string]any, len(value))
+		c.active[key] = true
+		for name, item := range value {
+			copy, err := c.clone(item)
+			if err != nil {
+				return nil, err
+			}
+			out[name] = copy
+		}
+		delete(c.active, key)
+		c.done[key] = out
+		return out, nil
+	case []any:
+		key := bashPPObjectCloneKey{kind: 2, ptr: reflect.ValueOf(value).Pointer()}
+		if c.active[key] {
+			return nil, fmt.Errorf("cyclic Bash++ object")
+		}
+		if done, ok := c.done[key]; ok {
+			return done, nil
+		}
+		out := make([]any, len(value))
+		c.active[key] = true
+		for i, item := range value {
+			copy, err := c.clone(item)
+			if err != nil {
+				return nil, err
+			}
+			out[i] = copy
+		}
+		delete(c.active, key)
+		c.done[key] = out
+		return out, nil
+	default:
+		return nil, fmt.Errorf("unsupported mutable Bash++ object type %T", value)
+	}
+}
+
+func cloneBashPPTaskVariable(vr expand.Variable, objects *bashPPObjectCloner) (expand.Variable, error) {
+	vr = cloneBashPPVariable(vr)
+	if vr.Kind != expand.Object || vr.Obj == nil {
+		return vr, nil
+	}
+	copy, err := objects.clone(vr.Obj)
+	if err != nil {
+		return expand.Variable{}, err
+	}
+	vr.Obj = copy
+	return vr, nil
+}
+
+func cloneBashPPTaskCells(r *Runner, objects *bashPPObjectCloner) error {
+	seenScopes := make(map[*bashPPScope]bool)
+	seenCells := make(map[*bashPPCell]bool)
+	var visit func(*bashPPScope) error
+	visit = func(scope *bashPPScope) error {
+		if scope == nil || seenScopes[scope] {
+			return nil
+		}
+		seenScopes[scope] = true
+		if err := visit(scope.parent); err != nil {
+			return err
+		}
+		for _, cell := range scope.entries {
+			if seenCells[cell] {
+				continue
+			}
+			seenCells[cell] = true
+			copy, err := cloneBashPPTaskVariable(cell.vr, objects)
+			if err != nil {
+				return err
+			}
+			cell.vr = copy
+		}
+		return nil
+	}
+	if err := visit(r.bashPPScope); err != nil {
+		return err
+	}
+	for _, scope := range r.bashPPFuncScopes {
+		if err := visit(scope); err != nil {
+			return err
+		}
+	}
+	for _, fn := range r.bashPPFuncs {
+		if err := visit(fn.scope); err != nil {
+			return err
+		}
+	}
+	for _, methods := range r.bashPPMethods {
+		for _, fn := range methods {
+			if err := visit(fn.scope); err != nil {
+				return err
+			}
+		}
+	}
+	for _, fn := range r.bashPPClosures {
+		if err := visit(fn.scope); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 type bashPPTaskFailure struct {
-	code uint8
-	text string
+	ordinal uint64
+	code    uint8
+	text    string
+}
+
+type bashPPTaskState struct {
+	ordinal uint64
+	armed   bool
 }
 
 // One dynamic structured task group belongs to one owning File Run. Unlike a
@@ -39,9 +183,11 @@ type bashPPConcurrent struct {
 	ctx      context.Context
 	cancel   context.CancelFunc
 	active   int
+	sealed   bool
 	quiesced bool
-	first    *bashPPTaskFailure
-	next     int
+	failures []bashPPTaskFailure
+	nextTask uint64
+	tasks    map[uint64]*bashPPTaskState
 	chans    map[string]*bashPPChannel
 	ioMu     sync.Mutex
 }
@@ -50,7 +196,7 @@ var bashPPConcurrencyInitMu sync.Mutex
 
 func newBashPPConcurrent(parent context.Context) *bashPPConcurrent {
 	ctx, cancel := context.WithCancel(parent)
-	c := &bashPPConcurrent{ctx: ctx, cancel: cancel, chans: make(map[string]*bashPPChannel)}
+	c := &bashPPConcurrent{ctx: ctx, cancel: cancel, chans: make(map[string]*bashPPChannel), tasks: make(map[uint64]*bashPPTaskState)}
 	c.changed = sync.NewCond(&c.mu)
 	return c
 }
@@ -64,25 +210,69 @@ func (r *Runner) bashPPConcurrency(ctx context.Context) *bashPPConcurrent {
 	return r.bashPPConcurrent
 }
 
-func (c *bashPPConcurrent) add() bool {
+func (c *bashPPConcurrent) add() (*bashPPTaskState, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.quiesced || c.ctx.Err() != nil {
-		return false
+	if c.quiesced {
+		return nil, false
 	}
+	ordinal := c.nextTask
+	c.nextTask++
 	c.active++
-	return true
+	state := &bashPPTaskState{ordinal: ordinal}
+	c.tasks[ordinal] = state
+	return state, true
 }
 
-func (c *bashPPConcurrent) done(f *bashPPTaskFailure) {
-	c.mu.Lock()
-	if f != nil && c.first == nil {
-		copy := *f
-		c.first = &copy
-		c.cancel()
+func (c *bashPPConcurrent) maybeCancelLocked() {
+	if !c.sealed || len(c.failures) == 0 {
+		return
 	}
+	primary := c.failures[0].ordinal
+	for i := 1; i < len(c.failures); i++ {
+		if c.failures[i].ordinal < primary {
+			primary = c.failures[i].ordinal
+		}
+	}
+	for ordinal, task := range c.tasks {
+		if ordinal < primary && !task.armed {
+			return
+		}
+	}
+	c.cancel()
+}
+
+func (c *bashPPConcurrent) arm(task *bashPPTaskState) {
+	if task == nil {
+		return
+	}
+	c.mu.Lock()
+	task.armed = true
+	c.maybeCancelLocked()
+	c.mu.Unlock()
+}
+
+func (c *bashPPConcurrent) armed(task *bashPPTaskState) bool {
+	c.mu.Lock()
+	armed := task == nil || task.armed
+	c.mu.Unlock()
+	return armed
+}
+
+func (c *bashPPConcurrent) done(ordinal uint64, f *bashPPTaskFailure) {
+	c.mu.Lock()
+	if f != nil {
+		c.failures = append(c.failures, *f)
+		// Do not let a very fast task make later syntactic go statements in
+		// the still-evaluating owner schedule-dependent. Once the File owner
+		// seals registration, the first observed concrete failure cancels the
+		// remaining task tree.
+	}
+	delete(c.tasks, ordinal)
 	c.active--
-	if c.active == 0 {
+	c.maybeCancelLocked()
+	if c.active == 0 && c.sealed {
+		c.quiesced = true
 		c.changed.Broadcast()
 	}
 	c.mu.Unlock()
@@ -91,17 +281,35 @@ func (c *bashPPConcurrent) done(f *bashPPTaskFailure) {
 func (c *bashPPConcurrent) stopAndJoin() *bashPPTaskFailure {
 	c.cancel()
 	c.mu.Lock()
+	c.sealed = true
+	c.maybeCancelLocked()
 	for c.active != 0 {
 		c.changed.Wait()
 	}
 	c.quiesced = true
-	var result *bashPPTaskFailure
-	if c.first != nil {
-		copy := *c.first
-		result = &copy
-	}
+	result := c.primaryFailureLocked()
 	c.mu.Unlock()
 	return result
+}
+
+func (c *bashPPConcurrent) primaryFailureLocked() *bashPPTaskFailure {
+	var result *bashPPTaskFailure
+	for i := range c.failures {
+		f := &c.failures[i]
+		if result == nil || f.ordinal < result.ordinal {
+			copy := *f
+			result = &copy
+		}
+	}
+	return result
+}
+
+func newBashPPChannelCapability() (string, error) {
+	var raw [24]byte
+	if _, err := cryptorand.Read(raw[:]); err != nil {
+		return "", err
+	}
+	return bashPPChanHandlePrefix + hex.EncodeToString(raw[:]), nil
 }
 
 func (r *Runner) bashPPTaskContext(ctx context.Context) context.Context {
@@ -131,6 +339,10 @@ func (r *Runner) bashPPChannel(w *syntax.Word) (*bashPPChannel, bool) {
 	if !ok {
 		r.errf("bash++: %s is not a channel in this task group\n", name)
 		r.exit.code = 2
+		// Wake any later operation in this malformed structured group; in
+		// particular, an invalid send followed by a receive must not strand the
+		// owner before it reaches the File join boundary.
+		c.cancel()
 	}
 	return h, ok
 }
@@ -153,8 +365,13 @@ func (r *Runner) bashPPMakeChan(ctx context.Context, d *syntax.BashPPShortDecl) 
 	}
 	c := r.bashPPConcurrency(ctx)
 	c.mu.Lock()
-	h := bashPPChanHandlePrefix + strconv.Itoa(c.next)
-	c.next++
+	h, err := newBashPPChannelCapability()
+	if err != nil {
+		c.mu.Unlock()
+		r.errf("make(chan): cannot allocate capability: %v\n", err)
+		r.exit.code = 2
+		return
+	}
 	c.chans[h] = &bashPPChannel{elem: d.MakeChan.ChanType.Elem.Value, ch: make(chan string, capacity)}
 	c.mu.Unlock()
 	r.bashPPDeclareName(d.Lhs[0].Value, expand.Variable{Set: true, Kind: expand.String, Str: h})
@@ -171,6 +388,9 @@ func (r *Runner) bashPPSend(ctx context.Context, s *syntax.BashPPSend) {
 		r.exit.code = 2
 		return
 	}
+	if r.bashPPConcurrent != nil {
+		r.bashPPConcurrent.arm(r.bashPPTaskState)
+	}
 	defer func() {
 		if recover() != nil {
 			r.errf("bash++: send on closed channel\n")
@@ -180,6 +400,7 @@ func (r *Runner) bashPPSend(ctx context.Context, s *syntax.BashPPSend) {
 	select {
 	case c.ch <- v:
 	case <-r.bashPPTaskContext(ctx).Done():
+		r.bashPPTaskCanceled = true
 		r.exit.code = 1
 	}
 }
@@ -189,11 +410,15 @@ func (r *Runner) bashPPReceive(ctx context.Context, recv *syntax.BashPPReceive, 
 	if !ok {
 		return "", false
 	}
+	if r.bashPPConcurrent != nil {
+		r.bashPPConcurrent.arm(r.bashPPTaskState)
+	}
 	var v string
 	var open bool
 	select {
 	case v, open = <-c.ch:
 	case <-r.bashPPTaskContext(ctx).Done():
+		r.bashPPTaskCanceled = true
 		r.exit.code = 1
 		return "", false
 	}
@@ -229,39 +454,180 @@ func (r *Runner) bashPPClose(cl *syntax.BashPPClose) {
 // variables, cwd, options, functions/types/imports, traps/signals/jobs and fd
 // maps. The maps are task-owned; underlying OS open-file descriptions retain
 // their normal shared offsets. Only the group and channel cores are shared.
-func (r *Runner) bashPPTaskSnapshot() *Runner {
+func (r *Runner) bashPPTaskSnapshot(ordinal uint64) (*Runner, error) {
 	child := r.subshell(true)
 	child.bashPPConcurrent, child.bashPPGoTask, child.bashPPChanBoundary = r.bashPPConcurrent, true, false
-	return child
+	child.bashPPFileRun = true
+	// A task is not a shell-copy boundary, so BASH_SUBSHELL stays unchanged.
+	child.subshellLevel = r.subshellLevel
+	// Tasks inherit every trap as a private snapshot, independent of the
+	// errtrace/functrace inheritance rules used by actual shell subshells.
+	child.trapCallbacks = cloneStringMap(r.trapCallbacks)
+	child.inheritedExitTrap = false
+	if child.trapCallbacks["ERR"] != "" {
+		if child.noOpSetState == nil {
+			child.noOpSetState = make(map[string]bool)
+		}
+		child.noOpSetState["errtrace"] = true
+	}
+	// Give deterministic tasks independent streams. Sharing PCG is both a data
+	// race and schedule-dependent; the launch ordinal is stable by construction.
+	if child.deterministic {
+		seed := uint64(child.deterministicSeed) ^ (ordinal+1)*0x9e3779b97f4a7c15
+		child.deterministicRng = mathrand.NewPCG(seed, seed^0xd1b54a32d192ed03)
+	}
+	child.randomSeed = r.randomSeed + uint32(ordinal+1)*0x9e37
+	// Jobs and coprocs are owned by the task that creates them. An owner's
+	// existing jobs are not waitable or mutable from a child task.
+	child.bgProcs, child.lastBang, child.inheritedBang = nil, nil, nil
+	child.doneBgPids = nil
+	child.coprocReg, child.coprocFds, child.coprocReapedFds = nil, nil, nil
+	child.coprocSeq = 0
+	child.asyncList, child.asyncProc, child.jobsReadOnly = false, nil, false
+	child.preferredJobID = 0
+	child.exit = exitStatus{}
+	child.expandRunExit = exitStatus{}
+	child.bashPPDeferStack = nil
+	child.bashPPReturn = bashPPReturnState{}
+	child.bashPPPanic = bashPPPanicState{}
+	child.bashPPDeferDepth = 0
+
+	// The ordinary subshell copy aliases *os.File pointers. Tasks instead own
+	// dup'd descriptors: aliases in the virtual fd tables stay aliases of one
+	// duplicate, while the kernel open description (and therefore offset) is
+	// shared with the owner. Closing a task descriptor cannot close the owner.
+	dups := make(map[*os.File]*os.File)
+	dup := func(f *os.File) (*os.File, error) {
+		if f == nil {
+			return nil, nil
+		}
+		if done := dups[f]; done != nil {
+			return done, nil
+		}
+		copy, owned, err := dupPipeFd(f)
+		if err != nil {
+			return nil, err
+		}
+		if !owned && copy == f {
+			return nil, fmt.Errorf("platform cannot duplicate task descriptor %s", f.Name())
+		}
+		dups[f] = copy
+		if owned {
+			child.bashPPTaskFiles = append(child.bashPPTaskFiles, copy)
+		}
+		return copy, nil
+	}
+	var err error
+	if child.stdin, err = dup(r.stdin); err != nil {
+		return child, err
+	}
+	if f, ok := r.stdout.(*os.File); ok {
+		if child.stdout, err = dup(f); err != nil {
+			return child, err
+		}
+	}
+	if f, ok := r.stderr.(*os.File); ok {
+		if child.stderr, err = dup(f); err != nil {
+			return child, err
+		}
+	}
+	for fd, f := range r.fdTable {
+		if child.fdTable[fd], err = dup(f); err != nil {
+			return child, err
+		}
+	}
+	for fd, w := range r.fdWriteTable {
+		if f, ok := w.(*os.File); ok {
+			if child.fdWriteTable[fd], err = dup(f); err != nil {
+				return child, err
+			}
+		}
+	}
+	// newOverlayEnviron's background snapshot is shallow for compatibility;
+	// Bash++ tasks require deep mutable-value isolation.
+	child.writeEnv = &overlayEnviron{}
+	objects := newBashPPObjectCloner()
+	for name, vr := range r.writeEnv.Each {
+		copy, err := cloneBashPPTaskVariable(vr, objects)
+		if err != nil {
+			return child, fmt.Errorf("variable %s: %w", name, err)
+		}
+		_ = child.writeEnv.Set(name, copy)
+	}
+	if err := cloneBashPPTaskCells(child, objects); err != nil {
+		return child, err
+	}
+	for name, typ := range child.bashPPTypes {
+		typ.members = append([]string(nil), typ.members...)
+		child.bashPPTypes[name] = typ
+	}
+	child.fillExpandConfig(r.ectx)
+	return child, nil
+}
+
+func (r *Runner) closeBashPPTaskResources() {
+	r.stopSignalSubscriptions()
+	for _, file := range r.bashPPTaskFiles {
+		_ = file.Close()
+	}
+	r.bashPPTaskFiles = nil
+	r.closeDirFile()
+}
+
+func cloneStringMap(src map[string]string) map[string]string {
+	dst := make(map[string]string, len(src))
+	for key, value := range src {
+		dst[key] = value
+	}
+	return dst
 }
 
 func (r *Runner) bashPPGo(ctx context.Context, g *syntax.BashPPGo) {
 	if g.Call == nil {
 		return
 	}
+	if !r.bashPPFileRun {
+		r.errf("bash++: go requires an owning File Run\n")
+		r.exit.code = 2
+		return
+	}
 	c := r.bashPPConcurrency(ctx)
-	if !c.add() {
+	state, ok := c.add()
+	if !ok {
 		r.errf("bash++: cannot start task after task group quiesced\n")
 		r.exit.code = 1
 		return
 	}
-	child := r.bashPPTaskSnapshot()
+	ordinal := state.ordinal
+	child, err := r.bashPPTaskSnapshot(ordinal)
+	if err != nil {
+		if child != nil {
+			child.closeBashPPTaskResources()
+		}
+		c.done(ordinal, &bashPPTaskFailure{ordinal: ordinal, code: 2, text: fmt.Sprintf("task snapshot: %v", err)})
+		return
+	}
+	child.bashPPTaskState = state
 	go func() {
 		var failure *bashPPTaskFailure
 		defer func() {
 			if x := recover(); x != nil {
-				failure = &bashPPTaskFailure{code: 2, text: fmt.Sprintf("panic: %v", x)}
+				failure = &bashPPTaskFailure{ordinal: ordinal, code: 2, text: fmt.Sprintf("panic: %v", x)}
 			}
-			child.stopSignalSubscriptions()
-			if child.dirFile != nil {
-				_ = child.dirFile.Close()
-				child.dirFile = nil
-			}
-			c.done(failure)
+			child.closeBashPPTaskResources()
+			c.done(ordinal, failure)
 		}()
 		child.bashPPCall(c.ctx, g.Call)
-		if child.exit.code != 0 {
-			failure = &bashPPTaskFailure{code: child.exit.code, text: fmt.Sprintf("exit status %d", child.exit.code)}
+		code := child.exit.code
+		if child.bashPPTaskCanceled && child.bashPPTaskFailed {
+			code = child.bashPPTaskFailCode
+		}
+		if code != 0 && child.trapCallbacks["ERR"] != "" {
+			child.trapCallback(c.ctx, child.trapCallbacks["ERR"], "error")
+		}
+		canceled := !child.bashPPTaskFailed && (child.bashPPTaskCanceled || errors.Is(child.exit.err, context.Canceled) || errors.Is(child.exit.err, context.DeadlineExceeded))
+		if code != 0 && !canceled {
+			failure = &bashPPTaskFailure{ordinal: ordinal, code: code, text: fmt.Sprintf("exit status %d", code)}
 		}
 	}()
 }
@@ -275,15 +641,13 @@ func (r *Runner) bashPPWait(ctx context.Context) {
 		c.cancel()
 	}
 	c.mu.Lock()
+	c.sealed = true
+	c.maybeCancelLocked()
 	for c.active != 0 {
 		c.changed.Wait()
 	}
 	c.quiesced = true
-	var failure *bashPPTaskFailure
-	if c.first != nil {
-		copy := *c.first
-		failure = &copy
-	}
+	failure := c.primaryFailureLocked()
 	c.mu.Unlock()
 	if failure != nil {
 		r.errf("bash++: task failed: %s\n", failure.text)
@@ -361,8 +725,12 @@ func (r *Runner) bashPPSelect(ctx context.Context, s *syntax.BashPPSelect) {
 			r.exit.code = 2
 		}
 	}()
+	if r.bashPPConcurrent != nil {
+		r.bashPPConcurrent.arm(r.bashPPTaskState)
+	}
 	i, v, open := reflect.Select(cases)
 	if def == nil && i == len(arms) {
+		r.bashPPTaskCanceled = true
 		r.exit.code = 1
 		return
 	}
@@ -392,6 +760,9 @@ func (r *Runner) bashPPRange(ctx context.Context, rng *syntax.BashPPRange) {
 	if !ok {
 		return
 	}
+	if r.bashPPConcurrent != nil {
+		r.bashPPConcurrent.arm(r.bashPPTaskState)
+	}
 	for {
 		select {
 		case v, open := <-c.ch:
@@ -408,12 +779,20 @@ func (r *Runner) bashPPRange(ctx context.Context, rng *syntax.BashPPRange) {
 				return
 			}
 		case <-r.bashPPTaskContext(ctx).Done():
+			r.bashPPTaskCanceled = true
 			r.exit.code = 1
 			return
 		}
 	}
 }
 
-func bashPPHasRuntimeHandle(value string) bool {
-	return strings.HasPrefix(value, bashPPChanHandlePrefix)
+func (r *Runner) bashPPHasRuntimeHandle(value string) bool {
+	c := r.bashPPConcurrent
+	if c == nil {
+		return false
+	}
+	c.mu.Lock()
+	_, ok := c.chans[value]
+	c.mu.Unlock()
+	return ok
 }

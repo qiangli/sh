@@ -185,6 +185,29 @@ func (c *bashPPCloner) cloneCell(cell *bashPPCell) *bashPPCell {
 	return copied
 }
 
+func cloneBashPPVariable(vr expand.Variable) expand.Variable {
+	vr.List = append([]string(nil), vr.List...)
+	if vr.ListMap != nil {
+		vr.ListMap = make(map[int]string, len(vr.ListMap))
+		for key, value := range vr.ListMap {
+			vr.ListMap[key] = value
+		}
+	}
+	if vr.ListSet != nil {
+		vr.ListSet = make(map[int]bool, len(vr.ListSet))
+		for key, value := range vr.ListSet {
+			vr.ListSet[key] = value
+		}
+	}
+	if vr.Map != nil {
+		vr.Map = make(map[string]string, len(vr.Map))
+		for key, value := range vr.Map {
+			vr.Map[key] = value
+		}
+	}
+	return vr
+}
+
 // bashPPPushScope enters a new lexical block, returning the function that
 // leaves it. Callers defer the result; the pair must bracket the block's
 // statements and nothing else.

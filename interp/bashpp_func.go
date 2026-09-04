@@ -1235,15 +1235,59 @@ func (r *Runner) bashPPCheckArgs(fn *bashPPFunc, params []bashPPParam, args []st
 // the phase has no way to construct an opinion about. An untyped parameter
 // (`func f(v)`) declares nothing and so admits everything.
 func (r *Runner) bashPPValueFits(declared, value string) bool {
+	if typ, ok := r.bashPPTypes[declared]; ok {
+		if typ.underlying == "enum" {
+			for _, member := range typ.members {
+				if value == member {
+					return true
+				}
+			}
+			return false
+		}
+		declared = typ.underlying
+	}
 	switch declared {
-	case "int", "int8", "int16", "int32", "int64":
+	case "int":
+		_, err := strconv.ParseInt(value, 10, strconv.IntSize)
+		return err == nil
+	case "int8":
+		_, err := strconv.ParseInt(value, 10, 8)
+		return err == nil
+	case "int16":
+		_, err := strconv.ParseInt(value, 10, 16)
+		return err == nil
+	case "int32", "rune":
+		_, err := strconv.ParseInt(value, 10, 32)
+		return err == nil
+	case "int64":
 		_, err := strconv.ParseInt(value, 10, 64)
 		return err == nil
-	case "uint", "uint8", "uint16", "uint32", "uint64", "uintptr":
+	case "uint", "uintptr":
+		_, err := strconv.ParseUint(value, 10, strconv.IntSize)
+		return err == nil
+	case "uint8", "byte":
+		_, err := strconv.ParseUint(value, 10, 8)
+		return err == nil
+	case "uint16":
+		_, err := strconv.ParseUint(value, 10, 16)
+		return err == nil
+	case "uint32":
+		_, err := strconv.ParseUint(value, 10, 32)
+		return err == nil
+	case "uint64":
 		_, err := strconv.ParseUint(value, 10, 64)
 		return err == nil
-	case "float32", "float64":
+	case "float32":
+		_, err := strconv.ParseFloat(value, 32)
+		return err == nil
+	case "float64":
 		_, err := strconv.ParseFloat(value, 64)
+		return err == nil
+	case "complex64":
+		_, err := strconv.ParseComplex(value, 64)
+		return err == nil
+	case "complex128":
+		_, err := strconv.ParseComplex(value, 128)
 		return err == nil
 	case "bool":
 		return value == "true" || value == "false"

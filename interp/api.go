@@ -153,6 +153,12 @@ type Runner struct {
 	bashPPConcurrent   *bashPPConcurrent
 	bashPPGoTask       bool
 	bashPPChanBoundary bool
+	bashPPFileRun      bool
+	bashPPTaskFiles    []*os.File
+	bashPPTaskState    *bashPPTaskState
+	bashPPTaskCanceled bool
+	bashPPTaskFailed   bool
+	bashPPTaskFailCode uint8
 
 	// funcSources records the script name active when a function was
 	// defined. Bash reports runtime diagnostics in a function body against
@@ -2943,6 +2949,8 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 	runExitTrap := false
 	switch node := node.(type) {
 	case *syntax.File:
+		r.bashPPFileRun = true
+		defer func() { r.bashPPFileRun = false }()
 		r.filename = node.Name
 		if r.stdinSourceEligible() && node.Name == "" && len(r.bashSource) > 0 {
 			r.stdinSourceActive = true

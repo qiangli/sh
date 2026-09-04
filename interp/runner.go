@@ -4498,7 +4498,10 @@ func (r *Runner) stop(ctx context.Context) bool {
 	if !r.handlingTrap && r.exit.exiting {
 		return true
 	}
-	if err := ctx.Err(); err != nil {
+	if err := ctx.Err(); err != nil && !(r.bashPPGoTask && r.bashPPConcurrent != nil && !r.bashPPConcurrent.armed(r.bashPPTaskState)) {
+		if r.bashPPGoTask {
+			r.bashPPTaskCanceled = true
+		}
 		r.exit.fatal(err)
 		return true
 	}
@@ -5351,6 +5354,18 @@ func (r *Runner) commandPrefixDeclArgs(args []*syntax.Word) (string, []string, b
 func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 	if r.stop(ctx) {
 		return
+	}
+	if r.bashPPGoTask {
+		defer func() {
+			canceled := r.bashPPTaskCanceled || errors.Is(r.exit.err, context.Canceled) || errors.Is(r.exit.err, context.DeadlineExceeded)
+			if !canceled {
+				r.bashPPTaskFailed = r.exit.code != 0
+				r.bashPPTaskFailCode = r.exit.code
+			}
+			if r.bashPPConcurrent != nil {
+				r.bashPPConcurrent.arm(r.bashPPTaskState)
+			}
+		}()
 	}
 
 	tracingEnabled := r.opts[optXTrace]
@@ -10811,19 +10826,22 @@ func (r *Runner) execAs(ctx context.Context, pos syntax.Pos, argv0 string, clear
 	}
 	if r.bashPPConcurrent != nil {
 		for _, arg := range args {
-			if bashPPHasRuntimeHandle(arg) {
+			if r.bashPPHasRuntimeHandle(arg) {
 				r.errf("bash++: channel handles cannot cross an exec boundary\n")
 				r.exit.code = 2
 				return
 			}
 		}
 		for _, vr := range r.bashPPEnv().Each {
-			if vr.Exported && bashPPHasRuntimeHandle(vr.String()) {
+			if vr.Exported && r.bashPPHasRuntimeHandle(vr.String()) {
 				r.errf("bash++: channel handles cannot cross an exec boundary\n")
 				r.exit.code = 2
 				return
 			}
 		}
+	}
+	if r.bashPPGoTask && r.bashPPConcurrent != nil {
+		r.bashPPConcurrent.arm(r.bashPPTaskState)
 	}
 	hctx := r.handlerCtx(ctx, handlerKindExec, pos)
 	if argv0 != "" {
@@ -10836,7 +10854,7 @@ func (r *Runner) execAs(ctx context.Context, pos syntax.Pos, argv0 string, clear
 		hc.ExecClearEnv = true
 		hctx = context.WithValue(hctx, handlerCtxKey{}, hc)
 	}
-	if replace && r.subshellLevel == 0 {
+	if replace && r.subshellLevel == 0 && !r.bashPPGoTask {
 		hc := HandlerCtx(hctx)
 		hc.ExecReplace = true
 		hctx = context.WithValue(hctx, handlerCtxKey{}, hc)

@@ -1610,6 +1610,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			r.removeJob(bg)
 		}
 	case "kill":
+		if r.bashPPGoTask {
+			failed := failf(2, "kill: process signals are unavailable inside a Bash++ task\n")
+			failed.exiting = true
+			return failed
+		}
 		// Bash kill accepts: `-l [signum|name…]`, `-s NAME pid…`, `-n NUM
 		// pid…`, `-NAME pid…`, `-NUM pid…`, and `pid…` (default SIGTERM).
 		// Job specs (`%1`) aren't supported because the in-process runner
