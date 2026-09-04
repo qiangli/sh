@@ -102,13 +102,25 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 				seen[member.Value] = true
 			}
 		} else {
-			base := strings.TrimPrefix(d.DeclType.Value, "*")
-			if base == name {
+			spelling := d.DeclType.Value
+			base := strings.TrimPrefix(spelling, "*")
+			// Go admits direct recursion only through indirection. A defined
+			// pointer type (`type Node *Node`) has finite representation; an
+			// alias or value cycle would require itself as its own underlying
+			// value and is rejected.
+			if base == name && (!strings.HasPrefix(spelling, "*") || d.Alias) {
 				r.errf("%scyclic type declaration: %s\n", r.bashErrPrefix(d.Pos()), name)
 				r.exit = exitStatus{code: 2}
 				return
 			}
-			if _, ok := r.bashPPTypes[base]; !ok && !bashPPBuiltinType(base) {
+			if base != name {
+				if _, ok := r.bashPPTypes[base]; !ok && !bashPPBuiltinType(base) {
+					r.errf("%sundefined type: %s\n", r.bashErrPrefix(d.Pos()), base)
+					r.exit = exitStatus{code: 2}
+					return
+				}
+			}
+			if base != name && !r.bashPPTypeTerminates(base, make(map[string]bool)) {
 				r.errf("%sundefined type: %s\n", r.bashErrPrefix(d.Pos()), base)
 				r.exit = exitStatus{code: 2}
 				return
@@ -160,6 +172,29 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 			cell.nilPointer = pointer && len(d.Init) == 0
 		}
 	}
+}
+
+// bashPPTypeTerminates validates the entire already-declared underlying chain.
+// This is defensive as declarations normally establish the invariant one by
+// one, but imported/retained registries must not smuggle a missing or cyclic
+// alias into a new declaration.
+func (r *Runner) bashPPTypeTerminates(name string, seen map[string]bool) bool {
+	if bashPPBuiltinType(name) || name == "enum" {
+		return true
+	}
+	if seen[name] {
+		return false
+	}
+	typ, ok := r.bashPPTypes[name]
+	if !ok {
+		return false
+	}
+	seen[name] = true
+	base := strings.TrimPrefix(typ.underlying, "*")
+	if base == name {
+		return strings.HasPrefix(typ.underlying, "*") && !typ.alias
+	}
+	return r.bashPPTypeTerminates(base, seen)
 }
 
 func bashPPBuiltinType(name string) bool {

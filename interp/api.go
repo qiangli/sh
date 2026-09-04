@@ -161,6 +161,7 @@ type Runner struct {
 	bashPPTaskCanceled  bool
 	bashPPTaskFailed    bool
 	bashPPTaskFailCode  uint8
+	bashPPLogicalDepth  int
 
 	// funcSources records the script name active when a function was
 	// defined. Bash reports runtime diagnostics in a function body against

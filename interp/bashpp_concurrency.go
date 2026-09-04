@@ -245,6 +245,7 @@ type bashPPConcurrent struct {
 	tasks      map[uint64]*bashPPTaskState
 	chans      map[string]*bashPPChannel
 	ioMu       sync.Mutex
+	logicalMu  sync.Mutex
 	observerMu sync.Mutex
 }
 
@@ -305,6 +306,26 @@ func (r *Runner) bashPPObserve(fn func()) {
 	r.bashPPConcurrent.observerMu.Lock()
 	defer r.bashPPConcurrent.observerMu.Unlock()
 	fn()
+}
+
+// bashPPLockLogicalOutput keeps a builtin's complete logical record atomic.
+// The writer facade protects memory safety per Write; commands such as echo
+// intentionally issue separate writes for operands and the newline, so they
+// need this outer, distinct mutex as well. A depth counter makes `builtin
+// echo`/`command echo` re-entry safe without making the mutex recursive.
+func (r *Runner) bashPPLockLogicalOutput(name string) func() {
+	if r.bashPPConcurrent == nil || (name != "echo" && name != "printf") {
+		return func() {}
+	}
+	r.bashPPLogicalDepth++
+	if r.bashPPLogicalDepth > 1 {
+		return func() { r.bashPPLogicalDepth-- }
+	}
+	r.bashPPConcurrent.logicalMu.Lock()
+	return func() {
+		r.bashPPLogicalDepth--
+		r.bashPPConcurrent.logicalMu.Unlock()
+	}
 }
 
 var bashPPConcurrencyInitMu sync.Mutex
@@ -420,6 +441,30 @@ func (r *Runner) bashPPTaskContext(ctx context.Context) context.Context {
 	return ctx
 }
 
+// bashPPArmBeforeBlock is the single launch-handshake transition for semantic
+// operations which may block. It checks cancellation on both sides of arm:
+// the first check prevents already-cancelled work, while the recheck closes
+// the race where cancellation and launcher release happen together.
+func (r *Runner) bashPPArmBeforeBlock(ctx context.Context) bool {
+	if !r.bashPPGoTask || r.bashPPConcurrent == nil {
+		return true
+	}
+	taskCtx := r.bashPPTaskContext(ctx)
+	if err := taskCtx.Err(); err != nil {
+		r.bashPPTaskCanceled = true
+		r.exit.fatal(err)
+		r.bashPPConcurrent.arm(r.bashPPTaskState)
+		return false
+	}
+	r.bashPPConcurrent.arm(r.bashPPTaskState)
+	if err := taskCtx.Err(); err != nil {
+		r.bashPPTaskCanceled = true
+		r.exit.fatal(err)
+		return false
+	}
+	return true
+}
+
 func (r *Runner) bashPPChannel(w *syntax.Word) (*bashPPChannel, bool) {
 	name := r.literal(w)
 	if r.bashPPConcurrent == nil {
@@ -497,8 +542,8 @@ func (r *Runner) bashPPSend(ctx context.Context, s *syntax.BashPPSend) {
 		r.exit.code = 2
 		return
 	}
-	if r.bashPPConcurrent != nil {
-		r.bashPPConcurrent.arm(r.bashPPTaskState)
+	if !r.bashPPArmBeforeBlock(ctx) {
+		return
 	}
 	if !c.beginSend() {
 		r.errf("bash++: send on closed channel\n")
@@ -522,8 +567,8 @@ func (r *Runner) bashPPReceive(ctx context.Context, recv *syntax.BashPPReceive, 
 	if !ok {
 		return "", false
 	}
-	if r.bashPPConcurrent != nil {
-		r.bashPPConcurrent.arm(r.bashPPTaskState)
+	if !r.bashPPArmBeforeBlock(ctx) {
+		return "", false
 	}
 	var v string
 	var open bool
@@ -828,7 +873,11 @@ func (r *Runner) bashPPGo(ctx context.Context, g *syntax.BashPPGo) {
 
 func (r *Runner) bashPPWait(ctx context.Context) {
 	c := r.bashPPConcurrent
-	if c == nil || r.bashPPGoTask {
+	if r.bashPPGoTask {
+		return
+	}
+	if c == nil {
+		r.bashPPPruneIssuedHandles(nil)
 		return
 	}
 	// EOF is the structured lifetime boundary. Successful blocked tasks must
@@ -840,32 +889,9 @@ func (r *Runner) bashPPWait(ctx context.Context) {
 	}
 	c.quiesced = true
 	failure := c.primaryFailureLocked()
-	if r.bashPPIssuedHandles == nil {
-		r.bashPPIssuedHandles = &bashPPHandleProvenance{}
-	}
-	p := r.bashPPIssuedHandles
-	p.mu.Lock()
-	candidates := make(map[string]struct{}, len(p.handles)+len(c.chans))
-	for handle := range p.handles {
-		candidates[handle] = struct{}{}
-	}
-	for handle := range c.chans {
-		candidates[handle] = struct{}{}
-	}
-	// Rebuild rather than append: a handle is remembered only while an exact
-	// issued token remains reachable from the persistent environment.
-	retained := make(map[string]struct{})
-	for _, vr := range r.bashPPEnv().Each {
-		value := vr.String()
-		for handle := range candidates {
-			if strings.Contains(value, handle) {
-				retained[handle] = struct{}{}
-			}
-		}
-	}
-	p.handles = retained
-	p.mu.Unlock()
 	c.mu.Unlock()
+	r.bashPPPruneIssuedHandles(c)
+	r.bashPPClearChannelRefs(c)
 	if failure != nil {
 		r.errf("bash++: task failed: %s\n", failure.text)
 		if r.exit.code == 0 {
@@ -876,6 +902,100 @@ func (r *Runner) bashPPWait(ctx context.Context) {
 	// Handles left in persistent shell variables consequently become invalid
 	// capabilities rather than aliases into stale channel state.
 	r.bashPPConcurrent = nil
+}
+
+func (r *Runner) bashPPPruneIssuedHandles(c *bashPPConcurrent) {
+	p := r.bashPPIssuedHandles
+	if p == nil && c == nil {
+		return
+	}
+	if p == nil {
+		p = &bashPPHandleProvenance{}
+		r.bashPPIssuedHandles = p
+	}
+	p.mu.Lock()
+	candidates := make(map[string]struct{}, len(p.handles))
+	for handle := range p.handles {
+		candidates[handle] = struct{}{}
+	}
+	if c != nil {
+		c.mu.Lock()
+		for handle := range c.chans {
+			candidates[handle] = struct{}{}
+		}
+		c.mu.Unlock()
+	}
+	retained := make(map[string]struct{})
+	for _, vr := range r.bashPPEnv().Each {
+		for handle := range candidates {
+			if variableContainsString(vr, handle) {
+				retained[handle] = struct{}{}
+			}
+		}
+	}
+	p.handles = retained
+	p.mu.Unlock()
+}
+
+func variableContainsString(vr expand.Variable, needle string) bool {
+	if strings.Contains(vr.Str, needle) {
+		return true
+	}
+	for _, value := range vr.List {
+		if strings.Contains(value, needle) {
+			return true
+		}
+	}
+	for _, value := range vr.ListMap {
+		if strings.Contains(value, needle) {
+			return true
+		}
+	}
+	for key, value := range vr.Map {
+		if strings.Contains(key, needle) || strings.Contains(value, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+// Persistent closures retain lexical cells across Files. Revoke the completed
+// group's capabilities without disturbing any other captured state.
+func (r *Runner) bashPPClearChannelRefs(owner *bashPPConcurrent) {
+	seenScopes := make(map[*bashPPScope]bool)
+	seenCells := make(map[*bashPPCell]bool)
+	var visit func(*bashPPScope)
+	visit = func(scope *bashPPScope) {
+		if scope == nil || seenScopes[scope] {
+			return
+		}
+		seenScopes[scope] = true
+		visit(scope.parent)
+		for _, cell := range scope.entries {
+			if seenCells[cell] {
+				continue
+			}
+			seenCells[cell] = true
+			if cell.channelOwner == owner {
+				cell.channel, cell.channelOwner = nil, nil
+			}
+		}
+	}
+	visit(r.bashPPScope)
+	for _, scope := range r.bashPPFuncScopes {
+		visit(scope)
+	}
+	for _, fn := range r.bashPPFuncs {
+		visit(fn.scope)
+	}
+	for _, methods := range r.bashPPMethods {
+		for _, fn := range methods {
+			visit(fn.scope)
+		}
+	}
+	for _, fn := range r.bashPPClosures {
+		visit(fn.scope)
+	}
 }
 
 func (r *Runner) bashPPSelect(ctx context.Context, s *syntax.BashPPSelect) {
@@ -967,8 +1087,8 @@ func (r *Runner) bashPPSelect(ctx context.Context, s *syntax.BashPPSelect) {
 		r.exit.code = 1
 		return
 	}
-	if r.bashPPConcurrent != nil {
-		r.bashPPConcurrent.arm(r.bashPPTaskState)
+	if !r.bashPPArmBeforeBlock(ctx) {
+		return
 	}
 	i, v, open := reflect.Select(cases)
 	releaseSends()
@@ -1009,8 +1129,8 @@ func (r *Runner) bashPPRange(ctx context.Context, rng *syntax.BashPPRange) {
 	if !ok {
 		return
 	}
-	if r.bashPPConcurrent != nil {
-		r.bashPPConcurrent.arm(r.bashPPTaskState)
+	if !r.bashPPArmBeforeBlock(ctx) {
+		return
 	}
 	for {
 		select {

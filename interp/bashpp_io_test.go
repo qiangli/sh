@@ -193,3 +193,36 @@ func TestBashPPObserverCallbacksSerialized(t *testing.T) {
 		t.Fatal("observer callbacks overlapped")
 	}
 }
+
+func TestBashPPConcurrentEchoLogicalLinesAtomic(t *testing.T) {
+	w := new(overlapWriter)
+	err := runBashPPIO(t, w, `
+func line(start, ack, value) {
+ <-start
+ echo "$value" "$value" "$value" "$value"
+ ack <- ok
+}
+func main() {
+ start := make(chan string, 16); ack := make(chan string, 16)
+ go line(start, ack, a); go line(start, ack, b); go line(start, ack, c); go line(start, ack, d)
+ start <- x; start <- x; start <- x; start <- x
+ <-ack; <-ack; <-ack; <-ack
+}
+main()
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.mu.Lock()
+	output := w.buf.String()
+	w.mu.Unlock()
+	lines := strings.Fields(strings.TrimSpace(output))
+	if len(lines) != 16 {
+		t.Fatalf("fragmented output %q", output)
+	}
+	for i := 0; i < len(lines); i += 4 {
+		if lines[i] != lines[i+1] || lines[i] != lines[i+2] || lines[i] != lines[i+3] {
+			t.Fatalf("logical echo line interleaved: %q", output)
+		}
+	}
+}

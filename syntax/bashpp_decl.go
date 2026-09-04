@@ -178,7 +178,11 @@ func bashppTypeDecl(ce *CallExpr, redirs []*Redirect) *BashPPDecl {
 	}
 	typ := bashppBareLit(typeWord)
 	if typ == nil || !bashppIsIdent(typ.Value) {
-		return nil
+		text := bashppWordText(typeWord)
+		if !strings.HasPrefix(text, "*") || !bashppIsIdent(strings.TrimPrefix(text, "*")) {
+			return nil
+		}
+		typ = &Lit{ValuePos: typeWord.Pos(), ValueEnd: typeWord.End(), Value: text}
 	}
 	m := RecognizeStartSite(kw.Value + " " + name.Value)
 	if m.Site != StartTypeDecl {

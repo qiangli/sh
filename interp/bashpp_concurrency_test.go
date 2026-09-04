@@ -728,3 +728,147 @@ func TestBashPPTypeAliasChainsAndInvalidUnderlying(t *testing.T) {
 		t.Fatal("alias chain validation did not reach underlying type")
 	}
 }
+
+func TestBashPPRecursivePointerTypeAndAliasCycle(t *testing.T) {
+	if out, err := runBashPPConcurrency(t, `type Node *Node`); err != nil {
+		t.Fatalf("defined pointer recursion rejected: out=%q err=%v", out, err)
+	}
+	out, err := runBashPPConcurrency(t, `type Loop = *Loop`)
+	if err == nil || !strings.Contains(out, "cyclic type declaration: Loop") {
+		t.Fatalf("alias pointer cycle accepted: out=%q err=%v", out, err)
+	}
+}
+
+func TestBashPPMapfileCancellationUnblocksTask(t *testing.T) {
+	read, write, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer write.Close()
+	var out strings.Builder
+	r, err := New(Lang(syntax.LangBashPP), StdIO(read, &out, &out))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer read.Close()
+	f, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(`
+func blocked() { mapfile values; }
+func fail() { return 7; }
+func main() { go blocked(); go fail(); }
+main()
+`), "mapfile-cancel.bpp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	err = r.Run(ctx, f)
+	if err == nil || !strings.Contains(out.String(), "blocking non-regular input is unavailable") || ctx.Err() != nil {
+		t.Fatalf("out=%q err=%v ctx=%v", out.String(), err, ctx.Err())
+	}
+}
+
+func TestBashPPFileBoundaryPrunesHistoryAndClosureChannels(t *testing.T) {
+	r, err := New(Lang(syntax.LangBashPP))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Reset()
+	c := newBashPPConcurrent(context.Background())
+	defer c.cancel()
+	handle := bashPPChanHandlePrefix + "retained"
+	r.bashPPIssuedHandles = &bashPPHandleProvenance{handles: map[string]struct{}{handle: {}}}
+	r.bashPPConcurrent = c
+	scope := newBashPPScope(nil)
+	cell := &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: handle}, channel: newBashPPChannel("string", 0), channelOwner: c}
+	scope.entries["saved"] = cell
+	r.bashPPFuncScopes = map[string]*bashPPScope{"saved": scope}
+	r.bashPPClearChannelRefs(c)
+	if cell.channel != nil || cell.channelOwner != nil || cell.vr.Str != handle {
+		t.Fatalf("channel authority not selectively revoked: %#v", cell)
+	}
+	r.bashPPConcurrent = nil
+	r.bashPPPruneIssuedHandles(nil)
+	if len(r.bashPPIssuedHandles.handles) != 0 {
+		t.Fatalf("unreachable defense history retained: %#v", r.bashPPIssuedHandles.handles)
+	}
+}
+
+func TestBashPPFileRunPrunesClearedPersistentHandle(t *testing.T) {
+	var out strings.Builder
+	r, err := New(Lang(syntax.LangBashPP), StdIO(nil, &out, &out))
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := func(src string) error {
+		f, parseErr := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(src), "boundary.bpp")
+		if parseErr != nil {
+			t.Fatal(parseErr)
+		}
+		return r.Run(context.Background(), f)
+	}
+	if err := run(`func main() { ch := make(chan string); saved=$ch; }; main()`); err != nil {
+		t.Fatal(err)
+	}
+	if r.bashPPIssuedHandles == nil || len(r.bashPPIssuedHandles.handles) == 0 {
+		t.Fatal("issued handle was not retained while reachable")
+	}
+	if err := run(`unset saved`); err != nil {
+		t.Fatal(err)
+	}
+	if len(r.bashPPIssuedHandles.handles) != 0 {
+		t.Fatalf("cleared handle history retained: %#v", r.bashPPIssuedHandles.handles)
+	}
+	if err := run(`/usr/bin/true`); err != nil {
+		t.Fatalf("stale history falsely refused later exec: %v output=%q", err, out.String())
+	}
+}
+
+func TestBashPPFileRunRevokesCapturedFunctionChannel(t *testing.T) {
+	r, err := New(Lang(syntax.LangBashPP))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(`
+func main() {
+ ch := make(chan string)
+ var marker = 7
+ func retained() { ch <- held; echo "$marker"; }
+}
+main()
+`), "captured-channel.bpp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Run(context.Background(), f); err != nil {
+		t.Fatal(err)
+	}
+	fn := r.bashPPFuncs["retained"]
+	if fn == nil || fn.scope == nil {
+		t.Fatal("captured function did not persist")
+	}
+	channelCell := fn.scope.lookup("ch")
+	markerCell := fn.scope.lookup("marker")
+	if channelCell == nil || channelCell.channel != nil || channelCell.channelOwner != nil {
+		t.Fatalf("captured channel authority survived File boundary: %#v", channelCell)
+	}
+	if markerCell == nil || markerCell.vr.Str != "7" {
+		t.Fatalf("unrelated captured lexical state changed: %#v", markerCell)
+	}
+}
+
+func TestBashPPRegularSourcePreservesFailureHandshake(t *testing.T) {
+	path := t.TempDir() + "/failure.bpp"
+	if err := os.WriteFile(path, []byte("return 7\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runBashPPConcurrency(t, `
+func load() { source `+path+`; }
+func later() { echo escaped; }
+func main() { go load(); go later(); }
+main()
+`)
+	if err == nil || strings.Contains(out, "escaped") || !strings.Contains(out, "exit status 7") {
+		t.Fatalf("regular source released handshake before sourced failure: out=%q err=%v", out, err)
+	}
+}

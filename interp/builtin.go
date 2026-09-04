@@ -590,9 +590,12 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 	// These builtins can wait on context-aware I/O or child state. Announce the
 	// blocking edge before entering it so the `go` launch handshake cannot
 	// deadlock an owner whose next statement supplies the wakeup or failure.
-	if r.bashPPGoTask && r.bashPPConcurrent != nil && (name == "read" || name == "wait") {
-		r.bashPPConcurrent.arm(r.bashPPTaskState)
+	if name == "read" || name == "wait" || name == "mapfile" || name == "readarray" {
+		if !r.bashPPArmBeforeBlock(ctx) {
+			return r.exit
+		}
 	}
+	defer r.bashPPLockLogicalOutput(name)()
 	// Bash fails a builtin whose standard-output write fails on a closed or
 	// broken descriptor (`echo >&-`, `printf x >&-`): it reports a write
 	// error and exits non-zero rather than silently succeeding. Track writes
@@ -2788,6 +2791,17 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			}
 			path = args[0]
 		}
+		if r.bashPPGoTask {
+			// Opening a FIFO has no context-aware portable primitive. A task
+			// must never enter an uninterruptible open which can strand the
+			// File join after sibling cancellation, so fail closed before open.
+			if info, statErr := r.stat(ctx, path); statErr == nil && !info.Mode().IsRegular() {
+				if info.Mode()&os.ModeNamedPipe != 0 {
+					return failf(2, "source: FIFO input is unavailable inside a Bash++ task\n")
+				}
+				return failf(2, "source: non-regular input is unavailable inside a Bash++ task\n")
+			}
+		}
 		// In bash-compat mode, let r.open print its own bash-shaped
 		// `<file>: line N: <path>: No such file or directory` line and
 		// avoid stacking a redundant `source: ` prefix on top. Outside
@@ -4867,10 +4881,25 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			src = f
 		}
 		var newLines []string
+		if r.bashPPGoTask {
+			file, ok := src.(*os.File)
+			if !ok {
+				return failf(2, "%s: blocking non-file input is unavailable inside a Bash++ task\n", name)
+			}
+			info, statErr := file.Stat()
+			if statErr != nil || !info.Mode().IsRegular() {
+				return failf(2, "%s: blocking non-regular input is unavailable inside a Bash++ task\n", name)
+			}
+		}
 		scanner := bufio.NewScanner(src)
 		scanner.Split(mapfileSplit(delim[0], dropDelim))
 		lineNum := 0
 		for scanner.Scan() {
+			if r.bashPPGoTask && r.bashPPTaskContext(ctx).Err() != nil {
+				r.bashPPTaskCanceled = true
+				r.exit.fatal(r.bashPPTaskContext(ctx).Err())
+				return r.exit
+			}
 			lineNum++
 			if skip > 0 && lineNum <= skip {
 				continue
@@ -4895,6 +4924,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		}
 		if err := scanner.Err(); err != nil {
 			return failf(2, "%s: unable to read, %v\n", name, err)
+		}
+		if r.bashPPGoTask && r.bashPPTaskContext(ctx).Err() != nil {
+			r.bashPPTaskCanceled = true
+			r.exit.fatal(r.bashPPTaskContext(ctx).Err())
+			return r.exit
 		}
 
 		// Merge into the existing indexed array so that entries below

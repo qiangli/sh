@@ -4897,7 +4897,9 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 			// Opening a FIFO or another context-aware redirect can block before
 			// command dispatch. Release the launch handshake before entering that
 			// path so the owner can execute the peer operation.
-			r.bashPPConcurrent.arm(r.bashPPTaskState)
+			if !r.bashPPArmBeforeBlock(ctx) {
+				return
+			}
 		}
 		oldFdTable = maps.Clone(r.fdTable)
 		oldFdReadTable = maps.Clone(r.fdReadTable)
@@ -10873,8 +10875,8 @@ func (r *Runner) execAs(ctx context.Context, pos syntax.Pos, argv0 string, clear
 			}
 		}
 	}
-	if r.bashPPGoTask && r.bashPPConcurrent != nil {
-		r.bashPPConcurrent.arm(r.bashPPTaskState)
+	if !r.bashPPArmBeforeBlock(ctx) {
+		return
 	}
 	hctx := r.handlerCtx(ctx, handlerKindExec, pos)
 	if argv0 != "" {
