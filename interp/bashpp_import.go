@@ -394,10 +394,13 @@ func bashPPGoIdentity() (bashPPGoIdentityInfo, error) {
 	if runtime.GOOS == "windows" {
 		name += ".exe"
 	}
-	bootstrap := filepath.Join(runtime.GOROOT(), "bin", name)
+	bootstrapRoot, bootstrap, err := bashPPGoBootstrap(name)
+	if err != nil {
+		return bashPPGoIdentityInfo{}, fmt.Errorf("resolve Go bootstrap: %w", err)
+	}
 	cmd := exec.Command(bootstrap, "env", "GOROOT", "GOOS", "GOARCH")
 	cmd.Env = setEnvString(os.Environ(), "GOTOOLCHAIN", "go1.27.0")
-	cmd.Env = setEnvString(cmd.Env, "GOROOT", runtime.GOROOT())
+	cmd.Env = setEnvString(cmd.Env, "GOROOT", bootstrapRoot)
 	out, err := cmd.Output()
 	if err != nil {
 		return bashPPGoIdentityInfo{}, fmt.Errorf("resolve GOTOOLCHAIN=go1.27.0: %w", err)
@@ -434,25 +437,90 @@ func bashPPGoIdentity() (bashPPGoIdentityInfo, error) {
 	if versionFields[3] != goos+"/"+goarch {
 		return bashPPGoIdentityInfo{}, fmt.Errorf("go version platform %q disagrees with go env %s/%s", versionFields[3], goos, goarch)
 	}
-	f, err := os.Open(real)
+	digest, err := bashPPGoDigest(real)
 	if err != nil {
 		return bashPPGoIdentityInfo{}, err
+	}
+	identity := bashPPGoIdentityInfo{Version: versionFields[2], GOOS: goos, GOARCH: goarch,
+		Root: root, Binary: real, SHA256: digest}
+	if err := validateBashPPGoIdentity(identity, bashPPGoReviews); err != nil {
+		return bashPPGoIdentityInfo{}, err
+	}
+	return identity, nil
+}
+
+// bashPPGoBootstrap returns an absolute Go binary without consulting PATH.
+// A -trimpath binary has no linker-recorded GOROOT, so in that case use the
+// downloaded Go 1.27 toolchain module and authenticate its reviewed payload
+// before executing it.
+func bashPPGoBootstrap(name string) (root, binary string, err error) {
+	if root = runtime.GOROOT(); root != "" {
+		root, err = filepath.Abs(root)
+		if err != nil {
+			return "", "", err
+		}
+		binary, err = filepath.Abs(filepath.Join(root, "bin", name))
+		return root, binary, err
+	}
+
+	modCache := os.Getenv("GOMODCACHE")
+	if modCache == "" {
+		if goPath := os.Getenv("GOPATH"); goPath != "" {
+			for _, entry := range filepath.SplitList(goPath) {
+				if entry != "" {
+					modCache = filepath.Join(entry, "pkg", "mod")
+					break
+				}
+			}
+		}
+	}
+	if modCache == "" {
+		home, homeErr := os.UserHomeDir()
+		if homeErr != nil {
+			return "", "", homeErr
+		}
+		modCache = filepath.Join(home, "go", "pkg", "mod")
+	}
+	if !filepath.IsAbs(modCache) {
+		return "", "", fmt.Errorf("module cache path %q is not absolute", modCache)
+	}
+	root = filepath.Join(modCache, "golang.org",
+		"toolchain@v0.0.1-go1.27.0."+runtime.GOOS+"-"+runtime.GOARCH)
+	binary, err = filepath.EvalSymlinks(filepath.Join(root, "bin", name))
+	if err != nil {
+		return "", "", err
+	}
+	binary, err = filepath.Abs(binary)
+	if err != nil {
+		return "", "", err
+	}
+	digest, err := bashPPGoDigest(binary)
+	if err != nil {
+		return "", "", err
+	}
+	identity := bashPPGoIdentityInfo{Version: "go1.27.0", GOOS: runtime.GOOS, GOARCH: runtime.GOARCH,
+		Root: root, Binary: binary, SHA256: digest}
+	if err := validateBashPPGoIdentity(identity, bashPPGoReviews); err != nil {
+		return "", "", err
+	}
+	return root, binary, nil
+}
+
+func bashPPGoDigest(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
 	}
 	h := sha256.New()
 	_, copyErr := io.Copy(h, f)
 	closeErr := f.Close()
 	if copyErr != nil {
-		return bashPPGoIdentityInfo{}, copyErr
+		return "", copyErr
 	}
 	if closeErr != nil {
-		return bashPPGoIdentityInfo{}, closeErr
+		return "", closeErr
 	}
-	identity := bashPPGoIdentityInfo{Version: versionFields[2], GOOS: goos, GOARCH: goarch,
-		Root: root, Binary: real, SHA256: fmt.Sprintf("%x", h.Sum(nil))}
-	if err := validateBashPPGoIdentity(identity, bashPPGoReviews); err != nil {
-		return bashPPGoIdentityInfo{}, err
-	}
-	return identity, nil
+	return fmt.Sprintf("%x", h.Sum(nil)), nil
 }
 
 func validateBashPPGoIdentity(got bashPPGoIdentityInfo, reviews []bashPPGoReview) error {

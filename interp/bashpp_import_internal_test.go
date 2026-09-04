@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"maps"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -298,6 +299,85 @@ func TestBashPPGoIdentityIgnoresPATH(t *testing.T) {
 	if got.Version != "go1.27.0" || got.GOOS != runtime.GOOS || got.GOARCH != runtime.GOARCH {
 		t.Fatalf("Go identity = %#v", got)
 	}
+}
+
+func TestBashPPGoIdentityWithoutRuntimeGOROOT(t *testing.T) {
+	const childEnv = "BASHPP_TEST_EMPTY_RUNTIME_GOROOT"
+	if os.Getenv(childEnv) == "1" {
+		if got := runtime.GOROOT(); got != "" {
+			t.Fatalf("runtime.GOROOT() = %q, want empty", got)
+		}
+		if pathGo, err := exec.LookPath("go"); err == nil {
+			t.Fatalf("scrubbed PATH resolved go as %q", pathGo)
+		}
+		var stdout, stderr strings.Builder
+		r, err := New(StdIO(nil, &stdout, &stderr), Lang(syntax.LangBashPP))
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = r.Run(context.Background(), parseBashPPInternal(t, `import "net/url"
+endpoint, _ := url.Parse("https://example.test/original")
+readonly endpoint
+endpoint.Host = "changed.test"
+`))
+		if stdout.String() != "" {
+			t.Fatalf("stdout = %q, want empty", stdout.String())
+		}
+		const wantStderr = "BASHPP-EREADONLY-MUTATION: cannot mutate readonly value \"endpoint\" through field .Host\n"
+		if stderr.String() != wantStderr {
+			t.Fatalf("stderr = %q, want %q", stderr.String(), wantStderr)
+		}
+		if !errors.Is(err, ExitStatus(2)) {
+			t.Fatalf("error = %v, want exit status 2", err)
+		}
+		return
+	}
+
+	if testing.Short() {
+		t.Skip("rebuilds the interp test binary with -trimpath")
+	}
+	if _, err := bashPPGoIdentity(); err != nil {
+		t.Fatalf("prepare reviewed Go toolchain: %v", err)
+	}
+	name := "go"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	_, goBinary, err := bashPPGoBootstrap(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testBinary := filepath.Join(t.TempDir(), "interp.test")
+	if runtime.GOOS == "windows" {
+		testBinary += ".exe"
+	}
+	build := exec.Command(goBinary, "test", "-c", "-trimpath", "-o", testBinary, "mvdan.cc/sh/v3/interp")
+	build.Env = append(bashPPEnvWithout(os.Environ(), "GOROOT", "GOTOOLCHAIN"), "CGO_ENABLED=0", "GOTOOLCHAIN=local")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build trimpath child: %v\n%s", err, out)
+	}
+	cmd := exec.Command(testBinary, "-test.run=^TestBashPPGoIdentityWithoutRuntimeGOROOT$")
+	cmd.Env = append(bashPPEnvWithout(os.Environ(), "GOROOT", "PATH", "GOTOOLCHAIN", "GOSH_PROG", "GOSH_CMD"),
+		childEnv+"=1", "CGO_ENABLED=0", "GOTOOLCHAIN=local", "PATH="+t.TempDir())
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("trimpath child: %v\n%s", err, out)
+	}
+}
+
+func bashPPEnvWithout(env []string, names ...string) []string {
+	remove := make(map[string]bool, len(names))
+	for _, name := range names {
+		remove[name] = true
+	}
+	out := make([]string, 0, len(env))
+	for _, entry := range env {
+		name, _, _ := strings.Cut(entry, "=")
+		if !remove[name] {
+			out = append(out, entry)
+		}
+	}
+	return out
 }
 
 func TestBashPPGoIdentityMutationRejection(t *testing.T) {
