@@ -3038,6 +3038,9 @@ func (p *Parser) gotStmtPipe(s *Stmt, binCmd bool) *Stmt {
 				p.coprocClause(s)
 			}
 		case "select":
+			if p.lang.in(LangBashPP) && p.bashppFuncDepth > 0 && p.bashppSelect(s) {
+				break
+			}
 			if p.lang.in(langBashLike | LangMirBSDKorn | LangZsh) {
 				p.selectClause(s)
 			}
@@ -4059,6 +4062,18 @@ loop:
 			p.curErr("%#q can only be used to open an arithmetic cmd", p.tok)
 		case leftParen:
 			if p.lang.in(LangBashPP) {
+				// `go` is intentionally claimed only with the call spelling.  The
+				// ordinary `go build ./...` command never reaches this branch.
+				if len(ce.Args) == 2 && bashppLitValue(ce.Args[0]) == "go" && bashppLitValue(ce.Args[1]) == "func" {
+					kw := bashppBareLit(ce.Args[0])
+					if kw != nil {
+						call := p.bashppLitCall(p.bashppFuncLit(bashppBareLit(ce.Args[1])))
+						if call != nil {
+							s.Cmd = &BashPPGo{Kw: kw, Call: call}
+							return
+						}
+					}
+				}
 				nested := len(ce.Args) > 1
 				for _, arg := range ce.Args[:len(ce.Args)-1] {
 					if arg.Lit() == ":=" || arg.Lit() == "defer" || arg.Lit() == "return" {
@@ -4068,6 +4083,12 @@ loop:
 				if nested {
 					last := ce.Args[len(ce.Args)-1]
 					if call, ok := p.bashppParenForm(&CallExpr{Args: []*Word{last}}).(*BashPPCall); ok {
+						if len(ce.Args) == 2 && bashppLitValue(ce.Args[0]) == "go" {
+							if kw := bashppBareLit(ce.Args[0]); kw != nil {
+								s.Cmd = &BashPPGo{Kw: kw, Call: call}
+								return
+							}
+						}
 						s.Cmd = &BashPPCommandCall{Before: ce.Args[:len(ce.Args)-1], Call: call}
 						return
 					}

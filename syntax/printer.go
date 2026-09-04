@@ -1638,6 +1638,49 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 		if cmd.Call != nil {
 			p.command(cmd.Call, nil)
 		}
+	case *BashPPGo:
+		p.spacedString(cmd.Kw.Value, cmd.Kw.Pos())
+		p.wantSpace = spaceRequired
+		p.command(cmd.Call, nil)
+	case *BashPPSend:
+		p.word(cmd.Chan)
+		p.writeLit(" <- ")
+		p.word(cmd.Value)
+	case *BashPPReceive:
+		p.writeLit("<-")
+		p.word(cmd.Chan)
+	case *BashPPClose:
+		p.spacedString(cmd.Kw.Value, cmd.Kw.Pos())
+		p.writeLit("(")
+		p.word(cmd.Chan)
+		p.writeLit(")")
+	case *BashPPSelect:
+		p.writeLit("select {")
+		for _, arm := range cmd.Cases {
+			p.newlines(arm.Pos())
+			if arm.Default {
+				p.writeLit("default:")
+			} else {
+				p.writeLit("case ")
+				p.command(arm.Comm, nil)
+				p.writeLit(":")
+			}
+			p.nestedStmts(arm.Stmts, arm.Last, cmd.Rbrace)
+		}
+		p.newlines(cmd.Rbrace)
+		p.writeLit("}")
+	case *BashPPRange:
+		p.writeLit("for ")
+		for i, name := range cmd.Names {
+			if i > 0 {
+				p.writeLit(", ")
+			}
+			p.writeLit(name.Value)
+		}
+		p.writeLit(" := range ")
+		p.word(cmd.Chan)
+		p.space()
+		p.command(cmd.Body, nil)
 	case *BashPPSwitch:
 		p.writeLit("switch ")
 		p.word(cmd.Expr)

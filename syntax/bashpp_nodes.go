@@ -50,6 +50,8 @@ const (
 	StartDefer     // defer f(x)
 	StartReturn    // return · return a, b (only inside a func body)
 	StartFuncLit   // func(a int) int { … }(1) — a function literal
+	StartGo        // go f() · go func() { … }()
+	StartSelect    // select { case …: …; default: … }
 )
 
 func (s StartSite) String() string {
@@ -76,6 +78,10 @@ func (s StartSite) String() string {
 		return "return"
 	case StartFuncLit:
 		return "funclit"
+	case StartGo:
+		return "go"
+	case StartSelect:
+		return "select"
 	}
 	return "none"
 }
@@ -111,6 +117,10 @@ func (s *StartSite) UnmarshalText(b []byte) error {
 		*s = StartReturn
 	case "funclit":
 		*s = StartFuncLit
+	case "go":
+		*s = StartGo
+	case "select":
+		*s = StartSelect
 	default:
 		return fmt.Errorf("unknown Bash++ start site: %q", b)
 	}
@@ -631,6 +641,119 @@ type BashPPDefer struct {
 	Call *BashPPCall // the deferred call
 }
 
+// BashPPGo is a Go-style asynchronous call. It is syntax only; execution is
+// intentionally owned by the interpreter concurrency lane.
+type BashPPGo struct {
+	Kw   *Lit
+	Call *BashPPCall
+}
+
+func (g *BashPPGo) Pos() Pos { return g.Kw.Pos() }
+func (g *BashPPGo) End() Pos {
+	if g.Call != nil {
+		return g.Call.End()
+	}
+	return g.Kw.End()
+}
+
+// BashPPChanType is the channel type spelling used by make(chan T, n).
+type BashPPChanType struct {
+	Chan Pos
+	Elem *Lit
+}
+
+func (t *BashPPChanType) Pos() Pos { return t.Chan }
+func (t *BashPPChanType) End() Pos {
+	if t.Elem != nil {
+		return t.Elem.End()
+	}
+	return posAddCol(t.Chan, 4)
+}
+
+// BashPPMakeChan records make(chan T, n), without evaluating its capacity.
+type BashPPMakeChan struct {
+	Make           *Lit
+	Type           *BashPPChanType
+	Capacity       *Word
+	Lparen, Rparen Pos
+}
+
+func (m *BashPPMakeChan) Pos() Pos { return m.Make.Pos() }
+func (m *BashPPMakeChan) End() Pos { return posAddCol(m.Rparen, 1) }
+
+// BashPPSend, BashPPReceive and BashPPClose are channel operations admitted
+// only while parsing an already committed Go region.
+type BashPPSend struct {
+	Chan  *Word
+	Arrow Pos
+	Value *Word
+}
+
+func (s *BashPPSend) Pos() Pos { return s.Chan.Pos() }
+func (s *BashPPSend) End() Pos { return s.Value.End() }
+
+type BashPPReceive struct {
+	Arrow Pos
+	Chan  *Word
+}
+
+func (r *BashPPReceive) Pos() Pos { return r.Arrow }
+func (r *BashPPReceive) End() Pos { return r.Chan.End() }
+
+type BashPPClose struct {
+	Kw   *Lit
+	Chan *Word
+}
+
+func (c *BashPPClose) Pos() Pos { return c.Kw.Pos() }
+func (c *BashPPClose) End() Pos { return c.Chan.End() }
+
+// BashPPSelect is a Go select statement and its source-order cases.
+type BashPPSelect struct {
+	Select Pos
+	Lbrace Pos
+	Cases  []*BashPPSelectCase
+	Rbrace Pos
+}
+
+func (s *BashPPSelect) Pos() Pos { return s.Select }
+func (s *BashPPSelect) End() Pos { return posAddCol(s.Rbrace, 1) }
+
+type BashPPSelectCase struct {
+	Case    Pos
+	Default bool
+	Comm    Command
+	Colon   Pos
+	Stmts   []*Stmt
+	Last    []Comment
+}
+
+func (c *BashPPSelectCase) Pos() Pos { return c.Case }
+func (c *BashPPSelectCase) End() Pos {
+	if len(c.Stmts) > 0 {
+		return c.Stmts[len(c.Stmts)-1].End()
+	}
+	return posAddCol(c.Colon, 1)
+}
+
+// BashPPRange is range-over-channel, parsed only in a committed Go region.
+type BashPPRange struct {
+	For    Pos
+	Names  []*Lit
+	Define Pos
+	Range  Pos
+	Chan   *Word
+	Body   *Block
+}
+
+func (r *BashPPRange) Pos() Pos { return r.For }
+func (r *BashPPRange) End() Pos {
+	if r.Body != nil {
+		return r.Body.End()
+	}
+	return r.Chan.End()
+}
+
 func (d *BashPPDefer) Pos() Pos { return d.Kw.Pos() }
 func (d *BashPPDefer) End() Pos {
 	if d.Call != nil {
@@ -652,3 +775,9 @@ func (*BashPPImport) commandNode()      {}
 func (*BashPPFuncDecl) commandNode()    {}
 func (*BashPPReturn) commandNode()      {}
 func (*BashPPDefer) commandNode()       {}
+func (*BashPPGo) commandNode()          {}
+func (*BashPPSend) commandNode()        {}
+func (*BashPPReceive) commandNode()     {}
+func (*BashPPClose) commandNode()       {}
+func (*BashPPSelect) commandNode()      {}
+func (*BashPPRange) commandNode()       {}
