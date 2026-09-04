@@ -7,6 +7,7 @@ package interp
 
 import (
 	"bufio"
+	"context"
 	"os"
 	"os/exec"
 	"runtime"
@@ -14,6 +15,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"mvdan.cc/sh/v3/syntax"
 )
 
 // TestIsRuntimeSignalClassification verifies that only the five synchronous
@@ -150,6 +153,81 @@ func TestSignalSubscriptionDrainKeepsQueuedDeliveryCallbacks(t *testing.T) {
 	}
 	if name, callback := r.nextPendingSignal(); name != "" || callback != "" {
 		t.Fatalf("extra delivery = (%q, %q)", name, callback)
+	}
+}
+
+// TestRunnerResetStopsSignalSubscriptions verifies the ownership boundary for
+// per-run signal forwarders. A Runner is commonly returned to a pool after a
+// normal return, shell exit, or context cancellation; Reset must join every
+// old forwarder before replacing the Runner value, on every reuse cycle.
+func TestRunnerResetStopsSignalSubscriptions(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+		ctx  func() (context.Context, context.CancelFunc)
+	}{
+		{
+			name: "return",
+			src:  ":",
+			ctx: func() (context.Context, context.CancelFunc) {
+				return context.WithCancel(context.Background())
+			},
+		},
+		{
+			name: "exit",
+			src:  "exit 7",
+			ctx: func() (context.Context, context.CancelFunc) {
+				return context.WithCancel(context.Background())
+			},
+		},
+		{
+			name: "cancel",
+			src:  "while :; do :; done",
+			ctx: func() (context.Context, context.CancelFunc) {
+				ctx, cancel := context.WithCancel(context.Background())
+				cancel()
+				return ctx, func() {}
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r, err := New()
+			if err != nil {
+				t.Fatal(err)
+			}
+			file, err := syntax.NewParser().Parse(strings.NewReader(tc.src), "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			trapFile, err := syntax.NewParser().Parse(strings.NewReader("trap ':' USR1"), "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for cycle := 0; cycle < 4; cycle++ {
+				if err := r.Run(context.Background(), trapFile); err != nil {
+					t.Fatalf("install trap: %v", err)
+				}
+				ctx, cancel := tc.ctx()
+				_ = r.Run(ctx, file)
+				cancel()
+
+				r.sigMu.Lock()
+				sub, ok := r.sigNotifyCh["USR1"]
+				r.sigMu.Unlock()
+				if !ok {
+					t.Fatal("USR1 subscription was not installed")
+				}
+
+				r.Reset()
+				select {
+				case <-sub.finished:
+				case <-time.After(time.Second):
+					t.Fatal("signal forwarder survived Runner.Reset")
+				}
+			}
+		})
 	}
 }
 
@@ -295,12 +373,24 @@ func TestStandaloneRuntimeSignalInheritedIgnore(t *testing.T) {
 	}
 	const helperEnv = "SH_RUNTIME_IGNORE_HELPER"
 	if name := os.Getenv(helperEnv); name != "" {
-		_, err := New(
+		r, err := New(
 			Env(nil),
 			WithSignalResetter(OSSignalResetter{}),
 			WithStandaloneSignalDefaults(),
 		)
 		if err != nil {
+			t.Fatal(err)
+		}
+		// Run forces the initial Reset after the standalone option has
+		// installed its default-action subscriptions. The Reset must preserve
+		// the bridged SIG_IGN instead of recreating a signal.Notify relay that
+		// overwrites it. Do this before announcing readiness so the parent can
+		// only signal us after crossing the real Runner lifecycle boundary.
+		file, err := syntax.NewParser().Parse(strings.NewReader(":"), "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := r.Run(context.Background(), file); err != nil {
 			t.Fatal(err)
 		}
 		_, _ = os.Stdout.WriteString("ready\n")

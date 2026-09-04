@@ -2583,6 +2583,12 @@ func (r *Runner) Reset() {
 	if !r.usedNew {
 		panic("use interp.New to construct a Runner")
 	}
+	// Reset below replaces r wholesale. Stop subscriptions first: otherwise the
+	// replacement drops their done/finished channels while their forwarders stay
+	// parked forever. standaloneDefaults is configuration established by an
+	// option, so retain it and recreate its subscriptions after the replacement.
+	r.stopSignalSubscriptions()
+	standaloneDefaults := maps.Clone(r.standaloneDefaults)
 	if !r.didReset {
 		if r.execReplacement == nil {
 			r.execReplacement = new(execReplacementState)
@@ -2634,16 +2640,17 @@ func (r *Runner) Reset() {
 	oldDirFile := r.dirFile
 	// reset the internal state
 	*r = Runner{
-		Env:            r.Env,
-		tempDir:        r.tempDir,
-		callHandler:    r.callHandler,
-		execHandler:    r.execHandler,
-		openHandler:    r.openHandler,
-		readDirHandler: r.readDirHandler,
-		statHandler:    r.statHandler,
-		bgPidCallback:  r.bgPidCallback,
-		jobCarrier:     r.jobCarrier,
-		sigReset:       r.sigReset,
+		Env:                r.Env,
+		tempDir:            r.tempDir,
+		callHandler:        r.callHandler,
+		execHandler:        r.execHandler,
+		openHandler:        r.openHandler,
+		readDirHandler:     r.readDirHandler,
+		statHandler:        r.statHandler,
+		bgPidCallback:      r.bgPidCallback,
+		jobCarrier:         r.jobCarrier,
+		sigReset:           r.sigReset,
+		standaloneDefaults: standaloneDefaults,
 
 		// The dialect is fixed at construction by [Lang]; a runtime `set -o
 		// bashpp` may have changed r.dialect since, so Reset restores the
@@ -2737,6 +2744,27 @@ func (r *Runner) Reset() {
 	}
 	if oldDirFile != nil {
 		_ = oldDirFile.Close()
+	}
+	if len(r.standaloneDefaults) > 0 {
+		r.sigMu.Lock()
+		r.ensureSignalLoopLocked()
+		for name := range r.standaloneDefaults {
+			// An ignored-on-entry signal is immutable to the shell. In
+			// particular, restoreBridgedStartupIgnores installed a raw SIG_IGN
+			// for runtime fault signals above; signal.Notify would overwrite
+			// that disposition with the Go handler. Keep the standalone-default
+			// configuration metadata, but do not subscribe while the startup
+			// hard-ignore owns the signal.
+			if r.startupIgnored[name] {
+				continue
+			}
+			sig, ok := signalByName(name)
+			if !ok {
+				continue
+			}
+			r.startSignalSubscriptionLocked(name, signalForOS(sig), "", true)
+		}
+		r.sigMu.Unlock()
 	}
 	// Ensure we stop referencing any pointers before we reuse bgProcs.
 	clear(r.bgProcs)
