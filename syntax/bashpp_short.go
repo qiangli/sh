@@ -485,7 +485,7 @@ func (p *Parser) bashppParenForm(ce *CallExpr) Command {
 		if p.bashppFuncDepth > 0 && len(call.Fun) == 1 && call.Fun[0].Value == "close" &&
 			len(args) == 1 && len(argNames) == 0 && !ellipsis.IsValid() &&
 			bashppChanOperand(args[0]) {
-			return &BashPPClose{Kw: name, Chan: args[0]}
+			return &BashPPClose{Kw: name, Chan: args[0], Lparen: lparen, Rparen: rparen}
 		}
 		return call
 	}

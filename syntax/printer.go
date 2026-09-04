@@ -1217,11 +1217,10 @@ func (p *Printer) stmt(s *Stmt) {
 		// share the same flush-the-operator convention.
 		if p.spaceRedirects && r.Op != DplIn && r.Op != DplOut && r.Op != Hdoc && r.Op != DashHdoc {
 			p.space()
-		} else if r.Op == RdrIn && bashppLeadingDash(r.Word) {
-			// `< -file` must not be flattened to `<-file`. The two are the
-			// same redirect to bash, but `<-` is the Bash++ receive operator,
-			// so flattening would make a reprint of a shell statement parse as
-			// a channel operation. Keeping the space is inert everywhere else.
+		} else if s.Cmd == nil && r.Op == RdrIn && bashppLeadingDash(r.Word) {
+			// Keep a commandless `< -file` distinct from the Bash++ receive
+			// `<-file` when reparsed. A command-prefixed redirect is already
+			// unambiguous and retains the base formatter's compact spelling.
 			p.space()
 		} else {
 			p.wantSpace = spaceRequired
@@ -1682,8 +1681,10 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 		p.writeLit(")")
 	case *BashPPSelect:
 		p.writeLit("select {")
+		p.wantSpace = spaceRequired
 		for _, arm := range cmd.Cases {
 			p.newlines(arm.Pos())
+			p.spacePad(arm.Pos())
 			if arm.Default {
 				p.writeLit("default:")
 			} else {
@@ -1691,7 +1692,12 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 				p.command(arm.Comm, nil)
 				p.writeLit(":")
 			}
+			p.wantSpace = spaceRequired
 			p.nestedStmts(arm.Stmts, arm.Last, cmd.Rbrace)
+			// A following case/default must not be glued to the final command
+			// in this arm. Force the same newline that Go's implicit semicolon
+			// requires; this also keeps an empty arm distinct from the next one.
+			p.wantNewline = true
 		}
 		p.newlines(cmd.Rbrace)
 		p.writeLit("}")

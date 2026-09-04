@@ -203,9 +203,6 @@ func (p *Parser) bashppMakeChanTail(kw *Lit, lparen Pos) *BashPPMakeChan {
 	return mk
 }
 
-// bashppLeadingDash reports whether a word begins with a literal dash, which
-// is the only thing that can turn a `<` redirect into a `<-` arrow when the
-// printer puts the two back together.
 func bashppLeadingDash(w *Word) bool {
 	if w == nil || len(w.Parts) == 0 {
 		return false

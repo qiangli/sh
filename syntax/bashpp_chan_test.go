@@ -133,6 +133,17 @@ func TestBashPPChanFormsExactAST(t *testing.T) {
 		qt.Assert(t, qt.Equals(cl.Kw.Value, "close"))
 		qt.Assert(t, qt.Equals(cl.Chan.Lit(), "results"))
 		qt.Assert(t, qt.Equals(cl.Pos().Col(), uint(2)))
+		qt.Assert(t, qt.Equals(cl.Lparen.Col(), uint(7)))
+		qt.Assert(t, qt.Equals(cl.Rparen.Col(), uint(15)))
+		qt.Assert(t, qt.Equals(cl.End(), posAddCol(cl.Rparen, 1)))
+		seenKw, seenChan := false, false
+		Walk(cl, func(n Node) bool {
+			seenKw = seenKw || n == cl.Kw
+			seenChan = seenChan || n == cl.Chan
+			return true
+		})
+		qt.Assert(t, qt.IsTrue(seenKw))
+		qt.Assert(t, qt.IsTrue(seenChan))
 	})
 
 	t.Run("go call", func(t *testing.T) {
@@ -212,6 +223,53 @@ func TestBashPPSelectArms(t *testing.T) {
 	empty := bashppRoundTrip(t, bashppWrapFunc("select {}"))
 	sel = empty.Stmts[0].Cmd.(*BashPPFuncDecl).Body.Stmts[0].Cmd.(*BashPPSelect)
 	qt.Assert(t, qt.HasLen(sel.Cases, 0))
+}
+
+// TestBashPPChanSelectCompactRoundTrip pins separators that source positions do
+// not supply when all arms occupy one line. The printer may normalize the
+// layout, but the printed form must reparse to the same arms and bodies.
+func TestBashPPChanSelectCompactRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	check := func(t *testing.T, src string, arms, nonEmpty int) *BashPPSelect {
+		t.Helper()
+		f, err := bashppParse(LangBashPP, src)
+		qt.Assert(t, qt.IsNil(err))
+		out, err := bashppPrint(f)
+		qt.Assert(t, qt.IsNil(err))
+		again, err := bashppParse(LangBashPP, out)
+		qt.Assert(t, qt.IsNil(err), qt.Commentf("printed source:\n%s", out))
+		sel := again.Stmts[0].Cmd.(*BashPPFuncDecl).Body.Stmts[0].Cmd.(*BashPPSelect)
+		qt.Assert(t, qt.HasLen(sel.Cases, arms))
+		gotNonEmpty := 0
+		for _, arm := range sel.Cases {
+			if len(arm.Stmts) > 0 {
+				gotNonEmpty++
+			}
+		}
+		qt.Assert(t, qt.Equals(gotNonEmpty, nonEmpty))
+		return sel
+	}
+
+	t.Run("same-line bodies", func(t *testing.T) {
+		const src = "func f() { select { case <-ch: echo x; default: echo y; } }\n"
+		sel := check(t, src, 2, 2)
+		recv, ok := sel.Cases[0].Comm.(*BashPPReceive)
+		qt.Assert(t, qt.IsTrue(ok))
+		qt.Assert(t, qt.Equals(recv.Chan.Lit(), "ch"))
+		qt.Assert(t, qt.Equals(sel.Cases[0].Stmts[0].Cmd.(*CallExpr).Args[1].Lit(), "x"))
+		qt.Assert(t, qt.IsTrue(sel.Cases[1].Default))
+		qt.Assert(t, qt.Equals(sel.Cases[1].Stmts[0].Cmd.(*CallExpr).Args[1].Lit(), "y"))
+	})
+	t.Run("empty multi-arm", func(t *testing.T) {
+		const src = "func f() { select { case <-ch: default: case ch <- 1: } }\n"
+		sel := check(t, src, 3, 0)
+		_, recv := sel.Cases[0].Comm.(*BashPPReceive)
+		qt.Assert(t, qt.IsTrue(recv))
+		qt.Assert(t, qt.IsTrue(sel.Cases[1].Default))
+		_, send := sel.Cases[2].Comm.(*BashPPSend)
+		qt.Assert(t, qt.IsTrue(send))
+	})
 }
 
 // TestBashPPChanFormsWalkComplete asserts every new node is reachable from
@@ -313,6 +371,33 @@ func TestBashPPChanFormsInertInBashAndPOSIX(t *testing.T) {
 			})
 		})
 	}
+
+	// Preserve the base formatter's spelling for an ordinary command redirect.
+	// The command prefix makes this unambiguous even though the space is elided.
+	for _, lang := range []LangVariant{LangBash, LangPOSIX} {
+		f, err := bashppParse(lang, "cat < -file\n")
+		qt.Assert(t, qt.IsNil(err))
+		out, err := bashppPrint(f)
+		qt.Assert(t, qt.IsNil(err))
+		qt.Assert(t, qt.Equals(out, "cat <-file\n"), qt.Commentf("variant %v", lang))
+	}
+
+	// A commandless redirect needs its separating space because `<-file`
+	// inside a Bash++ func is a receive. Parse-print-reparse must retain the
+	// nil command and ordinary redirect rather than manufacture a receive.
+	src := bashppWrapFunc("< -file")
+	f, err := bashppParse(LangBashPP, src)
+	qt.Assert(t, qt.IsNil(err))
+	stmt := f.Stmts[0].Cmd.(*BashPPFuncDecl).Body.Stmts[0]
+	qt.Assert(t, qt.IsNil(stmt.Cmd))
+	out, err := bashppPrint(f)
+	qt.Assert(t, qt.IsNil(err))
+	qt.Assert(t, qt.Equals(out, src))
+	again, err := bashppParse(LangBashPP, out)
+	qt.Assert(t, qt.IsNil(err))
+	stmt = again.Stmts[0].Cmd.(*BashPPFuncDecl).Body.Stmts[0]
+	qt.Assert(t, qt.IsNil(stmt.Cmd))
+	qt.Assert(t, qt.HasLen(stmt.Redirs, 1))
 }
 
 // TestBashPPChanRecognizersRollBack is the gate that matters most, and the one
@@ -339,9 +424,9 @@ func TestBashPPChanRecognizersRollBack(t *testing.T) {
 		{"for over positional params", "for i; do\n\t\techo $i\n\tdone", "*syntax.ForClause"},
 		{"select builtin", "select x in a b; do\n\t\techo $x\n\tdone", "*syntax.ForClause"},
 		{"plain redirect", "cat <in.txt", "*syntax.CallExpr"},
-		// The space after `<` is what keeps this a redirect rather than a
-		// receive, so the printer must not flatten it away on reprint.
-		{"dash-leading redirect keeps its space", "cat < -in.txt", "*syntax.CallExpr"},
+		// A command-prefixed `<-word` is unambiguously still a redirect; this
+		// is also the base printer's normalized spelling for `cat < -in.txt`.
+		{"dash-leading redirect base spelling", "cat <-in.txt", "*syntax.CallExpr"},
 		{"redirect with fd", "cat 0<in.txt", "*syntax.CallExpr"},
 		{"here string", "cat <<<word", "*syntax.CallExpr"},
 		{"process substitution", "diff <(f a) <(f b)", "*syntax.CallExpr"},

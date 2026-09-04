@@ -728,12 +728,13 @@ func (r *BashPPReceive) Pos() Pos { return r.Arrow }
 func (r *BashPPReceive) End() Pos { return r.Chan.End() }
 
 type BashPPClose struct {
-	Kw   *Lit
-	Chan *Word
+	Kw             *Lit
+	Chan           *Word
+	Lparen, Rparen Pos
 }
 
 func (c *BashPPClose) Pos() Pos { return c.Kw.Pos() }
-func (c *BashPPClose) End() Pos { return c.Chan.End() }
+func (c *BashPPClose) End() Pos { return posAddCol(c.Rparen, 1) }
 
 // BashPPSelect is a Go select statement and its source-order cases.
 type BashPPSelect struct {

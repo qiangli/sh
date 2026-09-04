@@ -75,7 +75,8 @@ func TestBashPPChanRoundTrip(t *testing.T) {
 	if recv := body[4].Cmd.(*syntax.BashPPReceive); recv.Chan.Lit() != "ch" {
 		t.Fatalf("standalone receive after JSON round trip = %#v", recv)
 	}
-	if cl := body[5].Cmd.(*syntax.BashPPClose); cl.Chan.Lit() != "ch" {
+	if cl := body[5].Cmd.(*syntax.BashPPClose); cl.Chan.Lit() != "ch" ||
+		cl.Lparen.Col() != 7 || cl.Rparen.Col() != 10 || cl.End().Col() != 11 {
 		t.Fatalf("close after JSON round trip = %#v", cl)
 	}
 	if rng := body[6].Cmd.(*syntax.BashPPRange); len(rng.Names) != 1 || rng.Chan.Lit() != "ch" {
