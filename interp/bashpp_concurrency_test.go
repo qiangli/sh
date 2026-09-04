@@ -1109,6 +1109,124 @@ func TestBashPPTaskOpenRejectsPreCanceledSideEffects(t *testing.T) {
 	}
 }
 
+func TestBashPPTaskImmediateReadFailureExcludesLaterTask(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "empty")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, body := range []string{
+		"read value < " + path + " || return $?",
+		"read -u 99 value || return $?",
+	} {
+		t.Run(body, func(t *testing.T) {
+			out, err := runBashPPConcurrency(t, `
+func first() { `+body+`; }
+func later() { echo escaped; }
+func main() { go first(); go later(); }
+main()
+`)
+			if err == nil || strings.Contains(out, "escaped") {
+				t.Fatalf("immediate read armed later task: out=%q err=%v", out, err)
+			}
+		})
+	}
+}
+
+func TestBashPPTaskCustomReaderFailsClosed(t *testing.T) {
+	var output strings.Builder
+	r, err := New(
+		Lang(syntax.LangBashPP),
+		StdIO(strings.NewReader("ready\n"), &output, &output),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(`
+func first() { read value; }
+func later() { echo escaped; }
+func main() { go first(); go later(); }
+main()
+`), "custom-reader.bpp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = r.Run(context.Background(), f)
+	if err == nil || strings.Contains(output.String(), "escaped") ||
+		!strings.Contains(output.String(), "non-cooperative input is unavailable") {
+		t.Fatalf("out=%q err=%v", output.String(), err)
+	}
+}
+
+func TestBashPPTaskZeroReadOptionsDoNotConsume(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "input")
+	if err := os.WriteFile(path, []byte("ready\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, option := range []string{"-t 0", "-n 0", "-N 0"} {
+		t.Run(option, func(t *testing.T) {
+			out, err := runBashPPConcurrency(t, `
+exec 8<`+path+`
+func first() {
+ read `+option+` -u 8 ignored
+}
+func main() {
+ go first()
+ read -u 8 value
+ echo "$value"
+}
+main()
+`)
+			if err != nil || out != "ready\n" {
+				t.Fatalf("zero option consumed input: out=%q err=%v", out, err)
+			}
+		})
+	}
+}
+
+func TestReadZeroOptionsMatchBashReadyAndEOF(t *testing.T) {
+	dir := t.TempDir()
+	ready := filepath.Join(dir, "ready")
+	empty := filepath.Join(dir, "empty")
+	if err := os.WriteFile(ready, []byte("x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(empty, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, lang := range []syntax.LangVariant{syntax.LangBash, syntax.LangPOSIX} {
+		for _, option := range []string{"-t 0", "-n 0", "-N 0"} {
+			t.Run(lang.String()+"/"+option, func(t *testing.T) {
+				var output strings.Builder
+				r, err := New(Lang(lang), StdIO(nil, &output, &output))
+				if err != nil {
+					t.Fatal(err)
+				}
+				f, err := syntax.NewParser(syntax.Variant(lang)).Parse(strings.NewReader(`
+value=old
+read `+option+` value < `+ready+`
+printf '<%s>:%s\n' "$value" "$?"
+value=old
+read `+option+` value < `+empty+`
+printf '<%s>:%s\n' "$value" "$?"
+`), "read-zero-count.sh")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := r.Run(context.Background(), f); err != nil {
+					t.Fatal(err)
+				}
+				want := "<>:0\n<>:0\n"
+				if option == "-t 0" {
+					want = "<old>:0\n<old>:0\n"
+				}
+				if got := output.String(); got != want {
+					t.Fatalf("output=%q", got)
+				}
+			})
+		}
+	}
+}
+
 func TestBashPPFileRunPrunesClearedPersistentHandle(t *testing.T) {
 	var out strings.Builder
 	r, err := New(Lang(syntax.LangBashPP), StdIO(nil, &out, &out))

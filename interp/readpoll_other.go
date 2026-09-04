@@ -19,9 +19,15 @@ func timeoutReader(context.Context, *os.File, time.Time) io.Reader { return nil 
 
 func signalReader(context.Context, *os.File, <-chan struct{}) io.Reader { return nil }
 
+func taskReadReader(context.Context, *os.File, time.Time, <-chan struct{}, func() bool) io.Reader {
+	return nil
+}
+
 func fdReadableNow(f *os.File) bool {
 	return false
 }
+
+func taskReadReadyNow(*os.File) bool { return false }
 
 type timeoutFileReader struct {
 	ctx      context.Context

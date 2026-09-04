@@ -426,6 +426,10 @@ type Runner struct {
 	// a later asynchronous list /dev/null unless that list's syntax supplies
 	// stdin of its own.
 	asyncStdinExplicit bool
+	// origStdinAsyncCopy records that StdIO adapted an arbitrary Reader through a
+	// copier goroutine. Its readiness and cancellation are not cooperative,
+	// so Bash++ tasks fail closed when that original stdin is active.
+	origStdinAsyncCopy bool
 
 	// aliasLineOverride is non-zero while expanding a multi-stmt
 	// alias body. bashErrPrefix prefers it over the AST stmt's own
@@ -2022,6 +2026,8 @@ func stdinFile(r io.Reader) (*os.File, error) {
 // so that cancelling the runner's context can stop a blocked standard input read.
 func StdIO(in io.Reader, out, err io.Writer) RunnerOption {
 	return func(r *Runner) error {
+		_, stdinIsFile := in.(*os.File)
+		r.origStdinAsyncCopy = in != nil && !stdinIsFile
 		stdin, _err := stdinFile(in)
 		if _err != nil {
 			return _err
@@ -2685,15 +2691,16 @@ func (r *Runner) Reset() {
 		// These can be set by functions like [Dir] or [Params], but
 		// builtins can overwrite them; reset the fields to whatever the
 		// constructor set up.
-		Dir:          r.origDir,
-		Params:       r.origParams,
-		opts:         r.origOpts,
-		dryRun:       r.origDryRun,
-		dryRunOpt:    r.origDryRunOpt,
-		noOpSetState: maps.Clone(r.origNoOpSetState),
-		stdin:        r.origStdin,
-		stdout:       r.origStdout,
-		stderr:       r.origStderr,
+		Dir:                r.origDir,
+		Params:             r.origParams,
+		opts:               r.origOpts,
+		dryRun:             r.origDryRun,
+		dryRunOpt:          r.origDryRunOpt,
+		noOpSetState:       maps.Clone(r.origNoOpSetState),
+		stdin:              r.origStdin,
+		origStdinAsyncCopy: r.origStdinAsyncCopy,
+		stdout:             r.origStdout,
+		stderr:             r.origStderr,
 
 		// Restore an explicitly configured $0 (see [WithArgv0]); a plain
 		// runner leaves both empty so the filename-based default applies.
@@ -3151,6 +3158,7 @@ func (r *Runner) subshell(background bool) *Runner {
 		statHandler:          r.statHandler,
 		stdin:                r.stdin,
 		asyncStdinExplicit:   r.asyncStdinExplicit,
+		origStdinAsyncCopy:   r.origStdinAsyncCopy,
 		stdinTTYFallback:     r.stdinTTYFallback,
 		stdinDevTTY:          r.stdinDevTTY,
 		stdout:               r.stdout,

@@ -3595,9 +3595,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		readline := false
 		readArray := false
 		var timeout time.Duration
+		timeoutSpecified := false
 		var timeoutSpec string
 		invalidTimeoutStatus := uint8(0)
 		nchars := 0
+		ncharsSpecified := false
 		// nstrict tracks `-N`: read exactly that many bytes, ignoring
 		// the delimiter and skipping the IFS split step (the buffer
 		// becomes one verbatim field).
@@ -3620,6 +3622,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					return failf(2, "read: -p: option requires an argument\n")
 				}
 			case "-t":
+				timeoutSpecified = true
 				val := fp.value()
 				if val == "" {
 					return failf(2, "read: -t: option requires an argument\n")
@@ -3640,6 +3643,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					timeout = time.Nanosecond
 				}
 			case "-n", "-N":
+				ncharsSpecified = true
 				val := fp.value()
 				n, err := strconv.Atoi(val)
 				if err != nil || n < 0 {
@@ -3856,7 +3860,69 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				}
 			}
 		}
-		if timeout > 0 {
+		zeroCharRead := ncharsSpecified && nchars == 0
+		if timeoutSpecified && timeout == 0 {
+			ready := false
+			switch input := input.(type) {
+			case *scriptStdinReader:
+				ready = true
+			case *os.File:
+				if info, statErr := input.Stat(); statErr == nil && info.Mode().IsRegular() {
+					ready = true
+				} else {
+					ready = taskReadReadyNow(input)
+				}
+			}
+			if !ready {
+				exit.code = 1
+			}
+			return exit
+		}
+		if zeroCharRead {
+			// Bash treats -n 0 and -N 0 as successful, non-consuming reads
+			// which still perform the normal empty assignment below.
+		} else if r.bashPPGoTask {
+			if silent {
+				return failf(2, "read: silent terminal input is unavailable inside a Bash++ task\n")
+			}
+			if r.origStdinAsyncCopy && !stdinSwapped && !r.stdinRedirected && input == stdin {
+				return failf(2, "read: non-cooperative input is unavailable inside a Bash++ task\n")
+			}
+			switch inputSource := input.(type) {
+			case *scriptStdinReader:
+				// The script tail is immutable memory and cannot block.
+			case *os.File:
+				info, statErr := inputSource.Stat()
+				if statErr != nil {
+					return failf(2, "read: unable to inspect task input: %v\n", statErr)
+				}
+				if !info.Mode().IsRegular() {
+					pollableMode := info.Mode()&os.ModeNamedPipe != 0 ||
+						info.Mode()&os.ModeCharDevice != 0 || info.Mode()&os.ModeSocket != 0
+					if !pollableMode {
+						return failf(2, "read: non-pollable input is unavailable inside a Bash++ task\n")
+					}
+					var deadline time.Time
+					if timeout > 0 {
+						deadline = time.Now().Add(timeout)
+					}
+					input = taskReadReader(r.bashPPTaskContext(ctx), inputSource, deadline, r.signalWakeChan(), func() bool {
+						return r.bashPPArmBeforeBlock(ctx)
+					})
+					if input == nil {
+						return failf(2, "read: blocking input is unavailable inside a Bash++ task\n")
+					}
+				}
+			default:
+				return failf(2, "read: non-cooperative input is unavailable inside a Bash++ task\n")
+			}
+			line, err = readThroughSignals()
+			if taskErr := r.bashPPTaskContext(ctx).Err(); taskErr != nil {
+				r.bashPPTaskCanceled = true
+				r.exit.fatal(taskErr)
+				return r.exit
+			}
+		} else if timeout > 0 {
 			if r.stdinTTYFallback || r.stdinDevTTY {
 				clearReadVars()
 				exit.code = 142
