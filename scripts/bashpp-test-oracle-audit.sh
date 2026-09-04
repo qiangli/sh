@@ -65,7 +65,11 @@ if (($#)); then
 	files=("$@")
 else
 	files=()
-	while IFS= read -r file; do files+=("$file"); done < <(git ls-files '*_test.go' | sort)
+	while IFS= read -r file; do files+=("$file"); done < <(
+		git ls-files '*_test.go' |
+			grep -v '^scripts/testdata/bashpp-oracle-audit/' |
+			sort
+	)
 fi
 if ((${#files[@]} == 0)); then
 	echo "bashpp oracle audit: no test files found" >&2

@@ -754,10 +754,9 @@ func TestJobCarrierCancelReapsCarrier(t *testing.T) {
 	file := parse(t, nil, `{ sleep 30; } & echo "$!"; wait "$!"; echo after`)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	runDone := make(chan struct{})
+	runDone := make(chan error, 1)
 	go func() {
-		defer close(runDone)
-		r.Run(ctx, file) // error (if any) is irrelevant; we cancel it
+		runDone <- r.Run(ctx, file)
 	}()
 	line := out.ReadLine(t, runnerRunTimeout)
 	pid, err := strconv.Atoi(strings.TrimSpace(line))
@@ -769,9 +768,15 @@ func TestJobCarrierCancelReapsCarrier(t *testing.T) {
 	}
 	cancel()
 	select {
-	case <-runDone:
+	case runErr := <-runDone:
+		if runErr != nil && !errors.Is(runErr, context.Canceled) {
+			t.Fatalf("Run after cancellation: %v", runErr)
+		}
 	case <-time.After(runnerRunTimeout):
 		t.Fatalf("Run did not return after context cancellation; output=%q", out.String())
+	}
+	if err := out.Err(); err != nil {
+		t.Fatalf("output observer: %v", err)
 	}
 	waitPidsGone(t, c.startedPids())
 }

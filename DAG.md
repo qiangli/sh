@@ -60,8 +60,10 @@ suite in `artifacts/bashpp-race-gate.txt`. The real Bash compatibility corpus
 remains the separate `confirm` task because it needs the external Bash oracle.
 The gate defaults `GOMEMLIMIT` to 2 GiB, gives each `go test` an explicit
 timeout plus an outer watchdog, and records portable `/usr/bin/time` peak-RSS
-evidence. `GOMEMLIMIT` bounds the Go heap, not total process-tree RSS; CI or the
-sprint manager must also apply an external job/process-tree memory ceiling.
+evidence. `GOMEMLIMIT` bounds the Go heap, not total process-tree RSS. CI does
+not impose a separate RSS ceiling; the sprint manager supplies the hard 3 GiB
+process-tree ceiling for the final acceptance run. A 15-minute global gate
+deadline leaves headroom inside the CI job's 30-minute limit for other steps.
 Use `scripts/bashpp-race-gate.sh --discovery-only` to validate package and
 focused-test discovery without launching race tests. The CI job gives this
 bounded gate enough time to emit its own diagnostics.
