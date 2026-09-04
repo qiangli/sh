@@ -3,10 +3,10 @@ id: 7b2d441dd7c8
 kind: task
 title: Bash++ concurrency data-race, schedule, and goroutine-leak gate
 seq: 2
-status: todo
+status: doing
 priority: p1
 created: 2026-08-07T14:15:00Z
-assignee: qiangli
+assignee: repair_run60_ab3
 sprint: 115
 ---
 
