@@ -416,6 +416,20 @@ func (p *Printer) bashppSignature(params, results []*BashPPField, resLparen Pos)
 	p.bashppFields(results)
 }
 
+// bashppMakeChan prints `make(chan T)` or `make(chan T, n)`. It is not part of
+// the command switch because a channel constructor is a VALUE: it appears only
+// as the right-hand side of a short declaration, never as a statement.
+func (p *Printer) bashppMakeChan(mk *BashPPMakeChan) {
+	p.spacedString(mk.Make.Value, mk.Make.Pos())
+	p.writeLit("(chan ")
+	p.writeLit(mk.ChanType.Elem.Value)
+	if mk.Capacity != nil {
+		p.writeLit(", ")
+		p.word(mk.Capacity)
+	}
+	p.writeLit(")")
+}
+
 // bashppFuncLit prints a function literal: `func(a int) int { … }`. The body
 // goes through the ordinary block printer, so a closure indents exactly as the
 // braces around it would anywhere else.
@@ -1203,6 +1217,12 @@ func (p *Printer) stmt(s *Stmt) {
 		// share the same flush-the-operator convention.
 		if p.spaceRedirects && r.Op != DplIn && r.Op != DplOut && r.Op != Hdoc && r.Op != DashHdoc {
 			p.space()
+		} else if r.Op == RdrIn && bashppLeadingDash(r.Word) {
+			// `< -file` must not be flattened to `<-file`. The two are the
+			// same redirect to bash, but `<-` is the Bash++ receive operator,
+			// so flattening would make a reprint of a shell statement parse as
+			// a channel operation. Keeping the space is inert everywhere else.
+			p.space()
 		} else {
 			p.wantSpace = spaceRequired
 		}
@@ -1552,6 +1572,12 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 			// invoked literal, which has no word spelling in Rhs at all).
 			p.space()
 			p.command(cmd.Call, nil)
+		case cmd.Recv != nil:
+			p.space()
+			p.command(cmd.Recv, nil)
+		case cmd.MakeChan != nil:
+			p.space()
+			p.bashppMakeChan(cmd.MakeChan)
 		default:
 			p.space()
 			for i, rhs := range cmd.Rhs {
@@ -1670,14 +1696,20 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 		p.newlines(cmd.Rbrace)
 		p.writeLit("}")
 	case *BashPPRange:
-		p.writeLit("for ")
+		p.writeLit("for")
+		// `for range ch { … }` discards the received values, so it has no
+		// names and must grow neither a `:=` nor the space before one.
 		for i, name := range cmd.Names {
 			if i > 0 {
-				p.writeLit(", ")
+				p.writeLit(",")
 			}
+			p.writeLit(" ")
 			p.writeLit(name.Value)
 		}
-		p.writeLit(" := range ")
+		if len(cmd.Names) > 0 {
+			p.writeLit(" :=")
+		}
+		p.writeLit(" range ")
 		p.word(cmd.Chan)
 		p.space()
 		p.command(cmd.Body, nil)

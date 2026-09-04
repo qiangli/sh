@@ -211,6 +211,12 @@ func Walk(node Node, f func(Node) bool) {
 		if node.FuncLit != nil {
 			Walk(node.FuncLit, f)
 		}
+		if node.Recv != nil {
+			Walk(node.Recv, f)
+		}
+		if node.MakeChan != nil {
+			Walk(node.MakeChan, f)
+		}
 	case *BashPPCall:
 		if node.FuncLit != nil {
 			Walk(node.FuncLit, f)
@@ -283,7 +289,7 @@ func Walk(node Node, f func(Node) bool) {
 		walkNilable(node.Elem, f)
 	case *BashPPMakeChan:
 		walkNilable(node.Make, f)
-		walkNilable(node.Type, f)
+		walkNilable(node.ChanType, f)
 		walkNilable(node.Capacity, f)
 	case *BashPPSend:
 		walkNilable(node.Chan, f)

@@ -445,6 +445,21 @@ func (p *Parser) bashppParenForm(ce *CallExpr) Command {
 	txn := p.beginBashPPTxn()
 	lparen := p.pos
 	p.next()
+	// `make(chan T, n)` is not an ordinary call: its first argument is a TYPE,
+	// which no argument list can hold, so it gets its own reader. Like every
+	// other channel form it is admitted only inside a committed func body —
+	// see sh/syntax/bashpp_chan.go — and a `make(` the channel grammar does
+	// not spell rewinds to the shell, which keeps `make(1)` and the GNU make
+	// command exactly as they are.
+	if short && p.bashppFuncDepth > 0 && name.Value == "make" {
+		mk := p.bashppMakeChanTail(name, lparen)
+		if mk == nil {
+			txn.rollback(p)
+			return nil
+		}
+		txn.commit(p)
+		return &BashPPShortDecl{Lhs: lhs, Class: ClassR, OpPos: opPos, MakeChan: mk}
+	}
 	args, argNames, ellipsis, ok := p.bashppCallArgs()
 	if !ok || p.tok != rightParen {
 		txn.rollback(p)
@@ -462,6 +477,16 @@ func (p *Parser) bashppParenForm(ce *CallExpr) Command {
 		Lparen: lparen, Rparen: rparen,
 	}
 	if !short {
+		// `close(ch)` is the Go builtin, not a call the interpreter can
+		// dispatch to a declared function, so it gets its own node rather
+		// than a BashPPCall a later phase would have to special-case by name.
+		// Inside a func body `close` cannot also be a user function: it is a
+		// Go builtin identifier there, exactly as it is in Go.
+		if p.bashppFuncDepth > 0 && len(call.Fun) == 1 && call.Fun[0].Value == "close" &&
+			len(args) == 1 && len(argNames) == 0 && !ellipsis.IsValid() &&
+			bashppChanOperand(args[0]) {
+			return &BashPPClose{Kw: name, Chan: args[0]}
+		}
 		return call
 	}
 	// A name bound from a call may hold a closure — that is the factory idiom,

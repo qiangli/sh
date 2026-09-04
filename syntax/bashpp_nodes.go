@@ -268,6 +268,20 @@ type BashPPShortDecl struct {
 	// selector structure so neither the printer nor interpreter must split
 	// source text to rediscover it.
 	MethodValue []*Lit
+
+	// Recv is set when the right-hand side is a channel receive, `v := <-ch`
+	// or the two-value `v, ok := <-ch`. Rhs is empty then: bash parses the
+	// arrow as a redirect, so there is no word spelling to keep, and the arrow
+	// and channel positions live on the [BashPPReceive] instead. Lhs holds one
+	// name for the value form and two for the value-and-open form, which is
+	// the only place Go admits a second name on a receive.
+	Recv *BashPPReceive
+
+	// MakeChan is set for `ch := make(chan T, n)`. It is separate from Call
+	// because `make` is not a call the interpreter can dispatch — it is the Go
+	// builtin, and its first argument is a TYPE rather than a value, which no
+	// [BashPPCall] argument list can hold.
+	MakeChan *BashPPMakeChan
 }
 
 func (d *BashPPShortDecl) Pos() Pos {
@@ -283,6 +297,12 @@ func (d *BashPPShortDecl) End() Pos {
 	}
 	if d.FuncLit != nil {
 		return d.FuncLit.End()
+	}
+	if d.Recv != nil {
+		return d.Recv.End()
+	}
+	if d.MakeChan != nil {
+		return d.MakeChan.End()
 	}
 	return posAddCol(d.OpPos, 2)
 }
@@ -671,9 +691,16 @@ func (t *BashPPChanType) End() Pos {
 }
 
 // BashPPMakeChan records make(chan T, n), without evaluating its capacity.
+//
+// ChanType is spelled that way rather than the obvious `Type` for the reason
+// [BashPPDecl.DeclType] records: sh/syntax/typedjson reserves a `Type` key on
+// every tagged node for the node's own type name and builds its encoding
+// struct by reflection, so a node field called Type panics reflect.StructOf.
+// The collision is invisible until a tree containing one is serialized, which
+// is exactly how it was found here.
 type BashPPMakeChan struct {
 	Make           *Lit
-	Type           *BashPPChanType
+	ChanType       *BashPPChanType
 	Capacity       *Word
 	Lparen, Rparen Pos
 }

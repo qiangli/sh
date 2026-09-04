@@ -2962,6 +2962,9 @@ func (p *Parser) gotStmtPipe(s *Stmt, binCmd bool) *Stmt {
 			// TODO(zsh): "repeat"
 			p.whileClause(s, p.val == "until")
 		case "for":
+			if p.lang.in(LangBashPP) && p.bashppFuncDepth > 0 && p.bashppRange(s) {
+				break
+			}
 			p.forClause(s)
 		case "case":
 			p.caseClause(s)
@@ -2979,6 +2982,25 @@ func (p *Parser) gotStmtPipe(s *Stmt, binCmd bool) *Stmt {
 		case "do":
 			p.curErr(`%#q can only be used in a loop`, p.val)
 		case "done":
+			// A Bash++ short declaration may bind a Go identifier whose text is
+			// also a shell reserved word. Probe the complete statement before
+			// diagnosing `done`: only a supported typed short declaration claims
+			// it, while an actual loop terminator is rewound byte for byte.
+			if p.lang.in(LangBashPP) && p.bashppFuncDepth > 0 {
+				txn := p.beginBashPPTxn()
+				probe := &Stmt{Position: s.Position}
+				name := p.wordOne(p.lit(p.pos, p.val))
+				p.next()
+				p.callExpr(probe, name, false)
+				if p.err == nil {
+					if _, ok := probe.Cmd.(*BashPPShortDecl); ok {
+						txn.commit(p)
+						s.Cmd, s.Redirs = probe.Cmd, probe.Redirs
+						break
+					}
+				}
+				txn.rollback(p)
+			}
 			p.curErr(`%#q can only be used to end a loop`, p.val)
 		case "esac":
 			p.curErr("%#q can only be used to end a `case`", p.val)
@@ -3165,6 +3187,17 @@ func (p *Parser) gotStmtPipe(s *Stmt, binCmd bool) *Stmt {
 	}
 	for p.peekRedir() {
 		p.doRedirect(s)
+	}
+	// A discarded receive, `<-done`, has no command at all: bash reads it as a
+	// redirect from a file named `-done`, so it arrives here as a statement
+	// whose only content is that redirect. Reclassifying it needs the redirect
+	// list to be final, which is why this sits after the trailing loop rather
+	// than beside the other Bash++ dispatch in callExpr.
+	if s.Cmd == nil && p.lang.in(LangBashPP) && p.bashppFuncDepth > 0 {
+		if cmd := bashppChanForm(nil, s.Redirs); cmd != nil {
+			s.Cmd = cmd
+			s.Redirs = nil
+		}
 	}
 	// instead of using recursion, iterate manually
 	for p.tok == or || p.tok == orAnd {
@@ -4148,6 +4181,17 @@ loop:
 		if ret := p.bashppReturn(ce, s.Redirs); ret != nil {
 			s.Cmd = ret
 			return
+		}
+		// Channel send and receive, which bash spells as a `<` redirect; see
+		// sh/syntax/bashpp_chan.go for why they are reclassified from the
+		// finished tree rather than recognized in the lexer. The redirect is
+		// consumed by the typed node, so it is dropped from the statement.
+		if p.bashppFuncDepth > 0 {
+			if cmd := bashppChanForm(ce, s.Redirs); cmd != nil {
+				s.Cmd = cmd
+				s.Redirs = nil
+				return
+			}
 		}
 		if decl := bashppShortDecl(ce, s.Redirs); decl != nil {
 			if len(decl.MethodValue) > 0 {
