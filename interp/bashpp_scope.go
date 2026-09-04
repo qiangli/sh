@@ -48,7 +48,9 @@ import (
 // later mutations of the identifier it closed over, which is only possible if
 // the snapshot and the live scope name the same cell.
 type bashPPCell struct {
-	vr expand.Variable
+	vr           expand.Variable
+	channel      *bashPPChannel
+	channelOwner *bashPPConcurrent
 	// object is shared by every alias of one structured value. Deep readonly
 	// is an attribute of this identity rather than of one variable spelling.
 	object *bashPPObjectIdentity

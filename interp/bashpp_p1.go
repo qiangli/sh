@@ -101,6 +101,18 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 				}
 				seen[member.Value] = true
 			}
+		} else {
+			base := strings.TrimPrefix(d.DeclType.Value, "*")
+			if base == name {
+				r.errf("%scyclic type declaration: %s\n", r.bashErrPrefix(d.Pos()), name)
+				r.exit = exitStatus{code: 2}
+				return
+			}
+			if _, ok := r.bashPPTypes[base]; !ok && !bashPPBuiltinType(base) {
+				r.errf("%sundefined type: %s\n", r.bashErrPrefix(d.Pos()), base)
+				r.exit = exitStatus{code: 2}
+				return
+			}
 		}
 	}
 	if d.Site == syntax.StartVar && d.DeclType != nil {
@@ -154,7 +166,7 @@ func bashPPBuiltinType(name string) bool {
 	switch name {
 	case "bool", "byte", "complex64", "complex128", "error", "float32", "float64",
 		"int", "int8", "int16", "int32", "int64", "rune", "string",
-		"uint", "uint8", "uint16", "uint32", "uint64", "uintptr":
+		"struct", "uint", "uint8", "uint16", "uint32", "uint64", "uintptr":
 		return true
 	}
 	return false
@@ -283,6 +295,12 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 			}
 		}
 		r.bashPPDeclareName(name, r.bashPPValue(ctx, d.Rhs))
+		if len(d.Rhs) == 1 {
+			if channel, owner := r.bashPPDirectChannel(d.Rhs[0]); channel != nil {
+				cell := r.bashPPScope.lookup(name)
+				cell.channel, cell.channelOwner = channel, owner
+			}
+		}
 		return
 	}
 	for i, lhs := range d.Lhs {
@@ -293,6 +311,21 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 		}
 		r.bashPPDeclareName(lhs.Value, r.bashPPValue(ctx, d.Rhs[i:i+1]))
 	}
+}
+
+func (r *Runner) bashPPDirectChannel(w *syntax.Word) (*bashPPChannel, *bashPPConcurrent) {
+	if w == nil || len(w.Parts) != 1 || r.bashPPScope == nil {
+		return nil, nil
+	}
+	lit, ok := w.Parts[0].(*syntax.Lit)
+	if !ok || !syntax.ValidName(lit.Value) {
+		return nil, nil
+	}
+	cell := r.bashPPScope.lookup(lit.Value)
+	if cell == nil {
+		return nil, nil
+	}
+	return cell.channel, cell.channelOwner
 }
 
 // bashPPEnumConstruct evaluates `v := Color(Member)`. Enum values keep their

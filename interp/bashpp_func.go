@@ -496,6 +496,7 @@ func (r *Runner) bashPPSpreadValues(w *syntax.Word) []string {
 // does this: silently passing the elements would make the two spellings mean
 // the same thing and hide the mistake.
 func (r *Runner) bashPPCallValues(c *syntax.BashPPCall, fn *bashPPFunc) ([]string, bool) {
+	r.bashPPCallChannels = nil
 	if required := bashppRequiredAfterDefault(fn.params()); required != "" {
 		r.errf("BASHPP-EDEFAULT-ORDER: required parameter %q follows a default parameter\n", required)
 		r.exit = exitStatus{code: 2}
@@ -506,16 +507,29 @@ func (r *Runner) bashPPCallValues(c *syntax.BashPPCall, fn *bashPPFunc) ([]strin
 		r.exit = exitStatus{code: 2}
 		return nil, false
 	}
+	// Capture typed argument provenance before evaluating any argument. An
+	// argument expansion may itself invoke a Bash++ function, whose ephemeral
+	// call metadata must not overwrite the authority belonging to this call.
+	channels := make([]*bashPPChannel, len(c.Args))
+	for i, word := range c.Args {
+		channel, owner := r.bashPPDirectChannel(word)
+		if owner == r.bashPPConcurrent {
+			channels[i] = channel
+		}
+	}
 	args := r.bashPPCallArgValues(c)
+	r.bashPPCallChannels = nil
 	names := c.ArgNames
 	positional := len(args) - len(names)
 	if fn.skipArgs > 0 {
 		args = args[fn.skipArgs:]
+		channels = channels[fn.skipArgs:]
 		positional -= fn.skipArgs
 	}
 	if len(names) > 0 || bashppHasDefaults(fn.params()) {
-		return r.bashPPBindCall(fn, args, names, positional)
+		return r.bashPPBindCall(fn, args, channels, names, positional)
 	}
+	r.bashPPCallChannels = channels
 	return args, true
 }
 
@@ -523,9 +537,10 @@ func (r *Runner) bashPPCallValues(c *syntax.BashPPCall, fn *bashPPFunc) ([]strin
 // contract. It is deliberately entered only when a call uses a name or the
 // signature has a default, so the established P3 arity diagnostics remain
 // byte-for-byte unchanged for ordinary Go-form calls.
-func (r *Runner) bashPPBindCall(fn *bashPPFunc, supplied []string, names []*syntax.Lit, positional int) ([]string, bool) {
+func (r *Runner) bashPPBindCall(fn *bashPPFunc, supplied []string, suppliedChannels []*bashPPChannel, names []*syntax.Lit, positional int) ([]string, bool) {
 	params := bashppParams(fn.params())
 	fail := func(format string, args ...any) ([]string, bool) {
+		r.bashPPCallChannels = nil
 		r.errf(format, args...)
 		r.exit = exitStatus{code: 2}
 		return nil, false
@@ -553,9 +568,13 @@ func (r *Runner) bashPPBindCall(fn *bashPPFunc, supplied []string, names []*synt
 		}
 	}
 	values := make([]string, len(params))
+	channels := make([]*bashPPChannel, len(params))
 	bound := make([]bool, len(params))
 	for i := 0; i < positional; i++ {
 		values[i], bound[i] = supplied[i], true
+		if i < len(suppliedChannels) {
+			channels[i] = suppliedChannels[i]
+		}
 	}
 	for i, name := range names {
 		index := byName[name.Value]
@@ -563,6 +582,9 @@ func (r *Runner) bashPPBindCall(fn *bashPPFunc, supplied []string, names []*synt
 			return fail("BASHPP-EARG-DUPLICATE-BINDING: parameter %q is supplied positionally and by name\n", name.Value)
 		}
 		values[index], bound[index] = supplied[positional+i], true
+		if source := positional + i; source < len(suppliedChannels) {
+			channels[index] = suppliedChannels[source]
+		}
 	}
 	for i, param := range params {
 		if bound[i] {
@@ -570,10 +592,14 @@ func (r *Runner) bashPPBindCall(fn *bashPPFunc, supplied []string, names []*synt
 		}
 		if param.defaultValue != nil {
 			values[i], bound[i] = r.bashPPExprValue(param.defaultValue), true
+			if channel, owner := r.bashPPDirectChannel(param.defaultValue); owner == r.bashPPConcurrent {
+				channels[i] = channel
+			}
 			continue
 		}
 		return fail("BASHPP-EARG-MISSING: %s requires argument %q\n", fn.name(), param.name)
 	}
+	r.bashPPCallChannels = channels
 	return values, true
 }
 
@@ -672,6 +698,8 @@ func (r *Runner) bashPPRewriteCommandArgs(args []*syntax.Word) []*syntax.Word {
 // of values succeeds with status 0, while a result-less function keeps the
 // body's last status (or the code named by a bash-style `return n`).
 func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string) []string {
+	callChannels := r.bashPPCallChannels
+	r.bashPPCallChannels = nil
 	params := bashppParams(fn.params())
 	if !r.bashPPCheckArgs(fn, params, args) {
 		return nil
@@ -710,6 +738,10 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 		}
 		_ = r.bashPPScope.declare(param.name,
 			expand.Variable{Set: true, Kind: expand.String, Str: args[i]}, false)
+		if i < len(callChannels) && callChannels[i] != nil {
+			cell := r.bashPPScope.lookup(param.name)
+			cell.channel, cell.channelOwner = callChannels[i], r.bashPPConcurrent
+		}
 		if base := strings.TrimPrefix(param.declared, "*"); base != "" {
 			if _, ok := r.bashPPTypes[base]; ok {
 				cell := r.bashPPScope.lookup(param.name)
@@ -1235,7 +1267,16 @@ func (r *Runner) bashPPCheckArgs(fn *bashPPFunc, params []bashPPParam, args []st
 // the phase has no way to construct an opinion about. An untyped parameter
 // (`func f(v)`) declares nothing and so admits everything.
 func (r *Runner) bashPPValueFits(declared, value string) bool {
-	if typ, ok := r.bashPPTypes[declared]; ok {
+	seen := make(map[string]bool)
+	for {
+		typ, ok := r.bashPPTypes[declared]
+		if !ok {
+			break
+		}
+		if seen[declared] {
+			return false
+		}
+		seen[declared] = true
 		if typ.underlying == "enum" {
 			for _, member := range typ.members {
 				if value == member {

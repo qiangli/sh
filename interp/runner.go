@@ -4486,9 +4486,12 @@ func (r *Runner) stop(ctx context.Context) bool {
 	if !r.handlingTrap && r.exit.exiting {
 		return true
 	}
-	if err := ctx.Err(); err != nil && !(r.bashPPGoTask && r.bashPPConcurrent != nil && !r.bashPPConcurrent.armed(r.bashPPTaskState)) {
+	if err := ctx.Err(); err != nil {
 		if r.bashPPGoTask {
 			r.bashPPTaskCanceled = true
+			if r.bashPPConcurrent != nil {
+				r.bashPPConcurrent.arm(r.bashPPTaskState)
+			}
 		}
 		r.exit.fatal(err)
 		return true
@@ -5773,6 +5776,11 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			// for an assignment/redirection-only simple command.
 			defer r.setVarString("_", "")
 			for _, as := range cm.Assigns {
+				var copiedChannel *bashPPChannel
+				var copiedOwner *bashPPConcurrent
+				if r.bashPPFuncActive > 0 {
+					copiedChannel, copiedOwner = r.bashPPDirectChannel(as.Value)
+				}
 				as = r.bashPPRewriteAssign(as)
 				name := as.Name.Value
 
@@ -5822,6 +5830,11 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				}
 				name, vr := r.assignVal(name, prev, as, "")
 				r.setVarWithIndex(prevForIndex, name, as.Index, vr, as.Append)
+				if as.Index == nil && copiedChannel != nil && copiedOwner == r.bashPPConcurrent {
+					if cell := r.bashPPScope.lookup(name); cell != nil {
+						cell.channel, cell.channelOwner = copiedChannel, copiedOwner
+					}
+				}
 				r.assignNamerefName = ""
 				if !r.exit.ok() && !r.exit.exiting && !r.exit.returning && !r.exit.fatalExit {
 					// Bash: an assignment-statement error (readonly
@@ -7719,6 +7732,19 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				// loops forever in recursive-getopts patterns.
 				if name == "OPTIND" {
 					r.optState = getopts{}
+				}
+			}
+			// A channel capability is an in-process authority, not an
+			// environment value. Refuse export after evaluating the RHS but
+			// before applying the export attribute or mutating the environment.
+			// The typed cell check covers `export ch`; the exact active-handle
+			// scan is defense in depth for `export saved=$ch` and concatenation.
+			if cm.Variant.Value == "export" {
+				cell := r.bashPPScope.lookup(as.Name.Value)
+				if (cell != nil && cell.channel != nil) || r.bashPPVariableHasRuntimeHandle(vr) {
+					r.errf("%sexport: channel capabilities cannot be exported\n", r.bashErrPrefix(r.curStmtPos))
+					r.exit.code = 1
+					continue
 				}
 			}
 			for _, mode := range modes {

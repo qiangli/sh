@@ -608,8 +608,16 @@ main()
 		}
 		return f
 	}
-	if err := r.Run(context.Background(), parse(`func setup() { ch := make(chan string, 1); export SAVED=$ch; }; setup()`)); err != nil {
+	if err := r.Run(context.Background(), parse(`func setup() { ch := make(chan string, 1); export SAVED=$ch; }; setup()`)); err == nil ||
+		!strings.Contains(later.String(), "channel capabilities cannot be exported") {
+		t.Fatalf("capability export was not rejected: out=%q err=%v", later.String(), err)
+	}
+	if err := r.Run(context.Background(), parse(`func save() { ch := make(chan string, 1); SAVED=$ch; }; save()`)); err != nil {
 		t.Fatal(err)
+	}
+	if err := r.Run(context.Background(), parse(`func stale() { SAVED <- nope; }; stale()`)); err == nil ||
+		!strings.Contains(later.String(), "not a channel in this task group") {
+		t.Fatalf("stale capability gained authority: out=%q err=%v", later.String(), err)
 	}
 	if err := r.Run(context.Background(), parse(`/bin/echo "prefix-${SAVED}-suffix"`)); err == nil ||
 		!strings.Contains(later.String(), "channel handles cannot cross an exec boundary") {
@@ -622,7 +630,7 @@ main()
 }
 
 func TestBashPPCanceledTaskDoesNotPromoteTransientFailure(t *testing.T) {
-	for range 80 {
+	for range 120 {
 		out, err := runBashPPConcurrency(t, `
 func transient(ch) { false; value := <-ch; echo "$value"; }
 func seven() { return 7; }
@@ -655,5 +663,68 @@ func TestBashPPUnseededTaskGetsPrivateRNG(t *testing.T) {
 	defer b.closeBashPPTaskResources()
 	if !a.randomSeeded || !b.randomSeeded || a.randomSeed == b.randomSeed {
 		t.Fatalf("task RNGs not private: a=%d/%v b=%d/%v", a.randomSeed, a.randomSeeded, b.randomSeed, b.randomSeeded)
+	}
+}
+
+func TestBashPPTypedChannelCapabilityPropagationAndForgery(t *testing.T) {
+	out, err := runBashPPConcurrency(t, `
+func relay(ch) { ch <- function; }
+func namedRelay(ch) { ch <- named; }
+func defaultRelay(ch string = channel) { ch <- default; }
+func main() {
+ ch := make(chan string, 5)
+	channel := ch
+	copy := ch
+	copy <- direct
+	var assigned string
+	assigned=ch
+	assigned <- assigned
+	relay(ch)
+ namedRelay(ch: ch)
+ defaultRelay()
+	first := <-ch
+	second := <-ch
+	third := <-ch
+	fourth := <-ch
+	fifth := <-ch
+ echo "$first"
+ echo "$second"
+ echo "$third"
+	echo "$fourth"
+	echo "$fifth"
+ forged := "$ch"
+ forged <- denied
+}
+main()
+`)
+	if err == nil || !strings.Contains(out, "direct\n") || !strings.Contains(out, "assigned\n") || !strings.Contains(out, "function\n") ||
+		!strings.Contains(out, "named\n") || !strings.Contains(out, "default\n") ||
+		!strings.Contains(out, "forged is not a channel in this task group") {
+		t.Fatalf("out=%q err=%v", out, err)
+	}
+}
+
+func TestBashPPTypeAliasChainsAndInvalidUnderlying(t *testing.T) {
+	for _, tc := range []struct{ src, want string }{
+		{`type Broken Missing`, "undefined type: Missing"},
+		{`type Loop Loop`, "cyclic type declaration: Loop"},
+	} {
+		out, err := runBashPPConcurrency(t, tc.src)
+		if err == nil || !strings.Contains(out, tc.want) {
+			t.Errorf("src=%q out=%q err=%v", tc.src, out, err)
+		}
+	}
+	r := &Runner{bashPPScope: newBashPPScope(nil), bashPPTypes: map[string]bashPPType{
+		"Base":  {underlying: "int8"},
+		"Alias": {underlying: "Base", alias: true},
+		"Chain": {underlying: "Alias", alias: true},
+	}}
+	_ = r.bashPPScope.declare("value", expand.Variable{Set: true}, false)
+	r.bashPPSetReceivedType("value", "Chain")
+	if got := r.bashPPScope.lookup("value").typeName; got != "Base" {
+		t.Fatalf("alias chain identity=%q", got)
+	}
+	if !r.bashPPValueFits("Chain", "127") || r.bashPPValueFits("Chain", "128") {
+		t.Fatal("alias chain validation did not reach underlying type")
 	}
 }

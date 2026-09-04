@@ -5553,11 +5553,23 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					continue
 				}
 				val := arg[eqIdx+1:]
+				if r.bashPPHasRuntimeHandle(val) {
+					r.errf("bash++: channel capabilities cannot be exported\n")
+					exit.code = 2
+					continue
+				}
 				r.setVar(name, expand.Variable{Set: true, Kind: expand.String, Str: val, Exported: true})
 			} else {
 				if !syntax.ValidName(arg) {
 					exit = invalidIdentifier("export", arg)
 					continue
+				}
+				if r.bashPPScope != nil {
+					if cell := r.bashPPScope.lookup(arg); cell != nil && cell.channel != nil {
+						r.errf("bash++: channel capabilities cannot be exported\n")
+						exit.code = 2
+						continue
+					}
 				}
 				vr := r.lookupVar(arg)
 				vr.Exported = true

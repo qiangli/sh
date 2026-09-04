@@ -2224,6 +2224,10 @@ func (r *Runner) setVar(name string, vr expand.Variable) {
 			vr.Exported = vr.Exported || cell.vr.Exported
 			vr.ReadOnly = cell.vr.ReadOnly
 			cell.vr = vr
+			// Ordinary string/value assignment revokes any channel authority.
+			// The few typed direct-copy paths explicitly reattach provenance
+			// after storing the copied visible value.
+			cell.channel, cell.channelOwner = nil, nil
 			if cell.object != nil && vr.ReadOnly {
 				cell.object.readonly = true
 			}

@@ -152,6 +152,7 @@ type Runner struct {
 	// only by Bash++ go tasks, never by shell copies such as subshells.
 	bashPPConcurrent    *bashPPConcurrent
 	bashPPIssuedHandles *bashPPHandleProvenance
+	bashPPCallChannels  []*bashPPChannel
 	bashPPGoTask        bool
 	bashPPChanBoundary  bool
 	bashPPFileRun       bool

@@ -222,6 +222,9 @@ type bashPPTaskState struct {
 	once    sync.Once
 }
 
+// bashPPHandleProvenance is defense-only history for exact handles which are
+// still present in the persistent shell environment. It never grants channel
+// authority; typed bashPPCell provenance is the sole authority source.
 type bashPPHandleProvenance struct {
 	mu      sync.RWMutex
 	handles map[string]struct{}
@@ -429,20 +432,18 @@ func (r *Runner) bashPPChannel(w *syntax.Word) (*bashPPChannel, bool) {
 		r.exit.code = 2
 		return nil, false
 	}
-	vr := r.lookupVar(name)
 	c := r.bashPPConcurrent
-	c.mu.Lock()
-	h, ok := c.chans[vr.Str]
-	c.mu.Unlock()
-	if !ok {
+	cell := r.bashPPScope.lookup(name)
+	if cell == nil || cell.channel == nil || cell.channelOwner != c {
 		r.errf("bash++: %s is not a channel in this task group\n", name)
 		r.exit.code = 2
 		// Wake any later operation in this malformed structured group; in
 		// particular, an invalid send followed by a receive must not strand the
 		// owner before it reaches the File join boundary.
 		c.cancel()
+		return nil, false
 	}
-	return h, ok
+	return cell.channel, true
 }
 
 func (r *Runner) bashPPMakeChan(ctx context.Context, d *syntax.BashPPShortDecl) {
@@ -477,8 +478,12 @@ func (r *Runner) bashPPMakeChan(ctx context.Context, d *syntax.BashPPShortDecl) 
 		return
 	}
 	c.chans[h] = newBashPPChannel(elem, capacity)
+	channel := c.chans[h]
 	c.mu.Unlock()
 	r.bashPPDeclareName(d.Lhs[0].Value, expand.Variable{Set: true, Kind: expand.String, Str: h})
+	if cell := r.bashPPScope.lookup(d.Lhs[0].Value); cell != nil {
+		cell.channel, cell.channelOwner = channel, c
+	}
 }
 
 func (r *Runner) bashPPSend(ctx context.Context, s *syntax.BashPPSend) {
@@ -803,7 +808,7 @@ func (r *Runner) bashPPGo(ctx context.Context, g *syntax.BashPPGo) {
 		}
 		child.bashPPCall(c.ctx, g.Call)
 		code := child.exit.code
-		canceled := child.bashPPTaskCanceled || errors.Is(child.exit.err, context.Canceled) || errors.Is(child.exit.err, context.DeadlineExceeded) || c.ctx.Err() != nil
+		canceled := child.bashPPTaskCanceled || errors.Is(child.exit.err, context.Canceled) || errors.Is(child.exit.err, context.DeadlineExceeded)
 		if canceled {
 			return
 		}
@@ -847,6 +852,8 @@ func (r *Runner) bashPPWait(ctx context.Context) {
 	for handle := range c.chans {
 		candidates[handle] = struct{}{}
 	}
+	// Rebuild rather than append: a handle is remembered only while an exact
+	// issued token remains reachable from the persistent environment.
 	retained := make(map[string]struct{})
 	for _, vr := range r.bashPPEnv().Each {
 		value := vr.String()
@@ -1048,6 +1055,28 @@ func (r *Runner) bashPPHasRuntimeHandle(value string) bool {
 			if strings.Contains(value, handle) {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+func (r *Runner) bashPPVariableHasRuntimeHandle(vr expand.Variable) bool {
+	if r.bashPPHasRuntimeHandle(vr.Str) {
+		return true
+	}
+	for _, value := range vr.List {
+		if r.bashPPHasRuntimeHandle(value) {
+			return true
+		}
+	}
+	for _, value := range vr.ListMap {
+		if r.bashPPHasRuntimeHandle(value) {
+			return true
+		}
+	}
+	for key, value := range vr.Map {
+		if r.bashPPHasRuntimeHandle(key) || r.bashPPHasRuntimeHandle(value) {
+			return true
 		}
 	}
 	return false
