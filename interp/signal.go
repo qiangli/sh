@@ -688,6 +688,25 @@ func (r *Runner) waitSignalSubscription(sub *signalSubscription) {
 	}
 }
 
+// stopSignalSubscriptions stops and joins every subscription currently owned
+// by r. Reset replaces the Runner value wholesale, so it must release these
+// workers before their lifetime map is discarded. Waiting happens after
+// sigMu is released because a worker draining an accepted delivery needs that
+// mutex to enqueue it.
+func (r *Runner) stopSignalSubscriptions() {
+	r.sigMu.Lock()
+	subs := make([]signalSubscription, 0, len(r.sigNotifyCh))
+	for name := range r.sigNotifyCh {
+		if sub := r.stopSignalSubscriptionLocked(name); sub != nil {
+			subs = append(subs, *sub)
+		}
+	}
+	r.sigMu.Unlock()
+	for i := range subs {
+		r.waitSignalSubscription(&subs[i])
+	}
+}
+
 // forwardSignalSubscription never holds sigMu while waiting for a channel.
 // Once stopped, signal.Stop guarantees no new OS delivery and the worker drains
 // its buffered channel before declaring itself finished, retaining the callback
