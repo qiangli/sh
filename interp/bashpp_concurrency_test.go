@@ -942,6 +942,35 @@ main()
 	}
 }
 
+func TestBashPPTaskOpenRejectsPreCanceledSideEffects(t *testing.T) {
+	dir := t.TempDir()
+	existing := filepath.Join(dir, "existing")
+	if err := os.WriteFile(existing, []byte("preserved"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := newBashPPConcurrent(context.Background())
+	c.cancel()
+	r := &Runner{Dir: dir, bashPPGoTask: true, bashPPConcurrent: c}
+	r.ensureDirFile(dir)
+	defer r.closeDirFile()
+	for _, name := range []string{"missing", "existing"} {
+		f, err := r.bashPPTaskOpen(context.Background(), name, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600, false, false)
+		if f != nil {
+			_ = f.Close()
+			t.Fatalf("pre-cancelled open returned a descriptor for %s", name)
+		}
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("pre-cancelled open %s: %v", name, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, "missing")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("pre-cancelled create changed filesystem: %v", err)
+	}
+	if data, err := os.ReadFile(existing); err != nil || string(data) != "preserved" {
+		t.Fatalf("pre-cancelled truncate changed existing file: data=%q err=%v", data, err)
+	}
+}
+
 func TestBashPPFileRunPrunesClearedPersistentHandle(t *testing.T) {
 	var out strings.Builder
 	r, err := New(Lang(syntax.LangBashPP), StdIO(nil, &out, &out))

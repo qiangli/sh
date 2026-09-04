@@ -431,6 +431,12 @@ func (r *Runner) bashPPTaskOpen(ctx context.Context, path string, flags int, mod
 	if !r.bashPPGoTask {
 		return r.open(ctx, path, flags, mode, print)
 	}
+	taskCtx := r.bashPPTaskContext(ctx)
+	if err := taskCtx.Err(); err != nil {
+		r.bashPPTaskCanceled = true
+		r.exit.fatal(err)
+		return nil, err
+	}
 	reportOpenError := func(err error) error {
 		if print {
 			reason := err
@@ -466,7 +472,11 @@ func (r *Runner) bashPPTaskOpen(ctx context.Context, path string, flags int, mod
 	if flags&os.O_CREATE != 0 {
 		mode &^= os.FileMode(r.umask)
 	}
-	file, supported, err := bashPPTaskProbeOpen(r.Dir, path, flags, mode)
+	// This precheck deterministically prevents already-cancelled tasks from
+	// creating or truncating files. Cancellation can still race the syscall;
+	// closing that narrow check-to-open window requires the group-wide action
+	// commit protocol shared with exec/background launch (tracked separately).
+	file, supported, err := bashPPTaskProbeOpen(r.dirFile, r.Dir, path, flags, mode)
 	if !supported {
 		err := fmt.Errorf("task file opens are unavailable on this platform")
 		return nil, reportOpenError(err)
