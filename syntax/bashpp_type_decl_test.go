@@ -65,13 +65,9 @@ func TestBashPPTypeDeclFallback(t *testing.T) {
 		"type if int", "type T return",
 		"type T =", "type T == int", "type T = = int", "type T int extra", "type T = int extra",
 		"type T []int", "type T = []int", "type T map[string]int", "type T struct {",
-		// The Bash# enum surface: `type` opens a real Day-1 site, so the
-		// recognizer claims the shape, but the enum body is one no phase
-		// implements. It must fall back to the shell command bash runs today
-		// (`type` with five arguments), never a diagnostic — the Class E
-		// contract in full. See TestStartSiteLaterPhasesStayShell for why the
-		// second gate, not the recognizer, is where this is enforced.
-		"type Color enum { Red }", "type Color enum { Red, Green }",
+		// Comma-separated members are not the accepted Bash# enum grammar;
+		// they remain an ordinary shell command rather than being guessed at.
+		"type Color enum { Red, Green }",
 		"type T int >out", ">out type T int", "e=1 type T int",
 		"type $name int", "type T $underlying", "type T ${underlying}", "type T $(underlying)",
 		`type "T" int`, `type T "int"`, "type T *", "type T a/b", "type T int=other",

@@ -186,8 +186,12 @@ type BashPPDecl struct {
 	// surface, `type T struct { Name string; ... }`. DeclType is the `struct`
 	// literal in that form; the braces retain their source positions.
 	StructFields []*BashPPField
-	Lbrace       Pos
-	Rbrace       Pos
+	// EnumMembers is non-empty for the closed Bash# enum declaration
+	// surface, `type Color enum { Red; Green }`. Members retain their source
+	// positions so diagnostics and typed JSON never need to split source text.
+	EnumMembers []*Lit
+	Lbrace      Pos
+	Rbrace      Pos
 
 	// End_ is the end of the declaration, which for a multi-line type
 	// declaration is the closing brace rather than the end of Init.
@@ -312,6 +316,23 @@ type BashPPCall struct {
 	Rparen Pos
 }
 
+// BashPPCommandCall is a shell command whose final argument is the result of a
+// typed Bash# call, as in `printf '%s\n' label(Green)`. Keeping the outer
+// command and inner call as nodes avoids inventing a shell expansion spelling
+// for a typed return value.
+type BashPPCommandCall struct {
+	Before []*Word
+	Call   *BashPPCall
+}
+
+func (c *BashPPCommandCall) Pos() Pos {
+	if len(c.Before) > 0 {
+		return c.Before[0].Pos()
+	}
+	return c.Call.Pos()
+}
+func (c *BashPPCommandCall) End() Pos { return c.Call.End() }
+
 // BashPPImport imports one or more standard-library packages into the
 // Runner-local Bash++ namespace.
 type BashPPImport struct {
@@ -379,6 +400,38 @@ type BashPPIf struct {
 	Cond []*Word // the condition, unevaluated
 	Then *Block  // the braced body
 	Else Command // an *BashPPIf for else-if, a *Block for else, or nil
+}
+
+// BashPPSwitch is the exhaustive switch form admitted inside a typed Bash#
+// function. Its expression and case members remain syntax nodes so positions,
+// Walk, printing, and typed JSON all describe the source rather than a lowered
+// representation.
+type BashPPSwitch struct {
+	Switch Pos
+	Expr   *Word
+	Lbrace Pos
+	Arms   []*BashPPSwitchArm
+	Rbrace Pos
+}
+
+func (s *BashPPSwitch) Pos() Pos { return s.Switch }
+func (s *BashPPSwitch) End() Pos { return posAddCol(s.Rbrace, 1) }
+
+// BashPPSwitchArm is one `case Member:` or `default:` arm.
+type BashPPSwitchArm struct {
+	Case   Pos // position of case/default
+	Member *Lit
+	Colon  Pos
+	Stmts  []*Stmt
+	Last   []Comment
+}
+
+func (a *BashPPSwitchArm) Pos() Pos { return a.Case }
+func (a *BashPPSwitchArm) End() Pos {
+	if len(a.Stmts) > 0 {
+		return a.Stmts[len(a.Stmts)-1].End()
+	}
+	return posAddCol(a.Colon, 1)
 }
 
 func (i *BashPPIf) Pos() Pos { return i.If }
@@ -588,12 +641,14 @@ func (d *BashPPDefer) End() Pos {
 
 // The Command marker methods. Declaring them here rather than in nodes.go is
 // what lets this whole file merge without touching a certification-owned file.
-func (*BashPPDecl) commandNode()      {}
-func (*BashPPShortDecl) commandNode() {}
-func (*BashPPAssign) commandNode()    {}
-func (*BashPPCall) commandNode()      {}
-func (*BashPPIf) commandNode()        {}
-func (*BashPPImport) commandNode()    {}
-func (*BashPPFuncDecl) commandNode()  {}
-func (*BashPPReturn) commandNode()    {}
-func (*BashPPDefer) commandNode()     {}
+func (*BashPPDecl) commandNode()        {}
+func (*BashPPShortDecl) commandNode()   {}
+func (*BashPPAssign) commandNode()      {}
+func (*BashPPCall) commandNode()        {}
+func (*BashPPCommandCall) commandNode() {}
+func (*BashPPIf) commandNode()          {}
+func (*BashPPSwitch) commandNode()      {}
+func (*BashPPImport) commandNode()      {}
+func (*BashPPFuncDecl) commandNode()    {}
+func (*BashPPReturn) commandNode()      {}
+func (*BashPPDefer) commandNode()       {}

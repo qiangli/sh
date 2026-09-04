@@ -1517,6 +1517,16 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 			}
 			p.spacedString("}", cmd.Rbrace)
 		}
+		if len(cmd.EnumMembers) > 0 {
+			p.spacedString("{", cmd.Lbrace)
+			for i, member := range cmd.EnumMembers {
+				if i > 0 {
+					p.writeLit(";")
+				}
+				p.spacedString(member.Value, member.Pos())
+			}
+			p.spacedString("}", cmd.Rbrace)
+		}
 		if len(cmd.Init) > 0 {
 			p.spacedString("=", Pos{})
 			p.wordJoin(cmd.Init)
@@ -1586,6 +1596,10 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 			p.writeLit("...")
 		}
 		p.writeLit(")")
+	case *BashPPCommandCall:
+		p.wordJoin(cmd.Before)
+		p.space()
+		p.command(cmd.Call, nil)
 	case *BashPPFuncDecl:
 		p.spacedString(cmd.Kw.Value, cmd.Kw.Pos())
 		if cmd.Receiver != nil {
@@ -1624,6 +1638,25 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 		if cmd.Call != nil {
 			p.command(cmd.Call, nil)
 		}
+	case *BashPPSwitch:
+		p.writeLit("switch ")
+		p.word(cmd.Expr)
+		p.writeLit(" {")
+		p.wantSpace = spaceRequired
+		for _, arm := range cmd.Arms {
+			p.newlines(arm.Pos())
+			if arm.Member == nil {
+				p.writeLit("default:")
+			} else {
+				p.writeLit("case ")
+				p.writeLit(arm.Member.Value)
+				p.writeLit(":")
+			}
+			p.wantSpace = spaceRequired
+			p.nestedStmts(arm.Stmts, arm.Last, cmd.Rbrace)
+		}
+		p.newlines(cmd.Rbrace)
+		p.writeLit("}")
 	case *BashPPImport:
 		p.spacedString(cmd.Kw.Value, cmd.Kw.Pos())
 		if cmd.Path != nil {

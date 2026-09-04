@@ -190,6 +190,14 @@ func Walk(node Node, f func(Node) bool) {
 		walkNilable(node.DeclType, f)
 		walkList(node.Init, f)
 		walkList(node.StructFields, f)
+		walkList(node.EnumMembers, f)
+	case *BashPPSwitch:
+		Walk(node.Expr, f)
+		walkList(node.Arms, f)
+	case *BashPPSwitchArm:
+		walkNilable(node.Member, f)
+		walkList(node.Stmts, f)
+		walkComments(node.Last, f)
 	case *BashPPAssign:
 		Walk(node.Target, f)
 		Walk(node.Value, f)
@@ -210,6 +218,9 @@ func Walk(node Node, f func(Node) bool) {
 		walkList(node.Fun, f)
 		walkList(node.ArgNames, f)
 		walkList(node.Args, f)
+	case *BashPPCommandCall:
+		walkList(node.Before, f)
+		Walk(node.Call, f)
 	case *BashPPImport:
 		Walk(node.Kw, f)
 		walkNilable(node.Alias, f)
