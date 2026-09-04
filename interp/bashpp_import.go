@@ -365,7 +365,7 @@ func (r *Runner) bashPPEvalRequest() (bashPPEvalRequest, error) {
 		env = setEnvString(env, "GOTOOLCHAIN", r.bashPPTools.goVersion)
 	}
 	return bashPPEvalRequest{Go: r.bashPPTools.goBinary, Dir: r.Dir, Env: env, Stdin: r.stdin,
-		Stdout: r.stdout, Stderr: r.stderr, Imports: r.bashPPImports}, nil
+		Stdout: r.bashPPWriter(r.stdout), Stderr: r.bashPPWriter(r.stderr), Imports: r.bashPPImports}, nil
 }
 
 func setEnvString(env []string, name, value string) []string {

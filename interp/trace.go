@@ -33,6 +33,7 @@ func (r *Runner) tracer(pos syntax.Pos) *tracer {
 	if r.stmtTraceOutput != nil {
 		out = r.stmtTraceOutput
 	}
+	out = r.bashPPWriter(out)
 	return &tracer{
 		printer:   syntax.NewPrinter(),
 		output:    out,

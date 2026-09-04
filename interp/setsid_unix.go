@@ -69,8 +69,8 @@ func runDetachedExec(ctx context.Context, r *Runner, label string, args []string
 		Env:    execEnv(r.bashPPEnv()),
 		Dir:    r.Dir,
 		Stdin:  r.stdin,
-		Stdout: r.stdout,
-		Stderr: r.stderr,
+		Stdout: r.bashPPWriter(r.stdout),
+		Stderr: r.bashPPWriter(r.stderr),
 		SysProcAttr: &syscall.SysProcAttr{
 			Setsid: true,
 		},

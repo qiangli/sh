@@ -440,7 +440,7 @@ func (r *Runner) expandErr(err error) {
 			errMsg = r.bashErrPrefix(r.curStmtPos) + errMsg
 		}
 	}
-	fmt.Fprintln(r.stderr, errMsg)
+	fmt.Fprintln(r.bashPPWriter(r.stderr), errMsg)
 	r.reportError("expand", r.curStmtPos, "", errMsg, 1)
 	if strings.Contains(errMsg, "arithmetic syntax error: invalid arithmetic operator") {
 		r.lastExpandExit = exitStatus{code: 1}
@@ -1702,8 +1702,8 @@ func (r *Runner) handlerCtx(ctx context.Context, kind handlerKind, pos syntax.Po
 		Env:    &overlayEnviron{parent: r.bashPPEnv()},
 		Dir:    r.Dir,
 		Pos:    pos,
-		Stdout: r.stdout,
-		Stderr: r.stderr,
+		Stdout: r.bashPPWriter(r.stdout),
+		Stderr: r.bashPPWriter(r.stderr),
 	}
 	if r.stdin != nil { // do not leave hc.Stdin as a typed nil
 		hc.Stdin = r.stdin
@@ -1730,31 +1730,19 @@ func (r *Runner) handlerCtx(ctx context.Context, kind handlerKind, pos syntax.Po
 }
 
 func (r *Runner) out(s string) {
-	if r.bashPPConcurrent != nil {
-		r.bashPPConcurrent.ioMu.Lock()
-		defer r.bashPPConcurrent.ioMu.Unlock()
-	}
-	if _, err := io.WriteString(r.stdout, s); err != nil {
+	if _, err := io.WriteString(r.bashPPWriter(r.stdout), s); err != nil {
 		r.outErr = err
 	}
 }
 
 func (r *Runner) outf(format string, a ...any) {
-	if r.bashPPConcurrent != nil {
-		r.bashPPConcurrent.ioMu.Lock()
-		defer r.bashPPConcurrent.ioMu.Unlock()
-	}
-	if _, err := fmt.Fprintf(r.stdout, format, a...); err != nil {
+	if _, err := fmt.Fprintf(r.bashPPWriter(r.stdout), format, a...); err != nil {
 		r.outErr = err
 	}
 }
 
 func (r *Runner) errf(format string, a ...any) {
-	if r.bashPPConcurrent != nil {
-		r.bashPPConcurrent.ioMu.Lock()
-		defer r.bashPPConcurrent.ioMu.Unlock()
-	}
-	fmt.Fprintf(r.stderr, format, a...)
+	fmt.Fprintf(r.bashPPWriter(r.stderr), format, a...)
 }
 
 func (r *Runner) reportError(kind string, pos syntax.Pos, command, message string, code uint8) {
@@ -1774,7 +1762,7 @@ func (r *Runner) reportError(kind string, pos syntax.Pos, command, message strin
 	if n := len(r.callStack); n > 0 {
 		ev.Function = r.callStack[n-1].funcName
 	}
-	r.structuredErrorHandler(ev)
+	r.bashPPObserve(func() { r.structuredErrorHandler(ev) })
 }
 
 // pureLiteral reports whether all parts of word are literal /
@@ -10918,12 +10906,12 @@ func (r *Runner) emitAudit(kind string, pos syntax.Pos, args []string, isBuiltin
 		IsBuiltin:     isBuiltin,
 	}
 	if r.auditHandler != nil {
-		r.auditHandler(ev)
+		r.bashPPObserve(func() { r.auditHandler(ev) })
 	}
 	if r.auditLog != nil {
 		if data, err := json.Marshal(ev); err == nil {
-			r.auditLog.Write(data)
-			r.auditLog.Write([]byte{'\n'})
+			data = append(data, '\n')
+			r.bashPPWriter(r.auditLog).Write(data)
 		}
 	}
 }

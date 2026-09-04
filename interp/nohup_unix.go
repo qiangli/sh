@@ -79,7 +79,7 @@ func (r *Runner) runNohup(ctx context.Context, args []string) exitStatus {
 		nohupOut = f
 		r.stdout = f
 		// Match coreutils: print the path to stderr so users know where it went.
-		fmt.Fprintf(origStderr, "nohup: appending output to %q\n", path)
+		fmt.Fprintf(r.bashPPWriter(origStderr), "nohup: appending output to %q\n", path)
 	}
 
 	if isTTYWriter(origStderr) {

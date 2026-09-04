@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	mathrand "math/rand/v2"
 	"os"
 	"reflect"
@@ -224,17 +225,77 @@ type bashPPTaskState struct {
 // sync.WaitGroup, registration remains safe while the owner is joining; only
 // reaching zero permanently quiesces the group.
 type bashPPConcurrent struct {
-	mu       sync.Mutex
-	changed  *sync.Cond
-	ctx      context.Context
-	cancel   context.CancelFunc
-	active   int
-	quiesced bool
-	failures []bashPPTaskFailure
-	nextTask uint64
-	tasks    map[uint64]*bashPPTaskState
-	chans    map[string]*bashPPChannel
-	ioMu     sync.Mutex
+	mu         sync.Mutex
+	changed    *sync.Cond
+	ctx        context.Context
+	cancel     context.CancelFunc
+	active     int
+	quiesced   bool
+	failures   []bashPPTaskFailure
+	nextTask   uint64
+	tasks      map[uint64]*bashPPTaskState
+	chans      map[string]*bashPPChannel
+	ioMu       sync.Mutex
+	observerMu sync.Mutex
+}
+
+// bashPPLockedWriter serializes one Write call at a time across every task in
+// a File-owned group. It deliberately does not hold the lock across a handler
+// invocation or process lifetime.
+type bashPPLockedWriter struct {
+	mu *sync.Mutex
+	w  io.Writer
+}
+
+func (w *bashPPLockedWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.w.Write(p)
+}
+
+func (c *bashPPConcurrent) writer(w io.Writer) io.Writer {
+	if w == nil {
+		return nil
+	}
+	if locked, ok := w.(*bashPPLockedWriter); ok && locked.mu == &c.ioMu {
+		return w
+	}
+	// pipelineWriter must remain the outermost facade so it can translate
+	// platform EPIPE behavior and DefaultExecHandler can still unwrap it.
+	if pw, ok := w.(*pipelineWriter); ok {
+		inner := c.writer(pw.w)
+		if inner == pw.w {
+			return pw
+		}
+		return &pipelineWriter{w: inner, runner: pw.runner}
+	}
+	// Native descriptors already support concurrent Write and their concrete
+	// shape is required for direct os/exec wiring, TTY probing, job control,
+	// and kernel SIGPIPE behavior. Do not hide them behind an io.Writer facade.
+	if _, ok := w.(*os.File); ok {
+		return w
+	}
+	if _, ok := w.(interface{ Fd() uintptr }); ok {
+		return w
+	}
+	return &bashPPLockedWriter{mu: &c.ioMu, w: w}
+}
+
+func (r *Runner) bashPPWriter(w io.Writer) io.Writer {
+	if r.bashPPConcurrent == nil {
+		return w
+	}
+	return r.bashPPConcurrent.writer(w)
+}
+
+func (r *Runner) bashPPObserve(fn func()) {
+	if r.bashPPConcurrent == nil {
+		fn()
+		return
+	}
+	r.bashPPConcurrent.observerMu.Lock()
+	defer r.bashPPConcurrent.observerMu.Unlock()
+	fn()
 }
 
 var bashPPConcurrencyInitMu sync.Mutex
