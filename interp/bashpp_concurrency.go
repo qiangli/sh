@@ -617,15 +617,34 @@ func (r *Runner) bashPPSend(ctx context.Context, s *syntax.BashPPSend) {
 		r.exit.code = 2
 		return
 	}
-	if !r.bashPPArmBeforeBlock(ctx) {
-		return
-	}
 	if !c.beginSend() {
 		r.errf("bash++: send on closed channel\n")
 		r.exit.code = 2
 		return
 	}
 	defer c.endSend()
+	taskCtx := r.bashPPTaskContext(ctx)
+	if err := taskCtx.Err(); err != nil {
+		r.bashPPTaskCanceled = true
+		r.exit.code = 1
+		return
+	}
+	select {
+	case c.ch <- v:
+		return
+	case <-c.closing:
+		r.errf("bash++: send on closed channel\n")
+		r.exit.code = 2
+		return
+	case <-taskCtx.Done():
+		r.bashPPTaskCanceled = true
+		r.exit.code = 1
+		return
+	default:
+	}
+	if !r.bashPPArmBeforeBlock(ctx) {
+		return
+	}
 	select {
 	case c.ch <- v:
 	case <-c.closing:
@@ -638,28 +657,44 @@ func (r *Runner) bashPPSend(ctx context.Context, s *syntax.BashPPSend) {
 }
 
 func (r *Runner) bashPPReceive(ctx context.Context, recv *syntax.BashPPReceive, lhs []*syntax.Lit) (string, bool) {
+	if lhs != nil && (len(lhs) == 0 || len(lhs) > 2) {
+		r.errf("receive assignment mismatch\n")
+		r.exit.code = 2
+		return "", false
+	}
 	c, ok := r.bashPPChannel(recv.Chan)
 	if !ok {
 		return "", false
 	}
-	if !r.bashPPArmBeforeBlock(ctx) {
-		return "", false
-	}
 	var v string
 	var open bool
-	select {
-	case v, open = <-c.ch:
-	case <-r.bashPPTaskContext(ctx).Done():
+	taskCtx := r.bashPPTaskContext(ctx)
+	if err := taskCtx.Err(); err != nil {
 		r.bashPPTaskCanceled = true
 		r.exit.code = 1
 		return "", false
 	}
-	if lhs != nil {
-		if len(lhs) == 0 || len(lhs) > 2 {
-			r.errf("receive assignment mismatch\n")
-			r.exit.code = 2
-			return v, open
+	select {
+	case v, open = <-c.ch:
+		// An immediately buffered or closed receive is part of the current
+		// task's deterministic prefix and must not release a later launch.
+	case <-taskCtx.Done():
+		r.bashPPTaskCanceled = true
+		r.exit.code = 1
+		return "", false
+	default:
+		if !r.bashPPArmBeforeBlock(ctx) {
+			return "", false
 		}
+		select {
+		case v, open = <-c.ch:
+		case <-taskCtx.Done():
+			r.bashPPTaskCanceled = true
+			r.exit.code = 1
+			return "", false
+		}
+	}
+	if lhs != nil {
 		r.bashPPDeclareName(lhs[0].Value, expand.Variable{Set: true, Kind: expand.String, Str: v})
 		r.bashPPSetReceivedType(lhs[0].Value, c.elem)
 		if len(lhs) == 2 {
@@ -1163,6 +1198,11 @@ func (r *Runner) bashPPSelect(ctx context.Context, s *syntax.BashPPSelect) {
 				r.exit.code = 2
 				return
 			}
+			if len(comm.Lhs) == 0 || len(comm.Lhs) > 2 {
+				r.errf("receive assignment mismatch\n")
+				r.exit.code = 2
+				return
+			}
 			c, ok := r.bashPPChannel(comm.Recv.Chan)
 			if !ok {
 				return
@@ -1180,6 +1220,9 @@ func (r *Runner) bashPPSelect(ctx context.Context, s *syntax.BashPPSelect) {
 				r.exit.code = 2
 				return
 			}
+			// beginSend is the send/close linearization point. A close which
+			// wins first rejects this case; once registration wins, close waits
+			// for it, while the paired closing case can release a blocked send.
 			if !c.beginSend() {
 				releaseSends()
 				r.errf("bash++: send on closed channel\n")
@@ -1202,43 +1245,56 @@ func (r *Runner) bashPPSelect(ctx context.Context, s *syntax.BashPPSelect) {
 		}
 		arms = append(arms, arm)
 	}
-	if def != nil {
-		cases = append(cases, reflect.SelectCase{Dir: reflect.SelectDefault})
-		arms = append(arms, def)
-		caseElems = append(caseElems, "")
-	}
-	if def == nil {
-		cases = append(cases, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(r.bashPPTaskContext(ctx).Done())})
-	}
-	if len(cases) == 0 {
-		<-r.bashPPTaskContext(ctx).Done()
-		r.exit.code = 1
-		return
-	}
-	if !r.bashPPArmBeforeBlock(ctx) {
-		return
-	}
-	i, v, open := reflect.Select(cases)
-	releaseSends()
-	if closingCases[i] {
-		r.errf("bash++: send on closed channel\n")
-		r.exit.code = 2
-		return
-	}
-	if def == nil && i == len(arms) {
+	taskCtx := r.bashPPTaskContext(ctx)
+	if len(cases) == 0 && def == nil {
+		if !r.bashPPArmBeforeBlock(ctx) {
+			return
+		}
+		<-taskCtx.Done()
 		r.bashPPTaskCanceled = true
 		r.exit.code = 1
 		return
 	}
-	arm := arms[i]
+	if err := taskCtx.Err(); err != nil {
+		r.bashPPTaskCanceled = true
+		r.exit.code = 1
+		return
+	}
+	ctxIndex := len(cases)
+	cases = append(cases, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(taskCtx.Done())})
+	probeDefault := len(cases)
+	cases = append(cases, reflect.SelectCase{Dir: reflect.SelectDefault})
+	i, v, open := reflect.Select(cases)
+	var arm *syntax.BashPPSelectCase
+	if i == probeDefault {
+		cases = cases[:probeDefault]
+		if def != nil {
+			arm = def
+			i = -1 // language default has no entry in cases/arms
+		} else {
+			if !r.bashPPArmBeforeBlock(ctx) {
+				return
+			}
+			i, v, open = reflect.Select(cases)
+		}
+	}
+	releaseSends()
+	if arm == nil && i == ctxIndex {
+		r.bashPPTaskCanceled = true
+		r.exit.code = 1
+		return
+	}
+	if i >= 0 && closingCases[i] {
+		r.errf("bash++: send on closed channel\n")
+		r.exit.code = 2
+		return
+	}
+	if arm == nil {
+		arm = arms[i]
+	}
 	leave := r.bashPPPushScope()
 	defer leave()
 	if decl, yes := arm.Comm.(*syntax.BashPPShortDecl); yes {
-		if len(decl.Lhs) == 0 || len(decl.Lhs) > 2 {
-			r.errf("receive assignment mismatch\n")
-			r.exit.code = 2
-			return
-		}
 		text := ""
 		if open {
 			text = v.String()
@@ -1257,28 +1313,44 @@ func (r *Runner) bashPPRange(ctx context.Context, rng *syntax.BashPPRange) {
 	if !ok {
 		return
 	}
-	if !r.bashPPArmBeforeBlock(ctx) {
-		return
-	}
+	taskCtx := r.bashPPTaskContext(ctx)
 	for {
-		select {
-		case v, open := <-c.ch:
-			if !open {
-				return
-			}
-			leave := r.bashPPPushScope()
-			if len(rng.Names) == 1 {
-				r.bashPPDeclareName(rng.Names[0].Value, expand.Variable{Set: true, Kind: expand.String, Str: v})
-				r.bashPPSetReceivedType(rng.Names[0].Value, c.elem)
-			}
-			r.cmd(r.bashPPTaskContext(ctx), rng.Body)
-			leave()
-			if r.exit.exiting || r.loopControlPending() {
-				return
-			}
-		case <-r.bashPPTaskContext(ctx).Done():
+		var v string
+		var open bool
+		if err := taskCtx.Err(); err != nil {
 			r.bashPPTaskCanceled = true
 			r.exit.code = 1
+			return
+		}
+		select {
+		case v, open = <-c.ch:
+		case <-taskCtx.Done():
+			r.bashPPTaskCanceled = true
+			r.exit.code = 1
+			return
+		default:
+			if !r.bashPPArmBeforeBlock(ctx) {
+				return
+			}
+			select {
+			case v, open = <-c.ch:
+			case <-taskCtx.Done():
+				r.bashPPTaskCanceled = true
+				r.exit.code = 1
+				return
+			}
+		}
+		if !open {
+			return
+		}
+		leave := r.bashPPPushScope()
+		if len(rng.Names) == 1 {
+			r.bashPPDeclareName(rng.Names[0].Value, expand.Variable{Set: true, Kind: expand.String, Str: v})
+			r.bashPPSetReceivedType(rng.Names[0].Value, c.elem)
+		}
+		r.cmd(taskCtx, rng.Body)
+		leave()
+		if r.exit.exiting || r.exit.returning || r.loopControlPending() {
 			return
 		}
 	}

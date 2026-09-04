@@ -547,6 +547,144 @@ func TestBashPPSelectReleasesSendBeforeArmAndOnError(t *testing.T) {
 	}
 }
 
+func TestBashPPImmediateChannelFailureExcludesLaterTask(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup string
+		body  string
+	}{
+		{"closed send", "close(ch)", "ch <- value"},
+		{"closed select send", "close(ch)", "select { case ch <- value: return; }"},
+		{"ready select", "ch <- value", "select { case <-ch: return 7; }"},
+		{"default select", "", "select { case <-ch: return 8; default: return 7; }"},
+		{"buffered range body", "ch <- value; close(ch)", "for range ch { return 7; }"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := runBashPPConcurrency(t, `
+func first(ch) { `+tc.body+`; }
+func later() { echo escaped; }
+func main() {
+ ch := make(chan string, 1)
+ `+tc.setup+`
+ go first(ch)
+ go later()
+}
+main()
+`)
+			if err == nil || strings.Contains(out, "escaped") {
+				t.Fatalf("immediate outcome armed later task: out=%q err=%v", out, err)
+			}
+		})
+	}
+}
+
+func TestBashPPReceiveValidatesBeforeBufferedConsume(t *testing.T) {
+	const src = `
+func main() {
+ ch := make(chan string, 1)
+ ch <- kept
+ a, b := <-ch
+ value := <-ch
+ echo "$value"
+}
+main()
+`
+	f, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(src), "malformed-receive.bpp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutated := false
+	syntax.Walk(f, func(node syntax.Node) bool {
+		if decl, ok := node.(*syntax.BashPPShortDecl); ok && decl.Recv != nil && !mutated {
+			decl.Lhs = append(decl.Lhs, &syntax.Lit{Value: "c"})
+			mutated = true
+		}
+		return true
+	})
+	if !mutated {
+		t.Fatal("receive declaration not found")
+	}
+	var out strings.Builder
+	r, err := New(Lang(syntax.LangBashPP), StdIO(nil, &out, &out))
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = r.Run(context.Background(), f)
+	if !strings.Contains(out.String(), "receive assignment mismatch") || !strings.Contains(out.String(), "kept\n") {
+		t.Fatalf("malformed receive consumed buffered value: out=%q err=%v", out.String(), err)
+	}
+}
+
+func TestBashPPEmptySelectCanceledByFailingSibling(t *testing.T) {
+	const src = `
+func blocked() { select {} }
+func fail() { return 7; }
+func main() { go blocked(); go fail(); }
+main()
+`
+	f, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(src), "empty-select.bpp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output strings.Builder
+	r, err := New(Lang(syntax.LangBashPP), StdIO(nil, &output, &output))
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	var runErr error
+	go func() {
+		runErr = r.Run(context.Background(), f)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("empty select did not observe sibling cancellation")
+	}
+	if runErr == nil || !strings.Contains(output.String(), "exit status 7") {
+		t.Fatalf("out=%q err=%v", output.String(), runErr)
+	}
+}
+
+func TestBashPPOpenEmptyRangeArmsForOwnerSend(t *testing.T) {
+	out, err := runBashPPConcurrency(t, `
+func drain(ch, ack) {
+ for value := range ch { echo "$value"; ack <- ok; }
+}
+func main() {
+ ch := make(chan string)
+ ack := make(chan string)
+ go drain(ch, ack)
+ ch <- ready
+ <-ack
+ close(ch)
+}
+main()
+`)
+	if err != nil || out != "ready\n" {
+		t.Fatalf("out=%q err=%v", out, err)
+	}
+}
+
+func TestBashPPSelectDefaultAndReadyReleaseRegistrations(t *testing.T) {
+	for _, tc := range []struct{ capacity, body string }{
+		{"0", "select { default: return; }"},
+		{"0", "select { case ch <- value: return 7; default: return; }"},
+		{"1", "select { case ch <- value: return; default: return 7; }"},
+	} {
+		out, err := runBashPPConcurrency(t, `
+func choose(ch) { `+tc.body+`; }
+func main() { ch := make(chan string, `+tc.capacity+`); go choose(ch); close(ch); }
+main()
+`)
+		if err != nil {
+			t.Fatalf("select registration leaked: body=%q out=%q err=%v", tc.body, out, err)
+		}
+	}
+}
+
 func TestBashPPChannelTypeExistenceAndReceiveIdentity(t *testing.T) {
 	out, err := runBashPPConcurrency(t, `func main() { ch := make(chan Missing); }; main()`)
 	if err == nil || !strings.Contains(out, "undefined element type: Missing") {
