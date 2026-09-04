@@ -283,6 +283,9 @@ type Printer struct {
 	levelIncs []bool
 
 	nestedBinary bool
+	// bashppFuncDepth scopes formatting choices needed only to keep shell
+	// syntax distinct from Bash++ forms inside committed function bodies.
+	bashppFuncDepth int
 
 	// pendingHdocs is the list of pending heredocs to write.
 	pendingHdocs []*Redirect
@@ -303,6 +306,7 @@ func (p *Printer) reset() {
 	p.lastLevel, p.level = 0, 0
 	p.levelIncs = p.levelIncs[:0]
 	p.nestedBinary = false
+	p.bashppFuncDepth = 0
 	p.pendingHdocs = p.pendingHdocs[:0]
 }
 
@@ -438,7 +442,9 @@ func (p *Printer) bashppFuncLit(lit *BashPPFuncLit) {
 	p.bashppSignature(lit.Params, lit.Results, lit.ResLparen)
 	p.wantSpace = spaceRequired
 	if lit.Body != nil {
+		p.bashppFuncDepth++
 		p.command(lit.Body, nil)
+		p.bashppFuncDepth--
 	}
 }
 
@@ -1217,7 +1223,7 @@ func (p *Printer) stmt(s *Stmt) {
 		// share the same flush-the-operator convention.
 		if p.spaceRedirects && r.Op != DplIn && r.Op != DplOut && r.Op != Hdoc && r.Op != DashHdoc {
 			p.space()
-		} else if s.Cmd == nil && r.Op == RdrIn && bashppLeadingDash(r.Word) {
+		} else if p.bashppFuncDepth > 0 && s.Cmd == nil && r.Op == RdrIn && bashppLeadingDash(r.Word) {
 			// Keep a commandless `< -file` distinct from the Bash++ receive
 			// `<-file` when reparsed. A command-prefixed redirect is already
 			// unambiguous and retains the base formatter's compact spelling.
@@ -1643,7 +1649,9 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 		p.bashppSignature(cmd.Params, cmd.Results, cmd.ResLparen)
 		p.wantSpace = spaceRequired
 		if cmd.Body != nil {
+			p.bashppFuncDepth++
 			p.command(cmd.Body, nil)
+			p.bashppFuncDepth--
 		}
 	case *BashPPReturn:
 		p.spacedString(cmd.Kw.Value, cmd.Kw.Pos())
@@ -1681,7 +1689,10 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 		p.writeLit(")")
 	case *BashPPSelect:
 		p.writeLit("select {")
-		p.wantSpace = spaceRequired
+		// Canonicalize the first arm and every body onto their own line on the
+		// first print. Depending on source positions here makes compact input
+		// require two formatting passes to reach a fixed point.
+		p.wantNewline = len(cmd.Cases) > 0
 		for _, arm := range cmd.Cases {
 			p.newlines(arm.Pos())
 			p.spacePad(arm.Pos())
@@ -1692,7 +1703,7 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 				p.command(arm.Comm, nil)
 				p.writeLit(":")
 			}
-			p.wantSpace = spaceRequired
+			p.wantNewline = true
 			p.nestedStmts(arm.Stmts, arm.Last, cmd.Rbrace)
 			// A following case/default must not be glued to the final command
 			// in this arm. Force the same newline that Go's implicit semicolon

@@ -239,6 +239,9 @@ func TestBashPPChanSelectCompactRoundTrip(t *testing.T) {
 		qt.Assert(t, qt.IsNil(err))
 		again, err := bashppParse(LangBashPP, out)
 		qt.Assert(t, qt.IsNil(err), qt.Commentf("printed source:\n%s", out))
+		out2, err := bashppPrint(again)
+		qt.Assert(t, qt.IsNil(err))
+		qt.Assert(t, qt.Equals(out2, out))
 		sel := again.Stmts[0].Cmd.(*BashPPFuncDecl).Body.Stmts[0].Cmd.(*BashPPSelect)
 		qt.Assert(t, qt.HasLen(sel.Cases, arms))
 		gotNonEmpty := 0
@@ -375,11 +378,16 @@ func TestBashPPChanFormsInertInBashAndPOSIX(t *testing.T) {
 	// Preserve the base formatter's spelling for an ordinary command redirect.
 	// The command prefix makes this unambiguous even though the space is elided.
 	for _, lang := range []LangVariant{LangBash, LangPOSIX} {
-		f, err := bashppParse(lang, "cat < -file\n")
-		qt.Assert(t, qt.IsNil(err))
-		out, err := bashppPrint(f)
-		qt.Assert(t, qt.IsNil(err))
-		qt.Assert(t, qt.Equals(out, "cat <-file\n"), qt.Commentf("variant %v", lang))
+		for _, test := range []struct{ src, want string }{
+			{"cat < -file\n", "cat <-file\n"},
+			{"< -file\n", "<-file\n"},
+		} {
+			f, err := bashppParse(lang, test.src)
+			qt.Assert(t, qt.IsNil(err))
+			out, err := bashppPrint(f)
+			qt.Assert(t, qt.IsNil(err))
+			qt.Assert(t, qt.Equals(out, test.want), qt.Commentf("variant %v", lang))
+		}
 	}
 
 	// A commandless redirect needs its separating space because `<-file`
