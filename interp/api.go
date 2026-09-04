@@ -148,6 +148,11 @@ type Runner struct {
 	// Go's "recover was not called directly by a deferred function" rule: a
 	// recover succeeds only where len(callStack) equals it.
 	bashPPDeferDepth int
+	// bashPPConcurrent is intentionally runner-session local.  It is shared
+	// only by Bash++ go tasks, never by shell copies such as subshells.
+	bashPPConcurrent   *bashPPConcurrent
+	bashPPGoTask       bool
+	bashPPChanBoundary bool
 
 	// funcSources records the script name active when a function was
 	// defined. Bash reports runtime diagnostics in a function body against
@@ -2992,6 +2997,7 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 		r.exit.exiting = false
 	}
 	if runExitTrap {
+		r.bashPPWait(ctx)
 		oldCallStack := r.callStack
 		if r.exitTrapCallStack != nil {
 			r.callStack = r.exitTrapCallStack
@@ -3200,6 +3206,10 @@ func (r *Runner) subshell(background bool) *Runner {
 		ulimitOverride: maps.Clone(r.ulimitOverride),
 	}
 	r2.writeEnv = newOverlayEnviron(r.writeEnv, background)
+	// A shell copy is a process boundary, even though this interpreter models
+	// it with a goroutine. Channel handles are deliberately not serializable.
+	r2.bashPPConcurrent = r.bashPPConcurrent
+	r2.bashPPChanBoundary = r.bashPPConcurrent != nil
 	// Funcs are copied, since they might be modified.
 	r2.Funcs = maps.Clone(r.Funcs)
 	r2.funcSources = maps.Clone(r.funcSources)

@@ -1730,6 +1730,10 @@ func (r *Runner) handlerCtx(ctx context.Context, kind handlerKind, pos syntax.Po
 }
 
 func (r *Runner) out(s string) {
+	if r.bashPPConcurrent != nil {
+		r.bashPPConcurrent.ioMu.Lock()
+		defer r.bashPPConcurrent.ioMu.Unlock()
+	}
 	if _, err := io.WriteString(r.stdout, s); err != nil {
 		r.outErr = err
 	}
@@ -5358,6 +5362,18 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		r.bashPPDeclare(ctx, cm)
 	case *syntax.BashPPShortDecl:
 		r.bashPPShortDecl(ctx, cm)
+	case *syntax.BashPPGo:
+		r.bashPPGo(ctx, cm)
+	case *syntax.BashPPSend:
+		r.bashPPSend(ctx, cm)
+	case *syntax.BashPPReceive:
+		r.bashPPReceive(ctx, cm, nil)
+	case *syntax.BashPPClose:
+		r.bashPPClose(cm)
+	case *syntax.BashPPSelect:
+		r.bashPPSelect(ctx, cm)
+	case *syntax.BashPPRange:
+		r.bashPPRange(ctx, cm)
 	case *syntax.BashPPAssign:
 		r.bashPPAssign(ctx, cm)
 	case *syntax.BashPPCall:

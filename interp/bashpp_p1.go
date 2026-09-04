@@ -175,6 +175,14 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 	if r.bashPPScope == nil {
 		r.bashPPScope = newBashPPScope(nil)
 	}
+	if d.MakeChan != nil {
+		r.bashPPMakeChan(ctx, d)
+		return
+	}
+	if d.Recv != nil {
+		r.bashPPReceive(ctx, d.Recv, d.Lhs)
+		return
+	}
 	// `greet := func(who string) { … }` binds the FUNCTION, not a call's
 	// results, so it is answered before the call and tuple paths: there is one
 	// value, it is the closure, and it captures the scope at this point.

@@ -658,6 +658,10 @@ type Parser struct {
 	// zeroed across a nested shell function or subshell body so a `return` there
 	// keeps its shell meaning.
 	bashppFuncDepth int
+	// bashppChanCopy keeps the already committed channel region recognizable
+	// inside a shell copy. It deliberately does not keep bashppFuncDepth: P3
+	// return/defer ownership stops at the copy boundary.
+	bashppChanCopy bool
 	// bashppFuncNames records declarations seen so far, allowing unambiguous
 	// zero-argument calls (`f()`) without stealing classic `f() { ... }` shell
 	// definitions from the parser.
@@ -2827,7 +2831,7 @@ func (p *Parser) doRedirect(s *Stmt) {
 	default:
 		r.Word = p.followWordTok(token(r.Op), r.OpPos)
 	}
-	if p.lang.in(LangBashPP) && p.bashppFuncDepth > 0 && r.Op == RdrIn &&
+	if p.lang.in(LangBashPP) && (p.bashppFuncDepth > 0 || p.bashppChanCopy) && r.Op == RdrIn &&
 		r.Word != nil && r.Word.Pos().Offset() != r.OpPos.Offset()+1 && bashppLeadingDash(r.Word) {
 		r.BashPPKeepSpace = true
 	}
@@ -2966,7 +2970,7 @@ func (p *Parser) gotStmtPipe(s *Stmt, binCmd bool) *Stmt {
 			// TODO(zsh): "repeat"
 			p.whileClause(s, p.val == "until")
 		case "for":
-			if p.lang.in(LangBashPP) && p.bashppFuncDepth > 0 && p.bashppRange(s) {
+			if p.lang.in(LangBashPP) && (p.bashppFuncDepth > 0 || p.bashppChanCopy) && p.bashppRange(s) {
 				break
 			}
 			p.forClause(s)
@@ -3064,7 +3068,7 @@ func (p *Parser) gotStmtPipe(s *Stmt, binCmd bool) *Stmt {
 				p.coprocClause(s)
 			}
 		case "select":
-			if p.lang.in(LangBashPP) && p.bashppFuncDepth > 0 && p.bashppSelect(s) {
+			if p.lang.in(LangBashPP) && (p.bashppFuncDepth > 0 || p.bashppChanCopy) && p.bashppSelect(s) {
 				break
 			}
 			if p.lang.in(langBashLike | LangMirBSDKorn | LangZsh) {
@@ -3197,7 +3201,7 @@ func (p *Parser) gotStmtPipe(s *Stmt, binCmd bool) *Stmt {
 	// whose only content is that redirect. Reclassifying it needs the redirect
 	// list to be final, which is why this sits after the trailing loop rather
 	// than beside the other Bash++ dispatch in callExpr.
-	if s.Cmd == nil && p.lang.in(LangBashPP) && p.bashppFuncDepth > 0 {
+	if s.Cmd == nil && p.lang.in(LangBashPP) && (p.bashppFuncDepth > 0 || p.bashppChanCopy) {
 		if cmd := bashppChanForm(nil, s.Redirs); cmd != nil {
 			s.Cmd = cmd
 			s.Redirs = nil
@@ -3243,9 +3247,12 @@ func (p *Parser) subshell(s *Stmt) {
 	// A subshell is a fresh execution context: a `return` inside it belongs to
 	// no enclosing Bash++ func, so the Go-form depth does not cross the `(`.
 	savedFuncDepth := p.bashppFuncDepth
+	savedChanCopy := p.bashppChanCopy
 	p.bashppFuncDepth = 0
+	p.bashppChanCopy = savedChanCopy || savedFuncDepth > 0
 	sub.Stmts, sub.Last = p.followStmts("(", sub.Lparen)
 	p.bashppFuncDepth = savedFuncDepth
+	p.bashppChanCopy = savedChanCopy
 	p.postNested(old)
 	if p.err == nil && p.tok == _EOF && p.heredocEOFWarning != nil && p.hdocEOFLine != 0 {
 		// A here-document inside this subshell ran to end-of-file
@@ -4190,7 +4197,7 @@ loop:
 		// sh/syntax/bashpp_chan.go for why they are reclassified from the
 		// finished tree rather than recognized in the lexer. The redirect is
 		// consumed by the typed node, so it is dropped from the statement.
-		if p.bashppFuncDepth > 0 {
+		if p.bashppFuncDepth > 0 || p.bashppChanCopy {
 			if cmd := bashppChanForm(ce, s.Redirs); cmd != nil {
 				s.Cmd = cmd
 				s.Redirs = nil
