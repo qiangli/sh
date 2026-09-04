@@ -560,21 +560,52 @@ func (r *Runner) bashPPRewriteAssign(as *syntax.Assign) *syntax.Assign {
 // subsequent words which name live lexical bindings become short parameter
 // expansions for this invocation only.
 func (r *Runner) bashPPRewriteCommandArgs(args []*syntax.Word) []*syntax.Word {
-	if r.bashPPFuncActive == 0 || len(args) < 2 {
+	if len(args) < 2 {
 		return args
 	}
-	out := append([]*syntax.Word(nil), args...)
-	for i, word := range out[1:] {
+	out := append([]*syntax.Word(nil), args[:1]...)
+	for i := 1; i < len(args); {
+		combined := &syntax.Word{Parts: append([]syntax.WordPart(nil), args[i].Parts...)}
+		bestValue, bestEnd := "", -1
+		for j := i; j < len(args); j++ {
+			if j > i {
+				if args[j-1].End() != args[j].Pos() {
+					break
+				}
+				combined.Parts = append(combined.Parts, args[j].Parts...)
+			}
+			if value, ok := r.bashPPResolveWord(combined); ok {
+				bestValue, bestEnd = value, j+1
+			}
+		}
+		if bestEnd >= 0 {
+			out = append(out, &syntax.Word{Parts: []syntax.WordPart{&syntax.SglQuoted{
+				Left: args[i].Pos(), Right: args[bestEnd-1].End(), Value: bestValue,
+			}}})
+			i = bestEnd
+			continue
+		}
+		word := args[i]
+		if r.bashPPFuncActive == 0 {
+			out = append(out, word)
+			i++
+			continue
+		}
 		if len(word.Parts) != 1 {
+			out = append(out, word)
+			i++
 			continue
 		}
 		lit, ok := word.Parts[0].(*syntax.Lit)
 		if !ok || !syntax.ValidName(lit.Value) || !r.lookupVar(lit.Value).IsSet() {
+			out = append(out, word)
+			i++
 			continue
 		}
-		out[i+1] = &syntax.Word{Parts: []syntax.WordPart{&syntax.ParamExp{
+		out = append(out, &syntax.Word{Parts: []syntax.WordPart{&syntax.ParamExp{
 			Dollar: lit.Pos(), Short: true, Param: lit,
-		}}}
+		}}})
+		i++
 	}
 	return out
 }

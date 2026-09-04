@@ -211,6 +211,9 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 			r.bashPPShortDeclPredeclared(d, name)
 			return
 		}
+		if r.bashPPShortDeclImported(ctx, d) {
+			return
+		}
 	}
 	if len(d.Lhs) != 1 && len(d.Lhs) != len(d.Rhs) {
 		r.errf("assignment mismatch: %d variable(s) but %d value(s)\n",
@@ -224,6 +227,18 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 			r.errf("invalid variable name: %q\n", name)
 			r.exit = exitStatus{code: 2}
 			return
+		}
+		if len(d.Rhs) == 1 {
+			if value, identity, ok := r.bashPPObjectExpr(bashPPWordSource(d.Rhs[0])); ok {
+				vr := expand.NewObject(value)
+				r.bashPPDeclareName(name, vr)
+				cell := r.bashPPScope.lookup(name)
+				if identity == nil {
+					identity = &bashPPObjectIdentity{owner: name}
+				}
+				cell.object = identity
+				return
+			}
 		}
 		r.bashPPDeclareName(name, r.bashPPValue(ctx, d.Rhs))
 		return

@@ -3948,6 +3948,8 @@ func (p *Parser) unexpectedInCallExpr(ce *CallExpr) {
 
 func (p *Parser) callExpr(s *Stmt, w *Word, assign bool) {
 	ce := p.call(w)
+	var bashppCompositeTxn *parserTransaction
+	bashppCompositeArgs := 0
 	if w == nil {
 		ce.Args = ce.Args[:0]
 	}
@@ -3964,6 +3966,36 @@ loop:
 		switch p.tok {
 		case _EOF, _Newl, semicolon, and, or, andAnd, orOr, orAnd, andPipe, andBang,
 			dblSemicolon, semiAnd, dblSemiAnd, semiOr:
+			if bashppCompositeTxn != nil {
+				if bashppCompositeCommandDepth(ce) == 0 {
+					if bashppCompositeCommandComplete(ce) {
+						bashppCompositeTxn.commit(p)
+					} else {
+						bashppCompositeTxn.rollback(p)
+						ce.Args = ce.Args[:bashppCompositeArgs]
+					}
+					break loop
+				}
+				if p.tok == _EOF {
+					bashppCompositeTxn.rollback(p)
+					ce.Args = ce.Args[:bashppCompositeArgs]
+					break loop
+				}
+			}
+			// A supported Bash# composite literal or struct declaration owns
+			// separators until its balanced closing brace. This is intentionally
+			// decided from the complete prefix already parsed as shell words; an
+			// unclosed or unsupported Class-E prefix still terminates here and
+			// retains ordinary shell behavior.
+			if p.lang.in(LangBashPP) && (p.tok == _Newl || p.tok == semicolon) &&
+				bashppCompositeCommandDepth(ce) > 0 {
+				if bashppCompositeTxn == nil {
+					bashppCompositeTxn = p.beginBashPPTxn()
+					bashppCompositeArgs = len(ce.Args)
+				}
+				p.next()
+				continue
+			}
 			break loop
 		case _LitWord:
 			if len(ce.Args) == 0 && p.hasValidIdent() {
@@ -4086,6 +4118,10 @@ loop:
 				}
 			}
 			s.Cmd = decl
+			return
+		}
+		if assign := bashppAssign(ce, s.Redirs); assign != nil {
+			s.Cmd = assign
 			return
 		}
 		if decl := bashppTypedVarDecl(ce, s.Redirs); decl != nil {

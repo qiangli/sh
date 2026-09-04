@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 
@@ -253,4 +254,12 @@ func (e *policyBashPPEvaluator) Call(ctx context.Context, req bashPPEvalRequest)
 		return err
 	}
 	return e.toolchain.Call(ctx, req)
+}
+
+func (e *policyBashPPEvaluator) Values(ctx context.Context, req bashPPEvalRequest) ([]any, error) {
+	values, ok := e.toolchain.(bashPPValuesEvaluator)
+	if !ok {
+		return nil, errors.New("bash++: selected evaluator cannot return object values")
+	}
+	return values.Values(ctx, req)
 }

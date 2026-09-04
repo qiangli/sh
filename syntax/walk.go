@@ -189,6 +189,10 @@ func Walk(node Node, f func(Node) bool) {
 		walkNilable(node.Name, f)
 		walkNilable(node.DeclType, f)
 		walkList(node.Init, f)
+		walkList(node.StructFields, f)
+	case *BashPPAssign:
+		Walk(node.Target, f)
+		Walk(node.Value, f)
 	case *BashPPShortDecl:
 		walkList(node.Lhs, f)
 		walkList(node.Rhs, f)

@@ -2210,12 +2210,23 @@ func (r *Runner) setVar(name string, vr expand.Variable) {
 				r.exit.code = 1
 				return
 			}
+			if vr.Kind == expand.KeepValue {
+				cell.vr.Exported = cell.vr.Exported || vr.Exported
+				cell.vr.ReadOnly = cell.vr.ReadOnly || vr.ReadOnly
+				if cell.object != nil && cell.vr.ReadOnly {
+					cell.object.readonly = true
+				}
+				return
+			}
 			// Attributes belong to the declaration, not to the assignment:
 			// a binding which shadows an exported shell variable keeps
 			// reaching child processes after `x=5`.
 			vr.Exported = vr.Exported || cell.vr.Exported
 			vr.ReadOnly = cell.vr.ReadOnly
 			cell.vr = vr
+			if cell.object != nil && vr.ReadOnly {
+				cell.object.readonly = true
+			}
 			return
 		}
 	}
