@@ -6,7 +6,7 @@ seq: 2
 status: todo
 priority: p1
 created: 2026-08-07T14:15:00Z
-assignee: unassigned
+assignee: qiangli
 sprint: 115
 ---
 
