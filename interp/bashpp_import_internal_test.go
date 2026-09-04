@@ -21,6 +21,7 @@ type recordingBashPPEval struct {
 	mu       sync.Mutex
 	resolved map[string]string
 	calls    []bashPPEvalRequest
+	values   []any
 	err      error
 }
 
@@ -41,6 +42,20 @@ func (e *recordingBashPPEval) Call(ctx context.Context, req bashPPEvalRequest) e
 	req.Imports = maps.Clone(req.Imports)
 	e.calls = append(e.calls, req)
 	return e.err
+}
+
+func (e *recordingBashPPEval) Values(ctx context.Context, req bashPPEvalRequest) ([]any, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if e.values == nil {
+		return nil, errors.New("bash++: selected evaluator cannot return object values")
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	req.Imports = maps.Clone(req.Imports)
+	e.calls = append(e.calls, req)
+	return e.values, e.err
 }
 
 func parseBashPPInternal(t *testing.T, src string) *syntax.File {
@@ -91,6 +106,21 @@ func TestBashPPImportRegistryContract(t *testing.T) {
 	}
 	if r.bashPPTools.goBinary != "/reviewed/go" || r.bashPPTools.eval != eval {
 		t.Fatal("Reset lost injected toolchain identity")
+	}
+}
+
+func TestBashPPImportedValuesValidateBeforeObjectCreation(t *testing.T) {
+	eval := &recordingBashPPEval{
+		resolved: map[string]string{"bad": "bad"},
+		values:   []any{func() {}},
+	}
+	r := newInjectedBashPPRunner(t, eval)
+	err := r.Run(context.Background(), parseBashPPInternal(t, "import \"bad\"\nobj := bad.Value()\n"))
+	if !errors.Is(err, ExitStatus(2)) {
+		t.Fatalf("Run error = %v, want exit status 2", err)
+	}
+	if got, ok := r.Object("obj"); ok {
+		t.Fatalf("invalid imported value created object: %#v", got)
 	}
 }
 

@@ -304,6 +304,17 @@ func (r *Runner) bashPPShortDeclImported(ctx context.Context, d *syntax.BashPPSh
 					if lhs.Value == "_" {
 						continue
 					}
+					if validateErr := expand.ValidObject(values[i]); validateErr != nil {
+						err = validateErr
+						break
+					}
+				}
+			}
+			if err == nil {
+				for i, lhs := range d.Lhs {
+					if lhs.Value == "_" {
+						continue
+					}
 					r.bashPPDeclareName(lhs.Value, expand.NewObject(values[i]))
 					r.bashPPScope.lookup(lhs.Value).object = &bashPPObjectIdentity{owner: lhs.Value}
 				}
