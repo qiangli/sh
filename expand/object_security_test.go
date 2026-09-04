@@ -54,3 +54,29 @@ func TestObjectPreflightAccountsForStringEscaping(t *testing.T) {
 	qt.Assert(t, qt.IsNotNil(expand.ValidObject(escapeHeavy)))
 	qt.Assert(t, qt.Equals(expand.ObjectString(escapeHeavy), expand.ObjectString(make(chan int))))
 }
+
+func TestObjectPreflightAccountsForStringTagQuoting(t *testing.T) {
+	t.Parallel()
+
+	ordinary := struct {
+		Value string `json:"value,string"`
+	}{Value: `x<"`}
+	qt.Assert(t, qt.Equals(expand.ObjectString(ordinary), `{"value":"\"x\\u003c\\\"\""}`))
+
+	// The first JSON quoting is below the limit; the second quoting required
+	// by ,string pushes the encoded field over it.
+	escapeHeavy := struct {
+		Value string `json:"value,string"`
+	}{Value: strings.Repeat("<", 10<<20)}
+	qt.Assert(t, qt.IsNotNil(expand.ValidObject(escapeHeavy)))
+	qt.Assert(t, qt.Equals(expand.ObjectString(escapeHeavy), expand.ObjectString(make(chan int))))
+}
+
+func TestObjectPreflightAccountsForByteSliceBase64(t *testing.T) {
+	t.Parallel()
+
+	qt.Assert(t, qt.Equals(expand.ObjectString([]byte{0}), `"AA=="`))
+	tooLarge := make([]byte, 49<<20)
+	qt.Assert(t, qt.IsNotNil(expand.ValidObject(tooLarge)))
+	qt.Assert(t, qt.Equals(expand.ObjectString(tooLarge), expand.ObjectString(make(chan int))))
+}

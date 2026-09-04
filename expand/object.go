@@ -187,6 +187,12 @@ func preflightObject(v reflect.Value, depth int, seen map[visit]bool, state *obj
 		}
 		seen[vis] = true
 		defer delete(seen, vis)
+		if isJSONByteSlice(v.Type()) {
+			// encoding/json uses a quoted base64 string for ordinary byte
+			// slices. Account for that expansion without walking or encoding
+			// the entire slice.
+			return state.addBytes(2 + 4*((int64(v.Len())+2)/3))
+		}
 		if err := state.addBytes(collectionOverhead(v.Len())); err != nil {
 			return err
 		}
@@ -237,9 +243,12 @@ func preflightObject(v reflect.Value, depth int, seen map[visit]bool, state *obj
 		fields := 0
 		for i := 0; i < v.NumField(); i++ {
 			field := t.Field(i)
-			name, reachable := objectJSONFieldName(field)
+			fieldInfo, reachable := objectJSONFieldInfo(field)
 			if !reachable {
 				continue
+			}
+			if fieldInfo.omitZero && typeHasIsZeroMethod(field.Type) {
+				return fmt.Errorf("reachable type %v has caller-defined IsZero method used by omitzero", field.Type)
 			}
 			if fields > 0 {
 				if err := state.addBytes(1); err != nil { // comma
@@ -247,7 +256,7 @@ func preflightObject(v reflect.Value, depth int, seen map[visit]bool, state *obj
 				}
 			}
 			fields++
-			nameBytes := jsonStringSize(name)
+			nameBytes := jsonStringSize(fieldInfo.name)
 			if fallback := jsonStringSize(field.Name); fallback > nameBytes {
 				nameBytes = fallback
 			}
@@ -256,6 +265,11 @@ func preflightObject(v reflect.Value, depth int, seen map[visit]bool, state *obj
 			}
 			if err := preflightObject(v.Field(i), depth+1, seen, state); err != nil {
 				return err
+			}
+			if fieldInfo.quoted {
+				if err := state.addBytes(quotedFieldExtra(v.Field(i))); err != nil {
+					return err
+				}
 			}
 		}
 		return nil
@@ -271,23 +285,55 @@ func collectionOverhead(length int) int64 {
 	return int64(length) + 1 // delimiters and length-1 commas
 }
 
-func objectJSONFieldName(field reflect.StructField) (string, bool) {
+type objectJSONField struct {
+	name     string
+	quoted   bool
+	omitZero bool
+}
+
+func objectJSONFieldInfo(field reflect.StructField) (objectJSONField, bool) {
 	tag := field.Tag.Get("json")
-	name, _, _ := strings.Cut(tag, ",")
-	if name == "-" {
-		return "", false
+	if tag == "-" {
+		return objectJSONField{}, false
 	}
 	if !field.IsExported() && !field.Anonymous {
-		return "", false
+		return objectJSONField{}, false
 	}
+	name, options, _ := strings.Cut(tag, ",")
 	if name == "" {
 		name = field.Name
 	}
-	return name, true
+	info := objectJSONField{name: name}
+	for options != "" {
+		var option string
+		option, options, _ = strings.Cut(options, ",")
+		switch option {
+		case "omitzero":
+			info.omitZero = true
+		case "string":
+			ft := field.Type
+			if ft.Name() == "" && ft.Kind() == reflect.Pointer {
+				ft = ft.Elem()
+			}
+			switch ft.Kind() {
+			case reflect.Bool,
+				reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+				reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr,
+				reflect.Float32, reflect.Float64, reflect.String:
+				info.quoted = true
+			}
+		}
+	}
+	return info, true
 }
 
 func jsonStringSize(s string) int64 {
-	size := int64(2) // quotes
+	size, _ := jsonStringMetrics(s)
+	return size
+}
+
+func jsonStringMetrics(s string) (size, backslashes int64) {
+	size = 2 // quotes
 	for i := 0; i < len(s); {
 		c := s[i]
 		if c < utf8.RuneSelf {
@@ -295,11 +341,14 @@ func jsonStringSize(s string) int64 {
 			switch c {
 			case '\\', '"', '\b', '\f', '\n', '\r', '\t':
 				size += 2
+				backslashes++
 			case '<', '>', '&':
 				size += 6 // encoding/json's default HTML escaping
+				backslashes++
 			default:
 				if c < 0x20 {
 					size += 6
+					backslashes++
 				} else {
 					size++
 				}
@@ -309,14 +358,49 @@ func jsonStringSize(s string) int64 {
 		r, width := utf8.DecodeRuneInString(s[i:])
 		i += width
 		if r == utf8.RuneError && width == 1 {
-			size += 3 // replacement rune
+			size += 6 // \\ufffd
+			backslashes++
 		} else if r == '\u2028' || r == '\u2029' {
 			size += 6
+			backslashes++
 		} else {
 			size += int64(width)
 		}
 	}
-	return size
+	return size, backslashes
+}
+
+func quotedFieldExtra(v reflect.Value) int64 {
+	for v.IsValid() && (v.Kind() == reflect.Pointer || v.Kind() == reflect.Interface) {
+		if v.IsNil() {
+			return 0 // nil pointers encode as null even with ,string
+		}
+		v = v.Elem()
+	}
+	if !v.IsValid() {
+		return 0
+	}
+	if v.Kind() == reflect.String && v.Type() != jsonNumberType {
+		_, backslashes := jsonStringMetrics(v.String())
+		// The outer quotes add two bytes, the inner quotes must be escaped
+		// (two more), and each existing escape gains another backslash.
+		return 4 + backslashes
+	}
+	return 2 // quotes around booleans and numbers
+}
+
+func typeHasIsZeroMethod(t reflect.Type) bool {
+	isZeroerType := reflect.TypeFor[interface{ IsZero() bool }]()
+	return t.Implements(isZeroerType) ||
+		(t.Kind() != reflect.Pointer && reflect.PointerTo(t).Implements(isZeroerType))
+}
+
+func isJSONByteSlice(t reflect.Type) bool {
+	if t.Kind() != reflect.Slice || t.Elem().Kind() != reflect.Uint8 {
+		return false
+	}
+	ptrElem := reflect.PointerTo(t.Elem())
+	return !ptrElem.Implements(jsonMarshalerType) && !ptrElem.Implements(textMarshalerType)
 }
 
 func typeHasCallerMethod(t reflect.Type) bool {

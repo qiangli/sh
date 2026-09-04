@@ -169,6 +169,24 @@ type embedsUnexportedHostile struct {
 	embeddedHostile
 }
 
+type valueIsZeroBomb struct {
+	called *bool
+}
+
+func (b valueIsZeroBomb) IsZero() bool {
+	*b.called = true
+	panic("IsZero must not run")
+}
+
+type pointerIsZeroBomb struct {
+	called *bool
+}
+
+func (b *pointerIsZeroBomb) IsZero() bool {
+	*b.called = true
+	panic("IsZero must not run")
+}
+
 func TestObjectHostileMethodsRejectedWithoutCalling(t *testing.T) {
 	t.Parallel()
 
@@ -194,6 +212,55 @@ func TestObjectHostileMethodsRejectedWithoutCalling(t *testing.T) {
 		qt.Assert(t, qt.Equals(got, marker))
 	}
 	qt.Assert(t, qt.IsFalse(called))
+}
+
+func TestObjectOmitZeroMethodsRejectedWithoutCalling(t *testing.T) {
+	t.Parallel()
+
+	called := false
+	values := []any{
+		struct {
+			Value valueIsZeroBomb `json:"value,omitzero"`
+		}{Value: valueIsZeroBomb{called: &called}},
+		struct {
+			Value pointerIsZeroBomb `json:"value,omitzero"`
+		}{Value: pointerIsZeroBomb{called: &called}},
+		struct {
+			Value *pointerIsZeroBomb `json:"value,omitzero"`
+		}{Value: &pointerIsZeroBomb{called: &called}},
+	}
+	for _, val := range values {
+		qt.Assert(t, qt.IsNotNil(expand.ValidObject(val)))
+		qt.Assert(t, qt.Equals(expand.ObjectString(val), expand.ObjectString(make(chan int))))
+	}
+	qt.Assert(t, qt.IsFalse(called))
+}
+
+func TestObjectJSONDashTagExactness(t *testing.T) {
+	t.Parallel()
+
+	called := false
+	omitted := struct {
+		Value togglingJSONMarshaler `json:"-"`
+	}{Value: togglingJSONMarshaler{called: &called}}
+	qt.Assert(t, qt.IsNil(expand.ValidObject(omitted)))
+	qt.Assert(t, qt.Equals(expand.ObjectString(omitted), `{}`))
+	qt.Assert(t, qt.IsFalse(called))
+
+	reachable := struct {
+		Value togglingJSONMarshaler `json:"-,"`
+	}{Value: togglingJSONMarshaler{called: &called}}
+	qt.Assert(t, qt.IsNotNil(expand.ValidObject(reachable)))
+	qt.Assert(t, qt.Equals(expand.ObjectString(reachable), expand.ObjectString(make(chan int))))
+	qt.Assert(t, qt.IsFalse(called))
+}
+
+func TestObjectInvalidUTF8SizeAccounting(t *testing.T) {
+	t.Parallel()
+
+	invalid := strings.Repeat("\xff", 11<<20)
+	qt.Assert(t, qt.IsNotNil(expand.ValidObject(invalid)))
+	qt.Assert(t, qt.Equals(expand.ObjectString(invalid), expand.ObjectString(make(chan int))))
 }
 
 func TestObjectCycleDepthAndSizeRejected(t *testing.T) {
