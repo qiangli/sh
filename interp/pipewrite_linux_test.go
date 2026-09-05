@@ -216,7 +216,35 @@ func runPipelineSIGPIPEConcurrentHelper() {
 	case <-time.After(100 * time.Millisecond):
 		fmt.Println("NO_LEAK")
 	}
-	if err := syscall.Kill(os.Getpid(), syscall.SIGPIPE); err != nil {
+	// A same-process SIGPIPE must still reach the shell after the write path
+	// has finished playing with masks and the pending slot. HOW it is sent
+	// differs under the race detector, and the reason is measured, not assumed.
+	//
+	// Linux delivers a process-directed signal to the main thread whenever that
+	// thread does not block it, and the Go runtime's m0 blocks SIGUSR1 but not
+	// SIGPIPE. Under -race, m0 spends its life parked in the runtime rather
+	// than in instrumented code, and TSan defers a signal that arrives there
+	// until the thread next reaches an interceptor — which never happens. The
+	// result is not a delayed signal, it is a permanently discarded one:
+	// measured in a linux/amd64 and linux/arm64 container, kill(getpid,
+	// SIGPIPE) leaves nothing pending in the kernel and twenty consecutive
+	// retries are all lost, while tgkill to the running thread is delivered
+	// every time and process-directed SIGUSR1 — which m0 blocks, so it lands
+	// elsewhere — is delivered every time.
+	//
+	// None of that is the shell: no interp code runs at this point. So under
+	// -race the delivery is thread-directed, which still proves the write path
+	// left SIGPIPE deliverable, and outside -race the stronger process-directed
+	// form is kept. The shell-visible version of this guarantee (`kill -PIPE
+	// $$` reaching a trap) is asserted end-to-end by the semantics helper
+	// above, which passes in both modes.
+	if raceEnabled {
+		if _, _, errno := syscall.RawSyscall(syscall.SYS_TGKILL, uintptr(os.Getpid()),
+			uintptr(unix.Gettid()), uintptr(syscall.SIGPIPE)); errno != 0 {
+			fmt.Fprintln(os.Stderr, "self tgkill:", errno)
+			os.Exit(2)
+		}
+	} else if err := syscall.Kill(os.Getpid(), syscall.SIGPIPE); err != nil {
 		fmt.Fprintln(os.Stderr, "self kill:", err)
 		os.Exit(2)
 	}
