@@ -3,9 +3,10 @@ id: fa4e1d6e77c1
 kind: task
 title: Task FIFO redirect must join the rendezvous, not skip it
 seq: 16
-status: todo
+status: doing
 priority: p0
 created: 2026-09-04T22:49:17.591315Z
+assignee: premium_run60_h3a
 sprint: 115
 ---
 
