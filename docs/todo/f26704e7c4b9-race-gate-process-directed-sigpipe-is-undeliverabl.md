@@ -3,10 +3,11 @@ id: f26704e7c4b9
 kind: task
 title: 'Race gate: process-directed SIGPIPE is undeliverable under TSan'
 seq: 18
-status: doing
+status: done
 priority: p0
 created: 2026-09-05T00:22:24.946171Z
 assignee: review_run60_ab2_semantics
+closed: 2026-09-05T08:31:23Z
 sprint: 115
 ---
 
