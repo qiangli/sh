@@ -71,14 +71,6 @@ func runBackgroundLaunchScript(t *testing.T, src string) error {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Reset is the runner's teardown, and it is required here rather than
-	// tidy: a script that traps or job-controls starts signal subscriptions,
-	// and dropping the runner without stopping them leaves each forwarder
-	// parked in select forever — exactly what Reset's own comment warns about.
-	// This helper builds a fresh runner on every call and is called in a loop,
-	// so one leak per iteration survives the whole package run and trips the
-	// focused gate's goroutine-leak check.
-	defer runner.Reset()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	return runner.Run(ctx, file)
