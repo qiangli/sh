@@ -326,9 +326,9 @@ func TestNestedAsyncReinstallsImplicitIntIgnore(t *testing.T) {
 	out := runCarrierScript(t, c, killBinPrelude+`
 (
 	trap - INT
-	/bin/sleep 0.2 &
+	/bin/sh -c ': >childready; exec /bin/sleep 1' &
 	p=$!
-	/bin/sleep 0.05
+	while [ ! -e childready ]; do :; done
 	"$K" -INT "$p"
 	wait "$p"
 	echo "$?"
