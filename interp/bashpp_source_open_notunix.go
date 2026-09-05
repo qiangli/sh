@@ -6,7 +6,6 @@
 package interp
 
 import (
-	"context"
 	"os"
 )
 
@@ -15,13 +14,3 @@ func bashPPTaskProbeOpen(dirFile *os.File, dir, path string, flags int, mode os.
 }
 
 func bashPPTaskSourceClearNonblock(file *os.File) error { return nil }
-
-type bashPPTaskFifoIdentity struct{}
-
-func bashPPTaskFifoIdentityOf(file *os.File) (bashPPTaskFifoIdentity, error) {
-	return bashPPTaskFifoIdentity{}, nil
-}
-
-func bashPPTaskFifoOpen(ctx context.Context, dirFile *os.File, dir, path string, flags int, mode os.FileMode) (*os.File, error) {
-	return nil, os.ErrInvalid
-}

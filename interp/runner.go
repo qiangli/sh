@@ -4849,7 +4849,10 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 	})
 	// Registered first so it fires LAST (LIFO) — file-close defers below
 	// still see whether exec made this scope persistent.
-	defer func() { r.redirScopes = r.redirScopes[:scopeIndex] }()
+	defer func() {
+		r.redirScopes = r.redirScopes[:scopeIndex]
+		r.bashPPReconcileFIFOs()
+	}()
 	defer func() {
 		for _, closer := range r.redirScopes[scopeIndex].boundaryClosers {
 			closer.Close()
@@ -4892,6 +4895,7 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 	var oldFdWriteTable map[int]io.Writer
 	var oldFdClosedTable map[int]bool
 	var modifiedFds []int
+	redirsPrepared, lateRedir := false, false
 	if len(st.Redirs) > 0 {
 		oldFdTable = maps.Clone(r.fdTable)
 		oldFdReadTable = maps.Clone(r.fdReadTable)
@@ -4911,6 +4915,31 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 		}
 	}
 	oldRedirMoveCloseFds := r.redirMoveCloseFds
+	if r.bashPPConcurrent != nil {
+		// Retain exactly what this scope restores. An unrelated outer
+		// redirect must not delay an inner exec's persistent close.
+		r.redirScopes[scopeIndex].fifoRestoreRefs = func(refs map[*os.File]bool) {
+			bashPPFIFORef(refs, oldIn)
+			bashPPFIFORef(refs, oldOut)
+			bashPPFIFORef(refs, oldErr)
+			if persistNamedRedirs {
+				return
+			}
+			if !redirsPrepared || lateRedir {
+				for _, f := range oldFdTable {
+					bashPPFIFORef(refs, f)
+				}
+				for _, w := range oldFdWriteTable {
+					bashPPFIFORef(refs, w)
+				}
+			} else {
+				for _, fd := range modifiedFds {
+					bashPPFIFORef(refs, oldFdTable[fd])
+					bashPPFIFORef(refs, oldFdWriteTable[fd])
+				}
+			}
+		}
+	}
 	r.redirMoveCloseFds = nil
 	defer func() { r.redirMoveCloseFds = oldRedirMoveCloseFds }()
 	// bash 5.3 caps the number of here-documents per simple command
@@ -4935,6 +4964,9 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 	if st.Cmd == nil && len(st.Redirs) > 0 {
 		r2 := r.subshell(false)
 		defer r2.closeDirFile()
+		if r2.bashPPConcurrent != nil {
+			defer r2.bashPPConcurrent.closeFIFOs(r2)
+		}
 		r2.lastExpandExit = exitStatus{}
 		var closers []io.Closer
 		for _, rd := range st.Redirs {
@@ -5002,7 +5034,6 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 	// `(( a = $(cmd) )) 2>err`: bash captures cmd's stderr into err, so the
 	// redirect must be active before the arithmetic evaluates — deferring it
 	// to a late path that ArithmCmd never drains would silently drop it.
-	lateRedir := false
 	if len(st.Redirs) > 0 && commandHasCmdSubst(st.Cmd) {
 		switch st.Cmd.(type) {
 		case *syntax.CallExpr, *syntax.DeclClause:
@@ -5127,6 +5158,7 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 			}
 		}
 	}
+	redirsPrepared = true
 	r.curStmtPos = oldCurStmtPos
 	if r.exit.ok() && st.Cmd != nil {
 		// A negated stmt suppresses `set -e`-driven exit for the
@@ -5256,6 +5288,7 @@ type redirScope struct {
 	persist         bool
 	closeAt         int
 	boundaryClosers []io.Closer
+	fifoRestoreRefs func(map[*os.File]bool)
 }
 
 // persistCurrentRedirs marks the exec statement itself and propagates that
@@ -5276,6 +5309,7 @@ func (r *Runner) persistCurrentRedirs() {
 		}
 		r.redirScopes[i].persist = true
 	}
+	r.bashPPReconcileFIFOs()
 }
 
 func (r *Runner) checkFuncDeclRedirs(ctx context.Context, body *syntax.Stmt) bool {
@@ -9635,7 +9669,12 @@ func dupReadablePipeFile(w io.Writer) *os.File {
 	return f
 }
 
-func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (io.Closer, error) {
+func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (closer io.Closer, redirErr error) {
+	defer func() {
+		if closer != nil {
+			closer = r.bashPPFIFOCloser(closer)
+		}
+	}()
 	// Bash reports a failed-open redirection error at the line of the
 	// redirect operator, not the enclosing statement's first line. This
 	// only shows up on compound commands whose redirect sits on a later

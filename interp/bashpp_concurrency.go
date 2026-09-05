@@ -205,6 +205,8 @@ type bashPPConcurrent struct {
 	ioMu       sync.Mutex
 	logicalMu  sync.Mutex
 	observerMu sync.Mutex
+	fifoMu     sync.Mutex
+	fifos      map[*os.File]*bashPPFIFOEntry
 }
 
 // bashPPLockedWriter serializes one Write call at a time across every task in
@@ -369,6 +371,7 @@ func (c *bashPPConcurrent) stopAndJoin() *bashPPTaskFailure {
 	c.quiesced = true
 	result := c.primaryFailureLocked()
 	c.mu.Unlock()
+	c.closeFIFOs(nil)
 	return result
 }
 
@@ -428,6 +431,40 @@ func (r *Runner) bashPPArmBeforeBlock(ctx context.Context) bool {
 // custom handlers: the OpenHandler contract does not promise cancellation or
 // honor O_NONBLOCK, so invoking one could strand the structured File join.
 func (r *Runner) bashPPTaskOpen(ctx context.Context, path string, flags int, mode os.FileMode, print, requireRegular bool) (io.ReadWriteCloser, error) {
+	// The owner retains virtual stdin; the host pseudo-path can name a
+	// different pipe. Custom open handlers retain their existing boundary.
+	if !r.bashPPGoTask && path == "/dev/stdin" && flags&3 == os.O_RDONLY && r.stdin != nil {
+		return r.open(ctx, path, flags, mode, print)
+	}
+	groupOpen := !requireRegular && !r.bashPPCustomOpen &&
+		(r.bashPPConcurrent != nil || (r.bashPPFileRun && r.Dialect() == syntax.LangBashPP))
+	if groupOpen {
+		openCtx := ctx
+		if r.bashPPConcurrent != nil {
+			openCtx = r.bashPPConcurrent.ctx
+		}
+		if err := openCtx.Err(); err != nil {
+			if r.bashPPGoTask {
+				r.bashPPTaskCanceled = true
+				r.exit.fatal(err)
+			}
+			return nil, err
+		}
+		file, fifo, err := r.bashPPFIFOOpen(ctx, path, flags)
+		if fifo {
+			if err != nil && print {
+				r.errf("%s%s: %v\n", r.bashErrPrefix(r.curStmtPos), path, err)
+			}
+			if err != nil {
+				if r.bashPPGoTask && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+					r.bashPPTaskCanceled = true
+					r.exit.fatal(err)
+				}
+				return nil, err
+			}
+			return file, nil
+		}
+	}
 	if !r.bashPPGoTask {
 		return r.open(ctx, path, flags, mode, print)
 	}
@@ -519,56 +556,8 @@ func (r *Runner) bashPPTaskOpen(ctx context.Context, path string, flags int, mod
 			err := fmt.Errorf("FIFO input is unavailable inside a Bash++ task")
 			return nil, reportOpenError(err)
 		}
-		// The probe CLASSIFIED this object; it did not join its rendezvous.
-		// O_NONBLOCK is what let the probe run before the task armed, and on a
-		// FIFO that flag does not defer the wait, it cancels it: the open
-		// succeeds with no peer and the descriptor reads end-of-file instead
-		// of waiting for a writer. Clearing O_NONBLOCK afterwards cannot
-		// recover a rendezvous that never happened — a task handed that
-		// descriptor finishes immediately on empty input, and its own writer
-		// is then left blocking on an open that no longer has a reader.
-		//
-		// Record which object the probe reached, arm, and open it again for
-		// real. The blocking open IS the rendezvous, which is what makes the
-		// launch handshake true here rather than merely early.
-		want, identityErr := bashPPTaskFifoIdentityOf(file)
 		_ = file.Close()
-		if identityErr != nil {
-			return nil, reportOpenError(identityErr)
-		}
-		if !r.bashPPArmBeforeBlock(ctx) {
-			return nil, r.bashPPTaskContext(ctx).Err()
-		}
-		taskCtx := r.bashPPTaskContext(ctx)
-		if err := taskCtx.Err(); err != nil {
-			return nil, err
-		}
-		opened, err := bashPPTaskFifoOpen(taskCtx, r.dirFile, r.Dir, path, flags, mode)
-		if err != nil {
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				r.bashPPTaskCanceled = true
-				return nil, err
-			}
-			return nil, reportOpenError(err)
-		}
-		// Re-opening by path reintroduces the window the probe was written to
-		// close, so prove the second open reached the first one's object
-		// rather than a replacement swapped in behind it.
-		got, err := bashPPTaskFifoIdentityOf(opened)
-		if err != nil {
-			_ = opened.Close()
-			return nil, reportOpenError(err)
-		}
-		if got != want {
-			_ = opened.Close()
-			err := fmt.Errorf("FIFO was replaced while the task was arming")
-			return nil, reportOpenError(err)
-		}
-		if err := taskCtx.Err(); err != nil {
-			_ = opened.Close()
-			return nil, err
-		}
-		return opened, nil
+		return nil, reportOpenError(fmt.Errorf("FIFO changed before its registered-peer rendezvous could be acquired"))
 	}
 	if err := bashPPTaskSourceClearNonblock(file); err != nil {
 		_ = file.Close()
@@ -844,6 +833,9 @@ func (r *Runner) bashPPTaskSnapshot(ordinal uint64) (*Runner, error) {
 		dups[f] = copy
 		if owned {
 			child.bashPPTaskFiles = append(child.bashPPTaskFiles, copy)
+			if child.bashPPConcurrent != nil {
+				child.bashPPConcurrent.cloneFIFO(f, copy, child)
+			}
 		}
 		return copy, nil
 	}
@@ -854,25 +846,17 @@ func (r *Runner) bashPPTaskSnapshot(ordinal uint64) (*Runner, error) {
 	if child.origStdin, err = dup(r.origStdin); err != nil {
 		return child, err
 	}
-	if f, ok := r.stdout.(*os.File); ok {
-		if child.stdout, err = dup(f); err != nil {
-			return child, err
-		}
+	if child.stdout, err = bashPPDupWriter(r.stdout, child, dup); err != nil {
+		return child, err
 	}
-	if f, ok := r.origStdout.(*os.File); ok {
-		if child.origStdout, err = dup(f); err != nil {
-			return child, err
-		}
+	if child.origStdout, err = bashPPDupWriter(r.origStdout, child, dup); err != nil {
+		return child, err
 	}
-	if f, ok := r.stderr.(*os.File); ok {
-		if child.stderr, err = dup(f); err != nil {
-			return child, err
-		}
+	if child.stderr, err = bashPPDupWriter(r.stderr, child, dup); err != nil {
+		return child, err
 	}
-	if f, ok := r.origStderr.(*os.File); ok {
-		if child.origStderr, err = dup(f); err != nil {
-			return child, err
-		}
+	if child.origStderr, err = bashPPDupWriter(r.origStderr, child, dup); err != nil {
+		return child, err
 	}
 	for fd, f := range r.fdTable {
 		if child.fdTable[fd], err = dup(f); err != nil {
@@ -880,10 +864,8 @@ func (r *Runner) bashPPTaskSnapshot(ordinal uint64) (*Runner, error) {
 		}
 	}
 	for fd, w := range r.fdWriteTable {
-		if f, ok := w.(*os.File); ok {
-			if child.fdWriteTable[fd], err = dup(f); err != nil {
-				return child, err
-			}
+		if child.fdWriteTable[fd], err = bashPPDupWriter(w, child, dup); err != nil {
+			return child, err
 		}
 	}
 	// newOverlayEnviron's background snapshot is shallow for compatibility;
@@ -929,6 +911,9 @@ func (r *Runner) closeBashPPTaskResources() {
 		}
 	}
 	r.bgProcs = nil
+	if r.bashPPConcurrent != nil {
+		r.bashPPConcurrent.closeFIFOs(r)
+	}
 	for _, file := range r.bashPPTaskFiles {
 		_ = file.Close()
 	}
@@ -1038,6 +1023,7 @@ func (r *Runner) bashPPWait(ctx context.Context) {
 	failure := c.primaryFailureLocked()
 	c.mu.Unlock()
 	r.bashPPPruneIssuedHandles(c)
+	c.closeFIFOs(nil)
 	r.bashPPClearChannelRefs(c)
 	if failure != nil {
 		r.errf("bash++: task failed: %s\n", failure.text)

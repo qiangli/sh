@@ -2965,6 +2965,11 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 	case *syntax.File:
 		r.bashPPFileRun = true
 		defer func() { r.bashPPFileRun = false }()
+		if r.Dialect() == syntax.LangBashPP {
+			// Persistent FIFO descriptors opened before the first task are
+			// still owned by this File and must be registered for snapshots.
+			r.bashPPConcurrency(ctx)
+		}
 		r.filename = node.Name
 		if r.stdinSourceEligible() && node.Name == "" && len(r.bashSource) > 0 {
 			r.stdinSourceActive = true
