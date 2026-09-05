@@ -78,6 +78,40 @@ func TestLinuxWriteGeneratedSIGPIPEClassification(t *testing.T) {
 	}
 }
 
+func TestCurrentThreadSignalPinsReceiver(t *testing.T) {
+	err := onCurrentOSThread(func(tid int) error {
+		// Yield repeatedly inside the same critical section used by the signal
+		// helper. A future removal of the thread pin would let this goroutine
+		// migrate and make the TID captured for tgkill stale.
+		for range 1000 {
+			runtime.Gosched()
+			if got := unix.Gettid(); got != tid {
+				return fmt.Errorf("receiver migrated from thread %d to %d", tid, got)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func onCurrentOSThread(fn func(tid int) error) error {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	return fn(unix.Gettid())
+}
+
+func signalCurrentThread(sig syscall.Signal) error {
+	return onCurrentOSThread(func(tid int) error {
+		if _, _, errno := syscall.RawSyscall(syscall.SYS_TGKILL, uintptr(os.Getpid()),
+			uintptr(tid), uintptr(sig)); errno != 0 {
+			return errno
+		}
+		return nil
+	})
+}
+
 func runPipelineSIGPIPEHelper(t *testing.T, mode string) (string, string) {
 	t.Helper()
 	cmd := exec.Command(os.Args[0], "-test.run=^TestPipelineBuiltinSIGPIPEIsolation$")
@@ -239,9 +273,8 @@ func runPipelineSIGPIPEConcurrentHelper() {
 	// $$` reaching a trap) is asserted end-to-end by the semantics helper
 	// above, which passes in both modes.
 	if raceEnabled {
-		if _, _, errno := syscall.RawSyscall(syscall.SYS_TGKILL, uintptr(os.Getpid()),
-			uintptr(unix.Gettid()), uintptr(syscall.SIGPIPE)); errno != 0 {
-			fmt.Fprintln(os.Stderr, "self tgkill:", errno)
+		if err := signalCurrentThread(syscall.SIGPIPE); err != nil {
+			fmt.Fprintln(os.Stderr, "self tgkill:", err)
 			os.Exit(2)
 		}
 	} else if err := syscall.Kill(os.Getpid(), syscall.SIGPIPE); err != nil {
