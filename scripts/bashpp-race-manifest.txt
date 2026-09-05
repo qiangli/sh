@@ -1,5 +1,8 @@
 # Exact reviewed membership for the Bash++ race/lifecycle gate.
-# Format: package|category|top-level test name
+# Format: package|category|top-level test name[|goos]
+#
+# The optional 4th field restricts a row to one platform, for a test behind a
+# build tag. Without it a row is required on every platform.
 #
 # Names are data, not category heuristics. Every row must exist exactly in its
 # package, every required category and package must have a row, and the gate's
@@ -94,7 +97,7 @@
 ./interp|pipeline|TestCommandVReportsBrokenPipeWriteError
 ./interp|pipeline|TestCompoundNestedPipelineDoesNotReplaceCarrierSignalOwner
 ./interp|adversarial|TestConcurrencyQuarantine
-./interp|pipeline|TestDarwinNestedPipelineSIGPIPEIsolation
+./interp|pipeline|TestDarwinNestedPipelineSIGPIPEIsolation|darwin
 ./interp|cancellation|TestDevTCPCanceledContext
 ./interp|signal|TestExecCancelSignal
 ./interp|fifo|TestFIFOBackgroundJobRedirectCancel

@@ -193,7 +193,26 @@ run_bounded() {
 	return "$status"
 }
 
-manifest=scripts/bashpp-race-manifest.txt
+# The reviewed manifest is platform-aware; the gate reads a RESOLVED copy.
+#
+# A row may carry an optional 4th field naming the GOOS it belongs to. Rows
+# without one are required everywhere; a row with one is required only on that
+# platform and dropped elsewhere, so a build-tagged test does not read as
+# "manifested test missing" on a runner where it cannot exist.
+#
+# Resolving ONCE here, rather than teaching all nine parse sites a second
+# arity, keeps every later `NF == 3` check exactly as reviewed.
+manifest_source=scripts/bashpp-race-manifest.txt
+manifest=$tmpdir/manifest.resolved
+awk -F '|' -v goos="$("$go_bin" env GOOS)" '
+	/^#/ { next }
+	NF == 3 { print; next }
+	NF == 4 && $4 == goos { print $1 "|" $2 "|" $3 }
+' "$manifest_source" >"$manifest"
+if [ ! -s "$manifest" ]; then
+	log "ERROR: resolved manifest is empty for GOOS=$("$go_bin" env GOOS)"
+	exit 1
+fi
 required_manifest_packages=(./syntax ./syntax/typedjson ./interp)
 required_manifest_categories=(
 	parser-lowering typedjson channel select range task resource exec output
