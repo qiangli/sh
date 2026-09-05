@@ -23,7 +23,7 @@ import (
 // string, never an inferred object), and only this package can see a
 // variable's kind directly.
 
-func captureRunner(t *testing.T, stderr *strings.Builder, opts ...RunnerOption) *Runner {
+func captureRunner(t *testing.T, stderr *strings.Builder, opts ...RunnerOption) *Runner { // bashpp-racegate:safe-synchronized
 	t.Helper()
 	all := append([]RunnerOption{
 		StdIO(nil, stderr, stderr),
@@ -56,7 +56,7 @@ func stringVar(t *testing.T, r *Runner, name string) string {
 
 func TestBashPPRunSeparatesThreeChannels(t *testing.T) {
 	t.Parallel()
-	var out strings.Builder
+	var out strings.Builder // bashpp-racegate:safe-synchronized
 	r := captureRunner(t, &out)
 	err := captureRun(t, r, "f() { printf out-data; printf err-data >&2; return 3; }\nres, err := run(f)\n")
 	if err != nil {
@@ -91,7 +91,7 @@ func TestBashPPRunSeparatesThreeChannels(t *testing.T) {
 
 func TestBashPPRunResultInterpolatesAndResolves(t *testing.T) {
 	t.Parallel()
-	var out strings.Builder
+	var out strings.Builder // bashpp-racegate:safe-synchronized
 	r := captureRunner(t, &out)
 	err := captureRun(t, r, `f() { printf hi; return 5; }
 res, err := run(f)
@@ -115,7 +115,7 @@ printf '%s' "$res"
 // output merely because it parses — this test fails on the variable's kind.
 func TestBashPPCaptureNeverInfersJSON(t *testing.T) {
 	t.Parallel()
-	var out strings.Builder
+	var out strings.Builder // bashpp-racegate:safe-synchronized
 	r := captureRunner(t, &out)
 	err := captureRun(t, r, "f() { printf '{\"a\":1}\\n'; }\nout, err := capture(f)\n")
 	if err != nil {
@@ -137,7 +137,7 @@ func TestBashPPCaptureNeverInfersJSON(t *testing.T) {
 
 func TestBashPPCaptureFailureIsNotEmptySuccess(t *testing.T) {
 	t.Parallel()
-	var out strings.Builder
+	var out strings.Builder // bashpp-racegate:safe-synchronized
 	r := captureRunner(t, &out)
 	err := captureRun(t, r, "f() { printf partial; return 7; }\nout, err := capture(f)\n")
 	if err != nil {
@@ -169,7 +169,7 @@ func TestBashPPCaptureFailureIsNotEmptySuccess(t *testing.T) {
 
 func TestBashPPCaptureUnderscoreAndStatus(t *testing.T) {
 	t.Parallel()
-	var out strings.Builder
+	var out strings.Builder // bashpp-racegate:safe-synchronized
 	r := captureRunner(t, &out)
 	err := captureRun(t, r, `set -e
 f() { return 9; }
@@ -193,7 +193,7 @@ func TestBashPPCaptureCancellationReportsCancellation(t *testing.T) {
 			t.Parallel()
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			var out strings.Builder
+			var out strings.Builder // bashpp-racegate:safe-synchronized
 			// The handler writes real bytes, then cancels mid-capture, then
 			// writes more: a lazy implementation would hand back a truncated
 			// value that looks complete.
@@ -230,7 +230,7 @@ func TestBashPPCaptureCancellationReportsCancellation(t *testing.T) {
 // same volume through a real OS pipe from an external process.
 func TestBashPPCaptureLargeIntact(t *testing.T) {
 	t.Parallel()
-	var out strings.Builder
+	var out strings.Builder // bashpp-racegate:safe-synchronized
 	r := captureRunner(t, &out)
 	chunk := strings.Repeat("0123456789abcdef", 4) // 64 bytes
 	err := captureRun(t, r, fmt.Sprintf(`f() {
@@ -263,7 +263,7 @@ func TestBashPPCaptureLargeExternalPipe(t *testing.T) {
 		t.Skipf("head not found: %v", err)
 	}
 	t.Parallel()
-	var out strings.Builder
+	var out strings.Builder // bashpp-racegate:safe-synchronized
 	r := captureRunner(t, &out)
 	// 100000 NUL bytes from a real external process: exercises the OS pipe
 	// between the child and the capture buffer, and binary safety.
@@ -285,7 +285,7 @@ func TestBashPPCaptureLargeExternalPipe(t *testing.T) {
 
 func TestBashPPCaptureArgConventionAndSpread(t *testing.T) {
 	t.Parallel()
-	var out strings.Builder
+	var out strings.Builder // bashpp-racegate:safe-synchronized
 	r := captureRunner(t, &out)
 	// Arguments are argv, by the established P3 call convention: a bare
 	// identifier naming a live binding is that binding's value, `$x`
@@ -306,7 +306,7 @@ out, err := capture(f, one, $arg2)
 func TestBashPPCaptureArityAndCommandPosition(t *testing.T) {
 	t.Parallel()
 	t.Run("one name", func(t *testing.T) {
-		var out strings.Builder
+		var out strings.Builder // bashpp-racegate:safe-synchronized
 		r := captureRunner(t, &out)
 		err := captureRun(t, r, "x := run(\"ls\")\n")
 		if err == nil || r.lookupVar("x").IsSet() {
@@ -317,7 +317,7 @@ func TestBashPPCaptureArityAndCommandPosition(t *testing.T) {
 		}
 	})
 	t.Run("no command", func(t *testing.T) {
-		var out strings.Builder
+		var out strings.Builder // bashpp-racegate:safe-synchronized
 		r := captureRunner(t, &out)
 		if err := captureRun(t, r, "a, b := capture()\n"); err == nil {
 			t.Fatal("capture() with no command must fail")
@@ -327,7 +327,7 @@ func TestBashPPCaptureArityAndCommandPosition(t *testing.T) {
 		}
 	})
 	t.Run("command position", func(t *testing.T) {
-		var out strings.Builder
+		var out strings.Builder // bashpp-racegate:safe-synchronized
 		r := captureRunner(t, &out)
 		if err := captureRun(t, r, "run(\"ls\")\n"); err == nil {
 			t.Fatal("run(...) in command position must be diagnosed")
@@ -342,7 +342,7 @@ func TestBashPPCaptureArityAndCommandPosition(t *testing.T) {
 // a Go declaration shadows a predeclared identifier.
 func TestBashPPUserFuncShadowsRun(t *testing.T) {
 	t.Parallel()
-	var out strings.Builder
+	var out strings.Builder // bashpp-racegate:safe-synchronized
 	r := captureRunner(t, &out)
 	err := captureRun(t, r, `func run(cmd string) (a, b string) {
  a=shadow
@@ -373,7 +373,7 @@ func TestBashPPCaptureInertOutsideBashPP(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var out strings.Builder
+			var out strings.Builder // bashpp-racegate:safe-synchronized
 			r, err := New(StdIO(nil, &out, &out), Lang(lang))
 			if err != nil {
 				t.Fatal(err)
@@ -396,7 +396,7 @@ func TestBashPPCaptureInertOutsideBashPP(t *testing.T) {
 
 // --- explicit decode ---
 
-func decodeRunner(t *testing.T, out *strings.Builder) *Runner {
+func decodeRunner(t *testing.T, out *strings.Builder) *Runner { // bashpp-racegate:safe-synchronized
 	t.Helper()
 	r := captureRunner(t, out)
 	// json.Decode is an imported selector; these tests pre-register the
@@ -409,7 +409,7 @@ func decodeRunner(t *testing.T, out *strings.Builder) *Runner {
 
 func TestBashPPDecodeExplicitTyped(t *testing.T) {
 	t.Parallel()
-	var out strings.Builder
+	var out strings.Builder // bashpp-racegate:safe-synchronized
 	r := decodeRunner(t, &out)
 	err := captureRun(t, r, `f() { printf '{"name":"ada","tags":[1,2]}'; }
 out, cerr := capture(f)
@@ -439,7 +439,7 @@ func TestBashPPDecodeAliasAndPathIdentity(t *testing.T) {
 	t.Parallel()
 	t.Run("alias", func(t *testing.T) {
 		t.Parallel()
-		var out strings.Builder
+		var out strings.Builder // bashpp-racegate:safe-synchronized
 		r := captureRunner(t, &out)
 		r.Reset()
 		r.bashPPImports = map[string]string{"j2": "encoding/json"}
@@ -455,7 +455,7 @@ func TestBashPPDecodeAliasAndPathIdentity(t *testing.T) {
 	})
 	t.Run("other package named json", func(t *testing.T) {
 		t.Parallel()
-		var out strings.Builder
+		var out strings.Builder // bashpp-racegate:safe-synchronized
 		r := captureRunner(t, &out)
 		r.Reset()
 		r.bashPPImports = map[string]string{"json": "example.com/json"}
@@ -481,7 +481,7 @@ func TestBashPPDecodeScalarsStayStrings(t *testing.T) {
 		{`'1e+21'`, "1e+21"}, // the source spelling, not a float64 detour
 	}
 	for _, tc := range tests {
-		var out strings.Builder
+		var out strings.Builder // bashpp-racegate:safe-synchronized
 		r := decodeRunner(t, &out)
 		if err := captureRun(t, r, fmt.Sprintf("v, derr := json.Decode(%s)\n", tc.input)); err != nil {
 			t.Fatal(err)
@@ -496,7 +496,7 @@ func TestBashPPDecodeScalarsStayStrings(t *testing.T) {
 
 	// null is a structured absence, not a scalar: it must round-trip as the
 	// object coercion "null", distinguishable from the empty string.
-	var out strings.Builder
+	var out strings.Builder // bashpp-racegate:safe-synchronized
 	r := decodeRunner(t, &out)
 	if err := captureRun(t, r, "v, derr := json.Decode('null')\nprintf '%s' \"$v\"\n"); err != nil {
 		t.Fatal(err)
@@ -511,7 +511,7 @@ func TestBashPPDecodeScalarsStayStrings(t *testing.T) {
 // diagnostic. The two are always distinguishable — that is requirement 2.
 func TestBashPPDecodeFailureIsDistinguishable(t *testing.T) {
 	t.Parallel()
-	var out strings.Builder
+	var out strings.Builder // bashpp-racegate:safe-synchronized
 	r := decodeRunner(t, &out)
 	err := captureRun(t, r, `a, aerr := json.Decode('""')
 b, berr := json.Decode("")
@@ -610,7 +610,7 @@ func randomJSONValue(rng *rand.Rand, depth int) any {
 }
 
 func randomJSONString(rng *rand.Rand, n int) string {
-	var b strings.Builder
+	var b strings.Builder // bashpp-racegate:safe-private
 	for i := 0; i < n; i++ {
 		switch rng.IntN(6) {
 		case 0:

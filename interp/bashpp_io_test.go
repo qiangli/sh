@@ -20,7 +20,7 @@ type overlapWriter struct {
 	active  atomic.Int32
 	overlap atomic.Bool
 	mu      sync.Mutex
-	buf     bytes.Buffer
+	buf     bytes.Buffer // bashpp-racegate:safe-synchronized
 }
 
 func (w *overlapWriter) Write(p []byte) (int, error) {

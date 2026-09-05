@@ -17,7 +17,7 @@ import (
 
 func runBashPPConcurrency(t *testing.T, src string) (string, error) {
 	t.Helper()
-	var out strings.Builder
+	var out strings.Builder // bashpp-racegate:safe-synchronized
 	r, err := New(Lang(syntax.LangBashPP), StdIO(nil, &out, &out))
 	if err != nil {
 		t.Fatal(err)
@@ -484,7 +484,7 @@ main()
 }
 
 func TestBashPPStaleChannelCapabilityIsInvalid(t *testing.T) {
-	var out strings.Builder
+	var out strings.Builder // bashpp-racegate:safe-synchronized
 	r, err := New(Lang(syntax.LangBashPP), StdIO(nil, &out, &out))
 	if err != nil {
 		t.Fatal(err)
@@ -506,7 +506,7 @@ func TestBashPPStaleChannelCapabilityIsInvalid(t *testing.T) {
 }
 
 func TestBashPPTaskSnapshotRefusesUnsupportedObject(t *testing.T) {
-	var out strings.Builder
+	var out strings.Builder // bashpp-racegate:safe-private
 	r, err := New(Lang(syntax.LangBashPP), StdIO(nil, &out, &out))
 	if err != nil {
 		t.Fatal(err)
@@ -605,7 +605,7 @@ main()
 	if !mutated {
 		t.Fatal("receive declaration not found")
 	}
-	var out strings.Builder
+	var out strings.Builder // bashpp-racegate:safe-private
 	r, err := New(Lang(syntax.LangBashPP), StdIO(nil, &out, &out))
 	if err != nil {
 		t.Fatal(err)
@@ -627,7 +627,7 @@ main()
 	if err != nil {
 		t.Fatal(err)
 	}
-	var output strings.Builder
+	var output strings.Builder // bashpp-racegate:safe-synchronized
 	r, err := New(Lang(syntax.LangBashPP), StdIO(nil, &output, &output))
 	if err != nil {
 		t.Fatal(err)
@@ -741,7 +741,7 @@ main()
 		t.Fatalf("shell-copy exfiltration was not rejected: %q", out)
 	}
 
-	var later strings.Builder
+	var later strings.Builder // bashpp-racegate:safe-synchronized
 	r, _ := New(Lang(syntax.LangBashPP), StdIO(nil, &later, &later))
 	parse := func(src string) *syntax.File {
 		f, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(src), "stale-exec.bpp")
@@ -887,7 +887,7 @@ func TestBashPPMapfileCancellationUnblocksTask(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer write.Close()
-	var out strings.Builder
+	var out strings.Builder // bashpp-racegate:safe-synchronized
 	r, err := New(Lang(syntax.LangBashPP), StdIO(read, &out, &out))
 	if err != nil {
 		t.Fatal(err)
@@ -985,7 +985,7 @@ func TestCloneBashPPTaskCellsClonesReceiverObjects(t *testing.T) {
 }
 
 func TestBashPPFileBoundaryRetainsMethodReceiverHandleDefense(t *testing.T) {
-	var out strings.Builder
+	var out strings.Builder // bashpp-racegate:safe-private
 	r, err := New(Lang(syntax.LangBashPP), StdIO(nil, &out, &out))
 	if err != nil {
 		t.Fatal(err)
@@ -1050,7 +1050,7 @@ func TestBashPPTaskCustomOpenFailsClosedBeforeHandler(t *testing.T) {
 	} {
 		t.Run(tc.body, func(t *testing.T) {
 			var calls atomic.Int32
-			var out strings.Builder
+			var out strings.Builder // bashpp-racegate:safe-synchronized
 			r, err := New(
 				Lang(syntax.LangBashPP),
 				StdIO(nil, &out, &out),
@@ -1133,7 +1133,7 @@ main()
 }
 
 func TestBashPPTaskCustomReaderFailsClosed(t *testing.T) {
-	var output strings.Builder
+	var output strings.Builder // bashpp-racegate:safe-synchronized
 	r, err := New(
 		Lang(syntax.LangBashPP),
 		StdIO(strings.NewReader("ready\n"), &output, &output),
@@ -1196,7 +1196,7 @@ func TestReadZeroOptionsMatchBashReadyAndEOF(t *testing.T) {
 	for _, lang := range []syntax.LangVariant{syntax.LangBash, syntax.LangPOSIX} {
 		for _, option := range []string{"-t 0", "-n 0", "-N 0"} {
 			t.Run(lang.String()+"/"+option, func(t *testing.T) {
-				var output strings.Builder
+				var output strings.Builder // bashpp-racegate:safe-private
 				r, err := New(Lang(lang), StdIO(nil, &output, &output))
 				if err != nil {
 					t.Fatal(err)
@@ -1228,7 +1228,7 @@ printf '<%s>:%s\n' "$value" "$?"
 }
 
 func TestBashPPFileRunPrunesClearedPersistentHandle(t *testing.T) {
-	var out strings.Builder
+	var out strings.Builder // bashpp-racegate:safe-synchronized
 	r, err := New(Lang(syntax.LangBashPP), StdIO(nil, &out, &out))
 	if err != nil {
 		t.Fatal(err)

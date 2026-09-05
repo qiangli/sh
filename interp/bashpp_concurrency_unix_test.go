@@ -153,7 +153,7 @@ func TestBashPPTaskSnapshotPipeReadFailsClosed(t *testing.T) {
 	}
 	defer stdinRead.Close()
 	defer stdinWrite.Close()
-	var output strings.Builder
+	var output strings.Builder // bashpp-racegate:safe-synchronized
 	r, err := New(Lang(syntax.LangBashPP), StdIO(stdinRead, &output, &output))
 	if err != nil {
 		t.Fatal(err)
@@ -183,7 +183,7 @@ func TestBashPPTaskBlockingTTYReadFailsClosed(t *testing.T) {
 	}
 	defer primary.Close()
 	defer secondary.Close()
-	var output strings.Builder
+	var output strings.Builder // bashpp-racegate:safe-synchronized
 	r, err := New(Lang(syntax.LangBashPP), StdIO(secondary, &output, &output))
 	if err != nil {
 		t.Fatal(err)
@@ -392,7 +392,7 @@ func TestBashPPTaskSourceFIFORefusedWithoutHang(t *testing.T) {
 		t.Fatal(err)
 	}
 	done := make(chan struct{})
-	var output strings.Builder
+	var output strings.Builder // bashpp-racegate:safe-synchronized
 	var runErr error
 	r, err := New(Lang(syntax.LangBashPP), StdIO(nil, &output, &output))
 	if err != nil {
@@ -433,7 +433,7 @@ func TestBashPPTaskRelativeOpenUsesRetainedDirectory(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(original, "payload.bpp"), []byte("echo sourced\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	var output strings.Builder
+	var output strings.Builder // bashpp-racegate:safe-synchronized
 	r, err := New(Lang(syntax.LangBashPP), StdIO(nil, &output, &output))
 	if err != nil {
 		t.Fatal(err)

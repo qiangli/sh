@@ -11,7 +11,7 @@ import (
 
 func runBashPPConcurrencyReview(t *testing.T, src string) (string, error) {
 	t.Helper()
-	var out strings.Builder
+	var out strings.Builder // bashpp-racegate:safe-synchronized
 	r, err := New(Lang(syntax.LangBashPP), StdIO(nil, &out, &out))
 	if err != nil {
 		t.Fatal(err)
@@ -72,7 +72,7 @@ main()
 }
 
 func TestBashPPCancellationJoins(t *testing.T) {
-	var out strings.Builder
+	var out strings.Builder // bashpp-racegate:safe-synchronized
 	r, _ := New(Lang(syntax.LangBashPP), StdIO(nil, &out, &out))
 	f, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(`
 func block(ch) { got := <-ch; }
@@ -92,7 +92,7 @@ main()
 }
 
 func TestBashPPPrimaryFailureUsesLaunchOrdinal(t *testing.T) {
-	seen := map[string]bool{}
+	seen := map[string]bool{} // bashpp-racegate:safe-private
 	for i := 0; i < 200; i++ {
 		out, _ := runBashPPConcurrencyReview(t, `
 func seven() { return 7; }
@@ -113,7 +113,7 @@ main()
 }
 
 func TestBashPPTaskSnapshotDoesNotShareRNG(t *testing.T) {
-	var out strings.Builder
+	var out strings.Builder // bashpp-racegate:safe-synchronized
 	r, _ := New(Lang(syntax.LangBashPP), WithDeterministic(1), StdIO(nil, &out, &out))
 	f, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(`
 func rnd(ch) { ch <- "$RANDOM"; }

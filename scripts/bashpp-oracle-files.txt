@@ -1,0 +1,6 @@
+# Production files which the Bash++ unsafe-oracle audit must always scan.
+interp/bashpp_capture_test.go
+interp/bashpp_concurrency_review_test.go
+interp/bashpp_concurrency_test.go
+interp/bashpp_concurrency_unix_test.go
+interp/bashpp_io_test.go

@@ -17,7 +17,7 @@ test:
 
 ## bashpp-race-gate: Run the Bash++ race/lifecycle gate and write local evidence
 bashpp-race-gate:
-	@./scripts/bashpp-race-gate.sh
+	@/bin/bash ./scripts/bashpp-race-gate.sh
 
 ## tidy: Run go mod tidy, gofmt, and go vet
 tidy:
