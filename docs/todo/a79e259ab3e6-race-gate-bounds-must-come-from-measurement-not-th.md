@@ -3,10 +3,11 @@ id: a79e259ab3e6
 kind: task
 title: Race gate bounds must come from measurement, not the dev box
 seq: 17
-status: doing
+status: done
 priority: p0
 created: 2026-09-04T23:02:58.059638Z
 assignee: review_run60_ab2_semantics
+closed: 2026-09-05T08:30:45Z
 sprint: 115
 ---
 
