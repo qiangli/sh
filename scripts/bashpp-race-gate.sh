@@ -74,12 +74,17 @@ start_watcher() {
 # process traps TERM/INT/HUP and cleans up any nested command group before it
 # exits, so the nested setsid groups cannot escape the global watchdog.
 if ((!internal)); then
-	# set -e aborts the gate at the FIRST lane that times out, so the worst
-	# realistic run is every lane finishing plus one ceiling, not the sum of
-	# every ceiling. This stays comfortably inside the workflow's own
-	# timeout-minutes so the gate always reports before the job is killed —
-	# a job-level kill produces no evidence at all.
-	global_seconds=${BASHPP_RACE_GLOBAL_TIMEOUT_SECONDS:-1800}
+	# Every operation below has its own diagnostic bound. With the fail-closed
+	# 20-package ceiling, their aggregate maximum is 3600s:
+	#
+	#   list 60 + package discovery 20*60 + focused discovery 60
+	#   + two oracle audits 2*60 + race build 300
+	#   + focused lanes 3*420 + full race suite 600
+	#
+	# Keep the global watchdog beyond that sum, with one minute for process
+	# startup, evidence copying, and cleanup. It must never erase the more useful
+	# label from a later lane's own timeout diagnostic.
+	global_seconds=${BASHPP_RACE_GLOBAL_TIMEOUT_SECONDS:-3660}
 	args=(--internal)
 	((discovery_only)) && args+=(--discovery-only)
 	marker=$(mktemp "${TMPDIR:-/tmp}/bashpp-race-global.XXXXXX")
@@ -199,6 +204,13 @@ if ((${#packages[@]} == 0)); then
 	log "ERROR: go list ./... returned zero packages"
 	exit 1
 fi
+# The outer watchdog is derived from this ceiling. Fail closed if the module
+# grows past it rather than silently invalidating the aggregate deadline.
+max_packages=20
+if ((${#packages[@]} > max_packages)); then
+	log "ERROR: package count ${#packages[@]} exceeds deadline budget ceiling $max_packages"
+	exit 1
+fi
 
 test_count=0
 index=0
@@ -225,7 +237,7 @@ if ((focused_count == 0)); then
 fi
 
 log "Bash++ race/lifecycle gate"
-log "global_deadline_seconds: ${BASHPP_RACE_GLOBAL_TIMEOUT_SECONDS:-900}"
+log "global_deadline_seconds: ${BASHPP_RACE_GLOBAL_TIMEOUT_SECONDS:-3660}"
 log "go_version: $("$go_bin" version)"
 log "goos: $("$go_bin" env GOOS)"
 log "goarch: $("$go_bin" env GOARCH)"
@@ -235,8 +247,10 @@ log "test_count: $test_count"
 log "focused_test_count: $focused_count"
 log "real_bash_compatibility_corpus: TestRunnerRunConfirm against Bash 5.2 (separate confirm task)"
 
-./scripts/bashpp-test-oracle-audit.sh --self-test 2>&1 | tee -a "$evidence"
-./scripts/bashpp-test-oracle-audit.sh 2>&1 | tee -a "$evidence"
+run_bounded 60 "oracle audit self-test" "$tmpdir/oracle-self" 0 \
+	./scripts/bashpp-test-oracle-audit.sh --self-test
+run_bounded 60 "oracle audit" "$tmpdir/oracle" 0 \
+	./scripts/bashpp-test-oracle-audit.sh
 if ((discovery_only)); then
 	log "discovery_only: PASS (race tests were not launched)"
 	exit 0

@@ -13,10 +13,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     # The Linux race/lifecycle gate runs a bounded schedule matrix plus the
     # complete race suite; keep CI from killing it before its own diagnostics.
-    # The gate's own global deadline is 1800s and it reports WHICH lane hung;
-    # a job-level kill reports nothing, so this must stay above it with room
-    # for the rest of the steps.
-    timeout-minutes: 45
+    # The gate's bounded operations total at most 3600s and its global
+    # watchdog adds one minute for orchestration. A job-level kill reports no
+    # lane, so leave another 19 minutes for the surrounding build/test steps.
+    timeout-minutes: 80
     steps:
     - uses: actions/checkout@v5
     - uses: actions/setup-go@v6
