@@ -6,7 +6,7 @@ seq: 2
 status: doing
 priority: p1
 created: 2026-08-07T14:15:00Z
-assignee: repair_run60_ab3
+assignee: codex-gpt5.6-terra
 sprint: 115
 ---
 

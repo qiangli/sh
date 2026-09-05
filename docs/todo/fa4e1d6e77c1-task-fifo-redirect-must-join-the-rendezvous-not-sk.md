@@ -6,7 +6,7 @@ seq: 16
 status: doing
 priority: p0
 created: 2026-09-04T22:49:17.591315Z
-assignee: premium_run60_h3a
+assignee: codex-gpt-5.5
 sprint: 115
 ---
 
