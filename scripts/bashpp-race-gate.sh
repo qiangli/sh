@@ -233,7 +233,7 @@ log "GOMEMLIMIT: $GOMEMLIMIT (Go heap ceiling; not a hard process-tree RSS limit
 log "package_count: ${#packages[@]}"
 log "test_count: $test_count"
 log "focused_test_count: $focused_count"
-log "real_bash_compatibility_corpus: TestRunnerRunConfirm against Bash 5.3 (separate confirm task)"
+log "real_bash_compatibility_corpus: TestRunnerRunConfirm against Bash 5.2 (separate confirm task)"
 
 ./scripts/bashpp-test-oracle-audit.sh --self-test 2>&1 | tee -a "$evidence"
 ./scripts/bashpp-test-oracle-audit.sh 2>&1 | tee -a "$evidence"
