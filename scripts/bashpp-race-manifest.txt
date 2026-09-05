@@ -98,6 +98,8 @@
 ./interp|pipeline|TestCompoundNestedPipelineDoesNotReplaceCarrierSignalOwner
 ./interp|adversarial|TestConcurrencyQuarantine
 ./interp|pipeline|TestDarwinNestedPipelineSIGPIPEIsolation|darwin
+./interp|pipeline|TestPipelineBuiltinSIGPIPEIsolation|linux
+./interp|process-boundary|TestBackgroundExternalLaunchBoundary|linux
 ./interp|cancellation|TestDevTCPCanceledContext
 ./interp|signal|TestExecCancelSignal
 ./interp|fifo|TestFIFOBackgroundJobRedirectCancel
