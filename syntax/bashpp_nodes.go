@@ -11,12 +11,9 @@ import "fmt"
 // keeps the shared-file diff down to the dispatch call itself.
 //
 // The P1 command-position dispatch is wired into parser.go, so every node below
-// except BashPPIf is now constructed from real input: the var/const/type
-// declarations, the := short declarations, the Go-form call, import, func,
-// return and defer. BashPPIf alone stays unconstructed by design — brace-form
-// `if` cannot be decided by the bounded-lookahead recognizer and is deferred;
-// see bashpp_braceif_decision.go. The node, its enum and its interpreter stub
-// are kept ready for the different mechanism a later sprint will need.
+// is constructed from real input. BashPPIf is the one form that cannot use the
+// bounded-lookahead recognizer; inside a committed function region it instead
+// uses the complete parser transaction described in bashpp_if.go.
 //
 // Two rules from the design of record govern every node below, and both are
 // easy to violate later:
@@ -502,18 +499,18 @@ func (c *BashPPCall) End() Pos { return posAddCol(c.Rparen, 1) }
 
 // BashPPIf is a Go brace-form if: if err != nil { … }.
 //
-// This is the one Day-1 site whose commit point needs a completing context
-// rather than a prefix. A shell `if` may legally end its condition with `{`
-// and continue with `then`, so the brace alone does not decide. The absence of
-// `then` after the matching `}` is what commits, which means the recognizer
-// cannot answer from a bounded prefix and the parser must reach the closing
-// brace before classifying. Recorded here because it is the one place the
-// bounded-lookahead property below does not hold.
+// Init, when non-nil, is the optional short declaration before the header's
+// semicolon. Cond is always a typed scalar expression. Else is another
+// BashPPIf for `else if`, a Block for `else`, or nil.
 type BashPPIf struct {
-	If   Pos
-	Cond []*Word // the condition, unevaluated
-	Then *Block  // the braced body
-	Else Command // an *BashPPIf for else-if, a *Block for else, or nil
+	Site      StartSite
+	If        Pos
+	Init      *BashPPShortDecl
+	Semicolon Pos
+	Cond      BashPPExpr
+	Then      *Block
+	ElsePos   Pos
+	Else      Command
 }
 
 // BashPPSwitch is the exhaustive switch form admitted inside a typed Bash#

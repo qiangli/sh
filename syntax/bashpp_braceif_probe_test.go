@@ -25,19 +25,9 @@ import (
 // a preceding `then` (Go). That scan is unbounded, and the parser is
 // streaming.
 //
-// These probes were written for Story #127 to produce a concrete, test-backed
-// decision between two alternatives:
-//
-//   A. A streaming-safe bounded mechanism — a recognizer that decides within
-//      maxLookahead bytes, accepting some forms and excluding others.
-//
-//   B. Explicit Day-1 deferral — `StartGoIf` stays unimplemented, documented
-//      as an open design question, with the grammar and escape consequences
-//      recorded.
-//
-// The probes prove that alternative A is unsound without restricting the input
-// language to a subset that excludes legal bash scripts, which violates the
-// Bash++ superset contract. Alternative B is therefore the correct choice.
+// These probes prove why StartGoIf cannot join the bounded recognizer. The
+// implementation uses a complete parser transaction instead, scoped to an
+// already committed Bash++ function body; see bashpp_if.go.
 
 // Probe 1: `{` is a legal word in bash `if` conditions.
 //
@@ -207,15 +197,16 @@ func TestBraceIfProbe_RecognizerReturnsNoMatch(t *testing.T) {
 	}
 }
 
-// Probe 6: the BashPPIf node compiles, implements Command, and has correct
-// position semantics — it is ready for an eventual implementation, but nothing
-// constructs it today.
+// Probe 6: the BashPPIf node implements Command and has correct position
+// semantics independently of parsing.
 func TestBraceIfProbe_NodeIsReady(t *testing.T) {
 	t.Parallel()
 
 	node := &BashPPIf{
-		If:   newTestPos(1, 1, 0),
-		Cond: []*Word{{Parts: []WordPart{&Lit{Value: "true"}}}},
+		If: newTestPos(1, 1, 0),
+		Cond: &BashPPIdent{Name: &Lit{
+			ValuePos: newTestPos(1, 4, 3), ValueEnd: newTestPos(1, 8, 7), Value: "true",
+		}},
 		Then: &Block{
 			Lbrace: newTestPos(1, 15, 14),
 			Rbrace: newTestPos(1, 30, 29),

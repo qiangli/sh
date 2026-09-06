@@ -6,6 +6,7 @@ package interp
 import (
 	"bytes"
 	"context"
+	"go/constant"
 	"strconv"
 	"strings"
 
@@ -660,14 +661,40 @@ func (r *Runner) bashPPEvalSelector(ctx context.Context, c *syntax.BashPPCall, v
 	}
 }
 
-// bashPPIf is a placeholder so the node has an owner from the start.
-//
-// The brace-form `if` is the one Day-1 site whose commit point is unbounded —
-// only the absence of `then` after the MATCHING brace decides it — so it is
-// gated behind that design question rather than behind implementation effort.
 func (r *Runner) bashPPIf(ctx context.Context, i *syntax.BashPPIf) {
-	r.errf("bash++: brace-form if is not implemented in this phase\n")
-	r.exit = exitStatus{code: 2}
+	if !r.objectsEnabled() {
+		r.errf("bash++ if evaluated with extensions disabled\n")
+		r.exit = exitStatus{code: 2}
+		return
+	}
+	if r.bashPPScope == nil {
+		r.bashPPScope = newBashPPScope(nil)
+	}
+	leave := r.bashPPPushScope()
+	defer leave()
+	r.exit.clear()
+	if i.Init != nil {
+		r.bashPPShortDecl(ctx, i.Init)
+		if !r.exit.ok() {
+			return
+		}
+	}
+	cond, err := r.bashPPEvalScalarExpr(i.Cond)
+	if err != nil {
+		r.errf("%v\n", err)
+		r.exit = exitStatus{code: 2}
+		return
+	}
+	if cond.value.Kind() != constant.Bool {
+		r.errf("BASHPP-EIF-COND: if condition must be boolean, got %s\n", cond.value.Kind())
+		r.exit = exitStatus{code: 2}
+		return
+	}
+	if constant.BoolVal(cond.value) {
+		r.cmd(ctx, i.Then)
+	} else if i.Else != nil {
+		r.cmd(ctx, i.Else)
+	}
 }
 
 // bashPPUnsupported is the shared response for a recognized Go form belonging

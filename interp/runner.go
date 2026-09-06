@@ -5443,10 +5443,6 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 	case *syntax.BashPPImport:
 		r.bashPPImport(ctx, cm)
 	case *syntax.BashPPIf:
-		// Never constructed by the parser — brace-form `if` is a recorded
-		// Day-1 deferral (see syntax/bashpp_braceif_decision.go) — but the
-		// node is public and a hand-built tree can carry one, so it gets its
-		// owner's diagnostic rather than the "unhandled command node" default.
 		r.bashPPIf(ctx, cm)
 	case *syntax.Subshell:
 		r2 := r.subshell(false)

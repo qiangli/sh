@@ -2965,6 +2965,9 @@ func (p *Parser) gotStmtPipe(s *Stmt, binCmd bool) *Stmt {
 				p.next()
 			}
 		case "if":
+			if p.lang.in(LangBashPP) && p.bashppFuncDepth > 0 && p.bashppIf(s) {
+				break
+			}
 			p.ifClause(s)
 		case "while", "until":
 			// TODO(zsh): "repeat"

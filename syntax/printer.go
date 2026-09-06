@@ -1789,6 +1789,20 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 		}
 		p.newlines(cmd.Rbrace)
 		p.writeLit("}")
+	case *BashPPIf:
+		p.writeLit("if ")
+		if cmd.Init != nil {
+			p.command(cmd.Init, nil)
+			p.writeLit("; ")
+		}
+		p.bashppExpr(cmd.Cond)
+		p.space()
+		p.command(cmd.Then, nil)
+		if cmd.Else != nil {
+			p.space()
+			p.writeLit("else ")
+			p.command(cmd.Else, nil)
+		}
 	case *BashPPImport:
 		p.spacedString(cmd.Kw.Value, cmd.Kw.Pos())
 		if cmd.Path != nil {

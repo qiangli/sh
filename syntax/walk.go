@@ -182,15 +182,18 @@ func Walk(node Node, f func(Node) bool) {
 		// The Bash++ nodes live in bashpp_nodes.go, but Walk is the one place
 		// they cannot: a Command the visitor does not know reaches the panic
 		// below. Every P1 node the dispatch constructs is handled here — the
-		// cases that follow cover the declaration, short declaration, call,
-		// import, func, return and defer forms. BashPPIf is deliberately absent
-		// because it is never constructed (see bashpp_braceif_decision.go).
+		// cases that follow cover every constructed Bash++ form.
 		walkNilable(node.Kw, f)
 		walkNilable(node.Name, f)
 		walkNilable(node.DeclType, f)
 		walkList(node.Init, f)
 		walkList(node.StructFields, f)
 		walkList(node.EnumMembers, f)
+	case *BashPPIf:
+		walkNilable(node.Init, f)
+		walkNilable(node.Cond, f)
+		walkNilable(node.Then, f)
+		walkNilable(node.Else, f)
 	case *BashPPSwitch:
 		Walk(node.Expr, f)
 		walkList(node.Arms, f)

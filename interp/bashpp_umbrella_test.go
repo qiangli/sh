@@ -87,12 +87,9 @@ func TestBashPPUmbrellaClassicRuntimeIsolation(t *testing.T) {
 	}
 }
 
-// TestBashPPUmbrellaBraceIfStubDiagnostic pins the one deliberately excluded
-// site. The parser never constructs a BashPPIf — brace-form `if` is a
-// recorded Day-1 deferral — but the node is public, so a hand-built tree must
-// land on the stub's honest diagnostic rather than the generic "unhandled
-// command node" fallback.
-func TestBashPPUmbrellaBraceIfStubDiagnostic(t *testing.T) {
+// A malformed hand-built node gets its typed-expression diagnostic rather than
+// falling through to the generic "unhandled command node" path.
+func TestBashPPUmbrellaBraceIfMalformedTreeDiagnostic(t *testing.T) {
 	t.Parallel()
 
 	f := &syntax.File{Stmts: []*syntax.Stmt{{Cmd: &syntax.BashPPIf{}}}}
@@ -102,5 +99,5 @@ func TestBashPPUmbrellaBraceIfStubDiagnostic(t *testing.T) {
 	var es interp.ExitStatus
 	qt.Assert(t, qt.IsTrue(errors.As(err, &es)))
 	qt.Assert(t, qt.Equals(uint8(es), 2))
-	qt.Assert(t, qt.StringContains(out.String(), "brace-form if is not implemented"))
+	qt.Assert(t, qt.StringContains(out.String(), "BASHPP-EEXPR-FORM"))
 }

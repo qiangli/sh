@@ -520,13 +520,14 @@ type parserTransaction struct {
 }
 
 type recordingReader struct {
-	r io.Reader
-	b bytes.Buffer
+	r      io.Reader
+	b      bytes.Buffer
+	record bool
 }
 
 func (r *recordingReader) Read(p []byte) (int, error) {
 	n, err := r.r.Read(p)
-	if n > 0 {
+	if n > 0 && r.record {
 		_, _ = r.b.Write(p[:n])
 	}
 	return n, err
@@ -534,12 +535,44 @@ func (r *recordingReader) Read(p []byte) (int, error) {
 
 func (p *Parser) beginBashPPTxn() *parserTransaction {
 	t := &parserTransaction{saved: *p, src: p.src, bsLen: len(p.bs)}
-	t.read = &recordingReader{r: p.src}
+	t.read = &recordingReader{r: p.src, record: true}
 	p.src = t.read
 	return t
 }
 
-func (t *parserTransaction) commit(p *Parser) { p.src = t.src }
+func (t *parserTransaction) commit(p *Parser) {
+	// Keep p.src intact: a transaction checkpoint may have installed replay
+	// bytes in front of the recorder. Disabling the recorder and reconnecting
+	// it to the original source preserves those bytes without retaining any
+	// transactional behavior after commit.
+	t.read.r = t.src
+	t.read.record = false
+}
+
+type parserTxnCheckpoint struct {
+	saved   Parser
+	bsLen   int
+	readLen int
+}
+
+func (t *parserTransaction) checkpoint(p *Parser) parserTxnCheckpoint {
+	return parserTxnCheckpoint{saved: *p, bsLen: len(p.bs), readLen: t.read.b.Len()}
+}
+
+func (t *parserTransaction) rewind(p *Parser, c parserTxnCheckpoint) {
+	read := append([]byte(nil), t.read.b.Bytes()[c.readLen:]...)
+	*p = c.saved
+	if c.bsLen == 0 {
+		p.bs = nil
+	} else {
+		p.bs = p.readBuf[:c.bsLen]
+	}
+	if len(read) > 0 {
+		p.src = io.MultiReader(bytes.NewReader(read), t.read)
+	} else {
+		p.src = t.read
+	}
+}
 
 func (t *parserTransaction) rollback(p *Parser) {
 	*p = t.saved
