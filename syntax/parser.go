@@ -4065,7 +4065,7 @@ loop:
 		// the ordinary arms with the parser exactly as they would have found it.
 		if p.lang.in(LangBashPP) && p.bashppFuncDepth > 0 && !bashppScalarTried &&
 			bashppCompositeTxn == nil && len(s.Redirs) == 0 &&
-			bashppScalarOpTok(p.tok) != "" && bashppScalarHead(ce) {
+			bashppScalarOpTok(p.tok) != "" && (bashppScalarHead(ce) || p.tok == and && bashppAddressHead(ce)) {
 			bashppScalarTried = true
 			if decl := p.bashppScalarTail(ce); decl != nil {
 				s.Cmd = decl

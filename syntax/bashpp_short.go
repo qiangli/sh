@@ -97,11 +97,22 @@ func bashppConvertExpr(expr goast.Expr, pos func(gotoken.Pos) Pos, lit func(goto
 		case *goast.ParenExpr:
 			return &BashPPParenExpr{Lparen: pos(x.Pos()), X: convert(x.X), Rparen: pos(x.End() - 1)}
 		case *goast.UnaryExpr:
+			switch x.Op {
+			case gotoken.AND:
+				return &BashPPAddressExpr{Amp: pos(x.OpPos), X: convert(x.X)}
+			case gotoken.MUL:
+				return &BashPPDerefExpr{Star: pos(x.OpPos), X: convert(x.X)}
+			}
 			return &BashPPUnaryExpr{Op: lit(x.OpPos, x.OpPos+gotoken.Pos(len(x.Op.String())), x.Op.String()), X: convert(x.X)}
+		case *goast.StarExpr:
+			return &BashPPDerefExpr{Star: pos(x.Star), X: convert(x.X)}
 		case *goast.BinaryExpr:
 			return &BashPPBinaryExpr{X: convert(x.X), Op: lit(x.OpPos, x.OpPos+gotoken.Pos(len(x.Op.String())), x.Op.String()), Y: convert(x.Y)}
 		case *goast.CallExpr:
 			id := x.Fun.(*goast.Ident)
+			if id.Name == "new" {
+				return &BashPPNewExpr{New: lit(id.Pos(), id.End(), id.Name), Lparen: pos(id.End()), AllocType: convertType(x.Args[0]), Rparen: pos(x.End() - 1)}
+			}
 			return &BashPPConvertExpr{ConvType: lit(id.Pos(), id.End(), id.Name), Lparen: pos(id.End()), X: convert(x.Args[0]), Rparen: pos(x.End() - 1)}
 		case *goast.IndexExpr:
 			return &BashPPIndexExpr{X: convert(x.X), Lbrack: pos(x.Lbrack), Index: convert(x.Index), Rbrack: pos(x.End() - 1)}
@@ -156,6 +167,8 @@ func bashppConvertType(e goast.Expr, pos func(gotoken.Pos) Pos, lit func(gotoken
 			out.Fields = append(out.Fields, entry)
 		}
 		return out
+	case *goast.StarExpr:
+		return &BashPPPointerType{Star: pos(x.Star), Element: bashppConvertType(x.X, pos, lit)}
 	}
 	return nil
 }
@@ -350,6 +363,8 @@ func bashppSupportedTypeAST(expr goast.Expr) bool {
 			}
 		}
 		return true
+	case *goast.StarExpr:
+		return bashppSupportedTypeAST(x.X)
 	}
 	return false
 }
@@ -373,6 +388,8 @@ func bashppGoTypeText(expr goast.Expr) string {
 		return "map[" + bashppGoTypeText(x.Key) + "]" + bashppGoTypeText(x.Value)
 	case *goast.StructType:
 		return "struct"
+	case *goast.StarExpr:
+		return "*" + bashppGoTypeText(x.X)
 	}
 	return ""
 }
@@ -504,11 +521,11 @@ func bashppAssign(ce *CallExpr, redirs []*Redirect) *BashPPAssign {
 	if !bashppSupportedValue(value) {
 		return nil
 	}
-	if !bashppMutationTarget(text) && !(bashppIsIdent(text) && strings.Contains(bashppWordText(value), "{")) {
+	if !bashppMutationTarget(text) && !strings.HasPrefix(text, "*") && !(bashppIsIdent(text) && strings.Contains(bashppWordText(value), "{")) {
 		return nil
 	}
 	assign := &BashPPAssign{Target: target, Eq: ce.Args[eq].Pos(), Value: value}
-	if expr := bashppIndexExpr(target); expr != nil {
+	if expr := bashppPointerExpr(target); expr != nil {
 		assign.TargetExpr = expr
 		if rhs := bashppCompositeExpr(value); rhs != nil {
 			assign.ValueExpr = rhs
@@ -519,6 +536,30 @@ func bashppAssign(ce *CallExpr, redirs []*Redirect) *BashPPAssign {
 		}
 	}
 	return assign
+}
+
+func bashppPointerExpr(w *Word) BashPPExpr {
+	if path := bashppIndexExpr(w); path != nil {
+		return path
+	}
+	text, positions, ok := bashppScalarSource(w)
+	if !ok {
+		return nil
+	}
+	expr, err := goparser.ParseExpr(text)
+	if err != nil || !bashppSupportedScalarAST(expr) {
+		return nil
+	}
+	switch expr.(type) {
+	case *goast.StarExpr, *goast.IndexExpr, *goast.SelectorExpr:
+	default:
+		return nil
+	}
+	pos := func(p gotoken.Pos) Pos { return positions[int(p)-1] }
+	lit := func(p, end gotoken.Pos, value string) *Lit {
+		return &Lit{ValuePos: pos(p), ValueEnd: pos(end), Value: value}
+	}
+	return bashppConvertExpr(expr, pos, lit)
 }
 
 func bashppConcatWords(words []*Word) *Word {
@@ -697,9 +738,13 @@ func bashppSupportedScalarAST(expr goast.Expr) bool {
 		return bashppSupportedScalarAST(x.X)
 	case *goast.UnaryExpr:
 		switch x.Op {
-		case gotoken.ADD, gotoken.SUB, gotoken.NOT, gotoken.XOR:
+		case gotoken.ADD, gotoken.SUB, gotoken.NOT, gotoken.XOR, gotoken.MUL:
 			return bashppSupportedScalarAST(x.X)
+		case gotoken.AND:
+			return bashppSupportedAddressAST(x.X)
 		}
+	case *goast.StarExpr:
+		return bashppSupportedScalarAST(x.X)
 	case *goast.BinaryExpr:
 		switch x.Op {
 		// The first row is spelled with characters the shell lexer keeps
@@ -717,14 +762,49 @@ func bashppSupportedScalarAST(expr goast.Expr) bool {
 			return false
 		}
 		id, ok := x.Fun.(*goast.Ident)
-		return ok && bashppScalarConversionType(id.Name) && bashppSupportedScalarAST(x.Args[0])
-	case *goast.IndexExpr:
-		switch x.X.(type) {
-		case *goast.Ident, *goast.IndexExpr:
-			return bashppSupportedScalarAST(x.X) && bashppSupportedScalarAST(x.Index)
+		if !ok {
+			return false
 		}
+		if id.Name == "new" {
+			return bashppSupportedTypeAST(x.Args[0])
+		}
+		return bashppScalarConversionType(id.Name) && bashppSupportedScalarAST(x.Args[0])
+	case *goast.IndexExpr:
+		return bashppSupportedScalarAST(x.X) && bashppSupportedScalarAST(x.Index)
+	case *goast.SelectorExpr:
+		return bashppContainsDeref(x.X) && bashppSupportedScalarAST(x.X) && bashppIsIdent(x.Sel.Name)
 	}
 	return false
+}
+
+func bashppContainsDeref(expr goast.Expr) bool {
+	switch x := expr.(type) {
+	case *goast.StarExpr:
+		return true
+	case *goast.ParenExpr:
+		return bashppContainsDeref(x.X)
+	case *goast.SelectorExpr:
+		return bashppContainsDeref(x.X)
+	case *goast.IndexExpr:
+		return bashppContainsDeref(x.X)
+	}
+	return false
+}
+
+func bashppSupportedAddressAST(expr goast.Expr) bool {
+	switch x := expr.(type) {
+	case *goast.Ident:
+		return bashppIsIdent(x.Name)
+	case *goast.SelectorExpr:
+		return bashppSupportedPathAST(x)
+	case *goast.IndexExpr:
+		return bashppSupportedPathAST(x)
+	case *goast.ParenExpr:
+		return bashppSupportedAddressAST(x.X)
+	}
+	// Keep syntactically valid operands in the typed tree so the interpreter
+	// can issue the deterministic non-addressable diagnostic.
+	return bashppSupportedScalarAST(expr)
 }
 
 func bashppScalarConversionType(name string) bool {
@@ -954,6 +1034,23 @@ func (p *Parser) bashppParenForm(ce *CallExpr) Command {
 		}
 		txn.commit(p)
 		return &BashPPShortDecl{Lhs: lhs, Class: ClassR, OpPos: opPos, GoRegion: p.bashppFuncDepth > 0, MakeChan: mk}
+	}
+	if short && p.bashppFuncDepth > 0 && name.Value == "new" {
+		typeWord := p.getWord()
+		typ := bashppTypeExpr(typeWord)
+		if typ == nil || p.tok != rightParen {
+			txn.rollback(p)
+			return nil
+		}
+		rparen := p.pos
+		p.next()
+		if !bashppCallTerminator(p.tok) {
+			txn.rollback(p)
+			return nil
+		}
+		txn.commit(p)
+		return &BashPPShortDecl{Lhs: lhs, Class: ClassR, OpPos: opPos, GoRegion: true,
+			Expr: &BashPPNewExpr{New: name, Lparen: lparen, AllocType: typ, Rparen: rparen}}
 	}
 	args, argNames, ellipsis, ok := p.bashppCallArgs()
 	if !ok || p.tok != rightParen {

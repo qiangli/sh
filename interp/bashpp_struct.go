@@ -38,6 +38,8 @@ func (r *Runner) bashPPValidateValueType(typ syntax.BashPPTypeExpr, seen map[str
 		return r.bashPPValidateValueType(&syntax.BashPPNamedType{Name: &syntax.Lit{Value: strings.TrimPrefix(decl.underlying, "*")}}, seen)
 	case *syntax.BashPPCollectionType:
 		return r.bashPPValidateCollectionType(x)
+	case *syntax.BashPPPointerType:
+		return r.bashPPValidatePointerType(x)
 	case *syntax.BashPPStructType:
 		seenFields := make(map[string]bool)
 		for _, field := range bashPPFlatFields(x.Fields) {
@@ -185,6 +187,37 @@ func (r *Runner) bashPPZeroValue(typ syntax.BashPPTypeExpr) (any, *bashPPCollect
 }
 
 func (r *Runner) bashPPEvalTypedValue(expr syntax.BashPPExpr, expected syntax.BashPPTypeExpr) (any, *bashPPCollectionMeta, error) {
+	if pointerType, ok := expected.(*syntax.BashPPPointerType); ok {
+		if id, nilIdent := expr.(*syntax.BashPPIdent); nilIdent && id.Name.Value == "nil" {
+			return nil, bashPPPointerMeta(pointerType), nil
+		}
+		ptr, err := r.bashPPPointerExprValue(expr)
+		if err != nil {
+			return nil, nil, err
+		}
+		if ptr != nil && bashPPTypeText(ptr.elem) != bashPPTypeText(pointerType.Element) {
+			return nil, nil, fmt.Errorf("BASHPP-EASSIGN-MISMATCH: cannot use *%s as %s", bashPPTypeText(ptr.elem), bashPPTypeText(expected))
+		}
+		return ptr, bashPPPointerMeta(pointerType), nil
+	}
+	if deref, ok := expr.(*syntax.BashPPDerefExpr); ok {
+		ptr, err := r.bashPPPointerExprValue(deref.X)
+		if err != nil {
+			return nil, nil, err
+		}
+		if ptr == nil {
+			return nil, nil, fmt.Errorf("BASHPP-ENIL-DEREF: dereference of nil pointer")
+		}
+		value, meta, typ, err := ptr.read()
+		if err != nil {
+			return nil, nil, err
+		}
+		if expected != nil && bashPPTypeText(typ) != bashPPTypeText(expected) {
+			return nil, nil, fmt.Errorf("BASHPP-EASSIGN-MISMATCH: cannot use %s as %s", bashPPTypeText(typ), bashPPTypeText(expected))
+		}
+		value, meta = bashPPCopyArrayValue(value, meta)
+		return value, meta, nil
+	}
 	if lit, ok := expr.(*syntax.BashPPCompositeLit); ok {
 		return r.bashPPEvalComposite(lit, expected)
 	}
@@ -225,6 +258,16 @@ func (r *Runner) bashPPEvalTypedValue(expr syntax.BashPPExpr, expected syntax.Ba
 }
 
 func (r *Runner) bashPPCheckTypedValue(value any, meta *bashPPCollectionMeta, expected syntax.BashPPTypeExpr) error {
+	if pointer, ok := expected.(*syntax.BashPPPointerType); ok {
+		if value == nil {
+			return nil
+		}
+		actual, ok := value.(*bashPPPointer)
+		if !ok || bashPPTypeText(actual.elem) != bashPPTypeText(pointer.Element) {
+			return fmt.Errorf("BASHPP-EASSIGN-MISMATCH: cannot use value as %s", bashPPTypeText(expected))
+		}
+		return nil
+	}
 	if _, _, ok := r.bashPPStructFields(expected); ok {
 		if meta == nil || meta.kind != "struct" || bashPPTypeText(meta.typ) != bashPPTypeText(expected) {
 			return fmt.Errorf("BASHPP-ESTRUCT-FIELD-TYPE: cannot use value as %s", bashPPTypeText(expected))
@@ -257,14 +300,36 @@ func (r *Runner) bashPPReadExpr(expr syntax.BashPPExpr) (any, *bashPPCollectionM
 	switch x := expr.(type) {
 	case *syntax.BashPPIdent:
 		cell := r.bashPPScope.lookup(x.Name.Value)
+		if cell != nil && cell.pointer {
+			return cell.pointerValue, bashPPPointerMeta(cell.declType), nil
+		}
 		if cell == nil || cell.vr.Kind != expand.Object {
 			return nil, nil, fmt.Errorf("BASHPP-ESELECTOR-ROOT: %s is not a structured value", x.Name.Value)
 		}
 		return cell.vr.Obj, bashPPCellMeta(cell), nil
+	case *syntax.BashPPDerefExpr:
+		ptr, err := r.bashPPPointerExprValue(x.X)
+		if err != nil {
+			return nil, nil, err
+		}
+		if ptr == nil {
+			return nil, nil, fmt.Errorf("BASHPP-ENIL-DEREF: dereference of nil pointer")
+		}
+		value, meta, _, err := ptr.read()
+		return value, meta, err
 	case *syntax.BashPPSelectorExpr:
 		value, meta, err := r.bashPPReadExpr(x.X)
 		if err != nil {
 			return nil, nil, err
+		}
+		if pointer, ok := value.(*bashPPPointer); ok {
+			if pointer == nil {
+				return nil, nil, fmt.Errorf("BASHPP-ENIL-DEREF: dereference of nil pointer")
+			}
+			value, meta, _, err = pointer.read()
+			if err != nil {
+				return nil, nil, err
+			}
 		}
 		if meta == nil || meta.kind != "struct" {
 			return nil, nil, fmt.Errorf("BASHPP-ESELECTOR-TYPE: %s has no fields", bashPPExprText(x.X))
@@ -282,6 +347,15 @@ func (r *Runner) bashPPReadExpr(expr syntax.BashPPExpr) (any, *bashPPCollectionM
 		value, meta, err := r.bashPPReadExpr(x.X)
 		if err != nil {
 			return nil, nil, err
+		}
+		if pointer, ok := value.(*bashPPPointer); ok {
+			if pointer == nil {
+				return nil, nil, fmt.Errorf("BASHPP-ENIL-DEREF: dereference of nil pointer")
+			}
+			value, meta, _, err = pointer.read()
+			if err != nil {
+				return nil, nil, err
+			}
 		}
 		if meta == nil || meta.kind == "struct" {
 			return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-INDEX: value is not a collection")
@@ -314,6 +388,10 @@ func (r *Runner) bashPPReadExpr(expr syntax.BashPPExpr) (any, *bashPPCollectionM
 }
 
 func (r *Runner) bashPPStructuredAssign(target, rhs syntax.BashPPExpr) {
+	if deref, ok := target.(*syntax.BashPPDerefExpr); ok {
+		r.bashPPDerefAssign(deref, rhs)
+		return
+	}
 	root, ok := bashPPCollectionRoot(target)
 	cell := r.bashPPScope.lookup(root)
 	if !ok || cell == nil || cell.object == nil {

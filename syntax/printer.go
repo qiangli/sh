@@ -1288,6 +1288,16 @@ func (p *Printer) bashppExpr(expr BashPPExpr) {
 	case *BashPPUnaryExpr:
 		p.writeLit(x.Op.Value)
 		p.bashppExpr(x.X)
+	case *BashPPAddressExpr:
+		p.writeLit("&")
+		p.bashppExpr(x.X)
+	case *BashPPDerefExpr:
+		p.writeLit("*")
+		p.bashppExpr(x.X)
+	case *BashPPNewExpr:
+		p.writeLit("new(")
+		p.bashppType(x.AllocType)
+		p.writeLit(")")
 	case *BashPPBinaryExpr:
 		p.bashppExpr(x.X)
 		p.space()
@@ -1369,6 +1379,9 @@ func (p *Printer) bashppType(typ BashPPTypeExpr) {
 			}
 		}
 		p.writeLit("}")
+	case *BashPPPointerType:
+		p.writeLit("*")
+		p.bashppType(x.Element)
 	default:
 		panic(fmt.Sprintf("unhandled Bash++ type %T", typ))
 	}

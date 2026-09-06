@@ -7,3 +7,6 @@
 {"op":"validate","slug":"replay-reader-bytes-when-rolling-back-streaming-parser-probes","tool":"codex:gpt-5.6-sol-y","host":"dragon","episode":"weave-issue-25","at":"2026-09-03T13:18:20.646411Z"}
 {"op":"add","slug":"separate-value-metadata-from-readonly-identity","tool":"codex-gpt5.6-sol-p","host":"dragon","episode":"weave-issue-16","at":"2026-09-06T22:10:30.378071Z"}
 {"op":"validate","slug":"separate-value-metadata-from-readonly-identity","tool":"codex-gpt5.6-sol-p","host":"dragon","episode":"weave-issue-16","at":"2026-09-06T22:10:35.268896Z"}
+{"op":"validate","slug":"separate-value-metadata-from-readonly-identity","tool":"codex-gpt5.6-sol-q","host":"dragon","episode":"weave-issue-17","at":"2026-09-06T22:32:18.387164Z"}
+{"op":"add","slug":"clone-pointer-targets-as-storage-graph-edges","tool":"codex-gpt5.6-sol-q","host":"dragon","episode":"weave-issue-17","at":"2026-09-06T22:32:18.408693Z"}
+{"op":"validate","slug":"clone-pointer-targets-as-storage-graph-edges","tool":"codex-gpt5.6-sol-q","host":"dragon","episode":"weave-issue-17","at":"2026-09-06T22:32:26.921394Z"}

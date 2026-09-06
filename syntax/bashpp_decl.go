@@ -190,7 +190,7 @@ func bashppTypeDecl(ce *CallExpr, redirs []*Redirect) *BashPPDecl {
 	if m.Site != StartTypeDecl {
 		return nil
 	}
-	return &BashPPDecl{Site: m.Site, Kw: kw, Name: name, DeclType: typ, Alias: alias, End_: typeWord.End()}
+	return &BashPPDecl{Site: m.Site, Kw: kw, Name: name, DeclType: typ, DeclTypeExpr: bashppTypeExpr(typeWord), Alias: alias, End_: typeWord.End()}
 }
 
 func bashppTypeLit(w *Word) *Lit {
@@ -213,16 +213,10 @@ func bashppTypedVarDecl(ce *CallExpr, redirs []*Redirect) *BashPPDecl {
 	kw, name := bashppBareLit(ce.Args[0]), bashppBareLit(ce.Args[1])
 	typ := bashppTypeLit(ce.Args[2])
 	typExpr := bashppTypeExpr(ce.Args[2])
-	if typ == nil {
-		if raw := bashppBareLit(ce.Args[2]); raw != nil && strings.HasPrefix(raw.Value, "*") && bashppIsIdent(strings.TrimPrefix(raw.Value, "*")) {
-			typ = raw
-		}
+	if typ == nil && typExpr != nil {
+		typ = &Lit{ValuePos: ce.Args[2].Pos(), ValueEnd: ce.Args[2].End(), Value: bashppWordText(ce.Args[2])}
 	}
-	if kw == nil || kw.Value != "var" || name == nil || !bashppIsIdent(name.Value) || typ == nil || typExpr == nil && !strings.HasPrefix(typ.Value, "*") {
-		return nil
-	}
-	base := strings.TrimPrefix(typ.Value, "*")
-	if !bashppIsIdent(base) || strings.HasPrefix(base, "*") {
+	if kw == nil || kw.Value != "var" || name == nil || !bashppIsIdent(name.Value) || typ == nil || typExpr == nil {
 		return nil
 	}
 	var init []*Word

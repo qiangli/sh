@@ -104,6 +104,8 @@ func bashPPTypeText(typ syntax.BashPPTypeExpr) string {
 		return "[" + length + "]" + bashPPTypeText(x.Element)
 	case *syntax.BashPPStructType:
 		return "struct"
+	case *syntax.BashPPPointerType:
+		return "*" + bashPPTypeText(x.Element)
 	}
 	return "<inferred>"
 }
@@ -243,6 +245,8 @@ func (r *Runner) bashPPValidateCollectionType(typ syntax.BashPPTypeExpr) error {
 			}
 		}
 		return r.bashPPValidateCollectionType(x.Element)
+	case *syntax.BashPPPointerType:
+		return r.bashPPValidatePointerType(x)
 	}
 	return fmt.Errorf("BASHPP-ECOLLECTION-TYPE: unsupported collection type %s", bashPPTypeText(typ))
 }
@@ -280,11 +284,19 @@ func (r *Runner) bashPPCollectionZero(typ syntax.BashPPTypeExpr) (any, *bashPPCo
 			values[i], meta.sequence[i] = r.bashPPZeroValue(x.Element)
 		}
 		return values, meta
+	case *syntax.BashPPPointerType:
+		return nil, bashPPPointerMeta(x)
 	}
 	return nil, nil
 }
 
 func (r *Runner) bashPPEvalElement(expr syntax.BashPPExpr, expected syntax.BashPPTypeExpr) (any, *bashPPCollectionMeta, error) {
+	if _, pointer := expected.(*syntax.BashPPPointerType); pointer {
+		return r.bashPPEvalTypedValue(expr, expected)
+	}
+	if _, deref := expr.(*syntax.BashPPDerefExpr); deref {
+		return r.bashPPEvalTypedValue(expr, expected)
+	}
 	if lit, ok := expr.(*syntax.BashPPCompositeLit); ok {
 		return r.bashPPEvalComposite(lit, expected)
 	}

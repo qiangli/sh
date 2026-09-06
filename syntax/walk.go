@@ -252,6 +252,13 @@ func Walk(node Node, f func(Node) bool) {
 	case *BashPPUnaryExpr:
 		Walk(node.Op, f)
 		Walk(node.X, f)
+	case *BashPPAddressExpr:
+		Walk(node.X, f)
+	case *BashPPDerefExpr:
+		Walk(node.X, f)
+	case *BashPPNewExpr:
+		Walk(node.New, f)
+		Walk(node.AllocType, f)
 	case *BashPPBinaryExpr:
 		Walk(node.X, f)
 		Walk(node.Op, f)
@@ -274,6 +281,8 @@ func Walk(node Node, f func(Node) bool) {
 	case *BashPPStructType:
 		Walk(node.Struct, f)
 		walkList(node.Fields, f)
+	case *BashPPPointerType:
+		Walk(node.Element, f)
 	case *BashPPCompositeLit:
 		walkNilable(node.LitType, f)
 		walkList(node.Elems, f)

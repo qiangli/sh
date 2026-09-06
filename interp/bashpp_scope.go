@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"mvdan.cc/sh/v3/expand"
+	"mvdan.cc/sh/v3/syntax"
 )
 
 // Lexical scopes for the Bash++ typed declarations.
@@ -61,9 +62,11 @@ type bashPPCell struct {
 	// typeName is non-empty for a value of a script-declared named type.
 	// Pointer/nilPointer retain identity in-process; the visible shell value
 	// remains vr, so typed values never need a lossy JSON representation.
-	typeName   string
-	pointer    bool
-	nilPointer bool
+	typeName     string
+	pointer      bool
+	nilPointer   bool
+	declType     syntax.BashPPTypeExpr
+	pointerValue *bashPPPointer
 	// constant marks a `const` binding. It is kept beside vr.ReadOnly rather
 	// than derived from it because the shell's readonly machinery is what
 	// vr.ReadOnly drives, and the two answer to different owners: `declare -r`
@@ -138,21 +141,40 @@ func (s *bashPPScope) snapshot() *bashPPScope {
 // it inside one. Memoizing on the ORIGINAL pointer reproduces the aliasing
 // graph exactly, one edge at a time.
 type bashPPCloner struct {
-	scopes  map[*bashPPScope]*bashPPScope
-	cells   map[*bashPPCell]*bashPPCell
-	objects map[*bashPPObjectIdentity]*bashPPObjectIdentity
-	values  *bashPPObjectCloner
-	metas   map[*bashPPCollectionMeta]*bashPPCollectionMeta
+	scopes   map[*bashPPScope]*bashPPScope
+	cells    map[*bashPPCell]*bashPPCell
+	objects  map[*bashPPObjectIdentity]*bashPPObjectIdentity
+	values   *bashPPObjectCloner
+	metas    map[*bashPPCollectionMeta]*bashPPCollectionMeta
+	pointers map[*bashPPPointer]*bashPPPointer
 }
 
 func newBashPPCloner() *bashPPCloner {
-	return &bashPPCloner{
-		scopes:  make(map[*bashPPScope]*bashPPScope),
-		cells:   make(map[*bashPPCell]*bashPPCell),
-		objects: make(map[*bashPPObjectIdentity]*bashPPObjectIdentity),
-		values:  newBashPPObjectCloner(),
-		metas:   make(map[*bashPPCollectionMeta]*bashPPCollectionMeta),
+	c := &bashPPCloner{
+		scopes:   make(map[*bashPPScope]*bashPPScope),
+		cells:    make(map[*bashPPCell]*bashPPCell),
+		objects:  make(map[*bashPPObjectIdentity]*bashPPObjectIdentity),
+		values:   newBashPPObjectCloner(),
+		metas:    make(map[*bashPPCollectionMeta]*bashPPCollectionMeta),
+		pointers: make(map[*bashPPPointer]*bashPPPointer),
 	}
+	c.values.pointer = c.clonePointer
+	return c
+}
+
+func (c *bashPPCloner) clonePointer(pointer *bashPPPointer) *bashPPPointer {
+	if pointer == nil {
+		return nil
+	}
+	if done := c.pointers[pointer]; done != nil {
+		return done
+	}
+	copy := *pointer
+	out := &copy
+	c.pointers[pointer] = out
+	out.path = append([]bashPPPointerStep(nil), pointer.path...)
+	out.target = c.cloneCell(pointer.target)
+	return out
 }
 
 func (c *bashPPCloner) clone(s *bashPPScope) *bashPPScope {
@@ -181,6 +203,9 @@ func (c *bashPPCloner) cloneCell(cell *bashPPCell) *bashPPCell {
 		return copied
 	}
 	dup := *cell
+	copied := &dup
+	// Publish before following pointer edges, which may lead back here.
+	c.cells[cell] = copied
 	dup.vr = cloneBashPPVariable(cell.vr)
 	if cell.vr.Kind == expand.Object && cell.vr.Obj != nil {
 		if value, err := c.values.clone(cell.vr.Obj); err == nil {
@@ -200,8 +225,9 @@ func (c *bashPPCloner) cloneCell(cell *bashPPCell) *bashPPCell {
 	if dup.object != nil {
 		dup.object.collection = bashPPCloneCollectionMeta(cell.object.collection, c.metas)
 	}
-	copied := &dup
-	c.cells[cell] = copied
+	if cell.pointerValue != nil {
+		dup.pointerValue = c.clonePointer(cell.pointerValue)
+	}
 	return copied
 }
 

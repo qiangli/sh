@@ -82,8 +82,9 @@ type bashPPObjectCloneKey struct {
 }
 
 type bashPPObjectCloner struct {
-	active map[bashPPObjectCloneKey]bool
-	done   map[bashPPObjectCloneKey]any
+	active  map[bashPPObjectCloneKey]bool
+	done    map[bashPPObjectCloneKey]any
+	pointer func(*bashPPPointer) *bashPPPointer
 }
 
 func newBashPPObjectCloner() *bashPPObjectCloner {
@@ -98,6 +99,11 @@ func (c *bashPPObjectCloner) clone(value any) (any, error) {
 	case nil, bool, string, float32, float64,
 		int, int8, int16, int32, int64,
 		uint, uint8, uint16, uint32, uint64:
+		return value, nil
+	case *bashPPPointer:
+		if c.pointer != nil {
+			return c.pointer(value), nil
+		}
 		return value, nil
 	case map[string]any:
 		key := bashPPObjectCloneKey{kind: 1, ptr: reflect.ValueOf(value).Pointer()}

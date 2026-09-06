@@ -350,6 +350,9 @@ func (*BashPPConvertExpr) bashPPExprNode()  {}
 func (*BashPPIndexExpr) bashPPExprNode()    {}
 func (*BashPPSelectorExpr) bashPPExprNode() {}
 func (*BashPPCompositeLit) bashPPExprNode() {}
+func (*BashPPAddressExpr) bashPPExprNode()  {}
+func (*BashPPDerefExpr) bashPPExprNode()    {}
+func (*BashPPNewExpr) bashPPExprNode()      {}
 
 // BashPPBasicLit is an exact scalar literal. Kind uses Go token names (INT,
 // FLOAT, CHAR, STRING), retained as text so typed JSON remains stable.
@@ -380,6 +383,38 @@ type BashPPUnaryExpr struct {
 	Op *Lit
 	X  BashPPExpr
 }
+
+// BashPPAddressExpr and BashPPDerefExpr retain the operator positions for
+// lowering. They are distinct from ordinary unary arithmetic because their
+// operands are locations and pointer values, respectively.
+type BashPPAddressExpr struct {
+	Amp Pos
+	X   BashPPExpr
+}
+
+func (x *BashPPAddressExpr) Pos() Pos { return x.Amp }
+func (x *BashPPAddressExpr) End() Pos { return x.X.End() }
+
+type BashPPDerefExpr struct {
+	Star Pos
+	X    BashPPExpr
+}
+
+func (x *BashPPDerefExpr) Pos() Pos { return x.Star }
+func (x *BashPPDerefExpr) End() Pos { return x.X.End() }
+
+// BashPPNewExpr is the predeclared allocation expression new(T). AllocType is
+// a type node rather than an argument expression, so lowering never has to
+// reinterpret source text.
+type BashPPNewExpr struct {
+	New       *Lit
+	Lparen    Pos
+	AllocType BashPPTypeExpr
+	Rparen    Pos
+}
+
+func (x *BashPPNewExpr) Pos() Pos { return x.New.Pos() }
+func (x *BashPPNewExpr) End() Pos { return posAddCol(x.Rparen, 1) }
 
 func (x *BashPPUnaryExpr) Pos() Pos { return x.Op.Pos() }
 func (x *BashPPUnaryExpr) End() Pos { return x.X.End() }
@@ -434,11 +469,22 @@ type BashPPTypeExpr interface {
 func (*BashPPNamedType) bashPPTypeExprNode()      {}
 func (*BashPPCollectionType) bashPPTypeExprNode() {}
 func (*BashPPStructType) bashPPTypeExprNode()     {}
+func (*BashPPPointerType) bashPPTypeExprNode()    {}
 
 type BashPPNamedType struct{ Name *Lit }
 
 func (t *BashPPNamedType) Pos() Pos { return t.Name.Pos() }
 func (t *BashPPNamedType) End() Pos { return t.Name.End() }
+
+// BashPPPointerType represents *T. Star is retained independently from the
+// element's position for exact diagnostics and source-to-source lowering.
+type BashPPPointerType struct {
+	Star    Pos
+	Element BashPPTypeExpr
+}
+
+func (t *BashPPPointerType) Pos() Pos { return t.Star }
+func (t *BashPPPointerType) End() Pos { return t.Element.End() }
 
 // BashPPCollectionType represents [N]T, [...]T, []T, or map[K]V. Kind is one
 // of "array", "inferred-array", "slice", and "map".

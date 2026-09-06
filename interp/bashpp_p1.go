@@ -185,8 +185,35 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 	// The visible scalar stays in the ordinary shell variable below; the named
 	// type and pointer bits are attached to its lexical cell after declaration.
 	vr := r.bashPPValue(ctx, d.Init)
+	legacyPointerVR := vr
+	legacyPointerInit := false
 	var valueMeta *bashPPCollectionMeta
+	var pointerValue *bashPPPointer
 	if d.Site == syntax.StartVar && d.DeclTypeExpr != nil {
+		if pointerType, ok := d.DeclTypeExpr.(*syntax.BashPPPointerType); ok {
+			if len(d.Init) > 0 {
+				value, _, err := r.bashPPEvalTypedValue(d.InitExpr, pointerType)
+				// Keep the established receiver construction surface (`var p
+				// *Count = 9`) by treating a direct element value as an allocated
+				// pointee. New code can spell the same operation as new(Count).
+				if err != nil {
+					elem, meta, elemErr := r.bashPPEvalTypedValue(d.InitExpr, pointerType.Element)
+					if elemErr == nil {
+						heap := &bashPPCell{declType: pointerType.Element}
+						bashPPStoreCellValue(heap, elem, meta)
+						value, err = &bashPPPointer{target: heap, elem: pointerType.Element}, nil
+						legacyPointerInit = true
+					}
+				}
+				if err != nil {
+					r.errf("%v\n", err)
+					r.exit = exitStatus{code: 2}
+					return
+				}
+				pointerValue, _ = value.(*bashPPPointer)
+			}
+			vr = expand.Variable{Set: true, Kind: expand.String}
+		}
 		_, _, isStruct := r.bashPPStructFields(d.DeclTypeExpr)
 		_, isCollection := d.DeclTypeExpr.(*syntax.BashPPCollectionType)
 		if d.InitExpr != nil && (isStruct || isCollection) {
@@ -233,10 +260,17 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 		spelling := d.DeclType.Value
 		pointer := strings.HasPrefix(spelling, "*")
 		base := strings.TrimPrefix(spelling, "*")
+		cell := r.bashPPScope.lookup(name)
+		cell.declType = d.DeclTypeExpr
 		if _, named := r.bashPPTypes[base]; named {
-			cell := r.bashPPScope.lookup(name)
-			cell.typeName, cell.pointer = base, pointer
-			cell.nilPointer = pointer && len(d.Init) == 0
+			cell.typeName = base
+		}
+		if pointer {
+			cell.pointer, cell.pointerValue = true, pointerValue
+			cell.nilPointer = pointerValue == nil
+			if legacyPointerInit {
+				cell.vr = legacyPointerVR
+			}
 		}
 		if valueMeta != nil {
 			cell := r.bashPPScope.lookup(name)
@@ -301,6 +335,9 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 		if len(d.Lhs) != 1 {
 			r.errf("assignment mismatch: %d variable(s) but 1 value(s)\n", len(d.Lhs))
 			r.exit = exitStatus{code: 2}
+			return
+		}
+		if r.bashPPBindPointerExpr(d.Lhs[0].Value, d.Expr) {
 			return
 		}
 		if lit, ok := d.Expr.(*syntax.BashPPCompositeLit); ok {

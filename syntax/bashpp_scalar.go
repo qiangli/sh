@@ -102,6 +102,21 @@ func bashppScalarHead(ce *CallExpr) bool {
 	return ok
 }
 
+// bashppAddressHead admits the prefix-only `x := &` state. It is consulted
+// only in a committed function and the transaction must still recognize the
+// complete expression before anything is consumed.
+func bashppAddressHead(ce *CallExpr) bool {
+	if ce == nil || len(ce.Assigns) != 0 || len(ce.Args) < 2 {
+		return false
+	}
+	op := len(ce.Args) - 1
+	if lit := bashppBareLit(ce.Args[op]); lit == nil || lit.Value != ":=" {
+		return false
+	}
+	_, ok := bashppShortLHS(ce.Args[:op])
+	return ok
+}
+
 // bashppScalarTail reads the rest of a scalar expression, starting at an
 // operator token, and returns the completed declaration. It returns nil for
 // every shape it does not claim, having first restored the parser to the state

@@ -62,6 +62,10 @@ func (r *Runner) bashPPAssign(_ context.Context, assign *syntax.BashPPAssign) {
 		return
 	}
 	if assign.TargetExpr != nil {
+		if deref, ok := assign.TargetExpr.(*syntax.BashPPDerefExpr); ok {
+			r.bashPPDerefAssign(deref, assign.ValueExpr)
+			return
+		}
 		r.bashPPStructuredAssign(assign.TargetExpr, assign.ValueExpr)
 		return
 	}
