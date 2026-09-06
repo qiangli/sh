@@ -3,7 +3,7 @@ id: 6f471ef89af5
 kind: task
 title: Bash++ typed if/for/switch control-flow semantics
 seq: 22
-status: assigned
+status: doing
 priority: p0
 created: 2026-09-06T18:02:22.690952Z
 assignee: codex-gpt5.6-sol
