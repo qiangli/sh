@@ -130,14 +130,32 @@ func TestBashPPScalarExpressionSourceReachability(t *testing.T) {
 	}
 }
 
-func TestBashPPScalarExpressionShellOperatorsAreNotClaimed(t *testing.T) {
-	for _, expr := range []string{
-		"true || false", "true && false", "1 < 2", "1 <= 2",
-		"1 > 2", "1 >= 2", "1 | 2", "1 & 2", "1 &^ 2",
-		"1 << 2", "1 >> 2",
-	} {
-		t.Run(expr, func(t *testing.T) {
-			src := "func main() {\n\tx := " + expr + "\n}\n"
+// bashppShellOperatorExprs are the Go binary operators spelled with shell
+// metacharacters. Each is claimed only inside a committed Go region, and only
+// through the carrier in bashpp_scalar.go, since the ordinary shell parse would
+// otherwise have turned it into a pipeline, a background statement, a binary
+// command or a redirect before any recognizer could run.
+var bashppShellOperatorExprs = []struct {
+	expr string
+	op   string
+}{
+	{"true || false", "||"},
+	{"true && false", "&&"},
+	{"1 < 2", "<"},
+	{"1 <= 2", "<="},
+	{"1 > 2", ">"},
+	{"1 >= 2", ">="},
+	{"1 | 2", "|"},
+	{"1 & 2", "&"},
+	{"1 &^ 2", "&^"},
+	{"1 << 2", "<<"},
+	{"1 >> 2", ">>"},
+}
+
+func TestBashPPScalarExpressionShellOperatorsReachTheTypedTree(t *testing.T) {
+	for _, test := range bashppShellOperatorExprs {
+		t.Run(test.expr, func(t *testing.T) {
+			src := "func main() {\n\tx := " + test.expr + "\n}\n"
 			parse := func(bytewise bool) (*File, error) {
 				var rd io.Reader = strings.NewReader(src)
 				if bytewise {
@@ -151,15 +169,226 @@ func TestBashPPScalarExpressionShellOperatorsAreNotClaimed(t *testing.T) {
 				t.Fatalf("one-byte parse differs:\nbuffered: %#v, %v\nstreamed: %#v, %v",
 					buffered, bufferedErr, streamed, streamedErr)
 			}
-			if buffered == nil {
-				return
+			if bufferedErr != nil {
+				t.Fatalf("%v", bufferedErr)
 			}
-			Walk(buffered, func(node Node) bool {
-				if binary, ok := node.(*BashPPBinaryExpr); ok {
-					t.Errorf("shell operator %q was claimed by a typed expression", binary.Op.Value)
+			fn := buffered.Stmts[0].Cmd.(*BashPPFuncDecl)
+			if len(fn.Body.Stmts) != 1 {
+				t.Fatalf("body has %d statements, want 1", len(fn.Body.Stmts))
+			}
+			stmt := fn.Body.Stmts[0]
+			if len(stmt.Redirs) != 0 || stmt.Background {
+				t.Fatalf("statement kept shell effects: redirs=%d background=%v",
+					len(stmt.Redirs), stmt.Background)
+			}
+			decl, ok := stmt.Cmd.(*BashPPShortDecl)
+			if !ok || decl.Expr == nil || decl.Rhs != nil {
+				t.Fatalf("declaration = %#v", stmt.Cmd)
+			}
+			binary, ok := decl.Expr.(*BashPPBinaryExpr)
+			if !ok {
+				t.Fatalf("expression = %T, want *BashPPBinaryExpr", decl.Expr)
+			}
+			if binary.Op.Value != test.op {
+				t.Fatalf("operator = %q, want %q", binary.Op.Value, test.op)
+			}
+			// Every position must still name the byte it was written at, which
+			// is what lets a diagnostic point into the original source.
+			start := strings.Index(src, test.expr)
+			for _, sub := range []struct {
+				name string
+				node Node
+				text string
+				at   int
+			}{
+				{"expression", binary, test.expr, start},
+				{"left", binary.X, test.expr[:strings.Index(test.expr, " ")], start},
+				{"operator", binary.Op, test.op, start + strings.Index(test.expr, " ") + 1},
+				{"right", binary.Y, test.expr[strings.LastIndex(test.expr, " ")+1:],
+					start + strings.LastIndex(test.expr, " ") + 1},
+			} {
+				if got := int(sub.node.Pos().Offset()); got != sub.at {
+					t.Errorf("%s starts at offset %d, want %d", sub.name, got, sub.at)
 				}
-				return true
-			})
+				if got, want := int(sub.node.End().Offset()), sub.at+len(sub.text); got != want {
+					t.Errorf("%s ends at offset %d, want %d", sub.name, got, want)
+				}
+			}
+			// The printer must put the source back, and the result must parse
+			// to the same tree.
+			var printed strings.Builder
+			if err := NewPrinter().Print(&printed, buffered); err != nil {
+				t.Fatal(err)
+			}
+			if printed.String() != src {
+				t.Fatalf("printed %q, want %q", printed.String(), src)
+			}
+			reparsed, err := NewParser(Variant(LangBashPP)).Parse(strings.NewReader(printed.String()), "expr.bpp")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(reparsed, buffered) {
+				t.Fatalf("reparse differs:\n%#v\n%#v", reparsed, buffered)
+			}
+		})
+	}
+}
+
+// TestBashPPScalarExpressionShellOperatorsStayShellOutsideGoRegions pins the
+// top-level Class-E boundary. `x := 1` is a published Class-E declaration and
+// is claimed there as it always was, but the operator after it is not: the
+// pipeline, background and redirect structure bash builds must survive byte
+// for byte, so `x := 1 < 2` still redirects stdin from the file `2`.
+func TestBashPPScalarExpressionShellOperatorsStayShellOutsideGoRegions(t *testing.T) {
+	for _, test := range bashppShellOperatorExprs {
+		t.Run(test.expr, func(t *testing.T) {
+			src := "x := " + test.expr + "\n"
+			for _, posix := range []bool{false, true} {
+				bash, bashErr := bashppParseAs(LangBash, src, posix, bashppReadModes[0].wrap)
+				for _, mode := range bashppReadModes {
+					pp, ppErr := bashppParseAs(LangBashPP, src, posix, mode.wrap)
+					if (bashErr == nil) != (ppErr == nil) {
+						t.Fatalf("%s: bash err=%s but bashpp err=%s",
+							mode.name, errText(bashErr), errText(ppErr))
+					}
+					if ppErr != nil {
+						continue
+					}
+					if got, want := bashppShellShape(pp.Stmts), bashppShellShape(bash.Stmts); got != want {
+						t.Fatalf("%s posix=%v: shell shape %s, want %s", mode.name, posix, got, want)
+					}
+					Walk(pp, func(node Node) bool {
+						if binary, ok := node.(*BashPPBinaryExpr); ok {
+							t.Errorf("%s: operator %q was claimed at top level", mode.name, binary.Op.Value)
+						}
+						return true
+					})
+				}
+			}
+		})
+	}
+}
+
+// bashppStmtSummary describes a statement list without using positions, so a
+// Go region's body can be compared against the same source parsed as ordinary
+// shell even though the two sit at different offsets.
+func bashppStmtSummary(stmts []*Stmt) string {
+	return bashppSummarize(stmts, true)
+}
+
+// bashppShellShape is bashppStmtSummary without the command node's type, so
+// that a Class-E node standing where bash has a CallExpr does not register as
+// a change to the SHELL structure — the statement, redirect and background
+// layout — which is what must not move.
+func bashppShellShape(stmts []*Stmt) string {
+	return bashppSummarize(stmts, false)
+}
+
+// bashppSummarize describes a statement list without using positions, so the
+// same source can be compared across languages and nesting depths.
+func bashppSummarize(stmts []*Stmt, withType bool) string {
+	var b strings.Builder
+	var walk func([]*Stmt)
+	walk = func(ss []*Stmt) {
+		for _, s := range ss {
+			if withType {
+				fmt.Fprintf(&b, "%T;", s.Cmd)
+			}
+			fmt.Fprintf(&b, "stmt redirs=%d bg=%v;", len(s.Redirs), s.Background)
+			for _, rd := range s.Redirs {
+				fmt.Fprintf(&b, "  redir %s %q;", rd.Op, bashppWordText(rd.Word))
+			}
+			if bin, ok := s.Cmd.(*BinaryCmd); ok {
+				fmt.Fprintf(&b, "  [%s];", bin.Op)
+				walk([]*Stmt{bin.X, bin.Y})
+			}
+		}
+	}
+	walk(stmts)
+	return b.String()
+}
+
+// TestBashPPScalarExpressionCarrierLeavesShellCommands pins ordinary commands
+// and redirections written inside a Go region: with no short-declaration head
+// to arm the carrier, they must parse exactly as bash parses them.
+func TestBashPPScalarExpressionCarrierLeavesShellCommands(t *testing.T) {
+	for _, body := range []string{
+		"echo hi > out.txt",
+		"cat < in.txt",
+		"sort < in.txt > out.txt",
+		"grep x | wc -l",
+		"sleep 1 &",
+		"true && false",
+		"true || false",
+		"cat << EOF\nbody\nEOF",
+	} {
+		t.Run(body, func(t *testing.T) {
+			bash, err := bashppParseAs(LangBash, body+"\n", false, bashppReadModes[0].wrap)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := bashppStmtSummary(bash.Stmts)
+			for _, mode := range bashppReadModes {
+				pp, err := bashppParseAs(LangBashPP, "func main() {\n"+body+"\n}\n", false, mode.wrap)
+				if err != nil {
+					t.Fatalf("%s: %v", mode.name, err)
+				}
+				got := bashppStmtSummary(pp.Stmts[0].Cmd.(*BashPPFuncDecl).Body.Stmts)
+				if got != want {
+					t.Fatalf("%s: body parsed as %s, want %s", mode.name, got, want)
+				}
+			}
+		})
+	}
+}
+
+// TestBashPPScalarExpressionCarrierDeclinesNearMisses pins the shapes that do
+// arm the carrier and must then be rolled back whole. Each keeps the shell
+// effect — a redirect, a background `&`, an extra word — that the expression
+// reading would have swallowed.
+func TestBashPPScalarExpressionCarrierDeclinesNearMisses(t *testing.T) {
+	for _, test := range []struct {
+		body       string
+		redirs     int
+		background bool
+	}{
+		// A right-hand side that runs a command is not an exact-Go expression.
+		{body: "out := $(echo 1) > f", redirs: 1},
+		// The operator has no right-hand operand at all.
+		{body: "x := 1 &", background: true},
+		// The operand is a filename, not a Go scalar expression.
+		{body: "x := 1 > out.txt", redirs: 1},
+		// A trailing word the expression cannot absorb.
+		{body: "x := 1 < 2 3", redirs: 1},
+		// A digit glued to `<` is a file-descriptor redirect in every shell,
+		// so the lexer never offers the carrier an operator token here.
+		{body: "x := 1<2", redirs: 1},
+		// A declaration head already carrying a redirect is left alone.
+		{body: "x := 1 2> err.txt < in.txt", redirs: 2},
+	} {
+		t.Run(test.body, func(t *testing.T) {
+			src := "func main() {\n\t" + test.body + "\n}\n"
+			for _, mode := range bashppReadModes {
+				f, err := bashppParseAs(LangBashPP, src, false, mode.wrap)
+				if err != nil {
+					t.Fatalf("%s: %v", mode.name, err)
+				}
+				body := f.Stmts[0].Cmd.(*BashPPFuncDecl).Body
+				if len(body.Stmts) != 1 {
+					t.Fatalf("%s: body has %d statements, want 1", mode.name, len(body.Stmts))
+				}
+				stmt := body.Stmts[0]
+				if len(stmt.Redirs) != test.redirs || stmt.Background != test.background {
+					t.Fatalf("%s: redirs=%d background=%v, want %d and %v",
+						mode.name, len(stmt.Redirs), stmt.Background, test.redirs, test.background)
+				}
+				Walk(f, func(node Node) bool {
+					if binary, ok := node.(*BashPPBinaryExpr); ok {
+						t.Errorf("%s: operator %q was claimed", mode.name, binary.Op.Value)
+					}
+					return true
+				})
+			}
 		})
 	}
 }

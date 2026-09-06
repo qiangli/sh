@@ -201,6 +201,12 @@ func bashPPBinaryScalar(op token.Token, left, right bashPPScalar) (bashPPScalar,
 		}
 		return bashPPScalar{value: value}, nil
 	case token.SHL, token.SHR:
+		// constant.Uint64Val panics on a non-integer, and `1 << "a"` is now
+		// reachable from source, so the kind is checked before the call rather
+		// than recovered after it.
+		if right.value.Kind() != constant.Int {
+			return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-SHIFT: shift count must be an unsigned integer")
+		}
 		shift, ok := constant.Uint64Val(right.value)
 		if !ok {
 			return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-SHIFT: shift count must be an unsigned integer")

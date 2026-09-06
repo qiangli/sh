@@ -4032,8 +4032,24 @@ func (p *Parser) callExpr(s *Stmt, w *Word, assign bool) {
 			ce.Assigns = append(ce.Assigns, as)
 		}
 	}
+	bashppScalarTried := false
 loop:
 	for {
+		// A Go scalar expression written with shell metacharacters is claimed
+		// here, ahead of the terminator and redirect arms below, because those
+		// arms have already destroyed it by the time a completed command could
+		// be inspected; see sh/syntax/bashpp_scalar.go. The attempt is
+		// transactional and made at most once, so a shape it declines reaches
+		// the ordinary arms with the parser exactly as they would have found it.
+		if p.lang.in(LangBashPP) && p.bashppFuncDepth > 0 && !bashppScalarTried &&
+			bashppCompositeTxn == nil && len(s.Redirs) == 0 &&
+			bashppScalarOpTok(p.tok) != "" && bashppScalarHead(ce) {
+			bashppScalarTried = true
+			if decl := p.bashppScalarTail(ce); decl != nil {
+				s.Cmd = decl
+				return
+			}
+		}
 		switch p.tok {
 		case _EOF, _Newl, semicolon, and, or, andAnd, orOr, orAnd, andPipe, andBang,
 			dblSemicolon, semiAnd, dblSemiAnd, semiOr:

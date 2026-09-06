@@ -7,9 +7,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"strings"
 	"testing"
+	"testing/iotest"
 
 	"github.com/go-quicktest/qt"
 
@@ -33,7 +35,18 @@ func bashPPRunner(tb testing.TB, out *strings.Builder, opts ...interp.RunnerOpti
 
 func bashPPRun(tb testing.TB, r *interp.Runner, src string) {
 	tb.Helper()
-	f, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(src), "")
+	bashPPRunReader(tb, r, src, false)
+}
+
+// bashPPRunReader parses src either in one piece or one byte at a time, which
+// is what proves a speculative parse restored input it had already read.
+func bashPPRunReader(tb testing.TB, r *interp.Runner, src string, bytewise bool) {
+	tb.Helper()
+	var rd io.Reader = strings.NewReader(src)
+	if bytewise {
+		rd = iotest.OneByteReader(rd)
+	}
+	f, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(rd, "")
 	qt.Assert(tb, qt.IsNil(err))
 	// A non-zero exit is the script's business; these tests assert on output.
 	_ = r.Run(context.Background(), f)
@@ -60,6 +73,78 @@ func TestBashPPParsedScalarExpressionsEvaluate(t *testing.T) {
 main()
 `)
 	qt.Assert(t, qt.Equals(out.String(), "42:true:A"))
+}
+
+// TestBashPPScalarShellOperatorExpressionsEvaluate proves each Go binary
+// operator spelled with shell metacharacters end to end: from the source bytes,
+// through the parser's carrier and typed tree, to the value the interpreter
+// binds. The script is fed both in one piece and one byte at a time, because
+// the carrier reads ahead transactionally and a rollback must restore unread
+// input either way.
+func TestBashPPScalarShellOperatorExpressionsEvaluate(t *testing.T) {
+	for _, tc := range []struct{ expr, want string }{
+		{"true || false", "true"},
+		{"true && false", "false"},
+		{"1 < 2", "true"},
+		{"1 <= 2", "true"},
+		{"1 > 2", "false"},
+		{"1 >= 2", "false"},
+		{"6 | 3", "7"},
+		{"6 & 3", "2"},
+		{"6 &^ 3", "4"},
+		{"1 << 2", "4"},
+		{"8 >> 2", "2"},
+	} {
+		t.Run(tc.expr, func(t *testing.T) {
+			src := "func main() {\n\tn := " + tc.expr + "\n\tprintf '%s' \"$n\"\n}\nmain()\n"
+			for _, bytewise := range []bool{false, true} {
+				var out strings.Builder
+				r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP))
+				bashPPRunReader(t, r, src, bytewise)
+				qt.Assert(t, qt.Equals(out.String(), tc.want))
+			}
+		})
+	}
+}
+
+// TestBashPPScalarShellOperatorDiagnostics proves the evaluator's diagnostics
+// survive the new reach: an operator that only the carrier can deliver still
+// reports the owner's error code rather than a generic failure.
+func TestBashPPScalarShellOperatorDiagnostics(t *testing.T) {
+	for _, tc := range []struct{ expr, code string }{
+		{"true || 1", "BASHPP-EEXPR-OPERAND"},
+		{"missing < 1", "BASHPP-EEXPR-UNDEFINED"},
+		{`"a" | 1`, "BASHPP-EEXPR-OPERAND"},
+		{`1 << "a"`, "BASHPP-EEXPR-SHIFT"},
+		{"1 << -1", "BASHPP-EEXPR-SHIFT"},
+	} {
+		t.Run(tc.expr, func(t *testing.T) {
+			var out strings.Builder
+			r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP))
+			bashPPRun(t, r, "func main() {\n\tn := "+tc.expr+"\n}\nmain()\n")
+			qt.Assert(t, qt.StringContains(out.String(), tc.code))
+		})
+	}
+}
+
+// TestBashPPScalarShellOperatorsStayShellOutsideGoRegions is the runtime half
+// of the compatibility boundary. At top level `z := x < y` is still a Class-E
+// declaration with a redirect attached, so the shell tries to open the file
+// `y`, fails, and leaves z unset — it does not bind the boolean the same line
+// would produce inside a func body.
+func TestBashPPScalarShellOperatorsStayShellOutsideGoRegions(t *testing.T) {
+	const tail = "z := x < y\nprintf '[%s]' \"$z\"\n"
+
+	var shell strings.Builder
+	rShell := bashPPRunner(t, &shell, interp.Lang(syntax.LangBashPP))
+	bashPPRun(t, rShell, "x := 1\ny := 2\n"+tail)
+	qt.Assert(t, qt.Equals(shell.String(), "open y: no such file or directory\n[]"))
+
+	var region strings.Builder
+	rRegion := bashPPRunner(t, &region, interp.Lang(syntax.LangBashPP))
+	bashPPRun(t, rRegion, "func main() {\n\tx := 1\n\ty := 2\n\t"+
+		strings.ReplaceAll(tail, "\n", "\n\t")+"}\nmain()\n")
+	qt.Assert(t, qt.Equals(region.String(), "[true]"))
 }
 
 func TestBashPPTopLevelSingleQuotesStayShellStrings(t *testing.T) {

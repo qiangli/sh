@@ -100,7 +100,11 @@ func TestBashPPFormsRoundTrip(t *testing.T) {
 }
 
 func TestBashPPScalarExpressionTypedJSONRoundTrip(t *testing.T) {
-	const src = "func main() {\n\tbase := 1\n\tneg := -base\n\tsum := base + 2\n\ttext := string(1)\n}\n"
+	// The last two are spelled with shell metacharacters, so they reach the
+	// typed tree only through the carrier in syntax/bashpp_scalar.go; encoding
+	// and printing must treat them like any other operator.
+	const src = "func main() {\n\tbase := 1\n\tneg := -base\n\tsum := base + 2\n" +
+		"\ttext := string(1)\n\tcmp := base < 2\n\tmask := base &^ 2\n}\n"
 	f, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(src), "expr.bpp")
 	if err != nil {
 		t.Fatal(err)

@@ -308,7 +308,13 @@ func bashppJoinWords(words []*Word) *Word {
 	parts := make([]WordPart, 0, len(words)*2-1)
 	for i, w := range words {
 		if i > 0 {
-			parts = append(parts, &Lit{ValuePos: words[i-1].End(), ValueEnd: w.Pos(), Value: " "})
+			// Two words the shell lexer split at an operator sit against each
+			// other in the source: `1 <` `=` `2` is `1 <= 2`, not `1 < = 2`.
+			// Only a real source gap becomes a separator, so the joined text
+			// stays byte-for-byte what was written.
+			if prev := words[i-1].End(); prev.Offset() != w.Pos().Offset() {
+				parts = append(parts, &Lit{ValuePos: prev, ValueEnd: w.Pos(), Value: " "})
+			}
 		}
 		parts = append(parts, w.Parts...)
 	}
@@ -397,8 +403,14 @@ func bashppSupportedScalarAST(expr goast.Expr) bool {
 		}
 	case *goast.BinaryExpr:
 		switch x.Op {
+		// The first row is spelled with characters the shell lexer keeps
+		// inside a word; the rest are shell metacharacters, and reach here
+		// only through [Parser.bashppScalarTail].
 		case gotoken.EQL, gotoken.NEQ, gotoken.ADD, gotoken.SUB,
-			gotoken.XOR, gotoken.MUL, gotoken.QUO, gotoken.REM:
+			gotoken.XOR, gotoken.MUL, gotoken.QUO, gotoken.REM,
+			gotoken.LOR, gotoken.LAND, gotoken.LSS, gotoken.LEQ,
+			gotoken.GTR, gotoken.GEQ, gotoken.OR, gotoken.AND,
+			gotoken.AND_NOT, gotoken.SHL, gotoken.SHR:
 			return bashppSupportedScalarAST(x.X) && bashppSupportedScalarAST(x.Y)
 		}
 	case *goast.CallExpr:
