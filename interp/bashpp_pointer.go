@@ -29,8 +29,45 @@ func bashPPPointerMeta(typ syntax.BashPPTypeExpr) *bashPPCollectionMeta {
 	return &bashPPCollectionMeta{kind: "pointer", typ: typ}
 }
 
+func (r *Runner) bashPPPointerType(typ syntax.BashPPTypeExpr) (*syntax.BashPPPointerType, bool) {
+	if pointer, ok := typ.(*syntax.BashPPPointerType); ok {
+		return pointer, true
+	}
+	shape := r.bashPPUnderlyingType(typ)
+	pointer, ok := shape.(*syntax.BashPPPointerType)
+	return pointer, ok
+}
+
+func (r *Runner) bashPPPointerExprType(expr syntax.BashPPExpr, ptr *bashPPPointer) syntax.BashPPTypeExpr {
+	switch x := expr.(type) {
+	case *syntax.BashPPParenExpr:
+		return r.bashPPPointerExprType(x.X, ptr)
+	case *syntax.BashPPIdent:
+		if cell := r.bashPPScope.lookup(x.Name.Value); cell != nil && cell.pointer {
+			return cell.declType
+		}
+	case *syntax.BashPPSelectorExpr, *syntax.BashPPIndexExpr, *syntax.BashPPSliceExpr:
+		_, meta, err := r.bashPPReadExpr(expr)
+		if err == nil && meta != nil && meta.kind == "pointer" {
+			return meta.typ
+		}
+	case *syntax.BashPPDerefExpr:
+		outer, err := r.bashPPPointerExprValue(x.X)
+		if err == nil && outer != nil {
+			_, meta, _, readErr := outer.read()
+			if readErr == nil && meta != nil && meta.kind == "pointer" {
+				return meta.typ
+			}
+		}
+	}
+	if ptr == nil {
+		return nil
+	}
+	return &syntax.BashPPPointerType{Element: ptr.elem}
+}
+
 func (r *Runner) bashPPValidatePointerType(typ syntax.BashPPTypeExpr) error {
-	ptr, ok := typ.(*syntax.BashPPPointerType)
+	ptr, ok := r.bashPPPointerType(typ)
 	if !ok || ptr.Element == nil {
 		return fmt.Errorf("BASHPP-EPOINTER-TYPE: invalid pointer type %s", bashPPTypeText(typ))
 	}
@@ -276,7 +313,7 @@ func bashPPScalarValue(text string) any {
 
 func bashPPStoreCellValue(cell *bashPPCell, value any, meta *bashPPCollectionMeta) {
 	if ptr, ok := value.(*bashPPPointer); ok || value == nil {
-		if _, pointerType := cell.declType.(*syntax.BashPPPointerType); pointerType {
+		if _, pointerType := cell.declType.(*syntax.BashPPPointerType); pointerType || meta != nil && meta.kind == "pointer" {
 			cell.pointer, cell.pointerValue, cell.nilPointer = true, ptr, ptr == nil
 			cell.vr = expand.Variable{Set: true, Kind: expand.String}
 			return

@@ -4187,6 +4187,13 @@ loop:
 						nested = false
 					}
 				}
+				// In a committed Bash++ function, `p = new(T)` is an
+				// unambiguous pointer assignment, not a shell command with a
+				// nested call as its final argument. Let bashppParenForm consume
+				// the complete typed assignment transactionally below.
+				if p.bashppFuncDepth > 0 && len(ce.Args) == 3 && ce.Args[1].Lit() == "=" && ce.Args[2].Lit() == "new" {
+					nested = false
+				}
 				if nested {
 					last := ce.Args[len(ce.Args)-1]
 					if call, ok := p.bashppParenForm(&CallExpr{Args: []*Word{last}}).(*BashPPCall); ok {

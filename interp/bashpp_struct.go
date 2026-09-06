@@ -186,22 +186,29 @@ func (r *Runner) bashPPZeroValue(typ syntax.BashPPTypeExpr) (any, *bashPPCollect
 		}
 		return out, meta
 	}
+	if _, ok := r.bashPPPointerType(typ); ok {
+		return nil, bashPPPointerMeta(typ)
+	}
 	return r.bashPPCollectionZero(typ)
 }
 
 func (r *Runner) bashPPEvalTypedValue(expr syntax.BashPPExpr, expected syntax.BashPPTypeExpr) (any, *bashPPCollectionMeta, error) {
-	if pointerType, ok := expected.(*syntax.BashPPPointerType); ok {
+	if pointerType, ok := r.bashPPPointerType(expected); ok {
 		if id, nilIdent := expr.(*syntax.BashPPIdent); nilIdent && id.Name.Value == "nil" {
-			return nil, bashPPPointerMeta(pointerType), nil
+			return nil, bashPPPointerMeta(expected), nil
 		}
 		ptr, err := r.bashPPPointerExprValue(expr)
 		if err != nil {
 			return nil, nil, err
 		}
-		if ptr != nil && bashPPTypeText(ptr.elem) != bashPPTypeText(pointerType.Element) {
-			return nil, nil, fmt.Errorf("BASHPP-EASSIGN-MISMATCH: cannot use *%s as %s", bashPPTypeText(ptr.elem), bashPPTypeText(expected))
+		actual := r.bashPPPointerExprType(expr, ptr)
+		if actual == nil {
+			actual = &syntax.BashPPPointerType{Element: pointerType.Element}
 		}
-		return ptr, bashPPPointerMeta(pointerType), nil
+		if !r.bashPPTypeAssignable(actual, expected) {
+			return nil, nil, fmt.Errorf("BASHPP-EASSIGN-MISMATCH: cannot use %s as %s", bashPPTypeText(actual), bashPPTypeText(expected))
+		}
+		return ptr, bashPPPointerMeta(expected), nil
 	}
 	if deref, ok := expr.(*syntax.BashPPDerefExpr); ok {
 		ptr, err := r.bashPPPointerExprValue(deref.X)
@@ -271,12 +278,11 @@ func (r *Runner) bashPPEvalTypedValue(expr syntax.BashPPExpr, expected syntax.Ba
 }
 
 func (r *Runner) bashPPCheckTypedValue(value any, meta *bashPPCollectionMeta, expected syntax.BashPPTypeExpr) error {
-	if pointer, ok := expected.(*syntax.BashPPPointerType); ok {
+	if _, ok := r.bashPPPointerType(expected); ok {
 		if value == nil {
 			return nil
 		}
-		actual, ok := value.(*bashPPPointer)
-		if !ok || bashPPTypeText(actual.elem) != bashPPTypeText(pointer.Element) {
+		if _, ok := value.(*bashPPPointer); !ok || meta == nil || !r.bashPPTypeAssignable(meta.typ, expected) {
 			return fmt.Errorf("BASHPP-EASSIGN-MISMATCH: cannot use value as %s", bashPPTypeText(expected))
 		}
 		return nil
@@ -305,6 +311,9 @@ func (r *Runner) bashPPCheckTypedValue(value any, meta *bashPPCollectionMeta, ex
 func bashPPCellMeta(cell *bashPPCell) *bashPPCollectionMeta {
 	if cell == nil {
 		return nil
+	}
+	if cell.pointer {
+		return bashPPPointerMeta(cell.declType)
 	}
 	if cell.valueMeta != nil {
 		return cell.valueMeta

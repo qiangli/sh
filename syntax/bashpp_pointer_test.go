@@ -10,8 +10,11 @@ import (
 )
 
 const bashppPointerSource = `type Count int
+type Ptr *int
 func main() {
 	var nilp *Count
+	var named Ptr
+	named = new(int)
 	x := 1
 	p := &x
 	y := *p
@@ -37,7 +40,7 @@ func TestBashPPPointerASTStreamingWalkAndPrint(t *testing.T) {
 	if !reflect.DeepEqual(buffered, oneByte) {
 		t.Fatal("buffered and one-byte pointer trees differ")
 	}
-	want := map[string]bool{"*syntax.BashPPPointerType": false, "*syntax.BashPPAddressExpr": false, "*syntax.BashPPDerefExpr": false, "*syntax.BashPPNewExpr": false}
+	want := map[string]bool{"*syntax.BashPPPointerType": false, "*syntax.BashPPAddressExpr": false, "*syntax.BashPPDerefExpr": false, "*syntax.BashPPNewExpr": false, "*syntax.BashPPAssign": false}
 	Walk(buffered, func(n Node) bool {
 		if n != nil {
 			if _, ok := want[reflect.TypeOf(n).String()]; ok {

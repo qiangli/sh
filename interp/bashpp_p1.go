@@ -196,9 +196,9 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 	var valueMeta *bashPPCollectionMeta
 	var pointerValue *bashPPPointer
 	if d.Site == syntax.StartVar && d.DeclTypeExpr != nil {
-		if pointerType, ok := d.DeclTypeExpr.(*syntax.BashPPPointerType); ok {
+		if pointerType, ok := r.bashPPPointerType(d.DeclTypeExpr); ok {
 			if len(d.Init) > 0 {
-				value, _, err := r.bashPPEvalTypedValue(d.InitExpr, pointerType)
+				value, _, err := r.bashPPEvalTypedValue(d.InitExpr, d.DeclTypeExpr)
 				// Keep the established receiver construction surface (`var p
 				// *Count = 9`) by treating a direct element value as an allocated
 				// pointee. New code can spell the same operation as new(Count).
@@ -268,7 +268,7 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 	}
 	if d.Site == syntax.StartVar && d.DeclType != nil {
 		spelling := d.DeclType.Value
-		pointer := strings.HasPrefix(spelling, "*")
+		_, pointer := r.bashPPPointerType(d.DeclTypeExpr)
 		base := strings.TrimPrefix(spelling, "*")
 		cell := r.bashPPScope.lookup(name)
 		cell.declType = d.DeclTypeExpr

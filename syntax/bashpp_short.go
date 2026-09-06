@@ -568,7 +568,15 @@ func bashppAssign(ce *CallExpr, redirs []*Redirect) *BashPPAssign {
 	if !bashppSupportedValue(value) {
 		return nil
 	}
-	if !bashppMutationTarget(text) && !strings.HasPrefix(text, "*") && !(bashppIsIdent(text) && strings.Contains(bashppWordText(value), "{")) {
+	rhsExpr := bashppScalarExpr(value)
+	pointerAssign := false
+	if bashppIsIdent(text) {
+		switch rhsExpr.(type) {
+		case *BashPPAddressExpr, *BashPPNewExpr, *BashPPDerefExpr:
+			pointerAssign = true
+		}
+	}
+	if !bashppMutationTarget(text) && !strings.HasPrefix(text, "*") && !(bashppIsIdent(text) && strings.Contains(bashppWordText(value), "{")) && !pointerAssign {
 		return nil
 	}
 	assign := &BashPPAssign{Target: target, Eq: ce.Args[eq].Pos(), Value: value}
@@ -581,6 +589,8 @@ func bashppAssign(ce *CallExpr, redirs []*Redirect) *BashPPAssign {
 		} else {
 			assign.ValueExpr = bashppScalarExpr(value)
 		}
+	} else if pointerAssign {
+		assign.ValueExpr = rhsExpr
 	}
 	return assign
 }
@@ -1062,18 +1072,24 @@ func (p *Parser) bashppParenForm(ce *CallExpr) Command {
 	var lhs []*Lit
 	var opPos Pos
 	short := false
+	assignNew := false
+	var assignTarget *Word
 	if len(ce.Args) >= 3 {
 		op := len(ce.Args) - 2
 		opLit, funLit := bashppBareLit(ce.Args[op]), bashppBareLit(ce.Args[op+1])
 		var ok bool
-		if opLit == nil || opLit.Value != ":=" || funLit == nil {
+		if opLit != nil && opLit.Value == "=" && funLit != nil && funLit.Value == "new" &&
+			len(ce.Args) == 3 && bashppIsIdent(bashppWordText(ce.Args[0])) && p.bashppFuncDepth > 0 {
+			name, opPos, assignTarget, assignNew = funLit, opLit.Pos(), ce.Args[0], true
+		} else if opLit == nil || opLit.Value != ":=" || funLit == nil {
 			return nil
+		} else {
+			lhs, ok = bashppShortLHS(ce.Args[:op])
+			if !ok {
+				return nil
+			}
+			name, opPos, short = funLit, opLit.Pos(), true
 		}
-		lhs, ok = bashppShortLHS(ce.Args[:op])
-		if !ok {
-			return nil
-		}
-		name, opPos, short = funLit, opLit.Pos(), true
 	} else if len(ce.Args) == 1 {
 		name = bashppBareLit(ce.Args[0])
 	} else {
@@ -1107,7 +1123,7 @@ func (p *Parser) bashppParenForm(ce *CallExpr) Command {
 		txn.commit(p)
 		return &BashPPShortDecl{Lhs: lhs, Class: ClassR, OpPos: opPos, GoRegion: p.bashppFuncDepth > 0, MakeChan: mk}
 	}
-	if short && p.bashppFuncDepth > 0 && name.Value == "new" {
+	if (short || assignNew) && p.bashppFuncDepth > 0 && name.Value == "new" {
 		typeWord := p.getWord()
 		typ := bashppTypeExpr(typeWord)
 		if typ == nil || p.tok != rightParen {
@@ -1121,8 +1137,13 @@ func (p *Parser) bashppParenForm(ce *CallExpr) Command {
 			return nil
 		}
 		txn.commit(p)
+		newExpr := &BashPPNewExpr{New: name, Lparen: lparen, AllocType: typ, Rparen: rparen}
+		if assignNew {
+			value := &Word{Parts: []WordPart{&Lit{ValuePos: name.Pos(), ValueEnd: posAddCol(rparen, 1), Value: "new(" + bashppWordText(typeWord) + ")"}}}
+			return &BashPPAssign{Target: assignTarget, Eq: opPos, Value: value, ValueExpr: newExpr}
+		}
 		return &BashPPShortDecl{Lhs: lhs, Class: ClassR, OpPos: opPos, GoRegion: true,
-			Expr: &BashPPNewExpr{New: name, Lparen: lparen, AllocType: typ, Rparen: rparen}}
+			Expr: newExpr}
 	}
 	args, argNames, ellipsis, ok := p.bashppCallArgs()
 	if !ok || p.tok != rightParen {

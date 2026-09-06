@@ -71,6 +71,21 @@ func (r *Runner) bashPPAssign(_ context.Context, assign *syntax.BashPPAssign) {
 	}
 	target := bashPPWordSource(assign.Target)
 	cell := r.bashPPScope.lookup(target)
+	if syntax.ValidName(target) && cell != nil && cell.pointer && assign.ValueExpr != nil {
+		value, meta, err := r.bashPPEvalTypedValue(assign.ValueExpr, cell.declType)
+		if err != nil {
+			r.errf("BASHPP-EASSIGN-MISMATCH: %v\n", err)
+			r.exit = exitStatus{code: 2}
+			return
+		}
+		if cell.constant || cell.vr.ReadOnly {
+			r.errf("BASHPP-EREADONLY-MUTATION: cannot mutate readonly value through pointer\n")
+			r.exit = exitStatus{code: 2}
+			return
+		}
+		bashPPStoreCellValue(cell, value, meta)
+		return
+	}
 	if !syntax.ValidName(target) || cell == nil || cell.object == nil || !cell.object.readonly {
 		r.errf("bash++: mutation is only implemented for readonly objects\n")
 		r.exit = exitStatus{code: 2}

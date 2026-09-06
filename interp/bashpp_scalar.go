@@ -347,7 +347,7 @@ func bashPPCompareValues(left any, leftMeta *bashPPCollectionMeta, leftNilLitera
 			value, meta = right, rightMeta
 		}
 		if bashPPPointerComparable(meta) || bashPPNilComparable(meta) {
-			return value == nil, nil
+			return bashPPNilComparableValue(value), nil
 		}
 		return false, fmt.Errorf("BASHPP-ECOMPARE-TYPE: value cannot be compared with nil")
 	}
@@ -445,6 +445,16 @@ func bashPPPointerEqual(left, right any) bool {
 		}
 	}
 	return true
+}
+
+func bashPPNilComparableValue(value any) bool {
+	if value == nil {
+		return true
+	}
+	if ptr, ok := value.(*bashPPPointer); ok {
+		return ptr == nil
+	}
+	return false
 }
 
 func bashPPBinaryOp(left constant.Value, op token.Token, right constant.Value) (value constant.Value, err error) {

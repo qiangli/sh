@@ -12,3 +12,5 @@
 {"op":"validate","slug":"clone-pointer-targets-as-storage-graph-edges","tool":"codex-gpt5.6-sol-q","host":"dragon","episode":"weave-issue-17","at":"2026-09-06T22:32:26.921394Z"}
 {"op":"validate","slug":"clone-pointer-targets-as-storage-graph-edges","tool":"codex-gpt-5.5-r","host":"dragon","episode":"weave-issue-18","at":"2026-09-06T22:50:40.756263Z"}
 {"op":"validate","slug":"separate-value-metadata-from-readonly-identity","tool":"codex-gpt-5.5-s","host":"dragon","episode":"weave-issue-19","at":"2026-09-06T23:20:25.21883Z"}
+{"op":"validate","slug":"clone-pointer-targets-as-storage-graph-edges","tool":"codex-gpt-5.5-t","host":"dragon","episode":"weave-issue-20","at":"2026-09-06T23:36:31.487158Z"}
+{"op":"validate","slug":"separate-value-metadata-from-readonly-identity","tool":"codex-gpt-5.5-t","host":"dragon","episode":"weave-issue-20","at":"2026-09-06T23:36:31.520701Z"}

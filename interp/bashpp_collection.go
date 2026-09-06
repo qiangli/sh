@@ -268,7 +268,7 @@ func (r *Runner) bashPPEvalCollection(lit *syntax.BashPPCompositeLit, expected s
 	out := make([]any, length)
 	meta.sequence = make([]*bashPPCollectionMeta, length)
 	for i := range out {
-		out[i], meta.sequence[i] = r.bashPPCollectionZero(collection.Element)
+		out[i], meta.sequence[i] = r.bashPPZeroValue(collection.Element)
 	}
 	for i, value := range values {
 		out[i], meta.sequence[i] = value, children[i]
@@ -450,7 +450,7 @@ func (r *Runner) bashPPEvalConstIntExpr(expr goast.Expr) (value constant.Value, 
 }
 
 func (r *Runner) bashPPEvalElement(expr syntax.BashPPExpr, expected syntax.BashPPTypeExpr) (any, *bashPPCollectionMeta, error) {
-	if _, pointer := expected.(*syntax.BashPPPointerType); pointer {
+	if _, pointer := r.bashPPPointerType(expected); pointer {
 		return r.bashPPEvalTypedValue(expr, expected)
 	}
 	if _, deref := expr.(*syntax.BashPPDerefExpr); deref {
