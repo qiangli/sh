@@ -21,7 +21,7 @@ func TestBashPPSwitchFirstMatchTaglessAndClauseScopes(t *testing.T) {
 	case 1, 3:
 		seen := "first"
 		echo "$seen:$x"
-	case 3:
+	case x:
 		echo wrong
 	default:
 		echo fallback
@@ -70,7 +70,9 @@ main()
 func TestBashPPSwitchTypeDiagnostics(t *testing.T) {
 	for _, test := range []struct{ src, want string }{
 		{"func main() { switch 1 { case \"1\": echo wrong } }\nmain()\n", "BASHPP-ESWITCH-TYPE: case expression type String does not match switch tag type Int\n"},
+		{"func main() { switch 1 { case 1: echo matched; case \"later\": echo wrong } }\nmain()\n", "BASHPP-ESWITCH-TYPE: case expression type String does not match switch tag type Int\n"},
 		{"func main() { switch { case 1: echo wrong } }\nmain()\n", "BASHPP-ESWITCH-TYPE: tagless switch case must be boolean, got Int\n"},
+		{"func main() { switch 1 { case 1: echo first; case 1.0: echo second } }\nmain()\n", "BASHPP-ESWITCH-DUPLICATE: duplicate case constant 1\n"},
 	} {
 		for _, bytewise := range []bool{false, true} {
 			var rd interface{ Read([]byte) (int, error) } = strings.NewReader(test.src)
