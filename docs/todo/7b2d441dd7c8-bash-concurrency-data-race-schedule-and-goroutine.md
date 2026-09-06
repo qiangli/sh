@@ -3,7 +3,7 @@ id: 7b2d441dd7c8
 kind: task
 title: Bash++ concurrency data-race, schedule, and goroutine-leak gate
 seq: 2
-status: doing
+status: todo
 priority: p1
 created: 2026-08-07T14:15:00Z
 assignee: codex-gpt5.6-terra
