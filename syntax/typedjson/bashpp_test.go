@@ -100,29 +100,41 @@ func TestBashPPFormsRoundTrip(t *testing.T) {
 }
 
 func TestBashPPScalarExpressionTypedJSONRoundTrip(t *testing.T) {
-	const src = "func main() {\n\tx := string(1)\n}\n"
+	const src = "func main() {\n\tbase := 1\n\tneg := -base\n\tsum := base + 2\n\ttext := string(1)\n}\n"
 	f, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(src), "expr.bpp")
 	if err != nil {
 		t.Fatal(err)
 	}
-	decl := f.Stmts[0].Cmd.(*syntax.BashPPFuncDecl).Body.Stmts[0].Cmd.(*syntax.BashPPShortDecl)
-	if decl.Expr == nil || decl.Rhs != nil {
-		t.Fatalf("short declaration did not retain a typed scalar expression: %#v", decl)
+	body := f.Stmts[0].Cmd.(*syntax.BashPPFuncDecl).Body
+	for i, stmt := range body.Stmts {
+		decl := stmt.Cmd.(*syntax.BashPPShortDecl)
+		if decl.Expr == nil || decl.Rhs != nil {
+			t.Fatalf("short declaration %d did not retain a typed scalar expression: %#v", i, decl)
+		}
 	}
 	var seen []string
-	syntax.Walk(decl.Expr, func(n syntax.Node) bool {
+	syntax.Walk(f, func(n syntax.Node) bool {
 		seen = append(seen, fmt.Sprintf("%T", n))
 		return true
 	})
-	if !slices.Contains(seen, "*syntax.BashPPConvertExpr") || !slices.Contains(seen, "*syntax.BashPPBasicLit") {
-		t.Fatalf("Walk missed typed expression nodes: %v", seen)
+	for _, typeName := range []string{
+		"*syntax.BashPPBasicLit", "*syntax.BashPPIdent", "*syntax.BashPPUnaryExpr",
+		"*syntax.BashPPBinaryExpr", "*syntax.BashPPConvertExpr",
+	} {
+		if !slices.Contains(seen, typeName) {
+			t.Fatalf("Walk missed %s in typed expression nodes: %v", typeName, seen)
+		}
 	}
 	var enc strings.Builder
 	if err := typedjson.Encode(&enc, f); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(enc.String(), `"Type":"BashPPConvertExpr"`) || !strings.Contains(enc.String(), `"Type":"BashPPBasicLit"`) {
-		t.Fatalf("typed expression nodes missing from JSON: %s", enc.String())
+	for _, typeName := range []string{
+		"BashPPBasicLit", "BashPPIdent", "BashPPUnaryExpr", "BashPPBinaryExpr", "BashPPConvertExpr",
+	} {
+		if !strings.Contains(enc.String(), `"Type":"`+typeName+`"`) {
+			t.Fatalf("typed expression node %s missing from JSON: %s", typeName, enc.String())
+		}
 	}
 	node, err := typedjson.Decode(strings.NewReader(enc.String()))
 	if err != nil {

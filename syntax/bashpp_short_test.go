@@ -83,6 +83,115 @@ func TestBashPPScalarExpressionReachabilityIsGoRegionBounded(t *testing.T) {
 	}
 }
 
+func TestBashPPScalarExpressionSourceReachability(t *testing.T) {
+	tests := []struct {
+		expr     string
+		typeName string
+	}{
+		{"42", "*syntax.BashPPBasicLit"},
+		{`"hello"`, "*syntax.BashPPBasicLit"},
+		{"base", "*syntax.BashPPIdent"},
+		{"+1", "*syntax.BashPPUnaryExpr"},
+		{"-1", "*syntax.BashPPUnaryExpr"},
+		{"!true", "*syntax.BashPPUnaryExpr"},
+		{"^1", "*syntax.BashPPUnaryExpr"},
+		{"1 + 2", "*syntax.BashPPBinaryExpr"},
+		{"1-2", "*syntax.BashPPBinaryExpr"},
+		{"1^2", "*syntax.BashPPBinaryExpr"},
+		{"1*2", "*syntax.BashPPBinaryExpr"},
+		{"4/2", "*syntax.BashPPBinaryExpr"},
+		{"5%2", "*syntax.BashPPBinaryExpr"},
+		{"1 == 2", "*syntax.BashPPBinaryExpr"},
+		{"1 != 2", "*syntax.BashPPBinaryExpr"},
+		{"string(65)", "*syntax.BashPPConvertExpr"},
+	}
+	for _, test := range tests {
+		t.Run(test.expr, func(t *testing.T) {
+			src := "func main() {\n\tx := " + test.expr + "\n}\n"
+			for _, bytewise := range []bool{false, true} {
+				var rd io.Reader = strings.NewReader(src)
+				if bytewise {
+					rd = bashppByteReader{rd}
+				}
+				f, err := NewParser(Variant(LangBashPP)).Parse(rd, "expr.bpp")
+				if err != nil {
+					t.Fatalf("bytewise=%v: %v", bytewise, err)
+				}
+				fn := f.Stmts[0].Cmd.(*BashPPFuncDecl)
+				decl, ok := fn.Body.Stmts[0].Cmd.(*BashPPShortDecl)
+				if !ok || decl.Expr == nil {
+					t.Fatalf("bytewise=%v: declaration = %#v", bytewise, fn.Body.Stmts[0].Cmd)
+				}
+				if got := fmt.Sprintf("%T", decl.Expr); got != test.typeName {
+					t.Fatalf("bytewise=%v: expression = %s, want %s", bytewise, got, test.typeName)
+				}
+			}
+		})
+	}
+}
+
+func TestBashPPScalarExpressionShellOperatorsAreNotClaimed(t *testing.T) {
+	for _, expr := range []string{
+		"true || false", "true && false", "1 < 2", "1 <= 2",
+		"1 > 2", "1 >= 2", "1 | 2", "1 & 2", "1 &^ 2",
+		"1 << 2", "1 >> 2",
+	} {
+		t.Run(expr, func(t *testing.T) {
+			src := "func main() {\n\tx := " + expr + "\n}\n"
+			parse := func(bytewise bool) (*File, error) {
+				var rd io.Reader = strings.NewReader(src)
+				if bytewise {
+					rd = bashppByteReader{rd}
+				}
+				return NewParser(Variant(LangBashPP)).Parse(rd, "expr.bpp")
+			}
+			buffered, bufferedErr := parse(false)
+			streamed, streamedErr := parse(true)
+			if fmt.Sprint(streamedErr) != fmt.Sprint(bufferedErr) || !reflect.DeepEqual(streamed, buffered) {
+				t.Fatalf("one-byte parse differs:\nbuffered: %#v, %v\nstreamed: %#v, %v",
+					buffered, bufferedErr, streamed, streamedErr)
+			}
+			if buffered == nil {
+				return
+			}
+			Walk(buffered, func(node Node) bool {
+				if binary, ok := node.(*BashPPBinaryExpr); ok {
+					t.Errorf("shell operator %q was claimed by a typed expression", binary.Op.Value)
+				}
+				return true
+			})
+		})
+	}
+}
+
+func TestBashPPScalarExpressionExactPositions(t *testing.T) {
+	const src = "func main() {\n\tx := 1  +\t2\n}\n"
+	f, err := NewParser(Variant(LangBashPP)).Parse(bashppByteReader{strings.NewReader(src)}, "expr.bpp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fn := f.Stmts[0].Cmd.(*BashPPFuncDecl)
+	expr := fn.Body.Stmts[0].Cmd.(*BashPPShortDecl).Expr.(*BashPPBinaryExpr)
+	for _, test := range []struct {
+		name       string
+		node       Node
+		text       string
+		fromOffset int
+	}{
+		{"left", expr.X, "1", 0},
+		{"operator", expr.Op, "+", 0},
+		{"right", expr.Y, "2", strings.Index(src, "+") + 1},
+	} {
+		start := strings.Index(src[test.fromOffset:], test.text) + test.fromOffset
+		if got := int(test.node.Pos().Offset()); got != start {
+			t.Errorf("%s starts at offset %d, want %d", test.name, got, start)
+		}
+		if got, want := int(test.node.End().Offset()), start+len(test.text); got != want {
+			t.Errorf("%s ends at offset %d, want %d", test.name, got, want)
+		}
+	}
+}
+
 func TestBashPPScalarExpressionDoesNotClaimTopLevelShellCommand(t *testing.T) {
 	bashppCheckIdentical(t, "x := 1 + 2\n")
 }

@@ -76,6 +76,20 @@ func TestBashPPTopLevelIdentifierShortDeclKeepsClassEBehavior(t *testing.T) {
 	qt.Assert(t, qt.Equals(out.String(), "base"))
 }
 
+func TestBashPPTypedScalarTreeIsDialectGatedAtRuntime(t *testing.T) {
+	f, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader("x := string(65)\n"), "")
+	qt.Assert(t, qt.IsNil(err))
+	for _, lang := range []syntax.LangVariant{syntax.LangBash, syntax.LangPOSIX} {
+		t.Run(lang.String(), func(t *testing.T) {
+			var out strings.Builder
+			r := bashPPRunner(t, &out, interp.Lang(lang))
+			err := r.Run(context.Background(), f)
+			qt.Check(t, qt.ErrorMatches(err, "exit status 2"))
+			qt.Check(t, qt.Equals(out.String(), "bash++ short declaration evaluated with extensions disabled\n"))
+		})
+	}
+}
+
 func TestBashPPParsedScalarConstantsUseGoConstantPrecision(t *testing.T) {
 	var out strings.Builder
 	r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP))

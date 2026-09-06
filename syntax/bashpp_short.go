@@ -59,11 +59,15 @@ func bashppShortDecl(ce *CallExpr, redirs []*Redirect, goRegion bool) *BashPPSho
 // bashppScalarExpr translates the parser's bounded Go expression probe into
 // our own AST immediately. The interpreter must never reparse a source word.
 func bashppScalarExpr(w *Word) BashPPExpr {
-	expr, err := goparser.ParseExpr(bashppWordText(w))
+	text, positions, ok := bashppScalarSource(w)
+	if !ok {
+		return nil
+	}
+	expr, err := goparser.ParseExpr(text)
 	if err != nil || !bashppSupportedScalarAST(expr) {
 		return nil
 	}
-	pos := func(p gotoken.Pos) Pos { return posAddCol(w.Pos(), int(p)-1) }
+	pos := func(p gotoken.Pos) Pos { return positions[int(p)-1] }
 	lit := func(p gotoken.Pos, end gotoken.Pos, value string) *Lit {
 		return &Lit{ValuePos: pos(p), ValueEnd: pos(end), Value: value}
 	}
@@ -77,9 +81,9 @@ func bashppScalarExpr(w *Word) BashPPExpr {
 		case *goast.ParenExpr:
 			return &BashPPParenExpr{Lparen: pos(x.Pos()), X: convert(x.X), Rparen: pos(x.End() - 1)}
 		case *goast.UnaryExpr:
-			return &BashPPUnaryExpr{Op: lit(x.OpPos, x.X.Pos(), x.Op.String()), X: convert(x.X)}
+			return &BashPPUnaryExpr{Op: lit(x.OpPos, x.OpPos+gotoken.Pos(len(x.Op.String())), x.Op.String()), X: convert(x.X)}
 		case *goast.BinaryExpr:
-			return &BashPPBinaryExpr{X: convert(x.X), Op: lit(x.OpPos, x.Y.Pos(), x.Op.String()), Y: convert(x.Y)}
+			return &BashPPBinaryExpr{X: convert(x.X), Op: lit(x.OpPos, x.OpPos+gotoken.Pos(len(x.Op.String())), x.Op.String()), Y: convert(x.Y)}
 		case *goast.CallExpr:
 			id := x.Fun.(*goast.Ident)
 			return &BashPPConvertExpr{ConvType: lit(id.Pos(), id.End(), id.Name), Lparen: pos(id.End()), X: convert(x.Args[0]), Rparen: pos(x.End() - 1)}
@@ -87,6 +91,61 @@ func bashppScalarExpr(w *Word) BashPPExpr {
 		return nil
 	}
 	return convert(expr)
+}
+
+// bashppScalarSource retains a boundary position for every byte passed to the
+// Go expression parser. In particular, a single normalized separator may span
+// multiple source bytes; adding a byte offset to w.Pos would shift every node
+// after that separator to the left.
+func bashppScalarSource(w *Word) (string, []Pos, bool) {
+	var text strings.Builder
+	var positions []Pos
+	appendPart := func(value string, start, end Pos, allowCollapsed bool) bool {
+		if value == "" {
+			return false
+		}
+		if len(positions) == 0 {
+			positions = append(positions, start)
+		} else {
+			positions[len(positions)-1] = start
+		}
+		exact := start.Line() == end.Line() && int(end.Offset()-start.Offset()) == len(value)
+		if !exact && !allowCollapsed {
+			return false
+		}
+		text.WriteString(value)
+		for i := 1; i <= len(value); i++ {
+			at := start
+			if exact {
+				at = posAddCol(start, i)
+			} else if i == len(value) {
+				at = end
+			}
+			positions = append(positions, at)
+		}
+		return true
+	}
+	for _, part := range w.Parts {
+		switch part := part.(type) {
+		case *Lit:
+			// bashppJoinWords represents an arbitrary source whitespace gap as
+			// one space. Its two boundary positions retain the exact gap.
+			if !appendPart(part.Value, part.Pos(), part.End(), part.Value == " ") {
+				return "", nil, false
+			}
+		case *SglQuoted, *DblQuoted:
+			value := bashppWordText(&Word{Parts: []WordPart{part}})
+			// A Go string or rune literal has no recursively represented
+			// children, so its exact outer boundaries are sufficient even
+			// when shell escaping changes the number of rendered bytes.
+			if !appendPart(value, part.Pos(), part.End(), true) {
+				return "", nil, false
+			}
+		default:
+			return "", nil, false
+		}
+	}
+	return text.String(), positions, len(positions) == text.Len()+1
 }
 
 // bashppCompositeCommandDepth reports an open, supported composite region in
@@ -317,8 +376,7 @@ func bashppSupportedValue(w *Word) bool {
 }
 
 func bashppSupportedScalarExpr(w *Word) bool {
-	expr, err := goparser.ParseExpr(bashppWordText(w))
-	return err == nil && bashppSupportedScalarAST(expr)
+	return bashppScalarExpr(w) != nil
 }
 
 func bashppSupportedScalarAST(expr goast.Expr) bool {
@@ -339,11 +397,8 @@ func bashppSupportedScalarAST(expr goast.Expr) bool {
 		}
 	case *goast.BinaryExpr:
 		switch x.Op {
-		case gotoken.LOR, gotoken.LAND, gotoken.EQL, gotoken.NEQ,
-			gotoken.LSS, gotoken.LEQ, gotoken.GTR, gotoken.GEQ,
-			gotoken.ADD, gotoken.SUB, gotoken.OR, gotoken.XOR,
-			gotoken.MUL, gotoken.QUO, gotoken.REM, gotoken.SHL,
-			gotoken.SHR, gotoken.AND, gotoken.AND_NOT:
+		case gotoken.EQL, gotoken.NEQ, gotoken.ADD, gotoken.SUB,
+			gotoken.XOR, gotoken.MUL, gotoken.QUO, gotoken.REM:
 			return bashppSupportedScalarAST(x.X) && bashppSupportedScalarAST(x.Y)
 		}
 	case *goast.CallExpr:

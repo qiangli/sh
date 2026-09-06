@@ -214,21 +214,6 @@ func bashPPBuiltinType(name string) bool {
 // previous values would leave the shell in a state no reader could predict
 // from the source line.
 func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl) {
-	if d.Expr != nil {
-		value, err := r.bashPPEvalScalarExpr(d.Expr)
-		if err != nil {
-			r.errf("%v\n", err)
-			r.exit = exitStatus{code: 2}
-			return
-		}
-		if len(d.Lhs) != 1 {
-			r.errf("assignment mismatch: %d variable(s) but 1 value(s)\n", len(d.Lhs))
-			r.exit = exitStatus{code: 2}
-			return
-		}
-		r.bashPPDeclareName(d.Lhs[0].Value, expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarString(value.value)})
-		return
-	}
 	if !r.objectsEnabled() {
 		r.errf("bash++ short declaration evaluated with extensions disabled\n")
 		r.exit = exitStatus{code: 2}
@@ -236,6 +221,43 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 	}
 	if r.bashPPScope == nil {
 		r.bashPPScope = newBashPPScope(nil)
+	}
+	if d.Expr != nil {
+		if len(d.Lhs) != 1 {
+			r.errf("assignment mismatch: %d variable(s) but 1 value(s)\n", len(d.Lhs))
+			r.exit = exitStatus{code: 2}
+			return
+		}
+		var source *bashPPCell
+		if ident, ok := d.Expr.(*syntax.BashPPIdent); ok {
+			source = r.bashPPScope.lookup(ident.Name.Value)
+			if vr := r.lookupVar(ident.Name.Value); vr.IsSet() && vr.Kind == expand.Object {
+				r.bashPPDeclareName(d.Lhs[0].Value, vr)
+				target := r.bashPPScope.lookup(d.Lhs[0].Value)
+				if source != nil && target != nil {
+					target.object = source.object
+					target.channel, target.channelOwner = source.channel, source.channelOwner
+					target.typeName = source.typeName
+				}
+				return
+			}
+		}
+		value, err := r.bashPPEvalScalarExpr(d.Expr)
+		if err != nil {
+			r.errf("%v\n", err)
+			r.exit = exitStatus{code: 2}
+			return
+		}
+		r.bashPPDeclareName(d.Lhs[0].Value, expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarString(value.value)})
+		target := r.bashPPScope.lookup(d.Lhs[0].Value)
+		if target != nil {
+			target.typeName = value.typ
+			if source != nil {
+				target.object = source.object
+				target.channel, target.channelOwner = source.channel, source.channelOwner
+			}
+		}
+		return
 	}
 	if d.MakeChan != nil {
 		r.bashPPMakeChan(ctx, d)
