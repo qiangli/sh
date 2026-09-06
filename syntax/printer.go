@@ -1275,6 +1275,35 @@ func (p *Printer) printRedirsUntil(redirs []*Redirect, startRedirs int, pos Pos)
 	return startRedirs
 }
 
+func (p *Printer) bashppExpr(expr BashPPExpr) {
+	switch x := expr.(type) {
+	case *BashPPBasicLit:
+		p.writeLit(x.Value.Value)
+	case *BashPPIdent:
+		p.writeLit(x.Name.Value)
+	case *BashPPParenExpr:
+		p.writeLit("(")
+		p.bashppExpr(x.X)
+		p.writeLit(")")
+	case *BashPPUnaryExpr:
+		p.writeLit(x.Op.Value)
+		p.bashppExpr(x.X)
+	case *BashPPBinaryExpr:
+		p.bashppExpr(x.X)
+		p.space()
+		p.writeLit(x.Op.Value)
+		p.space()
+		p.bashppExpr(x.Y)
+	case *BashPPConvertExpr:
+		p.writeLit(x.ConvType.Value)
+		p.writeLit("(")
+		p.bashppExpr(x.X)
+		p.writeLit(")")
+	default:
+		panic(fmt.Sprintf("unhandled Bash++ expression %T", expr))
+	}
+}
+
 func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 	p.advanceLine(cmd.Pos().Line())
 	p.spacePad(cmd.Pos())
@@ -1577,6 +1606,9 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 		case cmd.MakeChan != nil:
 			p.space()
 			p.bashppMakeChan(cmd.MakeChan)
+		case cmd.Expr != nil:
+			p.space()
+			p.bashppExpr(cmd.Expr)
 		default:
 			p.space()
 			for i, rhs := range cmd.Rhs {

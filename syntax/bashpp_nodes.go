@@ -287,6 +287,13 @@ type BashPPShortDecl struct {
 	// builtin, and its first argument is a TYPE rather than a value, which no
 	// [BashPPCall] argument list can hold.
 	MakeChan *BashPPMakeChan
+
+	// Expr is the typed scalar expression for the deliberately small scalar
+	// subset admitted inside a committed Go region. It is nil for the Class-E
+	// top-level spelling, whose words must keep their ordinary shell meaning.
+	// Rhs is empty when Expr is set: the expression tree is then the source of
+	// record for both printing and evaluation.
+	Expr BashPPExpr
 }
 
 func (d *BashPPShortDecl) Pos() Pos {
@@ -309,8 +316,80 @@ func (d *BashPPShortDecl) End() Pos {
 	if d.MakeChan != nil {
 		return d.MakeChan.End()
 	}
+	if d.Expr != nil {
+		return d.Expr.End()
+	}
 	return posAddCol(d.OpPos, 2)
 }
+
+// BashPPExpr is the source-reachable scalar expression subset. These nodes
+// deliberately model only forms which the shell lexer can carry into an
+// already committed Bash++ region; they are not a claim to support arbitrary
+// Go operators in shell command position.
+type BashPPExpr interface {
+	Node
+	bashPPExprNode()
+}
+
+func (*BashPPBasicLit) bashPPExprNode()    {}
+func (*BashPPIdent) bashPPExprNode()       {}
+func (*BashPPParenExpr) bashPPExprNode()   {}
+func (*BashPPUnaryExpr) bashPPExprNode()   {}
+func (*BashPPBinaryExpr) bashPPExprNode()  {}
+func (*BashPPConvertExpr) bashPPExprNode() {}
+
+// BashPPBasicLit is an exact scalar literal. Kind uses Go token names (INT,
+// FLOAT, CHAR, STRING), retained as text so typed JSON remains stable.
+type BashPPBasicLit struct {
+	Value *Lit
+	Kind  string
+}
+
+func (x *BashPPBasicLit) Pos() Pos { return x.Value.Pos() }
+func (x *BashPPBasicLit) End() Pos { return x.Value.End() }
+
+// BashPPIdent is an identifier or the predeclared true/false spelling.
+type BashPPIdent struct{ Name *Lit }
+
+func (x *BashPPIdent) Pos() Pos { return x.Name.Pos() }
+func (x *BashPPIdent) End() Pos { return x.Name.End() }
+
+type BashPPParenExpr struct {
+	Lparen Pos
+	X      BashPPExpr
+	Rparen Pos
+}
+
+func (x *BashPPParenExpr) Pos() Pos { return x.Lparen }
+func (x *BashPPParenExpr) End() Pos { return posAddCol(x.Rparen, 1) }
+
+type BashPPUnaryExpr struct {
+	Op *Lit
+	X  BashPPExpr
+}
+
+func (x *BashPPUnaryExpr) Pos() Pos { return x.Op.Pos() }
+func (x *BashPPUnaryExpr) End() Pos { return x.X.End() }
+
+type BashPPBinaryExpr struct {
+	X  BashPPExpr
+	Op *Lit
+	Y  BashPPExpr
+}
+
+func (x *BashPPBinaryExpr) Pos() Pos { return x.X.Pos() }
+func (x *BashPPBinaryExpr) End() Pos { return x.Y.End() }
+
+// BashPPConvertExpr is a source-reachable one-argument scalar conversion.
+type BashPPConvertExpr struct {
+	ConvType *Lit
+	Lparen   Pos
+	X        BashPPExpr
+	Rparen   Pos
+}
+
+func (x *BashPPConvertExpr) Pos() Pos { return x.ConvType.Pos() }
+func (x *BashPPConvertExpr) End() Pos { return posAddCol(x.Rparen, 1) }
 
 // BashPPCall is a Go call expression in command position: f(1, 2), x.y.z().
 //

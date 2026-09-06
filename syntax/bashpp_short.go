@@ -43,12 +43,50 @@ func bashppShortDecl(ce *CallExpr, redirs []*Redirect, goRegion bool) *BashPPSho
 		return nil
 	}
 	d := &BashPPShortDecl{Lhs: lhs, Rhs: rhs, Class: ClassE, OpPos: ce.Args[op].Pos(), GoRegion: goRegion}
+	if goRegion && len(rhs) == 1 {
+		if expr := bashppScalarExpr(rhs[0]); expr != nil {
+			d.Expr, d.Rhs = expr, nil
+		}
+	}
 	if len(rhs) == 1 {
 		if lit := bashppBareLit(rhs[0]); lit != nil && strings.Contains(lit.Value, ".") && bashppSelector(lit.Value) {
 			d.MethodValue = bashppSelectorLits(lit)
 		}
 	}
 	return d
+}
+
+// bashppScalarExpr translates the parser's bounded Go expression probe into
+// our own AST immediately. The interpreter must never reparse a source word.
+func bashppScalarExpr(w *Word) BashPPExpr {
+	expr, err := goparser.ParseExpr(bashppWordText(w))
+	if err != nil || !bashppSupportedScalarAST(expr) {
+		return nil
+	}
+	pos := func(p gotoken.Pos) Pos { return posAddCol(w.Pos(), int(p)-1) }
+	lit := func(p gotoken.Pos, end gotoken.Pos, value string) *Lit {
+		return &Lit{ValuePos: pos(p), ValueEnd: pos(end), Value: value}
+	}
+	var convert func(goast.Expr) BashPPExpr
+	convert = func(e goast.Expr) BashPPExpr {
+		switch x := e.(type) {
+		case *goast.BasicLit:
+			return &BashPPBasicLit{Value: lit(x.Pos(), x.End(), x.Value), Kind: x.Kind.String()}
+		case *goast.Ident:
+			return &BashPPIdent{Name: lit(x.Pos(), x.End(), x.Name)}
+		case *goast.ParenExpr:
+			return &BashPPParenExpr{Lparen: pos(x.Pos()), X: convert(x.X), Rparen: pos(x.End() - 1)}
+		case *goast.UnaryExpr:
+			return &BashPPUnaryExpr{Op: lit(x.OpPos, x.X.Pos(), x.Op.String()), X: convert(x.X)}
+		case *goast.BinaryExpr:
+			return &BashPPBinaryExpr{X: convert(x.X), Op: lit(x.OpPos, x.Y.Pos(), x.Op.String()), Y: convert(x.Y)}
+		case *goast.CallExpr:
+			id := x.Fun.(*goast.Ident)
+			return &BashPPConvertExpr{ConvType: lit(id.Pos(), id.End(), id.Name), Lparen: pos(id.End()), X: convert(x.Args[0]), Rparen: pos(x.End() - 1)}
+		}
+		return nil
+	}
+	return convert(expr)
 }
 
 // bashppCompositeCommandDepth reports an open, supported composite region in
@@ -527,6 +565,14 @@ func (p *Parser) bashppParenForm(ce *CallExpr) Command {
 	call := &BashPPCall{
 		Fun: bashppSelectorLits(name), Args: args, ArgNames: argNames, Ellipsis: ellipsis,
 		Lparen: lparen, Rparen: rparen,
+	}
+	if short && len(call.Fun) == 1 && len(call.Args) == 1 && len(call.ArgNames) == 0 &&
+		!call.Ellipsis.IsValid() && bashppScalarConversionType(call.Fun[0].Value) {
+		if arg := bashppScalarExpr(call.Args[0]); arg != nil {
+			return &BashPPShortDecl{Lhs: lhs, Class: ClassR, OpPos: opPos,
+				GoRegion: p.bashppFuncDepth > 0,
+				Expr:     &BashPPConvertExpr{ConvType: call.Fun[0], Lparen: call.Lparen, X: arg, Rparen: call.Rparen}}
+		}
 	}
 	if !short {
 		// `close(ch)` is the Go builtin, not a call the interpreter can

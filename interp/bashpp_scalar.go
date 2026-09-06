@@ -5,9 +5,7 @@ package interp
 
 import (
 	"fmt"
-	"go/ast"
 	"go/constant"
-	"go/parser"
 	"go/token"
 	"strconv"
 
@@ -20,119 +18,118 @@ type bashPPScalar struct {
 	typ   string
 }
 
-func (r *Runner) bashPPScalarWord(w *syntax.Word, goRegion bool) (string, bool) {
-	text := bashPPWordSource(w)
-	expr, err := parser.ParseExpr(text)
-	if err != nil {
-		return "", false
-	}
-	if !goRegion {
-		if lit, ok := expr.(*ast.BasicLit); ok && lit.Kind == token.CHAR {
-			return "", false
-		}
-	}
-	value, err := r.bashPPEvalScalarAST(expr, goRegion)
-	if err != nil {
-		if goRegion {
-			r.errf("%v\n", err)
-			r.exit = exitStatus{code: 2}
-			return "", true
-		}
-		return "", false
-	}
-	return bashPPScalarString(value.value), true
-}
-
-func (r *Runner) bashPPScalarCall(c *syntax.BashPPCall) (string, bool) {
-	if len(c.Fun) != 1 || len(c.Args) != 1 || !bashPPScalarType(c.Fun[0].Value) {
-		return "", false
-	}
-	arg, ok := r.bashPPScalarWord(c.Args[0], true)
-	if !ok || r.exit.code != 0 {
-		return "", true
-	}
-	value, err := r.bashPPConvertScalar(c.Fun[0].Value, bashPPScalarFromString(arg))
-	if err != nil {
-		r.errf("%v\n", err)
-		r.exit = exitStatus{code: 2}
-		return "", true
-	}
-	return bashPPScalarString(value.value), true
-}
-
-func (r *Runner) bashPPEvalScalarAST(expr ast.Expr, goRegion bool) (bashPPScalar, error) {
+// bashPPEvalScalarExpr consumes syntax's typed tree. Parsing belongs solely
+// to syntax; this package evaluates the tree it was handed.
+func (r *Runner) bashPPEvalScalarExpr(expr syntax.BashPPExpr) (bashPPScalar, error) {
 	switch x := expr.(type) {
-	case *ast.BasicLit:
+	case *syntax.BashPPBasicLit:
 		return bashPPBasicScalar(x)
-	case *ast.Ident:
-		return r.bashPPIdentScalar(x, goRegion)
-	case *ast.ParenExpr:
-		return r.bashPPEvalScalarAST(x.X, goRegion)
-	case *ast.UnaryExpr:
-		v, err := r.bashPPEvalScalarAST(x.X, goRegion)
+	case *syntax.BashPPIdent:
+		return r.bashPPIdentScalar(x.Name.Value)
+	case *syntax.BashPPParenExpr:
+		return r.bashPPEvalScalarExpr(x.X)
+	case *syntax.BashPPUnaryExpr:
+		v, err := r.bashPPEvalScalarExpr(x.X)
 		if err != nil {
 			return bashPPScalar{}, err
 		}
-		return bashPPUnaryScalar(x.Op, v)
-	case *ast.BinaryExpr:
-		left, err := r.bashPPEvalScalarAST(x.X, goRegion)
+		return bashPPUnaryScalar(bashPPOpToken(x.Op.Value), v)
+	case *syntax.BashPPBinaryExpr:
+		left, err := r.bashPPEvalScalarExpr(x.X)
 		if err != nil {
 			return bashPPScalar{}, err
 		}
-		right, err := r.bashPPEvalScalarAST(x.Y, goRegion)
+		right, err := r.bashPPEvalScalarExpr(x.Y)
 		if err != nil {
 			return bashPPScalar{}, err
 		}
-		return bashPPBinaryScalar(x.Op, left, right)
-	case *ast.CallExpr:
-		if len(x.Args) != 1 || x.Ellipsis.IsValid() {
-			return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-CALL: scalar conversion expects one argument")
-		}
-		id, ok := x.Fun.(*ast.Ident)
-		if !ok || !bashPPScalarType(id.Name) {
-			return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-CALL: unsupported scalar conversion")
-		}
-		v, err := r.bashPPEvalScalarAST(x.Args[0], goRegion)
+		return bashPPBinaryScalar(bashPPOpToken(x.Op.Value), left, right)
+	case *syntax.BashPPConvertExpr:
+		v, err := r.bashPPEvalScalarExpr(x.X)
 		if err != nil {
 			return bashPPScalar{}, err
 		}
-		return r.bashPPConvertScalar(id.Name, v)
+		return r.bashPPConvertScalar(x.ConvType.Value, v)
 	}
 	return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-FORM: unsupported scalar expression %T", expr)
 }
 
-func bashPPBasicScalar(x *ast.BasicLit) (bashPPScalar, error) {
-	v := constant.MakeFromLiteral(x.Value, x.Kind, 0)
+func bashPPBasicScalar(x *syntax.BashPPBasicLit) (bashPPScalar, error) {
+	kind := map[string]token.Token{"INT": token.INT, "FLOAT": token.FLOAT, "CHAR": token.CHAR, "STRING": token.STRING}[x.Kind]
+	v := constant.MakeFromLiteral(x.Value.Value, kind, 0)
 	if v.Kind() == constant.Unknown {
-		return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-LITERAL: invalid literal %s", x.Value)
+		return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-LITERAL: invalid literal %s", x.Value.Value)
 	}
 	return bashPPScalar{value: v}, nil
 }
 
-func (r *Runner) bashPPIdentScalar(x *ast.Ident, goRegion bool) (bashPPScalar, error) {
-	switch x.Name {
+func (r *Runner) bashPPIdentScalar(name string) (bashPPScalar, error) {
+	switch name {
 	case "true":
 		return bashPPScalar{value: constant.MakeBool(true)}, nil
 	case "false":
 		return bashPPScalar{value: constant.MakeBool(false)}, nil
 	}
-	vr := r.lookupVar(x.Name)
+	vr := r.lookupVar(name)
 	if !vr.IsSet() {
-		if goRegion {
-			return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-UNDEFINED: undefined: %s", x.Name)
-		}
-		return bashPPScalar{value: constant.MakeString(x.Name)}, nil
+		return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-UNDEFINED: undefined: %s", name)
 	}
 	if vr.Kind == expand.Object {
-		return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-OPERAND: %s is not a scalar", x.Name)
+		return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-OPERAND: %s is not a scalar", name)
 	}
 	value := bashPPScalarFromString(vr.String())
 	if r.bashPPScope != nil {
-		if cell := r.bashPPScope.lookup(x.Name); cell != nil && cell.typeName != "" {
+		if cell := r.bashPPScope.lookup(name); cell != nil && cell.typeName != "" {
 			value.typ = cell.typeName
 		}
 	}
 	return value, nil
+}
+
+func bashPPOpToken(op string) token.Token {
+	switch op {
+	case "+":
+		return token.ADD
+	case "-":
+		return token.SUB
+	case "!":
+		return token.NOT
+	case "^":
+		return token.XOR
+	case "||":
+		return token.LOR
+	case "&&":
+		return token.LAND
+	case "==":
+		return token.EQL
+	case "!=":
+		return token.NEQ
+	case "<":
+		return token.LSS
+	case "<=":
+		return token.LEQ
+	case ">":
+		return token.GTR
+	case ">=":
+		return token.GEQ
+	case "|":
+		return token.OR
+	case "*":
+		return token.MUL
+	case "/":
+		return token.QUO
+	case "%":
+		return token.REM
+	case "<<":
+		return token.SHL
+	case ">>":
+		return token.SHR
+	case "&":
+		return token.AND
+	case "&^":
+		return token.AND_NOT
+	}
+	return token.ILLEGAL
 }
 
 func bashPPScalarFromString(s string) bashPPScalar {

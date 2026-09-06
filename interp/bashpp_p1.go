@@ -214,6 +214,21 @@ func bashPPBuiltinType(name string) bool {
 // previous values would leave the shell in a state no reader could predict
 // from the source line.
 func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl) {
+	if d.Expr != nil {
+		value, err := r.bashPPEvalScalarExpr(d.Expr)
+		if err != nil {
+			r.errf("%v\n", err)
+			r.exit = exitStatus{code: 2}
+			return
+		}
+		if len(d.Lhs) != 1 {
+			r.errf("assignment mismatch: %d variable(s) but 1 value(s)\n", len(d.Lhs))
+			r.exit = exitStatus{code: 2}
+			return
+		}
+		r.bashPPDeclareName(d.Lhs[0].Value, expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarString(value.value)})
+		return
+	}
 	if !r.objectsEnabled() {
 		r.errf("bash++ short declaration evaluated with extensions disabled\n")
 		r.exit = exitStatus{code: 2}
@@ -275,18 +290,6 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 	// Rhs never matches a multi-name left-hand side; the real arity check is
 	// against the function's declared results, done inside.
 	if d.Call != nil {
-		if value, ok := r.bashPPScalarCall(d.Call); ok {
-			if r.exit.code != 0 {
-				return
-			}
-			if len(d.Lhs) != 1 {
-				r.errf("assignment mismatch: %d variable(s) but 1 value(s)\n", len(d.Lhs))
-				r.exit = exitStatus{code: 2}
-				return
-			}
-			r.bashPPDeclareName(d.Lhs[0].Value, expand.Variable{Set: true, Kind: expand.String, Str: value})
-			return
-		}
 		if r.bashPPEnumConstruct(d) {
 			return
 		}
@@ -514,11 +517,6 @@ func (r *Runner) bashPPValueInRegion(_ context.Context, words []*syntax.Word, go
 		// environment.
 		return expand.Variable{Set: true, Kind: expand.String, Str: ""}
 	case 1:
-		if goRegion {
-			if value, ok := r.bashPPScalarWord(words[0], true); ok {
-				return expand.Variable{Set: true, Kind: expand.String, Str: value}
-			}
-		}
 		return expand.Variable{Set: true, Kind: expand.String, Str: r.literal(words[0])}
 	default:
 		strs := make([]string, len(words))

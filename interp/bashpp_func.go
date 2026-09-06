@@ -609,9 +609,6 @@ func (r *Runner) bashPPBindCall(fn *bashPPFunc, supplied []string, suppliedChann
 // live binding. Other bare words remain string literals, preserving the
 // convenient `f(hello)` spelling for an unquoted string argument.
 func (r *Runner) bashPPExprValue(w *syntax.Word) string {
-	if value, ok := r.bashPPScalarWord(w, false); ok {
-		return value
-	}
 	if len(w.Parts) == 1 {
 		if lit, ok := w.Parts[0].(*syntax.Lit); ok && syntax.ValidName(lit.Value) {
 			if vr := r.lookupVar(lit.Value); vr.IsSet() {

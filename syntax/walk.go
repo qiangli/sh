@@ -217,6 +217,23 @@ func Walk(node Node, f func(Node) bool) {
 		if node.MakeChan != nil {
 			Walk(node.MakeChan, f)
 		}
+		walkNilable(node.Expr, f)
+	case *BashPPBasicLit:
+		Walk(node.Value, f)
+	case *BashPPIdent:
+		Walk(node.Name, f)
+	case *BashPPParenExpr:
+		Walk(node.X, f)
+	case *BashPPUnaryExpr:
+		Walk(node.Op, f)
+		Walk(node.X, f)
+	case *BashPPBinaryExpr:
+		Walk(node.X, f)
+		Walk(node.Op, f)
+		Walk(node.Y, f)
+	case *BashPPConvertExpr:
+		Walk(node.ConvType, f)
+		Walk(node.X, f)
 	case *BashPPCall:
 		if node.FuncLit != nil {
 			Walk(node.FuncLit, f)

@@ -53,7 +53,7 @@ func TestBashPPShortDeclSupportedShapes(t *testing.T) {
 }
 
 func TestBashPPScalarExpressionReachabilityIsGoRegionBounded(t *testing.T) {
-	const src = "func main() { x := 1 + 2 }\n"
+	const src = "func main() {\n\tx := string(1)\n}\n"
 	for _, bytewise := range []bool{false, true} {
 		var rd io.Reader = strings.NewReader(src)
 		if bytewise {
@@ -71,8 +71,14 @@ func TestBashPPScalarExpressionReachabilityIsGoRegionBounded(t *testing.T) {
 		if !d.GoRegion {
 			t.Fatalf("bytewise=%v: scalar expression was not marked as committed Go", bytewise)
 		}
-		if got := bashppWordText(d.Rhs[0]); got != "1 + 2" {
-			t.Fatalf("rhs = %q, want source expression", got)
+		if d.Expr == nil || d.Rhs != nil {
+			t.Fatalf("scalar expression was not represented by the typed tree: %#v", d)
+		}
+		if got, want := d.Expr.Pos().Line(), uint(2); got != want {
+			t.Fatalf("expression starts on line %d, want %d", got, want)
+		}
+		if _, ok := d.Expr.(*BashPPConvertExpr); !ok {
+			t.Fatalf("expression = %T, want *BashPPConvertExpr", d.Expr)
 		}
 	}
 }

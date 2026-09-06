@@ -4,6 +4,8 @@
 package typedjson_test
 
 import (
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -94,5 +96,40 @@ func TestBashPPFormsRoundTrip(t *testing.T) {
 				t.Fatalf("print %q: %v", out.String(), err)
 			}
 		})
+	}
+}
+
+func TestBashPPScalarExpressionTypedJSONRoundTrip(t *testing.T) {
+	const src = "func main() {\n\tx := string(1)\n}\n"
+	f, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(src), "expr.bpp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	decl := f.Stmts[0].Cmd.(*syntax.BashPPFuncDecl).Body.Stmts[0].Cmd.(*syntax.BashPPShortDecl)
+	if decl.Expr == nil || decl.Rhs != nil {
+		t.Fatalf("short declaration did not retain a typed scalar expression: %#v", decl)
+	}
+	var seen []string
+	syntax.Walk(decl.Expr, func(n syntax.Node) bool {
+		seen = append(seen, fmt.Sprintf("%T", n))
+		return true
+	})
+	if !slices.Contains(seen, "*syntax.BashPPConvertExpr") || !slices.Contains(seen, "*syntax.BashPPBasicLit") {
+		t.Fatalf("Walk missed typed expression nodes: %v", seen)
+	}
+	var enc strings.Builder
+	if err := typedjson.Encode(&enc, f); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(enc.String(), `"Type":"BashPPConvertExpr"`) || !strings.Contains(enc.String(), `"Type":"BashPPBasicLit"`) {
+		t.Fatalf("typed expression nodes missing from JSON: %s", enc.String())
+	}
+	node, err := typedjson.Decode(strings.NewReader(enc.String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	if err := syntax.NewPrinter().Print(&out, node); err != nil || out.String() != src {
+		t.Fatalf("decoded tree printed %q (%v), want %q", out.String(), err, src)
 	}
 }
