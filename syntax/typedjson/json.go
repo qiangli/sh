@@ -264,6 +264,7 @@ var nodeByName = map[string]reflect.Type{
 	"BashPPBinaryExpr":     reflect.TypeFor[syntax.BashPPBinaryExpr](),
 	"BashPPConvertExpr":    reflect.TypeFor[syntax.BashPPConvertExpr](),
 	"BashPPIndexExpr":      reflect.TypeFor[syntax.BashPPIndexExpr](),
+	"BashPPSliceExpr":      reflect.TypeFor[syntax.BashPPSliceExpr](),
 	"BashPPSelectorExpr":   reflect.TypeFor[syntax.BashPPSelectorExpr](),
 	"BashPPAddressExpr":    reflect.TypeFor[syntax.BashPPAddressExpr](),
 	"BashPPDerefExpr":      reflect.TypeFor[syntax.BashPPDerefExpr](),

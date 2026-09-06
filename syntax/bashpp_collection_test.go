@@ -13,7 +13,7 @@ import (
 )
 
 func TestBashPPCollectionASTStreamingWalkAndPrint(t *testing.T) {
-	const src = "func main() {\n\ta := [3]int{1, 2: 7}\n\tb := [...]string{1: \"x\", \"y\"}\n\ts := []int{1, 2}\n\tm := map[string][]int{\"a\": {4, 5}}\n\tx := m[\"a\"][1]\n\tm[\"a\"][0] = 9\n}\n"
+	const src = "func main() {\n\ta := [3]int{1, 2: 7}\n\tb := [...]string{1: \"x\", \"y\"}\n\ts := []int{1, 2}\n\tm := map[string][]int{\"a\": {4, 5}}\n\tx := m[\"a\"][1]\n\ty := s[0:2:2]\n\tm[\"a\"][0] = 9\n}\n"
 	parse := func(rd io.Reader) *File {
 		f, err := NewParser(Variant(LangBashPP)).Parse(rd, "collection.bpp")
 		if err != nil {
@@ -44,7 +44,10 @@ func TestBashPPCollectionASTStreamingWalkAndPrint(t *testing.T) {
 	if _, ok := body[4].Cmd.(*BashPPShortDecl).Expr.(*BashPPIndexExpr); !ok {
 		t.Fatal("indexed read is not typed")
 	}
-	assign := body[5].Cmd.(*BashPPAssign)
+	if _, ok := body[5].Cmd.(*BashPPShortDecl).Expr.(*BashPPSliceExpr); !ok {
+		t.Fatal("sliced read is not typed")
+	}
+	assign := body[6].Cmd.(*BashPPAssign)
 	if assign.TargetExpr == nil || assign.ValueExpr == nil {
 		t.Fatalf("assignment is not lowered: %#v", assign)
 	}
@@ -55,7 +58,7 @@ func TestBashPPCollectionASTStreamingWalkAndPrint(t *testing.T) {
 		}
 		return true
 	})
-	for _, name := range []string{"*syntax.BashPPCompositeLit", "*syntax.BashPPCompositeElem", "*syntax.BashPPCollectionType", "*syntax.BashPPNamedType", "*syntax.BashPPIndexExpr"} {
+	for _, name := range []string{"*syntax.BashPPCompositeLit", "*syntax.BashPPCompositeElem", "*syntax.BashPPCollectionType", "*syntax.BashPPNamedType", "*syntax.BashPPIndexExpr", "*syntax.BashPPSliceExpr"} {
 		if !seen[name] {
 			t.Fatalf("Walk missed %s", name)
 		}

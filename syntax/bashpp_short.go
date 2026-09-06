@@ -81,10 +81,10 @@ func bashppScalarExpr(w *Word) BashPPExpr {
 	lit := func(p gotoken.Pos, end gotoken.Pos, value string) *Lit {
 		return &Lit{ValuePos: pos(p), ValueEnd: pos(end), Value: value}
 	}
-	return bashppConvertExpr(expr, pos, lit)
+	return bashppConvertExpr(expr, text, pos, lit)
 }
 
-func bashppConvertExpr(expr goast.Expr, pos func(gotoken.Pos) Pos, lit func(gotoken.Pos, gotoken.Pos, string) *Lit) BashPPExpr {
+func bashppConvertExpr(expr goast.Expr, source string, pos func(gotoken.Pos) Pos, lit func(gotoken.Pos, gotoken.Pos, string) *Lit) BashPPExpr {
 	convertType := func(e goast.Expr) BashPPTypeExpr { return bashppConvertType(e, pos, lit) }
 
 	var convert func(goast.Expr) BashPPExpr
@@ -116,6 +116,25 @@ func bashppConvertExpr(expr goast.Expr, pos func(gotoken.Pos) Pos, lit func(goto
 			return &BashPPConvertExpr{ConvType: lit(id.Pos(), id.End(), id.Name), Lparen: pos(id.End()), X: convert(x.Args[0]), Rparen: pos(x.End() - 1)}
 		case *goast.IndexExpr:
 			return &BashPPIndexExpr{X: convert(x.X), Lbrack: pos(x.Lbrack), Index: convert(x.Index), Rbrack: pos(x.End() - 1)}
+		case *goast.SliceExpr:
+			colons := bashppSliceColonOffsets(source, x.Lbrack, x.End())
+			out := &BashPPSliceExpr{X: convert(x.X), Lbrack: pos(x.Lbrack), Rbrack: pos(x.End() - 1)}
+			if len(colons) > 0 {
+				out.Colon = pos(gotoken.Pos(colons[0] + 1))
+			}
+			if len(colons) > 1 {
+				out.SecondColon = pos(gotoken.Pos(colons[1] + 1))
+			}
+			if x.Low != nil {
+				out.Low = convert(x.Low)
+			}
+			if x.High != nil {
+				out.High = convert(x.High)
+			}
+			if x.Max != nil {
+				out.Max = convert(x.Max)
+			}
+			return out
 		case *goast.SelectorExpr:
 			return &BashPPSelectorExpr{X: convert(x.X), Dot: pos(x.Sel.Pos() - 1), Sel: lit(x.Sel.Pos(), x.Sel.End(), x.Sel.Name)}
 		case *goast.CompositeLit:
@@ -202,7 +221,7 @@ func bashppCollectionExpr(w *Word) BashPPExpr {
 	lit := func(p, end gotoken.Pos, value string) *Lit {
 		return &Lit{ValuePos: pos(p), ValueEnd: pos(end), Value: value}
 	}
-	return bashppConvertExpr(expr, pos, lit)
+	return bashppConvertExpr(expr, text, pos, lit)
 }
 
 // bashppCompositeExpr lowers both collection and struct composites. Go's
@@ -221,7 +240,7 @@ func bashppCompositeExpr(w *Word) BashPPExpr {
 	lit := func(p, end gotoken.Pos, value string) *Lit {
 		return &Lit{ValuePos: pos(p), ValueEnd: pos(end), Value: value}
 	}
-	return bashppConvertExpr(expr, pos, lit)
+	return bashppConvertExpr(expr, text, pos, lit)
 }
 
 func bashppIndexExpr(w *Word) BashPPExpr {
@@ -234,7 +253,7 @@ func bashppIndexExpr(w *Word) BashPPExpr {
 		return nil
 	}
 	switch expr.(type) {
-	case *goast.IndexExpr, *goast.SelectorExpr:
+	case *goast.IndexExpr, *goast.SliceExpr, *goast.SelectorExpr:
 	default:
 		return nil
 	}
@@ -245,7 +264,7 @@ func bashppIndexExpr(w *Word) BashPPExpr {
 	lit := func(p, end gotoken.Pos, value string) *Lit {
 		return &Lit{ValuePos: pos(p), ValueEnd: pos(end), Value: value}
 	}
-	return bashppConvertExpr(expr, pos, lit)
+	return bashppConvertExpr(expr, text, pos, lit)
 }
 
 func bashppSupportedPathAST(expr goast.Expr) bool {
@@ -256,6 +275,11 @@ func bashppSupportedPathAST(expr goast.Expr) bool {
 		return bashppSupportedPathAST(x.X) && bashppIsIdent(x.Sel.Name)
 	case *goast.IndexExpr:
 		return bashppSupportedPathAST(x.X) && bashppSupportedScalarAST(x.Index)
+	case *goast.SliceExpr:
+		return bashppSupportedPathAST(x.X) &&
+			(x.Low == nil || bashppSupportedScalarAST(x.Low)) &&
+			(x.High == nil || bashppSupportedScalarAST(x.High)) &&
+			(x.Max == nil || bashppSupportedScalarAST(x.Max))
 	}
 	return false
 }
@@ -559,7 +583,25 @@ func bashppPointerExpr(w *Word) BashPPExpr {
 	lit := func(p, end gotoken.Pos, value string) *Lit {
 		return &Lit{ValuePos: pos(p), ValueEnd: pos(end), Value: value}
 	}
-	return bashppConvertExpr(expr, pos, lit)
+	return bashppConvertExpr(expr, text, pos, lit)
+}
+
+func bashppSliceColonOffsets(source string, start, end gotoken.Pos) []int {
+	depth := 0
+	var out []int
+	for i := int(start) - 1; i < int(end)-1 && i < len(source); i++ {
+		switch source[i] {
+		case '[', '(', '{':
+			depth++
+		case ']', ')', '}':
+			depth--
+		case ':':
+			if depth == 1 {
+				out = append(out, i)
+			}
+		}
+	}
+	return out
 }
 
 func bashppConcatWords(words []*Word) *Word {
@@ -733,7 +775,7 @@ func bashppSupportedScalarAST(expr goast.Expr) bool {
 			return true
 		}
 	case *goast.Ident:
-		return bashppIsIdent(x.Name) || x.Name == "true" || x.Name == "false"
+		return bashppIsIdent(x.Name) || x.Name == "true" || x.Name == "false" || x.Name == "nil"
 	case *goast.ParenExpr:
 		return bashppSupportedScalarAST(x.X)
 	case *goast.UnaryExpr:
@@ -771,6 +813,11 @@ func bashppSupportedScalarAST(expr goast.Expr) bool {
 		return bashppScalarConversionType(id.Name) && bashppSupportedScalarAST(x.Args[0])
 	case *goast.IndexExpr:
 		return bashppSupportedScalarAST(x.X) && bashppSupportedScalarAST(x.Index)
+	case *goast.SliceExpr:
+		return bashppSupportedScalarAST(x.X) &&
+			(x.Low == nil || bashppSupportedScalarAST(x.Low)) &&
+			(x.High == nil || bashppSupportedScalarAST(x.High)) &&
+			(x.Max == nil || bashppSupportedScalarAST(x.Max))
 	case *goast.SelectorExpr:
 		return bashppContainsDeref(x.X) && bashppSupportedScalarAST(x.X) && bashppIsIdent(x.Sel.Name)
 	}
@@ -786,6 +833,8 @@ func bashppContainsDeref(expr goast.Expr) bool {
 	case *goast.SelectorExpr:
 		return bashppContainsDeref(x.X)
 	case *goast.IndexExpr:
+		return bashppContainsDeref(x.X)
+	case *goast.SliceExpr:
 		return bashppContainsDeref(x.X)
 	}
 	return false

@@ -348,6 +348,7 @@ func (*BashPPUnaryExpr) bashPPExprNode()    {}
 func (*BashPPBinaryExpr) bashPPExprNode()   {}
 func (*BashPPConvertExpr) bashPPExprNode()  {}
 func (*BashPPIndexExpr) bashPPExprNode()    {}
+func (*BashPPSliceExpr) bashPPExprNode()    {}
 func (*BashPPSelectorExpr) bashPPExprNode() {}
 func (*BashPPCompositeLit) bashPPExprNode() {}
 func (*BashPPAddressExpr) bashPPExprNode()  {}
@@ -447,6 +448,22 @@ type BashPPIndexExpr struct {
 
 func (x *BashPPIndexExpr) Pos() Pos { return x.X.Pos() }
 func (x *BashPPIndexExpr) End() Pos { return posAddCol(x.Rbrack, 1) }
+
+// BashPPSliceExpr is a two-index or full three-index slice expression. Low,
+// High, and Max are nil when their source slots are empty.
+type BashPPSliceExpr struct {
+	X           BashPPExpr
+	Lbrack      Pos
+	Low         BashPPExpr
+	Colon       Pos
+	High        BashPPExpr
+	SecondColon Pos
+	Max         BashPPExpr
+	Rbrack      Pos
+}
+
+func (x *BashPPSliceExpr) Pos() Pos { return x.X.Pos() }
+func (x *BashPPSliceExpr) End() Pos { return posAddCol(x.Rbrack, 1) }
 
 // BashPPSelectorExpr is a positioned field selection. Chained selections and
 // selections through indexed collections are represented recursively in X.
@@ -1077,6 +1094,7 @@ type BashPPRange struct {
 	Define Pos
 	Range  Pos
 	Chan   *Word
+	Expr   BashPPExpr
 	Body   *Block
 }
 

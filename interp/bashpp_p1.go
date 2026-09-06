@@ -382,6 +382,25 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 			}
 			return
 		}
+		if _, ok := d.Expr.(*syntax.BashPPSliceExpr); ok {
+			value, meta, err := r.bashPPReadExpr(d.Expr)
+			if err != nil {
+				r.errf("%v\n", err)
+				r.exit = exitStatus{code: 2}
+				return
+			}
+			name := d.Lhs[0].Value
+			r.bashPPDeclareName(name, expand.NewObject(value))
+			cell := r.bashPPScope.lookup(name)
+			cell.object = &bashPPObjectIdentity{owner: name, collection: meta}
+			if root, rootOK := bashPPCollectionRoot(d.Expr); rootOK {
+				if source := r.bashPPScope.lookup(root); source != nil && source.object != nil {
+					cell.object = source.object
+				}
+			}
+			cell.valueMeta = meta
+			return
+		}
 		if _, ok := d.Expr.(*syntax.BashPPSelectorExpr); ok {
 			value, meta, err := r.bashPPReadExpr(d.Expr)
 			if err == nil {

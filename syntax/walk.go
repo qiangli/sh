@@ -269,6 +269,11 @@ func Walk(node Node, f func(Node) bool) {
 	case *BashPPIndexExpr:
 		Walk(node.X, f)
 		Walk(node.Index, f)
+	case *BashPPSliceExpr:
+		Walk(node.X, f)
+		walkNilable(node.Low, f)
+		walkNilable(node.High, f)
+		walkNilable(node.Max, f)
 	case *BashPPSelectorExpr:
 		Walk(node.X, f)
 		Walk(node.Sel, f)
@@ -382,6 +387,7 @@ func Walk(node Node, f func(Node) bool) {
 	case *BashPPRange:
 		walkList(node.Names, f)
 		walkNilable(node.Chan, f)
+		walkNilable(node.Expr, f)
 		walkNilable(node.Body, f)
 	default:
 		panic(fmt.Sprintf("syntax.Walk: unexpected node type %T", node))

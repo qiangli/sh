@@ -232,6 +232,16 @@ func (r *Runner) bashPPEvalTypedValue(expr syntax.BashPPExpr, expected syntax.Ba
 		value, meta = bashPPCopyArrayValue(value, meta)
 		return value, meta, nil
 	}
+	if _, ok := expr.(*syntax.BashPPSliceExpr); ok {
+		value, meta, err := r.bashPPReadExpr(expr)
+		if err != nil {
+			return nil, nil, err
+		}
+		if err := r.bashPPCheckTypedValue(value, meta, expected); err != nil {
+			return nil, nil, err
+		}
+		return value, meta, nil
+	}
 	if _, ok := expr.(*syntax.BashPPSelectorExpr); ok {
 		value, meta, err := r.bashPPReadExpr(expr)
 		if err != nil {
@@ -383,6 +393,44 @@ func (r *Runner) bashPPReadExpr(expr syntax.BashPPExpr) (any, *bashPPCollectionM
 			return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-BOUNDS: index %d out of bounds for length %d", i, len(sequence))
 		}
 		return sequence[i], meta.sequence[i], nil
+	case *syntax.BashPPSliceExpr:
+		value, meta, err := r.bashPPReadExpr(x.X)
+		if err != nil {
+			return nil, nil, err
+		}
+		if pointer, ok := value.(*bashPPPointer); ok {
+			if pointer == nil {
+				return nil, nil, fmt.Errorf("BASHPP-ENIL-DEREF: dereference of nil pointer")
+			}
+			value, meta, _, err = pointer.read()
+			if err != nil {
+				return nil, nil, err
+			}
+		}
+		if meta == nil || meta.kind == "struct" || meta.kind == "map" {
+			return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-SLICE: value is not sliceable")
+		}
+		collection := meta.typ.(*syntax.BashPPCollectionType)
+		sequence, ok := value.([]any)
+		if !ok && value != nil {
+			return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-SLICE: value is not sliceable")
+		}
+		low, high, max, err := r.bashPPSliceBounds(x, len(sequence), cap(sequence), meta.kind == "slice")
+		if err != nil {
+			return nil, nil, err
+		}
+		var out []any
+		var childSeq []*bashPPCollectionMeta
+		if x.SecondColon.IsValid() {
+			out = sequence[low:high:max]
+			childSeq = meta.sequence[low:high:max]
+		} else {
+			out = sequence[low:high]
+			childSeq = meta.sequence[low:high]
+		}
+		childType := &syntax.BashPPCollectionType{Kind: "slice", Element: collection.Element}
+		child := &bashPPCollectionMeta{kind: "slice", typ: childType, sequence: childSeq}
+		return out, child, nil
 	}
 	return nil, nil, fmt.Errorf("BASHPP-ESELECTOR-EXPR: unsupported structured expression")
 }
@@ -476,6 +524,10 @@ func (r *Runner) bashPPStructuredAssign(target, rhs syntax.BashPPExpr) {
 			break
 		}
 		if parentMeta.kind == "map" {
+			if parent == nil {
+				err = fmt.Errorf("BASHPP-ENIL-MAP: assignment to nil map")
+				break
+			}
 			key, _, keyErr := r.bashPPEvalElement(x.Index, collection.Key)
 			if keyErr != nil {
 				err = keyErr

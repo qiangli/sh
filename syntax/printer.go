@@ -1314,6 +1314,23 @@ func (p *Printer) bashppExpr(expr BashPPExpr) {
 		p.writeLit("[")
 		p.bashppExpr(x.Index)
 		p.writeLit("]")
+	case *BashPPSliceExpr:
+		p.bashppExpr(x.X)
+		p.writeLit("[")
+		if x.Low != nil {
+			p.bashppExpr(x.Low)
+		}
+		p.writeLit(":")
+		if x.High != nil {
+			p.bashppExpr(x.High)
+		}
+		if x.SecondColon.IsValid() {
+			p.writeLit(":")
+			if x.Max != nil {
+				p.bashppExpr(x.Max)
+			}
+		}
+		p.writeLit("]")
 	case *BashPPSelectorExpr:
 		p.bashppExpr(x.X)
 		p.writeLit(".")

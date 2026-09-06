@@ -271,12 +271,13 @@ func (r *Runner) bashPPCollectionZero(typ syntax.BashPPTypeExpr) (any, *bashPPCo
 	case *syntax.BashPPCollectionType:
 		meta := &bashPPCollectionMeta{kind: x.Kind, typ: x}
 		if x.Kind == "map" {
-			meta.mapping = make(map[string]*bashPPCollectionMeta)
-			return map[string]any{}, meta
+			return nil, meta
 		}
 		length := 0
 		if x.Kind == "array" {
 			length, _ = strconv.Atoi(x.Length.Value)
+		} else {
+			return nil, meta
 		}
 		values := make([]any, length)
 		meta.sequence = make([]*bashPPCollectionMeta, length)
@@ -309,6 +310,16 @@ func (r *Runner) bashPPEvalElement(expr syntax.BashPPExpr, expected syntax.BashP
 			return nil, nil, err
 		}
 		value, meta = bashPPCopyArrayValue(value, meta)
+		return value, meta, nil
+	}
+	if _, sliced := expr.(*syntax.BashPPSliceExpr); sliced {
+		value, meta, err := r.bashPPReadExpr(expr)
+		if err != nil {
+			return nil, nil, err
+		}
+		if err := r.bashPPCheckTypedValue(value, meta, expected); err != nil {
+			return nil, nil, err
+		}
 		return value, meta, nil
 	}
 	if _, selected := expr.(*syntax.BashPPSelectorExpr); selected {
@@ -405,6 +416,53 @@ func (r *Runner) bashPPCollectionIndex(expr syntax.BashPPExpr) (int, error) {
 	return int(n), nil
 }
 
+func (r *Runner) bashPPSliceBound(expr syntax.BashPPExpr, fallback int) (int, error) {
+	if expr == nil {
+		return fallback, nil
+	}
+	v, err := r.bashPPEvalScalarExpr(expr)
+	if err != nil {
+		return 0, fmt.Errorf("BASHPP-ECOLLECTION-SLICE: %v", err)
+	}
+	n, ok := constant.Int64Val(v.value)
+	if !ok || int64(int(n)) != n {
+		return 0, fmt.Errorf("BASHPP-ECOLLECTION-SLICE: bound must be an integer")
+	}
+	return int(n), nil
+}
+
+func (r *Runner) bashPPSliceBounds(expr *syntax.BashPPSliceExpr, length, capacity int, sliceOperand bool) (int, int, int, error) {
+	low, err := r.bashPPSliceBound(expr.Low, 0)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	high, err := r.bashPPSliceBound(expr.High, length)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	max := capacity
+	if expr.SecondColon.IsValid() {
+		max, err = r.bashPPSliceBound(expr.Max, capacity)
+		if err != nil {
+			return 0, 0, 0, err
+		}
+	}
+	highLimit := length
+	if sliceOperand {
+		highLimit = capacity
+	}
+	if low < 0 || high < low || high > highLimit || max < high || max > capacity {
+		if expr.SecondColon.IsValid() {
+			return 0, 0, 0, fmt.Errorf("BASHPP-ECOLLECTION-SLICE: slice bounds out of range [%d:%d:%d] with length %d and capacity %d", low, high, max, length, capacity)
+		}
+		return 0, 0, 0, fmt.Errorf("BASHPP-ECOLLECTION-SLICE: slice bounds out of range [%d:%d] with length %d", low, high, length)
+	}
+	if !expr.SecondColon.IsValid() {
+		max = capacity
+	}
+	return low, high, max, nil
+}
+
 func (r *Runner) bashPPCollectionRead(index *syntax.BashPPIndexExpr) (any, *bashPPCollectionMeta, error) {
 	return r.bashPPReadExpr(index)
 }
@@ -414,6 +472,8 @@ func bashPPCollectionRoot(expr syntax.BashPPExpr) (string, bool) {
 	case *syntax.BashPPIdent:
 		return x.Name.Value, true
 	case *syntax.BashPPIndexExpr:
+		return bashPPCollectionRoot(x.X)
+	case *syntax.BashPPSliceExpr:
 		return bashPPCollectionRoot(x.X)
 	case *syntax.BashPPSelectorExpr:
 		return bashPPCollectionRoot(x.X)
@@ -429,6 +489,21 @@ func bashPPExprText(expr syntax.BashPPExpr) string {
 		return x.Value.Value
 	case *syntax.BashPPIndexExpr:
 		return bashPPExprText(x.X) + "[" + bashPPExprText(x.Index) + "]"
+	case *syntax.BashPPSliceExpr:
+		low, high, max := "", "", ""
+		if x.Low != nil {
+			low = bashPPExprText(x.Low)
+		}
+		if x.High != nil {
+			high = bashPPExprText(x.High)
+		}
+		if x.Max != nil {
+			max = bashPPExprText(x.Max)
+		}
+		if x.SecondColon.IsValid() {
+			return bashPPExprText(x.X) + "[" + low + ":" + high + ":" + max + "]"
+		}
+		return bashPPExprText(x.X) + "[" + low + ":" + high + "]"
 	case *syntax.BashPPSelectorExpr:
 		return bashPPExprText(x.X) + "." + x.Sel.Value
 	}
@@ -489,6 +564,11 @@ func (r *Runner) bashPPCollectionAssign(target *syntax.BashPPIndexExpr, rhs synt
 		return
 	}
 	if meta.kind == "map" {
+		if parent == nil {
+			r.errf("BASHPP-ENIL-MAP: assignment to nil map\n")
+			r.exit = exitStatus{code: 2}
+			return
+		}
 		key, _, keyErr := r.bashPPEvalElement(target.Index, typ.Key)
 		if keyErr != nil {
 			r.errf("BASHPP-ECOLLECTION-KEY: %v\n", keyErr)

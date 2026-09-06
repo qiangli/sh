@@ -202,26 +202,22 @@ func (p *Parser) bashppRange(stmt *Stmt) bool {
 	p.bashppControls = append(p.bashppControls, bashppControlRange)
 	rng := &BashPPRange{For: p.pos}
 	p.next()
-	// Exactly one iteration variable, or none. Go admits a second value only
-	// for maps, slices and strings; a channel yields one element per receive,
-	// so `for v, ok := range ch` does not compile there and is not spelled
-	// here either — accepting it would build a tree no interpreter can run.
 	if !(p.tok == _LitWord && p.val == "range") {
-		if p.tok != _LitWord {
+		var lhs []*Word
+		for p.tok == _LitWord && p.val != ":=" && len(lhs) < 3 {
+			lhs = append(lhs, p.getWord())
+		}
+		names, ok := bashppShortLHS(lhs)
+		if !ok || len(names) > 2 {
 			txn.rollback(p)
 			return false
 		}
-		lit := bashppBareLit(p.getWord())
-		if lit == nil || !bashppIsIdent(lit.Value) {
-			txn.rollback(p)
-			return false
-		}
-		rng.Names = append(rng.Names, lit)
 		op := bashppBareLit(p.getWord())
 		if op == nil || op.Value != ":=" {
 			txn.rollback(p)
 			return false
 		}
+		rng.Names = names
 		rng.Define = op.Pos()
 	}
 	if !(p.tok == _LitWord && p.val == "range") {
@@ -231,11 +227,19 @@ func (p *Parser) bashppRange(stmt *Stmt) bool {
 	rng.Range = p.pos
 	p.next()
 	ch := p.getWord()
-	if ch == nil || !bashppChanOperand(ch) {
+	if ch == nil {
 		txn.rollback(p)
 		return false
 	}
 	rng.Chan = ch
+	if expr := bashppIndexExpr(ch); expr != nil {
+		rng.Expr = expr
+	} else if expr := bashppScalarExpr(ch); expr != nil {
+		rng.Expr = expr
+	} else if !bashppChanOperand(ch) {
+		txn.rollback(p)
+		return false
+	}
 	p.got(_Newl)
 	if !(p.tok == _LitWord && (p.val == "{" || p.val == "{}")) {
 		txn.rollback(p)

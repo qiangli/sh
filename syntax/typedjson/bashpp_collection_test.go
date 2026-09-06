@@ -13,7 +13,7 @@ import (
 )
 
 func TestBashPPCollectionRoundTrip(t *testing.T) {
-	const src = "func main() {\n\tx := map[string][]int{\"a\": {1, 2}}\n\ty := x[\"a\"][0]\n\tx[\"a\"][1] = 3\n}\n"
+	const src = "func main() {\n\tx := map[string][]int{\"a\": {1, 2}}\n\ty := x[\"a\"][0]\n\tz := x[\"a\"][0:2]\n\tx[\"a\"][1] = 3\n}\n"
 	f, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(src), "")
 	if err != nil {
 		t.Fatal(err)
@@ -22,7 +22,7 @@ func TestBashPPCollectionRoundTrip(t *testing.T) {
 	if err := typedjson.Encode(&encoded, f); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"BashPPCompositeLit", "BashPPCollectionType", "BashPPIndexExpr"} {
+	for _, name := range []string{"BashPPCompositeLit", "BashPPCollectionType", "BashPPIndexExpr", "BashPPSliceExpr"} {
 		if !strings.Contains(encoded.String(), `"Type":"`+name+`"`) {
 			t.Fatalf("JSON missed %s: %s", name, encoded.String())
 		}

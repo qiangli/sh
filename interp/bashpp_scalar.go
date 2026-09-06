@@ -8,6 +8,7 @@ import (
 	"go/constant"
 	"go/token"
 	"strconv"
+	"strings"
 
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/syntax"
@@ -25,6 +26,9 @@ func (r *Runner) bashPPEvalScalarExpr(expr syntax.BashPPExpr) (bashPPScalar, err
 	case *syntax.BashPPBasicLit:
 		return bashPPBasicScalar(x)
 	case *syntax.BashPPIdent:
+		if x.Name.Value == "nil" {
+			return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-NIL: nil is not a scalar")
+		}
 		return r.bashPPIdentScalar(x.Name.Value)
 	case *syntax.BashPPParenExpr:
 		return r.bashPPEvalScalarExpr(x.X)
@@ -35,6 +39,16 @@ func (r *Runner) bashPPEvalScalarExpr(expr syntax.BashPPExpr) (bashPPScalar, err
 		}
 		return bashPPUnaryScalar(bashPPOpToken(x.Op.Value), v)
 	case *syntax.BashPPBinaryExpr:
+		op := bashPPOpToken(x.Op.Value)
+		if op == token.EQL || op == token.NEQ {
+			ok, err := r.bashPPCompareExpr(x.X, op, x.Y)
+			if err == nil {
+				return bashPPScalar{value: constant.MakeBool(ok)}, nil
+			}
+			if !bashPPComparableFallback(err) {
+				return bashPPScalar{}, err
+			}
+		}
 		left, err := r.bashPPEvalScalarExpr(x.X)
 		if err != nil {
 			return bashPPScalar{}, err
@@ -71,6 +85,10 @@ func (r *Runner) bashPPEvalScalarExpr(expr syntax.BashPPExpr) (bashPPScalar, err
 		return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-OPERAND: indexed value is not a scalar")
 	}
 	return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-FORM: unsupported scalar expression %T", expr)
+}
+
+func bashPPComparableFallback(err error) bool {
+	return strings.HasPrefix(err.Error(), "BASHPP-ECOMPARE-SCALAR:")
 }
 
 func bashPPBasicScalar(x *syntax.BashPPBasicLit) (bashPPScalar, error) {
@@ -259,6 +277,174 @@ func bashPPCompareScalar(left constant.Value, op token.Token, right constant.Val
 		}
 	}()
 	return constant.Compare(left, op, right), nil
+}
+
+type bashPPComparableValue struct {
+	value      any
+	meta       *bashPPCollectionMeta
+	nilLiteral bool
+}
+
+func (r *Runner) bashPPCompareExpr(left syntax.BashPPExpr, op token.Token, right syntax.BashPPExpr) (bool, error) {
+	lv, err := r.bashPPComparableExpr(left)
+	if err != nil {
+		return false, err
+	}
+	rv, err := r.bashPPComparableExpr(right)
+	if err != nil {
+		return false, err
+	}
+	ok, err := bashPPCompareValues(lv.value, lv.meta, lv.nilLiteral, rv.value, rv.meta, rv.nilLiteral)
+	if err != nil {
+		return false, err
+	}
+	if op == token.NEQ {
+		ok = !ok
+	}
+	return ok, nil
+}
+
+func (r *Runner) bashPPComparableExpr(expr syntax.BashPPExpr) (bashPPComparableValue, error) {
+	switch x := expr.(type) {
+	case *syntax.BashPPParenExpr:
+		return r.bashPPComparableExpr(x.X)
+	case *syntax.BashPPIdent:
+		if x.Name.Value == "nil" {
+			return bashPPComparableValue{nilLiteral: true}, nil
+		}
+		if cell := r.bashPPScope.lookup(x.Name.Value); cell != nil {
+			if cell.pointer {
+				return bashPPComparableValue{value: cell.pointerValue, meta: bashPPPointerMeta(cell.declType)}, nil
+			}
+			if cell.vr.Kind == expand.Object {
+				return bashPPComparableValue{value: cell.vr.Obj, meta: bashPPCellMeta(cell)}, nil
+			}
+		}
+		return bashPPComparableValue{}, fmt.Errorf("BASHPP-ECOMPARE-SCALAR: scalar")
+	case *syntax.BashPPAddressExpr, *syntax.BashPPNewExpr:
+		ptr, err := r.bashPPPointerExprValue(expr)
+		if err != nil {
+			return bashPPComparableValue{}, err
+		}
+		return bashPPComparableValue{value: ptr, meta: bashPPPointerMeta(&syntax.BashPPPointerType{Element: ptr.elem})}, nil
+	case *syntax.BashPPDerefExpr, *syntax.BashPPIndexExpr, *syntax.BashPPSliceExpr, *syntax.BashPPSelectorExpr:
+		value, meta, err := r.bashPPReadExpr(expr)
+		if err != nil {
+			return bashPPComparableValue{}, err
+		}
+		return bashPPComparableValue{value: value, meta: meta}, nil
+	}
+	return bashPPComparableValue{}, fmt.Errorf("BASHPP-ECOMPARE-SCALAR: scalar")
+}
+
+func bashPPCompareValues(left any, leftMeta *bashPPCollectionMeta, leftNilLiteral bool, right any, rightMeta *bashPPCollectionMeta, rightNilLiteral bool) (bool, error) {
+	if leftNilLiteral || rightNilLiteral {
+		if leftNilLiteral && rightNilLiteral {
+			return false, fmt.Errorf("BASHPP-ECOMPARE-TYPE: nil cannot be compared with nil")
+		}
+		value, meta := left, leftMeta
+		if leftNilLiteral {
+			value, meta = right, rightMeta
+		}
+		if bashPPPointerComparable(meta) || bashPPNilComparable(meta) {
+			return value == nil, nil
+		}
+		return false, fmt.Errorf("BASHPP-ECOMPARE-TYPE: value cannot be compared with nil")
+	}
+	if leftMeta == nil && rightMeta == nil {
+		return bashPPCompareScalarAny(left, right)
+	}
+	if bashPPPointerComparable(leftMeta) || bashPPPointerComparable(rightMeta) {
+		if !bashPPPointerComparable(leftMeta) || !bashPPPointerComparable(rightMeta) || bashPPTypeText(leftMeta.typ) != bashPPTypeText(rightMeta.typ) {
+			return false, fmt.Errorf("BASHPP-ECOMPARE-TYPE: mismatched pointer comparison")
+		}
+		return bashPPPointerEqual(left, right), nil
+	}
+	if leftMeta == nil || rightMeta == nil {
+		return false, fmt.Errorf("BASHPP-ECOMPARE-TYPE: mismatched comparison")
+	}
+	if leftMeta.kind != rightMeta.kind || bashPPTypeText(leftMeta.typ) != bashPPTypeText(rightMeta.typ) {
+		return false, fmt.Errorf("BASHPP-ECOMPARE-TYPE: mismatched comparison")
+	}
+	switch leftMeta.kind {
+	case "slice", "map":
+		return false, fmt.Errorf("BASHPP-ECOMPARE-NONCOMPARABLE: %s values can only be compared to nil", leftMeta.kind)
+	case "array", "inferred-array":
+		leftSeq := left.([]any)
+		rightSeq := right.([]any)
+		if len(leftSeq) != len(rightSeq) {
+			return false, nil
+		}
+		for i := range leftSeq {
+			ok, err := bashPPCompareValues(leftSeq[i], leftMeta.sequence[i], false, rightSeq[i], rightMeta.sequence[i], false)
+			if err != nil {
+				return false, err
+			}
+			if !ok {
+				return false, nil
+			}
+		}
+		return true, nil
+	case "struct":
+		leftMap := left.(map[string]any)
+		rightMap := right.(map[string]any)
+		for field, child := range leftMeta.mapping {
+			ok, err := bashPPCompareValues(leftMap[field], child, false, rightMap[field], rightMeta.mapping[field], false)
+			if err != nil {
+				return false, err
+			}
+			if !ok {
+				return false, nil
+			}
+		}
+		return true, nil
+	}
+	return false, fmt.Errorf("BASHPP-ECOMPARE-NONCOMPARABLE: unsupported comparison")
+}
+
+func bashPPPointerComparable(meta *bashPPCollectionMeta) bool {
+	return meta != nil && meta.kind == "pointer"
+}
+
+func bashPPNilComparable(meta *bashPPCollectionMeta) bool {
+	return meta != nil && (meta.kind == "slice" || meta.kind == "map")
+}
+
+func bashPPCompareScalarAny(left, right any) (bool, error) {
+	switch l := left.(type) {
+	case nil:
+		return right == nil, nil
+	case string:
+		r, ok := right.(string)
+		return ok && l == r, nil
+	case bool:
+		r, ok := right.(bool)
+		return ok && l == r, nil
+	case int:
+		r, ok := right.(int)
+		return ok && l == r, nil
+	case float64:
+		r, ok := right.(float64)
+		return ok && l == r, nil
+	}
+	return false, fmt.Errorf("BASHPP-ECOMPARE-NONCOMPARABLE: unsupported scalar comparison")
+}
+
+func bashPPPointerEqual(left, right any) bool {
+	lp, _ := left.(*bashPPPointer)
+	rp, _ := right.(*bashPPPointer)
+	if lp == nil || rp == nil {
+		return lp == nil && rp == nil
+	}
+	if lp.target != rp.target || len(lp.path) != len(rp.path) {
+		return false
+	}
+	for i := range lp.path {
+		if lp.path[i] != rp.path[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func bashPPBinaryOp(left constant.Value, op token.Token, right constant.Value) (value constant.Value, err error) {

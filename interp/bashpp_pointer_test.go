@@ -45,7 +45,7 @@ main()
 	out, stderr, err := runBashSharpCall(t, src)
 	qt.Assert(t, qt.IsNil(err))
 	qt.Assert(t, qt.Equals(stderr, ""))
-	qt.Assert(t, qt.Equals(out, "1:3:5:7:9:10:0:0:[]:{}\n"))
+	qt.Assert(t, qt.Equals(out, "1:3:5:7:9:10:0:0:null:null\n"))
 }
 
 func TestBashPPPointerDiagnostics(t *testing.T) {
