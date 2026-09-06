@@ -3,10 +3,11 @@ id: 141323c099a4
 kind: task
 title: Bash++ compact go closure requires a shell ';' separator
 seq: 20
-status: todo
+status: done
 priority: p2
 created: 2026-09-06T10:21:21.014472Z
 sprint: 115
+closed: 2026-09-06T14:01:27.967066Z
 ---
 
 Observed on sh master 586f87b6 (parse-only).

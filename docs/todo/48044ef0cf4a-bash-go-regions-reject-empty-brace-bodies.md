@@ -3,10 +3,11 @@ id: 48044ef0cf4a
 kind: task
 title: Bash++ Go regions reject empty brace bodies
 seq: 19
-status: todo
+status: done
 priority: p2
 created: 2026-09-06T10:20:50.637195Z
 sprint: 115
+closed: 2026-09-06T14:01:27.902038Z
 ---
 
 Observed on sh master 586f87b6 (parse-only; no interpreter involvement).
