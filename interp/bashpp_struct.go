@@ -43,6 +43,8 @@ func (r *Runner) bashPPValidateValueType(typ syntax.BashPPTypeExpr, seen map[str
 		return r.bashPPValidateCollectionType(x)
 	case *syntax.BashPPPointerType:
 		return r.bashPPValidatePointerType(x)
+	case *syntax.BashPPInterfaceType:
+		return r.bashPPValidateInterfaceType("anonymous", x)
 	case *syntax.BashPPStructType:
 		seenFields := make(map[string]bool)
 		for _, field := range bashPPFlatFields(x.Fields) {

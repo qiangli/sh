@@ -132,6 +132,18 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 					return
 				}
 			}
+		} else if d.DeclType.Value == "interface" {
+			iface, ok := d.DeclTypeExpr.(*syntax.BashPPInterfaceType)
+			if !ok {
+				r.errf("BASHPP-EINTERFACE-TYPE: malformed interface declaration %s\n", name)
+				r.exit = exitStatus{code: 2}
+				return
+			}
+			if err := r.bashPPValidateInterfaceType(name, iface); err != nil {
+				r.errf("%v\n", err)
+				r.exit = exitStatus{code: 2}
+				return
+			}
 		} else if d.DeclType.Value == "enum" {
 			seen := make(map[string]bool, len(d.EnumMembers))
 			for _, member := range d.EnumMembers {
@@ -196,7 +208,29 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 	var valueMeta *bashPPCollectionMeta
 	var pointerValue *bashPPPointer
 	if d.Site == syntax.StartVar && d.DeclTypeExpr != nil {
-		if pointerType, ok := r.bashPPPointerType(d.DeclTypeExpr); ok {
+		if _, ok := r.bashPPInterfaceType(d.DeclTypeExpr); ok {
+			if d.InitExpr != nil {
+				iv, ifaceVR, err := r.bashPPMakeInterfaceValue(d.InitExpr, d.DeclTypeExpr)
+				if err != nil {
+					r.errf("%v\n", err)
+					r.exit = exitStatus{code: 2}
+					return
+				}
+				vr = ifaceVR
+				defer func() {
+					if cell := r.bashPPScope.lookup(name); cell != nil {
+						cell.interfaceValue = iv
+					}
+				}()
+			} else {
+				vr = expand.Variable{Set: true, Kind: expand.String}
+				defer func() {
+					if cell := r.bashPPScope.lookup(name); cell != nil {
+						cell.interfaceValue = &bashPPInterfaceValue{nilIface: true}
+					}
+				}()
+			}
+		} else if pointerType, ok := r.bashPPPointerType(d.DeclTypeExpr); ok {
 			if len(d.Init) > 0 {
 				value, _, err := r.bashPPEvalTypedValue(d.InitExpr, d.DeclTypeExpr)
 				// Keep the established receiver construction surface (`var p
@@ -348,6 +382,39 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 		r.bashPPScope = newBashPPScope(nil)
 	}
 	if d.Expr != nil {
+		if assert, ok := d.Expr.(*syntax.BashPPTypeAssertExpr); ok {
+			if assert.TypeToken != nil {
+				r.errf("BASHPP-EASSERT-TYPE: .(type) is only valid in a type switch\n")
+				r.exit = exitStatus{code: 2}
+				return
+			}
+			if len(d.Lhs) != 1 && len(d.Lhs) != 2 {
+				r.errf("assignment mismatch: %d variable(s) but type assertion yields 1 or 2 value(s)\n", len(d.Lhs))
+				r.exit = exitStatus{code: 2}
+				return
+			}
+			values, source, err := r.bashPPTypeAssert(assert, len(d.Lhs) == 2)
+			if err != nil {
+				r.errf("%v\n", err)
+				r.exit = exitStatus{code: 2}
+				return
+			}
+			if r.exit.code != 0 {
+				return
+			}
+			r.bashPPDeclareName(d.Lhs[0].Value, expand.Variable{Set: true, Kind: expand.String, Str: values[0]})
+			target := r.bashPPScope.lookup(d.Lhs[0].Value)
+			if target != nil && source != nil {
+				target.typeName = source.typeName
+				target.declType = source.declType
+				target.pointer, target.nilPointer, target.pointerValue = source.pointer, source.nilPointer, source.pointerValue
+				target.object, target.valueMeta = source.object, source.valueMeta
+			}
+			if len(d.Lhs) == 2 {
+				r.bashPPDeclareName(d.Lhs[1].Value, expand.Variable{Set: true, Kind: expand.String, Str: values[1]})
+			}
+			return
+		}
 		if len(d.Lhs) != 1 {
 			r.errf("assignment mismatch: %d variable(s) but 1 value(s)\n", len(d.Lhs))
 			r.exit = exitStatus{code: 2}
@@ -468,6 +535,9 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 					target.valueMeta = source.valueMeta
 					target.channel, target.channelOwner = source.channel, source.channelOwner
 					target.typeName = source.typeName
+					target.declType = source.declType
+					target.pointer, target.nilPointer, target.pointerValue = source.pointer, source.nilPointer, source.pointerValue
+					target.interfaceValue = source.interfaceValue
 				}
 				return
 			}
@@ -589,6 +659,11 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 					cell.valueMeta = meta
 					return
 				}
+				if source != nil && source.interfaceValue != nil {
+					r.bashPPDeclareName(name, source.vr)
+					r.bashPPScope.lookup(name).interfaceValue = source.interfaceValue
+					return
+				}
 			}
 		}
 		vr := r.bashPPValueInRegion(ctx, d.Rhs, d.GoRegion)
@@ -702,10 +777,16 @@ func (r *Runner) bashPPSwitch(ctx context.Context, sw *syntax.BashPPSwitch) {
 	defer leaveSwitch()
 	r.exit.clear()
 	if sw.Init != nil {
-		r.cmd(ctx, sw.Init)
+		if !sw.TypeSwitch {
+			r.cmd(ctx, sw.Init)
+		}
 		if !r.exit.ok() {
 			return
 		}
+	}
+	if sw.TypeSwitch {
+		r.bashPPTypeSwitch(ctx, sw)
+		return
 	}
 	var tag bashPPScalar
 	var err error

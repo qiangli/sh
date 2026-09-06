@@ -3,6 +3,8 @@
 
 package syntax
 
+import "strings"
+
 // bashppSwitch transactionally recognizes a brace-form expression switch.
 // A switch-like shell command without the complete form is restored intact.
 func (p *Parser) bashppSwitch(stmt *Stmt) bool {
@@ -13,10 +15,39 @@ func (p *Parser) bashppSwitch(stmt *Stmt) bool {
 	p.next()
 
 	parts := make([][]*Word, 1, 2)
+	var typeSwitch *BashPPShortDecl
 	for !(p.tok == _LitWord && (p.val == "{" || p.val == "{}")) {
 		if p.tok == _EOF || p.tok == _Newl || len(parts) > 2 {
 			txn.rollback(p)
 			return false
+		}
+		if p.tok == leftParen && len(parts) == 1 && len(parts[0]) >= 3 {
+			last := bashppBareLit(parts[0][len(parts[0])-1])
+			if last == nil || !strings.HasSuffix(last.Value, ".") {
+				txn.rollback(p)
+				return false
+			}
+			p.next()
+			typeWord := p.getWord()
+			typeLit := bashppBareLit(typeWord)
+			if typeLit == nil || typeLit.Value != "type" || p.tok != rightParen {
+				txn.rollback(p)
+				return false
+			}
+			rparen := p.pos
+			p.next()
+			op := len(parts[0]) - 2
+			opLit := bashppBareLit(parts[0][op])
+			lhs, ok := bashppShortLHS(parts[0][:op])
+			if opLit == nil || opLit.Value != ":=" || !ok || len(lhs) != 1 {
+				txn.rollback(p)
+				return false
+			}
+			rootName := strings.TrimSuffix(last.Value, ".")
+			root := &Lit{ValuePos: last.Pos(), ValueEnd: posAddCol(last.End(), -1), Value: rootName}
+			typeSwitch = &BashPPShortDecl{Lhs: lhs, OpPos: opLit.Pos(), GoRegion: true, Class: ClassR,
+				Expr: &BashPPTypeAssertExpr{X: &BashPPIdent{Name: root}, Dot: root.End(), Lparen: posAddCol(last.End(), 0), TypeToken: typeLit, Rparen: rparen}}
+			continue
 		}
 		if p.tok == semicolon {
 			if len(parts) == 2 {
@@ -47,6 +78,10 @@ func (p *Parser) bashppSwitch(stmt *Stmt) bool {
 			problemPos, problem = sw.Switch, "bash++ switch init must be a scalar short declaration, assignment, or inc-dec statement"
 		}
 		tagWords = parts[1]
+	} else if typeSwitch != nil {
+		sw.Init = typeSwitch
+		sw.TypeSwitch = true
+		tagWords = nil
 	}
 	if len(tagWords) > 0 {
 		sw.Tag = bashppScalarExpr(bashppJoinWords(tagWords))

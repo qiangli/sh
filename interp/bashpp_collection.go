@@ -109,6 +109,8 @@ func bashPPTypeText(typ syntax.BashPPTypeExpr) string {
 		return "struct"
 	case *syntax.BashPPPointerType:
 		return "*" + bashPPTypeText(x.Element)
+	case *syntax.BashPPInterfaceType:
+		return "interface"
 	}
 	return "<inferred>"
 }

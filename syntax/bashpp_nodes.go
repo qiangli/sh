@@ -341,19 +341,20 @@ type BashPPExpr interface {
 	bashPPExprNode()
 }
 
-func (*BashPPBasicLit) bashPPExprNode()     {}
-func (*BashPPIdent) bashPPExprNode()        {}
-func (*BashPPParenExpr) bashPPExprNode()    {}
-func (*BashPPUnaryExpr) bashPPExprNode()    {}
-func (*BashPPBinaryExpr) bashPPExprNode()   {}
-func (*BashPPConvertExpr) bashPPExprNode()  {}
-func (*BashPPIndexExpr) bashPPExprNode()    {}
-func (*BashPPSliceExpr) bashPPExprNode()    {}
-func (*BashPPSelectorExpr) bashPPExprNode() {}
-func (*BashPPCompositeLit) bashPPExprNode() {}
-func (*BashPPAddressExpr) bashPPExprNode()  {}
-func (*BashPPDerefExpr) bashPPExprNode()    {}
-func (*BashPPNewExpr) bashPPExprNode()      {}
+func (*BashPPBasicLit) bashPPExprNode()       {}
+func (*BashPPIdent) bashPPExprNode()          {}
+func (*BashPPParenExpr) bashPPExprNode()      {}
+func (*BashPPUnaryExpr) bashPPExprNode()      {}
+func (*BashPPBinaryExpr) bashPPExprNode()     {}
+func (*BashPPConvertExpr) bashPPExprNode()    {}
+func (*BashPPIndexExpr) bashPPExprNode()      {}
+func (*BashPPSliceExpr) bashPPExprNode()      {}
+func (*BashPPSelectorExpr) bashPPExprNode()   {}
+func (*BashPPCompositeLit) bashPPExprNode()   {}
+func (*BashPPAddressExpr) bashPPExprNode()    {}
+func (*BashPPDerefExpr) bashPPExprNode()      {}
+func (*BashPPNewExpr) bashPPExprNode()        {}
+func (*BashPPTypeAssertExpr) bashPPExprNode() {}
 
 // BashPPBasicLit is an exact scalar literal. Kind uses Go token names (INT,
 // FLOAT, CHAR, STRING), retained as text so typed JSON remains stable.
@@ -370,6 +371,18 @@ type BashPPIdent struct{ Name *Lit }
 
 func (x *BashPPIdent) Pos() Pos { return x.Name.Pos() }
 func (x *BashPPIdent) End() Pos { return x.Name.End() }
+
+type BashPPTypeAssertExpr struct {
+	X         BashPPExpr
+	Dot       Pos
+	Lparen    Pos
+	Assert    BashPPTypeExpr
+	TypeToken *Lit // non-nil for the type-switch guard spelling .(type)
+	Rparen    Pos
+}
+
+func (x *BashPPTypeAssertExpr) Pos() Pos { return x.X.Pos() }
+func (x *BashPPTypeAssertExpr) End() Pos { return posAddCol(x.Rparen, 1) }
 
 type BashPPParenExpr struct {
 	Lparen Pos
@@ -487,6 +500,7 @@ func (*BashPPNamedType) bashPPTypeExprNode()      {}
 func (*BashPPCollectionType) bashPPTypeExprNode() {}
 func (*BashPPStructType) bashPPTypeExprNode()     {}
 func (*BashPPPointerType) bashPPTypeExprNode()    {}
+func (*BashPPInterfaceType) bashPPTypeExprNode()  {}
 
 type BashPPNamedType struct{ Name *Lit }
 
@@ -534,6 +548,40 @@ type BashPPStructType struct {
 
 func (t *BashPPStructType) Pos() Pos { return t.Struct.Pos() }
 func (t *BashPPStructType) End() Pos { return posAddCol(t.Rbrace, 1) }
+
+// BashPPInterfaceType is an anonymous interface type with explicit method
+// specifications. Embedded interfaces and promoted members are intentionally
+// left to the next Story 202 slice.
+type BashPPInterfaceType struct {
+	Interface *Lit
+	Lbrace    Pos
+	Methods   []*BashPPMethodSpec
+	Rbrace    Pos
+}
+
+func (t *BashPPInterfaceType) Pos() Pos { return t.Interface.Pos() }
+func (t *BashPPInterfaceType) End() Pos { return posAddCol(t.Rbrace, 1) }
+
+type BashPPMethodSpec struct {
+	Name      *Lit
+	Params    []*BashPPField
+	Results   []*BashPPField
+	Lparen    Pos
+	Rparen    Pos
+	ResLparen Pos
+	ResRparen Pos
+}
+
+func (s *BashPPMethodSpec) Pos() Pos { return s.Name.Pos() }
+func (s *BashPPMethodSpec) End() Pos {
+	if s.ResRparen.IsValid() {
+		return posAddCol(s.ResRparen, 1)
+	}
+	if len(s.Results) > 0 {
+		return s.Results[len(s.Results)-1].End()
+	}
+	return posAddCol(s.Rparen, 1)
+}
 
 // BashPPCompositeLit is a lowering-ready collection literal. A nil LitType
 // denotes the nested inferred spelling { ... }, whose type comes from its
@@ -753,13 +801,14 @@ func (b *BashPPBranch) End() Pos { return b.Kw.End() }
 // BashPPSwitch is a Go-form expression switch admitted inside a typed Bash++
 // function. A nil Tag is a tagless switch, whose implicit tag is true.
 type BashPPSwitch struct {
-	Switch    Pos
-	Init      Command
-	Semicolon Pos
-	Tag       BashPPExpr
-	Lbrace    Pos
-	Arms      []*BashPPSwitchArm
-	Rbrace    Pos
+	Switch     Pos
+	Init       Command
+	Semicolon  Pos
+	Tag        BashPPExpr
+	TypeSwitch bool
+	Lbrace     Pos
+	Arms       []*BashPPSwitchArm
+	Rbrace     Pos
 }
 
 func (s *BashPPSwitch) Pos() Pos { return s.Switch }

@@ -1298,6 +1298,15 @@ func (p *Printer) bashppExpr(expr BashPPExpr) {
 		p.writeLit("new(")
 		p.bashppType(x.AllocType)
 		p.writeLit(")")
+	case *BashPPTypeAssertExpr:
+		p.bashppExpr(x.X)
+		p.writeLit(".(")
+		if x.TypeToken != nil {
+			p.writeLit("type")
+		} else {
+			p.bashppType(x.Assert)
+		}
+		p.writeLit(")")
 	case *BashPPBinaryExpr:
 		p.bashppExpr(x.X)
 		p.space()
@@ -1399,6 +1408,16 @@ func (p *Printer) bashppType(typ BashPPTypeExpr) {
 	case *BashPPPointerType:
 		p.writeLit("*")
 		p.bashppType(x.Element)
+	case *BashPPInterfaceType:
+		p.writeLit("interface{")
+		for i, spec := range x.Methods {
+			if i > 0 {
+				p.writeLit("; ")
+			}
+			p.writeLit(spec.Name.Value)
+			p.bashppSignature(spec.Params, spec.Results, spec.ResLparen)
+		}
+		p.writeLit("}")
 	default:
 		panic(fmt.Sprintf("unhandled Bash++ type %T", typ))
 	}
@@ -1672,6 +1691,22 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 					p.writeLit(";")
 				}
 				p.spacedString(member.Value, member.Pos())
+			}
+			p.spacedString("}", cmd.Rbrace)
+		}
+		if iface, ok := cmd.DeclTypeExpr.(*BashPPInterfaceType); ok {
+			p.spacedString("{", cmd.Lbrace)
+			for i, spec := range iface.Methods {
+				if i > 0 {
+					p.writeLit(";")
+				}
+				p.spacedString(spec.Name.Value, spec.Name.Pos())
+				if len(spec.Params) > 0 && spec.Params[0].FieldType != nil {
+					p.spacedString(spec.Params[0].FieldType.Value, spec.Params[0].FieldType.Pos())
+				}
+				if len(spec.Results) > 0 && spec.Results[0].FieldType != nil {
+					p.spacedString(spec.Results[0].FieldType.Value, spec.Results[0].FieldType.Pos())
+				}
 			}
 			p.spacedString("}", cmd.Rbrace)
 		}

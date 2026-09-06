@@ -150,19 +150,20 @@ type Runner struct {
 	bashPPDeferDepth int
 	// bashPPConcurrent is intentionally runner-session local.  It is shared
 	// only by Bash++ go tasks, never by shell copies such as subshells.
-	bashPPConcurrent    *bashPPConcurrent
-	bashPPIssuedHandles *bashPPHandleProvenance
-	bashPPCallChannels  []*bashPPChannel
-	bashPPGoTask        bool
-	bashPPChanBoundary  bool
-	bashPPFileRun       bool
-	bashPPTaskFiles     []*os.File
-	bashPPTaskState     *bashPPTaskState
-	bashPPTaskCanceled  bool
-	bashPPTaskFailed    bool
-	bashPPTaskFailCode  uint8
-	bashPPLogicalDepth  int
-	bashPPCustomOpen    bool
+	bashPPConcurrent     *bashPPConcurrent
+	bashPPIssuedHandles  *bashPPHandleProvenance
+	bashPPCallChannels   []*bashPPChannel
+	bashPPCallInterfaces []*bashPPInterfaceValue
+	bashPPGoTask         bool
+	bashPPChanBoundary   bool
+	bashPPFileRun        bool
+	bashPPTaskFiles      []*os.File
+	bashPPTaskState      *bashPPTaskState
+	bashPPTaskCanceled   bool
+	bashPPTaskFailed     bool
+	bashPPTaskFailCode   uint8
+	bashPPLogicalDepth   int
+	bashPPCustomOpen     bool
 
 	// funcSources records the script name active when a function was
 	// defined. Bash reports runtime diagnostics in a function body against

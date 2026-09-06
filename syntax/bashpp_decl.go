@@ -157,6 +157,20 @@ func bashppTypeDecl(ce *CallExpr, redirs []*Redirect) *BashPPDecl {
 			StructFields: fields, Lbrace: ce.Args[3].Pos(), Rbrace: ce.Args[len(ce.Args)-1].Pos(),
 			End_: ce.Args[len(ce.Args)-1].End()}
 	}
+	if !alias && len(ce.Args) >= 5 && ce.Args[2].Lit() == "interface" &&
+		ce.Args[3].Lit() == "{" && ce.Args[len(ce.Args)-1].Lit() == "}" {
+		methods := bashppInterfaceMethodSpecs(ce.Args[4 : len(ce.Args)-1])
+		if methods == nil {
+			return nil
+		}
+		m := RecognizeStartSite(kw.Value + " " + name.Value)
+		if m.Site != StartTypeDecl {
+			return nil
+		}
+		iface := &BashPPInterfaceType{Interface: bashppBareLit(ce.Args[2]), Lbrace: ce.Args[3].Pos(), Methods: methods, Rbrace: ce.Args[len(ce.Args)-1].Pos()}
+		return &BashPPDecl{Site: m.Site, Kw: kw, Name: name, DeclType: bashppBareLit(ce.Args[2]), DeclTypeExpr: iface,
+			Lbrace: ce.Args[3].Pos(), Rbrace: ce.Args[len(ce.Args)-1].Pos(), End_: ce.Args[len(ce.Args)-1].End()}
+	}
 	if !alias && len(ce.Args) >= 6 && ce.Args[2].Lit() == "enum" &&
 		ce.Args[3].Lit() == "{" && ce.Args[len(ce.Args)-1].Lit() == "}" {
 		members := make([]*Lit, 0, len(ce.Args)-5)
@@ -198,6 +212,39 @@ func bashppTypeDecl(ce *CallExpr, redirs []*Redirect) *BashPPDecl {
 		return nil
 	}
 	return &BashPPDecl{Site: m.Site, Kw: kw, Name: name, DeclType: typ, DeclTypeExpr: typeExpr, Alias: alias, End_: typeWord.End()}
+}
+
+func bashppInterfaceMethodSpecs(words []*Word) []*BashPPMethodSpec {
+	if len(words) == 0 {
+		return []*BashPPMethodSpec{}
+	}
+	if len(words) != 3 && len(words)%2 != 0 {
+		return nil
+	}
+	var methods []*BashPPMethodSpec
+	for i := 0; i < len(words); i += 2 {
+		name := bashppBareLit(words[i])
+		if name == nil || !bashppIsIdent(name.Value) {
+			return nil
+		}
+		spec := &BashPPMethodSpec{Name: name}
+		param := bashppTypeLit(words[i+1])
+		paramExpr := bashppTypeExpr(words[i+1])
+		if param == nil || paramExpr == nil {
+			return nil
+		}
+		spec.Params = []*BashPPField{{FieldType: param, FieldTypeExpr: paramExpr}}
+		if len(words) == 3 {
+			result := bashppTypeLit(words[2])
+			resultExpr := bashppTypeExpr(words[2])
+			if result == nil || resultExpr == nil {
+				return nil
+			}
+			spec.Results = []*BashPPField{{FieldType: result, FieldTypeExpr: resultExpr}}
+		}
+		methods = append(methods, spec)
+	}
+	return methods
 }
 
 func bashppTypeLit(w *Word) *Lit {

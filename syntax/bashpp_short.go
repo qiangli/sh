@@ -138,6 +138,12 @@ func bashppConvertExpr(expr goast.Expr, source string, pos func(gotoken.Pos) Pos
 			return out
 		case *goast.SelectorExpr:
 			return &BashPPSelectorExpr{X: convert(x.X), Dot: pos(x.Sel.Pos() - 1), Sel: lit(x.Sel.Pos(), x.Sel.End(), x.Sel.Name)}
+		case *goast.TypeAssertExpr:
+			out := &BashPPTypeAssertExpr{X: convert(x.X), Dot: pos(x.Lparen - 1), Lparen: pos(x.Lparen), Rparen: pos(x.Rparen)}
+			if x.Type != nil {
+				out.Assert = convertType(x.Type)
+			}
+			return out
 		case *goast.CompositeLit:
 			out := &BashPPCompositeLit{LitType: convertType(x.Type), Lbrace: pos(x.Lbrace), Rbrace: pos(x.Rbrace)}
 			for _, raw := range x.Elts {
@@ -187,6 +193,35 @@ func bashppConvertType(e goast.Expr, pos func(gotoken.Pos) Pos, lit func(gotoken
 				entry.Names = append(entry.Names, lit(name.Pos(), name.End(), name.Name))
 			}
 			out.Fields = append(out.Fields, entry)
+		}
+		return out
+	case *goast.InterfaceType:
+		out := &BashPPInterfaceType{Interface: lit(x.Interface, x.Interface+9, "interface"), Lbrace: pos(x.Methods.Opening), Rbrace: pos(x.Methods.Closing)}
+		for _, field := range x.Methods.List {
+			ft, ok := field.Type.(*goast.FuncType)
+			if !ok || len(field.Names) != 1 {
+				return nil
+			}
+			spec := &BashPPMethodSpec{Name: lit(field.Names[0].Pos(), field.Names[0].End(), field.Names[0].Name),
+				Lparen: pos(ft.Params.Opening), Rparen: pos(ft.Params.Closing)}
+			for _, param := range ft.Params.List {
+				entry := &BashPPField{FieldTypeExpr: bashppConvertType(param.Type, pos, lit), FieldType: lit(param.Type.Pos(), param.Type.End(), bashppGoTypeText(param.Type))}
+				for _, name := range param.Names {
+					entry.Names = append(entry.Names, lit(name.Pos(), name.End(), name.Name))
+				}
+				spec.Params = append(spec.Params, entry)
+			}
+			if ft.Results != nil {
+				spec.ResLparen, spec.ResRparen = pos(ft.Results.Opening), pos(ft.Results.Closing)
+				for _, result := range ft.Results.List {
+					entry := &BashPPField{FieldTypeExpr: bashppConvertType(result.Type, pos, lit), FieldType: lit(result.Type.Pos(), result.Type.End(), bashppGoTypeText(result.Type))}
+					for _, name := range result.Names {
+						entry.Names = append(entry.Names, lit(name.Pos(), name.End(), name.Name))
+					}
+					spec.Results = append(spec.Results, entry)
+				}
+			}
+			out.Methods = append(out.Methods, spec)
 		}
 		return out
 	case *goast.StarExpr:
@@ -400,6 +435,17 @@ func bashppSupportedTypeAST(expr goast.Expr) bool {
 			}
 		}
 		return true
+	case *goast.InterfaceType:
+		for _, field := range x.Methods.List {
+			ft, ok := field.Type.(*goast.FuncType)
+			if !ok || len(field.Names) != 1 || !bashppIsIdent(field.Names[0].Name) {
+				return false
+			}
+			if !bashppSupportedFieldListTypes(ft.Params) || !bashppSupportedFieldListTypes(ft.Results) {
+				return false
+			}
+		}
+		return true
 	case *goast.StarExpr:
 		return bashppSupportedTypeAST(x.X)
 	}
@@ -429,8 +475,27 @@ func bashppGoTypeText(expr goast.Expr) string {
 		return "struct"
 	case *goast.StarExpr:
 		return "*" + bashppGoTypeText(x.X)
+	case *goast.InterfaceType:
+		return "interface"
 	}
 	return ""
+}
+
+func bashppSupportedFieldListTypes(fields *goast.FieldList) bool {
+	if fields == nil {
+		return true
+	}
+	for _, field := range fields.List {
+		if !bashppSupportedTypeAST(field.Type) {
+			return false
+		}
+		for _, name := range field.Names {
+			if !bashppIsIdent(name.Name) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func bashppGoExprText(expr goast.Expr) string {
@@ -506,7 +571,7 @@ func bashppCompositeCommandDepth(ce *CallExpr) int {
 	words := ce.Args
 	eligible := len(words) >= 4 && words[0].Lit() == "type" &&
 		bashppIsIdent(words[1].Lit()) &&
-		(words[2].Lit() == "struct" || words[2].Lit() == "enum") && words[3].Lit() == "{"
+		(words[2].Lit() == "struct" || words[2].Lit() == "enum" || words[2].Lit() == "interface") && words[3].Lit() == "{"
 	if !eligible && len(words) >= 5 && words[0].Lit() == "var" &&
 		bashppIsIdent(words[1].Lit()) && words[3].Lit() == "=" {
 		eligible = strings.Contains(bashppWordText(bashppJoinWords(words[4:])), "{")
@@ -853,6 +918,8 @@ func bashppSupportedScalarAST(expr goast.Expr) bool {
 			(x.Max == nil || bashppSupportedScalarAST(x.Max))
 	case *goast.SelectorExpr:
 		return bashppContainsDeref(x.X) && bashppSupportedScalarAST(x.X) && bashppIsIdent(x.Sel.Name)
+	case *goast.TypeAssertExpr:
+		return bashppSupportedScalarAST(x.X) && x.Type != nil && bashppSupportedTypeAST(x.Type)
 	}
 	return false
 }
@@ -1094,6 +1161,41 @@ func (p *Parser) bashppParenForm(ce *CallExpr) Command {
 		name = bashppBareLit(ce.Args[0])
 	} else {
 		return nil
+	}
+	if short && p.bashppFuncDepth > 0 && name != nil && strings.HasSuffix(name.Value, ".") {
+		txn := p.beginBashPPTxn()
+		lparen := p.pos
+		p.next()
+		typeWord := p.getWord()
+		typeLit := bashppBareLit(typeWord)
+		typ := bashppTypeExpr(typeWord)
+		typeToken := typeLit != nil && typeLit.Value == "type"
+		if (!typeToken && typ == nil) || p.tok != rightParen {
+			txn.rollback(p)
+			return nil
+		}
+		rparen := p.pos
+		p.next()
+		if !bashppCallTerminator(p.tok) {
+			txn.rollback(p)
+			return nil
+		}
+		txn.commit(p)
+		rootName := strings.TrimSuffix(name.Value, ".")
+		root := &Lit{ValuePos: name.Pos(), ValueEnd: posAddCol(name.End(), -1), Value: rootName}
+		expr := &BashPPTypeAssertExpr{
+			X:      &BashPPIdent{Name: root},
+			Dot:    root.End(),
+			Lparen: lparen,
+			Assert: typ,
+			Rparen: rparen,
+		}
+		if typeToken {
+			expr.TypeToken = typeLit
+		}
+		value := rootName + ".(" + bashppWordText(typeWord) + ")"
+		rhs := &Word{Parts: []WordPart{&Lit{ValuePos: name.Pos(), ValueEnd: posAddCol(rparen, 1), Value: value}}}
+		return &BashPPShortDecl{Lhs: lhs, Rhs: []*Word{rhs}, Class: ClassR, OpPos: opPos, GoRegion: true, Expr: expr}
 	}
 	if name == nil || !bashppSelector(name.Value) {
 		return nil

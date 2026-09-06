@@ -14,3 +14,4 @@
 {"op":"validate","slug":"separate-value-metadata-from-readonly-identity","tool":"codex-gpt-5.5-s","host":"dragon","episode":"weave-issue-19","at":"2026-09-06T23:20:25.21883Z"}
 {"op":"validate","slug":"clone-pointer-targets-as-storage-graph-edges","tool":"codex-gpt-5.5-t","host":"dragon","episode":"weave-issue-20","at":"2026-09-06T23:36:31.487158Z"}
 {"op":"validate","slug":"separate-value-metadata-from-readonly-identity","tool":"codex-gpt-5.5-t","host":"dragon","episode":"weave-issue-20","at":"2026-09-06T23:36:31.520701Z"}
+{"op":"add","slug":"carry-typed-interface-provenance-beside-shell-strings","tool":"codex-gpt-5.5-v","host":"dragon","episode":"weave-issue-22","at":"2026-09-06T23:59:25.879847Z"}

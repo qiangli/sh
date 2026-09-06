@@ -62,11 +62,12 @@ type bashPPCell struct {
 	// typeName is non-empty for a value of a script-declared named type.
 	// Pointer/nilPointer retain identity in-process; the visible shell value
 	// remains vr, so typed values never need a lossy JSON representation.
-	typeName     string
-	pointer      bool
-	nilPointer   bool
-	declType     syntax.BashPPTypeExpr
-	pointerValue *bashPPPointer
+	typeName       string
+	pointer        bool
+	nilPointer     bool
+	declType       syntax.BashPPTypeExpr
+	pointerValue   *bashPPPointer
+	interfaceValue *bashPPInterfaceValue
 	// constant marks a `const` binding. It is kept beside vr.ReadOnly rather
 	// than derived from it because the shell's readonly machinery is what
 	// vr.ReadOnly drives, and the two answer to different owners: `declare -r`
@@ -227,6 +228,11 @@ func (c *bashPPCloner) cloneCell(cell *bashPPCell) *bashPPCell {
 	}
 	if cell.pointerValue != nil {
 		dup.pointerValue = c.clonePointer(cell.pointerValue)
+	}
+	if cell.interfaceValue != nil {
+		iface := *cell.interfaceValue
+		iface.cell = c.cloneCell(cell.interfaceValue.cell)
+		dup.interfaceValue = &iface
 	}
 	return copied
 }

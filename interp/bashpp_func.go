@@ -520,25 +520,32 @@ func (r *Runner) bashPPCallValues(c *syntax.BashPPCall, fn *bashPPFunc) ([]strin
 	// argument expansion may itself invoke a Bash++ function, whose ephemeral
 	// call metadata must not overwrite the authority belonging to this call.
 	channels := make([]*bashPPChannel, len(c.Args))
+	interfaces := make([]*bashPPInterfaceValue, len(c.Args))
 	for i, word := range c.Args {
 		channel, owner := r.bashPPDirectChannel(word)
 		if owner == r.bashPPConcurrent {
 			channels[i] = channel
 		}
+		if cell := r.bashPPCellForWord(word); cell != nil {
+			interfaces[i] = cell.interfaceValue
+		}
 	}
 	args := r.bashPPCallArgValues(c)
 	r.bashPPCallChannels = nil
+	r.bashPPCallInterfaces = nil
 	names := c.ArgNames
 	positional := len(args) - len(names)
 	if fn.skipArgs > 0 {
 		args = args[fn.skipArgs:]
 		channels = channels[fn.skipArgs:]
+		interfaces = interfaces[fn.skipArgs:]
 		positional -= fn.skipArgs
 	}
 	if len(names) > 0 || bashppHasDefaults(fn.params()) {
 		return r.bashPPBindCall(fn, args, channels, names, positional)
 	}
 	r.bashPPCallChannels = channels
+	r.bashPPCallInterfaces = interfaces
 	return args, true
 }
 
@@ -550,6 +557,7 @@ func (r *Runner) bashPPBindCall(fn *bashPPFunc, supplied []string, suppliedChann
 	params := bashppParams(fn.params())
 	fail := func(format string, args ...any) ([]string, bool) {
 		r.bashPPCallChannels = nil
+		r.bashPPCallInterfaces = nil
 		r.errf(format, args...)
 		r.exit = exitStatus{code: 2}
 		return nil, false
@@ -578,11 +586,15 @@ func (r *Runner) bashPPBindCall(fn *bashPPFunc, supplied []string, suppliedChann
 	}
 	values := make([]string, len(params))
 	channels := make([]*bashPPChannel, len(params))
+	interfaces := make([]*bashPPInterfaceValue, len(params))
 	bound := make([]bool, len(params))
 	for i := 0; i < positional; i++ {
 		values[i], bound[i] = supplied[i], true
 		if i < len(suppliedChannels) {
 			channels[i] = suppliedChannels[i]
+		}
+		if i < len(r.bashPPCallInterfaces) {
+			interfaces[i] = r.bashPPCallInterfaces[i]
 		}
 	}
 	for i, name := range names {
@@ -593,6 +605,9 @@ func (r *Runner) bashPPBindCall(fn *bashPPFunc, supplied []string, suppliedChann
 		values[index], bound[index] = supplied[positional+i], true
 		if source := positional + i; source < len(suppliedChannels) {
 			channels[index] = suppliedChannels[source]
+		}
+		if source := positional + i; source < len(r.bashPPCallInterfaces) {
+			interfaces[index] = r.bashPPCallInterfaces[source]
 		}
 	}
 	for i, param := range params {
@@ -609,6 +624,7 @@ func (r *Runner) bashPPBindCall(fn *bashPPFunc, supplied []string, suppliedChann
 		return fail("BASHPP-EARG-MISSING: %s requires argument %q\n", fn.name(), param.name)
 	}
 	r.bashPPCallChannels = channels
+	r.bashPPCallInterfaces = interfaces
 	return values, true
 }
 
@@ -708,7 +724,9 @@ func (r *Runner) bashPPRewriteCommandArgs(args []*syntax.Word) []*syntax.Word {
 // body's last status (or the code named by a bash-style `return n`).
 func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string) []string {
 	callChannels := r.bashPPCallChannels
+	callInterfaces := r.bashPPCallInterfaces
 	r.bashPPCallChannels = nil
+	r.bashPPCallInterfaces = nil
 	params := bashppParams(fn.params())
 	if !r.bashPPCheckArgs(fn, params, args) {
 		return nil
@@ -750,6 +768,10 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 		if i < len(callChannels) && callChannels[i] != nil {
 			cell := r.bashPPScope.lookup(param.name)
 			cell.channel, cell.channelOwner = callChannels[i], r.bashPPConcurrent
+		}
+		if i < len(callInterfaces) && callInterfaces[i] != nil {
+			cell := r.bashPPScope.lookup(param.name)
+			cell.interfaceValue = callInterfaces[i]
 		}
 		if base := strings.TrimPrefix(param.declared, "*"); base != "" {
 			if _, ok := r.bashPPTypes[base]; ok {
