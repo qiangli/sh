@@ -142,16 +142,18 @@ func bashppTypeDecl(ce *CallExpr, redirs []*Redirect) *BashPPDecl {
 		fields := make([]*BashPPField, 0, len(body)/2)
 		for i := 0; i < len(body); i += 2 {
 			fieldName, fieldType := bashppBareLit(body[i]), bashppTypeLit(body[i+1])
-			if fieldName == nil || !bashppIsIdent(fieldName.Value) || fieldType == nil {
+			fieldTypeExpr := bashppTypeExpr(body[i+1])
+			if fieldName == nil || !bashppIsIdent(fieldName.Value) || fieldType == nil || fieldTypeExpr == nil {
 				return nil
 			}
-			fields = append(fields, &BashPPField{Names: []*Lit{fieldName}, FieldType: fieldType})
+			fields = append(fields, &BashPPField{Names: []*Lit{fieldName}, FieldType: fieldType, FieldTypeExpr: fieldTypeExpr})
 		}
 		m := RecognizeStartSite(kw.Value + " " + name.Value)
 		if m.Site != StartTypeDecl {
 			return nil
 		}
-		return &BashPPDecl{Site: m.Site, Kw: kw, Name: name, DeclType: bashppBareLit(ce.Args[2]),
+		structType := &BashPPStructType{Struct: bashppBareLit(ce.Args[2]), Lbrace: ce.Args[3].Pos(), Fields: fields, Rbrace: ce.Args[len(ce.Args)-1].Pos()}
+		return &BashPPDecl{Site: m.Site, Kw: kw, Name: name, DeclType: bashppBareLit(ce.Args[2]), DeclTypeExpr: structType,
 			StructFields: fields, Lbrace: ce.Args[3].Pos(), Rbrace: ce.Args[len(ce.Args)-1].Pos(),
 			End_: ce.Args[len(ce.Args)-1].End()}
 	}
@@ -205,11 +207,18 @@ func bashppTypeLit(w *Word) *Lit {
 // bashppTypedVarDecl recognizes the named scalar and pointer declarations
 // needed to construct receiver values: `var v T = 1` and `var p *T`.
 func bashppTypedVarDecl(ce *CallExpr, redirs []*Redirect) *BashPPDecl {
-	if ce == nil || len(ce.Assigns) != 0 || len(redirs) != 0 || (len(ce.Args) != 3 && len(ce.Args) != 5) {
+	if ce == nil || len(ce.Assigns) != 0 || len(redirs) != 0 || (len(ce.Args) != 3 && len(ce.Args) < 5) {
 		return nil
 	}
-	kw, name, typ := bashppBareLit(ce.Args[0]), bashppBareLit(ce.Args[1]), bashppBareLit(ce.Args[2])
-	if kw == nil || kw.Value != "var" || name == nil || !bashppIsIdent(name.Value) || typ == nil {
+	kw, name := bashppBareLit(ce.Args[0]), bashppBareLit(ce.Args[1])
+	typ := bashppTypeLit(ce.Args[2])
+	typExpr := bashppTypeExpr(ce.Args[2])
+	if typ == nil {
+		if raw := bashppBareLit(ce.Args[2]); raw != nil && strings.HasPrefix(raw.Value, "*") && bashppIsIdent(strings.TrimPrefix(raw.Value, "*")) {
+			typ = raw
+		}
+	}
+	if kw == nil || kw.Value != "var" || name == nil || !bashppIsIdent(name.Value) || typ == nil || typExpr == nil && !strings.HasPrefix(typ.Value, "*") {
 		return nil
 	}
 	base := strings.TrimPrefix(typ.Value, "*")
@@ -217,14 +226,28 @@ func bashppTypedVarDecl(ce *CallExpr, redirs []*Redirect) *BashPPDecl {
 		return nil
 	}
 	var init []*Word
-	if len(ce.Args) == 5 {
+	if len(ce.Args) >= 5 {
 		eq := bashppBareLit(ce.Args[3])
-		if eq == nil || eq.Value != "=" || !bashppSupportedValue(ce.Args[4]) {
+		value := ce.Args[4]
+		if len(ce.Args) > 5 {
+			value = bashppJoinWords(ce.Args[4:])
+		}
+		if eq == nil || eq.Value != "=" || !bashppSupportedValue(value) {
 			return nil
 		}
-		init = ce.Args[4:5:5]
+		init = []*Word{value}
 	}
-	return &BashPPDecl{Site: StartVar, Kw: kw, Name: name, DeclType: typ, Init: init, End_: ce.Args[len(ce.Args)-1].End()}
+	var initExpr BashPPExpr
+	if len(init) > 0 {
+		if expr := bashppCompositeExpr(init[0]); expr != nil {
+			initExpr = expr
+		} else if expr := bashppIndexExpr(init[0]); expr != nil {
+			initExpr = expr
+		} else {
+			initExpr = bashppScalarExpr(init[0])
+		}
+	}
+	return &BashPPDecl{Site: StartVar, Kw: kw, Name: name, DeclType: typ, DeclTypeExpr: typExpr, Init: init, InitExpr: initExpr, End_: ce.Args[len(ce.Args)-1].End()}
 }
 
 // bashppBareLit returns the word's sole literal part, or nil when the word is

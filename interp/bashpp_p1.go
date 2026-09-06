@@ -112,7 +112,27 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 			r.exit = exitStatus{code: 2}
 			return
 		}
-		if d.DeclType.Value == "enum" {
+		if d.DeclType.Value == "struct" {
+			seenFields := make(map[string]bool)
+			for _, field := range bashPPFlatFields(d.StructFields) {
+				if seenFields[field.name] {
+					r.errf("BASHPP-ESTRUCT-FIELD-DUPLICATE: field %q declared more than once\n", field.name)
+					r.exit = exitStatus{code: 2}
+					return
+				}
+				seenFields[field.name] = true
+				if named, ok := field.typ.(*syntax.BashPPNamedType); ok && named.Name.Value == name {
+					r.errf("BASHPP-ESTRUCT-CYCLE: cyclic field type %s\n", name)
+					r.exit = exitStatus{code: 2}
+					return
+				}
+				if err := r.bashPPValidateValueType(field.typ, make(map[string]bool)); err != nil {
+					r.errf("%v\n", err)
+					r.exit = exitStatus{code: 2}
+					return
+				}
+			}
+		} else if d.DeclType.Value == "enum" {
 			seen := make(map[string]bool, len(d.EnumMembers))
 			for _, member := range d.EnumMembers {
 				if !syntax.ValidName(member.Value) {
@@ -153,10 +173,9 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 			}
 		}
 	}
-	if d.Site == syntax.StartVar && d.DeclType != nil {
-		base := strings.TrimPrefix(d.DeclType.Value, "*")
-		if _, ok := r.bashPPTypes[base]; !ok && !bashPPBuiltinType(base) {
-			r.errf("%sundefined type: %s\n", r.bashErrPrefix(d.Pos()), base)
+	if d.Site == syntax.StartVar && d.DeclTypeExpr != nil {
+		if err := r.bashPPValidateValueType(d.DeclTypeExpr, make(map[string]bool)); err != nil {
+			r.errf("%s%v\n", r.bashErrPrefix(d.Pos()), err)
 			r.exit = exitStatus{code: 2}
 			return
 		}
@@ -166,6 +185,28 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 	// The visible scalar stays in the ordinary shell variable below; the named
 	// type and pointer bits are attached to its lexical cell after declaration.
 	vr := r.bashPPValue(ctx, d.Init)
+	var valueMeta *bashPPCollectionMeta
+	if d.Site == syntax.StartVar && d.DeclTypeExpr != nil {
+		_, _, isStruct := r.bashPPStructFields(d.DeclTypeExpr)
+		_, isCollection := d.DeclTypeExpr.(*syntax.BashPPCollectionType)
+		if d.InitExpr != nil && (isStruct || isCollection) {
+			value, meta, err := r.bashPPEvalTypedValue(d.InitExpr, d.DeclTypeExpr)
+			if err != nil {
+				r.errf("%v\n", err)
+				r.exit = exitStatus{code: 2}
+				return
+			}
+			if meta != nil {
+				vr, valueMeta = expand.NewObject(value), meta
+			}
+		} else if isStruct {
+			value, meta := r.bashPPZeroValue(d.DeclTypeExpr)
+			vr, valueMeta = expand.NewObject(value), meta
+		} else if collection, ok := d.DeclTypeExpr.(*syntax.BashPPCollectionType); ok {
+			value, meta := r.bashPPZeroValue(collection)
+			vr, valueMeta = expand.NewObject(value), meta
+		}
+	}
 	// A declaration which shadows an exported shell variable inherits the
 	// export, so the child process and the script agree on the value. It does
 	// not export a name the shell was not already exporting: a Go declaration
@@ -186,7 +227,7 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 		for i, member := range d.EnumMembers {
 			members[i] = member.Value
 		}
-		r.bashPPTypes[name] = bashPPType{underlying: d.DeclType.Value, alias: d.Alias, members: members}
+		r.bashPPTypes[name] = bashPPType{underlying: d.DeclType.Value, alias: d.Alias, members: members, typeExpr: d.DeclTypeExpr, fields: d.StructFields}
 	}
 	if d.Site == syntax.StartVar && d.DeclType != nil {
 		spelling := d.DeclType.Value
@@ -196,6 +237,14 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 			cell := r.bashPPScope.lookup(name)
 			cell.typeName, cell.pointer = base, pointer
 			cell.nilPointer = pointer && len(d.Init) == 0
+		}
+		if valueMeta != nil {
+			cell := r.bashPPScope.lookup(name)
+			cell.object = &bashPPObjectIdentity{owner: name, collection: valueMeta}
+			cell.valueMeta = valueMeta
+			if named, ok := d.DeclTypeExpr.(*syntax.BashPPNamedType); ok {
+				cell.typeName = named.Name.Value
+			}
 		}
 	}
 }
@@ -260,7 +309,7 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 				r.exit = exitStatus{code: 2}
 				return
 			}
-			value, meta, err := r.bashPPEvalCollection(lit, nil)
+			value, meta, err := r.bashPPEvalComposite(lit, nil)
 			if err != nil {
 				r.errf("%v\n", err)
 				r.exit = exitStatus{code: 2}
@@ -269,10 +318,11 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 			name := d.Lhs[0].Value
 			r.bashPPDeclareName(name, expand.NewObject(value))
 			r.bashPPScope.lookup(name).object = &bashPPObjectIdentity{owner: name, collection: meta}
+			r.bashPPScope.lookup(name).valueMeta = meta
 			return
 		}
-		if index, ok := d.Expr.(*syntax.BashPPIndexExpr); ok {
-			value, meta, err := r.bashPPCollectionRead(index)
+		if _, ok := d.Expr.(*syntax.BashPPIndexExpr); ok {
+			value, meta, err := r.bashPPReadExpr(d.Expr)
 			if err != nil {
 				r.errf("%v\n", err)
 				r.exit = exitStatus{code: 2}
@@ -282,22 +332,60 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 			if meta != nil {
 				value, meta = bashPPCopyArrayValue(value, meta)
 				r.bashPPDeclareName(name, expand.NewObject(value))
-				r.bashPPScope.lookup(name).object = &bashPPObjectIdentity{owner: name, collection: meta}
+				cell := r.bashPPScope.lookup(name)
+				cell.object = &bashPPObjectIdentity{owner: name, collection: meta}
+				if root, rootOK := bashPPCollectionRoot(d.Expr); rootOK {
+					if source := r.bashPPScope.lookup(root); source != nil && source.object != nil {
+						cell.object = source.object
+					}
+				}
+				cell.valueMeta = meta
 			} else {
 				r.bashPPDeclareName(name, expand.Variable{Set: true, Kind: expand.String, Str: fmt.Sprint(value)})
 			}
+			return
+		}
+		if _, ok := d.Expr.(*syntax.BashPPSelectorExpr); ok {
+			value, meta, err := r.bashPPReadExpr(d.Expr)
+			if err == nil {
+				name := d.Lhs[0].Value
+				if meta != nil {
+					value, meta = bashPPCopyArrayValue(value, meta)
+					r.bashPPDeclareName(name, expand.NewObject(value))
+					cell := r.bashPPScope.lookup(name)
+					cell.object = &bashPPObjectIdentity{owner: name, collection: meta}
+					if root, rootOK := bashPPCollectionRoot(d.Expr); rootOK {
+						if source := r.bashPPScope.lookup(root); source != nil && source.object != nil {
+							cell.object = source.object
+						}
+					}
+					cell.valueMeta = meta
+				} else {
+					r.bashPPDeclareName(name, expand.Variable{Set: true, Kind: expand.String, Str: fmt.Sprint(value)})
+				}
+				return
+			}
+			// A selector which is not rooted in a structured value remains a
+			// method value candidate and is handled below.
+			if len(d.MethodValue) == 0 {
+				r.errf("%v\n", err)
+				r.exit = exitStatus{code: 2}
+				return
+			}
+			r.bashPPShortDeclMethodValue(d)
 			return
 		}
 		var source *bashPPCell
 		if ident, ok := d.Expr.(*syntax.BashPPIdent); ok {
 			source = r.bashPPScope.lookup(ident.Name.Value)
 			if vr := r.lookupVar(ident.Name.Value); vr.IsSet() && vr.Kind == expand.Object {
-				if source != nil && source.object != nil && !source.object.readonly && bashPPArrayMeta(source.object.collection) {
-					value, meta := bashPPCopyArrayValue(vr.Obj, source.object.collection)
+				if source != nil && source.object != nil && bashPPValueMeta(bashPPCellMeta(source)) {
+					value, meta := bashPPCopyArrayValue(vr.Obj, bashPPCellMeta(source))
 					vr.Obj = value
 					r.bashPPDeclareName(d.Lhs[0].Value, vr)
 					target := r.bashPPScope.lookup(d.Lhs[0].Value)
-					target.object = &bashPPObjectIdentity{owner: d.Lhs[0].Value, collection: meta}
+					target.object = source.object
+					target.valueMeta = meta
 					target.typeName = source.typeName
 					return
 				}
@@ -305,6 +393,7 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 				target := r.bashPPScope.lookup(d.Lhs[0].Value)
 				if source != nil && target != nil {
 					target.object = source.object
+					target.valueMeta = source.valueMeta
 					target.channel, target.channelOwner = source.channel, source.channelOwner
 					target.typeName = source.typeName
 				}
@@ -357,23 +446,7 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 		return
 	}
 	if len(d.MethodValue) > 0 {
-		if len(d.Lhs) != 1 {
-			r.errf("assignment mismatch: %d variable(s) but 1 value(s)\n", len(d.Lhs))
-			r.exit = exitStatus{code: 2}
-			return
-		}
-		call := &syntax.BashPPCall{Fun: d.MethodValue}
-		fn, ok := r.bashPPLookupFunc(call)
-		if !ok {
-			if r.exit.code == 0 {
-				r.errf("bash++: selector %s.%s is not a method value\n", d.MethodValue[0].Value, d.MethodValue[len(d.MethodValue)-1].Value)
-				r.exit.code = 2
-			}
-			return
-		}
-		vr := r.bashPPStoreFunc(fn)
-		fn.bound = d.Lhs[0].Value
-		r.bashPPDeclareName(d.Lhs[0].Value, vr)
+		r.bashPPShortDeclMethodValue(d)
 		return
 	}
 	// `x := f(1)` / `a, b := f()` binds a typed function's results. It is
@@ -424,15 +497,26 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 			return
 		}
 		if len(d.Rhs) == 1 {
-			if value, identity, ok := r.bashPPObjectExpr(bashPPWordSource(d.Rhs[0])); ok {
-				vr := expand.NewObject(value)
-				r.bashPPDeclareName(name, vr)
-				cell := r.bashPPScope.lookup(name)
-				if identity == nil {
-					identity = &bashPPObjectIdentity{owner: name}
+			sourceName := bashPPWordSource(d.Rhs[0])
+			if syntax.ValidName(sourceName) {
+				source := r.bashPPScope.lookup(sourceName)
+				if source != nil && source.vr.Kind == expand.Object {
+					value, meta := source.vr.Obj, bashPPCellMeta(source)
+					identity := source.object
+					if bashPPValueMeta(meta) {
+						value, meta = bashPPCopyArrayValue(value, meta)
+						identity = source.object
+					}
+					vr := expand.NewObject(value)
+					r.bashPPDeclareName(name, vr)
+					cell := r.bashPPScope.lookup(name)
+					if identity == nil {
+						identity = &bashPPObjectIdentity{owner: name}
+					}
+					cell.object = identity
+					cell.valueMeta = meta
+					return
 				}
-				cell.object = identity
-				return
 			}
 		}
 		vr := r.bashPPValueInRegion(ctx, d.Rhs, d.GoRegion)
@@ -460,6 +544,26 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 		}
 		r.bashPPDeclareName(lhs.Value, vr)
 	}
+}
+
+func (r *Runner) bashPPShortDeclMethodValue(d *syntax.BashPPShortDecl) {
+	if len(d.Lhs) != 1 {
+		r.errf("assignment mismatch: %d variable(s) but 1 value(s)\n", len(d.Lhs))
+		r.exit = exitStatus{code: 2}
+		return
+	}
+	call := &syntax.BashPPCall{Fun: d.MethodValue}
+	fn, ok := r.bashPPLookupFunc(call)
+	if !ok {
+		if r.exit.code == 0 {
+			r.errf("bash++: selector %s.%s is not a method value\n", d.MethodValue[0].Value, d.MethodValue[len(d.MethodValue)-1].Value)
+			r.exit.code = 2
+		}
+		return
+	}
+	vr := r.bashPPStoreFunc(fn)
+	fn.bound = d.Lhs[0].Value
+	r.bashPPDeclareName(d.Lhs[0].Value, vr)
 }
 
 func (r *Runner) bashPPDirectChannel(w *syntax.Word) (*bashPPChannel, *bashPPConcurrent) {

@@ -64,6 +64,8 @@ type bashPPType struct {
 	underlying string
 	alias      bool
 	members    []string
+	typeExpr   syntax.BashPPTypeExpr
+	fields     []*syntax.BashPPField
 }
 
 // name is what diagnostics call the function. A literal has none, so it is

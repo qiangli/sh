@@ -168,6 +168,7 @@ func cloneBashPPTaskCells(r *Runner, objects *bashPPObjectCloner) error {
 		if cell.object != nil && cell.object.collection != nil {
 			cell.object.collection = bashPPCloneCollectionMeta(cell.object.collection, metadata)
 		}
+		cell.valueMeta = bashPPCloneCollectionMeta(cell.valueMeta, metadata)
 		return nil
 	})
 }

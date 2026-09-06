@@ -187,7 +187,12 @@ func Walk(node Node, f func(Node) bool) {
 		walkNilable(node.Name, f)
 		walkNilable(node.DeclType, f)
 		walkList(node.Init, f)
-		walkList(node.StructFields, f)
+		if node.DeclTypeExpr != nil {
+			Walk(node.DeclTypeExpr, f)
+		} else {
+			walkList(node.StructFields, f)
+		}
+		walkNilable(node.InitExpr, f)
 		walkList(node.EnumMembers, f)
 	case *BashPPIf:
 		walkNilable(node.Init, f)
@@ -257,12 +262,18 @@ func Walk(node Node, f func(Node) bool) {
 	case *BashPPIndexExpr:
 		Walk(node.X, f)
 		Walk(node.Index, f)
+	case *BashPPSelectorExpr:
+		Walk(node.X, f)
+		Walk(node.Sel, f)
 	case *BashPPNamedType:
 		Walk(node.Name, f)
 	case *BashPPCollectionType:
 		walkNilable(node.Length, f)
 		walkNilable(node.Key, f)
 		walkNilable(node.Element, f)
+	case *BashPPStructType:
+		Walk(node.Struct, f)
+		walkList(node.Fields, f)
 	case *BashPPCompositeLit:
 		walkNilable(node.LitType, f)
 		walkList(node.Elems, f)
@@ -319,6 +330,7 @@ func Walk(node Node, f func(Node) bool) {
 	case *BashPPField:
 		walkList(node.Names, f)
 		walkNilable(node.FieldType, f)
+		walkNilable(node.FieldTypeExpr, f)
 		walkNilable(node.Default, f)
 	case *BashPPReceiver:
 		walkNilable(node.Name, f)

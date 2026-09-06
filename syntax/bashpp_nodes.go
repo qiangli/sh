@@ -187,8 +187,16 @@ type BashPPDecl struct {
 	Kw       *Lit      // the literal "var", "const" or "type" as written
 	Name     *Lit      // the declared identifier
 	DeclType *Lit      // the declared type, or nil when inferred
-	Alias    bool      // whether a type declaration uses the `=` alias form
-	Init     []*Word   // the initializer, or nil for a bare declaration
+	// DeclTypeExpr is the lowering-ready form of a declared value type. It is
+	// populated for the struct/collection surface while DeclType retains the
+	// original compact spelling used by older API consumers.
+	DeclTypeExpr BashPPTypeExpr
+	Alias        bool    // whether a type declaration uses the `=` alias form
+	Init         []*Word // the initializer, or nil for a bare declaration
+	// InitExpr is populated whenever Init is a supported typed expression.
+	// Keeping Init preserves shell quoting and backwards compatibility; the
+	// interpreter consumes only this typed form for structured values.
+	InitExpr BashPPExpr
 	// StructFields is non-empty for the closed Bash# struct declaration
 	// surface, `type T struct { Name string; ... }`. DeclType is the `struct`
 	// literal in that form; the braces retain their source positions.
@@ -340,6 +348,7 @@ func (*BashPPUnaryExpr) bashPPExprNode()    {}
 func (*BashPPBinaryExpr) bashPPExprNode()   {}
 func (*BashPPConvertExpr) bashPPExprNode()  {}
 func (*BashPPIndexExpr) bashPPExprNode()    {}
+func (*BashPPSelectorExpr) bashPPExprNode() {}
 func (*BashPPCompositeLit) bashPPExprNode() {}
 
 // BashPPBasicLit is an exact scalar literal. Kind uses Go token names (INT,
@@ -404,6 +413,17 @@ type BashPPIndexExpr struct {
 func (x *BashPPIndexExpr) Pos() Pos { return x.X.Pos() }
 func (x *BashPPIndexExpr) End() Pos { return posAddCol(x.Rbrack, 1) }
 
+// BashPPSelectorExpr is a positioned field selection. Chained selections and
+// selections through indexed collections are represented recursively in X.
+type BashPPSelectorExpr struct {
+	X   BashPPExpr
+	Dot Pos
+	Sel *Lit
+}
+
+func (x *BashPPSelectorExpr) Pos() Pos { return x.X.Pos() }
+func (x *BashPPSelectorExpr) End() Pos { return x.Sel.End() }
+
 // BashPPTypeExpr is the closed type vocabulary accepted by collection
 // literals in this implementation slice.
 type BashPPTypeExpr interface {
@@ -413,6 +433,7 @@ type BashPPTypeExpr interface {
 
 func (*BashPPNamedType) bashPPTypeExprNode()      {}
 func (*BashPPCollectionType) bashPPTypeExprNode() {}
+func (*BashPPStructType) bashPPTypeExprNode()     {}
 
 type BashPPNamedType struct{ Name *Lit }
 
@@ -438,6 +459,18 @@ func (t *BashPPCollectionType) End() Pos {
 	}
 	return posAddCol(t.Rbrack, 1)
 }
+
+// BashPPStructType is an anonymous struct type as written in a composite
+// literal. Named declarations use the same positioned BashPPField entries.
+type BashPPStructType struct {
+	Struct *Lit
+	Lbrace Pos
+	Fields []*BashPPField
+	Rbrace Pos
+}
+
+func (t *BashPPStructType) Pos() Pos { return t.Struct.Pos() }
+func (t *BashPPStructType) End() Pos { return posAddCol(t.Rbrace, 1) }
 
 // BashPPCompositeLit is a lowering-ready collection literal. A nil LitType
 // denotes the nested inferred spelling { ... }, whose type comes from its
@@ -710,8 +743,11 @@ func (i *BashPPIf) End() Pos {
 type BashPPField struct {
 	Names     []*Lit // the declared identifiers, empty for an unnamed result type
 	FieldType *Lit   // the declared type, or nil for an untyped parameter
-	Default   *Word  // the value after `=`, nil for a required parameter
-	Equals    Pos    // position of `=` when Default is non-nil
+	// FieldTypeExpr is the lowering-ready type for struct fields. Function
+	// signatures retain FieldType alone until their broader type slice lands.
+	FieldTypeExpr BashPPTypeExpr
+	Default       *Word // the value after `=`, nil for a required parameter
+	Equals        Pos   // position of `=` when Default is non-nil
 
 	// Ellipsis is the position of the `...` in a variadic parameter group,
 	// `func f(head string, rest ...int)`, and is invalid for every other

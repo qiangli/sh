@@ -54,6 +54,10 @@ type bashPPCell struct {
 	// object is shared by every alias of one structured value. Deep readonly
 	// is an attribute of this identity rather than of one variable spelling.
 	object *bashPPObjectIdentity
+	// valueMeta describes this cell's payload. It is separate from object so
+	// struct/array copies can keep independent value layout while aliases still
+	// share the readonly identity carried by object.
+	valueMeta *bashPPCollectionMeta
 	// typeName is non-empty for a value of a script-declared named type.
 	// Pointer/nilPointer retain identity in-process; the visible shell value
 	// remains vr, so typed values never need a lossy JSON representation.
@@ -137,6 +141,8 @@ type bashPPCloner struct {
 	scopes  map[*bashPPScope]*bashPPScope
 	cells   map[*bashPPCell]*bashPPCell
 	objects map[*bashPPObjectIdentity]*bashPPObjectIdentity
+	values  *bashPPObjectCloner
+	metas   map[*bashPPCollectionMeta]*bashPPCollectionMeta
 }
 
 func newBashPPCloner() *bashPPCloner {
@@ -144,6 +150,8 @@ func newBashPPCloner() *bashPPCloner {
 		scopes:  make(map[*bashPPScope]*bashPPScope),
 		cells:   make(map[*bashPPCell]*bashPPCell),
 		objects: make(map[*bashPPObjectIdentity]*bashPPObjectIdentity),
+		values:  newBashPPObjectCloner(),
+		metas:   make(map[*bashPPCollectionMeta]*bashPPCollectionMeta),
 	}
 }
 
@@ -173,6 +181,12 @@ func (c *bashPPCloner) cloneCell(cell *bashPPCell) *bashPPCell {
 		return copied
 	}
 	dup := *cell
+	dup.vr = cloneBashPPVariable(cell.vr)
+	if cell.vr.Kind == expand.Object && cell.vr.Obj != nil {
+		if value, err := c.values.clone(cell.vr.Obj); err == nil {
+			dup.vr.Obj = value
+		}
+	}
 	if cell.object != nil {
 		if object := c.objects[cell.object]; object != nil {
 			dup.object = object
@@ -181,6 +195,10 @@ func (c *bashPPCloner) cloneCell(cell *bashPPCell) *bashPPCell {
 			dup.object = &objectCopy
 			c.objects[cell.object] = dup.object
 		}
+	}
+	dup.valueMeta = bashPPCloneCollectionMeta(cell.valueMeta, c.metas)
+	if dup.object != nil {
+		dup.object.collection = bashPPCloneCollectionMeta(cell.object.collection, c.metas)
 	}
 	copied := &dup
 	c.cells[cell] = copied

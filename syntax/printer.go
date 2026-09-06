@@ -1304,6 +1304,10 @@ func (p *Printer) bashppExpr(expr BashPPExpr) {
 		p.writeLit("[")
 		p.bashppExpr(x.Index)
 		p.writeLit("]")
+	case *BashPPSelectorExpr:
+		p.bashppExpr(x.X)
+		p.writeLit(".")
+		p.writeLit(x.Sel.Value)
 	case *BashPPCompositeLit:
 		if x.LitType != nil {
 			p.bashppType(x.LitType)
@@ -1342,6 +1346,29 @@ func (p *Printer) bashppType(typ BashPPTypeExpr) {
 			p.writeLit("]")
 		}
 		p.bashppType(x.Element)
+	case *BashPPStructType:
+		// Keep the opening brace attached. Besides matching the compact Go
+		// spelling, this lets the shell lexer expose an anonymous struct literal
+		// as one committed composite prefix on a reparse.
+		p.writeLit("struct{")
+		for i, field := range x.Fields {
+			if i > 0 {
+				p.writeLit("; ")
+			}
+			for j, name := range field.Names {
+				if j > 0 {
+					p.writeLit(", ")
+				}
+				p.writeLit(name.Value)
+			}
+			p.space()
+			if field.FieldTypeExpr != nil {
+				p.bashppType(field.FieldTypeExpr)
+			} else if field.FieldType != nil {
+				p.writeLit(field.FieldType.Value)
+			}
+		}
+		p.writeLit("}")
 	default:
 		panic(fmt.Sprintf("unhandled Bash++ type %T", typ))
 	}

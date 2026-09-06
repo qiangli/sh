@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 
-	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/syntax"
 )
 
@@ -26,22 +25,42 @@ func bashPPArrayMeta(meta *bashPPCollectionMeta) bool {
 	return meta != nil && (meta.kind == "array" || meta.kind == "inferred-array")
 }
 
+func bashPPValueMeta(meta *bashPPCollectionMeta) bool {
+	return bashPPArrayMeta(meta) || meta != nil && meta.kind == "struct"
+}
+
 // bashPPCopyArrayValue applies Go's value semantics to arrays without
 // accidentally deep-copying slice or map elements, which remain reference
 // values. Nested array elements are copied recursively.
 func bashPPCopyArrayValue(value any, meta *bashPPCollectionMeta) (any, *bashPPCollectionMeta) {
-	if !bashPPArrayMeta(meta) {
+	if !bashPPValueMeta(meta) {
 		return value, meta
+	}
+	metaCopy := *meta
+	if meta.kind == "struct" {
+		mapping, ok := value.(map[string]any)
+		if !ok {
+			return value, meta
+		}
+		out := make(map[string]any, len(mapping))
+		metaCopy.mapping = make(map[string]*bashPPCollectionMeta, len(meta.mapping))
+		for field, item := range mapping {
+			child := meta.mapping[field]
+			if bashPPValueMeta(child) {
+				item, child = bashPPCopyArrayValue(item, child)
+			}
+			out[field], metaCopy.mapping[field] = item, child
+		}
+		return out, &metaCopy
 	}
 	sequence, ok := value.([]any)
 	if !ok {
 		return value, meta
 	}
 	out := append([]any(nil), sequence...)
-	metaCopy := *meta
 	metaCopy.sequence = append([]*bashPPCollectionMeta(nil), meta.sequence...)
 	for i, child := range metaCopy.sequence {
-		if bashPPArrayMeta(child) {
+		if bashPPValueMeta(child) {
 			out[i], metaCopy.sequence[i] = bashPPCopyArrayValue(out[i], child)
 		}
 	}
@@ -83,6 +102,8 @@ func bashPPTypeText(typ syntax.BashPPTypeExpr) string {
 			length = x.Length.Value
 		}
 		return "[" + length + "]" + bashPPTypeText(x.Element)
+	case *syntax.BashPPStructType:
+		return "struct"
 	}
 	return "<inferred>"
 }
@@ -192,6 +213,14 @@ func (r *Runner) bashPPValidateCollectionType(typ syntax.BashPPTypeExpr) error {
 		if !ok {
 			return fmt.Errorf("BASHPP-ECOLLECTION-TYPE: undefined element type %s", name)
 		}
+		if decl.underlying == "struct" {
+			for _, field := range decl.fields {
+				if err := r.bashPPValidateValueType(field.FieldTypeExpr, make(map[string]bool)); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
 		if !bashPPScalarType(strings.TrimPrefix(decl.underlying, "*")) {
 			return fmt.Errorf("BASHPP-ECOLLECTION-TYPE: unsupported element type %s", name)
 		}
@@ -248,7 +277,7 @@ func (r *Runner) bashPPCollectionZero(typ syntax.BashPPTypeExpr) (any, *bashPPCo
 		values := make([]any, length)
 		meta.sequence = make([]*bashPPCollectionMeta, length)
 		for i := range values {
-			values[i], meta.sequence[i] = r.bashPPCollectionZero(x.Element)
+			values[i], meta.sequence[i] = r.bashPPZeroValue(x.Element)
 		}
 		return values, meta
 	}
@@ -257,14 +286,25 @@ func (r *Runner) bashPPCollectionZero(typ syntax.BashPPTypeExpr) (any, *bashPPCo
 
 func (r *Runner) bashPPEvalElement(expr syntax.BashPPExpr, expected syntax.BashPPTypeExpr) (any, *bashPPCollectionMeta, error) {
 	if lit, ok := expr.(*syntax.BashPPCompositeLit); ok {
-		return r.bashPPEvalCollection(lit, expected)
+		return r.bashPPEvalComposite(lit, expected)
 	}
-	if index, ok := expr.(*syntax.BashPPIndexExpr); ok {
-		value, meta, err := r.bashPPCollectionRead(index)
+	if _, indexed := expr.(*syntax.BashPPIndexExpr); indexed {
+		value, meta, err := r.bashPPReadExpr(expr)
 		if err != nil {
 			return nil, nil, err
 		}
-		if err := r.bashPPCheckCollectionValue(value, expected); err != nil {
+		if err := r.bashPPCheckTypedValue(value, meta, expected); err != nil {
+			return nil, nil, err
+		}
+		value, meta = bashPPCopyArrayValue(value, meta)
+		return value, meta, nil
+	}
+	if _, selected := expr.(*syntax.BashPPSelectorExpr); selected {
+		value, meta, err := r.bashPPReadExpr(expr)
+		if err != nil {
+			return nil, nil, err
+		}
+		if err := r.bashPPCheckTypedValue(value, meta, expected); err != nil {
 			return nil, nil, err
 		}
 		value, meta = bashPPCopyArrayValue(value, meta)
@@ -354,51 +394,7 @@ func (r *Runner) bashPPCollectionIndex(expr syntax.BashPPExpr) (int, error) {
 }
 
 func (r *Runner) bashPPCollectionRead(index *syntax.BashPPIndexExpr) (any, *bashPPCollectionMeta, error) {
-	var value any
-	var meta *bashPPCollectionMeta
-	switch x := index.X.(type) {
-	case *syntax.BashPPIdent:
-		cell := r.bashPPScope.lookup(x.Name.Value)
-		if cell == nil || cell.vr.Kind != expand.Object || cell.object == nil || cell.object.collection == nil {
-			return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-INDEX: %s is not a collection", x.Name.Value)
-		}
-		value, meta = cell.vr.Obj, cell.object.collection
-	case *syntax.BashPPIndexExpr:
-		var err error
-		value, meta, err = r.bashPPCollectionRead(x)
-		if err != nil {
-			return nil, nil, err
-		}
-	default:
-		return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-INDEX: unsupported indexed value")
-	}
-	if meta == nil {
-		return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-INDEX: value is not a collection")
-	}
-	if meta.kind == "map" {
-		collection := meta.typ.(*syntax.BashPPCollectionType)
-		key, _, err := r.bashPPEvalElement(index.Index, collection.Key)
-		if err != nil {
-			return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-KEY: %v", err)
-		}
-		canonical := fmt.Sprint(key)
-		mapping := value.(map[string]any)
-		result, found := mapping[canonical]
-		if !found {
-			zero, child := r.bashPPCollectionZero(collection.Element)
-			return zero, child, nil
-		}
-		return result, meta.mapping[canonical], nil
-	}
-	i, err := r.bashPPCollectionIndex(index.Index)
-	if err != nil {
-		return nil, nil, err
-	}
-	sequence := value.([]any)
-	if i < 0 || i >= len(sequence) {
-		return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-BOUNDS: index %d out of bounds for length %d", i, len(sequence))
-	}
-	return sequence[i], meta.sequence[i], nil
+	return r.bashPPReadExpr(index)
 }
 
 func bashPPCollectionRoot(expr syntax.BashPPExpr) (string, bool) {
@@ -406,6 +402,8 @@ func bashPPCollectionRoot(expr syntax.BashPPExpr) (string, bool) {
 	case *syntax.BashPPIdent:
 		return x.Name.Value, true
 	case *syntax.BashPPIndexExpr:
+		return bashPPCollectionRoot(x.X)
+	case *syntax.BashPPSelectorExpr:
 		return bashPPCollectionRoot(x.X)
 	}
 	return "", false
@@ -419,6 +417,8 @@ func bashPPExprText(expr syntax.BashPPExpr) string {
 		return x.Value.Value
 	case *syntax.BashPPIndexExpr:
 		return bashPPExprText(x.X) + "[" + bashPPExprText(x.Index) + "]"
+	case *syntax.BashPPSelectorExpr:
+		return bashPPExprText(x.X) + "." + x.Sel.Value
 	}
 	return "?"
 }

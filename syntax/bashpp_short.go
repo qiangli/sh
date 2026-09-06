@@ -47,7 +47,7 @@ func bashppShortDecl(ce *CallExpr, redirs []*Redirect, goRegion bool) *BashPPSho
 		// Collections and indexed reads are meaningful at Class-E sites which
 		// were already claimed as short declarations. Ordinary scalar words
 		// retain shell meaning unless an enclosing Go region owns them.
-		if expr := bashppCollectionExpr(rhs[0]); expr != nil {
+		if expr := bashppCompositeExpr(rhs[0]); expr != nil {
 			d.Expr, d.Rhs = expr, nil
 		} else if expr := bashppIndexExpr(rhs[0]); expr != nil {
 			d.Expr, d.Rhs = expr, nil
@@ -85,30 +85,7 @@ func bashppScalarExpr(w *Word) BashPPExpr {
 }
 
 func bashppConvertExpr(expr goast.Expr, pos func(gotoken.Pos) Pos, lit func(gotoken.Pos, gotoken.Pos, string) *Lit) BashPPExpr {
-	var convertType func(goast.Expr) BashPPTypeExpr
-	convertType = func(e goast.Expr) BashPPTypeExpr {
-		switch x := e.(type) {
-		case *goast.Ident:
-			return &BashPPNamedType{Name: lit(x.Pos(), x.End(), x.Name)}
-		case *goast.ArrayType:
-			kind := "slice"
-			var length *Lit
-			if x.Len != nil {
-				kind = "array"
-				switch n := x.Len.(type) {
-				case *goast.BasicLit:
-					length = lit(n.Pos(), n.End(), n.Value)
-				case *goast.Ellipsis:
-					kind = "inferred-array"
-					length = lit(n.Pos(), n.End(), "...")
-				}
-			}
-			return &BashPPCollectionType{Kind: kind, Start: pos(x.Pos()), Lbrack: pos(x.Lbrack), Length: length, Rbrack: pos(x.Elt.Pos() - 1), Element: convertType(x.Elt)}
-		case *goast.MapType:
-			return &BashPPCollectionType{Kind: "map", Start: pos(x.Pos()), Lbrack: pos(x.Map + 3), Rbrack: pos(x.Value.Pos() - 1), Key: convertType(x.Key), Element: convertType(x.Value)}
-		}
-		return nil
-	}
+	convertType := func(e goast.Expr) BashPPTypeExpr { return bashppConvertType(e, pos, lit) }
 
 	var convert func(goast.Expr) BashPPExpr
 	convert = func(e goast.Expr) BashPPExpr {
@@ -128,6 +105,8 @@ func bashppConvertExpr(expr goast.Expr, pos func(gotoken.Pos) Pos, lit func(goto
 			return &BashPPConvertExpr{ConvType: lit(id.Pos(), id.End(), id.Name), Lparen: pos(id.End()), X: convert(x.Args[0]), Rparen: pos(x.End() - 1)}
 		case *goast.IndexExpr:
 			return &BashPPIndexExpr{X: convert(x.X), Lbrack: pos(x.Lbrack), Index: convert(x.Index), Rbrack: pos(x.End() - 1)}
+		case *goast.SelectorExpr:
+			return &BashPPSelectorExpr{X: convert(x.X), Dot: pos(x.Sel.Pos() - 1), Sel: lit(x.Sel.Pos(), x.Sel.End(), x.Sel.Name)}
 		case *goast.CompositeLit:
 			out := &BashPPCompositeLit{LitType: convertType(x.Type), Lbrace: pos(x.Lbrace), Rbrace: pos(x.Rbrace)}
 			for _, raw := range x.Elts {
@@ -146,6 +125,57 @@ func bashppConvertExpr(expr goast.Expr, pos func(gotoken.Pos) Pos, lit func(goto
 	return convert(expr)
 }
 
+func bashppConvertType(e goast.Expr, pos func(gotoken.Pos) Pos, lit func(gotoken.Pos, gotoken.Pos, string) *Lit) BashPPTypeExpr {
+	switch x := e.(type) {
+	case *goast.Ident:
+		return &BashPPNamedType{Name: lit(x.Pos(), x.End(), x.Name)}
+	case *goast.ArrayType:
+		kind := "slice"
+		var length *Lit
+		if x.Len != nil {
+			kind = "array"
+			switch n := x.Len.(type) {
+			case *goast.BasicLit:
+				length = lit(n.Pos(), n.End(), n.Value)
+			case *goast.Ellipsis:
+				kind = "inferred-array"
+				length = lit(n.Pos(), n.End(), "...")
+			}
+		}
+		return &BashPPCollectionType{Kind: kind, Start: pos(x.Pos()), Lbrack: pos(x.Lbrack), Length: length, Rbrack: pos(x.Elt.Pos() - 1), Element: bashppConvertType(x.Elt, pos, lit)}
+	case *goast.MapType:
+		return &BashPPCollectionType{Kind: "map", Start: pos(x.Pos()), Lbrack: pos(x.Map + 3), Rbrack: pos(x.Value.Pos() - 1), Key: bashppConvertType(x.Key, pos, lit), Element: bashppConvertType(x.Value, pos, lit)}
+	case *goast.StructType:
+		out := &BashPPStructType{Struct: lit(x.Struct, x.Struct+6, "struct"), Lbrace: pos(x.Fields.Opening), Rbrace: pos(x.Fields.Closing)}
+		for _, field := range x.Fields.List {
+			entry := &BashPPField{FieldTypeExpr: bashppConvertType(field.Type, pos, lit)}
+			entry.FieldType = lit(field.Type.Pos(), field.Type.End(), bashppGoTypeText(field.Type))
+			for _, name := range field.Names {
+				entry.Names = append(entry.Names, lit(name.Pos(), name.End(), name.Name))
+			}
+			out.Fields = append(out.Fields, entry)
+		}
+		return out
+	}
+	return nil
+}
+
+func bashppTypeExpr(w *Word) BashPPTypeExpr {
+	text, positions, ok := bashppScalarSource(w)
+	if !ok {
+		return nil
+	}
+	expr, err := goparser.ParseExpr(text)
+	if err != nil || !bashppSupportedTypeAST(expr) {
+		return nil
+	}
+	pos := func(p gotoken.Pos) Pos { return positions[int(p)-1] }
+	lit := func(p, end gotoken.Pos, value string) *Lit {
+		return &Lit{ValuePos: pos(p), ValueEnd: pos(end), Value: value}
+	}
+	return bashppConvertType(expr, pos, lit)
+}
+
 func bashppCollectionExpr(w *Word) BashPPExpr {
 	text, positions, ok := bashppScalarSource(w)
 	if !ok {
@@ -153,6 +183,25 @@ func bashppCollectionExpr(w *Word) BashPPExpr {
 	}
 	expr, err := goparser.ParseExpr(text)
 	if err != nil || !bashppSupportedCollectionAST(expr, false) {
+		return nil
+	}
+	pos := func(p gotoken.Pos) Pos { return positions[int(p)-1] }
+	lit := func(p, end gotoken.Pos, value string) *Lit {
+		return &Lit{ValuePos: pos(p), ValueEnd: pos(end), Value: value}
+	}
+	return bashppConvertExpr(expr, pos, lit)
+}
+
+// bashppCompositeExpr lowers both collection and struct composites. Go's
+// parser is used only here, while source positions are still available; the
+// interpreter never reparses the word.
+func bashppCompositeExpr(w *Word) BashPPExpr {
+	text, positions, ok := bashppScalarSource(w)
+	if !ok {
+		return nil
+	}
+	expr, err := goparser.ParseExpr(text)
+	if err != nil || !bashppSupportedCompositeAST(expr, false) {
 		return nil
 	}
 	pos := func(p gotoken.Pos) Pos { return positions[int(p)-1] }
@@ -171,7 +220,12 @@ func bashppIndexExpr(w *Word) BashPPExpr {
 	if err != nil {
 		return nil
 	}
-	if _, ok := expr.(*goast.IndexExpr); !ok || !bashppSupportedScalarAST(expr) {
+	switch expr.(type) {
+	case *goast.IndexExpr, *goast.SelectorExpr:
+	default:
+		return nil
+	}
+	if !bashppSupportedPathAST(expr) {
 		return nil
 	}
 	pos := func(p gotoken.Pos) Pos { return positions[int(p)-1] }
@@ -179,6 +233,49 @@ func bashppIndexExpr(w *Word) BashPPExpr {
 		return &Lit{ValuePos: pos(p), ValueEnd: pos(end), Value: value}
 	}
 	return bashppConvertExpr(expr, pos, lit)
+}
+
+func bashppSupportedPathAST(expr goast.Expr) bool {
+	switch x := expr.(type) {
+	case *goast.Ident:
+		return bashppIsIdent(x.Name)
+	case *goast.SelectorExpr:
+		return bashppSupportedPathAST(x.X) && bashppIsIdent(x.Sel.Name)
+	case *goast.IndexExpr:
+		return bashppSupportedPathAST(x.X) && bashppSupportedScalarAST(x.Index)
+	}
+	return false
+}
+
+func bashppSupportedCompositeAST(expr goast.Expr, inferred bool) bool {
+	x, ok := expr.(*goast.CompositeLit)
+	if !ok {
+		return false
+	}
+	if x.Type == nil {
+		if !inferred {
+			return false
+		}
+	} else if !bashppSupportedTypeAST(x.Type) {
+		return false
+	}
+	for _, raw := range x.Elts {
+		value := raw
+		if kv, ok := raw.(*goast.KeyValueExpr); ok {
+			if !bashppSupportedScalarAST(kv.Key) {
+				return false
+			}
+			value = kv.Value
+		}
+		if nested, ok := value.(*goast.CompositeLit); ok {
+			if !bashppSupportedCompositeAST(nested, true) {
+				return false
+			}
+		} else if !bashppSupportedScalarAST(value) && !bashppSupportedPathAST(value) {
+			return false
+		}
+	}
+	return true
 }
 
 func bashppSupportedCollectionAST(expr goast.Expr, inferred bool) bool {
@@ -219,6 +316,10 @@ func bashppSupportedCollectionAST(expr goast.Expr, inferred bool) bool {
 }
 
 func bashppSupportedCollectionTypeAST(expr goast.Expr) bool {
+	return bashppSupportedTypeAST(expr)
+}
+
+func bashppSupportedTypeAST(expr goast.Expr) bool {
 	switch x := expr.(type) {
 	case *goast.Ident:
 		return bashppIsIdent(x.Name)
@@ -234,11 +335,46 @@ func bashppSupportedCollectionTypeAST(expr goast.Expr) bool {
 				return false
 			}
 		}
-		return bashppSupportedCollectionTypeAST(x.Elt)
+		return bashppSupportedTypeAST(x.Elt)
 	case *goast.MapType:
-		return bashppSupportedCollectionTypeAST(x.Key) && bashppSupportedCollectionTypeAST(x.Value)
+		return bashppSupportedTypeAST(x.Key) && bashppSupportedTypeAST(x.Value)
+	case *goast.StructType:
+		for _, field := range x.Fields.List {
+			if len(field.Names) == 0 || field.Tag != nil || !bashppSupportedTypeAST(field.Type) {
+				return false
+			}
+			for _, name := range field.Names {
+				if !bashppIsIdent(name.Name) {
+					return false
+				}
+			}
+		}
+		return true
 	}
 	return false
+}
+
+func bashppGoTypeText(expr goast.Expr) string {
+	switch x := expr.(type) {
+	case *goast.Ident:
+		return x.Name
+	case *goast.ArrayType:
+		length := ""
+		if x.Len != nil {
+			switch n := x.Len.(type) {
+			case *goast.BasicLit:
+				length = n.Value
+			case *goast.Ellipsis:
+				length = "..."
+			}
+		}
+		return "[" + length + "]" + bashppGoTypeText(x.Elt)
+	case *goast.MapType:
+		return "map[" + bashppGoTypeText(x.Key) + "]" + bashppGoTypeText(x.Value)
+	case *goast.StructType:
+		return "struct"
+	}
+	return ""
 }
 
 // bashppScalarSource retains a boundary position for every byte passed to the
@@ -307,11 +443,15 @@ func bashppCompositeCommandDepth(ce *CallExpr) int {
 	eligible := len(words) >= 4 && words[0].Lit() == "type" &&
 		bashppIsIdent(words[1].Lit()) &&
 		(words[2].Lit() == "struct" || words[2].Lit() == "enum") && words[3].Lit() == "{"
+	if !eligible && len(words) >= 5 && words[0].Lit() == "var" &&
+		bashppIsIdent(words[1].Lit()) && words[3].Lit() == "=" {
+		eligible = strings.Contains(bashppWordText(bashppJoinWords(words[4:])), "{")
+	}
 	if !eligible {
 		for i, w := range words {
 			if w.Lit() == ":=" && i > 0 && i+1 < len(words) {
 				lhs, ok := bashppShortLHS(words[:i])
-				eligible = ok && len(lhs) > 0 && strings.Contains(bashppWordText(words[i+1]), "{")
+				eligible = ok && len(lhs) > 0 && strings.Contains(bashppWordText(bashppJoinWords(words[i+1:])), "{")
 				break
 			}
 		}
@@ -331,7 +471,7 @@ func bashppCompositeCommandDepth(ce *CallExpr) int {
 }
 
 func bashppCompositeCommandComplete(ce *CallExpr) bool {
-	return bashppShortDecl(ce, nil, false) != nil || bashppTypeDecl(ce, nil) != nil
+	return bashppShortDecl(ce, nil, false) != nil || bashppTypeDecl(ce, nil) != nil || bashppTypedVarDecl(ce, nil) != nil
 }
 
 func bashppAssign(ce *CallExpr, redirs []*Redirect) *BashPPAssign {
@@ -370,7 +510,7 @@ func bashppAssign(ce *CallExpr, redirs []*Redirect) *BashPPAssign {
 	assign := &BashPPAssign{Target: target, Eq: ce.Args[eq].Pos(), Value: value}
 	if expr := bashppIndexExpr(target); expr != nil {
 		assign.TargetExpr = expr
-		if rhs := bashppCollectionExpr(value); rhs != nil {
+		if rhs := bashppCompositeExpr(value); rhs != nil {
 			assign.ValueExpr = rhs
 		} else if rhs := bashppIndexExpr(value); rhs != nil {
 			assign.ValueExpr = rhs
