@@ -16,6 +16,29 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 )
 
+type bashPPBranchKind uint8
+
+const (
+	bashPPBranchNone bashPPBranchKind = iota
+	bashPPBranchBreak
+	bashPPBranchContinue
+	bashPPBranchFallthrough
+)
+
+func (r *Runner) bashPPBranchStmt(branch *syntax.BashPPBranch) {
+	switch branch.Kw.Value {
+	case "break":
+		r.bashPPBranch = bashPPBranchBreak
+	case "continue":
+		r.bashPPBranch = bashPPBranchContinue
+	case "fallthrough":
+		r.bashPPBranch = bashPPBranchFallthrough
+	default:
+		panic("invalid Bash++ branch " + branch.Kw.Value)
+	}
+	r.exit.clear()
+}
+
 // Evaluation of the Bash++ P1 ("Day-1") nodes.
 //
 // Like its counterpart in sh/syntax, this file is deliberately separate from
@@ -483,10 +506,11 @@ func (r *Runner) bashPPSwitch(ctx context.Context, sw *syntax.BashPPSwitch) {
 		r.exit = exitStatus{code: 2}
 		return
 	}
-	var fallback *syntax.BashPPSwitchArm
+	selected := -1
+	defaultArm := -1
 	for armIndex, arm := range sw.Arms {
 		if len(arm.Exprs) == 0 {
-			fallback = arm
+			defaultArm = armIndex
 			continue
 		}
 		for _, candidate := range cases[armIndex] {
@@ -497,19 +521,37 @@ func (r *Runner) bashPPSwitch(ctx context.Context, sw *syntax.BashPPSwitch) {
 				return
 			}
 			if match {
-				fallback = arm
+				selected = armIndex
 				break
 			}
 		}
-		if fallback == arm {
+		if selected == armIndex {
 			break
 		}
 	}
-	if fallback == nil {
+	if selected < 0 {
+		selected = defaultArm
+	}
+	if selected < 0 {
 		return
 	}
-	defer r.bashPPPushScope()()
-	r.stmts(ctx, fallback.Stmts)
+	for armIndex := selected; armIndex < len(sw.Arms); armIndex++ {
+		leaveArm := r.bashPPPushScope()
+		r.stmts(ctx, sw.Arms[armIndex].Stmts)
+		leaveArm()
+		switch r.bashPPBranch {
+		case bashPPBranchBreak:
+			r.bashPPBranch = bashPPBranchNone
+			r.exit.clear()
+			return
+		case bashPPBranchFallthrough:
+			r.bashPPBranch = bashPPBranchNone
+			r.exit.clear()
+			continue
+		default:
+			return
+		}
+	}
 }
 
 // bashPPValidateSwitchCases is deliberately separate from arm selection.
@@ -884,6 +926,17 @@ func (r *Runner) bashPPFor(ctx context.Context, loop *syntax.BashPPFor) {
 		r.cmd(ctx, loop.Body)
 		if r.exit.exiting || r.exit.returning || r.exit.fatalExit || r.loopControlPending() {
 			return
+		}
+		switch r.bashPPBranch {
+		case bashPPBranchBreak:
+			r.bashPPBranch = bashPPBranchNone
+			r.exit.clear()
+			return
+		case bashPPBranchContinue:
+			r.bashPPBranch = bashPPBranchNone
+			r.exit.clear()
+		case bashPPBranchFallthrough:
+			panic("validated fallthrough escaped to Bash++ for")
 		}
 		// Go 1.27 creates the next iteration's variable after the body and
 		// initializes it from this iteration's value before running post.

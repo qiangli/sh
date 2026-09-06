@@ -1848,6 +1848,8 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 		}
 		p.space()
 		p.command(cmd.Body, nil)
+	case *BashPPBranch:
+		p.writeLit(cmd.Kw.Value)
 	case *BashPPImport:
 		p.spacedString(cmd.Kw.Value, cmd.Kw.Pos())
 		if cmd.Path != nil {

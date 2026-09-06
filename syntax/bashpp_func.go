@@ -286,10 +286,16 @@ func (p *Parser) bashppFuncBody(what string, after Pos) *Block {
 	if !(p.tok == _LitWord && (p.val == "{" || p.val == "{}")) {
 		p.followErr(after, what+"()", noQuote("a { } body"))
 	}
+	// Branch targets do not cross a function boundary. A literal nested in a
+	// typed loop starts with no enclosing control statements of its own; any
+	// typed controls it declares below build a fresh stack.
+	savedControls := p.bashppControls
+	p.bashppControls = nil
 	p.bashppFuncDepth++
 	var body Stmt
 	p.bashppBlock(&body)
 	p.bashppFuncDepth--
+	p.bashppControls = savedControls
 	block, _ := body.Cmd.(*Block)
 	return block
 }

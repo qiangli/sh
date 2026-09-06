@@ -14,6 +14,8 @@ package syntax
 // is decided by what it is rather than by which recognizer ran first.
 func (p *Parser) bashppSelect(stmt *Stmt) bool {
 	txn := p.beginBashPPTxn()
+	rootControl := len(p.bashppControls) == 0
+	p.bashppControls = append(p.bashppControls, bashppControlSelect)
 	sel := &BashPPSelect{Select: p.pos}
 	p.next()
 	p.got(_Newl)
@@ -23,6 +25,10 @@ func (p *Parser) bashppSelect(stmt *Stmt) bool {
 		p.next()
 		txn.commit(p)
 		stmt.Cmd = sel
+		p.bashppControls = p.bashppControls[:len(p.bashppControls)-1]
+		if rootControl {
+			p.bashppValidateBranches(sel)
+		}
 		return true
 	}
 	if !(p.tok == _LitWord && p.val == "{") {
@@ -56,6 +62,10 @@ func (p *Parser) bashppSelect(stmt *Stmt) bool {
 	}
 	txn.commit(p)
 	stmt.Cmd = sel
+	p.bashppControls = p.bashppControls[:len(p.bashppControls)-1]
+	if rootControl {
+		p.bashppValidateBranches(sel)
+	}
 	return true
 }
 
@@ -188,6 +198,8 @@ func bashppTrimColon(w *Word) (*Word, Pos, bool) {
 // already a bash syntax error and claiming it takes nothing away.
 func (p *Parser) bashppRange(stmt *Stmt) bool {
 	txn := p.beginBashPPTxn()
+	rootControl := len(p.bashppControls) == 0
+	p.bashppControls = append(p.bashppControls, bashppControlRange)
 	rng := &BashPPRange{For: p.pos}
 	p.next()
 	// Exactly one iteration variable, or none. Go admits a second value only
@@ -239,5 +251,9 @@ func (p *Parser) bashppRange(stmt *Stmt) bool {
 	rng.Body = block
 	txn.commit(p)
 	stmt.Cmd = rng
+	p.bashppControls = p.bashppControls[:len(p.bashppControls)-1]
+	if rootControl {
+		p.bashppValidateBranches(rng)
+	}
 	return true
 }

@@ -5450,6 +5450,8 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		r.bashPPForAssign(cm)
 	case *syntax.BashPPIncDec:
 		r.bashPPIncDec(cm)
+	case *syntax.BashPPBranch:
+		r.bashPPBranchStmt(cm)
 	case *syntax.Subshell:
 		r2 := r.subshell(false)
 		defer r2.closeDirFile()
@@ -6416,7 +6418,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		r.noErrExit = true
 		r.stmts(ctx, cm.Cond)
 		r.noErrExit = oldNoErrExit
-		if r.loopControlPending() {
+		if r.loopControlPending() || r.bashPPBranch != bashPPBranchNone {
 			return
 		}
 
@@ -9042,7 +9044,7 @@ func (r *Runner) stmts(ctx context.Context, stmts []*syntax.Stmt) {
 		// group, if/case body) so the rest of the list is skipped. Safe across
 		// function bodies: call() resets the loop-control state at the function
 		// boundary, so a function is a break/continue boundary as bash requires.
-		if r.loopControlPending() {
+		if r.loopControlPending() || r.bashPPBranch != bashPPBranchNone {
 			return
 		}
 		// Stop the list once `exit`/`return` has fired. Outside a trap this is

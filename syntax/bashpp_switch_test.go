@@ -155,13 +155,13 @@ func TestBashPPSwitchStableDiagnostics(t *testing.T) {
 	}
 }
 
-func TestBashPPSwitchDoesNotAddBranchControlSyntax(t *testing.T) {
-	const src = "func f() { switch { default: break; continue; fallthrough } }\n"
+func TestBashPPSwitchAddsBranchControlSyntax(t *testing.T) {
+	const src = "func f() { switch { case true: fallthrough; default: break } }\n"
 	f := parseBashPPSwitch(t, strings.NewReader(src))
-	arm := f.Stmts[0].Cmd.(*BashPPFuncDecl).Body.Stmts[0].Cmd.(*BashPPSwitch).Arms[0]
-	for i, stmt := range arm.Stmts {
-		if _, ok := stmt.Cmd.(*CallExpr); !ok {
-			t.Fatalf("arm statement %d = %T, want ordinary shell CallExpr", i, stmt.Cmd)
+	arms := f.Stmts[0].Cmd.(*BashPPFuncDecl).Body.Stmts[0].Cmd.(*BashPPSwitch).Arms
+	for i, arm := range arms {
+		if _, ok := arm.Stmts[0].Cmd.(*BashPPBranch); !ok {
+			t.Fatalf("arm %d statement = %T, want *BashPPBranch", i, arm.Stmts[0].Cmd)
 		}
 	}
 }

@@ -205,6 +205,8 @@ func Walk(node Node, f func(Node) bool) {
 	case *BashPPIncDec:
 		walkNilable(node.Name, f)
 		walkNilable(node.Op, f)
+	case *BashPPBranch:
+		walkNilable(node.Kw, f)
 	case *BashPPSwitch:
 		walkNilable(node.Init, f)
 		walkNilable(node.Tag, f)

@@ -166,13 +166,13 @@ func TestBashPPForStableDiagnostics(t *testing.T) {
 	}
 }
 
-func TestBashPPForDoesNotAddLoopControlStatements(t *testing.T) {
-	const src = "func f() {\n\tfor false {\n\t\tbreak\n\t\tcontinue\n\t\tfallthrough\n\t}\n}\n"
+func TestBashPPForAddsLoopControlStatements(t *testing.T) {
+	const src = "func f() {\n\tfor false {\n\t\tbreak\n\t\tcontinue\n\t}\n}\n"
 	f := parseBashPPFor(t, strings.NewReader(src))
 	loop := f.Stmts[0].Cmd.(*BashPPFuncDecl).Body.Stmts[0].Cmd.(*BashPPFor)
 	for i, stmt := range loop.Body.Stmts {
-		if _, ok := stmt.Cmd.(*CallExpr); !ok {
-			t.Fatalf("body statement %d = %T, want ordinary shell CallExpr", i, stmt.Cmd)
+		if _, ok := stmt.Cmd.(*BashPPBranch); !ok {
+			t.Fatalf("body statement %d = %T, want *BashPPBranch", i, stmt.Cmd)
 		}
 	}
 }

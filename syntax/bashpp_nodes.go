@@ -557,6 +557,16 @@ type BashPPIncDec struct {
 func (s *BashPPIncDec) Pos() Pos { return s.Name.Pos() }
 func (s *BashPPIncDec) End() Pos { return s.Op.End() }
 
+// BashPPBranch is an unlabeled Go-form break, continue, or fallthrough. It is
+// constructed only inside a committed typed control statement; the same bare
+// words everywhere else remain ordinary shell calls.
+type BashPPBranch struct {
+	Kw *Lit
+}
+
+func (b *BashPPBranch) Pos() Pos { return b.Kw.Pos() }
+func (b *BashPPBranch) End() Pos { return b.Kw.End() }
+
 // BashPPSwitch is a Go-form expression switch admitted inside a typed Bash++
 // function. A nil Tag is a tagless switch, whose implicit tag is true.
 type BashPPSwitch struct {
@@ -928,6 +938,7 @@ func (*BashPPIf) commandNode()          {}
 func (*BashPPFor) commandNode()         {}
 func (*BashPPForAssign) commandNode()   {}
 func (*BashPPIncDec) commandNode()      {}
+func (*BashPPBranch) commandNode()      {}
 func (*BashPPSwitch) commandNode()      {}
 func (*BashPPImport) commandNode()      {}
 func (*BashPPFuncDecl) commandNode()    {}

@@ -11,6 +11,8 @@ import "strings"
 // remains distinct from a condition-only Go loop.
 func (p *Parser) bashppFor(stmt *Stmt) bool {
 	txn := p.beginBashPPTxn()
+	rootControl := len(p.bashppControls) == 0
+	p.bashppControls = append(p.bashppControls, bashppControlFor)
 	node := &BashPPFor{For: p.pos}
 	p.next()
 
@@ -79,8 +81,11 @@ func (p *Parser) bashppFor(stmt *Stmt) bool {
 	}
 	txn.commit(p)
 	stmt.Cmd = node
+	p.bashppControls = p.bashppControls[:len(p.bashppControls)-1]
 	if problem != "" {
 		p.posErr(problemPos, "%s", problem)
+	} else if rootControl {
+		p.bashppValidateBranches(node)
 	}
 	return true
 }

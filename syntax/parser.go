@@ -658,6 +658,10 @@ type Parser struct {
 	// zeroed across a nested shell function or subshell body so a `return` there
 	// keeps its shell meaning.
 	bashppFuncDepth int
+	// bashppControls is the stack of committed typed control statements whose
+	// bodies are being parsed. Bare branch words remain shell commands until a
+	// typed for/range/switch/select has committed the surrounding region.
+	bashppControls []bashppControlKind
 	// bashppChanCopy keeps the already committed channel region recognizable
 	// inside a shell copy. It deliberately does not keep bashppFuncDepth: P3
 	// return/defer ownership stops at the copy boundary.
@@ -2971,7 +2975,10 @@ func (p *Parser) gotStmtPipe(s *Stmt, binCmd bool) *Stmt {
 			p.ifClause(s)
 		case "while", "until":
 			// TODO(zsh): "repeat"
+			controls := p.bashppControls
+			p.bashppControls = nil
 			p.whileClause(s, p.val == "until")
+			p.bashppControls = controls
 		case "for":
 			if p.lang.in(LangBashPP) && (p.bashppFuncDepth > 0 || p.bashppChanCopy) && p.bashppRange(s) {
 				break
@@ -2979,7 +2986,10 @@ func (p *Parser) gotStmtPipe(s *Stmt, binCmd bool) *Stmt {
 			if p.lang.in(LangBashPP) && p.bashppFuncDepth > 0 && p.bashppFor(s) {
 				break
 			}
+			controls := p.bashppControls
+			p.bashppControls = nil
 			p.forClause(s)
+			p.bashppControls = controls
 		case "case":
 			p.caseClause(s)
 		case "switch":
@@ -3078,7 +3088,10 @@ func (p *Parser) gotStmtPipe(s *Stmt, binCmd bool) *Stmt {
 				break
 			}
 			if p.lang.in(langBashLike | LangMirBSDKorn | LangZsh) {
+				controls := p.bashppControls
+				p.bashppControls = nil
 				p.selectClause(s)
+				p.bashppControls = controls
 			}
 		case "@test":
 			if p.lang.in(LangBats) {
@@ -3254,11 +3267,14 @@ func (p *Parser) subshell(s *Stmt) {
 	// no enclosing Bash++ func, so the Go-form depth does not cross the `(`.
 	savedFuncDepth := p.bashppFuncDepth
 	savedChanCopy := p.bashppChanCopy
+	savedControls := p.bashppControls
 	p.bashppFuncDepth = 0
 	p.bashppChanCopy = savedChanCopy || savedFuncDepth > 0
+	p.bashppControls = nil
 	sub.Stmts, sub.Last = p.followStmts("(", sub.Lparen)
 	p.bashppFuncDepth = savedFuncDepth
 	p.bashppChanCopy = savedChanCopy
+	p.bashppControls = savedControls
 	p.postNested(old)
 	if p.err == nil && p.tok == _EOF && p.heredocEOFWarning != nil && p.hdocEOFLine != 0 {
 		// A here-document inside this subshell ran to end-of-file
@@ -4228,6 +4244,10 @@ loop:
 	// unsupported body is handed back untouched, so LangBashPP stays identical
 	// to LangBash everywhere it does not claim a shape.
 	if p.lang.in(LangBashPP) {
+		if branch := p.bashppBranch(ce, s.Redirs); branch != nil {
+			s.Cmd = branch
+			return
+		}
 		if cmd := p.bashppImportGroup(ce); cmd != nil {
 			s.Cmd = cmd
 			return
@@ -4336,11 +4356,14 @@ func (p *Parser) funcDecl(s *Stmt, pos Pos, long, withParens bool, names ...*Lit
 	// return, not the enclosing Bash++ func's Go-form return, so drop the Go
 	// depth across the body and restore it after.
 	savedFuncDepth := p.bashppFuncDepth
+	savedControls := p.bashppControls
 	p.bashppFuncDepth = 0
+	p.bashppControls = nil
 	if fd.Body = p.getStmt(false, false, true); fd.Body == nil {
 		p.followErr(fd.Pos(), "foo()", noQuote("a statement"))
 	}
 	p.bashppFuncDepth = savedFuncDepth
+	p.bashppControls = savedControls
 	s.Cmd = fd
 }
 

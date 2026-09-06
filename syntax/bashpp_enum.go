@@ -7,6 +7,8 @@ package syntax
 // A switch-like shell command without the complete form is restored intact.
 func (p *Parser) bashppSwitch(stmt *Stmt) bool {
 	txn := p.beginBashPPTxn()
+	rootControl := len(p.bashppControls) == 0
+	p.bashppControls = append(p.bashppControls, bashppControlSwitch)
 	sw := &BashPPSwitch{Switch: p.pos}
 	p.next()
 
@@ -58,8 +60,11 @@ func (p *Parser) bashppSwitch(stmt *Stmt) bool {
 		p.next()
 		txn.commit(p)
 		stmt.Cmd = sw
+		p.bashppControls = p.bashppControls[:len(p.bashppControls)-1]
 		if problem != "" {
 			p.posErr(problemPos, "%s", problem)
+		} else if rootControl {
+			p.bashppValidateBranches(sw)
 		}
 		return true
 	}
@@ -123,8 +128,11 @@ func (p *Parser) bashppSwitch(stmt *Stmt) bool {
 	}
 	txn.commit(p)
 	stmt.Cmd = sw
+	p.bashppControls = p.bashppControls[:len(p.bashppControls)-1]
 	if problem != "" {
 		p.posErr(problemPos, "%s", problem)
+	} else if rootControl {
+		p.bashppValidateBranches(sw)
 	}
 	return true
 }
