@@ -46,6 +46,53 @@ func TestBashPPParsedShortDeclarationEvaluates(t *testing.T) {
 	qt.Assert(t, qt.Equals(out.String(), "42:1:2"))
 }
 
+func TestBashPPParsedScalarExpressionsEvaluate(t *testing.T) {
+	var out strings.Builder
+	r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP))
+	bashPPRun(t, r, `base := 40
+copy := base
+func main() {
+	n := copy + 2
+	ok := n == 42
+	s := string(65)
+	printf '%s:%s:%s' "$n" "$ok" "$s"
+}
+main()
+`)
+	qt.Assert(t, qt.Equals(out.String(), "42:true:A"))
+}
+
+func TestBashPPTopLevelSingleQuotesStayShellStrings(t *testing.T) {
+	var out strings.Builder
+	r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP))
+	bashPPRun(t, r, `x := 'a'; printf '%s' "$x"`)
+	qt.Assert(t, qt.Equals(out.String(), "a"))
+}
+
+func TestBashPPParsedScalarConstantsUseGoConstantPrecision(t *testing.T) {
+	var out strings.Builder
+	r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP))
+	bashPPRun(t, r, `func main() {
+	n := 9223372036854775808 + 1
+	printf '%s' "$n"
+}
+main()
+`)
+	qt.Assert(t, qt.Equals(out.String(), "9223372036854775809"))
+}
+
+func TestBashPPParsedScalarExpressionDiagnostics(t *testing.T) {
+	var out strings.Builder
+	r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP))
+	bashPPRun(t, r, `func main() {
+	n := missing + 1
+	printf '%s' "$n"
+}
+main()
+`)
+	qt.Assert(t, qt.Equals(out.String(), "BASHPP-EEXPR-UNDEFINED: undefined: missing\n"))
+}
+
 // TestBashPPDialectGate proves that LangBashPP gates the feature: the very same
 // call succeeds under bash++ and is refused under every other dialect, and under
 // POSIX mode.

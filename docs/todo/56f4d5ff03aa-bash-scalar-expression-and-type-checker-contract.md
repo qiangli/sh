@@ -3,11 +3,12 @@ id: 56f4d5ff03aa
 kind: task
 title: Bash++ scalar expression and type-checker contract
 seq: 21
-status: todo
+status: done
 priority: p0
 created: 2026-09-06T16:18:00Z
 assignee: codex-gpt5.6-sol
 sprint: 116
+closed: 2026-09-06T17:01:48.148154Z
 ---
 
 First bounded slice of parent story `0d36792e0026`. Define and implement the

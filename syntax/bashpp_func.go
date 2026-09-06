@@ -645,7 +645,7 @@ func (p *Parser) bashppFuncLitForm(ce *CallExpr) Command {
 			if call == nil {
 				return nil
 			}
-			return &BashPPShortDecl{Lhs: lhs, Class: ClassR, OpPos: opPos, Call: call}
+			return &BashPPShortDecl{Lhs: lhs, Class: ClassR, OpPos: opPos, GoRegion: true, Call: call}
 		}
 		// A name bound to a literal is callable with no arguments from here
 		// on, which is the whole point of binding it; see
@@ -653,7 +653,7 @@ func (p *Parser) bashppFuncLitForm(ce *CallExpr) Command {
 		for _, name := range lhs {
 			p.bashppRegisterFunc(name.Value)
 		}
-		return &BashPPShortDecl{Lhs: lhs, Class: ClassR, OpPos: opPos, FuncLit: lit}
+		return &BashPPShortDecl{Lhs: lhs, Class: ClassR, OpPos: opPos, GoRegion: true, FuncLit: lit}
 	}
 	return nil
 }

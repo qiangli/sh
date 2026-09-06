@@ -5,14 +5,16 @@ package syntax
 
 import (
 	"bytes"
+	goast "go/ast"
 	goparser "go/parser"
+	gotoken "go/token"
 	"io"
 	"strings"
 )
 
 // bashppShortDecl recognizes the Class-E half of := after the ordinary shell
 // parser has completed the command. No speculative input is involved here.
-func bashppShortDecl(ce *CallExpr, redirs []*Redirect) *BashPPShortDecl {
+func bashppShortDecl(ce *CallExpr, redirs []*Redirect, goRegion bool) *BashPPShortDecl {
 	if ce == nil || len(ce.Assigns) != 0 || len(redirs) != 0 {
 		return nil
 	}
@@ -32,7 +34,7 @@ func bashppShortDecl(ce *CallExpr, redirs []*Redirect) *BashPPShortDecl {
 	if !ok {
 		return nil
 	}
-	rhs, ok := bashppShortValues(ce.Args[op+1:])
+	rhs, ok := bashppShortValues(ce.Args[op+1:], goRegion)
 	if !ok || (len(lhs) > 1 && len(lhs) != len(rhs)) {
 		return nil
 	}
@@ -40,7 +42,7 @@ func bashppShortDecl(ce *CallExpr, redirs []*Redirect) *BashPPShortDecl {
 	if m.Site != StartShortDecl || m.Class != ClassE {
 		return nil
 	}
-	d := &BashPPShortDecl{Lhs: lhs, Rhs: rhs, Class: ClassE, OpPos: ce.Args[op].Pos()}
+	d := &BashPPShortDecl{Lhs: lhs, Rhs: rhs, Class: ClassE, OpPos: ce.Args[op].Pos(), GoRegion: goRegion}
 	if len(rhs) == 1 {
 		if lit := bashppBareLit(rhs[0]); lit != nil && strings.Contains(lit.Value, ".") && bashppSelector(lit.Value) {
 			d.MethodValue = bashppSelectorLits(lit)
@@ -84,7 +86,7 @@ func bashppCompositeCommandDepth(ce *CallExpr) int {
 }
 
 func bashppCompositeCommandComplete(ce *CallExpr) bool {
-	return bashppShortDecl(ce, nil) != nil || bashppTypeDecl(ce, nil) != nil
+	return bashppShortDecl(ce, nil, false) != nil || bashppTypeDecl(ce, nil) != nil
 }
 
 func bashppAssign(ce *CallExpr, redirs []*Redirect) *BashPPAssign {
@@ -186,10 +188,10 @@ func bashppShortLHS(words []*Word) ([]*Lit, bool) {
 	return out, len(out) > 0
 }
 
-func bashppShortValues(words []*Word) ([]*Word, bool) {
+func bashppShortValues(words []*Word, goRegion bool) ([]*Word, bool) {
 	if len(words) > 1 {
 		joined := bashppJoinWords(words)
-		if bashppSupportedValue(joined) {
+		if bashppSupportedValue(joined) || goRegion && bashppSupportedScalarExpr(joined) {
 			return []*Word{joined}, true
 		}
 	}
@@ -197,7 +199,7 @@ func bashppShortValues(words []*Word) ([]*Word, bool) {
 	for i, w := range words {
 		wantComma := i < len(words)-1
 		clean, comma := bashppTrimComma(w)
-		if comma != wantComma || !bashppSupportedValue(clean) {
+		if comma != wantComma || !(bashppSupportedValue(clean) || goRegion && bashppSupportedScalarExpr(clean)) {
 			return nil, false
 		}
 		out[i] = clean
@@ -272,6 +274,56 @@ func bashppSupportedValue(w *Word) bool {
 	if open := strings.IndexByte(text, '['); open > 0 {
 		return strings.HasSuffix(text, "]") && bashppSelector(text[:open]) &&
 			bashppNonemptyTypeArgs(text[open:])
+	}
+	return false
+}
+
+func bashppSupportedScalarExpr(w *Word) bool {
+	expr, err := goparser.ParseExpr(bashppWordText(w))
+	return err == nil && bashppSupportedScalarAST(expr)
+}
+
+func bashppSupportedScalarAST(expr goast.Expr) bool {
+	switch x := expr.(type) {
+	case *goast.BasicLit:
+		switch x.Kind {
+		case gotoken.INT, gotoken.FLOAT, gotoken.CHAR, gotoken.STRING:
+			return true
+		}
+	case *goast.Ident:
+		return bashppIsIdent(x.Name) || x.Name == "true" || x.Name == "false"
+	case *goast.ParenExpr:
+		return bashppSupportedScalarAST(x.X)
+	case *goast.UnaryExpr:
+		switch x.Op {
+		case gotoken.ADD, gotoken.SUB, gotoken.NOT, gotoken.XOR:
+			return bashppSupportedScalarAST(x.X)
+		}
+	case *goast.BinaryExpr:
+		switch x.Op {
+		case gotoken.LOR, gotoken.LAND, gotoken.EQL, gotoken.NEQ,
+			gotoken.LSS, gotoken.LEQ, gotoken.GTR, gotoken.GEQ,
+			gotoken.ADD, gotoken.SUB, gotoken.OR, gotoken.XOR,
+			gotoken.MUL, gotoken.QUO, gotoken.REM, gotoken.SHL,
+			gotoken.SHR, gotoken.AND, gotoken.AND_NOT:
+			return bashppSupportedScalarAST(x.X) && bashppSupportedScalarAST(x.Y)
+		}
+	case *goast.CallExpr:
+		if len(x.Args) != 1 || x.Ellipsis.IsValid() {
+			return false
+		}
+		id, ok := x.Fun.(*goast.Ident)
+		return ok && bashppScalarConversionType(id.Name) && bashppSupportedScalarAST(x.Args[0])
+	}
+	return false
+}
+
+func bashppScalarConversionType(name string) bool {
+	switch name {
+	case "bool", "byte", "float32", "float64", "int", "int8", "int16",
+		"int32", "int64", "rune", "string", "uint", "uint8", "uint16",
+		"uint32", "uint64", "uintptr":
+		return true
 	}
 	return false
 }
@@ -458,7 +510,7 @@ func (p *Parser) bashppParenForm(ce *CallExpr) Command {
 			return nil
 		}
 		txn.commit(p)
-		return &BashPPShortDecl{Lhs: lhs, Class: ClassR, OpPos: opPos, MakeChan: mk}
+		return &BashPPShortDecl{Lhs: lhs, Class: ClassR, OpPos: opPos, GoRegion: p.bashppFuncDepth > 0, MakeChan: mk}
 	}
 	args, argNames, ellipsis, ok := p.bashppCallArgs()
 	if !ok || p.tok != rightParen {
@@ -512,7 +564,7 @@ func (p *Parser) bashppParenForm(ce *CallExpr) Command {
 	}
 	text.WriteByte(')')
 	rhs := &Word{Parts: []WordPart{&Lit{ValuePos: name.Pos(), ValueEnd: call.End(), Value: text.String()}}}
-	return &BashPPShortDecl{Lhs: lhs, Rhs: []*Word{rhs}, Class: ClassR, OpPos: opPos, Call: call}
+	return &BashPPShortDecl{Lhs: lhs, Rhs: []*Word{rhs}, Class: ClassR, OpPos: opPos, GoRegion: p.bashppFuncDepth > 0, Call: call}
 }
 
 func bashppCallTerminator(tok token) bool {

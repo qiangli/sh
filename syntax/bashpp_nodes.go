@@ -247,6 +247,11 @@ type BashPPShortDecl struct {
 	Rhs   []*Word // the right-hand side, unevaluated
 	Class SiteClass
 	OpPos Pos // position of :=
+	// GoRegion is true when the declaration was parsed inside an already
+	// committed Go region, such as a Bash++ function body. It lets the
+	// interpreter diagnose expression errors there while preserving the legacy
+	// Class-E top-level fallback for bare shell words.
+	GoRegion bool
 
 	// Call is set when the right-hand side is a Go-form call, e.g.
 	// `x := f(1)` or `config, err := readConfig("c")`. It carries the parsed

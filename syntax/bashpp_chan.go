@@ -142,7 +142,7 @@ func bashppClassifyComm(pre []*Word, arrow Pos, post []*Word) Command {
 	if !ok || len(lhs) == 0 || len(lhs) > 2 {
 		return nil
 	}
-	return &BashPPShortDecl{Lhs: lhs, Class: ClassE, OpPos: opLit.Pos(), Recv: recv}
+	return &BashPPShortDecl{Lhs: lhs, Class: ClassE, OpPos: opLit.Pos(), GoRegion: true, Recv: recv}
 }
 
 // bashppChanOperand reports whether w names a channel plainly enough to be the

@@ -72,7 +72,7 @@ func TestBashPPDeclRoundTrip(t *testing.T) {
 }
 
 func TestBashPPFormsRoundTrip(t *testing.T) {
-	for _, src := range []string{"x := 42\n", "x, y := 1, 2\n", "f(1, 2)\n", "x.y.z()\n", "import f \"fmt\"\n", "import (\n\tf \"fmt\"\n\t_ \"embed\"\n)\n", "type Config struct { Name string; Ports []int }\n", "type Color enum { Red; Green }\nfunc label(c Color) string {\n\tswitch c {\n\tcase Red:\n\t\treturn \"red\"\n\tcase Green:\n\t\treturn \"green\"\n\t}\n}\n", `cfg["ports"][0] = 8080` + "\n"} {
+	for _, src := range []string{"x := 42\n", "x, y := 1, 2\n", "func main() {\n\tx := 1 + 2\n}\n", "f(1, 2)\n", "x.y.z()\n", "import f \"fmt\"\n", "import (\n\tf \"fmt\"\n\t_ \"embed\"\n)\n", "type Config struct { Name string; Ports []int }\n", "type Color enum { Red; Green }\nfunc label(c Color) string {\n\tswitch c {\n\tcase Red:\n\t\treturn \"red\"\n\tcase Green:\n\t\treturn \"green\"\n\t}\n}\n", `cfg["ports"][0] = 8080` + "\n"} {
 		t.Run(src, func(t *testing.T) {
 			f, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(src), "")
 			if err != nil {
@@ -81,6 +81,9 @@ func TestBashPPFormsRoundTrip(t *testing.T) {
 			var enc strings.Builder
 			if err := typedjson.Encode(&enc, f); err != nil {
 				t.Fatal(err)
+			}
+			if strings.Contains(src, "1 + 2") && !strings.Contains(enc.String(), `"GoRegion":true`) {
+				t.Fatalf("encoded form does not carry committed Go-region provenance:\n%s", enc.String())
 			}
 			node, err := typedjson.Decode(strings.NewReader(enc.String()))
 			if err != nil {

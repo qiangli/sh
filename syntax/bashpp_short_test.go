@@ -52,6 +52,35 @@ func TestBashPPShortDeclSupportedShapes(t *testing.T) {
 	}
 }
 
+func TestBashPPScalarExpressionReachabilityIsGoRegionBounded(t *testing.T) {
+	const src = "func main() { x := 1 + 2 }\n"
+	for _, bytewise := range []bool{false, true} {
+		var rd io.Reader = strings.NewReader(src)
+		if bytewise {
+			rd = bashppByteReader{rd}
+		}
+		f, err := NewParser(Variant(LangBashPP)).Parse(rd, "expr.sh")
+		if err != nil {
+			t.Fatalf("bytewise=%v: %v", bytewise, err)
+		}
+		fn := f.Stmts[0].Cmd.(*BashPPFuncDecl)
+		d, ok := fn.Body.Stmts[0].Cmd.(*BashPPShortDecl)
+		if !ok {
+			t.Fatalf("bytewise=%v: got %T", bytewise, fn.Body.Stmts[0].Cmd)
+		}
+		if !d.GoRegion {
+			t.Fatalf("bytewise=%v: scalar expression was not marked as committed Go", bytewise)
+		}
+		if got := bashppWordText(d.Rhs[0]); got != "1 + 2" {
+			t.Fatalf("rhs = %q, want source expression", got)
+		}
+	}
+}
+
+func TestBashPPScalarExpressionDoesNotClaimTopLevelShellCommand(t *testing.T) {
+	bashppCheckIdentical(t, "x := 1 + 2\n")
+}
+
 func TestBashPPGoCallsAndTerminators(t *testing.T) {
 	for _, src := range []string{
 		"f(1, 2)", "x.y.z()", "clear(m)",

@@ -4229,7 +4229,7 @@ loop:
 				return
 			}
 		}
-		if decl := bashppShortDecl(ce, s.Redirs); decl != nil {
+		if decl := bashppShortDecl(ce, s.Redirs, p.bashppFuncDepth > 0); decl != nil {
 			if len(decl.MethodValue) > 0 {
 				for _, name := range decl.Lhs {
 					p.bashppRegisterFunc(name.Value)

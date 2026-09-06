@@ -275,6 +275,18 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 	// Rhs never matches a multi-name left-hand side; the real arity check is
 	// against the function's declared results, done inside.
 	if d.Call != nil {
+		if value, ok := r.bashPPScalarCall(d.Call); ok {
+			if r.exit.code != 0 {
+				return
+			}
+			if len(d.Lhs) != 1 {
+				r.errf("assignment mismatch: %d variable(s) but 1 value(s)\n", len(d.Lhs))
+				r.exit = exitStatus{code: 2}
+				return
+			}
+			r.bashPPDeclareName(d.Lhs[0].Value, expand.Variable{Set: true, Kind: expand.String, Str: value})
+			return
+		}
 		if r.bashPPEnumConstruct(d) {
 			return
 		}
@@ -329,7 +341,11 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 				return
 			}
 		}
-		r.bashPPDeclareName(name, r.bashPPValue(ctx, d.Rhs))
+		vr := r.bashPPValueInRegion(ctx, d.Rhs, d.GoRegion)
+		if r.exit.code != 0 {
+			return
+		}
+		r.bashPPDeclareName(name, vr)
 		if len(d.Rhs) == 1 {
 			if channel, owner := r.bashPPDirectChannel(d.Rhs[0]); channel != nil {
 				cell := r.bashPPScope.lookup(name)
@@ -344,7 +360,11 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 			r.exit = exitStatus{code: 2}
 			return
 		}
-		r.bashPPDeclareName(lhs.Value, r.bashPPValue(ctx, d.Rhs[i:i+1]))
+		vr := r.bashPPValueInRegion(ctx, d.Rhs[i:i+1], d.GoRegion)
+		if r.exit.code != 0 {
+			return
+		}
+		r.bashPPDeclareName(lhs.Value, vr)
 	}
 }
 
@@ -480,6 +500,10 @@ func (r *Runner) bashPPDeclareName(name string, vr expand.Variable) {
 // in all three. Objects earn their keep for structured values, which have no
 // faithful string form; they cost more than they return for scalars.
 func (r *Runner) bashPPValue(ctx context.Context, words []*syntax.Word) expand.Variable {
+	return r.bashPPValueInRegion(ctx, words, false)
+}
+
+func (r *Runner) bashPPValueInRegion(_ context.Context, words []*syntax.Word, goRegion bool) expand.Variable {
 	switch len(words) {
 	case 0:
 		// A bare declaration: `var x int`. The zero value is the empty
@@ -490,6 +514,9 @@ func (r *Runner) bashPPValue(ctx context.Context, words []*syntax.Word) expand.V
 		// environment.
 		return expand.Variable{Set: true, Kind: expand.String, Str: ""}
 	case 1:
+		if value, ok := r.bashPPScalarWord(words[0], goRegion); ok {
+			return expand.Variable{Set: true, Kind: expand.String, Str: value}
+		}
 		return expand.Variable{Set: true, Kind: expand.String, Str: r.literal(words[0])}
 	default:
 		strs := make([]string, len(words))
