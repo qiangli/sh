@@ -1299,8 +1299,51 @@ func (p *Printer) bashppExpr(expr BashPPExpr) {
 		p.writeLit("(")
 		p.bashppExpr(x.X)
 		p.writeLit(")")
+	case *BashPPIndexExpr:
+		p.bashppExpr(x.X)
+		p.writeLit("[")
+		p.bashppExpr(x.Index)
+		p.writeLit("]")
+	case *BashPPCompositeLit:
+		if x.LitType != nil {
+			p.bashppType(x.LitType)
+		}
+		p.writeLit("{")
+		for i, elem := range x.Elems {
+			if i > 0 {
+				p.writeLit(", ")
+			}
+			if elem.Key != nil {
+				p.bashppExpr(elem.Key)
+				p.writeLit(": ")
+			}
+			p.bashppExpr(elem.Value)
+		}
+		p.writeLit("}")
 	default:
 		panic(fmt.Sprintf("unhandled Bash++ expression %T", expr))
+	}
+}
+
+func (p *Printer) bashppType(typ BashPPTypeExpr) {
+	switch x := typ.(type) {
+	case *BashPPNamedType:
+		p.writeLit(x.Name.Value)
+	case *BashPPCollectionType:
+		if x.Kind == "map" {
+			p.writeLit("map[")
+			p.bashppType(x.Key)
+			p.writeLit("]")
+		} else {
+			p.writeLit("[")
+			if x.Length != nil {
+				p.writeLit(x.Length.Value)
+			}
+			p.writeLit("]")
+		}
+		p.bashppType(x.Element)
+	default:
+		panic(fmt.Sprintf("unhandled Bash++ type %T", typ))
 	}
 }
 

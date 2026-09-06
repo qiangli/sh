@@ -227,6 +227,11 @@ type BashPPAssign struct {
 	Target *Word
 	Eq     Pos
 	Value  *Word
+	// TargetExpr and ValueExpr are populated for the supported collection
+	// assignment surface. The words remain for the older struct/readonly
+	// surface until selectors are lowered in a later slice.
+	TargetExpr BashPPExpr
+	ValueExpr  BashPPExpr
 }
 
 func (a *BashPPAssign) Pos() Pos { return a.Target.Pos() }
@@ -328,12 +333,14 @@ type BashPPExpr interface {
 	bashPPExprNode()
 }
 
-func (*BashPPBasicLit) bashPPExprNode()    {}
-func (*BashPPIdent) bashPPExprNode()       {}
-func (*BashPPParenExpr) bashPPExprNode()   {}
-func (*BashPPUnaryExpr) bashPPExprNode()   {}
-func (*BashPPBinaryExpr) bashPPExprNode()  {}
-func (*BashPPConvertExpr) bashPPExprNode() {}
+func (*BashPPBasicLit) bashPPExprNode()     {}
+func (*BashPPIdent) bashPPExprNode()        {}
+func (*BashPPParenExpr) bashPPExprNode()    {}
+func (*BashPPUnaryExpr) bashPPExprNode()    {}
+func (*BashPPBinaryExpr) bashPPExprNode()   {}
+func (*BashPPConvertExpr) bashPPExprNode()  {}
+func (*BashPPIndexExpr) bashPPExprNode()    {}
+func (*BashPPCompositeLit) bashPPExprNode() {}
 
 // BashPPBasicLit is an exact scalar literal. Kind uses Go token names (INT,
 // FLOAT, CHAR, STRING), retained as text so typed JSON remains stable.
@@ -384,6 +391,86 @@ type BashPPConvertExpr struct {
 	X        BashPPExpr
 	Rparen   Pos
 }
+
+// BashPPIndexExpr is a single indexed read. Chaining is represented by X
+// containing another BashPPIndexExpr, so every bracket retains its position.
+type BashPPIndexExpr struct {
+	X      BashPPExpr
+	Lbrack Pos
+	Index  BashPPExpr
+	Rbrack Pos
+}
+
+func (x *BashPPIndexExpr) Pos() Pos { return x.X.Pos() }
+func (x *BashPPIndexExpr) End() Pos { return posAddCol(x.Rbrack, 1) }
+
+// BashPPTypeExpr is the closed type vocabulary accepted by collection
+// literals in this implementation slice.
+type BashPPTypeExpr interface {
+	Node
+	bashPPTypeExprNode()
+}
+
+func (*BashPPNamedType) bashPPTypeExprNode()      {}
+func (*BashPPCollectionType) bashPPTypeExprNode() {}
+
+type BashPPNamedType struct{ Name *Lit }
+
+func (t *BashPPNamedType) Pos() Pos { return t.Name.Pos() }
+func (t *BashPPNamedType) End() Pos { return t.Name.End() }
+
+// BashPPCollectionType represents [N]T, [...]T, []T, or map[K]V. Kind is one
+// of "array", "inferred-array", "slice", and "map".
+type BashPPCollectionType struct {
+	Kind    string
+	Start   Pos
+	Lbrack  Pos
+	Length  *Lit
+	Rbrack  Pos
+	Key     BashPPTypeExpr
+	Element BashPPTypeExpr
+}
+
+func (t *BashPPCollectionType) Pos() Pos { return t.Start }
+func (t *BashPPCollectionType) End() Pos {
+	if t.Element != nil {
+		return t.Element.End()
+	}
+	return posAddCol(t.Rbrack, 1)
+}
+
+// BashPPCompositeLit is a lowering-ready collection literal. A nil LitType
+// denotes the nested inferred spelling { ... }, whose type comes from its
+// containing element. Struct composites deliberately remain on the preserved
+// word path for a later story.
+type BashPPCompositeLit struct {
+	LitType BashPPTypeExpr
+	Lbrace  Pos
+	Elems   []*BashPPCompositeElem
+	Rbrace  Pos
+}
+
+func (x *BashPPCompositeLit) Pos() Pos {
+	if x.LitType != nil {
+		return x.LitType.Pos()
+	}
+	return x.Lbrace
+}
+func (x *BashPPCompositeLit) End() Pos { return posAddCol(x.Rbrace, 1) }
+
+type BashPPCompositeElem struct {
+	Key   BashPPExpr
+	Colon Pos
+	Value BashPPExpr
+}
+
+func (e *BashPPCompositeElem) Pos() Pos {
+	if e.Key != nil {
+		return e.Key.Pos()
+	}
+	return e.Value.Pos()
+}
+func (e *BashPPCompositeElem) End() Pos { return e.Value.End() }
 
 func (x *BashPPConvertExpr) Pos() Pos { return x.ConvType.Pos() }
 func (x *BashPPConvertExpr) End() Pos { return posAddCol(x.Rparen, 1) }

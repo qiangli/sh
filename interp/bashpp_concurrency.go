@@ -158,12 +158,16 @@ func cloneBashPPTaskVariable(vr expand.Variable, objects *bashPPObjectCloner) (e
 }
 
 func cloneBashPPTaskCells(r *Runner, objects *bashPPObjectCloner) error {
+	metadata := make(map[*bashPPCollectionMeta]*bashPPCollectionMeta)
 	return r.bashPPWalkCells(func(cell *bashPPCell) error {
 		copy, err := cloneBashPPTaskVariable(cell.vr, objects)
 		if err != nil {
 			return err
 		}
 		cell.vr = copy
+		if cell.object != nil && cell.object.collection != nil {
+			cell.object.collection = bashPPCloneCollectionMeta(cell.object.collection, metadata)
+		}
 		return nil
 	})
 }

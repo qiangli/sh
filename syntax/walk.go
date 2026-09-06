@@ -219,6 +219,8 @@ func Walk(node Node, f func(Node) bool) {
 	case *BashPPAssign:
 		Walk(node.Target, f)
 		Walk(node.Value, f)
+		walkNilable(node.TargetExpr, f)
+		walkNilable(node.ValueExpr, f)
 	case *BashPPShortDecl:
 		walkList(node.Lhs, f)
 		walkList(node.Rhs, f)
@@ -252,6 +254,21 @@ func Walk(node Node, f func(Node) bool) {
 	case *BashPPConvertExpr:
 		Walk(node.ConvType, f)
 		Walk(node.X, f)
+	case *BashPPIndexExpr:
+		Walk(node.X, f)
+		Walk(node.Index, f)
+	case *BashPPNamedType:
+		Walk(node.Name, f)
+	case *BashPPCollectionType:
+		walkNilable(node.Length, f)
+		walkNilable(node.Key, f)
+		walkNilable(node.Element, f)
+	case *BashPPCompositeLit:
+		walkNilable(node.LitType, f)
+		walkList(node.Elems, f)
+	case *BashPPCompositeElem:
+		walkNilable(node.Key, f)
+		Walk(node.Value, f)
 	case *BashPPCall:
 		if node.FuncLit != nil {
 			Walk(node.FuncLit, f)

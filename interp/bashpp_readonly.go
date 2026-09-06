@@ -19,8 +19,9 @@ import (
 // bashPPObjectIdentity is shared by the cells created when an object is
 // aliased. Marking any root readonly freezes every path through that object.
 type bashPPObjectIdentity struct {
-	owner    string
-	readonly bool
+	owner      string
+	readonly   bool
+	collection *bashPPCollectionMeta
 }
 
 type bashPPPathPart struct {
@@ -197,6 +198,10 @@ func (r *Runner) bashPPAssign(_ context.Context, assign *syntax.BashPPAssign) {
 	if !r.objectsEnabled() || r.bashPPScope == nil {
 		r.errf("bash++ assignment evaluated with extensions disabled\n")
 		r.exit = exitStatus{code: 2}
+		return
+	}
+	if target, ok := assign.TargetExpr.(*syntax.BashPPIndexExpr); ok {
+		r.bashPPCollectionAssign(target, assign.ValueExpr)
 		return
 	}
 	target := bashPPWordSource(assign.Target)

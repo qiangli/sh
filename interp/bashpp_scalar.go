@@ -50,6 +50,25 @@ func (r *Runner) bashPPEvalScalarExpr(expr syntax.BashPPExpr) (bashPPScalar, err
 			return bashPPScalar{}, err
 		}
 		return r.bashPPConvertScalar(x.ConvType.Value, v)
+	case *syntax.BashPPIndexExpr:
+		value, meta, err := r.bashPPCollectionRead(x)
+		if err != nil {
+			return bashPPScalar{}, err
+		}
+		if meta != nil {
+			return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-OPERAND: indexed value is not a scalar")
+		}
+		switch value := value.(type) {
+		case string:
+			return bashPPScalar{value: constant.MakeString(value)}, nil
+		case bool:
+			return bashPPScalar{value: constant.MakeBool(value)}, nil
+		case int:
+			return bashPPScalar{value: constant.MakeInt64(int64(value))}, nil
+		case float64:
+			return bashPPScalar{value: constant.MakeFloat64(value)}, nil
+		}
+		return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-OPERAND: indexed value is not a scalar")
 	}
 	return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-FORM: unsupported scalar expression %T", expr)
 }

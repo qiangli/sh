@@ -254,10 +254,53 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 			r.exit = exitStatus{code: 2}
 			return
 		}
+		if lit, ok := d.Expr.(*syntax.BashPPCompositeLit); ok {
+			if len(d.Lhs) != 1 {
+				r.errf("assignment mismatch: %d variable(s) but 1 value(s)\n", len(d.Lhs))
+				r.exit = exitStatus{code: 2}
+				return
+			}
+			value, meta, err := r.bashPPEvalCollection(lit, nil)
+			if err != nil {
+				r.errf("%v\n", err)
+				r.exit = exitStatus{code: 2}
+				return
+			}
+			name := d.Lhs[0].Value
+			r.bashPPDeclareName(name, expand.NewObject(value))
+			r.bashPPScope.lookup(name).object = &bashPPObjectIdentity{owner: name, collection: meta}
+			return
+		}
+		if index, ok := d.Expr.(*syntax.BashPPIndexExpr); ok {
+			value, meta, err := r.bashPPCollectionRead(index)
+			if err != nil {
+				r.errf("%v\n", err)
+				r.exit = exitStatus{code: 2}
+				return
+			}
+			name := d.Lhs[0].Value
+			if meta != nil {
+				value, meta = bashPPCopyArrayValue(value, meta)
+				r.bashPPDeclareName(name, expand.NewObject(value))
+				r.bashPPScope.lookup(name).object = &bashPPObjectIdentity{owner: name, collection: meta}
+			} else {
+				r.bashPPDeclareName(name, expand.Variable{Set: true, Kind: expand.String, Str: fmt.Sprint(value)})
+			}
+			return
+		}
 		var source *bashPPCell
 		if ident, ok := d.Expr.(*syntax.BashPPIdent); ok {
 			source = r.bashPPScope.lookup(ident.Name.Value)
 			if vr := r.lookupVar(ident.Name.Value); vr.IsSet() && vr.Kind == expand.Object {
+				if source != nil && source.object != nil && !source.object.readonly && bashPPArrayMeta(source.object.collection) {
+					value, meta := bashPPCopyArrayValue(vr.Obj, source.object.collection)
+					vr.Obj = value
+					r.bashPPDeclareName(d.Lhs[0].Value, vr)
+					target := r.bashPPScope.lookup(d.Lhs[0].Value)
+					target.object = &bashPPObjectIdentity{owner: d.Lhs[0].Value, collection: meta}
+					target.typeName = source.typeName
+					return
+				}
 				r.bashPPDeclareName(d.Lhs[0].Value, vr)
 				target := r.bashPPScope.lookup(d.Lhs[0].Value)
 				if source != nil && target != nil {
