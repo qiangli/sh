@@ -283,17 +283,12 @@ func (p *Parser) bashppSignature(what string) bashppSig {
 // the func depth raised so that a `return` inside it is the Go-form one.
 func (p *Parser) bashppFuncBody(what string, after Pos) *Block {
 	p.got(_Newl)
-	if p.tok == _LitWord && p.val == "{}" {
-		pos := p.pos
-		p.next()
-		return &Block{Lbrace: pos, Rbrace: posAddCol(pos, 1)}
-	}
-	if !(p.tok == _LitWord && p.val == "{") {
+	if !(p.tok == _LitWord && (p.val == "{" || p.val == "{}")) {
 		p.followErr(after, what+"()", noQuote("a { } body"))
 	}
 	p.bashppFuncDepth++
 	var body Stmt
-	p.block(&body)
+	p.bashppBlock(&body)
 	p.bashppFuncDepth--
 	block, _ := body.Cmd.(*Block)
 	return block

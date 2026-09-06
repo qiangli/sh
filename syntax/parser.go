@@ -3279,9 +3279,29 @@ func (p *Parser) arithmExpCmd(s *Stmt) {
 }
 
 func (p *Parser) block(s *Stmt) {
+	p.blockWithEmpty(s, false)
+}
+
+// bashppBlock parses a block in an already committed Go region. Unlike a
+// shell compound command, a Go block may have an empty statement list.
+func (p *Parser) bashppBlock(s *Stmt) {
+	p.blockWithEmpty(s, true)
+}
+
+func (p *Parser) blockWithEmpty(s *Stmt, allowEmpty bool) {
 	b := &Block{Lbrace: p.pos}
+	if allowEmpty && p.tok == _LitWord && p.val == "{}" {
+		b.Rbrace = posAddCol(p.pos, 1)
+		p.next()
+		s.Cmd = b
+		return
+	}
 	p.next()
-	b.Stmts, b.Last = p.followStmts("{", b.Lbrace, "}")
+	if allowEmpty {
+		b.Stmts, b.Last = p.stmtList("}")
+	} else {
+		b.Stmts, b.Last = p.followStmts("{", b.Lbrace, "}")
+	}
 	if pos, ok := p.gotRsrv("}"); ok {
 		b.Rbrace = pos
 	} else if p.recoverError() {
@@ -4072,8 +4092,13 @@ loop:
 			if p.val == "{" && w != nil && w.Lit() == "function" {
 				p.checkLang(p.pos, langBashLike, `the "function" builtin`)
 			}
-			// Zsh does not require a semicolon to close a block.
-			if p.lang.in(LangZsh) && p.val == "}" {
+			// Zsh does not require a semicolon to close a block. Go's
+			// semicolon-insertion rule gives a committed Bash++ func body the
+			// same property. Keep this keyed to bashppFuncDepth: ordinary Bash
+			// and POSIX blocks, including speculative regions which later roll
+			// back, must retain their separator rules byte for byte.
+			if p.val == "}" && (p.lang.in(LangZsh) ||
+				p.lang.in(LangBashPP) && p.bashppFuncDepth > 0) {
 				break loop
 			}
 			w := p.wordOne(p.lit(p.pos, p.val))

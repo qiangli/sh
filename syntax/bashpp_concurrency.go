@@ -225,12 +225,12 @@ func (p *Parser) bashppRange(stmt *Stmt) bool {
 	}
 	rng.Chan = ch
 	p.got(_Newl)
-	if !(p.tok == _LitWord && p.val == "{") {
+	if !(p.tok == _LitWord && (p.val == "{" || p.val == "{}")) {
 		txn.rollback(p)
 		return false
 	}
 	var body Stmt
-	p.block(&body)
+	p.bashppBlock(&body)
 	block, _ := body.Cmd.(*Block)
 	if block == nil || p.err != nil {
 		txn.rollback(p)

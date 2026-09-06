@@ -97,6 +97,33 @@ func TestBashPPChanRoundTrip(t *testing.T) {
 	}
 }
 
+func TestBashPPEmptyRangeRoundTrip(t *testing.T) {
+	const src = "func f() {\n\tfor v := range ch { }\n}\n"
+	f, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(src), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var data bytes.Buffer
+	if err := Encode(&data, f); err != nil {
+		t.Fatal(err)
+	}
+	n, err := Decode(bytes.NewReader(data.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rng := n.(*syntax.File).Stmts[0].Cmd.(*syntax.BashPPFuncDecl).Body.Stmts[0].Cmd.(*syntax.BashPPRange)
+	if rng.Body == nil || len(rng.Body.Stmts) != 0 {
+		t.Fatalf("decoded range body = %#v, want empty block", rng.Body)
+	}
+	var out strings.Builder
+	if err := syntax.NewPrinter().Print(&out, n); err != nil {
+		t.Fatal(err)
+	}
+	if out.String() != src {
+		t.Fatalf("round trip = %q, want %q", out.String(), src)
+	}
+}
+
 // TestBashPPRedirectSpacingRoundTrip ensures the AST-carried distinction
 // between a shell redirect and a channel receive survives serialization. This
 // matters when callers print a decoded function body or statement in isolation.

@@ -22,6 +22,9 @@ func TestBashPPFuncLitRoundTrip(t *testing.T) {
 	t.Parallel()
 
 	for _, src := range []string{
+		"func empty() { }\n",
+		"go func() { }()\n",
+		"go func() { echo hi; }()\n",
 		"greet := func(who string) {\n\techo \"hi $who\"\n}\n",
 		"n := func() int {\n\treturn 1\n}()\n",
 		"func(n int) {\n\techo $n\n}(1)\n",
