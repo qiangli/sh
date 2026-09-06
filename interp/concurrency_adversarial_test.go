@@ -65,7 +65,13 @@ func cgRunUnderCtx(t *testing.T, ctx context.Context, src string, opts ...interp
 	if err != nil {
 		t.Fatalf("interp.New: %v", err)
 	}
-	return r.Run(ctx, file)
+	// Each trial owns a fresh Runner. Some paths install signal subscriptions
+	// lazily (including descendants created by background jobs); without an
+	// explicit Reset the test drops the only owner that can join them and the
+	// schedule-matrix leak gate correctly reports the surviving forwarders.
+	runErr := r.Run(ctx, file)
+	r.Reset()
+	return runErr
 }
 
 // cgBaseCases are the platform-independent adversarial rows. Each trial does a
@@ -97,13 +103,11 @@ func cgBaseCases() []cgCase {
 			category: "parent-exit-vs-child",
 			run: func(t *testing.T) {
 				// The parent script reaches `exit` while a background child is
-				// still spinning. The runner's teardown must reap the child
-				// goroutine without racing the exit path or permanently leaking
-				// it. The child does a small bounded loop so it reliably orphans
-				// (bash keeps a background job running past the parent's exit)
-				// yet finishes on its own; we then drain to baseline so the case
-				// is self-contained and a genuine permanent leak becomes a
-				// diagnosed failure rather than silent residue.
+				// still spinning. Run returns without waiting, as bash does; the
+				// helper's explicit Reset is the ownership boundary that must
+				// cancel and reap the child without racing the exit path or
+				// permanently leaking it. We then drain to baseline so a genuine
+				// permanent leak becomes a diagnosed failure rather than residue.
 				base := len(cgSuspectGoroutines())
 				for i := 0; i < 30; i++ {
 					err := cgRunUnderCtx(t, context.Background(),

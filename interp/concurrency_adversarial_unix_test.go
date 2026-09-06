@@ -126,5 +126,6 @@ func cgAsyncInterruptVsBlockedRead(t *testing.T) {
 		cancel()
 		_ = pw.Close()
 		_ = pr.Close()
+		r.Reset()
 	}
 }

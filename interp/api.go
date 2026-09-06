@@ -2605,6 +2605,26 @@ func (r *Runner) Reset() {
 	if !r.usedNew {
 		panic("use interp.New to construct a Runner")
 	}
+	// Reset is the terminal ownership boundary for asynchronous lists too.
+	// Run deliberately returns without waiting for ordinary background jobs,
+	// but replacing the Runner while one of their subshell goroutines still
+	// reads its state is both a data race and a lost cleanup path. Cancel and
+	// join every job created by this Runner before replacing either its signal
+	// subscriptions or the value itself.
+	for _, bg := range r.bgProcs {
+		if bg != nil && bg.cancel != nil {
+			bg.cancel()
+		}
+	}
+	for _, bg := range r.bgProcs {
+		if bg == nil || bg.cancel == nil {
+			continue
+		}
+		<-bg.done
+		if bg.coprocPid != 0 {
+			r.reapCoproc(bg)
+		}
+	}
 	// Reset below replaces r wholesale. Stop subscriptions first: otherwise the
 	// replacement drops their done/finished channels while their forwarders stay
 	// parked forever. standaloneDefaults is configuration established by an
