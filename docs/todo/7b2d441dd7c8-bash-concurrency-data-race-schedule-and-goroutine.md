@@ -3,11 +3,12 @@ id: 7b2d441dd7c8
 kind: task
 title: Bash++ concurrency data-race, schedule, and goroutine-leak gate
 seq: 2
-status: todo
+status: done
 priority: p1
 created: 2026-08-07T14:15:00Z
 assignee: codex-gpt5.6-terra
 sprint: 115
+closed: 2026-09-06T14:49:54.995114Z
 ---
 
 Before shipping the next Bash++ feature that adds shared-memory concurrency,
