@@ -84,6 +84,7 @@ func TestTP714TrapFiresDuringBlockedRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer r.Reset()
 
 	errc := make(chan error, 1)
 	go func() { errc <- r.Run(context.Background(), file) }()
@@ -195,6 +196,7 @@ func TestTP714IgnoreToTrapReadInterrupt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer r.Reset()
 
 	errc := make(chan error, 1)
 	go func() { errc <- r.Run(context.Background(), file) }()
