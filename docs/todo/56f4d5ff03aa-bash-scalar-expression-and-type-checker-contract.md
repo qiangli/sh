@@ -3,12 +3,11 @@ id: 56f4d5ff03aa
 kind: task
 title: Bash++ scalar expression and type-checker contract
 seq: 21
-status: done
+status: doing
 priority: p0
 created: 2026-09-06T16:18:00Z
 assignee: codex-gpt5.6-sol
 sprint: 116
-closed: 2026-09-06T17:01:48.148154Z
 ---
 
 First bounded slice of parent story `0d36792e0026`. Define and implement the
@@ -35,3 +34,10 @@ must prove every claimed form end to end from Bash++ source, resolve bare
 identifiers consistently inside committed Go regions, use Go-compatible
 constant semantics (for example `go/constant`), and keep unreachable syntax
 out of the delivered claim until a start site can carry it.
+
+Integrated partial (2026-09-06): `23e1b348` adds a source-reachable subset for
+short declarations in committed Go regions, backed by `go/constant`, while
+preserving top-level Class-E behavior. It is intentionally not closure for this
+task: typed expression nodes with exact source positions and their Walk,
+Printer, and typed-JSON representation remain; so do source carriers and tests
+for shell-metacharacter operators that the ordinary shell token stream consumes.

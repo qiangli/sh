@@ -49,9 +49,9 @@ func TestBashPPParsedShortDeclarationEvaluates(t *testing.T) {
 func TestBashPPParsedScalarExpressionsEvaluate(t *testing.T) {
 	var out strings.Builder
 	r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP))
-	bashPPRun(t, r, `base := 40
-copy := base
-func main() {
+	bashPPRun(t, r, `func main() {
+	base := 40
+	copy := base
 	n := copy + 2
 	ok := n == 42
 	s := string(65)
@@ -67,6 +67,13 @@ func TestBashPPTopLevelSingleQuotesStayShellStrings(t *testing.T) {
 	r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP))
 	bashPPRun(t, r, `x := 'a'; printf '%s' "$x"`)
 	qt.Assert(t, qt.Equals(out.String(), "a"))
+}
+
+func TestBashPPTopLevelIdentifierShortDeclKeepsClassEBehavior(t *testing.T) {
+	var out strings.Builder
+	r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP))
+	bashPPRun(t, r, `base := 40; copy := base; printf '%s' "$copy"`)
+	qt.Assert(t, qt.Equals(out.String(), "base"))
 }
 
 func TestBashPPParsedScalarConstantsUseGoConstantPrecision(t *testing.T) {
@@ -91,6 +98,24 @@ func TestBashPPParsedScalarExpressionDiagnostics(t *testing.T) {
 main()
 `)
 	qt.Assert(t, qt.Equals(out.String(), "BASHPP-EEXPR-UNDEFINED: undefined: missing\n"))
+}
+
+func TestBashPPParsedScalarInvalidOperationsNeverPanic(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		expr string
+		code string
+	}{
+		{"string subtraction", `"a" - "b"`, "BASHPP-EEXPR-OPERAND"},
+		{"narrow conversion overflow", `int8(300)`, "BASHPP-EEXPR-CONVERT"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out strings.Builder
+			r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP))
+			bashPPRun(t, r, "func main() {\n\tn := "+tc.expr+"\n}\nmain()\n")
+			qt.Assert(t, qt.StringContains(out.String(), tc.code))
+		})
+	}
 }
 
 // TestBashPPDialectGate proves that LangBashPP gates the feature: the very same

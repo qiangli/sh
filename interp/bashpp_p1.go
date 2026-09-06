@@ -514,8 +514,10 @@ func (r *Runner) bashPPValueInRegion(_ context.Context, words []*syntax.Word, go
 		// environment.
 		return expand.Variable{Set: true, Kind: expand.String, Str: ""}
 	case 1:
-		if value, ok := r.bashPPScalarWord(words[0], goRegion); ok {
-			return expand.Variable{Set: true, Kind: expand.String, Str: value}
+		if goRegion {
+			if value, ok := r.bashPPScalarWord(words[0], true); ok {
+				return expand.Variable{Set: true, Kind: expand.String, Str: value}
+			}
 		}
 		return expand.Variable{Set: true, Kind: expand.String, Str: r.literal(words[0])}
 	default:
