@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"go/constant"
+	"go/token"
 	"strconv"
 	"strings"
 
@@ -695,6 +696,143 @@ func (r *Runner) bashPPIf(ctx context.Context, i *syntax.BashPPIf) {
 	} else if i.Else != nil {
 		r.cmd(ctx, i.Else)
 	}
+}
+
+func (r *Runner) bashPPFor(ctx context.Context, loop *syntax.BashPPFor) {
+	if !r.objectsEnabled() {
+		r.errf("bash++ for evaluated with extensions disabled\n")
+		r.exit = exitStatus{code: 2}
+		return
+	}
+	if r.bashPPScope == nil {
+		r.bashPPScope = newBashPPScope(nil)
+	}
+	leave := r.bashPPPushScope()
+	defer leave()
+	r.exit.clear()
+	if loop.Init != nil {
+		r.cmd(ctx, loop.Init)
+		if !r.exit.ok() {
+			return
+		}
+	}
+	var iterationNames []string
+	if decl, ok := loop.Init.(*syntax.BashPPShortDecl); ok {
+		for _, lhs := range decl.Lhs {
+			iterationNames = append(iterationNames, lhs.Value)
+		}
+	}
+	for !r.stop(ctx) {
+		if loop.Cond != nil {
+			cond, err := r.bashPPEvalScalarExpr(loop.Cond)
+			if err != nil {
+				r.errf("%v\n", err)
+				r.exit = exitStatus{code: 2}
+				return
+			}
+			if cond.value.Kind() != constant.Bool {
+				r.errf("BASHPP-EFOR-COND: for condition must be boolean, got %s\n", cond.value.Kind())
+				r.exit = exitStatus{code: 2}
+				return
+			}
+			if !constant.BoolVal(cond.value) {
+				r.exit.clear()
+				return
+			}
+		}
+		r.cmd(ctx, loop.Body)
+		if r.exit.exiting || r.exit.returning || r.exit.fatalExit || r.loopControlPending() {
+			return
+		}
+		// Go 1.27 creates the next iteration's variable after the body and
+		// initializes it from this iteration's value before running post.
+		// Replacing the cell here leaves closures attached to the cell they
+		// observed while the loop itself proceeds with the fresh one.
+		for _, name := range iterationNames {
+			if old := r.bashPPScope.entries[name]; old != nil {
+				copyCell := *old
+				r.bashPPScope.entries[name] = &copyCell
+			}
+		}
+		if loop.Post != nil {
+			r.cmd(ctx, loop.Post)
+			if !r.exit.ok() {
+				return
+			}
+		}
+	}
+}
+
+func (r *Runner) bashPPForAssign(assign *syntax.BashPPForAssign) {
+	if !r.objectsEnabled() || r.bashPPScope == nil {
+		r.errf("bash++ scalar assignment evaluated with extensions disabled\n")
+		r.exit = exitStatus{code: 2}
+		return
+	}
+	cell := r.bashPPScope.lookup(assign.Name.Value)
+	if cell == nil {
+		r.errf("BASHPP-EASSIGN-UNDEFINED: undefined: %s\n", assign.Name.Value)
+		r.exit = exitStatus{code: 2}
+		return
+	}
+	if cell.constant {
+		r.errf("BASHPP-EASSIGN-CONST: cannot assign to constant %s\n", assign.Name.Value)
+		r.exit = exitStatus{code: 2}
+		return
+	}
+	if cell.vr.Kind == expand.Object {
+		r.errf("BASHPP-EASSIGN-TYPE: %s is not a scalar\n", assign.Name.Value)
+		r.exit = exitStatus{code: 2}
+		return
+	}
+	value, err := r.bashPPEvalScalarExpr(assign.Expr)
+	if err != nil {
+		r.errf("%v\n", err)
+		r.exit = exitStatus{code: 2}
+		return
+	}
+	cell.vr.Set = true
+	cell.vr.Kind = expand.String
+	cell.vr.Str = bashPPScalarString(value.value)
+	cell.vr.List, cell.vr.Map, cell.vr.ListMap, cell.vr.ListSet = nil, nil, nil, nil
+	r.exit.clear()
+}
+
+func (r *Runner) bashPPIncDec(stmt *syntax.BashPPIncDec) {
+	if r.bashPPScope == nil {
+		r.errf("bash++ inc-dec evaluated with extensions disabled\n")
+		r.exit = exitStatus{code: 2}
+		return
+	}
+	cell := r.bashPPScope.lookup(stmt.Name.Value)
+	if cell == nil {
+		r.errf("BASHPP-EINCDEC-UNDEFINED: undefined: %s\n", stmt.Name.Value)
+		r.exit = exitStatus{code: 2}
+		return
+	}
+	if cell.constant {
+		r.errf("BASHPP-EINCDEC-CONST: cannot assign to constant %s\n", stmt.Name.Value)
+		r.exit = exitStatus{code: 2}
+		return
+	}
+	value := bashPPScalarFromString(cell.vr.String())
+	if value.value.Kind() != constant.Int && value.value.Kind() != constant.Float {
+		r.errf("BASHPP-EINCDEC-TYPE: operator %s not defined on %s\n", stmt.Op.Value, value.value.Kind())
+		r.exit = exitStatus{code: 2}
+		return
+	}
+	op := token.ADD
+	if stmt.Op.Value == "--" {
+		op = token.SUB
+	}
+	result, err := bashPPBinaryOp(value.value, op, constant.MakeInt64(1))
+	if err != nil {
+		r.errf("%v\n", err)
+		r.exit = exitStatus{code: 2}
+		return
+	}
+	cell.vr.Set, cell.vr.Kind, cell.vr.Str = true, expand.String, bashPPScalarString(result)
+	r.exit.clear()
 }
 
 // bashPPUnsupported is the shared response for a recognized Go form belonging

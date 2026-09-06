@@ -194,6 +194,17 @@ func Walk(node Node, f func(Node) bool) {
 		walkNilable(node.Cond, f)
 		walkNilable(node.Then, f)
 		walkNilable(node.Else, f)
+	case *BashPPFor:
+		walkNilable(node.Init, f)
+		walkNilable(node.Cond, f)
+		walkNilable(node.Post, f)
+		walkNilable(node.Body, f)
+	case *BashPPForAssign:
+		walkNilable(node.Name, f)
+		walkNilable(node.Expr, f)
+	case *BashPPIncDec:
+		walkNilable(node.Name, f)
+		walkNilable(node.Op, f)
 	case *BashPPSwitch:
 		Walk(node.Expr, f)
 		walkList(node.Arms, f)

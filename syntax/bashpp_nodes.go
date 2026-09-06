@@ -513,6 +513,50 @@ type BashPPIf struct {
 	Else      Command
 }
 
+// BashPPFor is a Go brace-form for statement inside a committed Bash++
+// function region. A nil Init, Cond, and Post is the infinite form. The two
+// semicolon positions distinguish a three-clause loop from a condition-only
+// loop without re-reading source text.
+type BashPPFor struct {
+	For        Pos
+	Init       Command
+	FirstSemi  Pos
+	Cond       BashPPExpr
+	SecondSemi Pos
+	Post       Command
+	Body       *Block
+}
+
+func (f *BashPPFor) Pos() Pos { return f.For }
+func (f *BashPPFor) End() Pos {
+	if f.Body != nil {
+		return f.Body.End()
+	}
+	return f.For
+}
+
+// BashPPForAssign is an assignment whose right-hand side is already a
+// typed scalar expression. It is deliberately distinct from BashPPAssign,
+// which records the older object-mutation surface and retains words for its
+// deep-readonly diagnostics.
+type BashPPForAssign struct {
+	Name *Lit
+	Eq   Pos
+	Expr BashPPExpr
+}
+
+func (a *BashPPForAssign) Pos() Pos { return a.Name.Pos() }
+func (a *BashPPForAssign) End() Pos { return a.Expr.End() }
+
+// BashPPIncDec is the scalar ++ or -- statement admitted in a for clause.
+type BashPPIncDec struct {
+	Name *Lit
+	Op   *Lit
+}
+
+func (s *BashPPIncDec) Pos() Pos { return s.Name.Pos() }
+func (s *BashPPIncDec) End() Pos { return s.Op.End() }
+
 // BashPPSwitch is the exhaustive switch form admitted inside a typed Bash#
 // function. Its expression and case members remain syntax nodes so positions,
 // Walk, printing, and typed JSON all describe the source rather than a lowered
@@ -880,6 +924,9 @@ func (*BashPPAssign) commandNode()      {}
 func (*BashPPCall) commandNode()        {}
 func (*BashPPCommandCall) commandNode() {}
 func (*BashPPIf) commandNode()          {}
+func (*BashPPFor) commandNode()         {}
+func (*BashPPForAssign) commandNode()   {}
+func (*BashPPIncDec) commandNode()      {}
 func (*BashPPSwitch) commandNode()      {}
 func (*BashPPImport) commandNode()      {}
 func (*BashPPFuncDecl) commandNode()    {}

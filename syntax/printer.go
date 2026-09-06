@@ -1584,6 +1584,13 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 		p.spacedString("=", cmd.Eq)
 		p.space()
 		p.word(cmd.Value)
+	case *BashPPForAssign:
+		p.writeLit(cmd.Name.Value)
+		p.writeLit(" = ")
+		p.bashppExpr(cmd.Expr)
+	case *BashPPIncDec:
+		p.writeLit(cmd.Name.Value)
+		p.writeLit(cmd.Op.Value)
 	case *BashPPShortDecl:
 		for i, lhs := range cmd.Lhs {
 			if i > 0 {
@@ -1803,6 +1810,27 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 			p.writeLit("else ")
 			p.command(cmd.Else, nil)
 		}
+	case *BashPPFor:
+		p.writeLit("for")
+		if cmd.FirstSemi.IsValid() {
+			p.space()
+			if cmd.Init != nil {
+				p.command(cmd.Init, nil)
+			}
+			p.writeLit("; ")
+			if cmd.Cond != nil {
+				p.bashppExpr(cmd.Cond)
+			}
+			p.writeLit("; ")
+			if cmd.Post != nil {
+				p.command(cmd.Post, nil)
+			}
+		} else if cmd.Cond != nil {
+			p.space()
+			p.bashppExpr(cmd.Cond)
+		}
+		p.space()
+		p.command(cmd.Body, nil)
 	case *BashPPImport:
 		p.spacedString(cmd.Kw.Value, cmd.Kw.Pos())
 		if cmd.Path != nil {

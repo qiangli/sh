@@ -2976,6 +2976,9 @@ func (p *Parser) gotStmtPipe(s *Stmt, binCmd bool) *Stmt {
 			if p.lang.in(LangBashPP) && (p.bashppFuncDepth > 0 || p.bashppChanCopy) && p.bashppRange(s) {
 				break
 			}
+			if p.lang.in(LangBashPP) && p.bashppFuncDepth > 0 && p.bashppFor(s) {
+				break
+			}
 			p.forClause(s)
 		case "case":
 			p.caseClause(s)

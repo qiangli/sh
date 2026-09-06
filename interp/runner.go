@@ -5444,6 +5444,12 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		r.bashPPImport(ctx, cm)
 	case *syntax.BashPPIf:
 		r.bashPPIf(ctx, cm)
+	case *syntax.BashPPFor:
+		r.bashPPFor(ctx, cm)
+	case *syntax.BashPPForAssign:
+		r.bashPPForAssign(cm)
+	case *syntax.BashPPIncDec:
+		r.bashPPIncDec(cm)
 	case *syntax.Subshell:
 		r2 := r.subshell(false)
 		defer r2.closeDirFile()
