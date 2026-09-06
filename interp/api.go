@@ -371,6 +371,12 @@ type Runner struct {
 	exit     exitStatus
 	lastExit exitStatus
 
+	// lastSignaled preserves the typed termination of the most recent Run.
+	// Runner.Run still returns the historical ExitStatus value so callers
+	// comparing errors directly do not break.
+	lastSignaled    SignaledStatus
+	lastWasSignaled bool
+
 	lastExpandExit     exitStatus // used to surface exit statuses while expanding fields
 	lastExpandCmdSubst bool       // whether lastExpandExit came from a command substitution
 	expandRunExit      exitStatus // expansion failures which affect Run but not $?
@@ -2918,6 +2924,21 @@ type ExitStatus uint8
 
 func (s ExitStatus) Error() string { return fmt.Sprintf("exit status %d", s) }
 
+// SignaledStatus reports that a foreground external command was terminated by
+// an operating-system signal. It unwraps to ExitStatus so existing callers
+// which only inspect shell status remain source- and behavior-compatible.
+// SignalName is canonical and SIG-prefixed when the platform names the signal.
+type SignaledStatus struct {
+	Status     ExitStatus
+	Signal     int
+	SignalName string
+}
+
+func (s SignaledStatus) Error() string { return s.Status.Error() }
+
+// Unwrap preserves the long-standing errors.As(err, *ExitStatus) contract.
+func (s SignaledStatus) Unwrap() error { return s.Status }
+
 // NewExitStatus creates an error which contains the specified exit status code.
 //
 // Deprecated: use [ExitStatus] directly.
@@ -2945,6 +2966,14 @@ func IsExitStatus(err error) (status uint8, ok bool) {
 // scheduling errors and need the next shell statement to observe that status.
 func (r *Runner) SetLastExitStatus(status uint8) {
 	r.lastExit = exitStatus{code: status}
+}
+
+// LastSignaledStatus reports whether the most recent Run ended because its
+// foreground external command was terminated by an operating-system signal.
+// It distinguishes that case from an ordinary command which exits with the
+// same conventional 128+signal status.
+func (r *Runner) LastSignaledStatus() (SignaledStatus, bool) {
+	return r.lastSignaled, r.lastWasSignaled
 }
 
 // ExpandDocument expands src as one shell word using the runner's current
@@ -2979,6 +3008,17 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 	r.fillExpandConfig(ctx)
 	r.exit = exitStatus{}
 	r.expandRunExit = exitStatus{}
+	// The CLI drives an exiting statement followed by an empty File to run its
+	// EXIT trap. Preserve the statement's signal across that bookkeeping Run;
+	// every executable node still starts with a fresh termination record.
+	emptyExitTrapRun := false
+	if file, ok := node.(*syntax.File); ok && len(file.Stmts) == 0 {
+		emptyExitTrapRun = true
+	}
+	if !emptyExitTrapRun {
+		r.lastSignaled = SignaledStatus{}
+		r.lastWasSignaled = false
+	}
 	r.filename = r.incrementalFilename
 	runExitTrap := false
 	switch node := node.(type) {
@@ -3068,6 +3108,12 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 			// to see if the last command succeeded or failed. [exitStatus.err] should only be
 			// additional information, so fail loudly if the invariant is broken.
 			panic("ended up with a non-nil exitStatus.err but a zero exitStatus.code")
+		}
+		var signaled SignaledStatus
+		if errors.As(err, &signaled) {
+			r.lastSignaled = signaled
+			r.lastWasSignaled = true
+			return signaled.Status
 		}
 		return err
 	}

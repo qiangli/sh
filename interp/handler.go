@@ -621,7 +621,16 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 				if bg, _ := ctx.Value(bgProcCtxKey{}).(*bgProc); bg == nil && hc.runner != nil {
 					hc.runner.notifyForegroundSignalDeath(hc.Stderr, hc.Pos, cmd.Process.Pid, status, args)
 				}
-				return ExitStatus(128 + status.Signal())
+				signal := int(status.Signal())
+				name := ""
+				if _, short, ok := signalByNumber(signal); ok {
+					name = "SIG" + short
+				}
+				return SignaledStatus{
+					Status:     ExitStatus(128 + signal),
+					Signal:     signal,
+					SignalName: name,
+				}
 			}
 			return ExitStatus(err.ExitCode())
 		case *exec.Error:
