@@ -6,6 +6,7 @@ package syntax
 import (
 	"bytes"
 	goast "go/ast"
+	"go/format"
 	goparser "go/parser"
 	gotoken "go/token"
 	"io"
@@ -170,6 +171,8 @@ func bashppConvertType(e goast.Expr, pos func(gotoken.Pos) Pos, lit func(gotoken
 			case *goast.Ellipsis:
 				kind = "inferred-array"
 				length = lit(n.Pos(), n.End(), "...")
+			default:
+				length = lit(n.Pos(), n.End(), bashppGoExprText(n))
 			}
 		}
 		return &BashPPCollectionType{Kind: kind, Start: pos(x.Pos()), Lbrack: pos(x.Lbrack), Length: length, Rbrack: pos(x.Elt.Pos() - 1), Element: bashppConvertType(x.Elt, pos, lit)}
@@ -269,6 +272,10 @@ func bashppIndexExpr(w *Word) BashPPExpr {
 
 func bashppSupportedPathAST(expr goast.Expr) bool {
 	switch x := expr.(type) {
+	case *goast.ParenExpr:
+		return bashppSupportedPathAST(x.X)
+	case *goast.StarExpr:
+		return bashppSupportedPathAST(x.X)
 	case *goast.Ident:
 		return bashppIsIdent(x.Name)
 	case *goast.SelectorExpr:
@@ -282,6 +289,10 @@ func bashppSupportedPathAST(expr goast.Expr) bool {
 			(x.Max == nil || bashppSupportedScalarAST(x.Max))
 	}
 	return false
+}
+
+func bashppSupportedIndexableAST(expr goast.Expr) bool {
+	return bashppSupportedScalarAST(expr) || bashppSupportedCompositeAST(expr, false) || bashppSupportedPathAST(expr)
 }
 
 func bashppSupportedCompositeAST(expr goast.Expr, inferred bool) bool {
@@ -369,7 +380,9 @@ func bashppSupportedTypeAST(expr goast.Expr) bool {
 				}
 			case *goast.Ellipsis:
 			default:
-				return false
+				if !bashppSupportedScalarAST(n) {
+					return false
+				}
 			}
 		}
 		return bashppSupportedTypeAST(x.Elt)
@@ -405,6 +418,8 @@ func bashppGoTypeText(expr goast.Expr) string {
 				length = n.Value
 			case *goast.Ellipsis:
 				length = "..."
+			default:
+				length = bashppGoExprText(n)
 			}
 		}
 		return "[" + length + "]" + bashppGoTypeText(x.Elt)
@@ -416,6 +431,14 @@ func bashppGoTypeText(expr goast.Expr) string {
 		return "*" + bashppGoTypeText(x.X)
 	}
 	return ""
+}
+
+func bashppGoExprText(expr goast.Expr) string {
+	var buf bytes.Buffer
+	if err := format.Node(&buf, gotoken.NewFileSet(), expr); err != nil {
+		return ""
+	}
+	return buf.String()
 }
 
 // bashppScalarSource retains a boundary position for every byte passed to the
@@ -812,9 +835,9 @@ func bashppSupportedScalarAST(expr goast.Expr) bool {
 		}
 		return bashppScalarConversionType(id.Name) && bashppSupportedScalarAST(x.Args[0])
 	case *goast.IndexExpr:
-		return bashppSupportedScalarAST(x.X) && bashppSupportedScalarAST(x.Index)
+		return bashppSupportedIndexableAST(x.X) && bashppSupportedScalarAST(x.Index)
 	case *goast.SliceExpr:
-		return bashppSupportedScalarAST(x.X) &&
+		return bashppSupportedIndexableAST(x.X) &&
 			(x.Low == nil || bashppSupportedScalarAST(x.Low)) &&
 			(x.High == nil || bashppSupportedScalarAST(x.High)) &&
 			(x.Max == nil || bashppSupportedScalarAST(x.Max))

@@ -19,6 +19,10 @@ func TestBashPPTypeDeclClassified(t *testing.T) {
 		{"type T int", "T", "int", false, 0, 10, 5, 7},
 		{"type ID = string", "ID", "string", true, 0, 16, 5, 10},
 		{"echo before\ntype LongName = pkgType", "LongName", "pkgType", true, 12, 35, 17, 28},
+		{"type A [2+1]int", "A", "[2+1]int", false, 0, 15, 5, 7},
+		{"type S = []string", "S", "[]string", true, 0, 17, 5, 9},
+		{"type M map[string][]int", "M", "map[string][]int", false, 0, 23, 5, 7},
+		{"type P *Point", "P", "*Point", false, 0, 13, 5, 7},
 	}
 	for _, tc := range cases {
 		t.Run(tc.in, func(t *testing.T) {
@@ -64,7 +68,7 @@ func TestBashPPTypeDeclFallback(t *testing.T) {
 	cases := []string{
 		"type if int", "type T return",
 		"type T =", "type T == int", "type T = = int", "type T int extra", "type T = int extra",
-		"type T []int", "type T = []int", "type T map[string]int", "type T struct {",
+		"type T struct {",
 		// Comma-separated members are not the accepted Bash# enum grammar;
 		// they remain an ordinary shell command rather than being guessed at.
 		"type Color enum { Red, Green }",

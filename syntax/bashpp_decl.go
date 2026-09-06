@@ -113,9 +113,9 @@ func bashppUntypedDecl(ce *CallExpr, redirs []*Redirect) *BashPPDecl {
 	}
 }
 
-// bashppTypeDecl recognizes the deliberately small type surface supported by
-// this tranche. A type body is one bare identifier, optionally preceded by an
-// alias marker; unsupported bodies remain ordinary shell commands.
+// bashppTypeDecl recognizes the named type surface supported by this tranche:
+// identifiers, pointers, structs, arrays, slices, maps, and aliases over the
+// same. Unsupported bodies remain ordinary shell commands.
 func bashppTypeDecl(ce *CallExpr, redirs []*Redirect) *BashPPDecl {
 	if ce == nil || len(ce.Assigns) > 0 || len(redirs) > 0 || len(ce.Args) < 3 {
 		return nil
@@ -179,18 +179,25 @@ func bashppTypeDecl(ce *CallExpr, redirs []*Redirect) *BashPPDecl {
 		return nil
 	}
 	typ := bashppBareLit(typeWord)
+	typeExpr := bashppTypeExpr(typeWord)
 	if typ == nil || !bashppIsIdent(typ.Value) {
 		text := bashppWordText(typeWord)
-		if !strings.HasPrefix(text, "*") || !bashppIsIdent(strings.TrimPrefix(text, "*")) {
+		if typeExpr == nil && (!strings.HasPrefix(text, "*") || !bashppIsIdent(strings.TrimPrefix(text, "*"))) {
 			return nil
 		}
 		typ = &Lit{ValuePos: typeWord.Pos(), ValueEnd: typeWord.End(), Value: text}
+	}
+	if typeExpr == nil {
+		typeExpr = bashppTypeExpr(typeWord)
+	}
+	if typeExpr == nil {
+		return nil
 	}
 	m := RecognizeStartSite(kw.Value + " " + name.Value)
 	if m.Site != StartTypeDecl {
 		return nil
 	}
-	return &BashPPDecl{Site: m.Site, Kw: kw, Name: name, DeclType: typ, DeclTypeExpr: bashppTypeExpr(typeWord), Alias: alias, End_: typeWord.End()}
+	return &BashPPDecl{Site: m.Site, Kw: kw, Name: name, DeclType: typ, DeclTypeExpr: typeExpr, Alias: alias, End_: typeWord.End()}
 }
 
 func bashppTypeLit(w *Word) *Lit {

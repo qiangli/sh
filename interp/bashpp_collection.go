@@ -5,7 +5,10 @@ package interp
 
 import (
 	"fmt"
+	goast "go/ast"
 	"go/constant"
+	goparser "go/parser"
+	gotoken "go/token"
 	"strconv"
 	"strings"
 
@@ -110,19 +113,78 @@ func bashPPTypeText(typ syntax.BashPPTypeExpr) string {
 	return "<inferred>"
 }
 
+func (r *Runner) bashPPUnderlyingType(typ syntax.BashPPTypeExpr) syntax.BashPPTypeExpr {
+	seen := make(map[string]bool)
+	for {
+		name, ok := typ.(*syntax.BashPPNamedType)
+		if !ok {
+			return typ
+		}
+		decl, found := r.bashPPTypes[name.Name.Value]
+		if !found || decl.typeExpr == nil || seen[name.Name.Value] {
+			return typ
+		}
+		seen[name.Name.Value] = true
+		typ = decl.typeExpr
+	}
+}
+
+func (r *Runner) bashPPTypeAssignable(actual, expected syntax.BashPPTypeExpr) bool {
+	if expected == nil {
+		return true
+	}
+	actual = r.bashPPCanonicalAssignableType(actual)
+	expected = r.bashPPCanonicalAssignableType(expected)
+	if bashPPTypeText(actual) == bashPPTypeText(expected) {
+		return true
+	}
+	_, actualNamed := actual.(*syntax.BashPPNamedType)
+	_, expectedNamed := expected.(*syntax.BashPPNamedType)
+	if actualNamed && expectedNamed {
+		return false
+	}
+	return bashPPTypeText(r.bashPPUnderlyingType(actual)) == bashPPTypeText(r.bashPPUnderlyingType(expected))
+}
+
+func (r *Runner) bashPPCanonicalAssignableType(typ syntax.BashPPTypeExpr) syntax.BashPPTypeExpr {
+	seen := make(map[string]bool)
+	for {
+		name, ok := typ.(*syntax.BashPPNamedType)
+		if !ok || seen[name.Name.Value] {
+			return typ
+		}
+		decl, found := r.bashPPTypes[name.Name.Value]
+		if !found || !decl.alias || decl.typeExpr == nil {
+			return typ
+		}
+		seen[name.Name.Value] = true
+		typ = decl.typeExpr
+	}
+}
+
 func (r *Runner) bashPPEvalCollection(lit *syntax.BashPPCompositeLit, expected syntax.BashPPTypeExpr) (any, *bashPPCollectionMeta, error) {
 	typ := lit.LitType
 	if typ == nil {
 		typ = expected
 	}
-	collection, ok := typ.(*syntax.BashPPCollectionType)
+	shape := r.bashPPUnderlyingType(typ)
+	collection, ok := shape.(*syntax.BashPPCollectionType)
 	if !ok {
 		return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-TYPE: collection literal requires array, slice, or map type; got %s", bashPPTypeText(typ))
 	}
 	if err := r.bashPPValidateCollectionType(collection); err != nil {
 		return nil, nil, err
 	}
-	if expected != nil && lit.LitType != nil && bashPPTypeText(typ) != bashPPTypeText(expected) {
+	inferredToArray := false
+	if expected != nil && lit.LitType != nil {
+		if actualCollection := collection; actualCollection.Kind == "inferred-array" {
+			if expectedCollection, ok := r.bashPPUnderlyingType(expected).(*syntax.BashPPCollectionType); ok && expectedCollection.Kind == "array" &&
+				bashPPTypeText(actualCollection.Element) == bashPPTypeText(expectedCollection.Element) {
+				inferredToArray = true
+			}
+		}
+	}
+	if expected != nil && lit.LitType != nil && !inferredToArray && !r.bashPPTypeAssignable(typ, expected) {
 		return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-ELEMENT: cannot use %s as %s element", bashPPTypeText(typ), bashPPTypeText(expected))
 	}
 	meta := &bashPPCollectionMeta{kind: collection.Kind, typ: typ}
@@ -156,7 +218,7 @@ func (r *Runner) bashPPEvalCollection(lit *syntax.BashPPCompositeLit, expected s
 	fixed := -1
 	if collection.Kind == "array" {
 		var err error
-		fixed, err = strconv.Atoi(collection.Length.Value)
+		fixed, err = r.bashPPArrayLength(collection.Length.Value)
 		if err != nil || fixed < 0 {
 			return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-LENGTH: invalid array length %s", collection.Length.Value)
 		}
@@ -193,6 +255,16 @@ func (r *Runner) bashPPEvalCollection(lit *syntax.BashPPCompositeLit, expected s
 	if fixed >= 0 {
 		length = fixed
 	}
+	if inferredToArray {
+		expectedCollection := r.bashPPUnderlyingType(expected).(*syntax.BashPPCollectionType)
+		want, err := r.bashPPArrayLength(expectedCollection.Length.Value)
+		if err != nil || length != want {
+			return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-LENGTH: cannot use inferred array length %d as %s", length, bashPPTypeText(expected))
+		}
+		meta.kind = "array"
+		meta.typ = expected
+		length = want
+	}
 	out := make([]any, length)
 	meta.sequence = make([]*bashPPCollectionMeta, length)
 	for i := range out {
@@ -215,6 +287,9 @@ func (r *Runner) bashPPValidateCollectionType(typ syntax.BashPPTypeExpr) error {
 		if !ok {
 			return fmt.Errorf("BASHPP-ECOLLECTION-TYPE: undefined element type %s", name)
 		}
+		if _, ok := decl.typeExpr.(*syntax.BashPPCollectionType); ok {
+			return r.bashPPValidateCollectionType(decl.typeExpr)
+		}
 		if decl.underlying == "struct" {
 			for _, field := range decl.fields {
 				if err := r.bashPPValidateValueType(field.FieldTypeExpr, make(map[string]bool)); err != nil {
@@ -232,7 +307,8 @@ func (r *Runner) bashPPValidateCollectionType(typ syntax.BashPPTypeExpr) error {
 			if x.Length == nil {
 				return fmt.Errorf("BASHPP-ECOLLECTION-LENGTH: array length is missing")
 			}
-			if _, err := strconv.Atoi(x.Length.Value); err != nil {
+			n, err := r.bashPPArrayLength(x.Length.Value)
+			if err != nil || n < 0 {
 				return fmt.Errorf("BASHPP-ECOLLECTION-LENGTH: invalid array length %s", x.Length.Value)
 			}
 		}
@@ -254,6 +330,13 @@ func (r *Runner) bashPPValidateCollectionType(typ syntax.BashPPTypeExpr) error {
 func (r *Runner) bashPPCollectionZero(typ syntax.BashPPTypeExpr) (any, *bashPPCollectionMeta) {
 	switch x := typ.(type) {
 	case *syntax.BashPPNamedType:
+		if shape, ok := r.bashPPUnderlyingType(typ).(*syntax.BashPPCollectionType); ok {
+			value, meta := r.bashPPCollectionZero(shape)
+			if meta != nil {
+				meta.typ = typ
+			}
+			return value, meta
+		}
 		name := x.Name.Value
 		if decl, ok := r.bashPPTypes[name]; ok {
 			name = strings.TrimPrefix(decl.underlying, "*")
@@ -275,7 +358,7 @@ func (r *Runner) bashPPCollectionZero(typ syntax.BashPPTypeExpr) (any, *bashPPCo
 		}
 		length := 0
 		if x.Kind == "array" {
-			length, _ = strconv.Atoi(x.Length.Value)
+			length, _ = r.bashPPArrayLength(x.Length.Value)
 		} else {
 			return nil, meta
 		}
@@ -289,6 +372,81 @@ func (r *Runner) bashPPCollectionZero(typ syntax.BashPPTypeExpr) (any, *bashPPCo
 		return nil, bashPPPointerMeta(x)
 	}
 	return nil, nil
+}
+
+func (r *Runner) bashPPArrayLength(text string) (int, error) {
+	if n, err := strconv.Atoi(text); err == nil {
+		return n, nil
+	}
+	expr, err := goparser.ParseExpr(text)
+	if err != nil {
+		return 0, err
+	}
+	value, ok := r.bashPPEvalConstIntExpr(expr)
+	if !ok || value.Kind() != constant.Int {
+		return 0, fmt.Errorf("not an integer constant")
+	}
+	n, exact := constant.Int64Val(value)
+	if !exact || int64(int(n)) != n {
+		return 0, fmt.Errorf("integer constant overflows int")
+	}
+	return int(n), nil
+}
+
+func (r *Runner) bashPPEvalConstIntExpr(expr goast.Expr) (value constant.Value, ok bool) {
+	defer func() {
+		if recover() != nil {
+			value, ok = nil, false
+		}
+	}()
+	switch x := expr.(type) {
+	case *goast.BasicLit:
+		if x.Kind != gotoken.INT {
+			return nil, false
+		}
+		v := constant.MakeFromLiteral(x.Value, gotoken.INT, 0)
+		return v, v.Kind() == constant.Int
+	case *goast.Ident:
+		cell := r.bashPPScope.lookup(x.Name)
+		if cell == nil || !cell.constant {
+			return nil, false
+		}
+		v := bashPPScalarFromString(cell.vr.String()).value
+		return v, v != nil && v.Kind() == constant.Int
+	case *goast.ParenExpr:
+		return r.bashPPEvalConstIntExpr(x.X)
+	case *goast.UnaryExpr:
+		v, ok := r.bashPPEvalConstIntExpr(x.X)
+		if !ok {
+			return nil, false
+		}
+		switch x.Op {
+		case gotoken.ADD, gotoken.SUB, gotoken.XOR:
+			return constant.UnaryOp(x.Op, v, 0), true
+		}
+	case *goast.BinaryExpr:
+		left, lok := r.bashPPEvalConstIntExpr(x.X)
+		right, rok := r.bashPPEvalConstIntExpr(x.Y)
+		if !lok || !rok {
+			return nil, false
+		}
+		if x.Op == gotoken.SHL || x.Op == gotoken.SHR {
+			shift, exact := constant.Uint64Val(right)
+			if !exact {
+				return nil, false
+			}
+			return constant.Shift(left, x.Op, uint(shift)), true
+		}
+		switch x.Op {
+		case gotoken.ADD, gotoken.SUB, gotoken.MUL, gotoken.QUO, gotoken.REM,
+			gotoken.AND, gotoken.OR, gotoken.XOR, gotoken.AND_NOT:
+			if (x.Op == gotoken.QUO || x.Op == gotoken.REM) && constant.Sign(right) == 0 {
+				return nil, false
+			}
+			return constant.BinaryOp(left, x.Op, right), true
+		}
+	}
+	return nil, false
 }
 
 func (r *Runner) bashPPEvalElement(expr syntax.BashPPExpr, expected syntax.BashPPTypeExpr) (any, *bashPPCollectionMeta, error) {
@@ -469,6 +627,10 @@ func (r *Runner) bashPPCollectionRead(index *syntax.BashPPIndexExpr) (any, *bash
 
 func bashPPCollectionRoot(expr syntax.BashPPExpr) (string, bool) {
 	switch x := expr.(type) {
+	case *syntax.BashPPParenExpr:
+		return bashPPCollectionRoot(x.X)
+	case *syntax.BashPPDerefExpr:
+		return bashPPCollectionRoot(x.X)
 	case *syntax.BashPPIdent:
 		return x.Name.Value, true
 	case *syntax.BashPPIndexExpr:
@@ -513,13 +675,14 @@ func bashPPExprText(expr syntax.BashPPExpr) string {
 func (r *Runner) bashPPCollectionAssign(target *syntax.BashPPIndexExpr, rhs syntax.BashPPExpr) {
 	root, ok := bashPPCollectionRoot(target)
 	cell := r.bashPPScope.lookup(root)
-	if !ok || cell == nil || cell.object == nil || cell.object.collection == nil {
+	rootMeta := bashPPCellMeta(cell)
+	if !ok || cell == nil || rootMeta == nil {
 		r.errf("BASHPP-ECOLLECTION-ASSIGN: indexed target is not a collection\n")
 		r.exit = exitStatus{code: 2}
 		return
 	}
 	path := strings.TrimPrefix(bashPPExprText(target), root)
-	if cell.object.readonly {
+	if cell.object != nil && cell.object.readonly {
 		if root != cell.object.owner {
 			r.errf("BASHPP-EREADONLY-MUTATION: cannot mutate readonly value %q through alias %q and path %s\n", cell.object.owner, root, path)
 		} else {
@@ -541,7 +704,7 @@ func (r *Runner) bashPPCollectionAssign(target *syntax.BashPPIndexExpr, rhs synt
 	var meta *bashPPCollectionMeta
 	if id, ok := target.X.(*syntax.BashPPIdent); ok {
 		_ = id
-		parent, meta = cell.vr.Obj, cell.object.collection
+		parent, meta = cell.vr.Obj, rootMeta
 	} else {
 		var err error
 		parent, meta, err = r.bashPPCollectionRead(target.X.(*syntax.BashPPIndexExpr))
@@ -556,7 +719,12 @@ func (r *Runner) bashPPCollectionAssign(target *syntax.BashPPIndexExpr, rhs synt
 		r.exit = exitStatus{code: 2}
 		return
 	}
-	typ := meta.typ.(*syntax.BashPPCollectionType)
+	typ, ok := r.bashPPUnderlyingType(meta.typ).(*syntax.BashPPCollectionType)
+	if !ok {
+		r.errf("BASHPP-ECOLLECTION-ASSIGN: indexed target is not a collection\n")
+		r.exit = exitStatus{code: 2}
+		return
+	}
 	value, child, err := r.bashPPEvalElement(rhs, typ.Element)
 	if err != nil {
 		r.errf("%v\n", err)

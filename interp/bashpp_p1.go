@@ -147,6 +147,12 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 				}
 				seen[member.Value] = true
 			}
+		} else if _, ok := d.DeclTypeExpr.(*syntax.BashPPCollectionType); ok {
+			if err := r.bashPPValidateCollectionType(d.DeclTypeExpr); err != nil {
+				r.errf("%s%v\n", r.bashErrPrefix(d.Pos()), err)
+				r.exit = exitStatus{code: 2}
+				return
+			}
 		} else {
 			spelling := d.DeclType.Value
 			base := strings.TrimPrefix(spelling, "*")
@@ -214,8 +220,9 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 			}
 			vr = expand.Variable{Set: true, Kind: expand.String}
 		}
+		shape := r.bashPPUnderlyingType(d.DeclTypeExpr)
 		_, _, isStruct := r.bashPPStructFields(d.DeclTypeExpr)
-		_, isCollection := d.DeclTypeExpr.(*syntax.BashPPCollectionType)
+		_, isCollection := shape.(*syntax.BashPPCollectionType)
 		if d.InitExpr != nil && (isStruct || isCollection) {
 			value, meta, err := r.bashPPEvalTypedValue(d.InitExpr, d.DeclTypeExpr)
 			if err != nil {
@@ -229,8 +236,11 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 		} else if isStruct {
 			value, meta := r.bashPPZeroValue(d.DeclTypeExpr)
 			vr, valueMeta = expand.NewObject(value), meta
-		} else if collection, ok := d.DeclTypeExpr.(*syntax.BashPPCollectionType); ok {
+		} else if collection, ok := shape.(*syntax.BashPPCollectionType); ok {
 			value, meta := r.bashPPZeroValue(collection)
+			if meta != nil {
+				meta.typ = d.DeclTypeExpr
+			}
 			vr, valueMeta = expand.NewObject(value), meta
 		}
 	}
@@ -299,6 +309,12 @@ func (r *Runner) bashPPTypeTerminates(name string, seen map[string]bool) bool {
 		return false
 	}
 	seen[name] = true
+	if typ.typeExpr != nil {
+		if named, ok := typ.typeExpr.(*syntax.BashPPNamedType); ok {
+			return r.bashPPTypeTerminates(named.Name.Value, seen)
+		}
+		return true
+	}
 	base := strings.TrimPrefix(typ.underlying, "*")
 	if base == name {
 		return strings.HasPrefix(typ.underlying, "*") && !typ.alias

@@ -35,7 +35,12 @@ func (r *Runner) bashPPRangeCollection(ctx context.Context, rng *syntax.BashPPRa
 		r.exit = exitStatus{code: 2}
 		return true
 	}
-	collection := meta.typ.(*syntax.BashPPCollectionType)
+	collection, ok := r.bashPPUnderlyingType(meta.typ).(*syntax.BashPPCollectionType)
+	if !ok {
+		r.errf("BASHPP-ERANGE-TYPE: cannot range over %s\n", bashPPTypeText(meta.typ))
+		r.exit = exitStatus{code: 2}
+		return true
+	}
 	switch meta.kind {
 	case "array", "inferred-array":
 		value, meta = bashPPCopyArrayValue(value, meta)

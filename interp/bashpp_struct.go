@@ -27,6 +27,9 @@ func (r *Runner) bashPPValidateValueType(typ syntax.BashPPTypeExpr, seen map[str
 		}
 		seen[name] = true
 		defer delete(seen, name)
+		if decl.typeExpr != nil {
+			return r.bashPPValidateValueType(decl.typeExpr, seen)
+		}
 		if decl.underlying == "struct" {
 			for _, field := range decl.fields {
 				if err := r.bashPPValidateValueType(field.FieldTypeExpr, seen); err != nil {
@@ -113,7 +116,7 @@ func (r *Runner) bashPPEvalComposite(lit *syntax.BashPPCompositeLit, expected sy
 	if typ == nil {
 		typ = expected
 	}
-	if _, ok := typ.(*syntax.BashPPCollectionType); ok {
+	if _, ok := r.bashPPUnderlyingType(typ).(*syntax.BashPPCollectionType); ok {
 		return r.bashPPEvalCollection(lit, expected)
 	}
 	fields, typeName, ok := r.bashPPStructFields(typ)
@@ -279,13 +282,19 @@ func (r *Runner) bashPPCheckTypedValue(value any, meta *bashPPCollectionMeta, ex
 		return nil
 	}
 	if _, _, ok := r.bashPPStructFields(expected); ok {
-		if meta == nil || meta.kind != "struct" || bashPPTypeText(meta.typ) != bashPPTypeText(expected) {
+		if meta == nil || meta.kind != "struct" || !r.bashPPTypeAssignable(meta.typ, expected) {
 			return fmt.Errorf("BASHPP-ESTRUCT-FIELD-TYPE: cannot use value as %s", bashPPTypeText(expected))
 		}
 		return nil
 	}
 	if _, ok := expected.(*syntax.BashPPCollectionType); ok {
-		if meta == nil || bashPPTypeText(meta.typ) != bashPPTypeText(expected) {
+		if meta == nil || !r.bashPPTypeAssignable(meta.typ, expected) {
+			return fmt.Errorf("BASHPP-ECOLLECTION-ELEMENT: cannot use value as %s", bashPPTypeText(expected))
+		}
+		return nil
+	}
+	if _, ok := r.bashPPUnderlyingType(expected).(*syntax.BashPPCollectionType); ok {
+		if meta == nil || !r.bashPPTypeAssignable(meta.typ, expected) {
 			return fmt.Errorf("BASHPP-ECOLLECTION-ELEMENT: cannot use value as %s", bashPPTypeText(expected))
 		}
 		return nil
@@ -308,6 +317,8 @@ func bashPPCellMeta(cell *bashPPCell) *bashPPCollectionMeta {
 
 func (r *Runner) bashPPReadExpr(expr syntax.BashPPExpr) (any, *bashPPCollectionMeta, error) {
 	switch x := expr.(type) {
+	case *syntax.BashPPCompositeLit:
+		return r.bashPPEvalComposite(x, nil)
 	case *syntax.BashPPIdent:
 		cell := r.bashPPScope.lookup(x.Name.Value)
 		if cell != nil && cell.pointer {
@@ -442,6 +453,53 @@ func (r *Runner) bashPPStructuredAssign(target, rhs syntax.BashPPExpr) {
 	}
 	root, ok := bashPPCollectionRoot(target)
 	cell := r.bashPPScope.lookup(root)
+	if ok && cell != nil && cell.pointer {
+		ptr, err := r.bashPPAddress(target)
+		if err != nil {
+			r.errf("%v\n", err)
+			r.exit = exitStatus{code: 2}
+			return
+		}
+		if ptr == nil {
+			return
+		}
+		value, meta, err := r.bashPPEvalTypedValue(rhs, ptr.elem)
+		if err != nil {
+			r.errf("BASHPP-EASSIGN-MISMATCH: %v\n", err)
+			r.exit = exitStatus{code: 2}
+			return
+		}
+		if ptr.target.object != nil && ptr.target.object.readonly {
+			r.errf("BASHPP-EREADONLY-MUTATION: cannot mutate readonly value %q through pointer\n", ptr.target.object.owner)
+			r.exit = exitStatus{code: 2}
+			return
+		}
+		if ptr.target.constant || ptr.target.vr.ReadOnly {
+			r.errf("BASHPP-EREADONLY-MUTATION: cannot mutate readonly value through pointer\n")
+			r.exit = exitStatus{code: 2}
+			return
+		}
+		parent, parentMeta, _, err := ptr.readParent()
+		if err != nil {
+			r.errf("%v\n", err)
+			r.exit = exitStatus{code: 2}
+			return
+		}
+		if parentMeta == nil {
+			r.errf("BASHPP-ESELECTOR-TYPE: assignment parent is not a structured value\n")
+			r.exit = exitStatus{code: 2}
+			return
+		}
+		last := ptr.path[len(ptr.path)-1]
+		if last.field != "" {
+			parent.(map[string]any)[last.field] = value
+			parentMeta.mapping[last.field] = meta
+		} else {
+			parent.([]any)[last.index] = value
+			parentMeta.sequence[last.index] = meta
+		}
+		return
+	}
 	if !ok || cell == nil || cell.object == nil {
 		r.errf("BASHPP-ESELECTOR-ASSIGN: target is not a structured value\n")
 		r.exit = exitStatus{code: 2}
@@ -512,7 +570,7 @@ func (r *Runner) bashPPStructuredAssign(target, rhs syntax.BashPPExpr) {
 		parent.(map[string]any)[x.Sel.Value] = value
 		parentMeta.mapping[x.Sel.Value] = child
 	case *syntax.BashPPIndexExpr:
-		collection, found := parentMeta.typ.(*syntax.BashPPCollectionType)
+		collection, found := r.bashPPUnderlyingType(parentMeta.typ).(*syntax.BashPPCollectionType)
 		if !found {
 			err = fmt.Errorf("BASHPP-ECOLLECTION-ASSIGN: indexed target is not a collection")
 			break
