@@ -1778,17 +1778,34 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 		p.space()
 		p.command(cmd.Body, nil)
 	case *BashPPSwitch:
-		p.writeLit("switch ")
-		p.word(cmd.Expr)
-		p.writeLit(" {")
+		p.writeLit("switch")
+		if cmd.Init != nil || cmd.Semicolon.IsValid() || cmd.Tag != nil {
+			p.space()
+		}
+		if cmd.Init != nil {
+			p.command(cmd.Init, nil)
+		}
+		if cmd.Semicolon.IsValid() {
+			p.writeLit("; ")
+		}
+		if cmd.Tag != nil {
+			p.bashppExpr(cmd.Tag)
+		}
+		p.space()
+		p.writeLit("{")
 		p.wantSpace = spaceRequired
 		for _, arm := range cmd.Arms {
 			p.newlines(arm.Pos())
-			if arm.Member == nil {
+			if len(arm.Exprs) == 0 {
 				p.writeLit("default:")
 			} else {
 				p.writeLit("case ")
-				p.writeLit(arm.Member.Value)
+				for i, expr := range arm.Exprs {
+					if i > 0 {
+						p.writeLit(", ")
+					}
+					p.bashppExpr(expr)
+				}
 				p.writeLit(":")
 			}
 			p.wantSpace = spaceRequired

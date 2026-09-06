@@ -6,6 +6,7 @@ package interp
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"go/constant"
 	"go/token"
 	"strconv"
@@ -452,25 +453,95 @@ func (r *Runner) bashPPSwitch(ctx context.Context, sw *syntax.BashPPSwitch) {
 		r.exit = exitStatus{code: 2}
 		return
 	}
-	value := r.bashPPExprValue(sw.Expr)
+	if r.bashPPScope == nil {
+		r.bashPPScope = newBashPPScope(nil)
+	}
+	leaveSwitch := r.bashPPPushScope()
+	defer leaveSwitch()
+	r.exit.clear()
+	if sw.Init != nil {
+		r.cmd(ctx, sw.Init)
+		if !r.exit.ok() {
+			return
+		}
+	}
+	var tag bashPPScalar
+	var err error
+	if sw.Tag == nil {
+		tag.value = constant.MakeBool(true)
+	} else {
+		tag, err = r.bashPPEvalScalarExpr(sw.Tag)
+		if err != nil {
+			r.errf("%v\n", err)
+			r.exit = exitStatus{code: 2}
+			return
+		}
+	}
 	var fallback *syntax.BashPPSwitchArm
 	for _, arm := range sw.Arms {
-		if arm.Member == nil {
+		if len(arm.Exprs) == 0 {
 			fallback = arm
 			continue
 		}
-		if arm.Member.Value == value {
-			fallback = arm
+		for _, expr := range arm.Exprs {
+			candidate, evalErr := r.bashPPSwitchCaseScalar(tag, expr)
+			if evalErr != nil {
+				r.errf("%v\n", evalErr)
+				r.exit = exitStatus{code: 2}
+				return
+			}
+			if sw.Tag == nil && candidate.value.Kind() != constant.Bool {
+				r.errf("BASHPP-ESWITCH-TYPE: tagless switch case must be boolean, got %s\n", candidate.value.Kind())
+				r.exit = exitStatus{code: 2}
+				return
+			}
+			match, compareErr := bashPPSwitchEqual(tag, candidate)
+			if compareErr != nil {
+				r.errf("%v\n", compareErr)
+				r.exit = exitStatus{code: 2}
+				return
+			}
+			if match {
+				fallback = arm
+				break
+			}
+		}
+		if fallback == arm {
 			break
 		}
 	}
 	if fallback == nil {
 		return
 	}
-	if r.bashPPScope != nil {
-		defer r.bashPPPushScope()()
-	}
+	defer r.bashPPPushScope()()
 	r.stmts(ctx, fallback.Stmts)
+}
+
+func (r *Runner) bashPPSwitchCaseScalar(tag bashPPScalar, expr syntax.BashPPExpr) (bashPPScalar, error) {
+	if tag.typ != "" {
+		if typ := r.bashPPTypes[tag.typ]; typ.underlying == "enum" {
+			if ident, ok := expr.(*syntax.BashPPIdent); ok {
+				for _, member := range typ.members {
+					if ident.Name.Value == member {
+						return bashPPScalar{value: constant.MakeString(member), typ: tag.typ}, nil
+					}
+				}
+			}
+		}
+	}
+	return r.bashPPEvalScalarExpr(expr)
+}
+
+func bashPPSwitchEqual(tag, candidate bashPPScalar) (bool, error) {
+	if tag.typ != "" && candidate.typ != "" && tag.typ != candidate.typ {
+		return false, fmt.Errorf("BASHPP-ESWITCH-TYPE: case expression type %s does not match switch tag type %s", candidate.typ, tag.typ)
+	}
+	tagKind, candidateKind := tag.value.Kind(), candidate.value.Kind()
+	numeric := func(kind constant.Kind) bool { return kind == constant.Int || kind == constant.Float }
+	if tagKind != candidateKind && !(numeric(tagKind) && numeric(candidateKind)) {
+		return false, fmt.Errorf("BASHPP-ESWITCH-TYPE: case expression type %s does not match switch tag type %s", candidateKind, tagKind)
+	}
+	return bashPPCompareScalar(tag.value, token.EQL, candidate.value)
 }
 
 // bashPPShortDeclPredeclared binds the results of a predeclared call to the

@@ -557,25 +557,26 @@ type BashPPIncDec struct {
 func (s *BashPPIncDec) Pos() Pos { return s.Name.Pos() }
 func (s *BashPPIncDec) End() Pos { return s.Op.End() }
 
-// BashPPSwitch is the exhaustive switch form admitted inside a typed Bash#
-// function. Its expression and case members remain syntax nodes so positions,
-// Walk, printing, and typed JSON all describe the source rather than a lowered
-// representation.
+// BashPPSwitch is a Go-form expression switch admitted inside a typed Bash++
+// function. A nil Tag is a tagless switch, whose implicit tag is true.
 type BashPPSwitch struct {
-	Switch Pos
-	Expr   *Word
-	Lbrace Pos
-	Arms   []*BashPPSwitchArm
-	Rbrace Pos
+	Switch    Pos
+	Init      Command
+	Semicolon Pos
+	Tag       BashPPExpr
+	Lbrace    Pos
+	Arms      []*BashPPSwitchArm
+	Rbrace    Pos
 }
 
 func (s *BashPPSwitch) Pos() Pos { return s.Switch }
 func (s *BashPPSwitch) End() Pos { return posAddCol(s.Rbrace, 1) }
 
-// BashPPSwitchArm is one `case Member:` or `default:` arm.
+// BashPPSwitchArm is one case clause. Exprs is empty for default.
 type BashPPSwitchArm struct {
 	Case   Pos // position of case/default
-	Member *Lit
+	Exprs  []BashPPExpr
+	Commas []*Lit
 	Colon  Pos
 	Stmts  []*Stmt
 	Last   []Comment

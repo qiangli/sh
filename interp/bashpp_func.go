@@ -250,22 +250,29 @@ func (r *Runner) bashPPCheckEnumSwitches(d *syntax.BashPPFuncDecl) bool {
 			if !ok {
 				continue
 			}
-			expr := sw.Expr.Lit()
-			typ := r.bashPPTypes[types[expr]]
-			if len(typ.members) > 0 {
+			ident, isIdent := sw.Tag.(*syntax.BashPPIdent)
+			typeName := ""
+			if isIdent {
+				typeName = types[ident.Name.Value]
+			}
+			if typ := r.bashPPTypes[typeName]; len(typ.members) > 0 {
 				covered := make(map[string]bool)
 				hasDefault := false
 				for _, arm := range sw.Arms {
-					if arm.Member == nil {
+					if len(arm.Exprs) == 0 {
 						hasDefault = true
 					} else {
-						covered[arm.Member.Value] = true
+						for _, expr := range arm.Exprs {
+							if member, ok := expr.(*syntax.BashPPIdent); ok {
+								covered[member.Name.Value] = true
+							}
+						}
 					}
 				}
 				if !hasDefault {
 					for _, member := range typ.members {
 						if !covered[member] {
-							r.errf("BASHPP-EENUM-NONEXHAUSTIVE: switch on %s is missing member %s or a default arm\n", types[expr], member)
+							r.errf("BASHPP-EENUM-NONEXHAUSTIVE: switch on %s is missing member %s or a default arm\n", typeName, member)
 							r.exit = exitStatus{code: 2}
 							return false
 						}

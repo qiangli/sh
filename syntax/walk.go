@@ -206,10 +206,12 @@ func Walk(node Node, f func(Node) bool) {
 		walkNilable(node.Name, f)
 		walkNilable(node.Op, f)
 	case *BashPPSwitch:
-		Walk(node.Expr, f)
+		walkNilable(node.Init, f)
+		walkNilable(node.Tag, f)
 		walkList(node.Arms, f)
 	case *BashPPSwitchArm:
-		walkNilable(node.Member, f)
+		walkList(node.Exprs, f)
+		walkList(node.Commas, f)
 		walkList(node.Stmts, f)
 		walkComments(node.Last, f)
 	case *BashPPAssign:

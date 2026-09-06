@@ -33,7 +33,9 @@ func TestBashPPEnumSyntaxSurfaces(t *testing.T) {
 		}
 		fn := f.Stmts[1].Cmd.(*BashPPFuncDecl)
 		sw, ok := fn.Body.Stmts[0].Cmd.(*BashPPSwitch)
-		if !ok || len(sw.Arms) != 2 || sw.Arms[0].Member.Value != "Red" || sw.Arms[1].Member.Value != "Green" {
+		first, firstOK := sw.Arms[0].Exprs[0].(*BashPPIdent)
+		second, secondOK := sw.Arms[1].Exprs[0].(*BashPPIdent)
+		if !ok || len(sw.Arms) != 2 || !firstOK || !secondOK || first.Name.Value != "Red" || second.Name.Value != "Green" {
 			t.Fatalf("switch = %#v", fn.Body.Stmts[0].Cmd)
 		}
 		if decl.Pos().Offset() != 0 || decl.End().Offset() != 30 || sw.Pos().Offset() != 64 || sw.End().Offset() != 154 {
