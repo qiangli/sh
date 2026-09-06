@@ -3,7 +3,7 @@ id: 56f4d5ff03aa
 kind: task
 title: Bash++ scalar expression and type-checker contract
 seq: 21
-status: doing
+status: done
 priority: p0
 created: 2026-09-06T16:18:00Z
 assignee: codex-gpt5.6-sol
@@ -41,3 +41,17 @@ preserving top-level Class-E behavior. It is intentionally not closure for this
 task: typed expression nodes with exact source positions and their Walk,
 Printer, and typed-JSON representation remain; so do source carriers and tests
 for shell-metacharacter operators that the ordinary shell token stream consumes.
+
+Completed (2026-09-06): `24cbde7a` fixes the scalar compatibility boundary;
+`878c2fc2` and `fc4d6a1b` add the positioned repo-native typed expression tree,
+Walk/Printer/typed-JSON round trips, evaluator consumption, conversions, and
+source-boundary proofs; `245d0da3` carries all eleven shell-metacharacter Go
+binary operators through committed short declarations while preserving shell
+pipelines, redirects, heredocs, background commands, top-level Class-E input,
+Classic/POSIX parsing, malformed rollback, and one-byte streaming. It also
+turns invalid shift counts into `BASHPP-EEXPR-SHIFT` instead of a panic.
+
+Independent clean-room review passed for the final carrier commit. The manager
+then reran the exact gate on the integrated branch: syntax 1.080s, typedjson
+0.511s, interp 34.291s, all PASS. Parent Story 200 remains open only for its
+separate control-flow scope.
