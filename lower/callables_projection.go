@@ -204,6 +204,11 @@ func (e *emitter) callProjection(c *syntax.BashPPCall, index int) projection {
 					count = 1
 				}
 				if index >= i && index < i+count {
+					if callableResultField(field) {
+						if typ, ok := e.callableResultABI(field); ok {
+							return e.projectionType(typ, nil)
+						}
+					}
 					typ, err := e.fieldType(field)
 					if err == nil {
 						return e.projectionType(typ, nil)

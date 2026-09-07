@@ -27,6 +27,7 @@ func (e *emitter) makeElement(n *syntax.BashPPMakeChan) (string, error) {
 func (e *emitter) recordedReturn(n *syntax.BashPPReturn) (string, error) {
 	var expressions, payloads []string
 	tuple := false
+	forward := ""
 	switch {
 	case n.FuncLit != nil:
 		value, err := e.literal(n.FuncLit)
@@ -35,7 +36,13 @@ func (e *emitter) recordedReturn(n *syntax.BashPPReturn) (string, error) {
 		}
 		expressions = append(expressions, value)
 	case n.Call != nil:
+		if len(e.callResultTypes(n.Call)) > 0 {
+			forward = e.prefix + "forwardedResults"
+		}
+		savedFrame := e.resultCallFrame
+		e.resultCallFrame = forward
 		value, err := e.call(n.Call)
+		e.resultCallFrame = savedFrame
 		if err != nil {
 			return "", err
 		}
@@ -87,6 +94,9 @@ func (e *emitter) recordedReturn(n *syntax.BashPPReturn) (string, error) {
 	plan := e.richResultPlanFor(descriptors)
 	var out strings.Builder
 	out.WriteString("{\n")
+	if forward != "" {
+		out.WriteString(e.invocationFrame(forward, count))
+	}
 	temps := make([]string, count)
 	for i := range temps {
 		temps[i] = fmt.Sprintf("%sreturned%d", e.prefix, i)
@@ -104,6 +114,17 @@ func (e *emitter) recordedReturn(n *syntax.BashPPReturn) (string, error) {
 		}
 	}
 	frame := e.prefix + "results"
+	if forward != "" {
+		checks := make([]string, count)
+		zeros := make([]string, count)
+		for i, typ := range e.resultTypes {
+			checks[i] = fmt.Sprintf("%s.Present(%d)", forward, i)
+			zeros[i] = "*new(" + typ + ")"
+		}
+		fmt.Fprintf(&out, "if !(%s) {%s.ShortFailure(); return %s}\n", strings.Join(checks, " && "), e.program(), strings.Join(zeros, ","))
+		fmt.Fprintf(&out, "%srt.MustResult(%srt.ForwardResults(%s,%s))\nreturn %s\n}", e.prefix, e.prefix, frame, forward, strings.Join(temps, ","))
+		return out.String(), nil
+	}
 	fmt.Fprintf(&out, "if %s != nil {\n", frame)
 	for i, temp := range temps {
 		record, err := e.richResultRecord(frame, plan, i, temp)

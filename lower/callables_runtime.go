@@ -98,7 +98,24 @@ func (e *emitter) programEntry(name string, marked bool, results []*syntax.BashP
 	site := e.prefix + "site"
 	failure := e.prefix + "entryError"
 	child := e.prefix + "enteredProgram"
-	return e.prefix + "results := " + p + ".Results\n_ = " + e.prefix + "results\n" + p + " = " + p + ".WithResults(nil)\n" + site + ".Name = " + strconv.Quote(name) + "\n" + child + ", " + failure + " := " + p + ".Enter(" + site + ", " + strconv.FormatBool(marked) + ")\nif " + failure + " != nil { " + p + ".Fail(" + failure + ")\n" + storage + "return " + values + "\n}\n" + p + " = " + child + "\n", nil
+	mark := e.prefix + "shortMark"
+	settle := mark + " := " + p + ".ShortFailureMark()\ndefer " + p + ".SettleShortFailures(" + mark + ")\n"
+	var named []string
+	index := 0
+	for _, field := range results {
+		if len(field.Names) == 0 {
+			index++
+			continue
+		}
+		for _, name := range field.Names {
+			named = append(named, e.prefix+"rt.MustResult("+e.prefix+"rt.SetNamedResult("+e.prefix+"results,"+strconv.Itoa(index)+","+name.Value+"))")
+			index++
+		}
+	}
+	if len(named) > 0 {
+		settle += "defer func(){if " + p + ".ShortFailureMark()==" + mark + " {" + strings.Join(named, ";") + "}}()\n"
+	}
+	return e.prefix + "results := " + p + ".Results\n_ = " + e.prefix + "results\n" + p + " = " + p + ".WithResults(nil)\n" + site + ".Name = " + strconv.Quote(name) + "\n" + child + ", " + failure + " := " + p + ".Enter(" + site + ", " + strconv.FormatBool(marked) + ")\nif " + failure + " != nil { " + p + ".Fail(" + failure + ")\n" + storage + "return " + values + "\n}\n" + p + " = " + child + "\n" + settle, nil
 }
 func (e *emitter) runtimeFunction(f *syntax.BashPPFuncDecl, signature, body, generics string) (string, error) {
 	if f.Receiver != nil {

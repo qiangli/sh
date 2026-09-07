@@ -16,3 +16,11 @@ source through Compile and a source-removed artifact: pointer, struct and
 integer-declared channel results produce `5:6:7`. Scalar carrier arguments,
 forwarded result metadata and absent-result assignment handling require their
 respective integration paths; runtime helper tests alone do not certify them.
+
+Source call initializers now test result presence independently of the native
+return value. A denied invocation leaves its target absent; forwarding an
+absent scalar result preserves the original diagnostic. A shared sequential
+short-declaration failure mark retains the source status after later output.
+Named results are refreshed after source defers, so a recovered panic can still
+return the final named value. The four public refused-agentic-result controls
+verify complete output, diagnostics and status through source-removed artifacts.

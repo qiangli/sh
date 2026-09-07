@@ -807,6 +807,9 @@ func (e *emitter) command(c syntax.Command) (string, error) {
 		e.projections.projectionBind(n.Name.Value, projection)
 		return n.Kw.Value + " " + n.Name.Value + typ + init + e.unused([]string{n.Name.Value}), nil
 	case *syntax.BashPPShortDecl:
+		if text, handled, err := e.shortResultCall(n); handled || err != nil {
+			return text, err
+		}
 		if n.Recv != nil {
 			return e.receiveDeclaration(n)
 		}
