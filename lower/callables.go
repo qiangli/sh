@@ -120,6 +120,20 @@ func (e *emitter) globalStatement(s *syntax.Stmt) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if n, ok := s.Cmd.(*syntax.BashPPShortDecl); ok && e.globalChecked[n] != "" {
+		name, failure := n.Lhs[0].Value, e.globalChecked[n]
+		if e.declaredGlobals[name] {
+			return "", e.fail(n, CodeType, "no new variables on left side of :=")
+		}
+		e.declaredGlobals[name] = true
+		if e.globalTypes == nil {
+			first := strings.SplitN(text, "\n", 2)[0]
+			e.globalDecls.WriteString(e.mark(n) + "var " + strings.Replace(first, " := ", " = ", 1) + "\n")
+			return e.mark(n) + e.unused([]string{name}) + "\n", nil
+		}
+		fmt.Fprintf(&e.globalDecls, "%svar %s %s\nvar %s error\n", e.mark(n), name, e.globalTypes[name], failure)
+		return e.mark(n) + strings.Replace(text, " := ", " = ", 1) + "\n", nil
+	}
 	line := strings.SplitN(text, "\n_ = ", 2)[0]
 	var ns []string
 	constant := false

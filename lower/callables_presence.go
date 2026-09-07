@@ -64,6 +64,21 @@ func (e *emitter) checkedSelector(n *syntax.BashPPSelectorExpr) (string, error) 
 	if n.Sel == nil {
 		return "", e.fail(n, CodeExpr, "missing selector name")
 	}
+	if e.execution && e.selectorProjection(n).sourceType == "" {
+		typ := e.projectionExpr(n.X).sourceType
+		if e.methodDeclaration(typ, n.Sel.Value) != nil {
+			return e.runtimeMethodHandle(n, base, typ, n.Sel.Value)
+		}
+		if iface, ok := e.interfaceDecl(typ); ok {
+			_, _, found, err := e.interfaceMethodTypes(iface, n.Sel.Value, map[*syntax.BashPPInterfaceType]bool{})
+			if err != nil {
+				return "", err
+			}
+			if found {
+				return e.runtimeMethodHandle(n, base, typ, n.Sel.Value)
+			}
+		}
+	}
 	if info := e.projectionExpr(n.X); info.kind == projectPointer {
 		base = e.checkedDeref(n, base, "")
 	}
@@ -94,6 +109,12 @@ func (e *emitter) checkedShortDeclaration(n *syntax.BashPPShortDecl, rhs string)
 	name := n.Lhs[0].Value
 	failure := e.prefix + "bindingError" + strings.ReplaceAll(n.Pos().String(), ":", "_")
 	info.present = failure + " == nil"
+	if !e.inFunc {
+		if e.globalChecked == nil {
+			e.globalChecked = map[*syntax.BashPPShortDecl]string{}
+		}
+		e.globalChecked[n] = failure
+	}
 	e.bind(name)
 	e.projections.projectionBind(name, info)
 	text := name + ", " + failure + " := " + e.prefix + "rt.TryValue(func() " + info.sourceType + " { return " + rhs + " })\nif " + failure + " != nil {" + e.operationFailure(failure) + "}" + e.unused([]string{name})

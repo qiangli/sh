@@ -16,7 +16,7 @@ func (e *emitter) needsExecution(file *syntax.File) {
 				e.readonly = true
 				e.execution = true
 			}
-		case *syntax.BashPPAgenticBlock, *syntax.BashPPGo, *syntax.BashPPMakeChan, *syntax.BashPPSend, *syntax.BashPPReceive, *syntax.BashPPClose, *syntax.BashPPSelect:
+		case *syntax.Subshell, *syntax.BashPPAgenticBlock, *syntax.BashPPGo, *syntax.BashPPMakeChan, *syntax.BashPPSend, *syntax.BashPPReceive, *syntax.BashPPClose, *syntax.BashPPSelect:
 			e.execution = true
 		case *syntax.BashPPFuncDecl:
 			e.execution = e.execution || n.Agentic != nil
@@ -88,7 +88,7 @@ func (e *emitter) programEntry(name string, marked bool, results []*syntax.BashP
 }
 func (e *emitter) runtimeFunction(f *syntax.BashPPFuncDecl, signature, body, generics string) (string, error) {
 	if f.Receiver != nil {
-		return "", e.fail(f, CodeUnsupported, "runtime methods need private capability-interface adapters")
+		return e.runtimeMethodFunction(f, signature, body, generics)
 	}
 	entry, err := e.programEntry(f.Name.Value, f.Agentic != nil, f.Results)
 	if err != nil {

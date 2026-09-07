@@ -53,6 +53,7 @@ type emitter struct {
 	sourceName         string
 	inferredParams     map[*syntax.BashPPField]string
 	globalDecls        strings.Builder
+	globalChecked      map[*syntax.BashPPShortDecl]string
 }
 
 // Compile returns canonical Go and mappings, or positioned diagnostics with no
@@ -664,6 +665,8 @@ func (e *emitter) command(c syntax.Command) (string, error) {
 	case *syntax.BashPPGo:
 		return e.programGo(n)
 
+	case *syntax.Subshell:
+		return e.nativeSubshell(n)
 	case *syntax.DeclClause:
 		return e.readonlyDeclare(n, ReadonlyContext{State: e.program() + ".Readonly"})
 	case *syntax.BashPPCommandCall:
@@ -736,7 +739,11 @@ func (e *emitter) command(c syntax.Command) (string, error) {
 		case n.FuncLit != nil:
 			rhs, err = e.literal(n.FuncLit)
 		case len(n.MethodValue) > 0:
-			rhs = strings.Join(names(n.MethodValue), ".")
+			if e.execution {
+				rhs, err = e.methodHandle(n)
+			} else {
+				rhs = strings.Join(names(n.MethodValue), ".")
+			}
 		case n.MakeChan != nil:
 			rhs, err = e.runtimeMakeChannel(n.MakeChan, e.runtimeScope())
 		case n.Recv != nil:
@@ -802,7 +809,11 @@ func (e *emitter) command(c syntax.Command) (string, error) {
 			e.panicSupport = true
 			return "if " + e.prefix + "recovered := " + e.userRecover() + "; " + e.prefix + "recovered == nil { /*" + e.prefix + "status1*/ } else { " + e.prefix + "popPanic(); /*" + e.prefix + "status0*/ }", nil
 		}
-		return e.call(n)
+		text, err := e.call(n)
+		if !e.inFunc && len(n.Fun) == 1 && !e.funcs[n.Fun[0].Value] && (n.Fun[0].Value == "print" || n.Fun[0].Value == "println") {
+			text += "\n/*" + e.prefix + "status0*/"
+		}
+		return text, err
 	case *syntax.BashPPReturn:
 		if n.Expr != nil {
 			value, err := e.expr(n.Expr)
@@ -1148,6 +1159,9 @@ func (e *emitter) call(c *syntax.BashPPCall) (string, error) {
 	}
 	if len(c.Fun) == 0 {
 		return "", e.fail(c, CodeExpr, "missing callable")
+	}
+	if len(c.Fun) > 1 && e.execution && e.imports[c.Fun[0].Value] == "" {
+		return e.methodCall(c)
 	}
 	if len(c.Fun) > 1 {
 		var args []string
