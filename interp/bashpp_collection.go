@@ -155,6 +155,8 @@ func bashPPTypeText(typ syntax.BashPPTypeExpr) string {
 		return "struct"
 	case *syntax.BashPPPointerType:
 		return "*" + bashPPTypeText(x.Element)
+	case *syntax.BashPPFuncType:
+		return "func(" + bashPPFieldsSignature(x.Params) + ")(" + bashPPFieldsSignature(x.Results) + ")"
 	case *syntax.BashPPInterfaceType:
 		return "interface"
 	}

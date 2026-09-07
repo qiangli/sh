@@ -166,6 +166,7 @@ type Runner struct {
 	bashPPIssuedHandles  *bashPPHandleProvenance
 	bashPPCallChannels   []*bashPPChannel
 	bashPPCallInterfaces []*bashPPInterfaceValue
+	bashPPCallCells      []*bashPPCell
 	// bashPPResultCells is the authoritative value transport for the most
 	// recent typed function invocation. The parallel string results remain the
 	// shell-facing representation; these cells retain pointer, channel,

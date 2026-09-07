@@ -214,50 +214,13 @@ func (r *Runner) bashPPRunValueBuiltin(name string, c *syntax.BashPPCall) (*bash
 	}
 	switch name {
 	case "len", "cap":
-		if len(args) != 1 || c.Ellipsis.IsValid() {
-			r.bashPPBuiltinArity(name, "exactly 1 argument", len(args))
+		cell, err := r.bashPPBuiltinLength(name, c, args)
+		if err != nil {
+			r.errf("%v\n", err)
+			r.exit = exitStatus{code: 2}
 			return nil, false
 		}
-		if args[0].channel != nil {
-			if r.bashPPConcurrent == nil || args[0].cell.channelOwner != r.bashPPConcurrent || r.bashPPChanBoundary {
-				r.bashPPBuiltinError("TYPE", "%s argument is not a channel in this task group", name)
-				return nil, false
-			}
-			n := len(args[0].channel.ch)
-			if name == "cap" {
-				n = cap(args[0].channel.ch)
-			}
-			return bashPPBuiltinScalarCell(strconv.Itoa(n)), true
-		}
-		if n, ok := r.bashPPBuiltinPointerArrayLen(args[0]); ok {
-			return bashPPBuiltinScalarCell(strconv.Itoa(n)), true
-		}
-		if name == "len" {
-			if text, ok := args[0].value.(string); ok && args[0].meta == nil {
-				return bashPPBuiltinScalarCell(strconv.Itoa(len(text))), true
-			}
-		}
-		if args[0].value == nil && args[0].meta == nil {
-			r.bashPPBuiltinError("NIL", "%s cannot be applied to untyped nil", name)
-			return nil, false
-		}
-		kinds := []string{"array", "inferred-array", "slice", "map"}
-		if name == "cap" {
-			kinds = kinds[:3]
-		}
-		if _, ok := r.bashPPBuiltinCollection(args[0], kinds...); !ok {
-			r.bashPPBuiltinError("TYPE", "%s argument must be %s", name, map[bool]string{true: "an array or slice", false: "a string, array, slice, or map"}[name == "cap"])
-			return nil, false
-		}
-		if args[0].meta.kind == "map" {
-			return bashPPBuiltinScalarCell(strconv.Itoa(len(args[0].value.(map[string]any)))), true
-		}
-		seq, _ := args[0].value.([]any)
-		n := len(seq)
-		if name == "cap" {
-			n = cap(seq)
-		}
-		return bashPPBuiltinScalarCell(strconv.Itoa(n)), true
+		return cell, true
 
 	case "append":
 		if len(args) < 1 {
@@ -575,4 +538,50 @@ func (r *Runner) bashPPBindBuiltinResult(d *syntax.BashPPShortDecl, result *bash
 	} else if cell.object != nil && cell.object.owner == "" {
 		cell.object.owner = name
 	}
+}
+
+// bashPPBuiltinLength is shared by statement calls and positioned scalar calls.
+// It returns diagnostics instead of printing, so either caller reports once.
+func (r *Runner) bashPPBuiltinLength(name string, c *syntax.BashPPCall, args []bashPPBuiltinArg) (*bashPPCell, error) {
+	if len(args) != 1 || c.Ellipsis.IsValid() {
+		return nil, fmt.Errorf("BASHPP-EBUILTIN-ARITY: %s expects exactly 1 argument; got %d argument(s)", name, len(args))
+	}
+	arg := args[0]
+	if arg.channel != nil {
+		if r.bashPPConcurrent == nil || arg.cell.channelOwner != r.bashPPConcurrent || r.bashPPChanBoundary {
+			return nil, fmt.Errorf("BASHPP-EBUILTIN-TYPE: %s argument is not a channel in this task group", name)
+		}
+		size := len(arg.channel.ch)
+		if name == "cap" {
+			size = cap(arg.channel.ch)
+		}
+		return bashPPBuiltinScalarCell(strconv.Itoa(size)), nil
+	}
+	if size, ok := r.bashPPBuiltinPointerArrayLen(arg); ok {
+		return bashPPBuiltinScalarCell(strconv.Itoa(size)), nil
+	}
+	if name == "len" {
+		if text, ok := arg.value.(string); ok && arg.meta == nil {
+			return bashPPBuiltinScalarCell(strconv.Itoa(len(text))), nil
+		}
+	}
+	if arg.value == nil && arg.meta == nil {
+		return nil, fmt.Errorf("BASHPP-EBUILTIN-NIL: %s cannot be applied to untyped nil", name)
+	}
+	kinds := []string{"array", "inferred-array", "slice", "map"}
+	if name == "cap" {
+		kinds = kinds[:3]
+	}
+	if _, ok := r.bashPPBuiltinCollection(arg, kinds...); !ok {
+		return nil, fmt.Errorf("BASHPP-EBUILTIN-TYPE: %s argument must be %s", name, map[bool]string{true: "an array or slice", false: "a string, array, slice, or map"}[name == "cap"])
+	}
+	if arg.meta.kind == "map" {
+		return bashPPBuiltinScalarCell(strconv.Itoa(len(arg.value.(map[string]any)))), nil
+	}
+	seq, _ := arg.value.([]any)
+	size := len(seq)
+	if name == "cap" {
+		size = cap(seq)
+	}
+	return bashPPBuiltinScalarCell(strconv.Itoa(size)), nil
 }

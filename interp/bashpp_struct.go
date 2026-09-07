@@ -119,6 +119,15 @@ func (r *Runner) bashPPValidateTypeRepresentation(typ syntax.BashPPTypeExpr, act
 			}
 		}
 		return nil
+	case *syntax.BashPPFuncType:
+		for _, fields := range [][]*syntax.BashPPField{x.Params, x.Results} {
+			for _, field := range fields {
+				if err := r.bashPPValidateTypeRepresentation(field.FieldTypeExpr, active, make(map[string]bool)); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
 	case *syntax.BashPPInterfaceType:
 		if r.bashPPInterfaceHasTypeTerms(x, make(map[*syntax.BashPPInterfaceType]bool)) {
 			return fmt.Errorf("BASHPP-EINTERFACE-TYPESET: constraint interface cannot be used as a value type")

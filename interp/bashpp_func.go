@@ -203,6 +203,7 @@ type bashPPDeferred struct {
 	// so a later declaration shadowing the name cannot change what unwinds.
 	predeclared string
 	args        []string
+	cells       []*bashPPCell
 }
 
 // bashPPReturnState carries a Go-form return out through the body's statement
@@ -992,15 +993,32 @@ func bashPPMethodTypeBindings(fn *bashPPFunc, typ syntax.BashPPTypeExpr) map[str
 // A trailing `...` spreads its argument instead of passing it: `f(xs...)`
 // hands the elements of xs to a variadic parameter, one argument each.
 func (r *Runner) bashPPCallArgValues(c *syntax.BashPPCall) []string {
+	values, _ := r.bashPPCallArgValuesWithCells(c)
+	return values
+}
+
+func (r *Runner) bashPPCallArgValuesWithCells(c *syntax.BashPPCall) ([]string, []*bashPPCell) {
 	args := make([]string, 0, len(c.Args))
-	for i, w := range c.Args {
+	cells := make([]*bashPPCell, 0, len(c.Args))
+	for i, word := range c.Args {
 		if c.Ellipsis.IsValid() && i == len(c.Args)-1 {
-			args = append(args, r.bashPPSpreadValues(w)...)
+			values := r.bashPPSpreadValues(word)
+			args = append(args, values...)
+			cells = append(cells, make([]*bashPPCell, len(values))...)
 			break
 		}
-		args = append(args, r.bashPPExprValue(w))
+		var copied *bashPPCell
+		if cell := r.bashPPCellForWord(word); cell != nil {
+			copied = bashPPCopyAssignmentCell(cell)
+			// Direct channel authority is restored only from the separately checked
+			// owner provenance. A value copy cannot grant an unverified capability.
+			copied.channel = nil
+			copied.channelOwner = nil
+		}
+		args = append(args, r.bashPPExprValue(word))
+		cells = append(cells, copied)
 	}
-	return args
+	return args, cells
 }
 
 // bashPPSpreadValues expands the `xs...` argument into the values it passes.
@@ -1034,6 +1052,7 @@ func (r *Runner) bashPPSpreadValues(w *syntax.Word) []string {
 // does this: silently passing the elements would make the two spellings mean
 // the same thing and hide the mistake.
 func (r *Runner) bashPPCallValues(c *syntax.BashPPCall, fn *bashPPFunc) ([]string, bool) {
+	r.bashPPCallCells = nil
 	r.bashPPCallChannels = nil
 	if required := bashppRequiredAfterDefault(fn.params()); required != "" {
 		r.errf("BASHPP-EDEFAULT-ORDER: required parameter %q follows a default parameter\n", required)
@@ -1059,7 +1078,7 @@ func (r *Runner) bashPPCallValues(c *syntax.BashPPCall, fn *bashPPFunc) ([]strin
 			interfaces[i] = cell.interfaceValue
 		}
 	}
-	args := r.bashPPCallArgValues(c)
+	args, cells := r.bashPPCallArgValuesWithCells(c)
 	r.bashPPCallChannels = nil
 	r.bashPPCallInterfaces = nil
 	names := c.ArgNames
@@ -1068,13 +1087,16 @@ func (r *Runner) bashPPCallValues(c *syntax.BashPPCall, fn *bashPPFunc) ([]strin
 		args = args[fn.skipArgs:]
 		channels = channels[fn.skipArgs:]
 		interfaces = interfaces[fn.skipArgs:]
+		cells = cells[fn.skipArgs:]
 		positional -= fn.skipArgs
 	}
 	if len(names) > 0 || bashppHasDefaults(fn.params()) {
-		return r.bashPPBindCall(fn, args, channels, names, positional)
+		r.bashPPCallInterfaces = interfaces
+		return r.bashPPBindCall(fn, args, channels, cells, names, positional)
 	}
 	r.bashPPCallChannels = channels
 	r.bashPPCallInterfaces = interfaces
+	r.bashPPCallCells = cells
 	return args, true
 }
 
@@ -1082,11 +1104,12 @@ func (r *Runner) bashPPCallValues(c *syntax.BashPPCall, fn *bashPPFunc) ([]strin
 // contract. It is deliberately entered only when a call uses a name or the
 // signature has a default, so the established P3 arity diagnostics remain
 // byte-for-byte unchanged for ordinary Go-form calls.
-func (r *Runner) bashPPBindCall(fn *bashPPFunc, supplied []string, suppliedChannels []*bashPPChannel, names []*syntax.Lit, positional int) ([]string, bool) {
+func (r *Runner) bashPPBindCall(fn *bashPPFunc, supplied []string, suppliedChannels []*bashPPChannel, suppliedCells []*bashPPCell, names []*syntax.Lit, positional int) ([]string, bool) {
 	params := bashppParams(fn.params())
 	fail := func(format string, args ...any) ([]string, bool) {
 		r.bashPPCallChannels = nil
 		r.bashPPCallInterfaces = nil
+		r.bashPPCallCells = nil
 		r.errf(format, args...)
 		r.exit = exitStatus{code: 2}
 		return nil, false
@@ -1116,9 +1139,13 @@ func (r *Runner) bashPPBindCall(fn *bashPPFunc, supplied []string, suppliedChann
 	values := make([]string, len(params))
 	channels := make([]*bashPPChannel, len(params))
 	interfaces := make([]*bashPPInterfaceValue, len(params))
+	cells := make([]*bashPPCell, len(params))
 	bound := make([]bool, len(params))
 	for i := 0; i < positional; i++ {
 		values[i], bound[i] = supplied[i], true
+		if i < len(suppliedCells) {
+			cells[i] = suppliedCells[i]
+		}
 		if i < len(suppliedChannels) {
 			channels[i] = suppliedChannels[i]
 		}
@@ -1132,6 +1159,9 @@ func (r *Runner) bashPPBindCall(fn *bashPPFunc, supplied []string, suppliedChann
 			return fail("BASHPP-EARG-DUPLICATE-BINDING: parameter %q is supplied positionally and by name\n", name.Value)
 		}
 		values[index], bound[index] = supplied[positional+i], true
+		if source := positional + i; source < len(suppliedCells) {
+			cells[index] = suppliedCells[source]
+		}
 		if source := positional + i; source < len(suppliedChannels) {
 			channels[index] = suppliedChannels[source]
 		}
@@ -1144,6 +1174,9 @@ func (r *Runner) bashPPBindCall(fn *bashPPFunc, supplied []string, suppliedChann
 			continue
 		}
 		if param.defaultValue != nil {
+			if cell := r.bashPPCellForWord(param.defaultValue); cell != nil {
+				cells[i] = bashPPCopyAssignmentCell(cell)
+			}
 			values[i], bound[i] = r.bashPPExprValue(param.defaultValue), true
 			if channel, owner := r.bashPPDirectChannel(param.defaultValue); owner == r.bashPPConcurrent {
 				channels[i] = channel
@@ -1154,6 +1187,7 @@ func (r *Runner) bashPPBindCall(fn *bashPPFunc, supplied []string, suppliedChann
 	}
 	r.bashPPCallChannels = channels
 	r.bashPPCallInterfaces = interfaces
+	r.bashPPCallCells = cells
 	return values, true
 }
 
@@ -1255,6 +1289,8 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 	r.bashPPResultCells = nil
 	callChannels := r.bashPPCallChannels
 	callInterfaces := r.bashPPCallInterfaces
+	callCells := r.bashPPCallCells
+	r.bashPPCallCells = nil
 	r.bashPPCallChannels = nil
 	r.bashPPCallInterfaces = nil
 	if fn.decl != nil && fn.decl.Agentic != nil && !r.bashPPAgentic {
@@ -1300,6 +1336,18 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 		}
 		_ = r.bashPPScope.declare(param.name,
 			expand.Variable{Set: true, Kind: expand.String, Str: args[i]}, false)
+		if i < len(callCells) && callCells[i] != nil {
+			copy := bashPPCopyAssignmentCell(callCells[i])
+			copy.channel = nil
+			copy.channelOwner = nil
+			copy.constant = false
+			copy.vr.ReadOnly = false
+			copy.vr.Exported = false
+			if param.typ != nil {
+				copy.declType = param.typ
+			}
+			r.bashPPScope.entries[param.name] = copy
+		}
 		if i < len(callChannels) && callChannels[i] != nil {
 			cell := r.bashPPScope.lookup(param.name)
 			cell.channel, cell.channelOwner = callChannels[i], r.bashPPConcurrent
@@ -1627,6 +1675,35 @@ func (r *Runner) bashPPFinalResults(settled []string, resultNames []string) []st
 // bashPPReturnStmt evaluates a Go-form return, recording its values and
 // unwinding the body through the shell's existing return machinery.
 func (r *Runner) bashPPReturnStmt(ctx context.Context, ret *syntax.BashPPReturn) {
+	if ret.Call != nil {
+		fn, ok := r.bashPPLookupFunc(ret.Call)
+		if !ok {
+			r.bashPPShortFailureSeq++
+			if r.exit.code == 0 {
+				r.errf("BASHPP-ERETURN-CALL: return requires a declared callable\n")
+				r.exit = exitStatus{code: 2}
+			}
+			return
+		}
+		args, ok := r.bashPPCallValues(ret.Call, fn)
+		if !ok {
+			r.bashPPShortFailureSeq++
+			return
+		}
+		failureMark := r.bashPPShortFailureSeq
+		values := r.bashPPInvoke(ctx, fn, args)
+		if r.exit.code != 0 && !r.bashPPPanicking() {
+			r.bashPPShortFailureSeq++
+			return
+		}
+		if r.bashPPPanicking() || r.exit.exiting || r.exit.fatalExit || r.exit.err != nil || r.bashPPShortFailureSeq != failureMark {
+			return
+		}
+		cells := append([]*bashPPCell(nil), r.bashPPResultCells...)
+		r.bashPPReturn = bashPPReturnState{active: true, values: values, cells: cells}
+		r.exit.returning = true
+		return
+	}
 	if ret.FuncLit != nil {
 		// `return func(…) { … }` — the factory idiom. The closure captures the
 		// frame that is about to unwind, which is exactly what makes it useful:
@@ -1634,6 +1711,23 @@ func (r *Runner) bashPPReturnStmt(ctx context.Context, ret *syntax.BashPPReturn)
 		// frame does.
 		_, vr := r.bashPPMakeClosure(ret.FuncLit)
 		r.bashPPReturn = bashPPReturnState{active: true, values: []string{vr.Str}}
+		r.exit.returning = true
+		return
+	}
+	if ret.Expr != nil {
+		value, err := r.bashPPEvalScalarExpr(ret.Expr)
+		if err != nil {
+			r.errf("%v\n", err)
+			r.exit = exitStatus{code: 2}
+			r.bashPPShortFailureSeq++
+			return
+		}
+		text := bashPPScalarString(value.value)
+		cell := &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: text}, scalarKind: value.value.Kind()}
+		if value.typ != "" {
+			cell.declType = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: value.typ}}
+		}
+		r.bashPPReturn = bashPPReturnState{active: true, values: []string{text}, cells: []*bashPPCell{cell}}
 		r.exit.returning = true
 		return
 	}
@@ -1672,6 +1766,8 @@ func (r *Runner) bashPPDeferStmt(ctx context.Context, d *syntax.BashPPDefer) {
 			return
 		}
 		entry.fn, entry.args = fn, args
+		entry.cells = r.bashPPCallCells
+		r.bashPPCallCells = nil
 	} else {
 		if r.exit.code != 0 {
 			return
@@ -1726,6 +1822,7 @@ func (r *Runner) bashPPRunDefers(ctx context.Context, mark int) {
 		r.bashPPPanic.running = r.bashPPPanic.active
 		switch {
 		case d.fn != nil:
+			r.bashPPCallCells = d.cells
 			r.bashPPInvoke(ctx, d.fn, d.args)
 		case d.predeclared != "":
 			// `defer panic(v)` and `defer recover()`. The latter is the shape
@@ -1869,6 +1966,15 @@ func (r *Runner) bashPPCheckArgs(fn *bashPPFunc, params []bashPPParam, args []st
 	}
 	for i, arg := range args {
 		param := params[min(i, len(params)-1)]
+		if signature, ok := param.typ.(*syntax.BashPPFuncType); ok {
+			actual, found := r.bashPPClosure(arg)
+			if !found || bashPPFieldsSignature(actual.params()) != bashPPFieldsSignature(signature.Params) || bashPPFieldsSignature(actual.results()) != bashPPFieldsSignature(signature.Results) {
+				r.errf("BASHPP-EARG-FUNCTYPE: %s requires %s for parameter %s\n", fn.name(), bashPPTypeText(signature), param.name)
+				r.exit = exitStatus{code: 2}
+				return false
+			}
+			continue
+		}
 		if r.bashPPValueFits(param.declared, arg) {
 			continue
 		}
@@ -2048,6 +2154,11 @@ func bashPPSubstituteType(typ syntax.BashPPTypeExpr, typeArgs map[string]syntax.
 			ac.ArgType = bashPPSubstituteType(ac.ArgType, typeArgs)
 			cp.TypeArgs[i] = &ac
 		}
+		return &cp
+	case *syntax.BashPPFuncType:
+		cp := *x
+		cp.Params = bashPPSubstituteFields(x.Params, typeArgs)
+		cp.Results = bashPPSubstituteFields(x.Results, typeArgs)
 		return &cp
 	case *syntax.BashPPCollectionType:
 		cp := *x

@@ -28,6 +28,23 @@ func (r *Runner) bashPPEvalScalarExpr(expr syntax.BashPPExpr) (bashPPScalar, err
 	switch x := expr.(type) {
 	case *syntax.BashPPBasicLit:
 		return bashPPBasicScalar(x)
+	case *syntax.BashPPCall:
+		if len(x.Fun) != 1 || (x.Fun[0].Value != "len" && x.Fun[0].Value != "cap") {
+			return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-FORM: unsupported scalar call")
+		}
+		name := x.Fun[0].Value
+		if r.bashPPFuncs[name] != nil || (r.bashPPScope != nil && r.bashPPScope.lookup(name) != nil) {
+			return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-CALL: scalar %s requires the unshadowed builtin", name)
+		}
+		args := make([]bashPPBuiltinArg, len(x.Args))
+		for i, word := range x.Args {
+			args[i] = r.bashPPBuiltinArg(word)
+		}
+		cell, err := r.bashPPBuiltinLength(name, x, args)
+		if err != nil {
+			return bashPPScalar{}, err
+		}
+		return r.bashPPScalarFromCell(cell), nil
 	case *syntax.BashPPIdent:
 		if x.Name.Value == "nil" {
 			return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-NIL: nil is not a scalar")
@@ -56,6 +73,18 @@ func (r *Runner) bashPPEvalScalarExpr(expr syntax.BashPPExpr) (bashPPScalar, err
 		if err != nil {
 			return bashPPScalar{}, err
 		}
+		if op == token.LAND || op == token.LOR {
+			if left.value.Kind() != constant.Bool {
+				return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-OPERAND: logical operand must be boolean")
+			}
+			if known, boolean := r.bashPPBooleanExprShape(x.Y); known && !boolean {
+				return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-OPERAND: logical operand must be boolean")
+			}
+			truth := constant.BoolVal(left.value)
+			if op == token.LAND && !truth || op == token.LOR && truth {
+				return left, nil
+			}
+		}
 		right, err := r.bashPPEvalScalarExpr(x.Y)
 		if err != nil {
 			return bashPPScalar{}, err
@@ -67,7 +96,7 @@ func (r *Runner) bashPPEvalScalarExpr(expr syntax.BashPPExpr) (bashPPScalar, err
 			return bashPPScalar{}, err
 		}
 		return r.bashPPConvertScalar(x.ConvType.Value, v)
-	case *syntax.BashPPIndexExpr, *syntax.BashPPSelectorExpr:
+	case *syntax.BashPPIndexExpr, *syntax.BashPPSelectorExpr, *syntax.BashPPDerefExpr:
 		value, meta, err := r.bashPPReadExpr(expr)
 		if err != nil {
 			return bashPPScalar{}, err
@@ -787,4 +816,34 @@ func bashPPIntegerType(name string) bool {
 		return true
 	}
 	return false
+}
+
+// Preserve static operand diagnostics without evaluating a skipped logical RHS.
+func (r *Runner) bashPPBooleanExprShape(expr syntax.BashPPExpr) (known, boolean bool) {
+	switch x := expr.(type) {
+	case *syntax.BashPPParenExpr:
+		return r.bashPPBooleanExprShape(x.X)
+	case *syntax.BashPPBasicLit:
+		return true, false
+	case *syntax.BashPPIdent:
+		if x.Name.Value == "true" || x.Name.Value == "false" {
+			return true, true
+		}
+		if r.bashPPScope != nil {
+			if cell := r.bashPPScope.lookup(x.Name.Value); cell != nil && cell.vr.Kind != expand.Object && !cell.pointer && cell.interfaceValue == nil {
+				return true, r.bashPPScalarFromCell(cell).value.Kind() == constant.Bool
+			}
+		}
+	case *syntax.BashPPUnaryExpr:
+		return true, x.Op.Value == "!"
+	case *syntax.BashPPBinaryExpr:
+		switch x.Op.Value {
+		case "==", "!=", "<", "<=", ">", ">=", "&&", "||":
+			return true, true
+		}
+		return true, false
+	case *syntax.BashPPCall:
+		return true, false // positioned scalar calls are len/cap
+	}
+	return false, false
 }
