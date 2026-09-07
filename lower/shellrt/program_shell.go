@@ -30,11 +30,12 @@ func (p *Program) ShellRegion(source string) {
 	if p.Frame.Agentic() {
 		source = "agentic {\n" + source + "\n}"
 	}
-	if err := p.Session.Shell(p.Context, source); err != nil {
+	ctx, policy := WithLexicalDeclarations(p.Context, p.Bindings)
+	if err := p.Session.Shell(ctx, source); err != nil {
 		panic(ShellAbort{Err: err})
 	}
 	p.SetStatus(p.Session.Status())
-	if p.Session.Exited() {
+	if p.Session.Exited() || policy.AssignmentRefused() {
 		panic(ShellExit{})
 	}
 }

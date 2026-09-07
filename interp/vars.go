@@ -653,6 +653,14 @@ func bashExportedFuncValue(name string, body *syntax.Stmt) string {
 }
 
 func (r *Runner) lookupVar(name string) expand.Variable {
+	vr := r.lookupVarUnhosted(name)
+	if decl, ok := r.hostedDeclaration(name); ok && decl.Constant {
+		vr.ReadOnly = true
+	}
+	return vr
+}
+
+func (r *Runner) lookupVarUnhosted(name string) expand.Variable {
 	if name == "" {
 		// A nameref whose target is the empty string (or other
 		// invalid identifier) can reach here via Variable.Resolve.
@@ -1702,6 +1710,10 @@ func (r *Runner) bashShoptEnabled(name string) bool {
 }
 
 func (r *Runner) delVar(name string) {
+	if decl, ok := r.hostedDeclaration(name); ok {
+		r.refuseDeclarationUnset(name, decl.Constant)
+		return
+	}
 	// A declaration cannot be undeclared. Go has no `unset`, and letting one
 	// through would leave the name bound-but-unset in a block that still owns
 	// it, so a later `var x = 1` in the same block would fail as a
@@ -1710,13 +1722,7 @@ func (r *Runner) delVar(name string) {
 	// check — which is what `const` marking the variable readonly buys.
 	if r.bashPPScope != nil {
 		if cell := r.bashPPScope.lookup(name); cell != nil {
-			kind := "var"
-			if cell.constant {
-				kind = "const"
-			}
-			r.errf("%sunset: %s: cannot unset a bash++ %s declaration\n",
-				r.bashErrPrefix(r.curStmtPos), name, kind)
-			r.exit.code = 1
+			r.refuseDeclarationUnset(name, cell.constant)
 			return
 		}
 	}
@@ -2197,6 +2203,11 @@ func (r *Runner) markRestrictedVarsReadonly() {
 }
 
 func (r *Runner) setVar(name string, vr expand.Variable) {
+	if decl, ok := r.hostedDeclaration(name); ok && decl.Constant {
+		r.bashPPDeclRefused = true
+		r.refuseConstantAssignment(name)
+		return
+	}
 	// An ordinary shell assignment to a name a `var` declaration bound writes
 	// THROUGH to that binding rather than creating a shell variable beside
 	// it. Two stores for one name is the failure this whole file exists to
@@ -2205,9 +2216,7 @@ func (r *Runner) setVar(name string, vr expand.Variable) {
 	if r.bashPPScope != nil {
 		if cell := r.bashPPScope.lookup(name); cell != nil {
 			if cell.constant {
-				r.errf("%s%s: cannot assign to const\n",
-					r.bashErrPrefix(r.curStmtPos), name)
-				r.exit.code = 1
+				r.refuseConstantAssignment(name)
 				return
 			}
 			if vr.Kind == expand.KeepValue {

@@ -182,6 +182,8 @@ type Runner struct {
 	bashPPResultCells  []*bashPPCell
 	bashPPGoTask       bool
 	bashPPHostedTask   bool
+	bashPPHostedDecls  map[string]BashPPDeclaration
+	bashPPDeclRefused  bool
 	bashPPChanBoundary bool
 	bashPPFileRun      bool
 	bashPPTaskFiles    []*os.File
@@ -3040,6 +3042,7 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 	previousTaskPolicy := r.bashPPHostedTask
 	r.bashPPHostedTask = taskPolicy(ctx)
 	defer func() { r.bashPPHostedTask = previousTaskPolicy }()
+	defer r.withDeclarations(ctx)()
 	r.fillExpandConfig(ctx)
 	r.exit = exitStatus{}
 	r.expandRunExit = exitStatus{}
@@ -3126,6 +3129,7 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 	// A DISCARDed top-level command only aborts itself; the shell (and
 	// any caller driving Run statement-by-statement) keeps going.
 	r.discardRestOfLine = 0
+	r.bashPPDeclRefused = r.bashPPDeclRefused && r.exit.discarding
 	if r.exit.discarding {
 		r.exit.discarding = false
 		r.exit.exiting = false
@@ -3359,6 +3363,7 @@ func (r *Runner) subshell(background bool) *Runner {
 	// replacement authority merely by entering `( ... )` or a pipeline stage.
 	r2.bashPPGoTask = r.bashPPGoTask
 	r2.bashPPHostedTask = r.bashPPHostedTask
+	r2.bashPPHostedDecls = r.bashPPHostedDecls
 	r2.bashPPTaskState = r.bashPPTaskState
 	// Funcs are copied, since they might be modified.
 	r2.Funcs = maps.Clone(r.Funcs)

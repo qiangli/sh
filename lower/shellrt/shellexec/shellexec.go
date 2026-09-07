@@ -263,6 +263,7 @@ func (sh *shell) RunShell(ctx context.Context, st *shellrt.State, streams shellr
 	// shell decides when a region stops: Runner.Exited reports both `exit N`
 	// and an errexit-tripped failure, and is only valid immediately after the
 	// Run that set it.
+	ctx = sh.declarationContext(ctx)
 	status, exited := 0, false
 	for _, stmt := range file.Stmts {
 		runErr := sh.runner.Run(ctx, stmt)
@@ -272,7 +273,7 @@ func (sh *shell) RunShell(ctx context.Context, st *shellrt.State, streams shellr
 			return fatal
 		}
 		status = code
-		if exited {
+		if exited || shellrt.DeclarationsFromContext(ctx).AssignmentRefused() {
 			break
 		}
 	}
