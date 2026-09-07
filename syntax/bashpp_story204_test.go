@@ -47,3 +47,24 @@ func TestBashPPTypedConstRequiresInitializer(t *testing.T) {
 		return true
 	})
 }
+
+func TestBashPPTypedConstClassicPOSIXIsolation(t *testing.T) {
+	const src = "const Limit int8 = 7"
+	for _, lang := range []LangVariant{LangBash, LangPOSIX} {
+		for _, wrap := range []func(io.Reader) io.Reader{
+			func(r io.Reader) io.Reader { return r },
+			func(r io.Reader) io.Reader { return iotest.OneByteReader(r) },
+		} {
+			f, err := NewParser(Variant(lang)).Parse(wrap(strings.NewReader(src)), "")
+			if err != nil {
+				t.Fatalf("%v parse failed: %v", lang, err)
+			}
+			Walk(f, func(node Node) bool {
+				if _, ok := node.(*BashPPDecl); ok {
+					t.Fatalf("%v claimed a Bash++ typed const", lang)
+				}
+				return true
+			})
+		}
+	}
+}

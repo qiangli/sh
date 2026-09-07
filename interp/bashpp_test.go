@@ -67,6 +67,13 @@ func TestBashPPStory204DeclarationSemantics(t *testing.T) {
 		qt.Assert(t, qt.Equals(out.String(), "<0>:<false>:<>:7"))
 	})
 
+	t.Run("named typed const retains method identity", func(t *testing.T) {
+		var out strings.Builder
+		r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP))
+		bashPPRun(t, r, "type Count int\nfunc (c Count) Value() int { return c }\nconst K Count = 7\nn := K.Value()\nprintf '%s' \"$n\"\n")
+		qt.Assert(t, qt.Equals(out.String(), "7"))
+	})
+
 	t.Run("ordinary tuple may redeclare when another name is new", func(t *testing.T) {
 		var out strings.Builder
 		r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP))
@@ -82,13 +89,51 @@ func TestBashPPStory204DeclarationSemantics(t *testing.T) {
 		{"no new short declaration name", "x := 1\nx := 2\n", "BASHPP-ESHORT-NONEW"},
 		{"duplicate short declaration name", "x, x := 1, 2\n", "x repeated on left side of :="},
 		{"constant overflow", "var n int8 = 128\n", "BASHPP-EEXPR-CONVERT: constant 128 overflows int8"},
+		{"float32 overflow", "func main() {\n n := 999999999999999999999999999999999999999.0\n var f float32 = n\n}\nmain()\n", "BASHPP-EEXPR-CONVERT:"},
 		{"constant kind is not assignable", "var text string = 1\n", "BASHPP-EASSIGN-TYPE"},
+		{"complex carrier policy", "var z complex64 = 0\n", "BASHPP-ECOMPLEX-UNSUPPORTED"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var out strings.Builder
 			r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP))
 			bashPPRun(t, r, tc.src)
 			qt.Assert(t, qt.StringContains(out.String(), tc.want))
+		})
+	}
+}
+
+func TestBashPPStory204ShortDeclAtomicAcrossProducers(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			"function results reuse existing and add new",
+			"func pair() (int, int) { return 2, 3 }\nx := 1\nx, y := pair()\nprintf '%s:%s' \"$x\" \"$y\"\n",
+			"2:3",
+		},
+		{
+			"function result rollback on readonly target",
+			"func pair() (int, int) { return 2, 3 }\nconst x = 1\ny, x := pair()\nprintf '|%s|%s|' \"${y-unset}\" \"$x\"\n",
+			"x: cannot assign to constant\n|unset|1|",
+		},
+		{
+			"builtin no-new leaves old value",
+			"x := 9\nx := len(abc)\nprintf '|%s|' \"$x\"\n",
+			"BASHPP-ESHORT-NONEW: no new variables on left side of :=\n|9|",
+		},
+		{
+			"composite no-new leaves old value",
+			"x := 9\nx := []int{1, 2}\nprintf '|%s|' \"$x\"\n",
+			"BASHPP-ESHORT-NONEW: no new variables on left side of :=\n|9|",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out strings.Builder
+			r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP))
+			bashPPRun(t, r, tc.src)
+			qt.Assert(t, qt.Equals(out.String(), tc.want))
 		})
 	}
 }

@@ -139,6 +139,10 @@ type Runner struct {
 	// it lets ordinary assignment dispatch give bare identifier expressions
 	// their Go meaning without changing shell assignments elsewhere.
 	bashPPFuncActive int
+	// bashPPShortTxn makes every := result producer use the same atomic
+	// current-scope commit rules. Transactions nest across function calls, so a
+	// declaration evaluated by an RHS cannot be mistaken for the caller's LHS.
+	bashPPShortTxn *bashPPShortDeclTxn
 	// bashPPPanic is the panic currently unwinding this shell, if any. It is
 	// deliberately NOT copied into a subshell: a panic is scoped to the shell
 	// that raised it, exactly as a Go panic is scoped to its goroutine.

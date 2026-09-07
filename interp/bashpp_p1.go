@@ -187,6 +187,14 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 			}
 		}
 	}
+	if (d.Site == syntax.StartVar || d.Site == syntax.StartConst) && d.DeclTypeExpr != nil {
+		if named, ok := r.bashPPUnderlyingType(d.DeclTypeExpr).(*syntax.BashPPNamedType); ok &&
+			(named.Name.Value == "complex64" || named.Name.Value == "complex128") {
+			r.errf("%sBASHPP-ECOMPLEX-UNSUPPORTED: complex values are not supported by the Bash++ scalar carrier\n", r.bashErrPrefix(d.DeclTypeExpr.Pos()))
+			r.exit = exitStatus{code: 2}
+			return
+		}
+	}
 	if d.Site == syntax.StartVar && d.DeclTypeExpr != nil {
 		if err := r.bashPPValidateValueType(d.DeclTypeExpr, make(map[string]bool)); err != nil {
 			r.errf("%s%v\n", r.bashErrPrefix(d.Pos()), err)
@@ -309,7 +317,7 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 		r.bashPPTypes[name] = bashPPType{underlying: d.DeclType.Value, alias: d.Alias, typeParams: d.TypeParams, members: members, typeExpr: d.DeclTypeExpr, fields: d.StructFields}
 		keepType = true
 	}
-	if d.Site == syntax.StartVar && d.DeclType != nil {
+	if (d.Site == syntax.StartVar || d.Site == syntax.StartConst) && d.DeclType != nil {
 		_, pointer := r.bashPPPointerType(d.DeclTypeExpr)
 		base := bashPPNamedTypeBase(d.DeclTypeExpr)
 		cell := r.bashPPScope.lookup(name)
@@ -345,9 +353,15 @@ func (r *Runner) bashPPTypedScalarDeclValue(d *syntax.BashPPDecl) (expand.Variab
 	shape := r.bashPPUnderlyingType(d.DeclTypeExpr)
 	named, ok := shape.(*syntax.BashPPNamedType)
 	if !ok || !bashPPBuiltinType(named.Name.Value) || named.Name.Value == "error" {
+		if d.Site == syntax.StartConst {
+			return expand.Variable{}, true, fmt.Errorf("BASHPP-ECONST-TYPE: const initializer has unsupported type %s", bashPPTypeText(d.DeclTypeExpr))
+		}
 		return expand.Variable{}, false, nil
 	}
 	base := named.Name.Value
+	if base == "complex64" || base == "complex128" {
+		return expand.Variable{}, true, fmt.Errorf("BASHPP-ECOMPLEX-UNSUPPORTED: complex constants are not supported by the Bash++ scalar carrier")
+	}
 	if d.InitExpr == nil {
 		zero := "0"
 		switch base {
@@ -540,15 +554,11 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 	if r.bashPPScope == nil {
 		r.bashPPScope = newBashPPScope(nil)
 	}
-	// Literal declarations have no RHS diagnostic which could take
-	// precedence, so their declaration-set rules can be checked up front.
-	// More involved expression/call forms keep their established evaluation
-	// ordering and are intentionally outside this bounded tuple slice.
-	if _, literal := d.Expr.(*syntax.BashPPBasicLit); literal {
-		if !r.bashPPValidateShortDeclNames(d) {
-			return
-		}
+	txn, ok := r.bashPPBeginShortDecl(d)
+	if !ok {
+		return
 	}
+	defer r.bashPPEndShortDecl(txn, d.Pos())
 	if d.Expr != nil {
 		if assert, ok := d.Expr.(*syntax.BashPPTypeAssertExpr); ok {
 			if assert.TypeToken != nil {
@@ -804,9 +814,6 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 			return
 		}
 	}
-	if !r.bashPPValidateShortDeclNames(d) {
-		return
-	}
 	if len(d.Lhs) != 1 && len(d.Lhs) != len(d.Rhs) {
 		r.errf("assignment mismatch: %d variable(s) but %d value(s)\n",
 			len(d.Lhs), len(d.Rhs))
@@ -869,81 +876,83 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 		}
 	}
 	for i, lhs := range d.Lhs {
-		if !r.bashPPBindShortValue(lhs.Value, values[i], d.Pos()) {
+		r.bashPPDeclareName(lhs.Value, values[i])
+		if r.exit.code != 0 {
 			return
 		}
 	}
 }
 
-// bashPPValidateShortDeclNames enforces the rules which are properties of the
-// entire left-hand side before any right-hand side is evaluated or any cell is
-// changed. In particular, a := declaration may reuse names from this block,
-// but only when at least one non-blank name is new.
-func (r *Runner) bashPPValidateShortDeclNames(d *syntax.BashPPShortDecl) bool {
+type bashPPShortDeclTxn struct {
+	parent    *bashPPShortDeclTxn
+	scope     *bashPPScope
+	entries   map[string]*bashPPCell
+	cells     map[*bashPPCell]bashPPCell
+	newName   bool
+	expected  int
+	bound     map[string]bool
+	positions map[string]syntax.Pos
+	failed    bool
+}
+
+func (r *Runner) bashPPBeginShortDecl(d *syntax.BashPPShortDecl) (*bashPPShortDeclTxn, bool) {
 	seen := make(map[string]bool, len(d.Lhs))
-	newName := false
+	txn := &bashPPShortDeclTxn{
+		parent:    r.bashPPShortTxn,
+		scope:     r.bashPPScope,
+		entries:   make(map[string]*bashPPCell, len(r.bashPPScope.entries)),
+		cells:     make(map[*bashPPCell]bashPPCell, len(r.bashPPScope.entries)),
+		bound:     make(map[string]bool, len(d.Lhs)),
+		positions: make(map[string]syntax.Pos, len(d.Lhs)),
+	}
+	for name, cell := range r.bashPPScope.entries {
+		txn.entries[name] = cell
+		txn.cells[cell] = *cell
+	}
 	for _, lhs := range d.Lhs {
 		name := lhs.Value
 		if !syntax.ValidName(name) {
 			r.errf("%sinvalid variable name: %q\n", r.bashErrPrefix(lhs.Pos()), name)
 			r.exit = exitStatus{code: 2}
-			return false
+			return nil, false
 		}
 		if name == "_" {
 			continue
 		}
+		txn.expected++
 		if seen[name] {
 			r.errf("%s%s repeated on left side of :=\n", r.bashErrPrefix(lhs.Pos()), name)
 			r.exit = exitStatus{code: 2}
-			return false
+			return nil, false
 		}
 		seen[name] = true
-		cell, exists := r.bashPPScope.entries[name]
-		if !exists {
-			newName = true
-		} else if cell.constant || cell.vr.ReadOnly {
-			r.errf("%s%s: cannot assign to constant\n", r.bashErrPrefix(lhs.Pos()), name)
-			r.exit = exitStatus{code: 2}
-			return false
+		txn.positions[name] = lhs.Pos()
+		if _, exists := r.bashPPScope.entries[name]; !exists {
+			txn.newName = true
 		}
 	}
-	if !newName {
-		r.errf("%sBASHPP-ESHORT-NONEW: no new variables on left side of :=\n", r.bashErrPrefix(d.Pos()))
-		r.exit = exitStatus{code: 2}
-		return false
-	}
-	return true
+	r.bashPPShortTxn = txn
+	return txn, true
 }
 
-// bashPPBindShortValue performs the commit half of an ordinary scalar tuple.
-// Evaluation happens first, above, so a failing RHS cannot leave a prefix of
-// the tuple installed. Existing names are assignment targets; new names are
-// declarations. The blank identifier discards its value and never binds.
-func (r *Runner) bashPPBindShortValue(name string, vr expand.Variable, pos syntax.Pos) bool {
-	if name == "_" {
-		return true
+func (r *Runner) bashPPRollbackShortDecl(txn *bashPPShortDeclTxn) {
+	for cell, before := range txn.cells {
+		*cell = before
 	}
-	cell, exists := r.bashPPScope.entries[name]
-	if !exists {
-		r.bashPPDeclareName(name, vr)
-		return r.exit.code == 0
+	txn.scope.entries = txn.entries
+}
+
+func (r *Runner) bashPPEndShortDecl(txn *bashPPShortDeclTxn, pos syntax.Pos) {
+	r.bashPPShortTxn = txn.parent
+	if txn.failed || len(txn.bound) != txn.expected {
+		r.bashPPRollbackShortDecl(txn)
+		return
 	}
-	if cell.constant || cell.vr.ReadOnly {
-		r.errf("%s%s: cannot assign to constant\n", r.bashErrPrefix(pos), name)
+	if !txn.newName {
+		r.bashPPRollbackShortDecl(txn)
+		r.errf("%sBASHPP-ESHORT-NONEW: no new variables on left side of :=\n", r.bashErrPrefix(pos))
 		r.exit = exitStatus{code: 2}
-		return false
 	}
-	if cell.vr.Exported {
-		vr.Exported = true
-	}
-	cell.vr = vr
-	cell.channel, cell.channelOwner = nil, nil
-	cell.object, cell.valueMeta = nil, nil
-	// A reused name is assigned, not redeclared, so its declared scalar type
-	// identity remains attached to the cell.
-	cell.pointer, cell.nilPointer, cell.pointerValue = false, false, nil
-	cell.interfaceValue = nil
-	return true
 }
 
 func (r *Runner) bashPPShortDeclMethodValue(d *syntax.BashPPShortDecl) {
@@ -1245,8 +1254,31 @@ func (r *Runner) bashPPShortDeclPredeclared(d *syntax.BashPPShortDecl, name stri
 // is a rule about the whole left-hand side and so belongs to the site that has
 // one; this is only the per-name half the two forms share.
 func (r *Runner) bashPPDeclareName(name string, vr expand.Variable) {
+	if name == "_" {
+		return
+	}
 	if prev := r.writeEnv.Get(name); prev.Exported {
 		vr.Exported = true
+	}
+	for txn := r.bashPPShortTxn; txn != nil; txn = txn.parent {
+		if txn.scope != r.bashPPScope {
+			continue
+		}
+		if cell, exists := txn.scope.entries[name]; exists {
+			if cell.constant || cell.vr.ReadOnly {
+				r.errf("%s%s: cannot assign to constant\n", r.bashErrPrefix(txn.positions[name]), name)
+				r.exit = exitStatus{code: 2}
+				txn.failed = true
+				return
+			}
+			declType, typeName := cell.declType, cell.typeName
+			*cell = bashPPCell{vr: vr, declType: declType, typeName: typeName}
+			txn.bound[name] = true
+			return
+		}
+		_ = txn.scope.declare(name, vr, false)
+		txn.bound[name] = true
+		return
 	}
 	if err := r.bashPPScope.declare(name, vr, false); err != nil {
 		r.errf("%v\n", err)

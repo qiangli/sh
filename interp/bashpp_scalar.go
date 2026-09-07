@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"go/constant"
 	"go/token"
+	"math"
 	"math/big"
 	"strconv"
 	"strings"
@@ -636,6 +637,17 @@ func (r *Runner) bashPPConvertScalar(typ string, x bashPPScalar) (bashPPScalar, 
 		}
 	case "float32", "float64":
 		if x.value.Kind() == constant.Int || x.value.Kind() == constant.Float {
+			if typ == "float32" {
+				value, _ := constant.Float32Val(x.value)
+				if math.IsInf(float64(value), 0) {
+					return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-CONVERT: constant %s overflows %s", x.value, typ)
+				}
+			} else {
+				value, _ := constant.Float64Val(x.value)
+				if math.IsInf(value, 0) {
+					return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-CONVERT: constant %s overflows %s", x.value, typ)
+				}
+			}
 			return bashPPScalar{value: constant.ToFloat(x.value), typ: typ, runtime: x.runtime}, nil
 		}
 	default:
