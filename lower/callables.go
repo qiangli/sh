@@ -56,15 +56,8 @@ func (e *emitter) signature(params, results []*syntax.BashPPField, body *syntax.
 	}
 	var r []string
 	for _, field := range results {
-		if field.FieldType != nil && field.FieldType.Value == "func" {
-			var literal *syntax.BashPPFuncLit
-			syntax.Walk(body, func(n syntax.Node) bool {
-				if ret, ok := n.(*syntax.BashPPReturn); ok && ret.FuncLit != nil && literal == nil {
-					literal = ret.FuncLit
-					return false
-				}
-				return true
-			})
+		if callableResultField(field) {
+			literal := returnedFuncLit(body)
 			if literal == nil {
 				return "", e.fail(field, CodeUnsupported, "func result needs an inferable returned literal")
 			}
@@ -76,6 +69,15 @@ func (e *emitter) signature(params, results []*syntax.BashPPField, body *syntax.
 			if err != nil {
 				return "", err
 			}
+			// Record the public spelling once: the wrapper's declared result and
+			// its return adapter both read it back. What this signature declares
+			// is the current ABI's spelling, which under a runtime is the private
+			// closure the body's literal actually lowers to.
+			e.recordCallableResult(field, "func"+sig)
+			typ, ok := e.callableResultABI(field)
+			if !ok {
+				return "", e.fail(field, CodeUnsupported, "func result needs a recorded native signature")
+			}
 			names := names(field.Names)
 			for _, name := range names {
 				e.bind(name)
@@ -84,7 +86,7 @@ func (e *emitter) signature(params, results []*syntax.BashPPField, body *syntax.
 			if len(names) > 0 {
 				prefix = strings.Join(names, ",") + " "
 			}
-			r = append(r, prefix+"func"+sig)
+			r = append(r, prefix+typ)
 		} else {
 			x, err := e.fields([]*syntax.BashPPField{field})
 			if err != nil {

@@ -58,14 +58,24 @@ func (e *emitter) resultStorage(fields []*syntax.BashPPField) (declarations, val
 	var namesList []string
 	for _, f := range fields {
 		typ := "any"
-		if f.FieldType != nil || f.FieldTypeExpr != nil {
+		switch {
+		case callableResultField(f):
+			// `func` is not a committed type; its shape came from the literal
+			// the declaration returns. Storage holds what the private half
+			// produces, which is the private closure the wrapper adapts.
+			if e.methodResultField(f) {
+				return "", "", e.fail(f, CodeUnsupported, "runtime returned callable needs a receiver-aware return adapter")
+			}
+			native, ok := e.callableResultABI(f)
+			if !ok {
+				return "", "", e.fail(f, CodeUnsupported, "runtime returned callable needs an inferable native signature")
+			}
+			typ = native
+		case f.FieldType != nil || f.FieldTypeExpr != nil:
 			typ, err = e.fieldType(f)
 			if err != nil {
 				return "", "", err
 			}
-		}
-		if typ == "func" {
-			return "", "", e.fail(f, CodeUnsupported, "runtime returned callable needs public/private signature adapter")
 		}
 		count := len(f.Names)
 		if count == 0 {
@@ -136,7 +146,27 @@ func (e *emitter) runtimeFunction(f *syntax.BashPPFuncDecl, signature, body, gen
 	if public == "main" {
 		public = e.prefix + "sourceMain"
 	}
-	wrapper := "func " + public + generics + signature + " {\n" + p + ",err := " + e.prefix + "rt.NewProgram()\nif err != nil {panic(err)}\n" + storage + "err = " + p + ".Run(func(" + p + " *" + e.prefix + "rt.Program){" + invocation + "})\nif err != nil {panic(err)}\nreturn " + values + "\n}\n"
+	// A declaration that returns a callable has two spellings for that result,
+	// so the wrapper declares its own public signature and adapts the private
+	// closure on the way out. The Program it binds is the one this invocation
+	// ran under, captured inside Run: an escaped callable must keep reaching
+	// its creating owner, whose channel authority Run has already revoked, and
+	// never a fresh program that would hand it channels the owner gave up.
+	publicSignature, captured, adapters, returned := signature, "", "", values
+	if callableResults(f.Results) {
+		publicSignature, err = e.publicSignature(f)
+		if err != nil {
+			return "", err
+		}
+		adapters, returned, err = e.publicReturnValues(f, values)
+		if err != nil {
+			return "", err
+		}
+		name := e.capturedProgramName()
+		captured = "var " + name + " *" + e.prefix + "rt.Program\n"
+		invocation = name + " = " + p + "\n" + invocation
+	}
+	wrapper := "func " + public + generics + publicSignature + " {\n" + p + ",err := " + e.prefix + "rt.NewProgram()\nif err != nil {panic(err)}\n" + storage + captured + "err = " + p + ".Run(func(" + p + " *" + e.prefix + "rt.Program){" + invocation + "})\nif err != nil {panic(err)}\n" + adapters + "return " + returned + "\n}\n"
 	return e.mark(f) + "func " + private + generics + e.privateSignature(signature) + " {\n" + entry + body + "}\n" + wrapper, nil
 }
 func (e *emitter) programMain(body string) string {
