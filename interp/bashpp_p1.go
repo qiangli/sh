@@ -992,6 +992,15 @@ func (r *Runner) bashPPRollbackShortDecl(txn *bashPPShortDeclTxn) {
 
 func (r *Runner) bashPPEndShortDecl(txn *bashPPShortDeclTxn, pos syntax.Pos) {
 	r.bashPPShortTxn = txn.parent
+	incomplete := len(txn.bound) != txn.expected
+	// A producer which diagnosed an ordinary binding failure may return before
+	// touching any LHS. Mark that failure before an enclosing result-bearing
+	// function can settle and clear status 2. Panic and hard-exit paths are
+	// control transfers, not declaration diagnostics, and retain their own
+	// unwind machinery.
+	if incomplete && !txn.failed && r.exit.code == 2 && !r.exit.exiting && !r.exit.fatalExit && !r.bashPPPanicking() {
+		txn.failed = true
+	}
 	if !txn.failed && len(txn.bound) == txn.expected {
 		for _, name := range txn.names {
 			if !txn.bound[name] {

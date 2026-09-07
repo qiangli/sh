@@ -238,6 +238,33 @@ func TestBashPPStory204NestedCalleeFailureRollsBackCaller(t *testing.T) {
 	qt.Assert(t, qt.Equals(out.String(), "BASHPP-ESHORT-NONEW: no new variables on left side of :=\nstatus=2 x=7 fresh=unset"))
 }
 
+func TestBashPPStory204NestedProducerFailuresSurviveResultSettlement(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			"function result arity",
+			"func one() int { return 1 }\nfunc broken() (int, int) {\n a, b := one()\n return 8, 9\n}\n",
+			"assignment mismatch: 2 variable(s) but 1 value(s)\n",
+		},
+		{
+			"builtin arity",
+			"func broken() (int, int) {\n n := len(one, two)\n return 8, 9\n}\n",
+			"BASHPP-EBUILTIN-ARITY: len expects exactly 1 argument; got 2 argument(s)\n",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const caller = "x := 7\nx, fresh := broken()\nprintf 'status=%s x=%s fresh=%s' \"$?\" \"$x\" \"${fresh-unset}\"\n"
+			var out strings.Builder
+			r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP))
+			bashPPRun(t, r, tc.body+caller)
+			qt.Assert(t, qt.Equals(out.String(), tc.want+"status=2 x=7 fresh=unset"))
+		})
+	}
+}
+
 func TestBashPPStory204DiagnosticHasSourcePosition(t *testing.T) {
 	var out strings.Builder
 	r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP), interp.WithBashCompatErrors(true))
