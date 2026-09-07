@@ -75,3 +75,21 @@ results, switch, constant groups/integer range, inferred function parameters,
 reviewed import calls, direct-only recover, nested panic restoration and exit
 status. Unsupported cases remain diagnostics; a test count is not the full
 language denominator.
+
+## Scalar shell and variadic follow-up
+
+The next native slice adds simple shell-local scalar bindings, result-less
+function return statuses, typed variadic signatures and spread, and the quoted
+slice iteration used by variadic helpers. Typed variadic length/index parameter
+expansions are explicit operations; unsupported shell expansions still fail.
+
+Shell arguments now follow the existing structured selector/index convention:
+a path rooted in a live binding projects that field or element. This applies
+to command arguments, not arbitrary quoted text or typed return words. Return
+values receive the declared native result conversion at the callable boundary,
+including named scalar underlying types. Reviewed dot imports are resolved
+against the actual package export scope.
+
+These repairs were measured against additional public profile fixtures. Rich
+root-object JSON rendering, exact-rational scalar rendering and arbitrary-
+precision inferred scalar storage remain separate representation obligations.

@@ -33,6 +33,8 @@ type emitter struct {
 	panicSupport    bool
 	imports         map[string]string
 	callableParams  map[*syntax.BashPPField]string
+	resultTypes     []string
+	dotNames        map[string]bool
 	globalDecls     strings.Builder
 }
 
@@ -54,7 +56,7 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 	if !token.IsIdentifier(options.Package) || token.Lookup(options.Package).IsKeyword() {
 		return nil, ErrorList{{Code: CodeType, Msg: "invalid package name", Pos: file.Pos()}}
 	}
-	e := &emitter{options: options, funcs: map[string]bool{}, scopes: []map[string]bool{{}}, globals: map[string]bool{}, visibleGlobals: map[string]bool{}, imports: map[string]string{}, callableParams: map[*syntax.BashPPField]string{}, typeNames: map[string]bool{}, globalTypes: globalTypes}
+	e := &emitter{options: options, funcs: map[string]bool{}, scopes: []map[string]bool{{}}, globals: map[string]bool{}, visibleGlobals: map[string]bool{}, imports: map[string]string{}, callableParams: map[*syntax.BashPPField]string{}, dotNames: map[string]bool{}, typeNames: map[string]bool{}, globalTypes: globalTypes}
 	// Allocate private names from the tree rather than reserving user identifiers.
 	for n := 0; ; n++ {
 		e.prefix = fmt.Sprintf("__bpp%d_", n)
@@ -324,7 +326,7 @@ func (e *emitter) known(name string) bool {
 	if e.inFunc {
 		global = e.functionGlobals[name]
 	}
-	if e.funcs[name] || global || e.typeNames[name] || e.imports[name] != "" {
+	if e.funcs[name] || global || e.typeNames[name] || e.imports[name] != "" || e.dotNames[name] {
 		return true
 	}
 	for i := len(e.scopes) - 1; i >= 0; i-- {
@@ -432,6 +434,9 @@ func (e *emitter) function(f *syntax.BashPPFuncDecl) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	savedResults := e.resultTypes
+	e.resultTypes = e.returnTypes(f.Results)
+	defer func() { e.resultTypes = savedResults }()
 	body, err := e.block(f.Body)
 	if err != nil {
 		return "", err
@@ -492,12 +497,17 @@ func (e *emitter) fields(fs []*syntax.BashPPField) (string, error) {
 		} else if f.Ellipsis.IsValid() {
 			typ = "...any"
 		}
+		if f.Ellipsis.IsValid() && !strings.HasPrefix(typ, "...") {
+			typ = "..." + typ
+		}
 		out = append(out, s+typ)
 	}
 	return strings.Join(out, ", "), nil
 }
 func (e *emitter) command(c syntax.Command) (string, error) {
 	switch n := c.(type) {
+	case *syntax.ForClause:
+		return e.shellFor(n)
 	case *syntax.BashPPConstGroup:
 		return e.constGroup(n)
 	case *syntax.BashPPRange:
@@ -580,15 +590,29 @@ func (e *emitter) command(c syntax.Command) (string, error) {
 		}
 		return e.call(n)
 	case *syntax.BashPPReturn:
+		if len(e.resultTypes) == 0 && len(n.Results) > 0 {
+			if len(n.Results) != 1 {
+				return "", e.fail(n, CodeResult, "resultless function return requires one status")
+			}
+			x, err := e.valueWord(n.Results[0])
+			if err != nil {
+				return "", err
+			}
+			e.bridge = true
+			return e.prefix + "rt.Status = int(" + x + ")\nreturn", nil
+		}
 		if n.FuncLit != nil {
 			x, err := e.literal(n.FuncLit)
 			return "return " + x, err
 		}
 		var values []string
-		for _, w := range n.Results {
+		for i, w := range n.Results {
 			x, err := e.valueWord(w)
 			if err != nil {
 				return "", err
+			}
+			if i < len(e.resultTypes) && e.resultTypes[i] != "" {
+				x = e.resultTypes[i] + "(" + x + ")"
 			}
 			values = append(values, x)
 		}

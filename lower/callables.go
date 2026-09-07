@@ -27,6 +27,9 @@ func (e *emitter) literal(f *syntax.BashPPFuncLit) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	savedResults := e.resultTypes
+	e.resultTypes = e.returnTypes(f.Results)
+	defer func() { e.resultTypes = savedResults }()
 	body, err := e.block(f.Body)
 	if err != nil {
 		return "", err
@@ -242,7 +245,11 @@ func (e *emitter) importDecl(n *syntax.BashPPImport) error {
 			alias = spec.Alias.Value
 		}
 		if alias == "." {
-			return e.fail(spec, CodeUnsupported, "dot import binding is not implemented")
+			for _, name := range pkg.Scope().Names() {
+				if pkg.Scope().Lookup(name).Exported() {
+					e.dotNames[name] = true
+				}
+			}
 		}
 		e.imports[alias] = p
 		e.bind(alias)
@@ -442,4 +449,57 @@ func (e *emitter) callbackShape(params, results []*syntax.BashPPField) (string, 
 		r = " (" + r + ")"
 	}
 	return "func(" + p + ")" + r, nil
+}
+
+func (e *emitter) shellFor(n *syntax.ForClause) (string, error) {
+	loop, ok := n.Loop.(*syntax.WordIter)
+	if !ok || n.Select || len(loop.Items) != 1 {
+		return "", e.fail(n, CodeUnsupported, "shell loop requires runtime lowering")
+	}
+	w := loop.Items[0]
+	if len(w.Parts) != 1 {
+		return "", e.fail(w, CodeBridge, "shell loop word expansion")
+	}
+	q, ok := w.Parts[0].(*syntax.DblQuoted)
+	if !ok || len(q.Parts) != 1 {
+		return "", e.fail(w, CodeBridge, "shell loop requires a quoted typed-slice spread")
+	}
+	p, ok := q.Parts[0].(*syntax.ParamExp)
+	if !ok || p.Param == nil || p.Index == nil {
+		return "", e.fail(w, CodeBridge, "shell loop requires a typed-slice spread")
+	}
+	index, ok := p.Index.(*syntax.Word)
+	if !ok || index.Lit() != "@" || !e.known(p.Param.Value) {
+		return "", e.fail(w, CodeBridge, "shell loop requires a typed-slice spread")
+	}
+	e.push()
+	defer e.pop()
+	e.bind(loop.Name.Value)
+	var body strings.Builder
+	for _, stmt := range n.Do {
+		text, err := e.statement(stmt)
+		if err != nil {
+			return "", err
+		}
+		body.WriteString(text)
+	}
+	return "for _, " + loop.Name.Value + " := range " + p.Param.Value + " {\n" + body.String() + "}", nil
+}
+
+func (e *emitter) returnTypes(fields []*syntax.BashPPField) []string {
+	var out []string
+	for _, field := range fields {
+		typ := ""
+		if field.FieldType != nil && field.FieldType.Value != "func" {
+			typ, _ = e.fieldType(field)
+		}
+		n := len(field.Names)
+		if n == 0 {
+			n = 1
+		}
+		for i := 0; i < n; i++ {
+			out = append(out, typ)
+		}
+	}
+	return out
 }

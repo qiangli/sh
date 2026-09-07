@@ -110,6 +110,18 @@ func (e *emitter) nativeWordExpr(n syntax.Node, text string) (string, error) {
 	return out.String(), nil
 }
 func (e *emitter) parameter(p *syntax.ParamExp) (string, error) {
+	if p.Param != nil && e.known(p.Param.Value) && p.Index != nil && p.Exp == nil && !p.Excl {
+		if index, ok := p.Index.(*syntax.Word); ok {
+			if index.Lit() == "@" && p.Length {
+				return "len(" + p.Param.Value + ")", nil
+			}
+			if !p.Length {
+				if _, err := strconv.Atoi(index.Lit()); err == nil {
+					return p.Param.Value + "[" + index.Lit() + "]", nil
+				}
+			}
+		}
+	}
 	if p.Param != nil && p.Param.Value == "?" && p.Index == nil && p.Exp == nil && !p.Length && !p.Excl {
 		e.bridge = true
 		return e.prefix + "rt.Status", nil
@@ -171,6 +183,9 @@ func (e *emitter) stringParts(parts []syntax.WordPart) (string, error) {
 	return "(" + strings.Join(out, " + ") + ")", nil
 }
 func (e *emitter) shellWord(w *syntax.Word) (string, error) {
+	if value, ok, err := e.shellProjection(w); ok || err != nil {
+		return value, err
+	}
 	if len(w.Parts) == 1 {
 		if l, ok := w.Parts[0].(*syntax.Lit); ok && e.inFunc && e.known(l.Value) {
 			return l.Value, nil
@@ -223,14 +238,17 @@ func (e *emitter) shell(c *syntax.CallExpr) (string, error) {
 				return "", e.fail(a, CodeBridge, "non-scalar shell assignment")
 			}
 			name := a.Name.Value
-			if !e.known(name) {
-				return "", e.fail(a, CodeBridge, "new shell binding needs shell-state runtime")
-			}
+			fresh := !e.known(name)
 			v, err := e.valueWord(a.Value)
 			if err != nil {
 				return "", err
 			}
-			out = append(out, name+" = "+v)
+			op := " = "
+			if fresh {
+				op = " := "
+				e.bind(name)
+			}
+			out = append(out, name+op+v+e.unused([]string{name}))
 		}
 		return strings.Join(out, "\n"), nil
 	}
@@ -324,4 +342,54 @@ func (e *emitter) argument(w *syntax.Word) (string, error) {
 		}
 	}
 	return e.valueWord(w)
+}
+
+// Shell arguments have an explicit structured-value projection convention.
+// Decode only selector/index paths rooted in a live binding; ordinary quoted
+// strings and unknown command words retain shell literal semantics.
+func (e *emitter) shellProjection(w *syntax.Word) (string, bool, error) {
+	if len(w.Parts) == 0 {
+		return "", false, nil
+	}
+	if _, ok := w.Parts[0].(*syntax.Lit); !ok {
+		return "", false, nil
+	}
+	var raw strings.Builder
+	if err := syntax.NewPrinter().Print(&raw, w); err != nil {
+		return "", false, err
+	}
+	expr, err := parser.ParseExpr(raw.String())
+	if err != nil {
+		return "", false, nil
+	}
+	switch expr.(type) {
+	case *ast.SelectorExpr, *ast.IndexExpr:
+	default:
+		return "", false, nil
+	}
+	var root func(ast.Expr) (string, bool)
+	root = func(x ast.Expr) (string, bool) {
+		switch n := x.(type) {
+		case *ast.Ident:
+			return n.Name, e.known(n.Name)
+		case *ast.SelectorExpr:
+			return root(n.X)
+		case *ast.IndexExpr:
+			switch n.Index.(type) {
+			case *ast.BasicLit, *ast.Ident:
+			default:
+				return "", false
+			}
+			return root(n.X)
+		}
+		return "", false
+	}
+	if _, ok := root(expr); !ok {
+		return "", false, nil
+	}
+	var output bytes.Buffer
+	if err := format.Node(&output, token.NewFileSet(), expr); err != nil {
+		return "", false, err
+	}
+	return output.String(), true, nil
 }
