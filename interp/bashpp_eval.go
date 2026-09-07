@@ -180,7 +180,11 @@ func classifyBashPPPackage(f bashPPPackageFacts, path string) bashPPCapability {
 
 // bashPPGoListFacts runs `go list -json` for one import path.
 func bashPPGoListFacts(ctx context.Context, req bashPPEvalRequest, path string) (bashPPPackageFacts, error) {
-	cmd := exec.CommandContext(ctx, req.Go, "list", "-e", "-json", path)
+	target, err := bashPPImportListTarget(ctx, req, path)
+	if err != nil {
+		return bashPPPackageFacts{}, err
+	}
+	cmd := exec.CommandContext(ctx, req.Go, "list", "-e", "-json", target)
 	cmd.Dir, cmd.Env = req.Dir, req.Env
 	var out, errBuf bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errBuf

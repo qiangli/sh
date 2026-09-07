@@ -87,7 +87,11 @@ type bashPPGoIdentityInfo struct {
 type nativeBashPPEvaluator struct{}
 
 func (nativeBashPPEvaluator) Resolve(ctx context.Context, req bashPPEvalRequest, path string) (string, error) {
-	cmd := exec.CommandContext(ctx, req.Go, "list", "-json", path)
+	target, err := bashPPImportListTarget(ctx, req, path)
+	if err != nil {
+		return "", err
+	}
+	cmd := exec.CommandContext(ctx, req.Go, "list", "-json", target)
 	cmd.Dir, cmd.Env = req.Dir, req.Env
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, req.Stderr
