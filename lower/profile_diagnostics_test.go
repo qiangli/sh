@@ -1742,3 +1742,64 @@ func TestCheckProfileCycleIsStructural(t *testing.T) {
 	const undecided = "type Partial struct { Next Elsewhere }\n"
 	qt.Assert(t, qt.IsNil(lower.CheckProfile(parseProfile(t, undecided, "c.bpp"), "c.bpp")))
 }
+
+// Independent method parameters belong to the method, not its receiver or
+// another declaration with the same method name. These controls also exercise
+// alias resolution and method-expression argument alignment.
+func TestCheckProfileGenericMethodDiagnostics(t *testing.T) {
+	cases := []struct{ name, source, want string }{
+		{"renamed_arity", "type Vessel int\nfunc (v Vessel) Choose[A any, B any](a A, b B) A { return a; }\nvar owner Vessel = 1\nowner.Choose[int](7, 8)\n", "BASHPP-EGENERIC-ARITY: Choose expects 2 type argument(s); got 1\n"},
+		{"renamed_nongeneric", "type Vessel int\nfunc (v Vessel) Choose(a int) int { return a; }\nvar owner Vessel = 1\nowner.Choose[int](7)\n", "BASHPP-EGENERIC-ARITY: Choose is not generic; got 1 type argument(s)\n"},
+		{"renamed_value", "type Vessel int\nfunc (v Vessel) Choose[A any](a A) A { return a; }\nvar owner Vessel = 1\nf := owner.Choose\n", "BASHPP-EGENERIC-INFER: cannot infer type arguments for Choose\n"},
+		{"explicit_constraint", "type Vessel int\nfunc (v Vessel) Choose[A comparable](a A) A { return a; }\nvar owner Vessel = 1\nvar list []int = []int{1}\nowner.Choose[[]int](list)\n", "BASHPP-EGENERIC-CONSTRAINT: []int does not satisfy constraint for A in Choose\n"},
+		{"method_expression_constraint", "type Vessel int\nfunc (v Vessel) Choose[A comparable](a A) A { return a; }\nvar owner Vessel = 1\nvar list []int = []int{1}\nVessel.Choose(owner, list)\n", "BASHPP-EGENERIC-CONSTRAINT: []int does not satisfy constraint for A in Choose\n"},
+		{"renamed_interface", "type Vessel int\nfunc (v Vessel) Choose[A any](a A) A { return a; }\ntype Required interface { Choose(int) int }\nvar owner Vessel = 1\nvar target Required = owner\n", "BASHPP-EINTERFACE-GENERIC: Vessel method Choose declares type parameters and cannot implement an interface method\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			file := parseProfile(t, tc.source, "methods.bpp")
+			list := lower.CheckProfile(file, "methods.bpp")
+			qt.Assert(t, qt.Equals(renderProfile(list), tc.want))
+			qt.Assert(t, qt.Equals(len(list), 1))
+			qt.Assert(t, qt.IsTrue(list[0].Pos.IsValid()))
+			got, status := runInterpreter(t, tc.source, "methods.bpp")
+			qt.Assert(t, qt.Equals(got, tc.want))
+			qt.Assert(t, qt.Equals(status, 2))
+		})
+	}
+}
+
+func TestCheckProfileGenericMethodControls(t *testing.T) {
+	cases := []string{
+		"type Vessel int\nfunc (v Vessel) Choose[A comparable](a A) A { return a; }\nvar owner Vessel = 1\nx := Vessel.Choose(owner, 3)\n",
+		"type Vessel int\nfunc (v Vessel) Choose[A any](a A) A { return a; }\ntype Alias = Vessel\nvar owner Alias = 1\nx := owner.Choose[int](3)\n",
+		"type Vessel int\nfunc (v Vessel) Choose(a int) int { return a; }\nvar owner Vessel = 1\nf := owner.Choose\n",
+		"type Vessel int\nfunc (v Vessel) Extra[A any](a A) A { return a; }\nfunc (v Vessel) Choose(a int) int { return a; }\ntype Required interface { Choose(int) int }\nvar owner Vessel = 1\nvar target Required = owner\n",
+		"type Vessel int\nfunc (v Vessel) Choose[A any](a A) A { return a; }\ntype Other int\nfunc (v Other) Choose(a int) int { return a; }\nvar owner Other = 1\nf := owner.Choose\n",
+	}
+	for i, source := range cases {
+		t.Run(strconv.Itoa(i), func(t *testing.T) {
+			qt.Assert(t, qt.IsNil(lower.CheckProfile(parseProfile(t, source, "methods.bpp"), "methods.bpp")))
+			got, status := runInterpreter(t, source, "methods.bpp")
+			qt.Assert(t, qt.Equals(got, ""))
+			qt.Assert(t, qt.Equals(status, 0))
+		})
+	}
+}
+
+func TestCheckProfileEmbeddedPredeclaredInterfaces(t *testing.T) {
+	for _, source := range []string{
+		"type Failure string\nfunc (f Failure) Error() string { return f; }\ntype RichError interface { error }\nvar failure Failure = \"broken\"\nvar target RichError = failure\n",
+		"type Failure string\nfunc (f Failure) Error() string { return f; }\ntype Alias = error\ntype Required interface { Alias }\ntype Renamed interface { Required }\nvar failure Failure = \"broken\"\nvar target Renamed = failure\n",
+	} {
+		file := parseProfile(t, source, "embedding.bpp")
+		qt.Assert(t, qt.IsNil(lower.CheckProfile(file, "embedding.bpp")))
+		got, status := runInterpreter(t, source, "embedding.bpp")
+		qt.Assert(t, qt.Equals(got, ""))
+		qt.Assert(t, qt.Equals(status, 0))
+	}
+	// Session facts can carry only the name of an earlier declaration.
+	// Its unresolved embedding is not evidence of a concrete type term.
+	file := parseProfile(t, "type Required interface { Earlier }\nvar target Required\n", "embedding.bpp")
+	qt.Assert(t, qt.IsNil(lower.CheckProfileWithFacts(file, "embedding.bpp", &lower.ProfileFacts{Types: map[string]syntax.BashPPTypeExpr{"Earlier": nil}})))
+}

@@ -33,6 +33,8 @@ const (
 	CodeProfileBuiltinType       = "BASHPP-EBUILTIN-TYPE"
 	CodeProfileExprConvert       = "BASHPP-EEXPR-CONVERT"
 	CodeProfileForCond           = "BASHPP-EFOR-COND"
+	CodeProfileGenericArity      = "BASHPP-EGENERIC-ARITY"
+	CodeProfileInterfaceGeneric  = "BASHPP-EINTERFACE-GENERIC"
 	CodeProfileGenericParam      = "BASHPP-EGENERIC-PARAM"
 	CodeProfileGenericConstraint = "BASHPP-EGENERIC-CONSTRAINT"
 	CodeProfileGenericInfer      = "BASHPP-EGENERIC-INFER"
@@ -89,11 +91,12 @@ func CheckProfileWithFacts(file *syntax.File, origin string, facts *ProfileFacts
 		return nil
 	}
 	c := &profileChecker{
-		origin:   origin,
-		types:    map[string]*profileType{},
-		methods:  map[string][]ProfileMethod{},
-		funcs:    map[string]*syntax.BashPPFuncDecl{},
-		volatile: map[string]bool{},
+		origin:      origin,
+		types:       map[string]*profileType{},
+		methods:     map[string][]ProfileMethod{},
+		methodDecls: map[string]map[string]*syntax.BashPPFuncDecl{},
+		funcs:       map[string]*syntax.BashPPFuncDecl{},
+		volatile:    map[string]bool{},
 	}
 	c.collectFacts(facts)
 	c.collectFile(file)
@@ -130,11 +133,12 @@ type profileScalar struct {
 }
 
 type profileChecker struct {
-	origin  string
-	types   map[string]*profileType
-	methods map[string][]ProfileMethod
-	funcs   map[string]*syntax.BashPPFuncDecl
-	scopes  []map[string]*profileBinding
+	origin      string
+	types       map[string]*profileType
+	methods     map[string][]ProfileMethod
+	methodDecls map[string]map[string]*syntax.BashPPFuncDecl
+	funcs       map[string]*syntax.BashPPFuncDecl
+	scopes      []map[string]*profileBinding
 	// volatile names every identifier the file ever assigns, updates or takes
 	// the address of. See collectVolatile.
 	volatile map[string]bool
@@ -201,6 +205,10 @@ func (c *profileChecker) collectFile(file *syntax.File) {
 			}
 			if x.Receiver.RecvType != nil {
 				recv := x.Receiver.RecvType.Value
+				if c.methodDecls[recv] == nil {
+					c.methodDecls[recv] = map[string]*syntax.BashPPFuncDecl{}
+				}
+				c.methodDecls[recv][x.Name.Value] = x
 				c.methods[recv] = append(c.methods[recv], ProfileMethod{Name: x.Name.Value, Pointer: x.Receiver.Pointer})
 			}
 		}
@@ -544,6 +552,9 @@ func (c *profileChecker) shortDecl(d *syntax.BashPPShortDecl) {
 // shortDeclValue checks the right-hand side and reports whether it was
 // rejected.
 func (c *profileChecker) shortDeclValue(d *syntax.BashPPShortDecl) bool {
+	if c.checkGenericMethodValue(d.Expr) {
+		return true
+	}
 	before := len(c.out)
 	if d.Call != nil {
 		c.call(d.Call)
@@ -843,10 +854,29 @@ func (c *profileChecker) interfaceHasTypeTerms(iface *syntax.BashPPInterfaceType
 			}
 			continue
 		}
-		// A bare named type term is a type-set element too.
-		if _, named := elem.Embedded.(*syntax.BashPPNamedType); named {
+		// Only a known concrete type proves a type-set term. A name whose
+		// declaration is unavailable may instead denote an ordinary interface.
+		if c.concreteTypeTerm(elem.Embedded, map[string]bool{}) {
 			return true
 		}
+	}
+	return false
+}
+
+func (c *profileChecker) concreteTypeTerm(t syntax.BashPPTypeExpr, seen map[string]bool) bool {
+	switch x := t.(type) {
+	case *syntax.BashPPNamedType:
+		if x.Name == nil || seen[x.Name.Value] {
+			return false
+		}
+		name := x.Name.Value
+		seen[name] = true
+		if info := c.types[name]; info != nil {
+			return c.concreteTypeTerm(info.underlying, seen)
+		}
+		return name != "error" && name != "any" && profileBuiltinTypeName(name)
+	case *syntax.BashPPPointerType, *syntax.BashPPCollectionType, *syntax.BashPPStructType, *syntax.BashPPFuncType:
+		return true
 	}
 	return false
 }
@@ -1236,18 +1266,73 @@ func (c *profileChecker) wordScalarKind(w *syntax.Word) (constant.Kind, bool) {
 	return s.value.Kind(), true
 }
 
+// directMethod resolves only declarations on the actual named receiver (or
+// its alias). Promoted and dynamic interface methods are deliberately undecided.
+func (c *profileChecker) directMethod(t syntax.BashPPTypeExpr, name string) *syntax.BashPPFuncDecl {
+	if p, ok := t.(*syntax.BashPPPointerType); ok {
+		t = p.Element
+	}
+	named, ok := t.(*syntax.BashPPNamedType)
+	if !ok || named.Name == nil {
+		return nil
+	}
+	recv, ok := c.resolveAlias(named.Name.Value)
+	if !ok {
+		return nil
+	}
+	return c.methodDecls[recv][name]
+}
+
+func (c *profileChecker) methodReceiver(name string) (syntax.BashPPTypeExpr, bool) {
+	if b := c.lookup(name); b != nil {
+		return b.typeExpr, false
+	}
+	if c.types[name] != nil {
+		return &syntax.BashPPNamedType{Name: &syntax.Lit{Value: name}}, true
+	}
+	return nil, false
+}
+
 func (c *profileChecker) checkGenericCall(x *syntax.BashPPCall) bool {
-	if len(x.Fun) != 1 {
+	var fn *syntax.BashPPFuncDecl
+	var name string
+	if len(x.Fun) == 1 {
+		name = x.Fun[0].Value
+		if c.lookup(name) != nil {
+			return false
+		}
+		fn = c.funcs[name]
+	} else if len(x.Fun) == 2 {
+		name = x.Fun[1].Value
+		receiver, expression := c.methodReceiver(x.Fun[0].Value)
+		fn = c.directMethod(receiver, name)
+		// A method expression supplies the receiver as its first argument; it
+		// does not participate in inference of independent method parameters.
+		if expression && len(x.Args) > 0 {
+			copy := *x
+			copy.Args = x.Args[1:]
+			x = &copy
+		}
+	}
+	if fn == nil {
 		return false
 	}
-	fn := c.funcs[x.Fun[0].Value]
-	if fn == nil || len(fn.TypeParams) == 0 {
+	count := 0
+	for _, group := range fn.TypeParams {
+		count += len(group.Names)
+	}
+	if len(x.TypeArgs) > 0 && len(x.TypeArgs) != count {
+		if count == 0 {
+			c.emit(CodeProfileGenericArity, "BashPPCall", x.Pos(), false, "%s is not generic; got %d type argument(s)", name, len(x.TypeArgs))
+		} else {
+			c.emit(CodeProfileGenericArity, "BashPPCall", x.Pos(), false, "%s expects %d type argument(s); got %d", name, count, len(x.TypeArgs))
+		}
+		return true
+	}
+	if count == 0 {
 		return false
 	}
-	name := x.Fun[0].Value
 	if len(x.TypeArgs) == 0 {
-		// A type parameter that appears in no parameter type has nothing to be
-		// inferred from, whatever the arguments are.
 		used := map[string]bool{}
 		for _, f := range fn.Params {
 			collectTypeParamUses(f.FieldTypeExpr, used)
@@ -1255,14 +1340,40 @@ func (c *profileChecker) checkGenericCall(x *syntax.BashPPCall) bool {
 		for _, group := range fn.TypeParams {
 			for _, param := range group.Names {
 				if !used[param.Value] {
-					c.emit(CodeProfileGenericInfer, "BashPPCall", x.Pos(), false,
-						"cannot infer type arguments for %s", name)
+					c.emit(CodeProfileGenericInfer, "BashPPCall", x.Pos(), false, "cannot infer type arguments for %s", name)
 					return true
 				}
 			}
 		}
 	}
 	return c.checkGenericConstraints(x, fn, name)
+}
+
+// An uninstantiated method value has no call arguments from which to infer
+// independent parameters. An indexed/instantiated expression is not this case.
+func (c *profileChecker) checkGenericMethodValue(expr syntax.BashPPExpr) bool {
+	for {
+		p, ok := expr.(*syntax.BashPPParenExpr)
+		if !ok {
+			break
+		}
+		expr = p.X
+	}
+	sel, ok := expr.(*syntax.BashPPSelectorExpr)
+	if !ok || sel.Sel == nil {
+		return false
+	}
+	id, ok := sel.X.(*syntax.BashPPIdent)
+	if !ok || id.Name == nil {
+		return false
+	}
+	receiver, _ := c.methodReceiver(id.Name.Value)
+	fn := c.directMethod(receiver, sel.Sel.Value)
+	if fn == nil || len(fn.TypeParams) == 0 {
+		return false
+	}
+	c.emit(CodeProfileGenericInfer, "BashPPSelectorExpr", sel.Pos(), false, "cannot infer type arguments for %s", sel.Sel.Value)
+	return true
 }
 
 // checkGenericConstraints rejects an instantiation whose type argument provably
@@ -1427,6 +1538,22 @@ func (c *profileChecker) checkInterfaceAssign(declType syntax.BashPPTypeExpr, in
 	b := c.lookup(id.Name.Value)
 	if b == nil || b.typeExpr == nil {
 		return false
+	}
+	required, decided := c.interfaceMethodNames(iface, map[*syntax.BashPPInterfaceType]bool{})
+	if decided {
+		for _, name := range required {
+			fn := c.directMethod(b.typeExpr, name)
+			if fn != nil && len(fn.TypeParams) > 0 {
+				// A pointer-only method is not a member of a non-pointer value's
+				// interface method set; preserve the missing-method rule in that case.
+				_, pointer := b.typeExpr.(*syntax.BashPPPointerType)
+				if fn.Receiver.Pointer && !pointer {
+					continue
+				}
+				c.emit(CodeProfileInterfaceGeneric, "BashPPDecl", init.Pos(), false, "%s method %s declares type parameters and cannot implement an interface method", profileTypeText(b.typeExpr), name)
+				return true
+			}
+		}
 	}
 	missing, ok := c.missingMethod(b.typeExpr, iface)
 	if !ok || missing == "" {
@@ -1600,6 +1727,12 @@ func (c *profileChecker) interfaceOf(t syntax.BashPPTypeExpr) (*syntax.BashPPInt
 			}
 			seen[x.Name.Value] = true
 			info, ok := c.types[x.Name.Value]
+			if !ok {
+				switch x.Name.Value {
+				case "error":
+					return &syntax.BashPPInterfaceType{Methods: []*syntax.BashPPMethodSpec{{Name: &syntax.Lit{Value: "Error"}}}}, true
+				}
+			}
 			if !ok || info.underlying == nil {
 				return nil, false
 			}
