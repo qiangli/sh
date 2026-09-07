@@ -49,9 +49,24 @@ func (r *Result) LookupLine(line int) (Mapping, bool) {
 type Diagnostic struct {
 	Code, Msg, Node string
 	Pos             syntax.Pos
+
+	// Text, when non-empty, is the exact public rendering of this diagnostic,
+	// including any `<origin>: line N: ` prefix it carries.
+	//
+	// It exists because the source surface is not uniform: some diagnostics are
+	// written with an origin/line prefix and some without, and one of them
+	// carries no code at all. Reconstructing that from Code/Msg/Pos would mean
+	// either forging a code or encoding per-diagnostic rendering rules in every
+	// consumer. A formatter that wants the source bytes prints Text; a
+	// formatter that wants the lowering rendering ignores it and keeps using
+	// Code, Msg and Pos, which are always populated as before.
+	Text string
 }
 
 func (d Diagnostic) Error() string {
+	if d.Text != "" {
+		return d.Text
+	}
 	return fmt.Sprintf("%d:%d: %s: %s", d.Pos.Line(), d.Pos.Col(), d.Code, d.Msg)
 }
 
