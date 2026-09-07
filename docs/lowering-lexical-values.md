@@ -35,7 +35,12 @@ generated source, and compare execution with the same interpreted source. A
 separate compiled entry runs concurrent independent instances under the race
 detector. Dispatcher installation remains an explicit compiler integration step.
 
-This slice does not complete compound-update or tuple alias notifications,
-rich shell mutation, callable token projection, every scalar conversion context,
-generic type-parameter scalar reads, or result-presence propagation. Backend declaration-attribute and unset policy
+Compound updates retain a raw operand before narrowing and replace its spelling
+only after success. Tuple and result-frame transfer wrappers invalidate alias
+metadata only after the full transfer commits. Rejected updates and transfers
+leave both the native values and their prior spelling intact.
+
+This slice does not complete rich shell mutation, callable token projection,
+every scalar conversion context, generic type-parameter scalar reads, or
+result-presence propagation. Backend declaration-attribute and unset policy
 remain at their existing shell boundary.

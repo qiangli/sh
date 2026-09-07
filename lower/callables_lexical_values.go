@@ -129,6 +129,21 @@ func (e *emitter) lexicalValues(source []byte) ([]byte, error) {
 		if unary, ok := n.(*ast.UnaryExpr); ok && unary.Op == token.AND {
 			return false
 		}
+		if call, ok := n.(*ast.CallExpr); ok && (p.runtimeCall(call, "NumericUpdate") || p.runtimeCall(call, "AssignTuple") || p.runtimeCall(call, "TransferResults")) {
+			if bindings := p.contextBindings(call); bindings != "" {
+				originalFunction := call.Fun
+				name := "LexicalNumericUpdate"
+				if p.runtimeCall(call, "TransferResults") {
+					name = "LexicalTransferResults"
+					call.Args = append(call.Args, originalFunction)
+				}
+				if p.runtimeCall(call, "AssignTuple") {
+					name = "LexicalAssignTuple"
+				}
+				call.Fun = p.parse(p.rt + name)
+				call.Args = append([]ast.Expr{p.parse(bindings)}, call.Args...)
+			}
+		}
 		if call, ok := n.(*ast.CallExpr); ok && (p.runtimeCall(call, "Register") || p.runtimeCall(call, "Cell")) {
 			return false
 		}
@@ -433,6 +448,13 @@ func (p *lexicalValuePass) transactions(file *ast.File) {
 		var result []ast.Stmt
 		for _, statement := range block.List {
 			assignment, ok := statement.(*ast.AssignStmt)
+			if ok && assignment.Tok != token.ASSIGN && assignment.Tok != token.DEFINE && len(assignment.Lhs) == 1 && len(assignment.Rhs) == 1 {
+				if bindings := p.contextBindings(assignment); bindings != "" {
+					name := p.e.prefix + "rawUpdate" + strconv.Itoa(int(assignment.Pos()))
+					result = append(result, p.statements("if "+name+" := "+p.rt+"LexicalNumericUpdate("+bindings+", &("+p.text(assignment.Lhs[0])+"), "+p.text(assignment.Rhs[0])+","+strconv.Quote(assignment.Tok.String())+","+p.site(assignment, "")+"); "+name+" != nil {"+strings.TrimSuffix(bindings, ".Bindings")+".Fail("+name+")}")...)
+					continue
+				}
+			}
 			if ok && len(assignment.Lhs) == 1 && len(assignment.Rhs) == 1 {
 				if id, ok := assignment.Lhs[0].(*ast.Ident); ok {
 					if errName := presence[p.info.Defs[id]]; errName != "" {

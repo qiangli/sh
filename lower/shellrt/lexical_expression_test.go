@@ -1,6 +1,7 @@
 package shellrt
 
 import (
+	"errors"
 	"go/constant"
 	"go/token"
 	"testing"
@@ -48,5 +49,81 @@ func TestLexicalExactPreservesCompilerRational(t *testing.T) {
 	value, present, err := p.Bindings.ShellValue(p.Session, "ratio")
 	if err != nil || !present || value != "1/10" {
 		t.Fatalf("%q/%v/%v", value, present, err)
+	}
+}
+
+func TestLexicalUpdatesCommitMetadataAfterValidation(t *testing.T) {
+	p := lexicalProgram(t)
+	x := Cell[int8](p.Bindings, "x", "x", KindScalar)
+	x.Value = 1
+	x.Present = true
+	writeRaw(t, p, "x", "128")
+	if err := LexicalNumericUpdate(p.Bindings, &x.Value, int8(2), "/=", ValueSite{}); err != nil {
+		t.Fatal(err)
+	}
+	if x.Value != 64 {
+		t.Fatal(x.Value)
+	}
+	text, _, err := p.Bindings.ShellValue(p.Session, "x")
+	if err != nil || text != "64" {
+		t.Fatalf("%q/%v", text, err)
+	}
+	writeRaw(t, p, "x", "010")
+	err = LexicalNumericUpdate(p.Bindings, &x.Value, int8(0), "/=", ValueSite{})
+	if err == nil || err.Error() != "BASHPP-EUPDATE-OP: BASHPP-EEXPR-DIVZERO: division by zero" {
+		t.Fatal(err)
+	}
+	text, _, _ = p.Bindings.ShellValue(p.Session, "x")
+	if text != "010" || x.Value != 8 {
+		t.Fatalf("failed update committed: %q/%v", text, x.Value)
+	}
+	y := Cell[int](p.Bindings, "y", "y", KindScalar)
+	y.Value = 2
+	y.Present = true
+	writeRaw(t, p, "y", "02")
+	if err := LexicalAssignTuple(p.Bindings, []any{&x.Value, &y.Value}, []TupleValue{TupleResult(int8(7)), TupleResult(true)}, ValueSite{}); err == nil {
+		t.Fatal("bad tuple accepted")
+	}
+	text, _, _ = p.Bindings.ShellValue(p.Session, "x")
+	if text != "010" {
+		t.Fatal("failed tuple changed alias spelling")
+	}
+	if err := LexicalAssignTuple(p.Bindings, []any{&x.Value, &y.Value}, []TupleValue{TupleResult(int8(8)), TupleResult(2)}, ValueSite{}); err != nil {
+		t.Fatal(err)
+	}
+	text, _, _ = p.Bindings.ShellValue(p.Session, "x")
+	if text != "8" {
+		t.Fatal(text)
+	}
+}
+func TestLexicalTransferKeepsOriginalFailureAndCommitBoundary(t *testing.T) {
+	p := lexicalProgram(t)
+	x := Cell[int](p.Bindings, "x", "x", KindScalar)
+	x.Value = 1
+	x.Present = true
+	writeRaw(t, p, "x", "01")
+	cause := errors.New("transfer refused")
+	calls := 0
+	transfer := func(frame int, side string, targets []any, site ValueSite) error {
+		calls++
+		if frame == 0 {
+			return cause
+		}
+		*targets[0].(*int) = 1
+		return nil
+	}
+	if err := LexicalTransferResults(p.Bindings, 0, "side", []any{&x.Value}, ValueSite{}, transfer); err != cause {
+		t.Fatal(err)
+	}
+	text, _, _ := p.Bindings.ShellValue(p.Session, "x")
+	if text != "01" || calls != 1 {
+		t.Fatal("failed transfer changed metadata")
+	}
+	if err := LexicalTransferResults(p.Bindings, 1, "side", []any{&x.Value}, ValueSite{}, transfer); err != nil {
+		t.Fatal(err)
+	}
+	text, _, _ = p.Bindings.ShellValue(p.Session, "x")
+	if text != "1" || calls != 2 {
+		t.Fatal("successful transfer did not invalidate once")
 	}
 }

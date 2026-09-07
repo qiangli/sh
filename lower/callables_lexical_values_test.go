@@ -22,8 +22,15 @@ import (
 // installs the one-line dispatcher hook. It then builds and removes source.
 func TestLexicalValuesCompiledArtifact(t *testing.T) {
 	cases := map[string]string{
-		"exact_float":  `func main() { var x float64 = 1; x=0.1; y := x + 0.2; println(y); echo "$y" }; main()`,
-		"lazy_invalid": `func main() { var x int = 1; x=abc; var enabled bool = false; accepted := enabled && x > 0; println(accepted); echo after }; main()`,
+		"compound_equal":   `func main() { var x int = 1; x=010; x += 0; echo "$x" }; main()`,
+		"compound_pointer": `func main() { var x int8 = 1; p := &x; x=128; *p /= 2; echo "$x" }; main()`,
+		"tuple_equal": `func pair() (int, int) { return 1, 2 }
+func main() { var x int = 1; var y int = 2; x=01; y=02; p := &x; x, y = pair(); echo "$x:$y"; value := *p; println(value) }; main()`,
+		"tuple_failure_raw": `func pair() (int, bool) { return 7, true }
+func main() { var x int = 1; var y int = 2; x=01; y=02; x, y = pair(); echo "$x:$y" }; main()`,
+		"readonly_shell_write": `func main() { var x int = 1; readonly x; x=42; echo "$x" }; main()`,
+		"exact_float":          `func main() { var x float64 = 1; x=0.1; y := x + 0.2; println(y); echo "$y" }; main()`,
+		"lazy_invalid":         `func main() { var x int = 1; x=abc; var enabled bool = false; accepted := enabled && x > 0; println(accepted); echo after }; main()`,
 		"named_invalid": `type Amount int
 func main() { var x Amount = 1; x=abc; println(x); y := x + 1; println(y); echo after }; main()`,
 		"invalid_float":        `func main() { var x float64 = 1; x=abc; println(x); y := x + 0.5; println(y); echo after }; main()`,
@@ -67,7 +74,7 @@ func main() { var x Amount = 1; x=abc; println(x); y := x + 1; println(y); echo 
 			if prefix == "" {
 				t.Fatal("fixture did not compile through lexical runtime")
 			}
-			e := &emitter{prefix: prefix, options: Options{Runtime: DefaultRuntime, Origin: "lexical.bpp"}}
+			e := &emitter{prefix: prefix, options: Options{Runtime: DefaultRuntime, Origin: result.Origin}}
 			generated, err := e.lexicalValues(result.Source)
 			if err != nil {
 				t.Fatal(err)

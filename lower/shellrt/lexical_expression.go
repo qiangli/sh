@@ -147,3 +147,89 @@ func LexicalSourceType(b *LexicalBindings, id, name string) error {
 	slot.raw.info.SourceType = name
 	return nil
 }
+
+// LexicalAssignTuple updates alias provenance only after the existing tuple
+// transaction has validated and committed every target. Failed tuples retain
+// both their native values and the raw spelling visible through other aliases.
+func LexicalAssignTuple(b *LexicalBindings, targets []any, values []TupleValue, site ValueSite) error {
+	if err := AssignTuple(targets, values, site); err != nil {
+		return err
+	}
+	for _, target := range targets {
+		if target != nil {
+			if err := b.NativeWrittenAt(target); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// LexicalNumericUpdate preserves the source scalar before narrowing a raw
+// target. Successful updates replace its shell spelling, including equal-value
+// writes. Rejections leave both native storage and lexical metadata untouched.
+func LexicalNumericUpdate[T Numeric, R Numeric](b *LexicalBindings, target *T, rhs R, op string, site ValueSite) error {
+	slot := b.slotAt(target)
+	if slot == nil || slot.raw == nil || (!slot.raw.present && slot.raw.nativeScalar == nil) {
+		if err := NumericUpdate(target, rhs, op, site); err != nil {
+			return err
+		}
+		return lexicalUpdated(b, target)
+	}
+	if !*slot.present {
+		return &NumericError{Kind: "TARGET", Message: "undefined assignment target " + slot.name, Site: site}
+	}
+	if !numericOperators[op] {
+		return &NumericError{Kind: "OP", Message: "unsupported compound assignment operator " + op, Site: site}
+	}
+	left := slot.raw.scalar
+	if !slot.raw.present {
+		left = slot.raw.nativeScalar
+	}
+	right := LexicalNative(rhs)
+	if op != "<<=" && op != ">>=" {
+		converted, err := numericConvert[T](rhs, site)
+		if err != nil {
+			return err
+		}
+		right = LexicalNative(converted)
+	}
+	if numericIsFloat[T]() && op == "/=" && constant.Sign(right) == 0 {
+		return &NumericError{Kind: "OP", Message: "BASHPP-EUPDATE-NONFINITE: runtime floating-point division by zero is unsupported by the scalar carrier", Site: site}
+	}
+	operators := map[string]token.Token{"+=": token.ADD, "-=": token.SUB, "*=": token.MUL, "/=": token.QUO, "%=": token.REM, "&=": token.AND, "|=": token.OR, "^=": token.XOR, "&^=": token.AND_NOT, "<<=": token.SHL, ">>=": token.SHR}
+	candidate, err := TryValue(func() T { return LexicalBinary[T](left, right, operators[op], site) })
+	if err != nil {
+		return &NumericError{Kind: "OP", Message: err.Error(), Site: site}
+	}
+	*target = candidate
+	return lexicalUpdated(b, target)
+}
+func lexicalUpdated[T Numeric](b *LexicalBindings, target *T) error {
+	if err := b.NativeWrittenAt(target); err != nil {
+		return err
+	}
+	if slot := b.slotAt(target); slot != nil {
+		text := fmt.Sprint(*target)
+		slot.raw.value = Var{Kind: Scalar, Str: text}
+		slot.raw.scalar = lexicalRawScalar(slot.value.Type(), text)
+		slot.raw.present = true
+	}
+	return nil
+}
+
+// LexicalTransferResults preserves an independently owned result transfer's
+// validation, sidecars and error identity, then updates scalar alias metadata.
+func LexicalTransferResults[F, S any](b *LexicalBindings, frame F, sidecars S, targets []any, site ValueSite, transfer func(F, S, []any, ValueSite) error) error {
+	if err := transfer(frame, sidecars, targets, site); err != nil {
+		return err
+	}
+	for _, target := range targets {
+		if target != nil {
+			if err := b.NativeWrittenAt(target); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
