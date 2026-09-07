@@ -1908,16 +1908,25 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 			p.writeLit("]")
 		}
 		p.writeLit("(")
-		positional := len(cmd.Args) - len(cmd.ArgNames)
-		for i, arg := range cmd.Args {
-			if i > 0 {
-				p.writeLit(", ")
+		if cmd.ArgExprs != nil {
+			for i, arg := range cmd.ArgExprs {
+				if i > 0 {
+					p.writeLit(", ")
+				}
+				p.bashppExpr(arg)
 			}
-			if i >= positional {
-				p.writeLit(cmd.ArgNames[i-positional].Value)
-				p.writeLit(": ")
+		} else {
+			positional := len(cmd.Args) - len(cmd.ArgNames)
+			for i, arg := range cmd.Args {
+				if i > 0 {
+					p.writeLit(", ")
+				}
+				if i >= positional {
+					p.writeLit(cmd.ArgNames[i-positional].Value)
+					p.writeLit(": ")
+				}
+				p.word(arg)
 			}
-			p.word(arg)
 		}
 		if cmd.Ellipsis.IsValid() {
 			p.writeLit("...")

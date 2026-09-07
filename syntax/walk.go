@@ -361,7 +361,11 @@ func Walk(node Node, f func(Node) bool) {
 		walkList(node.TypeArgs, f)
 		walkList(node.ArgNames, f)
 		walkNilable(node.ArgType, f)
-		walkList(node.Args, f)
+		if node.ArgExprs != nil {
+			walkList(node.ArgExprs, f)
+		} else {
+			walkList(node.Args, f)
+		}
 	case *BashPPCommandCall:
 		walkList(node.Before, f)
 		Walk(node.Call, f)

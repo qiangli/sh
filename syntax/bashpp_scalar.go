@@ -193,26 +193,14 @@ func (p *Parser) bashppScalarTail(ce *CallExpr) *BashPPShortDecl {
 }
 
 func (p *Parser) bashppScalarTailWords(ce *CallExpr) *BashPPShortDecl {
-	for {
-		op := bashppScalarOpTok(p.tok)
-		if op == "" {
-			return nil
-		}
-		ce.Args = append(ce.Args, p.wordOne(&Lit{
-			ValuePos: p.pos, ValueEnd: posAddCol(p.pos, len(op)), Value: op,
-		}))
-		p.next()
-		for !p.bashppScalarTailEnd() && bashppScalarOpTok(p.tok) == "" {
-			w := p.bashppScalarOperand()
-			if w == nil {
-				return nil
-			}
-			ce.Args = append(ce.Args, w)
-		}
-		if p.bashppScalarTailEnd() {
-			break
-		}
+	// The typed prefix owns this tail. Balanced parentheses may belong to a
+	// scalar call operand; leaving them to the shell would turn &&/|| into
+	// command-status operators after rollback.
+	tail, ok := p.bashppReadScalarTail(false)
+	if !ok {
+		return nil
 	}
+	ce.Args = append(ce.Args, tail...)
 	decl := bashppShortDecl(ce, nil, true)
 	if decl == nil || decl.Expr == nil {
 		return nil

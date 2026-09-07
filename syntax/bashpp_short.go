@@ -127,10 +127,13 @@ func bashppConvertExpr(expr goast.Expr, source string, pos func(gotoken.Pos) Pos
 			return &BashPPBinaryExpr{X: convert(x.X), Op: lit(x.OpPos, x.OpPos+gotoken.Pos(len(x.Op.String())), x.Op.String()), Y: convert(x.Y)}
 		case *goast.CallExpr:
 			id := x.Fun.(*goast.Ident)
-			if id.Name == "len" || id.Name == "cap" {
+			if id.Name != "new" && !bashppScalarConversionType(id.Name) {
 				call := &BashPPCall{Fun: []*Lit{lit(id.Pos(), id.End(), id.Name)}, Lparen: pos(x.Lparen), Rparen: pos(x.Rparen)}
 				for _, arg := range x.Args {
 					call.Args = append(call.Args, &Word{Parts: []WordPart{lit(arg.Pos(), arg.End(), source[int(arg.Pos())-1:int(arg.End())-1])}})
+					if id.Name != "len" && id.Name != "cap" {
+						call.ArgExprs = append(call.ArgExprs, convert(arg))
+					}
 				}
 				return call
 			}
@@ -1348,17 +1351,25 @@ func bashppSupportedScalarAST(expr goast.Expr) bool {
 			return bashppSupportedScalarAST(x.X) && bashppSupportedScalarAST(x.Y)
 		}
 	case *goast.CallExpr:
-		if len(x.Args) != 1 || x.Ellipsis.IsValid() {
+		if x.Ellipsis.IsValid() {
 			return false
 		}
 		id, ok := x.Fun.(*goast.Ident)
-		if !ok {
+		if !ok || !bashppIsIdent(id.Name) {
 			return false
 		}
 		if id.Name == "new" {
-			return bashppSupportedTypeAST(x.Args[0])
+			return len(x.Args) == 1 && bashppSupportedTypeAST(x.Args[0])
 		}
-		return (bashppScalarConversionType(id.Name) || id.Name == "len" || id.Name == "cap") && bashppSupportedScalarAST(x.Args[0])
+		if bashppScalarConversionType(id.Name) || id.Name == "len" || id.Name == "cap" {
+			return len(x.Args) == 1 && bashppSupportedScalarAST(x.Args[0])
+		}
+		for _, arg := range x.Args {
+			if !bashppSupportedScalarAST(arg) {
+				return false
+			}
+		}
+		return true
 	case *goast.IndexExpr:
 		return bashppSupportedIndexableAST(x.X) && bashppSupportedScalarAST(x.Index)
 	case *goast.SliceExpr:

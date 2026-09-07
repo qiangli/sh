@@ -4,6 +4,7 @@
 package interp
 
 import (
+	"errors"
 	"fmt"
 	"go/constant"
 	"go/token"
@@ -29,8 +30,11 @@ func (r *Runner) bashPPEvalScalarExpr(expr syntax.BashPPExpr) (bashPPScalar, err
 	case *syntax.BashPPBasicLit:
 		return bashPPBasicScalar(x)
 	case *syntax.BashPPCall:
-		if len(x.Fun) != 1 || (x.Fun[0].Value != "len" && x.Fun[0].Value != "cap") {
+		if len(x.Fun) != 1 {
 			return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-FORM: unsupported scalar call")
+		}
+		if x.Fun[0].Value != "len" && x.Fun[0].Value != "cap" {
+			return r.bashPPScalarFuncCall(x)
 		}
 		name := x.Fun[0].Value
 		if r.bashPPFuncs[name] != nil || (r.bashPPScope != nil && r.bashPPScope.lookup(name) != nil) {
@@ -843,7 +847,79 @@ func (r *Runner) bashPPBooleanExprShape(expr syntax.BashPPExpr) (known, boolean 
 		}
 		return true, false
 	case *syntax.BashPPCall:
-		return true, false // positioned scalar calls are len/cap
+		if len(x.Fun) == 1 {
+			if name := x.Fun[0].Value; name == "len" || name == "cap" {
+				return true, false
+			}
+			if fn, ok := r.bashPPLookupFunc(x); ok {
+				resultTypes := bashppResultTypeExprs(fn.results())
+				if len(resultTypes) != 1 {
+					return true, false
+				}
+				underlying, ok := r.bashPPUnderlyingType(resultTypes[0]).(*syntax.BashPPNamedType)
+				return true, ok && underlying.Name.Value == "bool"
+			}
+		}
+		return false, false
 	}
 	return false, false
 }
+
+// bashPPScalarFuncCall consumes the positioned call node at the point selected
+// by the scalar evaluator. In particular a skipped logical operand never
+// evaluates arguments or enters the function frame.
+func (r *Runner) bashPPScalarFuncCall(call *syntax.BashPPCall) (bashPPScalar, error) {
+	fn, ok := r.bashPPLookupFunc(call)
+	if !ok {
+		return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-UNDEFINED: undefined callable %s", call.Fun[0].Value)
+	}
+	if bashppResultCount(fn.results()) != 1 {
+		return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-CALL: scalar call requires one result")
+	}
+	var args []string
+	if call.ArgExprs != nil {
+		if len(call.ArgExprs) != len(call.Args) {
+			return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-CALL: inconsistent positioned scalar arguments")
+		}
+		cells := make([]*bashPPCell, len(call.ArgExprs))
+		for i, expr := range call.ArgExprs {
+			value, err := r.bashPPEvalScalarExpr(expr)
+			if err != nil {
+				return bashPPScalar{}, err
+			}
+			text := bashPPScalarString(value.value)
+			args = append(args, text)
+			cell := &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: text}, scalarKind: value.value.Kind()}
+			if value.typ != "" {
+				cell.declType = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: value.typ}}
+			}
+			cells[i] = cell
+		}
+		args, ok = r.bashPPBindCall(fn, args, nil, cells, nil, len(args))
+	} else {
+		args, ok = r.bashPPCallValues(call, fn)
+	}
+	if !ok {
+		return bashPPScalar{}, errBashPPScalarInterrupted
+	}
+
+	previous := r.bashPPResultCells
+	defer func() { r.bashPPResultCells = previous }()
+	failure := r.bashPPShortFailureSeq
+	values := r.bashPPInvoke(r.ectx, fn, args)
+	if r.bashPPPanicking() || r.exit.exiting || r.exit.fatalExit || r.exit.err != nil || r.bashPPShortFailureSeq != failure || len(values) != 1 {
+		return bashPPScalar{}, errBashPPScalarInterrupted
+	}
+	if len(r.bashPPResultCells) != 1 {
+		return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-CALL: scalar result metadata missing")
+	}
+	result := r.bashPPScalarFromCell(r.bashPPResultCells[0])
+	if result.value == nil || result.value.Kind() == constant.Unknown {
+		return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-OPERAND: call result is not a scalar")
+	}
+	return result, nil
+}
+
+// A call may have already reported its failure, or may be unwinding through
+// panic/exit. Scalar statement consumers must retain that state unchanged.
+var errBashPPScalarInterrupted = errors.New("scalar call interrupted")

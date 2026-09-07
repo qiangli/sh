@@ -1744,6 +1744,9 @@ func (r *Runner) bashPPReturnStmt(ctx context.Context, ret *syntax.BashPPReturn)
 	if ret.Expr != nil {
 		value, err := r.bashPPEvalScalarExpr(ret.Expr)
 		if err != nil {
+			if err == errBashPPScalarInterrupted {
+				return
+			}
 			r.errf("%v\n", err)
 			r.exit = exitStatus{code: 2}
 			r.bashPPShortFailureSeq++

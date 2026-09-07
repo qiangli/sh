@@ -773,6 +773,11 @@ func (x *BashPPConvertExpr) End() Pos { return posAddCol(x.Rparen, 1) }
 type BashPPCall struct {
 	Fun  []*Lit  // the selector chain: x.y.z is three literals
 	Args []*Word // the arguments, unevaluated
+	// ArgExprs owns arguments of calls nested in a typed scalar expression.
+	// When present, it corresponds one-for-one with Args, which retains the
+	// original words for legacy consumers. Walk, printing, and evaluation use
+	// ArgExprs rather than walking/evaluating both representations.
+	ArgExprs []BashPPExpr
 	// ArgType records the first argument where a predeclared function accepts a
 	// type rather than a value. Today only make populates it.
 	// Keeping it on the positioned call avoids re-parsing source in interp.

@@ -4076,7 +4076,7 @@ loop:
 					return
 				}
 			}
-			if (p.tok == leftParen || p.tok == bckQuote) && bashppAddressHead(ce) {
+			if (p.tok == leftParen && (bashppAddressHead(ce) || bashppScalarHead(ce))) || (p.tok == bckQuote && bashppAddressHead(ce)) {
 				if decl := p.bashppLeadingScalarOperand(ce); decl != nil {
 					s.Cmd = decl
 					return
