@@ -462,7 +462,12 @@ func (p *Printer) bashppFields(fields []*BashPPField) {
 			}
 			p.writeLit("...")
 		}
-		if f.FieldType != nil {
+		if f.FieldTypeExpr != nil {
+			if len(f.Names) > 0 && !f.Variadic() {
+				p.writeLit(" ")
+			}
+			p.bashppType(f.FieldTypeExpr)
+		} else if f.FieldType != nil {
 			if len(f.Names) > 0 && !f.Variadic() {
 				p.writeLit(" ")
 			}
@@ -1369,6 +1374,8 @@ func (p *Printer) bashppType(typ BashPPTypeExpr) {
 	switch x := typ.(type) {
 	case *BashPPNamedType:
 		p.writeLit(x.Name.Value)
+	case *BashPPTypeParamType:
+		p.writeLit(x.Name.Value)
 	case *BashPPCollectionType:
 		if x.Kind == "map" {
 			p.writeLit("map[")
@@ -1797,6 +1804,16 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 			}
 			p.writeLit(fun.Value)
 		}
+		if len(cmd.TypeArgs) > 0 {
+			p.writeLit("[")
+			for i, arg := range cmd.TypeArgs {
+				if i > 0 {
+					p.writeLit(", ")
+				}
+				p.bashppType(arg.ArgType)
+			}
+			p.writeLit("]")
+		}
 		p.writeLit("(")
 		positional := len(cmd.Args) - len(cmd.ArgNames)
 		for i, arg := range cmd.Args {
@@ -1832,6 +1849,23 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 			p.space()
 		}
 		p.spacedString(cmd.Name.Value, cmd.Name.Pos())
+		if len(cmd.TypeParams) > 0 {
+			p.writeLit("[")
+			for i, param := range cmd.TypeParams {
+				if i > 0 {
+					p.writeLit(", ")
+				}
+				for j, name := range param.Names {
+					if j > 0 {
+						p.writeLit(", ")
+					}
+					p.writeLit(name.Value)
+				}
+				p.writeLit(" ")
+				p.bashppType(param.Constraint)
+			}
+			p.writeLit("]")
+		}
 		p.bashppSignature(cmd.Params, cmd.Results, cmd.ResLparen)
 		p.wantSpace = spaceRequired
 		if cmd.Body != nil {

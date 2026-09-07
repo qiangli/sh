@@ -283,6 +283,8 @@ func Walk(node Node, f func(Node) bool) {
 		Walk(node.Sel, f)
 	case *BashPPNamedType:
 		Walk(node.Name, f)
+	case *BashPPTypeParamType:
+		Walk(node.Name, f)
 	case *BashPPCollectionType:
 		walkNilable(node.Length, f)
 		walkNilable(node.Key, f)
@@ -317,6 +319,7 @@ func Walk(node Node, f func(Node) bool) {
 			Walk(node.FuncLit, f)
 		}
 		walkList(node.Fun, f)
+		walkList(node.TypeArgs, f)
 		walkList(node.ArgNames, f)
 		walkList(node.Args, f)
 	case *BashPPCommandCall:
@@ -339,6 +342,7 @@ func Walk(node Node, f func(Node) bool) {
 		if node.Receiver != nil {
 			Walk(node.Receiver, f)
 		}
+		walkList(node.TypeParams, f)
 		for _, field := range node.Params {
 			Walk(field, f)
 		}
@@ -364,6 +368,11 @@ func Walk(node Node, f func(Node) bool) {
 		walkNilable(node.FieldType, f)
 		walkNilable(node.FieldTypeExpr, f)
 		walkNilable(node.Default, f)
+	case *BashPPTypeParam:
+		walkList(node.Names, f)
+		walkNilable(node.Constraint, f)
+	case *BashPPTypeArg:
+		walkNilable(node.ArgType, f)
 	case *BashPPReceiver:
 		walkNilable(node.Name, f)
 		walkNilable(node.RecvType, f)

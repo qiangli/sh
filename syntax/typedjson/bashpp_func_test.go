@@ -33,3 +33,31 @@ func TestBashPPFuncRoundTrip(t *testing.T) {
 		t.Fatalf("round trip = %q, want %q", out.String(), src)
 	}
 }
+
+func TestBashPPGenericFuncRoundTrip(t *testing.T) {
+	const src = "func id[T any](v T) T {\n\treturn v\n}\nid[[]int](xs)\n"
+	f, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(src), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var enc strings.Builder
+	if err := typedjson.Encode(&enc, f); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"TypeParams", "BashPPTypeParamType", "TypeArgs", "ArgType"} {
+		if !strings.Contains(enc.String(), want) {
+			t.Fatalf("encoded JSON missing %s: %s", want, enc.String())
+		}
+	}
+	node, err := typedjson.Decode(strings.NewReader(enc.String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	if err := syntax.NewPrinter().Print(&out, node); err != nil {
+		t.Fatal(err)
+	}
+	if out.String() != src {
+		t.Fatalf("round trip = %q, want %q", out.String(), src)
+	}
+}

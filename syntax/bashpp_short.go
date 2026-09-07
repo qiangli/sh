@@ -258,6 +258,112 @@ func bashppTypeExpr(w *Word) BashPPTypeExpr {
 	return bashppConvertType(expr, pos, lit)
 }
 
+func bashppTypeExprFromLit(src *Lit) BashPPTypeExpr {
+	if src == nil {
+		return nil
+	}
+	if src.Value == "func" {
+		return &BashPPNamedType{Name: src}
+	}
+	expr, err := goparser.ParseExpr(src.Value)
+	if err != nil || !bashppSupportedTypeAST(expr) {
+		return nil
+	}
+	pos := func(p gotoken.Pos) Pos { return posAddCol(src.Pos(), int(p)-1) }
+	lit := func(p, end gotoken.Pos, value string) *Lit {
+		return &Lit{ValuePos: pos(p), ValueEnd: pos(end), Value: value}
+	}
+	return bashppConvertType(expr, pos, lit)
+}
+
+func bashppCallTypeArgs(name *Lit) (*Lit, []*BashPPTypeArg, bool) {
+	open := strings.IndexByte(name.Value, '[')
+	if open < 0 {
+		return name, nil, true
+	}
+	if !strings.HasSuffix(name.Value, "]") {
+		return nil, nil, false
+	}
+	baseText := name.Value[:open]
+	if !bashppSelector(baseText) {
+		return nil, nil, false
+	}
+	base := &Lit{ValuePos: name.Pos(), ValueEnd: posAddCol(name.Pos(), len(baseText)), Value: baseText}
+	body := name.Value[open+1 : len(name.Value)-1]
+	if body == "" {
+		return nil, nil, false
+	}
+	start := posAddCol(name.Pos(), open+1)
+	var args []*BashPPTypeArg
+	depth, partStart := 0, 0
+	for i, r := range body {
+		switch r {
+		case '[':
+			depth++
+		case ']':
+			if depth == 0 {
+				return nil, nil, false
+			}
+			depth--
+		case ',':
+			if depth == 0 {
+				arg, ok := bashppTypeArgFromText(body[partStart:i], posAddCol(start, partStart))
+				if !ok {
+					return nil, nil, false
+				}
+				args = append(args, arg)
+				partStart = i + 1
+			}
+		}
+	}
+	if depth != 0 {
+		return nil, nil, false
+	}
+	arg, ok := bashppTypeArgFromText(body[partStart:], posAddCol(start, partStart))
+	if !ok {
+		return nil, nil, false
+	}
+	args = append(args, arg)
+	return base, args, true
+}
+
+func bashppTypeArgFromText(text string, pos Pos) (*BashPPTypeArg, bool) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil, false
+	}
+	typ := bashppTypeExprFromLit(&Lit{ValuePos: pos, ValueEnd: posAddCol(pos, len(text)), Value: text})
+	if typ == nil {
+		return nil, false
+	}
+	return &BashPPTypeArg{ArgType: typ}, true
+}
+
+func bashppTypeText(typ BashPPTypeExpr) string {
+	switch x := typ.(type) {
+	case *BashPPNamedType:
+		return x.Name.Value
+	case *BashPPTypeParamType:
+		return x.Name.Value
+	case *BashPPCollectionType:
+		if x.Kind == "map" {
+			return "map[" + bashppTypeText(x.Key) + "]" + bashppTypeText(x.Element)
+		}
+		length := ""
+		if x.Length != nil {
+			length = x.Length.Value
+		}
+		return "[" + length + "]" + bashppTypeText(x.Element)
+	case *BashPPPointerType:
+		return "*" + bashppTypeText(x.Element)
+	case *BashPPStructType:
+		return "struct"
+	case *BashPPInterfaceType:
+		return "interface"
+	}
+	return ""
+}
+
 func bashppCollectionExpr(w *Word) BashPPExpr {
 	text, positions, ok := bashppScalarSource(w)
 	if !ok {
@@ -1161,7 +1267,7 @@ func (p *Parser) bashppParenForm(ce *CallExpr) Command {
 	var assignTarget *Word
 	if len(ce.Args) >= 3 {
 		op := len(ce.Args) - 2
-		opLit, funLit := bashppBareLit(ce.Args[op]), bashppBareLit(ce.Args[op+1])
+		opLit, funLit := bashppBareLit(ce.Args[op]), bashppWordLit(ce.Args[op+1])
 		var ok bool
 		if opLit != nil && opLit.Value == "=" && funLit != nil && funLit.Value == "new" &&
 			len(ce.Args) == 3 && bashppIsIdent(bashppWordText(ce.Args[0])) && p.bashppFuncDepth > 0 {
@@ -1176,7 +1282,7 @@ func (p *Parser) bashppParenForm(ce *CallExpr) Command {
 			name, opPos, short = funLit, opLit.Pos(), true
 		}
 	} else if len(ce.Args) == 1 {
-		name = bashppBareLit(ce.Args[0])
+		name = bashppWordLit(ce.Args[0])
 	} else {
 		return nil
 	}
@@ -1214,6 +1320,14 @@ func (p *Parser) bashppParenForm(ce *CallExpr) Command {
 		value := rootName + ".(" + bashppWordText(typeWord) + ")"
 		rhs := &Word{Parts: []WordPart{&Lit{ValuePos: name.Pos(), ValueEnd: posAddCol(rparen, 1), Value: value}}}
 		return &BashPPShortDecl{Lhs: lhs, Rhs: []*Word{rhs}, Class: ClassR, OpPos: opPos, GoRegion: true, Expr: expr}
+	}
+	var typeArgs []*BashPPTypeArg
+	if name != nil {
+		var ok bool
+		name, typeArgs, ok = bashppCallTypeArgs(name)
+		if !ok {
+			return nil
+		}
 	}
 	if name == nil || !bashppSelector(name.Value) {
 		return nil
@@ -1278,7 +1392,7 @@ func (p *Parser) bashppParenForm(ce *CallExpr) Command {
 	}
 	txn.commit(p)
 	call := &BashPPCall{
-		Fun: bashppSelectorLits(name), Args: args, ArgNames: argNames, Ellipsis: ellipsis,
+		Fun: bashppSelectorLits(name), TypeArgs: typeArgs, Args: args, ArgNames: argNames, Ellipsis: ellipsis,
 		Lparen: lparen, Rparen: rparen,
 	}
 	if short && len(call.Fun) == 1 && len(call.Args) == 1 && len(call.ArgNames) == 0 &&
@@ -1313,6 +1427,16 @@ func (p *Parser) bashppParenForm(ce *CallExpr) Command {
 	}
 	var text strings.Builder
 	text.WriteString(name.Value)
+	if len(typeArgs) > 0 {
+		text.WriteByte('[')
+		for i, arg := range typeArgs {
+			if i > 0 {
+				text.WriteString(", ")
+			}
+			text.WriteString(bashppTypeText(arg.ArgType))
+		}
+		text.WriteByte(']')
+	}
 	text.WriteByte('(')
 	for i, arg := range args {
 		if i > 0 {
@@ -1326,6 +1450,17 @@ func (p *Parser) bashppParenForm(ce *CallExpr) Command {
 	text.WriteByte(')')
 	rhs := &Word{Parts: []WordPart{&Lit{ValuePos: name.Pos(), ValueEnd: call.End(), Value: text.String()}}}
 	return &BashPPShortDecl{Lhs: lhs, Rhs: []*Word{rhs}, Class: ClassR, OpPos: opPos, GoRegion: p.bashppFuncDepth > 0, Call: call}
+}
+
+func bashppWordLit(w *Word) *Lit {
+	if lit := bashppBareLit(w); lit != nil {
+		return lit
+	}
+	text := bashppWordText(w)
+	if text == "" {
+		return nil
+	}
+	return &Lit{ValuePos: w.Pos(), ValueEnd: w.End(), Value: text}
 }
 
 func bashppCallTerminator(tok token) bool {

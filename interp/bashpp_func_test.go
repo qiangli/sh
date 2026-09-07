@@ -33,3 +33,66 @@ func TestBashPPFuncRuntimeProbe(t *testing.T) {
 		})
 	}
 }
+
+func TestBashPPGenericFuncRuntime(t *testing.T) {
+	tests := []struct{ name, src, want string }{
+		{
+			"explicit scalar substitution",
+			"func id[T any](v T) T {\n return v\n}\nx := id[int](7)\necho \"x=$x\"\n",
+			"x=7\n",
+		},
+		{
+			"ordinary scalar inference",
+			"func id[T any](v T) T {\n return v\n}\nx := id(hello)\necho \"x=$x\"\n",
+			"x=hello\n",
+		},
+		{
+			"composite inference",
+			"func sink[T any](v T) {\n echo ok\n}\nvar xs []int = []int{1, 2}\nsink(xs)\n",
+			"ok\n",
+		},
+		{
+			"pointer explicit argument",
+			"type Box struct { N int }\nfunc sink[T any](v T) {\n echo ok\n}\nfunc main() {\n p := new(Box)\n sink[*Box](p)\n}\nmain()\n",
+			"ok\n",
+		},
+		{
+			"comparable constraint",
+			"func same[T comparable](a, b T) T {\n return a\n}\nx := same[int](1, 2)\necho \"$x\"\n",
+			"1\n",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			qt.Assert(t, qt.Equals(runBashPPFunc(t, tc.src), tc.want))
+		})
+	}
+}
+
+func TestBashPPGenericFuncDiagnostics(t *testing.T) {
+	tests := []struct{ name, src, want string }{
+		{
+			"too many type arguments",
+			"func id[T any](v T) T {\n return v\n}\nid[int, string](1)\n",
+			"BASHPP-EGENERIC-ARITY: id expects 1 type argument(s); got 2\n",
+		},
+		{
+			"cannot infer",
+			"func zero[T any]() T {\n return 0\n}\nzero()\n",
+			"BASHPP-EGENERIC-INFER: cannot infer type arguments for zero\n",
+		},
+		{
+			"constraint",
+			"func bad[T comparable](v T) {}\nvar xs []int = []int{1}\nbad(xs)\n",
+			"BASHPP-EGENERIC-CONSTRAINT: []int does not satisfy constraint for T in bad\n",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := runBashPPFunc(t, tc.src)
+			if !strings.Contains(got, tc.want) {
+				t.Fatalf("output = %q, want to contain %q", got, tc.want)
+			}
+		})
+	}
+}

@@ -66,3 +66,35 @@ func TestBashPPFuncOneByteAndDialectFallback(t *testing.T) {
 		t.Fatalf("POSIX parser should preserve the AST for runtime gating: %v", err)
 	}
 }
+
+func TestBashPPGenericFuncAST(t *testing.T) {
+	const src = "func id[T any](v T) T {\n\treturn v\n}\nid[int](1)\n"
+	f, err := NewParser(Variant(LangBashPP)).Parse(strings.NewReader(src), "generic.bpp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	decl := f.Stmts[0].Cmd.(*BashPPFuncDecl)
+	if len(decl.TypeParams) != 1 || len(decl.TypeParams[0].Names) != 1 {
+		t.Fatalf("type params = %#v", decl.TypeParams)
+	}
+	if _, ok := decl.Params[0].FieldTypeExpr.(*BashPPTypeParamType); !ok {
+		t.Fatalf("param type = %T, want type parameter", decl.Params[0].FieldTypeExpr)
+	}
+	if _, ok := decl.Results[0].FieldTypeExpr.(*BashPPTypeParamType); !ok {
+		t.Fatalf("result type = %T, want type parameter", decl.Results[0].FieldTypeExpr)
+	}
+	call := f.Stmts[1].Cmd.(*BashPPCall)
+	if len(call.TypeArgs) != 1 {
+		t.Fatalf("type args = %#v", call.TypeArgs)
+	}
+	if _, ok := call.TypeArgs[0].ArgType.(*BashPPNamedType); !ok {
+		t.Fatalf("call type arg = %T", call.TypeArgs[0].ArgType)
+	}
+	var out strings.Builder
+	if err := NewPrinter().Print(&out, f); err != nil {
+		t.Fatal(err)
+	}
+	if out.String() != src {
+		t.Fatalf("print = %q, want %q", out.String(), src)
+	}
+}

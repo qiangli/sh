@@ -59,12 +59,12 @@ func (p *Parser) bashppFuncForm(ce *CallExpr) Command {
 		}
 		return p.bashppMethodForm(kw)
 	}
-	if len(ce.Args) != 2 {
+	if len(ce.Args) < 2 {
 		return nil
 	}
 	kw := bashppBareLit(ce.Args[0])
-	name := bashppBareLit(ce.Args[1])
-	if kw == nil || kw.Value != "func" || name == nil || !bashppIsIdent(name.Value) {
+	name, typeParams, ok := p.bashppFuncTypeParams(ce.Args[1:])
+	if kw == nil || kw.Value != "func" || name == nil || !bashppIsIdent(name.Value) || !ok {
 		return nil
 	}
 	// Confirm the region opens here against the single decision table of
@@ -75,7 +75,7 @@ func (p *Parser) bashppFuncForm(ce *CallExpr) Command {
 	}
 
 	txn := p.beginBashPPTxn()
-	fd := &BashPPFuncDecl{Kw: kw, Name: name}
+	fd := &BashPPFuncDecl{Kw: kw, Name: name, TypeParams: typeParams}
 	sig := p.bashppSignature("func " + name.Value)
 	if sig.nearMiss {
 		txn.rollback(p)
@@ -84,10 +84,43 @@ func (p *Parser) bashppFuncForm(ce *CallExpr) Command {
 	txn.commit(p)
 	p.bashppRegisterFunc(name.Value)
 	fd.Params, fd.Results = sig.params, sig.results
+	p.bashppMarkTypeParamFields(fd.Params, typeParams)
+	p.bashppMarkTypeParamFields(fd.Results, typeParams)
 	fd.Lparen, fd.Rparen = sig.lparen, sig.rparen
 	fd.ResLparen, fd.ResRparen = sig.resLparen, sig.resRparen
 	fd.Body = p.bashppFuncBody("func "+name.Value, sig.rparen)
 	return fd
+}
+
+func (p *Parser) bashppFuncTypeParams(words []*Word) (*Lit, []*BashPPTypeParam, bool) {
+	if len(words) == 1 {
+		return bashppBareLit(words[0]), nil, true
+	}
+	firstText := bashppWordText(words[0])
+	lastText := bashppWordText(words[len(words)-1])
+	if !strings.Contains(firstText, "[") || !strings.HasSuffix(lastText, "]") {
+		return nil, nil, false
+	}
+	nameText, rest, _ := strings.Cut(firstText, "[")
+	if !bashppIsIdent(nameText) {
+		return nil, nil, false
+	}
+	name := &Lit{ValuePos: words[0].Pos(), ValueEnd: posAddCol(words[0].Pos(), len(nameText)), Value: nameText}
+	items := make([]*Lit, 0, len(words))
+	if rest != "" {
+		pos := posAddCol(words[0].Pos(), len(nameText)+1)
+		items = append(items, &Lit{ValuePos: pos, ValueEnd: posAddCol(pos, len(rest)), Value: rest})
+	}
+	for _, word := range words[1 : len(words)-1] {
+		text := bashppWordText(word)
+		items = append(items, &Lit{ValuePos: word.Pos(), ValueEnd: word.End(), Value: text})
+	}
+	tail := strings.TrimSuffix(lastText, "]")
+	if tail != "" {
+		items = append(items, &Lit{ValuePos: words[len(words)-1].Pos(), ValueEnd: posAddCol(words[len(words)-1].End(), -1), Value: tail})
+	}
+	params, ok := bashppTypeParamList(items)
+	return name, params, ok
 }
 
 // bashppMethodForm parses `func (r T) M(...)` and `func (r *T) M(...)`.
@@ -270,10 +303,11 @@ func (p *Parser) bashppSignature(what string) bashppSig {
 		p.next()
 	case p.tok == _LitWord && !strings.HasPrefix(p.val, "{") && p.val != "}":
 		typ := p.lit(p.pos, p.val)
-		if !bashppTypeName(typ.Value) {
+		typExpr := bashppTypeExprFromLit(typ)
+		if typExpr == nil {
 			p.posErr(typ.Pos(), "func result must be a type name")
 		}
-		sig.results = []*BashPPField{{FieldType: typ}}
+		sig.results = []*BashPPField{{FieldType: typ, FieldTypeExpr: typExpr}}
 		p.next()
 	}
 	return sig
@@ -396,13 +430,14 @@ func (p *Parser) bashppFieldList(open Pos, result bool) ([]*BashPPField, bool) {
 		if err != nil {
 			break
 		}
-		if len(seg.lits) != 2 || !bashppIsIdent(seg.lits[0].Value) || !bashppTypeName(seg.lits[1].Value) {
+		if len(seg.lits) != 2 || !bashppIsIdent(seg.lits[0].Value) || bashppTypeExprFromLit(seg.lits[1]) == nil {
 			err = errBashppFieldList
 			break
 		}
 		fields = append(fields, &BashPPField{
 			Names: seg.lits[:1], FieldType: seg.lits[1],
-			Default: seg.def, Equals: seg.equals,
+			FieldTypeExpr: bashppTypeExprFromLit(seg.lits[1]),
+			Default:       seg.def, Equals: seg.equals,
 		})
 	}
 	flush()
@@ -418,6 +453,120 @@ func (p *Parser) bashppFieldList(open Pos, result bool) ([]*BashPPField, bool) {
 		p.posErr(open, "%v", err)
 	}
 	return fields, nearMiss
+}
+
+func (p *Parser) bashppMarkTypeParamFields(fields []*BashPPField, params []*BashPPTypeParam) {
+	if len(params) == 0 {
+		for _, field := range fields {
+			if field.FieldTypeExpr == nil && field.FieldType != nil {
+				field.FieldTypeExpr = bashppTypeExprFromLit(field.FieldType)
+			}
+		}
+		return
+	}
+	names := make(map[string]bool)
+	for _, param := range params {
+		for _, name := range param.Names {
+			names[name.Value] = true
+		}
+	}
+	for _, field := range fields {
+		if field.FieldTypeExpr == nil && field.FieldType != nil {
+			field.FieldTypeExpr = bashppTypeExprFromLit(field.FieldType)
+		}
+		field.FieldTypeExpr = bashppTypeParamUses(field.FieldTypeExpr, names)
+	}
+}
+
+func bashppTypeParamUses(typ BashPPTypeExpr, names map[string]bool) BashPPTypeExpr {
+	switch x := typ.(type) {
+	case *BashPPNamedType:
+		if names[x.Name.Value] {
+			return &BashPPTypeParamType{Name: x.Name}
+		}
+	case *BashPPCollectionType:
+		cp := *x
+		cp.Key = bashppTypeParamUses(cp.Key, names)
+		cp.Element = bashppTypeParamUses(cp.Element, names)
+		return &cp
+	case *BashPPPointerType:
+		cp := *x
+		cp.Element = bashppTypeParamUses(cp.Element, names)
+		return &cp
+	case *BashPPStructType:
+		cp := *x
+		cp.Fields = append([]*BashPPField(nil), x.Fields...)
+		for i, field := range cp.Fields {
+			fc := *field
+			fc.FieldTypeExpr = bashppTypeParamUses(fc.FieldTypeExpr, names)
+			cp.Fields[i] = &fc
+		}
+		return &cp
+	case *BashPPInterfaceType:
+		cp := *x
+		cp.Elems = append([]*BashPPInterfaceElem(nil), x.Elems...)
+		for i, elem := range cp.Elems {
+			ec := *elem
+			ec.Embedded = bashppTypeParamUses(ec.Embedded, names)
+			cp.Elems[i] = &ec
+		}
+		return &cp
+	}
+	return typ
+}
+
+func bashppTypeParamList(items []*Lit) ([]*BashPPTypeParam, bool) {
+	if len(items) == 0 {
+		return nil, false
+	}
+	var segs [][]*Lit
+	var cur []*Lit
+	for _, item := range items {
+		parts := strings.Split(item.Value, ",")
+		for i, part := range parts {
+			if part != "" {
+				start := strings.Index(item.Value, part)
+				pos := posAddCol(item.Pos(), start)
+				cur = append(cur, &Lit{ValuePos: pos, ValueEnd: posAddCol(pos, len(part)), Value: part})
+			}
+			if i < len(parts)-1 {
+				if len(cur) == 0 {
+					return nil, false
+				}
+				segs = append(segs, cur)
+				cur = nil
+			}
+		}
+	}
+	if len(cur) > 0 {
+		segs = append(segs, cur)
+	}
+	var out []*BashPPTypeParam
+	var pending []*Lit
+	for _, seg := range segs {
+		switch len(seg) {
+		case 1:
+			pending = append(pending, seg[0])
+		case 2:
+			for _, name := range append(pending, seg[0]) {
+				if !bashppIsIdent(name.Value) {
+					return nil, false
+				}
+			}
+			constraint := bashppTypeExprFromLit(seg[1])
+			if constraint == nil {
+				return nil, false
+			}
+			out = append(out, &BashPPTypeParam{Names: append(pending, seg[0]), Constraint: constraint})
+			pending = nil
+		default:
+			return nil, false
+		}
+	}
+	if len(pending) != 0 {
+		return nil, false
+	}
+	return out, true
 }
 
 // errBashppFieldList is the generic "this is not a signature we spell" verdict,
@@ -474,7 +623,8 @@ func bashppResolveFields(segs [][]*Lit, result bool) ([]*BashPPField, error) {
 			pending = append(pending, seg[0])
 		case 2:
 			name, typ := seg[0], seg[1]
-			if !bashppTypeName(typ.Value) {
+			typExpr := bashppTypeExprFromLit(typ)
+			if typExpr == nil {
 				return nil, errBashppFieldList
 			}
 			names := append(pending, name)
@@ -483,7 +633,7 @@ func bashppResolveFields(segs [][]*Lit, result bool) ([]*BashPPField, error) {
 					return nil, errBashppFieldList
 				}
 			}
-			fields = append(fields, &BashPPField{Names: names, FieldType: typ})
+			fields = append(fields, &BashPPField{Names: names, FieldType: typ, FieldTypeExpr: typExpr})
 			pending = nil
 			sawType = true
 		default:
@@ -501,10 +651,11 @@ func bashppResolveFields(segs [][]*Lit, result bool) ([]*BashPPField, error) {
 	}
 	if result {
 		for _, t := range pending {
-			if !bashppTypeName(t.Value) {
+			typExpr := bashppTypeExprFromLit(t)
+			if typExpr == nil {
 				return nil, errBashppFieldList
 			}
-			fields = append(fields, &BashPPField{FieldType: t})
+			fields = append(fields, &BashPPField{FieldType: t, FieldTypeExpr: typExpr})
 		}
 		return fields, nil
 	}
@@ -521,7 +672,7 @@ func bashppResolveFields(segs [][]*Lit, result bool) ([]*BashPPField, error) {
 // rather than at the dots.
 func bashppEllipsisElem(lit *Lit) (*Lit, bool) {
 	name := strings.TrimPrefix(lit.Value, "...")
-	if !bashppTypeName(name) {
+	if bashppTypeExprFromLit(&Lit{ValuePos: posAddCol(lit.ValuePos, 3), ValueEnd: lit.ValueEnd, Value: name}) == nil {
 		return nil, false
 	}
 	pos := posAddCol(lit.ValuePos, 3)

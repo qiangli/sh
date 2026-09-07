@@ -501,11 +501,21 @@ func (*BashPPCollectionType) bashPPTypeExprNode() {}
 func (*BashPPStructType) bashPPTypeExprNode()     {}
 func (*BashPPPointerType) bashPPTypeExprNode()    {}
 func (*BashPPInterfaceType) bashPPTypeExprNode()  {}
+func (*BashPPTypeParamType) bashPPTypeExprNode()  {}
 
 type BashPPNamedType struct{ Name *Lit }
 
 func (t *BashPPNamedType) Pos() Pos { return t.Name.Pos() }
 func (t *BashPPNamedType) End() Pos { return t.Name.End() }
+
+// BashPPTypeParamType is a use of a function type parameter inside a
+// parameter/result type. It is distinct from BashPPNamedType so lowering and
+// runtime substitution never have to guess whether T names a script type or a
+// generic parameter.
+type BashPPTypeParamType struct{ Name *Lit }
+
+func (t *BashPPTypeParamType) Pos() Pos { return t.Name.Pos() }
+func (t *BashPPTypeParamType) End() Pos { return t.Name.End() }
 
 // BashPPPointerType represents *T. Star is retained independently from the
 // element's position for exact diagnostics and source-to-source lowering.
@@ -647,6 +657,10 @@ func (x *BashPPConvertExpr) End() Pos { return posAddCol(x.Rparen, 1) }
 type BashPPCall struct {
 	Fun  []*Lit  // the selector chain: x.y.z is three literals
 	Args []*Word // the arguments, unevaluated
+
+	// TypeArgs are the explicit instantiation arguments in f[T, *U](...).
+	// They are nil for ordinary inferred calls.
+	TypeArgs []*BashPPTypeArg
 
 	// ArgNames names the trailing named arguments in source order. Since the
 	// grammar requires positional arguments first, Args[:len(Args)-len(ArgNames)]
@@ -892,6 +906,30 @@ type BashPPField struct {
 	Ellipsis Pos
 }
 
+// BashPPTypeParam is one generic function type-parameter group:
+// `T any`, `K comparable`, or `T Reader`. Multiple Names share one
+// constraint, mirroring ordinary signature field grouping.
+type BashPPTypeParam struct {
+	Names      []*Lit
+	Constraint BashPPTypeExpr
+}
+
+func (p *BashPPTypeParam) Pos() Pos {
+	if len(p.Names) > 0 {
+		return p.Names[0].Pos()
+	}
+	return p.Constraint.Pos()
+}
+func (p *BashPPTypeParam) End() Pos { return p.Constraint.End() }
+
+// BashPPTypeArg is one explicit function instantiation type argument.
+type BashPPTypeArg struct {
+	ArgType BashPPTypeExpr
+}
+
+func (a *BashPPTypeArg) Pos() Pos { return a.ArgType.Pos() }
+func (a *BashPPTypeArg) End() Pos { return a.ArgType.End() }
+
 // Variadic reports whether the group is the `...T` form.
 func (f *BashPPField) Variadic() bool { return f.Ellipsis.IsValid() }
 
@@ -929,12 +967,13 @@ func (f *BashPPField) End() Pos {
 // from a working script. That is why the signature may be parsed forward
 // without a transaction: a malformed body is a bash syntax error either way.
 type BashPPFuncDecl struct {
-	Kw       *Lit            // the literal "func"
-	Name     *Lit            // the declared function name
-	Receiver *BashPPReceiver // nil for an ordinary function
-	Params   []*BashPPField  // the parameter groups, in source order
-	Results  []*BashPPField  // the result groups, or nil when there are none
-	Body     *Block          // the braced body
+	Kw         *Lit            // the literal "func"
+	Name       *Lit            // the declared function name
+	Receiver   *BashPPReceiver // nil for an ordinary function
+	TypeParams []*BashPPTypeParam
+	Params     []*BashPPField // the parameter groups, in source order
+	Results    []*BashPPField // the result groups, or nil when there are none
+	Body       *Block         // the braced body
 
 	Lparen    Pos // ( opening the parameter list
 	Rparen    Pos // ) closing the parameter list

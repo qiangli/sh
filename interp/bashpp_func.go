@@ -41,9 +41,10 @@ import (
 // type with two spellings rather than two types with one duplicated invoker.
 // Exactly one of decl and lit is set.
 type bashPPFunc struct {
-	decl  *syntax.BashPPFuncDecl
-	lit   *syntax.BashPPFuncLit
-	scope *bashPPScope
+	decl     *syntax.BashPPFuncDecl
+	lit      *syntax.BashPPFuncLit
+	scope    *bashPPScope
+	typeArgs map[string]syntax.BashPPTypeExpr
 	// bound is the name a literal was bound to by `:=`, kept only so that a
 	// diagnostic can say which function the script means. It is not an
 	// identity: the same closure may be copied to other names, and a later
@@ -83,6 +84,9 @@ func (f *bashPPFunc) name() string {
 
 func (f *bashPPFunc) params() []*syntax.BashPPField {
 	if f.decl != nil {
+		if len(f.typeArgs) > 0 {
+			return bashPPSubstituteFields(f.decl.Params, f.typeArgs)
+		}
 		return f.decl.Params
 	}
 	return f.lit.Params
@@ -90,9 +94,19 @@ func (f *bashPPFunc) params() []*syntax.BashPPField {
 
 func (f *bashPPFunc) results() []*syntax.BashPPField {
 	if f.decl != nil {
+		if len(f.typeArgs) > 0 {
+			return bashPPSubstituteFields(f.decl.Results, f.typeArgs)
+		}
 		return f.decl.Results
 	}
 	return f.lit.Results
+}
+
+func (f *bashPPFunc) typeParams() []*syntax.BashPPTypeParam {
+	if f.decl != nil {
+		return f.decl.TypeParams
+	}
+	return nil
 }
 
 // cloned copies f for a subshell, deep-copying its captured scope through the
@@ -102,6 +116,12 @@ func (f *bashPPFunc) cloned(c *bashPPCloner) *bashPPFunc {
 	copied := *f
 	copied.scope = c.clone(f.scope)
 	copied.receiver = c.cloneCell(f.receiver)
+	if f.typeArgs != nil {
+		copied.typeArgs = make(map[string]syntax.BashPPTypeExpr, len(f.typeArgs))
+		for name, typ := range f.typeArgs {
+			copied.typeArgs[name] = typ
+		}
+	}
 	return &copied
 }
 
@@ -347,6 +367,11 @@ func (r *Runner) bashPPLookupFunc(c *syntax.BashPPCall) (*bashPPFunc, bool) {
 		return fn, true
 	}
 	if len(c.Fun) == 2 {
+		if len(c.TypeArgs) > 0 {
+			r.errf("BASHPP-EGENERIC-METHOD: generic method instantiation is not implemented in this phase\n")
+			r.exit.code = 2
+			return nil, false
+		}
 		owner, method := c.Fun[0].Value, c.Fun[1].Value
 		// A local value is always considered before an import binding. This is
 		// deterministic even when the import registry contains the same name.
@@ -407,15 +432,214 @@ func (r *Runner) bashPPLookupFunc(c *syntax.BashPPCall) (*bashPPFunc, bool) {
 	}
 	name := c.Fun[0].Value
 	if fn, ok := r.bashPPFuncs[name]; ok {
-		return fn, true
+		return r.bashPPInstantiateFunc(c, fn)
 	}
 	// A closure held in a variable is callable by that variable's name, which
 	// is what makes `greet := func(…) { … }; greet(x)` and a returned factory
 	// closure work without a second call syntax.
 	if vr := r.lookupVar(name); vr.Kind == expand.String {
-		return r.bashPPClosure(vr.Str)
+		fn, ok := r.bashPPClosure(vr.Str)
+		if !ok {
+			return nil, false
+		}
+		return r.bashPPInstantiateFunc(c, fn)
 	}
 	return nil, false
+}
+
+func (r *Runner) bashPPInstantiateFunc(c *syntax.BashPPCall, fn *bashPPFunc) (*bashPPFunc, bool) {
+	params := fn.typeParams()
+	if len(params) == 0 {
+		if len(c.TypeArgs) > 0 {
+			r.errf("BASHPP-EGENERIC-ARITY: %s is not generic; got %d type argument(s)\n", fn.name(), len(c.TypeArgs))
+			r.exit.code = 2
+			return nil, false
+		}
+		return fn, true
+	}
+	want := bashPPTypeParamCount(params)
+	if len(c.TypeArgs) > 0 && len(c.TypeArgs) != want {
+		r.errf("BASHPP-EGENERIC-ARITY: %s expects %d type argument(s); got %d\n", fn.name(), want, len(c.TypeArgs))
+		r.exit.code = 2
+		return nil, false
+	}
+	bindings := make(map[string]syntax.BashPPTypeExpr, want)
+	if len(c.TypeArgs) > 0 {
+		i := 0
+		for _, group := range params {
+			for _, name := range group.Names {
+				bindings[name.Value] = c.TypeArgs[i].ArgType
+				i++
+			}
+		}
+	} else if !r.bashPPInferTypeArgs(c, fn, bindings) {
+		return nil, false
+	}
+	if len(bindings) != want {
+		r.errf("BASHPP-EGENERIC-INFER: cannot infer type arguments for %s\n", fn.name())
+		r.exit.code = 2
+		return nil, false
+	}
+	if !r.bashPPCheckTypeConstraints(fn, params, bindings) {
+		return nil, false
+	}
+	bound := *fn
+	bound.typeArgs = bindings
+	return &bound, true
+}
+
+func bashPPTypeParamCount(params []*syntax.BashPPTypeParam) int {
+	var n int
+	for _, param := range params {
+		n += len(param.Names)
+	}
+	return n
+}
+
+func (r *Runner) bashPPInferTypeArgs(c *syntax.BashPPCall, fn *bashPPFunc, bindings map[string]syntax.BashPPTypeExpr) bool {
+	params := bashppParams(fn.decl.Params)
+	args := c.Args
+	if fn.skipArgs > 0 && len(args) >= fn.skipArgs {
+		args = args[fn.skipArgs:]
+	}
+	for i, arg := range args {
+		if i >= len(params) {
+			break
+		}
+		actual := r.bashPPTypeOfArg(arg)
+		if actual == nil {
+			continue
+		}
+		if !r.bashPPInferTypeFromParam(params[i].typ, actual, bindings) {
+			r.errf("BASHPP-EGENERIC-INFER: conflicting type inference for %s\n", fn.name())
+			r.exit.code = 2
+			return false
+		}
+	}
+	return true
+}
+
+func (r *Runner) bashPPTypeOfArg(w *syntax.Word) syntax.BashPPTypeExpr {
+	if cell := r.bashPPCellForWord(w); cell != nil {
+		if cell.declType != nil {
+			return cell.declType
+		}
+		if meta := bashPPCellMeta(cell); meta != nil && meta.typ != nil {
+			return meta.typ
+		}
+		if cell.typeName != "" {
+			name := &syntax.Lit{ValuePos: w.Pos(), ValueEnd: w.End(), Value: cell.typeName}
+			typ := syntax.BashPPTypeExpr(&syntax.BashPPNamedType{Name: name})
+			if cell.pointer {
+				return &syntax.BashPPPointerType{Star: w.Pos(), Element: typ}
+			}
+			return typ
+		}
+	}
+	value := r.bashPPExprValue(w)
+	switch {
+	case r.bashPPValueFits("int", value):
+		return &syntax.BashPPNamedType{Name: &syntax.Lit{ValuePos: w.Pos(), ValueEnd: w.End(), Value: "int"}}
+	case r.bashPPValueFits("bool", value):
+		return &syntax.BashPPNamedType{Name: &syntax.Lit{ValuePos: w.Pos(), ValueEnd: w.End(), Value: "bool"}}
+	default:
+		return &syntax.BashPPNamedType{Name: &syntax.Lit{ValuePos: w.Pos(), ValueEnd: w.End(), Value: "string"}}
+	}
+}
+
+func (r *Runner) bashPPInferTypeFromParam(param, actual syntax.BashPPTypeExpr, bindings map[string]syntax.BashPPTypeExpr) bool {
+	switch p := param.(type) {
+	case *syntax.BashPPTypeParamType:
+		if prev := bindings[p.Name.Value]; prev != nil {
+			return r.bashPPTypeAssignable(actual, prev) && r.bashPPTypeAssignable(prev, actual)
+		}
+		bindings[p.Name.Value] = actual
+		return true
+	case *syntax.BashPPPointerType:
+		a, ok := actual.(*syntax.BashPPPointerType)
+		return ok && r.bashPPInferTypeFromParam(p.Element, a.Element, bindings)
+	case *syntax.BashPPCollectionType:
+		a, ok := actual.(*syntax.BashPPCollectionType)
+		if !ok || p.Kind != a.Kind {
+			return false
+		}
+		if p.Kind == "map" && !r.bashPPInferTypeFromParam(p.Key, a.Key, bindings) {
+			return false
+		}
+		return r.bashPPInferTypeFromParam(p.Element, a.Element, bindings)
+	}
+	return true
+}
+
+func (r *Runner) bashPPCheckTypeConstraints(fn *bashPPFunc, params []*syntax.BashPPTypeParam, bindings map[string]syntax.BashPPTypeExpr) bool {
+	for _, group := range params {
+		for _, name := range group.Names {
+			arg := bindings[name.Value]
+			if arg == nil {
+				continue
+			}
+			switch c := group.Constraint.(type) {
+			case *syntax.BashPPNamedType:
+				switch c.Name.Value {
+				case "any":
+					continue
+				case "comparable":
+					if r.bashPPComparableType(arg, make(map[string]bool)) {
+						continue
+					}
+				default:
+					if iface, ok := r.bashPPInterfaceType(c); ok {
+						if err := r.bashPPImplements(arg, iface); err == nil {
+							continue
+						}
+					} else if r.bashPPTypeAssignable(arg, c) {
+						continue
+					}
+				}
+			case *syntax.BashPPInterfaceType:
+				if err := r.bashPPImplements(arg, c); err == nil {
+					continue
+				}
+			}
+			r.errf("BASHPP-EGENERIC-CONSTRAINT: %s does not satisfy constraint for %s in %s\n", bashPPTypeText(arg), name.Value, fn.name())
+			r.exit.code = 2
+			return false
+		}
+	}
+	return true
+}
+
+func (r *Runner) bashPPComparableType(typ syntax.BashPPTypeExpr, seen map[string]bool) bool {
+	switch x := typ.(type) {
+	case *syntax.BashPPNamedType:
+		name := x.Name.Value
+		decl, found := r.bashPPTypes[name]
+		if !found {
+			return bashPPBuiltinType(name)
+		}
+		if seen[name] || decl.typeExpr == nil {
+			return false
+		}
+		seen[name] = true
+		defer delete(seen, name)
+		return r.bashPPComparableType(decl.typeExpr, seen)
+	case *syntax.BashPPPointerType:
+		return true
+	case *syntax.BashPPCollectionType:
+		return x.Kind == "array" && r.bashPPComparableType(x.Element, seen)
+	case *syntax.BashPPStructType:
+		for _, field := range x.Fields {
+			if field.FieldTypeExpr == nil || !r.bashPPComparableType(field.FieldTypeExpr, seen) {
+				return false
+			}
+		}
+		return true
+	case *syntax.BashPPInterfaceType:
+		return true
+	case *syntax.BashPPTypeParamType:
+		return true
+	}
+	return false
 }
 
 func (r *Runner) bashPPCellForWord(w *syntax.Word) *bashPPCell {
@@ -1216,6 +1440,7 @@ func (r *Runner) bashPPRunDefers(ctx context.Context, mark int) {
 type bashPPParam struct {
 	name         string
 	declared     string
+	typ          syntax.BashPPTypeExpr
 	variadic     bool
 	defaultValue *syntax.Word
 }
@@ -1235,11 +1460,11 @@ func bashppParams(fields []*syntax.BashPPField) []bashPPParam {
 			if len(f.Names) > 0 {
 				name = f.Names[0].Value
 			}
-			params = append(params, bashPPParam{name: name, declared: declared, variadic: true})
+			params = append(params, bashPPParam{name: name, declared: declared, typ: f.FieldTypeExpr, variadic: true})
 			continue
 		}
 		for _, n := range f.Names {
-			params = append(params, bashPPParam{name: n.Value, declared: declared, defaultValue: f.Default})
+			params = append(params, bashPPParam{name: n.Value, declared: declared, typ: f.FieldTypeExpr, defaultValue: f.Default})
 		}
 	}
 	return params
@@ -1429,6 +1654,69 @@ func bashppResultTypes(fields []*syntax.BashPPField) []string {
 		}
 	}
 	return types
+}
+
+func bashPPSubstituteFields(fields []*syntax.BashPPField, typeArgs map[string]syntax.BashPPTypeExpr) []*syntax.BashPPField {
+	if len(typeArgs) == 0 {
+		return fields
+	}
+	out := make([]*syntax.BashPPField, len(fields))
+	for i, field := range fields {
+		cp := *field
+		if field.FieldTypeExpr != nil {
+			cp.FieldTypeExpr = bashPPSubstituteType(field.FieldTypeExpr, typeArgs)
+			if field.FieldType != nil {
+				cp.FieldType = &syntax.Lit{ValuePos: field.FieldType.Pos(), ValueEnd: field.FieldType.End(), Value: bashPPTypeText(cp.FieldTypeExpr)}
+			}
+		}
+		out[i] = &cp
+	}
+	return out
+}
+
+func bashPPSubstituteType(typ syntax.BashPPTypeExpr, typeArgs map[string]syntax.BashPPTypeExpr) syntax.BashPPTypeExpr {
+	switch x := typ.(type) {
+	case *syntax.BashPPTypeParamType:
+		if arg := typeArgs[x.Name.Value]; arg != nil {
+			return arg
+		}
+	case *syntax.BashPPCollectionType:
+		cp := *x
+		cp.Key = bashPPSubstituteType(x.Key, typeArgs)
+		cp.Element = bashPPSubstituteType(x.Element, typeArgs)
+		return &cp
+	case *syntax.BashPPPointerType:
+		cp := *x
+		cp.Element = bashPPSubstituteType(x.Element, typeArgs)
+		return &cp
+	case *syntax.BashPPStructType:
+		cp := *x
+		cp.Fields = bashPPSubstituteFields(x.Fields, typeArgs)
+		return &cp
+	case *syntax.BashPPInterfaceType:
+		cp := *x
+		cp.Elems = append([]*syntax.BashPPInterfaceElem(nil), x.Elems...)
+		for i, elem := range cp.Elems {
+			ec := *elem
+			ec.Embedded = bashPPSubstituteType(ec.Embedded, typeArgs)
+			if ec.Method != nil {
+				mc := *ec.Method
+				mc.Params = bashPPSubstituteFields(mc.Params, typeArgs)
+				mc.Results = bashPPSubstituteFields(mc.Results, typeArgs)
+				ec.Method = &mc
+			}
+			cp.Elems[i] = &ec
+		}
+		cp.Methods = append([]*syntax.BashPPMethodSpec(nil), x.Methods...)
+		for i, method := range cp.Methods {
+			mc := *method
+			mc.Params = bashPPSubstituteFields(mc.Params, typeArgs)
+			mc.Results = bashPPSubstituteFields(mc.Results, typeArgs)
+			cp.Methods[i] = &mc
+		}
+		return &cp
+	}
+	return typ
 }
 
 // bashppResultCount is the number of values a function returns.
