@@ -44,6 +44,13 @@ func (e *emitter) nativeScalarShellAssignment(stmt *syntax.Stmt) bool {
 		if a.Name == nil || a.Index != nil || a.Array != nil || a.Append || a.Naked || a.Value == nil || len(a.Value.Parts) != 1 {
 			return false
 		}
+		// A constant is not native storage, so this is not a native write. It
+		// stays a shell assignment whose refusal the declaration policy owns;
+		// claiming it here would emit a Go assignment to a Go constant and
+		// reject the whole program at compile time instead.
+		if e.lexicalConstantAssigned(a.Name.Value) {
+			return false
+		}
 		if _, arithmetic := a.Value.Parts[0].(*syntax.ArithmExp); arithmetic {
 			if !e.known(a.Name.Value) {
 				return false
