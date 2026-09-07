@@ -17,10 +17,10 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 )
 
-// readonlyContextNames are ordinary local expressions in the generated program.
-// Nothing here is a package-level variable, a thread local or a goroutine-id
-// lookup; the boundary function is passed in exactly like the state.
-var readonlyContextNames = ReadonlyContext{State: "__test_state", Abort: "__test_abort"}
+// readonlyContextNames threads the state as an ordinary expression. Nothing
+// here is a package-level variable, a thread local or a goroutine-id lookup,
+// and there is no failure sink: guards unwind with their typed error.
+var readonlyContextNames = ReadonlyContext{State: "__test_state"}
 
 func newReadonlyEmitter() *emitter {
 	return &emitter{
@@ -200,16 +200,16 @@ func (h *readonlyEmit) builtin(call *syntax.BashPPCall) (string, string, error) 
 		}
 		rest = append(rest, value)
 	}
-	source := readonlySource(call.Args[0])
 	return h.e.readonlyBuiltin(call, readonlyContextNames, ReadonlyBuiltin{
-		Name: call.Fun[0].Value, Root: source, Target: target, Path: source, Args: rest,
+		Name: call.Fun[0].Value, Root: readonlySource(call.Args[0]), Target: target, Args: rest,
 		Spread: call.Ellipsis.IsValid(),
 	})
 }
 
 // readonlyProgram assembles the ordinary Go artifact around the emitted body.
-// The helpers themselves never build a program wrapper; this is the test's own
-// stand-in for the compiler's boundary.
+// The helpers themselves never build a program wrapper; __test_boundary is this
+// test's stand-in for the runtime Program helper's Run, which catches the same
+// typed unwind, reports it once and exits with the error's own status.
 func readonlyProgram(e *emitter, declarations, body string) string {
 	return `package main
 
@@ -217,36 +217,34 @@ import __test_rt "mvdan.cc/sh/v3/lower/shellrt"
 import __test_fmt "fmt"
 import __test_os "os"
 ` + e.importLines() + `
-func __test_abort(err error) {
-	__test_fmt.Fprintln(__test_rt.Stderr, err)
-	status := 1
-	var exit interface{ ExitStatus() int }
-	if __test_errors_As(err, &exit) {
-		status = exit.ExitStatus()
-	}
-	__test_os.Exit(status)
-}
-
-func __test_errors_As(err error, target *interface{ ExitStatus() int }) bool {
-	for err != nil {
-		if value, ok := err.(interface{ ExitStatus() int }); ok {
-			*target = value
-			return true
+func __test_boundary(body func()) (status int) {
+	defer func() {
+		value := recover()
+		if value == nil {
+			return
 		}
-		unwrapper, ok := err.(interface{ Unwrap() error })
+		err, ok := value.(error)
 		if !ok {
-			return false
+			panic(value)
 		}
-		err = unwrapper.Unwrap()
-	}
-	return false
+		__test_fmt.Fprintln(__test_rt.Stderr, err)
+		status = 1
+		if exit, ok := err.(interface{ ExitStatus() int }); ok {
+			status = exit.ExitStatus()
+		}
+	}()
+	body()
+	return 0
 }
 
 ` + declarations + `
 func main() {
 	__test_state := &__test_rt.ReadonlyState{}
 	_ = __test_state
-` + body + "}\n"
+	__test_os.Exit(__test_boundary(func() {
+` + body + `}))
+}
+`
 }
 
 type readonlyRun struct {
@@ -317,14 +315,38 @@ func readonlyInterpret(t *testing.T, ctx context.Context, file *syntax.File) rea
 	return readonlyRun{stdout: out.String(), stderr: errs.String(), status: status}
 }
 
+type readonlyFixture struct {
+	name, src string
+	kinds     []string
+}
+
+func readonlyCompare(t *testing.T, fixture readonlyFixture) readonlyRun {
+	t.Helper()
+	file, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(fixture.src), "readonly.bpp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := newReadonlyEmitter()
+	harness := &readonlyEmit{e: e, kinds: fixture.kinds, t: t}
+	body, err := harness.stmts(file.Stmts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	compiled := readonlyBuildAndRun(t, ctx, readonlyProgram(e, harness.decls.String(), body))
+	interpreted := readonlyInterpret(t, ctx, file)
+	if compiled != interpreted {
+		t.Fatalf("compiled=%+v interpreted=%+v", compiled, interpreted)
+	}
+	return compiled
+}
+
 // TestReadonlyEmitterNegativeArtifactParity covers the seven public readonly
 // negatives. Each one must compile as ordinary Go and fail at runtime with the
-// interpreter's diagnostic and exit status, not at compile time.
+// interpreter's exact diagnostic and exit status, not at compile time.
 func TestReadonlyEmitterNegativeArtifactParity(t *testing.T) {
-	fixtures := []struct {
-		name, src string
-		kinds     []string
-	}{
+	fixtures := []readonlyFixture{
 		{"root", `cfg := map[string]int{"port": 80}
 readonly cfg
 cfg = map[string]int{"port": 443}
@@ -362,89 +384,109 @@ endpoint.Host = "changed.test"
 	for _, fixture := range fixtures {
 		t.Run(fixture.name, func(t *testing.T) {
 			t.Parallel()
-			file, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(fixture.src), "readonly.bpp")
-			if err != nil {
-				t.Fatal(err)
-			}
-			e := newReadonlyEmitter()
-			harness := &readonlyEmit{e: e, kinds: fixture.kinds, t: t}
-			body, err := harness.stmts(file.Stmts)
-			if err != nil {
-				t.Fatal(err)
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-			defer cancel()
-			compiled := readonlyBuildAndRun(t, ctx, readonlyProgram(e, harness.decls.String(), body))
-			interpreted := readonlyInterpret(t, ctx, file)
-			if interpreted.status != 2 {
-				t.Fatalf("interpreter status=%d stderr=%q", interpreted.status, interpreted.stderr)
-			}
-			if compiled != interpreted {
-				t.Fatalf("compiled=%+v interpreted=%+v", compiled, interpreted)
+			if run := readonlyCompare(t, fixture); run.status != 2 {
+				t.Fatalf("status=%d stderr=%q", run.status, run.stderr)
 			}
 		})
 	}
 }
 
-// TestReadonlyEmitterBuiltinArtifacts certifies that the builtin guards compile
-// and abort at runtime with the readonly diagnostic code and status. The
-// runtime cannot yet reproduce the interpreter's "through <builtin>" sentence,
-// so wording is explicitly not compared here; see the doc's API gap.
-func TestReadonlyEmitterBuiltinArtifacts(t *testing.T) {
-	fixtures := []struct {
-		name, src string
-		guarded   bool
-	}{
-		{"clear", "s := []int{1}\nreadonly s\nclear(s)\n", true},
-		{"append in place", "func main() {\n s := make([]int, 0, 1)\n readonly s\n _ := append(s, 1)\n}\nmain()\n", true},
-		{"delete", "m := map[string]int{\"a\": 1}\nreadonly m\ndelete(m, \"a\")\n", true},
-		{"copy", "s := []int{1, 2}\nreadonly s\ncopy(s, s)\n", true},
-		// A growing append allocates, so neither implementation reports a
-		// mutation of the readonly backing array.
-		{"append grows", "s := []int{1}\nreadonly s\nt := append(s, 2)\nprintln(t[1])\n", false},
+// TestReadonlyEmitterGuardPrecedesPathEvaluation pins the interpreter's timing.
+// The guard resolves the root binding, so a readonly mutation reports the
+// readonly diagnostic even when evaluating the path would first panic on a
+// bounds violation or a nil map — and the diagnostic text distinguishes a
+// nested field from an indexed path exactly as the interpreter does.
+func TestReadonlyEmitterGuardPrecedesPathEvaluation(t *testing.T) {
+	fixtures := []readonlyFixture{
+		{"out of range slice path", `type Config struct { Ports []int }
+cfg := Config{Ports: []int{80}}
+readonly cfg
+cfg.Ports[5] = 1
+`, []string{"slice"}},
+		{"nil map", `var m map[string]int
+readonly m
+m["a"] = 1
+`, []string{"map"}},
+		{"array element", `var a [3]int
+readonly a
+a[1] = 5
+`, []string{"slice"}},
+		{"struct map field", `type Config struct { Labels map[string]string }
+cfg := Config{Labels: map[string]string{"a": "b"}}
+readonly cfg
+cfg.Labels["a"] = "c"
+`, []string{"map"}},
+		{"nested field names last selector", `type Meta struct { Name string }
+type Config struct { Meta Meta }
+cfg := Config{Meta: Meta{Name: "prod"}}
+readonly cfg
+cfg.Meta.Name = "dev"
+`, []string{"field"}},
+		{"slice alias element", `s := []int{1, 2}
+readonly s
+alias := s
+alias[0] = 9
+`, []string{"slice"}},
 	}
-	const code = "BASHPP-EREADONLY-MUTATION:"
 	for _, fixture := range fixtures {
 		t.Run(fixture.name, func(t *testing.T) {
 			t.Parallel()
-			file, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(fixture.src), "readonly.bpp")
-			if err != nil {
-				t.Fatal(err)
-			}
-			e := newReadonlyEmitter()
-			harness := &readonlyEmit{e: e, t: t}
-			body, err := harness.stmts(file.Stmts)
-			if err != nil {
-				t.Fatal(err)
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-			defer cancel()
-			compiled := readonlyBuildAndRun(t, ctx, readonlyProgram(e, harness.decls.String(), body))
-			interpreted := readonlyInterpret(t, ctx, file)
-			if compiled.status != interpreted.status || compiled.stdout != interpreted.stdout {
-				t.Fatalf("compiled=%+v interpreted=%+v", compiled, interpreted)
-			}
-			if !fixture.guarded {
-				// An unguarded builtin must agree completely, wording included.
-				if compiled != interpreted {
-					t.Fatalf("compiled=%+v interpreted=%+v", compiled, interpreted)
-				}
-				return
-			}
-			if compiled.status != 2 {
-				t.Fatalf("status=%d stderr=%q", compiled.status, compiled.stderr)
-			}
-			if !strings.HasPrefix(compiled.stderr, code) || !strings.HasPrefix(interpreted.stderr, code) {
-				t.Fatalf("compiled=%q interpreted=%q", compiled.stderr, interpreted.stderr)
+			if run := readonlyCompare(t, fixture); run.status != 2 {
+				t.Fatalf("status=%d stderr=%q", run.status, run.stderr)
 			}
 		})
 	}
 }
 
-// TestReadonlyEmitterCapturesOperandsOnce pins the emitted shape: index
-// operands are captured once, in source order, before the check, and both the
-// check and the update then use those temps.
-func TestReadonlyEmitterCapturesOperandsOnce(t *testing.T) {
+// TestReadonlyEmitterBuiltinArtifactParity certifies the collection builtins
+// against the interpreter's exact stdout, stderr and status, wording included.
+func TestReadonlyEmitterBuiltinArtifactParity(t *testing.T) {
+	fixtures := []readonlyFixture{
+		{"clear", "s := []int{1}\nreadonly s\nclear(s)\n", nil},
+		{"delete", "m := map[string]int{\"a\": 1}\nreadonly m\ndelete(m, \"a\")\n", nil},
+		{"delete through alias", "m := map[string]int{\"a\": 1}\nreadonly m\nn := m\ndelete(n, \"a\")\n", nil},
+		{"copy", "s := []int{1, 2}\no := []int{3, 4}\nreadonly s\ncopy(s, o)\n", nil},
+		{"append in place", `func main() {
+ s := make([]int, 0, 1)
+ readonly s
+ t := append(s, 1)
+}
+main()
+`, nil},
+		{"append spread in place", `func main() {
+ s := make([]int, 0, 2)
+ more := []int{1}
+ readonly s
+ t := append(s, more...)
+}
+main()
+`, nil},
+		// A growing append allocates, so neither implementation reports a
+		// mutation of the readonly backing array.
+		{"append grows", "s := []int{1}\nreadonly s\nt := append(s, 2)\nprintln(t[1])\n", nil},
+		{"append spread grows", `func main() {
+ s := []int{1}
+ more := []int{2}
+ readonly s
+ t := append(s, more...)
+ println(t[1])
+}
+main()
+`, nil},
+	}
+	for _, fixture := range fixtures {
+		t.Run(fixture.name, func(t *testing.T) {
+			t.Parallel()
+			readonlyCompare(t, fixture)
+		})
+	}
+}
+
+// TestReadonlyEmitterGuardsWithoutHoisting pins the emitted shape: the guard
+// resolves the root binding and its own value, needs no part of the path, and
+// leaves the update as one ordinary Go statement whose operands are evaluated
+// once, in Go's order.
+func TestReadonlyEmitterGuardsWithoutHoisting(t *testing.T) {
 	const src = `cfg := map[string][]int{"ports": {80, 443}}
 readonly cfg
 cfg["ports"][0] = 8080
@@ -460,30 +502,113 @@ cfg["ports"][0] = 8080
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		`__test_state.Mark("cfg", &cfg)`,
-		"__test_readonlyIndex0 := \"ports\"\n__test_readonlyIndex1 := 0\n__test_readonlyContainer := cfg[__test_readonlyIndex0]\n",
-		`__test_state.CheckMutation("cfg", &cfg, __test_readonlyContainer, "[\"ports\"][0]", "slice")`,
-		"__test_readonlyContainer[__test_readonlyIndex1] = 8080",
+		`__test_rt.MustReadonly(__test_state.Mark("cfg", &cfg))`,
+		"__test_rt.MustReadonly(__test_state.CheckMutation(\"cfg\", &cfg, cfg, \"[\\\"ports\\\"][0]\", \"slice\"))\ncfg[\"ports\"][0] = 8080",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("missing %q in:\n%s", want, body)
 		}
 	}
-	if strings.Count(body, `"ports"`) != 2 { // one capture, one diagnostic path label
-		t.Fatalf("index evaluated more than once:\n%s", body)
+	if strings.Contains(body, "readonlyIndex") || strings.Contains(body, "readonlyContainer") {
+		t.Fatalf("mutation hoisted an operand:\n%s", body)
+	}
+	if !e.bridge {
+		t.Fatal("guard emission must record the runtime import")
 	}
 }
 
-func TestReadonlyEmitterRequiresExplicitStateAndBoundary(t *testing.T) {
+// TestReadonlyBuiltinCapturesOperandsBeforeGuard pins the builtin order: the
+// interpreter evaluates a builtin's arguments before it checks the target, so
+// every effectful operand is captured first. Constant operands stay in the call,
+// because hoisting one would change the type it takes.
+func TestReadonlyBuiltinCapturesOperandsBeforeGuard(t *testing.T) {
+	e := newReadonlyEmitter()
+	e.bind("m")
+	e.bind("key")
+	e.funcs["key"] = true
+	setup, call, err := e.readonlyBuiltin(nil, readonlyContextNames, ReadonlyBuiltin{
+		Name: "delete", Root: "m", Target: "m", Args: []string{"key()"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "__test_readonlyTarget := m\n__test_readonlyArg0 := key()\n" +
+		`__test_rt.MustReadonly(__test_state.CheckBuiltin(&m, __test_readonlyTarget, "delete"))` + "\n"
+	if setup != want {
+		t.Fatalf("setup=%q want=%q", setup, want)
+	}
+	if call != "delete(__test_readonlyTarget, __test_readonlyArg0)" {
+		t.Fatalf("call=%q", call)
+	}
+	// An untyped constant must not be hoisted without a type, and must be
+	// hoisted with the type the compiler supplies.
+	setup, call, err = e.readonlyBuiltin(nil, readonlyContextNames, ReadonlyBuiltin{
+		Name: "delete", Root: "m", Target: "m", Args: []string{"1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(setup, "readonlyArg0") || call != "delete(__test_readonlyTarget, 1)" {
+		t.Fatalf("constant hoisted: setup=%q call=%q", setup, call)
+	}
+	setup, call, err = e.readonlyBuiltin(nil, readonlyContextNames, ReadonlyBuiltin{
+		Name: "delete", Root: "m", Target: "m", Args: []string{"1"}, ArgTypes: []string{"float64"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(setup, "var __test_readonlyArg0 float64 = 1\n") ||
+		strings.Index(setup, "readonlyArg0 float64") > strings.Index(setup, "CheckBuiltin") {
+		t.Fatalf("typed capture must precede the guard: %q", setup)
+	}
+	if call != "delete(__test_readonlyTarget, __test_readonlyArg0)" {
+		t.Fatalf("call=%q", call)
+	}
+}
+
+// TestReadonlyEmitterSpreadAppendGuard pins the runtime-length form: the guard
+// only fires when the appended elements fit in the existing capacity.
+func TestReadonlyEmitterSpreadAppendGuard(t *testing.T) {
+	e := newReadonlyEmitter()
+	e.bind("s")
+	e.bind("more")
+	setup, call, err := e.readonlyBuiltin(nil, readonlyContextNames, ReadonlyBuiltin{
+		Name: "append", Root: "s", Target: "s", Args: []string{"more"}, Spread: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"__test_readonlyTarget := s\n",
+		"if len(more) > 0 && len(__test_readonlyTarget)+len(more) <= cap(__test_readonlyTarget) {",
+		`__test_rt.MustReadonly(__test_state.CheckBuiltin(&s, __test_readonlyTarget, "append"))`,
+	} {
+		if !strings.Contains(setup, want) {
+			t.Fatalf("missing %q in:\n%s", want, setup)
+		}
+	}
+	if call != "append(__test_readonlyTarget, more...)" {
+		t.Fatalf("call=%q", call)
+	}
+	if _, _, err := e.readonlyBuiltin(nil, readonlyContextNames, ReadonlyBuiltin{
+		Name: "copy", Root: "s", Target: "s", Args: []string{"more"}, Spread: true,
+	}); err == nil {
+		t.Fatal("spread copy accepted")
+	}
+}
+
+func TestReadonlyEmitterRequiresExplicitState(t *testing.T) {
 	e := newReadonlyEmitter()
 	e.bind("cfg")
-	for _, c := range []ReadonlyContext{{}, {State: "state"}, {Abort: "abort"}} {
-		if _, err := e.readonlyRebind(nil, c, "cfg", "1"); err == nil {
-			t.Fatalf("accepted %+v", c)
-		}
-		if _, _, err := e.readonlyBuiltin(nil, c, ReadonlyBuiltin{Name: "clear", Root: "cfg", Target: "cfg"}); err == nil {
-			t.Fatalf("accepted %+v", c)
-		}
+	empty := ReadonlyContext{}
+	if _, err := e.readonlyRebind(nil, empty, "cfg", "1"); err == nil {
+		t.Fatal("rebinding accepted without state")
+	}
+	if _, _, err := e.readonlyBuiltin(nil, empty, ReadonlyBuiltin{Name: "clear", Root: "cfg", Target: "cfg"}); err == nil {
+		t.Fatal("builtin accepted without state")
+	}
+	if e.bridge {
+		t.Fatal("a refused guard must not record the runtime import")
 	}
 }
 
@@ -501,23 +626,33 @@ func TestReadonlyEmitterRejectsIllFormedSites(t *testing.T) {
 		{"unknown kind", field, ReadonlyMutation{Kind: "object", Value: "1"}},
 		{"missing value", field, ReadonlyMutation{Kind: "field"}},
 		{"whole binding", ident, ReadonlyMutation{Kind: "field", Value: "1"}},
-		{"kind disagrees with path", index, ReadonlyMutation{Kind: "field", Value: "1"}},
-		{"field kind for index path", field, ReadonlyMutation{Kind: "slice", Value: "1"}},
+		{"field kind for index path", index, ReadonlyMutation{Kind: "field", Value: "1"}},
+		{"index kind for field path", field, ReadonlyMutation{Kind: "slice", Value: "1"}},
 	}
 	for _, tc := range cases {
 		if _, err := e.readonlyMutation(tc.target, readonlyContextNames, tc.m); err == nil {
 			t.Fatalf("%s accepted", tc.name)
 		}
 	}
+	// An array element is an indexed path the interpreter calls a slice path;
+	// routing it must work, not be refused for lacking a final field.
+	if _, err := e.readonlyMutation(index, readonlyContextNames, ReadonlyMutation{Kind: "slice", Value: "1"}); err != nil {
+		t.Fatal(err)
+	}
 	unknown := &syntax.BashPPSelectorExpr{X: &syntax.BashPPIdent{Name: &syntax.Lit{Value: "missing"}}, Sel: &syntax.Lit{Value: "Name"}}
 	if _, err := e.readonlyMutation(unknown, readonlyContextNames, ReadonlyMutation{Kind: "field", Value: "1"}); err == nil {
 		t.Fatal("undefined root accepted")
 	}
-	if _, _, err := e.readonlyBuiltin(nil, readonlyContextNames, ReadonlyBuiltin{Name: "delete", Root: "cfg", Target: "cfg"}); err == nil {
-		t.Fatal("delete without a key accepted")
-	}
-	if _, _, err := e.readonlyBuiltin(nil, readonlyContextNames, ReadonlyBuiltin{Name: "sort", Root: "cfg", Target: "cfg"}); err == nil {
-		t.Fatal("unguarded builtin accepted")
+	for _, b := range []ReadonlyBuiltin{
+		{Name: "delete", Root: "cfg", Target: "cfg"},
+		{Name: "sort", Root: "cfg", Target: "cfg"},
+		{Name: "clear", Root: "cfg", Target: "cfg", Args: []string{"1"}},
+		{Name: "clear", Root: "missing", Target: "missing"},
+		{Name: "copy", Root: "cfg", Target: "cfg", Args: []string{"1"}, ArgTypes: []string{"int", "int"}},
+	} {
+		if _, _, err := e.readonlyBuiltin(nil, readonlyContextNames, b); err == nil {
+			t.Fatalf("%+v accepted", b)
+		}
 	}
 	declare := &syntax.DeclClause{Variant: &syntax.Lit{Value: "export"}, Args: []*syntax.Assign{{Name: &syntax.Lit{Value: "cfg"}}}}
 	if _, err := e.readonlyDeclare(declare, readonlyContextNames); err == nil {
@@ -525,57 +660,20 @@ func TestReadonlyEmitterRejectsIllFormedSites(t *testing.T) {
 	}
 }
 
-// TestReadonlyEmitterTypedValueCapture pins the opt-in capture: with the
-// target's element type the value is captured before the check, which is the
-// only form that can keep an untyped constant's assignability.
-func TestReadonlyEmitterTypedValueCapture(t *testing.T) {
+func TestReadonlyEmitterOperandPurity(t *testing.T) {
 	e := newReadonlyEmitter()
-	e.bind("cfg")
-	target := &syntax.BashPPIndexExpr{
-		X:     &syntax.BashPPIdent{Name: &syntax.Lit{Value: "cfg"}},
-		Index: &syntax.BashPPBasicLit{Value: &syntax.Lit{Value: `"k"`}},
-	}
-	text, err := e.readonlyMutation(target, readonlyContextNames, ReadonlyMutation{Kind: "map", Value: "1", ValueType: "float64"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	capture := strings.Index(text, "var __test_readonlyValue float64 = 1")
-	check := strings.Index(text, "CheckMutation")
-	if capture < 0 || check < 0 || capture > check {
-		t.Fatalf("value capture must precede the check:\n%s", text)
-	}
-	if !strings.HasSuffix(strings.TrimSpace(text), "__test_readonlyContainer[__test_readonlyIndex0] = __test_readonlyValue\n}") {
-		t.Fatalf("update must use the captured value:\n%s", text)
-	}
-}
-
-// TestReadonlyEmitterSpreadAppendGuard pins the runtime-length form: the spread
-// operand is captured once and decides both the guard and the call.
-func TestReadonlyEmitterSpreadAppendGuard(t *testing.T) {
-	e := newReadonlyEmitter()
-	e.bind("s")
-	e.bind("more")
-	setup, call, err := e.readonlyBuiltin(nil, readonlyContextNames, ReadonlyBuiltin{
-		Name: "append", Root: "s", Target: "s", Path: "s", Args: []string{"more"}, Spread: true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, want := range []string{
-		"__test_readonlyTarget := s\n__test_readonlySpread := more\n",
-		"if len(__test_readonlySpread) > 0 && len(__test_readonlyTarget)+len(__test_readonlySpread) <= cap(__test_readonlyTarget) {",
-		`__test_state.CheckMutation("s", &s, __test_readonlyTarget, "s", "append")`,
-	} {
-		if !strings.Contains(setup, want) {
-			t.Fatalf("missing %q in:\n%s", want, setup)
+	e.imports["math"] = "math"
+	e.bind("x")
+	pure := []string{"1", `"a"`, "x", "-1", "(1 + 2)", "math.MaxInt64", "1 << 40"}
+	impure := []string{"f()", "m[k]", "*p", "x.Field", "<-ch", "[]int{1}", "x[1:]", "!("}
+	for _, text := range pure {
+		if !e.readonlyPure(text) {
+			t.Fatalf("%q must stay in the call", text)
 		}
 	}
-	if call != "append(__test_readonlyTarget, __test_readonlySpread...)" {
-		t.Fatalf("call=%q", call)
-	}
-	if _, _, err := e.readonlyBuiltin(nil, readonlyContextNames, ReadonlyBuiltin{
-		Name: "copy", Root: "s", Target: "s", Args: []string{"more"}, Spread: true,
-	}); err == nil {
-		t.Fatal("spread copy accepted")
+	for _, text := range impure {
+		if e.readonlyPure(text) {
+			t.Fatalf("%q must be captured before the guard", text)
+		}
 	}
 }

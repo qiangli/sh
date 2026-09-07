@@ -173,13 +173,7 @@ func (s *ReadonlyState) CheckAssign(binding any) error {
 func (s *ReadonlyState) CheckMutation(name string, binding, container any, path, kind string) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	owner := ""
-	if key, ok := readonlyObjectKey(reflect.ValueOf(binding)); ok {
-		owner = s.roots[key]
-	}
-	if owner == "" {
-		owner = s.owner(reflect.ValueOf(container))
-	}
+	owner := s.resolveOwner(binding, container)
 	if owner == "" {
 		return nil
 	}
@@ -190,4 +184,41 @@ func (s *ReadonlyState) CheckMutation(name string, binding, container any, path,
 		return &ReadonlyError{fmt.Sprintf("cannot mutate readonly value %q through field %s", owner, path)}
 	}
 	return &ReadonlyError{fmt.Sprintf("cannot mutate readonly value %q through %s path %s", owner, kind, path)}
+}
+
+// resolveOwner names the marked root reached by this binding or container, or
+// "" when neither is readonly. The binding is consulted first so a root's own
+// name wins over the name of an object it merely shares.
+func (s *ReadonlyState) resolveOwner(binding, container any) string {
+	if key, ok := readonlyObjectKey(reflect.ValueOf(binding)); ok {
+		if owner := s.roots[key]; owner != "" {
+			return owner
+		}
+	}
+	return s.owner(reflect.ValueOf(container))
+}
+
+// CheckBuiltin protects the target of a collection builtin. The whole container
+// is the operand there, so the diagnostic names the builtin rather than a path,
+// and it names the marked owner rather than the alias the call used: append,
+// copy, delete and clear reach the same object through any binding.
+func (s *ReadonlyState) CheckBuiltin(binding, container any, builtin string) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	owner := s.resolveOwner(binding, container)
+	if owner == "" {
+		return nil
+	}
+	return &ReadonlyError{fmt.Sprintf("cannot mutate readonly value %q through %s", owner, builtin)}
+}
+
+// MustReadonly unwinds with the guard's typed error. Generated code reports
+// nothing itself: the panic lets deferred code run and reaches the program
+// boundary, which prints the diagnostic once and exits with the error's own
+// status. There is no failure sink here, so two programs in one process cannot
+// see each other's guard failures.
+func MustReadonly(err error) {
+	if err != nil {
+		panic(err)
+	}
 }
