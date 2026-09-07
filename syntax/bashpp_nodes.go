@@ -418,6 +418,7 @@ func (*BashPPAddressExpr) bashPPExprNode()    {}
 func (*BashPPDerefExpr) bashPPExprNode()      {}
 func (*BashPPNewExpr) bashPPExprNode()        {}
 func (*BashPPTypeAssertExpr) bashPPExprNode() {}
+func (*BashPPCall) bashPPExprNode()           {}
 
 // BashPPBasicLit is an exact scalar literal. Kind uses Go token names (INT,
 // FLOAT, CHAR, STRING), retained as text so typed JSON remains stable.
@@ -559,6 +560,8 @@ type BashPPTypeExpr interface {
 	bashPPTypeExprNode()
 }
 
+func (*BashPPFuncType) bashPPTypeExprNode() {}
+
 func (*BashPPNamedType) bashPPTypeExprNode()      {}
 func (*BashPPCollectionType) bashPPTypeExprNode() {}
 func (*BashPPStructType) bashPPTypeExprNode()     {}
@@ -567,6 +570,26 @@ func (*BashPPInterfaceType) bashPPTypeExprNode()  {}
 func (*BashPPTypeParamType) bashPPTypeExprNode()  {}
 func (*BashPPUnionType) bashPPTypeExprNode()      {}
 func (*BashPPApproxType) bashPPTypeExprNode()     {}
+
+// BashPPFuncType is a concrete callable signature, distinct from the legacy
+// untyped `func` marker. Every parameter/result retains its positioned type.
+type BashPPFuncType struct {
+	Func                 Pos
+	Lparen, Rparen       Pos
+	Params, Results      []*BashPPField
+	ResLparen, ResRparen Pos
+}
+
+func (t *BashPPFuncType) Pos() Pos { return t.Func }
+func (t *BashPPFuncType) End() Pos {
+	if t.ResRparen.IsValid() {
+		return posAddCol(t.ResRparen, 1)
+	}
+	if len(t.Results) > 0 {
+		return t.Results[len(t.Results)-1].End()
+	}
+	return posAddCol(t.Rparen, 1)
+}
 
 type BashPPNamedType struct {
 	Name     *Lit
@@ -1190,6 +1213,9 @@ func (l *BashPPFuncLit) End() Pos {
 type BashPPReturn struct {
 	Kw      *Lit    // the literal "return"
 	Results []*Word // the returned values, or nil for a bare return
+	// Call retains the positioned AST for a single returned call. Results keeps
+	// its complete legacy Word spelling for consumers that still read values.
+	Call *BashPPCall
 
 	// FuncLit is set when the single returned value is a function literal,
 	// `return func(n int) int { … }`. That is how a closure ESCAPES the

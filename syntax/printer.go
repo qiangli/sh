@@ -1318,6 +1318,8 @@ func (p *Printer) bashppExpr(expr BashPPExpr) {
 		p.writeLit(x.Op.Value)
 		p.space()
 		p.bashppExpr(x.Y)
+	case *BashPPCall:
+		p.command(x, nil)
 	case *BashPPConvertExpr:
 		p.writeLit(x.ConvType.Value)
 		p.writeLit("(")
@@ -1372,6 +1374,9 @@ func (p *Printer) bashppExpr(expr BashPPExpr) {
 
 func (p *Printer) bashppType(typ BashPPTypeExpr) {
 	switch x := typ.(type) {
+	case *BashPPFuncType:
+		p.writeLit("func")
+		p.bashppSignature(x.Params, x.Results, x.ResLparen)
 	case *BashPPNamedType:
 		p.writeLit(x.Name.Value)
 		if len(x.TypeArgs) > 0 {
@@ -1978,6 +1983,11 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 		}
 	case *BashPPReturn:
 		p.spacedString(cmd.Kw.Value, cmd.Kw.Pos())
+		if cmd.Call != nil {
+			p.space()
+			p.command(cmd.Call, nil)
+			break
+		}
 		if cmd.FuncLit != nil {
 			p.bashppFuncLit(cmd.FuncLit)
 		}

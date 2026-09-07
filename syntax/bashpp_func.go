@@ -88,7 +88,7 @@ func (p *Parser) bashppFuncForm(ce *CallExpr) Command {
 	p.bashppMarkTypeParamFields(fd.Results, typeParams)
 	fd.Lparen, fd.Rparen = sig.lparen, sig.rparen
 	fd.ResLparen, fd.ResRparen = sig.resLparen, sig.resRparen
-	fd.Body = p.bashppFuncBody("func "+name.Value, sig.rparen)
+	fd.Body = p.bashppFuncBody("func "+name.Value, sig.rparen, sig.params)
 	return fd
 }
 
@@ -199,7 +199,7 @@ func (p *Parser) bashppMethodForm(kw *Lit) Command {
 	p.bashppMarkTypeParamFields(d.Results, receiverParams)
 	d.Lparen, d.Rparen = sig.lparen, sig.rparen
 	d.ResLparen, d.ResRparen = sig.resLparen, sig.resRparen
-	d.Body = p.bashppFuncBody("method "+method.Value, sig.rparen)
+	d.Body = p.bashppFuncBody("method "+method.Value, sig.rparen, sig.params)
 	return d
 }
 
@@ -351,7 +351,30 @@ func (p *Parser) bashppSignature(what string) bashppSig {
 
 // bashppFuncBody parses the braced body of a declaration or a literal, with
 // the func depth raised so that a `return` inside it is the Go-form one.
-func (p *Parser) bashppFuncBody(what string, after Pos) *Block {
+func (p *Parser) bashppFuncBody(what string, after Pos, params []*BashPPField) *Block {
+	// Concrete callable parameters enable zero-argument calls only in their body.
+	// Restore the original lookup entries so a local parameter cannot claim a
+	// later top-level shell spelling.
+	saved := make(map[string]bool)
+	for _, field := range params {
+		if _, ok := field.FieldTypeExpr.(*BashPPFuncType); !ok {
+			continue
+		}
+		for _, name := range field.Names {
+			saved[name.Value] = p.bashppFuncNames[name.Value]
+			p.bashppRegisterFunc(name.Value)
+		}
+	}
+	defer func() {
+		for name, exists := range saved {
+			if exists {
+				p.bashppFuncNames[name] = true
+			} else {
+				delete(p.bashppFuncNames, name)
+			}
+		}
+	}()
+
 	p.got(_Newl)
 	if !(p.tok == _LitWord && (p.val == "{" || p.val == "{}")) {
 		p.followErr(after, what+"()", noQuote("a { } body"))
@@ -386,7 +409,7 @@ func (p *Parser) bashppFuncLit(kw *Lit) *BashPPFuncLit {
 	lit.Params, lit.Results = sig.params, sig.results
 	lit.Lparen, lit.Rparen = sig.lparen, sig.rparen
 	lit.ResLparen, lit.ResRparen = sig.resLparen, sig.resRparen
-	lit.Body = p.bashppFuncBody("func", sig.rparen)
+	lit.Body = p.bashppFuncBody("func", sig.rparen, sig.params)
 	return lit
 }
 
@@ -400,6 +423,7 @@ func (p *Parser) bashppFieldList(open Pos, result bool) ([]*BashPPField, bool) {
 		equals Pos
 	}
 	var segs []segment
+	signatureTypes := make(map[*Lit]BashPPTypeExpr)
 	var cur segment
 	nearMiss := false
 	for {
@@ -412,8 +436,27 @@ func (p *Parser) bashppFieldList(open Pos, result bool) ([]*BashPPField, bool) {
 			p.followErr(open, "(", noQuote("a parameter"))
 			break
 		}
+		concreteSignature := false
+		if head := bashppBareLit(w); head != nil && head.Value == "func" && p.tok == leftParen {
+			w = p.bashppSignatureTypeWord(w)
+			if w == nil {
+				p.posErr(head.Pos(), "malformed concrete func type")
+				break
+			}
+			concreteSignature = true
+		}
 		clean, comma := bashppTrimComma(w)
 		lit := bashppBareLit(clean)
+		if concreteSignature {
+			text, _, ok := bashppScalarSource(clean)
+			typ := bashppTypeExpr(clean)
+			if !ok || typ == nil {
+				p.posErr(clean.Pos(), "malformed concrete func type")
+				break
+			}
+			lit = &Lit{ValuePos: clean.Pos(), ValueEnd: clean.End(), Value: text}
+			signatureTypes[lit] = typ
+		}
 		if lit == nil {
 			p.posErr(w.Pos(), "func parameter must be a name or type")
 		}
@@ -454,6 +497,11 @@ func (p *Parser) bashppFieldList(open Pos, result bool) ([]*BashPPField, bool) {
 		}
 		var resolved []*BashPPField
 		resolved, err = bashppResolveFields(plain, result)
+		for _, field := range resolved {
+			if typ := signatureTypes[field.FieldType]; typ != nil {
+				field.FieldTypeExpr = typ
+			}
+		}
 		fields = append(fields, resolved...)
 		plain = nil
 	}

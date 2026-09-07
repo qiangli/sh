@@ -127,6 +127,13 @@ func bashppConvertExpr(expr goast.Expr, source string, pos func(gotoken.Pos) Pos
 			return &BashPPBinaryExpr{X: convert(x.X), Op: lit(x.OpPos, x.OpPos+gotoken.Pos(len(x.Op.String())), x.Op.String()), Y: convert(x.Y)}
 		case *goast.CallExpr:
 			id := x.Fun.(*goast.Ident)
+			if id.Name == "len" || id.Name == "cap" {
+				call := &BashPPCall{Fun: []*Lit{lit(id.Pos(), id.End(), id.Name)}, Lparen: pos(x.Lparen), Rparen: pos(x.Rparen)}
+				for _, arg := range x.Args {
+					call.Args = append(call.Args, &Word{Parts: []WordPart{lit(arg.Pos(), arg.End(), source[int(arg.Pos())-1:int(arg.End())-1])}})
+				}
+				return call
+			}
 			if id.Name == "new" {
 				return &BashPPNewExpr{New: lit(id.Pos(), id.End(), id.Name), Lparen: pos(id.End()), AllocType: convertType(x.Args[0]), Rparen: pos(x.End() - 1)}
 			}
@@ -180,6 +187,27 @@ func bashppConvertExpr(expr goast.Expr, source string, pos func(gotoken.Pos) Pos
 
 func bashppConvertType(e goast.Expr, pos func(gotoken.Pos) Pos, lit func(gotoken.Pos, gotoken.Pos, string) *Lit) BashPPTypeExpr {
 	switch x := e.(type) {
+	case *goast.FuncType:
+		out := &BashPPFuncType{Func: pos(x.Func), Lparen: pos(x.Params.Opening), Rparen: pos(x.Params.Closing)}
+		fields := func(list *goast.FieldList) []*BashPPField {
+			if list == nil {
+				return nil
+			}
+			var result []*BashPPField
+			for _, f := range list.List {
+				field := &BashPPField{FieldType: lit(f.Type.Pos(), f.Type.End(), bashppGoTypeText(f.Type)), FieldTypeExpr: bashppConvertType(f.Type, pos, lit)}
+				for _, n := range f.Names {
+					field.Names = append(field.Names, lit(n.Pos(), n.End(), n.Name))
+				}
+				result = append(result, field)
+			}
+			return result
+		}
+		out.Params, out.Results = fields(x.Params), fields(x.Results)
+		if x.Results != nil && x.Results.Opening.IsValid() {
+			out.ResLparen, out.ResRparen = pos(x.Results.Opening), pos(x.Results.Closing)
+		}
+		return out
 	case *goast.Ident:
 		return &BashPPNamedType{Name: lit(x.Pos(), x.End(), x.Name)}
 	case *goast.IndexExpr:
@@ -408,6 +436,31 @@ func bashppTypeArgFromText(text string, pos Pos) (*BashPPTypeArg, bool) {
 
 func bashppTypeText(typ BashPPTypeExpr) string {
 	switch x := typ.(type) {
+	case *BashPPFuncType:
+		text := func(fields []*BashPPField) string {
+			var parts []string
+			for _, f := range fields {
+				var names []string
+				for _, n := range f.Names {
+					names = append(names, n.Value)
+				}
+				part := bashppTypeText(f.FieldTypeExpr)
+				if len(names) > 0 {
+					part = strings.Join(names, ", ") + " " + part
+				}
+				parts = append(parts, part)
+			}
+			return strings.Join(parts, ", ")
+		}
+		result := "func(" + text(x.Params) + ")"
+		if len(x.Results) > 0 {
+			if x.ResLparen.IsValid() {
+				result += " (" + text(x.Results) + ")"
+			} else {
+				result += " " + text(x.Results)
+			}
+		}
+		return result
 	case *BashPPNamedType:
 		if len(x.TypeArgs) == 0 {
 			return x.Name.Value
@@ -609,6 +662,8 @@ func bashppSupportedCollectionTypeAST(expr goast.Expr) bool {
 
 func bashppSupportedTypeAST(expr goast.Expr) bool {
 	switch x := expr.(type) {
+	case *goast.FuncType:
+		return x.TypeParams == nil && bashppSupportedFieldListTypes(x.Params) && bashppSupportedFieldListTypes(x.Results)
 	case *goast.Ident:
 		return bashppIsIdent(x.Name)
 	case *goast.IndexExpr:
@@ -702,6 +757,12 @@ func bashppSupportedEmbeddedFieldAST(expr goast.Expr) bool {
 
 func bashppGoTypeText(expr goast.Expr) string {
 	switch x := expr.(type) {
+	case *goast.FuncType:
+		var out bytes.Buffer
+		if err := format.Node(&out, gotoken.NewFileSet(), x); err != nil {
+			return ""
+		}
+		return out.String()
 	case *goast.Ident:
 		return x.Name
 	case *goast.IndexExpr:
@@ -1296,7 +1357,7 @@ func bashppSupportedScalarAST(expr goast.Expr) bool {
 		if id.Name == "new" {
 			return bashppSupportedTypeAST(x.Args[0])
 		}
-		return bashppScalarConversionType(id.Name) && bashppSupportedScalarAST(x.Args[0])
+		return (bashppScalarConversionType(id.Name) || id.Name == "len" || id.Name == "cap") && bashppSupportedScalarAST(x.Args[0])
 	case *goast.IndexExpr:
 		return bashppSupportedIndexableAST(x.X) && bashppSupportedScalarAST(x.Index)
 	case *goast.SliceExpr:
@@ -1530,6 +1591,7 @@ func (p *Parser) bashppParenForm(ce *CallExpr) Command {
 	assignNew := false
 	assignCall := false
 	var assignTarget *Word
+	var returnKw *Lit
 	if len(ce.Args) >= 3 {
 		op := len(ce.Args) - 2
 		opLit, funLit := bashppBareLit(ce.Args[op]), bashppWordLit(ce.Args[op+1])
@@ -1553,6 +1615,9 @@ func (p *Parser) bashppParenForm(ce *CallExpr) Command {
 			}
 			name, opPos, short = funLit, opLit.Pos(), true
 		}
+	} else if len(ce.Args) == 2 && p.bashppFuncDepth > 0 && bashppBareLit(ce.Args[0]) != nil && bashppBareLit(ce.Args[0]).Value == "return" {
+		returnKw = bashppBareLit(ce.Args[0])
+		name = bashppWordLit(ce.Args[1])
 	} else if len(ce.Args) == 1 {
 		name = bashppWordLit(ce.Args[0])
 	} else {
@@ -1693,7 +1758,7 @@ func (p *Parser) bashppParenForm(ce *CallExpr) Command {
 	if len(argTypes) > 0 {
 		call.ArgType = argTypes[0]
 	}
-	if assignCall {
+	if assignCall || returnKw != nil {
 		var text strings.Builder
 		text.WriteString(name.Value)
 		text.WriteByte('(')
@@ -1708,6 +1773,9 @@ func (p *Parser) bashppParenForm(ce *CallExpr) Command {
 		}
 		text.WriteByte(')')
 		value := &Word{Parts: []WordPart{&Lit{ValuePos: name.Pos(), ValueEnd: call.End(), Value: text.String()}}}
+		if returnKw != nil {
+			return &BashPPReturn{Kw: returnKw, Results: []*Word{value}, Call: call}
+		}
 		if len(lhs) > 1 {
 			return &BashPPAssign{Names: lhs, Eq: opPos, Value: value, Call: call}
 		}

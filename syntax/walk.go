@@ -309,6 +309,9 @@ func Walk(node Node, f func(Node) bool) {
 	case *BashPPSelectorExpr:
 		Walk(node.X, f)
 		Walk(node.Sel, f)
+	case *BashPPFuncType:
+		walkList(node.Params, f)
+		walkList(node.Results, f)
 	case *BashPPNamedType:
 		Walk(node.Name, f)
 		walkList(node.TypeArgs, f)
@@ -421,6 +424,7 @@ func Walk(node Node, f func(Node) bool) {
 		walkNilable(node.RecvType, f)
 		walkList(node.TypeParams, f)
 	case *BashPPReturn:
+		walkNilable(node.Call, f)
 		walkNilable(node.Kw, f)
 		walkList(node.Results, f)
 		if node.FuncLit != nil {

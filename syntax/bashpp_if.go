@@ -153,5 +153,16 @@ func (p *Parser) bashppIfHeaderWord() *Word {
 		p.next()
 		return word
 	}
-	return p.bashppScalarOperand()
+	word := p.bashppScalarOperand()
+	head := bashppBareLit(word)
+	if head == nil || (head.Value != "len" && head.Value != "cap") || p.tok != leftParen {
+		return word
+	}
+	// A call is collected only inside the enclosing transactional brace-if
+	// recognizer. A shell near miss still rewinds all tokens and source positions.
+	parts, ok := p.bashppParenWords()
+	if !ok {
+		return nil
+	}
+	return bashppJoinWords(append([]*Word{word}, parts...))
 }
