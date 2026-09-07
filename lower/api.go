@@ -17,10 +17,16 @@ const (
 	CodeBridge      = "LOWER-EBRIDGE"
 )
 
-type Options struct{ Package, Runtime, Origin string }
+type Options struct {
+	Package, Runtime, Origin string
+	// Entry optionally names an exported entry accepting runtime SessionOptions.
+	// Empty preserves the hygienic private entry and runtime-free native units.
+	Entry string
+}
 type Result struct {
 	Source   []byte
 	Package  string
+	Entry    string // emitted callable entry name, or empty for a runtime-free unit
 	Imports  []string
 	Origin   string
 	Mappings []Mapping

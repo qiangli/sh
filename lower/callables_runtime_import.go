@@ -41,3 +41,19 @@ func (i bridgeImporter) importRuntime(path string) (*types.Package, error) {
 	config := types.Config{Importer: i.fallback, IgnoreFuncBodies: true, DisableUnusedImportCheck: true}
 	return config.Check(path, positions, files, nil)
 }
+
+func (i bridgeImporter) importShellExec(path string) (*types.Package, error) {
+	positions := token.NewFileSet()
+	source := `package shellexec
+import rt "` + i.path + `"
+type Option func()
+func BashPP() Option
+func New(options ...Option) rt.ShellFactory
+`
+	file, err := parser.ParseFile(positions, "shellexec.go", source, 0)
+	if err != nil {
+		return nil, err
+	}
+	config := types.Config{Importer: i, IgnoreFuncBodies: true}
+	return config.Check(path, positions, []*ast.File{file}, nil)
+}

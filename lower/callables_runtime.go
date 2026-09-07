@@ -11,6 +11,11 @@ import (
 func (e *emitter) needsExecution(file *syntax.File) {
 	syntax.Walk(file, func(node syntax.Node) bool {
 		switch n := node.(type) {
+		case *syntax.DeclClause:
+			if n.Variant != nil && n.Variant.Value == "readonly" {
+				e.readonly = true
+				e.execution = true
+			}
 		case *syntax.BashPPAgenticBlock, *syntax.BashPPGo, *syntax.BashPPMakeChan, *syntax.BashPPSend, *syntax.BashPPReceive, *syntax.BashPPClose, *syntax.BashPPSelect:
 			e.execution = true
 		case *syntax.BashPPFuncDecl:
@@ -131,8 +136,10 @@ func (e *emitter) runtimeFunction(f *syntax.BashPPFuncDecl, signature, body, gen
 	return e.mark(f) + "func " + private + generics + e.privateSignature(signature) + " {\n" + entry + body + "}\n" + wrapper, nil
 }
 func (e *emitter) programMain(body string) string {
-	p := e.prefix + "program"
-	return "func main(){\n" + p + ", err := " + e.prefix + "rt.NewProgram()\nif err != nil { " + e.prefix + "fmt.Fprintln(" + e.prefix + "os.Stderr,err); " + e.prefix + "os.Exit(1) }\nerr = " + p + ".Run(func(" + p + " *" + e.prefix + "rt.Program){\n" + body + "})\nif err != nil {" + p + ".Fail(" + e.prefix + "rt.SourceFailure(err))}\nif status:=" + p + ".Status();status!=0 {" + e.prefix + "os.Exit(status)}\n}\n"
+	if e.options.Entry != "" {
+		return e.programEntrySourceNamed(body, e.mixedShell, e.options.Entry)
+	}
+	return e.programEntrySource(body, e.mixedShell)
 }
 
 func (e *emitter) agenticBlock(n *syntax.BashPPAgenticBlock) (string, error) {

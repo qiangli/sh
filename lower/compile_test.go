@@ -61,7 +61,7 @@ func executeBuild(t *testing.T, r compiledCase, flags ...string) (string, string
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 	defer cancel()
 	binary := filepath.Join(dir, "program")
-	args := append([]string{"build"}, flags...)
+	args := append([]string{"build", "-mod=mod"}, flags...)
 	args = append(args, "-o", binary, "generated.go")
 	cmd := exec.CommandContext(ctx, filepath.Join(runtime.GOROOT(), "bin", "go"), args...)
 	cmd.Dir = dir
@@ -214,7 +214,6 @@ println(n)
 }
 func TestRejectsUnsupportedAndInvalidWithoutResult(t *testing.T) {
 	cases := []struct{ name, source, code string }{
-		{"shell", `cat /tmp/file`, lower.CodeBridge},
 		{"unknown", `func f() int { return missing }`, lower.CodeUndefined},
 		{"badtype", `func f() int { return "wrong" }`, lower.CodeType},
 		{"arity", `func f(n int) int { return n }; x := f()`, lower.CodeType},

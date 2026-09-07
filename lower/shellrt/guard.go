@@ -14,6 +14,8 @@ func GuardError(value any) GuardFailure {
 	switch v := value.(type) {
 	case ValueAbort:
 		return v
+	case *ReadonlyError:
+		return v
 	case *ValueError:
 		return v
 	case *ProjectionError:
@@ -30,6 +32,9 @@ func (projectionFailure) ExitStatus() int { return 1 }
 // recover expression remains in the deferred function; checked failures keep
 // unwinding to the generated entry boundary.
 func PreserveAbort(value any) any {
+	if _, ok := value.(ShellExit); ok {
+		panic(value)
+	}
 	if _, ok := value.(ChannelAbort); ok {
 		panic(value)
 	}
