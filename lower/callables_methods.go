@@ -242,11 +242,6 @@ func (e *emitter) runtimeMethodFunction(f *syntax.BashPPFuncDecl, signature, bod
 	if f == nil || f.Receiver == nil || f.Receiver.RecvType == nil || f.Name == nil {
 		return "", e.fail(f, CodeUnsupported, "runtime method lowering needs a named receiver declaration")
 	}
-	// A Go method takes no type parameters of its own; a generic method is
-	// generic only through its receiver, whose parameters the receiver spells.
-	if len(f.TypeParams) > 0 || generics != "" {
-		return "", e.fail(f, CodeUnsupported, "a method is generic through its receiver, not its own type parameters")
-	}
 	entry, err := e.programEntry(f.Name.Value, f.Agentic != nil, f.Results)
 	if err != nil {
 		return "", err
@@ -274,7 +269,20 @@ func (e *emitter) runtimeMethodFunction(f *syntax.BashPPFuncDecl, signature, bod
 	recv := "(" + receiver + " " + receiverType + ") "
 	private := e.methodPrivateName(f.Name.Value)
 	p := e.prefix + "program"
-	invocation := receiver + "." + private + "(" + p + ", " + e.prefix + "rt.Site{Name:" + strconv.Quote(f.Name.Value) + "}"
+	// Go 1.27 lets a method declare type parameters of its own, so both halves
+	// of the pair carry the same list. The wrapper instantiates the private
+	// half EXPLICITLY with those same names rather than leaving it to
+	// inference: a parameter used only in the results is not inferable, and
+	// the names are in scope in the wrapper either way.
+	instantiation := ""
+	if len(f.TypeParams) > 0 {
+		var own []string
+		for _, param := range f.TypeParams {
+			own = append(own, names(param.Names)...)
+		}
+		instantiation = "[" + strings.Join(own, ", ") + "]"
+	}
+	invocation := receiver + "." + private + instantiation + "(" + p + ", " + e.prefix + "rt.Site{Name:" + strconv.Quote(f.Name.Value) + "}"
 	if len(args) > 0 {
 		invocation += ", " + strings.Join(args, ", ")
 	}
@@ -282,13 +290,13 @@ func (e *emitter) runtimeMethodFunction(f *syntax.BashPPFuncDecl, signature, bod
 	if values != "" {
 		invocation = values + " = " + invocation
 	}
-	wrapper := "func " + recv + f.Name.Value + signature + " {\n" +
+	wrapper := "func " + recv + f.Name.Value + generics + signature + " {\n" +
 		p + ", err := " + e.prefix + "rt.NewProgram()\n" +
 		"if err != nil { panic(err) }\n" + storage +
 		"err = " + p + ".Run(func(" + p + " *" + e.prefix + "rt.Program){\n" + invocation + "\n})\n" +
 		"if err != nil { panic(err) }\n" +
 		"return " + values + "\n}\n"
-	return e.mark(f) + "func " + recv + private + e.privateSignature(signature) + " {\n" + entry + body + "}\n" + wrapper, nil
+	return e.mark(f) + "func " + recv + private + generics + e.privateSignature(signature) + " {\n" + entry + body + "}\n" + wrapper, nil
 }
 
 // runtimeMethodCall lowers a method call. receiverType is the receiver's static
@@ -319,7 +327,18 @@ func (e *emitter) runtimeMethodCall(c *syntax.BashPPCall, receiverType string) (
 	if c.Ellipsis.IsValid() {
 		spread = "..."
 	}
+	// Explicit instantiation of a method's own type parameters. Inference
+	// covers the rest, so an absent list stays absent in the emitted call.
+	typeargs, err := e.typeArgs(c.TypeArgs)
+	if err != nil {
+		return "", err
+	}
 	if iface, ok := e.interfaceDecl(receiverType); ok {
+		// Go 1.27 gave methods type parameters but not interfaces, so there is
+		// nothing on an interface method to instantiate.
+		if typeargs != "" {
+			return "", e.fail(c, CodeUnsupported, "an interface method takes no type arguments")
+		}
 		params, results, found, err := e.interfaceMethodTypes(iface, method, map[*syntax.BashPPInterfaceType]bool{})
 		if err != nil {
 			return "", err
@@ -337,14 +356,14 @@ func (e *emitter) runtimeMethodCall(c *syntax.BashPPCall, receiverType string) (
 		// Foreign to this source unit: there is no private method to reach, so
 		// the ordinary Go call is the whole lowering and it runs with
 		// assistance off.
-		return receiver + "." + method + "(" + strings.Join(args, ", ") + spread + ")", nil
+		return receiver + "." + method + typeargs + "(" + strings.Join(args, ", ") + spread + ")", nil
 	}
 	// A declaration whose own signature this compiler cannot spell would emit a
 	// call the Go type checker rejects at an unmapped position instead.
 	if _, _, err := e.methodSignature(decl); err != nil {
 		return "", err
 	}
-	call := receiver + "." + e.methodPrivateName(method) + "(" + e.program() + ", " + e.callSite(c, method)
+	call := receiver + "." + e.methodPrivateName(method) + typeargs + "(" + e.program() + ", " + e.callSite(c, method)
 	if len(args) > 0 {
 		call += ", " + strings.Join(args, ", ") + spread
 	}

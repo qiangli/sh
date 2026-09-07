@@ -177,6 +177,13 @@ func (u *methodUnit) function(f *syntax.BashPPFuncDecl) (string, error) {
 	name, typ := receiverSpelling(f.Receiver)
 	e.bind(name)
 	e.projections.projectionBind(name, e.projectionType(typ, nil))
+	// A method's own type parameters are in scope over its signature and body
+	// exactly as a free callable's are; e.function binds them the same way.
+	for _, p := range f.TypeParams {
+		for _, n := range p.Names {
+			e.bind(n.Value)
+		}
+	}
 	signature, err := e.signature(f.Params, f.Results, f.Body)
 	if err != nil {
 		return "", err
@@ -188,7 +195,11 @@ func (u *methodUnit) function(f *syntax.BashPPFuncDecl) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return e.runtimeMethodFunction(f, signature, body, "")
+	generics, err := e.typeParams(f.TypeParams)
+	if err != nil {
+		return "", err
+	}
+	return e.runtimeMethodFunction(f, signature, body, generics)
 }
 
 func (u *methodUnit) statement(s *syntax.Stmt) (string, error) {
@@ -767,14 +778,28 @@ func TestRuntimeMethodDeclarationDiagnostics(t *testing.T) {
 	if _, err := e.runtimeMethodFunction(&syntax.BashPPFuncDecl{Kw: kw, Name: &syntax.Lit{Value: "m"}}, "()", "", ""); !errors.As(err, &list) || list[0].Code != CodeUnsupported {
 		t.Fatalf("missing receiver: %v", err)
 	}
+	// A method's OWN type parameters are lowered, not refused: Go 1.27 accepts
+	// them. Both halves of the pair carry the list, and the wrapper
+	// instantiates the private half explicitly so a parameter that appears
+	// only in the results is still spelled.
 	generic := &syntax.BashPPFuncDecl{
 		Kw:         kw,
 		Name:       &syntax.Lit{Value: "m"},
 		Receiver:   &syntax.BashPPReceiver{Name: &syntax.Lit{Value: "v"}, RecvType: &syntax.Lit{Value: "T"}},
 		TypeParams: []*syntax.BashPPTypeParam{{Names: []*syntax.Lit{{Value: "X"}}}},
 	}
-	if _, err := e.runtimeMethodFunction(generic, "()", "", "[X any]"); !errors.As(err, &list) || list[0].Code != CodeUnsupported {
+	got, err := e.runtimeMethodFunction(generic, "()", "", "[X any]")
+	if err != nil {
 		t.Fatalf("method type parameters: %v", err)
+	}
+	for _, want := range []string{
+		"func (v T) " + e.methodPrivateName("m") + "[X any](",
+		"func (v T) m[X any]()",
+		"v." + e.methodPrivateName("m") + "[X](",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generic method lowering = %q, want to contain %q", got, want)
+		}
 	}
 	unnamed := &syntax.BashPPFuncDecl{
 		Kw:       kw,
@@ -893,5 +918,28 @@ func main() {
 	}
 	if got != want {
 		t.Fatalf("got %+v want %+v\n%s", got, want, formatted)
+	}
+}
+
+// TestRuntimeGenericMethodLowering is the end-to-end shape of the Go 1.27
+// independent method type parameter: the declaration lowers to a private and a
+// public half that both carry the method's own list, and an explicitly
+// instantiated call reaches the private half with the same instantiation.
+func TestRuntimeGenericMethodLowering(t *testing.T) {
+	const src = `type R int
+agentic func (r R) M[T any](v T) T { return $v }
+var r R = 1
+agentic { r.M[int](7); }
+`
+	got := string(lowerMethodFixture(t, src))
+	for _, want := range []string{
+		"func (r R) __bpp0_call_M[T any](",
+		"func (r R) M[T any](v T) T",
+		"r.__bpp0_call_M[T](",
+		"__bpp0_call_M[int](",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("lowered generic method = %q, want to contain %q", got, want)
+		}
 	}
 }
