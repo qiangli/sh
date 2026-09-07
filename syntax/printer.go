@@ -1883,6 +1883,16 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 				p.writeLit("*")
 			}
 			p.writeLit(cmd.Receiver.RecvType.Value)
+			if len(cmd.Receiver.TypeParams) > 0 {
+				p.writeLit("[")
+				for i, param := range cmd.Receiver.TypeParams {
+					if i > 0 {
+						p.writeLit(", ")
+					}
+					p.writeLit(param.Value)
+				}
+				p.writeLit("]")
+			}
 			p.writeLit(")")
 			p.space()
 		}

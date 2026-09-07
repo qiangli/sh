@@ -79,3 +79,42 @@ func TestBashPPTypedReceiverValuesAndMethodValueAST(t *testing.T) {
 		t.Fatalf("typed declarations/method value = %#v %#v %#v", v, p, mv)
 	}
 }
+
+func TestBashPPGenericReceiverGrammarRoundTrip(t *testing.T) {
+	t.Parallel()
+	const src = "func (b *Box[T, U]) Get(v T) U {\n\treturn b.Value\n}\n"
+	for _, rd := range []io.Reader{strings.NewReader(src), funcOneByteReader{strings.NewReader(src)}} {
+		f, err := NewParser(Variant(LangBashPP)).Parse(rd, "generic-method.bpp")
+		if err != nil {
+			t.Fatal(err)
+		}
+		decl := f.Stmts[0].Cmd.(*BashPPFuncDecl)
+		if decl.Receiver == nil || !decl.Receiver.Pointer || len(decl.Receiver.TypeParams) != 2 || decl.Receiver.TypeParams[0].Value != "T" || decl.Receiver.TypeParams[1].Value != "U" {
+			t.Fatalf("receiver = %#v", decl.Receiver)
+		}
+		if _, ok := decl.Params[0].FieldTypeExpr.(*BashPPTypeParamType); !ok {
+			t.Fatalf("parameter type = %T, want receiver type parameter", decl.Params[0].FieldTypeExpr)
+		}
+		if _, ok := decl.Results[0].FieldTypeExpr.(*BashPPTypeParamType); !ok {
+			t.Fatalf("result type = %T, want receiver type parameter", decl.Results[0].FieldTypeExpr)
+		}
+		var out strings.Builder
+		if err := NewPrinter().Print(&out, f); err != nil || out.String() != src {
+			t.Fatalf("print = %q, %v", out.String(), err)
+		}
+	}
+}
+
+func TestBashPPGenericReceiverRejectsIndependentMethodTypeParams(t *testing.T) {
+	t.Parallel()
+	const src = "func (b Box[T]) Get[U any](v U) U { return v; }\n"
+	if _, err := NewParser(Variant(LangBashPP)).Parse(strings.NewReader(src), ""); err == nil {
+		t.Fatal("generic method declaration parsed; methods cannot declare independent type parameters")
+	}
+	for _, lang := range []LangVariant{LangBash, LangPOSIX} {
+		f, err := NewParser(Variant(lang)).Parse(strings.NewReader("func (b Box[T]) Get() { return; }\n"), "")
+		if err == nil {
+			t.Fatalf("classic %v accepted generic receiver: %#v", lang, f)
+		}
+	}
+}

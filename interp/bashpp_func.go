@@ -232,6 +232,11 @@ func (r *Runner) bashPPFuncDecl(d *syntax.BashPPFuncDecl) {
 		r.exit = exitStatus{code: 2}
 		return
 	}
+	if err := bashPPValidateTypeParamDecls(d.TypeParams); err != nil {
+		r.errf("%v\n", err)
+		r.exit.code = 2
+		return
+	}
 	if !r.bashPPCheckEnumSwitches(d) {
 		return
 	}
@@ -252,6 +257,25 @@ func (r *Runner) bashPPFuncDecl(d *syntax.BashPPFuncDecl) {
 		captured = r.bashPPScope.snapshot()
 	}
 	r.bashPPFuncs[name] = &bashPPFunc{decl: d, scope: captured}
+}
+
+func bashPPValidateTypeParamDecls(params []*syntax.BashPPTypeParam) error {
+	seen := make(map[string]bool)
+	for _, group := range params {
+		if group == nil || group.Constraint == nil {
+			return fmt.Errorf("BASHPP-EGENERIC-PARAM: type parameter constraint is missing")
+		}
+		for _, name := range group.Names {
+			if name == nil || !syntax.ValidName(name.Value) {
+				return fmt.Errorf("BASHPP-EGENERIC-PARAM: invalid type parameter")
+			}
+			if seen[name.Value] {
+				return fmt.Errorf("BASHPP-EGENERIC-PARAM: type parameter %s redeclared", name.Value)
+			}
+			seen[name.Value] = true
+		}
+	}
+	return nil
 }
 
 // bashPPCheckEnumSwitches validates exhaustiveness when the function is
@@ -335,6 +359,21 @@ func (r *Runner) bashPPMethodDecl(d *syntax.BashPPFuncDecl) {
 		r.errf("invalid receiver type %s (cannot define methods on an alias)\n", recv.RecvType.Value)
 		r.exit.code = 2
 		return
+	}
+	wantParams := bashPPTypeParamCount(typ.typeParams)
+	if len(recv.TypeParams) != wantParams {
+		r.errf("BASHPP-EGENERIC-RECEIVER: %s expects %d receiver type parameter(s); got %d\n", recv.RecvType.Value, wantParams, len(recv.TypeParams))
+		r.exit.code = 2
+		return
+	}
+	seenParams := make(map[string]bool, len(recv.TypeParams))
+	for _, param := range recv.TypeParams {
+		if seenParams[param.Value] {
+			r.errf("BASHPP-EGENERIC-RECEIVER: receiver type parameter %s redeclared\n", param.Value)
+			r.exit.code = 2
+			return
+		}
+		seenParams[param.Value] = true
 	}
 	if r.bashPPMethods == nil {
 		r.bashPPMethods = make(map[string]map[string]*bashPPFunc)
@@ -425,6 +464,7 @@ func (r *Runner) bashPPLookupFunc(c *syntax.BashPPCall) (*bashPPFunc, bool) {
 				bound.receiver = &copyCell
 			}
 			bound.skipArgs = 1
+			bound.typeArgs = bashPPMethodTypeArgs(fn, cell)
 			return &bound, true
 		}
 		return nil, false
@@ -467,6 +507,11 @@ func (r *Runner) bashPPInstantiateFunc(c *syntax.BashPPCall, fn *bashPPFunc) (*b
 	}
 	bindings := make(map[string]syntax.BashPPTypeExpr, want)
 	if len(c.TypeArgs) > 0 {
+		if err := bashPPValidateConcreteTypeArgs(c.TypeArgs); err != nil {
+			r.errf("%v\n", err)
+			r.exit.code = 2
+			return nil, false
+		}
 		i := 0
 		for _, group := range params {
 			for _, name := range group.Names {
@@ -678,6 +723,9 @@ func (r *Runner) bashPPValidateNamedTypeArgs(named *syntax.BashPPNamedType) erro
 	if len(named.TypeArgs) != want {
 		return fmt.Errorf("BASHPP-EGENERIC-ARITY: %s expects %d type argument(s); got %d", named.Name.Value, want, len(named.TypeArgs))
 	}
+	if err := bashPPValidateConcreteTypeArgs(named.TypeArgs); err != nil {
+		return err
+	}
 	i := 0
 	for _, group := range decl.typeParams {
 		for _, param := range group.Names {
@@ -686,6 +734,47 @@ func (r *Runner) bashPPValidateNamedTypeArgs(named *syntax.BashPPNamedType) erro
 				return fmt.Errorf("BASHPP-EGENERIC-CONSTRAINT: %s does not satisfy constraint for %s in %s", bashPPTypeText(arg), param.Value, named.Name.Value)
 			}
 			i++
+		}
+	}
+	return nil
+}
+
+func bashPPValidateConcreteTypeArgs(args []*syntax.BashPPTypeArg) error {
+	for _, arg := range args {
+		if arg == nil || arg.ArgType == nil {
+			return fmt.Errorf("BASHPP-EGENERIC-ARG: missing concrete type argument")
+		}
+		if err := bashPPValidateConcreteTypeExpr(arg.ArgType); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func bashPPValidateConcreteTypeExpr(typ syntax.BashPPTypeExpr) error {
+	switch x := typ.(type) {
+	case *syntax.BashPPUnionType, *syntax.BashPPApproxType:
+		return fmt.Errorf("BASHPP-EGENERIC-ARG: %s is a constraint expression, not a concrete type", bashPPTypeText(typ))
+	case *syntax.BashPPNamedType:
+		return bashPPValidateConcreteTypeArgs(x.TypeArgs)
+	case *syntax.BashPPCollectionType:
+		if x.Key != nil {
+			if err := bashPPValidateConcreteTypeExpr(x.Key); err != nil {
+				return err
+			}
+		}
+		if x.Element != nil {
+			return bashPPValidateConcreteTypeExpr(x.Element)
+		}
+	case *syntax.BashPPPointerType:
+		if x.Element != nil {
+			return bashPPValidateConcreteTypeExpr(x.Element)
+		}
+	case *syntax.BashPPStructType:
+		for _, field := range x.Fields {
+			if err := bashPPValidateConcreteTypeExpr(field.FieldTypeExpr); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -701,12 +790,12 @@ func (r *Runner) bashPPConstraintSatisfied(arg, constraint syntax.BashPPTypeExpr
 			return r.bashPPComparableType(arg, make(map[string]bool))
 		default:
 			if iface, ok := r.bashPPInterfaceType(c); ok {
-				return r.bashPPImplements(arg, iface) == nil
+				return r.bashPPImplements(arg, iface) == nil && r.bashPPInterfaceTypeSetSatisfied(arg, iface, make(map[*syntax.BashPPInterfaceType]bool))
 			}
 			return r.bashPPTypeAssignable(arg, c)
 		}
 	case *syntax.BashPPInterfaceType:
-		return r.bashPPImplements(arg, c) == nil
+		return r.bashPPImplements(arg, c) == nil && r.bashPPInterfaceTypeSetSatisfied(arg, c, make(map[*syntax.BashPPInterfaceType]bool))
 	case *syntax.BashPPUnionType, *syntax.BashPPApproxType:
 		return r.bashPPTypeSetSatisfied(arg, constraint)
 	}
@@ -757,6 +846,7 @@ func (r *Runner) bashPPBindMethod(cell *bashPPCell, method string, addressable b
 		return nil, false
 	}
 	bound := *fn
+	bound.typeArgs = bashPPMethodTypeArgs(fn, cell)
 	if ptrRecv {
 		bound.receiver = cell
 	} else {
@@ -775,6 +865,31 @@ func (r *Runner) bashPPBindMethod(cell *bashPPCell, method string, addressable b
 		bound.receiver = &copyCell
 	}
 	return &bound, true
+}
+
+func bashPPMethodTypeArgs(fn *bashPPFunc, cell *bashPPCell) map[string]syntax.BashPPTypeExpr {
+	if fn == nil || fn.decl == nil || fn.decl.Receiver == nil || len(fn.decl.Receiver.TypeParams) == 0 || cell == nil {
+		return nil
+	}
+	return bashPPMethodTypeBindings(fn, cell.declType)
+}
+
+func bashPPMethodTypeBindings(fn *bashPPFunc, typ syntax.BashPPTypeExpr) map[string]syntax.BashPPTypeExpr {
+	if fn == nil || fn.decl == nil || fn.decl.Receiver == nil || len(fn.decl.Receiver.TypeParams) == 0 {
+		return nil
+	}
+	if pointer, ok := typ.(*syntax.BashPPPointerType); ok {
+		typ = pointer.Element
+	}
+	named, ok := typ.(*syntax.BashPPNamedType)
+	if !ok || len(named.TypeArgs) != len(fn.decl.Receiver.TypeParams) {
+		return nil
+	}
+	bindings := make(map[string]syntax.BashPPTypeExpr, len(named.TypeArgs))
+	for i, param := range fn.decl.Receiver.TypeParams {
+		bindings[param.Value] = named.TypeArgs[i].ArgType
+	}
+	return bindings
 }
 
 // bashPPCallArgValues evaluates each call argument to a single string. Values

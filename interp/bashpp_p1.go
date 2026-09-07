@@ -88,10 +88,23 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 		return
 	}
 	name := d.Name.Value
+	typeInstalled, keepType := false, false
+	defer func() {
+		if typeInstalled && !keepType {
+			delete(r.bashPPTypes, name)
+		}
+	}()
 	if !syntax.ValidName(name) {
 		r.errf("invalid variable name: %q\n", name)
 		r.exit = exitStatus{code: 2}
 		return
+	}
+	if d.Site == syntax.StartTypeDecl {
+		if err := bashPPValidateTypeParamDecls(d.TypeParams); err != nil {
+			r.errf("%v\n", err)
+			r.exit.code = 2
+			return
+		}
 	}
 	if r.bashPPScope == nil {
 		// A runner which reached a Bash++ node without Reset having built the
@@ -112,6 +125,13 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 			r.exit = exitStatus{code: 2}
 			return
 		}
+		// Make the declaration visible while validating its representation.
+		// Recursive references can then be classified as either finite (behind
+		// pointer/slice/map indirection) or infinite (direct/array/struct value
+		// recursion), instead of being misreported as undefined.
+		candidate := bashPPType{underlying: d.DeclType.Value, alias: d.Alias, typeParams: d.TypeParams, typeExpr: d.DeclTypeExpr, fields: d.StructFields}
+		r.bashPPTypes[name] = candidate
+		typeInstalled = true
 		if d.DeclType.Value == "struct" {
 			seenFields := make(map[string]bool)
 			for _, field := range bashPPFlatFields(d.StructFields) {
@@ -121,16 +141,6 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 					return
 				}
 				seenFields[field.name] = true
-				if named, ok := field.typ.(*syntax.BashPPNamedType); ok && named.Name.Value == name {
-					r.errf("BASHPP-ESTRUCT-CYCLE: cyclic field type %s\n", name)
-					r.exit = exitStatus{code: 2}
-					return
-				}
-				if err := r.bashPPValidateValueType(field.typ, make(map[string]bool)); err != nil {
-					r.errf("%v\n", err)
-					r.exit = exitStatus{code: 2}
-					return
-				}
 			}
 		} else if d.DeclType.Value == "interface" {
 			iface, ok := d.DeclTypeExpr.(*syntax.BashPPInterfaceType)
@@ -159,48 +169,23 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 				}
 				seen[member.Value] = true
 			}
-		} else if _, ok := d.DeclTypeExpr.(*syntax.BashPPCollectionType); ok {
-			if err := r.bashPPValidateCollectionType(d.DeclTypeExpr); err != nil {
-				r.errf("%s%v\n", r.bashErrPrefix(d.Pos()), err)
-				r.exit = exitStatus{code: 2}
-				return
-			}
-		} else {
-			if len(d.TypeParams) > 0 {
-				if bashPPRecursiveGenericValue(d.DeclTypeExpr, name) {
-					r.errf("%scyclic type declaration: %s\n", r.bashErrPrefix(d.Pos()), name)
-					r.exit = exitStatus{code: 2}
-					return
-				}
-				if bashPPTypeContainsTypeParam(d.DeclTypeExpr) {
-					goto declaredValue
-				}
-			}
-			spelling := d.DeclType.Value
-			base := strings.TrimPrefix(spelling, "*")
-			// Go admits direct recursion only through indirection. A defined
-			// pointer type (`type Node *Node`) has finite representation; an
-			// alias or value cycle would require itself as its own underlying
-			// value and is rejected.
-			if base == name && (!strings.HasPrefix(spelling, "*") || d.Alias) {
+		}
+		if d.DeclType.Value != "interface" && d.DeclType.Value != "enum" {
+			if d.Alias && bashPPRecursiveGenericValue(d.DeclTypeExpr, name) {
 				r.errf("%scyclic type declaration: %s\n", r.bashErrPrefix(d.Pos()), name)
 				r.exit = exitStatus{code: 2}
 				return
 			}
-			if base != name {
-				if _, ok := r.bashPPTypes[base]; !ok && !bashPPBuiltinType(base) {
-					r.errf("%sundefined type: %s\n", r.bashErrPrefix(d.Pos()), base)
-					r.exit = exitStatus{code: 2}
-					return
+			if err := r.bashPPValidateTypeRepresentation(d.DeclTypeExpr, make(map[string]bool), make(map[string]bool)); err != nil {
+				if err == errBashPPTypeCycle {
+					r.errf("%scyclic type declaration: %s\n", r.bashErrPrefix(d.Pos()), name)
+				} else {
+					r.errf("%s%v\n", r.bashErrPrefix(d.Pos()), err)
 				}
-			}
-			if base != name && !r.bashPPTypeTerminates(base, make(map[string]bool)) {
-				r.errf("%sundefined type: %s\n", r.bashErrPrefix(d.Pos()), base)
 				r.exit = exitStatus{code: 2}
 				return
 			}
 		}
-	declaredValue:
 	}
 	if d.Site == syntax.StartVar && d.DeclTypeExpr != nil {
 		if err := r.bashPPValidateValueType(d.DeclTypeExpr, make(map[string]bool)); err != nil {
@@ -310,6 +295,7 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 			members[i] = member.Value
 		}
 		r.bashPPTypes[name] = bashPPType{underlying: d.DeclType.Value, alias: d.Alias, typeParams: d.TypeParams, members: members, typeExpr: d.DeclTypeExpr, fields: d.StructFields}
+		keepType = true
 	}
 	if d.Site == syntax.StartVar && d.DeclType != nil {
 		_, pointer := r.bashPPPointerType(d.DeclTypeExpr)
@@ -398,6 +384,8 @@ func bashPPRecursiveGenericValue(typ syntax.BashPPTypeExpr, name string) bool {
 		}
 	case *syntax.BashPPCollectionType:
 		return bashPPRecursiveGenericValue(x.Key, name) || bashPPRecursiveGenericValue(x.Element, name)
+	case *syntax.BashPPPointerType:
+		return bashPPRecursiveGenericValue(x.Element, name)
 	case *syntax.BashPPStructType:
 		for _, field := range x.Fields {
 			if bashPPRecursiveGenericValue(field.FieldTypeExpr, name) {

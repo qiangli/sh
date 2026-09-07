@@ -30,3 +30,23 @@ func TestBashPPMethodRoundTrip(t *testing.T) {
 		t.Fatalf("receiver after JSON round trip = %#v", d.Receiver)
 	}
 }
+
+func TestBashPPGenericMethodRoundTrip(t *testing.T) {
+	const src = "func (p *Box[T]) M(v T) T {\n return v\n}\n"
+	f, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(src), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var data bytes.Buffer
+	if err := Encode(&data, f); err != nil {
+		t.Fatal(err)
+	}
+	n, err := Decode(bytes.NewReader(data.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := n.(*syntax.File).Stmts[0].Cmd.(*syntax.BashPPFuncDecl)
+	if d.Receiver == nil || len(d.Receiver.TypeParams) != 1 || d.Receiver.TypeParams[0].Value != "T" {
+		t.Fatalf("generic receiver after JSON round trip = %#v", d.Receiver)
+	}
+}

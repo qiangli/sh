@@ -296,62 +296,7 @@ func (r *Runner) bashPPEvalCollection(lit *syntax.BashPPCompositeLit, expected s
 }
 
 func (r *Runner) bashPPValidateCollectionType(typ syntax.BashPPTypeExpr) error {
-	switch x := typ.(type) {
-	case *syntax.BashPPNamedType:
-		name := x.Name.Value
-		if bashPPScalarType(name) {
-			return nil
-		}
-		decl, ok := r.bashPPTypes[name]
-		if !ok {
-			return fmt.Errorf("BASHPP-ECOLLECTION-TYPE: undefined element type %s", name)
-		}
-		if len(decl.typeParams) > 0 || len(x.TypeArgs) > 0 {
-			if err := r.bashPPValidateNamedTypeArgs(x); err != nil {
-				return err
-			}
-			return r.bashPPValidateCollectionType(r.bashPPInstantiateNamedType(x))
-		}
-		if _, ok := decl.typeExpr.(*syntax.BashPPCollectionType); ok {
-			return r.bashPPValidateCollectionType(decl.typeExpr)
-		}
-		if decl.underlying == "struct" {
-			for _, field := range decl.fields {
-				if err := r.bashPPValidateValueType(field.FieldTypeExpr, make(map[string]bool)); err != nil {
-					return err
-				}
-			}
-			return nil
-		}
-		if !bashPPScalarType(strings.TrimPrefix(decl.underlying, "*")) {
-			return fmt.Errorf("BASHPP-ECOLLECTION-TYPE: unsupported element type %s", name)
-		}
-		return nil
-	case *syntax.BashPPCollectionType:
-		if x.Kind == "array" {
-			if x.Length == nil {
-				return fmt.Errorf("BASHPP-ECOLLECTION-LENGTH: array length is missing")
-			}
-			n, err := r.bashPPArrayLength(x.Length.Value)
-			if err != nil || n < 0 {
-				return fmt.Errorf("BASHPP-ECOLLECTION-LENGTH: invalid array length %s", x.Length.Value)
-			}
-		}
-		if x.Kind == "map" {
-			if !r.bashPPMapKeyType(x.Key) {
-				return fmt.Errorf("BASHPP-ECOLLECTION-KEY: unsupported map key type %s", bashPPTypeText(x.Key))
-			}
-			if err := r.bashPPValidateCollectionType(x.Key); err != nil {
-				return err
-			}
-		}
-		return r.bashPPValidateCollectionType(x.Element)
-	case *syntax.BashPPPointerType:
-		return r.bashPPValidatePointerType(x)
-	case *syntax.BashPPTypeParamType:
-		return nil
-	}
-	return fmt.Errorf("BASHPP-ECOLLECTION-TYPE: unsupported collection type %s", bashPPTypeText(typ))
+	return r.bashPPValidateTypeRepresentation(typ, make(map[string]bool), make(map[string]bool))
 }
 
 func (r *Runner) bashPPCollectionZero(typ syntax.BashPPTypeExpr) (any, *bashPPCollectionMeta) {

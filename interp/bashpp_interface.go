@@ -60,6 +60,9 @@ func (r *Runner) bashPPInterfaceMethodSet(name string, iface *syntax.BashPPInter
 		if elem.Method == nil {
 			embeddedIface, ok := r.bashPPInterfaceType(elem.Embedded)
 			if !ok {
+				if bashPPDirectTypeSetTerm(elem.Embedded) {
+					continue
+				}
 				return nil, fmt.Errorf("BASHPP-EINTERFACE-EMBED: interface %s embeds non-interface %s", name, bashPPTypeText(elem.Embedded))
 			}
 			embeddedName := bashPPTypeText(elem.Embedded)
@@ -98,6 +101,59 @@ func (r *Runner) bashPPInterfaceMethodSet(name string, iface *syntax.BashPPInter
 		set.byName[method] = bashPPInterfaceMethod{spec: spec, sig: sig}
 	}
 	return set, nil
+}
+
+func bashPPDirectTypeSetTerm(typ syntax.BashPPTypeExpr) bool {
+	switch typ.(type) {
+	case *syntax.BashPPUnionType, *syntax.BashPPApproxType:
+		return true
+	}
+	return false
+}
+
+func (r *Runner) bashPPInterfaceTypeSetSatisfied(arg syntax.BashPPTypeExpr, iface *syntax.BashPPInterfaceType, seen map[*syntax.BashPPInterfaceType]bool) bool {
+	if iface == nil || seen[iface] {
+		return iface != nil
+	}
+	seen[iface] = true
+	defer delete(seen, iface)
+	for _, elem := range bashPPInterfaceElems(iface) {
+		if elem.Method != nil {
+			continue
+		}
+		if embedded, ok := r.bashPPInterfaceType(elem.Embedded); ok {
+			if !r.bashPPInterfaceTypeSetSatisfied(arg, embedded, seen) {
+				return false
+			}
+			continue
+		}
+		if !r.bashPPTypeSetSatisfied(arg, elem.Embedded) {
+			return false
+		}
+	}
+	return true
+}
+
+func (r *Runner) bashPPInterfaceHasTypeTerms(iface *syntax.BashPPInterfaceType, seen map[*syntax.BashPPInterfaceType]bool) bool {
+	if iface == nil || seen[iface] {
+		return false
+	}
+	seen[iface] = true
+	for _, elem := range bashPPInterfaceElems(iface) {
+		if elem.Method != nil {
+			continue
+		}
+		if embedded, ok := r.bashPPInterfaceType(elem.Embedded); ok {
+			if r.bashPPInterfaceHasTypeTerms(embedded, seen) {
+				return true
+			}
+			continue
+		}
+		if bashPPDirectTypeSetTerm(elem.Embedded) {
+			return true
+		}
+	}
+	return false
 }
 
 func bashPPInterfaceElems(iface *syntax.BashPPInterfaceType) []*syntax.BashPPInterfaceElem {
@@ -148,11 +204,17 @@ func (r *Runner) bashPPImplements(actual syntax.BashPPTypeExpr, iface *syntax.Ba
 		if fn == nil || (!pointer && fn.decl.Receiver.Pointer) {
 			return fmt.Errorf("BASHPP-EINTERFACE-MISSING: %s does not implement interface (missing method %s)", bashPPTypeText(actual), name)
 		}
-		if bashPPFuncSignature(fn.decl) != expected.sig {
+		if bashPPInstantiatedMethodSignature(fn, actual) != expected.sig {
 			return fmt.Errorf("BASHPP-EINTERFACE-SIGNATURE: %s method %s has wrong signature", bashPPTypeText(actual), name)
 		}
 	}
 	return nil
+}
+
+func bashPPInstantiatedMethodSignature(fn *bashPPFunc, receiver syntax.BashPPTypeExpr) string {
+	bindings := bashPPMethodTypeBindings(fn, receiver)
+	return bashPPFieldsSignature(bashPPSubstituteFields(fn.decl.Params, bindings)) + "->" +
+		bashPPFieldsSignature(bashPPSubstituteFields(fn.decl.Results, bindings))
 }
 
 func bashPPInterfaceMethodOwner(typ syntax.BashPPTypeExpr) (string, bool) {
@@ -208,6 +270,9 @@ func (r *Runner) bashPPMakeInterfaceValue(expr syntax.BashPPExpr, expected synta
 	iface, _ := r.bashPPInterfaceType(expected)
 	if iface == nil {
 		return nil, expand.Variable{}, fmt.Errorf("BASHPP-EINTERFACE-TYPE: %s is not an interface", bashPPTypeText(expected))
+	}
+	if r.bashPPInterfaceHasTypeTerms(iface, make(map[*syntax.BashPPInterfaceType]bool)) {
+		return nil, expand.Variable{}, fmt.Errorf("BASHPP-EINTERFACE-TYPESET: %s is a constraint interface and cannot be used as a value type", bashPPTypeText(expected))
 	}
 	if id, ok := expr.(*syntax.BashPPIdent); ok {
 		if source := r.bashPPScope.lookup(id.Name.Value); source != nil && source.interfaceValue != nil {

@@ -134,23 +134,48 @@ func (p *Parser) bashppMethodForm(kw *Lit) Command {
 	recv := &BashPPReceiver{Lparen: p.pos}
 	p.next()
 	nameWord := p.getWord()
-	typeWord := p.getWord()
+	var typeWords []*Word
+	for p.tok != rightParen && p.tok != _EOF && p.tok != _Newl {
+		word := p.getWord()
+		if word == nil {
+			break
+		}
+		typeWords = append(typeWords, word)
+	}
 	recv.Name = bashppBareLit(nameWord)
-	typ := bashppBareLit(typeWord)
-	if recv.Name == nil || !bashppIsIdent(recv.Name.Value) || typ == nil {
+	var typLit *Lit
+	var typExpr BashPPTypeExpr
+	if len(typeWords) > 0 {
+		parts := make([]string, len(typeWords))
+		for i, word := range typeWords {
+			parts[i] = bashppWordText(word)
+		}
+		text := strings.Join(parts, " ")
+		typLit = &Lit{ValuePos: typeWords[0].Pos(), ValueEnd: typeWords[len(typeWords)-1].End(), Value: text}
+		typExpr = bashppTypeExprFromLit(typLit)
+	}
+	if recv.Name == nil || !bashppIsIdent(recv.Name.Value) || typLit == nil || typExpr == nil {
 		p.posErr(recv.Lparen, "method receiver must be one name and one named type")
 		return nil
 	}
-	typeName := typ.Value
-	if strings.HasPrefix(typeName, "*") {
+	if pointer, ok := typExpr.(*BashPPPointerType); ok {
 		recv.Pointer = true
-		typeName = strings.TrimPrefix(typeName, "*")
+		typExpr = pointer.Element
 	}
-	if !bashppIsIdent(typeName) || (recv.Pointer && strings.HasPrefix(typeName, "*")) {
-		p.posErr(typ.Pos(), "invalid method receiver type")
+	named, ok := typExpr.(*BashPPNamedType)
+	if !ok || !bashppIsIdent(named.Name.Value) {
+		p.posErr(typLit.Pos(), "invalid method receiver type")
 		return nil
 	}
-	recv.RecvType = &Lit{ValuePos: posAddCol(typ.Pos(), len(typ.Value)-len(typeName)), ValueEnd: typ.End(), Value: typeName}
+	recv.RecvType = named.Name
+	for _, arg := range named.TypeArgs {
+		param, ok := arg.ArgType.(*BashPPNamedType)
+		if !ok || len(param.TypeArgs) > 0 || !bashppIsIdent(param.Name.Value) {
+			p.posErr(arg.Pos(), "receiver type arguments must be identifiers")
+			return nil
+		}
+		recv.TypeParams = append(recv.TypeParams, param.Name)
+	}
 	if p.tok != rightParen {
 		p.followErr(recv.Lparen, "func (receiver", rightParen)
 	}
@@ -164,8 +189,14 @@ func (p *Parser) bashppMethodForm(kw *Lit) Command {
 	}
 	d := &BashPPFuncDecl{Kw: kw, Name: method, Receiver: recv}
 	p.bashppRegisterFunc(method.Value)
-	sig := p.bashppSignature("func (" + recv.Name.Value + " " + typ.Value + ") " + method.Value)
+	sig := p.bashppSignature("func (" + recv.Name.Value + " " + typLit.Value + ") " + method.Value)
 	d.Params, d.Results = sig.params, sig.results
+	receiverParams := make([]*BashPPTypeParam, 0, len(recv.TypeParams))
+	for _, name := range recv.TypeParams {
+		receiverParams = append(receiverParams, &BashPPTypeParam{Names: []*Lit{name}, Constraint: &BashPPNamedType{Name: &Lit{ValuePos: name.Pos(), ValueEnd: name.End(), Value: "any"}}})
+	}
+	p.bashppMarkTypeParamFields(d.Params, receiverParams)
+	p.bashppMarkTypeParamFields(d.Results, receiverParams)
 	d.Lparen, d.Rparen = sig.lparen, sig.rparen
 	d.ResLparen, d.ResRparen = sig.resLparen, sig.resRparen
 	d.Body = p.bashppFuncBody("method "+method.Value, sig.rparen)

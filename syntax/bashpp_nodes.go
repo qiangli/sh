@@ -1012,15 +1012,16 @@ type BashPPFuncDecl struct {
 	ResRparen Pos // ) closing a parenthesised result list, else invalid
 }
 
-// BashPPReceiver is the single receiver of a method declaration. Basic
-// named-type receivers are the Sprint 114 surface; embedding, interfaces and
-// generic receivers remain deliberately outside this node's grammar.
+// BashPPReceiver is the single receiver of a method declaration. TypeParams
+// are the identifiers introduced by an instantiated generic receiver such as
+// (b Box[T]); their constraints come from Box's declaration.
 type BashPPReceiver struct {
-	Name     *Lit
-	RecvType *Lit
-	Pointer  bool
-	Lparen   Pos
-	Rparen   Pos
+	Name       *Lit
+	RecvType   *Lit
+	TypeParams []*Lit
+	Pointer    bool
+	Lparen     Pos
+	Rparen     Pos
 }
 
 func (r *BashPPReceiver) Pos() Pos { return r.Lparen }

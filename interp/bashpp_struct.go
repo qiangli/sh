@@ -4,6 +4,7 @@
 package interp
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -11,52 +12,83 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 )
 
-func (r *Runner) bashPPValidateValueType(typ syntax.BashPPTypeExpr, seen map[string]bool) error {
+var errBashPPTypeCycle = errors.New("cyclic type representation")
+
+func cloneBashPPTypeSet(src map[string]bool) map[string]bool {
+	dst := make(map[string]bool, len(src))
+	for key := range src {
+		dst[key] = true
+	}
+	return dst
+}
+
+// bashPPValidateTypeRepresentation follows instantiated named types while
+// retaining two pieces of state: all active instantiations (to terminate legal
+// recursive paths), and the active instantiations since the last representation
+// boundary. Re-entering the latter is an infinite value layout. Pointers,
+// slices, and maps reset that direct set because their headers have finite size;
+// arrays and structs deliberately do not.
+func (r *Runner) bashPPValidateTypeRepresentation(typ syntax.BashPPTypeExpr, active, direct map[string]bool) error {
 	switch x := typ.(type) {
+	case *syntax.BashPPTypeParamType:
+		return nil
+	case *syntax.BashPPUnionType, *syntax.BashPPApproxType:
+		return fmt.Errorf("BASHPP-EGENERIC-ARG: %s is a constraint expression, not a concrete type", bashPPTypeText(typ))
 	case *syntax.BashPPNamedType:
+		if err := bashPPValidateConcreteTypeArgs(x.TypeArgs); err != nil {
+			return err
+		}
 		name := x.Name.Value
 		if bashPPScalarType(name) {
 			return nil
 		}
-		decl, ok := r.bashPPTypes[name]
+		_, ok := r.bashPPTypes[name]
 		if !ok {
-			return fmt.Errorf("BASHPP-ESTRUCT-FIELD-TYPE: undefined field type %s", name)
+			return fmt.Errorf("undefined type: %s", name)
 		}
-		if len(decl.typeParams) > 0 || len(x.TypeArgs) > 0 {
-			if err := r.bashPPValidateNamedTypeArgs(x); err != nil {
-				return err
-			}
-			key := bashPPTypeText(x)
-			if seen[key] {
-				return fmt.Errorf("BASHPP-ESTRUCT-CYCLE: cyclic field type %s", key)
-			}
-			seen[key] = true
-			defer delete(seen, key)
-			return r.bashPPValidateValueType(r.bashPPInstantiateNamedType(x), seen)
+		if err := r.bashPPValidateNamedTypeArgs(x); err != nil {
+			return err
 		}
-		if seen[name] {
-			return fmt.Errorf("BASHPP-ESTRUCT-CYCLE: cyclic field type %s", name)
-		}
-		seen[name] = true
-		defer delete(seen, name)
-		if decl.typeExpr != nil {
-			return r.bashPPValidateValueType(decl.typeExpr, seen)
-		}
-		if decl.underlying == "struct" {
-			for _, field := range decl.fields {
-				if err := r.bashPPValidateValueType(field.FieldTypeExpr, seen); err != nil {
-					return err
-				}
+		// Declaration identity, rather than full instantiation text, makes the
+		// traversal terminate even for expanding recursion such as A[*T]. The
+		// representation boundary still decides whether that recurrence is legal.
+		key := name
+		if active[key] {
+			if direct[key] {
+				return errBashPPTypeCycle
 			}
 			return nil
 		}
-		return r.bashPPValidateValueType(&syntax.BashPPNamedType{Name: &syntax.Lit{Value: strings.TrimPrefix(decl.underlying, "*")}}, seen)
-	case *syntax.BashPPCollectionType:
-		return r.bashPPValidateCollectionType(x)
+		active[key] = true
+		defer delete(active, key)
+		nextDirect := cloneBashPPTypeSet(direct)
+		nextDirect[key] = true
+		return r.bashPPValidateTypeRepresentation(r.bashPPInstantiateNamedType(x), active, nextDirect)
 	case *syntax.BashPPPointerType:
-		return r.bashPPValidatePointerType(x)
-	case *syntax.BashPPInterfaceType:
-		return r.bashPPValidateInterfaceType("anonymous", x)
+		if x.Element == nil {
+			return fmt.Errorf("BASHPP-EPOINTER-TYPE: invalid pointer type %s", bashPPTypeText(typ))
+		}
+		return r.bashPPValidateTypeRepresentation(x.Element, active, make(map[string]bool))
+	case *syntax.BashPPCollectionType:
+		if x.Kind == "array" {
+			if x.Length == nil {
+				return fmt.Errorf("BASHPP-ECOLLECTION-LENGTH: array length is missing")
+			}
+			n, err := r.bashPPArrayLength(x.Length.Value)
+			if err != nil || n < 0 {
+				return fmt.Errorf("BASHPP-ECOLLECTION-LENGTH: invalid array length %s", x.Length.Value)
+			}
+			return r.bashPPValidateTypeRepresentation(x.Element, active, direct)
+		}
+		if x.Kind == "map" {
+			if !r.bashPPMapKeyType(x.Key) {
+				return fmt.Errorf("BASHPP-ECOLLECTION-KEY: unsupported map key type %s", bashPPTypeText(x.Key))
+			}
+			if err := r.bashPPValidateTypeRepresentation(x.Key, active, make(map[string]bool)); err != nil {
+				return err
+			}
+		}
+		return r.bashPPValidateTypeRepresentation(x.Element, active, make(map[string]bool))
 	case *syntax.BashPPStructType:
 		seenFields := make(map[string]bool)
 		for _, field := range bashPPFlatFields(x.Fields) {
@@ -64,15 +96,23 @@ func (r *Runner) bashPPValidateValueType(typ syntax.BashPPTypeExpr, seen map[str
 				return fmt.Errorf("BASHPP-ESTRUCT-FIELD-DUPLICATE: field %q declared more than once", field.name)
 			}
 			seenFields[field.name] = true
-			if err := r.bashPPValidateValueType(field.typ, seen); err != nil {
+			if err := r.bashPPValidateTypeRepresentation(field.typ, active, direct); err != nil {
 				return err
 			}
 		}
 		return nil
-	case *syntax.BashPPTypeParamType:
-		return nil
+	case *syntax.BashPPInterfaceType:
+		if r.bashPPInterfaceHasTypeTerms(x, make(map[*syntax.BashPPInterfaceType]bool)) {
+			return fmt.Errorf("BASHPP-EINTERFACE-TYPESET: constraint interface cannot be used as a value type")
+		}
+		return r.bashPPValidateInterfaceType("anonymous", x)
 	}
 	return fmt.Errorf("BASHPP-ESTRUCT-FIELD-TYPE: unsupported field type %s", bashPPTypeText(typ))
+}
+
+func (r *Runner) bashPPValidateValueType(typ syntax.BashPPTypeExpr, seen map[string]bool) error {
+	direct := cloneBashPPTypeSet(seen)
+	return r.bashPPValidateTypeRepresentation(typ, seen, direct)
 }
 
 func (r *Runner) bashPPStructFields(typ syntax.BashPPTypeExpr) ([]*syntax.BashPPField, string, bool) {

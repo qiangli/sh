@@ -157,18 +157,18 @@ func TestBashPPGenericNamedTypeMethodSets(t *testing.T) {
 	}{
 		{
 			"value method on instantiated named type",
-			"type Box[T any] struct { Value T }\nfunc (b Box) Show() {\n echo show\n}\nfunc main() {\n var b Box[int] = Box[int]{Value:1}\n b.Show()\n}\nmain()\n",
+			"type Box[T any] struct { Value T }\nfunc (b Box[T]) Show() {\n echo show\n}\nfunc main() {\n var b Box[int] = Box[int]{Value:1}\n b.Show()\n}\nmain()\n",
 			"show\n",
 		},
 		{
 			"pointer method through addressable instantiated value",
-			"type Box[T any] struct { Value T }\nfunc (b *Box) Touch() {\n echo touch\n}\nfunc main() {\n var b Box[int] = Box[int]{Value:1}\n b.Touch()\n}\nmain()\n",
+			"type Box[T any] struct { Value T }\nfunc (b *Box[T]) Touch() {\n echo touch\n}\nfunc main() {\n var b Box[int] = Box[int]{Value:1}\n b.Touch()\n}\nmain()\n",
 			"touch\n",
 		},
 		{
-			"pointer method not in value method expression set",
-			"type Box[T any] struct { Value T }\nfunc (b *Box) Touch() {\n echo touch\n}\nfunc main() {\n var b Box[int] = Box[int]{Value:1}\n Box.Touch(b)\n}\nmain()\n",
-			"Box.Touch is not in the method set of Box",
+			"pointer method not in value interface method set",
+			"type Toucher interface { Touch() }\ntype Box[T any] struct { Value T }\nfunc (b *Box[T]) Touch() {\n echo touch\n}\nfunc main() {\n var b Box[int] = Box[int]{Value:1}\n var t Toucher = b\n}\nmain()\n",
+			"Box[int] does not implement interface (missing method Touch)",
 		},
 	}
 	for _, tc := range tests {
@@ -178,5 +178,124 @@ func TestBashPPGenericNamedTypeMethodSets(t *testing.T) {
 				t.Fatalf("output = %q, want to contain %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestBashPPGenericReceiverRequiresParameters(t *testing.T) {
+	const src = "type Box[T any] struct { Value T }\nfunc (b Box) Show() {\n echo show\n}\n"
+	if got := runBashPPFunc(t, src); !strings.Contains(got, "BASHPP-EGENERIC-RECEIVER: Box expects 1 receiver type parameter(s); got 0") {
+		t.Fatalf("output = %q", got)
+	}
+}
+
+func TestBashPPGenericRecursiveIndirectionAccepted(t *testing.T) {
+	const src = "type List[T any] []List[T]\necho ok\n"
+	if got := runBashPPFunc(t, src); got != "ok\n" {
+		t.Fatalf("output = %q, want %q", got, "ok\\n")
+	}
+}
+
+func TestBashPPGenericReceiverDeclaration(t *testing.T) {
+	const src = `type Box[T any] struct { Value T }
+func (b Box[T]) Show() {
+ echo show
+}
+func main() {
+ var b Box[int] = Box[int]{Value:1}
+ b.Show()
+}
+main()
+`
+	if got := runBashPPFunc(t, src); got != "show\n" {
+		t.Fatalf("output = %q, want %q", got, "show\\n")
+	}
+}
+
+func TestBashPPGenericRepresentationCyclesAndZeroValues(t *testing.T) {
+	accepted := []string{
+		"type List[T any] []List[T]\nvar v List[int]\necho ok\n",
+		"type Tree[T any] map[string]Tree[T]\nvar v Tree[int]\necho ok\n",
+		"type Node[T any] *Node[T]\nvar v Node[int]\necho ok\n",
+	}
+	for _, src := range accepted {
+		if got := runBashPPFunc(t, src); got != "ok\n" {
+			t.Fatalf("accepted recursive type output = %q", got)
+		}
+	}
+	for _, src := range []string{
+		"type Direct[T any] Direct[T]\n",
+		"type Array[T any] [1]Array[T]\n",
+		"type Struct[T any] struct { Next Struct[T] }\n",
+	} {
+		if got := runBashPPFunc(t, src); !strings.Contains(got, "cyclic type declaration:") {
+			t.Fatalf("invalid recursive type output = %q", got)
+		}
+	}
+}
+
+func TestBashPPGenericReceiverBindingAndMethodSets(t *testing.T) {
+	const src = `type Box[T any] struct { Value T }
+func (b Box[T]) Echo(v T) T { return v }
+func (b *Box[T]) Pointer(v T) T { return v }
+func main() {
+ var b Box[int] = Box[int]{Value:1}
+ x := b.Echo(7)
+ y := b.Pointer(8)
+ printf '%s:%s\n' "$x" "$y"
+}
+main()
+`
+	if got := runBashPPFunc(t, src); got != "7:8\n" {
+		t.Fatalf("output = %q, want %q", got, "7:8\\n")
+	}
+}
+
+func TestBashPPInstantiatedGenericMethodImplementsInterface(t *testing.T) {
+	const src = `type Echoer interface { Echo(int) int }
+type Box[T any] struct { Value T }
+func (b Box[T]) Echo(v T) T { return v }
+func main() {
+ var b Box[int] = Box[int]{Value:1}
+ var e Echoer = b
+ x := e.Echo(9)
+ echo "$x"
+}
+main()
+`
+	if got := runBashPPFunc(t, src); got != "9\n" {
+		t.Fatalf("output = %q, want %q", got, "9\\n")
+	}
+}
+
+func TestBashPPGenericNamedTypeSetConstraint(t *testing.T) {
+	const src = `type Integer interface { ~int }
+type Age int
+func id[T Integer](v T) T {
+ return v
+}
+var age Age = 9
+x := id(age)
+echo "$x"
+`
+	if got := runBashPPFunc(t, src); got != "9\n" {
+		t.Fatalf("output = %q, want %q", got, "9\\n")
+	}
+}
+
+func TestBashPPGenericTypeSetInterfaceIsNotValueType(t *testing.T) {
+	const src = "type Integer interface { ~int }\nvar value Integer\n"
+	if got := runBashPPFunc(t, src); !strings.Contains(got, "BASHPP-EINTERFACE-TYPESET:") {
+		t.Fatalf("output = %q", got)
+	}
+}
+
+func TestBashPPGenericDuplicateTypeParameters(t *testing.T) {
+	for _, src := range []string{
+		"func f[T any, T any](v T) T {\n return v\n}\n",
+		"type Box[T any, T any] struct { Value T }\n",
+	} {
+		if got := runBashPPFunc(t, src); !strings.Contains(got, "BASHPP-EGENERIC-PARAM: type parameter T redeclared") {
+			t.Fatalf("output = %q", got)
+		}
 	}
 }
