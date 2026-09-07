@@ -44,6 +44,9 @@ func (r *Runner) bashPPValidateTypeRepresentation(typ syntax.BashPPTypeExpr, act
 		}
 		_, ok := r.bashPPTypes[name]
 		if !ok {
+			if name == "error" {
+				return nil
+			}
 			return fmt.Errorf("undefined type: %s", name)
 		}
 		if err := r.bashPPValidateNamedTypeArgs(x); err != nil {

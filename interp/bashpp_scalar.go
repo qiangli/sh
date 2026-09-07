@@ -497,6 +497,9 @@ func (r *Runner) bashPPComparableExpr(expr syntax.BashPPExpr) (bashPPComparableV
 			return bashPPComparableValue{nilLiteral: true}, nil
 		}
 		if cell := r.bashPPScope.lookup(x.Name.Value); cell != nil {
+			if cell.interfaceValue != nil {
+				return bashPPComparableValue{value: cell.interfaceValue, meta: &bashPPCollectionMeta{kind: "interface", typ: cell.declType}}, nil
+			}
 			if cell.pointer {
 				return bashPPComparableValue{value: cell.pointerValue, meta: bashPPPointerMeta(cell.declType)}, nil
 			}
@@ -591,7 +594,7 @@ func bashPPPointerComparable(meta *bashPPCollectionMeta) bool {
 }
 
 func bashPPNilComparable(meta *bashPPCollectionMeta) bool {
-	return meta != nil && (meta.kind == "slice" || meta.kind == "map")
+	return meta != nil && (meta.kind == "slice" || meta.kind == "map" || meta.kind == "interface")
 }
 
 func bashPPCompareScalarAny(left, right any) (bool, error) {
@@ -637,6 +640,9 @@ func bashPPNilComparableValue(value any) bool {
 	}
 	if ptr, ok := value.(*bashPPPointer); ok {
 		return ptr == nil
+	}
+	if iface, ok := value.(*bashPPInterfaceValue); ok {
+		return iface == nil || iface.nilIface
 	}
 	return false
 }

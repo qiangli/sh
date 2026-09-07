@@ -40,6 +40,9 @@ func (r *Runner) bashPPInterfaceType(typ syntax.BashPPTypeExpr) (*syntax.BashPPI
 		}
 		seen[named.Name.Value] = true
 		decl, found := r.bashPPTypes[named.Name.Value]
+		if !found && named.Name.Value == "error" {
+			return bashPPPredeclaredErrorInterface(), true
+		}
 		if !found || decl.typeExpr == nil {
 			return nil, false
 		}
@@ -517,4 +520,12 @@ func typeCaseMatches(r *Runner, iv *bashPPInterfaceValue, expr syntax.BashPPExpr
 		return r.bashPPImplements(iv.dynamic, iface) == nil
 	}
 	return r.bashPPTypeAssignable(iv.dynamic, target)
+}
+
+// The predeclared error type is an ordinary interface. A source declaration
+// named error takes precedence through the normal named-type lookup above.
+func bashPPPredeclaredErrorInterface() *syntax.BashPPInterfaceType {
+	result := &syntax.BashPPField{FieldType: &syntax.Lit{Value: "string"}, FieldTypeExpr: &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "string"}}}
+	method := &syntax.BashPPMethodSpec{Name: &syntax.Lit{Value: "Error"}, Results: []*syntax.BashPPField{result}}
+	return &syntax.BashPPInterfaceType{Interface: &syntax.Lit{Value: "interface"}, Elems: []*syntax.BashPPInterfaceElem{{Method: method}}}
 }
