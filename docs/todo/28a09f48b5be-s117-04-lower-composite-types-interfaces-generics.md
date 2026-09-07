@@ -3,7 +3,7 @@ id: 28a09f48b5be
 kind: task
 title: 'S117-04: lower composite types interfaces generics and builtins'
 seq: 42
-status: assigned
+status: doing
 priority: p1
 created: 2026-09-07T17:54:06.060829Z
 assignee: sprint117-manager

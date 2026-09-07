@@ -3,7 +3,7 @@ id: 0f55f27ae900
 kind: task
 title: 'S117-05: lower five Bashsharp ergonomics features'
 seq: 43
-status: blocked
+status: doing
 priority: p1
 created: 2026-09-07T17:54:06.082227Z
 sprint: 117
