@@ -64,6 +64,34 @@ func TestBashPPTupleAssignRejectedRHSStreamingRoundTrip(t *testing.T) {
 	}
 }
 
+func TestBashPPTupleAssignWalkOptionalFields(t *testing.T) {
+	const src = "func pair() (int, int) {\n\treturn 1, 2\n}\nfunc f() {\n\tx, y = y, x\n\tx, y = pair()\n}\n"
+	file, err := NewParser(Variant(LangBashPP)).Parse(strings.NewReader(src), "walk.bpp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := file.Stmts[1].Cmd.(*BashPPFuncDecl).Body.Stmts
+	for i, stmt := range body {
+		assign := stmt.Cmd.(*BashPPAssign)
+		seenNames, seenCall := 0, false
+		Walk(assign, func(node Node) bool {
+			switch node.(type) {
+			case *Lit:
+				seenNames++
+			case *BashPPCall:
+				seenCall = true
+			}
+			return true
+		})
+		if seenNames < 2 {
+			t.Fatalf("assignment %d walk saw %d literals", i, seenNames)
+		}
+		if (i == 1) != seenCall {
+			t.Fatalf("assignment %d call seen = %v", i, seenCall)
+		}
+	}
+}
+
 func TestBashPPTupleAssignClassicPOSIXIsolation(t *testing.T) {
 	const src = "x, y = y, x\n"
 	for _, lang := range []LangVariant{LangBash, LangPOSIX} {

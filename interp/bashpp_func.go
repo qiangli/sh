@@ -1464,9 +1464,20 @@ func (r *Runner) bashPPSettleResults(fn *bashPPFunc, resultNames []string) []str
 			r.exit.code = 2
 			return nil
 		}
+		resultTypes := bashppResultTypeExprs(fn.results())
 		for i, name := range resultNames {
 			if name != "" && i < len(ret.values) {
-				r.setVarString(name, ret.values[i])
+				target := r.bashPPScope.lookup(name)
+				if target != nil && i < len(ret.cells) && ret.cells[i] != nil {
+					*target = *bashPPCopyAssignmentCell(ret.cells[i])
+				} else {
+					r.setVarString(name, ret.values[i])
+					target = r.bashPPScope.lookup(name)
+				}
+				if target != nil && i < len(resultTypes) {
+					target.declType = resultTypes[i]
+					target.typeName = bashPPNamedTypeBase(resultTypes[i])
+				}
 			}
 		}
 		r.exit.clear()

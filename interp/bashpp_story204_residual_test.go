@@ -169,6 +169,34 @@ func TestBashPPTupleAssignMalformedRHSIsPositioned(t *testing.T) {
 	qt.Assert(t, qt.StringContains(out.String(), "|1:2|"))
 }
 
+func TestBashPPTupleAssignNamedRichResultsPreserveMetadata(t *testing.T) {
+	const src = `type Box struct { N int }
+type Ch int
+func rich() (ptr *Box, value Box, pipe Ch) {
+ p := new(Box)
+ p.N = 5
+ b := Box{N: 6}
+ ch := make(chan int, 1)
+ ch <- 7
+ return p, b, ch
+}
+func main() {
+ var p *Box
+ var b Box
+ var ch Ch
+ p, b, ch = rich()
+ pv := *p
+ got := <-ch
+ printf '%s:%s:%s' pv.N b.N "$got"
+}
+main()
+`
+	var out strings.Builder
+	r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP))
+	bashPPRun(t, r, src)
+	qt.Assert(t, qt.Equals(out.String(), "5:6:7"))
+}
+
 func TestBashPPInitFunctionIsExplicitlyUnsupported(t *testing.T) {
 	const src = "func init() {\n}\n"
 	var out strings.Builder
