@@ -23,6 +23,12 @@ import (
 // GOPATH-vendor case applies that same public package call to a source-only
 // importing directory. Import resolution must not require a sibling Go file.
 func TestModuleContextAcceptance(t *testing.T) {
+	// The source oracle authenticates the reviewed Go 1.27 toolchain. Keep
+	// ordinary Go 1.26 library tests usable without weakening that policy.
+	if runtime.Version() != "go1.27.0" {
+		t.Skip("requires tests built with the reviewed Go 1.27.0 toolchain for the source interpreter oracle")
+	}
+
 	write := func(t *testing.T, root, name, body string) {
 		t.Helper()
 		path := filepath.Join(root, name)
