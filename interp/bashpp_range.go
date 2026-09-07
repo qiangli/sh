@@ -24,7 +24,8 @@ func (r *Runner) bashPPRangeScalar(ctx context.Context, rng *syntax.BashPPRange)
 		return false
 	}
 	if root, ok := bashPPCollectionRoot(rng.Expr); ok && r.bashPPScope != nil {
-		if cell := r.bashPPScope.lookup(root); cell != nil {
+		cell := r.bashPPScope.lookup(root)
+		if cell != nil {
 			if cell.channel != nil {
 				return false
 			}
@@ -33,7 +34,7 @@ func (r *Runner) bashPPRangeScalar(ctx context.Context, rng *syntax.BashPPRange)
 				return true
 			}
 		}
-		if r.bashPPFuncs[root] != nil {
+		if cell == nil && r.bashPPFuncs[root] != nil {
 			r.bashPPRangeError(rng, "BASHPP-ERANGE-FUNC: range over function requires a typed func(func(...) bool) iterator")
 			return true
 		}

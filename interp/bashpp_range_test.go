@@ -132,18 +132,67 @@ main()
 }
 
 func TestBashPPRangeNamedIntegerExpressionOverflow(t *testing.T) {
-	for _, expr := range []string{"tiny + 1", "300 - tiny"} {
-		src := `type Tiny uint8
+	const runtimeOverflow = `type Tiny uint8
 func main() {
  var tiny Tiny = 255
- for range ` + expr + ` { echo unreachable }
+ for range tiny + 1 { echo unreachable }
+ echo wrapped
 }
 main()
 `
-		_, stderr, err := runBashSharpCall(t, src)
-		qt.Assert(t, qt.ErrorIs(err, interp.ExitStatus(2)), qt.Commentf("expression: %s", expr))
-		qt.Assert(t, qt.StringContains(stderr, "overflows uint8"), qt.Commentf("expression: %s", expr))
-	}
+	out, stderr, err := runBashSharpCall(t, runtimeOverflow)
+	qt.Assert(t, qt.IsNil(err), qt.Commentf("stderr: %s", stderr))
+	qt.Assert(t, qt.Equals(stderr, ""))
+	qt.Assert(t, qt.Equals(out, "wrapped\n"))
+
+	const untypedOperandOverflow = `type Tiny uint8
+func main() {
+ var tiny Tiny = 255
+ for range 300 - tiny { echo unreachable }
+}
+main()
+`
+	_, stderr, err = runBashSharpCall(t, untypedOperandOverflow)
+	qt.Assert(t, qt.ErrorIs(err, interp.ExitStatus(2)))
+	qt.Assert(t, qt.StringContains(stderr, "constant 300 overflows uint8"))
+}
+
+func TestBashPPRangePathScalarPreservesNamedType(t *testing.T) {
+	const src = `type Count int
+type Counts []Count
+type Config struct { Limit Count }
+func requireSame[T any](a T, b T) { printf 'same:%s:%s\n' "$a" "$b" }
+func main() {
+ var reference Count = 2
+ counts := Counts{2}
+ for i := range counts[0] {
+  requireSame(i, reference)
+ }
+ cfg := Config{Limit: 2}
+ for i := range cfg.Limit {
+  requireSame(i, reference)
+ }
+}
+main()
+`
+	out, stderr, err := runBashSharpCall(t, src)
+	qt.Assert(t, qt.IsNil(err), qt.Commentf("stderr: %s", stderr))
+	qt.Assert(t, qt.Equals(stderr, ""))
+	qt.Assert(t, qt.Equals(out, "same:0:2\nsame:1:2\nsame:0:2\nsame:1:2\n"))
+}
+
+func TestBashPPRangeLexicalValueShadowsFunction(t *testing.T) {
+	const src = `func count() { echo function-ran }
+func main() {
+ count := 2
+ for i := range count { printf 'value:%s\n' "$i" }
+}
+main()
+`
+	out, stderr, err := runBashSharpCall(t, src)
+	qt.Assert(t, qt.IsNil(err), qt.Commentf("stderr: %s", stderr))
+	qt.Assert(t, qt.Equals(stderr, ""))
+	qt.Assert(t, qt.Equals(out, "value:0\nvalue:1\n"))
 }
 
 func TestBashPPRangePositionedUndefinedAndFunctionDiagnostics(t *testing.T) {
