@@ -64,12 +64,8 @@ func (r *Runner) bashPPBuiltinArg(w *syntax.Word) bashPPBuiltinArg {
 				arg.typ = arg.meta.typ
 			}
 		} else {
-			arg.scalar = bashPPScalarFromString(cell.vr.Str)
+			arg.scalar = r.bashPPScalarFromCell(cell)
 			arg.value = bashPPBuiltinExactScalarValue(cell.vr.Str, arg.scalar)
-			arg.scalar.runtime = !cell.constant
-			if named, ok := arg.typ.(*syntax.BashPPNamedType); ok {
-				arg.scalar.typ = named.Name.Value
-			}
 			arg.hasScalar = true
 		}
 		return arg
@@ -90,12 +86,22 @@ func (r *Runner) bashPPBuiltinArg(w *syntax.Word) bashPPBuiltinArg {
 }
 
 func bashPPBuiltinExactScalarValue(text string, scalar bashPPScalar) any {
-	if scalar.value.Kind() == constant.Int {
-		if _, ok := constant.Int64Val(scalar.value); !ok {
+	switch scalar.value.Kind() {
+	case constant.String:
+		return constant.StringVal(scalar.value)
+	case constant.Bool:
+		return constant.BoolVal(scalar.value)
+	case constant.Int:
+		if value, ok := constant.Int64Val(scalar.value); ok {
+			return int(value)
+		} else {
 			return text
 		}
+	case constant.Float:
+		value, _ := constant.Float64Val(scalar.value)
+		return value
 	}
-	return bashPPScalarValue(text)
+	return text
 }
 
 func bashPPBuiltinScalar(value any) string {
@@ -110,7 +116,7 @@ func bashPPBuiltinScalar(value any) string {
 }
 
 func bashPPBuiltinScalarCell(value string) *bashPPCell {
-	return &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: value}}
+	return &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: value}, scalarKind: bashPPScalarFromString(value).value.Kind()}
 }
 
 func (r *Runner) bashPPBuiltinMutable(name string, arg bashPPBuiltinArg) bool {
@@ -515,6 +521,7 @@ func (r *Runner) bashPPRunValueBuiltin(name string, c *syntax.BashPPCall) (*bash
 			}
 		}
 		result := bashPPBuiltinScalarCell(bashPPScalarString(args[best].scalar.value))
+		result.scalarKind = args[best].scalar.value.Kind()
 		result.declType = resultType
 		if named, ok := resultType.(*syntax.BashPPNamedType); ok {
 			result.typeName = named.Name.Value

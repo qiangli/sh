@@ -94,6 +94,41 @@ main()
 		"channel:1:3:1 pointer:4:4:5:5 copy:3:195:169:120 append:65:195:169 exact:9007199254740993:-9007199254740993\n"))
 }
 
+func TestBashPPBuiltinStringScalarProvenance(t *testing.T) {
+	const src = `type Label string
+type LabelAlias = Label
+func requireSame[T any](a T, b T) { printf 'typed:%s:%s\n' "$a" "$b" }
+func main() {
+ numeric := "10"
+ numericAlias := numeric
+ truth := "true"
+ truthAlias := truth
+ shortMin := min(numericAlias, "2")
+	shortMinAlias := shortMin
+	truthMin := min(truthAlias, "z")
+	shortLen := len(truthAlias)
+	selectedLen := len(shortMinAlias)
+ copiedBytes := make([]byte, 4)
+ copied := copy(copiedBytes, truthAlias)
+ empty := make([]byte, 0, 2)
+ appended := append(empty, numericAlias...)
+ var defined LabelAlias = "20"
+ definedMin := min(defined, "3")
+ requireSame(definedMin, defined)
+ definedLen := len(defined)
+	definedEmpty := make([]byte, 0, 2)
+	definedBytes := append(definedEmpty, defined...)
+ printf 'short:%s:%s:%s:%s copy:%s:%s:%s:%s:%s append:%s:%s defined:%s:%s:%s:%s\n' "$shortMin" "$truthMin" "$shortLen" "$selectedLen" "$copied" copiedBytes[0] copiedBytes[1] copiedBytes[2] copiedBytes[3] appended[0] appended[1] "$definedMin" "$definedLen" definedBytes[0] definedBytes[1]
+}
+main()
+`
+	out, stderr, err := runBashSharpCall(t, src)
+	qt.Assert(t, qt.IsNil(err), qt.Commentf("stderr: %s", stderr))
+	qt.Assert(t, qt.Equals(stderr, ""))
+	qt.Assert(t, qt.Equals(out, "typed:20:20\n"+
+		"short:10:true:4:2 copy:4:116:114:117:101 append:49:48 defined:20:2:50:48\n"))
+}
+
 func TestBashPPBuiltinDiagnosticsAndReadonly(t *testing.T) {
 	tests := []struct{ name, body, want string }{
 		{"len arity", "_ := len()", "BASHPP-EBUILTIN-ARITY:"},

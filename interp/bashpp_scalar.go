@@ -166,21 +166,58 @@ func (r *Runner) bashPPIdentScalar(name string) (bashPPScalar, error) {
 	if vr.Kind == expand.Object {
 		return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-OPERAND: %s is not a scalar", name)
 	}
-	value := bashPPScalarFromString(vr.String())
 	if r.bashPPScope != nil {
 		if cell := r.bashPPScope.lookup(name); cell != nil {
-			value.runtime = !cell.constant
-			switch {
-			case cell.typeName != "":
-				value.typ = cell.typeName
-			case cell.declType != nil:
-				if named, ok := cell.declType.(*syntax.BashPPNamedType); ok {
-					value.typ = named.Name.Value
+			return r.bashPPScalarFromCell(cell), nil
+		}
+	}
+	return bashPPScalarFromString(vr.String()), nil
+}
+
+// bashPPScalarFromCell reconstructs a scalar using lexical provenance before
+// considering its rendered shell text. Quoted "2" and "true" values must not
+// become numbers or booleans merely because their storage is textual.
+func (r *Runner) bashPPScalarFromCell(cell *bashPPCell) bashPPScalar {
+	text := cell.vr.String()
+	value := bashPPScalar{}
+	switch cell.scalarKind {
+	case constant.String:
+		value.value = constant.MakeString(text)
+	case constant.Bool:
+		value.value = constant.MakeBool(text == "true")
+	case constant.Int:
+		value.value = constant.MakeFromLiteral(text, token.INT, 0)
+	case constant.Float:
+		value.value = constant.MakeFromLiteral(text, token.FLOAT, 0)
+	default:
+		if named, ok := r.bashPPUnderlyingType(cell.declType).(*syntax.BashPPNamedType); ok {
+			switch named.Name.Value {
+			case "string":
+				value.value = constant.MakeString(text)
+			case "bool":
+				value.value = constant.MakeBool(text == "true")
+			default:
+				if bashPPIntegerType(named.Name.Value) {
+					value.value = constant.MakeFromLiteral(text, token.INT, 0)
+				} else if named.Name.Value == "float32" || named.Name.Value == "float64" {
+					value.value = constant.MakeFromLiteral(text, token.FLOAT, 0)
 				}
 			}
 		}
+		if value.value == nil || value.value.Kind() == constant.Unknown {
+			value = bashPPScalarFromString(text)
+		}
 	}
-	return value, nil
+	value.runtime = !cell.constant
+	switch {
+	case cell.typeName != "":
+		value.typ = cell.typeName
+	case cell.declType != nil:
+		if named, ok := cell.declType.(*syntax.BashPPNamedType); ok {
+			value.typ = named.Name.Value
+		}
+	}
+	return value
 }
 
 func bashPPOpToken(op string) token.Token {
