@@ -110,6 +110,15 @@ func projectionFromLiteral(lit *syntax.BashPPBasicLit) (projection, error) {
 	return pr, nil
 }
 
+// zeroFloatProjection retains the declared zero value of a floating binding.
+// Measured, `var a float64` and `var b float32` both interpolate 0, and that
+// is the one typed-float form the engine renders. Retaining it as text keeps
+// the float off the runtime scalar path entirely, so no float64 is ever
+// rendered without provenance.
+func zeroFloatProjection() projection {
+	return projection{kind: projectFloat, text: "0", hasText: true}
+}
+
 // projectionFromBool retains the two constant identifiers the scalar reader
 // treats as literals.
 func projectionFromBool(b bool) projection {

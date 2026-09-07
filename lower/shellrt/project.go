@@ -69,34 +69,27 @@ var (
 	isZeroerType      = reflect.TypeFor[interface{ IsZero() bool }]()
 )
 
-// Project renders value as the shell text for the given kind. A value the
-// runtime cannot faithfully render is an explicit failure, not a marker: it
-// reports through the package's existing Fail path, so the generated program
-// exits nonzero with a diagnostic on stderr rather than printing something the
-// interpreter would never print. The compiler is expected to have failed
-// closed already; this is the backstop.
-//
-// Project only reads value. It never assigns through a pointer, never writes a
-// map or slice element, and never calls a caller-defined method on the graph,
-// so projecting a readonly binding cannot disturb its identity and projecting
-// the same value twice always yields the same bytes. The object encoding is
-// deterministic: encoding/json sorts map keys and keeps struct field
-// declaration order.
-//
-// Values that cannot be safely coerced — channels, functions and other callable
-// capabilities, cyclic graphs, and values carrying MarshalJSON/MarshalText/
-// String/Error methods — do not leak a marshaling handle or run caller code.
-// They collapse to InvalidObject.
-func Project(value any, kind Kind) string {
-	text, err := ProjectErr(value, kind)
-	if err != nil {
-		Fail(err)
-		return ""
-	}
-	return text
+// ProjectionError is the typed failure a projection raises. It is a distinct
+// type so a program's failure plumbing can recognise it while unwinding,
+// rather than having to match on message text.
+type ProjectionError struct {
+	Kind Kind
+	Msg  string
 }
 
-// ProjectErr is Project with the failure returned rather than reported.
+func (e *ProjectionError) Error() string { return "shellrt: " + e.Msg }
+
+// AsProjectionError reports whether a recovered value is a projection failure,
+// for the generated program's own failure plumbing.
+func AsProjectionError(recovered any) (*ProjectionError, bool) {
+	err, ok := recovered.(*ProjectionError)
+	return err, ok
+}
+
+// ProjectErr renders value as the shell text for the given kind, returning any
+// failure. It is pure: it reads value, touches no package-level state, and in
+// particular never writes Status. Callers that own their own failure plumbing
+// should use this and not Project.
 func ProjectErr(value any, kind Kind) (string, error) {
 	switch kind {
 	case KindObject:
@@ -105,12 +98,50 @@ func ProjectErr(value any, kind Kind) (string, error) {
 		// Measured: every pointer root interpolates empty, nil or not.
 		return "", nil
 	case KindInterface:
-		if value == nil || isNilValue(reflect.ValueOf(value)) {
-			return "", nil
-		}
-		return scalarText(value)
+		return interfaceText(value)
 	default:
-		return scalarText(value)
+		return scalarText(value, kind)
+	}
+}
+
+// Project is ProjectErr for call sites that have no failure plumbing of their
+// own. A failure raises the *ProjectionError rather than reporting it, because
+// reporting it cannot work here: Echo and Printf both begin by assigning
+// Status = 0, so the very next operation in a statement such as
+// Echo(Project(bad, KindScalar)) would clear the failure and the program would
+// continue through the rest of its body as though the projection had succeeded.
+// Only an unwind survives that. The generated program's panic boundary turns it
+// into a nonzero exit with the message on stderr.
+func Project(value any, kind Kind) string {
+	text, err := ProjectErr(value, kind)
+	if err != nil {
+		if projectionErr, ok := err.(*ProjectionError); ok {
+			panic(projectionErr)
+		}
+		panic(&ProjectionError{Kind: kind, Msg: err.Error()})
+	}
+	return text
+}
+
+// interfaceText renders an interface root. Unlike every other kind, this one
+// legitimately dispatches on the dynamic value: an interface's rendering is a
+// runtime fact that no compiler metadata can settle, and the interpreter
+// dispatches the same way. Measured — a nil interface is empty, an interface
+// holding a named scalar renders plain (i=[7]), and one holding a named
+// struct, map or slice renders JSON ({"N":3}, {"a":1}, [1,2]). A pointer held
+// in an interface is empty, nil or not, like every other pointer root.
+func interfaceText(value any) (string, error) {
+	v := reflect.ValueOf(value)
+	if !v.IsValid() || isNilValue(v) {
+		return "", nil
+	}
+	switch v.Kind() {
+	case reflect.Pointer:
+		return "", nil
+	case reflect.Struct, reflect.Map, reflect.Slice, reflect.Array:
+		return objectText(value), nil
+	default:
+		return scalarText(value, KindInterface)
 	}
 }
 
@@ -339,7 +370,7 @@ func validJSONMapKey(t reflect.Type) bool {
 // exact rational 3/2 and 1.1 is 11/10. A float64 in hand no longer carries that
 // provenance, so producing a decimal here would print something the interpreter
 // never prints.
-func scalarText(value any) (string, error) {
+func scalarText(value any, kind Kind) (string, error) {
 	v := reflect.ValueOf(value)
 	if !v.IsValid() {
 		return "", nil
@@ -354,8 +385,8 @@ func scalarText(value any) (string, error) {
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
 		return strconv.FormatUint(v.Uint(), 10), nil
 	case reflect.Float32, reflect.Float64:
-		return "", fmt.Errorf("shellrt: floating scalar has no retained constant provenance; project it from its source literal")
+		return "", &ProjectionError{Kind: kind, Msg: "floating scalar has no retained constant provenance; project it from its source literal"}
 	default:
-		return "", fmt.Errorf("shellrt: %v is not a scalar projection", v.Kind())
+		return "", &ProjectionError{Kind: kind, Msg: fmt.Sprintf("%v is not a scalar projection", v.Kind())}
 	}
 }

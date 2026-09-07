@@ -389,3 +389,32 @@ func TestProjectionFloatLiteralCarriesFloatKind(t *testing.T) {
 		t.Fatalf("int literal kind = %v", got.kind)
 	}
 }
+
+// Observed: `var a float64; var b float32; echo "a=[$a] b=[$b]"` → "a=[0] b=[0]",
+// and `var a float64; echo "1=[$a]"; a=2.5; echo "2=[$a]"` → "1=[0]\n2=[2.5]".
+// The declared zero is the one typed-float form the engine renders, so it is
+// retained as text and never reaches the runtime scalar path.
+func TestProjectionFloatZeroValueIsRetained(t *testing.T) {
+	var p projector
+	p.projectionBind("a", zeroFloatProjection())
+	got, err := p.projectValue("a", "a")
+	if err != nil {
+		t.Fatalf("float zero value: %v", err)
+	}
+	if got != `"0"` {
+		t.Fatalf("got %s want %q", got, "0")
+	}
+	if strings.Contains(got, "shellrt") {
+		t.Fatalf("float zero reached the runtime: %s", got)
+	}
+	// Assignment still replaces it, matching 1=[0] then 2=[2.5].
+	p.projectionAssign("a", "2.5")
+	if got, _ := p.projectValue("a", "a"); got != `"2.5"` {
+		t.Fatalf("after assignment: %s", got)
+	}
+	// Invalidation still fails closed rather than reprinting the stale zero.
+	p.projectionInvalidate("a")
+	if got, err := p.projectValue("a", "a"); err == nil {
+		t.Fatalf("invalidated float zero projected %s", got)
+	}
+}

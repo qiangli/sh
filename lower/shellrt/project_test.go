@@ -4,7 +4,12 @@
 package shellrt
 
 import (
+	"bytes"
+	"errors"
 	"math"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -184,76 +189,48 @@ func TestProjectFloatScalarFailsExplicitly(t *testing.T) {
 	}
 }
 
-// The failure is reported, not swallowed into a marker string that would look
-// like a successful projection to everything downstream.
-func TestProjectReportsFailureThroughFail(t *testing.T) {
-	var errs strings.Builder
-	oldErr, oldStatus := Stderr, Status
-	Stderr, Status = &errs, 0
-	defer func() { Stderr, Status = oldErr, oldStatus }()
-
-	if got := Project(1.1, KindScalar); got != "" {
-		t.Fatalf("got %q, want the empty string on failure", got)
-	}
-	if Status == 0 {
-		t.Fatal("failed projection left status 0")
-	}
-	if !strings.Contains(errs.String(), "provenance") {
-		t.Fatalf("failure not reported: %q", errs.String())
-	}
+// Project raises a typed failure rather than reporting one. Reporting cannot
+// work: Echo and Printf both begin with Status = 0, so the next operation would
+// clear it. See TestCompiledArtifactFailsClosedThroughEcho for the artifact
+// proof, and TestCompiledArtifactStatusAloneWouldBeSwallowed for the defect.
+func TestProjectRaisesTypedFailure(t *testing.T) {
+	defer func() {
+		v := recover()
+		if v == nil {
+			t.Fatal("failed projection did not unwind")
+		}
+		err, ok := AsProjectionError(v)
+		if !ok {
+			t.Fatalf("unwound with %T, want *ProjectionError", v)
+		}
+		if err.Kind != KindScalar {
+			t.Fatalf("error kind = %v", err.Kind)
+		}
+		if !strings.Contains(err.Error(), "provenance") {
+			t.Fatalf("unhelpful message: %v", err)
+		}
+	}()
+	Project(1.1, KindScalar)
 }
 
-// The generated program links this package, so Project is a standard-library
-// port of the interpreter's coercion rather than a call into it. This test is
-// what keeps the port honest: the two must agree byte for byte on every shape
-// the compiler can route to KindObject. The expand import is test-only and so
-// never reaches a generated program's module graph.
-func TestProjectMatchesInterpreterCoercion(t *testing.T) {
-	type tagged struct {
-		Kept    int `json:"kept"`
-		Skipped int `json:"-"`
-		hidden  int
-		Zeroed  int `json:"zeroed,omitzero"`
-		Quoted  int `json:"quoted,string"`
-	}
-	type deep struct{ Next *deep }
-	cyclic := &deep{}
-	cyclic.Next = cyclic
-	var nilPtr *projPair
+// ProjectErr is pure: it returns the failure and touches no package state, so
+// a caller with its own failure plumbing keeps full control.
+func TestProjectErrDoesNotMutateGlobalState(t *testing.T) {
+	oldStatus := Status
+	Status = 0
+	defer func() { Status = oldStatus }()
 
-	cases := []any{
-		nil,
-		projHolder{Item: projPair{First: "n", Second: 7}},
-		&projHolder{Item: projPair{First: "n", Second: 7}},
-		map[string]int{"b": 2, "a": 1},
-		map[int]string{2: "b", 1: "a"},
-		map[projPair]int{},
-		[]int{1, 2, 3},
-		[2]string{"a", "b"},
-		[]byte("hi"),
-		map[string]any{"s": "x", "b": true, "n": 1.5, "z": nil},
-		tagged{Kept: 1, Skipped: 2, hidden: 3, Quoted: 4},
-		"incremental",
-		`{"a":1}`,
-		7,
-		true,
-		1.5,
-		nilPtr,
-		[]any{make(chan int)},
-		projStringer{N: 1},
-		projMarshaler{N: 1},
-		projAny{V: make(chan int)},
-		cyclic,
-		math.Inf(1),
-		math.NaN(),
+	if _, err := ProjectErr(1.1, KindScalar); err == nil {
+		t.Fatal("expected a failure")
 	}
-	for i, v := range cases {
-		want := expand.ObjectString(v)
-		if got := Project(v, KindObject); got != want {
-			t.Errorf("case %d (%T): shellrt %s, interpreter %s", i, v, got, want)
-		}
+	if Status != 0 {
+		t.Fatalf("ProjectErr mutated Status to %d", Status)
 	}
-	_ = tagged{}.hidden
+	var projErr *ProjectionError
+	_, err := ProjectErr(make(chan int), KindScalar)
+	if !errors.As(err, &projErr) {
+		t.Fatalf("got %T, want *ProjectionError", err)
+	}
 }
 
 // --- Measured against the engine ------------------------------------------
@@ -388,5 +365,254 @@ func TestProjectStructAndArrayRoots(t *testing.T) {
 	}
 	if got := Project([2]int{1, 2}, KindObject); got != "[1,2]" {
 		t.Fatalf("array root: got %s", got)
+	}
+}
+
+// --- Compiled-artifact regression -----------------------------------------
+
+// buildAndRun writes a real main package against this package, builds it, runs
+// it, and returns stdout, stderr and the exit status. Checking Status inside
+// the test process would prove nothing here: the defect being guarded against
+// is that a later operation clears it.
+func buildAndRun(t *testing.T, body string) (string, string, int) {
+	t.Helper()
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	write := func(name, content string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("go.mod", "module projartifact\n\ngo 1.25\n\nrequire mvdan.cc/sh/v3 v3.0.0\n\nreplace mvdan.cc/sh/v3 => "+root+"\n")
+	write("main.go", body)
+
+	tidy := exec.Command("go", "mod", "tidy")
+	tidy.Dir = dir
+	tidy.Env = append(os.Environ(), "GOFLAGS=-mod=mod")
+	if out, err := tidy.CombinedOutput(); err != nil {
+		t.Skipf("go mod tidy unavailable in this environment: %v\n%s", err, out)
+	}
+
+	bin := filepath.Join(dir, "artifact")
+	build := exec.Command("go", "build", "-o", bin, ".")
+	build.Dir = dir
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build: %v\n%s\n%s", err, out, body)
+	}
+	run := exec.Command(bin)
+	run.Dir = dir
+	var stdout, stderr bytes.Buffer
+	run.Stdout, run.Stderr = &stdout, &stderr
+	status := 0
+	if err := run.Run(); err != nil {
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) {
+			t.Fatalf("run: %v", err)
+		}
+		status = exit.ExitCode()
+	}
+	return stdout.String(), stderr.String(), status
+}
+
+// The regression this guards: Project used to report failure by setting
+// Status = 1 and returning "". Echo and Printf both begin with Status = 0, so
+// Echo(Project(bad, ...)) cleared the failure immediately and the program ran
+// on through its body — a fail-closed claim that was actually a success. The
+// check has to be an artifact that really runs, because the defect is that the
+// status is correct right up until the next statement destroys it.
+func TestCompiledArtifactFailsClosedThroughEcho(t *testing.T) {
+	stdout, stderr, status := buildAndRun(t, `package main
+
+import (
+	"os"
+	shellrt "mvdan.cc/sh/v3/lower/shellrt"
+)
+
+func main() {
+	defer func() {
+		if v := recover(); v != nil {
+			if err, ok := shellrt.AsProjectionError(v); ok {
+				shellrt.Fail(err)
+				os.Exit(2)
+			}
+			panic(v)
+		}
+	}()
+	shellrt.Echo("before")
+	f := 1.1
+	shellrt.Echo(shellrt.Project(f, shellrt.KindScalar))
+	shellrt.Echo("after-body-effect")
+}
+`)
+	if status == 0 {
+		t.Fatalf("compiled artifact exited 0; fail-closed did not hold\nstdout=%q stderr=%q", stdout, stderr)
+	}
+	if strings.Contains(stdout, "after-body-effect") {
+		t.Fatalf("body continued past the failed projection: stdout=%q", stdout)
+	}
+	if !strings.Contains(stdout, "before") {
+		t.Fatalf("artifact did not run at all: stdout=%q stderr=%q", stdout, stderr)
+	}
+	if !strings.Contains(stderr, "provenance") {
+		t.Fatalf("failure not reported on stderr: %q", stderr)
+	}
+}
+
+// Status is not a usable failure channel for this: the next Echo clears it.
+// This test pins the reason Project unwinds instead of reporting.
+func TestCompiledArtifactStatusAloneWouldBeSwallowed(t *testing.T) {
+	stdout, _, status := buildAndRun(t, `package main
+
+import (
+	"fmt"
+	"os"
+	shellrt "mvdan.cc/sh/v3/lower/shellrt"
+)
+
+func main() {
+	shellrt.Status = 1 // as a status-reporting projection failure would leave it
+	shellrt.Echo("next-operation")
+	fmt.Fprintf(os.Stdout, "status-after=%d\n", shellrt.Status)
+	shellrt.Exit()
+}
+`)
+	if !strings.Contains(stdout, "status-after=0") {
+		t.Fatalf("expected Echo to clear Status, got %q", stdout)
+	}
+	if status != 0 {
+		t.Fatalf("expected the swallowed failure to exit 0, got %d", status)
+	}
+}
+
+// A successful projection is unaffected: no unwind, ordinary output.
+func TestCompiledArtifactSucceedsNormally(t *testing.T) {
+	stdout, stderr, status := buildAndRun(t, `package main
+
+import shellrt "mvdan.cc/sh/v3/lower/shellrt"
+
+type Count int
+
+func main() {
+	shellrt.Echo(shellrt.Project(Count(7), shellrt.KindScalar))
+	shellrt.Echo(shellrt.Project(map[string]int{"b": 2, "a": 1}, shellrt.KindObject))
+	shellrt.Echo(shellrt.Project(new(Count), shellrt.KindPointer))
+	shellrt.Echo("done")
+	shellrt.Exit()
+}
+`)
+	if status != 0 {
+		t.Fatalf("status %d, stderr=%q", status, stderr)
+	}
+	want := "7\n{\"a\":1,\"b\":2}\n\ndone\n"
+	if stdout != want {
+		t.Fatalf("got %q want %q", stdout, want)
+	}
+}
+
+// An interface root dispatches on its dynamic value, because an interface's
+// rendering is a runtime fact no compiler metadata can settle — the
+// interpreter dispatches the same way. Observed, each with a method so the
+// value satisfies the interface:
+//
+//	var v S = S{N:3};   var i I = v  → i=[{"N":3}]
+//	var v M = M{"a":1}; var i I = v  → i=[{"a":1}]
+//	var v L = L{1,2};   var i I = v  → i=[[1,2]]
+//	var v C = 7;        var i I = v  → i=[7]
+//	var s S = S{N:3}; p := &s; var i I = p → i=[]
+//	var i S (unset)                  → i=[]
+func TestProjectInterfaceHoldingRichValues(t *testing.T) {
+	type projIS struct{ N int }
+	s := projIS{N: 3}
+	cases := []struct {
+		name  string
+		value any
+		want  string
+	}{
+		{"named struct", s, `{"N":3}`},
+		{"named map", projNamedMap{"a": 1}, `{"a":1}`},
+		{"named slice", projNamedSlice{1, 2}, "[1,2]"},
+		{"named scalar", projCount(7), "7"},
+		{"non-nil pointer", &s, ""},
+		{"array", [2]int{1, 2}, "[1,2]"},
+	}
+	for _, c := range cases {
+		got, err := ProjectErr(c.value, KindInterface)
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if got != c.want {
+			t.Fatalf("%s: got %q want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// The interface kind keeps the object path's safety: a rich dynamic value
+// carrying a caller method still collapses to the marker without running it.
+func TestProjectInterfaceKeepsCapabilitySafety(t *testing.T) {
+	got, err := ProjectErr(projAny{V: make(chan int)}, KindInterface)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != InvalidObject {
+		t.Fatalf("got %q want %q", got, InvalidObject)
+	}
+	if got, err := ProjectErr(projMarshaler{N: 1}, KindInterface); err != nil || got != InvalidObject {
+		t.Fatalf("got %q, %v", got, err)
+	}
+}
+
+// The generated program links this package, so Project is a standard-library
+// port of the interpreter's coercion rather than a call into it. This test is
+// what keeps the port honest: the two must agree byte for byte on every shape
+// the compiler can route to KindObject. The expand import is test-only and so
+// never reaches a generated program's module graph.
+func TestProjectMatchesInterpreterCoercion(t *testing.T) {
+	type tagged struct {
+		Kept    int `json:"kept"`
+		Skipped int `json:"-"`
+		Zeroed  int `json:"zeroed,omitzero"`
+		Quoted  int `json:"quoted,string"`
+	}
+	type deep struct{ Next *deep }
+	cyclic := &deep{}
+	cyclic.Next = cyclic
+	var nilPtr *projPair
+
+	cases := []any{
+		nil,
+		projHolder{Item: projPair{First: "n", Second: 7}},
+		&projHolder{Item: projPair{First: "n", Second: 7}},
+		map[string]int{"b": 2, "a": 1},
+		map[int]string{2: "b", 1: "a"},
+		map[projPair]int{},
+		[]int{1, 2, 3},
+		[2]string{"a", "b"},
+		[]byte("hi"),
+		map[string]any{"s": "x", "b": true, "n": 1.5, "z": nil},
+		tagged{Kept: 1, Skipped: 2, Quoted: 4},
+		projNamedSlice{1, 2},
+		projNamedMap{"a": 1},
+		"incremental",
+		`{"a":1}`,
+		7,
+		true,
+		1.5,
+		nilPtr,
+		[]any{make(chan int)},
+		projStringer{N: 1},
+		projMarshaler{N: 1},
+		projAny{V: make(chan int)},
+		cyclic,
+		math.Inf(1),
+		math.NaN(),
+	}
+	for i, v := range cases {
+		want := expand.ObjectString(v)
+		if got := Project(v, KindObject); got != want {
+			t.Errorf("case %d (%T): shellrt %s, interpreter %s", i, v, got, want)
+		}
 	}
 }

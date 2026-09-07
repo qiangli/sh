@@ -26,6 +26,8 @@ it is inferred from the implementation.
 | **any pointer, nil or not** | `KindPointer` | **empty** | `&S{}`, `&namedInt`, `new(S)`, `var p *S` all give `p=[]`; corpus `typed-nil-pointer:` |
 | nil interface | `KindInterface` | **empty** | `i=[]`; corpus `nil-interface-assert::false` |
 | interface holding a named scalar | `KindInterface` | plain | `i=[7]` |
+| interface holding a named struct / map / slice | `KindInterface` | JSON | `i=[{"N":3}]`, `i=[{"a":1}]`, `i=[[1,2]]` |
+| interface holding a pointer | `KindInterface` | empty | `i=[]` for a non-nil `*S` |
 | named int / string / bool / byte / rune | `KindScalar` | plain | `c=7 n=hi f=true`, `b=65 r=66` |
 | selected field or index scalar | `KindScalar` | plain | corpus `1:3:5:7:9:10:0:0` |
 | result of any imported-package call | `KindObject` | JSON, *including a `string` result* | `bashPPShortDeclImported` calls `expand.NewObject` unconditionally |
@@ -35,6 +37,11 @@ Two points are easy to get wrong, and both were corrected by measurement:
 - **Pointer roots are empty whether or not they are nil.** This is not
   nil-handling; it is what a pointer root projects. It does not disturb rich nil
   behaviour — a nil map or slice is an *object* root and still renders `null`.
+- **An interface root dispatches on its dynamic value.** This is the one kind
+  that reads shape, and legitimately so: an interface's rendering is a runtime
+  fact that no compiler metadata can settle, and the interpreter dispatches the
+  same way. A nil interface is empty, a held pointer is empty, a held named
+  scalar is plain, and a held named struct, map or slice is JSON.
 - **Named scalar types project plain**, so the runtime resolves scalars by
   reflect kind rather than a concrete type switch. A type switch over `int`,
   `string`, … silently misses `type Count int`, which the interpreter renders
@@ -77,9 +84,11 @@ float path errors there today:
 | `var a float64 = 1.1` | `"var": executable file not found in $PATH` |
 | `float64` struct field, slice element, map value | `BASHPP-ECOLLECTION-ELEMENT: cannot use string value as float64` |
 | `a := 1.5; b := a + a` | `BASHPP-EEXPR-OPERAND: operator + not defined on Unknown and Unknown` |
-| `var a float64` (zero value) | `0` |
+| `var a float64`, `var b float32` (declared zero) | `0` |
 
-So there is no typed-float rendering to preserve. `projectionFromLiteral`
+The declared zero is retained as text by `zeroFloatProjection()`, so it is
+emitted as a plain `"0"` and no float ever reaches the runtime scalar path.
+Beyond that there is no typed-float rendering to preserve. `projectionFromLiteral`
 retains the untyped literal's spelling and `projectValue` emits it as a plain Go
 string literal with **no runtime call at all**; a float binding with no retained
 text is a compile-time `LOWER-EEXPR` failure, which is the compiler declining
@@ -115,8 +124,9 @@ must report assignments:
 
 ## Runtime behaviour and safety
 
-`shellrt.Project(value, kind)` and `shellrt.ProjectErr(value, kind)` are the
-runtime entry points.
+`shellrt.ProjectErr(value, kind) (string, error)` is the runtime entry point for
+callers that own their failure plumbing; `shellrt.Project(value, kind) string`
+is the convenience for those that do not, and it raises rather than reports.
 
 `shellrt` is linked into every generated program, so it stays on the standard
 library — importing `expand` would drag `golang.org/x/text` and `golang.org/x/mod`
@@ -134,11 +144,21 @@ and never reaches a generated program.
   cannot disturb its identity, and repeated projection is byte-identical.
 - The object encoding is **deterministic**: `encoding/json` sorts map keys and
   keeps struct field declaration order.
-- An unsupported value is an **explicit failure**, not a marker that would look
-  like a successful projection downstream. `ProjectErr` returns the error;
-  `Project` reports it through the package's existing `Fail` path, so the
-  generated program exits nonzero with a diagnostic on stderr. The compiler is
-  expected to have failed closed already; this is the backstop.
+- An unsupported value **unwinds**. `Project` raises a typed `*ProjectionError`
+  rather than reporting one, because reporting cannot work here: `Echo` and
+  `Printf` both open with `Status = 0`, so a statement such as
+  `Echo(Project(bad, KindScalar))` would clear the failure and the program would
+  continue through the rest of its body as though the projection had succeeded.
+  That was a real defect in the first cut of this helper, and it is now pinned
+  from both sides by tests that build and run an actual binary:
+  `TestCompiledArtifactStatusAloneWouldBeSwallowed` demonstrates the swallow,
+  `TestCompiledArtifactFailsClosedThroughEcho` demonstrates the fix (nonzero
+  exit, and no output from statements after the failing one). Checking `Status`
+  in-process would have proved nothing, since the defect is that the next
+  statement destroys it.
+- `ProjectErr` is **pure**: it returns the failure, touches no package state and
+  never writes `Status`, so a caller with its own failure plumbing keeps full
+  control. `AsProjectionError` recognises the raised value in a recovery frame.
 - A value carrying `MarshalJSON`, `MarshalText`, `String` or `Error` — including
   a map alias or a struct method value — collapses to `InvalidObject`
   (`<invalid object>`) **without running that method**. That marker is not an
@@ -179,7 +199,8 @@ this is requested of them.
    spelling retained), `objectProjection()` (rich native root, and *every*
    imported-package call result), `scalarProjection()` (native scalar including
    a named type, or a scalar reached by selector or index),
-   `pointerProjection()`, or `interfaceProjection()`.
+   `pointerProjection()`, `interfaceProjection()`, or `zeroFloatProjection()`
+   (the declared zero of a float binding, the one typed-float form that renders).
 
 3b. On a shell assignment to a bound name, report it so a retained literal
    cannot outlive its binding:
