@@ -394,6 +394,10 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 		if err != nil {
 			return nil, e.fail(file, CodeExpr, err.Error())
 		}
+		source, err = e.lexicalValues(source)
+		if err != nil {
+			return nil, e.fail(file, CodeExpr, err.Error())
+		}
 		result.Source = source
 		result.Mappings = e.sourceMappings(source)
 		fs = token.NewFileSet()
