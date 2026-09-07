@@ -217,7 +217,7 @@ func TestRejectsUnsupportedAndInvalidWithoutResult(t *testing.T) {
 		{"badtype", `func f() int { return "wrong" }`, lower.CodeType},
 		{"arity", `func f(n int) int { return n }; x := f()`, lower.CodeType},
 		{"redirect", `printf hi >out`, lower.CodeUnsupported},
-		{"top-capture", `var x int = 1; func f() int { return x }`, lower.CodeUndefined},
+
 		{"scope", `func f() int { if true { x := 1 }; return x }`, lower.CodeUndefined},
 	}
 	for _, tc := range cases {

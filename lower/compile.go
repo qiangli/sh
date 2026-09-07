@@ -17,19 +17,31 @@ import (
 )
 
 type emitter struct {
-	options Options
-	prefix  string
-	marks   []Mapping
-	scopes  []map[string]bool
-	funcs   map[string]bool
-	bridge  bool
-	output  bool
-	inFunc  bool
+	options         Options
+	prefix          string
+	marks           []Mapping
+	scopes          []map[string]bool
+	funcs           map[string]bool
+	bridge          bool
+	output          bool
+	inFunc          bool
+	globals         map[string]bool
+	globalTypes     map[string]string
+	typeNames       map[string]bool
+	visibleGlobals  map[string]bool
+	functionGlobals map[string]bool
+	panicSupport    bool
+	imports         map[string]string
+	callableParams  map[*syntax.BashPPField]string
+	globalDecls     strings.Builder
 }
 
 // Compile returns canonical Go and mappings, or positioned diagnostics with no
 // partial output. It never executes the input program.
 func Compile(file *syntax.File, options Options) (*Result, error) {
+	return compilePass(file, options, nil)
+}
+func compilePass(file *syntax.File, options Options, globalTypes map[string]string) (*Result, error) {
 	if file == nil {
 		return nil, ErrorList{{Code: CodeUnsupported, Msg: "nil syntax file"}}
 	}
@@ -42,7 +54,7 @@ func Compile(file *syntax.File, options Options) (*Result, error) {
 	if !token.IsIdentifier(options.Package) || token.Lookup(options.Package).IsKeyword() {
 		return nil, ErrorList{{Code: CodeType, Msg: "invalid package name", Pos: file.Pos()}}
 	}
-	e := &emitter{options: options, funcs: map[string]bool{}, scopes: []map[string]bool{{}}}
+	e := &emitter{options: options, funcs: map[string]bool{}, scopes: []map[string]bool{{}}, globals: map[string]bool{}, visibleGlobals: map[string]bool{}, imports: map[string]string{}, callableParams: map[*syntax.BashPPField]string{}, typeNames: map[string]bool{}, globalTypes: globalTypes}
 	// Allocate private names from the tree rather than reserving user identifiers.
 	for n := 0; ; n++ {
 		e.prefix = fmt.Sprintf("__bpp%d_", n)
@@ -59,8 +71,32 @@ func Compile(file *syntax.File, options Options) (*Result, error) {
 	}
 	for _, s := range file.Stmts {
 		if f, ok := s.Cmd.(*syntax.BashPPFuncDecl); ok {
-			e.funcs[f.Name.Value] = true
+			if f.Receiver == nil {
+				e.funcs[f.Name.Value] = true
+			}
 		}
+		switch n := s.Cmd.(type) {
+		case *syntax.BashPPConstGroup:
+			for _, spec := range n.Specs {
+				e.globals[spec.Name.Value] = true
+			}
+		case *syntax.BashPPDecl:
+			if n.Kw.Value == "type" {
+				e.typeNames[n.Name.Value] = true
+			}
+			if n.Kw.Value == "var" || n.Kw.Value == "const" {
+				e.globals[n.Name.Value] = true
+			}
+		case *syntax.BashPPShortDecl:
+			for _, name := range names(n.Lhs) {
+				if name != "_" {
+					e.globals[name] = true
+				}
+			}
+		}
+	}
+	if err := e.discoverCallableParams(file); err != nil {
+		return nil, err
 	}
 	var declarations, body strings.Builder
 	for _, s := range file.Stmts {
@@ -74,7 +110,33 @@ func Compile(file *syntax.File, options Options) (*Result, error) {
 			}
 			declarations.WriteString(text)
 		} else {
-			text, err := e.statement(s)
+			var text string
+			var err error
+			switch n := s.Cmd.(type) {
+			case *syntax.BashPPImport:
+				err = e.importDecl(n)
+			case *syntax.BashPPConstGroup:
+				var constants string
+				constants, err = e.constGroup(n)
+				declarations.WriteString(e.mark(n) + constants + "\n")
+				for _, spec := range n.Specs {
+					e.visibleGlobals[spec.Name.Value] = true
+				}
+			case *syntax.BashPPDecl:
+				if n.Kw.Value == "var" || n.Kw.Value == "const" {
+					text, err = e.globalStatement(s)
+				} else if n.Kw.Value == "type" {
+					var typ string
+					typ, err = e.typeDecl(n)
+					declarations.WriteString(e.mark(n) + typ + "\n")
+				} else {
+					text, err = e.statement(s)
+				}
+			case *syntax.BashPPShortDecl:
+				text, err = e.globalStatement(s)
+			default:
+				text, err = e.statement(s)
+			}
 			if err != nil {
 				return nil, err
 			}
@@ -82,11 +144,26 @@ func Compile(file *syntax.File, options Options) (*Result, error) {
 		}
 	}
 	imports := []string{}
+	if e.panicSupport {
+		e.output = true
+		imports = append(imports, "os")
+	}
 	if e.output {
 		imports = append(imports, "fmt")
 	}
 	if e.bridge {
 		imports = append(imports, options.Runtime)
+	}
+	for _, path := range e.imports {
+		found := false
+		for _, p := range imports {
+			if p == path {
+				found = true
+			}
+		}
+		if !found {
+			imports = append(imports, path)
+		}
 	}
 	sort.Strings(imports)
 	var raw strings.Builder
@@ -97,17 +174,35 @@ func Compile(file *syntax.File, options Options) (*Result, error) {
 	if e.bridge {
 		fmt.Fprintf(&raw, "import %srt %s\n", e.prefix, strconv.Quote(options.Runtime))
 	}
+	if e.panicSupport {
+		fmt.Fprintf(&raw, "import %sos \"os\"\n", e.prefix)
+		raw.WriteString(e.panicHelpers())
+	}
+	raw.WriteString(e.importLines())
+	raw.WriteString(e.globalDecls.String())
 	raw.WriteString(declarations.String())
 	tail := ""
 	if e.bridge {
 		tail = e.prefix + "rt.Exit()\n"
 	}
-	fmt.Fprintf(&raw, "func main() {\n%s%s}\n", body.String(), tail)
+	head := ""
+	if e.panicSupport {
+		head = e.panicBoundary()
+	}
+	fmt.Fprintf(&raw, "func main() {\n%s%s%s}\n", head, body.String(), tail)
 	reset := ""
 	if e.bridge {
 		reset = e.prefix + "rt.Status = 0\n"
 	}
 	rawText := strings.ReplaceAll(raw.String(), "/*"+e.prefix+"reset*/", reset)
+	status0 := ""
+	status1 := ""
+	if e.bridge {
+		status0 = e.prefix + "rt.Status = 0;"
+		status1 = e.prefix + "rt.Status = 1;"
+	}
+	rawText = strings.ReplaceAll(rawText, "/*"+e.prefix+"status0*/", status0)
+	rawText = strings.ReplaceAll(rawText, "/*"+e.prefix+"status1*/", status1)
 	source, err := format.Source([]byte(rawText))
 	if err != nil {
 		return nil, e.fail(file, CodeExpr, "generated Go is not syntactically valid: "+err.Error())
@@ -161,10 +256,24 @@ func Compile(file *syntax.File, options Options) (*Result, error) {
 		}
 		diagnostics = append(diagnostics, Diagnostic{Code: code, Msg: msg, Node: node, Pos: pos})
 	}}
-	_, _ = conf.Check(options.Package, fs, []*ast.File{goFile}, nil)
+	checked, _ := conf.Check(options.Package, fs, []*ast.File{goFile}, nil)
 	if len(diagnostics) > 0 {
 		sort.SliceStable(diagnostics, func(i, j int) bool { return diagnostics[i].Pos.Offset() < diagnostics[j].Pos.Offset() })
 		return nil, diagnostics
+	}
+	if globalTypes == nil && len(e.globals) > 0 {
+		inferred := map[string]string{}
+		for name := range e.globals {
+			if obj := checked.Scope().Lookup(name); obj != nil {
+				inferred[name] = types.TypeString(obj.Type(), func(p *types.Package) string {
+					if p == checked {
+						return ""
+					}
+					return p.Name()
+				})
+			}
+		}
+		return compilePass(file, options, inferred)
 	}
 	return result, nil
 }
@@ -211,7 +320,11 @@ func (e *emitter) mark(n syntax.Node) string {
 	return fmt.Sprintf("// lower:%d\n", id)
 }
 func (e *emitter) known(name string) bool {
-	if e.funcs[name] {
+	global := e.globals[name]
+	if e.inFunc {
+		global = e.functionGlobals[name]
+	}
+	if e.funcs[name] || global || e.typeNames[name] || e.imports[name] != "" {
 		return true
 	}
 	for i := len(e.scopes) - 1; i >= 0; i-- {
@@ -290,25 +403,32 @@ func (e *emitter) unused(ns []string) string {
 	return out
 }
 func (e *emitter) function(f *syntax.BashPPFuncDecl) (string, error) {
-	if f.Agentic != nil || f.Receiver != nil || len(f.TypeParams) > 0 {
+	if f.Agentic != nil {
 		return "", e.fail(f, CodeUnsupported, "marked, generic and receiver functions need callable metadata lowering")
-	}
-	if f.Name.Value == "main" {
-		return "", e.fail(f, CodeUnsupported, "explicit main function needs program-entry lowering")
 	}
 	// Package functions cannot see main locals. Do not accidentally resolve a
 	// script-local name while lowering a package-level function.
+	savedGlobals := e.functionGlobals
+	e.functionGlobals = map[string]bool{}
+	for name := range e.visibleGlobals {
+		e.functionGlobals[name] = true
+	}
+	defer func() { e.functionGlobals = savedGlobals }()
 	savedFunc := e.inFunc
 	e.inFunc = true
 	defer func() { e.inFunc = savedFunc }()
 	saved := e.scopes
 	e.scopes = []map[string]bool{{}}
 	defer func() { e.scopes = saved }()
-	params, err := e.fields(f.Params)
-	if err != nil {
-		return "", err
+	if f.Receiver != nil {
+		e.bind(f.Receiver.Name.Value)
 	}
-	results, err := e.fields(f.Results)
+	for _, p := range f.TypeParams {
+		for _, n := range p.Names {
+			e.bind(n.Value)
+		}
+	}
+	signature, err := e.signature(f.Params, f.Results, f.Body)
 	if err != nil {
 		return "", err
 	}
@@ -316,11 +436,23 @@ func (e *emitter) function(f *syntax.BashPPFuncDecl) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	result := ""
-	if results != "" {
-		result = " (" + results + ")"
+	recv := ""
+	if f.Receiver != nil {
+		r := f.Receiver
+		typ := r.RecvType.Value
+		if r.Pointer {
+			typ = "*" + typ
+		}
+		if len(r.TypeParams) > 0 {
+			typ += "[" + strings.Join(names(r.TypeParams), ",") + "]"
+		}
+		recv = "(" + r.Name.Value + " " + typ + ") "
 	}
-	return e.mark(f) + "func " + f.Name.Value + "(" + params + ")" + result + " {\n" + body + "}\n", nil
+	generics, err := e.typeParams(f.TypeParams)
+	if err != nil {
+		return "", err
+	}
+	return e.mark(f) + "func " + recv + e.goName(f.Name.Value) + generics + signature + " {\n" + body + "}\n", nil
 }
 func scalarType(s string) bool {
 	switch s {
@@ -332,7 +464,7 @@ func scalarType(s string) bool {
 func (e *emitter) fields(fs []*syntax.BashPPField) (string, error) {
 	var out []string
 	for _, f := range fs {
-		if f.Default != nil || f.Ellipsis.IsValid() || f.FieldType == nil || !scalarType(f.FieldType.Value) {
+		if f.Default != nil {
 			return "", e.fail(f, CodeUnsupported, "parameter/result type, default or variadic form not supported by foundation")
 		}
 		ns := names(f.Names)
@@ -343,25 +475,53 @@ func (e *emitter) fields(fs []*syntax.BashPPField) (string, error) {
 		if s != "" {
 			s += " "
 		}
-		out = append(out, s+f.FieldType.Value)
+		typ := "any"
+		if f.FieldType != nil || f.FieldTypeExpr != nil {
+			var err error
+			if f.FieldType != nil && f.FieldType.Value == "func" {
+				typ = e.callableParams[f]
+				if typ == "" {
+					return "", e.fail(f, CodeUnsupported, "func parameter needs an inferable native call-site signature")
+				}
+			} else {
+				typ, err = e.fieldType(f)
+			}
+			if err != nil {
+				return "", err
+			}
+		} else if f.Ellipsis.IsValid() {
+			typ = "...any"
+		}
+		out = append(out, s+typ)
 	}
 	return strings.Join(out, ", "), nil
 }
 func (e *emitter) command(c syntax.Command) (string, error) {
 	switch n := c.(type) {
+	case *syntax.BashPPConstGroup:
+		return e.constGroup(n)
+	case *syntax.BashPPRange:
+		return e.rangeStmt(n)
 	case *syntax.BashPPDecl:
 		if n.Kw.Value != "var" && n.Kw.Value != "const" {
-			return "", e.fail(n, CodeUnsupported, "type declarations need the type lowering slice")
+			return e.typeDecl(n)
 		}
 		if len(n.TypeParams) > 0 || len(n.StructFields) > 0 || len(n.EnumMembers) > 0 {
 			return "", e.fail(n, CodeUnsupported, "composite declaration")
 		}
 		typ := ""
-		if n.DeclType != nil {
-			if !scalarType(n.DeclType.Value) {
-				return "", e.fail(n, CodeUnsupported, "non-scalar declaration type")
+		if n.DeclTypeExpr != nil {
+			x, err := e.typeExpr(n.DeclTypeExpr)
+			if err != nil {
+				return "", err
 			}
-			typ = " " + n.DeclType.Value
+			typ = " " + x
+		} else if n.DeclType != nil {
+			x, err := e.typeSpelling(n.DeclType, n.DeclType.Value)
+			if err != nil {
+				return "", err
+			}
+			typ = " " + x
 		}
 		init := ""
 		var err error
@@ -383,10 +543,17 @@ func (e *emitter) command(c syntax.Command) (string, error) {
 		var err error
 		switch {
 		case n.Call != nil:
+			if len(n.Call.Fun) > 1 && e.imports[n.Call.Fun[0].Value] != "" {
+				return "", e.fail(n, CodeUnsupported, "imported result binding needs object-projection metadata at the shell boundary")
+			}
 			rhs, err = e.call(n.Call)
 		case n.Expr != nil:
 			rhs, err = e.expr(n.Expr)
-		case n.FuncLit != nil || n.MakeChan != nil || n.Recv != nil || len(n.MethodValue) > 0:
+		case n.FuncLit != nil:
+			rhs, err = e.literal(n.FuncLit)
+		case len(n.MethodValue) > 0:
+			rhs = strings.Join(names(n.MethodValue), ".")
+		case n.MakeChan != nil || n.Recv != nil:
 			return "", e.fail(n, CodeUnsupported, "callable/channel declaration variant")
 		default:
 			rhs, err = e.wordSequence(n.Rhs)
@@ -398,12 +565,24 @@ func (e *emitter) command(c syntax.Command) (string, error) {
 		for _, name := range ns {
 			e.bind(name)
 		}
-		return strings.Join(ns, ", ") + " := " + rhs + e.unused(ns), nil
+		post := ""
+		if e.isRecover(n.Call) {
+			if len(ns) != 1 {
+				return "", e.fail(n, CodeResult, "recover yields one value")
+			}
+			post = e.recovered(ns[0])
+		}
+		return strings.Join(ns, ", ") + " := " + rhs + post + e.unused(ns), nil
 	case *syntax.BashPPCall:
+		if e.isRecover(n) {
+			e.panicSupport = true
+			return "if " + e.prefix + "recovered := recover(); " + e.prefix + "recovered == nil { /*" + e.prefix + "status1*/ } else { " + e.prefix + "popPanic(); /*" + e.prefix + "status0*/ }", nil
+		}
 		return e.call(n)
 	case *syntax.BashPPReturn:
 		if n.FuncLit != nil {
-			return "", e.fail(n, CodeUnsupported, "returned closure")
+			x, err := e.literal(n.FuncLit)
+			return "return " + x, err
 		}
 		var values []string
 		for _, w := range n.Results {
@@ -482,10 +661,21 @@ func (e *emitter) command(c syntax.Command) (string, error) {
 		return e.ifStmt(n)
 	case *syntax.BashPPFor:
 		return e.forStmt(n)
+	case *syntax.BashPPSwitch:
+		return e.switchStmt(n)
 	case *syntax.BashPPBranch:
 		return n.Kw.Value, nil
 	case *syntax.BashPPDefer:
-		return "", e.fail(n, CodeUnsupported, "defer needs shell status and agentic scheduling scope")
+		if n.Call != nil && len(n.Call.Fun) == 1 && n.Call.Fun[0].Value == "panic" && !e.funcs["panic"] {
+			if len(n.Call.Args) != 1 {
+				return "", e.fail(n, CodeResult, "panic takes one argument")
+			}
+			e.panicSupport = true
+			x, err := e.argument(n.Call.Args[0])
+			return "defer func(v any) { panic(" + e.prefix + "pushPanic(v)) }(" + x + ")", err
+		}
+		x, err := e.call(n.Call)
+		return "defer " + x, err
 	case *syntax.Block:
 		b, err := e.block(n)
 		return "{\n" + b + "}", err
@@ -556,7 +746,11 @@ func (e *emitter) forStmt(n *syntax.BashPPFor) (string, error) {
 	}
 	header := cond
 	if n.FirstSemi.IsValid() {
-		header = "; " + cond + "; " + post
+		if i := strings.Index(init, "\n_ = "); i >= 0 {
+			init = init[:i]
+		}
+		header = init + "; " + cond + "; " + post
+		init = ""
 	}
 	out := "for " + header + " {\n" + body + "}"
 	if init != "" {
@@ -566,13 +760,57 @@ func (e *emitter) forStmt(n *syntax.BashPPFor) (string, error) {
 }
 func (e *emitter) expr(x syntax.BashPPExpr) (string, error) {
 	switch n := x.(type) {
+	case *syntax.BashPPCompositeLit:
+		return e.compositeExpr(n)
+	case *syntax.BashPPSelectorExpr:
+		return e.selectorExpr(n)
+	case *syntax.BashPPTypeAssertExpr:
+		return e.typeAssertExpr(n)
+	case *syntax.BashPPSliceExpr:
+		base, err := e.expr(n.X)
+		if err != nil {
+			return "", err
+		}
+		bounds := []string{"", ""}
+		for i, x := range []syntax.BashPPExpr{n.Low, n.High} {
+			if x != nil {
+				bounds[i], err = e.expr(x)
+				if err != nil {
+					return "", err
+				}
+			}
+		}
+		if n.Max != nil {
+			x, err := e.expr(n.Max)
+			if err != nil {
+				return "", err
+			}
+			bounds = append(bounds, x)
+		}
+		return base + "[" + strings.Join(bounds, ":") + "]", nil
+	case *syntax.BashPPIndexExpr:
+		a, err := e.expr(n.X)
+		if err != nil {
+			return "", err
+		}
+		b, err := e.expr(n.Index)
+		return a + "[" + b + "]", err
+	case *syntax.BashPPAddressExpr:
+		a, err := e.expr(n.X)
+		return "&" + a, err
+	case *syntax.BashPPDerefExpr:
+		a, err := e.expr(n.X)
+		return "*" + a, err
+	case *syntax.BashPPNewExpr:
+		a, err := e.typeExpr(n.AllocType)
+		return "new(" + a + ")", err
 	case *syntax.BashPPBasicLit:
 		return n.Value.Value, nil
 	case *syntax.BashPPIdent:
 		if !e.known(n.Name.Value) {
 			return "", e.fail(n, CodeUndefined, "undefined: "+n.Name.Value)
 		}
-		return n.Name.Value, nil
+		return e.goName(n.Name.Value), nil
 	case *syntax.BashPPParenExpr:
 		v, err := e.expr(n.X)
 		return "(" + v + ")", err
@@ -597,19 +835,60 @@ func (e *emitter) expr(x syntax.BashPPExpr) (string, error) {
 	}
 }
 func (e *emitter) call(c *syntax.BashPPCall) (string, error) {
-	if c.FuncLit != nil || len(c.TypeArgs) > 0 || len(c.ArgNames) > 0 || c.Ellipsis.IsValid() || c.ArgType != nil || c.PointerMethodExpr {
+	if len(c.ArgNames) > 0 {
 		return "", e.fail(c, CodeUnsupported, "call variant needs callable/type lowering")
 	}
-	if len(c.Fun) != 1 {
-		return "", e.fail(c, CodeUnsupported, "selector calls need import/method lowering")
+	if c.FuncLit != nil {
+		callee, err := e.literal(c.FuncLit)
+		if err != nil {
+			return "", err
+		}
+		var args []string
+		for _, w := range c.Args {
+			x, err := e.valueWord(w)
+			if err != nil {
+				return "", err
+			}
+			args = append(args, x)
+		}
+		return "(" + callee + ")(" + strings.Join(args, ",") + ")", nil
+	}
+	if len(c.Fun) == 0 {
+		return "", e.fail(c, CodeExpr, "missing callable")
+	}
+	if len(c.Fun) > 1 {
+		var args []string
+		for _, w := range c.Args {
+			x, err := e.argument(w)
+			if err != nil {
+				return "", err
+			}
+			args = append(args, x)
+		}
+		callee := strings.Join(names(c.Fun), ".")
+		if c.PointerMethodExpr {
+			callee = "(*" + c.Fun[0].Value + ")." + c.Fun[1].Value
+		}
+		spread := ""
+		if c.Ellipsis.IsValid() {
+			spread = "..."
+		}
+		return callee + "(" + strings.Join(args, ",") + spread + ")", nil
 	}
 	name := c.Fun[0].Value
-	if !e.funcs[name] && !scalarType(name) && name != "print" && name != "println" {
+	if !e.known(name) && !scalarType(name) && !nativeBuiltin(name) && name != "print" && name != "println" {
 		return "", e.fail(c, CodeUndefined, "undefined callable: "+name)
 	}
 	var args []string
+	if c.ArgType != nil {
+		typ, err := e.typeExpr(c.ArgType)
+		if err != nil {
+			return "", err
+		}
+		args = append(args, typ)
+	}
 	for _, w := range c.Args {
-		x, err := e.valueWord(w)
+		x, err := e.argument(w)
 		if err != nil {
 			return "", err
 		}
@@ -625,5 +904,27 @@ func (e *emitter) call(c *syntax.BashPPCall) (string, error) {
 		}
 		return e.prefix + "fmt.Print(" + strings.Join(args, ", ") + ")", nil
 	}
-	return name + "(" + strings.Join(args, ", ") + ")", nil
+	spread := ""
+	if c.Ellipsis.IsValid() {
+		spread = "..."
+	}
+	if !e.funcs[name] && name == "panic" {
+		if len(args) != 1 {
+			return "", e.fail(c, CodeResult, "panic takes one argument")
+		}
+		e.panicSupport = true
+		return "panic(" + e.prefix + "pushPanic(" + args[0] + "))", nil
+	}
+	if !e.funcs[name] && name == "recover" {
+		if len(args) != 0 {
+			return "", e.fail(c, CodeResult, "recover takes no arguments")
+		}
+		e.panicSupport = true
+		return "recover()", nil
+	}
+	typeargs, err := e.typeArgs(c.TypeArgs)
+	if err != nil {
+		return "", err
+	}
+	return e.goName(name) + typeargs + "(" + strings.Join(args, ", ") + spread + ")", nil
 }

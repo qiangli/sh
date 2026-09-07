@@ -1,8 +1,10 @@
 package lower
 
 import (
+	"bytes"
 	"fmt"
 	"go/ast"
+	"go/format"
 	"go/parser"
 	"go/token"
 	"strconv"
@@ -84,7 +86,7 @@ func (e *emitter) nativeWordExpr(n syntax.Node, text string) (string, error) {
 				problem = e.fail(n, CodeUnsupported, "unary word expression operator "+q.Op.String())
 			}
 		case *ast.CallExpr:
-			if id, ok := q.Fun.(*ast.Ident); !ok || (!e.funcs[id.Name] && !scalarType(id.Name)) {
+			if id, ok := q.Fun.(*ast.Ident); !ok || (!e.known(id.Name) && !scalarType(id.Name)) {
 				problem = e.fail(n, CodeUnsupported, "word call requires resolved native function")
 			}
 		default:
@@ -95,9 +97,23 @@ func (e *emitter) nativeWordExpr(n syntax.Node, text string) (string, error) {
 	if problem != nil {
 		return "", problem
 	}
-	return text, nil
+	ast.Inspect(x, func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok {
+			id.Name = e.goName(id.Name)
+		}
+		return true
+	})
+	var out bytes.Buffer
+	if err := format.Node(&out, token.NewFileSet(), x); err != nil {
+		return "", e.fail(n, CodeExpr, err.Error())
+	}
+	return out.String(), nil
 }
 func (e *emitter) parameter(p *syntax.ParamExp) (string, error) {
+	if p.Param != nil && p.Param.Value == "?" && p.Index == nil && p.Exp == nil && !p.Length && !p.Excl {
+		e.bridge = true
+		return e.prefix + "rt.Status", nil
+	}
 	// Only the simple $name and ${name} bridge is implemented. All modifiers,
 	// subscripts, positional and special parameters remain explicit failures.
 	if p.Param == nil || !syntax.BashPPValidIdent(p.Param.Value) || p.Excl || p.Length || p.Width || p.IsSet || p.Index != nil || p.Slice != nil || p.Repl != nil || p.Exp != nil || p.NestedParam != nil || p.Flags != nil || p.Split != syntax.OptUnset || p.GlobSubst != syntax.OptUnset || p.RcExpand != syntax.OptUnset || len(p.Modifiers) > 0 || p.Names != 0 || p.BadSubst != nil {
@@ -299,4 +315,13 @@ func (e *emitter) printfFormat(w *syntax.Word) error {
 		}
 	}
 	return nil
+}
+
+func (e *emitter) argument(w *syntax.Word) (string, error) {
+	if len(w.Parts) == 1 {
+		if l, ok := w.Parts[0].(*syntax.Lit); ok && syntax.BashPPValidIdent(l.Value) && !e.known(l.Value) {
+			return strconv.Quote(l.Value), nil
+		}
+	}
+	return e.valueWord(w)
 }
