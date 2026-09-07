@@ -81,6 +81,8 @@ func (e *emitter) projectionExpr(x syntax.BashPPExpr) projection {
 		if p, ok := e.projections.projectionLookup(n.Name.Value); ok {
 			return p
 		}
+	case *syntax.BashPPSelectorExpr:
+		return e.selectorProjection(n)
 	case *syntax.BashPPCompositeLit:
 		if n.LitType != nil {
 			typ, err := e.typeExpr(n.LitType)
@@ -137,6 +139,15 @@ func (e *emitter) projectionWord(w *syntax.Word) projection {
 		scan.Init(token.NewFileSet().AddFile("", -1, len(name)), []byte(name), nil, 0)
 		_, kind, _ := scan.Scan()
 		if kind != token.FLOAT {
+			if kind == token.INT {
+				return e.projectionType("int", nil)
+			}
+			if kind == token.STRING {
+				return e.projectionType("string", nil)
+			}
+			if name == "true" || name == "false" {
+				return e.projectionType("bool", nil)
+			}
 			return scalarProjection()
 		}
 		value := constant.MakeFromLiteral(name, token.FLOAT, 0)
@@ -206,7 +217,14 @@ func (e *emitter) callProjection(c *syntax.BashPPCall, index int) projection {
 	}
 	return scalarProjection()
 }
-func (e *emitter) projectBinding(n syntax.Node, name, expression string) (string, error) {
+func (e *emitter) projectBinding(n syntax.Node, name, expression string) (text string, err error) {
+	if info, ok := e.projections.projectionLookup(name); ok && info.present != "" {
+		defer func() {
+			if err == nil {
+				text = e.prefix + "rt.BindingValue(" + info.present + ", " + text + ", \"\")"
+			}
+		}()
+	}
 	p, ok := e.projections.projectionLookup(name)
 	if !ok {
 		return expression, nil
@@ -227,7 +245,14 @@ func (e *emitter) projectBinding(n syntax.Node, name, expression string) (string
 	}
 	return value, nil
 }
-func (e *emitter) projectionArgument(w *syntax.Word, expression string) (string, error) {
+func (e *emitter) projectionArgument(w *syntax.Word, expression string) (text string, err error) {
+	if info, ok := e.projections.projectionLookup(w.Lit()); ok && info.present != "" {
+		defer func() {
+			if err == nil {
+				text = e.prefix + "rt.BindingValue(" + info.present + ", " + text + ", " + strconv.Quote(w.Lit()) + ")"
+			}
+		}()
+	}
 	if name := w.Lit(); name != "" {
 		if e.bound(name) {
 			p, ok := e.projections.projectionLookup(name)

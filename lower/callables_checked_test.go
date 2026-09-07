@@ -10,6 +10,21 @@ func TestCheckedNativeFailures(t *testing.T) {
 }
 main()
 `,
+		"nil_pointer_continues": `func main() {
+ var p *int
+ x := *p
+ println(x)
+}
+main()
+`,
+		"runtime_nil_pointer_continues": `func main() {
+ agentic { echo scope; }
+ var p *int
+ x := *p
+ println(x)
+}
+main()
+`,
 		"assert_failure": `type T int
 func (v T) M(s string) { }
 type U int

@@ -21,9 +21,18 @@ invocation wrapper intervenes between Go's defer and the source function.
 Promoted struct literal keys now use the native nested-literal helper, preserving
 field initializer evaluation order.
 
+Checked local short declarations now preserve continuation: a failed dereference
+leaves the binding absent, reports the positioned value error, and allows later
+statements to run. The emitter tracks presence separately from native storage,
+so typed printing uses the absent name and shell expansion uses an empty value.
+Implicit pointer field reads use the same checked path. Typed Print/Println
+preserve the preceding command status, including a failed initializer.
+
+Tuple function results are evaluated once into typed temporaries. The runtime
+retains each result's static type, validates every target, and commits only if
+the whole assignment is valid. A rejected tuple reports its error and continues
+with every original binding unchanged.
+
 Remaining checked-value work includes indexed writes, checked make sizes, and
-statement continuation after a failed local dereference. The engine can report
-a nil dereference and continue later statements with the failed binding absent;
-the current checked helper unwinds to the entry boundary. The terminal public
-nil-dereference fixture matches, but that continuation behavior is not yet
-implemented. This slice does not certify the entire lowering profile.
+complete continuation for other statement forms and unresolved field types.
+These changes do not certify the entire lowering profile.

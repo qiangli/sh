@@ -266,14 +266,12 @@ func (p *Program) Printf(format string, args ...any) error {
 
 // Print writes its arguments with Go's print spacing rule.
 func (p *Program) Print(args ...any) {
-	_, err := fmt.Fprint(p.stdout(), args...)
-	p.wrote(err)
+	_, _ = fmt.Fprint(p.stdout(), args...)
 }
 
 // Println writes its arguments space separated and followed by a newline.
 func (p *Program) Println(args ...any) {
-	_, err := fmt.Fprintln(p.stdout(), args...)
-	p.wrote(err)
+	_, _ = fmt.Fprintln(p.stdout(), args...)
 }
 
 // printfText renders the printf subset. ok is false for a malformed format, in

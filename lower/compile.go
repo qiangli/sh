@@ -767,6 +767,9 @@ func (e *emitter) command(c syntax.Command) (string, error) {
 				}
 			}
 		}
+		if text, handled, err := e.checkedShortDeclaration(n, rhs); handled || err != nil {
+			return text, err
+		}
 		ns := names(n.Lhs)
 		for i, name := range ns {
 			p := scalarProjection()
@@ -859,6 +862,9 @@ func (e *emitter) command(c syntax.Command) (string, error) {
 			}
 			if len(n.Names) == 0 {
 				return "", e.fail(n, CodeUnsupported, "structured call assignment")
+			}
+			if len(n.Names) > 1 {
+				return e.tupleCallAssignment(n, rhs)
 			}
 			return strings.Join(names(n.Names), ", ") + " = " + rhs, nil
 		}
@@ -1031,7 +1037,7 @@ func (e *emitter) expr(x syntax.BashPPExpr) (string, error) {
 		}
 		return e.compositeExpr(n)
 	case *syntax.BashPPSelectorExpr:
-		return e.selectorExpr(n)
+		return e.checkedSelector(n)
 	case *syntax.BashPPTypeAssertExpr:
 		return e.valueAssertion(n, false)
 	case *syntax.BashPPSliceExpr:

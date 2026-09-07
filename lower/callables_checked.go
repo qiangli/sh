@@ -9,7 +9,7 @@ import (
 func (e *emitter) findCheckedValues(file *syntax.File) {
 	syntax.Walk(file, func(node syntax.Node) bool {
 		switch n := node.(type) {
-		case *syntax.BashPPDerefExpr:
+		case *syntax.BashPPDerefExpr, *syntax.BashPPSelectorExpr:
 			e.guarded = true
 		case *syntax.BashPPTypeAssertExpr:
 			e.guarded = e.guarded || n.TypeToken == nil
