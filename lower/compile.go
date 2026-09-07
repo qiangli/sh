@@ -5,7 +5,6 @@ import (
 	"go/ast"
 	"go/constant"
 	"go/format"
-	"go/importer"
 	"go/parser"
 	"go/token"
 	"go/types"
@@ -19,6 +18,7 @@ import (
 
 type emitter struct {
 	options            Options
+	moduleImporter     types.Importer
 	prefix             string
 	marks              []Mapping
 	scopes             []map[string]bool
@@ -82,6 +82,7 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 		return nil, ErrorList{{Code: CodeType, Msg: "invalid package name", Pos: file.Pos()}}
 	}
 	e := &emitter{writtenNames: map[string]bool{}, inferredParams: map[*syntax.BashPPField]string{}, declaredTypes: map[string]*syntax.BashPPDecl{}, functionDecls: map[string]*syntax.BashPPFuncDecl{}, enumMembers: map[string][]*syntax.Lit{}, options: options, funcs: map[string]bool{}, scopes: []map[string]bool{{}}, globals: map[string]bool{}, visibleGlobals: map[string]bool{}, imports: map[string]string{}, callableParams: map[*syntax.BashPPField]string{}, dotNames: map[string]bool{}, declaredGlobals: map[string]bool{}, typeNames: map[string]bool{}, globalTypes: globalTypes}
+	e.moduleImporter = newModuleImporter(options.Dir)
 	e.sourceName = options.Origin
 	if e.sourceName == "" {
 		e.sourceName = file.Name
@@ -325,7 +326,7 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 		return nil, e.fail(file, CodeExpr, err.Error())
 	}
 	var diagnostics ErrorList
-	conf := types.Config{Importer: bridgeImporter{fallback: importer.Default(), path: options.Runtime, cache: map[string]*types.Package{}}, Error: func(err error) {
+	conf := types.Config{Importer: bridgeImporter{fallback: e.moduleImporter, path: options.Runtime, cache: map[string]*types.Package{}}, Error: func(err error) {
 		te, ok := err.(types.Error)
 		pos := file.Pos()
 		node := "File"
@@ -575,7 +576,9 @@ func (e *emitter) function(f *syntax.BashPPFuncDecl) (string, error) {
 		if f.Receiver.Pointer {
 			typ = "*" + typ
 		}
-		e.projections.projectionBind(f.Receiver.Name.Value, e.projectionType(typ, nil))
+		info := e.projectionType(typ, nil)
+		info.receiver = f.Receiver.Pointer
+		e.projections.projectionBind(f.Receiver.Name.Value, info)
 	}
 	for _, p := range f.TypeParams {
 		for _, n := range p.Names {
@@ -725,6 +728,18 @@ func (e *emitter) command(c syntax.Command) (string, error) {
 		}
 		if err != nil {
 			return "", err
+		}
+		if init != "" && init != "nil" && strings.HasPrefix(strings.TrimSpace(typ), "*") {
+			source := scalarProjection()
+			if n.InitExpr != nil {
+				source = e.projectionExpr(n.InitExpr)
+			} else if len(n.Init) == 1 {
+				source = e.projectionWord(n.Init[0])
+			}
+			if source.kind != projectPointer {
+				element := strings.TrimPrefix(strings.TrimSpace(typ), "*")
+				init = "func() *" + element + " { var value " + element + " = " + init + "; return &value }()"
+			}
 		}
 		if init != "" {
 			init = " = " + init

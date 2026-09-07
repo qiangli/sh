@@ -229,6 +229,10 @@ func (e *emitter) projectBinding(n syntax.Node, name, expression string) (text s
 	if !ok {
 		return expression, nil
 	}
+	if p.receiver && p.kind == projectPointer {
+		e.bridge = true
+		return e.prefix + "rt.ReceiverProjection(" + expression + ")", nil
+	}
 	if e.writtenNames[name] && (p.kind == projectFloat || p.kind == projectObject && !p.nativeAggregate) {
 		return "", e.fail(n, CodeUnsupported, "mutable exact/object projection requires runtime provenance storage")
 	}

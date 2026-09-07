@@ -316,8 +316,8 @@ func (e *emitter) runtimeMethodCall(c *syntax.BashPPCall, receiverType string) (
 	// typed parameters, so evaluation stays left to right and an untyped
 	// constant still converts to the parameter's type rather than to a default.
 	var args []string
-	for _, w := range c.Args {
-		value, err := e.argument(w)
+	for i := range c.Args {
+		value, err := e.callArgument(c, i)
 		if err != nil {
 			return "", err
 		}

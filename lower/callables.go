@@ -2,7 +2,6 @@ package lower
 
 import (
 	"fmt"
-	"go/importer"
 	"sort"
 	"strconv"
 	"strings"
@@ -289,6 +288,9 @@ func (e *emitter) panicBoundary() string {
 }
 
 func (e *emitter) importDecl(n *syntax.BashPPImport) error {
+	if e.moduleImporter == nil {
+		e.moduleImporter = newModuleImporter(e.options.Dir)
+	}
 	specs := n.Specs
 	if n.Path != nil {
 		specs = []*syntax.BashPPImportSpec{{Alias: n.Alias, Path: n.Path}}
@@ -303,10 +305,7 @@ func (e *emitter) importDecl(n *syntax.BashPPImport) error {
 			path.WriteString(lit.Value)
 		}
 		p := path.String()
-		if !syntax.BashPPStdlibImportAllowed(p) {
-			return e.fail(spec, CodeUnsupported, "external import needs module-aware compile resolution: "+p)
-		}
-		pkg, err := importer.Default().Import(p)
+		pkg, err := e.moduleImporter.Import(p)
 		if err != nil {
 			return e.fail(spec, CodeType, err.Error())
 		}
