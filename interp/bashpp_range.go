@@ -16,8 +16,9 @@ import (
 // bashPPRangeScalar handles the two non-container range operands whose values
 // live in the scalar namespace: strings and integers. It deliberately leaves
 // channels and structured values to their existing paths. Function iterators
-// use the profile's deliberately erased `func` parameter type and the existing
-// closure-handle transport; the yield arity is checked when it first runs.
+// are rejected explicitly: the current erased `func` type cannot encode Go's
+// required func(func(...) bool) signature, so executing one would be an unsafe
+// second semantics rather than Go-compatible range.
 func (r *Runner) bashPPRangeScalar(ctx context.Context, rng *syntax.BashPPRange) bool {
 	if rng.Expr == nil {
 		return false
@@ -27,31 +28,27 @@ func (r *Runner) bashPPRangeScalar(ctx context.Context, rng *syntax.BashPPRange)
 			if cell.channel != nil || cell.vr.Kind == expand.Object || cell.pointer {
 				return false
 			}
-			if fn, closure := r.bashPPClosure(cell.vr.String()); closure {
-				return r.bashPPRangeFunction(ctx, rng, fn)
+			if _, closure := r.bashPPClosure(cell.vr.String()); closure {
+				r.bashPPRangeError(rng, "BASHPP-ERANGE-FUNC: range over function requires a typed func(func(...) bool) iterator")
+				return true
 			}
 		}
-		if fn := r.bashPPFuncs[root]; fn != nil {
-			return r.bashPPRangeFunction(ctx, rng, fn)
+		if r.bashPPFuncs[root] != nil {
+			r.bashPPRangeError(rng, "BASHPP-ERANGE-FUNC: range over function requires a typed func(func(...) bool) iterator")
+			return true
 		}
 	}
 
 	value, err := r.bashPPEvalScalarExpr(rng.Expr)
 	if err != nil {
-		// An unresolved identifier may still be a channel operand. Preserve the
-		// channel path's established task-group diagnostic in that case.
-		if _, ok := rng.Expr.(*syntax.BashPPIdent); ok {
-			return false
-		}
-		r.errf("BASHPP-ERANGE-TYPE: %v\n", err)
-		r.exit = exitStatus{code: 2}
+		r.bashPPRangeError(rng, "BASHPP-ERANGE-TYPE: %v", err)
 		return true
 	}
 	switch value.value.Kind() {
 	case constant.String:
 		text := constant.StringVal(value.value)
 		for offset, runeValue := range text {
-			if !r.bashPPRangeIteration(ctx, rng, offset, nil, int64(runeValue), nil,
+			if !r.bashPPRangeIteration(ctx, rng, offset, bashPPRangeNamedType("int"), int64(runeValue), nil,
 				&syntax.BashPPNamedType{Name: &syntax.Lit{Value: "rune"}}) {
 				return true
 			}
@@ -59,79 +56,46 @@ func (r *Runner) bashPPRangeScalar(ctx context.Context, rng *syntax.BashPPRange)
 		return true
 	case constant.Int:
 		if len(rng.Names) > 1 {
-			r.errf("BASHPP-ERANGE-ARITY: integer range permits at most one iteration variable\n")
-			r.exit = exitStatus{code: 2}
+			r.bashPPRangeError(rng, "BASHPP-ERANGE-ARITY: integer range permits at most one iteration variable")
 			return true
 		}
 		limit, ok := constant.Int64Val(value.value)
 		if !ok {
-			r.errf("BASHPP-ERANGE-INTEGER: integer range bound is not representable as int64\n")
-			r.exit = exitStatus{code: 2}
+			r.bashPPRangeError(rng, "BASHPP-ERANGE-INTEGER: integer range bound is not representable as int64")
 			return true
 		}
+		iterationType := bashPPRangeNamedType("int")
+		if value.typ != "" {
+			iterationType = bashPPRangeNamedType(value.typ)
+		}
+		if ident, ok := rng.Expr.(*syntax.BashPPIdent); ok && r.bashPPScope != nil {
+			if cell := r.bashPPScope.lookup(ident.Name.Value); cell != nil && cell.declType != nil {
+				iterationType = cell.declType
+			}
+		}
 		for i := int64(0); i < limit; i++ {
-			if !r.bashPPRangeIteration(ctx, rng, i, nil, nil, nil, nil) {
+			if !r.bashPPRangeIteration(ctx, rng, i, iterationType, nil, nil, nil) {
 				return true
 			}
 		}
 		return true
 	default:
-		r.errf("BASHPP-ERANGE-TYPE: cannot range over %s\n", value.value.Kind())
-		r.exit = exitStatus{code: 2}
+		r.bashPPRangeError(rng, "BASHPP-ERANGE-TYPE: cannot range over %s", value.value.Kind())
 		return true
 	}
 }
 
-func (r *Runner) bashPPRangeFunction(ctx context.Context, rng *syntax.BashPPRange, generator *bashPPFunc) bool {
-	params := bashppParams(generator.params())
-	if len(params) != 1 || params[0].declared != "func" || len(generator.results()) != 0 {
-		r.errf("BASHPP-ERANGE-FUNC: range function must take one func yield parameter and return no values\n")
-		r.exit = exitStatus{code: 2}
-		return true
+func bashPPRangeNamedType(name string) syntax.BashPPTypeExpr {
+	return &syntax.BashPPNamedType{Name: &syntax.Lit{Value: name}}
+}
+
+func (r *Runner) bashPPRangeError(rng *syntax.BashPPRange, format string, args ...any) {
+	pos := rng.Range
+	if rng.Expr != nil {
+		pos = rng.Expr.Pos()
 	}
-	stopped := false
-	yieldArity := -1
-	yield := &bashPPFunc{bound: "range yield"}
-	yield.native = func(yieldCtx context.Context, args []string) []string {
-		if stopped {
-			r.errf("BASHPP-ERANGE-FUNC: range function called yield after it returned false\n")
-			r.exit = exitStatus{code: 2}
-			return []string{"false"}
-		}
-		if len(args) < 1 || len(args) > 2 {
-			r.errf("BASHPP-ERANGE-FUNC: yield must provide one or two values\n")
-			r.exit = exitStatus{code: 2}
-			stopped = true
-			return []string{"false"}
-		}
-		if yieldArity < 0 {
-			yieldArity = len(args)
-		} else if yieldArity != len(args) {
-			r.errf("BASHPP-ERANGE-FUNC: yield value count changed from %d to %d\n", yieldArity, len(args))
-			r.exit = exitStatus{code: 2}
-			stopped = true
-			return []string{"false"}
-		}
-		if len(rng.Names) > len(args) {
-			r.errf("BASHPP-ERANGE-ARITY: range declares %d variable(s) for %d yielded value(s)\n", len(rng.Names), len(args))
-			r.exit = exitStatus{code: 2}
-			stopped = true
-			return []string{"false"}
-		}
-		var second any
-		if len(args) == 2 {
-			second = args[1]
-		}
-		keepGoing := r.bashPPRangeIteration(yieldCtx, rng, args[0], nil, second, nil, nil)
-		if !keepGoing {
-			stopped = true
-		}
-		r.exit.clear()
-		return []string{fmt.Sprint(keepGoing)}
-	}
-	handle := r.bashPPStoreFunc(yield)
-	r.bashPPInvoke(ctx, generator, []string{handle.Str})
-	return true
+	r.errf("%s%s\n", r.bashErrPrefix(pos), fmt.Sprintf(format, args...))
+	r.exit = exitStatus{code: 2}
 }
 
 func (r *Runner) bashPPRangeCollection(ctx context.Context, rng *syntax.BashPPRange) bool {
@@ -148,19 +112,16 @@ func (r *Runner) bashPPRangeCollection(ctx context.Context, rng *syntax.BashPPRa
 	}
 	value, meta, err := r.bashPPReadExpr(rng.Expr)
 	if err != nil {
-		r.errf("%v\n", err)
-		r.exit = exitStatus{code: 2}
+		r.bashPPRangeError(rng, "%v", err)
 		return true
 	}
 	if meta == nil || meta.kind == "struct" || meta.kind == "pointer" {
-		r.errf("BASHPP-ERANGE-TYPE: cannot range over %s\n", bashPPTypeText(meta.typ))
-		r.exit = exitStatus{code: 2}
+		r.bashPPRangeError(rng, "BASHPP-ERANGE-TYPE: cannot range over %s", bashPPTypeText(meta.typ))
 		return true
 	}
 	collection, ok := r.bashPPUnderlyingType(meta.typ).(*syntax.BashPPCollectionType)
 	if !ok {
-		r.errf("BASHPP-ERANGE-TYPE: cannot range over %s\n", bashPPTypeText(meta.typ))
-		r.exit = exitStatus{code: 2}
+		r.bashPPRangeError(rng, "BASHPP-ERANGE-TYPE: cannot range over %s", bashPPTypeText(meta.typ))
 		return true
 	}
 	switch meta.kind {
@@ -168,7 +129,7 @@ func (r *Runner) bashPPRangeCollection(ctx context.Context, rng *syntax.BashPPRa
 		value, meta = bashPPCopyArrayValue(value, meta)
 		sequence := value.([]any)
 		for i, elem := range sequence {
-			if !r.bashPPRangeIteration(ctx, rng, i, nil, elem, meta.sequence[i], collection.Element) {
+			if !r.bashPPRangeIteration(ctx, rng, i, bashPPRangeNamedType("int"), elem, meta.sequence[i], collection.Element) {
 				return true
 			}
 		}
@@ -176,7 +137,7 @@ func (r *Runner) bashPPRangeCollection(ctx context.Context, rng *syntax.BashPPRa
 		sequence, _ := value.([]any)
 		length := len(sequence)
 		for i := 0; i < length; i++ {
-			if !r.bashPPRangeIteration(ctx, rng, i, nil, sequence[i], meta.sequence[i], collection.Element) {
+			if !r.bashPPRangeIteration(ctx, rng, i, bashPPRangeNamedType("int"), sequence[i], meta.sequence[i], collection.Element) {
 				return true
 			}
 		}
@@ -241,7 +202,16 @@ func (r *Runner) bashPPDeclareRangeValue(name string, value any, typ syntax.Bash
 		cell := r.bashPPScope.lookup(name)
 		cell.object = &bashPPObjectIdentity{owner: name, collection: meta}
 		cell.valueMeta = meta
+		cell.declType = typ
+		if named, ok := typ.(*syntax.BashPPNamedType); ok {
+			cell.typeName = named.Name.Value
+		}
 		return
 	}
 	r.bashPPDeclareName(name, expand.Variable{Set: true, Kind: expand.String, Str: fmt.Sprint(value)})
+	cell := r.bashPPScope.lookup(name)
+	cell.declType = typ
+	if named, ok := typ.(*syntax.BashPPNamedType); ok {
+		cell.typeName = named.Name.Value
+	}
 }
