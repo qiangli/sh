@@ -225,6 +225,9 @@ func (e *emitter) switchStmt(n *syntax.BashPPSwitch) (string, error) {
 		}
 		e.pop()
 	}
+	if e.completeEnumSwitch(n) {
+		out.WriteString("default: panic(\"invalid enum value\")\n")
+	}
 	out.WriteString("}")
 	if init != "" {
 		return "{\n" + init + "\n" + out.String() + "\n}", nil

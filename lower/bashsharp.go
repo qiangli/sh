@@ -431,7 +431,7 @@ func sharpNullableType(field *syntax.BashPPField) string {
 			return "pointer"
 		case strings.HasPrefix(text, "[]") || strings.HasPrefix(text, "map["):
 			return "indexable"
-		case strings.HasPrefix(text, "func"):
+		case strings.HasPrefix(text, "func("):
 			return "callable"
 		}
 	}

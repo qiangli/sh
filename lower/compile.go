@@ -39,12 +39,17 @@ type emitter struct {
 	declaredGlobals map[string]bool
 	iotaValue       *int
 	bigIntegers     bool
+	functionDecls   map[string]*syntax.BashPPFuncDecl
+	enumMembers     map[string][]*syntax.Lit
 	globalDecls     strings.Builder
 }
 
 // Compile returns canonical Go and mappings, or positioned diagnostics with no
 // partial output. It never executes the input program.
 func Compile(file *syntax.File, options Options) (*Result, error) {
+	if err := CheckBashSharp(file); err != nil {
+		return nil, err
+	}
 	return compilePass(file, options, nil)
 }
 func compilePass(file *syntax.File, options Options, globalTypes map[string]string) (*Result, error) {
@@ -60,7 +65,7 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 	if !token.IsIdentifier(options.Package) || token.Lookup(options.Package).IsKeyword() {
 		return nil, ErrorList{{Code: CodeType, Msg: "invalid package name", Pos: file.Pos()}}
 	}
-	e := &emitter{options: options, funcs: map[string]bool{}, scopes: []map[string]bool{{}}, globals: map[string]bool{}, visibleGlobals: map[string]bool{}, imports: map[string]string{}, callableParams: map[*syntax.BashPPField]string{}, dotNames: map[string]bool{}, declaredGlobals: map[string]bool{}, typeNames: map[string]bool{}, globalTypes: globalTypes}
+	e := &emitter{functionDecls: map[string]*syntax.BashPPFuncDecl{}, enumMembers: map[string][]*syntax.Lit{}, options: options, funcs: map[string]bool{}, scopes: []map[string]bool{{}}, globals: map[string]bool{}, visibleGlobals: map[string]bool{}, imports: map[string]string{}, callableParams: map[*syntax.BashPPField]string{}, dotNames: map[string]bool{}, declaredGlobals: map[string]bool{}, typeNames: map[string]bool{}, globalTypes: globalTypes}
 	// Allocate private names from the tree rather than reserving user identifiers.
 	for n := 0; ; n++ {
 		e.prefix = fmt.Sprintf("__bpp%d_", n)
@@ -79,6 +84,7 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 		if f, ok := s.Cmd.(*syntax.BashPPFuncDecl); ok {
 			if f.Receiver == nil {
 				e.funcs[f.Name.Value] = true
+				e.functionDecls[f.Name.Value] = f
 			}
 		}
 		switch n := s.Cmd.(type) {
@@ -133,7 +139,7 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 					text, err = e.globalStatement(s)
 				} else if n.Kw.Value == "type" {
 					var typ string
-					typ, err = e.typeDecl(n)
+					typ, err = e.declarationType(n)
 					declarations.WriteString(e.mark(n) + typ + "\n")
 				} else {
 					text, err = e.statement(s)
@@ -494,9 +500,6 @@ func scalarType(s string) bool {
 func (e *emitter) fields(fs []*syntax.BashPPField) (string, error) {
 	var out []string
 	for _, f := range fs {
-		if f.Default != nil {
-			return "", e.fail(f, CodeUnsupported, "parameter/result type, default or variadic form not supported by foundation")
-		}
 		ns := names(f.Names)
 		for _, n := range ns {
 			e.bind(n)
@@ -531,6 +534,13 @@ func (e *emitter) fields(fs []*syntax.BashPPField) (string, error) {
 }
 func (e *emitter) command(c syntax.Command) (string, error) {
 	switch n := c.(type) {
+	case *syntax.BashPPCommandCall:
+		tail, err := e.call(n.Call)
+		if err != nil {
+			return "", err
+		}
+		return e.shellWithTail(&syntax.CallExpr{Args: n.Before}, tail)
+
 	case *syntax.ForClause:
 		return e.shellFor(n)
 	case *syntax.BashPPConstGroup:
@@ -539,7 +549,7 @@ func (e *emitter) command(c syntax.Command) (string, error) {
 		return e.rangeStmt(n)
 	case *syntax.BashPPDecl:
 		if n.Kw.Value != "var" && n.Kw.Value != "const" {
-			return e.typeDecl(n)
+			return e.declarationType(n)
 		}
 		if len(n.TypeParams) > 0 || len(n.StructFields) > 0 || len(n.EnumMembers) > 0 {
 			return "", e.fail(n, CodeUnsupported, "composite declaration")
@@ -635,6 +645,9 @@ func (e *emitter) command(c syntax.Command) (string, error) {
 		}
 		return e.call(n)
 	case *syntax.BashPPReturn:
+		if n.Call != nil {
+			return "", e.fail(n, CodeUnsupported, "returned call requires interpreter callable result propagation")
+		}
 		if len(e.resultTypes) == 0 && len(n.Results) > 0 {
 			if len(n.Results) != 1 {
 				return "", e.fail(n, CodeResult, "resultless function return requires one status")
@@ -829,6 +842,8 @@ func (e *emitter) forStmt(n *syntax.BashPPFor) (string, error) {
 }
 func (e *emitter) expr(x syntax.BashPPExpr) (string, error) {
 	switch n := x.(type) {
+	case *syntax.BashPPCall:
+		return e.call(n)
 	case *syntax.BashPPCompositeLit:
 		return e.compositeExpr(n)
 	case *syntax.BashPPSelectorExpr:
@@ -907,8 +922,13 @@ func (e *emitter) expr(x syntax.BashPPExpr) (string, error) {
 	}
 }
 func (e *emitter) call(c *syntax.BashPPCall) (string, error) {
+	if len(c.Fun) == 1 {
+		if f := e.functionDecls[c.Fun[0].Value]; f != nil && (hasSharpDefaults(f) || len(c.ArgNames) > 0) {
+			return e.sharpCall(c, f)
+		}
+	}
 	if len(c.ArgNames) > 0 {
-		return "", e.fail(c, CodeUnsupported, "call variant needs callable/type lowering")
+		return "", e.fail(c, CodeUnsupported, "named arguments require a resolved callable signature")
 	}
 	if c.FuncLit != nil {
 		callee, err := e.literal(c.FuncLit)
@@ -978,6 +998,11 @@ func (e *emitter) call(c *syntax.BashPPCall) (string, error) {
 			return "", err
 		}
 		args = append(args, x)
+	}
+	if members := e.enumMembers[name]; len(members) > 0 && len(args) == 1 {
+		if _, err := strconv.ParseInt(args[0], 0, 64); err != nil {
+			return "", e.fail(c, CodeUnsupported, "nonconstant enum conversion requires runtime membership guard")
+		}
 	}
 	if !e.funcs[name] && (name == "print" || name == "println") {
 		e.output = true

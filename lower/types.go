@@ -14,6 +14,20 @@ import (
 // resulting Go program; the emitter does not execute or expand type text.
 func (e *emitter) typeExpr(t syntax.BashPPTypeExpr) (string, error) {
 	switch n := t.(type) {
+	case *syntax.BashPPFuncType:
+		params, err := e.signatureTypes(n.Params)
+		if err != nil {
+			return "", err
+		}
+		results, err := e.signatureTypes(n.Results)
+		if err != nil {
+			return "", err
+		}
+		if results != "" {
+			results = " (" + results + ")"
+		}
+		return "func(" + params + ")" + results, nil
+
 	case *syntax.BashPPNamedType:
 		if n.Name == nil {
 			return "", e.fail(nil, CodeType, "missing type name")

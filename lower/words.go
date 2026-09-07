@@ -80,7 +80,7 @@ func (e *emitter) nativeWordExpr(n syntax.Node, text string) (string, error) {
 			if q.Kind != token.INT && q.Kind != token.FLOAT && q.Kind != token.STRING && q.Kind != token.CHAR {
 				problem = e.fail(n, CodeUnsupported, "literal kind "+q.Kind.String())
 			}
-		case *ast.ParenExpr, *ast.BinaryExpr:
+		case *ast.ParenExpr, *ast.BinaryExpr, *ast.StarExpr, *ast.IndexExpr:
 		case *ast.UnaryExpr:
 			if q.Op != token.ADD && q.Op != token.SUB && q.Op != token.NOT && q.Op != token.XOR {
 				problem = e.fail(n, CodeUnsupported, "unary word expression operator "+q.Op.String())
@@ -189,6 +189,18 @@ func (e *emitter) stringParts(parts []syntax.WordPart) (string, error) {
 	return "(" + strings.Join(out, " + ") + ")", nil
 }
 func (e *emitter) shellWord(w *syntax.Word) (string, error) {
+	if len(w.Parts) == 1 {
+		if l, ok := w.Parts[0].(*syntax.Lit); ok {
+			if parsed, err := parser.ParseExpr(l.Value); err == nil {
+				if call, ok := parsed.(*ast.CallExpr); ok {
+					if id, ok := call.Fun.(*ast.Ident); ok && e.funcs[id.Name] {
+						return e.nativeWordExpr(w, l.Value)
+					}
+				}
+			}
+		}
+	}
+
 	if value, ok, err := e.shellProjection(w); ok || err != nil {
 		return value, err
 	}
@@ -233,7 +245,8 @@ func (e *emitter) arithmetic(x syntax.ArithmExpr) (string, error) {
 		return "", e.fail(x, CodeUnsupported, "shell arithmetic form")
 	}
 }
-func (e *emitter) shell(c *syntax.CallExpr) (string, error) {
+func (e *emitter) shell(c *syntax.CallExpr) (string, error) { return e.shellWithTail(c, "") }
+func (e *emitter) shellWithTail(c *syntax.CallExpr, tail string) (string, error) {
 	if len(c.Assigns) > 0 {
 		if len(c.Args) > 0 {
 			return "", e.fail(c, CodeBridge, "command-scoped assignments need shell-state runtime")
@@ -285,6 +298,9 @@ func (e *emitter) shell(c *syntax.CallExpr) (string, error) {
 			return "", err
 		}
 		args = append(args, s)
+	}
+	if tail != "" {
+		args = append(args, tail)
 	}
 	if name == "printf" && len(args) == 0 {
 		return "", e.fail(c, CodeBridge, "printf requires a format")
