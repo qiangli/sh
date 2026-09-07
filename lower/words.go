@@ -335,7 +335,7 @@ func (e *emitter) shellWithTail(c *syntax.CallExpr, tail string) (string, error)
 		method = "Echo"
 	}
 	if e.execution {
-		return "if " + e.prefix + "err := " + e.program() + "." + method + "(" + strings.Join(args, ", ") + "); " + e.prefix + "err != nil {" + e.program() + ".Fail(" + e.prefix + "err)}", nil
+		return "if " + e.prefix + "err := " + e.program() + "." + method + "(" + strings.Join(args, ", ") + "); " + e.prefix + "err != nil && " + e.program() + ".Status() != 0 {" + e.program() + ".Fail(" + e.prefix + "err)}", nil
 	}
 	return "if " + e.prefix + "err := " + e.prefix + "rt." + method + "(" + strings.Join(args, ", ") + "); " + e.prefix + "err != nil { " + e.prefix + "rt.Fail(" + e.prefix + "err) }", nil
 }

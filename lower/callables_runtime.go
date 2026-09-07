@@ -132,7 +132,7 @@ func (e *emitter) runtimeFunction(f *syntax.BashPPFuncDecl, signature, body, gen
 }
 func (e *emitter) programMain(body string) string {
 	p := e.prefix + "program"
-	return "func main(){\n" + p + ", err := " + e.prefix + "rt.NewProgram()\nif err != nil { " + e.prefix + "fmt.Fprintln(" + e.prefix + "os.Stderr,err); " + e.prefix + "os.Exit(1) }\nerr = " + p + ".Run(func(" + p + " *" + e.prefix + "rt.Program){\n" + body + "})\nif err != nil {" + p + ".Fail(err)}\nif status:=" + p + ".Status();status!=0 {" + e.prefix + "os.Exit(status)}\n}\n"
+	return "func main(){\n" + p + ", err := " + e.prefix + "rt.NewProgram()\nif err != nil { " + e.prefix + "fmt.Fprintln(" + e.prefix + "os.Stderr,err); " + e.prefix + "os.Exit(1) }\nerr = " + p + ".Run(func(" + p + " *" + e.prefix + "rt.Program){\n" + body + "})\nif err != nil {" + p + ".Fail(" + e.prefix + "rt.SourceFailure(err))}\nif status:=" + p + ".Status();status!=0 {" + e.prefix + "os.Exit(status)}\n}\n"
 }
 
 func (e *emitter) agenticBlock(n *syntax.BashPPAgenticBlock) (string, error) {
@@ -188,7 +188,29 @@ func (e *emitter) programGo(n *syntax.BashPPGo) (string, error) {
 			return "", err
 		}
 		name := fmt.Sprintf("%staskArg%d", e.prefix, i)
-		fmt.Fprintf(&out, "%s := %s\n", name, value)
+		typ := ""
+		if len(c.Fun) == 1 {
+			if f := e.functionDecls[c.Fun[0].Value]; f != nil {
+				params, problem := sharpParameters(f)
+				if problem != nil {
+					return "", problem
+				}
+				if i < len(params) {
+					field := params[i].field
+					if field.FieldType != nil || field.FieldTypeExpr != nil {
+						typ, err = e.fieldType(field)
+						if err != nil {
+							return "", err
+						}
+					}
+				}
+			}
+		}
+		if typ == "" {
+			fmt.Fprintf(&out, "%s := %s\n", name, value)
+		} else {
+			fmt.Fprintf(&out, "var %s %s = %s\n", name, typ, value)
+		}
 		args = append(args, name)
 	}
 	if c.Ellipsis.IsValid() && len(args) > 0 {
@@ -203,7 +225,7 @@ func (e *emitter) programGo(n *syntax.BashPPGo) (string, error) {
 		invocation += "," + strings.Join(args, ",")
 	}
 	invocation += ")"
-	out.WriteString(invocation + "\nreturn " + p + ".Session.Join()\n}))\n}\n")
+	out.WriteString("return " + p + ".RunSourceTask(func(){" + invocation + "})\n}))\n}\n")
 	return out.String(), nil
 }
 

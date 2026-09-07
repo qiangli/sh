@@ -46,6 +46,7 @@ type emitter struct {
 	declaredTypes      map[string]*syntax.BashPPDecl
 	writtenNames       map[string]bool
 	execution          bool
+	guarded            bool
 	programExpr        string
 	sourceName         string
 	inferredParams     map[*syntax.BashPPField]string
@@ -80,6 +81,7 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 	}
 	e.projections.projectionPush()
 	e.needsExecution(file)
+	e.findCheckedValues(file)
 	e.findProjectionWrites(file)
 	// Allocate private names from the tree rather than reserving user identifiers.
 	for n := 0; ; n++ {
@@ -183,7 +185,7 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 	if e.bigIntegers {
 		imports = append(imports, "math/big")
 	}
-	if e.execution || e.panicSupport {
+	if e.execution || e.panicSupport || e.guarded {
 		e.output = true
 		imports = append(imports, "os")
 	}
@@ -213,7 +215,7 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 	if e.bridge {
 		fmt.Fprintf(&raw, "import %srt %s\n", e.prefix, strconv.Quote(options.Runtime))
 	}
-	if e.execution || e.panicSupport {
+	if e.execution || e.panicSupport || e.guarded {
 		fmt.Fprintf(&raw, "import %sos \"os\"\n", e.prefix)
 	}
 	if e.bigIntegers {
@@ -235,6 +237,9 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 	head := ""
 	if e.panicSupport {
 		head = e.panicBoundary()
+	}
+	if e.guarded && !e.execution {
+		head = e.guardBoundary() + head
 	}
 	if e.execution {
 		raw.WriteString(e.programMain(body.String()))
@@ -679,7 +684,11 @@ func (e *emitter) command(c syntax.Command) (string, error) {
 
 			rhs, err = e.call(n.Call)
 		case n.Expr != nil:
-			rhs, err = e.expr(n.Expr)
+			if assertion, ok := n.Expr.(*syntax.BashPPTypeAssertExpr); ok {
+				rhs, err = e.valueAssertion(assertion, len(n.Lhs) == 2)
+			} else {
+				rhs, err = e.expr(n.Expr)
+			}
 		case n.FuncLit != nil:
 			rhs, err = e.literal(n.FuncLit)
 		case len(n.MethodValue) > 0:
@@ -741,10 +750,10 @@ func (e *emitter) command(c syntax.Command) (string, error) {
 	case *syntax.BashPPCall:
 		if e.isRecover(n) {
 			if e.execution {
-				return e.program() + ".Recovered(recover())", nil
+				return e.program() + ".Recovered(" + e.userRecover() + ")", nil
 			}
 			e.panicSupport = true
-			return "if " + e.prefix + "recovered := recover(); " + e.prefix + "recovered == nil { /*" + e.prefix + "status1*/ } else { " + e.prefix + "popPanic(); /*" + e.prefix + "status0*/ }", nil
+			return "if " + e.prefix + "recovered := " + e.userRecover() + "; " + e.prefix + "recovered == nil { /*" + e.prefix + "status1*/ } else { " + e.prefix + "popPanic(); /*" + e.prefix + "status0*/ }", nil
 		}
 		return e.call(n)
 	case *syntax.BashPPReturn:
@@ -874,6 +883,11 @@ func (e *emitter) command(c syntax.Command) (string, error) {
 			}
 			return "defer func(v any) { panic(" + e.prefix + "pushPanic(v)) }(" + x + ")", err
 		}
+		if n.Call != nil && len(n.Call.Fun) == 1 {
+			if f := e.functionDecls[n.Call.Fun[0].Value]; f != nil && (hasSharpDefaults(f) || len(n.Call.ArgNames) > 0) {
+				return e.sharpDefer(n.Call, f)
+			}
+		}
 		x, err := e.call(n.Call)
 		return "defer " + x, err
 	case *syntax.Block:
@@ -963,11 +977,14 @@ func (e *emitter) expr(x syntax.BashPPExpr) (string, error) {
 	case *syntax.BashPPCall:
 		return e.call(n)
 	case *syntax.BashPPCompositeLit:
+		if text, handled, err := e.promotedCompositeExpr(n, e.declaredTypes); handled || err != nil {
+			return text, err
+		}
 		return e.compositeExpr(n)
 	case *syntax.BashPPSelectorExpr:
 		return e.selectorExpr(n)
 	case *syntax.BashPPTypeAssertExpr:
-		return e.typeAssertExpr(n)
+		return e.valueAssertion(n, false)
 	case *syntax.BashPPSliceExpr:
 		base, err := e.expr(n.X)
 		if err != nil {
@@ -1002,7 +1019,10 @@ func (e *emitter) expr(x syntax.BashPPExpr) (string, error) {
 		return "&" + a, err
 	case *syntax.BashPPDerefExpr:
 		a, err := e.expr(n.X)
-		return "*" + a, err
+		if err != nil {
+			return "", err
+		}
+		return e.checkedDeref(n, a, ""), nil
 	case *syntax.BashPPNewExpr:
 		a, err := e.typeExpr(n.AllocType)
 		return "new(" + a + ")", err
@@ -1168,7 +1188,7 @@ func (e *emitter) call(c *syntax.BashPPCall) (string, error) {
 			return "", e.fail(c, CodeResult, "recover takes no arguments")
 		}
 		e.panicSupport = true
-		return "recover()", nil
+		return e.userRecover(), nil
 	}
 	typeargs, err := e.typeArgs(c.TypeArgs)
 	if err != nil {

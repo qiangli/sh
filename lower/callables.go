@@ -266,8 +266,12 @@ func PREFIXpopPanic(){if len(PREFIXpanicChain)>0{PREFIXpanicChain=PREFIXpanicCha
 `, "PREFIX", e.prefix)
 }
 func (e *emitter) panicBoundary() string {
-	return strings.ReplaceAll(`defer func(){if v:=recover();v!=nil{if len(PREFIXpanicChain)==0{PREFIXpanicChain=append(PREFIXpanicChain,PREFIXfmt.Sprint(v))};for i,message:=range PREFIXpanicChain{if i>0{PREFIXfmt.Fprint(PREFIXos.Stderr,"\t")};PREFIXfmt.Fprintln(PREFIXos.Stderr,"panic:",message)};PREFIXos.Exit(2)}}()
+	text := strings.ReplaceAll(`defer func(){if v:=recover();v!=nil{if len(PREFIXpanicChain)==0{PREFIXpanicChain=append(PREFIXpanicChain,PREFIXfmt.Sprint(v))};for i,message:=range PREFIXpanicChain{if i>0{PREFIXfmt.Fprint(PREFIXos.Stderr,"\t")};PREFIXfmt.Fprintln(PREFIXos.Stderr,"panic:",message)};PREFIXos.Exit(2)}}()
 `, "PREFIX", e.prefix)
+	if e.guarded {
+		text = strings.Replace(text, "if v:=recover();v!=nil{", "if v:=recover();v!=nil{"+e.prefix+"rt.PreserveAbort(v);", 1)
+	}
+	return text
 }
 
 func (e *emitter) importDecl(n *syntax.BashPPImport) error {

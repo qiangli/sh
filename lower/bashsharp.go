@@ -579,7 +579,13 @@ func (c *sharpNullChecker) command(command syntax.Command, state sharpNullState)
 			if value == nil && len(n.Init) == 1 {
 				value = sharpWordExpr(n.Init[0])
 			}
-			current[n.Name.Value] = sharpNullValue{kind: sharpNullableType(&syntax.BashPPField{FieldType: n.DeclType, FieldTypeExpr: n.DeclTypeExpr}), nonnil: sharpDefinitelyNonNil(value, current)}
+			// The static proof obligation follows nullable parameters and aliases.
+			// Local zero values retain checked runtime dereference semantics.
+			state := sharpNullValue{nonnil: sharpDefinitelyNonNil(value, current)}
+			if value != nil && value.op == "ident" {
+				state.kind = current[value.name].kind
+			}
+			current[n.Name.Value] = state
 		}
 	case *syntax.BashPPShortDecl:
 		check(n.Expr)
