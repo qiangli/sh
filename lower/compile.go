@@ -724,6 +724,9 @@ func (e *emitter) command(c syntax.Command) (string, error) {
 		e.projections.projectionBind(n.Name.Value, projection)
 		return n.Kw.Value + " " + n.Name.Value + typ + init + e.unused([]string{n.Name.Value}), nil
 	case *syntax.BashPPShortDecl:
+		if n.Recv != nil {
+			return e.receiveDeclaration(n)
+		}
 		var rhs string
 		var err error
 		switch {

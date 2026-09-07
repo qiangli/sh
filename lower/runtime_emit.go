@@ -116,7 +116,7 @@ func (e *emitter) runtimeSelect(n *syntax.BashPPSelect, c RuntimeContext, body r
 					e.pop()
 					return "", err
 				}
-				value, err := e.valueWord(comm.Value)
+				value, err := e.argument(comm.Value)
 				if err != nil {
 					e.pop()
 					return "", err
