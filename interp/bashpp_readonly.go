@@ -165,6 +165,15 @@ func (r *Runner) bashPPTupleAssignCall(ctx context.Context, assign *syntax.BashP
 }
 
 func (r *Runner) bashPPTupleAssign(assign *syntax.BashPPAssign) {
+	if len(assign.Values) == 0 || len(assign.ValueExprs) != len(assign.Values) {
+		pos := assign.Eq
+		if len(assign.Values) > 0 && assign.Values[0] != nil {
+			pos = assign.Values[0].Pos()
+		}
+		r.errf("%sBASHPP-EASSIGN-FORM: tuple RHS is not a supported comma-delimited scalar expression list\n", r.bashErrPrefix(pos))
+		r.exit = exitStatus{code: 2}
+		return
+	}
 	if len(assign.Names) != len(assign.Values) {
 		r.errf("%sBASHPP-EASSIGN-ARITY: %d variable(s) but %d value(s)\n",
 			r.bashErrPrefix(assign.Eq), len(assign.Names), len(assign.Values))

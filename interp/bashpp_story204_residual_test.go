@@ -160,6 +160,15 @@ main()
 	qt.Assert(t, qt.StringContains(out.String(), "BASHPP-EASSIGN-TYPE: cannot assign String to int\n|1:2:3|"))
 }
 
+func TestBashPPTupleAssignMalformedRHSIsPositioned(t *testing.T) {
+	const src = "func main() {\nvar x int = 1\nvar y int = 2\nx, y = x+, y+\nprintf '|%s:%s|' \"$x\" \"$y\"\n}\nmain()\n"
+	var out strings.Builder
+	r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP), interp.WithBashCompatErrors(true))
+	bashPPRun(t, r, src)
+	qt.Assert(t, qt.StringContains(out.String(), "line 4: BASHPP-EASSIGN-FORM:"))
+	qt.Assert(t, qt.StringContains(out.String(), "|1:2|"))
+}
+
 func TestBashPPInitFunctionIsExplicitlyUnsupported(t *testing.T) {
 	const src = "func init() {\n}\n"
 	var out strings.Builder

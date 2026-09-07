@@ -1791,6 +1791,15 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 				p.command(cmd.Call, nil)
 				break
 			}
+			if len(cmd.ValueExprs) == 0 {
+				for i, value := range cmd.Values {
+					if i > 0 {
+						p.space()
+					}
+					p.word(value)
+				}
+				break
+			}
 			for i, value := range cmd.Values {
 				if i > 0 {
 					p.writeLit(", ")

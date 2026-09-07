@@ -2,8 +2,12 @@
 
 Sprint 116 · story `97322d0e5504`
 
-Inside a committed Bash++ function, identifier-list `=` evaluates every scalar
-right-hand expression before validating or mutating any left-hand binding.
+Inside a committed Bash++ function, identifier-list `=` evaluates each
+comma-delimited scalar right-hand expression before validating or mutating any
+left-hand binding. A single scalar expression may contain whitespace, such as
+`x = x + 1`. Tuple elements which themselves span multiple shell words are
+retained losslessly but rejected with positioned `BASHPP-EASSIGN-FORM` until
+the parser has an unambiguous grouping representation.
 Result-bearing declared function calls use the same validate-then-commit path.
 Arity, undeclared targets, readonly targets, and assignability failures leave
 all target bindings unchanged. Blank identifiers discard their corresponding

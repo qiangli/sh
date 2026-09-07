@@ -40,6 +40,30 @@ func TestBashPPTupleAssignStreamingRoundTrip(t *testing.T) {
 	}
 }
 
+func TestBashPPTupleAssignRejectedRHSStreamingRoundTrip(t *testing.T) {
+	const src = "func f() {\n\tx, y = x + 1, y + 2\n}\n"
+	for _, wrap := range []func(io.Reader) io.Reader{
+		func(r io.Reader) io.Reader { return r },
+		func(r io.Reader) io.Reader { return iotest.OneByteReader(r) },
+	} {
+		file, err := NewParser(Variant(LangBashPP)).Parse(wrap(strings.NewReader(src)), "tuple.bpp")
+		if err != nil {
+			t.Fatal(err)
+		}
+		assign := file.Stmts[0].Cmd.(*BashPPFuncDecl).Body.Stmts[0].Cmd.(*BashPPAssign)
+		if len(assign.Values) == 0 || len(assign.ValueExprs) != 0 {
+			t.Fatalf("rejected tuple shape = %#v", assign)
+		}
+		var out strings.Builder
+		if err := NewPrinter().Print(&out, file); err != nil {
+			t.Fatal(err)
+		}
+		if out.String() != src {
+			t.Fatalf("round trip = %q, want %q", out.String(), src)
+		}
+	}
+}
+
 func TestBashPPTupleAssignClassicPOSIXIsolation(t *testing.T) {
 	const src = "x, y = y, x\n"
 	for _, lang := range []LangVariant{LangBash, LangPOSIX} {
