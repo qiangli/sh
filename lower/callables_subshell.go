@@ -27,6 +27,23 @@ func (e *emitter) nativeSubshell(n *syntax.Subshell) (string, error) {
 	snapshot := child + "Snapshot"
 	failure := child + "Error"
 	rt := e.prefix + "rt."
+	globalCells := map[string]bool{}
+	for _, name := range names {
+		if e.globalTypes[name] == "" {
+			continue
+		}
+		local := false
+		if e.inFunc {
+			for _, scope := range e.scopes {
+				local = local || scope[name]
+			}
+		} else {
+			for _, scope := range e.scopes[1:] {
+				local = local || scope[name]
+			}
+		}
+		globalCells[name] = !local
+	}
 	projections := map[string]projection{}
 	for _, name := range names {
 		projections[name], _ = e.projections.projectionLookup(name)
@@ -51,13 +68,21 @@ func (e *emitter) nativeSubshell(n *syntax.Subshell) (string, error) {
 	}
 	fmt.Fprintf(&out, "%s,%s := %s.Subshell()\nif %s != nil {%s.Fail(%s)} else {\n%s = %s.Run(func(%s *%sProgram){\n", child, failure, parent, failure, parent, failure, failure, child, child, rt)
 	for i, name := range names {
-		fmt.Fprintf(&out, "%s := *%soriginal%d\n", name, child, i)
+		if !globalCells[name] {
+			fmt.Fprintf(&out, "%s := *%soriginal%d\n", name, child, i)
+		}
 	}
 	fmt.Fprintf(&out, "%s := %sNewSnapshot(%s.Readonly,%s.Channels)\n", snapshot, rt, parent, child)
 	for i, name := range names {
 		fmt.Fprintf(&out, "%sMustReadonly(%sCapture(%s,%soriginal%d,&%s))\n", rt, rt, snapshot, child, i, name)
 	}
 	fmt.Fprintf(&out, "%sMustReadonly(%s.CloneContext(%s.Context))\n%s.Readonly = %s.Readonly()\n", rt, snapshot, child, child, snapshot)
+	for _, name := range names {
+		if globalCells[name] {
+			fmt.Fprintf(&out, "%s.Present = %s.Present\n", e.lexicalCell(name, child), e.lexicalCell(name, parent))
+		}
+	}
+	fmt.Fprintf(&out, "%sMustReadonly(%s.Bindings.RebindSnapshot(%s))\n", rt, child, snapshot)
 	out.WriteString(body)
 	fmt.Fprintf(&out, "})\nif %s != nil {%s.Fail(%sSourceFailure(%s))} else {%s.SetStatus(%s.Status())}\n}\n}", failure, parent, rt, failure, parent, child)
 	return out.String(), nil

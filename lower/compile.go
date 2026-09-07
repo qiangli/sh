@@ -64,6 +64,9 @@ func Compile(file *syntax.File, options Options) (*Result, error) {
 	if err := CheckProfile(file, options.Origin); err != nil {
 		return nil, err
 	}
+	if err := CheckToolchain(file); err != nil {
+		return nil, err
+	}
 	if err := CheckBashSharp(file); err != nil {
 		return nil, err
 	}
@@ -350,7 +353,7 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 		}
 		diagnostics = append(diagnostics, Diagnostic{Code: code, Msg: msg, Node: node, Pos: pos})
 	}}
-	info := &types.Info{Uses: map[*ast.Ident]types.Object{}}
+	info := &types.Info{Uses: map[*ast.Ident]types.Object{}, Defs: map[*ast.Ident]types.Object{}}
 	checked, _ := conf.Check(options.Package, fs, []*ast.File{goFile}, info)
 	if len(diagnostics) > 0 {
 		sort.SliceStable(diagnostics, func(i, j int) bool { return diagnostics[i].Pos.Offset() < diagnostics[j].Pos.Offset() })
@@ -381,7 +384,10 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 		}
 		return compilePass(file, options, inferred)
 	}
-	if e.execution && globalTypes != nil {
+	if e.execution {
+		if e.globalTypes == nil {
+			e.globalTypes = map[string]string{}
+		}
 		source, err = e.lexicalStorage(source, fs, goFile, checked, info)
 		if err != nil {
 			return nil, e.fail(file, CodeExpr, err.Error())
@@ -652,6 +658,7 @@ func (e *emitter) function(f *syntax.BashPPFuncDecl) (string, error) {
 		return "", err
 	}
 	if e.execution {
+		body = e.program() + " = " + e.program() + ".LexicalScope(" + e.lexicalNames(e.functionGlobals) + ")\n" + body
 		return e.runtimeFunction(f, signature, body, generics)
 	}
 	return e.mark(f) + "func " + recv + e.goName(f.Name.Value) + generics + signature + " {\n" + body + "}\n", nil

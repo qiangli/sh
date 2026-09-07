@@ -47,6 +47,16 @@ func (e *emitter) literal(f *syntax.BashPPFuncLit) (string, error) {
 		body = entry + body
 		signature = e.privateSignature(signature)
 	}
+	if e.execution {
+		parent := previousProgram
+		if parent == "" {
+			parent = e.prefix + "program"
+		}
+		captured := e.prefix + "closureBindings"
+		p := e.prefix + "program"
+		body = e.prefix + "closureProgram := *" + p + "\n" + p + " = &" + e.prefix + "closureProgram\n" + p + ".Bindings = " + captured + "\n" + p + " = " + p + ".LexicalScope(nil)\n" + body
+		return "func() func" + signature + " { " + captured + " := " + parent + ".LexicalScope(nil).Bindings\nreturn func" + signature + " {\n" + body + "}\n}()", nil
+	}
 	return "func" + signature + " {\n" + body + "}", nil
 }
 func (e *emitter) signature(params, results []*syntax.BashPPField, body *syntax.Block) (string, error) {
@@ -133,7 +143,11 @@ func (e *emitter) globalStatement(s *syntax.Stmt) (string, error) {
 			return e.mark(n) + e.unused([]string{name}) + "\n", nil
 		}
 		fmt.Fprintf(&e.globalDecls, "%svar %s %s\nvar %s error\n", e.mark(n), name, e.globalTypes[name], failure)
-		return e.mark(n) + strings.Replace(text, " := ", " = ", 1) + "\n" + e.lexicalCell(name, e.program()) + ".Present = " + failure + " == nil\n", nil
+		presence := ""
+		if e.execution {
+			presence = e.lexicalCell(name, e.program()) + ".Present = " + failure + " == nil\n"
+		}
+		return e.mark(n) + strings.Replace(text, " := ", " = ", 1) + "\n" + presence, nil
 	}
 	line := text
 	var ns []string

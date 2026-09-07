@@ -64,11 +64,7 @@ func (e *emitter) lexicalNames(names map[string]bool) string {
 // spelling, to move script storage into each invocation. Shadowed parameters,
 // struct fields, named results and loop variables retain ordinary Go storage.
 func (e *emitter) lexicalStorage(source []byte, fs *token.FileSet, file *ast.File, pkg *types.Package, info *types.Info) ([]byte, error) {
-	type edit struct {
-		start, end int
-		text       string
-	}
-	var edits []edit
+	edits := e.lexicalLocals(file, fs, info)
 	globals := map[types.Object]string{}
 	for _, name := range pkg.Scope().Names() {
 		if object, ok := pkg.Scope().Lookup(name).(*types.Var); ok {
@@ -113,7 +109,7 @@ func (e *emitter) lexicalStorage(source []byte, fs *token.FileSet, file *ast.Fil
 				}
 				return ' '
 			}, string(source[start:end]))
-			edits = append(edits, edit{start, end, text})
+			edits = append(edits, lexicalEdit{start, end, text})
 		}
 	}
 	type scope struct {
@@ -162,10 +158,10 @@ func (e *emitter) lexicalStorage(source []byte, fs *token.FileSet, file *ast.Fil
 		if len(scopes) == 0 {
 			return true
 		}
-		edits = append(edits, edit{fs.Position(ident.Pos()).Offset, fs.Position(ident.End()).Offset, e.lexicalCell(name, scopes[len(scopes)-1].program) + ".Value"})
+		edits = append(edits, lexicalEdit{fs.Position(ident.Pos()).Offset, fs.Position(ident.End()).Offset, e.lexicalCell(name, scopes[len(scopes)-1].program) + ".Value"})
 		return true
 	})
-	sort.Slice(edits, func(i, j int) bool { return edits[i].start > edits[j].start })
+	sort.SliceStable(edits, func(i, j int) bool { return edits[i].start > edits[j].start })
 	for _, change := range edits {
 		source = append(append(append([]byte{}, source[:change.start]...), []byte(change.text)...), source[change.end:]...)
 	}

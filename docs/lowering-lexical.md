@@ -16,9 +16,14 @@ Acceptance includes the public later-declaration and later-write scope cases,
 source-removed pointer-result artifacts, and 24 concurrent invocations of one
 compiled exported entry under the race detector.
 
-Local and parameter cells, rich shell writes, raw scalar spelling and returned
-callable adapters require their respective continuation hooks. This initial
-storage change does not establish parity for those additional cases.
+Native parameters, named results and local variables are registered by their
+actual Go addresses. Callable and block views preserve shadowing; loop variables
+are registered per iteration. Subshell global cells participate in the same
+snapshot graph as native local roots, followed by provenance rebinding.
+
+Raw scalar read/write observation, rich shell writes and returned callable
+adapters require their respective continuation hooks. Registration alone does
+not establish parity for those additional cases.
 
 Native shell call arguments are captured before invocation and restored on
 return or unwind. Positional parameters `$1`, `$#`, `${1-default}` and standalone

@@ -65,7 +65,7 @@ func (p *Program) shellExchangeBindings() *LexicalBindings {
 	names := map[string]string{}
 	p.Bindings.mu.RLock()
 	for name, id := range p.Bindings.names {
-		if slot := visible[name]; slot != nil && slot.value.Kind() != reflect.Func {
+		if slot := visible[name]; slot != nil && slot.value.Kind() != reflect.Func && slot.value.Kind() != reflect.Chan {
 			names[name] = id
 		}
 	}

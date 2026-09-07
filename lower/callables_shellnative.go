@@ -88,8 +88,8 @@ func (e *emitter) nativeShellStatement(s *syntax.Stmt) (string, bool, error) {
 			return "", true, err
 		}
 		capture := e.prefix + "shellCapture"
-		view := e.lexicalNames(e.visibleGlobals)
-		return e.mark(n) + "{\n" + capture + " := " + e.program() + ".Bindings.CaptureNames(" + view + ")\n" + e.program() + ".DefineNativeShell(" + strconv.Quote(n.Name.Value) + "," + strconv.FormatBool(n.Agentic != nil) + ",func(" + e.prefix + "program *" + e.prefix + "rt.Program){\n" + e.prefix + "shellProgram := *" + e.program() + "\n" + e.program() + " = &" + e.prefix + "shellProgram\n" + e.program() + ".Bindings = " + capture + ".CaptureNames(" + view + ")\n" + body + "\n})\n}\n", true, nil
+		view := "nil"
+		return e.mark(n) + "{\n" + capture + " := " + e.program() + ".LexicalScope(" + view + ").Bindings\n" + e.program() + ".DefineNativeShell(" + strconv.Quote(n.Name.Value) + "," + strconv.FormatBool(n.Agentic != nil) + ",func(" + e.prefix + "program *" + e.prefix + "rt.Program){\n" + e.prefix + "shellProgram := *" + e.program() + "\n" + e.program() + " = &" + e.prefix + "shellProgram\n" + e.program() + ".Bindings = " + capture + "\n" + e.program() + " = " + e.program() + ".LexicalScope(nil)\n" + body + "\n})\n}\n", true, nil
 	case *syntax.CallExpr:
 		if e.nativeShellBody && len(n.Args) > 0 && n.Args[0].Lit() == "return" {
 			value := "0"
