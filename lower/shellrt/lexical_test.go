@@ -106,7 +106,7 @@ func TestLexicalExchangeValidatesWholeWriteTransaction(t *testing.T) {
 		t.Fatal(err)
 	}
 	p.Session.SetString("a", "9")
-	p.Session.SetString("z", "128")
+	p.Session.Set("z", Var{Kind: Indexed, List: []string{"128"}})
 	p.Session.SetString("other", "keep")
 	err = exchange.EndShell(p.Session)
 	var boundary *LexicalWriteError
@@ -135,7 +135,7 @@ func TestLexicalScalarWritesPreserveNativeTypes(t *testing.T) {
 		text    string
 		want    any
 	}{
-		{tiny(0), "-128", tiny(-128)}, {count(0), "65535", count(65535)},
+		{tiny(0), "-128", tiny(-128)}, {tiny(0), "128", tiny(-128)}, {count(0), "-1", count(65535)}, {flag(false), "1", flag(false)}, {count(0), "65535", count(65535)},
 		{flag(false), "true", flag(true)}, {label(""), "two words\n", label("two words\n")},
 		{int64(0), "-9223372036854775808", int64(-9223372036854775808)},
 		{uint64(0), "18446744073709551615", uint64(18446744073709551615)},
@@ -148,7 +148,7 @@ func TestLexicalScalarWritesPreserveNativeTypes(t *testing.T) {
 	for _, tc := range []struct {
 		initial any
 		text    string
-	}{{tiny(0), "128"}, {count(0), "-1"}, {flag(false), "1"}, {int(0), "text"}} {
+	}{{int(0), "text"}} {
 		if _, err := lexicalScalarWrite("value", reflect.TypeOf(tc.initial), Var{Str: tc.text}); err == nil {
 			t.Fatalf("accepted %T = %q", tc.initial, tc.text)
 		}
@@ -407,7 +407,7 @@ func TestLexicalExchangeCleanupDoesNotConsumeSourcePanic(t *testing.T) {
 }
 
 func TestLexicalUnsupportedShellWritesRetainCells(t *testing.T) {
-	for _, action := range []string{"unset", "spelling", "array"} {
+	for _, action := range []string{"unset", "array"} {
 		t.Run(action, func(t *testing.T) {
 			p := lexicalProgram(t)
 			cell := Cell[int](p.Bindings, "x", "x", KindScalar)
@@ -419,8 +419,6 @@ func TestLexicalUnsupportedShellWritesRetainCells(t *testing.T) {
 			switch action {
 			case "unset":
 				p.Session.Unset("x")
-			case "spelling":
-				p.Session.SetString("x", "01")
 			case "array":
 				p.Session.Set("x", Var{Kind: Indexed, List: []string{"9"}})
 			}

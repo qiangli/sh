@@ -2,16 +2,17 @@ package shellrt
 
 import (
 	"fmt"
+	"go/constant"
 	"reflect"
 	"sort"
-	"strconv"
 	"sync"
 )
 
 // LexicalCell is native addressable storage for one source binding. Presence
 // starts at its executed declaration, independently of the Go zero value.
 // Cells belong to one sequential execution. Native reads and writes need no
-// runtime indirection; concurrent mutation of a shared cell requires the same
+// runtime indirection until a shell write establishes raw provenance; those
+// reads must use Load/LoadAddress. Concurrent mutation requires the same
 // synchronization as an ordinary Go variable.
 type LexicalCell[T any] struct {
 	Value   T
@@ -19,10 +20,13 @@ type LexicalCell[T any] struct {
 }
 
 type lexicalSlot struct {
-	cell    any
-	value   reflect.Value
-	present *bool
-	kind    Kind
+	cell        any
+	value       reflect.Value
+	present     *bool
+	kind        Kind
+	name        string
+	raw         *lexicalRaw
+	forkPending bool
 }
 
 type lexicalStore struct {
@@ -37,13 +41,15 @@ type lexicalStore struct {
 // operations are synchronized, but do not synchronize native
 // access to Cell.Value or its reachable object graph.
 type LexicalBindings struct {
-	store *lexicalStore
-	mu    sync.RWMutex
-	names map[string]string
+	addresses *lexicalAddresses
+	pending   map[lexicalAddress]lexicalPending
+	store     *lexicalStore
+	mu        sync.RWMutex
+	names     map[string]string
 }
 
 func NewLexicalBindings() *LexicalBindings {
-	return &LexicalBindings{store: &lexicalStore{slots: map[string]*lexicalSlot{}}, names: map[string]string{}}
+	return &LexicalBindings{addresses: &lexicalAddresses{slots: map[lexicalAddress]*lexicalSlot{}}, store: &lexicalStore{slots: map[string]*lexicalSlot{}}, names: map[string]string{}}
 }
 
 // Cell returns stable storage by a compiler-assigned hygienic ID and makes its
@@ -54,8 +60,9 @@ func Cell[T any](bindings *LexicalBindings, id, name string, kind Kind) *Lexical
 	slot := bindings.store.slots[id]
 	if slot == nil {
 		cell := &LexicalCell[T]{}
-		slot = &lexicalSlot{cell, reflect.ValueOf(&cell.Value).Elem(), &cell.Present, kind}
+		slot = &lexicalSlot{cell: cell, value: reflect.ValueOf(&cell.Value).Elem(), present: &cell.Present, kind: kind, name: name, raw: &lexicalRaw{}}
 		bindings.store.slots[id] = slot
+		bindings.track(slot)
 	}
 	cell, ok := slot.cell.(*LexicalCell[T])
 	bindings.store.mu.Unlock()
@@ -73,6 +80,8 @@ func Cell[T any](bindings *LexicalBindings, id, name string, kind Kind) *Lexical
 // already captured remain visible. The caller's map is never retained.
 func (b *LexicalBindings) CaptureNames(names map[string]string) *LexicalBindings {
 	view := NewLexicalBindings()
+	view.addresses = b.addresses
+	view.pending = b.pending
 	b.store.mu.Lock()
 	defer b.store.mu.Unlock()
 	for name, id := range names {
@@ -103,7 +112,22 @@ func Register[T any](b *LexicalBindings, id, name string, value *T, present *boo
 		b.store.mu.Unlock()
 		return &LexicalWriteError{name, "cannot replace cell-owned storage with external storage"}
 	}
-	b.store.slots[id] = &lexicalSlot{value: reflect.ValueOf(value).Elem(), present: present, kind: kind}
+	raw := &lexicalRaw{}
+	if old := b.slotAt(value); old != nil {
+		raw = old.raw
+	}
+	if existing != nil && existing.forkPending {
+		raw = existing.raw
+	}
+	// Multiple IDs exposing the same real native address share its spelling.
+	for _, slot := range b.store.slots {
+		if slot.value.Type() == reflect.TypeFor[T]() && slot.value.Addr().Pointer() == reflect.ValueOf(value).Pointer() {
+			raw = slot.raw
+			break
+		}
+	}
+	b.store.slots[id] = &lexicalSlot{value: reflect.ValueOf(value).Elem(), present: present, kind: kind, name: name, raw: raw}
+	b.track(b.store.slots[id])
 	b.store.mu.Unlock()
 	b.mu.Lock()
 	b.names[name] = id
@@ -125,14 +149,37 @@ func (b *LexicalBindings) Fork() *LexicalBindings {
 	b.mu.RUnlock()
 	b.store.mu.Lock()
 	defer b.store.mu.Unlock()
+	rawCopies := map[*lexicalRaw]*lexicalRaw{}
 	for id, slot := range b.store.slots {
+		raw := rawCopies[slot.raw]
+		if raw == nil {
+			copy := *slot.raw
+			copy.value = slot.raw.value.clone()
+			raw = &copy
+			rawCopies[slot.raw] = raw
+		}
 		if slot.cell == nil {
-			child.store.slots[id] = &lexicalSlot{value: reflect.New(slot.value.Type()).Elem(), present: new(bool), kind: slot.kind}
+			child.store.slots[id] = &lexicalSlot{value: reflect.New(slot.value.Type()).Elem(), present: new(bool), kind: slot.kind, name: slot.name, raw: raw, forkPending: true}
+			child.track(child.store.slots[id])
 			continue
 		}
 		cell := reflect.New(reflect.TypeOf(slot.cell).Elem())
-		child.store.slots[id] = &lexicalSlot{cell.Interface(), cell.Elem().FieldByName("Value"), cell.Elem().FieldByName("Present").Addr().Interface().(*bool), slot.kind}
+		child.store.slots[id] = &lexicalSlot{cell: cell.Interface(), value: cell.Elem().FieldByName("Value"), present: cell.Elem().FieldByName("Present").Addr().Interface().(*bool), kind: slot.kind, name: slot.name, raw: raw, forkPending: true}
+		child.track(child.store.slots[id])
 	}
+	child.pending = map[lexicalAddress]lexicalPending{}
+	b.addresses.mu.Lock()
+	for address, slot := range b.addresses.slots {
+		raw := rawCopies[slot.raw]
+		if raw == nil {
+			copy := *slot.raw
+			copy.value = slot.raw.value.clone()
+			raw = &copy
+			rawCopies[slot.raw] = raw
+		}
+		child.pending[address] = lexicalPending{slot.name, slot.kind, *slot.present, raw}
+	}
+	b.addresses.mu.Unlock()
 	return child
 }
 
@@ -158,7 +205,7 @@ func (b *LexicalBindings) visible() map[string]*lexicalSlot {
 // shell lookup. It never infers a rich value from serialized shell text.
 func (b *LexicalBindings) ShellValue(session *Session, name string) (string, bool, error) {
 	if slot := b.visible()[name]; slot != nil && *slot.present {
-		value, err := ProjectErr(slot.value.Interface(), slot.kind)
+		value, err := slot.shellText()
 		return value, true, err
 	}
 	value, ok := session.Get(name)
@@ -207,7 +254,7 @@ func (b *LexicalBindings) BeginShell(session *Session) (*LexicalExchange, error)
 		if !*slot.present {
 			continue
 		}
-		text, err := ProjectErr(slot.value.Interface(), slot.kind)
+		text, err := slot.shellText()
 		if err != nil {
 			return nil, err
 		}
@@ -225,7 +272,8 @@ func (b *LexicalBindings) BeginShell(session *Session) (*LexicalExchange, error)
 	return exchange, nil
 }
 
-// EndShell validates all changed overlaid values before committing any cell.
+// EndShell stages supported shell writes, retaining raw scalar spelling and
+// deferring numeric conversion errors until a typed read.
 // The original shell variables are restored on success AND failure so a later
 // typed declaration cannot leak into a closure's earlier captured name view.
 // An unsupported rich mutation never overwrites its native object with JSON.
@@ -249,6 +297,8 @@ func (e *LexicalExchange) EndShell(session *Session) error {
 		slot    *lexicalSlot
 		value   reflect.Value
 		present bool
+		raw     Var
+		scalar  constant.Value
 	}
 	var pending []write
 	for _, overlay := range e.overlays {
@@ -267,53 +317,31 @@ func (e *LexicalExchange) EndShell(session *Session) error {
 		if overlay.slot.kind != KindScalar {
 			return &LexicalWriteError{overlay.name, "writes to a rich projection require an explicit native conversion"}
 		}
-		value, err := lexicalScalarWrite(overlay.name, overlay.slot.value.Type(), actual)
-		if err != nil {
-			return err
+		if actual.Kind != Scalar {
+			return &LexicalWriteError{overlay.name, "array writes require an explicit native conversion"}
 		}
-		pending = append(pending, write{overlay.slot, value, true})
+		scalar := lexicalRawScalar(overlay.slot.value.Type(), actual.Str)
+		value, err := lexicalNativeScalar(overlay.slot, scalar, ValueSite{Name: overlay.name})
+		// Conversion failure belongs to the later typed read. Clear physical
+		// storage so no previous native value can accidentally survive it.
+		if err != nil {
+			value = reflect.Zero(overlay.slot.value.Type())
+		}
+		pending = append(pending, write{overlay.slot, value, true, actual.clone(), scalar})
 	}
 	for _, write := range pending {
 		write.slot.value.Set(write.value)
 		*write.slot.present = write.present
+		write.slot.raw.value, write.slot.raw.scalar, write.slot.raw.present = write.raw, write.scalar, true
+		write.slot.raw.nativeScalar = nil
 	}
 	return nil
 }
 
 func lexicalScalarWrite(name string, typ reflect.Type, value Var) (reflect.Value, error) {
-	failure := func(message string) (reflect.Value, error) { return reflect.Value{}, &LexicalWriteError{name, message} }
 	if value.Kind != Scalar {
-		return failure("array writes require an explicit native conversion")
+		return reflect.Value{}, &LexicalWriteError{name, "array writes require an explicit native conversion"}
 	}
-	result := reflect.New(typ).Elem()
-	switch typ.Kind() {
-	case reflect.String:
-		result.SetString(value.Str)
-	case reflect.Bool:
-		if value.Str != "true" && value.Str != "false" {
-			return failure("shell value cannot be represented as " + typ.String())
-		}
-		result.SetBool(value.Str == "true")
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		n, err := strconv.ParseInt(value.Str, 10, typ.Bits())
-		if err != nil {
-			return failure("shell value cannot be represented as " + typ.String())
-		}
-		if strconv.FormatInt(n, 10) != value.Str {
-			return failure("noncanonical numeric spelling requires shell provenance")
-		}
-		result.SetInt(n)
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
-		n, err := strconv.ParseUint(value.Str, 10, typ.Bits())
-		if err != nil {
-			return failure("shell value cannot be represented as " + typ.String())
-		}
-		if strconv.FormatUint(n, 10) != value.Str {
-			return failure("noncanonical numeric spelling requires shell provenance")
-		}
-		result.SetUint(n)
-	default:
-		return failure("writes to " + typ.String() + " require an explicit native conversion")
-	}
-	return result, nil
+	slot := &lexicalSlot{name: name, value: reflect.New(typ).Elem(), raw: &lexicalRaw{}}
+	return lexicalNativeScalar(slot, lexicalRawScalar(typ, value.Str), ValueSite{Name: name})
 }
