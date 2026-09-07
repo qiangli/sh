@@ -74,7 +74,8 @@ type Program struct {
 // sequential is the per-execution bookkeeping shared by Enter and Block and
 // forked by Child.
 type sequential struct {
-	mu sync.Mutex
+	mu           sync.Mutex
+	shortFailure uint64
 
 	// panics is the active panic chain, oldest first. It mirrors what the
 	// engine reports for a panic raised inside a panic; a recovered panic pops
