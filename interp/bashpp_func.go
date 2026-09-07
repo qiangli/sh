@@ -591,6 +591,13 @@ func (r *Runner) bashPPBindLocalSelector(c *syntax.BashPPCall, root *bashPPCell)
 
 func (r *Runner) bashPPInstantiateFunc(c *syntax.BashPPCall, fn *bashPPFunc) (*bashPPFunc, bool) {
 	params := fn.typeParams()
+	// A function value that was already instantiated — by the context it was
+	// bound in, see [Runner.bashPPContextualFuncValue] — is called at the
+	// types it carries. Re-inferring them from this call's arguments would ask
+	// a `func() int` value to determine `P` from no arguments at all.
+	if len(c.TypeArgs) == 0 && bashPPFullyInstantiated(fn, params) {
+		return fn, true
+	}
 	if len(params) == 0 {
 		if len(c.TypeArgs) > 0 {
 			r.errf("BASHPP-EGENERIC-ARITY: %s is not generic; got %d type argument(s)\n", fn.name(), len(c.TypeArgs))
@@ -1340,6 +1347,13 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 		return nil
 	}
 	params := bashppParams(fn.params())
+	// A function named as an argument becomes a function value before the
+	// type check looks at it, so a parameter declared `func() int` accepts
+	// `f` the same way it accepts a closure; see [Runner.bashPPBindFuncValueArgs].
+	args, bound := r.bashPPBindFuncValueArgs(params, args)
+	if !bound {
+		return nil
+	}
 	if !r.bashPPCheckArgs(fn, params, args) {
 		return nil
 	}
