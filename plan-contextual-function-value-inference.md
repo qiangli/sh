@@ -67,7 +67,8 @@ Not supported (unchanged by this work, and NOT silently accepted):
 
 ## Evidence
 
-Code SHA: see the commit carrying this file. Toolchain: Go 1.27.0
+Frozen at code SHA `199ddeda` ("interp: infer function values from the context
+that receives them"), on base `4bac0b26`. Toolchain: Go 1.27.0
 (`GOTOOLCHAIN=auto` resolving `go1.27.0` from the module cache),
 `PATH=/bin:/usr/bin:/opt/homebrew/bin`,
 `GOCACHE=/tmp/s117-contextual-inference-worker-cache`.
