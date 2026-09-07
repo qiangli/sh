@@ -418,6 +418,13 @@ func (r *Runner) bashPPTaskContext(ctx context.Context) context.Context {
 // the first check prevents already-cancelled work, while the recheck closes
 // the race where cancellation and launcher release happen together.
 func (r *Runner) bashPPArmBeforeBlock(ctx context.Context) bool {
+	if err := observeBlocking(ctx); err != nil {
+		if r.bashPPGoTask {
+			r.bashPPTaskCanceled = true
+		}
+		r.exit.fatal(err)
+		return false
+	}
 	if !r.bashPPGoTask || r.bashPPConcurrent == nil {
 		return true
 	}

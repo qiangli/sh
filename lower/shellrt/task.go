@@ -290,7 +290,13 @@ func (s *Session) Close() error {
 		// The shutdown context outlives cancellation on purpose: a cancelled
 		// program still has to run its EXIT trap and release the backend.
 		s.shellMu.Lock()
-		closeErr := shell.Close(context.WithoutCancel(s.base))
+		var closeErr error
+		if blocking, ok := shell.(BlockingShellRunner); ok {
+			closeErr = blocking.CloseWithBlocking(context.WithoutCancel(s.base), s.Arm)
+		} else {
+			s.Arm()
+			closeErr = shell.Close(context.WithoutCancel(s.base))
+		}
 		s.shellMu.Unlock()
 		if err == nil && closeErr != nil {
 			err = closeErr

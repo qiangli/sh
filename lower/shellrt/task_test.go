@@ -364,12 +364,12 @@ func TestPanickingTaskStillReapsItsOwnTasks(t *testing.T) {
 	}
 }
 
-func TestShellRegionArmsTheLaunchHandshake(t *testing.T) {
+func TestLegacyShellRegionArmsTheLaunchHandshake(t *testing.T) {
 	t.Parallel()
-	s, out := newSession(t)
+	s, out := newSession(t, shellrt.WithShellFactory(legacyShellFactory))
 	release := make(chan struct{})
-	// The body never calls Arm; entering the shell region, a blocking runtime
-	// operation the session owns, has to arm it.
+	// Legacy backends cannot expose semantic suspension points. Entering their
+	// shell region retains the original conservative arming contract.
 	task := s.Go(func(ctx context.Context, child *shellrt.Session) error {
 		if err := child.Shell(ctx, "echo in-task"); err != nil {
 			return err

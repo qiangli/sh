@@ -172,6 +172,17 @@ type ShellRunner interface {
 	Close(ctx context.Context) error
 }
 
+// BlockingShellRunner optionally identifies actual suspension points inside
+// shell execution and EXIT-trap cleanup. The callback releases the owning task
+// launcher and must run before blocking. Immediate operations do not call it.
+// A backend without this interface retains the conservative legacy contract:
+// entering RunShell or Close itself arms the task.
+type BlockingShellRunner interface {
+	ShellRunner
+	RunShellWithBlocking(ctx context.Context, st *State, io Stdio, src string, beforeBlock func()) error
+	CloseWithBlocking(ctx context.Context, beforeBlock func()) error
+}
+
 // ShellFactory builds a session's backend once the session's initial state and
 // streams are fully configured. It is how a backend is seeded with the
 // directory, environment and options the session options established.
@@ -541,11 +552,10 @@ var ErrNoShell = errors.New("shellrt: no dynamic shell backend configured")
 // A non-zero command status is reported through [Session.Status], not as an
 // error. The returned error is reserved for parse and runtime faults.
 //
-// Shell is a blocking runtime operation, so it arms the launch handshake
-// before running: a task body whose first act is a shell region never has to
-// call [Session.Arm] itself.
+// A BlockingShellRunner arms at its first actual blocking operation; a legacy
+// backend arms before RunShell. Thus immediate builtins retain their launch
+// until their status is settled, while blocking providers release the owner.
 func (s *Session) Shell(ctx context.Context, src string) error {
-	s.Arm()
 	s.mu.Lock()
 	shell, st, streams := s.shell, s.state.Clone(), s.io
 	s.mu.Unlock()
@@ -556,7 +566,13 @@ func (s *Session) Shell(ctx context.Context, src string) error {
 		ctx = s.base
 	}
 	s.shellMu.Lock()
-	err := shell.RunShell(ctx, &st, streams, src)
+	var err error
+	if blocking, ok := shell.(BlockingShellRunner); ok {
+		err = blocking.RunShellWithBlocking(ctx, &st, streams, src, s.Arm)
+	} else {
+		s.Arm()
+		err = shell.RunShell(ctx, &st, streams, src)
+	}
 	s.shellMu.Unlock()
 	s.mu.Lock()
 	s.state = st
