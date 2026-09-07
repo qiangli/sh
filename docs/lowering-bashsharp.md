@@ -122,11 +122,10 @@ explicitly unsupported until runtime membership guards are available.
 Concrete function types and nested expression calls consume the parser's new
 nodes. Legacy bare `func` parameters remain call-site inferred; the null checker
 applies nullable callable analysis to concrete `func(...)` types. Returned call
-nodes currently report a positioned unsupported diagnostic because the current
-interpreter still treats their retained words as literal values. Parser and
-interpreter consumer repairs must precede that native dispatch.
+and scalar return-expression nodes now dispatch directly after the matching
+interpreter consumer repairs, including tuple forwarding and lazy nil guards.
 
 `TestSharpCallPublicManifest` compares actual compiled and interpreted public
 default, named-argument and enum fixtures. Static rejection rows compare exact
-public messages and require no artifact. Null-flow and readonly runtime artifact
-coverage is still a later integration slice; this test does not replace it.
+public messages and require no artifact. Null-flow artifact execution is covered by the same manifest test. Readonly
+runtime artifact coverage remains a later integration slice.

@@ -97,8 +97,15 @@ func (e *emitter) nativeWordExpr(n syntax.Node, text string) (string, error) {
 	if problem != nil {
 		return "", problem
 	}
-	ast.Inspect(x, func(n ast.Node) bool {
-		if id, ok := n.(*ast.Ident); ok {
+	ast.Inspect(x, func(node ast.Node) bool {
+		if call, ok := node.(*ast.CallExpr); ok && e.execution {
+			if id, ok := call.Fun.(*ast.Ident); ok && (e.funcs[id.Name] || e.bound(id.Name)) {
+				program, _ := parser.ParseExpr(e.program())
+				site, _ := parser.ParseExpr(e.callSite(n, id.Name))
+				call.Args = append([]ast.Expr{program, site}, call.Args...)
+			}
+		}
+		if id, ok := node.(*ast.Ident); ok {
 			id.Name = e.goName(id.Name)
 		}
 		return true
@@ -130,6 +137,9 @@ func (e *emitter) parameter(p *syntax.ParamExp) (string, error) {
 	}
 	if p.Param != nil && p.Param.Value == "?" && p.Index == nil && p.Exp == nil && !p.Length && !p.Excl {
 		e.bridge = true
+		if e.execution {
+			return e.program() + ".Status()", nil
+		}
 		return e.prefix + "rt.Status", nil
 	}
 	// Only the simple $name and ${name} bridge is implemented. All modifiers,
@@ -170,6 +180,12 @@ func (e *emitter) stringParts(parts []syntax.WordPart) (string, error) {
 			if err != nil {
 				return "", err
 			}
+			if p.Param != nil && p.Index == nil && (p.Exp == nil || p.Exp.Op == syntax.DefaultUnset) && !p.Length {
+				x, err = e.projectBinding(p, p.Param.Value, x)
+				if err != nil {
+					return "", err
+				}
+			}
 			e.bridge = true
 			out = append(out, e.prefix+"rt.Word("+x+")")
 		case *syntax.ArithmExp:
@@ -206,7 +222,7 @@ func (e *emitter) shellWord(w *syntax.Word) (string, error) {
 	}
 	if len(w.Parts) == 1 {
 		if l, ok := w.Parts[0].(*syntax.Lit); ok && e.inFunc && e.bound(l.Value) {
-			return l.Value, nil
+			return e.projectBinding(w, l.Value, l.Value)
 		}
 	}
 	return e.stringParts(w.Parts)
@@ -267,6 +283,7 @@ func (e *emitter) shellWithTail(c *syntax.CallExpr, tail string) (string, error)
 				op = " := "
 				e.bind(name)
 			}
+			e.projections.projectionInvalidate(name)
 			out = append(out, name+op+v+e.unused([]string{name}))
 		}
 		return strings.Join(out, "\n"), nil
@@ -316,6 +333,9 @@ func (e *emitter) shellWithTail(c *syntax.CallExpr, tail string) (string, error)
 	method := "Printf"
 	if name == "echo" {
 		method = "Echo"
+	}
+	if e.execution {
+		return "if " + e.prefix + "err := " + e.program() + "." + method + "(" + strings.Join(args, ", ") + "); " + e.prefix + "err != nil {" + e.program() + ".Fail(" + e.prefix + "err)}", nil
 	}
 	return "if " + e.prefix + "err := " + e.prefix + "rt." + method + "(" + strings.Join(args, ", ") + "); " + e.prefix + "err != nil { " + e.prefix + "rt.Fail(" + e.prefix + "err) }", nil
 }

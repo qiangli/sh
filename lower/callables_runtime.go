@@ -1,0 +1,281 @@
+package lower
+
+import (
+	"fmt"
+	"mvdan.cc/sh/v3/syntax"
+	"sort"
+	"strconv"
+	"strings"
+)
+
+func (e *emitter) needsExecution(file *syntax.File) {
+	syntax.Walk(file, func(node syntax.Node) bool {
+		switch n := node.(type) {
+		case *syntax.BashPPAgenticBlock, *syntax.BashPPGo, *syntax.BashPPMakeChan, *syntax.BashPPSend, *syntax.BashPPReceive, *syntax.BashPPClose, *syntax.BashPPSelect:
+			e.execution = true
+		case *syntax.BashPPFuncDecl:
+			e.execution = e.execution || n.Agentic != nil
+		}
+		return true
+	})
+	if e.execution {
+		e.bridge = true
+	}
+}
+func (e *emitter) program() string {
+	if e.programExpr != "" {
+		return e.programExpr
+	}
+	return e.prefix + "program"
+}
+func (e *emitter) runtimeScope() RuntimeContext {
+	p := e.program()
+	return RuntimeContext{Context: p + ".Context", Session: p + ".Session", Channels: p + ".Channels"}
+}
+func (e *emitter) privateSignature(signature string) string {
+	if !e.execution {
+		return signature
+	}
+	parameters := e.prefix + "program *" + e.prefix + "rt.Program, " + e.prefix + "site " + e.prefix + "rt.Site"
+	if signature[1] != ')' {
+		parameters += ", "
+	}
+	return "(" + parameters + signature[1:]
+}
+func (e *emitter) callSite(n syntax.Node, name string) string {
+	return fmt.Sprintf("%srt.Site{Name:%s}", e.prefix, strconv.Quote(name))
+}
+func (e *emitter) resultStorage(fields []*syntax.BashPPField) (declarations, values string, err error) {
+	var namesList []string
+	for _, f := range fields {
+		typ := "any"
+		if f.FieldType != nil || f.FieldTypeExpr != nil {
+			typ, err = e.fieldType(f)
+			if err != nil {
+				return "", "", err
+			}
+		}
+		if typ == "func" {
+			return "", "", e.fail(f, CodeUnsupported, "runtime returned callable needs public/private signature adapter")
+		}
+		count := len(f.Names)
+		if count == 0 {
+			count = 1
+		}
+		for j := 0; j < count; j++ {
+			name := fmt.Sprintf("%sresult%d", e.prefix, len(namesList))
+			declarations += "var " + name + " " + typ + "\n"
+			namesList = append(namesList, name)
+		}
+	}
+	return declarations, strings.Join(namesList, ","), nil
+}
+func (e *emitter) programEntry(name string, marked bool, results []*syntax.BashPPField) (string, error) {
+	storage, values, err := e.resultStorage(results)
+	if err != nil {
+		return "", err
+	}
+	p := e.prefix + "program"
+	site := e.prefix + "site"
+	failure := e.prefix + "entryError"
+	child := e.prefix + "enteredProgram"
+	return site + ".Name = " + strconv.Quote(name) + "\n" + child + ", " + failure + " := " + p + ".Enter(" + site + ", " + strconv.FormatBool(marked) + ")\nif " + failure + " != nil { " + p + ".Fail(" + failure + ")\n" + storage + "return " + values + "\n}\n" + p + " = " + child + "\n", nil
+}
+func (e *emitter) runtimeFunction(f *syntax.BashPPFuncDecl, signature, body, generics string) (string, error) {
+	if f.Receiver != nil {
+		return "", e.fail(f, CodeUnsupported, "runtime methods need private capability-interface adapters")
+	}
+	entry, err := e.programEntry(f.Name.Value, f.Agentic != nil, f.Results)
+	if err != nil {
+		return "", err
+	}
+	private := e.goName(f.Name.Value)
+	var args []string
+	for _, field := range f.Params {
+		if field.FieldType != nil && strings.HasPrefix(field.FieldType.Value, "func") {
+			return "", e.fail(field, CodeUnsupported, "runtime public callable parameters need native adapters")
+		}
+		for _, name := range field.Names {
+			args = append(args, name.Value)
+		}
+		if field.Ellipsis.IsValid() && len(args) > 0 {
+			args[len(args)-1] += "..."
+		}
+	}
+	var typeArgs []string
+	for _, p := range f.TypeParams {
+		typeArgs = append(typeArgs, names(p.Names)...)
+	}
+	instance := ""
+	if len(typeArgs) > 0 {
+		instance = "[" + strings.Join(typeArgs, ",") + "]"
+	}
+	p := e.prefix + "program"
+	invocation := private + instance + "(" + p + ", " + e.prefix + "rt.Site{Name:" + strconv.Quote(f.Name.Value) + "}"
+	if len(args) > 0 {
+		invocation += ", " + strings.Join(args, ",")
+	}
+	invocation += ")"
+	storage, values, err := e.resultStorage(f.Results)
+	if err != nil {
+		return "", err
+	}
+	if values != "" {
+		invocation = values + " = " + invocation
+	}
+	public := f.Name.Value
+	if public == "main" {
+		public = e.prefix + "sourceMain"
+	}
+	wrapper := "func " + public + generics + signature + " {\n" + p + ",err := " + e.prefix + "rt.NewProgram()\nif err != nil {panic(err)}\n" + storage + "err = " + p + ".Run(func(" + p + " *" + e.prefix + "rt.Program){" + invocation + "})\nif err != nil {panic(err)}\nreturn " + values + "\n}\n"
+	return e.mark(f) + "func " + private + generics + e.privateSignature(signature) + " {\n" + entry + body + "}\n" + wrapper, nil
+}
+func (e *emitter) programMain(body string) string {
+	p := e.prefix + "program"
+	return "func main(){\n" + p + ", err := " + e.prefix + "rt.NewProgram()\nif err != nil { " + e.prefix + "fmt.Fprintln(" + e.prefix + "os.Stderr,err); " + e.prefix + "os.Exit(1) }\nerr = " + p + ".Run(func(" + p + " *" + e.prefix + "rt.Program){\n" + body + "})\nif err != nil {" + p + ".Fail(err)}\nif status:=" + p + ".Status();status!=0 {" + e.prefix + "os.Exit(status)}\n}\n"
+}
+
+func (e *emitter) agenticBlock(n *syntax.BashPPAgenticBlock) (string, error) {
+	parent := e.program()
+	child := fmt.Sprintf("%sblockProgram%d", e.prefix, len(e.marks))
+	previous := e.programExpr
+	e.programExpr = child
+	defer func() { e.programExpr = previous }()
+	text, err := e.runtimeStatements(n.Body.Stmts, e.runtimeScope())
+	if err != nil {
+		return "", err
+	}
+	// Agentic changes assistance, not lexical bindings: no Go braces or new scope.
+	return child + " := " + parent + ".Block()\n_ = " + child + "\n" + text, nil
+}
+func (e *emitter) runtimeStatements(stmts []*syntax.Stmt, _ RuntimeContext) (string, error) {
+	var out strings.Builder
+	for _, stmt := range stmts {
+		text, err := e.statement(stmt)
+		if err != nil {
+			return "", err
+		}
+		out.WriteString(text)
+	}
+	return out.String(), nil
+}
+func (e *emitter) programGo(n *syntax.BashPPGo) (string, error) {
+	c := n.Call
+	if c == nil {
+		return "", e.fail(n, CodeExpr, "missing task callable")
+	}
+	var callee string
+	var err error
+	if c.FuncLit != nil {
+		callee, err = e.literal(c.FuncLit)
+	} else if len(c.Fun) == 1 {
+		callee = e.goName(c.Fun[0].Value)
+	} else {
+		return "", e.fail(c, CodeUnsupported, "task method adapter")
+	}
+	if err != nil {
+		return "", err
+	}
+	if len(c.ArgNames) > 0 {
+		return "", e.fail(c, CodeUnsupported, "task named-argument capture adapter")
+	}
+	var out strings.Builder
+	fmt.Fprintf(&out, "{\n%staskCallee := %s\n", e.prefix, callee)
+	var args []string
+	for i, w := range c.Args {
+		value, err := e.argument(w)
+		if err != nil {
+			return "", err
+		}
+		name := fmt.Sprintf("%staskArg%d", e.prefix, i)
+		fmt.Fprintf(&out, "%s := %s\n", name, value)
+		args = append(args, name)
+	}
+	if c.Ellipsis.IsValid() && len(args) > 0 {
+		args[len(args)-1] += "..."
+	}
+	parent := e.prefix + "taskParent"
+	p := e.prefix + "program"
+	rt := e.prefix + "rt."
+	fmt.Fprintf(&out, "%s := %s\n%s.Session.Go(%sChannelTask(func(ctx %sTaskContext, session *%sSession)error{\n%s := %s.Child(ctx,session)\n", parent, e.program(), parent, rt, rt, rt, p, parent)
+	invocation := e.prefix + "taskCallee(" + p + "," + e.callSite(c, "func")
+	if len(args) > 0 {
+		invocation += "," + strings.Join(args, ",")
+	}
+	invocation += ")"
+	out.WriteString(invocation + "\nreturn " + p + ".Session.Join()\n}))\n}\n")
+	return out.String(), nil
+}
+
+// Infer the native channel signature of legacy untyped parameters from the
+// parser's committed make-channel nodes and resolved in-unit calls.
+func (e *emitter) inferChannelParameters(file *syntax.File) error {
+	for round := 0; round < 3; round++ {
+		for _, owner := range append([]*syntax.BashPPFuncDecl{nil}, e.functionList()...) {
+			local := map[string]string{}
+			var root syntax.Node = file
+			if owner != nil {
+				root = owner.Body
+				for _, p := range owner.Params {
+					if typ := e.inferredParams[p]; typ != "" {
+						for _, n := range p.Names {
+							local[n.Value] = typ
+						}
+					}
+				}
+			}
+			syntax.Walk(root, func(node syntax.Node) bool {
+				if _, ok := node.(*syntax.BashPPFuncDecl); ok {
+					return false
+				}
+				if decl, ok := node.(*syntax.BashPPShortDecl); ok && decl.MakeChan != nil && len(decl.Lhs) == 1 {
+					local[decl.Lhs[0].Value] = "chan " + decl.MakeChan.ChanType.Elem.Value
+				}
+				return true
+			})
+			var problem error
+			syntax.Walk(root, func(node syntax.Node) bool {
+				if _, ok := node.(*syntax.BashPPFuncDecl); ok {
+					return false
+				}
+				call, ok := node.(*syntax.BashPPCall)
+				if !ok || len(call.Fun) != 1 {
+					return true
+				}
+				target := e.functionDecls[call.Fun[0].Value]
+				if target == nil {
+					return true
+				}
+				index := 0
+				for _, field := range target.Params {
+					for range field.Names {
+						if index < len(call.Args) && field.FieldType == nil && field.FieldTypeExpr == nil {
+							if typ := local[call.Args[index].Lit()]; typ != "" {
+								if prior := e.inferredParams[field]; prior != "" && prior != typ {
+									problem = e.fail(call, CodeType, "channel parameter has incompatible call-site types")
+								} else {
+									e.inferredParams[field] = typ
+								}
+							}
+						}
+						index++
+					}
+				}
+				return true
+			})
+			if problem != nil {
+				return problem
+			}
+		}
+	}
+	return nil
+}
+func (e *emitter) functionList() []*syntax.BashPPFuncDecl {
+	var result []*syntax.BashPPFuncDecl
+	// Source positions make inference deterministic despite map storage.
+	for _, f := range e.functionDecls {
+		result = append(result, f)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Pos().Offset() < result[j].Pos().Offset() })
+	return result
+}

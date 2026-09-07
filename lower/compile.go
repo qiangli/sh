@@ -18,30 +18,38 @@ import (
 )
 
 type emitter struct {
-	options         Options
-	prefix          string
-	marks           []Mapping
-	scopes          []map[string]bool
-	funcs           map[string]bool
-	bridge          bool
-	output          bool
-	inFunc          bool
-	globals         map[string]bool
-	globalTypes     map[string]string
-	typeNames       map[string]bool
-	visibleGlobals  map[string]bool
-	functionGlobals map[string]bool
-	panicSupport    bool
-	imports         map[string]string
-	callableParams  map[*syntax.BashPPField]string
-	resultTypes     []string
-	dotNames        map[string]bool
-	declaredGlobals map[string]bool
-	iotaValue       *int
-	bigIntegers     bool
-	functionDecls   map[string]*syntax.BashPPFuncDecl
-	enumMembers     map[string][]*syntax.Lit
-	globalDecls     strings.Builder
+	options            Options
+	prefix             string
+	marks              []Mapping
+	scopes             []map[string]bool
+	funcs              map[string]bool
+	bridge             bool
+	output             bool
+	inFunc             bool
+	globals            map[string]bool
+	globalTypes        map[string]string
+	typeNames          map[string]bool
+	visibleGlobals     map[string]bool
+	functionGlobals    map[string]bool
+	panicSupport       bool
+	imports            map[string]string
+	callableParams     map[*syntax.BashPPField]string
+	resultTypes        []string
+	dotNames           map[string]bool
+	declaredGlobals    map[string]bool
+	iotaValue          *int
+	bigIntegers        bool
+	functionDecls      map[string]*syntax.BashPPFuncDecl
+	methodDeclarations []*syntax.BashPPFuncDecl
+	enumMembers        map[string][]*syntax.Lit
+	projections        projector
+	declaredTypes      map[string]*syntax.BashPPDecl
+	writtenNames       map[string]bool
+	execution          bool
+	programExpr        string
+	sourceName         string
+	inferredParams     map[*syntax.BashPPField]string
+	globalDecls        strings.Builder
 }
 
 // Compile returns canonical Go and mappings, or positioned diagnostics with no
@@ -65,7 +73,14 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 	if !token.IsIdentifier(options.Package) || token.Lookup(options.Package).IsKeyword() {
 		return nil, ErrorList{{Code: CodeType, Msg: "invalid package name", Pos: file.Pos()}}
 	}
-	e := &emitter{functionDecls: map[string]*syntax.BashPPFuncDecl{}, enumMembers: map[string][]*syntax.Lit{}, options: options, funcs: map[string]bool{}, scopes: []map[string]bool{{}}, globals: map[string]bool{}, visibleGlobals: map[string]bool{}, imports: map[string]string{}, callableParams: map[*syntax.BashPPField]string{}, dotNames: map[string]bool{}, declaredGlobals: map[string]bool{}, typeNames: map[string]bool{}, globalTypes: globalTypes}
+	e := &emitter{writtenNames: map[string]bool{}, inferredParams: map[*syntax.BashPPField]string{}, declaredTypes: map[string]*syntax.BashPPDecl{}, functionDecls: map[string]*syntax.BashPPFuncDecl{}, enumMembers: map[string][]*syntax.Lit{}, options: options, funcs: map[string]bool{}, scopes: []map[string]bool{{}}, globals: map[string]bool{}, visibleGlobals: map[string]bool{}, imports: map[string]string{}, callableParams: map[*syntax.BashPPField]string{}, dotNames: map[string]bool{}, declaredGlobals: map[string]bool{}, typeNames: map[string]bool{}, globalTypes: globalTypes}
+	e.sourceName = options.Origin
+	if e.sourceName == "" {
+		e.sourceName = file.Name
+	}
+	e.projections.projectionPush()
+	e.needsExecution(file)
+	e.findProjectionWrites(file)
 	// Allocate private names from the tree rather than reserving user identifiers.
 	for n := 0; ; n++ {
 		e.prefix = fmt.Sprintf("__bpp%d_", n)
@@ -82,6 +97,9 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 	}
 	for _, s := range file.Stmts {
 		if f, ok := s.Cmd.(*syntax.BashPPFuncDecl); ok {
+			if f.Receiver != nil {
+				e.methodDeclarations = append(e.methodDeclarations, f)
+			}
 			if f.Receiver == nil {
 				e.funcs[f.Name.Value] = true
 				e.functionDecls[f.Name.Value] = f
@@ -95,6 +113,7 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 		case *syntax.BashPPDecl:
 			if n.Kw.Value == "type" {
 				e.typeNames[n.Name.Value] = true
+				e.declaredTypes[n.Name.Value] = n
 			}
 			if n.Kw.Value == "var" || n.Kw.Value == "const" {
 				e.globals[n.Name.Value] = true
@@ -109,6 +128,11 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 	}
 	if err := e.discoverCallableParams(file); err != nil {
 		return nil, err
+	}
+	if e.execution {
+		if err := e.inferChannelParameters(file); err != nil {
+			return nil, err
+		}
 	}
 	var declarations, body strings.Builder
 	for _, s := range file.Stmts {
@@ -159,7 +183,7 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 	if e.bigIntegers {
 		imports = append(imports, "math/big")
 	}
-	if e.panicSupport {
+	if e.execution || e.panicSupport {
 		e.output = true
 		imports = append(imports, "os")
 	}
@@ -189,15 +213,18 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 	if e.bridge {
 		fmt.Fprintf(&raw, "import %srt %s\n", e.prefix, strconv.Quote(options.Runtime))
 	}
-	if e.panicSupport {
+	if e.execution || e.panicSupport {
 		fmt.Fprintf(&raw, "import %sos \"os\"\n", e.prefix)
 	}
 	if e.bigIntegers {
 		fmt.Fprintf(&raw, "import %sbig \"math/big\"\n", e.prefix)
 	}
 	raw.WriteString(e.importLines())
-	if e.panicSupport {
+	if e.panicSupport && !e.execution {
 		raw.WriteString(e.panicHelpers())
+	}
+	if e.execution && e.globalTypes == nil && len(e.globals) > 0 {
+		fmt.Fprintf(&raw, "var %sprogram *%srt.Program\n", e.prefix, e.prefix)
 	}
 	raw.WriteString(e.globalDecls.String())
 	raw.WriteString(declarations.String())
@@ -209,15 +236,24 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 	if e.panicSupport {
 		head = e.panicBoundary()
 	}
-	fmt.Fprintf(&raw, "func main() {\n%s%s%s}\n", head, body.String(), tail)
+	if e.execution {
+		raw.WriteString(e.programMain(body.String()))
+	} else {
+		fmt.Fprintf(&raw, "func main() {\n%s%s%s}\n", head, body.String(), tail)
+	}
 	reset := ""
-	if e.bridge {
+	if e.execution {
+		reset = e.program() + ".SetStatus(0)\n"
+	} else if e.bridge {
 		reset = e.prefix + "rt.Status = 0\n"
 	}
 	rawText := strings.ReplaceAll(raw.String(), "/*"+e.prefix+"reset*/", reset)
 	status0 := ""
 	status1 := ""
-	if e.bridge {
+	if e.execution {
+		status0 = e.program() + ".SetStatus(0);"
+		status1 = e.program() + ".SetStatus(1);"
+	} else if e.bridge {
 		status0 = e.prefix + "rt.Status = 0;"
 		status1 = e.prefix + "rt.Status = 1;"
 	}
@@ -289,6 +325,17 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 					if p == checked {
 						return ""
 					}
+					if p.Path() == options.Runtime {
+						return e.prefix + "rt"
+					}
+					if p.Path() == "math/big" && e.bigIntegers {
+						return e.prefix + "big"
+					}
+					for alias, path := range e.imports {
+						if path == p.Path() {
+							return alias
+						}
+					}
 					return p.Name()
 				})
 			}
@@ -307,19 +354,7 @@ func (i bridgeImporter) Import(path string) (*types.Package, error) {
 	if path != i.path {
 		return i.fallback.Import(path)
 	}
-	fs := token.NewFileSet()
-	f, err := parser.ParseFile(fs, "bridge.go", `package shellrt
-func Printf(format string,args ...any) error{return nil}
-func Echo(args ...any) error{return nil}
-func Word(v any) string{return ""}
-func Fail(err error){}
-func Exit(){}
-var Status int
-`, 0)
-	if err != nil {
-		return nil, err
-	}
-	return new(types.Config).Check(path, fs, []*ast.File{f}, nil)
+	return i.importRuntime(path)
 }
 func nodeName(n syntax.Node) string {
 	if n == nil {
@@ -374,10 +409,14 @@ func (e *emitter) bound(name string) bool {
 func (e *emitter) bind(name string) {
 	if name != "_" {
 		e.scopes[len(e.scopes)-1][name] = true
+		e.projections.projectionBind(name, scalarProjection())
 	}
 }
-func (e *emitter) push() { e.scopes = append(e.scopes, map[string]bool{}) }
-func (e *emitter) pop()  { e.scopes = e.scopes[:len(e.scopes)-1] }
+func (e *emitter) push() {
+	e.scopes = append(e.scopes, map[string]bool{})
+	e.projections.projectionPush()
+}
+func (e *emitter) pop() { e.scopes = e.scopes[:len(e.scopes)-1]; e.projections.projectionPop() }
 func (e *emitter) statementFlags(s *syntax.Stmt) error {
 	if s.Negated || s.Background || s.Coprocess || s.Disown || len(s.Redirs) > 0 {
 		return e.fail(s, CodeUnsupported, "statement flags and redirections need the shell runtime slice")
@@ -403,6 +442,9 @@ func (e *emitter) statement(s *syntax.Stmt) (string, error) {
 		if len(n.Results) > 0 {
 			reset = "/*" + e.prefix + "reset*/"
 		}
+	}
+	if e.execution && reset != "" {
+		reset = e.program() + ".SetStatus(0)\n"
 	}
 	return e.mark(s.Cmd) + reset + text + "\n", nil
 }
@@ -436,7 +478,10 @@ func (e *emitter) unused(ns []string) string {
 	return out
 }
 func (e *emitter) function(f *syntax.BashPPFuncDecl) (string, error) {
-	if f.Agentic != nil {
+	previousProgram := e.programExpr
+	e.programExpr = ""
+	defer func() { e.programExpr = previousProgram }()
+	if f.Agentic != nil && !e.execution {
 		return "", e.fail(f, CodeUnsupported, "marked, generic and receiver functions need callable metadata lowering")
 	}
 	// Package functions cannot see main locals. Do not accidentally resolve a
@@ -451,10 +496,25 @@ func (e *emitter) function(f *syntax.BashPPFuncDecl) (string, error) {
 	e.inFunc = true
 	defer func() { e.inFunc = savedFunc }()
 	saved := e.scopes
+	savedProjections := e.projections
+	e.projections = projector{}
+	e.projections.projectionPush()
+	for name := range e.visibleGlobals {
+		if p, ok := savedProjections.projectionLookup(name); ok {
+			e.projections.projectionBind(name, p)
+		}
+	}
+	e.projections.projectionPush()
+	defer func() { e.projections = savedProjections }()
 	e.scopes = []map[string]bool{{}}
 	defer func() { e.scopes = saved }()
 	if f.Receiver != nil {
 		e.bind(f.Receiver.Name.Value)
+		typ := f.Receiver.RecvType.Value
+		if f.Receiver.Pointer {
+			typ = "*" + typ
+		}
+		e.projections.projectionBind(f.Receiver.Name.Value, e.projectionType(typ, nil))
 	}
 	for _, p := range f.TypeParams {
 		for _, n := range p.Names {
@@ -488,6 +548,9 @@ func (e *emitter) function(f *syntax.BashPPFuncDecl) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if e.execution {
+		return e.runtimeFunction(f, signature, body, generics)
+	}
 	return e.mark(f) + "func " + recv + e.goName(f.Name.Value) + generics + signature + " {\n" + body + "}\n", nil
 }
 func scalarType(s string) bool {
@@ -509,6 +572,9 @@ func (e *emitter) fields(fs []*syntax.BashPPField) (string, error) {
 			s += " "
 		}
 		typ := "any"
+		if inferred := e.inferredParams[f]; inferred != "" {
+			typ = inferred
+		}
 		if f.FieldType != nil || f.FieldTypeExpr != nil {
 			var err error
 			if f.FieldType != nil && f.FieldType.Value == "func" {
@@ -528,12 +594,29 @@ func (e *emitter) fields(fs []*syntax.BashPPField) (string, error) {
 		if f.Ellipsis.IsValid() && !strings.HasPrefix(typ, "...") {
 			typ = "..." + typ
 		}
+		for _, name := range ns {
+			e.projections.projectionBind(name, e.projectionType(typ, nil))
+		}
 		out = append(out, s+typ)
 	}
 	return strings.Join(out, ", "), nil
 }
 func (e *emitter) command(c syntax.Command) (string, error) {
 	switch n := c.(type) {
+	case *syntax.BashPPAgenticBlock:
+		return e.agenticBlock(n)
+	case *syntax.BashPPSend:
+		return e.runtimeSend(n, e.runtimeScope())
+	case *syntax.BashPPReceive:
+		value, err := e.runtimeReceive(n, e.runtimeScope(), false)
+		return "_ = " + value, err
+	case *syntax.BashPPClose:
+		return e.runtimeClose(n, e.runtimeScope())
+	case *syntax.BashPPSelect:
+		return e.runtimeSelect(n, e.runtimeScope(), e.runtimeStatements)
+	case *syntax.BashPPGo:
+		return e.programGo(n)
+
 	case *syntax.BashPPCommandCall:
 		tail, err := e.call(n.Call)
 		if err != nil {
@@ -582,15 +665,18 @@ func (e *emitter) command(c syntax.Command) (string, error) {
 			init = " = " + init
 		}
 		e.bind(n.Name.Value)
+		projection := e.declarationProjection(n)
+		if projection.kind == projectFloat && !projection.hasText {
+			return "", e.fail(n, CodeUnsupported, "initialized typed float needs certified scalar conversion semantics")
+		}
+		e.projections.projectionBind(n.Name.Value, projection)
 		return n.Kw.Value + " " + n.Name.Value + typ + init + e.unused([]string{n.Name.Value}), nil
 	case *syntax.BashPPShortDecl:
 		var rhs string
 		var err error
 		switch {
 		case n.Call != nil:
-			if len(n.Call.Fun) > 1 && e.imports[n.Call.Fun[0].Value] != "" {
-				return "", e.fail(n, CodeUnsupported, "imported result binding needs object-projection metadata at the shell boundary")
-			}
+
 			rhs, err = e.call(n.Call)
 		case n.Expr != nil:
 			rhs, err = e.expr(n.Expr)
@@ -598,8 +684,10 @@ func (e *emitter) command(c syntax.Command) (string, error) {
 			rhs, err = e.literal(n.FuncLit)
 		case len(n.MethodValue) > 0:
 			rhs = strings.Join(names(n.MethodValue), ".")
-		case n.MakeChan != nil || n.Recv != nil:
-			return "", e.fail(n, CodeUnsupported, "callable/channel declaration variant")
+		case n.MakeChan != nil:
+			rhs, err = e.runtimeMakeChannel(n.MakeChan, e.runtimeScope())
+		case n.Recv != nil:
+			rhs, err = e.runtimeReceive(n.Recv, e.runtimeScope(), len(n.Lhs) == 2)
 		default:
 			if len(n.Lhs) > 1 && len(n.Rhs) > 1 {
 				var parts []string
@@ -627,8 +715,20 @@ func (e *emitter) command(c syntax.Command) (string, error) {
 			}
 		}
 		ns := names(n.Lhs)
-		for _, name := range ns {
+		for i, name := range ns {
+			p := scalarProjection()
+			switch {
+			case n.Call != nil:
+				p = e.callProjection(n.Call, i)
+			case n.Expr != nil:
+				if i == 0 {
+					p = e.projectionExpr(n.Expr)
+				}
+			case len(n.Rhs) > i:
+				p = e.projectionWord(n.Rhs[i])
+			}
 			e.bind(name)
+			e.projections.projectionBind(name, p)
 		}
 		post := ""
 		if e.isRecover(n.Call) {
@@ -640,13 +740,21 @@ func (e *emitter) command(c syntax.Command) (string, error) {
 		return strings.Join(ns, ", ") + " := " + rhs + post + e.unused(ns), nil
 	case *syntax.BashPPCall:
 		if e.isRecover(n) {
+			if e.execution {
+				return e.program() + ".Recovered(recover())", nil
+			}
 			e.panicSupport = true
 			return "if " + e.prefix + "recovered := recover(); " + e.prefix + "recovered == nil { /*" + e.prefix + "status1*/ } else { " + e.prefix + "popPanic(); /*" + e.prefix + "status0*/ }", nil
 		}
 		return e.call(n)
 	case *syntax.BashPPReturn:
+		if n.Expr != nil {
+			value, err := e.expr(n.Expr)
+			return "return " + value, err
+		}
 		if n.Call != nil {
-			return "", e.fail(n, CodeUnsupported, "returned call requires interpreter callable result propagation")
+			value, err := e.call(n.Call)
+			return "return " + value, err
 		}
 		if len(e.resultTypes) == 0 && len(n.Results) > 0 {
 			if len(n.Results) != 1 {
@@ -657,6 +765,9 @@ func (e *emitter) command(c syntax.Command) (string, error) {
 				return "", err
 			}
 			e.bridge = true
+			if e.execution {
+				return e.program() + ".SetStatus(int(" + x + "))\nreturn", nil
+			}
 			return e.prefix + "rt.Status = int(" + x + ")\nreturn", nil
 		}
 		if n.FuncLit != nil {
@@ -676,9 +787,13 @@ func (e *emitter) command(c syntax.Command) (string, error) {
 		}
 		return "return " + strings.Join(values, ", "), nil
 	case *syntax.BashPPForAssign:
+		e.projections.projectionInvalidate(n.Name.Value)
 		x, err := e.expr(n.Expr)
 		return n.Name.Value + " = " + x, err
 	case *syntax.BashPPAssign:
+		for _, name := range n.Names {
+			e.projections.projectionInvalidate(name.Value)
+		}
 		if n.Call != nil {
 			rhs, err := e.call(n.Call)
 			if err != nil {
@@ -754,6 +869,9 @@ func (e *emitter) command(c syntax.Command) (string, error) {
 			}
 			e.panicSupport = true
 			x, err := e.argument(n.Call.Args[0])
+			if e.execution {
+				return "defer func(p *" + e.prefix + "rt.Program,v any){panic(p.PushPanic(v))}(" + e.program() + "," + x + ")", err
+			}
 			return "defer func(v any) { panic(" + e.prefix + "pushPanic(v)) }(" + x + ")", err
 		}
 		x, err := e.call(n.Call)
@@ -943,6 +1061,9 @@ func (e *emitter) call(c *syntax.BashPPCall) (string, error) {
 			}
 			args = append(args, x)
 		}
+		if e.execution {
+			args = append([]string{e.program(), e.callSite(c, "func")}, args...)
+		}
 		return "(" + callee + ")(" + strings.Join(args, ",") + ")", nil
 	}
 	if len(c.Fun) == 0 {
@@ -1005,7 +1126,21 @@ func (e *emitter) call(c *syntax.BashPPCall) (string, error) {
 		}
 	}
 	if !e.funcs[name] && (name == "print" || name == "println") {
+		for i, w := range c.Args {
+			projected, err := e.projectionArgument(w, args[i])
+			if err != nil {
+				return "", err
+			}
+			args[i] = projected
+		}
 		e.output = true
+		if e.execution {
+			method := "Print"
+			if name == "println" {
+				method = "Println"
+			}
+			return e.program() + "." + method + "(" + strings.Join(args, ",") + ")", nil
+		}
 		if name == "println" {
 			return e.prefix + "fmt.Println(" + strings.Join(args, ", ") + ")", nil
 		}
@@ -1023,6 +1158,9 @@ func (e *emitter) call(c *syntax.BashPPCall) (string, error) {
 			return "", e.fail(c, CodeResult, "panic takes one argument")
 		}
 		e.panicSupport = true
+		if e.execution {
+			return "panic(" + e.program() + ".PushPanic(" + args[0] + "))", nil
+		}
 		return "panic(" + e.prefix + "pushPanic(" + args[0] + "))", nil
 	}
 	if !e.funcs[name] && name == "recover" {
@@ -1035,6 +1173,9 @@ func (e *emitter) call(c *syntax.BashPPCall) (string, error) {
 	typeargs, err := e.typeArgs(c.TypeArgs)
 	if err != nil {
 		return "", err
+	}
+	if e.execution && (e.funcs[name] || e.bound(name)) {
+		args = append([]string{e.program(), e.callSite(c, name)}, args...)
 	}
 	return e.goName(name) + typeargs + "(" + strings.Join(args, ", ") + spread + ")", nil
 }

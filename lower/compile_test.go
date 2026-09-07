@@ -41,7 +41,8 @@ func compile(t *testing.T, source string) compiledCase {
 	}
 	return compiledCase{r, source}
 }
-func execute(t *testing.T, r compiledCase) (string, string) {
+func execute(t *testing.T, r compiledCase) (string, string) { return executeBuild(t, r) }
+func executeBuild(t *testing.T, r compiledCase, flags ...string) (string, string) {
 	t.Helper()
 	dir := t.TempDir()
 	p := filepath.Join(dir, "generated.go")
@@ -60,7 +61,9 @@ func execute(t *testing.T, r compiledCase) (string, string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 	defer cancel()
 	binary := filepath.Join(dir, "program")
-	cmd := exec.CommandContext(ctx, filepath.Join(runtime.GOROOT(), "bin", "go"), "build", "-o", binary, "generated.go")
+	args := append([]string{"build"}, flags...)
+	args = append(args, "-o", binary, "generated.go")
+	cmd := exec.CommandContext(ctx, filepath.Join(runtime.GOROOT(), "bin", "go"), args...)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "GOWORK=off", "GOTOOLCHAIN=local")
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -211,7 +214,6 @@ println(n)
 }
 func TestRejectsUnsupportedAndInvalidWithoutResult(t *testing.T) {
 	cases := []struct{ name, source, code string }{
-		{"agentic", `agentic { echo hi; }`, lower.CodeUnsupported},
 		{"shell", `cat /tmp/file`, lower.CodeBridge},
 		{"unknown", `func f() int { return missing }`, lower.CodeUndefined},
 		{"badtype", `func f() int { return "wrong" }`, lower.CodeType},

@@ -52,7 +52,10 @@ const (
 
 // projection is one binding's retained provenance.
 type projection struct {
-	kind projectionKind
+	kind            projectionKind
+	nativeAggregate bool
+	sourceType      string
+	element         *projection
 	// text is the exact shell spelling when the binding is a constant whose
 	// source literal was retained. hasText distinguishes a known empty string
 	// from an unknown value.

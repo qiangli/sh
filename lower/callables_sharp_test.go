@@ -30,7 +30,7 @@ main()
 }
 
 // Exercise public callable/default/enum sources without rewriting fixtures.
-// Null and readonly artifact execution belong to their subsequent runtime slice.
+// Readonly artifact execution belongs to its subsequent runtime slice.
 func TestSharpCallPublicManifest(t *testing.T) {
 	root := os.Getenv("BASHSHARP_CORPUS")
 	if root == "" {
@@ -53,7 +53,7 @@ func TestSharpCallPublicManifest(t *testing.T) {
 			if len(row) != 6 {
 				t.Fatalf("bad manifest row %q", line)
 			}
-			if group := filepath.Base(filepath.Dir(manifest)); group != "defaults" && group != "kwargs" && group != "enums" {
+			if group := filepath.Base(filepath.Dir(manifest)); group != "defaults" && group != "kwargs" && group != "enums" && group != "null-safety" {
 				continue
 			}
 			path := filepath.Join(filepath.Dir(manifest), row[1])

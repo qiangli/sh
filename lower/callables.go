@@ -11,6 +11,9 @@ import (
 )
 
 func (e *emitter) goName(name string) string {
+	if e.execution && e.funcs[name] {
+		return e.prefix + "call_" + name
+	}
 	if name == "main" && e.funcs[name] {
 		return e.prefix + "sourceMain"
 	}
@@ -18,6 +21,9 @@ func (e *emitter) goName(name string) string {
 }
 
 func (e *emitter) literal(f *syntax.BashPPFuncLit) (string, error) {
+	previousProgram := e.programExpr
+	e.programExpr = ""
+	defer func() { e.programExpr = previousProgram }()
 	saved := e.inFunc
 	e.inFunc = true
 	defer func() { e.inFunc = saved }()
@@ -33,6 +39,14 @@ func (e *emitter) literal(f *syntax.BashPPFuncLit) (string, error) {
 	body, err := e.block(f.Body)
 	if err != nil {
 		return "", err
+	}
+	if e.execution {
+		entry, err := e.programEntry("func", false, f.Results)
+		if err != nil {
+			return "", err
+		}
+		body = entry + body
+		signature = e.privateSignature(signature)
 	}
 	return "func" + signature + " {\n" + body + "}", nil
 }
@@ -239,6 +253,9 @@ func (e *emitter) isRecover(c *syntax.BashPPCall) bool {
 	return c != nil && len(c.Fun) == 1 && c.Fun[0].Value == "recover" && !e.funcs["recover"]
 }
 func (e *emitter) recovered(name string) string {
+	if e.execution {
+		return "\n" + name + " = " + e.program() + ".Recovered(" + name + ")"
+	}
 	return "\nif " + name + " == nil { " + name + " = \"\"; /*" + e.prefix + "status1*/ } else { " + e.prefix + "popPanic(); /*" + e.prefix + "status0*/ }"
 }
 func (e *emitter) panicHelpers() string {
@@ -343,6 +360,11 @@ func (e *emitter) constGroup(n *syntax.BashPPConstGroup) (string, error) {
 		}
 		lines = append(lines, spec.Name.Value+typ+value)
 		e.bind(spec.Name.Value)
+		if expr != nil {
+			e.projections.projectionBind(spec.Name.Value, e.projectionExpr(expr))
+		} else if len(words) == 1 {
+			e.projections.projectionBind(spec.Name.Value, e.projectionWord(words[0]))
+		}
 		if spec.Name.Value == "iota" {
 			shadowed = true
 		}
@@ -350,12 +372,18 @@ func (e *emitter) constGroup(n *syntax.BashPPConstGroup) (string, error) {
 	for _, spec := range n.Specs {
 		if spec.Name.Value != "_" {
 			e.scopes[len(e.scopes)-2][spec.Name.Value] = true
+			if p, ok := e.projections.projectionLookup(spec.Name.Value); ok {
+				e.projections.scopes[len(e.projections.scopes)-2][spec.Name.Value] = p
+			}
 		}
 	}
 	return "const (\n" + strings.Join(lines, "\n") + "\n)", nil
 }
 
 func (e *emitter) rangeStmt(n *syntax.BashPPRange) (string, error) {
+	if e.execution && n.Chan != nil {
+		return e.runtimeChannelRange(n, e.runtimeScope(), e.runtimeStatements)
+	}
 	e.push()
 	defer e.pop()
 	var rhs string
@@ -580,6 +608,7 @@ func (e *emitter) typeSwitchStmt(n *syntax.BashPPSwitch) (string, error) {
 	for _, arm := range n.Arms {
 		e.push()
 		e.bind(name)
+		e.projections.projectionBind(name, interfaceProjection())
 		if len(arm.Exprs) == 0 {
 			out.WriteString("default:\n")
 		} else {
@@ -591,6 +620,11 @@ func (e *emitter) typeSwitchStmt(n *syntax.BashPPSwitch) (string, error) {
 					return "", err
 				}
 				values = append(values, v)
+			}
+			if len(values) == 1 && values[0] != "nil" {
+				e.projections.projectionBind(name, e.projectionType(values[0], nil))
+			} else {
+				e.projections.projectionBind(name, interfaceProjection())
 			}
 			out.WriteString("case " + strings.Join(values, ",") + ":\n")
 		}

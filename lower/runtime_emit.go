@@ -48,7 +48,7 @@ func (e *emitter) runtimeSend(n *syntax.BashPPSend, c RuntimeContext) (string, e
 	if err != nil {
 		return "", err
 	}
-	value, err := e.valueWord(n.Value)
+	value, err := e.argument(n.Value)
 	if err != nil {
 		return "", err
 	}

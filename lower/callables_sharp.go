@@ -78,6 +78,11 @@ func (e *emitter) sharpCall(c *syntax.BashPPCall, f *syntax.BashPPFuncDecl) (str
 	for _, i := range plan.ParameterOrder {
 		arguments = append(arguments, values[i])
 	}
+	if e.execution {
+		caller := e.prefix + "capturedCaller"
+		fmt.Fprintf(&out, "%s := %s\n", caller, e.program())
+		arguments = append([]string{caller, e.callSite(c, f.Name.Value)}, arguments...)
+	}
 	ret := ""
 	if len(resultTypes) > 0 {
 		ret = "return "
