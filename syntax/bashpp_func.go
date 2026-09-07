@@ -372,6 +372,16 @@ func (p *Parser) bashppSignature(what string) bashppSig {
 		}
 		sig.resRparen = p.pos
 		p.next()
+	case p.tok == rdrIn || p.tok == _LitWord && p.val == "chan":
+		w := p.getWord()
+		w = p.bashppChannelTypeWord(w)
+		typExpr := bashppTypeExpr(w)
+		if typExpr == nil {
+			p.posErr(p.pos, "func result must be a channel type")
+			break
+		}
+		text, _, _ := bashppScalarSource(w)
+		sig.results = []*BashPPField{{FieldType: &Lit{ValuePos: w.Pos(), ValueEnd: w.End(), Value: text}, FieldTypeExpr: typExpr}}
 	case p.tok == _LitWord && !strings.HasPrefix(p.val, "{") && p.val != "}":
 		typ := p.lit(p.pos, p.val)
 		typExpr := bashppTypeExprFromLit(typ)
@@ -467,6 +477,13 @@ func (p *Parser) bashppFieldList(open Pos, result bool) ([]*BashPPField, bool) {
 			break
 		}
 		w := p.getWord()
+		channelSignature := p.tok == rdrIn && w == nil
+		if head := bashppBareLit(w); head != nil && head.Value == "chan" {
+			channelSignature = true
+		}
+		if channelSignature {
+			w = p.bashppChannelTypeWord(w)
+		}
 		if w == nil {
 			p.followErr(open, "(", noQuote("a parameter"))
 			break
@@ -482,7 +499,7 @@ func (p *Parser) bashppFieldList(open Pos, result bool) ([]*BashPPField, bool) {
 		}
 		clean, comma := bashppTrimComma(w)
 		lit := bashppBareLit(clean)
-		if concreteSignature {
+		if concreteSignature || channelSignature {
 			text, _, ok := bashppScalarSource(clean)
 			typ := bashppTypeExpr(clean)
 			if !ok || typ == nil {
@@ -617,6 +634,10 @@ func bashppTypeParamUses(typ BashPPTypeExpr, names map[string]bool) BashPPTypeEx
 			}
 			return &cp
 		}
+	case *BashPPChanType:
+		cp := *x
+		cp.Element = bashppTypeParamUses(cp.Element, names)
+		return &cp
 	case *BashPPCollectionType:
 		cp := *x
 		cp.Key = bashppTypeParamUses(cp.Key, names)

@@ -651,7 +651,7 @@ func (r *Runner) bashPPMakeChan(ctx context.Context, d *syntax.BashPPShortDecl) 
 }
 
 func (r *Runner) bashPPSend(ctx context.Context, s *syntax.BashPPSend) {
-	c, ok := r.bashPPChannel(s.Chan)
+	c, ok := r.bashPPChannelOperation(s.Chan, "send")
 	if !ok {
 		return
 	}
@@ -706,7 +706,7 @@ func (r *Runner) bashPPReceive(ctx context.Context, recv *syntax.BashPPReceive, 
 		r.exit.code = 2
 		return "", false
 	}
-	c, ok := r.bashPPChannel(recv.Chan)
+	c, ok := r.bashPPChannelOperation(recv.Chan, "receive")
 	if !ok {
 		return "", false
 	}
@@ -769,7 +769,7 @@ func (r *Runner) bashPPSetReceivedType(name, elem string) {
 }
 
 func (r *Runner) bashPPClose(cl *syntax.BashPPClose) {
-	c, ok := r.bashPPChannel(cl.Chan)
+	c, ok := r.bashPPChannelOperation(cl.Chan, "close")
 	if !ok {
 		return
 	}
@@ -1227,7 +1227,7 @@ func (r *Runner) bashPPSelect(ctx context.Context, s *syntax.BashPPSelect) {
 		}
 		switch comm := arm.Comm.(type) {
 		case *syntax.BashPPReceive:
-			c, ok := r.bashPPChannel(comm.Chan)
+			c, ok := r.bashPPChannelOperation(comm.Chan, "receive")
 			if !ok {
 				return
 			}
@@ -1244,14 +1244,14 @@ func (r *Runner) bashPPSelect(ctx context.Context, s *syntax.BashPPSelect) {
 				r.exit.code = 2
 				return
 			}
-			c, ok := r.bashPPChannel(comm.Recv.Chan)
+			c, ok := r.bashPPChannelOperation(comm.Recv.Chan, "receive")
 			if !ok {
 				return
 			}
 			cases = append(cases, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(c.ch)})
 			caseElems = append(caseElems, c.elem)
 		case *syntax.BashPPSend:
-			c, ok := r.bashPPChannel(comm.Chan)
+			c, ok := r.bashPPChannelOperation(comm.Chan, "send")
 			if !ok {
 				return
 			}
@@ -1360,7 +1360,7 @@ func (r *Runner) bashPPRange(ctx context.Context, rng *syntax.BashPPRange) {
 	if r.bashPPRangeScalar(ctx, rng) {
 		return
 	}
-	c, ok := r.bashPPChannel(rng.Chan)
+	c, ok := r.bashPPChannelOperation(rng.Chan, "receive")
 	if !ok {
 		return
 	}

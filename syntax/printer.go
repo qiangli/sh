@@ -1374,6 +1374,20 @@ func (p *Printer) bashppExpr(expr BashPPExpr) {
 
 func (p *Printer) bashppType(typ BashPPTypeExpr) {
 	switch x := typ.(type) {
+	case *BashPPChanType:
+		prefix := "chan "
+		if x.Direction == "send" {
+			prefix = "chan<- "
+		}
+		if x.Direction == "recv" {
+			prefix = "<-chan "
+		}
+		p.writeLit(prefix)
+		if x.Element != nil {
+			p.bashppType(x.Element)
+		} else if x.Elem != nil {
+			p.writeLit(x.Elem.Value)
+		}
 	case *BashPPFuncType:
 		p.writeLit("func")
 		p.bashppSignature(x.Params, x.Results, x.ResLparen)

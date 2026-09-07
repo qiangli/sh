@@ -855,6 +855,9 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 			if source != nil {
 				target.object = source.object
 				target.channel, target.channelOwner = source.channel, source.channelOwner
+				if source.channel != nil {
+					target.declType = source.declType
+				}
 			}
 		}
 		return
@@ -984,6 +987,9 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 			if channel, owner := r.bashPPDirectChannel(d.Rhs[0]); channel != nil {
 				cell := r.bashPPScope.lookup(name)
 				cell.channel, cell.channelOwner = channel, owner
+				if source := r.bashPPScope.lookup(bashPPWordSource(d.Rhs[0])); source != nil {
+					cell.declType = source.declType
+				}
 			}
 		}
 		return

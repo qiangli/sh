@@ -123,6 +123,21 @@ func bashPPCloneCollectionMeta(meta *bashPPCollectionMeta, seen map[*bashPPColle
 
 func bashPPTypeText(typ syntax.BashPPTypeExpr) string {
 	switch x := typ.(type) {
+	case *syntax.BashPPChanType:
+		prefix := "chan "
+		if x.Direction == "send" {
+			prefix = "chan<- "
+		}
+		if x.Direction == "recv" {
+			prefix = "<-chan "
+		}
+		if x.Element != nil {
+			return prefix + bashPPTypeText(x.Element)
+		}
+		if x.Elem != nil {
+			return prefix + x.Elem.Value
+		}
+		return prefix
 	case *syntax.BashPPNamedType:
 		if len(x.TypeArgs) == 0 {
 			return x.Name.Value

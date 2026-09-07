@@ -444,7 +444,11 @@ func Walk(node Node, f func(Node) bool) {
 		walkNilable(node.Kw, f)
 		walkNilable(node.Call, f)
 	case *BashPPChanType:
-		walkNilable(node.Elem, f)
+		if node.Element != nil {
+			Walk(node.Element, f)
+		} else {
+			walkNilable(node.Elem, f)
+		}
 	case *BashPPMakeChan:
 		walkNilable(node.Make, f)
 		walkNilable(node.ChanType, f)

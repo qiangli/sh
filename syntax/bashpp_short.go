@@ -190,6 +190,23 @@ func bashppConvertExpr(expr goast.Expr, source string, pos func(gotoken.Pos) Pos
 
 func bashppConvertType(e goast.Expr, pos func(gotoken.Pos) Pos, lit func(gotoken.Pos, gotoken.Pos, string) *Lit) BashPPTypeExpr {
 	switch x := e.(type) {
+	case *goast.ChanType:
+		direction := ""
+		if x.Dir == goast.SEND {
+			direction = "send"
+		}
+		if x.Dir == goast.RECV {
+			direction = "recv"
+		}
+		chanPos := pos(x.Begin)
+		if direction == "recv" {
+			chanPos = posAddCol(chanPos, 2)
+		}
+		out := &BashPPChanType{Chan: chanPos, Direction: direction, Element: bashppConvertType(x.Value, pos, lit), Elem: lit(x.Value.Pos(), x.Value.End(), bashppGoTypeText(x.Value))}
+		if x.Arrow.IsValid() {
+			out.Arrow = pos(x.Arrow)
+		}
+		return out
 	case *goast.FuncType:
 		out := &BashPPFuncType{Func: pos(x.Func), Lparen: pos(x.Params.Opening), Rparen: pos(x.Params.Closing)}
 		fields := func(list *goast.FieldList) []*BashPPField {
@@ -439,6 +456,21 @@ func bashppTypeArgFromText(text string, pos Pos) (*BashPPTypeArg, bool) {
 
 func bashppTypeText(typ BashPPTypeExpr) string {
 	switch x := typ.(type) {
+	case *BashPPChanType:
+		prefix := "chan "
+		if x.Direction == "send" {
+			prefix = "chan<- "
+		}
+		if x.Direction == "recv" {
+			prefix = "<-chan "
+		}
+		if x.Element != nil {
+			return prefix + bashppTypeText(x.Element)
+		}
+		if x.Elem != nil {
+			return prefix + x.Elem.Value
+		}
+		return prefix
 	case *BashPPFuncType:
 		text := func(fields []*BashPPField) string {
 			var parts []string
@@ -665,6 +697,8 @@ func bashppSupportedCollectionTypeAST(expr goast.Expr) bool {
 
 func bashppSupportedTypeAST(expr goast.Expr) bool {
 	switch x := expr.(type) {
+	case *goast.ChanType:
+		return bashppSupportedTypeAST(x.Value)
 	case *goast.FuncType:
 		return x.TypeParams == nil && bashppSupportedFieldListTypes(x.Params) && bashppSupportedFieldListTypes(x.Results)
 	case *goast.Ident:
@@ -760,6 +794,15 @@ func bashppSupportedEmbeddedFieldAST(expr goast.Expr) bool {
 
 func bashppGoTypeText(expr goast.Expr) string {
 	switch x := expr.(type) {
+	case *goast.ChanType:
+		prefix := "chan "
+		if x.Dir == goast.SEND {
+			prefix = "chan<- "
+		}
+		if x.Dir == goast.RECV {
+			prefix = "<-chan "
+		}
+		return prefix + bashppGoTypeText(x.Value)
 	case *goast.FuncType:
 		var out bytes.Buffer
 		if err := format.Node(&out, gotoken.NewFileSet(), x); err != nil {

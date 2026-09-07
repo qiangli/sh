@@ -561,6 +561,7 @@ type BashPPTypeExpr interface {
 }
 
 func (*BashPPFuncType) bashPPTypeExprNode() {}
+func (*BashPPChanType) bashPPTypeExprNode() {}
 
 func (*BashPPNamedType) bashPPTypeExprNode()      {}
 func (*BashPPCollectionType) bashPPTypeExprNode() {}
@@ -1285,14 +1286,28 @@ func (g *BashPPGo) End() Pos {
 	return g.Kw.End()
 }
 
-// BashPPChanType is the channel type spelling used by make(chan T, n).
+// BashPPChanType is a positioned channel type. Direction is "" for a
+// bidirectional channel, "send" for chan<- T, and "recv" for <-chan T.
+// Element is authoritative when present. Elem preserves the make(chan T)
+// legacy element spelling; Walk visits only the authoritative representation.
 type BashPPChanType struct {
-	Chan Pos
-	Elem *Lit
+	Chan      Pos
+	Arrow     Pos
+	Direction string
+	Element   BashPPTypeExpr
+	Elem      *Lit
 }
 
-func (t *BashPPChanType) Pos() Pos { return t.Chan }
+func (t *BashPPChanType) Pos() Pos {
+	if t.Direction == "recv" {
+		return t.Arrow
+	}
+	return t.Chan
+}
 func (t *BashPPChanType) End() Pos {
+	if t.Element != nil {
+		return t.Element.End()
+	}
 	if t.Elem != nil {
 		return t.Elem.End()
 	}

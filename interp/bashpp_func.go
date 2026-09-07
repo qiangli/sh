@@ -1357,6 +1357,9 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 	if !r.bashPPCheckArgs(fn, params, args) {
 		return nil
 	}
+	if !r.bashPPCheckChannelArgs(fn, params, callChannels, callCells) {
+		return nil
+	}
 	if limit, _ := strconv.Atoi(r.envGet("FUNCNEST")); limit > 0 && len(r.callStack) >= limit {
 		r.errf("%s: maximum function nesting level exceeded (%d)\n", fn.name(), limit)
 		r.exit.code = 1
@@ -1484,6 +1487,10 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 			source = r.bashPPScope.lookup(resultNames[i])
 		} else if i < len(r.bashPPReturn.cells) {
 			source = r.bashPPReturn.cells[i]
+		}
+		if i < len(resultTypes) && !r.bashPPCheckChannelResult(fn, resultTypes[i], source) {
+			r.bashPPResultCells = nil
+			return nil
 		}
 		if source != nil {
 			r.bashPPResultCells[i] = bashPPCopyAssignmentCell(source)
@@ -1623,6 +1630,11 @@ func (r *Runner) bashPPShortDeclCall(ctx context.Context, d *syntax.BashPPShortD
 			return
 		}
 		r.bashPPDeclareName(lhs.Value, expand.Variable{Set: true, Kind: expand.String, Str: results[i]})
+		if i < len(r.bashPPResultCells) && r.bashPPResultCells[i] != nil {
+			source := r.bashPPResultCells[i]
+			target := r.bashPPScope.lookup(lhs.Value)
+			target.channel, target.channelOwner = source.channel, source.channelOwner
+		}
 		if i < len(resultTypeExprs) {
 			r.bashPPScope.lookup(lhs.Value).declType = resultTypeExprs[i]
 		}
