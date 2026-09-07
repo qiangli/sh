@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"go/build"
 	"go/importer"
 	"go/token"
 	"go/types"
@@ -37,12 +38,13 @@ type moduleMetadata struct {
 }
 
 type moduleImporter struct {
-	dir        string
-	packages   map[string]*listPackage
-	importMap  map[string]string
-	callerPath string
-	mu         sync.Mutex
-	delegate   types.Importer
+	dir           string
+	packages      map[string]*listPackage
+	importMap     map[string]string
+	callerPath    string
+	mu            sync.Mutex
+	delegate      types.Importer
+	gopathContext *build.Context
 }
 
 // newModuleImporter creates a types.Importer that invokes `go list -export -deps -json`
@@ -58,6 +60,18 @@ func newModuleImporter(dir string) types.Importer {
 		packages:   make(map[string]*listPackage),
 		importMap:  make(map[string]string),
 		callerPath: determineCallerPath(dir),
+	}
+	// Module-aware go list resolves module/workspace vendoring itself. In GOPATH
+	// mode the standard structural resolver supplies the importing-directory
+	// context even when that directory contains only Bash++ source.
+	cmd := exec.Command(filepath.Join(runtime.GOROOT(), "bin", "go"), "env", "-json", "GOMOD", "GOPATH")
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GOTOOLCHAIN=local")
+	var env struct{ GOMOD, GOPATH string }
+	if data, err := cmd.Output(); err == nil && json.Unmarshal(data, &env) == nil && env.GOMOD == "" {
+		ctx := build.Default
+		ctx.GOPATH, ctx.GOROOT = env.GOPATH, runtime.GOROOT()
+		m.gopathContext = &ctx
 	}
 	m.delegate = importer.ForCompiler(token.NewFileSet(), "gc", m.lookup)
 	return m
@@ -223,6 +237,13 @@ func (m *moduleImporter) lookup(path string) (io.ReadCloser, error) {
 	defer m.mu.Unlock()
 
 	actualPath := path
+	if m.gopathContext != nil {
+		if resolved, err := m.gopathContext.Import(path, m.dir, build.FindOnly); err == nil {
+			actualPath = resolved.ImportPath
+			// Preserve vendor precedence even if an unvendored package also exists.
+			m.importMap[path] = actualPath
+		}
+	}
 	if mapped, ok := m.importMap[path]; ok {
 		actualPath = mapped
 	}

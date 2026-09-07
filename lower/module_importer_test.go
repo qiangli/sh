@@ -273,3 +273,33 @@ func TestModuleImporterStdlibInternalGOPATH(t *testing.T) {
 		t.Fatal("importer accepts stdlib internal/abi from GOPATH app package")
 	}
 }
+
+func TestModuleImporterSourceOnlyGOPATHVendor(t *testing.T) {
+	root := testModuleRoot(t)
+	testModuleWrite(t, root, "src/app/main.bpp", "import \"example.test/dep/pkg\"\n")
+	testModuleWrite(t, root, "src/app/vendor/example.test/dep/pkg/p.go", "package vendored\ntype T int\n")
+	testModuleWrite(t, root, "src/example.test/dep/pkg/p.go", "package wrongglobal\ntype T string\n")
+	testModuleWrite(t, root, "src/app/vendor/example.test/consumer/p.go", "package consumer\nimport \"example.test/dep/pkg\"\nfunc Value() vendored.T { return 7 }\n")
+	t.Setenv("GO111MODULE", "off")
+	t.Setenv("GOPATH", root)
+	app := filepath.Join(root, "src/app")
+	i := newModuleImporter(app)
+	consumer := testModuleImport(t, i, "example.test/consumer")
+	pkg := testModuleImport(t, i, "example.test/dep/pkg")
+	got := consumer.Scope().Lookup("Value").Type().(*types.Signature).Results().At(0).Type()
+	if !types.Identical(got, pkg.Scope().Lookup("T").Type()) {
+		t.Fatalf("vendored type identity lost: %v / %v", got, pkg)
+	}
+	if pkg.Name() != "vendored" {
+		t.Fatal(pkg)
+	}
+	entries, err := os.ReadDir(app)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".go") {
+			t.Fatalf("import created Go source %s", entry.Name())
+		}
+	}
+}
