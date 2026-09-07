@@ -18,6 +18,12 @@ func (e *emitter) programEntrySourceNamed(body string, mixedShell bool, entryNam
 	// Session options override these per invocation. Do not use the support
 	// package's legacy mutable process-wide output handles as entry defaults.
 	defaults = append(defaults, rt+"WithStdio("+e.prefix+"os.Stdin,"+e.prefix+"os.Stdout,"+e.prefix+"os.Stderr)")
+	// The process operands are the program's positional parameters, one
+	// argument per parameter and byte for byte. It is a default like the
+	// stdio triple: it is appended before the caller's opts, so an embedder
+	// passing rt.WithParams(...) replaces it instead of being replaced by it.
+	// os.Args is only read; WithParams copies what it is given.
+	defaults = append(defaults, rt+"WithParams("+e.prefix+"os.Args[1:]...)")
 	if mixedShell {
 		defaults = append(defaults, rt+"WithShellFactory("+e.prefix+"shellexec.New("+e.prefix+"shellexec.BashPP()))")
 	}

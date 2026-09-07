@@ -86,6 +86,17 @@ type State struct {
 	Options map[string]bool
 	Status  int
 
+	// Params are the positional parameters the shell sees as $1, $2, ... and
+	// counts with $#. They are a list of opaque argument strings, never a
+	// joined command line: an element may be empty, may hold spaces, tabs,
+	// newlines or arbitrary UTF-8, and byte boundaries are preserved exactly
+	// as the caller supplied them.
+	//
+	// Like the rest of State this is a projection: `set --` and `shift` inside
+	// a shell region are read back here, and a typed-side write is pushed into
+	// the shell before the next region runs.
+	Params []string
+
 	// Exited reports that the shell asked to end the program during the last
 	// region: an `exit` builtin, or a failure under errexit. Status carries
 	// the code. The runtime does not act on it -- a session stays usable --
@@ -95,7 +106,7 @@ type State struct {
 
 // Clone returns a deep copy, so a child task and its parent share no map.
 func (s State) Clone() State {
-	c := State{Dir: s.Dir, Status: s.Status, Exited: s.Exited, Vars: map[string]Var{}, Options: maps.Clone(s.Options)}
+	c := State{Dir: s.Dir, Status: s.Status, Exited: s.Exited, Vars: map[string]Var{}, Options: maps.Clone(s.Options), Params: slices.Clone(s.Params)}
 	for name, v := range s.Vars {
 		c.Vars[name] = v.clone()
 	}

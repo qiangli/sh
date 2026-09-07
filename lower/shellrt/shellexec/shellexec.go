@@ -112,7 +112,7 @@ func NewRunner(st shellrt.State, streams shellrt.Stdio, opts ...Option) (shellrt
 		interp.Lang(cfg.lang),
 		interp.Env(stateEnviron{vars: st.Vars}),
 		interp.StdIO(streams.In, streams.Out, streams.Err),
-		interp.Params(optionParams(st.Options)...),
+		interp.Params(initialParams(st)...),
 	}
 	if st.Dir != "" {
 		base = append(base, interp.Dir(st.Dir))
@@ -137,6 +137,17 @@ type shell struct {
 
 	closeOnce sync.Once
 	closeErr  error
+}
+
+// initialParams seeds both the shell options and the positional parameters in
+// the single [interp.Params] call the runner accepts. The "--" terminator is
+// always emitted so that a first parameter spelled like a flag is a parameter,
+// and so that an empty parameter list is seeded as empty rather than left at
+// the interpreter's default.
+func initialParams(st shellrt.State) []string {
+	args := optionParams(st.Options)
+	args = append(args, "--")
+	return append(args, st.Params...)
 }
 
 func optionParams(options map[string]bool) []string {
@@ -324,6 +335,17 @@ func (sh *shell) applyTypedWrites(ctx context.Context, st *shellrt.State) error 
 			emit("set %s %s", flag, name)
 		}
 	}
+	if !slices.Equal(st.Params, sh.last.Params) {
+		// One `set --` rewrites the whole list, which is the only way the
+		// shell offers: positional parameters have no per-element write.
+		// Every element is quoted, so spaces, newlines and leading dashes
+		// survive as one parameter each.
+		quoted := make([]string, 0, len(st.Params))
+		for _, param := range st.Params {
+			quoted = append(quoted, quote(param))
+		}
+		emit("set -- %s", strings.Join(quoted, " "))
+	}
 	for _, name := range slices.Sorted(maps.Keys(sh.last.Vars)) {
 		if _, ok := st.Vars[name]; !ok {
 			emit("unset %s", name)
@@ -441,6 +463,13 @@ func (sh *shell) project(st *shellrt.State, status int) error {
 		}
 	}
 	st.Vars = vars
+
+	// `set --` and `shift` inside the region move the live parameters; the
+	// copy keeps the projection from aliasing the runner's own slice.
+	st.Params = slices.Clone(sh.runner.Params)
+	if st.Params == nil {
+		st.Params = []string{}
+	}
 
 	st.Options = sh.projectOptions()
 	// The option probe is bookkeeping too; $? must still report the region.
