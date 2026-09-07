@@ -33,22 +33,26 @@ type Kind int
 
 const (
 	// KindScalar renders a native scalar as the plain shell text the
-	// interpreter produces for it. No quoting, no JSON.
+	// interpreter produces for it. No quoting, no JSON. It is reflect-based
+	// so a named type such as `type Count int` projects plain like its
+	// underlying kind; the interpreter renders `var c Count = 7` as 7.
 	KindScalar Kind = iota
 	// KindObject renders a rich root through the shell's object coercion,
-	// which is JSON.
+	// which is JSON. A nil map or nil slice renders "null".
 	KindObject
+	// KindPointer renders a pointer root. The interpreter projects every
+	// pointer root as the empty string, nil or not: &S{}, &namedInt, new(S)
+	// and a nil *S all interpolate empty.
+	KindPointer
+	// KindInterface renders an interface root: empty when the interface is
+	// nil, and otherwise the plain scalar text of the named value it holds.
+	KindInterface
 )
 
 // InvalidObject is the one fixed marker every unsafely coercible value
-// collapses to. It matches the interpreter's marker exactly.
+// collapses to. It is not an invention of this package: it matches the
+// interpreter's own marker in expand/object.go byte for byte.
 const InvalidObject = "<invalid object>"
-
-// UnsupportedScalar is the visible marker returned when a value reaches the
-// runtime scalar path that the runtime cannot faithfully render. It is
-// deliberately not a silent best effort: the only values that land here are
-// ones whose faithful spelling was already lost before the runtime saw them.
-const UnsupportedScalar = "<unsupported scalar projection>"
 
 const (
 	maxObjectDepth     = 100
@@ -65,7 +69,12 @@ var (
 	isZeroerType      = reflect.TypeFor[interface{ IsZero() bool }]()
 )
 
-// Project renders value as the shell text for the given kind.
+// Project renders value as the shell text for the given kind. A value the
+// runtime cannot faithfully render is an explicit failure, not a marker: it
+// reports through the package's existing Fail path, so the generated program
+// exits nonzero with a diagnostic on stderr rather than printing something the
+// interpreter would never print. The compiler is expected to have failed
+// closed already; this is the backstop.
 //
 // Project only reads value. It never assigns through a pointer, never writes a
 // map or slice element, and never calls a caller-defined method on the graph,
@@ -79,12 +88,43 @@ var (
 // String/Error methods — do not leak a marshaling handle or run caller code.
 // They collapse to InvalidObject.
 func Project(value any, kind Kind) string {
+	text, err := ProjectErr(value, kind)
+	if err != nil {
+		Fail(err)
+		return ""
+	}
+	return text
+}
+
+// ProjectErr is Project with the failure returned rather than reported.
+func ProjectErr(value any, kind Kind) (string, error) {
 	switch kind {
 	case KindObject:
-		return objectText(value)
+		return objectText(value), nil
+	case KindPointer:
+		// Measured: every pointer root interpolates empty, nil or not.
+		return "", nil
+	case KindInterface:
+		if value == nil || isNilValue(reflect.ValueOf(value)) {
+			return "", nil
+		}
+		return scalarText(value)
 	default:
 		return scalarText(value)
 	}
+}
+
+// isNilValue reports a nil held inside an interface without calling anything on
+// the value.
+func isNilValue(v reflect.Value) bool {
+	if !v.IsValid() {
+		return true
+	}
+	switch v.Kind() {
+	case reflect.Pointer, reflect.Interface, reflect.Map, reflect.Slice, reflect.Func, reflect.Chan:
+		return v.IsNil()
+	}
+	return false
 }
 
 func objectText(value any) string {
@@ -286,42 +326,36 @@ func validJSONMapKey(t reflect.Type) bool {
 	}
 }
 
-// scalarText renders the native scalars the compiler is allowed to route
-// through KindScalar. Floating values are refused rather than guessed: the
-// interpreter spells an untyped 1.5 as the exact rational 3/2, and a float64
-// alone no longer carries the source provenance needed to recover that. The
-// compiler must project floating scalars from their retained literal instead.
-func scalarText(value any) string {
-	switch v := value.(type) {
-	case nil:
-		return ""
-	case string:
-		return v
-	case bool:
-		return strconv.FormatBool(v)
-	case int:
-		return strconv.FormatInt(int64(v), 10)
-	case int8:
-		return strconv.FormatInt(int64(v), 10)
-	case int16:
-		return strconv.FormatInt(int64(v), 10)
-	case int32:
-		return strconv.FormatInt(int64(v), 10)
-	case int64:
-		return strconv.FormatInt(v, 10)
-	case uint:
-		return strconv.FormatUint(uint64(v), 10)
-	case uint8:
-		return strconv.FormatUint(uint64(v), 10)
-	case uint16:
-		return strconv.FormatUint(uint64(v), 10)
-	case uint32:
-		return strconv.FormatUint(uint64(v), 10)
-	case uint64:
-		return strconv.FormatUint(v, 10)
-	case uintptr:
-		return strconv.FormatUint(uint64(v), 10)
+// scalarText renders a native scalar as plain interpreter text. It uses
+// reflect kinds rather than a concrete type switch so that a named type
+// projects like its underlying kind — the interpreter renders `var c Count = 7`
+// as 7 and `var n Name = "hi"` as hi. Only the kind is read; no method on the
+// value is consulted or invoked, so a named type carrying String or Error
+// cannot execute caller code here.
+//
+// Floats are refused. Measured against the engine, the only float path that
+// renders at all is an untyped literal at its binding site, which the compiler
+// projects from retained provenance without reaching the runtime: 1.5 is the
+// exact rational 3/2 and 1.1 is 11/10. A float64 in hand no longer carries that
+// provenance, so producing a decimal here would print something the interpreter
+// never prints.
+func scalarText(value any) (string, error) {
+	v := reflect.ValueOf(value)
+	if !v.IsValid() {
+		return "", nil
+	}
+	switch v.Kind() {
+	case reflect.String:
+		return v.String(), nil
+	case reflect.Bool:
+		return strconv.FormatBool(v.Bool()), nil
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return strconv.FormatInt(v.Int(), 10), nil
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		return strconv.FormatUint(v.Uint(), 10), nil
+	case reflect.Float32, reflect.Float64:
+		return "", fmt.Errorf("shellrt: floating scalar has no retained constant provenance; project it from its source literal")
 	default:
-		return UnsupportedScalar
+		return "", fmt.Errorf("shellrt: %v is not a scalar projection", v.Kind())
 	}
 }

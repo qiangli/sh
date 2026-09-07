@@ -15,13 +15,33 @@ Every projection needs a *root kind*, and that kind is a compiler fact recorded
 where the binding is created. It is never recovered later by inspecting the
 value.
 
-| Root | Kind | Renders |
-| --- | --- | --- |
-| Native struct / map / slice / pointer | `KindObject` | deterministic JSON |
-| Result of any imported-package call | `KindObject` | JSON, *including a `string` result* |
-| `nil` rich root | `KindObject` | `null` |
-| Native scalar binding | `KindScalar` | plain interpreter text |
-| Scalar reached by selector or index | `KindScalar` | plain text, not the root's JSON |
+Every row below was measured against the engine (`interp.Runner` with
+`interp.Lang(syntax.LangBashPP)`) or is a recorded corpus expectation. None of
+it is inferred from the implementation.
+
+| Root | Kind | Renders | Evidence |
+| --- | --- | --- | --- |
+| struct / array / slice / map, including named | `KindObject` | JSON | `s=[{"N":1,"T":"x"}]`, `a=[[1,2]]`, `l=[[1,2]]`, `m=[{"a":1}]` |
+| nil map, nil slice | `KindObject` | `null` | `m=[null] s=[null]`; corpus `address-deref-new` ends `:null:null` |
+| **any pointer, nil or not** | `KindPointer` | **empty** | `&S{}`, `&namedInt`, `new(S)`, `var p *S` all give `p=[]`; corpus `typed-nil-pointer:` |
+| nil interface | `KindInterface` | **empty** | `i=[]`; corpus `nil-interface-assert::false` |
+| interface holding a named scalar | `KindInterface` | plain | `i=[7]` |
+| named int / string / bool / byte / rune | `KindScalar` | plain | `c=7 n=hi f=true`, `b=65 r=66` |
+| selected field or index scalar | `KindScalar` | plain | corpus `1:3:5:7:9:10:0:0` |
+| result of any imported-package call | `KindObject` | JSON, *including a `string` result* | `bashPPShortDeclImported` calls `expand.NewObject` unconditionally |
+
+Two points are easy to get wrong, and both were corrected by measurement:
+
+- **Pointer roots are empty whether or not they are nil.** This is not
+  nil-handling; it is what a pointer root projects. It does not disturb rich nil
+  behaviour — a nil map or slice is an *object* root and still renders `null`.
+- **Named scalar types project plain**, so the runtime resolves scalars by
+  reflect kind rather than a concrete type switch. A type switch over `int`,
+  `string`, … silently misses `type Count int`, which the interpreter renders
+  as `7`. Only the kind is read; no method on the value is consulted or invoked,
+  so a named type carrying `String` or `Error` cannot execute caller code.
+
+Two further rows are the reason shape must not be consulted:
 
 Two of these rows are the reason shape must not be consulted:
 
@@ -42,34 +62,61 @@ Canonical evidence: `tests/lowering/profile-additional/recursive-substitution.bp
 in `bashpp-tests` records stdout `{"Item":{"First":"n","Second":7}}` for
 `echo "$h"` over a `Holder[int]{Item: Pair[string,int]{First:"n", Second:7}}`.
 
-## Constants keep their source spelling
+## Floats: narrow measured provenance, and fail closed otherwise
 
 The interpreter evaluates untyped constants with `go/constant` over the source
-text and prints numerics with `ExactString`. So `1.5` prints as the exact
-rational `3/2`, and `0x1.8p+1` prints as `3`
+text and prints numerics with `ExactString`. Measured: `x := 1.5` interpolates
+`3/2` and `x := 1.1` interpolates `11/10`
 (`tests/lowering/profile-additional/literal-float.bpp` records `3/2 3`).
 
-`projectionFromLiteral` retains that spelling from the literal node, and
-`projectValue` emits it as a plain Go string literal with **no runtime call at
-all**. That is the only path by which the exact spelling can survive into a
-compiled program.
+That is the *only* float rendering the engine currently produces. Every other
+float path errors there today:
 
-`projectionFromFloat64` exists and always fails, with a hint pointing at the
-literal. This is deliberate. A `float64` cannot recover the rational: `1.5` is
-exactly representable, so a lenient implementation using
-`constant.MakeFloat64` would look correct on the fixture and silently print
-`1.1` as something other than `11/10`. Floating provenance is retained or the
-compile fails; it is never approximated. Correspondingly, a float reaching
-`shellrt.Project`'s scalar path returns the visible `UnsupportedScalar` marker
-rather than a decimal the interpreter would never print.
+| Source | Observed |
+| --- | --- |
+| `var a float64 = 1.1` | `"var": executable file not found in $PATH` |
+| `float64` struct field, slice element, map value | `BASHPP-ECOLLECTION-ELEMENT: cannot use string value as float64` |
+| `a := 1.5; b := a + a` | `BASHPP-EEXPR-OPERAND: operator + not defined on Unknown and Unknown` |
+| `var a float64` (zero value) | `0` |
+
+So there is no typed-float rendering to preserve. `projectionFromLiteral`
+retains the untyped literal's spelling and `projectValue` emits it as a plain Go
+string literal with **no runtime call at all**; a float binding with no retained
+text is a compile-time `LOWER-EEXPR` failure, which is the compiler declining
+exactly where the engine declines. `projectionFromFloat64` exists only to make
+that refusal a named, tested boundary — `1.5` is exactly representable as a
+float64, so a lenient `constant.MakeFloat64` would pass the fixture and diverge
+on `1.1`.
 
 Go floats in general are *not* all treated as having this provenance — only
 values the compiler recorded as untyped constant literals do. Native float
 arithmetic remains ordinary native Go.
 
+### Reassignment invalidates retained literals
+
+The exact rational belongs to the *binding*, not to the name. Measured:
+
+```
+x := 1.5   →  3/2
+x=2.5      →  2.5        (not 5/2)
+```
+
+After a shell assignment the variable holds the raw assigned text. A retained
+literal that outlived its binding would reprint `3/2` forever, so the emitter
+must report assignments:
+
+- `projectionAssign(name, text)` — assignment whose text is statically known.
+  The text is stored verbatim, not re-derived through `go/constant`. It updates
+  the binding where it lives rather than creating a shadow.
+- `projectionInvalidate(name)` — assignment whose text is not statically known.
+  Drops the retained text and keeps the kind, so a float binding then fails
+  closed instead of reprinting a stale rational, while an int or string binding
+  falls back to ordinary runtime projection.
+
 ## Runtime behaviour and safety
 
-`shellrt.Project(value, kind)` is the runtime entry point.
+`shellrt.Project(value, kind)` and `shellrt.ProjectErr(value, kind)` are the
+runtime entry points.
 
 `shellrt` is linked into every generated program, so it stays on the standard
 library — importing `expand` would drag `golang.org/x/text` and `golang.org/x/mod`
@@ -87,9 +134,15 @@ and never reaches a generated program.
   cannot disturb its identity, and repeated projection is byte-identical.
 - The object encoding is **deterministic**: `encoding/json` sorts map keys and
   keeps struct field declaration order.
+- An unsupported value is an **explicit failure**, not a marker that would look
+  like a successful projection downstream. `ProjectErr` returns the error;
+  `Project` reports it through the package's existing `Fail` path, so the
+  generated program exits nonzero with a diagnostic on stderr. The compiler is
+  expected to have failed closed already; this is the backstop.
 - A value carrying `MarshalJSON`, `MarshalText`, `String` or `Error` — including
-  a map alias or a struct method value — collapses to the fixed
-  `InvalidObject` marker (`<invalid object>`) **without running that method**.
+  a map alias or a struct method value — collapses to `InvalidObject`
+  (`<invalid object>`) **without running that method**. That marker is not an
+  invention of this package: it is the interpreter's own, byte for byte.
   Refusal happens in a preflight pass, before any marshaling begins, which is
   what keeps caller code from running and keeps a capability from reaching the
   encoder at all.
@@ -100,7 +153,7 @@ and never reaches a generated program.
 ## Emitter integration
 
 `projector`'s zero value is usable, so the seam against `compile.go` /
-`words.go` / `callables.go` is **one struct field plus four call sites**. It is
+`words.go` / `callables.go` is **one struct field plus six call sites**. It is
 stated here in full because those files have a different owner; nothing beyond
 this is requested of them.
 
@@ -122,10 +175,19 @@ this is requested of them.
    e.projections.projectionBind(name, pr)
    ```
 
-   `pr` is one of `projectionFromLiteral(lit)` (untyped constant literal, exact
+   `pr` is one of `projectionFromLiteral(lit)` (constant literal, exact
    spelling retained), `objectProjection()` (rich native root, and *every*
-   imported-package call result), or `scalarProjection()` (native scalar, or a
-   scalar reached by selector or index).
+   imported-package call result), `scalarProjection()` (native scalar including
+   a named type, or a scalar reached by selector or index),
+   `pointerProjection()`, or `interfaceProjection()`.
+
+3b. On a shell assignment to a bound name, report it so a retained literal
+   cannot outlive its binding:
+
+   ```go
+   e.projections.projectionAssign(name, text) // text statically known
+   e.projections.projectionInvalidate(name)   // text not statically known
+   ```
 
 4. At the shell-word boundary (`words.go`'s `parameter` / `stringParts` path),
    replace the raw Go expression with the projection:
@@ -156,7 +218,7 @@ already has. An unrecorded name is an error, not a guess.
 
 `TestProjection*`, `TestProjectValue*` and `TestProjectorTracksEmitterScopes` in
 `lower/projection_test.go`, and `TestProject*` in
-`lower/shellrt/project_test.go`, check these helpers directly against recorded
-interpreter output and prove the emitter scope seam holds. They are
-helper-level checks. No profile case is compiled or executed here, and nothing
+`lower/shellrt/project_test.go`, check these helpers against **measured** engine
+output — each expectation quotes the observed stdout in a comment — and prove
+the emitter scope seam holds. They are helper-level checks. No profile case is compiled or executed here, and nothing
 in this document claims `go-profile` or `profile-additional` passes end to end.

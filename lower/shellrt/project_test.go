@@ -6,6 +6,7 @@ package shellrt
 import (
 	"math"
 	"reflect"
+	"strings"
 	"testing"
 
 	"mvdan.cc/sh/v3/expand"
@@ -141,8 +142,8 @@ type projAny struct{ V any }
 
 func projHolderOf(v any) projAny { return projAny{V: v} }
 
-// Channels and callables are capabilities. They collapse to the fixed marker
-// with no handle of any kind in the output.
+// Channels and callables are capabilities. They never leak a marshaling
+// handle, a pointer, or any other referenceable token.
 func TestProjectNeverLeaksCapabilities(t *testing.T) {
 	ch := make(chan int)
 	fn := func() {}
@@ -151,15 +152,12 @@ func TestProjectNeverLeaksCapabilities(t *testing.T) {
 		"func":        fn,
 		"nested chan": projAny{V: ch},
 		"nested func": projAny{V: fn},
-		"scalar chan": ch,
-		"scalar func": fn,
 	} {
-		object := Project(v, KindObject)
-		if object != InvalidObject {
+		if object := Project(v, KindObject); object != InvalidObject {
 			t.Fatalf("%s object kind: got %s", name, object)
 		}
-		if scalar := Project(v, KindScalar); scalar != UnsupportedScalar {
-			t.Fatalf("%s scalar kind: got %s", name, scalar)
+		if _, err := ProjectErr(v, KindScalar); err == nil {
+			t.Fatalf("%s scalar kind: expected an explicit failure", name)
 		}
 	}
 }
@@ -174,13 +172,34 @@ func TestProjectRejectsCycles(t *testing.T) {
 	}
 }
 
-// Floating values reaching the runtime scalar path fail closed rather than
-// producing a decimal the interpreter would never print.
-func TestProjectFloatScalarFailsClosed(t *testing.T) {
+// Floating values reaching the runtime scalar path fail explicitly. Measured
+// against the engine, the only float rendering that exists is an untyped
+// literal's exact rational, produced by the compiler from retained provenance;
+// a float64 in hand cannot recover it, so there is nothing faithful to print.
+func TestProjectFloatScalarFailsExplicitly(t *testing.T) {
 	for _, v := range []any{1.5, float32(1.5), 1.1} {
-		if got := Project(v, KindScalar); got != UnsupportedScalar {
-			t.Fatalf("float %v: got %s want %s", v, got, UnsupportedScalar)
+		if _, err := ProjectErr(v, KindScalar); err == nil {
+			t.Fatalf("float %v: expected an explicit failure", v)
 		}
+	}
+}
+
+// The failure is reported, not swallowed into a marker string that would look
+// like a successful projection to everything downstream.
+func TestProjectReportsFailureThroughFail(t *testing.T) {
+	var errs strings.Builder
+	oldErr, oldStatus := Stderr, Status
+	Stderr, Status = &errs, 0
+	defer func() { Stderr, Status = oldErr, oldStatus }()
+
+	if got := Project(1.1, KindScalar); got != "" {
+		t.Fatalf("got %q, want the empty string on failure", got)
+	}
+	if Status == 0 {
+		t.Fatal("failed projection left status 0")
+	}
+	if !strings.Contains(errs.String(), "provenance") {
+		t.Fatalf("failure not reported: %q", errs.String())
 	}
 }
 
@@ -235,4 +254,139 @@ func TestProjectMatchesInterpreterCoercion(t *testing.T) {
 		}
 	}
 	_ = tagged{}.hidden
+}
+
+// --- Measured against the engine ------------------------------------------
+//
+// Every expectation below was observed by running the source through
+// interp.Runner with interp.Lang(syntax.LangBashPP); the observed stdout is
+// quoted in each comment. None of it is inferred from this implementation.
+
+type projCount int
+
+type projName string
+
+type projFlag bool
+
+// Named scalar types project plain, like their underlying kind. Observed:
+// `type Count int; type Name string; type Flag bool; var c Count = 7;
+// var n Name = "hi"; var f Flag = true; echo "c=$c n=$n f=$f"` → "c=7 n=hi f=true".
+// A concrete type switch would have missed all three.
+func TestProjectNamedScalarsArePlain(t *testing.T) {
+	cases := map[any]string{
+		projCount(7):    "7",
+		projName("hi"):  "hi",
+		projFlag(true):  "true",
+		projCount(-3):   "-3",
+		byte(65):        "65",
+		rune(66):        "66",
+		uint64(1 << 40): "1099511627776",
+	}
+	for v, want := range cases {
+		got, err := ProjectErr(v, KindScalar)
+		if err != nil {
+			t.Fatalf("%T(%v): %v", v, v, err)
+		}
+		if got != want {
+			t.Fatalf("%T(%v): got %q want %q", v, v, got, want)
+		}
+	}
+}
+
+type projMethodNamed int
+
+func (projMethodNamed) String() string { panic("scalar projection must not call String") }
+
+// A named scalar carrying a method still projects by kind, without running it.
+func TestProjectNamedScalarIgnoresMethods(t *testing.T) {
+	got, err := ProjectErr(projMethodNamed(7), KindScalar)
+	if err != nil || got != "7" {
+		t.Fatalf("got %q, %v; want 7", got, err)
+	}
+}
+
+// Observed: `p := &s; echo "p=[$p]"` → "p=[]", and identically for &namedInt,
+// new(S) and a nil *S. Corpus interfaces/assignment-assert-type-switch.bpp
+// records `typed-nil-pointer:` for a typed nil pointer. Pointer roots are empty
+// whether or not they are nil.
+func TestProjectPointerRootsAreEmpty(t *testing.T) {
+	s := projPair{First: "n", Second: 7}
+	n := projCount(7)
+	var nilPtr *projPair
+	for name, v := range map[string]any{
+		"&struct":     &s,
+		"&namedInt":   &n,
+		"new(struct)": new(projPair),
+		"nil *struct": nilPtr,
+	} {
+		got, err := ProjectErr(v, KindPointer)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if got != "" {
+			t.Fatalf("%s: got %q want the empty string", name, got)
+		}
+	}
+}
+
+// Observed: `var i S; echo "i=[$i]"` → "i=[]"; corpus
+// interfaces/embedded-promotion-assertions.bpp records `nil-interface-assert::false`.
+// And `var v C = 7; var i I = v; echo "i=[$i]"` → "i=[7]".
+func TestProjectInterfaceRootIsNilCapable(t *testing.T) {
+	var nilIface any
+	got, err := ProjectErr(nilIface, KindInterface)
+	if err != nil || got != "" {
+		t.Fatalf("nil interface: got %q, %v; want empty", got, err)
+	}
+	var nilPtr *projPair
+	if got, err := ProjectErr(any(nilPtr), KindInterface); err != nil || got != "" {
+		t.Fatalf("interface holding typed nil: got %q, %v; want empty", got, err)
+	}
+	if got, err := ProjectErr(any(projCount(7)), KindInterface); err != nil || got != "7" {
+		t.Fatalf("interface holding named scalar: got %q, %v; want 7", got, err)
+	}
+}
+
+// Rich nil behaviour is unchanged by the pointer and interface kinds. Observed:
+// `var m map[string]int; var s []int; echo "m=[$m] s=[$s]"` → "m=[null] s=[null]",
+// and corpus pointers/address-deref-new.bpp ends "...:0:0:null:null".
+func TestProjectRichNilRootsStayNull(t *testing.T) {
+	var m map[string]int
+	var sl []int
+	if got := Project(m, KindObject); got != "null" {
+		t.Fatalf("nil map: got %s want null", got)
+	}
+	if got := Project(sl, KindObject); got != "null" {
+		t.Fatalf("nil slice: got %s want null", got)
+	}
+}
+
+type projNamedSlice []int
+
+type projNamedMap map[string]int
+
+// Observed: `type L []int; type M map[string]int; l := L{1,2}; m := M{"a":1};
+// echo "l=[$l] m=[$m]"` → `l=[[1,2]] m=[{"a":1}]`. Named composites stay JSON.
+func TestProjectNamedCompositesAreJSON(t *testing.T) {
+	if got := Project(projNamedSlice{1, 2}, KindObject); got != "[1,2]" {
+		t.Fatalf("named slice: got %s", got)
+	}
+	if got := Project(projNamedMap{"a": 1}, KindObject); got != `{"a":1}` {
+		t.Fatalf("named map: got %s", got)
+	}
+}
+
+// Observed: `s := S{N:1, T:"x"}; echo "s=[$s]"` → `s=[{"N":1,"T":"x"}]`, and
+// `a := [2]int{1,2}` → `a=[[1,2]]`.
+func TestProjectStructAndArrayRoots(t *testing.T) {
+	type projST struct {
+		N int
+		T string
+	}
+	if got := Project(projST{N: 1, T: "x"}, KindObject); got != `{"N":1,"T":"x"}` {
+		t.Fatalf("struct root: got %s", got)
+	}
+	if got := Project([2]int{1, 2}, KindObject); got != "[1,2]" {
+		t.Fatalf("array root: got %s", got)
+	}
 }

@@ -242,3 +242,150 @@ func TestProjectorPopIsSafe(t *testing.T) {
 		t.Fatal("blank identifier was bound")
 	}
 }
+
+// --- Measured against the engine ------------------------------------------
+//
+// Expectations below were observed by running the source through interp.Runner
+// with interp.Lang(syntax.LangBashPP). The observed stdout is quoted inline.
+
+// Observed: `x := 1.5; echo "1:$x"; x=2.5; echo "2:$x"` → "1:3/2\n2:2.5\n".
+// The exact rational belongs to the binding, not to the name: after a shell
+// assignment the variable holds the raw assigned text. A retained literal that
+// outlived its binding would reprint 3/2 forever, which is why the emitter
+// needs an assignment hook and not just a bind hook.
+func TestProjectionAssignmentReplacesRetainedLiteral(t *testing.T) {
+	var p projector
+	p.projectionBind("x", mustLiteral(t, "FLOAT", "1.5"))
+	if got, err := p.projectValue("x", "x"); err != nil || got != `"3/2"` {
+		t.Fatalf("before assignment: got %s, %v; want \"3/2\"", got, err)
+	}
+	p.projectionAssign("x", "2.5")
+	got, err := p.projectValue("x", "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != `"2.5"` {
+		t.Fatalf("after assignment: got %s want %q", got, "2.5")
+	}
+	// The assigned text is stored verbatim, not re-derived as a rational.
+	if strings.Contains(got, "/") {
+		t.Fatalf("assignment re-derived a rational: %s", got)
+	}
+}
+
+// Observed the same shape for integers and strings: `x := 5; x=7` → "1:5\n2:7\n",
+// and `x := "a"; x=b` → "1:a\n2:b\n".
+func TestProjectionAssignmentForIntAndString(t *testing.T) {
+	var p projector
+	p.projectionBind("i", mustLiteral(t, "INT", "5"))
+	p.projectionAssign("i", "7")
+	if got, _ := p.projectValue("i", "i"); got != `"7"` {
+		t.Fatalf("int reassignment: %s", got)
+	}
+	p.projectionBind("s", mustLiteral(t, "STRING", `"a"`))
+	p.projectionAssign("s", "b")
+	if got, _ := p.projectValue("s", "s"); got != `"b"` {
+		t.Fatalf("string reassignment: %s", got)
+	}
+}
+
+// An assignment whose text is not statically known drops the retained literal.
+// A float binding then fails closed rather than reprinting a stale 3/2.
+func TestProjectionInvalidateFailsClosedForFloat(t *testing.T) {
+	var p projector
+	p.projectionBind("x", mustLiteral(t, "FLOAT", "1.5"))
+	p.projectionInvalidate("x")
+	got, err := p.projectValue("x", "x")
+	if err == nil {
+		t.Fatalf("invalidated float still projected %s", got)
+	}
+	if !strings.Contains(err.Error(), "source literal") {
+		t.Fatalf("refusal lacks the actionable hint: %v", err)
+	}
+	// A non-float binding falls back to runtime projection rather than failing.
+	p.projectionBind("n", mustLiteral(t, "INT", "5"))
+	p.projectionInvalidate("n")
+	if got, err := p.projectValue("n", "n"); err != nil || got != "shellrt.Project(n, shellrt.KindScalar)" {
+		t.Fatalf("invalidated int: got %s, %v", got, err)
+	}
+}
+
+// Assignment updates the binding where it lives rather than creating a shadow
+// that would vanish on scope exit.
+func TestProjectionAssignmentUpdatesOuterBinding(t *testing.T) {
+	var p projector
+	p.projectionPush()
+	p.projectionBind("x", mustLiteral(t, "INT", "5"))
+	p.projectionPush()
+	p.projectionAssign("x", "9")
+	p.projectionPop()
+	if got, _ := p.projectValue("x", "x"); got != `"9"` {
+		t.Fatalf("assignment did not reach the outer binding: %s", got)
+	}
+}
+
+// No typed-float path in the engine renders at all today: `var a float64 = 1.1`
+// reports `"var": executable file not found`, a float64 struct field, slice
+// element and map value each report BASHPP-ECOLLECTION-ELEMENT, and `a := 1.5;
+// b := a + a` reports BASHPP-EEXPR-OPERAND on Unknown and Unknown. So a float
+// projection without retained provenance has nothing faithful to emit and must
+// fail closed rather than invent a decimal.
+func TestProjectionFloatWithoutProvenanceFailsClosed(t *testing.T) {
+	var p projector
+	p.projectionBind("f", projection{kind: projectFloat})
+	if got, err := p.projectValue("f", "f"); err == nil {
+		t.Fatalf("float without provenance projected %s", got)
+	}
+	// It is a positioned compiler diagnostic, not a runtime marker.
+	_, err := p.projectValue("f", "f")
+	d, ok := projectionDiagnostic(&syntax.Lit{}, err).(Diagnostic)
+	if !ok || d.Code != CodeExpr {
+		t.Fatalf("got %#v want a %s diagnostic", err, CodeExpr)
+	}
+	if strings.Contains(d.Msg, "<") {
+		t.Fatalf("diagnostic looks like a marker string: %s", d.Msg)
+	}
+}
+
+// Pointer and interface roots get their own kinds, and rich nil behaviour is
+// untouched. Observed: pointer roots interpolate empty (`p=[]` for &S{},
+// &namedInt, new(S) and nil *S), a nil interface interpolates empty, and a nil
+// map or slice still renders "null".
+func TestProjectValueEmitsPointerAndInterfaceKinds(t *testing.T) {
+	var p projector
+	p.projectionBind("ptr", pointerProjection())
+	p.projectionBind("iface", interfaceProjection())
+	p.projectionBind("rich", objectProjection())
+	want := map[string]string{
+		"ptr":   "shellrt.Project(ptr, shellrt.KindPointer)",
+		"iface": "shellrt.Project(iface, shellrt.KindInterface)",
+		"rich":  "shellrt.Project(rich, shellrt.KindObject)",
+	}
+	for name, expect := range want {
+		got, err := p.projectValue(name, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != expect {
+			t.Fatalf("%s: got %s want %s", name, got, expect)
+		}
+		if _, err := parser.ParseExpr(got); err != nil {
+			t.Fatalf("emitted %s is not a Go expression: %v", got, err)
+		}
+	}
+}
+
+// The untyped float literal keeps its exact-rational provenance and is marked
+// as a float binding, so invalidation can find it later.
+func TestProjectionFloatLiteralCarriesFloatKind(t *testing.T) {
+	pr := mustLiteral(t, "FLOAT", "1.1")
+	if pr.kind != projectFloat {
+		t.Fatalf("float literal kind = %v", pr.kind)
+	}
+	if pr.text != "11/10" {
+		t.Fatalf("got %q want 11/10", pr.text)
+	}
+	if got := mustLiteral(t, "INT", "5"); got.kind != projectScalar {
+		t.Fatalf("int literal kind = %v", got.kind)
+	}
+}
