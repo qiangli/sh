@@ -402,6 +402,9 @@ func (e *emitter) constGroup(n *syntax.BashPPConstGroup) (string, error) {
 		} else if len(words) == 1 {
 			e.projections.projectionBind(spec.Name.Value, e.projectionWord(words[0]))
 		}
+		projection, _ := e.projections.projectionLookup(spec.Name.Value)
+		projection.constant = true
+		e.projections.projectionBind(spec.Name.Value, projection)
 		if spec.Name.Value == "iota" {
 			shadowed = true
 		}

@@ -804,6 +804,7 @@ func (e *emitter) command(c syntax.Command) (string, error) {
 		}
 		e.bind(n.Name.Value)
 		projection := e.declarationProjection(n)
+		projection.constant = n.Kw.Value == "const"
 		if projection.kind == projectFloat && !projection.hasText && !projection.runtimeFloat {
 			return "", e.fail(n, CodeUnsupported, "initialized typed float needs certified scalar conversion semantics")
 		}

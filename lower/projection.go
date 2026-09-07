@@ -52,6 +52,7 @@ const (
 
 // projection is one binding's retained provenance.
 type projection struct {
+	constant          bool
 	emptyWhen         string
 	capabilityElement string
 	kind              projectionKind
