@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"mvdan.cc/sh/v3/interp"
 	"mvdan.cc/sh/v3/lower/shellrt"
 	"mvdan.cc/sh/v3/lower/shellrt/shellexec"
 	"mvdan.cc/sh/v3/syntax"
@@ -514,5 +515,331 @@ func main() {
 	cmd.Env = append(os.Environ(), "GOWORK=off", "GOTOOLCHAIN=local", "GOPROXY=off")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("shellrt no longer builds without a go.sum, so it gained a module dependency: %v\n%s", err, out)
+	}
+}
+
+// TestOrdinaryFailureDoesNotStopARegion is the default shell contract: a
+// non-zero status is not a reason to stop.
+func TestOrdinaryFailureDoesNotStopARegion(t *testing.T) {
+	t.Parallel()
+	s, out := newSession(t)
+	if err := s.Shell(t.Context(), "false\necho ok"); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := out.String(), "ok\n"; got != want {
+		t.Fatalf("output %q, want %q: the region stopped at the first failure", got, want)
+	}
+	if got := s.Status(); got != 0 {
+		t.Fatalf("Status() = %d, want 0: echo is the last command", got)
+	}
+	if s.Exited() {
+		t.Fatal("Exited() is set for an ordinary failure")
+	}
+	// Several failures in a row, and a status that survives to the end.
+	if err := s.Shell(t.Context(), "false; false; echo mid; (exit 5)"); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Status(); got != 5 {
+		t.Fatalf("Status() = %d, want 5", got)
+	}
+	if got, want := out.String(), "ok\nmid\n"; got != want {
+		t.Fatalf("output %q, want %q", got, want)
+	}
+}
+
+func TestErrexitStopsARegion(t *testing.T) {
+	t.Parallel()
+	s, out := newSession(t)
+	if err := s.Shell(t.Context(), "set -e\nfalse\necho ok"); err != nil {
+		t.Fatal(err)
+	}
+	if got := out.String(); got != "" {
+		t.Fatalf("output %q, want none: errexit did not stop the region", got)
+	}
+	if got := s.Status(); got != 1 {
+		t.Fatalf("Status() = %d, want 1", got)
+	}
+	if !s.Exited() {
+		t.Fatal("Exited() is not set after errexit tripped")
+	}
+	// The session stays usable; acting on Exited is the program's decision.
+	if err := s.Shell(t.Context(), "set +e; false; echo after"); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := out.String(), "after\n"; got != want {
+		t.Fatalf("output %q, want %q", got, want)
+	}
+	if s.Exited() {
+		t.Fatal("Exited() stuck on after a region that ran to the end")
+	}
+}
+
+func TestExitStopsARegionAndKeepsItsCode(t *testing.T) {
+	t.Parallel()
+	s, out := newSession(t)
+	if err := s.Shell(t.Context(), "echo before\nexit 7\necho after"); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := out.String(), "before\n"; got != want {
+		t.Fatalf("output %q, want %q", got, want)
+	}
+	if got := s.Status(); got != 7 {
+		t.Fatalf("Status() = %d, want 7", got)
+	}
+	if !s.Exited() {
+		t.Fatal("Exited() is not set after exit")
+	}
+}
+
+// TestRegionBookkeepingIsInvisible proves the per-region machinery -- applying
+// typed writes, projecting variables and options, preserving $? -- adds no
+// user-visible callbacks and does not perturb the program's status.
+func TestRegionBookkeepingIsInvisible(t *testing.T) {
+	t.Parallel()
+	s, out := newSession(t)
+	ctx := t.Context()
+
+	if err := s.Shell(ctx, "trap 'echo D:$BASH_COMMAND' DEBUG"); err != nil {
+		t.Fatal(err)
+	}
+	// A typed write and an option read both happen at this region boundary.
+	s.SetString("typed", "v")
+	if err := s.SetOption("xtrace", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Shell(ctx, "echo one\necho two"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Shell(ctx, "trap - DEBUG"); err != nil {
+		t.Fatal(err)
+	}
+
+	// The typed assignment is visible as an assignment, which is honest: the
+	// typed side really did assign a variable, and the merged program's DEBUG
+	// trap should see it. Everything that reflects no program action --
+	// reading the options back, projecting variables, restoring $? -- is
+	// invisible. Note there is no `set` callback: options are read out of
+	// SHELLOPTS rather than by running `set +o`.
+	got := out.String()
+	debugs := strings.Count(got, "D:")
+	if want := 4; debugs != want {
+		t.Fatalf("output %q: %d DEBUG callbacks, want %d (typed=, echo one, echo two, trap -)", got, debugs, want)
+	}
+	for _, leak := range []string{"D:set ", "SHELLOPTS", "D:cd ", "D:unset"} {
+		if strings.Contains(got, leak) {
+			t.Fatalf("output %q: bookkeeping %q leaked into the DEBUG trap", got, leak)
+		}
+	}
+
+	// A region boundary with no typed writes adds no callbacks at all.
+	if err := s.Shell(ctx, "trap 'echo D:$BASH_COMMAND' DEBUG"); err != nil {
+		t.Fatal(err)
+	}
+	before := strings.Count(out.String(), "D:")
+	if err := s.Shell(ctx, "echo three"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Shell(ctx, "trap - DEBUG"); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.Count(out.String(), "D:")-before, 2; got != want {
+		t.Fatalf("output %q: %d callbacks across two clean region boundaries, want %d", out.String(), got, want)
+	}
+
+	// An ERR trap must not see the bookkeeping either, and $? must survive it.
+	if err := s.Shell(ctx, "trap 'echo E' ERR"); err != nil {
+		t.Fatal(err)
+	}
+	s.SetString("another", "w")
+	if err := s.Shell(ctx, "false"); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Status(); got != 1 {
+		t.Fatalf("Status() = %d, want 1", got)
+	}
+	if n := strings.Count(out.String(), "E\n"); n != 1 {
+		t.Fatalf("output %q: %d ERR callbacks, want 1", out.String(), n)
+	}
+	// $? still reports the previous region, not the runtime's own last
+	// statement -- so it has to be read by the region's first command.
+	if err := s.Shell(ctx, "echo prev=$?; trap - ERR"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "prev=1") {
+		t.Fatalf("output %q: $? was perturbed across the region boundary", out.String())
+	}
+}
+
+func TestBookkeepingCannotTripErrexit(t *testing.T) {
+	t.Parallel()
+	s, out := newSession(t)
+	ctx := t.Context()
+	if err := s.Shell(ctx, "set -e; echo start"); err != nil {
+		t.Fatal(err)
+	}
+	// Under errexit, a bookkeeping statement that the runtime chose must not
+	// be able to end the program.
+	s.SetString("x", "1")
+	s.Set("arr", shellrt.Var{Kind: shellrt.Indexed, List: []string{"a"}})
+	if err := s.Shell(ctx, "echo still-here"); err != nil {
+		t.Fatal(err)
+	}
+	if s.Exited() {
+		t.Fatal("bookkeeping tripped errexit")
+	}
+	if got, want := out.String(), "start\nstill-here\n"; got != want {
+		t.Fatalf("output %q, want %q", got, want)
+	}
+}
+
+func TestTypedWriteToAReadonlyVariableIsReported(t *testing.T) {
+	t.Parallel()
+	s, out := newSession(t)
+	ctx := t.Context()
+	if err := s.Shell(ctx, "frozen=original; readonly frozen"); err != nil {
+		t.Fatal(err)
+	}
+	s.SetString("frozen", "overwritten")
+
+	err := s.Shell(ctx, "echo unreachable")
+	var applyErr *shellexec.ApplyError
+	if !errors.As(err, &applyErr) {
+		t.Fatalf("err = %v, want an *ApplyError", err)
+	}
+	if !strings.Contains(applyErr.Source, "frozen=") {
+		t.Fatalf("ApplyError names %q, want the refused assignment", applyErr.Source)
+	}
+	// The region did not run, and the projection reports what the shell holds
+	// rather than the write that was refused.
+	if got := out.String(); strings.Contains(got, "unreachable") {
+		t.Fatalf("output %q: the region ran after a refused write", got)
+	}
+	v, ok := s.Get("frozen")
+	if !ok || v.Str != "original" {
+		t.Fatalf("frozen = %+v, want the shell's original value", v)
+	}
+	if !v.ReadOnly {
+		t.Fatal("the projection lost the readonly attribute")
+	}
+	// The session recovers once the typed side stops fighting the shell.
+	s.Set("frozen", v)
+	if err := s.Shell(ctx, "echo recovered"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "recovered") {
+		t.Fatalf("output %q", out.String())
+	}
+}
+
+func TestTypedChdirToAVanishedDirectoryIsReported(t *testing.T) {
+	t.Parallel()
+	s, _ := newSession(t)
+	ctx := t.Context()
+	start := s.Dir()
+	gone := filepath.Join(start, "gone")
+	if err := os.Mkdir(gone, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Chdir(gone); err != nil {
+		t.Fatal(err)
+	}
+	// Chdir validated the directory; it disappears before the shell sees it.
+	if err := os.Remove(gone); err != nil {
+		t.Fatal(err)
+	}
+	err := s.Shell(ctx, "echo unreachable")
+	var applyErr *shellexec.ApplyError
+	if !errors.As(err, &applyErr) {
+		t.Fatalf("err = %v, want an *ApplyError", err)
+	}
+	if !strings.HasPrefix(applyErr.Source, "cd ") {
+		t.Fatalf("ApplyError names %q, want the cd", applyErr.Source)
+	}
+	// The projection reports the shell's real cwd, not the one that failed.
+	if got := s.Dir(); got != start {
+		t.Fatalf("Dir() = %q, want the shell's actual cwd %q", got, start)
+	}
+}
+
+// blockUntilCancelled is a command that only returns when its context ends.
+func blockUntilCancelled(started chan<- struct{}) interp.ExecHandlerFunc {
+	var once sync.Once
+	return func(ctx context.Context, args []string) error {
+		if len(args) == 0 || args[0] != "blockforever" {
+			return interp.DefaultExecHandler(0)(ctx, args)
+		}
+		once.Do(func() { close(started) })
+		<-ctx.Done()
+		return nil
+	}
+}
+
+func TestCloseIsBoundedWhenTheExitTrapBlocks(t *testing.T) {
+	t.Parallel()
+	started := make(chan struct{})
+	ctx, cancel := context.WithCancel(t.Context())
+	s, _ := newSession(t,
+		shellrt.WithContext(ctx),
+		shellrt.WithShellFactory(shellexec.New(
+			shellexec.ShutdownTimeout(150*time.Millisecond),
+			shellexec.RunnerOptions(interp.ExecHandler(blockUntilCancelled(started))),
+		)),
+	)
+	if err := s.Shell(ctx, "trap 'blockforever' EXIT"); err != nil {
+		t.Fatal(err)
+	}
+	// The session context is already cancelled, so shutdown cannot inherit a
+	// deadline from it: the backend has to supply its own.
+	cancel()
+
+	done := make(chan error, 1)
+	go func() { done <- s.Close() }()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the EXIT trap never ran after cancellation")
+	}
+	select {
+	case err := <-done:
+		if err == nil || !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("Close() = %v, want a bounded shutdown deadline", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close hung on a blocking EXIT trap")
+	}
+	// No leaks: the blocked command was released by the shutdown deadline, and
+	// Close stays idempotent afterwards.
+	if err := s.Close(); err != nil {
+		t.Fatalf("second Close() = %v", err)
+	}
+	if active := s.Active(); active != 0 {
+		t.Fatalf("Active() = %d, want 0", active)
+	}
+}
+
+func TestWithoutExitTrapsStillTerminatesTheShell(t *testing.T) {
+	t.Parallel()
+	started := make(chan struct{})
+	s, out := newSession(t, shellrt.WithShellFactory(shellexec.New(
+		shellexec.WithoutExitTraps(),
+		shellexec.ShutdownTimeout(150*time.Millisecond),
+		shellexec.RunnerOptions(interp.ExecHandler(blockUntilCancelled(started))),
+	)))
+	if err := s.Shell(t.Context(), "trap 'echo bye' EXIT; echo body"); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- s.Close() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close hung with WithoutExitTraps")
+	}
+	// The user callback was dropped, but shutdown still ran to completion.
+	if got, want := out.String(), "body\n"; got != want {
+		t.Fatalf("output %q, want %q", got, want)
 	}
 }

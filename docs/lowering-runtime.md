@@ -49,6 +49,7 @@ type State struct {
     Vars    map[string]Var
     Options map[string]bool
     Status  int
+    Exited  bool   // the shell asked to end the program
 }
 func (s State) Clone() State
 func (s State) Environ() []string      // sorted NAME=value, exported scalars
@@ -95,6 +96,7 @@ func (s *Session) Option(name string) bool
 func (s *Session) SetOption(name string, on bool) error
 func (s *Session) Status() int
 func (s *Session) SetStatus(code int)
+func (s *Session) Exited() bool
 func (s *Session) Stdio() Stdio
 func (s *Session) SetStdio(in io.Reader, out, err io.Writer)
 func (s *Session) Context() context.Context
@@ -133,6 +135,15 @@ func Dialect(lang syntax.LangVariant) Option   // default syntax.LangBash
 func BashPP() Option                           // Dialect(syntax.LangBashPP)
 func RunnerOptions(opts ...interp.RunnerOption) Option
 func WithoutExitTraps() Option
+func ShutdownTimeout(d time.Duration) Option   // default DefaultShutdownTimeout
+
+const DefaultShutdownTimeout = 10 * time.Second
+
+type ApplyError struct {   // a typed-side write the shell refused
+    Source string
+    Status int
+    Err    error
+}
 ```
 
 Typical construction:
@@ -162,6 +173,48 @@ options and `$?`.
 A backend applies only what the typed side actually changed since the last
 projection. Re-applying the whole projection would flatten shell-only
 attributes on variables the typed program never touched.
+
+### Region control flow
+
+A non-zero status is **not** a reason to stop. `false; echo ok` runs both
+commands and ends at status 0, exactly as a shell without errexit does. The
+shell decides when a region stops, and `interp.Runner.Exited` — checked
+immediately after each `Run`, as its documentation requires — reports both
+cases that end one: the `exit` builtin, and a failure that tripped errexit.
+
+When a region ends that way, `State.Exited` is set and `State.Status` carries
+the code. The runtime does not act on it: the session stays usable, because
+whether the program stops is the generated program's decision, not the
+runtime's.
+
+### Region bookkeeping is invisible
+
+Per-region machinery must not add callbacks the program can observe, or
+perturb its status:
+
+- **Options are read, not run.** The projection reads `SHELLOPTS` with
+  `Runner.LiveVar`, a pure variable read. The earlier `set +o` probe was a real
+  command: it fired DEBUG and ERR traps, could trip errexit, reset `$?`, and —
+  because it captured stdout — swallowed a trap's output into the option state.
+- **Variables are read, not run**, likewise through `LiveVar`.
+- **`$?` is restored** with `Runner.SetLastExitStatus` after any bookkeeping, so
+  a region's first command sees the previous region's status.
+
+One thing is deliberately visible: applying a typed-side write. A typed
+assignment, `cd`, `unset` or option change is emitted as the corresponding
+shell statement, so a DEBUG trap sees `typed='v'`. That is honest — the typed
+side really did assign a variable — and it is unavoidable without a public
+interpreter API for writing a variable without running a command. See
+*Proposed interp API* below.
+
+### Typed writes that the shell refuses
+
+A refused write — a readonly variable, a `cd` to a directory that vanished
+between validation and use — returns `*shellexec.ApplyError` naming the
+statement, and the region does **not** run. The projection is refreshed from
+the live shell first, so the caller sees what the shell actually holds (the
+readonly variable's original value, the shell's real cwd) rather than the write
+that was rejected. The session stays usable.
 
 ### Persistence
 
@@ -229,6 +282,16 @@ cancellation and shutdown still work.
   executing anything else. The session passes a shutdown context derived with
   `context.WithoutCancel`, so a cancelled program still runs its EXIT trap and
   still releases interpreter resources.
+- **Shutdown is bounded.** An EXIT trap is arbitrary user code and the
+  interpreter also waits there for background work, so `Close` cannot inherit a
+  deadline from the already-cancelled session context and supplies its own:
+  `ShutdownTimeout`, defaulting to `DefaultShutdownTimeout`. Exceeding it
+  returns an error wrapping `context.DeadlineExceeded` and releases whatever
+  the trap was blocked on.
+- `WithoutExitTraps` drops the user callbacks but still terminates the shell and
+  still waits for the interpreter's background work — it does not skip cleanup.
+  It costs one `trap - EXIT DEBUG ERR` statement, so a DEBUG trap may observe
+  that single statement before it is cleared.
 - A task runs the `EXIT` trap it inherited when its body ends. That is bash++
   task semantics, not plain subshell semantics: real bash does not run an
   inherited EXIT trap when a `( ... )` subshell exits, but
@@ -280,12 +343,37 @@ backend (the tests import it rather than keeping a second copy):
   reaping, snapshot-failure reporting, `Go`-after-join, and concurrent
   launch/join under the race detector.
 
-`shellexec`'s own tests add: EXIT trap exactly once on `Close` and never per
-region, EXIT trap still running after cancellation, a task running its own and
-its inherited EXIT trap, `WithoutExitTraps`, the `BashPP`/`Dialect` options, a
-full functions/traps/arrays/options/status/cwd exchange through a child
-snapshot, concurrent tasks sharing no backend, and the two artifact builds
-described above.
+`shellexec`'s own tests add: `false; echo ok` continuing and ending at 0;
+`set -e; false; echo ok` stopping with status 1 and `Exited`; `exit 7` stopping
+with its code; a DEBUG trap counted across region boundaries, showing exactly
+one callback per user command, none for option reads or projection, and none at
+all at a boundary with no typed writes; an ERR trap counted likewise with `$?`
+surviving the boundary; bookkeeping unable to trip errexit; a refused readonly
+write and a vanished-directory `cd` both reported as `ApplyError` with the
+projection showing the shell's real state; a blocking EXIT trap under a
+cancelled context returning within the shutdown deadline with no leaks;
+`WithoutExitTraps` still terminating the shell; EXIT trap exactly once on
+`Close` and never per region; a task running its own and its inherited EXIT
+trap; the `BashPP`/`Dialect` options; a full
+functions/traps/arrays/options/status/cwd exchange through a child snapshot;
+concurrent tasks sharing no backend; and the two artifact builds described
+above.
+
+## Proposed interp API
+
+Not implemented; `interp` is untouched. Applying a typed-side variable write
+currently goes through a shell assignment statement because there is no public
+way to write a variable on a `Runner`. A minimal addition —
+
+```go
+func (r *Runner) SetVar(name string, vr expand.Variable) error
+```
+
+a public counterpart to the existing unexported `setVar` — would let the
+runtime apply typed writes without executing a command, making the last
+observable piece of region bookkeeping invisible too, and would report
+readonly refusals directly instead of through an exit status. Needs a decision
+before anyone touches `interp`.
 
 ## Remaining work
 
@@ -301,5 +389,5 @@ described above.
   streams, job control, pipelines between tasks, channels, `set -e` semantics
   for typed statements, and agentic callback scopes. `WithContext` is the seam
   the callback scope will attach to; nothing consumes it yet.
-- **Option projection** is read back with a `set +o` probe because the
-  interpreter exposes no public getter. It covers `KnownOptions()` only.
+- **Option projection** covers `KnownOptions()` only; those are exactly the
+  `SHELLOPTS` names the typed side can read and write.

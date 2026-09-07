@@ -14,15 +14,16 @@
 package shellexec
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/interp"
@@ -34,10 +35,17 @@ import (
 type Option func(*config)
 
 type config struct {
-	lang    syntax.LangVariant
-	runner  []interp.RunnerOption
-	noTraps bool
+	lang     syntax.LangVariant
+	runner   []interp.RunnerOption
+	noTraps  bool
+	shutdown time.Duration
 }
+
+// DefaultShutdownTimeout bounds Close. A shell's EXIT trap is arbitrary user
+// code and the interpreter also waits there for background work, so shutdown
+// needs a deadline of its own: the session's context is already cancelled by
+// then and cannot supply one.
+const DefaultShutdownTimeout = 10 * time.Second
 
 // Dialect selects the language variant used to parse regions and to run them.
 // The default is [syntax.LangBash].
@@ -60,8 +68,21 @@ func RunnerOptions(opts ...interp.RunnerOption) Option {
 // WithoutExitTraps stops [shellrt.Session.Close] from running the shell's EXIT
 // trap. The default is to run it exactly once per session, which is what a
 // shell does when it terminates.
+//
+// Shutdown still terminates the shell and waits for the interpreter's own
+// background work; only the user callbacks are dropped. Dropping them costs
+// one `trap - EXIT DEBUG ERR` statement, so a DEBUG trap may observe that one
+// statement before it is cleared. There is no public API to clear a trap
+// without running a command.
 func WithoutExitTraps() Option {
 	return func(c *config) { c.noTraps = true }
+}
+
+// ShutdownTimeout bounds how long Close waits for the EXIT trap and for the
+// interpreter's background work. Zero or negative selects
+// [DefaultShutdownTimeout]; use a very large value to wait indefinitely.
+func ShutdownTimeout(d time.Duration) Option {
+	return func(c *config) { c.shutdown = d }
 }
 
 // New returns a factory for [shellrt.WithShellFactory], so that the backend is
@@ -80,9 +101,12 @@ func New(opts ...Option) shellrt.ShellFactory {
 // NewRunner builds a backend directly, for callers that manage session
 // construction themselves.
 func NewRunner(st shellrt.State, streams shellrt.Stdio, opts ...Option) (shellrt.ShellRunner, error) {
-	cfg := config{lang: syntax.LangBash}
+	cfg := config{lang: syntax.LangBash, shutdown: DefaultShutdownTimeout}
 	for _, opt := range opts {
 		opt(&cfg)
+	}
+	if cfg.shutdown <= 0 {
+		cfg.shutdown = DefaultShutdownTimeout
 	}
 	base := []interp.RunnerOption{
 		interp.Lang(cfg.lang),
@@ -156,16 +180,45 @@ func (sh *shell) Clone(streams shellrt.Stdio) (shellrt.ShellRunner, error) {
 // and still releases the interpreter's resources.
 func (sh *shell) Close(ctx context.Context) error {
 	sh.closeOnce.Do(func() {
+		ctx, cancel := context.WithTimeout(ctx, sh.cfg.shutdown)
+		defer cancel()
 		if sh.cfg.noTraps {
-			return
+			// Drop the user callbacks but still terminate the shell below, so
+			// the interpreter's own background work is still waited for.
+			if err := sh.runStatements(ctx, "trap - EXIT DEBUG ERR", "shellrt-shutdown"); err != nil {
+				sh.closeErr = err
+				return
+			}
 		}
+		// An empty File is the interpreter's own way to drive an EXIT trap and
+		// its background-work wait without executing anything else.
 		if err := sh.runner.Run(ctx, &syntax.File{}); err != nil {
 			if _, convErr := exitStatus(err); convErr != nil {
 				sh.closeErr = convErr
 			}
 		}
+		if err := ctx.Err(); err != nil && sh.closeErr == nil {
+			sh.closeErr = fmt.Errorf("shellrt: shutdown did not finish within %s: %w", sh.cfg.shutdown, err)
+		}
 	})
 	return sh.closeErr
+}
+
+// runStatements runs bookkeeping source without letting it become part of the
+// program's observable status.
+func (sh *shell) runStatements(ctx context.Context, src, name string) error {
+	file, err := sh.parse(src, name)
+	if err != nil {
+		return err
+	}
+	for _, stmt := range file.Stmts {
+		if err := sh.runner.Run(ctx, stmt); err != nil {
+			if _, convErr := exitStatus(err); convErr != nil {
+				return convErr
+			}
+		}
+	}
+	return nil
 }
 
 // RunShell applies the typed side's changes, runs one region, and refreshes
@@ -177,6 +230,11 @@ func (sh *shell) RunShell(ctx context.Context, st *shellrt.State, streams shellr
 		}
 	}
 	if err := sh.applyTypedWrites(ctx, st); err != nil {
+		// The typed write did not take. Publish what the shell actually holds
+		// rather than the state the caller asked for, then report.
+		if projectErr := sh.project(st, sh.lastStatus()); projectErr != nil {
+			return errors.Join(err, projectErr)
+		}
 		return err
 	}
 	file, err := sh.parse(src, "shellrt")
@@ -186,17 +244,41 @@ func (sh *shell) RunShell(ctx context.Context, st *shellrt.State, streams shellr
 	// Statement by statement, not as a whole File: running a File implies an
 	// exit, which would fire the EXIT trap at the end of every region. Close
 	// is what ends the shell.
-	var runErr error
+	//
+	// A non-zero status is not a reason to stop. `false; echo ok` runs both
+	// commands and ends at 0, exactly as a shell without errexit does. The
+	// shell decides when a region stops: Runner.Exited reports both `exit N`
+	// and an errexit-tripped failure, and is only valid immediately after the
+	// Run that set it.
+	status, exited := 0, false
 	for _, stmt := range file.Stmts {
-		if runErr = sh.runner.Run(ctx, stmt); runErr != nil {
+		runErr := sh.runner.Run(ctx, stmt)
+		exited = sh.runner.Exited()
+		code, fatal := exitStatus(runErr)
+		if fatal != nil {
+			return fatal
+		}
+		status = code
+		if exited {
 			break
 		}
 	}
-	status, err := exitStatus(runErr)
-	if err != nil {
+	if err := sh.project(st, status); err != nil {
 		return err
 	}
-	return sh.project(ctx, st, status)
+	st.Exited = exited
+	sh.last.Exited = exited
+	return nil
+}
+
+// lastStatus reads $? without running anything.
+func (sh *shell) lastStatus() int {
+	v := sh.runner.LiveVar("?")
+	code, err := strconv.Atoi(v.Str)
+	if err != nil {
+		return 1
+	}
+	return code
 }
 
 func (sh *shell) parse(src, name string) (*syntax.File, error) {
@@ -225,9 +307,13 @@ func exitStatus(runErr error) (int, error) {
 // attributes — declare -i, namerefs — on variables the typed program never
 // touched.
 func (sh *shell) applyTypedWrites(ctx context.Context, st *shellrt.State) error {
-	var script strings.Builder
+	// One statement per element, so a failure names the write that failed.
+	var stmts []string
+	emit := func(format string, args ...any) {
+		stmts = append(stmts, fmt.Sprintf(format, args...))
+	}
 	if st.Dir != sh.last.Dir {
-		fmt.Fprintf(&script, "cd -- %s\n", quote(st.Dir))
+		emit("cd -- %s", quote(st.Dir))
 	}
 	for _, name := range shellrt.KnownOptions() {
 		if st.Options[name] != sh.last.Options[name] {
@@ -235,12 +321,12 @@ func (sh *shell) applyTypedWrites(ctx context.Context, st *shellrt.State) error 
 			if st.Options[name] {
 				flag = "-o"
 			}
-			fmt.Fprintf(&script, "set %s %s\n", flag, name)
+			emit("set %s %s", flag, name)
 		}
 	}
 	for _, name := range slices.Sorted(maps.Keys(sh.last.Vars)) {
 		if _, ok := st.Vars[name]; !ok {
-			fmt.Fprintf(&script, "unset %s\n", name)
+			emit("unset %s", name)
 		}
 	}
 	for _, name := range slices.Sorted(maps.Keys(st.Vars)) {
@@ -248,18 +334,28 @@ func (sh *shell) applyTypedWrites(ctx context.Context, st *shellrt.State) error 
 		if old, ok := sh.last.Vars[name]; ok && old.Equal(v) {
 			continue
 		}
-		script.WriteString(assignment(name, v))
+		for _, stmt := range assignment(name, v) {
+			stmts = append(stmts, stmt)
+		}
 	}
-	if script.Len() > 0 {
-		file, err := sh.parse(script.String(), "shellrt-apply")
+	if len(stmts) > 0 {
+		file, err := sh.parse(strings.Join(stmts, "\n"), "shellrt-apply")
 		if err != nil {
 			return err
 		}
-		for _, stmt := range file.Stmts {
-			if err := sh.runner.Run(ctx, stmt); err != nil {
-				if _, convErr := exitStatus(err); convErr != nil {
-					return convErr
-				}
+		if len(file.Stmts) != len(stmts) {
+			return fmt.Errorf("shellrt: applying typed state: %d statements parsed as %d", len(stmts), len(file.Stmts))
+		}
+		for i, stmt := range file.Stmts {
+			runErr := sh.runner.Run(ctx, stmt)
+			code, fatal := exitStatus(runErr)
+			if fatal != nil {
+				return &ApplyError{Source: stmts[i], Err: fatal}
+			}
+			// A refused write -- readonly variable, missing directory -- must
+			// not be swallowed and then projected as if it had worked.
+			if code != 0 {
+				return &ApplyError{Source: stmts[i], Status: code}
 			}
 		}
 	}
@@ -270,42 +366,63 @@ func (sh *shell) applyTypedWrites(ctx context.Context, st *shellrt.State) error 
 	return nil
 }
 
-func assignment(name string, v shellrt.Var) string {
-	var b strings.Builder
+// ApplyError reports a typed-side write the shell refused: a readonly
+// variable, a directory that does not exist, and so on. The session's
+// projection is refreshed from the live shell before it is returned, so the
+// caller sees what the shell actually holds.
+type ApplyError struct {
+	Source string // the bookkeeping statement that failed
+	Status int    // the shell status it produced, if it was not fatal
+	Err    error  // set when the failure was fatal rather than a status
+}
+
+func (e *ApplyError) Error() string {
+	if e.Err != nil {
+		return fmt.Sprintf("shellrt: applying %q: %v", e.Source, e.Err)
+	}
+	return fmt.Sprintf("shellrt: applying %q: exit status %d", e.Source, e.Status)
+}
+
+func (e *ApplyError) Unwrap() error { return e.Err }
+
+func assignment(name string, v shellrt.Var) []string {
+	var value strings.Builder
 	switch v.Kind {
 	case shellrt.Indexed:
-		fmt.Fprintf(&b, "%s=(", name)
+		fmt.Fprintf(&value, "%s=(", name)
 		for i, elem := range v.List {
 			if i > 0 {
-				b.WriteByte(' ')
+				value.WriteByte(' ')
 			}
-			b.WriteString(quote(elem))
+			value.WriteString(quote(elem))
 		}
-		b.WriteString(")\n")
+		value.WriteString(")")
 	case shellrt.Associative:
-		fmt.Fprintf(&b, "declare -A %s=(", name)
+		fmt.Fprintf(&value, "declare -A %s=(", name)
 		for _, key := range slices.Sorted(maps.Keys(v.Map)) {
-			fmt.Fprintf(&b, "[%s]=%s ", quote(key), quote(v.Map[key]))
+			fmt.Fprintf(&value, "[%s]=%s ", quote(key), quote(v.Map[key]))
 		}
-		b.WriteString(")\n")
+		value.WriteString(")")
 	default:
-		fmt.Fprintf(&b, "%s=%s\n", name, quote(v.Str))
+		fmt.Fprintf(&value, "%s=%s", name, quote(v.Str))
 	}
+	stmts := []string{value.String()}
 	if v.Exported {
-		fmt.Fprintf(&b, "export %s\n", name)
+		stmts = append(stmts, "export "+name)
 	}
 	if v.ReadOnly {
-		fmt.Fprintf(&b, "readonly %s\n", name)
+		stmts = append(stmts, "readonly "+name)
 	}
-	return b.String()
+	return stmts
 }
 
 func quote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
 // project refreshes the typed-visible view from the live shell.
-func (sh *shell) project(ctx context.Context, st *shellrt.State, status int) error {
+func (sh *shell) project(st *shellrt.State, status int) error {
 	st.Dir = sh.runner.Dir
 	st.Status = status
+	st.Exited = false
 
 	managed := managedNames(sh.cfg.lang)
 	names := map[string]bool{}
@@ -325,11 +442,7 @@ func (sh *shell) project(ctx context.Context, st *shellrt.State, status int) err
 	}
 	st.Vars = vars
 
-	options, err := sh.projectOptions(ctx)
-	if err != nil {
-		return err
-	}
-	st.Options = options
+	st.Options = sh.projectOptions()
 	// The option probe is bookkeeping too; $? must still report the region.
 	sh.runner.SetLastExitStatus(clampStatus(status))
 	sh.last = st.Clone()
@@ -358,38 +471,21 @@ func projectVar(v expand.Variable) (shellrt.Var, bool) {
 	return out, true
 }
 
-// projectOptions reads the live option state back through `set +o`, since the
-// interpreter exposes no public getter for it.
-func (sh *shell) projectOptions(ctx context.Context) (map[string]bool, error) {
-	var buf bytes.Buffer
-	if err := interp.StdIO(nil, &buf, &buf)(sh.runner); err != nil {
-		return nil, err
-	}
-	file, err := sh.parse("set +o", "shellrt-options")
-	if err != nil {
-		return nil, err
-	}
-	runErr := sh.runner.Run(ctx, file.Stmts[0])
-	if err := sh.restoreStdio(sh.io); err != nil {
-		return nil, err
-	}
-	if runErr != nil {
-		if _, convErr := exitStatus(runErr); convErr != nil {
-			return nil, convErr
-		}
+// projectOptions reads the live option state out of SHELLOPTS. That is a pure
+// variable read: unlike running `set +o`, it executes no command, so it fires
+// no DEBUG or ERR trap, cannot trip errexit, cannot perturb $?, and cannot
+// capture a trap's output as if it were option state. Region bookkeeping must
+// stay invisible to the program being run.
+func (sh *shell) projectOptions() map[string]bool {
+	enabled := map[string]bool{}
+	for _, name := range strings.Split(sh.runner.LiveVar("SHELLOPTS").Str, ":") {
+		enabled[name] = true
 	}
 	options := map[string]bool{}
-	known := shellrt.KnownOptions()
-	for line := range strings.Lines(buf.String()) {
-		fields := strings.Fields(line)
-		if len(fields) != 3 || fields[0] != "set" {
-			continue
-		}
-		if slices.Contains(known, fields[2]) {
-			options[fields[2]] = fields[1] == "-o"
-		}
+	for _, name := range shellrt.KnownOptions() {
+		options[name] = enabled[name]
 	}
-	return options, nil
+	return options
 }
 
 // managedNames is the set of variables a fresh runner defines by itself. It is

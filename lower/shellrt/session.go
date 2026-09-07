@@ -85,11 +85,17 @@ type State struct {
 	Vars    map[string]Var
 	Options map[string]bool
 	Status  int
+
+	// Exited reports that the shell asked to end the program during the last
+	// region: an `exit` builtin, or a failure under errexit. Status carries
+	// the code. The runtime does not act on it -- a session stays usable --
+	// because whether to stop is the generated program's decision.
+	Exited bool
 }
 
 // Clone returns a deep copy, so a child task and its parent share no map.
 func (s State) Clone() State {
-	c := State{Dir: s.Dir, Status: s.Status, Vars: map[string]Var{}, Options: maps.Clone(s.Options)}
+	c := State{Dir: s.Dir, Status: s.Status, Exited: s.Exited, Vars: map[string]Var{}, Options: maps.Clone(s.Options)}
 	for name, v := range s.Vars {
 		c.Vars[name] = v.clone()
 	}
@@ -493,6 +499,15 @@ func (s *Session) SetStatus(code int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.state.Status = code
+}
+
+// Exited reports whether the last shell region ended because the shell asked
+// to end the program -- `exit`, or a failure under errexit -- rather than
+// because it ran out of statements. [Session.Status] carries the code.
+func (s *Session) Exited() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.state.Exited
 }
 
 // Stdio returns the session's streams. They are shared, not copied.
