@@ -47,11 +47,22 @@ func (e *emitter) promotedCompositeExpr(lit *syntax.BashPPCompositeLit, declared
 	if err != nil {
 		return "", true, err
 	}
+	// fail reports a keyed-literal rejection with the public source rendering.
+	// The source engine writes every one of these through r.bashErrPrefix (see
+	// bashPPStructLiteral in interp/bashpp_struct.go), so their public bytes
+	// carry an `<origin>: line N: ` prefix; failMixed is the one rejection
+	// there that is deliberately written without it. Recording the rendering
+	// per diagnostic in Text keeps that split where the source engine puts it,
+	// rather than making it a formatter-wide rule a consumer would have to
+	// re-derive. Code, Msg and Pos stay populated as before.
 	fail := func(node syntax.Node, code, message string) (string, bool, error) {
-		return "", true, e.fail(node, "BASHPP-ESTRUCT-"+code, message)
+		return "", true, e.promotedFail(node, code, message, true)
+	}
+	failMixed := func(node syntax.Node, code, message string) (string, bool, error) {
+		return "", true, e.promotedFail(node, code, message, false)
 	}
 	if positional {
-		return fail(lit, "MIXED", typ+" literal cannot mix keyed and positional fields")
+		return failMixed(lit, "MIXED", typ+" literal cannot mix keyed and positional fields")
 	}
 	seen := map[string]bool{}
 	selections := make([]promotedSelection, len(lit.Elems))
@@ -160,6 +171,25 @@ func (e *emitter) promotedCompositeExpr(lit *syntax.BashPPCompositeLit, declared
 	}
 	return "func() " + typ + " {\n" + setup.String() + "return " + result + "\n}()", true, nil
 }
+
+// promotedFail builds the keyed-literal diagnostic. prefixed selects the
+// `<origin>: line N: ` rendering the source engine's bashErrPrefix produces,
+// which names an unnamed script "bash" exactly as the interpreter does.
+func (e *emitter) promotedFail(node syntax.Node, code, message string, prefixed bool) error {
+	code = "BASHPP-ESTRUCT-" + code
+	err := e.fail(node, code, message)
+	list, ok := err.(ErrorList)
+	if !prefixed || !ok || len(list) == 0 {
+		return err
+	}
+	origin := e.options.Origin
+	if origin == "" {
+		origin = "bash"
+	}
+	list[0].Text = fmt.Sprintf("%s: line %d: %s: %s", origin, list[0].Pos.Line(), code, message)
+	return list
+}
+
 func promotedPath(path []promotedEdge) string {
 	names := make([]string, len(path))
 	for i, edge := range path {
