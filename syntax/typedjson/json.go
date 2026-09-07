@@ -256,6 +256,8 @@ var nodeByName = map[string]reflect.Type{
 	"CoprocClause":         reflect.TypeFor[syntax.CoprocClause](),
 	"TestDecl":             reflect.TypeFor[syntax.TestDecl](),
 	"BashPPDecl":           reflect.TypeFor[syntax.BashPPDecl](),
+	"BashPPConstGroup":     reflect.TypeFor[syntax.BashPPConstGroup](),
+	"BashPPConstSpec":      reflect.TypeFor[syntax.BashPPConstSpec](),
 	"BashPPShortDecl":      reflect.TypeFor[syntax.BashPPShortDecl](),
 	"BashPPBasicLit":       reflect.TypeFor[syntax.BashPPBasicLit](),
 	"BashPPIdent":          reflect.TypeFor[syntax.BashPPIdent](),

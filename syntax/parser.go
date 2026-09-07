@@ -3114,6 +3114,12 @@ func (p *Parser) gotStmtPipe(s *Stmt, binCmd bool) *Stmt {
 			}
 		}
 		if p.lang.in(LangBashPP) && p.tok == leftParen {
+			if cmd := p.bashppConstGroup(&CallExpr{Args: []*Word{p.wordOne(name)}}); cmd != nil {
+				s.Cmd = cmd
+				break
+			}
+		}
+		if p.lang.in(LangBashPP) && p.tok == leftParen {
 			if cmd := p.bashppImportGroup(&CallExpr{Args: []*Word{p.wordOne(name)}}); cmd != nil {
 				s.Cmd = cmd
 				break
@@ -4216,6 +4222,10 @@ loop:
 					return
 				}
 				if cmd := p.bashppImportGroup(ce); cmd != nil {
+					s.Cmd = cmd
+					return
+				}
+				if cmd := p.bashppConstGroup(ce); cmd != nil {
 					s.Cmd = cmd
 					return
 				}

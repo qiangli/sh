@@ -214,6 +214,41 @@ type BashPPDecl struct {
 	End_ Pos
 }
 
+// BashPPConstGroup is a parenthesized Go constant declaration. A spec with a
+// nil Init repeats the preceding non-empty type and expression; Iota records
+// the zero-based ConstSpec index used when that expression is evaluated.
+type BashPPConstGroup struct {
+	Kw             *Lit
+	Lparen, Rparen Pos
+	Comments, Last []Comment
+	Specs          []*BashPPConstSpec
+}
+
+func (g *BashPPConstGroup) Pos() Pos { return g.Kw.Pos() }
+func (g *BashPPConstGroup) End() Pos { return posAddCol(g.Rparen, 1) }
+
+type BashPPConstSpec struct {
+	Comments     []Comment
+	Name         *Lit
+	DeclType     *Lit
+	DeclTypeExpr BashPPTypeExpr
+	Eq           Pos
+	Init         []*Word
+	InitExpr     BashPPExpr
+	Iota         uint32
+}
+
+func (s *BashPPConstSpec) Pos() Pos { return s.Name.Pos() }
+func (s *BashPPConstSpec) End() Pos {
+	if len(s.Init) > 0 {
+		return s.Init[len(s.Init)-1].End()
+	}
+	if s.DeclType != nil {
+		return s.DeclType.End()
+	}
+	return s.Name.End()
+}
+
 func (d *BashPPDecl) Pos() Pos { return d.Kw.Pos() }
 func (d *BashPPDecl) End() Pos {
 	if d.End_.IsValid() {
@@ -1267,6 +1302,7 @@ func (d *BashPPDefer) End() Pos {
 // The Command marker methods. Declaring them here rather than in nodes.go is
 // what lets this whole file merge without touching a certification-owned file.
 func (*BashPPDecl) commandNode()        {}
+func (*BashPPConstGroup) commandNode()  {}
 func (*BashPPShortDecl) commandNode()   {}
 func (*BashPPAssign) commandNode()      {}
 func (*BashPPCall) commandNode()        {}

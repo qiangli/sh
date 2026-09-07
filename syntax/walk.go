@@ -197,6 +197,18 @@ func Walk(node Node, f func(Node) bool) {
 		}
 		walkNilable(node.InitExpr, f)
 		walkList(node.EnumMembers, f)
+	case *BashPPConstGroup:
+		walkNilable(node.Kw, f)
+		walkComments(node.Comments, f)
+		walkList(node.Specs, f)
+		walkComments(node.Last, f)
+	case *BashPPConstSpec:
+		walkComments(node.Comments, f)
+		walkNilable(node.Name, f)
+		walkNilable(node.DeclType, f)
+		walkNilable(node.DeclTypeExpr, f)
+		walkList(node.Init, f)
+		walkNilable(node.InitExpr, f)
 	case *BashPPIf:
 		walkNilable(node.Init, f)
 		walkNilable(node.Cond, f)

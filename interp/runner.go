@@ -5412,6 +5412,8 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		r.stmts(ctx, cm.Stmts)
 	case *syntax.BashPPDecl:
 		r.bashPPDeclare(ctx, cm)
+	case *syntax.BashPPConstGroup:
+		r.bashPPConstGroup(ctx, cm)
 	case *syntax.BashPPShortDecl:
 		r.bashPPShortDecl(ctx, cm)
 	case *syntax.BashPPGo:
