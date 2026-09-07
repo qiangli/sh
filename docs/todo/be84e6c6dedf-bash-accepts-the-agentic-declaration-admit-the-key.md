@@ -6,7 +6,7 @@ seq: 38
 status: todo
 priority: p2
 created: 2026-09-07T08:56:01.260063Z
-sprint: 116
+sprint: 134
 ---
 
 ADMIT THE agentic DECLARATION INTO BASH++ so that agentic xxx parses and is represented. This is the ADMISSION half. The LOWERING half is sprint 117 story 72cd8bec4ac6, whose acceptance already covers it: every certified typed node and Bash# feature lowers deterministically to ordinary Go with interpreted and compiled agreement on effects.
