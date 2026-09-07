@@ -3,9 +3,10 @@ id: 606e9014d3ea
 kind: task
 title: 'S117-03: lower expressions control flow and callables'
 seq: 41
-status: blocked
+status: doing
 priority: p1
 created: 2026-09-07T17:54:06.040446Z
+assignee: sprint117-manager
 sprint: 117
 ---
 
