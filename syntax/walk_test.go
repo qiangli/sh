@@ -127,3 +127,16 @@ func TestWalkUnexpectedType(t *testing.T) {
 		return true
 	})
 }
+
+// TestWalkEmptyArithm pins that Walk tolerates the empty arithmetic forms this
+// parser accepts, `(())` and `$(())`, whose inner expression is nil.
+func TestWalkEmptyArithm(t *testing.T) {
+	t.Parallel()
+	for _, src := range []string{"(())", "echo $(())"} {
+		f, err := NewParser().Parse(strings.NewReader(src), "")
+		if err != nil {
+			t.Fatalf("%q: %v", src, err)
+		}
+		Walk(f, func(node Node) bool { return true })
+	}
+}

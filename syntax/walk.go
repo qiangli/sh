@@ -109,9 +109,11 @@ func Walk(node Node, f func(Node) bool) {
 		}
 		walkNilable(node.BadSubst, f)
 	case *ArithmExp:
-		Walk(node.X, f)
+		// An empty arithmetic expression or command — `$(())` and `(())` —
+		// parses with no inner expression, so X may be nil here.
+		walkNilable(node.X, f)
 	case *ArithmCmd:
-		Walk(node.X, f)
+		walkNilable(node.X, f)
 	case *BinaryArithm:
 		Walk(node.X, f)
 		Walk(node.Y, f)
