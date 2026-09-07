@@ -5,6 +5,7 @@ package interp
 
 import (
 	"fmt"
+	"go/constant"
 
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/syntax"
@@ -49,7 +50,11 @@ import (
 // later mutations of the identifier it closed over, which is only possible if
 // the snapshot and the live scope name the same cell.
 type bashPPCell struct {
-	vr           expand.Variable
+	vr expand.Variable
+	// scalarKind retains whether an untyped rendered scalar came from a string,
+	// bool, integer, or float expression. Re-parsing vr.Str would turn quoted
+	// "2" into an integer and quoted "true" into a bool at assignment time.
+	scalarKind   constant.Kind
 	channel      *bashPPChannel
 	channelOwner *bashPPConcurrent
 	// object is shared by every alias of one structured value. Deep readonly

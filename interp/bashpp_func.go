@@ -1180,6 +1180,7 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 	// environment and call stack exactly as they were. See [bashPPFrame].
 	frame := r.bashPPEnterFrame(fn, args)
 	defer frame.leave()
+	shortFailureMark := r.bashPPShortFailureSeq
 
 	// Parameters and named results are typed bindings; a shell assignment in
 	// the body writes through to them, which is what lets a named result be
@@ -1235,7 +1236,11 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 	// lets a deferred call change a NAMED result — including the recovering
 	// defer, whose whole job is to replace the value an abandoned frame would
 	// otherwise have failed to produce.
-	results := r.bashPPSettleResults(fn, resultNames)
+	shortDeclFailed := r.bashPPShortFailureSeq != shortFailureMark
+	var results []string
+	if !shortDeclFailed {
+		results = r.bashPPSettleResults(fn, resultNames)
+	}
 
 	// Deferred calls run as the frame unwinds — on a normal return and on a
 	// panic alike, which is the point of them — but not through a hard shell
@@ -1244,6 +1249,10 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 		r.bashPPRunDefers(ctx, frame.deferMark)
 	} else {
 		r.bashPPDeferStack = r.bashPPDeferStack[:frame.deferMark]
+	}
+	if shortDeclFailed {
+		r.exit = exitStatus{code: 2}
+		return nil
 	}
 
 	// An explicit `exit` reached while a panic was unwinding terminates the
@@ -1358,11 +1367,12 @@ func (r *Runner) bashPPShortDeclCall(ctx context.Context, d *syntax.BashPPShortD
 	if !ok {
 		return
 	}
+	shortFailureMark := r.bashPPShortFailureSeq
 	results := r.bashPPInvoke(ctx, fn, args)
 	// A call abandoned by panic or hard termination produced no values. Do not
 	// turn that control transfer into a secondary assignment-mismatch error;
 	// the caller's frame must get the original unwind unchanged.
-	if r.bashPPPanicking() || r.exit.exiting || r.exit.fatalExit || r.exit.err != nil {
+	if r.bashPPPanicking() || r.exit.exiting || r.exit.fatalExit || r.exit.err != nil || r.bashPPShortFailureSeq != shortFailureMark {
 		return
 	}
 	if len(d.Lhs) != len(results) {

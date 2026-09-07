@@ -184,6 +184,60 @@ func TestBashPPStory204TypedConstRequiresConstantExpression(t *testing.T) {
 	}
 }
 
+func TestBashPPStory204ReusedScalarKindProvenance(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			"quoted numeric remains string",
+			"var value string = old\nvalue, fresh := \"2\", 1\nprintf '%s:%s' \"$value\" \"$fresh\"\n",
+			"2:1",
+		},
+		{
+			"quoted bool remains string",
+			"var value string = old\nvalue, fresh := \"true\", 1\nprintf '%s:%s' \"$value\" \"$fresh\"\n",
+			"true:1",
+		},
+		{
+			"quoted numeric rejected by integer target",
+			"var value int = 7\nvalue, fresh := \"2\", 1\nprintf '|%s|%s|' \"$value\" \"${fresh-unset}\"\n",
+			"BASHPP-EASSIGN-TYPE: cannot assign String to int\n|7|unset|",
+		},
+		{
+			"quoted bool rejected by bool target",
+			"var value bool = true\nvalue, fresh := \"true\", 1\nprintf '|%s|%s|' \"$value\" \"${fresh-unset}\"\n",
+			"BASHPP-EASSIGN-TYPE: cannot assign String to bool\n|true|unset|",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out strings.Builder
+			r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP))
+			bashPPRun(t, r, tc.src)
+			qt.Assert(t, qt.Equals(out.String(), tc.want))
+		})
+	}
+}
+
+func TestBashPPStory204MismatchDiagnosticsFollowLHSOrder(t *testing.T) {
+	const src = "func values() (string, string, int) { return bad, alsoBad, 1 }\nvar first int = 7\nvar second bool = true\nfirst, second, fresh := values()\n"
+	for range 20 {
+		var out strings.Builder
+		r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP))
+		bashPPRun(t, r, src)
+		qt.Assert(t, qt.Equals(out.String(), "BASHPP-EASSIGN-TYPE: cannot assign string to int\n"))
+	}
+}
+
+func TestBashPPStory204NestedCalleeFailureRollsBackCaller(t *testing.T) {
+	const src = "func broken() (int, int) {\n inner := 1\n inner := 2\n return 8, 9\n}\nx := 7\nx, fresh := broken()\nprintf 'status=%s x=%s fresh=%s' \"$?\" \"$x\" \"${fresh-unset}\"\n"
+	var out strings.Builder
+	r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP))
+	bashPPRun(t, r, src)
+	qt.Assert(t, qt.Equals(out.String(), "BASHPP-ESHORT-NONEW: no new variables on left side of :=\nstatus=2 x=7 fresh=unset"))
+}
+
 func TestBashPPStory204DiagnosticHasSourcePosition(t *testing.T) {
 	var out strings.Builder
 	r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP), interp.WithBashCompatErrors(true))

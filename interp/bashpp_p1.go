@@ -760,6 +760,7 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 		r.bashPPDeclareName(d.Lhs[0].Value, expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarString(value.value)})
 		target := r.bashPPScope.lookup(d.Lhs[0].Value)
 		if target != nil {
+			target.scalarKind = value.value.Kind()
 			target.typeName = value.typ
 			if source != nil {
 				target.object = source.object
@@ -789,6 +790,7 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 		if !syntax.ValidName(name) {
 			r.errf("invalid variable name: %q\n", name)
 			r.exit = exitStatus{code: 2}
+			r.bashPPShortFailureSeq++
 			return
 		}
 		fn, vr := r.bashPPMakeClosure(d.FuncLit)
@@ -885,6 +887,9 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 			return
 		}
 		r.bashPPDeclareName(name, vr)
+		if cell := r.bashPPScope.lookup(name); cell != nil && len(d.Rhs) == 1 {
+			cell.scalarKind = bashPPWordScalarKind(d.Rhs[0], vr)
+		}
 		if len(d.Rhs) == 1 {
 			if channel, owner := r.bashPPDirectChannel(d.Rhs[0]); channel != nil {
 				cell := r.bashPPScope.lookup(name)
@@ -905,7 +910,22 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 		if r.exit.code != 0 {
 			return
 		}
+		if cell := r.bashPPScope.lookup(lhs.Value); cell != nil {
+			cell.scalarKind = bashPPWordScalarKind(d.Rhs[i], values[i])
+		}
 	}
+}
+
+func bashPPWordScalarKind(word *syntax.Word, value expand.Variable) constant.Kind {
+	if word != nil && len(word.Parts) == 1 {
+		switch word.Parts[0].(type) {
+		case *syntax.SglQuoted, *syntax.DblQuoted:
+			return constant.String
+		case *syntax.Lit:
+			return bashPPScalarFromString(value.Str).value.Kind()
+		}
+	}
+	return constant.String
 }
 
 type bashPPShortDeclTxn struct {
@@ -917,6 +937,7 @@ type bashPPShortDeclTxn struct {
 	expected  int
 	bound     map[string]bool
 	positions map[string]syntax.Pos
+	names     []string
 	failed    bool
 }
 
@@ -948,10 +969,12 @@ func (r *Runner) bashPPBeginShortDecl(d *syntax.BashPPShortDecl) (*bashPPShortDe
 		if seen[name] {
 			r.errf("%s%s repeated on left side of :=\n", r.bashErrPrefix(lhs.Pos()), name)
 			r.exit = exitStatus{code: 2}
+			r.bashPPShortFailureSeq++
 			return nil, false
 		}
 		seen[name] = true
 		txn.positions[name] = lhs.Pos()
+		txn.names = append(txn.names, name)
 		if _, exists := r.bashPPScope.entries[name]; !exists {
 			txn.newName = true
 		}
@@ -970,7 +993,10 @@ func (r *Runner) bashPPRollbackShortDecl(txn *bashPPShortDeclTxn) {
 func (r *Runner) bashPPEndShortDecl(txn *bashPPShortDeclTxn, pos syntax.Pos) {
 	r.bashPPShortTxn = txn.parent
 	if !txn.failed && len(txn.bound) == txn.expected {
-		for name := range txn.bound {
+		for _, name := range txn.names {
+			if !txn.bound[name] {
+				continue
+			}
 			cell, reused := txn.entries[name]
 			if !reused {
 				continue
@@ -990,6 +1016,7 @@ func (r *Runner) bashPPEndShortDecl(txn *bashPPShortDeclTxn, pos syntax.Pos) {
 		r.bashPPRollbackShortDecl(txn)
 		if txn.failed {
 			r.exit = exitStatus{code: 2}
+			r.bashPPShortFailureSeq++
 		}
 		return
 	}
@@ -997,6 +1024,7 @@ func (r *Runner) bashPPEndShortDecl(txn *bashPPShortDeclTxn, pos syntax.Pos) {
 		r.bashPPRollbackShortDecl(txn)
 		r.errf("%sBASHPP-ESHORT-NONEW: no new variables on left side of :=\n", r.bashErrPrefix(pos))
 		r.exit = exitStatus{code: 2}
+		r.bashPPShortFailureSeq++
 	}
 }
 
@@ -1025,6 +1053,16 @@ func (r *Runner) bashPPValidateReusedShortValue(target, candidate *bashPPCell) e
 		return fmt.Errorf("BASHPP-EASSIGN-TYPE: untyped result is not assignable to %s", bashPPTypeText(target.declType))
 	}
 	value := bashPPScalarFromString(candidate.vr.Str)
+	switch candidate.scalarKind {
+	case constant.String:
+		value = bashPPScalar{value: constant.MakeString(candidate.vr.Str)}
+	case constant.Bool:
+		value = bashPPScalar{value: constant.MakeBool(candidate.vr.Str == "true")}
+	case constant.Int:
+		value.value = constant.MakeFromLiteral(candidate.vr.Str, token.INT, 0)
+	case constant.Float:
+		value.value = constant.MakeFromLiteral(candidate.vr.Str, token.FLOAT, 0)
+	}
 	if !bashPPUntypedScalarAssignable(shape.Name.Value, value.value) {
 		return fmt.Errorf("BASHPP-EASSIGN-TYPE: cannot assign %s to %s", value.value.Kind(), bashPPTypeText(target.declType))
 	}
