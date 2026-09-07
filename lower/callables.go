@@ -593,7 +593,7 @@ func (e *emitter) returnTypes(fields []*syntax.BashPPField) []string {
 	var out []string
 	for _, field := range fields {
 		typ := ""
-		if field.FieldType != nil && field.FieldType.Value != "func" {
+		if (field.FieldType != nil || field.FieldTypeExpr != nil) && (field.FieldType == nil || field.FieldType.Value != "func") {
 			typ, _ = e.fieldType(field)
 		}
 		n := len(field.Names)
