@@ -600,6 +600,9 @@ func (p *Program) runBody(body func(*Program)) (err error) {
 
 // aborted classifies a recovered value.
 func (p *Program) aborted(v any) error {
+	if _, ok := v.(DeclarationAbort); ok {
+		return nil
+	}
 	if _, ok := v.(ShellExit); ok {
 		return nil
 	}

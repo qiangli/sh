@@ -116,6 +116,20 @@ func (e *emitter) nativeWordExpr(n syntax.Node, text string) (string, error) {
 	}
 	return out.String(), nil
 }
+
+// Shell lookup observes declarations reached by the script, even though native
+// declarations are collected early for type checking.
+func (e *emitter) shellKnown(name string) bool {
+	if !e.inFunc && e.globals[name] && !e.visibleGlobals[name] {
+		for _, scope := range e.scopes {
+			if scope[name] {
+				return true
+			}
+		}
+		return false
+	}
+	return e.known(name)
+}
 func (e *emitter) parameter(p *syntax.ParamExp) (string, error) {
 	if value, handled, err := e.positionalParameter(p); handled || err != nil {
 		return value, err
@@ -131,7 +145,7 @@ func (e *emitter) parameter(p *syntax.ParamExp) (string, error) {
 		}
 	}
 	if p.Param != nil && p.Exp != nil && p.Exp.Op == syntax.DefaultUnset && p.Index == nil && !p.Length && !p.Excl {
-		if e.known(p.Param.Value) {
+		if e.shellKnown(p.Param.Value) {
 			return p.Param.Value, nil
 		}
 		fallback, err := e.stringParts(p.Exp.Word.Parts)
@@ -143,7 +157,7 @@ func (e *emitter) parameter(p *syntax.ParamExp) (string, error) {
 		}
 		return fallback, nil
 	}
-	if p.Param != nil && e.known(p.Param.Value) && p.Index != nil && p.Exp == nil && !p.Excl {
+	if p.Param != nil && e.shellKnown(p.Param.Value) && p.Index != nil && p.Exp == nil && !p.Excl {
 		if index, ok := p.Index.(*syntax.Word); ok {
 			if index.Lit() == "@" && p.Length {
 				return "len(" + p.Param.Value + ")", nil
@@ -167,10 +181,10 @@ func (e *emitter) parameter(p *syntax.ParamExp) (string, error) {
 	if p.Param == nil || !syntax.BashPPValidIdent(p.Param.Value) || p.Excl || p.Length || p.Width || p.IsSet || p.Index != nil || p.Slice != nil || p.Repl != nil || p.Exp != nil || p.NestedParam != nil || p.Flags != nil || p.Split != syntax.OptUnset || p.GlobSubst != syntax.OptUnset || p.RcExpand != syntax.OptUnset || len(p.Modifiers) > 0 || p.Names != 0 || p.BadSubst != nil {
 		return "", e.fail(p, CodeBridge, "parameter expansion requires shell-state lowering")
 	}
-	if !e.known(p.Param.Value) && e.mixedShell {
+	if !e.shellKnown(p.Param.Value) && e.mixedShell {
 		return e.program() + ".ShellString(" + strconv.Quote(p.Param.Value) + ")", nil
 	}
-	if !e.known(p.Param.Value) {
+	if !e.shellKnown(p.Param.Value) {
 		return "", e.fail(p, CodeUndefined, "unknown shell/typed binding: "+p.Param.Value)
 	}
 	return p.Param.Value, nil
@@ -203,7 +217,7 @@ func (e *emitter) stringParts(parts []syntax.WordPart) (string, error) {
 			if err != nil {
 				return "", err
 			}
-			if p.Param != nil && e.known(p.Param.Value) && p.Index == nil && (p.Exp == nil || p.Exp.Op == syntax.DefaultUnset) && !p.Length {
+			if p.Param != nil && e.shellKnown(p.Param.Value) && p.Index == nil && (p.Exp == nil || p.Exp.Op == syntax.DefaultUnset) && !p.Length {
 				x, err = e.projectBinding(p, p.Param.Value, x)
 				if err != nil {
 					return "", err

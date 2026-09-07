@@ -162,6 +162,16 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 			return nil, err
 		}
 	}
+	hasConstants := false
+	syntax.Walk(file, func(n syntax.Node) bool {
+		switch n := n.(type) {
+		case *syntax.BashPPConstGroup:
+			hasConstants = true
+		case *syntax.BashPPDecl:
+			hasConstants = hasConstants || n.Kw.Value == "const"
+		}
+		return true
+	})
 	var declarations, body strings.Builder
 	for _, s := range file.Stmts {
 		if f, ok := s.Cmd.(*syntax.BashPPFuncDecl); ok {
@@ -185,6 +195,7 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 				declarations.WriteString(e.mark(n) + constants + "\n")
 				for _, spec := range n.Specs {
 					e.visibleGlobals[spec.Name.Value] = true
+					text += e.lexicalGlobalConstant(spec.Name.Value)
 				}
 			case *syntax.BashPPDecl:
 				if n.Kw.Value == "var" || n.Kw.Value == "const" {
@@ -203,6 +214,13 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 			}
 			if err != nil {
 				return nil, err
+			}
+			if e.execution && hasConstants && text != "" {
+				switch s.Cmd.(type) {
+				case *syntax.BashPPDefer, *syntax.BashPPReturn:
+				default:
+					text = e.program() + ".RootStatement(func(){\n" + text + "\n})\n"
+				}
 			}
 			body.WriteString(text)
 		}

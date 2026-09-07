@@ -48,7 +48,8 @@ func (e *emitter) lexicalPresence(names []string) string {
 func (e *emitter) lexicalNames(names map[string]bool) string {
 	var keys []string
 	for name := range names {
-		if _, ok := e.globalTypes[name]; ok {
+		projection, _ := e.projections.projectionLookup(name)
+		if _, ok := e.globalTypes[name]; ok || projection.constant {
 			keys = append(keys, name)
 		}
 	}
@@ -65,6 +66,7 @@ func (e *emitter) lexicalNames(names map[string]bool) string {
 // struct fields, named results and loop variables retain ordinary Go storage.
 func (e *emitter) lexicalStorage(source []byte, fs *token.FileSet, file *ast.File, pkg *types.Package, info *types.Info) ([]byte, error) {
 	edits := e.lexicalLocals(file, fs, info)
+	edits = append(edits, e.lexicalConstants(file, fs, info)...)
 	globals := map[types.Object]string{}
 	for _, name := range pkg.Scope().Names() {
 		if object, ok := pkg.Scope().Lookup(name).(*types.Var); ok {
@@ -170,4 +172,14 @@ func (e *emitter) lexicalStorage(source []byte, fs *token.FileSet, file *ast.Fil
 		return nil, fmt.Errorf("lexical storage: %w", err)
 	}
 	return out, nil
+}
+
+// lexicalGlobalConstant publishes the shadow at the source declaration's
+// execution point. The native constant itself remains package-level.
+func (e *emitter) lexicalGlobalConstant(name string) string {
+	if !e.execution || name == "_" {
+		return ""
+	}
+	p, _ := e.projections.projectionLookup(name)
+	return e.prefix + "rt.MustReadonly(" + e.prefix + "rt.RegisterConstant(" + e.program() + ".Bindings," + strconv.Quote("global:"+name) + "," + strconv.Quote(name) + "," + strconv.Quote(p.sourceType) + "," + name + "," + e.lexicalKind(name) + "))\n"
 }

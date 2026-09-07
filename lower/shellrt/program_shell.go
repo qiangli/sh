@@ -6,6 +6,21 @@ import "reflect"
 // control transfer rather than a user panic or a second diagnostic.
 type ShellExit struct{}
 
+// DeclarationAbort ends the current source statement after the backend has
+// reported a refused constant write. A file can continue with its next statement.
+type DeclarationAbort struct{}
+
+func (p *Program) RootStatement(body func()) {
+	defer func() {
+		if value := recover(); value != nil {
+			if _, ok := value.(DeclarationAbort); !ok {
+				panic(value)
+			}
+		}
+	}()
+	body()
+}
+
 // ShellAbort carries a backend failure across native callable frames while
 // retaining its identity for an injected entry's caller. It is not a source
 // panic; generated source recover must preserve this control transfer.
@@ -35,8 +50,11 @@ func (p *Program) ShellRegion(source string) {
 		panic(ShellAbort{Err: err})
 	}
 	p.SetStatus(p.Session.Status())
-	if p.Session.Exited() || policy.AssignmentRefused() {
+	if p.Session.Exited() {
 		panic(ShellExit{})
+	}
+	if policy.AssignmentRefused() {
+		panic(DeclarationAbort{})
 	}
 }
 func (p *Program) ShellString(name string) string {
