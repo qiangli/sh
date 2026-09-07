@@ -208,6 +208,9 @@ func (e *emitter) stringParts(parts []syntax.WordPart) (string, error) {
 				if err != nil {
 					return "", err
 				}
+				if e.execution {
+					x = e.program() + ".ShellBinding(" + strconv.Quote(p.Param.Value) + ",func() string {return " + e.prefix + "rt.Word(" + x + ")})"
+				}
 			}
 			e.bridge = true
 			out = append(out, e.prefix+"rt.Word("+x+")")

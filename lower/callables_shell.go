@@ -14,6 +14,9 @@ func (e *emitter) needsShell(file *syntax.File) {
 		case *syntax.FuncDecl, *syntax.IfClause, *syntax.BinaryCmd:
 			e.mixedShell = true
 		case *syntax.CallExpr:
+			if len(n.Assigns) > 0 {
+				e.mixedShell = true
+			}
 			if len(n.Args) > 0 {
 				name := n.Args[0].Lit()
 				if name != "echo" && name != "printf" {
@@ -28,8 +31,51 @@ func (e *emitter) needsShell(file *syntax.File) {
 		e.bridge = true
 	}
 }
+
+// nativeScalarShellAssignment retains the native arithmetic boundary and the
+// canonical integer declarations used by shell-shaped local variables. Raw
+// spellings and values requiring shell conversion stay in the persistent session.
+func (e *emitter) nativeScalarShellAssignment(stmt *syntax.Stmt) bool {
+	c, ok := stmt.Cmd.(*syntax.CallExpr)
+	if !ok || len(c.Assigns) == 0 || len(c.Args) != 0 || stmt.Negated || stmt.Background || len(stmt.Redirs) != 0 || e.readonly {
+		return false
+	}
+	for _, a := range c.Assigns {
+		if a.Name == nil || a.Index != nil || a.Array != nil || a.Append || a.Naked || a.Value == nil || len(a.Value.Parts) != 1 {
+			return false
+		}
+		if _, arithmetic := a.Value.Parts[0].(*syntax.ArithmExp); arithmetic {
+			if !e.known(a.Name.Value) {
+				return false
+			}
+			continue
+		}
+		lit, ok := a.Value.Parts[0].(*syntax.Lit)
+		if !ok {
+			return false
+		}
+		n, err := strconv.ParseInt(lit.Value, 10, 64)
+		if err != nil || strconv.FormatInt(n, 10) != lit.Value {
+			return false
+		}
+		if p, known := e.projections.projectionLookup(a.Name.Value); known {
+			switch p.sourceType {
+			case "", "int", "int64":
+			case "int8", "int16", "int32":
+				bits, _ := strconv.Atoi(strings.TrimPrefix(p.sourceType, "int"))
+				if _, err := strconv.ParseInt(lit.Value, 10, bits); err != nil {
+					return false
+				}
+			default:
+				return false
+			}
+		}
+	}
+	return true
+}
+
 func (e *emitter) dynamicShell(stmt *syntax.Stmt) bool {
-	if !e.mixedShell || stmt == nil {
+	if !e.mixedShell || stmt == nil || e.nativeScalarShellAssignment(stmt) {
 		return false
 	}
 	switch n := stmt.Cmd.(type) {
