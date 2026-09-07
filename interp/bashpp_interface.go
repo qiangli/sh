@@ -213,6 +213,14 @@ func (r *Runner) bashPPImplements(actual syntax.BashPPTypeExpr, iface *syntax.Ba
 		}
 		actualSig := ""
 		if sel.method != nil {
+			// Go 1.27 gives methods their own type parameters but does NOT
+			// give them to interfaces: an interface method may declare none,
+			// so a generic method is not in the method set an interface can
+			// name. Reporting it as a distinct error rather than a signature
+			// mismatch keeps the reason visible.
+			if sel.method.decl != nil && len(sel.method.decl.TypeParams) > 0 {
+				return fmt.Errorf("BASHPP-EINTERFACE-GENERIC: %s method %s declares type parameters and cannot implement an interface method", bashPPTypeText(actual), name)
+			}
 			actualSig = bashPPInstantiatedMethodSignature(sel.method, sel.receiverType)
 		} else {
 			actualSig = bashPPMethodSpecSignature(sel.interfaceSpec)

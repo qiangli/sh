@@ -6,6 +6,7 @@ package interp
 import (
 	"context"
 	"fmt"
+	"maps"
 	"strconv"
 	"strings"
 
@@ -412,71 +413,16 @@ func (r *Runner) bashPPLookupFunc(c *syntax.BashPPCall) (*bashPPFunc, bool) {
 		return fn, true
 	}
 	if len(c.Fun) >= 2 {
-		if len(c.TypeArgs) > 0 {
-			r.errf("BASHPP-EGENERIC-METHOD: generic method instantiation is not implemented in this phase\n")
-			r.exit.code = 2
+		// A selector call resolves to its method first and is instantiated
+		// second, exactly as a plain call is. A method's own type parameters
+		// are independent of the receiver's, so the receiver bindings the
+		// binding step recorded are already on the function when the
+		// instantiation step adds the method's; see [Runner.bashPPInstantiateFunc].
+		fn, ok := r.bashPPLookupSelectorFunc(c)
+		if !ok {
 			return nil, false
 		}
-		owner := c.Fun[0].Value
-		// A local value is always considered before an import binding. This is
-		// deterministic even when the import registry contains the same name.
-		if cell := r.bashPPScope.lookup(owner); cell != nil {
-			_, typeName := r.bashPPTypes[owner]
-			if !typeName || cell.interfaceValue != nil || bashPPSelectorCellType(cell) != nil {
-				return r.bashPPBindLocalSelector(c, cell)
-			}
-		}
-		if len(c.Fun) != 2 {
-			return nil, false
-		}
-		method := c.Fun[1].Value
-		// T.M(v, ...) selects from T's method set; (*T).M(p, ...) records the
-		// pointer method-expression spelling on the call node.
-		if _, localType := r.bashPPTypes[owner]; localType {
-			rootType := syntax.BashPPTypeExpr(&syntax.BashPPNamedType{Name: &syntax.Lit{Value: owner}})
-			if c.PointerMethodExpr {
-				rootType = &syntax.BashPPPointerType{Element: rootType}
-			}
-			sel := r.bashPPResolveSelection(rootType, method, true, false)
-			if sel.ambiguous {
-				r.errf("BASHPP-ESELECTOR-AMBIGUOUS: ambiguous selector %s.%s\n", bashPPTypeText(rootType), method)
-				r.exit.code = 2
-				return nil, false
-			}
-			fn := sel.method
-			if fn == nil && sel.interfaceSpec == nil {
-				r.errf("%s.%s is not in the method set of %s\n", owner, method, owner)
-				r.exit.code = 2
-				return nil, false
-			}
-			if len(c.Args) == 0 {
-				r.errf("not enough arguments in call to method expression %s.%s\n", owner, method)
-				r.exit.code = 2
-				return nil, false
-			}
-			cell := r.bashPPCellForWord(c.Args[0])
-			var actualType syntax.BashPPTypeExpr
-			if cell != nil {
-				actualType = cell.declType
-				if actualType == nil {
-					if meta := bashPPCellMeta(cell); meta != nil {
-						actualType = meta.typ
-					}
-				}
-			}
-			if cell == nil || bashPPTypeText(actualType) != bashPPTypeText(rootType) {
-				r.errf("cannot use first argument as %s receiver in %s.%s\n", owner, owner, method)
-				r.exit.code = 2
-				return nil, false
-			}
-			bound, ok := r.bashPPBindPromotedMethod(cell, method, sel, false)
-			if !ok {
-				return nil, false
-			}
-			bound.skipArgs = 1
-			return bound, true
-		}
-		return nil, false
+		return r.bashPPInstantiateFunc(c, fn)
 	}
 	if len(c.Fun) != 1 {
 		return nil, false
@@ -494,6 +440,71 @@ func (r *Runner) bashPPLookupFunc(c *syntax.BashPPCall) (*bashPPFunc, bool) {
 			return nil, false
 		}
 		return r.bashPPInstantiateFunc(c, fn)
+	}
+	return nil, false
+}
+
+// bashPPLookupSelectorFunc resolves the `x.M`, `T.M` and `(*T).M` callee forms
+// to the method they name, without instantiating it.
+func (r *Runner) bashPPLookupSelectorFunc(c *syntax.BashPPCall) (*bashPPFunc, bool) {
+	owner := c.Fun[0].Value
+	// A local value is always considered before an import binding. This is
+	// deterministic even when the import registry contains the same name.
+	if cell := r.bashPPScope.lookup(owner); cell != nil {
+		_, typeName := r.bashPPTypes[owner]
+		if !typeName || cell.interfaceValue != nil || bashPPSelectorCellType(cell) != nil {
+			return r.bashPPBindLocalSelector(c, cell)
+		}
+	}
+	if len(c.Fun) != 2 {
+		return nil, false
+	}
+	method := c.Fun[1].Value
+	// T.M(v, ...) selects from T's method set; (*T).M(p, ...) records the
+	// pointer method-expression spelling on the call node.
+	if _, localType := r.bashPPTypes[owner]; localType {
+		rootType := syntax.BashPPTypeExpr(&syntax.BashPPNamedType{Name: &syntax.Lit{Value: owner}})
+		if c.PointerMethodExpr {
+			rootType = &syntax.BashPPPointerType{Element: rootType}
+		}
+		sel := r.bashPPResolveSelection(rootType, method, true, false)
+		if sel.ambiguous {
+			r.errf("BASHPP-ESELECTOR-AMBIGUOUS: ambiguous selector %s.%s\n", bashPPTypeText(rootType), method)
+			r.exit.code = 2
+			return nil, false
+		}
+		fn := sel.method
+		if fn == nil && sel.interfaceSpec == nil {
+			r.errf("%s.%s is not in the method set of %s\n", owner, method, owner)
+			r.exit.code = 2
+			return nil, false
+		}
+		if len(c.Args) == 0 {
+			r.errf("not enough arguments in call to method expression %s.%s\n", owner, method)
+			r.exit.code = 2
+			return nil, false
+		}
+		cell := r.bashPPCellForWord(c.Args[0])
+		var actualType syntax.BashPPTypeExpr
+		if cell != nil {
+			actualType = cell.declType
+			if actualType == nil {
+				if meta := bashPPCellMeta(cell); meta != nil {
+					actualType = meta.typ
+				}
+			}
+		}
+		if cell == nil || bashPPTypeText(actualType) != bashPPTypeText(rootType) {
+			r.errf("cannot use first argument as %s receiver in %s.%s\n", owner, owner, method)
+			r.exit.code = 2
+			return nil, false
+		}
+		bound, ok := r.bashPPBindPromotedMethod(cell, method, sel, false)
+		if !ok {
+			return nil, false
+		}
+		bound.skipArgs = 1
+		return bound, true
 	}
 	return nil, false
 }
@@ -605,6 +616,17 @@ func (r *Runner) bashPPInstantiateFunc(c *syntax.BashPPCall, fn *bashPPFunc) (*b
 		return nil, false
 	}
 	bound := *fn
+	// A generic METHOD arrives here already carrying the receiver's bindings,
+	// which the binding step read off the receiver value. Those names are
+	// disjoint from the method's own — the parser rejects the collision — so
+	// the two scopes merge rather than replace, and a signature mentioning
+	// both substitutes both.
+	if len(fn.typeArgs) > 0 {
+		merged := make(map[string]syntax.BashPPTypeExpr, len(fn.typeArgs)+len(bindings))
+		maps.Copy(merged, fn.typeArgs)
+		maps.Copy(merged, bindings)
+		bindings = merged
+	}
 	bound.typeArgs = bindings
 	return &bound, true
 }
@@ -618,7 +640,12 @@ func bashPPTypeParamCount(params []*syntax.BashPPTypeParam) int {
 }
 
 func (r *Runner) bashPPInferTypeArgs(c *syntax.BashPPCall, fn *bashPPFunc, bindings map[string]syntax.BashPPTypeExpr) bool {
-	params := bashppParams(fn.decl.Params)
+	// fn.params() rather than fn.decl.Params: on a generic method the receiver
+	// type parameters are already bound, so substituting them first leaves
+	// only the method's own parameters open to inference. A parameter typed
+	// with a receiver parameter must therefore MATCH its receiver binding
+	// instead of rebinding it.
+	params := bashppParams(fn.params())
 	args := c.Args
 	if fn.skipArgs > 0 && len(args) >= fn.skipArgs {
 		args = args[fn.skipArgs:]

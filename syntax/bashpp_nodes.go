@@ -1115,10 +1115,16 @@ func (f *BashPPField) End() Pos {
 // from a working script. That is why the signature may be parsed forward
 // without a transaction: a malformed body is a bash syntax error either way.
 type BashPPFuncDecl struct {
-	Agentic    *Lit            // optional bare "agentic" modifier
-	Kw         *Lit            // the literal "func"
-	Name       *Lit            // the declared function name
-	Receiver   *BashPPReceiver // nil for an ordinary function
+	Agentic  *Lit            // optional bare "agentic" modifier
+	Kw       *Lit            // the literal "func"
+	Name     *Lit            // the declared function name
+	Receiver *BashPPReceiver // nil for an ordinary function
+	// TypeParams are the type parameters the declaration itself introduces.
+	// A METHOD may have them too, independent of its receiver's: Go 1.27
+	// accepts `func (r R) M[T any](v T) T`, so the two scopes coexist over one
+	// signature and Receiver.TypeParams stays the receiver's alone. Their
+	// names may not collide; the parser rejects the collision the way the Go
+	// compiler reports `T redeclared in this block`.
 	TypeParams []*BashPPTypeParam
 	Params     []*BashPPField // the parameter groups, in source order
 	Results    []*BashPPField // the result groups, or nil when there are none
@@ -1132,7 +1138,9 @@ type BashPPFuncDecl struct {
 
 // BashPPReceiver is the single receiver of a method declaration. TypeParams
 // are the identifiers introduced by an instantiated generic receiver such as
-// (b Box[T]); their constraints come from Box's declaration.
+// (b Box[T]); their constraints come from Box's declaration. A method's OWN
+// type parameters are not here — they carry their own constraints and live on
+// BashPPFuncDecl.TypeParams.
 type BashPPReceiver struct {
 	Name       *Lit
 	RecvType   *Lit

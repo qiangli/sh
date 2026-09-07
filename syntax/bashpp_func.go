@@ -181,22 +181,57 @@ func (p *Parser) bashppMethodForm(kw *Lit) Command {
 	}
 	recv.Rparen = p.pos
 	p.next()
-	methodWord := p.getWord()
-	method := bashppBareLit(methodWord)
-	if method == nil || !bashppIsIdent(method.Value) || p.tok != leftParen || p.spaced {
+	// The method name may be followed by its OWN type parameter list —
+	// `func (b Box[T]) Get[U any](v U) U`. Go 1.27 allows a method to declare
+	// type parameters independent of the receiver's, so the name is collected
+	// as the same word run an ordinary generic `func name[U any](` produces
+	// and handed to the one type-parameter reader both forms share. A method
+	// with no list is the single-word case of that reader.
+	var methodWords []*Word
+	for p.tok != leftParen && p.tok != _EOF && p.tok != _Newl {
+		word := p.getWord()
+		if word == nil {
+			break
+		}
+		methodWords = append(methodWords, word)
+	}
+	var method *Lit
+	var methodParams []*BashPPTypeParam
+	paramsOK := len(methodWords) > 0
+	if paramsOK {
+		method, methodParams, paramsOK = bashppFuncTypeParams(methodWords)
+	}
+	if !paramsOK || method == nil || !bashppIsIdent(method.Value) || p.tok != leftParen || p.spaced {
 		p.posErr(recv.Rparen, "method declaration requires a name and signature")
 		return nil
 	}
-	d := &BashPPFuncDecl{Kw: kw, Name: method, Receiver: recv}
+	// A method type parameter may not reuse a receiver type parameter name:
+	// both are in scope over the same signature and body, which is why Go
+	// reports `T redeclared in this block` for the collision.
+	for _, group := range methodParams {
+		for _, name := range group.Names {
+			for _, recvParam := range recv.TypeParams {
+				if recvParam.Value == name.Value {
+					p.posErr(name.Pos(), "method type parameter %s redeclares receiver type parameter", name.Value)
+					return nil
+				}
+			}
+		}
+	}
+	d := &BashPPFuncDecl{Kw: kw, Name: method, Receiver: recv, TypeParams: methodParams}
 	p.bashppRegisterFunc(method.Value)
 	sig := p.bashppSignature("func (" + recv.Name.Value + " " + typLit.Value + ") " + method.Value)
 	d.Params, d.Results = sig.params, sig.results
-	receiverParams := make([]*BashPPTypeParam, 0, len(recv.TypeParams))
+	// Both scopes mark the signature: the receiver's parameters, whose
+	// constraints come from the receiver type's own declaration, and the
+	// method's own parameters, which carry their constraints here.
+	scopeParams := make([]*BashPPTypeParam, 0, len(recv.TypeParams)+len(methodParams))
 	for _, name := range recv.TypeParams {
-		receiverParams = append(receiverParams, &BashPPTypeParam{Names: []*Lit{name}, Constraint: &BashPPNamedType{Name: &Lit{ValuePos: name.Pos(), ValueEnd: name.End(), Value: "any"}}})
+		scopeParams = append(scopeParams, &BashPPTypeParam{Names: []*Lit{name}, Constraint: &BashPPNamedType{Name: &Lit{ValuePos: name.Pos(), ValueEnd: name.End(), Value: "any"}}})
 	}
-	p.bashppMarkTypeParamFields(d.Params, receiverParams)
-	p.bashppMarkTypeParamFields(d.Results, receiverParams)
+	scopeParams = append(scopeParams, methodParams...)
+	p.bashppMarkTypeParamFields(d.Params, scopeParams)
+	p.bashppMarkTypeParamFields(d.Results, scopeParams)
 	d.Lparen, d.Rparen = sig.lparen, sig.rparen
 	d.ResLparen, d.ResRparen = sig.resLparen, sig.resRparen
 	d.Body = p.bashppFuncBody("method "+method.Value, sig.rparen, sig.params)
