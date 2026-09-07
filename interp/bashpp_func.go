@@ -228,7 +228,7 @@ func (r *Runner) bashPPFuncDecl(d *syntax.BashPPFuncDecl) {
 		r.exit = exitStatus{code: 2}
 		return
 	}
-	if !syntax.ValidName(name) {
+	if !syntax.BashPPValidIdent(name) {
 		r.errf("invalid function name: %q\n", name)
 		r.exit = exitStatus{code: 2}
 		return
@@ -267,7 +267,7 @@ func bashPPValidateTypeParamDecls(params []*syntax.BashPPTypeParam) error {
 			return fmt.Errorf("BASHPP-EGENERIC-PARAM: type parameter constraint is missing")
 		}
 		for _, name := range group.Names {
-			if name == nil || !syntax.ValidName(name.Value) {
+			if name == nil || !syntax.BashPPValidIdent(name.Value) {
 				return fmt.Errorf("BASHPP-EGENERIC-PARAM: invalid type parameter")
 			}
 			if seen[name.Value] {
@@ -834,7 +834,7 @@ func (r *Runner) bashPPCellForWord(w *syntax.Word) *bashPPCell {
 		return nil
 	}
 	lit, ok := w.Parts[0].(*syntax.Lit)
-	if !ok || !syntax.ValidName(lit.Value) {
+	if !ok || !syntax.BashPPValidIdent(lit.Value) {
 		return nil
 	}
 	return r.bashPPScope.lookup(lit.Value)
@@ -968,7 +968,7 @@ func (r *Runner) bashPPCallArgValues(c *syntax.BashPPCall) []string {
 // nothing, so forwarding an empty variadic parameter passes zero arguments.
 func (r *Runner) bashPPSpreadValues(w *syntax.Word) []string {
 	if len(w.Parts) == 1 {
-		if lit, ok := w.Parts[0].(*syntax.Lit); ok && syntax.ValidName(lit.Value) {
+		if lit, ok := w.Parts[0].(*syntax.Lit); ok && syntax.BashPPValidIdent(lit.Value) {
 			vr := r.lookupVar(lit.Value)
 			switch {
 			case !vr.IsSet():
@@ -1118,7 +1118,7 @@ func (r *Runner) bashPPBindCall(fn *bashPPFunc, supplied []string, suppliedChann
 // convenient `f(hello)` spelling for an unquoted string argument.
 func (r *Runner) bashPPExprValue(w *syntax.Word) string {
 	if len(w.Parts) == 1 {
-		if lit, ok := w.Parts[0].(*syntax.Lit); ok && syntax.ValidName(lit.Value) {
+		if lit, ok := w.Parts[0].(*syntax.Lit); ok && syntax.BashPPValidIdent(lit.Value) {
 			if vr := r.lookupVar(lit.Value); vr.IsSet() {
 				return vr.String()
 			}
@@ -1136,7 +1136,7 @@ func (r *Runner) bashPPRewriteAssign(as *syntax.Assign) *syntax.Assign {
 		return as
 	}
 	lit, ok := as.Value.Parts[0].(*syntax.Lit)
-	if !ok || !syntax.ValidName(lit.Value) || !r.lookupVar(lit.Value).IsSet() {
+	if !ok || !syntax.BashPPValidIdent(lit.Value) || !r.lookupVar(lit.Value).IsSet() {
 		return as
 	}
 	cp := *as
@@ -1188,7 +1188,7 @@ func (r *Runner) bashPPRewriteCommandArgs(args []*syntax.Word) []*syntax.Word {
 			continue
 		}
 		lit, ok := word.Parts[0].(*syntax.Lit)
-		if !ok || !syntax.ValidName(lit.Value) || !r.lookupVar(lit.Value).IsSet() {
+		if !ok || !syntax.BashPPValidIdent(lit.Value) || !r.lookupVar(lit.Value).IsSet() {
 			out = append(out, word)
 			i++
 			continue
@@ -1450,7 +1450,7 @@ func (r *Runner) bashPPShortDeclCall(ctx context.Context, d *syntax.BashPPShortD
 	resultTypes := bashppResultTypes(fn.results())
 	resultTypeExprs := bashppResultTypeExprs(fn.results())
 	for i, lhs := range d.Lhs {
-		if !syntax.ValidName(lhs.Value) {
+		if !syntax.BashPPValidIdent(lhs.Value) {
 			r.errf("invalid variable name: %q\n", lhs.Value)
 			r.exit = exitStatus{code: 2}
 			return

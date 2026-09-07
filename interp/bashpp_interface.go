@@ -83,7 +83,7 @@ func (r *Runner) bashPPInterfaceMethodSet(name string, iface *syntax.BashPPInter
 			continue
 		}
 		spec := elem.Method
-		if spec.Name == nil || !syntax.ValidName(spec.Name.Value) {
+		if spec.Name == nil || !syntax.BashPPValidIdent(spec.Name.Value) {
 			return nil, fmt.Errorf("BASHPP-EINTERFACE-METHOD: interface %s has invalid method name", name)
 		}
 		method := spec.Name.Value

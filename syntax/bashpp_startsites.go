@@ -3,7 +3,11 @@
 
 package syntax
 
-import "strings"
+import (
+	"strings"
+	"unicode"
+	"unicode/utf8"
+)
 
 // This file is the Bash++ start-site DECISION TABLE, extracted from the parser
 // rather than embedded in it.
@@ -360,9 +364,14 @@ func hasCallShape(s string) bool {
 }
 
 func leadingIdent(s string) string {
-	i := 0
-	for i < len(s) && isIdentByte(s[i], i == 0) {
-		i++
+	i, first := 0, true
+	for i < len(s) {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		if r == utf8.RuneError && size == 1 || !bashppIdentRune(r, first) {
+			break
+		}
+		i += size
+		first = false
 	}
 	return s[:i]
 }
@@ -384,14 +393,27 @@ func leadingSelector(s string) string {
 	}
 }
 
-func isIdentByte(c byte, first bool) bool {
-	switch {
-	case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c == '_':
-		return true
-	case c >= '0' && c <= '9':
-		return !first
+func bashppIdentRune(r rune, first bool) bool {
+	return r == '_' || unicode.IsLetter(r) || !first && unicode.IsDigit(r)
+}
+
+// BashPPValidIdent reports whether s is a complete Go identifier. It is
+// intentionally separate from ValidName: POSIX shell names remain ASCII-only,
+// while committed Bash++ grammar follows Go's Unicode letter/digit rules.
+func BashPPValidIdent(s string) bool {
+	if s == "" || isGoReservedWord(s) {
+		return false
 	}
-	return false
+	first := true
+	for len(s) > 0 {
+		r, size := utf8.DecodeRuneInString(s)
+		if r == utf8.RuneError && size == 1 || !bashppIdentRune(r, first) {
+			return false
+		}
+		s = s[size:]
+		first = false
+	}
+	return true
 }
 
 // goReservedWords is the complete set of Go keywords, as of the Go 1.x

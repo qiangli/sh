@@ -239,7 +239,7 @@ func (e *policyBashPPEvaluator) Resolve(ctx context.Context, req bashPPEvalReque
 	if bashPPPolicyFor(capability) != policyToolchain {
 		return "", fmt.Errorf("bash++ import %q: %s", path, capability.refusal())
 	}
-	if !syntax.ValidName(facts.Name) {
+	if !syntax.BashPPValidIdent(facts.Name) {
 		return "", fmt.Errorf("bash++ import %q: invalid package name %q", path, facts.Name)
 	}
 	if err := validateBashPPImportVisibility(req.Dir, facts.Dir, path); err != nil {

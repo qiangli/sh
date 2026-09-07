@@ -592,15 +592,7 @@ func bashppBareLit(w *Word) *Lit {
 // purpose: the two gates answer different questions, and a shape that can
 // never be a Go region should not reach the second gate as a Class E hit.
 func bashppIsIdent(s string) bool {
-	if s == "" || isGoReservedWord(s) {
-		return false
-	}
-	for i := 0; i < len(s); i++ {
-		if !isIdentByte(s[i], i == 0) {
-			return false
-		}
-	}
-	return true
+	return BashPPValidIdent(s)
 }
 
 // THE DAY-1 INITIALIZER GRAMMAR, in full:

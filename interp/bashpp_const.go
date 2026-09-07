@@ -55,7 +55,7 @@ func (r *Runner) bashPPConstGroup(ctx context.Context, group *syntax.BashPPConst
 		if name == "_" {
 			continue
 		}
-		if !syntax.ValidName(name) || seen[name] || r.bashPPScope.entries[name] != nil {
+		if !syntax.BashPPValidIdent(name) || seen[name] || r.bashPPScope.entries[name] != nil {
 			r.errf("%sconstant %s redeclared in this scope\n", r.bashErrPrefix(spec.Pos()), name)
 			r.exit.code = 2
 			return

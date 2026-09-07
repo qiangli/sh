@@ -105,7 +105,7 @@ func (nativeBashPPEvaluator) Resolve(ctx context.Context, req bashPPEvalRequest,
 	if info.Standard && !syntax.BashPPStdlibImportAllowed(path) {
 		return "", fmt.Errorf("bash++ import %q: package is not in the reviewed Go standard library", path)
 	}
-	if !syntax.ValidName(info.Name) {
+	if !syntax.BashPPValidIdent(info.Name) {
 		return "", fmt.Errorf("bash++ import %q: invalid package name %q", path, info.Name)
 	}
 	if err := validateBashPPImportVisibility(req.Dir, info.Dir, path); err != nil {

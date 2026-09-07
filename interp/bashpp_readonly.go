@@ -72,7 +72,7 @@ func (r *Runner) bashPPAssign(ctx context.Context, assign *syntax.BashPPAssign) 
 	if assign.Call != nil {
 		target := bashPPWordSource(assign.Target)
 		cell := r.bashPPScope.lookup(target)
-		if cell == nil || !syntax.ValidName(target) {
+		if cell == nil || !syntax.BashPPValidIdent(target) {
 			r.bashPPBuiltinError("TYPE", "assignment target %q is not declared", target)
 			return
 		}
@@ -106,7 +106,7 @@ func (r *Runner) bashPPAssign(ctx context.Context, assign *syntax.BashPPAssign) 
 	}
 	target := bashPPWordSource(assign.Target)
 	cell := r.bashPPScope.lookup(target)
-	if syntax.ValidName(target) && cell != nil && cell.pointer && assign.ValueExpr != nil {
+	if syntax.BashPPValidIdent(target) && cell != nil && cell.pointer && assign.ValueExpr != nil {
 		value, meta, err := r.bashPPEvalTypedValue(assign.ValueExpr, cell.declType)
 		if err != nil {
 			r.errf("BASHPP-EASSIGN-MISMATCH: %v\n", err)
@@ -121,7 +121,7 @@ func (r *Runner) bashPPAssign(ctx context.Context, assign *syntax.BashPPAssign) 
 		bashPPStoreCellValue(cell, value, meta)
 		return
 	}
-	if !syntax.ValidName(target) || cell == nil || cell.object == nil || !cell.object.readonly {
+	if !syntax.BashPPValidIdent(target) || cell == nil || cell.object == nil || !cell.object.readonly {
 		r.errf("bash++: mutation is only implemented for readonly objects\n")
 		r.exit = exitStatus{code: 2}
 		return
@@ -334,7 +334,7 @@ func bashPPParsePathText(text string) (string, []bashPPPathPart, bool) {
 		i++
 	}
 	root := text[:i]
-	if !syntax.ValidName(root) {
+	if !syntax.BashPPValidIdent(root) {
 		return "", nil, false
 	}
 	var parts []bashPPPathPart
@@ -348,7 +348,7 @@ func bashPPParsePathText(text string) (string, []bashPPPathPart, bool) {
 				i++
 			}
 			field := text[fieldStart:i]
-			if !syntax.ValidName(field) {
+			if !syntax.BashPPValidIdent(field) {
 				return "", nil, false
 			}
 			parts = append(parts, bashPPPathPart{field: field, text: text[start:i]})

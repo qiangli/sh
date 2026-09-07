@@ -267,7 +267,7 @@ func (r *Runner) bashPPShortDeclDecode(ctx context.Context, d *syntax.BashPPShor
 // coercion — the same string every other consumer of the variable sees.
 func (r *Runner) bashPPDecodeArg(w *syntax.Word) string {
 	if len(w.Parts) == 1 {
-		if lit, ok := w.Parts[0].(*syntax.Lit); ok && syntax.ValidName(lit.Value) {
+		if lit, ok := w.Parts[0].(*syntax.Lit); ok && syntax.BashPPValidIdent(lit.Value) {
 			if vr := r.lookupVar(lit.Value); vr.IsSet() {
 				return vr.String()
 			}

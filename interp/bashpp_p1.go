@@ -94,7 +94,7 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 			delete(r.bashPPTypes, name)
 		}
 	}()
-	if !syntax.ValidName(name) {
+	if !syntax.BashPPValidIdent(name) {
 		r.errf("invalid variable name: %q\n", name)
 		r.exit = exitStatus{code: 2}
 		return
@@ -157,7 +157,7 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 		} else if d.DeclType.Value == "enum" {
 			seen := make(map[string]bool, len(d.EnumMembers))
 			for _, member := range d.EnumMembers {
-				if !syntax.ValidName(member.Value) {
+				if !syntax.BashPPValidIdent(member.Value) {
 					r.errf("BASHPP-EENUM-MEMBER: enum member %q must be an identifier\n", member.Value)
 					r.exit = exitStatus{code: 2}
 					return
@@ -844,7 +844,7 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 			return
 		}
 		name := d.Lhs[0].Value
-		if !syntax.ValidName(name) {
+		if !syntax.BashPPValidIdent(name) {
 			r.errf("invalid variable name: %q\n", name)
 			r.exit = exitStatus{code: 2}
 			r.bashPPShortFailureSeq++
@@ -906,14 +906,14 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 	}
 	if len(d.Lhs) == 1 {
 		name := d.Lhs[0].Value
-		if !syntax.ValidName(name) {
+		if !syntax.BashPPValidIdent(name) {
 			r.errf("invalid variable name: %q\n", name)
 			r.exit = exitStatus{code: 2}
 			return
 		}
 		if len(d.Rhs) == 1 {
 			sourceName := bashPPWordSource(d.Rhs[0])
-			if syntax.ValidName(sourceName) {
+			if syntax.BashPPValidIdent(sourceName) {
 				source := r.bashPPScope.lookup(sourceName)
 				if source != nil && source.vr.Kind == expand.Object {
 					value, meta := source.vr.Obj, bashPPCellMeta(source)
@@ -1014,7 +1014,7 @@ func (r *Runner) bashPPBeginShortDecl(d *syntax.BashPPShortDecl) (*bashPPShortDe
 	}
 	for _, lhs := range d.Lhs {
 		name := lhs.Value
-		if !syntax.ValidName(name) {
+		if !syntax.BashPPValidIdent(name) {
 			r.errf("%sinvalid variable name: %q\n", r.bashErrPrefix(lhs.Pos()), name)
 			r.exit = exitStatus{code: 2}
 			return nil, false
@@ -1165,7 +1165,7 @@ func (r *Runner) bashPPDirectChannel(w *syntax.Word) (*bashPPChannel, *bashPPCon
 		return nil, nil
 	}
 	lit, ok := w.Parts[0].(*syntax.Lit)
-	if !ok || !syntax.ValidName(lit.Value) {
+	if !ok || !syntax.BashPPValidIdent(lit.Value) {
 		return nil, nil
 	}
 	cell := r.bashPPScope.lookup(lit.Value)
@@ -1423,7 +1423,7 @@ func (r *Runner) bashPPShortDeclPredeclared(d *syntax.BashPPShortDecl, name stri
 	}
 	status := r.exit
 	for i, lhs := range d.Lhs {
-		if !syntax.ValidName(lhs.Value) {
+		if !syntax.BashPPValidIdent(lhs.Value) {
 			r.errf("invalid variable name: %q\n", lhs.Value)
 			r.exit = exitStatus{code: 2}
 			return
