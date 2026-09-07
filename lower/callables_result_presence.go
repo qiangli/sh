@@ -119,7 +119,7 @@ func (e *emitter) shortResultCall(n *syntax.BashPPShortDecl) (string, bool, erro
 		e.bind(name)
 		e.projections.projectionBind(name, p)
 	}
-	if !e.inFunc && len(ns) == 1 {
+	if !e.inFunc {
 		if e.globalChecked == nil {
 			e.globalChecked = map[*syntax.BashPPShortDecl]string{}
 		}

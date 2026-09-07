@@ -526,6 +526,9 @@ func (e *emitter) statementFlags(s *syntax.Stmt) error {
 	return nil
 }
 func (e *emitter) statement(s *syntax.Stmt) (string, error) {
+	if text, handled, err := e.lexicalCopyShellAssignment(s); handled || err != nil {
+		return text, err
+	}
 	if text, handled, err := e.carrierShellAssignment(s); handled || err != nil {
 		return text, err
 	}

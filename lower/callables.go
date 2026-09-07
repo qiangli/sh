@@ -135,21 +135,32 @@ func (e *emitter) globalStatement(s *syntax.Stmt) (string, error) {
 		return "", err
 	}
 	if n, ok := s.Cmd.(*syntax.BashPPShortDecl); ok && e.globalChecked[n] != "" {
-		name, failure := n.Lhs[0].Value, e.globalChecked[n]
-		if e.declaredGlobals[name] {
-			return "", e.fail(n, CodeType, "no new variables on left side of :=")
+		ns, failure := names(n.Lhs), e.globalChecked[n]
+		for _, name := range ns {
+			if name == "_" {
+				continue
+			}
+			if e.declaredGlobals[name] {
+				return "", e.fail(n, CodeType, "no new variables on left side of :=")
+			}
+			e.declaredGlobals[name] = true
 		}
-		e.declaredGlobals[name] = true
 		if e.globalTypes == nil {
 			first := strings.SplitN(text, "\n", 2)[0]
 			e.globalDecls.WriteString(e.mark(n) + "var " + strings.Replace(first, " := ", " = ", 1) + "\n")
-			return e.mark(n) + e.unused([]string{name}) + "\n", nil
+			return e.mark(n) + e.unused(ns) + "\n", nil
 		}
-		fmt.Fprintf(&e.globalDecls, "%svar %s %s\nvar %s error\n", e.mark(n), name, e.globalTypes[name], failure)
 		presence := ""
-		if e.execution {
-			presence = e.lexicalCell(name, e.program()) + ".Present = " + failure + " == nil\n"
+		for _, name := range ns {
+			if name == "_" {
+				continue
+			}
+			fmt.Fprintf(&e.globalDecls, "%svar %s %s\n", e.mark(n), name, e.globalTypes[name])
+			if e.execution {
+				presence += e.lexicalCell(name, e.program()) + ".Present = " + failure + " == nil\n"
+			}
 		}
+		fmt.Fprintf(&e.globalDecls, "var %s error\n", failure)
 		return e.mark(n) + strings.Replace(text, " := ", " = ", 1) + "\n" + presence, nil
 	}
 	line := text
