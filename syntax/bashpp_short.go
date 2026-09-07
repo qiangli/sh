@@ -85,6 +85,22 @@ func bashppScalarExpr(w *Word) BashPPExpr {
 	return bashppConvertExpr(expr, text, pos, lit)
 }
 
+func bashppAssignmentTargetExpr(w *Word) BashPPExpr {
+	text, positions, ok := bashppScalarSource(w)
+	if !ok {
+		return nil
+	}
+	expr, err := goparser.ParseExpr(text)
+	if err != nil || !bashppSupportedAddressAST(expr) {
+		return nil
+	}
+	pos := func(p gotoken.Pos) Pos { return positions[int(p)-1] }
+	lit := func(p gotoken.Pos, end gotoken.Pos, value string) *Lit {
+		return &Lit{ValuePos: pos(p), ValueEnd: pos(end), Value: value}
+	}
+	return bashppConvertExpr(expr, text, pos, lit)
+}
+
 func bashppConvertExpr(expr goast.Expr, source string, pos func(gotoken.Pos) Pos, lit func(gotoken.Pos, gotoken.Pos, string) *Lit) BashPPExpr {
 	convertType := func(e goast.Expr) BashPPTypeExpr { return bashppConvertType(e, pos, lit) }
 
@@ -920,6 +936,96 @@ func bashppAssign(ce *CallExpr, redirs []*Redirect, goRegion bool) *BashPPAssign
 		assign.ValueExpr = rhsExpr
 	}
 	return assign
+}
+
+func (p *Parser) bashppUpdate(ce *CallExpr, redirs []*Redirect, goRegion bool) Command {
+	if !goRegion || ce == nil || len(redirs) != 0 {
+		return nil
+	}
+	if len(ce.Assigns) == 1 && len(ce.Args) == 0 {
+		assign := ce.Assigns[0]
+		if assign.Append && assign.Name != nil && assign.Value != nil {
+			var targetWord *Word
+			if assign.Index == nil {
+				targetWord = &Word{Parts: []WordPart{assign.Name}}
+			} else {
+				withoutAppend := *assign
+				withoutAppend.Append, withoutAppend.Value = false, nil
+				targetWord = p.assignAsWord(&withoutAppend)
+			}
+			opPos := posAddCol(assign.Value.Pos(), -2)
+			return &BashPPUpdate{TargetWord: targetWord, Target: bashppAssignmentTargetExpr(targetWord),
+				Op:        &Lit{ValuePos: opPos, ValueEnd: posAddCol(opPos, 2), Value: "+="},
+				ValueWord: assign.Value, Value: bashppScalarExpr(assign.Value)}
+		}
+		return nil
+	}
+	if len(ce.Assigns) != 0 || len(ce.Args) == 0 {
+		return nil
+	}
+	if inc := bashppStandaloneIncDec(ce.Args); inc != nil {
+		return inc
+	}
+	if len(ce.Args) == 1 {
+		text := bashppWordText(ce.Args[0])
+		for _, value := range []string{"<<=", ">>=", "&^=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^="} {
+			if at := strings.Index(text, value); at > 0 && at+len(value) < len(text) {
+				start := ce.Args[0].Pos()
+				targetLit := &Lit{ValuePos: start, ValueEnd: posAddCol(start, at), Value: text[:at]}
+				opPos := targetLit.End()
+				valuePos := posAddCol(opPos, len(value))
+				valueLit := &Lit{ValuePos: valuePos, ValueEnd: ce.Args[0].End(), Value: text[at+len(value):]}
+				targetWord, valueWord := &Word{Parts: []WordPart{targetLit}}, &Word{Parts: []WordPart{valueLit}}
+				return &BashPPUpdate{TargetWord: targetWord, Target: bashppAssignmentTargetExpr(targetWord),
+					Op:        &Lit{ValuePos: opPos, ValueEnd: valuePos, Value: value},
+					ValueWord: valueWord, Value: bashppScalarExpr(valueWord)}
+			}
+		}
+	}
+	if len(ce.Args) < 3 {
+		return nil
+	}
+	op := bashppBareLit(ce.Args[1])
+	if op == nil || !strings.HasSuffix(op.Value, "=") || op.Value == "=" || op.Value == ":=" {
+		return nil
+	}
+	valueWord := bashppJoinWords(ce.Args[2:])
+	return &BashPPUpdate{TargetWord: ce.Args[0], Target: bashppAssignmentTargetExpr(ce.Args[0]), Op: op,
+		ValueWord: valueWord, Value: bashppScalarExpr(valueWord)}
+}
+
+func bashppStandaloneIncDec(words []*Word) *BashPPIncDec {
+	var targetWord *Word
+	var op *Lit
+	if len(words) == 1 {
+		lit := bashppBareLit(words[0])
+		if lit == nil {
+			return nil
+		}
+		for _, value := range []string{"++", "--"} {
+			if strings.HasSuffix(lit.Value, value) {
+				opPos := posAddCol(lit.End(), -2)
+				targetLit := &Lit{ValuePos: lit.Pos(), ValueEnd: opPos, Value: strings.TrimSuffix(lit.Value, value)}
+				targetWord = &Word{Parts: []WordPart{targetLit}}
+				op = &Lit{ValuePos: opPos, ValueEnd: lit.End(), Value: value}
+				break
+			}
+		}
+	} else if len(words) == 2 {
+		targetWord, op = words[0], bashppBareLit(words[1])
+		if op == nil || op.Value != "++" && op.Value != "--" {
+			return nil
+		}
+	}
+	if targetWord == nil || op == nil {
+		return nil
+	}
+	target := bashppAssignmentTargetExpr(targetWord)
+	var name *Lit
+	if ident, ok := target.(*BashPPIdent); ok {
+		name = ident.Name
+	}
+	return &BashPPIncDec{Name: name, TargetWord: targetWord, Target: target, Op: op}
 }
 
 func bashppPointerExpr(w *Word) BashPPExpr {

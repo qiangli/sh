@@ -1825,8 +1825,17 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 		p.writeLit(" = ")
 		p.bashppExpr(cmd.Expr)
 	case *BashPPIncDec:
-		p.writeLit(cmd.Name.Value)
+		if cmd.TargetWord != nil {
+			p.word(cmd.TargetWord)
+		} else {
+			p.writeLit(cmd.Name.Value)
+		}
 		p.writeLit(cmd.Op.Value)
+	case *BashPPUpdate:
+		p.word(cmd.TargetWord)
+		p.spacedString(cmd.Op.Value, cmd.Op.Pos())
+		p.space()
+		p.word(cmd.ValueWord)
 	case *BashPPShortDecl:
 		for i, lhs := range cmd.Lhs {
 			if i > 0 {

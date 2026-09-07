@@ -224,7 +224,15 @@ func Walk(node Node, f func(Node) bool) {
 		walkNilable(node.Expr, f)
 	case *BashPPIncDec:
 		walkNilable(node.Name, f)
+		walkNilable(node.TargetWord, f)
+		walkNilable(node.Target, f)
 		walkNilable(node.Op, f)
+	case *BashPPUpdate:
+		walkNilable(node.TargetWord, f)
+		walkNilable(node.Target, f)
+		walkNilable(node.Op, f)
+		walkNilable(node.ValueWord, f)
+		walkNilable(node.Value, f)
 	case *BashPPBranch:
 		walkNilable(node.Kw, f)
 	case *BashPPSwitch:

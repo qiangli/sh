@@ -5452,6 +5452,8 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		r.bashPPForAssign(cm)
 	case *syntax.BashPPIncDec:
 		r.bashPPIncDec(cm)
+	case *syntax.BashPPUpdate:
+		r.bashPPUpdate(cm)
 	case *syntax.BashPPBranch:
 		r.bashPPBranchStmt(cm)
 	case *syntax.Subshell:

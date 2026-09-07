@@ -3,6 +3,8 @@
 
 package syntax
 
+import "strings"
+
 // This file holds the one carrier that lets a Go scalar expression written
 // with SHELL METACHARACTERS reach the typed [BashPPExpr] tree.
 //
@@ -115,6 +117,63 @@ func bashppAddressHead(ce *CallExpr) bool {
 	}
 	_, ok := bashppShortLHS(ce.Args[:op])
 	return ok
+}
+
+func bashppCompoundTokenHead(ce *CallExpr, tok token) bool {
+	if ce == nil || len(ce.Assigns) != 0 || len(ce.Args) != 1 {
+		return false
+	}
+	return bashppScalarOpTok(tok) != ""
+}
+
+func (p *Parser) bashppCompoundTail(ce *CallExpr) *BashPPUpdate {
+	txn := p.beginBashPPTxn()
+	opPos := p.pos
+	op := bashppScalarOpTok(p.tok)
+	var rhs []*Word
+	p.next()
+	suffix := ""
+	if p.tok == _LitWord {
+		suffix = p.val
+	}
+	opSuffix := "="
+	if op == "&" && strings.HasPrefix(suffix, "^=") {
+		opSuffix = "^="
+	}
+	if !strings.HasPrefix(suffix, opSuffix) {
+		txn.rollback(p)
+		return nil
+	}
+	op += opSuffix
+	if rest := strings.TrimPrefix(suffix, opSuffix); rest != "" {
+		start := posAddCol(p.pos, len(opSuffix))
+		rhs = append(rhs, p.wordOne(&Lit{ValuePos: start, ValueEnd: posAddCol(start, len(rest)), Value: rest}))
+	}
+	p.next()
+	for !p.bashppScalarTailEnd() {
+		if scalarOp := bashppScalarOpTok(p.tok); scalarOp != "" {
+			rhs = append(rhs, p.wordOne(&Lit{ValuePos: p.pos, ValueEnd: posAddCol(p.pos, len(scalarOp)), Value: scalarOp}))
+			p.next()
+			continue
+		}
+		word := p.bashppScalarOperand()
+		if word == nil {
+			txn.rollback(p)
+			return nil
+		}
+		rhs = append(rhs, word)
+	}
+	if len(rhs) == 0 {
+		txn.rollback(p)
+		return nil
+	}
+	txn.commit(p)
+	valueWord := bashppJoinWords(rhs)
+	return &BashPPUpdate{
+		TargetWord: ce.Args[0], Target: bashppAssignmentTargetExpr(ce.Args[0]),
+		Op:        &Lit{ValuePos: opPos, ValueEnd: posAddCol(opPos, len(op)), Value: op},
+		ValueWord: valueWord, Value: bashppScalarExpr(valueWord),
+	}
 }
 
 // bashppScalarTail reads the rest of a scalar expression, starting at an

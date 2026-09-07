@@ -1769,6 +1769,19 @@ func (r *Runner) bashPPForAssign(assign *syntax.BashPPForAssign) {
 }
 
 func (r *Runner) bashPPIncDec(stmt *syntax.BashPPIncDec) {
+	if stmt.TargetWord != nil {
+		if stmt.Target == nil {
+			r.bashPPUpdateError(stmt.Pos(), "FORM", "unsupported increment or decrement target")
+			return
+		}
+		one := &syntax.BashPPBasicLit{Value: &syntax.Lit{ValuePos: stmt.Op.Pos(), ValueEnd: stmt.Op.End(), Value: "1"}, Kind: "INT"}
+		op := "+"
+		if stmt.Op.Value == "--" {
+			op = "-"
+		}
+		r.bashPPApplyUpdate(stmt.Target, op, one, stmt.Op.Pos())
+		return
+	}
 	if r.bashPPScope == nil {
 		r.errf("bash++ inc-dec evaluated with extensions disabled\n")
 		r.exit = exitStatus{code: 2}

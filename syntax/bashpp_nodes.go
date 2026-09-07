@@ -905,12 +905,37 @@ func (a *BashPPForAssign) End() Pos { return a.Expr.End() }
 
 // BashPPIncDec is the scalar ++ or -- statement admitted in a for clause.
 type BashPPIncDec struct {
-	Name *Lit
-	Op   *Lit
+	Name       *Lit // compatibility field for for-clause identifier forms
+	TargetWord *Word
+	Target     BashPPExpr
+	Op         *Lit
 }
 
-func (s *BashPPIncDec) Pos() Pos { return s.Name.Pos() }
+func (s *BashPPIncDec) Pos() Pos {
+	if s.Target != nil {
+		return s.Target.Pos()
+	}
+	if s.TargetWord != nil {
+		return s.TargetWord.Pos()
+	}
+	return s.Name.Pos()
+}
 func (s *BashPPIncDec) End() Pos { return s.Op.End() }
+
+// BashPPUpdate is a compound assignment statement in a committed Go region.
+// TargetWord preserves the exact source while Target and Value are positioned,
+// lowering-ready expressions. A nil expression is retained for a deterministic
+// runtime diagnostic rather than falling through to shell execution.
+type BashPPUpdate struct {
+	TargetWord *Word
+	Target     BashPPExpr
+	Op         *Lit
+	ValueWord  *Word
+	Value      BashPPExpr
+}
+
+func (u *BashPPUpdate) Pos() Pos { return u.TargetWord.Pos() }
+func (u *BashPPUpdate) End() Pos { return u.ValueWord.End() }
 
 // BashPPBranch is an unlabeled Go-form break, continue, or fallthrough. It is
 // constructed only inside a committed typed control statement; the same bare
@@ -1328,6 +1353,7 @@ func (*BashPPIf) commandNode()          {}
 func (*BashPPFor) commandNode()         {}
 func (*BashPPForAssign) commandNode()   {}
 func (*BashPPIncDec) commandNode()      {}
+func (*BashPPUpdate) commandNode()      {}
 func (*BashPPBranch) commandNode()      {}
 func (*BashPPSwitch) commandNode()      {}
 func (*BashPPImport) commandNode()      {}

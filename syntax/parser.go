@@ -4078,6 +4078,13 @@ loop:
 				return
 			}
 		}
+		if p.lang.in(LangBashPP) && p.bashppFuncDepth > 0 && bashppCompositeTxn == nil && len(s.Redirs) == 0 &&
+			bashppCompoundTokenHead(ce, p.tok) {
+			if update := p.bashppCompoundTail(ce); update != nil {
+				s.Cmd = update
+				return
+			}
+		}
 		switch p.tok {
 		case _EOF, _Newl, semicolon, and, or, andAnd, orOr, orAnd, andPipe, andBang,
 			dblSemicolon, semiAnd, dblSemiAnd, semiOr:
@@ -4307,6 +4314,10 @@ loop:
 				}
 			}
 			s.Cmd = decl
+			return
+		}
+		if update := p.bashppUpdate(ce, s.Redirs, p.bashppFuncDepth > 0); update != nil {
+			s.Cmd = update
 			return
 		}
 		if assign := bashppAssign(ce, s.Redirs, p.bashppFuncDepth > 0); assign != nil {
