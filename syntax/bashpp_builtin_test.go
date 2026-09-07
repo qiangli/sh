@@ -56,7 +56,7 @@ func TestBashPPPredeclaredBuiltinAST(t *testing.T) {
 }
 
 func TestBashPPPredeclaredBuiltinFallback(t *testing.T) {
-	const src = "len() { :; }\nmake() { :; }\n"
+	const src = "len() { :; }\ncap() { :; }\nappend() { :; }\ncopy() { :; }\nmin() { :; }\nmax() { :; }\nnew() { :; }\nmake() { :; }\n"
 	for _, lang := range []LangVariant{LangBash, LangPOSIX} {
 		f, err := NewParser(Variant(lang)).Parse(strings.NewReader(src), "")
 		if err != nil {
@@ -68,5 +68,36 @@ func TestBashPPPredeclaredBuiltinFallback(t *testing.T) {
 			}
 			return true
 		})
+	}
+}
+
+func TestBashPPPredeclaredBuiltinResidualAST(t *testing.T) {
+	const src = "func main() {\n\tch := make(chan int, 2)\n\tp := new([3]int)\n\tbuf := make([]byte, 0, 4)\n\ta := len(ch)\n\tb := cap(p)\n\tbuf = append(buf, \"x\"...)\n\tn := copy(buf, \"y\")\n\tm := max(9007199254740992, 9007199254740993)\n}\n"
+	parse := func(rd io.Reader) *File {
+		f, err := NewParser(Variant(LangBashPP)).Parse(rd, "builtin-residual.bpp")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return f
+	}
+	buffered := parse(strings.NewReader(src))
+	streamed := parse(iotest.OneByteReader(strings.NewReader(src)))
+	if !reflect.DeepEqual(buffered, streamed) {
+		t.Fatal("buffered and streamed residual builtin trees differ")
+	}
+	body := buffered.Stmts[0].Cmd.(*BashPPFuncDecl).Body.Stmts
+	appendCall := body[5].Cmd.(*BashPPCommandCall).Call
+	if appendCall == nil || appendCall.Fun[0].Value != "append" || !appendCall.Ellipsis.IsValid() {
+		t.Fatalf("append string spread = %#v", appendCall)
+	}
+	for _, index := range []int{3, 4, 6, 7} {
+		decl := body[index].Cmd.(*BashPPShortDecl)
+		if decl.Call == nil || !decl.Call.Lparen.IsValid() || !decl.Call.Rparen.IsValid() {
+			t.Fatalf("builtin statement %d lost call positions: %#v", index, decl)
+		}
+	}
+	var printed bytes.Buffer
+	if err := NewPrinter().Print(&printed, buffered); err != nil || printed.String() != src {
+		t.Fatalf("print = %q, %v", printed.String(), err)
 	}
 }

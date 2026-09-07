@@ -149,3 +149,26 @@ func TestBashPPScalarExpressionTypedJSONRoundTrip(t *testing.T) {
 		t.Fatalf("decoded tree printed %q (%v), want %q", out.String(), err, src)
 	}
 }
+
+func TestBashPPBuiltinResidualTypedJSONRoundTrip(t *testing.T) {
+	const src = "func main() {\n\tbuf := make([]byte, 0, 4)\n\tbuf = append(buf, \"x\"...)\n\tn := copy(buf, \"y\")\n\tm := max(9007199254740992, 9007199254740993)\n}\n"
+	f, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(src), "builtin-residual.bpp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var enc strings.Builder
+	if err := typedjson.Encode(&enc, f); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(enc.String(), `"Ellipsis":{"Offset":`) || !strings.Contains(enc.String(), `"Value":"byte"`) {
+		t.Fatalf("encoded builtin calls lost spread/type evidence: %s", enc.String())
+	}
+	node, err := typedjson.Decode(strings.NewReader(enc.String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	if err := syntax.NewPrinter().Print(&out, node); err != nil || out.String() != src {
+		t.Fatalf("decoded builtin tree printed %q (%v), want %q", out.String(), err, src)
+	}
+}

@@ -5,6 +5,8 @@ package interp
 
 import (
 	"fmt"
+	"go/constant"
+	"go/token"
 	"strconv"
 	"strings"
 
@@ -34,11 +36,14 @@ func (r *Runner) bashPPBuiltinArity(name, want string, got int) {
 }
 
 type bashPPBuiltinArg struct {
-	value any
-	meta  *bashPPCollectionMeta
-	typ   syntax.BashPPTypeExpr
-	cell  *bashPPCell
-	text  string
+	value     any
+	meta      *bashPPCollectionMeta
+	typ       syntax.BashPPTypeExpr
+	cell      *bashPPCell
+	channel   *bashPPChannel
+	scalar    bashPPScalar
+	hasScalar bool
+	text      string
 }
 
 func (r *Runner) bashPPBuiltinArg(w *syntax.Word) bashPPBuiltinArg {
@@ -47,7 +52,10 @@ func (r *Runner) bashPPBuiltinArg(w *syntax.Word) bashPPBuiltinArg {
 		return bashPPBuiltinArg{text: text}
 	}
 	if cell := r.bashPPCellForWord(w); cell != nil {
-		arg := bashPPBuiltinArg{cell: cell, typ: cell.declType, text: text}
+		arg := bashPPBuiltinArg{cell: cell, typ: cell.declType, channel: cell.channel, text: text}
+		if arg.typ == nil && cell.typeName != "" {
+			arg.typ = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: cell.typeName}}
+		}
 		if cell.pointer {
 			arg.value, arg.meta = cell.pointerValue, bashPPPointerMeta(cell.declType)
 		} else if cell.vr.Kind == expand.Object {
@@ -56,21 +64,38 @@ func (r *Runner) bashPPBuiltinArg(w *syntax.Word) bashPPBuiltinArg {
 				arg.typ = arg.meta.typ
 			}
 		} else {
-			arg.value = bashPPScalarValue(cell.vr.Str)
+			arg.scalar = bashPPScalarFromString(cell.vr.Str)
+			arg.value = bashPPBuiltinExactScalarValue(cell.vr.Str, arg.scalar)
+			arg.scalar.runtime = !cell.constant
+			if named, ok := arg.typ.(*syntax.BashPPNamedType); ok {
+				arg.scalar.typ = named.Name.Value
+			}
+			arg.hasScalar = true
 		}
 		return arg
 	}
 	if value, ok := r.bashPPResolveWord(w); ok {
-		return bashPPBuiltinArg{value: bashPPScalarValue(value), text: text}
+		scalar := bashPPScalarFromString(value)
+		return bashPPBuiltinArg{value: bashPPBuiltinExactScalarValue(value, scalar), scalar: scalar, hasScalar: true, text: text}
 	}
 	value := r.bashPPExprValue(w)
 	if len(w.Parts) == 1 {
 		switch w.Parts[0].(type) {
 		case *syntax.SglQuoted, *syntax.DblQuoted:
-			return bashPPBuiltinArg{value: value, text: text}
+			return bashPPBuiltinArg{value: value, scalar: bashPPScalar{value: constant.MakeString(value)}, hasScalar: true, text: text}
 		}
 	}
-	return bashPPBuiltinArg{value: bashPPScalarValue(value), text: text}
+	scalar := bashPPScalarFromString(value)
+	return bashPPBuiltinArg{value: bashPPBuiltinExactScalarValue(value, scalar), scalar: scalar, hasScalar: true, text: text}
+}
+
+func bashPPBuiltinExactScalarValue(text string, scalar bashPPScalar) any {
+	if scalar.value.Kind() == constant.Int {
+		if _, ok := constant.Int64Val(scalar.value); !ok {
+			return text
+		}
+	}
+	return bashPPScalarValue(text)
 }
 
 func bashPPBuiltinScalar(value any) string {
@@ -121,6 +146,25 @@ func (r *Runner) bashPPBuiltinCollection(arg bashPPBuiltinArg, kinds ...string) 
 	return nil, false
 }
 
+func (r *Runner) bashPPBuiltinPointerArrayLen(arg bashPPBuiltinArg) (int, bool) {
+	ptr, ok := r.bashPPPointerType(arg.typ)
+	if !ok {
+		return 0, false
+	}
+	array, ok := r.bashPPUnderlyingType(ptr.Element).(*syntax.BashPPCollectionType)
+	if !ok || array.Kind != "array" || array.Length == nil {
+		return 0, false
+	}
+	n, err := r.bashPPArrayLength(array.Length.Value)
+	return n, err == nil
+}
+
+func (r *Runner) bashPPBuiltinByteSlice(shape *syntax.BashPPCollectionType) bool {
+	typ := r.bashPPCanonicalAssignableType(shape.Element)
+	named, ok := typ.(*syntax.BashPPNamedType)
+	return ok && (named.Name.Value == "byte" || named.Name.Value == "uint8")
+}
+
 func (r *Runner) bashPPBuiltinInt(name string, arg bashPPBuiltinArg) (int, bool) {
 	var text string
 	switch value := arg.value.(type) {
@@ -168,6 +212,20 @@ func (r *Runner) bashPPRunValueBuiltin(name string, c *syntax.BashPPCall) (*bash
 			r.bashPPBuiltinArity(name, "exactly 1 argument", len(args))
 			return nil, false
 		}
+		if args[0].channel != nil {
+			if r.bashPPConcurrent == nil || args[0].cell.channelOwner != r.bashPPConcurrent || r.bashPPChanBoundary {
+				r.bashPPBuiltinError("TYPE", "%s argument is not a channel in this task group", name)
+				return nil, false
+			}
+			n := len(args[0].channel.ch)
+			if name == "cap" {
+				n = cap(args[0].channel.ch)
+			}
+			return bashPPBuiltinScalarCell(strconv.Itoa(n)), true
+		}
+		if n, ok := r.bashPPBuiltinPointerArrayLen(args[0]); ok {
+			return bashPPBuiltinScalarCell(strconv.Itoa(n)), true
+		}
 		if name == "len" {
 			if text, ok := args[0].value.(string); ok && args[0].meta == nil {
 				return bashPPBuiltinScalarCell(strconv.Itoa(len(text))), true
@@ -177,7 +235,11 @@ func (r *Runner) bashPPRunValueBuiltin(name string, c *syntax.BashPPCall) (*bash
 			r.bashPPBuiltinError("NIL", "%s cannot be applied to untyped nil", name)
 			return nil, false
 		}
-		if _, ok := r.bashPPBuiltinCollection(args[0], "array", "inferred-array", "slice", "map"); !ok {
+		kinds := []string{"array", "inferred-array", "slice", "map"}
+		if name == "cap" {
+			kinds = kinds[:3]
+		}
+		if _, ok := r.bashPPBuiltinCollection(args[0], kinds...); !ok {
 			r.bashPPBuiltinError("TYPE", "%s argument must be %s", name, map[bool]string{true: "an array or slice", false: "a string, array, slice, or map"}[name == "cap"])
 			return nil, false
 		}
@@ -209,8 +271,11 @@ func (r *Runner) bashPPRunValueBuiltin(name string, c *syntax.BashPPCall) (*bash
 		metas := args[0].meta.sequence
 		oldCap := cap(seq)
 		additional := len(args) - 1
+		stringSpread := false
 		if c.Ellipsis.IsValid() && len(args) == 2 {
-			if spread, ok := args[1].value.([]any); ok {
+			if text, ok := args[1].value.(string); ok && args[1].meta == nil && args[1].channel == nil && r.bashPPBuiltinByteSlice(shape) {
+				additional, stringSpread = len([]byte(text)), true
+			} else if spread, ok := args[1].value.([]any); ok {
 				additional = len(spread)
 			}
 		}
@@ -222,14 +287,20 @@ func (r *Runner) bashPPRunValueBuiltin(name string, c *syntax.BashPPCall) (*bash
 				r.bashPPBuiltinArity(name, "a slice and one spread slice", len(args))
 				return nil, false
 			}
-			otherShape, ok := r.bashPPBuiltinCollection(args[1], "slice")
-			if !ok || !r.bashPPTypeAssignable(otherShape.Element, shape.Element) {
-				r.bashPPBuiltinError("TYPE", "append spread argument must be a compatible slice")
-				return nil, false
+			if stringSpread {
+				for _, b := range []byte(args[1].value.(string)) {
+					seq, metas = append(seq, int(b)), append(metas, nil)
+				}
+			} else {
+				otherShape, ok := r.bashPPBuiltinCollection(args[1], "slice")
+				if !ok || !r.bashPPTypeAssignable(otherShape.Element, shape.Element) {
+					r.bashPPBuiltinError("TYPE", "append spread argument must be a compatible slice or string for []byte")
+					return nil, false
+				}
+				other, _ := args[1].value.([]any)
+				seq = append(seq, other...)
+				metas = append(metas, args[1].meta.sequence...)
 			}
-			other, _ := args[1].value.([]any)
-			seq = append(seq, other...)
-			metas = append(metas, args[1].meta.sequence...)
 		} else {
 			for _, arg := range args[1:] {
 				value, meta, ok := r.bashPPBuiltinElement(arg, shape.Element)
@@ -253,7 +324,9 @@ func (r *Runner) bashPPRunValueBuiltin(name string, c *syntax.BashPPCall) (*bash
 		}
 		dstType, dstOK := r.bashPPBuiltinCollection(args[0], "slice")
 		srcType, srcOK := r.bashPPBuiltinCollection(args[1], "slice")
-		if !dstOK || !srcOK || !r.bashPPTypeAssignable(srcType.Element, dstType.Element) {
+		text, stringSource := args[1].value.(string)
+		stringSource = stringSource && args[1].meta == nil && args[1].channel == nil && dstOK && r.bashPPBuiltinByteSlice(dstType)
+		if !dstOK || !stringSource && (!srcOK || !r.bashPPTypeAssignable(srcType.Element, dstType.Element)) {
 			r.bashPPBuiltinError("TYPE", "copy arguments must be compatible slices")
 			return nil, false
 		}
@@ -261,9 +334,18 @@ func (r *Runner) bashPPRunValueBuiltin(name string, c *syntax.BashPPCall) (*bash
 			return nil, false
 		}
 		dst, _ := args[0].value.([]any)
-		src, _ := args[1].value.([]any)
-		n := copy(dst, src)
-		copy(args[0].meta.sequence[:n], args[1].meta.sequence[:n])
+		var n int
+		if stringSource {
+			bytes := []byte(text)
+			n = min(len(dst), len(bytes))
+			for i := range n {
+				dst[i], args[0].meta.sequence[i] = int(bytes[i]), nil
+			}
+		} else {
+			src, _ := args[1].value.([]any)
+			n = copy(dst, src)
+			copy(args[0].meta.sequence[:n], args[1].meta.sequence[:n])
+		}
 		return bashPPBuiltinScalarCell(strconv.Itoa(n)), true
 
 	case "delete":
@@ -377,37 +459,66 @@ func (r *Runner) bashPPRunValueBuiltin(name string, c *syntax.BashPPCall) (*bash
 			return nil, false
 		}
 		best := 0
-		numeric := true
-		numbers := make([]float64, len(args))
-		for i, arg := range args {
-			text := bashPPBuiltinScalar(arg.value)
-			n, err := strconv.ParseFloat(text, 64)
-			if err != nil {
-				numeric = false
-				break
+		var resultType syntax.BashPPTypeExpr
+		kind := constant.Unknown
+		for _, arg := range args {
+			if !arg.hasScalar || arg.scalar.value == nil {
+				r.bashPPBuiltinError("TYPE", "%s arguments must all be ordered scalar values", name)
+				return nil, false
 			}
-			numbers[i] = n
-		}
-		for i := 1; i < len(args); i++ {
-			if numeric {
-				if name == "min" && numbers[i] < numbers[best] || name == "max" && numbers[i] > numbers[best] {
-					best = i
-				}
-			} else {
-				a, b := args[i].value, args[best].value
-				as, aok := a.(string)
-				bs, bok := b.(string)
-				if !aok || !bok {
+			argKind := arg.scalar.value.Kind()
+			if argKind != constant.Int && argKind != constant.Float && argKind != constant.String {
+				r.bashPPBuiltinError("TYPE", "%s arguments must all be ordered values", name)
+				return nil, false
+			}
+			if kind == constant.Unknown {
+				kind = argKind
+			} else if kind == constant.String || argKind == constant.String {
+				if kind != argKind {
 					r.bashPPBuiltinError("TYPE", "%s arguments must all be ordered values of one kind", name)
 					return nil, false
 				}
-				if name == "min" && as < bs || name == "max" && as > bs {
-					best = i
+			} else if argKind == constant.Float {
+				kind = constant.Float
+			}
+			if arg.typ != nil {
+				if resultType == nil {
+					resultType = arg.typ
+				} else if !r.bashPPTypeAssignable(arg.typ, resultType) || !r.bashPPTypeAssignable(resultType, arg.typ) {
+					r.bashPPBuiltinError("TYPE", "%s typed arguments must have one type", name)
+					return nil, false
 				}
 			}
 		}
-		result := bashPPBuiltinScalarCell(bashPPBuiltinScalar(args[best].value))
-		result.declType = args[best].typ
+		if resultType != nil {
+			named, ok := r.bashPPUnderlyingType(resultType).(*syntax.BashPPNamedType)
+			if !ok {
+				r.bashPPBuiltinError("TYPE", "%s result type must be an ordered scalar type", name)
+				return nil, false
+			}
+			for _, arg := range args {
+				if arg.typ == nil {
+					if _, err := r.bashPPConvertScalar(named.Name.Value, arg.scalar); err != nil {
+						r.bashPPBuiltinError("TYPE", "%v", err)
+						return nil, false
+					}
+				}
+			}
+		}
+		for i := 1; i < len(args); i++ {
+			op := token.LSS
+			if name == "max" {
+				op = token.GTR
+			}
+			if constant.Compare(args[i].scalar.value, op, args[best].scalar.value) {
+				best = i
+			}
+		}
+		result := bashPPBuiltinScalarCell(bashPPScalarString(args[best].scalar.value))
+		result.declType = resultType
+		if named, ok := resultType.(*syntax.BashPPNamedType); ok {
+			result.typeName = named.Name.Value
+		}
 		return result, true
 
 	case "print", "println":

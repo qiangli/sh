@@ -54,10 +54,51 @@ main()
 	qt.Assert(t, qt.Equals(out, "lens:0:0:3:3 copy 3 3 alias 3 map 0 str 2 nil true false false false\nclear 0 0 0 order 2 z\n"))
 }
 
+func TestBashPPPredeclaredBuiltinResidualForms(t *testing.T) {
+	const src = `type Count uint64
+func requireSame[T any](a T, b T) { printf 'typed:%s:%s\n' "$a" "$b" }
+func main() {
+ ch := make(chan int, 3)
+ ch <- 7
+ channelLen := len(ch)
+ channelCap := cap(ch)
+ close(ch)
+ closedLen := len(ch)
+ arrayPointer := new([4]int)
+ pointerLen := len(arrayPointer)
+ pointerCap := cap(arrayPointer)
+ var nilArray *[5]int
+ nilPointerLen := len(nilArray)
+ nilPointerCap := cap(nilArray)
+ bytes := make([]byte, 3)
+ copied := copy(bytes, "éx")
+ empty := make([]byte, 0, 3)
+ appended := append(empty, "Aé"...)
+ exact := max(9007199254740992, 9007199254740993)
+ negativeA := -9007199254740993
+ negativeB := -9007199254740992
+ exactNegative := min(negativeA, negativeB)
+ var count Count = 9007199254740993
+ typed := min(count, 9007199254740994)
+ requireSame(typed, count)
+ println("exact-print", exact)
+ printf 'channel:%s:%s:%s pointer:%s:%s:%s:%s copy:%s:%s:%s:%s append:%s:%s:%s exact:%s:%s\n' "$channelLen" "$channelCap" "$closedLen" "$pointerLen" "$pointerCap" "$nilPointerLen" "$nilPointerCap" "$copied" bytes[0] bytes[1] bytes[2] appended[0] appended[1] appended[2] "$exact" "$exactNegative"
+}
+main()
+`
+	out, stderr, err := runBashSharpCall(t, src)
+	qt.Assert(t, qt.IsNil(err), qt.Commentf("stderr: %s", stderr))
+	qt.Assert(t, qt.Equals(stderr, ""))
+	qt.Assert(t, qt.Equals(out, "typed:9007199254740993:9007199254740993\n"+
+		"exact-print 9007199254740993\n"+
+		"channel:1:3:1 pointer:4:4:5:5 copy:3:195:169:120 append:65:195:169 exact:9007199254740993:-9007199254740993\n"))
+}
+
 func TestBashPPBuiltinDiagnosticsAndReadonly(t *testing.T) {
 	tests := []struct{ name, body, want string }{
 		{"len arity", "_ := len()", "BASHPP-EBUILTIN-ARITY:"},
 		{"cap type", "_ := cap(1)", "BASHPP-EBUILTIN-TYPE:"},
+		{"cap map", "m := make(map[string]int)\n _ := cap(m)", "BASHPP-EBUILTIN-TYPE:"},
 		{"append type", "_ := append(1, 2)", "BASHPP-EBUILTIN-TYPE:"},
 		{"copy type", "_ := copy(1, 2)", "BASHPP-EBUILTIN-TYPE:"},
 		{"delete nil allowed", "var m map[string]int\n delete(m, \"x\")\n println(\"ok\")", ""},
@@ -69,6 +110,10 @@ func TestBashPPBuiltinDiagnosticsAndReadonly(t *testing.T) {
 		{"len untyped nil", "_ := len(nil)", "BASHPP-EBUILTIN-NIL:"},
 		{"append untyped nil", "_ := append(nil, 1)", "BASHPP-EBUILTIN-NIL:"},
 		{"min mixed", "_ := min(1, true)", "BASHPP-EBUILTIN-TYPE:"},
+		{"copy string non-byte", "s := make([]int, 2)\n _ := copy(s, \"ab\")", "BASHPP-EBUILTIN-TYPE:"},
+		{"append string non-byte", "s := make([]int, 0)\n _ := append(s, \"ab\"...)", "BASHPP-EBUILTIN-TYPE:"},
+		{"append string defined byte", "type Octet byte\n s := make([]Octet, 0)\n _ := append(s, \"ab\"...)", "BASHPP-EBUILTIN-TYPE:"},
+		{"min named mismatch", "type A int\n type B int\n var a A = 1\n var b B = 2\n _ := min(a, b)", "BASHPP-EBUILTIN-TYPE:"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
