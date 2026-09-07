@@ -83,7 +83,7 @@ func TestBashPPInterfaceDiagnostics(t *testing.T) {
 		{"duplicate", "type I interface { M string M string }\n", "BASHPP-EINTERFACE-DUPLICATE: interface I declares method M more than once\n"},
 		{"missing", "type T int\nfunc (v T) N(s string) { }\ntype I interface { M string }\nfunc main() { var v T = 1; var i I = v }\nmain()\n", "BASHPP-EINTERFACE-MISSING: T does not implement interface (missing method M)\n"},
 		{"wrong signature", "type T int\nfunc (v T) M(n int) { }\ntype I interface { M string }\nfunc main() { var v T = 1; var i I = v }\nmain()\n", "BASHPP-EINTERFACE-SIGNATURE: T method M has wrong signature\n"},
-		{"assert fail", "type T int\nfunc (v T) M(s string) { }\ntype U int\nfunc (v U) M(s string) { }\ntype I interface { M string }\nfunc main() { var v T = 1; var i I = v; x := i.(U); echo $x }\nmain()\n", "BASHPP-EASSERT-FAIL: interface value has dynamic type T, not U\n\n"},
+		{"assert fail", "type T int\nfunc (v T) M(s string) { }\ntype U int\nfunc (v U) M(s string) { }\ntype I interface { M string }\nfunc main() { var v T = 1; var i I = v; x := i.(U); echo $x }\nmain()\n", "BASHPP-EASSERT-FAIL: interface value has dynamic type T, not U\n"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -95,15 +95,45 @@ func TestBashPPInterfaceDiagnostics(t *testing.T) {
 			r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP))
 			err = r.Run(context.Background(), f)
 			var status interp.ExitStatus
-			if tc.name == "assert fail" {
-				if err != nil || out.String() != tc.want {
-					t.Fatalf("err/output = %v/%q, want nil/%q", err, out.String(), tc.want)
-				}
-				return
-			}
 			if !errors.As(err, &status) || status != 2 || out.String() != tc.want {
 				t.Fatalf("err/output = %v/%q, want status 2/%q", err, out.String(), tc.want)
 			}
 		})
+	}
+}
+
+func TestBashPPInterfaceValueCopyAndAssertionZero(t *testing.T) {
+	const src = `type Box struct { N int }
+func (v Box) Show(prefix string) { echo "$prefix:${v.N}"; }
+type Shower interface { Show string }
+type Other int
+func (v Other) Show(prefix string) { echo "$prefix:$v"; }
+func main() {
+	var box Box = Box{N: 1}
+	var i Shower = box
+	box.N = 9
+	stored := i.(Box)
+	printf 'copy:%s\n' stored.N
+	zero, ok := i.(Other)
+	echo "zero:$zero:$ok"
+	p := &box
+	var pi Shower = p
+	q := pi.(*Box)
+	q.N = 12
+	printf 'pointer:%s\n' box.N
+}
+main()
+`
+	f, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(src), "ifacecopy.bpp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP))
+	if err := r.Run(context.Background(), f); err != nil {
+		t.Fatalf("err=%v output=%q", err, out.String())
+	}
+	if want := "copy:1\nzero:0:false\npointer:12\n"; out.String() != want {
+		t.Fatalf("output = %q, want %q", out.String(), want)
 	}
 }

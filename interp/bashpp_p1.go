@@ -396,7 +396,11 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 			values, source, err := r.bashPPTypeAssert(assert, len(d.Lhs) == 2)
 			if err != nil {
 				r.errf("%v\n", err)
+				// A one-result failed assertion is a language-level panic in Go.
+				// Keep it across the typed function boundary instead of allowing
+				// the enclosing command invocation to clear a plain status code.
 				r.exit = exitStatus{code: 2}
+				r.exit.fatal(ExitStatus(2))
 				return
 			}
 			if r.exit.code != 0 {
@@ -405,6 +409,7 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 			r.bashPPDeclareName(d.Lhs[0].Value, expand.Variable{Set: true, Kind: expand.String, Str: values[0]})
 			target := r.bashPPScope.lookup(d.Lhs[0].Value)
 			if target != nil && source != nil {
+				target.vr = source.vr
 				target.typeName = source.typeName
 				target.declType = source.declType
 				target.pointer, target.nilPointer, target.pointerValue = source.pointer, source.nilPointer, source.pointerValue

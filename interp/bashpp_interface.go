@@ -112,11 +112,26 @@ func (r *Runner) bashPPMakeInterfaceValue(expr syntax.BashPPExpr, expected synta
 	if err := r.bashPPImplements(actual, iface); err != nil {
 		return nil, expand.Variable{}, err
 	}
-	vr := cell.vr
-	if cell.pointer && cell.pointerValue == nil {
-		vr = expand.Variable{Set: true, Kind: expand.String}
+	stored := bashPPCopyInterfaceCell(cell)
+	if stored.pointer && stored.pointerValue == nil {
+		stored.vr = expand.Variable{Set: true, Kind: expand.String}
 	}
-	return &bashPPInterfaceValue{dynamic: actual, cell: cell}, vr, nil
+	return &bashPPInterfaceValue{dynamic: actual, cell: stored}, stored.vr, nil
+}
+
+// bashPPCopyInterfaceCell captures the dynamic value at assignment time.
+// Structs and arrays are values and therefore need their own payload, while
+// pointers, maps, and slices deliberately retain the identities they carry.
+func bashPPCopyInterfaceCell(cell *bashPPCell) *bashPPCell {
+	stored := *cell
+	stored.interfaceValue = nil
+	if cell.vr.Kind == expand.Object && bashPPValueMeta(bashPPCellMeta(cell)) {
+		value, meta := bashPPCopyArrayValue(cell.vr.Obj, bashPPCellMeta(cell))
+		stored.vr = expand.NewObject(value)
+		stored.valueMeta = meta
+		stored.object = &bashPPObjectIdentity{collection: meta}
+	}
+	return &stored
 }
 
 func (r *Runner) bashPPCellForInterfaceExpr(expr syntax.BashPPExpr) (*bashPPCell, syntax.BashPPTypeExpr, error) {
@@ -156,7 +171,13 @@ func (r *Runner) bashPPTypeAssert(assert *syntax.BashPPTypeAssertExpr, commaOK b
 	matched := !iv.nilIface && bashPPTypeText(iv.dynamic) == bashPPTypeText(assert.Assert)
 	if !matched {
 		if commaOK {
-			return []string{"", "false"}, nil, nil
+			value, meta := r.bashPPZeroValue(assert.Assert)
+			zero := &bashPPCell{declType: assert.Assert}
+			if named, ok := assert.Assert.(*syntax.BashPPNamedType); ok {
+				zero.typeName = named.Name.Value
+			}
+			bashPPStoreCellValue(zero, value, meta)
+			return []string{zero.vr.Str, "false"}, zero, nil
 		}
 		return nil, nil, fmt.Errorf("BASHPP-EASSERT-FAIL: interface value has dynamic type %s, not %s", bashPPTypeText(iv.dynamic), bashPPTypeText(assert.Assert))
 	}
