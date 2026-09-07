@@ -95,7 +95,10 @@ func closedExecFile() (*os.File, error) {
 // HandlerContext is the data passed to all the handler functions via [context.WithValue].
 // It contains some of the current state of the [Runner].
 type HandlerContext struct {
-	runner *Runner // for internal use only, e.g. [HandlerContext.Builtin]
+	// Agentic permits cooperating tools to use explicitly requested Bash++
+	// assistance. It grants no provider, network, or spending permissions.
+	Agentic bool
+	runner  *Runner // for internal use only, e.g. [HandlerContext.Builtin]
 
 	// kind records which type of handler this context was built for.
 	kind handlerKind

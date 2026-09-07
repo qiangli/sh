@@ -87,6 +87,24 @@ func RecognizeStartSite(src string) StartSiteMatch {
 	if s == "" {
 		return noMatch
 	}
+	if rest, ok := cutKeyword(s, "agentic"); ok {
+		if strings.HasPrefix(rest, "{") && (len(rest) == 1 || strings.ContainsRune(" \t\r\n;", rune(rest[1]))) {
+			return StartSiteMatch{Site: StartAgentic, Class: ClassE, Bounded: true}
+		}
+		if recognizeFuncDecl(rest) {
+			return StartSiteMatch{Site: StartAgentic, Class: ClassR, Bounded: true}
+		}
+		if tail, ok := cutKeyword(rest, "func"); ok && strings.HasPrefix(tail, "(") {
+			return StartSiteMatch{Site: StartAgentic, Class: ClassR, Bounded: true}
+		}
+		if tail, ok := cutKeyword(rest, "function"); ok {
+			name := leadingIdent(tail)
+			if name != "" && strings.HasPrefix(strings.TrimLeft(tail[len(name):], " \t"), "(") {
+				return StartSiteMatch{Site: StartAgentic, Class: ClassR, Bounded: true}
+			}
+		}
+		return noMatch
+	}
 
 	if m := recognizeKeywordDecl(s); m.Site != StartNone {
 		return m

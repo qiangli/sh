@@ -3063,6 +3063,10 @@ func (p *Parser) gotStmtPipe(s *Stmt, binCmd bool) *Stmt {
 			if p.lang.in(langBashLike | LangMirBSDKorn | LangZsh) {
 				p.bashFuncDecl(s)
 			}
+		case "agentic":
+			if p.lang.in(LangBashPP) {
+				p.bashppAgentic(s)
+			}
 		case "declare":
 			if p.lang.in(langBashLike | LangZsh) { // Note that mksh lacks this one.
 				p.declClause(s)
@@ -4308,7 +4312,11 @@ loop:
 			}
 		}
 		if decl := bashppShortDecl(ce, s.Redirs, p.bashppFuncDepth > 0); decl != nil {
-			if len(decl.MethodValue) > 0 {
+			knownFuncValue := len(decl.Rhs) == 1 && p.bashppCallable(bashppLitValue(decl.Rhs[0]))
+			if ident, ok := decl.Expr.(*BashPPIdent); ok {
+				knownFuncValue = p.bashppCallable(ident.Name.Value)
+			}
+			if len(decl.MethodValue) > 0 || knownFuncValue {
 				for _, name := range decl.Lhs {
 					p.bashppRegisterFunc(name.Value)
 				}

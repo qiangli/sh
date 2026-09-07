@@ -2576,6 +2576,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		}
 		src := strings.Join(args, " ")
 		p := syntax.NewParser()
+		if r.Dialect() == syntax.LangBashPP {
+			syntax.Variant(syntax.LangBashPP)(p)
+		}
 		file, err := p.Parse(strings.NewReader(src), "")
 		if err != nil {
 			if r.opts[optExpandAliases] {
@@ -2743,6 +2746,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			}
 		}
 	case "source", ".":
+		savedAgentic := r.bashPPAgentic
+		r.bashPPAgentic = false
+		defer func() { r.bashPPAgentic = savedAgentic }()
 		// Bash 5.3: accept `-p PATH` to override the search path.
 		var pathOverride string
 		havePathOverride := false
@@ -2830,6 +2836,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		}
 		defer f.Close()
 		p := syntax.NewParser()
+		if r.Dialect() == syntax.LangBashPP {
+			syntax.Variant(syntax.LangBashPP)(p)
+		}
 		var file *syntax.File
 		if r.bashCompatErrors {
 			// Bash evalfile.c: a sourced directory is `<builtin>: <path>:
@@ -5002,9 +5011,18 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				quoted, qerr := syntax.Quote(scanner.Text(), syntax.LangBash)
 				if qerr == nil {
 					cb := fmt.Sprintf("%s %d %s", callback, idx, quoted)
-					if prog, perr := syntax.NewParser().Parse(strings.NewReader(cb), ""); perr == nil {
-						r.stmts(ctx, prog.Stmts)
-					}
+					func() {
+						savedAgentic := r.bashPPAgentic
+						r.bashPPAgentic = false
+						defer func() { r.bashPPAgentic = savedAgentic }()
+						p := syntax.NewParser()
+						if r.Dialect() == syntax.LangBashPP {
+							syntax.Variant(syntax.LangBashPP)(p)
+						}
+						if prog, perr := p.Parse(strings.NewReader(cb), ""); perr == nil {
+							r.stmts(ctx, prog.Stmts)
+						}
+					}()
 				}
 			}
 			if maxLines > 0 && len(newLines) >= maxLines {

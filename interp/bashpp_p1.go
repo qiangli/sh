@@ -636,6 +636,28 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 		return
 	}
 	defer r.bashPPEndShortDecl(txn, d.Pos())
+	// A named function value uses the same callable registry as a closure or
+	// method value, retaining its declaration (including the agentic marker).
+	if len(d.Lhs) == 1 {
+		var sourceName string
+		if ident, ok := d.Expr.(*syntax.BashPPIdent); ok {
+			sourceName = ident.Name.Value
+		}
+		if len(d.Rhs) == 1 {
+			sourceName = d.Rhs[0].Lit()
+		}
+		if sourceName != "" {
+			if vr := r.lookupVar(sourceName); vr.IsSet() {
+				if _, ok := r.bashPPClosure(vr.Str); ok {
+					r.bashPPDeclareName(d.Lhs[0].Value, vr)
+					return
+				}
+			} else if fn := r.bashPPFuncs[sourceName]; fn != nil {
+				r.bashPPDeclareName(d.Lhs[0].Value, r.bashPPStoreFunc(fn))
+				return
+			}
+		}
+	}
 	if d.Expr != nil {
 		if assert, ok := d.Expr.(*syntax.BashPPTypeAssertExpr); ok {
 			if assert.TypeToken != nil {

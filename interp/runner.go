@@ -1694,8 +1694,9 @@ var todoPos syntax.Pos // for handlerCtx callers where we don't yet have a posit
 
 func (r *Runner) handlerCtx(ctx context.Context, kind handlerKind, pos syntax.Pos) context.Context {
 	hc := HandlerContext{
-		runner: r,
-		kind:   kind,
+		Agentic: r.bashPPAgentic,
+		runner:  r,
+		kind:    kind,
 		// Layered over the typed bindings rather than over writeEnv alone, so
 		// a handler reading HandlerCtx.Env sees the same value for a name
 		// that the script's own `$name` does.
@@ -2036,7 +2037,9 @@ func (r *Runner) printFuncDecl(name string, body *syntax.Stmt) {
 	// `(`, `)`, or other characters that break the standard
 	// declaration syntax. Pure-digit / dash names render as plain
 	// `NAME ()` without `function`.
-	if funcDeclNeedsKeyword(name) {
+	if r.bashPPAgenticFunc(name) {
+		r.outf("agentic function %s () \n", name)
+	} else if funcDeclNeedsKeyword(name) {
 		r.outf("function %s () \n", name)
 	} else {
 		r.outf("%s () \n", name)
@@ -5401,6 +5404,11 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 	trace := r.tracer(cm.Pos())
 
 	switch cm := cm.(type) {
+	case *syntax.BashPPAgenticBlock:
+		saved := r.bashPPAgentic
+		r.bashPPAgentic = true
+		defer func() { r.bashPPAgentic = saved }()
+		r.stmts(ctx, cm.Body.Stmts)
 	case *syntax.Block:
 		// `{ ...; }` is a Go block in the bash++ dialect: a `var` declared
 		// inside it is gone at the closing brace. Shell assignments in the
@@ -6753,6 +6761,13 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			return
 		}
 		r.setFunc(name, cm.Body)
+		if cm.Agentic != nil {
+			if r.bashPPAgenticFuncs == nil {
+				r.bashPPAgenticFuncs = make(map[string]*syntax.Stmt)
+			}
+			r.bashPPAgenticFuncs[name] = cm.Body
+			delete(r.exportedFuncs, name)
+		}
 	case *syntax.ArithmCmd:
 		if r.fireDebugTrap(ctx, cm) {
 			return
@@ -7210,7 +7225,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 					// function itself does exist. The diagnostic
 					// is `export: <name>: cannot export` and the
 					// builtin keeps going (exit 1).
-					if !validExportedFuncName(name) {
+					if !validExportedFuncName(name) || r.bashPPAgenticFunc(name) {
 						r.errf("%sexport: %s: cannot export\n",
 							r.bashErrPrefix(r.curStmtPos), name)
 						r.exit.code = 1
@@ -8388,7 +8403,12 @@ func (r *Runner) trapCallback(ctx context.Context, callback, name string) uint8 
 	if name == "debug" {
 		r.handlingDebugTrap = true
 	}
+	// A callback is ordinary source even when agentic work triggered it.
+	// Its own explicit block may opt in without lending scope to its caller.
+	savedAgentic := r.bashPPAgentic
+	r.bashPPAgentic = false
 	defer func() {
+		r.bashPPAgentic = savedAgentic
 		if name == "debug" {
 			r.handlingDebugTrap = false
 		}
@@ -8401,6 +8421,9 @@ func (r *Runner) trapCallback(ctx context.Context, callback, name string) uint8 
 	// The action is re-parsed on every invocation, so the trap text is
 	// re-evaluated against the alias and variable state in effect each time
 	// it fires rather than parsed once when `trap` was called.
+	if r.Dialect() == syntax.LangBashPP {
+		syntax.Variant(syntax.LangBashPP)(p)
+	}
 	file, err := p.Parse(strings.NewReader(callback), name+" trap")
 	if err != nil {
 		r.errf(name+"trap: %v\n", err)
@@ -10467,6 +10490,8 @@ func (r *Runner) selectLoop(ctx context.Context, name string, items []string, do
 // last statement is itself exempt) qualify.
 func errExitExemptByAndOr(cmd syntax.Command) bool {
 	switch c := cmd.(type) {
+	case *syntax.BashPPAgenticBlock:
+		return errExitExemptByAndOr(c.Body)
 	case *syntax.BinaryCmd:
 		return c.Op == syntax.AndStmt || c.Op == syntax.OrStmt
 	case *syntax.Block:
@@ -10587,6 +10612,14 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 	} else if r.opts[optPosix] && isPosixSpecialBuiltin(name) && IsBuiltin(name) {
 		// fall through to builtin/exec dispatch below
 	} else if body := r.Funcs[name]; body != nil {
+		marked := r.bashPPAgenticFunc(name)
+		if marked && !r.bashPPAgentic {
+			r.bashPPAgenticCallError(pos, name)
+			return
+		}
+		savedAgentic := r.bashPPAgentic
+		r.bashPPAgentic = marked
+		defer func() { r.bashPPAgentic = savedAgentic }()
 		releaseBgPid(ctx)
 		// Honor $FUNCNEST: when set to a positive integer, bash aborts
 		// once nesting reaches that depth. An unset, empty, zero, or

@@ -1047,6 +1047,9 @@ func (r *Runner) runSignalTrap(ctx context.Context, callback, name string) {
 	if callback == "" {
 		return // explicitly-ignored signal (`trap '' SIG`)
 	}
+	savedAgentic := r.bashPPAgentic
+	r.bashPPAgentic = false
+	defer func() { r.bashPPAgentic = savedAgentic }()
 	wasHandling := r.handlingTrap
 	r.handlingTrap = true
 	defer func() { r.handlingTrap = wasHandling }()
@@ -1057,7 +1060,11 @@ func (r *Runner) runSignalTrap(ctx context.Context, callback, name string) {
 		}
 	}
 
-	file, err := syntax.NewParser().Parse(strings.NewReader(callback), name+" trap")
+	p := syntax.NewParser()
+	if r.Dialect() == syntax.LangBashPP {
+		syntax.Variant(syntax.LangBashPP)(p)
+	}
+	file, err := p.Parse(strings.NewReader(callback), name+" trap")
 	if err != nil {
 		return // ignore parse errors in the callback, as trapCallback does
 	}

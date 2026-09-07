@@ -79,6 +79,7 @@ func Walk(node Node, f func(Node) bool) {
 		Walk(node.X, f)
 		Walk(node.Y, f)
 	case *FuncDecl:
+		walkNilable(node.Agentic, f)
 		walkNilable(node.Name, f)
 		walkList(node.Names, f)
 		Walk(node.Body, f)
@@ -373,6 +374,7 @@ func Walk(node Node, f func(Node) bool) {
 		walkNilable(node.Alias, f)
 		Walk(node.Path, f)
 	case *BashPPFuncDecl:
+		walkNilable(node.Agentic, f)
 		walkNilable(node.Kw, f)
 		walkNilable(node.Name, f)
 		if node.Receiver != nil {
@@ -396,6 +398,11 @@ func Walk(node Node, f func(Node) bool) {
 		for _, field := range node.Results {
 			Walk(field, f)
 		}
+		if node.Body != nil {
+			Walk(node.Body, f)
+		}
+	case *BashPPAgenticBlock:
+		walkNilable(node.Kw, f)
 		if node.Body != nil {
 			Walk(node.Body, f)
 		}

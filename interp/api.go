@@ -92,6 +92,10 @@ type Runner struct {
 
 	Vars  map[string]expand.Variable
 	Funcs map[string]*syntax.Stmt
+	// Agentic shell declarations retain their body identity alongside the
+	// public function table, which embedders may replace directly.
+	bashPPAgenticFuncs map[string]*syntax.Stmt
+	bashPPAgentic      bool
 
 	// bashPPScope is the innermost Bash++ lexical block, or nil when the
 	// runner is not in the bash++ dialect. Nil is the fast path every other
@@ -2767,8 +2771,9 @@ func (r *Runner) Reset() {
 		// `BASH_FUNC_*` env imports run at construction time and the
 		// resulting functions are part of the initial shell state,
 		// not per-Run scratch state.
-		Funcs:       r.Funcs,
-		funcSources: r.funcSources,
+		Funcs:              r.Funcs,
+		bashPPAgenticFuncs: r.bashPPAgenticFuncs,
+		funcSources:        r.funcSources,
 
 		// A function's captured Bash++ scope is part of the function, so it
 		// is preserved exactly as far as Funcs is. The runner's own current
@@ -3040,6 +3045,9 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 	runExitTrap := false
 	switch node := node.(type) {
 	case *syntax.File:
+		savedAgentic := r.bashPPAgentic
+		r.bashPPAgentic = false
+		defer func() { r.bashPPAgentic = savedAgentic }()
 		r.bashPPFileRun = true
 		defer func() { r.bashPPFileRun = false }()
 		if r.Dialect() == syntax.LangBashPP {
@@ -3237,6 +3245,7 @@ func (r *Runner) subshell(background bool) *Runner {
 	r.ensureDirFile(r.Dir)
 	dirFile, _ := dupRunnerDir(r.dirFile)
 	r2 := &Runner{
+		bashPPAgentic:        r.bashPPAgentic,
 		Dir:                  r.Dir,
 		dirFile:              dirFile,
 		tempDir:              r.tempDir,
@@ -3339,6 +3348,7 @@ func (r *Runner) subshell(background bool) *Runner {
 	r2.bashPPTaskState = r.bashPPTaskState
 	// Funcs are copied, since they might be modified.
 	r2.Funcs = maps.Clone(r.Funcs)
+	r2.bashPPAgenticFuncs = maps.Clone(r.bashPPAgenticFuncs)
 	r2.funcSources = maps.Clone(r.funcSources)
 	r2.bashPPImports = maps.Clone(r.bashPPImports)
 	r2.bashPPTypes = maps.Clone(r.bashPPTypes)

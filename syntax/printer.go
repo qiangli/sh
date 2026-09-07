@@ -1587,6 +1587,9 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 		}
 		p.nestedBinary = false
 	case *FuncDecl:
+		if cmd.Agentic != nil {
+			p.spacedString("agentic", cmd.Agentic.Pos())
+		}
 		if cmd.RsrvWord {
 			p.spacedString("function", Pos{})
 		}
@@ -1919,7 +1922,14 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 		p.wordJoin(cmd.Before)
 		p.space()
 		p.command(cmd.Call, nil)
+	case *BashPPAgenticBlock:
+		p.spacedString("agentic", cmd.Kw.Pos())
+		p.space()
+		p.command(cmd.Body, nil)
 	case *BashPPFuncDecl:
+		if cmd.Agentic != nil {
+			p.spacedString("agentic", cmd.Agentic.Pos())
+		}
 		p.spacedString(cmd.Kw.Value, cmd.Kw.Pos())
 		if cmd.Receiver != nil {
 			p.space()

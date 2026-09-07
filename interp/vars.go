@@ -2918,6 +2918,7 @@ func (r *Runner) integerArrayValue(s string) string {
 }
 
 func (r *Runner) setFunc(name string, body *syntax.Stmt) {
+	delete(r.bashPPAgenticFuncs, name)
 	if r.Funcs == nil {
 		r.Funcs = make(map[string]*syntax.Stmt, 4)
 	}

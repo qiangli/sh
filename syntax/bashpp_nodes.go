@@ -49,6 +49,7 @@ const (
 	StartFuncLit   // func(a int) int { … }(1) — a function literal
 	StartGo        // go f() · go func() { … }()
 	StartSelect    // select { case …: …; default: … }
+	StartAgentic   // agentic { … } or agentic function/func declaration
 )
 
 func (s StartSite) String() string {
@@ -79,6 +80,8 @@ func (s StartSite) String() string {
 		return "go"
 	case StartSelect:
 		return "select"
+	case StartAgentic:
+		return "agentic"
 	}
 	return "none"
 }
@@ -92,6 +95,8 @@ func (s *StartSite) UnmarshalText(b []byte) error {
 	switch string(b) {
 	case "none":
 		*s = StartNone
+	case "agentic":
+		*s = StartAgentic
 	case "var":
 		*s = StartVar
 	case "const":
@@ -1087,6 +1092,7 @@ func (f *BashPPField) End() Pos {
 // from a working script. That is why the signature may be parsed forward
 // without a transaction: a malformed body is a bash syntax error either way.
 type BashPPFuncDecl struct {
+	Agentic    *Lit            // optional bare "agentic" modifier
 	Kw         *Lit            // the literal "func"
 	Name       *Lit            // the declared function name
 	Receiver   *BashPPReceiver // nil for an ordinary function
@@ -1116,7 +1122,12 @@ type BashPPReceiver struct {
 func (r *BashPPReceiver) Pos() Pos { return r.Lparen }
 func (r *BashPPReceiver) End() Pos { return posAddCol(r.Rparen, 1) }
 
-func (d *BashPPFuncDecl) Pos() Pos { return d.Kw.Pos() }
+func (d *BashPPFuncDecl) Pos() Pos {
+	if d.Agentic != nil {
+		return d.Agentic.Pos()
+	}
+	return d.Kw.Pos()
+}
 func (d *BashPPFuncDecl) End() Pos {
 	if d.Body != nil {
 		return d.Body.End()

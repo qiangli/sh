@@ -111,6 +111,10 @@ Commit style follows upstream: scoped prefixes (`interp:`, `syntax:`, `expand+in
 
 ## Plans
 
+The public Bash++ assistance contract is documented in
+[`docs/bashpp-agentic.md`](docs/bashpp-agentic.md), including call scopes and the
+shell-function export boundary.
+
 Save implementation plans for non-trivial work as Markdown alongside the change or in the repo root; use a descriptive filename (e.g. `plan-feature-name.md`). (The bashy compliance roadmap and per-fixture analyses live in the `bashy` repo's `docs/`.)
 
 ## Third-Party Libraries

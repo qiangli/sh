@@ -191,7 +191,8 @@ func (r *Runner) bashPPClosure(value string) (*bashPPFunc, bool) {
 // at the point `defer` ran, which is what gives Go's "arguments are evaluated
 // when the defer statement executes" rule.
 type bashPPDeferred struct {
-	call *syntax.BashPPCall
+	agentic bool
+	call    *syntax.BashPPCall
 	// fn is the function resolved AT DEFER TIME, which matters for a closure:
 	// `defer f(1)` must run the f that was current when the defer executed,
 	// not whatever f names when the frame unwinds. It is nil when the deferred
@@ -1256,6 +1257,10 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 	callInterfaces := r.bashPPCallInterfaces
 	r.bashPPCallChannels = nil
 	r.bashPPCallInterfaces = nil
+	if fn.decl != nil && fn.decl.Agentic != nil && !r.bashPPAgentic {
+		r.bashPPAgenticCallError(r.curStmtPos, fn.name())
+		return nil
+	}
 	params := bashppParams(fn.params())
 	if !r.bashPPCheckArgs(fn, params, args) {
 		return nil
@@ -1400,6 +1405,7 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 // restores all of them, and because it is called through a defer it restores
 // them even on the paths that do not reach the end of the invoker.
 type bashPPFrame struct {
+	agentic    bool
 	r          *Runner
 	params     []string
 	inFunc     bool
@@ -1418,6 +1424,7 @@ type bashPPFrame struct {
 // mark on the deferred-call stack.
 func (r *Runner) bashPPEnterFrame(fn *bashPPFunc, args []string) *bashPPFrame {
 	frame := &bashPPFrame{
+		agentic:    r.bashPPAgentic,
 		r:          r,
 		params:     r.Params,
 		inFunc:     r.inFunc,
@@ -1428,6 +1435,7 @@ func (r *Runner) bashPPEnterFrame(fn *bashPPFunc, args []string) *bashPPFrame {
 		ret:        r.bashPPReturn,
 		deferDepth: r.bashPPDeferDepth,
 	}
+	r.bashPPAgentic = fn.decl != nil && fn.decl.Agentic != nil
 	r.Params = args
 	r.inFunc = true
 	r.writeEnv = &overlayEnviron{parent: r.writeEnv, funcScope: true}
@@ -1455,6 +1463,7 @@ func (r *Runner) bashPPEnterFrame(fn *bashPPFunc, args []string) *bashPPFrame {
 // entry too many.
 func (f *bashPPFrame) leave() {
 	r := f.r
+	r.bashPPAgentic = f.agentic
 	r.writeEnv = f.writeEnv
 	r.bashPPScope = f.scope
 	if len(r.callStack) > f.callDepth {
@@ -1656,7 +1665,7 @@ func (r *Runner) bashPPDeferStmt(ctx context.Context, d *syntax.BashPPDefer) {
 	// Both the function and its arguments are fixed HERE, as Go fixes them:
 	// a literal is captured now, and a name resolves to the function it names
 	// now, so a later rebinding cannot change which cleanup runs.
-	entry := bashPPDeferred{call: d.Call}
+	entry := bashPPDeferred{call: d.Call, agentic: r.bashPPAgentic}
 	if fn, ok := r.bashPPLookupFunc(d.Call); ok {
 		args, ok := r.bashPPCallValues(d.Call, fn)
 		if !ok {
@@ -1695,11 +1704,13 @@ func (r *Runner) bashPPRunDefers(ctx context.Context, mark int) {
 	savedReturning := r.exit.returning
 	r.exit.returning = false
 	savedDeferDepth := r.bashPPDeferDepth
+	savedAgentic := r.bashPPAgentic
 	// A call this frame deferred runs one frame deeper than this one, and that
 	// depth is the whole of recover's "called directly by a deferred function"
 	// rule; see [Runner.bashPPRecover].
 	r.bashPPDeferDepth = len(r.callStack) + 1
 	defer func() {
+		r.bashPPAgentic = savedAgentic
 		r.bashPPDeferDepth = savedDeferDepth
 		r.bashPPPanic.running = false
 	}()
@@ -1707,6 +1718,7 @@ func (r *Runner) bashPPRunDefers(ctx context.Context, mark int) {
 	deferFailed := false
 	for i := len(pending) - 1; i >= 0; i-- {
 		d := pending[i]
+		r.bashPPAgentic = d.agentic
 		r.exit = exitStatus{}
 		// A cleanup runs even while a panic is unwinding — that is the whole
 		// point of it — so the panic stops halting statements for the length

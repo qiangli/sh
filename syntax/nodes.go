@@ -494,6 +494,7 @@ func (b *BinaryCmd) End() Pos { return b.Y.End() }
 
 // FuncDecl represents the declaration of a function.
 type FuncDecl struct {
+	Agentic  *Lit // optional Bash++ assistance contract
 	Position Pos
 	RsrvWord bool // non-posix "function f" style
 	Parens   bool // with () parentheses, can only be false when RsrvWord==true
@@ -507,7 +508,12 @@ type FuncDecl struct {
 	Body *Stmt
 }
 
-func (f *FuncDecl) Pos() Pos { return f.Position }
+func (f *FuncDecl) Pos() Pos {
+	if f.Agentic != nil {
+		return f.Agentic.Pos()
+	}
+	return f.Position
+}
 func (f *FuncDecl) End() Pos { return f.Body.End() }
 
 // Word represents a shell word, containing one or more word parts contiguous to
