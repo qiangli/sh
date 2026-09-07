@@ -117,20 +117,22 @@ main()
 	qt.Assert(t, qt.Equals(out.String(), "0:234"))
 }
 
-func TestBashPPUpdateRuntimeFloatDivisionByZero(t *testing.T) {
+func TestBashPPUpdateRuntimeFloatDivisionByZeroPreservesState(t *testing.T) {
 	const src = `func main() {
- var positive float64 = 1
- var zero float64 = 0
- positive /= 0
- zero /= 0
- printf '%s:%s' "$positive" "$zero"
+ var value float64 = 1
+ value /= 0
+ printf ':immediate=%s' "$value"
+ value += 2
+ printf ':subsequent=%s' "$value"
 }
 main()
 `
 	var out strings.Builder
-	r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP))
+	r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP), interp.WithBashCompatErrors(true))
 	bashPPRun(t, r, src)
-	qt.Assert(t, qt.Equals(out.String(), "+Inf:NaN"))
+	qt.Assert(t, qt.StringContains(out.String(), "line 3:"))
+	qt.Assert(t, qt.StringContains(out.String(), "BASHPP-EUPDATE-NONFINITE"))
+	qt.Assert(t, qt.StringContains(out.String(), ":immediate=1:subsequent=3"))
 }
 
 func TestBashPPUpdateIntegerDivisionByZeroDoesNotCommit(t *testing.T) {

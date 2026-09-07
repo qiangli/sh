@@ -167,9 +167,7 @@ func (r *Runner) bashPPUpdateResult(op string, left, right bashPPScalar) (any, c
 			}
 		}
 		if compatible {
-			leftFloat, _ := constant.Float64Val(left.value)
-			rightFloat, _ := constant.Float64Val(constant.ToFloat(right.value))
-			return leftFloat / rightFloat, constant.Float, nil
+			return nil, constant.Unknown, fmt.Errorf("BASHPP-EUPDATE-NONFINITE: runtime floating-point division by zero is unsupported by the scalar carrier")
 		}
 	}
 	result, err := r.bashPPBinaryScalar(bashPPOpToken(op), left, right)
