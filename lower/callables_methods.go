@@ -299,6 +299,98 @@ func (e *emitter) runtimeMethodFunction(f *syntax.BashPPFuncDecl, signature, bod
 	return e.mark(f) + "func " + recv + private + generics + e.privateSignature(signature) + " {\n" + entry + body + "}\n" + wrapper, nil
 }
 
+// promotedInterfaceSource names the embedded interface field a promoted method
+// actually comes from, as a selector suffix on the receiver expression.
+type promotedInterfaceSource struct {
+	selector string
+	iface    *syntax.BashPPInterfaceType
+}
+
+// promotedInterfaceSource resolves a method that the receiver's own type does
+// not declare to the embedded interface field that supplies it.
+//
+// Go promotes an embedded interface's method set to the outer struct, but only
+// the methods the interface itself names — its public ones. The private
+// capability method is not part of an interface type unless that interface
+// spells it, so a promoted call cannot be lowered as a direct private selector
+// on the outer type: the outer type has no such method and the Go checker says
+// so. The selector down to the embedded field is an ordinary interface value
+// though, so the very same capability dispatch a directly typed interface
+// receiver gets applies to it, which is what keeps the caller's program, frame,
+// channel and agentic authority on a promoted call.
+//
+// A nil result means there is nothing to reroute: either the method is not
+// promoted at all, or it is promoted from an embedded concrete type, whose
+// private method Go promotes exactly as it promotes the public one.
+func (e *emitter) promotedInterfaceSource(node syntax.Node, receiverType, method string) (*promotedInterfaceSource, error) {
+	base := receiverBaseType(receiverType)
+	if base == "" || e.declaredTypes[base] == nil {
+		return nil, nil
+	}
+	// A receiver already typed as an interface is dispatched as one; promotion
+	// is about a struct that embeds one.
+	if _, ok := e.interfaceDecl(base); ok {
+		return nil, nil
+	}
+	if e.methodDeclaration(base, method) != nil {
+		return nil, nil
+	}
+	type embeddedNode struct {
+		selector string
+		typ      string
+	}
+	level := []embeddedNode{{"", base}}
+	visited := map[string]bool{base: true}
+	// Go resolves a selector at the shallowest embedding depth that has it, and
+	// calls a tie at that depth ambiguous rather than picking one. Walking depth
+	// by depth reproduces both halves of that rule.
+	for len(level) > 0 {
+		var next []embeddedNode
+		var found []*promotedInterfaceSource
+		concrete := 0
+		for _, current := range level {
+			fields, ok := promotedFields(&syntax.BashPPNamedType{Name: &syntax.Lit{Value: current.typ}}, e.declaredTypes, map[string]bool{})
+			if !ok {
+				continue
+			}
+			for _, field := range fields {
+				if !field.embedded {
+					continue
+				}
+				selector := current.selector + "." + field.name
+				if iface, ok := e.interfaceDecl(field.name); ok {
+					_, _, has, err := e.interfaceMethodTypes(iface, method, map[*syntax.BashPPInterfaceType]bool{})
+					if err != nil {
+						return nil, err
+					}
+					if has {
+						found = append(found, &promotedInterfaceSource{selector: selector, iface: iface})
+						continue
+					}
+				} else if e.methodDeclaration(field.name, method) != nil {
+					concrete++
+					continue
+				}
+				if !visited[field.name] {
+					visited[field.name] = true
+					next = append(next, embeddedNode{selector: selector, typ: field.name})
+				}
+			}
+		}
+		if len(found)+concrete > 1 {
+			return nil, e.fail(node, CodeType, "method "+method+" is promoted from several embedded fields of "+base)
+		}
+		if len(found) == 1 {
+			return found[0], nil
+		}
+		if concrete == 1 {
+			return nil, nil
+		}
+		level = next
+	}
+	return nil, nil
+}
+
 // runtimeMethodCall lowers a method call. receiverType is the receiver's static
 // type as the caller resolved it; it, and not the method name on its own,
 // chooses the declaration, so two receivers declaring one name keep their own
@@ -347,6 +439,23 @@ func (e *emitter) runtimeMethodCall(c *syntax.BashPPCall, receiverType string) (
 			return "", e.fail(c, CodeUndefined, "interface "+receiverBaseType(receiverType)+" has no method "+method)
 		}
 		return e.interfaceMethodCall(receiver, method, params, results, args, spread), nil
+	}
+	promoted, err := e.promotedInterfaceSource(c, receiverType, method)
+	if err != nil {
+		return "", err
+	}
+	if promoted != nil {
+		if typeargs != "" {
+			return "", e.fail(c, CodeUnsupported, "an interface method takes no type arguments")
+		}
+		params, results, found, err := e.interfaceMethodTypes(promoted.iface, method, map[*syntax.BashPPInterfaceType]bool{})
+		if err != nil {
+			return "", err
+		}
+		if !found {
+			return "", e.fail(c, CodeUndefined, "interface "+receiverBaseType(receiverType)+" has no method "+method)
+		}
+		return e.interfaceMethodCall(receiver+promoted.selector, method, params, results, args, spread), nil
 	}
 	decl, err := e.resolveMethod(c, receiverType, method)
 	if err != nil {
@@ -423,6 +532,20 @@ func (e *emitter) methodHandleSignature(node syntax.Node, receiverType, methodNa
 		}
 		return params, results, nil
 	}
+	promoted, err := e.promotedInterfaceSource(node, receiverType, methodName)
+	if err != nil {
+		return nil, nil, err
+	}
+	if promoted != nil {
+		params, results, found, err := e.interfaceMethodTypes(promoted.iface, methodName, map[*syntax.BashPPInterfaceType]bool{})
+		if err != nil {
+			return nil, nil, err
+		}
+		if !found {
+			return nil, nil, e.fail(node, CodeUndefined, "interface "+receiverBaseType(receiverType)+" has no method "+methodName)
+		}
+		return params, results, nil
+	}
 	decl, err := e.resolveMethod(node, receiverType, methodName)
 	if err != nil {
 		return nil, nil, err
@@ -470,6 +593,20 @@ func (e *emitter) runtimeMethodHandle(node syntax.Node, receiverExpr, receiverTy
 			return "", e.fail(node, CodeUndefined, "interface "+receiverBaseType(receiverType)+" has no method "+methodName)
 		}
 		return e.interfaceMethodHandle(receiverExpr, methodName, params, results), nil
+	}
+	promoted, err := e.promotedInterfaceSource(node, receiverType, methodName)
+	if err != nil {
+		return "", err
+	}
+	if promoted != nil {
+		params, results, found, err := e.interfaceMethodTypes(promoted.iface, methodName, map[*syntax.BashPPInterfaceType]bool{})
+		if err != nil {
+			return "", err
+		}
+		if !found {
+			return "", e.fail(node, CodeUndefined, "interface "+receiverBaseType(receiverType)+" has no method "+methodName)
+		}
+		return e.interfaceMethodHandle(receiverExpr+promoted.selector, methodName, params, results), nil
 	}
 	decl, err := e.resolveMethod(node, receiverType, methodName)
 	if err != nil {
