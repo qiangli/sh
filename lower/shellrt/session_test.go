@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
-	"io"
 	"maps"
 	"os"
 	"path/filepath"
@@ -14,338 +12,20 @@ import (
 	"sync"
 	"testing"
 
-	"mvdan.cc/sh/v3/expand"
-	"mvdan.cc/sh/v3/interp"
 	"mvdan.cc/sh/v3/lower/shellrt"
-	"mvdan.cc/sh/v3/syntax"
+	"mvdan.cc/sh/v3/lower/shellrt/shellexec"
 )
 
-// interpShell is a persistent [shellrt.ShellRunner] backed by one long-lived
-// interp.Runner. It is the reference implementation of the seam: the shipped
-// backend must live in a package of its own, because mvdan.cc/sh/v3/lower's
-// artifact tests build generated programs in a module with no go.sum, so the
-// package generated code imports has to stay free of interp's module graph.
-//
-// One runner per session is what makes shell state persistent: functions,
-// traps, aliases, arrays and options set by a region are still there for the
-// next one. Only the typed-visible projection travels through State.
-type interpShell struct {
-	runner *interp.Runner
-	last   shellrt.State
-	io     shellrt.Stdio
-}
-
-func newInterpShell(st shellrt.State, streams shellrt.Stdio) (*interpShell, error) {
-	runner, err := interp.New(
-		interp.Env(stateEnviron{vars: st.Vars}),
-		interp.Dir(st.Dir),
-		interp.StdIO(streams.In, streams.Out, streams.Err),
-		interp.Params(optionParams(st.Options)...),
-	)
-	if err != nil {
-		return nil, err
-	}
-	runner.Reset()
-	runner.SetLastExitStatus(uint8(st.Status))
-	return &interpShell{runner: runner, last: st.Clone(), io: streams}, nil
-}
-
-func optionParams(options map[string]bool) []string {
-	var params []string
-	for _, name := range slices.Sorted(maps.Keys(options)) {
-		if options[name] {
-			params = append(params, "-o", name)
+// clearEnviron drops the inherited process environment from a session under
+// construction, so tests observe only the variables they set. It relies on
+// session options being applied in order, before the shell factory runs.
+func clearEnviron() shellrt.SessionOption {
+	return func(s *shellrt.Session) error {
+		for _, pair := range s.Environ() {
+			name, _, _ := strings.Cut(pair, "=")
+			s.Unset(name)
 		}
-	}
-	return params
-}
-
-// Clone gives a child task its own shell. interp.Runner.Subshell is the public
-// snapshot primitive: the copy inherits variables, functions and traps under
-// the shell's own inheritance rules, and neither side can write through to the
-// other.
-func (sh *interpShell) Clone(streams shellrt.Stdio) (shellrt.ShellRunner, error) {
-	child := sh.runner.Subshell()
-	if err := interp.StdIO(streams.In, streams.Out, streams.Err)(child); err != nil {
-		return nil, err
-	}
-	return &interpShell{runner: child, last: sh.last.Clone(), io: streams}, nil
-}
-
-func (sh *interpShell) Close() error { return nil }
-
-func (sh *interpShell) RunShell(ctx context.Context, st *shellrt.State, streams shellrt.Stdio, src string) error {
-	if streams != sh.io {
-		if err := sh.restoreStdio(streams); err != nil {
-			return err
-		}
-	}
-	if err := sh.applyTypedWrites(ctx, st); err != nil {
-		return err
-	}
-	file, err := syntax.NewParser().Parse(strings.NewReader(src), "shellrt")
-	if err != nil {
-		return err
-	}
-	// Statement by statement, not as a whole File: running a File implies an
-	// exit, which would fire the EXIT trap at the end of every region.
-	var runErr error
-	for _, stmt := range file.Stmts {
-		if runErr = sh.runner.Run(ctx, stmt); runErr != nil {
-			break
-		}
-	}
-	status, err := exitStatus(runErr)
-	if err != nil {
-		return err
-	}
-	return sh.project(ctx, st, status)
-}
-
-func exitStatus(runErr error) (int, error) {
-	var status interp.ExitStatus
-	switch {
-	case runErr == nil:
-		return 0, nil
-	case errors.As(runErr, &status):
-		return int(status), nil
-	default:
-		return 1, runErr
-	}
-}
-
-// applyTypedWrites pushes only what the typed side changed since the last
-// projection. Re-applying everything would flatten shell-only attributes on
-// variables the typed side never touched.
-func (sh *interpShell) applyTypedWrites(ctx context.Context, st *shellrt.State) error {
-	var script strings.Builder
-	if st.Dir != sh.last.Dir {
-		fmt.Fprintf(&script, "cd -- %s\n", quote(st.Dir))
-	}
-	for _, name := range shellrt.KnownOptions() {
-		if st.Options[name] != sh.last.Options[name] {
-			flag := "+o"
-			if st.Options[name] {
-				flag = "-o"
-			}
-			fmt.Fprintf(&script, "set %s %s\n", flag, name)
-		}
-	}
-	for _, name := range slices.Sorted(maps.Keys(sh.last.Vars)) {
-		if _, ok := st.Vars[name]; !ok {
-			fmt.Fprintf(&script, "unset %s\n", name)
-		}
-	}
-	for _, name := range slices.Sorted(maps.Keys(st.Vars)) {
-		v := st.Vars[name]
-		if old, ok := sh.last.Vars[name]; ok && old.Equal(v) {
-			continue
-		}
-		script.WriteString(assignment(name, v))
-	}
-	if script.Len() > 0 {
-		file, err := syntax.NewParser().Parse(strings.NewReader(script.String()), "shellrt-apply")
-		if err != nil {
-			return err
-		}
-		for _, stmt := range file.Stmts {
-			if err := sh.runner.Run(ctx, stmt); err != nil {
-				if _, convErr := exitStatus(err); convErr != nil {
-					return convErr
-				}
-			}
-		}
-	}
-	// The applied statements are bookkeeping, not program commands: restore
-	// the status the region is supposed to start from, whether it came from
-	// the previous region or from a typed-side write.
-	sh.runner.SetLastExitStatus(clampStatus(st.Status))
-	return nil
-}
-
-func clampStatus(code int) uint8 {
-	if code < 0 || code > 255 {
-		return 1
-	}
-	return uint8(code)
-}
-
-func assignment(name string, v shellrt.Var) string {
-	var b strings.Builder
-	switch v.Kind {
-	case shellrt.Indexed:
-		fmt.Fprintf(&b, "%s=(", name)
-		for i, elem := range v.List {
-			if i > 0 {
-				b.WriteByte(' ')
-			}
-			b.WriteString(quote(elem))
-		}
-		b.WriteString(")\n")
-	case shellrt.Associative:
-		fmt.Fprintf(&b, "declare -A %s=(", name)
-		for _, key := range slices.Sorted(maps.Keys(v.Map)) {
-			fmt.Fprintf(&b, "[%s]=%s ", quote(key), quote(v.Map[key]))
-		}
-		b.WriteString(")\n")
-	default:
-		fmt.Fprintf(&b, "%s=%s\n", name, quote(v.Str))
-	}
-	if v.Exported {
-		fmt.Fprintf(&b, "export %s\n", name)
-	}
-	if v.ReadOnly {
-		fmt.Fprintf(&b, "readonly %s\n", name)
-	}
-	return b.String()
-}
-
-func quote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
-
-// project refreshes the typed-visible view from the live shell.
-func (sh *interpShell) project(ctx context.Context, st *shellrt.State, status int) error {
-	st.Dir = sh.runner.Dir
-	st.Status = status
-
-	managed := interpManagedNames()
-	names := map[string]bool{}
-	for name := range sh.last.Vars {
-		names[name] = true
-	}
-	for name := range sh.runner.Vars {
-		if !managed[name] {
-			names[name] = true
-		}
-	}
-	vars := make(map[string]shellrt.Var, len(names))
-	for name := range names {
-		if v, ok := projectVar(sh.runner.LiveVar(name)); ok {
-			vars[name] = v
-		}
-	}
-	st.Vars = vars
-
-	options, err := sh.projectOptions(ctx)
-	if err != nil {
-		return err
-	}
-	st.Options = options
-	// The option probe is bookkeeping too; $? must still report the region.
-	sh.runner.SetLastExitStatus(clampStatus(status))
-	sh.last = st.Clone()
-	return nil
-}
-
-func projectVar(v expand.Variable) (shellrt.Var, bool) {
-	if !v.IsSet() {
-		return shellrt.Var{}, false
-	}
-	out := shellrt.Var{Exported: v.Exported, ReadOnly: v.ReadOnly}
-	switch v.Kind {
-	case expand.String:
-		out.Str = v.Str
-	case expand.Indexed:
-		out.Kind = shellrt.Indexed
-		out.List = v.IndexedValues()
-	case expand.Associative:
-		out.Kind = shellrt.Associative
-		out.Map = maps.Clone(v.Map)
-	default:
-		// Namerefs and live Go objects have no projection yet.
-		return shellrt.Var{}, false
-	}
-	return out, true
-}
-
-// projectOptions reads the live option state back through `set +o`, since the
-// interpreter exposes no public getter for it.
-func (sh *interpShell) projectOptions(ctx context.Context) (map[string]bool, error) {
-	var buf bytes.Buffer
-	saved := sh.runner.Dir
-	if err := interp.StdIO(nil, &buf, &buf)(sh.runner); err != nil {
-		return nil, err
-	}
-	file, err := syntax.NewParser().Parse(strings.NewReader("set +o"), "shellrt-options")
-	if err != nil {
-		return nil, err
-	}
-	runErr := sh.runner.Run(ctx, file.Stmts[0])
-	if err := sh.restoreStdio(sh.io); err != nil {
-		return nil, err
-	}
-	if runErr != nil {
-		if _, convErr := exitStatus(runErr); convErr != nil {
-			return nil, convErr
-		}
-	}
-	if sh.runner.Dir != saved {
-		return nil, fmt.Errorf("shellrt: option probe moved the working directory")
-	}
-	options := map[string]bool{}
-	known := shellrt.KnownOptions()
-	for line := range strings.Lines(buf.String()) {
-		fields := strings.Fields(line)
-		if len(fields) != 3 || fields[0] != "set" {
-			continue
-		}
-		if slices.Contains(known, fields[2]) {
-			options[fields[2]] = fields[1] == "-o"
-		}
-	}
-	return options, nil
-}
-
-// restoreStdio points the runner back at the session's streams, which the
-// option probe temporarily borrows.
-func (sh *interpShell) restoreStdio(streams shellrt.Stdio) error {
-	sh.io = streams
-	return interp.StdIO(streams.In, streams.Out, streams.Err)(sh.runner)
-}
-
-// interpManagedNames is the set of variables a fresh runner defines by itself,
-// computed from the interpreter so it stays correct as the engine's defaults
-// change instead of freezing a hand-written list.
-var interpManagedNames = sync.OnceValue(func() map[string]bool {
-	names := map[string]bool{}
-	runner, err := interp.New(interp.Env(expand.ListEnviron()), interp.StdIO(nil, io.Discard, io.Discard))
-	if err != nil {
-		return names
-	}
-	if err := runner.Run(context.Background(), &syntax.File{}); err != nil {
-		return names
-	}
-	for name := range runner.Vars {
-		names[name] = true
-	}
-	return names
-})
-
-// stateEnviron seeds a runner from a projection, preserving each variable's
-// kind and export attribute.
-type stateEnviron struct{ vars map[string]shellrt.Var }
-
-func (e stateEnviron) Get(name string) expand.Variable {
-	v, ok := e.vars[name]
-	if !ok {
-		return expand.Variable{}
-	}
-	vr := expand.Variable{Set: true, Exported: v.Exported, ReadOnly: v.ReadOnly}
-	switch v.Kind {
-	case shellrt.Indexed:
-		vr.Kind, vr.List = expand.Indexed, slices.Clone(v.List)
-	case shellrt.Associative:
-		vr.Kind, vr.Map = expand.Associative, maps.Clone(v.Map)
-	default:
-		vr.Kind, vr.Str = expand.String, v.Str
-	}
-	return vr
-}
-
-func (e stateEnviron) Each(fn func(name string, vr expand.Variable) bool) {
-	for _, name := range slices.Sorted(maps.Keys(e.vars)) {
-		if !fn(name, e.Get(name)) {
-			return
-		}
+		return nil
 	}
 }
 
@@ -363,23 +43,17 @@ func newSession(t *testing.T, opts ...shellrt.SessionOption) (*shellrt.Session, 
 	}
 	t.Cleanup(func() { devNull.Close() })
 
+	// A session's own environment is dropped so assertions see only what the
+	// test put there; clearing it before the backend is built keeps the two
+	// in step, which is exactly what WithShellFactory is for.
 	base := []shellrt.SessionOption{
 		shellrt.WithStdio(devNull, out, out),
 		shellrt.WithDir(t.TempDir()),
+		clearEnviron(),
+		shellrt.WithShellFactory(shellexec.New()),
 	}
 	s, err := shellrt.NewSession(append(base, opts...)...)
 	if err != nil {
-		t.Fatal(err)
-	}
-	for _, pair := range s.Environ() {
-		name, _, _ := strings.Cut(pair, "=")
-		s.Unset(name)
-	}
-	shell, err := newInterpShell(s.Snapshot(), s.Stdio())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := shellrt.WithShell(shell)(s); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { s.Close() })
@@ -766,7 +440,7 @@ func (r *recordingShell) Clone(io shellrt.Stdio) (shellrt.ShellRunner, error) {
 	return &recordingShell{}, nil
 }
 
-func (r *recordingShell) Close() error {
+func (r *recordingShell) Close(ctx context.Context) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.closed++

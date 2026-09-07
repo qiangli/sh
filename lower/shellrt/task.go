@@ -287,8 +287,10 @@ func (s *Session) Close() error {
 	s.group.cancel()
 	err := s.Join()
 	if shell != nil {
+		// The shutdown context outlives cancellation on purpose: a cancelled
+		// program still has to run its EXIT trap and release the backend.
 		s.shellMu.Lock()
-		closeErr := shell.Close()
+		closeErr := shell.Close(context.WithoutCancel(s.base))
 		s.shellMu.Unlock()
 		if err == nil && closeErr != nil {
 			err = closeErr

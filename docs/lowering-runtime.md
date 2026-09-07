@@ -1,9 +1,14 @@
 # Bash++ bounded runtime foundation
 
 `mvdan.cc/sh/v3/lower/shellrt` is the runtime a compiled Bash++ program links
-against. Alongside the scalar output helpers already in `runtime.go`, it now
+against. Alongside the scalar output helpers already in `runtime.go`, it
 carries an explicit **persistent shell state boundary** (`session.go`) and a
 **task ownership model** (`task.go`).
+
+`mvdan.cc/sh/v3/lower/shellrt/shellexec` is the production dynamic-shell
+backend, implemented on the public `interp` API. It is a separate package so
+that `shellrt` itself stays standard-library-only: a program with no dynamic
+shell region links neither `shellexec` nor `interp`.
 
 This document freezes the API the compiler glue will be written against. It
 also states honestly what is not implemented yet.
@@ -17,6 +22,8 @@ also states honestly what is not implemented yet.
   wrapper: a typed program is never handed to an interpreter as a fallback.
 - A typed-only artifact links no interpreter at all. `lower/shellrt` imports
   nothing outside the standard library (see *Package dependency invariant*).
+- A program with dynamic regions imports `shellexec` explicitly and attaches it
+  with `shellrt.WithShellFactory(shellexec.New(...))`.
 
 ## Frozen API
 
@@ -55,8 +62,9 @@ func KnownOptions() []string           // errexit noglob nounset pipefail xtrace
 type ShellRunner interface {
     RunShell(ctx context.Context, st *State, io Stdio, src string) error
     Clone(io Stdio) (ShellRunner, error)
-    Close() error
+    Close(ctx context.Context) error   // runs the EXIT trap exactly once
 }
+type ShellFactory func(State, Stdio) (ShellRunner, error)
 var ErrNoShell error
 
 // ---- session --------------------------------------------------------------
@@ -71,6 +79,7 @@ func WithVars(vars map[string]Var) SessionOption
 func WithStdio(in io.Reader, out, err io.Writer) SessionOption
 func WithOption(name string, on bool) SessionOption
 func WithShell(sh ShellRunner) SessionOption
+func WithShellFactory(f ShellFactory) SessionOption
 func WithContext(ctx context.Context) SessionOption
 
 func (s *Session) Snapshot() State
@@ -113,6 +122,32 @@ func (s *Session) Close() error
 func (s *Session) Active() int         // diagnostics only
 ```
 
+### `shellexec`
+
+```go
+func New(opts ...Option) shellrt.ShellFactory
+func NewRunner(st shellrt.State, streams shellrt.Stdio, opts ...Option) (shellrt.ShellRunner, error)
+
+type Option func(*config)
+func Dialect(lang syntax.LangVariant) Option   // default syntax.LangBash
+func BashPP() Option                           // Dialect(syntax.LangBashPP)
+func RunnerOptions(opts ...interp.RunnerOption) Option
+func WithoutExitTraps() Option
+```
+
+Typical construction:
+
+```go
+s, err := shellrt.NewSession(
+    shellrt.WithDir(dir),
+    shellrt.WithShellFactory(shellexec.New(shellexec.BashPP())),
+)
+defer s.Close()
+```
+
+The factory runs after every other session option, so the backend is seeded
+with the directory, environment and options the session ended up with.
+
 ## Semantics
 
 ### State is a projection, not the shell
@@ -130,12 +165,12 @@ attributes on variables the typed program never touched.
 
 ### Persistence
 
-One backend per session, alive for the session's whole life. A region that
-defines a function, sets `set -u`, builds an array or leaves a non-zero status
-is observed by every later region of that session. The reference backend runs a
-region statement by statement rather than as a whole `*syntax.File`, because
-running a `File` implies an exit and would fire the `EXIT` trap at the end of
-every region.
+One `interp.Runner` per session, alive for the session's whole life. A region
+that defines a function, sets `set -u`, builds an array or leaves a non-zero
+status is observed by every later region of that session. A region runs
+statement by statement rather than as a whole `*syntax.File`, because running a
+`File` implies an exit and would fire the `EXIT` trap at the end of every
+region.
 
 Runtime bookkeeping (applying typed writes, probing option state) restores `$?`
 afterwards, so `$?` reports the region's own last command.
@@ -188,7 +223,17 @@ cancellation and shutdown still work.
   failures outrank failures that are only the group's own cancellation, and
   within a rank the lowest launch ordinal wins. So a group where task 2 fails
   while tasks 0 and 1 sit blocked reports task 2, not task 0's `context.Canceled`.
-- `Close` = cancel + join + release the backend. Idempotent, safe to defer.
+- `Close` = cancel + join + terminate the backend. Idempotent, safe to defer.
+  The backend's `Close` runs the shell's `EXIT` trap exactly once, by running an
+  empty `syntax.File` — the interpreter's own way to drive an EXIT trap without
+  executing anything else. The session passes a shutdown context derived with
+  `context.WithoutCancel`, so a cancelled program still runs its EXIT trap and
+  still releases interpreter resources.
+- A task runs the `EXIT` trap it inherited when its body ends. That is bash++
+  task semantics, not plain subshell semantics: real bash does not run an
+  inherited EXIT trap when a `( ... )` subshell exits, but
+  `interp/bashpp_concurrency.go` clears `inheritedExitTrap` for a task
+  snapshot, so a task does. `shellexec.WithoutExitTraps()` opts out entirely.
 - `Go` after join or close returns an already-failed task (`ErrSessionClosed`)
   and starts no goroutine.
 - A task body's own tasks are closed when the body returns, on every exit path,
@@ -196,22 +241,27 @@ cancellation and shutdown still work.
 
 ## Package dependency invariant
 
-`lower/shellrt` imports only the standard library. `lower`'s artifact tests
-build generated programs in a temporary module that has a `go.mod` and **no**
-`go.sum`; if `shellrt` pulled in `interp`, that build would fail on missing
-`go.sum` entries for `golang.org/x/{text,mod,sys,term}`.
+`lower/shellrt` imports only the standard library, and `shellexec` is where the
+interpreter dependency lives. Two things depend on that split:
 
-Consequence, stated plainly: **no shell backend ships in this package yet.**
-`NewSession` installs none, and `Session.Shell` reports `ErrNoShell` until one
-is passed with `WithShell`. The interp-backed persistent backend exists and is
-exercised in full by `session_test.go` (`interpShell`), but it lives in the test
-binary. Shipping it means either a sibling package — `lower/shellrt/shellexec`
-is the intended home — or teaching `lower/compile_test.go`'s fixture to produce
-a `go.sum`. Both are outside this work package's file ownership.
+- `lower`'s artifact tests build generated programs in a temporary module that
+  has a `go.mod` and **no** `go.sum`. If `shellrt` pulled in `interp`, that
+  build would fail on missing `go.sum` entries for
+  `golang.org/x/{text,mod,sys,term}`. That is a test-setup constraint, not a
+  reason to withhold the runtime — hence the split rather than a test-only
+  backend.
+- A typed-only artifact stays small and interpreter-free.
+
+`shellexec`'s own artifact test builds in a module that declares the dependency
+and resolves it with `go mod tidy` (`-mod=mod`, `GOPROXY=off`, `GOWORK=off`), so
+the production path has a real `go.mod` **and** `go.sum` and needs no umbrella
+`go.work`. A second test builds a `shellrt`-only program in a module with no
+`go.sum` at all, which fails the moment `shellrt` gains a module dependency.
 
 ## Verification
 
-`go test -race ./lower/shellrt/` covers, against a real `interp` backend:
+`go test -race ./lower/shellrt/...` covers, against the production `shellexec`
+backend (the tests import it rather than keeping a second copy):
 
 - state persistence across regions: `f() { echo yes; }; arr=(a b); set -u; false`
   followed by a region that sees the function, the array, `nounset` and `$?`;
@@ -230,9 +280,15 @@ a `go.sum`. Both are outside this work package's file ownership.
   reaping, snapshot-failure reporting, `Go`-after-join, and concurrent
   launch/join under the race detector.
 
+`shellexec`'s own tests add: EXIT trap exactly once on `Close` and never per
+region, EXIT trap still running after cancellation, a task running its own and
+its inherited EXIT trap, `WithoutExitTraps`, the `BashPP`/`Dialect` options, a
+full functions/traps/arrays/options/status/cwd exchange through a child
+snapshot, concurrent tasks sharing no backend, and the two artifact builds
+described above.
+
 ## Remaining work
 
-- **Ship the backend.** See *Package dependency invariant*.
 - **Compiler glue.** Nothing in `compile.go`/`words.go` emits `Session` calls
   yet; this work package deliberately touches no compiler dispatch. The glue
   needs: session construction in the entry function, `Shell` for identified

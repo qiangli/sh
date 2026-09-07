@@ -159,9 +159,17 @@ type ShellRunner interface {
 	// mutable state: writes on either side are invisible to the other.
 	Clone(io Stdio) (ShellRunner, error)
 
-	// Close releases the backend. It must be safe to call more than once.
-	Close() error
+	// Close terminates the shell: it runs the shell's EXIT trap exactly once
+	// and releases the backend's resources. It must be safe to call more than
+	// once. The session passes a shutdown context derived with
+	// [context.WithoutCancel], so a cancelled program still runs its EXIT trap.
+	Close(ctx context.Context) error
 }
+
+// ShellFactory builds a session's backend once the session's initial state and
+// streams are fully configured. It is how a backend is seeded with the
+// directory, environment and options the session options established.
+type ShellFactory func(State, Stdio) (ShellRunner, error)
 
 // Session is the persistent shell state boundary plus ownership of the tasks
 // launched from it. The zero value is not usable; call [NewSession].
@@ -175,6 +183,7 @@ type Session struct {
 	// as the shell takes, while the projection must stay readable.
 	shellMu sync.Mutex
 	shell   ShellRunner
+	factory ShellFactory
 	base    context.Context
 
 	group  *taskGroup
@@ -242,12 +251,29 @@ func WithOption(name string, on bool) SessionOption {
 	return func(s *Session) error { return s.setOptionLocked(name, on) }
 }
 
-// WithShell installs the persistent dynamic-shell backend. Without it a
-// session has no shell: [Session.Shell] reports [ErrNoShell], which is what a
-// typed-only artifact wants — it links no interpreter at all.
+// WithShell installs an already-built persistent dynamic-shell backend.
+// Without it, and without [WithShellFactory], a session has no shell:
+// [Session.Shell] reports [ErrNoShell], which is what a typed-only artifact
+// wants — it links no interpreter at all.
 func WithShell(sh ShellRunner) SessionOption {
 	return func(s *Session) error {
 		s.shell = sh
+		s.factory = nil
+		return nil
+	}
+}
+
+// WithShellFactory installs the backend built from the session's final initial
+// state and streams, after every other option has been applied. This is the
+// normal way to attach a backend:
+//
+//	shellrt.NewSession(
+//		shellrt.WithDir(dir),
+//		shellrt.WithShellFactory(shellexec.New(shellexec.BashPP())),
+//	)
+func WithShellFactory(f ShellFactory) SessionOption {
+	return func(s *Session) error {
+		s.factory = f
 		return nil
 	}
 }
@@ -300,6 +326,13 @@ func NewSession(opts ...SessionOption) (*Session, error) {
 		if err := opt(s); err != nil {
 			return nil, err
 		}
+	}
+	if s.shell == nil && s.factory != nil {
+		shell, err := s.factory(s.state.Clone(), s.io)
+		if err != nil {
+			return nil, err
+		}
+		s.shell = shell
 	}
 	s.group = newTaskGroup(s.base)
 	return s, nil
