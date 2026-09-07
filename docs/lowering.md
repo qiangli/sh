@@ -169,3 +169,20 @@ checks cover deterministic bytes/maps, empty programs, name collisions,
 unsupported syntax and invalid typing. Tests use the current toolchain version
 for their temporary module so they run at the repository's compatibility floor
 as well as the Go 1.27 profile toolchain.
+
+## Compiler build toolchain
+
+The module retains the Go 1.26.5 compatibility floor and selects
+`toolchain go1.27.0` for default automatic builds. The complete Go 1.27 source
+profile requires building the compiler and its generated artifacts with Go
+1.27.0 or newer. Release and certification builds should select their reviewed
+Go 1.27 toolchain explicitly.
+
+An explicit `GOTOOLCHAIN=local` build can retain an older checker. Independent
+method type parameters then produce positioned `LOWER-ETOOLCHAIN` diagnostics
+before emission. This is a compiler capability failure, not a successful
+semantic-negative fixture result. Ordinary generic functions and generic
+receiver parameters remain available at the compatibility floor. The check
+uses the compiler process's build version; changing PATH or GOTOOLCHAIN when
+running an already-built compiler cannot upgrade its linked Go checker.
+Unrecognized development versions fail closed for this feature.
