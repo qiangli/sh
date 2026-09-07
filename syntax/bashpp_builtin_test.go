@@ -86,7 +86,11 @@ func TestBashPPPredeclaredBuiltinResidualAST(t *testing.T) {
 		t.Fatal("buffered and streamed residual builtin trees differ")
 	}
 	body := buffered.Stmts[0].Cmd.(*BashPPFuncDecl).Body.Stmts
-	appendCall := body[5].Cmd.(*BashPPCommandCall).Call
+	appendAssign, ok := body[5].Cmd.(*BashPPAssign)
+	if !ok {
+		t.Fatalf("append assignment node = %T", body[5].Cmd)
+	}
+	appendCall := appendAssign.Call
 	if appendCall == nil || appendCall.Fun[0].Value != "append" || !appendCall.Ellipsis.IsValid() {
 		t.Fatalf("append string spread = %#v", appendCall)
 	}
