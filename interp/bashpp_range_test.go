@@ -83,11 +83,18 @@ func TestBashPPRangePreservesIterationTypes(t *testing.T) {
 	const src = `type Count int
 func takeCount(v Count) { printf 'count:%s\n' "$v" }
 func takeRune(v rune) { printf 'rune:%s\n' "$v" }
+func requireSame[T any](a T, b T) { printf 'same:%s:%s\n' "$a" "$b" }
 func main() {
  var count Count = 2
  for i := range count {
   takeCount(i)
  }
+	for i := range count + 1 {
+		requireSame(i, count)
+	}
+	for i := range +count {
+		requireSame(i, count)
+	}
  for _, r := range "é" {
   takeRune(r)
  }
@@ -99,7 +106,44 @@ main()
 	out, stderr, err := runBashSharpCall(t, src)
 	qt.Assert(t, qt.IsNil(err), qt.Commentf("stderr: %s", stderr))
 	qt.Assert(t, qt.Equals(stderr, ""))
-	qt.Assert(t, qt.Equals(out, "count:0\ncount:1\nrune:233\nnested:7\n"))
+	qt.Assert(t, qt.Equals(out, "count:0\ncount:1\n"+
+		"same:0:2\nsame:1:2\nsame:2:2\n"+
+		"same:0:2\nsame:1:2\n"+
+		"rune:233\nnested:7\n"))
+}
+
+func TestBashPPRangeIndexedAndSelectedScalars(t *testing.T) {
+	const src = `type Limits struct { Count int; Text string }
+func main() {
+ nested := [][]int{{2}}
+ for i := range nested[0][0] { printf 'index:%s\n' "$i" }
+ cfg := Limits{Count: 2, Text: "aé"}
+ for i := range cfg.Count { printf 'select-int:%s\n' "$i" }
+ for i, r := range cfg.Text { printf 'select-string:%s:%s\n' "$i" "$r" }
+}
+main()
+`
+	out, stderr, err := runBashSharpCall(t, src)
+	qt.Assert(t, qt.IsNil(err), qt.Commentf("stderr: %s", stderr))
+	qt.Assert(t, qt.Equals(stderr, ""))
+	qt.Assert(t, qt.Equals(out, "index:0\nindex:1\n"+
+		"select-int:0\nselect-int:1\n"+
+		"select-string:0:97\nselect-string:1:233\n"))
+}
+
+func TestBashPPRangeNamedIntegerExpressionOverflow(t *testing.T) {
+	for _, expr := range []string{"tiny + 1", "300 - tiny"} {
+		src := `type Tiny uint8
+func main() {
+ var tiny Tiny = 255
+ for range ` + expr + ` { echo unreachable }
+}
+main()
+`
+		_, stderr, err := runBashSharpCall(t, src)
+		qt.Assert(t, qt.ErrorIs(err, interp.ExitStatus(2)), qt.Commentf("expression: %s", expr))
+		qt.Assert(t, qt.StringContains(stderr, "overflows uint8"), qt.Commentf("expression: %s", expr))
+	}
 }
 
 func TestBashPPRangePositionedUndefinedAndFunctionDiagnostics(t *testing.T) {

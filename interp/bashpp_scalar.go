@@ -37,7 +37,7 @@ func (r *Runner) bashPPEvalScalarExpr(expr syntax.BashPPExpr) (bashPPScalar, err
 		if err != nil {
 			return bashPPScalar{}, err
 		}
-		return bashPPUnaryScalar(bashPPOpToken(x.Op.Value), v)
+		return r.bashPPUnaryScalar(bashPPOpToken(x.Op.Value), v)
 	case *syntax.BashPPBinaryExpr:
 		op := bashPPOpToken(x.Op.Value)
 		if op == token.EQL || op == token.NEQ {
@@ -57,15 +57,15 @@ func (r *Runner) bashPPEvalScalarExpr(expr syntax.BashPPExpr) (bashPPScalar, err
 		if err != nil {
 			return bashPPScalar{}, err
 		}
-		return bashPPBinaryScalar(bashPPOpToken(x.Op.Value), left, right)
+		return r.bashPPBinaryScalar(bashPPOpToken(x.Op.Value), left, right)
 	case *syntax.BashPPConvertExpr:
 		v, err := r.bashPPEvalScalarExpr(x.X)
 		if err != nil {
 			return bashPPScalar{}, err
 		}
 		return r.bashPPConvertScalar(x.ConvType.Value, v)
-	case *syntax.BashPPIndexExpr:
-		value, meta, err := r.bashPPCollectionRead(x)
+	case *syntax.BashPPIndexExpr, *syntax.BashPPSelectorExpr:
+		value, meta, err := r.bashPPReadExpr(expr)
 		if err != nil {
 			return bashPPScalar{}, err
 		}
@@ -185,7 +185,7 @@ func bashPPScalarFromString(s string) bashPPScalar {
 	return bashPPScalar{value: constant.MakeString(s)}
 }
 
-func bashPPUnaryScalar(op token.Token, x bashPPScalar) (bashPPScalar, error) {
+func (r *Runner) bashPPUnaryScalar(op token.Token, x bashPPScalar) (bashPPScalar, error) {
 	switch op {
 	case token.ADD, token.SUB, token.XOR:
 		if x.value.Kind() != constant.Int && x.value.Kind() != constant.Float {
@@ -194,24 +194,49 @@ func bashPPUnaryScalar(op token.Token, x bashPPScalar) (bashPPScalar, error) {
 		if op == token.XOR && x.value.Kind() != constant.Int {
 			return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-OPERAND: operator ^ requires integer operand")
 		}
-		return bashPPScalar{value: constant.UnaryOp(op, x.value, 0)}, nil
+		return r.bashPPTypedScalarResult(constant.UnaryOp(op, x.value, 0), x.typ)
 	case token.NOT:
 		if x.value.Kind() != constant.Bool {
 			return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-OPERAND: operator ! requires boolean operand")
 		}
-		return bashPPScalar{value: constant.MakeBool(!constant.BoolVal(x.value))}, nil
+		return r.bashPPTypedScalarResult(constant.MakeBool(!constant.BoolVal(x.value)), x.typ)
 	}
 	return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-OPERAND: unsupported unary operator %s", op)
 }
 
-func bashPPBinaryScalar(op token.Token, left, right bashPPScalar) (bashPPScalar, error) {
+func (r *Runner) bashPPBinaryScalar(op token.Token, left, right bashPPScalar) (bashPPScalar, error) {
+	resultType := left.typ
+	if resultType == "" {
+		resultType = right.typ
+	}
+	comparison := op == token.EQL || op == token.NEQ || op == token.LSS || op == token.LEQ || op == token.GTR || op == token.GEQ
+	shift := op == token.SHL || op == token.SHR
+	if !comparison && !shift {
+		if left.typ != "" && right.typ != "" && left.typ != right.typ {
+			return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-MISMATCH: mismatched scalar types %s and %s", left.typ, right.typ)
+		}
+		// An untyped constant combines with a typed operand only when the
+		// constant itself is representable in that type; checking merely the
+		// final result would incorrectly accept expressions such as
+		// `300 - tinyUint8`.
+		if left.typ != "" && right.typ == "" {
+			if err := r.bashPPValidateUntypedScalarOperand(right.value, left.typ); err != nil {
+				return bashPPScalar{}, err
+			}
+		}
+		if right.typ != "" && left.typ == "" {
+			if err := r.bashPPValidateUntypedScalarOperand(left.value, right.typ); err != nil {
+				return bashPPScalar{}, err
+			}
+		}
+	}
 	switch op {
 	case token.LAND, token.LOR:
 		if left.value.Kind() != constant.Bool || right.value.Kind() != constant.Bool {
 			return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-OPERAND: operator %s requires boolean operands", op)
 		}
-		l, r := constant.BoolVal(left.value), constant.BoolVal(right.value)
-		return bashPPScalar{value: constant.MakeBool(op == token.LAND && l && r || op == token.LOR && (l || r))}, nil
+		leftBool, rightBool := constant.BoolVal(left.value), constant.BoolVal(right.value)
+		return r.bashPPTypedScalarResult(constant.MakeBool(op == token.LAND && leftBool && rightBool || op == token.LOR && (leftBool || rightBool)), resultType)
 	case token.EQL, token.NEQ, token.LSS, token.LEQ, token.GTR, token.GEQ:
 		ok, err := bashPPCompareScalar(left.value, op, right.value)
 		if err != nil {
@@ -229,14 +254,11 @@ func bashPPBinaryScalar(op token.Token, left, right bashPPScalar) (bashPPScalar,
 		}
 		fallthrough
 	case token.ADD, token.SUB, token.OR, token.XOR, token.MUL, token.AND, token.AND_NOT:
-		if left.typ != "" && right.typ != "" && left.typ != right.typ {
-			return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-MISMATCH: mismatched scalar types %s and %s", left.typ, right.typ)
-		}
 		value, err := bashPPBinaryOp(left.value, op, right.value)
 		if err != nil {
 			return bashPPScalar{}, err
 		}
-		return bashPPScalar{value: value}, nil
+		return r.bashPPTypedScalarResult(value, resultType)
 	case token.SHL, token.SHR:
 		// constant.Uint64Val panics on a non-integer, and `1 << "a"` is now
 		// reachable from source, so the kind is checked before the call rather
@@ -252,9 +274,33 @@ func bashPPBinaryScalar(op token.Token, left, right bashPPScalar) (bashPPScalar,
 		if err != nil {
 			return bashPPScalar{}, err
 		}
-		return bashPPScalar{value: value}, nil
+		return r.bashPPTypedScalarResult(value, left.typ)
 	}
 	return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-OPERAND: unsupported binary operator %s", op)
+}
+
+func (r *Runner) bashPPValidateUntypedScalarOperand(value constant.Value, typ string) error {
+	underlying := r.bashPPUnderlyingType(&syntax.BashPPNamedType{Name: &syntax.Lit{Value: typ}})
+	named, ok := underlying.(*syntax.BashPPNamedType)
+	if !ok {
+		return fmt.Errorf("BASHPP-EEXPR-TYPE: %s does not have a scalar underlying type", typ)
+	}
+	_, err := r.bashPPConvertScalar(named.Name.Value, bashPPScalar{value: value})
+	return err
+}
+
+// bashPPTypedScalarResult retains the defined operand type of a non-comparison
+// operation and verifies that the exact constant carrier still fits its
+// underlying scalar type. This prevents a named integer expression from being
+// silently downgraded to untyped int (or retaining an impossible value).
+func (r *Runner) bashPPTypedScalarResult(value constant.Value, typ string) (bashPPScalar, error) {
+	if typ == "" {
+		return bashPPScalar{value: value}, nil
+	}
+	if err := r.bashPPValidateUntypedScalarOperand(value, typ); err != nil {
+		return bashPPScalar{}, err
+	}
+	return bashPPScalar{value: value, typ: typ}, nil
 }
 
 func bashPPShiftScalar(left constant.Value, op token.Token, shift uint) (value constant.Value, err error) {

@@ -25,7 +25,7 @@ func (r *Runner) bashPPRangeScalar(ctx context.Context, rng *syntax.BashPPRange)
 	}
 	if root, ok := bashPPCollectionRoot(rng.Expr); ok && r.bashPPScope != nil {
 		if cell := r.bashPPScope.lookup(root); cell != nil {
-			if cell.channel != nil || cell.vr.Kind == expand.Object || cell.pointer {
+			if cell.channel != nil {
 				return false
 			}
 			if _, closure := r.bashPPClosure(cell.vr.String()); closure {
@@ -115,7 +115,13 @@ func (r *Runner) bashPPRangeCollection(ctx context.Context, rng *syntax.BashPPRa
 		r.bashPPRangeError(rng, "%v", err)
 		return true
 	}
-	if meta == nil || meta.kind == "struct" || meta.kind == "pointer" {
+	// A path rooted in a collection can still select an ordinary scalar, for
+	// example matrix[0][0] or cfg.Limit. Let the scalar range path evaluate
+	// those values; metadata is only present for structured results.
+	if meta == nil {
+		return false
+	}
+	if meta.kind == "struct" || meta.kind == "pointer" {
 		r.bashPPRangeError(rng, "BASHPP-ERANGE-TYPE: cannot range over %s", bashPPTypeText(meta.typ))
 		return true
 	}
