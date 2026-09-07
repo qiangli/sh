@@ -3,9 +3,10 @@ id: b251ba04edb7
 kind: task
 title: 'S117-06: compiled shell process and concurrency runtime'
 seq: 44
-status: blocked
+status: assigned
 priority: p1
 created: 2026-09-07T17:54:06.103826Z
+assignee: claude-opus5
 sprint: 117
 ---
 
