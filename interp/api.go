@@ -124,6 +124,14 @@ type Runner struct {
 	// They persist with the session and are cloned for subshell isolation.
 	bashPPTypes   map[string]bashPPType
 	bashPPMethods map[string]map[string]*bashPPFunc
+	// bashPPTypeParamArgs binds the type parameter names of the generic
+	// function or method whose body is executing RIGHT NOW to their type
+	// arguments. It is frame-scoped rather than stacked: entering any frame
+	// replaces it with that callee's own arguments — nil when the callee is
+	// not generic — so a callee never resolves its caller's `T`, and two
+	// instantiations of one method cannot see each other's binding. See
+	// bashpp_generic_body.go.
+	bashPPTypeParamArgs map[string]syntax.BashPPTypeExpr
 	// bashPPClosures is the registry a function-literal value refers to. A
 	// closure cannot be stored in a shell variable directly — variables hold
 	// strings, and a subshell copies them as bytes — so the variable holds a
@@ -3353,6 +3361,9 @@ func (r *Runner) subshell(background bool) *Runner {
 	r2.funcSources = maps.Clone(r.funcSources)
 	r2.bashPPImports = maps.Clone(r.bashPPImports)
 	r2.bashPPTypes = maps.Clone(r.bashPPTypes)
+	// The bindings map is read-only once installed, but a subshell may enter
+	// its own frames, so it gets its own map rather than sharing this one.
+	r2.bashPPTypeParamArgs = maps.Clone(r.bashPPTypeParamArgs)
 	// A subshell gets a private copy of the typed bindings, exactly as it
 	// gets a private copy of the shell's variables. One cloner does the live
 	// scope and every captured closure together so that the aliasing between

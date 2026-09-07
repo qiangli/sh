@@ -92,6 +92,12 @@ func (f *bashPPFunc) params() []*syntax.BashPPField {
 		}
 		return f.decl.Params
 	}
+	// A literal has no type parameters of its own, but one written inside a
+	// generic body carries that instantiation's bindings, so its signature
+	// substitutes them exactly as a declared function's does.
+	if len(f.typeArgs) > 0 {
+		return bashPPSubstituteFields(f.lit.Params, f.typeArgs)
+	}
 	return f.lit.Params
 }
 
@@ -101,6 +107,9 @@ func (f *bashPPFunc) results() []*syntax.BashPPField {
 			return bashPPSubstituteFields(f.decl.Results, f.typeArgs)
 		}
 		return f.decl.Results
+	}
+	if len(f.typeArgs) > 0 {
+		return bashPPSubstituteFields(f.lit.Results, f.typeArgs)
 	}
 	return f.lit.Results
 }
@@ -160,6 +169,12 @@ func (r *Runner) bashPPMakeClosure(lit *syntax.BashPPFuncLit) (*bashPPFunc, expa
 	if r.bashPPScope != nil {
 		fn.scope = r.bashPPScope.snapshot()
 	}
+	// A literal written inside a generic body is part of THAT instantiation:
+	// its own body may name the enclosing `T`, and it keeps meaning the type
+	// argument of the call that created the closure even if the closure
+	// escapes and is invoked later. The bindings travel with the closure for
+	// the same reason its captured scope does.
+	fn.typeArgs = r.bashPPTypeParamArgs
 	return fn, r.bashPPStoreFunc(fn)
 }
 
@@ -1490,6 +1505,9 @@ type bashPPFrame struct {
 	deferMark  int
 	ret        bashPPReturnState
 	deferDepth int
+	// typeArgs is the caller's type parameter bindings, restored on leave so
+	// a generic frame's `T` cannot outlive the call that bound it.
+	typeArgs map[string]syntax.BashPPTypeExpr
 }
 
 // bashPPEnterFrame pushes the frame fn's body runs in: its own shell function
@@ -1509,7 +1527,12 @@ func (r *Runner) bashPPEnterFrame(fn *bashPPFunc, args []string) *bashPPFrame {
 		deferMark:  len(r.bashPPDeferStack),
 		ret:        r.bashPPReturn,
 		deferDepth: r.bashPPDeferDepth,
+		typeArgs:   r.bashPPTypeParamArgs,
 	}
+	// The callee's own type arguments REPLACE the caller's rather than
+	// extending them. An ordinary function called from inside a generic body
+	// has none, and must not inherit a `T` it never declared.
+	r.bashPPTypeParamArgs = fn.typeArgs
 	r.bashPPAgentic = fn.decl != nil && fn.decl.Agentic != nil
 	r.Params = args
 	r.inFunc = true
@@ -1551,6 +1574,7 @@ func (f *bashPPFrame) leave() {
 	r.inFunc = f.inFunc
 	r.bashPPReturn = f.ret
 	r.bashPPDeferDepth = f.deferDepth
+	r.bashPPTypeParamArgs = f.typeArgs
 	r.bashPPFuncActive--
 }
 
@@ -2177,6 +2201,18 @@ func bashPPSubstituteType(typ syntax.BashPPTypeExpr, typeArgs map[string]syntax.
 			return arg
 		}
 	case *syntax.BashPPNamedType:
+		// A type parameter used in a BODY statement is parsed as an ordinary
+		// named type: the declaration recognizers never see the enclosing
+		// parameter list, so only signature positions get the dedicated
+		// BashPPTypeParamType marker. Resolving the name here is what makes
+		// `var zero T` inside the body mean the same as `T` in the signature.
+		// A Go type parameter shadows any same-named type for the whole
+		// function, so a binding wins over the script's namespace.
+		if len(x.TypeArgs) == 0 {
+			if arg := typeArgs[x.Name.Value]; arg != nil {
+				return arg
+			}
+		}
 		cp := *x
 		cp.TypeArgs = append([]*syntax.BashPPTypeArg(nil), x.TypeArgs...)
 		for i, arg := range cp.TypeArgs {

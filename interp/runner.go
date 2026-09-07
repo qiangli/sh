@@ -5418,12 +5418,16 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			defer r.bashPPPushScope()()
 		}
 		r.stmts(ctx, cm.Stmts)
+	// Statements that can name a type are rebound against the enclosing
+	// generic frame's type arguments before they run, on a clone: the AST is
+	// shared by every instantiation, so `var zero T` must not be rewritten in
+	// place by the first call. See bashpp_generic_body.go.
 	case *syntax.BashPPDecl:
-		r.bashPPDeclare(ctx, cm)
+		r.bashPPDeclare(ctx, r.bashPPBindDecl(cm))
 	case *syntax.BashPPConstGroup:
-		r.bashPPConstGroup(ctx, cm)
+		r.bashPPConstGroup(ctx, r.bashPPBindConstGroup(cm))
 	case *syntax.BashPPShortDecl:
-		r.bashPPShortDecl(ctx, cm)
+		r.bashPPShortDecl(ctx, r.bashPPBindShortDecl(cm))
 	case *syntax.BashPPGo:
 		r.bashPPGo(ctx, cm)
 	case *syntax.BashPPSend:
@@ -5437,19 +5441,19 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 	case *syntax.BashPPRange:
 		r.bashPPRange(ctx, cm)
 	case *syntax.BashPPAssign:
-		r.bashPPAssign(ctx, cm)
+		r.bashPPAssign(ctx, r.bashPPBindAssign(cm))
 	case *syntax.BashPPCall:
-		r.bashPPCall(ctx, cm)
+		r.bashPPCall(ctx, r.bashPPBindCallNode(cm))
 	case *syntax.BashPPCommandCall:
 		r.bashPPCommandCall(ctx, cm)
 	case *syntax.BashPPFuncDecl:
 		r.bashPPFuncDecl(cm)
 	case *syntax.BashPPReturn:
-		r.bashPPReturnStmt(ctx, cm)
+		r.bashPPReturnStmt(ctx, r.bashPPBindReturn(cm))
 	case *syntax.BashPPDefer:
 		r.bashPPDeferStmt(ctx, cm)
 	case *syntax.BashPPSwitch:
-		r.bashPPSwitch(ctx, cm)
+		r.bashPPSwitch(ctx, r.bashPPBindSwitch(cm))
 	case *syntax.BashPPImport:
 		r.bashPPImport(ctx, cm)
 	case *syntax.BashPPIf:
