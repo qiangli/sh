@@ -209,6 +209,7 @@ func main() {
  promoted.Speak()
  selected := o.Speaker
  selected.Speak()
+ o.Speaker.Speak()
  a := AliasOuter{Alias: s}
  a.Speak()
  p := &o
@@ -225,7 +226,7 @@ main()
 	out, stderr, err := runBashSharpCall(t, src)
 	qt.Assert(t, qt.IsNil(err), qt.Commentf("stderr: %s", stderr))
 	qt.Assert(t, qt.Equals(stderr, ""), qt.Commentf("stdout: %s", out))
-	qt.Assert(t, qt.Equals(out, "v3:v3:v3:v3:v3:v3:v3:v3:v3:"))
+	qt.Assert(t, qt.Equals(out, "v3:v3:v3:v3:v3:v3:v3:v3:v3:v3:"))
 }
 
 func TestBashPPEmbeddedInterfaceNilAndAmbiguity(t *testing.T) {
@@ -234,7 +235,7 @@ func TestBashPPEmbeddedInterfaceNilAndAmbiguity(t *testing.T) {
 type Outer struct { Speaker }
 func main() {
  var o Outer
- o.Speak()
+ o.Speaker.Speak()
 }
 main()
 `, "nil interface has no method Speak"},
@@ -324,7 +325,7 @@ func main() {
  var p *Voice
  var s Speaker = p
  o := Outer{Speaker: s}
- o.Speak()
+ o.Speaker.Speak()
 }
 main()
 `
@@ -332,6 +333,27 @@ main()
 	qt.Assert(t, qt.IsNil(err), qt.Commentf("stderr: %s", stderr))
 	qt.Assert(t, qt.Equals(stderr, ""))
 	qt.Assert(t, qt.Equals(out, "nil-pointer"))
+}
+
+func TestBashPPEmbeddedInterfaceTypedNilDereferenceDiagnostic(t *testing.T) {
+	const src = `type Speaker interface { Speak() }
+type Voice struct { N int }
+func (p *Voice) Speak() {
+ x := p.N
+ println(x)
+}
+type Outer struct { Speaker }
+func main() {
+ var p *Voice
+ var s Speaker = p
+ o := Outer{Speaker: s}
+ o.Speaker.Speak()
+}
+main()
+`
+	_, stderr, err := runBashSharpCall(t, src)
+	qt.Assert(t, qt.ErrorIs(err, interp.ExitStatus(2)))
+	qt.Assert(t, qt.StringContains(stderr, "BASHPP-ENIL-DEREF"))
 }
 
 func TestBashPPPointerToInterfaceEmbeddingRejected(t *testing.T) {

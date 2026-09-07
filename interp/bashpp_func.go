@@ -398,7 +398,8 @@ func (r *Runner) bashPPMethodDecl(d *syntax.BashPPFuncDecl) {
 
 // bashPPLookupFunc resolves a call's callee to a callable function: a literal
 // in callee position, a function declared with `func`, or a name bound to a
-// closure. A dotted selector (`pkg.Fn`) is never a local function.
+// closure. Selector calls first resolve a local typed root; only an absent
+// local root may fall through to package-import evaluation.
 //
 // A literal is EVALUATED here, which is the correct moment: `func(n int) { …
 // }(1)` captures the scope at the point of the call, exactly as the same
@@ -408,46 +409,25 @@ func (r *Runner) bashPPLookupFunc(c *syntax.BashPPCall) (*bashPPFunc, bool) {
 		fn, _ := r.bashPPMakeClosure(c.FuncLit)
 		return fn, true
 	}
-	if len(c.Fun) == 2 {
+	if len(c.Fun) >= 2 {
 		if len(c.TypeArgs) > 0 {
 			r.errf("BASHPP-EGENERIC-METHOD: generic method instantiation is not implemented in this phase\n")
 			r.exit.code = 2
 			return nil, false
 		}
-		owner, method := c.Fun[0].Value, c.Fun[1].Value
+		owner := c.Fun[0].Value
 		// A local value is always considered before an import binding. This is
 		// deterministic even when the import registry contains the same name.
-		if _, localType := r.bashPPTypes[owner]; !localType {
-			if cell := r.bashPPScope.lookup(owner); cell != nil {
-				if cell.interfaceValue != nil {
-					return r.bashPPBindInterfaceMethod(cell.interfaceValue, method)
-				}
-				typ := cell.declType
-				if typ == nil {
-					if meta := bashPPCellMeta(cell); meta != nil {
-						typ = meta.typ
-					}
-				}
-				if typ == nil && cell.typeName != "" {
-					typ = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: cell.typeName}}
-					if cell.pointer {
-						typ = &syntax.BashPPPointerType{Element: typ}
-					}
-				}
-				sel := r.bashPPResolveSelection(typ, method, true, true)
-				if sel.ambiguous {
-					r.errf("BASHPP-ESELECTOR-AMBIGUOUS: ambiguous selector %s.%s\n", bashPPTypeText(typ), method)
-					r.exit.code = 2
-					return nil, false
-				}
-				if sel.method == nil && sel.interfaceSpec == nil {
-					r.errf("type %s has no method %s\n", bashPPTypeText(typ), method)
-					r.exit.code = 2
-					return nil, false
-				}
-				return r.bashPPBindPromotedMethod(cell, method, sel, true)
+		if cell := r.bashPPScope.lookup(owner); cell != nil {
+			_, typeName := r.bashPPTypes[owner]
+			if !typeName || cell.interfaceValue != nil || bashPPSelectorCellType(cell) != nil {
+				return r.bashPPBindLocalSelector(c, cell)
 			}
 		}
+		if len(c.Fun) != 2 {
+			return nil, false
+		}
+		method := c.Fun[1].Value
 		// T.M(v, ...) selects from T's method set; (*T).M(p, ...) records the
 		// pointer method-expression spelling on the call node.
 		if _, localType := r.bashPPTypes[owner]; localType {
@@ -514,6 +494,71 @@ func (r *Runner) bashPPLookupFunc(c *syntax.BashPPCall) (*bashPPFunc, bool) {
 		return r.bashPPInstantiateFunc(c, fn)
 	}
 	return nil, false
+}
+
+func bashPPSelectorCellType(cell *bashPPCell) syntax.BashPPTypeExpr {
+	if cell == nil {
+		return nil
+	}
+	typ := cell.declType
+	if typ == nil {
+		if meta := bashPPCellMeta(cell); meta != nil {
+			typ = meta.typ
+		}
+	}
+	if typ == nil && cell.typeName != "" {
+		typ = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: cell.typeName}}
+		if cell.pointer {
+			typ = &syntax.BashPPPointerType{Element: typ}
+		}
+	}
+	return typ
+}
+
+// bashPPBindLocalSelector resolves x.a.b.M against the static field graph
+// rooted at x, then performs the final bind against x's live storage. Keeping
+// the entire edge path is what preserves addressability and nil diagnostics;
+// materializing intermediate shell values would lose both.
+func (r *Runner) bashPPBindLocalSelector(c *syntax.BashPPCall, root *bashPPCell) (*bashPPFunc, bool) {
+	method := c.Fun[len(c.Fun)-1].Value
+	if len(c.Fun) == 2 && root.interfaceValue != nil {
+		return r.bashPPBindInterfaceMethod(root.interfaceValue, method)
+	}
+	typ := bashPPSelectorCellType(root)
+	if typ == nil {
+		r.errf("BASHPP-ESELECTOR-TYPE: local %s has no typed selector path\n", c.Fun[0].Value)
+		r.exit.code = 2
+		return nil, false
+	}
+	var edges []bashPPEmbedEdge
+	for _, part := range c.Fun[1 : len(c.Fun)-1] {
+		sel := r.bashPPResolveField(typ, part.Value)
+		if sel.ambiguous {
+			r.errf("BASHPP-ESELECTOR-AMBIGUOUS: ambiguous selector %s.%s\n", bashPPTypeText(typ), part.Value)
+			r.exit.code = 2
+			return nil, false
+		}
+		if len(sel.edges) == 0 {
+			r.errf("BASHPP-ESELECTOR-UNKNOWN: %s has no field %q\n", bashPPTypeText(typ), part.Value)
+			r.exit.code = 2
+			return nil, false
+		}
+		edges = append(edges, sel.edges...)
+		typ = sel.fieldType
+	}
+	sel := r.bashPPResolveSelection(typ, method, true, true)
+	if sel.ambiguous {
+		r.errf("BASHPP-ESELECTOR-AMBIGUOUS: ambiguous selector %s.%s\n", bashPPTypeText(typ), method)
+		r.exit.code = 2
+		return nil, false
+	}
+	if sel.method == nil && sel.interfaceSpec == nil {
+		r.errf("type %s has no method %s\n", bashPPTypeText(typ), method)
+		r.exit.code = 2
+		return nil, false
+	}
+	sel.edges = append(edges, sel.edges...)
+	return r.bashPPBindPromotedMethod(root, method, sel, true)
 }
 
 func (r *Runner) bashPPInstantiateFunc(c *syntax.BashPPCall, fn *bashPPFunc) (*bashPPFunc, bool) {

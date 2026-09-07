@@ -43,6 +43,35 @@ func TestBashPPStdlibImportSelectorCalls(t *testing.T) {
 	}
 }
 
+func TestBashPPLocalMultipartSelectorWinsOverImport(t *testing.T) {
+	const src = `import "fmt"
+fmt.Println("package")
+type Speaker interface { Speak() }
+type Voice int
+func (v Voice) Speak() { printf local }
+type Holder struct { Speaker }
+func main() {
+ var voice Voice = 0
+ var speaker Speaker = voice
+ fmt := Holder{Speaker: speaker}
+ fmt.Speaker.Speak()
+}
+main()
+`
+	file, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(src), "selector-import.bpp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP), interp.Env(expand.ListEnviron(os.Environ()...)))
+	if err := r.Run(context.Background(), file); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := out.String(), "package\nlocal"; got != want {
+		t.Fatalf("output = %q, want %q", got, want)
+	}
+}
+
 func TestBashPPForcedShellImportEndToEnd(t *testing.T) {
 	for _, src := range []string{`command import "fmt"`, `"import" "fmt"`} {
 		t.Run(src, func(t *testing.T) {
