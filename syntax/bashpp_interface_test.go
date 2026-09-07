@@ -12,7 +12,7 @@ import (
 	"testing/iotest"
 )
 
-const bashppInterfaceFixture = `type Shower interface { Show string; Ptr int }
+const bashppInterfaceFixture = `type Shower interface { Show(int) string; Ptr() int }
 func f() {
 	x, ok := i.(Count)
 	switch v := i.(type) {
@@ -81,7 +81,7 @@ func TestBashPPInterfaceASTStreamingWalkAndPrint(t *testing.T) {
 
 func TestBashPPInterfaceFallbackBoundaries(t *testing.T) {
 	for _, src := range []string{
-		"type I interface { M string }\n",
+		"type I interface { M(int) string }\n",
 		"func f() {\n\tx, ok := i.(T)\n}\n",
 		"func f() {\n\tswitch v := i.(type) { default: echo d }\n}\n",
 	} {

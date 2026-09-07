@@ -84,14 +84,20 @@ func bashPPMethodSpecMatches(fn *syntax.BashPPFuncDecl, spec *syntax.BashPPMetho
 func bashPPFieldsSignature(fields []*syntax.BashPPField) string {
 	var b strings.Builder
 	for i, field := range fields {
-		if i > 0 {
-			b.WriteByte(',')
+		count := len(field.Names)
+		if count == 0 {
+			count = 1
 		}
-		if field.Variadic() {
-			b.WriteString("...")
-		}
-		if field.FieldType != nil {
-			b.WriteString(field.FieldType.Value)
+		for j := 0; j < count; j++ {
+			if i > 0 || j > 0 {
+				b.WriteByte(',')
+			}
+			if field.Variadic() {
+				b.WriteString("...")
+			}
+			if field.FieldType != nil {
+				b.WriteString(field.FieldType.Value)
+			}
 		}
 	}
 	return b.String()
@@ -168,6 +174,11 @@ func (r *Runner) bashPPTypeAssert(assert *syntax.BashPPTypeAssertExpr, commaOK b
 		return nil, nil, fmt.Errorf("BASHPP-EASSERT-OPERAND: %s is not an interface", id.Name.Value)
 	}
 	iv := cell.interfaceValue
+	if iface, ok := r.bashPPInterfaceType(cell.declType); ok {
+		if err := r.bashPPImplements(assert.Assert, iface); err != nil {
+			return nil, nil, fmt.Errorf("BASHPP-EASSERT-IMPOSSIBLE: %s cannot be asserted from %s", bashPPTypeText(assert.Assert), bashPPTypeText(cell.declType))
+		}
+	}
 	matched := !iv.nilIface && bashPPTypeText(iv.dynamic) == bashPPTypeText(assert.Assert)
 	if !matched {
 		if commaOK {

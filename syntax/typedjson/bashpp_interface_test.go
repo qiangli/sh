@@ -13,7 +13,7 @@ import (
 )
 
 func TestBashPPInterfaceRoundTrip(t *testing.T) {
-	const src = `type Shower interface { Show string Ptr int }
+	const src = `type Shower interface { Show(int) string Ptr() int }
 func f() {
 	x, ok := i.(Count)
 	switch v := i.(type) {

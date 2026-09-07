@@ -3,7 +3,12 @@
 
 package syntax
 
-import "strings"
+import (
+	goast "go/ast"
+	goparser "go/parser"
+	gotoken "go/token"
+	"strings"
+)
 
 // The Bash++ untyped declaration: `var x = 1` and `const K = 2`.
 //
@@ -214,9 +219,70 @@ func bashppTypeDecl(ce *CallExpr, redirs []*Redirect) *BashPPDecl {
 	return &BashPPDecl{Site: m.Site, Kw: kw, Name: name, DeclType: typ, DeclTypeExpr: typeExpr, Alias: alias, End_: typeWord.End()}
 }
 
+func (p *Parser) bashppInterfaceForm(ce *CallExpr) Command {
+	if ce == nil || len(ce.Assigns) != 0 || p.tok != leftParen || len(ce.Args) != 5 {
+		return nil
+	}
+	kw, name := bashppBareLit(ce.Args[0]), bashppBareLit(ce.Args[1])
+	ifaceLit, lbrace := bashppBareLit(ce.Args[2]), bashppBareLit(ce.Args[3])
+	method := bashppBareLit(ce.Args[4])
+	if kw == nil || kw.Value != "type" || name == nil || !bashppIsIdent(name.Value) ||
+		ifaceLit == nil || ifaceLit.Value != "interface" || lbrace == nil || lbrace.Value != "{" ||
+		method == nil || !bashppIsIdent(method.Value) {
+		return nil
+	}
+	m := RecognizeStartSite(kw.Value + " " + name.Value)
+	if m.Site != StartTypeDecl {
+		return nil
+	}
+	iface := &BashPPInterfaceType{Interface: ifaceLit, Lbrace: lbrace.Pos()}
+	for {
+		spec := &BashPPMethodSpec{Name: method}
+		sig := p.bashppSignature("interface method " + method.Value)
+		spec.Params, spec.Results = bashppInterfaceParams(sig.params), sig.results
+		spec.Lparen, spec.Rparen = sig.lparen, sig.rparen
+		spec.ResLparen, spec.ResRparen = sig.resLparen, sig.resRparen
+		iface.Methods = append(iface.Methods, spec)
+		for p.got(_Newl) || p.got(semicolon) {
+		}
+		if p.tok == _LitWord && p.val == "}" {
+			iface.Rbrace = p.pos
+			end := p.lit(p.pos, p.val).End()
+			p.next()
+			return &BashPPDecl{Site: m.Site, Kw: kw, Name: name, DeclType: ifaceLit, DeclTypeExpr: iface,
+				Lbrace: iface.Lbrace, Rbrace: iface.Rbrace, End_: end}
+		}
+		word := p.getWord()
+		method = bashppBareLit(word)
+		if method == nil || !bashppIsIdent(method.Value) || p.tok != leftParen {
+			p.posErr(iface.Lbrace, "malformed interface method list")
+			return nil
+		}
+	}
+}
+
+func bashppInterfaceParams(fields []*BashPPField) []*BashPPField {
+	out := make([]*BashPPField, len(fields))
+	for i, field := range fields {
+		if field.FieldType != nil || len(field.Names) != 1 || !bashppTypeName(field.Names[0].Value) {
+			out[i] = field
+			continue
+		}
+		copyField := *field
+		copyField.FieldType = field.Names[0]
+		copyField.FieldTypeExpr = bashppTypeExpr(&Word{Parts: []WordPart{field.Names[0]}})
+		copyField.Names = nil
+		out[i] = &copyField
+	}
+	return out
+}
+
 func bashppInterfaceMethodSpecs(words []*Word) []*BashPPMethodSpec {
 	if len(words) == 0 {
 		return []*BashPPMethodSpec{}
+	}
+	if methods := bashppGoInterfaceMethodSpecs(words); methods != nil {
+		return methods
 	}
 	if len(words) != 3 && len(words)%2 != 0 {
 		return nil
@@ -245,6 +311,39 @@ func bashppInterfaceMethodSpecs(words []*Word) []*BashPPMethodSpec {
 		methods = append(methods, spec)
 	}
 	return methods
+}
+
+func bashppGoInterfaceMethodSpecs(words []*Word) []*BashPPMethodSpec {
+	body := bashppJoinWords(words)
+	text, positions, ok := bashppScalarSource(body)
+	if !ok {
+		return nil
+	}
+	const prefix = "interface{"
+	expr, err := goparser.ParseExpr(prefix + text + "}")
+	if err != nil {
+		return nil
+	}
+	ifaceAST, ok := expr.(*goast.InterfaceType)
+	if !ok || !bashppSupportedTypeAST(expr) {
+		return nil
+	}
+	pos := func(p gotoken.Pos) Pos {
+		idx := int(p) - len(prefix) - 1
+		if idx < 0 || idx >= len(positions) {
+			return Pos{}
+		}
+		return positions[idx]
+	}
+	lit := func(p, end gotoken.Pos, value string) *Lit {
+		return &Lit{ValuePos: pos(p), ValueEnd: pos(end), Value: value}
+	}
+	converted := bashppConvertType(ifaceAST, pos, lit)
+	if converted == nil {
+		return nil
+	}
+	iface := converted.(*BashPPInterfaceType)
+	return iface.Methods
 }
 
 func bashppTypeLit(w *Word) *Lit {

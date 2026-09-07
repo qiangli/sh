@@ -352,6 +352,9 @@ func (r *Runner) bashPPLookupFunc(c *syntax.BashPPCall) (*bashPPFunc, bool) {
 		// deterministic even when the import registry contains the same name.
 		if _, localType := r.bashPPTypes[owner]; !localType {
 			if cell := r.bashPPScope.lookup(owner); cell != nil {
+				if cell.interfaceValue != nil {
+					return r.bashPPBindInterfaceMethod(cell.interfaceValue, method)
+				}
 				if cell.typeName == "" {
 					r.errf("%s.%s: %s is a local value with no methods\n", owner, method, owner)
 					r.exit.code = 2
@@ -424,6 +427,20 @@ func (r *Runner) bashPPCellForWord(w *syntax.Word) *bashPPCell {
 		return nil
 	}
 	return r.bashPPScope.lookup(lit.Value)
+}
+
+func (r *Runner) bashPPBindInterfaceMethod(iv *bashPPInterfaceValue, method string) (*bashPPFunc, bool) {
+	if iv == nil || iv.nilIface {
+		r.errf("nil interface has no method %s\n", method)
+		r.exit.code = 2
+		return nil, false
+	}
+	if iv.cell == nil {
+		r.errf("interface value has no dynamic receiver for method %s\n", method)
+		r.exit.code = 2
+		return nil, false
+	}
+	return r.bashPPBindMethod(iv.cell, method, false)
 }
 
 func (r *Runner) bashPPBindMethod(cell *bashPPCell, method string, addressable bool) (*bashPPFunc, bool) {

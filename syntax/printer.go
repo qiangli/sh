@@ -1701,12 +1701,7 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 					p.writeLit(";")
 				}
 				p.spacedString(spec.Name.Value, spec.Name.Pos())
-				if len(spec.Params) > 0 && spec.Params[0].FieldType != nil {
-					p.spacedString(spec.Params[0].FieldType.Value, spec.Params[0].FieldType.Pos())
-				}
-				if len(spec.Results) > 0 && spec.Results[0].FieldType != nil {
-					p.spacedString(spec.Results[0].FieldType.Value, spec.Results[0].FieldType.Pos())
-				}
+				p.bashppSignature(spec.Params, spec.Results, spec.ResLparen)
 			}
 			p.spacedString("}", cmd.Rbrace)
 		}

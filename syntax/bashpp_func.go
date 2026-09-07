@@ -268,7 +268,7 @@ func (p *Parser) bashppSignature(what string) bashppSig {
 		}
 		sig.resRparen = p.pos
 		p.next()
-	case p.tok == _LitWord && !strings.HasPrefix(p.val, "{"):
+	case p.tok == _LitWord && !strings.HasPrefix(p.val, "{") && p.val != "}":
 		typ := p.lit(p.pos, p.val)
 		if !bashppTypeName(typ.Value) {
 			p.posErr(typ.Pos(), "func result must be a type name")

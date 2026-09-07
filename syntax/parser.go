@@ -4219,6 +4219,10 @@ loop:
 					s.Cmd = cmd
 					return
 				}
+				if cmd := p.bashppInterfaceForm(ce); cmd != nil {
+					s.Cmd = cmd
+					return
+				}
 				if cmd := p.bashppParenForm(ce); cmd != nil {
 					s.Cmd = cmd
 					return

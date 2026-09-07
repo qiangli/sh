@@ -373,6 +373,11 @@ func (r *Runner) bashPPBindPointerExpr(name string, expr syntax.BashPPExpr) bool
 	r.bashPPDeclareName(name, expand.Variable{Set: true, Kind: expand.String})
 	cell := r.bashPPScope.lookup(name)
 	cell.declType = typ
+	if ptrType, ok := typ.(*syntax.BashPPPointerType); ok {
+		if named, ok := ptrType.Element.(*syntax.BashPPNamedType); ok {
+			cell.typeName = named.Name.Value
+		}
+	}
 	bashPPStoreCellValue(cell, value, meta)
 	if cell.object != nil && cell.object.owner == "" {
 		cell.object.owner = name

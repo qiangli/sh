@@ -17,12 +17,18 @@ import (
 func TestBashPPInterfaceAssignmentAssertionsAndTypeSwitch(t *testing.T) {
 	const src = `type Count int
 func (v Count) Show(prefix string) { echo "$prefix:$v"; }
-type Shower interface { Show string }
+func (v Count) Label(n int) string { return "$n:$v"; }
+type Shower interface { Show(string) }
+type Labeler interface { Label(int) string }
 func main() {
 	var v Count = 7
 	var i Shower = v
 	x, ok := i.(Count)
 	echo "assert:$x:$ok"
+	var l Labeler = v
+	label := l.Label(3)
+	echo "label:$label"
+	i.Show(iface)
 	y := i.(Count)
 	y.Show(method)
 	var nilI Shower
@@ -71,7 +77,7 @@ main()
 		if err != nil {
 			t.Fatalf("bytewise=%v: err=%v output=%q", bytewise, err, out.String())
 		}
-		want := "assert:7:true\nmethod:7\nnil-interface\ntyped-nil-pointer:\ntype:7\nsubshell:7:true\n"
+		want := "assert:7:true\nlabel:3:7\niface:7\nmethod:7\nnil-interface\ntyped-nil-pointer:\ntype:7\nsubshell:7:true\n"
 		if out.String() != want {
 			t.Fatalf("bytewise=%v: output = %q, want %q", bytewise, out.String(), want)
 		}
@@ -80,10 +86,13 @@ main()
 
 func TestBashPPInterfaceDiagnostics(t *testing.T) {
 	tests := []struct{ name, src, want string }{
-		{"duplicate", "type I interface { M string M string }\n", "BASHPP-EINTERFACE-DUPLICATE: interface I declares method M more than once\n"},
-		{"missing", "type T int\nfunc (v T) N(s string) { }\ntype I interface { M string }\nfunc main() { var v T = 1; var i I = v }\nmain()\n", "BASHPP-EINTERFACE-MISSING: T does not implement interface (missing method M)\n"},
-		{"wrong signature", "type T int\nfunc (v T) M(n int) { }\ntype I interface { M string }\nfunc main() { var v T = 1; var i I = v }\nmain()\n", "BASHPP-EINTERFACE-SIGNATURE: T method M has wrong signature\n"},
-		{"assert fail", "type T int\nfunc (v T) M(s string) { }\ntype U int\nfunc (v U) M(s string) { }\ntype I interface { M string }\nfunc main() { var v T = 1; var i I = v; x := i.(U); echo $x }\nmain()\n", "BASHPP-EASSERT-FAIL: interface value has dynamic type T, not U\n"},
+		{"duplicate", "type I interface { M(int) string M(int) string }\n", "BASHPP-EINTERFACE-DUPLICATE: interface I declares method M more than once\n"},
+		{"missing", "type T int\nfunc (v T) N(s string) { }\ntype I interface { M(string) }\nfunc main() { var v T = 1; var i I = v }\nmain()\n", "BASHPP-EINTERFACE-MISSING: T does not implement interface (missing method M)\n"},
+		{"pointer receiver not in value method set", "type T int\nfunc (p *T) M() { }\ntype I interface { M() }\nfunc main() { var v T = 1; var i I = v }\nmain()\n", "BASHPP-EINTERFACE-MISSING: T does not implement interface (missing method M)\n"},
+		{"wrong signature", "type T int\nfunc (v T) M(n int) { }\ntype I interface { M(string) }\nfunc main() { var v T = 1; var i I = v }\nmain()\n", "BASHPP-EINTERFACE-SIGNATURE: T method M has wrong signature\n"},
+		{"assert fail", "type T int\nfunc (v T) M(s string) { }\ntype U int\nfunc (v U) M(s string) { }\ntype I interface { M(string) }\nfunc main() { var v T = 1; var i I = v; x := i.(U); echo $x }\nmain()\n", "BASHPP-EASSERT-FAIL: interface value has dynamic type T, not U\n"},
+		{"assert impossible", "type T int\nfunc (v T) M(s string) { }\ntype U int\ntype I interface { M(string) }\nfunc main() { var v T = 1; var i I = v; x, ok := i.(U); echo $x $ok }\nmain()\n", "BASHPP-EASSERT-IMPOSSIBLE: U cannot be asserted from I\n"},
+		{"nil interface call", "type T int\nfunc (v T) M() { }\ntype I interface { M() }\nfunc main() {\n var i I\n i.M()\n}\nmain()\n", "nil interface has no method M\n"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -105,7 +114,7 @@ func TestBashPPInterfaceDiagnostics(t *testing.T) {
 func TestBashPPInterfaceValueCopyAndAssertionZero(t *testing.T) {
 	const src = `type Box struct { N int }
 func (v Box) Show(prefix string) { echo "$prefix:${v.N}"; }
-type Shower interface { Show string }
+type Shower interface { Show(string) }
 type Other int
 func (v Other) Show(prefix string) { echo "$prefix:$v"; }
 func main() {
@@ -135,5 +144,63 @@ main()
 	}
 	if want := "copy:1\nzero:0:false\npointer:12\n"; out.String() != want {
 		t.Fatalf("output = %q, want %q", out.String(), want)
+	}
+}
+
+func TestBashPPInterfaceMethodSetsAndPointerIdentity(t *testing.T) {
+	const src = `type Box struct { N int }
+func (v Box) Value(prefix string) { printf '%s:%s\n' "$prefix" v.N; }
+func (p *Box) Set(n int) { p.N = n; }
+type Valuer interface { Value(string) }
+type Mutator interface { Set(int) }
+func main() {
+	var b Box = Box{N: 4}
+	var v Valuer = b
+	b.N = 9
+	v.Value(copy)
+	bp := &b
+	var m Mutator = bp
+	m.Set(12)
+	printf 'mutated:%s\n' b.N
+}
+main()
+`
+	f, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(src), "ifacemethods.bpp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP))
+	if err := r.Run(context.Background(), f); err != nil {
+		t.Fatalf("err=%v output=%q", err, out.String())
+	}
+	if want := "copy:4\nmutated:12\n"; out.String() != want {
+		t.Fatalf("output = %q, want %q", out.String(), want)
+	}
+}
+
+func TestBashPPInterfaceReadonlyMutationThroughAlias(t *testing.T) {
+	const src = `type Box struct { N int }
+func (p *Box) Set(n int) { p.N = n; }
+type Mutator interface { Set(int) }
+func main() {
+	var b Box = Box{N: 1}
+	alias := &b
+	var m Mutator = alias
+	readonly b
+	m.Set(2)
+	printf 'still:%s\n' b.N
+}
+main()
+`
+	f, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(src), "ifacereadonly.bpp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP))
+	err = r.Run(context.Background(), f)
+	if err != nil || out.String() != "BASHPP-EREADONLY-MUTATION: cannot mutate readonly value \"b\" through pointer\nstill:1\n" {
+		t.Fatalf("err/output = %v/%q, want readonly pointer mutation blocked with value intact", err, out.String())
 	}
 }
