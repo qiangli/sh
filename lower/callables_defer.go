@@ -26,7 +26,7 @@ func (e *emitter) sharpDefer(c *syntax.BashPPCall, f *syntax.BashPPFuncDecl) (st
 	out.WriteString("{\n")
 	values := make([]string, len(plan.Words))
 	for i, word := range plan.Words {
-		value, err := e.argument(word)
+		value, err := e.plannedCallArgument(c, word)
 		if err != nil {
 			return "", err
 		}

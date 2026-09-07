@@ -59,6 +59,9 @@ type emitter struct {
 // Compile returns canonical Go and mappings, or positioned diagnostics with no
 // partial output. It never executes the input program.
 func Compile(file *syntax.File, options Options) (*Result, error) {
+	if err := CheckProfile(file, options.Origin); err != nil {
+		return nil, err
+	}
 	if err := CheckBashSharp(file); err != nil {
 		return nil, err
 	}
@@ -1148,8 +1151,8 @@ func (e *emitter) call(c *syntax.BashPPCall) (string, error) {
 			return "", err
 		}
 		var args []string
-		for _, w := range c.Args {
-			x, err := e.valueWord(w)
+		for i := range c.Args {
+			x, err := e.callArgument(c, i)
 			if err != nil {
 				return "", err
 			}
@@ -1168,8 +1171,8 @@ func (e *emitter) call(c *syntax.BashPPCall) (string, error) {
 	}
 	if len(c.Fun) > 1 {
 		var args []string
-		for _, w := range c.Args {
-			x, err := e.argument(w)
+		for i := range c.Args {
+			x, err := e.callArgument(c, i)
 			if err != nil {
 				return "", err
 			}
@@ -1183,7 +1186,11 @@ func (e *emitter) call(c *syntax.BashPPCall) (string, error) {
 		if c.Ellipsis.IsValid() {
 			spread = "..."
 		}
-		return callee + "(" + strings.Join(args, ",") + spread + ")", nil
+		typeargs, err := e.typeArgs(c.TypeArgs)
+		if err != nil {
+			return "", err
+		}
+		return callee + typeargs + "(" + strings.Join(args, ",") + spread + ")", nil
 	}
 	name := c.Fun[0].Value
 	if !e.known(name) && !scalarType(name) && !nativeBuiltin(name) && name != "print" && name != "println" {
@@ -1211,7 +1218,7 @@ func (e *emitter) call(c *syntax.BashPPCall) (string, error) {
 			args = append(args, typ)
 			continue
 		}
-		x, err := e.argument(w)
+		x, err := e.callArgument(c, i)
 		if err != nil {
 			return "", err
 		}

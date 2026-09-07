@@ -1,6 +1,11 @@
 package lower_test
 
-import "testing"
+import (
+	"mvdan.cc/sh/v3/lower"
+	"mvdan.cc/sh/v3/syntax"
+	"strings"
+	"testing"
+)
 
 func TestCheckedNativeFailures(t *testing.T) {
 	for name, source := range map[string]string{
@@ -41,7 +46,20 @@ func main() { var v T = 1; var i I = v; x, ok := i.(U); echo $x $ok }
 main()
 `,
 	} {
-		t.Run(name, func(t *testing.T) { execute(t, compile(t, source)) })
+		t.Run(name, func(t *testing.T) {
+			if name == "assert_impossible" {
+				file, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(source), "input.bpp")
+				if err != nil {
+					t.Fatal(err)
+				}
+				result, err := lower.Compile(file, lower.Options{})
+				if result != nil || err == nil || err.Error() != "BASHPP-EASSERT-IMPOSSIBLE: U cannot be asserted from I" {
+					t.Fatalf("semantic rejection result=%v err=%v", result, err)
+				}
+				return
+			}
+			execute(t, compile(t, source))
+		})
 	}
 }
 

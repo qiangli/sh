@@ -41,8 +41,8 @@ func (e *emitter) methodCall(c *syntax.BashPPCall) (string, error) {
 			return "", e.fail(c, CodeResult, "method expression requires its receiver argument")
 		}
 		var args []string
-		for _, arg := range c.Args {
-			value, err := e.argument(arg)
+		for i := range c.Args {
+			value, err := e.callArgument(c, i)
 			if err != nil {
 				return "", err
 			}
@@ -55,7 +55,11 @@ func (e *emitter) methodCall(c *syntax.BashPPCall) (string, error) {
 		if c.Ellipsis.IsValid() {
 			arguments[len(arguments)-1] += "..."
 		}
-		return receiver + "." + e.methodPrivateName(method.Value) + "(" + strings.Join(arguments, ",") + ")", nil
+		typeargs, err := e.typeArgs(c.TypeArgs)
+		if err != nil {
+			return "", err
+		}
+		return receiver + "." + e.methodPrivateName(method.Value) + typeargs + "(" + strings.Join(arguments, ",") + ")", nil
 	}
 	copy := *c
 	copy.Fun = []*syntax.Lit{{Value: receiver}, method}

@@ -189,8 +189,8 @@ func (e *emitter) programGo(n *syntax.BashPPGo) (string, error) {
 	var out strings.Builder
 	fmt.Fprintf(&out, "{\n%staskCallee := %s\n", e.prefix, callee)
 	var args []string
-	for i, w := range c.Args {
-		value, err := e.argument(w)
+	for i := range c.Args {
+		value, err := e.callArgument(c, i)
 		if err != nil {
 			return "", err
 		}

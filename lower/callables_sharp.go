@@ -58,7 +58,7 @@ func (e *emitter) sharpCall(c *syntax.BashPPCall, f *syntax.BashPPFuncDecl) (str
 	}
 	var values []string
 	for i, w := range plan.Words {
-		value, err := e.argument(w)
+		value, err := e.plannedCallArgument(c, w)
 		if err != nil {
 			return "", err
 		}

@@ -94,8 +94,8 @@ func (e *emitter) guardedBuiltin(c *syntax.BashPPCall) (string, bool, error) {
 		return "", false, nil
 	}
 	var args []string
-	for _, word := range c.Args {
-		value, err := e.argument(word)
+	for i := range c.Args {
+		value, err := e.callArgument(c, i)
 		if err != nil {
 			return "", true, err
 		}
