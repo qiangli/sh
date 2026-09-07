@@ -156,6 +156,24 @@ func pathWithin(root, name string) bool {
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
+// bashPPImportTempSource keeps generated package-main files out of the
+// importer's package. A private dot directory is ignored by go list/build ./...
+// while remaining inside the importer's module/internal visibility tree.
+// Callers keep both build and execution cwd at the original request directory.
+func bashPPImportTempSource(dir, pattern string) (*os.File, func(), error) {
+	work, err := os.MkdirTemp(dir, ".bashpp-eval-")
+	if err != nil {
+		return nil, nil, err
+	}
+	cleanup := func() { _ = os.RemoveAll(work) }
+	f, err := os.CreateTemp(work, pattern)
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	return f, cleanup, nil
+}
+
 func (nativeBashPPEvaluator) Call(ctx context.Context, req bashPPEvalRequest) error {
 	if len(req.Selector) == 0 {
 		return errors.New("bash++: selector call requires an imported package")
@@ -233,12 +251,12 @@ func (nativeBashPPEvaluator) Call(ctx context.Context, req bashPPEvalRequest) er
 	if err := format.Node(&src, token.NewFileSet(), file); err != nil {
 		return fmt.Errorf("bash++: construct selector call: %w", err)
 	}
-	f, err := os.CreateTemp(req.Dir, "bashpp-*.go")
+	f, cleanup, err := bashPPImportTempSource(req.Dir, "bashpp-*.go")
 	if err != nil {
 		return err
 	}
 	name := f.Name()
-	defer os.Remove(name)
+	defer cleanup()
 	if _, err := io.Copy(f, &src); err != nil {
 		f.Close()
 		return err
@@ -250,7 +268,6 @@ func (nativeBashPPEvaluator) Call(ctx context.Context, req bashPPEvalRequest) er
 	if runtime.GOOS == "windows" {
 		bin += ".exe"
 	}
-	defer os.Remove(bin)
 	build := exec.CommandContext(ctx, req.Go, "build", "-o", bin, name)
 	build.Dir, build.Env = req.Dir, req.Env
 	build.Stdout, build.Stderr = req.Stdout, req.Stderr
@@ -313,12 +330,12 @@ func (nativeBashPPEvaluator) Values(ctx context.Context, req bashPPEvalRequest) 
 	if err != nil {
 		return nil, fmt.Errorf("bash++: construct value call: %w", err)
 	}
-	f, err := os.CreateTemp(req.Dir, "bashpp-values-*.go")
+	f, cleanup, err := bashPPImportTempSource(req.Dir, "bashpp-values-*.go")
 	if err != nil {
 		return nil, err
 	}
 	name := f.Name()
-	defer os.Remove(name)
+	defer cleanup()
 	if _, err := f.Write(formatted); err != nil {
 		f.Close()
 		return nil, err
@@ -330,7 +347,6 @@ func (nativeBashPPEvaluator) Values(ctx context.Context, req bashPPEvalRequest) 
 	if runtime.GOOS == "windows" {
 		bin += ".exe"
 	}
-	defer os.Remove(bin)
 	build := exec.CommandContext(ctx, req.Go, "build", "-o", bin, name)
 	build.Dir, build.Env, build.Stdout, build.Stderr = req.Dir, req.Env, req.Stdout, req.Stderr
 	if err := build.Run(); err != nil {
