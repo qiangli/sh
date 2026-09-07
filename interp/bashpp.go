@@ -161,7 +161,7 @@ func (r *Runner) SetObject(name string, val any) error {
 	if !r.objectsEnabled() {
 		return ErrObjectsUnsupported
 	}
-	if !syntax.ValidName(name) {
+	if !syntax.BashPPValidIdent(name) {
 		return fmt.Errorf("invalid variable name: %q", name)
 	}
 	if err := expand.ValidObject(val); err != nil {

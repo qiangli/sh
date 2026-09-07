@@ -4,6 +4,7 @@
 package interp_test
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -27,4 +28,21 @@ func 计算(参数 int) {
 	r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP))
 	bashPPRun(t, r, src)
 	qt.Assert(t, qt.Equals(out.String(), "6 7\n"))
+}
+
+func TestBashPPUnicodeSetObjectRoundTripAndValidation(t *testing.T) {
+	r, err := interp.New(interp.Lang(syntax.LangBashPP))
+	qt.Assert(t, qt.IsNil(err))
+	want := map[string]any{"值": 7}
+	qt.Assert(t, qt.IsNil(r.SetObject("数据２", want)))
+	got, ok := r.Object("数据２")
+	qt.Assert(t, qt.IsTrue(ok))
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Object Unicode round trip = %#v, want %#v", got, want)
+	}
+	for _, invalid := range []string{"for", "２数据", string([]byte{0xff})} {
+		if err := r.SetObject(invalid, want); err == nil {
+			t.Errorf("SetObject(%q) unexpectedly succeeded", invalid)
+		}
+	}
 }
