@@ -159,6 +159,22 @@ func Send[T any](ctx context.Context, session *Session, scope *ChannelScope, cha
 		return err
 	}
 	defer finish()
+	// A ready outcome belongs to the current launch. Arm only if the first
+	// selection finds no ready operation; otherwise a following task can start
+	// before this task reports an immediate channel/body failure.
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-channelOwnerDone(session):
+		return session.group.ctx.Err()
+	case <-scope.Done():
+		return ErrChannelScopeClosed
+	case <-closed:
+		return errors.New("bash++: send on closed channel")
+	case channel <- value:
+		return nil
+	default:
+	}
 	session.Arm()
 	select {
 	case <-ctx.Done():
@@ -180,6 +196,22 @@ func Receive[T any](ctx context.Context, session *Session, scope *ChannelScope, 
 	if _, err = scope.state(reflect.ValueOf(channel)); err != nil {
 		return
 	}
+	select {
+	case <-ctx.Done():
+		err = ctx.Err()
+	case <-channelOwnerDone(session):
+		err = session.group.ctx.Err()
+	case <-scope.Done():
+		err = ErrChannelScopeClosed
+	case value, ok = <-channel:
+	default:
+		// Cancellation and channel closure remain observable across the arm:
+		// their notifications persist until the blocking selection consumes one.
+		goto blocking
+	}
+	return
+
+blocking:
 	session.Arm()
 	select {
 	case <-ctx.Done():
@@ -227,8 +259,10 @@ func SelectChannels(ctx context.Context, session *Session, scope *ChannelScope, 
 		return
 	}
 	var native []reflect.SelectCase
+	hasDefault := false
 	for _, entry := range cases {
 		if entry.direction == reflect.SelectDefault {
+			hasDefault = true
 			native = append(native, reflect.SelectCase{Dir: reflect.SelectDefault})
 			continue
 		}
@@ -267,8 +301,18 @@ func SelectChannels(ctx context.Context, session *Session, scope *ChannelScope, 
 			addCancel(closed)
 		}
 	}
-	session.Arm()
-	index, value, ok := reflect.Select(native)
+	// An authored default makes the selection nonblocking. Otherwise append a
+	// temporary default to probe all ready communication/cancellation cases in
+	// one native selection, retaining Go's choice among ready cases.
+	probe := native
+	if !hasDefault {
+		probe = append(probe, reflect.SelectCase{Dir: reflect.SelectDefault})
+	}
+	index, value, ok := reflect.Select(probe)
+	if !hasDefault && index == len(native) {
+		session.Arm()
+		index, value, ok = reflect.Select(native)
+	}
 	if index < len(cases) {
 		if closedSends[index] {
 			return selection, errors.New("bash++: send on closed channel")
