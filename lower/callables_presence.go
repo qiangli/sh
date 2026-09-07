@@ -78,6 +78,17 @@ func (e *emitter) checkedSelector(n *syntax.BashPPSelectorExpr) (string, error) 
 				return e.runtimeMethodHandle(n, base, typ, n.Sel.Value)
 			}
 		}
+		// A method the receiver reaches only through an embedded interface is
+		// neither declared on it nor named by it, so neither branch above sees
+		// it, yet it is still a handle carrying the private ABI rather than the
+		// public method value this selector would otherwise fall through to.
+		promoted, err := e.promotedInterfaceSource(n, typ, n.Sel.Value)
+		if err != nil {
+			return "", err
+		}
+		if promoted != nil {
+			return e.runtimeMethodHandle(n, base, typ, n.Sel.Value)
+		}
 	}
 	if info := e.projectionExpr(n.X); info.kind == projectPointer {
 		base = e.checkedDeref(n, base, "")

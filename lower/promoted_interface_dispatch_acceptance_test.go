@@ -46,6 +46,26 @@ agentic { h.Speak(); }
 `,
 			wantOut: "spoke\n",
 		},
+		// A handle taken on a promoted method resolves through the embedded
+		// interface too, so it carries the private ABI and the invocation is
+		// checked against the frame it is made from. Falling through to the
+		// public method value here would both drop the authority and give the
+		// handle a type the call site cannot invoke.
+		{
+			name: "promoted_method_handle",
+			source: `type Speaker interface { Speak() }
+type Voice int
+agentic func (v Voice) Speak() { echo handled }
+type Outer struct { Speaker }
+var v Voice = 1
+h := Outer{Speaker: v}
+agentic {
+ speak := h.Speak
+ speak()
+}
+`,
+			wantOut: "handled\n",
+		},
 		// Promotion through a struct that itself embeds the interface: Go
 		// resolves the selector at the shallowest depth that has it, and so does
 		// the lowering.
