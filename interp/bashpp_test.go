@@ -110,13 +110,28 @@ func TestBashPPStory204ShortDeclAtomicAcrossProducers(t *testing.T) {
 	}{
 		{
 			"function results reuse existing and add new",
-			"func pair() (int, int) { return 2, 3 }\nx := 1\nx, y := pair()\nprintf '%s:%s' \"$x\" \"$y\"\n",
+			"func pair() (int, int) {\n inner := 3\n return 2, inner\n}\nx := 1\nx, y := pair()\nprintf '%s:%s' \"$x\" \"$y\"\n",
 			"2:3",
 		},
 		{
 			"function result rollback on readonly target",
 			"func pair() (int, int) { return 2, 3 }\nconst x = 1\ny, x := pair()\nprintf '|%s|%s|' \"${y-unset}\" \"$x\"\n",
 			"x: cannot assign to constant\n|unset|1|",
+		},
+		{
+			"status-restoring producer cannot erase binding failure",
+			"func main() {\n const x = 1\n x := recover()\n printf 'status=%s x=%s' \"$?\" \"$x\"\n}\nmain()\n",
+			"x: cannot assign to constant\nstatus=2 x=1",
+		},
+		{
+			"typed reuse retains identity",
+			"type Count int\nfunc (c Count) Value() int { return c }\nfunc pair() (Count, int) { return 2, 3 }\nvar x Count = 1\nx, y := pair()\nn := x.Value()\nprintf '%s:%s' \"$n\" \"$y\"\n",
+			"2:3",
+		},
+		{
+			"typed reuse mismatch rolls back tuple",
+			"type Count int\nfunc pair() (string, int) { return bad, 3 }\nvar x Count = 1\nx, y := pair()\nprintf '|%s|%s|' \"$x\" \"${y-unset}\"\n",
+			"BASHPP-EASSIGN-TYPE: cannot assign string to Count\n|1|unset|",
 		},
 		{
 			"builtin no-new leaves old value",
@@ -134,6 +149,37 @@ func TestBashPPStory204ShortDeclAtomicAcrossProducers(t *testing.T) {
 			r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP))
 			bashPPRun(t, r, tc.src)
 			qt.Assert(t, qt.Equals(out.String(), tc.want))
+		})
+	}
+}
+
+func TestBashPPStory204TypedConstRequiresConstantExpression(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			"constant may depend on constant",
+			"const A int = 2\nconst B int = A\nprintf '%s' \"$B\"\n",
+			"2",
+		},
+		{
+			"mutable identifier",
+			"var n int = 2\nconst K int = n\n",
+			"BASHPP-ECONST-EXPR:",
+		},
+		{
+			"function-derived identifier",
+			"func value() int { return 2 }\nn := value()\nconst K int = n\n",
+			"BASHPP-ECONST-EXPR:",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out strings.Builder
+			r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP))
+			bashPPRun(t, r, tc.src)
+			qt.Assert(t, qt.StringContains(out.String(), tc.want))
 		})
 	}
 }

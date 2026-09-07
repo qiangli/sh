@@ -1372,6 +1372,7 @@ func (r *Runner) bashPPShortDeclCall(ctx context.Context, d *syntax.BashPPShortD
 		return
 	}
 	resultTypes := bashppResultTypes(fn.results())
+	resultTypeExprs := bashppResultTypeExprs(fn.results())
 	for i, lhs := range d.Lhs {
 		if !syntax.ValidName(lhs.Value) {
 			r.errf("invalid variable name: %q\n", lhs.Value)
@@ -1379,6 +1380,9 @@ func (r *Runner) bashPPShortDeclCall(ctx context.Context, d *syntax.BashPPShortD
 			return
 		}
 		r.bashPPDeclareName(lhs.Value, expand.Variable{Set: true, Kind: expand.String, Str: results[i]})
+		if i < len(resultTypeExprs) {
+			r.bashPPScope.lookup(lhs.Value).declType = resultTypeExprs[i]
+		}
 		if i < len(resultTypes) {
 			declared := resultTypes[i]
 			base := strings.TrimPrefix(declared, "*")
@@ -1841,6 +1845,20 @@ func bashppResultTypes(fields []*syntax.BashPPField) []string {
 		}
 		for range count {
 			types = append(types, declared)
+		}
+	}
+	return types
+}
+
+func bashppResultTypeExprs(fields []*syntax.BashPPField) []syntax.BashPPTypeExpr {
+	var types []syntax.BashPPTypeExpr
+	for _, field := range fields {
+		count := len(field.Names)
+		if count == 0 {
+			count = 1
+		}
+		for range count {
+			types = append(types, field.FieldTypeExpr)
 		}
 	}
 	return types

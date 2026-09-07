@@ -372,6 +372,9 @@ func (r *Runner) bashPPTypedScalarDeclValue(d *syntax.BashPPDecl) (expand.Variab
 		}
 		return expand.Variable{Set: true, Kind: expand.String, Str: zero}, true, nil
 	}
+	if d.Site == syntax.StartConst && !r.bashPPConstantScalarExpr(d.InitExpr, base) {
+		return expand.Variable{}, true, fmt.Errorf("BASHPP-ECONST-EXPR: const initializer is not a constant expression")
+	}
 	var value bashPPScalar
 	var err error
 	// Bash++ has always allowed an unquoted shell word as a string value
@@ -398,6 +401,28 @@ func (r *Runner) bashPPTypedScalarDeclValue(d *syntax.BashPPDecl) (expand.Variab
 		return expand.Variable{}, true, err
 	}
 	return expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarString(converted.value)}, true, nil
+}
+
+func (r *Runner) bashPPConstantScalarExpr(expr syntax.BashPPExpr, targetBase string) bool {
+	switch x := expr.(type) {
+	case *syntax.BashPPBasicLit:
+		return true
+	case *syntax.BashPPIdent:
+		if x.Name.Value == "true" || x.Name.Value == "false" {
+			return true
+		}
+		cell := r.bashPPScope.lookup(x.Name.Value)
+		return cell != nil && cell.constant || cell == nil && targetBase == "string"
+	case *syntax.BashPPParenExpr:
+		return r.bashPPConstantScalarExpr(x.X, targetBase)
+	case *syntax.BashPPUnaryExpr:
+		return r.bashPPConstantScalarExpr(x.X, targetBase)
+	case *syntax.BashPPBinaryExpr:
+		return r.bashPPConstantScalarExpr(x.X, targetBase) && r.bashPPConstantScalarExpr(x.Y, targetBase)
+	case *syntax.BashPPConvertExpr:
+		return r.bashPPConstantScalarExpr(x.X, targetBase)
+	}
+	return false
 }
 
 func bashPPUntypedScalarAssignable(base string, value constant.Value) bool {
@@ -944,8 +969,28 @@ func (r *Runner) bashPPRollbackShortDecl(txn *bashPPShortDeclTxn) {
 
 func (r *Runner) bashPPEndShortDecl(txn *bashPPShortDeclTxn, pos syntax.Pos) {
 	r.bashPPShortTxn = txn.parent
+	if !txn.failed && len(txn.bound) == txn.expected {
+		for name := range txn.bound {
+			cell, reused := txn.entries[name]
+			if !reused {
+				continue
+			}
+			before := txn.cells[cell]
+			if err := r.bashPPValidateReusedShortValue(&before, cell); err != nil {
+				r.errf("%s%v\n", r.bashErrPrefix(txn.positions[name]), err)
+				txn.failed = true
+				break
+			}
+			// := assigns an existing cell; it cannot replace that cell's
+			// declared identity with metadata belonging to the producer.
+			cell.declType, cell.typeName = before.declType, before.typeName
+		}
+	}
 	if txn.failed || len(txn.bound) != txn.expected {
 		r.bashPPRollbackShortDecl(txn)
+		if txn.failed {
+			r.exit = exitStatus{code: 2}
+		}
 		return
 	}
 	if !txn.newName {
@@ -953,6 +998,42 @@ func (r *Runner) bashPPEndShortDecl(txn *bashPPShortDeclTxn, pos syntax.Pos) {
 		r.errf("%sBASHPP-ESHORT-NONEW: no new variables on left side of :=\n", r.bashErrPrefix(pos))
 		r.exit = exitStatus{code: 2}
 	}
+}
+
+func (r *Runner) bashPPValidateReusedShortValue(target, candidate *bashPPCell) error {
+	if target.declType == nil {
+		return nil
+	}
+	actual := candidate.declType
+	if actual == nil && candidate.typeName != "" {
+		actual = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: candidate.typeName}}
+		if candidate.pointer {
+			actual = &syntax.BashPPPointerType{Element: actual}
+		}
+	}
+	if actual == nil && candidate.valueMeta != nil {
+		actual = candidate.valueMeta.typ
+	}
+	if actual != nil {
+		if !r.bashPPTypeAssignable(actual, target.declType) {
+			return fmt.Errorf("BASHPP-EASSIGN-TYPE: cannot assign %s to %s", bashPPTypeText(actual), bashPPTypeText(target.declType))
+		}
+		return nil
+	}
+	shape, ok := r.bashPPUnderlyingType(target.declType).(*syntax.BashPPNamedType)
+	if !ok || !bashPPBuiltinType(shape.Name.Value) || candidate.vr.Kind != expand.String {
+		return fmt.Errorf("BASHPP-EASSIGN-TYPE: untyped result is not assignable to %s", bashPPTypeText(target.declType))
+	}
+	value := bashPPScalarFromString(candidate.vr.Str)
+	if !bashPPUntypedScalarAssignable(shape.Name.Value, value.value) {
+		return fmt.Errorf("BASHPP-EASSIGN-TYPE: cannot assign %s to %s", value.value.Kind(), bashPPTypeText(target.declType))
+	}
+	converted, err := r.bashPPConvertScalar(shape.Name.Value, value)
+	if err != nil {
+		return err
+	}
+	candidate.vr.Str = bashPPScalarString(converted.value)
+	return nil
 }
 
 func (r *Runner) bashPPShortDeclMethodValue(d *syntax.BashPPShortDecl) {
@@ -1271,8 +1352,10 @@ func (r *Runner) bashPPDeclareName(name string, vr expand.Variable) {
 				txn.failed = true
 				return
 			}
-			declType, typeName := cell.declType, cell.typeName
-			*cell = bashPPCell{vr: vr, declType: declType, typeName: typeName}
+			// The producer decorates a fresh candidate cell. The transaction
+			// validates that candidate against the saved target identity and
+			// restores the target identity only at commit.
+			*cell = bashPPCell{vr: vr}
 			txn.bound[name] = true
 			return
 		}

@@ -192,6 +192,8 @@ func (r *Runner) bashPPBindResultPair(lhs []*syntax.Lit, value expand.Variable, 
 			if cell := r.bashPPScope.lookup(name); cell != nil {
 				cell.object = &bashPPObjectIdentity{owner: name}
 			}
+		} else if cell := r.bashPPScope.lookup(name); cell != nil {
+			cell.declType = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "string"}}
 		}
 	}
 	if name := lhs[1].Value; name != "_" {
@@ -199,6 +201,7 @@ func (r *Runner) bashPPBindResultPair(lhs []*syntax.Lit, value expand.Variable, 
 		if r.exit.code != 0 {
 			return
 		}
+		r.bashPPScope.lookup(name).declType = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "error"}}
 	}
 	r.exit = exitStatus{}
 }
