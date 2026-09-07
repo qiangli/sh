@@ -33,12 +33,15 @@ const (
 	CodeProfileBuiltinType       = "BASHPP-EBUILTIN-TYPE"
 	CodeProfileExprConvert       = "BASHPP-EEXPR-CONVERT"
 	CodeProfileForCond           = "BASHPP-EFOR-COND"
+	CodeProfileGenericParam      = "BASHPP-EGENERIC-PARAM"
 	CodeProfileGenericConstraint = "BASHPP-EGENERIC-CONSTRAINT"
 	CodeProfileGenericInfer      = "BASHPP-EGENERIC-INFER"
 	CodeProfileIfCond            = "BASHPP-EIF-COND"
 	CodeProfileInterfaceMissing  = "BASHPP-EINTERFACE-MISSING"
+	CodeProfileInterfaceTypeSet  = "BASHPP-EINTERFACE-TYPESET"
 	CodeProfileRangeArity        = "BASHPP-ERANGE-ARITY"
 	CodeProfileShortNoNew        = "BASHPP-ESHORT-NONEW"
+	CodeProfileStructKey         = "BASHPP-ESTRUCT-KEY"
 	CodeProfileStructMixed       = "BASHPP-ESTRUCT-MIXED"
 	CodeProfileSwitchType        = "BASHPP-ESWITCH-TYPE"
 )
@@ -463,6 +466,9 @@ func (c *profileChecker) cmd(cmd syntax.Command) {
 }
 
 func (c *profileChecker) funcDecl(d *syntax.BashPPFuncDecl) {
+	if c.checkTypeParams(d.TypeParams) {
+		return
+	}
 	// A method's receiver type must be declared. This is the one source
 	// diagnostic in the certified slice that carries no BASHPP code, so it is
 	// reported with an empty Code and its exact legacy text.
@@ -605,6 +611,10 @@ func (c *profileChecker) decl(d *syntax.BashPPDecl) {
 		return
 	}
 	if d.Kw.Value == "type" {
+		c.typeDecl(d)
+		return
+	}
+	if d.Site == syntax.StartVar && d.DeclTypeExpr != nil && c.checkValueType(d.DeclTypeExpr, d.Pos()) {
 		return
 	}
 	c.expr(d.InitExpr)
@@ -655,6 +665,188 @@ func (c *profileChecker) checkScalarDeclValue(declType syntax.BashPPTypeExpr, in
 	if msg, ok := profileConvertScalar(base, value.value); !ok {
 		c.emit(CodeProfileExprConvert, "BashPPDecl", pos, true, "%s", msg)
 		return true
+	}
+	return false
+}
+
+// checkTypeParams rejects a type-parameter list that declares a name twice. It
+// reports whether it produced a diagnostic.
+func (c *profileChecker) checkTypeParams(params []*syntax.BashPPTypeParam) bool {
+	seen := map[string]bool{}
+	for _, group := range params {
+		for _, name := range group.Names {
+			if name.Value == "_" {
+				continue
+			}
+			if seen[name.Value] {
+				c.emit(CodeProfileGenericParam, "BashPPTypeParam", name.Pos(), false,
+					"type parameter %s redeclared", name.Value)
+				return true
+			}
+			seen[name.Value] = true
+		}
+	}
+	return false
+}
+
+// typeDecl applies the rules a type declaration alone can decide.
+func (c *profileChecker) typeDecl(d *syntax.BashPPDecl) {
+	if c.checkTypeParams(d.TypeParams) {
+		return
+	}
+	// Interface and enum declarations have their own validations, which are
+	// not part of this slice; neither can form a representation cycle.
+	if d.DeclType != nil && (d.DeclType.Value == "interface" || d.DeclType.Value == "enum") {
+		return
+	}
+	if d.Name == nil || d.DeclTypeExpr == nil {
+		return
+	}
+	// A named type whose own representation contains itself has no finite size.
+	// Slices, maps, pointers, channels and functions are indirections, so they
+	// break the cycle; an array element and a struct field do not.
+	active, direct := map[string]bool{d.Name.Value: true}, map[string]bool{d.Name.Value: true}
+	if c.representationCycle(d.DeclTypeExpr, active, direct) == profileCycleFound {
+		c.emit("", "BashPPDecl", d.Pos(), true, "cyclic type declaration: %s", d.Name.Value)
+	}
+}
+
+type profileCycleResult int
+
+const (
+	profileCycleNone profileCycleResult = iota
+	profileCycleFound
+	// profileCycleUnknown is returned as soon as the walk meets a type it
+	// cannot resolve. Absence of a cycle is never concluded from a partial
+	// walk, but neither is its presence.
+	profileCycleUnknown
+)
+
+func (c *profileChecker) representationCycle(t syntax.BashPPTypeExpr, active, direct map[string]bool) profileCycleResult {
+	switch x := t.(type) {
+	case nil:
+		return profileCycleUnknown
+	case *syntax.BashPPTypeParamType, *syntax.BashPPInterfaceType,
+		*syntax.BashPPUnionType, *syntax.BashPPApproxType, *syntax.BashPPFuncType:
+		return profileCycleNone
+	case *syntax.BashPPPointerType:
+		// An indirection: the referent is a separate allocation, so the chain
+		// of direct containment restarts here.
+		return c.representationCycle(x.Element, active, map[string]bool{})
+	case *syntax.BashPPCollectionType:
+		if x.Kind == "array" {
+			return c.representationCycle(x.Element, active, direct)
+		}
+		return c.representationCycle(x.Element, active, map[string]bool{})
+	case *syntax.BashPPStructType:
+		worst := profileCycleNone
+		for _, f := range x.Fields {
+			switch c.representationCycle(f.FieldTypeExpr, active, direct) {
+			case profileCycleFound:
+				return profileCycleFound
+			case profileCycleUnknown:
+				worst = profileCycleUnknown
+			}
+		}
+		return worst
+	case *syntax.BashPPNamedType:
+		name := x.Name.Value
+		if profileBuiltinTypeName(name) {
+			return profileCycleNone
+		}
+		if active[name] {
+			if direct[name] {
+				return profileCycleFound
+			}
+			return profileCycleNone
+		}
+		info, ok := c.types[name]
+		if !ok || info.underlying == nil {
+			return profileCycleUnknown
+		}
+		active[name] = true
+		defer delete(active, name)
+		next := map[string]bool{name: true}
+		for k := range direct {
+			next[k] = true
+		}
+		return c.representationCycle(info.underlying, active, next)
+	}
+	return profileCycleUnknown
+}
+
+// checkValueType rejects a declared value type that is, or contains, a
+// constraint interface — one whose elements include type-set terms rather than
+// only methods. Such an interface has no value representation.
+func (c *profileChecker) checkValueType(t syntax.BashPPTypeExpr, pos syntax.Pos) bool {
+	if !c.constraintValueType(t, map[string]bool{}) {
+		return false
+	}
+	c.emit(CodeProfileInterfaceTypeSet, "BashPPDecl", pos, true,
+		"constraint interface cannot be used as a value type")
+	return true
+}
+
+func (c *profileChecker) constraintValueType(t syntax.BashPPTypeExpr, seen map[string]bool) bool {
+	switch x := t.(type) {
+	case *syntax.BashPPInterfaceType:
+		return c.interfaceHasTypeTerms(x, map[*syntax.BashPPInterfaceType]bool{})
+	case *syntax.BashPPPointerType:
+		return c.constraintValueType(x.Element, seen)
+	case *syntax.BashPPCollectionType:
+		return c.constraintValueType(x.Key, seen) || c.constraintValueType(x.Element, seen)
+	case *syntax.BashPPStructType:
+		for _, f := range x.Fields {
+			if f.FieldTypeExpr != nil && c.constraintValueType(f.FieldTypeExpr, seen) {
+				return true
+			}
+		}
+	case *syntax.BashPPNamedType:
+		if seen[x.Name.Value] {
+			return false
+		}
+		seen[x.Name.Value] = true
+		info, ok := c.types[x.Name.Value]
+		if !ok || info.underlying == nil {
+			return false
+		}
+		return c.constraintValueType(info.underlying, seen)
+	}
+	return false
+}
+
+// interfaceHasTypeTerms reports whether an interface constrains a type set, as
+// opposed to requiring methods. A union or approximation term does so directly;
+// an embedded interface does so when it in turn has one.
+func (c *profileChecker) interfaceHasTypeTerms(iface *syntax.BashPPInterfaceType, seen map[*syntax.BashPPInterfaceType]bool) bool {
+	if iface == nil || seen[iface] {
+		return false
+	}
+	seen[iface] = true
+	elems := iface.Elems
+	if len(elems) == 0 {
+		for _, spec := range iface.Methods {
+			elems = append(elems, &syntax.BashPPInterfaceElem{Method: spec})
+		}
+	}
+	for _, elem := range elems {
+		if elem.Method != nil || elem.Embedded == nil {
+			continue
+		}
+		switch elem.Embedded.(type) {
+		case *syntax.BashPPUnionType, *syntax.BashPPApproxType:
+			return true
+		}
+		if embedded, ok := c.interfaceOf(elem.Embedded); ok {
+			if c.interfaceHasTypeTerms(embedded, seen) {
+				return true
+			}
+			continue
+		}
+		// A bare named type term is a type-set element too.
+		if _, named := elem.Embedded.(*syntax.BashPPNamedType); named {
+			return true
+		}
 	}
 	return false
 }
@@ -944,6 +1136,16 @@ func (c *profileChecker) checkCompositeLit(lit *syntax.BashPPCompositeLit) {
 	if keyed && positional {
 		c.emit(CodeProfileStructMixed, "BashPPCompositeLit", lit.Pos(), false,
 			"%s literal cannot mix keyed and positional fields", name)
+		return
+	}
+	// A field key names one field of this struct; a selector names a path
+	// through another value, which is not a key.
+	for _, elem := range lit.Elems {
+		if _, selector := elem.Key.(*syntax.BashPPSelectorExpr); selector {
+			c.emit(CodeProfileStructKey, "BashPPCompositeElem", elem.Key.Pos(), true,
+				"%s literal field key must be an identifier, not a selector expression", name)
+			return
+		}
 	}
 }
 

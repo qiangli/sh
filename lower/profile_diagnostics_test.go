@@ -1612,3 +1612,133 @@ func TestCheckProfileMalformedOperandsAreUndecided(t *testing.T) {
 		qt.Assert(t, qt.IsNil(panicked))
 	}
 }
+
+// profileBoundaryCases are the supplemental static rejections of the C6
+// negative-boundary set. They are NOT part of the 120-row public phase
+// contract and do not change it; they extend what this checker decides.
+//
+// Every expectation is the full stderr this checkout's interpreter produces,
+// so none of it is a rewrite of a LOWER-ETYPE or go/types sentence — those say
+// something different for each of these programs.
+var profileBoundaryCases = []profileCase{{
+	id:     "GenericTypeSetInterfaceIsNotValueType",
+	origin: "input.bpp",
+	source: "type Integer interface { ~int }\nvar value Integer\n",
+	stderr: "input.bpp: line 2: BASHPP-EINTERFACE-TYPESET: constraint interface cannot be used as a value type\n",
+}, {
+	id:     "GenericDuplicateTypeParameters_Func",
+	origin: "input.bpp",
+	source: "func f[T any, T any](v T) T {\n return v\n}\n",
+	stderr: "BASHPP-EGENERIC-PARAM: type parameter T redeclared\n",
+}, {
+	id:     "GenericDuplicateTypeParameters_Struct",
+	origin: "input.bpp",
+	source: "type Box[T any, T any] struct { Value T }\n",
+	stderr: "BASHPP-EGENERIC-PARAM: type parameter T redeclared\n",
+}, {
+	id:     "GenericRepresentationCycles_Direct",
+	origin: "input.bpp",
+	source: "type Direct[T any] Direct[T]\n",
+	stderr: "input.bpp: line 1: cyclic type declaration: Direct\n",
+}, {
+	id:     "GenericRepresentationCycles_Array",
+	origin: "input.bpp",
+	source: "type Array[T any] [1]Array[T]\n",
+	stderr: "input.bpp: line 1: cyclic type declaration: Array\n",
+}, {
+	id:     "GenericRepresentationCycles_Struct",
+	origin: "input.bpp",
+	source: "type Struct[T any] struct { Next Struct[T] }\n",
+	stderr: "input.bpp: line 1: cyclic type declaration: Struct\n",
+}, {
+	id:     "StructSelectorKey_DottedKey",
+	origin: "input.bpp",
+	source: "type Leaf struct { X int }\ntype Outer struct { Leaf }\nfunc main() {\n bad := Outer{Leaf.X: 1}\n printf '%s' \"$bad\"\n}\nmain()\n",
+	stderr: "input.bpp: line 4: BASHPP-ESTRUCT-KEY: Outer literal field key must be an identifier, not a selector expression\n",
+}}
+
+// TestCheckProfileNegativeBoundaries pins the supplemental slice to the exact
+// stderr bytes, which again are not uniform: two of the four identities are
+// prefixed, one carries no code, and the interpreter is the oracle for all of
+// them rather than the lowering type checker.
+func TestCheckProfileNegativeBoundaries(t *testing.T) {
+	for _, tc := range profileBoundaryCases {
+		t.Run(tc.id, func(t *testing.T) {
+			file := parseProfile(t, tc.source, tc.origin)
+			qt.Assert(t, qt.Equals(renderProfile(lower.CheckProfile(file, tc.origin)), tc.stderr))
+
+			stderr, status := runInterpreter(t, tc.source, tc.origin)
+			qt.Assert(t, qt.Equals(stderr, tc.stderr))
+			qt.Assert(t, qt.Equals(status, 2))
+
+			// A statically rejected program produces no Go. Wiring the check
+			// into the compile hook is the core's, so this asserts only that
+			// today's Compile already emits nothing for these sources.
+			res, err := lower.Compile(parseProfile(t, tc.source, tc.origin), lower.Options{Origin: tc.origin})
+			qt.Assert(t, qt.IsNil(res))
+			qt.Assert(t, qt.IsNotNil(err))
+		})
+	}
+}
+
+// TestCheckProfileBoundaryControls are the valid neighbours of each supplemental
+// rule. A slice, map or pointer is an indirection, so a type may name itself
+// through one; a constraint interface is legal where a constraint is wanted;
+// distinct type parameters and identifier keys are ordinary.
+func TestCheckProfileBoundaryControls(t *testing.T) {
+	controls := []profileCase{
+		{id: "recursive slice", source: "type List[T any] []List[T]\nvar v List[int]\necho ok\n"},
+		{id: "recursive map", source: "type Tree[T any] map[string]Tree[T]\nvar v Tree[int]\necho ok\n"},
+		{id: "recursive pointer", source: "type Node[T any] *Node[T]\nvar v Node[int]\necho ok\n"},
+		{id: "recursive slice non-generic", source: "type L []L\nvar v L\necho ok\n"},
+		{id: "constraint used as a constraint", source: "type Integer interface { ~int }\nfunc id[T Integer](v T) T { return v }\nx := id(3)\necho $x\n"},
+		{id: "method interface as a value", source: "type R interface { Read() int }\nvar value R\necho ok\n"},
+		{id: "distinct type parameters", source: "func f[T any, U any](v T) T {\n return v\n}\necho ok\n"},
+		{id: "identifier field key", source: "type Leaf struct { X int }\nfunc main() {\n g := Leaf{X: 1}\n printf '%s' g.X\n}\nmain()\n"},
+		{id: "embedded field key", source: "type Leaf struct { X int }\ntype Outer struct { Leaf }\nfunc main() {\n g := Outer{Leaf: Leaf{X: 1}}\n printf '%s' g.X\n}\nmain()\n"},
+	}
+	for _, tc := range controls {
+		t.Run(tc.id, func(t *testing.T) {
+			const origin = "control.bpp"
+			if list := lower.CheckProfile(parseProfile(t, tc.source, origin), origin); list != nil {
+				t.Fatalf("valid boundary neighbour rejected:\n%s", renderProfile(list))
+			}
+			stderr, status := runInterpreter(t, tc.source, origin)
+			qt.Assert(t, qt.Equals(stderr, ""))
+			qt.Assert(t, qt.Equals(status, 0))
+		})
+	}
+}
+
+// TestCheckProfileCycleIsStructural renames and reshapes each cycle so nothing
+// a memorised type name could match survives, and checks the indirection rule
+// at a remove: a cycle that passes through a pointer is legal however long it
+// is, and one that does not is rejected however it is spelled.
+func TestCheckProfileCycleIsStructural(t *testing.T) {
+	rejected := []profileCase{
+		{id: "renamed direct", source: "type Alias[E any] Alias[E]\n", stderr: "c.bpp: line 1: cyclic type declaration: Alias\n"},
+		{id: "mutual through arrays", source: "type Ping struct { P [2]Pong }\ntype Pong struct { Q Ping }\n", stderr: "c.bpp: line 1: cyclic type declaration: Ping\n"},
+		{id: "nested struct field", source: "type Holder struct { Inner Wrapper }\ntype Wrapper struct { Back Holder }\n", stderr: "c.bpp: line 1: cyclic type declaration: Holder\n"},
+	}
+	for _, tc := range rejected {
+		t.Run(tc.id, func(t *testing.T) {
+			const origin = "c.bpp"
+			qt.Assert(t, qt.Equals(renderProfile(lower.CheckProfile(parseProfile(t, tc.source, origin), origin)), tc.stderr))
+		})
+	}
+	accepted := []string{
+		"type Ping struct { P *Pong }\ntype Pong struct { Q Ping }\n",
+		"type Ring struct { Next []Ring }\n",
+		"type Chain struct { Next map[string]Chain }\n",
+		"type Deep struct { A [2][3]*Deep }\n",
+	}
+	for _, source := range accepted {
+		const origin = "c.bpp"
+		if list := lower.CheckProfile(parseProfile(t, source, origin), origin); list != nil {
+			t.Fatalf("indirected recursion rejected:\n%s\n%s", source, renderProfile(list))
+		}
+	}
+	// An unresolvable type leaves the walk undecided rather than clean.
+	const undecided = "type Partial struct { Next Elsewhere }\n"
+	qt.Assert(t, qt.IsNil(lower.CheckProfile(parseProfile(t, undecided, "c.bpp"), "c.bpp")))
+}

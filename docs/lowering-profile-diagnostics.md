@@ -169,6 +169,23 @@ declaration: its right-hand side is checked first and the declaration-form
 diagnostic follows, which is exactly the two diagnostics `cap-type-neg` records —
 in emission order, which for that case is *not* position order.
 
+## Supplemental boundary rules
+
+These are **not** part of the 120-row public phase contract and do not change
+it. They extend what the checker decides, with the same discipline: the exact
+bytes are this checkout's interpreter, never a rewrite of the `LOWER-ETYPE` or
+go/types sentence, which says something different for every one of them.
+
+| rule | fires when | rendering |
+|---|---|---|
+| `EINTERFACE-TYPESET` | a `var` whose declared type is, or contains, an interface with type-set terms (union, approximation or a bare type term) rather than only methods | prefixed |
+| `EGENERIC-PARAM` | a type-parameter list — on a function or on a type — declaring a name twice | unprefixed |
+| *(uncoded)* `cyclic type declaration: NAME` | a named type whose representation contains itself; slices, maps, pointers, channels and functions are indirections and break the cycle, an array element and a struct field do not | prefixed |
+| `ESTRUCT-KEY` | a struct literal whose field key is a selector rather than an identifier | prefixed |
+
+The cycle walk is tri-state: an unresolvable type yields *undecided*, so neither
+the presence nor the absence of a cycle is concluded from a partial walk.
+
 ## Deliberately not decided
 
 This is a frozen partial slice, not a compiler front end. It is silent on:
@@ -230,7 +247,12 @@ runtime negatives and 40 artifact-run sources. It asserts:
   interpreter and to be accepted here, plus a control confirming an unwritten
   name is still a usable constant fact;
 * that operands an operator does not support leave the expression undecided
-  rather than panicking inside `go/constant`.
+  rather than panicking inside `go/constant`;
+* the seven supplemental boundary rejections with their exact stderr, nine valid
+  neighbours (recursive slice/map/pointer types, a constraint used as a
+  constraint, a method interface used as a value, distinct type parameters and
+  identifier keys), and renamed/reshaped cycles including mutual recursion
+  through arrays and legal recursion through a pointer.
 
 `TestCheckProfileCorpusSweep` runs the full 120-row corpus when
 `BASHPP_PROFILE_CORPUS` points at the public checkout: 15 exact, 105 clean.
