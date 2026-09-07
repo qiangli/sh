@@ -22,6 +22,10 @@ type bashPPCollectionMeta struct {
 	typ      syntax.BashPPTypeExpr
 	sequence []*bashPPCollectionMeta
 	mapping  map[string]*bashPPCollectionMeta
+	// interfaceValue preserves the dynamic type and value of an interface
+	// stored inside a collection or struct. The JSON-shaped payload alone can
+	// only retain its printable shell value.
+	interfaceValue *bashPPInterfaceValue
 }
 
 func bashPPArrayMeta(meta *bashPPCollectionMeta) bool {
@@ -36,10 +40,24 @@ func bashPPValueMeta(meta *bashPPCollectionMeta) bool {
 // accidentally deep-copying slice or map elements, which remain reference
 // values. Nested array elements are copied recursively.
 func bashPPCopyArrayValue(value any, meta *bashPPCollectionMeta) (any, *bashPPCollectionMeta) {
-	if !bashPPValueMeta(meta) {
+	if meta == nil {
 		return value, meta
 	}
 	metaCopy := *meta
+	if meta.interfaceValue != nil {
+		iface := *meta.interfaceValue
+		if meta.interfaceValue.cell != nil {
+			iface.cell = bashPPCopyInterfaceCell(meta.interfaceValue.cell)
+		}
+		metaCopy.interfaceValue = &iface
+		if iface.nilIface || iface.cell == nil {
+			return "", &metaCopy
+		}
+		return iface.cell.vrValue(), &metaCopy
+	}
+	if !bashPPValueMeta(meta) {
+		return value, meta
+	}
 	if meta.kind == "struct" {
 		mapping, ok := value.(map[string]any)
 		if !ok {
@@ -49,7 +67,7 @@ func bashPPCopyArrayValue(value any, meta *bashPPCollectionMeta) (any, *bashPPCo
 		metaCopy.mapping = make(map[string]*bashPPCollectionMeta, len(meta.mapping))
 		for field, item := range mapping {
 			child := meta.mapping[field]
-			if bashPPValueMeta(child) {
+			if bashPPValueMeta(child) || child != nil && child.interfaceValue != nil {
 				item, child = bashPPCopyArrayValue(item, child)
 			}
 			out[field], metaCopy.mapping[field] = item, child
@@ -63,14 +81,14 @@ func bashPPCopyArrayValue(value any, meta *bashPPCollectionMeta) (any, *bashPPCo
 	out := append([]any(nil), sequence...)
 	metaCopy.sequence = append([]*bashPPCollectionMeta(nil), meta.sequence...)
 	for i, child := range metaCopy.sequence {
-		if bashPPValueMeta(child) {
+		if bashPPValueMeta(child) || child != nil && child.interfaceValue != nil {
 			out[i], metaCopy.sequence[i] = bashPPCopyArrayValue(out[i], child)
 		}
 	}
 	return out, &metaCopy
 }
 
-func bashPPCloneCollectionMeta(meta *bashPPCollectionMeta, seen map[*bashPPCollectionMeta]*bashPPCollectionMeta) *bashPPCollectionMeta {
+func bashPPCloneCollectionMeta(meta *bashPPCollectionMeta, seen map[*bashPPCollectionMeta]*bashPPCollectionMeta, cloneCell func(*bashPPCell) *bashPPCell) *bashPPCollectionMeta {
 	if meta == nil {
 		return nil
 	}
@@ -79,14 +97,25 @@ func bashPPCloneCollectionMeta(meta *bashPPCollectionMeta, seen map[*bashPPColle
 	}
 	out := *meta
 	seen[meta] = &out
+	if meta.interfaceValue != nil {
+		iface := *meta.interfaceValue
+		if meta.interfaceValue.cell != nil {
+			if cloneCell != nil {
+				iface.cell = cloneCell(meta.interfaceValue.cell)
+			} else {
+				iface.cell = bashPPCopyInterfaceCell(meta.interfaceValue.cell)
+			}
+		}
+		out.interfaceValue = &iface
+	}
 	out.sequence = make([]*bashPPCollectionMeta, len(meta.sequence))
 	for i, child := range meta.sequence {
-		out.sequence[i] = bashPPCloneCollectionMeta(child, seen)
+		out.sequence[i] = bashPPCloneCollectionMeta(child, seen, cloneCell)
 	}
 	if meta.mapping != nil {
 		out.mapping = make(map[string]*bashPPCollectionMeta, len(meta.mapping))
 		for key, child := range meta.mapping {
-			out.mapping[key] = bashPPCloneCollectionMeta(child, seen)
+			out.mapping[key] = bashPPCloneCollectionMeta(child, seen, cloneCell)
 		}
 	}
 	return &out

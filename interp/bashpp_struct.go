@@ -96,13 +96,13 @@ func (r *Runner) bashPPValidateTypeRepresentation(typ syntax.BashPPTypeExpr, act
 				if _, ok := bashPPEmbeddedFieldName(field); !ok {
 					return fmt.Errorf("BASHPP-ESTRUCT-EMBED: unsupported embedded field type %s", bashPPTypeText(field.FieldTypeExpr))
 				}
-				_, _, definedPointer, iface := r.bashPPEmbeddedTarget(field.FieldTypeExpr)
+				_, indirect, definedPointer, iface := r.bashPPEmbeddedTarget(field.FieldTypeExpr)
 				if definedPointer {
 					name, _ := bashPPEmbeddedFieldName(field)
 					return fmt.Errorf("BASHPP-ESTRUCT-EMBED: defined pointer type %s cannot be embedded", name)
 				}
-				if iface {
-					return fmt.Errorf("BASHPP-ESTRUCT-EMBED: embedded interface fields are not supported")
+				if indirect && iface {
+					return fmt.Errorf("BASHPP-ESTRUCT-EMBED: pointer to interface type %s cannot be embedded", bashPPTypeText(field.FieldTypeExpr))
 				}
 			}
 		}
@@ -327,6 +327,9 @@ func bashPPSetStructSelector(root map[string]any, meta *bashPPCollectionMeta, ed
 }
 
 func (r *Runner) bashPPZeroValue(typ syntax.BashPPTypeExpr) (any, *bashPPCollectionMeta) {
+	if _, ok := r.bashPPInterfaceType(typ); ok {
+		return "", &bashPPCollectionMeta{kind: "interface", typ: typ, interfaceValue: &bashPPInterfaceValue{nilIface: true}}
+	}
 	if fields, _, ok := r.bashPPStructFields(typ); ok {
 		out := make(map[string]any)
 		meta := &bashPPCollectionMeta{kind: "struct", typ: typ, mapping: make(map[string]*bashPPCollectionMeta)}
@@ -342,6 +345,17 @@ func (r *Runner) bashPPZeroValue(typ syntax.BashPPTypeExpr) (any, *bashPPCollect
 }
 
 func (r *Runner) bashPPEvalTypedValue(expr syntax.BashPPExpr, expected syntax.BashPPTypeExpr) (any, *bashPPCollectionMeta, error) {
+	if _, ok := r.bashPPInterfaceType(expected); ok {
+		iv, vr, err := r.bashPPMakeInterfaceValue(expr, expected)
+		if err != nil {
+			return nil, nil, err
+		}
+		value := any(vr.String())
+		if vr.Kind == expand.Object {
+			value = vr.Obj
+		}
+		return value, &bashPPCollectionMeta{kind: "interface", typ: expected, interfaceValue: iv}, nil
+	}
 	if pointerType, ok := r.bashPPPointerType(expected); ok {
 		if id, nilIdent := expr.(*syntax.BashPPIdent); nilIdent && id.Name.Value == "nil" {
 			return nil, bashPPPointerMeta(expected), nil
@@ -427,6 +441,15 @@ func (r *Runner) bashPPEvalTypedValue(expr syntax.BashPPExpr, expected syntax.Ba
 }
 
 func (r *Runner) bashPPCheckTypedValue(value any, meta *bashPPCollectionMeta, expected syntax.BashPPTypeExpr) error {
+	if iface, ok := r.bashPPInterfaceType(expected); ok {
+		if meta == nil || meta.interfaceValue == nil {
+			return fmt.Errorf("BASHPP-EASSIGN-MISMATCH: cannot use value as %s", bashPPTypeText(expected))
+		}
+		if meta.interfaceValue.nilIface {
+			return nil
+		}
+		return r.bashPPImplements(meta.interfaceValue.dynamic, iface)
+	}
 	if _, ok := r.bashPPPointerType(expected); ok {
 		if value == nil {
 			return nil

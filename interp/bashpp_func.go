@@ -440,7 +440,7 @@ func (r *Runner) bashPPLookupFunc(c *syntax.BashPPCall) (*bashPPFunc, bool) {
 					r.exit.code = 2
 					return nil, false
 				}
-				if sel.method == nil {
+				if sel.method == nil && sel.interfaceSpec == nil {
 					r.errf("type %s has no method %s\n", bashPPTypeText(typ), method)
 					r.exit.code = 2
 					return nil, false
@@ -462,7 +462,7 @@ func (r *Runner) bashPPLookupFunc(c *syntax.BashPPCall) (*bashPPFunc, bool) {
 				return nil, false
 			}
 			fn := sel.method
-			if fn == nil {
+			if fn == nil && sel.interfaceSpec == nil {
 				r.errf("%s.%s is not in the method set of %s\n", owner, method, owner)
 				r.exit.code = 2
 				return nil, false
@@ -857,7 +857,7 @@ func (r *Runner) bashPPBindInterfaceMethod(iv *bashPPInterfaceValue, method stri
 		r.exit.code = 2
 		return nil, false
 	}
-	if sel.method == nil {
+	if sel.method == nil && sel.interfaceSpec == nil {
 		r.errf("type %s has no method %s\n", bashPPTypeText(iv.dynamic), method)
 		r.exit.code = 2
 		return nil, false

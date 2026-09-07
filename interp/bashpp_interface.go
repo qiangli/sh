@@ -29,17 +29,22 @@ type bashPPInterfaceMethods struct {
 }
 
 func (r *Runner) bashPPInterfaceType(typ syntax.BashPPTypeExpr) (*syntax.BashPPInterfaceType, bool) {
-	if iface, ok := typ.(*syntax.BashPPInterfaceType); ok {
-		return iface, true
-	}
-	if named, ok := typ.(*syntax.BashPPNamedType); ok {
-		if decl, found := r.bashPPTypes[named.Name.Value]; found {
-			if iface, ok := decl.typeExpr.(*syntax.BashPPInterfaceType); ok {
-				return iface, true
-			}
+	seen := make(map[string]bool)
+	for {
+		if iface, ok := typ.(*syntax.BashPPInterfaceType); ok {
+			return iface, true
 		}
+		named, ok := typ.(*syntax.BashPPNamedType)
+		if !ok || named.Name == nil || seen[named.Name.Value] {
+			return nil, false
+		}
+		seen[named.Name.Value] = true
+		decl, found := r.bashPPTypes[named.Name.Value]
+		if !found || decl.typeExpr == nil {
+			return nil, false
+		}
+		typ = r.bashPPInstantiateNamedType(named)
 	}
-	return nil, false
 }
 
 func (r *Runner) bashPPValidateInterfaceType(name string, iface *syntax.BashPPInterfaceType) error {
@@ -200,10 +205,16 @@ func (r *Runner) bashPPImplements(actual syntax.BashPPTypeExpr, iface *syntax.Ba
 	for _, name := range expectedSet.order {
 		expected := expectedSet.byName[name]
 		sel := r.bashPPResolveSelection(actual, name, true, false)
-		if sel.method == nil || sel.ambiguous {
+		if sel.ambiguous || sel.method == nil && sel.interfaceSpec == nil {
 			return fmt.Errorf("BASHPP-EINTERFACE-MISSING: %s does not implement interface (missing method %s)", bashPPTypeText(actual), name)
 		}
-		if bashPPInstantiatedMethodSignature(sel.method, sel.receiverType) != expected.sig {
+		actualSig := ""
+		if sel.method != nil {
+			actualSig = bashPPInstantiatedMethodSignature(sel.method, sel.receiverType)
+		} else {
+			actualSig = bashPPMethodSpecSignature(sel.interfaceSpec)
+		}
+		if actualSig != expected.sig {
 			return fmt.Errorf("BASHPP-EINTERFACE-SIGNATURE: %s method %s has wrong signature", bashPPTypeText(actual), name)
 		}
 	}
@@ -285,6 +296,25 @@ func (r *Runner) bashPPMakeInterfaceValue(expr syntax.BashPPExpr, expected synta
 			iv.cell = bashPPCopyInterfaceCell(source.interfaceValue.cell)
 			return &iv, iv.cell.vr, nil
 		}
+	}
+	if _, ok := expr.(*syntax.BashPPSelectorExpr); ok {
+		_, meta, err := r.bashPPReadExpr(expr)
+		if err != nil {
+			return nil, expand.Variable{}, err
+		}
+		if meta == nil || meta.interfaceValue == nil {
+			return nil, expand.Variable{}, fmt.Errorf("BASHPP-EINTERFACE-VALUE: selector is not an interface value")
+		}
+		source := meta.interfaceValue
+		if source.nilIface {
+			return &bashPPInterfaceValue{nilIface: true}, expand.Variable{Set: true, Kind: expand.String}, nil
+		}
+		if err := r.bashPPImplements(source.dynamic, iface); err != nil {
+			return nil, expand.Variable{}, err
+		}
+		iv := *source
+		iv.cell = bashPPCopyInterfaceCell(source.cell)
+		return &iv, iv.cell.vr, nil
 	}
 	cell, actual, err := r.bashPPCellForInterfaceExpr(expr)
 	if err != nil {

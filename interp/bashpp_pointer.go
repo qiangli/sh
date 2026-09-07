@@ -327,6 +327,19 @@ func bashPPScalarValue(text string) any {
 }
 
 func bashPPStoreCellValue(cell *bashPPCell, value any, meta *bashPPCollectionMeta) {
+	if meta != nil && meta.interfaceValue != nil {
+		cell.pointer, cell.pointerValue, cell.nilPointer = false, nil, false
+		cell.interfaceValue = meta.interfaceValue
+		cell.valueMeta = nil
+		cell.object = nil
+		if meta.interfaceValue.nilIface || meta.interfaceValue.cell == nil {
+			cell.vr = expand.Variable{Set: true, Kind: expand.String}
+		} else {
+			cell.vr = meta.interfaceValue.cell.vr
+		}
+		return
+	}
+	cell.interfaceValue = nil
 	if ptr, ok := value.(*bashPPPointer); ok || value == nil {
 		if _, pointerType := cell.declType.(*syntax.BashPPPointerType); pointerType || meta != nil && meta.kind == "pointer" {
 			cell.pointer, cell.pointerValue, cell.nilPointer = true, ptr, ptr == nil

@@ -11,7 +11,7 @@ import (
 	"testing/iotest"
 )
 
-const bashPPEmbeddedStructSource = "type Inner struct { N int }\ntype Other struct { S string }\ntype Outer struct { Inner; *Other; Label string }\n"
+const bashPPEmbeddedStructSource = "type Inner struct { N int }\ntype Other struct { S string }\ntype Reader interface { Read() }\ntype Outer struct { Inner; *Other; Reader; Label string }\n"
 
 func TestBashPPEmbeddedStructStreamingASTPrintWalk(t *testing.T) {
 	parse := func(rd io.Reader) *File {
@@ -26,8 +26,8 @@ func TestBashPPEmbeddedStructStreamingASTPrintWalk(t *testing.T) {
 	if !reflect.DeepEqual(buffered, streamed) {
 		t.Fatal("buffered and one-byte embedded struct trees differ")
 	}
-	outer := buffered.Stmts[2].Cmd.(*BashPPDecl).DeclTypeExpr.(*BashPPStructType)
-	if len(outer.Fields) != 3 || !outer.Fields[0].Embedded || !outer.Fields[1].Embedded || outer.Fields[2].Embedded {
+	outer := buffered.Stmts[3].Cmd.(*BashPPDecl).DeclTypeExpr.(*BashPPStructType)
+	if len(outer.Fields) != 4 || !outer.Fields[0].Embedded || !outer.Fields[1].Embedded || !outer.Fields[2].Embedded || outer.Fields[3].Embedded {
 		t.Fatalf("embedded flags = %#v", outer.Fields)
 	}
 	seenEmbedded := 0
@@ -37,7 +37,7 @@ func TestBashPPEmbeddedStructStreamingASTPrintWalk(t *testing.T) {
 		}
 		return true
 	})
-	if seenEmbedded != 2 {
+	if seenEmbedded != 3 {
 		t.Fatalf("Walk saw %d embedded fields", seenEmbedded)
 	}
 	var first strings.Builder

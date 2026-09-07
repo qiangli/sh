@@ -193,15 +193,158 @@ main()
 	qt.Assert(t, qt.StringContains(stderr, "BASHPP-ENIL-DEREF"))
 }
 
-func TestBashPPEmbeddedInterfaceRejected(t *testing.T) {
+func TestBashPPEmbeddedInterfacePromotesDynamicMethods(t *testing.T) {
+	const src = `type Speaker interface { Speak() }
+type Voice struct { N int }
+func (v Voice) Speak() { printf 'v%s:' v.N }
+type Outer struct { Speaker }
+type Alias = Speaker
+type AliasOuter struct { Alias }
+func main() {
+ v := Voice{N: 3}
+ var s Speaker = v
+ o := Outer{Speaker: s}
+ o.Speak()
+ var promoted Speaker = o
+ promoted.Speak()
+ selected := o.Speaker
+ selected.Speak()
+ a := AliasOuter{Alias: s}
+ a.Speak()
+ p := &o
+ p.Speak()
+ var pointerPromoted Speaker = p
+ pointerPromoted.Speak()
+ Outer.Speak(o)
+ (*Outer).Speak(p)
+ f := o.Speak
+ f()
+}
+main()
+`
+	out, stderr, err := runBashSharpCall(t, src)
+	qt.Assert(t, qt.IsNil(err), qt.Commentf("stderr: %s", stderr))
+	qt.Assert(t, qt.Equals(stderr, ""), qt.Commentf("stdout: %s", out))
+	qt.Assert(t, qt.Equals(out, "v3:v3:v3:v3:v3:v3:v3:v3:v3:"))
+}
+
+func TestBashPPEmbeddedInterfaceNilAndAmbiguity(t *testing.T) {
+	tests := []struct{ name, src, want string }{
+		{"nil", `type Speaker interface { Speak() }
+type Outer struct { Speaker }
+func main() {
+ var o Outer
+ o.Speak()
+}
+main()
+`, "nil interface has no method Speak"},
+		{"ambiguous", `type Speaker interface { Speak() }
+type Left struct { Speaker }
+type Right struct { Speaker }
+type Outer struct { Left; Right }
+func main() {
+ var o Outer
+ o.Speak()
+}
+main()
+`, "BASHPP-ESELECTOR-AMBIGUOUS"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, stderr, err := runBashSharpCall(t, test.src)
+			qt.Assert(t, qt.ErrorIs(err, interp.ExitStatus(2)))
+			qt.Assert(t, qt.StringContains(stderr, test.want))
+		})
+	}
+}
+
+func TestBashPPEmbeddedInterfaceValueAndReferenceSemantics(t *testing.T) {
+	const src = `type Speaker interface { Speak() }
+type Voice struct { N int }
+func (v Voice) Speak() { printf '%s:' v.N }
+type Outer struct { Speaker }
+func main() {
+ v := Voice{N: 1}
+ var value Speaker = v
+ h := Outer{Speaker: value}
+ v.N = 2
+ h.Speak()
+
+ p := new(Voice)
+ p.N = 3
+ var reference Speaker = p
+ h.Speaker = reference
+ copied := h
+ p.N = 4
+ h.Speak()
+ copied.Speak()
+
+ h.Speaker = value
+ copied.Speak()
+ h.Speak()
+}
+main()
+`
+	out, stderr, err := runBashSharpCall(t, src)
+	qt.Assert(t, qt.IsNil(err), qt.Commentf("stderr: %s", stderr))
+	qt.Assert(t, qt.Equals(stderr, ""))
+	qt.Assert(t, qt.Equals(out, "1:4:4:4:1:"))
+}
+
+func TestBashPPEmbeddedInterfaceDirectMethodShadowsAndEmbeddedInterfacesCompose(t *testing.T) {
 	const src = `type Reader interface { Read() }
-type Outer struct { Reader }
-func main() { var o Outer }
+type Writer interface { Write() }
+type ReadWriter interface { Reader; Writer }
+type Device int
+func (d Device) Read() { printf r }
+func (d Device) Write() { printf w }
+type Outer struct { ReadWriter }
+func (o Outer) Read() { printf R }
+func main() {
+	var device Device = 0
+	var d ReadWriter = device
+ o := Outer{ReadWriter: d}
+ o.Read()
+ o.Write()
+}
+main()
+`
+	out, stderr, err := runBashSharpCall(t, src)
+	qt.Assert(t, qt.IsNil(err), qt.Commentf("stderr: %s", stderr))
+	qt.Assert(t, qt.Equals(stderr, ""))
+	qt.Assert(t, qt.Equals(out, "Rw"))
+}
+
+func TestBashPPEmbeddedInterfaceTypedNilRetainsDynamicType(t *testing.T) {
+	const src = `type Speaker interface { Speak() }
+type Voice int
+func (p *Voice) Speak() { printf nil-pointer }
+type Outer struct { Speaker }
+func main() {
+ var p *Voice
+ var s Speaker = p
+ o := Outer{Speaker: s}
+ o.Speak()
+}
+main()
+`
+	out, stderr, err := runBashSharpCall(t, src)
+	qt.Assert(t, qt.IsNil(err), qt.Commentf("stderr: %s", stderr))
+	qt.Assert(t, qt.Equals(stderr, ""))
+	qt.Assert(t, qt.Equals(out, "nil-pointer"))
+}
+
+func TestBashPPPointerToInterfaceEmbeddingRejected(t *testing.T) {
+	const src = `type Speaker interface { Speak() }
+type Outer struct { *Speaker }
+func main() {
+ var o Outer
+}
 main()
 `
 	_, stderr, err := runBashSharpCall(t, src)
 	qt.Assert(t, qt.ErrorIs(err, interp.ExitStatus(2)))
-	qt.Assert(t, qt.StringContains(stderr, "BASHPP-ESTRUCT-EMBED: embedded interface fields are not supported"))
+	qt.Assert(t, qt.StringContains(stderr, "BASHPP-ESTRUCT-EMBED: pointer to interface type *Speaker cannot be embedded"))
 }
 
 func TestBashPPAliasPointerEmbeddingPromotesFieldsMethodsAndInterface(t *testing.T) {

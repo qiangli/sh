@@ -80,6 +80,16 @@ type bashPPCell struct {
 	constant bool
 }
 
+func (c *bashPPCell) vrValue() any {
+	if c == nil {
+		return ""
+	}
+	if c.vr.Kind == expand.Object {
+		return c.vr.Obj
+	}
+	return c.vr.String()
+}
+
 // bashPPScope is one lexical block's declarations, linked to its enclosing
 // block. Lookup walks outwards; declaration only ever writes to the innermost.
 type bashPPScope struct {
@@ -227,9 +237,9 @@ func (c *bashPPCloner) cloneCell(cell *bashPPCell) *bashPPCell {
 			c.objects[cell.object] = dup.object
 		}
 	}
-	dup.valueMeta = bashPPCloneCollectionMeta(cell.valueMeta, c.metas)
+	dup.valueMeta = bashPPCloneCollectionMeta(cell.valueMeta, c.metas, c.cloneCell)
 	if dup.object != nil {
-		dup.object.collection = bashPPCloneCollectionMeta(cell.object.collection, c.metas)
+		dup.object.collection = bashPPCloneCollectionMeta(cell.object.collection, c.metas, c.cloneCell)
 	}
 	if cell.pointerValue != nil {
 		dup.pointerValue = c.clonePointer(cell.pointerValue)

@@ -749,7 +749,12 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 			value, meta, err := r.bashPPReadExpr(d.Expr)
 			if err == nil {
 				name := d.Lhs[0].Value
-				if meta != nil {
+				if meta != nil && meta.interfaceValue != nil {
+					r.bashPPDeclareName(name, expand.Variable{Set: true, Kind: expand.String})
+					cell := r.bashPPScope.lookup(name)
+					bashPPStoreCellValue(cell, value, meta)
+					cell.declType = meta.typ
+				} else if meta != nil {
 					value, meta = bashPPCopyArrayValue(value, meta)
 					r.bashPPDeclareName(name, expand.NewObject(value))
 					cell := r.bashPPScope.lookup(name)

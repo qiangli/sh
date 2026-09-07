@@ -55,3 +55,43 @@ func TestBashPPTaskSnapshotClonesCollectionMetadata(t *testing.T) {
 		t.Fatal("task metadata mutation escaped snapshot")
 	}
 }
+
+func TestBashPPSubshellCloneOwnsEmbeddedInterfaceDynamicPointer(t *testing.T) {
+	voiceType := &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "Voice"}}
+	target := &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: "parent"}, declType: voiceType}
+	dynamic := &bashPPCell{
+		vr:           expand.Variable{Set: true, Kind: expand.String},
+		declType:     &syntax.BashPPPointerType{Element: voiceType},
+		pointer:      true,
+		pointerValue: &bashPPPointer{target: target, elem: voiceType},
+	}
+	interfaceType := &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "Speaker"}}
+	interfaceMeta := &bashPPCollectionMeta{kind: "interface", typ: interfaceType, interfaceValue: &bashPPInterfaceValue{
+		dynamic: dynamic.declType,
+		cell:    dynamic,
+	}}
+	structMeta := &bashPPCollectionMeta{
+		kind:    "struct",
+		typ:     &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "Outer"}},
+		mapping: map[string]*bashPPCollectionMeta{"Speaker": interfaceMeta},
+	}
+	parent := newBashPPScope(nil)
+	parent.entries["o"] = &bashPPCell{
+		vr:        expand.NewObject(map[string]any{"Speaker": ""}),
+		valueMeta: structMeta,
+		object:    &bashPPObjectIdentity{collection: structMeta},
+	}
+
+	child := newBashPPCloner().clone(parent)
+	childInterface := child.lookup("o").valueMeta.mapping["Speaker"].interfaceValue
+	if childInterface == nil || childInterface.cell == dynamic {
+		t.Fatal("embedded interface dynamic cell escaped subshell clone")
+	}
+	if childInterface.cell.pointerValue == dynamic.pointerValue || childInterface.cell.pointerValue.target == target {
+		t.Fatal("embedded interface dynamic pointer escaped subshell clone")
+	}
+	childInterface.cell.pointerValue.target.vr.Str = "child"
+	if target.vr.Str != "parent" {
+		t.Fatalf("embedded interface mutation escaped subshell: %q", target.vr.Str)
+	}
+}

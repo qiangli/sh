@@ -16,11 +16,12 @@ type bashPPEmbedEdge struct {
 }
 
 type bashPPSelection struct {
-	edges        []bashPPEmbedEdge
-	fieldType    syntax.BashPPTypeExpr
-	method       *bashPPFunc
-	receiverType syntax.BashPPTypeExpr
-	ambiguous    bool
+	edges         []bashPPEmbedEdge
+	fieldType     syntax.BashPPTypeExpr
+	method        *bashPPFunc
+	receiverType  syntax.BashPPTypeExpr
+	interfaceSpec *syntax.BashPPMethodSpec
+	ambiguous     bool
 }
 
 type bashPPSelectionNode struct {
@@ -143,6 +144,16 @@ func (r *Runner) bashPPResolveSelection(root syntax.BashPPTypeExpr, name string,
 		var matches []bashPPSelection
 		var next []bashPPSelectionNode
 		for _, node := range level {
+			if methods {
+				if iface, ok := r.bashPPInterfaceType(node.typ); ok {
+					set, err := r.bashPPInterfaceMethodSet(bashPPTypeText(node.typ), iface, make(map[string]bool))
+					if err == nil {
+						if candidate, found := set.byName[name]; found {
+							matches = append(matches, bashPPSelection{edges: append([]bashPPEmbedEdge(nil), node.edges...), interfaceSpec: candidate.spec})
+						}
+					}
+				}
+			}
 			fields, _, isStruct := r.bashPPStructFields(node.typ)
 			if isStruct {
 				for _, field := range fields {
@@ -170,8 +181,8 @@ func (r *Runner) bashPPResolveSelection(root syntax.BashPPTypeExpr, name string,
 				if !ok {
 					continue
 				}
-				child, pointer, invalid, iface := r.bashPPEmbeddedTarget(field.FieldTypeExpr)
-				if invalid || iface || child == nil {
+				child, pointer, invalid, _ := r.bashPPEmbeddedTarget(field.FieldTypeExpr)
+				if invalid || child == nil {
 					continue
 				}
 				childKey := bashPPTypeText(child)
@@ -306,6 +317,39 @@ func (r *Runner) bashPPEmbeddedReceiver(rootCell *bashPPCell, sel bashPPSelectio
 }
 
 func (r *Runner) bashPPBindPromotedMethod(rootCell *bashPPCell, method string, sel bashPPSelection, addressable bool) (*bashPPFunc, bool) {
+	if sel.interfaceSpec != nil {
+		var value any
+		meta := bashPPCellMeta(rootCell)
+		var err error
+		if rootCell.pointer {
+			if rootCell.pointerValue == nil {
+				r.errf("BASHPP-ENIL-DEREF: dereference of nil pointer\n")
+				r.exit.code = 2
+				return nil, false
+			}
+			value, meta, _, err = rootCell.pointerValue.read()
+		} else {
+			value = rootCell.vrValue()
+		}
+		if err != nil {
+			r.errf("%v\n", err)
+			r.exit.code = 2
+			return nil, false
+		}
+		value, meta, err = bashPPReadSelection(value, meta, sel.edges)
+		_ = value
+		if err != nil {
+			r.errf("%v\n", err)
+			r.exit.code = 2
+			return nil, false
+		}
+		if meta == nil || meta.interfaceValue == nil {
+			r.errf("BASHPP-EINTERFACE-VALUE: promoted interface method %s has no interface storage\n", method)
+			r.exit.code = 2
+			return nil, false
+		}
+		return r.bashPPBindInterfaceMethod(meta.interfaceValue, method)
+	}
 	receiver, err := r.bashPPEmbeddedReceiver(rootCell, sel)
 	if err != nil {
 		r.errf("%v\n", err)
