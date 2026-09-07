@@ -10968,7 +10968,7 @@ func (r *Runner) execAs(ctx context.Context, pos syntax.Pos, argv0 string, clear
 		hc.ExecClearEnv = true
 		hctx = context.WithValue(hctx, handlerCtxKey{}, hc)
 	}
-	if replace && r.subshellLevel == 0 && !r.bashPPGoTask {
+	if replace && r.subshellLevel == 0 && !r.inBashPPTask() {
 		hc := HandlerCtx(hctx)
 		hc.ExecReplace = true
 		hctx = context.WithValue(hctx, handlerCtxKey{}, hc)

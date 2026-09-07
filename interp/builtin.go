@@ -1635,7 +1635,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			r.removeJob(bg)
 		}
 	case "kill":
-		if r.bashPPGoTask {
+		if r.inBashPPTask() {
 			failed := failf(2, "kill: process signals are unavailable inside a Bash++ task\n")
 			failed.exiting = true
 			return failed
@@ -2828,7 +2828,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			}
 			return failf(1, "source: %v\n", err)
 		}
-		if r.bashPPGoTask && r.bashPPTaskContext(ctx).Err() != nil {
+		if r.inBashPPTask() && r.bashPPTaskContext(ctx).Err() != nil {
 			_ = f.Close()
 			r.bashPPTaskCanceled = true
 			r.exit.fatal(r.bashPPTaskContext(ctx).Err())
@@ -3890,7 +3890,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		if zeroCharRead {
 			// Bash treats -n 0 and -N 0 as successful, non-consuming reads
 			// which still perform the normal empty assignment below.
-		} else if r.bashPPGoTask {
+		} else if r.inBashPPTask() {
 			if silent {
 				return failf(2, "read: silent terminal input is unavailable inside a Bash++ task\n")
 			}
@@ -4979,7 +4979,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			src = f
 		}
 		var newLines []string
-		if r.bashPPGoTask {
+		if r.inBashPPTask() {
 			file, ok := src.(*os.File)
 			if !ok {
 				return failf(2, "%s: blocking non-file input is unavailable inside a Bash++ task\n", name)
@@ -4993,7 +4993,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		scanner.Split(mapfileSplit(delim[0], dropDelim))
 		lineNum := 0
 		for scanner.Scan() {
-			if r.bashPPGoTask && r.bashPPTaskContext(ctx).Err() != nil {
+			if r.inBashPPTask() && r.bashPPTaskContext(ctx).Err() != nil {
 				r.bashPPTaskCanceled = true
 				r.exit.fatal(r.bashPPTaskContext(ctx).Err())
 				return r.exit
@@ -5032,7 +5032,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		if err := scanner.Err(); err != nil {
 			return failf(2, "%s: unable to read, %v\n", name, err)
 		}
-		if r.bashPPGoTask && r.bashPPTaskContext(ctx).Err() != nil {
+		if r.inBashPPTask() && r.bashPPTaskContext(ctx).Err() != nil {
 			r.bashPPTaskCanceled = true
 			r.exit.fatal(r.bashPPTaskContext(ctx).Err())
 			return r.exit

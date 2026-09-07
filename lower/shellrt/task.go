@@ -153,7 +153,8 @@ func (s *Session) Go(fn TaskFunc) *Task {
 	// bookkeeping as any other: the launcher is released and the group is
 	// cancelled, rather than the launch call returning an error the emitted
 	// code would have to handle separately.
-	child, err := s.newChild(g.ctx, snapshot)
+	taskCtx := ownedTaskContext(g.ctx)
+	child, err := s.newChild(taskCtx, snapshot)
 	if err != nil {
 		g.finish(t, err)
 		return t
@@ -164,7 +165,7 @@ func (s *Session) Go(fn TaskFunc) *Task {
 	child.armReady = ready
 
 	go func() {
-		err := runTaskBody(g.ctx, ordinal, child, fn)
+		err := runTaskBody(taskCtx, ordinal, child, fn)
 		// The child owns its own tasks and its own shell clone; close them
 		// here, on every exit path including a panic, so nothing a task
 		// launched or opened outlives the body that created it.

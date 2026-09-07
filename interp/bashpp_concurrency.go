@@ -451,7 +451,7 @@ func (r *Runner) bashPPArmBeforeBlock(ctx context.Context) bool {
 func (r *Runner) bashPPTaskOpen(ctx context.Context, path string, flags int, mode os.FileMode, print, requireRegular bool) (io.ReadWriteCloser, error) {
 	// The owner retains virtual stdin; the host pseudo-path can name a
 	// different pipe. Custom open handlers retain their existing boundary.
-	if !r.bashPPGoTask && path == "/dev/stdin" && flags&3 == os.O_RDONLY && r.stdin != nil {
+	if !r.inBashPPTask() && path == "/dev/stdin" && flags&3 == os.O_RDONLY && r.stdin != nil {
 		return r.open(ctx, path, flags, mode, print)
 	}
 	groupOpen := !requireRegular && !r.bashPPCustomOpen &&
@@ -483,7 +483,7 @@ func (r *Runner) bashPPTaskOpen(ctx context.Context, path string, flags int, mod
 			return file, nil
 		}
 	}
-	if !r.bashPPGoTask {
+	if !r.inBashPPTask() {
 		return r.open(ctx, path, flags, mode, print)
 	}
 	taskCtx := r.bashPPTaskContext(ctx)

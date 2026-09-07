@@ -190,6 +190,7 @@ func (sh *shell) Clone(streams shellrt.Stdio) (shellrt.ShellRunner, error) {
 // [context.WithoutCancel] so that a cancelled program still runs its EXIT trap
 // and still releases the interpreter's resources.
 func (sh *shell) Close(ctx context.Context) error {
+	ctx = sh.taskPolicyContext(ctx)
 	sh.closeOnce.Do(func() {
 		ctx, cancel := context.WithTimeout(ctx, sh.cfg.shutdown)
 		defer cancel()
@@ -235,6 +236,7 @@ func (sh *shell) runStatements(ctx context.Context, src, name string) error {
 // RunShell applies the typed side's changes, runs one region, and refreshes
 // the typed-visible projection from the live shell.
 func (sh *shell) RunShell(ctx context.Context, st *shellrt.State, streams shellrt.Stdio, src string) error {
+	ctx = sh.taskPolicyContext(ctx)
 	if streams != sh.io {
 		if err := sh.restoreStdio(streams); err != nil {
 			return err

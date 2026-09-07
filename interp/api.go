@@ -181,6 +181,7 @@ type Runner struct {
 	// closure, interface, collection, and declared-type provenance.
 	bashPPResultCells  []*bashPPCell
 	bashPPGoTask       bool
+	bashPPHostedTask   bool
 	bashPPChanBoundary bool
 	bashPPFileRun      bool
 	bashPPTaskFiles    []*os.File
@@ -3036,6 +3037,9 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 	if !r.didReset {
 		r.Reset()
 	}
+	previousTaskPolicy := r.bashPPHostedTask
+	r.bashPPHostedTask = taskPolicy(ctx)
+	defer func() { r.bashPPHostedTask = previousTaskPolicy }()
 	r.fillExpandConfig(ctx)
 	r.exit = exitStatus{}
 	r.expandRunExit = exitStatus{}
@@ -3354,6 +3358,7 @@ func (r *Runner) subshell(background bool) *Runner {
 	// and cancellation boundary. They may not regain process-signal or exec
 	// replacement authority merely by entering `( ... )` or a pipeline stage.
 	r2.bashPPGoTask = r.bashPPGoTask
+	r2.bashPPHostedTask = r.bashPPHostedTask
 	r2.bashPPTaskState = r.bashPPTaskState
 	// Funcs are copied, since they might be modified.
 	r2.Funcs = maps.Clone(r.Funcs)

@@ -585,7 +585,7 @@ func (r *Runner) enableSignalTrap(name string) {
 	// OS signal dispositions are process-global, whereas a Bash++ task is an
 	// in-process structured child. Keep the callback in the task's private map
 	// but never let a task install a process-global signal subscription.
-	if r.bashPPGoTask {
+	if r.inBashPPTask() {
 		return
 	}
 	if r.isStartupIgnored(name) {
@@ -750,7 +750,7 @@ func (r *Runner) forwardSignalSubscription(name string, sub signalSubscription) 
 // shell (trap.tests/trap1.sub). Pseudo-signals are ignored here; the empty
 // trapCallbacks entry alone records their state.
 func (r *Runner) ignoreSignalTrap(name string) {
-	if r.bashPPGoTask {
+	if r.inBashPPTask() {
 		return
 	}
 	if r.isStartupIgnored(name) {
@@ -805,7 +805,7 @@ func (r *Runner) ignoreSignalTrap(name string) {
 // disableSignalTrap stops OS delivery for the named signal, restoring its
 // default disposition. Called by the `trap` builtin when a trap is reset.
 func (r *Runner) disableSignalTrap(name string) {
-	if r.bashPPGoTask {
+	if r.inBashPPTask() {
 		return
 	}
 	if r.isStartupIgnored(name) {
