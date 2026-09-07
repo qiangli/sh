@@ -41,5 +41,5 @@ func (e *emitter) receiveDeclaration(n *syntax.BashPPShortDecl) (string, error) 
 	rt := e.prefix + "rt."
 	text := ns[0] + ", " + okName + ", " + failure + " := " + rt + "Receive(" + strings.Join([]string{c.Context, c.Session, c.Channels, ch}, ",") + ")\n"
 	text += "if " + failure + " != nil {\n" + e.program() + ".ReceiveFailure(" + failure + ")\nif " + c.Context + ".Err() != nil { panic(" + rt + "ChannelAbort{Err:" + failure + "}) }\n}"
-	return text + e.unused(ns), nil
+	return text + e.unused(append(ns, okName)), nil
 }
