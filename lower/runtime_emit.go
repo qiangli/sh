@@ -61,6 +61,21 @@ func (e *emitter) runtimeSend(n *syntax.BashPPSend, c RuntimeContext) (string, e
 		return "", err
 	}
 	rt := e.prefix + "rt."
+	info, _ := e.projections.projectionLookup(n.Chan.Lit())
+	if info.sourceType == "string" || info.capabilityElement != "" {
+		elem := info.capabilityElement
+		if elem == "" {
+			elem = "string"
+		}
+		if elem == "string" && n.Value.Lit() != "" {
+			value = strconv.Quote(n.Value.Lit())
+		}
+		guard := rt + "MustChannelOperation(" + rt + "RequireChannelBinding(" + e.program() + ".ResultSidecars,&" + channel + "," + strconv.Quote(n.Chan.Lit()) + "))\n"
+		return guard + rt + "MustChannelOperation(" + rt + "SendCapability[" + elem + "](" + c.Context + "," + e.program() + ".ResultSidecars,&" + channel + "," + value + "))", nil
+	}
+	if strings.TrimSpace(info.sourceType) == "chan string" && n.Value.Lit() != "" {
+		value = strconv.Quote(n.Value.Lit())
+	}
 	return rt + "MustChannelOperation(" + rt + "Send(" + c.Context + ", " + c.Session + ", " + c.Channels + ", " + channel + ", " + value + "))", nil
 }
 func (e *emitter) runtimeReceive(n *syntax.BashPPReceive, c RuntimeContext, commaOK bool) (string, error) {

@@ -63,7 +63,10 @@ func (e *emitter) sharpCall(c *syntax.BashPPCall, f *syntax.BashPPFuncDecl) (str
 			return "", err
 		}
 		field := params[byEvaluation[i]].field
-		typ := "any"
+		typ := e.inferredParams[field]
+		if typ == "" {
+			typ = "string"
+		}
 		if field.FieldType != nil || field.FieldTypeExpr != nil {
 			typ, err = e.fieldType(field)
 			if err != nil {

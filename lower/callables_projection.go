@@ -71,6 +71,9 @@ func (e *emitter) projectionType(text string, seen map[string]bool) (out project
 func (e *emitter) projectionExpr(x syntax.BashPPExpr) projection {
 	switch n := x.(type) {
 	case *syntax.BashPPBasicLit:
+		if n.Kind == "STRING" {
+			return e.projectionType("string", nil)
+		}
 		if n.Kind == "FLOAT" {
 			p, err := projectionFromLiteral(n)
 			if err == nil {
@@ -153,6 +156,12 @@ func (e *emitter) projectionWord(w *syntax.Word) projection {
 		value := constant.MakeFromLiteral(name, token.FLOAT, 0)
 		if value.Kind() == constant.Float {
 			return projection{kind: projectFloat, text: value.ExactString(), hasText: true}
+		}
+	}
+	if len(w.Parts) > 0 {
+		switch w.Parts[0].(type) {
+		case *syntax.DblQuoted, *syntax.SglQuoted:
+			return e.projectionType("string", nil)
 		}
 	}
 	return scalarProjection()
@@ -239,6 +248,9 @@ func (e *emitter) projectBinding(n syntax.Node, name, expression string) (text s
 	p, ok := e.projections.projectionLookup(name)
 	if !ok {
 		return expression, nil
+	}
+	if e.execution && richChannelType(p.sourceType) {
+		return e.prefix + "rt.ChannelWord(" + e.program() + ".Channels," + expression + ")", nil
 	}
 	if p.runtimeFloat {
 		e.bridge = true

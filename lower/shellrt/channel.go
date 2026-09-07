@@ -21,6 +21,7 @@ type ChannelScope struct {
 	closed   bool
 }
 type channelState struct {
+	text        string
 	value       reflect.Value // retain native identity for the scope's lifetime
 	mu          sync.Mutex
 	changed     *sync.Cond

@@ -526,6 +526,9 @@ func (e *emitter) statementFlags(s *syntax.Stmt) error {
 	return nil
 }
 func (e *emitter) statement(s *syntax.Stmt) (string, error) {
+	if text, handled, err := e.carrierShellAssignment(s); handled || err != nil {
+		return text, err
+	}
 	if text, handled, err := e.nativeShellStatement(s); handled || err != nil {
 		return text, err
 	}
@@ -1201,6 +1204,13 @@ func (e *emitter) call(c *syntax.BashPPCall) (string, error) {
 	invocation := e.program()
 	if frame != "" {
 		invocation += ".WithResults(" + frame + ")"
+	}
+	if len(c.Fun) == 1 {
+		if f := e.functionDecls[c.Fun[0].Value]; f != nil {
+			if text, handled, err := e.carrierArgumentCall(c, f, invocation); handled || err != nil {
+				return text, err
+			}
+		}
 	}
 	if e.readonly {
 		if text, handled, err := e.guardedBuiltin(c); handled || err != nil {

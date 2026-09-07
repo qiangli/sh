@@ -125,6 +125,7 @@ func (e *emitter) runtimeFunction(f *syntax.BashPPFuncDecl, signature, body, gen
 	if err != nil {
 		return "", err
 	}
+	entry += e.bindResultArguments(f.Params)
 	private := e.goName(f.Name.Value)
 	var args []string
 	for _, field := range f.Params {

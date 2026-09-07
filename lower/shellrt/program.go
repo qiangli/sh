@@ -31,7 +31,8 @@ type Program struct {
 	Bindings *LexicalBindings
 
 	// Results is an explicit caller-owned invocation descriptor.
-	Results *ResultFrame
+	Results   *ResultFrame
+	Arguments *ResultFrame
 	// ResultSidecars binds retained authority to actual native storage.
 	ResultSidecars *ResultSidecars
 

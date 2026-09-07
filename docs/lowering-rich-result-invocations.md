@@ -24,3 +24,11 @@ short-declaration failure mark retains the source status after later output.
 Named results are refreshed after source defers, so a recovered panic can still
 return the final named value. The four public refused-agentic-result controls
 verify complete output, diagnostics and status through source-removed artifacts.
+
+Channel authority can also enter a native scalar carrier through a real shell
+binding assignment or a source call's argument/default. The caller evaluates
+arguments once in source order, retains channel identity in an explicit
+argument frame, and binds it to the callee's actual parameter addresses.
+Channel display strings are opaque text; interpolation does not copy authority.
+The C3 artifact verifies direct, assigned, ordinary, named and default argument
+paths, followed by exact refusal of a forged string, under the race detector.
