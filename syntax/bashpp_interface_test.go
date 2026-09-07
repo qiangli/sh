@@ -79,6 +79,28 @@ func TestBashPPInterfaceASTStreamingWalkAndPrint(t *testing.T) {
 	}
 }
 
+func TestBashPPInterfaceMethodSpecSeparators(t *testing.T) {
+	const canonical = "type I interface { A(); B(int) string }\n"
+	for _, src := range []string{
+		canonical,
+		"type I interface {\n A()\n B(int) string\n}\n",
+	} {
+		buffered := parseBashPPInterface(t, strings.NewReader(src))
+		streamed := parseBashPPInterface(t, iotest.OneByteReader(strings.NewReader(src)))
+		if !reflect.DeepEqual(buffered, streamed) {
+			t.Fatalf("buffered and one-byte trees differ for %q", src)
+		}
+		var printed bytes.Buffer
+		if err := NewPrinter().Print(&printed, buffered); err != nil {
+			t.Fatal(err)
+		}
+		if printed.String() != canonical {
+			t.Fatalf("print = %q, want canonical %q", printed.String(), canonical)
+		}
+		_ = parseBashPPInterface(t, strings.NewReader(printed.String()))
+	}
+}
+
 func TestBashPPInterfaceFallbackBoundaries(t *testing.T) {
 	for _, src := range []string{
 		"type I interface { M(int) string }\n",

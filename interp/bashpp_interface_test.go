@@ -204,3 +204,31 @@ main()
 		t.Fatalf("err/output = %v/%q, want readonly pointer mutation blocked with value intact", err, out.String())
 	}
 }
+
+func TestBashPPTypedNilInterfaceMethodCalls(t *testing.T) {
+	const src = `type T int
+func (p *T) Pointer() { echo pointer-nil; }
+func (v T) Value() { echo value; }
+type PointerCaller interface { Pointer() }
+type ValueCaller interface { Value() }
+func main() {
+	var p *T = nil
+	var pi PointerCaller = p
+	pi.Pointer()
+	var vi ValueCaller = p
+	vi.Value()
+}
+main()
+`
+	f, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(src), "ifacetypednil.bpp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP))
+	err = r.Run(context.Background(), f)
+	var status interp.ExitStatus
+	if !errors.As(err, &status) || status != 2 || out.String() != "pointer-nil\nvalue method Value called using nil *T pointer\n" {
+		t.Fatalf("err/output = %v/%q, want status 2 and typed-nil value-method diagnostic", err, out.String())
+	}
+}
