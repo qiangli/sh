@@ -166,6 +166,57 @@ func bashppConvertType(e goast.Expr, pos func(gotoken.Pos) Pos, lit func(gotoken
 	switch x := e.(type) {
 	case *goast.Ident:
 		return &BashPPNamedType{Name: lit(x.Pos(), x.End(), x.Name)}
+	case *goast.IndexExpr:
+		name, ok := x.X.(*goast.Ident)
+		if !ok {
+			return nil
+		}
+		return &BashPPNamedType{Name: lit(name.Pos(), name.End(), name.Name), TypeArgs: []*BashPPTypeArg{{ArgType: bashppConvertType(x.Index, pos, lit)}}}
+	case *goast.IndexListExpr:
+		name, ok := x.X.(*goast.Ident)
+		if !ok {
+			return nil
+		}
+		out := &BashPPNamedType{Name: lit(name.Pos(), name.End(), name.Name)}
+		for _, index := range x.Indices {
+			out.TypeArgs = append(out.TypeArgs, &BashPPTypeArg{ArgType: bashppConvertType(index, pos, lit)})
+		}
+		return out
+	case *goast.BinaryExpr:
+		if x.Op != gotoken.OR {
+			return nil
+		}
+		var terms []BashPPTypeExpr
+		var bars []*Lit
+		var flatten func(goast.Expr) bool
+		flatten = func(e goast.Expr) bool {
+			if b, ok := e.(*goast.BinaryExpr); ok && b.Op == gotoken.OR {
+				if !flatten(b.X) {
+					return false
+				}
+				bars = append(bars, lit(b.OpPos, b.OpPos+1, "|"))
+				return flatten(b.Y)
+			}
+			term := bashppConvertType(e, pos, lit)
+			if term == nil {
+				return false
+			}
+			terms = append(terms, term)
+			return true
+		}
+		if !flatten(x) || len(terms) < 2 {
+			return nil
+		}
+		return &BashPPUnionType{Terms: terms, Bars: bars}
+	case *goast.UnaryExpr:
+		if x.Op != gotoken.TILDE {
+			return nil
+		}
+		term := bashppConvertType(x.X, pos, lit)
+		if term == nil {
+			return nil
+		}
+		return &BashPPApproxType{Tilde: pos(x.OpPos), Term: term}
 	case *goast.ArrayType:
 		kind := "slice"
 		var length *Lit
@@ -342,9 +393,24 @@ func bashppTypeArgFromText(text string, pos Pos) (*BashPPTypeArg, bool) {
 func bashppTypeText(typ BashPPTypeExpr) string {
 	switch x := typ.(type) {
 	case *BashPPNamedType:
-		return x.Name.Value
+		if len(x.TypeArgs) == 0 {
+			return x.Name.Value
+		}
+		var args []string
+		for _, arg := range x.TypeArgs {
+			args = append(args, bashppTypeText(arg.ArgType))
+		}
+		return x.Name.Value + "[" + strings.Join(args, ", ") + "]"
 	case *BashPPTypeParamType:
 		return x.Name.Value
+	case *BashPPUnionType:
+		var terms []string
+		for _, term := range x.Terms {
+			terms = append(terms, bashppTypeText(term))
+		}
+		return strings.Join(terms, " | ")
+	case *BashPPApproxType:
+		return "~" + bashppTypeText(x.Term)
 	case *BashPPCollectionType:
 		if x.Kind == "map" {
 			return "map[" + bashppTypeText(x.Key) + "]" + bashppTypeText(x.Element)
@@ -524,6 +590,24 @@ func bashppSupportedTypeAST(expr goast.Expr) bool {
 	switch x := expr.(type) {
 	case *goast.Ident:
 		return bashppIsIdent(x.Name)
+	case *goast.IndexExpr:
+		name, ok := x.X.(*goast.Ident)
+		return ok && bashppIsIdent(name.Name) && bashppSupportedTypeAST(x.Index)
+	case *goast.IndexListExpr:
+		name, ok := x.X.(*goast.Ident)
+		if !ok || !bashppIsIdent(name.Name) || len(x.Indices) == 0 {
+			return false
+		}
+		for _, index := range x.Indices {
+			if !bashppSupportedTypeAST(index) {
+				return false
+			}
+		}
+		return true
+	case *goast.BinaryExpr:
+		return x.Op == gotoken.OR && bashppSupportedTypeAST(x.X) && bashppSupportedTypeAST(x.Y)
+	case *goast.UnaryExpr:
+		return x.Op == gotoken.TILDE && bashppSupportedTypeAST(x.X)
 	case *goast.ArrayType:
 		if x.Len != nil {
 			switch n := x.Len.(type) {
@@ -580,6 +664,22 @@ func bashppGoTypeText(expr goast.Expr) string {
 	switch x := expr.(type) {
 	case *goast.Ident:
 		return x.Name
+	case *goast.IndexExpr:
+		return bashppGoTypeText(x.X) + "[" + bashppGoTypeText(x.Index) + "]"
+	case *goast.IndexListExpr:
+		var parts []string
+		for _, index := range x.Indices {
+			parts = append(parts, bashppGoTypeText(index))
+		}
+		return bashppGoTypeText(x.X) + "[" + strings.Join(parts, ", ") + "]"
+	case *goast.BinaryExpr:
+		if x.Op == gotoken.OR {
+			return bashppGoTypeText(x.X) + " | " + bashppGoTypeText(x.Y)
+		}
+	case *goast.UnaryExpr:
+		if x.Op == gotoken.TILDE {
+			return "~" + bashppGoTypeText(x.X)
+		}
 	case *goast.ArrayType:
 		length := ""
 		if x.Len != nil {
@@ -693,9 +793,12 @@ func bashppCompositeCommandDepth(ce *CallExpr) int {
 		return 0
 	}
 	words := ce.Args
-	eligible := len(words) >= 4 && words[0].Lit() == "type" &&
-		bashppIsIdent(words[1].Lit()) &&
-		(words[2].Lit() == "struct" || words[2].Lit() == "enum" || words[2].Lit() == "interface") && words[3].Lit() == "{"
+	eligible := false
+	if len(words) >= 4 && words[0].Lit() == "type" {
+		if _, _, typeStart, ok := bashppTypeDeclName(words); ok && typeStart+1 < len(words) {
+			eligible = (words[typeStart].Lit() == "struct" || words[typeStart].Lit() == "enum" || words[typeStart].Lit() == "interface") && words[typeStart+1].Lit() == "{"
+		}
+	}
 	if !eligible && len(words) >= 5 && words[0].Lit() == "var" &&
 		bashppIsIdent(words[1].Lit()) && words[3].Lit() == "=" {
 		eligible = strings.Contains(bashppWordText(bashppJoinWords(words[4:])), "{")
@@ -1096,11 +1199,11 @@ func bashppCompositeType(s string) bool {
 		return false
 	}
 	lit, ok := expr.(*goast.CompositeLit)
-	if !ok || !bashppSupportedCollectionTypeAST(lit.Type) {
+	if !ok || !bashppSupportedTypeAST(lit.Type) {
 		return bashppSelector(s) // retained for the deferred struct path
 	}
 	switch lit.Type.(type) {
-	case *goast.ArrayType, *goast.MapType:
+	case *goast.ArrayType, *goast.MapType, *goast.Ident, *goast.IndexExpr, *goast.IndexListExpr:
 		return true
 	}
 	return bashppSelector(s)

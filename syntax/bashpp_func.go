@@ -93,6 +93,10 @@ func (p *Parser) bashppFuncForm(ce *CallExpr) Command {
 }
 
 func (p *Parser) bashppFuncTypeParams(words []*Word) (*Lit, []*BashPPTypeParam, bool) {
+	return bashppFuncTypeParams(words)
+}
+
+func bashppFuncTypeParams(words []*Word) (*Lit, []*BashPPTypeParam, bool) {
 	if len(words) == 1 {
 		return bashppBareLit(words[0]), nil, true
 	}
@@ -456,6 +460,10 @@ func (p *Parser) bashppFieldList(open Pos, result bool) ([]*BashPPField, bool) {
 }
 
 func (p *Parser) bashppMarkTypeParamFields(fields []*BashPPField, params []*BashPPTypeParam) {
+	bashppMarkTypeParamFields(fields, params)
+}
+
+func bashppMarkTypeParamFields(fields []*BashPPField, params []*BashPPTypeParam) {
 	if len(params) == 0 {
 		for _, field := range fields {
 			if field.FieldTypeExpr == nil && field.FieldType != nil {
@@ -484,6 +492,16 @@ func bashppTypeParamUses(typ BashPPTypeExpr, names map[string]bool) BashPPTypeEx
 		if names[x.Name.Value] {
 			return &BashPPTypeParamType{Name: x.Name}
 		}
+		if len(x.TypeArgs) > 0 {
+			cp := *x
+			cp.TypeArgs = append([]*BashPPTypeArg(nil), x.TypeArgs...)
+			for i, arg := range cp.TypeArgs {
+				ac := *arg
+				ac.ArgType = bashppTypeParamUses(ac.ArgType, names)
+				cp.TypeArgs[i] = &ac
+			}
+			return &cp
+		}
 	case *BashPPCollectionType:
 		cp := *x
 		cp.Key = bashppTypeParamUses(cp.Key, names)
@@ -510,6 +528,17 @@ func bashppTypeParamUses(typ BashPPTypeExpr, names map[string]bool) BashPPTypeEx
 			ec.Embedded = bashppTypeParamUses(ec.Embedded, names)
 			cp.Elems[i] = &ec
 		}
+		return &cp
+	case *BashPPUnionType:
+		cp := *x
+		cp.Terms = append([]BashPPTypeExpr(nil), x.Terms...)
+		for i, term := range cp.Terms {
+			cp.Terms[i] = bashppTypeParamUses(term, names)
+		}
+		return &cp
+	case *BashPPApproxType:
+		cp := *x
+		cp.Term = bashppTypeParamUses(cp.Term, names)
 		return &cp
 	}
 	return typ
@@ -553,14 +582,39 @@ func bashppTypeParamList(items []*Lit) ([]*BashPPTypeParam, bool) {
 					return nil, false
 				}
 			}
-			constraint := bashppTypeExprFromLit(seg[1])
+			constraintLit := seg[1]
+			if strings.Contains(constraintLit.Value, `\|`) {
+				cp := *constraintLit
+				cp.Value = strings.ReplaceAll(cp.Value, `\|`, "|")
+				constraintLit = &cp
+			}
+			constraint := bashppTypeExprFromLit(constraintLit)
 			if constraint == nil {
 				return nil, false
 			}
 			out = append(out, &BashPPTypeParam{Names: append(pending, seg[0]), Constraint: constraint})
 			pending = nil
 		default:
-			return nil, false
+			for _, name := range append(pending, seg[0]) {
+				if !bashppIsIdent(name.Value) {
+					return nil, false
+				}
+			}
+			var b strings.Builder
+			for i, lit := range seg[1:] {
+				if i > 0 {
+					b.WriteByte(' ')
+				}
+				b.WriteString(strings.ReplaceAll(lit.Value, `\|`, "|"))
+			}
+			start := seg[1].Pos()
+			constraintLit := &Lit{ValuePos: start, ValueEnd: seg[len(seg)-1].End(), Value: b.String()}
+			constraint := bashppTypeExprFromLit(constraintLit)
+			if constraint == nil {
+				return nil, false
+			}
+			out = append(out, &BashPPTypeParam{Names: append(pending, seg[0]), Constraint: constraint})
+			pending = nil
 		}
 	}
 	if len(pending) != 0 {

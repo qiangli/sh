@@ -61,3 +61,95 @@ main()
 		t.Fatalf("output = %q, want %q", got, "7\\n")
 	}
 }
+
+func TestBashPPGenericNamedTypeRuntime(t *testing.T) {
+	const src = `type Box[T any] struct { Value T }
+func main() {
+ var b Box[int] = Box[int]{Value:7}
+ echo "$b"
+}
+main()
+`
+	if got := runBashPPFunc(t, src); !strings.Contains(got, `"Value":7`) {
+		t.Fatalf("output = %q, want Box value", got)
+	}
+}
+
+func TestBashPPGenericTypeSetConstraints(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			"approximation accepts named underlying int",
+			"type Age int\nfunc id[T ~int\\|string](v T) T {\n return v\n}\nvar a Age = 9\nx := id(a)\necho \"$x\"\n",
+			"9\n",
+		},
+		{
+			"union accepts string",
+			"func id[T ~int\\|string](v T) T {\n return v\n}\nx := id[string](hi)\necho \"$x\"\n",
+			"hi\n",
+		},
+		{
+			"union rejects bool",
+			"func id[T ~int\\|string](v T) T {\n return v\n}\nid[bool](true)\n",
+			"BASHPP-EGENERIC-CONSTRAINT:",
+		},
+		{
+			"named type arity",
+			"type Box[T any] struct { Value T }\nvar b Box = Box[int]{Value:1}\n",
+			"BASHPP-EGENERIC-ARITY: Box expects 1 type argument(s); got 0",
+		},
+		{
+			"named type constraint",
+			"type Box[T comparable] struct { Value T }\nvar xs []int = []int{1}\nvar b Box[[]int]\n",
+			"BASHPP-EGENERIC-CONSTRAINT:",
+		},
+		{
+			"recursive generic value cycle",
+			"type Bad[T any] Bad[T]\n",
+			"cyclic type declaration: Bad",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := runBashPPFunc(t, tc.src)
+			if !strings.Contains(got, tc.want) {
+				t.Fatalf("output = %q, want to contain %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestBashPPGenericNamedTypeMethodSets(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			"value method on instantiated named type",
+			"type Box[T any] struct { Value T }\nfunc (b Box) Show() {\n echo show\n}\nfunc main() {\n var b Box[int] = Box[int]{Value:1}\n b.Show()\n}\nmain()\n",
+			"show\n",
+		},
+		{
+			"pointer method through addressable instantiated value",
+			"type Box[T any] struct { Value T }\nfunc (b *Box) Touch() {\n echo touch\n}\nfunc main() {\n var b Box[int] = Box[int]{Value:1}\n b.Touch()\n}\nmain()\n",
+			"touch\n",
+		},
+		{
+			"pointer method not in value method expression set",
+			"type Box[T any] struct { Value T }\nfunc (b *Box) Touch() {\n echo touch\n}\nfunc main() {\n var b Box[int] = Box[int]{Value:1}\n Box.Touch(b)\n}\nmain()\n",
+			"Box.Touch is not in the method set of Box",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := runBashPPFunc(t, tc.src)
+			if !strings.Contains(got, tc.want) {
+				t.Fatalf("output = %q, want to contain %q", got, tc.want)
+			}
+		})
+	}
+}

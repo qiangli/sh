@@ -18,12 +18,24 @@ func (r *Runner) bashPPValidateValueType(typ syntax.BashPPTypeExpr, seen map[str
 		if bashPPScalarType(name) {
 			return nil
 		}
-		if seen[name] {
-			return fmt.Errorf("BASHPP-ESTRUCT-CYCLE: cyclic field type %s", name)
-		}
 		decl, ok := r.bashPPTypes[name]
 		if !ok {
 			return fmt.Errorf("BASHPP-ESTRUCT-FIELD-TYPE: undefined field type %s", name)
+		}
+		if len(decl.typeParams) > 0 || len(x.TypeArgs) > 0 {
+			if err := r.bashPPValidateNamedTypeArgs(x); err != nil {
+				return err
+			}
+			key := bashPPTypeText(x)
+			if seen[key] {
+				return fmt.Errorf("BASHPP-ESTRUCT-CYCLE: cyclic field type %s", key)
+			}
+			seen[key] = true
+			defer delete(seen, key)
+			return r.bashPPValidateValueType(r.bashPPInstantiateNamedType(x), seen)
+		}
+		if seen[name] {
+			return fmt.Errorf("BASHPP-ESTRUCT-CYCLE: cyclic field type %s", name)
 		}
 		seen[name] = true
 		defer delete(seen, name)
@@ -57,6 +69,8 @@ func (r *Runner) bashPPValidateValueType(typ syntax.BashPPTypeExpr, seen map[str
 			}
 		}
 		return nil
+	case *syntax.BashPPTypeParamType:
+		return nil
 	}
 	return fmt.Errorf("BASHPP-ESTRUCT-FIELD-TYPE: unsupported field type %s", bashPPTypeText(typ))
 }
@@ -73,6 +87,11 @@ func (r *Runner) bashPPStructFields(typ syntax.BashPPTypeExpr) ([]*syntax.BashPP
 			decl, ok := r.bashPPTypes[name]
 			if !ok {
 				return nil, "", false
+			}
+			if len(x.TypeArgs) > 0 {
+				if st, ok := r.bashPPInstantiateNamedType(x).(*syntax.BashPPStructType); ok {
+					return st.Fields, x.Name.Value, true
+				}
 			}
 			if decl.underlying == "struct" {
 				return decl.fields, x.Name.Value, true

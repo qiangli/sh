@@ -17,3 +17,4 @@
 {"op":"add","slug":"carry-typed-interface-provenance-beside-shell-strings","tool":"codex-gpt-5.5-v","host":"dragon","episode":"weave-issue-22","at":"2026-09-06T23:59:25.879847Z"}
 {"op":"validate","slug":"carry-typed-interface-provenance-beside-shell-strings","tool":"codex-gpt-5.5-w","host":"dragon","episode":"weave-issue-23","at":"2026-09-07T00:22:58.709822Z"}
 {"op":"validate","slug":"carry-typed-interface-provenance-beside-shell-strings","tool":"codex-gpt-5.5-x","host":"dragon","episode":"weave-issue-24","at":"2026-09-07T00:40:14.855604Z"}
+{"op":"add","slug":"escape-type-set-union-bars-before-shell-parsing","tool":"codex-gpt-5.5-z","host":"dragon","episode":"weave-issue-26","at":"2026-09-07T01:33:40.335871Z"}

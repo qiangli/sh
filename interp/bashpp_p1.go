@@ -166,6 +166,16 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 				return
 			}
 		} else {
+			if len(d.TypeParams) > 0 {
+				if bashPPRecursiveGenericValue(d.DeclTypeExpr, name) {
+					r.errf("%scyclic type declaration: %s\n", r.bashErrPrefix(d.Pos()), name)
+					r.exit = exitStatus{code: 2}
+					return
+				}
+				if bashPPTypeContainsTypeParam(d.DeclTypeExpr) {
+					goto declaredValue
+				}
+			}
 			spelling := d.DeclType.Value
 			base := strings.TrimPrefix(spelling, "*")
 			// Go admits direct recursion only through indirection. A defined
@@ -190,6 +200,7 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 				return
 			}
 		}
+	declaredValue:
 	}
 	if d.Site == syntax.StartVar && d.DeclTypeExpr != nil {
 		if err := r.bashPPValidateValueType(d.DeclTypeExpr, make(map[string]bool)); err != nil {
@@ -298,12 +309,11 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 		for i, member := range d.EnumMembers {
 			members[i] = member.Value
 		}
-		r.bashPPTypes[name] = bashPPType{underlying: d.DeclType.Value, alias: d.Alias, members: members, typeExpr: d.DeclTypeExpr, fields: d.StructFields}
+		r.bashPPTypes[name] = bashPPType{underlying: d.DeclType.Value, alias: d.Alias, typeParams: d.TypeParams, members: members, typeExpr: d.DeclTypeExpr, fields: d.StructFields}
 	}
 	if d.Site == syntax.StartVar && d.DeclType != nil {
-		spelling := d.DeclType.Value
 		_, pointer := r.bashPPPointerType(d.DeclTypeExpr)
-		base := strings.TrimPrefix(spelling, "*")
+		base := bashPPNamedTypeBase(d.DeclTypeExpr)
 		cell := r.bashPPScope.lookup(name)
 		cell.declType = d.DeclTypeExpr
 		if _, named := r.bashPPTypes[base]; named {
@@ -325,6 +335,91 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 			}
 		}
 	}
+}
+
+func bashPPNamedTypeBase(typ syntax.BashPPTypeExpr) string {
+	switch x := typ.(type) {
+	case *syntax.BashPPNamedType:
+		return x.Name.Value
+	case *syntax.BashPPPointerType:
+		return bashPPNamedTypeBase(x.Element)
+	}
+	return ""
+}
+
+func bashPPTypeContainsTypeParam(typ syntax.BashPPTypeExpr) bool {
+	switch x := typ.(type) {
+	case *syntax.BashPPTypeParamType:
+		return true
+	case *syntax.BashPPNamedType:
+		for _, arg := range x.TypeArgs {
+			if bashPPTypeContainsTypeParam(arg.ArgType) {
+				return true
+			}
+		}
+	case *syntax.BashPPCollectionType:
+		return bashPPTypeContainsTypeParam(x.Key) || bashPPTypeContainsTypeParam(x.Element)
+	case *syntax.BashPPPointerType:
+		return bashPPTypeContainsTypeParam(x.Element)
+	case *syntax.BashPPStructType:
+		for _, field := range x.Fields {
+			if bashPPTypeContainsTypeParam(field.FieldTypeExpr) {
+				return true
+			}
+		}
+	case *syntax.BashPPInterfaceType:
+		for _, elem := range x.Elems {
+			if bashPPTypeContainsTypeParam(elem.Embedded) {
+				return true
+			}
+		}
+	case *syntax.BashPPUnionType:
+		for _, term := range x.Terms {
+			if bashPPTypeContainsTypeParam(term) {
+				return true
+			}
+		}
+	case *syntax.BashPPApproxType:
+		return bashPPTypeContainsTypeParam(x.Term)
+	}
+	return false
+}
+
+func bashPPRecursiveGenericValue(typ syntax.BashPPTypeExpr, name string) bool {
+	switch x := typ.(type) {
+	case *syntax.BashPPNamedType:
+		if x.Name.Value == name {
+			return true
+		}
+		for _, arg := range x.TypeArgs {
+			if bashPPRecursiveGenericValue(arg.ArgType, name) {
+				return true
+			}
+		}
+	case *syntax.BashPPCollectionType:
+		return bashPPRecursiveGenericValue(x.Key, name) || bashPPRecursiveGenericValue(x.Element, name)
+	case *syntax.BashPPStructType:
+		for _, field := range x.Fields {
+			if bashPPRecursiveGenericValue(field.FieldTypeExpr, name) {
+				return true
+			}
+		}
+	case *syntax.BashPPInterfaceType:
+		for _, elem := range x.Elems {
+			if bashPPRecursiveGenericValue(elem.Embedded, name) {
+				return true
+			}
+		}
+	case *syntax.BashPPUnionType:
+		for _, term := range x.Terms {
+			if bashPPRecursiveGenericValue(term, name) {
+				return true
+			}
+		}
+	case *syntax.BashPPApproxType:
+		return bashPPRecursiveGenericValue(x.Term, name)
+	}
+	return false
 }
 
 // bashPPTypeTerminates validates the entire already-declared underlying chain.

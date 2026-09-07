@@ -1374,8 +1374,28 @@ func (p *Printer) bashppType(typ BashPPTypeExpr) {
 	switch x := typ.(type) {
 	case *BashPPNamedType:
 		p.writeLit(x.Name.Value)
+		if len(x.TypeArgs) > 0 {
+			p.writeLit("[")
+			for i, arg := range x.TypeArgs {
+				if i > 0 {
+					p.writeLit(", ")
+				}
+				p.bashppType(arg.ArgType)
+			}
+			p.writeLit("]")
+		}
 	case *BashPPTypeParamType:
 		p.writeLit(x.Name.Value)
+	case *BashPPUnionType:
+		for i, term := range x.Terms {
+			if i > 0 {
+				p.writeLit(`\|`)
+			}
+			p.bashppType(term)
+		}
+	case *BashPPApproxType:
+		p.writeLit("~")
+		p.bashppType(x.Term)
 	case *BashPPCollectionType:
 		if x.Kind == "map" {
 			p.writeLit("map[")
@@ -1694,6 +1714,24 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 		// written at whatever column the surrounding words leave it.
 		p.spacedString(cmd.Kw.Value, cmd.Kw.Pos())
 		p.spacedString(cmd.Name.Value, cmd.Name.Pos())
+		if len(cmd.TypeParams) > 0 {
+			p.writeLit("[")
+			for i, param := range cmd.TypeParams {
+				if i > 0 {
+					p.writeLit(", ")
+				}
+				for j, name := range param.Names {
+					if j > 0 {
+						p.writeLit(", ")
+					}
+					p.writeLit(name.Value)
+				}
+				p.space()
+				p.bashppType(param.Constraint)
+			}
+			p.writeLit("]")
+			p.space()
+		}
 		if cmd.DeclType != nil {
 			if cmd.Alias {
 				p.spacedString("=", Pos{})

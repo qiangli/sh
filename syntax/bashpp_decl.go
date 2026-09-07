@@ -126,21 +126,21 @@ func bashppTypeDecl(ce *CallExpr, redirs []*Redirect) *BashPPDecl {
 		return nil
 	}
 	kw := bashppBareLit(ce.Args[0])
-	name := bashppBareLit(ce.Args[1])
-	if kw == nil || kw.Value != "type" || name == nil || !bashppIsIdent(name.Value) {
+	name, typeParams, typeStart, ok := bashppTypeDeclName(ce.Args)
+	if kw == nil || kw.Value != "type" || name == nil || !ok {
 		return nil
 	}
 	alias := false
-	typeWord := ce.Args[2]
-	if len(ce.Args) == 4 {
-		if ce.Args[2].Lit() != "=" {
+	typeWord := ce.Args[typeStart]
+	if len(ce.Args) == typeStart+2 {
+		if ce.Args[typeStart].Lit() != "=" {
 			return nil
 		}
-		alias, typeWord = true, ce.Args[3]
+		alias, typeWord = true, ce.Args[typeStart+1]
 	}
-	if !alias && len(ce.Args) >= 7 && ce.Args[2].Lit() == "struct" &&
-		ce.Args[3].Lit() == "{" && ce.Args[len(ce.Args)-1].Lit() == "}" {
-		body := ce.Args[4 : len(ce.Args)-1]
+	if !alias && len(ce.Args) >= typeStart+5 && ce.Args[typeStart].Lit() == "struct" &&
+		ce.Args[typeStart+1].Lit() == "{" && ce.Args[len(ce.Args)-1].Lit() == "}" {
+		body := ce.Args[typeStart+2 : len(ce.Args)-1]
 		if len(body)%2 != 0 {
 			return nil
 		}
@@ -157,14 +157,16 @@ func bashppTypeDecl(ce *CallExpr, redirs []*Redirect) *BashPPDecl {
 		if m.Site != StartTypeDecl {
 			return nil
 		}
-		structType := &BashPPStructType{Struct: bashppBareLit(ce.Args[2]), Lbrace: ce.Args[3].Pos(), Fields: fields, Rbrace: ce.Args[len(ce.Args)-1].Pos()}
-		return &BashPPDecl{Site: m.Site, Kw: kw, Name: name, DeclType: bashppBareLit(ce.Args[2]), DeclTypeExpr: structType,
-			StructFields: fields, Lbrace: ce.Args[3].Pos(), Rbrace: ce.Args[len(ce.Args)-1].Pos(),
+		structType := &BashPPStructType{Struct: bashppBareLit(ce.Args[typeStart]), Lbrace: ce.Args[typeStart+1].Pos(), Fields: fields, Rbrace: ce.Args[len(ce.Args)-1].Pos()}
+		bashppMarkTypeParamFields(fields, typeParams)
+		structType.Fields = fields
+		return &BashPPDecl{Site: m.Site, Kw: kw, Name: name, TypeParams: typeParams, DeclType: bashppBareLit(ce.Args[typeStart]), DeclTypeExpr: structType,
+			StructFields: fields, Lbrace: ce.Args[typeStart+1].Pos(), Rbrace: ce.Args[len(ce.Args)-1].Pos(),
 			End_: ce.Args[len(ce.Args)-1].End()}
 	}
-	if !alias && len(ce.Args) >= 5 && ce.Args[2].Lit() == "interface" &&
-		ce.Args[3].Lit() == "{" && ce.Args[len(ce.Args)-1].Lit() == "}" {
-		iface := bashppInterfaceFromWords(ce.Args[4 : len(ce.Args)-1])
+	if !alias && len(ce.Args) >= typeStart+3 && ce.Args[typeStart].Lit() == "interface" &&
+		ce.Args[typeStart+1].Lit() == "{" && ce.Args[len(ce.Args)-1].Lit() == "}" {
+		iface := bashppInterfaceFromWords(ce.Args[typeStart+2 : len(ce.Args)-1])
 		if iface == nil {
 			return nil
 		}
@@ -172,16 +174,16 @@ func bashppTypeDecl(ce *CallExpr, redirs []*Redirect) *BashPPDecl {
 		if m.Site != StartTypeDecl {
 			return nil
 		}
-		iface.Interface = bashppBareLit(ce.Args[2])
-		iface.Lbrace = ce.Args[3].Pos()
+		iface.Interface = bashppBareLit(ce.Args[typeStart])
+		iface.Lbrace = ce.Args[typeStart+1].Pos()
 		iface.Rbrace = ce.Args[len(ce.Args)-1].Pos()
-		return &BashPPDecl{Site: m.Site, Kw: kw, Name: name, DeclType: bashppBareLit(ce.Args[2]), DeclTypeExpr: iface,
-			Lbrace: ce.Args[3].Pos(), Rbrace: ce.Args[len(ce.Args)-1].Pos(), End_: ce.Args[len(ce.Args)-1].End()}
+		return &BashPPDecl{Site: m.Site, Kw: kw, Name: name, TypeParams: typeParams, DeclType: bashppBareLit(ce.Args[typeStart]), DeclTypeExpr: iface,
+			Lbrace: ce.Args[typeStart+1].Pos(), Rbrace: ce.Args[len(ce.Args)-1].Pos(), End_: ce.Args[len(ce.Args)-1].End()}
 	}
-	if !alias && len(ce.Args) >= 6 && ce.Args[2].Lit() == "enum" &&
-		ce.Args[3].Lit() == "{" && ce.Args[len(ce.Args)-1].Lit() == "}" {
+	if !alias && len(ce.Args) >= typeStart+4 && ce.Args[typeStart].Lit() == "enum" &&
+		ce.Args[typeStart+1].Lit() == "{" && ce.Args[len(ce.Args)-1].Lit() == "}" {
 		members := make([]*Lit, 0, len(ce.Args)-5)
-		for _, word := range ce.Args[4 : len(ce.Args)-1] {
+		for _, word := range ce.Args[typeStart+2 : len(ce.Args)-1] {
 			member := bashppBareLit(word)
 			if member == nil || strings.ContainsAny(member.Value, ",:") {
 				return nil
@@ -192,11 +194,11 @@ func bashppTypeDecl(ce *CallExpr, redirs []*Redirect) *BashPPDecl {
 		if m.Site != StartTypeDecl {
 			return nil
 		}
-		return &BashPPDecl{Site: m.Site, Kw: kw, Name: name, DeclType: bashppBareLit(ce.Args[2]),
-			EnumMembers: members, Lbrace: ce.Args[3].Pos(), Rbrace: ce.Args[len(ce.Args)-1].Pos(),
+		return &BashPPDecl{Site: m.Site, Kw: kw, Name: name, TypeParams: typeParams, DeclType: bashppBareLit(ce.Args[typeStart]),
+			EnumMembers: members, Lbrace: ce.Args[typeStart+1].Pos(), Rbrace: ce.Args[len(ce.Args)-1].Pos(),
 			End_: ce.Args[len(ce.Args)-1].End()}
 	}
-	if len(ce.Args) > 4 {
+	if len(ce.Args) > typeStart+2 {
 		return nil
 	}
 	typ := bashppBareLit(typeWord)
@@ -214,11 +216,43 @@ func bashppTypeDecl(ce *CallExpr, redirs []*Redirect) *BashPPDecl {
 	if typeExpr == nil {
 		return nil
 	}
+	typeParamNames := make(map[string]bool)
+	for _, param := range typeParams {
+		for _, n := range param.Names {
+			typeParamNames[n.Value] = true
+		}
+	}
+	typeExpr = bashppTypeParamUses(typeExpr, typeParamNames)
 	m := RecognizeStartSite(kw.Value + " " + name.Value)
 	if m.Site != StartTypeDecl {
 		return nil
 	}
-	return &BashPPDecl{Site: m.Site, Kw: kw, Name: name, DeclType: typ, DeclTypeExpr: typeExpr, Alias: alias, End_: typeWord.End()}
+	return &BashPPDecl{Site: m.Site, Kw: kw, Name: name, TypeParams: typeParams, DeclType: typ, DeclTypeExpr: typeExpr, Alias: alias, End_: typeWord.End()}
+}
+
+func bashppTypeDeclName(words []*Word) (*Lit, []*BashPPTypeParam, int, bool) {
+	if len(words) < 3 {
+		return nil, nil, 0, false
+	}
+	lit := bashppBareLit(words[1])
+	if lit != nil && bashppIsIdent(lit.Value) {
+		return lit, nil, 2, true
+	}
+	end := 1
+	for end < len(words) && !strings.HasSuffix(bashppWordText(words[end]), "]") {
+		end++
+	}
+	if end >= len(words) {
+		return nil, nil, 0, false
+	}
+	if end+1 >= len(words) {
+		return nil, nil, 0, false
+	}
+	name, params, ok := bashppFuncTypeParams(words[1 : end+1])
+	if name == nil || !bashppIsIdent(name.Value) || !ok {
+		return nil, nil, 0, false
+	}
+	return name, params, end + 1, true
 }
 
 func (p *Parser) bashppInterfaceForm(ce *CallExpr) Command {

@@ -95,7 +95,24 @@ func bashPPCloneCollectionMeta(meta *bashPPCollectionMeta, seen map[*bashPPColle
 func bashPPTypeText(typ syntax.BashPPTypeExpr) string {
 	switch x := typ.(type) {
 	case *syntax.BashPPNamedType:
+		if len(x.TypeArgs) == 0 {
+			return x.Name.Value
+		}
+		var args []string
+		for _, arg := range x.TypeArgs {
+			args = append(args, bashPPTypeText(arg.ArgType))
+		}
+		return x.Name.Value + "[" + strings.Join(args, ", ") + "]"
+	case *syntax.BashPPTypeParamType:
 		return x.Name.Value
+	case *syntax.BashPPUnionType:
+		var terms []string
+		for _, term := range x.Terms {
+			terms = append(terms, bashPPTypeText(term))
+		}
+		return strings.Join(terms, " | ")
+	case *syntax.BashPPApproxType:
+		return "~" + bashPPTypeText(x.Term)
 	case *syntax.BashPPCollectionType:
 		if x.Kind == "map" {
 			return "map[" + bashPPTypeText(x.Key) + "]" + bashPPTypeText(x.Element)
@@ -123,11 +140,11 @@ func (r *Runner) bashPPUnderlyingType(typ syntax.BashPPTypeExpr) syntax.BashPPTy
 			return typ
 		}
 		decl, found := r.bashPPTypes[name.Name.Value]
-		if !found || decl.typeExpr == nil || seen[name.Name.Value] {
+		if !found || decl.typeExpr == nil || seen[bashPPTypeText(name)] {
 			return typ
 		}
-		seen[name.Name.Value] = true
-		typ = decl.typeExpr
+		seen[bashPPTypeText(name)] = true
+		typ = r.bashPPInstantiateNamedType(name)
 	}
 }
 
@@ -160,7 +177,7 @@ func (r *Runner) bashPPCanonicalAssignableType(typ syntax.BashPPTypeExpr) syntax
 			return typ
 		}
 		seen[name.Name.Value] = true
-		typ = decl.typeExpr
+		typ = r.bashPPInstantiateNamedType(name)
 	}
 }
 
@@ -289,6 +306,12 @@ func (r *Runner) bashPPValidateCollectionType(typ syntax.BashPPTypeExpr) error {
 		if !ok {
 			return fmt.Errorf("BASHPP-ECOLLECTION-TYPE: undefined element type %s", name)
 		}
+		if len(decl.typeParams) > 0 || len(x.TypeArgs) > 0 {
+			if err := r.bashPPValidateNamedTypeArgs(x); err != nil {
+				return err
+			}
+			return r.bashPPValidateCollectionType(r.bashPPInstantiateNamedType(x))
+		}
 		if _, ok := decl.typeExpr.(*syntax.BashPPCollectionType); ok {
 			return r.bashPPValidateCollectionType(decl.typeExpr)
 		}
@@ -325,6 +348,8 @@ func (r *Runner) bashPPValidateCollectionType(typ syntax.BashPPTypeExpr) error {
 		return r.bashPPValidateCollectionType(x.Element)
 	case *syntax.BashPPPointerType:
 		return r.bashPPValidatePointerType(x)
+	case *syntax.BashPPTypeParamType:
+		return nil
 	}
 	return fmt.Errorf("BASHPP-ECOLLECTION-TYPE: unsupported collection type %s", bashPPTypeText(typ))
 }

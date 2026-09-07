@@ -98,3 +98,40 @@ func TestBashPPGenericFuncAST(t *testing.T) {
 		t.Fatalf("print = %q, want %q", out.String(), src)
 	}
 }
+
+func TestBashPPGenericNamedTypeAST(t *testing.T) {
+	const src = "type Box[T ~int\\|string] struct { Value T }\nvar b Box[int] = Box[int]{Value:7}\n"
+	for _, rd := range []io.Reader{strings.NewReader(src), funcOneByteReader{strings.NewReader(src)}} {
+		f, err := NewParser(Variant(LangBashPP)).Parse(rd, "generic-type.bpp")
+		if err != nil {
+			t.Fatal(err)
+		}
+		decl := f.Stmts[0].Cmd.(*BashPPDecl)
+		if len(decl.TypeParams) != 1 {
+			t.Fatalf("type params = %#v", decl.TypeParams)
+		}
+		if _, ok := decl.TypeParams[0].Constraint.(*BashPPUnionType); !ok {
+			t.Fatalf("constraint = %T, want union", decl.TypeParams[0].Constraint)
+		}
+		field := decl.DeclTypeExpr.(*BashPPStructType).Fields[0]
+		if _, ok := field.FieldTypeExpr.(*BashPPTypeParamType); !ok {
+			t.Fatalf("field type = %T, want type parameter", field.FieldTypeExpr)
+		}
+		varDecl := f.Stmts[1].Cmd.(*BashPPDecl)
+		named := varDecl.DeclTypeExpr.(*BashPPNamedType)
+		if named.Name.Value != "Box" || len(named.TypeArgs) != 1 {
+			t.Fatalf("var type = %#v", named)
+		}
+		var out strings.Builder
+		if err := NewPrinter().Print(&out, f); err != nil {
+			t.Fatal(err)
+		}
+		f2, err := NewParser(Variant(LangBashPP)).Parse(strings.NewReader(out.String()), "printed.bpp")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := f2.Stmts[0].Cmd.(*BashPPDecl).TypeParams[0].Constraint.(*BashPPUnionType); !ok {
+			t.Fatalf("reparsed constraint = %T", f2.Stmts[0].Cmd.(*BashPPDecl).TypeParams[0].Constraint)
+		}
+	}
+}

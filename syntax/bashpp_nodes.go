@@ -183,10 +183,11 @@ func (c *SiteClass) UnmarshalText(b []byte) error {
 // BashPPDecl could reach an encoder — and it is worth a line here because the
 // collision is invisible until a tree containing one is serialized.
 type BashPPDecl struct {
-	Site     StartSite // StartVar, StartConst or StartTypeDecl
-	Kw       *Lit      // the literal "var", "const" or "type" as written
-	Name     *Lit      // the declared identifier
-	DeclType *Lit      // the declared type, or nil when inferred
+	Site       StartSite // StartVar, StartConst or StartTypeDecl
+	Kw         *Lit      // the literal "var", "const" or "type" as written
+	Name       *Lit      // the declared identifier
+	TypeParams []*BashPPTypeParam
+	DeclType   *Lit // the declared type, or nil when inferred
 	// DeclTypeExpr is the lowering-ready form of a declared value type. It is
 	// populated for the struct/collection surface while DeclType retains the
 	// original compact spelling used by older API consumers.
@@ -502,11 +503,21 @@ func (*BashPPStructType) bashPPTypeExprNode()     {}
 func (*BashPPPointerType) bashPPTypeExprNode()    {}
 func (*BashPPInterfaceType) bashPPTypeExprNode()  {}
 func (*BashPPTypeParamType) bashPPTypeExprNode()  {}
+func (*BashPPUnionType) bashPPTypeExprNode()      {}
+func (*BashPPApproxType) bashPPTypeExprNode()     {}
 
-type BashPPNamedType struct{ Name *Lit }
+type BashPPNamedType struct {
+	Name     *Lit
+	TypeArgs []*BashPPTypeArg
+}
 
 func (t *BashPPNamedType) Pos() Pos { return t.Name.Pos() }
-func (t *BashPPNamedType) End() Pos { return t.Name.End() }
+func (t *BashPPNamedType) End() Pos {
+	if len(t.TypeArgs) > 0 {
+		return t.TypeArgs[len(t.TypeArgs)-1].End()
+	}
+	return t.Name.End()
+}
 
 // BashPPTypeParamType is a use of a function type parameter inside a
 // parameter/result type. It is distinct from BashPPNamedType so lowering and
@@ -516,6 +527,26 @@ type BashPPTypeParamType struct{ Name *Lit }
 
 func (t *BashPPTypeParamType) Pos() Pos { return t.Name.Pos() }
 func (t *BashPPTypeParamType) End() Pos { return t.Name.End() }
+
+// BashPPUnionType is the type-set union spelling used inside generic
+// constraints, for example `~int | string`.
+type BashPPUnionType struct {
+	Terms []BashPPTypeExpr
+	Bars  []*Lit
+}
+
+func (t *BashPPUnionType) Pos() Pos { return t.Terms[0].Pos() }
+func (t *BashPPUnionType) End() Pos { return t.Terms[len(t.Terms)-1].End() }
+
+// BashPPApproxType is the `~T` approximation term inside a type-set
+// constraint.
+type BashPPApproxType struct {
+	Tilde Pos
+	Term  BashPPTypeExpr
+}
+
+func (t *BashPPApproxType) Pos() Pos { return t.Tilde }
+func (t *BashPPApproxType) End() Pos { return t.Term.End() }
 
 // BashPPPointerType represents *T. Star is retained independently from the
 // element's position for exact diagnostics and source-to-source lowering.

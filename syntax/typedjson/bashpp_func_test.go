@@ -61,3 +61,39 @@ func TestBashPPGenericFuncRoundTrip(t *testing.T) {
 		t.Fatalf("round trip = %q, want %q", out.String(), src)
 	}
 }
+
+func TestBashPPGenericNamedTypeRoundTrip(t *testing.T) {
+	const src = "type Box[T ~int\\|string] struct { Value T }\nvar b Box[int] = Box[int]{Value:7}\n"
+	f, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(src), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var enc strings.Builder
+	if err := typedjson.Encode(&enc, f); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"TypeParams", "BashPPUnionType", "BashPPApproxType", "TypeArgs"} {
+		if !strings.Contains(enc.String(), want) {
+			t.Fatalf("encoded JSON missing %s: %s", want, enc.String())
+		}
+	}
+	node, err := typedjson.Decode(strings.NewReader(enc.String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	if err := syntax.NewPrinter().Print(&out, node); err != nil {
+		t.Fatal(err)
+	}
+	reparsed, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(out.String()), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var second strings.Builder
+	if err := typedjson.Encode(&second, reparsed); err != nil {
+		t.Fatal(err)
+	}
+	if second.String() != enc.String() {
+		t.Fatal("generic named type JSON changed after print/reparse")
+	}
+}

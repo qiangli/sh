@@ -185,6 +185,7 @@ func Walk(node Node, f func(Node) bool) {
 		// cases that follow cover every constructed Bash++ form.
 		walkNilable(node.Kw, f)
 		walkNilable(node.Name, f)
+		walkList(node.TypeParams, f)
 		walkNilable(node.DeclType, f)
 		walkList(node.Init, f)
 		if node.DeclTypeExpr != nil {
@@ -283,8 +284,16 @@ func Walk(node Node, f func(Node) bool) {
 		Walk(node.Sel, f)
 	case *BashPPNamedType:
 		Walk(node.Name, f)
+		walkList(node.TypeArgs, f)
 	case *BashPPTypeParamType:
 		Walk(node.Name, f)
+	case *BashPPUnionType:
+		for _, term := range node.Terms {
+			Walk(term, f)
+		}
+		walkList(node.Bars, f)
+	case *BashPPApproxType:
+		Walk(node.Term, f)
 	case *BashPPCollectionType:
 		walkNilable(node.Length, f)
 		walkNilable(node.Key, f)

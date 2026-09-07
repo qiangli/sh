@@ -5,6 +5,7 @@ package interp
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -64,6 +65,7 @@ type bashPPFunc struct {
 type bashPPType struct {
 	underlying string
 	alias      bool
+	typeParams []*syntax.BashPPTypeParam
 	members    []string
 	typeExpr   syntax.BashPPTypeExpr
 	fields     []*syntax.BashPPField
@@ -578,28 +580,8 @@ func (r *Runner) bashPPCheckTypeConstraints(fn *bashPPFunc, params []*syntax.Bas
 			if arg == nil {
 				continue
 			}
-			switch c := group.Constraint.(type) {
-			case *syntax.BashPPNamedType:
-				switch c.Name.Value {
-				case "any":
-					continue
-				case "comparable":
-					if r.bashPPComparableType(arg, make(map[string]bool)) {
-						continue
-					}
-				default:
-					if iface, ok := r.bashPPInterfaceType(c); ok {
-						if err := r.bashPPImplements(arg, iface); err == nil {
-							continue
-						}
-					} else if r.bashPPTypeAssignable(arg, c) {
-						continue
-					}
-				}
-			case *syntax.BashPPInterfaceType:
-				if err := r.bashPPImplements(arg, c); err == nil {
-					continue
-				}
+			if r.bashPPConstraintSatisfied(arg, group.Constraint) {
+				continue
 			}
 			r.errf("BASHPP-EGENERIC-CONSTRAINT: %s does not satisfy constraint for %s in %s\n", bashPPTypeText(arg), name.Value, fn.name())
 			r.exit.code = 2
@@ -607,6 +589,22 @@ func (r *Runner) bashPPCheckTypeConstraints(fn *bashPPFunc, params []*syntax.Bas
 		}
 	}
 	return true
+}
+
+func (r *Runner) bashPPTypeSetSatisfied(arg, constraint syntax.BashPPTypeExpr) bool {
+	switch c := constraint.(type) {
+	case *syntax.BashPPUnionType:
+		for _, term := range c.Terms {
+			if r.bashPPTypeSetSatisfied(arg, term) {
+				return true
+			}
+		}
+		return false
+	case *syntax.BashPPApproxType:
+		return bashPPTypeText(r.bashPPUnderlyingType(arg)) == bashPPTypeText(r.bashPPUnderlyingType(c.Term))
+	default:
+		return r.bashPPTypeAssignable(arg, c)
+	}
 }
 
 func (r *Runner) bashPPComparableType(typ syntax.BashPPTypeExpr, seen map[string]bool) bool {
@@ -617,12 +615,12 @@ func (r *Runner) bashPPComparableType(typ syntax.BashPPTypeExpr, seen map[string
 		if !found {
 			return bashPPBuiltinType(name)
 		}
-		if seen[name] || decl.typeExpr == nil {
+		if seen[bashPPTypeText(x)] || decl.typeExpr == nil {
 			return false
 		}
-		seen[name] = true
-		defer delete(seen, name)
-		return r.bashPPComparableType(decl.typeExpr, seen)
+		seen[bashPPTypeText(x)] = true
+		defer delete(seen, bashPPTypeText(x))
+		return r.bashPPComparableType(r.bashPPInstantiateNamedType(x), seen)
 	case *syntax.BashPPPointerType:
 		return true
 	case *syntax.BashPPCollectionType:
@@ -638,6 +636,79 @@ func (r *Runner) bashPPComparableType(typ syntax.BashPPTypeExpr, seen map[string
 		return true
 	case *syntax.BashPPTypeParamType:
 		return true
+	}
+	return false
+}
+
+func (r *Runner) bashPPInstantiateNamedType(named *syntax.BashPPNamedType) syntax.BashPPTypeExpr {
+	decl, ok := r.bashPPTypes[named.Name.Value]
+	if !ok || len(decl.typeParams) == 0 {
+		if ok && decl.typeExpr != nil {
+			return decl.typeExpr
+		}
+		return named
+	}
+	want := bashPPTypeParamCount(decl.typeParams)
+	if len(named.TypeArgs) != want {
+		return named
+	}
+	bindings := make(map[string]syntax.BashPPTypeExpr, want)
+	i := 0
+	for _, group := range decl.typeParams {
+		for _, name := range group.Names {
+			bindings[name.Value] = named.TypeArgs[i].ArgType
+			i++
+		}
+	}
+	return bashPPSubstituteType(decl.typeExpr, bindings)
+}
+
+func (r *Runner) bashPPValidateNamedTypeArgs(named *syntax.BashPPNamedType) error {
+	decl, ok := r.bashPPTypes[named.Name.Value]
+	if !ok {
+		return nil
+	}
+	want := bashPPTypeParamCount(decl.typeParams)
+	if want == 0 {
+		if len(named.TypeArgs) > 0 {
+			return fmt.Errorf("BASHPP-EGENERIC-ARITY: %s is not generic; got %d type argument(s)", named.Name.Value, len(named.TypeArgs))
+		}
+		return nil
+	}
+	if len(named.TypeArgs) != want {
+		return fmt.Errorf("BASHPP-EGENERIC-ARITY: %s expects %d type argument(s); got %d", named.Name.Value, want, len(named.TypeArgs))
+	}
+	i := 0
+	for _, group := range decl.typeParams {
+		for _, param := range group.Names {
+			arg := named.TypeArgs[i].ArgType
+			if !r.bashPPConstraintSatisfied(arg, group.Constraint) {
+				return fmt.Errorf("BASHPP-EGENERIC-CONSTRAINT: %s does not satisfy constraint for %s in %s", bashPPTypeText(arg), param.Value, named.Name.Value)
+			}
+			i++
+		}
+	}
+	return nil
+}
+
+func (r *Runner) bashPPConstraintSatisfied(arg, constraint syntax.BashPPTypeExpr) bool {
+	switch c := constraint.(type) {
+	case *syntax.BashPPNamedType:
+		switch c.Name.Value {
+		case "any":
+			return true
+		case "comparable":
+			return r.bashPPComparableType(arg, make(map[string]bool))
+		default:
+			if iface, ok := r.bashPPInterfaceType(c); ok {
+				return r.bashPPImplements(arg, iface) == nil
+			}
+			return r.bashPPTypeAssignable(arg, c)
+		}
+	case *syntax.BashPPInterfaceType:
+		return r.bashPPImplements(arg, c) == nil
+	case *syntax.BashPPUnionType, *syntax.BashPPApproxType:
+		return r.bashPPTypeSetSatisfied(arg, constraint)
 	}
 	return false
 }
@@ -1680,6 +1751,15 @@ func bashPPSubstituteType(typ syntax.BashPPTypeExpr, typeArgs map[string]syntax.
 		if arg := typeArgs[x.Name.Value]; arg != nil {
 			return arg
 		}
+	case *syntax.BashPPNamedType:
+		cp := *x
+		cp.TypeArgs = append([]*syntax.BashPPTypeArg(nil), x.TypeArgs...)
+		for i, arg := range cp.TypeArgs {
+			ac := *arg
+			ac.ArgType = bashPPSubstituteType(ac.ArgType, typeArgs)
+			cp.TypeArgs[i] = &ac
+		}
+		return &cp
 	case *syntax.BashPPCollectionType:
 		cp := *x
 		cp.Key = bashPPSubstituteType(x.Key, typeArgs)
@@ -1714,6 +1794,17 @@ func bashPPSubstituteType(typ syntax.BashPPTypeExpr, typeArgs map[string]syntax.
 			mc.Results = bashPPSubstituteFields(mc.Results, typeArgs)
 			cp.Methods[i] = &mc
 		}
+		return &cp
+	case *syntax.BashPPUnionType:
+		cp := *x
+		cp.Terms = append([]syntax.BashPPTypeExpr(nil), x.Terms...)
+		for i, term := range cp.Terms {
+			cp.Terms[i] = bashPPSubstituteType(term, typeArgs)
+		}
+		return &cp
+	case *syntax.BashPPApproxType:
+		cp := *x
+		cp.Term = bashPPSubstituteType(cp.Term, typeArgs)
 		return &cp
 	}
 	return typ
