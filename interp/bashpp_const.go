@@ -52,6 +52,9 @@ func (r *Runner) bashPPConstGroup(ctx context.Context, group *syntax.BashPPConst
 	seen := make(map[string]bool)
 	for _, spec := range group.Specs {
 		name := spec.Name.Value
+		if name == "_" {
+			continue
+		}
 		if !syntax.ValidName(name) || seen[name] || r.bashPPScope.entries[name] != nil {
 			r.errf("%sconstant %s redeclared in this scope\n", r.bashErrPrefix(spec.Pos()), name)
 			r.exit.code = 2
@@ -81,7 +84,7 @@ func (r *Runner) bashPPConstGroup(ctx context.Context, group *syntax.BashPPConst
 		expr := effective.InitExpr
 		// iota is predeclared, so an ordinary lexical declaration with the
 		// same name shadows it after that declaration's ConstSpec ends.
-		if r.bashPPScope.lookup("iota") == nil {
+		if r.bashPPScope.lookup("iota") == nil && r.bashPPFuncs["iota"] == nil {
 			expr = bashPPIotaExpr(expr, int(spec.Iota))
 		}
 		if !r.bashPPConstantScalarExpr(expr, "") {
@@ -110,6 +113,11 @@ func (r *Runner) bashPPConstGroup(ctx context.Context, group *syntax.BashPPConst
 			r.exit.code = 2
 			return
 		}
+		// The blank identifier declares no binding, but its ConstSpec still
+		// participates fully in expression validation and iota sequencing.
+		if spec.Name.Value == "_" {
+			continue
+		}
 		if err := r.bashPPScope.declare(spec.Name.Value, vr, true); err != nil {
 			r.errf("%s%v\n", r.bashErrPrefix(spec.Pos()), err)
 			r.exit.code = 2
@@ -124,6 +132,12 @@ func (r *Runner) bashPPConstGroup(ctx context.Context, group *syntax.BashPPConst
 			}
 		} else if scalar.value != nil {
 			cell.scalarKind = scalar.value.Kind()
+			if scalar.typ != "" {
+				cell.declType = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: scalar.typ}}
+				if _, named := r.bashPPTypes[scalar.typ]; named {
+					cell.typeName = scalar.typ
+				}
+			}
 		}
 		cell.constant = true
 		created = append(created, spec.Name.Value)

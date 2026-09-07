@@ -76,3 +76,45 @@ main()
 		t.Fatalf("out=%q stderr=%q err=%v", out, stderr, err)
 	}
 }
+
+func TestBashPPGroupedConstantsTypedExpressionIdentity(t *testing.T) {
+	const src = `type Count int
+const (
+ A Count = 1
+ B = A + 1
+)
+func same[T any](a T, b T) { printf 'same:%s:%s\n' "$a" "$b" }
+func main() {
+ same(A, B)
+}
+main()
+`
+	out, stderr, err := runBashSharpCall(t, src)
+	if err != nil || stderr != "" || out != "same:1:2\n" {
+		t.Fatalf("out=%q stderr=%q err=%v", out, stderr, err)
+	}
+}
+
+func TestBashPPGroupedConstantsBlankSpecsAdvanceIota(t *testing.T) {
+	const src = `const (
+ _ = iota
+ A
+ _
+ B
+)
+func main() { printf '%s:%s:%s\n' "$A" "$B" "${_-unbound}" }
+main()
+`
+	out, stderr, err := runBashSharpCall(t, src)
+	if err != nil || stderr != "" || out != "1:3:unbound\n" {
+		t.Fatalf("out=%q stderr=%q err=%v", out, stderr, err)
+	}
+}
+
+func TestBashPPGroupedConstantsFunctionShadowsIota(t *testing.T) {
+	const src = "func iota() {}\nconst (\n A = iota\n)\n"
+	_, stderr, err := runBashSharpCall(t, src)
+	if err == nil || !strings.Contains(stderr, "BASHPP-ECONST-EXPR") {
+		t.Fatalf("stderr=%q err=%v", stderr, err)
+	}
+}
