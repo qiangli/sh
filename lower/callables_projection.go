@@ -168,10 +168,8 @@ func (e *emitter) declarationProjection(n *syntax.BashPPDecl) projection {
 		p = e.projectionType(n.DeclType.Value, nil)
 	}
 	if p.kind == projectFloat {
-		if n.InitExpr == nil && len(n.Init) == 0 {
-			return zeroFloatProjection()
-		}
-		return projection{kind: projectFloat}
+		p.runtimeFloat = true
+		return p
 	}
 	if n.DeclType == nil && n.DeclTypeExpr == nil {
 		if n.InitExpr != nil {
@@ -228,6 +226,10 @@ func (e *emitter) projectBinding(n syntax.Node, name, expression string) (text s
 	p, ok := e.projections.projectionLookup(name)
 	if !ok {
 		return expression, nil
+	}
+	if p.runtimeFloat {
+		e.bridge = true
+		return e.prefix + "rt.TypedFloatProjection(" + expression + ")", nil
 	}
 	if p.receiver && p.kind == projectPointer {
 		e.bridge = true

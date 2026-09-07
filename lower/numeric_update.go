@@ -1,6 +1,8 @@
 package lower
 
 import (
+	"go/token"
+	"go/types"
 	"strconv"
 	"strings"
 
@@ -52,8 +54,8 @@ func (e *emitter) numericUpdate(n *syntax.BashPPUpdate, target, rhs, targetType 
 // Passed on its own the constant would be inferred at Go's default type — int
 // for `0`, float64 for `0.5` — and a `float32` or named-width target would
 // then be updated through a type the source never named. A constant the target
-// cannot carry stays a static rejection, which is what Go does with the same
-// operand and what the engine reports for it.
+// cannot carry remains unconverted so the checked operation reports the source
+// overflow diagnostic without rejecting the generated Go program.
 //
 // A shift count is deliberately excluded: it is not an operand of the target's
 // width, so converting it would reject `wide <<= 300`, which is a defined
@@ -68,7 +70,23 @@ func (e *emitter) numericUpdateValue(n *syntax.BashPPUpdate, rhs, targetType str
 	if !numericUpdateUntypedConstant(n.Value) {
 		return rhs
 	}
-	return targetType + "(" + rhs + ")"
+	conversion := targetType + "(" + rhs + ")"
+	checkedType := targetType
+	if decl := e.declaredTypes[targetType]; decl != nil {
+		if decl.DeclType != nil {
+			checkedType = decl.DeclType.Value
+		} else if decl.DeclTypeExpr != nil {
+			if typ, err := e.typeExpr(decl.DeclTypeExpr); err == nil {
+				checkedType = typ
+			}
+		}
+	}
+	if scalarType(checkedType) {
+		if _, err := types.Eval(token.NewFileSet(), nil, token.NoPos, checkedType+"("+rhs+")"); err != nil {
+			return rhs
+		}
+	}
+	return conversion
 }
 
 // numericUpdatePosition is the node a diagnostic is anchored to. An update
@@ -158,4 +176,40 @@ func numericUpdateName(x syntax.BashPPExpr) string {
 		return x.Sel.Value
 	}
 	return ""
+}
+
+// Ordinary safe integer updates stay native and keep pure typed units free of
+// support imports. Only an operation with a source runtime failure boundary
+// needs the checked helper.
+func (e *emitter) numericUpdateNeedsCheck(n *syntax.BashPPUpdate, targetType, rhs string) bool {
+	if targetType == "string" {
+		return false
+	}
+	if e.projectionExpr(n.Target).kind == projectFloat {
+		return true
+	}
+	switch n.Op.Value {
+	case "/=", "%=", "<<=", ">>=":
+		return true
+	}
+	if sourceType := e.projectionExpr(n.Value).sourceType; targetType != "" && sourceType != "" {
+		return targetType != sourceType
+	}
+	if numericUpdateUntypedConstant(n.Value) && targetType != "" {
+		check := targetType
+		if decl := e.declaredTypes[check]; decl != nil {
+			if decl.DeclType != nil {
+				check = decl.DeclType.Value
+			} else if decl.DeclTypeExpr != nil {
+				if typ, err := e.typeExpr(decl.DeclTypeExpr); err == nil {
+					check = typ
+				}
+			}
+		}
+		if scalarType(check) {
+			_, err := types.Eval(token.NewFileSet(), nil, token.NoPos, check+"("+rhs+")")
+			return err != nil
+		}
+	}
+	return false
 }

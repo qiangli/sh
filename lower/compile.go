@@ -746,7 +746,7 @@ func (e *emitter) command(c syntax.Command) (string, error) {
 		}
 		e.bind(n.Name.Value)
 		projection := e.declarationProjection(n)
-		if projection.kind == projectFloat && !projection.hasText {
+		if projection.kind == projectFloat && !projection.hasText && !projection.runtimeFloat {
 			return "", e.fail(n, CodeUnsupported, "initialized typed float needs certified scalar conversion semantics")
 		}
 		e.projections.projectionBind(n.Name.Value, projection)
@@ -959,7 +959,15 @@ func (e *emitter) command(c syntax.Command) (string, error) {
 			return "", err
 		}
 		r, err := e.expr(n.Value)
-		return l + " " + n.Op.Value + " " + r, err
+		if err != nil {
+			return "", err
+		}
+		typ := e.projectionExpr(n.Target).sourceType
+		if e.numericUpdateNeedsCheck(n, typ, r) {
+			e.bridge = true
+			return e.numericUpdate(n, l, r, typ)
+		}
+		return l + " " + n.Op.Value + " " + r, nil
 	case *syntax.BashPPIf:
 		return e.ifStmt(n)
 	case *syntax.BashPPFor:
@@ -1044,6 +1052,9 @@ func (e *emitter) forStmt(n *syntax.BashPPFor) (string, error) {
 		if err != nil {
 			return "", err
 		}
+	}
+	if strings.HasPrefix(strings.TrimSpace(post), "if ") {
+		post = "func(){" + post + "}()"
 	}
 	if n.Cond != nil {
 		cond, err = e.expr(n.Cond)

@@ -275,15 +275,6 @@ func main() {
 	})
 }
 
-// TestNumericUpdateCompileHookPending records what this story does not own.
-// Wiring the *syntax.BashPPUpdate dispatch in compile.go to numericUpdate is
-// core's edit; until it lands the statement is still emitted as plain Go, so
-// the whole-compile assertion is deliberately left pending rather than
-// asserting the unwired form as if it were the intended one.
-func TestNumericUpdateCompileHookPending(t *testing.T) {
-	t.Skip("pending core: compile.go dispatches *syntax.BashPPUpdate to emitter.numericUpdate")
-}
-
 func numericModule(t *testing.T, dir string) {
 	t.Helper()
 	root, err := filepath.Abs("..")
