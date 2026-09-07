@@ -126,6 +126,21 @@ func (e *emitter) lexicalValues(source []byte) ([]byte, error) {
 				return false
 			}
 		}
+		if selector, ok := n.(*ast.SelectorExpr); ok {
+			if selection := p.info.Selections[selector]; selection != nil && selection.Kind() == types.MethodVal {
+				if signature, ok := selection.Obj().Type().(*types.Signature); ok {
+					_, pointerReceiver := signature.Recv().Type().(*types.Pointer)
+					_, scalarReceiver := p.info.TypeOf(selector.X).Underlying().(*types.Basic)
+					if pointerReceiver && scalarReceiver && p.info.Types[selector.X].Addressable() {
+						if bindings := p.contextBindings(selector); bindings != "" {
+							selector.X = p.parse("(*" + p.rt + "MustValue(" + p.rt + "LexicalAddress(" + bindings + ",&(" + p.text(selector.X) + ")," + p.site(selector, "") + ")))")
+							p.markChanged(selector)
+							return false
+						}
+					}
+				}
+			}
+		}
 		if unary, ok := n.(*ast.UnaryExpr); ok && unary.Op == token.AND {
 			return false
 		}

@@ -127,3 +127,31 @@ func TestLexicalTransferKeepsOriginalFailureAndCommitBoundary(t *testing.T) {
 		t.Fatal("successful transfer did not invalidate once")
 	}
 }
+
+func TestLexicalAddressKeepsStorageAndRejectsInvalidReads(t *testing.T) {
+	p := lexicalProgram(t)
+	x := Cell[int](p.Bindings, "x", "x", KindScalar)
+	x.Value = 1
+	x.Present = true
+	writeRaw(t, p, "x", "010")
+	address, err := LexicalAddress(p.Bindings, &x.Value, ValueSite{Name: "x"})
+	if err != nil || address != &x.Value || *address != 8 {
+		t.Fatalf("address=%p target=%p value=%v error=%v", address, &x.Value, x.Value, err)
+	}
+	*address = 9
+	if err := p.Bindings.NativeWrittenAt(address); err != nil {
+		t.Fatal(err)
+	}
+	if x.Value != 9 {
+		t.Fatal("receiver copied storage")
+	}
+	writeRaw(t, p, "x", "bad")
+	address, err = LexicalAddress(p.Bindings, &x.Value, ValueSite{Name: "x", Line: 3})
+	if address != nil || err == nil || err.Error() != "BASHPP-EEXPR-CONVERT: cannot convert String to int" {
+		t.Fatalf("invalid receiver %p %v", address, err)
+	}
+	text, _, err := p.Bindings.ShellValue(p.Session, "x")
+	if err != nil || text != "bad" {
+		t.Fatalf("invalid check mutated spelling: %q %v", text, err)
+	}
+}

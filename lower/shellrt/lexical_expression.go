@@ -233,3 +233,15 @@ func LexicalTransferResults[F, S any](b *LexicalBindings, frame F, sidecars S, t
 	}
 	return nil
 }
+
+// LexicalAddress validates an implicit pointer-method receiver without making
+// a value copy. Method values retain this original native address, including
+// aliases and mutations performed after the method value was captured.
+func LexicalAddress[T any](bindings *LexicalBindings, address *T, site ValueSite) (*T, error) {
+	value, err := LoadAddress(bindings, address, site)
+	if err != nil {
+		return nil, err
+	}
+	*address = value
+	return address, nil
+}
