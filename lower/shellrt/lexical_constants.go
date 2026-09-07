@@ -45,16 +45,30 @@ func RegisterConstant[T any](b *LexicalBindings, id, name, sourceType string, va
 	info := LexicalInfo{SourceType: sourceType, Constant: true, Readonly: true}
 	b.store.mu.Lock()
 	if existing := b.store.slots[id]; existing != nil {
-		defer b.store.mu.Unlock()
-		if !existing.raw.info.Constant {
-			return &LexicalWriteError{name, "cannot replace a variable binding with a constant"}
+		err := func() error {
+			if !existing.raw.info.Constant {
+				return &LexicalWriteError{name, "cannot replace a variable binding with a constant"}
+			}
+			if existing.value.Type() != reflect.TypeFor[T]() || existing.kind != kind {
+				return &LexicalWriteError{name, "inconsistent constant type or projection"}
+			}
+			if existing.raw.info != info || !reflect.DeepEqual(existing.value.Interface(), value) {
+				return &LexicalWriteError{name, "constant re-registered with a different value"}
+			}
+			return nil
+		}()
+		b.store.mu.Unlock()
+		if err != nil {
+			return err
 		}
-		if existing.value.Type() != reflect.TypeFor[T]() || existing.kind != kind {
-			return &LexicalWriteError{name, "inconsistent constant type or projection"}
-		}
-		if existing.raw.info != info || !reflect.DeepEqual(existing.value.Interface(), value) {
-			return &LexicalWriteError{name, "constant re-registered with a different value"}
-		}
+		// Idempotent in the store is not idempotent in the view. A captured
+		// view carries its own name table, so a second registration reaching
+		// an already-known slot must still publish the name — otherwise the
+		// constant exists but is invisible to visible(), and the boundary
+		// stops projecting it after the first call.
+		b.mu.Lock()
+		b.names[name] = id
+		b.mu.Unlock()
 		return nil
 	}
 	storage := reflect.New(reflect.TypeFor[T]()).Elem()

@@ -33,11 +33,19 @@ Go type checker, decides its outcome. `nativeScalarShellAssignment` declines
 any target `lexicalConstantAssigned` reports as constant, and the statement
 falls through to an ordinary shell region.
 
-The tracking behind that predicate lives in `callables_lexical_constants.go`
-and is keyed by the emitter that is lowering, because `emitter` itself is
-declared in `compile.go`. Core calls `noteLexicalConstant` from the `const` arm
-of declaration lowering, `dropLexicalConstants` on scope pop, and
-`releaseLexicalConstants` when the pass finishes.
+`lexicalConstantAssigned` reads the emitter's own scoped projection metadata:
+
+```go
+p, ok := e.projections.projectionLookup(name)
+return ok && p.constant
+```
+
+`projection.constant` is set when a `const` BashPPDecl or ConstGroup spec is
+lowered. Reusing the projector is not just economy — it already models
+shadowing, scope push/pop and captured function views, so an inner `var x` is
+native storage again and the constant returns when that scope pops. A second
+table keyed by name would have to re-derive all of that, and one keyed by
+emitter pointer would leak across concurrent compiles.
 
 ## 2. The constant needs a shadow at the boundary
 
@@ -54,6 +62,11 @@ Three properties matter:
   constant, and the registration passes the value.
 - **The shadow is not in the address registry.** No pointer can alias it, so no
   native write can arrive through one.
+- **A repeated registration republishes the name.** A declaration re-executed
+  in a loop or a re-entered callable reaches an identity the store already
+  holds. If the spelling was rebound in between, returning early would leave
+  the constant in the store but pointing nowhere, and the boundary would
+  silently stop projecting it.
 - **Registration is keyed by resolved identity** — the same
   `local:<offset>:<name>` key `lexicalLocals` mints — not by spelling, so a
   constant shadowing a variable of the same name is a distinct binding, and
@@ -82,3 +95,8 @@ so `lexicalStorage` installs it with one line after storage registration:
 ```go
 edits = append(edits, e.lexicalConstants(file, fs, info)...)
 ```
+
+It descends into declarations that take no program parameter of their own: the
+entry and the source main hold the root body as a literal passed to
+`Program.Run`, and that literal's parameter is the only context a top-level
+source constant ever has.

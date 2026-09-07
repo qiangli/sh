@@ -106,3 +106,84 @@ func TestConstantsReportsMetadataForTheDeclarationPolicy(t *testing.T) {
 		t.Fatal("a variable binding reported constant metadata")
 	}
 }
+
+// A repeated registration reaches an ID the store already holds whenever a
+// declaration is re-executed — a loop body, a re-entered callable. If the name
+// was rebound in between (an inner variable shadowing the spelling), returning
+// early leaves the constant in the store but pointing nowhere, so the boundary
+// silently stops projecting it and stops knowing the identity is constant.
+func TestRegisterConstantRepublishesNameOnRepeatedRegistration(t *testing.T) {
+	b := NewLexicalBindings()
+	if err := RegisterConstant(b, "local:905:x", "x", "int", 1, KindScalar); err != nil {
+		t.Fatal(err)
+	}
+	shadow, present := 42, true
+	if err := Register(b, "local:12:x", "x", &shadow, &present, KindScalar); err != nil {
+		t.Fatal(err)
+	}
+	if _, constant := b.ConstantInfo(b.names["x"]); constant {
+		t.Fatal("the shadowing variable did not take the name")
+	}
+
+	// Re-entering the constant's scope: the store already has this ID.
+	if err := RegisterConstant(b, "local:905:x", "x", "int", 1, KindScalar); err != nil {
+		t.Fatal(err)
+	}
+	slot, ok := b.visible()["x"]
+	if !ok {
+		t.Fatal("a repeated registration left the constant invisible")
+	}
+	if !slot.raw.info.Constant {
+		t.Fatal("the name did not return to the constant identity")
+	}
+	text, err := slot.shellText()
+	if err != nil || text != "1" {
+		t.Fatalf("shell text = %q/%v", text, err)
+	}
+	constants, err := b.Constants()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []ConstBinding{{ID: "local:905:x", Name: "x", SourceType: "int", Text: "1"}}
+	if !reflect.DeepEqual(constants, want) {
+		t.Fatalf("Constants() = %+v, want %+v", constants, want)
+	}
+	if shadow != 42 {
+		t.Fatalf("the shadowed variable's storage changed to %d", shadow)
+	}
+	// Still idempotent rather than a redeclaration, however often it repeats.
+	for range 3 {
+		if err := RegisterConstant(b, "local:905:x", "x", "int", 1, KindScalar); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, ok := b.visible()["x"]; !ok {
+		t.Fatal("a later registration lost the constant")
+	}
+}
+
+// A fresh captured view that never saw the constant registers it from scratch,
+// which must not disturb the parent's binding.
+func TestRegisterConstantInFreshViewLeavesParentIntact(t *testing.T) {
+	b := NewLexicalBindings()
+	if err := RegisterConstant(b, "local:905:x", "x", "int", 1, KindScalar); err != nil {
+		t.Fatal(err)
+	}
+	view := b.CaptureNames(map[string]string{})
+	if _, ok := view.visible()["x"]; ok {
+		t.Fatal("an uncaptured constant was already visible")
+	}
+	if err := RegisterConstant(view, "local:905:x", "x", "int", 1, KindScalar); err != nil {
+		t.Fatal(err)
+	}
+	for _, bindings := range []*LexicalBindings{b, view} {
+		slot, ok := bindings.visible()["x"]
+		if !ok || !slot.raw.info.Constant {
+			t.Fatalf("constant missing: visible=%v", ok)
+		}
+		text, err := slot.shellText()
+		if err != nil || text != "1" {
+			t.Fatalf("shell text = %q/%v", text, err)
+		}
+	}
+}
