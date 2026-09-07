@@ -27,6 +27,9 @@ import (
 // a region and a task independent observations rather than saved-and-restored
 // global state.
 type Program struct {
+	// Bindings owns this entry's native lexical cells and captured name view.
+	Bindings *LexicalBindings
+
 	// Context is the context an in-process tool is called with. It is derived
 	// from the frame in effect, so the agentic observation and the region
 	// always agree.
@@ -88,6 +91,7 @@ func NewProgram(opts ...SessionOption) (*Program, error) {
 		return nil, err
 	}
 	p := &Program{
+		Bindings:     NewLexicalBindings(),
 		Session:      session,
 		Channels:     &ChannelScope{},
 		Readonly:     &ReadonlyState{},
@@ -149,6 +153,7 @@ func (p *Program) Child(ctx context.Context, session *Session) *Program {
 	}
 	frame := p.Frame.Child()
 	return &Program{
+		Bindings:     p.Bindings.Fork(),
 		Context:      frame.Context(ctx),
 		Session:      session,
 		Channels:     p.Channels,
