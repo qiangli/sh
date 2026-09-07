@@ -50,6 +50,10 @@ func (e *emitter) shellStatement(stmt *syntax.Stmt) (string, error) {
 		if node == nil {
 			return false
 		}
+		if call, ok := node.(*syntax.CallExpr); ok && len(call.Args) > 0 && e.nativeShellNames[call.Args[0].Lit()] {
+			unsupported = node
+			return false
+		}
 		if _, scope := node.(*syntax.BashPPAgenticBlock); !scope && strings.HasPrefix(nodeName(node), "BashPP") {
 			unsupported = node
 			return false

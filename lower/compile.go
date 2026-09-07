@@ -54,6 +54,7 @@ type emitter struct {
 	inferredParams     map[*syntax.BashPPField]string
 	globalDecls        strings.Builder
 	globalChecked      map[*syntax.BashPPShortDecl]string
+	nativeShellNames   map[string]bool
 }
 
 // Compile returns canonical Go and mappings, or positioned diagnostics with no
@@ -88,6 +89,7 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 	e.projections.projectionPush()
 	e.needsExecution(file)
 	e.needsShell(file)
+	e.findNativeShells(file)
 	if options.Entry != "" {
 		if !token.IsIdentifier(options.Entry) || !ast.IsExported(options.Entry) {
 			return nil, e.fail(file, CodeType, "entry must be an exported Go identifier")
@@ -472,6 +474,9 @@ func (e *emitter) statementFlags(s *syntax.Stmt) error {
 	return nil
 }
 func (e *emitter) statement(s *syntax.Stmt) (string, error) {
+	if text, handled, err := e.nativeShellStatement(s); handled || err != nil {
+		return text, err
+	}
 	if e.dynamicShell(s) {
 		return e.shellStatement(s)
 	}
@@ -496,6 +501,11 @@ func (e *emitter) statement(s *syntax.Stmt) (string, error) {
 	}
 	if e.execution && reset != "" {
 		reset = e.program() + ".SetStatus(0)\n"
+	}
+	if _, ok := s.Cmd.(*syntax.CallExpr); ok && hasBadSubstitution(s) {
+		e.bridge = true
+		failure := e.prefix + "expansionError"
+		text = "if " + failure + " := " + e.prefix + "rt.TryShellStatement(func(){\n" + text + "\n}); " + failure + " != nil {" + e.operationFailure(failure) + "}"
 	}
 	return e.mark(s.Cmd) + reset + text + "\n", nil
 }

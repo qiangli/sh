@@ -55,7 +55,8 @@ type Program struct {
 	// seq is the bookkeeping shared by the sequential regions of one
 	// execution: the panic chain. A task forks it, because Go's panic state
 	// is per goroutine.
-	seq *sequential
+	seq          *sequential
+	nativeShells *nativeShellRegistry
 
 	// owner marks the program whose Run revokes the channel scope. A task
 	// entry is not an owner: it must not close channels its siblings still use.
@@ -87,12 +88,13 @@ func NewProgram(opts ...SessionOption) (*Program, error) {
 		return nil, err
 	}
 	p := &Program{
-		Session:  session,
-		Channels: &ChannelScope{},
-		Readonly: &ReadonlyState{},
-		Frame:    Off(),
-		seq:      &sequential{},
-		owner:    true,
+		Session:      session,
+		Channels:     &ChannelScope{},
+		Readonly:     &ReadonlyState{},
+		Frame:        Off(),
+		seq:          &sequential{},
+		nativeShells: &nativeShellRegistry{},
+		owner:        true,
 	}
 	p.Context = p.Frame.Context(session.Context())
 	return p, nil
@@ -147,13 +149,14 @@ func (p *Program) Child(ctx context.Context, session *Session) *Program {
 	}
 	frame := p.Frame.Child()
 	return &Program{
-		Context:  frame.Context(ctx),
-		Session:  session,
-		Channels: p.Channels,
-		Readonly: p.Readonly,
-		Frame:    frame,
-		seq:      &sequential{},
-		owner:    false,
+		Context:      frame.Context(ctx),
+		Session:      session,
+		Channels:     p.Channels,
+		Readonly:     p.Readonly,
+		nativeShells: p.nativeShells.clone(),
+		Frame:        frame,
+		seq:          &sequential{},
+		owner:        false,
 	}
 }
 

@@ -117,6 +117,10 @@ func (e *emitter) nativeWordExpr(n syntax.Node, text string) (string, error) {
 	return out.String(), nil
 }
 func (e *emitter) parameter(p *syntax.ParamExp) (string, error) {
+	if p.BadSubst != nil {
+		e.bridge = true
+		return e.prefix + "rt.BadSubstitutionValue()", nil
+	}
 	if p.Param != nil && strings.Contains(p.Param.Value, ".") && p.Index == nil && p.Exp == nil && !p.Excl && !p.Length {
 		value, handled, err := e.shellProjection(&syntax.Word{Parts: []syntax.WordPart{p.Param}})
 		if handled || err != nil {
