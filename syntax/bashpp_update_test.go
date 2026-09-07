@@ -71,3 +71,30 @@ func TestBashPPUpdateClassicPOSIXIsolation(t *testing.T) {
 		}
 	}
 }
+
+func TestBashPPCompactIndexedIncDecStreamingPrint(t *testing.T) {
+	const src = "func f() {\n\tm[k]++\n}\n"
+	parse := func(rd io.Reader) *File {
+		file, err := NewParser(Variant(LangBashPP)).Parse(rd, "map-inc.bpp")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return file
+	}
+	buffered := parse(strings.NewReader(src))
+	streamed := parse(iotest.OneByteReader(strings.NewReader(src)))
+	if !reflect.DeepEqual(buffered, streamed) {
+		t.Fatal("buffered and one-byte indexed inc-dec trees differ")
+	}
+	body := buffered.Stmts[0].Cmd.(*BashPPFuncDecl).Body
+	if _, ok := body.Stmts[0].Cmd.(*BashPPIncDec); !ok {
+		t.Fatalf("indexed inc-dec parsed as %T", body.Stmts[0].Cmd)
+	}
+	var printed strings.Builder
+	if err := NewPrinter().Print(&printed, buffered); err != nil {
+		t.Fatal(err)
+	}
+	if printed.String() != src {
+		t.Fatalf("print = %q, want %q", printed.String(), src)
+	}
+}

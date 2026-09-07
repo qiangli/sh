@@ -1013,7 +1013,22 @@ func bashppStandaloneIncDec(words []*Word) *BashPPIncDec {
 		}
 	} else if len(words) == 2 {
 		targetWord, op = words[0], bashppBareLit(words[1])
-		if op == nil || op.Value != "++" && op.Value != "--" {
+		var splitCompact bool
+		if parts := words[0].Parts; len(parts) > 0 {
+			if tail, ok := parts[len(parts)-1].(*Lit); ok {
+				splitCompact = !tail.Pos().IsValid() && op != nil && tail.Value == op.Value
+			}
+		}
+		if op != nil && (op.Value == "+" || op.Value == "-") && splitCompact {
+			firstText := bashppWordText(words[0])
+			if !strings.HasSuffix(firstText, op.Value) {
+				return nil
+			}
+			opPos := posAddCol(op.Pos(), -1)
+			targetLit := &Lit{ValuePos: words[0].Pos(), ValueEnd: opPos, Value: strings.TrimSuffix(firstText, op.Value)}
+			targetWord = &Word{Parts: []WordPart{targetLit}}
+			op = &Lit{ValuePos: opPos, ValueEnd: op.End(), Value: op.Value + op.Value}
+		} else if op == nil || op.Value != "++" && op.Value != "--" {
 			return nil
 		}
 	}

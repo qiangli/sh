@@ -83,3 +83,67 @@ func TestBashPPCompoundOperatorMatrix(t *testing.T) {
 		})
 	}
 }
+
+func TestBashPPMapIndexCompoundAndIncDec(t *testing.T) {
+	const src = `func main() {
+ m := map[string]uint8{"present": 254}
+ key := "present"
+ m[key]++
+ m["missing"] += 2
+ printf '%s:%s' m["present"] m["missing"]
+}
+main()
+`
+	var out strings.Builder
+	r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP))
+	bashPPRun(t, r, src)
+	qt.Assert(t, qt.Equals(out.String(), "255:2"))
+}
+
+func TestBashPPUpdateScalarProvenanceAndUint64Wrap(t *testing.T) {
+	const src = `func main() {
+ var n uint64 = 18446744073709551615
+ n++
+ text := "2"
+ text += "3"
+ text += "4"
+ printf '%s:%s' "$n" "$text"
+}
+main()
+`
+	var out strings.Builder
+	r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP))
+	bashPPRun(t, r, src)
+	qt.Assert(t, qt.Equals(out.String(), "0:234"))
+}
+
+func TestBashPPUpdateRuntimeFloatDivisionByZero(t *testing.T) {
+	const src = `func main() {
+ var positive float64 = 1
+ var zero float64 = 0
+ positive /= 0
+ zero /= 0
+ printf '%s:%s' "$positive" "$zero"
+}
+main()
+`
+	var out strings.Builder
+	r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP))
+	bashPPRun(t, r, src)
+	qt.Assert(t, qt.Equals(out.String(), "+Inf:NaN"))
+}
+
+func TestBashPPUpdateIntegerDivisionByZeroDoesNotCommit(t *testing.T) {
+	const src = `func main() {
+ var n int = 7
+ n /= 0
+ printf ':%s' "$n"
+}
+main()
+`
+	var out strings.Builder
+	r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP), interp.WithBashCompatErrors(true))
+	bashPPRun(t, r, src)
+	qt.Assert(t, qt.StringContains(out.String(), "BASHPP-EEXPR-DIVZERO"))
+	qt.Assert(t, qt.StringContains(out.String(), ":7"))
+}
