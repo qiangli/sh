@@ -95,7 +95,8 @@ func bashPPPredeclaredCall(c *syntax.BashPPCall) string {
 		return ""
 	}
 	switch name := c.Fun[0].Value; name {
-	case "panic", "recover":
+	case "append", "cap", "clear", "copy", "delete", "len", "make",
+		"max", "min", "new", "panic", "print", "println", "recover":
 		return name
 	}
 	return ""

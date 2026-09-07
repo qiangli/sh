@@ -282,7 +282,8 @@ func (p *Parser) bashppRegisterFunc(name string) {
 // parenthesis — so what is claimed is exactly the shape bash rejects today.
 func bashppPredeclaredFunc(name string) bool {
 	switch name {
-	case "panic", "recover":
+	case "append", "cap", "clear", "copy", "delete", "len", "make",
+		"max", "min", "new", "panic", "print", "println", "recover":
 		return true
 	}
 	return false

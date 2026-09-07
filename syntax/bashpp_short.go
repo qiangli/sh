@@ -1367,14 +1367,16 @@ func (p *Parser) bashppParenForm(ce *CallExpr) Command {
 	var opPos Pos
 	short := false
 	assignNew := false
+	assignCall := false
 	var assignTarget *Word
 	if len(ce.Args) >= 3 {
 		op := len(ce.Args) - 2
 		opLit, funLit := bashppBareLit(ce.Args[op]), bashppWordLit(ce.Args[op+1])
 		var ok bool
-		if opLit != nil && opLit.Value == "=" && funLit != nil && funLit.Value == "new" &&
+		if opLit != nil && opLit.Value == "=" && funLit != nil && bashppPredeclaredFunc(funLit.Value) &&
 			len(ce.Args) == 3 && bashppIsIdent(bashppWordText(ce.Args[0])) && p.bashppFuncDepth > 0 {
-			name, opPos, assignTarget, assignNew = funLit, opLit.Pos(), ce.Args[0], true
+			name, opPos, assignTarget, assignCall = funLit, opLit.Pos(), ce.Args[0], true
+			assignNew = funLit.Value == "new"
 		} else if opLit == nil || opLit.Value != ":=" || funLit == nil {
 			return nil
 		} else {
@@ -1452,37 +1454,60 @@ func (p *Parser) bashppParenForm(ce *CallExpr) Command {
 	// not spell rewinds to the shell, which keeps `make(1)` and the GNU make
 	// command exactly as they are.
 	if short && p.bashppFuncDepth > 0 && name.Value == "make" {
+		makeTxn := p.beginBashPPTxn()
 		mk := p.bashppMakeChanTail(name, lparen)
 		if mk == nil {
-			txn.rollback(p)
-			return nil
+			makeTxn.rollback(p)
+		} else {
+			makeTxn.commit(p)
+			txn.commit(p)
+			return &BashPPShortDecl{Lhs: lhs, Class: ClassR, OpPos: opPos, GoRegion: p.bashppFuncDepth > 0, MakeChan: mk}
 		}
-		txn.commit(p)
-		return &BashPPShortDecl{Lhs: lhs, Class: ClassR, OpPos: opPos, GoRegion: p.bashppFuncDepth > 0, MakeChan: mk}
 	}
 	if (short || assignNew) && p.bashppFuncDepth > 0 && name.Value == "new" {
+		newTxn := p.beginBashPPTxn()
 		typeWord := p.getWord()
-		typ := bashppTypeExpr(typeWord)
+		var typ BashPPTypeExpr
+		if typeWord != nil {
+			typ = bashppTypeExpr(typeWord)
+		}
 		if typ == nil || p.tok != rightParen {
-			txn.rollback(p)
-			return nil
+			newTxn.rollback(p)
+		} else {
+			rparen := p.pos
+			p.next()
+			if !bashppCallTerminator(p.tok) {
+				newTxn.rollback(p)
+			} else {
+				newTxn.commit(p)
+				txn.commit(p)
+				newExpr := &BashPPNewExpr{New: name, Lparen: lparen, AllocType: typ, Rparen: rparen}
+				if assignNew {
+					value := &Word{Parts: []WordPart{&Lit{ValuePos: name.Pos(), ValueEnd: posAddCol(rparen, 1), Value: "new(" + bashppWordText(typeWord) + ")"}}}
+					return &BashPPAssign{Target: assignTarget, Eq: opPos, Value: value, ValueExpr: newExpr}
+				}
+				return &BashPPShortDecl{Lhs: lhs, Class: ClassR, OpPos: opPos, GoRegion: true,
+					Expr: newExpr}
+			}
 		}
-		rparen := p.pos
-		p.next()
-		if !bashppCallTerminator(p.tok) {
-			txn.rollback(p)
-			return nil
-		}
-		txn.commit(p)
-		newExpr := &BashPPNewExpr{New: name, Lparen: lparen, AllocType: typ, Rparen: rparen}
-		if assignNew {
-			value := &Word{Parts: []WordPart{&Lit{ValuePos: name.Pos(), ValueEnd: posAddCol(rparen, 1), Value: "new(" + bashppWordText(typeWord) + ")"}}}
-			return &BashPPAssign{Target: assignTarget, Eq: opPos, Value: value, ValueExpr: newExpr}
-		}
-		return &BashPPShortDecl{Lhs: lhs, Class: ClassR, OpPos: opPos, GoRegion: true,
-			Expr: newExpr}
 	}
-	args, argNames, ellipsis, ok := p.bashppCallArgs()
+	var argTypes []BashPPTypeExpr
+	var args []*Word
+	var argNames []*Lit
+	var ellipsis Pos
+	var ok bool
+	if (short || assignCall) && p.bashppFuncDepth > 0 && name.Value == "make" {
+		makeTxn := p.beginBashPPTxn()
+		args, argTypes, ok = p.bashppMakeValueArgs()
+		if ok {
+			makeTxn.commit(p)
+		} else {
+			makeTxn.rollback(p)
+			args, argNames, ellipsis, ok = p.bashppCallArgs()
+		}
+	} else {
+		args, argNames, ellipsis, ok = p.bashppCallArgs()
+	}
 	if !ok || p.tok != rightParen {
 		txn.rollback(p)
 		return nil
@@ -1497,6 +1522,26 @@ func (p *Parser) bashppParenForm(ce *CallExpr) Command {
 	call := &BashPPCall{
 		Fun: bashppSelectorLits(name), TypeArgs: typeArgs, Args: args, ArgNames: argNames, Ellipsis: ellipsis,
 		Lparen: lparen, Rparen: rparen,
+	}
+	if len(argTypes) > 0 {
+		call.ArgType = argTypes[0]
+	}
+	if assignCall {
+		var text strings.Builder
+		text.WriteString(name.Value)
+		text.WriteByte('(')
+		for i, arg := range args {
+			if i > 0 {
+				text.WriteString(", ")
+			}
+			text.WriteString(bashppWordText(arg))
+		}
+		if ellipsis.IsValid() {
+			text.WriteString("...")
+		}
+		text.WriteByte(')')
+		value := &Word{Parts: []WordPart{&Lit{ValuePos: name.Pos(), ValueEnd: call.End(), Value: text.String()}}}
+		return &BashPPAssign{Target: assignTarget, Eq: opPos, Value: value, Call: call}
 	}
 	if short && len(call.Fun) == 1 && len(call.Args) == 1 && len(call.ArgNames) == 0 &&
 		!call.Ellipsis.IsValid() && bashppScalarConversionType(call.Fun[0].Value) {
@@ -1553,6 +1598,38 @@ func (p *Parser) bashppParenForm(ce *CallExpr) Command {
 	text.WriteByte(')')
 	rhs := &Word{Parts: []WordPart{&Lit{ValuePos: name.Pos(), ValueEnd: call.End(), Value: text.String()}}}
 	return &BashPPShortDecl{Lhs: lhs, Rhs: []*Word{rhs}, Class: ClassR, OpPos: opPos, GoRegion: p.bashppFuncDepth > 0, Call: call}
+}
+
+// bashppMakeValueArgs reads make(T[, n[, cap]]) for slice and map T. Channel
+// make remains owned by BashPPMakeChan and is attempted first by the caller.
+func (p *Parser) bashppMakeValueArgs() ([]*Word, []BashPPTypeExpr, bool) {
+	if p.tok == rightParen {
+		return nil, nil, true
+	}
+	typeWord := p.getWord()
+	if typeWord == nil {
+		return nil, nil, false
+	}
+	clean, comma := bashppTrimComma(typeWord)
+	typ := bashppTypeExpr(clean)
+	if typ == nil {
+		return nil, nil, false
+	}
+	args := []*Word{clean}
+	types := []BashPPTypeExpr{typ}
+	if p.tok == rightParen {
+		return args, types, !comma
+	}
+	if !comma {
+		return nil, nil, false
+	}
+	rest, names, ellipsis, ok := p.bashppCallArgs()
+	if !ok || len(names) != 0 || ellipsis.IsValid() {
+		return nil, nil, false
+	}
+	args = append(args, rest...)
+	types = append(types, make([]BashPPTypeExpr, len(rest))...)
+	return args, types, true
 }
 
 func bashppWordLit(w *Word) *Lit {

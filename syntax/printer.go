@@ -1781,7 +1781,11 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 		p.word(cmd.Target)
 		p.spacedString("=", cmd.Eq)
 		p.space()
-		p.word(cmd.Value)
+		if cmd.Call != nil {
+			p.command(cmd.Call, nil)
+		} else {
+			p.word(cmd.Value)
+		}
 	case *BashPPForAssign:
 		p.writeLit(cmd.Name.Value)
 		p.writeLit(" = ")

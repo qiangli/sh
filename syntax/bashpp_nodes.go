@@ -241,10 +241,18 @@ type BashPPAssign struct {
 	// surface until selectors are lowered in a later slice.
 	TargetExpr BashPPExpr
 	ValueExpr  BashPPExpr
+	// Call is set when the right side is a Go-form call. Value retains its
+	// exact source span for compatibility.
+	Call *BashPPCall
 }
 
 func (a *BashPPAssign) Pos() Pos { return a.Target.Pos() }
-func (a *BashPPAssign) End() Pos { return a.Value.End() }
+func (a *BashPPAssign) End() Pos {
+	if a.Call != nil {
+		return a.Call.End()
+	}
+	return a.Value.End()
+}
 
 // BashPPShortDecl is a Go short variable declaration: x := 42, x, y := f().
 //
@@ -688,6 +696,10 @@ func (x *BashPPConvertExpr) End() Pos { return posAddCol(x.Rparen, 1) }
 type BashPPCall struct {
 	Fun  []*Lit  // the selector chain: x.y.z is three literals
 	Args []*Word // the arguments, unevaluated
+	// ArgType records the first argument where a predeclared function accepts a
+	// type rather than a value. Today only make populates it.
+	// Keeping it on the positioned call avoids re-parsing source in interp.
+	ArgType BashPPTypeExpr
 
 	// TypeArgs are the explicit instantiation arguments in f[T, *U](...).
 	// They are nil for ordinary inferred calls.

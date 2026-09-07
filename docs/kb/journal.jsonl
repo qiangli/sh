@@ -18,3 +18,5 @@
 {"op":"validate","slug":"carry-typed-interface-provenance-beside-shell-strings","tool":"codex-gpt-5.5-w","host":"dragon","episode":"weave-issue-23","at":"2026-09-07T00:22:58.709822Z"}
 {"op":"validate","slug":"carry-typed-interface-provenance-beside-shell-strings","tool":"codex-gpt-5.5-x","host":"dragon","episode":"weave-issue-24","at":"2026-09-07T00:40:14.855604Z"}
 {"op":"add","slug":"escape-type-set-union-bars-before-shell-parsing","tool":"codex-gpt-5.5-z","host":"dragon","episode":"weave-issue-26","at":"2026-09-07T01:33:40.335871Z"}
+{"op":"add","slug":"resolve-collection-metadata-through-named-types","tool":"codex:gpt5.6-sol-c","host":"dragon","episode":"weave-issue-29","at":"2026-09-07T02:24:43.293748Z"}
+{"op":"validate","slug":"resolve-collection-metadata-through-named-types","tool":"codex:gpt5.6-sol-c","host":"dragon","episode":"weave-issue-29","at":"2026-09-07T02:24:49.660288Z"}

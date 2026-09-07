@@ -1576,7 +1576,11 @@ func (r *Runner) bashPPRunDefers(ctx context.Context, mark int) {
 			// Go documents as not working, and it does not work here either,
 			// for the reason it does not there: recover IS the deferred call,
 			// so nothing deferred it in turn — see [Runner.bashPPRecover].
-			r.bashPPPredeclared(d.predeclared, d.call, d.args)
+			if bashPPValueBuiltin(d.predeclared) {
+				r.bashPPRunValueBuiltin(d.predeclared, d.call)
+			} else {
+				r.bashPPPredeclared(d.predeclared, d.call, d.args)
+			}
 		case len(d.call.Fun) > 1:
 			// A deferred SELECTOR is dispatched exactly as a direct one is,
 			// through the import evaluator, so `defer fmt.Println(x)` reaches

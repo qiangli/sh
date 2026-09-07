@@ -61,6 +61,33 @@ func (r *Runner) bashPPAssign(_ context.Context, assign *syntax.BashPPAssign) {
 		r.exit = exitStatus{code: 2}
 		return
 	}
+	if assign.Call != nil {
+		target := bashPPWordSource(assign.Target)
+		cell := r.bashPPScope.lookup(target)
+		if cell == nil || !syntax.ValidName(target) {
+			r.bashPPBuiltinError("TYPE", "assignment target %q is not declared", target)
+			return
+		}
+		if cell.constant || cell.vr.ReadOnly {
+			r.errf("BASHPP-EREADONLY-MUTATION: cannot assign to readonly value %q\n", target)
+			r.exit = exitStatus{code: 2}
+			return
+		}
+		name := bashPPPredeclaredCall(assign.Call)
+		if !bashPPValueBuiltin(name) {
+			r.bashPPBuiltinError("TYPE", "assignment call %s is not a supported value builtin", name)
+			return
+		}
+		result, produced := r.bashPPRunValueBuiltin(name, assign.Call)
+		if !produced || result == nil {
+			if r.exit.code == 0 {
+				r.bashPPBuiltinError("ARITY", "%s produces no value", name)
+			}
+			return
+		}
+		*cell = *result
+		return
+	}
 	if assign.TargetExpr != nil {
 		if deref, ok := assign.TargetExpr.(*syntax.BashPPDerefExpr); ok {
 			r.bashPPDerefAssign(deref, assign.ValueExpr)

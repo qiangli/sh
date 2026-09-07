@@ -696,7 +696,12 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 		// with, so the predeclared functions bind their results here exactly
 		// as a declared function's do.
 		if name := bashPPPredeclaredCall(d.Call); name != "" {
-			r.bashPPShortDeclPredeclared(d, name)
+			if bashPPValueBuiltin(name) {
+				result, produced := r.bashPPRunValueBuiltin(name, d.Call)
+				r.bashPPBindBuiltinResult(d, result, produced)
+			} else {
+				r.bashPPShortDeclPredeclared(d, name)
+			}
 			return
 		}
 		// The typed process boundary's inbound half: `r, err := run(...)`,
@@ -1154,7 +1159,11 @@ func (r *Runner) bashPPCall(ctx context.Context, c *syntax.BashPPCall) {
 	// Go form, never a panic.
 	if r.bashPPEnabled() && !r.PosixMode() {
 		if name := bashPPPredeclaredCall(c); name != "" {
-			r.bashPPPredeclared(name, c, r.bashPPCallArgValues(c))
+			if bashPPValueBuiltin(name) {
+				r.bashPPRunValueBuiltin(name, c)
+			} else {
+				r.bashPPPredeclared(name, c, r.bashPPCallArgValues(c))
+			}
 			return
 		}
 		if r.bashPPCaptureCommandPosition(c) {

@@ -451,7 +451,10 @@ func (r *Runner) bashPPReadExpr(expr syntax.BashPPExpr) (any, *bashPPCollectionM
 		if meta == nil || meta.kind == "struct" {
 			return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-INDEX: value is not a collection")
 		}
-		collection := meta.typ.(*syntax.BashPPCollectionType)
+		collection, ok := r.bashPPUnderlyingType(meta.typ).(*syntax.BashPPCollectionType)
+		if !ok {
+			return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-INDEX: value is not a collection")
+		}
 		if meta.kind == "map" {
 			key, _, keyErr := r.bashPPEvalElement(x.Index, collection.Key)
 			if keyErr != nil {
@@ -491,7 +494,10 @@ func (r *Runner) bashPPReadExpr(expr syntax.BashPPExpr) (any, *bashPPCollectionM
 		if meta == nil || meta.kind == "struct" || meta.kind == "map" {
 			return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-SLICE: value is not sliceable")
 		}
-		collection := meta.typ.(*syntax.BashPPCollectionType)
+		collection, ok := r.bashPPUnderlyingType(meta.typ).(*syntax.BashPPCollectionType)
+		if !ok {
+			return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-SLICE: value is not sliceable")
+		}
 		sequence, ok := value.([]any)
 		if !ok && value != nil {
 			return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-SLICE: value is not sliceable")
