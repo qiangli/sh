@@ -260,8 +260,12 @@ func (r *Runner) bashPPCommitTupleAssign(assign *syntax.BashPPAssign, candidates
 			continue
 		}
 		declType, typeName := target.declType, target.typeName
+		constantBinding := target.constant
+		readonlyBinding, exportedBinding := target.vr.ReadOnly, target.vr.Exported
 		*target = *candidates[i]
 		target.declType, target.typeName = declType, typeName
+		target.constant = constantBinding
+		target.vr.ReadOnly, target.vr.Exported = readonlyBinding, exportedBinding
 	}
 	r.exit.clear()
 }

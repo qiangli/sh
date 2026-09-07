@@ -1469,7 +1469,11 @@ func (r *Runner) bashPPSettleResults(fn *bashPPFunc, resultNames []string) []str
 			if name != "" && i < len(ret.values) {
 				target := r.bashPPScope.lookup(name)
 				if target != nil && i < len(ret.cells) && ret.cells[i] != nil {
+					constantBinding := target.constant
+					readonlyBinding, exportedBinding := target.vr.ReadOnly, target.vr.Exported
 					*target = *bashPPCopyAssignmentCell(ret.cells[i])
+					target.constant = constantBinding
+					target.vr.ReadOnly, target.vr.Exported = readonlyBinding, exportedBinding
 				} else {
 					r.setVarString(name, ret.values[i])
 					target = r.bashPPScope.lookup(name)

@@ -197,6 +197,42 @@ main()
 	qt.Assert(t, qt.Equals(out.String(), "5:6:7"))
 }
 
+func TestBashPPTupleAssignFromConstDoesNotFreezeDestination(t *testing.T) {
+	const src = `func main() {
+ const source int = 2
+ var target int = 1
+ target = source
+ target = 3
+ printf '%s' "$target"
+}
+main()
+`
+	var out strings.Builder
+	r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP))
+	bashPPRun(t, r, src)
+	qt.Assert(t, qt.Equals(out.String(), "3"))
+}
+
+func TestBashPPNamedResultReturnConstRemainsMutableToDefer(t *testing.T) {
+	const src = `const source int = 5
+func result() (n int) {
+ defer func() {
+  n=6
+ }()
+ return source
+}
+func main() {
+ n := result()
+ printf '%s' "$n"
+}
+main()
+`
+	var out strings.Builder
+	r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP))
+	bashPPRun(t, r, src)
+	qt.Assert(t, qt.Equals(out.String(), "6"))
+}
+
 func TestBashPPInitFunctionIsExplicitlyUnsupported(t *testing.T) {
 	const src = "func init() {\n}\n"
 	var out strings.Builder
