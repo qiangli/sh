@@ -130,10 +130,9 @@ func (r *Runner) bashPPExprScalarType(expr syntax.BashPPExpr) syntax.BashPPTypeE
 			return collection.Element
 		}
 	case *syntax.BashPPSelectorExpr:
-		if fields, _, ok := r.bashPPStructFields(r.bashPPExprScalarType(x.X)); ok {
-			if typ, found := bashPPFieldType(fields, x.Sel.Value); found {
-				return typ
-			}
+		parent := r.bashPPExprScalarType(x.X)
+		if sel := r.bashPPResolveField(parent, x.Sel.Value); !sel.ambiguous && len(sel.edges) > 0 {
+			return sel.fieldType
 		}
 	}
 	return nil

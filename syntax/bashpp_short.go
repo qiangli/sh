@@ -238,7 +238,7 @@ func bashppConvertType(e goast.Expr, pos func(gotoken.Pos) Pos, lit func(gotoken
 	case *goast.StructType:
 		out := &BashPPStructType{Struct: lit(x.Struct, x.Struct+6, "struct"), Lbrace: pos(x.Fields.Opening), Rbrace: pos(x.Fields.Closing)}
 		for _, field := range x.Fields.List {
-			entry := &BashPPField{FieldTypeExpr: bashppConvertType(field.Type, pos, lit)}
+			entry := &BashPPField{FieldTypeExpr: bashppConvertType(field.Type, pos, lit), Embedded: len(field.Names) == 0}
 			entry.FieldType = lit(field.Type.Pos(), field.Type.End(), bashppGoTypeText(field.Type))
 			for _, name := range field.Names {
 				entry.Names = append(entry.Names, lit(name.Pos(), name.End(), name.Name))
@@ -627,7 +627,10 @@ func bashppSupportedTypeAST(expr goast.Expr) bool {
 		return bashppSupportedTypeAST(x.Key) && bashppSupportedTypeAST(x.Value)
 	case *goast.StructType:
 		for _, field := range x.Fields.List {
-			if len(field.Names) == 0 || field.Tag != nil || !bashppSupportedTypeAST(field.Type) {
+			if field.Tag != nil || !bashppSupportedTypeAST(field.Type) {
+				return false
+			}
+			if len(field.Names) == 0 && !bashppSupportedEmbeddedFieldAST(field.Type) {
 				return false
 			}
 			for _, name := range field.Names {
@@ -656,6 +659,22 @@ func bashppSupportedTypeAST(expr goast.Expr) bool {
 		return true
 	case *goast.StarExpr:
 		return bashppSupportedTypeAST(x.X)
+	}
+	return false
+}
+
+func bashppSupportedEmbeddedFieldAST(expr goast.Expr) bool {
+	switch x := expr.(type) {
+	case *goast.Ident:
+		return bashppIsIdent(x.Name)
+	case *goast.IndexExpr:
+		_, ok := x.X.(*goast.Ident)
+		return ok && bashppSupportedTypeAST(x)
+	case *goast.IndexListExpr:
+		_, ok := x.X.(*goast.Ident)
+		return ok && bashppSupportedTypeAST(x)
+	case *goast.StarExpr:
+		return bashppSupportedEmbeddedFieldAST(x.X)
 	}
 	return false
 }

@@ -189,22 +189,21 @@ func (r *Runner) bashPPImplements(actual syntax.BashPPTypeExpr, iface *syntax.Ba
 		}
 		return nil
 	}
-	typeName, pointer := bashPPInterfaceMethodOwner(actual)
+	typeName, _ := bashPPInterfaceMethodOwner(actual)
 	if typeName == "" {
 		return fmt.Errorf("BASHPP-EINTERFACE-IMPOSSIBLE: %s cannot implement interface", bashPPTypeText(actual))
 	}
-	methods := r.bashPPMethods[typeName]
 	expectedSet, err := r.bashPPInterfaceMethodSet("interface", iface, make(map[string]bool))
 	if err != nil {
 		return err
 	}
 	for _, name := range expectedSet.order {
 		expected := expectedSet.byName[name]
-		fn := methods[name]
-		if fn == nil || (!pointer && fn.decl.Receiver.Pointer) {
+		sel := r.bashPPResolveSelection(actual, name, true, false)
+		if sel.method == nil || sel.ambiguous {
 			return fmt.Errorf("BASHPP-EINTERFACE-MISSING: %s does not implement interface (missing method %s)", bashPPTypeText(actual), name)
 		}
-		if bashPPInstantiatedMethodSignature(fn, actual) != expected.sig {
+		if bashPPInstantiatedMethodSignature(sel.method, sel.receiverType) != expected.sig {
 			return fmt.Errorf("BASHPP-EINTERFACE-SIGNATURE: %s method %s has wrong signature", bashPPTypeText(actual), name)
 		}
 	}
@@ -329,6 +328,11 @@ func (r *Runner) bashPPCellForInterfaceExpr(expr syntax.BashPPExpr) (*bashPPCell
 			return cell.interfaceValue.cell, cell.interfaceValue.dynamic, nil
 		}
 		actual := cell.declType
+		if actual == nil {
+			if meta := bashPPCellMeta(cell); meta != nil {
+				actual = meta.typ
+			}
+		}
 		if actual == nil && cell.typeName != "" {
 			actual = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: cell.typeName}}
 		}

@@ -765,6 +765,11 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 				}
 				return
 			}
+			if strings.Contains(err.Error(), "BASHPP-ENIL-DEREF") || strings.Contains(err.Error(), "BASHPP-ESELECTOR-AMBIGUOUS") {
+				r.errf("%v\n", err)
+				r.exit = exitStatus{code: 2}
+				return
+			}
 			// A selector which is not rooted in a structured value remains a
 			// method value candidate and is handled below.
 			if len(d.MethodValue) == 0 {

@@ -138,20 +138,12 @@ func bashppTypeDecl(ce *CallExpr, redirs []*Redirect) *BashPPDecl {
 		}
 		alias, typeWord = true, ce.Args[typeStart+1]
 	}
-	if !alias && len(ce.Args) >= typeStart+5 && ce.Args[typeStart].Lit() == "struct" &&
+	if !alias && len(ce.Args) >= typeStart+4 && ce.Args[typeStart].Lit() == "struct" &&
 		ce.Args[typeStart+1].Lit() == "{" && ce.Args[len(ce.Args)-1].Lit() == "}" {
 		body := ce.Args[typeStart+2 : len(ce.Args)-1]
-		if len(body)%2 != 0 {
+		fields := bashppStructFieldsFromWords(body)
+		if fields == nil {
 			return nil
-		}
-		fields := make([]*BashPPField, 0, len(body)/2)
-		for i := 0; i < len(body); i += 2 {
-			fieldName, fieldType := bashppBareLit(body[i]), bashppTypeLit(body[i+1])
-			fieldTypeExpr := bashppTypeExpr(body[i+1])
-			if fieldName == nil || !bashppIsIdent(fieldName.Value) || fieldType == nil || fieldTypeExpr == nil {
-				return nil
-			}
-			fields = append(fields, &BashPPField{Names: []*Lit{fieldName}, FieldType: fieldType, FieldTypeExpr: fieldTypeExpr})
 		}
 		m := RecognizeStartSite(kw.Value + " " + name.Value)
 		if m.Site != StartTypeDecl {
@@ -228,6 +220,79 @@ func bashppTypeDecl(ce *CallExpr, redirs []*Redirect) *BashPPDecl {
 		return nil
 	}
 	return &BashPPDecl{Site: m.Site, Kw: kw, Name: name, TypeParams: typeParams, DeclType: typ, DeclTypeExpr: typeExpr, Alias: alias, End_: typeWord.End()}
+}
+
+func bashppStructTypeCommand(ce *CallExpr) bool {
+	if ce == nil || len(ce.Args) < 4 || ce.Args[0].Lit() != "type" {
+		return false
+	}
+	_, _, typeStart, ok := bashppTypeDeclName(ce.Args)
+	return ok && typeStart+1 < len(ce.Args) && ce.Args[typeStart].Lit() == "struct" && ce.Args[typeStart+1].Lit() == "{"
+}
+
+func bashppStructFieldsFromWords(body []*Word) []*BashPPField {
+	var groups [][]*Word
+	var current []*Word
+	hasSeparators := false
+	for _, word := range body {
+		if word.Lit() == ";" {
+			hasSeparators = true
+			if len(current) > 0 {
+				groups = append(groups, current)
+				current = nil
+			}
+			continue
+		}
+		current = append(current, word)
+	}
+	if len(current) > 0 {
+		groups = append(groups, current)
+	}
+	if !hasSeparators {
+		if len(body) == 1 {
+			groups = [][]*Word{body}
+		} else if len(body)%2 != 0 {
+			return nil
+		} else {
+			groups = groups[:0]
+			for i := 0; i < len(body); i += 2 {
+				groups = append(groups, body[i:i+2])
+			}
+		}
+	}
+	fields := make([]*BashPPField, 0, len(groups))
+	for _, group := range groups {
+		switch len(group) {
+		case 1:
+			fieldType := bashppTypeLit(group[0])
+			fieldTypeExpr := bashppTypeExpr(group[0])
+			if fieldType == nil && fieldTypeExpr != nil {
+				fieldType = &Lit{ValuePos: group[0].Pos(), ValueEnd: group[0].End(), Value: bashppWordText(group[0])}
+			}
+			if fieldType == nil || fieldTypeExpr == nil || !bashppSupportedEmbeddedType(fieldTypeExpr) {
+				return nil
+			}
+			fields = append(fields, &BashPPField{FieldType: fieldType, FieldTypeExpr: fieldTypeExpr, Embedded: true})
+		case 2:
+			fieldName, fieldType := bashppBareLit(group[0]), bashppTypeLit(group[1])
+			fieldTypeExpr := bashppTypeExpr(group[1])
+			if fieldName == nil || !bashppIsIdent(fieldName.Value) || fieldType == nil || fieldTypeExpr == nil {
+				return nil
+			}
+			fields = append(fields, &BashPPField{Names: []*Lit{fieldName}, FieldType: fieldType, FieldTypeExpr: fieldTypeExpr})
+		default:
+			return nil
+		}
+	}
+	return fields
+}
+
+func bashppSupportedEmbeddedType(typ BashPPTypeExpr) bool {
+	if pointer, ok := typ.(*BashPPPointerType); ok {
+		typ = pointer.Element
+	}
+	_, ok := typ.(*BashPPNamedType)
+	return ok
 }
 
 func bashppTypeDeclName(words []*Word) (*Lit, []*BashPPTypeParam, int, bool) {

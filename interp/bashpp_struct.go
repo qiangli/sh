@@ -91,6 +91,16 @@ func (r *Runner) bashPPValidateTypeRepresentation(typ syntax.BashPPTypeExpr, act
 		return r.bashPPValidateTypeRepresentation(x.Element, active, make(map[string]bool))
 	case *syntax.BashPPStructType:
 		seenFields := make(map[string]bool)
+		for _, field := range x.Fields {
+			if field.Embedded {
+				if _, ok := bashPPEmbeddedFieldName(field); !ok {
+					return fmt.Errorf("BASHPP-ESTRUCT-EMBED: unsupported embedded field type %s", bashPPTypeText(field.FieldTypeExpr))
+				}
+				if r.bashPPEmbeddedFieldIsInterface(field.FieldTypeExpr) {
+					return fmt.Errorf("BASHPP-ESTRUCT-EMBED: embedded interface fields are not supported")
+				}
+			}
+		}
 		for _, field := range bashPPFlatFields(x.Fields) {
 			if seenFields[field.name] {
 				return fmt.Errorf("BASHPP-ESTRUCT-FIELD-DUPLICATE: field %q declared more than once", field.name)
@@ -144,6 +154,9 @@ func (r *Runner) bashPPStructFields(typ syntax.BashPPTypeExpr) ([]*syntax.BashPP
 
 func bashPPFieldType(fields []*syntax.BashPPField, name string) (syntax.BashPPTypeExpr, bool) {
 	for _, field := range fields {
+		if embedded, ok := bashPPEmbeddedFieldName(field); ok && embedded == name {
+			return field.FieldTypeExpr, true
+		}
 		for _, fieldName := range field.Names {
 			if fieldName.Value == name {
 				return field.FieldTypeExpr, true
@@ -162,6 +175,13 @@ func bashPPFlatFields(fields []*syntax.BashPPField) []struct {
 		typ  syntax.BashPPTypeExpr
 	}
 	for _, field := range fields {
+		if name, ok := bashPPEmbeddedFieldName(field); ok {
+			out = append(out, struct {
+				name string
+				typ  syntax.BashPPTypeExpr
+			}{name, field.FieldTypeExpr})
+			continue
+		}
 		for _, name := range field.Names {
 			out = append(out, struct {
 				name string
@@ -429,11 +449,12 @@ func (r *Runner) bashPPReadExpr(expr syntax.BashPPExpr) (any, *bashPPCollectionM
 		if !ok {
 			return nil, nil, fmt.Errorf("BASHPP-ESELECTOR-TYPE: %s has no fields", bashPPExprText(x.X))
 		}
-		result, found := mapping[x.Sel.Value]
-		if !found {
-			return nil, nil, fmt.Errorf("BASHPP-ESELECTOR-UNKNOWN: %s has no field %q", bashPPTypeText(meta.typ), x.Sel.Value)
+		sel := r.bashPPResolveField(meta.typ, x.Sel.Value)
+		if sel.ambiguous || len(sel.edges) == 0 {
+			return nil, nil, bashPPSelectionError(meta.typ, x.Sel.Value, sel)
 		}
-		return result, meta.mapping[x.Sel.Value], nil
+		_ = mapping
+		return bashPPReadSelection(value, meta, sel.edges)
 	case *syntax.BashPPIndexExpr:
 		value, meta, err := r.bashPPReadExpr(x.X)
 		if err != nil {
@@ -628,23 +649,35 @@ func (r *Runner) bashPPStructuredAssign(target, rhs syntax.BashPPExpr) {
 	var expected syntax.BashPPTypeExpr
 	switch x := target.(type) {
 	case *syntax.BashPPSelectorExpr:
-		fields, _, found := r.bashPPStructFields(parentMeta.typ)
-		if !found {
-			err = fmt.Errorf("BASHPP-ESELECTOR-TYPE: target has no fields")
+		sel := r.bashPPResolveField(parentMeta.typ, x.Sel.Value)
+		if sel.ambiguous || len(sel.edges) == 0 {
+			err = bashPPSelectionError(parentMeta.typ, x.Sel.Value, sel)
 			break
 		}
-		expected, found = bashPPFieldType(fields, x.Sel.Value)
-		if !found {
-			err = fmt.Errorf("BASHPP-ESELECTOR-UNKNOWN: %s has no field %q", bashPPTypeText(parentMeta.typ), x.Sel.Value)
-			break
-		}
+		expected = sel.fieldType
 		value, child, valueErr := r.bashPPEvalTypedValue(rhs, expected)
 		if valueErr != nil {
 			err = valueErr
 			break
 		}
-		parent.(map[string]any)[x.Sel.Value] = value
-		parentMeta.mapping[x.Sel.Value] = child
+		if len(sel.edges) > 1 {
+			parent, parentMeta, err = bashPPReadSelection(parent, parentMeta, sel.edges[:len(sel.edges)-1])
+			if err != nil {
+				break
+			}
+			parent, parentMeta, err = bashPPDerefEmbedded(parent, parentMeta)
+			if err != nil {
+				break
+			}
+		}
+		last := sel.edges[len(sel.edges)-1].name
+		mapping, ok := parent.(map[string]any)
+		if !ok || parentMeta == nil || parentMeta.kind != "struct" {
+			err = fmt.Errorf("BASHPP-ESELECTOR-TYPE: assignment parent is not struct storage")
+			break
+		}
+		mapping[last] = value
+		parentMeta.mapping[last] = child
 	case *syntax.BashPPIndexExpr:
 		collection, found := r.bashPPUnderlyingType(parentMeta.typ).(*syntax.BashPPCollectionType)
 		if !found {

@@ -422,20 +422,47 @@ func (r *Runner) bashPPLookupFunc(c *syntax.BashPPCall) (*bashPPFunc, bool) {
 				if cell.interfaceValue != nil {
 					return r.bashPPBindInterfaceMethod(cell.interfaceValue, method)
 				}
-				if cell.typeName == "" {
-					r.errf("%s.%s: %s is a local value with no methods\n", owner, method, owner)
+				typ := cell.declType
+				if typ == nil {
+					if meta := bashPPCellMeta(cell); meta != nil {
+						typ = meta.typ
+					}
+				}
+				if typ == nil && cell.typeName != "" {
+					typ = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: cell.typeName}}
+					if cell.pointer {
+						typ = &syntax.BashPPPointerType{Element: typ}
+					}
+				}
+				sel := r.bashPPResolveSelection(typ, method, true, true)
+				if sel.ambiguous {
+					r.errf("BASHPP-ESELECTOR-AMBIGUOUS: ambiguous selector %s.%s\n", bashPPTypeText(typ), method)
 					r.exit.code = 2
 					return nil, false
 				}
-				return r.bashPPBindMethod(cell, method, true)
+				if sel.method == nil {
+					r.errf("type %s has no method %s\n", bashPPTypeText(typ), method)
+					r.exit.code = 2
+					return nil, false
+				}
+				return r.bashPPBindPromotedMethod(cell, method, sel, true)
 			}
 		}
 		// T.M(v, ...) selects from T's method set; (*T).M(p, ...) records the
 		// pointer method-expression spelling on the call node.
 		if _, localType := r.bashPPTypes[owner]; localType {
-			methods := r.bashPPMethods[owner]
-			fn := methods[method]
-			if fn == nil || (fn.decl.Receiver.Pointer && !c.PointerMethodExpr) {
+			rootType := syntax.BashPPTypeExpr(&syntax.BashPPNamedType{Name: &syntax.Lit{Value: owner}})
+			if c.PointerMethodExpr {
+				rootType = &syntax.BashPPPointerType{Element: rootType}
+			}
+			sel := r.bashPPResolveSelection(rootType, method, true, false)
+			if sel.ambiguous {
+				r.errf("BASHPP-ESELECTOR-AMBIGUOUS: ambiguous selector %s.%s\n", bashPPTypeText(rootType), method)
+				r.exit.code = 2
+				return nil, false
+			}
+			fn := sel.method
+			if fn == nil {
 				r.errf("%s.%s is not in the method set of %s\n", owner, method, owner)
 				r.exit.code = 2
 				return nil, false
@@ -446,27 +473,26 @@ func (r *Runner) bashPPLookupFunc(c *syntax.BashPPCall) (*bashPPFunc, bool) {
 				return nil, false
 			}
 			cell := r.bashPPCellForWord(c.Args[0])
-			if cell == nil || cell.typeName != owner || cell.pointer != c.PointerMethodExpr {
+			var actualType syntax.BashPPTypeExpr
+			if cell != nil {
+				actualType = cell.declType
+				if actualType == nil {
+					if meta := bashPPCellMeta(cell); meta != nil {
+						actualType = meta.typ
+					}
+				}
+			}
+			if cell == nil || bashPPTypeText(actualType) != bashPPTypeText(rootType) {
 				r.errf("cannot use first argument as %s receiver in %s.%s\n", owner, owner, method)
 				r.exit.code = 2
 				return nil, false
 			}
-			bound := *fn
-			if fn.decl.Receiver.Pointer {
-				bound.receiver = cell
-			} else {
-				if cell.pointer && cell.nilPointer {
-					r.errf("value method %s called using nil *%s pointer\n", method, owner)
-					r.exit.code = 2
-					return nil, false
-				}
-				copyCell := *cell
-				copyCell.pointer, copyCell.nilPointer = false, false
-				bound.receiver = &copyCell
+			bound, ok := r.bashPPBindPromotedMethod(cell, method, sel, false)
+			if !ok {
+				return nil, false
 			}
 			bound.skipArgs = 1
-			bound.typeArgs = bashPPMethodTypeArgs(fn, cell)
-			return &bound, true
+			return bound, true
 		}
 		return nil, false
 	}
@@ -825,7 +851,18 @@ func (r *Runner) bashPPBindInterfaceMethod(iv *bashPPInterfaceValue, method stri
 		r.exit.code = 2
 		return nil, false
 	}
-	return r.bashPPBindMethod(iv.cell, method, false)
+	sel := r.bashPPResolveSelection(iv.dynamic, method, true, false)
+	if sel.ambiguous {
+		r.errf("BASHPP-ESELECTOR-AMBIGUOUS: ambiguous selector %s.%s\n", bashPPTypeText(iv.dynamic), method)
+		r.exit.code = 2
+		return nil, false
+	}
+	if sel.method == nil {
+		r.errf("type %s has no method %s\n", bashPPTypeText(iv.dynamic), method)
+		r.exit.code = 2
+		return nil, false
+	}
+	return r.bashPPBindPromotedMethod(iv.cell, method, sel, false)
 }
 
 func (r *Runner) bashPPBindMethod(cell *bashPPCell, method string, addressable bool) (*bashPPFunc, bool) {
@@ -861,6 +898,14 @@ func (r *Runner) bashPPBindMethod(cell *bashPPCell, method string, addressable b
 			}
 			copyCell = bashPPCell{declType: typ, typeName: cell.typeName}
 			bashPPStoreCellValue(&copyCell, value, meta)
+		}
+		if copyCell.vr.Kind == expand.Object {
+			if meta := bashPPCellMeta(&copyCell); bashPPValueMeta(meta) {
+				value, copiedMeta := bashPPCopyArrayValue(copyCell.vr.Obj, meta)
+				copyCell.vr = expand.NewObject(value)
+				copyCell.valueMeta = copiedMeta
+				copyCell.object = &bashPPObjectIdentity{collection: copiedMeta}
+			}
 		}
 		copyCell.pointer, copyCell.nilPointer = false, false
 		bound.receiver = &copyCell

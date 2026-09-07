@@ -1418,13 +1418,15 @@ func (p *Printer) bashppType(typ BashPPTypeExpr) {
 			if i > 0 {
 				p.writeLit("; ")
 			}
-			for j, name := range field.Names {
-				if j > 0 {
-					p.writeLit(", ")
+			if !field.Embedded {
+				for j, name := range field.Names {
+					if j > 0 {
+						p.writeLit(", ")
+					}
+					p.writeLit(name.Value)
 				}
-				p.writeLit(name.Value)
+				p.space()
 			}
-			p.space()
 			if field.FieldTypeExpr != nil {
 				p.bashppType(field.FieldTypeExpr)
 			} else if field.FieldType != nil {
@@ -1744,7 +1746,9 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 				if i > 0 {
 					p.writeLit(";")
 				}
-				p.spacedString(field.Names[0].Value, field.Names[0].Pos())
+				if !field.Embedded {
+					p.spacedString(field.Names[0].Value, field.Names[0].Pos())
+				}
 				p.spacedString(field.FieldType.Value, field.FieldType.Pos())
 			}
 			p.spacedString("}", cmd.Rbrace)

@@ -282,9 +282,48 @@ func (r *Runner) bashPPResolveWord(w *syntax.Word) (string, bool) {
 	if cell == nil || cell.vr.Kind != expand.Object {
 		return "", false
 	}
-	value, ok := bashPPPathValue(cell.vr.Obj, parts)
-	if !ok {
-		return "", false
+	value := cell.vr.Obj
+	meta := bashPPCellMeta(cell)
+	for _, part := range parts {
+		if part.field != "" {
+			if meta == nil {
+				mapping, ok := value.(map[string]any)
+				if !ok {
+					return "", false
+				}
+				value = mapping[part.field]
+				continue
+			}
+			sel := r.bashPPResolveField(meta.typ, part.field)
+			if sel.ambiguous || len(sel.edges) == 0 {
+				return "", false
+			}
+			var err error
+			value, meta, err = bashPPReadSelection(value, meta, sel.edges)
+			if err != nil {
+				return "", false
+			}
+			continue
+		}
+		switch current := value.(type) {
+		case map[string]any:
+			key, _ := part.index.(string)
+			value = current[key]
+			if meta != nil {
+				meta = meta.mapping[key]
+			}
+		case []any:
+			i, ok := part.index.(int)
+			if !ok || i < 0 || i >= len(current) {
+				return "", false
+			}
+			value = current[i]
+			if meta != nil {
+				meta = meta.sequence[i]
+			}
+		default:
+			return "", false
+		}
 	}
 	return fmt.Sprint(value), true
 }

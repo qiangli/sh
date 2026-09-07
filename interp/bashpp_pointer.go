@@ -14,6 +14,7 @@ import (
 type bashPPPointerStep struct {
 	field string
 	index int
+	deref bool
 }
 
 // bashPPPointer names storage, not a copied value. Keeping the root cell makes
@@ -181,19 +182,21 @@ func (r *Runner) bashPPAddress(expr syntax.BashPPExpr) (*bashPPPointer, error) {
 			if err := descend(x.X); err != nil {
 				return err
 			}
-			fields, _, found := r.bashPPStructFields(typ)
-			if !found {
-				return fmt.Errorf("BASHPP-EPOINTER-TARGET: selector target has no fields")
+			sel := r.bashPPResolveField(typ, x.Sel.Value)
+			if sel.ambiguous || len(sel.edges) == 0 {
+				return bashPPSelectionError(typ, x.Sel.Value, sel)
 			}
-			fieldType, found := bashPPFieldType(fields, x.Sel.Value)
-			if !found {
-				return fmt.Errorf("BASHPP-ESELECTOR-UNKNOWN: %s has no field %q", bashPPTypeText(typ), x.Sel.Value)
+			for i, edge := range sel.edges {
+				ptr.path = append(ptr.path, bashPPPointerStep{field: edge.name})
+				if meta != nil {
+					meta = meta.mapping[edge.name]
+				}
+				if edge.pointer && i+1 < len(sel.edges) {
+					ptr.path = append(ptr.path, bashPPPointerStep{deref: true})
+					meta = nil
+				}
 			}
-			ptr.path = append(ptr.path, bashPPPointerStep{field: x.Sel.Value})
-			typ = fieldType
-			if meta != nil {
-				meta = meta.mapping[x.Sel.Value]
-			}
+			typ = sel.fieldType
 			return nil
 		case *syntax.BashPPIndexExpr:
 			if err := descend(x.X); err != nil {
@@ -267,6 +270,18 @@ func (p *bashPPPointer) read() (any, *bashPPCollectionMeta, syntax.BashPPTypeExp
 		value = bashPPScalarValue(p.target.vr.String())
 	}
 	for _, step := range p.path {
+		if step.deref {
+			pointer, ok := value.(*bashPPPointer)
+			if !ok || pointer == nil {
+				return nil, nil, nil, fmt.Errorf("BASHPP-ENIL-DEREF: dereference of nil embedded pointer")
+			}
+			var err error
+			value, meta, _, err = pointer.read()
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			continue
+		}
 		if step.field != "" {
 			mapping, ok := value.(map[string]any)
 			if !ok {

@@ -4108,6 +4108,9 @@ loop:
 					bashppCompositeTxn = p.beginBashPPTxn()
 					bashppCompositeArgs = len(ce.Args)
 				}
+				if bashppStructTypeCommand(ce) {
+					ce.Args = append(ce.Args, p.wordOne(&Lit{ValuePos: p.pos, ValueEnd: posAddCol(p.pos, 1), Value: ";"}))
+				}
 				p.next()
 				continue
 			}

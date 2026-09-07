@@ -979,6 +979,9 @@ func (i *BashPPIf) End() Pos {
 type BashPPField struct {
 	Names     []*Lit // the declared identifiers, empty for an unnamed result type
 	FieldType *Lit   // the declared type, or nil for an untyped parameter
+	// Embedded distinguishes an ordinary anonymous struct field from an
+	// unnamed function result. Its field name is derived from FieldTypeExpr.
+	Embedded bool
 	// FieldTypeExpr is the lowering-ready type for struct fields. Function
 	// signatures retain FieldType alone until their broader type slice lands.
 	FieldTypeExpr BashPPTypeExpr
