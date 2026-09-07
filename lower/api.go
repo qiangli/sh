@@ -19,6 +19,9 @@ const (
 
 type Options struct {
 	Package, Runtime, Origin string
+	// Dir is the source directory used to resolve module imports.
+	// Empty uses the current working directory; Origin remains source identity.
+	Dir string
 	// Entry optionally names an exported entry accepting runtime SessionOptions.
 	// Empty preserves the hygienic private entry and runtime-free native units.
 	Entry string
