@@ -32,6 +32,9 @@ func (projectionFailure) ExitStatus() int { return 1 }
 // recover expression remains in the deferred function; checked failures keep
 // unwinding to the generated entry boundary.
 func PreserveAbort(value any) any {
+	if _, ok := value.(ShellAbort); ok {
+		panic(value)
+	}
 	if _, ok := value.(ShellExit); ok {
 		panic(value)
 	}

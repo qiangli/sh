@@ -71,6 +71,10 @@ type sequential struct {
 	// engine reports for a panic raised inside a panic; a recovered panic pops
 	// its entry.
 	panics []string
+
+	// operationErr is a canceled operation whose source statement continues.
+	// Sequential regions share it; tasks fork it with their own Program state.
+	operationErr error
 }
 
 // NewProgram builds a program around a new session. The options are the
@@ -182,6 +186,39 @@ func (p *Program) Fail(err error) {
 	}
 	p.SetStatus(failureStatus(err))
 	fmt.Fprintln(p.stderr(), err)
+}
+
+// ReceiveFailure settles a failed channel receive without abandoning the next
+// source statement. Cancellation is deferred until task failure arbitration,
+// so a sibling's real error is the only diagnostic. Other channel failures
+// report once here with source status 2. The generated caller tracks whether
+// the receive binding was established; a channel's normal closed zero value
+// with err == nil is still a present binding.
+func (p *Program) ReceiveFailure(err error) {
+	if err == nil {
+		return
+	}
+	if failureRank(err) != 1 {
+		p.Fail(channelOperationError(err))
+		return
+	}
+	if p.seq == nil {
+		p.seq = &sequential{}
+	}
+	p.seq.mu.Lock()
+	p.seq.operationErr = rankFailures(p.seq.operationErr, err)
+	p.seq.mu.Unlock()
+}
+
+func (p *Program) operationFailure() error {
+	if p.seq == nil {
+		return nil
+	}
+	p.seq.mu.Lock()
+	defer p.seq.mu.Unlock()
+	err := p.seq.operationErr
+	p.seq.operationErr = nil
+	return err
 }
 
 // failureStatus is the generic recognition of a runtime failure's status. It
@@ -485,7 +522,7 @@ func ExitCode(err error) int {
 // cancelled an operation the body was blocked on, the reported error is the
 // task's, not the cancellation the body observed.
 func (p *Program) Run(body func(*Program)) error {
-	bodyErr := p.runBody(body)
+	bodyErr := rankFailures(p.runBody(body), p.operationFailure())
 
 	if p.Session != nil {
 		// The end of the body is the structured lifetime boundary, on the
@@ -536,6 +573,9 @@ func (p *Program) aborted(v any) error {
 		return nil
 	}
 	if abort, ok := v.(ChannelAbort); ok {
+		return channelOperationError(abort.Err)
+	}
+	if abort, ok := v.(ShellAbort); ok {
 		return abort.Err
 	}
 	if err, ok := v.(error); ok {

@@ -330,9 +330,27 @@ func SelectChannels(ctx context.Context, session *Session, scope *ChannelScope, 
 // an error before Session's generic panic boundary ranks failures.
 type ChannelAbort struct{ Err error }
 
+// ChannelError gives a failed language channel operation its source status
+// without replacing the cause or changing its diagnostic text.
+type ChannelError struct{ Err error }
+
+func (e *ChannelError) Error() string { return e.Err.Error() }
+func (e *ChannelError) Unwrap() error { return e.Err }
+func (*ChannelError) ExitStatus() int { return 2 }
+
+func channelOperationError(err error) error {
+	if err == nil || failureRank(err) == 1 {
+		return err
+	}
+	if _, ok := err.(*ChannelError); ok {
+		return err
+	}
+	return &ChannelError{Err: err}
+}
+
 func MustChannelOperation(err error) {
 	if err != nil {
-		panic(ChannelAbort{err})
+		panic(ChannelAbort{channelOperationError(err)})
 	}
 }
 func MustChannel[T any](channel chan T, err error) chan T { MustChannelOperation(err); return channel }
