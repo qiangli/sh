@@ -162,16 +162,21 @@ type Runner struct {
 	bashPPIssuedHandles  *bashPPHandleProvenance
 	bashPPCallChannels   []*bashPPChannel
 	bashPPCallInterfaces []*bashPPInterfaceValue
-	bashPPGoTask         bool
-	bashPPChanBoundary   bool
-	bashPPFileRun        bool
-	bashPPTaskFiles      []*os.File
-	bashPPTaskState      *bashPPTaskState
-	bashPPTaskCanceled   bool
-	bashPPTaskFailed     bool
-	bashPPTaskFailCode   uint8
-	bashPPLogicalDepth   int
-	bashPPCustomOpen     bool
+	// bashPPResultCells is the authoritative value transport for the most
+	// recent typed function invocation. The parallel string results remain the
+	// shell-facing representation; these cells retain pointer, channel,
+	// closure, interface, collection, and declared-type provenance.
+	bashPPResultCells  []*bashPPCell
+	bashPPGoTask       bool
+	bashPPChanBoundary bool
+	bashPPFileRun      bool
+	bashPPTaskFiles    []*os.File
+	bashPPTaskState    *bashPPTaskState
+	bashPPTaskCanceled bool
+	bashPPTaskFailed   bool
+	bashPPTaskFailCode uint8
+	bashPPLogicalDepth int
+	bashPPCustomOpen   bool
 
 	// funcSources records the script name active when a function was
 	// defined. Bash reports runtime diagnostics in a function body against

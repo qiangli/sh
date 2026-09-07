@@ -12,8 +12,8 @@ expression/control-flow story, not this slice.
 
 The file runtime cannot implement Go's package dependency reordering without
 also moving observable shell commands. It therefore preserves source order and
-rejects forward or cyclic top-level initializer dependencies with positioned
-`BASHPP-EINIT-ORDER`. Go `init` functions are likewise rejected with positioned
+rejects directly referenced forward or self-dependent top-level initializers
+with positioned `BASHPP-EINIT-ORDER`. Go `init` functions are likewise rejected with positioned
 `BASHPP-EINIT-FUNC`; silently declaring one without automatically invoking it
 would give incorrect program-initialization semantics.
 

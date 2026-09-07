@@ -143,6 +143,7 @@ func (r *Runner) bashPPTupleAssignCall(ctx context.Context, assign *syntax.BashP
 	}
 	failureMark := r.bashPPShortFailureSeq
 	results := r.bashPPInvoke(ctx, fn, args)
+	resultCells := r.bashPPResultCells
 	if r.bashPPPanicking() || r.exit.exiting || r.exit.fatalExit || r.exit.err != nil || r.bashPPShortFailureSeq != failureMark {
 		return
 	}
@@ -152,15 +153,13 @@ func (r *Runner) bashPPTupleAssignCall(ctx context.Context, assign *syntax.BashP
 		r.exit = exitStatus{code: 2}
 		return
 	}
-	types := bashppResultTypeExprs(fn.results())
 	candidates := make([]*bashPPCell, len(results))
 	for i, result := range results {
-		cell := &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: result}}
-		if i < len(types) {
-			cell.declType = types[i]
-			cell.typeName = bashPPNamedTypeBase(types[i])
+		if i < len(resultCells) && resultCells[i] != nil {
+			candidates[i] = bashPPCopyAssignmentCell(resultCells[i])
+		} else {
+			candidates[i] = &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: result}}
 		}
-		candidates[i] = cell
 	}
 	r.bashPPCommitTupleAssign(assign, candidates)
 }
@@ -180,6 +179,16 @@ func (r *Runner) bashPPTupleAssign(assign *syntax.BashPPAssign) {
 			r.exit = exitStatus{code: 2}
 			return
 		}
+		if ident, ok := expr.(*syntax.BashPPIdent); ok {
+			source := r.bashPPScope.lookup(ident.Name.Value)
+			if source == nil {
+				r.errf("%sBASHPP-EASSIGN-UNDECLARED: RHS %s is not declared\n", r.bashErrPrefix(ident.Pos()), ident.Name.Value)
+				r.exit = exitStatus{code: 2}
+				return
+			}
+			candidates[i] = bashPPCopyAssignmentCell(source)
+			continue
+		}
 		value, err := r.bashPPEvalScalarExpr(expr)
 		if err != nil {
 			r.errf("%s%v\n", r.bashErrPrefix(expr.Pos()), err)
@@ -194,6 +203,23 @@ func (r *Runner) bashPPTupleAssign(assign *syntax.BashPPAssign) {
 		candidates[i] = cell
 	}
 	r.bashPPCommitTupleAssign(assign, candidates)
+}
+
+// bashPPCopyAssignmentCell snapshots the complete source cell while retaining
+// Go's value/reference distinction: arrays and structs copy their payload,
+// whereas slices, maps, channels, pointers, interfaces, and closures retain
+// their reference identity and authoritative runtime metadata.
+func bashPPCopyAssignmentCell(source *bashPPCell) *bashPPCell {
+	if source == nil {
+		return nil
+	}
+	copyCell := *source
+	if source.vr.Kind == expand.Object && source.vr.Obj != nil && source.object != nil && bashPPValueMeta(bashPPCellMeta(source)) {
+		value, meta := bashPPCopyArrayValue(source.vr.Obj, bashPPCellMeta(source))
+		copyCell.vr = expand.NewObject(value)
+		copyCell.valueMeta = meta
+	}
+	return &copyCell
 }
 
 func (r *Runner) bashPPCommitTupleAssign(assign *syntax.BashPPAssign, candidates []*bashPPCell) {

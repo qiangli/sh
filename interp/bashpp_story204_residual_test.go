@@ -61,6 +61,105 @@ func TestBashPPTupleAssignFunctionTypeFailureRollsBack(t *testing.T) {
 	qt.Assert(t, qt.StringContains(out.String(), "BASHPP-EASSIGN-TYPE: cannot assign bool to int\n|1:2|"))
 }
 
+func TestBashPPTupleAssignPreservesRichCells(t *testing.T) {
+	const src = `type Box struct { N int }
+func main() {
+ left := make(chan int, 1)
+ right := make(chan int, 1)
+ left <- 1
+ right <- 2
+ left, right = right, left
+ gotLeft := <-left
+ gotRight := <-right
+ a := Box{N: 1}
+ b := Box{N: 2}
+ a, b = b, a
+ p := new(Box)
+ q := new(Box)
+ p.N = 3
+ q.N = 4
+ p, q = q, p
+ f := func() { printf f }
+ g := func() { printf g }
+ f, g = g, f
+ pv := *p
+ qv := *q
+ printf '%s:%s:%s:%s:%s:' "$gotLeft" "$gotRight" a.N pv.N qv.N
+ f()
+ g()
+}
+main()
+`
+	var out strings.Builder
+	r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP))
+	bashPPRun(t, r, src)
+	qt.Assert(t, qt.Equals(out.String(), "2:1:2:4:3:gf"))
+}
+
+func TestBashPPTupleAssignGenericResultsAndSpacedExpression(t *testing.T) {
+	const src = `func pair[T any](a, b T) (T, T) {
+ return a, b
+}
+func main() {
+ var x int = 1
+ var y int = 2
+ x, y = pair[int](7, 8)
+ x = x + 1
+ printf '%s:%s' "$x" "$y"
+}
+main()
+`
+	var out strings.Builder
+	r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP))
+	bashPPRun(t, r, src)
+	qt.Assert(t, qt.Equals(out.String(), "8:8"))
+}
+
+func TestBashPPTupleAssignFunctionResultsPreserveMetadata(t *testing.T) {
+	const src = `type Box struct { N int }
+func rich() (*Box, *Box) {
+ p := new(Box)
+ q := new(Box)
+ p.N = 5
+ q.N = 6
+ return p, q
+}
+func main() {
+ var p *Box
+ var q *Box
+ p, q = rich()
+ pv := *p
+ qv := *q
+ printf '%s:%s' pv.N qv.N
+}
+main()
+`
+	var out strings.Builder
+	r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP))
+	bashPPRun(t, r, src)
+	qt.Assert(t, qt.Equals(out.String(), "5:6"))
+}
+
+func TestBashPPTupleAssignMetadataRollback(t *testing.T) {
+	const src = `func main() {
+ left := make(chan int, 1)
+ right := make(chan int, 1)
+ left <- 1
+ right <- 2
+ var n int = 3
+ left, n = right, "bad"
+ gotLeft := <-left
+ gotRight := <-right
+ printf '|%s:%s:%s|' "$gotLeft" "$gotRight" "$n"
+}
+main()
+`
+	var out strings.Builder
+	r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP))
+	bashPPRun(t, r, src)
+	qt.Assert(t, qt.StringContains(out.String(), "BASHPP-EASSIGN-TYPE: cannot assign String to int\n|1:2:3|"))
+}
+
 func TestBashPPInitFunctionIsExplicitlyUnsupported(t *testing.T) {
 	const src = "func init() {\n}\n"
 	var out strings.Builder

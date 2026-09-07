@@ -855,6 +855,11 @@ func bashppAssign(ce *CallExpr, redirs []*Redirect, goRegion bool) *BashPPAssign
 				}
 				return out
 			}
+			// Once an identifier-list `=` is seen in a committed Go region,
+			// malformed or not-yet-supported RHS syntax must not fall through and
+			// execute as a shell command. Preserve its words for a positioned
+			// runtime EASSIGN-FORM diagnostic.
+			return &BashPPAssign{Names: names, Values: ce.Args[eq+1:], Eq: ce.Args[eq].Pos()}
 		}
 	}
 	for i := 1; i < eq; i++ {

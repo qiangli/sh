@@ -13,6 +13,7 @@ import (
 func TestBashPPTupleAssignStreamingRoundTrip(t *testing.T) {
 	for _, src := range []string{
 		"func f() {\n\tx, y = y, x\n}\n",
+		"func f() {\n\tx = x + 1\n}\n",
 		"func pair() (int, int) {\n\treturn 1, 2\n}\nfunc f() {\n\tx, y = pair()\n}\n",
 	} {
 		for _, wrap := range []func(io.Reader) io.Reader{
@@ -25,7 +26,7 @@ func TestBashPPTupleAssignStreamingRoundTrip(t *testing.T) {
 			}
 			fn := file.Stmts[len(file.Stmts)-1].Cmd.(*BashPPFuncDecl)
 			assign := fn.Body.Stmts[0].Cmd.(*BashPPAssign)
-			if len(assign.Names) != 2 || (assign.Call == nil && (len(assign.Values) != 2 || len(assign.ValueExprs) != 2)) {
+			if len(assign.Names) == 0 || (assign.Call == nil && (len(assign.Values) != len(assign.Names) || len(assign.ValueExprs) != len(assign.Names))) {
 				t.Fatalf("tuple shape = %#v", assign)
 			}
 			var out strings.Builder

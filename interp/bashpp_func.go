@@ -211,6 +211,7 @@ type bashPPDeferred struct {
 type bashPPReturnState struct {
 	active bool
 	values []string
+	cells  []*bashPPCell
 }
 
 // bashPPFuncDecl registers a typed function, capturing the lexical environment
@@ -1160,6 +1161,7 @@ func (r *Runner) bashPPRewriteCommandArgs(args []*syntax.Word) []*syntax.Word {
 // of values succeeds with status 0, while a result-less function keeps the
 // body's last status (or the code named by a bash-style `return n`).
 func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string) []string {
+	r.bashPPResultCells = nil
 	callChannels := r.bashPPCallChannels
 	callInterfaces := r.bashPPCallInterfaces
 	r.bashPPCallChannels = nil
@@ -1275,6 +1277,25 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 	// A named result may have been reassigned by a deferred call, so it is
 	// read here rather than trusted from before the defers ran.
 	results = r.bashPPFinalResults(results, resultNames)
+	resultTypes := bashppResultTypeExprs(fn.results())
+	r.bashPPResultCells = make([]*bashPPCell, len(results))
+	for i := range results {
+		var source *bashPPCell
+		if i < len(resultNames) && resultNames[i] != "" {
+			source = r.bashPPScope.lookup(resultNames[i])
+		} else if i < len(r.bashPPReturn.cells) {
+			source = r.bashPPReturn.cells[i]
+		}
+		if source != nil {
+			r.bashPPResultCells[i] = bashPPCopyAssignmentCell(source)
+		} else {
+			r.bashPPResultCells[i] = &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: results[i]}}
+		}
+		if i < len(resultTypes) {
+			r.bashPPResultCells[i].declType = resultTypes[i]
+			r.bashPPResultCells[i].typeName = bashPPNamedTypeBase(resultTypes[i])
+		}
+	}
 	// A Go-form return is consumed at the func boundary, exactly as a shell
 	// function's `return` is in [Runner.call]; it must not unwind the caller.
 	r.exit.returning = false
@@ -1503,10 +1524,14 @@ func (r *Runner) bashPPReturnStmt(ctx context.Context, ret *syntax.BashPPReturn)
 		return
 	}
 	vals := make([]string, len(ret.Results))
+	cells := make([]*bashPPCell, len(ret.Results))
 	for i, w := range ret.Results {
 		vals[i] = r.bashPPExprValue(w)
+		if source := r.bashPPCellForWord(w); source != nil {
+			cells[i] = bashPPCopyAssignmentCell(source)
+		}
 	}
-	r.bashPPReturn = bashPPReturnState{active: true, values: vals}
+	r.bashPPReturn = bashPPReturnState{active: true, values: vals, cells: cells}
 	r.exit.returning = true
 }
 

@@ -451,9 +451,9 @@ func bashPPNamedTypeBase(typ syntax.BashPPTypeExpr) string {
 // bashPPValidatePackageInitOrder rejects the package-initialization cases this
 // mixed shell/Go runtime cannot reorder soundly. Moving a declaration ahead of
 // an intervening shell command would move observable I/O, so forward/cyclic
-// dependencies receive a positioned diagnostic instead of silently reading a
-// shell zero value. Source-ordered dependencies retain their ordinary runtime
-// behavior.
+// directly referenced forward or self dependencies receive a positioned
+// diagnostic instead of silently reading a shell zero value. Source-ordered
+// dependencies retain their ordinary runtime behavior.
 func (r *Runner) bashPPValidatePackageInitOrder(file *syntax.File) bool {
 	type topDecl struct {
 		index int
