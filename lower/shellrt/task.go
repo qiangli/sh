@@ -261,10 +261,10 @@ func (s *Session) Cancel() { s.group.cancel() }
 // tasks expected to finish on their own. It is idempotent, and once it returns
 // no task launched from this session is still running.
 func (s *Session) Join() error {
-	s.Arm()
 	g := s.group
 	g.mu.Lock()
 	for g.active != 0 {
+		s.Arm()
 		g.changed.Wait()
 	}
 	g.joined = true
