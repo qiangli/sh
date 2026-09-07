@@ -1350,6 +1350,9 @@ func (r *Runner) bashPPRange(ctx context.Context, rng *syntax.BashPPRange) {
 	if r.bashPPRangeCollection(ctx, rng) {
 		return
 	}
+	if r.bashPPRangeScalar(ctx, rng) {
+		return
+	}
 	c, ok := r.bashPPChannel(rng.Chan)
 	if !ok {
 		return

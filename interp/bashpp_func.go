@@ -58,6 +58,10 @@ type bashPPFunc struct {
 	// skipArgs is one for a method expression T.M(v, ...), where v supplies
 	// the receiver rather than the first ordinary parameter.
 	skipArgs int
+	// native is used for interpreter-owned function values which still travel
+	// through the ordinary closure-handle path. Range-over-function's yield
+	// callback is the first such value.
+	native func(context.Context, []string) []string
 }
 
 // bashPPType is one script-local named type. Aliases intentionally cannot own
@@ -943,6 +947,9 @@ func (r *Runner) bashPPSpreadValues(w *syntax.Word) []string {
 // the same thing and hide the mistake.
 func (r *Runner) bashPPCallValues(c *syntax.BashPPCall, fn *bashPPFunc) ([]string, bool) {
 	r.bashPPCallChannels = nil
+	if fn.native != nil {
+		return r.bashPPCallArgValues(c), true
+	}
 	if required := bashppRequiredAfterDefault(fn.params()); required != "" {
 		r.errf("BASHPP-EDEFAULT-ORDER: required parameter %q follows a default parameter\n", required)
 		r.exit = exitStatus{code: 2}
@@ -1160,6 +1167,9 @@ func (r *Runner) bashPPRewriteCommandArgs(args []*syntax.Word) []*syntax.Word {
 // of values succeeds with status 0, while a result-less function keeps the
 // body's last status (or the code named by a bash-style `return n`).
 func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string) []string {
+	if fn.native != nil {
+		return fn.native(ctx, args)
+	}
 	callChannels := r.bashPPCallChannels
 	callInterfaces := r.bashPPCallInterfaces
 	r.bashPPCallChannels = nil

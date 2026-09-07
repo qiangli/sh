@@ -204,16 +204,28 @@ func (p *Parser) bashppRange(stmt *Stmt) bool {
 	p.next()
 	if !(p.tok == _LitWord && p.val == "range") {
 		var lhs []*Word
-		for p.tok == _LitWord && p.val != ":=" && len(lhs) < 3 {
+		for p.tok == _LitWord && p.val != ":=" {
 			lhs = append(lhs, p.getWord())
-		}
-		names, ok := bashppShortLHS(lhs)
-		if !ok || len(names) > 2 {
-			txn.rollback(p)
-			return false
 		}
 		op := bashppBareLit(p.getWord())
 		if op == nil || op.Value != ":=" {
+			txn.rollback(p)
+			return false
+		}
+		names, namesOK := bashppShortLHS(lhs)
+		if p.tok == _LitWord && p.val == "range" && (!namesOK || len(names) > 2) {
+			rng.Range = p.pos
+			problem := rng.For
+			if len(lhs) > 2 {
+				problem = lhs[2].Pos()
+			}
+			p.posErr(problem, "bash++ range permits at most two iteration variables")
+			txn.commit(p)
+			stmt.Cmd = rng
+			p.bashppControls = p.bashppControls[:len(p.bashppControls)-1]
+			return true
+		}
+		if !namesOK {
 			txn.rollback(p)
 			return false
 		}
@@ -226,11 +238,16 @@ func (p *Parser) bashppRange(stmt *Stmt) bool {
 	}
 	rng.Range = p.pos
 	p.next()
-	ch := p.getWord()
-	if ch == nil {
+	firstOperand := p.getWord()
+	if firstOperand == nil {
 		txn.rollback(p)
 		return false
 	}
+	operandWords := []*Word{firstOperand}
+	for p.tok == _LitWord && p.val != "{" && p.val != "{}" {
+		operandWords = append(operandWords, p.getWord())
+	}
+	ch := bashppJoinWords(operandWords)
 	rng.Chan = ch
 	if expr := bashppIndexExpr(ch); expr != nil {
 		rng.Expr = expr
