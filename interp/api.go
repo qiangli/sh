@@ -3043,6 +3043,9 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 			r.bashPPConcurrency(ctx)
 		}
 		r.filename = node.Name
+		if r.Dialect() == syntax.LangBashPP && !r.bashPPValidatePackageInitOrder(node) {
+			break
+		}
 		if r.stdinSourceEligible() && node.Name == "" && len(r.bashSource) > 0 {
 			r.stdinSourceActive = true
 		}

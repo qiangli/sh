@@ -269,6 +269,11 @@ func (d *BashPPDecl) End() Pos {
 // grammar only after the node has passed the Bash++/POSIX runtime gates.
 type BashPPAssign struct {
 	Target *Word
+	// Names/Values carry general identifier tuple assignment inside an already
+	// committed Go region. Target/Value remain the compatibility surface for
+	// the older single structured assignment forms.
+	Names  []*Lit
+	Values []*Word
 	Eq     Pos
 	Value  *Word
 	// TargetExpr and ValueExpr are populated for the supported collection
@@ -276,15 +281,24 @@ type BashPPAssign struct {
 	// surface until selectors are lowered in a later slice.
 	TargetExpr BashPPExpr
 	ValueExpr  BashPPExpr
+	ValueExprs []BashPPExpr
 	// Call is set when the right side is a Go-form call. Value retains its
 	// exact source span for compatibility.
 	Call *BashPPCall
 }
 
-func (a *BashPPAssign) Pos() Pos { return a.Target.Pos() }
+func (a *BashPPAssign) Pos() Pos {
+	if len(a.Names) > 0 {
+		return a.Names[0].Pos()
+	}
+	return a.Target.Pos()
+}
 func (a *BashPPAssign) End() Pos {
 	if a.Call != nil {
 		return a.Call.End()
+	}
+	if len(a.Values) > 0 {
+		return a.Values[len(a.Values)-1].End()
 	}
 	return a.Value.End()
 }

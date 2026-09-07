@@ -55,10 +55,18 @@ func bashPPPathValue(value any, parts []bashPPPathPart) (any, bool) {
 	return value, true
 }
 
-func (r *Runner) bashPPAssign(_ context.Context, assign *syntax.BashPPAssign) {
+func (r *Runner) bashPPAssign(ctx context.Context, assign *syntax.BashPPAssign) {
 	if !r.objectsEnabled() || r.bashPPScope == nil {
 		r.errf("bash++ assignment evaluated with extensions disabled\n")
 		r.exit = exitStatus{code: 2}
+		return
+	}
+	if len(assign.Names) > 0 {
+		if assign.Call != nil {
+			r.bashPPTupleAssignCall(ctx, assign)
+			return
+		}
+		r.bashPPTupleAssign(assign)
 		return
 	}
 	if assign.Call != nil {
@@ -120,6 +128,107 @@ func (r *Runner) bashPPAssign(_ context.Context, assign *syntax.BashPPAssign) {
 	}
 	r.errf("BASHPP-EREADONLY-MUTATION: cannot assign to readonly value %q\n", cell.object.owner)
 	r.exit = exitStatus{code: 2}
+}
+
+func (r *Runner) bashPPTupleAssignCall(ctx context.Context, assign *syntax.BashPPAssign) {
+	fn, ok := r.bashPPLookupFunc(assign.Call)
+	if !ok {
+		r.errf("%sBASHPP-EASSIGN-CALL: tuple assignment requires a declared result-bearing function\n", r.bashErrPrefix(assign.Call.Pos()))
+		r.exit = exitStatus{code: 2}
+		return
+	}
+	args, ok := r.bashPPCallValues(assign.Call, fn)
+	if !ok {
+		return
+	}
+	failureMark := r.bashPPShortFailureSeq
+	results := r.bashPPInvoke(ctx, fn, args)
+	if r.bashPPPanicking() || r.exit.exiting || r.exit.fatalExit || r.exit.err != nil || r.bashPPShortFailureSeq != failureMark {
+		return
+	}
+	if len(assign.Names) != len(results) {
+		r.errf("%sBASHPP-EASSIGN-ARITY: %d variable(s) but %d value(s)\n",
+			r.bashErrPrefix(assign.Eq), len(assign.Names), len(results))
+		r.exit = exitStatus{code: 2}
+		return
+	}
+	types := bashppResultTypeExprs(fn.results())
+	candidates := make([]*bashPPCell, len(results))
+	for i, result := range results {
+		cell := &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: result}}
+		if i < len(types) {
+			cell.declType = types[i]
+			cell.typeName = bashPPNamedTypeBase(types[i])
+		}
+		candidates[i] = cell
+	}
+	r.bashPPCommitTupleAssign(assign, candidates)
+}
+
+func (r *Runner) bashPPTupleAssign(assign *syntax.BashPPAssign) {
+	if len(assign.Names) != len(assign.Values) {
+		r.errf("%sBASHPP-EASSIGN-ARITY: %d variable(s) but %d value(s)\n",
+			r.bashErrPrefix(assign.Eq), len(assign.Names), len(assign.Values))
+		r.exit = exitStatus{code: 2}
+		return
+	}
+	candidates := make([]*bashPPCell, len(assign.Values))
+	for i, expr := range assign.ValueExprs {
+		if expr == nil {
+			r.errf("%sBASHPP-EASSIGN-FORM: tuple RHS %d is not a supported scalar expression\n",
+				r.bashErrPrefix(assign.Values[i].Pos()), i+1)
+			r.exit = exitStatus{code: 2}
+			return
+		}
+		value, err := r.bashPPEvalScalarExpr(expr)
+		if err != nil {
+			r.errf("%s%v\n", r.bashErrPrefix(expr.Pos()), err)
+			r.exit = exitStatus{code: 2}
+			return
+		}
+		cell := &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarString(value.value)}, scalarKind: value.value.Kind()}
+		if value.typ != "" {
+			cell.declType = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: value.typ}}
+			cell.typeName = value.typ
+		}
+		candidates[i] = cell
+	}
+	r.bashPPCommitTupleAssign(assign, candidates)
+}
+
+func (r *Runner) bashPPCommitTupleAssign(assign *syntax.BashPPAssign, candidates []*bashPPCell) {
+	targets := make([]*bashPPCell, len(assign.Names))
+	for i, name := range assign.Names {
+		if name.Value == "_" {
+			continue
+		}
+		target := r.bashPPScope.lookup(name.Value)
+		if target == nil {
+			r.errf("%sBASHPP-EASSIGN-UNDECLARED: assignment target %s is not declared\n", r.bashErrPrefix(name.Pos()), name.Value)
+			r.exit = exitStatus{code: 2}
+			return
+		}
+		if target.constant || target.vr.ReadOnly {
+			r.errf("%sBASHPP-EASSIGN-CONST: cannot assign to %s\n", r.bashErrPrefix(name.Pos()), name.Value)
+			r.exit = exitStatus{code: 2}
+			return
+		}
+		if err := r.bashPPValidateReusedShortValue(target, candidates[i]); err != nil {
+			r.errf("%s%v\n", r.bashErrPrefix(name.Pos()), err)
+			r.exit = exitStatus{code: 2}
+			return
+		}
+		targets[i] = target
+	}
+	for i, target := range targets {
+		if target == nil {
+			continue
+		}
+		declType, typeName := target.declType, target.typeName
+		*target = *candidates[i]
+		target.declType, target.typeName = declType, typeName
+	}
+	r.exit.clear()
 }
 
 func (r *Runner) bashPPResolveWord(w *syntax.Word) (string, bool) {

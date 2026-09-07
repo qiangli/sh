@@ -1778,6 +1778,27 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 			p.wordJoin(cmd.Init)
 		}
 	case *BashPPAssign:
+		if len(cmd.Names) > 0 {
+			for i, name := range cmd.Names {
+				if i > 0 {
+					p.writeLit(",")
+				}
+				p.spacedString(name.Value, name.Pos())
+			}
+			p.spacedString("=", cmd.Eq)
+			p.space()
+			if cmd.Call != nil {
+				p.command(cmd.Call, nil)
+				break
+			}
+			for i, value := range cmd.Values {
+				if i > 0 {
+					p.writeLit(", ")
+				}
+				p.word(value)
+			}
+			break
+		}
 		p.word(cmd.Target)
 		p.spacedString("=", cmd.Eq)
 		p.space()

@@ -448,6 +448,58 @@ func bashPPNamedTypeBase(typ syntax.BashPPTypeExpr) string {
 	return ""
 }
 
+// bashPPValidatePackageInitOrder rejects the package-initialization cases this
+// mixed shell/Go runtime cannot reorder soundly. Moving a declaration ahead of
+// an intervening shell command would move observable I/O, so forward/cyclic
+// dependencies receive a positioned diagnostic instead of silently reading a
+// shell zero value. Source-ordered dependencies retain their ordinary runtime
+// behavior.
+func (r *Runner) bashPPValidatePackageInitOrder(file *syntax.File) bool {
+	type topDecl struct {
+		index int
+	}
+	decls := make(map[string]topDecl)
+	for index, stmt := range file.Stmts {
+		if decl, ok := stmt.Cmd.(*syntax.BashPPDecl); ok && (decl.Site == syntax.StartVar || decl.Site == syntax.StartConst) {
+			decls[decl.Name.Value] = topDecl{index: index}
+		}
+	}
+	for index, stmt := range file.Stmts {
+		if fn, ok := stmt.Cmd.(*syntax.BashPPFuncDecl); ok && fn.Receiver == nil && fn.Name.Value == "init" {
+			r.errf("%sBASHPP-EINIT-FUNC: init functions are unsupported in the mixed shell execution model\n", r.bashErrPrefix(fn.Name.Pos()))
+			r.exit = exitStatus{code: 2}
+			return false
+		}
+		decl, ok := stmt.Cmd.(*syntax.BashPPDecl)
+		if !ok || decl.InitExpr == nil {
+			continue
+		}
+		valid := true
+		syntax.Walk(decl.InitExpr, func(node syntax.Node) bool {
+			if !valid {
+				return false
+			}
+			ident, ok := node.(*syntax.BashPPIdent)
+			if !ok {
+				return true
+			}
+			dependency, declared := decls[ident.Name.Value]
+			if declared && dependency.index >= index {
+				r.errf("%sBASHPP-EINIT-ORDER: initializer for %s depends on %s before it is initialized; dependency reordering across shell statements is unsupported\n",
+					r.bashErrPrefix(ident.Pos()), decl.Name.Value, ident.Name.Value)
+				r.exit = exitStatus{code: 2}
+				valid = false
+				return false
+			}
+			return true
+		})
+		if !valid {
+			return false
+		}
+	}
+	return true
+}
+
 func bashPPTypeContainsTypeParam(typ syntax.BashPPTypeExpr) bool {
 	switch x := typ.(type) {
 	case *syntax.BashPPTypeParamType:

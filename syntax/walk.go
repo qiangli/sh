@@ -237,6 +237,9 @@ func Walk(node Node, f func(Node) bool) {
 		walkList(node.Stmts, f)
 		walkComments(node.Last, f)
 	case *BashPPAssign:
+		walkList(node.Names, f)
+		walkList(node.Values, f)
+		walkList(node.ValueExprs, f)
 		Walk(node.Target, f)
 		Walk(node.Value, f)
 		walkNilable(node.TargetExpr, f)
