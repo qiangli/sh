@@ -1983,6 +1983,11 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 		}
 	case *BashPPReturn:
 		p.spacedString(cmd.Kw.Value, cmd.Kw.Pos())
+		if cmd.Expr != nil {
+			p.space()
+			p.bashppExpr(cmd.Expr)
+			break
+		}
 		if cmd.Call != nil {
 			p.space()
 			p.command(cmd.Call, nil)

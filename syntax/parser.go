@@ -4065,8 +4065,24 @@ func (p *Parser) callExpr(s *Stmt, w *Word, assign bool) {
 		}
 	}
 	bashppScalarTried := false
+	bashppReturnTried := false
 loop:
 	for {
+		if p.lang.in(LangBashPP) && p.bashppFuncDepth > 0 && bashppCompositeTxn == nil && len(s.Redirs) == 0 {
+			if !bashppReturnTried && len(ce.Assigns) == 0 && len(ce.Args) > 0 && bashppLitValue(ce.Args[0]) == "return" {
+				bashppReturnTried = true
+				if ret := p.bashppScalarReturn(ce); ret != nil {
+					s.Cmd = ret
+					return
+				}
+			}
+			if (p.tok == leftParen || p.tok == bckQuote) && bashppAddressHead(ce) {
+				if decl := p.bashppLeadingScalarOperand(ce); decl != nil {
+					s.Cmd = decl
+					return
+				}
+			}
+		}
 		// A Go scalar expression written with shell metacharacters is claimed
 		// here, ahead of the terminator and redirect arms below, because those
 		// arms have already destroyed it by the time a completed command could

@@ -868,7 +868,8 @@ func bashppScalarSource(w *Word) (string, []Pos, bool) {
 		case *Lit:
 			// bashppJoinWords represents an arbitrary source whitespace gap as
 			// one space. Its two boundary positions retain the exact gap.
-			if !appendPart(part.Value, part.Pos(), part.End(), part.Value == " ") {
+			rawLiteral := len(part.Value) >= 2 && part.Value[0] == '`' && part.Value[len(part.Value)-1] == '`'
+			if !appendPart(part.Value, part.Pos(), part.End(), part.Value == " " || rawLiteral) {
 				return "", nil, false
 			}
 		case *SglQuoted, *DblQuoted:
@@ -1746,7 +1747,7 @@ func (p *Parser) bashppParenForm(ce *CallExpr) Command {
 	}
 	rparen := p.pos
 	p.next()
-	if !bashppCallTerminator(p.tok) {
+	if !bashppCallTerminator(p.tok) && !(p.bashppFuncDepth > 0 && p.tok == _LitWord && p.val == "}") {
 		txn.rollback(p)
 		return nil
 	}

@@ -424,6 +424,7 @@ func Walk(node Node, f func(Node) bool) {
 		walkNilable(node.RecvType, f)
 		walkList(node.TypeParams, f)
 	case *BashPPReturn:
+		walkNilable(node.Expr, f)
 		walkNilable(node.Call, f)
 		walkNilable(node.Kw, f)
 		walkList(node.Results, f)

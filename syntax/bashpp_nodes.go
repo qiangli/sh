@@ -1216,6 +1216,10 @@ type BashPPReturn struct {
 	// Call retains the positioned AST for a single returned call. Results keeps
 	// its complete legacy Word spelling for consumers that still read values.
 	Call *BashPPCall
+	// Expr is a single positioned scalar result claimed in a committed typed
+	// body. Results retains its complete legacy word; Call/FuncLit are separate
+	// alternatives and do not also populate Expr.
+	Expr BashPPExpr
 
 	// FuncLit is set when the single returned value is a function literal,
 	// `return func(n int) int { … }`. That is how a closure ESCAPES the
@@ -1226,6 +1230,12 @@ type BashPPReturn struct {
 
 func (r *BashPPReturn) Pos() Pos { return r.Kw.Pos() }
 func (r *BashPPReturn) End() Pos {
+	if r.Expr != nil {
+		return r.Expr.End()
+	}
+	if r.Call != nil {
+		return r.Call.End()
+	}
 	if len(r.Results) > 0 {
 		return r.Results[len(r.Results)-1].End()
 	}
