@@ -9,23 +9,35 @@ import (
 
 func (e *emitter) findNativeShells(file *syntax.File) {
 	e.nativeShellNames = map[string]bool{}
+	typedNames := map[string]bool{}
+	syntax.Walk(file, func(n syntax.Node) bool {
+		switch n := n.(type) {
+		case *syntax.BashPPDecl:
+			if n.Name != nil {
+				typedNames[n.Name.Value] = true
+			}
+		case *syntax.BashPPShortDecl:
+			for _, name := range n.Lhs {
+				typedNames[name.Value] = true
+			}
+		}
+		return true
+	})
 	syntax.Walk(file, func(node syntax.Node) bool {
 		f, ok := node.(*syntax.FuncDecl)
 		if !ok || f.Name == nil {
 			return true
 		}
-		typed, positional := false, false
 		syntax.Walk(f.Body, func(n syntax.Node) bool {
+			if p, ok := n.(*syntax.ParamExp); ok && p.Param != nil && typedNames[p.Param.Value] {
+				e.nativeShellNames[f.Name.Value] = true
+			}
 			_, scope := n.(*syntax.BashPPAgenticBlock)
 			if n != nil && !scope && strings.HasPrefix(nodeName(n), "BashPP") {
-				typed = true
-			}
-			if p, ok := n.(*syntax.ParamExp); ok && p.Param != nil && !syntax.BashPPValidIdent(p.Param.Value) && p.Param.Value != "?" {
-				positional = true
+				e.nativeShellNames[f.Name.Value] = true
 			}
 			return true
 		})
-		e.nativeShellNames[f.Name.Value] = typed || !positional
 		return true
 	})
 }
@@ -35,8 +47,20 @@ func (e *emitter) nativeShellStatement(s *syntax.Stmt) (string, bool, error) {
 	}
 	switch n := s.Cmd.(type) {
 	case *syntax.FuncDecl:
-		if n.Name == nil || !e.nativeShellNames[n.Name.Value] {
+		if n.Name == nil {
 			return "", false, nil
+		}
+		if !e.nativeShellNames[n.Name.Value] {
+			captured := false
+			for name := range e.visibleGlobals {
+				if !e.typeNames[name] && !e.funcs[name] {
+					captured = true
+				}
+			}
+			if !captured {
+				return "", false, nil
+			}
+			e.nativeShellNames[n.Name.Value] = true
 		}
 		if err := e.statementFlags(s); err != nil {
 			return "", true, err
@@ -83,14 +107,18 @@ func (e *emitter) nativeShellStatement(s *syntax.Stmt) (string, bool, error) {
 		if err := e.statementFlags(s); err != nil {
 			return "", true, err
 		}
-		if len(n.Args) != 1 || len(n.Assigns) > 0 {
+		if len(n.Assigns) > 0 {
 			return "", true, e.fail(n, CodeUnsupported, "native shell callable positional arguments need the shell parameter bridge")
+		}
+		arguments, err := e.positionalArguments(n.Args[1:])
+		if err != nil {
+			return "", true, err
 		}
 		var raw bytes.Buffer
 		if err := syntax.NewPrinter().Print(&raw, s); err != nil {
 			return "", true, err
 		}
-		return e.mark(n) + "if !" + e.program() + ".CallNativeShell(" + e.callSite(n, n.Args[0].Lit()) + "){" + e.program() + ".ShellRegion(" + strconv.Quote(raw.String()) + ")}\n", true, nil
+		return e.mark(n) + "if !" + e.program() + ".CallNativeShell(" + e.callSite(n, n.Args[0].Lit()) + "," + e.prefix + "rt.StringArguments(" + arguments + ")...){" + e.program() + ".ShellRegion(" + strconv.Quote(raw.String()) + ")}\n", true, nil
 	}
 	return "", false, nil
 }

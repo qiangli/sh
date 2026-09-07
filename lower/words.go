@@ -117,6 +117,9 @@ func (e *emitter) nativeWordExpr(n syntax.Node, text string) (string, error) {
 	return out.String(), nil
 }
 func (e *emitter) parameter(p *syntax.ParamExp) (string, error) {
+	if value, handled, err := e.positionalParameter(p); handled || err != nil {
+		return value, err
+	}
 	if p.BadSubst != nil {
 		e.bridge = true
 		return e.prefix + "rt.BadSubstitutionValue()", nil
@@ -283,6 +286,11 @@ func (e *emitter) arithmetic(x syntax.ArithmExpr) (string, error) {
 }
 func (e *emitter) shell(c *syntax.CallExpr) (string, error) { return e.shellWithTail(c, "") }
 func (e *emitter) shellWithTail(c *syntax.CallExpr, tail string) (string, error) {
+	if tail == "" && len(c.Args) > 0 {
+		if text, handled, err := e.positionalShell(c); handled || err != nil {
+			return text, err
+		}
+	}
 	if len(c.Assigns) > 0 {
 		if len(c.Args) > 0 {
 			return "", e.fail(c, CodeBridge, "command-scoped assignments need shell-state runtime")

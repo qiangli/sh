@@ -19,3 +19,11 @@ compiled exported entry under the race detector.
 Local and parameter cells, rich shell writes, raw scalar spelling and returned
 callable adapters require their respective continuation hooks. This initial
 storage change does not establish parity for those additional cases.
+
+Native shell call arguments are captured before invocation and restored on
+return or unwind. Positional parameters `$1`, `$#`, `${1-default}` and standalone
+quoted `"$@"` use the session's copied argument vector; the quoted all-arguments
+form retains empty strings and embedded whitespace. Pure shell functions without
+native binding references stay in the persistent shell, including source/eval
+lookup. Functions referencing later typed names still require native capture of
+an empty definition-time view.

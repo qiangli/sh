@@ -39,7 +39,7 @@ func (p *Program) DefineNativeShell(name string, marked bool, body func(*Program
 // CallNativeShell enters the definition using the invocation's frame. Panics
 // propagate on the same goroutine through ordinary native deferred functions.
 // False means no declaration has run; the caller may use ordinary shell lookup.
-func (p *Program) CallNativeShell(site Site) bool {
+func (p *Program) CallNativeShell(site Site, args ...string) bool {
 	p.nativeShells.mu.RLock()
 	definition, ok := p.nativeShells.functions[site.Name]
 	p.nativeShells.mu.RUnlock()
@@ -51,6 +51,9 @@ func (p *Program) CallNativeShell(site Site) bool {
 		p.Fail(err)
 		return true
 	}
+	previous := child.Session.Params()
+	child.Session.SetParams(args...)
+	defer child.Session.SetParams(previous...)
 	definition.body(child)
 	return true
 }

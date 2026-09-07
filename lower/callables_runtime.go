@@ -9,6 +9,10 @@ import (
 )
 
 func (e *emitter) needsExecution(file *syntax.File) {
+	if hasPositionalParameter(file) {
+		e.execution = true
+		e.bridge = true
+	}
 	syntax.Walk(file, func(node syntax.Node) bool {
 		switch n := node.(type) {
 		case *syntax.DeclClause:
