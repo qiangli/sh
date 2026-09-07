@@ -75,6 +75,33 @@ main()
 	}
 }
 
+func TestBashPPGenericNamedTypeRecursiveSubstitution(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			"nested named composite substitution",
+			"type Pair[A, B any] struct { First A; Second B }\ntype Holder[T any] struct { Item Pair[string,T] }\nfunc main() {\n var h Holder[int] = Holder[int]{Item: Pair[string,int]{First:\"n\", Second:7}}\n echo \"$h\"\n}\nmain()\n",
+			`"Second":7`,
+		},
+		{
+			"recursive substitution arity rejection",
+			"type Pair[A, B any] struct { First A; Second B }\ntype Holder[T any] struct { Item Pair[string] }\n",
+			"BASHPP-EGENERIC-ARITY: Pair expects 2 type argument(s); got 1",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := runBashPPFunc(t, tc.src)
+			if !strings.Contains(got, tc.want) {
+				t.Fatalf("output = %q, want to contain %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestBashPPGenericTypeSetConstraints(t *testing.T) {
 	tests := []struct {
 		name string
