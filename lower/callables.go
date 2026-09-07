@@ -133,7 +133,7 @@ func (e *emitter) globalStatement(s *syntax.Stmt) (string, error) {
 		fmt.Fprintf(&e.globalDecls, "%svar %s %s\nvar %s error\n", e.mark(n), name, e.globalTypes[name], failure)
 		return e.mark(n) + strings.Replace(text, " := ", " = ", 1) + "\n", nil
 	}
-	line := strings.SplitN(text, "\n_ = ", 2)[0]
+	line := text
 	var ns []string
 	constant := false
 	switch n := s.Cmd.(type) {
@@ -146,6 +146,7 @@ func (e *emitter) globalStatement(s *syntax.Stmt) (string, error) {
 	default:
 		return "", e.fail(s, CodeUnsupported, "global declaration")
 	}
+	line = strings.TrimSuffix(line, e.unused(ns))
 	newNames := map[string]bool{}
 	for _, name := range ns {
 		if name != "_" && !e.declaredGlobals[name] {
