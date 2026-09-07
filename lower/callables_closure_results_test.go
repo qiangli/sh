@@ -36,6 +36,41 @@ echo "$x $y"
 `, "ready\n11 12\n"},
 		// The escaped callable mutates state its factory declared, so the
 		// captured cell — not a copy — has to survive the return.
+		// The same creation-in-a-scope shape the host case measures, but wholly
+		// in-unit, so the interpreter is the oracle for it: a callable created
+		// inside an agentic scope does ordinary work when invoked outside that
+		// scope, and reaches a marked action only where it opens an explicit
+		// scope of its own. execute compares status, stdout and stderr.
+		{"agentic-scope-capture", `agentic func assist() int {
+ return 3
+}
+func plain() int {
+ return 4
+}
+func unmarked() func {
+ agentic {
+  return func() int { return plain() }
+ }
+}
+func rescoped() func {
+ agentic {
+  return func() int {
+   agentic {
+    n := assist()
+    return n
+   }
+  }
+ }
+}
+func main() {
+ u := unmarked()
+ a := u()
+ r := rescoped()
+ c := r()
+ echo "$a $c"
+}
+main()
+`, "4 3\n"},
 		{"counter-under-runtime", `func counter() func {
  var n = 0
  return func() int {
@@ -100,6 +135,32 @@ func Sender() func {
 agentic func Guarded() func {
  return func() int { return 3 }
 }
+agentic func assist() int {
+ return 3
+}
+func plain() int {
+ return 4
+}
+func Unmarked() func {
+ agentic {
+  return func() int { return plain() }
+ }
+}
+func Escalating() func {
+ agentic {
+  return func() int { return assist() }
+ }
+}
+func Rescoped() func {
+ agentic {
+  return func() int {
+   agentic {
+    n := assist()
+    return n
+   }
+  }
+ }
+}
 `
 
 // closureHostHarness holds the artifact to the public contract. The typed
@@ -163,6 +224,26 @@ func abortOf(t *testing.T,held func(int) int,op int) (abort rt.ChannelAbort) {
  }()
  held(op)
  return
+}
+
+// A callable created inside an agentic scope keeps that scope's lexical
+// capture, not its permission. Invoked later by a native caller it is an
+// ordinary unmarked invocation: ordinary work runs, a marked action is refused
+// exactly as it would be anywhere outside a scope, and that action becomes
+// reachable again only where the callable itself opens an explicit one.
+// Guarded, above, measures the other direction — a marked factory refused at
+// its own entry — and says nothing about what an escaped callable carries.
+func TestEscapedCallableDoesNotInheritCreationPermission(t *testing.T){
+ var ordinary func() int = generated.Unmarked()
+ if got:=ordinary();got!=4{
+  t.Fatalf("ordinary work from a callable created in an agentic scope=%d, want 4",got)
+ }
+ if got:=generated.Escalating()();got!=0{
+  t.Fatalf("marked action ran from an escaped callable=%d; creation permission persisted",got)
+ }
+ if got:=generated.Rescoped()();got!=3{
+  t.Fatalf("marked action inside the callable's own agentic scope=%d, want 3",got)
+ }
 }
 `
 
