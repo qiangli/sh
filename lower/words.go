@@ -410,7 +410,7 @@ func (e *emitter) argument(w *syntax.Word) (string, error) {
 		return value, err
 	}
 	if len(w.Parts) == 1 {
-		if l, ok := w.Parts[0].(*syntax.Lit); ok && syntax.BashPPValidIdent(l.Value) && !e.known(l.Value) {
+		if l, ok := w.Parts[0].(*syntax.Lit); ok && (syntax.BashPPValidIdent(l.Value) || token.Lookup(l.Value).IsKeyword()) && !e.known(l.Value) {
 			return strconv.Quote(l.Value), nil
 		}
 	}

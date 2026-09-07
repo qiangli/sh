@@ -14,6 +14,30 @@ import (
 // resulting Go program; the emitter does not execute or expand type text.
 func (e *emitter) typeExpr(t syntax.BashPPTypeExpr) (string, error) {
 	switch n := t.(type) {
+	case *syntax.BashPPChanType:
+		var element string
+		var err error
+		if n.Element != nil {
+			element, err = e.typeExpr(n.Element)
+		} else if n.Elem != nil {
+			element, err = e.typeSpelling(n.Elem, n.Elem.Value)
+		} else {
+			return "", e.fail(n, CodeType, "channel element type is missing")
+		}
+		if err != nil {
+			return "", err
+		}
+		switch n.Direction {
+		case "":
+			return "chan " + element, nil
+		case "send":
+			return "chan<- " + element, nil
+		case "recv":
+			return "<-chan " + element, nil
+		default:
+			return "", e.fail(n, CodeType, "unknown channel direction")
+		}
+
 	case *syntax.BashPPFuncType:
 		params, err := e.signatureTypes(n.Params)
 		if err != nil {

@@ -22,7 +22,7 @@ func (e *emitter) receiveDeclaration(n *syntax.BashPPShortDecl) (string, error) 
 	}
 	ns := names(n.Lhs)
 	failure := fmt.Sprintf("%sreceiveError%d_%d", e.prefix, n.Pos().Line(), n.Pos().Col())
-	okName := "_"
+	okName := failure + "OK"
 	if len(ns) == 2 {
 		okName = ns[1]
 	}
@@ -32,6 +32,9 @@ func (e *emitter) receiveDeclaration(n *syntax.BashPPShortDecl) (string, error) 
 			info.sourceType = "bool"
 		}
 		info.present = failure + " == nil"
+		if i == 0 {
+			info.emptyWhen = failure + " == nil && !" + okName
+		}
 		e.bind(name)
 		e.projections.projectionBind(name, info)
 	}

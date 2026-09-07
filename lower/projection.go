@@ -52,6 +52,7 @@ const (
 
 // projection is one binding's retained provenance.
 type projection struct {
+	emptyWhen       string
 	kind            projectionKind
 	nativeAggregate bool
 	sourceType      string

@@ -216,6 +216,14 @@ func (e *emitter) callProjection(c *syntax.BashPPCall, index int) projection {
 	return scalarProjection()
 }
 func (e *emitter) projectBinding(n syntax.Node, name, expression string) (text string, err error) {
+	if info, ok := e.projections.projectionLookup(name); ok && info.emptyWhen != "" {
+		defer func() {
+			if err == nil {
+				text = e.prefix + "rt.BindingValue(!(" + info.emptyWhen + ")," + text + ",\"\")"
+			}
+		}()
+	}
+
 	if info, ok := e.projections.projectionLookup(name); ok && info.present != "" {
 		defer func() {
 			if err == nil {
@@ -252,6 +260,14 @@ func (e *emitter) projectBinding(n syntax.Node, name, expression string) (text s
 	return value, nil
 }
 func (e *emitter) projectionArgument(w *syntax.Word, expression string) (text string, err error) {
+	if info, ok := e.projections.projectionLookup(w.Lit()); ok && info.emptyWhen != "" {
+		defer func() {
+			if err == nil {
+				text = e.prefix + "rt.BindingValue(!(" + info.emptyWhen + ")," + text + ",\"\")"
+			}
+		}()
+	}
+
 	if info, ok := e.projections.projectionLookup(w.Lit()); ok && info.present != "" {
 		defer func() {
 			if err == nil {

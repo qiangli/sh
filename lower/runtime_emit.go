@@ -23,10 +23,18 @@ func (e *emitter) runtimeMakeChannel(n *syntax.BashPPMakeChan, c RuntimeContext)
 	if err := e.runtimeContext(c); err != nil {
 		return "", err
 	}
-	if n.ChanType == nil || n.ChanType.Elem == nil {
+	if n.ChanType == nil {
 		return "", e.fail(n, CodeType, "channel element type is missing")
 	}
-	typ, err := e.typeSpelling(n.ChanType.Elem, n.ChanType.Elem.Value)
+	var typ string
+	var err error
+	if n.ChanType.Element != nil {
+		typ, err = e.typeExpr(n.ChanType.Element)
+	} else if n.ChanType.Elem != nil {
+		typ, err = e.typeSpelling(n.ChanType.Elem, n.ChanType.Elem.Value)
+	} else {
+		return "", e.fail(n, CodeType, "channel element type is missing")
+	}
 	if err != nil {
 		return "", err
 	}
