@@ -143,7 +143,7 @@ func TestSharedBackendReset(t *testing.T){
   if o.backend==nil{var err error;o.backend,err=shellexec.NewRunner(st,io,shellexec.BashPP(),shellexec.RunnerOptions(func(r *interp.Runner)error{o.runner=r;return nil}));if err!=nil{return nil,err}}
   o.leases++;return &lease{owner:o},nil
  }
- options:=[]rt.SessionOption{rt.WithStdio(nil,&out,&diagnostic),rt.WithShellFactory(factory)}
+ options:=[]rt.SessionOption{rt.WithStdio(nil,&out,&diagnostic),rt.WithShellFactory(factory),rt.WithNativeContinuation(rt.NewNativeContinuation())}
  code,err:=part0.Execute(options...);if code!=0||err!=nil{t.Fatalf("part0: code=%d err=%v stderr=%q",code,err,diagnostic.String())}
  if o.runner==nil||o.leases!=1||o.releases!=1{t.Fatalf("first lease lifecycle %+v",o)}
  keep:=o.runner.Funcs["keep"];t.Logf("backend shell keep present=%t (native registry may own it)",keep!=nil)

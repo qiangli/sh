@@ -64,8 +64,9 @@ type Program struct {
 	// seq is the bookkeeping shared by the sequential regions of one
 	// execution: the panic chain. A task forks it, because Go's panic state
 	// is per goroutine.
-	seq          *sequential
-	nativeShells *nativeShellRegistry
+	seq                *sequential
+	nativeShells       *nativeShellRegistry
+	nativeContinuation *NativeContinuation
 
 	// owner marks the program whose Run revokes the channel scope. A task
 	// entry is not an owner: it must not close channels its siblings still use.
@@ -107,6 +108,10 @@ func NewProgram(opts ...SessionOption) (*Program, error) {
 		seq:            &sequential{},
 		nativeShells:   &nativeShellRegistry{},
 		owner:          true,
+	}
+	if continuation := session.nativeContinuation; continuation != nil {
+		p.nativeContinuation = continuation
+		p.nativeShells = &continuation.registry
 	}
 	p.Context = p.Frame.Context(session.Context())
 	return p, nil
@@ -539,7 +544,16 @@ func ExitCode(err error) int {
 // cancelled an operation the body was blocked on, the reported error is the
 // task's, not the cancellation the body observed.
 func (p *Program) Run(body func(*Program)) error {
-	bodyErr := rankFailures(p.runBody(body), p.operationFailure())
+	var bodyErr error
+	if p.owner && p.nativeContinuation != nil {
+		bodyErr = p.nativeContinuation.acquire(p.Context)
+		if bodyErr == nil {
+			defer p.nativeContinuation.release()
+		}
+	}
+	if bodyErr == nil {
+		bodyErr = rankFailures(p.runBody(body), p.operationFailure())
+	}
 
 	if p.Session != nil {
 		// The end of the body is the structured lifetime boundary, on the

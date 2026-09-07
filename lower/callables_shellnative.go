@@ -101,7 +101,11 @@ func (e *emitter) nativeShellStatement(s *syntax.Stmt) (string, bool, error) {
 			}
 			return e.program() + ".SetStatus(" + value + "); return\n", true, nil
 		}
-		if len(n.Args) == 0 || !e.nativeShellNames[n.Args[0].Lit()] {
+		if len(n.Args) == 0 {
+			return "", false, nil
+		}
+		name := n.Args[0].Lit()
+		if !e.nativeShellNames[name] && (name == "" || name == "echo" || name == "printf" || !e.execution || len(n.Assigns) > 0 || len(s.Redirs) > 0 || s.Background || s.Negated) {
 			return "", false, nil
 		}
 		if err := e.statementFlags(s); err != nil {
@@ -112,6 +116,9 @@ func (e *emitter) nativeShellStatement(s *syntax.Stmt) (string, bool, error) {
 		}
 		arguments, err := e.positionalArguments(n.Args[1:])
 		if err != nil {
+			if !e.nativeShellNames[name] {
+				return "", false, nil
+			}
 			return "", true, err
 		}
 		var raw bytes.Buffer

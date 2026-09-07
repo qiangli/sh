@@ -202,9 +202,10 @@ type ShellFactory func(State, Stdio) (ShellRunner, error)
 // Session is the persistent shell state boundary plus ownership of the tasks
 // launched from it. The zero value is not usable; call [NewSession].
 type Session struct {
-	mu    sync.Mutex
-	state State
-	io    Stdio
+	nativeContinuation *NativeContinuation
+	mu                 sync.Mutex
+	state              State
+	io                 Stdio
 
 	// shellMu serializes every use of the backend, including cloning it for a
 	// child. It is a separate lock from mu because a region runs for as long
