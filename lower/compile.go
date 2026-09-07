@@ -55,6 +55,7 @@ type emitter struct {
 	globalDecls        strings.Builder
 	globalChecked      map[*syntax.BashPPShortDecl]string
 	nativeShellNames   map[string]bool
+	nativeShellBody    bool
 }
 
 // Compile returns canonical Go and mappings, or positioned diagnostics with no
@@ -349,7 +350,8 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 		}
 		diagnostics = append(diagnostics, Diagnostic{Code: code, Msg: msg, Node: node, Pos: pos})
 	}}
-	checked, _ := conf.Check(options.Package, fs, []*ast.File{goFile}, nil)
+	info := &types.Info{Uses: map[*ast.Ident]types.Object{}}
+	checked, _ := conf.Check(options.Package, fs, []*ast.File{goFile}, info)
 	if len(diagnostics) > 0 {
 		sort.SliceStable(diagnostics, func(i, j int) bool { return diagnostics[i].Pos.Offset() < diagnostics[j].Pos.Offset() })
 		return nil, diagnostics
@@ -379,7 +381,44 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 		}
 		return compilePass(file, options, inferred)
 	}
+	if e.execution && globalTypes != nil {
+		source, err = e.lexicalStorage(source, fs, goFile, checked, info)
+		if err != nil {
+			return nil, e.fail(file, CodeExpr, err.Error())
+		}
+		result.Source = source
+		result.Mappings = e.sourceMappings(source)
+		fs = token.NewFileSet()
+		goFile, err = parser.ParseFile(fs, "generated.go", source, 0)
+		if err != nil {
+			return nil, e.fail(file, CodeExpr, err.Error())
+		}
+		_, _ = conf.Check(options.Package, fs, []*ast.File{goFile}, nil)
+		if len(diagnostics) > 0 {
+			return nil, diagnostics
+		}
+	}
 	return result, nil
+}
+
+func (e *emitter) sourceMappings(source []byte) []Mapping {
+	var mappings []Mapping
+	pending := -1
+	for i, line := range strings.Split(string(source), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "// lower:") {
+			pending, _ = strconv.Atoi(strings.TrimPrefix(trimmed, "// lower:"))
+			continue
+		}
+		if pending >= 0 && trimmed != "" {
+			m := e.marks[pending]
+			m.GoLine = i + 1
+			m.GoCol = len(line) - len(strings.TrimLeft(line, "\t ")) + 1
+			mappings = append(mappings, m)
+			pending = -1
+		}
+	}
+	return mappings
 }
 
 type bridgeImporter struct {
@@ -846,44 +885,7 @@ func (e *emitter) command(c syntax.Command) (string, error) {
 		}
 		return text, err
 	case *syntax.BashPPReturn:
-		if n.Expr != nil {
-			value, err := e.expr(n.Expr)
-			return "return " + value, err
-		}
-		if n.Call != nil {
-			value, err := e.call(n.Call)
-			return "return " + value, err
-		}
-		if len(e.resultTypes) == 0 && len(n.Results) > 0 {
-			if len(n.Results) != 1 {
-				return "", e.fail(n, CodeResult, "resultless function return requires one status")
-			}
-			x, err := e.valueWord(n.Results[0])
-			if err != nil {
-				return "", err
-			}
-			e.bridge = true
-			if e.execution {
-				return e.program() + ".SetStatus(int(" + x + "))\nreturn", nil
-			}
-			return e.prefix + "rt.Status = int(" + x + ")\nreturn", nil
-		}
-		if n.FuncLit != nil {
-			x, err := e.literal(n.FuncLit)
-			return "return " + x, err
-		}
-		var values []string
-		for i, w := range n.Results {
-			x, err := e.valueWord(w)
-			if err != nil {
-				return "", err
-			}
-			if i < len(e.resultTypes) && e.resultTypes[i] != "" {
-				x = e.resultTypes[i] + "(" + x + ")"
-			}
-			values = append(values, x)
-		}
-		return "return " + strings.Join(values, ", "), nil
+		return e.returnStatement(n)
 	case *syntax.BashPPForAssign:
 		e.projections.projectionInvalidate(n.Name.Value)
 		x, err := e.expr(n.Expr)

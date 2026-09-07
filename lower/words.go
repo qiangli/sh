@@ -131,7 +131,14 @@ func (e *emitter) parameter(p *syntax.ParamExp) (string, error) {
 		if e.known(p.Param.Value) {
 			return p.Param.Value, nil
 		}
-		return e.stringParts(p.Exp.Word.Parts)
+		fallback, err := e.stringParts(p.Exp.Word.Parts)
+		if err != nil {
+			return "", err
+		}
+		if e.mixedShell {
+			return e.program() + ".ShellDefault(" + strconv.Quote(p.Param.Value) + "," + fallback + ")", nil
+		}
+		return fallback, nil
 	}
 	if p.Param != nil && e.known(p.Param.Value) && p.Index != nil && p.Exp == nil && !p.Excl {
 		if index, ok := p.Index.(*syntax.Word); ok {

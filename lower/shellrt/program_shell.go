@@ -1,5 +1,7 @@
 package shellrt
 
+import "reflect"
+
 // ShellExit stops generated statements after an explicit shell exit. It is a
 // control transfer rather than a user panic or a second diagnostic.
 type ShellExit struct{}
@@ -10,6 +12,21 @@ type ShellExit struct{}
 type ShellAbort struct{ Err error }
 
 func (p *Program) ShellRegion(source string) {
+	exchange, err := p.shellExchangeBindings().BeginShell(p.Session)
+	if err != nil {
+		panic(ShellAbort{Err: err})
+	}
+	defer func() {
+		pending := recover()
+		endErr := exchange.EndShell(p.Session)
+		if pending != nil {
+			panic(pending)
+		}
+		if endErr != nil {
+			panic(ShellAbort{Err: endErr})
+		}
+	}()
+
 	if p.Frame.Agentic() {
 		source = "agentic {\n" + source + "\n}"
 	}
@@ -22,6 +39,36 @@ func (p *Program) ShellRegion(source string) {
 	}
 }
 func (p *Program) ShellString(name string) string {
-	value, _ := p.Session.Get(name)
-	return value.String()
+	value, _, err := p.Bindings.ShellValue(p.Session, name)
+	if err != nil {
+		panic(ShellAbort{Err: err})
+	}
+	return value
+}
+
+func (p *Program) ShellDefault(name, fallback string) string {
+	value, present, err := p.Bindings.ShellValue(p.Session, name)
+	if err != nil {
+		panic(ShellAbort{Err: err})
+	}
+	if !present {
+		return fallback
+	}
+	return value
+}
+
+// A native callable has no scalar serialization. Keep it out of unrelated
+// shell exchanges; an explicit ShellValue observation still uses the lexical
+// projection contract and reports unsupported callable rendering.
+func (p *Program) shellExchangeBindings() *LexicalBindings {
+	visible := p.Bindings.visible()
+	names := map[string]string{}
+	p.Bindings.mu.RLock()
+	for name, id := range p.Bindings.names {
+		if slot := visible[name]; slot != nil && slot.value.Kind() != reflect.Func {
+			names[name] = id
+		}
+	}
+	p.Bindings.mu.RUnlock()
+	return p.Bindings.CaptureNames(names)
 }

@@ -131,7 +131,7 @@ func (e *emitter) globalStatement(s *syntax.Stmt) (string, error) {
 			return e.mark(n) + e.unused([]string{name}) + "\n", nil
 		}
 		fmt.Fprintf(&e.globalDecls, "%svar %s %s\nvar %s error\n", e.mark(n), name, e.globalTypes[name], failure)
-		return e.mark(n) + strings.Replace(text, " := ", " = ", 1) + "\n", nil
+		return e.mark(n) + strings.Replace(text, " := ", " = ", 1) + "\n" + e.lexicalCell(name, e.program()) + ".Present = " + failure + " == nil\n", nil
 	}
 	line := text
 	var ns []string
@@ -199,9 +199,9 @@ func (e *emitter) globalStatement(s *syntax.Stmt) (string, error) {
 
 	eq := strings.Index(line, " = ")
 	if eq < 0 {
-		return e.mark(s.Cmd) + e.unused(ns) + "\n", nil
+		return e.mark(s.Cmd) + e.unused(ns) + "\n" + e.lexicalPresence(ns), nil
 	}
-	return e.mark(s.Cmd) + "/*" + e.prefix + "reset*/" + strings.Join(ns, ", ") + " = " + line[eq+3:] + "\n", nil
+	return e.mark(s.Cmd) + "/*" + e.prefix + "reset*/" + strings.Join(ns, ", ") + " = " + line[eq+3:] + "\n" + e.lexicalPresence(ns), nil
 }
 
 func (e *emitter) switchStmt(n *syntax.BashPPSwitch) (string, error) {

@@ -14,13 +14,18 @@ func (e *emitter) findNativeShells(file *syntax.File) {
 		if !ok || f.Name == nil {
 			return true
 		}
+		typed, positional := false, false
 		syntax.Walk(f.Body, func(n syntax.Node) bool {
 			_, scope := n.(*syntax.BashPPAgenticBlock)
 			if n != nil && !scope && strings.HasPrefix(nodeName(n), "BashPP") {
-				e.nativeShellNames[f.Name.Value] = true
+				typed = true
+			}
+			if p, ok := n.(*syntax.ParamExp); ok && p.Param != nil && !syntax.BashPPValidIdent(p.Param.Value) && p.Param.Value != "?" {
+				positional = true
 			}
 			return true
 		})
+		e.nativeShellNames[f.Name.Value] = typed || !positional
 		return true
 	})
 }
@@ -41,6 +46,12 @@ func (e *emitter) nativeShellStatement(s *syntax.Stmt) (string, bool, error) {
 			return "", true, e.fail(n, CodeUnsupported, "native shell callable needs a block body")
 		}
 		priorProgram, priorFunc, priorResults := e.programExpr, e.inFunc, e.resultTypes
+		priorGlobals, priorShell := e.functionGlobals, e.nativeShellBody
+		e.functionGlobals = map[string]bool{}
+		for name := range e.visibleGlobals {
+			e.functionGlobals[name] = true
+		}
+		e.nativeShellBody = true
 		e.programExpr = e.prefix + "program"
 		e.inFunc = true
 		e.resultTypes = nil
@@ -48,11 +59,24 @@ func (e *emitter) nativeShellStatement(s *syntax.Stmt) (string, bool, error) {
 		body, err := e.block(block)
 		e.pop()
 		e.programExpr, e.inFunc, e.resultTypes = priorProgram, priorFunc, priorResults
+		e.functionGlobals, e.nativeShellBody = priorGlobals, priorShell
 		if err != nil {
 			return "", true, err
 		}
-		return e.mark(n) + e.program() + ".DefineNativeShell(" + strconv.Quote(n.Name.Value) + "," + strconv.FormatBool(n.Agentic != nil) + ",func(" + e.prefix + "program *" + e.prefix + "rt.Program){\n" + body + "\n})\n", true, nil
+		capture := e.prefix + "shellCapture"
+		view := e.lexicalNames(e.visibleGlobals)
+		return e.mark(n) + "{\n" + capture + " := " + e.program() + ".Bindings.CaptureNames(" + view + ")\n" + e.program() + ".DefineNativeShell(" + strconv.Quote(n.Name.Value) + "," + strconv.FormatBool(n.Agentic != nil) + ",func(" + e.prefix + "program *" + e.prefix + "rt.Program){\n" + e.prefix + "shellProgram := *" + e.program() + "\n" + e.program() + " = &" + e.prefix + "shellProgram\n" + e.program() + ".Bindings = " + capture + ".CaptureNames(" + view + ")\n" + body + "\n})\n}\n", true, nil
 	case *syntax.CallExpr:
+		if e.nativeShellBody && len(n.Args) > 0 && n.Args[0].Lit() == "return" {
+			value := "0"
+			if len(n.Args) > 1 {
+				if _, err := strconv.Atoi(n.Args[1].Lit()); err != nil {
+					return "", true, e.fail(n, CodeUnsupported, "native shell return needs integer status")
+				}
+				value = n.Args[1].Lit()
+			}
+			return e.program() + ".SetStatus(" + value + "); return\n", true, nil
+		}
 		if len(n.Args) == 0 || !e.nativeShellNames[n.Args[0].Lit()] {
 			return "", false, nil
 		}

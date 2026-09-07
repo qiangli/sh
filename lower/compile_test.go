@@ -100,7 +100,7 @@ func executeBuild(t *testing.T, r compiledCase, flags ...string) (string, string
 		interpretedStatus = int(exit)
 	}
 	if compiledStatus != interpretedStatus {
-		t.Fatalf("status compiled=%d interpreted=%d", compiledStatus, interpretedStatus)
+		t.Fatalf("status compiled=%d interpreted=%d; compiled=(%q,%q), interpreted=(%q,%q)", compiledStatus, interpretedStatus, out.String(), stderr.String(), interpOut.String(), interpErr.String())
 	}
 	if out.String() != interpOut.String() || stderr.String() != interpErr.String() {
 		t.Fatalf("parity mismatch: compiled=(%q,%q), interpreted=(%q,%q)\n%s", out.String(), stderr.String(), interpOut.String(), interpErr.String(), r.Source)
