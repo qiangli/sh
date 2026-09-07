@@ -91,5 +91,17 @@ including named scalar underlying types. Reviewed dot imports are resolved
 against the actual package export scope.
 
 These repairs were measured against additional public profile fixtures. Rich
-root-object JSON rendering, exact-rational scalar rendering and arbitrary-
-precision inferred scalar storage remain separate representation obligations.
+root-object JSON rendering and exact-rational scalar rendering remain separate
+representation obligations. Inferred integer constant expressions exceeding
+int64 use native `math/big.Int` storage; arithmetic on those stored values still
+requires a separate numeric emitter.
+
+## Binding and type-switch follow-up
+
+Tuple short declarations preserve existing bindings while adding new storage;
+source initializers still run in entry order. Constant groups retain omitted
+initializer expressions and the interpreter's lexical `iota` shadowing. Native
+type switches bind the selected concrete value only inside its selected case.
+The `make` emitter consumes the parser's committed type argument once, even
+when its compatibility word is also retained in the AST. Scoped `${name-unset}`
+expansions preserve the source's static binding lifetime.

@@ -110,6 +110,12 @@ func (e *emitter) nativeWordExpr(n syntax.Node, text string) (string, error) {
 	return out.String(), nil
 }
 func (e *emitter) parameter(p *syntax.ParamExp) (string, error) {
+	if p.Param != nil && p.Exp != nil && p.Exp.Op == syntax.DefaultUnset && p.Index == nil && !p.Length && !p.Excl {
+		if e.known(p.Param.Value) {
+			return p.Param.Value, nil
+		}
+		return e.stringParts(p.Exp.Word.Parts)
+	}
 	if p.Param != nil && e.known(p.Param.Value) && p.Index != nil && p.Exp == nil && !p.Excl {
 		if index, ok := p.Index.(*syntax.Word); ok {
 			if index.Lit() == "@" && p.Length {
@@ -187,7 +193,7 @@ func (e *emitter) shellWord(w *syntax.Word) (string, error) {
 		return value, err
 	}
 	if len(w.Parts) == 1 {
-		if l, ok := w.Parts[0].(*syntax.Lit); ok && e.inFunc && e.known(l.Value) {
+		if l, ok := w.Parts[0].(*syntax.Lit); ok && e.inFunc && e.bound(l.Value) {
 			return l.Value, nil
 		}
 	}
@@ -336,6 +342,9 @@ func (e *emitter) printfFormat(w *syntax.Word) error {
 }
 
 func (e *emitter) argument(w *syntax.Word) (string, error) {
+	if value, ok, err := e.shellProjection(w); ok || err != nil {
+		return value, err
+	}
 	if len(w.Parts) == 1 {
 		if l, ok := w.Parts[0].(*syntax.Lit); ok && syntax.BashPPValidIdent(l.Value) && !e.known(l.Value) {
 			return strconv.Quote(l.Value), nil

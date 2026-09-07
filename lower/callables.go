@@ -119,16 +119,47 @@ func (e *emitter) globalStatement(s *syntax.Stmt) (string, error) {
 	default:
 		return "", e.fail(s, CodeUnsupported, "global declaration")
 	}
+	newNames := map[string]bool{}
+	for _, name := range ns {
+		if name != "_" && !e.declaredGlobals[name] {
+			newNames[name] = true
+		}
+	}
+	if _, short := s.Cmd.(*syntax.BashPPShortDecl); short && len(newNames) == 0 {
+		return "", e.fail(s, CodeType, "no new variables on left side of :=")
+	}
+	for _, name := range ns {
+		if name != "_" {
+			e.declaredGlobals[name] = true
+		}
+	}
 	if constant {
 		e.globalDecls.WriteString(e.mark(s.Cmd) + line + "\n")
 		return e.mark(s.Cmd) + e.unused(ns) + "\n", nil
 	}
 	if e.globalTypes == nil {
-		e.globalDecls.WriteString(e.mark(s.Cmd) + line + "\n")
+		if len(newNames) == len(ns) {
+			e.globalDecls.WriteString(e.mark(s.Cmd) + line + "\n")
+		} else {
+			eq := strings.Index(line, " = ")
+			if eq < 0 {
+				return "", e.fail(s, CodeType, "redeclaration needs an initializer")
+			}
+			var temp []string
+			for i := range ns {
+				temp = append(temp, fmt.Sprintf("%stuple%d_%d", e.prefix, len(e.marks), i))
+			}
+			fmt.Fprintf(&e.globalDecls, "%svar %s = %s\n", e.mark(s.Cmd), strings.Join(temp, ","), line[eq+3:])
+			for i, name := range ns {
+				if newNames[name] {
+					fmt.Fprintf(&e.globalDecls, "var %s = %s\n", name, temp[i])
+				}
+			}
+		}
 		return e.mark(s.Cmd) + e.unused(ns) + "\n", nil
 	}
 	for _, name := range ns {
-		if name == "_" {
+		if !newNames[name] {
 			continue
 		}
 		typ, ok := e.globalTypes[name]
@@ -137,6 +168,7 @@ func (e *emitter) globalStatement(s *syntax.Stmt) (string, error) {
 		}
 		fmt.Fprintf(&e.globalDecls, "%svar %s %s\n", e.mark(s.Cmd), name, typ)
 	}
+
 	eq := strings.Index(line, " = ")
 	if eq < 0 {
 		return e.mark(s.Cmd) + e.unused(ns) + "\n", nil
@@ -146,7 +178,7 @@ func (e *emitter) globalStatement(s *syntax.Stmt) (string, error) {
 
 func (e *emitter) switchStmt(n *syntax.BashPPSwitch) (string, error) {
 	if n.TypeSwitch {
-		return "", e.fail(n, CodeUnsupported, "type switch needs interface lowering")
+		return e.typeSwitchStmt(n)
 	}
 	e.push()
 	defer e.pop()
@@ -260,8 +292,21 @@ func (e *emitter) importDecl(n *syntax.BashPPImport) error {
 func (e *emitter) constGroup(n *syntax.BashPPConstGroup) (string, error) {
 	e.push()
 	e.bind("iota")
+	defer e.pop()
+	saved := e.iotaValue
+	defer func() { e.iotaValue = saved }()
+	shadowed := false
 	var lines []string
+	var lastExpr syntax.BashPPExpr
+	var lastWords []*syntax.Word
+	var lastType string
 	for _, spec := range n.Specs {
+		current := int(spec.Iota)
+		if shadowed {
+			e.iotaValue = nil
+		} else {
+			e.iotaValue = &current
+		}
 		typ := ""
 		var err error
 		if spec.DeclTypeExpr != nil {
@@ -270,34 +315,43 @@ func (e *emitter) constGroup(n *syntax.BashPPConstGroup) (string, error) {
 			typ, err = e.typeSpelling(spec.DeclType, spec.DeclType.Value)
 		}
 		if err != nil {
-			e.pop()
+			return "", err
+		}
+		expr, words := spec.InitExpr, spec.Init
+		if expr == nil && len(words) == 0 {
+			expr, words, typ = lastExpr, lastWords, lastType
+		} else {
+			lastExpr, lastWords, lastType = expr, words, typ
+		}
+		value := ""
+		if expr != nil {
+			value, err = e.expr(expr)
+		} else if len(words) > 0 {
+			value, err = e.wordSequence(words)
+		}
+		if err != nil {
 			return "", err
 		}
 		if typ != "" {
 			typ = " " + typ
-		}
-		value := ""
-		if spec.InitExpr != nil {
-			value, err = e.expr(spec.InitExpr)
-		} else if len(spec.Init) > 0 {
-			value, err = e.wordSequence(spec.Init)
-		}
-		if err != nil {
-			e.pop()
-			return "", err
 		}
 		if value != "" {
 			value = " = " + value
 		}
 		lines = append(lines, spec.Name.Value+typ+value)
 		e.bind(spec.Name.Value)
+		if spec.Name.Value == "iota" {
+			shadowed = true
+		}
 	}
-	e.pop()
 	for _, spec := range n.Specs {
-		e.bind(spec.Name.Value)
+		if spec.Name.Value != "_" {
+			e.scopes[len(e.scopes)-2][spec.Name.Value] = true
+		}
 	}
 	return "const (\n" + strings.Join(lines, "\n") + "\n)", nil
 }
+
 func (e *emitter) rangeStmt(n *syntax.BashPPRange) (string, error) {
 	e.push()
 	defer e.pop()
@@ -502,4 +556,52 @@ func (e *emitter) returnTypes(fields []*syntax.BashPPField) []string {
 		}
 	}
 	return out
+}
+
+func (e *emitter) typeSwitchStmt(n *syntax.BashPPSwitch) (string, error) {
+	init, ok := n.Init.(*syntax.BashPPShortDecl)
+	if !ok || len(init.Lhs) != 1 {
+		return "", e.fail(n, CodeUnsupported, "type switch guard")
+	}
+	assert, ok := init.Expr.(*syntax.BashPPTypeAssertExpr)
+	if !ok {
+		return "", e.fail(n, CodeType, "missing type switch assertion")
+	}
+	root, err := e.expr(assert.X)
+	if err != nil {
+		return "", err
+	}
+	name := init.Lhs[0].Value
+	var out strings.Builder
+	out.WriteString("switch " + name + " := " + root + ".(type) {\n")
+	for _, arm := range n.Arms {
+		e.push()
+		e.bind(name)
+		if len(arm.Exprs) == 0 {
+			out.WriteString("default:\n")
+		} else {
+			var values []string
+			for _, x := range arm.Exprs {
+				v, err := e.expr(x)
+				if err != nil {
+					e.pop()
+					return "", err
+				}
+				values = append(values, v)
+			}
+			out.WriteString("case " + strings.Join(values, ",") + ":\n")
+		}
+		out.WriteString("_ = " + name + "\n")
+		for _, stmt := range arm.Stmts {
+			text, err := e.statement(stmt)
+			if err != nil {
+				e.pop()
+				return "", err
+			}
+			out.WriteString(text)
+		}
+		e.pop()
+	}
+	out.WriteString("}")
+	return out.String(), nil
 }

@@ -3,6 +3,7 @@ package lower
 import (
 	"fmt"
 	"go/ast"
+	"go/constant"
 	"go/format"
 	"go/importer"
 	"go/parser"
@@ -35,6 +36,9 @@ type emitter struct {
 	callableParams  map[*syntax.BashPPField]string
 	resultTypes     []string
 	dotNames        map[string]bool
+	declaredGlobals map[string]bool
+	iotaValue       *int
+	bigIntegers     bool
 	globalDecls     strings.Builder
 }
 
@@ -56,7 +60,7 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 	if !token.IsIdentifier(options.Package) || token.Lookup(options.Package).IsKeyword() {
 		return nil, ErrorList{{Code: CodeType, Msg: "invalid package name", Pos: file.Pos()}}
 	}
-	e := &emitter{options: options, funcs: map[string]bool{}, scopes: []map[string]bool{{}}, globals: map[string]bool{}, visibleGlobals: map[string]bool{}, imports: map[string]string{}, callableParams: map[*syntax.BashPPField]string{}, dotNames: map[string]bool{}, typeNames: map[string]bool{}, globalTypes: globalTypes}
+	e := &emitter{options: options, funcs: map[string]bool{}, scopes: []map[string]bool{{}}, globals: map[string]bool{}, visibleGlobals: map[string]bool{}, imports: map[string]string{}, callableParams: map[*syntax.BashPPField]string{}, dotNames: map[string]bool{}, declaredGlobals: map[string]bool{}, typeNames: map[string]bool{}, globalTypes: globalTypes}
 	// Allocate private names from the tree rather than reserving user identifiers.
 	for n := 0; ; n++ {
 		e.prefix = fmt.Sprintf("__bpp%d_", n)
@@ -146,6 +150,9 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 		}
 	}
 	imports := []string{}
+	if e.bigIntegers {
+		imports = append(imports, "math/big")
+	}
 	if e.panicSupport {
 		e.output = true
 		imports = append(imports, "os")
@@ -178,9 +185,14 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 	}
 	if e.panicSupport {
 		fmt.Fprintf(&raw, "import %sos \"os\"\n", e.prefix)
-		raw.WriteString(e.panicHelpers())
+	}
+	if e.bigIntegers {
+		fmt.Fprintf(&raw, "import %sbig \"math/big\"\n", e.prefix)
 	}
 	raw.WriteString(e.importLines())
+	if e.panicSupport {
+		raw.WriteString(e.panicHelpers())
+	}
 	raw.WriteString(e.globalDecls.String())
 	raw.WriteString(declarations.String())
 	tail := ""
@@ -339,6 +351,19 @@ func (e *emitter) known(name string) bool {
 		return true
 	}
 	return false
+}
+
+// bound distinguishes script storage from predeclared literals and callables.
+func (e *emitter) bound(name string) bool {
+	for i := len(e.scopes) - 1; i >= 0; i-- {
+		if e.scopes[i][name] {
+			return true
+		}
+	}
+	if e.inFunc {
+		return e.functionGlobals[name]
+	}
+	return e.globals[name]
 }
 func (e *emitter) bind(name string) {
 	if name != "_" {
@@ -566,10 +591,30 @@ func (e *emitter) command(c syntax.Command) (string, error) {
 		case n.MakeChan != nil || n.Recv != nil:
 			return "", e.fail(n, CodeUnsupported, "callable/channel declaration variant")
 		default:
-			rhs, err = e.wordSequence(n.Rhs)
+			if len(n.Lhs) > 1 && len(n.Rhs) > 1 {
+				var parts []string
+				for _, w := range n.Rhs {
+					x, problem := e.valueWord(w)
+					if problem != nil {
+						return "", problem
+					}
+					parts = append(parts, x)
+				}
+				rhs = strings.Join(parts, ", ")
+			} else {
+				rhs, err = e.wordSequence(n.Rhs)
+			}
 		}
 		if err != nil {
 			return "", err
+		}
+		if len(n.Lhs) == 1 && n.Call == nil && n.FuncLit == nil {
+			if value, err := types.Eval(token.NewFileSet(), nil, token.NoPos, rhs); err == nil && value.Value != nil && value.Value.Kind() == constant.Int {
+				if _, fits := constant.Int64Val(value.Value); !fits {
+					e.bigIntegers = true
+					rhs = "func() *" + e.prefix + "big.Int { v, _ := new(" + e.prefix + "big.Int).SetString(" + strconv.Quote(value.Value.ExactString()) + ",10); return v }()"
+				}
+			}
 		}
 		ns := names(n.Lhs)
 		for _, name := range ns {
@@ -831,6 +876,9 @@ func (e *emitter) expr(x syntax.BashPPExpr) (string, error) {
 	case *syntax.BashPPBasicLit:
 		return n.Value.Value, nil
 	case *syntax.BashPPIdent:
+		if n.Name.Value == "iota" && e.iotaValue != nil {
+			return strconv.Itoa(*e.iotaValue), nil
+		}
 		if !e.known(n.Name.Value) {
 			return "", e.fail(n, CodeUndefined, "undefined: "+n.Name.Value)
 		}
@@ -911,7 +959,20 @@ func (e *emitter) call(c *syntax.BashPPCall) (string, error) {
 		}
 		args = append(args, typ)
 	}
-	for _, w := range c.Args {
+	for i, w := range c.Args {
+		if i == 0 && c.ArgType != nil {
+			continue
+		}
+		if i == 0 && name == "make" && !e.funcs[name] && c.ArgType == nil {
+			var spelling strings.Builder
+			_ = syntax.NewPrinter().Print(&spelling, w)
+			typ, err := e.typeSpelling(w, spelling.String())
+			if err != nil {
+				return "", err
+			}
+			args = append(args, typ)
+			continue
+		}
 		x, err := e.argument(w)
 		if err != nil {
 			return "", err
