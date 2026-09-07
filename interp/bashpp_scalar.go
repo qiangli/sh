@@ -639,11 +639,15 @@ func (r *Runner) bashPPConvertScalar(typ string, x bashPPScalar) (bashPPScalar, 
 			return bashPPScalar{value: constant.ToFloat(x.value), typ: typ, runtime: x.runtime}, nil
 		}
 	default:
-		if bashPPIntegerType(typ) && x.value.Kind() == constant.Int {
-			if !bashPPIntegerRepresentable(typ, x.value) {
+		if bashPPIntegerType(typ) && (x.value.Kind() == constant.Int || x.value.Kind() == constant.Float) {
+			integer := constant.ToInt(x.value)
+			if integer.Kind() != constant.Int {
+				break
+			}
+			if !bashPPIntegerRepresentable(typ, integer) {
 				return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-CONVERT: constant %s overflows %s", x.value, typ)
 			}
-			return bashPPScalar{value: constant.ToInt(x.value), typ: typ, runtime: x.runtime}, nil
+			return bashPPScalar{value: integer, typ: typ, runtime: x.runtime}, nil
 		}
 	}
 	return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-CONVERT: cannot convert %s to %s", x.value.Kind(), typ)

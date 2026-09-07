@@ -59,6 +59,50 @@ func TestBashPPParsedShortDeclarationEvaluates(t *testing.T) {
 	qt.Assert(t, qt.Equals(out.String(), "42:1:2"))
 }
 
+func TestBashPPStory204DeclarationSemantics(t *testing.T) {
+	t.Run("typed scalar zero values and typed const", func(t *testing.T) {
+		var out strings.Builder
+		r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP))
+		bashPPRun(t, r, "var n int\nvar ok bool\nvar text string\nconst K int8 = 7\nprintf '<%s>:<%s>:<%s>:%s' \"$n\" \"$ok\" \"$text\" \"$K\"\n")
+		qt.Assert(t, qt.Equals(out.String(), "<0>:<false>:<>:7"))
+	})
+
+	t.Run("ordinary tuple may redeclare when another name is new", func(t *testing.T) {
+		var out strings.Builder
+		r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP))
+		bashPPRun(t, r, "x := 1\nx, y := 2, 3\nprintf '%s:%s' \"$x\" \"$y\"\n")
+		qt.Assert(t, qt.Equals(out.String(), "2:3"))
+	})
+
+	for _, tc := range []struct {
+		name string
+		src  string
+		want string
+	}{
+		{"no new short declaration name", "x := 1\nx := 2\n", "BASHPP-ESHORT-NONEW"},
+		{"duplicate short declaration name", "x, x := 1, 2\n", "x repeated on left side of :="},
+		{"constant overflow", "var n int8 = 128\n", "BASHPP-EEXPR-CONVERT: constant 128 overflows int8"},
+		{"constant kind is not assignable", "var text string = 1\n", "BASHPP-EASSIGN-TYPE"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out strings.Builder
+			r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP))
+			bashPPRun(t, r, tc.src)
+			qt.Assert(t, qt.StringContains(out.String(), tc.want))
+		})
+	}
+}
+
+func TestBashPPStory204DiagnosticHasSourcePosition(t *testing.T) {
+	var out strings.Builder
+	r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP), interp.WithBashCompatErrors(true))
+	f, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(
+		strings.NewReader("var good int8 = 1\nvar bad int8 = 128\n"), "decl.bpp")
+	qt.Assert(t, qt.IsNil(err))
+	_ = r.Run(context.Background(), f)
+	qt.Assert(t, qt.StringContains(out.String(), "decl.bpp: line 2: BASHPP-EEXPR-CONVERT"))
+}
+
 func TestBashPPParsedScalarExpressionsEvaluate(t *testing.T) {
 	var out strings.Builder
 	r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP))

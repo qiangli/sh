@@ -445,8 +445,9 @@ func bashppTypeLit(w *Word) *Lit {
 	return &Lit{ValuePos: w.Pos(), ValueEnd: w.End(), Value: text}
 }
 
-// bashppTypedVarDecl recognizes the named scalar and pointer declarations
-// needed to construct receiver values: `var v T = 1` and `var p *T`.
+// bashppTypedVarDecl recognizes typed var declarations and typed const
+// declarations with an initializer. A const without an initializer is not a
+// committed start site: that Class-E shape remains an ordinary shell command.
 func bashppTypedVarDecl(ce *CallExpr, redirs []*Redirect) *BashPPDecl {
 	if ce == nil || len(ce.Assigns) != 0 || len(redirs) != 0 || (len(ce.Args) != 3 && len(ce.Args) < 5) {
 		return nil
@@ -457,7 +458,10 @@ func bashppTypedVarDecl(ce *CallExpr, redirs []*Redirect) *BashPPDecl {
 	if typ == nil && typExpr != nil {
 		typ = &Lit{ValuePos: ce.Args[2].Pos(), ValueEnd: ce.Args[2].End(), Value: bashppWordText(ce.Args[2])}
 	}
-	if kw == nil || kw.Value != "var" || name == nil || !bashppIsIdent(name.Value) || typ == nil || typExpr == nil {
+	if kw == nil || (kw.Value != "var" && kw.Value != "const") || name == nil || !bashppIsIdent(name.Value) || typ == nil || typExpr == nil {
+		return nil
+	}
+	if kw.Value == "const" && len(ce.Args) == 3 {
 		return nil
 	}
 	var init []*Word
@@ -482,7 +486,11 @@ func bashppTypedVarDecl(ce *CallExpr, redirs []*Redirect) *BashPPDecl {
 			initExpr = bashppScalarExpr(init[0])
 		}
 	}
-	return &BashPPDecl{Site: StartVar, Kw: kw, Name: name, DeclType: typ, DeclTypeExpr: typExpr, Init: init, InitExpr: initExpr, End_: ce.Args[len(ce.Args)-1].End()}
+	site := StartVar
+	if kw.Value == "const" {
+		site = StartConst
+	}
+	return &BashPPDecl{Site: site, Kw: kw, Name: name, DeclType: typ, DeclTypeExpr: typExpr, Init: init, InitExpr: initExpr, End_: ce.Args[len(ce.Args)-1].End()}
 }
 
 // bashppBareLit returns the word's sole literal part, or nil when the word is

@@ -149,10 +149,6 @@ var bashppUnsupportedDeclBodies = []struct{ name, in string }{
 	{"no value", "var x ="},
 	{"const bare", "const"},
 
-	// Typed const remains outside the receiver value surface. Typed var forms
-	// are now claimed by Sprint 114 P3-C and covered in bashpp_method_test.go.
-	{"const typed", "const K int = 2"},
-
 	// The separator is not `=`.
 	{"short decl operator", "var x := 1"},
 	{"no separator", "var x 1"},
