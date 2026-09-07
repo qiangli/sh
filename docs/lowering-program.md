@@ -197,19 +197,50 @@ blocked on, the reported error is the task's, not the cancellation the body
 happened to observe. A tie keeps the body's own failure, and a backend close
 failure is reported only when nothing else failed.
 
+**Does not report the cancellation it caused itself.** This is the correction
+to the first revision. For
+
+```
+func blocked(ch) { ch <- 1; }
+func main() { ch := make(chan int); go blocked(ch) }
+main()
+```
+
+the interpreter ends silently at status 0: `bashPPGo`'s task records no failure
+at all when it ends cancelled. The first revision reported the shutdown's own
+cancellation, so the artifact exited 1 with `shellrt: task 0: context canceled`
+— a diagnostic the script never produces. `Run` now drops a cancellation-class
+task failure when the program's own context was never cancelled from outside.
+A sibling's genuine failure is unaffected (it outranks a cancellation and is
+what `Join` returns anyway), and an externally cancelled or expired program
+still reports, because that cancellation is the reason it stopped.
+
 ## Output
 
-`Echo`, `Printf`, `Print` and `Println` write to the program's stream and set
-the status the way bash does: 0 for a successful write, 1 for a failed one.
-`Printf` implements the same `%s`, `%d`, `%%` and escape subset as the global
-helper, including format recycling, omitted arguments and `\c`; an unsupported
-conversion fails and writes nothing at all rather than quietly taking Go
-`fmt`'s different semantics.
+`Echo`, `Printf`, `Print` and `Println` write to the program's stream. `Printf`
+implements the same `%s`, `%d`, `%%` and escape subset as the global helper,
+including format recycling, omitted arguments and `\c`.
 
-One rule is not bash's: once an output write has failed, a *following
-successful write* no longer resets the status to 0. An I/O failure cannot be
-erased by the next `echo`. A command that genuinely sets `$?` afterwards still
-does.
+The status they leave is the engine's, and the engine was asked rather than
+guessed at. Running `echo a` under `interp` with a writer whose write fails
+leaves the script at status 0 with nothing on standard error: **a lost write is
+not a failed command**. So `Echo` and friends set status 0 whether or not the
+write landed, and return the write error for the caller to do with as it sees
+fit. A *format* failure is a different thing and the engine does report it —
+`printf '%d\n' abc` prints `printf: abc: invalid number` and ends at status 1 —
+so an unreadable conversion argument sets status 1 after writing what it could,
+and an unsupported conversion sets status 1 and writes nothing.
+
+An earlier revision of this helper made a failed write sticky, so that a later
+successful write could not reset the status to 0. That rule has no counterpart
+in the source language — the engine records nothing for the failed write in the
+first place — and it is gone. `lower/shellrt/program_test.go` now runs the
+interpreter as the oracle for both cases rather than asserting an intuition.
+
+> For the emitter: `words.go` currently emits
+> `if err := rt.Echo(...); err != nil { rt.Fail(err) }`. On the `Program` path
+> that would report and exit 1 where the interpreted script is silent at 0.
+> A write error from `Echo` is information, not a command failure.
 
 ## What is not here
 
@@ -224,13 +255,17 @@ does.
 ## Tests
 
 `lower/shellrt/program_test.go` covers independent concurrent programs (under
-`-race`), a task failure outranking the cancellation it caused in the body, the
-ordered and bounded shutdown against a stub backend, a task entry leaving the
-shared channel scope alone, readonly status 2, marked-callable denial at status
-1 with no body, shared sequential and forked child panic bookkeeping, recovery
-status, output-failure stickiness, and the printf subset. A real built artifact
-exercises the generated entry shape end to end — status, panic, nested panic,
-native panic, readonly, denial and task failure — with no Go on `PATH`.
+`-race`), a task failure outranking the cancellation it caused in the body, a
+task left blocked at shutdown ending as a silent success, an external
+cancellation still being reported, a sibling failure not being mistaken for
+one, the ordered and bounded shutdown against a stub backend, a task entry
+leaving the shared channel scope alone, readonly status 2, marked-callable
+denial at status 1 with no body, shared sequential and forked child panic
+bookkeeping, recovery status, and the printf subset. Two tests run `interp`
+itself as the oracle for the output status. A real built artifact exercises the
+generated entry shape end to end — status, panic, nested panic, native panic,
+readonly, denial, task failure and the blocked-task shape above — with no Go on
+`PATH`.
 
 ## Handoff to the compiler owner
 
@@ -249,6 +284,10 @@ than assumed:
    open-code the panic at every guard site, that belongs in `program.go` and
    will be added there.
 2. **`Print` and `Println` return nothing**, matching the signed signatures,
-   while `Echo` and `Printf` return an error. All four record the sticky
-   output failure described above, so nothing is lost by the difference; say so
-   if the emitter wants `error` results from all four instead.
+   while `Echo` and `Printf` return an error. Since a failed write is not a
+   command failure, nothing observable is lost by the difference; say so if the
+   emitter wants `error` results from all four instead.
+3. **A write error must not be `Fail`ed** on this path, for the reason the
+   Output section gives. If the emitter wants the strict-I/O behaviour anyway,
+   that is a language decision to make deliberately, not one to inherit from
+   `words.go`'s current `rt.Echo` spelling.

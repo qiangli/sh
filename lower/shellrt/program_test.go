@@ -15,7 +15,10 @@ import (
 	"testing"
 	"time"
 
+	"mvdan.cc/sh/v3/expand"
+	"mvdan.cc/sh/v3/interp"
 	"mvdan.cc/sh/v3/lower/shellrt"
+	"mvdan.cc/sh/v3/syntax"
 )
 
 // newProgram builds a program whose output and diagnostics are captured, and
@@ -213,13 +216,21 @@ func TestRunShutdownIsOrderedAndBounded(t *testing.T) {
 	}
 }
 
-// TestSuccessfulBodyDoesNotWaitForABlockedTask: the end of the body is the
-// structured lifetime boundary on the successful path too, which is the
-// engine's own rule — a blocked task must not keep a finished program alive.
-func TestSuccessfulBodyDoesNotWaitForABlockedTask(t *testing.T) {
+// TestBlockedTaskAtShutdownIsSilentSuccess is the compiled counterpart of
+//
+//	func blocked(ch) { ch <- 1; }
+//	func main() { ch := make(chan int); go blocked(ch) }
+//	main()
+//
+// which the interpreter ends silently at status 0. The end of the body is the
+// structured lifetime boundary, so the blocked send is released; but the
+// cancellation that release consists of is this shutdown's own doing and is
+// not a failure. Reporting it made the artifact exit 1 with a diagnostic the
+// script never produces.
+func TestBlockedTaskAtShutdownIsSilentSuccess(t *testing.T) {
 	t.Parallel()
 
-	p, _, _ := newProgram(t)
+	p, out, diagnostics := newProgram(t)
 	channel, err := shellrt.MakeChannel[int](p.Channels, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -231,8 +242,8 @@ func TestSuccessfulBodyDoesNotWaitForABlockedTask(t *testing.T) {
 			p.Session.Go(shellrt.ChannelTask(func(ctx context.Context, child *shellrt.Session) error {
 				task := p.Child(ctx, child)
 				close(blocked)
-				// Nothing will ever send on this channel.
-				shellrt.MustReceive(shellrt.Receive(task.Context, child, task.Channels, channel))
+				// Nothing will ever receive: only shutdown releases this.
+				shellrt.MustChannelOperation(shellrt.Send(task.Context, child, task.Channels, channel, 1))
 				return nil
 			}))
 			<-blocked
@@ -240,14 +251,81 @@ func TestSuccessfulBodyDoesNotWaitForABlockedTask(t *testing.T) {
 	}()
 	select {
 	case runErr := <-done:
-		// The cancellation the shutdown itself caused is not a failure worth
-		// reporting over a body that succeeded, but it must be a
-		// cancellation-class one if it is reported at all.
-		if runErr != nil && shellrt.ExitCode(runErr) != 1 {
-			t.Fatalf("Run reported %v", runErr)
+		if runErr != nil {
+			t.Fatalf("Run reported %v, want a silent success", runErr)
 		}
 	case <-time.After(30 * time.Second):
 		t.Fatal("a blocked task kept the program alive")
+	}
+	if p.Status() != 0 {
+		t.Fatalf("status %d, want 0", p.Status())
+	}
+	if out.String() != "" || diagnostics.String() != "" {
+		t.Fatalf("out=%q err=%q, want both empty", out.String(), diagnostics.String())
+	}
+}
+
+// TestExternalCancellationIsStillReported is the other side of that
+// suppression: a program cancelled from outside stopped for a reason, and
+// erasing it would hide why.
+func TestExternalCancellationIsStillReported(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	out, diagnostics := &lockedBuffer{}, &lockedBuffer{}
+	p, err := shellrt.NewProgram(shellrt.WithStdio(nil, out, diagnostics), shellrt.WithContext(ctx))
+	if err != nil {
+		t.Fatal(err)
+	}
+	channel, err := shellrt.MakeChannel[int](p.Channels, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocked := make(chan struct{})
+	runErr := p.Run(func(p *shellrt.Program) {
+		p.Session.Go(shellrt.ChannelTask(func(ctx context.Context, child *shellrt.Session) error {
+			task := p.Child(ctx, child)
+			close(blocked)
+			shellrt.MustChannelOperation(shellrt.Send(task.Context, child, task.Channels, channel, 1))
+			return nil
+		}))
+		<-blocked
+		cancel()
+	})
+	if !errors.Is(runErr, context.Canceled) {
+		t.Fatalf("Run reported %v, want the external cancellation", runErr)
+	}
+}
+
+// TestSiblingFailureIsNotSuppressedAsCancellation: a task failure cancels its
+// siblings, so the suppression must not swallow the failure that caused the
+// cancellation in the first place.
+func TestSiblingFailureIsNotSuppressedAsCancellation(t *testing.T) {
+	t.Parallel()
+
+	p, _, _ := newProgram(t)
+	channel, err := shellrt.MakeChannel[int](p.Channels, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	boom := errors.New("the second task failed")
+	blocked := make(chan struct{})
+	runErr := p.Run(func(p *shellrt.Program) {
+		p.Session.Go(shellrt.ChannelTask(func(ctx context.Context, child *shellrt.Session) error {
+			task := p.Child(ctx, child)
+			close(blocked)
+			shellrt.MustChannelOperation(shellrt.Send(task.Context, child, task.Channels, channel, 1))
+			return nil
+		}))
+		<-blocked
+		if err := p.Session.Go(func(ctx context.Context, child *shellrt.Session) error {
+			return boom
+		}).Wait(); err == nil {
+			panic("the second task did not fail")
+		}
+	})
+	if !errors.Is(runErr, boom) {
+		t.Fatalf("Run reported %v, want the task failure", runErr)
 	}
 }
 
@@ -483,7 +561,9 @@ func TestNativePanicUsesTheSourceContract(t *testing.T) {
 	}
 }
 
-// failingWriter fails its first write and succeeds afterwards.
+// failingWriter fails its first write and succeeds afterwards. Both the
+// interpreter and the program runtime are pointed at one, so the two are
+// compared on exactly the same I/O failure.
 type failingWriter struct {
 	mu     sync.Mutex
 	failed bool
@@ -500,41 +580,120 @@ func (w *failingWriter) Write(p []byte) (int, error) {
 	return w.buf.Write(p)
 }
 
-// TestOutputFailureIsNotClearedByLaterOutput: a failed write is a failure of
-// the program, and the next successful echo must not quietly erase it.
-func TestOutputFailureIsNotClearedByLaterOutput(t *testing.T) {
+func (w *failingWriter) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buf.String()
+}
+
+// interpretedStatus runs src through the engine with a writer whose first
+// write fails, and returns the status the script ended with and what reached
+// standard error. It is the oracle for the two tests below: the compiled
+// program's status after the same I/O failure has to be the engine's, not one
+// this runtime invented.
+func interpretedStatus(t *testing.T, src string) (status int, diagnostics string) {
+	t.Helper()
+	out := &failingWriter{}
+	var stderr strings.Builder
+	runner, err := interp.New(
+		interp.Lang(syntax.LangBashPP),
+		interp.StdIO(nil, out, &stderr),
+		interp.Dir(t.TempDir()),
+		interp.Env(expand.ListEnviron("PATH=/no-tools")),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(src), "oracle.bpp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runErr := runner.Run(context.Background(), file)
+	var exit interp.ExitStatus
+	switch {
+	case runErr == nil:
+	case errors.As(runErr, &exit):
+		status = int(exit)
+	default:
+		t.Fatalf("interpreter: %v", runErr)
+	}
+	return status, stderr.String()
+}
+
+// TestOutputWriteFailureIsNotACommandFailure pins the output status against
+// the engine rather than against an intuition about I/O. Running `echo a` with
+// a writer whose write fails leaves the engine at status 0 with nothing on
+// standard error: a lost write is not a failed command there, so a compiled
+// program must not report one either. An earlier sticky policy here — a failed
+// write that a later successful write could not clear — had no counterpart in
+// the source language at all.
+func TestOutputWriteFailureIsNotACommandFailure(t *testing.T) {
 	t.Parallel()
 
+	status, diagnostics := interpretedStatus(t, "echo a\necho b\n")
+	if status != 0 || diagnostics != "" {
+		t.Fatalf("engine oracle changed: status=%d stderr=%q", status, diagnostics)
+	}
+
 	out := &failingWriter{}
-	p, err := shellrt.NewProgram(shellrt.WithStdio(nil, out, &lockedBuffer{}))
+	stderr := &lockedBuffer{}
+	p, err := shellrt.NewProgram(shellrt.WithStdio(nil, out, stderr))
 	if err != nil {
 		t.Fatal(err)
 	}
 	runErr := p.Run(func(p *shellrt.Program) {
-		if echoErr := p.Echo("first"); echoErr == nil {
+		// The write fails and says so, but the command did not.
+		if echoErr := p.Echo("a"); echoErr == nil {
 			t.Error("the failing write was reported as a success")
 		}
-		if p.Status() != 1 {
-			t.Errorf("status %d after a failed write", p.Status())
+		if p.Status() != status {
+			t.Errorf("status %d after a failed write, engine says %d", p.Status(), status)
 		}
-		if echoErr := p.Echo("second"); echoErr != nil {
+		if echoErr := p.Echo("b"); echoErr != nil {
 			t.Errorf("the second write failed: %v", echoErr)
 		}
-		if p.Status() != 1 {
-			t.Errorf("a later echo cleared the output failure: status %d", p.Status())
-		}
-		if printfErr := p.Printf("%s\n", "third"); printfErr != nil {
-			t.Errorf("printf failed: %v", printfErr)
-		}
-		if p.Status() != 1 {
-			t.Errorf("a later printf cleared the output failure: status %d", p.Status())
+		if p.Status() != status {
+			t.Errorf("status %d after the next write, engine says %d", p.Status(), status)
 		}
 	})
 	if runErr != nil {
 		t.Fatal(runErr)
 	}
-	if p.Status() != 1 {
-		t.Fatalf("final status %d", p.Status())
+	if p.Status() != status {
+		t.Fatalf("final status %d, engine says %d", p.Status(), status)
+	}
+	if stderr.String() != diagnostics {
+		t.Fatalf("diagnostics %q, engine says %q", stderr.String(), diagnostics)
+	}
+}
+
+// TestPrintfFormatFailureIsACommandFailure is the other half of that
+// distinction: the engine does report a bad conversion, at status 1, and still
+// writes what it managed to format.
+func TestPrintfFormatFailureIsACommandFailure(t *testing.T) {
+	t.Parallel()
+
+	status, diagnostics := interpretedStatus(t, "printf '%d\\n' abc\n")
+	if status != 1 {
+		t.Fatalf("engine oracle changed: status=%d", status)
+	}
+	if !strings.Contains(diagnostics, "invalid number") {
+		t.Fatalf("engine oracle changed: stderr=%q", diagnostics)
+	}
+
+	p, _, _ := newProgram(t)
+	runErr := p.Run(func(p *shellrt.Program) {
+		if err := p.Printf("%d\n", "abc"); err == nil {
+			t.Error("an unreadable conversion argument was accepted")
+		}
+		// The engine reports `printf: abc: invalid number` and leaves $? at
+		// its own status for that command.
+		if p.Status() != status {
+			t.Errorf("status %d after a bad conversion, engine says %d", p.Status(), status)
+		}
+	})
+	if runErr != nil {
+		t.Fatal(runErr)
 	}
 }
 
@@ -666,6 +825,12 @@ import (
 	"mvdan.cc/sh/v3/lower/shellrt"
 )
 
+// blocked is the shape the compiler emits for a private callable: the threaded
+// program, and a channel operation that unwinds through MustChannelOperation.
+func blocked(p *shellrt.Program, ch chan int) {
+	shellrt.MustChannelOperation(shellrt.Send(p.Context, p.Session, p.Channels, ch, 1))
+}
+
 func main() {
 	p, err := shellrt.NewProgram()
 	if err != nil {
@@ -720,6 +885,14 @@ func main() {
 				return errors.New("the task failed")
 			})
 			p.Echo("launched")
+		case "blocked":
+			// func blocked(ch) { ch <- 1; }
+			// func main() { ch := make(chan int); go blocked(ch) }
+			ch := shellrt.MustChannel(shellrt.MakeChannel[int](p.Channels, 0))
+			p.Session.Go(shellrt.ChannelTask(func(taskCtx shellrt.TaskContext, taskSession *shellrt.Session) error {
+				blocked(p.Child(taskCtx, taskSession), ch)
+				return nil
+			}))
 		}
 	}); runErr != nil {
 		p.Fail(runErr)
@@ -757,6 +930,9 @@ func TestProgramEntryArtifact(t *testing.T) {
 			status:      1,
 		},
 		{mode: "task", out: "launched\n", diagnostics: "shellrt: task 0: the task failed\n", status: 1},
+		// The interpreter ends this script silently at status 0; so does the
+		// artifact. The task is released by the shutdown it did not cause.
+		{mode: "blocked"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.mode, func(t *testing.T) {

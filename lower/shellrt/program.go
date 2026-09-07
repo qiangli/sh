@@ -53,8 +53,8 @@ type Program struct {
 	Frame Frame
 
 	// seq is the bookkeeping shared by the sequential regions of one
-	// execution: the panic chain and the output-failure record. A task forks
-	// it, because Go's panic state is per goroutine.
+	// execution: the panic chain. A task forks it, because Go's panic state
+	// is per goroutine.
 	seq *sequential
 
 	// owner marks the program whose Run revokes the channel scope. A task
@@ -71,11 +71,6 @@ type sequential struct {
 	// engine reports for a panic raised inside a panic; a recovered panic pops
 	// its entry.
 	panics []string
-
-	// outputFailed records that a write to the program's output has failed.
-	// Once set, a following successful write no longer clears the status: an
-	// I/O failure cannot be erased by the next echo.
-	outputFailed bool
 }
 
 // NewProgram builds a program around a new session. The options are the
@@ -221,29 +216,14 @@ func (p *Program) stderr() io.Writer {
 	return os.Stderr
 }
 
-// wrote records the outcome of one output operation and sets the status the
-// way bash does: 0 for a successful write, 1 for a failed one. A failure is
-// sticky in one specific way — a later successful write no longer resets the
-// status to 0, so an I/O failure cannot be erased by the next echo. A command
-// that genuinely sets `$?` afterwards still does, as it would in bash.
+// wrote records the outcome of one output operation. A write that did not
+// reach its destination is deliberately not a command failure: the engine's
+// echo and printf report status 0 whether or not the write succeeded, and a
+// compiled program that invented a failure there would diverge from the script
+// it was compiled from. The error is still returned, because the caller — not
+// this runtime — decides whether a lost write matters to it.
 func (p *Program) wrote(err error) error {
-	failed := false
-	if p.seq != nil {
-		p.seq.mu.Lock()
-		if err != nil {
-			p.seq.outputFailed = true
-		}
-		failed = p.seq.outputFailed
-		p.seq.mu.Unlock()
-	}
-	switch {
-	case err != nil:
-		p.SetStatus(1)
-	case failed:
-		// Leave the status alone: the earlier failure still stands.
-	default:
-		p.SetStatus(0)
-	}
+	p.SetStatus(0)
 	return err
 }
 
@@ -261,17 +241,27 @@ func (p *Program) Echo(args ...any) error {
 // Printf implements the foundation's %s, %d, %% and escape subset, including
 // format recycling and omitted arguments. Unsupported conversions fail rather
 // than quietly using Go fmt's different semantics.
+//
+// A format failure is a command failure at status 1, as it is in the engine: a
+// malformed format writes nothing, and a conversion that could not read its
+// argument still writes its output and then reports. A failed write is neither,
+// for the reason [Program.wrote] gives.
 func (p *Program) Printf(format string, args ...any) error {
 	text, ok, err := printfText(format, args)
 	if !ok {
-		// A malformed format writes nothing at all.
-		return p.wrote(err)
+		p.SetStatus(1)
+		return err
 	}
 	_, writeErr := io.WriteString(p.stdout(), text)
-	if writeErr != nil {
-		return p.wrote(writeErr)
+	if err != nil {
+		p.SetStatus(1)
+	} else {
+		p.SetStatus(0)
 	}
-	return p.wrote(err)
+	if writeErr != nil {
+		return writeErr
+	}
+	return err
 }
 
 // Print writes its arguments with Go's print spacing rule.
@@ -488,6 +478,11 @@ func ExitCode(err error) int {
 // never revokes the shared scope, so a sibling still running does not lose its
 // channels underneath it.
 //
+// The cancellation that shutdown itself causes is not a failure. A task left
+// blocked when the body ends is released and reports nothing, exactly as the
+// engine's task runtime records nothing for a cancelled task. A cancellation
+// the program was handed from outside is a real outcome and is still reported.
+//
 // A genuine failure outranks a cancellation-class one: when a task's failure
 // cancelled an operation the body was blocked on, the reported error is the
 // task's, not the cancellation the body observed.
@@ -503,6 +498,14 @@ func (p *Program) Run(body func(*Program)) error {
 		p.Session.Cancel()
 		taskErr := p.Session.Join()
 		closeErr := p.Session.Close()
+
+		// A task that only ever observed this shutdown's own cancellation did
+		// not fail. The engine's task runtime records nothing for a cancelled
+		// task, so a script whose last act is to leave a task blocked ends
+		// silently at status 0; a compiled program must too. Close reports the
+		// same primary failure Join did, so it is filtered the same way.
+		taskErr = p.withoutShutdownCancellation(taskErr)
+		closeErr = p.withoutShutdownCancellation(closeErr)
 		bodyErr = rankFailures(bodyErr, taskErr)
 		if bodyErr == nil {
 			// Close reports the same primary task failure Join already
@@ -561,6 +564,45 @@ func (p *Program) panicChain(v any) []string {
 		chain = append(chain, newest)
 	}
 	return chain
+}
+
+// withoutShutdownCancellation drops a failure that is only this shutdown's own
+// cancellation.
+func (p *Program) withoutShutdownCancellation(err error) error {
+	if p.shutdownCancellation(err) {
+		return nil
+	}
+	return err
+}
+
+// shutdownCancellation reports whether err is nothing but the cancellation
+// this shutdown itself caused. A failure that outranks a cancellation is never
+// one — a sibling's genuine failure cancels the group too, and Join already
+// prefers it — and neither is a cancellation the program was handed from
+// outside: a cancelled or expired program context is a real outcome, and
+// suppressing it would hide the reason the program stopped.
+func (p *Program) shutdownCancellation(err error) bool {
+	if err == nil || !errors.Is(err, context.Canceled) {
+		return false
+	}
+	return p.externalCancellation() == nil
+}
+
+// externalCancellation reports a cancellation that did not come from this
+// shutdown. Run cancels the session's task group, which is derived from these
+// contexts and never cancels them, so an error here is someone else's.
+func (p *Program) externalCancellation() error {
+	if p.Context != nil {
+		if err := p.Context.Err(); err != nil {
+			return err
+		}
+	}
+	if p.Session != nil {
+		if err := p.Session.Context().Err(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // rankFailures picks the failure to report. A genuine failure outranks one
