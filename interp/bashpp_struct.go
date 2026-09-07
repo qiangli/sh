@@ -96,7 +96,12 @@ func (r *Runner) bashPPValidateTypeRepresentation(typ syntax.BashPPTypeExpr, act
 				if _, ok := bashPPEmbeddedFieldName(field); !ok {
 					return fmt.Errorf("BASHPP-ESTRUCT-EMBED: unsupported embedded field type %s", bashPPTypeText(field.FieldTypeExpr))
 				}
-				if r.bashPPEmbeddedFieldIsInterface(field.FieldTypeExpr) {
+				_, _, definedPointer, iface := r.bashPPEmbeddedTarget(field.FieldTypeExpr)
+				if definedPointer {
+					name, _ := bashPPEmbeddedFieldName(field)
+					return fmt.Errorf("BASHPP-ESTRUCT-EMBED: defined pointer type %s cannot be embedded", name)
+				}
+				if iface {
 					return fmt.Errorf("BASHPP-ESTRUCT-EMBED: embedded interface fields are not supported")
 				}
 			}
@@ -130,23 +135,20 @@ func (r *Runner) bashPPStructFields(typ syntax.BashPPTypeExpr) ([]*syntax.BashPP
 	case *syntax.BashPPStructType:
 		return x.Fields, "struct", true
 	case *syntax.BashPPNamedType:
-		name := x.Name.Value
+		owner := x.Name.Value
+		current := x
 		seen := make(map[string]bool)
-		for !seen[name] {
-			seen[name] = true
-			decl, ok := r.bashPPTypes[name]
+		for current != nil && !seen[bashPPTypeText(current)] {
+			seen[bashPPTypeText(current)] = true
+			_, ok := r.bashPPTypes[current.Name.Value]
 			if !ok {
 				return nil, "", false
 			}
-			if len(x.TypeArgs) > 0 {
-				if st, ok := r.bashPPInstantiateNamedType(x).(*syntax.BashPPStructType); ok {
-					return st.Fields, x.Name.Value, true
-				}
+			instantiated := r.bashPPInstantiateNamedType(current)
+			if st, ok := instantiated.(*syntax.BashPPStructType); ok {
+				return st.Fields, owner, true
 			}
-			if decl.underlying == "struct" {
-				return decl.fields, x.Name.Value, true
-			}
-			name = strings.TrimPrefix(decl.underlying, "*")
+			current, _ = instantiated.(*syntax.BashPPNamedType)
 		}
 	}
 	return nil, "", false

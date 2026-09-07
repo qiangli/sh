@@ -203,3 +203,72 @@ main()
 	qt.Assert(t, qt.ErrorIs(err, interp.ExitStatus(2)))
 	qt.Assert(t, qt.StringContains(stderr, "BASHPP-ESTRUCT-EMBED: embedded interface fields are not supported"))
 }
+
+func TestBashPPAliasPointerEmbeddingPromotesFieldsMethodsAndInterface(t *testing.T) {
+	const src = `type Leaf struct { N int }
+func (v Leaf) Value() { printf 'v%s:' v.N }
+func (p *Leaf) Set(n int) { p.N = n }
+type LeafPtr = *Leaf
+type Outer struct { LeafPtr }
+type Setter interface { Set(int) }
+func main() {
+ p := new(Leaf)
+ o := Outer{LeafPtr: p}
+ o.N = 3
+ o.Value()
+ o.Set(4)
+ var s Setter = o
+ s.Set(5)
+ printf '%s' o.N
+}
+main()
+`
+	out, stderr, err := runBashSharpCall(t, src)
+	qt.Assert(t, qt.Equals(stderr, ""))
+	qt.Assert(t, qt.IsNil(err))
+	qt.Assert(t, qt.Equals(out, "v3:5"))
+}
+
+func TestBashPPAliasPointerEmbeddingNilDiagnostic(t *testing.T) {
+	const src = `type Leaf struct { N int }
+type LeafPtr = *Leaf
+type Outer struct { LeafPtr }
+func main() {
+ var o Outer
+ x := o.N
+ printf '%s' "$x"
+}
+main()
+`
+	_, stderr, err := runBashSharpCall(t, src)
+	qt.Assert(t, qt.ErrorIs(err, interp.ExitStatus(2)))
+	qt.Assert(t, qt.StringContains(stderr, "BASHPP-ENIL-DEREF"))
+}
+
+func TestBashPPDefinedPointerEmbeddingRejected(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		src  string
+		want string
+	}{
+		{"direct", `type Leaf struct { N int }
+type LeafPtr *Leaf
+type Outer struct { LeafPtr }
+func main() { var o Outer }
+main()
+`, "LeafPtr"},
+		{"through alias", `type Leaf struct { N int }
+type Defined *Leaf
+type Alias = Defined
+type Outer struct { Alias }
+func main() { var o Outer }
+main()
+`, "Alias"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, stderr, err := runBashSharpCall(t, tc.src)
+			qt.Assert(t, qt.ErrorIs(err, interp.ExitStatus(2)))
+			qt.Assert(t, qt.StringContains(stderr, "BASHPP-ESTRUCT-EMBED: defined pointer type "+tc.want+" cannot be embedded"))
+		})
+	}
+}

@@ -55,29 +55,46 @@ func bashPPDeclaredFieldName(field *syntax.BashPPField) (string, bool) {
 	return "", false
 }
 
-func (r *Runner) bashPPEmbeddedFieldIsInterface(typ syntax.BashPPTypeExpr) bool {
-	if pointer, ok := typ.(*syntax.BashPPPointerType); ok {
-		typ = pointer.Element
-	}
+// bashPPEmbeddedTarget resolves only aliases while retaining defined type
+// identity. An alias may denote a pointer and is then an indirect embedded
+// edge; a defined pointer type is not a legal embedded field in Go.
+func (r *Runner) bashPPEmbeddedTarget(typ syntax.BashPPTypeExpr) (target syntax.BashPPTypeExpr, indirect, definedPointer, iface bool) {
 	seen := make(map[string]bool)
 	for {
+		if pointer, ok := typ.(*syntax.BashPPPointerType); ok {
+			if indirect {
+				return nil, false, true, false
+			}
+			indirect = true
+			typ = pointer.Element
+			continue
+		}
 		if _, ok := typ.(*syntax.BashPPInterfaceType); ok {
-			return true
+			return typ, indirect, false, true
 		}
 		named, ok := typ.(*syntax.BashPPNamedType)
-		if !ok || named.Name == nil || seen[named.Name.Value] {
-			return false
+		if !ok || named.Name == nil {
+			return typ, indirect, false, false
+		}
+		if seen[named.Name.Value] {
+			return nil, false, true, false
 		}
 		seen[named.Name.Value] = true
 		decl, found := r.bashPPTypes[named.Name.Value]
 		if !found {
-			return false
+			return typ, indirect, false, false
+		}
+		if !decl.alias {
+			switch r.bashPPInstantiateNamedType(named).(type) {
+			case *syntax.BashPPPointerType:
+				return nil, false, true, false
+			case *syntax.BashPPInterfaceType:
+				return typ, indirect, false, true
+			default:
+				return typ, indirect, false, false
+			}
 		}
 		typ = r.bashPPInstantiateNamedType(named)
-		if !decl.alias {
-			_, ok := typ.(*syntax.BashPPInterfaceType)
-			return ok
-		}
 	}
 }
 
@@ -153,10 +170,9 @@ func (r *Runner) bashPPResolveSelection(root syntax.BashPPTypeExpr, name string,
 				if !ok {
 					continue
 				}
-				child := field.FieldTypeExpr
-				pointer := false
-				if ptr, ok := child.(*syntax.BashPPPointerType); ok {
-					pointer, child = true, ptr.Element
+				child, pointer, invalid, iface := r.bashPPEmbeddedTarget(field.FieldTypeExpr)
+				if invalid || iface || child == nil {
+					continue
 				}
 				childKey := bashPPTypeText(child)
 				if node.ancestors[childKey] {
