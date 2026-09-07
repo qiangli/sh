@@ -12,7 +12,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 )
@@ -45,10 +44,15 @@ type moduleImporter struct {
 	mu            sync.Mutex
 	delegate      types.Importer
 	gopathContext *build.Context
+	sdk           *goSDK
+	sdkErr        error
 }
 
 // newModuleImporter creates a types.Importer that invokes `go list -export -deps -json`
-// using runtime.GOROOT()/bin/go in the specified directory with GOTOOLCHAIN=local.
+// in the specified directory using an installed Go SDK resolved by resolveGoSDK.
+// The SDK supplies a coherent go command and GOROOT for module, GOPATH and
+// internal-package decisions alike; a resolution failure is reported on first
+// import rather than being turned into a relative "bin/go" exec.
 // The returned importer also implements types.ImporterFrom and enforces internal package visibility.
 func newModuleImporter(dir string) types.Importer {
 	if dir == "" {
@@ -56,42 +60,35 @@ func newModuleImporter(dir string) types.Importer {
 	}
 	dir, _ = filepath.EvalSymlinks(dir)
 	m := &moduleImporter{
-		dir:        dir,
-		packages:   make(map[string]*listPackage),
-		importMap:  make(map[string]string),
-		callerPath: determineCallerPath(dir),
+		dir:       dir,
+		packages:  make(map[string]*listPackage),
+		importMap: make(map[string]string),
 	}
+	m.sdk, m.sdkErr = resolveGoSDK(dir)
+	m.callerPath = determineCallerPath(dir, m.sdk)
 	// Module-aware go list resolves module/workspace vendoring itself. In GOPATH
 	// mode the standard structural resolver supplies the importing-directory
-	// context even when that directory contains only Bash++ source.
-	cmd := exec.Command(filepath.Join(runtime.GOROOT(), "bin", "go"), "env", "-json", "GOMOD", "GOPATH")
-	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "GOTOOLCHAIN=local")
-	var env struct{ GOMOD, GOPATH string }
-	if data, err := cmd.Output(); err == nil && json.Unmarshal(data, &env) == nil && env.GOMOD == "" {
+	// context even when that directory contains only Bash++ source. The SDK
+	// already reported GOMOD and GOPATH for this directory.
+	if m.sdk != nil && m.sdk.GOMOD == "" {
 		ctx := build.Default
-		ctx.GOPATH, ctx.GOROOT = env.GOPATH, runtime.GOROOT()
+		ctx.GOPATH, ctx.GOROOT = m.sdk.GOPATH, m.sdk.Root
 		m.gopathContext = &ctx
 	}
 	m.delegate = importer.ForCompiler(token.NewFileSet(), "gc", m.lookup)
 	return m
 }
 
-func goBinPath() (string, error) {
-	return filepath.Join(runtime.GOROOT(), "bin", "go"), nil
-}
-
-func determineCallerPath(dir string) string {
+func determineCallerPath(dir string, sdk *goSDK) string {
 	cleanDir, err := filepath.EvalSymlinks(dir)
 	if err != nil {
 		cleanDir = filepath.Clean(dir)
 	}
 
-	goBin, err := goBinPath()
-	if err == nil {
-		cmd := exec.Command(goBin, "list", "-m", "-json")
+	if sdk != nil {
+		cmd := exec.Command(sdk.Bin, "list", "-m", "-json")
 		cmd.Dir = cleanDir
-		cmd.Env = append(os.Environ(), "GOTOOLCHAIN=local")
+		cmd.Env = sdk.env(os.Environ())
 		var stdout bytes.Buffer
 		cmd.Stdout = &stdout
 
@@ -158,8 +155,7 @@ func determineCallerPath(dir string) string {
 	return filepath.Base(cleanDir)
 }
 
-func isDirInGOROOT(dir string) bool {
-	goroot := runtime.GOROOT()
+func isDirInGOROOT(dir, goroot string) bool {
 	if goroot == "" {
 		return false
 	}
@@ -179,7 +175,7 @@ func isDirInGOROOT(dir string) bool {
 	return !strings.HasPrefix(rel, "..") && rel != ".."
 }
 
-func checkInternalVisibility(targetPath, callerPath, callerDir string) error {
+func checkInternalVisibility(targetPath, callerPath, callerDir, goroot string) error {
 	parts := strings.Split(targetPath, "/")
 	internalIdx := -1
 	for i := len(parts) - 1; i >= 0; i-- {
@@ -195,7 +191,7 @@ func checkInternalVisibility(targetPath, callerPath, callerDir string) error {
 	parentPrefix := strings.Join(parts[:internalIdx], "/")
 
 	if parentPrefix == "" {
-		if !isDirInGOROOT(callerDir) {
+		if !isDirInGOROOT(callerDir, goroot) {
 			return fmt.Errorf("use of internal package %s not allowed", targetPath)
 		}
 		return nil
@@ -220,9 +216,14 @@ func (m *moduleImporter) ImportFrom(path, srcDir string, mode types.ImportMode) 
 	m.mu.Lock()
 	caller := m.callerPath
 	callerDir := m.dir
+	sdk, sdkErr := m.sdk, m.sdkErr
 	m.mu.Unlock()
 
-	if err := checkInternalVisibility(path, caller, callerDir); err != nil {
+	if sdkErr != nil {
+		return nil, fmt.Errorf("cannot resolve %q: %w", path, sdkErr)
+	}
+
+	if err := checkInternalVisibility(path, caller, callerDir, sdk.Root); err != nil {
 		return nil, err
 	}
 
@@ -279,14 +280,13 @@ func (m *moduleImporter) lookup(path string) (io.ReadCloser, error) {
 }
 
 func (m *moduleImporter) loadLocked(target string) error {
-	goBin, err := goBinPath()
-	if err != nil {
-		return err
+	if m.sdkErr != nil {
+		return m.sdkErr
 	}
 
-	cmd := exec.Command(goBin, "list", "-export", "-deps", "-json", target)
+	cmd := exec.Command(m.sdk.Bin, "list", "-export", "-deps", "-json", target)
 	cmd.Dir = m.dir
-	cmd.Env = append(os.Environ(), "GOTOOLCHAIN=local")
+	cmd.Env = m.sdk.env(os.Environ())
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -299,7 +299,7 @@ func (m *moduleImporter) loadLocked(target string) error {
 		var pkg listPackage
 		if err := decoder.Decode(&pkg); err != nil {
 			if runErr != nil {
-				return fmt.Errorf("go list failed: %w\n%s", runErr, stderr.String())
+				return fmt.Errorf("go list failed using %s: %w\n%s", m.sdk.describe(), runErr, stderr.String())
 			}
 			return fmt.Errorf("failed to decode go list output: %w", err)
 		}
@@ -319,10 +319,10 @@ func (m *moduleImporter) loadLocked(target string) error {
 	}
 
 	if !ok && runErr != nil {
-		return fmt.Errorf("go list failed: %w\n%s", runErr, stderr.String())
+		return fmt.Errorf("go list failed using %s: %w\n%s", m.sdk.describe(), runErr, stderr.String())
 	}
 	if ok && pkg.Export == "" && pkg.Error == nil && len(pkg.DepsErrors) == 0 && runErr != nil {
-		return fmt.Errorf("go build failed: %w\n%s", runErr, stderr.String())
+		return fmt.Errorf("go build failed using %s: %w\n%s", m.sdk.describe(), runErr, stderr.String())
 	}
 
 	return nil
