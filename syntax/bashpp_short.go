@@ -545,7 +545,12 @@ func bashppSupportedCompositeAST(expr goast.Expr, inferred bool) bool {
 	for _, raw := range x.Elts {
 		value := raw
 		if kv, ok := raw.(*goast.KeyValueExpr); ok {
-			if !bashppSupportedScalarAST(kv.Key) {
+			// Struct keys are syntactically identifiers even when Go 1.27
+			// resolves them as promoted field selectors. Retain a selector-shaped
+			// key too so the interpreter can issue a positioned type error once
+			// the enclosing composite is known to be a struct; selector
+			// expressions remain useful as ordinary map keys.
+			if !bashppSupportedScalarAST(kv.Key) && !bashppSupportedPathAST(kv.Key) {
 				return false
 			}
 			value = kv.Value

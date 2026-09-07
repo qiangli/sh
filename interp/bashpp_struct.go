@@ -237,27 +237,93 @@ func (r *Runner) bashPPEvalComposite(lit *syntax.BashPPCompositeLit, expected sy
 		return out, meta, nil
 	}
 	seen := make(map[string]bool, len(lit.Elems))
-	for _, elem := range lit.Elems {
+	selections := make([]bashPPSelection, len(lit.Elems))
+	for i, elem := range lit.Elems {
 		key, ok := elem.Key.(*syntax.BashPPIdent)
 		if !ok {
-			return nil, nil, fmt.Errorf("BASHPP-ESTRUCT-KEY: %s literal field name must be an identifier", typeName)
+			return nil, nil, fmt.Errorf("%sBASHPP-ESTRUCT-KEY: %s literal field key must be an identifier, not a selector expression", r.bashErrPrefix(elem.Key.Pos()), typeName)
 		}
 		name := key.Name.Value
-		fieldType, found := bashPPFieldType(fields, name)
-		if !found {
-			return nil, nil, fmt.Errorf("BASHPP-ESTRUCT-UNKNOWN: %s has no field %q", typeName, name)
+		sel := r.bashPPResolveField(typ, name)
+		if sel.ambiguous {
+			return nil, nil, fmt.Errorf("%sBASHPP-ESTRUCT-AMBIGUOUS: field selector %s.%s is ambiguous", r.bashErrPrefix(key.Pos()), typeName, name)
+		}
+		if len(sel.edges) == 0 {
+			return nil, nil, fmt.Errorf("%sBASHPP-ESTRUCT-UNKNOWN: %s has no field selector %q", r.bashErrPrefix(key.Pos()), typeName, name)
 		}
 		if seen[name] {
-			return nil, nil, fmt.Errorf("BASHPP-ESTRUCT-DUPLICATE: field %q is supplied more than once", name)
+			return nil, nil, fmt.Errorf("%sBASHPP-ESTRUCT-DUPLICATE: field selector %q is supplied more than once", r.bashErrPrefix(key.Pos()), name)
 		}
 		seen[name] = true
-		value, child, err := r.bashPPEvalTypedValue(elem.Value, fieldType)
+		for _, edge := range sel.edges[:len(sel.edges)-1] {
+			if edge.pointer {
+				return nil, nil, fmt.Errorf("%sBASHPP-ESTRUCT-KEY-POINTER: field selector %s.%s traverses pointer field %s", r.bashErrPrefix(key.Pos()), typeName, name, edge.name)
+			}
+		}
+		for previous := 0; previous < i; previous++ {
+			if bashPPEmbeddedKeyConflict(selections[previous].edges, sel.edges) {
+				return nil, nil, fmt.Errorf("%sBASHPP-ESTRUCT-KEY-CONFLICT: field selector %s.%s conflicts with key %s", r.bashErrPrefix(key.Pos()), typeName, name, bashPPEmbedPath(selections[previous].edges))
+			}
+		}
+		selections[i] = sel
+	}
+	for i, elem := range lit.Elems {
+		sel := selections[i]
+		value, child, err := r.bashPPEvalTypedValue(elem.Value, sel.fieldType)
 		if err != nil {
 			return nil, nil, err
 		}
-		out[name], meta.mapping[name] = value, child
+		if err := bashPPSetStructSelector(out, meta, sel.edges, value, child); err != nil {
+			return nil, nil, fmt.Errorf("%sBASHPP-ESTRUCT-KEY-STORAGE: %v", r.bashErrPrefix(elem.Key.Pos()), err)
+		}
 	}
 	return out, meta, nil
+}
+
+func bashPPEmbeddedKeyConflict(left, right []bashPPEmbedEdge) bool {
+	shorter, longer := left, right
+	if len(shorter) > len(longer) {
+		shorter, longer = longer, shorter
+	}
+	if len(shorter) == len(longer) {
+		return false
+	}
+	for i := range shorter {
+		if shorter[i].name != longer[i].name {
+			return false
+		}
+	}
+	return true
+}
+
+func bashPPEmbedPath(edges []bashPPEmbedEdge) string {
+	parts := make([]string, len(edges))
+	for i, edge := range edges {
+		parts[i] = edge.name
+	}
+	return strings.Join(parts, ".")
+}
+
+func bashPPSetStructSelector(root map[string]any, meta *bashPPCollectionMeta, edges []bashPPEmbedEdge, value any, child *bashPPCollectionMeta) error {
+	mapping := root
+	currentMeta := meta
+	for i, edge := range edges {
+		if i == len(edges)-1 {
+			mapping[edge.name] = value
+			currentMeta.mapping[edge.name] = child
+			return nil
+		}
+		nested, ok := mapping[edge.name].(map[string]any)
+		if !ok || currentMeta == nil {
+			return fmt.Errorf("promoted path %s no longer names struct storage", bashPPEmbedPath(edges[:i+1]))
+		}
+		nestedMeta := currentMeta.mapping[edge.name]
+		if nestedMeta == nil || nestedMeta.kind != "struct" {
+			return fmt.Errorf("promoted path %s no longer names struct storage", bashPPEmbedPath(edges[:i+1]))
+		}
+		mapping, currentMeta = nested, nestedMeta
+	}
+	return fmt.Errorf("empty field selector")
 }
 
 func (r *Runner) bashPPZeroValue(typ syntax.BashPPTypeExpr) (any, *bashPPCollectionMeta) {
