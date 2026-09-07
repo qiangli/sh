@@ -52,14 +52,15 @@ const (
 
 // projection is one binding's retained provenance.
 type projection struct {
-	emptyWhen       string
-	kind            projectionKind
-	nativeAggregate bool
-	sourceType      string
-	present         string
-	receiver        bool
-	runtimeFloat    bool
-	element         *projection
+	emptyWhen         string
+	capabilityElement string
+	kind              projectionKind
+	nativeAggregate   bool
+	sourceType        string
+	present           string
+	receiver          bool
+	runtimeFloat      bool
+	element           *projection
 	// text is the exact shell spelling when the binding is a constant whose
 	// source literal was retained. hasText distinguishes a known empty string
 	// from an unknown value.

@@ -9,6 +9,9 @@ import (
 // return contract. Parenthesize conversion types so pointer results remain
 // conversions: (*Box)(p), not a dereference of Box(p).
 func (e *emitter) returnStatement(n *syntax.BashPPReturn) (string, error) {
+	if e.execution && len(e.resultTypes) > 0 {
+		return e.recordedReturn(n)
+	}
 	if n.Expr != nil {
 		value, err := e.expr(n.Expr)
 		return "return " + value, err

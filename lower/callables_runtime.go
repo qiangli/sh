@@ -98,7 +98,7 @@ func (e *emitter) programEntry(name string, marked bool, results []*syntax.BashP
 	site := e.prefix + "site"
 	failure := e.prefix + "entryError"
 	child := e.prefix + "enteredProgram"
-	return site + ".Name = " + strconv.Quote(name) + "\n" + child + ", " + failure + " := " + p + ".Enter(" + site + ", " + strconv.FormatBool(marked) + ")\nif " + failure + " != nil { " + p + ".Fail(" + failure + ")\n" + storage + "return " + values + "\n}\n" + p + " = " + child + "\n", nil
+	return e.prefix + "results := " + p + ".Results\n_ = " + e.prefix + "results\n" + p + " = " + p + ".WithResults(nil)\n" + site + ".Name = " + strconv.Quote(name) + "\n" + child + ", " + failure + " := " + p + ".Enter(" + site + ", " + strconv.FormatBool(marked) + ")\nif " + failure + " != nil { " + p + ".Fail(" + failure + ")\n" + storage + "return " + values + "\n}\n" + p + " = " + child + "\n", nil
 }
 func (e *emitter) runtimeFunction(f *syntax.BashPPFuncDecl, signature, body, generics string) (string, error) {
 	if f.Receiver != nil {
@@ -135,6 +135,20 @@ func (e *emitter) runtimeFunction(f *syntax.BashPPFuncDecl, signature, body, gen
 		invocation += ", " + strings.Join(args, ",")
 	}
 	invocation += ")"
+	resultAllocation, resultValidation := "", ""
+	plan := e.functionResultPlan(f)
+	if plan.NeedsFrame() {
+		frame := e.prefix + "publicResults"
+		resultAllocation, err = e.richResultFrame(frame, e.runtimeScope(), plan)
+		if err != nil {
+			return "", err
+		}
+		resultAllocation += "\n"
+		invocation = strings.Replace(invocation, "("+p+",", "("+p+".WithResults("+frame+"),", 1)
+		for i, result := range plan.Results {
+			resultValidation += "if _, err := " + e.prefix + "rt.NativeResult[" + result.Declared + "](" + frame + "," + strconv.Itoa(i) + "," + e.checkedValueSite(f, "") + "); err != nil {panic(err)}\n"
+		}
+	}
 	storage, values, err := e.resultStorage(f.Results)
 	if err != nil {
 		return "", err
@@ -166,7 +180,7 @@ func (e *emitter) runtimeFunction(f *syntax.BashPPFuncDecl, signature, body, gen
 		captured = "var " + name + " *" + e.prefix + "rt.Program\n"
 		invocation = name + " = " + p + "\n" + invocation
 	}
-	wrapper := "func " + public + generics + publicSignature + " {\n" + p + ",err := " + e.prefix + "rt.NewProgram()\nif err != nil {panic(err)}\n" + storage + captured + "err = " + p + ".Run(func(" + p + " *" + e.prefix + "rt.Program){" + invocation + "})\nif err != nil {panic(err)}\n" + adapters + "return " + returned + "\n}\n"
+	wrapper := "func " + public + generics + publicSignature + " {\n" + p + ",err := " + e.prefix + "rt.NewProgram()\nif err != nil {panic(err)}\n" + storage + captured + resultAllocation + "err = " + p + ".Run(func(" + p + " *" + e.prefix + "rt.Program){" + invocation + "})\nif err != nil {panic(err)}\n" + resultValidation + adapters + "return " + returned + "\n}\n"
 	return e.mark(f) + "func " + private + generics + e.privateSignature(signature) + " {\n" + entry + body + "}\n" + wrapper, nil
 }
 func (e *emitter) programMain(body string) string {

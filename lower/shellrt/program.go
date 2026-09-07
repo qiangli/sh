@@ -30,6 +30,11 @@ type Program struct {
 	// Bindings owns this entry's native lexical cells and captured name view.
 	Bindings *LexicalBindings
 
+	// Results is an explicit caller-owned invocation descriptor.
+	Results *ResultFrame
+	// ResultSidecars binds retained authority to actual native storage.
+	ResultSidecars *ResultSidecars
+
 	// Context is the context an in-process tool is called with. It is derived
 	// from the frame in effect, so the agentic observation and the region
 	// always agree.
@@ -91,14 +96,15 @@ func NewProgram(opts ...SessionOption) (*Program, error) {
 		return nil, err
 	}
 	p := &Program{
-		Bindings:     NewLexicalBindings(),
-		Session:      session,
-		Channels:     &ChannelScope{},
-		Readonly:     &ReadonlyState{},
-		Frame:        Off(),
-		seq:          &sequential{},
-		nativeShells: &nativeShellRegistry{},
-		owner:        true,
+		Bindings:       NewLexicalBindings(),
+		ResultSidecars: NewResultSidecars(),
+		Session:        session,
+		Channels:       &ChannelScope{},
+		Readonly:       &ReadonlyState{},
+		Frame:          Off(),
+		seq:            &sequential{},
+		nativeShells:   &nativeShellRegistry{},
+		owner:          true,
 	}
 	p.Context = p.Frame.Context(session.Context())
 	return p, nil
@@ -153,15 +159,16 @@ func (p *Program) Child(ctx context.Context, session *Session) *Program {
 	}
 	frame := p.Frame.Child()
 	return &Program{
-		Bindings:     p.Bindings.Fork(),
-		Context:      frame.Context(ctx),
-		Session:      session,
-		Channels:     p.Channels,
-		Readonly:     p.Readonly,
-		nativeShells: p.nativeShells.clone(),
-		Frame:        frame,
-		seq:          &sequential{},
-		owner:        false,
+		Bindings:       p.Bindings.Fork(),
+		ResultSidecars: NewResultSidecars(),
+		Context:        frame.Context(ctx),
+		Session:        session,
+		Channels:       p.Channels,
+		Readonly:       p.Readonly,
+		nativeShells:   p.nativeShells.clone(),
+		Frame:          frame,
+		seq:            &sequential{},
+		owner:          false,
 	}
 }
 

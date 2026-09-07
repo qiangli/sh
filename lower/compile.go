@@ -35,6 +35,8 @@ type emitter struct {
 	imports            map[string]string
 	callableParams     map[*syntax.BashPPField]string
 	resultTypes        []string
+	resultNames        []string
+	resultCallFrame    string
 	dotNames           map[string]bool
 	declaredGlobals    map[string]bool
 	iotaValue          *int
@@ -634,6 +636,9 @@ func (e *emitter) function(f *syntax.BashPPFuncDecl) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	savedNames := e.resultNames
+	e.resultNames = resultFieldNames(f.Results)
+	defer func() { e.resultNames = savedNames }()
 	savedResults := e.resultTypes
 	e.resultTypes = e.returnTypes(f.Results)
 	defer func() { e.resultTypes = savedResults }()
@@ -860,6 +865,9 @@ func (e *emitter) command(c syntax.Command) (string, error) {
 			switch {
 			case n.Call != nil:
 				p = e.callProjection(n.Call, i)
+			case n.MakeChan != nil:
+				elem, _ := e.makeElement(n.MakeChan)
+				p.sourceType = "chan " + elem
 			case n.Expr != nil:
 				if i == 0 {
 					p = e.projectionExpr(n.Expr)
@@ -898,6 +906,9 @@ func (e *emitter) command(c syntax.Command) (string, error) {
 		x, err := e.expr(n.Expr)
 		return n.Name.Value + " = " + x, err
 	case *syntax.BashPPAssign:
+		if text, handled, err := e.richCallAssignment(n); handled || err != nil {
+			return text, err
+		}
 		if e.readonly {
 			if text, handled, err := e.guardedAssignment(n); handled || err != nil {
 				return text, err
@@ -1177,6 +1188,13 @@ func (e *emitter) expr(x syntax.BashPPExpr) (string, error) {
 	}
 }
 func (e *emitter) call(c *syntax.BashPPCall) (string, error) {
+	frame := e.resultCallFrame
+	e.resultCallFrame = ""
+	defer func() { e.resultCallFrame = frame }()
+	invocation := e.program()
+	if frame != "" {
+		invocation += ".WithResults(" + frame + ")"
+	}
 	if e.readonly {
 		if text, handled, err := e.guardedBuiltin(c); handled || err != nil {
 			return text, err
@@ -1204,7 +1222,7 @@ func (e *emitter) call(c *syntax.BashPPCall) (string, error) {
 			args = append(args, x)
 		}
 		if e.execution {
-			args = append([]string{e.program(), e.callSite(c, "func")}, args...)
+			args = append([]string{invocation, e.callSite(c, "func")}, args...)
 		}
 		return "(" + callee + ")(" + strings.Join(args, ",") + ")", nil
 	}
@@ -1324,7 +1342,7 @@ func (e *emitter) call(c *syntax.BashPPCall) (string, error) {
 		return "", err
 	}
 	if e.execution && (e.funcs[name] || e.bound(name)) {
-		args = append([]string{e.program(), e.callSite(c, name)}, args...)
+		args = append([]string{invocation, e.callSite(c, name)}, args...)
 	}
 	return e.goName(name) + typeargs + "(" + strings.Join(args, ", ") + spread + ")", nil
 }

@@ -39,7 +39,11 @@ func (e *emitter) receiveDeclaration(n *syntax.BashPPShortDecl) (string, error) 
 		e.projections.projectionBind(name, info)
 	}
 	rt := e.prefix + "rt."
-	text := ns[0] + ", " + okName + ", " + failure + " := " + rt + "Receive(" + strings.Join([]string{c.Context, c.Session, c.Channels, ch}, ",") + ")\n"
+	receive := rt + "Receive(" + strings.Join([]string{c.Context, c.Session, c.Channels, ch}, ",") + ")"
+	if info, ok := e.projections.projectionLookup(n.Recv.Chan.Lit()); ok && info.capabilityElement != "" {
+		receive = rt + "ReceiveCapability[" + info.capabilityElement + "](" + c.Context + "," + e.program() + ".ResultSidecars,&" + ch + ")"
+	}
+	text := ns[0] + ", " + okName + ", " + failure + " := " + receive + "\n"
 	text += "if " + failure + " != nil {\n" + e.program() + ".ReceiveFailure(" + failure + ")\nif " + c.Context + ".Err() != nil { panic(" + rt + "ChannelAbort{Err:" + failure + "}) }\n}"
 	return text + e.unused(append(ns, okName)), nil
 }

@@ -32,6 +32,9 @@ func (e *emitter) literal(f *syntax.BashPPFuncLit) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	savedNames := e.resultNames
+	e.resultNames = resultFieldNames(f.Results)
+	defer func() { e.resultNames = savedNames }()
 	savedResults := e.resultTypes
 	e.resultTypes = e.returnTypes(f.Results)
 	defer func() { e.resultTypes = savedResults }()

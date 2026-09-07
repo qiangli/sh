@@ -83,6 +83,7 @@ func (e *emitter) nativeSubshell(n *syntax.Subshell) (string, error) {
 		}
 	}
 	fmt.Fprintf(&out, "%sMustReadonly(%s.Bindings.RebindSnapshot(%s))\n", rt, child, snapshot)
+	fmt.Fprintf(&out, "%s.ResultSidecars = %sMustValue(%sForkSidecars(%s.ResultSidecars,%s,&%sResultOwner{Channels:%s.Channels,Session:%s.Session}))\n", child, rt, rt, parent, snapshot, rt, child, child)
 	out.WriteString(body)
 	fmt.Fprintf(&out, "})\nif %s != nil {%s.Fail(%sSourceFailure(%s))} else {%s.SetStatus(%s.Status())}\n}\n}", failure, parent, rt, failure, parent, child)
 	return out.String(), nil
