@@ -294,7 +294,14 @@ func Walk(node Node, f func(Node) bool) {
 		Walk(node.Element, f)
 	case *BashPPInterfaceType:
 		Walk(node.Interface, f)
-		walkList(node.Methods, f)
+		if len(node.Elems) > 0 {
+			walkList(node.Elems, f)
+		} else {
+			walkList(node.Methods, f)
+		}
+	case *BashPPInterfaceElem:
+		walkNilable(node.Method, f)
+		walkNilable(node.Embedded, f)
 	case *BashPPMethodSpec:
 		Walk(node.Name, f)
 		walkList(node.Params, f)

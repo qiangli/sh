@@ -550,17 +550,35 @@ func (t *BashPPStructType) Pos() Pos { return t.Struct.Pos() }
 func (t *BashPPStructType) End() Pos { return posAddCol(t.Rbrace, 1) }
 
 // BashPPInterfaceType is an anonymous interface type with explicit method
-// specifications. Embedded interfaces and promoted members are intentionally
-// left to the next Story 202 slice.
+// specifications and embedded interface type elements.
 type BashPPInterfaceType struct {
 	Interface *Lit
 	Lbrace    Pos
+	Elems     []*BashPPInterfaceElem
 	Methods   []*BashPPMethodSpec
 	Rbrace    Pos
 }
 
 func (t *BashPPInterfaceType) Pos() Pos { return t.Interface.Pos() }
 func (t *BashPPInterfaceType) End() Pos { return posAddCol(t.Rbrace, 1) }
+
+type BashPPInterfaceElem struct {
+	Method   *BashPPMethodSpec
+	Embedded BashPPTypeExpr
+}
+
+func (e *BashPPInterfaceElem) Pos() Pos {
+	if e.Method != nil {
+		return e.Method.Pos()
+	}
+	return e.Embedded.Pos()
+}
+func (e *BashPPInterfaceElem) End() Pos {
+	if e.Method != nil {
+		return e.Method.End()
+	}
+	return e.Embedded.End()
+}
 
 type BashPPMethodSpec struct {
 	Name      *Lit

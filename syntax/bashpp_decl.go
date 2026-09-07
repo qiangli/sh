@@ -164,15 +164,17 @@ func bashppTypeDecl(ce *CallExpr, redirs []*Redirect) *BashPPDecl {
 	}
 	if !alias && len(ce.Args) >= 5 && ce.Args[2].Lit() == "interface" &&
 		ce.Args[3].Lit() == "{" && ce.Args[len(ce.Args)-1].Lit() == "}" {
-		methods := bashppInterfaceMethodSpecs(ce.Args[4 : len(ce.Args)-1])
-		if methods == nil {
+		iface := bashppInterfaceFromWords(ce.Args[4 : len(ce.Args)-1])
+		if iface == nil {
 			return nil
 		}
 		m := RecognizeStartSite(kw.Value + " " + name.Value)
 		if m.Site != StartTypeDecl {
 			return nil
 		}
-		iface := &BashPPInterfaceType{Interface: bashppBareLit(ce.Args[2]), Lbrace: ce.Args[3].Pos(), Methods: methods, Rbrace: ce.Args[len(ce.Args)-1].Pos()}
+		iface.Interface = bashppBareLit(ce.Args[2])
+		iface.Lbrace = ce.Args[3].Pos()
+		iface.Rbrace = ce.Args[len(ce.Args)-1].Pos()
 		return &BashPPDecl{Site: m.Site, Kw: kw, Name: name, DeclType: bashppBareLit(ce.Args[2]), DeclTypeExpr: iface,
 			Lbrace: ce.Args[3].Pos(), Rbrace: ce.Args[len(ce.Args)-1].Pos(), End_: ce.Args[len(ce.Args)-1].End()}
 	}
@@ -220,12 +222,12 @@ func bashppTypeDecl(ce *CallExpr, redirs []*Redirect) *BashPPDecl {
 }
 
 func (p *Parser) bashppInterfaceForm(ce *CallExpr) Command {
-	if ce == nil || len(ce.Assigns) != 0 || p.tok != leftParen || len(ce.Args) != 5 {
+	if ce == nil || len(ce.Assigns) != 0 || p.tok != leftParen || len(ce.Args) < 5 {
 		return nil
 	}
 	kw, name := bashppBareLit(ce.Args[0]), bashppBareLit(ce.Args[1])
 	ifaceLit, lbrace := bashppBareLit(ce.Args[2]), bashppBareLit(ce.Args[3])
-	method := bashppBareLit(ce.Args[4])
+	method := bashppBareLit(ce.Args[len(ce.Args)-1])
 	if kw == nil || kw.Value != "type" || name == nil || !bashppIsIdent(name.Value) ||
 		ifaceLit == nil || ifaceLit.Value != "interface" || lbrace == nil || lbrace.Value != "{" ||
 		method == nil || !bashppIsIdent(method.Value) {
@@ -236,6 +238,13 @@ func (p *Parser) bashppInterfaceForm(ce *CallExpr) Command {
 		return nil
 	}
 	iface := &BashPPInterfaceType{Interface: ifaceLit, Lbrace: lbrace.Pos()}
+	for _, word := range ce.Args[4 : len(ce.Args)-1] {
+		embedded := bashppTypeExpr(word)
+		if embedded == nil {
+			return nil
+		}
+		iface.Elems = append(iface.Elems, &BashPPInterfaceElem{Embedded: embedded})
+	}
 	for {
 		spec := &BashPPMethodSpec{Name: method}
 		sig := p.bashppSignature("interface method " + method.Value)
@@ -243,6 +252,7 @@ func (p *Parser) bashppInterfaceForm(ce *CallExpr) Command {
 		spec.Lparen, spec.Rparen = sig.lparen, sig.rparen
 		spec.ResLparen, spec.ResRparen = sig.resLparen, sig.resRparen
 		iface.Methods = append(iface.Methods, spec)
+		iface.Elems = append(iface.Elems, &BashPPInterfaceElem{Method: spec})
 		for p.got(_Newl) || p.got(semicolon) {
 		}
 		if p.tok == _LitWord && p.val == "}" {
@@ -254,9 +264,32 @@ func (p *Parser) bashppInterfaceForm(ce *CallExpr) Command {
 		}
 		word := p.getWord()
 		method = bashppBareLit(word)
-		if method == nil || !bashppIsIdent(method.Value) || p.tok != leftParen {
+		if method == nil || !bashppIsIdent(method.Value) {
 			p.posErr(iface.Lbrace, "malformed interface method list")
 			return nil
+		}
+		for p.tok != leftParen {
+			embedded := bashppTypeExpr(word)
+			if embedded == nil {
+				p.posErr(iface.Lbrace, "malformed interface method list")
+				return nil
+			}
+			iface.Elems = append(iface.Elems, &BashPPInterfaceElem{Embedded: embedded})
+			for p.got(_Newl) || p.got(semicolon) {
+			}
+			if p.tok == _LitWord && p.val == "}" {
+				iface.Rbrace = p.pos
+				end := p.lit(p.pos, p.val).End()
+				p.next()
+				return &BashPPDecl{Site: m.Site, Kw: kw, Name: name, DeclType: ifaceLit, DeclTypeExpr: iface,
+					Lbrace: iface.Lbrace, Rbrace: iface.Rbrace, End_: end}
+			}
+			word = p.getWord()
+			method = bashppBareLit(word)
+			if method == nil || !bashppIsIdent(method.Value) {
+				p.posErr(iface.Lbrace, "malformed interface method list")
+				return nil
+			}
 		}
 	}
 }
@@ -278,15 +311,35 @@ func bashppInterfaceParams(fields []*BashPPField) []*BashPPField {
 }
 
 func bashppInterfaceMethodSpecs(words []*Word) []*BashPPMethodSpec {
-	if len(words) == 0 {
-		return []*BashPPMethodSpec{}
+	if iface := bashppInterfaceFromWords(words); iface != nil {
+		return iface.Methods
 	}
-	if methods := bashppGoInterfaceMethodSpecs(words); methods != nil {
-		return methods
+	return nil
+}
+
+func bashppInterfaceFromWords(words []*Word) *BashPPInterfaceType {
+	if len(words) == 0 {
+		return &BashPPInterfaceType{}
+	}
+	iface := &BashPPInterfaceType{}
+	for _, word := range words {
+		embedded := bashppTypeExpr(word)
+		if embedded == nil {
+			iface = nil
+			break
+		}
+		iface.Elems = append(iface.Elems, &BashPPInterfaceElem{Embedded: embedded})
+	}
+	if iface != nil {
+		return iface
+	}
+	if iface := bashppGoInterfaceType(words); iface != nil {
+		return iface
 	}
 	if len(words) != 3 && len(words)%2 != 0 {
 		return nil
 	}
+	iface = &BashPPInterfaceType{}
 	var methods []*BashPPMethodSpec
 	for i := 0; i < len(words); i += 2 {
 		name := bashppBareLit(words[i])
@@ -309,11 +362,13 @@ func bashppInterfaceMethodSpecs(words []*Word) []*BashPPMethodSpec {
 			spec.Results = []*BashPPField{{FieldType: result, FieldTypeExpr: resultExpr}}
 		}
 		methods = append(methods, spec)
+		iface.Elems = append(iface.Elems, &BashPPInterfaceElem{Method: spec})
 	}
-	return methods
+	iface.Methods = methods
+	return iface
 }
 
-func bashppGoInterfaceMethodSpecs(words []*Word) []*BashPPMethodSpec {
+func bashppGoInterfaceType(words []*Word) *BashPPInterfaceType {
 	body := bashppJoinWords(words)
 	text, positions, ok := bashppScalarSource(body)
 	if !ok {
@@ -342,8 +397,7 @@ func bashppGoInterfaceMethodSpecs(words []*Word) []*BashPPMethodSpec {
 	if converted == nil {
 		return nil
 	}
-	iface := converted.(*BashPPInterfaceType)
-	return iface.Methods
+	return converted.(*BashPPInterfaceType)
 }
 
 func bashppTypeLit(w *Word) *Lit {

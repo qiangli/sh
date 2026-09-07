@@ -90,6 +90,9 @@ func TestBashPPInterfaceDiagnostics(t *testing.T) {
 		{"missing", "type T int\nfunc (v T) N(s string) { }\ntype I interface { M(string) }\nfunc main() { var v T = 1; var i I = v }\nmain()\n", "BASHPP-EINTERFACE-MISSING: T does not implement interface (missing method M)\n"},
 		{"pointer receiver not in value method set", "type T int\nfunc (p *T) M() { }\ntype I interface { M() }\nfunc main() { var v T = 1; var i I = v }\nmain()\n", "BASHPP-EINTERFACE-MISSING: T does not implement interface (missing method M)\n"},
 		{"wrong signature", "type T int\nfunc (v T) M(n int) { }\ntype I interface { M(string) }\nfunc main() { var v T = 1; var i I = v }\nmain()\n", "BASHPP-EINTERFACE-SIGNATURE: T method M has wrong signature\n"},
+		{"embedded promoted missing", "type T int\nfunc (v T) Close() { }\ntype Reader interface { Read(string) }\ntype Closer interface { Close() }\ntype ReadCloser interface { Reader; Closer }\nfunc main() {\n var v T = 1\n var i ReadCloser = v\n}\nmain()\n", "BASHPP-EINTERFACE-MISSING: T does not implement interface (missing method Read)\n"},
+		{"embedded duplicate identical accepted conflict later", "type A interface { M(int) }\ntype B interface { M(string) }\ntype C interface { A; B }\n", "BASHPP-EINTERFACE-CONFLICT: interface C has conflicting method M\n"},
+		{"embedded non interface", "type T int\ntype I interface { T }\n", "BASHPP-EINTERFACE-EMBED: interface I embeds non-interface T\n"},
 		{"assert fail", "type T int\nfunc (v T) M(s string) { }\ntype U int\nfunc (v U) M(s string) { }\ntype I interface { M(string) }\nfunc main() { var v T = 1; var i I = v; x := i.(U); echo $x }\nmain()\n", "BASHPP-EASSERT-FAIL: interface value has dynamic type T, not U\n"},
 		{"assert impossible", "type T int\nfunc (v T) M(s string) { }\ntype U int\ntype I interface { M(string) }\nfunc main() { var v T = 1; var i I = v; x, ok := i.(U); echo $x $ok }\nmain()\n", "BASHPP-EASSERT-IMPOSSIBLE: U cannot be asserted from I\n"},
 		{"nil interface call", "type T int\nfunc (v T) M() { }\ntype I interface { M() }\nfunc main() {\n var i I\n i.M()\n}\nmain()\n", "nil interface has no method M\n"},
@@ -175,6 +178,52 @@ main()
 		t.Fatalf("err=%v output=%q", err, out.String())
 	}
 	if want := "copy:4\nmutated:12\n"; out.String() != want {
+		t.Fatalf("output = %q, want %q", out.String(), want)
+	}
+}
+
+func TestBashPPEmbeddedInterfacePromotionAndAssertions(t *testing.T) {
+	const src = `type File struct { N int }
+func (v File) Read(prefix string) { echo "read:$prefix"; }
+func (p *File) Close() { p.N = 0; echo closed; }
+type Reader interface { Read(string) }
+type Closer interface { Close() }
+type ReadCloser interface { Reader; Closer }
+func main() {
+	var f File = File{N: 8}
+	p := &f
+	var rc ReadCloser = p
+	rc.Read(file)
+	rc.Close()
+	var r Reader = rc
+	r.Read(after)
+	c, ok := r.(Closer)
+	echo "assert-interface:$ok"
+	c.Close()
+	switch x := r.(type) {
+	case Closer:
+		echo closer
+	default:
+		echo "$x"
+	}
+	var nilRC ReadCloser
+	var nilR Reader = nilRC
+	nilC, nilOK := nilR.(Closer)
+	echo "nil-interface-assert:$nilC:$nilOK"
+}
+main()
+`
+	f, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(src), "embediface.bpp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP))
+	if err := r.Run(context.Background(), f); err != nil {
+		t.Fatalf("err=%v output=%q", err, out.String())
+	}
+	want := "read:file\nclosed\nread:after\nassert-interface:true\nclosed\ncloser\nnil-interface-assert::false\n"
+	if out.String() != want {
 		t.Fatalf("output = %q, want %q", out.String(), want)
 	}
 }

@@ -199,7 +199,18 @@ func bashppConvertType(e goast.Expr, pos func(gotoken.Pos) Pos, lit func(gotoken
 		out := &BashPPInterfaceType{Interface: lit(x.Interface, x.Interface+9, "interface"), Lbrace: pos(x.Methods.Opening), Rbrace: pos(x.Methods.Closing)}
 		for _, field := range x.Methods.List {
 			ft, ok := field.Type.(*goast.FuncType)
-			if !ok || len(field.Names) != 1 {
+			if !ok {
+				if len(field.Names) != 0 {
+					return nil
+				}
+				embedded := bashppConvertType(field.Type, pos, lit)
+				if embedded == nil {
+					return nil
+				}
+				out.Elems = append(out.Elems, &BashPPInterfaceElem{Embedded: embedded})
+				continue
+			}
+			if len(field.Names) != 1 {
 				return nil
 			}
 			spec := &BashPPMethodSpec{Name: lit(field.Names[0].Pos(), field.Names[0].End(), field.Names[0].Name),
@@ -221,6 +232,7 @@ func bashppConvertType(e goast.Expr, pos func(gotoken.Pos) Pos, lit func(gotoken
 					spec.Results = append(spec.Results, entry)
 				}
 			}
+			out.Elems = append(out.Elems, &BashPPInterfaceElem{Method: spec})
 			out.Methods = append(out.Methods, spec)
 		}
 		return out
@@ -438,7 +450,13 @@ func bashppSupportedTypeAST(expr goast.Expr) bool {
 	case *goast.InterfaceType:
 		for _, field := range x.Methods.List {
 			ft, ok := field.Type.(*goast.FuncType)
-			if !ok || len(field.Names) != 1 || !bashppIsIdent(field.Names[0].Name) {
+			if !ok {
+				if len(field.Names) != 0 || !bashppSupportedTypeAST(field.Type) {
+					return false
+				}
+				continue
+			}
+			if len(field.Names) != 1 || !bashppIsIdent(field.Names[0].Name) {
 				return false
 			}
 			if !bashppSupportedFieldListTypes(ft.Params) || !bashppSupportedFieldListTypes(ft.Results) {

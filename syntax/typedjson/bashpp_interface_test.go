@@ -13,7 +13,9 @@ import (
 )
 
 func TestBashPPInterfaceRoundTrip(t *testing.T) {
-	const src = `type Shower interface { Show(int) string Ptr() int }
+	const src = `type Reader interface { Read(string) int }
+type Closer interface { Close() }
+type Shower interface { Reader; Closer }
 func f() {
 	x, ok := i.(Count)
 	switch v := i.(type) {
@@ -34,7 +36,7 @@ func f() {
 	if err := typedjson.Encode(&first, f); err != nil {
 		t.Fatal(err)
 	}
-	for _, tag := range []string{"BashPPInterfaceType", "BashPPTypeAssertExpr", `"Name":{"Pos"`} {
+	for _, tag := range []string{"BashPPInterfaceType", `"Elems"`, `"Embedded"`, "BashPPTypeAssertExpr", `"Name":{"Pos"`} {
 		if !strings.Contains(first.String(), tag) {
 			t.Fatalf("typed JSON lacks %s: %s", tag, first.String())
 		}

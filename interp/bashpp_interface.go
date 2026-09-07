@@ -18,6 +18,16 @@ type bashPPInterfaceValue struct {
 	nilIface bool
 }
 
+type bashPPInterfaceMethod struct {
+	spec *syntax.BashPPMethodSpec
+	sig  string
+}
+
+type bashPPInterfaceMethods struct {
+	byName map[string]bashPPInterfaceMethod
+	order  []string
+}
+
 func (r *Runner) bashPPInterfaceType(typ syntax.BashPPTypeExpr) (*syntax.BashPPInterfaceType, bool) {
 	if iface, ok := typ.(*syntax.BashPPInterfaceType); ok {
 		return iface, true
@@ -33,32 +43,113 @@ func (r *Runner) bashPPInterfaceType(typ syntax.BashPPTypeExpr) (*syntax.BashPPI
 }
 
 func (r *Runner) bashPPValidateInterfaceType(name string, iface *syntax.BashPPInterfaceType) error {
-	seen := make(map[string]bool, len(iface.Methods))
-	for _, spec := range iface.Methods {
-		if spec.Name == nil || !syntax.ValidName(spec.Name.Value) {
-			return fmt.Errorf("BASHPP-EINTERFACE-METHOD: interface %s has invalid method name", name)
-		}
-		if seen[spec.Name.Value] {
-			return fmt.Errorf("BASHPP-EINTERFACE-DUPLICATE: interface %s declares method %s more than once", name, spec.Name.Value)
-		}
-		seen[spec.Name.Value] = true
+	_, err := r.bashPPInterfaceMethodSet(name, iface, make(map[string]bool))
+	return err
+}
+
+func (r *Runner) bashPPInterfaceMethodSet(name string, iface *syntax.BashPPInterfaceType, stack map[string]bool) (*bashPPInterfaceMethods, error) {
+	if stack[name] {
+		return nil, fmt.Errorf("BASHPP-EINTERFACE-CYCLE: interface %s embeds itself", name)
 	}
-	return nil
+	stack[name] = true
+	defer delete(stack, name)
+
+	set := &bashPPInterfaceMethods{byName: make(map[string]bashPPInterfaceMethod)}
+	direct := make(map[string]bool)
+	for _, elem := range bashPPInterfaceElems(iface) {
+		if elem.Method == nil {
+			embeddedIface, ok := r.bashPPInterfaceType(elem.Embedded)
+			if !ok {
+				return nil, fmt.Errorf("BASHPP-EINTERFACE-EMBED: interface %s embeds non-interface %s", name, bashPPTypeText(elem.Embedded))
+			}
+			embeddedName := bashPPTypeText(elem.Embedded)
+			promoted, err := r.bashPPInterfaceMethodSet(embeddedName, embeddedIface, stack)
+			if err != nil {
+				return nil, err
+			}
+			for _, method := range promoted.order {
+				candidate := promoted.byName[method]
+				if existing, found := set.byName[method]; found && existing.sig != candidate.sig {
+					return nil, fmt.Errorf("BASHPP-EINTERFACE-CONFLICT: interface %s has conflicting method %s", name, method)
+				}
+				if _, found := set.byName[method]; !found {
+					set.order = append(set.order, method)
+				}
+				set.byName[method] = candidate
+			}
+			continue
+		}
+		spec := elem.Method
+		if spec.Name == nil || !syntax.ValidName(spec.Name.Value) {
+			return nil, fmt.Errorf("BASHPP-EINTERFACE-METHOD: interface %s has invalid method name", name)
+		}
+		method := spec.Name.Value
+		sig := bashPPMethodSpecSignature(spec)
+		if direct[method] {
+			return nil, fmt.Errorf("BASHPP-EINTERFACE-DUPLICATE: interface %s declares method %s more than once", name, spec.Name.Value)
+		}
+		direct[method] = true
+		if existing, found := set.byName[method]; found && existing.sig != sig {
+			return nil, fmt.Errorf("BASHPP-EINTERFACE-CONFLICT: interface %s has conflicting method %s", name, method)
+		}
+		if _, found := set.byName[method]; !found {
+			set.order = append(set.order, method)
+		}
+		set.byName[method] = bashPPInterfaceMethod{spec: spec, sig: sig}
+	}
+	return set, nil
+}
+
+func bashPPInterfaceElems(iface *syntax.BashPPInterfaceType) []*syntax.BashPPInterfaceElem {
+	if len(iface.Elems) > 0 {
+		return iface.Elems
+	}
+	out := make([]*syntax.BashPPInterfaceElem, len(iface.Methods))
+	for i, spec := range iface.Methods {
+		out[i] = &syntax.BashPPInterfaceElem{Method: spec}
+	}
+	return out
 }
 
 func (r *Runner) bashPPImplements(actual syntax.BashPPTypeExpr, iface *syntax.BashPPInterfaceType) error {
+	if actualIface, ok := r.bashPPInterfaceType(actual); ok {
+		actualSet, err := r.bashPPInterfaceMethodSet(bashPPTypeText(actual), actualIface, make(map[string]bool))
+		if err != nil {
+			return err
+		}
+		expectedSet, err := r.bashPPInterfaceMethodSet("interface", iface, make(map[string]bool))
+		if err != nil {
+			return err
+		}
+		for _, name := range expectedSet.order {
+			expected := expectedSet.byName[name]
+			actualMethod, found := actualSet.byName[name]
+			if !found {
+				return fmt.Errorf("BASHPP-EINTERFACE-MISSING: %s does not implement interface (missing method %s)", bashPPTypeText(actual), name)
+			}
+			if actualMethod.sig != expected.sig {
+				return fmt.Errorf("BASHPP-EINTERFACE-SIGNATURE: %s method %s has wrong signature", bashPPTypeText(actual), name)
+			}
+		}
+		return nil
+	}
 	typeName, pointer := bashPPInterfaceMethodOwner(actual)
 	if typeName == "" {
 		return fmt.Errorf("BASHPP-EINTERFACE-IMPOSSIBLE: %s cannot implement interface", bashPPTypeText(actual))
 	}
 	methods := r.bashPPMethods[typeName]
-	for _, spec := range iface.Methods {
-		fn := methods[spec.Name.Value]
+	expectedSet, err := r.bashPPInterfaceMethodSet("interface", iface, make(map[string]bool))
+	if err != nil {
+		return err
+	}
+	for _, name := range expectedSet.order {
+		expected := expectedSet.byName[name]
+		fn := methods[name]
 		if fn == nil || (!pointer && fn.decl.Receiver.Pointer) {
-			return fmt.Errorf("BASHPP-EINTERFACE-MISSING: %s does not implement interface (missing method %s)", bashPPTypeText(actual), spec.Name.Value)
+			return fmt.Errorf("BASHPP-EINTERFACE-MISSING: %s does not implement interface (missing method %s)", bashPPTypeText(actual), name)
 		}
-		if !bashPPMethodSpecMatches(fn.decl, spec) {
-			return fmt.Errorf("BASHPP-EINTERFACE-SIGNATURE: %s method %s has wrong signature", bashPPTypeText(actual), spec.Name.Value)
+		if bashPPFuncSignature(fn.decl) != expected.sig {
+			return fmt.Errorf("BASHPP-EINTERFACE-SIGNATURE: %s method %s has wrong signature", bashPPTypeText(actual), name)
 		}
 	}
 	return nil
@@ -77,8 +168,15 @@ func bashPPInterfaceMethodOwner(typ syntax.BashPPTypeExpr) (string, bool) {
 }
 
 func bashPPMethodSpecMatches(fn *syntax.BashPPFuncDecl, spec *syntax.BashPPMethodSpec) bool {
-	return bashPPFieldsSignature(fn.Params) == bashPPFieldsSignature(spec.Params) &&
-		bashPPFieldsSignature(fn.Results) == bashPPFieldsSignature(spec.Results)
+	return bashPPFuncSignature(fn) == bashPPMethodSpecSignature(spec)
+}
+
+func bashPPFuncSignature(fn *syntax.BashPPFuncDecl) string {
+	return bashPPFieldsSignature(fn.Params) + "->" + bashPPFieldsSignature(fn.Results)
+}
+
+func bashPPMethodSpecSignature(spec *syntax.BashPPMethodSpec) string {
+	return bashPPFieldsSignature(spec.Params) + "->" + bashPPFieldsSignature(spec.Results)
 }
 
 func bashPPFieldsSignature(fields []*syntax.BashPPField) string {
@@ -107,13 +205,26 @@ func (r *Runner) bashPPMakeInterfaceValue(expr syntax.BashPPExpr, expected synta
 	if id, ok := expr.(*syntax.BashPPIdent); ok && id.Name.Value == "nil" {
 		return &bashPPInterfaceValue{nilIface: true}, expand.Variable{Set: true, Kind: expand.String}, nil
 	}
-	cell, actual, err := r.bashPPCellForInterfaceExpr(expr)
-	if err != nil {
-		return nil, expand.Variable{}, err
-	}
 	iface, _ := r.bashPPInterfaceType(expected)
 	if iface == nil {
 		return nil, expand.Variable{}, fmt.Errorf("BASHPP-EINTERFACE-TYPE: %s is not an interface", bashPPTypeText(expected))
+	}
+	if id, ok := expr.(*syntax.BashPPIdent); ok {
+		if source := r.bashPPScope.lookup(id.Name.Value); source != nil && source.interfaceValue != nil {
+			if err := r.bashPPImplements(source.declType, iface); err != nil {
+				return nil, expand.Variable{}, err
+			}
+			if source.interfaceValue.nilIface {
+				return &bashPPInterfaceValue{nilIface: true}, expand.Variable{Set: true, Kind: expand.String}, nil
+			}
+			iv := *source.interfaceValue
+			iv.cell = bashPPCopyInterfaceCell(source.interfaceValue.cell)
+			return &iv, iv.cell.vr, nil
+		}
+	}
+	cell, actual, err := r.bashPPCellForInterfaceExpr(expr)
+	if err != nil {
+		return nil, expand.Variable{}, err
 	}
 	if err := r.bashPPImplements(actual, iface); err != nil {
 		return nil, expand.Variable{}, err
@@ -148,7 +259,7 @@ func (r *Runner) bashPPCellForInterfaceExpr(expr syntax.BashPPExpr) (*bashPPCell
 		}
 		if cell.interfaceValue != nil {
 			if cell.interfaceValue.nilIface {
-				return nil, nil, fmt.Errorf("BASHPP-EINTERFACE-NIL: nil interface has no dynamic type")
+				return cell, cell.declType, nil
 			}
 			return cell.interfaceValue.cell, cell.interfaceValue.dynamic, nil
 		}
@@ -175,13 +286,28 @@ func (r *Runner) bashPPTypeAssert(assert *syntax.BashPPTypeAssertExpr, commaOK b
 	}
 	iv := cell.interfaceValue
 	if iface, ok := r.bashPPInterfaceType(cell.declType); ok {
-		if err := r.bashPPImplements(assert.Assert, iface); err != nil {
-			return nil, nil, fmt.Errorf("BASHPP-EASSERT-IMPOSSIBLE: %s cannot be asserted from %s", bashPPTypeText(assert.Assert), bashPPTypeText(cell.declType))
+		if _, assertIface := r.bashPPInterfaceType(assert.Assert); !assertIface {
+			if err := r.bashPPImplements(assert.Assert, iface); err != nil {
+				return nil, nil, fmt.Errorf("BASHPP-EASSERT-IMPOSSIBLE: %s cannot be asserted from %s", bashPPTypeText(assert.Assert), bashPPTypeText(cell.declType))
+			}
 		}
 	}
-	matched := !iv.nilIface && bashPPTypeText(iv.dynamic) == bashPPTypeText(assert.Assert)
+	assertIface, assertingInterface := r.bashPPInterfaceType(assert.Assert)
+	matched := false
+	if !iv.nilIface {
+		if assertingInterface {
+			matched = r.bashPPImplements(iv.dynamic, assertIface) == nil
+		} else {
+			matched = bashPPTypeText(iv.dynamic) == bashPPTypeText(assert.Assert)
+		}
+	}
 	if !matched {
 		if commaOK {
+			if assertingInterface {
+				zero := &bashPPCell{declType: assert.Assert, interfaceValue: &bashPPInterfaceValue{nilIface: true}}
+				zero.vr = expand.Variable{Set: true, Kind: expand.String}
+				return []string{"", "false"}, zero, nil
+			}
 			value, meta := r.bashPPZeroValue(assert.Assert)
 			zero := &bashPPCell{declType: assert.Assert}
 			if named, ok := assert.Assert.(*syntax.BashPPNamedType); ok {
@@ -191,6 +317,14 @@ func (r *Runner) bashPPTypeAssert(assert *syntax.BashPPTypeAssertExpr, commaOK b
 			return []string{zero.vr.Str, "false"}, zero, nil
 		}
 		return nil, nil, fmt.Errorf("BASHPP-EASSERT-FAIL: interface value has dynamic type %s, not %s", bashPPTypeText(iv.dynamic), bashPPTypeText(assert.Assert))
+	}
+	if assertingInterface {
+		source := &bashPPCell{declType: assert.Assert, interfaceValue: &bashPPInterfaceValue{
+			dynamic: iv.dynamic,
+			cell:    bashPPCopyInterfaceCell(iv.cell),
+		}}
+		source.vr = source.interfaceValue.cell.vr
+		return []string{source.vr.Str, "true"}, source, nil
 	}
 	return []string{iv.cell.vr.Str, "true"}, iv.cell, nil
 }
@@ -279,5 +413,9 @@ func typeCaseMatches(r *Runner, iv *bashPPInterfaceValue, expr syntax.BashPPExpr
 	if iv == nil || iv.nilIface {
 		return false
 	}
-	return r.bashPPTypeAssignable(iv.dynamic, &syntax.BashPPNamedType{Name: id.Name})
+	target := &syntax.BashPPNamedType{Name: id.Name}
+	if iface, ok := r.bashPPInterfaceType(target); ok {
+		return r.bashPPImplements(iv.dynamic, iface) == nil
+	}
+	return r.bashPPTypeAssignable(iv.dynamic, target)
 }

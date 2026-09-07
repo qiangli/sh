@@ -414,6 +414,7 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 				target.declType = source.declType
 				target.pointer, target.nilPointer, target.pointerValue = source.pointer, source.nilPointer, source.pointerValue
 				target.object, target.valueMeta = source.object, source.valueMeta
+				target.interfaceValue = source.interfaceValue
 			}
 			if len(d.Lhs) == 2 {
 				r.bashPPDeclareName(d.Lhs[1].Value, expand.Variable{Set: true, Kind: expand.String, Str: values[1]})

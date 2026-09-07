@@ -466,6 +466,16 @@ func (r *Runner) bashPPBindMethod(cell *bashPPCell, method string, addressable b
 		bound.receiver = cell
 	} else {
 		copyCell := *cell
+		if cell.pointer && cell.pointerValue != nil {
+			value, meta, typ, err := cell.pointerValue.read()
+			if err != nil {
+				r.errf("%v\n", err)
+				r.exit.code = 2
+				return nil, false
+			}
+			copyCell = bashPPCell{declType: typ, typeName: cell.typeName}
+			bashPPStoreCellValue(&copyCell, value, meta)
+		}
 		copyCell.pointer, copyCell.nilPointer = false, false
 		bound.receiver = &copyCell
 	}
