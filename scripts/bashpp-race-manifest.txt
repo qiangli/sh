@@ -85,6 +85,7 @@
 ./interp|pipeline|TestAsyncPipelineResetIntQuitExecInheritance
 ./interp|fifo|TestBackgroundExternalLaunchFIFORedirectDoesNotDeadlock
 ./interp|signal|TestBackgroundRunnerStopsSignalSubscriptions
+./interp|signal|TestParenthesizedShellStopsSignalSubscriptions
 ./interp|signal|TestBackgroundSelfSignalSurvivesExecReplacement
 ./interp|signal|TestBackgroundSelfSignalBeforeExecTerminatesOwner
 ./interp|signal|TestAsyncSelfSignalTargetsForegroundOwner

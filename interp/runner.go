@@ -5475,6 +5475,10 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 	case *syntax.Subshell:
 		r2 := r.subshell(false)
 		defer r2.closeDirFile()
+		// This internal shell cannot be reused or Reset by the caller. Join
+		// its own subscriptions after EXIT cleanup, without canceling any
+		// asynchronous descendants that outlive the parenthesized scope.
+		defer r2.stopSignalSubscriptions()
 		r2.enclosingSubshellEnd = cm.Rparen
 		r2.stmts(ctx, cm.Stmts)
 		if cb := r2.trapCallbacks["EXIT"]; cb != "" && !r2.inheritedExitTrap {

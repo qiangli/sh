@@ -246,6 +246,72 @@ func TestRunnerResetStopsSignalSubscriptions(t *testing.T) {
 	}
 }
 
+// TestParenthesizedShellStopsSignalSubscriptions covers the inner shell of
+// both `( ... )` and `( ... ) &`. Its trap workers belong to that terminal
+// scope, including traps installed by its EXIT handler; the outer Runner
+// remains incrementally reusable and retains its own subscriptions.
+func TestParenthesizedShellStopsSignalSubscriptions(t *testing.T) {
+	for _, suffix := range []string{"", " & wait"} {
+		t.Run("subshell"+suffix, func(t *testing.T) {
+			type observedSubscription struct {
+				owner *Runner
+				sub   signalSubscription
+			}
+			observed := make(chan observedSubscription, 2)
+			r, err := New(ExecHandlers(func(next ExecHandlerFunc) ExecHandlerFunc {
+				return func(ctx context.Context, args []string) error {
+					if args[0] != "capture-signal" {
+						return next(ctx, args)
+					}
+					owner := HandlerCtx(ctx).runner
+					owner.sigMu.Lock()
+					sub := owner.sigNotifyCh[args[1]]
+					owner.sigMu.Unlock()
+					observed <- observedSubscription{owner, sub}
+					return nil
+				}
+			}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer r.Reset()
+			run := func(source string) {
+				t.Helper()
+				file, err := syntax.NewParser().Parse(strings.NewReader(source), "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := r.Run(t.Context(), file); err != nil {
+					t.Fatal(err)
+				}
+			}
+			run("trap ':' USR1")
+			parent := r.sigNotifyCh["USR1"]
+			run(`(trap 'echo WRONG-SENDER' TERM; capture-signal TERM; trap 'trap : USR2; capture-signal USR2' EXIT)` + suffix)
+			if len(observed) != 2 {
+				t.Fatalf("observed %d subscriptions, want body and EXIT subscriptions", len(observed))
+			}
+			for range 2 {
+				got := <-observed
+				defer got.owner.stopSignalSubscriptions() // Keep a failed assertion isolated.
+				if got.owner == r || got.sub.finished == nil {
+					t.Fatal("did not observe an inner shell's owned subscription")
+				}
+				select {
+				case <-got.sub.finished:
+				default:
+					t.Error("completed parenthesized shell retained a signal forwarder")
+				}
+			}
+			select {
+			case <-parent.finished:
+				t.Fatal("inner shell completion stopped the outer Runner's subscription")
+			default:
+			}
+		})
+	}
+}
+
 // TestBackgroundRunnerStopsSignalSubscriptions verifies the other ownership
 // boundary: an async-list runner is an internal terminal subshell, not an
 // incrementally reusable Runner. A trap installed inside that list must be
