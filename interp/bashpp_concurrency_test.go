@@ -247,6 +247,57 @@ main()
 	}
 }
 
+func TestBashPPReturnDefersLaunchUntilStatusSettles(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		src  string
+		code uint8
+	}{
+		{"shell status", "func f() { return 7; }", 7},
+		{"nested block", "func f() { { return 7; }; }", 7},
+		{"typed value", "func f() int { return 7; }", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			decl := parseBashPPInternal(t, tc.src).Stmts[0].Cmd.(*syntax.BashPPFuncDecl)
+			r, err := New(Lang(syntax.LangBashPP), StdIO(nil, io.Discard, io.Discard))
+			if err != nil {
+				t.Fatal(err)
+			}
+			r.Reset()
+			c := newBashPPConcurrent(context.Background())
+			defer c.cancel()
+			r.bashPPConcurrent = c
+			r.bashPPGoTask = true
+			r.bashPPTaskState, _ = c.add()
+
+			// Stop at the actual race window without relying on goroutine timing:
+			// the return command has run, but its function has not settled status.
+			r.cmd(c.ctx, decl.Body.Stmts[0].Cmd)
+			if !r.exit.returning || !r.bashPPReturn.active {
+				t.Fatal("fixture did not reach an unsettled Bash++ return")
+			}
+			if c.armed(r.bashPPTaskState) {
+				t.Fatal("return released the launcher before its function status was settled")
+			}
+			r.bashPPSettleResults(&bashPPFunc{decl: decl}, nil)
+			if r.exit.code != tc.code {
+				t.Fatalf("settled status = %d, want %d", r.exit.code, tc.code)
+			}
+			var failure *bashPPTaskFailure
+			if tc.code != 0 {
+				failure = &bashPPTaskFailure{ordinal: r.bashPPTaskState.ordinal, code: tc.code}
+			}
+			c.done(r.bashPPTaskState.ordinal, failure)
+			if !c.armed(r.bashPPTaskState) {
+				t.Fatal("task completion did not release the launcher")
+			}
+			if canceled := c.ctx.Err() != nil; canceled != (tc.code != 0) {
+				t.Fatalf("group canceled = %v after status %d", canceled, tc.code)
+			}
+		})
+	}
+}
+
 func TestBashPPFastFailureCancelsOwnerReceive(t *testing.T) {
 	done := make(chan struct{})
 	go func() {

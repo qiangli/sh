@@ -5394,7 +5394,11 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			// the function's terminal command, task completion must record and
 			// propagate cancellation before waking the owner. If later shell code
 			// recovers the status, that later successful command can wake it.
-			if r.bashPPConcurrent != nil && !r.bashPPTaskFailed {
+			// A Bash++ return is also unsettled here: `return 7` records a value
+			// with status zero before the result-less function converts it to
+			// status 7. Keep the handshake closed while that return unwinds,
+			// including through enclosing block commands.
+			if r.bashPPConcurrent != nil && !r.bashPPTaskFailed && !r.exit.returning {
 				r.bashPPConcurrent.arm(r.bashPPTaskState)
 			}
 		}()
