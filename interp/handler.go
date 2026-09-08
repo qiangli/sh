@@ -373,6 +373,11 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 		// as the resolved command pathname, even though `_` is not exported as
 		// a shell variable (variables.c:put_command_name_into_env).
 		env = setExecEnvValue(env, "_", envCommandPath)
+		// Identity checks run in this process, before exec: execPath may now
+		// name an ExtraFiles descriptor that exists only in the child.
+		if parent := hc.runner.childParentPIDBridge(ctx, diagnosticScriptPath); parent != "" {
+			env = setExecEnvValue(env, bashyParentPIDEnv, parent)
+		}
 		if inheritedFds != "" {
 			env = append(env, BashyInheritedFdsEnv+"="+inheritedFds)
 		}

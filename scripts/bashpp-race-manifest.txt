@@ -93,6 +93,10 @@
 ./interp|signal|TestAsyncSelfSignalFailedPublishedReplacement
 ./interp|signal|TestAsyncSelfSignalUsesCurrentOwnerDisposition
 ./interp|signal|TestAsyncSelfSignalExitCleanup
+./interp|job-carrier|TestParentPIDBridgeValidation
+./interp|job-carrier|TestParentPIDBridgeRequiresOwnExecutable
+./interp|job-carrier|TestNativeChildShellParentIdentity|linux
+./interp|job-carrier|TestNativeChildShellParentIdentity|darwin
 ./interp|signal|TestAsyncSelfSignalPreservesCallerContext
 ./interp|signal|TestAsyncSelfSignalCallerDeadlineErrors
 ./interp|signal|TestRunAliasExpandedSourceLineCallerContext

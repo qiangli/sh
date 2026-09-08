@@ -881,6 +881,7 @@ type Runner struct {
 	// list as `trap -- '' SIG`. Computed once at first Reset and shared (read
 	// only) with subshell clones.
 	startupIgnored map[string]bool
+	parentPID      int // shell-entry PPID, including a validated native-child bridge
 
 	// inSignalTrap and friends implement POSIX interp 1602: a `return`
 	// with no argument executed directly in a signal-trap action yields
@@ -2740,6 +2741,7 @@ func (r *Runner) Reset() {
 		// environment bridge covers self re-execs; the OS disposition snapshot
 		// covers a real parent that exec'd us with SIG_IGN inherited.
 		r.startupIgnored = startupIgnoredSignals(r.Env.Get(BashyHardIgnoreEnv).String())
+		r.parentPID = r.startupParentPID()
 		// A standalone host re-applies the bridged dispositions here. The Go
 		// runtime may have replaced inherited SIG_IGN before main; the explicit
 		// sideband is the supported provenance across that boundary.
@@ -2833,6 +2835,7 @@ func (r *Runner) Reset() {
 		subshellLevel:          r.subshellLevel,
 		umask:                  r.umask,
 		startupIgnored:         r.startupIgnored,
+		parentPID:              r.parentPID,
 		inheritedExitTrap:      r.inheritedExitTrap,
 		loginShell:             r.loginShell,
 		bashCompatErrors:       r.bashCompatErrors,
@@ -2917,6 +2920,9 @@ func (r *Runner) Reset() {
 	// snapshotted into startupIgnored) and hide it from the script's scope.
 	if r.writeEnv.Get(BashyHardIgnoreEnv).IsSet() {
 		r.delVar(BashyHardIgnoreEnv)
+	}
+	if r.writeEnv.Get(bashyParentPIDEnv).IsSet() {
+		r.delVar(bashyParentPIDEnv)
 	}
 	if !r.writeEnv.Get("HOME").IsSet() {
 		home, _ := os.UserHomeDir()
@@ -3375,6 +3381,7 @@ func (r *Runner) subshell(background bool) *Runner {
 		asyncProc:              r.asyncProc,
 		umask:                  r.umask,
 		startupIgnored:         r.startupIgnored,
+		parentPID:              r.parentPID,
 		loginShell:             r.loginShell,
 		bashCompatErrors:       r.bashCompatErrors,
 		strictPosix:            r.strictPosix,

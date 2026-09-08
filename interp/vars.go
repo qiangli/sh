@@ -542,7 +542,7 @@ func execEnv(env expand.Environ) []string {
 	if o, ok := env.(*overlayEnviron); ok && o.parent == nil {
 		for _, named := range o.values {
 			name, vr := named.Name, named.Variable
-			if name == BashyInheritedFdsEnv || name == BashyHardIgnoreEnv {
+			if name == BashyInheritedFdsEnv || name == BashyHardIgnoreEnv || name == bashyParentPIDEnv {
 				continue
 			}
 			if !vr.IsSet() && vr.Local && named.Prev.Exported && named.Prev.Kind == expand.String {
@@ -555,7 +555,7 @@ func execEnv(env expand.Environ) []string {
 		return list
 	}
 	for name, vr := range env.Each {
-		if name == BashyInheritedFdsEnv || name == BashyHardIgnoreEnv {
+		if name == BashyInheritedFdsEnv || name == BashyHardIgnoreEnv || name == bashyParentPIDEnv {
 			continue
 		}
 		if !vr.IsSet() && !vr.Local {
@@ -732,7 +732,7 @@ func (r *Runner) lookupVarUnhosted(name string) expand.Variable {
 			vr.Kind, vr.Str = expand.String, strconv.FormatInt(pid, 10)
 		}
 	case "PPID":
-		vr.Kind, vr.Str = expand.String, strconv.Itoa(os.Getppid())
+		vr.Kind, vr.Str = expand.String, strconv.Itoa(r.parentPID)
 	case "-":
 		// Bash's $- expands to the single-letter forms of all
 		// currently-set option flags, in bash's canonical order.
