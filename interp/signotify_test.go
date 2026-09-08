@@ -7,6 +7,7 @@ package interp
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"strings"
 	"syscall"
@@ -74,9 +75,19 @@ func TestReadInterruptedByTrappedSignal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	ctx, cancel := context.WithCancel(t.Context())
 	errc := make(chan error, 1)
+	done := make(chan struct{})
+	t.Cleanup(func() {
+		cancel()
+		_ = pr.Close()
+		_ = pw.Close()
+		<-done
+		r.Reset()
+	})
 	go func() {
-		errc <- r.Run(t.Context(), file)
+		defer close(done)
+		errc <- r.Run(ctx, file)
 	}()
 	select {
 	case <-out.ready:
@@ -97,6 +108,20 @@ func TestReadInterruptedByTrappedSignal(t *testing.T) {
 	pw.Close()
 	if err := <-errc; err != nil {
 		t.Fatal(err)
+	}
+	r.sigMu.Lock()
+	sub, subscribed := r.sigNotifyCh["USR1"]
+	r.sigMu.Unlock()
+	if !subscribed {
+		t.Fatal("USR1 trap subscription missing before owner cleanup")
+	}
+	// Run preserves traps for incremental use; this fixture owns the Runner
+	// and must explicitly join its subscription when that use is finished.
+	r.Reset()
+	select {
+	case <-sub.finished:
+	default:
+		t.Error("read fixture left its signal subscription running")
 	}
 	if got, want := out.buf.String(), "ready\nUSR1 received\ngot:input\n"; got != want {
 		t.Fatalf("output mismatch\n got: %q\nwant: %q", got, want)

@@ -85,16 +85,23 @@ func TestSynchronousFaultSignalTrappable(t *testing.T) {
 		// enableSignalTrap installs a signal.Notify handler.
 		r := &Runner{}
 		r.enableSignalTrap(name)
+		t.Cleanup(r.stopSignalSubscriptions)
 		r.sigMu.Lock()
+		enabled := r.sigNotifyCh[name]
 		_, hasNotify := r.sigNotify[name]
 		r.sigMu.Unlock()
 		if !hasNotify {
 			t.Errorf("enableSignalTrap(%q) did not install a signal.Notify handler", name)
 		}
 
-		// ignoreSignalTrap sets SIG_IGN.
-		r = &Runner{}
+		// Ignore the actual subscription above, joining its worker before
+		// replacing its OS disposition with SIG_IGN.
 		r.ignoreSignalTrap(name)
+		select {
+		case <-enabled.finished:
+		default:
+			t.Errorf("ignoreSignalTrap(%q) left the prior subscription running", name)
+		}
 		r.sigMu.Lock()
 		_, hasIgnore := r.sigIgnored[name]
 		r.sigMu.Unlock()
@@ -105,10 +112,18 @@ func TestSynchronousFaultSignalTrappable(t *testing.T) {
 			t.Errorf("ignoreSignalTrap(%q) did not install OS SIG_IGN", name)
 		}
 
-		// disableSignalTrap tears down a prior trap.
-		r = &Runner{}
-		r.sigNotify = map[string]os.Signal{name: syscall.SIGSEGV} // simulate prior trap
+		// Re-enable and disable a real subscription, rather than fabricating
+		// metadata that cannot demonstrate ownership of a forwarding worker.
+		r.enableSignalTrap(name)
+		r.sigMu.Lock()
+		enabled = r.sigNotifyCh[name]
+		r.sigMu.Unlock()
 		r.disableSignalTrap(name)
+		select {
+		case <-enabled.finished:
+		default:
+			t.Errorf("disableSignalTrap(%q) left the prior subscription running", name)
+		}
 		r.sigMu.Lock()
 		_, stillHasNotify := r.sigNotify[name]
 		r.sigMu.Unlock()
