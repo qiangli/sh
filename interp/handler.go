@@ -466,6 +466,30 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 		}
 		prepareBackgroundJobCmd(ctx, &cmd)
 		foregroundTTY := prepareForegroundJobCmd(ctx, hc.runner, &cmd)
+		defer func() {
+			if foregroundTTY != nil {
+				_ = foregroundTTY.restore()
+			}
+		}()
+		startCmd := func() error {
+			var startErr error
+			if hc.runner != nil {
+				startErr = hc.runner.startExecCmdWithUmask(ctx, &cmd, hc.runner.umask)
+			} else {
+				startErr = cmd.Start()
+			}
+			if startErr != nil && foregroundTTY != nil {
+				// Foreground may transfer the terminal before exec fails.
+				// Restore it before preparing an ENOEXEC fallback, which must
+				// observe the shell owning the terminal and acquire a fresh fd.
+				restoreErr := foregroundTTY.restore()
+				foregroundTTY = nil
+				if restoreErr != nil {
+					return fmt.Errorf("restore terminal after failed start: %w", restoreErr)
+				}
+			}
+			return startErr
+		}
 		// Job control off leaves this command in the shell's own pgrp (see
 		// prepareForegroundJobCmd), so terminal INT/QUIT reach the shell too;
 		// guard them for the run's full extent, including pipeline components,
@@ -473,11 +497,7 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 		stopSignalGuard := hc.runner.guardUnmonitoredForegroundSignals(ctx)
 		defer stopSignalGuard()
 
-		if hc.runner != nil {
-			err = hc.runner.startExecCmdWithUmask(ctx, &cmd, hc.runner.umask)
-		} else {
-			err = cmd.Start()
-		}
+		err = startCmd()
 		// POSIX/bash: when execve fails with ENOEXEC (the file
 		// has no shebang and isn't a recognised binary), the
 		// shell falls back to running the file as a shell
@@ -510,11 +530,7 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 				}
 				prepareBackgroundJobCmd(ctx, &cmd)
 				foregroundTTY = prepareForegroundJobCmd(ctx, hc.runner, &cmd)
-				if hc.runner != nil {
-					err = hc.runner.startExecCmdWithUmask(ctx, &cmd, hc.runner.umask)
-				} else {
-					err = cmd.Start()
-				}
+				err = startCmd()
 			}
 		}
 		if replacement != nil {
@@ -531,17 +547,6 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 			}
 		}
 		if err == nil {
-			if foregroundTTY != nil {
-				if handoffErr := foregroundTTY.giveTo(cmd.Process.Pid); handoffErr != nil {
-					// The child is already in its own process group. Leaving it
-					// behind the shell's foreground group can make a terminal read
-					// stop forever, so fail closed instead of waiting on it.
-					_ = cmd.Process.Kill()
-					_ = cmd.Wait()
-					return handoffErr
-				}
-				defer func() { _ = foregroundTTY.restore() }()
-			}
 			publishBgPid(ctx, cmd.Process.Pid)
 			stopReplacementStopWatch := func() {}
 			stopReplacementSignalForward := func() {}

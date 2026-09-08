@@ -460,7 +460,12 @@ func prepareForegroundJobCmd(ctx context.Context, r *Runner, cmd *exec.Cmd) *for
 		// it. Do not create a group we cannot safely foreground.
 		return nil
 	}
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// Transfer ownership in the forked child before exec, while Go still
+	// blocks signals. A parent-side handoff after Start lets terminal reads
+	// or ioctls race ahead and stop the child on SIGTTIN/SIGTTOU.
+	// Foreground uses a descriptor in the parent, including our /dev/tty fd
+	// when the command's stdin is redirected.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Foreground: true, Ctty: tty.fd}
 	return tty
 }
 
