@@ -4607,7 +4607,7 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 		// attachCarrier stores the same runner; a background pipeline later
 		// replaces it with its last component via publishBgSignalRunner.
 		bg.carrierSignalRunner.Store(r2)
-		bgCtx, cancel := context.WithCancel(ctx)
+		bgCtx, cancel := r.backgroundContext(ctx)
 		bg.cancel = cancel
 		// With a JobCarrier configured, give the job a real kernel PID
 		// as its identity before it starts running; see WithJobCarrier.
@@ -8261,7 +8261,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		// publishes the real OS PID of whatever command the coprocess
 		// runs into bg.pid (via publishBgPid). `kill $COPROC_PID` resolves
 		// the synthetic pid to that real child so the signal reaches it.
-		bgCtx, cancel := context.WithCancel(ctx)
+		bgCtx, cancel := r.backgroundContext(ctx)
 		bg.cancel = cancel
 		bgCtx = context.WithValue(bgCtx, bgProcCtxKey{}, bg)
 		go func() {

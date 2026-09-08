@@ -991,16 +991,14 @@ func (r *Runner) peekPendingSignal() (string, int) {
 // true if a signal interrupted the wait. POSIX requires `wait` to return
 // immediately (with status >128) when a trapped signal is received; the trap
 // itself runs at the next statement boundary via deliverPendingSignals.
-func (r *Runner) waitOrSignal(bg *bgProc) (interrupted bool) {
+func (r *Runner) waitOrSignal(ctx context.Context, bg *bgProc) (interrupted bool) {
 	r.sigMu.Lock()
 	wake := r.sigWake
 	r.sigMu.Unlock()
-	if wake == nil {
-		<-bg.done
-		return false
-	}
 	for {
 		select {
+		case <-ctx.Done():
+			return true
 		case <-bg.done:
 			return false
 		case <-wake:

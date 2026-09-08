@@ -409,6 +409,9 @@ type Runner struct {
 	// comparing errors directly do not break.
 	lastSignaled    SignaledStatus
 	lastWasSignaled bool
+	// An owner's default signal controls incremental EXIT cleanup; an
+	// ordinary foreground child's signaled status does not.
+	lastWasOwnerSignaled bool
 
 	lastExpandExit     exitStatus // used to surface exit statuses while expanding fields
 	lastExpandCmdSubst bool       // whether lastExpandExit came from a command substitution
@@ -1176,6 +1179,10 @@ type bgProc struct {
 // shell's semantic process identity.
 type execReplacementState struct {
 	current atomic.Pointer[execReplacementAttempt]
+	mu      sync.Mutex
+	owner   *Runner
+	pending *asyncOwnerSignal
+	run     *asyncSignalRun
 }
 
 type execReplacementAttempt struct {
@@ -1442,7 +1449,17 @@ func (r *Runner) RunAliasExpandedSourceLine(ctx context.Context, line int) bool 
 	}
 	pos := syntax.NewPos(uint(r.sourceLineEndOffset(uint(line-1))), uint(line), 1)
 	if file, ok := r.aliasReparsePhysicalLine(pos, r.aliasUseLine(line)); ok {
-		r.runAliasReparseFile(ctx, pos, r.aliasUseLine(line), file)
+		// This is an execution boundary between incremental Run calls.
+		// Use Run's current-context and signal lifecycle, while a Block
+		// avoids treating each recovered line as a file's EXIT boundary.
+		prevOverride := r.aliasLineOverride
+		r.aliasLineOverride = line
+		r.aliasReparseDepth++
+		r.withAliasReparse(r.aliasUseLine(line), func() {
+			_ = r.Run(ctx, &syntax.Block{Lbrace: pos, Rbrace: file.End(), Stmts: file.Stmts})
+		})
+		r.aliasReparseDepth--
+		r.aliasLineOverride = prevOverride
 		return true
 	}
 	return false
@@ -1462,6 +1479,7 @@ func New(opts ...RunnerOption) (*Runner, error) {
 		readDirHandler:  DefaultReadDirHandler2(),
 		statHandler:     DefaultStatHandler(),
 	}
+	r.execReplacement.owner = r
 	r.dirStack = r.dirBootstrap[:0]
 	// turn "on" the default Bash options
 	for i, opt := range bashOptsTable {
@@ -2675,6 +2693,9 @@ func (r *Runner) Reset() {
 		r.bashPPConcurrent.stopAndJoin()
 		r.bashPPConcurrent = nil
 	}
+	if r.execReplacement == nil || r.execReplacement.owner == r {
+		r.execReplacement = &execReplacementState{owner: r}
+	}
 	standaloneDefaults := maps.Clone(r.standaloneDefaults)
 	if !r.didReset {
 		if r.execReplacement == nil {
@@ -3039,6 +3060,8 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 	if !r.didReset {
 		r.Reset()
 	}
+	ctx, finishSignalRun := r.beginAsyncSignalRun(ctx)
+	defer finishSignalRun()
 	previousTaskPolicy := r.bashPPHostedTask
 	r.bashPPHostedTask = taskPolicy(ctx)
 	defer func() { r.bashPPHostedTask = previousTaskPolicy }()
@@ -3056,6 +3079,7 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 	if !emptyExitTrapRun {
 		r.lastSignaled = SignaledStatus{}
 		r.lastWasSignaled = false
+		r.lastWasOwnerSignaled = false
 	}
 	r.filename = r.incrementalFilename
 	runExitTrap := false
@@ -3134,7 +3158,28 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 		r.exit.discarding = false
 		r.exit.exiting = false
 	}
-	if runExitTrap {
+	ownerSignal := r.finishAsyncOwnerSignal()
+	if ownerSignal != nil {
+		// Signal termination interrupts foreground work, not the owner's
+		// EXIT cleanup. Preserve the caller's cancellation and deadline.
+		ctx = r.ownerCallerContext(ctx)
+	}
+	ownerSignalName := ""
+	var ownerStatus *SignaledStatus
+	if ownerSignal != nil {
+		r.lastWasOwnerSignaled = true
+		ownerSignalName, _ = signalName(ownerSignal.signal)
+		status := ownerSignal.status()
+		ownerStatus = &status
+	} else if emptyExitTrapRun && r.lastWasOwnerSignaled {
+		// Incremental embedded callers use an empty File for final cleanup.
+		// Keep the preceding signal's cleanup rules and terminal status.
+		status := r.lastSignaled
+		ownerStatus = &status
+		ownerSignalName = strings.TrimPrefix(status.SignalName, "SIG")
+	}
+	_, standalone := r.sigReset.(OSSignalResetter)
+	if (runExitTrap || ownerSignal != nil && standalone) && ownerSignalName != "KILL" {
 		r.bashPPWait(ctx)
 		oldCallStack := r.callStack
 		if r.exitTrapCallStack != nil {
@@ -3146,6 +3191,16 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 		r.finishBackgroundOutputBuiltins(ctx)
 	}
 	maps.Insert(r.Vars, r.writeEnv.Each)
+	if ownerStatus != nil {
+		status := *ownerStatus
+		r.exit = exitStatus{code: uint8(status.Status), err: status, exiting: true}
+		if ownerSignal != nil && standalone {
+			// Before an exec exists, native host death cannot preserve an
+			// in-process sender. Take the signal promptly after EXIT cleanup;
+			// embedded hosts return the status and leave the sender alive.
+			_ = relayAsyncOwnerSignal(ownerSignal.signal)
+		}
+	}
 	// Return the first of: a fatal error, a non-fatal handler error, or the exit code.
 	if err := r.exit.err; err != nil {
 		if r.exit.code == 0 {

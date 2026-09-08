@@ -368,6 +368,10 @@ printf 'REDIRECTED_FG_STATUS=%s\n' "$?"
 				sig = "TERM"
 				execCommand = `/bin/sh -c 'trap "exit 7" TERM; while :; do /bin/sleep 1; done'`
 			}
+			if readyFIFO := os.Getenv("GOSH_READY_FIFO"); readyFIFO != "" {
+				delay = fmt.Sprintf("read ready < %q; ", readyFIFO)
+				execCommand = fmt.Sprintf(`/bin/sh -c 'printf "ready\n" > "$GOSH_READY_FIFO"; exec /bin/sleep %s'`, duration)
+			}
 			src := fmt.Sprintf(`(printf S > %q; %s%s -s %s $$; printf '%%s' "$?" >> %q) & exec %s`, marker, delay, killCommand, sig, marker, execCommand)
 			file, err := syntax.NewParser().Parse(strings.NewReader(src), "")
 			if err != nil {
@@ -390,6 +394,35 @@ printf 'REDIRECTED_FG_STATUS=%s\n' "$?"
 				os.Exit(1)
 			}
 			os.Exit(0)
+		case "bg_self_signal_before_exec":
+			// No replacement exists: terminate the owner promptly even if
+			// the asynchronous sender has unbounded work after its kill.
+			source := `trap 'echo EXIT-CLEANUP; exit 7' EXIT; (kill -TERM $$; while :; do :; done) & wait`
+			if os.Getenv("GOSH_OWNER_MODE") == "alias" {
+				source = "trap 'echo EXIT-CLEANUP; exit 7' EXIT\nshopt -s expand_aliases\nalias recovered='(kill -TERM $$; while :; do :; done) & wait'\nrecovered\n"
+			}
+			file, err := syntax.NewParser().Parse(strings.NewReader(source), "")
+			if err != nil {
+				os.Exit(2)
+			}
+			runner, err := interp.New(interp.StdIO(os.Stdin, os.Stdout, os.Stderr), interp.WithSignalResetter(interp.OSSignalResetter{}), interp.WithBashSource([]byte(source)))
+			if err != nil {
+				os.Exit(2)
+			}
+			switch os.Getenv("GOSH_OWNER_MODE") {
+			case "incremental":
+				for _, stmt := range file.Stmts {
+					_ = runner.Run(context.Background(), stmt)
+				}
+			case "alias":
+				for _, stmt := range file.Stmts[:3] {
+					_ = runner.Run(context.Background(), stmt)
+				}
+				runner.RunAliasExpandedSourceLine(context.Background(), 4)
+			default:
+				_ = runner.Run(context.Background(), file)
+			}
+			os.Exit(1)
 		case "bg_unrelated_exec":
 			file, err := syntax.NewParser().Parse(strings.NewReader(
 				`/bin/sleep 5 & exec /usr/bin/true`), "")
@@ -3016,9 +3049,12 @@ var runTests = []runTest{
 		"trap 'return 0' USR1; loop() { kill -s USR1 $$; while :; do :; done; }; get_loop_exit() { loop; echo exit=$?; }; get_loop_exit",
 		"exit=0\n",
 	},
+	// An async subshell can replace INT's inherited ignore and reset QUIT.
+	// Inspect that child's dispositions: $$ still names the parent, so
+	// signaling $$ cannot test the child's callback or terminating status.
 	{
-		"set -o posix; (trap 'echo got INT' INT; trap - QUIT; kill -s INT $$; echo after INT; kill -s QUIT $$; echo after QUIT) & wait $!; echo status:$?",
-		"got INT\nafter INT\nstatus:131\n",
+		"set -o posix; (trap 'echo got INT' INT; trap -p INT; trap - QUIT; trap -p QUIT) & wait $!; echo status:$?",
+		"trap -- 'echo got INT' INT\ntrap -- - QUIT\nstatus:0\n",
 	},
 	{"(true) & ok=$!; (false) & fail=$!; wait $ok $fail", "exit status 1"},
 	{"(true) & ok=$!; (false) & ignore=$!; wait $ok", ""},
@@ -6623,6 +6659,37 @@ func TestRunnerRun(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRunAliasExpandedSourceLineCallerContext(t *testing.T) {
+	const setup = "shopt -s expand_aliases\nset -o posix\nalias short='probe )'\n"
+	const source = setup + "echo \"$( short \"\n"
+	type contextKey struct{}
+	var output bytes.Buffer // bashpp-racegate:safe-synchronized recovery calls and output reads execute synchronously.
+	r, err := interp.New(interp.StdIO(nil, &output, &output), interp.WithBashSource([]byte(source)),
+		interp.ExecHandlers(func(next interp.ExecHandlerFunc) interp.ExecHandlerFunc {
+			return func(ctx context.Context, args []string) error {
+				if args[0] != "probe" {
+					return next(ctx, args)
+				}
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				_, err := fmt.Fprint(interp.HandlerCtx(ctx).Stdout, ctx.Value(contextKey{}))
+				return err
+			}
+		}))
+	qt.Assert(t, qt.IsNil(err))
+	defer r.Reset()
+	qt.Assert(t, qt.IsNil(r.Run(t.Context(), parse(t, nil, setup))))
+	caller := context.WithValue(t.Context(), contextKey{}, "ok 8")
+	qt.Assert(t, qt.IsTrue(r.RunAliasExpandedSourceLine(caller, 4)))
+	qt.Assert(t, qt.Equals(output.String(), "ok 8 \n"))
+	output.Reset()
+	canceled, cancel := context.WithCancel(caller)
+	cancel()
+	qt.Assert(t, qt.IsTrue(r.RunAliasExpandedSourceLine(canceled, 4)))
+	qt.Assert(t, qt.Equals(output.String(), ""))
 }
 
 func TestRunnerInheritedUnsetRestoredAfterFunctionTemp(t *testing.T) {

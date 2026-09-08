@@ -86,6 +86,15 @@
 ./interp|fifo|TestBackgroundExternalLaunchFIFORedirectDoesNotDeadlock
 ./interp|signal|TestBackgroundRunnerStopsSignalSubscriptions
 ./interp|signal|TestBackgroundSelfSignalSurvivesExecReplacement
+./interp|signal|TestBackgroundSelfSignalBeforeExecTerminatesOwner
+./interp|signal|TestAsyncSelfSignalTargetsForegroundOwner
+./interp|signal|TestAsyncSelfSignalBetweenRunsAndReset
+./interp|signal|TestAsyncSelfSignalFailedPublishedReplacement
+./interp|signal|TestAsyncSelfSignalUsesCurrentOwnerDisposition
+./interp|signal|TestAsyncSelfSignalExitCleanup
+./interp|signal|TestAsyncSelfSignalPreservesCallerContext
+./interp|signal|TestAsyncSelfSignalCallerDeadlineErrors
+./interp|signal|TestRunAliasExpandedSourceLineCallerContext
 ./interp|background|TestBackgroundSelfStopSurvivesExecReplacement
 ./interp|cancellation|TestBashPPFastFailureCancelsOwnerReceive
 ./interp|fifo|TestBashPPGoArmsBeforeBlockingFIFORedirect

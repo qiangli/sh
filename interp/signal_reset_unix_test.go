@@ -7,6 +7,7 @@ package interp_test
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"io"
 	"os"
@@ -209,6 +210,17 @@ func TestBackgroundSelfSignalSurvivesExecReplacement(t *testing.T) {
 				"GOSH_SIGNAL="+tc.signal,
 				"GOSH_DELAY="+tc.delay,
 			)
+			if tc.delay == "" {
+				// This row measures a signal with no delay after an actual
+				// replacement has started. A separate test covers a signal
+				// which wins before any exec publication.
+				readyFIFO := t.TempDir() + "/replacement-ready"
+				if err := syscall.Mkfifo(readyFIFO, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				cmd.Env = append(cmd.Env, "GOSH_READY_FIFO="+readyFIFO)
+				cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+			}
 			if tc.external {
 				cmd.Env = append(cmd.Env, "GOSH_EXTERNAL_KILL=1")
 			}
@@ -240,7 +252,11 @@ func TestBackgroundSelfSignalSurvivesExecReplacement(t *testing.T) {
 					t.Fatalf("probe replacement: %v", err)
 				}
 			case <-time.After(2 * time.Second):
+				if tc.delay == "" {
+					_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+				}
 				_ = cmd.Process.Kill()
+				<-done
 				got, _ := os.ReadFile(marker)
 				t.Fatalf("replacement did not complete; marker=%q", got)
 			}
@@ -377,5 +393,39 @@ func waitStandaloneStopped(t *testing.T, pid int, sig syscall.Signal) {
 			t.Fatalf("child did not enter the stopped state for %s", sig)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestBackgroundSelfSignalBeforeExecTerminatesOwner(t *testing.T) {
+	for _, mode := range []string{"file", "incremental", "alias"} {
+		t.Run(mode, func(t *testing.T) {
+			cmd := exec.Command(os.Args[0])
+			cmd.Env = append(os.Environ(), "GOSH_CMD=bg_self_signal_before_exec", "GOSH_OWNER_MODE="+mode)
+			var output bytes.Buffer // bashpp-racegate:safe-synchronized cmd.Wait joins the pipe copier before inspection.
+			cmd.Stdout, cmd.Stderr = &output, &output
+			if err := cmd.Start(); err != nil {
+				t.Fatal(err)
+			}
+			done := make(chan error, 1)
+			go func() { done <- cmd.Wait() }()
+			select {
+			case err := <-done:
+				var exited *exec.ExitError
+				if !errors.As(err, &exited) {
+					t.Fatalf("owner did not take its default signal: %v", err)
+				}
+				status := exited.Sys().(syscall.WaitStatus)
+				if !status.Signaled() || status.Signal() != syscall.SIGTERM {
+					t.Fatalf("owner status = %v, want SIGTERM", status)
+				}
+				if got := output.String(); got != "EXIT-CLEANUP\n" {
+					t.Fatalf("owner EXIT cleanup = %q", got)
+				}
+			case <-time.After(2 * time.Second):
+				_ = cmd.Process.Kill()
+				<-done
+				t.Fatal("owner waited for a non-exec sender's remaining work")
+			}
+		})
 	}
 }

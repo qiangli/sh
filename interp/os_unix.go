@@ -668,6 +668,8 @@ func execReplaceCwdMatches(dir string) bool {
 	return err == nil && os.SameFile(processDir, logicalDir)
 }
 
+func relayAsyncOwnerSignal(sig killSig) error { return relayExecReplacementSignal(sig) }
+
 func relayExecReplacementSignal(sig syscall.Signal) error {
 	// execve resets caught dispositions to default. Do the same before
 	// relaying a proxied replacement child's terminal signal to the shell

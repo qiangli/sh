@@ -425,19 +425,29 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 				}()
 			}
 		}
-		proxyReplace := hc.ExecReplace && hc.runner != nil && hc.runner.hasLiveBackgroundJobs()
+		proxyReplace := false
+		var replacement *execReplacementAttempt
+		if hc.ExecReplace && hc.runner != nil {
+			state := hc.runner.execReplacement
+			state.mu.Lock()
+			if pending := state.pending; pending != nil && state.owner == hc.runner {
+				state.mu.Unlock()
+				return pending.status()
+			}
+			proxyReplace = hc.runner.hasLiveBackgroundJobs()
+			if proxyReplace {
+				replacement = &execReplacementAttempt{ready: make(chan struct{})}
+				state.current.Store(replacement)
+			}
+			state.mu.Unlock()
+			if replacement != nil {
+				defer state.current.CompareAndSwap(replacement, nil)
+			}
+		}
 		if hc.ExecReplace && !proxyReplace {
 			if replaced, err := execReplace(ctx, execPath, cmdArgs, env, execStdin, execStdout, execStderr); replaced {
 				return err
 			}
-		}
-		var replacement *execReplacementAttempt
-		if proxyReplace {
-			replacement = &execReplacementAttempt{ready: make(chan struct{})}
-			hc.runner.execReplacement.current.Store(replacement)
-			defer func() {
-				hc.runner.execReplacement.current.CompareAndSwap(replacement, nil)
-			}()
 		}
 		cmd := exec.Cmd{
 			Path:       execPath,
@@ -563,7 +573,11 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 			// to an already-dead child instead of reaching the proxy's parent.
 			stopReplacementSignalForward()
 			stopReplacementSignalForward = func() {}
-			if replacement != nil {
+			standaloneReplacement := false
+			if hc.runner != nil {
+				_, standaloneReplacement = hc.runner.sigReset.(OSSignalResetter)
+			}
+			if replacement != nil && standaloneReplacement {
 				// A real shell's asynchronous child which addressed $$ survives
 				// execve. Let that particular in-process observer finish its
 				// post-kill bookkeeping before this host exits.
@@ -610,7 +624,9 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 			// Note: [waitStatus] is an alias [syscall.WaitStatus]
 			if status, ok := err.Sys().(waitStatus); ok && status.Signaled() {
 				if proxyReplace {
-					return relayExecReplacementSignal(status.Signal())
+					if _, standalone := hc.runner.sigReset.(OSSignalResetter); standalone {
+						return relayExecReplacementSignal(status.Signal())
+					}
 				}
 				if ctx.Err() != nil {
 					return ctx.Err()

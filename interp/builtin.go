@@ -1558,7 +1558,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				return r.exit
 			}
 			for _, bg := range r.bgProcs {
-				if r.waitOrSignal(bg) {
+				if r.waitOrSignal(ctx, bg) {
+					if err := ctx.Err(); err != nil {
+						exit.fatal(err)
+						return exit
+					}
 					_, num := r.peekPendingSignal()
 					exit.code = uint8(128 + num)
 					return exit
@@ -1624,7 +1628,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					return r.exit
 				}
 			}
-			if r.waitOrSignal(bg) {
+			if r.waitOrSignal(ctx, bg) {
+				if err := ctx.Err(); err != nil {
+					exit.fatal(err)
+					return exit
+				}
 				_, num := r.peekPendingSignal()
 				exit.code = uint8(128 + num)
 				return exit
@@ -1927,6 +1935,22 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					if err := sendSignal(replacementPid, sig); err != nil {
 						exit.code = 1
 						r.errf(r.bashErrPrefix(pos)+"kill: (%d) - %v\n", replacementPid, err)
+					}
+					continue
+				}
+				if attempt, queued := r.routeAsyncOwnerSignal(sig); queued {
+					continue
+				} else if attempt != nil {
+					<-attempt.ready
+					if bg, _ := ctx.Value(bgProcCtxKey{}).(*bgProc); bg != nil {
+						attempt.observer.Store(bg)
+					}
+					pid := int(attempt.pid.Load())
+					if pid == 0 {
+						exit.code = 1
+					} else if err := sendSignal(pid, sig); err != nil {
+						exit.code = 1
+						r.errf(r.bashErrPrefix(pos)+"kill: (%d) - %v\n", pid, err)
 					}
 					continue
 				}
