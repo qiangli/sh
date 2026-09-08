@@ -187,3 +187,19 @@ func TestRegisterConstantInFreshViewLeavesParentIntact(t *testing.T) {
 		}
 	}
 }
+
+func TestConstantForkRetainsImmutableMetadata(t *testing.T) {
+	parent := NewLexicalBindings()
+	if err := RegisterConstant(parent, "constant:x", "x", "int", 7, KindScalar); err != nil {
+		t.Fatal(err)
+	}
+	child := parent.Fork()
+	info, ok := child.ConstantInfo("constant:x")
+	if !ok || !info.Constant || !info.Readonly {
+		t.Fatalf("lost declaration: %#v %v", info, ok)
+	}
+	values, err := child.Constants()
+	if err != nil || len(values) != 1 || values[0].Text != "7" {
+		t.Fatalf("lost constant: %#v %v", values, err)
+	}
+}

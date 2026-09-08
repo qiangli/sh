@@ -12,7 +12,8 @@ func (e *emitter) nativeSubshell(n *syntax.Subshell) (string, error) {
 	bindings := map[string]bool{}
 	for _, scope := range e.projections.scopes {
 		for name := range scope {
-			if !e.funcs[name] && !e.typeNames[name] && e.imports[name] == "" && !e.dotNames[name] && e.known(name) {
+			projection, _ := e.projections.projectionLookup(name)
+			if !projection.constant && !e.funcs[name] && !e.typeNames[name] && e.imports[name] == "" && !e.dotNames[name] && e.known(name) {
 				bindings[name] = true
 			}
 		}

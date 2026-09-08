@@ -158,6 +158,16 @@ func (b *LexicalBindings) Fork() *LexicalBindings {
 			raw = &copy
 			rawCopies[slot.raw] = raw
 		}
+		// Constants have no native address to register with Snapshot. Their
+		// immutable scalar value and presence cross the boundary directly;
+		// the shadow remains unaddressable through the provenance registry.
+		if slot.raw.info.Constant {
+			value := reflect.New(slot.value.Type()).Elem()
+			value.Set(slot.value)
+			present := *slot.present
+			child.store.slots[id] = &lexicalSlot{value: value, present: &present, kind: slot.kind, name: slot.name, raw: raw}
+			continue
+		}
 		if slot.cell == nil {
 			child.store.slots[id] = &lexicalSlot{value: reflect.New(slot.value.Type()).Elem(), present: new(bool), kind: slot.kind, name: slot.name, raw: raw, forkPending: true}
 			child.track(child.store.slots[id])
