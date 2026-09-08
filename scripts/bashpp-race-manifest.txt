@@ -23,6 +23,7 @@
 ./interp|task|TestBashPPTaskFailureCancelsBlockedSibling
 ./interp|task|TestBashPPNestedTaskRegistration
 ./interp|task|TestBashPPEOFStopsSuccessfulBlockedTask
+./interp|task|TestHostedTaskPolicyKeepsSourceDescendantOwnership
 ./interp|resource|TestBashPPTaskDescriptorCloseIsPrivateAndOffsetShared
 ./interp|resource|TestBashPPFileRunPrunesClearedPersistentHandle
 ./interp|resource|TestBashPPFileRunRevokesCapturedFunctionChannel
@@ -49,6 +50,8 @@
 ./interp|output|TestBashPPConcurrentEchoLogicalLinesAtomic
 ./interp|arbitration|TestBashPPFailureArbitratesByLaunchOrdinal
 ./interp|arbitration|TestBashPPPrimaryFailureUsesLaunchOrdinal
+./interp|arbitration|TestBashPPFastFailureRefusesLaterLaunchSideEffects
+./interp|arbitration|TestBashPPReturnDefersLaunchUntilStatusSettles
 ./interp|cancellation|TestBashPPCancellationJoins
 ./interp|cancellation|TestBashPPCanceledTaskDoesNotPromoteTransientFailure
 ./interp|cancellation|TestBashPPCaptureCancellationReportsCancellation
@@ -67,6 +70,8 @@
 ./interp|capability-policy|TestBashPPPolicyUsesOneReplaceableToolchain
 ./interp|capability-policy|TestBashPPDefaultEvaluatorIsThePolicy
 ./interp|capability-policy|TestBashPPCallHonoursCancellation
+./interp|capability-policy|TestHostedTaskPolicyMapfileAndScopeRestoration
+./interp|cancellation|TestHostedTaskPolicyCancelsReadAndRejectsProcessEffects
 ./interp|native-evaluator|TestNativeBashPPEvaluatorRejectsArgumentInjection
 ./interp|native-evaluator|TestNativeBashPPEvaluatorImportsPackagesUsedByArguments
 ./interp|native-evaluator|TestNativeBashPPSelectorExitStatusIsExact

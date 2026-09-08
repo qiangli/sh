@@ -20,7 +20,7 @@ import (
 
 type cancellationOutput struct {
 	sync.Mutex
-	bytes.Buffer
+	bytes.Buffer // bashpp-racegate:safe-synchronized — writes lock; reads follow Runner.Run's task join.
 }
 
 func (b *cancellationOutput) Write(p []byte) (int, error) {
@@ -61,7 +61,7 @@ func TestCompiledEntryCancellationAcceptance(t *testing.T) {
 	}
 	dir := t.TempDir()
 	writeEntryModule(t, dir)
-	var imports, entries strings.Builder
+	var imports, entries strings.Builder // bashpp-racegate:safe-private — subtests run sequentially while generating source.
 	var paths []string
 	for i, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -97,7 +97,7 @@ func TestCompiledEntryCancellationAcceptance(t *testing.T) {
 	defer cancel()
 	command := exec.CommandContext(ctx, binary, "-test.v", "-test.timeout=25s")
 	command.Dir = t.TempDir()
-	command.Env = []string{"PATH=/no-tools", "GORACE=halt_on_error=1"}
+	command.Env = []string{"PATH=/no-tools", "GORACE=halt_on_error=1"} // bashpp-racegate:safe-private — child command configured before CombinedOutput starts it.
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("compiled cancellation acceptance: %v\n%s", err, output)
 	}
@@ -130,7 +130,7 @@ const cancellationHost = `package host_test
 import("bytes";"context";"fmt";"runtime";"sync";"testing";"time"; rt "mvdan.cc/sh/v3/lower/shellrt"
 IMPORTS
 )
-type lockedOutput struct { sync.Mutex; bytes.Buffer }
+type lockedOutput struct { sync.Mutex; bytes.Buffer } // bashpp-racegate:safe-synchronized — writes lock; each invocation reads after its task join.
 func(b *lockedOutput)Write(p []byte)(int,error){b.Lock();defer b.Unlock();return b.Buffer.Write(p)}
 func(b *lockedOutput)WriteString(s string)(int,error){b.Lock();defer b.Unlock();return b.Buffer.WriteString(s)}
 func TestEntries(t *testing.T) {
