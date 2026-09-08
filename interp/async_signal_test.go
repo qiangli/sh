@@ -338,6 +338,7 @@ func TestAsyncSelfSignalPreservesCallerContext(t *testing.T) {
 						// A new Done channel is an independent embedder scope;
 						// background creation must not unwrap it to the outer Run.
 						inner, cancelInner := context.WithCancelCause(ctx)
+						defer cancelInner(nil)
 						child := r.Subshell()
 						defer child.Reset()
 						if err := child.Run(inner, asyncSignalFile(t, "hold &")); err != nil {
