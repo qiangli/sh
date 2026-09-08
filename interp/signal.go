@@ -179,6 +179,16 @@ func (OSSignalResetter) ResetDefault(num int, name string) {
 	restoreExecSignal(signalForOS(sig))
 }
 
+// IsIgnored reports whether name currently has an ignored disposition,
+// without changing it. Like ResetDefault, it resolves the canonical signal
+// name; an unknown name returns false. Linux and Darwin query the kernel
+// disposition directly. Other platforms use the existing os/signal fallback
+// and cannot distinguish raw host changes from its bookkeeping.
+func (OSSignalResetter) IsIgnored(num int, name string) bool {
+	sig, ok := signalByName(name)
+	return ok && osSignalIgnored(signalForOS(sig))
+}
+
 // IgnoreStartup implements [StartupSignalIgnorer].
 func (OSSignalResetter) IgnoreStartup(num int, name string) {
 	sig, ok := signalByName(name)
