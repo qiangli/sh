@@ -1882,6 +1882,16 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				r.errf(r.bashErrPrefix(pos)+"kill: `%s': not a pid or valid job spec\n", target)
 				continue
 			}
+			// A compound job's own kernel identity is its live proxy. Deliver
+			// builtin self-signals synchronously, as for $$, so its next
+			// statement sees the trap/default action without an IPC race.
+			// External senders use the same live-disposition event path.
+			if bg, _ := ctx.Value(bgProcCtxKey{}).(*bgProc); bg != nil && bg.carrier != nil && pid == bg.carrier.Pid() {
+				if _, live := bg.carrier.(SignalAwareCarrierProcess); live && !signalStopsJob(sig) && !signalContinuesJob(sig) {
+					bg.deliverCarrierSignal(sigNum(sig))
+					continue
+				}
+			}
 			// A coproc's `<NAME>_PID` is a synthetic integer, not a real OS
 			// pid; resolve it to the coprocess's real child so the signal
 			// actually reaches the running command (e.g. `kill $COPROC_PID`).

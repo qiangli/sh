@@ -97,6 +97,22 @@ type StopAwareCarrierProcess interface {
 	WaitState() CarrierWaitState
 }
 
+// CarrierSignalState optionally reports a catchable signal received by a live
+// proxy. Delivered states do not imply that the carrier stopped or exited.
+type CarrierSignalState struct {
+	CarrierWaitState
+	Delivered bool
+}
+
+// SignalAwareCarrierProcess preserves a carrier across ignored and trapped
+// signals. The runner consumes either WaitSignalState, WaitState, or Wait with
+// one waiter, never multiple APIs. Terminal states must follow every already
+// received signal event and join any implementation-owned readers.
+type SignalAwareCarrierProcess interface {
+	StopAwareCarrierProcess
+	WaitSignalState() CarrierSignalState
+}
+
 // WithJobCarrier gives background jobs a kernel-visible identity. For
 // each asynchronous list (`cmd &`, including `a | b &`) the runner
 // starts one carrier process via c and uses its real PID instead of the
@@ -255,7 +271,17 @@ func (r *Runner) attachCarrier(ctx context.Context, job *Runner, bg *bgProc) err
 		sig := 0
 		if stopAware, ok := cp.(StopAwareCarrierProcess); ok {
 			for {
-				state := stopAware.WaitState()
+				var state CarrierWaitState
+				if live, ok := cp.(SignalAwareCarrierProcess); ok {
+					event := live.WaitSignalState()
+					if event.Delivered {
+						bg.deliverCarrierSignal(event.Signal)
+						continue
+					}
+					state = event.CarrierWaitState
+				} else {
+					state = stopAware.WaitState()
+				}
 				if !state.Stopped {
 					sig = state.Signal
 					break
@@ -300,26 +326,42 @@ func (r *Runner) attachCarrier(ctx context.Context, job *Runner, bg *bgProc) err
 		// carrier that somehow exits normally, which must not outlive
 		// its kernel identity — kills the job as 128+signal.
 		if sig > 0 {
-			signalRunner := bg.carrierSignalRunner.Load()
-			if signalRunner == nil {
-				signalRunner = job
-			}
-			name, disp := signalRunner.carrierSignalDisposition(sig)
-			switch disp {
-			case carrierSigTrapped:
-				signalRunner.markPendingSignal(name)
-				return
-			case carrierSigIgnored:
-				return
-			}
-			if signalRunner.asyncSignalExplicitlyReset(name) {
-				bg.carrierResetSignal.CompareAndSwap(0, int32(sig))
-			}
-			bg.killedSignal.CompareAndSwap(0, int32(sig))
+			bg.deliverCarrierSignal(sig)
+			return
 		}
 		bg.cancel()
 	}()
 	return nil
+}
+
+// deliverCarrierSignal classifies one receipt against the current logical
+// job, preserving the callback captured with that disposition. A live proxy
+// stays available after ignored/trapped deliveries and is reaped by normal
+// job cleanup after a default disposition cancels the represented job.
+func (bg *bgProc) deliverCarrierSignal(num int) {
+	if num <= 0 || bg.carrierReaped.Load() {
+		return
+	}
+	job := bg.carrierSignalRunner.Load()
+	if job == nil {
+		return
+	}
+	name, disposition, callback, reset := job.carrierSignalSnapshot(num)
+	switch disposition {
+	case carrierSigIgnored:
+		return
+	case carrierSigTrapped:
+		job.queuePendingSignal(name, callback)
+		return
+	}
+	if sig, _, ok := signalByNumber(num); ok && signalDefaultDoesNotTerminate(sig) {
+		return
+	}
+	if reset {
+		bg.carrierResetSignal.CompareAndSwap(0, int32(num))
+	}
+	bg.killedSignal.CompareAndSwap(0, int32(num))
+	bg.cancel()
 }
 
 // carrierIgnoredSignalNames snapshots the real signals the new background
@@ -345,8 +387,8 @@ func (r *Runner) carrierIgnoredSignalNames() []string {
 	return names
 }
 
-// carrierSigDisposition classifies how a job handles a signal relayed
-// from its dead carrier: run a trap action, ignore it, or die.
+// carrierSigDisposition classifies a received or terminating carrier signal:
+// run a trap action, ignore it, or terminate the represented job.
 type carrierSigDisposition int
 
 const (
@@ -363,23 +405,28 @@ const (
 // SIGSTOP, which are uncatchable no matter what `trap` recorded — are
 // always default.
 func (r *Runner) carrierSignalDisposition(num int) (string, carrierSigDisposition) {
+	name, disposition, _, _ := r.carrierSignalSnapshot(num)
+	return name, disposition
+}
+
+func (r *Runner) carrierSignalSnapshot(num int) (string, carrierSigDisposition, string, bool) {
 	_, name, ok := signalByNumber(num)
 	if !ok || name == "KILL" || name == "STOP" {
-		return name, carrierSigDefault
-	}
-	if r.startupIgnored[name] {
-		return name, carrierSigIgnored
+		return name, carrierSigDefault, "", false
 	}
 	r.sigMu.Lock()
 	defer r.sigMu.Unlock()
-	cb, ok := r.trapCallbacks[name]
-	switch {
-	case !ok:
-		return name, carrierSigDefault
-	case cb == "":
-		return name, carrierSigIgnored
+	if r.startupIgnored[name] {
+		return name, carrierSigIgnored, "", false
 	}
-	return name, carrierSigTrapped
+	callback, trapped := r.trapCallbacks[name]
+	if !trapped {
+		return name, carrierSigDefault, "", r.asyncDefaultReset[name]
+	}
+	if callback == "" {
+		return name, carrierSigIgnored, "", false
+	}
+	return name, carrierSigTrapped, callback, false
 }
 
 // reapCarrier tears down the job's carrier process once the job itself

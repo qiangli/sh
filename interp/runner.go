@@ -4606,6 +4606,7 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 		// SIG_IGN a fork-based shell's async children inherit (POSIX 2.11).
 		// attachCarrier stores the same runner; a background pipeline later
 		// replaces it with its last component via publishBgSignalRunner.
+		bg.carrierRootSubshell, _ = st2.Cmd.(*syntax.Subshell)
 		bg.carrierSignalRunner.Store(r2)
 		bgCtx, cancel := r.backgroundContext(ctx)
 		bg.cancel = cancel
@@ -5474,6 +5475,9 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		r.bashPPBranchStmt(cm)
 	case *syntax.Subshell:
 		r2 := r.subshell(false)
+		if bg, _ := ctx.Value(bgProcCtxKey{}).(*bgProc); bg != nil && bg.carrierRootSubshell == cm {
+			bg.carrierSignalRunner.Store(r2)
+		}
 		defer r2.closeDirFile()
 		// This internal shell cannot be reused or Reset by the caller. Join
 		// its own subscriptions after EXIT cleanup, without canceling any

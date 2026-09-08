@@ -1095,6 +1095,9 @@ type bgProc struct {
 	// the externally visible job. It normally points at the asynchronous-list
 	// runner; a pipeline publishes its last component instead, matching the
 	// process denoted by `$!` in bash.
+	// Root parenthesized compound executes in its own internal runner; nested
+	// subshells must not replace this job-wide signal owner.
+	carrierRootSubshell *syntax.Subshell
 	carrierSignalRunner atomic.Pointer[Runner]
 	// carrierPipelineSignalOwner restricts runner publication to jobs whose
 	// top-level asynchronous statement is itself a pipeline. The CAS prevents
