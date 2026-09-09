@@ -44,11 +44,12 @@ import (
 // type with two spellings rather than two types with one duplicated invoker.
 // Exactly one of decl and lit is set.
 type bashPPFunc struct {
-	native   *bashPPBridgeValue
-	decl     *syntax.BashPPFuncDecl
-	lit      *syntax.BashPPFuncLit
-	scope    *bashPPScope
-	typeArgs map[string]syntax.BashPPTypeExpr
+	goSourceReceiver *goSourceMethodBinding
+	native           *bashPPBridgeValue
+	decl             *syntax.BashPPFuncDecl
+	lit              *syntax.BashPPFuncLit
+	scope            *bashPPScope
+	typeArgs         map[string]syntax.BashPPTypeExpr
 	// bound is the name a literal was bound to by `:=`, kept only so that a
 	// diagnostic can say which function the script means. It is not an
 	// identity: the same closure may be copied to other names, and a later
@@ -421,7 +422,11 @@ func (r *Runner) bashPPMethodDecl(d *syntax.BashPPFuncDecl) {
 	}
 	var captured *bashPPScope
 	if r.bashPPScope != nil {
-		captured = r.bashPPScope.snapshot()
+		if r.bashPPGoSource {
+			captured = r.bashPPScope
+		} else {
+			captured = r.bashPPScope.snapshot()
+		}
 	}
 	methods[d.Name.Value] = &bashPPFunc{decl: d, scope: captured}
 }
@@ -436,6 +441,16 @@ func (r *Runner) bashPPMethodDecl(d *syntax.BashPPFuncDecl) {
 // literal bound to a name captures it at the point of the binding.
 func (r *Runner) bashPPLookupFunc(c *syntax.BashPPCall) (*bashPPFunc, bool) {
 	if r.bashPPGoSource && c.CalleeExpr != nil {
+		if method, ok := c.CalleeExpr.(*syntax.BashPPSelectorExpr); ok && method.MethodValue && !r.bashPPNativeExpr(method.X) {
+			fn, err := r.goSourceLocalMethod(method, len(c.Args) > 0)
+			if err != nil {
+				if !r.bashPPPanicking() {
+					r.exit.fatal(err)
+				}
+				return nil, false
+			}
+			return fn, true
+		}
 		cell, err := r.goSourceValueCell(c.CalleeExpr)
 		if err != nil {
 			r.exit.fatal(err)
@@ -1111,7 +1126,14 @@ func (r *Runner) bashPPGoSourceArgCell(w *syntax.Word, expr syntax.BashPPExpr) *
 // scalar evaluator, so `Abs(v)` on a struct and `Abs(x*2)` on a number both
 // reach the callee instead of the second form forcing the first to be refused
 // as "not a scalar".
-func (r *Runner) bashPPTypedCallArgs(call *syntax.BashPPCall, fn *bashPPFunc) ([]string, bool, error) {
+func (r *Runner) bashPPTypedCallArgs(call *syntax.BashPPCall, fn *bashPPFunc) (result []string, success bool, failure error) {
+	defer func() {
+		if success && !r.goSourceFinalizeReceiver(fn) {
+			result = nil
+			success = false
+			failure = errBashPPScalarInterrupted
+		}
+	}()
 	if len(call.ArgExprs) != len(call.Args) {
 		return nil, false, fmt.Errorf("BASHPP-EEXPR-CALL: inconsistent positioned scalar arguments")
 	}
@@ -1340,7 +1362,13 @@ func (r *Runner) bashPPSpreadValues(w *syntax.Word) []string {
 // callee cannot accept. Go rejects `f(xs...)` when f is not variadic, and so
 // does this: silently passing the elements would make the two spellings mean
 // the same thing and hide the mistake.
-func (r *Runner) bashPPCallValues(c *syntax.BashPPCall, fn *bashPPFunc) ([]string, bool) {
+func (r *Runner) bashPPCallValues(c *syntax.BashPPCall, fn *bashPPFunc) (result []string, success bool) {
+	defer func() {
+		if success && !r.goSourceFinalizeReceiver(fn) {
+			result = nil
+			success = false
+		}
+	}()
 	r.bashPPCallCells = nil
 	r.bashPPCallChannels = nil
 	if required := bashppRequiredAfterDefault(fn.params()); required != "" {

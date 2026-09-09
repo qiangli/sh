@@ -735,6 +735,22 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 	if r.bashPPComplexShortDecl(d) {
 		return
 	}
+	if r.bashPPGoSource && len(d.Lhs) == 1 {
+		if method, ok := d.Expr.(*syntax.BashPPSelectorExpr); ok && method.MethodValue && !r.bashPPNativeExpr(method.X) {
+			cell, err := r.goSourceLocalMethodValue(method)
+			if err != nil {
+				if !r.bashPPPanicking() {
+					r.exit.fatal(err)
+				}
+				return
+			}
+			r.bashPPDeclareName(d.Lhs[0].Value, cell.vr)
+			if target := r.bashPPScope.lookup(d.Lhs[0].Value); target != nil {
+				*target = *cell
+			}
+			return
+		}
+	}
 	// A named function value uses the same callable registry as a closure or
 	// method value, retaining its declaration (including the agentic marker).
 	if len(d.Lhs) == 1 {

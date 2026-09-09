@@ -368,7 +368,12 @@ func (c *converter) exprValue(e ast.Expr) s.BashPPExpr {
 	case *ast.BinaryExpr:
 		return &s.BashPPBinaryExpr{X: c.expr(x.X), Op: c.lit(x.OpPos, x.Op.String()), Y: c.expr(x.Y)}
 	case *ast.SelectorExpr:
-		return &s.BashPPSelectorExpr{X: c.expr(x.X), Dot: c.pos(x.Sel.Pos() - 1), Sel: c.ident(x.Sel), FuncType: c.functionValueType(x)}
+		out := &s.BashPPSelectorExpr{X: c.expr(x.X), Dot: c.pos(x.Sel.Pos() - 1), Sel: c.ident(x.Sel), FuncType: c.functionValueType(x)}
+		if selection := c.info.Selections[x]; selection != nil && selection.Kind() == types.MethodVal {
+			out.MethodValue = true
+			out.ReceiverAddressable = c.info.Types[x.X].Addressable()
+		}
+		return out
 	case *ast.IndexExpr:
 		return &s.BashPPIndexExpr{X: c.expr(x.X), Lbrack: c.pos(x.Lbrack), Rbrack: c.pos(x.Rbrack), Index: c.expr(x.Index)}
 	case *ast.SliceExpr:

@@ -549,10 +549,12 @@ func (x *BashPPSliceExpr) End() Pos { return posAddCol(x.Rbrack, 1) }
 // BashPPSelectorExpr is a positioned field selection. Chained selections and
 // selections through indexed collections are represented recursively in X.
 type BashPPSelectorExpr struct {
-	FuncType *BashPPFuncType // Go-source function value signature, when applicable
-	X        BashPPExpr
-	Dot      Pos
-	Sel      *Lit
+	MethodValue         bool            // Go-source selector denotes a method value, not a function-valued field
+	ReceiverAddressable bool            // Original receiver is addressable according to go/types
+	FuncType            *BashPPFuncType // Go-source function value signature, when applicable
+	X                   BashPPExpr
+	Dot                 Pos
+	Sel                 *Lit
 }
 
 func (x *BashPPSelectorExpr) Pos() Pos { return x.X.Pos() }

@@ -270,6 +270,21 @@ func (r *Runner) bashPPBridgeExpr(expr syntax.BashPPExpr) (bashPPBridgeValue, er
 			}
 			return values[0], nil
 		}
+		if r.bashPPGoSource {
+			if fn, ok := r.bashPPLookupFunc(x); ok {
+				cells, err := r.goSourceCallResultCells(x, fn)
+				if err != nil {
+					return bashPPBridgeValue{}, err
+				}
+				if len(cells) != 1 {
+					return bashPPBridgeValue{}, fmt.Errorf("gosource: expression requires one local result, got %d", len(cells))
+				}
+				return r.bashPPBridgeCell(cells[0])
+			}
+			if r.exit.exiting || r.exit.fatalExit || r.exit.err != nil {
+				return bashPPBridgeValue{}, errBashPPScalarInterrupted
+			}
+		}
 	case *syntax.BashPPSelectorExpr:
 		if r.bashPPNativeExpr(x.X) {
 			base, err := r.bashPPNativeReceiver(x.X)

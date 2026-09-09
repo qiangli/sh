@@ -36,6 +36,10 @@ func (r *Runner) goSourceCallableCell(expr syntax.BashPPExpr) (*bashPPCell, bool
 			return &bashPPCell{vr: r.bashPPStoreFunc(fn)}, true, nil
 		}
 	case *syntax.BashPPSelectorExpr:
+		if x.MethodValue && !r.bashPPNativeExpr(x.X) {
+			cell, err := r.goSourceLocalMethodValue(x)
+			return cell, true, err
+		}
 		if x.FuncType == nil {
 			return nil, false, nil
 		}
