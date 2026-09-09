@@ -297,3 +297,71 @@ func TestGoSourceTestingDiscoveryRejectsInvalid(t *testing.T) {
 		}
 	}
 }
+
+// TestGoSourceTestingRecoverGuardedCallback pins the shapes the pinned corpus
+// writes around its scheduler callbacks, using separately authored fixtures.
+//
+// The guarded shape is the one that measured a defect: an original body whose
+// last act is `defer func() { recover() }()`, as wrap_test.go's TestAsValidation
+// subtests write it. `recover` reports "nothing to recover" through the exit
+// status, Go source form aborts a statement that reports failure, and the
+// residual status then reached the callback outcome — so a test Go passes
+// failed twice over, at the root and inside t.Run.
+func TestGoSourceTestingRecoverGuardedCallback(t *testing.T) {
+	source := `package specimen
+import "testing"
+func helperRun(t *testing.T, name string){
+ t.Helper()
+ t.Run(name, func(t *testing.T){ t.Log("helper subtest") })
+}
+func TestRootRecover(t *testing.T){ defer func(){ recover() }(); t.Log("root body") }
+func TestUnrecoveredPanic(t *testing.T){ panic("deliberate") }
+func TestSubRecover(t *testing.T){
+ t.Run("guarded", func(t *testing.T){ defer func(){ recover() }(); t.Log("sub body") })
+}
+func TestEmptyNames(t *testing.T){
+ for i := 0; i < 3; i++ { t.Run("", func(t *testing.T){ t.Log("sub") }) }
+}
+func TestHelperCapability(t *testing.T){ helperRun(t, "alpha"); helperRun(t, "beta") }
+func TestStillFailsOnDiagnostic(t *testing.T){ var ch chan int; ch <- 1 }
+`
+	program, err := gosource.Parse(strings.NewReader(source), "recover_fixture.go", gosource.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var errs bytes.Buffer
+	runner, err := interp.New(interp.Lang(syntax.LangBashPP), interp.Dir(t.TempDir()), interp.StdIO(nil, nil, &errs))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	session, err := runner.LoadGoSourceTests(ctx, program)
+	if err != nil {
+		t.Fatalf("load: %v %s", err, errs.String())
+	}
+	defer session.Close()
+	// Every guarded shape reaches the real scheduler and passes, including the
+	// nested callback and the capability handed to a helper function.
+	for _, name := range []string{
+		"TestRootRecover", "TestSubRecover",
+		"TestEmptyNames", "TestHelperCapability",
+	} {
+		errs.Reset()
+		t.Run(name, func(t *testing.T) {
+			if err := session.Run(ctx, name, t); err != nil {
+				t.Fatalf("original body: %v; %s", err, errs.String())
+			}
+		})
+	}
+	// The exemption must not become a blanket one. An unrecovered panic and an
+	// interpreter diagnostic each still fail their callback rather than being
+	// discarded along with the status.
+	for _, name := range []string{"TestUnrecoveredPanic", "TestStillFailsOnDiagnostic"} {
+		errs.Reset()
+		recorded := &testingRecorder{}
+		if err := session.Run(ctx, name, recorded); err == nil {
+			t.Fatalf("%s was discarded: %#v %s", name, recorded, errs.String())
+		}
+	}
+}

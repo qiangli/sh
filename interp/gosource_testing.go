@@ -198,10 +198,33 @@ func (s *GoSourceTestingSession) runFunction(ctx context.Context, name string, f
 	if r.exit.err != nil {
 		return r.exit.err
 	}
-	if r.exit.code != 0 {
-		return ExitStatus(r.exit.code)
+	if code := r.testingCallbackStatus(); code != 0 {
+		return ExitStatus(code)
 	}
 	return ctx.Err()
+}
+
+// testingCallbackStatus reduces the runner state left by one returned test
+// callback to the status that actually failed it.
+//
+// A Go `func(*testing.T)` returns no value and has no exit status, so the
+// residual truthiness of whatever statement happened to run last must not
+// decide the test outcome. `recover()` is the case the corpus hits: with
+// nothing to recover it deliberately reports status 1 (see
+// [Runner.bashPPPredeclared]), so an original body ending in
+// `defer func() { recover() }()` returned status 1 and failed a test that
+// Go passes.
+//
+// Only a terminating condition fails the callback here. Every Bash++
+// diagnostic reports [bashPPPanicStatus] (2), as does an unrecovered panic
+// escaping the body, and an explicit exit sets exiting; none of those is
+// discarded. A fatal interpreter error is already returned by the caller
+// through exit.err before this runs.
+func (r *Runner) testingCallbackStatus() uint8 {
+	if r.exit.code == 1 && !r.exit.exiting && !r.exit.fatalExit && !r.bashPPPanicking() {
+		return 0
+	}
+	return r.exit.code
 }
 
 // bashPPTestingCall handles only the host testing capability. All ordinary

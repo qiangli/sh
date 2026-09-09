@@ -104,6 +104,73 @@ non-scalar values. The full corpus gate consequently fails; missing dynamic
 subtests are never credited as passed or skipped. The complete standard-library
 obligation remains open.
 
+## Second full corpus replay
+
+The replay was repeated on the complete gate. Discovery again finds exactly ten
+roots, and all ten are invoked and accounted for; none is skipped and no missing
+dynamic subtest is credited. The native oracle for the same package passes ten
+roots and 70 dynamic subtests. Those 70 belong only to TestIs (30), TestAs (18),
+TestAsValidation (4) and TestAsType (18), so the three roots the interpreter
+passes owe no subtests and take no unearned credit. The pinned source hashes
+match before loading and the bytes are unchanged after execution.
+
+The interpreter still passes TestNewEqual, TestErrorMethod and
+TestJoinReturnsNil, and still fails the other seven with byte-identical
+diagnostics, so the full corpus gate still fails. Every remaining root cause is
+in the shared value model, ahead of any scheduler callback — each of the seven
+fails before its first `t.Run`. Minimal repros, by original position:
+
+| Root | Position | Diagnostic | Shape |
+| --- | --- | --- | --- |
+| TestJoin | join_test.go:28:19 | BASHPP-ECOLLECTION-ELEMENT: native handle (*errors.errorString) is not scalar | `multiErr{errors.New("err3")}` — composite literal of a named slice type whose element is a dependency handle |
+| TestJoinErrorMethod | join_test.go:58:23 | BASHPP-ERANGE-TYPE / BASHPP-EEXPR-FORM: unsupported scalar expression *syntax.BashPPCompositeLit | `for _, test := range []struct{...}{...}` — range directly over a composite literal |
+| TestIs | wrap_test.go:23:35 | BASHPP-ECOLLECTION-ELEMENT / BASHPP-EEXPR-FORM: *syntax.BashPPFuncLit | `&poser{"either 1 or 3", func(err error) bool {...}}` — function literal as a composite element |
+| TestAs | wrap_test.go:101:30 | BASHPP-ECOLLECTION-ELEMENT / BASHPP-EEXPR-NIL: nil is not a scalar | `target any` field left `nil` in a table element |
+| TestAsValidation | (registration-time) | undefined type: any | `testCases := []any{...}` — the predeclared `any` type |
+| TestAsType | wrap_test.go:250:30 | BASHPP-ECOLLECTION-ELEMENT / BASHPP-EEXPR-NIL: nil is not a scalar | `nil` argument in a variadic aggregate |
+| TestUnwrap | wrap_test.go:404:27 | BASHPP-EEXPR-OPERAND: indexed value is not a scalar | `tc.err` — selector on a struct range element holding an interface value |
+
+None of these is owned by this adapter. They are reported as repros rather than
+edited here, so the collection, native-handle, local-registry and lowering
+owners each patch their own layer once.
+
+## Guarded scheduler callbacks
+
+Two measured defects on the callback path itself were repaired, using separately
+authored fixtures rather than any original body.
+
+`recover` reports "nothing to recover" through the exit status, because a panic
+value may itself be the empty string. Go source form aborts a statement that
+reports a non-zero status, so `defer func() { recover() }()` — the guard the
+standard library writes when it only cares THAT a call panicked — terminated the
+very frame it exists to let continue. That status is now marked errexit-exempt
+where `recover` sets it, and the Go source statement rule honours the exemption
+it already honours for errexit. Separately, a returned callback's residual
+status no longer decides the test outcome: a Go `func(*testing.T)` returns no
+value and has no exit status, so only a terminating condition — a fatal
+interpreter error, an unrecovered panic, or an explicit exit — fails it.
+
+The exemption is not a blanket one. Interpreter diagnostics report
+`bashPPPanicStatus` and still fail their callback, an unrecovered panic still
+fails its callback, and both are pinned by the regression alongside the guarded
+root, the guarded `t.Run` callback, repeated empty subtest names, and a helper
+function that receives the capability and opens its own subtest:
+
+```sh
+go test ./interp -run '^TestGoSourceTestingRecoverGuardedCallback$' -count=1
+```
+
+This shape is exactly how the pinned corpus writes TestAsValidation's subtests,
+so the repair removes a defect that would otherwise have failed four dynamic
+subtests after the `any` type gap is closed. It does not by itself pass any
+additional root; the corpus totals above are unchanged by it.
+
+One further gap was observed and is NOT repaired here: inside a testing
+callback, a guard that recovers an actual panic and binds its value
+(`defer func(){ v := recover(); t.Log(v) }(); panic("deliberate")`) reports
+status 2 with no diagnostic, and the guard's log never arrives. It needs
+attribution before anyone edits for it.
+
 The runtime accepts `GoSourceTestProgram`, a syntax-based view implemented by
 `*gosource.Program`. Existing `LoadGoSourceTests(ctx, program)` calls are unchanged.
 The view retains the original AST, package name, initializer order and SourceAt

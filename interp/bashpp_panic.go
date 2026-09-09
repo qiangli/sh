@@ -133,6 +133,12 @@ func (r *Runner) bashPPPredeclared(name string, c *syntax.BashPPCall, args []str
 		value, ok := r.bashPPRecover()
 		r.exit = exitStatus{}
 		r.exit.oneIf(!ok)
+		// "nothing to recover" is this call's ANSWER, not a failed command.
+		// Go source form aborts on a statement that reports a non-zero status,
+		// so without the exemption `defer func() { recover() }()` — the guard
+		// the standard library writes when it only cares that a call panicked
+		// — would terminate the very frame it exists to let continue.
+		r.exit.errexitExempt = true
 		return []string{value}, true
 	}
 	return nil, false
