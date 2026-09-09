@@ -64,6 +64,9 @@ type Runner struct {
 	// Otherwise, [os.TempDir] is used.
 	Env expand.Environ
 
+	// goSourceEnvironment is the explicitly configured original Go process env.
+	goSourceEnvironment []string
+
 	// writeEnv overlays [Runner.Env] so that we can write environment variables
 	// as an overlay.
 	writeEnv expand.WriteEnviron
@@ -2777,6 +2780,8 @@ func (r *Runner) Reset() {
 		sigReset:           r.sigReset,
 		standaloneDefaults: standaloneDefaults,
 
+		goSourceEnvironment: r.goSourceEnvironment,
+
 		// The dialect is fixed at construction by [Lang]; a runtime `set -o
 		// bashpp` may have changed r.dialect since, so Reset restores the
 		// construction-time value from origDialect (mirroring dryRun).
@@ -3386,6 +3391,7 @@ func (r *Runner) subshell(background bool) *Runner {
 	r.ensureDirFile(r.Dir)
 	dirFile, _ := dupRunnerDir(r.dirFile)
 	r2 := &Runner{
+		goSourceEnvironment:  slices.Clone(r.goSourceEnvironment),
 		bashPPAgentic:        r.bashPPAgentic,
 		Dir:                  r.Dir,
 		dirFile:              dirFile,
