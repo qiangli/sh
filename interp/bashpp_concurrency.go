@@ -1097,6 +1097,11 @@ func (r *Runner) bashPPGo(ctx context.Context, g *syntax.BashPPGo) {
 		// evaluates a function value in the launching goroutine; the child
 		// runs that function rather than resolving the name again.
 		child.bashPPGoSourcePin = pin
+		if child.bashPPGoSource {
+			// Implicit expression requests use ectx too, so they must share
+			// the launched task's cancellation lifetime with its statements.
+			child.fillExpandConfig(c.ctx)
+		}
 		if prepared != nil {
 			child.goSourceInvokeTaskArguments(c.ctx, call, prepared)
 		} else {
