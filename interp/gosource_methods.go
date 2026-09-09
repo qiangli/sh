@@ -30,17 +30,23 @@ func (r *Runner) goSourceLocalMethod(expr *syntax.BashPPSelectorExpr, afterArgs 
 		if err != nil {
 			return nil, err
 		}
-		value, meta, typ, err := ptr.read()
-		if err != nil {
-			return nil, err
-		}
-		receiver = &bashPPCell{declType: typ}
-		bashPPStoreCellValue(receiver, value, meta)
-		if len(ptr.path) == 0 && ptr.target.interfaceValue != nil {
-			receiver = ptr.target
-		}
-		if !receiver.pointer && receiver.interfaceValue == nil {
+		_, pointer := r.bashPPPointerType(ptr.elem)
+		_, iface := r.bashPPInterfaceType(ptr.elem)
+		if !pointer && !iface {
+			// An addressable concrete receiver needs only its address/type.
+			// Reading and validating a temporary object here would traverse
+			// mutable map/slice fields before its method acquires a lock.
 			receiver = bashPPPointerCell(ptr)
+		} else {
+			value, meta, typ, err := ptr.read()
+			if err != nil {
+				return nil, err
+			}
+			receiver = &bashPPCell{declType: typ}
+			bashPPStoreCellValue(receiver, value, meta)
+			if len(ptr.path) == 0 && ptr.target.interfaceValue != nil {
+				receiver = ptr.target
+			}
 		}
 	} else {
 		var err error
@@ -59,9 +65,17 @@ func (r *Runner) goSourceLocalMethod(expr *syntax.BashPPSelectorExpr, afterArgs 
 		if sel.ambiguous || sel.method == nil && sel.interfaceSpec == nil {
 			return nil, fmt.Errorf("gosource: cannot resolve method %s on %s", expr.Sel.Value, bashPPTypeText(typ))
 		}
-		fn, ok = r.bashPPBindPromotedMethod(receiver, expr.Sel.Value, sel, expr.ReceiverAddressable)
-		if ok && afterArgs && sel.method != nil && !sel.method.decl.Receiver.Pointer {
-			fn.goSourceReceiver = &goSourceMethodBinding{receiver: receiver, method: expr.Sel.Value, selection: sel, addressable: expr.ReceiverAddressable}
+		if afterArgs && sel.method != nil && !sel.method.decl.Receiver.Pointer {
+			// Preserve the evaluated address until arguments have completed.
+			// Even a discarded eager value copy would read user storage before
+			// an argument's synchronization or mutation has taken place.
+			copy := *sel.method
+			copy.receiver = receiver
+			copy.typeArgs = bashPPMethodTypeBindings(sel.method, sel.receiverType)
+			copy.goSourceReceiver = &goSourceMethodBinding{receiver: receiver, method: expr.Sel.Value, selection: sel, addressable: expr.ReceiverAddressable}
+			fn, ok = &copy, true
+		} else {
+			fn, ok = r.bashPPBindPromotedMethod(receiver, expr.Sel.Value, sel, expr.ReceiverAddressable)
 		}
 	}
 	if !ok {
@@ -81,6 +95,7 @@ func (r *Runner) goSourceFinalizeReceiver(fn *bashPPFunc) bool {
 	bound, ok := r.bashPPBindPromotedMethod(binding.receiver, binding.method, binding.selection, binding.addressable)
 	if ok {
 		fn.receiver = bound.receiver
+		fn.typeArgs = bound.typeArgs
 	}
 	return ok
 }

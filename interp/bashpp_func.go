@@ -445,6 +445,9 @@ func (r *Runner) bashPPLookupFunc(c *syntax.BashPPCall) (*bashPPFunc, bool) {
 		// A launched task's callee was resolved once, in the parent. Re-running
 		// a computed callee here would evaluate it twice; re-reading a variable
 		// could find a different function than the `go` statement launched.
+		if pin.bound != nil {
+			return pin.bound, true
+		}
 		return r.bashPPClosure(pin.handle)
 	}
 	if r.bashPPGoSource && c.CalleeExpr != nil {
@@ -1272,12 +1275,23 @@ func (r *Runner) bashPPBindMethod(cell *bashPPCell, method string, addressable b
 				return nil, false
 			}
 			copyCell = bashPPCell{declType: typ, typeName: cell.typeName}
-			bashPPStoreCellValue(&copyCell, value, meta)
+			if r.bashPPGoSource && meta != nil {
+				copyCell.vr = expand.Variable{Set: true, Kind: expand.Object, Obj: value}
+				copyCell.valueMeta = meta
+				copyCell.object = &bashPPObjectIdentity{collection: meta}
+			} else {
+				bashPPStoreCellValue(&copyCell, value, meta)
+			}
 		}
 		if copyCell.vr.Kind == expand.Object {
 			if meta := bashPPCellMeta(&copyCell); bashPPValueMeta(meta) {
 				value, copiedMeta := bashPPCopyArrayValue(copyCell.vr.Obj, meta)
-				copyCell.vr = expand.NewObject(value)
+				if r.bashPPGoSource {
+					// A typed value copy copies fields, not referenced storage.
+					copyCell.vr = expand.Variable{Set: true, Kind: expand.Object, Obj: value}
+				} else {
+					copyCell.vr = expand.NewObject(value)
+				}
 				copyCell.valueMeta = copiedMeta
 				copyCell.object = &bashPPObjectIdentity{collection: copiedMeta}
 			}

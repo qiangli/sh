@@ -25,6 +25,8 @@ func (r *Runner) goSourcePrepareTaskArguments(call *syntax.BashPPCall, pin *bash
 		// Preparing a literal's signature must not retain an extra callable
 		// in the parent registry across Reset. The child instantiates it.
 		fn, ok = &bashPPFunc{lit: call.FuncLit, scope: r.bashPPScope, typeArgs: r.bashPPTypeParamArgs}, true
+	} else if pin != nil && pin.bound != nil {
+		fn, ok = pin.bound, true
 	} else if pin != nil {
 		fn, ok = r.bashPPClosure(pin.handle)
 	} else {

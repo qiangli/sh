@@ -1061,6 +1061,9 @@ func (r *Runner) bashPPGo(ctx context.Context, g *syntax.BashPPGo) {
 		c.done(ordinal, &bashPPTaskFailure{ordinal: ordinal, code: 2, text: fmt.Sprintf("task snapshot: %v", err)})
 		return
 	}
+	if pin != nil && pin.bound != nil {
+		pin = child.goSourceCopyTaskMethodPin(pin, shared)
+	}
 	child.bashPPTaskState = state
 	if c.ctx.Err() != nil {
 		child.closeBashPPTaskResources()

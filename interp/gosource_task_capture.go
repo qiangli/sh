@@ -118,6 +118,7 @@ import (
 type bashPPGoSourcePin struct {
 	call   *syntax.BashPPCall
 	handle string
+	bound  *bashPPFunc // ephemeral original method; never added to the parent registry
 }
 
 // bashPPGoSourceTaskCapture is the set of cells a launched GoSource task must
@@ -285,6 +286,14 @@ func (r *Runner) bashPPGoSourceTaskBody(call *syntax.BashPPCall) (*syntax.Block,
 // goroutine — so the returned pin, not a second evaluation in the child, is
 // what the task calls.
 func (r *Runner) bashPPGoSourceTaskFunc(call *syntax.BashPPCall) (*bashPPFunc, *bashPPGoSourcePin) {
+	if method, ok := call.CalleeExpr.(*syntax.BashPPSelectorExpr); ok && method.MethodValue && !r.bashPPNativeExpr(method.X) {
+		fn, err := r.goSourceLocalMethod(method, len(call.Args) > 0)
+		if err != nil {
+			r.exit.fatal(err)
+			return nil, nil
+		}
+		return r.goSourceTaskMethodPin(call, fn)
+	}
 	if call.CalleeExpr != nil {
 		cell, err := r.goSourceValueCell(call.CalleeExpr)
 		if err != nil {
@@ -298,12 +307,27 @@ func (r *Runner) bashPPGoSourceTaskFunc(call *syntax.BashPPCall) (*bashPPFunc, *
 		if !ok {
 			return nil, nil
 		}
-		return fn, &bashPPGoSourcePin{call: call, handle: cell.vr.Str}
+		return r.goSourcePinTaskCallable(call, fn, cell.vr.Str)
 	}
 	if len(call.Fun) != 1 {
-		// A selector callee is a method; its receiver binding is resolved by
-		// call dispatch, which this analysis does not duplicate.
-		return nil, nil
+		if len(call.Fun) > 1 && r.bashPPScope.lookup(call.Fun[0].Value) != nil {
+			var receiver syntax.BashPPExpr = &syntax.BashPPIdent{Name: call.Fun[0]}
+			for _, field := range call.Fun[1 : len(call.Fun)-1] {
+				receiver = &syntax.BashPPSelectorExpr{X: receiver, Sel: field}
+			}
+			method := &syntax.BashPPSelectorExpr{X: receiver, Sel: call.Fun[len(call.Fun)-1], MethodValue: true, ReceiverAddressable: true}
+			fn, err := r.goSourceLocalMethod(method, len(call.Args) > 0)
+			if err != nil {
+				r.exit.fatal(err)
+				return nil, nil
+			}
+			return r.goSourceTaskMethodPin(call, fn)
+		}
+		fn, ok := r.bashPPLookupFunc(call)
+		if !ok {
+			return nil, nil
+		}
+		return r.goSourceTaskMethodPin(call, fn)
 	}
 	name := call.Fun[0].Value
 	// A lexical binding is considered BEFORE a package-level `func` of the
@@ -327,13 +351,13 @@ func (r *Runner) bashPPGoSourceTaskFunc(call *syntax.BashPPCall) (*bashPPFunc, *
 		if !ok {
 			return nil, nil
 		}
-		return fn, &bashPPGoSourcePin{call: call, handle: cell.vr.Str}
+		return r.goSourcePinTaskCallable(call, fn, cell.vr.Str)
 	}
 	// A closure held in a shell variable: the cell's value is the handle, so
 	// the exact function is resolvable without running anything.
 	if vr := r.lookupVar(name); vr.Kind == expand.String {
 		if fn, ok := r.bashPPClosure(vr.Str); ok {
-			return fn, &bashPPGoSourcePin{call: call, handle: vr.Str}
+			return r.goSourcePinTaskCallable(call, fn, vr.Str)
 		}
 	}
 	if fn, ok := r.bashPPFuncs[name]; ok {
