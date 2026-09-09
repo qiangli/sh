@@ -2,6 +2,7 @@ package interp
 
 // Sprint: #118; Story: #54; Story-ID: c3a60493cde9
 import (
+	"cmp"
 	"fmt"
 	"sort"
 	"strconv"
@@ -376,47 +377,60 @@ func nativeSlicePrimitiveEqual(a, b bashPPBridgeValue) (bool, error) {
 		return false, nil
 	}
 	for i := range left {
-		lk, err := nativeSliceScalarKey(left[i])
+		equal, err := nativeSliceScalarEqual(left[i], right[i])
 		if err != nil {
 			return false, err
 		}
-		rk, err := nativeSliceScalarKey(right[i])
-		if err != nil {
-			return false, err
-		}
-		if lk != rk {
+		if !equal {
 			return false, nil
 		}
 	}
 	return true, nil
 }
 
-// nativeSliceScalarKey maps a primitive element to a canonical comparison key.
-// Integer kinds normalise so an int and a uint holding the same value compare
-// equal, matching a same-typed element slice crossing the boundary.
-func nativeSliceScalarKey(v bashPPBridgeValue) (string, error) {
-	switch v.Kind {
-	case "string":
-		return "s:" + v.Text, nil
-	case "bool":
-		return "b:" + v.Text, nil
-	case "int", "uint":
-		if n, err := strconv.ParseInt(v.Text, 10, 64); err == nil {
-			return "n:" + strconv.FormatInt(n, 10), nil
-		}
-		u, err := strconv.ParseUint(v.Text, 10, 64)
-		if err != nil {
-			return "", fmt.Errorf("gosource: invalid integer element %q", v.Text)
-		}
-		return "n:" + strconv.FormatUint(u, 10), nil
-	case "float":
-		f, err := strconv.ParseFloat(v.Text, 64)
-		if err != nil {
-			return "", fmt.Errorf("gosource: invalid float element %q", v.Text)
-		}
-		return "f:" + strconv.FormatFloat(f, 'g', -1, 64), nil
+// nativeSliceScalarEqual compares primitive elements with Go's == semantics.
+// In particular, NaN never equals itself while signed zero values compare equal.
+func nativeSliceScalarEqual(a, b bashPPBridgeValue) (bool, error) {
+	if a.Kind != b.Kind {
+		return false, fmt.Errorf("gosource: slices.Equal requires uniform element kinds, got %s and %s", a.Kind, b.Kind)
 	}
-	return "", fmt.Errorf("gosource: slices.Equal requires primitive elements, got %s", v.Kind)
+	switch a.Kind {
+	case "string":
+		return a.Text == b.Text, nil
+	case "bool":
+		return a.Text == b.Text, nil
+	case "int":
+		ai, err := strconv.ParseInt(a.Text, 10, 64)
+		if err != nil {
+			return false, fmt.Errorf("gosource: invalid integer element %q", a.Text)
+		}
+		bi, err := strconv.ParseInt(b.Text, 10, 64)
+		if err != nil {
+			return false, fmt.Errorf("gosource: invalid integer element %q", b.Text)
+		}
+		return ai == bi, nil
+	case "uint":
+		au, err := strconv.ParseUint(a.Text, 10, 64)
+		if err != nil {
+			return false, fmt.Errorf("gosource: invalid unsigned element %q", a.Text)
+		}
+		bu, err := strconv.ParseUint(b.Text, 10, 64)
+		if err != nil {
+			return false, fmt.Errorf("gosource: invalid unsigned element %q", b.Text)
+		}
+		return au == bu, nil
+	case "float":
+		af, err := strconv.ParseFloat(a.Text, 64)
+		if err != nil {
+			return false, fmt.Errorf("gosource: invalid float element %q", a.Text)
+		}
+		bf, err := strconv.ParseFloat(b.Text, 64)
+		if err != nil {
+			return false, fmt.Errorf("gosource: invalid float element %q", b.Text)
+		}
+		return af == bf, nil
+	}
+	return false, fmt.Errorf("gosource: slices.Equal requires primitive elements, got %s", a.Kind)
 }
 
 // nativeSliceSorted returns the elements ordered like slices.Sort over an ordered
@@ -481,7 +495,7 @@ func nativeSliceElementLess(a, b bashPPBridgeValue) (bool, error) {
 		if err != nil {
 			return false, fmt.Errorf("gosource: invalid float element %q", b.Text)
 		}
-		return af < bf, nil
+		return cmp.Less(af, bf), nil
 	}
 	return false, fmt.Errorf("gosource: slices.Sort requires ordered primitive elements, got %s", a.Kind)
 }
