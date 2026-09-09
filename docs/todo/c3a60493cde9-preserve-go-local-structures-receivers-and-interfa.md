@@ -4,7 +4,7 @@ kind: task
 title: Preserve Go local structures receivers and interface values
 seq: 54
 status: doing
-priority: p0
+priority: p1
 created: 2026-09-09T06:39:40.110712Z
 assignee: s118-go-captures
 sprint: 118

@@ -3,10 +3,10 @@ id: 825f8083451e
 kind: task
 title: Implement unchanged Go channel expression and frame semantics
 seq: 51
-status: doing
+status: todo
 priority: p0
 created: 2026-09-09T06:37:55.650583Z
-assignee: s118-complex
+assignee: qiangli
 sprint: 118
 ---
 

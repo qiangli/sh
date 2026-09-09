@@ -3,11 +3,15 @@ id: 99bd1de0093b
 kind: task
 title: Complete Go source conversion and default constant lowering
 seq: 53
-status: doing
+status: done
 priority: p0
 created: 2026-09-09T06:37:55.781661Z
-assignee: s118-go-frontend
+weave: 74
+assignee: qiangli
 sprint: 118
+closed: 2026-09-09T18:18:37.665354Z
+resolution: fixed
+closed_by: claude-opus4.8-v
 ---
 
-Sprint118 candidate002 realfailures inbothmodes: examples/base64-encoding anddirectories []byte/string conversions unsupported *ast.ArrayType. Lowered examples/constants prints600000000000 whereasnative6e+11 due untyped constant defaulttype. Generics andtypedeclarations maystillbeunsupported; fix directfrontend/lowerblocking subsets basedactualunchangedsource plus full97Tourlower failures. Own ONLY gosource/* lower/gosource.go andotherlowerfileswhenneeded, syntaxmetadata onlynotify beforeedit. No interp/nativebridge/concurrencyfiles (otherworkers). Reproduce exactupstreamsource unchanged; add meaningfulthree-mode tests possibleusingcurrentinterp; preserve117120+33focusedsuite. No fullsource forwarding/nativego runinterpreter. CommitproperSprint118 Story+ID no subagents/push/closure.30minbounded shipArrayType conversion+constantlower first, thenreportgenericsplan. Parent6f0c4d9a31be.
+Sprint 118 continuation on current sh 037aaf8687e0aa049efb4f7a2dceb3a4941e9bbc. Read CLAUDE.md and /Users/qiangli/projects/poc/dhnt/docs/sprint-118-handoff.md. First bounded slice: locate the two retained importdecl0 failures in candidate013 checker evidence under /Users/qiangli/.bashy/sprint118, reproduce one against the authenticated Go 1.27 toolchain, fix their coherent gosource/lower frontend cause, and add focused unchanged-source regressions. Own gosource/* and lower frontend files only. Do not touch interp/native/concurrency files, frozen candidates, or run broad corpora. Use GOMAXPROCS=2 and GOFLAGS=-p=2. Commit with Sprint: #118, Story: #53, Story-ID: 99bd1de0093b trailers. Do not push, merge, close, or claim corpus closure. Parent 6f0c4d9a31be.
