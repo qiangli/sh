@@ -90,6 +90,11 @@ func (r *Runner) bashPPGoSourceEvaluatedCall(call *syntax.BashPPCall) *syntax.Ba
 		}
 		out.Args[i] = replacement
 	}
+	if out != call {
+		// This clone carries values prepared in the launching goroutine.
+		// Original expression trees must not execute again in the child.
+		out.ArgExprs = nil
+	}
 	return out
 }
 

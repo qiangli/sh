@@ -407,7 +407,16 @@ func (r *Runner) bashPPUnaryScalar(op token.Token, x bashPPScalar) (bashPPScalar
 		if op == token.XOR && x.value.Kind() != constant.Int {
 			return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-OPERAND: operator ^ requires integer operand")
 		}
-		return r.bashPPTypedScalarResult(constant.UnaryOp(op, x.value, 0), x.typ, x.runtime)
+		precision := uint(0)
+		if r.bashPPGoSource && op == token.XOR {
+			typ := r.bashPPUnderlyingType(&syntax.BashPPNamedType{Name: &syntax.Lit{Value: x.typ}})
+			if named, ok := typ.(*syntax.BashPPNamedType); ok && named.Name != nil && bashPPIntegerType(named.Name.Value) {
+				if width, signed := bashPPIntegerWidth(named.Name.Value); !signed {
+					precision = uint(width)
+				}
+			}
+		}
+		return r.bashPPTypedScalarResult(constant.UnaryOp(op, x.value, precision), x.typ, x.runtime)
 	case token.NOT:
 		if x.value.Kind() != constant.Bool {
 			return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-OPERAND: operator ! requires boolean operand")

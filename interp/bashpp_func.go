@@ -1134,6 +1134,9 @@ func (r *Runner) bashPPTypedCallArgs(call *syntax.BashPPCall, fn *bashPPFunc) (r
 			failure = errBashPPScalarInterrupted
 		}
 	}()
+	if r.bashPPGoSource && !call.Ellipsis.IsValid() {
+		return r.goSourceCallArguments(call, fn)
+	}
 	if len(call.ArgExprs) != len(call.Args) {
 		return nil, false, fmt.Errorf("BASHPP-EEXPR-CALL: inconsistent positioned scalar arguments")
 	}
@@ -1369,6 +1372,18 @@ func (r *Runner) bashPPCallValues(c *syntax.BashPPCall, fn *bashPPFunc) (result 
 			success = false
 		}
 	}()
+	if r.bashPPGoSource && !c.Ellipsis.IsValid() && len(c.ArgExprs) == len(c.Args) {
+		args, ok, err := r.goSourceCallArguments(c, fn)
+		if err != nil {
+			if err != errBashPPScalarInterrupted {
+				r.errf("%s%v\n", r.bashErrPrefix(c.Pos()), err)
+				r.exit = exitStatus{code: 2}
+			}
+			r.bashPPShortFailureSeq++
+			return nil, false
+		}
+		return args, ok
+	}
 	r.bashPPCallCells = nil
 	r.bashPPCallChannels = nil
 	if required := bashppRequiredAfterDefault(fn.params()); required != "" {
@@ -1666,6 +1681,9 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 					expand.Variable{Set: true, Kind: expand.Indexed, List: rest}, false)
 			}
 			break
+		}
+		if param.name == "" {
+			continue
 		}
 		_ = r.bashPPScope.declare(param.name,
 			expand.Variable{Set: true, Kind: expand.String, Str: args[i]}, false)
@@ -2092,6 +2110,15 @@ func (r *Runner) bashPPReturnStmt(ctx context.Context, ret *syntax.BashPPReturn)
 			r.bashPPReturnScalarExpr(conv)
 			return
 		}
+		if cell, handled, err := r.goSourceBuiltinResult(ret.Call); handled {
+			if err != nil {
+				r.bashPPShortFailureSeq++
+				return
+			}
+			r.bashPPReturn = bashPPReturnState{active: true, values: []string{cell.vr.String()}, cells: []*bashPPCell{bashPPCopyAssignmentCell(cell)}}
+			r.exit.returning = true
+			return
+		}
 		fn, ok := r.bashPPLookupFunc(ret.Call)
 		if !ok {
 			r.bashPPShortFailureSeq++
@@ -2376,8 +2403,7 @@ type bashPPParam struct {
 }
 
 // bashppParams flattens a parameter list into one slot per declared name, plus
-// a slot for an unnamed variadic group — `func f(...int)` — which accepts
-// arguments without binding them.
+// slots for unnamed parameters, which accept arguments without binding them.
 func bashppParams(fields []*syntax.BashPPField) []bashPPParam {
 	var params []bashPPParam
 	for _, f := range fields {
@@ -2391,6 +2417,10 @@ func bashppParams(fields []*syntax.BashPPField) []bashPPParam {
 				name = f.Names[0].Value
 			}
 			params = append(params, bashPPParam{name: name, declared: declared, typ: f.FieldTypeExpr, variadic: true})
+			continue
+		}
+		if len(f.Names) == 0 {
+			params = append(params, bashPPParam{declared: declared, typ: f.FieldTypeExpr})
 			continue
 		}
 		for _, n := range f.Names {
