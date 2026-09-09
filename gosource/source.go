@@ -11,6 +11,7 @@ import (
 	"go/scanner"
 	"go/token"
 	"go/types"
+	"go/version"
 	"io"
 	"sort"
 	"strings"
@@ -53,6 +54,10 @@ type Options struct {
 	RunMain bool
 	// Importer may resolve module dependencies. Nil uses the Go export importer.
 	Importer types.Importer
+	// GoVersion is passed unchanged to types.Config.GoVersion. Empty preserves
+	// the checker default; a nonempty value selects Go language semantics, not
+	// an SDK executable. Invalid or newer versions are rejected by the checker.
+	GoVersion string
 }
 type Program struct {
 	File          *syntax.File
@@ -82,6 +87,9 @@ func Parse(r io.Reader, name string, options Options) (*Program, error) {
 // Load processes a single package in lexical filename order, matching the Go
 // toolchain. Source bytes are neither modified nor executed by the native toolchain.
 func Load(sources []Source, options Options) (*Program, error) {
+	if options.GoVersion != "" && !version.IsValid(options.GoVersion) {
+		return nil, fmt.Errorf("gosource: invalid Go version %q", options.GoVersion)
+	}
 	if len(sources) == 0 {
 		return nil, fmt.Errorf("gosource: no source files")
 	}
@@ -119,7 +127,7 @@ func Load(sources []Source, options Options) (*Program, error) {
 		imp = importer.Default()
 	}
 	var typeErrors ErrorList
-	config := types.Config{Importer: imp, Error: func(err error) { typeErrors = append(typeErrors, err) }}
+	config := types.Config{Importer: imp, GoVersion: options.GoVersion, Error: func(err error) { typeErrors = append(typeErrors, err) }}
 	pkg, err := config.Check(p.Package, c.fset, c.files, c.info)
 	// Match the native checker test flow: parser diagnostics first, followed
 	// by semantic diagnostics from every recoverable file. Check's returned
