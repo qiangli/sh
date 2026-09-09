@@ -1045,6 +1045,7 @@ func (i *BashPPIf) End() Pos {
 // type in FieldType, which is what keeps the result arity queryable from the tree
 // without re-reading whether each word was a name or a type.
 type BashPPField struct {
+	Tag       *Lit   // optional original Go struct tag, including its quotes
 	Names     []*Lit // the declared identifiers, empty for an unnamed result type
 	FieldType *Lit   // the declared type, or nil for an untyped parameter
 	// Embedded distinguishes an ordinary anonymous struct field from an
@@ -1109,6 +1110,9 @@ func (f *BashPPField) Pos() Pos {
 	return Pos{}
 }
 func (f *BashPPField) End() Pos {
+	if f.Tag != nil {
+		return f.Tag.End()
+	}
 	if f.Default != nil {
 		return f.Default.End()
 	}

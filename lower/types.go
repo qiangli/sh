@@ -242,6 +242,9 @@ func (e *emitter) structFields(fields []*syntax.BashPPField) (string, error) {
 		if err != nil {
 			return "", err
 		}
+		if f.Tag != nil {
+			typ += " " + f.Tag.Value
+		}
 		if f.Embedded {
 			parts = append(parts, typ)
 			continue

@@ -252,6 +252,7 @@ func Load(sources []Source, options Options) (*Program, error) {
 	if c.err != nil {
 		return nil, c.err
 	}
+	c.attachEmbedDirectives(p.File)
 	p.File.Sources = append([]syntax.SourceFile(nil), p.Sources...)
 	return p, nil
 }

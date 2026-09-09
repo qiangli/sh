@@ -87,7 +87,9 @@ func CheckProfile(file *syntax.File, origin string) ErrorList {
 // CheckProfileWithFacts is CheckProfile with session declarations supplied
 // explicitly. See ProfileFacts.
 func CheckProfileWithFacts(file *syntax.File, origin string, facts *ProfileFacts) ErrorList {
-	if file == nil {
+	// Ordinary Go is checked by go/types during ingestion and after emission.
+	// Bash++ profile restrictions (including receiver registries) do not apply.
+	if file == nil || file.GoSource {
 		return nil
 	}
 	c := &profileChecker{

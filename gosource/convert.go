@@ -193,6 +193,9 @@ func (c *converter) fields(list *ast.FieldList, structure bool) []*s.BashPPField
 		}
 		v.FieldType = c.lit(t.Pos(), c.text(t))
 		v.FieldTypeExpr = c.typ(t)
+		if f.Tag != nil {
+			v.Tag = c.lit(f.Tag.Pos(), f.Tag.Value)
+		}
 		for _, n := range f.Names {
 			v.Names = append(v.Names, c.ident(n))
 		}

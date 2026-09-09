@@ -416,6 +416,7 @@ func Walk(node Node, f func(Node) bool) {
 			Walk(node.Body, f)
 		}
 	case *BashPPField:
+		walkNilable(node.Tag, f)
 		walkList(node.Names, f)
 		walkNilable(node.FieldType, f)
 		walkNilable(node.FieldTypeExpr, f)

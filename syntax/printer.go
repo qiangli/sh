@@ -473,6 +473,9 @@ func (p *Printer) bashppFields(fields []*BashPPField) {
 			}
 			p.writeLit(f.FieldType.Value)
 		}
+		if f.Tag != nil {
+			p.writeLit(" " + f.Tag.Value)
+		}
 		if f.Default != nil {
 			p.writeLit(" = ")
 			p.word(f.Default)
@@ -1457,6 +1460,9 @@ func (p *Printer) bashppType(typ BashPPTypeExpr) {
 			} else if field.FieldType != nil {
 				p.writeLit(field.FieldType.Value)
 			}
+			if field.Tag != nil {
+				p.writeLit(" " + field.Tag.Value)
+			}
 		}
 		p.writeLit("}")
 	case *BashPPPointerType:
@@ -1778,6 +1784,9 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 					p.spacedString(field.Names[0].Value, field.Names[0].Pos())
 				}
 				p.spacedString(field.FieldType.Value, field.FieldType.Pos())
+				if field.Tag != nil {
+					p.spacedString(field.Tag.Value, field.Tag.Pos())
+				}
 			}
 			p.spacedString("}", cmd.Rbrace)
 		}
