@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"go/constant"
 	"go/token"
+	"reflect"
 	"strconv"
 	"strings"
 
@@ -215,11 +216,16 @@ func (r *Runner) bashPPBridgeExpr(expr syntax.BashPPExpr) (bashPPBridgeValue, er
 			return bashPPBridgeValue{Kind: "nil"}, nil
 		}
 		if r.bashPPScope != nil {
-			if cell := r.bashPPScope.lookup(x.Name.Value); cell != nil && cell.vr.Kind == expand.Object {
-				if value, ok := cell.vr.Obj.(*bashPPBridgeValue); ok {
-					return *value, nil
+			if cell := r.bashPPScope.lookup(x.Name.Value); cell != nil {
+				switch {
+				case cell.pointer || cell.interfaceValue != nil:
+					return r.bashPPBridgeCell(cell)
+				case cell.vr.Kind == expand.Object:
+					if value, ok := cell.vr.Obj.(*bashPPBridgeValue); ok {
+						return *value, nil
+					}
+					return r.bashPPBridgeCollection(cell.vr.Obj, cell.valueMeta, cell.declType)
 				}
-				return r.bashPPBridgeCollection(cell.vr.Obj, cell.valueMeta, cell.declType)
 			}
 		}
 	case *syntax.BashPPCall:
@@ -268,10 +274,28 @@ func (r *Runner) bashPPBridgeExpr(expr syntax.BashPPExpr) (bashPPBridgeValue, er
 		if r.bashPPNativeExpr(x.X) {
 			return r.bashPPNativeSlice(x)
 		}
+	case *syntax.BashPPDerefExpr:
+		ptr, err := r.bashPPPointerExprValue(x.X)
+		if err != nil {
+			return bashPPBridgeValue{}, err
+		}
+		if ptr == nil {
+			return bashPPBridgeValue{}, fmt.Errorf("gosource: invalid memory address or nil pointer dereference")
+		}
+		value, meta, typ, err := ptr.read()
+		if err != nil {
+			return bashPPBridgeValue{}, err
+		}
+		return r.bashPPBridgeCollection(value, meta, typ)
 	case *syntax.BashPPAddressExpr:
 		if lit, ok := x.X.(*syntax.BashPPCompositeLit); ok && r.bashPPNativeType(lit.LitType) {
 			return r.bashPPNativeComposite(lit, true)
 		}
+		ptr, err := r.bashPPPointerExprValue(x)
+		if err != nil {
+			return bashPPBridgeValue{}, err
+		}
+		return r.bashPPBridgePointerValue(ptr)
 	case *syntax.BashPPCompositeLit:
 		if r.bashPPNativeType(x.LitType) {
 			return r.bashPPNativeComposite(x, false)
@@ -286,13 +310,124 @@ func (r *Runner) bashPPBridgeExpr(expr syntax.BashPPExpr) (bashPPBridgeValue, er
 	if err != nil {
 		return bashPPBridgeValue{}, err
 	}
-	return bridgeScalar(scalar)
+	value, err := bridgeScalar(scalar)
+	if err != nil {
+		return value, err
+	}
+	return r.bashPPBridgeDefinedScalar(value)
 }
+
+// bashPPBridgeFloatText normalises one shell-held float, including the exact
+// rational spelling the interpreter uses for a non-representable constant.
+func bashPPBridgeFloatText(text string) (string, bool) {
+	number := constant.MakeFromLiteral(text, token.FLOAT, 0)
+	if number.Kind() == constant.Unknown {
+		numerator, denominator, ok := strings.Cut(text, "/")
+		if !ok {
+			return "", false
+		}
+		top := constant.MakeFromLiteral(numerator, token.FLOAT, 0)
+		bottom := constant.MakeFromLiteral(denominator, token.FLOAT, 0)
+		if top.Kind() == constant.Unknown || bottom.Kind() == constant.Unknown || constant.Sign(bottom) == 0 {
+			return "", false
+		}
+		number = constant.BinaryOp(top, token.QUO, bottom)
+	}
+	value, _ := constant.Float64Val(number)
+	return strconv.FormatFloat(value, 'g', -1, 64), true
+}
+
+// bashPPBridgeDefinedScalar re-reads a scalar the shell carries as text at the
+// underlying kind of the original defined type that names it, so a value of
+// `type Celsius float64` crosses the boundary as a float and keeps the
+// materialised Celsius identity rather than arriving as a string.
+func (r *Runner) bashPPBridgeDefinedScalar(value bashPPBridgeValue) (bashPPBridgeValue, error) {
+	if value.Kind != "string" || value.Type == "" {
+		return value, nil
+	}
+	if _, local := r.bashPPTypes[value.Type]; !local {
+		return value, nil
+	}
+	named := &syntax.BashPPNamedType{Name: &syntax.Lit{Value: value.Type}}
+	underlying := bashPPTypeText(r.bashPPUnderlyingType(named))
+	switch {
+	case underlying == "string":
+		return value, nil
+	case underlying == "bool":
+		if value.Text != "true" && value.Text != "false" {
+			return value, fmt.Errorf("gosource: %s value %q is not a bool", value.Type, value.Text)
+		}
+		value.Kind = "bool"
+	case underlying == "float32" || underlying == "float64":
+		// The shell may hold an exact non-integer constant in its rational
+		// form, which is the interpreter's own spelling and not a Go literal.
+		number, ok := bashPPBridgeFloatText(value.Text)
+		if !ok {
+			return value, fmt.Errorf("gosource: %s value %q is not a %s", value.Type, value.Text, underlying)
+		}
+		value.Kind, value.Text = "float", number
+	case bashPPIntegerType(underlying):
+		if _, err := strconv.ParseInt(value.Text, 10, 64); err != nil {
+			return value, fmt.Errorf("gosource: %s value %q is not an %s", value.Type, value.Text, underlying)
+		}
+		value.Kind = "int"
+		if strings.HasPrefix(underlying, "uint") || underlying == "byte" {
+			value.Kind = "uint"
+		}
+	}
+	return value, nil
+}
+
+// bashPPBridgePointerValue transports a pointer to an original value as the
+// pointee it addresses, so the dependency observes a real *T — Go's &{1 2}
+// rather than a struct. The identity resolves to the original interpreter
+// storage for method callbacks. General native out-parameters fail before the
+// dependency executes because native writes have no complete alias contract.
+func (r *Runner) bashPPBridgePointerValue(ptr *bashPPPointer) (bashPPBridgeValue, error) {
+	if ptr == nil {
+		return bashPPBridgeValue{Kind: "nil"}, nil
+	}
+	value, meta, typ, err := ptr.read()
+	if err != nil {
+		return bashPPBridgeValue{}, err
+	}
+	inner, err := r.bashPPBridgeCollection(value, meta, typ)
+	if err != nil {
+		return bashPPBridgeValue{}, err
+	}
+	req, err := r.bashPPEvalRequest()
+	if err != nil {
+		return bashPPBridgeValue{}, err
+	}
+	session := req.Bridge
+	session.mu.Lock()
+	if session.origins == nil {
+		session.origins = map[uint64]*bashPPPointer{}
+	}
+	var origin uint64
+	for id, existing := range session.origins {
+		if existing.target == ptr.target && reflect.DeepEqual(existing.path, ptr.path) {
+			origin = id
+			break
+		}
+	}
+	if origin == 0 {
+		session.originNext++
+		origin = session.originNext
+		session.origins[origin] = ptr
+	}
+	session.mu.Unlock()
+	return bashPPBridgeValue{Origin: origin, Session: session.id, Kind: "pointer", Type: "*" + inner.Type, Elements: []bashPPBridgeValue{inner}}, nil
+}
+
 func (r *Runner) bashPPBridgeCollection(value any, meta *bashPPCollectionMeta, typ syntax.BashPPTypeExpr) (bashPPBridgeValue, error) {
 	if meta != nil && meta.interfaceValue != nil {
 		cell := meta.interfaceValue.cell
 		if meta.interfaceValue.nilIface || cell == nil {
 			return bashPPBridgeValue{Kind: "nil"}, nil
+		}
+		if cell.pointer {
+			return r.bashPPBridgePointerValue(cell.pointerValue)
 		}
 		if cell.vr.Kind == expand.Object {
 			return r.bashPPBridgeCollection(cell.vr.Obj, cell.valueMeta, cell.declType)
@@ -491,6 +626,13 @@ func (r *Runner) bashPPBridgeCell(cell *bashPPCell) (bashPPBridgeValue, error) {
 			return bashPPBridgeValue{Kind: "nil"}, nil
 		}
 		return r.bashPPBridgeCell(cell.interfaceValue.cell)
+	}
+	if cell.pointer {
+		value, err := r.bashPPBridgePointerValue(cell.pointerValue)
+		if value.Type == "" {
+			value.Type = bashPPTypeText(cell.declType)
+		}
+		return value, err
 	}
 	if cell.vr.Kind == expand.Object {
 		if value, ok := cell.vr.Obj.(*bashPPBridgeValue); ok {

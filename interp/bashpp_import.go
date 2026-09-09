@@ -40,6 +40,11 @@ type bashPPEvalRequest struct {
 	Argv       []string
 	ModuleDir  string
 	RuntimeEnv []string
+	// LocalTypes materialises the original program's own named types inside
+	// the dependency helper. Sprint #118 Story #54 (c3a60493cde9).
+	LocalTypes    []bashPPLocalType
+	CallbackOwner *Runner
+	CallbackDepth int
 }
 
 type bashPPEvaluator interface {
@@ -56,12 +61,13 @@ type bashPPValuesEvaluator interface {
 // first on PATH. Tests may inject the exact evaluator and identity under
 // review without exposing an evaluator API to embedders.
 type bashPPToolchain struct {
-	goBinary  string
-	goRoot    string
-	goVersion string
-	eval      bashPPEvaluator
-	bridge    *bashPPNativeSession
-	moduleDir string
+	goBinary      string
+	goRoot        string
+	goVersion     string
+	eval          bashPPEvaluator
+	bridge        *bashPPNativeSession
+	callbackDepth int
+	moduleDir     string
 }
 
 type bashPPGoReview struct {
@@ -407,6 +413,9 @@ func (r *Runner) bashPPEvalRequest() (bashPPEvalRequest, error) {
 		env = setEnvString(env, "GOTOOLCHAIN", r.bashPPTools.goVersion)
 	}
 	if r.bashPPGoSource && r.bashPPTools.bridge == nil {
+		// The dependency helper materialises the original local types but
+		// never their bodies; a mirrored String/Error asks this runner to run
+		// the original body. Sprint #118 Story #54 (c3a60493cde9).
 		r.bashPPTools.bridge = &bashPPNativeSession{}
 	}
 	moduleDir := ""
@@ -417,7 +426,7 @@ func (r *Runner) bashPPEvalRequest() (bashPPEvalRequest, error) {
 	if r.bashPPGoSource {
 		runtimeEnv = r.bashPPGoSourceEnvironment()
 	}
-	return bashPPEvalRequest{RuntimeEnv: runtimeEnv, ModuleDir: moduleDir, Argv: append([]string{r.filename}, r.Params...), Bridge: r.bashPPTools.bridge, Go: r.bashPPTools.goBinary, Dir: r.Dir, Env: env, Stdin: r.stdin,
+	return bashPPEvalRequest{CallbackOwner: r, CallbackDepth: r.bashPPTools.callbackDepth, LocalTypes: r.bashPPLocalTypeDescriptors(), RuntimeEnv: runtimeEnv, ModuleDir: moduleDir, Argv: append([]string{r.filename}, r.Params...), Bridge: r.bashPPTools.bridge, Go: r.bashPPTools.goBinary, Dir: r.Dir, Env: env, Stdin: r.stdin,
 		Stdout: r.bashPPWriter(r.stdout), Stderr: r.bashPPWriter(r.stderr), Imports: r.bashPPImports}, nil
 }
 
