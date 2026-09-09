@@ -31,6 +31,11 @@ func cloneBashPPTypeSet(src map[string]bool) map[string]bool {
 // arrays and structs deliberately do not.
 func (r *Runner) bashPPValidateTypeRepresentation(typ syntax.BashPPTypeExpr, active, direct map[string]bool) error {
 	switch x := typ.(type) {
+	case *syntax.BashPPChanType:
+		if r.bashPPGoSource {
+			return r.bashPPValidateTypeRepresentation(x.Element, active, make(map[string]bool))
+		}
+		return fmt.Errorf("BASHPP-ESTRUCT-FIELD-TYPE: unsupported field type %s", bashPPTypeText(typ))
 	case *syntax.BashPPTypeParamType:
 		return nil
 	case *syntax.BashPPUnionType, *syntax.BashPPApproxType:

@@ -1117,8 +1117,21 @@ func (r *Runner) bashPPTypedCallArgs(call *syntax.BashPPCall, fn *bashPPFunc) ([
 	}
 	args := make([]string, len(call.ArgExprs))
 	cells := make([]*bashPPCell, len(call.ArgExprs))
+	channels := make([]*bashPPChannel, len(call.ArgExprs))
 	interfaces := make([]*bashPPInterfaceValue, len(call.ArgExprs))
 	for i, expr := range call.ArgExprs {
+		if r.bashPPGoSource {
+			if cell, handled, err := r.goSourceChannelValueCell(expr); handled {
+				if err != nil {
+					return nil, false, err
+				}
+				if cell.channel != nil && cell.channelOwner != r.bashPPConcurrent {
+					return nil, false, fmt.Errorf("channel belongs to another task group")
+				}
+				channels[i], cells[i], args[i] = cell.channel, cell, cell.vr.String()
+				continue
+			}
+		}
 		structured, err := r.bashPPStructuredArgCell(call.Args[i], expr)
 		if err != nil {
 			return nil, false, err
@@ -1147,7 +1160,7 @@ func (r *Runner) bashPPTypedCallArgs(call *syntax.BashPPCall, fn *bashPPFunc) ([
 		cells[i], args[i] = cell, text
 	}
 	r.bashPPCallInterfaces = interfaces
-	bound, ok := r.bashPPBindCall(fn, args, nil, cells, nil, len(args))
+	bound, ok := r.bashPPBindCall(fn, args, channels, cells, nil, len(args))
 	return bound, ok, nil
 }
 
@@ -2102,6 +2115,15 @@ func (r *Runner) bashPPReturnStmt(ctx context.Context, ret *syntax.BashPPReturn)
 // bashPPReturnScalarExpr settles a single scalar result, retaining the value's
 // type so a defined type reaches the caller as itself.
 func (r *Runner) bashPPReturnScalarExpr(expr syntax.BashPPExpr) {
+	if cell, handled, err := r.goSourceChannelValueCell(expr); handled {
+		if err != nil {
+			r.bashPPGoSendError(expr, err)
+			return
+		}
+		r.bashPPReturn = bashPPReturnState{active: true, values: []string{cell.vr.String()}, cells: []*bashPPCell{cell}}
+		r.exit.returning = true
+		return
+	}
 	// A returned value need not be scalar: `return &V{…}`, `return *p` and
 	// `return v.Inner` all name storage the caller receives as a value, and
 	// the cell is the only thing that can carry it across the boundary.

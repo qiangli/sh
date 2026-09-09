@@ -29,6 +29,8 @@ func (r *Runner) goSourceCallableCell(expr syntax.BashPPExpr) (*bashPPCell, bool
 			if _, ok := r.bashPPClosure(cell.vr.Str); ok {
 				return bashPPCopyAssignmentCell(cell), true, nil
 			}
+			// A non-callable local binding shadows the package function too.
+			return nil, false, nil
 		}
 		if fn := r.bashPPFuncs[x.Name.Value]; fn != nil {
 			return &bashPPCell{vr: r.bashPPStoreFunc(fn)}, true, nil
@@ -51,6 +53,9 @@ func (r *Runner) goSourceCallableCell(expr syntax.BashPPExpr) (*bashPPCell, bool
 	return nil, false, nil
 }
 func (r *Runner) goSourceValueCell(expr syntax.BashPPExpr) (*bashPPCell, error) {
+	if cell, handled, err := r.goSourceChannelValueCell(expr); handled {
+		return cell, err
+	}
 	if cell, handled, err := r.goSourceCallableCell(expr); handled {
 		return cell, err
 	}

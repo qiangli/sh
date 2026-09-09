@@ -2073,9 +2073,17 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 		p.wantSpace = spaceRequired
 		p.command(cmd.Call, nil)
 	case *BashPPSend:
-		p.word(cmd.Chan)
+		if cmd.ChanExpr != nil {
+			p.bashppExpr(cmd.ChanExpr)
+		} else {
+			p.word(cmd.Chan)
+		}
 		p.writeLit(" <- ")
-		p.word(cmd.Value)
+		if cmd.ValueExpr != nil {
+			p.bashppExpr(cmd.ValueExpr)
+		} else {
+			p.word(cmd.Value)
+		}
 	case *BashPPReceive:
 		p.writeLit("<-")
 		p.word(cmd.Chan)

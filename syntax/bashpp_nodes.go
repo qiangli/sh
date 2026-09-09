@@ -1356,13 +1356,25 @@ func (m *BashPPMakeChan) End() Pos { return posAddCol(m.Rparen, 1) }
 // BashPPSend, BashPPReceive and BashPPClose are channel operations admitted
 // only while parsing an already committed Go region.
 type BashPPSend struct {
-	Chan  *Word
-	Arrow Pos
-	Value *Word
+	ChanExpr  BashPPExpr // authoritative GoSource channel operand
+	Chan      *Word
+	Arrow     Pos
+	Value     *Word
+	ValueExpr BashPPExpr
 }
 
-func (s *BashPPSend) Pos() Pos { return s.Chan.Pos() }
-func (s *BashPPSend) End() Pos { return s.Value.End() }
+func (s *BashPPSend) Pos() Pos {
+	if s.ChanExpr != nil {
+		return s.ChanExpr.Pos()
+	}
+	return s.Chan.Pos()
+}
+func (s *BashPPSend) End() Pos {
+	if s.ValueExpr != nil {
+		return s.ValueExpr.End()
+	}
+	return s.Value.End()
+}
 
 type BashPPReceive struct {
 	Arrow Pos

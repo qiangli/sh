@@ -648,7 +648,7 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 	case *ast.GoStmt:
 		cmd = &s.BashPPGo{Kw: c.lit(x.Go, "go"), Call: c.call(x.Call)}
 	case *ast.SendStmt:
-		cmd = &s.BashPPSend{Chan: c.word(x.Chan), Arrow: c.pos(x.Arrow), Value: c.word(x.Value)}
+		cmd = &s.BashPPSend{Chan: c.word(x.Chan), Arrow: c.pos(x.Arrow), Value: c.word(x.Value), ValueExpr: c.expr(x.Value), ChanExpr: c.expr(x.Chan)}
 	case *ast.SelectStmt:
 		out := &s.BashPPSelect{Select: c.pos(x.Select), Lbrace: c.pos(x.Body.Lbrace), Rbrace: c.pos(x.Body.Rbrace)}
 		for _, st := range x.Body.List {

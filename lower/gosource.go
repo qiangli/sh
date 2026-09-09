@@ -14,11 +14,22 @@ func (e *emitter) goSourceCommand(c syntax.Command) (string, bool, error) {
 		v, err := e.call(n.Call)
 		return "go " + v, true, err
 	case *syntax.BashPPSend:
-		ch, err := e.valueWord(n.Chan)
+		var ch string
+		var err error
+		if n.ChanExpr != nil {
+			ch, err = e.expr(n.ChanExpr)
+		} else {
+			ch, err = e.valueWord(n.Chan)
+		}
 		if err != nil {
 			return "", true, err
 		}
-		v, err := e.valueWord(n.Value)
+		var v string
+		if n.ValueExpr != nil {
+			v, err = e.expr(n.ValueExpr)
+		} else {
+			v, err = e.valueWord(n.Value)
+		}
 		return ch + " <- " + v, true, err
 	case *syntax.BashPPReceive:
 		ch, err := e.valueWord(n.Chan)
