@@ -167,6 +167,11 @@ type Runner struct {
 	// non-zero body status from a diagnosed short-declaration failure which
 	// must not be cleared while settling declared results.
 	bashPPShortFailureSeq uint64
+	// bashPPRecoverSeq counts the times `recover` has reported "nothing to
+	// recover" through the exit status. It is the provenance a hosted test
+	// callback needs: only a status this counter stamped may be reduced, and
+	// only when the counter moved while that one callback ran.
+	bashPPRecoverSeq uint64
 	// bashPPPanic is the panic currently unwinding this shell, if any. It is
 	// deliberately NOT copied into a subshell: a panic is scoped to the shell
 	// that raised it, exactly as a Go panic is scoped to its goroutine.
@@ -921,6 +926,14 @@ type exitStatus struct {
 	noNegate      bool // whether a surrounding `!` must not invert this status
 	errexitExempt bool // whether this failure inherited an errexit exemption
 
+	// recoverSeq stamps a status that `recover` itself reported, carrying the
+	// value [Runner.bashPPRecoverSeq] held when it did. It is provenance, not
+	// a status: a zero stamp, or a stamp older than the runner's counter,
+	// means this status came from somewhere else and must be taken at face
+	// value. clear() drops it, because a cleared status is no longer the
+	// answer recover gave.
+	recoverSeq uint64
+
 	// discarding qualifies exiting: a variable-assignment error in a
 	// non-interactive non-POSIX shell aborts the current top-level
 	// command (bash's DISCARD longjmp) rather than the whole shell.
@@ -945,6 +958,7 @@ func (e *exitStatus) clear() {
 	}
 	e.code = 0
 	e.err = nil
+	e.recoverSeq = 0
 }
 
 func (e *exitStatus) ok() bool { return e.code == 0 }

@@ -150,14 +150,40 @@ status no longer decides the test outcome: a Go `func(*testing.T)` returns no
 value and has no exit status, so only a terminating condition — a fatal
 interpreter error, an unrecovered panic, or an explicit exit — fails it.
 
-The exemption is not a blanket one. Interpreter diagnostics report
-`bashPPPanicStatus` and still fail their callback, an unrecovered panic still
-fails its callback, and both are pinned by the regression alongside the guarded
-root, the guarded `t.Run` callback, repeated empty subtest names, and a helper
-function that receives the capability and opens its own subtest:
+The exemption is not a blanket one, and the callback reduction is keyed to
+provenance rather than to the status value. Reading it as "status 1 does not
+fail a callback" would reduce any native or runtime failure reporting 1 to a
+pass. Instead `recover` stamps the status it reports with `Runner.bashPPRecoverSeq`
+(recorded on `exitStatus.recoverSeq`), and `testingCallbackStatus` discards a
+status 1 only when that stamp is the current one — recover reported it and
+nothing has reported since — and only when the stamp was issued while that one
+callback ran. A status carrying no stamp, a stamp superseded within the
+callback, or a stamp left by an earlier callback is a real failure and is
+returned unchanged, as is every terminating condition (explicit exit, fatal
+exit, a panic still unwinding) and every status other than 1.
+
+The provenance is what carries the guarantee, so it is pinned directly. These
+cases hold the status at 1 and vary only the stamp; a blanket condition reduces
+all of them to 0, so `unstamped status one`, `stamp superseded within the
+callback` and `stamp issued before this callback` fail against a blanket form
+and pass only against the narrowed one:
 
 ```sh
-go test ./interp -run '^TestGoSourceTestingRecoverGuardedCallback$' -count=1
+go test ./interp -run '^TestTestingCallbackStatus' -count=1
+```
+
+The end-to-end shapes are pinned separately: the guarded root, the guarded
+`t.Run` callback, repeated empty subtest names, a helper function that receives
+the capability and opens its own subtest, and — after a `recover` has already
+stamped the runner — a deliberate unrecovered panic (`exit status 2`),
+`t.Fatal` (fails via the capability) and a nil-channel send (`exit status 1`).
+These pin the rule through the real scheduler but do not by themselves
+distinguish the narrowed condition from a blanket one, because each of their
+failures is already carried by `exit.err`, by the panic status, or by the
+capability rather than by a bare residual status 1:
+
+```sh
+go test ./interp -run '^TestGoSourceTestingRecover' -count=1
 ```
 
 This shape is exactly how the pinned corpus writes TestAsValidation's subtests,

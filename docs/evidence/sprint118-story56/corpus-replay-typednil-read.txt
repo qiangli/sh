@@ -1,0 +1,35 @@
+=== RUN   TestGoSourceTestingErrorsCorpus
+    gosource_testing_corpus_test.go:70: REGISTRATION [{"Name":"TestNewEqual","Source":"/Users/qiangli/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.0.darwin-arm64/src/errors/errors_test.go","Line":12,"Column":1},{"Name":"TestErrorMethod","Source":"/Users/qiangli/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.0.darwin-arm64/src/errors/errors_test.go","Line":28,"Column":1},{"Name":"TestJoinReturnsNil","Source":"/Users/qiangli/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.0.darwin-arm64/src/errors/join_test.go","Line":13,"Column":1},{"Name":"TestJoin","Source":"/Users/qiangli/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.0.darwin-arm64/src/errors/join_test.go","Line":25,"Column":1},{"Name":"TestJoinErrorMethod","Source":"/Users/qiangli/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.0.darwin-arm64/src/errors/join_test.go","Line":55,"Column":1},{"Name":"TestIs","Source":"/Users/qiangli/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.0.darwin-arm64/src/errors/wrap_test.go","Line":16,"Column":1},{"Name":"TestAs","Source":"/Users/qiangli/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.0.darwin-arm64/src/errors/wrap_test.go","Line":95,"Column":1},{"Name":"TestAsValidation","Source":"/Users/qiangli/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.0.darwin-arm64/src/errors/wrap_test.go","Line":219,"Column":1},{"Name":"TestAsType","Source":"/Users/qiangli/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.0.darwin-arm64/src/errors/wrap_test.go","Line":242,"Column":1},{"Name":"TestUnwrap","Source":"/Users/qiangli/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.0.darwin-arm64/src/errors/wrap_test.go","Line":389,"Column":1}]
+=== RUN   TestGoSourceTestingErrorsCorpus/TestNewEqual
+=== RUN   TestGoSourceTestingErrorsCorpus/TestErrorMethod
+=== RUN   TestGoSourceTestingErrorsCorpus/TestJoinReturnsNil
+=== RUN   TestGoSourceTestingErrorsCorpus/TestJoin
+    gosource_testing_corpus_test.go:81: original body: exit status 2; BASHPP-EASSIGN-MISMATCH: cannot use value as error
+=== RUN   TestGoSourceTestingErrorsCorpus/TestJoinErrorMethod
+    gosource_testing_corpus_test.go:81: original body: exit status 2; /Users/qiangli/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.0.darwin-arm64/src/errors/join_test.go:58:23: BASHPP-ERANGE-TYPE: /Users/qiangli/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.0.darwin-arm64/src/errors/join_test.go:58:23: BASHPP-EEXPR-FORM: unsupported scalar expression *syntax.BashPPCompositeLit
+=== RUN   TestGoSourceTestingErrorsCorpus/TestIs
+    gosource_testing_corpus_test.go:81: original body: exit status 2; BASHPP-ECOLLECTION-ELEMENT: /Users/qiangli/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.0.darwin-arm64/src/errors/wrap_test.go:23:35: BASHPP-EEXPR-FORM: unsupported scalar expression *syntax.BashPPFuncLit
+=== RUN   TestGoSourceTestingErrorsCorpus/TestAs
+    gosource_testing_corpus_test.go:81: original body: exit status 2; BASHPP-ECOLLECTION-ELEMENT: /Users/qiangli/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.0.darwin-arm64/src/errors/wrap_test.go:101:30: BASHPP-EEXPR-NIL: nil is not a scalar
+=== RUN   TestGoSourceTestingErrorsCorpus/TestAsValidation
+    gosource_testing_corpus_test.go:81: original body: exit status 2; BASHPP-ECOLLECTION-ELEMENT: /Users/qiangli/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.0.darwin-arm64/src/errors/wrap_test.go:222:3: BASHPP-EEXPR-NIL: nil is not a scalar
+=== RUN   TestGoSourceTestingErrorsCorpus/TestAsType
+    gosource_testing_corpus_test.go:81: original body: exit status 2; BASHPP-ECOLLECTION-ELEMENT: /Users/qiangli/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.0.darwin-arm64/src/errors/wrap_test.go:250:30: BASHPP-EEXPR-NIL: nil is not a scalar
+=== RUN   TestGoSourceTestingErrorsCorpus/TestUnwrap
+    gosource_testing_corpus_test.go:81: original body: gosource: original method wrapped.Unwrap is not supported by dependency transport; 
+--- FAIL: TestGoSourceTestingErrorsCorpus (3.73s)
+    --- PASS: TestGoSourceTestingErrorsCorpus/TestNewEqual (0.00s)
+    --- PASS: TestGoSourceTestingErrorsCorpus/TestErrorMethod (0.00s)
+    --- PASS: TestGoSourceTestingErrorsCorpus/TestJoinReturnsNil (0.00s)
+    --- FAIL: TestGoSourceTestingErrorsCorpus/TestJoin (0.00s)
+    --- FAIL: TestGoSourceTestingErrorsCorpus/TestJoinErrorMethod (0.00s)
+    --- FAIL: TestGoSourceTestingErrorsCorpus/TestIs (0.00s)
+    --- FAIL: TestGoSourceTestingErrorsCorpus/TestAs (0.00s)
+    --- FAIL: TestGoSourceTestingErrorsCorpus/TestAsValidation (0.00s)
+    --- FAIL: TestGoSourceTestingErrorsCorpus/TestAsType (0.00s)
+    --- FAIL: TestGoSourceTestingErrorsCorpus/TestUnwrap (0.00s)
+FAIL
+FAIL	mvdan.cc/sh/v3/interp	5.242s
+FAIL
+
+[exited with code 0]

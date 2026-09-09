@@ -133,11 +133,22 @@ func (r *Runner) bashPPPredeclared(name string, c *syntax.BashPPCall, args []str
 		value, ok := r.bashPPRecover()
 		r.exit = exitStatus{}
 		r.exit.oneIf(!ok)
-		// "nothing to recover" is this call's ANSWER, not a failed command.
-		// Go source form aborts on a statement that reports a non-zero status,
-		// so without the exemption `defer func() { recover() }()` — the guard
-		// the standard library writes when it only cares that a call panicked
-		// — would terminate the very frame it exists to let continue.
+		// "nothing to recover" is this call's ANSWER, not a failed command:
+		// recover reports through the status because a panic value may itself
+		// be the empty string. Go source form aborts on a statement that
+		// reports a non-zero status, so without the exemption
+		// `defer func() { recover() }()` — the guard the standard library
+		// writes when it only cares that a call panicked — would terminate the
+		// very frame it exists to let continue.
+		//
+		// Stamp the status with this call's provenance as well. The exemption
+		// alone is shared with the errexit contexts in [Runner.stmts]; only a
+		// stamp identifies the status THIS call reported, which is what a
+		// hosted test callback may reduce and nothing else is.
+		if !ok {
+			r.bashPPRecoverSeq++
+			r.exit.recoverSeq = r.bashPPRecoverSeq
+		}
 		r.exit.errexitExempt = true
 		return []string{value}, true
 	}

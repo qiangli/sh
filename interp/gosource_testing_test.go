@@ -365,3 +365,92 @@ func TestStillFailsOnDiagnostic(t *testing.T){ var ch chan int; ch <- 1 }
 		}
 	}
 }
+
+// TestGoSourceTestingRecoverProvenance pins that the recover reduction is a
+// narrow one, keyed to recover's own provenance stamp, rather than a rule that
+// status 1 cannot fail a hosted callback.
+//
+// Only the first body is recover's own answer; the rest reach a failure after
+// a recover has already stamped the runner, and must still fail. Their
+// failures travel by exit.err, by the panic status, or by the capability, so
+// this test pins the rule end to end rather than discriminating the narrowed
+// condition from a blanket one -- that discrimination is
+// [TestTestingCallbackStatusProvenance], which holds the status at 1 and
+// varies only the provenance.
+func TestGoSourceTestingRecoverProvenance(t *testing.T) {
+	source := `package specimen
+import "testing"
+// Recover's own answer, and the only body here that may pass.
+func TestGuardOnly(t *testing.T){ defer func(){ recover() }(); t.Log("body") }
+// The guard runs, then the body deliberately panics anyway. The panic is
+// unrecovered -- the deferred recover already ran and consumed nothing -- so
+// the stamp is stale and the callback must fail.
+func TestGuardThenDeliberatePanic(t *testing.T){
+ recover()
+ t.Log("guard ran")
+ panic("deliberate")
+}
+// A recover stamps the runner, then the original body reports failure the way
+// a test does. t.Fatal must remain terminating.
+func TestGuardThenFatal(t *testing.T){
+ recover()
+ t.Fatal("original fatal")
+}
+// A recover stamps the runner, then a real native bridge failure occurs. The
+// bridge diagnostic must reach the callback outcome, not be excused.
+func TestGuardThenBridgeFailure(t *testing.T){
+ recover()
+ var ch chan int
+ ch <- 1
+}
+`
+	program, err := gosource.Parse(strings.NewReader(source), "provenance_fixture.go", gosource.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var errs bytes.Buffer
+	runner, err := interp.New(interp.Lang(syntax.LangBashPP), interp.Dir(t.TempDir()), interp.StdIO(nil, nil, &errs))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	session, err := runner.LoadGoSourceTests(ctx, program)
+	if err != nil {
+		t.Fatalf("load: %v %s", err, errs.String())
+	}
+	defer session.Close()
+
+	errs.Reset()
+	t.Run("TestGuardOnly", func(t *testing.T) {
+		if err := session.Run(ctx, "TestGuardOnly", t); err != nil {
+			t.Fatalf("guarded body: %v; %s", err, errs.String())
+		}
+	})
+
+	// The reduction must not reach any of these. Each is run through a
+	// recorder so a body that fails via the capability is caught even when it
+	// reports no error, and via the returned error for the rest.
+	//
+	// A nil-channel send has no runnable partner, so it is bounded by its own
+	// deadline rather than the whole test's; the point is that it does not
+	// return a pass.
+	for _, name := range []string{
+		"TestGuardThenDeliberatePanic",
+		"TestGuardThenFatal",
+		"TestGuardThenBridgeFailure",
+	} {
+		errs.Reset()
+		recorded := &testingRecorder{}
+		caseCtx, caseCancel := context.WithTimeout(ctx, 5*time.Second)
+		err := session.Run(caseCtx, name, recorded)
+		caseCancel()
+		if err == nil && !recorded.failed {
+			t.Errorf("%s was discarded: err=nil recorder=%#v stderr=%s",
+				name, recorded, errs.String())
+			continue
+		}
+		t.Logf("%s failed as required: err=%v failed=%v stderr=%q",
+			name, err, recorded.failed, errs.String())
+	}
+}
