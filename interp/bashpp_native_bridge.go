@@ -172,10 +172,15 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 	auth := hex.EncodeToString(secret)
 	s.id = auth[:16]
 	source = strings.Replace(source, "//CONNECTION", "const bridgeAddress = "+strconv.Quote(listener.Addr().String())+"\nconst bridgeAuth = "+strconv.Quote(auth), 1)
-	file, cleanup, err := bashPPImportTempSource(bashPPModuleRequest(req).Dir, "bashpp-session-*.go")
+	scratchEnv := req.RuntimeEnv
+	if scratchEnv == nil {
+		scratchEnv = req.Env
+	}
+	file, err := bashPPImportTempSource(bashPPModuleRequest(req).Dir, "bashpp-session-*.go", scratchEnv)
 	if err != nil {
 		return err
 	}
+	cleanup := file.cleanup
 	s.cleanup = cleanup
 	if _, err = file.WriteString(source); err != nil {
 		file.Close()
@@ -187,7 +192,7 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 		return err
 	}
 	binary := file.Name() + ".bin"
-	build := exec.CommandContext(ctx, req.Go, "build", "-p", "2", "-o", binary, file.Name())
+	build := exec.CommandContext(ctx, req.Go, "build", "-p", "2", "-overlay="+file.overlay, "-o", binary, file.buildPath)
 	build.Dir, build.Env = bashPPModuleRequest(req).Dir, setEnvString(req.Env, "CGO_ENABLED", "0")
 	var diagnostics bytes.Buffer
 	build.Stdout, build.Stderr = &diagnostics, &diagnostics
@@ -238,6 +243,11 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 		s.close()
 		return errors.New("gosource: unauthenticated dependency bridge")
 	}
+	// The process has loaded its executable and authenticated its connection.
+	// Removing build inputs now also prevents abrupt host termination from
+	// leaving helper effects in the caller's TMPDIR. Close retries cleanup on
+	// systems which cannot unlink an executable while it is running.
+	cleanup()
 	_ = conn.SetDeadline(time.Time{})
 	s.mu.Lock()
 	s.conn = conn

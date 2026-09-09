@@ -55,6 +55,8 @@ func Emit(){fmt.Print(Wait())}
 			}
 			env := setEnvString(os.Environ(), "GOTOOLCHAIN", "local")
 			env = setEnvString(env, "GOWORK", "off")
+			scratch := t.TempDir()
+			env = setEnvString(env, "TMPDIR", scratch)
 			ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 			defer cancel()
 			release := filepath.Join(root, "bridge.release")
@@ -122,7 +124,10 @@ func Emit(){fmt.Print(Wait())}
 			if out, err := listing.CombinedOutput(); err != nil || strings.Contains(string(out), "bashpp-") {
 				t.Fatalf("package enumeration included bridge scratch: %v\n%s", err, out)
 			}
-			dirs, err := filepath.Glob(filepath.Join(root, ".bashpp-eval-*"))
+			if paths, _ := filepath.Glob(filepath.Join(root, ".bashpp-eval-*")); len(paths) != 0 {
+				t.Fatalf("source tree contaminated: %v", paths)
+			}
+			dirs, err := filepath.Glob(filepath.Join(scratch, ".bashpp-eval-*"))
 			if err != nil || len(dirs) != 1 {
 				t.Fatalf("private work directories=%v error=%v", dirs, err)
 			}
@@ -152,7 +157,7 @@ func Emit(){fmt.Print(Wait())}
 			if mode == "call" && stdout.String() != "relative-sidecar" {
 				t.Fatalf("stdout=%q", stdout.String())
 			}
-			dirs, _ = filepath.Glob(filepath.Join(root, ".bashpp-eval-*"))
+			dirs, _ = filepath.Glob(filepath.Join(scratch, ".bashpp-eval-*"))
 			if len(dirs) != 0 {
 				t.Fatalf("bridge leaked work directory: %v", dirs)
 			}
@@ -174,6 +179,8 @@ func TestBashPPImportBridgeCleansFailedWork(t *testing.T) {
 				}
 				env := setEnvString(os.Environ(), "GOTOOLCHAIN", "local")
 				env = setEnvString(env, "GOWORK", "off")
+				scratch := t.TempDir()
+				env = setEnvString(env, "TMPDIR", scratch)
 				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 				defer cancel()
 				if failure == "canceled" {
@@ -199,6 +206,9 @@ func TestBashPPImportBridgeCleansFailedWork(t *testing.T) {
 				}
 				if len(entries) != 1 || entries[0].Name() != "go.mod" {
 					t.Fatalf("failed bridge leaked artifacts: %v", entries)
+				}
+				if entries, err := os.ReadDir(scratch); err != nil || len(entries) != 0 {
+					t.Fatalf("private scratch leaked artifacts: %v %v", entries, err)
 				}
 			})
 		}

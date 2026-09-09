@@ -316,8 +316,9 @@ func main(){
  conn,err:=net.Dial("tcp",bridgeAddress);if err!=nil{panic(err)};defer conn.Close()
  encoder:=json.NewEncoder(conn);if err=encoder.Encode(bridgeAuth);err!=nil{return};decoder:=json.NewDecoder(conn)
  outbound.Lock();outbound.encoder=encoder;outbound.Unlock()
- var calls sync.WaitGroup
- for {var q request;if err:=decoder.Decode(&q);err!=nil{close(handles.stop);calls.Wait();return};if q.Op=="close"{close(handles.stop);calls.Wait();return}
+ // Host EOF/close ends the dependency process, including blocked native calls.
+ // Waiting for those calls would orphan listeners after host termination.
+ for {var q request;if err:=decoder.Decode(&q);err!=nil{close(handles.stop);return};if q.Op=="close"{close(handles.stop);return}
   if q.Op=="callback-reply" {callbacks.Lock();wait:=callbacks.waiting[q.ID];callbacks.Unlock();if wait!=nil{wait<-q};continue}
-  calls.Add(1);go func(){defer calls.Done();answer:=dispatch(q);outbound.Lock();defer outbound.Unlock();_ = outbound.encoder.Encode(answer)}()}
+  go func(){answer:=dispatch(q);outbound.Lock();defer outbound.Unlock();_ = outbound.encoder.Encode(answer)}()}
 }
