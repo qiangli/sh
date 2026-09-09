@@ -96,49 +96,71 @@ func (s *GoSourceTestingSession) Close() {
 // goroutine. Generated testing.InternalTest callbacks can call this method
 // directly; no original test body is compiled into their native harness.
 // FailNow and SkipNow unwind interpreted defers before reaching the scheduler.
-func (s *GoSourceTestingSession) Run(ctx context.Context, name string, target GoSourceTestingT) (err error) {
+func (s *GoSourceTestingSession) Run(ctx context.Context, name string, target GoSourceTestingT) error {
+	if s == nil || s.closed || s.runner.goSourceTesting != s {
+		return fmt.Errorf("gosource: testing session is closed or reset")
+	}
+	return s.runFunction(ctx, name, s.runner.bashPPFuncs[name], target, false, nil)
+}
+func (s *GoSourceTestingSession) runFunction(ctx context.Context, name string, fn *bashPPFunc, target GoSourceTestingT, nested bool, cleanup *goSourceTestingHandle) (err error) {
 	if s == nil || s.closed || s.runner.goSourceTesting != s {
 		return fmt.Errorf("gosource: testing session is closed or reset")
 	}
 	if target == nil {
 		return fmt.Errorf("gosource: nil testing scheduler capability")
 	}
-	if s.active != nil {
+	if s.active != nil && !nested {
 		return fmt.Errorf("gosource: overlapping test callbacks are not supported")
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	r := s.runner
-	ctx, finishSignalRun := r.beginAsyncSignalRun(ctx)
-	defer finishSignalRun()
+	if !nested {
+		var finishSignalRun func()
+		ctx, finishSignalRun = r.beginAsyncSignalRun(ctx)
+		defer finishSignalRun()
+	}
 	previousTaskPolicy := r.bashPPHostedTask
 	r.bashPPHostedTask = taskPolicy(ctx)
 	defer func() { r.bashPPHostedTask = previousTaskPolicy }()
 	defer r.withDeclarations(ctx)()
-	fn := r.bashPPFuncs[name]
 	if fn == nil {
 		return fmt.Errorf("gosource: test function %q is not loaded", name)
 	}
 	params := bashppParams(fn.params())
-	if len(params) != 1 || len(fn.results()) != 0 {
-		return fmt.Errorf("gosource: %s must have signature func(*testing.T)", name)
+	expectedParams := 1
+	if cleanup != nil {
+		expectedParams = 0
 	}
-	declared := params[0].declared
-	alias, typ, ok := strings.Cut(strings.TrimPrefix(declared, "*"), ".")
-	if !strings.HasPrefix(declared, "*") || !ok || typ != "T" || r.bashPPImports[alias] != "testing" {
-		return fmt.Errorf("gosource: %s must receive the imported *testing.T, got %s", name, declared)
+	if len(params) != expectedParams || len(fn.results()) != 0 {
+		return fmt.Errorf("gosource: invalid testing callback signature for %s", name)
 	}
-	handle := &goSourceTestingHandle{session: s, target: target, active: true}
+	if cleanup == nil {
+		declared := params[0].declared
+		alias, typ, ok := strings.Cut(strings.TrimPrefix(declared, "*"), ".")
+		if !strings.HasPrefix(declared, "*") || !ok || typ != "T" || r.bashPPImports[alias] != "testing" {
+			return fmt.Errorf("gosource: %s must receive the imported *testing.T, got %s", name, declared)
+		}
+	}
+	previousHandle := s.active
+	handle := cleanup
+	if handle == nil {
+		handle = &goSourceTestingHandle{session: s, target: target}
+	}
+	previousActive := handle.active
+	handle.active = true
 	s.active = handle
+	previousExit, previousExpandExit := r.exit, r.expandRunExit
 	previousGo, previousFile, previousContext := r.bashPPGoSource, r.bashPPGoSourceFile, r.ectx
 	r.bashPPGoSource, r.bashPPGoSourceFile = true, s.program.File
 	r.fillExpandConfig(ctx)
 	r.exit = exitStatus{}
 	r.expandRunExit = exitStatus{}
 	defer func() {
-		handle.active = false
-		s.active = nil
+		handle.active = previousActive
+		s.active = previousHandle
+		r.exit, r.expandRunExit = previousExit, previousExpandExit
 		r.bashPPGoSource, r.bashPPGoSourceFile = previousGo, previousFile
 		r.fillExpandConfig(previousContext)
 		if v := recover(); v != nil {
@@ -153,10 +175,14 @@ func (s *GoSourceTestingSession) Run(ctx context.Context, name string, target Go
 			}
 		}
 	}()
-	cell := &bashPPCell{vr: expand.NewObject(handle), declType: params[0].typ}
-	args, ok := r.bashPPBindCall(fn, []string{"testing.T@host"}, nil, []*bashPPCell{cell}, nil, 1)
-	if !ok {
-		return fmt.Errorf("gosource: cannot bind test callback %s", name)
+	var args []string
+	if cleanup == nil {
+		cell := &bashPPCell{vr: expand.NewObject(handle), declType: params[0].typ}
+		var ok bool
+		args, ok = r.bashPPBindCall(fn, []string{"testing.T@host"}, nil, []*bashPPCell{cell}, nil, 1)
+		if !ok {
+			return fmt.Errorf("gosource: cannot bind test callback %s", name)
+		}
 	}
 	r.bashPPInvoke(ctx, fn, args)
 	if r.exit.err != nil {
@@ -196,6 +222,11 @@ func (r *Runner) bashPPTestingCapture(call *syntax.BashPPCall) (func(), bool) {
 	}
 	var args []any
 	for _, expr := range call.ArgExprs {
+		if literal, ok := expr.(*syntax.BashPPFuncLit); ok {
+			fn, _ := r.bashPPMakeClosure(literal)
+			args = append(args, fn)
+			continue
+		}
 		value, err := r.bashPPEvalScalarExpr(expr)
 		if err != nil {
 			return fail(err)
@@ -239,6 +270,18 @@ func (r *Runner) bashPPTestingInvoke(handle *goSourceTestingHandle, method strin
 		return fmt.Sprintf(format, args[1:]...), nil
 	}
 	switch method {
+	case "Run", "Cleanup":
+		if err := r.bashPPTestingCallback(handle, method, args); err != nil {
+			fail(err)
+		}
+		return
+	case "Helper":
+		if len(args) != 0 {
+			fail(errors.New("gosource: testing.Helper takes no arguments"))
+		}
+		// A scheduler helper mark cannot describe an interpreted stack. Retain
+		// source positions in interpreter errors; no native helper frame is claimed.
+		return
 	case "Errorf", "Logf", "Fatalf", "Skipf":
 		text, err := message()
 		if err != nil {

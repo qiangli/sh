@@ -36,8 +36,12 @@ unwind runs every interpreted defer before invoking the real scheduler's
 A session and its runner are serial resources. Callbacks may reenter after the
 previous callback returns or exits through the testing scheduler. Ordinary
 `Runner.Run` cannot replace an active session; Reset invalidates old sessions.
-Unsupported testing methods fail explicitly. This is not a general implementation
-of `testing.T`: subtests, Parallel, Cleanup, Helper attribution, benchmarks,
+Unsupported testing methods fail explicitly. Statement-position `Run` and
+`Cleanup` accept interpreted function literals; the real scheduler owns nested
+callback goroutines and cleanup ordering. `Helper` accepts its no-argument form,
+but native helper-frame attribution is not claimed. This is not a general
+implementation of `testing.T`: boolean-valued Run expressions, Parallel, precise
+Helper attribution, benchmarks,
 examples, fuzzing, TestMain, composite formatting values and callbacks crossing
 the native dependency-process boundary remain pending. Callers must turn every
 returned interpreter error into a native test failure.
@@ -77,3 +81,22 @@ keep the loading context alive until they finish the session. The original
 source hashes and post-execution byte comparisons remain mandatory. This
 establishes the two-function slice only; the remaining standard-library bodies
 and unsupported testing methods above remain pending.
+
+The complete `errors_test` corpus harness is separate from the two-function
+regression. Product capabilities have no build tag. The explicit corpus tag
+selects only the harness, which discovers every top-level Go Test declaration
+from the original typed AST and invokes every discovered root:
+
+```sh
+go test -tags=gosource_testing_corpus ./interp -run '^TestGoSourceTestingErrorsCorpus$' -json -count=1
+```
+
+The first full replay discovers ten roots. Native Go passes those ten roots and
+70 dynamic subtests; its twelve examples are recorded separately. The interpreter
+passes TestNewEqual, TestErrorMethod and TestJoinReturnsNil, and actually fails
+the other seven roots before their subtests start. All ten starts and terminals
+are retained. Current failures concern interface/handle collection elements,
+function literal elements, composite ranges, the predeclared any type, and indexed
+non-scalar values. The full corpus gate consequently fails; missing dynamic
+subtests are never credited as passed or skipped. The complete standard-library
+obligation remains open.

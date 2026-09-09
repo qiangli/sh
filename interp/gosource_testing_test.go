@@ -103,6 +103,18 @@ func TestSkip(t *testing.T){defer t.Log("skip defer");t.SkipNow();t.Log("unreach
 func TestInit(t *testing.T){if initialized!=7{t.Errorf("bad init: %d",initialized)}}
 func TestDeferControl(t *testing.T){defer t.Log("last");defer t.FailNow();defer t.Log("first")}
 func TestDeferCapture(t *testing.T){x:="before";defer t.Log(x);x="after"}
+var cleanupOrder string
+func TestNested(t *testing.T){
+ t.Cleanup(func(){cleanupOrder += "outer;"})
+ t.Run("child",func(t *testing.T){t.Cleanup(func(){cleanupOrder += "child;"});t.SkipNow();cleanupOrder += "unreachable;"})
+ if cleanupOrder != "child;" {t.Errorf("child cleanup order: %s",cleanupOrder)}
+}
+func TestNestedFatal(t *testing.T){
+ t.Cleanup(func(){t.Log("outer cleanup")})
+ t.Run("child",func(t *testing.T){defer t.Log("child defer");t.Cleanup(func(){t.Log("child cleanup")});t.Fatal("nested deliberate")})
+ t.Log("after child")
+}
+func TestAfterCleanup(t *testing.T){if cleanupOrder != "child;outer;"{t.Errorf("final cleanup order: %s",cleanupOrder)}}
 func TestUnsupported(t *testing.T){t.Parallel()}
 func TestFailure(t *testing.T){t.Errorf("deliberate failure %s","kept")}
 `
@@ -130,6 +142,11 @@ func TestFailure(t *testing.T){t.Errorf("deliberate failure %s","kept")}
 			}
 			t.Fatal("unreachable after FailNow")
 		})
+		t.Run("NestedFatalScheduler", func(t *testing.T) {
+			if err := session.Run(ctx, "TestNestedFatal", t); err != nil {
+				t.Fatal(err)
+			}
+		})
 		t.Run("Reentry", func(t *testing.T) {
 			if err := session.Run(ctx, "TestInit", t); err != nil {
 				t.Fatal(err)
@@ -143,6 +160,24 @@ func TestFailure(t *testing.T){t.Errorf("deliberate failure %s","kept")}
 	if childErr == nil || !bytes.Contains(output, []byte("--- FAIL: TestGoSourceTestingControlAndLifecycle/FatalScheduler")) || !bytes.Contains(output, []byte("--- PASS: TestGoSourceTestingControlAndLifecycle/Reentry")) || bytes.Contains(output, []byte("unreachable after FailNow")) {
 		t.Fatalf("real FailNow scheduler/reentry: %v\n%s", childErr, output)
 	}
+	position := -1
+	for _, marker := range []string{"nested deliberate", "child defer", "child cleanup", "after child", "outer cleanup"} {
+		found := bytes.Index(output, []byte(marker))
+		if found <= position {
+			t.Fatalf("nested fatal/cleanup ordering at %s: %s", marker, output)
+		}
+		position = found
+	}
+	t.Run("NestedScheduler", func(t *testing.T) {
+		if err := session.Run(ctx, "TestNested", t); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("AfterCleanup", func(t *testing.T) {
+		if err := session.Run(ctx, "TestAfterCleanup", t); err != nil {
+			t.Fatal(err)
+		}
+	})
 	afterSkip := false
 	t.Run("RealSkip", func(t *testing.T) {
 		if err := session.Run(ctx, "TestSkip", t); err != nil {
