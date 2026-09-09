@@ -783,6 +783,25 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 		}
 	}
 	if d.Expr != nil {
+		if call, ok := d.Expr.(*syntax.BashPPCall); ok {
+			if cells, handled := r.goSourceErrorsAsTypeCells(call); handled {
+				if len(d.Lhs) != len(cells) {
+					r.errf("assignment mismatch: %d variable(s) but %d value(s)\n", len(d.Lhs), len(cells))
+					r.exit = exitStatus{code: 2}
+					return
+				}
+				for i, name := range d.Lhs {
+					if name.Value == "_" {
+						continue
+					}
+					r.bashPPDeclareName(name.Value, cells[i].vr)
+					if target := r.bashPPScope.lookup(name.Value); target != nil {
+						*target = *cells[i]
+					}
+				}
+				return
+			}
+		}
 		// A read rooted in a dependency-owned value binds a session handle;
 		// see bashPPNativeShortDecl in bashpp_native_access.go.
 		if r.bashPPNativeShortDecl(d) {
@@ -1058,6 +1077,23 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 	// against the function's declared results, done inside.
 	if d.Call != nil {
 		if r.bashPPEnumConstruct(d) {
+			return
+		}
+		if cells, handled := r.goSourceErrorsAsTypeCells(d.Call); handled {
+			if len(d.Lhs) != len(cells) {
+				r.errf("assignment mismatch: %d variable(s) but %d value(s)\n", len(d.Lhs), len(cells))
+				r.exit = exitStatus{code: 2}
+				return
+			}
+			for i, name := range d.Lhs {
+				if name.Value == "_" {
+					continue
+				}
+				r.bashPPDeclareName(name.Value, cells[i].vr)
+				if target := r.bashPPScope.lookup(name.Value); target != nil {
+					*target = *cells[i]
+				}
+			}
 			return
 		}
 		// Native dependency handles resolve their own methods before local

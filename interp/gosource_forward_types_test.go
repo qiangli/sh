@@ -65,6 +65,16 @@ func TestGoSourceOriginalMethodsErrorsThreeModes(t *testing.T) {
 	})
 }
 
+// The custom-errors example returns an interpreter-owned *argError through the
+// predeclared error interface, then asks errors.AsType to inspect it inside the
+// dependency bridge. AsType is synchronous and mutates only its own generic
+// destination; the original Error body remains interpreted.
+func TestGoSourceOriginalCustomErrorsThreeModes(t *testing.T) {
+	source := forwardTypeOriginal(t, "custom-errors.go.txt",
+		"88886635c0867df55b7fcc2680e2c5d346799129b3ea258e0b717d9170a40c3f")
+	typedSendThreeModes(t, source)
+}
+
 // The cluster's last pinned gap, `solutions/webcrawler.go`, is no longer a gap:
 // `(*f)[url]` on a defined map type now evaluates, so it is compared against
 // real Go in all three modes by TestGoSourceOriginalPointerDefinedMapThreeModes

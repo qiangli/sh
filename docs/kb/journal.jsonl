@@ -20,3 +20,4 @@
 {"op":"add","slug":"escape-type-set-union-bars-before-shell-parsing","tool":"codex-gpt-5.5-z","host":"dragon","episode":"weave-issue-26","at":"2026-09-07T01:33:40.335871Z"}
 {"op":"add","slug":"resolve-collection-metadata-through-named-types","tool":"codex:gpt5.6-sol-c","host":"dragon","episode":"weave-issue-29","at":"2026-09-07T02:24:43.293748Z"}
 {"op":"validate","slug":"resolve-collection-metadata-through-named-types","tool":"codex:gpt5.6-sol-c","host":"dragon","episode":"weave-issue-29","at":"2026-09-07T02:24:49.660288Z"}
+{"op":"add","slug":"handle-generic-dependency-helpers-at-the-interpreter-boundary","tool":"codex-gpt-5.5-x","host":"dragon","episode":"weave-issue-76","at":"2026-09-09T18:36:27.112827Z"}

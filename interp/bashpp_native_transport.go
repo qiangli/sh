@@ -94,7 +94,7 @@ func validateLocalTransport(req bashPPEvalRequest, q bashPPBridgeRequest) error 
 	if nativePointerWritebackAllowed(req, q) {
 		return nil
 	}
-	if synchronousReaderCallback(req, q) || synchronousImageCallback(req, q) || !functionCallbacks && synchronousUnwrapCallback(req, q) {
+	if synchronousReaderCallback(req, q) || synchronousImageCallback(req, q) || !functionCallbacks && (synchronousUnwrapCallback(req, q) || synchronousErrorsAsType(req, q)) {
 		return nil
 	}
 	if functionCallbacks && !synchronousFunctionCallback(req, q) {
@@ -129,6 +129,14 @@ func nativePointerWritebackAllowed(req bashPPEvalRequest, q bashPPBridgeRequest)
 		return len(q.Args) >= 1 && q.Args[0].Kind == "pointer" && q.Args[0].Origin != 0
 	}
 	return false
+}
+
+func synchronousErrorsAsType(req bashPPEvalRequest, q bashPPBridgeRequest) bool {
+	if q.Receiver != nil {
+		return false
+	}
+	alias, name, ok := strings.Cut(q.Selector, ".")
+	return ok && req.Imports[alias] == "errors" && name == "AsType" && len(q.Args) == 1
 }
 
 // Only requests carrying a local interface callback acquire the gate. Native
