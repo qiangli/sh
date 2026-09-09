@@ -126,8 +126,8 @@ func TestModuleImporter(t *testing.T) {
 	}
 }
 
-func TestGoSourceStopsOnUnsupportedRuntime(t *testing.T) {
-	src := "package main\nvar z complex128 = 1i\nfunc main(){println(\"must not run\")}"
+func TestGoSourceComplexRuntime(t *testing.T) {
+	src := "package main\nvar z complex128 = 1i\nfunc main(){println(\"complex ready\")}"
 	p, err := gosource.Parse(strings.NewReader(src), "unsupported.go", gosource.Options{RunMain: true})
 	if err != nil {
 		t.Fatal(err)
@@ -137,11 +137,11 @@ func TestGoSourceStopsOnUnsupportedRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = r.Run(context.Background(), p.File); err == nil {
-		t.Fatal("unsupported runtime exited successfully")
+	if err = r.Run(context.Background(), p.File); err != nil {
+		t.Fatalf("complex runtime: %v %s", err, stderr.String())
 	}
-	if out.Len() != 0 || strings.Contains(stderr.String(), "must not run") {
-		t.Fatalf("executed past failure: %q %q", out.String(), stderr.String())
+	if out.Len() != 0 || stderr.String() != "complex ready\n" {
+		t.Fatalf("complex print output: %q %q", out.String(), stderr.String())
 	}
 }
 

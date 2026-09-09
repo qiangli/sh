@@ -39,12 +39,18 @@ func (r *Runner) bashPPEvalScalarExpr(expr syntax.BashPPExpr) (result bashPPScal
 	}
 	switch x := expr.(type) {
 	case *syntax.BashPPBasicLit:
+		if x.Kind == "IMAG" && !r.bashPPGoSource {
+			return bashPPScalar{}, fmt.Errorf("BASHPP-ECOMPLEX-UNSUPPORTED: complex values require Go source")
+		}
 		value, err := bashPPBasicScalar(x)
 		if r.bashPPGoSource && x.Kind == "CHAR" {
 			value.typ = "rune"
 		}
 		return value, err
 	case *syntax.BashPPCall:
+		if v, handled, err := r.bashPPComplexBuiltin(x); handled {
+			return v, err
+		}
 		if x.CalleeExpr != nil {
 			return bashPPScalar{}, fmt.Errorf("gosource: computed call runtime is not implemented")
 		}
@@ -217,7 +223,7 @@ func bashPPComparableFallback(err error) bool {
 }
 
 func bashPPBasicScalar(x *syntax.BashPPBasicLit) (bashPPScalar, error) {
-	kind := map[string]token.Token{"INT": token.INT, "FLOAT": token.FLOAT, "CHAR": token.CHAR, "STRING": token.STRING}[x.Kind]
+	kind := map[string]token.Token{"INT": token.INT, "IMAG": token.IMAG, "FLOAT": token.FLOAT, "CHAR": token.CHAR, "STRING": token.STRING}[x.Kind]
 	v := constant.MakeFromLiteral(x.Value.Value, kind, 0)
 	if v.Kind() == constant.Unknown {
 		return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-LITERAL: invalid literal %s", x.Value.Value)
@@ -267,6 +273,8 @@ func (r *Runner) bashPPScalarFromCell(cell *bashPPCell) bashPPScalar {
 		value.value = constant.MakeBool(text == "true")
 	case constant.Int:
 		value.value = constant.MakeFromLiteral(text, token.INT, 0)
+	case constant.Complex:
+		value.value = bashPPParseComplex(text)
 	case constant.Float:
 		value.value = constant.MakeFromLiteral(text, token.FLOAT, 0)
 	default:
@@ -279,6 +287,8 @@ func (r *Runner) bashPPScalarFromCell(cell *bashPPCell) bashPPScalar {
 			default:
 				if bashPPIntegerType(named.Name.Value) {
 					value.value = constant.MakeFromLiteral(text, token.INT, 0)
+				} else if r.bashPPGoSource && (named.Name.Value == "complex64" || named.Name.Value == "complex128") {
+					value.value = bashPPParseComplex(text)
 				} else if named.Name.Value == "float32" || named.Name.Value == "float64" {
 					value.value = constant.MakeFromLiteral(text, token.FLOAT, 0)
 				}
@@ -374,7 +384,7 @@ func bashPPScalarFromString(s string) bashPPScalar {
 func (r *Runner) bashPPUnaryScalar(op token.Token, x bashPPScalar) (bashPPScalar, error) {
 	switch op {
 	case token.ADD, token.SUB, token.XOR:
-		if x.value.Kind() != constant.Int && x.value.Kind() != constant.Float {
+		if x.value.Kind() != constant.Int && x.value.Kind() != constant.Float && !(r.bashPPGoSource && x.value.Kind() == constant.Complex) {
 			return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-OPERAND: operator %s not defined on %s", op, x.value.Kind())
 		}
 		if op == token.XOR && x.value.Kind() != constant.Int {
@@ -415,6 +425,9 @@ func (r *Runner) bashPPBinaryScalar(op token.Token, left, right bashPPScalar) (b
 				return bashPPScalar{}, err
 			}
 		}
+	}
+	if v, handled, err := r.bashPPComplexRuntimeOp(op, left, right, resultType); handled {
+		return v, err
 	}
 	switch op {
 	case token.LAND, token.LOR:
@@ -500,6 +513,11 @@ func (r *Runner) bashPPTypedScalarResult(value constant.Value, typ string, runti
 	}
 	if runtime && bashPPIntegerType(named.Name.Value) && value.Kind() == constant.Int {
 		value = bashPPWrapInteger(named.Name.Value, value)
+	}
+	if r.bashPPGoSource && (named.Name.Value == "complex64" || named.Name.Value == "complex128") {
+		out, err := r.bashPPConvertComplex(named.Name.Value, bashPPScalar{value: value, runtime: runtime})
+		out.typ = typ
+		return out, err
 	}
 	if err := r.bashPPValidateUntypedScalarOperand(value, typ); err != nil {
 		return bashPPScalar{}, err
@@ -765,6 +783,8 @@ func bashPPBinaryOp(left constant.Value, op token.Token, right constant.Value) (
 
 func (r *Runner) bashPPConvertScalar(typ string, x bashPPScalar) (bashPPScalar, error) {
 	switch typ {
+	case "complex64", "complex128":
+		return r.bashPPConvertComplex(typ, x)
 	case "string":
 		switch x.value.Kind() {
 		case constant.String:
@@ -864,6 +884,8 @@ func bashPPIntegerRepresentable(typ string, v constant.Value) bool {
 
 func bashPPScalarString(v constant.Value) string {
 	switch v.Kind() {
+	case constant.Complex:
+		return strconv.FormatComplex(bashPPComplexNumber(v), 'g', -1, 128)
 	case constant.String:
 		return constant.StringVal(v)
 	case constant.Bool:
@@ -875,7 +897,7 @@ func bashPPScalarString(v constant.Value) string {
 
 func bashPPScalarType(name string) bool {
 	switch name {
-	case "bool", "byte", "float32", "float64", "int", "int8", "int16",
+	case "bool", "byte", "complex64", "complex128", "float32", "float64", "int", "int8", "int16",
 		"int32", "int64", "rune", "string", "uint", "uint8", "uint16",
 		"uint32", "uint64", "uintptr":
 		return true

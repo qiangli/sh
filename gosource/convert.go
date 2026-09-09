@@ -307,7 +307,7 @@ func (c *converter) valueDecl(g *ast.GenDecl, v *ast.ValueSpec, n *ast.Ident, in
 					out.InitExpr = &s.BashPPBinaryExpr{X: &s.BashPPBasicLit{Kind: "FLOAT", Value: c.lit(n.Pos(), parts[0]+".0")}, Op: c.lit(n.Pos(), "/"), Y: &s.BashPPBasicLit{Kind: "FLOAT", Value: c.lit(n.Pos(), parts[1]+".0")}}
 				}
 			case constant.Complex:
-				c.fail(n, "complex constant")
+				out.InitExpr = c.complexConstantExpr(n.Pos(), obj.Val())
 			}
 			if out.InitExpr == nil {
 				out.InitExpr = &s.BashPPBasicLit{Kind: kind, Value: c.lit(n.Pos(), value)}

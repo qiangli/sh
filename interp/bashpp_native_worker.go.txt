@@ -32,6 +32,7 @@ var symbols = map[string]reflect.Value{
 }
 var types = map[string]reflect.Type{
  "error": reflect.TypeFor[error](), "any": reflect.TypeFor[any](), "interface{}": reflect.TypeFor[any](), "bool": reflect.TypeFor[bool](), "string": reflect.TypeFor[string](), "int": reflect.TypeFor[int](), "int8": reflect.TypeFor[int8](), "int16": reflect.TypeFor[int16](), "int32": reflect.TypeFor[int32](), "int64": reflect.TypeFor[int64](), "uint": reflect.TypeFor[uint](), "uint8": reflect.TypeFor[uint8](), "uint16": reflect.TypeFor[uint16](), "uint32": reflect.TypeFor[uint32](), "uint64": reflect.TypeFor[uint64](), "uintptr": reflect.TypeFor[uintptr](), "float32": reflect.TypeFor[float32](), "float64": reflect.TypeFor[float64](), "rune": reflect.TypeFor[rune](), "byte": reflect.TypeFor[byte](),
+ "complex64":reflect.TypeFor[complex64](),"complex128":reflect.TypeFor[complex128](),
 //TYPES
 }
 var handles = struct { sync.Mutex; next uint64; values map[uint64]reflect.Value }{values: map[uint64]reflect.Value{}}
@@ -45,6 +46,7 @@ func encode(v reflect.Value) value {
  case reflect.Bool:result.Kind="bool";result.Text=strconv.FormatBool(v.Bool())
  case reflect.Int,reflect.Int8,reflect.Int16,reflect.Int32,reflect.Int64:result.Kind="int";result.Text=strconv.FormatInt(v.Int(),10)
  case reflect.Uint,reflect.Uint8,reflect.Uint16,reflect.Uint32,reflect.Uint64,reflect.Uintptr:result.Kind="uint";result.Text=strconv.FormatUint(v.Uint(),10)
+ case reflect.Complex64,reflect.Complex128:result.Kind="complex";result.Text=strconv.FormatComplex(v.Complex(),'g',-1,v.Type().Bits())
  case reflect.Float32,reflect.Float64:result.Kind="float";result.Text=strconv.FormatFloat(v.Float(),'g',-1,v.Type().Bits())
  default: handles.Lock();handles.next++;id:=handles.next;copy:=reflect.New(v.Type()).Elem();copy.Set(v);handles.values[id]=copy;handles.Unlock();result.Kind="handle";result.Handle=id
  }
@@ -71,15 +73,16 @@ func decode(v value, target reflect.Type)(reflect.Value,error){
   typ:=resolveType(v.Type)
   if v.Type!="" && typ==nil {return result,fmt.Errorf("unregistered bridge type %q",v.Type)}
   if typ==nil && target!=nil && target.Kind()!=reflect.Interface {typ=target}
-  if typ==nil {switch v.Kind{case "string":typ=types["string"];case "bool":typ=types["bool"];case "int":typ=types["int"];case "uint":typ=types["uint"];case "float":typ=types["float64"]}}
+  if typ==nil {switch v.Kind{case "string":typ=types["string"];case "bool":typ=types["bool"];case "int":typ=types["int"];case "uint":typ=types["uint"];case "float":typ=types["float64"];case "complex":typ=types["complex128"]}}
   if typ==nil{return result,fmt.Errorf("missing bridge type for %s",v.Kind)}
   result=reflect.New(typ).Elem()
   switch v.Kind {
   case "string":if typ.Kind()!=reflect.String{return result,fmt.Errorf("string for %s",typ)};result.SetString(v.Text)
   case "bool":b,e:=strconv.ParseBool(v.Text);if e!=nil||typ.Kind()!=reflect.Bool{return result,fmt.Errorf("invalid bool")};result.SetBool(b)
-  case "int":n,e:=strconv.ParseInt(v.Text,10,64);if e!=nil{return result,e};switch typ.Kind(){case reflect.Int,reflect.Int8,reflect.Int16,reflect.Int32,reflect.Int64:if result.OverflowInt(n){return result,fmt.Errorf("integer overflow")};result.SetInt(n);case reflect.Uint,reflect.Uint8,reflect.Uint16,reflect.Uint32,reflect.Uint64,reflect.Uintptr:if n<0||result.OverflowUint(uint64(n)){return result,fmt.Errorf("unsigned overflow")};result.SetUint(uint64(n));case reflect.Float32,reflect.Float64:result.SetFloat(float64(n));default:return result,fmt.Errorf("integer for %s",typ)}
+  case "int":n,e:=strconv.ParseInt(v.Text,10,64);if e!=nil{return result,e};switch typ.Kind(){case reflect.Int,reflect.Int8,reflect.Int16,reflect.Int32,reflect.Int64:if result.OverflowInt(n){return result,fmt.Errorf("integer overflow")};result.SetInt(n);case reflect.Uint,reflect.Uint8,reflect.Uint16,reflect.Uint32,reflect.Uint64,reflect.Uintptr:if n<0||result.OverflowUint(uint64(n)){return result,fmt.Errorf("unsigned overflow")};result.SetUint(uint64(n));case reflect.Float32,reflect.Float64:result.SetFloat(float64(n));case reflect.Complex64,reflect.Complex128:result.SetComplex(complex(float64(n),0));default:return result,fmt.Errorf("integer for %s",typ)}
   case "uint":n,e:=strconv.ParseUint(v.Text,10,64);if e!=nil||result.OverflowUint(n){return result,fmt.Errorf("unsigned overflow")};result.SetUint(n)
-  case "float":n,e:=strconv.ParseFloat(v.Text,64);if e!=nil{return result,e};if typ.Kind()!=reflect.Float32&&typ.Kind()!=reflect.Float64{return result,fmt.Errorf("float for %s",typ)};result.SetFloat(n)
+  case "complex":n,e:=strconv.ParseComplex(v.Text,128);if e!=nil{return result,e};if typ.Kind()!=reflect.Complex64&&typ.Kind()!=reflect.Complex128{return result,fmt.Errorf("complex for %s",typ)};if result.OverflowComplex(n){return result,fmt.Errorf("complex overflow")};result.SetComplex(n)
+  case "float":n,e:=strconv.ParseFloat(v.Text,64);if e!=nil{return result,e};switch typ.Kind(){case reflect.Float32,reflect.Float64:result.SetFloat(n);case reflect.Complex64,reflect.Complex128:result.SetComplex(complex(n,0));default:return result,fmt.Errorf("float for %s",typ)}
   case "slice","array":if typ.Kind()==reflect.Slice {result=reflect.MakeSlice(typ,len(v.Elements),len(v.Elements))} else if typ.Kind()!=reflect.Array||typ.Len()!=len(v.Elements){return result,fmt.Errorf("invalid collection %s",typ)};for i,elem:=range v.Elements{item,e:=decode(elem,typ.Elem());if e!=nil{return result,e};result.Index(i).Set(item)}
   case "map":if typ.Kind()!=reflect.Map{return result,fmt.Errorf("map for %s",typ)};result=reflect.MakeMapWithSize(typ,len(v.Entries));for _,entry:=range v.Entries{key,e:=decode(entry.Key,typ.Key());if e!=nil{return result,e};item,e:=decode(entry.Value,typ.Elem());if e!=nil{return result,e};result.SetMapIndex(key,item)}
   case "struct":if typ.Kind()!=reflect.Struct{return result,fmt.Errorf("struct for %s",typ)};for name,field:=range v.Fields{slot:=result.FieldByName(name);if !slot.IsValid()||!slot.CanSet(){return result,fmt.Errorf("invalid field %s",name)};item,e:=decode(field,slot.Type());if e!=nil{return result,e};slot.Set(item)}

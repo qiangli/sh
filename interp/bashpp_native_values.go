@@ -164,6 +164,8 @@ func (value bashPPBridgeValue) scalar() (bashPPScalar, error) {
 		scalar.value = constant.MakeBool(value.Text == "true")
 	case "int", "uint":
 		scalar.value = constant.MakeFromLiteral(value.Text, token.INT, 0)
+	case "complex":
+		scalar.value = bashPPParseComplex(value.Text)
 	case "float":
 		scalar.value = constant.MakeFromLiteral(value.Text, token.FLOAT, 0)
 	default:
@@ -192,6 +194,9 @@ func bridgeScalar(value bashPPScalar) (bashPPBridgeValue, error) {
 		if strings.HasPrefix(value.typ, "uint") || value.typ == "byte" {
 			out.Kind = "uint"
 		}
+	case constant.Complex:
+		out.Kind = "complex"
+		out.Text = strconv.FormatComplex(bashPPComplexNumber(value.value), 'g', -1, 128)
 	case constant.Float:
 		out.Kind = "float"
 		number, _ := constant.Float64Val(value.value)

@@ -190,7 +190,7 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 			}
 		}
 	}
-	if (d.Site == syntax.StartVar || d.Site == syntax.StartConst) && d.DeclTypeExpr != nil {
+	if !r.bashPPGoSource && (d.Site == syntax.StartVar || d.Site == syntax.StartConst) && d.DeclTypeExpr != nil {
 		if named, ok := r.bashPPUnderlyingType(d.DeclTypeExpr).(*syntax.BashPPNamedType); ok &&
 			(named.Name.Value == "complex64" || named.Name.Value == "complex128") {
 			r.errf("%sBASHPP-ECOMPLEX-UNSUPPORTED: complex values are not supported by the Bash++ scalar carrier\n", r.bashErrPrefix(d.DeclTypeExpr.Pos()))
@@ -382,7 +382,7 @@ func (r *Runner) bashPPTypedScalarDeclValue(d *syntax.BashPPDecl) (expand.Variab
 		return expand.Variable{}, false, nil
 	}
 	base := named.Name.Value
-	if base == "complex64" || base == "complex128" {
+	if !r.bashPPGoSource && (base == "complex64" || base == "complex128") {
 		return expand.Variable{}, true, fmt.Errorf("BASHPP-ECOMPLEX-UNSUPPORTED: complex constants are not supported by the Bash++ scalar carrier")
 	}
 	if d.InitExpr == nil {
@@ -450,6 +450,8 @@ func (r *Runner) bashPPConstantScalarExpr(expr syntax.BashPPExpr, targetBase str
 
 func bashPPUntypedScalarAssignable(base string, value constant.Value) bool {
 	switch base {
+	case "complex64", "complex128":
+		return value.Kind() == constant.Int || value.Kind() == constant.Float || value.Kind() == constant.Complex
 	case "string":
 		return value.Kind() == constant.String
 	case "bool":
@@ -725,6 +727,9 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 		return
 	}
 	defer r.bashPPEndShortDecl(txn, d.Pos())
+	if r.bashPPComplexShortDecl(d) {
+		return
+	}
 	// A named function value uses the same callable registry as a closure or
 	// method value, retaining its declaration (including the agentic marker).
 	if len(d.Lhs) == 1 {
@@ -1282,6 +1287,8 @@ func (r *Runner) bashPPValidateReusedShortValue(target, candidate *bashPPCell) e
 		value = bashPPScalar{value: constant.MakeBool(candidate.vr.Str == "true")}
 	case constant.Int:
 		value.value = constant.MakeFromLiteral(candidate.vr.Str, token.INT, 0)
+	case constant.Complex:
+		value.value = bashPPParseComplex(candidate.vr.Str)
 	case constant.Float:
 		value.value = constant.MakeFromLiteral(candidate.vr.Str, token.FLOAT, 0)
 	}
