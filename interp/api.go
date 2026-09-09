@@ -3153,7 +3153,13 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 			if node.GoSource {
 				if _, isImport := stmt.Cmd.(*syntax.BashPPImport); !isImport && !goImportsStarted {
 					goImportsStarted = true
-					if err := r.bashPPStartGoSourceBridge(ctx); err != nil {
+					bridgeContext := ctx
+					if r.goSourceTesting != nil {
+						// Run's signal scope ends after package initialization;
+						// the test session owns the dependency process longer.
+						bridgeContext = r.goSourceTesting.context
+					}
+					if err := r.bashPPStartGoSourceBridge(bridgeContext); err != nil {
 						r.exit.fatal(err)
 						break
 					}

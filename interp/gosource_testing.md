@@ -68,12 +68,12 @@ They also exercise actual SkipNow, cancellation, unsupported methods, initializa
 and Reset invalidation. Passing them does not substitute for the pinned original
 source integration proof.
 
-Initial measured boundary: on the base product, the pinned proof fails while
-converting `wrap_test.go:425` (`[]error(m)`). With the committed frontend
-`117dde41` prerequisite temporarily applied, all four files convert but package
-loading fails at `example_test.go:16:1`: imported `time.Time` is not recognized
-as a struct field type. Neither selected original test body has completed.
-The integration test deliberately retains this failure; it must pass before
-claiming the original-source slice or merging it as completed acceptance.
-Further imported-handle comparison and method obligations can emerge after
-package loading works. Scheduler-control checks passing are separate evidence.
+The pinned four-companion integration now passes both selected original test
+functions. Initial discovery failures exposed structured interface constraints,
+unnamed receiver handling, imported type representation, native error identity,
+and a dependency-process context that ended after package initialization. The
+session now gives that process its own caller-supplied lifetime; callers must
+keep the loading context alive until they finish the session. The original
+source hashes and post-execution byte comparisons remain mandatory. This
+establishes the two-function slice only; the remaining standard-library bodies
+and unsupported testing methods above remain pending.

@@ -371,7 +371,7 @@ func (r *Runner) bashPPMethodDecl(d *syntax.BashPPFuncDecl) {
 	recv := d.Receiver
 	for _, field := range append(append([]*syntax.BashPPField(nil), d.Params...), d.Results...) {
 		for _, name := range field.Names {
-			if name.Value == recv.Name.Value && name.Value != "_" {
+			if recv.Name != nil && name.Value == recv.Name.Value && name.Value != "_" {
 				r.errf("receiver %s redeclared in method signature\n", recv.Name.Value)
 				r.exit.code = 2
 				return
@@ -771,6 +771,11 @@ func (r *Runner) bashPPCheckTypeConstraints(fn *bashPPFunc, params []*syntax.Bas
 
 func (r *Runner) bashPPTypeSetSatisfied(arg, constraint syntax.BashPPTypeExpr) bool {
 	switch c := constraint.(type) {
+	case *syntax.BashPPNamedType:
+		if c.Name.Value == "comparable" {
+			return r.bashPPComparableType(arg, make(map[string]bool))
+		}
+		return r.bashPPTypeAssignable(arg, c)
 	case *syntax.BashPPUnionType:
 		for _, term := range c.Terms {
 			if r.bashPPTypeSetSatisfied(arg, term) {
@@ -1760,7 +1765,7 @@ func (r *Runner) bashPPEnterFrame(fn *bashPPFunc, args []string) *bashPPFrame {
 	r.inFunc = true
 	r.writeEnv = &overlayEnviron{parent: r.writeEnv, funcScope: true}
 	r.bashPPScope = newBashPPScope(fn.scope)
-	if fn.decl != nil && fn.decl.Receiver != nil && fn.receiver != nil {
+	if fn.decl != nil && fn.decl.Receiver != nil && fn.decl.Receiver.Name != nil && fn.decl.Receiver.Name.Value != "_" && fn.receiver != nil {
 		recv := fn.decl.Receiver
 		if recv.Pointer {
 			r.bashPPScope.entries[recv.Name.Value] = fn.receiver

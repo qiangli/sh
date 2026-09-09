@@ -128,6 +128,7 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 			r.exit = exitStatus{code: 2}
 			return
 		}
+		_, interfaceDeclaration := d.DeclTypeExpr.(*syntax.BashPPInterfaceType)
 		// Make the declaration visible while validating its representation.
 		// Recursive references can then be classified as either finite (behind
 		// pointer/slice/map indirection) or infinite (direct/array/struct value
@@ -145,7 +146,7 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 				}
 				seenFields[field.name] = true
 			}
-		} else if d.DeclType.Value == "interface" {
+		} else if d.DeclType.Value == "interface" || interfaceDeclaration {
 			iface, ok := d.DeclTypeExpr.(*syntax.BashPPInterfaceType)
 			if !ok {
 				r.errf("BASHPP-EINTERFACE-TYPE: malformed interface declaration %s\n", name)
@@ -173,7 +174,7 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 				seen[member.Value] = true
 			}
 		}
-		if d.DeclType.Value != "interface" && d.DeclType.Value != "enum" {
+		if d.DeclType.Value != "interface" && !interfaceDeclaration && d.DeclType.Value != "enum" {
 			if d.Alias && bashPPRecursiveGenericValue(d.DeclTypeExpr, name) {
 				r.errf("%scyclic type declaration: %s\n", r.bashErrPrefix(d.Pos()), name)
 				r.exit = exitStatus{code: 2}

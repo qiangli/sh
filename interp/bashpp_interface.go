@@ -113,7 +113,9 @@ func (r *Runner) bashPPInterfaceMethodSet(name string, iface *syntax.BashPPInter
 }
 
 func bashPPDirectTypeSetTerm(typ syntax.BashPPTypeExpr) bool {
-	switch typ.(type) {
+	switch t := typ.(type) {
+	case *syntax.BashPPNamedType:
+		return t.Name.Value == "comparable"
 	case *syntax.BashPPUnionType, *syntax.BashPPApproxType:
 		return true
 	}

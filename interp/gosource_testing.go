@@ -30,6 +30,7 @@ type GoSourceTestingT interface {
 // Close it before using the Runner for another program. Reset invalidates it.
 type GoSourceTestingSession struct {
 	runner  *Runner
+	context context.Context
 	program *gosource.Program
 	loading bool
 	active  *goSourceTestingHandle
@@ -62,7 +63,7 @@ func (r *Runner) LoadGoSourceTests(ctx context.Context, program *gosource.Progra
 		return nil, fmt.Errorf("gosource: runner already owns a testing session")
 	}
 	r.Reset()
-	session := &GoSourceTestingSession{runner: r, program: program, loading: true}
+	session := &GoSourceTestingSession{runner: r, context: ctx, program: program, loading: true}
 	r.goSourceTesting = session
 	file := *program.File
 	file.Stmts = append([]*syntax.Stmt(nil), program.File.Stmts...)
