@@ -12,6 +12,11 @@ func validateLocalTransport(req bashPPEvalRequest, q bashPPBridgeRequest) error 
 	if q.Op != "call" {
 		return nil
 	}
+	alias, name, selected := strings.Cut(q.Selector, ".")
+	nativeWriterFormat := selected && req.Imports[alias] == "fmt" && (name == "Fprint" || name == "Fprintln" || name == "Fprintf")
+	if nativeWriterFormat && (len(q.Args) == 0 || q.Args[0].Kind != "handle") {
+		return fmt.Errorf("gosource: fmt.%s requires a dependency-owned writer; original Write callbacks are unsupported", name)
+	}
 	local := map[string]bashPPLocalType{}
 	for _, typ := range req.LocalTypes {
 		local[typ.Name] = typ
@@ -96,6 +101,9 @@ func validateLocalTransport(req bashPPEvalRequest, q bashPPBridgeRequest) error 
 		return nil
 	}
 	if q.Receiver != nil && q.Receiver.Callbacks && (q.Selector == "Error" || q.Selector == "String") && len(q.Args) == 0 {
+		return nil
+	}
+	if nativeWriterFormat {
 		return nil
 	}
 	alias, name, ok := strings.Cut(q.Selector, ".")
