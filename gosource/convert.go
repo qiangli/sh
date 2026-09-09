@@ -549,6 +549,13 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 					out.FuncLit = c.funlit(rhs)
 					out.Rhs = nil
 				case *ast.CallExpr:
+					if id, ok := rhs.Fun.(*ast.Ident); ok {
+						if obj, ok := c.info.Uses[id].(*types.Builtin); ok && obj.Name() == "new" {
+							out.Expr = c.expr(rhs)
+							out.Rhs = nil
+							break
+						}
+					}
 					if c.info.Types[rhs.Fun].IsType() {
 						out.Expr = c.expr(rhs)
 						out.Rhs = nil
