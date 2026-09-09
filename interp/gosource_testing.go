@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"go/constant"
 	"strings"
+	"time"
 
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/syntax"
@@ -408,4 +409,57 @@ func bashPPTestingCatch(call func()) (control *goSourceTestingExit) {
 	}()
 	call()
 	return nil
+}
+
+// goSourceTestingCancelGrace bounds how long a cancelled callback's abandoned
+// defers may run. It is a shutdown grace window, not a test deadline: the
+// defers this discharges are cleanup, and cleanup that has not finished in
+// this long is wedged rather than slow.
+const goSourceTestingCancelGrace = 5 * time.Second
+
+// bashPPTestingCancelUnwind discharges an abandoned callback frame's
+// interpreted defers when the session context is cancelled while an original
+// body is still running.
+//
+// Cancellation abandons the frame the way a hard shell `exit` does, and that
+// path deliberately drops the deferred-call stack rather than running it. For
+// a hosted test callback that would silently strip obligations the driver
+// contract requires to be finished or explicitly failed: the body's own
+// defers, and — through them — anything it registered with the scheduler.
+// A Go `defer` is not conditional on the reason the frame is leaving.
+//
+// The defers run detached from the cancelled context, because every call they
+// make would otherwise abort on the same cancellation they exist to clean up
+// after, and with a cleared exit status so the cancellation is not re-reported
+// by each deferred call in turn. The caller's status is restored afterwards:
+// this discharges obligations, it does not turn a cancelled callback into a
+// passing one. [GoSourceTestingSession.runFunction] still returns ctx.Err().
+//
+// It reports whether it ran the frame's defers, so the abandoning caller drops
+// the stack itself when it did not.
+func (r *Runner) bashPPTestingCancelUnwind(ctx context.Context, mark int) bool {
+	if r.goSourceTesting == nil || r.goSourceTesting.active == nil {
+		return false
+	}
+	if ctx.Err() == nil || len(r.bashPPDeferStack) <= mark {
+		return false
+	}
+	previous := r.exit
+	// Restored on a control unwind too: a defer may call FailNow, which leaves
+	// through a control panic, and the abandoning caller's status must survive it.
+	defer func() {
+		r.bashPPDeferStack = r.bashPPDeferStack[:mark]
+		r.exit = previous
+	}()
+	r.exit = exitStatus{}
+	// Detached from the cancellation, but not unbounded. A defer is ordinary
+	// interpreted code and may block forever -- a receive with no partner is
+	// the shape the corpus already writes -- and cancellation is a request to
+	// shut down, so a wedged defer must not pin the harness in place of the
+	// obligations it was meant to discharge. Whatever has not finished within
+	// the grace window is abandoned exactly as it was before this ran.
+	detached, done := context.WithTimeout(context.WithoutCancel(ctx), goSourceTestingCancelGrace)
+	defer done()
+	r.bashPPRunDefers(detached, mark)
+	return true
 }
