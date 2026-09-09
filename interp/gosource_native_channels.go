@@ -24,7 +24,9 @@ func (r *Runner) goSourceNativeChannel(cell *bashPPCell) (*bashPPBridgeValue, bo
 		return nil, false
 	}
 	if !strings.HasPrefix(name, "chan ") && !strings.HasPrefix(name, "<-chan ") && !strings.HasPrefix(name, "chan<- ") {
-		return nil, false
+		if _, typed := r.bashPPUnderlyingType(cell.declType).(*syntax.BashPPChanType); !typed {
+			return nil, false
+		}
 	}
 	copy := *value
 	return &copy, true

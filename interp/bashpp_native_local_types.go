@@ -348,6 +348,19 @@ func (l *bashPPLocalTypeSet) source(typ syntax.BashPPTypeExpr, depth int) (strin
 			return "", false
 		}
 		return "*" + element, true
+	case *syntax.BashPPChanType:
+		element, ok := l.source(t.Element, depth+1)
+		if !ok {
+			return "", false
+		}
+		prefix := "chan "
+		if t.Direction == "recv" {
+			prefix = "<-chan "
+		}
+		if t.Direction == "send" {
+			prefix = "chan<- "
+		}
+		return prefix + element, true
 	case *syntax.BashPPCollectionType:
 		element, ok := l.source(t.Element, depth+1)
 		if !ok {

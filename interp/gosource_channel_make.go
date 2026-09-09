@@ -70,7 +70,7 @@ func (r *Runner) goSourceChannelCapacity(expr syntax.BashPPExpr, word *syntax.Wo
 	}
 	return int(n), nil
 }
-func (r *Runner) goSourceMakeNativeChannel(typ *syntax.BashPPChanType, expr syntax.BashPPExpr, word *syntax.Word) (*bashPPCell, bool, error) {
+func (r *Runner) goSourceMakeNativeChannel(typ *syntax.BashPPChanType, expr syntax.BashPPExpr, word *syntax.Word, declared ...syntax.BashPPTypeExpr) (*bashPPCell, bool, error) {
 	if !r.bashPPGoSource || typ == nil || !r.goSourceNativeChannelElement(typ.Element, map[string]bool{}) {
 		return nil, false, nil
 	}
@@ -82,7 +82,11 @@ func (r *Runner) goSourceMakeNativeChannel(typ *syntax.BashPPChanType, expr synt
 	if err != nil {
 		return nil, true, err
 	}
-	values, err := r.bashPPNativeRequest(r.bashPPTaskContext(r.ectx), req, bashPPBridgeRequest{Op: "channel-make", Selector: goSourceNativeChannelTypeText(typ), Args: []bashPPBridgeValue{{Kind: "int", Type: "int", Text: strconv.Itoa(capacity)}}})
+	selector := goSourceNativeChannelTypeText(typ)
+	if len(declared) > 0 {
+		selector = bashPPBridgeTypeText(declared[0])
+	}
+	values, err := r.bashPPNativeRequest(r.bashPPTaskContext(r.ectx), req, bashPPBridgeRequest{Op: "channel-make", Selector: selector, Args: []bashPPBridgeValue{{Kind: "int", Type: "int", Text: strconv.Itoa(capacity)}}})
 	if err != nil {
 		return nil, true, err
 	}

@@ -47,7 +47,7 @@ func (r *Runner) goSourceChannelOperand(expr syntax.BashPPExpr, word *syntax.Wor
 		r.bashPPGoSendError(expr, fmt.Errorf("Go channel operand has no value"))
 		return nil, false
 	}
-	typ, _ := cell.declType.(*syntax.BashPPChanType)
+	typ, _ := r.bashPPUnderlyingType(cell.declType).(*syntax.BashPPChanType)
 	if typ != nil && (((operation == "send" || operation == "close") && typ.Direction == "recv") || (operation == "receive" && typ.Direction == "send")) {
 		r.bashPPGoSendError(expr, fmt.Errorf("cannot %s on %s-only channel", operation, typ.Direction))
 		return nil, false
@@ -205,9 +205,30 @@ func (r *Runner) goSourceChannelValueCell(expr syntax.BashPPExpr) (*bashPPCell, 
 		return nil, false, nil
 	}
 	switch x := expr.(type) {
+	case *syntax.BashPPCall:
+		if len(x.Fun) != 1 || x.Fun[0].Value != "make" || x.ArgType == nil {
+			return nil, false, nil
+		}
+		_, ok := r.bashPPUnderlyingType(x.ArgType).(*syntax.BashPPChanType)
+		if !ok {
+			return nil, false, nil
+		}
+		var capacity syntax.BashPPExpr
+		var word *syntax.Word
+		if len(x.ArgExprs) > 1 {
+			capacity = x.ArgExprs[1]
+		}
+		if len(x.Args) > 1 {
+			word = x.Args[1]
+		}
+		cell, err := r.goSourceMakeChannelCell(x.ArgType, capacity, word)
+		if cell != nil {
+			cell.declType = x.ArgType
+		}
+		return cell, true, err
 	case *syntax.BashPPIdent:
 		if cell := r.bashPPScope.lookup(x.Name.Value); cell != nil {
-			_, channelType := cell.declType.(*syntax.BashPPChanType)
+			_, channelType := r.bashPPUnderlyingType(cell.declType).(*syntax.BashPPChanType)
 			if cell.channel != nil || channelType {
 				return bashPPCopyAssignmentCell(cell), true, nil
 			}

@@ -638,15 +638,13 @@ func (r *Runner) bashPPMakeChan(ctx context.Context, d *syntax.BashPPShortDecl) 
 		return
 	}
 	if r.bashPPGoSource {
-		cell, handled, err := r.goSourceMakeNativeChannel(d.MakeChan.ChanType, d.MakeChan.CapacityExpr, d.MakeChan.Capacity)
-		if handled {
-			if err != nil {
-				r.goSourceNativeChannelError(err)
-				return
-			}
-			r.bashPPBindReceivedCell(d.Lhs[0].Value, cell)
+		cell, err := r.goSourceMakeChannelCell(d.MakeChan.ChanType, d.MakeChan.CapacityExpr, d.MakeChan.Capacity)
+		if err != nil {
+			r.goSourceNativeChannelError(err)
 			return
 		}
+		r.bashPPBindReceivedCell(d.Lhs[0].Value, cell)
+		return
 	}
 	capacity := 0
 	elem := d.MakeChan.ChanType.Elem.Value

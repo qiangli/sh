@@ -698,6 +698,8 @@ func (r *Runner) bashPPBindNativeValue(name string, value bashPPBridgeValue) {
 
 func bashPPBridgeTypeText(typ syntax.BashPPTypeExpr) string {
 	switch t := typ.(type) {
+	case *syntax.BashPPChanType:
+		return goSourceNativeChannelTypeText(t)
 	case *syntax.BashPPStructType:
 		var fields []string
 		for _, field := range t.Fields {

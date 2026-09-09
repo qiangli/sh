@@ -111,6 +111,9 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 		// outermost block; give it one rather than binding nowhere.
 		r.bashPPScope = newBashPPScope(nil)
 	}
+	if r.goSourceChannelDeclaration(d) {
+		return
+	}
 	if r.bashPPNativeDeclaration(d) {
 		return
 	}

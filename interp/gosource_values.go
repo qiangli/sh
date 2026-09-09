@@ -63,10 +63,10 @@ func (r *Runner) goSourceValueCell(expr syntax.BashPPExpr) (*bashPPCell, error) 
 	if paren, ok := expr.(*syntax.BashPPParenExpr); ok {
 		return r.goSourceValueCell(paren.X)
 	}
-	if cell, handled, err := r.goSourceCollectionBuiltinCell(expr); handled {
+	if cell, handled, err := r.goSourceChannelValueCell(expr); handled {
 		return cell, err
 	}
-	if cell, handled, err := r.goSourceChannelValueCell(expr); handled {
+	if cell, handled, err := r.goSourceCollectionBuiltinCell(expr); handled {
 		return cell, err
 	}
 	if cell, handled, err := r.goSourceCallableCell(expr); handled {

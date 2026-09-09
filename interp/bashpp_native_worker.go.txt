@@ -257,6 +257,13 @@ func dispatch(q request)(reply response){
   channel:=reflect.MakeChan(reflect.ChanOf(reflect.BothDir,typ.Elem()),n);if channel.Type()!=typ{channel=channel.Convert(typ)}
   reply.Values=[]value{encode(channel)};return
  }
+
+ if q.Op=="channel-bind" {
+  typ:=resolveType(q.Selector);if typ==nil||typ.Kind()!=reflect.Chan||len(q.Args)!=1{reply.Error="channel binding requires a registered channel type and one value";return}
+  original,err:=decode(q.Args[0],nil);if err!=nil{reply.Error=err.Error();return}
+  if !original.IsValid()||original.Kind()!=reflect.Chan||!original.Type().AssignableTo(typ){reply.Error="channel value is not assignable to declared type";return}
+  bound:=reflect.New(typ).Elem();bound.Set(original);reply.Values=[]value{encode(bound)};return
+ }
  if q.Op=="channel-close" {
   if q.Receiver==nil{reply.Error="channel close lacks receiver";return};channel,err:=decode(*q.Receiver,nil);if err!=nil{reply.Error=err.Error();return}
   if !channel.IsValid()||channel.Kind()!=reflect.Chan||channel.Type().ChanDir()==reflect.RecvDir{reply.Error="channel close requires a send-capable channel";return};channel.Close();return
