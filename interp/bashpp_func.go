@@ -214,6 +214,7 @@ func (r *Runner) bashPPClosure(value string) (*bashPPFunc, bool) {
 // at the point `defer` ran, which is what gives Go's "arguments are evaluated
 // when the defer statement executes" rule.
 type bashPPDeferred struct {
+	builtin func()
 	native  func(context.Context) error
 	testing func()
 	agentic bool
@@ -2308,6 +2309,13 @@ func (r *Runner) bashPPDeferStmt(ctx context.Context, d *syntax.BashPPDefer) {
 	// a literal is captured now, and a name resolves to the function it names
 	// now, so a later rebinding cannot change which cleanup runs.
 	entry := bashPPDeferred{call: d.Call, agentic: r.bashPPAgentic}
+	if invoke, handled := r.goSourceCaptureDeferredClose(d.Call); handled {
+		if invoke != nil {
+			entry.builtin = invoke
+			r.bashPPDeferStack = append(r.bashPPDeferStack, entry)
+		}
+		return
+	}
 	if invoke, handled := r.bashPPTestingCapture(d.Call); handled {
 		if invoke != nil {
 			entry.testing = invoke
@@ -2387,8 +2395,11 @@ func (r *Runner) bashPPRunDefers(ctx context.Context, mark int) {
 		// point of it — so the panic stops halting statements for the length
 		// of this call, without ceasing to be recoverable by it.
 		r.bashPPPanic.running = r.bashPPPanic.active
+		builtinPanicDepth := len(r.bashPPPanic.chain)
 		runDeferred := func() {
 			switch {
+			case d.builtin != nil:
+				d.builtin()
 			case d.native != nil:
 				if err := d.native(ctx); err != nil && !r.bashPPPanicking() {
 					r.exit.fatal(err)
@@ -2442,7 +2453,11 @@ func (r *Runner) bashPPRunDefers(ctx context.Context, mark int) {
 		// Cleanup failures are observable. Keep the first failure in execution
 		// order while still running every remaining defer, then restore the
 		// enclosing function's return status when all cleanups succeeded.
-		if !deferFailed && (!r.exit.ok() || r.exit.err != nil) {
+		// A deferred GoSource builtin can start a recoverable panic. Its
+		// unwind status is not a failed shell cleanup to restore after a later
+		// defer recovers; the panic state carries that control transfer.
+		builtinPanic := d.builtin != nil && len(r.bashPPPanic.chain) > builtinPanicDepth
+		if !deferFailed && !builtinPanic && (!r.exit.ok() || r.exit.err != nil) {
 			failed, deferFailed = r.exit, true
 		}
 	}

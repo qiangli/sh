@@ -102,6 +102,10 @@ func (r *Runner) goSourceCloseChannel(expr syntax.BashPPExpr) {
 	if !ok {
 		return
 	}
+	r.goSourceCloseChannelValue(channel)
+}
+
+func (r *Runner) goSourceCloseChannelValue(channel *bashPPChannel) {
 	if channel.native != nil {
 		req, err := r.bashPPEvalRequest()
 		if err == nil {
