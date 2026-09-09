@@ -1553,6 +1553,14 @@ func (r *Runner) bashPPValue(ctx context.Context, words []*syntax.Word) expand.V
 }
 
 func (r *Runner) bashPPValueInRegion(_ context.Context, words []*syntax.Word, goRegion bool) expand.Variable {
+	if len(words) == 1 {
+		// `x, y := <-c, <-c` reaches this site one operand at a time, and a Go
+		// receive word is an operation rather than a literal. See
+		// bashpp_chan_value.go.
+		if vr, handled := r.bashPPGoReceiveWordValue(words[0]); handled {
+			return vr
+		}
+	}
 	switch len(words) {
 	case 0:
 		// A bare declaration: `var x int`. The zero value is the empty
@@ -1604,6 +1612,11 @@ func (r *Runner) bashPPCall(ctx context.Context, c *syntax.BashPPCall) {
 		return
 	}
 	if r.exit.code != 0 {
+		return
+	}
+	// A Go region spells `close(ch)` as an ordinary call rather than as the
+	// shell-recognized channel form. See bashpp_chan_value.go.
+	if r.bashPPGoSourceChanCall(c) {
 		return
 	}
 	// `panic` and `recover` are predeclared, so they answer only where the

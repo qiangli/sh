@@ -75,6 +75,11 @@ func (r *Runner) bashPPEvalScalarExpr(expr syntax.BashPPExpr) (result bashPPScal
 	case *syntax.BashPPParenExpr:
 		return r.bashPPEvalScalarExpr(x.X)
 	case *syntax.BashPPUnaryExpr:
+		// A Go receive is spelled as a unary operator but is a channel
+		// operation, not arithmetic. See bashpp_chan_value.go.
+		if value, handled, err := r.bashPPGoReceiveScalar(x); handled {
+			return value, err
+		}
 		v, err := r.bashPPEvalScalarExpr(x.X)
 		if err != nil {
 			return bashPPScalar{}, err
