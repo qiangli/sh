@@ -9,6 +9,12 @@ func TestGoSourceChannelCaptureUsesTypedOperands(t *testing.T) {
 	}{
 		{"receive_selector", `<-box.C`, []string{"box"}},
 		{"send_selectors", `box.C <- payload.N`, []string{"box", "payload"}},
+		{"short_receive_selector", `value:=<-box.C;_=value`, []string{"box"}},
+		{"select_receive", `select {case value:=<-box.C:_=value;default:}`, []string{"box"}},
+		{"select_receive_tuple", `select {case value,ok:=<-box.C:_,_=value,ok;default:}`, []string{"box"}},
+		{"select_receive_assignment", `select {case payload.N=<-box.C:default:}`, []string{"box", "payload"}},
+		{"select_case_shadow", `select {case payload:=<-box.C:_=payload;default:}`, []string{"box"}},
+		{"select_computed_receive", `select {case value:=<-pick(box.C):_=value;default:}`, []string{"box"}},
 		{"select_send", `select {case box.C <- payload.N:default:}`, []string{"box", "payload"}},
 		{"computed_receive", `<-pick(box.C)`, []string{"box"}},
 		{"shadow_and_literal", `box:=struct{C chan int}{};_="payload";<-box.C`, nil},

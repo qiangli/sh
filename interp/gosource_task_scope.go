@@ -321,7 +321,9 @@ func (s *bashPPGoSourceScope) shortDecl(d *syntax.BashPPShortDecl) {
 	case d.FuncLit != nil:
 		s.funcLit(d.FuncLit)
 	case d.Recv != nil:
-		s.word(d.Recv.Chan)
+		// Receive declarations (including select cases) use the same typed
+		// operand traversal as standalone receives, before binding the LHS.
+		s.command(d.Recv)
 	case d.MakeChan != nil:
 		s.word(d.MakeChan.Capacity)
 	case len(d.MethodValue) > 0:
