@@ -57,6 +57,9 @@ func (r *Runner) goSourceCallableCell(expr syntax.BashPPExpr) (*bashPPCell, bool
 	return nil, false, nil
 }
 func (r *Runner) goSourceValueCell(expr syntax.BashPPExpr) (*bashPPCell, error) {
+	if cell, handled, err := r.goSourceCollectionBuiltinCell(expr); handled {
+		return cell, err
+	}
 	if cell, handled, err := r.goSourceChannelValueCell(expr); handled {
 		return cell, err
 	}

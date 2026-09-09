@@ -368,6 +368,9 @@ func (r *Runner) bashPPBridgeExpr(expr syntax.BashPPExpr) (bashPPBridgeValue, er
 	// scalar spelling and crosses as the collection it is; see
 	// bashPPStructuredBridgeRead in bashpp_collection_growth.go. Scalar reads
 	// report false and keep the scalar evaluator's own diagnostics below.
+	if value, handled, err := r.goSourceBridgeCollectionRead(expr); handled {
+		return value, err
+	}
 	if value, meta, ok := r.bashPPStructuredBridgeRead(expr); ok {
 		return r.bashPPBridgeCollection(value, meta, meta.typ)
 	}
@@ -585,6 +588,14 @@ func (r *Runner) bashPPBridgeCollection(value any, meta *bashPPCollectionMeta, t
 		default:
 			return result, fmt.Errorf("gosource: missing mapping type schema")
 		}
+	case *bashPPBridgeValue:
+		if !r.bashPPGoSource || value == nil {
+			return result, fmt.Errorf("gosource: invalid native collection value")
+		}
+		// Preserve the dependency-owned object and its canonical identity.
+		// The request boundary validates sessions recursively through fields,
+		// elements and map entries before invoking any imported operation.
+		return *value, nil
 	case string:
 		result.Kind = "string"
 		result.Text = value

@@ -1953,7 +1953,11 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 				if i > 0 {
 					p.writeLit(", ")
 				}
-				p.bashppExpr(arg)
+				if arg == nil && i == 0 && cmd.ArgType != nil {
+					p.bashppType(cmd.ArgType)
+				} else {
+					p.bashppExpr(arg)
+				}
 			}
 		} else {
 			positional := len(cmd.Args) - len(cmd.ArgNames)

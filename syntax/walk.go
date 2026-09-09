@@ -367,7 +367,9 @@ func Walk(node Node, f func(Node) bool) {
 		walkList(node.ArgNames, f)
 		walkNilable(node.ArgType, f)
 		if node.ArgExprs != nil {
-			walkList(node.ArgExprs, f)
+			for _, arg := range node.ArgExprs {
+				walkNilable(arg, f)
+			}
 		} else {
 			walkList(node.Args, f)
 		}

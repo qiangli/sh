@@ -61,6 +61,13 @@ func (r *Runner) bashPPAssign(ctx context.Context, assign *syntax.BashPPAssign) 
 		r.exit = exitStatus{code: 2}
 		return
 	}
+	if r.bashPPGoSource && assign.Call != nil {
+		switch assign.TargetExpr.(type) {
+		case *syntax.BashPPIndexExpr, *syntax.BashPPSelectorExpr, *syntax.BashPPDerefExpr:
+			r.bashPPStructuredAssign(assign.TargetExpr, assign.Call)
+			return
+		}
+	}
 	if len(assign.Names) > 0 {
 		if assign.Call != nil {
 			r.bashPPTupleAssignCall(ctx, assign)

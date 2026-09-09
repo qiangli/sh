@@ -74,8 +74,12 @@ func (r *Runner) bashPPEvalScalarExpr(expr syntax.BashPPExpr) (result bashPPScal
 			return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-CALL: scalar %s requires the unshadowed builtin", name)
 		}
 		args := make([]bashPPBuiltinArg, len(x.Args))
-		for i, word := range x.Args {
-			args[i] = r.bashPPBuiltinArg(word)
+		for i := range x.Args {
+			var err error
+			args[i], err = r.goSourceBuiltinArg(x, i)
+			if err != nil {
+				return bashPPScalar{}, err
+			}
 		}
 		cell, err := r.bashPPBuiltinLength(name, x, args)
 		if err != nil {

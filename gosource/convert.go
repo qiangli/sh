@@ -480,9 +480,6 @@ func (c *converter) call(x *ast.CallExpr) *s.BashPPCall {
 		out.Args = append(out.Args, c.word(a))
 		out.ArgExprs = append(out.ArgExprs, c.expr(a))
 	}
-	if out.ArgType != nil {
-		out.ArgExprs = nil
-	}
 	return out
 }
 func (c *converter) statements(st ast.Stmt) []*s.Stmt {

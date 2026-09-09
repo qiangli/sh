@@ -209,7 +209,7 @@ func (r *Runner) bashPPBuiltinElement(arg bashPPBuiltinArg, expected syntax.Bash
 // full cell so structured identity and named type metadata survive `:=`.
 func (r *Runner) bashPPRunValueBuiltin(name string, c *syntax.BashPPCall) (*bashPPCell, bool) {
 	args := make([]bashPPBuiltinArg, len(c.Args))
-	for i, word := range c.Args {
+	for i := range c.Args {
 		if r.bashPPGoSource && (name == "print" || name == "println") && i < len(c.ArgExprs) && c.ArgExprs[i] != nil {
 			scalar, err := r.bashPPEvalScalarExpr(c.ArgExprs[i])
 			if err != nil {
@@ -222,7 +222,14 @@ func (r *Runner) bashPPRunValueBuiltin(name string, c *syntax.BashPPCall) (*bash
 			args[i] = bashPPBuiltinArg{value: bashPPBuiltinExactScalarValue(text, scalar), scalar: scalar, hasScalar: true, text: text}
 			continue
 		}
-		args[i] = r.bashPPBuiltinArg(word)
+		var err error
+		args[i], err = r.goSourceBuiltinArg(c, i)
+		if err != nil {
+			if err != errBashPPScalarInterrupted {
+				r.exit.fatal(err)
+			}
+			return nil, false
+		}
 	}
 	switch name {
 	case "len", "cap":

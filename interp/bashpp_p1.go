@@ -732,6 +732,9 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 		r.goSourceParallelDecl(d)
 		return
 	}
+	if r.goSourceMapCommaDecl(d) {
+		return
+	}
 	if r.bashPPComplexShortDecl(d) {
 		return
 	}
