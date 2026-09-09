@@ -190,7 +190,7 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 	if scratchEnv == nil {
 		scratchEnv = req.Env
 	}
-	file, err := bashPPImportTempSource(bashPPModuleRequest(req).Dir, "bashpp-session-*.go", scratchEnv)
+	file, err := bashPPImportTempSource(bashPPModuleRequest(req).Dir, "bashpp-session-*.go", scratchEnv, bashPPScratchIsolated)
 	if err != nil {
 		return err
 	}

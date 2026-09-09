@@ -1,12 +1,15 @@
 package interp
 
 import (
+	"bytes"
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestBashPPImportScratchOverlay(t *testing.T) {
@@ -35,7 +38,7 @@ func TestBashPPImportScratchOverlay(t *testing.T) {
 	}
 	env := setEnvString(os.Environ(), "TMPDIR", scratch)
 	env = setEnvString(env, "GOWORK", "off")
-	f, err := bashPPImportTempSource(alias, "helper-*.go", env)
+	f, err := bashPPImportTempSource(alias, "helper-*.go", env, bashPPScratchIsolated)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +86,7 @@ func TestBashPPImportScratchOverlay(t *testing.T) {
 func TestBashPPImportScratchRejectsSourceTMPDIR(t *testing.T) {
 	root := t.TempDir()
 	for _, tmp := range []string{root, filepath.Join(root, "missing")} {
-		f, err := bashPPImportTempSource(root, "helper-*.go", setEnvString(os.Environ(), "TMPDIR", tmp))
+		f, err := bashPPImportTempSource(root, "helper-*.go", setEnvString(os.Environ(), "TMPDIR", tmp), bashPPScratchIsolated)
 		if err == nil {
 			f.Close()
 			f.cleanup()
@@ -93,8 +96,83 @@ func TestBashPPImportScratchRejectsSourceTMPDIR(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// Tolerating a source-tree scratch root must not also start tolerating a
+	// TMPDIR that does not resolve: Classic still needs a real directory.
+	f, err := bashPPImportTempSource(root, "helper-*.go", setEnvString(os.Environ(), "TMPDIR", filepath.Join(root, "missing")), bashPPScratchSourceTree)
+	if err == nil {
+		f.Close()
+		f.cleanup()
+		t.Fatal("missing TMPDIR accepted")
+	}
 	entries, err := os.ReadDir(root)
 	if err != nil || len(entries) != 0 {
 		t.Fatalf("failed request altered source: %v %v", entries, err)
+	}
+}
+
+// The Classic bash++ import profile deliberately points TMPDIR at the exec
+// source root: its helpers have always been evaluated from a dot directory
+// under the importer. Isolation is a GoSource requirement, so a source-tree
+// TMPDIR must keep working here instead of failing the whole call. The cases
+// mirror the import shapes of the legacy profile's stdlib-import fixtures.
+func TestBashPPImportClassicAllowsSourceTMPDIR(t *testing.T) {
+	cases := []struct {
+		name     string
+		imports  map[string]string
+		selector []string
+		args     []string
+		want     string
+		values   bool
+	}{
+		{name: "named", imports: map[string]string{"fmt": "fmt"}, selector: []string{"fmt", "Print"}, args: []string{`"incremental"`}, want: "incremental"},
+		{name: "dot", imports: map[string]string{".:fmt": "fmt"}, selector: []string{"Print"}, args: []string{`"dot"`}, want: "dot"},
+		{name: "alias-blank", imports: map[string]string{"fmt": "fmt", "_:strings": "strings"}, selector: []string{"fmt", "Print"}, args: []string{`"alias"`}, want: "alias"},
+		{name: "values", imports: map[string]string{"strings": "strings"}, selector: []string{"strings", "Repeat"}, args: []string{`"package"`, `1`}, want: "package", values: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root, err := filepath.EvalSymlinks(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.test/classic\n\ngo 1.25\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			goBin := filepath.Join(runtime.GOROOT(), "bin", "go")
+			if runtime.GOOS == "windows" {
+				goBin += ".exe"
+			}
+			env := setEnvString(os.Environ(), "GOTOOLCHAIN", "local")
+			env = setEnvString(env, "GOWORK", "off")
+			// Exactly the legacy profile shape: TMPDIR inside the source root.
+			env = setEnvString(env, "TMPDIR", root)
+			ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+			defer cancel()
+			var stdout, stderr bytes.Buffer
+			req := bashPPEvalRequest{Go: goBin, Dir: root, Env: env, Stdout: &stdout, Stderr: &stderr,
+				Imports: tc.imports, Selector: tc.selector, Args: tc.args}
+			if tc.values {
+				req.Results = 1
+				values, err := (nativeBashPPEvaluator{}).Values(ctx, req)
+				if err != nil {
+					t.Fatalf("classic values with source TMPDIR: %v\n%s", err, stderr.String())
+				}
+				if len(values) != 1 || values[0] != tc.want {
+					t.Fatalf("values = %v, want %q", values, tc.want)
+				}
+			} else {
+				if err := (nativeBashPPEvaluator{}).Call(ctx, req); err != nil {
+					t.Fatalf("classic call with source TMPDIR: %v\n%s", err, stderr.String())
+				}
+				if stdout.String() != tc.want {
+					t.Fatalf("stdout = %q, want %q", stdout.String(), tc.want)
+				}
+			}
+			// The helper must still leave the source tree exactly as it found it.
+			entries, err := os.ReadDir(root)
+			if err != nil || len(entries) != 1 || entries[0].Name() != "go.mod" {
+				t.Fatalf("classic helper leaked into source tree: %v %v", entries, err)
+			}
+		})
 	}
 }

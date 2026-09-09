@@ -256,7 +256,7 @@ func (nativeBashPPEvaluator) Call(ctx context.Context, req bashPPEvalRequest) er
 	if err := format.Node(&src, token.NewFileSet(), file); err != nil {
 		return fmt.Errorf("bash++: construct selector call: %w", err)
 	}
-	f, err := bashPPImportTempSource(req.Dir, "bashpp-*.go", req.Env)
+	f, err := bashPPImportTempSource(req.Dir, "bashpp-*.go", req.Env, bashPPScratchSourceTree)
 	if err != nil {
 		return err
 	}
@@ -346,7 +346,7 @@ func (nativeBashPPEvaluator) Values(ctx context.Context, req bashPPEvalRequest) 
 	if err != nil {
 		return nil, fmt.Errorf("bash++: construct value call: %w", err)
 	}
-	f, err := bashPPImportTempSource(req.Dir, "bashpp-values-*.go", req.Env)
+	f, err := bashPPImportTempSource(req.Dir, "bashpp-values-*.go", req.Env, bashPPScratchSourceTree)
 	if err != nil {
 		return nil, err
 	}
