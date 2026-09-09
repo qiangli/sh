@@ -128,9 +128,6 @@ func main(){fmt.Println(Tag(1),b);println("after")}`,
 		"retaining_constructor": `package main
 import "bytes"
 func main(){b:=[]byte{1,2};r:=bytes.NewReader(b);_ = r;println("after")}`,
-		"unreviewed_mutator": `package main
-import "sort"
-func main(){b:=[]int{2,1};sort.Ints(b);println("after")}`,
 		"original_reader": `package main
 import "io"
 type Reader struct{}

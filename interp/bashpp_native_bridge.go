@@ -63,6 +63,13 @@ type bashPPBridgeEntry struct {
 type bashPPBridgeRequest struct {
 	SliceBuffers []bashPPNativeSliceBuffer `json:"slice_buffers,omitempty"`
 	sliceTargets []*bashPPNativeSlice
+	// sliceMutating[i] distinguishes a full in-place mutation writeback (sort)
+	// from the byte-read writeback: a read fills a caller buffer up to its
+	// capacity, while a mutation reorders exactly the visible length. Host-only.
+	sliceMutating []bool
+	// sliceElem[i] is the declared element type of sliceTargets[i], used to
+	// rebuild the writeback elements as interpreter values. Host-only.
+	sliceElem []syntax.BashPPTypeExpr
 
 	ID       uint64              `json:"id"`
 	Op       string              `json:"op"`
@@ -389,7 +396,7 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 				}
 			}
 		case reply := <-wait:
-			if err := applyNativeSliceBuffers(q, reply); err != nil {
+			if err := applyNativeSliceBuffers(req.CallbackOwner, q, reply); err != nil {
 				return nil, err
 			}
 			if err := s.applyNativePointerUpdates(req, reply); err != nil {

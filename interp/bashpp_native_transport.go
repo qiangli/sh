@@ -94,6 +94,14 @@ func validateLocalTransport(req bashPPEvalRequest, q bashPPBridgeRequest) error 
 	if nativePointerWritebackAllowed(req, q) {
 		return nil
 	}
+	// A read-only structural emitter (json/xml Marshal, base64/hex encode) walks
+	// the transported value tree and allocates its own output; it never retains
+	// or mutates the interpreter-owned slices nested inside a local struct. It is
+	// safe precisely when no original callback rides along — a type carrying its
+	// own Marshal method would surface as a callback and take the paths below.
+	if callable := nativeSliceCallable(req, q); nativeSliceReadOnly(callable) && !functionCallbacks && !requestHasCallbacks(req, q) {
+		return nil
+	}
 	if synchronousReaderCallback(req, q) || synchronousImageCallback(req, q) || !functionCallbacks && (synchronousUnwrapCallback(req, q) || synchronousErrorsAsType(req, q)) {
 		return nil
 	}

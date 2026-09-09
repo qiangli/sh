@@ -61,10 +61,35 @@ func nativeSliceReadOnly(name string) bool {
 		"bytes.Equal", "bytes.Compare", "bytes.Contains", "bytes.Count", "bytes.HasPrefix", "bytes.HasSuffix", "bytes.Index", "bytes.IndexByte", "bytes.IndexAny", "bytes.LastIndex", "bytes.LastIndexByte", "bytes.LastIndexAny", "bytes.Clone",
 		"strings.Join", "os.WriteFile", "syscall.Exec", "*flag.FlagSet.Parse",
 		"*crypto/internal/fips140/sha256.Digest.Write", "*crypto/sha256.digest.Write", "crypto/sha256.Sum256", "crypto/sha1.Sum", "crypto/md5.Sum",
-		"*bytes.Buffer.Write", "*bufio.Writer.Write", "*os.File.Write", "*net.TCPConn.Write", "*net.UnixConn.Write":
+		"*bytes.Buffer.Write", "*bufio.Writer.Write", "*os.File.Write", "*net.TCPConn.Write", "*net.UnixConn.Write",
+		// Byte-slice emitters that read the transported storage and hand back a
+		// freshly allocated string/[]byte; the original slice is never retained.
+		"*encoding/base64.Encoding.EncodeToString", "encoding/base64.StdEncoding.EncodeToString",
+		"encoding/hex.EncodeToString", "encoding/hex.Dump",
+		"regexp.Match", "*regexp.Regexp.Match", "*regexp.Regexp.Find", "*regexp.Regexp.FindAll", "*regexp.Regexp.FindIndex", "*regexp.Regexp.FindSubmatch", "*regexp.Regexp.ReplaceAll",
+		// Structural value emitters — the marshalers walk the transported value
+		// tree and allocate their own output. Element storage is read only.
+		"encoding/json.Marshal", "encoding/json.MarshalIndent", "encoding/json/v2.Marshal",
+		"encoding/xml.Marshal", "encoding/xml.MarshalIndent":
 		return true
 	}
 	return false
+}
+
+// nativeSliceMutatingIndex reports the argument that an in-place collection
+// operation reorders or rewrites through the transported backing storage, or
+// -1 when the callable does not mutate a slice argument. The dependency sorts
+// its own decoded copy of the elements; the writeback protocol then copies the
+// reordered elements back into the interpreter's original backing array so
+// aliases observe the change, exactly as native Go would. Only concrete
+// (non-generic) mutators appear here: a generic helper such as slices.Sort
+// cannot be reflected as an imported symbol and is resolved elsewhere.
+func nativeSliceMutatingIndex(name string) int {
+	switch name {
+	case "sort.Ints", "sort.Strings", "sort.Float64s":
+		return 0
+	}
+	return -1
 }
 
 func prepareNativeSliceBuffers(req bashPPEvalRequest, q *bashPPBridgeRequest) error {
@@ -139,12 +164,16 @@ func prepareNativeSliceBuffers(req bashPPEvalRequest, q *bashPPBridgeRequest) er
 		}
 		return nil
 	}
+	name := nativeSliceCallable(req, *q)
+	if mut := nativeSliceMutatingIndex(name); mut >= 0 {
+		return prepareNativeSliceMutation(req, q, mut)
+	}
 	index := nativeSliceReadIndex(req, *q)
 	if index < 0 {
-		if nativeSliceReadOnly(nativeSliceCallable(req, *q)) {
+		if nativeSliceReadOnly(name) {
 			return nil
 		}
-		return fmt.Errorf("gosource: native slice retention or mutation is unsupported for %s", nativeSliceCallable(req, *q))
+		return fmt.Errorf("gosource: native slice retention or mutation is unsupported for %s", name)
 	}
 	if index >= len(q.Args) || q.Args[index].sliceView == nil {
 		return fmt.Errorf("gosource: native Read requires a direct original byte slice")
@@ -171,34 +200,98 @@ func prepareNativeSliceBuffers(req bashPPEvalRequest, q *bashPPBridgeRequest) er
 	}
 	q.SliceBuffers = []bashPPNativeSliceBuffer{{Index: index, Length: len(target.view), Value: full}}
 	q.sliceTargets = []*bashPPNativeSlice{target}
+	q.sliceMutating = []bool{false}
+	q.sliceElem = []syntax.BashPPTypeExpr{collection.Element}
 	return nil
 }
 
-func applyNativeSliceBuffers(q bashPPBridgeRequest, reply bashPPBridgeResponse) error {
+// prepareNativeSliceMutation sets up the transport for a concrete in-place
+// mutator (sort.Ints/Strings/Float64s). Only the visible length crosses the
+// boundary; the dependency reorders its decoded copy and the writeback copies
+// the reordered elements back into the interpreter's original backing array so
+// aliasing slices observe the same reordering, as native Go does.
+func prepareNativeSliceMutation(req bashPPEvalRequest, q *bashPPBridgeRequest, index int) error {
+	if requestHasCallbacks(req, *q) {
+		return fmt.Errorf("gosource: %s cannot mutate a slice carrying original callbacks", nativeSliceCallable(req, *q))
+	}
+	if index >= len(q.Args) || q.Args[index].sliceView == nil {
+		return fmt.Errorf("gosource: %s requires a direct original slice", nativeSliceCallable(req, *q))
+	}
+	target := q.Args[index].sliceView
+	collection, ok := req.CallbackOwner.bashPPUnderlyingType(target.typ).(*syntax.BashPPCollectionType)
+	if !ok || collection.Kind != "slice" {
+		return fmt.Errorf("gosource: native mutation buffer has no slice identity")
+	}
+	visible, err := req.CallbackOwner.bashPPBridgeCollection(target.view, target.meta, target.typ)
+	if err != nil {
+		return err
+	}
+	if visible.Kind != "slice" {
+		return fmt.Errorf("gosource: native mutation buffer is not a slice")
+	}
+	q.SliceBuffers = []bashPPNativeSliceBuffer{{Index: index, Length: len(target.view), Value: visible}}
+	q.sliceTargets = []*bashPPNativeSlice{target}
+	q.sliceMutating = []bool{true}
+	q.sliceElem = []syntax.BashPPTypeExpr{collection.Element}
+	return nil
+}
+
+func applyNativeSliceBuffers(runner *Runner, q bashPPBridgeRequest, reply bashPPBridgeResponse) error {
 	if len(reply.SliceUpdates) == 0 && reply.Error != "" {
 		return nil
 	} // rejected before invoking the dependency
 	if len(reply.SliceUpdates) != len(q.SliceBuffers) {
 		return fmt.Errorf("gosource: native slice writeback count mismatch")
 	}
-	updates := make([][]any, len(reply.SliceUpdates))
+	type sliceWriteback struct {
+		values   []any
+		metas    []*bashPPCollectionMeta
+		length   int  // visible length written; the byte path writes cap
+		mutating bool // reorder the visible length vs fill up to capacity
+	}
+	updates := make([]sliceWriteback, len(reply.SliceUpdates))
 	for i, wire := range reply.SliceUpdates {
 		target := q.sliceTargets[i]
-		if wire.Index != q.SliceBuffers[i].Index || wire.Length != len(target.view) || wire.Value.Kind != "slice" || len(wire.Value.Elements) != cap(target.view) {
+		mutating := i < len(q.sliceMutating) && q.sliceMutating[i]
+		want := cap(target.view)
+		if mutating {
+			want = len(target.view)
+		}
+		if wire.Index != q.SliceBuffers[i].Index || wire.Length != len(target.view) || wire.Value.Kind != "slice" || len(wire.Value.Elements) != want {
 			return fmt.Errorf("gosource: invalid native slice writeback shape")
 		}
 		values := make([]any, len(wire.Value.Elements))
-		for j, v := range wire.Value.Elements {
-			n, err := strconv.ParseUint(v.Text, 10, 8)
-			if err != nil || (v.Kind != "uint" && v.Kind != "int") {
-				return fmt.Errorf("gosource: invalid byte in native slice writeback")
+		metas := make([]*bashPPCollectionMeta, len(wire.Value.Elements))
+		if mutating {
+			// Rebuild the reordered elements at the slice's declared element
+			// type. Structured metadata (per-element identity) rides along so a
+			// mutated element remains a full interpreter value.
+			for j, v := range wire.Value.Elements {
+				value, meta, err := runner.bashPPBridgeContents(v, q.sliceElem[i])
+				if err != nil {
+					return fmt.Errorf("gosource: invalid native slice writeback: %w", err)
+				}
+				values[j], metas[j] = value, meta
 			}
-			values[j] = int(n)
+		} else {
+			for j, v := range wire.Value.Elements {
+				n, err := strconv.ParseUint(v.Text, 10, 8)
+				if err != nil || (v.Kind != "uint" && v.Kind != "int") {
+					return fmt.Errorf("gosource: invalid byte in native slice writeback")
+				}
+				values[j] = int(n)
+			}
 		}
-		updates[i] = values
+		updates[i] = sliceWriteback{values: values, metas: metas, length: want, mutating: mutating}
 	}
-	for i, values := range updates {
-		copy(q.sliceTargets[i].view[:cap(q.sliceTargets[i].view)], values)
+	for i, update := range updates {
+		target := q.sliceTargets[i]
+		copy(target.view[:update.length], update.values)
+		if update.mutating && target.meta != nil && len(target.meta.sequence) >= update.length {
+			for j := 0; j < update.length; j++ {
+				target.meta.sequence[j] = update.metas[j]
+			}
+		}
 	}
 	return nil
 }

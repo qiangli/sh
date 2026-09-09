@@ -612,15 +612,23 @@ func (r *Runner) bashPPBridgeCollection(value any, meta *bashPPCollectionMeta, t
 		return *value, nil
 	case []any:
 		result.Kind = "slice"
+		inferredArray := false
 		if meta != nil {
 			result.Kind = meta.kind
 			if result.Kind == "inferred-array" {
 				result.Kind = "array"
+				inferredArray = true
 			}
 		}
 		collection, ok := r.bashPPUnderlyingType(typ).(*syntax.BashPPCollectionType)
 		if !ok {
 			return result, fmt.Errorf("gosource: missing collection element identity")
+		}
+		// An inferred-length array literal ([...]T) carries the placeholder "..."
+		// in its declared type. The dependency's reflect-based type resolver only
+		// parses a concrete length, so emit the realised element count instead.
+		if inferredArray {
+			result.Type = "[" + strconv.Itoa(len(value)) + "]" + bashPPBridgeTypeText(collection.Element)
 		}
 		if r.bashPPGoSource && result.Kind == "slice" {
 			result.sliceView = &bashPPNativeSlice{view: value, meta: meta, typ: typ}
