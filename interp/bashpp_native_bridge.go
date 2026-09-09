@@ -35,17 +35,21 @@ import (
 var bashPPNativeWorker string
 
 type bashPPBridgeValue struct {
-	Callbacks bool                         `json:"callbacks,omitempty"`
-	Origin    uint64                       `json:"origin,omitempty"`
-	Interface string                       `json:"interface,omitempty"`
-	Session   string                       `json:"session,omitempty"`
-	Kind      string                       `json:"kind"`
-	Type      string                       `json:"type,omitempty"`
-	Text      string                       `json:"text,omitempty"`
-	Handle    uint64                       `json:"handle,omitempty"`
-	Elements  []bashPPBridgeValue          `json:"elements,omitempty"`
-	Fields    map[string]bashPPBridgeValue `json:"fields,omitempty"`
-	Entries   []bashPPBridgeEntry          `json:"entries,omitempty"`
+	// Callable is derived by the interpreter from authenticated native type or
+	// import metadata; the dependency worker cannot set callback policy itself.
+	Callable   string                       `json:"-"`
+	NativeType string                       `json:"native_type,omitempty"`
+	Callbacks  bool                         `json:"callbacks,omitempty"`
+	Origin     uint64                       `json:"origin,omitempty"`
+	Interface  string                       `json:"interface,omitempty"`
+	Session    string                       `json:"session,omitempty"`
+	Kind       string                       `json:"kind"`
+	Type       string                       `json:"type,omitempty"`
+	Text       string                       `json:"text,omitempty"`
+	Handle     uint64                       `json:"handle,omitempty"`
+	Elements   []bashPPBridgeValue          `json:"elements,omitempty"`
+	Fields     map[string]bashPPBridgeValue `json:"fields,omitempty"`
+	Entries    []bashPPBridgeEntry          `json:"entries,omitempty"`
 }
 type bashPPBridgeEntry struct {
 	Key   bashPPBridgeValue `json:"key"`

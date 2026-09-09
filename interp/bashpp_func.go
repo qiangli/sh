@@ -213,6 +213,7 @@ func (r *Runner) bashPPClosure(value string) (*bashPPFunc, bool) {
 // at the point `defer` ran, which is what gives Go's "arguments are evaluated
 // when the defer statement executes" rule.
 type bashPPDeferred struct {
+	native  func(context.Context) error
 	testing func()
 	agentic bool
 	call    *syntax.BashPPCall
@@ -2158,6 +2159,17 @@ func (r *Runner) bashPPDeferStmt(ctx context.Context, d *syntax.BashPPDefer) {
 		}
 		return
 	}
+	if invoke, handled, err := r.bashPPNativeCapture(ctx, d.Call); handled {
+		if err != nil {
+			if !r.bashPPPanicking() {
+				r.exit.fatal(err)
+			}
+			return
+		}
+		entry.native = invoke
+		r.bashPPDeferStack = append(r.bashPPDeferStack, entry)
+		return
+	}
 	if fn, ok := r.bashPPLookupFunc(d.Call); ok {
 		args, ok := r.bashPPCallValues(d.Call, fn)
 		if !ok {
@@ -2221,6 +2233,10 @@ func (r *Runner) bashPPRunDefers(ctx context.Context, mark int) {
 		r.bashPPPanic.running = r.bashPPPanic.active
 		runDeferred := func() {
 			switch {
+			case d.native != nil:
+				if err := d.native(ctx); err != nil && !r.bashPPPanicking() {
+					r.exit.fatal(err)
+				}
 			case d.testing != nil:
 				d.testing()
 			case d.fn != nil:

@@ -15,6 +15,7 @@ import (
 //CONNECTION
 
 type value struct {
+ NativeType string `json:"native_type,omitempty"`
  Origin uint64 `json:"origin,omitempty"`
  Interface string `json:"interface,omitempty"`
  Kind string `json:"kind"`
@@ -44,10 +45,11 @@ var types = map[string]reflect.Type{
 var originalPointers = struct {sync.Mutex; values map[uint64]reflect.Value; ids map[uintptr]uint64}{values:map[uint64]reflect.Value{},ids:map[uintptr]uint64{}}
 var handles = struct { sync.Mutex; next uint64; values map[uint64]reflect.Value }{values: map[uint64]reflect.Value{}}
 func typeID(t reflect.Type) string { if t.Name()!="" && t.PkgPath()!="" {return t.PkgPath()+"."+t.Name()}; return t.String() }
+func nativeTypeID(t reflect.Type) string {if t.Kind()==reflect.Pointer{return "*"+nativeTypeID(t.Elem())};if t.Name()!=""&&t.PkgPath()!=""{return t.PkgPath()+"."+t.Name()};return t.String()}
 func encode(v reflect.Value) value {
  if !v.IsValid() { return value{Kind:"nil"} }
  static:="";if v.Kind()==reflect.Interface {static=typeID(v.Type());if v.IsNil(){return value{Kind:"nil",Type:static,Interface:static}};v=v.Elem()}
- result:=value{Type:typeID(v.Type()),Interface:static}
+ result:=value{Type:typeID(v.Type()),NativeType:nativeTypeID(v.Type()),Interface:static}
  switch v.Kind(){
  case reflect.String: result.Kind="string";result.Text=v.String()
  case reflect.Bool:result.Kind="bool";result.Text=strconv.FormatBool(v.Bool())
@@ -140,13 +142,28 @@ func decode(v value, target reflect.Type)(reflect.Value,error){
 // Structured access over a native value. Handles keep Go identity, so an
 // original index/slice/field/len expression reads through the same value
 // instead of materialising an interpreter copy.
+// Bind value methods to a value snapshot; pointer methods retain the original
+// native receiver. Exported field traversal never exposes unexported storage.
+func memberMethod(rv reflect.Value,name string) reflect.Value {
+ for rv.IsValid()&&rv.Kind()==reflect.Interface&&!rv.IsNil(){rv=rv.Elem()}
+ if !rv.IsValid(){return reflect.Value{}}
+ if method:=rv.MethodByName(name);method.IsValid(){snapshot:=reflect.New(rv.Type()).Elem();snapshot.Set(rv);return snapshot.MethodByName(name)}
+ if rv.CanAddr(){return rv.Addr().MethodByName(name)}
+ return reflect.Value{}
+}
 func access(rv reflect.Value,q request)([]value,string){
  if rv.Kind()==reflect.Interface&&!rv.IsNil(){rv=rv.Elem()}
- if q.Op=="field" {
-  for rv.Kind()==reflect.Pointer {if rv.IsNil(){return nil,"field access through nil pointer"};rv=rv.Elem()}
-  if rv.Kind()!=reflect.Struct{return nil,"field access on "+rv.Type().String()}
-  f:=rv.FieldByName(q.Selector);if !f.IsValid(){return nil,"unknown field "+q.Selector};if !f.CanInterface(){return nil,"unexported field "+q.Selector}
-  return []value{encode(f)},""
+ if q.Op=="field"||q.Op=="member"||q.Op=="receiver_field" {
+  original:=rv
+  for rv.Kind()==reflect.Pointer {if rv.IsNil(){if q.Op=="member" {if method:=memberMethod(original,q.Selector);method.IsValid(){return []value{encode(method)},""}};return nil,"field access through nil pointer"};rv=rv.Elem()}
+  if rv.Kind()==reflect.Struct {
+   f:=rv.FieldByName(q.Selector)
+   if f.IsValid(){if !f.CanInterface(){return nil,"unexported field "+q.Selector};encoded:=encode(f)
+    if q.Op=="receiver_field"&&encoded.Kind=="handle"&&f.CanAddr(){handles.Lock();handles.values[encoded.Handle]=f;handles.Unlock()}
+    return []value{encoded},""}
+  }
+  if q.Op=="member" {if method:=memberMethod(original,q.Selector);method.IsValid(){return []value{encode(method)},""}}
+  return nil,"unknown exported member "+q.Selector+" of "+original.Type().String()
  }
  for rv.Kind()==reflect.Pointer&&rv.Type().Elem().Kind()==reflect.Array {if rv.IsNil(){return nil,"index through nil pointer"};rv=rv.Elem()}
  switch q.Op {
@@ -186,11 +203,8 @@ func dispatch(q request)(reply response){
  if q.Op=="construct"||q.Op=="address" {if len(q.Args)!=1{reply.Error="construction requires one literal";return};typ:=resolveType(q.Selector);if typ==nil{reply.Error="unregistered bridge type "+strconv.Quote(q.Selector);return};v,err:=decode(q.Args[0],typ);if err!=nil{reply.Error=err.Error();return};if q.Op=="address"{ptr:=reflect.New(typ);ptr.Elem().Set(v);v=ptr};reply.Values=[]value{encode(v)};return}
  fn:=symbols[q.Selector]
  if q.Receiver!=nil {receiver,err:=decode(*q.Receiver,nil);if err!=nil{reply.Error=err.Error();return}
-  switch q.Op {case "len","cap","index","slice","field":reply.Values,reply.Error=access(receiver,q);return}
-  if q.Selector==""&&receiver.Kind()==reflect.Func{fn=receiver}else{fn=receiver.MethodByName(q.Selector)}
-  // A handle stores an addressable copy, so pointer-receiver methods of a
-  // value-typed native variable remain reachable and keep mutating that value.
-  if !fn.IsValid()&&receiver.CanAddr(){fn=receiver.Addr().MethodByName(q.Selector)}}
+  switch q.Op {case "len","cap","index","slice","field","member","receiver_field":reply.Values,reply.Error=access(receiver,q);return}
+  if q.Selector==""&&receiver.Kind()==reflect.Func{fn=receiver}else{fn=memberMethod(receiver,q.Selector)}}
  if q.Op=="new" {typ:=resolveType(q.Selector);if typ==nil{reply.Error="unregistered bridge type "+strconv.Quote(q.Selector);return};reply.Values=[]value{encode(reflect.New(typ).Elem())};return}
  if !fn.IsValid(){reply.Error="unknown imported symbol or method: "+q.Selector;return}
  if q.Op=="get" {reply.Values=[]value{encode(fn)};return}
