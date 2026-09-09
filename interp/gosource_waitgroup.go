@@ -139,6 +139,20 @@ func (r *Runner) goSourceWaitGroupNamed(name string) (*bashPPFunc, bool) {
 // group failure reporting — because a WaitGroup task is a task like any other;
 // what it adds is the native counter either side of the body.
 func (r *Runner) goSourceWaitGroupLaunch(ctx context.Context, wg bashPPBridgeValue, body syntax.BashPPExpr, call *syntax.BashPPCall) {
+	// `wg.Go(f)` evaluates f in the CALLING goroutine, exactly as `go f()`
+	// evaluates its function value there. So the spawn call is built once, in
+	// the parent, and handed to the same helper `go` uses: one lexical capture
+	// analysis, one resolution of the callee, one pin. Nothing about the body
+	// is compiled, forwarded or credited to the dependency — the pin is a
+	// handle into this interpreter's own closure registry, and the body is
+	// interpreted in the task.
+	spawn := r.goSourceWaitGroupSpawnCall(body, call)
+	shared, pin := r.bashPPGoSourceTaskCapture(spawn)
+	if r.exit.code != 0 || r.exit.err != nil {
+		// A refused capture analysis is the launch's own diagnostic. Nothing
+		// has been added to the WaitGroup and no task has been registered.
+		return
+	}
 	c := r.bashPPConcurrency(ctx)
 	state, ok := c.add()
 	if !ok {
@@ -147,7 +161,7 @@ func (r *Runner) goSourceWaitGroupLaunch(ctx context.Context, wg bashPPBridgeVal
 		return
 	}
 	ordinal := state.ordinal
-	child, err := r.bashPPTaskSnapshot(ordinal)
+	child, err := r.bashPPTaskSnapshot(ordinal, shared)
 	if err != nil {
 		if child != nil {
 			child.closeBashPPTaskResources()
@@ -207,7 +221,10 @@ func (r *Runner) goSourceWaitGroupLaunch(ctx context.Context, wg bashPPBridgeVal
 		if c.ctx.Err() != nil {
 			return
 		}
-		child.goSourceWaitGroupInvoke(c.ctx, body, call)
+		// The callee was resolved once, in the parent; the child runs that
+		// exact function through its own cloned registry.
+		child.bashPPGoSourcePin = pin
+		child.goSourceWaitGroupInvoke(c.ctx, spawn)
 		if child.bashPPPanicking() {
 			// The body left panicking and nothing recovered it. Go's WaitGroup
 			// re-panics rather than releasing the counter, so neither does this.
@@ -229,15 +246,37 @@ func (r *Runner) goSourceWaitGroupLaunch(ctx context.Context, wg bashPPBridgeVal
 	<-state.ready
 }
 
-// goSourceWaitGroupInvoke resolves the argument to one closure and runs it once
-// in this task. The body is interpreted here; nothing about it is forwarded to
-// the dependency.
-func (r *Runner) goSourceWaitGroupInvoke(ctx context.Context, body syntax.BashPPExpr, call *syntax.BashPPCall) {
-	spawn := &syntax.BashPPCall{CalleeExpr: body, Lparen: call.Lparen, Rparen: call.Rparen}
+// goSourceWaitGroupSpawnCall is the launched body written as the call the task
+// runs, in the spelling the shared task helpers already understand.
+//
+// A literal goes in FuncLit, which is the same node `go func(){…}()` presents,
+// so the closure is built against the task's own scope and the capture set
+// decides what that scope shares. A name goes in CalleeExpr, which is what
+// makes it resolvable — and therefore pinnable — in the parent.
+func (r *Runner) goSourceWaitGroupSpawnCall(body syntax.BashPPExpr, call *syntax.BashPPCall) *syntax.BashPPCall {
+	spawn := &syntax.BashPPCall{Lparen: call.Lparen, Rparen: call.Rparen}
+	if lit, ok := body.(*syntax.BashPPFuncLit); ok {
+		spawn.FuncLit = lit
+		return spawn
+	}
+	spawn.CalleeExpr = body
+	return spawn
+}
+
+// goSourceWaitGroupInvoke resolves the spawn call to one closure and runs it
+// once in this task. The body is interpreted here; nothing about it is
+// forwarded to the dependency.
+func (r *Runner) goSourceWaitGroupInvoke(ctx context.Context, spawn *syntax.BashPPCall) {
 	fn, ok := r.bashPPLookupFunc(spawn)
 	if !ok {
 		if r.exit.code == 0 && r.exit.err == nil {
-			r.exit.fatal(fmt.Errorf("%sgosource: sync.WaitGroup.Go argument is not an original function", r.bashErrPrefix(body.Pos())))
+			pos := spawn.Lparen
+			if spawn.CalleeExpr != nil {
+				pos = spawn.CalleeExpr.Pos()
+			} else if spawn.FuncLit != nil {
+				pos = spawn.FuncLit.Pos()
+			}
+			r.exit.fatal(fmt.Errorf("%sgosource: sync.WaitGroup.Go argument is not an original function", r.bashErrPrefix(pos)))
 		}
 		return
 	}

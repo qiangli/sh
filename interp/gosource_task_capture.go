@@ -4,6 +4,10 @@
 package interp
 
 import (
+	"fmt"
+	"reflect"
+	"strings"
+
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/syntax"
 )
@@ -115,11 +119,21 @@ func (r *Runner) bashPPGoSourceTaskCapture(call *syntax.BashPPCall) (map[*bashPP
 		return nil, nil
 	}
 	body, params, env, pin := r.bashPPGoSourceTaskBody(call)
+	if r.exit.code != 0 || r.exit.err != nil {
+		return nil, pin
+	}
 	if body == nil || env == nil {
+		r.bashPPGoSourceCaptureUnsupported(call, "the launched callee does not resolve to an original function body")
 		return nil, pin
 	}
 	free, exact := bashPPGoSourceFreeNames(body, params)
-	if !exact || len(free) == 0 {
+	if !exact {
+		r.bashPPGoSourceCaptureUnsupported(call, "the body contains a construct the lexical capture analysis does not model")
+		return nil, pin
+	}
+	if len(free) == 0 {
+		// Exact, and the body captures nothing. There is nothing to share and
+		// nothing unanswered; the deep-copy snapshot is the right answer.
 		return nil, pin
 	}
 	shared := make(map[*bashPPCell]bool, len(free))
@@ -138,6 +152,27 @@ func (r *Runner) bashPPGoSourceTaskCapture(call *syntax.BashPPCall) (map[*bashPP
 		return nil, pin
 	}
 	return shared, pin
+}
+
+// bashPPGoSourceCaptureUnsupported refuses a launch the capture analysis
+// cannot answer exactly.
+//
+// The alternative — quietly returning a nil capture set — is the failure this
+// review exists to remove. A nil set means the classic deep-copy snapshot, and
+// for an ORIGINAL Go program that is not a conservative fallback but a
+// different program: the goroutine gets its own copy of a variable Go says it
+// shares, so a correctly synchronized original prints the parent's untouched
+// value and looks like it merely computed the wrong number. A refusal with a
+// diagnostic is a visible, reportable gap; a silent deep copy is a wrong answer
+// wearing a green test.
+//
+// Classic Bash++ is untouched: this is only ever reached in GoSource mode.
+func (r *Runner) bashPPGoSourceCaptureUnsupported(call *syntax.BashPPCall, reason string) {
+	if r.bashPPPanicking() {
+		return
+	}
+	r.exit.fatal(fmt.Errorf("%sgosource: unsupported task capture: %s; an original Go closure captures its free variables by reference and this launch cannot be given that meaning",
+		r.bashErrPrefix(call.Pos()), reason))
 }
 
 // bashPPGoSourceTaskBody reports the launched body, its parameter names, the
@@ -202,15 +237,38 @@ func (r *Runner) bashPPGoSourceTaskFunc(call *syntax.BashPPCall) (*bashPPFunc, *
 		return nil, nil
 	}
 	name := call.Fun[0].Value
-	if fn, ok := r.bashPPFuncs[name]; ok {
-		return fn, nil
+	// A lexical binding is considered BEFORE a package-level `func` of the
+	// same name, because that is what Go's scoping says: an inner
+	//
+	//	f := func() { … }
+	//
+	// shadows a file-scope `func f()` for the rest of its block, and `go f()`
+	// there launches the local closure. Consulting r.bashPPFuncs first made
+	// the analysis walk the global body while the pin — and therefore the
+	// task — ran the local one, so the capture set was computed from a
+	// function that was never launched.
+	if cell := r.bashPPScope.lookup(name); cell != nil {
+		if cell.vr.Kind != expand.String {
+			// The name is bound here to something that is not a function
+			// value. It still shadows the declared func, so there is no
+			// original body to launch through this analysis.
+			return nil, nil
+		}
+		fn, ok := r.bashPPClosure(cell.vr.Str)
+		if !ok {
+			return nil, nil
+		}
+		return fn, &bashPPGoSourcePin{call: call, handle: cell.vr.Str}
 	}
-	// A closure held in a variable: the cell's value is the handle, so the
-	// exact function is resolvable without running anything.
+	// A closure held in a shell variable: the cell's value is the handle, so
+	// the exact function is resolvable without running anything.
 	if vr := r.lookupVar(name); vr.Kind == expand.String {
 		if fn, ok := r.bashPPClosure(vr.Str); ok {
 			return fn, &bashPPGoSourcePin{call: call, handle: vr.Str}
 		}
+	}
+	if fn, ok := r.bashPPFuncs[name]; ok {
+		return fn, nil
 	}
 	return nil, nil
 }
@@ -258,14 +316,28 @@ func bashPPGoSourceAddFieldNames(names map[string]bool, fields []*syntax.BashPPF
 // re-inspecting the payload on a later launch would read a value a running task
 // is concurrently writing, which is a data race in the interpreter itself
 // rather than in the program it runs. (`go test -race` on a loop that launches
-// the same closure repeatedly reports exactly that.) The first launch that
-// names a cell is by construction the last moment at which the parent is its
-// sole owner, so that is where the answer is taken.
+// the same closure repeatedly reports exactly that.)
 //
-// Deciding once is also the right answer, not merely the safe one: what is
-// being classified is the variable's TYPE — plain interpreted value, channel,
-// or imported native handle — and a Go variable's type is fixed at its
-// declaration. It cannot become something else while a goroutine holds it.
+// # Why a nested task never inspects a shared payload
+//
+// The memo below is the ownership record, and it is the SUPERSET of everything
+// ever shared: a cell is shared only after this function has written an entry
+// for it, and [Runner.subshell] hands each task its own clone of the memo (see
+// api.go). So inside a task:
+//
+//   - a cell the parent shared is present in the inherited memo under the SAME
+//     pointer, and is answered from the memo without reading the payload;
+//   - a cell that is absent from the memo was deep copied into this task, or
+//     was declared inside it, and is therefore private to this runner — the
+//     only goroutine that can read or write it is this one.
+//
+// That is the race proof. It holds for arbitrarily nested launches because
+// each level clones the level above's memo before its task can run.
+//
+// The classification itself prefers the cell's DECLARED TYPE, which Go fixes at
+// the declaration and which no concurrent writer can change. Payload inspection
+// is the fallback for an inferred binding only, and it is reached only on a
+// cell this runner privately owns.
 func (r *Runner) bashPPGoSourceSharable(cell *bashPPCell) bool {
 	if cell == nil {
 		return false
@@ -273,7 +345,7 @@ func (r *Runner) bashPPGoSourceSharable(cell *bashPPCell) bool {
 	if decided, ok := r.bashPPGoSourceSharableCells[cell]; ok {
 		return decided
 	}
-	decided := bashPPGoSourceSharableCell(cell)
+	decided := r.bashPPGoSourceSharableCell(cell)
 	if r.bashPPGoSourceSharableCells == nil {
 		r.bashPPGoSourceSharableCells = make(map[*bashPPCell]bool)
 	}
@@ -287,41 +359,142 @@ func (r *Runner) bashPPGoSourceSharable(cell *bashPPCell) bool {
 // the object it names, by copying the descriptor and carrying Session/Handle
 // across, and that rule stays the one authority on native identity. A channel
 // is excluded for the same reason — it owns its own cross-task identity.
-func bashPPGoSourceSharableCell(cell *bashPPCell) bool {
+func (r *Runner) bashPPGoSourceSharableCell(cell *bashPPCell) bool {
 	if cell == nil || cell.channel != nil || cell.constant {
 		return false
 	}
+	if plain, decided := r.bashPPGoSourceSharableType(cell.declType, 0); decided {
+		return plain
+	}
+	// An inferred binding has no declared type to answer from. This runner
+	// privately owns the cell (see the memo argument above), so reading its
+	// payload here races with nobody.
 	return !bashPPCellHoldsNative(cell)
+}
+
+// bashPPGoSourceSharableType answers from the declared type alone, reporting
+// whether it could answer at all.
+//
+// A type expression is immutable AST fixed at the declaration, so this answer
+// is stable for the cell's whole life — which is what makes it usable while
+// other goroutines hold the variable. A package-qualified name is a dependency
+// type (`sync.Mutex`, `atomic.Int64`, `os.File`), and identity for those stays
+// bashpp_task.go's to decide. Anything this function does not model reports
+// "undecided" rather than guessing.
+func (r *Runner) bashPPGoSourceSharableType(typ syntax.BashPPTypeExpr, depth int) (plain, decided bool) {
+	if typ == nil {
+		return false, false
+	}
+	if depth > 32 {
+		// A type expression this deep is not one this function models. Report
+		// undecided rather than granting: an unmodelled shape must never fall
+		// through to "plain" merely by running out of budget.
+		return false, false
+	}
+	switch typ := typ.(type) {
+	case *syntax.BashPPNamedType:
+		if typ.Name == nil {
+			return false, false
+		}
+		if strings.Contains(typ.Name.Value, ".") {
+			// Qualified by a package: a dependency type.
+			return false, true
+		}
+		if _, imported := r.bashPPImports[typ.Name.Value]; imported {
+			return false, true
+		}
+		for _, arg := range typ.TypeArgs {
+			if arg == nil {
+				return false, false
+			}
+			argPlain, argDecided := r.bashPPGoSourceSharableType(arg.ArgType, depth+1)
+			if !argDecided {
+				return false, false
+			}
+			if !argPlain {
+				return false, true
+			}
+		}
+		return true, true
+	case *syntax.BashPPPointerType:
+		// A pointer to a dependency value names that dependency object.
+		return r.bashPPGoSourceSharableType(typ.Element, depth+1)
+	case *syntax.BashPPCollectionType:
+		// [N]T, []T and map[K]V are plain exactly when everything they can
+		// hold is plain.
+		if typ.Key != nil {
+			keyPlain, keyDecided := r.bashPPGoSourceSharableType(typ.Key, depth+1)
+			if !keyDecided {
+				return false, false
+			}
+			if !keyPlain {
+				return false, true
+			}
+		}
+		return r.bashPPGoSourceSharableType(typ.Element, depth+1)
+	}
+	return false, false
 }
 
 // bashPPCellHoldsNative reports whether a cell's payload is, or contains, an
 // imported native handle.
+//
+// It is total rather than depth-limited. An earlier revision stopped at depth 8
+// and answered "no native here", which GRANTS identity to whatever sits below —
+// a native handle nested ten containers deep would have been shared as if it
+// were a plain value. Recursion is bounded by a visited set over the container
+// pointers instead, so a cyclic payload terminates without a depth cap, and any
+// payload shape this function does not model is reported as native-holding so
+// that an unmodelled value is copied rather than aliased.
 func bashPPCellHoldsNative(cell *bashPPCell) bool {
 	if cell == nil {
 		return false
 	}
-	var holds func(any, int) bool
-	holds = func(value any, depth int) bool {
-		if depth > 8 {
-			return false
-		}
+	seen := make(map[any]bool)
+	var holds func(any) bool
+	holds = func(value any) bool {
 		switch value := value.(type) {
+		case nil:
+			return false
 		case *bashPPBridgeValue:
 			return true
+		case bashPPBridgeValue:
+			return true
 		case map[string]any:
+			key := reflect.ValueOf(value).Pointer()
+			if seen[key] {
+				return false
+			}
+			seen[key] = true
 			for _, item := range value {
-				if holds(item, depth+1) {
+				if holds(item) {
 					return true
 				}
 			}
+			return false
 		case []any:
+			if len(value) == 0 {
+				return false
+			}
+			key := reflect.ValueOf(value).Pointer()
+			if seen[key] {
+				return false
+			}
+			seen[key] = true
 			for _, item := range value {
-				if holds(item, depth+1) {
+				if holds(item) {
 					return true
 				}
 			}
+			return false
+		case string, bool, int, int8, int16, int32, int64,
+			uint, uint8, uint16, uint32, uint64, float32, float64:
+			return false
 		}
-		return false
+		// Not a shape this function models. Fail closed: report it as native so
+		// the cell is copied under the reviewed bashpp_task.go rule instead of
+		// being aliased on an assumption.
+		return true
 	}
-	return holds(cell.vr.Obj, 0)
+	return holds(cell.vr.Obj)
 }

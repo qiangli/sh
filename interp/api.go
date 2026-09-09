@@ -160,10 +160,11 @@ type Runner struct {
 	// gosource_task_capture.go. Nil everywhere else.
 	bashPPGoSourcePin *bashPPGoSourcePin
 	// bashPPGoSourceSharableCells memoizes, per cell, whether GoSource task
-	// capture may grant it identity. The answer is taken while the parent is
+	// capture may grant it identity. The answer is taken while this runner is
 	// still the cell's sole owner and never revisited; see
-	// [Runner.bashPPGoSourceSharable]. Task-local, never shared across
-	// goroutines.
+	// [Runner.bashPPGoSourceSharable]. A task inherits its own CLONE of the
+	// map, never the map itself, so the record of what is already shared
+	// reaches nested launches without two goroutines writing one map.
 	bashPPGoSourceSharableCells map[*bashPPCell]bool
 	// bashPPDeferStack is the LIFO stack of deferred calls awaiting the return
 	// of the func invocations currently on the call stack. Each invocation
@@ -3554,6 +3555,13 @@ func (r *Runner) subshell(background bool) *Runner {
 		// genuinely names is aliased rather than deep copied).
 		cloner := newBashPPClonerFor(r2)
 		cloner.shared = r.bashPPGoSourceCapture
+		// The GoSource capture-ownership record travels with the copy. It is
+		// the superset of every cell ever shared, so a nested launch inside
+		// this copy answers a shared cell from the record instead of reading a
+		// payload another goroutine may be writing; see
+		// [Runner.bashPPGoSourceSharable]. The clone is private to r2, so the
+		// two runners never write one map.
+		r2.bashPPGoSourceSharableCells = maps.Clone(r.bashPPGoSourceSharableCells)
 		r2.bashPPScope = cloner.clone(r.bashPPScope)
 		if r.bashPPFuncScopes != nil {
 			r2.bashPPFuncScopes = make(map[string]*bashPPScope, len(r.bashPPFuncScopes))

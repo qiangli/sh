@@ -112,12 +112,12 @@ func captureThreeModes(t *testing.T, source string) {
 //
 // Synchronization here is by CHANNEL, not by sync.Mutex/WaitGroup. Those are
 // imported native handles, and the snapshot rule that carries a native handle
-// across the task boundary is a sibling story's, not in this lineage: a
-// sync-synchronized program currently fails the snapshot outright with
-// "unsupported mutable Bash++ object type". Channels own their own cross-task
+// across the task boundary is a sibling story's, not in this lineage. Channels
+// own their own cross-task
 // identity already, so a channel-synchronized program measures exactly what
 // this story decides — whether the plain interpreted cell is shared — without
-// depending on work that is not here. See TestGoSourceCaptureNativeHandlePending.
+// depending on work that is not here. A sync-synchronized program is measured
+// separately by TestGoSourceCaptureNativeMutexSharedLocal.
 func TestGoSourceCaptureSharedCounterThreeModes(t *testing.T) {
 	source, err := os.ReadFile("testdata/gosource-task/shared-counter.go")
 	if err != nil {
@@ -298,17 +298,26 @@ func main() {
 	}
 }
 
-// TestGoSourceCaptureNativeHandlePending records, as an executable fact rather
-// than a comment, why the controls above synchronize with channels.
+// TestGoSourceCaptureNativeMutexSharedLocal is what the story text asked for
+// all along, now that it runs.
 //
-// A sync.Mutex / sync.WaitGroup program is the shape the original story text
-// used, and it does not run here: the snapshot has no rule for carrying an
-// imported native handle across the task boundary, so it fails closed before
-// capture is ever consulted. That rule belongs to a sibling story and is not in
-// this lineage. This test pins the CURRENT boundary so the day it lands, this
-// test fails and the case moves up into the three-mode table.
-func TestGoSourceCaptureNativeHandlePending(t *testing.T) {
-	const source = `package main
+// This test replaces TestGoSourceCaptureNativeHandlePending, which pinned the
+// opposite claim: that a sync.Mutex / sync.WaitGroup program failed the
+// snapshot with "unsupported mutable Bash++ object type" before capture was
+// ever consulted, and that the case would move up into the three-mode table
+// the day the sibling native-handle rule landed. It has landed — the task
+// snapshot carries an imported native handle across by copying the descriptor
+// and keeping Session/Handle (bashpp_task.go) — so the pending test was
+// asserting a boundary that no longer exists and would have kept failing as a
+// false alarm.
+//
+// The measurement it was standing in for is the interesting one: a NATIVE
+// mutex protecting an INTERPRETED local. The two rules meet on one statement —
+// the mutex keeps its object identity through bashpp_task.go, and the plain
+// `counter` cell is shared by the lexical capture set here — and Go's answer
+// is only reproduced if BOTH hold.
+func TestGoSourceCaptureNativeMutexSharedLocal(t *testing.T) {
+	captureThreeModes(t, `package main
 
 import (
 	"fmt"
@@ -319,35 +328,19 @@ func main() {
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	counter := 0
-	wg.Add(1)
-	go func() {
-		mu.Lock()
-		counter++
-		mu.Unlock()
-		wg.Done()
-	}()
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			mu.Lock()
+			counter++
+			mu.Unlock()
+			wg.Done()
+		}()
+	}
 	wg.Wait()
 	fmt.Println("counter", counter)
 }
-`
-	program, err := gosource.Parse(strings.NewReader(source), "native.go", gosource.Options{RunMain: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var out, stderr bytes.Buffer
-	r, err := interp.New(interp.Lang(syntax.LangBashPP), interp.StdIO(nil, &out, &stderr))
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	err = r.Run(ctx, program.File)
-	if !strings.Contains(stderr.String(), "unsupported mutable Bash++ object type") {
-		t.Fatalf("native handle snapshot boundary moved: %v stdout=%q stderr=%q", err, out.String(), stderr.String())
-	}
-	if out.Len() != 0 {
-		t.Fatalf("a failed snapshot must not produce output: %q", out.String())
-	}
+`)
 }
 
 // TestGoSourceCaptureClassicBashPPDeepCopy is the blast-radius control from the
