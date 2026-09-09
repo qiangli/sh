@@ -1,6 +1,9 @@
 // Generated dependency bridge: imported operations only, no program source.
 package main
 import (
+ "bytes"
+ "go/format"
+ "go/token"
  "encoding/json"
  "fmt"
  "go/ast"
@@ -40,6 +43,9 @@ var types = map[string]reflect.Type{
 //TYPES
 }
 
+type localStructCodec struct { decode func(value)(reflect.Value,error); structural func(reflect.Value)value }
+var localStructCodecs = map[reflect.Type]localStructCodec{}
+func localTypeKey(name string) string { expr,err:=parser.ParseExpr(name);if err!=nil{return name};var b bytes.Buffer;if format.Node(&b,token.NewFileSet(),expr)!=nil{return name};return b.String() }
 //LOCALTYPES
 
 var originalPointers = struct {sync.Mutex; values map[uint64]reflect.Value; ids map[uintptr]uint64}{values:map[uint64]reflect.Value{},ids:map[uintptr]uint64{}}
@@ -69,8 +75,8 @@ func structural(v reflect.Value) value {
  static:="";if v.Kind()==reflect.Interface {static=typeID(v.Type());if v.IsNil(){return value{Kind:"nil",Type:static,Interface:static}};v=v.Elem()}
  result:=value{Type:typeID(v.Type()),Interface:static}
  switch v.Kind(){
- case reflect.Pointer:if v.IsNil(){return value{Kind:"nil",Type:result.Type,Interface:static}};inner:=structural(v.Elem());inner.Interface=static;originalPointers.Lock();inner.Origin=originalPointers.ids[v.Pointer()];originalPointers.Unlock();return inner
- case reflect.Struct:result.Kind="struct";result.Fields=map[string]value{};for i:=range v.NumField(){f:=v.Type().Field(i);if !f.IsExported(){continue};result.Fields[f.Name]=structural(v.Field(i))};return result
+ case reflect.Pointer:if v.IsNil(){return value{Kind:"nil",Type:result.Type,Interface:static}};if pkg:=v.Type().Elem().PkgPath();pkg!=""&&pkg!="main"{encoded:=encode(v);encoded.Interface=static;return encoded};inner:=structural(v.Elem());inner.Interface=static;originalPointers.Lock();inner.Origin=originalPointers.ids[v.Pointer()];originalPointers.Unlock();return inner
+ case reflect.Struct:if codec,ok:=localStructCodecs[v.Type()];ok{encoded:=codec.structural(v);encoded.Interface=static;return encoded};if v.Type().PkgPath()!=""{encoded:=encode(v);encoded.Interface=static;return encoded};result.Kind="struct";result.Fields=map[string]value{};for i:=range v.NumField(){f:=v.Type().Field(i);if !f.IsExported(){continue};result.Fields[f.Name]=structural(v.Field(i))};return result
  case reflect.Slice,reflect.Array:if v.Kind()==reflect.Slice&&v.IsNil(){return value{Kind:"nil",Type:result.Type,Interface:static}};result.Kind="slice";if v.Kind()==reflect.Array{result.Kind="array"};for i:=range v.Len(){result.Elements=append(result.Elements,structural(v.Index(i)))};return result
  case reflect.Map:if v.IsNil(){return value{Kind:"nil",Type:result.Type,Interface:static}};result.Kind="map";for iter:=v.MapRange();iter.Next();{result.Entries=append(result.Entries,entry{Key:structural(iter.Key()),Value:structural(iter.Value())})};return result
  }
@@ -102,6 +108,7 @@ func(p originalCallbackPanic)Error()string{return p.value.Text}
 
 func resolveType(name string) reflect.Type {
  if typ:=types[name];typ!=nil{return typ}
+ if t:=types[localTypeKey(name)];t!=nil{return t}
  expression,err:=parser.ParseExpr(name);if err!=nil{return nil}
  var walk func(ast.Expr) reflect.Type
  walk=func(expr ast.Expr) reflect.Type {switch e:=expr.(type){
@@ -143,7 +150,7 @@ func decode(v value, target reflect.Type)(reflect.Value,error){
   case "slice","array":if typ.Kind()==reflect.Slice {result=reflect.MakeSlice(typ,len(v.Elements),len(v.Elements))} else if typ.Kind()!=reflect.Array||typ.Len()!=len(v.Elements){return result,fmt.Errorf("invalid collection %s",typ)};for i,elem:=range v.Elements{item,e:=decode(elem,typ.Elem());if e!=nil{return result,e};result.Index(i).Set(item)}
   case "pointer":if typ.Kind()!=reflect.Pointer{return result,fmt.Errorf("pointer for %s",typ)};if len(v.Elements)!=1{return result,fmt.Errorf("pointer needs one referent")};item,e:=decode(v.Elements[0],typ.Elem());if e!=nil{return result,e};originalPointers.Lock();if v.Origin!=0 {result=originalPointers.values[v.Origin]};if !result.IsValid() || result.Type()!=typ || result.IsNil(){result=reflect.New(typ.Elem())};result.Elem().Set(item);if v.Origin!=0{originalPointers.values[v.Origin]=result;originalPointers.ids[result.Pointer()]=v.Origin};originalPointers.Unlock()
   case "map":if typ.Kind()!=reflect.Map{return result,fmt.Errorf("map for %s",typ)};result=reflect.MakeMapWithSize(typ,len(v.Entries));for _,entry:=range v.Entries{key,e:=decode(entry.Key,typ.Key());if e!=nil{return result,e};item,e:=decode(entry.Value,typ.Elem());if e!=nil{return result,e};result.SetMapIndex(key,item)}
-  case "struct":if typ.Kind()!=reflect.Struct{return result,fmt.Errorf("struct for %s",typ)};for name,field:=range v.Fields{slot:=result.FieldByName(name);if !slot.IsValid(){return result,fmt.Errorf("unknown field %s of %s",name,typ)};if !slot.CanSet(){return result,fmt.Errorf("unexported field %s of %s cannot cross the dependency boundary",name,typ)};item,e:=decode(field,slot.Type());if e!=nil{return result,e};slot.Set(item)}
+  case "struct":if typ.Kind()!=reflect.Struct{return result,fmt.Errorf("struct for %s",typ)};if codec,ok:=localStructCodecs[typ];ok{var err error;result,err=codec.decode(v);if err!=nil{return result,err};break};for name,field:=range v.Fields{slot:=result.FieldByName(name);if !slot.IsValid(){return result,fmt.Errorf("unknown field %s of %s",name,typ)};if !slot.CanSet(){return result,fmt.Errorf("unexported field %s of %s cannot cross the dependency boundary",name,typ)};item,e:=decode(field,slot.Type());if e!=nil{return result,e};slot.Set(item)}
   default:return result,fmt.Errorf("unsupported bridge value %s",v.Kind)
   }
  }

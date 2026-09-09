@@ -41,6 +41,7 @@ type bashPPLocalType struct {
 var bashPPHelperReserved = map[string]bool{
 	"value": true, "entry": true, "request": true, "response": true,
 	"originalCallbackPanic": true, "originalPointers": true, "symbols": true, "types": true, "handles": true, "callbacks": true,
+	"localTypeKey": true, "localStructCodec": true, "localStructCodecs": true,
 	"outbound": true, "failure": true, "encode": true, "structural": true,
 	"decode": true, "resolveType": true, "typeID": true, "access": true,
 	"dispatch": true, "main": true, "callback": true, "callbackFailed": true,

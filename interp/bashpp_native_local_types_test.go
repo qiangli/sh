@@ -269,12 +269,9 @@ func main() {
 	}
 }
 
-// TestGoSourceLocalTypeUnsupported pins the boundary. Reflection cannot write
-// an unexported field, so a struct carrying one is refused by name instead of
-// being delivered with that field silently zeroed. The failure is reported, the
-// original source is not rewritten to avoid the case, and no stand-in value is
-// fabricated.
-func TestGoSourceLocalTypeUnsupported(t *testing.T) {
+// The original private-field refusal fixture now requires native equivalence.
+// Typed local codecs preserve its hidden field without unsafe reflection.
+func TestGoSourceLocalTypePrivateField(t *testing.T) {
 	const source = `package main
 
 import "fmt"
@@ -288,10 +285,7 @@ func main() {
 	fmt.Println(Counter{1, "secret"})
 }
 `
-	outcome := runGoSourceRunnerError(t, source)
-	if !strings.Contains(outcome, "unexported field hidden") {
-		t.Fatalf("want an honest unexported-field refusal, got %q", outcome)
-	}
+	differGoSource(t, source, nil, "")
 }
 
 // runGoSourceRunnerError runs one original source and returns the diagnostic

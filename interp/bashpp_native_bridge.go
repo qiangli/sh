@@ -515,6 +515,11 @@ func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, err
 		// package-qualified identity Go's %T prints for it.
 		fmt.Fprintf(&typeEntries, "%q: reflect.TypeFor[%s](),\n%q: reflect.TypeFor[%s](),\n", local.Name, local.Name, "main."+local.Name, local.Name)
 	}
+	codecs, err := bashPPLocalCodecsGo(req.LocalTypes)
+	if err != nil {
+		return "", err
+	}
+	locals.WriteString(codecs)
 	source := strings.Replace(bashPPNativeWorker, "//IMPORTS", imports.String(), 1)
 	source = strings.Replace(source, "//SYMBOLS", symbols.String(), 1)
 	source = strings.Replace(source, "//TYPES", typeEntries.String(), 1)

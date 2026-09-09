@@ -64,6 +64,7 @@ func (s *bashPPNativeSession) serveCallback(ctx context.Context, owner *Runner, 
 	if owner == nil || q.Receiver == nil {
 		answer.Error = "gosource: callback has no original owner or receiver"
 	} else {
+		s.bashPPAuthenticateCallbackValue(q.Receiver)
 		owner.bashPPTools.callbackDepth++
 		var values []bashPPBridgeValue
 		var err error
@@ -195,13 +196,10 @@ func (r *Runner) bashPPNativeCallback(ctx context.Context, selector string, recv
 	return []bashPPBridgeValue{{Kind: "string", Type: "string", Text: results[0]}}, nil
 }
 
-// bashPPBridgeContents rebuilds an interpreter value from a structurally
-// encoded dependency value at the original declared type. It refuses a
-// dependency-owned handle rather than inventing a stand-in for it.
+// bashPPBridgeContents rebuilds an interpreter value at its original declared
+// type. Native fields retain their authenticated session handles; their private
+// SDK storage is never reflected into an interpreter-owned imitation.
 func (r *Runner) bashPPBridgeContents(v bashPPBridgeValue, typ syntax.BashPPTypeExpr) (any, *bashPPCollectionMeta, error) {
-	if v.Kind == "handle" {
-		return nil, nil, fmt.Errorf("a dependency-owned %s cannot enter an original method body", v.Type)
-	}
 	if _, ok := r.bashPPInterfaceType(typ); ok {
 		if v.Kind == "nil" {
 			return "", &bashPPCollectionMeta{kind: "interface", typ: typ, interfaceValue: &bashPPInterfaceValue{nilIface: true}}, nil
@@ -218,6 +216,13 @@ func (r *Runner) bashPPBridgeContents(v bashPPBridgeValue, typ syntax.BashPPType
 		bashPPStoreCellValue(payload, inner, innerMeta)
 		iv := &bashPPInterfaceValue{cell: payload, dynamic: dynamic}
 		return inner, &bashPPCollectionMeta{kind: "interface", typ: typ, interfaceValue: iv}, nil
+	}
+	if v.Kind == "handle" {
+		if r.bashPPTools.bridge == nil || v.Session != r.bashPPTools.bridge.id {
+			return nil, nil, fmt.Errorf("gosource: native callback field belongs to another dependency session")
+		}
+		copy := v
+		return &copy, &bashPPCollectionMeta{kind: "native", typ: typ}, nil
 	}
 	if pointer, ok := r.bashPPPointerType(typ); ok {
 		if v.Kind == "nil" {
@@ -307,4 +312,24 @@ func bashPPBridgeScalarValue(v bashPPBridgeValue) (any, *bashPPCollectionMeta, e
 		return n, nil, nil
 	}
 	return nil, nil, fmt.Errorf("%s (%s) has no interpreter representation", v.Kind, v.Type)
+}
+
+// Only values arriving on this session's authenticated callback connection get
+// its identity. Stored handles keep that identity through nested field reads,
+// and the normal request validator rejects them after Reset or in another runner.
+func (s *bashPPNativeSession) bashPPAuthenticateCallbackValue(v *bashPPBridgeValue) {
+	if v.Kind == "handle" || v.Kind == "callback" || v.Origin != 0 {
+		v.Session = s.id
+	}
+	for i := range v.Elements {
+		s.bashPPAuthenticateCallbackValue(&v.Elements[i])
+	}
+	for name, field := range v.Fields {
+		s.bashPPAuthenticateCallbackValue(&field)
+		v.Fields[name] = field
+	}
+	for i := range v.Entries {
+		s.bashPPAuthenticateCallbackValue(&v.Entries[i].Key)
+		s.bashPPAuthenticateCallbackValue(&v.Entries[i].Value)
+	}
 }

@@ -504,6 +504,11 @@ func (r *Runner) bashPPBridgeCollection(value any, meta *bashPPCollectionMeta, t
 	}
 	result := bashPPBridgeValue{Type: bashPPBridgeTypeText(typ)}
 	switch value := value.(type) {
+	case *bashPPBridgeValue:
+		if value == nil || !r.bashPPGoSource {
+			return bashPPBridgeValue{}, fmt.Errorf("gosource: missing native field value")
+		}
+		return *value, nil
 	case []any:
 		result.Kind = "slice"
 		if meta != nil {
@@ -672,7 +677,11 @@ func bashPPBridgeTypeText(typ syntax.BashPPTypeExpr) string {
 			for i, name := range field.Names {
 				names[i] = name.Value
 			}
-			fields = append(fields, strings.Join(names, ",")+" "+bashPPBridgeTypeText(field.FieldTypeExpr))
+			text := strings.Join(names, ",") + " " + bashPPBridgeTypeText(field.FieldTypeExpr)
+			if field.Tag != nil {
+				text += " " + field.Tag.Value
+			}
+			fields = append(fields, text)
 		}
 		return "struct{" + strings.Join(fields, ";") + "}"
 	case *syntax.BashPPInterfaceType:
