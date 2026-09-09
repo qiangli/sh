@@ -950,6 +950,18 @@ func bashPPValidateConcreteTypeExpr(typ syntax.BashPPTypeExpr) error {
 }
 
 func (r *Runner) bashPPConstraintSatisfied(arg, constraint syntax.BashPPTypeExpr) bool {
+	// `any` is satisfied by every type, so there is nothing to decide and no
+	// need for the argument to be a concrete type. gosource lowers `any` to a
+	// literal empty interface, which would otherwise be routed through the
+	// implements check and reject an uninstantiated type parameter — the form
+	// a generic type takes inside its own declaration, as in the Tour's
+	// `type List[T any] struct { next *List[T]; val T }`. A type parameter
+	// used as a type argument is checked against a real constraint where the
+	// generic type is instantiated, which is the first point a concrete type
+	// exists to check.
+	if bashPPEmptyInterfaceType(constraint) {
+		return true
+	}
 	switch c := constraint.(type) {
 	case *syntax.BashPPNamedType:
 		switch c.Name.Value {
@@ -969,6 +981,13 @@ func (r *Runner) bashPPConstraintSatisfied(arg, constraint syntax.BashPPTypeExpr
 		return r.bashPPTypeSetSatisfied(arg, constraint)
 	}
 	return false
+}
+
+// bashPPEmptyInterfaceType reports whether typ is spelled as an interface with
+// no methods and no type terms, that is, `any`.
+func bashPPEmptyInterfaceType(typ syntax.BashPPTypeExpr) bool {
+	iface, ok := typ.(*syntax.BashPPInterfaceType)
+	return ok && len(iface.Elems) == 0 && len(iface.Methods) == 0
 }
 
 func (r *Runner) bashPPCellForWord(w *syntax.Word) *bashPPCell {

@@ -106,9 +106,12 @@ type Runner struct {
 	// bashPPGoSource selects ordinary Go package scope semantics for gosource trees.
 	bashPPGoSource      bool
 	bashPPGoSourceDecls map[string]bool
-	bashPPGoSourceFile  *syntax.File
-	goSourceTesting     *GoSourceTestingSession
-	bashPPScope         *bashPPScope
+	// bashPPGoSourcePending holds the package-level type names installed by
+	// the pre-registration pass but not yet reached by their own statement.
+	bashPPGoSourcePending map[string]bool
+	bashPPGoSourceFile    *syntax.File
+	goSourceTesting       *GoSourceTestingSession
+	bashPPScope           *bashPPScope
 	// bashPPFuncScopes records, per function name, the lexical environment
 	// visible where the function was defined. It is preserved across
 	// [Runner.Reset] for the same reason Funcs is: a function that survives a
@@ -3169,6 +3172,13 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 		if r.Dialect() == syntax.LangBashPP && !r.bashPPValidatePackageInitOrder(node) {
 			break
 		}
+		// Package-level type names are visible to the whole package, so they
+		// are registered before any declaration statement runs. A nested Run —
+		// a testing session's extra file, say — must not consume this file's
+		// outstanding registrations, so they are saved across it.
+		savedPending := r.bashPPGoSourcePending
+		r.bashPPGoSourceRegisterTypes(node)
+		defer func() { r.bashPPGoSourcePending = savedPending }()
 		if r.stdinSourceEligible() && node.Name == "" && len(r.bashSource) > 0 {
 			r.stdinSourceActive = true
 		}
