@@ -104,6 +104,7 @@ type Runner struct {
 	bashPPGoSource      bool
 	bashPPGoSourceDecls map[string]bool
 	bashPPGoSourceFile  *syntax.File
+	goSourceTesting     *GoSourceTestingSession
 	bashPPScope         *bashPPScope
 	// bashPPFuncScopes records, per function name, the lexical environment
 	// visible where the function was defined. It is preserved across
@@ -3076,6 +3077,9 @@ func (r *Runner) ExpandDocument(ctx context.Context, src string) (string, error)
 // Calling Run on an entire [*File] implies an exit, meaning that an exit trap may
 // run.
 func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
+	if r.goSourceTesting != nil && !r.goSourceTesting.loading {
+		return fmt.Errorf("gosource: runner is reserved by a testing session; close it first")
+	}
 	if !r.didReset {
 		r.Reset()
 	}
@@ -3109,7 +3113,7 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 		defer func() { r.bashPPGoSourceFile = savedGoFile }()
 		savedGoSource := r.bashPPGoSource
 		r.bashPPGoSource = node.GoSource
-		if node.GoSource {
+		if node.GoSource && r.goSourceTesting == nil {
 			defer r.closeGoSourceBridge()
 		}
 		defer func() { r.bashPPGoSource = savedGoSource }()

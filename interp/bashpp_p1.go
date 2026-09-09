@@ -1682,6 +1682,9 @@ func (r *Runner) bashPPValueInRegion(_ context.Context, words []*syntax.Word, go
 // away from any working script, which is exactly why a diagnostic is
 // permitted here and forbidden on a Class E shape.
 func (r *Runner) bashPPCall(ctx context.Context, c *syntax.BashPPCall) {
+	if r.bashPPTestingCall(c) {
+		return
+	}
 	if r.bashPPBridgeHandles(c) {
 		if _, err := r.bashPPBridgeCall(ctx, c); err != nil {
 			r.exit.fatal(err)

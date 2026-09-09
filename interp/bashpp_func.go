@@ -212,6 +212,7 @@ func (r *Runner) bashPPClosure(value string) (*bashPPFunc, bool) {
 // at the point `defer` ran, which is what gives Go's "arguments are evaluated
 // when the defer statement executes" rule.
 type bashPPDeferred struct {
+	testing func()
 	agentic bool
 	call    *syntax.BashPPCall
 	// fn is the function resolved AT DEFER TIME, which matters for a closure:
@@ -1564,6 +1565,9 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 	// environment and call stack exactly as they were. See [bashPPFrame].
 	frame := r.bashPPEnterFrame(fn, args)
 	defer frame.leave()
+	if r.goSourceTesting != nil {
+		defer r.bashPPTestingUnwind(ctx, frame.deferMark)
+	}
 	shortFailureMark := r.bashPPShortFailureSeq
 
 	// Parameters and named results are typed bindings; a shell assignment in
@@ -2107,6 +2111,13 @@ func (r *Runner) bashPPDeferStmt(ctx context.Context, d *syntax.BashPPDefer) {
 	// a literal is captured now, and a name resolves to the function it names
 	// now, so a later rebinding cannot change which cleanup runs.
 	entry := bashPPDeferred{call: d.Call, agentic: r.bashPPAgentic}
+	if invoke, handled := r.bashPPTestingCapture(d.Call); handled {
+		if invoke != nil {
+			entry.testing = invoke
+			r.bashPPDeferStack = append(r.bashPPDeferStack, entry)
+		}
+		return
+	}
 	if fn, ok := r.bashPPLookupFunc(d.Call); ok {
 		args, ok := r.bashPPCallValues(d.Call, fn)
 		if !ok {
@@ -2159,6 +2170,7 @@ func (r *Runner) bashPPRunDefers(ctx context.Context, mark int) {
 	}()
 	var failed exitStatus
 	deferFailed := false
+	var testingControl *goSourceTestingExit
 	for i := len(pending) - 1; i >= 0; i-- {
 		d := pending[i]
 		r.bashPPAgentic = d.agentic
@@ -2167,33 +2179,44 @@ func (r *Runner) bashPPRunDefers(ctx context.Context, mark int) {
 		// point of it — so the panic stops halting statements for the length
 		// of this call, without ceasing to be recoverable by it.
 		r.bashPPPanic.running = r.bashPPPanic.active
-		switch {
-		case d.fn != nil:
-			r.bashPPCallCells = d.cells
-			r.bashPPInvoke(ctx, d.fn, d.args)
-		case d.predeclared != "":
-			// `defer panic(v)` and `defer recover()`. The latter is the shape
-			// Go documents as not working, and it does not work here either,
-			// for the reason it does not there: recover IS the deferred call,
-			// so nothing deferred it in turn — see [Runner.bashPPRecover].
-			if bashPPValueBuiltin(d.predeclared) {
-				r.bashPPRunValueBuiltin(d.predeclared, d.call)
-			} else {
-				r.bashPPPredeclared(d.predeclared, d.call, d.args)
+		runDeferred := func() {
+			switch {
+			case d.testing != nil:
+				d.testing()
+			case d.fn != nil:
+				r.bashPPCallCells = d.cells
+				r.bashPPInvoke(ctx, d.fn, d.args)
+			case d.predeclared != "":
+				// `defer panic(v)` and `defer recover()`. The latter is the shape
+				// Go documents as not working, and it does not work here either,
+				// for the reason it does not there: recover IS the deferred call,
+				// so nothing deferred it in turn — see [Runner.bashPPRecover].
+				if bashPPValueBuiltin(d.predeclared) {
+					r.bashPPRunValueBuiltin(d.predeclared, d.call)
+				} else {
+					r.bashPPPredeclared(d.predeclared, d.call, d.args)
+				}
+			case len(d.call.Fun) > 1:
+				// A deferred SELECTOR is dispatched exactly as a direct one is,
+				// through the import evaluator, so `defer fmt.Println(x)` reaches
+				// the package rather than a shell command named after the final
+				// selector element. Its arguments were evaluated at defer time and
+				// are handed over as values, so the call the evaluator makes is the
+				// one the defer described.
+				r.bashPPEvalSelector(ctx, d.call, d.args)
+			case len(d.call.Fun) > 0:
+				// A deferred call to something that is not a typed function runs as an
+				// ordinary command, which is what makes `defer log(...)` reach a shell
+				// helper of that name.
+				r.call(ctx, d.call.Pos(), append([]string{d.call.Fun[0].Value}, d.args...))
 			}
-		case len(d.call.Fun) > 1:
-			// A deferred SELECTOR is dispatched exactly as a direct one is,
-			// through the import evaluator, so `defer fmt.Println(x)` reaches
-			// the package rather than a shell command named after the final
-			// selector element. Its arguments were evaluated at defer time and
-			// are handed over as values, so the call the evaluator makes is the
-			// one the defer described.
-			r.bashPPEvalSelector(ctx, d.call, d.args)
-		case len(d.call.Fun) > 0:
-			// A deferred call to something that is not a typed function runs as an
-			// ordinary command, which is what makes `defer log(...)` reach a shell
-			// helper of that name.
-			r.call(ctx, d.call.Pos(), append([]string{d.call.Fun[0].Value}, d.args...))
+		}
+		if r.goSourceTesting != nil {
+			if control := bashPPTestingCatch(runDeferred); control != nil {
+				testingControl = control
+			}
+		} else {
+			runDeferred()
 		}
 		// An explicit `exit` inside a cleanup terminates the script there and
 		// then: the remaining cleanups do not run, and any panic in flight is
@@ -2210,6 +2233,9 @@ func (r *Runner) bashPPRunDefers(ctx context.Context, mark int) {
 		if !deferFailed && (!r.exit.ok() || r.exit.err != nil) {
 			failed, deferFailed = r.exit, true
 		}
+	}
+	if testingControl != nil {
+		panic(*testingControl)
 	}
 	if r.bashPPPanicking() {
 		// The frame is still being abandoned; its status is the panic's, not
