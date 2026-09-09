@@ -242,7 +242,33 @@ func (c *converter) function(f *ast.FuncDecl) *s.BashPPFuncDecl {
 			recv.Pointer = true
 			t = ptr.X
 		}
-		recv.RecvType = c.lit(t.Pos(), c.text(t))
+		// Keep a generic receiver's declared base type separate from its type
+		// parameters. The Bash++ parser produces this shape for List[T], and the
+		// interpreter resolves methods against the base declaration (List).
+		switch generic := t.(type) {
+		case *ast.IndexExpr:
+			if base, ok := generic.X.(*ast.Ident); ok {
+				recv.RecvType = c.ident(base)
+				if param, ok := generic.Index.(*ast.Ident); ok {
+					recv.TypeParams = append(recv.TypeParams, c.ident(param))
+				}
+			} else {
+				recv.RecvType = c.lit(t.Pos(), c.text(t))
+			}
+		case *ast.IndexListExpr:
+			if base, ok := generic.X.(*ast.Ident); ok {
+				recv.RecvType = c.ident(base)
+				for _, index := range generic.Indices {
+					if param, ok := index.(*ast.Ident); ok {
+						recv.TypeParams = append(recv.TypeParams, c.ident(param))
+					}
+				}
+			} else {
+				recv.RecvType = c.lit(t.Pos(), c.text(t))
+			}
+		default:
+			recv.RecvType = c.lit(t.Pos(), c.text(t))
+		}
 		o.Receiver = recv
 	}
 	return o
