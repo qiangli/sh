@@ -6,6 +6,7 @@ package interp
 import (
 	"context"
 	"fmt"
+	"go/constant"
 	"maps"
 	"strconv"
 	"strings"
@@ -989,12 +990,38 @@ func (r *Runner) bashPPStructuredArgCell(w *syntax.Word, expr syntax.BashPPExpr)
 		}
 		bashPPStoreCellValue(cell, value, meta)
 		return cell, nil
+	case *syntax.BashPPDerefExpr, *syntax.BashPPIndexExpr, *syntax.BashPPSelectorExpr:
+		// `f(*p)`, `f(xs[0])`, `f(v.Inner)`: a read that yields structured
+		// storage is passed as the value it is. A scalar read has no metadata
+		// and is left to the scalar evaluator, which also owns the diagnostic
+		// when the read itself fails.
+		value, meta, err := r.bashPPReadExpr(expr)
+		if err != nil || meta == nil {
+			return nil, nil
+		}
+		cell := &bashPPCell{declType: meta.typ}
+		if named, ok := meta.typ.(*syntax.BashPPNamedType); ok && named.Name != nil {
+			cell.typeName = named.Name.Value
+		}
+		bashPPStoreCellValue(cell, value, meta)
+		return cell, nil
 	}
-	cell := r.bashPPCellForWord(w)
-	if cell != nil && (cell.pointer || cell.interfaceValue != nil || cell.vr.Kind == expand.Object) {
+	if id, ok := expr.(*syntax.BashPPIdent); ok && r.bashPPScope != nil {
+		if cell := r.bashPPScope.lookup(id.Name.Value); bashPPStructuredCell(cell) {
+			return cell, nil
+		}
+		return nil, nil
+	}
+	if cell := r.bashPPCellForWord(w); bashPPStructuredCell(cell) {
 		return cell, nil
 	}
 	return nil, nil
+}
+
+// bashPPStructuredCell reports whether a binding holds a value with no scalar
+// spelling, so that passing or returning it has to carry the cell itself.
+func bashPPStructuredCell(cell *bashPPCell) bool {
+	return cell != nil && (cell.pointer || cell.interfaceValue != nil || cell.vr.Kind == expand.Object)
 }
 
 // bashPPCellForArg resolves the provenance cell of one call argument. A named
@@ -1021,6 +1048,33 @@ func (r *Runner) bashPPCellForArg(w *syntax.Word, expr syntax.BashPPExpr) *bashP
 		return nil
 	}
 	return bashPPPointerCell(ptr)
+}
+
+// bashPPGoSourceArgCell gives a Go-source argument that names no variable its
+// own provenance cell. A Go call's argument is an expression, so `do(21)` has
+// to arrive carrying the kind and type of 21 — without that the callee sees
+// only text, and an interface parameter has no dynamic type to switch on.
+// Classic Bash++ calls are untouched: there a bare word is its own literal.
+func (r *Runner) bashPPGoSourceArgCell(w *syntax.Word, expr syntax.BashPPExpr) *bashPPCell {
+	if !r.bashPPGoSource || expr == nil {
+		return nil
+	}
+	if structured, err := r.bashPPStructuredArgCell(w, expr); err == nil && structured != nil {
+		return structured
+	}
+	value, err := r.bashPPEvalScalarExpr(expr)
+	if err != nil || value.value == nil || value.value.Kind() == constant.Unknown {
+		return nil
+	}
+	cell := &bashPPCell{
+		vr:         expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarString(value.value)},
+		scalarKind: value.value.Kind(),
+	}
+	if value.typ != "" {
+		cell.typeName = value.typ
+		cell.declType = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: value.typ}}
+	}
+	return cell
 }
 
 // bashPPTypedCallArgs binds the positioned Go-form arguments of a call whose
@@ -1191,7 +1245,11 @@ func (r *Runner) bashPPCallArgValuesWithCells(c *syntax.BashPPCall) ([]string, [
 			argExpr = c.ArgExprs[i]
 		}
 		var copied *bashPPCell
-		if cell := r.bashPPCellForArg(word, argExpr); cell != nil {
+		cell := r.bashPPCellForArg(word, argExpr)
+		if cell == nil {
+			cell = r.bashPPGoSourceArgCell(word, argExpr)
+		}
+		if cell != nil {
 			copied = bashPPCopyAssignmentCell(cell)
 			// Direct channel authority is restored only from the separately checked
 			// owner provenance. A value copy cannot grant an unverified capability.
@@ -1536,6 +1594,11 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 			copy.constant = false
 			copy.vr.ReadOnly = false
 			copy.vr.Exported = false
+			if err := r.bashPPBindInterfaceParam(copy, param.typ); err != nil {
+				r.errf("%v\n", err)
+				r.exit = exitStatus{code: 2}
+				return nil
+			}
 			if param.typ != nil {
 				copy.declType = param.typ
 			}
@@ -1758,28 +1821,46 @@ func (r *Runner) bashPPShortDeclCall(ctx context.Context, d *syntax.BashPPShortD
 	resultTypes := bashppResultTypes(fn.results())
 	resultTypeExprs := bashppResultTypeExprs(fn.results())
 	for i, lhs := range d.Lhs {
+		// Go's blank identifier discards the result: `_, err := f()` declares
+		// no binding for the first result, so there is nothing to look up and
+		// nothing to attach that result's provenance to.
+		if lhs.Value == "_" {
+			continue
+		}
 		if !syntax.BashPPValidIdent(lhs.Value) {
 			r.errf("invalid variable name: %q\n", lhs.Value)
 			r.exit = exitStatus{code: 2}
 			return
 		}
 		r.bashPPDeclareName(lhs.Value, expand.Variable{Set: true, Kind: expand.String, Str: results[i]})
+		target := r.bashPPScope.lookup(lhs.Value)
+		if target == nil {
+			continue
+		}
 		if i < len(r.bashPPResultCells) && r.bashPPResultCells[i] != nil {
 			source := r.bashPPResultCells[i]
-			target := r.bashPPScope.lookup(lhs.Value)
 			target.channel, target.channelOwner = source.channel, source.channelOwner
+			// A structured result is the value itself, not its text: a
+			// pointer, an interface and an object payload have to survive the
+			// hand-off or the binding names an empty string.
+			target.interfaceValue = source.interfaceValue
+			target.pointer, target.nilPointer, target.pointerValue = source.pointer, source.nilPointer, source.pointerValue
+			if source.vr.Kind == expand.Object || source.pointer || source.interfaceValue != nil {
+				target.vr, target.object, target.valueMeta = source.vr, source.object, source.valueMeta
+			}
 		}
 		if i < len(resultTypeExprs) {
-			r.bashPPScope.lookup(lhs.Value).declType = resultTypeExprs[i]
+			target.declType = resultTypeExprs[i]
 		}
 		if i < len(resultTypes) {
 			declared := resultTypes[i]
 			base := strings.TrimPrefix(declared, "*")
 			if _, ok := r.bashPPTypes[base]; ok {
-				cell := r.bashPPScope.lookup(lhs.Value)
-				cell.typeName = base
-				cell.pointer = strings.HasPrefix(declared, "*")
-				cell.nilPointer = cell.pointer && results[i] == ""
+				target.typeName = base
+				target.pointer = strings.HasPrefix(declared, "*")
+				// A pointer binding's text is always empty, so the result cell
+				// is what distinguishes a live pointer from a nil one.
+				target.nilPointer = target.pointer && target.pointerValue == nil && results[i] == ""
 			}
 		}
 	}
@@ -1974,6 +2055,21 @@ func (r *Runner) bashPPReturnStmt(ctx context.Context, ret *syntax.BashPPReturn)
 // bashPPReturnScalarExpr settles a single scalar result, retaining the value's
 // type so a defined type reaches the caller as itself.
 func (r *Runner) bashPPReturnScalarExpr(expr syntax.BashPPExpr) {
+	// A returned value need not be scalar: `return &V{…}`, `return *p` and
+	// `return v.Inner` all name storage the caller receives as a value, and
+	// the cell is the only thing that can carry it across the boundary.
+	structured, structuredErr := r.bashPPStructuredArgCell(nil, expr)
+	if structuredErr != nil {
+		r.errf("%v\n", structuredErr)
+		r.exit = exitStatus{code: 2}
+		r.bashPPShortFailureSeq++
+		return
+	}
+	if structured != nil {
+		r.bashPPReturn = bashPPReturnState{active: true, values: []string{structured.vr.String()}, cells: []*bashPPCell{structured}}
+		r.exit.returning = true
+		return
+	}
 	value, err := r.bashPPEvalScalarExpr(expr)
 	if err != nil {
 		if err == errBashPPScalarInterrupted {

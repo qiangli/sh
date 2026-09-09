@@ -6,6 +6,7 @@ package interp
 import (
 	"errors"
 	"fmt"
+	"go/constant"
 	"strings"
 
 	"mvdan.cc/sh/v3/expand"
@@ -860,4 +861,23 @@ func (r *Runner) bashPPCompositeAddress(lit *syntax.BashPPCompositeLit) (*bashPP
 	}
 	bashPPStoreCellValue(cell, value, meta)
 	return &bashPPPointer{target: cell, elem: typ}, nil
+}
+
+// bashPPRepresentableScalar converts an untyped constant toward the type it is
+// being stored in, the way Go does. `p.X = 1e9` assigns an int field because
+// 1e9 denotes an exact integer, even though the constant is written in
+// floating form; a constant that is not exactly an integer is left alone so
+// the assignment is still refused.
+func (r *Runner) bashPPRepresentableScalar(scalar bashPPScalar, expected syntax.BashPPTypeExpr) bashPPScalar {
+	if scalar.typ != "" || scalar.value == nil || scalar.value.Kind() != constant.Float || expected == nil {
+		return scalar
+	}
+	name, ok := r.bashPPUnderlyingType(expected).(*syntax.BashPPNamedType)
+	if !ok || !bashPPIntegerType(name.Name.Value) {
+		return scalar
+	}
+	if integer := constant.ToInt(scalar.value); integer.Kind() == constant.Int {
+		scalar.value = integer
+	}
+	return scalar
 }

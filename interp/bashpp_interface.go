@@ -365,6 +365,69 @@ func (r *Runner) bashPPInterfaceAssignCandidate(target *bashPPCell, expr syntax.
 	return cell, true, nil
 }
 
+// bashPPAssertCandidate settles `x = i.(T)` — a one-result type assertion used
+// as an assignment's right-hand side. It reports whether it claimed the
+// expression. A failed one-result assertion is a language-level panic in Go,
+// which the caller keeps by making the failure fatal.
+func (r *Runner) bashPPAssertCandidate(expr syntax.BashPPExpr) (*bashPPCell, bool, error) {
+	assert, ok := expr.(*syntax.BashPPTypeAssertExpr)
+	if !ok {
+		return nil, false, nil
+	}
+	if assert.TypeToken != nil {
+		return nil, true, fmt.Errorf("BASHPP-EASSERT-TYPE: .(type) is only valid in a type switch")
+	}
+	values, source, err := r.bashPPTypeAssert(assert, false)
+	if err != nil {
+		return nil, true, err
+	}
+	if source == nil {
+		return &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: values[0]}}, true, nil
+	}
+	candidate := *source
+	return &candidate, true, nil
+}
+
+// bashPPBindInterfaceParam gives a parameter declared with an interface type
+// the interface value Go's assignment to it would have produced: the argument
+// keeps its own dynamic type, which is what a type switch or an assertion in
+// the body reads. An argument that already arrived as an interface value keeps
+// the dynamic type it was carrying.
+func (r *Runner) bashPPBindInterfaceParam(cell *bashPPCell, typ syntax.BashPPTypeExpr) error {
+	if cell == nil || typ == nil || cell.interfaceValue != nil {
+		return nil
+	}
+	iface, ok := r.bashPPInterfaceType(typ)
+	if !ok {
+		return nil
+	}
+	dynamic := cell.declType
+	if dynamic == nil {
+		if meta := bashPPCellMeta(cell); meta != nil {
+			dynamic = meta.typ
+		}
+	}
+	if dynamic == nil && cell.typeName != "" {
+		dynamic = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: cell.typeName}}
+	}
+	if dynamic == nil {
+		if name := bashPPDefaultScalarTypeName(cell.scalarKind); name != "" {
+			dynamic = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: name}}
+		}
+	}
+	// Without a dynamic type there is nothing an interface could record, and
+	// a value already typed as the interface itself is not its own dynamic
+	// type; both are left exactly as they arrived.
+	if dynamic == nil || bashPPTypeText(dynamic) == bashPPTypeText(typ) {
+		return nil
+	}
+	if err := r.bashPPImplements(dynamic, iface); err != nil {
+		return err
+	}
+	cell.interfaceValue = &bashPPInterfaceValue{dynamic: dynamic, cell: bashPPCopyInterfaceCell(cell)}
+	return nil
+}
+
 // bashPPCopyInterfaceCell captures the dynamic value at assignment time.
 // Structs and arrays are values and therefore need their own payload, while
 // pointers, maps, and slices deliberately retain the identities they carry.

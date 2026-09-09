@@ -120,6 +120,21 @@ func (r *Runner) bashPPEvalScalarExpr(expr syntax.BashPPExpr) (result bashPPScal
 			return bashPPScalar{}, err
 		}
 		return r.bashPPBinaryScalar(bashPPOpToken(x.Op.Value), left, right)
+	case *syntax.BashPPTypeAssertExpr:
+		// `fmt.Println(i.(string))`: a one-result assertion used as a value.
+		// The comma-ok spelling has its own statement forms; here a failure is
+		// Go's panic, which surfaces as this expression's error.
+		if x.TypeToken != nil {
+			return bashPPScalar{}, fmt.Errorf("BASHPP-EASSERT-TYPE: .(type) is only valid in a type switch")
+		}
+		_, source, err := r.bashPPTypeAssert(x, false)
+		if err != nil {
+			return bashPPScalar{}, err
+		}
+		if source == nil {
+			return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-OPERAND: asserted value is not a scalar")
+		}
+		return r.bashPPScalarFromCell(source), nil
 	case *syntax.BashPPConvertExpr:
 		v, err := r.bashPPEvalScalarExpr(x.X)
 		if err != nil {
