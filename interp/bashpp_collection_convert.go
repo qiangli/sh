@@ -177,6 +177,24 @@ func (r *Runner) bashPPConvertCollectionScalar(x *syntax.BashPPConvertExpr) (bas
 	if !ok || named.Name.Value != "string" {
 		return bashPPScalar{}, false, nil
 	}
+	if r.bashPPGoSource && r.bashPPNativeExpr(x.X) {
+		value, err := r.bashPPBridgeExpr(x.X)
+		if err != nil {
+			return bashPPScalar{}, true, err
+		}
+		text, ok, err := r.bashPPNativeStringConversion(value)
+		if !ok {
+			return bashPPScalar{}, false, nil
+		}
+		if err != nil {
+			return bashPPScalar{}, true, err
+		}
+		typ := ""
+		if declared, ok := target.(*syntax.BashPPNamedType); ok {
+			typ = declared.Name.Value
+		}
+		return bashPPScalar{value: constant.MakeString(text), typ: typ, runtime: true}, true, nil
+	}
 	value, meta, ok := r.bashPPCollectionOperand(x.X)
 	if !ok {
 		return bashPPScalar{}, false, nil
@@ -203,6 +221,49 @@ func (r *Runner) bashPPConvertCollectionScalar(x *syntax.BashPPConvertExpr) (bas
 		typ = declared.Name.Value
 	}
 	return bashPPScalar{value: constant.MakeString(out.String()), typ: typ, runtime: true}, true, nil
+}
+
+func (r *Runner) bashPPNativeStringConversion(value bashPPBridgeValue) (string, bool, error) {
+	elemKind := ""
+	switch value.Type {
+	case "[]uint8", "[]byte":
+		elemKind = "byte"
+	case "[]int32", "[]rune":
+		elemKind = "rune"
+	default:
+		return "", false, nil
+	}
+	if value.Kind == "nil" {
+		return "", true, nil
+	}
+	if value.Kind != "handle" {
+		return "", false, nil
+	}
+	length, err := r.bashPPNativeLen(r.ectx, value)
+	if err != nil {
+		return "", true, err
+	}
+	var out strings.Builder
+	for i := range length {
+		element, err := r.bashPPNativeAccess(r.ectx, "index", value, "", bashPPBridgeValue{Kind: "int", Text: fmt.Sprint(i)})
+		if err != nil {
+			return "", true, err
+		}
+		scalar, err := element.scalar()
+		if err != nil {
+			return "", true, err
+		}
+		n, ok := constant.Int64Val(scalar.value)
+		if !ok {
+			return "", true, fmt.Errorf("BASHPP-EEXPR-CONVERT: %s element is not an integer", elemKind)
+		}
+		if elemKind == "byte" {
+			out.WriteByte(byte(n))
+		} else {
+			out.WriteRune(rune(n))
+		}
+	}
+	return out.String(), true, nil
 }
 
 // bashPPConvertCollectionCell wraps a collection-producing conversion in the

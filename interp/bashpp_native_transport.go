@@ -91,6 +91,9 @@ func validateLocalTransport(req bashPPEvalRequest, q bashPPBridgeRequest) error 
 		}
 		unsafe = unsafe || (local && ref) || arg.Kind == "pointer"
 	}
+	if nativePointerWritebackAllowed(req, q) {
+		return nil
+	}
 	if synchronousReaderCallback(req, q) || synchronousImageCallback(req, q) || !functionCallbacks && synchronousUnwrapCallback(req, q) {
 		return nil
 	}
@@ -117,6 +120,15 @@ func validateLocalTransport(req bashPPEvalRequest, q bashPPBridgeRequest) error 
 		}
 	}
 	return fmt.Errorf("gosource: dependency mutation of interpreter-owned references is unsupported for %s", q.Selector)
+}
+
+func nativePointerWritebackAllowed(req bashPPEvalRequest, q bashPPBridgeRequest) bool {
+	name := nativeSliceCallable(req, q)
+	switch name {
+	case "*flag.FlagSet.IntVar":
+		return len(q.Args) >= 1 && q.Args[0].Kind == "pointer" && q.Args[0].Origin != 0
+	}
+	return false
 }
 
 // Only requests carrying a local interface callback acquire the gate. Native

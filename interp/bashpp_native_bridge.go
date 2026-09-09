@@ -77,6 +77,7 @@ type bashPPBridgeRequest struct {
 }
 type bashPPBridgeResponse struct {
 	SliceUpdates []bashPPNativeSliceBuffer `json:"slice_updates,omitempty"`
+	PtrUpdates   []bashPPBridgeValue       `json:"ptr_updates,omitempty"`
 
 	Panic *bashPPBridgeValue `json:"panic,omitempty"`
 	ID    uint64             `json:"id"`
@@ -389,6 +390,9 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 			}
 		case reply := <-wait:
 			if err := applyNativeSliceBuffers(q, reply); err != nil {
+				return nil, err
+			}
+			if err := s.applyNativePointerUpdates(req, reply); err != nil {
 				return nil, err
 			}
 			if reply.Panic != nil {
