@@ -60,13 +60,11 @@ import (
 //     binding — is a different variable from the outer one that happens to
 //     share a spelling, and the outer cell is NOT shared. Text inside a
 //     string literal is not a variable use at all.
-//   - Only INTERPRETER-OWNED values. A payload that IS an imported native
-//     handle keeps the reviewed descriptor-copy rule in bashpp_task.go, and
-//     channels keep their own identity and ownership machinery; neither is
-//     re-decided here. A local struct that HOLDS native fields is shared
-//     whole: it is one original Go variable, and copying it to protect the
-//     descriptor would copy away the original mutable map/slice fields
-//     beside it.
+//   - Native-handle and channel VARIABLES retain their cell identity after
+//     first-admission session or task-group authentication. Each operation
+//     still validates the referenced object. Classic snapshots still copy
+//     descriptors. A local struct holding native fields is also one original
+//     variable; copying it would fork mutable map/slice fields beside them.
 //
 // # Why precision, not over-approximation
 //
@@ -177,6 +175,9 @@ func (r *Runner) bashPPGoSourceCaptureSet(call *syntax.BashPPCall, body *syntax.
 			if cell := env.lookup(name); cell != nil && r.bashPPGoSourceSharable(cell) {
 				shared[cell] = true
 			}
+			if r.exit.err != nil {
+				return false
+			}
 		}
 		return true
 	}
@@ -200,7 +201,7 @@ func (r *Runner) bashPPGoSourceCaptureSet(call *syntax.BashPPCall, body *syntax.
 		if fn.receiver != nil && r.bashPPGoSourceSharable(fn.receiver) {
 			shared[fn.receiver] = true
 		}
-		return true
+		return r.exit.err == nil
 	}
 	for _, fn := range r.bashPPClosures {
 		if !addFunc(fn) {
@@ -413,7 +414,13 @@ func (r *Runner) bashPPGoSourceSharable(cell *bashPPCell) bool {
 	if decided, ok := r.bashPPGoSourceSharableCells[cell]; ok {
 		return decided
 	}
-	decided := r.bashPPGoSourceSharableCell(cell)
+	decided, handled := false, cell.constant
+	if !handled {
+		decided, handled = r.goSourceCapturedHandleCell(cell)
+	}
+	if !handled {
+		decided = r.bashPPGoSourceSharableCell(cell)
+	}
 	if r.bashPPGoSourceSharableCells == nil {
 		r.bashPPGoSourceSharableCells = make(map[*bashPPCell]bool)
 	}
@@ -421,13 +428,12 @@ func (r *Runner) bashPPGoSourceSharable(cell *bashPPCell) bool {
 	return decided
 }
 
-// bashPPGoSourceSharableCell restricts identity to interpreter-owned values.
+// bashPPGoSourceSharableCell classifies the remaining non-handle payloads.
+// Authenticated native/channel variables are admitted by goSourceCapturedHandleCell
+// before this fallback; this classifier alone grants no native authority.
 //
-// A payload that IS an imported native handle is deliberately excluded:
-// bashpp_task.go already preserves the object it names by copying the
-// descriptor and carrying Session/Handle across, and that rule stays the one
-// authority on native identity. A channel is excluded for the same reason —
-// it owns its own cross-task identity.
+// This fallback excludes direct native handles and channels because their
+// first-admission authentication is separate from plain type classification.
 //
 // A local struct that HOLDS native fields is the opposite case, and sharing
 // it is the corrected rule: the struct is one ORIGINAL Go variable — the

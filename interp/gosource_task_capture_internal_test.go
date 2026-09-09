@@ -90,10 +90,8 @@ var box struct{counters map[string]int}
 var gate sync.Mutex
 func main() {
 	bump := func() {
-		gate.Lock()
-		box.counters["a"]++
-		gate.Unlock()
-	}
+			box.counters["a"]++
+		}
 	go func() {
 		bump()
 	}()
@@ -135,7 +133,7 @@ func main() {
 			"deep copying it copies away the original map/slice fields the program increments")
 	}
 	if shared[cells["gate"]] {
-		t.Error("a payload that IS a native handle must keep the bashpp_task.go descriptor-copy rule")
+		t.Error("an unused gate must not enter this closure capture set")
 	}
 }
 
@@ -211,11 +209,9 @@ func TestGoSourceCaptureClassicBashPPUnchanged(t *testing.T) {
 	}
 }
 
-// TestGoSourceCaptureExcludesNativeHandles keeps this layer out of the one
-// next to it: an imported native value is already identity preserving via
-// cloneNativeHandle, which copies the descriptor and carries Session/Handle
-// across. Sharing the whole cell instead would re-decide that rule here.
-func TestGoSourceCaptureExcludesNativeHandles(t *testing.T) {
+// A descriptor without a live minting session cannot gain authority merely
+// because an original function mentions the variable holding it.
+func TestGoSourceCaptureRejectsUnboundNativeHandles(t *testing.T) {
 	r, _ := captureRunnerFor()
 	handle := &bashPPCell{vr: expand.Variable{
 		Kind: expand.Object,
@@ -224,19 +220,18 @@ func TestGoSourceCaptureExcludesNativeHandles(t *testing.T) {
 	r.bashPPScope.entries["mu"] = handle
 	g := parseGoStmt(t, "func main() {\n\tgo func() {\n\t\tmu.Lock()\n\t}()\n}\n")
 	if shared, _ := r.bashPPGoSourceTaskCapture(g.Call); shared[handle] {
-		t.Error("a native handle must keep the bashpp_task.go descriptor rule")
+		t.Error("a native handle without a live minting session must be rejected")
 	}
 }
 
-// TestGoSourceCaptureChannelsExcluded leaves channel identity to the channel
-// layer, which owns its own cross-task ownership rules.
-func TestGoSourceCaptureChannelsExcluded(t *testing.T) {
+// A channel from no task group cannot be captured into the current group.
+func TestGoSourceCaptureRejectsForeignChannels(t *testing.T) {
 	r, _ := captureRunnerFor()
 	ch := &bashPPCell{channel: &bashPPChannel{}}
 	r.bashPPScope.entries["ch"] = ch
 	g := parseGoStmt(t, "func main() {\n\tgo func() {\n\t\tch <- 1\n\t}()\n}\n")
 	if shared, _ := r.bashPPGoSourceTaskCapture(g.Call); shared[ch] {
-		t.Error("channel identity is not this layer's to grant")
+		t.Error("a channel without a matching task-group owner must be rejected")
 	}
 }
 

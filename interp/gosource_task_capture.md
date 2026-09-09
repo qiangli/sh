@@ -29,9 +29,8 @@ references independently of the variable currently holding the function value.
 - **Interpreter-owned cells include local composites holding native fields.**
   A local struct containing a native mutex and a counters map remains one
   original variable. Copying the whole struct forks the protected map. Direct
-  native handle payloads keep the descriptor-copy rule in `bashpp_task.go`;
-  channels keep their existing machinery. Their variable-reassignment gap is
-  recorded below.
+  native/channel variables also retain their cells after first-admission
+  authentication. Classic snapshots retain the descriptor-copy rule.
 
 ## Why not over-approximate
 
@@ -166,15 +165,25 @@ local import-alias shadowing, and a computed launch callee evaluated once.
 Existing precision, Classic snapshot, native descriptor, stale-session and Reset
 controls remain running and passed in the review.
 
-This is not full Go variable-identity acceptance. Strict private three-mode
-probes retain two concrete failures: assigning a captured channel variable after
-launch leaves the child with the old channel (native/lowered length 1 versus
-Runner 0), and assigning a captured `*big.Int` variable leaves the old descriptor
-(native/lowered value 2 versus Runner 1). Object identity is distinct from the
-identity of the variable holding it. These existing direct-native/channel
-snapshot rules need a separate coherent repair; no comparison was relaxed.
+The follow-up fixes the two measured direct-variable failures: captured native
+pointers and native/local channels observe synchronized reassignment, including
+initially nil variables. The cell is shared; the dependency object remains in its
+authenticated process. The existing shared-cell branch precedes object cloning,
+and the later task-cell clone pass does not overwrite shared payloads. First
+admission checks a native descriptor's live session or a local channel's owning
+task group; later launches use the inherited identity memo without rereading a
+potentially concurrent variable. Dependency and channel operations continue to
+check ownership after every reassignment. Reset clears the memo. Actual Runner
+sessions prove valid admission and rejection after Reset or into another session.
 
-Original closure values placed directly in an interface or local struct are
+A narrow tuple-assignment hook supplies typed nil for native pointer/channel
+targets before the generic identifier lookup. Canonical native pointer identity
+is bound to the session's source-import alias table; display names such as
+`*big.Int` need not be actual import aliases. Ordinary assignment validation
+still precedes writes. No whole original body or source expression is compiled
+for this operation.
+
+This is not full Go variable-identity acceptance. Original closure values placed directly in an interface or local struct are
 also rejected by existing value construction before launch. Closures created
 only after the task's registry snapshot are outside this bounded registry
 preservation change. Raw source-bound probes remain in the review evidence;
