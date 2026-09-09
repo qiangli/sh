@@ -191,11 +191,72 @@ so the repair removes a defect that would otherwise have failed four dynamic
 subtests after the `any` type gap is closed. It does not by itself pass any
 additional root; the corpus totals above are unchanged by it.
 
-One further gap was observed and is NOT repaired here: inside a testing
-callback, a guard that recovers an actual panic and binds its value
-(`defer func(){ v := recover(); t.Log(v) }(); panic("deliberate")`) reports
-status 2 with no diagnostic, and the guard's log never arrives. It needs
-attribution before anyone edits for it.
+The further gap recorded here previously — inside a testing callback, a guard
+that recovers an actual panic and binds its value
+(`defer func(){ v := recover(); t.Log(v) }(); panic("deliberate")`) reporting
+status 2 with no diagnostic and no log — no longer reproduces. It is now
+pinned so it cannot regress unobserved, for a panic raised in the body itself
+and for one raised in a called helper, both recovered and reported through the
+capability:
+
+```sh
+go test ./interp -run '^TestGoSourceTestingRecoverBindsValue$' -count=1
+```
+
+One adjacent shape does still fail and is recorded rather than edited, because
+it is not owned by this adapter: `recover` used directly as a call ARGUMENT,
+`defer func(){ t.Log(recover()) }()`, reports
+`BASHPP-EEXPR-UNDEFINED: undefined callable recover`. `recover` is answered as
+a statement and as an assignment right-hand side, but not as a nested call
+operand. The repair belongs to the predeclared-call lowering, not here.
+
+## Cancellation of an in-flight nested callback
+
+The lifecycle control cancelled only BEFORE a root callback started, where the
+entry check in `Run` answers immediately and no body is abandoned. Cancelling
+while a nested `t.Run` body is actually running was unpinned, and it dropped
+obligations: cancellation abandons an interpreted frame the way a hard shell
+`exit` does, and that path deliberately discards the deferred-call stack
+instead of running it. The child body's own `defer` never ran, and neither did
+the abandoned parent's.
+
+`Runner.bashPPTestingCancelUnwind` now discharges an abandoned hosted-callback
+frame's interpreted defers. They run detached from the cancelled context — each
+call would otherwise abort on the same cancellation they exist to clean up
+after — and with a cleared exit status, which is restored afterwards. This
+finishes the obligations; it does not convert the outcome: `runFunction` still
+returns `ctx.Err()`, the child callback still fails through the capability, and
+the parent's remaining statements are NOT resumed. Cancellation abandons a
+body; it does not let it keep running.
+
+```sh
+go test ./interp -run '^TestGoSourceTestingNestedCallbackCancellation$' -count=1
+```
+
+## Unexecuted standard-library obligations
+
+This driver's executed set is the pinned discovery slice
+`errors-original-errors-test-go-two-functions` — `TestNewEqual` and
+`TestErrorMethod` from the unmodified `src/errors/errors_test.go`, loaded with
+all four selected `errors_test` companions. Nothing else is executed, and
+nothing else is discharged. The full denominator is retained as unexecuted,
+never as successful and never as excluded:
+
+| Obligation | Count | Status |
+| --- | --- | --- |
+| Reviewed packages | 180 | unexecuted, except the slice below |
+| Host-exposed package roots | 178 | unexecuted |
+| Policy refusals | 2 | refused, retained in the denominator |
+| `errors_test` discovered roots | 10 | 3 pass, 7 fail with the repros above |
+| `errors_test` dynamic subtests (native oracle) | 70 | unexecuted; owed by the 7 failing roots |
+| `errors_test` examples | 12 | unsupported (example stdout routing unproven) |
+| Slice actually claimed | 2 | `TestNewEqual`, `TestErrorMethod` |
+
+Runtime test registrations and terminals are the denominator, not source-file
+counts. `TestMain`, fuzzing, coverage/profiling, benchmarks and examples remain
+separate phase obligations requiring the real `MainStart` contract; they are
+recorded as pending, never omitted and never labelled successful. This slice is
+not whole-corpus closure and no whole-corpus PASS is claimed.
 
 The runtime accepts `GoSourceTestProgram`, a syntax-based view implemented by
 `*gosource.Program`. Existing `LoadGoSourceTests(ctx, program)` calls are unchanged.

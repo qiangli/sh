@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -452,5 +453,227 @@ func TestGuardThenBridgeFailure(t *testing.T){
 		}
 		t.Logf("%s failed as required: err=%v failed=%v stderr=%q",
 			name, err, recorded.failed, errs.String())
+	}
+}
+
+// cancellingRecorder is a scheduler capability that owns nested callbacks and
+// cleanups the way testing.T does, and cancels the session context the moment
+// the interpreted body reaches a chosen marker. It exists so that cancellation
+// can be observed WHILE a nested callback body is running, which the
+// root-entry cancellation check in [interp.GoSourceTestingSession.Run] cannot
+// reach.
+type cancellingRecorder struct {
+	log      []string
+	failed   bool
+	failNow  bool
+	skipped  bool
+	trigger  string
+	cancel   context.CancelFunc
+	cleanups []func()
+	children []*cancellingRecorder
+}
+
+func (t *cancellingRecorder) record(text string) {
+	t.log = append(t.log, text)
+	if t.trigger != "" && strings.Contains(text, t.trigger) && t.cancel != nil {
+		t.cancel()
+	}
+}
+
+func (t *cancellingRecorder) Errorf(format string, args ...any) {
+	t.failed = true
+	t.record(fmt.Sprintf(format, args...))
+}
+func (t *cancellingRecorder) Logf(format string, args ...any) { t.record(fmt.Sprintf(format, args...)) }
+func (t *cancellingRecorder) Fail()                           { t.failed = true }
+func (t *cancellingRecorder) FailNow()                        { t.failed = true; t.failNow = true }
+func (t *cancellingRecorder) SkipNow()                        { t.skipped = true }
+func (t *cancellingRecorder) Cleanup(fn func())               { t.cleanups = append(t.cleanups, fn) }
+
+// Run mirrors the scheduler's parent/child structure: the child owns its own
+// capability and its cleanups run before Run returns, in reverse order.
+func (t *cancellingRecorder) Run(name string, fn func(*cancellingRecorder)) bool {
+	child := &cancellingRecorder{trigger: t.trigger, cancel: t.cancel}
+	t.children = append(t.children, child)
+	fn(child)
+	for i := len(child.cleanups) - 1; i >= 0; i-- {
+		child.cleanups[i]()
+	}
+	t.log = append(t.log, child.log...)
+	if child.failed {
+		t.failed = true
+	}
+	return !child.failed
+}
+
+func (t *cancellingRecorder) runCleanups() {
+	for i := len(t.cleanups) - 1; i >= 0; i-- {
+		t.cleanups[i]()
+	}
+}
+
+// TestGoSourceTestingNestedCallbackCancellation pins that cancelling the
+// session context while a NESTED callback body is in flight finishes every
+// outstanding obligation rather than silently reporting a pass: the child
+// callback fails, its interpreted defers and cleanups still run, the parent
+// observes the false Run result, and the root callback reports the
+// cancellation to its caller.
+//
+// The existing lifecycle control only cancels before the root callback starts,
+// where the entry check answers immediately; nothing pinned what happens once
+// a body is already running inside a child.
+func TestGoSourceTestingNestedCallbackCancellation(t *testing.T) {
+	source := `package specimen
+import "testing"
+func TestNestedCancel(t *testing.T){
+ defer t.Log("outer defer")
+ t.Cleanup(func(){ t.Log("outer cleanup") })
+ if t.Run("child", func(t *testing.T){
+  defer t.Log("child defer")
+  t.Cleanup(func(){ t.Log("child cleanup") })
+  t.Log("child cancels here")
+  t.Log("child continued")
+ }) { t.Log("child returned true") } else { t.Log("child returned false") }
+ t.Log("outer after child")
+}
+`
+	program, err := gosource.Parse(strings.NewReader(source), "cancel_fixture.go", gosource.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var errs bytes.Buffer
+	runner, err := interp.New(interp.Lang(syntax.LangBashPP), interp.Dir(t.TempDir()), interp.StdIO(nil, nil, &errs))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	session, err := runner.LoadGoSourceTests(ctx, program)
+	if err != nil {
+		t.Fatalf("load: %v %s", err, errs.String())
+	}
+	defer session.Close()
+
+	bodyCtx, stop := context.WithCancel(ctx)
+	defer stop()
+	recorded := &cancellingRecorder{trigger: "child cancels here", cancel: stop}
+	err = session.Run(bodyCtx, "TestNestedCancel", recorded)
+	recorded.runCleanups()
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled nested callback reported %v; stderr=%s", err, errs.String())
+	}
+	joined := strings.Join(recorded.log, "|")
+	// Every outstanding obligation is discharged rather than dropped: the
+	// child's own interpreted defer and its scheduler cleanup run, and the
+	// abandoned parent's interpreted defer and cleanup run too. The parent's
+	// remaining STATEMENTS are not resumed -- cancellation abandons the body,
+	// it does not let it keep running -- so no marker after the child's Run is
+	// expected.
+	for _, want := range []string{
+		"child defer", "child cleanup", "outer defer", "outer cleanup",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("cancellation dropped %q; log=%q stderr=%s", want, joined, errs.String())
+		}
+	}
+	if !recorded.failed {
+		t.Errorf("cancellation reported a pass; log=%q", joined)
+	}
+}
+
+// TestGoSourceTestingCancelledDeferIsBounded pins that discharging an
+// abandoned callback's defers cannot pin the harness. The defers run detached
+// from the cancellation -- otherwise every call would abort on the very
+// cancellation they clean up after -- so a defer that blocks forever, which a
+// receive with no partner does, would hang were the detached context not
+// itself bounded.
+func TestGoSourceTestingCancelledDeferIsBounded(t *testing.T) {
+	source := `package specimen
+import "testing"
+func TestWedgedDefer(t *testing.T){
+ defer func(){ var ch chan int; <-ch }()
+ t.Log("body cancels here")
+ t.Log("unreachable")
+}
+`
+	program, err := gosource.Parse(strings.NewReader(source), "wedged_fixture.go", gosource.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var errs bytes.Buffer
+	runner, err := interp.New(interp.Lang(syntax.LangBashPP), interp.Dir(t.TempDir()), interp.StdIO(nil, nil, &errs))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	session, err := runner.LoadGoSourceTests(ctx, program)
+	if err != nil {
+		t.Fatalf("load: %v %s", err, errs.String())
+	}
+	defer session.Close()
+
+	bodyCtx, stop := context.WithCancel(ctx)
+	defer stop()
+	recorded := &cancellingRecorder{trigger: "body cancels here", cancel: stop}
+	done := make(chan error, 1)
+	go func() { done <- session.Run(bodyCtx, "TestWedgedDefer", recorded) }()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancelled callback reported %v; stderr=%s", err, errs.String())
+		}
+	case <-time.After(90 * time.Second):
+		t.Fatalf("wedged defer pinned the cancelled callback; stderr=%s", errs.String())
+	}
+}
+
+// TestGoSourceTestingRecoverBindsValue pins the shape recorded as an open,
+// unattributed gap while the guarded-callback repair was made: a deferred
+// guard that recovers an ACTUAL panic, binds the recovered value and reports
+// it through the capability. The measured symptom was exit status 2 with no
+// diagnostic and no log. The guard must instead swallow the panic, deliver the
+// recovered value, and let the callback pass.
+func TestGoSourceTestingRecoverBindsValue(t *testing.T) {
+	source := `package specimen
+import "testing"
+func TestBindRecovered(t *testing.T){
+ defer func(){ v := recover(); t.Log(v) }()
+ panic("deliberate")
+}
+func TestBindRecoveredHelper(t *testing.T){
+ defer func(){ v := recover(); t.Log(v) }()
+ helper()
+}
+func helper(){ panic("from helper") }
+`
+	program, err := gosource.Parse(strings.NewReader(source), "recover_value_fixture.go", gosource.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var errs bytes.Buffer
+	runner, err := interp.New(interp.Lang(syntax.LangBashPP), interp.Dir(t.TempDir()), interp.StdIO(nil, nil, &errs))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	session, err := runner.LoadGoSourceTests(ctx, program)
+	if err != nil {
+		t.Fatalf("load: %v %s", err, errs.String())
+	}
+	defer session.Close()
+	for name, want := range map[string]string{
+		"TestBindRecovered":       "deliberate",
+		"TestBindRecoveredHelper": "from helper",
+	} {
+		errs.Reset()
+		recorded := &testingRecorder{}
+		if err := session.Run(ctx, name, recorded); err != nil {
+			t.Fatalf("%s: %v; stderr=%s", name, err, errs.String())
+		}
+		if recorded.failed || !strings.Contains(strings.Join(recorded.log, "|"), want) {
+			t.Errorf("%s: guard lost the recovered value: %#v stderr=%s", name, recorded, errs.String())
+		}
 	}
 }

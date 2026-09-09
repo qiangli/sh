@@ -1802,7 +1802,7 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 	// `exit`, which is terminating everything.
 	if !r.exit.exiting {
 		r.bashPPRunDefers(ctx, frame.deferMark)
-	} else {
+	} else if !r.bashPPTestingCancelUnwind(ctx, frame.deferMark) {
 		r.bashPPDeferStack = r.bashPPDeferStack[:frame.deferMark]
 	}
 	if shortDeclFailed {
