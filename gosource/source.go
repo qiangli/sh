@@ -97,19 +97,21 @@ func Load(sources []Source, options Options) (*Program, error) {
 		f, err := parser.ParseFile(c.fset, s.Name, s.Data, parser.ParseComments|parser.AllErrors)
 		if err != nil {
 			parseErrors = appendDiagnostics(parseErrors, err)
+		}
+		// A recovered file still contains declarations and bodies for the Go
+		// checker. Keep it for diagnostics only; no errored AST is converted.
+		if f == nil {
 			continue
 		}
 		if p.Package == "" {
 			p.Package = f.Name.Name
-		} else if f.Name.Name != p.Package {
-			return nil, fmt.Errorf("%s: package %s differs from %s", s.Name, f.Name.Name, p.Package)
 		}
-		tf := c.fset.File(f.Pos())
+		tf := c.fset.File(f.FileStart)
 		p.Sources = append(p.Sources, SourceInfo{s.Name, fmt.Sprintf("%x", sha256.Sum256(s.Data)), uint(tf.Base() - 1), uint(len(s.Data))})
 		c.files = append(c.files, f)
 		c.sources = append(c.sources, s)
 	}
-	if len(parseErrors) > 0 {
+	if len(c.files) == 0 {
 		return nil, parseErrors
 	}
 	imp := options.Importer
@@ -119,11 +121,15 @@ func Load(sources []Source, options Options) (*Program, error) {
 	var typeErrors ErrorList
 	config := types.Config{Importer: imp, Error: func(err error) { typeErrors = append(typeErrors, err) }}
 	pkg, err := config.Check(p.Package, c.fset, c.files, c.info)
-	if len(typeErrors) > 0 {
-		return nil, typeErrors
+	// Match the native checker test flow: parser diagnostics first, followed
+	// by semantic diagnostics from every recoverable file. Check's returned
+	// first error is already reported through Error; do not duplicate it.
+	diagnostics := append(parseErrors, typeErrors...)
+	if err != nil && len(typeErrors) == 0 {
+		diagnostics = appendDiagnostics(diagnostics, err)
 	}
-	if err != nil {
-		return nil, err
+	if len(diagnostics) > 0 {
+		return nil, diagnostics
 	}
 	if main, ok := pkg.Scope().Lookup("main").(*types.Func); ok && p.Package == "main" {
 		p.Main = main.Name()
