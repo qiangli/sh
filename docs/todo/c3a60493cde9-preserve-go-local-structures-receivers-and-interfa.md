@@ -6,8 +6,7 @@ seq: 54
 status: doing
 priority: p0
 created: 2026-09-09T06:39:40.110712Z
-weave: 33
-assignee: sprint118-manager
+assignee: s118-go-captures
 sprint: 118
 ---
 

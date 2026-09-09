@@ -6,7 +6,6 @@ seq: 53
 status: doing
 priority: p0
 created: 2026-09-09T06:37:55.781661Z
-weave: 32
 assignee: s118-go-frontend
 sprint: 118
 ---

@@ -6,8 +6,7 @@ seq: 56
 status: doing
 priority: p0
 created: 2026-09-09T07:00:31.40852Z
-weave: 36
-assignee: sprint118-manager
+assignee: s118-gbe-lifecycle
 sprint: 118
 ---
 
