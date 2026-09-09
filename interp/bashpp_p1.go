@@ -679,6 +679,11 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 		}
 	}
 	if d.Expr != nil {
+		// A read rooted in a dependency-owned value binds a session handle;
+		// see bashPPNativeShortDecl in bashpp_native_access.go.
+		if r.bashPPNativeShortDecl(d) {
+			return
+		}
 		if assert, ok := d.Expr.(*syntax.BashPPTypeAssertExpr); ok {
 			if assert.TypeToken != nil {
 				r.errf("BASHPP-EASSERT-TYPE: .(type) is only valid in a type switch\n")

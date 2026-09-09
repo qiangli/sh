@@ -286,7 +286,13 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 		err := s.waitErr
 		s.mu.Unlock()
 		if err == nil {
-			err = io.ErrUnexpectedEOF
+			// A clean exit is the original program terminating itself, for
+			// example os.Exit(0) or a successful syscall.Exec replacement.
+			return nil, &bashPPNativeExit{}
+		}
+		var exit *exec.ExitError
+		if errors.As(err, &exit) && exit.ExitCode() >= 0 {
+			return nil, &bashPPNativeExit{status: exit.ExitCode(), err: err}
 		}
 		return nil, fmt.Errorf("gosource: dependency process exited: %w", err)
 	}

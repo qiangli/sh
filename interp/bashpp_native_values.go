@@ -97,7 +97,7 @@ func (r *Runner) bashPPBridgeCall(ctx context.Context, call *syntax.BashPPCall) 
 					return nil, err
 				}
 				q.Args = append(q.Args, values...)
-				return req.Bridge.request(ctx, req, q)
+				return r.bashPPNativeRequest(ctx, req, q)
 			}
 			if _, ok := r.bashPPLookupFunc(inner); ok {
 				cells, err := r.bashPPGoSourceTupleCall(inner)
@@ -111,7 +111,7 @@ func (r *Runner) bashPPBridgeCall(ctx context.Context, call *syntax.BashPPCall) 
 					}
 					q.Args = append(q.Args, value)
 				}
-				return req.Bridge.request(ctx, req, q)
+				return r.bashPPNativeRequest(ctx, req, q)
 			}
 		}
 	}
@@ -126,7 +126,7 @@ func (r *Runner) bashPPBridgeCall(ctx context.Context, call *syntax.BashPPCall) 
 		}
 		q.Args = append(q.Args, value)
 	}
-	return req.Bridge.request(ctx, req, q)
+	return r.bashPPNativeRequest(ctx, req, q)
 }
 func (r *Runner) bashPPBridgeScalar(expr syntax.BashPPExpr) (bashPPScalar, bool, error) {
 	if !r.bashPPGoSource {
@@ -140,6 +140,10 @@ func (r *Runner) bashPPBridgeScalar(expr syntax.BashPPExpr) (bashPPScalar, bool,
 		if id, ok := e.X.(*syntax.BashPPIdent); ok {
 			_, handled = r.bashPPImports[id.Name.Value]
 		}
+	case *syntax.BashPPIndexExpr:
+		handled = r.bashPPNativeExpr(e.X)
+	case *syntax.BashPPSliceExpr:
+		handled = r.bashPPNativeExpr(e.X)
 	}
 	if !handled {
 		return bashPPScalar{}, false, nil
@@ -219,19 +223,29 @@ func (r *Runner) bashPPBridgeExpr(expr syntax.BashPPExpr) (bashPPBridgeValue, er
 			if err != nil {
 				return bashPPBridgeValue{}, err
 			}
+			if r.exit.exiting {
+				return bashPPBridgeValue{}, errBashPPNativeExited
+			}
 			if len(values) != 1 {
 				return bashPPBridgeValue{}, fmt.Errorf("gosource: expression requires one native result, got %d", len(values))
 			}
 			return values[0], nil
 		}
 	case *syntax.BashPPSelectorExpr:
+		if r.bashPPNativeExpr(x.X) {
+			base, err := r.bashPPBridgeExpr(x.X)
+			if err != nil {
+				return bashPPBridgeValue{}, err
+			}
+			return r.bashPPNativeAccess(r.ectx, "field", base, x.Sel.Value)
+		}
 		if id, ok := x.X.(*syntax.BashPPIdent); ok {
 			if _, imported := r.bashPPImports[id.Name.Value]; imported {
 				req, err := r.bashPPEvalRequest()
 				if err != nil {
 					return bashPPBridgeValue{}, err
 				}
-				values, err := req.Bridge.request(r.ectx, req, bashPPBridgeRequest{Op: "get", Selector: id.Name.Value + "." + x.Sel.Value})
+				values, err := r.bashPPNativeRequest(r.ectx, req, bashPPBridgeRequest{Op: "get", Selector: id.Name.Value + "." + x.Sel.Value})
 				if err != nil {
 					return bashPPBridgeValue{}, err
 				}
@@ -240,6 +254,14 @@ func (r *Runner) bashPPBridgeExpr(expr syntax.BashPPExpr) (bashPPBridgeValue, er
 				}
 				return values[0], nil
 			}
+		}
+	case *syntax.BashPPIndexExpr:
+		if r.bashPPNativeExpr(x.X) {
+			return r.bashPPNativeIndex(x)
+		}
+	case *syntax.BashPPSliceExpr:
+		if r.bashPPNativeExpr(x.X) {
+			return r.bashPPNativeSlice(x)
 		}
 	case *syntax.BashPPCompositeLit:
 		value, meta, err := r.bashPPEvalComposite(x, x.LitType)
@@ -371,6 +393,11 @@ func (r *Runner) bashPPBridgeShortDecl(ctx context.Context, d *syntax.BashPPShor
 		return false
 	}
 	values, err := r.bashPPBridgeCall(ctx, d.Call)
+	if err == nil && r.exit.exiting {
+		// The dependency process terminated the program; the recorded status
+		// must not be replaced by an arity diagnostic.
+		return true
+	}
 	if err == nil && len(values) != len(d.Lhs) {
 		err = fmt.Errorf("assignment mismatch: %d variables but %d native results", len(d.Lhs), len(values))
 	}
@@ -382,26 +409,33 @@ func (r *Runner) bashPPBridgeShortDecl(ctx context.Context, d *syntax.BashPPShor
 		if lhs.Value == "_" {
 			continue
 		}
-		value := values[i]
-		scalar, err := value.scalar()
-		if err == nil {
-			r.bashPPDeclareName(lhs.Value, expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarString(scalar.value)})
-			cell := r.bashPPScope.lookup(lhs.Value)
-			cell.scalarKind = scalar.value.Kind()
-			cell.typeName = value.Type
-			cell.declType = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: value.Type}}
-		} else {
-			copy := value
-			r.bashPPDeclareName(lhs.Value, expand.NewObject(&copy))
-			if value.Interface != "" {
-				cell := r.bashPPScope.lookup(lhs.Value)
-				cell.declType = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: value.Interface}}
-				payload := &bashPPCell{vr: expand.NewObject(&copy)}
-				cell.interfaceValue = &bashPPInterfaceValue{nilIface: value.Kind == "nil", cell: payload, dynamic: &syntax.BashPPNamedType{Name: &syntax.Lit{Value: value.Type}}}
-			}
-		}
+		r.bashPPBindNativeValue(lhs.Value, values[i])
 	}
 	return true
+}
+
+// bashPPBindNativeValue declares name from one native value. A scalar becomes
+// an ordinary typed interpreter variable; anything else stays a session handle
+// so the dependency keeps ownership, identity and mutation of the value.
+func (r *Runner) bashPPBindNativeValue(name string, value bashPPBridgeValue) {
+	scalar, err := value.scalar()
+	if err == nil {
+		r.bashPPDeclareName(name, expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarString(scalar.value)})
+		cell := r.bashPPScope.lookup(name)
+		cell.scalarKind = scalar.value.Kind()
+		cell.typeName = value.Type
+		cell.declType = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: value.Type}}
+		return
+	}
+	copy := value
+	r.bashPPDeclareName(name, expand.NewObject(&copy))
+	cell := r.bashPPScope.lookup(name)
+	cell.typeName = value.Type
+	if value.Interface != "" {
+		cell.declType = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: value.Interface}}
+		payload := &bashPPCell{vr: expand.NewObject(&copy)}
+		cell.interfaceValue = &bashPPInterfaceValue{nilIface: value.Kind == "nil", cell: payload, dynamic: &syntax.BashPPNamedType{Name: &syntax.Lit{Value: value.Type}}}
+	}
 }
 
 func bashPPBridgeTypeText(typ syntax.BashPPTypeExpr) string {

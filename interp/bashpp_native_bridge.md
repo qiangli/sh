@@ -48,6 +48,45 @@ while a real dependency subprocess is active, including process termination and
 cleanup.
 These are scoped tests, not full corpus or cross-platform certification.
 
+## Structured native values (Sprint #118, Story #52, Story-ID d564bada90bb)
+
+An imported call or package variable that is not a scalar answers with a
+session handle. The original program's `len`, `cap`, index, slice, field and
+`range` expressions read through that handle, so the dependency keeps ownership,
+identity and mutation of the value and no interpreter copy of the sequence is
+materialised. Only the access is forwarded; the surrounding expression,
+statement and loop bodies stay on the interpreter path. A scalar element binds
+as an ordinary typed interpreter variable, a non-scalar element keeps its
+handle, and Go's own index/slice bounds errors are reported by the dependency.
+`os.Args[3]`, `os.Args[1:]`, `u.Host` and `for _, e := range os.Environ()` are
+the covered shapes. The three-index slice form is refused rather than
+reinterpreted, because its capacity operand has no interpreter meaning.
+
+A dependency process that ends on its own — `os.Exit`, or a successful
+`syscall.Exec` replacement — is now reported as the original program's exit
+status instead of a bridge failure. A non-zero status becomes the interpreter's
+status and suppresses later bridge diagnostics on the same unwind; a zero status
+ends the run with no error. Deferred interpreter work does not run, matching Go.
+The session is closed at that point, so a later `Run` starts a fresh dependency.
+
+Handles store an addressable copy, so pointer-receiver methods of a value-typed
+native remain reachable and keep mutating the value behind the same handle.
+
+`TestGoSourceNativeStructuredValues`, `TestGoSourceNativeSelfTermination` and
+`TestGoSourceNativeSessionLifecycle` compare unchanged original sources against
+a real Go build of the same file on stdout, stderr and exit status.
+
+Still unsupported after this slice, and not counted as coverage: declaring a
+variable of an imported non-scalar type (`var ops atomic.Uint64`,
+`var mu sync.Mutex`, `embed.FS`), which needs the shared declaration and type
+registry paths; carrying a handle through an interpreted function's parameters
+and results (`defer closeFile(f)`); taking the address of an interpreter
+variable for a native out-parameter (`flag.IntVar(&n, ...)`); interpreted
+callbacks passed into dependencies (`wg.Go(func(){...})`); and indexing a plain
+interpreter string. The generated helper workspace is also still visible in the
+runtime directory while the program runs, so a program that lists its own cwd
+does not match Go byte for byte.
+
 Remaining unsupported or uncertified semantics include interpreted callbacks
 passed into dependencies, generic imported calls, mutation/alias preservation
 when interpreted aggregates are copied into native arguments, complete local

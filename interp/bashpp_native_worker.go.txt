@@ -89,11 +89,57 @@ func decode(v value, target reflect.Type)(reflect.Value,error){
  if result.Type().AssignableTo(target){return result,nil}
  return result,fmt.Errorf("%s not assignable to %s",result.Type(),target)
 }
+// Structured access over a native value. Handles keep Go identity, so an
+// original index/slice/field/len expression reads through the same value
+// instead of materialising an interpreter copy.
+func access(rv reflect.Value,q request)([]value,string){
+ if rv.Kind()==reflect.Interface&&!rv.IsNil(){rv=rv.Elem()}
+ if q.Op=="field" {
+  for rv.Kind()==reflect.Pointer {if rv.IsNil(){return nil,"field access through nil pointer"};rv=rv.Elem()}
+  if rv.Kind()!=reflect.Struct{return nil,"field access on "+rv.Type().String()}
+  f:=rv.FieldByName(q.Selector);if !f.IsValid(){return nil,"unknown field "+q.Selector};if !f.CanInterface(){return nil,"unexported field "+q.Selector}
+  return []value{encode(f)},""
+ }
+ for rv.Kind()==reflect.Pointer&&rv.Type().Elem().Kind()==reflect.Array {if rv.IsNil(){return nil,"index through nil pointer"};rv=rv.Elem()}
+ switch q.Op {
+ case "len":
+  switch rv.Kind(){case reflect.String,reflect.Slice,reflect.Array,reflect.Map,reflect.Chan:return []value{encode(reflect.ValueOf(rv.Len()))},""}
+  return nil,"len is not defined on "+rv.Type().String()
+ case "cap":
+  switch rv.Kind(){case reflect.Slice,reflect.Array,reflect.Chan:return []value{encode(reflect.ValueOf(rv.Cap()))},""}
+  return nil,"cap is not defined on "+rv.Type().String()
+ case "index":
+  if len(q.Args)!=1{return nil,"index requires one operand"}
+  if rv.Kind()==reflect.Map{key,err:=decode(q.Args[0],rv.Type().Key());if err!=nil{return nil,err.Error()};item:=rv.MapIndex(key);if !item.IsValid(){item=reflect.Zero(rv.Type().Elem())};return []value{encode(item)},""}
+  n,err:=strconv.Atoi(q.Args[0].Text);if err!=nil{return nil,"index is not an integer"}
+  switch rv.Kind(){case reflect.String,reflect.Slice,reflect.Array:default:return nil,"index is not defined on "+rv.Type().String()}
+  if n<0||n>=rv.Len(){return nil,fmt.Sprintf("index out of range [%d] with length %d",n,rv.Len())}
+  if rv.Kind()==reflect.String{return []value{encode(reflect.ValueOf(rv.String()[n]))},""}
+  return []value{encode(rv.Index(n))},""
+ case "slice":
+  if len(q.Args)!=2{return nil,"slice requires two bounds"}
+  switch rv.Kind(){case reflect.String,reflect.Slice,reflect.Array:default:return nil,"slice is not defined on "+rv.Type().String()}
+  if rv.Kind()==reflect.Array&&!rv.CanAddr(){return nil,"unaddressable array slice"}
+  low,high:=0,rv.Len()
+  if q.Args[0].Kind!="nil"{n,err:=strconv.Atoi(q.Args[0].Text);if err!=nil{return nil,"slice bound is not an integer"};low=n}
+  if q.Args[1].Kind!="nil"{n,err:=strconv.Atoi(q.Args[1].Text);if err!=nil{return nil,"slice bound is not an integer"};high=n}
+  capacity:=rv.Len();if rv.Kind()==reflect.Slice{capacity=rv.Cap()}
+  if low<0||high<low||high>capacity{return nil,fmt.Sprintf("slice bounds out of range [%d:%d] with capacity %d",low,high,capacity)}
+  return []value{encode(rv.Slice(low,high))},""
+ }
+ return nil,"unsupported native access "+q.Op
+}
 func dispatch(q request)(reply response){
  reply.ID=q.ID
  defer func(){if e:=recover();e!=nil{reply.Error=fmt.Sprintf("native dependency panic: %v",e)}}()
  fn:=symbols[q.Selector]
- if q.Receiver!=nil {receiver,err:=decode(*q.Receiver,nil);if err!=nil{reply.Error=err.Error();return};fn=receiver.MethodByName(q.Selector)}
+ if q.Receiver!=nil {receiver,err:=decode(*q.Receiver,nil);if err!=nil{reply.Error=err.Error();return}
+  switch q.Op {case "len","cap","index","slice","field":reply.Values,reply.Error=access(receiver,q);return}
+  fn=receiver.MethodByName(q.Selector)
+  // A handle stores an addressable copy, so pointer-receiver methods of a
+  // value-typed native variable remain reachable and keep mutating that value.
+  if !fn.IsValid()&&receiver.CanAddr(){fn=receiver.Addr().MethodByName(q.Selector)}}
+ if q.Op=="new" {typ:=resolveType(q.Selector);if typ==nil{reply.Error="unregistered bridge type "+strconv.Quote(q.Selector);return};reply.Values=[]value{encode(reflect.New(typ).Elem())};return}
  if !fn.IsValid(){reply.Error="unknown imported symbol or method: "+q.Selector;return}
  if q.Op=="get" {reply.Values=[]value{encode(fn)};return}
  if q.Op!="call"||fn.Kind()!=reflect.Func{reply.Error="imported symbol is not callable";return}

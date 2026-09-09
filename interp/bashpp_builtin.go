@@ -578,6 +578,14 @@ func (r *Runner) bashPPBuiltinLength(name string, c *syntax.BashPPCall, args []b
 	if size, ok := r.bashPPBuiltinPointerArrayLen(arg); ok {
 		return bashPPBuiltinScalarCell(strconv.Itoa(size)), nil
 	}
+	// A dependency-owned value answers its own length; see
+	// bashPPNativeBuiltinLength in bashpp_native_access.go.
+	if size, err, native := r.bashPPNativeBuiltinLength(name, c, arg); native {
+		if err != nil {
+			return nil, err
+		}
+		return bashPPBuiltinScalarCell(strconv.Itoa(size)), nil
+	}
 	if name == "len" {
 		if text, ok := arg.value.(string); ok && arg.meta == nil {
 			return bashPPBuiltinScalarCell(strconv.Itoa(len(text))), nil

@@ -509,6 +509,11 @@ func bashPPCellMeta(cell *bashPPCell) *bashPPCollectionMeta {
 }
 
 func (r *Runner) bashPPReadExpr(expr syntax.BashPPExpr) (any, *bashPPCollectionMeta, error) {
+	// An index or slice rooted in a dependency-owned value is read through its
+	// handle; see bashPPNativeRead in bashpp_native_access.go.
+	if value, meta, err, native := r.bashPPNativeRead(expr); native {
+		return value, meta, err
+	}
 	switch x := expr.(type) {
 	case *syntax.BashPPCompositeLit:
 		return r.bashPPEvalComposite(x, nil)
