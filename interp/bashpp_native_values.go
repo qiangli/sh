@@ -66,6 +66,9 @@ func (r *Runner) bashPPBridgeCall(ctx context.Context, call *syntax.BashPPCall) 
 	if err != nil {
 		return nil, err
 	}
+	if !r.goSourceNativeSleepBoundary(ctx, req, q) {
+		return nil, errBashPPScalarInterrupted
+	}
 	return r.bashPPNativeRequest(ctx, req, q)
 }
 func (r *Runner) bashPPPrepareNativeCall(ctx context.Context, call *syntax.BashPPCall) (bashPPBridgeRequest, error) {

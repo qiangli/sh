@@ -461,7 +461,11 @@ func Walk(node Node, f func(Node) bool) {
 	case *BashPPMakeChan:
 		walkNilable(node.Make, f)
 		walkNilable(node.ChanType, f)
-		walkNilable(node.Capacity, f)
+		if node.CapacityExpr != nil {
+			Walk(node.CapacityExpr, f)
+		} else {
+			walkNilable(node.Capacity, f)
+		}
 	case *BashPPSend:
 		if node.ChanExpr != nil {
 			Walk(node.ChanExpr, f)

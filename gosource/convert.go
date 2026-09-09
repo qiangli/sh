@@ -548,6 +548,7 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 							out.MakeChan = &s.BashPPMakeChan{Make: out.Call.Fun[0], ChanType: ch, Lparen: out.Call.Lparen, Rparen: out.Call.Rparen}
 							if len(rhs.Args) > 1 {
 								out.MakeChan.Capacity = c.word(rhs.Args[1])
+								out.MakeChan.CapacityExpr = c.expr(rhs.Args[1])
 							}
 							out.Call = nil
 							out.Rhs = nil

@@ -57,6 +57,10 @@ func (r *Runner) bashPPGoSourceChanCall(c *syntax.BashPPCall) bool {
 	if r.bashPPFuncs["close"] != nil || (r.bashPPScope != nil && r.bashPPScope.lookup("close") != nil) {
 		return false
 	}
+	if len(c.ArgExprs) == 1 && c.ArgExprs[0] != nil {
+		r.goSourceCloseChannel(c.ArgExprs[0])
+		return true
+	}
 	r.bashPPClose(&syntax.BashPPClose{Kw: c.Fun[0], Chan: c.Args[0], Lparen: c.Lparen, Rparen: c.Rparen})
 	return true
 }

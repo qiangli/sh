@@ -117,6 +117,9 @@ func (r *Runner) bashPPRangeCollection(ctx context.Context, rng *syntax.BashPPRa
 	if cell == nil || cell.channel != nil || cell.vr.Kind != expand.Object && !cell.pointer {
 		return false
 	}
+	if _, native := r.goSourceNativeChannel(cell); native {
+		return false
+	}
 	value, meta, err := r.bashPPReadExpr(rng.Expr)
 	if err != nil {
 		r.bashPPRangeError(rng, "%v", err)

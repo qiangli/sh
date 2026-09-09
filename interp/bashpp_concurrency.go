@@ -637,6 +637,17 @@ func (r *Runner) bashPPMakeChan(ctx context.Context, d *syntax.BashPPShortDecl) 
 		r.exit.code = 2
 		return
 	}
+	if r.bashPPGoSource {
+		cell, handled, err := r.goSourceMakeNativeChannel(d.MakeChan.ChanType, d.MakeChan.CapacityExpr, d.MakeChan.Capacity)
+		if handled {
+			if err != nil {
+				r.goSourceNativeChannelError(err)
+				return
+			}
+			r.bashPPBindReceivedCell(d.Lhs[0].Value, cell)
+			return
+		}
+	}
 	capacity := 0
 	elem := d.MakeChan.ChanType.Elem.Value
 	if _, ok := r.bashPPTypes[elem]; !r.bashPPGoSource && !ok && !bashPPBuiltinType(elem) {
@@ -644,7 +655,14 @@ func (r *Runner) bashPPMakeChan(ctx context.Context, d *syntax.BashPPShortDecl) 
 		r.exit.code = 2
 		return
 	}
-	if d.MakeChan.Capacity != nil {
+	if r.bashPPGoSource && d.MakeChan.CapacityExpr != nil {
+		var err error
+		capacity, err = r.goSourceChannelCapacity(d.MakeChan.CapacityExpr, d.MakeChan.Capacity)
+		if err != nil {
+			r.goSourceNativeChannelError(err)
+			return
+		}
+	} else if d.MakeChan.Capacity != nil {
 		var err error
 		capacity, err = strconv.Atoi(r.literal(d.MakeChan.Capacity))
 		if err != nil || capacity < 0 || capacity > bashPPMaxChanCapacity {

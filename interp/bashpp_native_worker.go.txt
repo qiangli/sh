@@ -244,6 +244,16 @@ func primitiveTemplateTree(node bppTemplateParse.Node)bool {
 func dispatch(q request)(reply response){
  reply.ID=q.ID
  defer func(){if e:=recover();e!=nil{if original,ok:=e.(originalCallbackPanic);ok{reply.Panic=&original.value}else{reply.Error=fmt.Sprintf("native dependency panic: %v",e)}}}()
+ if q.Op=="channel-make" {
+  typ:=resolveType(q.Selector);if typ==nil||typ.Kind()!=reflect.Chan||len(q.Args)!=1{reply.Error="channel make requires one capacity and a registered channel type";return}
+  n,err:=strconv.Atoi(q.Args[0].Text);if err!=nil||n<0{panic("makechan: size out of range")}
+  channel:=reflect.MakeChan(reflect.ChanOf(reflect.BothDir,typ.Elem()),n);if channel.Type()!=typ{channel=channel.Convert(typ)}
+  reply.Values=[]value{encode(channel)};return
+ }
+ if q.Op=="channel-close" {
+  if q.Receiver==nil{reply.Error="channel close lacks receiver";return};channel,err:=decode(*q.Receiver,nil);if err!=nil{reply.Error=err.Error();return}
+  if !channel.IsValid()||channel.Kind()!=reflect.Chan||channel.Type().ChanDir()==reflect.RecvDir{reply.Error="channel close requires a send-capable channel";return};channel.Close();return
+ }
  if q.Op=="channel-type" {
   if q.Receiver==nil{reply.Error="channel type query lacks receiver";return}
   channel,err:=decode(*q.Receiver,nil);if err!=nil{reply.Error=err.Error();return};target:=resolveType(q.Selector)

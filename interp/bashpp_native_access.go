@@ -154,6 +154,10 @@ func (r *Runner) bashPPNativeRange(ctx context.Context, rng *syntax.BashPPRange)
 		r.bashPPRangeError(rng, "BASHPP-ERANGE-TYPE: %v", err)
 		return true
 	}
+	if channel, ok := r.goSourceNativeChannel(goSourceNativeValueCell(base)); ok {
+		r.goSourceRangeNativeChannel(ctx, rng, channel)
+		return true
+	}
 	if base.Kind != "handle" {
 		// A native scalar or nil is not a range operand the bridge owns; the
 		// ordinary scalar range path reports it with Go's own wording.

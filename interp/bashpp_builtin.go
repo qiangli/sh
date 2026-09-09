@@ -208,6 +208,27 @@ func (r *Runner) bashPPBuiltinElement(arg bashPPBuiltinArg, expected syntax.Bash
 // bashPPRunValueBuiltin executes a non-panic predeclared call. Its result is a
 // full cell so structured identity and named type metadata survive `:=`.
 func (r *Runner) bashPPRunValueBuiltin(name string, c *syntax.BashPPCall) (*bashPPCell, bool) {
+	if r.bashPPGoSource && name == "make" {
+		if typ, ok := c.ArgType.(*syntax.BashPPChanType); ok {
+			var expr syntax.BashPPExpr
+			var word *syntax.Word
+			if len(c.ArgExprs) > 1 {
+				expr = c.ArgExprs[1]
+			}
+			if len(c.Args) > 1 {
+				word = c.Args[1]
+			}
+			cell, handled, err := r.goSourceMakeNativeChannel(typ, expr, word)
+			if handled {
+				if err != nil {
+					r.goSourceNativeChannelError(err)
+					return nil, false
+				}
+				return cell, true
+			}
+		}
+	}
+
 	args := make([]bashPPBuiltinArg, len(c.Args))
 	for i := range c.Args {
 		if r.bashPPGoSource && (name == "print" || name == "println") && i < len(c.ArgExprs) && c.ArgExprs[i] != nil {
@@ -583,6 +604,11 @@ func (r *Runner) bashPPBuiltinLength(name string, c *syntax.BashPPCall, args []b
 		return nil, fmt.Errorf("BASHPP-EBUILTIN-ARITY: %s expects exactly 1 argument; got %d argument(s)", name, len(args))
 	}
 	arg := args[0]
+	if r.bashPPGoSource && arg.cell != nil && arg.cell.vr.Kind == expand.String && arg.cell.vr.Str == "" {
+		if _, ok := arg.typ.(*syntax.BashPPChanType); ok {
+			return bashPPBuiltinScalarCell("0"), nil
+		}
+	}
 	if arg.channel != nil {
 		if r.bashPPConcurrent == nil || arg.cell.channelOwner != r.bashPPConcurrent || r.bashPPChanBoundary {
 			return nil, fmt.Errorf("BASHPP-EBUILTIN-TYPE: %s argument is not a channel in this task group", name)

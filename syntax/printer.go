@@ -423,7 +423,10 @@ func (p *Printer) bashppMakeChan(mk *BashPPMakeChan) {
 	p.spacedString(mk.Make.Value, mk.Make.Pos())
 	p.writeLit("(chan ")
 	p.writeLit(mk.ChanType.Elem.Value)
-	if mk.Capacity != nil {
+	if mk.CapacityExpr != nil {
+		p.writeLit(", ")
+		p.bashppExpr(mk.CapacityExpr)
+	} else if mk.Capacity != nil {
 		p.writeLit(", ")
 		p.word(mk.Capacity)
 	}

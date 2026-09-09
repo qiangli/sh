@@ -1349,6 +1349,7 @@ type BashPPMakeChan struct {
 	Make           *Lit
 	ChanType       *BashPPChanType
 	Capacity       *Word
+	CapacityExpr   BashPPExpr // authoritative GoSource capacity
 	Lparen, Rparen Pos
 }
 

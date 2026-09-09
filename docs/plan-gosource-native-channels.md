@@ -30,14 +30,14 @@ access, never through scalar string conversion.
 
 ## Deliberate boundaries
 
-Mixed local/native select remains an explicit error before communication. The
-original GbE tickers example therefore remains unsupported: its select combines
-local `done` with native `ticker.C`. Interpreter-owned mutable slice/map/pointer
+Mixed local-reference/native select remains an explicit error before
+communication. The successor described in plan-gosource-unified-channels.md
+places scalar GoSource channels in the native session, allowing the original
+GbE tickers select to combine `done` with `ticker.C`. Interpreter-owned mutable slice/map/pointer
 and callback payloads cannot be retained by native channels; native-owned
 handles remain in their original session. Named channel types whose channel
-kind is not represented by current metadata are not guessed. Native channel
-`make`, `close`, range and a unified local/native channel runtime are subsequent
-work, not acceptance claimed by this change. Invoking a returned named native
+kind is not represented by current metadata are not guessed. Native channel make, close and range are provided by that bounded successor;
+reference-bearing channel domains are still separate. Invoking a returned named native
 function such as `context.CancelFunc` remains an adjacent callable-routing
 limitation; `context.WithTimeout(...).Done()` receives are covered independently.
 

@@ -48,7 +48,7 @@ func (r *Runner) goSourceChannelOperand(expr syntax.BashPPExpr, word *syntax.Wor
 		return nil, false
 	}
 	typ, _ := cell.declType.(*syntax.BashPPChanType)
-	if typ != nil && ((operation == "send" && typ.Direction == "recv") || (operation == "receive" && typ.Direction == "send")) {
+	if typ != nil && (((operation == "send" || operation == "close") && typ.Direction == "recv") || (operation == "receive" && typ.Direction == "send")) {
 		r.bashPPGoSendError(expr, fmt.Errorf("cannot %s on %s-only channel", operation, typ.Direction))
 		return nil, false
 	}
@@ -67,6 +67,10 @@ func (r *Runner) goSourceChannelOperand(expr syntax.BashPPExpr, word *syntax.Wor
 		return cell.channel, true
 	}
 	if typ != nil && cell.vr.Kind == expand.String && cell.vr.Str == "" {
+		if r.goSourceNativeChannelElement(typ.Element, map[string]bool{}) {
+			value := bashPPBridgeValue{Kind: "nil", Type: goSourceNativeChannelTypeText(typ)}
+			return &bashPPChannel{native: &value}, true
+		}
 		// nil has no ready communication or close notification.
 		nilChannel := newBashPPChannel(bashPPTypeText(typ.Element), 0)
 		nilChannel.ch = nil

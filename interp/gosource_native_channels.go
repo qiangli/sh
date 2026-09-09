@@ -114,6 +114,11 @@ func (r *Runner) goSourceNativeChannelError(err error) {
 	if err == nil || errors.Is(err, errBashPPScalarInterrupted) {
 		return
 	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		r.bashPPTaskCanceled = true
+		r.exit = exitStatus{code: 1}
+		return
+	}
 	if strings.Contains(err.Error(), "native dependency panic: send on closed channel") {
 		r.bashPPClosedSend()
 		return
@@ -184,6 +189,6 @@ func (r *Runner) goSourceNativeChannelFits(cell *bashPPCell, target *syntax.Bash
 	if err != nil {
 		return false
 	}
-	values, err := r.bashPPNativeRequest(r.bashPPTaskContext(r.ectx), req, bashPPBridgeRequest{Op: "channel-type", Selector: bashPPTypeText(target), Receiver: value})
+	values, err := r.bashPPNativeRequest(r.bashPPTaskContext(r.ectx), req, bashPPBridgeRequest{Op: "channel-type", Selector: goSourceNativeChannelTypeText(target), Receiver: value})
 	return err == nil && len(values) == 1 && values[0].Kind == "bool" && values[0].Text == "true"
 }
