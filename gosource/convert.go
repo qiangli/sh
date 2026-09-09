@@ -280,6 +280,12 @@ func (c *converter) valueDecl(g *ast.GenDecl, v *ast.ValueSpec, n *ast.Ident, in
 				}
 				return p.Name()
 			})
+			// The synthetic AST has no go/types object bindings. Expand the
+			// predeclared any alias so it keeps its interface shape instead
+			// of becoming an unresolved named type during initialization.
+			if typeName == "any" && types.Identical(obj.Type(), types.Universe.Lookup("any").Type()) {
+				typeName = "interface{}"
+			}
 			parsed, err := parser.ParseExpr(typeName)
 			if err != nil {
 				c.fail(n, "inferred variable type")
@@ -513,6 +519,10 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 		for _, spec := range g.Specs {
 			switch v := spec.(type) {
 			case *ast.ValueSpec:
+				if g.Tok == token.VAR && len(v.Values) == 1 && len(v.Names) > 1 {
+					out = append(out, c.tupleValueDecls(g, v)...)
+					continue
+				}
 				for i, n := range v.Names {
 					out = append(out, c.stmt(c.valueDecl(g, v, n, i)))
 				}

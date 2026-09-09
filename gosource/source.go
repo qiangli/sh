@@ -187,6 +187,8 @@ func Load(sources []Source, options Options) (*Program, error) {
 	}
 	var imports, decls, funcs []*syntax.Stmt
 	vars := map[*types.Var]*syntax.BashPPDecl{}
+	tupleSpecs := map[*types.Var]*ast.ValueSpec{}
+	tupleDecls := map[*ast.ValueSpec]*ast.GenDecl{}
 	for _, f := range c.files {
 		for _, d := range f.Decls {
 			if fd, ok := d.(*ast.FuncDecl); ok {
@@ -206,8 +208,18 @@ func Load(sources []Source, options Options) (*Program, error) {
 				case *ast.TypeSpec:
 					decls = append(decls, c.stmt(c.typeDecl(gd, v)))
 				case *ast.ValueSpec:
+					valueSpec := v
+					if gd.Tok == token.VAR && len(v.Values) == 1 && len(v.Names) > 1 {
+						zero := *v
+						zero.Values = nil
+						valueSpec = &zero
+						tupleDecls[v] = gd
+						for _, n := range v.Names {
+							tupleSpecs[c.info.Defs[n].(*types.Var)] = v
+						}
+					}
 					for i, n := range v.Names {
-						node := c.valueDecl(gd, v, n, i)
+						node := c.valueDecl(gd, valueSpec, n, i)
 						if gd.Tok == token.VAR {
 							vars[c.info.Defs[n].(*types.Var)] = node
 						} else {
@@ -244,8 +256,16 @@ func Load(sources []Source, options Options) (*Program, error) {
 		}
 	}
 	for _, init := range c.info.InitOrder {
-		if len(init.Lhs) != 1 {
-			return nil, fmt.Errorf("%s: gosource: tuple package initialization is not implemented", c.fset.Position(init.Rhs.Pos()))
+		if len(init.Lhs) > 1 {
+			spec := tupleSpecs[init.Lhs[0]]
+			if spec == nil {
+				return nil, fmt.Errorf("%s: gosource: missing tuple initializer", c.fset.Position(init.Rhs.Pos()))
+			}
+			p.File.Stmts = append(p.File.Stmts, c.tupleValueDecls(tupleDecls[spec], spec)...)
+			for _, variable := range init.Lhs {
+				initialized[variable] = true
+			}
+			continue
 		}
 		v := init.Lhs[0]
 		p.File.Stmts = append(p.File.Stmts, c.stmt(vars[v]))
