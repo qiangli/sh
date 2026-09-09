@@ -927,24 +927,10 @@ func (r *Runner) bashPPScalarFuncCall(call *syntax.BashPPCall) (bashPPScalar, er
 	}
 	var args []string
 	if call.ArgExprs != nil {
-		if len(call.ArgExprs) != len(call.Args) {
-			return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-CALL: inconsistent positioned scalar arguments")
+		var err error
+		if args, ok, err = r.bashPPTypedCallArgs(call, fn); err != nil {
+			return bashPPScalar{}, err
 		}
-		cells := make([]*bashPPCell, len(call.ArgExprs))
-		for i, expr := range call.ArgExprs {
-			value, err := r.bashPPEvalScalarExpr(expr)
-			if err != nil {
-				return bashPPScalar{}, err
-			}
-			text := bashPPScalarString(value.value)
-			args = append(args, text)
-			cell := &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: text}, scalarKind: value.value.Kind()}
-			if value.typ != "" {
-				cell.declType = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: value.typ}}
-			}
-			cells[i] = cell
-		}
-		args, ok = r.bashPPBindCall(fn, args, nil, cells, nil, len(args))
 	} else {
 		args, ok = r.bashPPCallValues(call, fn)
 	}

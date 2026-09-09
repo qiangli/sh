@@ -2,7 +2,6 @@ package interp
 
 import (
 	"fmt"
-	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/syntax"
 )
 
@@ -15,20 +14,10 @@ func (r *Runner) bashPPGoSourceTupleCall(call *syntax.BashPPCall) ([]*bashPPCell
 	}
 	var args []string
 	if call.ArgExprs != nil {
-		cells := make([]*bashPPCell, len(call.ArgExprs))
-		for i, expr := range call.ArgExprs {
-			value, err := r.bashPPEvalScalarExpr(expr)
-			if err != nil {
-				return nil, err
-			}
-			text := bashPPScalarString(value.value)
-			args = append(args, text)
-			cells[i] = &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: text}, scalarKind: value.value.Kind()}
-			if value.typ != "" {
-				cells[i].declType = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: value.typ}}
-			}
+		var err error
+		if args, ok, err = r.bashPPTypedCallArgs(call, fn); err != nil {
+			return nil, err
 		}
-		args, ok = r.bashPPBindCall(fn, args, nil, cells, nil, len(args))
 	} else {
 		args, ok = r.bashPPCallValues(call, fn)
 	}

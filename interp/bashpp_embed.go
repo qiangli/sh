@@ -46,14 +46,22 @@ func bashPPEmbeddedFieldName(field *syntax.BashPPField) (string, bool) {
 	return named.Name.Value, true
 }
 
-func bashPPDeclaredFieldName(field *syntax.BashPPField) (string, bool) {
+// bashPPDeclaredFieldNames lists every selector name one field contributes. An
+// embedded field contributes the implicit name of its type; a named field
+// contributes each name in its declaration group, so Go's grouped
+// `X, Y float64` form is selectable under both names rather than under neither.
+func bashPPDeclaredFieldNames(field *syntax.BashPPField) []string {
 	if name, ok := bashPPEmbeddedFieldName(field); ok {
-		return name, true
+		return []string{name}
 	}
-	if field != nil && len(field.Names) == 1 {
-		return field.Names[0].Value, true
+	if field == nil || len(field.Names) == 0 {
+		return nil
 	}
-	return "", false
+	names := make([]string, 0, len(field.Names))
+	for _, n := range field.Names {
+		names = append(names, n.Value)
+	}
+	return names
 }
 
 // bashPPEmbeddedTarget resolves only aliases while retaining defined type
@@ -157,8 +165,10 @@ func (r *Runner) bashPPResolveSelection(root syntax.BashPPTypeExpr, name string,
 			fields, _, isStruct := r.bashPPStructFields(node.typ)
 			if isStruct {
 				for _, field := range fields {
-					fieldName, named := bashPPDeclaredFieldName(field)
-					if named && fieldName == name {
+					for _, fieldName := range bashPPDeclaredFieldNames(field) {
+						if fieldName != name {
+							continue
+						}
 						edges := append([]bashPPEmbedEdge(nil), node.edges...)
 						edges = append(edges, bashPPEmbedEdge{name: fieldName})
 						matches = append(matches, bashPPSelection{edges: edges, fieldType: field.FieldTypeExpr})

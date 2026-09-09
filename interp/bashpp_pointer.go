@@ -142,6 +142,12 @@ func (r *Runner) bashPPAddress(expr syntax.BashPPExpr) (*bashPPPointer, error) {
 	if deref, ok := expr.(*syntax.BashPPDerefExpr); ok {
 		return r.bashPPPointerExprValue(deref.X)
 	}
+	// Go's `&T{…}` is addressable even though it names no variable: the
+	// literal is a fresh allocation whose address the expression yields. It
+	// gets an anonymous cell to live in, exactly as `new(T)` does above.
+	if lit, ok := expr.(*syntax.BashPPCompositeLit); ok {
+		return r.bashPPCompositeAddress(lit)
+	}
 	root, ok := bashPPCollectionRoot(expr)
 	if !ok || r.bashPPScope == nil {
 		return nil, fmt.Errorf("BASHPP-ENONADDRESSABLE: operand is not addressable")

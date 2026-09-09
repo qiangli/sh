@@ -840,3 +840,24 @@ func bashPPParentExpr(expr syntax.BashPPExpr) syntax.BashPPExpr {
 	}
 	return expr
 }
+
+// bashPPCompositeAddress materializes `&T{…}` — a composite literal taken by
+// address. Go allows it although the literal is not a variable: the result is
+// a pointer to a fresh value with its own lifetime, so the literal is stored
+// in an anonymous cell which the returned pointer owns.
+func (r *Runner) bashPPCompositeAddress(lit *syntax.BashPPCompositeLit) (*bashPPPointer, error) {
+	typ := lit.LitType
+	if typ == nil {
+		return nil, fmt.Errorf("BASHPP-ENONADDRESSABLE: composite literal has no type")
+	}
+	value, meta, err := r.bashPPEvalComposite(lit, nil)
+	if err != nil {
+		return nil, err
+	}
+	cell := &bashPPCell{declType: typ}
+	if named, ok := typ.(*syntax.BashPPNamedType); ok && named.Name != nil {
+		cell.typeName = named.Name.Value
+	}
+	bashPPStoreCellValue(cell, value, meta)
+	return &bashPPPointer{target: cell, elem: typ}, nil
+}

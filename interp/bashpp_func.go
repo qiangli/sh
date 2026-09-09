@@ -944,6 +944,124 @@ func (r *Runner) bashPPCellForWord(w *syntax.Word) *bashPPCell {
 	return r.bashPPScope.lookup(lit.Value)
 }
 
+// bashPPPointerCell wraps a pointer value in an anonymous cell. `&x`, `&T{…}`
+// and `new(T)` name storage that no variable holds, so there is no cell to
+// carry their provenance to a parameter; this makes one.
+func bashPPPointerCell(ptr *bashPPPointer) *bashPPCell {
+	if ptr == nil {
+		return &bashPPCell{pointer: true, nilPointer: true}
+	}
+	cell := &bashPPCell{pointer: true, pointerValue: ptr, declType: &syntax.BashPPPointerType{Element: ptr.elem}}
+	if named, ok := ptr.elem.(*syntax.BashPPNamedType); ok && named.Name != nil {
+		cell.typeName = named.Name.Value
+	}
+	return cell
+}
+
+// bashPPStructuredArgCell reports the provenance cell of a call argument that
+// has no scalar form — a struct, collection, pointer or interface value, plus
+// the `&x` / `&T{…}` / `new(T)` and composite-literal spellings that produce
+// one without naming a variable. A scalar argument returns (nil, nil) so it
+// keeps being evaluated as an expression rather than passed by name.
+func (r *Runner) bashPPStructuredArgCell(w *syntax.Word, expr syntax.BashPPExpr) (*bashPPCell, error) {
+	switch x := expr.(type) {
+	case *syntax.BashPPAddressExpr, *syntax.BashPPNewExpr:
+		ptr, err := r.bashPPPointerExprValue(expr)
+		if err != nil {
+			return nil, err
+		}
+		return bashPPPointerCell(ptr), nil
+	case *syntax.BashPPCompositeLit:
+		if x.LitType == nil {
+			return nil, nil
+		}
+		value, meta, err := r.bashPPEvalComposite(x, nil)
+		if err != nil {
+			return nil, err
+		}
+		cell := &bashPPCell{declType: x.LitType}
+		if named, ok := x.LitType.(*syntax.BashPPNamedType); ok && named.Name != nil {
+			cell.typeName = named.Name.Value
+		}
+		bashPPStoreCellValue(cell, value, meta)
+		return cell, nil
+	}
+	cell := r.bashPPCellForWord(w)
+	if cell != nil && (cell.pointer || cell.interfaceValue != nil || cell.vr.Kind == expand.Object) {
+		return cell, nil
+	}
+	return nil, nil
+}
+
+// bashPPCellForArg resolves the provenance cell of one call argument. A named
+// operand is the variable itself, so a pointer argument keeps its identity.
+// `&x` and `new(T)` name freshly taken storage that no variable holds; the
+// pointer is wrapped in an anonymous cell so it travels the same parameter
+// binding path a named pointer does, instead of arriving as a nil pointer.
+func (r *Runner) bashPPCellForArg(w *syntax.Word, expr syntax.BashPPExpr) *bashPPCell {
+	if cell := r.bashPPCellForWord(w); cell != nil {
+		return cell
+	}
+	switch expr.(type) {
+	case *syntax.BashPPAddressExpr, *syntax.BashPPNewExpr:
+	default:
+		return nil
+	}
+	ptr, err := r.bashPPPointerExprValue(expr)
+	if err != nil {
+		r.errf("%s%v\n", r.bashErrPrefix(expr.Pos()), err)
+		r.exit = exitStatus{code: 2}
+		return nil
+	}
+	if ptr == nil {
+		return nil
+	}
+	return bashPPPointerCell(ptr)
+}
+
+// bashPPTypedCallArgs binds the positioned Go-form arguments of a call whose
+// result is consumed as a value. Each argument is evaluated once: a structured
+// operand travels through its provenance cell, everything else through the
+// scalar evaluator, so `Abs(v)` on a struct and `Abs(x*2)` on a number both
+// reach the callee instead of the second form forcing the first to be refused
+// as "not a scalar".
+func (r *Runner) bashPPTypedCallArgs(call *syntax.BashPPCall, fn *bashPPFunc) ([]string, bool, error) {
+	if len(call.ArgExprs) != len(call.Args) {
+		return nil, false, fmt.Errorf("BASHPP-EEXPR-CALL: inconsistent positioned scalar arguments")
+	}
+	args := make([]string, len(call.ArgExprs))
+	cells := make([]*bashPPCell, len(call.ArgExprs))
+	interfaces := make([]*bashPPInterfaceValue, len(call.ArgExprs))
+	for i, expr := range call.ArgExprs {
+		structured, err := r.bashPPStructuredArgCell(call.Args[i], expr)
+		if err != nil {
+			return nil, false, err
+		}
+		if structured != nil {
+			copied := bashPPCopyAssignmentCell(structured)
+			// A value copy never carries direct channel authority; that is
+			// restored only from separately checked owner provenance.
+			copied.channel, copied.channelOwner = nil, nil
+			cells[i], interfaces[i] = copied, copied.interfaceValue
+			args[i] = r.bashPPExprValue(call.Args[i])
+			continue
+		}
+		value, err := r.bashPPEvalScalarExpr(expr)
+		if err != nil {
+			return nil, false, err
+		}
+		text := bashPPScalarString(value.value)
+		cell := &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: text}, scalarKind: value.value.Kind()}
+		if value.typ != "" {
+			cell.declType = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: value.typ}}
+		}
+		cells[i], args[i] = cell, text
+	}
+	r.bashPPCallInterfaces = interfaces
+	bound, ok := r.bashPPBindCall(fn, args, nil, cells, nil, len(args))
+	return bound, ok, nil
+}
+
 func (r *Runner) bashPPBindInterfaceMethod(iv *bashPPInterfaceValue, method string) (*bashPPFunc, bool) {
 	if iv == nil || iv.nilIface {
 		r.errf("nil interface has no method %s\n", method)
@@ -1064,8 +1182,12 @@ func (r *Runner) bashPPCallArgValuesWithCells(c *syntax.BashPPCall) ([]string, [
 			cells = append(cells, make([]*bashPPCell, len(values))...)
 			break
 		}
+		var argExpr syntax.BashPPExpr
+		if i < len(c.ArgExprs) {
+			argExpr = c.ArgExprs[i]
+		}
 		var copied *bashPPCell
-		if cell := r.bashPPCellForWord(word); cell != nil {
+		if cell := r.bashPPCellForArg(word, argExpr); cell != nil {
 			copied = bashPPCopyAssignmentCell(cell)
 			// Direct channel authority is restored only from the separately checked
 			// owner provenance. A value copy cannot grant an unverified capability.
