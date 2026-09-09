@@ -349,10 +349,23 @@ func (r *Runner) bashPPNativeBuiltinLength(name string, c *syntax.BashPPCall, ar
 // Inspect only a local identifier/field chain. This evaluates no index, call or
 // user expression and therefore cannot repeat argument effects during dispatch.
 func (r *Runner) bashPPNativeLocalField(expr *syntax.BashPPSelectorExpr) *bashPPBridgeValue {
-	if !r.bashPPGoSource {
+	value, _, ok := r.bashPPNativeLocalBase(expr)
+	if !ok {
 		return nil
 	}
-	var root syntax.BashPPExpr = expr
+	native, _ := value.(*bashPPBridgeValue)
+	return native
+}
+
+// bashPPNativeLocalBase walks that chain and reports the value and collection
+// metadata it lands on. Callers wanting the dependency-owned value use
+// [Runner.bashPPNativeLocalField]; callers that must promote an embedded
+// receiver out of the enclosing struct need the metadata too.
+func (r *Runner) bashPPNativeLocalBase(expr syntax.BashPPExpr) (any, *bashPPCollectionMeta, bool) {
+	if !r.bashPPGoSource {
+		return nil, nil, false
+	}
+	root := expr
 	var names []string
 	for {
 		field, ok := root.(*syntax.BashPPSelectorExpr)
@@ -364,47 +377,46 @@ func (r *Runner) bashPPNativeLocalField(expr *syntax.BashPPSelectorExpr) *bashPP
 	}
 	id, ok := root.(*syntax.BashPPIdent)
 	if !ok || r.bashPPScope == nil {
-		return nil
+		return nil, nil, false
 	}
 	cell := r.bashPPScope.lookup(id.Name.Value)
 	if cell == nil || r.bashPPNativeCellValue(id.Name.Value) != nil {
-		return nil
+		return nil, nil, false
 	}
 	value, meta := cell.vr.Obj, bashPPCellMeta(cell)
 	if cell.pointer {
 		if cell.pointerValue == nil {
-			return nil
+			return nil, nil, false
 		}
 		var err error
 		value, meta, _, err = cell.pointerValue.read()
 		if err != nil {
-			return nil
+			return nil, nil, false
 		}
 	}
 	for i := len(names) - 1; i >= 0; i-- {
 		if ptr, ok := value.(*bashPPPointer); ok {
 			if ptr == nil {
-				return nil
+				return nil, nil, false
 			}
 			var err error
 			value, meta, _, err = ptr.read()
 			if err != nil {
-				return nil
+				return nil, nil, false
 			}
 		}
 		if meta == nil || meta.kind != "struct" {
-			return nil
+			return nil, nil, false
 		}
 		sel := r.bashPPResolveField(meta.typ, names[i])
 		if sel.ambiguous || len(sel.edges) == 0 {
-			return nil
+			return nil, nil, false
 		}
 		var err error
 		value, meta, err = bashPPReadSelection(value, meta, sel.edges)
 		if err != nil {
-			return nil
+			return nil, nil, false
 		}
 	}
-	native, _ := value.(*bashPPBridgeValue)
-	return native
+	return value, meta, true
 }

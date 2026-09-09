@@ -42,17 +42,44 @@ func TestGoSourceOriginalForwardTypeThreeModes(t *testing.T) {
 	typedSendThreeModes(t, source)
 }
 
-// Two same-cluster originals still fail, for reasons that are not declaration
-// registration. Pinning the diagnostic keeps each gap visible and keeps it from
-// silently turning back into a registration failure.
+// `methods/errors.go` gives MyError a time.Time field. That used to leave the
+// local type without a codec at all; imported field types are now materialised,
+// so the original runs, and it is compared against real Go rather than pinned to
+// a diagnostic. Sprint: #118; Story: #54; Story-ID: c3a60493cde9
+// The original prints `time.Now()`, so the timestamp is the one thing two runs
+// cannot agree on. It is elided only after being checked as a real time in Go's
+// own Time.String layout; the surrounding text — which is what the codec had to
+// get right — is still compared byte for byte.
+func TestGoSourceOriginalMethodsErrorsThreeModes(t *testing.T) {
+	source := forwardTypeOriginal(t, "methods-errors.go.txt",
+		"a0825fe6310af87e48e7f46b5290814df190d1e9533d0132fd663d6bb7f3236e")
+	typedSendThreeModesNormalized(t, source, func(stream string) string {
+		stamp, rest, ok := strings.Cut(strings.TrimPrefix(stream, "at "), ", ")
+		if !ok || !strings.HasPrefix(stream, "at ") {
+			return stream
+		}
+		// Go renders a monotonic reading as a trailing ` m=±<seconds>`, which is
+		// not part of the parseable layout.
+		wall, _, _ := strings.Cut(stamp, " m=")
+		if _, err := time.Parse("2006-01-02 15:04:05.999999999 -0700 MST", wall); err != nil {
+			t.Errorf("MyError.When did not render as a time.Time: %q: %v", stamp, err)
+			return stream
+		}
+		return "at <time>, " + rest
+	})
+}
+
+// One same-cluster original still fails, for a reason that is neither
+// declaration registration nor the embedded imported method set. Pinning the
+// diagnostic keeps the gap visible and keeps it from silently regressing into
+// either already-fixed failure.
 func TestGoSourceOriginalForwardTypeRemainingGaps(t *testing.T) {
 	for _, tc := range []struct{ name, digest, want string }{
-		// Embeds sync.Mutex in an anonymous struct; the embedded imported
-		// method set is what is missing, not the type's registration.
-		{"webcrawler.go.txt", "490f194b0e0610dde7196a8cb2ebec643586a6f05f94a1aabe7a29fb526b8882", "has no method Lock"},
-		// MyError carries a time.Time field, which the dependency helper cannot
-		// materialise, so no codec is emitted for the local type at all.
-		{"methods-errors.go.txt", "a0825fe6310af87e48e7f46b5290814df190d1e9533d0132fd663d6bb7f3236e", `unregistered bridge type "*MyError"`},
+		// `fetched` embeds sync.Mutex in an anonymous struct, and `fetched.Lock`
+		// now reaches it. What remains is unrelated to selection: fakeFetcher is
+		// a defined map type, and `(*f)[url]` indexes through a dereference of
+		// it, which the structured-expression evaluator does not accept.
+		{"webcrawler.go.txt", "490f194b0e0610dde7196a8cb2ebec643586a6f05f94a1aabe7a29fb526b8882", "BASHPP-ESELECTOR-EXPR: unsupported structured expression"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			source := forwardTypeOriginal(t, tc.name, tc.digest)
@@ -74,6 +101,9 @@ func TestGoSourceOriginalForwardTypeRemainingGaps(t *testing.T) {
 			diagnostic := err.Error() + errout.String()
 			if strings.Contains(diagnostic, "undefined type") {
 				t.Fatalf("declaration registration regressed: %s", diagnostic)
+			}
+			if strings.Contains(diagnostic, "has no method Lock") {
+				t.Fatalf("embedded imported method promotion regressed: %s", diagnostic)
 			}
 			if !strings.Contains(diagnostic, tc.want) {
 				t.Fatalf("gap changed: want %q, got %q", tc.want, diagnostic)

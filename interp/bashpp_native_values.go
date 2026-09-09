@@ -21,7 +21,11 @@ func (r *Runner) bashPPBridgeHandles(call *syntax.BashPPCall) bool {
 	}
 	if call.CalleeExpr != nil {
 		selector, ok := call.CalleeExpr.(*syntax.BashPPSelectorExpr)
-		return ok && r.bashPPNativeExpr(selector.X)
+		if !ok {
+			return false
+		}
+		return r.bashPPNativeExpr(selector.X) ||
+			r.bashPPPromotedNativeReceiver(selector.X, selector.Sel.Value) != nil
 	}
 	if len(call.Fun) < 1 {
 		return false
@@ -33,14 +37,17 @@ func (r *Runner) bashPPBridgeHandles(call *syntax.BashPPCall) bool {
 		if r.bashPPNativeCellValue(call.Fun[0].Value) != nil {
 			return true
 		}
-		if len(call.Fun) > 2 {
-			var receiver syntax.BashPPExpr = &syntax.BashPPIdent{Name: call.Fun[0]}
-			for _, part := range call.Fun[1 : len(call.Fun)-1] {
-				receiver = &syntax.BashPPSelectorExpr{X: receiver, Sel: part}
-			}
-			if r.bashPPNativeExpr(receiver) {
-				return true
-			}
+		var receiver syntax.BashPPExpr = &syntax.BashPPIdent{Name: call.Fun[0]}
+		for _, part := range call.Fun[1 : len(call.Fun)-1] {
+			receiver = &syntax.BashPPSelectorExpr{X: receiver, Sel: part}
+		}
+		if len(call.Fun) > 2 && r.bashPPNativeExpr(receiver) {
+			return true
+		}
+		// A method promoted from an embedded imported type is the dependency's
+		// to run even though the receiver spelling names a local struct.
+		if r.bashPPPromotedNativeReceiver(receiver, call.Fun[len(call.Fun)-1].Value) != nil {
+			return true
 		}
 	}
 	if len(call.Fun) == 1 {
@@ -77,7 +84,7 @@ func (r *Runner) bashPPPrepareNativeCall(ctx context.Context, call *syntax.BashP
 	}
 	q := bashPPBridgeRequest{Op: "call", Spread: call.Ellipsis.IsValid()}
 	if selector, ok := call.CalleeExpr.(*syntax.BashPPSelectorExpr); ok {
-		receiver, err := r.bashPPNativeReceiver(selector.X)
+		receiver, err := r.bashPPNativeMethodReceiver(selector.X, selector.Sel.Value)
 		if err != nil {
 			return bashPPBridgeRequest{}, err
 		}
@@ -91,7 +98,7 @@ func (r *Runner) bashPPPrepareNativeCall(ctx context.Context, call *syntax.BashP
 			for _, part := range call.Fun[1 : len(call.Fun)-1] {
 				receiverExpr = &syntax.BashPPSelectorExpr{X: receiverExpr, Sel: part}
 			}
-			receiver, err := r.bashPPNativeReceiver(receiverExpr)
+			receiver, err := r.bashPPNativeMethodReceiver(receiverExpr, call.Fun[len(call.Fun)-1].Value)
 			if err != nil {
 				return bashPPBridgeRequest{}, err
 			}

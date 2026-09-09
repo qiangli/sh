@@ -71,3 +71,17 @@ func (r *Runner) bashPPBindNativeMethod(ctx context.Context, receiver bashPPBrid
 	}
 	return bound, nil
 }
+
+// bashPPNativeMethodReceiver evaluates the receiver of a dependency-owned
+// method call. The receiver expression is evaluated once: either it is native
+// itself, or method is promoted from an embedded imported field, in which case
+// that field is read out of the already-walked local storage rather than
+// re-evaluated. Sprint: #118; Story: #54; Story-ID: c3a60493cde9
+func (r *Runner) bashPPNativeMethodReceiver(expr syntax.BashPPExpr, method string) (bashPPBridgeValue, error) {
+	if !r.bashPPNativeExpr(expr) {
+		if promoted := r.bashPPPromotedNativeReceiver(expr, method); promoted != nil {
+			return *promoted, nil
+		}
+	}
+	return r.bashPPNativeReceiver(expr)
+}

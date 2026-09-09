@@ -5,6 +5,7 @@ package interp
 
 import (
 	"fmt"
+	"strings"
 
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/syntax"
@@ -43,7 +44,14 @@ func bashPPEmbeddedFieldName(field *syntax.BashPPField) (string, bool) {
 	if !ok || named.Name == nil {
 		return "", false
 	}
-	return named.Name.Value, true
+	// Go spec, Struct types: "The unqualified type name acts as the field
+	// name." An embedded `sync.Mutex` is therefore selected as `.Mutex`, not
+	// as `.sync.Mutex`, which is not even a single selector.
+	name := named.Name.Value
+	if _, unqualified, ok := strings.Cut(name, "."); ok {
+		name = unqualified
+	}
+	return name, true
 }
 
 // bashPPDeclaredFieldNames lists every selector name one field contributes. An
