@@ -7,7 +7,7 @@ status: doing
 priority: p0
 created: 2026-09-09T06:41:24.782184Z
 weave: 35
-assignee: s118-complex
+assignee: sprint118-manager
 sprint: 118
 ---
 
