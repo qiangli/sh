@@ -810,6 +810,26 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 		if r.bashPPBindPointerExpr(d.Lhs[0].Value, d.Expr) {
 			return
 		}
+		// `bs := []byte(s)`: a conversion whose target is a collection binds the
+		// slice it produces rather than a scalar spelling of it; see
+		// bashPPConvertCollectionCell in bashpp_collection_convert.go. Scalar
+		// conversions report false and stay on the path below.
+		if conv, ok := d.Expr.(*syntax.BashPPConvertExpr); ok && len(d.Lhs) == 1 {
+			cell, handled, err := r.bashPPConvertCollectionCell(conv)
+			if err != nil {
+				r.errf("%s%v\n", r.bashErrPrefix(conv.Pos()), err)
+				r.exit = exitStatus{code: 2}
+				return
+			}
+			if handled {
+				name := d.Lhs[0].Value
+				r.bashPPDeclareName(name, cell.vr)
+				target := r.bashPPScope.lookup(name)
+				*target = *cell
+				target.object = &bashPPObjectIdentity{owner: name, collection: cell.valueMeta}
+				return
+			}
+		}
 		if lit, ok := d.Expr.(*syntax.BashPPCompositeLit); ok {
 			if len(d.Lhs) != 1 {
 				r.errf("assignment mismatch: %d variable(s) but 1 value(s)\n", len(d.Lhs))

@@ -70,30 +70,7 @@ func (r *Runner) bashPPAssign(ctx context.Context, assign *syntax.BashPPAssign) 
 		return
 	}
 	if assign.Call != nil {
-		target := bashPPWordSource(assign.Target)
-		cell := r.bashPPScope.lookup(target)
-		if cell == nil || !syntax.BashPPValidIdent(target) {
-			r.bashPPBuiltinError("TYPE", "assignment target %q is not declared", target)
-			return
-		}
-		if cell.constant || cell.vr.ReadOnly {
-			r.errf("BASHPP-EREADONLY-MUTATION: cannot assign to readonly value %q\n", target)
-			r.exit = exitStatus{code: 2}
-			return
-		}
-		name := bashPPPredeclaredCall(assign.Call)
-		if !bashPPValueBuiltin(name) {
-			r.bashPPBuiltinError("TYPE", "assignment call %s is not a supported value builtin", name)
-			return
-		}
-		result, produced := r.bashPPRunValueBuiltin(name, assign.Call)
-		if !produced || result == nil {
-			if r.exit.code == 0 {
-				r.bashPPBuiltinError("ARITY", "%s produces no value", name)
-			}
-			return
-		}
-		*cell = *result
+		r.bashPPBuiltinAssign(assign)
 		return
 	}
 	if assign.TargetExpr != nil {
@@ -130,9 +107,56 @@ func (r *Runner) bashPPAssign(ctx context.Context, assign *syntax.BashPPAssign) 
 	r.exit = exitStatus{code: 2}
 }
 
+// bashPPBuiltinAssign stores the single value a predeclared value builtin
+// produces into an already declared target, keeping the result cell whole so
+// that `s = append(s, 0)` carries the slice's payload, metadata and identity
+// rather than a scalar spelling of it.
+func (r *Runner) bashPPBuiltinAssign(assign *syntax.BashPPAssign) {
+	target := bashPPWordSource(assign.Target)
+	cell := r.bashPPScope.lookup(target)
+	if cell == nil || !syntax.BashPPValidIdent(target) {
+		r.bashPPBuiltinError("TYPE", "assignment target %q is not declared", target)
+		return
+	}
+	if cell.constant || cell.vr.ReadOnly {
+		r.errf("BASHPP-EREADONLY-MUTATION: cannot assign to readonly value %q\n", target)
+		r.exit = exitStatus{code: 2}
+		return
+	}
+	name := bashPPPredeclaredCall(assign.Call)
+	if !bashPPValueBuiltin(name) {
+		r.bashPPBuiltinError("TYPE", "assignment call %s is not a supported value builtin", name)
+		return
+	}
+	result, produced := r.bashPPRunValueBuiltin(name, assign.Call)
+	if !produced || result == nil {
+		if r.exit.code == 0 {
+			r.bashPPBuiltinError("ARITY", "%s produces no value", name)
+		}
+		return
+	}
+	owner := cell.object
+	*cell = *result
+	// The target keeps naming its own storage: append that reused the backing
+	// array returns the source identity, and one that reallocated returns a
+	// fresh one, but either way this variable is what owns it here.
+	if cell.object != nil && cell.object.owner == "" && owner != nil {
+		cell.object.owner = owner.owner
+	}
+}
+
 func (r *Runner) bashPPTupleAssignCall(ctx context.Context, assign *syntax.BashPPAssign) {
 	fn, ok := r.bashPPLookupFunc(assign.Call)
 	if !ok {
+		// `s = append(s, 0)`: the Go front end records the single target in
+		// Names too, so a one-target assignment whose RHS is a predeclared
+		// value builtin arrives here rather than at the single-target path. It
+		// produces one value, not a tuple, and a declared function of the same
+		// name has already been preferred by the lookup above.
+		if len(assign.Names) == 1 && bashPPValueBuiltin(bashPPPredeclaredCall(assign.Call)) {
+			r.bashPPBuiltinAssign(assign)
+			return
+		}
 		r.errf("%sBASHPP-EASSIGN-CALL: tuple assignment requires a declared result-bearing function\n", r.bashErrPrefix(assign.Call.Pos()))
 		r.exit = exitStatus{code: 2}
 		return
@@ -226,6 +250,14 @@ func (r *Runner) bashPPTupleAssign(assign *syntax.BashPPAssign) {
 				return
 			}
 			candidates[i] = bashPPCopyAssignmentCell(source)
+			continue
+		}
+		// `s = s[:0]`, `row = board[i]`: a RHS that reads structured storage has
+		// no scalar spelling, so it is assigned as the value it is. A scalar
+		// read returns no cell and falls through to the scalar evaluator, which
+		// keeps owning that diagnostic.
+		if cell, err := r.bashPPStructuredArgCell(assign.Values[i], expr); err == nil && cell != nil {
+			candidates[i] = cell
 			continue
 		}
 		value, err := r.bashPPEvalScalarExpr(expr)

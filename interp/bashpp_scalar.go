@@ -148,6 +148,13 @@ func (r *Runner) bashPPEvalScalarExpr(expr syntax.BashPPExpr) (result bashPPScal
 		}
 		return r.bashPPScalarFromCell(source), nil
 	case *syntax.BashPPConvertExpr:
+		// `string(bs)` reads a byte or rune slice, not a scalar; see
+		// bashPPConvertCollectionScalar in bashpp_collection_convert.go. It
+		// reports false for every conversion whose operand is already scalar,
+		// which keeps the named-scalar path below unchanged.
+		if scalar, handled, err := r.bashPPConvertCollectionScalar(x); handled {
+			return scalar, err
+		}
 		v, err := r.bashPPEvalScalarExpr(x.X)
 		if err != nil {
 			return bashPPScalar{}, err

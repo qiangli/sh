@@ -994,6 +994,15 @@ func (r *Runner) bashPPStructuredArgCell(w *syntax.Word, expr syntax.BashPPExpr)
 			return nil, err
 		}
 		return bashPPPointerCell(ptr), nil
+	case *syntax.BashPPConvertExpr:
+		// `f([]byte(s))`: a conversion whose result is a collection travels as
+		// the cell holding it; see bashPPConvertCollectionCell in
+		// bashpp_collection_convert.go. Scalar conversions report false.
+		cell, handled, err := r.bashPPConvertCollectionCell(x)
+		if !handled {
+			return nil, nil
+		}
+		return cell, err
 	case *syntax.BashPPCompositeLit:
 		if x.LitType == nil {
 			return nil, nil
@@ -1008,8 +1017,8 @@ func (r *Runner) bashPPStructuredArgCell(w *syntax.Word, expr syntax.BashPPExpr)
 		}
 		bashPPStoreCellValue(cell, value, meta)
 		return cell, nil
-	case *syntax.BashPPDerefExpr, *syntax.BashPPIndexExpr, *syntax.BashPPSelectorExpr:
-		// `f(*p)`, `f(xs[0])`, `f(v.Inner)`: a read that yields structured
+	case *syntax.BashPPDerefExpr, *syntax.BashPPIndexExpr, *syntax.BashPPSelectorExpr, *syntax.BashPPSliceExpr:
+		// `f(*p)`, `f(xs[0])`, `f(v.Inner)`, `f(xs[1:])`: a read that yields structured
 		// storage is passed as the value it is. A scalar read has no metadata
 		// and is left to the scalar evaluator, which also owns the diagnostic
 		// when the read itself fails.

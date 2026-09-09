@@ -306,6 +306,20 @@ func (r *Runner) bashPPBridgeExpr(expr syntax.BashPPExpr) (bashPPBridgeValue, er
 		}
 		return r.bashPPBridgeCollection(value, meta, x.LitType)
 	}
+	// A predeclared value call — append(xs, 1), copy(dst, src), make(...) — is
+	// implemented over cells rather than as a callable, so the scalar evaluator
+	// cannot look it up; see bashPPValueBuiltinBridge in
+	// bashpp_collection_bridge.go. An unclaimed name keeps the scalar path.
+	if bridged, claimed, err := r.bashPPValueBuiltinBridge(expr); claimed {
+		return bridged, err
+	}
+	// An interpreter-owned structured read — board[i], xs[1:], v.Inner — has no
+	// scalar spelling and crosses as the collection it is; see
+	// bashPPStructuredBridgeRead in bashpp_collection_growth.go. Scalar reads
+	// report false and keep the scalar evaluator's own diagnostics below.
+	if value, meta, ok := r.bashPPStructuredBridgeRead(expr); ok {
+		return r.bashPPBridgeCollection(value, meta, meta.typ)
+	}
 	scalar, err := r.bashPPEvalScalarExpr(expr)
 	if err != nil {
 		return bashPPBridgeValue{}, err
@@ -530,6 +544,14 @@ func (r *Runner) bashPPBridgeCollection(value any, meta *bashPPCollectionMeta, t
 	case float64:
 		result.Kind = "float"
 		result.Text = strconv.FormatFloat(value, 'g', -1, 64)
+	case nil:
+		// A nil slice or map keeps its declared type and zero state; see
+		// bashPPNilCollectionBridge in bashpp_collection_growth.go.
+		if nilValue, ok := r.bashPPNilCollectionBridge(meta, typ); ok {
+			return nilValue, nil
+		}
+		result.Kind = "nil"
+		return result, nil
 	default:
 		return result, fmt.Errorf("gosource: unsupported interpreter collection value %T", value)
 	}
