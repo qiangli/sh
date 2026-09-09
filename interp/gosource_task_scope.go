@@ -96,7 +96,10 @@ func (s *bashPPGoSourceScope) useLit(lit *syntax.Lit) {
 }
 
 // unknown marks the analysis inexact. The capture set is discarded wholesale
-// when this fires, so an unmodelled construct costs sharing, never soundness.
+// when this fires and the launch is then REFUSED with a diagnostic, so an
+// unmodelled construct costs a reportable gap, never soundness. (It does not
+// fall back to the classic deep-copy snapshot: for an original Go program that
+// would silently be a different program.)
 func (s *bashPPGoSourceScope) unknown() { s.exact = false }
 
 func (s *bashPPGoSourceScope) block(b *syntax.Block) {

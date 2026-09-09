@@ -209,3 +209,91 @@ func mustParseFuncLit(t *testing.T, src string) *syntax.BashPPFuncLit {
 	}
 	return found
 }
+
+// TestGoSourceSharableRefusesUnresolvableNamedType is the type-spelling
+// correction.
+//
+// The classifier answered "plain, decided" for EVERY unqualified named type,
+// which reads identity off the spelling rather than off the value. Two shapes
+// break under that rule, and neither is exotic:
+//
+//   - a locally declared named struct or alias that EMBEDS a dependency handle
+//     (`type counter struct { mu sync.Mutex }`) is spelled `counter`, is
+//     unqualified, and is in no import map;
+//   - an interface spelling — `any`, `error` — describes nothing about the
+//     value it dynamically holds, and [Runner.bashPPBindNativeValue] gives a
+//     native interface binding exactly such a declType.
+//
+// In both cases granting identity hands a native handle across tasks behind
+// bashpp_task.go's descriptor-copy rule. An unresolvable name must report
+// UNDECIDED so the total, fail-closed payload walk answers instead.
+func TestGoSourceSharableRefusesUnresolvableNamedType(t *testing.T) {
+	named := func(name string) syntax.BashPPTypeExpr {
+		return &syntax.BashPPNamedType{Name: &syntax.Lit{Value: name}}
+	}
+	native := func() expand.Variable {
+		return expand.Variable{Kind: expand.Object, Obj: map[string]any{
+			"mu": &bashPPBridgeValue{Kind: "handle", Type: "sync.Mutex"},
+		}}
+	}
+	plain := func() expand.Variable {
+		return expand.Variable{Kind: expand.Object, Obj: map[string]any{"n": 1}}
+	}
+	tests := []struct {
+		name    string
+		typ     syntax.BashPPTypeExpr
+		payload func() expand.Variable
+		want    bool
+	}{
+		{"local struct embedding a handle", named("counter"), native, false},
+		{"interface spelling holding a handle", named("any"), native, false},
+		{"error spelling holding a handle", named("error"), native, false},
+		{"slice of local structs embedding handles",
+			&syntax.BashPPCollectionType{Kind: "slice", Element: named("counter")}, native, false},
+		// No regression: an unresolvable name whose payload really is plain is
+		// still shared, because the payload walk — not the spelling — decides.
+		{"local struct with no handle", named("point"), plain, true},
+		{"predeclared scalar", named("int"), plain, true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			r := &Runner{bashPPGoSource: true, bashPPScope: newBashPPScope(nil)}
+			cell := &bashPPCell{declType: test.typ, vr: test.payload()}
+			if got := r.bashPPGoSourceSharable(cell); got != test.want {
+				t.Fatalf("sharable(%s) = %v, want %v", test.name, got, test.want)
+			}
+		})
+	}
+}
+
+// TestGoSourceSharableClassificationIsImmutableAndInherited pins the two
+// properties the race proof rests on: a cell's answer is decided ONCE, and a
+// nested launch inherits it rather than re-reading a payload a running task may
+// concurrently be writing.
+func TestGoSourceSharableClassificationIsImmutableAndInherited(t *testing.T) {
+	r := &Runner{bashPPGoSource: true, bashPPScope: newBashPPScope(nil)}
+	cell := &bashPPCell{
+		declType: &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "point"}},
+		vr:       expand.Variable{Kind: expand.Object, Obj: map[string]any{"n": 1}},
+	}
+	if !r.bashPPGoSourceSharable(cell) {
+		t.Fatal("a plain payload under an unresolvable name must be sharable")
+	}
+	// Mutate the payload the way a running task would. The memoized answer must
+	// not change: re-inspecting here is the data race the memo exists to avoid.
+	cell.vr = expand.Variable{Kind: expand.Object, Obj: map[string]any{
+		"mu": &bashPPBridgeValue{Kind: "handle", Type: "sync.Mutex"},
+	}}
+	if !r.bashPPGoSourceSharable(cell) {
+		t.Fatal("the classification must be immutable once decided")
+	}
+	// A nested launch clones the memo and must answer from it, without reading.
+	child := &Runner{bashPPGoSource: true, bashPPScope: newBashPPScope(nil)}
+	child.bashPPGoSourceSharableCells = make(map[*bashPPCell]bool, len(r.bashPPGoSourceSharableCells))
+	for k, v := range r.bashPPGoSourceSharableCells {
+		child.bashPPGoSourceSharableCells[k] = v
+	}
+	if !child.bashPPGoSourceSharable(cell) {
+		t.Fatal("a nested launch must inherit the parent's classification")
+	}
+}

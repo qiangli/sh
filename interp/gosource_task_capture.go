@@ -75,11 +75,13 @@ import (
 // walker below therefore reports EXACTNESS, and an inexact analysis shares
 // nothing:
 //
-//   - A construct the walker does not model returns exact=false, the capture
-//     set is nil, and the task falls back to the classic deep-copy snapshot.
-//     That direction loses Go's by-reference capture for that one launch (a
-//     visible, testable wrong answer) rather than silently aliasing a cell the
-//     program never named (an invisible one).
+//   - A construct the walker does not model returns exact=false, and the
+//     launch is REFUSED with a diagnostic (see
+//     [Runner.bashPPGoSourceCaptureUnsupported]). An earlier revision fell
+//     back to the classic deep-copy snapshot here; that is not a conservative
+//     fallback for an original Go program but a different program, so the gap
+//     is now reported rather than run. Either way the walker never silently
+//     aliases a cell the program did not name.
 //
 // # Race safety
 //
@@ -403,6 +405,22 @@ func (r *Runner) bashPPGoSourceSharableType(typ syntax.BashPPTypeExpr, depth int
 		if _, imported := r.bashPPImports[typ.Name.Value]; imported {
 			return false, true
 		}
+		if !bashPPGoSourcePredeclaredPlain[typ.Name.Value] {
+			// An unqualified name this function cannot resolve. A locally
+			// declared named struct or alias may EMBED a dependency handle
+			// (`type counter struct { mu sync.Mutex }`), and an interface
+			// spelling — `any`, `error`, a local interface — says nothing at
+			// all about what the value dynamically holds. Answering "plain"
+			// from the spelling would hand cross-task identity to a native
+			// handle behind bashpp_task.go's descriptor-copy rule, which is
+			// the one authority on native identity.
+			//
+			// Report undecided rather than guessing. The caller then falls
+			// through to bashPPCellHoldsNative, which is total and fails
+			// closed, so a local struct that really is plain is still shared
+			// and one that hides a handle is copied.
+			return false, false
+		}
 		for _, arg := range typ.TypeArgs {
 			if arg == nil {
 				return false, false
@@ -434,6 +452,18 @@ func (r *Runner) bashPPGoSourceSharableType(typ syntax.BashPPTypeExpr, depth int
 		return r.bashPPGoSourceSharableType(typ.Element, depth+1)
 	}
 	return false, false
+}
+
+// bashPPGoSourcePredeclaredPlain is the set of Go predeclared type names whose
+// values are plain by construction: they cannot name or embed a dependency
+// handle, so identity may be granted from the spelling alone. Interface
+// spellings are deliberately absent — `any` and `error` describe no payload.
+var bashPPGoSourcePredeclaredPlain = map[string]bool{
+	"bool": true, "string": true, "byte": true, "rune": true,
+	"int": true, "int8": true, "int16": true, "int32": true, "int64": true,
+	"uint": true, "uint8": true, "uint16": true, "uint32": true, "uint64": true,
+	"uintptr": true, "float32": true, "float64": true,
+	"complex64": true, "complex128": true,
 }
 
 // bashPPCellHoldsNative reports whether a cell's payload is, or contains, an
