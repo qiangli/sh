@@ -206,7 +206,7 @@ func (r *Runner) bashPPRangeIteration(ctx context.Context, rng *syntax.BashPPRan
 }
 
 func (r *Runner) bashPPDeclareRangeValue(name string, value any, typ syntax.BashPPTypeExpr, meta *bashPPCollectionMeta) {
-	if meta != nil && meta.kind == "pointer" {
+	if meta != nil && (meta.kind == "pointer" || r.bashPPGoSource && meta.interfaceValue != nil) {
 		r.bashPPDeclareName(name, expand.Variable{Set: true, Kind: expand.String})
 		cell := r.bashPPScope.lookup(name)
 		cell.declType = typ

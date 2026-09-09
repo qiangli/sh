@@ -179,6 +179,18 @@ func bashPPInterfaceElems(iface *syntax.BashPPInterfaceType) []*syntax.BashPPInt
 }
 
 func (r *Runner) bashPPImplements(actual syntax.BashPPTypeExpr, iface *syntax.BashPPInterfaceType) error {
+	if r.bashPPGoSource && !r.bashPPInterfaceHasTypeTerms(iface, make(map[*syntax.BashPPInterfaceType]bool)) {
+		switch r.bashPPUnderlyingType(actual).(type) {
+		case *syntax.BashPPFuncType, *syntax.BashPPChanType:
+			methods, err := r.bashPPInterfaceMethodSet("interface", iface, make(map[string]bool))
+			if err != nil {
+				return err
+			}
+			if len(methods.order) == 0 {
+				return nil
+			}
+		}
+	}
 	if actualIface, ok := r.bashPPInterfaceType(actual); ok {
 		actualSet, err := r.bashPPInterfaceMethodSet(bashPPTypeText(actual), actualIface, make(map[string]bool))
 		if err != nil {

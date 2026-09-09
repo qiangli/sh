@@ -747,7 +747,13 @@ func (r *Runner) bashPPBridgeCell(cell *bashPPCell) (bashPPBridgeValue, error) {
 		if cell.interfaceValue.nilIface {
 			return bashPPBridgeValue{Kind: "nil"}, nil
 		}
-		return r.bashPPBridgeCell(cell.interfaceValue.cell)
+		value, err := r.bashPPBridgeCell(cell.interfaceValue.cell)
+		if err == nil && r.bashPPGoSource {
+			// A typed nil dynamic value is still a nonnil interface. Range
+			// copies and argument/result cells must retain that static wrapper.
+			value.Interface = bashPPBridgeTypeText(cell.declType)
+		}
+		return value, err
 	}
 	if cell.pointer {
 		value, err := r.bashPPBridgePointerValue(cell.pointerValue)

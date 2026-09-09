@@ -103,6 +103,10 @@ func (r *Runner) bashPPNativeCompare(left syntax.BashPPExpr, op token.Token, rig
 	if err != nil {
 		return false, err
 	}
+	return r.bashPPNativeCompareValues(lv, op, rv)
+}
+
+func (r *Runner) bashPPNativeCompareValues(lv bashPPBridgeValue, op token.Token, rv bashPPBridgeValue) (bool, error) {
 	req, err := r.bashPPEvalRequest()
 	if err != nil {
 		return false, err

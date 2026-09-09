@@ -679,6 +679,17 @@ func (r *Runner) bashPPCompareExpr(left syntax.BashPPExpr, op token.Token, right
 	if err != nil {
 		return false, err
 	}
+	if r.bashPPGoSource {
+		lv.value = bashPPComparablePayload(lv.value, lv.meta)
+		rv.value = bashPPComparablePayload(rv.value, rv.meta)
+		// Indexed aggregate reads can carry native typed nils even when the
+		// containing aggregate is local. Reuse the evaluated operands.
+		if l, lok := goSourceNativeComparable(lv); lok {
+			if rr, rok := goSourceNativeComparable(rv); rok {
+				return r.bashPPNativeCompareValues(l, op, rr)
+			}
+		}
+	}
 	if equal, handled, err := r.goSourceInterfaceEqual(lv, rv); handled {
 		if op == token.NEQ {
 			equal = !equal
@@ -839,6 +850,24 @@ func bashPPPointerEqual(left, right any) bool {
 		}
 	}
 	return true
+}
+
+// bashPPComparablePayload recovers the value that decides an interface's
+// identity. A variable carries its *bashPPInterfaceValue on the cell, but an
+// interface stored inside a slice, map or struct keeps that identity on the
+// element meta and leaves the JSON-shaped payload as the printable value.
+// Reading such an element back therefore yields "" rather than the interface,
+// which made an untyped nil element compare unequal to nil while the same nil
+// held in a variable compared equal. Recovering it here keeps the nil
+// interface and a typed nil interface distinguishable on read-back.
+func bashPPComparablePayload(value any, meta *bashPPCollectionMeta) any {
+	if meta == nil || meta.kind != "interface" || meta.interfaceValue == nil {
+		return value
+	}
+	if _, ok := value.(*bashPPInterfaceValue); ok {
+		return value
+	}
+	return meta.interfaceValue
 }
 
 func bashPPNilComparableValue(value any) bool {

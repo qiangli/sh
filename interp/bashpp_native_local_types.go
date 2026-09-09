@@ -361,6 +361,9 @@ func (l *bashPPLocalTypeSet) source(typ syntax.BashPPTypeExpr, depth int) (strin
 			prefix = "chan<- "
 		}
 		return prefix + element, true
+	case *syntax.BashPPFuncType:
+		text, ok := l.signature(&syntax.BashPPMethodSpec{Params: t.Params, Results: t.Results}, depth+1)
+		return "func" + text, ok
 	case *syntax.BashPPCollectionType:
 		element, ok := l.source(t.Element, depth+1)
 		if !ok {
@@ -430,6 +433,9 @@ func (l *bashPPLocalTypeSet) signature(spec *syntax.BashPPMethodSpec, depth int)
 			text, ok := l.source(field.FieldTypeExpr, depth+1)
 			if !ok {
 				return nil, false
+			}
+			if field.Ellipsis.IsValid() {
+				text = "..." + text
 			}
 			count := len(field.Names)
 			if count == 0 {

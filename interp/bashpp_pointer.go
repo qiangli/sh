@@ -40,6 +40,9 @@ func (r *Runner) bashPPPointerType(typ syntax.BashPPTypeExpr) (*syntax.BashPPPoi
 }
 
 func (r *Runner) bashPPPointerExprType(expr syntax.BashPPExpr, ptr *bashPPPointer) syntax.BashPPTypeExpr {
+	if target, nilConversion := r.bashPPNilPointerConversion(expr); nilConversion {
+		return target
+	}
 	switch x := expr.(type) {
 	case *syntax.BashPPParenExpr:
 		return r.bashPPPointerExprType(x.X, ptr)
@@ -79,6 +82,9 @@ func (r *Runner) bashPPValidatePointerType(typ syntax.BashPPTypeExpr) error {
 }
 
 func (r *Runner) bashPPPointerExprValue(expr syntax.BashPPExpr) (*bashPPPointer, error) {
+	if _, nilConversion := r.bashPPNilPointerConversion(expr); nilConversion {
+		return nil, nil
+	}
 	switch x := expr.(type) {
 	case *syntax.BashPPParenExpr:
 		return r.bashPPPointerExprValue(x.X)

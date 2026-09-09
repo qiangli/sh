@@ -119,6 +119,9 @@ func resolveType(name string) reflect.Type {
  var walk func(ast.Expr) reflect.Type
  walk=func(expr ast.Expr) reflect.Type {var canonical bytes.Buffer;if format.Node(&canonical,token.NewFileSet(),expr)==nil {if typ:=types[canonical.String()];typ!=nil{return typ}};switch e:=expr.(type){
  case *ast.StarExpr:element:=walk(e.X);if element!=nil{return reflect.PointerTo(element)}
+ case *ast.FuncType:
+  fields:=func(list *ast.FieldList)([]reflect.Type,bool,bool){var out []reflect.Type;variadic:=false;if list==nil{return out,false,true};for i,f:=range list.List{expr:=f.Type;if ell,ok:=expr.(*ast.Ellipsis);ok{if i!=len(list.List)-1{return nil,false,false};variadic=true;expr=&ast.ArrayType{Elt:ell.Elt}};typ:=walk(expr);if typ==nil{return nil,false,false};n:=len(f.Names);if n==0{n=1};for j:=0;j<n;j++{out=append(out,typ)}};return out,variadic,true}
+  in,variadic,ok:=fields(e.Params);if !ok{return nil};out,resultVariadic,ok:=fields(e.Results);if !ok||resultVariadic{return nil};return reflect.FuncOf(in,out,variadic)
  case *ast.ChanType:element:=walk(e.Value);if element!=nil{direction:=reflect.BothDir;if e.Dir==ast.RECV{direction=reflect.RecvDir};if e.Dir==ast.SEND{direction=reflect.SendDir};return reflect.ChanOf(direction,element)}
  case *ast.Ident:return types[e.Name]
  case *ast.ArrayType:element:=walk(e.Elt);if element==nil{return nil};if e.Len==nil{return reflect.SliceOf(element)};if lit,ok:=e.Len.(*ast.BasicLit);ok{n,err:=strconv.Atoi(lit.Value);if err==nil&&n>=0{return reflect.ArrayOf(n,element)}}

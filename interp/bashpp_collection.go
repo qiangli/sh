@@ -499,6 +499,15 @@ func (r *Runner) bashPPEvalElement(expr syntax.BashPPExpr, expected syntax.BashP
 	if _, deref := expr.(*syntax.BashPPDerefExpr); deref {
 		return r.bashPPEvalTypedValue(expr, expected)
 	}
+	if value, meta, handled, err := r.goSourceNilElement(expr, expected); handled {
+		return value, meta, err
+	}
+	if handled, err := r.goSourceInterfaceElement(expr, expected); handled {
+		if err != nil {
+			return nil, nil, err
+		}
+		return r.bashPPEvalTypedValue(expr, expected)
+	}
 	if lit, ok := expr.(*syntax.BashPPCompositeLit); ok {
 		return r.bashPPEvalComposite(lit, expected)
 	}

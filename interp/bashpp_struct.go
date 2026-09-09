@@ -349,6 +349,9 @@ func bashPPSetStructSelector(root map[string]any, meta *bashPPCollectionMeta, ed
 }
 
 func (r *Runner) bashPPZeroValue(typ syntax.BashPPTypeExpr) (any, *bashPPCollectionMeta) {
+	if value, meta, ok := r.goSourceNilCallableOrChannel(typ); ok {
+		return value, meta
+	}
 	if r.bashPPNativeType(typ) {
 		value, err := r.bashPPNativeTypeRequest("new", typ)
 		if err != nil {
