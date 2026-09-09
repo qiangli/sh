@@ -552,6 +552,14 @@ func (r *Runner) bashPPReadExpr(expr syntax.BashPPExpr) (any, *bashPPCollectionM
 		return value, meta, err
 	}
 	switch x := expr.(type) {
+	// Parentheses carry no value of their own. Every sibling walker --
+	// bashPPAddress, bashPPCollectionRoot, bashPPPointerExprValue -- already
+	// looks through them, so without this case a merely parenthesized operand
+	// reached the fallthrough below and was reported as an unsupported
+	// expression. `(*p)[k]` is the spelling Go requires whenever p is a pointer
+	// to a defined map or slice type, since `p[k]` is not valid there.
+	case *syntax.BashPPParenExpr:
+		return r.bashPPReadExpr(x.X)
 	case *syntax.BashPPCompositeLit:
 		return r.bashPPEvalComposite(x, nil)
 	case *syntax.BashPPIdent:
@@ -708,6 +716,17 @@ func (r *Runner) bashPPStructuredAssign(target, rhs syntax.BashPPExpr) {
 	if r.bashPPNativeByteAssign(target, rhs) {
 		return
 	}
+	// Parentheses around an assignment target carry no meaning of their own,
+	// so `(*p) = v` has to reach the same handler as `*p = v`. Without this,
+	// a parenthesised dereference fell through to the pointer path below and
+	// indexed an empty pointer path, crashing the host.
+	for {
+		paren, parenthesised := target.(*syntax.BashPPParenExpr)
+		if !parenthesised {
+			break
+		}
+		target = paren.X
+	}
 	if deref, ok := target.(*syntax.BashPPDerefExpr); ok {
 		r.bashPPDerefAssign(deref, rhs)
 		return
@@ -715,6 +734,13 @@ func (r *Runner) bashPPStructuredAssign(target, rhs syntax.BashPPExpr) {
 	root, ok := bashPPCollectionRoot(target)
 	cell := r.bashPPScope.lookup(root)
 	if ok && cell != nil && cell.pointer {
+		if index, indexed := target.(*syntax.BashPPIndexExpr); indexed && r.bashPPGoSource {
+			if err := r.bashPPPointerElementAssign(index, rhs); err != nil {
+				r.errf("%v\n", err)
+				r.exit = exitStatus{code: 2}
+			}
+			return
+		}
 		ptr, err := r.bashPPAddress(target)
 		if err != nil {
 			r.errf("%v\n", err)
@@ -748,6 +774,15 @@ func (r *Runner) bashPPStructuredAssign(target, rhs syntax.BashPPExpr) {
 		}
 		if parentMeta == nil {
 			r.errf("BASHPP-ESELECTOR-TYPE: assignment parent is not a structured value\n")
+			r.exit = exitStatus{code: 2}
+			return
+		}
+		if len(ptr.path) == 0 {
+			// The pointer names a whole value rather than a place inside one,
+			// so there is no parent to write into. Every such target is
+			// handled above; reaching here means a shape this path cannot
+			// address, which is reported rather than left to index nothing.
+			r.errf("BASHPP-ESELECTOR-ASSIGN: target is not a structured value\n")
 			r.exit = exitStatus{code: 2}
 			return
 		}
@@ -867,26 +902,8 @@ func (r *Runner) bashPPStructuredAssign(target, rhs syntax.BashPPExpr) {
 			break
 		}
 		if parentMeta.kind == "map" {
-			if parent == nil {
-				err = fmt.Errorf("BASHPP-ENIL-MAP: assignment to nil map")
-				break
-			}
-			key, keyErr := savedKey, error(nil)
-			if !r.bashPPGoSource {
-				key, _, keyErr = r.bashPPEvalElement(x.Index, collection.Key)
-			}
-			if keyErr != nil {
-				err = keyErr
-				break
-			}
-			canonical := fmt.Sprint(key)
-			mapping, valid := parent.(map[string]any)
-			if !valid || mapping == nil {
-				err = fmt.Errorf("BASHPP-ENIL-MAP: assignment to nil map")
-				break
-			}
-			mapping[canonical] = value
-			parentMeta.mapping[canonical] = child
+			err = r.bashPPMapElementWrite(parent, parentMeta, collection, x.Index, savedKey, value, child)
+			break
 		} else {
 			i, indexErr := savedIndex, error(nil)
 			if !r.bashPPGoSource {
@@ -916,6 +933,97 @@ func (r *Runner) bashPPStructuredAssign(target, rhs syntax.BashPPExpr) {
 		r.errf("%v\n", err)
 		r.exit = exitStatus{code: 2}
 	}
+}
+
+// bashPPMapElementWrite stores one element into a map's shared storage. Go
+// does not make map elements addressable, so this write -- not a write through
+// an address -- is the only way any indexed map target is assigned, whether
+// the map is named directly or reached through a pointer.
+func (r *Runner) bashPPMapElementWrite(parent any, parentMeta *bashPPCollectionMeta, collection *syntax.BashPPCollectionType, index syntax.BashPPExpr, savedKey, value any, child *bashPPCollectionMeta) error {
+	if parent == nil {
+		return fmt.Errorf("BASHPP-ENIL-MAP: assignment to nil map")
+	}
+	key := savedKey
+	if !r.bashPPGoSource {
+		var keyErr error
+		if key, _, keyErr = r.bashPPEvalElement(index, collection.Key); keyErr != nil {
+			return keyErr
+		}
+	}
+	mapping, valid := parent.(map[string]any)
+	if !valid || mapping == nil {
+		return fmt.Errorf("BASHPP-ENIL-MAP: assignment to nil map")
+	}
+	canonical := fmt.Sprint(key)
+	mapping[canonical] = value
+	parentMeta.mapping[canonical] = child
+	return nil
+}
+
+// bashPPPointerElementAssign retains the evaluated parent storage for GoSource
+// indexed writes. Maps are not addressable; slices and arrays must not fall
+// back to another expression walk after evaluating a possibly effectful parent.
+func (r *Runner) bashPPPointerElementAssign(target *syntax.BashPPIndexExpr, rhs syntax.BashPPExpr) error {
+	parent, parentMeta, err := r.bashPPReadExpr(target.X)
+	if err != nil {
+		return err
+	}
+	if parentMeta == nil {
+		return fmt.Errorf("BASHPP-ECOLLECTION-ASSIGN: indexed target is not a collection")
+	}
+	collection, found := r.bashPPUnderlyingType(parentMeta.typ).(*syntax.BashPPCollectionType)
+	if !found {
+		return fmt.Errorf("BASHPP-ECOLLECTION-ASSIGN: indexed target is not a collection")
+	}
+	// The map itself is addressable even though its elements are not, so the
+	// readonly guards that protect any other write through a pointer still
+	// apply. They are read off the root cell rather than by re-walking the
+	// operand, so that an index expression along the way -- `(*p)[next()][k]`
+	// -- is not evaluated a second time just to answer a readonly question.
+	if root, named := bashPPCollectionRoot(target.X); named && r.bashPPScope != nil {
+		owner := r.bashPPScope.lookup(root)
+		if owner != nil && owner.pointer && owner.pointerValue != nil {
+			owner = owner.pointerValue.target
+		}
+		if owner != nil {
+			if owner.object != nil && owner.object.readonly {
+				return fmt.Errorf("BASHPP-EREADONLY-MUTATION: cannot mutate readonly value %q through pointer", owner.object.owner)
+			}
+			if owner.constant || owner.vr.ReadOnly {
+				return fmt.Errorf("BASHPP-EREADONLY-MUTATION: cannot mutate readonly value through pointer")
+			}
+		}
+	}
+	var savedKey any
+	var savedIndex int
+	// Resolve all operands once, before the RHS, retaining the parent storage.
+	if parentMeta.kind == "map" {
+		savedKey, _, err = r.bashPPEvalElement(target.Index, collection.Key)
+	} else {
+		savedIndex, err = r.bashPPCollectionIndex(target.Index)
+	}
+	if err != nil {
+		return err
+	}
+	value, child, err := r.bashPPEvalTypedValue(rhs, collection.Element)
+	if err != nil {
+		return err
+	}
+	if parentMeta.kind == "map" {
+		return r.bashPPMapElementWrite(parent, parentMeta, collection, target.Index, savedKey, value, child)
+	}
+	sequence, valid := parent.([]any)
+	if !valid && parent != nil {
+		return fmt.Errorf("BASHPP-ECOLLECTION-STORAGE: invalid sequence payload")
+	}
+	if savedIndex < 0 || savedIndex >= len(sequence) {
+		return fmt.Errorf("BASHPP-ECOLLECTION-BOUNDS: index %d out of bounds for length %d", savedIndex, len(sequence))
+	}
+	if savedIndex >= len(parentMeta.sequence) {
+		return fmt.Errorf("BASHPP-ECOLLECTION-STORAGE: missing element metadata")
+	}
+	sequence[savedIndex], parentMeta.sequence[savedIndex] = value, child
+	return nil
 }
 
 func bashPPParentExpr(expr syntax.BashPPExpr) syntax.BashPPExpr {

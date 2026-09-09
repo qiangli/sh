@@ -65,48 +65,13 @@ func TestGoSourceOriginalMethodsErrorsThreeModes(t *testing.T) {
 	})
 }
 
-// One same-cluster original still fails, for a reason that is neither
-// declaration registration nor the embedded imported method set. Pinning the
-// diagnostic keeps the gap visible and keeps it from silently regressing into
-// either already-fixed failure.
-func TestGoSourceOriginalForwardTypeRemainingGaps(t *testing.T) {
-	for _, tc := range []struct{ name, digest, want string }{
-		// `fetched` embeds sync.Mutex in an anonymous struct, and `fetched.Lock`
-		// now reaches it. What remains is unrelated to selection: fakeFetcher is
-		// a defined map type, and `(*f)[url]` indexes through a dereference of
-		// it, which the structured-expression evaluator does not accept.
-		{"webcrawler.go.txt", "490f194b0e0610dde7196a8cb2ebec643586a6f05f94a1aabe7a29fb526b8882", "BASHPP-ESELECTOR-EXPR: unsupported structured expression"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			source := forwardTypeOriginal(t, tc.name, tc.digest)
-			program, err := gosource.Parse(strings.NewReader(source), tc.name, gosource.Options{RunMain: true})
-			if err != nil {
-				t.Fatalf("gosource rejected an original: %v", err)
-			}
-			var out, errout bytes.Buffer
-			runner, err := interp.New(interp.Lang(syntax.LangBashPP), interp.Dir(t.TempDir()), interp.StdIO(nil, &out, &errout))
-			if err != nil {
-				t.Fatal(err)
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-			defer cancel()
-			err = runner.Run(ctx, program.File)
-			if err == nil {
-				t.Fatalf("documented gap now passes; promote %s to a three-mode case", tc.name)
-			}
-			diagnostic := err.Error() + errout.String()
-			if strings.Contains(diagnostic, "undefined type") {
-				t.Fatalf("declaration registration regressed: %s", diagnostic)
-			}
-			if strings.Contains(diagnostic, "has no method Lock") {
-				t.Fatalf("embedded imported method promotion regressed: %s", diagnostic)
-			}
-			if !strings.Contains(diagnostic, tc.want) {
-				t.Fatalf("gap changed: want %q, got %q", tc.want, diagnostic)
-			}
-		})
-	}
-}
+// The cluster's last pinned gap, `solutions/webcrawler.go`, is no longer a gap:
+// `(*f)[url]` on a defined map type now evaluates, so it is compared against
+// real Go in all three modes by TestGoSourceOriginalPointerDefinedMapThreeModes
+// instead of having its diagnostic pinned here. That is a strictly stronger
+// guard, so TestGoSourceOriginalForwardTypeRemainingGaps -- whose whole table
+// it was -- is gone rather than left iterating nothing.
+// Sprint: #118; Story: #52; Story-ID: d564bada90bb
 
 // Forward and recursive references across every position a named type can hold
 // in a declaration, each checked against real Go.
