@@ -9,12 +9,20 @@ import (
 
 func (e *emitter) operationFailure(name string) string {
 	e.bridge = true
+	if e.goSource {
+		// A failed typed operation cannot become a shared shell status or let
+		// an ordinary Go goroutine silently continue after the failure.
+		return "panic(" + name + ")"
+	}
 	if e.execution {
 		return e.program() + ".Fail(" + name + ")"
 	}
 	return e.prefix + "rt.Fail(" + name + "); " + e.prefix + "rt.Status = " + e.prefix + "rt.ExitCode(" + name + ")"
 }
 func (e *emitter) tupleCallAssignment(n *syntax.BashPPAssign, rhs string) (string, error) {
+	if e.goSource {
+		return strings.Join(names(n.Names), ",") + " = " + rhs, nil
+	}
 	rt := e.prefix + "rt."
 	var temps, targets, values []string
 	for i, name := range n.Names {

@@ -32,6 +32,9 @@ func (e *emitter) returnStatement(n *syntax.BashPPReturn) (string, error) {
 		return "return " + value, err
 	}
 	if len(e.resultTypes) == 0 && len(n.Results) > 0 {
+		if e.goSource {
+			return "", e.fail(n, CodeResult, "Go resultless function cannot return a shell status")
+		}
 		if len(n.Results) != 1 {
 			return "", e.fail(n, CodeResult, "resultless function return requires one status")
 		}

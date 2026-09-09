@@ -182,6 +182,11 @@ func numericUpdateName(x syntax.BashPPExpr) string {
 // support imports. Only an operation with a source runtime failure boundary
 // needs the checked helper.
 func (e *emitter) numericUpdateNeedsCheck(n *syntax.BashPPUpdate, targetType, rhs string) bool {
+	if e.goSource {
+		// Go's compound assignment already supplies its own type checking and
+		// panic semantics; Classic's status-reporting operation is not a Go ABI.
+		return false
+	}
 	if targetType == "string" {
 		return false
 	}

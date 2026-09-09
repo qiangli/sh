@@ -290,7 +290,7 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 	raw.WriteString(e.globalDecls.String())
 	raw.WriteString(declarations.String())
 	tail := ""
-	if e.bridge {
+	if e.bridge && !e.goSource {
 		tail = e.prefix + "rt.Exit()\n"
 	}
 	head := ""
@@ -306,7 +306,10 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 		fmt.Fprintf(&raw, "func main() {\n%s%s%s}\n", head, body.String(), tail)
 	}
 	reset := ""
-	if e.execution {
+	if e.goSource {
+		// Ordinary Go declarations and assignments have no shell exit status.
+		// Goroutines must not write shared command state as a side effect.
+	} else if e.execution {
 		reset = e.program() + ".SetStatus(0)\n"
 	} else if e.bridge {
 		reset = e.prefix + "rt.Status = 0\n"
@@ -314,7 +317,9 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 	rawText := strings.ReplaceAll(raw.String(), "/*"+e.prefix+"reset*/", reset)
 	status0 := ""
 	status1 := ""
-	if e.execution {
+	if e.goSource {
+		// Go's recover/print semantics do not report shell command statuses.
+	} else if e.execution {
 		status0 = e.program() + ".SetStatus(0);"
 		status1 = e.program() + ".SetStatus(1);"
 	} else if e.bridge {
@@ -607,7 +612,9 @@ func (e *emitter) statement(s *syntax.Stmt) (string, error) {
 			reset = "/*" + e.prefix + "reset*/"
 		}
 	}
-	if e.execution && reset != "" {
+	if e.goSource {
+		reset = ""
+	} else if e.execution && reset != "" {
 		reset = e.program() + ".SetStatus(0)\n"
 	}
 	if _, ok := s.Cmd.(*syntax.CallExpr); ok && hasBadSubstitution(s) {
@@ -1095,7 +1102,7 @@ func (e *emitter) command(c syntax.Command) (string, error) {
 	case *syntax.BashPPBranch:
 		return n.Kw.Value, nil
 	case *syntax.BashPPDefer:
-		if n.Call != nil && len(n.Call.Fun) == 1 && n.Call.Fun[0].Value == "panic" && !e.funcs["panic"] {
+		if !e.goSource && n.Call != nil && len(n.Call.Fun) == 1 && n.Call.Fun[0].Value == "panic" && !e.funcs["panic"] {
 			if len(n.Call.Args) != 1 {
 				return "", e.fail(n, CodeResult, "panic takes one argument")
 			}
