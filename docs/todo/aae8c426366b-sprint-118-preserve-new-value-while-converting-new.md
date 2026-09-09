@@ -6,7 +6,7 @@ seq: 57
 status: assigned
 priority: p0
 created: 2026-09-09T21:39:43.800205Z
-weave: 102
+weave: 103
 assignee: qiangli
 sprint: 118
 ---
@@ -16,3 +16,5 @@ Candidate022 exact regression: unchanged examples/pointers/pointers.go line 45 p
 Run 100 preserved the reviewed implementation but timed out, then broadened scope during resume and was stopped. Replacement run 101 must import only commit 3866fe9e8503c19985fb501943c69a319f4183d9, correct test traceability, and exclude zz_repro_test.go. Manager independently passed `go test ./gosource ./lower` on the preserved implementation (22.731s / 408.611s).
 
 Run 101's Codex wrapper remained idle without modifying the clean workspace and was stopped. Replacement run 102 carries the same exact two-file integration scope.
+
+Run 102 produced the correct two-file bytes at 88a777053f7a542cc3e64b385f706fd71f96ce3e, but its wrapper used the host Go 1.26.0 rather than the pinned Go 1.27 path and its commit message collapsed the required trailers onto one line. Replacement run 103 imports those bytes without that commit metadata and uses the pinned verifier.
