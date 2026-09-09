@@ -191,6 +191,16 @@ func (e *emitter) globalStatement(s *syntax.Stmt) (string, error) {
 			e.declaredGlobals[name] = true
 		}
 	}
+	if e.goSource {
+		var directives strings.Builder
+		for _, comment := range s.Comments {
+			if strings.HasPrefix(comment.Text, "go:embed ") || strings.HasPrefix(comment.Text, "go:embed\t") {
+				directives.WriteString("//" + comment.Text + "\n")
+			}
+		}
+		e.globalDecls.WriteString(e.mark(s.Cmd) + directives.String() + line + "\n")
+		return "", nil
+	}
 	if constant {
 		e.globalDecls.WriteString(e.mark(s.Cmd) + line + "\n")
 		if e.goSource {
@@ -297,7 +307,7 @@ func (e *emitter) switchStmt(n *syntax.BashPPSwitch) (string, error) {
 }
 
 func (e *emitter) isRecover(c *syntax.BashPPCall) bool {
-	return c != nil && len(c.Fun) == 1 && c.Fun[0].Value == "recover" && !e.funcs["recover"]
+	return !e.goSource && c != nil && len(c.Fun) == 1 && c.Fun[0].Value == "recover" && !e.funcs["recover"]
 }
 func (e *emitter) recovered(name string) string {
 	if e.execution {

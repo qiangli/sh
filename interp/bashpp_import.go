@@ -413,7 +413,11 @@ func (r *Runner) bashPPEvalRequest() (bashPPEvalRequest, error) {
 	if r.bashPPGoSource {
 		moduleDir = r.bashPPTools.moduleDir
 	}
-	return bashPPEvalRequest{RuntimeEnv: environStrings(r.writeEnv), ModuleDir: moduleDir, Argv: append([]string{r.filename}, r.Params...), Bridge: r.bashPPTools.bridge, Go: r.bashPPTools.goBinary, Dir: r.Dir, Env: env, Stdin: r.stdin,
+	runtimeEnv := environStrings(r.writeEnv)
+	if r.bashPPGoSource {
+		runtimeEnv = r.bashPPGoSourceEnvironment()
+	}
+	return bashPPEvalRequest{RuntimeEnv: runtimeEnv, ModuleDir: moduleDir, Argv: append([]string{r.filename}, r.Params...), Bridge: r.bashPPTools.bridge, Go: r.bashPPTools.goBinary, Dir: r.Dir, Env: env, Stdin: r.stdin,
 		Stdout: r.bashPPWriter(r.stdout), Stderr: r.bashPPWriter(r.stderr), Imports: r.bashPPImports}, nil
 }
 

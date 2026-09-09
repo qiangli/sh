@@ -6,6 +6,7 @@ package interp
 import (
 	"errors"
 	"fmt"
+	"go/constant"
 	"strings"
 
 	"mvdan.cc/sh/v3/expand"
@@ -39,6 +40,10 @@ func (r *Runner) bashPPValidateTypeRepresentation(typ syntax.BashPPTypeExpr, act
 			return err
 		}
 		name := x.Name.Value
+		if r.bashPPNativeType(x) {
+			_, err := r.bashPPNativeTypeRequest("type", x)
+			return err
+		}
 		if bashPPScalarType(name) {
 			return nil
 		}
@@ -339,6 +344,14 @@ func bashPPSetStructSelector(root map[string]any, meta *bashPPCollectionMeta, ed
 }
 
 func (r *Runner) bashPPZeroValue(typ syntax.BashPPTypeExpr) (any, *bashPPCollectionMeta) {
+	if r.bashPPNativeType(typ) {
+		value, err := r.bashPPNativeTypeRequest("new", typ)
+		if err != nil {
+			r.exit.fatal(err)
+			return nil, nil
+		}
+		return &value, &bashPPCollectionMeta{kind: "native", typ: typ}
+	}
 	if _, ok := r.bashPPInterfaceType(typ); ok {
 		return "", &bashPPCollectionMeta{kind: "interface", typ: typ, interfaceValue: &bashPPInterfaceValue{nilIface: true}}
 	}
@@ -509,6 +522,11 @@ func bashPPCellMeta(cell *bashPPCell) *bashPPCollectionMeta {
 }
 
 func (r *Runner) bashPPReadExpr(expr syntax.BashPPExpr) (any, *bashPPCollectionMeta, error) {
+	// An index or slice rooted in a dependency-owned value is read through its
+	// handle; see bashPPNativeRead in bashpp_native_access.go.
+	if value, meta, err, native := r.bashPPNativeRead(expr); native {
+		return value, meta, err
+	}
 	switch x := expr.(type) {
 	case *syntax.BashPPCompositeLit:
 		return r.bashPPEvalComposite(x, nil)
@@ -834,4 +852,44 @@ func bashPPParentExpr(expr syntax.BashPPExpr) syntax.BashPPExpr {
 		return x.X
 	}
 	return expr
+}
+
+// bashPPCompositeAddress materializes `&T{…}` — a composite literal taken by
+// address. Go allows it although the literal is not a variable: the result is
+// a pointer to a fresh value with its own lifetime, so the literal is stored
+// in an anonymous cell which the returned pointer owns.
+func (r *Runner) bashPPCompositeAddress(lit *syntax.BashPPCompositeLit) (*bashPPPointer, error) {
+	typ := lit.LitType
+	if typ == nil {
+		return nil, fmt.Errorf("BASHPP-ENONADDRESSABLE: composite literal has no type")
+	}
+	value, meta, err := r.bashPPEvalComposite(lit, nil)
+	if err != nil {
+		return nil, err
+	}
+	cell := &bashPPCell{declType: typ}
+	if named, ok := typ.(*syntax.BashPPNamedType); ok && named.Name != nil {
+		cell.typeName = named.Name.Value
+	}
+	bashPPStoreCellValue(cell, value, meta)
+	return &bashPPPointer{target: cell, elem: typ}, nil
+}
+
+// bashPPRepresentableScalar converts an untyped constant toward the type it is
+// being stored in, the way Go does. `p.X = 1e9` assigns an int field because
+// 1e9 denotes an exact integer, even though the constant is written in
+// floating form; a constant that is not exactly an integer is left alone so
+// the assignment is still refused.
+func (r *Runner) bashPPRepresentableScalar(scalar bashPPScalar, expected syntax.BashPPTypeExpr) bashPPScalar {
+	if scalar.typ != "" || scalar.value == nil || scalar.value.Kind() != constant.Float || expected == nil {
+		return scalar
+	}
+	name, ok := r.bashPPUnderlyingType(expected).(*syntax.BashPPNamedType)
+	if !ok || !bashPPIntegerType(name.Name.Value) {
+		return scalar
+	}
+	if integer := constant.ToInt(scalar.value); integer.Kind() == constant.Int {
+		scalar.value = integer
+	}
+	return scalar
 }

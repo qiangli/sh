@@ -19,6 +19,9 @@ import (
 func TestUnchangedGo(t *testing.T) {
 	for _, tc := range []struct{ name, src, want string }{
 		{"native_method_shortdecl", "package main\nimport \"fmt\"\nimport \"time\"\nfunc main(){value:=time.Date(2020,time.January,2,0,0,0,0,time.UTC);year:=value.Year();fmt.Println(year)}", "2020\n"},
+		{"constant_defaults", "package main\nimport \"fmt\"\nconst(i=1;f=1.0;r='a';h=0x1p0)\nfunc main(){fmt.Printf(\"%T %T %T %T %T\\n\",i,f,r,h,i+f)}", "int float64 int32 float64 float64\n"},
+		{"constant_huge", "package main\nimport \"fmt\"\nconst huge=1e1000\nfunc main(){fmt.Printf(\"%T %v\\n\",huge-huge,huge-huge)}", "float64 0\n"},
+		{"constant_fraction", "package main\nimport \"fmt\"\nconst third=1.0/3.0\nconst n=9007199254740993.0\nfunc main(){fmt.Println(third*3==1,n-9007199254740992.0)}", "true 1\n"},
 		{"hello", "// A Go program.\npackage main\nimport \"fmt\"\nfunc main(){ fmt.Println(\"Hello, 世界\") }", "Hello, 世界\n"},
 		{"literals", "package main\nimport \"fmt\"\nfunc main(){fmt.Println(\"$HOME // | ` x\", `raw $HOME // |`, '世', 6 & 3, 1 << 3)}", "$HOME // | ` x raw $HOME // | 19990 2 8\n"},
 		{"constants", "package main\nimport \"fmt\"\nconst Pi = 3.14\nfunc main(){const World=\"世界\";fmt.Println(\"Hello\",World,Pi);fmt.Printf(\"%T\\n\",'世')}", "Hello 世界 3.14\nint32\n"},
@@ -29,6 +32,7 @@ func TestUnchangedGo(t *testing.T) {
 		{"zero", "package main\nimport \"fmt\"\nvar a int\nvar b bool\nvar c string\nfunc main(){fmt.Printf(\"%d %t %q\\n\",a,b,c)}", "0 false \"\"\n"},
 		{"hygiene", "package main\nimport \"fmt\"\nvar __gosource_import_0_0=7\nfunc __gosource_init_0(){}\nfunc init(){}\nfunc main(){fmt.Println(__gosource_import_0_0)}", "7\n"},
 		{"init", "package main\nimport \"fmt\"\nvar a = f()\nvar b = 3\nfunc f() int {return b+1}\nfunc init(){fmt.Println(a,b)}\nfunc init(){fmt.Println(\"init2\")}\nfunc main(){fmt.Println(\"main\")}", "4 3\ninit2\nmain\n"},
+		{"examples_constants", "package main\nimport(\"fmt\"\n\"math\")\nconst s string=\"constant\"\nfunc main(){\nfmt.Println(s)\nconst n=500000000\nconst d=3e20/n\nfmt.Println(d)\nfmt.Println(int64(d))\nfmt.Println(math.Sin(n))\n}", "constant\n6e+11\n600000000000\n-0.28470407323754404\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p, err := gosource.Parse(strings.NewReader(tc.src), tc.name+".go", gosource.Options{RunMain: true})
@@ -122,8 +126,8 @@ func TestModuleImporter(t *testing.T) {
 	}
 }
 
-func TestGoSourceStopsOnUnsupportedRuntime(t *testing.T) {
-	src := "package main\nvar z complex128 = 1i\nfunc main(){println(\"must not run\")}"
+func TestGoSourceComplexRuntime(t *testing.T) {
+	src := "package main\nvar z complex128 = 1i\nfunc main(){println(\"complex ready\")}"
 	p, err := gosource.Parse(strings.NewReader(src), "unsupported.go", gosource.Options{RunMain: true})
 	if err != nil {
 		t.Fatal(err)
@@ -133,11 +137,11 @@ func TestGoSourceStopsOnUnsupportedRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = r.Run(context.Background(), p.File); err == nil {
-		t.Fatal("unsupported runtime exited successfully")
+	if err = r.Run(context.Background(), p.File); err != nil {
+		t.Fatalf("complex runtime: %v %s", err, stderr.String())
 	}
-	if out.Len() != 0 || strings.Contains(stderr.String(), "must not run") {
-		t.Fatalf("executed past failure: %q %q", out.String(), stderr.String())
+	if out.Len() != 0 || stderr.String() != "complex ready\n" {
+		t.Fatalf("complex print output: %q %q", out.String(), stderr.String())
 	}
 }
 
@@ -375,5 +379,52 @@ func main(){println(strings.ToUpper("go"),local(),calls);print(strings.ToLower("
 	}
 	if out.Len() != 0 || stderr.String() != "GO local 1\nend" {
 		t.Fatalf("stdout=%q stderr=%q", out.String(), stderr.String())
+	}
+}
+
+// Slice and generic conversion execution remains a separate interpreter task.
+// This test explicitly verifies ingestion, typed serialization, and native lowering.
+func TestGoConversionLowering(t *testing.T) {
+	for _, tc := range []struct{ name, src, want string }{
+		{"slice", "package main\nimport \"fmt\"\nfunc bytes(s string)[]byte{return []byte(s)}\nfunc main(){b:=[]byte(\"abc\");b=[]byte(\"def\");fmt.Println(string(b),string(bytes(\"xyz\")))}", "def xyz\n"},
+		{"pointer", "package main\nimport \"fmt\"\nfunc main(){p:=(*int)(nil);fmt.Println(p==nil)}", "true\n"},
+		{"generic", "package main\nimport \"fmt\"\ntype Slice[T any][]T\nfunc main(){fmt.Println(Slice[int]([]int{1,2}))}", "[1 2]\n"},
+		{"computed_call", "package main\nimport \"fmt\"\nfunc factory()func(int)int{return func(n int)int{return n+1}}\nfunc main(){fmt.Println(factory()(2))}", "3\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, err := gosource.Parse(strings.NewReader(tc.src), tc.name+".go", gosource.Options{RunMain: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var encoded bytes.Buffer
+			if err := typedjson.Encode(&encoded, p.File); err != nil {
+				t.Fatal(err)
+			}
+			decoded, err := typedjson.Decode(&encoded)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := lower.Compile(decoded.(*syntax.File), lower.Options{Origin: tc.name + ".go"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			dir := t.TempDir()
+			source := filepath.Join(dir, "generated.go")
+			artifact := filepath.Join(dir, "program")
+			if err := os.WriteFile(source, result.Source, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if output, err := exec.Command("go", "build", "-p", "2", "-o", artifact, source).CombinedOutput(); err != nil {
+				t.Fatalf("build: %v\n%s\n%s", err, output, result.Source)
+			}
+			if err := os.Remove(source); err != nil {
+				t.Fatal(err)
+			}
+			run := exec.Command(artifact)
+			run.Env = []string{"PATH="}
+			if output, err := run.CombinedOutput(); err != nil || string(output) != tc.want {
+				t.Fatalf("artifact: %v output=%q want=%q", err, output, tc.want)
+			}
+		})
 	}
 }

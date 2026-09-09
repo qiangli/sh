@@ -40,6 +40,12 @@ func (r *Runner) bashPPRangeScalar(ctx context.Context, rng *syntax.BashPPRange)
 		}
 	}
 
+	// A dependency-owned sequence is read through its handle; see
+	// bashPPNativeRange in bashpp_native_access.go.
+	if r.bashPPNativeRange(ctx, rng) {
+		return true
+	}
+
 	value, err := r.bashPPEvalScalarExpr(rng.Expr)
 	if err != nil {
 		r.bashPPRangeError(rng, "BASHPP-ERANGE-TYPE: %v", err)

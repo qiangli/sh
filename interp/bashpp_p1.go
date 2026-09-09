@@ -111,6 +111,9 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 		// outermost block; give it one rather than binding nowhere.
 		r.bashPPScope = newBashPPScope(nil)
 	}
+	if r.bashPPNativeDeclaration(d) {
+		return
+	}
 	if d.Site == syntax.StartTypeDecl {
 		if r.bashPPTypes == nil {
 			r.bashPPTypes = make(map[string]bashPPType)
@@ -125,6 +128,7 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 			r.exit = exitStatus{code: 2}
 			return
 		}
+		_, interfaceDeclaration := d.DeclTypeExpr.(*syntax.BashPPInterfaceType)
 		// Make the declaration visible while validating its representation.
 		// Recursive references can then be classified as either finite (behind
 		// pointer/slice/map indirection) or infinite (direct/array/struct value
@@ -142,7 +146,7 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 				}
 				seenFields[field.name] = true
 			}
-		} else if d.DeclType.Value == "interface" {
+		} else if d.DeclType.Value == "interface" || interfaceDeclaration {
 			iface, ok := d.DeclTypeExpr.(*syntax.BashPPInterfaceType)
 			if !ok {
 				r.errf("BASHPP-EINTERFACE-TYPE: malformed interface declaration %s\n", name)
@@ -170,7 +174,7 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 				seen[member.Value] = true
 			}
 		}
-		if d.DeclType.Value != "interface" && d.DeclType.Value != "enum" {
+		if d.DeclType.Value != "interface" && !interfaceDeclaration && d.DeclType.Value != "enum" {
 			if d.Alias && bashPPRecursiveGenericValue(d.DeclTypeExpr, name) {
 				r.errf("%scyclic type declaration: %s\n", r.bashErrPrefix(d.Pos()), name)
 				r.exit = exitStatus{code: 2}
@@ -187,7 +191,7 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 			}
 		}
 	}
-	if (d.Site == syntax.StartVar || d.Site == syntax.StartConst) && d.DeclTypeExpr != nil {
+	if !r.bashPPGoSource && (d.Site == syntax.StartVar || d.Site == syntax.StartConst) && d.DeclTypeExpr != nil {
 		if named, ok := r.bashPPUnderlyingType(d.DeclTypeExpr).(*syntax.BashPPNamedType); ok &&
 			(named.Name.Value == "complex64" || named.Name.Value == "complex128") {
 			r.errf("%sBASHPP-ECOMPLEX-UNSUPPORTED: complex values are not supported by the Bash++ scalar carrier\n", r.bashErrPrefix(d.DeclTypeExpr.Pos()))
@@ -379,7 +383,7 @@ func (r *Runner) bashPPTypedScalarDeclValue(d *syntax.BashPPDecl) (expand.Variab
 		return expand.Variable{}, false, nil
 	}
 	base := named.Name.Value
-	if base == "complex64" || base == "complex128" {
+	if !r.bashPPGoSource && (base == "complex64" || base == "complex128") {
 		return expand.Variable{}, true, fmt.Errorf("BASHPP-ECOMPLEX-UNSUPPORTED: complex constants are not supported by the Bash++ scalar carrier")
 	}
 	if d.InitExpr == nil {
@@ -447,6 +451,8 @@ func (r *Runner) bashPPConstantScalarExpr(expr syntax.BashPPExpr, targetBase str
 
 func bashPPUntypedScalarAssignable(base string, value constant.Value) bool {
 	switch base {
+	case "complex64", "complex128":
+		return value.Kind() == constant.Int || value.Kind() == constant.Float || value.Kind() == constant.Complex
 	case "string":
 		return value.Kind() == constant.String
 	case "bool":
@@ -626,6 +632,72 @@ func (r *Runner) bashPPTypeTerminates(name string, seen map[string]bool) bool {
 	return r.bashPPTypeTerminates(base, seen)
 }
 
+// bashPPShortDeclConversion recognizes `x := T(v)`. Only a builtin or defined
+// type whose underlying type is scalar is claimed; a name that already denotes
+// a callable or a binding, and a type with a structured underlying type, both
+// stay on the paths that already own them.
+func (r *Runner) bashPPShortDeclConversion(d *syntax.BashPPShortDecl) (*syntax.BashPPConvertExpr, bool) {
+	if len(d.Lhs) != 1 {
+		return nil, false
+	}
+	return r.bashPPConversionCall(d.Call)
+}
+
+// bashPPConversionCall recognizes a call-shaped Go conversion `T(v)`. See
+// [Runner.bashPPShortDeclConversion] for what it deliberately leaves alone.
+func (r *Runner) bashPPConversionCall(call *syntax.BashPPCall) (*syntax.BashPPConvertExpr, bool) {
+	if call == nil || call.CalleeExpr != nil || len(call.Fun) != 1 {
+		return nil, false
+	}
+	if len(call.ArgExprs) != 1 || call.ArgExprs[0] == nil || call.Ellipsis.IsValid() {
+		return nil, false
+	}
+	name := call.Fun[0].Value
+	if r.bashPPFuncs[name] != nil || !bashPPScalarTypeName(name) {
+		return nil, false
+	}
+	if !bashPPBuiltinType(name) {
+		decl, declared := r.bashPPTypes[name]
+		if !declared {
+			return nil, false
+		}
+		shape, ok := r.bashPPUnderlyingType(decl.typeExpr).(*syntax.BashPPNamedType)
+		if !ok || !bashPPScalarTypeName(shape.Name.Value) || !bashPPBuiltinType(shape.Name.Value) {
+			return nil, false
+		}
+	}
+	return &syntax.BashPPConvertExpr{ConvType: call.Fun[0], Lparen: call.Lparen, Rparen: call.Rparen, X: call.ArgExprs[0]}, true
+}
+
+// bashPPConvertNamedScalar converts a scalar to a DEFINED type as well as to a
+// builtin one. `MyFloat(3)` converts through MyFloat's underlying type and then
+// keeps MyFloat as the result's type: that named identity is what carries the
+// defined type's method set, so `MyFloat(3).Abs()` resolves where a bare
+// float64 would not.
+func (r *Runner) bashPPConvertNamedScalar(name string, x bashPPScalar) (bashPPScalar, error) {
+	if bashPPBuiltinType(name) {
+		return r.bashPPConvertScalar(name, x)
+	}
+	named := &syntax.BashPPNamedType{Name: &syntax.Lit{Value: name}}
+	shape, ok := r.bashPPUnderlyingType(named).(*syntax.BashPPNamedType)
+	if !ok || shape == named || !bashPPBuiltinType(shape.Name.Value) {
+		return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-CONVERT: cannot convert %s to %s", x.value.Kind(), name)
+	}
+	converted, err := r.bashPPConvertScalar(shape.Name.Value, x)
+	if err != nil {
+		return bashPPScalar{}, err
+	}
+	converted.typ = name
+	return converted, nil
+}
+
+// bashPPScalarTypeName rejects the two names [bashPPBuiltinType] admits that
+// never denote a scalar conversion: `struct` is a shape, and `error` is an
+// interface whose conversions are interface assignments.
+func bashPPScalarTypeName(name string) bool {
+	return name != "struct" && name != "error"
+}
+
 func bashPPBuiltinType(name string) bool {
 	switch name {
 	case "bool", "byte", "complex64", "complex128", "error", "float32", "float64",
@@ -656,6 +728,13 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 		return
 	}
 	defer r.bashPPEndShortDecl(txn, d.Pos())
+	if r.bashPPGoSource && len(d.RhsExprs) > 0 {
+		r.goSourceParallelDecl(d)
+		return
+	}
+	if r.bashPPComplexShortDecl(d) {
+		return
+	}
 	// A named function value uses the same callable registry as a closure or
 	// method value, retaining its declaration (including the agentic marker).
 	if len(d.Lhs) == 1 {
@@ -679,6 +758,11 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 		}
 	}
 	if d.Expr != nil {
+		// A read rooted in a dependency-owned value binds a session handle;
+		// see bashPPNativeShortDecl in bashpp_native_access.go.
+		if r.bashPPNativeShortDecl(d) {
+			return
+		}
 		if assert, ok := d.Expr.(*syntax.BashPPTypeAssertExpr); ok {
 			if assert.TypeToken != nil {
 				r.errf("BASHPP-EASSERT-TYPE: .(type) is only valid in a type switch\n")
@@ -927,6 +1011,27 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 		}
 		if fn, ok := r.bashPPLookupFunc(d.Call); ok {
 			r.bashPPShortDeclCall(ctx, d, fn)
+			return
+		}
+		// A Go conversion is spelled exactly like a call, so the Go front end
+		// delivers `f := MyFloat(3)` as one. Evaluate it as the conversion it
+		// is: the result then carries the defined type, and with it the method
+		// set `f.Abs()` resolves against. Reaching the call path instead left
+		// the value an untyped string with no selector path at all.
+		if conv, ok := r.bashPPShortDeclConversion(d); ok {
+			value, err := r.bashPPEvalScalarExpr(conv)
+			if err != nil {
+				if err != errBashPPScalarInterrupted {
+					r.errf("%v\n", err)
+					r.exit = exitStatus{code: 2}
+				}
+				return
+			}
+			r.bashPPDeclareName(d.Lhs[0].Value, expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarString(value.value)})
+			if target := r.bashPPScope.lookup(d.Lhs[0].Value); target != nil {
+				target.scalarKind = value.value.Kind()
+				target.typeName = value.typ
+			}
 			return
 		}
 		// `err := recover()` is the spelling a recovering defer is written
@@ -1187,6 +1292,8 @@ func (r *Runner) bashPPValidateReusedShortValue(target, candidate *bashPPCell) e
 		value = bashPPScalar{value: constant.MakeBool(candidate.vr.Str == "true")}
 	case constant.Int:
 		value.value = constant.MakeFromLiteral(candidate.vr.Str, token.INT, 0)
+	case constant.Complex:
+		value.value = bashPPParseComplex(candidate.vr.Str)
 	case constant.Float:
 		value.value = constant.MakeFromLiteral(candidate.vr.Str, token.FLOAT, 0)
 	}
@@ -1553,6 +1660,14 @@ func (r *Runner) bashPPValue(ctx context.Context, words []*syntax.Word) expand.V
 }
 
 func (r *Runner) bashPPValueInRegion(_ context.Context, words []*syntax.Word, goRegion bool) expand.Variable {
+	if len(words) == 1 {
+		// `x, y := <-c, <-c` reaches this site one operand at a time, and a Go
+		// receive word is an operation rather than a literal. See
+		// bashpp_chan_value.go.
+		if vr, handled := r.bashPPGoReceiveWordValue(words[0]); handled {
+			return vr
+		}
+	}
 	switch len(words) {
 	case 0:
 		// A bare declaration: `var x int`. The zero value is the empty
@@ -1582,6 +1697,9 @@ func (r *Runner) bashPPValueInRegion(_ context.Context, words []*syntax.Word, go
 // away from any working script, which is exactly why a diagnostic is
 // permitted here and forbidden on a Class E shape.
 func (r *Runner) bashPPCall(ctx context.Context, c *syntax.BashPPCall) {
+	if r.bashPPTestingCall(c) {
+		return
+	}
 	if r.bashPPBridgeHandles(c) {
 		if _, err := r.bashPPBridgeCall(ctx, c); err != nil {
 			r.exit.fatal(err)
@@ -1604,6 +1722,11 @@ func (r *Runner) bashPPCall(ctx context.Context, c *syntax.BashPPCall) {
 		return
 	}
 	if r.exit.code != 0 {
+		return
+	}
+	// A Go region spells `close(ch)` as an ordinary call rather than as the
+	// shell-recognized channel form. See bashpp_chan_value.go.
+	if r.bashPPGoSourceChanCall(c) {
 		return
 	}
 	// `panic` and `recover` are predeclared, so they answer only where the

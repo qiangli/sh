@@ -154,12 +154,12 @@ func (c *converter) typ(e ast.Expr) s.BashPPTypeExpr {
 		}
 		return out
 	case *ast.IndexExpr:
-		if id, ok := x.X.(*ast.Ident); ok {
-			return &s.BashPPNamedType{Name: c.ident(id), TypeArgs: []*s.BashPPTypeArg{{ArgType: c.typ(x.Index)}}}
+		if named, ok := c.typ(x.X).(*s.BashPPNamedType); ok {
+			named.TypeArgs = []*s.BashPPTypeArg{{ArgType: c.typ(x.Index)}}
+			return named
 		}
 	case *ast.IndexListExpr:
-		if id, ok := x.X.(*ast.Ident); ok {
-			o := &s.BashPPNamedType{Name: c.ident(id)}
+		if o, ok := c.typ(x.X).(*s.BashPPNamedType); ok {
 			for _, a := range x.Indices {
 				o.TypeArgs = append(o.TypeArgs, &s.BashPPTypeArg{ArgType: c.typ(a)})
 			}
@@ -193,6 +193,9 @@ func (c *converter) fields(list *ast.FieldList, structure bool) []*s.BashPPField
 		}
 		v.FieldType = c.lit(t.Pos(), c.text(t))
 		v.FieldTypeExpr = c.typ(t)
+		if f.Tag != nil {
+			v.Tag = c.lit(f.Tag.Pos(), f.Tag.Value)
+		}
 		for _, n := range f.Names {
 			v.Names = append(v.Names, c.ident(n))
 		}
@@ -298,11 +301,16 @@ func (c *converter) valueDecl(g *ast.GenDecl, v *ast.ValueSpec, n *ast.Ident, in
 				out.InitExpr = &s.BashPPIdent{Name: c.lit(n.Pos(), value)}
 			case constant.Float:
 				kind = "FLOAT"
+				// ExactString may spell an integral float as an integer. Keep
+				// floating syntax without any machine-float conversion.
+				if !strings.Contains(value, "/") {
+					value += ".0"
+				}
 				if parts := strings.Split(value, "/"); len(parts) == 2 {
 					out.InitExpr = &s.BashPPBinaryExpr{X: &s.BashPPBasicLit{Kind: "FLOAT", Value: c.lit(n.Pos(), parts[0]+".0")}, Op: c.lit(n.Pos(), "/"), Y: &s.BashPPBasicLit{Kind: "FLOAT", Value: c.lit(n.Pos(), parts[1]+".0")}}
 				}
 			case constant.Complex:
-				c.fail(n, "complex constant")
+				out.InitExpr = c.complexConstantExpr(n.Pos(), obj.Val())
 			}
 			if out.InitExpr == nil {
 				out.InitExpr = &s.BashPPBasicLit{Kind: kind, Value: c.lit(n.Pos(), value)}
@@ -325,6 +333,22 @@ func (c *converter) expr(e ast.Expr) s.BashPPExpr {
 	if e == nil {
 		return nil
 	}
+	result := c.exprValue(e)
+	// go/types records the concrete type only at a constant's contextual
+	// conversion/defaulting boundary. Inner untyped operands remain exact.
+	// Preserve that boundary, particularly float and rune defaults in any.
+	if tv := c.info.Types[e]; tv.Value != nil {
+		if basic, ok := tv.Type.(*types.Basic); ok && basic.Info()&types.IsUntyped == 0 {
+			return &s.BashPPConvertExpr{ConvType: c.lit(e.Pos(), basic.Name()), Lparen: c.pos(e.Pos()), Rparen: c.pos(e.End() - 1), X: result}
+		}
+	}
+	return result
+}
+
+func (c *converter) exprValue(e ast.Expr) s.BashPPExpr {
+	if e == nil {
+		return nil
+	}
 	switch x := e.(type) {
 	case *ast.FuncLit:
 		return c.funlit(x)
@@ -344,7 +368,7 @@ func (c *converter) expr(e ast.Expr) s.BashPPExpr {
 	case *ast.BinaryExpr:
 		return &s.BashPPBinaryExpr{X: c.expr(x.X), Op: c.lit(x.OpPos, x.Op.String()), Y: c.expr(x.Y)}
 	case *ast.SelectorExpr:
-		return &s.BashPPSelectorExpr{X: c.expr(x.X), Dot: c.pos(x.Sel.Pos() - 1), Sel: c.ident(x.Sel)}
+		return &s.BashPPSelectorExpr{X: c.expr(x.X), Dot: c.pos(x.Sel.Pos() - 1), Sel: c.ident(x.Sel), FuncType: c.functionValueType(x)}
 	case *ast.IndexExpr:
 		return &s.BashPPIndexExpr{X: c.expr(x.X), Lbrack: c.pos(x.Lbrack), Rbrack: c.pos(x.Rbrack), Index: c.expr(x.Index)}
 	case *ast.SliceExpr:
@@ -379,9 +403,16 @@ func (c *converter) expr(e ast.Expr) s.BashPPExpr {
 			if obj, ok := c.info.Uses[id].(*types.Builtin); ok && obj.Name() == "new" {
 				return &s.BashPPNewExpr{New: c.ident(id), Lparen: c.pos(x.Lparen), Rparen: c.pos(x.Rparen), AllocType: c.typ(x.Args[0])}
 			}
-			if c.info.Types[x.Fun].IsType() && len(x.Args) == 1 {
-				return &s.BashPPConvertExpr{ConvType: c.ident(id), Lparen: c.pos(x.Lparen), Rparen: c.pos(x.Rparen), X: c.expr(x.Args[0])}
+		}
+		if c.info.Types[x.Fun].IsType() && len(x.Args) == 1 {
+			var typeLit *s.Lit
+			if id, ok := x.Fun.(*ast.Ident); ok {
+				typeLit = c.ident(id)
+			} else {
+				typeLit = c.lit(x.Fun.Pos(), c.text(x.Fun))
+				typeLit.ValueEnd = c.pos(x.Fun.End())
 			}
+			return &s.BashPPConvertExpr{ConvType: typeLit, ConvTypeExpr: c.typ(x.Fun), Lparen: c.pos(x.Lparen), Rparen: c.pos(x.Rparen), X: c.expr(x.Args[0])}
 		}
 		return c.call(x)
 	}
@@ -486,6 +517,9 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 			}
 			for _, e := range x.Rhs {
 				out.Rhs = append(out.Rhs, c.word(e))
+				if len(x.Rhs) > 1 {
+					out.RhsExprs = append(out.RhsExprs, c.expr(e))
+				}
 			}
 			if len(x.Rhs) == 1 {
 				switch rhs := x.Rhs[0].(type) {
@@ -493,6 +527,11 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 					out.FuncLit = c.funlit(rhs)
 					out.Rhs = nil
 				case *ast.CallExpr:
+					if c.info.Types[rhs.Fun].IsType() {
+						out.Expr = c.expr(rhs)
+						out.Rhs = nil
+						break
+					}
 					out.Call = c.call(rhs)
 					if len(out.Call.Fun) == 1 && out.Call.Fun[0].Value == "make" {
 						if ch, ok := out.Call.ArgType.(*s.BashPPChanType); ok {
@@ -531,7 +570,7 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 			}
 			if len(x.Rhs) == 1 {
 				out.ValueExpr = c.expr(x.Rhs[0])
-				if call, ok := x.Rhs[0].(*ast.CallExpr); ok {
+				if call, ok := x.Rhs[0].(*ast.CallExpr); ok && !c.info.Types[call.Fun].IsType() {
 					out.Call = c.call(call)
 				}
 			}
@@ -549,11 +588,18 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 		out := &s.BashPPReturn{Kw: c.lit(x.Return, "return")}
 		for _, e := range x.Results {
 			out.Results = append(out.Results, c.word(e))
+			if len(x.Results) > 1 {
+				out.ResultExprs = append(out.ResultExprs, c.expr(e))
+			}
 		}
 		if len(x.Results) == 1 {
 			switch e := x.Results[0].(type) {
 			case *ast.CallExpr:
-				out.Call = c.call(e)
+				if c.info.Types[e.Fun].IsType() {
+					out.Expr = c.expr(e)
+				} else {
+					out.Call = c.call(e)
+				}
 			case *ast.FuncLit:
 				out.FuncLit = c.funlit(e)
 				out.Results = nil

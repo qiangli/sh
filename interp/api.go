@@ -64,6 +64,9 @@ type Runner struct {
 	// Otherwise, [os.TempDir] is used.
 	Env expand.Environ
 
+	// goSourceEnvironment is the explicitly configured original Go process env.
+	goSourceEnvironment []string
+
 	// writeEnv overlays [Runner.Env] so that we can write environment variables
 	// as an overlay.
 	writeEnv expand.WriteEnviron
@@ -104,6 +107,7 @@ type Runner struct {
 	bashPPGoSource      bool
 	bashPPGoSourceDecls map[string]bool
 	bashPPGoSourceFile  *syntax.File
+	goSourceTesting     *GoSourceTestingSession
 	bashPPScope         *bashPPScope
 	// bashPPFuncScopes records, per function name, the lexical environment
 	// visible where the function was defined. It is preserved across
@@ -2776,6 +2780,8 @@ func (r *Runner) Reset() {
 		sigReset:           r.sigReset,
 		standaloneDefaults: standaloneDefaults,
 
+		goSourceEnvironment: r.goSourceEnvironment,
+
 		// The dialect is fixed at construction by [Lang]; a runtime `set -o
 		// bashpp` may have changed r.dialect since, so Reset restores the
 		// construction-time value from origDialect (mirroring dryRun).
@@ -3076,6 +3082,9 @@ func (r *Runner) ExpandDocument(ctx context.Context, src string) (string, error)
 // Calling Run on an entire [*File] implies an exit, meaning that an exit trap may
 // run.
 func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
+	if r.goSourceTesting != nil && !r.goSourceTesting.loading {
+		return fmt.Errorf("gosource: runner is reserved by a testing session; close it first")
+	}
 	if !r.didReset {
 		r.Reset()
 	}
@@ -3109,7 +3118,7 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 		defer func() { r.bashPPGoSourceFile = savedGoFile }()
 		savedGoSource := r.bashPPGoSource
 		r.bashPPGoSource = node.GoSource
-		if node.GoSource {
+		if node.GoSource && r.goSourceTesting == nil {
 			defer r.closeGoSourceBridge()
 		}
 		defer func() { r.bashPPGoSource = savedGoSource }()
@@ -3149,7 +3158,13 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 			if node.GoSource {
 				if _, isImport := stmt.Cmd.(*syntax.BashPPImport); !isImport && !goImportsStarted {
 					goImportsStarted = true
-					if err := r.bashPPStartGoSourceBridge(ctx); err != nil {
+					bridgeContext := ctx
+					if r.goSourceTesting != nil {
+						// Run's signal scope ends after package initialization;
+						// the test session owns the dependency process longer.
+						bridgeContext = r.goSourceTesting.context
+					}
+					if err := r.bashPPStartGoSourceBridge(bridgeContext); err != nil {
 						r.exit.fatal(err)
 						break
 					}
@@ -3376,6 +3391,7 @@ func (r *Runner) subshell(background bool) *Runner {
 	r.ensureDirFile(r.Dir)
 	dirFile, _ := dupRunnerDir(r.dirFile)
 	r2 := &Runner{
+		goSourceEnvironment:  slices.Clone(r.goSourceEnvironment),
 		bashPPAgentic:        r.bashPPAgentic,
 		Dir:                  r.Dir,
 		dirFile:              dirFile,

@@ -76,9 +76,13 @@ func (c *bashPPChannel) close() bool {
 	return true
 }
 
+// bashPPObjectCloneKey identifies one shared payload. A slice's identity is
+// its data pointer *and* its length: `s` and `s[:3]` start at the same address,
+// so a pointer-only key would hand a task the wrong one of the two.
 type bashPPObjectCloneKey struct {
-	kind uint8
-	ptr  uintptr
+	kind   uint8
+	ptr    uintptr
+	length int
 }
 
 type bashPPObjectCloner struct {
@@ -126,7 +130,7 @@ func (c *bashPPObjectCloner) clone(value any) (any, error) {
 		c.done[key] = out
 		return out, nil
 	case []any:
-		key := bashPPObjectCloneKey{kind: 2, ptr: reflect.ValueOf(value).Pointer()}
+		key := bashPPObjectCloneKey{kind: 2, ptr: reflect.ValueOf(value).Pointer(), length: len(value)}
 		if c.active[key] {
 			return nil, fmt.Errorf("cyclic Bash++ object")
 		}
@@ -655,7 +659,7 @@ func (r *Runner) bashPPSend(ctx context.Context, s *syntax.BashPPSend) {
 	if !ok {
 		return
 	}
-	v := r.literal(s.Value)
+	v := r.bashPPGoSendValue(s.Value)
 	if !r.bashPPValueFits(c.elem, v) {
 		r.errf("bash++: cannot send %q as %s channel value\n", v, c.elem)
 		r.exit.code = 2
@@ -737,6 +741,9 @@ func (r *Runner) bashPPReceive(ctx context.Context, recv *syntax.BashPPReceive, 
 			r.exit.code = 1
 			return "", false
 		}
+	}
+	if !open {
+		v = r.bashPPChanZeroText(c.elem)
 	}
 	if lhs != nil {
 		r.bashPPDeclareName(lhs[0].Value, expand.Variable{Set: true, Kind: expand.String, Str: v})
@@ -956,6 +963,13 @@ func (r *Runner) bashPPGo(ctx context.Context, g *syntax.BashPPGo) {
 		r.exit.code = 2
 		return
 	}
+	// Go evaluates a launched call's arguments in the launching goroutine.
+	// Evaluating them here also gives a computed operand such as `cap(c)` its
+	// value rather than its Go source text. See gosource_calls.go.
+	call := r.bashPPGoSourceEvaluatedCall(g.Call)
+	if r.exit.code != 0 {
+		return
+	}
 	c := r.bashPPConcurrency(ctx)
 	state, ok := c.add()
 	if !ok {
@@ -1001,7 +1015,7 @@ func (r *Runner) bashPPGo(ctx context.Context, g *syntax.BashPPGo) {
 		if c.ctx.Err() != nil {
 			return
 		}
-		child.bashPPCall(c.ctx, g.Call)
+		child.bashPPCall(c.ctx, call)
 		code := child.exit.code
 		canceled := child.bashPPTaskCanceled || errors.Is(child.exit.err, context.Canceled) || errors.Is(child.exit.err, context.DeadlineExceeded)
 		if canceled {
@@ -1255,7 +1269,7 @@ func (r *Runner) bashPPSelect(ctx context.Context, s *syntax.BashPPSelect) {
 			if !ok {
 				return
 			}
-			v := r.literal(comm.Value)
+			v := r.bashPPGoSendValue(comm.Value)
 			if !r.bashPPValueFits(c.elem, v) {
 				r.errf("bash++: cannot send %q as %s channel value\n", v, c.elem)
 				r.exit.code = 2
@@ -1336,7 +1350,7 @@ func (r *Runner) bashPPSelect(ctx context.Context, s *syntax.BashPPSelect) {
 	leave := r.bashPPPushScope()
 	defer leave()
 	if decl, yes := arm.Comm.(*syntax.BashPPShortDecl); yes {
-		text := ""
+		text := r.bashPPChanZeroText(caseElems[i])
 		if open {
 			text = v.String()
 		}

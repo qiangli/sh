@@ -513,7 +513,7 @@ func (r *Runner) bashPPEvalElement(expr syntax.BashPPExpr, expected syntax.BashP
 	if err != nil {
 		return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-ELEMENT: %v", err)
 	}
-	value := bashPPScalarAny(scalar.value)
+	value := bashPPScalarAny(r.bashPPRepresentableScalar(scalar, expected).value)
 	if err := r.bashPPCheckCollectionValue(value, expected); err != nil {
 		return nil, nil, err
 	}

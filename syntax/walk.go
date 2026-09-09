@@ -255,6 +255,7 @@ func Walk(node Node, f func(Node) bool) {
 		walkNilable(node.ValueExpr, f)
 		walkNilable(node.Call, f)
 	case *BashPPShortDecl:
+		walkList(node.RhsExprs, f)
 		walkList(node.Lhs, f)
 		walkList(node.Rhs, f)
 		walkList(node.MethodValue, f)
@@ -297,6 +298,7 @@ func Walk(node Node, f func(Node) bool) {
 		Walk(node.Y, f)
 	case *BashPPConvertExpr:
 		Walk(node.ConvType, f)
+		walkNilable(node.ConvTypeExpr, f)
 		Walk(node.X, f)
 	case *BashPPIndexExpr:
 		Walk(node.X, f)
@@ -307,6 +309,7 @@ func Walk(node Node, f func(Node) bool) {
 		walkNilable(node.High, f)
 		walkNilable(node.Max, f)
 	case *BashPPSelectorExpr:
+		walkNilable(node.FuncType, f)
 		Walk(node.X, f)
 		Walk(node.Sel, f)
 	case *BashPPFuncType:
@@ -415,6 +418,7 @@ func Walk(node Node, f func(Node) bool) {
 			Walk(node.Body, f)
 		}
 	case *BashPPField:
+		walkNilable(node.Tag, f)
 		walkList(node.Names, f)
 		walkNilable(node.FieldType, f)
 		walkNilable(node.FieldTypeExpr, f)
@@ -429,6 +433,7 @@ func Walk(node Node, f func(Node) bool) {
 		walkNilable(node.RecvType, f)
 		walkList(node.TypeParams, f)
 	case *BashPPReturn:
+		walkList(node.ResultExprs, f)
 		walkNilable(node.Expr, f)
 		walkNilable(node.Call, f)
 		walkNilable(node.Kw, f)

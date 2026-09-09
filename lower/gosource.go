@@ -1,6 +1,7 @@
 package lower
 
 import (
+	"fmt"
 	"mvdan.cc/sh/v3/syntax"
 	"strings"
 )
@@ -95,6 +96,65 @@ func (e *emitter) goSourceCommand(c syntax.Command) (string, bool, error) {
 func goSourceCommNames(c syntax.Command) []string {
 	if s, ok := c.(*syntax.BashPPShortDecl); ok {
 		return names(s.Lhs)
+	}
+	return nil
+}
+
+// goSourcePositions preserves caller positions in native stack and logging APIs.
+// Add directives only after checking emitted Go, while retaining physical output
+// lines in the external source map used by transpile consumers.
+func goSourcePositions(result *Result, origin string) error {
+	byLine := make(map[int]int, len(result.Mappings))
+	for i, m := range result.Mappings {
+		byLine[m.GoLine] = i
+	}
+	var out strings.Builder
+	physical := 1
+	lines := strings.Split(string(result.Source), "\n")
+	for i, line := range lines {
+		if mi, ok := byLine[i+1]; ok {
+			m := &result.Mappings[mi]
+			name := m.Source
+			if name == "" {
+				name = origin
+			}
+			if strings.ContainsAny(name, "\r\n") {
+				return fmt.Errorf("source filename cannot be represented in Go line directive")
+			}
+			if name != "" && m.Pos.Line() > 0 {
+				fmt.Fprintf(&out, "//line %s:%d:%d\n", name, m.Pos.Line(), m.Pos.Col())
+				physical++
+			}
+			m.GoLine = physical
+		}
+		out.WriteString(line)
+		if i < len(lines)-1 {
+			out.WriteByte('\n')
+		}
+		physical++
+	}
+	result.Source = []byte(out.String())
+	// The public map contract anchors each marker at the next nonempty
+	// physical line, including compiler directives. Runtime line directives
+	// do not change these generated-file coordinates.
+	pending, index := false, 0
+	for i, line := range strings.Split(string(result.Source), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "// lower:") {
+			pending = true
+			continue
+		}
+		if pending && strings.TrimSpace(line) != "" {
+			if index >= len(result.Mappings) {
+				return fmt.Errorf("generated marker count exceeds source mappings")
+			}
+			result.Mappings[index].GoLine = i + 1
+			result.Mappings[index].GoCol = len(line) - len(strings.TrimLeft(line, "\t ")) + 1
+			index++
+			pending = false
+		}
+	}
+	if pending || index != len(result.Mappings) {
+		return fmt.Errorf("generated marker count differs from source mappings")
 	}
 	return nil
 }

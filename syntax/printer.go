@@ -473,6 +473,9 @@ func (p *Printer) bashppFields(fields []*BashPPField) {
 			}
 			p.writeLit(f.FieldType.Value)
 		}
+		if f.Tag != nil {
+			p.writeLit(" " + f.Tag.Value)
+		}
 		if f.Default != nil {
 			p.writeLit(" = ")
 			p.word(f.Default)
@@ -1323,7 +1326,11 @@ func (p *Printer) bashppExpr(expr BashPPExpr) {
 	case *BashPPCall:
 		p.command(x, nil)
 	case *BashPPConvertExpr:
-		p.writeLit(x.ConvType.Value)
+		if x.ConvTypeExpr != nil {
+			p.bashppType(x.ConvTypeExpr)
+		} else {
+			p.writeLit(x.ConvType.Value)
+		}
 		p.writeLit("(")
 		p.bashppExpr(x.X)
 		p.writeLit(")")
@@ -1452,6 +1459,9 @@ func (p *Printer) bashppType(typ BashPPTypeExpr) {
 				p.bashppType(field.FieldTypeExpr)
 			} else if field.FieldType != nil {
 				p.writeLit(field.FieldType.Value)
+			}
+			if field.Tag != nil {
+				p.writeLit(" " + field.Tag.Value)
 			}
 		}
 		p.writeLit("}")
@@ -1774,6 +1784,9 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 					p.spacedString(field.Names[0].Value, field.Names[0].Pos())
 				}
 				p.spacedString(field.FieldType.Value, field.FieldType.Pos())
+				if field.Tag != nil {
+					p.spacedString(field.Tag.Value, field.Tag.Pos())
+				}
 			}
 			p.spacedString("}", cmd.Rbrace)
 		}
@@ -1869,6 +1882,14 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 		}
 		p.spacedString(":=", cmd.OpPos)
 		switch {
+		case len(cmd.RhsExprs) > 0:
+			for i, expr := range cmd.RhsExprs {
+				if i > 0 {
+					p.writeLit(",")
+				}
+				p.space()
+				p.bashppExpr(expr)
+			}
 		case cmd.FuncLit != nil:
 			p.bashppFuncLit(cmd.FuncLit)
 		case cmd.Call != nil:
@@ -2011,6 +2032,16 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 		}
 	case *BashPPReturn:
 		p.spacedString(cmd.Kw.Value, cmd.Kw.Pos())
+		if len(cmd.ResultExprs) > 0 {
+			for i, expr := range cmd.ResultExprs {
+				if i > 0 {
+					p.writeLit(",")
+				}
+				p.space()
+				p.bashppExpr(expr)
+			}
+			break
+		}
 		if cmd.Expr != nil {
 			p.space()
 			p.bashppExpr(cmd.Expr)

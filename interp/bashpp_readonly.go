@@ -188,6 +188,36 @@ func (r *Runner) bashPPTupleAssign(assign *syntax.BashPPAssign) {
 			r.exit = exitStatus{code: 2}
 			return
 		}
+		// `f = i.(float64)` is an assertion, not a scalar expression, and its
+		// one-result form panics rather than yielding a value when it fails.
+		if cell, handled, err := r.bashPPAssertCandidate(expr); handled {
+			if err != nil {
+				r.errf("%s%v\n", r.bashErrPrefix(expr.Pos()), err)
+				r.exit = exitStatus{code: 2}
+				r.exit.fatal(ExitStatus(2))
+				return
+			}
+			if r.exit.code != 0 {
+				return
+			}
+			candidates[i] = cell
+			continue
+		}
+		// An interface-typed target owns the dynamic type of what it is
+		// given, so the value is built against the target's declared
+		// interface rather than read as a plain scalar.
+		if name := assign.Names[i]; name.Value != "_" {
+			cell, handled, err := r.bashPPInterfaceAssignCandidate(r.bashPPScope.lookup(name.Value), expr)
+			if err != nil {
+				r.errf("%s%v\n", r.bashErrPrefix(expr.Pos()), err)
+				r.exit = exitStatus{code: 2}
+				return
+			}
+			if handled {
+				candidates[i] = cell
+				continue
+			}
+		}
 		if ident, ok := expr.(*syntax.BashPPIdent); ok {
 			source := r.bashPPScope.lookup(ident.Name.Value)
 			if source == nil {

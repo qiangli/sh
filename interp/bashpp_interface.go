@@ -6,6 +6,7 @@ package interp
 import (
 	"context"
 	"fmt"
+	"go/constant"
 	"strings"
 
 	"mvdan.cc/sh/v3/expand"
@@ -112,7 +113,9 @@ func (r *Runner) bashPPInterfaceMethodSet(name string, iface *syntax.BashPPInter
 }
 
 func bashPPDirectTypeSetTerm(typ syntax.BashPPTypeExpr) bool {
-	switch typ.(type) {
+	switch t := typ.(type) {
+	case *syntax.BashPPNamedType:
+		return t.Name.Value == "comparable"
 	case *syntax.BashPPUnionType, *syntax.BashPPApproxType:
 		return true
 	}
@@ -341,6 +344,92 @@ func (r *Runner) bashPPMakeInterfaceValue(expr syntax.BashPPExpr, expected synta
 	return &bashPPInterfaceValue{dynamic: actual, cell: stored}, stored.vr, nil
 }
 
+// bashPPInterfaceAssignCandidate builds the assignment candidate for a target
+// declared with an interface type. The dynamic value and the interface value
+// naming its type are captured together, so `i = &T{…}` and `i = 42` store
+// what Go stores instead of being read as a bare scalar with no dynamic type.
+// It reports whether it claimed the assignment at all.
+func (r *Runner) bashPPInterfaceAssignCandidate(target *bashPPCell, expr syntax.BashPPExpr) (*bashPPCell, bool, error) {
+	if target == nil || target.declType == nil || expr == nil {
+		return nil, false, nil
+	}
+	if _, ok := r.bashPPInterfaceType(target.declType); !ok {
+		return nil, false, nil
+	}
+	iv, vr, err := r.bashPPMakeInterfaceValue(expr, target.declType)
+	if err != nil {
+		return nil, true, err
+	}
+	cell := &bashPPCell{vr: vr, declType: target.declType, interfaceValue: iv}
+	if iv != nil && iv.cell != nil {
+		cell.valueMeta, cell.object, cell.scalarKind = iv.cell.valueMeta, iv.cell.object, iv.cell.scalarKind
+	}
+	return cell, true, nil
+}
+
+// bashPPAssertCandidate settles `x = i.(T)` — a one-result type assertion used
+// as an assignment's right-hand side. It reports whether it claimed the
+// expression. A failed one-result assertion is a language-level panic in Go,
+// which the caller keeps by making the failure fatal.
+func (r *Runner) bashPPAssertCandidate(expr syntax.BashPPExpr) (*bashPPCell, bool, error) {
+	assert, ok := expr.(*syntax.BashPPTypeAssertExpr)
+	if !ok {
+		return nil, false, nil
+	}
+	if assert.TypeToken != nil {
+		return nil, true, fmt.Errorf("BASHPP-EASSERT-TYPE: .(type) is only valid in a type switch")
+	}
+	values, source, err := r.bashPPTypeAssert(assert, false)
+	if err != nil {
+		return nil, true, err
+	}
+	if source == nil {
+		return &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: values[0]}}, true, nil
+	}
+	candidate := *source
+	return &candidate, true, nil
+}
+
+// bashPPBindInterfaceParam gives a parameter declared with an interface type
+// the interface value Go's assignment to it would have produced: the argument
+// keeps its own dynamic type, which is what a type switch or an assertion in
+// the body reads. An argument that already arrived as an interface value keeps
+// the dynamic type it was carrying.
+func (r *Runner) bashPPBindInterfaceParam(cell *bashPPCell, typ syntax.BashPPTypeExpr) error {
+	if cell == nil || typ == nil || cell.interfaceValue != nil {
+		return nil
+	}
+	iface, ok := r.bashPPInterfaceType(typ)
+	if !ok {
+		return nil
+	}
+	dynamic := cell.declType
+	if dynamic == nil {
+		if meta := bashPPCellMeta(cell); meta != nil {
+			dynamic = meta.typ
+		}
+	}
+	if dynamic == nil && cell.typeName != "" {
+		dynamic = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: cell.typeName}}
+	}
+	if dynamic == nil {
+		if name := bashPPDefaultScalarTypeName(cell.scalarKind); name != "" {
+			dynamic = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: name}}
+		}
+	}
+	// Without a dynamic type there is nothing an interface could record, and
+	// a value already typed as the interface itself is not its own dynamic
+	// type; both are left exactly as they arrived.
+	if dynamic == nil || bashPPTypeText(dynamic) == bashPPTypeText(typ) {
+		return nil
+	}
+	if err := r.bashPPImplements(dynamic, iface); err != nil {
+		return err
+	}
+	cell.interfaceValue = &bashPPInterfaceValue{dynamic: dynamic, cell: bashPPCopyInterfaceCell(cell)}
+	return nil
+}
+
 // bashPPCopyInterfaceCell captures the dynamic value at assignment time.
 // Structs and arrays are values and therefore need their own payload, while
 // pointers, maps, and slices deliberately retain the identities they carry.
@@ -382,7 +471,73 @@ func (r *Runner) bashPPCellForInterfaceExpr(expr syntax.BashPPExpr) (*bashPPCell
 		}
 		return cell, actual, nil
 	}
-	return nil, nil, fmt.Errorf("BASHPP-EINTERFACE-VALUE: interface assignment requires a named value")
+	// A dynamic value need not be a variable. `var i I = T{"hello"}`,
+	// `i = &T{}` and `i = 42` all store a value the interface then owns, so
+	// each is materialized into an anonymous cell carrying the dynamic type
+	// the assignment's method-set check is made against.
+	switch x := expr.(type) {
+	case *syntax.BashPPParenExpr:
+		return r.bashPPCellForInterfaceExpr(x.X)
+	case *syntax.BashPPCompositeLit:
+		if x.LitType == nil {
+			return nil, nil, fmt.Errorf("BASHPP-EINTERFACE-VALUE: composite literal has no type")
+		}
+		value, meta, err := r.bashPPEvalComposite(x, nil)
+		if err != nil {
+			return nil, nil, err
+		}
+		cell := &bashPPCell{declType: x.LitType}
+		if named, ok := x.LitType.(*syntax.BashPPNamedType); ok && named.Name != nil {
+			cell.typeName = named.Name.Value
+		}
+		bashPPStoreCellValue(cell, value, meta)
+		return cell, x.LitType, nil
+	case *syntax.BashPPAddressExpr, *syntax.BashPPNewExpr:
+		ptr, err := r.bashPPPointerExprValue(expr)
+		if err != nil {
+			return nil, nil, err
+		}
+		cell := bashPPPointerCell(ptr)
+		if cell.declType == nil {
+			return nil, nil, fmt.Errorf("BASHPP-EINTERFACE-VALUE: pointer value has no dynamic type")
+		}
+		return cell, cell.declType, nil
+	}
+	value, err := r.bashPPEvalScalarExpr(expr)
+	if err != nil {
+		return nil, nil, err
+	}
+	name := value.typ
+	if name == "" {
+		name = bashPPDefaultScalarTypeName(value.value.Kind())
+	}
+	if name == "" {
+		return nil, nil, fmt.Errorf("BASHPP-EINTERFACE-VALUE: interface assignment requires a named value")
+	}
+	actual := &syntax.BashPPNamedType{Name: &syntax.Lit{Value: name}}
+	cell := &bashPPCell{
+		vr:         expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarString(value.value)},
+		scalarKind: value.value.Kind(),
+		typeName:   name,
+		declType:   actual,
+	}
+	return cell, actual, nil
+}
+
+// bashPPDefaultScalarTypeName names the Go default type of an untyped
+// constant, which is the dynamic type it takes on when stored in an interface.
+func bashPPDefaultScalarTypeName(kind constant.Kind) string {
+	switch kind {
+	case constant.Bool:
+		return "bool"
+	case constant.String:
+		return "string"
+	case constant.Int:
+		return "int"
+	case constant.Float:
+		return "float64"
+	}
+	return ""
 }
 
 func (r *Runner) bashPPTypeAssert(assert *syntax.BashPPTypeAssertExpr, commaOK bool) ([]string, *bashPPCell, error) {

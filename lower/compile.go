@@ -343,7 +343,7 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 			pending, _ = strconv.Atoi(strings.TrimPrefix(trimmed, "// lower:"))
 			continue
 		}
-		if pending >= 0 && trimmed != "" {
+		if pending >= 0 && trimmed != "" && !strings.HasPrefix(trimmed, "//") {
 			m := e.marks[pending]
 			m.GoLine = i + 1
 			m.GoCol = len(line) - len(strings.TrimLeft(line, "\t ")) + 1
@@ -438,6 +438,11 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 			return nil, diagnostics
 		}
 	}
+	if e.goSource {
+		if err := goSourcePositions(result, e.sourceName); err != nil {
+			return nil, e.fail(file, CodeExpr, err.Error())
+		}
+	}
 	return result, nil
 }
 
@@ -450,7 +455,7 @@ func (e *emitter) sourceMappings(source []byte) []Mapping {
 			pending, _ = strconv.Atoi(strings.TrimPrefix(trimmed, "// lower:"))
 			continue
 		}
-		if pending >= 0 && trimmed != "" {
+		if pending >= 0 && trimmed != "" && !strings.HasPrefix(trimmed, "//") {
 			m := e.marks[pending]
 			m.GoLine = i + 1
 			m.GoCol = len(line) - len(strings.TrimLeft(line, "\t ")) + 1
@@ -877,6 +882,15 @@ func (e *emitter) command(c syntax.Command) (string, error) {
 			} else {
 				rhs, err = e.expr(n.Expr)
 			}
+		case e.goSource && len(n.RhsExprs) > 0:
+			parts := make([]string, len(n.RhsExprs))
+			for i, x := range n.RhsExprs {
+				parts[i], err = e.expr(x)
+				if err != nil {
+					return "", err
+				}
+			}
+			rhs = strings.Join(parts, ", ")
 		case n.FuncLit != nil:
 			rhs, err = e.literal(n.FuncLit)
 		case len(n.MethodValue) > 0:
@@ -1166,6 +1180,9 @@ func (e *emitter) expr(x syntax.BashPPExpr) (string, error) {
 	case *syntax.BashPPCall:
 		return e.call(n)
 	case *syntax.BashPPCompositeLit:
+		if e.goSource {
+			return e.compositeExpr(n)
+		}
 		if text, handled, err := e.promotedCompositeExpr(n, e.declaredTypes); handled || err != nil {
 			return text, err
 		}
@@ -1239,7 +1256,15 @@ func (e *emitter) expr(x syntax.BashPPExpr) (string, error) {
 		r, err := e.expr(n.Y)
 		return "(" + l + " " + n.Op.Value + " " + r + ")", err
 	case *syntax.BashPPConvertExpr:
-		if !scalarType(n.ConvType.Value) && !(e.goSource && e.typeNames[n.ConvType.Value]) {
+		if e.goSource && n.ConvTypeExpr != nil {
+			target, err := e.typeExpr(n.ConvTypeExpr)
+			if err != nil {
+				return "", err
+			}
+			v, err := e.expr(n.X)
+			return "(" + target + ")(" + v + ")", err
+		}
+		if !scalarType(n.ConvType.Value) && !(e.goSource && (e.typeNames[n.ConvType.Value] || n.ConvType.Value == "complex64" || n.ConvType.Value == "complex128")) {
 			return "", e.fail(n, CodeUnsupported, "non-scalar conversion")
 		}
 		v, err := e.expr(n.X)
