@@ -3,11 +3,12 @@ id: 825f8083451e
 kind: task
 title: Implement unchanged Go channel expression and frame semantics
 seq: 51
-status: todo
+status: done
 priority: p0
 created: 2026-09-09T06:37:55.650583Z
 assignee: qiangli
 sprint: 118
+closed: 2026-09-09T18:26:30.702157Z
 ---
 
-Sprint118 current candidate002 measured failures: Tour buffered-channels/channels/range-and-close/select; GbE channel-buffering/channel-directions/closing-channels. Receive expressions fmt.Println(<-ch) report unary ILLEGAL; sends pass raw local variable j/sum rather than evaluated scalar; goroutine calls fibonacci(cap(c),c) retain rawexpression. Fix actual GoSource channel receive/send/function argument evaluation and goroutineframe semantics using existing Bash++runtime, preserving oldBash++ABI and guards. Own interp/bashpp_concurrency*.go, interp/bashpp_chan*.go, interp/gosource_calls.go and newfocused tests; inspectactualfilepaths and notify manager if neededsharedfileoutside ownership beforeediting. Do notmodifygosource/lower, nativebridgefiles, scalar/p1/functopglobal sincepeersown. Reproduce unchangedsource from canonical ../bashpp-tests/tour/_content/tour and examples/channel*. Candidate002 rawlogs manager evidence. ScopeGOsourceonly whereappropriate preserveClassic. No source rewrites/fullnativeGo forwarding. Need3mode diffs andrace focusedtests. Commit proper Sprint118,Story+ID. No subagents/push/closure;30minbounded. Send API/fileownership plan early. Parent6f0c4d9a31be.
+Resolved by the reviewed typed-receive/capture path already published in candidate017 at sh 037aaf8687e0aa049efb4f7a2dceb3a4941e9bbc. Candidate017 durable evidence records Tour buffered-channels, channels, range-and-close, and select PASS in baseline/interpreted/compiled, and Go by Example channel-buffering, channel-directions, and closing-channels pass in oracle/interpreted/compiled. The Sprint 118 Gemini investigation reproduced goroutine function literals, fibonacci(cap(ch), ch), computed send arguments, and receive expressions as passing on current baseline; its scratch-only branch was rejected and no additional code was needed. Candidate018 retains these commits.
