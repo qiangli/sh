@@ -139,17 +139,32 @@ func (r *Runner) bashPPConvertToCollection(x *syntax.BashPPConvertExpr) (any, *b
 		return nil, nil, true, fmt.Errorf("BASHPP-EEXPR-CONVERT: cannot convert %s to %s", scalar.value.Kind(), bashPPTypeText(target))
 	}
 	text := constant.StringVal(scalar.value)
-	elements := []any{}
+	var units []int
 	if elemKind == "byte" {
 		for _, b := range []byte(text) {
-			elements = append(elements, int(b))
+			units = append(units, int(b))
 		}
 	} else {
 		for _, ru := range text {
-			elements = append(elements, int(ru))
+			units = append(units, int(ru))
 		}
 	}
-	meta := &bashPPCollectionMeta{kind: "slice", typ: target, sequence: make([]*bashPPCollectionMeta, len(elements))}
+	// Keep Classic's established []any growth. GoSource carries the original
+	// constant-string distinction rather than guessing from the runtime value.
+	if !r.bashPPGoSource {
+		elements := []any{}
+		for _, unit := range units {
+			elements = append(elements, unit)
+		}
+		return elements, &bashPPCollectionMeta{kind: "slice", typ: target, sequence: make([]*bashPPCollectionMeta, len(elements))}, true, nil
+	}
+	shape, _ := r.bashPPUnderlyingType(target).(*syntax.BashPPCollectionType)
+	capacity := bashPPStringConversionCapacity(text, elemKind, x.GoStringConstant)
+	elements, sequence := r.bashPPConvertedStringStorage(shape.Element, len(units), capacity)
+	for i, unit := range units {
+		elements[i] = unit
+	}
+	meta := &bashPPCollectionMeta{kind: "slice", typ: target, sequence: sequence}
 	return elements, meta, true, nil
 }
 

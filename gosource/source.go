@@ -11,6 +11,7 @@ import (
 	"go/scanner"
 	"go/token"
 	"go/types"
+	"go/version"
 	"io"
 	"sort"
 	"strings"
@@ -53,6 +54,10 @@ type Options struct {
 	RunMain bool
 	// Importer may resolve module dependencies. Nil uses the Go export importer.
 	Importer types.Importer
+	// GoVersion is passed unchanged to types.Config.GoVersion. Empty preserves
+	// the checker default; a nonempty value selects Go language semantics, not
+	// an SDK executable. Invalid or newer versions are rejected by the checker.
+	GoVersion string
 }
 type Program struct {
 	File          *syntax.File
@@ -82,6 +87,9 @@ func Parse(r io.Reader, name string, options Options) (*Program, error) {
 // Load processes a single package in lexical filename order, matching the Go
 // toolchain. Source bytes are neither modified nor executed by the native toolchain.
 func Load(sources []Source, options Options) (*Program, error) {
+	if options.GoVersion != "" && !version.IsValid(options.GoVersion) {
+		return nil, fmt.Errorf("gosource: invalid Go version %q", options.GoVersion)
+	}
 	if len(sources) == 0 {
 		return nil, fmt.Errorf("gosource: no source files")
 	}
@@ -97,19 +105,21 @@ func Load(sources []Source, options Options) (*Program, error) {
 		f, err := parser.ParseFile(c.fset, s.Name, s.Data, parser.ParseComments|parser.AllErrors)
 		if err != nil {
 			parseErrors = appendDiagnostics(parseErrors, err)
+		}
+		// A recovered file still contains declarations and bodies for the Go
+		// checker. Keep it for diagnostics only; no errored AST is converted.
+		if f == nil {
 			continue
 		}
 		if p.Package == "" {
 			p.Package = f.Name.Name
-		} else if f.Name.Name != p.Package {
-			return nil, fmt.Errorf("%s: package %s differs from %s", s.Name, f.Name.Name, p.Package)
 		}
-		tf := c.fset.File(f.Pos())
+		tf := c.fset.File(f.FileStart)
 		p.Sources = append(p.Sources, SourceInfo{s.Name, fmt.Sprintf("%x", sha256.Sum256(s.Data)), uint(tf.Base() - 1), uint(len(s.Data))})
 		c.files = append(c.files, f)
 		c.sources = append(c.sources, s)
 	}
-	if len(parseErrors) > 0 {
+	if len(c.files) == 0 {
 		return nil, parseErrors
 	}
 	imp := options.Importer
@@ -117,13 +127,17 @@ func Load(sources []Source, options Options) (*Program, error) {
 		imp = importer.Default()
 	}
 	var typeErrors ErrorList
-	config := types.Config{Importer: imp, Error: func(err error) { typeErrors = append(typeErrors, err) }}
+	config := types.Config{Importer: imp, GoVersion: options.GoVersion, Error: func(err error) { typeErrors = append(typeErrors, err) }}
 	pkg, err := config.Check(p.Package, c.fset, c.files, c.info)
-	if len(typeErrors) > 0 {
-		return nil, typeErrors
+	// Match the native checker test flow: parser diagnostics first, followed
+	// by semantic diagnostics from every recoverable file. Check's returned
+	// first error is already reported through Error; do not duplicate it.
+	diagnostics := append(parseErrors, typeErrors...)
+	if err != nil && len(typeErrors) == 0 {
+		diagnostics = appendDiagnostics(diagnostics, err)
 	}
-	if err != nil {
-		return nil, err
+	if len(diagnostics) > 0 {
+		return nil, diagnostics
 	}
 	if main, ok := pkg.Scope().Lookup("main").(*types.Func); ok && p.Package == "main" {
 		p.Main = main.Name()
@@ -173,6 +187,8 @@ func Load(sources []Source, options Options) (*Program, error) {
 	}
 	var imports, decls, funcs []*syntax.Stmt
 	vars := map[*types.Var]*syntax.BashPPDecl{}
+	tupleSpecs := map[*types.Var]*ast.ValueSpec{}
+	tupleDecls := map[*ast.ValueSpec]*ast.GenDecl{}
 	for _, f := range c.files {
 		for _, d := range f.Decls {
 			if fd, ok := d.(*ast.FuncDecl); ok {
@@ -192,8 +208,18 @@ func Load(sources []Source, options Options) (*Program, error) {
 				case *ast.TypeSpec:
 					decls = append(decls, c.stmt(c.typeDecl(gd, v)))
 				case *ast.ValueSpec:
+					valueSpec := v
+					if gd.Tok == token.VAR && len(v.Values) == 1 && len(v.Names) > 1 {
+						zero := *v
+						zero.Values = nil
+						valueSpec = &zero
+						tupleDecls[v] = gd
+						for _, n := range v.Names {
+							tupleSpecs[c.info.Defs[n].(*types.Var)] = v
+						}
+					}
 					for i, n := range v.Names {
-						node := c.valueDecl(gd, v, n, i)
+						node := c.valueDecl(gd, valueSpec, n, i)
 						if gd.Tok == token.VAR {
 							vars[c.info.Defs[n].(*types.Var)] = node
 						} else {
@@ -230,8 +256,16 @@ func Load(sources []Source, options Options) (*Program, error) {
 		}
 	}
 	for _, init := range c.info.InitOrder {
-		if len(init.Lhs) != 1 {
-			return nil, fmt.Errorf("%s: gosource: tuple package initialization is not implemented", c.fset.Position(init.Rhs.Pos()))
+		if len(init.Lhs) > 1 {
+			spec := tupleSpecs[init.Lhs[0]]
+			if spec == nil {
+				return nil, fmt.Errorf("%s: gosource: missing tuple initializer", c.fset.Position(init.Rhs.Pos()))
+			}
+			p.File.Stmts = append(p.File.Stmts, c.tupleValueDecls(tupleDecls[spec], spec)...)
+			for _, variable := range init.Lhs {
+				initialized[variable] = true
+			}
+			continue
 		}
 		v := init.Lhs[0]
 		p.File.Stmts = append(p.File.Stmts, c.stmt(vars[v]))

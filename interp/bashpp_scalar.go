@@ -407,7 +407,16 @@ func (r *Runner) bashPPUnaryScalar(op token.Token, x bashPPScalar) (bashPPScalar
 		if op == token.XOR && x.value.Kind() != constant.Int {
 			return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-OPERAND: operator ^ requires integer operand")
 		}
-		return r.bashPPTypedScalarResult(constant.UnaryOp(op, x.value, 0), x.typ, x.runtime)
+		precision := uint(0)
+		if r.bashPPGoSource && op == token.XOR {
+			typ := r.bashPPUnderlyingType(&syntax.BashPPNamedType{Name: &syntax.Lit{Value: x.typ}})
+			if named, ok := typ.(*syntax.BashPPNamedType); ok && named.Name != nil && bashPPIntegerType(named.Name.Value) {
+				if width, signed := bashPPIntegerWidth(named.Name.Value); !signed {
+					precision = uint(width)
+				}
+			}
+		}
+		return r.bashPPTypedScalarResult(constant.UnaryOp(op, x.value, precision), x.typ, x.runtime)
 	case token.NOT:
 		if x.value.Kind() != constant.Bool {
 			return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-OPERAND: operator ! requires boolean operand")
@@ -418,6 +427,21 @@ func (r *Runner) bashPPUnaryScalar(op token.Token, x bashPPScalar) (bashPPScalar
 }
 
 func (r *Runner) bashPPBinaryScalar(op token.Token, left, right bashPPScalar) (bashPPScalar, error) {
+	if r.bashPPGoSource {
+		canonical := func(name string) string {
+			if _, declared := r.bashPPTypes[name]; declared {
+				return name
+			}
+			switch name {
+			case "byte":
+				return "uint8"
+			case "rune":
+				return "int32"
+			}
+			return name
+		}
+		left.typ, right.typ = canonical(left.typ), canonical(right.typ)
+	}
 	resultType := left.typ
 	if resultType == "" {
 		resultType = right.typ
@@ -655,6 +679,23 @@ func (r *Runner) bashPPCompareExpr(left syntax.BashPPExpr, op token.Token, right
 	if err != nil {
 		return false, err
 	}
+	if r.bashPPGoSource {
+		lv.value = bashPPComparablePayload(lv.value, lv.meta)
+		rv.value = bashPPComparablePayload(rv.value, rv.meta)
+		// Indexed aggregate reads can carry native typed nils even when the
+		// containing aggregate is local. Reuse the evaluated operands.
+		if l, lok := goSourceNativeComparable(lv); lok {
+			if rr, rok := goSourceNativeComparable(rv); rok {
+				return r.bashPPNativeCompareValues(l, op, rr)
+			}
+		}
+	}
+	if equal, handled, err := r.goSourceInterfaceEqual(lv, rv); handled {
+		if op == token.NEQ {
+			equal = !equal
+		}
+		return equal, err
+	}
 	ok, err := bashPPCompareValues(lv.value, lv.meta, lv.nilLiteral, rv.value, rv.meta, rv.nilLiteral)
 	if err != nil {
 		return false, err
@@ -809,6 +850,24 @@ func bashPPPointerEqual(left, right any) bool {
 		}
 	}
 	return true
+}
+
+// bashPPComparablePayload recovers the value that decides an interface's
+// identity. A variable carries its *bashPPInterfaceValue on the cell, but an
+// interface stored inside a slice, map or struct keeps that identity on the
+// element meta and leaves the JSON-shaped payload as the printable value.
+// Reading such an element back therefore yields "" rather than the interface,
+// which made an untyped nil element compare unequal to nil while the same nil
+// held in a variable compared equal. Recovering it here keeps the nil
+// interface and a typed nil interface distinguishable on read-back.
+func bashPPComparablePayload(value any, meta *bashPPCollectionMeta) any {
+	if meta == nil || meta.kind != "interface" || meta.interfaceValue == nil {
+		return value
+	}
+	if _, ok := value.(*bashPPInterfaceValue); ok {
+		return value
+	}
+	return meta.interfaceValue
 }
 
 func bashPPNilComparableValue(value any) bool {

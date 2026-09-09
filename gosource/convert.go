@@ -111,6 +111,14 @@ func (c *converter) typ(e ast.Expr) s.BashPPTypeExpr {
 	}
 	switch x := e.(type) {
 	case *ast.Ident:
+		if c.info.ObjectOf(x) == types.Universe.Lookup("any") {
+			return &s.BashPPInterfaceType{Interface: c.ident(x), Lbrace: c.pos(x.End() - 1), Rbrace: c.pos(x.End() - 1)}
+		}
+		if object := c.info.ObjectOf(x); object != nil {
+			if _, parameter := object.Type().(*types.TypeParam); parameter {
+				return &s.BashPPTypeParamType{Name: c.ident(x)}
+			}
+		}
 		return &s.BashPPNamedType{Name: c.ident(x)}
 	case *ast.SelectorExpr:
 		return &s.BashPPNamedType{Name: c.lit(x.Pos(), c.ident(x.X.(*ast.Ident)).Value+"."+x.Sel.Name)}
@@ -272,6 +280,12 @@ func (c *converter) valueDecl(g *ast.GenDecl, v *ast.ValueSpec, n *ast.Ident, in
 				}
 				return p.Name()
 			})
+			// The synthetic AST has no go/types object bindings. Expand the
+			// predeclared any alias so it keeps its interface shape instead
+			// of becoming an unresolved named type during initialization.
+			if typeName == "any" && types.Identical(obj.Type(), types.Universe.Lookup("any").Type()) {
+				typeName = "interface{}"
+			}
 			parsed, err := parser.ParseExpr(typeName)
 			if err != nil {
 				c.fail(n, "inferred variable type")
@@ -417,7 +431,9 @@ func (c *converter) exprValue(e ast.Expr) s.BashPPExpr {
 				typeLit = c.lit(x.Fun.Pos(), c.text(x.Fun))
 				typeLit.ValueEnd = c.pos(x.Fun.End())
 			}
-			return &s.BashPPConvertExpr{ConvType: typeLit, ConvTypeExpr: c.typ(x.Fun), Lparen: c.pos(x.Lparen), Rparen: c.pos(x.Rparen), X: c.expr(x.Args[0])}
+			value := c.info.Types[x.Args[0]].Value
+			stringConstant := value != nil && value.Kind() == constant.String
+			return &s.BashPPConvertExpr{GoStringConstant: stringConstant, ConvType: typeLit, ConvTypeExpr: c.typ(x.Fun), Lparen: c.pos(x.Lparen), Rparen: c.pos(x.Rparen), X: c.expr(x.Args[0])}
 		}
 		return c.call(x)
 	}
@@ -503,6 +519,10 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 		for _, spec := range g.Specs {
 			switch v := spec.(type) {
 			case *ast.ValueSpec:
+				if g.Tok == token.VAR && len(v.Values) == 1 && len(v.Names) > 1 {
+					out = append(out, c.tupleValueDecls(g, v)...)
+					continue
+				}
 				for i, n := range v.Names {
 					out = append(out, c.stmt(c.valueDecl(g, v, n, i)))
 				}
@@ -540,6 +560,7 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 							out.MakeChan = &s.BashPPMakeChan{Make: out.Call.Fun[0], ChanType: ch, Lparen: out.Call.Lparen, Rparen: out.Call.Rparen}
 							if len(rhs.Args) > 1 {
 								out.MakeChan.Capacity = c.word(rhs.Args[1])
+								out.MakeChan.CapacityExpr = c.expr(rhs.Args[1])
 							}
 							out.Call = nil
 							out.Rhs = nil

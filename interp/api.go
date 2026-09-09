@@ -106,9 +106,12 @@ type Runner struct {
 	// bashPPGoSource selects ordinary Go package scope semantics for gosource trees.
 	bashPPGoSource      bool
 	bashPPGoSourceDecls map[string]bool
-	bashPPGoSourceFile  *syntax.File
-	goSourceTesting     *GoSourceTestingSession
-	bashPPScope         *bashPPScope
+	// bashPPGoSourcePending holds the package-level type names installed by
+	// the pre-registration pass but not yet reached by their own statement.
+	bashPPGoSourcePending map[string]bool
+	bashPPGoSourceFile    *syntax.File
+	goSourceTesting       *GoSourceTestingSession
+	bashPPScope           *bashPPScope
 	// bashPPFuncScopes records, per function name, the lexical environment
 	// visible where the function was defined. It is preserved across
 	// [Runner.Reset] for the same reason Funcs is: a function that survives a
@@ -147,6 +150,25 @@ type Runner struct {
 	// where [bashPPCloner] can copy it alongside the scopes it captured. It is
 	// preserved across [Runner.Reset] for the same reason bashPPFuncs is.
 	bashPPClosures []*bashPPFunc
+	// bashPPGoSourceCapture is the set of cells the task currently being
+	// snapshotted captures lexically, in GoSource mode only. It is set for the
+	// duration of one [Runner.bashPPTaskSnapshot] and is read by the scope
+	// cloner, which aliases these cells instead of copying them; see
+	// gosource_task_capture.go. Nil everywhere else, which is what keeps the
+	// classic Bash++ deep-copy snapshot unchanged.
+	bashPPGoSourceCapture map[*bashPPCell]bool
+	// bashPPGoSourcePin is the function value a launched GoSource task already
+	// resolved in its parent. It keeps the task on that exact function and
+	// keeps a computed callee from being evaluated a second time; see
+	// gosource_task_capture.go. Nil everywhere else.
+	bashPPGoSourcePin *bashPPGoSourcePin
+	// bashPPGoSourceSharableCells memoizes, per cell, whether GoSource task
+	// capture may grant it identity. The answer is taken while this runner is
+	// still the cell's sole owner and never revisited; see
+	// [Runner.bashPPGoSourceSharable]. A task inherits its own CLONE of the
+	// map, never the map itself, so the record of what is already shared
+	// reaches nested launches without two goroutines writing one map.
+	bashPPGoSourceSharableCells map[*bashPPCell]bool
 	// bashPPDeferStack is the LIFO stack of deferred calls awaiting the return
 	// of the func invocations currently on the call stack. Each invocation
 	// remembers the stack length it entered at and runs everything pushed above
@@ -167,6 +189,11 @@ type Runner struct {
 	// non-zero body status from a diagnosed short-declaration failure which
 	// must not be cleared while settling declared results.
 	bashPPShortFailureSeq uint64
+	// bashPPRecoverSeq counts the times `recover` has reported "nothing to
+	// recover" through the exit status. It is the provenance a hosted test
+	// callback needs: only a status this counter stamped may be reduced, and
+	// only when the counter moved while that one callback ran.
+	bashPPRecoverSeq uint64
 	// bashPPPanic is the panic currently unwinding this shell, if any. It is
 	// deliberately NOT copied into a subshell: a panic is scoped to the shell
 	// that raised it, exactly as a Go panic is scoped to its goroutine.
@@ -921,6 +948,14 @@ type exitStatus struct {
 	noNegate      bool // whether a surrounding `!` must not invert this status
 	errexitExempt bool // whether this failure inherited an errexit exemption
 
+	// recoverSeq stamps a status that `recover` itself reported, carrying the
+	// value [Runner.bashPPRecoverSeq] held when it did. It is provenance, not
+	// a status: a zero stamp, or a stamp older than the runner's counter,
+	// means this status came from somewhere else and must be taken at face
+	// value. clear() drops it, because a cleared status is no longer the
+	// answer recover gave.
+	recoverSeq uint64
+
 	// discarding qualifies exiting: a variable-assignment error in a
 	// non-interactive non-POSIX shell aborts the current top-level
 	// command (bash's DISCARD longjmp) rather than the whole shell.
@@ -945,6 +980,7 @@ func (e *exitStatus) clear() {
 	}
 	e.code = 0
 	e.err = nil
+	e.recoverSeq = 0
 }
 
 func (e *exitStatus) ok() bool { return e.code == 0 }
@@ -3136,6 +3172,13 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 		if r.Dialect() == syntax.LangBashPP && !r.bashPPValidatePackageInitOrder(node) {
 			break
 		}
+		// Package-level type names are visible to the whole package, so they
+		// are registered before any declaration statement runs. A nested Run —
+		// a testing session's extra file, say — must not consume this file's
+		// outstanding registrations, so they are saved across it.
+		savedPending := r.bashPPGoSourcePending
+		r.bashPPGoSourceRegisterTypes(node)
+		defer func() { r.bashPPGoSourcePending = savedPending }()
 		if r.stdinSourceEligible() && node.Name == "" && len(r.bashSource) > 0 {
 			r.stdinSourceActive = true
 		}
@@ -3515,7 +3558,21 @@ func (r *Runner) subshell(background bool) *Runner {
 	// a data race for a background subshell, which runs in its own goroutine.
 	if r.bashPPScope != nil || len(r.bashPPFuncScopes) > 0 || len(r.bashPPFuncs) > 0 ||
 		len(r.bashPPClosures) > 0 {
+		// Deliberate resolution of the two sprint118 lines that met here:
+		// the clone still carries the dependency session it belongs to (so a
+		// native handle resolves against r2), and it still honours the
+		// GoSource lexical capture set (so a cell an original Go closure
+		// genuinely names is aliased rather than deep copied).
 		cloner := newBashPPClonerFor(r2)
+		cloner.shared = r.bashPPGoSourceCapture
+		cloner.goSourceTask = r.bashPPGoSource && r.bashPPGoSourceCapture != nil
+		// The GoSource capture-ownership record travels with the copy. It is
+		// the superset of every cell ever shared, so a nested launch inside
+		// this copy answers a shared cell from the record instead of reading a
+		// payload another goroutine may be writing; see
+		// [Runner.bashPPGoSourceSharable]. The clone is private to r2, so the
+		// two runners never write one map.
+		r2.bashPPGoSourceSharableCells = maps.Clone(r.bashPPGoSourceSharableCells)
 		r2.bashPPScope = cloner.clone(r.bashPPScope)
 		if r.bashPPFuncScopes != nil {
 			r2.bashPPFuncScopes = make(map[string]*bashPPScope, len(r.bashPPFuncScopes))

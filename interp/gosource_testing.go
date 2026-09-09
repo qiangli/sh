@@ -194,14 +194,52 @@ func (s *GoSourceTestingSession) runFunction(ctx context.Context, name string, f
 			return fmt.Errorf("gosource: cannot bind test callback %s", name)
 		}
 	}
+	recoverMark := r.bashPPRecoverSeq
 	r.bashPPInvoke(ctx, fn, args)
 	if r.exit.err != nil {
 		return r.exit.err
 	}
-	if r.exit.code != 0 {
-		return ExitStatus(r.exit.code)
+	if code := r.testingCallbackStatus(recoverMark); code != 0 {
+		return ExitStatus(code)
 	}
 	return ctx.Err()
+}
+
+// testingCallbackStatus reduces the runner state left by one returned test
+// callback to the status that actually failed it. recoverMark is
+// [Runner.bashPPRecoverSeq] sampled immediately before that one callback ran.
+//
+// A Go `func(*testing.T)` returns no value and has no exit status, so the
+// residual truthiness of whatever statement happened to run last must not
+// decide the test outcome. `recover()` is the case the corpus hits: with
+// nothing to recover it deliberately reports status 1 (see
+// [Runner.bashPPPredeclared]), so an original body ending in
+// `defer func() { recover() }()` returned status 1 and failed a test that
+// Go passes.
+//
+// The reduction is deliberately NOT "status 1 is not a failure". A status 1
+// is discarded only when all of the following hold, so that a native bridge
+// or runtime failure which happens to report 1 still fails its test:
+//
+//   - the status carries recover's own provenance stamp, and that stamp is the
+//     current one — recover reported it and nothing has reported since;
+//   - the stamp was issued while THIS callback ran, so a stamp left by an
+//     earlier callback cannot excuse this one;
+//   - no terminating condition is pending: an explicit exit, a fatal exit, or
+//     a panic still unwinding out of the body.
+//
+// A fatal interpreter error is already returned by the caller through exit.err
+// before this runs, and every other status — including [bashPPPanicStatus] —
+// is returned untouched.
+func (r *Runner) testingCallbackStatus(recoverMark uint64) uint8 {
+	recovered := r.exit.recoverSeq != 0 &&
+		r.exit.recoverSeq == r.bashPPRecoverSeq &&
+		r.exit.recoverSeq > recoverMark
+	if r.exit.code == 1 && recovered &&
+		!r.exit.exiting && !r.exit.fatalExit && !r.bashPPPanicking() {
+		return 0
+	}
+	return r.exit.code
 }
 
 // bashPPTestingCall handles only the host testing capability. All ordinary

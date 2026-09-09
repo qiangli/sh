@@ -165,6 +165,11 @@ type bashPPCloner struct {
 	values   *bashPPObjectCloner
 	metas    map[*bashPPCollectionMeta]*bashPPCollectionMeta
 	pointers map[*bashPPPointer]*bashPPPointer
+	// shared are cells to alias rather than copy, because an original Go
+	// closure captures them by reference; see gosource_task_capture.go. It is
+	// nil for every classic Bash++ clone, so the deep copy is unchanged there.
+	shared       map[*bashPPCell]bool
+	goSourceTask bool
 }
 
 func newBashPPCloner() *bashPPCloner { return newBashPPClonerFor(nil) }
@@ -225,6 +230,22 @@ func (c *bashPPCloner) cloneCell(cell *bashPPCell) *bashPPCell {
 	}
 	if copied, ok := c.cells[cell]; ok {
 		return copied
+	}
+	if c.shared[cell] {
+		// GoSource lexical capture: the task and its parent must name one
+		// variable. Memoize the identity so every other edge which reaches
+		// this cell — an alias, a closure's captured scope, a pointer target —
+		// lands on the same shared cell rather than forking a copy.
+		c.cells[cell] = cell
+		return cell
+	}
+	if c.goSourceTask && !cell.constant {
+		// Exact Go lexical capture has already selected every outer binding
+		// a carried original callable can access. Omit unrelated locals:
+		// reading even their scalar slots can race with a task using &local.
+		// Actual argument values are prepared separately before this clone.
+		c.cells[cell] = nil
+		return nil
 	}
 	dup := *cell
 	copied := &dup

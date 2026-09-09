@@ -12,12 +12,17 @@ import (
  "reflect"
  "strconv"
  "sync"
+ bppTextTemplate "text/template"
+ bppTemplateParse "text/template/parse"
 //IMPORTS
 )
 
 //CONNECTION
 
 type value struct {
+ ReaderBuffer []byte `json:"reader_buffer,omitempty"`
+ ReaderLength int `json:"reader_length,omitempty"`
+ CallArgs []value `json:"call_args,omitempty"`
  NativeType string `json:"native_type,omitempty"`
  Origin uint64 `json:"origin,omitempty"`
  Interface string `json:"interface,omitempty"`
@@ -27,13 +32,14 @@ type value struct {
  Handle uint64 `json:"handle,omitempty"`
  Elements []value `json:"elements,omitempty"`
  Fields map[string]value `json:"fields,omitempty"`
- Entries []entry `json:"entries,omitempty"`
+ Entries []bppProtocolEntry `json:"entries,omitempty"`
 }
-type entry struct {Key value `json:"key"`; Value value `json:"value"`}
-type request struct { ID uint64 `json:"id"`; Op string `json:"op"`; Selector string `json:"selector"`; Receiver *value `json:"receiver,omitempty"`; Args []value `json:"args,omitempty"`; Spread bool `json:"spread,omitempty"`; Values []value `json:"values,omitempty"`; Error string `json:"error,omitempty"` }
+type bppProtocolEntry struct {Key value `json:"key"`; Value value `json:"value"`}
+type sliceBuffer struct {Index int `json:"index"`;Length int `json:"length"`;Value value `json:"value"`}
+type request struct { SliceBuffers []sliceBuffer `json:"slice_buffers,omitempty"`; ID uint64 `json:"id"`; Op string `json:"op"`; Selector string `json:"selector"`; Receiver *value `json:"receiver,omitempty"`; Args []value `json:"args,omitempty"`; Spread bool `json:"spread,omitempty"`; Values []value `json:"values,omitempty"`; Error string `json:"error,omitempty"` }
 // Op, Selector and Receiver are set only on a callback: the reverse direction
 // in which this helper asks the interpreter to run an original method body.
-type response struct { Panic *value `json:"panic,omitempty"`; ID uint64 `json:"id"`; Op string `json:"op,omitempty"`; Selector string `json:"selector,omitempty"`; Receiver *value `json:"receiver,omitempty"`; Values []value `json:"values,omitempty"`; Error string `json:"error,omitempty"` }
+type response struct { SliceUpdates []sliceBuffer `json:"slice_updates,omitempty"`; Panic *value `json:"panic,omitempty"`; ID uint64 `json:"id"`; Op string `json:"op,omitempty"`; Selector string `json:"selector,omitempty"`; Receiver *value `json:"receiver,omitempty"`; Values []value `json:"values,omitempty"`; Error string `json:"error,omitempty"` }
 var symbols = map[string]reflect.Value{
 //SYMBOLS
 }
@@ -49,7 +55,7 @@ func localTypeKey(name string) string { expr,err:=parser.ParseExpr(name);if err!
 //LOCALTYPES
 
 var originalPointers = struct {sync.Mutex; values map[uint64]reflect.Value; ids map[uintptr]uint64}{values:map[uint64]reflect.Value{},ids:map[uintptr]uint64{}}
-var handles = struct { sync.Mutex; next uint64; values map[uint64]reflect.Value }{values: map[uint64]reflect.Value{}}
+var handles = struct { sync.Mutex; next uint64; values map[uint64]reflect.Value; stop chan struct{} }{values: map[uint64]reflect.Value{},stop:make(chan struct{})}
 func typeID(t reflect.Type) string { if t.Name()!="" && t.PkgPath()!="" {return t.PkgPath()+"."+t.Name()}; return t.String() }
 func nativeTypeID(t reflect.Type) string {if t.Kind()==reflect.Pointer{return "*"+nativeTypeID(t.Elem())};if t.Name()!=""&&t.PkgPath()!=""{return t.PkgPath()+"."+t.Name()};return t.String()}
 func encode(v reflect.Value) value {
@@ -75,10 +81,10 @@ func structural(v reflect.Value) value {
  static:="";if v.Kind()==reflect.Interface {static=typeID(v.Type());if v.IsNil(){return value{Kind:"nil",Type:static,Interface:static}};v=v.Elem()}
  result:=value{Type:typeID(v.Type()),Interface:static}
  switch v.Kind(){
- case reflect.Pointer:if v.IsNil(){return value{Kind:"nil",Type:result.Type,Interface:static}};if pkg:=v.Type().Elem().PkgPath();pkg!=""&&pkg!="main"{encoded:=encode(v);encoded.Interface=static;return encoded};inner:=structural(v.Elem());inner.Interface=static;originalPointers.Lock();inner.Origin=originalPointers.ids[v.Pointer()];originalPointers.Unlock();return inner
+ case reflect.Pointer:if pkg:=v.Type().Elem().PkgPath();pkg!=""&&pkg!="main"{encoded:=encode(v);encoded.Interface=static;return encoded};if v.IsNil(){return value{Kind:"nil",Type:result.Type,Interface:static}};inner:=structural(v.Elem());inner.Interface=static;originalPointers.Lock();inner.Origin=originalPointers.ids[v.Pointer()];originalPointers.Unlock();return inner
  case reflect.Struct:if codec,ok:=localStructCodecs[v.Type()];ok{encoded:=codec.structural(v);encoded.Interface=static;return encoded};if v.Type().PkgPath()!=""{encoded:=encode(v);encoded.Interface=static;return encoded};result.Kind="struct";result.Fields=map[string]value{};for i:=range v.NumField(){f:=v.Type().Field(i);if !f.IsExported(){continue};result.Fields[f.Name]=structural(v.Field(i))};return result
  case reflect.Slice,reflect.Array:if v.Kind()==reflect.Slice&&v.IsNil(){return value{Kind:"nil",Type:result.Type,Interface:static}};result.Kind="slice";if v.Kind()==reflect.Array{result.Kind="array"};for i:=range v.Len(){result.Elements=append(result.Elements,structural(v.Index(i)))};return result
- case reflect.Map:if v.IsNil(){return value{Kind:"nil",Type:result.Type,Interface:static}};result.Kind="map";for iter:=v.MapRange();iter.Next();{result.Entries=append(result.Entries,entry{Key:structural(iter.Key()),Value:structural(iter.Value())})};return result
+ case reflect.Map:if v.IsNil(){return value{Kind:"nil",Type:result.Type,Interface:static}};result.Kind="map";for iter:=v.MapRange();iter.Next();{result.Entries=append(result.Entries,bppProtocolEntry{Key:structural(iter.Key()),Value:structural(iter.Value())})};return result
  }
  encoded:=encode(v);encoded.Interface=static;return encoded
 }
@@ -111,8 +117,12 @@ func resolveType(name string) reflect.Type {
  if t:=types[localTypeKey(name)];t!=nil{return t}
  expression,err:=parser.ParseExpr(name);if err!=nil{return nil}
  var walk func(ast.Expr) reflect.Type
- walk=func(expr ast.Expr) reflect.Type {switch e:=expr.(type){
+ walk=func(expr ast.Expr) reflect.Type {var canonical bytes.Buffer;if format.Node(&canonical,token.NewFileSet(),expr)==nil {if typ:=types[canonical.String()];typ!=nil{return typ}};switch e:=expr.(type){
  case *ast.StarExpr:element:=walk(e.X);if element!=nil{return reflect.PointerTo(element)}
+ case *ast.FuncType:
+  fields:=func(list *ast.FieldList)([]reflect.Type,bool,bool){var out []reflect.Type;variadic:=false;if list==nil{return out,false,true};for i,f:=range list.List{expr:=f.Type;if ell,ok:=expr.(*ast.Ellipsis);ok{if i!=len(list.List)-1{return nil,false,false};variadic=true;expr=&ast.ArrayType{Elt:ell.Elt}};typ:=walk(expr);if typ==nil{return nil,false,false};n:=len(f.Names);if n==0{n=1};for j:=0;j<n;j++{out=append(out,typ)}};return out,variadic,true}
+  in,variadic,ok:=fields(e.Params);if !ok{return nil};out,resultVariadic,ok:=fields(e.Results);if !ok||resultVariadic{return nil};return reflect.FuncOf(in,out,variadic)
+ case *ast.ChanType:element:=walk(e.Value);if element!=nil{direction:=reflect.BothDir;if e.Dir==ast.RECV{direction=reflect.RecvDir};if e.Dir==ast.SEND{direction=reflect.SendDir};return reflect.ChanOf(direction,element)}
  case *ast.Ident:return types[e.Name]
  case *ast.ArrayType:element:=walk(e.Elt);if element==nil{return nil};if e.Len==nil{return reflect.SliceOf(element)};if lit,ok:=e.Len.(*ast.BasicLit);ok{n,err:=strconv.Atoi(lit.Value);if err==nil&&n>=0{return reflect.ArrayOf(n,element)}}
  case *ast.MapType:key,element:=walk(e.Key),walk(e.Value);if key!=nil&&element!=nil&&key.Comparable(){return reflect.MapOf(key,element)}
@@ -123,7 +133,15 @@ func resolveType(name string) reflect.Type {
 }
 func decode(v value, target reflect.Type)(reflect.Value,error){
  var result reflect.Value
- if v.Kind=="nil" {if target==nil{return reflect.Value{},nil}; switch target.Kind(){case reflect.Chan,reflect.Func,reflect.Interface,reflect.Map,reflect.Pointer,reflect.Slice:return reflect.Zero(target),nil};return result,fmt.Errorf("nil is not assignable to %s",target)}
+ if v.Kind=="nil" {
+  typ:=target
+  if v.Type!="" {typ=resolveType(v.Type);if typ==nil{return result,fmt.Errorf("unregistered nil bridge type %q",v.Type)}}
+  if typ==nil{return reflect.Value{},nil}
+  switch typ.Kind(){case reflect.Chan,reflect.Func,reflect.Interface,reflect.Map,reflect.Pointer,reflect.Slice:default:return result,fmt.Errorf("nil is not assignable to %s",typ)}
+  result=reflect.Zero(typ)
+  if target==nil||typ.AssignableTo(target){return result,nil}
+  return reflect.Value{},fmt.Errorf("nil %s is not assignable to %s",typ,target)
+ }
  if v.Kind=="handle" {handles.Lock();result=handles.values[v.Handle];handles.Unlock();if !result.IsValid(){return result,fmt.Errorf("unknown native handle %d",v.Handle)}} else {
   typ:=resolveType(v.Type)
   if v.Type!="" && typ==nil {return result,fmt.Errorf("unregistered bridge type %q",v.Type)}
@@ -150,7 +168,8 @@ func decode(v value, target reflect.Type)(reflect.Value,error){
   case "slice","array":if typ.Kind()==reflect.Slice {result=reflect.MakeSlice(typ,len(v.Elements),len(v.Elements))} else if typ.Kind()!=reflect.Array||typ.Len()!=len(v.Elements){return result,fmt.Errorf("invalid collection %s",typ)};for i,elem:=range v.Elements{item,e:=decode(elem,typ.Elem());if e!=nil{return result,e};result.Index(i).Set(item)}
   case "pointer":if typ.Kind()!=reflect.Pointer{return result,fmt.Errorf("pointer for %s",typ)};if len(v.Elements)!=1{return result,fmt.Errorf("pointer needs one referent")};item,e:=decode(v.Elements[0],typ.Elem());if e!=nil{return result,e};originalPointers.Lock();if v.Origin!=0 {result=originalPointers.values[v.Origin]};if !result.IsValid() || result.Type()!=typ || result.IsNil(){result=reflect.New(typ.Elem())};result.Elem().Set(item);if v.Origin!=0{originalPointers.values[v.Origin]=result;originalPointers.ids[result.Pointer()]=v.Origin};originalPointers.Unlock()
   case "map":if typ.Kind()!=reflect.Map{return result,fmt.Errorf("map for %s",typ)};result=reflect.MakeMapWithSize(typ,len(v.Entries));for _,entry:=range v.Entries{key,e:=decode(entry.Key,typ.Key());if e!=nil{return result,e};item,e:=decode(entry.Value,typ.Elem());if e!=nil{return result,e};result.SetMapIndex(key,item)}
-  case "struct":if typ.Kind()!=reflect.Struct{return result,fmt.Errorf("struct for %s",typ)};if codec,ok:=localStructCodecs[typ];ok{var err error;result,err=codec.decode(v);if err!=nil{return result,err};break};for name,field:=range v.Fields{slot:=result.FieldByName(name);if !slot.IsValid(){return result,fmt.Errorf("unknown field %s of %s",name,typ)};if !slot.CanSet(){return result,fmt.Errorf("unexported field %s of %s cannot cross the dependency boundary",name,typ)};item,e:=decode(field,slot.Type());if e!=nil{return result,e};slot.Set(item)}
+  case "struct":if typ.Kind()!=reflect.Struct{return result,fmt.Errorf("struct for %s",typ)};if len(v.Elements)>0&&(len(v.Fields)>0||len(v.Elements)!=typ.NumField()){return result,fmt.Errorf("invalid positional field count or mixed fields for %s",typ)};if codec,ok:=localStructCodecs[typ];ok{var err error;result,err=codec.decode(v);if err!=nil{return result,err};break};for name,field:=range v.Fields{slot:=result.FieldByName(name);if !slot.IsValid(){return result,fmt.Errorf("unknown field %s of %s",name,typ)};if !slot.CanSet(){return result,fmt.Errorf("unexported field %s of %s cannot cross the dependency boundary",name,typ)};item,e:=decode(field,slot.Type());if e!=nil{return result,e};slot.Set(item)}
+   for i,field:=range v.Elements{if i>=result.NumField(){return result,fmt.Errorf("too many values for %s",typ)};slot:=result.Field(i);if !slot.CanSet(){return result,fmt.Errorf("unexported field %s of %s cannot cross the dependency boundary",typ.Field(i).Name,typ)};item,e:=decode(field,slot.Type());if e!=nil{return result,e};slot.Set(item)}
   default:return result,fmt.Errorf("unsupported bridge value %s",v.Kind)
   }
  }
@@ -171,6 +190,8 @@ func memberMethod(rv reflect.Value,name string) reflect.Value {
  return reflect.Value{}
 }
 func access(rv reflect.Value,q request)([]value,string){
+ if q.Op=="byte-set" {if rv.Kind()!=reflect.Slice||rv.Type().Elem().Kind()!=reflect.Uint8||len(q.Args)!=2{return nil,"native indexed writes require a byte slice"};index,err:=decode(q.Args[0],nil);if err!=nil{return nil,err.Error()};var i int64;switch index.Kind(){case reflect.Int,reflect.Int8,reflect.Int16,reflect.Int32,reflect.Int64:i=index.Int();case reflect.Uint,reflect.Uint8,reflect.Uint16,reflect.Uint32,reflect.Uint64:if index.Uint()>uint64(rv.Len()){return nil,"byte index out of range"};i=int64(index.Uint());default:return nil,"byte index must be an integer"};if i<0||i>=int64(rv.Len()){return nil,"byte index out of range"};element,err:=decode(q.Args[1],rv.Type().Elem());if err!=nil{return nil,err.Error()};rv.Index(int(i)).Set(element);return []value{encode(reflect.ValueOf(true))},""}
+
  if rv.Kind()==reflect.Interface&&!rv.IsNil(){rv=rv.Elem()}
  if q.Op=="field"||q.Op=="member"||q.Op=="receiver_field" {
   original:=rv
@@ -201,7 +222,7 @@ func access(rv reflect.Value,q request)([]value,string){
   if rv.Kind()==reflect.String{return []value{encode(reflect.ValueOf(rv.String()[n]))},""}
   return []value{encode(rv.Index(n))},""
  case "slice":
-  if len(q.Args)!=2{return nil,"slice requires two bounds"}
+  if (len(q.Args)!=2&&len(q.Args)!=3){return nil,"slice requires two or three bounds"}
   switch rv.Kind(){case reflect.String,reflect.Slice,reflect.Array:default:return nil,"slice is not defined on "+rv.Type().String()}
   if rv.Kind()==reflect.Array&&!rv.CanAddr(){return nil,"unaddressable array slice"}
   low,high:=0,rv.Len()
@@ -209,20 +230,83 @@ func access(rv reflect.Value,q request)([]value,string){
   if q.Args[1].Kind!="nil"{n,err:=strconv.Atoi(q.Args[1].Text);if err!=nil{return nil,"slice bound is not an integer"};high=n}
   capacity:=rv.Len();if rv.Kind()==reflect.Slice{capacity=rv.Cap()}
   if low<0||high<low||high>capacity{return nil,fmt.Sprintf("slice bounds out of range [%d:%d] with capacity %d",low,high,capacity)}
+  if len(q.Args)==3 {if rv.Kind()!=reflect.Slice{return nil,"three-index slice requires slice storage"};maximum,err:=strconv.Atoi(q.Args[2].Text);if err!=nil||maximum<high||maximum>capacity{return nil,"invalid three-index slice capacity"};return []value{encode(rv.Slice3(low,high,maximum))},""}
   return []value{encode(rv.Slice(low,high))},""
  }
  return nil,"unsupported native access "+q.Op
 }
+// A tree containing any function identifier or template invocation is outside
+// the read-only primitive-slice contract, regardless of its Funcs registry.
+func primitiveTemplateTree(node bppTemplateParse.Node)bool {
+ if node==nil{return true}
+ switch n:=node.(type) {
+ case *bppTemplateParse.ListNode:if n==nil{return true};for _,child:=range n.Nodes{if !primitiveTemplateTree(child){return false}};return true
+ case *bppTemplateParse.ActionNode:return primitiveTemplateTree(n.Pipe)
+ case *bppTemplateParse.PipeNode:for _,command:=range n.Cmds{if !primitiveTemplateTree(command){return false}};return true
+ case *bppTemplateParse.CommandNode:for _,arg:=range n.Args{if !primitiveTemplateTree(arg){return false}};return true
+ case *bppTemplateParse.IfNode:return primitiveTemplateTree(n.Pipe)&&primitiveTemplateTree(n.List)&&primitiveTemplateTree(n.ElseList)
+ case *bppTemplateParse.RangeNode:return primitiveTemplateTree(n.Pipe)&&primitiveTemplateTree(n.List)&&primitiveTemplateTree(n.ElseList)
+ case *bppTemplateParse.WithNode:return primitiveTemplateTree(n.Pipe)&&primitiveTemplateTree(n.List)&&primitiveTemplateTree(n.ElseList)
+ case *bppTemplateParse.TextNode,*bppTemplateParse.DotNode,*bppTemplateParse.StringNode,*bppTemplateParse.NumberNode,*bppTemplateParse.BoolNode,*bppTemplateParse.NilNode,*bppTemplateParse.VariableNode,*bppTemplateParse.FieldNode:return true
+ }
+ return false
+}
 func dispatch(q request)(reply response){
  reply.ID=q.ID
  defer func(){if e:=recover();e!=nil{if original,ok:=e.(originalCallbackPanic);ok{reply.Panic=&original.value}else{reply.Error=fmt.Sprintf("native dependency panic: %v",e)}}}()
+ if q.Op=="channel-make" {
+  typ:=resolveType(q.Selector);if typ==nil||typ.Kind()!=reflect.Chan||len(q.Args)!=1{reply.Error="channel make requires one capacity and a registered channel type";return}
+  n,err:=strconv.Atoi(q.Args[0].Text);if err!=nil||n<0{panic("makechan: size out of range")}
+  channel:=reflect.MakeChan(reflect.ChanOf(reflect.BothDir,typ.Elem()),n);if channel.Type()!=typ{channel=channel.Convert(typ)}
+  reply.Values=[]value{encode(channel)};return
+ }
+
+ if q.Op=="channel-bind" {
+  typ:=resolveType(q.Selector);if typ==nil||typ.Kind()!=reflect.Chan||len(q.Args)!=1{reply.Error="channel binding requires a registered channel type and one value";return}
+  original,err:=decode(q.Args[0],nil);if err!=nil{reply.Error=err.Error();return}
+  if !original.IsValid()||original.Kind()!=reflect.Chan||!original.Type().AssignableTo(typ){reply.Error="channel value is not assignable to declared type";return}
+  bound:=reflect.New(typ).Elem();bound.Set(original);reply.Values=[]value{encode(bound)};return
+ }
+ if q.Op=="channel-close" {
+  if q.Receiver==nil{reply.Error="channel close lacks receiver";return};channel,err:=decode(*q.Receiver,nil);if err!=nil{reply.Error=err.Error();return}
+  if !channel.IsValid()||channel.Kind()!=reflect.Chan||channel.Type().ChanDir()==reflect.RecvDir{reply.Error="channel close requires a send-capable channel";return};channel.Close();return
+ }
+ if q.Op=="channel-type" {
+  if q.Receiver==nil{reply.Error="channel type query lacks receiver";return}
+  channel,err:=decode(*q.Receiver,nil);if err!=nil{reply.Error=err.Error();return};target:=resolveType(q.Selector)
+  if !channel.IsValid()||channel.Kind()!=reflect.Chan||target==nil||target.Kind()!=reflect.Chan{reply.Error="channel type query requires registered channel types";return}
+  reply.Values=[]value{encode(reflect.ValueOf(channel.Type().AssignableTo(target)))};return
+ }
+ if q.Op=="channel-select" {
+  if q.Selector!=""&&q.Selector!="probe"{reply.Error="invalid native select mode";return}
+  cases:=make([]reflect.SelectCase,0,len(q.Args)+1)
+  for _,arm:=range q.Args {
+   if len(arm.Elements)<1{reply.Error="channel select arm lacks a channel";return}
+   channel,err:=decode(arm.Elements[0],nil);if err!=nil{reply.Error=err.Error();return}
+   if !channel.IsValid()||channel.Kind()!=reflect.Chan{reply.Error="native channel operand required";return}
+   switch arm.Kind {
+   case "recv":if channel.Type().ChanDir()==reflect.SendDir{reply.Error="receive on send-only channel";return};cases=append(cases,reflect.SelectCase{Dir:reflect.SelectRecv,Chan:channel})
+   case "send":if channel.Type().ChanDir()==reflect.RecvDir{reply.Error="send on receive-only channel";return};if len(arm.Elements)!=2{reply.Error="channel send requires one value";return};v,err:=decode(arm.Elements[1],channel.Type().Elem());if err!=nil{reply.Error=err.Error();return};cases=append(cases,reflect.SelectCase{Dir:reflect.SelectSend,Chan:channel,Send:v})
+   default:reply.Error="invalid native select arm";return
+   }
+  }
+  if q.Selector=="probe"{cases=append(cases,reflect.SelectCase{Dir:reflect.SelectDefault})}
+  stopIndex:=len(cases);cases=append(cases,reflect.SelectCase{Dir:reflect.SelectRecv,Chan:reflect.ValueOf(handles.stop)})
+  chosen,received,open:=reflect.Select(cases)
+  if chosen==stopIndex{reply.Error="native channel session closed";return}
+  if q.Selector=="probe"&&chosen==len(q.Args){chosen=-1}
+  item:=value{Kind:"nil"};if received.IsValid(){item=encode(received)}
+  reply.Values=[]value{encode(reflect.ValueOf(chosen)),item,encode(reflect.ValueOf(open))};return
+ }
  if q.Op=="equal" {if len(q.Args)!=2{reply.Error="comparison requires two values";return};left,err:=decode(q.Args[0],nil);if err!=nil{reply.Error=err.Error();return};right,err:=decode(q.Args[1],nil);if err!=nil{reply.Error=err.Error();return};equal:=false
- if !left.IsValid()||!right.IsValid(){other:=left;if !other.IsValid(){other=right};if !other.IsValid(){equal=true}else{switch other.Kind(){case reflect.Chan,reflect.Func,reflect.Interface,reflect.Map,reflect.Pointer,reflect.Slice:equal=other.IsNil();if (!left.IsValid()&&q.Args[1].Interface!=""&&q.Args[1].Kind!="nil")||(!right.IsValid()&&q.Args[0].Interface!=""&&q.Args[0].Kind!="nil"){equal=false};default:reply.Error="value cannot be compared with nil";return}}}else{equal=left.Equal(right)};reply.Values=[]value{encode(reflect.ValueOf(equal))};return}
+ if !left.IsValid()||!right.IsValid(){other:=left;if !other.IsValid(){other=right};if !other.IsValid(){equal=true}else{switch other.Kind(){case reflect.Chan,reflect.Func,reflect.Interface,reflect.Map,reflect.Pointer,reflect.Slice:equal=other.IsNil();if (!left.IsValid()&&q.Args[1].Interface!=""&&other.Kind()!=reflect.Interface)||(!right.IsValid()&&q.Args[0].Interface!=""&&other.Kind()!=reflect.Interface){equal=false};default:reply.Error="value cannot be compared with nil";return}}}else{equal=left.Equal(right)};reply.Values=[]value{encode(reflect.ValueOf(equal))};return}
+ if q.Op=="template-readonly" {if q.Receiver==nil{reply.Error="template inspection requires native receiver";return};v,err:=decode(*q.Receiver,nil);if err!=nil{reply.Error=err.Error();return};template,ok:=v.Interface().(*bppTextTemplate.Template);safe:=ok&&template!=nil&&template.Tree!=nil&&primitiveTemplateTree(template.Tree.Root);reply.Values=[]value{encode(reflect.ValueOf(safe))};return}
+ if q.Op=="assignable" {if len(q.Args)!=1{reply.Error="assignability requires one value";return};typ:=resolveType(q.Selector);if typ==nil{reply.Error="unregistered bridge type "+strconv.Quote(q.Selector);return};v,err:=decode(q.Args[0],nil);if err!=nil{reply.Error=err.Error();return};result:=encode(reflect.ValueOf(v.IsValid()&&v.Type().AssignableTo(typ)));if typ.Kind()==reflect.Interface{result.Interface=q.Selector};reply.Values=[]value{result};return}
  if q.Op=="type" {typ:=resolveType(q.Selector);if typ==nil{reply.Error="unregistered bridge type "+strconv.Quote(q.Selector);return};reply.Values=[]value{encode(reflect.ValueOf(typeID(typ)))};return}
  if q.Op=="construct"||q.Op=="address" {if len(q.Args)!=1{reply.Error="construction requires one literal";return};typ:=resolveType(q.Selector);if typ==nil{reply.Error="unregistered bridge type "+strconv.Quote(q.Selector);return};v,err:=decode(q.Args[0],typ);if err!=nil{reply.Error=err.Error();return};if q.Op=="address"{ptr:=reflect.New(typ);ptr.Elem().Set(v);v=ptr};reply.Values=[]value{encode(v)};return}
  fn:=symbols[q.Selector]
  if q.Receiver!=nil {receiver,err:=decode(*q.Receiver,nil);if err!=nil{reply.Error=err.Error();return}
-  switch q.Op {case "len","cap","index","slice","field","member","receiver_field":reply.Values,reply.Error=access(receiver,q);return}
+  switch q.Op {case "len","cap","index","slice","field","member","receiver_field","byte-set":reply.Values,reply.Error=access(receiver,q);return}
   if q.Selector==""&&receiver.Kind()==reflect.Func{fn=receiver}else{fn=memberMethod(receiver,q.Selector)}}
  if q.Op=="new" {typ:=resolveType(q.Selector);if typ==nil{reply.Error="unregistered bridge type "+strconv.Quote(q.Selector);return};reply.Values=[]value{encode(reflect.New(typ).Elem())};return}
  if !fn.IsValid(){reply.Error="unknown imported symbol or method: "+q.Selector;return}
@@ -232,6 +316,8 @@ func dispatch(q request)(reply response){
  if len(q.Args)<minimum||!signature.IsVariadic()&&len(q.Args)!=n{reply.Error="native argument count mismatch";return}
  args:=make([]reflect.Value,len(q.Args))
  for i,arg:=range q.Args {var target reflect.Type;if signature.IsVariadic()&&i>=n-1 {target=signature.In(n-1);if !q.Spread{target=target.Elem()}}else{target=signature.In(i)};v,err:=decode(arg,target);if err!=nil{reply.Error=err.Error();return};args[i]=v}
+ for _,buffer:=range q.SliceBuffers {if buffer.Index<0||buffer.Index>=len(args)||args[buffer.Index].Kind()!=reflect.Slice{reply.Error="invalid native buffer index";return};backing,err:=decode(buffer.Value,args[buffer.Index].Type());if err!=nil{reply.Error=err.Error();return};if backing.Kind()!=reflect.Slice||buffer.Length<0||buffer.Length>backing.Len(){reply.Error="invalid native buffer bounds";return};args[buffer.Index]=backing.Slice3(0,buffer.Length,backing.Len())}
+ defer func(){for _,buffer:=range q.SliceBuffers {v:=args[buffer.Index];reply.SliceUpdates=append(reply.SliceUpdates,sliceBuffer{Index:buffer.Index,Length:v.Len(),Value:structural(v.Slice(0,v.Cap()))})}}()
  var returned []reflect.Value
  if q.Spread {if !signature.IsVariadic()||len(args)!=n{reply.Error="invalid spread call";return};returned=fn.CallSlice(args)}else{returned=fn.Call(args)}
  for _,v:=range returned{reply.Values=append(reply.Values,encode(v))};return
@@ -240,8 +326,9 @@ func main(){
  conn,err:=net.Dial("tcp",bridgeAddress);if err!=nil{panic(err)};defer conn.Close()
  encoder:=json.NewEncoder(conn);if err=encoder.Encode(bridgeAuth);err!=nil{return};decoder:=json.NewDecoder(conn)
  outbound.Lock();outbound.encoder=encoder;outbound.Unlock()
- var calls sync.WaitGroup
- for {var q request;if err:=decoder.Decode(&q);err!=nil{calls.Wait();return};if q.Op=="close"{calls.Wait();return}
+ // Host EOF/close ends the dependency process, including blocked native calls.
+ // Waiting for those calls would orphan listeners after host termination.
+ for {var q request;if err:=decoder.Decode(&q);err!=nil{close(handles.stop);return};if q.Op=="close"{close(handles.stop);return}
   if q.Op=="callback-reply" {callbacks.Lock();wait:=callbacks.waiting[q.ID];callbacks.Unlock();if wait!=nil{wait<-q};continue}
-  calls.Add(1);go func(){defer calls.Done();answer:=dispatch(q);outbound.Lock();defer outbound.Unlock();_ = outbound.encoder.Encode(answer)}()}
+  go func(){answer:=dispatch(q);outbound.Lock();defer outbound.Unlock();_ = outbound.encoder.Encode(answer)}()}
 }

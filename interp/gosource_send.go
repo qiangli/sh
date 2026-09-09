@@ -30,6 +30,12 @@ func (r *Runner) goSourceChannelOperand(expr syntax.BashPPExpr, word *syntax.Wor
 	var err error
 	if id, ok := expr.(*syntax.BashPPIdent); ok {
 		cell = r.bashPPScope.lookup(id.Name.Value)
+	} else if r.bashPPNativeExpr(expr) {
+		var value bashPPBridgeValue
+		value, err = r.bashPPBridgeExpr(expr)
+		if err == nil {
+			cell = goSourceNativeValueCell(value)
+		}
 	} else {
 		cell, err = r.goSourceValueCell(expr)
 	}
@@ -41,14 +47,17 @@ func (r *Runner) goSourceChannelOperand(expr syntax.BashPPExpr, word *syntax.Wor
 		r.bashPPGoSendError(expr, fmt.Errorf("Go channel operand has no value"))
 		return nil, false
 	}
-	typ, _ := cell.declType.(*syntax.BashPPChanType)
-	if typ != nil && ((operation == "send" && typ.Direction == "recv") || (operation == "receive" && typ.Direction == "send")) {
+	typ, _ := r.bashPPUnderlyingType(cell.declType).(*syntax.BashPPChanType)
+	if typ != nil && (((operation == "send" || operation == "close") && typ.Direction == "recv") || (operation == "receive" && typ.Direction == "send")) {
 		r.bashPPGoSendError(expr, fmt.Errorf("cannot %s on %s-only channel", operation, typ.Direction))
 		return nil, false
 	}
 	if r.bashPPChanBoundary {
 		r.bashPPGoSendError(expr, fmt.Errorf("channel cannot cross a shell-copy boundary"))
 		return nil, false
+	}
+	if native, ok := r.goSourceNativeChannel(cell); ok {
+		return &bashPPChannel{native: native}, true
 	}
 	if cell.channel != nil {
 		if cell.channelOwner != r.bashPPConcurrent {
@@ -58,6 +67,10 @@ func (r *Runner) goSourceChannelOperand(expr syntax.BashPPExpr, word *syntax.Wor
 		return cell.channel, true
 	}
 	if typ != nil && cell.vr.Kind == expand.String && cell.vr.Str == "" {
+		if r.goSourceNativeChannelElement(typ.Element, map[string]bool{}) {
+			value := bashPPBridgeValue{Kind: "nil", Type: goSourceNativeChannelTypeText(typ)}
+			return &bashPPChannel{native: &value}, true
+		}
 		// nil has no ready communication or close notification.
 		nilChannel := newBashPPChannel(bashPPTypeText(typ.Element), 0)
 		nilChannel.ch = nil
@@ -192,9 +205,30 @@ func (r *Runner) goSourceChannelValueCell(expr syntax.BashPPExpr) (*bashPPCell, 
 		return nil, false, nil
 	}
 	switch x := expr.(type) {
+	case *syntax.BashPPCall:
+		if len(x.Fun) != 1 || x.Fun[0].Value != "make" || x.ArgType == nil {
+			return nil, false, nil
+		}
+		_, ok := r.bashPPUnderlyingType(x.ArgType).(*syntax.BashPPChanType)
+		if !ok {
+			return nil, false, nil
+		}
+		var capacity syntax.BashPPExpr
+		var word *syntax.Word
+		if len(x.ArgExprs) > 1 {
+			capacity = x.ArgExprs[1]
+		}
+		if len(x.Args) > 1 {
+			word = x.Args[1]
+		}
+		cell, err := r.goSourceMakeChannelCell(x.ArgType, capacity, word)
+		if cell != nil {
+			cell.declType = x.ArgType
+		}
+		return cell, true, err
 	case *syntax.BashPPIdent:
 		if cell := r.bashPPScope.lookup(x.Name.Value); cell != nil {
-			_, channelType := cell.declType.(*syntax.BashPPChanType)
+			_, channelType := r.bashPPUnderlyingType(cell.declType).(*syntax.BashPPChanType)
 			if cell.channel != nil || channelType {
 				return bashPPCopyAssignmentCell(cell), true, nil
 			}

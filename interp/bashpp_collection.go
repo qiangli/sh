@@ -468,6 +468,18 @@ func (r *Runner) bashPPEvalConstIntExpr(expr goast.Expr) (value constant.Value, 
 }
 
 func (r *Runner) bashPPEvalElement(expr syntax.BashPPExpr, expected syntax.BashPPTypeExpr) (any, *bashPPCollectionMeta, error) {
+	if conversion, ok := expr.(*syntax.BashPPConvertExpr); ok && r.bashPPGoSource {
+		if value, meta, handled, err := r.bashPPConvertToCollection(conversion); handled {
+			if err != nil {
+				return nil, nil, err
+			}
+			if err := r.bashPPCheckTypedValue(value, meta, expected); err != nil {
+				return nil, nil, err
+			}
+			return value, meta, nil
+		}
+	}
+
 	if value, meta, handled, err := r.goSourceCollectionCallValue(expr); handled {
 		if err != nil {
 			return nil, nil, err
@@ -485,6 +497,15 @@ func (r *Runner) bashPPEvalElement(expr syntax.BashPPExpr, expected syntax.BashP
 		return r.bashPPEvalTypedValue(expr, expected)
 	}
 	if _, deref := expr.(*syntax.BashPPDerefExpr); deref {
+		return r.bashPPEvalTypedValue(expr, expected)
+	}
+	if value, meta, handled, err := r.goSourceNilElement(expr, expected); handled {
+		return value, meta, err
+	}
+	if handled, err := r.goSourceInterfaceElement(expr, expected); handled {
+		if err != nil {
+			return nil, nil, err
+		}
 		return r.bashPPEvalTypedValue(expr, expected)
 	}
 	if lit, ok := expr.(*syntax.BashPPCompositeLit); ok {

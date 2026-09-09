@@ -62,7 +62,7 @@ func TestBashPPFIFOWrappedWriterSnapshot(t *testing.T) {
 	wrapped := &bashPPLockedWriter{mu: &mu, w: &pipelineWriter{w: owner.fdWriteTable[8], runner: owner}}
 	owner.fdWriteTable[8], owner.stdout = wrapped, wrapped
 	owner.stderr = borrowedFile{File: original}
-	child, err := owner.bashPPTaskSnapshot(10)
+	child, err := owner.bashPPTaskSnapshot(10, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,7 +234,7 @@ func TestBashPPFIFOPersistentAliasesAndSnapshot(t *testing.T) {
 	r := newFIFOTestTask(t, c)
 	fifoTestStmt(t, r, fmt.Sprintf("exec 8<>%q; exec 9<&8", fifoTestPath(t)))
 	original := r.fdTable[8]
-	child, err := r.bashPPTaskSnapshot(10)
+	child, err := r.bashPPTaskSnapshot(10, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -510,7 +510,7 @@ func TestBashPPFIFOTaskSnapshotOwnsRegistration(t *testing.T) {
 		t.Fatal(err)
 	}
 	owner.stdin = file.(*os.File)
-	child, err := owner.bashPPTaskSnapshot(10)
+	child, err := owner.bashPPTaskSnapshot(10, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -151,34 +151,85 @@ func main(){n:=10;out:=strings.Map(func(r rune)rune{n++;return r},"a");fmt.Print
 	}
 }
 
+// TestGoSourceFunctionCallbackLifetimeBoundary pins where a retained original
+// callback still stops, and — since sprint118 story #54 — where it no longer
+// does.
+//
+// The boundary itself is unchanged and is the first half below: a callback
+// handle is only sound while the interpreter is blocked inside the request that
+// raised it, so a dependency function which RETAINS f and calls it from a
+// goroutine it owns is refused. time.AfterFunc is exactly that shape.
+//
+// `wg.Go(f)` used to be measured here as the same shape, and it is not one.
+// It never becomes a native request at all: sync.WaitGroup.Go is answered as a
+// bridge operation of its own, which runs the native Add in the launcher, spawns
+// the body as an interpreted task, and runs the native Done from inside that
+// task (see gosource_waitgroup.go). Nothing is retained by the dependency and no
+// original body is forwarded to it. Asserting the refusal here would now be
+// asserting a boundary that moved — the second half measures the program
+// against the native oracle instead, which is the stronger claim and the one
+// that fails if the launch is ever lost, duplicated or forwarded.
 func TestGoSourceFunctionCallbackLifetimeBoundary(t *testing.T) {
-	source := `package main
+	t.Run("retained callback is refused", func(t *testing.T) {
+		source := `package main
+import "time"
+func main(){t:=time.AfterFunc(time.Millisecond,func(){println("late")});time.Sleep(10*time.Millisecond);t.Stop();println("after")}`
+		dir := t.TempDir()
+		path := filepath.Join(dir, "original.go")
+		if err := os.WriteFile(path, []byte(source), 0600); err != nil {
+			t.Fatal(err)
+		}
+		p, err := gosource.Parse(strings.NewReader(source), path, gosource.Options{RunMain: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var output bytes.Buffer
+		r, err := interp.New(interp.Lang(syntax.LangBashPP), interp.Dir(dir), interp.StdIO(nil, &output, &output))
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = r.Run(context.Background(), p.File)
+		if err == nil || !strings.Contains(err.Error()+output.String(), "asynchronous or retained") ||
+			strings.Contains(output.String(), "late") || strings.Contains(output.String(), "after") {
+			t.Fatalf("retained callback executed: %v %q", err, output.String())
+		}
+		after, err := os.ReadFile(path)
+		if err != nil || string(after) != source {
+			t.Fatal("original source changed")
+		}
+	})
+
+	t.Run("WaitGroup.Go matches the native oracle", func(t *testing.T) {
+		source := `package main
 import "sync"
 func main(){var wg sync.WaitGroup;wg.Go(func(){println("callback-ran")});wg.Wait();println("after")}`
-	dir := t.TempDir()
-	path := filepath.Join(dir, "original.go")
-	if err := os.WriteFile(path, []byte(source), 0600); err != nil {
-		t.Fatal(err)
-	}
-	want := runNativeOracle(t, dir, path, nil, "")
-	if want.status != 0 || !strings.Contains(want.stderr, "callback-ran") {
-		t.Fatalf("native callback failed: %+v", want)
-	}
-	p, err := gosource.Parse(strings.NewReader(source), path, gosource.Options{RunMain: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var output bytes.Buffer
-	r, err := interp.New(interp.Lang(syntax.LangBashPP), interp.Dir(dir), interp.StdIO(nil, &output, &output))
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = r.Run(context.Background(), p.File)
-	if err == nil || !strings.Contains(err.Error()+output.String(), "asynchronous or retained") || strings.Contains(output.String(), "callback-ran") || strings.Contains(output.String(), "after") {
-		t.Fatalf("retained callback executed: %v %q", err, output.String())
-	}
-	after, err := os.ReadFile(path)
-	if err != nil || string(after) != source {
-		t.Fatal("original source changed")
-	}
+		dir := t.TempDir()
+		path := filepath.Join(dir, "original.go")
+		if err := os.WriteFile(path, []byte(source), 0600); err != nil {
+			t.Fatal(err)
+		}
+		want := runNativeOracle(t, dir, path, nil, "")
+		if want.status != 0 || !strings.Contains(want.stderr, "callback-ran") {
+			t.Fatalf("native callback failed: %+v", want)
+		}
+		p, err := gosource.Parse(strings.NewReader(source), path, gosource.Options{RunMain: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out, stderr bytes.Buffer
+		r, err := interp.New(interp.Lang(syntax.LangBashPP), interp.Dir(dir), interp.StdIO(nil, &out, &stderr))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := r.Run(context.Background(), p.File); err != nil {
+			t.Fatalf("Runner: %v stdout=%q stderr=%q", err, out.String(), stderr.String())
+		}
+		if out.String() != want.stdout || stderr.String() != want.stderr {
+			t.Fatalf("interpreted %q %q; oracle %q %q", out.String(), stderr.String(), want.stdout, want.stderr)
+		}
+		after, err := os.ReadFile(path)
+		if err != nil || string(after) != source {
+			t.Fatal("original source changed")
+		}
+	})
 }

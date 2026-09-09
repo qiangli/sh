@@ -71,7 +71,13 @@ func (e *emitter) goSourceCommand(c syntax.Command) (string, bool, error) {
 				return "", true, err
 			}
 			cap := ""
-			if n.MakeChan.Capacity != nil {
+			if n.MakeChan.CapacityExpr != nil {
+				v, err := e.expr(n.MakeChan.CapacityExpr)
+				if err != nil {
+					return "", true, err
+				}
+				cap = "," + v
+			} else if n.MakeChan.Capacity != nil {
 				v, err := e.valueWord(n.MakeChan.Capacity)
 				if err != nil {
 					return "", true, err

@@ -3,7 +3,7 @@ package interp
 // Sprint: #118; Story: #54; Story-ID: c3a60493cde9
 //
 // The interpreter side of a dependency callback. A materialised local type's
-// String or Error method is a generated stub in the helper whose whole body
+// reviewed method is a generated stub in the helper whose whole body
 // asks for this: the original body is never compiled, it is executed here by
 // the interpreter that owns it.
 
@@ -115,8 +115,8 @@ func bashPPLocalTypeName(identity string) string {
 }
 
 // bashPPNativeCallback executes one original method body for the dependency.
-// Only the fmt-facing String and Error methods are mirrored, and each answers
-// with the single string the original body returns.
+// Reviewed signatures include String/Error, synchronous Read, and image.Image.
+// Arguments and results preserve their declared types across the callback.
 func (r *Runner) bashPPNativeCallback(ctx context.Context, selector string, recv bashPPBridgeValue) (values []bashPPBridgeValue, err error) {
 	defer func() {
 		if failure := recover(); failure != nil {
@@ -175,7 +175,52 @@ func (r *Runner) bashPPNativeCallback(ctx context.Context, selector string, recv
 	if !ok {
 		return nil, fmt.Errorf("gosource: cannot bind original method %s", selector)
 	}
-	results := r.bashPPInvoke(ctx, bound, nil)
+	var arguments []string
+	var readerBuffer []any
+	if method == "Read" {
+		if (len(recv.CallArgs) != 1 && len(recv.CallArgs) != 2) || recv.CallArgs[0].Kind != "handle" || (recv.CallArgs[0].Type != "[]uint8" && recv.CallArgs[0].Type != "[]byte") {
+			return nil, fmt.Errorf("gosource: original Read requires an authenticated native byte buffer")
+		}
+		argument := goSourceNativeValueCell(recv.CallArgs[0])
+		argument.declType = bound.params()[0].FieldTypeExpr
+		argument.typeName = bashPPTypeText(argument.declType)
+		if len(recv.CallArgs) == 2 && r.bashPPReaderLocalBufferAllowed(bound) {
+			snapshot := recv.CallArgs[1]
+			if snapshot.Kind != "reader-buffer" || snapshot.ReaderLength < 0 || snapshot.ReaderLength > len(snapshot.ReaderBuffer) {
+				return nil, fmt.Errorf("gosource: invalid Read buffer snapshot")
+			}
+			readerBuffer = make([]any, len(snapshot.ReaderBuffer))
+			for i, b := range snapshot.ReaderBuffer {
+				readerBuffer[i] = int(b)
+			}
+			bashPPStoreCellValue(argument, readerBuffer[:snapshot.ReaderLength], &bashPPCollectionMeta{kind: "slice", typ: argument.declType, sequence: make([]*bashPPCollectionMeta, snapshot.ReaderLength, len(readerBuffer))})
+		}
+
+		r.bashPPCallCells = []*bashPPCell{argument}
+		arguments = []string{""}
+	} else {
+		// A generalised mirrored signature — image.Image's At(x, y int) — sends
+		// its arguments with the call. Each binds at the original parameter's
+		// own declared type, so the body sees exactly what it declared.
+		params := bashppParams(bound.params())
+		if len(recv.CallArgs) != len(params) {
+			return nil, fmt.Errorf("gosource: original %s got %d argument(s), want %d", selector, len(recv.CallArgs), len(params))
+		}
+		cells := make([]*bashPPCell, len(params))
+		for i, arg := range recv.CallArgs {
+			cell := goSourceNativeValueCell(arg)
+			cell.declType = params[i].typ
+			cell.typeName = bashPPTypeText(params[i].typ)
+			cells[i] = cell
+			text := ""
+			if scalar, err := arg.scalar(); err == nil {
+				text = bashPPScalarString(scalar.value)
+			}
+			arguments = append(arguments, text)
+		}
+		r.bashPPCallCells = cells
+	}
+	results := r.bashPPInvoke(ctx, bound, arguments)
 	if r.bashPPPanicking() && !r.exit.exiting {
 		payload := r.bashPPPanic.value()
 		r.bashPPPanic, r.exit = savedPanic, savedExit
@@ -190,10 +235,48 @@ func (r *Runner) bashPPNativeCallback(ctx context.Context, selector string, recv
 	if r.exit.exiting || r.exit.fatalExit || r.exit.code != 0 || r.bashPPShortFailureSeq != failure {
 		return nil, fmt.Errorf("gosource: original %s failed (status %d)", selector, r.exit.code)
 	}
+	// Error and String answer with the one string the original body returns.
+	// Every other mirrored signature — Read, and the image.Image method set —
+	// crosses back as typed values, so a native handle stays an authenticated
+	// handle rather than being flattened into text.
+	if want := bashppParams(bound.results()); !bashPPStringResult(want) {
+		if len(results) != len(want) || len(r.bashPPResultCells) != len(want) {
+			return nil, fmt.Errorf("gosource: original %s returned %d values, want %d", selector, len(results), len(want))
+		}
+		for _, cell := range r.bashPPResultCells {
+			value, err := r.bashPPBridgeCell(cell)
+			if err != nil {
+				return nil, err
+			}
+			values = append(values, value)
+		}
+		if readerBuffer != nil {
+			data := make([]byte, len(readerBuffer))
+			for i, item := range readerBuffer {
+				n, ok := item.(int)
+				if !ok || n < 0 || n > 255 {
+					return nil, fmt.Errorf("gosource: invalid Read byte writeback")
+				}
+				data[i] = byte(n)
+			}
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			values = append(values, bashPPBridgeValue{Kind: "reader-buffer", ReaderBuffer: data})
+		}
+		return values, nil
+	}
 	if len(results) != 1 {
 		return nil, fmt.Errorf("gosource: original %s returned %d values, want 1", selector, len(results))
 	}
 	return []bashPPBridgeValue{{Kind: "string", Type: "string", Text: results[0]}}, nil
+}
+
+// bashPPStringResult reports the fixed String/Error protocol shape: exactly one
+// result, of type string. Those mirrors answer with text; everything else the
+// helper mirrors answers with typed values.
+func bashPPStringResult(results []bashPPParam) bool {
+	return len(results) == 1 && bashPPTypeText(results[0].typ) == "string"
 }
 
 // bashPPBridgeContents rebuilds an interpreter value at its original declared
@@ -201,12 +284,23 @@ func (r *Runner) bashPPNativeCallback(ctx context.Context, selector string, recv
 // SDK storage is never reflected into an interpreter-owned imitation.
 func (r *Runner) bashPPBridgeContents(v bashPPBridgeValue, typ syntax.BashPPTypeExpr) (any, *bashPPCollectionMeta, error) {
 	if _, ok := r.bashPPInterfaceType(typ); ok {
-		if v.Kind == "nil" {
+		if v.Kind == "nil" && (v.Type == "" || v.Type == v.Interface) {
 			return "", &bashPPCollectionMeta{kind: "interface", typ: typ, interfaceValue: &bashPPInterfaceValue{nilIface: true}}, nil
 		}
 		dynamic := &syntax.BashPPNamedType{Name: &syntax.Lit{Value: bashPPLocalTypeName(v.Type)}}
 		if _, ok := r.bashPPInterfaceType(dynamic); ok {
 			return nil, nil, fmt.Errorf("dynamic type %s of an interface value is not materialised", v.Type)
+		}
+		if v.Kind == "nil" {
+			if _, _, err := r.goSourceNativeAssignedValue(v, typ); err != nil {
+				return nil, nil, err
+			}
+			// The native receiver contains a nonnil interface whose dynamic
+			// value is typed nil. Keep that type; no handle needs rebuilding.
+			payload := goSourceNativeValueCell(v)
+			payload.declType = dynamic
+			iv := &bashPPInterfaceValue{cell: payload, dynamic: dynamic}
+			return payload.vr.Obj, &bashPPCollectionMeta{kind: "interface", typ: typ, interfaceValue: iv}, nil
 		}
 		inner, innerMeta, err := r.bashPPBridgeContents(v, dynamic)
 		if err != nil {
@@ -320,6 +414,9 @@ func bashPPBridgeScalarValue(v bashPPBridgeValue) (any, *bashPPCollectionMeta, e
 func (s *bashPPNativeSession) bashPPAuthenticateCallbackValue(v *bashPPBridgeValue) {
 	if v.Kind == "handle" || v.Kind == "callback" || v.Origin != 0 {
 		v.Session = s.id
+	}
+	for i := range v.CallArgs {
+		s.bashPPAuthenticateCallbackValue(&v.CallArgs[i])
 	}
 	for i := range v.Elements {
 		s.bashPPAuthenticateCallbackValue(&v.Elements[i])

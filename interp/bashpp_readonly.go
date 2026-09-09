@@ -120,6 +120,12 @@ func (r *Runner) bashPPAssign(ctx context.Context, assign *syntax.BashPPAssign) 
 // rather than a scalar spelling of it.
 func (r *Runner) bashPPBuiltinAssign(assign *syntax.BashPPAssign) {
 	target := bashPPWordSource(assign.Target)
+	if r.bashPPGoSource && target == "_" && assign.Call != nil && bashPPPredeclaredCall(assign.Call) == "make" {
+		if _, ok := assign.Call.ArgType.(*syntax.BashPPChanType); ok {
+			r.bashPPRunValueBuiltin("make", assign.Call)
+			return
+		}
+	}
 	cell := r.bashPPScope.lookup(target)
 	if cell == nil || !syntax.BashPPValidIdent(target) {
 		r.bashPPBuiltinError("TYPE", "assignment target %q is not declared", target)
@@ -200,6 +206,9 @@ func (r *Runner) bashPPTupleAssignCall(ctx context.Context, assign *syntax.BashP
 }
 
 func (r *Runner) bashPPTupleAssign(assign *syntax.BashPPAssign) {
+	if r.goSourceReceiveAssign(assign) {
+		return
+	}
 	if len(assign.Values) == 0 || len(assign.ValueExprs) != len(assign.Values) {
 		pos := assign.Eq
 		if len(assign.Values) > 0 && assign.Values[0] != nil {
@@ -252,6 +261,19 @@ func (r *Runner) bashPPTupleAssign(assign *syntax.BashPPAssign) {
 				candidates[i] = cell
 				continue
 			}
+		}
+		if r.bashPPGoSource && r.bashPPNativeExpr(expr) {
+			value, err := r.bashPPBridgeExpr(expr)
+			if err != nil {
+				r.exit.fatal(err)
+				return
+			}
+			candidates[i] = goSourceNativeValueCell(value)
+			continue
+		}
+		if candidate := r.goSourceNativeNilCandidate(r.bashPPScope.lookup(assign.Names[i].Value), expr); candidate != nil {
+			candidates[i] = candidate
+			continue
 		}
 		if ident, ok := expr.(*syntax.BashPPIdent); ok {
 			source := r.bashPPScope.lookup(ident.Name.Value)

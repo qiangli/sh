@@ -214,6 +214,7 @@ func (r *Runner) bashPPClosure(value string) (*bashPPFunc, bool) {
 // at the point `defer` ran, which is what gives Go's "arguments are evaluated
 // when the defer statement executes" rule.
 type bashPPDeferred struct {
+	builtin func()
 	native  func(context.Context) error
 	testing func()
 	agentic bool
@@ -440,6 +441,15 @@ func (r *Runner) bashPPMethodDecl(d *syntax.BashPPFuncDecl) {
 // }(1)` captures the scope at the point of the call, exactly as the same
 // literal bound to a name captures it at the point of the binding.
 func (r *Runner) bashPPLookupFunc(c *syntax.BashPPCall) (*bashPPFunc, bool) {
+	if pin := r.bashPPGoSourcePin; pin != nil && pin.call == c {
+		// A launched task's callee was resolved once, in the parent. Re-running
+		// a computed callee here would evaluate it twice; re-reading a variable
+		// could find a different function than the `go` statement launched.
+		if pin.bound != nil {
+			return pin.bound, true
+		}
+		return r.bashPPClosure(pin.handle)
+	}
 	if r.bashPPGoSource && c.CalleeExpr != nil {
 		if method, ok := c.CalleeExpr.(*syntax.BashPPSelectorExpr); ok && method.MethodValue && !r.bashPPNativeExpr(method.X) {
 			fn, err := r.goSourceLocalMethod(method, len(c.Args) > 0)
@@ -944,6 +954,18 @@ func bashPPValidateConcreteTypeExpr(typ syntax.BashPPTypeExpr) error {
 }
 
 func (r *Runner) bashPPConstraintSatisfied(arg, constraint syntax.BashPPTypeExpr) bool {
+	// `any` is satisfied by every type, so there is nothing to decide and no
+	// need for the argument to be a concrete type. gosource lowers `any` to a
+	// literal empty interface, which would otherwise be routed through the
+	// implements check and reject an uninstantiated type parameter — the form
+	// a generic type takes inside its own declaration, as in the Tour's
+	// `type List[T any] struct { next *List[T]; val T }`. A type parameter
+	// used as a type argument is checked against a real constraint where the
+	// generic type is instantiated, which is the first point a concrete type
+	// exists to check.
+	if bashPPEmptyInterfaceType(constraint) {
+		return true
+	}
 	switch c := constraint.(type) {
 	case *syntax.BashPPNamedType:
 		switch c.Name.Value {
@@ -963,6 +985,13 @@ func (r *Runner) bashPPConstraintSatisfied(arg, constraint syntax.BashPPTypeExpr
 		return r.bashPPTypeSetSatisfied(arg, constraint)
 	}
 	return false
+}
+
+// bashPPEmptyInterfaceType reports whether typ is spelled as an interface with
+// no methods and no type terms, that is, `any`.
+func bashPPEmptyInterfaceType(typ syntax.BashPPTypeExpr) bool {
+	iface, ok := typ.(*syntax.BashPPInterfaceType)
+	return ok && len(iface.Elems) == 0 && len(iface.Methods) == 0
 }
 
 func (r *Runner) bashPPCellForWord(w *syntax.Word) *bashPPCell {
@@ -1134,6 +1163,9 @@ func (r *Runner) bashPPTypedCallArgs(call *syntax.BashPPCall, fn *bashPPFunc) (r
 			failure = errBashPPScalarInterrupted
 		}
 	}()
+	if r.bashPPGoSource && !call.Ellipsis.IsValid() {
+		return r.goSourceCallArguments(call, fn)
+	}
 	if len(call.ArgExprs) != len(call.Args) {
 		return nil, false, fmt.Errorf("BASHPP-EEXPR-CALL: inconsistent positioned scalar arguments")
 	}
@@ -1243,12 +1275,23 @@ func (r *Runner) bashPPBindMethod(cell *bashPPCell, method string, addressable b
 				return nil, false
 			}
 			copyCell = bashPPCell{declType: typ, typeName: cell.typeName}
-			bashPPStoreCellValue(&copyCell, value, meta)
+			if r.bashPPGoSource && meta != nil {
+				copyCell.vr = expand.Variable{Set: true, Kind: expand.Object, Obj: value}
+				copyCell.valueMeta = meta
+				copyCell.object = &bashPPObjectIdentity{collection: meta}
+			} else {
+				bashPPStoreCellValue(&copyCell, value, meta)
+			}
 		}
 		if copyCell.vr.Kind == expand.Object {
 			if meta := bashPPCellMeta(&copyCell); bashPPValueMeta(meta) {
 				value, copiedMeta := bashPPCopyArrayValue(copyCell.vr.Obj, meta)
-				copyCell.vr = expand.NewObject(value)
+				if r.bashPPGoSource {
+					// A typed value copy copies fields, not referenced storage.
+					copyCell.vr = expand.Variable{Set: true, Kind: expand.Object, Obj: value}
+				} else {
+					copyCell.vr = expand.NewObject(value)
+				}
 				copyCell.valueMeta = copiedMeta
 				copyCell.object = &bashPPObjectIdentity{collection: copiedMeta}
 			}
@@ -1369,6 +1412,18 @@ func (r *Runner) bashPPCallValues(c *syntax.BashPPCall, fn *bashPPFunc) (result 
 			success = false
 		}
 	}()
+	if r.bashPPGoSource && !c.Ellipsis.IsValid() && len(c.ArgExprs) == len(c.Args) {
+		args, ok, err := r.goSourceCallArguments(c, fn)
+		if err != nil {
+			if err != errBashPPScalarInterrupted {
+				r.errf("%s%v\n", r.bashErrPrefix(c.Pos()), err)
+				r.exit = exitStatus{code: 2}
+			}
+			r.bashPPShortFailureSeq++
+			return nil, false
+		}
+		return args, ok
+	}
 	r.bashPPCallCells = nil
 	r.bashPPCallChannels = nil
 	if required := bashppRequiredAfterDefault(fn.params()); required != "" {
@@ -1667,10 +1722,18 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 			}
 			break
 		}
+		if param.name == "" {
+			continue
+		}
 		_ = r.bashPPScope.declare(param.name,
 			expand.Variable{Set: true, Kind: expand.String, Str: args[i]}, false)
 		if i < len(callCells) && callCells[i] != nil {
-			copy := bashPPCopyAssignmentCell(callCells[i])
+			copy, err := r.goSourceExpectedCell(callCells[i], param.typ)
+			if err != nil {
+				r.exit.fatal(err)
+				return nil
+			}
+			copy = bashPPCopyAssignmentCell(copy)
 			copy.channel = nil
 			copy.channelOwner = nil
 			copy.constant = false
@@ -1690,7 +1753,7 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 			cell := r.bashPPScope.lookup(param.name)
 			cell.channel, cell.channelOwner = callChannels[i], r.bashPPConcurrent
 		}
-		if i < len(callInterfaces) && callInterfaces[i] != nil {
+		if i < len(callInterfaces) && callInterfaces[i] != nil && !(r.bashPPGoSource && i < len(callCells) && callCells[i] != nil) {
 			cell := r.bashPPScope.lookup(param.name)
 			cell.interfaceValue = callInterfaces[i]
 		}
@@ -1700,6 +1763,9 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 				cell.typeName = base
 				cell.pointer = strings.HasPrefix(param.declared, "*")
 				cell.nilPointer = cell.pointer && args[i] == ""
+				if r.bashPPGoSource && cell.pointer {
+					cell.nilPointer = cell.pointerValue == nil
+				}
 			}
 		}
 	}
@@ -1783,6 +1849,13 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 			r.bashPPResultCells[i] = &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: results[i]}}
 		}
 		if i < len(resultTypes) {
+			var err error
+			r.bashPPResultCells[i], err = r.goSourceExpectedCell(r.bashPPResultCells[i], resultTypes[i])
+			if err != nil {
+				r.exit.fatal(err)
+				r.bashPPResultCells = nil
+				return nil
+			}
 			r.bashPPResultCells[i].declType = resultTypes[i]
 			r.bashPPResultCells[i].typeName = bashPPNamedTypeBase(resultTypes[i])
 		}
@@ -2092,6 +2165,15 @@ func (r *Runner) bashPPReturnStmt(ctx context.Context, ret *syntax.BashPPReturn)
 			r.bashPPReturnScalarExpr(conv)
 			return
 		}
+		if cell, handled, err := r.goSourceBuiltinResult(ret.Call); handled {
+			if err != nil {
+				r.bashPPShortFailureSeq++
+				return
+			}
+			r.bashPPReturn = bashPPReturnState{active: true, values: []string{cell.vr.String()}, cells: []*bashPPCell{bashPPCopyAssignmentCell(cell)}}
+			r.exit.returning = true
+			return
+		}
 		fn, ok := r.bashPPLookupFunc(ret.Call)
 		if !ok {
 			r.bashPPShortFailureSeq++
@@ -2149,11 +2231,42 @@ func (r *Runner) bashPPReturnStmt(ctx context.Context, ret *syntax.BashPPReturn)
 // bashPPReturnScalarExpr settles a single scalar result, retaining the value's
 // type so a defined type reaches the caller as itself.
 func (r *Runner) bashPPReturnScalarExpr(expr syntax.BashPPExpr) {
+	if cell, handled, err := r.goSourceNilValueCell(expr); handled {
+		if err != nil {
+			r.exit.fatal(err)
+			return
+		}
+		r.bashPPReturn = bashPPReturnState{active: true, values: []string{cell.vr.String()}, cells: []*bashPPCell{cell}}
+		r.exit.returning = true
+		return
+	}
+
 	if cell, handled, err := r.goSourceChannelValueCell(expr); handled {
 		if err != nil {
 			r.bashPPGoSendError(expr, err)
 			return
 		}
+		r.bashPPReturn = bashPPReturnState{active: true, values: []string{cell.vr.String()}, cells: []*bashPPCell{cell}}
+		r.exit.returning = true
+		return
+	}
+	// An imported value returned as itself — `return color.RGBAModel`,
+	// `return image.Rect(…)` — crosses back as the authenticated native handle
+	// the dependency owns, never flattened into text. Imported scalars keep
+	// their existing scalar cells; see [goSourceNativeValueCell].
+	if r.bashPPGoSource && r.bashPPNativeExpr(expr) {
+		value, err := r.bashPPBridgeExpr(expr)
+		if err != nil {
+			// Native evaluation may already have recorded a Go panic or exit.
+			// Keep that state so deferred recover and cancellation can unwind.
+			if err == errBashPPScalarInterrupted || r.bashPPPanicking() || r.exit.exiting || r.exit.fatalExit {
+				return
+			}
+			r.exit.fatal(&goSourceError{prefix: r.bashErrPrefix(expr.Pos()), err: err})
+			r.bashPPShortFailureSeq++
+			return
+		}
+		cell := goSourceNativeValueCell(value)
 		r.bashPPReturn = bashPPReturnState{active: true, values: []string{cell.vr.String()}, cells: []*bashPPCell{cell}}
 		r.exit.returning = true
 		return
@@ -2210,6 +2323,13 @@ func (r *Runner) bashPPDeferStmt(ctx context.Context, d *syntax.BashPPDefer) {
 	// a literal is captured now, and a name resolves to the function it names
 	// now, so a later rebinding cannot change which cleanup runs.
 	entry := bashPPDeferred{call: d.Call, agentic: r.bashPPAgentic}
+	if invoke, handled := r.goSourceCaptureDeferredClose(d.Call); handled {
+		if invoke != nil {
+			entry.builtin = invoke
+			r.bashPPDeferStack = append(r.bashPPDeferStack, entry)
+		}
+		return
+	}
 	if invoke, handled := r.bashPPTestingCapture(d.Call); handled {
 		if invoke != nil {
 			entry.testing = invoke
@@ -2289,8 +2409,11 @@ func (r *Runner) bashPPRunDefers(ctx context.Context, mark int) {
 		// point of it — so the panic stops halting statements for the length
 		// of this call, without ceasing to be recoverable by it.
 		r.bashPPPanic.running = r.bashPPPanic.active
+		builtinPanicDepth := len(r.bashPPPanic.chain)
 		runDeferred := func() {
 			switch {
+			case d.builtin != nil:
+				d.builtin()
 			case d.native != nil:
 				if err := d.native(ctx); err != nil && !r.bashPPPanicking() {
 					r.exit.fatal(err)
@@ -2344,7 +2467,11 @@ func (r *Runner) bashPPRunDefers(ctx context.Context, mark int) {
 		// Cleanup failures are observable. Keep the first failure in execution
 		// order while still running every remaining defer, then restore the
 		// enclosing function's return status when all cleanups succeeded.
-		if !deferFailed && (!r.exit.ok() || r.exit.err != nil) {
+		// A deferred GoSource builtin can start a recoverable panic. Its
+		// unwind status is not a failed shell cleanup to restore after a later
+		// defer recovers; the panic state carries that control transfer.
+		builtinPanic := d.builtin != nil && len(r.bashPPPanic.chain) > builtinPanicDepth
+		if !deferFailed && !builtinPanic && (!r.exit.ok() || r.exit.err != nil) {
 			failed, deferFailed = r.exit, true
 		}
 	}
@@ -2376,8 +2503,7 @@ type bashPPParam struct {
 }
 
 // bashppParams flattens a parameter list into one slot per declared name, plus
-// a slot for an unnamed variadic group — `func f(...int)` — which accepts
-// arguments without binding them.
+// slots for unnamed parameters, which accept arguments without binding them.
 func bashppParams(fields []*syntax.BashPPField) []bashPPParam {
 	var params []bashPPParam
 	for _, f := range fields {
@@ -2391,6 +2517,10 @@ func bashppParams(fields []*syntax.BashPPField) []bashPPParam {
 				name = f.Names[0].Value
 			}
 			params = append(params, bashPPParam{name: name, declared: declared, typ: f.FieldTypeExpr, variadic: true})
+			continue
+		}
+		if len(f.Names) == 0 {
+			params = append(params, bashPPParam{declared: declared, typ: f.FieldTypeExpr})
 			continue
 		}
 		for _, n := range f.Names {

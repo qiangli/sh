@@ -149,6 +149,37 @@ func (r *Runner) bashPPZeroSpareCapacity(seq []any, metas []*bashPPCollectionMet
 	}
 }
 
+// String conversion and append are distinct operations. Use a real escaping
+// primitive conversion for the runtime allocation, not append's growth policy.
+// Constant byte strings use the compiler's exact-length array lowering.
+func bashPPStringConversionCapacity(text, kind string, stringConstant bool) int {
+	if kind == "byte" {
+		if stringConstant {
+			return len(text)
+		}
+		return cap(bashPPHeapStringBytes(text))
+	}
+	return cap(bashPPHeapStringRunes(text))
+}
+
+// A noinline result escapes its defining frame. These contain no original
+// expressions or source bodies, only the primitive conversion of input data.
+//
+//go:noinline
+func bashPPHeapStringBytes(text string) []byte { return []byte(text) }
+
+//go:noinline
+func bashPPHeapStringRunes(text string) []rune { return []rune(text) }
+
+// Allocate fresh, typed backing storage; never zero a retained alias's spare
+// capacity. The caller supplies the capacity of the actual conversion route.
+func (r *Runner) bashPPConvertedStringStorage(elem syntax.BashPPTypeExpr, n, capacity int) ([]any, []*bashPPCollectionMeta) {
+	seq := make([]any, n, capacity)
+	metas := make([]*bashPPCollectionMeta, n, capacity)
+	r.bashPPZeroSpareCapacity(seq, metas, elem)
+	return seq, metas
+}
+
 // bashPPAppendSlice appends values to a slice payload with Go's own append
 // semantics: it reuses the backing array while the capacity allows, and
 // otherwise moves to a freshly allocated one whose capacity is the one Go would

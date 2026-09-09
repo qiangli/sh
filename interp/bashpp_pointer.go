@@ -40,6 +40,9 @@ func (r *Runner) bashPPPointerType(typ syntax.BashPPTypeExpr) (*syntax.BashPPPoi
 }
 
 func (r *Runner) bashPPPointerExprType(expr syntax.BashPPExpr, ptr *bashPPPointer) syntax.BashPPTypeExpr {
+	if target, nilConversion := r.bashPPNilPointerConversion(expr); nilConversion {
+		return target
+	}
 	switch x := expr.(type) {
 	case *syntax.BashPPParenExpr:
 		return r.bashPPPointerExprType(x.X, ptr)
@@ -79,6 +82,9 @@ func (r *Runner) bashPPValidatePointerType(typ syntax.BashPPTypeExpr) error {
 }
 
 func (r *Runner) bashPPPointerExprValue(expr syntax.BashPPExpr) (*bashPPPointer, error) {
+	if _, nilConversion := r.bashPPNilPointerConversion(expr); nilConversion {
+		return nil, nil
+	}
 	switch x := expr.(type) {
 	case *syntax.BashPPParenExpr:
 		return r.bashPPPointerExprValue(x.X)
@@ -184,6 +190,20 @@ func (r *Runner) bashPPAddress(expr syntax.BashPPExpr) (*bashPPPointer, error) {
 		switch x := node.(type) {
 		case *syntax.BashPPIdent:
 			return nil
+		case *syntax.BashPPParenExpr:
+			return descend(x.X)
+		case *syntax.BashPPDerefExpr:
+			// The setup above already followed the root pointer once, so the
+			// dereference naming that root contributes no further step -- this
+			// is how `(*p)[i]` reaches the same address as `p[i]` would if Go
+			// allowed that spelling. A deeper dereference would need a step
+			// this walker does not build, so it is refused rather than
+			// silently resolved to the wrong address.
+			inner, isIdent := x.X.(*syntax.BashPPIdent)
+			if isIdent && cell.pointer && inner.Name.Value == root {
+				return nil
+			}
+			return fmt.Errorf("BASHPP-ENONADDRESSABLE: operand is not addressable")
 		case *syntax.BashPPSelectorExpr:
 			if err := descend(x.X); err != nil {
 				return err
@@ -208,7 +228,10 @@ func (r *Runner) bashPPAddress(expr syntax.BashPPExpr) (*bashPPPointer, error) {
 			if err := descend(x.X); err != nil {
 				return err
 			}
-			collection, found := typ.(*syntax.BashPPCollectionType)
+			// A defined type such as `type bag []int` indexes exactly as its
+			// underlying collection does, so the shape has to be read through
+			// the definition rather than off the declared name.
+			collection, found := r.bashPPUnderlyingType(typ).(*syntax.BashPPCollectionType)
 			if !found {
 				return fmt.Errorf("BASHPP-EPOINTER-TARGET: indexed target is not a collection")
 			}
@@ -219,7 +242,14 @@ func (r *Runner) bashPPAddress(expr syntax.BashPPExpr) (*bashPPPointer, error) {
 			if err != nil {
 				return err
 			}
-			value, _, err := r.bashPPReadExpr(x.X)
+			var value any
+			if r.bashPPGoSource {
+				// descend has already evaluated every inner index. Read the
+				// saved path instead of executing those operands again.
+				value, _, _, err = ptr.read()
+			} else {
+				value, _, err = r.bashPPReadExpr(x.X)
+			}
 			if err != nil {
 				return err
 			}

@@ -111,6 +111,9 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 		// outermost block; give it one rather than binding nowhere.
 		r.bashPPScope = newBashPPScope(nil)
 	}
+	if r.goSourceChannelDeclaration(d) {
+		return
+	}
 	if r.bashPPNativeDeclaration(d) {
 		return
 	}
@@ -118,7 +121,10 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 		if r.bashPPTypes == nil {
 			r.bashPPTypes = make(map[string]bashPPType)
 		}
-		if _, exists := r.bashPPTypes[name]; exists {
+		// A pre-registered package-level type is already in the registry by
+		// design; only an entry this statement did not put there is a clash.
+		preRegistered := r.bashPPGoSourceClaimType(name)
+		if _, exists := r.bashPPTypes[name]; exists && !preRegistered {
 			r.errf("%stype %s redeclared in this session\n", r.bashErrPrefix(d.Pos()), name)
 			r.exit = exitStatus{code: 2}
 			return
@@ -826,6 +832,17 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 			r.exit = exitStatus{code: 2}
 			return
 		}
+		if cell, handled, err := r.goSourceNilValueCell(d.Expr); handled {
+			if err != nil {
+				r.exit.fatal(err)
+				return
+			}
+			r.bashPPDeclareName(d.Lhs[0].Value, cell.vr)
+			if target := r.bashPPScope.lookup(d.Lhs[0].Value); target != nil {
+				*target = *cell
+			}
+			return
+		}
 		if r.bashPPBindPointerExpr(d.Lhs[0].Value, d.Expr) {
 			return
 		}
@@ -1303,6 +1320,18 @@ func (r *Runner) bashPPValidateReusedShortValue(target, candidate *bashPPCell) e
 	if target.declType == nil {
 		return nil
 	}
+	if r.bashPPGoSource && candidate.vr.Kind == expand.Object {
+		if native, ok := candidate.vr.Obj.(*bashPPBridgeValue); ok && native != nil {
+			value, meta, err := r.goSourceNativeAssignedValue(*native, target.declType)
+			if err != nil {
+				return err
+			}
+			candidate.vr.Obj = value
+			candidate.valueMeta = meta
+			candidate.declType = target.declType
+			return nil
+		}
+	}
 	actual := candidate.declType
 	if actual == nil && candidate.typeName != "" {
 		actual = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: candidate.typeName}}
@@ -1739,13 +1768,20 @@ func (r *Runner) bashPPCall(ctx context.Context, c *syntax.BashPPCall) {
 	if r.bashPPTestingCall(c) {
 		return
 	}
+	// `wg.Go(f)` retains f past the call, so it can never be a synchronous
+	// dependency callback. It is answered as its own bridge operation, on a
+	// receiver the dependency authenticated as a sync.WaitGroup, before the
+	// call would be prepared as a native request. See gosource_waitgroup.go.
+	if r.goSourceWaitGroupGo(ctx, c) {
+		return
+	}
 	if r.bashPPBridgeHandles(c) {
 		if _, err := r.bashPPBridgeCall(ctx, c); err != nil && !r.bashPPPanicking() {
 			r.exit.fatal(err)
 		}
 		return
 	}
-	if c.CalleeExpr != nil {
+	if c.CalleeExpr != nil && !(r.bashPPGoSource && r.bashPPGoSourcePin != nil && r.bashPPGoSourcePin.call == c) {
 		r.exit.fatal(fmt.Errorf("%sgosource: computed call runtime is not implemented", r.bashErrPrefix(c.Pos())))
 		return
 	}

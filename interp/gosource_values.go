@@ -57,16 +57,25 @@ func (r *Runner) goSourceCallableCell(expr syntax.BashPPExpr) (*bashPPCell, bool
 	return nil, false, nil
 }
 func (r *Runner) goSourceValueCell(expr syntax.BashPPExpr) (*bashPPCell, error) {
-	if cell, handled, err := r.goSourceCollectionBuiltinCell(expr); handled {
+	if cell, handled, err := r.goSourceNilValueCell(expr); handled {
 		return cell, err
 	}
+	if paren, ok := expr.(*syntax.BashPPParenExpr); ok {
+		return r.goSourceValueCell(paren.X)
+	}
 	if cell, handled, err := r.goSourceChannelValueCell(expr); handled {
+		return cell, err
+	}
+	if cell, handled, err := r.goSourceCollectionBuiltinCell(expr); handled {
 		return cell, err
 	}
 	if cell, handled, err := r.goSourceCallableCell(expr); handled {
 		return cell, err
 	}
 	if call, ok := expr.(*syntax.BashPPCall); ok {
+		if cell, handled, err := r.goSourceBuiltinResult(call); handled {
+			return cell, err
+		}
 		if r.bashPPBridgeHandles(call) {
 			values, err := r.bashPPBridgeCall(r.ectx, call)
 			if err != nil {
@@ -87,6 +96,13 @@ func (r *Runner) goSourceValueCell(expr syntax.BashPPExpr) (*bashPPCell, error) 
 			}
 			return cells[0], nil
 		}
+	}
+	if r.bashPPNativeExpr(expr) {
+		value, err := r.bashPPBridgeExpr(expr)
+		if err != nil {
+			return nil, err
+		}
+		return goSourceNativeValueCell(value), nil
 	}
 	if cell, err := r.bashPPStructuredArgCell(nil, expr); err != nil || cell != nil {
 		return cell, err

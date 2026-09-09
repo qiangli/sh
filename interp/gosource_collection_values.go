@@ -200,12 +200,23 @@ func (r *Runner) goSourceCheckNativeElement(value any, expected syntax.BashPPTyp
 	if !ok || native == nil {
 		return fmt.Errorf("BASHPP-EASSIGN-MISMATCH: native element requires a dependency value")
 	}
-	identity, err := r.bashPPNativeTypeRequest("type", expected)
+	_, _, err := r.goSourceNativeAssignedValue(*native, expected)
+	return err
+}
+
+func (r *Runner) goSourceNativeAssignedValue(native bashPPBridgeValue, expected syntax.BashPPTypeExpr) (any, *bashPPCollectionMeta, error) {
+	// The helper checks the actual authenticated value's Go type. Name equality
+	// rejects legitimate concrete implementations of imported interfaces.
+	assignable, err := r.bashPPNativeTypeRequest("assignable", expected, native)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
-	if native.Type != identity.Text && native.NativeType != identity.Text {
-		return fmt.Errorf("BASHPP-EASSIGN-MISMATCH: cannot use native %s as %s", native.Type, identity.Text)
+	if assignable.Kind != "bool" || assignable.Text != "true" {
+		return nil, nil, fmt.Errorf("BASHPP-EASSIGN-MISMATCH: cannot use native %s as %s", native.Type, bashPPTypeText(expected))
 	}
-	return nil
+	// Preserve the static interface on a copy, never on the source binding.
+	if assignable.Interface != "" {
+		native.Interface = assignable.Interface
+	}
+	return &native, &bashPPCollectionMeta{typ: expected}, nil
 }

@@ -9088,7 +9088,13 @@ func (r *Runner) localeDecimalPoint() string {
 func (r *Runner) stmts(ctx context.Context, stmts []*syntax.Stmt) {
 	for _, stmt := range stmts {
 		r.stmt(ctx, stmt)
-		if r.bashPPGoSource && r.exit.code != 0 && !r.bashPPPanicking() {
+		// Go source form has no "the last command failed" status to carry, so a
+		// statement that reports failure aborts the program. A status a call
+		// uses to REPORT a result is exempt, exactly as it is exempt from
+		// errexit; see the recover case in [Runner.bashPPPredeclared]. A panic
+		// already unwinding carries its own termination and must not be
+		// re-reported as a plain fatal status.
+		if r.bashPPGoSource && r.exit.code != 0 && !r.exit.errexitExempt && !r.bashPPPanicking() {
 			r.exit.fatal(ExitStatus(r.exit.code))
 		}
 		// Propagate a pending break/continue out of a compound body (brace

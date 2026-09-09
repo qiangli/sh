@@ -510,6 +510,8 @@ func (x *BashPPBinaryExpr) End() Pos { return x.Y.End() }
 
 // BashPPConvertExpr is a source-reachable one-argument conversion.
 type BashPPConvertExpr struct {
+	// GoStringConstant records the original go/types constant-string operand.
+	GoStringConstant bool
 	// ConvTypeExpr preserves structured Go-source targets; ConvType retains legacy spelling.
 	ConvTypeExpr BashPPTypeExpr
 	ConvType     *Lit
@@ -1349,6 +1351,7 @@ type BashPPMakeChan struct {
 	Make           *Lit
 	ChanType       *BashPPChanType
 	Capacity       *Word
+	CapacityExpr   BashPPExpr // authoritative GoSource capacity
 	Lparen, Rparen Pos
 }
 

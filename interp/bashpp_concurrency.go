@@ -27,6 +27,7 @@ const (
 )
 
 type bashPPChannel struct {
+	native  *bashPPBridgeValue
 	elem    string
 	ch      chan any
 	element syntax.BashPPTypeExpr
@@ -176,9 +177,21 @@ func cloneBashPPTaskVariable(vr expand.Variable, objects *bashPPObjectCloner) (e
 	return vr, nil
 }
 
-func cloneBashPPTaskCells(r *Runner, objects *bashPPObjectCloner) error {
+func cloneBashPPTaskCells(r *Runner, objects *bashPPObjectCloner, shared map[*bashPPCell]bool) error {
 	metadata := make(map[*bashPPCollectionMeta]*bashPPCollectionMeta)
 	return r.bashPPWalkCells(func(cell *bashPPCell) error {
+		if shared[cell] {
+			// A GoSource captured cell is the PARENT's cell, reached here
+			// through the child's scope. Copying its payload would rewrite the
+			// parent's variable in place, which is the one thing sharing must
+			// not do; see gosource_task_capture.go.
+			return nil
+		}
+		if r.bashPPGoSource && r.bashPPGoTask {
+			// Go task scopes contain only shared lexical cells and immutable
+			// constants. Actual value arguments bypass shell deep cloning.
+			return nil
+		}
 		copy, err := cloneBashPPTaskVariable(cell.vr, objects)
 		if err != nil {
 			return err
@@ -629,6 +642,15 @@ func (r *Runner) bashPPMakeChan(ctx context.Context, d *syntax.BashPPShortDecl) 
 		r.exit.code = 2
 		return
 	}
+	if r.bashPPGoSource {
+		cell, err := r.goSourceMakeChannelCell(d.MakeChan.ChanType, d.MakeChan.CapacityExpr, d.MakeChan.Capacity)
+		if err != nil {
+			r.goSourceNativeChannelError(err)
+			return
+		}
+		r.bashPPBindReceivedCell(d.Lhs[0].Value, cell)
+		return
+	}
 	capacity := 0
 	elem := d.MakeChan.ChanType.Elem.Value
 	if _, ok := r.bashPPTypes[elem]; !r.bashPPGoSource && !ok && !bashPPBuiltinType(elem) {
@@ -636,7 +658,14 @@ func (r *Runner) bashPPMakeChan(ctx context.Context, d *syntax.BashPPShortDecl) 
 		r.exit.code = 2
 		return
 	}
-	if d.MakeChan.Capacity != nil {
+	if r.bashPPGoSource && d.MakeChan.CapacityExpr != nil {
+		var err error
+		capacity, err = r.goSourceChannelCapacity(d.MakeChan.CapacityExpr, d.MakeChan.Capacity)
+		if err != nil {
+			r.goSourceNativeChannelError(err)
+			return
+		}
+	} else if d.MakeChan.Capacity != nil {
 		var err error
 		capacity, err = strconv.Atoi(r.literal(d.MakeChan.Capacity))
 		if err != nil || capacity < 0 || capacity > bashPPMaxChanCapacity {
@@ -672,6 +701,10 @@ func (r *Runner) bashPPMakeChan(ctx context.Context, d *syntax.BashPPShortDecl) 
 func (r *Runner) bashPPSend(ctx context.Context, s *syntax.BashPPSend) {
 	c, ok := r.bashPPGoSendChannel(s)
 	if !ok {
+		return
+	}
+	if c.native != nil {
+		r.goSourceNativeSend(ctx, c, s)
 		return
 	}
 	v, ok := r.bashPPGoSendPayload(c, s)
@@ -731,6 +764,9 @@ func (r *Runner) bashPPReceiveCell(ctx context.Context, recv *syntax.BashPPRecei
 	c, ok := r.bashPPGoReceiveChannel(recv)
 	if !ok {
 		return nil, false
+	}
+	if c.native != nil {
+		return r.goSourceNativeReceive(ctx, c, lhs)
 	}
 	var v any
 	var open bool
@@ -805,8 +841,14 @@ func (r *Runner) bashPPClose(cl *syntax.BashPPClose) {
 // variables, cwd, options, functions/types/imports, traps/signals/jobs and fd
 // maps. The maps are task-owned; underlying OS open-file descriptions retain
 // their normal shared offsets. Only the group and channel cores are shared.
-func (r *Runner) bashPPTaskSnapshot(ordinal uint64) (*Runner, error) {
+func (r *Runner) bashPPTaskSnapshot(ordinal uint64, shared map[*bashPPCell]bool) (*Runner, error) {
+	// The scope cloner inside subshell is what grants capture identity, so the
+	// set has to be visible for exactly that call and no longer.
+	saved := r.bashPPGoSourceCapture
+	r.bashPPGoSourceCapture = shared
 	child := r.subshell(true)
+	r.bashPPGoSourceCapture = saved
+	child.bashPPGoSourceCapture = nil
 	child.bashPPConcurrent, child.bashPPGoTask, child.bashPPChanBoundary = r.bashPPConcurrent, true, false
 	child.bashPPFileRun = true
 	// A task is not a shell-copy boundary, so BASH_SUBSHELL stays unchanged.
@@ -916,13 +958,20 @@ func (r *Runner) bashPPTaskSnapshot(ordinal uint64) (*Runner, error) {
 	// handles keep naming the same objects; see bashpp_task.go.
 	objects.native = bashPPNativeScopeOf(r)
 	for name, vr := range r.writeEnv.Each {
+		if r.bashPPGoSource {
+			// The shell environment is an immutable binding snapshot here; Go
+			// variables resolve through the exact typed lexical cells. Never
+			// traverse referenced user storage solely for an unused env copy.
+			_ = child.writeEnv.Set(name, vr)
+			continue
+		}
 		copy, err := cloneBashPPTaskVariable(vr, objects)
 		if err != nil {
 			return child, fmt.Errorf("variable %s: %w", name, err)
 		}
 		_ = child.writeEnv.Set(name, copy)
 	}
-	if err := cloneBashPPTaskCells(child, objects); err != nil {
+	if err := cloneBashPPTaskCells(child, objects, shared); err != nil {
 		return child, err
 	}
 	for name, typ := range child.bashPPTypes {
@@ -981,12 +1030,20 @@ func (r *Runner) bashPPGo(ctx context.Context, g *syntax.BashPPGo) {
 		r.exit.code = 2
 		return
 	}
-	// Go evaluates a launched call's arguments in the launching goroutine.
-	// Evaluating them here also gives a computed operand such as `cap(c)` its
-	// value rather than its Go source text. See gosource_calls.go.
-	call := r.bashPPGoSourceEvaluatedCall(g.Call)
+	// Resolve the function value first; then evaluate its arguments exactly
+	// once in the launching goroutine, before any task is registered.
+	call := g.Call
+	shared, pin := r.bashPPGoSourceTaskCapture(call)
 	if r.exit.code != 0 {
 		return
+	}
+	var prepared *goSourceTaskArguments
+	if r.bashPPGoSource {
+		prepared, shared = r.goSourcePrepareTaskArguments(call, pin)
+		if prepared == nil || r.exit.code != 0 {
+			return
+		}
+		pin = prepared.pin
 	}
 	c := r.bashPPConcurrency(ctx)
 	state, ok := c.add()
@@ -996,13 +1053,16 @@ func (r *Runner) bashPPGo(ctx context.Context, g *syntax.BashPPGo) {
 		return
 	}
 	ordinal := state.ordinal
-	child, err := r.bashPPTaskSnapshot(ordinal)
+	child, err := r.bashPPTaskSnapshot(ordinal, shared)
 	if err != nil {
 		if child != nil {
 			child.closeBashPPTaskResources()
 		}
 		c.done(ordinal, &bashPPTaskFailure{ordinal: ordinal, code: 2, text: fmt.Sprintf("task snapshot: %v", err)})
 		return
+	}
+	if pin != nil && pin.bound != nil {
+		pin = child.goSourceCopyTaskMethodPin(pin, shared)
 	}
 	child.bashPPTaskState = state
 	if c.ctx.Err() != nil {
@@ -1033,7 +1093,20 @@ func (r *Runner) bashPPGo(ctx context.Context, g *syntax.BashPPGo) {
 		if c.ctx.Err() != nil {
 			return
 		}
-		child.bashPPCall(c.ctx, call)
+		// The callee was resolved once, in the parent, exactly as Go
+		// evaluates a function value in the launching goroutine; the child
+		// runs that function rather than resolving the name again.
+		child.bashPPGoSourcePin = pin
+		if child.bashPPGoSource {
+			// Implicit expression requests use ectx too, so they must share
+			// the launched task's cancellation lifetime with its statements.
+			child.fillExpandConfig(c.ctx)
+		}
+		if prepared != nil {
+			child.goSourceInvokeTaskArguments(c.ctx, call, prepared)
+		} else {
+			child.bashPPCall(c.ctx, call)
+		}
 		code := child.exit.code
 		canceled := child.bashPPTaskCanceled || errors.Is(child.exit.err, context.Canceled) || errors.Is(child.exit.err, context.DeadlineExceeded)
 		if canceled {
@@ -1235,6 +1308,9 @@ func (r *Runner) bashPPVisitPersistentCells(fn func(*bashPPCell)) {
 }
 
 func (r *Runner) bashPPSelect(ctx context.Context, s *syntax.BashPPSelect) {
+	var nativeCases []bashPPBridgeValue
+	var nativeArms []*syntax.BashPPSelectCase
+	hasLocal := false
 	var cases []reflect.SelectCase
 	var arms []*syntax.BashPPSelectCase
 	var caseElems []*bashPPChannel
@@ -1264,6 +1340,12 @@ func (r *Runner) bashPPSelect(ctx context.Context, s *syntax.BashPPSelect) {
 			if !ok {
 				return
 			}
+			if c.native != nil {
+				nativeCases = append(nativeCases, bashPPBridgeValue{Kind: "recv", Elements: []bashPPBridgeValue{*c.native}})
+				nativeArms = append(nativeArms, arm)
+			} else {
+				hasLocal = true
+			}
 			cases = append(cases, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(c.ch)})
 			caseElems = append(caseElems, c)
 		case *syntax.BashPPShortDecl:
@@ -1281,6 +1363,12 @@ func (r *Runner) bashPPSelect(ctx context.Context, s *syntax.BashPPSelect) {
 			if !ok {
 				return
 			}
+			if c.native != nil {
+				nativeCases = append(nativeCases, bashPPBridgeValue{Kind: "recv", Elements: []bashPPBridgeValue{*c.native}})
+				nativeArms = append(nativeArms, arm)
+			} else {
+				hasLocal = true
+			}
 			cases = append(cases, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(c.ch)})
 			caseElems = append(caseElems, c)
 		case *syntax.BashPPSend:
@@ -1288,6 +1376,17 @@ func (r *Runner) bashPPSelect(ctx context.Context, s *syntax.BashPPSelect) {
 			if !ok {
 				return
 			}
+			if c.native != nil {
+				value, err := r.goSourceNativeChannelPayload(comm.ValueExpr)
+				if err != nil {
+					r.bashPPGoSendError(comm.ValueExpr, err)
+					return
+				}
+				nativeCases = append(nativeCases, bashPPBridgeValue{Kind: "send", Elements: []bashPPBridgeValue{*c.native, value}})
+				nativeArms = append(nativeArms, arm)
+				continue
+			}
+			hasLocal = true
 			v, ok := r.bashPPGoSendPayload(c, comm)
 			if !ok {
 				return
@@ -1316,6 +1415,15 @@ func (r *Runner) bashPPSelect(ctx context.Context, s *syntax.BashPPSelect) {
 			return
 		}
 		arms = append(arms, arm)
+	}
+	if len(nativeCases) > 0 {
+		if hasLocal {
+			r.errf("%sgosource: mixed native/interpreted channel select requires atomic arbitration\n", r.bashErrPrefix(s.Pos()))
+			r.exit.code = 2
+			return
+		}
+		r.goSourceNativeSelect(ctx, nativeCases, nativeArms, def)
+		return
 	}
 	// All channel operands and send values have now been evaluated once.
 	for _, c := range pendingSends {

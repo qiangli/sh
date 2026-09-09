@@ -57,6 +57,10 @@ func (r *Runner) bashPPGoSourceChanCall(c *syntax.BashPPCall) bool {
 	if r.bashPPFuncs["close"] != nil || (r.bashPPScope != nil && r.bashPPScope.lookup("close") != nil) {
 		return false
 	}
+	if len(c.ArgExprs) == 1 && c.ArgExprs[0] != nil {
+		r.goSourceCloseChannel(c.ArgExprs[0])
+		return true
+	}
 	r.bashPPClose(&syntax.BashPPClose{Kw: c.Fun[0], Chan: c.Args[0], Lparen: c.Lparen, Rparen: c.Rparen})
 	return true
 }
@@ -89,6 +93,11 @@ func (r *Runner) bashPPGoSourceEvaluatedCall(call *syntax.BashPPCall) *syntax.Ba
 			out = &copied
 		}
 		out.Args[i] = replacement
+	}
+	if out != call {
+		// This clone carries values prepared in the launching goroutine.
+		// Original expression trees must not execute again in the child.
+		out.ArgExprs = nil
 	}
 	return out
 }

@@ -35,6 +35,11 @@ import (
 var bashPPNativeWorker string
 
 type bashPPBridgeValue struct {
+	ReaderBuffer []byte              `json:"reader_buffer,omitempty"`
+	ReaderLength int                 `json:"reader_length,omitempty"`
+	CallArgs     []bashPPBridgeValue `json:"call_args,omitempty"`
+	sliceView    *bashPPNativeSlice  // host-only original backing view
+
 	// Callable is derived by the interpreter from authenticated native type or
 	// import metadata; the dependency worker cannot set callback policy itself.
 	Callable   string                       `json:"-"`
@@ -56,6 +61,9 @@ type bashPPBridgeEntry struct {
 	Value bashPPBridgeValue `json:"value"`
 }
 type bashPPBridgeRequest struct {
+	SliceBuffers []bashPPNativeSliceBuffer `json:"slice_buffers,omitempty"`
+	sliceTargets []*bashPPNativeSlice
+
 	ID       uint64              `json:"id"`
 	Op       string              `json:"op"`
 	Selector string              `json:"selector"`
@@ -68,6 +76,8 @@ type bashPPBridgeRequest struct {
 	Error  string              `json:"error,omitempty"`
 }
 type bashPPBridgeResponse struct {
+	SliceUpdates []bashPPNativeSliceBuffer `json:"slice_updates,omitempty"`
+
 	Panic *bashPPBridgeValue `json:"panic,omitempty"`
 	ID    uint64             `json:"id"`
 	// Op, Selector and Receiver are set only when the dependency is asking the
@@ -79,42 +89,57 @@ type bashPPBridgeResponse struct {
 	Error    string              `json:"error,omitempty"`
 }
 type bashPPNativeSession struct {
-	functions       map[uint64]*bashPPFunc
-	functionNext    uint64
-	callbackGate    chan struct{}
-	activeCallbacks chan bashPPBridgeResponse
-	callbackOwner   *Runner
-	origins         map[uint64]*bashPPPointer
-	originNext      uint64
-	start           sync.Mutex
-	write           sync.Mutex
-	mu              sync.Mutex
-	next            atomic.Uint64
-	conn            net.Conn
-	cmd             *exec.Cmd
-	pending         map[uint64]chan bashPPBridgeResponse
-	done            chan struct{}
-	waitErr         error
-	closeOnce       sync.Once
-	cleanup         func()
-	imports         string
-	locals          string
-	id              string
+	functions           map[uint64]*bashPPFunc
+	functionNext        uint64
+	callbackGate        chan struct{}
+	activeCallbacks     chan bashPPBridgeResponse
+	callbackOwner       *Runner
+	origins             map[uint64]*bashPPPointer
+	originNext          uint64
+	start               sync.Mutex
+	write               sync.Mutex
+	mu                  sync.Mutex
+	next                atomic.Uint64
+	conn                net.Conn
+	cmd                 *exec.Cmd
+	pending             map[uint64]chan bashPPBridgeResponse
+	done                chan struct{}
+	waitErr             error
+	closeCancellation   error // protected by mu; set only by the closer of conn
+	processCancellation error // protected by mu; command context requested kill
+	closeOnce           sync.Once
+	cleanup             func()
+	imports             string
+	locals              string
+	id                  string
 }
 
 func (r *Runner) closeGoSourceBridge() {
+	r.bashPPTools.nativeTypes = nil
 	if session := r.bashPPTools.bridge; session != nil {
 		session.close()
 		r.bashPPTools.bridge = nil
 	}
 }
-func (s *bashPPNativeSession) close() {
+func (s *bashPPNativeSession) close() { s.closeCanceled(nil) }
+
+func (s *bashPPNativeSession) closeCanceled(cause error) {
 	s.closeOnce.Do(func() {
 		if s.conn != nil {
 			s.write.Lock()
+			processExited := false
+			select {
+			case <-s.done:
+				processExited = true
+			default:
+			}
 			_ = json.NewEncoder(s.conn).Encode(bashPPBridgeRequest{Op: "close"})
+			if err := s.conn.Close(); err == nil && cause != nil && !processExited {
+				s.mu.Lock()
+				s.closeCancellation = cause
+				s.mu.Unlock()
+			}
 			s.write.Unlock()
-			_ = s.conn.Close()
 		}
 		if s.cmd != nil && s.cmd.Process != nil {
 			select {
@@ -161,10 +186,15 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 	auth := hex.EncodeToString(secret)
 	s.id = auth[:16]
 	source = strings.Replace(source, "//CONNECTION", "const bridgeAddress = "+strconv.Quote(listener.Addr().String())+"\nconst bridgeAuth = "+strconv.Quote(auth), 1)
-	file, cleanup, err := bashPPImportTempSource(bashPPModuleRequest(req).Dir, "bashpp-session-*.go")
+	scratchEnv := req.RuntimeEnv
+	if scratchEnv == nil {
+		scratchEnv = req.Env
+	}
+	file, err := bashPPImportTempSource(bashPPModuleRequest(req).Dir, "bashpp-session-*.go", scratchEnv, bashPPScratchIsolated)
 	if err != nil {
 		return err
 	}
+	cleanup := file.cleanup
 	s.cleanup = cleanup
 	if _, err = file.WriteString(source); err != nil {
 		file.Close()
@@ -176,7 +206,7 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 		return err
 	}
 	binary := file.Name() + ".bin"
-	build := exec.CommandContext(ctx, req.Go, "build", "-p", "2", "-o", binary, file.Name())
+	build := exec.CommandContext(ctx, req.Go, "build", "-p", "2", "-overlay="+file.overlay, "-o", binary, file.buildPath)
 	build.Dir, build.Env = bashPPModuleRequest(req).Dir, setEnvString(req.Env, "CGO_ENABLED", "0")
 	var diagnostics bytes.Buffer
 	build.Stdout, build.Stderr = &diagnostics, &diagnostics
@@ -191,7 +221,13 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 	cmd.Dir, cmd.Env = req.Dir, req.RuntimeEnv
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = req.Stdin, req.Stdout, req.Stderr
 	bashPPNativeProcessGroup(cmd)
-	cmd.Cancel = func() error { bashPPNativeKill(cmd); return nil }
+	cmd.Cancel = func() error {
+		s.mu.Lock()
+		s.processCancellation = ctx.Err()
+		s.mu.Unlock()
+		bashPPNativeKill(cmd)
+		return nil
+	}
 	if err = cmd.Start(); err != nil {
 		cleanup()
 		return err
@@ -208,7 +244,10 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 		close(s.done)
 		_ = listener.Close()
 		if conn != nil {
+			// Serialize local close with writes and cancellation provenance.
+			s.write.Lock()
 			_ = conn.Close()
+			s.write.Unlock()
 		}
 	}()
 	if tcp, ok := listener.(*net.TCPListener); ok {
@@ -227,6 +266,11 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 		s.close()
 		return errors.New("gosource: unauthenticated dependency bridge")
 	}
+	// The process has loaded its executable and authenticated its connection.
+	// Removing build inputs now also prevents abrupt host termination from
+	// leaving helper effects in the caller's TMPDIR. Close retries cleanup on
+	// systems which cannot unlink an executable while it is running.
+	cleanup()
 	_ = conn.SetDeadline(time.Time{})
 	s.mu.Lock()
 	s.conn = conn
@@ -268,6 +312,9 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 }
 func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest, q bashPPBridgeRequest) ([]bashPPBridgeValue, error) {
 	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := prepareNativeSliceBuffers(req, &q); err != nil {
 		return nil, err
 	}
 	if err := validateLocalTransport(req, q); err != nil {
@@ -326,7 +373,7 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 	err = json.NewEncoder(s.conn).Encode(q)
 	s.write.Unlock()
 	if err != nil {
-		return nil, err
+		return nil, s.closedWriteError(ctx, err)
 	}
 	for {
 		select {
@@ -341,6 +388,9 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 				}
 			}
 		case reply := <-wait:
+			if err := applyNativeSliceBuffers(q, reply); err != nil {
+				return nil, err
+			}
 			if reply.Panic != nil {
 				return nil, &bashPPCallbackPanic{value: reply.Panic.Text}
 			}
@@ -357,12 +407,15 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 			}
 			return reply.Values, nil
 		case <-ctx.Done():
-			s.close()
+			s.closeCanceled(ctx.Err())
 			return nil, ctx.Err()
 		case <-s.done:
 			s.mu.Lock()
 			err := s.waitErr
 			s.mu.Unlock()
+			if canceled := s.canceledTermination(ctx, err); canceled != nil {
+				return nil, canceled
+			}
 			if err == nil {
 				// A clean exit is the original program terminating itself, for
 				// example os.Exit(0) or a successful syscall.Exec replacement.
@@ -399,6 +452,7 @@ func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, err
 	}
 	sort.Strings(ordered)
 	var imports, symbols, typeEntries strings.Builder
+	importAliases := map[string]string{}
 	for i, path := range ordered {
 		blankOnly := true
 		for _, alias := range paths[path] {
@@ -415,6 +469,9 @@ func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, err
 			return "", err
 		}
 		alias := fmt.Sprintf("bpppkg%d", i)
+		for _, original := range paths[path] {
+			importAliases[original] = alias
+		}
 		fmt.Fprintf(&imports, "%s %q\n", alias, path)
 		used := false
 		for _, name := range pkg.Scope().Names() {
@@ -509,13 +566,49 @@ func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, err
 	// name. Only the declaration crosses over: a mirrored String/Error body is
 	// a fixed callback into the interpreter, never compiled original code.
 	var locals strings.Builder
-	for _, local := range req.LocalTypes {
+	localTypes := append([]bashPPLocalType(nil), req.LocalTypes...)
+	for i := range localTypes {
+		mapped, err := bashPPNativeTypeImports(localTypes[i].Decl, importAliases)
+		if err != nil {
+			return "", err
+		}
+		localTypes[i].Decl = mapped
+		// Mirrored signatures name imported types the same way the original
+		// program did; the helper knows them only by its own generated aliases.
+		methods := append([]bashPPLocalMethod(nil), localTypes[i].Methods...)
+		rewrite := func(list []string) ([]string, error) {
+			out := make([]string, len(list))
+			for k, text := range list {
+				mapped, err := bashPPNativeTypeImports(text, importAliases)
+				if err != nil {
+					return nil, err
+				}
+				out[k] = mapped
+			}
+			return out, nil
+		}
+		for j := range methods {
+			// Copy rather than rewrite in place: the caller's descriptors are
+			// the session identity key and must keep the original spellings.
+			if methods[j].Params, err = rewrite(methods[j].Params); err != nil {
+				return "", err
+			}
+			if methods[j].Results, err = rewrite(methods[j].Results); err != nil {
+				return "", err
+			}
+		}
+		localTypes[i].Methods = methods
+	}
+	for _, local := range localTypes {
 		locals.WriteString(bashPPLocalTypeGo(local))
 		// Both spellings resolve: the original program's own name, and the
 		// package-qualified identity Go's %T prints for it.
 		fmt.Fprintf(&typeEntries, "%q: reflect.TypeFor[%s](),\n%q: reflect.TypeFor[%s](),\n", local.Name, local.Name, "main."+local.Name, local.Name)
+		if local.WireType != "" {
+			fmt.Fprintf(&typeEntries, "%q: reflect.TypeFor[%s](),\n", local.WireType, local.Name)
+		}
 	}
-	codecs, err := bashPPLocalCodecsGo(req.LocalTypes)
+	codecs, err := bashPPLocalCodecsGo(localTypes)
 	if err != nil {
 		return "", err
 	}
@@ -618,6 +711,18 @@ func (r *Runner) bashPPBridgeRegisterScalarTypes(ctx context.Context, req bashPP
 	if r.bashPPTypes == nil {
 		r.bashPPTypes = map[string]bashPPType{}
 	}
+	// Copy on write: public subshells and interpreted tasks may share the
+	// previous immutable export metadata without sharing import mutations.
+	nativeTypes := make(map[string]types.Type, len(r.bashPPTools.nativeTypes)+pkg.Scope().Len())
+	for name, typ := range r.bashPPTools.nativeTypes {
+		nativeTypes[name] = typ
+	}
+	for _, name := range pkg.Scope().Names() {
+		if object, ok := pkg.Scope().Lookup(name).(*types.TypeName); ok && object.Exported() {
+			nativeTypes[path+"."+name] = object.Type()
+		}
+	}
+	r.bashPPTools.nativeTypes = nativeTypes
 	for _, name := range pkg.Scope().Names() {
 		object, ok := pkg.Scope().Lookup(name).(*types.TypeName)
 		if !ok || !object.Exported() {
@@ -641,6 +746,49 @@ func (r *Runner) bashPPBridgeRegisterScalarTypes(ctx context.Context, req bashPP
 				r.bashPPTypes[binding] = bashPPType{underlying: basic.Name(), alias: true, typeExpr: &syntax.BashPPNamedType{Name: &syntax.Lit{Value: canonical}}}
 			}
 		}
+	}
+	return nil
+}
+
+// A sibling may have passed its initial context check before EOF cancellation
+// closed the shared connection. Only that causally identified local close is
+// cancellation; ordinary network failures and live-context requests stay errors.
+func (s *bashPPNativeSession) closedWriteError(ctx context.Context, err error) error {
+	if ctx.Err() == nil || !errors.Is(err, net.ErrClosed) {
+		return err
+	}
+	s.mu.Lock()
+	canceled := s.closeCancellation != nil || s.processCanceledLocked(s.waitErr)
+	s.mu.Unlock()
+	if canceled {
+		return ctx.Err()
+	}
+	return err
+}
+
+// A signaled dependency process is cancellation only when its command context
+// requested that kill. An ordinary exit status remains the program's own exit.
+func (s *bashPPNativeSession) processCanceledLocked(err error) bool {
+	var exit *exec.ExitError
+	return s.processCancellation != nil && errors.As(err, &exit) && exit.ExitCode() < 0
+}
+func (s *bashPPNativeSession) canceledTermination(ctx context.Context, err error) error {
+	if ctx.Err() == nil {
+		return nil
+	}
+	// A close response can terminate the helper before the closer records
+	// its provenance. Wait for that close transaction before inspecting it.
+	s.write.Lock()
+	defer s.write.Unlock()
+	s.mu.Lock()
+	canceled := s.processCanceledLocked(err)
+	if s.closeCancellation != nil {
+		var exit *exec.ExitError
+		canceled = canceled || err == nil || errors.As(err, &exit) && exit.ExitCode() < 0
+	}
+	s.mu.Unlock()
+	if canceled {
+		return ctx.Err()
 	}
 	return nil
 }

@@ -57,6 +57,13 @@ func (r *Runner) bashPPNativeExitStatus(err error) bool {
 // dependency process into the program's exit status.
 func (r *Runner) bashPPNativeRequest(ctx context.Context, req bashPPEvalRequest, q bashPPBridgeRequest) ([]bashPPBridgeValue, error) {
 	values, err := req.Bridge.request(ctx, req, q)
+	if r.bashPPGoSource && r.bashPPGoTask && ctx.Err() != nil && errors.Is(err, ctx.Err()) {
+		// EOF cancels the task lifetime. Native expression callers need the
+		// same silent unwind as channel operations, not a scalar diagnostic.
+		r.bashPPTaskCanceled = true
+		r.exit.fatal(ctx.Err())
+		return nil, errBashPPScalarInterrupted
+	}
 	var callbackPanic *bashPPCallbackPanic
 	if errors.As(err, &callbackPanic) {
 		r.bashPPRaise(callbackPanic.value)

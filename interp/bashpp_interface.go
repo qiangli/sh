@@ -179,6 +179,18 @@ func bashPPInterfaceElems(iface *syntax.BashPPInterfaceType) []*syntax.BashPPInt
 }
 
 func (r *Runner) bashPPImplements(actual syntax.BashPPTypeExpr, iface *syntax.BashPPInterfaceType) error {
+	if r.bashPPGoSource && !r.bashPPInterfaceHasTypeTerms(iface, make(map[*syntax.BashPPInterfaceType]bool)) {
+		switch r.bashPPUnderlyingType(actual).(type) {
+		case *syntax.BashPPFuncType, *syntax.BashPPChanType:
+			methods, err := r.bashPPInterfaceMethodSet("interface", iface, make(map[string]bool))
+			if err != nil {
+				return err
+			}
+			if len(methods.order) == 0 {
+				return nil
+			}
+		}
+	}
 	if actualIface, ok := r.bashPPInterfaceType(actual); ok {
 		actualSet, err := r.bashPPInterfaceMethodSet(bashPPTypeText(actual), actualIface, make(map[string]bool))
 		if err != nil {
@@ -297,6 +309,18 @@ func (r *Runner) bashPPMakeInterfaceValue(expr syntax.BashPPExpr, expected synta
 	}
 	if r.bashPPInterfaceHasTypeTerms(iface, make(map[*syntax.BashPPInterfaceType]bool)) {
 		return nil, expand.Variable{}, fmt.Errorf("BASHPP-EINTERFACE-TYPESET: %s is a constraint interface and cannot be used as a value type", bashPPTypeText(expected))
+	}
+	if cell, handled, err := r.goSourceNilValueCell(expr); handled {
+		if err != nil {
+			return nil, expand.Variable{}, err
+		}
+		if cell.interfaceValue != nil && cell.interfaceValue.nilIface {
+			return &bashPPInterfaceValue{nilIface: true}, cell.vr, nil
+		}
+		if err := r.bashPPImplements(cell.declType, iface); err != nil {
+			return nil, expand.Variable{}, err
+		}
+		return &bashPPInterfaceValue{dynamic: cell.declType, cell: cell}, cell.vr, nil
 	}
 	if id, ok := expr.(*syntax.BashPPIdent); ok {
 		if source := r.bashPPScope.lookup(id.Name.Value); source != nil && source.interfaceValue != nil {

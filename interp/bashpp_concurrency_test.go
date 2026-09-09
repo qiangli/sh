@@ -844,12 +844,12 @@ func TestBashPPUnseededTaskGetsPrivateRNG(t *testing.T) {
 	r.Reset()
 	r.bashPPConcurrent = newBashPPConcurrent(context.Background())
 	defer r.bashPPConcurrent.cancel()
-	a, err := r.bashPPTaskSnapshot(0)
+	a, err := r.bashPPTaskSnapshot(0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer a.closeBashPPTaskResources()
-	b, err := r.bashPPTaskSnapshot(1)
+	b, err := r.bashPPTaskSnapshot(1, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1025,7 +1025,7 @@ func TestCloneBashPPTaskCellsClonesReceiverObjects(t *testing.T) {
 	cloner := newBashPPCloner()
 	childFn := parentFn.cloned(cloner)
 	child := &Runner{bashPPFuncs: map[string]*bashPPFunc{"bound": childFn}}
-	if err := cloneBashPPTaskCells(child, newBashPPObjectCloner()); err != nil {
+	if err := cloneBashPPTaskCells(child, newBashPPObjectCloner(), nil); err != nil {
 		t.Fatal(err)
 	}
 	childObject := childFn.receiver.vr.Obj.(map[string]any)

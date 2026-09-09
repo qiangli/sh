@@ -42,6 +42,9 @@ func (r *Runner) bashPPNativeExpr(expr syntax.BashPPExpr) bool {
 	case *syntax.BashPPCall:
 		return r.bashPPBridgeHandles(x)
 	case *syntax.BashPPSelectorExpr:
+		if r.bashPPNativeLocalField(x) != nil {
+			return true
+		}
 		if id, ok := x.X.(*syntax.BashPPIdent); ok {
 			if _, imported := r.bashPPImports[id.Name.Value]; imported {
 				return true
@@ -100,18 +103,18 @@ func (r *Runner) bashPPNativeIndex(x *syntax.BashPPIndexExpr) (bashPPBridgeValue
 }
 
 // bashPPNativeSlice evaluates base[low:high] in the dependency process. Go's
-// three-index form carries a capacity that no interpreter value models, so it
-// is refused rather than silently reinterpreted.
+// optional capacity bound stays on that native slice header and is checked
+// against the actual backing capacity by the dependency worker.
 func (r *Runner) bashPPNativeSlice(x *syntax.BashPPSliceExpr) (bashPPBridgeValue, error) {
-	if x.Max != nil {
-		return bashPPBridgeValue{}, fmt.Errorf("gosource: native three-index slice is not supported")
-	}
 	base, err := r.bashPPBridgeExpr(x.X)
 	if err != nil {
 		return bashPPBridgeValue{}, err
 	}
-	bounds := [2]bashPPBridgeValue{{Kind: "nil"}, {Kind: "nil"}}
-	for i, bound := range [2]syntax.BashPPExpr{x.Low, x.High} {
+	bounds := []bashPPBridgeValue{{Kind: "nil"}, {Kind: "nil"}}
+	if x.Max != nil {
+		bounds = append(bounds, bashPPBridgeValue{Kind: "nil"})
+	}
+	for i, bound := range []syntax.BashPPExpr{x.Low, x.High, x.Max} {
 		if bound == nil {
 			continue
 		}
@@ -119,7 +122,7 @@ func (r *Runner) bashPPNativeSlice(x *syntax.BashPPSliceExpr) (bashPPBridgeValue
 			return bashPPBridgeValue{}, err
 		}
 	}
-	return r.bashPPNativeAccess(r.ectx, "slice", base, "", bounds[0], bounds[1])
+	return r.bashPPNativeAccess(r.ectx, "slice", base, "", bounds...)
 }
 
 // bashPPNativeLen answers len(value) for a native value.
@@ -151,6 +154,10 @@ func (r *Runner) bashPPNativeRange(ctx context.Context, rng *syntax.BashPPRange)
 		r.bashPPRangeError(rng, "BASHPP-ERANGE-TYPE: %v", err)
 		return true
 	}
+	if channel, ok := r.goSourceNativeChannel(goSourceNativeValueCell(base)); ok {
+		r.goSourceRangeNativeChannel(ctx, rng, channel)
+		return true
+	}
 	if base.Kind != "handle" {
 		// A native scalar or nil is not a range operand the bridge owns; the
 		// ordinary scalar range path reports it with Go's own wording.
@@ -162,6 +169,12 @@ func (r *Runner) bashPPNativeRange(ctx context.Context, rng *syntax.BashPPRange)
 		return true
 	}
 	for i := range length {
+		if (base.Type == "[]uint8" || base.Type == "[]byte") && (len(rng.Names) < 2 || rng.Names[1].Value == "_") {
+			if !r.bashPPRangeIteration(ctx, rng, i, bashPPRangeNamedType("int"), nil, nil, nil) {
+				return true
+			}
+			continue
+		}
 		element, err := r.bashPPNativeAccess(ctx, "index", base, "", bashPPBridgeValue{Kind: "int", Text: fmt.Sprint(i)})
 		if err != nil {
 			r.bashPPRangeError(rng, "BASHPP-ERANGE-TYPE: %v", err)
@@ -331,4 +344,79 @@ func (r *Runner) bashPPNativeBuiltinLength(name string, c *syntax.BashPPCall, ar
 		return 0, fmt.Errorf("gosource: native %s is not representable", name), true
 	}
 	return int(size), nil, true
+}
+
+// Inspect only a local identifier/field chain. This evaluates no index, call or
+// user expression and therefore cannot repeat argument effects during dispatch.
+func (r *Runner) bashPPNativeLocalField(expr *syntax.BashPPSelectorExpr) *bashPPBridgeValue {
+	value, _, ok := r.bashPPNativeLocalBase(expr)
+	if !ok {
+		return nil
+	}
+	native, _ := value.(*bashPPBridgeValue)
+	return native
+}
+
+// bashPPNativeLocalBase walks that chain and reports the value and collection
+// metadata it lands on. Callers wanting the dependency-owned value use
+// [Runner.bashPPNativeLocalField]; callers that must promote an embedded
+// receiver out of the enclosing struct need the metadata too.
+func (r *Runner) bashPPNativeLocalBase(expr syntax.BashPPExpr) (any, *bashPPCollectionMeta, bool) {
+	if !r.bashPPGoSource {
+		return nil, nil, false
+	}
+	root := expr
+	var names []string
+	for {
+		field, ok := root.(*syntax.BashPPSelectorExpr)
+		if !ok {
+			break
+		}
+		names = append(names, field.Sel.Value)
+		root = field.X
+	}
+	id, ok := root.(*syntax.BashPPIdent)
+	if !ok || r.bashPPScope == nil {
+		return nil, nil, false
+	}
+	cell := r.bashPPScope.lookup(id.Name.Value)
+	if cell == nil || r.bashPPNativeCellValue(id.Name.Value) != nil {
+		return nil, nil, false
+	}
+	value, meta := cell.vr.Obj, bashPPCellMeta(cell)
+	if cell.pointer {
+		if cell.pointerValue == nil {
+			return nil, nil, false
+		}
+		var err error
+		value, meta, _, err = cell.pointerValue.read()
+		if err != nil {
+			return nil, nil, false
+		}
+	}
+	for i := len(names) - 1; i >= 0; i-- {
+		if ptr, ok := value.(*bashPPPointer); ok {
+			if ptr == nil {
+				return nil, nil, false
+			}
+			var err error
+			value, meta, _, err = ptr.read()
+			if err != nil {
+				return nil, nil, false
+			}
+		}
+		if meta == nil || meta.kind != "struct" {
+			return nil, nil, false
+		}
+		sel := r.bashPPResolveField(meta.typ, names[i])
+		if sel.ambiguous || len(sel.edges) == 0 {
+			return nil, nil, false
+		}
+		var err error
+		value, meta, err = bashPPReadSelection(value, meta, sel.edges)
+		if err != nil {
+			return nil, nil, false
+		}
+	}
+	return value, meta, true
 }
