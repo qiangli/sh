@@ -3,9 +3,11 @@ id: e84c5ba3c215
 kind: task
 title: Shared unchanged Go source ingestion for Bash++
 seq: 49
-status: todo
+status: doing
 priority: p0
 created: 2026-09-09T03:33:39.703148Z
+weave: 28
+assignee: qiangli
 sprint: 118
 ---
 
