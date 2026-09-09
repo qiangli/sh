@@ -325,6 +325,14 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 	if err := prepareNativeSliceBuffers(req, &q); err != nil {
 		return nil, err
 	}
+	// A generic slices helper (slices.Equal/slices.Sort) is not a reflectable
+	// dependency symbol, so it is answered interpreter-side over the values that
+	// already crossed the collection transport, before the dependency dispatch.
+	if req.CallbackOwner != nil {
+		if values, handled, err := req.CallbackOwner.nativeSliceGenericHelper(req, &q); handled || err != nil {
+			return values, err
+		}
+	}
 	if err := validateLocalTransport(req, q); err != nil {
 		return nil, err
 	}

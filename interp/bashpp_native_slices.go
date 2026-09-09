@@ -3,6 +3,7 @@ package interp
 // Sprint: #118; Story: #54; Story-ID: c3a60493cde9
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -60,6 +61,10 @@ func nativeSliceReadOnly(name string) bool {
 	case "fmt.Print", "fmt.Println", "fmt.Printf", "fmt.Sprint", "fmt.Sprintln", "fmt.Sprintf", "fmt.Errorf", "fmt.Fprint", "fmt.Fprintln", "fmt.Fprintf",
 		"bytes.Equal", "bytes.Compare", "bytes.Contains", "bytes.Count", "bytes.HasPrefix", "bytes.HasSuffix", "bytes.Index", "bytes.IndexByte", "bytes.IndexAny", "bytes.LastIndex", "bytes.LastIndexByte", "bytes.LastIndexAny", "bytes.Clone",
 		"strings.Join", "os.WriteFile", "syscall.Exec", "*flag.FlagSet.Parse",
+		// slices.Equal only reads both transported slices to answer a bool; it
+		// retains neither. The generic function is not a reflectable dependency
+		// symbol, so nativeSliceGenericHelper computes the result interpreter-side.
+		"slices.Equal",
 		"*crypto/internal/fips140/sha256.Digest.Write", "*crypto/sha256.digest.Write", "crypto/sha256.Sum256", "crypto/sha1.Sum", "crypto/md5.Sum",
 		"*bytes.Buffer.Write", "*bufio.Writer.Write", "*os.File.Write", "*net.TCPConn.Write", "*net.UnixConn.Write",
 		// Byte-slice emitters that read the transported storage and hand back a
@@ -81,12 +86,14 @@ func nativeSliceReadOnly(name string) bool {
 // -1 when the callable does not mutate a slice argument. The dependency sorts
 // its own decoded copy of the elements; the writeback protocol then copies the
 // reordered elements back into the interpreter's original backing array so
-// aliases observe the change, exactly as native Go would. Only concrete
-// (non-generic) mutators appear here: a generic helper such as slices.Sort
-// cannot be reflected as an imported symbol and is resolved elsewhere.
+// aliases observe the change, exactly as native Go would. The concrete
+// sort.Ints/Strings/Float64s sorters cross to the dependency as reflected
+// symbols; the generic slices.Sort is not a reflectable symbol, so it shares
+// this mutation writeback but has its reordering computed interpreter-side by
+// nativeSliceGenericHelper before the request would reach the dependency.
 func nativeSliceMutatingIndex(name string) int {
 	switch name {
-	case "sort.Ints", "sort.Strings", "sort.Float64s":
+	case "sort.Ints", "sort.Strings", "sort.Float64s", "slices.Sort":
 		return 0
 	}
 	return -1
@@ -294,4 +301,187 @@ func applyNativeSliceBuffers(runner *Runner, q bashPPBridgeRequest, reply bashPP
 		}
 	}
 	return nil
+}
+
+// nativeSliceGenericHelper answers the two generic slices helpers the dependency
+// worker cannot invoke: an uninstantiated generic function is not a reflectable
+// imported symbol, so slices.Equal/slices.Sort never resolve there. Both operate
+// over primitive element values that already crossed the collection transport, so
+// the interpreter computes them directly. slices.Equal reads both transported
+// slices and answers a bool (the read-only path); slices.Sort reorders the
+// visible elements and rides the existing mutation writeback, so every aliasing
+// header observes the reordering exactly as the concrete sort.Strings path does.
+// handled is false for every other callable, leaving the normal dependency
+// dispatch untouched.
+func (r *Runner) nativeSliceGenericHelper(req bashPPEvalRequest, q *bashPPBridgeRequest) (values []bashPPBridgeValue, handled bool, err error) {
+	if q.Op != "call" {
+		return nil, false, nil
+	}
+	switch nativeSliceCallable(req, *q) {
+	case "slices.Equal":
+		if len(q.Args) != 2 {
+			return nil, false, fmt.Errorf("gosource: slices.Equal requires two slices")
+		}
+		equal, err := nativeSlicePrimitiveEqual(q.Args[0], q.Args[1])
+		if err != nil {
+			return nil, false, err
+		}
+		return []bashPPBridgeValue{{Kind: "bool", Type: "bool", Text: strconv.FormatBool(equal)}}, true, nil
+	case "slices.Sort":
+		if len(q.SliceBuffers) != 1 {
+			return nil, false, fmt.Errorf("gosource: slices.Sort requires a direct original slice")
+		}
+		sorted, err := nativeSliceSorted(q.SliceBuffers[0].Value.Elements)
+		if err != nil {
+			return nil, false, err
+		}
+		reply := bashPPBridgeResponse{SliceUpdates: []bashPPNativeSliceBuffer{{
+			Index:  q.SliceBuffers[0].Index,
+			Length: q.SliceBuffers[0].Length,
+			Value:  bashPPBridgeValue{Kind: "slice", Elements: sorted},
+		}}}
+		if err := applyNativeSliceBuffers(r, *q, reply); err != nil {
+			return nil, false, err
+		}
+		return nil, true, nil
+	}
+	return nil, false, nil
+}
+
+// nativeSliceElements returns the element values of a transported slice, treating
+// a nil slice as empty so slices.Equal(nil, []T{}) is true as native Go reports.
+func nativeSliceElements(v bashPPBridgeValue) ([]bashPPBridgeValue, error) {
+	switch v.Kind {
+	case "slice":
+		return v.Elements, nil
+	case "nil":
+		return nil, nil
+	}
+	return nil, fmt.Errorf("gosource: slices.Equal requires slice operands, got %s", v.Kind)
+}
+
+// nativeSlicePrimitiveEqual compares two transported slices element by element
+// over the primitive element kinds. Non-primitive elements are rejected rather
+// than silently mishandled, keeping the helper fail-closed.
+func nativeSlicePrimitiveEqual(a, b bashPPBridgeValue) (bool, error) {
+	left, err := nativeSliceElements(a)
+	if err != nil {
+		return false, err
+	}
+	right, err := nativeSliceElements(b)
+	if err != nil {
+		return false, err
+	}
+	if len(left) != len(right) {
+		return false, nil
+	}
+	for i := range left {
+		lk, err := nativeSliceScalarKey(left[i])
+		if err != nil {
+			return false, err
+		}
+		rk, err := nativeSliceScalarKey(right[i])
+		if err != nil {
+			return false, err
+		}
+		if lk != rk {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+// nativeSliceScalarKey maps a primitive element to a canonical comparison key.
+// Integer kinds normalise so an int and a uint holding the same value compare
+// equal, matching a same-typed element slice crossing the boundary.
+func nativeSliceScalarKey(v bashPPBridgeValue) (string, error) {
+	switch v.Kind {
+	case "string":
+		return "s:" + v.Text, nil
+	case "bool":
+		return "b:" + v.Text, nil
+	case "int", "uint":
+		if n, err := strconv.ParseInt(v.Text, 10, 64); err == nil {
+			return "n:" + strconv.FormatInt(n, 10), nil
+		}
+		u, err := strconv.ParseUint(v.Text, 10, 64)
+		if err != nil {
+			return "", fmt.Errorf("gosource: invalid integer element %q", v.Text)
+		}
+		return "n:" + strconv.FormatUint(u, 10), nil
+	case "float":
+		f, err := strconv.ParseFloat(v.Text, 64)
+		if err != nil {
+			return "", fmt.Errorf("gosource: invalid float element %q", v.Text)
+		}
+		return "f:" + strconv.FormatFloat(f, 'g', -1, 64), nil
+	}
+	return "", fmt.Errorf("gosource: slices.Equal requires primitive elements, got %s", v.Kind)
+}
+
+// nativeSliceSorted returns the elements ordered like slices.Sort over an ordered
+// primitive element type. The input order is preserved among equal elements; that
+// choice is unobservable by value, which is all the mutation writeback restores.
+func nativeSliceSorted(elems []bashPPBridgeValue) ([]bashPPBridgeValue, error) {
+	out := append([]bashPPBridgeValue(nil), elems...)
+	var sortErr error
+	sort.SliceStable(out, func(i, j int) bool {
+		if sortErr != nil {
+			return false
+		}
+		less, err := nativeSliceElementLess(out[i], out[j])
+		if err != nil {
+			sortErr = err
+			return false
+		}
+		return less
+	})
+	if sortErr != nil {
+		return nil, sortErr
+	}
+	return out, nil
+}
+
+// nativeSliceElementLess orders two primitive elements as cmp.Ordered would:
+// strings lexically and numbers by value. bool is not ordered and is rejected,
+// as slices.Sort's cmp.Ordered constraint requires.
+func nativeSliceElementLess(a, b bashPPBridgeValue) (bool, error) {
+	if a.Kind != b.Kind {
+		return false, fmt.Errorf("gosource: slices.Sort requires uniform element kinds, got %s and %s", a.Kind, b.Kind)
+	}
+	switch a.Kind {
+	case "string":
+		return a.Text < b.Text, nil
+	case "int":
+		ai, err := strconv.ParseInt(a.Text, 10, 64)
+		if err != nil {
+			return false, fmt.Errorf("gosource: invalid integer element %q", a.Text)
+		}
+		bi, err := strconv.ParseInt(b.Text, 10, 64)
+		if err != nil {
+			return false, fmt.Errorf("gosource: invalid integer element %q", b.Text)
+		}
+		return ai < bi, nil
+	case "uint":
+		au, err := strconv.ParseUint(a.Text, 10, 64)
+		if err != nil {
+			return false, fmt.Errorf("gosource: invalid unsigned element %q", a.Text)
+		}
+		bu, err := strconv.ParseUint(b.Text, 10, 64)
+		if err != nil {
+			return false, fmt.Errorf("gosource: invalid unsigned element %q", b.Text)
+		}
+		return au < bu, nil
+	case "float":
+		af, err := strconv.ParseFloat(a.Text, 64)
+		if err != nil {
+			return false, fmt.Errorf("gosource: invalid float element %q", a.Text)
+		}
+		bf, err := strconv.ParseFloat(b.Text, 64)
+		if err != nil {
+			return false, fmt.Errorf("gosource: invalid float element %q", b.Text)
+		}
+		return af < bf, nil
+	}
+	return false, fmt.Errorf("gosource: slices.Sort requires ordered primitive elements, got %s", a.Kind)
 }

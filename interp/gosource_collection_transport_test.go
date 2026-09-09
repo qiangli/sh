@@ -14,10 +14,13 @@ package interp_test
 // The byte fixture deliberately carries invalid UTF-8 so agreement proves
 // lossless byte transport rather than a lucky printable rendering.
 //
-// Generic helpers such as slices.Sort/slices.Contains are intentionally out of
-// scope here: an uninstantiated generic function cannot be reflected as an
-// imported dependency symbol, so it belongs to the interpreter-side generic
-// helper story, not to this transport slice.
+// An uninstantiated generic function cannot be reflected as an imported
+// dependency symbol, so a generic helper is never dispatched to the dependency.
+// slices.Equal and slices.Sort are answered interpreter-side over the values
+// that already crossed this transport — Equal on the read-only path, Sort on the
+// mutation writeback — and are covered by TestGoSourceGenericSliceHelpers and
+// TestGoSourceGenericSliceSortAlias below. Other generic helpers such as
+// slices.Contains remain out of scope.
 
 import (
 	"crypto/sha256"
@@ -79,5 +82,62 @@ type box struct{ xs []int }
 func main(){b:=box{[]int{5,4,3,2,1}};sort.Ints(b.xs);fmt.Println(b.xs)}`,
 	} {
 		t.Run(name, func(t *testing.T) { callbackTourThreeModes(t, source) })
+	}
+}
+
+// TestGoSourceGenericSliceHelpers exercises the two generic slices helpers that
+// cannot be reflected as dependency symbols and are therefore answered
+// interpreter-side: slices.Equal over the read-only transport and slices.Sort
+// over the mutation writeback. Each unchanged original is run interpreted and
+// against a real Go build; their observable behaviour must agree.
+func TestGoSourceGenericSliceHelpers(t *testing.T) {
+	for name, source := range map[string]string{
+		// slices.Equal reads both transported slices and answers a bool.
+		"equal_true": `package main
+import("fmt";"slices")
+func main(){a:=[]string{"go","sh"};b:=[]string{"go","sh"};fmt.Println(slices.Equal(a,b))}`,
+		"equal_false": `package main
+import("fmt";"slices")
+func main(){a:=[]string{"go","sh"};b:=[]string{"go","zz"};fmt.Println(slices.Equal(a,b))}`,
+		"equal_length_mismatch": `package main
+import("fmt";"slices")
+func main(){a:=[]string{"x"};b:=[]string{"x","y"};fmt.Println(slices.Equal(a,b))}`,
+		// A nil slice and an empty slice are equal, as native Go reports.
+		"equal_nil_and_empty": `package main
+import("fmt";"slices")
+func main(){var a []string;b:=[]string{};fmt.Println(slices.Equal(a,b))}`,
+		// slices.Sort reorders the visible elements through the backing storage.
+		"sort_strings": `package main
+import("fmt";"slices")
+func main(){s:=[]string{"pear","apple","kiwi","banana"};slices.Sort(s);fmt.Println(s)}`,
+	} {
+		t.Run(name, func(t *testing.T) { differGoSource(t, source, nil, "") })
+	}
+}
+
+// TestGoSourceGenericSliceSortAlias mirrors the concrete sort.Ints alias cases
+// for the generic slices.Sort: every aliasing header over the shared backing must
+// observe the reordering, and a sub-slice sort must leave the tail untouched.
+func TestGoSourceGenericSliceSortAlias(t *testing.T) {
+	for name, source := range map[string]string{
+		// Two headers over one backing array both see the sort.
+		"alias_both_sorted": `package main
+import("fmt";"slices")
+func main(){s:=[]string{"d","b","e","a","c"};a:=s;slices.Sort(s);fmt.Println(s,a)}`,
+		// Sorting a sub-slice leaves the tail of the shared backing untouched.
+		"subslice_tail_preserved": `package main
+import("fmt";"slices")
+func main(){b:=[]string{"e","d","c","b","a"};h:=b[:3];slices.Sort(h);fmt.Println(h,b)}`,
+		// A slice built by append (cap may exceed len) still round-trips exactly.
+		"appended_len_vs_cap": `package main
+import("fmt";"slices")
+func main(){s:=make([]string,0,8);s=append(s,"c","a","b");slices.Sort(s);fmt.Println(s,len(s),cap(s))}`,
+		// A slice field inside a struct is reordered in place through the field.
+		"struct_field_slice": `package main
+import("fmt";"slices")
+type box struct{ xs []string }
+func main(){b:=box{[]string{"e","d","c","b","a"}};slices.Sort(b.xs);fmt.Println(b.xs)}`,
+	} {
+		t.Run(name, func(t *testing.T) { differGoSource(t, source, nil, "") })
 	}
 }
