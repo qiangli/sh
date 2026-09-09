@@ -6,7 +6,7 @@ seq: 51
 status: doing
 priority: p0
 created: 2026-09-09T06:37:55.650583Z
-assignee: s118-waitgroup-go
+assignee: s118-complex
 sprint: 118
 ---
 
