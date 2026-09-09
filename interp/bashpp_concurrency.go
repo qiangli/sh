@@ -187,6 +187,11 @@ func cloneBashPPTaskCells(r *Runner, objects *bashPPObjectCloner, shared map[*ba
 			// not do; see gosource_task_capture.go.
 			return nil
 		}
+		if r.bashPPGoSource && r.bashPPGoTask {
+			// Go task scopes contain only shared lexical cells and immutable
+			// constants. Actual value arguments bypass shell deep cloning.
+			return nil
+		}
 		copy, err := cloneBashPPTaskVariable(cell.vr, objects)
 		if err != nil {
 			return err
@@ -953,6 +958,13 @@ func (r *Runner) bashPPTaskSnapshot(ordinal uint64, shared map[*bashPPCell]bool)
 	// handles keep naming the same objects; see bashpp_task.go.
 	objects.native = bashPPNativeScopeOf(r)
 	for name, vr := range r.writeEnv.Each {
+		if r.bashPPGoSource {
+			// The shell environment is an immutable binding snapshot here; Go
+			// variables resolve through the exact typed lexical cells. Never
+			// traverse referenced user storage solely for an unused env copy.
+			_ = child.writeEnv.Set(name, vr)
+			continue
+		}
 		copy, err := cloneBashPPTaskVariable(vr, objects)
 		if err != nil {
 			return child, fmt.Errorf("variable %s: %w", name, err)
@@ -1018,21 +1030,20 @@ func (r *Runner) bashPPGo(ctx context.Context, g *syntax.BashPPGo) {
 		r.exit.code = 2
 		return
 	}
-	// Go evaluates a launched call's arguments in the launching goroutine.
-	// Evaluating them here also gives a computed operand such as `cap(c)` its
-	// value rather than its Go source text. See gosource_calls.go.
-	call := r.bashPPGoSourceEvaluatedCall(g.Call)
-	if r.exit.code != 0 {
-		return
-	}
-	// Original Go closures capture by reference; classic Bash++ tasks do not.
-	// See gosource_task_capture.go, which returns nil outside GoSource mode.
-	// This resolves the callee, which for a computed one is an evaluation, so
-	// it belongs here beside the argument evaluation and BEFORE the task is
-	// registered: a failure now must not leave a counted task nobody finishes.
+	// Resolve the function value first; then evaluate its arguments exactly
+	// once in the launching goroutine, before any task is registered.
+	call := g.Call
 	shared, pin := r.bashPPGoSourceTaskCapture(call)
 	if r.exit.code != 0 {
 		return
+	}
+	var prepared *goSourceTaskArguments
+	if r.bashPPGoSource {
+		prepared, shared = r.goSourcePrepareTaskArguments(call, pin)
+		if prepared == nil || r.exit.code != 0 {
+			return
+		}
+		pin = prepared.pin
 	}
 	c := r.bashPPConcurrency(ctx)
 	state, ok := c.add()
@@ -1083,7 +1094,11 @@ func (r *Runner) bashPPGo(ctx context.Context, g *syntax.BashPPGo) {
 		// evaluates a function value in the launching goroutine; the child
 		// runs that function rather than resolving the name again.
 		child.bashPPGoSourcePin = pin
-		child.bashPPCall(c.ctx, call)
+		if prepared != nil {
+			child.goSourceInvokeTaskArguments(c.ctx, call, prepared)
+		} else {
+			child.bashPPCall(c.ctx, call)
+		}
 		code := child.exit.code
 		canceled := child.bashPPTaskCanceled || errors.Is(child.exit.err, context.Canceled) || errors.Is(child.exit.err, context.DeadlineExceeded)
 		if canceled {

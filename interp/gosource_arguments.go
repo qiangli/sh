@@ -3,6 +3,7 @@ package interp
 // Sprint: #118; Story: #53; Story-ID: 99bd1de0093b
 import (
 	"fmt"
+	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/syntax"
 )
 
@@ -32,7 +33,12 @@ func (r *Runner) goSourceCallArguments(call *syntax.BashPPCall, fn *bashPPFunc) 
 	channels := make([]*bashPPChannel, len(cells))
 	interfaces := make([]*bashPPInterfaceValue, len(cells))
 	for i, cell := range cells {
-		args[i] = cell.vr.String()
+		// Typed aggregate arguments already carry their complete value cell.
+		// Stringifying them would traverse referenced storage that another
+		// goroutine may legally mutate under its own synchronization.
+		if cell.vr.Kind != expand.Object {
+			args[i] = cell.vr.String()
+		}
 		channels[i] = cell.channel
 		interfaces[i] = cell.interfaceValue
 	}

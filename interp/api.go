@@ -3565,6 +3565,7 @@ func (r *Runner) subshell(background bool) *Runner {
 		// genuinely names is aliased rather than deep copied).
 		cloner := newBashPPClonerFor(r2)
 		cloner.shared = r.bashPPGoSourceCapture
+		cloner.goSourceTask = r.bashPPGoSource && r.bashPPGoSourceCapture != nil
 		// The GoSource capture-ownership record travels with the copy. It is
 		// the superset of every cell ever shared, so a nested launch inside
 		// this copy answers a shared cell from the record instead of reading a
