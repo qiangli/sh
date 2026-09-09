@@ -36,11 +36,14 @@ unwind runs every interpreted defer before invoking the real scheduler's
 A session and its runner are serial resources. Callbacks may reenter after the
 previous callback returns or exits through the testing scheduler. Ordinary
 `Runner.Run` cannot replace an active session; Reset invalidates old sessions.
-Unsupported testing methods fail explicitly. Statement-position `Run` and
+Unsupported testing methods fail explicitly. `Run` and
 `Cleanup` accept interpreted function literals; the real scheduler owns nested
-callback goroutines and cleanup ordering. `Helper` accepts its no-argument form,
+callback goroutines and cleanup ordering. Run returns the scheduler
+Boolean to interpreted expressions, including `if !t.Run(...)`. Test discovery
+rejects generic functions and invalid `func(*testing.T)` signatures before
+registration; TestMain requires its separate, still-pending testing.M driver. `Helper` accepts its no-argument form,
 but native helper-frame attribution is not claimed. This is not a general
-implementation of `testing.T`: boolean-valued Run expressions, Parallel, precise
+implementation of `testing.T`: Parallel, precise
 Helper attribution, benchmarks,
 examples, fuzzing, TestMain, composite formatting values and callbacks crossing
 the native dependency-process boundary remain pending. Callers must turn every

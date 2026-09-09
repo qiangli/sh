@@ -106,12 +106,12 @@ func TestDeferCapture(t *testing.T){x:="before";defer t.Log(x);x="after"}
 var cleanupOrder string
 func TestNested(t *testing.T){
  t.Cleanup(func(){cleanupOrder += "outer;"})
- t.Run("child",func(t *testing.T){t.Cleanup(func(){cleanupOrder += "child;"});t.SkipNow();cleanupOrder += "unreachable;"})
+ if !t.Run("child",func(t *testing.T){t.Cleanup(func(){cleanupOrder += "child;"});t.SkipNow();cleanupOrder += "unreachable;"}) {t.Error("skipped child Run returned false")}
  if cleanupOrder != "child;" {t.Errorf("child cleanup order: %s",cleanupOrder)}
 }
 func TestNestedFatal(t *testing.T){
  t.Cleanup(func(){t.Log("outer cleanup")})
- t.Run("child",func(t *testing.T){defer t.Log("child defer");t.Cleanup(func(){t.Log("child cleanup")});t.Fatal("nested deliberate")})
+ if t.Run("child",func(t *testing.T){defer t.Log("child defer");t.Cleanup(func(){t.Log("child cleanup")});t.Fatal("nested deliberate")}) {t.Error("failed child Run returned true")} else {t.Log("false result propagated")}
  t.Log("after child")
 }
 func TestAfterCleanup(t *testing.T){if cleanupOrder != "child;outer;"{t.Errorf("final cleanup order: %s",cleanupOrder)}}
@@ -161,7 +161,7 @@ func TestFailure(t *testing.T){t.Errorf("deliberate failure %s","kept")}
 		t.Fatalf("real FailNow scheduler/reentry: %v\n%s", childErr, output)
 	}
 	position := -1
-	for _, marker := range []string{"nested deliberate", "child defer", "child cleanup", "after child", "outer cleanup"} {
+	for _, marker := range []string{"nested deliberate", "child defer", "child cleanup", "false result propagated", "after child", "outer cleanup"} {
 		found := bytes.Index(output, []byte(marker))
 		if found <= position {
 			t.Fatalf("nested fatal/cleanup ordering at %s: %s", marker, output)
@@ -236,5 +236,32 @@ func TestFailure(t *testing.T){t.Errorf("deliberate failure %s","kept")}
 	runner.Reset()
 	if err := session.Run(ctx, "TestInit", &testingRecorder{}); err == nil {
 		t.Fatal("Reset did not invalidate testing capability")
+	}
+}
+
+func TestGoSourceTestingDiscoveryRejectsInvalid(t *testing.T) {
+	for _, source := range []string{
+		"package specimen; func TestBad() {}",
+		"package specimen; import \"testing\"; func TestBad(t *testing.T) bool {return true}",
+		"package specimen; import \"testing\"; func TestBad[T any](t *testing.T) {}",
+		"package specimen; import \"testing\"; func TestBad(t *testing.B) {}",
+	} {
+		program, err := gosource.Parse(strings.NewReader(source), "invalid_registration.go", gosource.Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		runner, err := interp.New(interp.Lang(syntax.LangBashPP), interp.Dir(t.TempDir()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		session, err := runner.LoadGoSourceTests(context.Background(), program)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = session.Tests()
+		session.Close()
+		if err == nil {
+			t.Fatalf("invalid Test registration accepted: %s", source)
+		}
 	}
 }

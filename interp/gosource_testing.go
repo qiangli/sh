@@ -205,18 +205,30 @@ func (r *Runner) bashPPTestingCall(call *syntax.BashPPCall) bool {
 }
 
 func (r *Runner) bashPPTestingCapture(call *syntax.BashPPCall) (func(), bool) {
-	if !r.bashPPGoSource || r.goSourceTesting == nil || len(call.Fun) != 2 || r.bashPPScope == nil {
+	handle, args, handled, err := r.bashPPTestingArguments(call)
+	if err != nil {
+		r.exit.fatal(err)
+		return nil, true
+	}
+	if !handled {
 		return nil, false
+	}
+	return func() { r.bashPPTestingInvoke(handle, call.Fun[1].Value, args) }, true
+}
+
+func (r *Runner) bashPPTestingArguments(call *syntax.BashPPCall) (*goSourceTestingHandle, []any, bool, error) {
+	if !r.bashPPGoSource || r.goSourceTesting == nil || len(call.Fun) != 2 || r.bashPPScope == nil {
+		return nil, nil, false, nil
 	}
 	cell := r.bashPPScope.lookup(call.Fun[0].Value)
 	if cell == nil {
-		return nil, false
+		return nil, nil, false, nil
 	}
 	handle, ok := cell.vr.Obj.(*goSourceTestingHandle)
 	if !ok {
-		return nil, false
+		return nil, nil, false, nil
 	}
-	fail := func(err error) (func(), bool) { r.exit.fatal(err); return nil, true }
+	fail := func(err error) (*goSourceTestingHandle, []any, bool, error) { return nil, nil, true, err }
 	if !handle.active || handle.session != r.goSourceTesting || handle.session.active != handle {
 		return fail(errors.New("gosource: stale testing.T capability"))
 	}
@@ -249,8 +261,7 @@ func (r *Runner) bashPPTestingCapture(call *syntax.BashPPCall) (func(), bool) {
 			return fail(errors.New("gosource: testing method requires scalar arguments in this driver slice"))
 		}
 	}
-	method := call.Fun[1].Value
-	return func() { r.bashPPTestingInvoke(handle, method, args) }, true
+	return handle, args, true, nil
 }
 
 func (r *Runner) bashPPTestingInvoke(handle *goSourceTestingHandle, method string, args []any) {
@@ -271,7 +282,7 @@ func (r *Runner) bashPPTestingInvoke(handle *goSourceTestingHandle, method strin
 	}
 	switch method {
 	case "Run", "Cleanup":
-		if err := r.bashPPTestingCallback(handle, method, args); err != nil {
+		if _, err := r.bashPPTestingCallback(handle, method, args); err != nil {
 			fail(err)
 		}
 		return

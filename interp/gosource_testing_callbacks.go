@@ -3,6 +3,7 @@ package interp
 // Sprint: #118; Story: #56; Story-ID: 3ef468f4e831
 import (
 	"fmt"
+	"go/constant"
 	"mvdan.cc/sh/v3/syntax"
 	"reflect"
 	"strings"
@@ -39,6 +40,21 @@ func (s *GoSourceTestingSession) Tests() ([]GoSourceTest, error) {
 				continue
 			}
 		}
+		if name == "TestMain" {
+			return nil, fmt.Errorf("gosource: TestMain requires a separate testing.M driver")
+		}
+		if len(decl.TypeParams) != 0 {
+			return nil, fmt.Errorf("gosource: test %s must not have type parameters", name)
+		}
+		params := bashppParams(decl.Params)
+		if len(params) != 1 || len(decl.Results) != 0 || params[0].variadic {
+			return nil, fmt.Errorf("gosource: test %s must have signature func(*testing.T)", name)
+		}
+		declared := params[0].declared
+		alias, typ, ok := strings.Cut(strings.TrimPrefix(declared, "*"), ".")
+		if !strings.HasPrefix(declared, "*") || !ok || typ != "T" || s.runner.bashPPImports[alias] != "testing" {
+			return nil, fmt.Errorf("gosource: test %s must have signature func(*testing.T)", name)
+		}
 		source, _, ok := s.program.SourceAt(decl.Pos())
 		if !ok {
 			return nil, fmt.Errorf("gosource: test %s lacks original source identity", name)
@@ -51,25 +67,25 @@ func (s *GoSourceTestingSession) Tests() ([]GoSourceTest, error) {
 // Reflection only adapts testing's concrete callback type; it never executes
 // original test code. testing remains owned by the host harness, whose Run and
 // Cleanup implementations decide the callback goroutine and cleanup order.
-func (r *Runner) bashPPTestingCallback(handle *goSourceTestingHandle, method string, args []any) error {
+func (r *Runner) bashPPTestingCallback(handle *goSourceTestingHandle, method string, args []any) (bool, error) {
 	native := reflect.ValueOf(handle.target).MethodByName(method)
 	if !native.IsValid() {
-		return fmt.Errorf("gosource: scheduler does not provide testing.%s", method)
+		return false, fmt.Errorf("gosource: scheduler does not provide testing.%s", method)
 	}
 	if method == "Run" {
 		if len(args) != 2 {
-			return fmt.Errorf("gosource: testing.Run requires a name and callback")
+			return false, fmt.Errorf("gosource: testing.Run requires a name and callback")
 		}
 		name, ok := args[0].(string)
 		if !ok {
-			return fmt.Errorf("gosource: testing.Run name must be a string")
+			return false, fmt.Errorf("gosource: testing.Run name must be a string")
 		}
 		fn, ok := args[1].(*bashPPFunc)
 		if !ok {
-			return fmt.Errorf("gosource: testing.Run callback must be interpreted")
+			return false, fmt.Errorf("gosource: testing.Run callback must be interpreted")
 		}
-		if native.Type().NumIn() != 2 || native.Type().In(1).Kind() != reflect.Func || native.Type().In(1).NumIn() != 1 {
-			return fmt.Errorf("gosource: invalid scheduler Run signature")
+		if native.Type().NumIn() != 2 || native.Type().In(1).Kind() != reflect.Func || native.Type().In(1).NumIn() != 1 || native.Type().In(1).NumOut() != 0 || native.Type().NumOut() != 1 || native.Type().Out(0).Kind() != reflect.Bool {
+			return false, fmt.Errorf("gosource: invalid scheduler Run signature")
 		}
 		ctx := r.ectx
 		callback := reflect.MakeFunc(native.Type().In(1), func(values []reflect.Value) []reflect.Value {
@@ -82,18 +98,18 @@ func (r *Runner) bashPPTestingCallback(handle *goSourceTestingHandle, method str
 			}
 			return nil
 		})
-		native.Call([]reflect.Value{reflect.ValueOf(name), callback})
-		return nil
+		result := native.Call([]reflect.Value{reflect.ValueOf(name), callback})
+		return result[0].Bool(), nil
 	}
 	if len(args) != 1 {
-		return fmt.Errorf("gosource: testing.Cleanup requires a callback")
+		return false, fmt.Errorf("gosource: testing.Cleanup requires a callback")
 	}
 	fn, ok := args[0].(*bashPPFunc)
 	if !ok {
-		return fmt.Errorf("gosource: testing.Cleanup callback must be interpreted")
+		return false, fmt.Errorf("gosource: testing.Cleanup callback must be interpreted")
 	}
 	if native.Type().NumIn() != 1 || native.Type().In(0).Kind() != reflect.Func || native.Type().In(0).NumIn() != 0 {
-		return fmt.Errorf("gosource: invalid scheduler Cleanup signature")
+		return false, fmt.Errorf("gosource: invalid scheduler Cleanup signature")
 	}
 	// The root callback's signal scope ends before Cleanup. The package session
 	// lifetime remains valid until the harness closes the session.
@@ -105,5 +121,19 @@ func (r *Runner) bashPPTestingCallback(handle *goSourceTestingHandle, method str
 		return nil
 	})
 	native.Call([]reflect.Value{callback})
-	return nil
+	return false, nil
+}
+
+// Run's Boolean result participates in ordinary interpreted expressions.
+func (r *Runner) bashPPTestingScalar(expr syntax.BashPPExpr) (bashPPScalar, bool, error) {
+	call, ok := expr.(*syntax.BashPPCall)
+	if !ok || len(call.Fun) != 2 || call.Fun[1].Value != "Run" {
+		return bashPPScalar{}, false, nil
+	}
+	handle, args, handled, err := r.bashPPTestingArguments(call)
+	if err != nil || !handled {
+		return bashPPScalar{}, handled, err
+	}
+	result, err := r.bashPPTestingCallback(handle, "Run", args)
+	return bashPPScalar{value: constant.MakeBool(result), typ: "bool", runtime: true}, true, err
 }

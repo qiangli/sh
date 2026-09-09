@@ -34,6 +34,9 @@ func (r *Runner) bashPPEvalScalarExpr(expr syntax.BashPPExpr) (result bashPPScal
 			}
 		}
 	}()
+	if value, handled, err := r.bashPPTestingScalar(expr); handled {
+		return value, err
+	}
 	if value, handled, err := r.bashPPBridgeScalar(expr); handled {
 		return value, err
 	}
