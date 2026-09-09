@@ -16,7 +16,8 @@ remain separate obligations.
 
 Emitted `//line` directives retain original caller filenames and positions for
 native logging/stack APIs. External source-map line numbers remain physical
-positions in the generated file and target declarations/statements, not comments.
+positions in the generated file. Each marker anchors its next nonempty physical
+line, including a compiler directive, matching the public source-map contract.
 No original body is delegated to a dependency helper.
 
 `TestGoSourceGbENativeArtifacts` verifies archived, SHA-pinned original sources

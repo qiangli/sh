@@ -134,5 +134,27 @@ func goSourcePositions(result *Result, origin string) error {
 		physical++
 	}
 	result.Source = []byte(out.String())
+	// The public map contract anchors each marker at the next nonempty
+	// physical line, including compiler directives. Runtime line directives
+	// do not change these generated-file coordinates.
+	pending, index := false, 0
+	for i, line := range strings.Split(string(result.Source), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "// lower:") {
+			pending = true
+			continue
+		}
+		if pending && strings.TrimSpace(line) != "" {
+			if index >= len(result.Mappings) {
+				return fmt.Errorf("generated marker count exceeds source mappings")
+			}
+			result.Mappings[index].GoLine = i + 1
+			result.Mappings[index].GoCol = len(line) - len(strings.TrimLeft(line, "\t ")) + 1
+			index++
+			pending = false
+		}
+	}
+	if pending || index != len(result.Mappings) {
+		return fmt.Errorf("generated marker count differs from source mappings")
+	}
 	return nil
 }

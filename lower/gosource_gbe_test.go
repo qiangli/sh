@@ -91,12 +91,32 @@ func TestGoSourceGbENativeArtifacts(t *testing.T) {
 			if err := os.WriteFile(generated, result.Source, 0600); err != nil {
 				t.Fatal(err)
 			}
+			// Mirror the public marker contract: directives are nonempty lines
+			// and therefore physical anchors; adjusted //line positions are not.
+			pending, mapped := false, 0
+			for lineIndex, line := range strings.Split(string(result.Source), "\n") {
+				if strings.HasPrefix(strings.TrimSpace(line), "// lower:") {
+					pending = true
+					continue
+				}
+				if pending && strings.TrimSpace(line) != "" {
+					if mapped >= len(result.Mappings) {
+						t.Fatal("missing generated mapping")
+					}
+					m := result.Mappings[mapped]
+					if m.GoLine != lineIndex+1 || m.GoCol != len(line)-len(strings.TrimLeft(line, "\t "))+1 {
+						t.Fatalf("physical marker mismatch: %#v", m)
+					}
+					mapped++
+					pending = false
+				}
+			}
+			if pending || mapped != len(result.Mappings) {
+				t.Fatal("incomplete physical mappings")
+			}
 			for _, mapping := range result.Mappings {
 				if mapping.GoLine < 1 || mapping.GoLine > bytes.Count(result.Source, []byte("\n"))+1 {
 					t.Fatalf("invalid physical source map: %#v", mapping)
-				}
-				if strings.HasPrefix(strings.TrimSpace(strings.Split(string(result.Source), "\n")[mapping.GoLine-1]), "//") {
-					t.Fatalf("source map points at comment: %#v", mapping)
 				}
 			}
 			originals := []string{source, generated}
