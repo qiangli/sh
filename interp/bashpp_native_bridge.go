@@ -35,6 +35,8 @@ import (
 var bashPPNativeWorker string
 
 type bashPPBridgeValue struct {
+	sliceView *bashPPNativeSlice // host-only original backing view
+
 	// Callable is derived by the interpreter from authenticated native type or
 	// import metadata; the dependency worker cannot set callback policy itself.
 	Callable   string                       `json:"-"`
@@ -56,6 +58,9 @@ type bashPPBridgeEntry struct {
 	Value bashPPBridgeValue `json:"value"`
 }
 type bashPPBridgeRequest struct {
+	SliceBuffers []bashPPNativeSliceBuffer `json:"slice_buffers,omitempty"`
+	sliceTargets []*bashPPNativeSlice
+
 	ID       uint64              `json:"id"`
 	Op       string              `json:"op"`
 	Selector string              `json:"selector"`
@@ -68,6 +73,8 @@ type bashPPBridgeRequest struct {
 	Error  string              `json:"error,omitempty"`
 }
 type bashPPBridgeResponse struct {
+	SliceUpdates []bashPPNativeSliceBuffer `json:"slice_updates,omitempty"`
+
 	Panic *bashPPBridgeValue `json:"panic,omitempty"`
 	ID    uint64             `json:"id"`
 	// Op, Selector and Receiver are set only when the dependency is asking the
@@ -270,6 +277,9 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if err := prepareNativeSliceBuffers(req, &q); err != nil {
+		return nil, err
+	}
 	if err := validateLocalTransport(req, q); err != nil {
 		return nil, err
 	}
@@ -341,6 +351,9 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 				}
 			}
 		case reply := <-wait:
+			if err := applyNativeSliceBuffers(q, reply); err != nil {
+				return nil, err
+			}
 			if reply.Panic != nil {
 				return nil, &bashPPCallbackPanic{value: reply.Panic.Text}
 			}

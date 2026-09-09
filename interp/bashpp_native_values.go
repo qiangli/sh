@@ -527,6 +527,9 @@ func (r *Runner) bashPPBridgeCollection(value any, meta *bashPPCollectionMeta, t
 		if !ok {
 			return result, fmt.Errorf("gosource: missing collection element identity")
 		}
+		if r.bashPPGoSource && result.Kind == "slice" {
+			result.sliceView = &bashPPNativeSlice{view: value, meta: meta, typ: typ}
+		}
 		for i, item := range value {
 			var child *bashPPCollectionMeta
 			if meta != nil && i < len(meta.sequence) {

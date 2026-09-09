@@ -30,10 +30,11 @@ type value struct {
  Entries []bppProtocolEntry `json:"entries,omitempty"`
 }
 type bppProtocolEntry struct {Key value `json:"key"`; Value value `json:"value"`}
-type request struct { ID uint64 `json:"id"`; Op string `json:"op"`; Selector string `json:"selector"`; Receiver *value `json:"receiver,omitempty"`; Args []value `json:"args,omitempty"`; Spread bool `json:"spread,omitempty"`; Values []value `json:"values,omitempty"`; Error string `json:"error,omitempty"` }
+type sliceBuffer struct {Index int `json:"index"`;Length int `json:"length"`;Value value `json:"value"`}
+type request struct { SliceBuffers []sliceBuffer `json:"slice_buffers,omitempty"`; ID uint64 `json:"id"`; Op string `json:"op"`; Selector string `json:"selector"`; Receiver *value `json:"receiver,omitempty"`; Args []value `json:"args,omitempty"`; Spread bool `json:"spread,omitempty"`; Values []value `json:"values,omitempty"`; Error string `json:"error,omitempty"` }
 // Op, Selector and Receiver are set only on a callback: the reverse direction
 // in which this helper asks the interpreter to run an original method body.
-type response struct { Panic *value `json:"panic,omitempty"`; ID uint64 `json:"id"`; Op string `json:"op,omitempty"`; Selector string `json:"selector,omitempty"`; Receiver *value `json:"receiver,omitempty"`; Values []value `json:"values,omitempty"`; Error string `json:"error,omitempty"` }
+type response struct { SliceUpdates []sliceBuffer `json:"slice_updates,omitempty"`; Panic *value `json:"panic,omitempty"`; ID uint64 `json:"id"`; Op string `json:"op,omitempty"`; Selector string `json:"selector,omitempty"`; Receiver *value `json:"receiver,omitempty"`; Values []value `json:"values,omitempty"`; Error string `json:"error,omitempty"` }
 var symbols = map[string]reflect.Value{
 //SYMBOLS
 }
@@ -240,6 +241,8 @@ func dispatch(q request)(reply response){
  if len(q.Args)<minimum||!signature.IsVariadic()&&len(q.Args)!=n{reply.Error="native argument count mismatch";return}
  args:=make([]reflect.Value,len(q.Args))
  for i,arg:=range q.Args {var target reflect.Type;if signature.IsVariadic()&&i>=n-1 {target=signature.In(n-1);if !q.Spread{target=target.Elem()}}else{target=signature.In(i)};v,err:=decode(arg,target);if err!=nil{reply.Error=err.Error();return};args[i]=v}
+ for _,buffer:=range q.SliceBuffers {if buffer.Index<0||buffer.Index>=len(args)||args[buffer.Index].Kind()!=reflect.Slice{reply.Error="invalid native buffer index";return};backing,err:=decode(buffer.Value,args[buffer.Index].Type());if err!=nil{reply.Error=err.Error();return};if backing.Kind()!=reflect.Slice||buffer.Length<0||buffer.Length>backing.Len(){reply.Error="invalid native buffer bounds";return};args[buffer.Index]=backing.Slice3(0,buffer.Length,backing.Len())}
+ defer func(){for _,buffer:=range q.SliceBuffers {v:=args[buffer.Index];reply.SliceUpdates=append(reply.SliceUpdates,sliceBuffer{Index:buffer.Index,Length:v.Len(),Value:structural(v.Slice(0,v.Cap()))})}}()
  var returned []reflect.Value
  if q.Spread {if !signature.IsVariadic()||len(args)!=n{reply.Error="invalid spread call";return};returned=fn.CallSlice(args)}else{returned=fn.Call(args)}
  for _,v:=range returned{reply.Values=append(reply.Values,encode(v))};return
