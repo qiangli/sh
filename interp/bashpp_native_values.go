@@ -263,7 +263,14 @@ func (r *Runner) bashPPBridgeExpr(expr syntax.BashPPExpr) (bashPPBridgeValue, er
 		if r.bashPPNativeExpr(x.X) {
 			return r.bashPPNativeSlice(x)
 		}
+	case *syntax.BashPPAddressExpr:
+		if lit, ok := x.X.(*syntax.BashPPCompositeLit); ok && r.bashPPNativeType(lit.LitType) {
+			return r.bashPPNativeComposite(lit, true)
+		}
 	case *syntax.BashPPCompositeLit:
+		if r.bashPPNativeType(x.LitType) {
+			return r.bashPPNativeComposite(x, false)
+		}
 		value, meta, err := r.bashPPEvalComposite(x, x.LitType)
 		if err != nil {
 			return bashPPBridgeValue{}, err

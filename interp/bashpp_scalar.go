@@ -570,6 +570,9 @@ type bashPPComparableValue struct {
 }
 
 func (r *Runner) bashPPCompareExpr(left syntax.BashPPExpr, op token.Token, right syntax.BashPPExpr) (bool, error) {
+	if r.bashPPGoSource && (r.bashPPNativeExpr(left) || r.bashPPNativeExpr(right)) {
+		return r.bashPPNativeCompare(left, op, right)
+	}
 	lv, err := r.bashPPComparableExpr(left)
 	if err != nil {
 		return false, err

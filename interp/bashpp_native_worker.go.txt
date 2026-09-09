@@ -31,7 +31,7 @@ var symbols = map[string]reflect.Value{
 //SYMBOLS
 }
 var types = map[string]reflect.Type{
- "any": reflect.TypeFor[any](), "interface{}": reflect.TypeFor[any](), "bool": reflect.TypeFor[bool](), "string": reflect.TypeFor[string](), "int": reflect.TypeFor[int](), "int8": reflect.TypeFor[int8](), "int16": reflect.TypeFor[int16](), "int32": reflect.TypeFor[int32](), "int64": reflect.TypeFor[int64](), "uint": reflect.TypeFor[uint](), "uint8": reflect.TypeFor[uint8](), "uint16": reflect.TypeFor[uint16](), "uint32": reflect.TypeFor[uint32](), "uint64": reflect.TypeFor[uint64](), "uintptr": reflect.TypeFor[uintptr](), "float32": reflect.TypeFor[float32](), "float64": reflect.TypeFor[float64](), "rune": reflect.TypeFor[rune](), "byte": reflect.TypeFor[byte](),
+ "error": reflect.TypeFor[error](), "any": reflect.TypeFor[any](), "interface{}": reflect.TypeFor[any](), "bool": reflect.TypeFor[bool](), "string": reflect.TypeFor[string](), "int": reflect.TypeFor[int](), "int8": reflect.TypeFor[int8](), "int16": reflect.TypeFor[int16](), "int32": reflect.TypeFor[int32](), "int64": reflect.TypeFor[int64](), "uint": reflect.TypeFor[uint](), "uint8": reflect.TypeFor[uint8](), "uint16": reflect.TypeFor[uint16](), "uint32": reflect.TypeFor[uint32](), "uint64": reflect.TypeFor[uint64](), "uintptr": reflect.TypeFor[uintptr](), "float32": reflect.TypeFor[float32](), "float64": reflect.TypeFor[float64](), "rune": reflect.TypeFor[rune](), "byte": reflect.TypeFor[byte](),
 //TYPES
 }
 var handles = struct { sync.Mutex; next uint64; values map[uint64]reflect.Value }{values: map[uint64]reflect.Value{}}
@@ -55,6 +55,7 @@ func resolveType(name string) reflect.Type {
  expression,err:=parser.ParseExpr(name);if err!=nil{return nil}
  var walk func(ast.Expr) reflect.Type
  walk=func(expr ast.Expr) reflect.Type {switch e:=expr.(type){
+ case *ast.StarExpr:element:=walk(e.X);if element!=nil{return reflect.PointerTo(element)}
  case *ast.Ident:return types[e.Name]
  case *ast.ArrayType:element:=walk(e.Elt);if element==nil{return nil};if e.Len==nil{return reflect.SliceOf(element)};if lit,ok:=e.Len.(*ast.BasicLit);ok{n,err:=strconv.Atoi(lit.Value);if err==nil&&n>=0{return reflect.ArrayOf(n,element)}}
  case *ast.MapType:key,element:=walk(e.Key),walk(e.Value);if key!=nil&&element!=nil&&key.Comparable(){return reflect.MapOf(key,element)}
@@ -76,7 +77,7 @@ func decode(v value, target reflect.Type)(reflect.Value,error){
   switch v.Kind {
   case "string":if typ.Kind()!=reflect.String{return result,fmt.Errorf("string for %s",typ)};result.SetString(v.Text)
   case "bool":b,e:=strconv.ParseBool(v.Text);if e!=nil||typ.Kind()!=reflect.Bool{return result,fmt.Errorf("invalid bool")};result.SetBool(b)
-  case "int":n,e:=strconv.ParseInt(v.Text,10,64);if e!=nil{return result,e};switch typ.Kind(){case reflect.Int,reflect.Int8,reflect.Int16,reflect.Int32,reflect.Int64:if result.OverflowInt(n){return result,fmt.Errorf("integer overflow")};result.SetInt(n);case reflect.Float32,reflect.Float64:result.SetFloat(float64(n));default:return result,fmt.Errorf("integer for %s",typ)}
+  case "int":n,e:=strconv.ParseInt(v.Text,10,64);if e!=nil{return result,e};switch typ.Kind(){case reflect.Int,reflect.Int8,reflect.Int16,reflect.Int32,reflect.Int64:if result.OverflowInt(n){return result,fmt.Errorf("integer overflow")};result.SetInt(n);case reflect.Uint,reflect.Uint8,reflect.Uint16,reflect.Uint32,reflect.Uint64,reflect.Uintptr:if n<0||result.OverflowUint(uint64(n)){return result,fmt.Errorf("unsigned overflow")};result.SetUint(uint64(n));case reflect.Float32,reflect.Float64:result.SetFloat(float64(n));default:return result,fmt.Errorf("integer for %s",typ)}
   case "uint":n,e:=strconv.ParseUint(v.Text,10,64);if e!=nil||result.OverflowUint(n){return result,fmt.Errorf("unsigned overflow")};result.SetUint(n)
   case "float":n,e:=strconv.ParseFloat(v.Text,64);if e!=nil{return result,e};if typ.Kind()!=reflect.Float32&&typ.Kind()!=reflect.Float64{return result,fmt.Errorf("float for %s",typ)};result.SetFloat(n)
   case "slice","array":if typ.Kind()==reflect.Slice {result=reflect.MakeSlice(typ,len(v.Elements),len(v.Elements))} else if typ.Kind()!=reflect.Array||typ.Len()!=len(v.Elements){return result,fmt.Errorf("invalid collection %s",typ)};for i,elem:=range v.Elements{item,e:=decode(elem,typ.Elem());if e!=nil{return result,e};result.Index(i).Set(item)}
@@ -132,6 +133,10 @@ func access(rv reflect.Value,q request)([]value,string){
 func dispatch(q request)(reply response){
  reply.ID=q.ID
  defer func(){if e:=recover();e!=nil{reply.Error=fmt.Sprintf("native dependency panic: %v",e)}}()
+ if q.Op=="equal" {if len(q.Args)!=2{reply.Error="comparison requires two values";return};left,err:=decode(q.Args[0],nil);if err!=nil{reply.Error=err.Error();return};right,err:=decode(q.Args[1],nil);if err!=nil{reply.Error=err.Error();return};equal:=false
+ if !left.IsValid()||!right.IsValid(){other:=left;if !other.IsValid(){other=right};if !other.IsValid(){equal=true}else{switch other.Kind(){case reflect.Chan,reflect.Func,reflect.Interface,reflect.Map,reflect.Pointer,reflect.Slice:equal=other.IsNil();if (!left.IsValid()&&q.Args[1].Interface!=""&&q.Args[1].Kind!="nil")||(!right.IsValid()&&q.Args[0].Interface!=""&&q.Args[0].Kind!="nil"){equal=false};default:reply.Error="value cannot be compared with nil";return}}}else{equal=left.Equal(right)};reply.Values=[]value{encode(reflect.ValueOf(equal))};return}
+ if q.Op=="type" {typ:=resolveType(q.Selector);if typ==nil{reply.Error="unregistered bridge type "+strconv.Quote(q.Selector);return};reply.Values=[]value{encode(reflect.ValueOf(typeID(typ)))};return}
+ if q.Op=="construct"||q.Op=="address" {if len(q.Args)!=1{reply.Error="construction requires one literal";return};typ:=resolveType(q.Selector);if typ==nil{reply.Error="unregistered bridge type "+strconv.Quote(q.Selector);return};v,err:=decode(q.Args[0],typ);if err!=nil{reply.Error=err.Error();return};if q.Op=="address"{ptr:=reflect.New(typ);ptr.Elem().Set(v);v=ptr};reply.Values=[]value{encode(v)};return}
  fn:=symbols[q.Selector]
  if q.Receiver!=nil {receiver,err:=decode(*q.Receiver,nil);if err!=nil{reply.Error=err.Error();return}
   switch q.Op {case "len","cap","index","slice","field":reply.Values,reply.Error=access(receiver,q);return}

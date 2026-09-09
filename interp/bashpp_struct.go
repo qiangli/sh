@@ -40,6 +40,10 @@ func (r *Runner) bashPPValidateTypeRepresentation(typ syntax.BashPPTypeExpr, act
 			return err
 		}
 		name := x.Name.Value
+		if r.bashPPNativeType(x) {
+			_, err := r.bashPPNativeTypeRequest("type", x)
+			return err
+		}
 		if bashPPScalarType(name) {
 			return nil
 		}
@@ -340,6 +344,14 @@ func bashPPSetStructSelector(root map[string]any, meta *bashPPCollectionMeta, ed
 }
 
 func (r *Runner) bashPPZeroValue(typ syntax.BashPPTypeExpr) (any, *bashPPCollectionMeta) {
+	if r.bashPPNativeType(typ) {
+		value, err := r.bashPPNativeTypeRequest("new", typ)
+		if err != nil {
+			r.exit.fatal(err)
+			return nil, nil
+		}
+		return &value, &bashPPCollectionMeta{kind: "native", typ: typ}
+	}
 	if _, ok := r.bashPPInterfaceType(typ); ok {
 		return "", &bashPPCollectionMeta{kind: "interface", typ: typ, interfaceValue: &bashPPInterfaceValue{nilIface: true}}
 	}

@@ -26,6 +26,13 @@ import (
 // their base so that os.Args[1:] is recognised without evaluating anything.
 func (r *Runner) bashPPNativeExpr(expr syntax.BashPPExpr) bool {
 	switch x := expr.(type) {
+	case *syntax.BashPPCompositeLit:
+		return r.bashPPNativeType(x.LitType)
+	case *syntax.BashPPAddressExpr:
+		if lit, ok := x.X.(*syntax.BashPPCompositeLit); ok {
+			return r.bashPPNativeType(lit.LitType)
+		}
+		return false
 	case *syntax.BashPPParenExpr:
 		return r.bashPPNativeExpr(x.X)
 	case *syntax.BashPPIndexExpr:
@@ -254,6 +261,10 @@ func (r *Runner) bashPPNativeShortDecl(d *syntax.BashPPShortDecl) bool {
 		return false
 	}
 	switch x := d.Expr.(type) {
+	case *syntax.BashPPCompositeLit, *syntax.BashPPAddressExpr:
+		if !r.bashPPNativeExpr(d.Expr) {
+			return false
+		}
 	case *syntax.BashPPIndexExpr:
 		if !r.bashPPNativeExpr(x.X) {
 			return false
