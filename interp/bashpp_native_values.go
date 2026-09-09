@@ -588,14 +588,6 @@ func (r *Runner) bashPPBridgeCollection(value any, meta *bashPPCollectionMeta, t
 		default:
 			return result, fmt.Errorf("gosource: missing mapping type schema")
 		}
-	case *bashPPBridgeValue:
-		if !r.bashPPGoSource || value == nil {
-			return result, fmt.Errorf("gosource: invalid native collection value")
-		}
-		// Preserve the dependency-owned object and its canonical identity.
-		// The request boundary validates sessions recursively through fields,
-		// elements and map entries before invoking any imported operation.
-		return *value, nil
 	case string:
 		result.Kind = "string"
 		result.Text = value
