@@ -255,10 +255,24 @@ func (s *bashPPGoSourceScope) command(cmd syntax.Command) {
 			s.pop()
 		}
 	case *syntax.BashPPSend:
-		s.word(cmd.Chan)
-		s.word(cmd.Value)
+		// GoSource's typed operands preserve selector roots and calls that
+		// the legacy display words cannot identify as lexical variables.
+		if cmd.ChanExpr != nil {
+			s.expr(cmd.ChanExpr)
+		} else {
+			s.word(cmd.Chan)
+		}
+		if cmd.ValueExpr != nil {
+			s.expr(cmd.ValueExpr)
+		} else {
+			s.word(cmd.Value)
+		}
 	case *syntax.BashPPReceive:
-		s.word(cmd.Chan)
+		if cmd.ChanExpr != nil {
+			s.expr(cmd.ChanExpr)
+		} else {
+			s.word(cmd.Chan)
+		}
 	case *syntax.BashPPClose:
 		s.word(cmd.Chan)
 	case *syntax.BashPPCommandCall:
