@@ -284,12 +284,23 @@ func bashPPStringResult(results []bashPPParam) bool {
 // SDK storage is never reflected into an interpreter-owned imitation.
 func (r *Runner) bashPPBridgeContents(v bashPPBridgeValue, typ syntax.BashPPTypeExpr) (any, *bashPPCollectionMeta, error) {
 	if _, ok := r.bashPPInterfaceType(typ); ok {
-		if v.Kind == "nil" {
+		if v.Kind == "nil" && (v.Type == "" || v.Type == v.Interface) {
 			return "", &bashPPCollectionMeta{kind: "interface", typ: typ, interfaceValue: &bashPPInterfaceValue{nilIface: true}}, nil
 		}
 		dynamic := &syntax.BashPPNamedType{Name: &syntax.Lit{Value: bashPPLocalTypeName(v.Type)}}
 		if _, ok := r.bashPPInterfaceType(dynamic); ok {
 			return nil, nil, fmt.Errorf("dynamic type %s of an interface value is not materialised", v.Type)
+		}
+		if v.Kind == "nil" {
+			if _, _, err := r.goSourceNativeAssignedValue(v, typ); err != nil {
+				return nil, nil, err
+			}
+			// The native receiver contains a nonnil interface whose dynamic
+			// value is typed nil. Keep that type; no handle needs rebuilding.
+			payload := goSourceNativeValueCell(v)
+			payload.declType = dynamic
+			iv := &bashPPInterfaceValue{cell: payload, dynamic: dynamic}
+			return payload.vr.Obj, &bashPPCollectionMeta{kind: "interface", typ: typ, interfaceValue: iv}, nil
 		}
 		inner, innerMeta, err := r.bashPPBridgeContents(v, dynamic)
 		if err != nil {

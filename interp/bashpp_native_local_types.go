@@ -214,6 +214,7 @@ func (l *bashPPLocalTypeSet) mirrored(decls []*syntax.BashPPFuncDecl) []bashPPLo
 			break
 		}
 	}
+	methods = append(methods, l.mirroredUnwrap(decls)...)
 	methods = append(methods, l.mirroredImage(decls)...)
 	for _, decl := range decls {
 		if decl.Name == nil || decl.Name.Value != "Read" || len(decl.TypeParams) > 0 || len(decl.Receiver.TypeParams) > 0 || len(decl.Params) != 1 || len(decl.Params[0].Names) > 1 || decl.Params[0].Variadic() || len(decl.Results) != 2 {
