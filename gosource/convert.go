@@ -425,7 +425,9 @@ func (c *converter) exprValue(e ast.Expr) s.BashPPExpr {
 				typeLit = c.lit(x.Fun.Pos(), c.text(x.Fun))
 				typeLit.ValueEnd = c.pos(x.Fun.End())
 			}
-			return &s.BashPPConvertExpr{ConvType: typeLit, ConvTypeExpr: c.typ(x.Fun), Lparen: c.pos(x.Lparen), Rparen: c.pos(x.Rparen), X: c.expr(x.Args[0])}
+			value := c.info.Types[x.Args[0]].Value
+			stringConstant := value != nil && value.Kind() == constant.String
+			return &s.BashPPConvertExpr{GoStringConstant: stringConstant, ConvType: typeLit, ConvTypeExpr: c.typ(x.Fun), Lparen: c.pos(x.Lparen), Rparen: c.pos(x.Rparen), X: c.expr(x.Args[0])}
 		}
 		return c.call(x)
 	}
