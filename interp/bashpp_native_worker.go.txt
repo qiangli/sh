@@ -50,7 +50,7 @@ func localTypeKey(name string) string { expr,err:=parser.ParseExpr(name);if err!
 //LOCALTYPES
 
 var originalPointers = struct {sync.Mutex; values map[uint64]reflect.Value; ids map[uintptr]uint64}{values:map[uint64]reflect.Value{},ids:map[uintptr]uint64{}}
-var handles = struct { sync.Mutex; next uint64; values map[uint64]reflect.Value }{values: map[uint64]reflect.Value{}}
+var handles = struct { sync.Mutex; next uint64; values map[uint64]reflect.Value; stop chan struct{} }{values: map[uint64]reflect.Value{},stop:make(chan struct{})}
 func typeID(t reflect.Type) string { if t.Name()!="" && t.PkgPath()!="" {return t.PkgPath()+"."+t.Name()}; return t.String() }
 func nativeTypeID(t reflect.Type) string {if t.Kind()==reflect.Pointer{return "*"+nativeTypeID(t.Elem())};if t.Name()!=""&&t.PkgPath()!=""{return t.PkgPath()+"."+t.Name()};return t.String()}
 func encode(v reflect.Value) value {
@@ -114,6 +114,7 @@ func resolveType(name string) reflect.Type {
  var walk func(ast.Expr) reflect.Type
  walk=func(expr ast.Expr) reflect.Type {var canonical bytes.Buffer;if format.Node(&canonical,token.NewFileSet(),expr)==nil {if typ:=types[canonical.String()];typ!=nil{return typ}};switch e:=expr.(type){
  case *ast.StarExpr:element:=walk(e.X);if element!=nil{return reflect.PointerTo(element)}
+ case *ast.ChanType:element:=walk(e.Value);if element!=nil{direction:=reflect.BothDir;if e.Dir==ast.RECV{direction=reflect.RecvDir};if e.Dir==ast.SEND{direction=reflect.SendDir};return reflect.ChanOf(direction,element)}
  case *ast.Ident:return types[e.Name]
  case *ast.ArrayType:element:=walk(e.Elt);if element==nil{return nil};if e.Len==nil{return reflect.SliceOf(element)};if lit,ok:=e.Len.(*ast.BasicLit);ok{n,err:=strconv.Atoi(lit.Value);if err==nil&&n>=0{return reflect.ArrayOf(n,element)}}
  case *ast.MapType:key,element:=walk(e.Key),walk(e.Value);if key!=nil&&element!=nil&&key.Comparable(){return reflect.MapOf(key,element)}
@@ -225,6 +226,33 @@ func access(rv reflect.Value,q request)([]value,string){
 func dispatch(q request)(reply response){
  reply.ID=q.ID
  defer func(){if e:=recover();e!=nil{if original,ok:=e.(originalCallbackPanic);ok{reply.Panic=&original.value}else{reply.Error=fmt.Sprintf("native dependency panic: %v",e)}}}()
+ if q.Op=="channel-type" {
+  if q.Receiver==nil{reply.Error="channel type query lacks receiver";return}
+  channel,err:=decode(*q.Receiver,nil);if err!=nil{reply.Error=err.Error();return};target:=resolveType(q.Selector)
+  if !channel.IsValid()||channel.Kind()!=reflect.Chan||target==nil||target.Kind()!=reflect.Chan{reply.Error="channel type query requires registered channel types";return}
+  reply.Values=[]value{encode(reflect.ValueOf(channel.Type().AssignableTo(target)))};return
+ }
+ if q.Op=="channel-select" {
+  if q.Selector!=""&&q.Selector!="probe"{reply.Error="invalid native select mode";return}
+  cases:=make([]reflect.SelectCase,0,len(q.Args)+1)
+  for _,arm:=range q.Args {
+   if len(arm.Elements)<1{reply.Error="channel select arm lacks a channel";return}
+   channel,err:=decode(arm.Elements[0],nil);if err!=nil{reply.Error=err.Error();return}
+   if !channel.IsValid()||channel.Kind()!=reflect.Chan{reply.Error="native channel operand required";return}
+   switch arm.Kind {
+   case "recv":if channel.Type().ChanDir()==reflect.SendDir{reply.Error="receive on send-only channel";return};cases=append(cases,reflect.SelectCase{Dir:reflect.SelectRecv,Chan:channel})
+   case "send":if channel.Type().ChanDir()==reflect.RecvDir{reply.Error="send on receive-only channel";return};if len(arm.Elements)!=2{reply.Error="channel send requires one value";return};v,err:=decode(arm.Elements[1],channel.Type().Elem());if err!=nil{reply.Error=err.Error();return};cases=append(cases,reflect.SelectCase{Dir:reflect.SelectSend,Chan:channel,Send:v})
+   default:reply.Error="invalid native select arm";return
+   }
+  }
+  if q.Selector=="probe"{cases=append(cases,reflect.SelectCase{Dir:reflect.SelectDefault})}
+  stopIndex:=len(cases);cases=append(cases,reflect.SelectCase{Dir:reflect.SelectRecv,Chan:reflect.ValueOf(handles.stop)})
+  chosen,received,open:=reflect.Select(cases)
+  if chosen==stopIndex{reply.Error="native channel session closed";return}
+  if q.Selector=="probe"&&chosen==len(q.Args){chosen=-1}
+  item:=value{Kind:"nil"};if received.IsValid(){item=encode(received)}
+  reply.Values=[]value{encode(reflect.ValueOf(chosen)),item,encode(reflect.ValueOf(open))};return
+ }
  if q.Op=="equal" {if len(q.Args)!=2{reply.Error="comparison requires two values";return};left,err:=decode(q.Args[0],nil);if err!=nil{reply.Error=err.Error();return};right,err:=decode(q.Args[1],nil);if err!=nil{reply.Error=err.Error();return};equal:=false
  if !left.IsValid()||!right.IsValid(){other:=left;if !other.IsValid(){other=right};if !other.IsValid(){equal=true}else{switch other.Kind(){case reflect.Chan,reflect.Func,reflect.Interface,reflect.Map,reflect.Pointer,reflect.Slice:equal=other.IsNil();if (!left.IsValid()&&q.Args[1].Interface!=""&&other.Kind()!=reflect.Interface)||(!right.IsValid()&&q.Args[0].Interface!=""&&other.Kind()!=reflect.Interface){equal=false};default:reply.Error="value cannot be compared with nil";return}}}else{equal=left.Equal(right)};reply.Values=[]value{encode(reflect.ValueOf(equal))};return}
  if q.Op=="assignable" {if len(q.Args)!=1{reply.Error="assignability requires one value";return};typ:=resolveType(q.Selector);if typ==nil{reply.Error="unregistered bridge type "+strconv.Quote(q.Selector);return};v,err:=decode(q.Args[0],nil);if err!=nil{reply.Error=err.Error();return};result:=encode(reflect.ValueOf(v.IsValid()&&v.Type().AssignableTo(typ)));if typ.Kind()==reflect.Interface{result.Interface=q.Selector};reply.Values=[]value{result};return}
@@ -253,7 +281,7 @@ func main(){
  encoder:=json.NewEncoder(conn);if err=encoder.Encode(bridgeAuth);err!=nil{return};decoder:=json.NewDecoder(conn)
  outbound.Lock();outbound.encoder=encoder;outbound.Unlock()
  var calls sync.WaitGroup
- for {var q request;if err:=decoder.Decode(&q);err!=nil{calls.Wait();return};if q.Op=="close"{calls.Wait();return}
+ for {var q request;if err:=decoder.Decode(&q);err!=nil{close(handles.stop);calls.Wait();return};if q.Op=="close"{close(handles.stop);calls.Wait();return}
   if q.Op=="callback-reply" {callbacks.Lock();wait:=callbacks.waiting[q.ID];callbacks.Unlock();if wait!=nil{wait<-q};continue}
   calls.Add(1);go func(){defer calls.Done();answer:=dispatch(q);outbound.Lock();defer outbound.Unlock();_ = outbound.encoder.Encode(answer)}()}
 }

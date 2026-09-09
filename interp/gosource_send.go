@@ -30,6 +30,12 @@ func (r *Runner) goSourceChannelOperand(expr syntax.BashPPExpr, word *syntax.Wor
 	var err error
 	if id, ok := expr.(*syntax.BashPPIdent); ok {
 		cell = r.bashPPScope.lookup(id.Name.Value)
+	} else if r.bashPPNativeExpr(expr) {
+		var value bashPPBridgeValue
+		value, err = r.bashPPBridgeExpr(expr)
+		if err == nil {
+			cell = goSourceNativeValueCell(value)
+		}
 	} else {
 		cell, err = r.goSourceValueCell(expr)
 	}
@@ -49,6 +55,9 @@ func (r *Runner) goSourceChannelOperand(expr syntax.BashPPExpr, word *syntax.Wor
 	if r.bashPPChanBoundary {
 		r.bashPPGoSendError(expr, fmt.Errorf("channel cannot cross a shell-copy boundary"))
 		return nil, false
+	}
+	if native, ok := r.goSourceNativeChannel(cell); ok {
+		return &bashPPChannel{native: native}, true
 	}
 	if cell.channel != nil {
 		if cell.channelOwner != r.bashPPConcurrent {

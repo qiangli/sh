@@ -29,6 +29,9 @@ func (r *Runner) bashPPCheckChannelArgs(fn *bashPPFunc, params []bashPPParam, ch
 		if !ok {
 			continue
 		}
+		if i < len(cells) && r.goSourceNativeChannelFits(cells[i], required) {
+			continue
+		}
 		var channel *bashPPChannel
 		if i < len(channels) {
 			channel = channels[i]
@@ -63,6 +66,9 @@ func (r *Runner) bashPPCheckChannelArgs(fn *bashPPFunc, params []bashPPParam, ch
 func (r *Runner) bashPPCheckChannelResult(fn *bashPPFunc, required syntax.BashPPTypeExpr, source *bashPPCell) bool {
 	typ, ok := required.(*syntax.BashPPChanType)
 	if !ok {
+		return true
+	}
+	if r.goSourceNativeChannelFits(source, typ) {
 		return true
 	}
 	if r.bashPPGoSource && source != nil && source.channel == nil && source.vr.Str == "" {

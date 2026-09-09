@@ -27,6 +27,7 @@ const (
 )
 
 type bashPPChannel struct {
+	native  *bashPPBridgeValue
 	elem    string
 	ch      chan any
 	element syntax.BashPPTypeExpr
@@ -674,6 +675,10 @@ func (r *Runner) bashPPSend(ctx context.Context, s *syntax.BashPPSend) {
 	if !ok {
 		return
 	}
+	if c.native != nil {
+		r.goSourceNativeSend(ctx, c, s)
+		return
+	}
 	v, ok := r.bashPPGoSendPayload(c, s)
 	if !ok {
 		return
@@ -731,6 +736,9 @@ func (r *Runner) bashPPReceiveCell(ctx context.Context, recv *syntax.BashPPRecei
 	c, ok := r.bashPPGoReceiveChannel(recv)
 	if !ok {
 		return nil, false
+	}
+	if c.native != nil {
+		return r.goSourceNativeReceive(ctx, c, lhs)
 	}
 	var v any
 	var open bool
@@ -1235,6 +1243,9 @@ func (r *Runner) bashPPVisitPersistentCells(fn func(*bashPPCell)) {
 }
 
 func (r *Runner) bashPPSelect(ctx context.Context, s *syntax.BashPPSelect) {
+	var nativeCases []bashPPBridgeValue
+	var nativeArms []*syntax.BashPPSelectCase
+	hasLocal := false
 	var cases []reflect.SelectCase
 	var arms []*syntax.BashPPSelectCase
 	var caseElems []*bashPPChannel
@@ -1264,6 +1275,12 @@ func (r *Runner) bashPPSelect(ctx context.Context, s *syntax.BashPPSelect) {
 			if !ok {
 				return
 			}
+			if c.native != nil {
+				nativeCases = append(nativeCases, bashPPBridgeValue{Kind: "recv", Elements: []bashPPBridgeValue{*c.native}})
+				nativeArms = append(nativeArms, arm)
+			} else {
+				hasLocal = true
+			}
 			cases = append(cases, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(c.ch)})
 			caseElems = append(caseElems, c)
 		case *syntax.BashPPShortDecl:
@@ -1281,6 +1298,12 @@ func (r *Runner) bashPPSelect(ctx context.Context, s *syntax.BashPPSelect) {
 			if !ok {
 				return
 			}
+			if c.native != nil {
+				nativeCases = append(nativeCases, bashPPBridgeValue{Kind: "recv", Elements: []bashPPBridgeValue{*c.native}})
+				nativeArms = append(nativeArms, arm)
+			} else {
+				hasLocal = true
+			}
 			cases = append(cases, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(c.ch)})
 			caseElems = append(caseElems, c)
 		case *syntax.BashPPSend:
@@ -1288,6 +1311,17 @@ func (r *Runner) bashPPSelect(ctx context.Context, s *syntax.BashPPSelect) {
 			if !ok {
 				return
 			}
+			if c.native != nil {
+				value, err := r.goSourceNativeChannelPayload(comm.ValueExpr)
+				if err != nil {
+					r.bashPPGoSendError(comm.ValueExpr, err)
+					return
+				}
+				nativeCases = append(nativeCases, bashPPBridgeValue{Kind: "send", Elements: []bashPPBridgeValue{*c.native, value}})
+				nativeArms = append(nativeArms, arm)
+				continue
+			}
+			hasLocal = true
 			v, ok := r.bashPPGoSendPayload(c, comm)
 			if !ok {
 				return
@@ -1316,6 +1350,15 @@ func (r *Runner) bashPPSelect(ctx context.Context, s *syntax.BashPPSelect) {
 			return
 		}
 		arms = append(arms, arm)
+	}
+	if len(nativeCases) > 0 {
+		if hasLocal {
+			r.errf("%sgosource: mixed native/interpreted channel select requires atomic arbitration\n", r.bashErrPrefix(s.Pos()))
+			r.exit.code = 2
+			return
+		}
+		r.goSourceNativeSelect(ctx, nativeCases, nativeArms, def)
+		return
 	}
 	// All channel operands and send values have now been evaluated once.
 	for _, c := range pendingSends {
