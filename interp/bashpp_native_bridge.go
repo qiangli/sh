@@ -537,6 +537,31 @@ func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, err
 			return "", err
 		}
 		localTypes[i].Decl = mapped
+		// Mirrored signatures name imported types the same way the original
+		// program did; the helper knows them only by its own generated aliases.
+		methods := append([]bashPPLocalMethod(nil), localTypes[i].Methods...)
+		rewrite := func(list []string) ([]string, error) {
+			out := make([]string, len(list))
+			for k, text := range list {
+				mapped, err := bashPPNativeTypeImports(text, importAliases)
+				if err != nil {
+					return nil, err
+				}
+				out[k] = mapped
+			}
+			return out, nil
+		}
+		for j := range methods {
+			// Copy rather than rewrite in place: the caller's descriptors are
+			// the session identity key and must keep the original spellings.
+			if methods[j].Params, err = rewrite(methods[j].Params); err != nil {
+				return "", err
+			}
+			if methods[j].Results, err = rewrite(methods[j].Results); err != nil {
+				return "", err
+			}
+		}
+		localTypes[i].Methods = methods
 	}
 	for _, local := range localTypes {
 		locals.WriteString(bashPPLocalTypeGo(local))

@@ -39,7 +39,18 @@ func (r *Runner) bashPPNativeTypeRequest(op string, typ syntax.BashPPTypeExpr, a
 }
 func (r *Runner) bashPPNativeComposite(lit *syntax.BashPPCompositeLit, address bool) (bashPPBridgeValue, error) {
 	value := bashPPBridgeValue{Kind: "struct", Type: bashPPBridgeTypeText(lit.LitType), Fields: map[string]bashPPBridgeValue{}}
+	// Go allows either every field keyed or none; the positional form —
+	// color.RGBA{c, c, 255, 255} — is filled in the dependency's own field
+	// order, which only the dependency knows.
 	for _, elem := range lit.Elems {
+		field, err := r.bashPPBridgeExpr(elem.Value)
+		if err != nil {
+			return value, err
+		}
+		if elem.Key == nil {
+			value.Elements = append(value.Elements, field)
+			continue
+		}
 		key, ok := elem.Key.(*syntax.BashPPIdent)
 		if !ok {
 			return value, fmt.Errorf("gosource: imported struct literal requires named fields")
@@ -47,11 +58,10 @@ func (r *Runner) bashPPNativeComposite(lit *syntax.BashPPCompositeLit, address b
 		if _, exists := value.Fields[key.Name.Value]; exists {
 			return value, fmt.Errorf("gosource: duplicate imported field %s", key.Name.Value)
 		}
-		field, err := r.bashPPBridgeExpr(elem.Value)
-		if err != nil {
-			return value, err
-		}
 		value.Fields[key.Name.Value] = field
+	}
+	if len(value.Elements) > 0 && len(value.Fields) > 0 {
+		return value, fmt.Errorf("gosource: imported struct literal mixes keyed and positional fields")
 	}
 	op := "construct"
 	if address {

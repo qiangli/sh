@@ -216,7 +216,39 @@ func main(){fmt.Println(V(1));println("after")}`
 	if err == nil || strings.Contains(output.String(), "after") || strings.Contains(output.String(), "original method unavailable") {
 		t.Fatalf("body failure swallowed: %v %q", err, output.String())
 	}
-	if !strings.Contains(fmt.Sprint(err)+output.String(), "interpreter failure") {
+	// Collection reads now return a positioned diagnostic instead of a host
+	// panic. Preserve failure containment; this is not Go bounds-panic support.
+	if !strings.Contains(err.Error(), path+":4:56: BASHPP-ECOLLECTION-BOUNDS: index 0 out of bounds for length 0") {
 		t.Fatalf("unrelated failure: %v %q", err, output.String())
+	}
+}
+
+func TestGoSourceCallbackUnsupportedBodyPropagation(t *testing.T) {
+	source := `package main
+import("fmt";"sort")
+type V int
+func(v V)String()string{println("entered");sort.Ints([]int{2,1});return "finished"}
+func main(){fmt.Println(V(1));println("after")}`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "original.go")
+	if err := os.WriteFile(path, []byte(source), 0600); err != nil {
+		t.Fatal(err)
+	}
+	want := runNativeOracle(t, dir, path, nil, "")
+	if want.status != 0 {
+		t.Fatalf("invalid oracle: %+v", want)
+	}
+	p, err := gosource.Parse(strings.NewReader(source), path, gosource.Options{RunMain: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	r, err := interp.New(interp.Lang(syntax.LangBashPP), interp.Dir(dir), interp.StdIO(nil, &out, &out))
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = r.Run(context.Background(), p.File)
+	if err == nil || !strings.Contains(err.Error(), "native slice retention or mutation is unsupported for sort.Ints") || !strings.Contains(out.String(), "entered") || strings.Contains(out.String(), "after") || strings.Contains(out.String(), "finished") {
+		t.Fatalf("unsupported nested body escaped: %v %q", err, out.String())
 	}
 }

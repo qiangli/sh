@@ -19,12 +19,20 @@ import (
 )
 
 // bashPPLocalMethod is one interface method the dependency must be able to
-// invoke on a materialised local type. String/Error and exact Read([]byte) (int, error)
-// methods are mirrored; the mirror never carries the original body.
+// invoke on a materialised local type. String/Error, exact Read([]byte) (int, error)
+// and the image.Image method set are mirrored; the mirror never carries the
+// original body.
+//
+// Params and Results are the helper Go source spellings of the reviewed
+// signature, already flattened one entry per value. They are empty for the
+// fixed String/Error and Read protocol stubs, which have their own hand-written
+// mirrors; a method carrying them is emitted by the generalised stub instead.
 type bashPPLocalMethod struct {
 	Name              string
 	Pointer           bool
 	ReaderLocalBuffer bool
+	Params            []string
+	Results           []string
 }
 
 // bashPPLocalType is the transportable descriptor of one original named type.
@@ -206,6 +214,7 @@ func (l *bashPPLocalTypeSet) mirrored(decls []*syntax.BashPPFuncDecl) []bashPPLo
 			break
 		}
 	}
+	methods = append(methods, l.mirroredImage(decls)...)
 	for _, decl := range decls {
 		if decl.Name == nil || decl.Name.Value != "Read" || len(decl.TypeParams) > 0 || len(decl.Receiver.TypeParams) > 0 || len(decl.Params) != 1 || len(decl.Params[0].Names) > 1 || decl.Params[0].Variadic() || len(decl.Results) != 2 {
 			continue
@@ -226,6 +235,86 @@ func (l *bashPPLocalTypeSet) mirrored(decls []*syntax.BashPPFuncDecl) []bashPPLo
 		break
 	}
 	return methods
+}
+
+// importedType reports whether typ names exactly the symbol path.name through
+// one of the original program's own imports. The alias is whatever the original
+// wrote; the dependency path is what is actually checked.
+func (l *bashPPLocalTypeSet) importedType(typ syntax.BashPPTypeExpr, path, name string) bool {
+	named, ok := typ.(*syntax.BashPPNamedType)
+	if !ok || named.Name == nil || len(named.TypeArgs) > 0 {
+		return false
+	}
+	alias, symbol, ok := strings.Cut(named.Name.Value, ".")
+	return ok && symbol == name && l.imports[alias] == path
+}
+
+// mirroredImage reports the image.Image method set, or nothing. The Go Tour
+// image exercise hands an original value to pic.ShowImage and image/png then
+// drives ColorModel, Bounds and At from dependency code, so all three must
+// cross together: a partial mirror would present itself to the dependency as an
+// image.Image it cannot actually serve. Every signature is matched exactly —
+// ColorModel() color.Model, Bounds() image.Rectangle, At(x, y int) color.Color —
+// and each original body still runs in the interpreter.
+func (l *bashPPLocalTypeSet) mirroredImage(decls []*syntax.BashPPFuncDecl) []bashPPLocalMethod {
+	found := map[string]*syntax.BashPPFuncDecl{}
+	for _, decl := range decls {
+		if decl.Name == nil || len(decl.TypeParams) > 0 || len(decl.Receiver.TypeParams) > 0 {
+			continue
+		}
+		switch decl.Name.Value {
+		case "ColorModel", "Bounds", "At":
+			if found[decl.Name.Value] != nil {
+				return nil
+			}
+			found[decl.Name.Value] = decl
+		}
+	}
+	if len(found) != 3 {
+		return nil
+	}
+	// One unnamed-or-singly-named result of exactly the reviewed imported type.
+	result := func(decl *syntax.BashPPFuncDecl, path, name string) (string, bool) {
+		if len(decl.Results) != 1 || len(decl.Results[0].Names) > 1 {
+			return "", false
+		}
+		if !l.importedType(decl.Results[0].FieldTypeExpr, path, name) {
+			return "", false
+		}
+		return l.source(decl.Results[0].FieldTypeExpr, 0)
+	}
+	colorModel, ok := result(found["ColorModel"], "image/color", "Model")
+	if !ok || len(found["ColorModel"].Params) != 0 {
+		return nil
+	}
+	rectangle, ok := result(found["Bounds"], "image", "Rectangle")
+	if !ok || len(found["Bounds"].Params) != 0 {
+		return nil
+	}
+	colorValue, ok := result(found["At"], "image/color", "Color")
+	if !ok {
+		return nil
+	}
+	// At takes exactly two ints, however the original spelled them: `x, y int`
+	// is one field with two names, `x int, y int` is two fields with one each.
+	coordinates := 0
+	for _, param := range found["At"].Params {
+		if param.Variadic() {
+			return nil
+		}
+		if text, ok := l.source(param.FieldTypeExpr, 0); !ok || text != "int" {
+			return nil
+		}
+		coordinates += max(len(param.Names), 1)
+	}
+	if coordinates != 2 {
+		return nil
+	}
+	return []bashPPLocalMethod{
+		{Name: "At", Pointer: found["At"].Receiver.Pointer, Params: []string{"int", "int"}, Results: []string{colorValue}},
+		{Name: "Bounds", Pointer: found["Bounds"].Receiver.Pointer, Results: []string{rectangle}},
+		{Name: "ColorModel", Pointer: found["ColorModel"].Receiver.Pointer, Results: []string{colorModel}},
+	}
 }
 
 // bashPPLocalTypeSource renders one original type expression as helper Go
@@ -374,6 +463,10 @@ func bashPPLocalTypeGo(local bashPPLocalType) string {
 		if method.Pointer {
 			receiver = "*" + local.Name
 		}
+		if len(method.Params) > 0 || len(method.Results) > 0 {
+			b.WriteString(bashPPLocalMethodGo(local.Name, receiver, method))
+			continue
+		}
 		if method.Name == "Read" {
 			fmt.Fprintf(&b, `func (bpprecv %s) Read(p []byte)(int,error) {
  recv:=structural(reflect.ValueOf(bpprecv));recv.CallArgs=[]value{encode(reflect.ValueOf(p))}
@@ -400,6 +493,48 @@ func bashPPLocalTypeGo(local bashPPLocalType) string {
 	return b.String()
 }
 
+// bashPPLocalMethodGo emits the generalised transport stub for one mirrored
+// method with typed parameters and typed results. The whole body is generated
+// protocol: arguments are encoded onto the callback request, the interpreter
+// runs the original body, and each result is decoded back at its declared type
+// so a native handle stays a native handle. No original statement is compiled.
+func bashPPLocalMethodGo(typeName, receiver string, method bashPPLocalMethod) string {
+	var b strings.Builder
+	params := make([]string, len(method.Params))
+	encoded := make([]string, len(method.Params))
+	for i, typ := range method.Params {
+		params[i] = fmt.Sprintf("bpparg%d %s", i, typ)
+		encoded[i] = fmt.Sprintf("encode(reflect.ValueOf(bpparg%d))", i)
+	}
+	results := strings.Join(method.Results, ", ")
+	if len(method.Results) > 1 {
+		results = "(" + results + ")"
+	}
+	if results != "" {
+		results = " " + results
+	}
+	selector := typeName + "." + method.Name
+	fmt.Fprintf(&b, "func (bpprecv %s) %s(%s)%s {\n", receiver, method.Name, strings.Join(params, ", "), results)
+	b.WriteString(" recv:=structural(reflect.ValueOf(bpprecv))\n")
+	if len(encoded) > 0 {
+		fmt.Fprintf(&b, " recv.CallArgs=[]value{%s}\n", strings.Join(encoded, ","))
+	}
+	fmt.Fprintf(&b, " out,err:=callback(%q,recv);if err!=nil{panic(err)}\n", selector)
+	fmt.Fprintf(&b, " if len(out)!=%d{panic(fmt.Errorf(%q))}\n", len(method.Results),
+		fmt.Sprintf("original %s result count mismatch", selector))
+	names := make([]string, len(method.Results))
+	for i, typ := range method.Results {
+		names[i] = fmt.Sprintf("bppres%d", i)
+		fmt.Fprintf(&b, " bppval%d,err:=decode(out[%d],reflect.TypeFor[%s]());if err!=nil{panic(err)}\n", i, i, typ)
+		fmt.Fprintf(&b, " var bppres%d %s;if bppval%d.IsValid(){bppres%d,_=bppval%d.Interface().(%s)}\n", i, typ, i, i, i, typ)
+	}
+	if len(names) > 0 {
+		fmt.Fprintf(&b, " return %s\n", strings.Join(names, ", "))
+	}
+	b.WriteString("}\n")
+	return b.String()
+}
+
 // bashPPLocalTypeIdentity is the comparison key that decides whether a running
 // dependency session already materialises the current local type namespace.
 func bashPPLocalTypeIdentity(locals []bashPPLocalType) string {
@@ -407,7 +542,7 @@ func bashPPLocalTypeIdentity(locals []bashPPLocalType) string {
 	for _, local := range locals {
 		fmt.Fprintf(&b, "%s|%s|%t|%s|", local.Name, local.Decl, local.Alias, local.WireType)
 		for _, method := range local.Methods {
-			fmt.Fprintf(&b, "%s:%t,", method.Name, method.Pointer)
+			fmt.Fprintf(&b, "%s:%t:%t:%v:%v,", method.Name, method.Pointer, method.ReaderLocalBuffer, method.Params, method.Results)
 		}
 		fmt.Fprintf(&b, "%v;", local.OmittedMethods)
 	}

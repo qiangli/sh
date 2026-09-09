@@ -2235,6 +2235,27 @@ func (r *Runner) bashPPReturnScalarExpr(expr syntax.BashPPExpr) {
 		r.exit.returning = true
 		return
 	}
+	// An imported value returned as itself — `return color.RGBAModel`,
+	// `return image.Rect(…)` — crosses back as the authenticated native handle
+	// the dependency owns, never flattened into text. Imported scalars keep
+	// their existing scalar cells; see [goSourceNativeValueCell].
+	if r.bashPPGoSource && r.bashPPNativeExpr(expr) {
+		value, err := r.bashPPBridgeExpr(expr)
+		if err != nil {
+			// Native evaluation may already have recorded a Go panic or exit.
+			// Keep that state so deferred recover and cancellation can unwind.
+			if err == errBashPPScalarInterrupted || r.bashPPPanicking() || r.exit.exiting || r.exit.fatalExit {
+				return
+			}
+			r.exit.fatal(&goSourceError{prefix: r.bashErrPrefix(expr.Pos()), err: err})
+			r.bashPPShortFailureSeq++
+			return
+		}
+		cell := goSourceNativeValueCell(value)
+		r.bashPPReturn = bashPPReturnState{active: true, values: []string{cell.vr.String()}, cells: []*bashPPCell{cell}}
+		r.exit.returning = true
+		return
+	}
 	// A returned value need not be scalar: `return &V{…}`, `return *p` and
 	// `return v.Inner` all name storage the caller receives as a value, and
 	// the cell is the only thing that can carry it across the boundary.

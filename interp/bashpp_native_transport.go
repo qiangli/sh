@@ -91,7 +91,7 @@ func validateLocalTransport(req bashPPEvalRequest, q bashPPBridgeRequest) error 
 		}
 		unsafe = unsafe || (local && ref) || arg.Kind == "pointer"
 	}
-	if synchronousReaderCallback(req, q) {
+	if synchronousReaderCallback(req, q) || synchronousImageCallback(req, q) {
 		return nil
 	}
 	if functionCallbacks && !synchronousFunctionCallback(req, q) {
