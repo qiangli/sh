@@ -38,3 +38,25 @@ Durable raw evidence (including the original reader replay, artifact execution
 with no tools on PATH, source digest, stdout/stderr and statuses) is at
 ~/.local/state/bashy/sprint118-evidence/native-slices-015/manifest.json.
 The full sprint and unrelated interpreter coverage remain open.
+
+Read-only regression repair:
+
+- syscall.Exec reads the captured argv/env slices before replacing the dependency
+  process; no original caller continuation retains those copies.
+- The authenticated standard-library SHA-256 Digest.Write receiver consumes bytes
+  without modifying or retaining them. Arbitrary methods named Write stay denied.
+- Direct text/template.Template.Execute may receive primitive []string data only
+  after the authenticated native template's parse tree passes a function-free
+  inspection. Function identifiers, associated-template invocations and unknown
+  node forms are refused. Existing original-callback/reference checks still run.
+  This deliberately does not approve arbitrary configured template functions.
+
+The unchanged Go by Example execing-processes, sha256-hashes and text-templates
+sources pass native/interpreted/compiled comparisons with identical raw streams.
+The process example runs all modes against the same unchanged assets directory
+and retains its required system ls dependency. Generated Go is removed before
+artifact execution. Raw evidence is at
+~/.local/state/bashy/sprint118-evidence/readonly-regressions-017/manifest.json.
+Race controls retain the old unsupported-reference tests and exercise read-only
+SHA writes, primitive templates, refused associated-template invocation, and a
+native dependency's configured template mutator that must never be invoked.

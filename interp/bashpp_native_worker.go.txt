@@ -12,6 +12,8 @@ import (
  "reflect"
  "strconv"
  "sync"
+ bppTextTemplate "text/template"
+ bppTemplateParse "text/template/parse"
 //IMPORTS
 )
 
@@ -223,6 +225,22 @@ func access(rv reflect.Value,q request)([]value,string){
  }
  return nil,"unsupported native access "+q.Op
 }
+// A tree containing any function identifier or template invocation is outside
+// the read-only primitive-slice contract, regardless of its Funcs registry.
+func primitiveTemplateTree(node bppTemplateParse.Node)bool {
+ if node==nil{return true}
+ switch n:=node.(type) {
+ case *bppTemplateParse.ListNode:if n==nil{return true};for _,child:=range n.Nodes{if !primitiveTemplateTree(child){return false}};return true
+ case *bppTemplateParse.ActionNode:return primitiveTemplateTree(n.Pipe)
+ case *bppTemplateParse.PipeNode:for _,command:=range n.Cmds{if !primitiveTemplateTree(command){return false}};return true
+ case *bppTemplateParse.CommandNode:for _,arg:=range n.Args{if !primitiveTemplateTree(arg){return false}};return true
+ case *bppTemplateParse.IfNode:return primitiveTemplateTree(n.Pipe)&&primitiveTemplateTree(n.List)&&primitiveTemplateTree(n.ElseList)
+ case *bppTemplateParse.RangeNode:return primitiveTemplateTree(n.Pipe)&&primitiveTemplateTree(n.List)&&primitiveTemplateTree(n.ElseList)
+ case *bppTemplateParse.WithNode:return primitiveTemplateTree(n.Pipe)&&primitiveTemplateTree(n.List)&&primitiveTemplateTree(n.ElseList)
+ case *bppTemplateParse.TextNode,*bppTemplateParse.DotNode,*bppTemplateParse.StringNode,*bppTemplateParse.NumberNode,*bppTemplateParse.BoolNode,*bppTemplateParse.NilNode,*bppTemplateParse.VariableNode,*bppTemplateParse.FieldNode:return true
+ }
+ return false
+}
 func dispatch(q request)(reply response){
  reply.ID=q.ID
  defer func(){if e:=recover();e!=nil{if original,ok:=e.(originalCallbackPanic);ok{reply.Panic=&original.value}else{reply.Error=fmt.Sprintf("native dependency panic: %v",e)}}}()
@@ -255,6 +273,7 @@ func dispatch(q request)(reply response){
  }
  if q.Op=="equal" {if len(q.Args)!=2{reply.Error="comparison requires two values";return};left,err:=decode(q.Args[0],nil);if err!=nil{reply.Error=err.Error();return};right,err:=decode(q.Args[1],nil);if err!=nil{reply.Error=err.Error();return};equal:=false
  if !left.IsValid()||!right.IsValid(){other:=left;if !other.IsValid(){other=right};if !other.IsValid(){equal=true}else{switch other.Kind(){case reflect.Chan,reflect.Func,reflect.Interface,reflect.Map,reflect.Pointer,reflect.Slice:equal=other.IsNil();if (!left.IsValid()&&q.Args[1].Interface!=""&&other.Kind()!=reflect.Interface)||(!right.IsValid()&&q.Args[0].Interface!=""&&other.Kind()!=reflect.Interface){equal=false};default:reply.Error="value cannot be compared with nil";return}}}else{equal=left.Equal(right)};reply.Values=[]value{encode(reflect.ValueOf(equal))};return}
+ if q.Op=="template-readonly" {if q.Receiver==nil{reply.Error="template inspection requires native receiver";return};v,err:=decode(*q.Receiver,nil);if err!=nil{reply.Error=err.Error();return};template,ok:=v.Interface().(*bppTextTemplate.Template);safe:=ok&&template!=nil&&template.Tree!=nil&&primitiveTemplateTree(template.Tree.Root);reply.Values=[]value{encode(reflect.ValueOf(safe))};return}
  if q.Op=="assignable" {if len(q.Args)!=1{reply.Error="assignability requires one value";return};typ:=resolveType(q.Selector);if typ==nil{reply.Error="unregistered bridge type "+strconv.Quote(q.Selector);return};v,err:=decode(q.Args[0],nil);if err!=nil{reply.Error=err.Error();return};result:=encode(reflect.ValueOf(v.IsValid()&&v.Type().AssignableTo(typ)));if typ.Kind()==reflect.Interface{result.Interface=q.Selector};reply.Values=[]value{result};return}
  if q.Op=="type" {typ:=resolveType(q.Selector);if typ==nil{reply.Error="unregistered bridge type "+strconv.Quote(q.Selector);return};reply.Values=[]value{encode(reflect.ValueOf(typeID(typ)))};return}
  if q.Op=="construct"||q.Op=="address" {if len(q.Args)!=1{reply.Error="construction requires one literal";return};typ:=resolveType(q.Selector);if typ==nil{reply.Error="unregistered bridge type "+strconv.Quote(q.Selector);return};v,err:=decode(q.Args[0],typ);if err!=nil{reply.Error=err.Error();return};if q.Op=="address"{ptr:=reflect.New(typ);ptr.Elem().Set(v);v=ptr};reply.Values=[]value{encode(v)};return}

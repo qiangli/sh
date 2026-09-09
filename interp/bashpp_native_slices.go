@@ -59,7 +59,8 @@ func nativeSliceReadOnly(name string) bool {
 	switch name {
 	case "fmt.Print", "fmt.Println", "fmt.Printf", "fmt.Sprint", "fmt.Sprintln", "fmt.Sprintf", "fmt.Errorf", "fmt.Fprint", "fmt.Fprintln", "fmt.Fprintf",
 		"bytes.Equal", "bytes.Compare", "bytes.Contains", "bytes.Count", "bytes.HasPrefix", "bytes.HasSuffix", "bytes.Index", "bytes.IndexByte", "bytes.IndexAny", "bytes.LastIndex", "bytes.LastIndexByte", "bytes.LastIndexAny", "bytes.Clone",
-		"strings.Join", "os.WriteFile", "crypto/sha256.Sum256", "crypto/sha1.Sum", "crypto/md5.Sum",
+		"strings.Join", "os.WriteFile", "syscall.Exec",
+		"*crypto/internal/fips140/sha256.Digest.Write", "*crypto/sha256.digest.Write", "crypto/sha256.Sum256", "crypto/sha1.Sum", "crypto/md5.Sum",
 		"*bytes.Buffer.Write", "*bufio.Writer.Write", "*os.File.Write", "*net.TCPConn.Write", "*net.UnixConn.Write":
 		return true
 	}
@@ -117,6 +118,26 @@ func prepareNativeSliceBuffers(req bashPPEvalRequest, q *bashPPBridgeRequest) er
 	}
 	if requestHasCallbacks(req, *q) {
 		return fmt.Errorf("gosource: original callback with copied slice references is unsupported")
+	}
+	if nativeSliceCallable(req, *q) == "*text/template.Template.Execute" {
+		// A configured template may call arbitrary registered functions. Permit
+		// only inspected function-free trees over primitive string slices.
+		if q.Receiver == nil || q.Selector != "Execute" || len(q.Args) != 2 || q.Args[1].Type != "[]string" || q.Args[1].Kind != "slice" {
+			return fmt.Errorf("gosource: template slice transport requires direct primitive string data")
+		}
+		for _, element := range q.Args[1].Elements {
+			if element.Kind != "string" || element.Type != "string" {
+				return fmt.Errorf("gosource: template slice elements must be primitive strings")
+			}
+		}
+		values, err := req.CallbackOwner.bashPPNativeRequest(req.CallbackOwner.ectx, req, bashPPBridgeRequest{Op: "template-readonly", Receiver: q.Receiver})
+		if err != nil {
+			return err
+		}
+		if len(values) != 1 || values[0].Kind != "bool" || values[0].Text != "true" {
+			return fmt.Errorf("gosource: template with function or template callbacks cannot receive original slice storage")
+		}
+		return nil
 	}
 	index := nativeSliceReadIndex(req, *q)
 	if index < 0 {
