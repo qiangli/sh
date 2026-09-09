@@ -3515,7 +3515,7 @@ func (r *Runner) subshell(background bool) *Runner {
 	// a data race for a background subshell, which runs in its own goroutine.
 	if r.bashPPScope != nil || len(r.bashPPFuncScopes) > 0 || len(r.bashPPFuncs) > 0 ||
 		len(r.bashPPClosures) > 0 {
-		cloner := newBashPPCloner()
+		cloner := newBashPPClonerFor(r2)
 		r2.bashPPScope = cloner.clone(r.bashPPScope)
 		if r.bashPPFuncScopes != nil {
 			r2.bashPPFuncScopes = make(map[string]*bashPPScope, len(r.bashPPFuncScopes))

@@ -89,6 +89,9 @@ type bashPPObjectCloner struct {
 	active  map[bashPPObjectCloneKey]bool
 	done    map[bashPPObjectCloneKey]any
 	pointer func(*bashPPPointer) *bashPPPointer
+	// native scopes imported dependency handles; see bashpp_task.go. The zero
+	// value preserves handle identity without a staleness check.
+	native bashPPNativeHandleScope
 }
 
 func newBashPPObjectCloner() *bashPPObjectCloner {
@@ -109,6 +112,11 @@ func (c *bashPPObjectCloner) clone(value any) (any, error) {
 			return c.pointer(value), nil
 		}
 		return value, nil
+	case *bashPPBridgeValue:
+		// An imported native value is a reference into the dependency
+		// session, not interpreter-owned mutable state; cloning preserves the
+		// object it names. See bashpp_task.go.
+		return c.cloneNativeHandle(value)
 	case map[string]any:
 		key := bashPPObjectCloneKey{kind: 1, ptr: reflect.ValueOf(value).Pointer()}
 		if c.active[key] {
@@ -897,6 +905,9 @@ func (r *Runner) bashPPTaskSnapshot(ordinal uint64) (*Runner, error) {
 	// Bash++ tasks require deep mutable-value isolation.
 	child.writeEnv = &overlayEnviron{}
 	objects := newBashPPObjectCloner()
+	// The task inherits this runner's dependency session, so its native
+	// handles keep naming the same objects; see bashpp_task.go.
+	objects.native = bashPPNativeScopeOf(r)
 	for name, vr := range r.writeEnv.Each {
 		copy, err := cloneBashPPTaskVariable(vr, objects)
 		if err != nil {
