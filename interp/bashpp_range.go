@@ -114,7 +114,19 @@ func (r *Runner) bashPPRangeCollection(ctx context.Context, rng *syntax.BashPPRa
 		return false
 	}
 	cell := r.bashPPScope.lookup(root)
-	if cell == nil || cell.channel != nil || cell.vr.Kind != expand.Object && !cell.pointer {
+	if cell == nil || cell.channel != nil {
+		return false
+	}
+	// A variadic parameter binds as an indexed variable rather than an
+	// object — see [Runner.bashPPInvoke] — so it carries its collection meta
+	// on the side instead of behind cell.object. A bare `range rest` is the
+	// only shape that meta describes; a path rooted in one more scalars would
+	// still need the Object machinery below, which a variadic parameter never
+	// has.
+	if _, isIdent := rng.Expr.(*syntax.BashPPIdent); isIdent && cell.vr.Kind == expand.Indexed && cell.valueMeta != nil {
+		return r.bashPPRangeIndexed(ctx, rng, cell)
+	}
+	if cell.vr.Kind != expand.Object && !cell.pointer {
 		return false
 	}
 	if _, native := r.goSourceNativeChannel(cell); native {
@@ -172,6 +184,30 @@ func (r *Runner) bashPPRangeCollection(ctx context.Context, rng *syntax.BashPPRa
 			if !r.bashPPRangeIteration(ctx, rng, key, collection.Key, item, meta.mapping[key], collection.Element) {
 				return true
 			}
+		}
+	}
+	return true
+}
+
+// bashPPRangeIndexed ranges the indexed binding a variadic parameter gets in
+// [Runner.bashPPInvoke], using the collection meta attached there instead of
+// the string list's length: element i's value and declared element type come
+// from cell.valueMeta, exactly as they would for a slice held behind an
+// Object cell.
+func (r *Runner) bashPPRangeIndexed(ctx context.Context, rng *syntax.BashPPRange, cell *bashPPCell) bool {
+	meta := cell.valueMeta
+	collection, ok := r.bashPPUnderlyingType(meta.typ).(*syntax.BashPPCollectionType)
+	if !ok {
+		r.bashPPRangeError(rng, "BASHPP-ERANGE-TYPE: cannot range over %s", bashPPTypeText(meta.typ))
+		return true
+	}
+	for i, elem := range cell.vr.List {
+		var elemMeta *bashPPCollectionMeta
+		if i < len(meta.sequence) {
+			elemMeta = meta.sequence[i]
+		}
+		if !r.bashPPRangeIteration(ctx, rng, i, bashPPRangeNamedType("int"), elem, elemMeta, collection.Element) {
+			return true
 		}
 	}
 	return true

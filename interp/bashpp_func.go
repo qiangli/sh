@@ -1719,6 +1719,17 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 				rest := append([]string(nil), args[i:]...)
 				_ = r.bashPPScope.declare(param.name,
 					expand.Variable{Set: true, Kind: expand.Indexed, List: rest}, false)
+				// The indexed binding above is what lets the body keep using
+				// `${rest[@]}`; this collection meta rides alongside it so a
+				// two-variable `for i, v := range rest` sees each element's value
+				// and declared type instead of falling through to the scalar
+				// range path, which has no notion of a list at all and would
+				// treat len(rest) as an integer to count up to.
+				r.bashPPScope.lookup(param.name).valueMeta = &bashPPCollectionMeta{
+					kind:     "slice",
+					typ:      &syntax.BashPPCollectionType{Kind: "slice", Element: param.typ},
+					sequence: make([]*bashPPCollectionMeta, len(rest)),
+				}
 			}
 			break
 		}
