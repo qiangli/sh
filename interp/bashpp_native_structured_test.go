@@ -188,6 +188,75 @@ func main() {
 	}
 }
 
+// TestGoSourceNativeStructuredBridgeEdges pins bridge surfaces that previously
+// fell back to scalar text or package-selector parsing. The original bodies
+// stay interpreted; only imported operations use the persistent helper.
+func TestGoSourceNativeStructuredBridgeEdges(t *testing.T) {
+	cases := map[string]string{
+		"flag_intvar_address": `package main
+
+import (
+	"flag"
+	"fmt"
+)
+
+func main() {
+	fs := flag.NewFlagSet("s118", flag.ContinueOnError)
+	n := 0
+	fs.IntVar(&n, "n", 3, "number")
+	err := fs.Parse([]string{"-n", "7"})
+	fmt.Println(n, err)
+}
+`,
+		"io_eof_identity": `package main
+
+import (
+	"fmt"
+	"io"
+	"strings"
+)
+
+func main() {
+	buf := []byte{1}
+	n, err := strings.NewReader("").Read(buf)
+	fmt.Println(n, err == io.EOF, err)
+}
+`,
+		"syscall_exec_with_native_environ": `package main
+
+import (
+	"os"
+	"syscall"
+)
+
+func main() {
+	syscall.Exec("/bin/echo", []string{"echo", "exec-ok"}, os.Environ())
+}
+`,
+	}
+	for name, source := range cases {
+		t.Run(name, func(t *testing.T) { differGoSource(t, source, nil, "") })
+	}
+}
+
+func TestGoSourceNativeEmbedFS(t *testing.T) {
+	source := `package main
+
+import (
+	"embed"
+	"fmt"
+)
+
+var files embed.FS
+
+func main() {
+	data, err := files.ReadFile("missing.txt")
+	fmt.Println(data == nil, err != nil)
+}
+`
+	differGoSource(t, source, nil, "")
+}
+
 // TestGoSourceNativeSelfTermination covers programs that end their own
 // process through a dependency. The status the original program chose must
 // reach the caller instead of a bridge diagnostic, and deferred interpreter

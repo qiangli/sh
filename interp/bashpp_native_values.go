@@ -510,6 +510,79 @@ func (r *Runner) bashPPBridgePointerValue(ptr *bashPPPointer) (bashPPBridgeValue
 	return bashPPBridgeValue{Origin: origin, Session: session.id, Kind: "pointer", Type: "*" + inner.Type, Elements: []bashPPBridgeValue{inner}}, nil
 }
 
+func (s *bashPPNativeSession) applyNativePointerUpdates(req bashPPEvalRequest, reply bashPPBridgeResponse) error {
+	if len(reply.PtrUpdates) == 0 {
+		return nil
+	}
+	owner := req.CallbackOwner
+	if owner == nil {
+		return fmt.Errorf("gosource: native pointer writeback has no request owner")
+	}
+	for _, update := range reply.PtrUpdates {
+		if update.Origin == 0 || update.Session != s.id {
+			return fmt.Errorf("gosource: native pointer writeback has invalid origin")
+		}
+		s.mu.Lock()
+		ptr := s.origins[update.Origin]
+		s.mu.Unlock()
+		if ptr == nil {
+			return fmt.Errorf("gosource: native pointer writeback target expired")
+		}
+		if len(update.Elements) != 1 {
+			return fmt.Errorf("gosource: native pointer writeback needs one value")
+		}
+		if err := owner.bashPPWriteBridgePointer(ptr, update.Elements[0]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *Runner) bashPPWriteBridgePointer(ptr *bashPPPointer, value bashPPBridgeValue) error {
+	if ptr == nil {
+		return fmt.Errorf("BASHPP-ENIL-DEREF: dereference of nil pointer")
+	}
+	if ptr.target.object != nil && ptr.target.object.readonly {
+		return fmt.Errorf("BASHPP-EREADONLY-MUTATION: cannot mutate readonly value %q through pointer", ptr.target.object.owner)
+	}
+	if ptr.target.constant || ptr.target.vr.ReadOnly {
+		return fmt.Errorf("BASHPP-EREADONLY-MUTATION: cannot mutate readonly value through pointer")
+	}
+	converted, err := bashPPNativeReadValue(value)
+	if err != nil {
+		return err
+	}
+	if len(ptr.path) == 0 {
+		bashPPStoreCellValue(ptr.target, converted, nil)
+		return nil
+	}
+	parent, parentMeta, _, err := ptr.readParent()
+	if err != nil {
+		return err
+	}
+	last := ptr.path[len(ptr.path)-1]
+	if last.field != "" {
+		mapping, ok := parent.(map[string]any)
+		if !ok {
+			return fmt.Errorf("BASHPP-EPOINTER-TARGET: pointer field path no longer names struct storage")
+		}
+		mapping[last.field] = converted
+		if parentMeta != nil {
+			parentMeta.mapping[last.field] = nil
+		}
+		return nil
+	}
+	sequence, ok := parent.([]any)
+	if !ok || last.index < 0 || last.index >= len(sequence) {
+		return fmt.Errorf("BASHPP-EPOINTER-TARGET: pointer index no longer names collection storage")
+	}
+	sequence[last.index] = converted
+	if parentMeta != nil {
+		parentMeta.sequence[last.index] = nil
+	}
+	return nil
+}
+
 func (r *Runner) bashPPBridgeCollection(value any, meta *bashPPCollectionMeta, typ syntax.BashPPTypeExpr) (bashPPBridgeValue, error) {
 	if meta != nil && meta.interfaceValue != nil {
 		cell := meta.interfaceValue.cell
