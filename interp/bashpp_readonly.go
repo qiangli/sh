@@ -188,6 +188,21 @@ func (r *Runner) bashPPTupleAssign(assign *syntax.BashPPAssign) {
 			r.exit = exitStatus{code: 2}
 			return
 		}
+		// An interface-typed target owns the dynamic type of what it is
+		// given, so the value is built against the target's declared
+		// interface rather than read as a plain scalar.
+		if name := assign.Names[i]; name.Value != "_" {
+			cell, handled, err := r.bashPPInterfaceAssignCandidate(r.bashPPScope.lookup(name.Value), expr)
+			if err != nil {
+				r.errf("%s%v\n", r.bashErrPrefix(expr.Pos()), err)
+				r.exit = exitStatus{code: 2}
+				return
+			}
+			if handled {
+				candidates[i] = cell
+				continue
+			}
+		}
 		if ident, ok := expr.(*syntax.BashPPIdent); ok {
 			source := r.bashPPScope.lookup(ident.Name.Value)
 			if source == nil {

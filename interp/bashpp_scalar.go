@@ -48,10 +48,13 @@ func (r *Runner) bashPPEvalScalarExpr(expr syntax.BashPPExpr) (result bashPPScal
 		if x.CalleeExpr != nil {
 			return bashPPScalar{}, fmt.Errorf("gosource: computed call runtime is not implemented")
 		}
-		if len(x.Fun) != 1 {
+		if len(x.Fun) == 0 {
 			return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-FORM: unsupported scalar call")
 		}
-		if x.Fun[0].Value != "len" && x.Fun[0].Value != "cap" {
+		// A selector callee is a method value — `v.Abs()`, `p.q.M()` — which
+		// the callable lookup resolves against the receiver's type. Only the
+		// bare `len`/`cap` spellings are the length builtins.
+		if len(x.Fun) > 1 || (x.Fun[0].Value != "len" && x.Fun[0].Value != "cap") {
 			return r.bashPPScalarFuncCall(x)
 		}
 		name := x.Fun[0].Value
@@ -122,7 +125,7 @@ func (r *Runner) bashPPEvalScalarExpr(expr syntax.BashPPExpr) (result bashPPScal
 		if err != nil {
 			return bashPPScalar{}, err
 		}
-		return r.bashPPConvertScalar(x.ConvType.Value, v)
+		return r.bashPPConvertNamedScalar(x.ConvType.Value, v)
 	case *syntax.BashPPIndexExpr, *syntax.BashPPSelectorExpr, *syntax.BashPPDerefExpr:
 		value, meta, err := r.bashPPReadExpr(expr)
 		if err != nil {

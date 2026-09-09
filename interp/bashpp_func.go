@@ -948,10 +948,14 @@ func (r *Runner) bashPPCellForWord(w *syntax.Word) *bashPPCell {
 // and `new(T)` name storage that no variable holds, so there is no cell to
 // carry their provenance to a parameter; this makes one.
 func bashPPPointerCell(ptr *bashPPPointer) *bashPPCell {
+	// A pointer variable's own shell binding is a set, empty string: the
+	// pointer travels in pointerValue, not in the text. An anonymous pointer
+	// cell must look the same, or reading it reports an unset name.
+	vr := expand.Variable{Set: true, Kind: expand.String}
 	if ptr == nil {
-		return &bashPPCell{pointer: true, nilPointer: true}
+		return &bashPPCell{pointer: true, nilPointer: true, vr: vr}
 	}
-	cell := &bashPPCell{pointer: true, pointerValue: ptr, declType: &syntax.BashPPPointerType{Element: ptr.elem}}
+	cell := &bashPPCell{pointer: true, pointerValue: ptr, vr: vr, declType: &syntax.BashPPPointerType{Element: ptr.elem}}
 	if named, ok := ptr.elem.(*syntax.BashPPNamedType); ok && named.Name != nil {
 		cell.typeName = named.Name.Value
 	}
@@ -1905,6 +1909,14 @@ func (r *Runner) bashPPReturnStmt(ctx context.Context, ret *syntax.BashPPReturn)
 		return
 	}
 	if ret.Call != nil {
+		// `return float64(f)` is a conversion, not a call; the Go front end
+		// cannot tell the two apart from syntax alone and delivers both as a
+		// call, so the conversion is recognized here rather than refused as an
+		// undeclared callable.
+		if conv, ok := r.bashPPConversionCall(ret.Call); ok {
+			r.bashPPReturnScalarExpr(conv)
+			return
+		}
 		fn, ok := r.bashPPLookupFunc(ret.Call)
 		if !ok {
 			r.bashPPShortFailureSeq++
@@ -1944,23 +1956,7 @@ func (r *Runner) bashPPReturnStmt(ctx context.Context, ret *syntax.BashPPReturn)
 		return
 	}
 	if ret.Expr != nil {
-		value, err := r.bashPPEvalScalarExpr(ret.Expr)
-		if err != nil {
-			if err == errBashPPScalarInterrupted {
-				return
-			}
-			r.errf("%v\n", err)
-			r.exit = exitStatus{code: 2}
-			r.bashPPShortFailureSeq++
-			return
-		}
-		text := bashPPScalarString(value.value)
-		cell := &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: text}, scalarKind: value.value.Kind()}
-		if value.typ != "" {
-			cell.declType = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: value.typ}}
-		}
-		r.bashPPReturn = bashPPReturnState{active: true, values: []string{text}, cells: []*bashPPCell{cell}}
-		r.exit.returning = true
+		r.bashPPReturnScalarExpr(ret.Expr)
 		return
 	}
 	vals := make([]string, len(ret.Results))
@@ -1972,6 +1968,29 @@ func (r *Runner) bashPPReturnStmt(ctx context.Context, ret *syntax.BashPPReturn)
 		}
 	}
 	r.bashPPReturn = bashPPReturnState{active: true, values: vals, cells: cells}
+	r.exit.returning = true
+}
+
+// bashPPReturnScalarExpr settles a single scalar result, retaining the value's
+// type so a defined type reaches the caller as itself.
+func (r *Runner) bashPPReturnScalarExpr(expr syntax.BashPPExpr) {
+	value, err := r.bashPPEvalScalarExpr(expr)
+	if err != nil {
+		if err == errBashPPScalarInterrupted {
+			return
+		}
+		r.errf("%v\n", err)
+		r.exit = exitStatus{code: 2}
+		r.bashPPShortFailureSeq++
+		return
+	}
+	text := bashPPScalarString(value.value)
+	cell := &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: text}, scalarKind: value.value.Kind()}
+	if value.typ != "" {
+		cell.typeName = value.typ
+		cell.declType = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: value.typ}}
+	}
+	r.bashPPReturn = bashPPReturnState{active: true, values: []string{text}, cells: []*bashPPCell{cell}}
 	r.exit.returning = true
 }
 

@@ -626,6 +626,72 @@ func (r *Runner) bashPPTypeTerminates(name string, seen map[string]bool) bool {
 	return r.bashPPTypeTerminates(base, seen)
 }
 
+// bashPPShortDeclConversion recognizes `x := T(v)`. Only a builtin or defined
+// type whose underlying type is scalar is claimed; a name that already denotes
+// a callable or a binding, and a type with a structured underlying type, both
+// stay on the paths that already own them.
+func (r *Runner) bashPPShortDeclConversion(d *syntax.BashPPShortDecl) (*syntax.BashPPConvertExpr, bool) {
+	if len(d.Lhs) != 1 {
+		return nil, false
+	}
+	return r.bashPPConversionCall(d.Call)
+}
+
+// bashPPConversionCall recognizes a call-shaped Go conversion `T(v)`. See
+// [Runner.bashPPShortDeclConversion] for what it deliberately leaves alone.
+func (r *Runner) bashPPConversionCall(call *syntax.BashPPCall) (*syntax.BashPPConvertExpr, bool) {
+	if call == nil || call.CalleeExpr != nil || len(call.Fun) != 1 {
+		return nil, false
+	}
+	if len(call.ArgExprs) != 1 || call.ArgExprs[0] == nil || call.Ellipsis.IsValid() {
+		return nil, false
+	}
+	name := call.Fun[0].Value
+	if r.bashPPFuncs[name] != nil || !bashPPScalarTypeName(name) {
+		return nil, false
+	}
+	if !bashPPBuiltinType(name) {
+		decl, declared := r.bashPPTypes[name]
+		if !declared {
+			return nil, false
+		}
+		shape, ok := r.bashPPUnderlyingType(decl.typeExpr).(*syntax.BashPPNamedType)
+		if !ok || !bashPPScalarTypeName(shape.Name.Value) || !bashPPBuiltinType(shape.Name.Value) {
+			return nil, false
+		}
+	}
+	return &syntax.BashPPConvertExpr{ConvType: call.Fun[0], Lparen: call.Lparen, Rparen: call.Rparen, X: call.ArgExprs[0]}, true
+}
+
+// bashPPConvertNamedScalar converts a scalar to a DEFINED type as well as to a
+// builtin one. `MyFloat(3)` converts through MyFloat's underlying type and then
+// keeps MyFloat as the result's type: that named identity is what carries the
+// defined type's method set, so `MyFloat(3).Abs()` resolves where a bare
+// float64 would not.
+func (r *Runner) bashPPConvertNamedScalar(name string, x bashPPScalar) (bashPPScalar, error) {
+	if bashPPBuiltinType(name) {
+		return r.bashPPConvertScalar(name, x)
+	}
+	named := &syntax.BashPPNamedType{Name: &syntax.Lit{Value: name}}
+	shape, ok := r.bashPPUnderlyingType(named).(*syntax.BashPPNamedType)
+	if !ok || shape == named || !bashPPBuiltinType(shape.Name.Value) {
+		return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-CONVERT: cannot convert %s to %s", x.value.Kind(), name)
+	}
+	converted, err := r.bashPPConvertScalar(shape.Name.Value, x)
+	if err != nil {
+		return bashPPScalar{}, err
+	}
+	converted.typ = name
+	return converted, nil
+}
+
+// bashPPScalarTypeName rejects the two names [bashPPBuiltinType] admits that
+// never denote a scalar conversion: `struct` is a shape, and `error` is an
+// interface whose conversions are interface assignments.
+func bashPPScalarTypeName(name string) bool {
+	return name != "struct" && name != "error"
+}
+
 func bashPPBuiltinType(name string) bool {
 	switch name {
 	case "bool", "byte", "complex64", "complex128", "error", "float32", "float64",
@@ -932,6 +998,27 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 		}
 		if fn, ok := r.bashPPLookupFunc(d.Call); ok {
 			r.bashPPShortDeclCall(ctx, d, fn)
+			return
+		}
+		// A Go conversion is spelled exactly like a call, so the Go front end
+		// delivers `f := MyFloat(3)` as one. Evaluate it as the conversion it
+		// is: the result then carries the defined type, and with it the method
+		// set `f.Abs()` resolves against. Reaching the call path instead left
+		// the value an untyped string with no selector path at all.
+		if conv, ok := r.bashPPShortDeclConversion(d); ok {
+			value, err := r.bashPPEvalScalarExpr(conv)
+			if err != nil {
+				if err != errBashPPScalarInterrupted {
+					r.errf("%v\n", err)
+					r.exit = exitStatus{code: 2}
+				}
+				return
+			}
+			r.bashPPDeclareName(d.Lhs[0].Value, expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarString(value.value)})
+			if target := r.bashPPScope.lookup(d.Lhs[0].Value); target != nil {
+				target.scalarKind = value.value.Kind()
+				target.typeName = value.typ
+			}
 			return
 		}
 		// `err := recover()` is the spelling a recovering defer is written

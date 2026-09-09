@@ -6,6 +6,7 @@ package interp
 import (
 	"context"
 	"fmt"
+	"go/constant"
 	"strings"
 
 	"mvdan.cc/sh/v3/expand"
@@ -341,6 +342,29 @@ func (r *Runner) bashPPMakeInterfaceValue(expr syntax.BashPPExpr, expected synta
 	return &bashPPInterfaceValue{dynamic: actual, cell: stored}, stored.vr, nil
 }
 
+// bashPPInterfaceAssignCandidate builds the assignment candidate for a target
+// declared with an interface type. The dynamic value and the interface value
+// naming its type are captured together, so `i = &T{…}` and `i = 42` store
+// what Go stores instead of being read as a bare scalar with no dynamic type.
+// It reports whether it claimed the assignment at all.
+func (r *Runner) bashPPInterfaceAssignCandidate(target *bashPPCell, expr syntax.BashPPExpr) (*bashPPCell, bool, error) {
+	if target == nil || target.declType == nil || expr == nil {
+		return nil, false, nil
+	}
+	if _, ok := r.bashPPInterfaceType(target.declType); !ok {
+		return nil, false, nil
+	}
+	iv, vr, err := r.bashPPMakeInterfaceValue(expr, target.declType)
+	if err != nil {
+		return nil, true, err
+	}
+	cell := &bashPPCell{vr: vr, declType: target.declType, interfaceValue: iv}
+	if iv != nil && iv.cell != nil {
+		cell.valueMeta, cell.object, cell.scalarKind = iv.cell.valueMeta, iv.cell.object, iv.cell.scalarKind
+	}
+	return cell, true, nil
+}
+
 // bashPPCopyInterfaceCell captures the dynamic value at assignment time.
 // Structs and arrays are values and therefore need their own payload, while
 // pointers, maps, and slices deliberately retain the identities they carry.
@@ -382,7 +406,73 @@ func (r *Runner) bashPPCellForInterfaceExpr(expr syntax.BashPPExpr) (*bashPPCell
 		}
 		return cell, actual, nil
 	}
-	return nil, nil, fmt.Errorf("BASHPP-EINTERFACE-VALUE: interface assignment requires a named value")
+	// A dynamic value need not be a variable. `var i I = T{"hello"}`,
+	// `i = &T{}` and `i = 42` all store a value the interface then owns, so
+	// each is materialized into an anonymous cell carrying the dynamic type
+	// the assignment's method-set check is made against.
+	switch x := expr.(type) {
+	case *syntax.BashPPParenExpr:
+		return r.bashPPCellForInterfaceExpr(x.X)
+	case *syntax.BashPPCompositeLit:
+		if x.LitType == nil {
+			return nil, nil, fmt.Errorf("BASHPP-EINTERFACE-VALUE: composite literal has no type")
+		}
+		value, meta, err := r.bashPPEvalComposite(x, nil)
+		if err != nil {
+			return nil, nil, err
+		}
+		cell := &bashPPCell{declType: x.LitType}
+		if named, ok := x.LitType.(*syntax.BashPPNamedType); ok && named.Name != nil {
+			cell.typeName = named.Name.Value
+		}
+		bashPPStoreCellValue(cell, value, meta)
+		return cell, x.LitType, nil
+	case *syntax.BashPPAddressExpr, *syntax.BashPPNewExpr:
+		ptr, err := r.bashPPPointerExprValue(expr)
+		if err != nil {
+			return nil, nil, err
+		}
+		cell := bashPPPointerCell(ptr)
+		if cell.declType == nil {
+			return nil, nil, fmt.Errorf("BASHPP-EINTERFACE-VALUE: pointer value has no dynamic type")
+		}
+		return cell, cell.declType, nil
+	}
+	value, err := r.bashPPEvalScalarExpr(expr)
+	if err != nil {
+		return nil, nil, err
+	}
+	name := value.typ
+	if name == "" {
+		name = bashPPDefaultScalarTypeName(value.value.Kind())
+	}
+	if name == "" {
+		return nil, nil, fmt.Errorf("BASHPP-EINTERFACE-VALUE: interface assignment requires a named value")
+	}
+	actual := &syntax.BashPPNamedType{Name: &syntax.Lit{Value: name}}
+	cell := &bashPPCell{
+		vr:         expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarString(value.value)},
+		scalarKind: value.value.Kind(),
+		typeName:   name,
+		declType:   actual,
+	}
+	return cell, actual, nil
+}
+
+// bashPPDefaultScalarTypeName names the Go default type of an untyped
+// constant, which is the dynamic type it takes on when stored in an interface.
+func bashPPDefaultScalarTypeName(kind constant.Kind) string {
+	switch kind {
+	case constant.Bool:
+		return "bool"
+	case constant.String:
+		return "string"
+	case constant.Int:
+		return "int"
+	case constant.Float:
+		return "float64"
+	}
+	return ""
 }
 
 func (r *Runner) bashPPTypeAssert(assert *syntax.BashPPTypeAssertExpr, commaOK bool) ([]string, *bashPPCell, error) {
