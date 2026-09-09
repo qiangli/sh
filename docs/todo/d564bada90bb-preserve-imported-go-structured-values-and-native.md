@@ -6,7 +6,6 @@ seq: 52
 status: done
 priority: p0
 created: 2026-09-09T06:37:55.717046Z
-weave: 70
 assignee: qiangli
 sprint: 118
 closed: 2026-09-09T18:20:49.291077Z
