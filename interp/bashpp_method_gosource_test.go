@@ -30,8 +30,11 @@ import (
 // through fmt goes to the native dependency bridge, which is a separate
 // runtime surface with its own gaps, and would make this test report on
 // something it is not about.
+//
+// The oracle builds run one at a time: five concurrent `go build` invocations
+// are enough of a load spike to make the timing-sensitive concurrency tests in
+// this package flake.
 func TestGoSourceStructuredValuesMatchGo(t *testing.T) {
-	t.Parallel()
 	for _, tc := range []struct{ name, source string }{
 		{"grouped_fields_and_value_receiver", `package main
 
@@ -194,7 +197,6 @@ func main() {
 `},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
 			dir := t.TempDir()
 			path := filepath.Join(dir, "original.go")
 			if err := os.WriteFile(path, []byte(tc.source), 0o600); err != nil {
