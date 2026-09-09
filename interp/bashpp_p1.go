@@ -1706,9 +1706,40 @@ func (r *Runner) bashPPShortDeclPredeclared(d *syntax.BashPPShortDecl, name stri
 			r.exit = exitStatus{code: 2}
 			return
 		}
+		// recover's static type is `interface{}`, so `r := recover()` binds an
+		// interface value, not a bare scalar. That is what lets `r != nil` hold
+		// for a recovered payload — even the empty string — and `r == nil` hold
+		// when there was nothing to recover. Status 0 from the call is the same
+		// "recovered" signal `$?` carries; see [Runner.bashPPPredeclared].
+		if name == "recover" && r.bashPPGoSource {
+			r.bashPPDeclareRecoverInterface(lhs.Value, results[i], status.code == 0)
+			continue
+		}
 		r.bashPPDeclareName(lhs.Value, expand.Variable{Set: true, Kind: expand.String, Str: results[i]})
 	}
 	r.exit = status
+}
+
+// bashPPDeclareRecoverInterface binds name to the interface value recover
+// returns. A recovered payload becomes a non-nil interface whose dynamic type is
+// string (the only shape a panic value carries in this engine), so it compares
+// unequal to nil while still interpolating as its text. Nothing to recover binds
+// the nil interface, which compares equal to nil.
+func (r *Runner) bashPPDeclareRecoverInterface(name, value string, recovered bool) {
+	vr := expand.Variable{Set: true, Kind: expand.String, Str: value}
+	r.bashPPDeclareName(name, vr)
+	cell := r.bashPPScope.lookup(name)
+	if cell == nil {
+		return
+	}
+	if !recovered {
+		cell.interfaceValue = &bashPPInterfaceValue{nilIface: true}
+		return
+	}
+	stringType := &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "string"}}
+	inner := &bashPPCell{vr: vr, scalarKind: constant.MakeString(value).Kind(), declType: stringType, typeName: "string"}
+	cell.interfaceValue = &bashPPInterfaceValue{dynamic: stringType, cell: inner}
+	cell.scalarKind = inner.scalarKind
 }
 
 // bashPPDeclareName binds one name in the innermost block, reporting a
@@ -1956,9 +1987,18 @@ func (r *Runner) bashPPIf(ctx context.Context, i *syntax.BashPPIf) {
 		} else {
 			r.bashPPShortDecl(ctx, i.Init)
 		}
-		if !r.exit.ok() || r.bashPPPanicking() {
+		if r.bashPPPanicking() {
 			return
 		}
+		// `if r := recover(); r != nil` is the canonical recover idiom, and a
+		// recover that found nothing to recover reports status 1. That status is
+		// the recover's ANSWER, not a failed init, so — like the errexit contexts
+		// elsewhere — an errexit-exempt status does not abort the if; the
+		// condition is still evaluated. A genuine error or exit still does.
+		if !r.exit.ok() && !r.exit.errexitExempt {
+			return
+		}
+		r.exit.clear()
 	}
 	cond, err := r.bashPPEvalScalarExpr(i.Cond)
 	if err != nil {
