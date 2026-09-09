@@ -123,7 +123,15 @@ func resolveType(name string) reflect.Type {
 }
 func decode(v value, target reflect.Type)(reflect.Value,error){
  var result reflect.Value
- if v.Kind=="nil" {if target==nil{return reflect.Value{},nil}; switch target.Kind(){case reflect.Chan,reflect.Func,reflect.Interface,reflect.Map,reflect.Pointer,reflect.Slice:return reflect.Zero(target),nil};return result,fmt.Errorf("nil is not assignable to %s",target)}
+ if v.Kind=="nil" {
+  typ:=target
+  if v.Type!="" {typ=resolveType(v.Type);if typ==nil{return result,fmt.Errorf("unregistered nil bridge type %q",v.Type)}}
+  if typ==nil{return reflect.Value{},nil}
+  switch typ.Kind(){case reflect.Chan,reflect.Func,reflect.Interface,reflect.Map,reflect.Pointer,reflect.Slice:default:return result,fmt.Errorf("nil is not assignable to %s",typ)}
+  result=reflect.Zero(typ)
+  if target==nil||typ.AssignableTo(target){return result,nil}
+  return reflect.Value{},fmt.Errorf("nil %s is not assignable to %s",typ,target)
+ }
  if v.Kind=="handle" {handles.Lock();result=handles.values[v.Handle];handles.Unlock();if !result.IsValid(){return result,fmt.Errorf("unknown native handle %d",v.Handle)}} else {
   typ:=resolveType(v.Type)
   if v.Type!="" && typ==nil {return result,fmt.Errorf("unregistered bridge type %q",v.Type)}

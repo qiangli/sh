@@ -495,6 +495,9 @@ func (r *Runner) bashPPBridgeCollection(value any, meta *bashPPCollectionMeta, t
 			return bashPPBridgeValue{Kind: "nil"}, nil
 		}
 		if cell.pointer {
+			if r.bashPPGoSource {
+				return r.bashPPBridgeCell(cell)
+			}
 			return r.bashPPBridgePointerValue(cell.pointerValue)
 		}
 		if cell.vr.Kind == expand.Object {

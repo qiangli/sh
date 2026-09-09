@@ -664,6 +664,12 @@ func (r *Runner) bashPPCompareExpr(left syntax.BashPPExpr, op token.Token, right
 	if err != nil {
 		return false, err
 	}
+	if equal, handled, err := r.goSourceInterfaceEqual(lv, rv); handled {
+		if op == token.NEQ {
+			equal = !equal
+		}
+		return equal, err
+	}
 	ok, err := bashPPCompareValues(lv.value, lv.meta, lv.nilLiteral, rv.value, rv.meta, rv.nilLiteral)
 	if err != nil {
 		return false, err

@@ -826,6 +826,17 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 			r.exit = exitStatus{code: 2}
 			return
 		}
+		if cell, handled, err := r.goSourceNilValueCell(d.Expr); handled {
+			if err != nil {
+				r.exit.fatal(err)
+				return
+			}
+			r.bashPPDeclareName(d.Lhs[0].Value, cell.vr)
+			if target := r.bashPPScope.lookup(d.Lhs[0].Value); target != nil {
+				*target = *cell
+			}
+			return
+		}
 		if r.bashPPBindPointerExpr(d.Lhs[0].Value, d.Expr) {
 			return
 		}

@@ -1688,7 +1688,12 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 		_ = r.bashPPScope.declare(param.name,
 			expand.Variable{Set: true, Kind: expand.String, Str: args[i]}, false)
 		if i < len(callCells) && callCells[i] != nil {
-			copy := bashPPCopyAssignmentCell(callCells[i])
+			copy, err := r.goSourceExpectedCell(callCells[i], param.typ)
+			if err != nil {
+				r.exit.fatal(err)
+				return nil
+			}
+			copy = bashPPCopyAssignmentCell(copy)
 			copy.channel = nil
 			copy.channelOwner = nil
 			copy.constant = false
@@ -1708,7 +1713,7 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 			cell := r.bashPPScope.lookup(param.name)
 			cell.channel, cell.channelOwner = callChannels[i], r.bashPPConcurrent
 		}
-		if i < len(callInterfaces) && callInterfaces[i] != nil {
+		if i < len(callInterfaces) && callInterfaces[i] != nil && !(r.bashPPGoSource && i < len(callCells) && callCells[i] != nil) {
 			cell := r.bashPPScope.lookup(param.name)
 			cell.interfaceValue = callInterfaces[i]
 		}
@@ -1718,6 +1723,9 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 				cell.typeName = base
 				cell.pointer = strings.HasPrefix(param.declared, "*")
 				cell.nilPointer = cell.pointer && args[i] == ""
+				if r.bashPPGoSource && cell.pointer {
+					cell.nilPointer = cell.pointerValue == nil
+				}
 			}
 		}
 	}
@@ -1801,6 +1809,13 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 			r.bashPPResultCells[i] = &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: results[i]}}
 		}
 		if i < len(resultTypes) {
+			var err error
+			r.bashPPResultCells[i], err = r.goSourceExpectedCell(r.bashPPResultCells[i], resultTypes[i])
+			if err != nil {
+				r.exit.fatal(err)
+				r.bashPPResultCells = nil
+				return nil
+			}
 			r.bashPPResultCells[i].declType = resultTypes[i]
 			r.bashPPResultCells[i].typeName = bashPPNamedTypeBase(resultTypes[i])
 		}
@@ -2176,6 +2191,16 @@ func (r *Runner) bashPPReturnStmt(ctx context.Context, ret *syntax.BashPPReturn)
 // bashPPReturnScalarExpr settles a single scalar result, retaining the value's
 // type so a defined type reaches the caller as itself.
 func (r *Runner) bashPPReturnScalarExpr(expr syntax.BashPPExpr) {
+	if cell, handled, err := r.goSourceNilValueCell(expr); handled {
+		if err != nil {
+			r.exit.fatal(err)
+			return
+		}
+		r.bashPPReturn = bashPPReturnState{active: true, values: []string{cell.vr.String()}, cells: []*bashPPCell{cell}}
+		r.exit.returning = true
+		return
+	}
+
 	if cell, handled, err := r.goSourceChannelValueCell(expr); handled {
 		if err != nil {
 			r.bashPPGoSendError(expr, err)

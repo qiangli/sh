@@ -111,6 +111,9 @@ func (c *converter) typ(e ast.Expr) s.BashPPTypeExpr {
 	}
 	switch x := e.(type) {
 	case *ast.Ident:
+		if c.info.ObjectOf(x) == types.Universe.Lookup("any") {
+			return &s.BashPPInterfaceType{Interface: c.ident(x), Lbrace: c.pos(x.End() - 1), Rbrace: c.pos(x.End() - 1)}
+		}
 		if object := c.info.ObjectOf(x); object != nil {
 			if _, parameter := object.Type().(*types.TypeParam); parameter {
 				return &s.BashPPTypeParamType{Name: c.ident(x)}
