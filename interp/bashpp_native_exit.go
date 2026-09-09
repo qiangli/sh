@@ -57,6 +57,11 @@ func (r *Runner) bashPPNativeExitStatus(err error) bool {
 // dependency process into the program's exit status.
 func (r *Runner) bashPPNativeRequest(ctx context.Context, req bashPPEvalRequest, q bashPPBridgeRequest) ([]bashPPBridgeValue, error) {
 	values, err := req.Bridge.request(ctx, req, q)
+	var callbackPanic *bashPPCallbackPanic
+	if errors.As(err, &callbackPanic) {
+		r.bashPPRaise(callbackPanic.value)
+		return nil, errBashPPScalarInterrupted
+	}
 	if err != nil && r.bashPPNativeExitStatus(err) {
 		if r.exit.code == 0 {
 			// A successful self-termination has no diagnostic to report; the
@@ -71,3 +76,7 @@ func (r *Runner) bashPPNativeRequest(ctx context.Context, req bashPPEvalRequest,
 // errBashPPNativeExited unwinds the interpreter after the program's status has
 // already been recorded. It carries no diagnostic of its own.
 var errBashPPNativeExited = errors.New("gosource: program exited")
+
+type bashPPCallbackPanic struct{ value string }
+
+func (p *bashPPCallbackPanic) Error() string { return "original callback panic: " + p.value }

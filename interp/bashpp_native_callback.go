@@ -65,7 +65,13 @@ func (s *bashPPNativeSession) serveCallback(ctx context.Context, owner *Runner, 
 		answer.Error = "gosource: callback has no original owner or receiver"
 	} else {
 		owner.bashPPTools.callbackDepth++
-		values, err := owner.bashPPNativeCallback(ctx, q.Selector, *q.Receiver)
+		var values []bashPPBridgeValue
+		var err error
+		if q.Receiver.Kind == "callback" {
+			values, err = owner.bashPPNativeFunctionCallback(ctx, q.Receiver.Handle, q.Receiver.Elements)
+		} else {
+			values, err = owner.bashPPNativeCallback(ctx, q.Selector, *q.Receiver)
+		}
 		owner.bashPPTools.callbackDepth--
 		if err != nil {
 			answer.Error = err.Error()

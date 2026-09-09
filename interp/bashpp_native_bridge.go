@@ -68,7 +68,8 @@ type bashPPBridgeRequest struct {
 	Error  string              `json:"error,omitempty"`
 }
 type bashPPBridgeResponse struct {
-	ID uint64 `json:"id"`
+	Panic *bashPPBridgeValue `json:"panic,omitempty"`
+	ID    uint64             `json:"id"`
 	// Op, Selector and Receiver are set only when the dependency is asking the
 	// interpreter to run an original method body it must not compile itself.
 	Op       string              `json:"op,omitempty"`
@@ -78,6 +79,8 @@ type bashPPBridgeResponse struct {
 	Error    string              `json:"error,omitempty"`
 }
 type bashPPNativeSession struct {
+	functions       map[uint64]*bashPPFunc
+	functionNext    uint64
 	callbackGate    chan struct{}
 	activeCallbacks chan bashPPBridgeResponse
 	callbackOwner   *Runner
@@ -280,7 +283,7 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 	}
 	var check func(bashPPBridgeValue) error
 	check = func(v bashPPBridgeValue) error {
-		if (v.Kind == "handle" || v.Origin != 0) && v.Session != s.id {
+		if (v.Kind == "handle" || v.Kind == "callback" || v.Origin != 0) && v.Session != s.id {
 			return errors.New("gosource: native handle belongs to another dependency session")
 		}
 		for _, e := range v.Elements {
@@ -338,13 +341,16 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 				}
 			}
 		case reply := <-wait:
+			if reply.Panic != nil {
+				return nil, &bashPPCallbackPanic{value: reply.Panic.Text}
+			}
 			if reply.Error != "" {
 				return nil, errors.New(reply.Error)
 			}
 			for i := range reply.Values {
 				if reply.Values[i].Kind == "handle" {
 					reply.Values[i].Session = s.id
-					if callbacks != nil {
+					if callbacks != nil && !synchronousFunctionCallback(req, q) {
 						reply.Values[i].Callbacks = true
 					}
 				}

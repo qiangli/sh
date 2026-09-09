@@ -2015,7 +2015,9 @@ func (r *Runner) bashPPReturnStmt(ctx context.Context, ret *syntax.BashPPReturn)
 	if r.bashPPBridgeHandles(ret.Call) {
 		values, err := r.bashPPBridgeCall(ctx, ret.Call)
 		if err != nil {
-			r.exit.fatal(err)
+			if !r.bashPPPanicking() {
+				r.exit.fatal(err)
+			}
 			return
 		}
 		result := bashPPReturnState{active: true}

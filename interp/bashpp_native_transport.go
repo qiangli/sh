@@ -16,8 +16,13 @@ func validateLocalTransport(req bashPPEvalRequest, q bashPPBridgeRequest) error 
 	for _, typ := range req.LocalTypes {
 		local[typ.Name] = typ
 	}
+	functionCallbacks := false
 	var inspect func(bashPPBridgeValue) (bool, bool, error)
 	inspect = func(v bashPPBridgeValue) (bool, bool, error) {
+		if v.Kind == "callback" {
+			functionCallbacks = true
+			return false, false, nil
+		}
 		if v.Kind == "handle" {
 			return false, false, nil
 		}
@@ -80,6 +85,12 @@ func validateLocalTransport(req bashPPEvalRequest, q bashPPBridgeRequest) error 
 			return err
 		}
 		unsafe = unsafe || (local && ref) || arg.Kind == "pointer"
+	}
+	if functionCallbacks && !synchronousFunctionCallback(req, q) {
+		return fmt.Errorf("gosource: asynchronous or retained original function callbacks are unsupported for %s", q.Selector)
+	}
+	if !unsafe && synchronousFunctionCallback(req, q) {
+		return nil
 	}
 	if !unsafe && !requestHasCallbacks(req, q) {
 		return nil

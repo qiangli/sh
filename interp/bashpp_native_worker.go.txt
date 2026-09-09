@@ -30,7 +30,7 @@ type entry struct {Key value `json:"key"`; Value value `json:"value"`}
 type request struct { ID uint64 `json:"id"`; Op string `json:"op"`; Selector string `json:"selector"`; Receiver *value `json:"receiver,omitempty"`; Args []value `json:"args,omitempty"`; Spread bool `json:"spread,omitempty"`; Values []value `json:"values,omitempty"`; Error string `json:"error,omitempty"` }
 // Op, Selector and Receiver are set only on a callback: the reverse direction
 // in which this helper asks the interpreter to run an original method body.
-type response struct { ID uint64 `json:"id"`; Op string `json:"op,omitempty"`; Selector string `json:"selector,omitempty"`; Receiver *value `json:"receiver,omitempty"`; Values []value `json:"values,omitempty"`; Error string `json:"error,omitempty"` }
+type response struct { Panic *value `json:"panic,omitempty"`; ID uint64 `json:"id"`; Op string `json:"op,omitempty"`; Selector string `json:"selector,omitempty"`; Receiver *value `json:"receiver,omitempty"`; Values []value `json:"values,omitempty"`; Error string `json:"error,omitempty"` }
 var symbols = map[string]reflect.Value{
 //SYMBOLS
 }
@@ -91,12 +91,15 @@ func callback(selector string, recv value) ([]value,error) {
  reply:=<-wait
  if reply.Receiver!=nil && recv.Origin!=0 {if _,err:=decode(*reply.Receiver,nil);err!=nil{return nil,err}}
  if reply.Error!=""{return nil,fmt.Errorf("%s",reply.Error)}
- if len(reply.Values)==1 && reply.Values[0].Kind=="panic" {panic(reply.Values[0].Text)}
+ if len(reply.Values)==1 && reply.Values[0].Kind=="panic" {panic(originalCallbackPanic{reply.Values[0]})}
  return reply.Values,nil
 }
 // An implementation failure is also retained by the owning interpreter request;
 // fmt may recover this panic, but it cannot convert that failed request to PASS.
 func callbackFailed(err error) string {panic(err)}
+type originalCallbackPanic struct {value value}
+func(p originalCallbackPanic)Error()string{return p.value.Text}
+
 func resolveType(name string) reflect.Type {
  if typ:=types[name];typ!=nil{return typ}
  expression,err:=parser.ParseExpr(name);if err!=nil{return nil}
@@ -122,6 +125,15 @@ func decode(v value, target reflect.Type)(reflect.Value,error){
   if typ==nil{return result,fmt.Errorf("missing bridge type for %s",v.Kind)}
   result=reflect.New(typ).Elem()
   switch v.Kind {
+  case "callback":
+   if target==nil||target.Kind()!=reflect.Func{return result,fmt.Errorf("original callback requires a typed function parameter")}
+   result=reflect.MakeFunc(target,func(args []reflect.Value)[]reflect.Value{
+    inputs:=make([]value,len(args));for i,arg:=range args {inputs[i]=encode(arg)}
+    returned,err:=callback("",value{Kind:"callback",Handle:v.Handle,Elements:inputs});if err!=nil{panic(err)}
+    if len(returned)!=target.NumOut(){panic(fmt.Errorf("original callback result count mismatch"))}
+    outputs:=make([]reflect.Value,len(returned));for i,item:=range returned {output,err:=decode(item,target.Out(i));if err!=nil{panic(err)};outputs[i]=output};return outputs
+   })
+   return result,nil
   case "string":if typ.Kind()!=reflect.String{return result,fmt.Errorf("string for %s",typ)};result.SetString(v.Text)
   case "bool":b,e:=strconv.ParseBool(v.Text);if e!=nil||typ.Kind()!=reflect.Bool{return result,fmt.Errorf("invalid bool")};result.SetBool(b)
   case "int":n,e:=strconv.ParseInt(v.Text,10,64);if e!=nil{return result,e};switch typ.Kind(){case reflect.Int,reflect.Int8,reflect.Int16,reflect.Int32,reflect.Int64:if result.OverflowInt(n){return result,fmt.Errorf("integer overflow")};result.SetInt(n);case reflect.Uint,reflect.Uint8,reflect.Uint16,reflect.Uint32,reflect.Uint64,reflect.Uintptr:if n<0||result.OverflowUint(uint64(n)){return result,fmt.Errorf("unsigned overflow")};result.SetUint(uint64(n));case reflect.Float32,reflect.Float64:result.SetFloat(float64(n));case reflect.Complex64,reflect.Complex128:result.SetComplex(complex(float64(n),0));default:return result,fmt.Errorf("integer for %s",typ)}
@@ -196,7 +208,7 @@ func access(rv reflect.Value,q request)([]value,string){
 }
 func dispatch(q request)(reply response){
  reply.ID=q.ID
- defer func(){if e:=recover();e!=nil{reply.Error=fmt.Sprintf("native dependency panic: %v",e)}}()
+ defer func(){if e:=recover();e!=nil{if original,ok:=e.(originalCallbackPanic);ok{reply.Panic=&original.value}else{reply.Error=fmt.Sprintf("native dependency panic: %v",e)}}}()
  if q.Op=="equal" {if len(q.Args)!=2{reply.Error="comparison requires two values";return};left,err:=decode(q.Args[0],nil);if err!=nil{reply.Error=err.Error();return};right,err:=decode(q.Args[1],nil);if err!=nil{reply.Error=err.Error();return};equal:=false
  if !left.IsValid()||!right.IsValid(){other:=left;if !other.IsValid(){other=right};if !other.IsValid(){equal=true}else{switch other.Kind(){case reflect.Chan,reflect.Func,reflect.Interface,reflect.Map,reflect.Pointer,reflect.Slice:equal=other.IsNil();if (!left.IsValid()&&q.Args[1].Interface!=""&&q.Args[1].Kind!="nil")||(!right.IsValid()&&q.Args[0].Interface!=""&&q.Args[0].Kind!="nil"){equal=false};default:reply.Error="value cannot be compared with nil";return}}}else{equal=left.Equal(right)};reply.Values=[]value{encode(reflect.ValueOf(equal))};return}
  if q.Op=="type" {typ:=resolveType(q.Selector);if typ==nil{reply.Error="unregistered bridge type "+strconv.Quote(q.Selector);return};reply.Values=[]value{encode(reflect.ValueOf(typeID(typ)))};return}

@@ -211,6 +211,17 @@ func bridgeScalar(value bashPPScalar) (bashPPBridgeValue, error) {
 	return out, nil
 }
 func (r *Runner) bashPPBridgeExpr(expr syntax.BashPPExpr) (bashPPBridgeValue, error) {
+	switch expr.(type) {
+	case *syntax.BashPPFuncLit, *syntax.BashPPIdent:
+		if cell, handled, err := r.goSourceCallableCell(expr); handled {
+			if err != nil {
+				return bashPPBridgeValue{}, err
+			}
+			if fn, ok := r.bashPPClosure(cell.vr.Str); ok {
+				return r.bashPPBridgeFunction(fn)
+			}
+		}
+	}
 	switch x := expr.(type) {
 	case *syntax.BashPPParenExpr:
 		return r.bashPPBridgeExpr(x.X)
@@ -232,6 +243,13 @@ func (r *Runner) bashPPBridgeExpr(expr syntax.BashPPExpr) (bashPPBridgeValue, er
 			}
 		}
 	case *syntax.BashPPCall:
+		if r.bashPPGoSource && len(x.Fun) == 1 && x.Fun[0].Value == "recover" && len(x.Args) == 0 && r.bashPPFuncs["recover"] == nil && (r.bashPPScope == nil || r.bashPPScope.lookup("recover") == nil) {
+			value, recovered := r.bashPPRecover()
+			if !recovered {
+				return bashPPBridgeValue{Kind: "nil"}, nil
+			}
+			return bashPPBridgeValue{Kind: "string", Type: "string", Text: value}, nil
+		}
 		if r.bashPPBridgeHandles(x) {
 			values, err := r.bashPPBridgeCall(r.ectx, x)
 			if err != nil {
@@ -582,7 +600,9 @@ func (r *Runner) bashPPBridgeShortDecl(ctx context.Context, d *syntax.BashPPShor
 		err = fmt.Errorf("assignment mismatch: %d variables but %d native results", len(d.Lhs), len(values))
 	}
 	if err != nil {
-		r.exit.fatal(err)
+		if !r.bashPPPanicking() {
+			r.exit.fatal(err)
+		}
 		return true
 	}
 	for i, lhs := range d.Lhs {
@@ -651,6 +671,11 @@ func bashPPBridgeTypeText(typ syntax.BashPPTypeExpr) string {
 }
 
 func (r *Runner) bashPPBridgeCell(cell *bashPPCell) (bashPPBridgeValue, error) {
+	if cell != nil {
+		if fn, ok := r.bashPPClosure(cell.vr.Str); ok {
+			return r.bashPPBridgeFunction(fn)
+		}
+	}
 	if cell == nil {
 		return bashPPBridgeValue{}, fmt.Errorf("gosource: missing result cell")
 	}

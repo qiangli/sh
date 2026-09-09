@@ -1721,7 +1721,7 @@ func (r *Runner) bashPPCall(ctx context.Context, c *syntax.BashPPCall) {
 		return
 	}
 	if r.bashPPBridgeHandles(c) {
-		if _, err := r.bashPPBridgeCall(ctx, c); err != nil {
+		if _, err := r.bashPPBridgeCall(ctx, c); err != nil && !r.bashPPPanicking() {
 			r.exit.fatal(err)
 		}
 		return
