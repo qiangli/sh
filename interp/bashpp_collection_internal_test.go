@@ -42,7 +42,7 @@ func TestBashPPTaskSnapshotClonesCollectionMetadata(t *testing.T) {
 	parent.bashPPScope.entries["a"] = &bashPPCell{vr: expand.NewObject(parentValue), object: identity}
 
 	child := &Runner{bashPPScope: newBashPPCloner().clone(parent.bashPPScope)}
-	if err := cloneBashPPTaskCells(child, newBashPPObjectCloner()); err != nil {
+	if err := cloneBashPPTaskCells(child, newBashPPObjectCloner(), nil); err != nil {
 		t.Fatal(err)
 	}
 	childCell := child.bashPPScope.lookup("a")

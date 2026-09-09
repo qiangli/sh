@@ -440,6 +440,12 @@ func (r *Runner) bashPPMethodDecl(d *syntax.BashPPFuncDecl) {
 // }(1)` captures the scope at the point of the call, exactly as the same
 // literal bound to a name captures it at the point of the binding.
 func (r *Runner) bashPPLookupFunc(c *syntax.BashPPCall) (*bashPPFunc, bool) {
+	if pin := r.bashPPGoSourcePin; pin != nil && pin.call == c {
+		// A launched task's callee was resolved once, in the parent. Re-running
+		// a computed callee here would evaluate it twice; re-reading a variable
+		// could find a different function than the `go` statement launched.
+		return r.bashPPClosure(pin.handle)
+	}
 	if r.bashPPGoSource && c.CalleeExpr != nil {
 		if method, ok := c.CalleeExpr.(*syntax.BashPPSelectorExpr); ok && method.MethodValue && !r.bashPPNativeExpr(method.X) {
 			fn, err := r.goSourceLocalMethod(method, len(c.Args) > 0)

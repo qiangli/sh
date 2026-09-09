@@ -177,9 +177,16 @@ func cloneBashPPTaskVariable(vr expand.Variable, objects *bashPPObjectCloner) (e
 	return vr, nil
 }
 
-func cloneBashPPTaskCells(r *Runner, objects *bashPPObjectCloner) error {
+func cloneBashPPTaskCells(r *Runner, objects *bashPPObjectCloner, shared map[*bashPPCell]bool) error {
 	metadata := make(map[*bashPPCollectionMeta]*bashPPCollectionMeta)
 	return r.bashPPWalkCells(func(cell *bashPPCell) error {
+		if shared[cell] {
+			// A GoSource captured cell is the PARENT's cell, reached here
+			// through the child's scope. Copying its payload would rewrite the
+			// parent's variable in place, which is the one thing sharing must
+			// not do; see gosource_task_capture.go.
+			return nil
+		}
 		copy, err := cloneBashPPTaskVariable(cell.vr, objects)
 		if err != nil {
 			return err
@@ -813,8 +820,14 @@ func (r *Runner) bashPPClose(cl *syntax.BashPPClose) {
 // variables, cwd, options, functions/types/imports, traps/signals/jobs and fd
 // maps. The maps are task-owned; underlying OS open-file descriptions retain
 // their normal shared offsets. Only the group and channel cores are shared.
-func (r *Runner) bashPPTaskSnapshot(ordinal uint64) (*Runner, error) {
+func (r *Runner) bashPPTaskSnapshot(ordinal uint64, shared map[*bashPPCell]bool) (*Runner, error) {
+	// The scope cloner inside subshell is what grants capture identity, so the
+	// set has to be visible for exactly that call and no longer.
+	saved := r.bashPPGoSourceCapture
+	r.bashPPGoSourceCapture = shared
 	child := r.subshell(true)
+	r.bashPPGoSourceCapture = saved
+	child.bashPPGoSourceCapture = nil
 	child.bashPPConcurrent, child.bashPPGoTask, child.bashPPChanBoundary = r.bashPPConcurrent, true, false
 	child.bashPPFileRun = true
 	// A task is not a shell-copy boundary, so BASH_SUBSHELL stays unchanged.
@@ -930,7 +943,7 @@ func (r *Runner) bashPPTaskSnapshot(ordinal uint64) (*Runner, error) {
 		}
 		_ = child.writeEnv.Set(name, copy)
 	}
-	if err := cloneBashPPTaskCells(child, objects); err != nil {
+	if err := cloneBashPPTaskCells(child, objects, shared); err != nil {
 		return child, err
 	}
 	for name, typ := range child.bashPPTypes {
@@ -996,6 +1009,15 @@ func (r *Runner) bashPPGo(ctx context.Context, g *syntax.BashPPGo) {
 	if r.exit.code != 0 {
 		return
 	}
+	// Original Go closures capture by reference; classic Bash++ tasks do not.
+	// See gosource_task_capture.go, which returns nil outside GoSource mode.
+	// This resolves the callee, which for a computed one is an evaluation, so
+	// it belongs here beside the argument evaluation and BEFORE the task is
+	// registered: a failure now must not leave a counted task nobody finishes.
+	shared, pin := r.bashPPGoSourceTaskCapture(call)
+	if r.exit.code != 0 {
+		return
+	}
 	c := r.bashPPConcurrency(ctx)
 	state, ok := c.add()
 	if !ok {
@@ -1004,7 +1026,7 @@ func (r *Runner) bashPPGo(ctx context.Context, g *syntax.BashPPGo) {
 		return
 	}
 	ordinal := state.ordinal
-	child, err := r.bashPPTaskSnapshot(ordinal)
+	child, err := r.bashPPTaskSnapshot(ordinal, shared)
 	if err != nil {
 		if child != nil {
 			child.closeBashPPTaskResources()
@@ -1041,6 +1063,10 @@ func (r *Runner) bashPPGo(ctx context.Context, g *syntax.BashPPGo) {
 		if c.ctx.Err() != nil {
 			return
 		}
+		// The callee was resolved once, in the parent, exactly as Go
+		// evaluates a function value in the launching goroutine; the child
+		// runs that function rather than resolving the name again.
+		child.bashPPGoSourcePin = pin
 		child.bashPPCall(c.ctx, call)
 		code := child.exit.code
 		canceled := child.bashPPTaskCanceled || errors.Is(child.exit.err, context.Canceled) || errors.Is(child.exit.err, context.DeadlineExceeded)

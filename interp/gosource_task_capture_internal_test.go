@@ -1,0 +1,303 @@
+// Copyright (c) 2026, the bashy authors.
+// See LICENSE for licensing information.
+
+package interp
+
+import (
+	"strings"
+	"testing"
+
+	"mvdan.cc/sh/v3/expand"
+	"mvdan.cc/sh/v3/syntax"
+)
+
+// parseGoStmt returns the single `go ...` statement in src.
+func parseGoStmt(t *testing.T, src string) *syntax.BashPPGo {
+	t.Helper()
+	file, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(src), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found *syntax.BashPPGo
+	syntax.Walk(file, func(node syntax.Node) bool {
+		if g, ok := node.(*syntax.BashPPGo); ok && found == nil {
+			found = g
+		}
+		return true
+	})
+	if found == nil {
+		t.Fatalf("no go statement in %q", src)
+	}
+	return found
+}
+
+func scalarCell(value string) *bashPPCell {
+	return &bashPPCell{vr: expand.Variable{Kind: expand.String, Str: value}}
+}
+
+// captureRunnerFor builds a GoSource runner whose lexical scope holds names.
+func captureRunnerFor(names ...string) (*Runner, map[string]*bashPPCell) {
+	r := &Runner{bashPPGoSource: true, bashPPScope: newBashPPScope(nil)}
+	cells := make(map[string]*bashPPCell, len(names))
+	for _, name := range names {
+		cell := scalarCell("0")
+		r.bashPPScope.entries[name] = cell
+		cells[name] = cell
+	}
+	return r, cells
+}
+
+// TestGoSourceCaptureFreeVariablesOnly is the core rule: a variable the body
+// mentions freely is captured by reference, and a parameter is not. Excluding
+// parameters is what keeps `go func(n int){…}(i)` from sharing the parent's
+// still-advancing loop variable, which Go does not share either.
+func TestGoSourceCaptureFreeVariablesOnly(t *testing.T) {
+	r, cells := captureRunnerFor("counter", "i")
+	g := parseGoStmt(t, "func main() {\n\tgo func(n int) {\n\t\tcounter++\n\t}(i)\n}\n")
+	shared, _ := r.bashPPGoSourceTaskCapture(g.Call)
+	if !shared[cells["counter"]] {
+		t.Error("free variable counter was not captured by reference")
+	}
+	if shared[cells["i"]] {
+		t.Error("loop variable i is passed by value, so it must not be shared")
+	}
+}
+
+// TestGoSourceCaptureShadowedParameter checks that a parameter shadowing an
+// outer name of the same spelling still resolves to the parameter, so the
+// outer cell keeps its copy semantics.
+func TestGoSourceCaptureShadowedParameter(t *testing.T) {
+	r, cells := captureRunnerFor("n")
+	g := parseGoStmt(t, "func main() {\n\tgo func(n int) {\n\t\tn++\n\t}(n)\n}\n")
+	if shared, _ := r.bashPPGoSourceTaskCapture(g.Call); shared[cells["n"]] {
+		t.Error("a shadowing parameter must not grant identity to the outer n")
+	}
+}
+
+// TestGoSourceCaptureClassicBashPPUnchanged is the guard on the blast radius.
+// Outside GoSource mode a task is a shell construct with a private copy of the
+// shell, and that deep-copy snapshot must stay exactly as it was.
+func TestGoSourceCaptureClassicBashPPUnchanged(t *testing.T) {
+	r, _ := captureRunnerFor("counter")
+	r.bashPPGoSource = false
+	g := parseGoStmt(t, "func main() {\n\tgo func() {\n\t\tcounter++\n\t}()\n}\n")
+	if shared, _ := r.bashPPGoSourceTaskCapture(g.Call); shared != nil {
+		t.Errorf("classic Bash++ must keep the deep-copy snapshot, got %d shared cells", len(shared))
+	}
+}
+
+// TestGoSourceCaptureExcludesNativeHandles keeps this layer out of the one
+// next to it: an imported native value is already identity preserving via
+// cloneNativeHandle, which copies the descriptor and carries Session/Handle
+// across. Sharing the whole cell instead would re-decide that rule here.
+func TestGoSourceCaptureExcludesNativeHandles(t *testing.T) {
+	r, _ := captureRunnerFor()
+	handle := &bashPPCell{vr: expand.Variable{
+		Kind: expand.Object,
+		Obj:  &bashPPBridgeValue{Kind: "handle", Type: "sync.Mutex", Session: "s", Handle: 1},
+	}}
+	r.bashPPScope.entries["mu"] = handle
+	g := parseGoStmt(t, "func main() {\n\tgo func() {\n\t\tmu.Lock()\n\t}()\n}\n")
+	if shared, _ := r.bashPPGoSourceTaskCapture(g.Call); shared[handle] {
+		t.Error("a native handle must keep the bashpp_task.go descriptor rule")
+	}
+}
+
+// TestGoSourceCaptureChannelsExcluded leaves channel identity to the channel
+// layer, which owns its own cross-task ownership rules.
+func TestGoSourceCaptureChannelsExcluded(t *testing.T) {
+	r, _ := captureRunnerFor()
+	ch := &bashPPCell{channel: &bashPPChannel{}}
+	r.bashPPScope.entries["ch"] = ch
+	g := parseGoStmt(t, "func main() {\n\tgo func() {\n\t\tch <- 1\n\t}()\n}\n")
+	if shared, _ := r.bashPPGoSourceTaskCapture(g.Call); shared[ch] {
+		t.Error("channel identity is not this layer's to grant")
+	}
+}
+
+// TestGoSourceCaptureClonerAliasesSharedCell is the scope hook itself. A
+// captured cell must come out of the clone as the SAME pointer, and every
+// other edge which reaches it — a second name for the same variable — must
+// land on that one cell rather than forking a copy.
+func TestGoSourceCaptureClonerAliasesSharedCell(t *testing.T) {
+	shared, copied := scalarCell("shared"), scalarCell("copied")
+	scope := newBashPPScope(nil)
+	scope.entries["shared"] = shared
+	scope.entries["alias"] = shared
+	scope.entries["copied"] = copied
+
+	cloner := newBashPPCloner()
+	cloner.shared = map[*bashPPCell]bool{shared: true}
+	out := cloner.clone(scope)
+
+	if out.entries["shared"] != shared {
+		t.Error("a captured cell must survive the clone as the same cell")
+	}
+	if out.entries["alias"] != shared {
+		t.Error("two names for one captured variable must stay one cell")
+	}
+	if out.entries["copied"] == copied {
+		t.Error("an uncaptured cell must still be deep copied")
+	}
+	if out.entries["copied"].vr.Str != "copied" {
+		t.Errorf("copied cell lost its value: %q", out.entries["copied"].vr.Str)
+	}
+}
+
+// TestGoSourceCaptureTaskCellsSkipsShared covers the second hook. The task
+// walk reaches a shared cell through the child's scope, and copying its
+// payload there would rewrite the PARENT's variable in place — the one thing
+// sharing must never do.
+func TestGoSourceCaptureTaskCellsSkipsShared(t *testing.T) {
+	shared := &bashPPCell{vr: expand.Variable{Kind: expand.Object, Obj: map[string]any{"n": "1"}}}
+	child := &Runner{bashPPScope: newBashPPScope(nil)}
+	child.bashPPScope.entries["shared"] = shared
+	before := shared.vr.Obj
+
+	if err := cloneBashPPTaskCells(child, newBashPPObjectCloner(), map[*bashPPCell]bool{shared: true}); err != nil {
+		t.Fatal(err)
+	}
+	if !sameObject(shared.vr.Obj, before) {
+		t.Error("the task walk replaced a shared cell's payload, which is the parent's")
+	}
+}
+
+func sameObject(a, b any) bool {
+	am, aok := a.(map[string]any)
+	bm, bok := b.(map[string]any)
+	if !aok || !bok {
+		return false
+	}
+	if len(am) != len(bm) {
+		return false
+	}
+	// Two map values are the same map exactly when writing one is visible in
+	// the other; comparing contents would pass for a copy too.
+	am["probe"] = "x"
+	same := bm["probe"] == "x"
+	delete(am, "probe")
+	return same
+}
+
+// The precision cases below are the ones a metadata-only, collect-every-Lit
+// analysis got wrong. Each names a cell that must NOT be shared, or one that
+// must be, and none of them is decidable without lexical scope.
+
+// TestGoSourceCaptureStringLiteralIsNotAUse: the text inside a string literal
+// is data. Sharing an unrelated outer cell because a printf argument spelled
+// its name splices a live parent variable into a running task for a variable
+// the program never captured.
+func TestGoSourceCaptureStringLiteralIsNotAUse(t *testing.T) {
+	r, cells := captureRunnerFor("counter", "total")
+	g := parseGoStmt(t, "func main() {\n\tgo func() {\n\t\tfmt.Println(\"total\", 'total', counter)\n\t}()\n}\n")
+	shared, _ := r.bashPPGoSourceTaskCapture(g.Call)
+	if shared[cells["total"]] {
+		t.Error("string literal text is not a variable use")
+	}
+	if !shared[cells["counter"]] {
+		t.Error("the real free variable was not captured")
+	}
+}
+
+// TestGoSourceCaptureLocalShadowsOuter: a body that declares its own `x` never
+// names the outer `x`, so the outer cell keeps copy semantics.
+func TestGoSourceCaptureLocalShadowsOuter(t *testing.T) {
+	for name, src := range map[string]string{
+		"short_decl": "func main() {\n\tgo func() {\n\t\tx := 1\n\t\tx++\n\t}()\n}\n",
+		"var_decl":   "func main() {\n\tgo func() {\n\t\tvar x int\n\t\tx++\n\t}()\n}\n",
+		"range_bind": "func main() {\n\tgo func() {\n\t\tfor x := range ch {\n\t\t\tuse(x)\n\t\t}\n\t}()\n}\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			r, cells := captureRunnerFor("x")
+			g := parseGoStmt(t, src)
+			if shared, _ := r.bashPPGoSourceTaskCapture(g.Call); shared[cells["x"]] {
+				t.Error("a local binding must not grant identity to the outer cell it shadows")
+			}
+		})
+	}
+}
+
+// TestGoSourceCaptureUnicodeIdentifier: Go identifiers are Unicode, and an
+// ASCII-only predicate silently dropped these from the capture set, so a
+// correctly synchronized program using them printed the parent's stale copy.
+func TestGoSourceCaptureUnicodeIdentifier(t *testing.T) {
+	r, cells := captureRunnerFor("计数器", "naïve")
+	g := parseGoStmt(t, "func main() {\n\tgo func() {\n\t\t计数器++\n\t\tnaïve++\n\t}()\n}\n")
+	shared, _ := r.bashPPGoSourceTaskCapture(g.Call)
+	for _, name := range []string{"计数器", "naïve"} {
+		if !shared[cells[name]] {
+			t.Errorf("Unicode identifier %q was not captured", name)
+		}
+	}
+}
+
+// TestGoSourceCaptureNestedClosure: a variable free in an inner closure is
+// free in the body that encloses it — the outer body is what must capture it
+// so the inner one can — while the inner closure's own parameter still
+// shadows.
+func TestGoSourceCaptureNestedClosure(t *testing.T) {
+	r, cells := captureRunnerFor("counter", "p")
+	g := parseGoStmt(t, "func main() {\n\tgo func() {\n\t\tinner := func(p int) {\n\t\t\tcounter++\n\t\t\tp++\n\t\t}\n\t\tinner(1)\n\t}()\n}\n")
+	shared, _ := r.bashPPGoSourceTaskCapture(g.Call)
+	if !shared[cells["counter"]] {
+		t.Error("a nested closure's free variable is free in the launched body")
+	}
+	if shared[cells["p"]] {
+		t.Error("a nested closure's parameter shadows the outer spelling")
+	}
+}
+
+// TestGoSourceCaptureClosureHeldInVariable: `go f()` where f is a closure in a
+// variable used to return nil and silently fall back to the deep copy, so the
+// body's captures were copied and the program printed a stale parent value.
+// The callee resolves here, once, and the pin keeps the child on it.
+func TestGoSourceCaptureClosureHeldInVariable(t *testing.T) {
+	r, cells := captureRunnerFor("counter")
+	file, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(
+		strings.NewReader("func main() {\n\tf := func() {\n\t\tcounter++\n\t}\n\tgo f()\n}\n"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lit *syntax.BashPPFuncLit
+	var g *syntax.BashPPGo
+	syntax.Walk(file, func(node syntax.Node) bool {
+		switch node := node.(type) {
+		case *syntax.BashPPFuncLit:
+			if lit == nil {
+				lit = node
+			}
+		case *syntax.BashPPGo:
+			if g == nil {
+				g = node
+			}
+		}
+		return true
+	})
+	if lit == nil || g == nil {
+		t.Fatal("expected a literal and a go statement")
+	}
+	fn := &bashPPFunc{lit: lit, scope: r.bashPPScope}
+	r.bashPPClosures = append(r.bashPPClosures, fn)
+	handle := bashPPFuncHandlePrefix + "0"
+	r.bashPPScope.entries["f"] = scalarCell(handle)
+
+	shared, pin := r.bashPPGoSourceTaskCapture(g.Call)
+	if !shared[cells["counter"]] {
+		t.Error("a closure held in a variable must capture its free variables")
+	}
+	if pin == nil || pin.call != g.Call || pin.handle != handle {
+		t.Errorf("the launched callee was not pinned: %+v", pin)
+	}
+}
+
+// TestGoSourceCaptureInexactSharesNothing is the fail-closed contract. A
+// construct the walker does not model must cost sharing, never soundness: the
+// task falls back to the classic deep-copy snapshot rather than aliasing cells
+// the analysis could not account for.
+func TestGoSourceCaptureInexactSharesNothing(t *testing.T) {
+	r, _ := captureRunnerFor("counter")
+	g := parseGoStmt(t, "func main() {\n\tgo func() {\n\t\tcounter++\n\t\techo \"$unmodelled\"\n\t}()\n}\n")
+	if shared, _ := r.bashPPGoSourceTaskCapture(g.Call); len(shared) != 0 {
+		t.Errorf("an inexact analysis must share nothing, got %d cells", len(shared))
+	}
+}

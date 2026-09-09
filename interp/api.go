@@ -147,6 +147,24 @@ type Runner struct {
 	// where [bashPPCloner] can copy it alongside the scopes it captured. It is
 	// preserved across [Runner.Reset] for the same reason bashPPFuncs is.
 	bashPPClosures []*bashPPFunc
+	// bashPPGoSourceCapture is the set of cells the task currently being
+	// snapshotted captures lexically, in GoSource mode only. It is set for the
+	// duration of one [Runner.bashPPTaskSnapshot] and is read by the scope
+	// cloner, which aliases these cells instead of copying them; see
+	// gosource_task_capture.go. Nil everywhere else, which is what keeps the
+	// classic Bash++ deep-copy snapshot unchanged.
+	bashPPGoSourceCapture map[*bashPPCell]bool
+	// bashPPGoSourcePin is the function value a launched GoSource task already
+	// resolved in its parent. It keeps the task on that exact function and
+	// keeps a computed callee from being evaluated a second time; see
+	// gosource_task_capture.go. Nil everywhere else.
+	bashPPGoSourcePin *bashPPGoSourcePin
+	// bashPPGoSourceSharableCells memoizes, per cell, whether GoSource task
+	// capture may grant it identity. The answer is taken while the parent is
+	// still the cell's sole owner and never revisited; see
+	// [Runner.bashPPGoSourceSharable]. Task-local, never shared across
+	// goroutines.
+	bashPPGoSourceSharableCells map[*bashPPCell]bool
 	// bashPPDeferStack is the LIFO stack of deferred calls awaiting the return
 	// of the func invocations currently on the call stack. Each invocation
 	// remembers the stack length it entered at and runs everything pushed above
@@ -3529,7 +3547,13 @@ func (r *Runner) subshell(background bool) *Runner {
 	// a data race for a background subshell, which runs in its own goroutine.
 	if r.bashPPScope != nil || len(r.bashPPFuncScopes) > 0 || len(r.bashPPFuncs) > 0 ||
 		len(r.bashPPClosures) > 0 {
+		// Deliberate resolution of the two sprint118 lines that met here:
+		// the clone still carries the dependency session it belongs to (so a
+		// native handle resolves against r2), and it still honours the
+		// GoSource lexical capture set (so a cell an original Go closure
+		// genuinely names is aliased rather than deep copied).
 		cloner := newBashPPClonerFor(r2)
+		cloner.shared = r.bashPPGoSourceCapture
 		r2.bashPPScope = cloner.clone(r.bashPPScope)
 		if r.bashPPFuncScopes != nil {
 			r2.bashPPFuncScopes = make(map[string]*bashPPScope, len(r.bashPPFuncScopes))
