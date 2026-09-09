@@ -29,6 +29,7 @@ func TestUnchangedGo(t *testing.T) {
 		{"for_clause", "package main\nimport \"fmt\"\nfunc main(){s:=0;for i:=0;i<4;i++{s+=i};fmt.Println(s)}", "6\n"},
 		{"shadow_nil", "package main\nimport \"fmt\"\nfunc main(){nil:=7;fmt.Println(nil)}", "7\n"},
 		{"function", "package main\nimport \"fmt\"\nfunc add(x, y int)int{return x+y}\nfunc main(){fmt.Println(add(2,3))}", "5\n"},
+		{"generic_receiver", "package main\nimport \"fmt\"\ntype Pair[A,B any] struct{first A;second B;next *Pair[A,B]}\nfunc(p Pair[A,B]) First()A{return p.first}\nfunc(p *Pair[A,B]) Seconds()[]B{var out []B;for q:=p.next;q!=nil;q=q.next{out=append(out,q.second)};return out}\nfunc main(){p:=Pair[int,string]{first:7,next:&Pair[int,string]{second:\"bound\"}};fmt.Printf(\"%T %v %T %v\\n\",p.First(),p.First(),p.Seconds()[0],p.Seconds()[0])}", "int 7 string bound\n"},
 		{"zero", "package main\nimport \"fmt\"\nvar a int\nvar b bool\nvar c string\nfunc main(){fmt.Printf(\"%d %t %q\\n\",a,b,c)}", "0 false \"\"\n"},
 		{"hygiene", "package main\nimport \"fmt\"\nvar __gosource_import_0_0=7\nfunc __gosource_init_0(){}\nfunc init(){}\nfunc main(){fmt.Println(__gosource_import_0_0)}", "7\n"},
 		{"init", "package main\nimport \"fmt\"\nvar a = f()\nvar b = 3\nfunc f() int {return b+1}\nfunc init(){fmt.Println(a,b)}\nfunc init(){fmt.Println(\"init2\")}\nfunc main(){fmt.Println(\"main\")}", "4 3\ninit2\nmain\n"},
