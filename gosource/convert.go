@@ -257,7 +257,21 @@ func (c *converter) function(f *ast.FuncDecl) *s.BashPPFuncDecl {
 			recv.Pointer = true
 			t = ptr.X
 		}
-		recv.RecvType = c.lit(t.Pos(), c.text(t))
+		named, ok := c.typ(t).(*s.BashPPNamedType)
+		if !ok {
+			c.fail(t, fmt.Sprintf("method receiver type %T", t))
+			recv.RecvType = c.lit(t.Pos(), c.text(t))
+		} else {
+			recv.RecvType = named.Name
+			for _, arg := range named.TypeArgs {
+				param, ok := arg.ArgType.(*s.BashPPTypeParamType)
+				if !ok {
+					c.fail(t, fmt.Sprintf("method receiver type argument %T", arg.ArgType))
+					continue
+				}
+				recv.TypeParams = append(recv.TypeParams, param.Name)
+			}
+		}
 		o.Receiver = recv
 	}
 	return o

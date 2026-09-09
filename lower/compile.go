@@ -698,6 +698,9 @@ func (e *emitter) function(f *syntax.BashPPFuncDecl) (string, error) {
 		info := e.projectionType(typ, nil)
 		info.receiver = f.Receiver.Pointer
 		e.projections.projectionBind(f.Receiver.Name.Value, info)
+		for _, param := range f.Receiver.TypeParams {
+			e.bind(param.Value)
+		}
 	}
 	for _, p := range f.TypeParams {
 		for _, n := range p.Names {
@@ -1200,8 +1203,14 @@ func (e *emitter) forStmt(n *syntax.BashPPFor) (string, error) {
 		if i := strings.Index(init, "\n_ = "); i >= 0 {
 			init = init[:i]
 		}
-		header = init + "; " + cond + "; " + post
-		init = ""
+		// Checked bindings expand to a declaration plus a failure guard. Keep
+		// that compound initializer in the loop's enclosing lexical block.
+		if strings.Contains(init, "\n") {
+			header = "; " + cond + "; " + post
+		} else {
+			header = init + "; " + cond + "; " + post
+			init = ""
+		}
 	}
 	out := "for " + header + " {\n" + body + "}"
 	if init != "" {
