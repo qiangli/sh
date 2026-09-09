@@ -35,7 +35,8 @@ import (
 var bashPPNativeWorker string
 
 type bashPPBridgeValue struct {
-	sliceView *bashPPNativeSlice // host-only original backing view
+	CallArgs  []bashPPBridgeValue `json:"call_args,omitempty"`
+	sliceView *bashPPNativeSlice  // host-only original backing view
 
 	// Callable is derived by the interpreter from authenticated native type or
 	// import metadata; the dependency worker cannot set callback policy itself.
@@ -412,6 +413,7 @@ func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, err
 	}
 	sort.Strings(ordered)
 	var imports, symbols, typeEntries strings.Builder
+	importAliases := map[string]string{}
 	for i, path := range ordered {
 		blankOnly := true
 		for _, alias := range paths[path] {
@@ -428,6 +430,9 @@ func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, err
 			return "", err
 		}
 		alias := fmt.Sprintf("bpppkg%d", i)
+		for _, original := range paths[path] {
+			importAliases[original] = alias
+		}
 		fmt.Fprintf(&imports, "%s %q\n", alias, path)
 		used := false
 		for _, name := range pkg.Scope().Names() {
@@ -522,7 +527,15 @@ func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, err
 	// name. Only the declaration crosses over: a mirrored String/Error body is
 	// a fixed callback into the interpreter, never compiled original code.
 	var locals strings.Builder
-	for _, local := range req.LocalTypes {
+	localTypes := append([]bashPPLocalType(nil), req.LocalTypes...)
+	for i := range localTypes {
+		mapped, err := bashPPNativeTypeImports(localTypes[i].Decl, importAliases)
+		if err != nil {
+			return "", err
+		}
+		localTypes[i].Decl = mapped
+	}
+	for _, local := range localTypes {
 		locals.WriteString(bashPPLocalTypeGo(local))
 		// Both spellings resolve: the original program's own name, and the
 		// package-qualified identity Go's %T prints for it.
@@ -531,7 +544,7 @@ func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, err
 			fmt.Fprintf(&typeEntries, "%q: reflect.TypeFor[%s](),\n", local.WireType, local.Name)
 		}
 	}
-	codecs, err := bashPPLocalCodecsGo(req.LocalTypes)
+	codecs, err := bashPPLocalCodecsGo(localTypes)
 	if err != nil {
 		return "", err
 	}

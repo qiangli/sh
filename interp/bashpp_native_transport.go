@@ -91,6 +91,9 @@ func validateLocalTransport(req bashPPEvalRequest, q bashPPBridgeRequest) error 
 		}
 		unsafe = unsafe || (local && ref) || arg.Kind == "pointer"
 	}
+	if synchronousReaderCallback(req, q) {
+		return nil
+	}
 	if functionCallbacks && !synchronousFunctionCallback(req, q) {
 		return fmt.Errorf("gosource: asynchronous or retained original function callbacks are unsupported for %s", q.Selector)
 	}

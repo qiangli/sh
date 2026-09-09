@@ -175,7 +175,18 @@ func (r *Runner) bashPPNativeCallback(ctx context.Context, selector string, recv
 	if !ok {
 		return nil, fmt.Errorf("gosource: cannot bind original method %s", selector)
 	}
-	results := r.bashPPInvoke(ctx, bound, nil)
+	var arguments []string
+	if method == "Read" {
+		if len(recv.CallArgs) != 1 || recv.CallArgs[0].Kind != "handle" || (recv.CallArgs[0].Type != "[]uint8" && recv.CallArgs[0].Type != "[]byte") {
+			return nil, fmt.Errorf("gosource: original Read requires an authenticated native byte buffer")
+		}
+		argument := goSourceNativeValueCell(recv.CallArgs[0])
+		argument.declType = bound.params()[0].FieldTypeExpr
+		argument.typeName = bashPPTypeText(argument.declType)
+		r.bashPPCallCells = []*bashPPCell{argument}
+		arguments = []string{""}
+	}
+	results := r.bashPPInvoke(ctx, bound, arguments)
 	if r.bashPPPanicking() && !r.exit.exiting {
 		payload := r.bashPPPanic.value()
 		r.bashPPPanic, r.exit = savedPanic, savedExit
@@ -189,6 +200,19 @@ func (r *Runner) bashPPNativeCallback(ctx context.Context, selector string, recv
 	}
 	if r.exit.exiting || r.exit.fatalExit || r.exit.code != 0 || r.bashPPShortFailureSeq != failure {
 		return nil, fmt.Errorf("gosource: original %s failed (status %d)", selector, r.exit.code)
+	}
+	if method == "Read" {
+		if len(results) != 2 || len(r.bashPPResultCells) != 2 {
+			return nil, fmt.Errorf("gosource: original Read returned invalid result count")
+		}
+		for _, cell := range r.bashPPResultCells {
+			value, err := r.bashPPBridgeCell(cell)
+			if err != nil {
+				return nil, err
+			}
+			values = append(values, value)
+		}
+		return values, nil
 	}
 	if len(results) != 1 {
 		return nil, fmt.Errorf("gosource: original %s returned %d values, want 1", selector, len(results))
@@ -320,6 +344,9 @@ func bashPPBridgeScalarValue(v bashPPBridgeValue) (any, *bashPPCollectionMeta, e
 func (s *bashPPNativeSession) bashPPAuthenticateCallbackValue(v *bashPPBridgeValue) {
 	if v.Kind == "handle" || v.Kind == "callback" || v.Origin != 0 {
 		v.Session = s.id
+	}
+	for i := range v.CallArgs {
+		s.bashPPAuthenticateCallbackValue(&v.CallArgs[i])
 	}
 	for i := range v.Elements {
 		s.bashPPAuthenticateCallbackValue(&v.Elements[i])

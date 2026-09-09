@@ -702,6 +702,9 @@ func (r *Runner) bashPPReadExpr(expr syntax.BashPPExpr) (any, *bashPPCollectionM
 }
 
 func (r *Runner) bashPPStructuredAssign(target, rhs syntax.BashPPExpr) {
+	if r.bashPPNativeByteAssign(target, rhs) {
+		return
+	}
 	if deref, ok := target.(*syntax.BashPPDerefExpr); ok {
 		r.bashPPDerefAssign(deref, rhs)
 		return

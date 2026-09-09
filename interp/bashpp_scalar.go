@@ -427,6 +427,21 @@ func (r *Runner) bashPPUnaryScalar(op token.Token, x bashPPScalar) (bashPPScalar
 }
 
 func (r *Runner) bashPPBinaryScalar(op token.Token, left, right bashPPScalar) (bashPPScalar, error) {
+	if r.bashPPGoSource {
+		canonical := func(name string) string {
+			if _, declared := r.bashPPTypes[name]; declared {
+				return name
+			}
+			switch name {
+			case "byte":
+				return "uint8"
+			case "rune":
+				return "int32"
+			}
+			return name
+		}
+		left.typ, right.typ = canonical(left.typ), canonical(right.typ)
+	}
 	resultType := left.typ
 	if resultType == "" {
 		resultType = right.typ

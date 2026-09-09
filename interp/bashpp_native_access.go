@@ -103,18 +103,18 @@ func (r *Runner) bashPPNativeIndex(x *syntax.BashPPIndexExpr) (bashPPBridgeValue
 }
 
 // bashPPNativeSlice evaluates base[low:high] in the dependency process. Go's
-// three-index form carries a capacity that no interpreter value models, so it
-// is refused rather than silently reinterpreted.
+// optional capacity bound stays on that native slice header and is checked
+// against the actual backing capacity by the dependency worker.
 func (r *Runner) bashPPNativeSlice(x *syntax.BashPPSliceExpr) (bashPPBridgeValue, error) {
-	if x.Max != nil {
-		return bashPPBridgeValue{}, fmt.Errorf("gosource: native three-index slice is not supported")
-	}
 	base, err := r.bashPPBridgeExpr(x.X)
 	if err != nil {
 		return bashPPBridgeValue{}, err
 	}
-	bounds := [2]bashPPBridgeValue{{Kind: "nil"}, {Kind: "nil"}}
-	for i, bound := range [2]syntax.BashPPExpr{x.Low, x.High} {
+	bounds := []bashPPBridgeValue{{Kind: "nil"}, {Kind: "nil"}}
+	if x.Max != nil {
+		bounds = append(bounds, bashPPBridgeValue{Kind: "nil"})
+	}
+	for i, bound := range []syntax.BashPPExpr{x.Low, x.High, x.Max} {
 		if bound == nil {
 			continue
 		}
@@ -122,7 +122,7 @@ func (r *Runner) bashPPNativeSlice(x *syntax.BashPPSliceExpr) (bashPPBridgeValue
 			return bashPPBridgeValue{}, err
 		}
 	}
-	return r.bashPPNativeAccess(r.ectx, "slice", base, "", bounds[0], bounds[1])
+	return r.bashPPNativeAccess(r.ectx, "slice", base, "", bounds...)
 }
 
 // bashPPNativeLen answers len(value) for a native value.
@@ -169,6 +169,12 @@ func (r *Runner) bashPPNativeRange(ctx context.Context, rng *syntax.BashPPRange)
 		return true
 	}
 	for i := range length {
+		if (base.Type == "[]uint8" || base.Type == "[]byte") && (len(rng.Names) < 2 || rng.Names[1].Value == "_") {
+			if !r.bashPPRangeIteration(ctx, rng, i, bashPPRangeNamedType("int"), nil, nil, nil) {
+				return true
+			}
+			continue
+		}
 		element, err := r.bashPPNativeAccess(ctx, "index", base, "", bashPPBridgeValue{Kind: "int", Text: fmt.Sprint(i)})
 		if err != nil {
 			r.bashPPRangeError(rng, "BASHPP-ERANGE-TYPE: %v", err)

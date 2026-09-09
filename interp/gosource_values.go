@@ -97,6 +97,13 @@ func (r *Runner) goSourceValueCell(expr syntax.BashPPExpr) (*bashPPCell, error) 
 			return cells[0], nil
 		}
 	}
+	if r.bashPPNativeExpr(expr) {
+		value, err := r.bashPPBridgeExpr(expr)
+		if err != nil {
+			return nil, err
+		}
+		return goSourceNativeValueCell(value), nil
+	}
 	if cell, err := r.bashPPStructuredArgCell(nil, expr); err != nil || cell != nil {
 		return cell, err
 	}

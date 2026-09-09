@@ -1314,6 +1314,18 @@ func (r *Runner) bashPPValidateReusedShortValue(target, candidate *bashPPCell) e
 	if target.declType == nil {
 		return nil
 	}
+	if r.bashPPGoSource && candidate.vr.Kind == expand.Object {
+		if native, ok := candidate.vr.Obj.(*bashPPBridgeValue); ok && native != nil {
+			value, meta, err := r.goSourceNativeAssignedValue(*native, target.declType)
+			if err != nil {
+				return err
+			}
+			candidate.vr.Obj = value
+			candidate.valueMeta = meta
+			candidate.declType = target.declType
+			return nil
+		}
+	}
 	actual := candidate.declType
 	if actual == nil && candidate.typeName != "" {
 		actual = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: candidate.typeName}}

@@ -262,6 +262,15 @@ func (r *Runner) bashPPTupleAssign(assign *syntax.BashPPAssign) {
 				continue
 			}
 		}
+		if r.bashPPGoSource && r.bashPPNativeExpr(expr) {
+			value, err := r.bashPPBridgeExpr(expr)
+			if err != nil {
+				r.exit.fatal(err)
+				return
+			}
+			candidates[i] = goSourceNativeValueCell(value)
+			continue
+		}
 		if ident, ok := expr.(*syntax.BashPPIdent); ok {
 			source := r.bashPPScope.lookup(ident.Name.Value)
 			if source == nil {

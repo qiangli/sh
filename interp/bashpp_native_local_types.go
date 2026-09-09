@@ -19,7 +19,7 @@ import (
 )
 
 // bashPPLocalMethod is one interface method the dependency must be able to
-// invoke on a materialised local type. Only the fmt-facing Stringer and error
+// invoke on a materialised local type. String/Error and exact Read([]byte) (int, error)
 // methods are mirrored; the mirror never carries the original body.
 type bashPPLocalMethod struct {
 	Name    string
@@ -121,7 +121,7 @@ func (r *Runner) bashPPLocalTypeDescriptors() []bashPPLocalType {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	local := &bashPPLocalTypeSet{declared: declared}
+	local := &bashPPLocalTypeSet{declared: declared, imports: r.bashPPImports}
 	var out []bashPPLocalType
 	for _, name := range names {
 		if bashPPHelperReserved[name] {
@@ -180,11 +180,11 @@ func (r *Runner) bashPPLocalTypeDescriptors() []bashPPLocalType {
 // helper will materialise it.
 type bashPPLocalTypeSet struct {
 	declared map[string]syntax.BashPPTypeExpr
+	imports  map[string]string
 }
 
-// mirrored reports the method set the helper stubs out. Only String and Error
-// are mirrored: they are what the fmt verbs consult, and each is answered by a
-// callback into the interpreter rather than by compiled original code.
+// mirrored reports the method set the helper stubs out. String/Error and Read
+// are mirrored by fixed protocol stubs; each original body runs in the interpreter.
 func (l *bashPPLocalTypeSet) mirrored(decls []*syntax.BashPPFuncDecl) []bashPPLocalMethod {
 	var methods []bashPPLocalMethod
 	for _, want := range []string{"Error", "String"} {
@@ -204,6 +204,25 @@ func (l *bashPPLocalTypeSet) mirrored(decls []*syntax.BashPPFuncDecl) []bashPPLo
 			methods = append(methods, bashPPLocalMethod{Name: want, Pointer: decl.Receiver.Pointer})
 			break
 		}
+	}
+	for _, decl := range decls {
+		if decl.Name == nil || decl.Name.Value != "Read" || len(decl.TypeParams) > 0 || len(decl.Receiver.TypeParams) > 0 || len(decl.Params) != 1 || len(decl.Params[0].Names) > 1 || decl.Params[0].Variadic() || len(decl.Results) != 2 {
+			continue
+		}
+		param, ok := l.source(decl.Params[0].FieldTypeExpr, 0)
+		if !ok || (param != "[]byte" && param != "[]uint8") {
+			continue
+		}
+		a, ok := l.source(decl.Results[0].FieldTypeExpr, 0)
+		if !ok || a != "int" || len(decl.Results[0].Names) > 1 {
+			continue
+		}
+		b, ok := l.source(decl.Results[1].FieldTypeExpr, 0)
+		if !ok || b != "error" || len(decl.Results[1].Names) > 1 {
+			continue
+		}
+		methods = append(methods, bashPPLocalMethod{Name: "Read", Pointer: decl.Receiver.Pointer})
+		break
 	}
 	return methods
 }
@@ -227,6 +246,9 @@ func (l *bashPPLocalTypeSet) source(typ syntax.BashPPTypeExpr, depth int) (strin
 			return "any", true
 		}
 		if _, local := l.declared[name]; local && !bashPPHelperReserved[name] {
+			return name, true
+		}
+		if alias, symbol, ok := strings.Cut(name, "."); ok && l.imports[alias] != "" && symbol != "" {
 			return name, true
 		}
 		return "", false
@@ -350,6 +372,19 @@ func bashPPLocalTypeGo(local bashPPLocalType) string {
 		receiver := local.Name
 		if method.Pointer {
 			receiver = "*" + local.Name
+		}
+		if method.Name == "Read" {
+			fmt.Fprintf(&b, `func (bpprecv %s) Read(p []byte)(int,error) {
+ recv:=structural(reflect.ValueOf(bpprecv));recv.CallArgs=[]value{encode(reflect.ValueOf(p))}
+ out,err:=callback(%q,recv);if err!=nil{panic(err)}
+ if len(out)!=2{panic(fmt.Errorf("original Read result count mismatch"))}
+ count,err:=decode(out[0],reflect.TypeFor[int]());if err!=nil{panic(err)}
+ failure,err:=decode(out[1],reflect.TypeFor[error]());if err!=nil{panic(err)}
+ var readErr error;if failure.IsValid(){readErr,_=failure.Interface().(error)}
+ return int(count.Int()),readErr
+}
+`, receiver, local.Name+".Read")
+			continue
 		}
 		fmt.Fprintf(&b, `func (bpprecv %s) %s() string {
  out, err := callback(%q, structural(reflect.ValueOf(bpprecv)))

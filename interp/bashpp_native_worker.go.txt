@@ -20,6 +20,7 @@ import (
 //CONNECTION
 
 type value struct {
+ CallArgs []value `json:"call_args,omitempty"`
  NativeType string `json:"native_type,omitempty"`
  Origin uint64 `json:"origin,omitempty"`
  Interface string `json:"interface,omitempty"`
@@ -183,6 +184,8 @@ func memberMethod(rv reflect.Value,name string) reflect.Value {
  return reflect.Value{}
 }
 func access(rv reflect.Value,q request)([]value,string){
+ if q.Op=="byte-set" {if rv.Kind()!=reflect.Slice||rv.Type().Elem().Kind()!=reflect.Uint8||len(q.Args)!=2{return nil,"native indexed writes require a byte slice"};index,err:=decode(q.Args[0],nil);if err!=nil{return nil,err.Error()};var i int64;switch index.Kind(){case reflect.Int,reflect.Int8,reflect.Int16,reflect.Int32,reflect.Int64:i=index.Int();case reflect.Uint,reflect.Uint8,reflect.Uint16,reflect.Uint32,reflect.Uint64:if index.Uint()>uint64(rv.Len()){return nil,"byte index out of range"};i=int64(index.Uint());default:return nil,"byte index must be an integer"};if i<0||i>=int64(rv.Len()){return nil,"byte index out of range"};element,err:=decode(q.Args[1],rv.Type().Elem());if err!=nil{return nil,err.Error()};rv.Index(int(i)).Set(element);return []value{encode(reflect.ValueOf(true))},""}
+
  if rv.Kind()==reflect.Interface&&!rv.IsNil(){rv=rv.Elem()}
  if q.Op=="field"||q.Op=="member"||q.Op=="receiver_field" {
   original:=rv
@@ -213,7 +216,7 @@ func access(rv reflect.Value,q request)([]value,string){
   if rv.Kind()==reflect.String{return []value{encode(reflect.ValueOf(rv.String()[n]))},""}
   return []value{encode(rv.Index(n))},""
  case "slice":
-  if len(q.Args)!=2{return nil,"slice requires two bounds"}
+  if (len(q.Args)!=2&&len(q.Args)!=3){return nil,"slice requires two or three bounds"}
   switch rv.Kind(){case reflect.String,reflect.Slice,reflect.Array:default:return nil,"slice is not defined on "+rv.Type().String()}
   if rv.Kind()==reflect.Array&&!rv.CanAddr(){return nil,"unaddressable array slice"}
   low,high:=0,rv.Len()
@@ -221,6 +224,7 @@ func access(rv reflect.Value,q request)([]value,string){
   if q.Args[1].Kind!="nil"{n,err:=strconv.Atoi(q.Args[1].Text);if err!=nil{return nil,"slice bound is not an integer"};high=n}
   capacity:=rv.Len();if rv.Kind()==reflect.Slice{capacity=rv.Cap()}
   if low<0||high<low||high>capacity{return nil,fmt.Sprintf("slice bounds out of range [%d:%d] with capacity %d",low,high,capacity)}
+  if len(q.Args)==3 {if rv.Kind()!=reflect.Slice{return nil,"three-index slice requires slice storage"};maximum,err:=strconv.Atoi(q.Args[2].Text);if err!=nil||maximum<high||maximum>capacity{return nil,"invalid three-index slice capacity"};return []value{encode(rv.Slice3(low,high,maximum))},""}
   return []value{encode(rv.Slice(low,high))},""
  }
  return nil,"unsupported native access "+q.Op
@@ -289,7 +293,7 @@ func dispatch(q request)(reply response){
  if q.Op=="construct"||q.Op=="address" {if len(q.Args)!=1{reply.Error="construction requires one literal";return};typ:=resolveType(q.Selector);if typ==nil{reply.Error="unregistered bridge type "+strconv.Quote(q.Selector);return};v,err:=decode(q.Args[0],typ);if err!=nil{reply.Error=err.Error();return};if q.Op=="address"{ptr:=reflect.New(typ);ptr.Elem().Set(v);v=ptr};reply.Values=[]value{encode(v)};return}
  fn:=symbols[q.Selector]
  if q.Receiver!=nil {receiver,err:=decode(*q.Receiver,nil);if err!=nil{reply.Error=err.Error();return}
-  switch q.Op {case "len","cap","index","slice","field","member","receiver_field":reply.Values,reply.Error=access(receiver,q);return}
+  switch q.Op {case "len","cap","index","slice","field","member","receiver_field","byte-set":reply.Values,reply.Error=access(receiver,q);return}
   if q.Selector==""&&receiver.Kind()==reflect.Func{fn=receiver}else{fn=memberMethod(receiver,q.Selector)}}
  if q.Op=="new" {typ:=resolveType(q.Selector);if typ==nil{reply.Error="unregistered bridge type "+strconv.Quote(q.Selector);return};reply.Values=[]value{encode(reflect.New(typ).Elem())};return}
  if !fn.IsValid(){reply.Error="unknown imported symbol or method: "+q.Selector;return}
