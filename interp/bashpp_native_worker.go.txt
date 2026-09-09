@@ -27,9 +27,9 @@ type value struct {
  Handle uint64 `json:"handle,omitempty"`
  Elements []value `json:"elements,omitempty"`
  Fields map[string]value `json:"fields,omitempty"`
- Entries []entry `json:"entries,omitempty"`
+ Entries []bppProtocolEntry `json:"entries,omitempty"`
 }
-type entry struct {Key value `json:"key"`; Value value `json:"value"`}
+type bppProtocolEntry struct {Key value `json:"key"`; Value value `json:"value"`}
 type request struct { ID uint64 `json:"id"`; Op string `json:"op"`; Selector string `json:"selector"`; Receiver *value `json:"receiver,omitempty"`; Args []value `json:"args,omitempty"`; Spread bool `json:"spread,omitempty"`; Values []value `json:"values,omitempty"`; Error string `json:"error,omitempty"` }
 // Op, Selector and Receiver are set only on a callback: the reverse direction
 // in which this helper asks the interpreter to run an original method body.
@@ -78,7 +78,7 @@ func structural(v reflect.Value) value {
  case reflect.Pointer:if v.IsNil(){return value{Kind:"nil",Type:result.Type,Interface:static}};if pkg:=v.Type().Elem().PkgPath();pkg!=""&&pkg!="main"{encoded:=encode(v);encoded.Interface=static;return encoded};inner:=structural(v.Elem());inner.Interface=static;originalPointers.Lock();inner.Origin=originalPointers.ids[v.Pointer()];originalPointers.Unlock();return inner
  case reflect.Struct:if codec,ok:=localStructCodecs[v.Type()];ok{encoded:=codec.structural(v);encoded.Interface=static;return encoded};if v.Type().PkgPath()!=""{encoded:=encode(v);encoded.Interface=static;return encoded};result.Kind="struct";result.Fields=map[string]value{};for i:=range v.NumField(){f:=v.Type().Field(i);if !f.IsExported(){continue};result.Fields[f.Name]=structural(v.Field(i))};return result
  case reflect.Slice,reflect.Array:if v.Kind()==reflect.Slice&&v.IsNil(){return value{Kind:"nil",Type:result.Type,Interface:static}};result.Kind="slice";if v.Kind()==reflect.Array{result.Kind="array"};for i:=range v.Len(){result.Elements=append(result.Elements,structural(v.Index(i)))};return result
- case reflect.Map:if v.IsNil(){return value{Kind:"nil",Type:result.Type,Interface:static}};result.Kind="map";for iter:=v.MapRange();iter.Next();{result.Entries=append(result.Entries,entry{Key:structural(iter.Key()),Value:structural(iter.Value())})};return result
+ case reflect.Map:if v.IsNil(){return value{Kind:"nil",Type:result.Type,Interface:static}};result.Kind="map";for iter:=v.MapRange();iter.Next();{result.Entries=append(result.Entries,bppProtocolEntry{Key:structural(iter.Key()),Value:structural(iter.Value())})};return result
  }
  encoded:=encode(v);encoded.Interface=static;return encoded
 }
@@ -111,7 +111,7 @@ func resolveType(name string) reflect.Type {
  if t:=types[localTypeKey(name)];t!=nil{return t}
  expression,err:=parser.ParseExpr(name);if err!=nil{return nil}
  var walk func(ast.Expr) reflect.Type
- walk=func(expr ast.Expr) reflect.Type {switch e:=expr.(type){
+ walk=func(expr ast.Expr) reflect.Type {var canonical bytes.Buffer;if format.Node(&canonical,token.NewFileSet(),expr)==nil {if typ:=types[canonical.String()];typ!=nil{return typ}};switch e:=expr.(type){
  case *ast.StarExpr:element:=walk(e.X);if element!=nil{return reflect.PointerTo(element)}
  case *ast.Ident:return types[e.Name]
  case *ast.ArrayType:element:=walk(e.Elt);if element==nil{return nil};if e.Len==nil{return reflect.SliceOf(element)};if lit,ok:=e.Len.(*ast.BasicLit);ok{n,err:=strconv.Atoi(lit.Value);if err==nil&&n>=0{return reflect.ArrayOf(n,element)}}

@@ -10,6 +10,7 @@ package interp
 // whose whole body asks the interpreter to run the original body.
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"sort"
 	"strings"
@@ -30,6 +31,8 @@ type bashPPLocalMethod struct {
 // reflect view has exactly the original field names and element types.
 type bashPPLocalType struct {
 	Name           string
+	Alias          bool
+	WireType       string
 	Decl           string
 	Methods        []bashPPLocalMethod
 	OmittedMethods []string
@@ -39,7 +42,7 @@ type bashPPLocalType struct {
 // defines. An original type using one of these names is left unregistered
 // rather than silently renamed, so the failure stays honest.
 var bashPPHelperReserved = map[string]bool{
-	"value": true, "entry": true, "request": true, "response": true,
+	"value": true, "bppProtocolEntry": true, "request": true, "response": true,
 	"originalCallbackPanic": true, "originalPointers": true, "symbols": true, "types": true, "handles": true, "callbacks": true,
 	"localTypeKey": true, "localStructCodec": true, "localStructCodecs": true,
 	"outbound": true, "failure": true, "encode": true, "structural": true,
@@ -63,22 +66,41 @@ var bashPPLocalScalarTypes = map[string]bool{
 // as the imports do — before the original type declarations run — and its
 // materialised type namespace is fixed for the life of that session.
 //
-// A type whose shape cannot be expressed without guessing — a channel, a func
-// field, a generic instantiation, an imported element type — is omitted, and
-// the dependency then reports it as an unregistered bridge type instead of
-// accepting a fabricated stand-in.
+// Package declarations, aliases, uniquely named local declarations, and
+// anonymous shapes retain their actual Go identity. A reused local spelling
+// is omitted: the current runtime has no lexical type namespace, so registering
+// either declaration would conflate distinct Go types. Shapes which cannot be
+// expressed faithfully remain unregistered.
 func (r *Runner) bashPPLocalTypeDescriptors() []bashPPLocalType {
 	if !r.bashPPGoSource || r.bashPPGoSourceFile == nil {
 		return nil
 	}
 	declared := map[string]syntax.BashPPTypeExpr{}
 	methods := map[string][]*syntax.BashPPFuncDecl{}
+	aliases := map[string]bool{}
+	ambiguous := map[string]bool{}
+	var anonymous []*syntax.BashPPStructType
+	syntax.Walk(r.bashPPGoSourceFile, func(node syntax.Node) bool {
+		if d, ok := node.(*syntax.BashPPDecl); ok && d.Site == syntax.StartTypeDecl && len(d.TypeParams) == 0 && d.DeclTypeExpr != nil {
+			name := d.Name.Value
+			if _, exists := declared[name]; exists {
+				ambiguous[name] = true
+			}
+			declared[name] = d.DeclTypeExpr
+			aliases[name] = d.Alias
+		}
+		if shape, ok := node.(*syntax.BashPPStructType); ok {
+			anonymous = append(anonymous, shape)
+		}
+		return true
+	})
+	// A name used in two scopes denotes distinct Go types even when their
+	// fields are identical. Do not let either name escape through the helper.
+	for name := range ambiguous {
+		delete(declared, name)
+	}
 	for _, stmt := range r.bashPPGoSourceFile.Stmts {
 		switch d := stmt.Cmd.(type) {
-		case *syntax.BashPPDecl:
-			if d.Site == syntax.StartTypeDecl && !d.Alias && len(d.TypeParams) == 0 && d.DeclTypeExpr != nil {
-				declared[d.Name.Value] = d.DeclTypeExpr
-			}
 		case *syntax.BashPPFuncDecl:
 			if d.Receiver != nil && d.Receiver.RecvType != nil {
 				owner := d.Receiver.RecvType.Value
@@ -108,11 +130,11 @@ func (r *Runner) bashPPLocalTypeDescriptors() []bashPPLocalType {
 		if !ok {
 			continue
 		}
-		materialised := bashPPLocalType{Name: name, Decl: decl}
+		materialised := bashPPLocalType{Name: name, Decl: decl, Alias: aliases[name]}
 		// A defined interface type cannot carry a method declaration, so its
 		// implementations are mirrored instead — the dynamic value is what
 		// crosses the boundary.
-		if decl != "any" && !strings.HasPrefix(decl, "interface") {
+		if !materialised.Alias && decl != "any" && !strings.HasPrefix(decl, "interface") {
 			materialised.Methods = local.mirrored(methods[name])
 			for _, method := range methods[name] {
 				mirrored := false
@@ -127,6 +149,28 @@ func (r *Runner) bashPPLocalTypeDescriptors() []bashPPLocalType {
 			}
 		}
 		out = append(out, materialised)
+	}
+	// Anonymous shapes keep their Go identity through aliases, never invented
+	// defined types. Existing typed codecs provide legal private field access.
+	shapes := map[string]*syntax.BashPPStructType{}
+	for _, shape := range anonymous {
+		shapes[bashPPBridgeTypeText(shape)] = shape
+	}
+	keys := make([]string, 0, len(shapes))
+	for key := range shapes {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		decl, ok := local.source(shapes[key], 0)
+		if !ok {
+			continue
+		}
+		name := fmt.Sprintf("bppAnonymous_%x", sha256.Sum256([]byte(key)))
+		for declared[name] != nil || bashPPHelperReserved[name] {
+			name += "_"
+		}
+		out = append(out, bashPPLocalType{Name: name, Decl: decl, Alias: true, WireType: key})
 	}
 	return out
 }
@@ -296,7 +340,11 @@ func (l *bashPPLocalTypeSet) signature(spec *syntax.BashPPMethodSpec, depth int)
 // callback.
 func bashPPLocalTypeGo(local bashPPLocalType) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "type %s %s\n", local.Name, local.Decl)
+	alias := ""
+	if local.Alias {
+		alias = "= "
+	}
+	fmt.Fprintf(&b, "type %s %s%s\n", local.Name, alias, local.Decl)
 	for _, method := range local.Methods {
 		receiver := local.Name
 		if method.Pointer {
@@ -318,7 +366,7 @@ func bashPPLocalTypeGo(local bashPPLocalType) string {
 func bashPPLocalTypeIdentity(locals []bashPPLocalType) string {
 	var b strings.Builder
 	for _, local := range locals {
-		fmt.Fprintf(&b, "%s|%s|", local.Name, local.Decl)
+		fmt.Fprintf(&b, "%s|%s|%t|%s|", local.Name, local.Decl, local.Alias, local.WireType)
 		for _, method := range local.Methods {
 			fmt.Fprintf(&b, "%s:%t,", method.Name, method.Pointer)
 		}

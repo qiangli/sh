@@ -111,6 +111,11 @@ func (c *converter) typ(e ast.Expr) s.BashPPTypeExpr {
 	}
 	switch x := e.(type) {
 	case *ast.Ident:
+		if object := c.info.ObjectOf(x); object != nil {
+			if _, parameter := object.Type().(*types.TypeParam); parameter {
+				return &s.BashPPTypeParamType{Name: c.ident(x)}
+			}
+		}
 		return &s.BashPPNamedType{Name: c.ident(x)}
 	case *ast.SelectorExpr:
 		return &s.BashPPNamedType{Name: c.lit(x.Pos(), c.ident(x.X.(*ast.Ident)).Value+"."+x.Sel.Name)}

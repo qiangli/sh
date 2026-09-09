@@ -514,6 +514,9 @@ func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, err
 		// Both spellings resolve: the original program's own name, and the
 		// package-qualified identity Go's %T prints for it.
 		fmt.Fprintf(&typeEntries, "%q: reflect.TypeFor[%s](),\n%q: reflect.TypeFor[%s](),\n", local.Name, local.Name, "main."+local.Name, local.Name)
+		if local.WireType != "" {
+			fmt.Fprintf(&typeEntries, "%q: reflect.TypeFor[%s](),\n", local.WireType, local.Name)
+		}
 	}
 	codecs, err := bashPPLocalCodecsGo(req.LocalTypes)
 	if err != nil {

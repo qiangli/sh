@@ -468,6 +468,18 @@ func (r *Runner) bashPPEvalConstIntExpr(expr goast.Expr) (value constant.Value, 
 }
 
 func (r *Runner) bashPPEvalElement(expr syntax.BashPPExpr, expected syntax.BashPPTypeExpr) (any, *bashPPCollectionMeta, error) {
+	if conversion, ok := expr.(*syntax.BashPPConvertExpr); ok && r.bashPPGoSource {
+		if value, meta, handled, err := r.bashPPConvertToCollection(conversion); handled {
+			if err != nil {
+				return nil, nil, err
+			}
+			if err := r.bashPPCheckTypedValue(value, meta, expected); err != nil {
+				return nil, nil, err
+			}
+			return value, meta, nil
+		}
+	}
+
 	if value, meta, handled, err := r.goSourceCollectionCallValue(expr); handled {
 		if err != nil {
 			return nil, nil, err
