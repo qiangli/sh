@@ -33,6 +33,15 @@ func (r *Runner) bashPPBridgeHandles(call *syntax.BashPPCall) bool {
 		if r.bashPPNativeCellValue(call.Fun[0].Value) != nil {
 			return true
 		}
+		if len(call.Fun) > 2 {
+			var receiver syntax.BashPPExpr = &syntax.BashPPIdent{Name: call.Fun[0]}
+			for _, part := range call.Fun[1 : len(call.Fun)-1] {
+				receiver = &syntax.BashPPSelectorExpr{X: receiver, Sel: part}
+			}
+			if r.bashPPNativeExpr(receiver) {
+				return true
+			}
+		}
 	}
 	if len(call.Fun) == 1 {
 		if value := r.bashPPNativeCellValue(call.Fun[0].Value); value != nil && value.Kind == "handle" && strings.HasPrefix(value.Type, "func(") {
@@ -286,6 +295,9 @@ func (r *Runner) bashPPBridgeExpr(expr syntax.BashPPExpr) (bashPPBridgeValue, er
 			}
 		}
 	case *syntax.BashPPSelectorExpr:
+		if value := r.bashPPNativeLocalField(x); value != nil {
+			return *value, nil
+		}
 		if r.bashPPNativeExpr(x.X) {
 			base, err := r.bashPPNativeReceiver(x.X)
 			if err != nil {

@@ -14,15 +14,20 @@ func (r *Runner) bashPPBridgeFunction(fn *bashPPFunc) (bashPPBridgeValue, error)
 	if fn.native != nil {
 		return *fn.native, nil
 	}
-	for _, fields := range [][]*syntax.BashPPField{fn.params(), fn.results()} {
+	for group, fields := range [][]*syntax.BashPPField{fn.params(), fn.results()} {
 		for _, field := range fields {
 			if field.Variadic() {
 				return bashPPBridgeValue{}, fmt.Errorf("gosource: variadic original callbacks are unsupported")
 			}
+			// Only reviewed synchronous consumers accept these aggregate results.
+			// Callback arguments remain scalar: no copied reference aliasing.
+			if group == 1 && r.bashPPTourCallbackResult(field.FieldTypeExpr) {
+				continue
+			}
 			typ := r.bashPPUnderlyingType(field.FieldTypeExpr)
 			n, ok := typ.(*syntax.BashPPNamedType)
 			if !ok || n.Name == nil || !(bashPPIntegerType(n.Name.Value) || n.Name.Value == "bool" || n.Name.Value == "string" || n.Name.Value == "float32" || n.Name.Value == "float64") {
-				return bashPPBridgeValue{}, fmt.Errorf("gosource: original callback signature requires supported scalar types")
+				return bashPPBridgeValue{}, fmt.Errorf("gosource: original callback signature requires scalar parameters and supported results")
 			}
 		}
 	}
@@ -135,6 +140,9 @@ func synchronousFunctionCallback(req bashPPEvalRequest, q bashPPBridgeRequest) b
 		}
 		path = req.Imports[alias] + "." + name
 	}
+	if path == "golang.org/x/tour/wc.Test" || path == "golang.org/x/tour/pic.Show" {
+		return true
+	}
 	pkg, name, ok := strings.Cut(path, ".")
 	if !ok {
 		return false
@@ -146,4 +154,26 @@ func synchronousFunctionCallback(req bashPPEvalRequest, q bashPPBridgeRequest) b
 		}
 	}
 	return false
+}
+
+// These result shapes are consumed without mutation or retention by the reviewed
+// Tour helpers. Arbitrary aggregate parameters/results require shared-reference
+// transport and remain unsupported.
+func (r *Runner) bashPPTourCallbackResult(typ syntax.BashPPTypeExpr) bool {
+	shape, ok := r.bashPPUnderlyingType(typ).(*syntax.BashPPCollectionType)
+	if !ok {
+		return false
+	}
+	if shape.Kind == "map" {
+		return bashPPTypeText(r.bashPPUnderlyingType(shape.Key)) == "string" && bashPPTypeText(r.bashPPUnderlyingType(shape.Element)) == "int"
+	}
+	if shape.Kind != "slice" {
+		return false
+	}
+	inner, ok := r.bashPPUnderlyingType(shape.Element).(*syntax.BashPPCollectionType)
+	if !ok || inner.Kind != "slice" {
+		return false
+	}
+	element := bashPPTypeText(r.bashPPUnderlyingType(inner.Element))
+	return element == "uint8" || element == "byte"
 }

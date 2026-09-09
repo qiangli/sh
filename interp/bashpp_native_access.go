@@ -42,6 +42,9 @@ func (r *Runner) bashPPNativeExpr(expr syntax.BashPPExpr) bool {
 	case *syntax.BashPPCall:
 		return r.bashPPBridgeHandles(x)
 	case *syntax.BashPPSelectorExpr:
+		if r.bashPPNativeLocalField(x) != nil {
+			return true
+		}
 		if id, ok := x.X.(*syntax.BashPPIdent); ok {
 			if _, imported := r.bashPPImports[id.Name.Value]; imported {
 				return true
@@ -331,4 +334,67 @@ func (r *Runner) bashPPNativeBuiltinLength(name string, c *syntax.BashPPCall, ar
 		return 0, fmt.Errorf("gosource: native %s is not representable", name), true
 	}
 	return int(size), nil, true
+}
+
+// Inspect only a local identifier/field chain. This evaluates no index, call or
+// user expression and therefore cannot repeat argument effects during dispatch.
+func (r *Runner) bashPPNativeLocalField(expr *syntax.BashPPSelectorExpr) *bashPPBridgeValue {
+	if !r.bashPPGoSource {
+		return nil
+	}
+	var root syntax.BashPPExpr = expr
+	var names []string
+	for {
+		field, ok := root.(*syntax.BashPPSelectorExpr)
+		if !ok {
+			break
+		}
+		names = append(names, field.Sel.Value)
+		root = field.X
+	}
+	id, ok := root.(*syntax.BashPPIdent)
+	if !ok || r.bashPPScope == nil {
+		return nil
+	}
+	cell := r.bashPPScope.lookup(id.Name.Value)
+	if cell == nil || r.bashPPNativeCellValue(id.Name.Value) != nil {
+		return nil
+	}
+	value, meta := cell.vr.Obj, bashPPCellMeta(cell)
+	if cell.pointer {
+		if cell.pointerValue == nil {
+			return nil
+		}
+		var err error
+		value, meta, _, err = cell.pointerValue.read()
+		if err != nil {
+			return nil
+		}
+	}
+	for i := len(names) - 1; i >= 0; i-- {
+		if ptr, ok := value.(*bashPPPointer); ok {
+			if ptr == nil {
+				return nil
+			}
+			var err error
+			value, meta, _, err = ptr.read()
+			if err != nil {
+				return nil
+			}
+		}
+		if meta == nil || meta.kind != "struct" {
+			return nil
+		}
+		sel := r.bashPPResolveField(meta.typ, names[i])
+		if sel.ambiguous || len(sel.edges) == 0 {
+			return nil
+		}
+		var err error
+		value, meta, err = bashPPReadSelection(value, meta, sel.edges)
+		if err != nil {
+			return nil
+		}
+	}
+	native, _ := value.(*bashPPBridgeValue)
+	return native
 }

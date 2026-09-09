@@ -375,6 +375,13 @@ func (r *Runner) bashPPZeroValue(typ syntax.BashPPTypeExpr) (any, *bashPPCollect
 }
 
 func (r *Runner) bashPPEvalTypedValue(expr syntax.BashPPExpr, expected syntax.BashPPTypeExpr) (any, *bashPPCollectionMeta, error) {
+	if r.bashPPGoSource && r.bashPPNativeType(expected) && r.bashPPNativeExpr(expr) {
+		value, err := r.bashPPBridgeExpr(expr)
+		if err != nil {
+			return nil, nil, err
+		}
+		return r.goSourceNativeAssignedValue(value, expected)
+	}
 	if _, ok := r.bashPPInterfaceType(expected); ok {
 		iv, vr, err := r.bashPPMakeInterfaceValue(expr, expected)
 		if err != nil {
