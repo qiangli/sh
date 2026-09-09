@@ -1323,7 +1323,11 @@ func (p *Printer) bashppExpr(expr BashPPExpr) {
 	case *BashPPCall:
 		p.command(x, nil)
 	case *BashPPConvertExpr:
-		p.writeLit(x.ConvType.Value)
+		if x.ConvTypeExpr != nil {
+			p.bashppType(x.ConvTypeExpr)
+		} else {
+			p.writeLit(x.ConvType.Value)
+		}
 		p.writeLit("(")
 		p.bashppExpr(x.X)
 		p.writeLit(")")

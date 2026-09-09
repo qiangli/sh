@@ -507,12 +507,14 @@ type BashPPBinaryExpr struct {
 func (x *BashPPBinaryExpr) Pos() Pos { return x.X.Pos() }
 func (x *BashPPBinaryExpr) End() Pos { return x.Y.End() }
 
-// BashPPConvertExpr is a source-reachable one-argument scalar conversion.
+// BashPPConvertExpr is a source-reachable one-argument conversion.
 type BashPPConvertExpr struct {
-	ConvType *Lit
-	Lparen   Pos
-	X        BashPPExpr
-	Rparen   Pos
+	// ConvTypeExpr preserves structured Go-source targets; ConvType retains legacy spelling.
+	ConvTypeExpr BashPPTypeExpr
+	ConvType     *Lit
+	Lparen       Pos
+	X            BashPPExpr
+	Rparen       Pos
 }
 
 // BashPPIndexExpr is a single indexed read. Chaining is represented by X

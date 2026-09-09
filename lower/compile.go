@@ -1239,6 +1239,14 @@ func (e *emitter) expr(x syntax.BashPPExpr) (string, error) {
 		r, err := e.expr(n.Y)
 		return "(" + l + " " + n.Op.Value + " " + r + ")", err
 	case *syntax.BashPPConvertExpr:
+		if e.goSource && n.ConvTypeExpr != nil {
+			target, err := e.typeExpr(n.ConvTypeExpr)
+			if err != nil {
+				return "", err
+			}
+			v, err := e.expr(n.X)
+			return "(" + target + ")(" + v + ")", err
+		}
 		if !scalarType(n.ConvType.Value) && !(e.goSource && e.typeNames[n.ConvType.Value]) {
 			return "", e.fail(n, CodeUnsupported, "non-scalar conversion")
 		}

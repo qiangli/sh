@@ -297,6 +297,7 @@ func Walk(node Node, f func(Node) bool) {
 		Walk(node.Y, f)
 	case *BashPPConvertExpr:
 		Walk(node.ConvType, f)
+		walkNilable(node.ConvTypeExpr, f)
 		Walk(node.X, f)
 	case *BashPPIndexExpr:
 		Walk(node.X, f)
