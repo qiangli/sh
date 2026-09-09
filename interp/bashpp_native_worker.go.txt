@@ -143,7 +143,7 @@ func dispatch(q request)(reply response){
  fn:=symbols[q.Selector]
  if q.Receiver!=nil {receiver,err:=decode(*q.Receiver,nil);if err!=nil{reply.Error=err.Error();return}
   switch q.Op {case "len","cap","index","slice","field":reply.Values,reply.Error=access(receiver,q);return}
-  fn=receiver.MethodByName(q.Selector)
+  if q.Selector==""&&receiver.Kind()==reflect.Func{fn=receiver}else{fn=receiver.MethodByName(q.Selector)}
   // A handle stores an addressable copy, so pointer-receiver methods of a
   // value-typed native variable remain reachable and keep mutating that value.
   if !fn.IsValid()&&receiver.CanAddr(){fn=receiver.Addr().MethodByName(q.Selector)}}

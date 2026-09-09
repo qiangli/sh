@@ -728,6 +728,10 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 		return
 	}
 	defer r.bashPPEndShortDecl(txn, d.Pos())
+	if r.bashPPGoSource && len(d.RhsExprs) > 0 {
+		r.goSourceParallelDecl(d)
+		return
+	}
 	if r.bashPPComplexShortDecl(d) {
 		return
 	}

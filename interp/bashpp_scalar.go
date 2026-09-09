@@ -55,6 +55,9 @@ func (r *Runner) bashPPEvalScalarExpr(expr syntax.BashPPExpr) (result bashPPScal
 			return v, err
 		}
 		if x.CalleeExpr != nil {
+			if r.bashPPGoSource {
+				return r.bashPPScalarFuncCall(x)
+			}
 			return bashPPScalar{}, fmt.Errorf("gosource: computed call runtime is not implemented")
 		}
 		if len(x.Fun) == 0 {
@@ -429,6 +432,19 @@ func (r *Runner) bashPPBinaryScalar(op token.Token, left, right bashPPScalar) (b
 			}
 		}
 	}
+	if r.bashPPGoSource && (left.runtime || right.runtime) {
+		if named, ok := r.bashPPUnderlyingType(&syntax.BashPPNamedType{Name: &syntax.Lit{Value: resultType}}).(*syntax.BashPPNamedType); ok && (named.Name.Value == "float32" || named.Name.Value == "float64") {
+			var err error
+			left, err = r.bashPPConvertScalar(named.Name.Value, left)
+			if err != nil {
+				return bashPPScalar{}, err
+			}
+			right, err = r.bashPPConvertScalar(named.Name.Value, right)
+			if err != nil {
+				return bashPPScalar{}, err
+			}
+		}
+	}
 	if v, handled, err := r.bashPPComplexRuntimeOp(op, left, right, resultType); handled {
 		return v, err
 	}
@@ -516,6 +532,11 @@ func (r *Runner) bashPPTypedScalarResult(value constant.Value, typ string, runti
 	}
 	if runtime && bashPPIntegerType(named.Name.Value) && value.Kind() == constant.Int {
 		value = bashPPWrapInteger(named.Name.Value, value)
+	}
+	if r.bashPPGoSource && (named.Name.Value == "float32" || named.Name.Value == "float64") {
+		out, err := r.bashPPConvertScalar(named.Name.Value, bashPPScalar{value: value, runtime: runtime})
+		out.typ = typ
+		return out, err
 	}
 	if r.bashPPGoSource && (named.Name.Value == "complex64" || named.Name.Value == "complex128") {
 		out, err := r.bashPPConvertComplex(named.Name.Value, bashPPScalar{value: value, runtime: runtime})
@@ -816,7 +837,17 @@ func (r *Runner) bashPPConvertScalar(typ string, x bashPPScalar) (bashPPScalar, 
 					return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-CONVERT: constant %s overflows %s", x.value, typ)
 				}
 			}
-			return bashPPScalar{value: constant.ToFloat(x.value), typ: typ, runtime: x.runtime}, nil
+			value := constant.ToFloat(x.value)
+			if r.bashPPGoSource {
+				if typ == "float32" {
+					v, _ := constant.Float32Val(x.value)
+					value = constant.MakeFloat64(float64(v))
+				} else {
+					v, _ := constant.Float64Val(x.value)
+					value = constant.MakeFloat64(v)
+				}
+			}
+			return bashPPScalar{value: value, typ: typ, runtime: x.runtime}, nil
 		}
 	default:
 		if bashPPIntegerType(typ) && (x.value.Kind() == constant.Int || x.value.Kind() == constant.Float) {
@@ -966,7 +997,11 @@ func (r *Runner) bashPPBooleanExprShape(expr syntax.BashPPExpr) (known, boolean 
 func (r *Runner) bashPPScalarFuncCall(call *syntax.BashPPCall) (bashPPScalar, error) {
 	fn, ok := r.bashPPLookupFunc(call)
 	if !ok {
-		return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-UNDEFINED: undefined callable %s", call.Fun[0].Value)
+		name := "computed function"
+		if len(call.Fun) > 0 {
+			name = call.Fun[0].Value
+		}
+		return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-UNDEFINED: undefined callable %s", name)
 	}
 	if bashppResultCount(fn.results()) != 1 {
 		return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-CALL: scalar call requires one result")

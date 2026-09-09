@@ -882,6 +882,15 @@ func (e *emitter) command(c syntax.Command) (string, error) {
 			} else {
 				rhs, err = e.expr(n.Expr)
 			}
+		case e.goSource && len(n.RhsExprs) > 0:
+			parts := make([]string, len(n.RhsExprs))
+			for i, x := range n.RhsExprs {
+				parts[i], err = e.expr(x)
+				if err != nil {
+					return "", err
+				}
+			}
+			rhs = strings.Join(parts, ", ")
 		case n.FuncLit != nil:
 			rhs, err = e.literal(n.FuncLit)
 		case len(n.MethodValue) > 0:

@@ -368,7 +368,7 @@ func (c *converter) exprValue(e ast.Expr) s.BashPPExpr {
 	case *ast.BinaryExpr:
 		return &s.BashPPBinaryExpr{X: c.expr(x.X), Op: c.lit(x.OpPos, x.Op.String()), Y: c.expr(x.Y)}
 	case *ast.SelectorExpr:
-		return &s.BashPPSelectorExpr{X: c.expr(x.X), Dot: c.pos(x.Sel.Pos() - 1), Sel: c.ident(x.Sel)}
+		return &s.BashPPSelectorExpr{X: c.expr(x.X), Dot: c.pos(x.Sel.Pos() - 1), Sel: c.ident(x.Sel), FuncType: c.functionValueType(x)}
 	case *ast.IndexExpr:
 		return &s.BashPPIndexExpr{X: c.expr(x.X), Lbrack: c.pos(x.Lbrack), Rbrack: c.pos(x.Rbrack), Index: c.expr(x.Index)}
 	case *ast.SliceExpr:
@@ -517,6 +517,9 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 			}
 			for _, e := range x.Rhs {
 				out.Rhs = append(out.Rhs, c.word(e))
+				if len(x.Rhs) > 1 {
+					out.RhsExprs = append(out.RhsExprs, c.expr(e))
+				}
 			}
 			if len(x.Rhs) == 1 {
 				switch rhs := x.Rhs[0].(type) {
@@ -585,6 +588,9 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 		out := &s.BashPPReturn{Kw: c.lit(x.Return, "return")}
 		for _, e := range x.Results {
 			out.Results = append(out.Results, c.word(e))
+			if len(x.Results) > 1 {
+				out.ResultExprs = append(out.ResultExprs, c.expr(e))
+			}
 		}
 		if len(x.Results) == 1 {
 			switch e := x.Results[0].(type) {

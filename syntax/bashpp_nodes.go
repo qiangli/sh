@@ -316,10 +316,11 @@ func (a *BashPPAssign) End() Pos {
 // records which one fired, so the compatibility contract is queryable from the
 // tree instead of being re-derived from source.
 type BashPPShortDecl struct {
-	Lhs   []*Lit  // one name, or several for the tuple form
-	Rhs   []*Word // the right-hand side, unevaluated
-	Class SiteClass
-	OpPos Pos // position of :=
+	RhsExprs []BashPPExpr // positioned expressions for Go-source parallel RHS evaluation
+	Lhs      []*Lit       // one name, or several for the tuple form
+	Rhs      []*Word      // the right-hand side, unevaluated
+	Class    SiteClass
+	OpPos    Pos // position of :=
 	// GoRegion is true when the declaration was parsed inside an already
 	// committed Go region, such as a Bash++ function body. It lets the
 	// interpreter diagnose expression errors there while preserving the legacy
@@ -548,9 +549,10 @@ func (x *BashPPSliceExpr) End() Pos { return posAddCol(x.Rbrack, 1) }
 // BashPPSelectorExpr is a positioned field selection. Chained selections and
 // selections through indexed collections are represented recursively in X.
 type BashPPSelectorExpr struct {
-	X   BashPPExpr
-	Dot Pos
-	Sel *Lit
+	FuncType *BashPPFuncType // Go-source function value signature, when applicable
+	X        BashPPExpr
+	Dot      Pos
+	Sel      *Lit
 }
 
 func (x *BashPPSelectorExpr) Pos() Pos { return x.X.Pos() }
@@ -1238,8 +1240,9 @@ func (l *BashPPFuncLit) End() Pos {
 // return, which yields the function's named results (or its last status when it
 // declares none).
 type BashPPReturn struct {
-	Kw      *Lit    // the literal "return"
-	Results []*Word // the returned values, or nil for a bare return
+	ResultExprs []BashPPExpr // positioned Go-source results, evaluated before binding
+	Kw          *Lit         // the literal "return"
+	Results     []*Word      // the returned values, or nil for a bare return
 	// Call retains the positioned AST for a single returned call. Results keeps
 	// its complete legacy Word spelling for consumers that still read values.
 	Call *BashPPCall
@@ -1257,6 +1260,9 @@ type BashPPReturn struct {
 
 func (r *BashPPReturn) Pos() Pos { return r.Kw.Pos() }
 func (r *BashPPReturn) End() Pos {
+	if len(r.ResultExprs) > 0 {
+		return r.ResultExprs[len(r.ResultExprs)-1].End()
+	}
 	if r.Expr != nil {
 		return r.Expr.End()
 	}

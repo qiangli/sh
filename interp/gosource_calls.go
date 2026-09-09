@@ -14,6 +14,11 @@ func (r *Runner) bashPPGoSourceTupleCall(call *syntax.BashPPCall) ([]*bashPPCell
 	if !ok {
 		return nil, fmt.Errorf("gosource: undefined interpreted callable")
 	}
+	return r.goSourceCallResultCells(call, fn)
+}
+
+func (r *Runner) goSourceCallResultCells(call *syntax.BashPPCall, fn *bashPPFunc) ([]*bashPPCell, error) {
+	var ok bool
 	var args []string
 	if call.ArgExprs != nil {
 		var err error

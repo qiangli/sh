@@ -44,6 +44,7 @@ import (
 // type with two spellings rather than two types with one duplicated invoker.
 // Exactly one of decl and lit is set.
 type bashPPFunc struct {
+	native   *bashPPBridgeValue
 	decl     *syntax.BashPPFuncDecl
 	lit      *syntax.BashPPFuncLit
 	scope    *bashPPScope
@@ -433,6 +434,14 @@ func (r *Runner) bashPPMethodDecl(d *syntax.BashPPFuncDecl) {
 // }(1)` captures the scope at the point of the call, exactly as the same
 // literal bound to a name captures it at the point of the binding.
 func (r *Runner) bashPPLookupFunc(c *syntax.BashPPCall) (*bashPPFunc, bool) {
+	if r.bashPPGoSource && c.CalleeExpr != nil {
+		cell, err := r.goSourceValueCell(c.CalleeExpr)
+		if err != nil {
+			r.exit.fatal(err)
+			return nil, false
+		}
+		return r.bashPPClosure(cell.vr.Str)
+	}
 	if c.FuncLit != nil {
 		fn, _ := r.bashPPMakeClosure(c.FuncLit)
 		return fn, true
@@ -975,6 +984,9 @@ func bashPPPointerCell(ptr *bashPPPointer) *bashPPCell {
 // one without naming a variable. A scalar argument returns (nil, nil) so it
 // keeps being evaluated as an expression rather than passed by name.
 func (r *Runner) bashPPStructuredArgCell(w *syntax.Word, expr syntax.BashPPExpr) (*bashPPCell, error) {
+	if cell, handled, err := r.goSourceCallableCell(expr); handled {
+		return cell, err
+	}
 	switch x := expr.(type) {
 	case *syntax.BashPPAddressExpr, *syntax.BashPPNewExpr:
 		ptr, err := r.bashPPPointerExprValue(expr)
@@ -1108,6 +1120,9 @@ func (r *Runner) bashPPTypedCallArgs(call *syntax.BashPPCall, fn *bashPPFunc) ([
 			copied.channel, copied.channelOwner = nil, nil
 			cells[i], interfaces[i] = copied, copied.interfaceValue
 			args[i] = r.bashPPExprValue(call.Args[i])
+			if _, ok := r.bashPPClosure(copied.vr.Str); ok {
+				args[i] = copied.vr.Str
+			}
 			continue
 		}
 		value, err := r.bashPPEvalScalarExpr(expr)
@@ -1262,7 +1277,11 @@ func (r *Runner) bashPPCallArgValuesWithCells(c *syntax.BashPPCall) ([]string, [
 			copied.channel = nil
 			copied.channelOwner = nil
 		}
-		args = append(args, r.bashPPExprValue(word))
+		value := r.bashPPExprValue(word)
+		if r.bashPPGoSource && copied != nil && copied.vr.Kind == expand.String {
+			value = copied.vr.Str
+		}
+		args = append(args, value)
 		cells = append(cells, copied)
 	}
 	return args, cells
@@ -1540,6 +1559,9 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 	r.bashPPCallCells = nil
 	r.bashPPCallChannels = nil
 	r.bashPPCallInterfaces = nil
+	if fn.native != nil {
+		return r.goSourceInvokeNative(ctx, fn, args, callCells)
+	}
 	if fn.decl != nil && fn.decl.Agentic != nil && !r.bashPPAgentic {
 		r.bashPPAgenticCallError(r.curStmtPos, fn.name())
 		return nil
@@ -1976,6 +1998,10 @@ func (r *Runner) bashPPFinalResults(settled []string, resultNames []string) []st
 // bashPPReturnStmt evaluates a Go-form return, recording its values and
 // unwinding the body through the shell's existing return machinery.
 func (r *Runner) bashPPReturnStmt(ctx context.Context, ret *syntax.BashPPReturn) {
+	if r.bashPPGoSource && len(ret.ResultExprs) > 0 {
+		r.goSourceReturnValues(ret.ResultExprs)
+		return
+	}
 	if r.bashPPBridgeHandles(ret.Call) {
 		values, err := r.bashPPBridgeCall(ctx, ret.Call)
 		if err != nil {

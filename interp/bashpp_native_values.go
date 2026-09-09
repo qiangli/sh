@@ -99,8 +99,8 @@ func (r *Runner) bashPPBridgeCall(ctx context.Context, call *syntax.BashPPCall) 
 				q.Args = append(q.Args, values...)
 				return r.bashPPNativeRequest(ctx, req, q)
 			}
-			if _, ok := r.bashPPLookupFunc(inner); ok {
-				cells, err := r.bashPPGoSourceTupleCall(inner)
+			if fn, ok := r.bashPPLookupFunc(inner); ok {
+				cells, err := r.goSourceCallResultCells(inner, fn)
 				if err != nil {
 					return nil, err
 				}

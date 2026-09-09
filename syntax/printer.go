@@ -1882,6 +1882,14 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 		}
 		p.spacedString(":=", cmd.OpPos)
 		switch {
+		case len(cmd.RhsExprs) > 0:
+			for i, expr := range cmd.RhsExprs {
+				if i > 0 {
+					p.writeLit(",")
+				}
+				p.space()
+				p.bashppExpr(expr)
+			}
 		case cmd.FuncLit != nil:
 			p.bashppFuncLit(cmd.FuncLit)
 		case cmd.Call != nil:
@@ -2024,6 +2032,16 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 		}
 	case *BashPPReturn:
 		p.spacedString(cmd.Kw.Value, cmd.Kw.Pos())
+		if len(cmd.ResultExprs) > 0 {
+			for i, expr := range cmd.ResultExprs {
+				if i > 0 {
+					p.writeLit(",")
+				}
+				p.space()
+				p.bashppExpr(expr)
+			}
+			break
+		}
 		if cmd.Expr != nil {
 			p.space()
 			p.bashppExpr(cmd.Expr)
