@@ -3,7 +3,9 @@ package gosource_test
 // Sprint: #118; Story: #52; Story-ID: d564bada90bb
 import (
 	"bytes"
+	"context"
 	"mvdan.cc/sh/v3/gosource"
+	"mvdan.cc/sh/v3/interp"
 	"mvdan.cc/sh/v3/lower"
 	"mvdan.cc/sh/v3/syntax"
 	"mvdan.cc/sh/v3/syntax/typedjson"
@@ -63,5 +65,32 @@ func main(){_=make([]int,size(),size()+3)}`
 	}
 	if bytes.Contains(lowered.Source, []byte("STALE_SIZE")) {
 		t.Fatal("lowering used stale compatibility size")
+	}
+}
+
+// Sprint: #118; Story: #3; Story-ID: fa07603b71dc
+// A named scalar type such as `type ServerState int` must keep its underlying
+// scalar identity when used as a map key: the literal, indexed assignment and
+// lookup all encode keys over that scalar, instead of rejecting the named type.
+func TestNamedScalarMapKey(t *testing.T) {
+	src := `package main
+import "fmt"
+type ServerState int
+const (Idle ServerState = iota; Busy)
+func main(){states:=map[ServerState]string{Idle:"idle",Busy:"busy"};states[Busy]="running";fmt.Println(states[Idle],states[Busy])}`
+	p, err := gosource.Parse(strings.NewReader(src), "enum.go", gosource.Options{RunMain: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out, stderr bytes.Buffer
+	r, err := interp.New(interp.Lang(syntax.LangBashPP), interp.StdIO(nil, &out, &stderr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Run(context.Background(), p.File); err != nil {
+		t.Fatalf("run: %v stderr=%q", err, stderr.String())
+	}
+	if want := "idle running\n"; out.String() != want || stderr.Len() > 0 {
+		t.Fatalf("out=%q stderr=%q want=%q", out.String(), stderr.String(), want)
 	}
 }

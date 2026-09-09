@@ -605,8 +605,12 @@ func (r *Runner) bashPPCheckCollectionValue(value any, expected syntax.BashPPTyp
 	return nil
 }
 
+// bashPPMapKeyType reports whether typ may encode map keys. A named scalar
+// declaration such as `type ServerState int` carries its underlying scalar
+// identity: resolving through the declaration keeps key encoding and lookup
+// canonical over the same scalar instead of rejecting the named type.
 func (r *Runner) bashPPMapKeyType(typ syntax.BashPPTypeExpr) bool {
-	name, ok := typ.(*syntax.BashPPNamedType)
+	name, ok := r.bashPPUnderlyingType(typ).(*syntax.BashPPNamedType)
 	if !ok {
 		return false
 	}
