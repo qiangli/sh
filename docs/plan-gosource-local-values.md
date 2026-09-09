@@ -76,11 +76,14 @@ than becoming an untyped nil.
 **Concurrency / signals (worker30)** — `interp/signal.go` never stops the
 subscription goroutines started for `WithStandaloneSignalDefaults`, so they
 accumulate across repetitions inside one test binary. `go test ./interp` (the
-CI mode) is green; `go test -count=3 ./interp` trips
+CI mode) is green; repeated runs in one binary trip
 `TestConcurrencyScheduleMatrix`'s goroutine-leak assertion once the run is long
-enough for enough of them to age past the detector's window. Adding any test to
-the package lengthens the run and makes this more likely — it is a leak in the
-subscription lifecycle, not in the tests that surface it.
+enough for enough of them to age past the detector's window. It is purely a
+function of run length: frozen baseline 002 passes at `-count=3` and fails at
+`-count=5`, this tree passes at `-count=1` and fails at `-count=3`, and the
+leaked goroutines are all `forwardSignalSubscription` workers. Adding any test
+to the package moves the threshold — the defect is the subscription lifecycle,
+not the tests that surface it.
 
 ## Verification
 
