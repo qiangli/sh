@@ -32,6 +32,10 @@ import "fmt"
 var count atomic.Uint64
 var lock sync.Mutex
 func main(){lock.Lock();count.Add(3);lock.Unlock();fmt.Println(count.Load())}`, "3\n"},
+		{"typed_nil_interface", `package main
+import "io/fs"
+import "fmt"
+func main(){var ptr *fs.PathError;var err error=ptr;fmt.Println(ptr==nil,err==nil)}`, "true false\n"},
 		{"error_identity", `package main
 import "errors"
 import "fmt"

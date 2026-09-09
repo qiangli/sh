@@ -76,6 +76,9 @@ func (r *Runner) bashPPNativeDeclaration(d *syntax.BashPPDecl) bool {
 		r.exit.fatal(&goSourceError{prefix: r.bashErrPrefix(d.Pos()), err: err})
 		return true
 	}
+	if _, iface := r.bashPPInterfaceType(d.DeclTypeExpr); iface {
+		value.Interface = bashPPBridgeTypeText(d.DeclTypeExpr)
+	}
 	if d.Name.Value != "_" {
 		r.bashPPBindNativeValue(d.Name.Value, value)
 	}
