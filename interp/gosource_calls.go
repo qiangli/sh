@@ -2,6 +2,8 @@ package interp
 
 import (
 	"fmt"
+
+	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/syntax"
 )
 
