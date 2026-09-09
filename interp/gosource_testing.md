@@ -103,3 +103,10 @@ function literal elements, composite ranges, the predeclared any type, and index
 non-scalar values. The full corpus gate consequently fails; missing dynamic
 subtests are never credited as passed or skipped. The complete standard-library
 obligation remains open.
+
+The runtime accepts `GoSourceTestProgram`, a syntax-based view implemented by
+`*gosource.Program`. Existing `LoadGoSourceTests(ctx, program)` calls are unchanged.
+The view retains the original AST, package name, initializer order and SourceAt
+mapping. This removes the production dependency from interp to the optional
+Go-source frontend, so classic shell consumers do not link that frontend merely
+because the runtime supports hosted tests. No build tags control this boundary.

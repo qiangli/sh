@@ -9,9 +9,19 @@ import (
 	"strings"
 
 	"mvdan.cc/sh/v3/expand"
-	"mvdan.cc/sh/v3/gosource"
 	"mvdan.cc/sh/v3/syntax"
 )
+
+// GoSourceTestProgram is the positioned, checked package view required by the
+// testing runner. gosource.Program implements it without coupling this runtime
+// package to the optional Go-source frontend.
+// Implementations must retain original source identities and initializer order.
+type GoSourceTestProgram interface {
+	GoSourceAST() *syntax.File
+	GoSourcePackage() string
+	GoSourceInitializers() []string
+	SourceAt(syntax.Pos) (string, uint, bool)
+}
 
 // GoSourceTestingT is the scheduler capability passed to an interpreted test.
 // A real *testing.T implements it. The interpreter deliberately does not import
@@ -31,7 +41,7 @@ type GoSourceTestingT interface {
 type GoSourceTestingSession struct {
 	runner  *Runner
 	context context.Context
-	program *gosource.Program
+	program GoSourceTestProgram
 	loading bool
 	active  *goSourceTestingHandle
 	closed  bool
@@ -52,8 +62,8 @@ type goSourceTestingExit struct {
 // or adding a main function. The caller must supply every applicable original
 // package companion to gosource.Load with RunMain false. Only its original init
 // functions are invoked here; test registration is an explicit later operation.
-func (r *Runner) LoadGoSourceTests(ctx context.Context, program *gosource.Program) (*GoSourceTestingSession, error) {
-	if program == nil || program.File == nil || !program.File.GoSource || program.Package == "main" {
+func (r *Runner) LoadGoSourceTests(ctx context.Context, program GoSourceTestProgram) (*GoSourceTestingSession, error) {
+	if program == nil || program.GoSourceAST() == nil || !program.GoSourceAST().GoSource || program.GoSourcePackage() == "main" {
 		return nil, fmt.Errorf("gosource: testing requires a loaded non-main Go package")
 	}
 	if r.Dialect() != syntax.LangBashPP {
@@ -65,9 +75,9 @@ func (r *Runner) LoadGoSourceTests(ctx context.Context, program *gosource.Progra
 	r.Reset()
 	session := &GoSourceTestingSession{runner: r, context: ctx, program: program, loading: true}
 	r.goSourceTesting = session
-	file := *program.File
-	file.Stmts = append([]*syntax.Stmt(nil), program.File.Stmts...)
-	for _, name := range program.InitFunctions {
+	file := *program.GoSourceAST()
+	file.Stmts = append([]*syntax.Stmt(nil), program.GoSourceAST().Stmts...)
+	for _, name := range program.GoSourceInitializers() {
 		pos := file.Pos()
 		file.Stmts = append(file.Stmts, &syntax.Stmt{Cmd: &syntax.BashPPCall{Fun: []*syntax.Lit{{Value: name, ValuePos: pos, ValueEnd: pos}}, Lparen: pos, Rparen: pos}})
 	}
@@ -153,7 +163,7 @@ func (s *GoSourceTestingSession) runFunction(ctx context.Context, name string, f
 	s.active = handle
 	previousExit, previousExpandExit := r.exit, r.expandRunExit
 	previousGo, previousFile, previousContext := r.bashPPGoSource, r.bashPPGoSourceFile, r.ectx
-	r.bashPPGoSource, r.bashPPGoSourceFile = true, s.program.File
+	r.bashPPGoSource, r.bashPPGoSourceFile = true, s.program.GoSourceAST()
 	r.fillExpandConfig(ctx)
 	r.exit = exitStatus{}
 	r.expandRunExit = exitStatus{}

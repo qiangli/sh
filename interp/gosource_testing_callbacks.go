@@ -24,7 +24,7 @@ func (s *GoSourceTestingSession) Tests() ([]GoSourceTest, error) {
 		return nil, fmt.Errorf("gosource: testing session is closed or reset")
 	}
 	var tests []GoSourceTest
-	for _, stmt := range s.program.File.Stmts {
+	for _, stmt := range s.program.GoSourceAST().Stmts {
 		decl, ok := stmt.Cmd.(*syntax.BashPPFuncDecl)
 		if !ok || decl.Receiver != nil || decl.Name == nil {
 			continue

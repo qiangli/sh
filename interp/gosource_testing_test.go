@@ -6,6 +6,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -59,6 +62,35 @@ func TestGoSourceTestingOriginalErrors(t *testing.T) {
 		t.Fatalf("load original package: %v; %s", err, errs.String())
 	}
 	defer session.Close()
+	// Registration still identifies all ten original roots through the narrow
+	// program view, with source paths and positions checked independently.
+	registered, err := session.Tests()
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := map[string]token.Position{}
+	fset := token.NewFileSet()
+	for _, source := range sources {
+		file, err := parser.ParseFile(fset, source.Name, source.Data, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, decl := range file.Decls {
+			if fn, ok := decl.(*ast.FuncDecl); ok && fn.Recv == nil && strings.HasPrefix(fn.Name.Name, "Test") {
+				expected[fn.Name.Name] = fset.Position(fn.Pos())
+			}
+		}
+	}
+	if len(registered) != len(expected) || len(expected) != 10 {
+		t.Fatalf("registration count %d, expected %d", len(registered), len(expected))
+	}
+	for _, test := range registered {
+		pos, ok := expected[test.Name]
+		if !ok || test.Source != pos.Filename || test.Line != uint(pos.Line) || test.Column != uint(pos.Column) {
+			t.Fatalf("registration lost source identity: %+v vs %+v", test, pos)
+		}
+		delete(expected, test.Name)
+	}
 	for _, name := range []string{"TestNewEqual", "TestErrorMethod"} {
 		t.Run(name, func(t *testing.T) {
 			if err := session.Run(ctx, name, t); err != nil {
