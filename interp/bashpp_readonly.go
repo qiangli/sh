@@ -146,6 +146,10 @@ func (r *Runner) bashPPBuiltinAssign(assign *syntax.BashPPAssign) {
 }
 
 func (r *Runner) bashPPTupleAssignCall(ctx context.Context, assign *syntax.BashPPAssign) {
+	if r.bashPPGoSource && r.bashPPBridgeHandles(assign.Call) {
+		r.goSourceNativeAssignCall(ctx, assign)
+		return
+	}
 	fn, ok := r.bashPPLookupFunc(assign.Call)
 	if !ok {
 		// `s = append(s, 0)`: the Go front end records the single target in

@@ -1676,9 +1676,15 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 		}
 	}
 	resultNames := bashppResultNames(fn.results())
-	for _, name := range resultNames {
-		if name != "" {
-			_ = r.bashPPScope.declare(name, expand.Variable{Set: true, Kind: expand.String, Str: ""}, false)
+	if r.bashPPGoSource {
+		if !r.goSourceDeclareResults(ctx, fn.results()) {
+			return nil
+		}
+	} else {
+		for _, name := range resultNames {
+			if name != "" {
+				_ = r.bashPPScope.declare(name, expand.Variable{Set: true, Kind: expand.String, Str: ""}, false)
+			}
 		}
 	}
 
