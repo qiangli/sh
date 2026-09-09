@@ -105,6 +105,21 @@ func (c *converter) block(b *ast.BlockStmt) *s.Block {
 	}
 	return o
 }
+
+// isNewType reports whether x is a call to the predeclared new builtin with a
+// type operand. Go 1.27 also allows new(v) over a value, whose argument is not
+// convertible by typ; those calls stay on the generic call path.
+func (c *converter) isNewType(x *ast.CallExpr) bool {
+	id, ok := x.Fun.(*ast.Ident)
+	if !ok || len(x.Args) != 1 {
+		return false
+	}
+	obj, ok := c.info.Uses[id].(*types.Builtin)
+	if !ok || obj.Name() != "new" {
+		return false
+	}
+	return c.info.Types[x.Args[0]].IsType()
+}
 func (c *converter) typ(e ast.Expr) s.BashPPTypeExpr {
 	if e == nil {
 		return nil
@@ -418,10 +433,9 @@ func (c *converter) exprValue(e ast.Expr) s.BashPPExpr {
 		}
 		return out
 	case *ast.CallExpr:
-		if id, ok := x.Fun.(*ast.Ident); ok {
-			if obj, ok := c.info.Uses[id].(*types.Builtin); ok && obj.Name() == "new" {
-				return &s.BashPPNewExpr{New: c.ident(id), Lparen: c.pos(x.Lparen), Rparen: c.pos(x.Rparen), AllocType: c.typ(x.Args[0])}
-			}
+		if c.isNewType(x) {
+			id := x.Fun.(*ast.Ident)
+			return &s.BashPPNewExpr{New: c.ident(id), Lparen: c.pos(x.Lparen), Rparen: c.pos(x.Rparen), AllocType: c.typ(x.Args[0])}
 		}
 		if c.info.Types[x.Fun].IsType() && len(x.Args) == 1 {
 			var typeLit *s.Lit
@@ -549,12 +563,10 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 					out.FuncLit = c.funlit(rhs)
 					out.Rhs = nil
 				case *ast.CallExpr:
-					if id, ok := rhs.Fun.(*ast.Ident); ok {
-						if obj, ok := c.info.Uses[id].(*types.Builtin); ok && obj.Name() == "new" {
-							out.Expr = c.expr(rhs)
-							out.Rhs = nil
-							break
-						}
+					if c.isNewType(rhs) {
+						out.Expr = c.expr(rhs)
+						out.Rhs = nil
+						break
 					}
 					if c.info.Types[rhs.Fun].IsType() {
 						out.Expr = c.expr(rhs)
