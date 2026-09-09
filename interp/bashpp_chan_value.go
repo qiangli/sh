@@ -113,14 +113,7 @@ func (r *Runner) bashPPGoReceiveScalar(x *syntax.BashPPUnaryExpr) (bashPPScalar,
 	if !r.bashPPGoSource || x == nil || x.Op == nil || x.Op.Value != "<-" {
 		return bashPPScalar{}, false, nil
 	}
-	ident, ok := x.X.(*syntax.BashPPIdent)
-	if !ok {
-		return bashPPScalar{}, false, nil
-	}
-	chanWord := &syntax.Word{Parts: []syntax.WordPart{&syntax.Lit{
-		Value: ident.Name.Value, ValuePos: ident.Pos(), ValueEnd: ident.End(),
-	}}}
-	cell, _ := r.bashPPReceiveCell(r.ectx, &syntax.BashPPReceive{Arrow: x.Pos(), Chan: chanWord}, nil)
+	cell, _ := r.bashPPReceiveCell(r.ectx, &syntax.BashPPReceive{Arrow: x.Pos(), ChanExpr: x.X}, nil)
 	if cell == nil {
 		return bashPPScalar{}, true, errBashPPScalarInterrupted
 	}

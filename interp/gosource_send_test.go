@@ -189,17 +189,22 @@ func TestGoSourceUpstreamChannelSendThreeModes(t *testing.T) {
 // A readiness signal observes the RHS's actual output. The test then proves
 // the send stays blocked before cancelling the Runner and joining it.
 type sendReadyWriter struct {
-	mu    sync.Mutex
-	data  bytes.Buffer
-	ready chan struct{}
-	once  sync.Once
+	marker string
+	mu     sync.Mutex
+	data   bytes.Buffer
+	ready  chan struct{}
+	once   sync.Once
 }
 
 func (w *sendReadyWriter) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	n, err := w.data.Write(p)
-	if strings.Contains(w.data.String(), "rhs\n") {
+	marker := w.marker
+	if marker == "" {
+		marker = "rhs\n"
+	}
+	if strings.Contains(w.data.String(), marker) {
 		w.once.Do(func() { close(w.ready) })
 	}
 	return n, err

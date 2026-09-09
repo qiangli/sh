@@ -32,7 +32,7 @@ func (e *emitter) goSourceCommand(c syntax.Command) (string, bool, error) {
 		}
 		return ch + " <- " + v, true, err
 	case *syntax.BashPPReceive:
-		ch, err := e.valueWord(n.Chan)
+		ch, err := e.goSourceReceiveOperand(n)
 		return "<-" + ch, true, err
 	case *syntax.BashPPClose:
 		ch, err := e.valueWord(n.Chan)
@@ -85,7 +85,7 @@ func (e *emitter) goSourceCommand(c syntax.Command) (string, bool, error) {
 			return strings.Join(ns, ",") + " := make(" + typ + cap + ")", true, nil
 		}
 		if n.Recv != nil {
-			ch, err := e.valueWord(n.Recv.Chan)
+			ch, err := e.goSourceReceiveOperand(n.Recv)
 			ns := names(n.Lhs)
 			for _, name := range ns {
 				e.bind(name)
@@ -168,4 +168,11 @@ func goSourcePositions(result *Result, origin string) error {
 		return fmt.Errorf("generated marker count differs from source mappings")
 	}
 	return nil
+}
+
+func (e *emitter) goSourceReceiveOperand(recv *syntax.BashPPReceive) (string, error) {
+	if recv.ChanExpr != nil {
+		return e.expr(recv.ChanExpr)
+	}
+	return e.valueWord(recv.Chan)
 }

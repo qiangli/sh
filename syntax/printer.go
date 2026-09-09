@@ -2086,7 +2086,11 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 		}
 	case *BashPPReceive:
 		p.writeLit("<-")
-		p.word(cmd.Chan)
+		if cmd.ChanExpr != nil {
+			p.bashppExpr(cmd.ChanExpr)
+		} else {
+			p.word(cmd.Chan)
+		}
 	case *BashPPClose:
 		p.spacedString(cmd.Kw.Value, cmd.Kw.Pos())
 		p.writeLit("(")

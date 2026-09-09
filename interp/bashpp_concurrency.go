@@ -728,7 +728,7 @@ func (r *Runner) bashPPReceiveCell(ctx context.Context, recv *syntax.BashPPRecei
 		r.exit.code = 2
 		return nil, false
 	}
-	c, ok := r.bashPPChannelOperation(recv.Chan, "receive")
+	c, ok := r.bashPPGoReceiveChannel(recv)
 	if !ok {
 		return nil, false
 	}
@@ -1260,7 +1260,7 @@ func (r *Runner) bashPPSelect(ctx context.Context, s *syntax.BashPPSelect) {
 		}
 		switch comm := arm.Comm.(type) {
 		case *syntax.BashPPReceive:
-			c, ok := r.bashPPChannelOperation(comm.Chan, "receive")
+			c, ok := r.bashPPGoReceiveChannel(comm)
 			if !ok {
 				return
 			}
@@ -1277,7 +1277,7 @@ func (r *Runner) bashPPSelect(ctx context.Context, s *syntax.BashPPSelect) {
 				r.exit.code = 2
 				return
 			}
-			c, ok := r.bashPPChannelOperation(comm.Recv.Chan, "receive")
+			c, ok := r.bashPPGoReceiveChannel(comm.Recv)
 			if !ok {
 				return
 			}

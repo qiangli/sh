@@ -2,6 +2,7 @@ package interp
 
 // Sprint: #118; Story: #51; Story-ID: 825f8083451e
 import (
+	"errors"
 	"fmt"
 	"go/constant"
 	"mvdan.cc/sh/v3/expand"
@@ -9,10 +10,15 @@ import (
 )
 
 func (r *Runner) bashPPGoSendChannel(send *syntax.BashPPSend) (*bashPPChannel, bool) {
-	if !r.bashPPGoSource || send.ChanExpr == nil {
-		return r.bashPPChannelOperation(send.Chan, "send")
+	return r.goSourceChannelOperand(send.ChanExpr, send.Chan, "send")
+}
+func (r *Runner) bashPPGoReceiveChannel(recv *syntax.BashPPReceive) (*bashPPChannel, bool) {
+	return r.goSourceChannelOperand(recv.ChanExpr, recv.Chan, "receive")
+}
+func (r *Runner) goSourceChannelOperand(expr syntax.BashPPExpr, word *syntax.Word, operation string) (*bashPPChannel, bool) {
+	if !r.bashPPGoSource || expr == nil {
+		return r.bashPPChannelOperation(word, operation)
 	}
-	expr := send.ChanExpr
 	for {
 		paren, ok := expr.(*syntax.BashPPParenExpr)
 		if !ok {
@@ -36,8 +42,8 @@ func (r *Runner) bashPPGoSendChannel(send *syntax.BashPPSend) (*bashPPChannel, b
 		return nil, false
 	}
 	typ, _ := cell.declType.(*syntax.BashPPChanType)
-	if typ != nil && typ.Direction == "recv" {
-		r.bashPPGoSendError(expr, fmt.Errorf("cannot send on receive-only channel"))
+	if typ != nil && ((operation == "send" && typ.Direction == "recv") || (operation == "receive" && typ.Direction == "send")) {
+		r.bashPPGoSendError(expr, fmt.Errorf("cannot %s on %s-only channel", operation, typ.Direction))
 		return nil, false
 	}
 	if r.bashPPChanBoundary {
@@ -52,7 +58,7 @@ func (r *Runner) bashPPGoSendChannel(send *syntax.BashPPSend) (*bashPPChannel, b
 		return cell.channel, true
 	}
 	if typ != nil && cell.vr.Kind == expand.String && cell.vr.Str == "" {
-		// nil has no ready send or close notification. Its RHS still evaluates.
+		// nil has no ready communication or close notification.
 		nilChannel := newBashPPChannel(bashPPTypeText(typ.Element), 0)
 		nilChannel.ch = nil
 		nilChannel.closing = nil
@@ -63,10 +69,15 @@ func (r *Runner) bashPPGoSendChannel(send *syntax.BashPPSend) (*bashPPChannel, b
 	return nil, false
 }
 func (r *Runner) bashPPGoSendError(expr syntax.BashPPExpr, err error) {
-	if err == errBashPPScalarInterrupted || r.bashPPPanicking() || r.exit.exiting || r.exit.fatalExit {
+	if errors.Is(err, errBashPPScalarInterrupted) || r.bashPPPanicking() || r.exit.exiting || r.exit.fatalExit {
 		return
 	}
-	r.errf("%s%v\n", r.bashErrPrefix(expr.Pos()), err)
+	var positioned *goSourceError
+	if errors.As(err, &positioned) {
+		r.errf("%v\n", err)
+	} else {
+		r.errf("%s%v\n", r.bashErrPrefix(expr.Pos()), err)
+	}
 	r.exit = exitStatus{code: 2}
 }
 func (r *Runner) bashPPGoSendPayload(channel *bashPPChannel, send *syntax.BashPPSend) (any, bool) {
@@ -142,6 +153,9 @@ func (r *Runner) bashPPReceivedCell(channel *bashPPChannel, value any, open bool
 		return &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: text}, typeName: named}
 	}
 	if !open {
+		if _, channelType := channel.element.(*syntax.BashPPChanType); channelType {
+			return &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String}, declType: channel.element}
+		}
 		if r.bashPPGoSource && channel.element != nil {
 			base, _ := r.bashPPChanElemBase(channel.elem)
 			if !bashPPScalarType(base) && base != "complex64" && base != "complex128" {
@@ -191,12 +205,7 @@ func (r *Runner) goSourceChannelValueCell(expr syntax.BashPPExpr) (*bashPPCell, 
 		if x.Op == nil || x.Op.Value != "<-" {
 			return nil, false, nil
 		}
-		id, ok := x.X.(*syntax.BashPPIdent)
-		if !ok {
-			return nil, false, nil
-		}
-		word := &syntax.Word{Parts: []syntax.WordPart{id.Name}}
-		cell, _ := r.bashPPReceiveCell(r.ectx, &syntax.BashPPReceive{Arrow: x.Pos(), Chan: word}, nil)
+		cell, _ := r.bashPPReceiveCell(r.ectx, &syntax.BashPPReceive{Arrow: x.Pos(), ChanExpr: x.X}, nil)
 		if cell == nil {
 			return nil, true, errBashPPScalarInterrupted
 		}

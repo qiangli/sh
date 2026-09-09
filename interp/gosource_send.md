@@ -32,9 +32,9 @@ and require prompt join, cancellation status 1 and no statement after the send.
 An AST tamper test ensures stale compatibility words cannot replace the original
 positioned operands, including after typed-JSON round trip.
 
-This slice is not full Go concurrency acceptance. General computed receive
-operands, nil receive/select arms, dependency-owned native channels and arbitrary
-channel-bearing aggregate storage still depend on other runtime paths. The
+This slice is not full Go concurrency acceptance. Computed and nil local receive operands are covered by the follow-up in
+[gosource_receive.md](gosource_receive.md). Dependency-owned native channels and
+arbitrary channel-bearing aggregate storage still depend on other runtime paths. The
 existing panic engine carries text, so this slice proves closed-send unwind and
 message behavior, not the recovered `runtime.Error` dynamic type. Public
 shell-copy/task-group ownership restrictions remain in force. Broader goroutine

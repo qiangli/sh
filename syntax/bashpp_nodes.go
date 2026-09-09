@@ -1377,12 +1377,18 @@ func (s *BashPPSend) End() Pos {
 }
 
 type BashPPReceive struct {
-	Arrow Pos
-	Chan  *Word
+	Arrow    Pos
+	ChanExpr BashPPExpr // authoritative GoSource channel operand
+	Chan     *Word
 }
 
 func (r *BashPPReceive) Pos() Pos { return r.Arrow }
-func (r *BashPPReceive) End() Pos { return r.Chan.End() }
+func (r *BashPPReceive) End() Pos {
+	if r.ChanExpr != nil {
+		return r.ChanExpr.End()
+	}
+	return r.Chan.End()
+}
 
 type BashPPClose struct {
 	Kw             *Lit

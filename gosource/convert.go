@@ -491,7 +491,7 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 		if call, ok := x.X.(*ast.CallExpr); ok {
 			cmd = c.call(call)
 		} else if recv, ok := x.X.(*ast.UnaryExpr); ok && recv.Op == token.ARROW {
-			cmd = &s.BashPPReceive{Arrow: c.pos(recv.OpPos), Chan: c.word(recv.X)}
+			cmd = &s.BashPPReceive{Arrow: c.pos(recv.OpPos), Chan: c.word(recv.X), ChanExpr: c.expr(recv.X)}
 		} else {
 			c.fail(x, "expression statement")
 		}
@@ -545,7 +545,7 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 					}
 				case *ast.UnaryExpr:
 					if rhs.Op == token.ARROW {
-						out.Recv = &s.BashPPReceive{Arrow: c.pos(rhs.OpPos), Chan: c.word(rhs.X)}
+						out.Recv = &s.BashPPReceive{Arrow: c.pos(rhs.OpPos), Chan: c.word(rhs.X), ChanExpr: c.expr(rhs.X)}
 						out.Rhs = nil
 					} else {
 						out.Expr = c.expr(rhs)
