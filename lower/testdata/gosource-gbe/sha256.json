@@ -8,5 +8,6 @@
   "logging": "a7c2043beb550a5a070019455a28de8bbaf92ab90455643a620837fe93aea446",
   "folder/file1.hash": "181210f8f9c779c26da1d9b2075bde0127302ee0e3fca38c9a83f5b1dd8e5d3b",
   "folder/single_file.txt": "1ff203466e9f61d80b34170e88e22f7de355fd504313c905c1bef12c7ac14960",
-  "folder/file2.hash": "cdfba543ee8ef7fdb3d8b587648cc22dd792bbd6272cc5447307c7c106c2374c"
+  "folder/file2.hash": "cdfba543ee8ef7fdb3d8b587648cc22dd792bbd6272cc5447307c7c106c2374c",
+  "unnamed": "fbde3add1e483be9961e5cf1d40d064bd5c368130d20fe627d8b096b8c38e114"
 }

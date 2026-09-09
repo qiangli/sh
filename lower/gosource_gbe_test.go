@@ -29,7 +29,7 @@ func TestGoSourceGbENativeArtifacts(t *testing.T) {
 	if err = json.Unmarshal(pinsBytes, &pins); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"recover", "structs", "xml", "generics", "range-over-iterators", "embed-directive", "logging"} {
+	for _, name := range []string{"recover", "structs", "xml", "generics", "range-over-iterators", "embed-directive", "logging", "unnamed"} {
 		t.Run(name, func(t *testing.T) {
 			data, err := os.ReadFile("testdata/gosource-gbe/" + name + ".go.txt")
 			if err != nil {

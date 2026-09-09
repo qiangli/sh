@@ -555,6 +555,15 @@ func (e *emitter) bind(name string) {
 		e.projections.projectionBind(name, scalarProjection())
 	}
 }
+func (e *emitter) syntheticName() string {
+	for i := 0; ; i++ {
+		name := fmt.Sprintf("%sunnamed%d", e.prefix, i)
+		if !e.known(name) && !e.bound(name) {
+			e.bind(name)
+			return name
+		}
+	}
+}
 func (e *emitter) push() {
 	e.scopes = append(e.scopes, map[string]bool{})
 	e.projections.projectionPush()
@@ -669,6 +678,11 @@ func (e *emitter) function(f *syntax.BashPPFuncDecl) (string, error) {
 	e.scopes = []map[string]bool{{}}
 	defer func() { e.scopes = saved }()
 	if f.Receiver != nil {
+		if f.Receiver.Name == nil {
+			f.Receiver.Name = &syntax.Lit{Value: e.syntheticName()}
+		} else if f.Receiver.Name.Value == "_" {
+			f.Receiver.Name.Value = e.syntheticName()
+		}
 		e.bind(f.Receiver.Name.Value)
 		typ := f.Receiver.RecvType.Value
 		if f.Receiver.Pointer {
@@ -681,6 +695,17 @@ func (e *emitter) function(f *syntax.BashPPFuncDecl) (string, error) {
 	for _, p := range f.TypeParams {
 		for _, n := range p.Names {
 			e.bind(n.Value)
+		}
+	}
+	for _, p := range f.Params {
+		if len(p.Names) == 0 {
+			p.Names = []*syntax.Lit{{Value: e.syntheticName()}}
+		} else {
+			for _, n := range p.Names {
+				if n.Value == "_" {
+					n.Value = e.syntheticName()
+				}
+			}
 		}
 	}
 	signature, err := e.signature(f.Params, f.Results, f.Body)
