@@ -42,14 +42,12 @@ func (r *Runner) bashPPNativeExpr(expr syntax.BashPPExpr) bool {
 	case *syntax.BashPPCall:
 		return r.bashPPBridgeHandles(x)
 	case *syntax.BashPPSelectorExpr:
-		id, ok := x.X.(*syntax.BashPPIdent)
-		if !ok {
-			return false
+		if id, ok := x.X.(*syntax.BashPPIdent); ok {
+			if _, imported := r.bashPPImports[id.Name.Value]; imported {
+				return true
+			}
 		}
-		if _, imported := r.bashPPImports[id.Name.Value]; imported {
-			return true
-		}
-		return r.bashPPNativeCellValue(id.Name.Value) != nil
+		return r.bashPPNativeExpr(x.X)
 	case *syntax.BashPPIdent:
 		return r.bashPPNativeCellValue(x.Name.Value) != nil
 	}
@@ -62,6 +60,9 @@ func (r *Runner) bashPPNativeCellValue(name string) *bashPPBridgeValue {
 		return nil
 	}
 	cell := r.bashPPScope.lookup(name)
+	for cell != nil && cell.interfaceValue != nil && !cell.interfaceValue.nilIface {
+		cell = cell.interfaceValue.cell
+	}
 	if cell == nil || cell.vr.Kind != expand.Object {
 		return nil
 	}
@@ -274,13 +275,7 @@ func (r *Runner) bashPPNativeShortDecl(d *syntax.BashPPShortDecl) bool {
 			return false
 		}
 	case *syntax.BashPPSelectorExpr:
-		// A selector on a native value can also be a method value, which this
-		// path does not implement; only package-level reads are claimed.
-		id, ok := x.X.(*syntax.BashPPIdent)
-		if !ok {
-			return false
-		}
-		if _, imported := r.bashPPImports[id.Name.Value]; !imported {
+		if !r.bashPPNativeExpr(x) {
 			return false
 		}
 	default:

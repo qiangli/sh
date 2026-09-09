@@ -167,7 +167,12 @@ type bashPPCloner struct {
 	pointers map[*bashPPPointer]*bashPPPointer
 }
 
-func newBashPPCloner() *bashPPCloner {
+func newBashPPCloner() *bashPPCloner { return newBashPPClonerFor(nil) }
+
+// newBashPPClonerFor is [newBashPPCloner] with the dependency session the
+// clone will run against, so imported native handles are checked against it;
+// see bashpp_task.go. A nil runner keeps handle identity without that check.
+func newBashPPClonerFor(r *Runner) *bashPPCloner {
 	c := &bashPPCloner{
 		scopes:   make(map[*bashPPScope]*bashPPScope),
 		cells:    make(map[*bashPPCell]*bashPPCell),
@@ -177,6 +182,7 @@ func newBashPPCloner() *bashPPCloner {
 		pointers: make(map[*bashPPPointer]*bashPPPointer),
 	}
 	c.values.pointer = c.clonePointer
+	c.values.native = bashPPNativeScopeOf(r)
 	return c
 }
 

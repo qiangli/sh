@@ -967,7 +967,12 @@ func profileSubstituteIota(expr syntax.BashPPExpr, value int) syntax.BashPPExpr 
 func (c *profileChecker) ifStmt(x *syntax.BashPPIf) {
 	c.push()
 	defer c.pop()
-	if x.Init != nil {
+	if x.InitStmt != nil {
+		c.cmd(x.InitStmt)
+		if c.done() {
+			return
+		}
+	} else if x.Init != nil {
 		c.shortDecl(x.Init)
 		if c.done() {
 			return

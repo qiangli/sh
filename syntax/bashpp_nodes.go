@@ -549,10 +549,12 @@ func (x *BashPPSliceExpr) End() Pos { return posAddCol(x.Rbrack, 1) }
 // BashPPSelectorExpr is a positioned field selection. Chained selections and
 // selections through indexed collections are represented recursively in X.
 type BashPPSelectorExpr struct {
-	FuncType *BashPPFuncType // Go-source function value signature, when applicable
-	X        BashPPExpr
-	Dot      Pos
-	Sel      *Lit
+	MethodValue         bool            // Go-source selector denotes a method value, not a function-valued field
+	ReceiverAddressable bool            // Original receiver is addressable according to go/types
+	FuncType            *BashPPFuncType // Go-source function value signature, when applicable
+	X                   BashPPExpr
+	Dot                 Pos
+	Sel                 *Lit
 }
 
 func (x *BashPPSelectorExpr) Pos() Pos { return x.X.Pos() }
@@ -900,12 +902,14 @@ func (c *BashPPCall) End() Pos { return posAddCol(c.Rparen, 1) }
 // BashPPIf is a Go brace-form if: if err != nil { … }.
 //
 // Init, when non-nil, is the optional short declaration before the header's
-// semicolon. Cond is always a typed scalar expression. Else is another
+// semicolon. InitStmt preserves another Go simple statement initializer; at most
+// one of Init and InitStmt is non-nil. Cond is always a typed scalar expression. Else is another
 // BashPPIf for `else if`, a Block for `else`, or nil.
 type BashPPIf struct {
 	Site      StartSite
 	If        Pos
 	Init      *BashPPShortDecl
+	InitStmt  Command
 	Semicolon Pos
 	Cond      BashPPExpr
 	Then      *Block
@@ -1354,21 +1358,39 @@ func (m *BashPPMakeChan) End() Pos { return posAddCol(m.Rparen, 1) }
 // BashPPSend, BashPPReceive and BashPPClose are channel operations admitted
 // only while parsing an already committed Go region.
 type BashPPSend struct {
-	Chan  *Word
-	Arrow Pos
-	Value *Word
+	ChanExpr  BashPPExpr // authoritative GoSource channel operand
+	Chan      *Word
+	Arrow     Pos
+	Value     *Word
+	ValueExpr BashPPExpr
 }
 
-func (s *BashPPSend) Pos() Pos { return s.Chan.Pos() }
-func (s *BashPPSend) End() Pos { return s.Value.End() }
+func (s *BashPPSend) Pos() Pos {
+	if s.ChanExpr != nil {
+		return s.ChanExpr.Pos()
+	}
+	return s.Chan.Pos()
+}
+func (s *BashPPSend) End() Pos {
+	if s.ValueExpr != nil {
+		return s.ValueExpr.End()
+	}
+	return s.Value.End()
+}
 
 type BashPPReceive struct {
-	Arrow Pos
-	Chan  *Word
+	Arrow    Pos
+	ChanExpr BashPPExpr // authoritative GoSource channel operand
+	Chan     *Word
 }
 
 func (r *BashPPReceive) Pos() Pos { return r.Arrow }
-func (r *BashPPReceive) End() Pos { return r.Chan.End() }
+func (r *BashPPReceive) End() Pos {
+	if r.ChanExpr != nil {
+		return r.ChanExpr.End()
+	}
+	return r.Chan.End()
+}
 
 type BashPPClose struct {
 	Kw             *Lit

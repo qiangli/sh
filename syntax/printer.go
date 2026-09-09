@@ -1953,7 +1953,11 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 				if i > 0 {
 					p.writeLit(", ")
 				}
-				p.bashppExpr(arg)
+				if arg == nil && i == 0 && cmd.ArgType != nil {
+					p.bashppType(cmd.ArgType)
+				} else {
+					p.bashppExpr(arg)
+				}
 			}
 		} else {
 			positional := len(cmd.Args) - len(cmd.ArgNames)
@@ -2073,12 +2077,24 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 		p.wantSpace = spaceRequired
 		p.command(cmd.Call, nil)
 	case *BashPPSend:
-		p.word(cmd.Chan)
+		if cmd.ChanExpr != nil {
+			p.bashppExpr(cmd.ChanExpr)
+		} else {
+			p.word(cmd.Chan)
+		}
 		p.writeLit(" <- ")
-		p.word(cmd.Value)
+		if cmd.ValueExpr != nil {
+			p.bashppExpr(cmd.ValueExpr)
+		} else {
+			p.word(cmd.Value)
+		}
 	case *BashPPReceive:
 		p.writeLit("<-")
-		p.word(cmd.Chan)
+		if cmd.ChanExpr != nil {
+			p.bashppExpr(cmd.ChanExpr)
+		} else {
+			p.word(cmd.Chan)
+		}
 	case *BashPPClose:
 		p.spacedString(cmd.Kw.Value, cmd.Kw.Pos())
 		p.writeLit("(")
@@ -2181,7 +2197,10 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 		p.writeLit("}")
 	case *BashPPIf:
 		p.writeLit("if ")
-		if cmd.Init != nil {
+		if cmd.InitStmt != nil {
+			p.command(cmd.InitStmt, nil)
+			p.writeLit("; ")
+		} else if cmd.Init != nil {
 			p.command(cmd.Init, nil)
 			p.writeLit("; ")
 		}

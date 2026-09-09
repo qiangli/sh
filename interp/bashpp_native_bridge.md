@@ -96,3 +96,78 @@ different session fail closed. Constraint-only interfaces and generic type
 aliases are omitted from runtime reflection registries; blank imports register
 no exports. These limits require parent-story follow-up and must not be counted
 as passing corpus coverage.
+
+## Original local types in the dependency (Sprint #118, Story #54, Story-ID c3a60493cde9)
+
+The original program's own named types are materialised in the generated
+helper as real Go declarations, read from the loaded program rather than from
+declarations executed so far — the dependency session starts with the imports,
+before any type declaration runs, and its type namespace is fixed for the life
+of that session. `fmt.Println(Vertex{1, 2})` therefore reaches a `main.Vertex`
+with the original field names, field types and defined type name, and `%T`,
+`%v` and `%s` report what Go reports. Struct values, struct literals, struct
+pointers (`&v` and `*p`), defined scalar and array types, slices and maps of
+structs, declared interfaces, the empty interface and `error` all cross. A
+value of a defined scalar type is re-read at that type's underlying kind, so
+`type Celsius float64` arrives as a float and not as the shell's text form.
+Original pointer receivers have a session-scoped identity. Their method bodies
+bind to the original interpreter storage; mutation is sent back to the helper's
+canonical pointer so aliases and subsequent formatting observe the same state.
+General native out-parameters are refused before dispatch. Value receivers that
+contain copied reference storage are also refused before dispatch; no mutation
+is silently dropped.
+
+No original method body is compiled into the helper. A local `String` or `Error`
+method becomes a protocol stub. The request waiting for the dependency executes
+the callback synchronously on its own Runner. Callback-capable requests serialize
+at the session boundary; nested imports from that callback can reenter. Requests
+without local callbacks retain ordinary concurrent native dispatch, including
+native synchronization. This avoids borrowing the root Runner from an unrelated
+interpreted task. A dependency handle that may retain a local callback carries
+that provenance with its native session.
+
+An original panic travels back as a panic to the native method stub, so `fmt`
+performs its own recovery and prints its own panic diagnostic. Interpreter errors,
+cancellation and explicit program exit remain failures or termination of the
+owning request. There is no global callback-failure bucket and no unconditional
+exit-status rollback. Original struct tags remain in the helper declaration.
+
+A type the helper cannot reproduce exactly — a channel or func field, a generic
+declaration, an imported element type, an embedded field, a name the fixed
+helper template already uses — is not materialised, and the dependency answers
+`unregistered bridge type`. A struct with an unexported field is materialised
+but refused by field name when it is transported, because reflection cannot
+write that field; it is never delivered with the field silently zeroed. Only `String` and `Error` are mirrored. Omitted methods fail closed when a
+non-formatting dependency could observe them; omitted `Format` and `GoString`
+methods also refuse formatting. Nil pointer callbacks and copied reference
+receivers are explicit unsupported cases. General interpreted function callbacks
+and native mutation of interpreter aggregates remain unsupported.
+
+`TestGoSourceLocalTypeValues`, `TestGoSourceLocalTypeMethodCallbacks` and
+`TestGoSourceLocalTypeUnsupported` compare unchanged original sources against a
+real Go build of the same file on stdout, stderr and exit status. They are a
+scoped slice, not Tour or corpus certification.
+
+
+`TestGoSourceCallbackEffects` adds native-Go differential checks for pointer
+mutation and aliasing, nested reentry, concurrent interpreter tasks, `fmt` panic
+recovery, explicit exit, wrapped errors and original struct tags.
+`TestGoSourceCallbackCancelReset` cancels a nested native sleep from an active
+original callback and reruns a fresh program after Reset. Negative transport
+checks verify native Go accepts the program while this implementation refuses
+unsupported semantics before the original method or subsequent statement runs.
+These focused tests run under the race detector.
+
+Two independently observed task/send limitations remain open, outside this
+transport correction. `testdata/gosource-callback-blockers/native-handle-task.go.txt`
+records the original WaitGroup capture probe: task snapshotting rejects its
+native bridge handle and the parent waits. A direct channel send of an imported
+call expression also sends its source text rather than its result; callback
+concurrency coverage uses a separately evaluated local value to isolate callback
+ownership. Neither failure is classified as passing corpus coverage.
+
+`TestGoSourceCallbackBodyFailure` retains an explicit unsupported runtime case:
+a nil-slice index currently triggers an interpreter implementation failure. The
+callback boundary reports it as failure and stops the request; it never turns it
+into a successful formatting placeholder. This differs from native Go's bounds
+panic recovery and is not counted as semantic equivalence.

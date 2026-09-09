@@ -368,7 +368,12 @@ func (c *converter) exprValue(e ast.Expr) s.BashPPExpr {
 	case *ast.BinaryExpr:
 		return &s.BashPPBinaryExpr{X: c.expr(x.X), Op: c.lit(x.OpPos, x.Op.String()), Y: c.expr(x.Y)}
 	case *ast.SelectorExpr:
-		return &s.BashPPSelectorExpr{X: c.expr(x.X), Dot: c.pos(x.Sel.Pos() - 1), Sel: c.ident(x.Sel), FuncType: c.functionValueType(x)}
+		out := &s.BashPPSelectorExpr{X: c.expr(x.X), Dot: c.pos(x.Sel.Pos() - 1), Sel: c.ident(x.Sel), FuncType: c.functionValueType(x)}
+		if selection := c.info.Selections[x]; selection != nil && selection.Kind() == types.MethodVal {
+			out.MethodValue = true
+			out.ReceiverAddressable = c.info.Types[x.X].Addressable()
+		}
+		return out
 	case *ast.IndexExpr:
 		return &s.BashPPIndexExpr{X: c.expr(x.X), Lbrack: c.pos(x.Lbrack), Rbrack: c.pos(x.Rbrack), Index: c.expr(x.Index)}
 	case *ast.SliceExpr:
@@ -475,9 +480,6 @@ func (c *converter) call(x *ast.CallExpr) *s.BashPPCall {
 		out.Args = append(out.Args, c.word(a))
 		out.ArgExprs = append(out.ArgExprs, c.expr(a))
 	}
-	if out.ArgType != nil {
-		out.ArgExprs = nil
-	}
 	return out
 }
 func (c *converter) statements(st ast.Stmt) []*s.Stmt {
@@ -491,7 +493,7 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 		if call, ok := x.X.(*ast.CallExpr); ok {
 			cmd = c.call(call)
 		} else if recv, ok := x.X.(*ast.UnaryExpr); ok && recv.Op == token.ARROW {
-			cmd = &s.BashPPReceive{Arrow: c.pos(recv.OpPos), Chan: c.word(recv.X)}
+			cmd = &s.BashPPReceive{Arrow: c.pos(recv.OpPos), Chan: c.word(recv.X), ChanExpr: c.expr(recv.X)}
 		} else {
 			c.fail(x, "expression statement")
 		}
@@ -545,7 +547,7 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 					}
 				case *ast.UnaryExpr:
 					if rhs.Op == token.ARROW {
-						out.Recv = &s.BashPPReceive{Arrow: c.pos(rhs.OpPos), Chan: c.word(rhs.X)}
+						out.Recv = &s.BashPPReceive{Arrow: c.pos(rhs.OpPos), Chan: c.word(rhs.X), ChanExpr: c.expr(rhs.X)}
 						out.Rhs = nil
 					} else {
 						out.Expr = c.expr(rhs)
@@ -612,11 +614,12 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 		out := &s.BashPPIf{Site: s.StartGoIf, If: c.pos(x.If), Cond: c.expr(x.Cond), Then: c.block(x.Body)}
 		if x.Init != nil {
 			init := c.one(x.Init)
-			var ok bool
-			out.Init, ok = init.(*s.BashPPShortDecl)
-			if !ok {
-				c.fail(x.Init, "if initializer")
+			if decl, ok := init.(*s.BashPPShortDecl); ok {
+				out.Init = decl
+			} else {
+				out.InitStmt = init
 			}
+			out.Semicolon = c.headerToken(x.If, x.Body.Lbrace, token.SEMICOLON, 0)
 		}
 		if x.Else != nil {
 			out.Else = c.one(x.Else)
@@ -647,7 +650,7 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 	case *ast.GoStmt:
 		cmd = &s.BashPPGo{Kw: c.lit(x.Go, "go"), Call: c.call(x.Call)}
 	case *ast.SendStmt:
-		cmd = &s.BashPPSend{Chan: c.word(x.Chan), Arrow: c.pos(x.Arrow), Value: c.word(x.Value)}
+		cmd = &s.BashPPSend{Chan: c.word(x.Chan), Arrow: c.pos(x.Arrow), Value: c.word(x.Value), ValueExpr: c.expr(x.Value), ChanExpr: c.expr(x.Chan)}
 	case *ast.SelectStmt:
 		out := &s.BashPPSelect{Select: c.pos(x.Select), Lbrace: c.pos(x.Body.Lbrace), Rbrace: c.pos(x.Body.Rbrace)}
 		for _, st := range x.Body.List {

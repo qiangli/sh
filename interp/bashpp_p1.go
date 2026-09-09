@@ -732,8 +732,27 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 		r.goSourceParallelDecl(d)
 		return
 	}
+	if r.goSourceMapCommaDecl(d) {
+		return
+	}
 	if r.bashPPComplexShortDecl(d) {
 		return
+	}
+	if r.bashPPGoSource && len(d.Lhs) == 1 {
+		if method, ok := d.Expr.(*syntax.BashPPSelectorExpr); ok && method.MethodValue && !r.bashPPNativeExpr(method.X) {
+			cell, err := r.goSourceLocalMethodValue(method)
+			if err != nil {
+				if !r.bashPPPanicking() {
+					r.exit.fatal(err)
+				}
+				return
+			}
+			r.bashPPDeclareName(d.Lhs[0].Value, cell.vr)
+			if target := r.bashPPScope.lookup(d.Lhs[0].Value); target != nil {
+				*target = *cell
+			}
+			return
+		}
 	}
 	// A named function value uses the same callable registry as a closure or
 	// method value, retaining its declaration (including the agentic marker).
@@ -809,6 +828,26 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 		}
 		if r.bashPPBindPointerExpr(d.Lhs[0].Value, d.Expr) {
 			return
+		}
+		// `bs := []byte(s)`: a conversion whose target is a collection binds the
+		// slice it produces rather than a scalar spelling of it; see
+		// bashPPConvertCollectionCell in bashpp_collection_convert.go. Scalar
+		// conversions report false and stay on the path below.
+		if conv, ok := d.Expr.(*syntax.BashPPConvertExpr); ok && len(d.Lhs) == 1 {
+			cell, handled, err := r.bashPPConvertCollectionCell(conv)
+			if err != nil {
+				r.errf("%s%v\n", r.bashErrPrefix(conv.Pos()), err)
+				r.exit = exitStatus{code: 2}
+				return
+			}
+			if handled {
+				name := d.Lhs[0].Value
+				r.bashPPDeclareName(name, cell.vr)
+				target := r.bashPPScope.lookup(name)
+				*target = *cell
+				target.object = &bashPPObjectIdentity{owner: name, collection: cell.valueMeta}
+				return
+			}
 		}
 		if lit, ok := d.Expr.(*syntax.BashPPCompositeLit); ok {
 			if len(d.Lhs) != 1 {
@@ -1701,7 +1740,7 @@ func (r *Runner) bashPPCall(ctx context.Context, c *syntax.BashPPCall) {
 		return
 	}
 	if r.bashPPBridgeHandles(c) {
-		if _, err := r.bashPPBridgeCall(ctx, c); err != nil {
+		if _, err := r.bashPPBridgeCall(ctx, c); err != nil && !r.bashPPPanicking() {
 			r.exit.fatal(err)
 		}
 		return
@@ -1839,9 +1878,13 @@ func (r *Runner) bashPPIf(ctx context.Context, i *syntax.BashPPIf) {
 	leave := r.bashPPPushScope()
 	defer leave()
 	r.exit.clear()
-	if i.Init != nil {
-		r.bashPPShortDecl(ctx, i.Init)
-		if !r.exit.ok() {
+	if i.InitStmt != nil || i.Init != nil {
+		if i.InitStmt != nil {
+			r.cmd(ctx, i.InitStmt)
+		} else {
+			r.bashPPShortDecl(ctx, i.Init)
+		}
+		if !r.exit.ok() || r.bashPPPanicking() {
 			return
 		}
 	}

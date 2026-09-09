@@ -35,15 +35,21 @@ import (
 var bashPPNativeWorker string
 
 type bashPPBridgeValue struct {
-	Interface string                       `json:"interface,omitempty"`
-	Session   string                       `json:"session,omitempty"`
-	Kind      string                       `json:"kind"`
-	Type      string                       `json:"type,omitempty"`
-	Text      string                       `json:"text,omitempty"`
-	Handle    uint64                       `json:"handle,omitempty"`
-	Elements  []bashPPBridgeValue          `json:"elements,omitempty"`
-	Fields    map[string]bashPPBridgeValue `json:"fields,omitempty"`
-	Entries   []bashPPBridgeEntry          `json:"entries,omitempty"`
+	// Callable is derived by the interpreter from authenticated native type or
+	// import metadata; the dependency worker cannot set callback policy itself.
+	Callable   string                       `json:"-"`
+	NativeType string                       `json:"native_type,omitempty"`
+	Callbacks  bool                         `json:"callbacks,omitempty"`
+	Origin     uint64                       `json:"origin,omitempty"`
+	Interface  string                       `json:"interface,omitempty"`
+	Session    string                       `json:"session,omitempty"`
+	Kind       string                       `json:"kind"`
+	Type       string                       `json:"type,omitempty"`
+	Text       string                       `json:"text,omitempty"`
+	Handle     uint64                       `json:"handle,omitempty"`
+	Elements   []bashPPBridgeValue          `json:"elements,omitempty"`
+	Fields     map[string]bashPPBridgeValue `json:"fields,omitempty"`
+	Entries    []bashPPBridgeEntry          `json:"entries,omitempty"`
 }
 type bashPPBridgeEntry struct {
 	Key   bashPPBridgeValue `json:"key"`
@@ -56,26 +62,44 @@ type bashPPBridgeRequest struct {
 	Receiver *bashPPBridgeValue  `json:"receiver,omitempty"`
 	Args     []bashPPBridgeValue `json:"args,omitempty"`
 	Spread   bool                `json:"spread,omitempty"`
-}
-type bashPPBridgeResponse struct {
-	ID     uint64              `json:"id"`
+	// Values and Error answer a callback the dependency raised; they are set
+	// only when Op is "callback-reply". Sprint #118 Story #54 (c3a60493cde9).
 	Values []bashPPBridgeValue `json:"values,omitempty"`
 	Error  string              `json:"error,omitempty"`
 }
+type bashPPBridgeResponse struct {
+	Panic *bashPPBridgeValue `json:"panic,omitempty"`
+	ID    uint64             `json:"id"`
+	// Op, Selector and Receiver are set only when the dependency is asking the
+	// interpreter to run an original method body it must not compile itself.
+	Op       string              `json:"op,omitempty"`
+	Selector string              `json:"selector,omitempty"`
+	Receiver *bashPPBridgeValue  `json:"receiver,omitempty"`
+	Values   []bashPPBridgeValue `json:"values,omitempty"`
+	Error    string              `json:"error,omitempty"`
+}
 type bashPPNativeSession struct {
-	start     sync.Mutex
-	write     sync.Mutex
-	mu        sync.Mutex
-	next      atomic.Uint64
-	conn      net.Conn
-	cmd       *exec.Cmd
-	pending   map[uint64]chan bashPPBridgeResponse
-	done      chan struct{}
-	waitErr   error
-	closeOnce sync.Once
-	cleanup   func()
-	imports   string
-	id        string
+	functions       map[uint64]*bashPPFunc
+	functionNext    uint64
+	callbackGate    chan struct{}
+	activeCallbacks chan bashPPBridgeResponse
+	callbackOwner   *Runner
+	origins         map[uint64]*bashPPPointer
+	originNext      uint64
+	start           sync.Mutex
+	write           sync.Mutex
+	mu              sync.Mutex
+	next            atomic.Uint64
+	conn            net.Conn
+	cmd             *exec.Cmd
+	pending         map[uint64]chan bashPPBridgeResponse
+	done            chan struct{}
+	waitErr         error
+	closeOnce       sync.Once
+	cleanup         func()
+	imports         string
+	locals          string
+	id              string
 }
 
 func (r *Runner) closeGoSourceBridge() {
@@ -115,6 +139,9 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 	if s.conn != nil {
 		if s.imports != bridgeImportIdentity(req.Imports) {
 			return errors.New("gosource: imports changed after native dependency initialization")
+		}
+		if s.locals != bashPPLocalTypeIdentity(req.LocalTypes) {
+			return errors.New("gosource: local types changed after native dependency initialization")
 		}
 		return nil
 	}
@@ -205,11 +232,29 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 	s.conn = conn
 	s.mu.Unlock()
 	s.imports = bridgeImportIdentity(req.Imports)
+	s.locals = bashPPLocalTypeIdentity(req.LocalTypes)
 	go func() {
 		for {
 			var reply bashPPBridgeResponse
 			if err := decoder.Decode(&reply); err != nil {
 				return
+			}
+			if reply.Op == "callback" {
+				// The waiting request executes its own callback; this reader
+				// remains available for nested dependency replies.
+				s.mu.Lock()
+				callbacks := s.activeCallbacks
+				s.mu.Unlock()
+				if callbacks != nil {
+					select {
+					case callbacks <- reply:
+					case <-s.done:
+						return
+					}
+				} else {
+					s.serveCallback(ctx, nil, reply)
+				}
+				continue
 			}
 			s.mu.Lock()
 			wait := s.pending[reply.ID]
@@ -225,12 +270,20 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if err := validateLocalTransport(req, q); err != nil {
+		return nil, err
+	}
+	release, callbacks, err := s.enterCallbacks(ctx, req, q)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	if err := s.begin(ctx, req); err != nil {
 		return nil, err
 	}
 	var check func(bashPPBridgeValue) error
 	check = func(v bashPPBridgeValue) error {
-		if v.Kind == "handle" && v.Session != s.id {
+		if (v.Kind == "handle" || v.Kind == "callback" || v.Origin != 0) && v.Session != s.id {
 			return errors.New("gosource: native handle belongs to another dependency session")
 		}
 		for _, e := range v.Elements {
@@ -240,6 +293,14 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 		}
 		for _, e := range v.Fields {
 			if err := check(e); err != nil {
+				return err
+			}
+		}
+		for _, e := range v.Entries {
+			if err := check(e.Key); err != nil {
+				return err
+			}
+			if err := check(e.Value); err != nil {
 				return err
 			}
 		}
@@ -262,39 +323,57 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 	s.mu.Unlock()
 	defer func() { s.mu.Lock(); delete(s.pending, q.ID); s.mu.Unlock() }()
 	s.write.Lock()
-	err := json.NewEncoder(s.conn).Encode(q)
+	err = json.NewEncoder(s.conn).Encode(q)
 	s.write.Unlock()
 	if err != nil {
 		return nil, err
 	}
-	select {
-	case reply := <-wait:
-		if reply.Error != "" {
-			return nil, errors.New(reply.Error)
-		}
-		for i := range reply.Values {
-			if reply.Values[i].Kind == "handle" {
-				reply.Values[i].Session = s.id
+	for {
+		select {
+		case callback := <-callbacks:
+			s.serveCallback(ctx, req.CallbackOwner, callback)
+			if owner := req.CallbackOwner; owner != nil {
+				if owner.exit.err != nil {
+					return nil, owner.exit.err
+				}
+				if owner.exit.exiting {
+					return nil, &bashPPNativeExit{status: int(owner.exit.code)}
+				}
 			}
+		case reply := <-wait:
+			if reply.Panic != nil {
+				return nil, &bashPPCallbackPanic{value: reply.Panic.Text}
+			}
+			if reply.Error != "" {
+				return nil, errors.New(reply.Error)
+			}
+			for i := range reply.Values {
+				if reply.Values[i].Kind == "handle" {
+					reply.Values[i].Session = s.id
+					if callbacks != nil && !synchronousFunctionCallback(req, q) {
+						reply.Values[i].Callbacks = true
+					}
+				}
+			}
+			return reply.Values, nil
+		case <-ctx.Done():
+			s.close()
+			return nil, ctx.Err()
+		case <-s.done:
+			s.mu.Lock()
+			err := s.waitErr
+			s.mu.Unlock()
+			if err == nil {
+				// A clean exit is the original program terminating itself, for
+				// example os.Exit(0) or a successful syscall.Exec replacement.
+				return nil, &bashPPNativeExit{}
+			}
+			var exit *exec.ExitError
+			if errors.As(err, &exit) && exit.ExitCode() >= 0 {
+				return nil, &bashPPNativeExit{status: exit.ExitCode(), err: err}
+			}
+			return nil, fmt.Errorf("gosource: dependency process exited: %w", err)
 		}
-		return reply.Values, nil
-	case <-ctx.Done():
-		s.close()
-		return nil, ctx.Err()
-	case <-s.done:
-		s.mu.Lock()
-		err := s.waitErr
-		s.mu.Unlock()
-		if err == nil {
-			// A clean exit is the original program terminating itself, for
-			// example os.Exit(0) or a successful syscall.Exec replacement.
-			return nil, &bashPPNativeExit{}
-		}
-		var exit *exec.ExitError
-		if errors.As(err, &exit) && exit.ExitCode() >= 0 {
-			return nil, &bashPPNativeExit{status: exit.ExitCode(), err: err}
-		}
-		return nil, fmt.Errorf("gosource: dependency process exited: %w", err)
 	}
 }
 func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, error) {
@@ -425,9 +504,26 @@ func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, err
 			imports.WriteString(strings.Replace(text, alias+" ", "_ ", 1))
 		}
 	}
+	// Original locally declared types become real declarations here, so the
+	// dependency sees the original field names, field types and defined type
+	// name. Only the declaration crosses over: a mirrored String/Error body is
+	// a fixed callback into the interpreter, never compiled original code.
+	var locals strings.Builder
+	for _, local := range req.LocalTypes {
+		locals.WriteString(bashPPLocalTypeGo(local))
+		// Both spellings resolve: the original program's own name, and the
+		// package-qualified identity Go's %T prints for it.
+		fmt.Fprintf(&typeEntries, "%q: reflect.TypeFor[%s](),\n%q: reflect.TypeFor[%s](),\n", local.Name, local.Name, "main."+local.Name, local.Name)
+	}
+	codecs, err := bashPPLocalCodecsGo(req.LocalTypes)
+	if err != nil {
+		return "", err
+	}
+	locals.WriteString(codecs)
 	source := strings.Replace(bashPPNativeWorker, "//IMPORTS", imports.String(), 1)
 	source = strings.Replace(source, "//SYMBOLS", symbols.String(), 1)
 	source = strings.Replace(source, "//TYPES", typeEntries.String(), 1)
+	source = strings.Replace(source, "//LOCALTYPES", locals.String(), 1)
 	return source, nil
 }
 func bashPPBridgeLiteral(text string) (bashPPBridgeValue, error) {

@@ -211,6 +211,7 @@ func Walk(node Node, f func(Node) bool) {
 		walkList(node.Init, f)
 		walkNilable(node.InitExpr, f)
 	case *BashPPIf:
+		walkNilable(node.InitStmt, f)
 		walkNilable(node.Init, f)
 		walkNilable(node.Cond, f)
 		walkNilable(node.Then, f)
@@ -366,7 +367,9 @@ func Walk(node Node, f func(Node) bool) {
 		walkList(node.ArgNames, f)
 		walkNilable(node.ArgType, f)
 		if node.ArgExprs != nil {
-			walkList(node.ArgExprs, f)
+			for _, arg := range node.ArgExprs {
+				walkNilable(arg, f)
+			}
 		} else {
 			walkList(node.Args, f)
 		}
@@ -460,10 +463,22 @@ func Walk(node Node, f func(Node) bool) {
 		walkNilable(node.ChanType, f)
 		walkNilable(node.Capacity, f)
 	case *BashPPSend:
-		walkNilable(node.Chan, f)
-		walkNilable(node.Value, f)
+		if node.ChanExpr != nil {
+			Walk(node.ChanExpr, f)
+		} else {
+			walkNilable(node.Chan, f)
+		}
+		if node.ValueExpr != nil {
+			Walk(node.ValueExpr, f)
+		} else {
+			walkNilable(node.Value, f)
+		}
 	case *BashPPReceive:
-		walkNilable(node.Chan, f)
+		if node.ChanExpr != nil {
+			Walk(node.ChanExpr, f)
+		} else {
+			walkNilable(node.Chan, f)
+		}
 	case *BashPPClose:
 		walkNilable(node.Kw, f)
 		walkNilable(node.Chan, f)

@@ -122,7 +122,9 @@ func encodeValue(val reflect.Value) (reflect.Value, string) {
 		for i := range n {
 			elem := val.Index(i)
 			encElem, _ := encodeValue(elem)
-			enc.Index(i).Set(encElem)
+			if encElem.IsValid() {
+				enc.Index(i).Set(encElem)
+			}
 		}
 		return enc, ""
 	case reflect.Bool:

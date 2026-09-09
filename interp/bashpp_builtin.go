@@ -209,7 +209,7 @@ func (r *Runner) bashPPBuiltinElement(arg bashPPBuiltinArg, expected syntax.Bash
 // full cell so structured identity and named type metadata survive `:=`.
 func (r *Runner) bashPPRunValueBuiltin(name string, c *syntax.BashPPCall) (*bashPPCell, bool) {
 	args := make([]bashPPBuiltinArg, len(c.Args))
-	for i, word := range c.Args {
+	for i := range c.Args {
 		if r.bashPPGoSource && (name == "print" || name == "println") && i < len(c.ArgExprs) && c.ArgExprs[i] != nil {
 			scalar, err := r.bashPPEvalScalarExpr(c.ArgExprs[i])
 			if err != nil {
@@ -222,7 +222,14 @@ func (r *Runner) bashPPRunValueBuiltin(name string, c *syntax.BashPPCall) (*bash
 			args[i] = bashPPBuiltinArg{value: bashPPBuiltinExactScalarValue(text, scalar), scalar: scalar, hasScalar: true, text: text}
 			continue
 		}
-		args[i] = r.bashPPBuiltinArg(word)
+		var err error
+		args[i], err = r.goSourceBuiltinArg(c, i)
+		if err != nil {
+			if err != errBashPPScalarInterrupted {
+				r.exit.fatal(err)
+			}
+			return nil, false
+		}
 	}
 	switch name {
 	case "len", "cap":
@@ -263,6 +270,12 @@ func (r *Runner) bashPPRunValueBuiltin(name string, c *syntax.BashPPCall) (*bash
 		if additional > 0 && len(seq)+additional <= oldCap && !r.bashPPBuiltinMutable(name, args[0]) {
 			return nil, false
 		}
+		// The appended elements are gathered first so that all three spellings
+		// grow the payload through one call, which is what reproduces Go's
+		// element-size-dependent capacity; see bashPPAppendSlice in
+		// bashpp_collection_growth.go.
+		var added []any
+		var addedMetas []*bashPPCollectionMeta
 		if c.Ellipsis.IsValid() {
 			if len(args) != 2 {
 				r.bashPPBuiltinArity(name, "a slice and one spread slice", len(args))
@@ -270,7 +283,7 @@ func (r *Runner) bashPPRunValueBuiltin(name string, c *syntax.BashPPCall) (*bash
 			}
 			if stringSpread {
 				for _, b := range []byte(args[1].value.(string)) {
-					seq, metas = append(seq, int(b)), append(metas, nil)
+					added, addedMetas = append(added, int(b)), append(addedMetas, nil)
 				}
 			} else {
 				otherShape, ok := r.bashPPBuiltinCollection(args[1], "slice")
@@ -279,8 +292,8 @@ func (r *Runner) bashPPRunValueBuiltin(name string, c *syntax.BashPPCall) (*bash
 					return nil, false
 				}
 				other, _ := args[1].value.([]any)
-				seq = append(seq, other...)
-				metas = append(metas, args[1].meta.sequence...)
+				added = append(added, other...)
+				addedMetas = append(addedMetas, args[1].meta.sequence...)
 			}
 		} else {
 			for _, arg := range args[1:] {
@@ -288,9 +301,10 @@ func (r *Runner) bashPPRunValueBuiltin(name string, c *syntax.BashPPCall) (*bash
 				if !ok {
 					return nil, false
 				}
-				seq, metas = append(seq, value), append(metas, meta)
+				added, addedMetas = append(added, value), append(addedMetas, meta)
 			}
 		}
+		seq, metas = r.bashPPAppendSlice(seq, metas, shape.Element, added, addedMetas)
 		meta := &bashPPCollectionMeta{kind: "slice", typ: args[0].meta.typ, sequence: metas}
 		identity := args[0].cell.object
 		if len(seq) > oldCap {
@@ -431,6 +445,10 @@ func (r *Runner) bashPPRunValueBuiltin(name string, c *syntax.BashPPCall) (*bash
 		for i := range value {
 			value[i], children[i] = r.bashPPZeroValue(shape.Element)
 		}
+		// Go's backing array is zeroed to its full capacity, so re-slicing past
+		// the length has to expose typed zeros; see bashPPZeroSpareCapacity in
+		// bashpp_collection_growth.go.
+		r.bashPPZeroSpareCapacity(value, children, shape.Element)
 		meta := &bashPPCollectionMeta{kind: "slice", typ: typ, sequence: children}
 		return &bashPPCell{vr: expand.NewObject(value), object: &bashPPObjectIdentity{collection: meta}, valueMeta: meta, declType: typ}, true
 
@@ -602,7 +620,11 @@ func (r *Runner) bashPPBuiltinLength(name string, c *syntax.BashPPCall, args []b
 		return nil, fmt.Errorf("BASHPP-EBUILTIN-TYPE: %s argument must be %s", name, map[bool]string{true: "an array or slice", false: "a string, array, slice, or map"}[name == "cap"])
 	}
 	if arg.meta.kind == "map" {
-		return bashPPBuiltinScalarCell(strconv.Itoa(len(arg.value.(map[string]any)))), nil
+		// A nil map is a map with no entries, so its payload is absent rather
+		// than an empty table. Reading it as a table crashed the interpreter on
+		// `len(m)` for `var m map[string]int`.
+		table, _ := arg.value.(map[string]any)
+		return bashPPBuiltinScalarCell(strconv.Itoa(len(table))), nil
 	}
 	seq, _ := arg.value.([]any)
 	size := len(seq)

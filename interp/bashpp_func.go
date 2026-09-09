@@ -44,11 +44,12 @@ import (
 // type with two spellings rather than two types with one duplicated invoker.
 // Exactly one of decl and lit is set.
 type bashPPFunc struct {
-	native   *bashPPBridgeValue
-	decl     *syntax.BashPPFuncDecl
-	lit      *syntax.BashPPFuncLit
-	scope    *bashPPScope
-	typeArgs map[string]syntax.BashPPTypeExpr
+	goSourceReceiver *goSourceMethodBinding
+	native           *bashPPBridgeValue
+	decl             *syntax.BashPPFuncDecl
+	lit              *syntax.BashPPFuncLit
+	scope            *bashPPScope
+	typeArgs         map[string]syntax.BashPPTypeExpr
 	// bound is the name a literal was bound to by `:=`, kept only so that a
 	// diagnostic can say which function the script means. It is not an
 	// identity: the same closure may be copied to other names, and a later
@@ -213,6 +214,7 @@ func (r *Runner) bashPPClosure(value string) (*bashPPFunc, bool) {
 // at the point `defer` ran, which is what gives Go's "arguments are evaluated
 // when the defer statement executes" rule.
 type bashPPDeferred struct {
+	native  func(context.Context) error
 	testing func()
 	agentic bool
 	call    *syntax.BashPPCall
@@ -420,7 +422,11 @@ func (r *Runner) bashPPMethodDecl(d *syntax.BashPPFuncDecl) {
 	}
 	var captured *bashPPScope
 	if r.bashPPScope != nil {
-		captured = r.bashPPScope.snapshot()
+		if r.bashPPGoSource {
+			captured = r.bashPPScope
+		} else {
+			captured = r.bashPPScope.snapshot()
+		}
 	}
 	methods[d.Name.Value] = &bashPPFunc{decl: d, scope: captured}
 }
@@ -435,6 +441,16 @@ func (r *Runner) bashPPMethodDecl(d *syntax.BashPPFuncDecl) {
 // literal bound to a name captures it at the point of the binding.
 func (r *Runner) bashPPLookupFunc(c *syntax.BashPPCall) (*bashPPFunc, bool) {
 	if r.bashPPGoSource && c.CalleeExpr != nil {
+		if method, ok := c.CalleeExpr.(*syntax.BashPPSelectorExpr); ok && method.MethodValue && !r.bashPPNativeExpr(method.X) {
+			fn, err := r.goSourceLocalMethod(method, len(c.Args) > 0)
+			if err != nil {
+				if !r.bashPPPanicking() {
+					r.exit.fatal(err)
+				}
+				return nil, false
+			}
+			return fn, true
+		}
 		cell, err := r.goSourceValueCell(c.CalleeExpr)
 		if err != nil {
 			r.exit.fatal(err)
@@ -994,6 +1010,15 @@ func (r *Runner) bashPPStructuredArgCell(w *syntax.Word, expr syntax.BashPPExpr)
 			return nil, err
 		}
 		return bashPPPointerCell(ptr), nil
+	case *syntax.BashPPConvertExpr:
+		// `f([]byte(s))`: a conversion whose result is a collection travels as
+		// the cell holding it; see bashPPConvertCollectionCell in
+		// bashpp_collection_convert.go. Scalar conversions report false.
+		cell, handled, err := r.bashPPConvertCollectionCell(x)
+		if !handled {
+			return nil, nil
+		}
+		return cell, err
 	case *syntax.BashPPCompositeLit:
 		if x.LitType == nil {
 			return nil, nil
@@ -1008,8 +1033,8 @@ func (r *Runner) bashPPStructuredArgCell(w *syntax.Word, expr syntax.BashPPExpr)
 		}
 		bashPPStoreCellValue(cell, value, meta)
 		return cell, nil
-	case *syntax.BashPPDerefExpr, *syntax.BashPPIndexExpr, *syntax.BashPPSelectorExpr:
-		// `f(*p)`, `f(xs[0])`, `f(v.Inner)`: a read that yields structured
+	case *syntax.BashPPDerefExpr, *syntax.BashPPIndexExpr, *syntax.BashPPSelectorExpr, *syntax.BashPPSliceExpr:
+		// `f(*p)`, `f(xs[0])`, `f(v.Inner)`, `f(xs[1:])`: a read that yields structured
 		// storage is passed as the value it is. A scalar read has no metadata
 		// and is left to the scalar evaluator, which also owns the diagnostic
 		// when the read itself fails.
@@ -1101,14 +1126,34 @@ func (r *Runner) bashPPGoSourceArgCell(w *syntax.Word, expr syntax.BashPPExpr) *
 // scalar evaluator, so `Abs(v)` on a struct and `Abs(x*2)` on a number both
 // reach the callee instead of the second form forcing the first to be refused
 // as "not a scalar".
-func (r *Runner) bashPPTypedCallArgs(call *syntax.BashPPCall, fn *bashPPFunc) ([]string, bool, error) {
+func (r *Runner) bashPPTypedCallArgs(call *syntax.BashPPCall, fn *bashPPFunc) (result []string, success bool, failure error) {
+	defer func() {
+		if success && !r.goSourceFinalizeReceiver(fn) {
+			result = nil
+			success = false
+			failure = errBashPPScalarInterrupted
+		}
+	}()
 	if len(call.ArgExprs) != len(call.Args) {
 		return nil, false, fmt.Errorf("BASHPP-EEXPR-CALL: inconsistent positioned scalar arguments")
 	}
 	args := make([]string, len(call.ArgExprs))
 	cells := make([]*bashPPCell, len(call.ArgExprs))
+	channels := make([]*bashPPChannel, len(call.ArgExprs))
 	interfaces := make([]*bashPPInterfaceValue, len(call.ArgExprs))
 	for i, expr := range call.ArgExprs {
+		if r.bashPPGoSource {
+			if cell, handled, err := r.goSourceChannelValueCell(expr); handled {
+				if err != nil {
+					return nil, false, err
+				}
+				if cell.channel != nil && cell.channelOwner != r.bashPPConcurrent {
+					return nil, false, fmt.Errorf("channel belongs to another task group")
+				}
+				channels[i], cells[i], args[i] = cell.channel, cell, cell.vr.String()
+				continue
+			}
+		}
 		structured, err := r.bashPPStructuredArgCell(call.Args[i], expr)
 		if err != nil {
 			return nil, false, err
@@ -1137,7 +1182,7 @@ func (r *Runner) bashPPTypedCallArgs(call *syntax.BashPPCall, fn *bashPPFunc) ([
 		cells[i], args[i] = cell, text
 	}
 	r.bashPPCallInterfaces = interfaces
-	bound, ok := r.bashPPBindCall(fn, args, nil, cells, nil, len(args))
+	bound, ok := r.bashPPBindCall(fn, args, channels, cells, nil, len(args))
 	return bound, ok, nil
 }
 
@@ -1317,7 +1362,13 @@ func (r *Runner) bashPPSpreadValues(w *syntax.Word) []string {
 // callee cannot accept. Go rejects `f(xs...)` when f is not variadic, and so
 // does this: silently passing the elements would make the two spellings mean
 // the same thing and hide the mistake.
-func (r *Runner) bashPPCallValues(c *syntax.BashPPCall, fn *bashPPFunc) ([]string, bool) {
+func (r *Runner) bashPPCallValues(c *syntax.BashPPCall, fn *bashPPFunc) (result []string, success bool) {
+	defer func() {
+		if success && !r.goSourceFinalizeReceiver(fn) {
+			result = nil
+			success = false
+		}
+	}()
 	r.bashPPCallCells = nil
 	r.bashPPCallChannels = nil
 	if required := bashppRequiredAfterDefault(fn.params()); required != "" {
@@ -1653,9 +1704,15 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 		}
 	}
 	resultNames := bashppResultNames(fn.results())
-	for _, name := range resultNames {
-		if name != "" {
-			_ = r.bashPPScope.declare(name, expand.Variable{Set: true, Kind: expand.String, Str: ""}, false)
+	if r.bashPPGoSource {
+		if !r.goSourceDeclareResults(ctx, fn.results()) {
+			return nil
+		}
+	} else {
+		for _, name := range resultNames {
+			if name != "" {
+				_ = r.bashPPScope.declare(name, expand.Variable{Set: true, Kind: expand.String, Str: ""}, false)
+			}
 		}
 	}
 
@@ -2005,7 +2062,9 @@ func (r *Runner) bashPPReturnStmt(ctx context.Context, ret *syntax.BashPPReturn)
 	if r.bashPPBridgeHandles(ret.Call) {
 		values, err := r.bashPPBridgeCall(ctx, ret.Call)
 		if err != nil {
-			r.exit.fatal(err)
+			if !r.bashPPPanicking() {
+				r.exit.fatal(err)
+			}
 			return
 		}
 		result := bashPPReturnState{active: true}
@@ -2090,6 +2149,15 @@ func (r *Runner) bashPPReturnStmt(ctx context.Context, ret *syntax.BashPPReturn)
 // bashPPReturnScalarExpr settles a single scalar result, retaining the value's
 // type so a defined type reaches the caller as itself.
 func (r *Runner) bashPPReturnScalarExpr(expr syntax.BashPPExpr) {
+	if cell, handled, err := r.goSourceChannelValueCell(expr); handled {
+		if err != nil {
+			r.bashPPGoSendError(expr, err)
+			return
+		}
+		r.bashPPReturn = bashPPReturnState{active: true, values: []string{cell.vr.String()}, cells: []*bashPPCell{cell}}
+		r.exit.returning = true
+		return
+	}
 	// A returned value need not be scalar: `return &V{…}`, `return *p` and
 	// `return v.Inner` all name storage the caller receives as a value, and
 	// the cell is the only thing that can carry it across the boundary.
@@ -2147,6 +2215,17 @@ func (r *Runner) bashPPDeferStmt(ctx context.Context, d *syntax.BashPPDefer) {
 			entry.testing = invoke
 			r.bashPPDeferStack = append(r.bashPPDeferStack, entry)
 		}
+		return
+	}
+	if invoke, handled, err := r.bashPPNativeCapture(ctx, d.Call); handled {
+		if err != nil {
+			if !r.bashPPPanicking() {
+				r.exit.fatal(err)
+			}
+			return
+		}
+		entry.native = invoke
+		r.bashPPDeferStack = append(r.bashPPDeferStack, entry)
 		return
 	}
 	if fn, ok := r.bashPPLookupFunc(d.Call); ok {
@@ -2212,6 +2291,10 @@ func (r *Runner) bashPPRunDefers(ctx context.Context, mark int) {
 		r.bashPPPanic.running = r.bashPPPanic.active
 		runDeferred := func() {
 			switch {
+			case d.native != nil:
+				if err := d.native(ctx); err != nil && !r.bashPPPanicking() {
+					r.exit.fatal(err)
+				}
 			case d.testing != nil:
 				d.testing()
 			case d.fn != nil:

@@ -31,6 +31,11 @@ func cloneBashPPTypeSet(src map[string]bool) map[string]bool {
 // arrays and structs deliberately do not.
 func (r *Runner) bashPPValidateTypeRepresentation(typ syntax.BashPPTypeExpr, active, direct map[string]bool) error {
 	switch x := typ.(type) {
+	case *syntax.BashPPChanType:
+		if r.bashPPGoSource {
+			return r.bashPPValidateTypeRepresentation(x.Element, active, make(map[string]bool))
+		}
+		return fmt.Errorf("BASHPP-ESTRUCT-FIELD-TYPE: unsupported field type %s", bashPPTypeText(typ))
 	case *syntax.BashPPTypeParamType:
 		return nil
 	case *syntax.BashPPUnionType, *syntax.BashPPApproxType:
@@ -461,11 +466,17 @@ func (r *Runner) bashPPEvalTypedValue(expr syntax.BashPPExpr, expected syntax.Ba
 			return value, copied, nil
 		}
 	}
-	value, _, err := r.bashPPEvalElement(expr, expected)
+	value, meta, err := r.bashPPEvalElement(expr, expected)
+	if r.bashPPGoSource {
+		return value, meta, err
+	}
 	return value, nil, err
 }
 
 func (r *Runner) bashPPCheckTypedValue(value any, meta *bashPPCollectionMeta, expected syntax.BashPPTypeExpr) error {
+	if _, native := value.(*bashPPBridgeValue); native && r.bashPPNativeType(expected) {
+		return r.goSourceCheckNativeElement(value, expected)
+	}
 	if iface, ok := r.bashPPInterfaceType(expected); ok {
 		if meta == nil || meta.interfaceValue == nil {
 			return fmt.Errorf("BASHPP-EASSIGN-MISMATCH: cannot use value as %s", bashPPTypeText(expected))
@@ -522,6 +533,9 @@ func bashPPCellMeta(cell *bashPPCell) *bashPPCollectionMeta {
 }
 
 func (r *Runner) bashPPReadExpr(expr syntax.BashPPExpr) (any, *bashPPCollectionMeta, error) {
+	if value, meta, handled, err := r.goSourceCollectionCallValue(expr); handled {
+		return value, meta, err
+	}
 	// An index or slice rooted in a dependency-owned value is read through its
 	// handle; see bashPPNativeRead in bashpp_native_access.go.
 	if value, meta, err, native := r.bashPPNativeRead(expr); native {
@@ -603,7 +617,11 @@ func (r *Runner) bashPPReadExpr(expr syntax.BashPPExpr) (any, *bashPPCollectionM
 				return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-KEY: %v", keyErr)
 			}
 			canonical := fmt.Sprint(key)
-			result, found := value.(map[string]any)[canonical]
+			mapping, valid := value.(map[string]any)
+			if !valid && value != nil {
+				return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-STORAGE: map payload has type %T", value)
+			}
+			result, found := mapping[canonical]
 			if !found {
 				zero, child := r.bashPPZeroValue(collection.Element)
 				return zero, child, nil
@@ -614,9 +632,15 @@ func (r *Runner) bashPPReadExpr(expr syntax.BashPPExpr) (any, *bashPPCollectionM
 		if indexErr != nil {
 			return nil, nil, indexErr
 		}
-		sequence := value.([]any)
+		sequence, valid := value.([]any)
+		if !valid && value != nil {
+			return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-STORAGE: sequence payload has type %T", value)
+		}
 		if i < 0 || i >= len(sequence) {
 			return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-BOUNDS: index %d out of bounds for length %d", i, len(sequence))
+		}
+		if i >= len(meta.sequence) {
+			return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-STORAGE: missing element metadata")
 		}
 		return sequence[i], meta.sequence[i], nil
 	case *syntax.BashPPSliceExpr:
@@ -648,6 +672,9 @@ func (r *Runner) bashPPReadExpr(expr syntax.BashPPExpr) (any, *bashPPCollectionM
 		if err != nil {
 			return nil, nil, err
 		}
+		if max > cap(meta.sequence) {
+			return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-STORAGE: missing slice capacity metadata")
+		}
 		var out []any
 		var childSeq []*bashPPCollectionMeta
 		if x.SecondColon.IsValid() {
@@ -659,6 +686,9 @@ func (r *Runner) bashPPReadExpr(expr syntax.BashPPExpr) (any, *bashPPCollectionM
 		}
 		childType := &syntax.BashPPCollectionType{Kind: "slice", Element: collection.Element}
 		child := &bashPPCollectionMeta{kind: "slice", typ: childType, sequence: childSeq}
+		if r.bashPPGoSource && sequence == nil {
+			return nil, child, nil
+		}
 		return out, child, nil
 	}
 	return nil, nil, fmt.Errorf("BASHPP-ESELECTOR-EXPR: unsupported structured expression")
@@ -806,6 +836,18 @@ func (r *Runner) bashPPStructuredAssign(target, rhs syntax.BashPPExpr) {
 			break
 		}
 		expected = collection.Element
+		var savedKey any
+		var savedIndex int
+		if r.bashPPGoSource {
+			if parentMeta.kind == "map" {
+				savedKey, _, err = r.bashPPEvalElement(x.Index, collection.Key)
+			} else {
+				savedIndex, err = r.bashPPCollectionIndex(x.Index)
+			}
+			if err != nil {
+				break
+			}
+		}
 		value, child, valueErr := r.bashPPEvalTypedValue(rhs, expected)
 		if valueErr != nil {
 			err = valueErr
@@ -816,23 +858,42 @@ func (r *Runner) bashPPStructuredAssign(target, rhs syntax.BashPPExpr) {
 				err = fmt.Errorf("BASHPP-ENIL-MAP: assignment to nil map")
 				break
 			}
-			key, _, keyErr := r.bashPPEvalElement(x.Index, collection.Key)
+			key, keyErr := savedKey, error(nil)
+			if !r.bashPPGoSource {
+				key, _, keyErr = r.bashPPEvalElement(x.Index, collection.Key)
+			}
 			if keyErr != nil {
 				err = keyErr
 				break
 			}
 			canonical := fmt.Sprint(key)
-			parent.(map[string]any)[canonical] = value
+			mapping, valid := parent.(map[string]any)
+			if !valid || mapping == nil {
+				err = fmt.Errorf("BASHPP-ENIL-MAP: assignment to nil map")
+				break
+			}
+			mapping[canonical] = value
 			parentMeta.mapping[canonical] = child
 		} else {
-			i, indexErr := r.bashPPCollectionIndex(x.Index)
+			i, indexErr := savedIndex, error(nil)
+			if !r.bashPPGoSource {
+				i, indexErr = r.bashPPCollectionIndex(x.Index)
+			}
 			if indexErr != nil {
 				err = indexErr
 				break
 			}
-			sequence := parent.([]any)
+			sequence, valid := parent.([]any)
+			if !valid && parent != nil {
+				err = fmt.Errorf("BASHPP-ECOLLECTION-STORAGE: invalid sequence payload")
+				break
+			}
 			if i < 0 || i >= len(sequence) {
 				err = fmt.Errorf("BASHPP-ECOLLECTION-BOUNDS: index %d out of bounds for length %d", i, len(sequence))
+				break
+			}
+			if i >= len(parentMeta.sequence) {
+				err = fmt.Errorf("BASHPP-ECOLLECTION-STORAGE: missing element metadata")
 				break
 			}
 			sequence[i], parentMeta.sequence[i] = value, child

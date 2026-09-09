@@ -11,11 +11,10 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 )
 
-// Go source hands a channel operand to the runtime as the original expression
-// text, because a Go region has no shell expansion to carry a value: `c <- sum`
-// arrives as the word "sum" and `<-ch` arrives as the word "<-ch". Classic
-// Bash++ keeps the established literal meaning of such a word, so every
-// evaluation added here is gated on the Go-source region and on nothing else.
+// Legacy receive operands still have compatibility words. GoSource sends use
+// the positioned ChanExpr/ValueExpr trees handled by gosource_send.go; no shell
+// expansion or reparsing of original Go expressions participates in that path.
+// Classic Bash++ retains its established literal word semantics.
 
 // bashPPGoRecvOperand answers the channel word of a receive spelled as a single
 // word, `<-ch`. It recognizes only the identifier form, which is the only
@@ -82,6 +81,8 @@ func (r *Runner) bashPPChanElemKind(base string) constant.Kind {
 		return constant.Bool
 	case base == "float32" || base == "float64":
 		return constant.Float
+	case r.bashPPGoSource && (base == "complex64" || base == "complex128"):
+		return constant.Complex
 	case bashPPIntegerType(base):
 		return constant.Int
 	}
@@ -112,22 +113,11 @@ func (r *Runner) bashPPGoReceiveScalar(x *syntax.BashPPUnaryExpr) (bashPPScalar,
 	if !r.bashPPGoSource || x == nil || x.Op == nil || x.Op.Value != "<-" {
 		return bashPPScalar{}, false, nil
 	}
-	ident, ok := x.X.(*syntax.BashPPIdent)
-	if !ok {
-		return bashPPScalar{}, false, nil
-	}
-	chanWord := &syntax.Word{Parts: []syntax.WordPart{&syntax.Lit{
-		Value: ident.Name.Value, ValuePos: ident.Pos(), ValueEnd: ident.End(),
-	}}}
-	elem := r.bashPPChanElem(chanWord)
-	before := r.exit.code
-	value, _ := r.bashPPReceive(r.ectx, &syntax.BashPPReceive{Arrow: x.Pos(), Chan: chanWord}, nil)
-	if r.exit.code != before {
-		// The receive already reported and staged its own status. The error
-		// keeps the caller from consuming a value the operation never produced.
+	cell, _ := r.bashPPReceiveCell(r.ectx, &syntax.BashPPReceive{Arrow: x.Pos(), ChanExpr: x.X}, nil)
+	if cell == nil {
 		return bashPPScalar{}, true, errBashPPScalarInterrupted
 	}
-	return r.bashPPScalarFromCell(r.bashPPChanValueCell(value, elem)), true, nil
+	return r.bashPPScalarFromCell(cell), true, nil
 }
 
 // bashPPGoReceiveWordValue performs a receive written as a bare word, which is
@@ -175,6 +165,8 @@ func (r *Runner) bashPPChanZeroText(elem string) string {
 		return "0"
 	case constant.Float:
 		return "0"
+	case constant.Complex:
+		return "(0+0i)"
 	case constant.Bool:
 		return "false"
 	}

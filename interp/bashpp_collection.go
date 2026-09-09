@@ -468,6 +468,19 @@ func (r *Runner) bashPPEvalConstIntExpr(expr goast.Expr) (value constant.Value, 
 }
 
 func (r *Runner) bashPPEvalElement(expr syntax.BashPPExpr, expected syntax.BashPPTypeExpr) (any, *bashPPCollectionMeta, error) {
+	if value, meta, handled, err := r.goSourceCollectionCallValue(expr); handled {
+		if err != nil {
+			return nil, nil, err
+		}
+		if err := r.bashPPCheckTypedValue(value, meta, expected); err != nil {
+			return nil, nil, err
+		}
+		if _, native := value.(*bashPPBridgeValue); native && r.bashPPNativeType(expected) {
+			meta = &bashPPCollectionMeta{kind: "native", typ: expected}
+		}
+		value, meta = bashPPCopyArrayValue(value, meta)
+		return value, meta, nil
+	}
 	if _, pointer := r.bashPPPointerType(expected); pointer {
 		return r.bashPPEvalTypedValue(expr, expected)
 	}

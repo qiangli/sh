@@ -44,6 +44,9 @@ func (r *Runner) bashPPCheckChannelArgs(fn *bashPPFunc, params []bashPPParam, ch
 		} else if required.Elem != nil {
 			element = required.Elem.Value
 		}
+		if r.bashPPGoSource && channel == nil && actual != nil && directionOK && bashPPTypeText(actual.Element) == element && cells[i].vr.Str == "" {
+			continue
+		}
 		if channel != nil && channel.elem == element && directionOK {
 			continue
 		}
@@ -61,6 +64,11 @@ func (r *Runner) bashPPCheckChannelResult(fn *bashPPFunc, required syntax.BashPP
 	typ, ok := required.(*syntax.BashPPChanType)
 	if !ok {
 		return true
+	}
+	if r.bashPPGoSource && source != nil && source.channel == nil && source.vr.Str == "" {
+		if actual, ok := source.declType.(*syntax.BashPPChanType); ok && bashPPTypeText(actual.Element) == bashPPTypeText(typ.Element) && (actual.Direction == "" || actual.Direction == typ.Direction) {
+			return true
+		}
 	}
 	if source != nil && source.channel != nil {
 		actual, _ := source.declType.(*syntax.BashPPChanType)

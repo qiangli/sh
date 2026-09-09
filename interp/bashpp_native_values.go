@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"go/constant"
 	"go/token"
+	"reflect"
 	"strconv"
 	"strings"
 
@@ -19,8 +20,8 @@ func (r *Runner) bashPPBridgeHandles(call *syntax.BashPPCall) bool {
 		return false
 	}
 	if call.CalleeExpr != nil {
-		_, ok := call.CalleeExpr.(*syntax.BashPPSelectorExpr)
-		return ok
+		selector, ok := call.CalleeExpr.(*syntax.BashPPSelectorExpr)
+		return ok && r.bashPPNativeExpr(selector.X)
 	}
 	if len(call.Fun) < 1 {
 		return false
@@ -29,16 +30,14 @@ func (r *Runner) bashPPBridgeHandles(call *syntax.BashPPCall) bool {
 		if _, ok := r.bashPPImports[call.Fun[0].Value]; ok {
 			return true
 		}
-		if r.bashPPScope != nil {
-			cell := r.bashPPScope.lookup(call.Fun[0].Value)
-			if cell != nil {
-				if _, ok := cell.vr.Obj.(*bashPPBridgeValue); ok {
-					return true
-				}
-			}
+		if r.bashPPNativeCellValue(call.Fun[0].Value) != nil {
+			return true
 		}
 	}
 	if len(call.Fun) == 1 {
+		if value := r.bashPPNativeCellValue(call.Fun[0].Value); value != nil && value.Kind == "handle" && strings.HasPrefix(value.Type, "func(") {
+			return true
+		}
 		for alias := range r.bashPPImports {
 			if strings.HasPrefix(alias, ".:") {
 				if _, ok := r.bashPPLookupFunc(call); !ok {
@@ -50,68 +49,75 @@ func (r *Runner) bashPPBridgeHandles(call *syntax.BashPPCall) bool {
 	return false
 }
 func (r *Runner) bashPPBridgeCall(ctx context.Context, call *syntax.BashPPCall) ([]bashPPBridgeValue, error) {
-	if !r.bashPPBridgeHandles(call) {
-		return nil, fmt.Errorf("gosource: call is not an imported dependency operation")
+	q, err := r.bashPPPrepareNativeCall(ctx, call)
+	if err != nil {
+		return nil, err
 	}
 	req, err := r.bashPPEvalRequest()
 	if err != nil {
 		return nil, err
 	}
+	return r.bashPPNativeRequest(ctx, req, q)
+}
+func (r *Runner) bashPPPrepareNativeCall(ctx context.Context, call *syntax.BashPPCall) (bashPPBridgeRequest, error) {
+	if !r.bashPPBridgeHandles(call) {
+		return bashPPBridgeRequest{}, fmt.Errorf("gosource: call is not an imported dependency operation")
+	}
 	q := bashPPBridgeRequest{Op: "call", Spread: call.Ellipsis.IsValid()}
 	if selector, ok := call.CalleeExpr.(*syntax.BashPPSelectorExpr); ok {
-		receiver, err := r.bashPPBridgeExpr(selector.X)
+		receiver, err := r.bashPPNativeReceiver(selector.X)
 		if err != nil {
-			return nil, err
+			return bashPPBridgeRequest{}, err
 		}
 		q.Receiver = &receiver
 		q.Selector = selector.Sel.Value
 	} else if len(call.Fun) >= 2 {
-		if _, ok := r.bashPPImports[call.Fun[0].Value]; ok {
-			parts := make([]string, len(call.Fun))
-			for i, p := range call.Fun {
-				parts[i] = p.Value
-			}
-			q.Selector = strings.Join(parts, ".")
+		if _, ok := r.bashPPImports[call.Fun[0].Value]; ok && len(call.Fun) == 2 {
+			q.Selector = call.Fun[0].Value + "." + call.Fun[1].Value
 		} else {
-			receiver, err := r.bashPPBridgeExpr(&syntax.BashPPIdent{Name: call.Fun[0]})
+			var receiverExpr syntax.BashPPExpr = &syntax.BashPPIdent{Name: call.Fun[0]}
+			for _, part := range call.Fun[1 : len(call.Fun)-1] {
+				receiverExpr = &syntax.BashPPSelectorExpr{X: receiverExpr, Sel: part}
+			}
+			receiver, err := r.bashPPNativeReceiver(receiverExpr)
 			if err != nil {
-				return nil, err
+				return bashPPBridgeRequest{}, err
 			}
 			q.Receiver = &receiver
-			q.Selector = call.Fun[1].Value
-			if len(call.Fun) != 2 {
-				return nil, fmt.Errorf("gosource: nested receiver selector is unsupported")
-			}
+			q.Selector = call.Fun[len(call.Fun)-1].Value
 		}
+	} else if value := r.bashPPNativeCellValue(call.Fun[0].Value); value != nil && value.Kind == "handle" && strings.HasPrefix(value.Type, "func(") {
+		copy := *value
+		q.Receiver = &copy
 	} else {
 		q.Selector = call.Fun[0].Value
 	}
 	if len(call.ArgExprs) != len(call.Args) {
-		return nil, fmt.Errorf("gosource: missing evaluated dependency arguments")
+		return bashPPBridgeRequest{}, fmt.Errorf("gosource: missing evaluated dependency arguments")
 	}
 	if len(call.ArgExprs) == 1 {
 		if inner, ok := call.ArgExprs[0].(*syntax.BashPPCall); ok {
 			if r.bashPPBridgeHandles(inner) {
 				values, err := r.bashPPBridgeCall(ctx, inner)
 				if err != nil {
-					return nil, err
+					return bashPPBridgeRequest{}, err
 				}
 				q.Args = append(q.Args, values...)
-				return r.bashPPNativeRequest(ctx, req, q)
+				return q, nil
 			}
 			if fn, ok := r.bashPPLookupFunc(inner); ok {
 				cells, err := r.goSourceCallResultCells(inner, fn)
 				if err != nil {
-					return nil, err
+					return bashPPBridgeRequest{}, err
 				}
 				for _, cell := range cells {
 					value, err := r.bashPPBridgeCell(cell)
 					if err != nil {
-						return nil, err
+						return bashPPBridgeRequest{}, err
 					}
 					q.Args = append(q.Args, value)
 				}
-				return r.bashPPNativeRequest(ctx, req, q)
+				return q, nil
 			}
 		}
 	}
@@ -120,13 +126,13 @@ func (r *Runner) bashPPBridgeCall(ctx context.Context, call *syntax.BashPPCall) 
 		if err != nil {
 			var positioned *goSourceError
 			if errors.As(err, &positioned) {
-				return nil, err
+				return bashPPBridgeRequest{}, err
 			}
-			return nil, &goSourceError{prefix: r.bashErrPrefix(expr.Pos()), err: err}
+			return bashPPBridgeRequest{}, &goSourceError{prefix: r.bashErrPrefix(expr.Pos()), err: err}
 		}
 		q.Args = append(q.Args, value)
 	}
-	return r.bashPPNativeRequest(ctx, req, q)
+	return q, nil
 }
 func (r *Runner) bashPPBridgeScalar(expr syntax.BashPPExpr) (bashPPScalar, bool, error) {
 	if !r.bashPPGoSource {
@@ -137,9 +143,7 @@ func (r *Runner) bashPPBridgeScalar(expr syntax.BashPPExpr) (bashPPScalar, bool,
 	case *syntax.BashPPCall:
 		handled = r.bashPPBridgeHandles(e)
 	case *syntax.BashPPSelectorExpr:
-		if id, ok := e.X.(*syntax.BashPPIdent); ok {
-			_, handled = r.bashPPImports[id.Name.Value]
-		}
+		handled = r.bashPPNativeExpr(e)
 	case *syntax.BashPPIndexExpr:
 		handled = r.bashPPNativeExpr(e.X)
 	case *syntax.BashPPSliceExpr:
@@ -207,7 +211,25 @@ func bridgeScalar(value bashPPScalar) (bashPPBridgeValue, error) {
 	return out, nil
 }
 func (r *Runner) bashPPBridgeExpr(expr syntax.BashPPExpr) (bashPPBridgeValue, error) {
+	switch expr.(type) {
+	case *syntax.BashPPFuncLit, *syntax.BashPPIdent:
+		if cell, handled, err := r.goSourceCallableCell(expr); handled {
+			if err != nil {
+				return bashPPBridgeValue{}, err
+			}
+			if fn, ok := r.bashPPClosure(cell.vr.Str); ok {
+				return r.bashPPBridgeFunction(fn)
+			}
+		}
+	}
 	switch x := expr.(type) {
+	case *syntax.BashPPUnaryExpr:
+		if cell, handled, err := r.goSourceChannelValueCell(x); handled {
+			if err != nil {
+				return bashPPBridgeValue{}, err
+			}
+			return r.bashPPBridgeCell(cell)
+		}
 	case *syntax.BashPPParenExpr:
 		return r.bashPPBridgeExpr(x.X)
 	case *syntax.BashPPIdent:
@@ -215,14 +237,26 @@ func (r *Runner) bashPPBridgeExpr(expr syntax.BashPPExpr) (bashPPBridgeValue, er
 			return bashPPBridgeValue{Kind: "nil"}, nil
 		}
 		if r.bashPPScope != nil {
-			if cell := r.bashPPScope.lookup(x.Name.Value); cell != nil && cell.vr.Kind == expand.Object {
-				if value, ok := cell.vr.Obj.(*bashPPBridgeValue); ok {
-					return *value, nil
+			if cell := r.bashPPScope.lookup(x.Name.Value); cell != nil {
+				switch {
+				case cell.pointer || cell.interfaceValue != nil:
+					return r.bashPPBridgeCell(cell)
+				case cell.vr.Kind == expand.Object:
+					if value, ok := cell.vr.Obj.(*bashPPBridgeValue); ok {
+						return *value, nil
+					}
+					return r.bashPPBridgeCollection(cell.vr.Obj, cell.valueMeta, cell.declType)
 				}
-				return r.bashPPBridgeCollection(cell.vr.Obj, cell.valueMeta, cell.declType)
 			}
 		}
 	case *syntax.BashPPCall:
+		if r.bashPPGoSource && len(x.Fun) == 1 && x.Fun[0].Value == "recover" && len(x.Args) == 0 && r.bashPPFuncs["recover"] == nil && (r.bashPPScope == nil || r.bashPPScope.lookup("recover") == nil) {
+			value, recovered := r.bashPPRecover()
+			if !recovered {
+				return bashPPBridgeValue{Kind: "nil"}, nil
+			}
+			return bashPPBridgeValue{Kind: "string", Type: "string", Text: value}, nil
+		}
 		if r.bashPPBridgeHandles(x) {
 			values, err := r.bashPPBridgeCall(r.ectx, x)
 			if err != nil {
@@ -236,13 +270,32 @@ func (r *Runner) bashPPBridgeExpr(expr syntax.BashPPExpr) (bashPPBridgeValue, er
 			}
 			return values[0], nil
 		}
+		if r.bashPPGoSource {
+			if fn, ok := r.bashPPLookupFunc(x); ok {
+				cells, err := r.goSourceCallResultCells(x, fn)
+				if err != nil {
+					return bashPPBridgeValue{}, err
+				}
+				if len(cells) != 1 {
+					return bashPPBridgeValue{}, fmt.Errorf("gosource: expression requires one local result, got %d", len(cells))
+				}
+				return r.bashPPBridgeCell(cells[0])
+			}
+			if r.exit.exiting || r.exit.fatalExit || r.exit.err != nil {
+				return bashPPBridgeValue{}, errBashPPScalarInterrupted
+			}
+		}
 	case *syntax.BashPPSelectorExpr:
 		if r.bashPPNativeExpr(x.X) {
-			base, err := r.bashPPBridgeExpr(x.X)
+			base, err := r.bashPPNativeReceiver(x.X)
 			if err != nil {
 				return bashPPBridgeValue{}, err
 			}
-			return r.bashPPNativeAccess(r.ectx, "field", base, x.Sel.Value)
+			value, err := r.bashPPNativeAccess(r.ectx, "member", base, x.Sel.Value)
+			if err == nil && value.Kind == "handle" && strings.HasPrefix(value.Type, "func(") && base.NativeType != "" {
+				value.Callable = base.NativeType + "." + x.Sel.Value
+			}
+			return value, err
 		}
 		if id, ok := x.X.(*syntax.BashPPIdent); ok {
 			if _, imported := r.bashPPImports[id.Name.Value]; imported {
@@ -257,7 +310,11 @@ func (r *Runner) bashPPBridgeExpr(expr syntax.BashPPExpr) (bashPPBridgeValue, er
 				if len(values) != 1 {
 					return bashPPBridgeValue{}, fmt.Errorf("gosource: native symbol returned no value")
 				}
-				return values[0], nil
+				value := values[0]
+				if value.Kind == "handle" && strings.HasPrefix(value.Type, "func(") {
+					value.Callable = r.bashPPImports[id.Name.Value] + "." + x.Sel.Value
+				}
+				return value, nil
 			}
 		}
 	case *syntax.BashPPIndexExpr:
@@ -268,10 +325,28 @@ func (r *Runner) bashPPBridgeExpr(expr syntax.BashPPExpr) (bashPPBridgeValue, er
 		if r.bashPPNativeExpr(x.X) {
 			return r.bashPPNativeSlice(x)
 		}
+	case *syntax.BashPPDerefExpr:
+		ptr, err := r.bashPPPointerExprValue(x.X)
+		if err != nil {
+			return bashPPBridgeValue{}, err
+		}
+		if ptr == nil {
+			return bashPPBridgeValue{}, fmt.Errorf("gosource: invalid memory address or nil pointer dereference")
+		}
+		value, meta, typ, err := ptr.read()
+		if err != nil {
+			return bashPPBridgeValue{}, err
+		}
+		return r.bashPPBridgeCollection(value, meta, typ)
 	case *syntax.BashPPAddressExpr:
 		if lit, ok := x.X.(*syntax.BashPPCompositeLit); ok && r.bashPPNativeType(lit.LitType) {
 			return r.bashPPNativeComposite(lit, true)
 		}
+		ptr, err := r.bashPPPointerExprValue(x)
+		if err != nil {
+			return bashPPBridgeValue{}, err
+		}
+		return r.bashPPBridgePointerValue(ptr)
 	case *syntax.BashPPCompositeLit:
 		if r.bashPPNativeType(x.LitType) {
 			return r.bashPPNativeComposite(x, false)
@@ -282,17 +357,145 @@ func (r *Runner) bashPPBridgeExpr(expr syntax.BashPPExpr) (bashPPBridgeValue, er
 		}
 		return r.bashPPBridgeCollection(value, meta, x.LitType)
 	}
+	// A predeclared value call — append(xs, 1), copy(dst, src), make(...) — is
+	// implemented over cells rather than as a callable, so the scalar evaluator
+	// cannot look it up; see bashPPValueBuiltinBridge in
+	// bashpp_collection_bridge.go. An unclaimed name keeps the scalar path.
+	if bridged, claimed, err := r.bashPPValueBuiltinBridge(expr); claimed {
+		return bridged, err
+	}
+	// An interpreter-owned structured read — board[i], xs[1:], v.Inner — has no
+	// scalar spelling and crosses as the collection it is; see
+	// bashPPStructuredBridgeRead in bashpp_collection_growth.go. Scalar reads
+	// report false and keep the scalar evaluator's own diagnostics below.
+	if value, handled, err := r.goSourceBridgeCollectionRead(expr); handled {
+		return value, err
+	}
+	if value, meta, ok := r.bashPPStructuredBridgeRead(expr); ok {
+		return r.bashPPBridgeCollection(value, meta, meta.typ)
+	}
 	scalar, err := r.bashPPEvalScalarExpr(expr)
 	if err != nil {
 		return bashPPBridgeValue{}, err
 	}
-	return bridgeScalar(scalar)
+	value, err := bridgeScalar(scalar)
+	if err != nil {
+		return value, err
+	}
+	return r.bashPPBridgeDefinedScalar(value)
 }
+
+// bashPPBridgeFloatText normalises one shell-held float, including the exact
+// rational spelling the interpreter uses for a non-representable constant.
+func bashPPBridgeFloatText(text string) (string, bool) {
+	number := constant.MakeFromLiteral(text, token.FLOAT, 0)
+	if number.Kind() == constant.Unknown {
+		numerator, denominator, ok := strings.Cut(text, "/")
+		if !ok {
+			return "", false
+		}
+		top := constant.MakeFromLiteral(numerator, token.FLOAT, 0)
+		bottom := constant.MakeFromLiteral(denominator, token.FLOAT, 0)
+		if top.Kind() == constant.Unknown || bottom.Kind() == constant.Unknown || constant.Sign(bottom) == 0 {
+			return "", false
+		}
+		number = constant.BinaryOp(top, token.QUO, bottom)
+	}
+	value, _ := constant.Float64Val(number)
+	return strconv.FormatFloat(value, 'g', -1, 64), true
+}
+
+// bashPPBridgeDefinedScalar re-reads a scalar the shell carries as text at the
+// underlying kind of the original defined type that names it, so a value of
+// `type Celsius float64` crosses the boundary as a float and keeps the
+// materialised Celsius identity rather than arriving as a string.
+func (r *Runner) bashPPBridgeDefinedScalar(value bashPPBridgeValue) (bashPPBridgeValue, error) {
+	if value.Kind != "string" || value.Type == "" {
+		return value, nil
+	}
+	if _, local := r.bashPPTypes[value.Type]; !local {
+		return value, nil
+	}
+	named := &syntax.BashPPNamedType{Name: &syntax.Lit{Value: value.Type}}
+	underlying := bashPPTypeText(r.bashPPUnderlyingType(named))
+	switch {
+	case underlying == "string":
+		return value, nil
+	case underlying == "bool":
+		if value.Text != "true" && value.Text != "false" {
+			return value, fmt.Errorf("gosource: %s value %q is not a bool", value.Type, value.Text)
+		}
+		value.Kind = "bool"
+	case underlying == "float32" || underlying == "float64":
+		// The shell may hold an exact non-integer constant in its rational
+		// form, which is the interpreter's own spelling and not a Go literal.
+		number, ok := bashPPBridgeFloatText(value.Text)
+		if !ok {
+			return value, fmt.Errorf("gosource: %s value %q is not a %s", value.Type, value.Text, underlying)
+		}
+		value.Kind, value.Text = "float", number
+	case bashPPIntegerType(underlying):
+		if _, err := strconv.ParseInt(value.Text, 10, 64); err != nil {
+			return value, fmt.Errorf("gosource: %s value %q is not an %s", value.Type, value.Text, underlying)
+		}
+		value.Kind = "int"
+		if strings.HasPrefix(underlying, "uint") || underlying == "byte" {
+			value.Kind = "uint"
+		}
+	}
+	return value, nil
+}
+
+// bashPPBridgePointerValue transports a pointer to an original value as the
+// pointee it addresses, so the dependency observes a real *T — Go's &{1 2}
+// rather than a struct. The identity resolves to the original interpreter
+// storage for method callbacks. General native out-parameters fail before the
+// dependency executes because native writes have no complete alias contract.
+func (r *Runner) bashPPBridgePointerValue(ptr *bashPPPointer) (bashPPBridgeValue, error) {
+	if ptr == nil {
+		return bashPPBridgeValue{Kind: "nil"}, nil
+	}
+	value, meta, typ, err := ptr.read()
+	if err != nil {
+		return bashPPBridgeValue{}, err
+	}
+	inner, err := r.bashPPBridgeCollection(value, meta, typ)
+	if err != nil {
+		return bashPPBridgeValue{}, err
+	}
+	req, err := r.bashPPEvalRequest()
+	if err != nil {
+		return bashPPBridgeValue{}, err
+	}
+	session := req.Bridge
+	session.mu.Lock()
+	if session.origins == nil {
+		session.origins = map[uint64]*bashPPPointer{}
+	}
+	var origin uint64
+	for id, existing := range session.origins {
+		if existing.target == ptr.target && reflect.DeepEqual(existing.path, ptr.path) {
+			origin = id
+			break
+		}
+	}
+	if origin == 0 {
+		session.originNext++
+		origin = session.originNext
+		session.origins[origin] = ptr
+	}
+	session.mu.Unlock()
+	return bashPPBridgeValue{Origin: origin, Session: session.id, Kind: "pointer", Type: "*" + inner.Type, Elements: []bashPPBridgeValue{inner}}, nil
+}
+
 func (r *Runner) bashPPBridgeCollection(value any, meta *bashPPCollectionMeta, typ syntax.BashPPTypeExpr) (bashPPBridgeValue, error) {
 	if meta != nil && meta.interfaceValue != nil {
 		cell := meta.interfaceValue.cell
 		if meta.interfaceValue.nilIface || cell == nil {
 			return bashPPBridgeValue{Kind: "nil"}, nil
+		}
+		if cell.pointer {
+			return r.bashPPBridgePointerValue(cell.pointerValue)
 		}
 		if cell.vr.Kind == expand.Object {
 			return r.bashPPBridgeCollection(cell.vr.Obj, cell.valueMeta, cell.declType)
@@ -304,6 +507,11 @@ func (r *Runner) bashPPBridgeCollection(value any, meta *bashPPCollectionMeta, t
 	}
 	result := bashPPBridgeValue{Type: bashPPBridgeTypeText(typ)}
 	switch value := value.(type) {
+	case *bashPPBridgeValue:
+		if value == nil || !r.bashPPGoSource {
+			return bashPPBridgeValue{}, fmt.Errorf("gosource: missing native field value")
+		}
+		return *value, nil
 	case []any:
 		result.Kind = "slice"
 		if meta != nil {
@@ -395,6 +603,14 @@ func (r *Runner) bashPPBridgeCollection(value any, meta *bashPPCollectionMeta, t
 	case float64:
 		result.Kind = "float"
 		result.Text = strconv.FormatFloat(value, 'g', -1, 64)
+	case nil:
+		// A nil slice or map keeps its declared type and zero state; see
+		// bashPPNilCollectionBridge in bashpp_collection_growth.go.
+		if nilValue, ok := r.bashPPNilCollectionBridge(meta, typ); ok {
+			return nilValue, nil
+		}
+		result.Kind = "nil"
+		return result, nil
 	default:
 		return result, fmt.Errorf("gosource: unsupported interpreter collection value %T", value)
 	}
@@ -414,7 +630,9 @@ func (r *Runner) bashPPBridgeShortDecl(ctx context.Context, d *syntax.BashPPShor
 		err = fmt.Errorf("assignment mismatch: %d variables but %d native results", len(d.Lhs), len(values))
 	}
 	if err != nil {
-		r.exit.fatal(err)
+		if !r.bashPPPanicking() {
+			r.exit.fatal(err)
+		}
 		return true
 	}
 	for i, lhs := range d.Lhs {
@@ -462,7 +680,11 @@ func bashPPBridgeTypeText(typ syntax.BashPPTypeExpr) string {
 			for i, name := range field.Names {
 				names[i] = name.Value
 			}
-			fields = append(fields, strings.Join(names, ",")+" "+bashPPBridgeTypeText(field.FieldTypeExpr))
+			text := strings.Join(names, ",") + " " + bashPPBridgeTypeText(field.FieldTypeExpr)
+			if field.Tag != nil {
+				text += " " + field.Tag.Value
+			}
+			fields = append(fields, text)
 		}
 		return "struct{" + strings.Join(fields, ";") + "}"
 	case *syntax.BashPPInterfaceType:
@@ -483,6 +705,11 @@ func bashPPBridgeTypeText(typ syntax.BashPPTypeExpr) string {
 }
 
 func (r *Runner) bashPPBridgeCell(cell *bashPPCell) (bashPPBridgeValue, error) {
+	if cell != nil {
+		if fn, ok := r.bashPPClosure(cell.vr.Str); ok {
+			return r.bashPPBridgeFunction(fn)
+		}
+	}
 	if cell == nil {
 		return bashPPBridgeValue{}, fmt.Errorf("gosource: missing result cell")
 	}
@@ -491,6 +718,13 @@ func (r *Runner) bashPPBridgeCell(cell *bashPPCell) (bashPPBridgeValue, error) {
 			return bashPPBridgeValue{Kind: "nil"}, nil
 		}
 		return r.bashPPBridgeCell(cell.interfaceValue.cell)
+	}
+	if cell.pointer {
+		value, err := r.bashPPBridgePointerValue(cell.pointerValue)
+		if value.Type == "" {
+			value.Type = bashPPTypeText(cell.declType)
+		}
+		return value, err
 	}
 	if cell.vr.Kind == expand.Object {
 		if value, ok := cell.vr.Obj.(*bashPPBridgeValue); ok {
