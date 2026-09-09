@@ -1778,7 +1778,7 @@ func (r *Runner) bashPPCall(ctx context.Context, c *syntax.BashPPCall) {
 		}
 		return
 	}
-	if c.CalleeExpr != nil {
+	if c.CalleeExpr != nil && !(r.bashPPGoSource && r.bashPPGoSourcePin != nil && r.bashPPGoSourcePin.call == c) {
 		r.exit.fatal(fmt.Errorf("%sgosource: computed call runtime is not implemented", r.bashErrPrefix(c.Pos())))
 		return
 	}

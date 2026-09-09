@@ -1,6 +1,6 @@
 # GoSource lexical capture identity across tasks
 
-Sprint: #118 · Story: #52 · Story-ID: d564bada90bb
+Sprint: #118 · Story: #54 · Story-ID: c3a60493cde9
 
 ## The problem
 
@@ -15,8 +15,9 @@ synchronized Go program printed `counter 0` where Go prints `counter 8`.
 
 ## The rule
 
-Identity is granted to exactly the cells a launched task's closure captures
-lexically, and to nothing else.
+The launched body and every original callable descriptor carried in its registry
+retain their own lexical free-cell identities. Function descriptors retain these
+references independently of the variable currently holding the function value.
 
 - **Only in GoSource mode.** `Runner.bashPPGoSourceTaskCapture` returns a nil
   set otherwise and every hook is a no-op on nil, so the classic Bash++
@@ -25,9 +26,12 @@ lexically, and to nothing else.
   `gosource_task_scope.go`. A parameter, a `:=`, a `var`, a range or select
   binding, or a nested closure's parameter is a *different* variable from an
   outer one that shares its spelling, and the outer cell is not shared.
-- **Only plain interpreted cells.** Native handles keep the reviewed
-  descriptor-copy rule in `bashpp_task.go`; channels keep their own identity
-  machinery. Neither is re-decided here.
+- **Interpreter-owned cells include local composites holding native fields.**
+  A local struct containing a native mutex and a counters map remains one
+  original variable. Copying the whole struct forks the protected map. Direct
+  native handle payloads keep the descriptor-copy rule in `bashpp_task.go`;
+  channels keep their existing machinery. Their variable-reassignment gap is
+  recorded below.
 
 ## Why not over-approximate
 
@@ -43,10 +47,18 @@ dropped from the capture set and its program kept printing the stale parent
 value.
 
 The walker therefore reports **exactness**. A construct it does not model sets
-`exact=false` and the capture set is discarded wholesale: the task falls back to
-the classic deep-copy snapshot. That direction loses Go's by-reference capture
-for one launch — a visible, testable wrong answer — rather than aliasing a cell
-the program never named, which is an invisible one.
+`exact=false` and the entire launch is refused with an unsupported-capture
+diagnostic. It never silently substitutes a Classic snapshot. This applies to
+all original descriptors carried in the registry, so an unsupported descriptor
+can conservatively refuse a launch even if that task would not invoke it.
+
+Each carried function is inspected through immutable syntax and lexical scope
+bindings. The analysis does not inspect a function variable's current payload
+or cache the first closure assigned to it. Such a cache becomes stale after a
+synchronized assignment, while an extra launch-time read can race with a legal
+assignment that the original body would read only after synchronization. Registry
+references also cover package functions and avoid executing computed callees.
+A lexical cell takes precedence over an import alias with the same name.
 
 ## Resolving the launched callee once
 
@@ -63,7 +75,8 @@ parent, before the snapshot:
 the same function, with the child's copy of everything the snapshot legitimately
 copied. `Runner.bashPPLookupFunc` consults the pin first, which is what prevents
 a second evaluation of a computed callee and prevents the child from re-reading
-a variable that may hold a different function by then.
+a variable that may hold a different function by then. Statement dispatch admits
+that exact GoSource pin before its general computed-call rejection.
 
 ## Deciding a cell once
 
@@ -139,3 +152,30 @@ Hooks into code owned elsewhere, kept to the minimum:
   program moves up into the three-mode table.
 - `gosource_task_capture_internal_test.go` — the cloner and task-walk hooks, the
   native-handle and channel exclusions, and the fail-closed contract.
+
+## Bounded review evidence and remaining gaps
+
+The unchanged upstream Go by Example `mutexes.go` is retained in
+`testdata/gosource-task-capture/mutexes.go.txt`, SHA-256
+`288acf44044d532f12ead0d173a521d7a67f272f9d4ce611c90dcdcafe0221f7`.
+It executes all original 30,000 increments and prints `map[a:20000 b:10000]` in
+native Go, the Runner, and a real source-free lowered artifact. The race gate
+also exercises synchronized function reassignment before and after task launch,
+concurrent function-cell access under a mutex, package-function global access,
+local import-alias shadowing, and a computed launch callee evaluated once.
+Existing precision, Classic snapshot, native descriptor, stale-session and Reset
+controls remain running and passed in the review.
+
+This is not full Go variable-identity acceptance. Strict private three-mode
+probes retain two concrete failures: assigning a captured channel variable after
+launch leaves the child with the old channel (native/lowered length 1 versus
+Runner 0), and assigning a captured `*big.Int` variable leaves the old descriptor
+(native/lowered value 2 versus Runner 1). Object identity is distinct from the
+identity of the variable holding it. These existing direct-native/channel
+snapshot rules need a separate coherent repair; no comparison was relaxed.
+
+Original closure values placed directly in an interface or local struct are
+also rejected by existing value construction before launch. Closures created
+only after the task's registry snapshot are outside this bounded registry
+preservation change. Raw source-bound probes remain in the review evidence;
+these unsupported or mismatching cases are not counted as coverage.

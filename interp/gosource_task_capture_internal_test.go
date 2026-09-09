@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"mvdan.cc/sh/v3/expand"
+	"mvdan.cc/sh/v3/gosource"
 	"mvdan.cc/sh/v3/syntax"
 )
 
@@ -60,6 +61,130 @@ func TestGoSourceCaptureFreeVariablesOnly(t *testing.T) {
 	}
 	if shared[cells["i"]] {
 		t.Error("loop variable i is passed by value, so it must not be shared")
+	}
+}
+
+// TestGoSourceCaptureFlowsThroughCalledClosures is the combined
+// capture+WaitGroup regression (Sprint #118, Story #54) pinned at the
+// capture-set level.
+//
+// The launched body names only a closure; the closure's own body frees a
+// local struct holding a native mutex. Go grants identity through the call
+// chain — the goroutine reaches everything bump captures the moment it calls
+// through — so the struct cell must be shared, not deep copied: copying it to
+// protect the descriptor copied away the ORIGINAL counters map beside it,
+// and the three-way synchronized original printed map[a:0 b:0] where Go
+// prints map[a:20000 b:10000]. A DIRECT native handle freed by the same
+// closure keeps the bashpp_task.go descriptor-copy rule.
+func TestGoSourceCaptureFlowsThroughCalledClosures(t *testing.T) {
+	r, cells := captureRunnerFor("box", "gate")
+	cells["box"].vr = expand.Variable{Kind: expand.Object, Obj: map[string]any{
+		"mu":       &bashPPBridgeValue{Kind: "handle", Type: "sync.Mutex", Session: "s", Handle: 1},
+		"counters": map[string]any{"a": 0},
+	}}
+	cells["gate"].vr = expand.Variable{Kind: expand.Object,
+		Obj: &bashPPBridgeValue{Kind: "handle", Type: "sync.Mutex", Session: "s", Handle: 2}}
+	src := `package main
+import "sync"
+var box struct{counters map[string]int}
+var gate sync.Mutex
+func main() {
+	bump := func() {
+		gate.Lock()
+		box.counters["a"]++
+		gate.Unlock()
+	}
+	go func() {
+		bump()
+	}()
+}
+`
+	program, err := gosource.Parse(strings.NewReader(src), "capture.go", gosource.Options{RunMain: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var literals []*syntax.BashPPFuncLit
+	var goStmt *syntax.BashPPGo
+	syntax.Walk(program.File, func(node syntax.Node) bool {
+		switch node := node.(type) {
+		case *syntax.BashPPFuncLit:
+			literals = append(literals, node)
+		case *syntax.BashPPGo:
+			goStmt = node
+		}
+		return true
+	})
+	if len(literals) != 2 || goStmt == nil {
+		t.Fatalf("parsed %d literals and go=%v from %q", len(literals), goStmt != nil, src)
+	}
+	fn := &bashPPFunc{lit: literals[0], scope: r.bashPPScope, bound: "bump"}
+	r.bashPPClosures = append(r.bashPPClosures, fn)
+	handle := bashPPFuncHandlePrefix + "0"
+	cells["bump"] = scalarCell(handle)
+	r.bashPPScope.entries["bump"] = cells["bump"]
+
+	shared, _ := r.bashPPGoSourceTaskCapture(goStmt.Call)
+	if r.exit.err != nil {
+		t.Fatal(r.exit.err)
+	}
+	if !shared[cells["bump"]] {
+		t.Error("the closure the launched body calls must itself be captured by reference")
+	}
+	if !shared[cells["box"]] {
+		t.Error("a local struct holding a native field is one original Go variable; " +
+			"deep copying it copies away the original map/slice fields the program increments")
+	}
+	if shared[cells["gate"]] {
+		t.Error("a payload that IS a native handle must keep the bashpp_task.go descriptor-copy rule")
+	}
+}
+
+// TestGoSourceCaptureRefusesInexactCalledClosure keeps the exact-or-nothing
+// rule on the transitive surface: a closure the body calls through whose own
+// body contains an unmodelled construct refuses the launch rather than
+// silently deep-copying what Go shares.
+func TestGoSourceCaptureRefusesInexactCalledClosure(t *testing.T) {
+	r, cells := captureRunnerFor("box")
+	cells["box"].vr = expand.Variable{Kind: expand.Object, Obj: map[string]any{"n": 1}}
+	src := `func main() {
+	bump := func() {
+		echo hello
+		box.n++
+	}
+	go func() {
+		bump()
+	}()
+}
+`
+	file, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(src), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var literals []*syntax.BashPPFuncLit
+	var goStmt *syntax.BashPPGo
+	syntax.Walk(file, func(node syntax.Node) bool {
+		switch node := node.(type) {
+		case *syntax.BashPPFuncLit:
+			literals = append(literals, node)
+		case *syntax.BashPPGo:
+			goStmt = node
+		}
+		return true
+	})
+	if len(literals) != 2 || goStmt == nil {
+		t.Fatalf("parsed %d literals and go=%v from %q", len(literals), goStmt != nil, src)
+	}
+	fn := &bashPPFunc{lit: literals[0], scope: r.bashPPScope, bound: "bump"}
+	r.bashPPClosures = append(r.bashPPClosures, fn)
+	cells["bump"] = scalarCell(bashPPFuncHandlePrefix + "0")
+	r.bashPPScope.entries["bump"] = cells["bump"]
+
+	shared, _ := r.bashPPGoSourceTaskCapture(goStmt.Call)
+	if shared != nil {
+		t.Fatalf("an inexact called closure must refuse the launch, got %d shared cells", len(shared))
+	}
+	if r.exit.err == nil {
+		t.Fatal("the refusal must carry the unsupported-capture diagnostic")
 	}
 }
 

@@ -211,22 +211,27 @@ func mustParseFuncLit(t *testing.T, src string) *syntax.BashPPFuncLit {
 }
 
 // TestGoSourceSharableRefusesUnresolvableNamedType is the type-spelling
-// correction.
+// correction, as revised by the combined capture+WaitGroup regression
+// (Sprint #118, Story #54).
 //
-// The classifier answered "plain, decided" for EVERY unqualified named type,
-// which reads identity off the spelling rather than off the value. Two shapes
-// break under that rule, and neither is exotic:
-//
-//   - a locally declared named struct or alias that EMBEDS a dependency handle
-//     (`type counter struct { mu sync.Mutex }`) is spelled `counter`, is
-//     unqualified, and is in no import map;
-//   - an interface spelling — `any`, `error` — describes nothing about the
-//     value it dynamically holds, and [Runner.bashPPBindNativeValue] gives a
-//     native interface binding exactly such a declType.
-//
-// In both cases granting identity hands a native handle across tasks behind
-// bashpp_task.go's descriptor-copy rule. An unresolvable name must report
+// The spelling half stands unchanged: the classifier answered "plain,
+// decided" for EVERY unqualified named type, which reads identity off the
+// spelling rather than off the value. An unresolvable name must report
 // UNDECIDED so the total, fail-closed payload walk answers instead.
+//
+// The payload half was corrected. The original revision made the payload walk
+// copy any composite that held a native field descriptor, to keep
+// bashpp_task.go's descriptor-copy rule the sole authority on native
+// identity. That protected the one thing which needed no protection — the
+// descriptor, immutable once installed — while copying away the ORIGINAL
+// mutable map/slice fields beside it: a Container{mu sync.Mutex; counters
+// map[string]int} captured through a closure was deep copied per task, so
+// three correctly synchronized goroutines printed the parent's untouched
+// map[a:0 b:0] where Go prints map[a:20000 b:10000]. A local struct is ONE
+// original Go variable; sharing it keeps the field references and names the
+// same session objects from either side. So a composite payload — handle
+// fields included — is now shared, while a payload that IS a native handle
+// keeps the descriptor-copy rule, and unmodelled shapes still fail closed.
 func TestGoSourceSharableRefusesUnresolvableNamedType(t *testing.T) {
 	named := func(name string) syntax.BashPPTypeExpr {
 		return &syntax.BashPPNamedType{Name: &syntax.Lit{Value: name}}
@@ -235,6 +240,10 @@ func TestGoSourceSharableRefusesUnresolvableNamedType(t *testing.T) {
 		return expand.Variable{Kind: expand.Object, Obj: map[string]any{
 			"mu": &bashPPBridgeValue{Kind: "handle", Type: "sync.Mutex"},
 		}}
+	}
+	direct := func() expand.Variable {
+		return expand.Variable{Kind: expand.Object,
+			Obj: &bashPPBridgeValue{Kind: "handle", Type: "sync.Mutex", Session: "s", Handle: 1}}
 	}
 	plain := func() expand.Variable {
 		return expand.Variable{Kind: expand.Object, Obj: map[string]any{"n": 1}}
@@ -245,11 +254,18 @@ func TestGoSourceSharableRefusesUnresolvableNamedType(t *testing.T) {
 		payload func() expand.Variable
 		want    bool
 	}{
-		{"local struct embedding a handle", named("counter"), native, false},
-		{"interface spelling holding a handle", named("any"), native, false},
-		{"error spelling holding a handle", named("error"), native, false},
+		// Corrected: a local struct embedding a handle is one original Go
+		// variable and is shared WHOLE, so its original map/slice fields keep
+		// their reference identity across the task boundary.
+		{"local struct embedding a handle", named("counter"), native, true},
+		{"interface spelling holding a composite", named("any"), native, true},
+		{"error spelling holding a composite", named("error"), native, true},
 		{"slice of local structs embedding handles",
-			&syntax.BashPPCollectionType{Kind: "slice", Element: named("counter")}, native, false},
+			&syntax.BashPPCollectionType{Kind: "slice", Element: named("counter")}, native, true},
+		// The spelling still decides nothing by itself: a payload that IS a
+		// native handle keeps bashpp_task.go's descriptor-copy rule.
+		{"interface spelling holding a direct handle", named("any"), direct, false},
+		{"error spelling holding a direct handle", named("error"), direct, false},
 		// No regression: an unresolvable name whose payload really is plain is
 		// still shared, because the payload walk — not the spelling — decides.
 		{"local struct with no handle", named("point"), plain, true},
@@ -281,9 +297,11 @@ func TestGoSourceSharableClassificationIsImmutableAndInherited(t *testing.T) {
 	}
 	// Mutate the payload the way a running task would. The memoized answer must
 	// not change: re-inspecting here is the data race the memo exists to avoid.
-	cell.vr = expand.Variable{Kind: expand.Object, Obj: map[string]any{
-		"mu": &bashPPBridgeValue{Kind: "handle", Type: "sync.Mutex"},
-	}}
+	// The mutation is to a DIRECT native handle — a shape the fresh-answer
+	// path would refuse — so this still discriminates: only the memo keeps the
+	// answer true once a composite-holding struct is legitimately shared.
+	cell.vr = expand.Variable{Kind: expand.Object,
+		Obj: &bashPPBridgeValue{Kind: "handle", Type: "sync.Mutex", Session: "s", Handle: 2}}
 	if !r.bashPPGoSourceSharable(cell) {
 		t.Fatal("the classification must be immutable once decided")
 	}

@@ -53,13 +53,20 @@ import (
 //     snapshot unchanged; [Runner.bashPPGoSourceTaskCapture] returns nil there
 //     and every hook below is a no-op on a nil set.
 //   - Only names the body actually USES as variables, computed by the lexical
-//     scope walker in this file. A name the body re-declares — a `:=`, a `var`,
-//     a nested parameter, a range or select binding — is a different variable
-//     from the outer one that happens to share a spelling, and the outer cell
-//     is NOT shared. Text inside a string literal is not a variable use at all.
-//   - Only PLAIN interpreted cells. Native handles keep the reviewed
-//     descriptor-copy rule in bashpp_task.go, and channels keep their own
-//     identity and ownership machinery; neither is re-decided here.
+//     scope walker in this file, and in each original callable descriptor
+//     carried into the task. Each descriptor retains its lexical references
+//     independently of the variable holding its function value. A name the body
+//     re-declares — a `:=`, a `var`, a nested parameter, a range or select
+//     binding — is a different variable from the outer one that happens to
+//     share a spelling, and the outer cell is NOT shared. Text inside a
+//     string literal is not a variable use at all.
+//   - Only INTERPRETER-OWNED values. A payload that IS an imported native
+//     handle keeps the reviewed descriptor-copy rule in bashpp_task.go, and
+//     channels keep their own identity and ownership machinery; neither is
+//     re-decided here. A local struct that HOLDS native fields is shared
+//     whole: it is one original Go variable, and copying it to protect the
+//     descriptor would copy away the original mutable map/slice fields
+//     beside it.
 //
 // # Why precision, not over-approximation
 //
@@ -72,8 +79,11 @@ import (
 // variable the program never asked to share. `fmt.Println("counter")` would
 // have shared an unrelated outer `counter`, and a body whose own `x := …`
 // shadows an outer `x` would have shared the outer one it can never name. The
-// walker below therefore reports EXACTNESS, and an inexact analysis shares
-// nothing:
+// walker below therefore reports EXACTNESS for each body, and an inexact
+// analysis shares nothing. A task also carries original callable descriptors;
+// each keeps its own exact lexical references, even if this particular task
+// never invokes it. This is closure identity, not interpreting a string or a
+// shadowed local as an outer use:
 //
 //   - A construct the walker does not model returns exact=false, and the
 //     launch is REFUSED with a diagnostic (see
@@ -128,32 +138,88 @@ func (r *Runner) bashPPGoSourceTaskCapture(call *syntax.BashPPCall) (map[*bashPP
 		r.bashPPGoSourceCaptureUnsupported(call, "the launched callee does not resolve to an original function body")
 		return nil, pin
 	}
-	free, exact := bashPPGoSourceFreeNames(body, params)
-	if !exact {
-		r.bashPPGoSourceCaptureUnsupported(call, "the body contains a construct the lexical capture analysis does not model")
+	shared, ok := r.bashPPGoSourceCaptureSet(call, body, params, env)
+	if !ok {
+		// A refused analysis has already reported its diagnostic.
 		return nil, pin
-	}
-	if len(free) == 0 {
-		// Exact, and the body captures nothing. There is nothing to share and
-		// nothing unanswered; the deep-copy snapshot is the right answer.
-		return nil, pin
-	}
-	shared := make(map[*bashPPCell]bool, len(free))
-	for name := range free {
-		if _, imported := r.bashPPImports[name]; imported {
-			// A package name is not a variable, so `fmt` in `fmt.Println`
-			// never nominates a cell even if one shares the spelling.
-			continue
-		}
-		cell := env.lookup(name)
-		if cell != nil && r.bashPPGoSourceSharable(cell) {
-			shared[cell] = true
-		}
 	}
 	if len(shared) == 0 {
 		return nil, pin
 	}
 	return shared, pin
+}
+
+// bashPPGoSourceCaptureSet retains the original free-cell identity of the
+// launched body and the original callable descriptors copied into its registry.
+// A function value keeps its lexical references wherever that value is stored:
+// assigning f after a synchronized first launch must not leave a second task's
+// registry pointing at a deep copy of the new closure's environment.
+//
+// Inspect immutable function syntax and scope bindings, never the current
+// payload of a function-valued cell. Such a payload can legally be assigned
+// while a previously launched body waits before reading it. Memoizing the first
+// value is stale; rereading it as an extra launch-time operand is a host race.
+// Every carried descriptor retains its exact lexical free cells, even when a
+// particular task never invokes that descriptor. Parameters, shadowed locals,
+// and names inside string literals still do not nominate outer cells.
+func (r *Runner) bashPPGoSourceCaptureSet(call *syntax.BashPPCall, body *syntax.Block, params map[string]bool, env *bashPPScope) (map[*bashPPCell]bool, bool) {
+	shared := make(map[*bashPPCell]bool)
+	add := func(body *syntax.Block, params map[string]bool, env *bashPPScope) bool {
+		free, exact := bashPPGoSourceFreeNames(body, params)
+		if !exact {
+			r.bashPPGoSourceCaptureUnsupported(call, "a carried original function contains a construct the lexical capture analysis does not model")
+			return false
+		}
+		if env == nil {
+			return true
+		}
+		for name := range free {
+			if cell := env.lookup(name); cell != nil && r.bashPPGoSourceSharable(cell) {
+				shared[cell] = true
+			}
+		}
+		return true
+	}
+	if !add(body, params, env) {
+		return nil, false
+	}
+	seen := make(map[*bashPPFunc]bool)
+	addFunc := func(fn *bashPPFunc) bool {
+		if fn == nil || fn.native != nil || seen[fn] {
+			return true
+		}
+		seen[fn] = true
+		if fn.decl == nil && fn.lit == nil {
+			r.bashPPGoSourceCaptureUnsupported(call, "a carried original function has no inspectable body")
+			return false
+		}
+		fnBody, fnParams := bashPPGoSourceFuncBody(fn.lit, fn.decl)
+		if !add(fnBody, fnParams, fn.scope) {
+			return false
+		}
+		if fn.receiver != nil && r.bashPPGoSourceSharable(fn.receiver) {
+			shared[fn.receiver] = true
+		}
+		return true
+	}
+	for _, fn := range r.bashPPClosures {
+		if !addFunc(fn) {
+			return nil, false
+		}
+	}
+	for _, fn := range r.bashPPFuncs {
+		if !addFunc(fn) {
+			return nil, false
+		}
+	}
+	for _, methods := range r.bashPPMethods {
+		for _, fn := range methods {
+			if !addFunc(fn) {
+				return nil, false
+			}
+		}
+	}
+	return shared, true
 }
 
 // bashPPGoSourceCaptureUnsupported refuses a launch the capture analysis
@@ -355,12 +421,32 @@ func (r *Runner) bashPPGoSourceSharable(cell *bashPPCell) bool {
 	return decided
 }
 
-// bashPPGoSourceSharableCell restricts identity to a plain interpreted cell.
+// bashPPGoSourceSharableCell restricts identity to interpreter-owned values.
 //
-// A native handle is deliberately excluded: bashpp_task.go already preserves
-// the object it names, by copying the descriptor and carrying Session/Handle
-// across, and that rule stays the one authority on native identity. A channel
-// is excluded for the same reason — it owns its own cross-task identity.
+// A payload that IS an imported native handle is deliberately excluded:
+// bashpp_task.go already preserves the object it names by copying the
+// descriptor and carrying Session/Handle across, and that rule stays the one
+// authority on native identity. A channel is excluded for the same reason —
+// it owns its own cross-task identity.
+//
+// A local struct that HOLDS native fields is the opposite case, and sharing
+// it is the corrected rule: the struct is one ORIGINAL Go variable — the
+// closure captures it by reference — so the snapshot must not copy it away.
+// Copying "to protect the handle" protects only the descriptor, which needs
+// no protection: it is immutable once installed (Session/Handle/Type are
+// written before a value is ever published), while the copy silently forks
+// every ORIGINAL mutable field beside it. That was the combined
+// capture+WaitGroup regression: a Container{mu sync.Mutex; counters
+// map[string]int} was deep copied per task, so three synchronized
+// goroutines printed the parent's untouched map[a:0 b:0] where Go prints
+// map[a:20000 b:10000].
+//
+// The race proof is the same one plain sharing rests on: a shared struct cell
+// is touched exactly as a Go variable is, so the program's own
+// synchronization — a native mu.Lock/mu.Unlock pair, each a session request
+// over real Go mutexes — supplies the happens-before edges the race detector
+// checks, and the native objects keep their authenticated session identity
+// because the shared payload still names the same Session/Handle.
 func (r *Runner) bashPPGoSourceSharableCell(cell *bashPPCell) bool {
 	if cell == nil || cell.channel != nil || cell.constant {
 		return false
@@ -371,7 +457,29 @@ func (r *Runner) bashPPGoSourceSharableCell(cell *bashPPCell) bool {
 	// An inferred binding has no declared type to answer from. This runner
 	// privately owns the cell (see the memo argument above), so reading its
 	// payload here races with nobody.
-	return !bashPPCellHoldsNative(cell)
+	return bashPPGoSourcePlainPayload(cell.vr.Obj)
+}
+
+// bashPPGoSourcePlainPayload decides identity from a payload an undecided
+// spelling left open.
+//
+// Interpreter composites — the struct/array/map/slice layout of an original
+// Go value — are shared WHOLE, including fields that hold native descriptors:
+// the descriptors name the same session objects from either side, and the
+// original mutable fields beside them keep their reference identity. A payload
+// that IS a native handle keeps bashpp_task.go's descriptor-copy rule, and an
+// unmodelled shape fails closed and is copied rather than aliased.
+func bashPPGoSourcePlainPayload(value any) bool {
+	switch value.(type) {
+	case nil:
+		return true
+	case string, bool, int, int8, int16, int32, int64,
+		uint, uint8, uint16, uint32, uint64, float32, float64:
+		return true
+	case map[string]any, []any:
+		return true
+	}
+	return false
 }
 
 // bashPPGoSourceSharableType answers from the declared type alone, reporting
@@ -411,14 +519,14 @@ func (r *Runner) bashPPGoSourceSharableType(typ syntax.BashPPTypeExpr, depth int
 			// (`type counter struct { mu sync.Mutex }`), and an interface
 			// spelling — `any`, `error`, a local interface — says nothing at
 			// all about what the value dynamically holds. Answering "plain"
-			// from the spelling would hand cross-task identity to a native
-			// handle behind bashpp_task.go's descriptor-copy rule, which is
-			// the one authority on native identity.
+			// from the spelling would hand cross-task identity to a value this
+			// spelling cannot describe.
 			//
 			// Report undecided rather than guessing. The caller then falls
-			// through to bashPPCellHoldsNative, which is total and fails
-			// closed, so a local struct that really is plain is still shared
-			// and one that hides a handle is copied.
+			// through to bashPPGoSourcePlainPayload, which is total and fails
+			// closed: a local struct — handle fields included — is shared as
+			// one original Go variable, while a payload that IS a native
+			// handle keeps bashpp_task.go's descriptor-copy rule.
 			return false, false
 		}
 		for _, arg := range typ.TypeArgs {
