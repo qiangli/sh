@@ -1750,6 +1750,13 @@ func (r *Runner) bashPPCall(ctx context.Context, c *syntax.BashPPCall) {
 	if r.bashPPTestingCall(c) {
 		return
 	}
+	// `wg.Go(f)` retains f past the call, so it can never be a synchronous
+	// dependency callback. It is answered as its own bridge operation, on a
+	// receiver the dependency authenticated as a sync.WaitGroup, before the
+	// call would be prepared as a native request. See gosource_waitgroup.go.
+	if r.goSourceWaitGroupGo(ctx, c) {
+		return
+	}
 	if r.bashPPBridgeHandles(c) {
 		if _, err := r.bashPPBridgeCall(ctx, c); err != nil && !r.bashPPPanicking() {
 			r.exit.fatal(err)
