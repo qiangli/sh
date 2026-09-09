@@ -49,11 +49,15 @@ func TestGoSourceEmbeddedImportedMethodPromotion(t *testing.T) {
 	for name, source := range map[string]string{
 		// The shape `solutions/webcrawler.go` uses: an anonymous struct at
 		// package scope embedding sync.Mutex beside the map it guards.
-		"anon_package_var": `package main;import ("fmt";"sync");var fetched = struct{m map[string]int;sync.Mutex}{m:make(map[string]int)};func main(){fetched.Lock();fetched.m["a"]=1;fetched.Unlock();fetched.Lock();fmt.Println(fetched.m["a"]);fetched.Unlock()}`,
-		"named_value":      `package main;import ("fmt";"sync");type box struct{n int;sync.Mutex};func main(){b:=box{};b.Lock();b.n=5;b.Unlock();fmt.Println(b.n)}`,
-		"pointer_root":     `package main;import ("fmt";"sync");type box struct{n int;sync.Mutex};func main(){b:=&box{};b.Lock();b.n=7;b.Unlock();fmt.Println(b.n)}`,
-		"depth_two":        `package main;import ("fmt";"sync");type inner struct{sync.Mutex};type outer struct{inner;n int};func main(){o:=outer{};o.Lock();o.n=9;o.Unlock();fmt.Println(o.n)}`,
-		"waitgroup":        `package main;import ("fmt";"sync");type pool struct{sync.WaitGroup;n int};func main(){p:=&pool{};p.Add(1);go func(){p.Done()}();p.Wait();fmt.Println("joined")}`,
+		"anon_package_var":                `package main;import ("fmt";"sync");var fetched = struct{m map[string]int;sync.Mutex}{m:make(map[string]int)};func main(){fetched.Lock();fetched.m["a"]=1;fetched.Unlock();fetched.Lock();fmt.Println(fetched.m["a"]);fetched.Unlock()}`,
+		"native_internal_promotion_depth": `package main;import("fmt";"bytes";"bufio";"strings");type box struct{*bufio.ReadWriter;*bytes.Buffer};func main(){b:=box{ReadWriter:bufio.NewReadWriter(bufio.NewReader(strings.NewReader("wrong\n")),bufio.NewWriter(bytes.NewBufferString(""))),Buffer:bytes.NewBufferString("right\n")};s,e:=b.ReadString('\n');fmt.Printf("%s%v\n",s,e)}`,
+		"distinct_native_sets":            `package main;import("fmt";"sync";"bytes");type box struct{sync.Mutex;*bytes.Buffer};func main(){b:=box{Buffer:bytes.NewBufferString("a")};b.Lock();b.Write([]byte("b"));b.Mutex.Unlock();fmt.Println(b.String())}`,
+		"unrelated_shallower":             `package main;import("fmt";"sync";"bytes");type inner struct{*bytes.Buffer};type box struct{sync.Mutex;inner};func main(){b:=box{inner:inner{Buffer:bytes.NewBufferString("a")}};b.Lock();b.Write([]byte("b"));b.Unlock();fmt.Println(b.String())}`,
+		"pointer_embedded_value_root":     `package main;import("fmt";"sync";"bytes");type box struct{*sync.Mutex;*bytes.Buffer};func main(){b:=box{Mutex:new(sync.Mutex),Buffer:bytes.NewBufferString("a")};b.Lock();b.Buffer.WriteString("b");b.Unlock();fmt.Println(b.String())}`,
+		"named_value":                     `package main;import ("fmt";"sync");type box struct{n int;sync.Mutex};func main(){b:=box{};b.Lock();b.n=5;b.Unlock();fmt.Println(b.n)}`,
+		"pointer_root":                    `package main;import ("fmt";"sync");type box struct{n int;sync.Mutex};func main(){b:=&box{};b.Lock();b.n=7;b.Unlock();fmt.Println(b.n)}`,
+		"depth_two":                       `package main;import ("fmt";"sync");type inner struct{sync.Mutex};type outer struct{inner;n int};func main(){o:=outer{};o.Lock();o.n=9;o.Unlock();fmt.Println(o.n)}`,
+		"waitgroup":                       `package main;import ("fmt";"sync");type pool struct{sync.WaitGroup;n int};func main(){p:=&pool{};p.Add(1);go func(){p.Done()}();p.Wait();fmt.Println("joined")}`,
 	} {
 		t.Run(name, func(t *testing.T) { typedSendThreeModes(t, source) })
 	}

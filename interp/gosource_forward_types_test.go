@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -53,19 +55,13 @@ func TestGoSourceOriginalForwardTypeThreeModes(t *testing.T) {
 func TestGoSourceOriginalMethodsErrorsThreeModes(t *testing.T) {
 	source := forwardTypeOriginal(t, "methods-errors.go.txt",
 		"a0825fe6310af87e48e7f46b5290814df190d1e9533d0132fd663d6bb7f3236e")
+	observedStart := time.Now()
 	typedSendThreeModesNormalized(t, source, func(stream string) string {
-		stamp, rest, ok := strings.Cut(strings.TrimPrefix(stream, "at "), ", ")
-		if !ok || !strings.HasPrefix(stream, "at ") {
-			return stream
+		normalized, err := normalizeMethodsErrorTime(stream, observedStart, time.Now())
+		if err != nil {
+			t.Fatalf("MyError clock: %v", err)
 		}
-		// Go renders a monotonic reading as a trailing ` m=±<seconds>`, which is
-		// not part of the parseable layout.
-		wall, _, _ := strings.Cut(stamp, " m=")
-		if _, err := time.Parse("2006-01-02 15:04:05.999999999 -0700 MST", wall); err != nil {
-			t.Errorf("MyError.When did not render as a time.Time: %q: %v", stamp, err)
-			return stream
-		}
-		return "at <time>, " + rest
+		return normalized
 	})
 }
 
@@ -224,5 +220,44 @@ func TestBashPPClassicTypesStaySequential(t *testing.T) {
 				t.Fatalf("classic Bash++ did not report %q: %q", tc.want, out.String())
 			}
 		})
+	}
+}
+
+var methodsErrorMonotonic = regexp.MustCompile(`^[+-][0-9]+\.[0-9]{9}$`)
+
+func normalizeMethodsErrorTime(stream string, start, end time.Time) (string, error) {
+	if !strings.HasPrefix(stream, "at ") {
+		return "", fmt.Errorf("missing original prefix: %q", stream)
+	}
+	stamp, rest, ok := strings.Cut(strings.TrimPrefix(stream, "at "), ", ")
+	if !ok {
+		return "", fmt.Errorf("missing timestamp terminator")
+	}
+	wall, mono, hasMono := strings.Cut(stamp, " m=")
+	if !hasMono || !methodsErrorMonotonic.MatchString(mono) {
+		return "", fmt.Errorf("invalid or missing monotonic reading: %q", stamp)
+	}
+	elapsed, err := strconv.ParseFloat(mono, 64)
+	if err != nil || elapsed < 0 || elapsed > end.Sub(start).Seconds()+1 {
+		return "", fmt.Errorf("monotonic reading outside observed run: %q", mono)
+	}
+	when, err := time.Parse("2006-01-02 15:04:05.999999999 -0700 MST", wall)
+	if err != nil || when.Before(start) || when.After(end) {
+		return "", fmt.Errorf("wall time outside observation window: %q", wall)
+	}
+	return "at <time>, " + rest, nil
+}
+func TestGoSourceMethodsErrorClockValidation(t *testing.T) {
+	start := time.Now().Add(-time.Second)
+	end := time.Now()
+	stamp := end.Add(-time.Millisecond).Format("2006-01-02 15:04:05.999999999 -0700 MST")
+	for _, bad := range []string{"0001-01-01 00:00:00 +0000 UTC m=+0.001000000", stamp, stamp + " m=garbage", stamp + " m=+999999.000000000", stamp + " m=-0.100000000", stamp + " m=+0.1"} {
+		if _, err := normalizeMethodsErrorTime("at "+bad+", exact remainder\n", start, end); err == nil {
+			t.Fatalf("bad clock accepted: %q", bad)
+		}
+	}
+	got, err := normalizeMethodsErrorTime("at "+stamp+" m=+0.001000000, exact remainder\n", start, end)
+	if err != nil || got != "at <time>, exact remainder\n" {
+		t.Fatalf("clock/remainder: %q %v", got, err)
 	}
 }

@@ -101,8 +101,8 @@ func typedSendThreeModes(t *testing.T, source string) {
 	typedSendThreeModesNormalized(t, source, nil)
 }
 
-// typedSendThreeModesNormalized compares the three modes after passing each
-// stream through normalize. It exists for originals whose output embeds a value
+// typedSendThreeModesNormalized compares the three modes after passing stdout
+// through normalize; stderr is always exact. It exists for originals whose output embeds a value
 // no two runs can agree on — a wall clock reading — so that everything else in
 // the output is still compared byte for byte. normalize must fail the test
 // itself if the elided value is not well formed, or the comparison would be
@@ -151,7 +151,7 @@ func typedSendThreeModesNormalized(t *testing.T, source string, normalize func(s
 	if err := r.Run(ctx, program.File); err != nil {
 		t.Fatalf("Runner: %v out=%q err=%q", err, out.String(), errout.String())
 	}
-	if normalize(out.String()) != normalize(wantOut) || normalize(errout.String()) != normalize(wantErr) {
+	if normalize(out.String()) != normalize(wantOut) || errout.String() != wantErr {
 		t.Fatalf("Runner %q/%q; oracle %q/%q", out.String(), errout.String(), wantOut, wantErr)
 	}
 	lowered, err := lower.Compile(program.File, lower.Options{Origin: path, Dir: dir})
@@ -175,7 +175,7 @@ func typedSendThreeModesNormalized(t *testing.T, source string, normalize func(s
 		t.Fatal(err)
 	}
 	gotOut, gotErr := run(artifact)
-	if normalize(gotOut) != normalize(wantOut) || normalize(gotErr) != normalize(wantErr) {
+	if normalize(gotOut) != normalize(wantOut) || gotErr != wantErr {
 		t.Fatalf("artifact %q/%q; oracle %q/%q", gotOut, gotErr, wantOut, wantErr)
 	}
 }

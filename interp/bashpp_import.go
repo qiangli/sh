@@ -11,6 +11,7 @@ import (
 	"go/format"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"io"
 	"os"
 	"os/exec"
@@ -61,6 +62,7 @@ type bashPPValuesEvaluator interface {
 // first on PATH. Tests may inject the exact evaluator and identity under
 // review without exposing an evaluator API to embedders.
 type bashPPToolchain struct {
+	nativeTypes   map[string]types.Type // immutable authenticated export metadata
 	goBinary      string
 	goRoot        string
 	goVersion     string

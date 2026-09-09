@@ -5,7 +5,9 @@ package interp
 
 // Sprint: #118; Story: #54; Story-ID: c3a60493cde9
 import (
+	"go/types"
 	"mvdan.cc/sh/v3/syntax"
+	"strings"
 )
 
 // bashPPResolveNativeEmbedded finds the embedded field path that promotes an
@@ -19,7 +21,7 @@ import (
 // method of the same name at that level therefore shadows or collides exactly
 // as it would in Go, and this helper reports nothing so the interpreted paths
 // keep ownership of the diagnostic.
-func (r *Runner) bashPPResolveNativeEmbedded(root syntax.BashPPTypeExpr, name string) ([]bashPPEmbedEdge, bool) {
+func (r *Runner) bashPPResolveNativeEmbedded(root syntax.BashPPTypeExpr, name string, addressable bool) ([]bashPPEmbedEdge, bool) {
 	if !r.bashPPGoSource || root == nil || name == "" {
 		return nil, false
 	}
@@ -29,35 +31,46 @@ func (r *Runner) bashPPResolveNativeEmbedded(root syntax.BashPPTypeExpr, name st
 	}
 	key := bashPPTypeText(root)
 	level := []bashPPSelectionNode{{typ: root, indirect: rootPointer, ancestors: map[string]bool{key: true}}}
-	for len(level) > 0 {
-		var native [][]bashPPEmbedEdge
-		local := 0
+	type candidate struct {
+		edges  []bashPPEmbedEdge
+		native bool
+	}
+	pending := map[int][]candidate{}
+	for depth := 0; len(level) > 0 || len(pending) > 0; depth++ {
 		var next []bashPPSelectionNode
 		for _, node := range level {
-			if r.bashPPNativeType(node.typ) {
-				// Depth 0 is an ordinary native receiver, already routed by the
-				// direct paths; it still counts as the winning candidate here so
-				// a deeper embedded match cannot outrank it.
-				native = append(native, append([]bashPPEmbedEdge(nil), node.edges...))
+			if typ := r.bashPPEmbeddedNativeType(node.typ); typ != nil {
+				object, index, indirect := types.LookupFieldOrMethod(typ, addressable || node.indirect, nil, name)
+				if object != nil || index != nil || indirect {
+					offset := len(index) - 1
+					if offset < 0 {
+						offset = 0
+					}
+					_, method := object.(*types.Func)
+					pending[depth+offset] = append(pending[depth+offset], candidate{node.edges, method})
+				}
+				continue
 			}
 			fields, _, isStruct := r.bashPPStructFields(node.typ)
 			if isStruct {
 				for _, field := range fields {
 					for _, fieldName := range bashPPDeclaredFieldNames(field) {
 						if fieldName == name {
-							local++
+							pending[depth] = append(pending[depth], candidate{})
 						}
 					}
 				}
 			}
-			if owner, _, ok := r.bashPPMethodOwner(node.typ); ok && r.bashPPMethods[owner][name] != nil {
-				local++
+			if owner, _, ok := r.bashPPMethodOwner(node.typ); ok {
+				if fn := r.bashPPMethods[owner][name]; fn != nil {
+					pending[depth] = append(pending[depth], candidate{})
+				}
 			}
 			if iface, ok := r.bashPPInterfaceType(node.typ); ok {
 				set, err := r.bashPPInterfaceMethodSet(bashPPTypeText(node.typ), iface, make(map[string]bool))
 				if err == nil {
 					if _, found := set.byName[name]; found {
-						local++
+						pending[depth] = append(pending[depth], candidate{})
 					}
 				}
 			}
@@ -86,12 +99,13 @@ func (r *Runner) bashPPResolveNativeEmbedded(root syntax.BashPPTypeExpr, name st
 				next = append(next, bashPPSelectionNode{typ: child, edges: edges, indirect: node.indirect || pointer, ancestors: ancestors})
 			}
 		}
-		if local+len(native) > 0 {
-			if local > 0 || len(native) != 1 {
+		if matches := pending[depth]; len(matches) > 0 {
+			if len(matches) != 1 || !matches[0].native {
 				return nil, false
 			}
-			return native[0], true
+			return matches[0].edges, true
 		}
+		delete(pending, depth)
 		level = next
 	}
 	return nil, false
@@ -123,7 +137,7 @@ func (r *Runner) bashPPPromotedNativeReceiver(expr syntax.BashPPExpr, method str
 		// A wholly dependency-owned receiver is the direct path's business.
 		return nil
 	}
-	edges, ok := r.bashPPResolveNativeEmbedded(meta.typ, method)
+	edges, ok := r.bashPPResolveNativeEmbedded(meta.typ, method, true)
 	if !ok || len(edges) == 0 {
 		return nil
 	}
@@ -131,6 +145,36 @@ func (r *Runner) bashPPPromotedNativeReceiver(expr syntax.BashPPExpr, method str
 	if err != nil {
 		return nil
 	}
+	// new(imported.Type) may carry an interpreter pointer to the authentic
+	// native value cell. Follow that pointer without reconstructing its target.
+	if pointer, ok := embedded.(*bashPPPointer); ok {
+		if pointer == nil {
+			return nil
+		}
+		embedded, _, _, err = pointer.read()
+		if err != nil {
+			return nil
+		}
+	}
 	native, _ := embedded.(*bashPPBridgeValue)
 	return native
+}
+
+// The name is resolved through this Runner's accepted import binding. The type
+// object came from the reviewed SDK export importer, not a display spelling or
+// user-supplied method-name list. Lookup includes native internal embedding.
+func (r *Runner) bashPPEmbeddedNativeType(typ syntax.BashPPTypeExpr) types.Type {
+	named, ok := typ.(*syntax.BashPPNamedType)
+	if !ok || named.Name == nil {
+		return nil
+	}
+	alias, name, ok := strings.Cut(named.Name.Value, ".")
+	if !ok {
+		return nil
+	}
+	path := r.bashPPImports[alias]
+	if path == "" {
+		return nil
+	}
+	return r.bashPPTools.nativeTypes[path+"."+name]
 }

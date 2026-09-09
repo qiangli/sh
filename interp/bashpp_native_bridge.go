@@ -113,6 +113,7 @@ type bashPPNativeSession struct {
 }
 
 func (r *Runner) closeGoSourceBridge() {
+	r.bashPPTools.nativeTypes = nil
 	if session := r.bashPPTools.bridge; session != nil {
 		session.close()
 		r.bashPPTools.bridge = nil
@@ -649,6 +650,18 @@ func (r *Runner) bashPPBridgeRegisterScalarTypes(ctx context.Context, req bashPP
 	if r.bashPPTypes == nil {
 		r.bashPPTypes = map[string]bashPPType{}
 	}
+	// Copy on write: public subshells and interpreted tasks may share the
+	// previous immutable export metadata without sharing import mutations.
+	nativeTypes := make(map[string]types.Type, len(r.bashPPTools.nativeTypes)+pkg.Scope().Len())
+	for name, typ := range r.bashPPTools.nativeTypes {
+		nativeTypes[name] = typ
+	}
+	for _, name := range pkg.Scope().Names() {
+		if object, ok := pkg.Scope().Lookup(name).(*types.TypeName); ok && object.Exported() {
+			nativeTypes[path+"."+name] = object.Type()
+		}
+	}
+	r.bashPPTools.nativeTypes = nativeTypes
 	for _, name := range pkg.Scope().Names() {
 		object, ok := pkg.Scope().Lookup(name).(*types.TypeName)
 		if !ok || !object.Exported() {
