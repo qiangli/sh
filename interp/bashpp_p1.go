@@ -1859,9 +1859,13 @@ func (r *Runner) bashPPIf(ctx context.Context, i *syntax.BashPPIf) {
 	leave := r.bashPPPushScope()
 	defer leave()
 	r.exit.clear()
-	if i.Init != nil {
-		r.bashPPShortDecl(ctx, i.Init)
-		if !r.exit.ok() {
+	if i.InitStmt != nil || i.Init != nil {
+		if i.InitStmt != nil {
+			r.cmd(ctx, i.InitStmt)
+		} else {
+			r.bashPPShortDecl(ctx, i.Init)
+		}
+		if !r.exit.ok() || r.bashPPPanicking() {
 			return
 		}
 	}

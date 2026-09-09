@@ -2181,7 +2181,10 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 		p.writeLit("}")
 	case *BashPPIf:
 		p.writeLit("if ")
-		if cmd.Init != nil {
+		if cmd.InitStmt != nil {
+			p.command(cmd.InitStmt, nil)
+			p.writeLit("; ")
+		} else if cmd.Init != nil {
 			p.command(cmd.Init, nil)
 			p.writeLit("; ")
 		}

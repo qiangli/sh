@@ -549,7 +549,9 @@ func (c *sharpNullChecker) command(command syntax.Command, state sharpNullState)
 		}
 		return current, true
 	case *syntax.BashPPIf:
-		if n.Init != nil {
+		if n.InitStmt != nil {
+			current, _ = c.command(n.InitStmt, current)
+		} else if n.Init != nil {
 			current, _ = c.command(n.Init, current)
 		}
 		condition := sharpExpr(n.Cond)

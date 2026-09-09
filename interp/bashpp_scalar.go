@@ -505,11 +505,27 @@ func (r *Runner) bashPPBinaryScalar(op token.Token, left, right bashPPScalar) (b
 		if !ok {
 			return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-SHIFT: shift count must be an unsigned integer")
 		}
+		runtime := left.runtime
+		if r.bashPPGoSource {
+			runtime = runtime || right.runtime
+		}
+		if r.bashPPGoSource && runtime {
+			if named, ok := r.bashPPUnderlyingType(&syntax.BashPPNamedType{Name: &syntax.Lit{Value: left.typ}}).(*syntax.BashPPNamedType); ok && bashPPIntegerType(named.Name.Value) {
+				bits, _ := bashPPIntegerWidth(named.Name.Value)
+				if shift >= uint64(bits) {
+					value := constant.MakeInt64(0)
+					if op == token.SHR && constant.Sign(left.value) < 0 {
+						value = constant.MakeInt64(-1)
+					}
+					return r.bashPPTypedScalarResult(value, left.typ, true)
+				}
+			}
+		}
 		value, err := bashPPShiftScalar(left.value, op, uint(shift))
 		if err != nil {
 			return bashPPScalar{}, err
 		}
-		return r.bashPPTypedScalarResult(value, left.typ, left.runtime)
+		return r.bashPPTypedScalarResult(value, left.typ, runtime)
 	}
 	return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-OPERAND: unsupported binary operator %s", op)
 }
@@ -556,8 +572,8 @@ func (r *Runner) bashPPTypedScalarResult(value constant.Value, typ string, runti
 	return bashPPScalar{value: value, typ: typ, runtime: runtime}, nil
 }
 
-func bashPPWrapInteger(typ string, value constant.Value) constant.Value {
-	bits, signed := strconv.IntSize, true
+func bashPPIntegerWidth(typ string) (bits int, signed bool) {
+	bits, signed = strconv.IntSize, true
 	switch typ {
 	case "int8":
 		bits = 8
@@ -578,6 +594,11 @@ func bashPPWrapInteger(typ string, value constant.Value) constant.Value {
 	case "uint", "uintptr":
 		signed = false
 	}
+	return bits, signed
+}
+
+func bashPPWrapInteger(typ string, value constant.Value) constant.Value {
+	bits, signed := bashPPIntegerWidth(typ)
 	n, ok := new(big.Int).SetString(value.ExactString(), 10)
 	if !ok {
 		return value
@@ -859,6 +880,15 @@ func (r *Runner) bashPPConvertScalar(typ string, x bashPPScalar) (bashPPScalar, 
 	default:
 		if bashPPIntegerType(typ) && (x.value.Kind() == constant.Int || x.value.Kind() == constant.Float) {
 			integer := constant.ToInt(x.value)
+			if r.bashPPGoSource && x.runtime {
+				if x.value.Kind() == constant.Float {
+					// Runtime floating conversions truncate toward zero. Do not
+					// round an exact untyped constant or route it through float64.
+					n, d := constant.Num(x.value), constant.Denom(x.value)
+					integer = constant.BinaryOp(n, token.QUO_ASSIGN, d)
+				}
+				integer = bashPPWrapInteger(typ, integer)
+			}
 			if integer.Kind() != constant.Int {
 				break
 			}

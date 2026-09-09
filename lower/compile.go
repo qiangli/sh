@@ -1101,8 +1101,12 @@ func (e *emitter) ifStmt(n *syntax.BashPPIf) (string, error) {
 	e.push()
 	defer e.pop()
 	init := ""
-	if n.Init != nil {
-		x, err := e.command(n.Init)
+	var initializer syntax.Command = n.InitStmt
+	if initializer == nil && n.Init != nil {
+		initializer = n.Init
+	}
+	if initializer != nil {
+		x, err := e.command(initializer)
 		if err != nil {
 			return "", err
 		}

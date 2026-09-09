@@ -211,6 +211,7 @@ func Walk(node Node, f func(Node) bool) {
 		walkList(node.Init, f)
 		walkNilable(node.InitExpr, f)
 	case *BashPPIf:
+		walkNilable(node.InitStmt, f)
 		walkNilable(node.Init, f)
 		walkNilable(node.Cond, f)
 		walkNilable(node.Then, f)

@@ -612,11 +612,12 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 		out := &s.BashPPIf{Site: s.StartGoIf, If: c.pos(x.If), Cond: c.expr(x.Cond), Then: c.block(x.Body)}
 		if x.Init != nil {
 			init := c.one(x.Init)
-			var ok bool
-			out.Init, ok = init.(*s.BashPPShortDecl)
-			if !ok {
-				c.fail(x.Init, "if initializer")
+			if decl, ok := init.(*s.BashPPShortDecl); ok {
+				out.Init = decl
+			} else {
+				out.InitStmt = init
 			}
+			out.Semicolon = c.headerToken(x.If, x.Body.Lbrace, token.SEMICOLON, 0)
 		}
 		if x.Else != nil {
 			out.Else = c.one(x.Else)

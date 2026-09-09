@@ -900,12 +900,14 @@ func (c *BashPPCall) End() Pos { return posAddCol(c.Rparen, 1) }
 // BashPPIf is a Go brace-form if: if err != nil { … }.
 //
 // Init, when non-nil, is the optional short declaration before the header's
-// semicolon. Cond is always a typed scalar expression. Else is another
+// semicolon. InitStmt preserves another Go simple statement initializer; at most
+// one of Init and InitStmt is non-nil. Cond is always a typed scalar expression. Else is another
 // BashPPIf for `else if`, a Block for `else`, or nil.
 type BashPPIf struct {
 	Site      StartSite
 	If        Pos
 	Init      *BashPPShortDecl
+	InitStmt  Command
 	Semicolon Pos
 	Cond      BashPPExpr
 	Then      *Block
