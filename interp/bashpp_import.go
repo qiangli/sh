@@ -26,16 +26,20 @@ import (
 )
 
 type bashPPEvalRequest struct {
-	Go       string
-	Dir      string
-	Env      []string
-	Stdin    io.Reader
-	Stdout   io.Writer
-	Stderr   io.Writer
-	Imports  map[string]string
-	Selector []string
-	Args     []string
-	Results  int
+	Go         string
+	Dir        string
+	Env        []string
+	Stdin      io.Reader
+	Stdout     io.Writer
+	Stderr     io.Writer
+	Imports    map[string]string
+	Selector   []string
+	Args       []string
+	Results    int
+	Bridge     *bashPPNativeSession
+	Argv       []string
+	ModuleDir  string
+	RuntimeEnv []string
 }
 
 type bashPPEvaluator interface {
@@ -56,6 +60,8 @@ type bashPPToolchain struct {
 	goRoot    string
 	goVersion string
 	eval      bashPPEvaluator
+	bridge    *bashPPNativeSession
+	moduleDir string
 }
 
 type bashPPGoReview struct {
@@ -87,6 +93,7 @@ type bashPPGoIdentityInfo struct {
 type nativeBashPPEvaluator struct{}
 
 func (nativeBashPPEvaluator) Resolve(ctx context.Context, req bashPPEvalRequest, path string) (string, error) {
+	req = bashPPModuleRequest(req)
 	target, err := bashPPImportListTarget(ctx, req, path)
 	if err != nil {
 		return "", err
@@ -179,6 +186,10 @@ func bashPPImportTempSource(dir, pattern string) (*os.File, func(), error) {
 }
 
 func (nativeBashPPEvaluator) Call(ctx context.Context, req bashPPEvalRequest) error {
+	if req.Bridge != nil {
+		_, err := req.Bridge.legacy(ctx, req)
+		return err
+	}
 	if len(req.Selector) == 0 {
 		return errors.New("bash++: selector call requires an imported package")
 	}
@@ -294,6 +305,17 @@ func (nativeBashPPEvaluator) Call(ctx context.Context, req bashPPEvalRequest) er
 }
 
 func (nativeBashPPEvaluator) Values(ctx context.Context, req bashPPEvalRequest) ([]any, error) {
+	if req.Bridge != nil {
+		values, err := req.Bridge.legacy(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]any, len(values))
+		for i := range values {
+			out[i] = values[i]
+		}
+		return out, nil
+	}
 	if len(req.Selector) < 2 || req.Results < 1 {
 		return nil, errors.New("bash++: value call requires an imported selector and result names")
 	}
@@ -384,7 +406,14 @@ func (r *Runner) bashPPEvalRequest() (bashPPEvalRequest, error) {
 		env = setEnvString(env, "GOROOT", r.bashPPTools.goRoot)
 		env = setEnvString(env, "GOTOOLCHAIN", r.bashPPTools.goVersion)
 	}
-	return bashPPEvalRequest{Go: r.bashPPTools.goBinary, Dir: r.Dir, Env: env, Stdin: r.stdin,
+	if r.bashPPGoSource && r.bashPPTools.bridge == nil {
+		r.bashPPTools.bridge = &bashPPNativeSession{}
+	}
+	moduleDir := ""
+	if r.bashPPGoSource {
+		moduleDir = r.bashPPTools.moduleDir
+	}
+	return bashPPEvalRequest{RuntimeEnv: environStrings(r.writeEnv), ModuleDir: moduleDir, Argv: append([]string{r.filename}, r.Params...), Bridge: r.bashPPTools.bridge, Go: r.bashPPTools.goBinary, Dir: r.Dir, Env: env, Stdin: r.stdin,
 		Stdout: r.bashPPWriter(r.stdout), Stderr: r.bashPPWriter(r.stderr), Imports: r.bashPPImports}, nil
 }
 
@@ -608,6 +637,12 @@ func (r *Runner) bashPPImport(ctx context.Context, imp *syntax.BashPPImport) {
 		if spec.Alias != nil {
 			name = spec.Alias.Value
 		}
+		if r.bashPPGoSource {
+			if err := r.bashPPBridgeRegisterScalarTypes(ctx, req, path, name); err != nil {
+				r.exit.fatal(err)
+				return
+			}
+		}
 		if _, exists := groupPaths[path]; exists {
 			r.exit.fatal(fmt.Errorf("bash++: duplicate import path %q", path))
 			return
@@ -625,7 +660,7 @@ func (r *Runner) bashPPImport(ctx context.Context, imp *syntax.BashPPImport) {
 			return
 		}
 		for oldName, oldPath := range next {
-			if oldPath == path {
+			if oldPath == path && !r.bashPPGoSource {
 				r.exit.fatal(fmt.Errorf("bash++: import path %q already uses name %s", path, oldName))
 				return
 			}

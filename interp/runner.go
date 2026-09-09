@@ -4421,6 +4421,11 @@ func (r *Runner) posixSpecialBuiltinFatal(name string, args []string) {
 // filename comes from the parsed script (set when running a File) or
 // falls back to "bashy" for `-c` / stdin / interactive invocations.
 func (r *Runner) bashErrPrefix(pos syntax.Pos) string {
+	if r.bashPPGoSource && r.bashPPGoSourceFile != nil {
+		if source, ok := r.bashPPGoSourceFile.SourceAt(pos); ok {
+			return fmt.Sprintf("%s:%d:%d: ", source.Name, pos.Line(), pos.Col())
+		}
+	}
 	return r.bashErrPrefixLine(int(pos.Line()))
 }
 
@@ -9083,6 +9088,9 @@ func (r *Runner) localeDecimalPoint() string {
 func (r *Runner) stmts(ctx context.Context, stmts []*syntax.Stmt) {
 	for _, stmt := range stmts {
 		r.stmt(ctx, stmt)
+		if r.bashPPGoSource && r.exit.code != 0 {
+			r.exit.fatal(ExitStatus(r.exit.code))
+		}
 		// Propagate a pending break/continue out of a compound body (brace
 		// group, if/case body) so the rest of the list is skipped. Safe across
 		// function bodies: call() resets the loop-control state at the function

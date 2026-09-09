@@ -57,6 +57,11 @@ func (e *emitter) fieldProjection(typ, name string, seen map[string]bool) projec
 	return scalarProjection()
 }
 func (e *emitter) checkedSelector(n *syntax.BashPPSelectorExpr) (string, error) {
+	if e.goSource && n.Sel != nil {
+		if id, ok := n.X.(*syntax.BashPPIdent); ok && e.imports[id.Name.Value] != "" {
+			return id.Name.Value + "." + n.Sel.Value, nil
+		}
+	}
 	base, err := e.expr(n.X)
 	if err != nil {
 		return "", err

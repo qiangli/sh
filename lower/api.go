@@ -27,6 +27,7 @@ type Options struct {
 	Entry string
 }
 type Result struct {
+	Sources  []syntax.SourceFile
 	Source   []byte
 	Package  string
 	Entry    string // emitted callable entry name, or empty for a runtime-free unit
@@ -35,6 +36,8 @@ type Result struct {
 	Mappings []Mapping
 }
 type Mapping struct {
+	Source        string
+	SourceOffset  uint
 	GoLine, GoCol int
 	Pos           syntax.Pos
 	Node          string
@@ -51,6 +54,7 @@ func (r *Result) LookupLine(line int) (Mapping, bool) {
 
 type Diagnostic struct {
 	Code, Msg, Node string
+	Source          string
 	Pos             syntax.Pos
 
 	// Text, when non-empty, is the exact public rendering of this diagnostic,
@@ -69,6 +73,9 @@ type Diagnostic struct {
 func (d Diagnostic) Error() string {
 	if d.Text != "" {
 		return d.Text
+	}
+	if d.Source != "" {
+		return fmt.Sprintf("%s:%d:%d: %s: %s", d.Source, d.Pos.Line(), d.Pos.Col(), d.Code, d.Msg)
 	}
 	return fmt.Sprintf("%d:%d: %s: %s", d.Pos.Line(), d.Pos.Col(), d.Code, d.Msg)
 }

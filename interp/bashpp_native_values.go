@@ -1,0 +1,456 @@
+package interp
+
+// Sprint: #118; Story: #50; Story-ID: cf81e4868348
+import (
+	"context"
+	"errors"
+	"fmt"
+	"go/constant"
+	"go/token"
+	"strconv"
+	"strings"
+
+	"mvdan.cc/sh/v3/expand"
+	"mvdan.cc/sh/v3/syntax"
+)
+
+func (r *Runner) bashPPBridgeHandles(call *syntax.BashPPCall) bool {
+	if !r.bashPPGoSource || call == nil {
+		return false
+	}
+	if call.CalleeExpr != nil {
+		_, ok := call.CalleeExpr.(*syntax.BashPPSelectorExpr)
+		return ok
+	}
+	if len(call.Fun) < 1 {
+		return false
+	}
+	if len(call.Fun) >= 2 {
+		if _, ok := r.bashPPImports[call.Fun[0].Value]; ok {
+			return true
+		}
+		if r.bashPPScope != nil {
+			cell := r.bashPPScope.lookup(call.Fun[0].Value)
+			if cell != nil {
+				if _, ok := cell.vr.Obj.(*bashPPBridgeValue); ok {
+					return true
+				}
+			}
+		}
+	}
+	if len(call.Fun) == 1 {
+		for alias := range r.bashPPImports {
+			if strings.HasPrefix(alias, ".:") {
+				if _, ok := r.bashPPLookupFunc(call); !ok {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+func (r *Runner) bashPPBridgeCall(ctx context.Context, call *syntax.BashPPCall) ([]bashPPBridgeValue, error) {
+	if !r.bashPPBridgeHandles(call) {
+		return nil, fmt.Errorf("gosource: call is not an imported dependency operation")
+	}
+	req, err := r.bashPPEvalRequest()
+	if err != nil {
+		return nil, err
+	}
+	q := bashPPBridgeRequest{Op: "call", Spread: call.Ellipsis.IsValid()}
+	if selector, ok := call.CalleeExpr.(*syntax.BashPPSelectorExpr); ok {
+		receiver, err := r.bashPPBridgeExpr(selector.X)
+		if err != nil {
+			return nil, err
+		}
+		q.Receiver = &receiver
+		q.Selector = selector.Sel.Value
+	} else if len(call.Fun) >= 2 {
+		if _, ok := r.bashPPImports[call.Fun[0].Value]; ok {
+			parts := make([]string, len(call.Fun))
+			for i, p := range call.Fun {
+				parts[i] = p.Value
+			}
+			q.Selector = strings.Join(parts, ".")
+		} else {
+			receiver, err := r.bashPPBridgeExpr(&syntax.BashPPIdent{Name: call.Fun[0]})
+			if err != nil {
+				return nil, err
+			}
+			q.Receiver = &receiver
+			q.Selector = call.Fun[1].Value
+			if len(call.Fun) != 2 {
+				return nil, fmt.Errorf("gosource: nested receiver selector is unsupported")
+			}
+		}
+	} else {
+		q.Selector = call.Fun[0].Value
+	}
+	if len(call.ArgExprs) != len(call.Args) {
+		return nil, fmt.Errorf("gosource: missing evaluated dependency arguments")
+	}
+	if len(call.ArgExprs) == 1 {
+		if inner, ok := call.ArgExprs[0].(*syntax.BashPPCall); ok {
+			if r.bashPPBridgeHandles(inner) {
+				values, err := r.bashPPBridgeCall(ctx, inner)
+				if err != nil {
+					return nil, err
+				}
+				q.Args = append(q.Args, values...)
+				return req.Bridge.request(ctx, req, q)
+			}
+			if _, ok := r.bashPPLookupFunc(inner); ok {
+				cells, err := r.bashPPGoSourceTupleCall(inner)
+				if err != nil {
+					return nil, err
+				}
+				for _, cell := range cells {
+					value, err := r.bashPPBridgeCell(cell)
+					if err != nil {
+						return nil, err
+					}
+					q.Args = append(q.Args, value)
+				}
+				return req.Bridge.request(ctx, req, q)
+			}
+		}
+	}
+	for _, expr := range call.ArgExprs {
+		value, err := r.bashPPBridgeExpr(expr)
+		if err != nil {
+			var positioned *goSourceError
+			if errors.As(err, &positioned) {
+				return nil, err
+			}
+			return nil, &goSourceError{prefix: r.bashErrPrefix(expr.Pos()), err: err}
+		}
+		q.Args = append(q.Args, value)
+	}
+	return req.Bridge.request(ctx, req, q)
+}
+func (r *Runner) bashPPBridgeScalar(expr syntax.BashPPExpr) (bashPPScalar, bool, error) {
+	if !r.bashPPGoSource {
+		return bashPPScalar{}, false, nil
+	}
+	handled := false
+	switch e := expr.(type) {
+	case *syntax.BashPPCall:
+		handled = r.bashPPBridgeHandles(e)
+	case *syntax.BashPPSelectorExpr:
+		if id, ok := e.X.(*syntax.BashPPIdent); ok {
+			_, handled = r.bashPPImports[id.Name.Value]
+		}
+	}
+	if !handled {
+		return bashPPScalar{}, false, nil
+	}
+	value, err := r.bashPPBridgeExpr(expr)
+	if err != nil {
+		return bashPPScalar{}, true, err
+	}
+	scalar, err := value.scalar()
+	return scalar, true, err
+}
+func (value bashPPBridgeValue) scalar() (bashPPScalar, error) {
+	scalar := bashPPScalar{typ: value.Type, runtime: true}
+	switch value.Kind {
+	case "string":
+		scalar.value = constant.MakeString(value.Text)
+	case "bool":
+		scalar.value = constant.MakeBool(value.Text == "true")
+	case "int", "uint":
+		scalar.value = constant.MakeFromLiteral(value.Text, token.INT, 0)
+	case "float":
+		scalar.value = constant.MakeFromLiteral(value.Text, token.FLOAT, 0)
+	default:
+		return scalar, fmt.Errorf("gosource: native %s (%s) is not scalar", value.Kind, value.Type)
+	}
+	if scalar.value == nil || scalar.value.Kind() == constant.Unknown {
+		return scalar, fmt.Errorf("gosource: invalid native scalar")
+	}
+	return scalar, nil
+}
+func bridgeScalar(value bashPPScalar) (bashPPBridgeValue, error) {
+	out := bashPPBridgeValue{Type: value.typ}
+	if value.value == nil {
+		return out, fmt.Errorf("gosource: absent scalar value")
+	}
+	switch value.value.Kind() {
+	case constant.String:
+		out.Kind = "string"
+		out.Text = constant.StringVal(value.value)
+	case constant.Bool:
+		out.Kind = "bool"
+		out.Text = strconv.FormatBool(constant.BoolVal(value.value))
+	case constant.Int:
+		out.Kind = "int"
+		out.Text = value.value.ExactString()
+		if strings.HasPrefix(value.typ, "uint") || value.typ == "byte" {
+			out.Kind = "uint"
+		}
+	case constant.Float:
+		out.Kind = "float"
+		number, _ := constant.Float64Val(value.value)
+		out.Text = strconv.FormatFloat(number, 'g', -1, 64)
+	default:
+		return out, fmt.Errorf("gosource: unsupported native scalar kind %s", value.value.Kind())
+	}
+	return out, nil
+}
+func (r *Runner) bashPPBridgeExpr(expr syntax.BashPPExpr) (bashPPBridgeValue, error) {
+	switch x := expr.(type) {
+	case *syntax.BashPPParenExpr:
+		return r.bashPPBridgeExpr(x.X)
+	case *syntax.BashPPIdent:
+		if x.Name.Value == "nil" {
+			return bashPPBridgeValue{Kind: "nil"}, nil
+		}
+		if r.bashPPScope != nil {
+			if cell := r.bashPPScope.lookup(x.Name.Value); cell != nil && cell.vr.Kind == expand.Object {
+				if value, ok := cell.vr.Obj.(*bashPPBridgeValue); ok {
+					return *value, nil
+				}
+				return r.bashPPBridgeCollection(cell.vr.Obj, cell.valueMeta, cell.declType)
+			}
+		}
+	case *syntax.BashPPCall:
+		if r.bashPPBridgeHandles(x) {
+			values, err := r.bashPPBridgeCall(r.ectx, x)
+			if err != nil {
+				return bashPPBridgeValue{}, err
+			}
+			if len(values) != 1 {
+				return bashPPBridgeValue{}, fmt.Errorf("gosource: expression requires one native result, got %d", len(values))
+			}
+			return values[0], nil
+		}
+	case *syntax.BashPPSelectorExpr:
+		if id, ok := x.X.(*syntax.BashPPIdent); ok {
+			if _, imported := r.bashPPImports[id.Name.Value]; imported {
+				req, err := r.bashPPEvalRequest()
+				if err != nil {
+					return bashPPBridgeValue{}, err
+				}
+				values, err := req.Bridge.request(r.ectx, req, bashPPBridgeRequest{Op: "get", Selector: id.Name.Value + "." + x.Sel.Value})
+				if err != nil {
+					return bashPPBridgeValue{}, err
+				}
+				if len(values) != 1 {
+					return bashPPBridgeValue{}, fmt.Errorf("gosource: native symbol returned no value")
+				}
+				return values[0], nil
+			}
+		}
+	case *syntax.BashPPCompositeLit:
+		value, meta, err := r.bashPPEvalComposite(x, x.LitType)
+		if err != nil {
+			return bashPPBridgeValue{}, err
+		}
+		return r.bashPPBridgeCollection(value, meta, x.LitType)
+	}
+	scalar, err := r.bashPPEvalScalarExpr(expr)
+	if err != nil {
+		return bashPPBridgeValue{}, err
+	}
+	return bridgeScalar(scalar)
+}
+func (r *Runner) bashPPBridgeCollection(value any, meta *bashPPCollectionMeta, typ syntax.BashPPTypeExpr) (bashPPBridgeValue, error) {
+	if meta != nil && meta.interfaceValue != nil {
+		cell := meta.interfaceValue.cell
+		if meta.interfaceValue.nilIface || cell == nil {
+			return bashPPBridgeValue{Kind: "nil"}, nil
+		}
+		if cell.vr.Kind == expand.Object {
+			return r.bashPPBridgeCollection(cell.vr.Obj, cell.valueMeta, cell.declType)
+		}
+		return bridgeScalar(r.bashPPScalarFromCell(cell))
+	}
+	if meta != nil && meta.typ != nil {
+		typ = meta.typ
+	}
+	result := bashPPBridgeValue{Type: bashPPBridgeTypeText(typ)}
+	switch value := value.(type) {
+	case []any:
+		result.Kind = "slice"
+		if meta != nil {
+			result.Kind = meta.kind
+			if result.Kind == "inferred-array" {
+				result.Kind = "array"
+			}
+		}
+		collection, ok := r.bashPPUnderlyingType(typ).(*syntax.BashPPCollectionType)
+		if !ok {
+			return result, fmt.Errorf("gosource: missing collection element identity")
+		}
+		for i, item := range value {
+			var child *bashPPCollectionMeta
+			if meta != nil && i < len(meta.sequence) {
+				child = meta.sequence[i]
+			}
+			converted, err := r.bashPPBridgeCollection(item, child, collection.Element)
+			if err != nil {
+				return result, err
+			}
+			result.Elements = append(result.Elements, converted)
+		}
+		return result, nil
+	case map[string]any:
+		switch shape := r.bashPPUnderlyingType(typ).(type) {
+		case *syntax.BashPPCollectionType:
+			if shape.Kind != "map" {
+				return result, fmt.Errorf("gosource: mapping without map type")
+			}
+			result.Kind = "map"
+			for key, item := range value {
+				keyValue := bashPPBridgeValue{Type: bashPPTypeText(shape.Key), Text: key}
+				switch bashPPTypeText(r.bashPPUnderlyingType(shape.Key)) {
+				case "string":
+					keyValue.Kind = "string"
+				case "bool":
+					keyValue.Kind = "bool"
+				default:
+					keyValue.Kind = "int"
+				}
+				var child *bashPPCollectionMeta
+				if meta != nil {
+					child = meta.mapping[key]
+				}
+				converted, err := r.bashPPBridgeCollection(item, child, shape.Element)
+				if err != nil {
+					return result, err
+				}
+				result.Entries = append(result.Entries, bashPPBridgeEntry{Key: keyValue, Value: converted})
+			}
+			return result, nil
+		case *syntax.BashPPStructType:
+			result.Kind = "struct"
+			result.Fields = map[string]bashPPBridgeValue{}
+			for _, field := range shape.Fields {
+				for _, name := range field.Names {
+					item, exists := value[name.Value]
+					if !exists {
+						return result, fmt.Errorf("gosource: missing struct field %s", name.Value)
+					}
+					var child *bashPPCollectionMeta
+					if meta != nil {
+						child = meta.mapping[name.Value]
+					}
+					converted, err := r.bashPPBridgeCollection(item, child, field.FieldTypeExpr)
+					if err != nil {
+						return result, err
+					}
+					result.Fields[name.Value] = converted
+				}
+			}
+			return result, nil
+		default:
+			return result, fmt.Errorf("gosource: missing mapping type schema")
+		}
+	case string:
+		result.Kind = "string"
+		result.Text = value
+	case bool:
+		result.Kind = "bool"
+		result.Text = strconv.FormatBool(value)
+	case int:
+		result.Kind = "int"
+		result.Text = strconv.Itoa(value)
+	case int64:
+		result.Kind = "int"
+		result.Text = strconv.FormatInt(value, 10)
+	case float64:
+		result.Kind = "float"
+		result.Text = strconv.FormatFloat(value, 'g', -1, 64)
+	default:
+		return result, fmt.Errorf("gosource: unsupported interpreter collection value %T", value)
+	}
+	return result, nil
+}
+func (r *Runner) bashPPBridgeShortDecl(ctx context.Context, d *syntax.BashPPShortDecl) bool {
+	if !r.bashPPBridgeHandles(d.Call) {
+		return false
+	}
+	values, err := r.bashPPBridgeCall(ctx, d.Call)
+	if err == nil && len(values) != len(d.Lhs) {
+		err = fmt.Errorf("assignment mismatch: %d variables but %d native results", len(d.Lhs), len(values))
+	}
+	if err != nil {
+		r.exit.fatal(err)
+		return true
+	}
+	for i, lhs := range d.Lhs {
+		if lhs.Value == "_" {
+			continue
+		}
+		value := values[i]
+		scalar, err := value.scalar()
+		if err == nil {
+			r.bashPPDeclareName(lhs.Value, expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarString(scalar.value)})
+			cell := r.bashPPScope.lookup(lhs.Value)
+			cell.scalarKind = scalar.value.Kind()
+			cell.typeName = value.Type
+			cell.declType = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: value.Type}}
+		} else {
+			copy := value
+			r.bashPPDeclareName(lhs.Value, expand.NewObject(&copy))
+			if value.Interface != "" {
+				cell := r.bashPPScope.lookup(lhs.Value)
+				cell.declType = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: value.Interface}}
+				payload := &bashPPCell{vr: expand.NewObject(&copy)}
+				cell.interfaceValue = &bashPPInterfaceValue{nilIface: value.Kind == "nil", cell: payload, dynamic: &syntax.BashPPNamedType{Name: &syntax.Lit{Value: value.Type}}}
+			}
+		}
+	}
+	return true
+}
+
+func bashPPBridgeTypeText(typ syntax.BashPPTypeExpr) string {
+	switch t := typ.(type) {
+	case *syntax.BashPPStructType:
+		var fields []string
+		for _, field := range t.Fields {
+			if field.Embedded {
+				return "<unsupported embedded field>"
+			}
+			names := make([]string, len(field.Names))
+			for i, name := range field.Names {
+				names[i] = name.Value
+			}
+			fields = append(fields, strings.Join(names, ",")+" "+bashPPBridgeTypeText(field.FieldTypeExpr))
+		}
+		return "struct{" + strings.Join(fields, ";") + "}"
+	case *syntax.BashPPInterfaceType:
+		if len(t.Methods) == 0 && len(t.Elems) == 0 {
+			return "interface{}"
+		}
+	case *syntax.BashPPCollectionType:
+		if t.Kind == "map" {
+			return "map[" + bashPPBridgeTypeText(t.Key) + "]" + bashPPBridgeTypeText(t.Element)
+		}
+		length := ""
+		if t.Length != nil {
+			length = t.Length.Value
+		}
+		return "[" + length + "]" + bashPPBridgeTypeText(t.Element)
+	}
+	return bashPPTypeText(typ)
+}
+
+func (r *Runner) bashPPBridgeCell(cell *bashPPCell) (bashPPBridgeValue, error) {
+	if cell == nil {
+		return bashPPBridgeValue{}, fmt.Errorf("gosource: missing result cell")
+	}
+	if cell.interfaceValue != nil {
+		if cell.interfaceValue.nilIface {
+			return bashPPBridgeValue{Kind: "nil"}, nil
+		}
+		return r.bashPPBridgeCell(cell.interfaceValue.cell)
+	}
+	if cell.vr.Kind == expand.Object {
+		if value, ok := cell.vr.Obj.(*bashPPBridgeValue); ok {
+			return *value, nil
+		}
+		return r.bashPPBridgeCollection(cell.vr.Obj, cell.valueMeta, cell.declType)
+	}
+	return bridgeScalar(r.bashPPScalarFromCell(cell))
+}

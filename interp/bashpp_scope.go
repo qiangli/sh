@@ -54,6 +54,8 @@ type bashPPCell struct {
 	// scalarKind retains whether an untyped rendered scalar came from a string,
 	// bool, integer, or float expression. Re-parsing vr.Str would turn quoted
 	// "2" into an integer and quoted "true" into a bool at assignment time.
+	// exactScalar preserves untyped Go constants without a text round trip.
+	exactScalar  constant.Value
 	scalarKind   constant.Kind
 	channel      *bashPPChannel
 	channelOwner *bashPPConcurrent

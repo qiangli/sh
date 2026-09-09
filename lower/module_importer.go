@@ -327,3 +327,9 @@ func (m *moduleImporter) loadLocked(target string) error {
 
 	return nil
 }
+
+// NewModuleImporter resolves Go dependency export data in dir using the same
+// SDK, module, workspace, vendor and internal visibility rules as Compile.
+// It does not execute the importing program. Callers loading unchanged Go source
+// can provide this importer to their Go type checker.
+func NewModuleImporter(dir string) types.Importer { return newModuleImporter(dir) }

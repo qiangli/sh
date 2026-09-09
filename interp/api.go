@@ -100,7 +100,11 @@ type Runner struct {
 	// bashPPScope is the innermost Bash++ lexical block, or nil when the
 	// runner is not in the bash++ dialect. Nil is the fast path every other
 	// dialect takes: the read/write hooks in vars.go are one nil check.
-	bashPPScope *bashPPScope
+	// bashPPGoSource selects ordinary Go package scope semantics for gosource trees.
+	bashPPGoSource      bool
+	bashPPGoSourceDecls map[string]bool
+	bashPPGoSourceFile  *syntax.File
+	bashPPScope         *bashPPScope
 	// bashPPFuncScopes records, per function name, the lexical environment
 	// visible where the function was defined. It is preserved across
 	// [Runner.Reset] for the same reason Funcs is: a function that survives a
@@ -2663,6 +2667,7 @@ const (
 // mean that the shell state will be kept, including variables, options, and the
 // current directory.
 func (r *Runner) Reset() {
+	r.closeGoSourceBridge()
 	if !r.usedNew {
 		panic("use interp.New to construct a Runner")
 	}
@@ -2749,6 +2754,11 @@ func (r *Runner) Reset() {
 		// runtime may have replaced inherited SIG_IGN before main; the explicit
 		// sideband is the supported provenance across that boundary.
 		r.restoreBridgedStartupIgnores()
+	}
+	for name := range r.bashPPGoSourceDecls {
+		delete(r.bashPPFuncs, name)
+		delete(r.bashPPTypes, name)
+		delete(r.bashPPMethods, name)
 	}
 	oldDirFile := r.dirFile
 	// reset the internal state
@@ -3094,6 +3104,15 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 	runExitTrap := false
 	switch node := node.(type) {
 	case *syntax.File:
+		savedGoFile := r.bashPPGoSourceFile
+		r.bashPPGoSourceFile = node
+		defer func() { r.bashPPGoSourceFile = savedGoFile }()
+		savedGoSource := r.bashPPGoSource
+		r.bashPPGoSource = node.GoSource
+		if node.GoSource {
+			defer r.closeGoSourceBridge()
+		}
+		defer func() { r.bashPPGoSource = savedGoSource }()
 		savedAgentic := r.bashPPAgentic
 		r.bashPPAgentic = false
 		defer func() { r.bashPPAgentic = savedAgentic }()
@@ -3112,6 +3131,7 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 			r.stdinSourceActive = true
 		}
 		runExitTrap = true
+		goImportsStarted := false
 		for _, stmt := range node.Stmts {
 			if r.stdinSourceActive && int(stmt.Pos().Offset()) < r.stdinSourceOffset {
 				continue
@@ -3126,8 +3146,33 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 				r.exit.discarding = false
 				r.exit.exiting = false
 			}
+			if node.GoSource {
+				if _, isImport := stmt.Cmd.(*syntax.BashPPImport); !isImport && !goImportsStarted {
+					goImportsStarted = true
+					if err := r.bashPPStartGoSourceBridge(ctx); err != nil {
+						r.exit.fatal(err)
+						break
+					}
+				}
+				if r.bashPPGoSourceDecls == nil {
+					r.bashPPGoSourceDecls = map[string]bool{}
+				}
+				switch d := stmt.Cmd.(type) {
+				case *syntax.BashPPFuncDecl:
+					if d.Receiver == nil {
+						r.bashPPGoSourceDecls[d.Name.Value] = true
+					}
+				case *syntax.BashPPDecl:
+					if d.Site == syntax.StartTypeDecl {
+						r.bashPPGoSourceDecls[d.Name.Value] = true
+					}
+				}
+			}
 			r.verboseStmt(stmt)
 			r.stmt(ctx, stmt)
+			if r.bashPPGoSource && r.exit.code != 0 {
+				r.exit.fatal(ExitStatus(r.exit.code))
+			}
 			// A DISCARD only aborts the top-level command it
 			// occurred in; the next one still runs.
 			if r.exit.discarding {
@@ -3311,7 +3356,12 @@ func (r *Runner) StdinFile() *os.File {
 // To replace e.g. stdin/out/err, do [StdIO](r.stdin, r.stdout, r.stderr)(r) on
 // the copy.
 func (r *Runner) Subshell() *Runner {
-	return r.subshell(true)
+	child := r.subshell(true)
+	// A public Runner owns any dependency session it starts. Inherited
+	// native handles remain tied to the parent's session and fail closed
+	// if used in the independent child session.
+	child.bashPPTools.bridge = nil
+	return child
 }
 
 // subshell is like [Runner.subshell], but allows skipping some allocations and copies
@@ -3354,6 +3404,9 @@ func (r *Runner) subshell(background bool) *Runner {
 		opts:                 r.opts,
 		dialect:              r.dialect,
 		bashPPTools:          r.bashPPTools,
+		bashPPGoSource:       r.bashPPGoSource,
+		bashPPGoSourceFile:   r.bashPPGoSourceFile,
+		bashPPGoSourceDecls:  maps.Clone(r.bashPPGoSourceDecls),
 		origDialect:          r.origDialect,
 		hideBashPPOption:     r.hideBashPPOption,
 		noOpSetState:         maps.Clone(r.noOpSetState),

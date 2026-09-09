@@ -25,11 +25,29 @@ type bashPPScalar struct {
 
 // bashPPEvalScalarExpr consumes syntax's typed tree. Parsing belongs solely
 // to syntax; this package evaluates the tree it was handed.
-func (r *Runner) bashPPEvalScalarExpr(expr syntax.BashPPExpr) (bashPPScalar, error) {
+func (r *Runner) bashPPEvalScalarExpr(expr syntax.BashPPExpr) (result bashPPScalar, failure error) {
+	defer func() {
+		if r.bashPPGoSource && failure != nil && failure != errBashPPScalarInterrupted && expr != nil {
+			var positioned *goSourceError
+			if !errors.As(failure, &positioned) {
+				failure = &goSourceError{prefix: r.bashErrPrefix(expr.Pos()), err: failure}
+			}
+		}
+	}()
+	if value, handled, err := r.bashPPBridgeScalar(expr); handled {
+		return value, err
+	}
 	switch x := expr.(type) {
 	case *syntax.BashPPBasicLit:
-		return bashPPBasicScalar(x)
+		value, err := bashPPBasicScalar(x)
+		if r.bashPPGoSource && x.Kind == "CHAR" {
+			value.typ = "rune"
+		}
+		return value, err
 	case *syntax.BashPPCall:
+		if x.CalleeExpr != nil {
+			return bashPPScalar{}, fmt.Errorf("gosource: computed call runtime is not implemented")
+		}
 		if len(x.Fun) != 1 {
 			return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-FORM: unsupported scalar call")
 		}
@@ -210,6 +228,13 @@ func (r *Runner) bashPPIdentScalar(name string) (bashPPScalar, error) {
 // considering its rendered shell text. Quoted "2" and "true" values must not
 // become numbers or booleans merely because their storage is textual.
 func (r *Runner) bashPPScalarFromCell(cell *bashPPCell) bashPPScalar {
+	if r.bashPPGoSource && cell.constant && cell.exactScalar != nil {
+		value := bashPPScalar{value: cell.exactScalar}
+		if named, ok := cell.declType.(*syntax.BashPPNamedType); ok {
+			value.typ = named.Name.Value
+		}
+		return value
+	}
 	text := cell.vr.String()
 	value := bashPPScalar{}
 	switch cell.scalarKind {
@@ -238,6 +263,15 @@ func (r *Runner) bashPPScalarFromCell(cell *bashPPCell) bashPPScalar {
 		}
 		if value.value == nil || value.value.Kind() == constant.Unknown {
 			value = bashPPScalarFromString(text)
+		}
+	}
+	if r.bashPPGoSource && cell.scalarKind == constant.Float && (value.value == nil || value.value.Kind() == constant.Unknown) {
+		if parts := strings.Split(text, "/"); len(parts) == 2 {
+			numerator := constant.MakeFromLiteral(parts[0], token.FLOAT, 0)
+			denominator := constant.MakeFromLiteral(parts[1], token.FLOAT, 0)
+			if numerator.Kind() != constant.Unknown && denominator.Kind() != constant.Unknown && constant.Sign(denominator) != 0 {
+				value.value = constant.BinaryOp(numerator, token.QUO, denominator)
+			}
 		}
 	}
 	value.runtime = !cell.constant
@@ -383,7 +417,17 @@ func (r *Runner) bashPPBinaryScalar(op token.Token, left, right bashPPScalar) (b
 		}
 		fallthrough
 	case token.ADD, token.SUB, token.OR, token.XOR, token.MUL, token.AND, token.AND_NOT:
-		value, err := bashPPBinaryOp(left.value, op, right.value)
+		arithmeticOp := op
+		if r.bashPPGoSource && op == token.QUO && left.value.Kind() == constant.Int && right.value.Kind() == constant.Int {
+			integer := resultType == ""
+			if typ, ok := r.bashPPUnderlyingType(&syntax.BashPPNamedType{Name: &syntax.Lit{Value: resultType}}).(*syntax.BashPPNamedType); ok {
+				integer = integer || bashPPIntegerType(typ.Name.Value)
+			}
+			if integer {
+				arithmeticOp = token.QUO_ASSIGN
+			}
+		}
+		value, err := bashPPBinaryOp(left.value, arithmeticOp, right.value)
 		if err != nil {
 			return bashPPScalar{}, err
 		}

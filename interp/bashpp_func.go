@@ -167,7 +167,11 @@ const bashPPFuncHandlePrefix = "func@bashpp:"
 func (r *Runner) bashPPMakeClosure(lit *syntax.BashPPFuncLit) (*bashPPFunc, expand.Variable) {
 	fn := &bashPPFunc{lit: lit}
 	if r.bashPPScope != nil {
-		fn.scope = r.bashPPScope.snapshot()
+		if r.bashPPGoSource && r.bashPPFuncActive == 0 {
+			fn.scope = r.bashPPScope
+		} else {
+			fn.scope = r.bashPPScope.snapshot()
+		}
 	}
 	// A literal written inside a generic body is part of THAT instantiation:
 	// its own body may name the enclosing `T`, and it keeps meaning the type
@@ -273,7 +277,11 @@ func (r *Runner) bashPPFuncDecl(d *syntax.BashPPFuncDecl) {
 	}
 	var captured *bashPPScope
 	if r.bashPPScope != nil {
-		captured = r.bashPPScope.snapshot()
+		if r.bashPPGoSource {
+			captured = r.bashPPScope
+		} else {
+			captured = r.bashPPScope.snapshot()
+		}
 	}
 	r.bashPPFuncs[name] = &bashPPFunc{decl: d, scope: captured}
 }
@@ -1752,6 +1760,28 @@ func (r *Runner) bashPPFinalResults(settled []string, resultNames []string) []st
 // bashPPReturnStmt evaluates a Go-form return, recording its values and
 // unwinding the body through the shell's existing return machinery.
 func (r *Runner) bashPPReturnStmt(ctx context.Context, ret *syntax.BashPPReturn) {
+	if r.bashPPBridgeHandles(ret.Call) {
+		values, err := r.bashPPBridgeCall(ctx, ret.Call)
+		if err != nil {
+			r.exit.fatal(err)
+			return
+		}
+		result := bashPPReturnState{active: true}
+		for _, value := range values {
+			var cell *bashPPCell
+			if scalar, err := value.scalar(); err == nil {
+				cell = &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarString(scalar.value)}, scalarKind: scalar.value.Kind(), typeName: value.Type, declType: &syntax.BashPPNamedType{Name: &syntax.Lit{Value: value.Type}}}
+			} else {
+				copy := value
+				cell = &bashPPCell{vr: expand.NewObject(&copy)}
+			}
+			result.values = append(result.values, cell.vr.String())
+			result.cells = append(result.cells, cell)
+		}
+		r.bashPPReturn = result
+		r.exit.returning = true
+		return
+	}
 	if ret.Call != nil {
 		fn, ok := r.bashPPLookupFunc(ret.Call)
 		if !ok {

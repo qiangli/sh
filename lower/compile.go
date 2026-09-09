@@ -17,6 +17,8 @@ import (
 )
 
 type emitter struct {
+	sourceFile         *syntax.File
+	goSource           bool
 	options            Options
 	moduleImporter     types.Importer
 	prefix             string
@@ -69,8 +71,10 @@ func Compile(file *syntax.File, options Options) (*Result, error) {
 	if err := CheckToolchain(file); err != nil {
 		return nil, err
 	}
-	if err := CheckBashSharp(file); err != nil {
-		return nil, err
+	if !file.GoSource {
+		if err := CheckBashSharp(file); err != nil {
+			return nil, err
+		}
 	}
 	return compilePass(file, options, nil)
 }
@@ -87,7 +91,7 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 	if !token.IsIdentifier(options.Package) || token.Lookup(options.Package).IsKeyword() {
 		return nil, ErrorList{{Code: CodeType, Msg: "invalid package name", Pos: file.Pos()}}
 	}
-	e := &emitter{writtenNames: map[string]bool{}, inferredParams: map[*syntax.BashPPField]string{}, declaredTypes: map[string]*syntax.BashPPDecl{}, functionDecls: map[string]*syntax.BashPPFuncDecl{}, enumMembers: map[string][]*syntax.Lit{}, options: options, funcs: map[string]bool{}, scopes: []map[string]bool{{}}, globals: map[string]bool{}, visibleGlobals: map[string]bool{}, imports: map[string]string{}, callableParams: map[*syntax.BashPPField]string{}, dotNames: map[string]bool{}, declaredGlobals: map[string]bool{}, typeNames: map[string]bool{}, globalTypes: globalTypes}
+	e := &emitter{goSource: file.GoSource, sourceFile: file, writtenNames: map[string]bool{}, inferredParams: map[*syntax.BashPPField]string{}, declaredTypes: map[string]*syntax.BashPPDecl{}, functionDecls: map[string]*syntax.BashPPFuncDecl{}, enumMembers: map[string][]*syntax.Lit{}, options: options, funcs: map[string]bool{}, scopes: []map[string]bool{{}}, globals: map[string]bool{}, visibleGlobals: map[string]bool{}, imports: map[string]string{}, callableParams: map[*syntax.BashPPField]string{}, dotNames: map[string]bool{}, declaredGlobals: map[string]bool{}, typeNames: map[string]bool{}, globalTypes: globalTypes}
 	e.moduleImporter = newModuleImporter(options.Dir)
 	e.sourceName = options.Origin
 	if e.sourceName == "" {
@@ -149,6 +153,11 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 					e.globals[name] = true
 				}
 			}
+		}
+	}
+	if file.GoSource {
+		for name := range e.globals {
+			e.visibleGlobals[name] = true
 		}
 	}
 	if options.Entry != "" && (e.funcs[options.Entry] || e.globals[options.Entry] || e.typeNames[options.Entry]) {
@@ -318,7 +327,7 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 	if err != nil {
 		return nil, e.fail(file, CodeExpr, "generated Go is not syntactically valid: "+err.Error())
 	}
-	result := &Result{Source: source, Package: options.Package, Imports: imports, Origin: options.Origin}
+	result := &Result{Sources: append([]syntax.SourceFile(nil), file.Sources...), Source: source, Package: options.Package, Imports: imports, Origin: options.Origin}
 	if e.execution {
 		result.Entry = e.prefix + "execute"
 		if options.Entry != "" {
@@ -371,7 +380,8 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 		if strings.Contains(msg, "undefined:") {
 			code = CodeUndefined
 		}
-		diagnostics = append(diagnostics, Diagnostic{Code: code, Msg: msg, Node: node, Pos: pos})
+		origin, _ := file.SourceAt(pos)
+		diagnostics = append(diagnostics, Diagnostic{Code: code, Msg: msg, Node: node, Pos: pos, Source: origin.Name})
 	}}
 	info := &types.Info{Uses: map[*ast.Ident]types.Object{}, Defs: map[*ast.Ident]types.Object{}}
 	checked, _ := conf.Check(options.Package, fs, []*ast.File{goFile}, info)
@@ -487,11 +497,19 @@ func (e *emitter) fail(n syntax.Node, code, msg string) error {
 	if n != nil {
 		pos = n.Pos()
 	}
-	return ErrorList{{Code: code, Msg: msg, Node: nodeName(n), Pos: pos}}
+	source := syntax.SourceFile{}
+	if e.sourceFile != nil {
+		source, _ = e.sourceFile.SourceAt(pos)
+	}
+	return ErrorList{{Code: code, Msg: msg, Node: nodeName(n), Pos: pos, Source: source.Name}}
 }
 func (e *emitter) mark(n syntax.Node) string {
 	id := len(e.marks)
-	e.marks = append(e.marks, Mapping{Pos: n.Pos(), Node: nodeName(n)})
+	source := syntax.SourceFile{}
+	if e.sourceFile != nil {
+		source, _ = e.sourceFile.SourceAt(n.Pos())
+	}
+	e.marks = append(e.marks, Mapping{Pos: n.Pos(), Node: nodeName(n), Source: source.Name, SourceOffset: n.Pos().Offset() - source.Base})
 	return fmt.Sprintf("// lower:%d\n", id)
 }
 func (e *emitter) known(name string) bool {
@@ -745,6 +763,11 @@ func (e *emitter) fields(fs []*syntax.BashPPField) (string, error) {
 	return strings.Join(out, ", "), nil
 }
 func (e *emitter) command(c syntax.Command) (string, error) {
+	if e.goSource {
+		if text, handled, err := e.goSourceCommand(c); handled {
+			return text, err
+		}
+	}
 	switch n := c.(type) {
 	case *syntax.BashPPAgenticBlock:
 		return e.agenticBlock(n)
@@ -830,7 +853,11 @@ func (e *emitter) command(c syntax.Command) (string, error) {
 			return "", e.fail(n, CodeUnsupported, "initialized typed float needs certified scalar conversion semantics")
 		}
 		e.projections.projectionBind(n.Name.Value, projection)
-		return n.Kw.Value + " " + n.Name.Value + typ + init + e.unused([]string{n.Name.Value}), nil
+		unused := e.unused([]string{n.Name.Value})
+		if e.goSource && n.Kw.Value == "const" {
+			unused = ""
+		}
+		return n.Kw.Value + " " + n.Name.Value + typ + init + unused, nil
 	case *syntax.BashPPShortDecl:
 		if text, handled, err := e.shortResultCall(n); handled || err != nil {
 			return text, err
@@ -1134,6 +1161,8 @@ func (e *emitter) forStmt(n *syntax.BashPPFor) (string, error) {
 }
 func (e *emitter) expr(x syntax.BashPPExpr) (string, error) {
 	switch n := x.(type) {
+	case *syntax.BashPPFuncLit:
+		return e.literal(n)
 	case *syntax.BashPPCall:
 		return e.call(n)
 	case *syntax.BashPPCompositeLit:
@@ -1192,7 +1221,7 @@ func (e *emitter) expr(x syntax.BashPPExpr) (string, error) {
 		if n.Name.Value == "iota" && e.iotaValue != nil {
 			return strconv.Itoa(*e.iotaValue), nil
 		}
-		if !e.known(n.Name.Value) {
+		if !e.known(n.Name.Value) && !(e.goSource && scalarType(n.Name.Value)) {
 			return "", e.fail(n, CodeUndefined, "undefined: "+n.Name.Value)
 		}
 		return e.goName(n.Name.Value), nil
@@ -1210,7 +1239,7 @@ func (e *emitter) expr(x syntax.BashPPExpr) (string, error) {
 		r, err := e.expr(n.Y)
 		return "(" + l + " " + n.Op.Value + " " + r + ")", err
 	case *syntax.BashPPConvertExpr:
-		if !scalarType(n.ConvType.Value) {
+		if !scalarType(n.ConvType.Value) && !(e.goSource && e.typeNames[n.ConvType.Value]) {
 			return "", e.fail(n, CodeUnsupported, "non-scalar conversion")
 		}
 		v, err := e.expr(n.X)
@@ -1220,6 +1249,24 @@ func (e *emitter) expr(x syntax.BashPPExpr) (string, error) {
 	}
 }
 func (e *emitter) call(c *syntax.BashPPCall) (string, error) {
+	if c.CalleeExpr != nil {
+		callee, err := e.expr(c.CalleeExpr)
+		if err != nil {
+			return "", err
+		}
+		args := make([]string, len(c.Args))
+		for i := range c.Args {
+			args[i], err = e.callArgument(c, i)
+			if err != nil {
+				return "", err
+			}
+		}
+		spread := ""
+		if c.Ellipsis.IsValid() {
+			spread = "..."
+		}
+		return "(" + callee + ")(" + strings.Join(args, ",") + spread + ")", nil
+	}
 	frame := e.resultCallFrame
 	e.resultCallFrame = ""
 	defer func() { e.resultCallFrame = frame }()
@@ -1331,7 +1378,13 @@ func (e *emitter) call(c *syntax.BashPPCall) (string, error) {
 			return "", e.fail(c, CodeUnsupported, "nonconstant enum conversion requires runtime membership guard")
 		}
 	}
+	if e.goSource && !e.funcs[name] && (name == "panic" || name == "recover") {
+		return name + "(" + strings.Join(args, ",") + ")", nil
+	}
 	if !e.funcs[name] && (name == "print" || name == "println") {
+		if e.goSource {
+			return name + "(" + strings.Join(args, ",") + ")", nil
+		}
 		for i, w := range c.Args {
 			projected, err := e.projectionArgument(w, args[i])
 			if err != nil {

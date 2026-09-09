@@ -207,6 +207,9 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 	// The visible scalar stays in the ordinary shell variable below; the named
 	// type and pointer bits are attached to its lexical cell after declaration.
 	vr := r.bashPPValue(ctx, d.Init)
+	if lit, ok := d.InitExpr.(*syntax.BashPPFuncLit); ok {
+		_, vr = r.bashPPMakeClosure(lit)
+	}
 	if typed, handled, err := r.bashPPTypedScalarDeclValue(d); handled {
 		if err != nil {
 			if err == errBashPPScalarInterrupted {
@@ -312,6 +315,13 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 		r.exit = exitStatus{code: 2}
 		return
 	}
+	if r.bashPPGoSource && d.Site == syntax.StartConst && d.InitExpr != nil {
+		if value, err := r.bashPPEvalScalarExpr(d.InitExpr); err == nil {
+			cell := r.bashPPScope.lookup(name)
+			cell.exactScalar = value.value
+			cell.scalarKind = value.value.Kind()
+		}
+	}
 	if d.Site == syntax.StartTypeDecl {
 		members := make([]string, len(d.EnumMembers))
 		for i, member := range d.EnumMembers {
@@ -350,6 +360,13 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 // assignability rules to scalar declarations. Structured, pointer, and
 // interface values retain their single-model paths below in bashPPDeclare.
 func (r *Runner) bashPPTypedScalarDeclValue(d *syntax.BashPPDecl) (expand.Variable, bool, error) {
+	if r.bashPPGoSource && d.Site == syntax.StartConst && d.DeclTypeExpr == nil {
+		value, err := r.bashPPEvalScalarExpr(d.InitExpr)
+		if err != nil {
+			return expand.Variable{}, true, err
+		}
+		return expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarString(value.value)}, true, nil
+	}
 	if (d.Site != syntax.StartVar && d.Site != syntax.StartConst) || d.DeclTypeExpr == nil {
 		return expand.Variable{}, false, nil
 	}
@@ -901,6 +918,11 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 	// against the function's declared results, done inside.
 	if d.Call != nil {
 		if r.bashPPEnumConstruct(d) {
+			return
+		}
+		// Native dependency handles resolve their own methods before local
+		// language method lookup attempts to inspect interpreter type metadata.
+		if r.bashPPBridgeShortDecl(ctx, d) {
 			return
 		}
 		if fn, ok := r.bashPPLookupFunc(d.Call); ok {
@@ -1560,6 +1582,16 @@ func (r *Runner) bashPPValueInRegion(_ context.Context, words []*syntax.Word, go
 // away from any working script, which is exactly why a diagnostic is
 // permitted here and forbidden on a Class E shape.
 func (r *Runner) bashPPCall(ctx context.Context, c *syntax.BashPPCall) {
+	if r.bashPPBridgeHandles(c) {
+		if _, err := r.bashPPBridgeCall(ctx, c); err != nil {
+			r.exit.fatal(err)
+		}
+		return
+	}
+	if c.CalleeExpr != nil {
+		r.exit.fatal(fmt.Errorf("%sgosource: computed call runtime is not implemented", r.bashErrPrefix(c.Pos())))
+		return
+	}
 	// A call to a typed function declared in this session runs the function.
 	// It is checked before the external eval toolchain so a user's own `func`
 	// always wins over a same-named tool binding.
@@ -1650,6 +1682,12 @@ func (r *Runner) bashPPEvalSelector(ctx context.Context, c *syntax.BashPPCall, v
 			req.Args = make([]string, len(values))
 			for i, value := range values {
 				req.Args[i] = strconv.Quote(value)
+			}
+		} else if r.bashPPGoSource {
+			req.Args, err = r.bashPPGoSourceArguments(c)
+			if err != nil {
+				r.exit.fatal(err)
+				return
 			}
 		} else {
 			req.Args = make([]string, len(c.Args))

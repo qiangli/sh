@@ -419,6 +419,7 @@ func (*BashPPDerefExpr) bashPPExprNode()      {}
 func (*BashPPNewExpr) bashPPExprNode()        {}
 func (*BashPPTypeAssertExpr) bashPPExprNode() {}
 func (*BashPPCall) bashPPExprNode()           {}
+func (*BashPPFuncLit) bashPPExprNode()        {}
 
 // BashPPBasicLit is an exact scalar literal. Kind uses Go token names (INT,
 // FLOAT, CHAR, STRING), retained as text so typed JSON remains stable.
@@ -772,8 +773,11 @@ func (x *BashPPConvertExpr) End() Pos { return posAddCol(x.Rparen, 1) }
 // disambiguator the whole Day-1 set leans on, and it is why `go build ./...`
 // keeps running the Go toolchain while `go worker(a, b)` does not.
 type BashPPCall struct {
-	Fun  []*Lit  // the selector chain: x.y.z is three literals
-	Args []*Word // the arguments, unevaluated
+	// CalleeExpr preserves computed callees, such as factory().Method.
+	// It is mutually exclusive with Fun and FuncLit.
+	CalleeExpr BashPPExpr
+	Fun        []*Lit  // the selector chain: x.y.z is three literals
+	Args       []*Word // the arguments, unevaluated
 	// ArgExprs owns arguments of calls nested in a typed scalar expression.
 	// When present, it corresponds one-for-one with Args, which retains the
 	// original words for legacy consumers. Walk, printing, and evaluation use
@@ -873,6 +877,9 @@ func (s *BashPPImportSpec) Pos() Pos {
 func (s *BashPPImportSpec) End() Pos { return s.Path.End() }
 
 func (c *BashPPCall) Pos() Pos {
+	if c.CalleeExpr != nil {
+		return c.CalleeExpr.Pos()
+	}
 	if c.MethodExprLparen.IsValid() {
 		return c.MethodExprLparen
 	}

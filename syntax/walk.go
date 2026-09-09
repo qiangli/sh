@@ -354,6 +354,7 @@ func Walk(node Node, f func(Node) bool) {
 		walkNilable(node.Key, f)
 		Walk(node.Value, f)
 	case *BashPPCall:
+		walkNilable(node.CalleeExpr, f)
 		if node.FuncLit != nil {
 			Walk(node.FuncLit, f)
 		}

@@ -9,6 +9,9 @@ import (
 )
 
 func (e *emitter) needsExecution(file *syntax.File) {
+	if file.GoSource {
+		return
+	}
 	if hasPositionalParameter(file) {
 		e.execution = true
 		e.bridge = true

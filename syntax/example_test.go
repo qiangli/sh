@@ -161,6 +161,8 @@ func ExampleDebugPrint() {
 	// Output:
 	// *syntax.File {
 	// .  Name: ""
+	// .  GoSource: false
+	// .  Sources: []syntax.SourceFile (len = 0) {}
 	// .  Stmts: []*syntax.Stmt (len = 1) {
 	// .  .  0: *syntax.Stmt {
 	// .  .  .  Comments: []syntax.Comment (len = 0) {}

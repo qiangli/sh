@@ -133,7 +133,7 @@ func encodeValue(val reflect.Value) (reflect.Value, string) {
 		if val.String() != "" {
 			return val, ""
 		}
-	case reflect.Uint8, reflect.Uint32:
+	case reflect.Uint, reflect.Uint8, reflect.Uint32:
 		if val.Uint() == 0 {
 			break
 		}
@@ -378,7 +378,7 @@ func decodeValue(val reflect.Value, enc any) error {
 		// listed alongside Uint32 because the Bash++ node enums are uint8;
 		// without it they decode via SetString and panic on a non-string kind.
 		switch val.Kind() {
-		case reflect.Uint8, reflect.Uint32:
+		case reflect.Uint, reflect.Uint8, reflect.Uint32:
 			u, ok := val.Addr().Interface().(encoding.TextUnmarshaler)
 			if !ok {
 				return fmt.Errorf("cannot decode string into %s", val.Type())

@@ -24,8 +24,29 @@ type Node interface {
 type File struct {
 	Name string
 
+	// GoSource marks a tree loaded using Go lexical and static semantics.
+	GoSource bool
+	// Sources maps merged Go AST offsets to their original immutable inputs.
+	Sources []SourceFile
+
 	Stmts []*Stmt
 	Last  []Comment
+}
+
+// SourceFile identifies one input in a combined positioned Go syntax tree.
+type SourceFile struct {
+	Name, SHA256 string
+	Base, Size   uint
+}
+
+// SourceAt returns the input containing pos. Offsets are relative to Base.
+func (f *File) SourceAt(pos Pos) (SourceFile, bool) {
+	for _, source := range f.Sources {
+		if pos.Offset() >= source.Base && pos.Offset() <= source.Base+source.Size {
+			return source, true
+		}
+	}
+	return SourceFile{}, false
 }
 
 func (f *File) Pos() Pos { return stmtsPos(f.Stmts, f.Last) }

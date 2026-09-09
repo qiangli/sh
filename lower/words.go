@@ -65,6 +65,36 @@ func (e *emitter) nativeWordExpr(n syntax.Node, text string) (string, error) {
 	if err != nil {
 		return "", e.fail(n, CodeExpr, "invalid committed expression: "+text)
 	}
+	if e.goSource {
+		// This fragment came from a Go-typechecked AST compatibility field.
+		// Retain its complete Go expression grammar; generated-code checking
+		// below Compile remains authoritative for emitted names and types.
+		var stack []ast.Node
+		ast.Inspect(x, func(node ast.Node) bool {
+			if node == nil {
+				stack = stack[:len(stack)-1]
+				return true
+			}
+			if id, ok := node.(*ast.Ident); ok && id.Name == "main" {
+				selectorField := false
+				if len(stack) > 0 {
+					if parent, ok := stack[len(stack)-1].(*ast.SelectorExpr); ok && parent.Sel == id {
+						selectorField = true
+					}
+				}
+				if !selectorField {
+					id.Name = e.goName(id.Name)
+				}
+			}
+			stack = append(stack, node)
+			return true
+		})
+		var out bytes.Buffer
+		if err := format.Node(&out, token.NewFileSet(), x); err != nil {
+			return "", e.fail(n, CodeExpr, err.Error())
+		}
+		return out.String(), nil
+	}
 	var problem error
 	ast.Inspect(x, func(a ast.Node) bool {
 		if a == nil || problem != nil {

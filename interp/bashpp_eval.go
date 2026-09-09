@@ -231,6 +231,7 @@ func newPolicyBashPPEvaluator() *policyBashPPEvaluator {
 // place, and under `set -e` it aborts at the wrong statement. The registry is
 // only ever populated with packages that passed policy.
 func (e *policyBashPPEvaluator) Resolve(ctx context.Context, req bashPPEvalRequest, path string) (string, error) {
+	req = bashPPModuleRequest(req)
 	load := e.facts
 	if load == nil {
 		load = bashPPGoListFacts

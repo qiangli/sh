@@ -193,6 +193,9 @@ func (e *emitter) globalStatement(s *syntax.Stmt) (string, error) {
 	}
 	if constant {
 		e.globalDecls.WriteString(e.mark(s.Cmd) + line + "\n")
+		if e.goSource {
+			return "", nil
+		}
 		return e.mark(s.Cmd) + e.unused(ns) + "\n" + e.lexicalGlobalConstant(ns[0]), nil
 	}
 	if e.globalTypes == nil {

@@ -210,6 +210,18 @@ func (r *Runner) bashPPBuiltinElement(arg bashPPBuiltinArg, expected syntax.Bash
 func (r *Runner) bashPPRunValueBuiltin(name string, c *syntax.BashPPCall) (*bashPPCell, bool) {
 	args := make([]bashPPBuiltinArg, len(c.Args))
 	for i, word := range c.Args {
+		if r.bashPPGoSource && (name == "print" || name == "println") && i < len(c.ArgExprs) && c.ArgExprs[i] != nil {
+			scalar, err := r.bashPPEvalScalarExpr(c.ArgExprs[i])
+			if err != nil {
+				if err != errBashPPScalarInterrupted {
+					r.exit.fatal(err)
+				}
+				return nil, false
+			}
+			text := bashPPScalarString(scalar.value)
+			args[i] = bashPPBuiltinArg{value: bashPPBuiltinExactScalarValue(text, scalar), scalar: scalar, hasScalar: true, text: text}
+			continue
+		}
 		args[i] = r.bashPPBuiltinArg(word)
 	}
 	switch name {
@@ -500,7 +512,13 @@ func (r *Runner) bashPPRunValueBuiltin(name string, c *syntax.BashPPCall) (*bash
 		for i, arg := range args {
 			parts[i] = bashPPBuiltinScalar(arg.value)
 		}
-		if name == "println" {
+		if r.bashPPGoSource {
+			if name == "println" {
+				r.errf("%s\n", strings.Join(parts, " "))
+			} else {
+				r.errf("%s", strings.Join(parts, ""))
+			}
+		} else if name == "println" {
 			r.outf("%s\n", strings.Join(parts, " "))
 		} else {
 			r.outf("%s", strings.Join(parts, ""))

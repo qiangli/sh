@@ -1,0 +1,113 @@
+// Generated dependency bridge: imported operations only, no program source.
+package main
+import (
+ "encoding/json"
+ "fmt"
+ "go/ast"
+ "go/parser"
+ "net"
+ "reflect"
+ "strconv"
+ "sync"
+//IMPORTS
+)
+
+//CONNECTION
+
+type value struct {
+ Interface string `json:"interface,omitempty"`
+ Kind string `json:"kind"`
+ Type string `json:"type,omitempty"`
+ Text string `json:"text,omitempty"`
+ Handle uint64 `json:"handle,omitempty"`
+ Elements []value `json:"elements,omitempty"`
+ Fields map[string]value `json:"fields,omitempty"`
+ Entries []entry `json:"entries,omitempty"`
+}
+type entry struct {Key value `json:"key"`; Value value `json:"value"`}
+type request struct { ID uint64 `json:"id"`; Op string `json:"op"`; Selector string `json:"selector"`; Receiver *value `json:"receiver,omitempty"`; Args []value `json:"args,omitempty"`; Spread bool `json:"spread,omitempty"` }
+type response struct { ID uint64 `json:"id"`; Values []value `json:"values,omitempty"`; Error string `json:"error,omitempty"` }
+var symbols = map[string]reflect.Value{
+//SYMBOLS
+}
+var types = map[string]reflect.Type{
+ "any": reflect.TypeFor[any](), "interface{}": reflect.TypeFor[any](), "bool": reflect.TypeFor[bool](), "string": reflect.TypeFor[string](), "int": reflect.TypeFor[int](), "int8": reflect.TypeFor[int8](), "int16": reflect.TypeFor[int16](), "int32": reflect.TypeFor[int32](), "int64": reflect.TypeFor[int64](), "uint": reflect.TypeFor[uint](), "uint8": reflect.TypeFor[uint8](), "uint16": reflect.TypeFor[uint16](), "uint32": reflect.TypeFor[uint32](), "uint64": reflect.TypeFor[uint64](), "uintptr": reflect.TypeFor[uintptr](), "float32": reflect.TypeFor[float32](), "float64": reflect.TypeFor[float64](), "rune": reflect.TypeFor[rune](), "byte": reflect.TypeFor[byte](),
+//TYPES
+}
+var handles = struct { sync.Mutex; next uint64; values map[uint64]reflect.Value }{values: map[uint64]reflect.Value{}}
+func typeID(t reflect.Type) string { if t.Name()!="" && t.PkgPath()!="" {return t.PkgPath()+"."+t.Name()}; return t.String() }
+func encode(v reflect.Value) value {
+ if !v.IsValid() { return value{Kind:"nil"} }
+ static:="";if v.Kind()==reflect.Interface {static=typeID(v.Type());if v.IsNil(){return value{Kind:"nil",Type:static,Interface:static}};v=v.Elem()}
+ result:=value{Type:typeID(v.Type()),Interface:static}
+ switch v.Kind(){
+ case reflect.String: result.Kind="string";result.Text=v.String()
+ case reflect.Bool:result.Kind="bool";result.Text=strconv.FormatBool(v.Bool())
+ case reflect.Int,reflect.Int8,reflect.Int16,reflect.Int32,reflect.Int64:result.Kind="int";result.Text=strconv.FormatInt(v.Int(),10)
+ case reflect.Uint,reflect.Uint8,reflect.Uint16,reflect.Uint32,reflect.Uint64,reflect.Uintptr:result.Kind="uint";result.Text=strconv.FormatUint(v.Uint(),10)
+ case reflect.Float32,reflect.Float64:result.Kind="float";result.Text=strconv.FormatFloat(v.Float(),'g',-1,v.Type().Bits())
+ default: handles.Lock();handles.next++;id:=handles.next;copy:=reflect.New(v.Type()).Elem();copy.Set(v);handles.values[id]=copy;handles.Unlock();result.Kind="handle";result.Handle=id
+ }
+ return result
+}
+func resolveType(name string) reflect.Type {
+ if typ:=types[name];typ!=nil{return typ}
+ expression,err:=parser.ParseExpr(name);if err!=nil{return nil}
+ var walk func(ast.Expr) reflect.Type
+ walk=func(expr ast.Expr) reflect.Type {switch e:=expr.(type){
+ case *ast.Ident:return types[e.Name]
+ case *ast.ArrayType:element:=walk(e.Elt);if element==nil{return nil};if e.Len==nil{return reflect.SliceOf(element)};if lit,ok:=e.Len.(*ast.BasicLit);ok{n,err:=strconv.Atoi(lit.Value);if err==nil&&n>=0{return reflect.ArrayOf(n,element)}}
+ case *ast.MapType:key,element:=walk(e.Key),walk(e.Value);if key!=nil&&element!=nil&&key.Comparable(){return reflect.MapOf(key,element)}
+ case *ast.InterfaceType:if len(e.Methods.List)==0{return reflect.TypeFor[any]()}
+ case *ast.StructType:var fields []reflect.StructField;for _,field:=range e.Fields.List{typ:=walk(field.Type);if typ==nil{return nil};for _,name:=range field.Names{if !name.IsExported(){return nil};fields=append(fields,reflect.StructField{Name:name.Name,Type:typ})}};return reflect.StructOf(fields)
+ case *ast.SelectorExpr:if prefix,ok:=e.X.(*ast.Ident);ok{return types[prefix.Name+"."+e.Sel.Name]}
+ };return nil};return walk(expression)
+}
+func decode(v value, target reflect.Type)(reflect.Value,error){
+ var result reflect.Value
+ if v.Kind=="nil" {if target==nil{return reflect.Value{},nil}; switch target.Kind(){case reflect.Chan,reflect.Func,reflect.Interface,reflect.Map,reflect.Pointer,reflect.Slice:return reflect.Zero(target),nil};return result,fmt.Errorf("nil is not assignable to %s",target)}
+ if v.Kind=="handle" {handles.Lock();result=handles.values[v.Handle];handles.Unlock();if !result.IsValid(){return result,fmt.Errorf("unknown native handle %d",v.Handle)}} else {
+  typ:=resolveType(v.Type)
+  if v.Type!="" && typ==nil {return result,fmt.Errorf("unregistered bridge type %q",v.Type)}
+  if typ==nil && target!=nil && target.Kind()!=reflect.Interface {typ=target}
+  if typ==nil {switch v.Kind{case "string":typ=types["string"];case "bool":typ=types["bool"];case "int":typ=types["int"];case "uint":typ=types["uint"];case "float":typ=types["float64"]}}
+  if typ==nil{return result,fmt.Errorf("missing bridge type for %s",v.Kind)}
+  result=reflect.New(typ).Elem()
+  switch v.Kind {
+  case "string":if typ.Kind()!=reflect.String{return result,fmt.Errorf("string for %s",typ)};result.SetString(v.Text)
+  case "bool":b,e:=strconv.ParseBool(v.Text);if e!=nil||typ.Kind()!=reflect.Bool{return result,fmt.Errorf("invalid bool")};result.SetBool(b)
+  case "int":n,e:=strconv.ParseInt(v.Text,10,64);if e!=nil{return result,e};switch typ.Kind(){case reflect.Int,reflect.Int8,reflect.Int16,reflect.Int32,reflect.Int64:if result.OverflowInt(n){return result,fmt.Errorf("integer overflow")};result.SetInt(n);case reflect.Float32,reflect.Float64:result.SetFloat(float64(n));default:return result,fmt.Errorf("integer for %s",typ)}
+  case "uint":n,e:=strconv.ParseUint(v.Text,10,64);if e!=nil||result.OverflowUint(n){return result,fmt.Errorf("unsigned overflow")};result.SetUint(n)
+  case "float":n,e:=strconv.ParseFloat(v.Text,64);if e!=nil{return result,e};if typ.Kind()!=reflect.Float32&&typ.Kind()!=reflect.Float64{return result,fmt.Errorf("float for %s",typ)};result.SetFloat(n)
+  case "slice","array":if typ.Kind()==reflect.Slice {result=reflect.MakeSlice(typ,len(v.Elements),len(v.Elements))} else if typ.Kind()!=reflect.Array||typ.Len()!=len(v.Elements){return result,fmt.Errorf("invalid collection %s",typ)};for i,elem:=range v.Elements{item,e:=decode(elem,typ.Elem());if e!=nil{return result,e};result.Index(i).Set(item)}
+  case "map":if typ.Kind()!=reflect.Map{return result,fmt.Errorf("map for %s",typ)};result=reflect.MakeMapWithSize(typ,len(v.Entries));for _,entry:=range v.Entries{key,e:=decode(entry.Key,typ.Key());if e!=nil{return result,e};item,e:=decode(entry.Value,typ.Elem());if e!=nil{return result,e};result.SetMapIndex(key,item)}
+  case "struct":if typ.Kind()!=reflect.Struct{return result,fmt.Errorf("struct for %s",typ)};for name,field:=range v.Fields{slot:=result.FieldByName(name);if !slot.IsValid()||!slot.CanSet(){return result,fmt.Errorf("invalid field %s",name)};item,e:=decode(field,slot.Type());if e!=nil{return result,e};slot.Set(item)}
+  default:return result,fmt.Errorf("unsupported bridge value %s",v.Kind)
+  }
+ }
+ if target==nil{return result,nil}
+ if result.Type().AssignableTo(target){return result,nil}
+ return result,fmt.Errorf("%s not assignable to %s",result.Type(),target)
+}
+func dispatch(q request)(reply response){
+ reply.ID=q.ID
+ defer func(){if e:=recover();e!=nil{reply.Error=fmt.Sprintf("native dependency panic: %v",e)}}()
+ fn:=symbols[q.Selector]
+ if q.Receiver!=nil {receiver,err:=decode(*q.Receiver,nil);if err!=nil{reply.Error=err.Error();return};fn=receiver.MethodByName(q.Selector)}
+ if !fn.IsValid(){reply.Error="unknown imported symbol or method: "+q.Selector;return}
+ if q.Op=="get" {reply.Values=[]value{encode(fn)};return}
+ if q.Op!="call"||fn.Kind()!=reflect.Func{reply.Error="imported symbol is not callable";return}
+ signature:=fn.Type();n:=signature.NumIn();minimum:=n;if signature.IsVariadic(){minimum--}
+ if len(q.Args)<minimum||!signature.IsVariadic()&&len(q.Args)!=n{reply.Error="native argument count mismatch";return}
+ args:=make([]reflect.Value,len(q.Args))
+ for i,arg:=range q.Args {var target reflect.Type;if signature.IsVariadic()&&i>=n-1 {target=signature.In(n-1);if !q.Spread{target=target.Elem()}}else{target=signature.In(i)};v,err:=decode(arg,target);if err!=nil{reply.Error=err.Error();return};args[i]=v}
+ var returned []reflect.Value
+ if q.Spread {if !signature.IsVariadic()||len(args)!=n{reply.Error="invalid spread call";return};returned=fn.CallSlice(args)}else{returned=fn.Call(args)}
+ for _,v:=range returned{reply.Values=append(reply.Values,encode(v))};return
+}
+func main(){
+ conn,err:=net.Dial("tcp",bridgeAddress);if err!=nil{panic(err)};defer conn.Close()
+ encoder:=json.NewEncoder(conn);if err=encoder.Encode(bridgeAuth);err!=nil{return};decoder:=json.NewDecoder(conn)
+ var writes sync.Mutex;var calls sync.WaitGroup
+ for {var q request;if err:=decoder.Decode(&q);err!=nil{calls.Wait();return};if q.Op=="close"{calls.Wait();return};calls.Add(1);go func(){defer calls.Done();answer:=dispatch(q);writes.Lock();defer writes.Unlock();_ = encoder.Encode(answer)}()}
+}

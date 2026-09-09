@@ -1282,6 +1282,8 @@ func (p *Printer) printRedirsUntil(redirs []*Redirect, startRedirs int, pos Pos)
 
 func (p *Printer) bashppExpr(expr BashPPExpr) {
 	switch x := expr.(type) {
+	case *BashPPFuncLit:
+		p.bashppFuncLit(x)
 	case *BashPPBasicLit:
 		p.writeLit(x.Value.Value)
 	case *BashPPIdent:
@@ -1893,6 +1895,9 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 			}
 		}
 	case *BashPPCall:
+		if cmd.CalleeExpr != nil {
+			p.bashppExpr(cmd.CalleeExpr)
+		}
 		if cmd.FuncLit != nil {
 			p.bashppFuncLit(cmd.FuncLit)
 		}
