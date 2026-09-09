@@ -6,7 +6,6 @@ seq: 55
 status: done
 priority: p0
 created: 2026-09-09T06:41:24.782184Z
-weave: 35
 assignee: sprint118-manager
 sprint: 118
 closed: 2026-09-09T10:16:38.607489Z
@@ -16,3 +15,5 @@ Implement bounded GoSource complex scalar support for unchanged Tour basics/basi
 
 
 Manager acceptance (2026-09-09): bounded complex scalar scope is complete. Reviewed implementation 2a3ce96f is included in runtime integration 005 and published integration 006a. Exact unchanged Tour basic-types plus complex64 arithmetic, conversions and builtins passed native/interpreted/compiled comparisons, with classic Bash++ rejection preserved. Independent GoSource and race checks passed; publication-006a make test and make build passed. Durable receipts: sprint118-evidence/runtime-integration-006 and sprint118-evidence/publication-006a. General complex aggregate/nonfinite behavior and full corpus completion are outside this bounded story; their failures remain on the open parents.
+
+Manager reclamation 2026-09-09: superseded issue35 workspace removed after confirming published complex-scalar successors. Exact physical raw tip2a3ce96f and ignored review files are preserved; completed acceptance remains unchanged.
