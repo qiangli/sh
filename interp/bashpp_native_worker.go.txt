@@ -20,6 +20,8 @@ import (
 //CONNECTION
 
 type value struct {
+ ReaderBuffer []byte `json:"reader_buffer,omitempty"`
+ ReaderLength int `json:"reader_length,omitempty"`
  CallArgs []value `json:"call_args,omitempty"`
  NativeType string `json:"native_type,omitempty"`
  Origin uint64 `json:"origin,omitempty"`

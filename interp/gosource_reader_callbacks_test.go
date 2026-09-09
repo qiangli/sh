@@ -27,6 +27,19 @@ func TestGoSourceReaderCallbackThreeModes(t *testing.T) {
 	}
 	for name, source := range map[string]string{
 		"unchanged_rot13": string(original),
+		"local_buffer_capacity": `package main
+import("fmt";"io";"bytes")
+type reader struct{}
+func(r reader)Read(p []byte)(int,error){for i:=range p{p[i]=255};return len(p),nil}
+func main(){b:=bytes.NewBufferString("01234567").Bytes();n,e:=io.ReadFull(reader{},b[2:5:7]);fmt.Printf("%v %d %v\n",b,n,e)}`,
+		"shadowed_len_retains_buffer": `package main
+import("fmt";"io";"bytes")
+var saved []byte
+func len(p []byte)int{saved=p;return 3}
+type reader struct{}
+func(r reader)Read(p []byte)(int,error){for i:=range p{p[i]='A'};return len(p),nil}
+func main(){b:=bytes.NewBufferString("012").Bytes();n,e:=io.ReadFull(reader{},b);saved[1]='Z';fmt.Printf("%s %d %v\n",b,n,e)}`,
+
 		"partial_error_state": `package main
 import("fmt";"io";"bytes")
 type reader struct{calls int}

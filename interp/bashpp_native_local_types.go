@@ -22,8 +22,9 @@ import (
 // invoke on a materialised local type. String/Error and exact Read([]byte) (int, error)
 // methods are mirrored; the mirror never carries the original body.
 type bashPPLocalMethod struct {
-	Name    string
-	Pointer bool
+	Name              string
+	Pointer           bool
+	ReaderLocalBuffer bool
 }
 
 // bashPPLocalType is the transportable descriptor of one original named type.
@@ -221,7 +222,7 @@ func (l *bashPPLocalTypeSet) mirrored(decls []*syntax.BashPPFuncDecl) []bashPPLo
 		if !ok || b != "error" || len(decl.Results[1].Names) > 1 {
 			continue
 		}
-		methods = append(methods, bashPPLocalMethod{Name: "Read", Pointer: decl.Receiver.Pointer})
+		methods = append(methods, bashPPLocalMethod{Name: "Read", Pointer: decl.Receiver.Pointer, ReaderLocalBuffer: bashPPReaderLocalBufferProof(decl)})
 		break
 	}
 	return methods
@@ -376,14 +377,16 @@ func bashPPLocalTypeGo(local bashPPLocalType) string {
 		if method.Name == "Read" {
 			fmt.Fprintf(&b, `func (bpprecv %s) Read(p []byte)(int,error) {
  recv:=structural(reflect.ValueOf(bpprecv));recv.CallArgs=[]value{encode(reflect.ValueOf(p))}
+ if %t { recv.CallArgs=append(recv.CallArgs,value{Kind:"reader-buffer",ReaderBuffer:append([]byte(nil),p[:cap(p)]...),ReaderLength:len(p)}) }
  out,err:=callback(%q,recv);if err!=nil{panic(err)}
+ if len(out)==3 { if out[2].Kind!="reader-buffer" || len(out[2].ReaderBuffer)!=cap(p){panic(fmt.Errorf("original Read buffer writeback mismatch"))};copy(p[:cap(p)],out[2].ReaderBuffer);out=out[:2] }
  if len(out)!=2{panic(fmt.Errorf("original Read result count mismatch"))}
  count,err:=decode(out[0],reflect.TypeFor[int]());if err!=nil{panic(err)}
  failure,err:=decode(out[1],reflect.TypeFor[error]());if err!=nil{panic(err)}
  var readErr error;if failure.IsValid(){readErr,_=failure.Interface().(error)}
  return int(count.Int()),readErr
 }
-`, receiver, local.Name+".Read")
+`, receiver, method.ReaderLocalBuffer, local.Name+".Read")
 			continue
 		}
 		fmt.Fprintf(&b, `func (bpprecv %s) %s() string {

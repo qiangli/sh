@@ -176,13 +176,26 @@ func (r *Runner) bashPPNativeCallback(ctx context.Context, selector string, recv
 		return nil, fmt.Errorf("gosource: cannot bind original method %s", selector)
 	}
 	var arguments []string
+	var readerBuffer []any
 	if method == "Read" {
-		if len(recv.CallArgs) != 1 || recv.CallArgs[0].Kind != "handle" || (recv.CallArgs[0].Type != "[]uint8" && recv.CallArgs[0].Type != "[]byte") {
+		if (len(recv.CallArgs) != 1 && len(recv.CallArgs) != 2) || recv.CallArgs[0].Kind != "handle" || (recv.CallArgs[0].Type != "[]uint8" && recv.CallArgs[0].Type != "[]byte") {
 			return nil, fmt.Errorf("gosource: original Read requires an authenticated native byte buffer")
 		}
 		argument := goSourceNativeValueCell(recv.CallArgs[0])
 		argument.declType = bound.params()[0].FieldTypeExpr
 		argument.typeName = bashPPTypeText(argument.declType)
+		if len(recv.CallArgs) == 2 && r.bashPPReaderLocalBufferAllowed(bound) {
+			snapshot := recv.CallArgs[1]
+			if snapshot.Kind != "reader-buffer" || snapshot.ReaderLength < 0 || snapshot.ReaderLength > len(snapshot.ReaderBuffer) {
+				return nil, fmt.Errorf("gosource: invalid Read buffer snapshot")
+			}
+			readerBuffer = make([]any, len(snapshot.ReaderBuffer))
+			for i, b := range snapshot.ReaderBuffer {
+				readerBuffer[i] = int(b)
+			}
+			bashPPStoreCellValue(argument, readerBuffer[:snapshot.ReaderLength], &bashPPCollectionMeta{kind: "slice", typ: argument.declType, sequence: make([]*bashPPCollectionMeta, snapshot.ReaderLength, len(readerBuffer))})
+		}
+
 		r.bashPPCallCells = []*bashPPCell{argument}
 		arguments = []string{""}
 	}
@@ -211,6 +224,20 @@ func (r *Runner) bashPPNativeCallback(ctx context.Context, selector string, recv
 				return nil, err
 			}
 			values = append(values, value)
+		}
+		if readerBuffer != nil {
+			data := make([]byte, len(readerBuffer))
+			for i, item := range readerBuffer {
+				n, ok := item.(int)
+				if !ok || n < 0 || n > 255 {
+					return nil, fmt.Errorf("gosource: invalid Read byte writeback")
+				}
+				data[i] = byte(n)
+			}
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			values = append(values, bashPPBridgeValue{Kind: "reader-buffer", ReaderBuffer: data})
 		}
 		return values, nil
 	}

@@ -35,8 +35,10 @@ import (
 var bashPPNativeWorker string
 
 type bashPPBridgeValue struct {
-	CallArgs  []bashPPBridgeValue `json:"call_args,omitempty"`
-	sliceView *bashPPNativeSlice  // host-only original backing view
+	ReaderBuffer []byte              `json:"reader_buffer,omitempty"`
+	ReaderLength int                 `json:"reader_length,omitempty"`
+	CallArgs     []bashPPBridgeValue `json:"call_args,omitempty"`
+	sliceView    *bashPPNativeSlice  // host-only original backing view
 
 	// Callable is derived by the interpreter from authenticated native type or
 	// import metadata; the dependency worker cannot set callback policy itself.
