@@ -3,11 +3,11 @@ id: 99bd1de0093b
 kind: task
 title: Complete Go source conversion and default constant lowering
 seq: 53
-status: assigned
+status: doing
 priority: p0
 created: 2026-09-09T06:37:55.781661Z
 weave: 32
-assignee: qiangli
+assignee: s118-go-frontend
 sprint: 118
 ---
 

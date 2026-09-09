@@ -3,11 +3,11 @@ id: 825f8083451e
 kind: task
 title: Implement unchanged Go channel expression and frame semantics
 seq: 51
-status: assigned
+status: doing
 priority: p0
 created: 2026-09-09T06:37:55.650583Z
 weave: 30
-assignee: qiangli
+assignee: sprint118-manager
 sprint: 118
 ---
 

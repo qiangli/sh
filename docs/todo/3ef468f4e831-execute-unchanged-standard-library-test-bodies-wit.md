@@ -3,9 +3,11 @@ id: 3ef468f4e831
 kind: task
 title: Execute unchanged standard-library test bodies with interpreter-owned callbacks
 seq: 56
-status: todo
+status: doing
 priority: p0
 created: 2026-09-09T07:00:31.40852Z
+weave: 36
+assignee: s118-native-types
 sprint: 118
 ---
 

@@ -3,11 +3,11 @@ id: d564bada90bb
 kind: task
 title: Preserve imported Go structured values and native process semantics
 seq: 52
-status: assigned
+status: doing
 priority: p0
 created: 2026-09-09T06:37:55.717046Z
 weave: 31
-assignee: qiangli
+assignee: s118-native-types
 sprint: 118
 ---
 

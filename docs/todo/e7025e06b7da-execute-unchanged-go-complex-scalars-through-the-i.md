@@ -3,11 +3,11 @@ id: e7025e06b7da
 kind: task
 title: Execute unchanged Go complex scalars through the interpreter
 seq: 55
-status: assigned
+status: doing
 priority: p0
 created: 2026-09-09T06:41:24.782184Z
 weave: 35
-assignee: qiangli
+assignee: s118-complex
 sprint: 118
 ---
 

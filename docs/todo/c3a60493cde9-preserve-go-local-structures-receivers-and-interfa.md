@@ -3,11 +3,11 @@ id: c3a60493cde9
 kind: task
 title: Preserve Go local structures receivers and interface values
 seq: 54
-status: assigned
+status: doing
 priority: p0
 created: 2026-09-09T06:39:40.110712Z
 weave: 33
-assignee: qiangli
+assignee: claude-opus5-w38
 sprint: 118
 ---
 
