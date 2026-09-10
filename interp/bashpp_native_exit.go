@@ -76,11 +76,17 @@ func (r *Runner) bashPPNativeRequest(ctx context.Context, req bashPPEvalRequest,
 		r.bashPPRaise(callbackPanic.value)
 		return nil, errBashPPScalarInterrupted
 	}
-	if err != nil && r.bashPPNativeExitStatus(err) {
+	var nativeExit *bashPPNativeExit
+	if err != nil && errors.As(err, &nativeExit) && r.bashPPNativeExitStatus(err) {
 		if r.exit.code == 0 {
 			// A successful self-termination has no diagnostic to report; the
 			// interpreter simply stops with the program's own zero status.
 			return nil, nil
+		}
+		if nativeExit.forwarded {
+			// The signal itself is the complete program outcome. Unwind scalar,
+			// assignment and task paths without printing the bridge sentinel.
+			return nil, errBashPPScalarInterrupted
 		}
 		return nil, errBashPPNativeExited
 	}
