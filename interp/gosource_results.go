@@ -2,6 +2,7 @@ package interp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"mvdan.cc/sh/v3/expand"
@@ -36,7 +37,7 @@ func (r *Runner) goSourceNativeAssignCall(ctx context.Context, assign *syntax.Ba
 	}
 	values, err := r.bashPPBridgeCall(ctx, assign.Call)
 	if err != nil {
-		if !r.bashPPPanicking() {
+		if !errors.Is(err, errBashPPScalarInterrupted) && !r.bashPPPanicking() {
 			r.exit.fatal(err)
 		}
 		return
