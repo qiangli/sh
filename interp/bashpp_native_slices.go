@@ -63,6 +63,10 @@ func nativeSliceReadOnly(name string) bool {
 	case "fmt.Print", "fmt.Println", "fmt.Printf", "fmt.Sprint", "fmt.Sprintln", "fmt.Sprintf", "fmt.Errorf", "fmt.Fprint", "fmt.Fprintln", "fmt.Fprintf",
 		"bytes.Equal", "bytes.Compare", "bytes.Contains", "bytes.Count", "bytes.HasPrefix", "bytes.HasSuffix", "bytes.Index", "bytes.IndexByte", "bytes.IndexAny", "bytes.LastIndex", "bytes.LastIndexByte", "bytes.LastIndexAny", "bytes.Clone",
 		"strings.Join", "os.WriteFile", "syscall.Exec",
+		// testing.Main reads its descriptor slices and retains their callbacks
+		// only for the lifetime of this blocking call. The callback-capable
+		// request remains their owner until the scheduler returns.
+		"testing.Main",
 		// slices.Equal only reads both transported slices to answer a bool; it
 		// retains neither. The generic function is not a reflectable dependency
 		// symbol, so nativeSliceGenericHelper computes the result interpreter-side.

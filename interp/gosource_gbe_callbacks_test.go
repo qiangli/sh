@@ -332,13 +332,15 @@ func TestGoSourceGbETestingAndBenchmarking(t *testing.T) {
 func TestGoSourceGbETestingDriverComposite(t *testing.T) {
 	source := `package main
 import (
-	"fmt"
+	"regexp"
 	"testing"
 )
-func sample(*testing.T) {}
+func TestSample(t *testing.T) { t.Run("child", func(*testing.T) {}) }
+func match(pat, str string) (bool, error) { return regexp.MatchString(pat, str) }
 func main() {
-	tests := []testing.InternalTest{{Name: "sample", F: sample}}
-	fmt.Println(len(tests))
+	testing.Main(match,
+		[]testing.InternalTest{{Name: "TestSample", F: TestSample}},
+		[]testing.InternalBenchmark{}, nil)
 }
 `
 	differGoSource(t, source, nil, "")

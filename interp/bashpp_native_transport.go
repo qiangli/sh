@@ -116,6 +116,13 @@ func validateLocalTransport(req bashPPEvalRequest, q bashPPBridgeRequest) error 
 	if callable := nativeSliceCallable(req, q); nativeSliceReadOnly(callable) && !functionCallbacks {
 		return nil
 	}
+	// testing.Main owns the scheduler while this request remains parked. Its
+	// descriptor slices are read-only copies and every original test callback
+	// returns before Main does, so neither original storage nor callback
+	// lifetime escapes this request.
+	if functionCallbacks && nativeSliceCallable(req, q) == "testing.Main" {
+		return nil
+	}
 	if synchronousReaderCallback(req, q) || synchronousImageCallback(req, q) || !functionCallbacks && (synchronousUnwrapCallback(req, q) || synchronousErrorsAsType(req, q)) {
 		return nil
 	}

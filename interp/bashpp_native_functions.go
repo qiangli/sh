@@ -170,6 +170,11 @@ func synchronousFunctionCallback(req bashPPEvalRequest, q bashPPBridgeRequest) b
 		if q.Selector == "Do" && (q.Receiver.NativeType == "sync.Once" || q.Receiver.NativeType == "*sync.Once" || (q.Receiver.NativeType == "" && q.Receiver.Type == "sync.Once")) {
 			return true
 		}
+		// T.Run does not return until a non-parallel subtest callback completes.
+		// This is the path used by the reviewed Go-by-Example table test.
+		if q.Selector == "Run" && (q.Receiver.NativeType == "testing.T" || q.Receiver.NativeType == "*testing.T") {
+			return true
+		}
 	}
 	if path == "" {
 		alias, name, ok := strings.Cut(q.Selector, ".")
@@ -178,7 +183,7 @@ func synchronousFunctionCallback(req bashPPEvalRequest, q bashPPBridgeRequest) b
 		}
 		path = req.Imports[alias] + "." + name
 	}
-	if path == "golang.org/x/tour/wc.Test" || path == "golang.org/x/tour/pic.Show" || path == "path/filepath.WalkDir" {
+	if path == "golang.org/x/tour/wc.Test" || path == "golang.org/x/tour/pic.Show" || path == "path/filepath.WalkDir" || path == "testing.Main" {
 		return true
 	}
 	if pkg, name, ok := strings.Cut(path, "."); ok {

@@ -497,7 +497,7 @@ func (s *bashPPNativeSession) programExitError(err error) error {
 		forwardedSignal := s.forwardedSignal
 		s.mu.Unlock()
 		if forwardedSignal > 0 {
-			return &bashPPNativeExit{status: 128 + forwardedSignal, err: err}
+			return &bashPPNativeExit{status: 128 + forwardedSignal, err: err, forwarded: true}
 		}
 	}
 	return fmt.Errorf("gosource: dependency process exited: %w", err)

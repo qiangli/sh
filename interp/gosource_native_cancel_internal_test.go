@@ -117,11 +117,18 @@ func TestGoSourceNativeForwardedSignalBecomesProgramStatus(t *testing.T) {
 	}
 	s := &bashPPNativeSession{waitErr: err, forwardedSignal: int(syscall.SIGTERM)}
 	var programExit *bashPPNativeExit
-	if got := s.programExitError(err); !errors.As(got, &programExit) || programExit.status != 143 {
+	if got := s.programExitError(err); !errors.As(got, &programExit) || programExit.status != 143 || !programExit.forwarded {
 		t.Fatalf("forwarded SIGTERM error = %#v", got)
 	}
 	s.forwardedSignal = 0
 	if got := s.programExitError(err); errors.As(got, &programExit) {
 		t.Fatalf("unexplained signal became program status: %#v", got)
+	}
+	r := &Runner{bashPPGoTask: true}
+	if !r.bashPPNativeExitStatus(&bashPPNativeExit{status: 143, err: err, forwarded: true}) {
+		t.Fatal("forwarded program exit was not adopted")
+	}
+	if r.exit.code != 143 || !r.bashPPTaskCanceled {
+		t.Fatalf("task exit code=%d canceled=%v", r.exit.code, r.bashPPTaskCanceled)
 	}
 }

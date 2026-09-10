@@ -20,8 +20,9 @@ import (
 // rather than failing to answer a request. status is the process status; the
 // wrapped error is retained so callers can still inspect the original cause.
 type bashPPNativeExit struct {
-	status int
-	err    error
+	status    int
+	err       error
+	forwarded bool
 }
 
 func (e *bashPPNativeExit) Error() string {
@@ -43,6 +44,12 @@ func (r *Runner) bashPPNativeExitStatus(err error) bool {
 	}
 	r.closeGoSourceBridge()
 	r.exit = exitStatus{code: uint8(status), exiting: true}
+	if exit.forwarded && r.bashPPGoTask {
+		// Every task shares the program's dependency process. A parent signal
+		// terminates that one program; sibling tasks must not report its status
+		// again as independent `task failed` diagnostics.
+		r.bashPPTaskCanceled = true
+	}
 	if status != 0 {
 		// fatalExit keeps the status across the enclosing command and makes
 		// every later exit.fatal on this unwind a no-op, so the program's own
