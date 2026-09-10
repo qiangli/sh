@@ -807,13 +807,20 @@ func (r *Runner) bashPPInferTypeFromParam(param, actual syntax.BashPPTypeExpr, b
 }
 
 func (r *Runner) bashPPCheckTypeConstraints(fn *bashPPFunc, params []*syntax.BashPPTypeParam, bindings map[string]syntax.BashPPTypeExpr) bool {
+	constraintBindings := bindings
+	if len(fn.typeArgs) > 0 {
+		constraintBindings = make(map[string]syntax.BashPPTypeExpr, len(fn.typeArgs)+len(bindings))
+		maps.Copy(constraintBindings, fn.typeArgs)
+		maps.Copy(constraintBindings, bindings)
+	}
 	for _, group := range params {
+		constraint := bashPPSubstituteType(group.Constraint, constraintBindings)
 		for _, name := range group.Names {
 			arg := bindings[name.Value]
 			if arg == nil {
 				continue
 			}
-			if r.bashPPConstraintSatisfied(arg, group.Constraint) {
+			if r.bashPPConstraintSatisfied(arg, constraint) {
 				continue
 			}
 			r.errf("BASHPP-EGENERIC-CONSTRAINT: %s does not satisfy constraint for %s in %s\n", bashPPTypeText(arg), name.Value, fn.name())
@@ -919,11 +926,20 @@ func (r *Runner) bashPPValidateNamedTypeArgs(named *syntax.BashPPNamedType) erro
 	if err := bashPPValidateConcreteTypeArgs(named.TypeArgs); err != nil {
 		return err
 	}
+	bindings := make(map[string]syntax.BashPPTypeExpr, want)
 	i := 0
 	for _, group := range decl.typeParams {
 		for _, param := range group.Names {
+			bindings[param.Value] = named.TypeArgs[i].ArgType
+			i++
+		}
+	}
+	i = 0
+	for _, group := range decl.typeParams {
+		constraint := bashPPSubstituteType(group.Constraint, bindings)
+		for _, param := range group.Names {
 			arg := named.TypeArgs[i].ArgType
-			if !r.bashPPConstraintSatisfied(arg, group.Constraint) {
+			if !r.bashPPConstraintSatisfied(arg, constraint) {
 				return fmt.Errorf("BASHPP-EGENERIC-CONSTRAINT: %s does not satisfy constraint for %s in %s", bashPPTypeText(arg), param.Value, named.Name.Value)
 			}
 			i++

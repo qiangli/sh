@@ -282,6 +282,33 @@ echo "$x"
 	}
 }
 
+func TestBashPPGenericNamedTypeDependentTypeSetConstraint(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			"reject outside substituted type set",
+			"type Bucket[S ~[]E, E comparable] struct { Values S }\nvar bucket Bucket[[]int,string]\n",
+			"BASHPP-EGENERIC-CONSTRAINT: []int does not satisfy constraint for S in Bucket",
+		},
+		{
+			"accept substituted slice approximation",
+			"type Bucket[S ~[]E, E comparable] struct { Values S }\nvar bucket Bucket[[]string,string]\necho accepted\n",
+			"accepted\n",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := runBashPPFunc(t, tc.src)
+			if !strings.Contains(got, tc.want) {
+				t.Fatalf("output = %q, want to contain %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestBashPPGenericTypeSetInterfaceIsNotValueType(t *testing.T) {
 	const src = "type Integer interface { ~int }\nvar value Integer\n"
 	if got := runBashPPFunc(t, src); !strings.Contains(got, "BASHPP-EINTERFACE-TYPESET:") {
