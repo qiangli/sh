@@ -451,6 +451,15 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 				return nil, &bashPPCallbackPanic{value: reply.Panic.Text}
 			}
 			if reply.Error != "" {
+				s.mu.Lock()
+				forwarded := s.forwardedSignal > 0
+				s.mu.Unlock()
+				// A callback may already have serialized the private unwind token
+				// before the signal closes the helper. Reattach its identity only
+				// when this session actually forwarded that program signal.
+				if forwarded && strings.HasSuffix(reply.Error, errBashPPScalarInterrupted.Error()) {
+					return nil, errBashPPScalarInterrupted
+				}
 				return nil, errors.New(reply.Error)
 			}
 			for i := range reply.Values {

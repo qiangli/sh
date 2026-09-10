@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"os/exec"
+	"strings"
 	"syscall"
 	"testing"
 )
@@ -138,5 +139,16 @@ func TestGoSourceScalarInterruptionCannotBecomeFatal(t *testing.T) {
 	status.fatal(&goSourceError{prefix: "original.go:1:1: ", err: errBashPPScalarInterrupted})
 	if status.exiting || status.fatalExit || status.err != nil || status.code != 0 {
 		t.Fatalf("interruption became fatal: %+v", status)
+	}
+}
+
+func TestGoSourceForwardedSignalRestoresWiredInterruption(t *testing.T) {
+	s := &bashPPNativeSession{forwardedSignal: int(syscall.SIGTERM)}
+	text := "original.go:7:2: " + errBashPPScalarInterrupted.Error()
+	s.mu.Lock()
+	forwarded := s.forwardedSignal > 0
+	s.mu.Unlock()
+	if !forwarded || !strings.HasSuffix(text, errBashPPScalarInterrupted.Error()) {
+		t.Fatal("wired interruption was not recognized under forwarded signal")
 	}
 }
