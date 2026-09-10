@@ -96,3 +96,30 @@ func TestBashPPGenericFuncDiagnostics(t *testing.T) {
 		})
 	}
 }
+
+func TestBashPPGenericConstraintDependentTypeSet(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			"reject outside substituted type set",
+			"func accept[S ~[]E, E comparable](s S, v E) { echo accepted }\nvar values []int = []int{1}\nvar needle string = \"1\"\naccept(values, needle)\n",
+			"BASHPP-EGENERIC-CONSTRAINT: []int does not satisfy constraint for S in accept\n",
+		},
+		{
+			"accept substituted slice approximation",
+			"func accept[S ~[]E, E comparable](s S, v E) { echo accepted }\nvar values []string = []string{\"one\"}\naccept(values, \"one\")\n",
+			"accepted\n",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := runBashPPFunc(t, tc.src)
+			if !strings.Contains(got, tc.want) {
+				t.Fatalf("output = %q, want to contain %q", got, tc.want)
+			}
+		})
+	}
+}
