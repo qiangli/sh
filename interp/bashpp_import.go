@@ -41,6 +41,8 @@ type bashPPEvalRequest struct {
 	Argv       []string
 	ModuleDir  string
 	RuntimeEnv []string
+	SourceDir  string
+	EmbedDecls []bashPPEmbedDecl
 	// LocalTypes materialises the original program's own named types inside
 	// the dependency helper. Sprint #118 Story #54 (c3a60493cde9).
 	LocalTypes    []bashPPLocalType
@@ -410,8 +412,9 @@ func (r *Runner) bashPPEvalRequest() (bashPPEvalRequest, error) {
 	if r.bashPPGoSource {
 		runtimeEnv = r.bashPPGoSourceEnvironment()
 	}
+	embedDecls, sourceDir := r.bashPPGoSourceEmbedRequest()
 	return bashPPEvalRequest{CallbackOwner: r, CallbackDepth: r.bashPPTools.callbackDepth, LocalTypes: r.bashPPLocalTypeDescriptors(), RuntimeEnv: runtimeEnv, ModuleDir: moduleDir, Argv: append([]string{r.filename}, r.Params...), Bridge: r.bashPPTools.bridge, Go: r.bashPPTools.goBinary, Dir: r.Dir, Env: env, Stdin: r.stdin,
-		Stdout: r.bashPPWriter(r.stdout), Stderr: r.bashPPWriter(r.stderr), Imports: r.bashPPImports}, nil
+		Stdout: r.bashPPWriter(r.stdout), Stderr: r.bashPPWriter(r.stderr), Imports: r.bashPPImports, SourceDir: sourceDir, EmbedDecls: embedDecls}, nil
 }
 
 func setEnvString(env []string, name, value string) []string {

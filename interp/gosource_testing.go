@@ -51,7 +51,12 @@ type GoSourceTestingSession struct {
 type goSourceTestingHandle struct {
 	session *GoSourceTestingSession
 	target  GoSourceTestingT
-	active  bool
+	// capability is the imported testing type this handle stands for, "T" for
+	// a test and "B" for a benchmark. Nested callbacks inherit it, because a
+	// subtest of a test receives *testing.T and a sub-benchmark receives
+	// *testing.B.
+	capability string
+	active     bool
 }
 
 type goSourceTestingExit struct {
@@ -59,13 +64,15 @@ type goSourceTestingExit struct {
 	skip   bool
 }
 
-// LoadGoSourceTests initializes a non-main package without rewriting its source
+// LoadGoSourceTests initializes a loaded package without rewriting its source
 // or adding a main function. The caller must supply every applicable original
 // package companion to gosource.Load with RunMain false. Only its original init
 // functions are invoked here; test registration is an explicit later operation.
+// A package named main is accepted, as `go test` accepts one: nothing here
+// invokes a main function, and a test package is free to be the command's own.
 func (r *Runner) LoadGoSourceTests(ctx context.Context, program GoSourceTestProgram) (*GoSourceTestingSession, error) {
-	if program == nil || program.GoSourceAST() == nil || !program.GoSourceAST().GoSource || program.GoSourcePackage() == "main" {
-		return nil, fmt.Errorf("gosource: testing requires a loaded non-main Go package")
+	if program == nil || program.GoSourceAST() == nil || !program.GoSourceAST().GoSource {
+		return nil, fmt.Errorf("gosource: testing requires a loaded Go package")
 	}
 	if r.Dialect() != syntax.LangBashPP {
 		return nil, fmt.Errorf("gosource: testing requires a Bash++ runner")
@@ -111,9 +118,9 @@ func (s *GoSourceTestingSession) Run(ctx context.Context, name string, target Go
 	if s == nil || s.closed || s.runner.goSourceTesting != s {
 		return fmt.Errorf("gosource: testing session is closed or reset")
 	}
-	return s.runFunction(ctx, name, s.runner.bashPPFuncs[name], target, false, nil)
+	return s.runFunction(ctx, name, s.runner.bashPPFuncs[name], target, "T", false, nil)
 }
-func (s *GoSourceTestingSession) runFunction(ctx context.Context, name string, fn *bashPPFunc, target GoSourceTestingT, nested bool, cleanup *goSourceTestingHandle) (err error) {
+func (s *GoSourceTestingSession) runFunction(ctx context.Context, name string, fn *bashPPFunc, target GoSourceTestingT, capability string, nested bool, cleanup *goSourceTestingHandle) (err error) {
 	if s == nil || s.closed || s.runner.goSourceTesting != s {
 		return fmt.Errorf("gosource: testing session is closed or reset")
 	}
@@ -150,14 +157,14 @@ func (s *GoSourceTestingSession) runFunction(ctx context.Context, name string, f
 	if cleanup == nil {
 		declared := params[0].declared
 		alias, typ, ok := strings.Cut(strings.TrimPrefix(declared, "*"), ".")
-		if !strings.HasPrefix(declared, "*") || !ok || typ != "T" || r.bashPPImports[alias] != "testing" {
-			return fmt.Errorf("gosource: %s must receive the imported *testing.T, got %s", name, declared)
+		if !strings.HasPrefix(declared, "*") || !ok || typ != capability || r.bashPPImports[alias] != "testing" {
+			return fmt.Errorf("gosource: %s must receive the imported *testing.%s, got %s", name, capability, declared)
 		}
 	}
 	previousHandle := s.active
 	handle := cleanup
 	if handle == nil {
-		handle = &goSourceTestingHandle{session: s, target: target}
+		handle = &goSourceTestingHandle{session: s, target: target, capability: capability}
 	}
 	previousActive := handle.active
 	handle.active = true
@@ -190,7 +197,7 @@ func (s *GoSourceTestingSession) runFunction(ctx context.Context, name string, f
 	if cleanup == nil {
 		cell := &bashPPCell{vr: expand.NewObject(handle), declType: params[0].typ}
 		var ok bool
-		args, ok = r.bashPPBindCall(fn, []string{"testing.T@host"}, nil, []*bashPPCell{cell}, nil, 1)
+		args, ok = r.bashPPBindCall(fn, []string{"testing." + capability + "@host"}, nil, []*bashPPCell{cell}, nil, 1)
 		if !ok {
 			return fmt.Errorf("gosource: cannot bind test callback %s", name)
 		}
@@ -279,7 +286,7 @@ func (r *Runner) bashPPTestingArguments(call *syntax.BashPPCall) (*goSourceTesti
 	}
 	fail := func(err error) (*goSourceTestingHandle, []any, bool, error) { return nil, nil, true, err }
 	if !handle.active || handle.session != r.goSourceTesting || handle.session.active != handle {
-		return fail(errors.New("gosource: stale testing.T capability"))
+		return fail(errors.New("gosource: stale testing capability"))
 	}
 	var args []any
 	for _, expr := range call.ArgExprs {
@@ -316,7 +323,7 @@ func (r *Runner) bashPPTestingArguments(call *syntax.BashPPCall) (*goSourceTesti
 func (r *Runner) bashPPTestingInvoke(handle *goSourceTestingHandle, method string, args []any) {
 	fail := func(err error) { r.exit.fatal(err) }
 	if !handle.active || handle.session != r.goSourceTesting || handle.session.active != handle {
-		fail(errors.New("gosource: stale testing.T capability"))
+		fail(errors.New("gosource: stale testing capability"))
 		return
 	}
 	message := func() (string, error) {
@@ -378,7 +385,7 @@ func (r *Runner) bashPPTestingInvoke(handle *goSourceTestingHandle, method strin
 			panic(goSourceTestingExit{handle: handle, skip: method == "SkipNow"})
 		}
 	default:
-		fail(fmt.Errorf("gosource: testing.T.%s is not implemented by this driver slice", method))
+		fail(fmt.Errorf("gosource: testing.%s.%s is not implemented by this driver slice", handle.capabilityName(), method))
 		return
 	}
 }

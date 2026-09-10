@@ -33,6 +33,8 @@ func (r *Runner) bashPPNativeExpr(expr syntax.BashPPExpr) bool {
 			return r.bashPPNativeType(lit.LitType)
 		}
 		return false
+	case *syntax.BashPPDerefExpr:
+		return r.bashPPNativeExpr(x.X)
 	case *syntax.BashPPParenExpr:
 		return r.bashPPNativeExpr(x.X)
 	case *syntax.BashPPIndexExpr:
@@ -163,6 +165,15 @@ func (r *Runner) bashPPNativeRange(ctx context.Context, rng *syntax.BashPPRange)
 		// ordinary scalar range path reports it with Go's own wording.
 		return false
 	}
+	kind, err := r.bashPPNativeKind(ctx, base)
+	if err != nil {
+		r.bashPPRangeError(rng, "BASHPP-ERANGE-TYPE: %v", err)
+		return true
+	}
+	if kind == "map" {
+		r.bashPPNativeRangeMap(ctx, rng, base)
+		return true
+	}
 	length, err := r.bashPPNativeLen(ctx, base)
 	if err != nil {
 		r.bashPPRangeError(rng, "BASHPP-ERANGE-TYPE: %v", err)
@@ -180,27 +191,92 @@ func (r *Runner) bashPPNativeRange(ctx context.Context, rng *syntax.BashPPRange)
 			r.bashPPRangeError(rng, "BASHPP-ERANGE-TYPE: %v", err)
 			return true
 		}
-		value, typ, err := r.bashPPNativeIterationValue(element)
+		value, meta, typ, err := r.bashPPNativeIterationValue(element)
 		if err != nil {
 			r.bashPPRangeError(rng, "BASHPP-ERANGE-TYPE: %v", err)
 			return true
 		}
-		if !r.bashPPRangeIteration(ctx, rng, i, bashPPRangeNamedType("int"), value, nil, typ) {
+		if !r.bashPPRangeIteration(ctx, rng, i, bashPPRangeNamedType("int"), value, meta, typ) {
 			return true
 		}
 	}
 	return true
 }
 
+// bashPPNativeKind asks the dependency for the reflect kind of a value it
+// owns. A range must know whether it iterates keys or indexes before it asks
+// for either; only the kind name crosses.
+func (r *Runner) bashPPNativeKind(ctx context.Context, base bashPPBridgeValue) (string, error) {
+	value, err := r.bashPPNativeAccess(ctx, "kind", base, "")
+	if err != nil {
+		return "", err
+	}
+	if value.Kind != "string" {
+		return "", fmt.Errorf("gosource: native kind is not reported")
+	}
+	return value.Text, nil
+}
+
+// bashPPNativeRangeMap iterates a dependency-owned map. Go's own map order is
+// unspecified, and the keys arrive in the order the dependency's own range
+// produced them. Each key and value is read back through the same handle.
+func (r *Runner) bashPPNativeRangeMap(ctx context.Context, rng *syntax.BashPPRange, base bashPPBridgeValue) {
+	req, err := r.bashPPEvalRequest()
+	if err != nil {
+		r.bashPPRangeError(rng, "BASHPP-ERANGE-TYPE: %v", err)
+		return
+	}
+	keys, err := r.bashPPNativeRequest(ctx, req, bashPPBridgeRequest{Op: "keys", Receiver: &base})
+	if err != nil {
+		r.bashPPRangeError(rng, "BASHPP-ERANGE-TYPE: %v", err)
+		return
+	}
+	for _, key := range keys {
+		element, err := r.bashPPNativeAccess(ctx, "index", base, "", key)
+		if err != nil {
+			r.bashPPRangeError(rng, "BASHPP-ERANGE-TYPE: %v", err)
+			return
+		}
+		if !r.bashPPNativeIteration(ctx, rng, &key, &element) {
+			return
+		}
+	}
+}
+
+// bashPPNativeIteration runs one loop body with dependency-owned bindings. A
+// scalar binds as an ordinary typed value and anything else keeps its handle,
+// which is what bashPPBindNativeValue already decides for every other native
+// binding site.
+func (r *Runner) bashPPNativeIteration(ctx context.Context, rng *syntax.BashPPRange, key, value *bashPPBridgeValue) bool {
+	leave := r.bashPPPushScope()
+	if len(rng.Names) >= 1 && rng.Names[0].Value != "_" && key != nil {
+		r.bashPPBindNativeValue(rng.Names[0].Value, *key)
+	}
+	if len(rng.Names) == 2 && rng.Names[1].Value != "_" && value != nil {
+		r.bashPPBindNativeValue(rng.Names[1].Value, *value)
+	}
+	r.cmd(r.bashPPTaskContext(ctx), rng.Body)
+	leave()
+	return r.bashPPRangeControl()
+}
+
 // bashPPNativeIterationValue converts one element into the interpreter's
 // iteration binding. Scalars bind by value; anything else keeps its handle.
-func (r *Runner) bashPPNativeIterationValue(element bashPPBridgeValue) (any, syntax.BashPPTypeExpr, error) {
-	typ := bashPPRangeNamedType(element.Type)
+func (r *Runner) bashPPNativeIterationValue(element bashPPBridgeValue) (any, *bashPPCollectionMeta, syntax.BashPPTypeExpr, error) {
+	typeName := element.Type
+	if element.Interface != "" {
+		typeName = element.Interface
+	}
+	typ := bashPPRangeNamedType(typeName)
 	scalar, err := element.scalar()
 	if err != nil {
-		return nil, nil, err
+		if element.Kind == "handle" || element.Kind == "nil" {
+			copy := element
+			return &copy, &bashPPCollectionMeta{kind: "native", typ: typ}, typ, nil
+		}
+		return nil, nil, nil, err
 	}
-	return bashPPScalarString(scalar.value), typ, nil
+	return bashPPScalarString(scalar.value), nil, typ, nil
 }
 
 // bashPPNativeRead answers a structured read whose base is dependency-owned.
@@ -222,6 +298,10 @@ func (r *Runner) bashPPNativeRead(expr syntax.BashPPExpr) (any, *bashPPCollectio
 		}
 	case *syntax.BashPPSelectorExpr:
 		if !r.bashPPNativeExpr(x) {
+			return nil, nil, nil, false
+		}
+	case *syntax.BashPPDerefExpr:
+		if !r.bashPPNativeExpr(x.X) {
 			return nil, nil, nil, false
 		}
 	default:

@@ -69,3 +69,40 @@ func tupleBooleanType(typ types.Type) bool {
 	basic, ok := typ.Underlying().(*types.Basic)
 	return ok && basic.Kind() == types.Bool
 }
+
+// tupleAssignStmts lowers a multi-target `=` whose left-hand side is not all
+// plain identifiers — `p.a, xs[1] = f()`, `*p, ok = m[k]`.
+//
+// The results are bound to collision-free temporaries first and then assigned
+// to their real targets one at a time, which is the shape every later phase
+// already supports: one target, one value. Without it the whole family was
+// refused at conversion, so a Go original could not assign a call's results
+// into a field, an element or through a pointer at all.
+//
+// Go evaluates index expressions and pointer indirections on the left together
+// with the right-hand operands, then assigns left to right. This preserves the
+// assignment order and the single evaluation of the right-hand side. It orders
+// the right-hand side ahead of the left-hand operands, which is observable only
+// when both sides call functions with side effects.
+func (c *converter) tupleAssignStmts(x *ast.AssignStmt) []*s.Stmt {
+	temps := make([]ast.Expr, len(x.Lhs))
+	for i, target := range x.Lhs {
+		temps[i] = &ast.Ident{NamePos: target.Pos(), Name: fmt.Sprintf("%stuple_%d_%d", c.prefix, x.TokPos, i)}
+	}
+	out := c.statements(&ast.AssignStmt{Lhs: temps, TokPos: x.TokPos, Tok: token.DEFINE, Rhs: x.Rhs})
+	for i, target := range x.Lhs {
+		out = append(out, c.statements(&ast.AssignStmt{Lhs: []ast.Expr{target}, TokPos: x.TokPos, Tok: token.ASSIGN, Rhs: []ast.Expr{temps[i]}})...)
+	}
+	return out
+}
+
+// tuplePlainTargets reports whether every target is a bare name, which is the
+// shape BashPPAssign carries directly.
+func tuplePlainTargets(targets []ast.Expr) bool {
+	for _, target := range targets {
+		if _, ok := target.(*ast.Ident); !ok {
+			return false
+		}
+	}
+	return true
+}

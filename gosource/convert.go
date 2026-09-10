@@ -120,6 +120,58 @@ func (c *converter) isNewType(x *ast.CallExpr) bool {
 	}
 	return c.info.Types[x.Args[0]].IsType()
 }
+
+func (c *converter) isNewBuiltin(x *ast.CallExpr) bool {
+	id, ok := x.Fun.(*ast.Ident)
+	if !ok || len(x.Args) != 1 {
+		return false
+	}
+	obj, ok := c.info.Uses[id].(*types.Builtin)
+	return ok && obj.Name() == "new"
+}
+
+// valueType converts the go/types result of an expression back into the typed
+// syntax representation. Go 1.27's new(v) needs both v and its defaulted type:
+// the former initializes the fresh cell while the latter is the pointer's
+// element identity. Positions are anchored at the original expression without
+// inventing source text or reparsing the program.
+func (c *converter) valueType(e ast.Expr) s.BashPPTypeExpr {
+	typ := c.info.Types[e].Type
+	if typ == nil {
+		return nil
+	}
+	typ = types.Default(typ)
+	typeName := types.TypeString(typ, func(p *types.Package) string {
+		if p.Path() == c.packagePath {
+			return ""
+		}
+		if alias := c.importAliases[p.Path()]; alias != "" {
+			return alias
+		}
+		return p.Name()
+	})
+	if typeName == "any" && types.Identical(typ, types.Universe.Lookup("any").Type()) {
+		typeName = "interface{}"
+	}
+	parsed, err := parser.ParseExpr(typeName)
+	if err != nil {
+		c.fail(e, "inferred value type")
+		return nil
+	}
+	c.syntheticPos = e.Pos()
+	result := c.typ(parsed)
+	c.syntheticPos = token.NoPos
+	return result
+}
+
+func (c *converter) stringValue(e ast.Expr) bool {
+	typ := c.info.TypeOf(e)
+	if typ == nil {
+		return false
+	}
+	basic, ok := typ.Underlying().(*types.Basic)
+	return ok && (basic.Kind() == types.String || basic.Kind() == types.UntypedString)
+}
 func (c *converter) typ(e ast.Expr) s.BashPPTypeExpr {
 	if e == nil {
 		return nil
@@ -418,9 +470,9 @@ func (c *converter) exprValue(e ast.Expr) s.BashPPExpr {
 		}
 		return out
 	case *ast.IndexExpr:
-		return &s.BashPPIndexExpr{X: c.expr(x.X), Lbrack: c.pos(x.Lbrack), Rbrack: c.pos(x.Rbrack), Index: c.expr(x.Index)}
+		return &s.BashPPIndexExpr{GoString: c.stringValue(x.X), X: c.expr(x.X), Lbrack: c.pos(x.Lbrack), Rbrack: c.pos(x.Rbrack), Index: c.expr(x.Index)}
 	case *ast.SliceExpr:
-		return &s.BashPPSliceExpr{X: c.expr(x.X), Lbrack: c.pos(x.Lbrack), Rbrack: c.pos(x.Rbrack), Low: c.expr(x.Low), High: c.expr(x.High), Max: c.expr(x.Max), Colon: c.pos(x.Lbrack + 1), SecondColon: func() s.Pos {
+		return &s.BashPPSliceExpr{GoString: c.stringValue(x.X), X: c.expr(x.X), Lbrack: c.pos(x.Lbrack), Rbrack: c.pos(x.Rbrack), Low: c.expr(x.Low), High: c.expr(x.High), Max: c.expr(x.Max), Colon: c.pos(x.Lbrack + 1), SecondColon: func() s.Pos {
 			if x.Slice3 {
 				return c.pos(x.Max.Pos() - 1)
 			}
@@ -450,6 +502,10 @@ func (c *converter) exprValue(e ast.Expr) s.BashPPExpr {
 		if c.isNewType(x) {
 			id := x.Fun.(*ast.Ident)
 			return &s.BashPPNewExpr{New: c.ident(id), Lparen: c.pos(x.Lparen), Rparen: c.pos(x.Rparen), AllocType: c.typ(x.Args[0])}
+		}
+		if c.isNewBuiltin(x) {
+			id := x.Fun.(*ast.Ident)
+			return &s.BashPPNewExpr{New: c.ident(id), Lparen: c.pos(x.Lparen), Rparen: c.pos(x.Rparen), AllocType: c.valueType(x.Args[0]), Init: c.expr(x.Args[0])}
 		}
 		if c.info.Types[x.Fun].IsType() && len(x.Args) == 1 {
 			var typeLit *s.Lit
@@ -577,7 +633,7 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 					out.FuncLit = c.funlit(rhs)
 					out.Rhs = nil
 				case *ast.CallExpr:
-					if c.isNewType(rhs) {
+					if c.isNewBuiltin(rhs) {
 						out.Expr = c.expr(rhs)
 						out.Rhs = nil
 						break
@@ -612,12 +668,13 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 			}
 			cmd = out
 		} else if x.Tok == token.ASSIGN {
+			if len(x.Lhs) > 1 && !tuplePlainTargets(x.Lhs) {
+				return c.tupleAssignStmts(x)
+			}
 			out := &s.BashPPAssign{Eq: c.pos(x.TokPos), Target: c.word(x.Lhs[0]), Value: c.word(x.Rhs[0]), TargetExpr: c.expr(x.Lhs[0])}
 			for _, e := range x.Lhs {
 				if id, ok := e.(*ast.Ident); ok {
 					out.Names = append(out.Names, c.ident(id))
-				} else if len(x.Lhs) > 1 {
-					c.fail(x, "tuple structured assignment")
 				}
 			}
 			for _, e := range x.Rhs {

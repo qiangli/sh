@@ -45,6 +45,7 @@ type bashPPBridgeValue struct {
 	Callable   string                       `json:"-"`
 	NativeType string                       `json:"native_type,omitempty"`
 	Callbacks  bool                         `json:"callbacks,omitempty"`
+	Function   bool                         `json:"function,omitempty"`
 	Origin     uint64                       `json:"origin,omitempty"`
 	Interface  string                       `json:"interface,omitempty"`
 	Session    string                       `json:"session,omitempty"`
@@ -69,14 +70,16 @@ type bashPPBridgeRequest struct {
 	sliceMutating []bool
 	// sliceElem[i] is the declared element type of sliceTargets[i], used to
 	// rebuild the writeback elements as interpreter values. Host-only.
-	sliceElem []syntax.BashPPTypeExpr
-
-	ID       uint64              `json:"id"`
-	Op       string              `json:"op"`
-	Selector string              `json:"selector"`
-	Receiver *bashPPBridgeValue  `json:"receiver,omitempty"`
-	Args     []bashPPBridgeValue `json:"args,omitempty"`
-	Spread   bool                `json:"spread,omitempty"`
+	sliceElem  []syntax.BashPPTypeExpr
+	ID         uint64              `json:"id"`
+	Op         string              `json:"op"`
+	Selector   string              `json:"selector"`
+	Receiver   *bashPPBridgeValue  `json:"receiver,omitempty"`
+	Args       []bashPPBridgeValue `json:"args,omitempty"`
+	Spread     bool                `json:"spread,omitempty"`
+	SourceFile string              `json:"source_file,omitempty"`
+	SourceLine int                 `json:"source_line,omitempty"`
+	LogPrint   string              `json:"log_print,omitempty"`
 	// Values and Error answer a callback the dependency raised; they are set
 	// only when Op is "callback-reply". Sprint #118 Story #54 (c3a60493cde9).
 	Values []bashPPBridgeValue `json:"values,omitempty"`
@@ -97,11 +100,15 @@ type bashPPBridgeResponse struct {
 	Error    string              `json:"error,omitempty"`
 }
 type bashPPNativeSession struct {
-	functions           map[uint64]*bashPPFunc
-	functionNext        uint64
-	callbackGate        chan struct{}
-	activeCallbacks     chan bashPPBridgeResponse
-	callbackOwner       *Runner
+	functions       map[uint64]*bashPPFunc
+	functionNext    uint64
+	callbackGate    chan struct{}
+	activeCallbacks chan bashPPBridgeResponse
+	callbackOwner   *Runner
+	// retained records that this session was handed an original callback it
+	// keeps past the handing-over call. Every later request then parks as a
+	// callback server; see requestCallbackCapable.
+	retained            bool
 	origins             map[uint64]*bashPPPointer
 	originNext          uint64
 	start               sync.Mutex
@@ -117,8 +124,10 @@ type bashPPNativeSession struct {
 	processCancellation error // protected by mu; command context requested kill
 	closeOnce           sync.Once
 	cleanup             func()
+	stopSignals         func()
 	imports             string
 	locals              string
+	embeds              string
 	id                  string
 }
 
@@ -157,6 +166,9 @@ func (s *bashPPNativeSession) closeCanceled(cause error) {
 				<-s.done
 			}
 		}
+		if s.stopSignals != nil {
+			s.stopSignals()
+		}
 		if s.cleanup != nil {
 			s.cleanup()
 		}
@@ -175,6 +187,9 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 		}
 		if s.locals != bashPPLocalTypeIdentity(req.LocalTypes) {
 			return errors.New("gosource: local types changed after native dependency initialization")
+		}
+		if s.embeds != bashPPEmbedIdentity(req.EmbedDecls) {
+			return errors.New("gosource: embed declarations changed after native dependency initialization")
 		}
 		return nil
 	}
@@ -198,7 +213,13 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 	if scratchEnv == nil {
 		scratchEnv = req.Env
 	}
-	file, err := bashPPImportTempSource(bashPPModuleRequest(req).Dir, "bashpp-session-*.go", scratchEnv, bashPPScratchIsolated)
+	sourceDir := bashPPModuleRequest(req).Dir
+	policy := bashPPScratchIsolated
+	if len(req.EmbedDecls) > 0 {
+		sourceDir = req.SourceDir
+		policy = bashPPScratchSourceRoot
+	}
+	file, err := bashPPImportTempSource(sourceDir, "bashpp-session-*.go", scratchEnv, policy)
 	if err != nil {
 		return err
 	}
@@ -240,6 +261,10 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 		cleanup()
 		return err
 	}
+	// The helper owns the native standard-library state of the interpreted Go
+	// program. Keep it in an isolated process group for cleanup, but proxy the
+	// program process's catchable signals as an exec replacement would.
+	s.stopSignals = forwardExecReplacementSignals(cmd.Process.Pid)
 	s.cmd = cmd
 	s.done = make(chan struct{})
 	s.pending = make(map[uint64]chan bashPPBridgeResponse)
@@ -285,6 +310,7 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 	s.mu.Unlock()
 	s.imports = bridgeImportIdentity(req.Imports)
 	s.locals = bashPPLocalTypeIdentity(req.LocalTypes)
+	s.embeds = bashPPEmbedIdentity(req.EmbedDecls)
 	go func() {
 		for {
 			var reply bashPPBridgeResponse
@@ -335,6 +361,9 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 	}
 	if err := validateLocalTransport(req, q); err != nil {
 		return nil, err
+	}
+	if retainedFunctionCallback(req, q) {
+		s.markRetainedCallbacks()
 	}
 	release, callbacks, err := s.enterCallbacks(ctx, req, q)
 	if err != nil {
@@ -407,6 +436,9 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 			if err := applyNativeSliceBuffers(req.CallbackOwner, q, reply); err != nil {
 				return nil, err
 			}
+			// The worker reports only pointees whose structural snapshot changed,
+			// so applying every reported update preserves retained-pointer writes
+			// without replaying stale native copies over interpreter state.
 			if err := s.applyNativePointerUpdates(req, reply); err != nil {
 				return nil, err
 			}
@@ -419,7 +451,12 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 			for i := range reply.Values {
 				if reply.Values[i].Kind == "handle" {
 					reply.Values[i].Session = s.id
-					if callbacks != nil && !synchronousFunctionCallback(req, q) {
+					// Only a result of a request that actually CARRIED an
+					// original callback may retain one. A request merely
+					// parked as a callback server for the session — every
+					// request once a retained handler is registered — hands
+					// its callbacks to nothing and marks nothing.
+					if requestHasCallbacks(req, q) && !synchronousFunctionCallback(req, q) {
 						reply.Values[i].Callbacks = true
 					}
 				}
@@ -580,6 +617,19 @@ func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, err
 			imports.WriteString(strings.Replace(text, alias+" ", "_ ", 1))
 		}
 	}
+	var embeds strings.Builder
+	for i, embed := range req.EmbedDecls {
+		typ, err := bashPPNativeTypeImports(embed.Type, importAliases)
+		if err != nil {
+			return "", err
+		}
+		name := fmt.Sprintf("__bashpp_embed_%d", i)
+		for _, directive := range embed.Directives {
+			fmt.Fprintf(&embeds, "//%s\n", directive)
+		}
+		fmt.Fprintf(&embeds, "var %s %s\n", name, typ)
+		fmt.Fprintf(&symbols, "%q: reflect.ValueOf(&%s).Elem(),\n", bashPPEmbedSymbolPrefix+embed.Name, name)
+	}
 	// Original locally declared types become real declarations here, so the
 	// dependency sees the original field names, field types and defined type
 	// name. Only the declaration crosses over: a mirrored String/Error body is
@@ -633,11 +683,18 @@ func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, err
 	}
 	locals.WriteString(codecs)
 	source := strings.Replace(bashPPNativeWorker, "//IMPORTS", imports.String(), 1)
+	source = strings.Replace(source, "//EMBEDS", embeds.String(), 1)
 	source = strings.Replace(source, "//SYMBOLS", symbols.String(), 1)
 	source = strings.Replace(source, "//TYPES", typeEntries.String(), 1)
 	source = strings.Replace(source, "//LOCALTYPES", locals.String(), 1)
 	return source, nil
 }
+
+func bashPPEmbedIdentity(decls []bashPPEmbedDecl) string {
+	data, _ := json.Marshal(decls)
+	return string(data)
+}
+
 func bashPPBridgeLiteral(text string) (bashPPBridgeValue, error) {
 	if text == "nil" {
 		return bashPPBridgeValue{Kind: "nil"}, nil
@@ -810,4 +867,19 @@ func (s *bashPPNativeSession) canceledTermination(ctx context.Context, err error
 		return ctx.Err()
 	}
 	return nil
+}
+
+func (s *bashPPNativeSession) markRetainedCallbacks() {
+	s.mu.Lock()
+	s.retained = true
+	s.mu.Unlock()
+}
+
+func (s *bashPPNativeSession) retainedCallbacks() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.retained
 }

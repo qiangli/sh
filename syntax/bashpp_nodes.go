@@ -483,13 +483,14 @@ type BashPPDerefExpr struct {
 func (x *BashPPDerefExpr) Pos() Pos { return x.Star }
 func (x *BashPPDerefExpr) End() Pos { return x.X.End() }
 
-// BashPPNewExpr is the predeclared allocation expression new(T). AllocType is
-// a type node rather than an argument expression, so lowering never has to
-// reinterpret source text.
+// BashPPNewExpr is the predeclared allocation expression new(T), or Go 1.27's
+// new(v). AllocType always records the allocated element type; Init is non-nil
+// only for the value form.
 type BashPPNewExpr struct {
 	New       *Lit
 	Lparen    Pos
 	AllocType BashPPTypeExpr
+	Init      BashPPExpr
 	Rparen    Pos
 }
 
@@ -523,10 +524,11 @@ type BashPPConvertExpr struct {
 // BashPPIndexExpr is a single indexed read. Chaining is represented by X
 // containing another BashPPIndexExpr, so every bracket retains its position.
 type BashPPIndexExpr struct {
-	X      BashPPExpr
-	Lbrack Pos
-	Index  BashPPExpr
-	Rbrack Pos
+	GoString bool // Go-source base has underlying string type
+	X        BashPPExpr
+	Lbrack   Pos
+	Index    BashPPExpr
+	Rbrack   Pos
 }
 
 func (x *BashPPIndexExpr) Pos() Pos { return x.X.Pos() }
@@ -535,6 +537,7 @@ func (x *BashPPIndexExpr) End() Pos { return posAddCol(x.Rbrack, 1) }
 // BashPPSliceExpr is a two-index or full three-index slice expression. Low,
 // High, and Max are nil when their source slots are empty.
 type BashPPSliceExpr struct {
+	GoString    bool // Go-source base has underlying string type
 	X           BashPPExpr
 	Lbrack      Pos
 	Low         BashPPExpr

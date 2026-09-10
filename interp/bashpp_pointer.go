@@ -95,6 +95,13 @@ func (r *Runner) bashPPPointerExprValue(expr syntax.BashPPExpr) (*bashPPPointer,
 			return nil, fmt.Errorf("BASHPP-EPOINTER-TYPE: %v", err)
 		}
 		value, meta := r.bashPPZeroValue(x.AllocType)
+		if x.Init != nil {
+			initialized, initializedMeta, err := r.bashPPEvalTypedValue(x.Init, x.AllocType)
+			if err != nil {
+				return nil, err
+			}
+			value, meta = initialized, initializedMeta
+		}
 		cell := &bashPPCell{declType: x.AllocType}
 		bashPPStoreCellValue(cell, value, meta)
 		return &bashPPPointer{target: cell, elem: x.AllocType}, nil
@@ -376,6 +383,25 @@ func bashPPStoreCellValue(cell *bashPPCell, value any, meta *bashPPCollectionMet
 		return
 	}
 	cell.interfaceValue = nil
+	if meta != nil && meta.kind == "channel" {
+		// A channel read out of a collection has to arrive as the channel it
+		// names, not as a rendering of one: an interpreter-owned channel lives
+		// entirely in the identity beside the payload, while a dependency-owned
+		// one is the handle payload itself. Either way the cell is what send,
+		// receive, close and select resolve against.
+		cell.pointer, cell.pointerValue, cell.nilPointer = false, nil, false
+		cell.valueMeta, cell.channel, cell.channelOwner = meta, meta.channel, meta.channelOwner
+		if native, ok := value.(*bashPPBridgeValue); ok && native != nil {
+			cell.vr = expand.NewObject(native)
+			return
+		}
+		text := ""
+		if value != nil {
+			text = fmt.Sprint(value)
+		}
+		cell.vr = expand.Variable{Set: true, Kind: expand.String, Str: text}
+		return
+	}
 	if ptr, ok := value.(*bashPPPointer); ok || value == nil {
 		if _, pointerType := cell.declType.(*syntax.BashPPPointerType); pointerType || meta != nil && meta.kind == "pointer" {
 			cell.pointer, cell.pointerValue, cell.nilPointer = true, ptr, ptr == nil

@@ -62,22 +62,27 @@ func nativeSliceReadOnly(name string) bool {
 	switch name {
 	case "fmt.Print", "fmt.Println", "fmt.Printf", "fmt.Sprint", "fmt.Sprintln", "fmt.Sprintf", "fmt.Errorf", "fmt.Fprint", "fmt.Fprintln", "fmt.Fprintf",
 		"bytes.Equal", "bytes.Compare", "bytes.Contains", "bytes.Count", "bytes.HasPrefix", "bytes.HasSuffix", "bytes.Index", "bytes.IndexByte", "bytes.IndexAny", "bytes.LastIndex", "bytes.LastIndexByte", "bytes.LastIndexAny", "bytes.Clone",
-		"strings.Join", "os.WriteFile", "syscall.Exec", "*flag.FlagSet.Parse",
+		"strings.Join", "os.WriteFile", "syscall.Exec",
 		// slices.Equal only reads both transported slices to answer a bool; it
 		// retains neither. The generic function is not a reflectable dependency
 		// symbol, so nativeSliceGenericHelper computes the result interpreter-side.
-		"slices.Equal",
+		"slices.Equal", "maps.Equal",
 		"*crypto/internal/fips140/sha256.Digest.Write", "*crypto/sha256.digest.Write", "crypto/sha256.Sum256", "crypto/sha1.Sum", "crypto/md5.Sum",
 		"*bytes.Buffer.Write", "*bufio.Writer.Write", "*os.File.Write", "*net.TCPConn.Write", "*net.UnixConn.Write",
 		// Byte-slice emitters that read the transported storage and hand back a
 		// freshly allocated string/[]byte; the original slice is never retained.
 		"*encoding/base64.Encoding.EncodeToString", "encoding/base64.StdEncoding.EncodeToString",
 		"encoding/hex.EncodeToString", "encoding/hex.Dump",
-		"regexp.Match", "*regexp.Regexp.Match", "*regexp.Regexp.Find", "*regexp.Regexp.FindAll", "*regexp.Regexp.FindIndex", "*regexp.Regexp.FindSubmatch", "*regexp.Regexp.ReplaceAll",
+		"regexp.Match", "*regexp.Regexp.Match", "*regexp.Regexp.Find", "*regexp.Regexp.FindAll", "*regexp.Regexp.FindIndex", "*regexp.Regexp.FindSubmatch", "*regexp.Regexp.ReplaceAll", "*regexp.Regexp.ReplaceAllFunc",
+		"slices.IsSorted",
 		// Structural value emitters — the marshalers walk the transported value
 		// tree and allocate their own output. Element storage is read only.
 		"encoding/json.Marshal", "encoding/json.MarshalIndent", "encoding/json/v2.Marshal",
-		"encoding/xml.Marshal", "encoding/xml.MarshalIndent":
+		"encoding/xml.Marshal", "encoding/xml.MarshalIndent",
+		// The structural decoders read the transported input bytes once and
+		// build their own result; the input storage is neither retained nor
+		// written. Their output travels through the pointer writeback.
+		"encoding/json.Unmarshal", "encoding/json/v2.Unmarshal", "encoding/xml.Unmarshal":
 		return true
 	}
 	return false
@@ -95,7 +100,11 @@ func nativeSliceReadOnly(name string) bool {
 // nativeSliceGenericHelper before the request would reach the dependency.
 func nativeSliceMutatingIndex(name string) int {
 	switch name {
-	case "sort.Ints", "sort.Strings", "sort.Float64s", "slices.Sort":
+	case "sort.Ints", "sort.Strings", "sort.Float64s", "slices.Sort",
+		// slices.SortFunc/SortStableFunc reorder in place through the original
+		// comparison callback; goSourceSlicesSortFunc computes the ordering
+		// interpreter-side and rides this same writeback.
+		"slices.SortFunc", "slices.SortStableFunc":
 		return 0
 	}
 	return -1
@@ -150,7 +159,15 @@ func prepareNativeSliceBuffers(req bashPPEvalRequest, q *bashPPBridgeRequest) er
 	if !hasSlice {
 		return nil
 	}
-	if requestHasCallbacks(req, *q) {
+	// The refusal below guards a dependency that would RETAIN or MUTATE a
+	// decoded copy of interpreter storage while an original callback runs. Two
+	// kinds of callable are outside that hazard and are admitted with their
+	// callbacks: one this Runner answers itself, which never sends the storage
+	// anywhere, and a read-only emitter, which walks the transported tree once
+	// and allocates its own output. The latter is the same footing fmt's
+	// formatting entries already stand on, and they are in that set.
+	if callable := nativeSliceCallable(req, *q); requestHasCallbacks(req, *q) &&
+		!goSourceInterpretedCallable(callable) && !nativeSliceReadOnly(callable) {
 		return fmt.Errorf("gosource: original callback with copied slice references is unsupported")
 	}
 	if nativeSliceCallable(req, *q) == "*text/template.Template.Execute" {
@@ -177,9 +194,14 @@ func prepareNativeSliceBuffers(req bashPPEvalRequest, q *bashPPBridgeRequest) er
 	if mut := nativeSliceMutatingIndex(name); mut >= 0 {
 		return prepareNativeSliceMutation(req, q, mut)
 	}
+	if nativePointerWritebackAllowed(req, *q) || nativeRetainedPointerMutator(name) {
+		return nil
+	}
 	index := nativeSliceReadIndex(req, *q)
 	if index < 0 {
-		if nativeSliceReadOnly(name) {
+		// An interpreter-computed helper that does not mutate reads the
+		// transported elements and allocates its own answer.
+		if nativeSliceReadOnly(name) || goSourceInterpretedCallable(name) {
 			return nil
 		}
 		return fmt.Errorf("gosource: native slice retention or mutation is unsupported for %s", name)
@@ -220,7 +242,7 @@ func prepareNativeSliceBuffers(req bashPPEvalRequest, q *bashPPBridgeRequest) er
 // the reordered elements back into the interpreter's original backing array so
 // aliasing slices observe the same reordering, as native Go does.
 func prepareNativeSliceMutation(req bashPPEvalRequest, q *bashPPBridgeRequest, index int) error {
-	if requestHasCallbacks(req, *q) {
+	if requestHasCallbacks(req, *q) && !goSourceInterpretedCallable(nativeSliceCallable(req, *q)) {
 		return fmt.Errorf("gosource: %s cannot mutate a slice carrying original callbacks", nativeSliceCallable(req, *q))
 	}
 	if index >= len(q.Args) || q.Args[index].sliceView == nil {
@@ -332,6 +354,15 @@ func (r *Runner) nativeSliceGenericHelper(ctx context.Context, req bashPPEvalReq
 			return nil, false, err
 		}
 		return []bashPPBridgeValue{{Kind: "bool", Type: "bool", Text: strconv.FormatBool(equal)}}, true, nil
+	case "maps.Equal":
+		if len(q.Args) != 2 {
+			return nil, true, fmt.Errorf("gosource: maps.Equal requires two maps")
+		}
+		equal, err := nativeMapPrimitiveEqual(q.Args[0], q.Args[1])
+		if err != nil {
+			return nil, true, err
+		}
+		return []bashPPBridgeValue{{Kind: "bool", Type: "bool", Text: strconv.FormatBool(equal)}}, true, nil
 	case "slices.Sort":
 		if len(q.SliceBuffers) != 1 {
 			return nil, false, fmt.Errorf("gosource: slices.Sort requires a direct original slice")
@@ -349,8 +380,60 @@ func (r *Runner) nativeSliceGenericHelper(ctx context.Context, req bashPPEvalReq
 			return nil, false, err
 		}
 		return nil, true, nil
+	case "slices.IsSorted":
+		if len(q.Args) != 1 {
+			return nil, false, fmt.Errorf("gosource: slices.IsSorted requires one slice")
+		}
+		elements, err := nativeSliceElements(q.Args[0])
+		if err != nil {
+			return nil, false, err
+		}
+		sorted, err := nativeSliceIsSorted(elements)
+		if err != nil {
+			return nil, false, err
+		}
+		return []bashPPBridgeValue{{Kind: "bool", Type: "bool", Text: strconv.FormatBool(sorted)}}, true, nil
 	}
-	return nil, false, nil
+	// The generic callback-taking helpers share this interpreter-side dispatch:
+	// slices.SortFunc and friends are uninstantiated generic functions too.
+	return r.goSourceGenericCallbackHelper(ctx, req, q)
+}
+
+func nativeMapPrimitiveEqual(a, b bashPPBridgeValue) (bool, error) {
+	if a.Kind == "nil" && b.Kind == "nil" {
+		return true, nil
+	}
+	if a.Kind != "map" || b.Kind != "map" {
+		return false, fmt.Errorf("gosource: maps.Equal requires map operands, got %s and %s", a.Kind, b.Kind)
+	}
+	if len(a.Entries) != len(b.Entries) {
+		return false, nil
+	}
+	for _, left := range a.Entries {
+		found := false
+		for _, right := range b.Entries {
+			keysEqual, err := nativeSliceScalarEqual(left.Key, right.Key)
+			if err != nil {
+				return false, err
+			}
+			if !keysEqual {
+				continue
+			}
+			valuesEqual, err := nativeSliceScalarEqual(left.Value, right.Value)
+			if err != nil {
+				return false, err
+			}
+			if !valuesEqual {
+				return false, nil
+			}
+			found = true
+			break
+		}
+		if !found {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 func (r *Runner) goSourceSlicesCollect(ctx context.Context, req bashPPEvalRequest, args []bashPPBridgeValue) ([]bashPPBridgeValue, error) {
@@ -491,6 +574,19 @@ func nativeSliceSorted(elems []bashPPBridgeValue) ([]bashPPBridgeValue, error) {
 		return nil, sortErr
 	}
 	return out, nil
+}
+
+func nativeSliceIsSorted(elems []bashPPBridgeValue) (bool, error) {
+	for i := 1; i < len(elems); i++ {
+		less, err := nativeSliceElementLess(elems[i], elems[i-1])
+		if err != nil {
+			return false, err
+		}
+		if less {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // nativeSliceElementLess orders two primitive elements as cmp.Ordered would:

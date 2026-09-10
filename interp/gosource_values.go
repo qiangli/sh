@@ -12,7 +12,17 @@ func goSourceNativeValueCell(value bashPPBridgeValue) *bashPPCell {
 	if scalar, err := value.scalar(); err == nil {
 		return &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarString(scalar.value)}, scalarKind: scalar.value.Kind(), typeName: scalar.typ, declType: &syntax.BashPPNamedType{Name: &syntax.Lit{Value: scalar.typ}}}
 	}
-	return &bashPPCell{vr: expand.NewObject(&value)}
+	cell := &bashPPCell{vr: expand.NewObject(&value), typeName: value.Type}
+	if value.Interface != "" {
+		cell.declType = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: value.Interface}}
+		payload := &bashPPCell{vr: expand.NewObject(&value), typeName: value.Type}
+		cell.interfaceValue = &bashPPInterfaceValue{
+			nilIface: value.Kind == "nil",
+			cell:     payload,
+			dynamic:  &syntax.BashPPNamedType{Name: &syntax.Lit{Value: value.Type}},
+		}
+	}
+	return cell
 }
 func (r *Runner) goSourceCallableCell(expr syntax.BashPPExpr) (*bashPPCell, bool, error) {
 	if !r.bashPPGoSource || expr == nil {

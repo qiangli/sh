@@ -50,18 +50,20 @@ func TestShortDeclNewTypeKeepsAllocation(t *testing.T) {
 	}
 }
 
-// Go 1.27 new(v) allocates a copy of a value, so the argument is not a type and
-// the declaration stays on the generic call path instead of failing conversion.
-func TestShortDeclNewValueUsesCallPath(t *testing.T) {
+// Go 1.27 new(v) allocates a copy of a value. The typed node retains both the
+// initializer and its defaulted element type, so interpreted and lowered modes
+// share the same value semantics.
+func TestShortDeclNewValueKeepsInitializer(t *testing.T) {
 	decl := shortDecl(t, "package main\nimport \"fmt\"\nfunc main(){p:=new(42);fmt.Println(*p)}")
-	if decl.Expr != nil {
+	alloc, ok := decl.Expr.(*syntax.BashPPNewExpr)
+	if !ok {
 		t.Fatalf("value allocation converted as %T", decl.Expr)
 	}
-	if decl.Call == nil || len(decl.Call.Fun) != 1 || decl.Call.Fun[0].Value != "new" {
-		t.Fatal("value allocation lost its call")
+	if alloc.Init == nil || alloc.AllocType == nil {
+		t.Fatal("value allocation lost its initializer or type")
 	}
-	if len(decl.Call.Args) != 1 || decl.Call.Args[0].Lit() != "42" {
-		t.Fatal("value allocation lost its operand")
+	if decl.Call != nil || decl.Rhs != nil {
+		t.Fatal("value allocation left a shadow call or word")
 	}
 }
 
@@ -79,7 +81,7 @@ func TestNewValueExpressionConverts(t *testing.T) {
 		}
 		return true
 	})
-	if alloc != nil {
-		t.Fatal("value operand converted as an allocated type")
+	if alloc == nil || alloc.Init == nil || alloc.AllocType == nil {
+		t.Fatal("value operand lost its typed allocation")
 	}
 }

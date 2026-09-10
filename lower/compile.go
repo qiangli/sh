@@ -1275,6 +1275,10 @@ func (e *emitter) expr(x syntax.BashPPExpr) (string, error) {
 		}
 		return e.checkedDeref(n, a, ""), nil
 	case *syntax.BashPPNewExpr:
+		if n.Init != nil {
+			a, err := e.expr(n.Init)
+			return "new(" + a + ")", err
+		}
 		a, err := e.typeExpr(n.AllocType)
 		return "new(" + a + ")", err
 	case *syntax.BashPPBasicLit:

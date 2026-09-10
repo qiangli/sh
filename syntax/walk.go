@@ -289,6 +289,7 @@ func Walk(node Node, f func(Node) bool) {
 	case *BashPPNewExpr:
 		Walk(node.New, f)
 		Walk(node.AllocType, f)
+		walkNilable(node.Init, f)
 	case *BashPPTypeAssertExpr:
 		Walk(node.X, f)
 		walkNilable(node.Assert, f)

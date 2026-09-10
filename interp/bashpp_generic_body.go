@@ -277,11 +277,12 @@ func (r *Runner) bashPPBindExprs(x syntax.BashPPExpr) syntax.BashPPExpr {
 		return &cp
 	case *syntax.BashPPNewExpr:
 		alloc := r.bashPPBindTypeExpr(e.AllocType)
-		if alloc == e.AllocType {
+		init := r.bashPPBindExprs(e.Init)
+		if alloc == e.AllocType && init == e.Init {
 			return x
 		}
 		cp := *e
-		cp.AllocType = alloc
+		cp.AllocType, cp.Init = alloc, init
 		return &cp
 	case *syntax.BashPPTypeAssertExpr:
 		assert := r.bashPPBindTypeExpr(e.Assert)

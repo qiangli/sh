@@ -505,6 +505,9 @@ func (r *Runner) bashPPCheckTypedValue(value any, meta *bashPPCollectionMeta, ex
 		}
 		return nil
 	}
+	if _, ok := r.goSourceChannelType(expected); ok {
+		return r.goSourceCheckChannelValue(value, meta, expected)
+	}
 	if _, _, ok := r.bashPPStructFields(expected); ok {
 		if meta == nil || meta.kind != "struct" || !r.bashPPTypeAssignable(meta.typ, expected) {
 			return fmt.Errorf("BASHPP-ESTRUCT-FIELD-TYPE: cannot use value as %s", bashPPTypeText(expected))

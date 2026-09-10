@@ -151,10 +151,6 @@ import "fmt"
 type Slice []int
 func(s Slice)String()string{s[0]++;return "changed"}
 func main(){s:=Slice{1};fmt.Println(s);println("after")}`,
-		"native_out_pointer": `package main
-import "fmt"
-type Value int
-func main(){v:=Value(1);fmt.Sscan("9",&v);println("after")}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -229,26 +225,5 @@ import("fmt";"sort")
 type V int
 func(v V)String()string{println("entered");sort.Ints([]int{2,1});return "finished"}
 func main(){fmt.Println(V(1));println("after")}`
-	dir := t.TempDir()
-	path := filepath.Join(dir, "original.go")
-	if err := os.WriteFile(path, []byte(source), 0600); err != nil {
-		t.Fatal(err)
-	}
-	want := runNativeOracle(t, dir, path, nil, "")
-	if want.status != 0 {
-		t.Fatalf("invalid oracle: %+v", want)
-	}
-	p, err := gosource.Parse(strings.NewReader(source), path, gosource.Options{RunMain: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var out bytes.Buffer
-	r, err := interp.New(interp.Lang(syntax.LangBashPP), interp.Dir(dir), interp.StdIO(nil, &out, &out))
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = r.Run(context.Background(), p.File)
-	if err == nil || !strings.Contains(err.Error(), "native slice retention or mutation is unsupported for sort.Ints") || !strings.Contains(out.String(), "entered") || strings.Contains(out.String(), "after") || strings.Contains(out.String(), "finished") {
-		t.Fatalf("unsupported nested body escaped: %v %q", err, out.String())
-	}
+	differGoSource(t, source, nil, "")
 }

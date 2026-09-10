@@ -1450,7 +1450,12 @@ func (r *Runner) bashPPCallValues(c *syntax.BashPPCall, fn *bashPPFunc) (result 
 			success = false
 		}
 	}()
-	if r.bashPPGoSource && !c.Ellipsis.IsValid() && len(c.ArgExprs) == len(c.Args) {
+	if c.Ellipsis.IsValid() && !bashppVariadic(fn.params()) {
+		r.errf("cannot use ... in call to non-variadic %s\n", fn.name())
+		r.exit = exitStatus{code: 2}
+		return nil, false
+	}
+	if r.bashPPGoSource && len(c.ArgExprs) == len(c.Args) {
 		args, ok, err := r.goSourceCallArguments(c, fn)
 		if err != nil {
 			if err != errBashPPScalarInterrupted {
@@ -1700,9 +1705,11 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 	callChannels := r.bashPPCallChannels
 	callInterfaces := r.bashPPCallInterfaces
 	callCells := r.bashPPCallCells
+	callSpread := r.bashPPCallSpread
 	r.bashPPCallCells = nil
 	r.bashPPCallChannels = nil
 	r.bashPPCallInterfaces = nil
+	r.bashPPCallSpread = false
 	if fn.native != nil {
 		return r.goSourceInvokeNative(ctx, fn, args, callCells)
 	}
@@ -1724,7 +1731,7 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 	if !bound {
 		return nil
 	}
-	if !r.bashPPCheckArgs(fn, params, args) {
+	if !r.bashPPCheckArgs(fn, params, args, callSpread) {
 		return nil
 	}
 	if !r.bashPPCheckChannelArgs(fn, params, callChannels, callCells) {
@@ -1759,6 +1766,16 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 	// is still a slice.
 	for i, param := range params {
 		if param.variadic {
+			// An original Go program's variadic parameter IS a slice: it is
+			// printed as one, measured with len, indexed, resliced and passed
+			// on. The indexed shell binding below carries none of that, so a
+			// Go-source frame binds a real slice cell instead.
+			if r.bashPPGoSource && param.name != "" {
+				if !r.goSourceBindVariadic(param, args[i:], callCells[min(i, len(callCells)):], callSpread) {
+					return nil
+				}
+				break
+			}
 			if param.name != "" {
 				rest := append([]string(nil), args[i:]...)
 				_ = r.bashPPScope.declare(param.name,
@@ -2620,7 +2637,12 @@ func bashppVariadic(fields []*syntax.BashPPField) bool {
 // takes at least its fixed parameters and any number beyond them, including
 // none — which is why the two are worded differently: "expected 2" and
 // "expected at least 2" tell a reader which rule they broke.
-func (r *Runner) bashPPCheckArgs(fn *bashPPFunc, params []bashPPParam, args []string) bool {
+//
+// SPREAD. `f(xs...)` hands the variadic parameter one whole slice rather than
+// one element per argument, so the trailing argument is checked against []T by
+// the binding that receives it — see [Runner.goSourceBindSpreadVariadic] — and
+// not against T here, which would reject every spread.
+func (r *Runner) bashPPCheckArgs(fn *bashPPFunc, params []bashPPParam, args []string, spread bool) bool {
 	fixed := len(params)
 	variadic := fixed > 0 && params[fixed-1].variadic
 	if variadic {
@@ -2638,6 +2660,9 @@ func (r *Runner) bashPPCheckArgs(fn *bashPPFunc, params []bashPPParam, args []st
 	}
 	for i, arg := range args {
 		param := params[min(i, len(params)-1)]
+		if spread && param.variadic {
+			continue
+		}
 		if signature, ok := param.typ.(*syntax.BashPPFuncType); ok {
 			actual, found := r.bashPPClosure(arg)
 			if !found || bashPPFieldsSignature(actual.params()) != bashPPFieldsSignature(signature.Params) || bashPPFieldsSignature(actual.results()) != bashPPFieldsSignature(signature.Results) {

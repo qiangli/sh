@@ -101,6 +101,11 @@ func (e *emitter) projectionExpr(x syntax.BashPPExpr) projection {
 		return p
 	case *syntax.BashPPNewExpr:
 		p := pointerProjection()
+		if n.Init != nil {
+			element := e.projectionExpr(n.Init)
+			p.element = &element
+			return p
+		}
 		typ, err := e.typeExpr(n.AllocType)
 		if err == nil {
 			element := e.projectionType(typ, nil)

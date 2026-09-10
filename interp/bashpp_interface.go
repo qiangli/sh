@@ -41,6 +41,9 @@ func (r *Runner) bashPPInterfaceType(typ syntax.BashPPTypeExpr) (*syntax.BashPPI
 		}
 		seen[named.Name.Value] = true
 		decl, found := r.bashPPTypes[named.Name.Value]
+		if !found && named.Name.Value == "any" {
+			return &syntax.BashPPInterfaceType{Interface: &syntax.Lit{Value: "interface"}}, true
+		}
 		if !found && named.Name.Value == "error" {
 			return bashPPPredeclaredErrorInterface(), true
 		}
@@ -567,16 +570,39 @@ func bashPPDefaultScalarTypeName(kind constant.Kind) string {
 func (r *Runner) bashPPTypeAssert(assert *syntax.BashPPTypeAssertExpr, commaOK bool) ([]string, *bashPPCell, error) {
 	id, ok := assert.X.(*syntax.BashPPIdent)
 	if !ok {
-		return nil, nil, fmt.Errorf("BASHPP-EASSERT-OPERAND: type assertion operand must be an interface")
+		value, meta, err := r.bashPPReadExpr(assert.X)
+		if err != nil {
+			return nil, nil, err
+		}
+		if meta == nil || meta.interfaceValue == nil {
+			return nil, nil, fmt.Errorf("BASHPP-EASSERT-OPERAND: type assertion operand must be an interface")
+		}
+		cell := &bashPPCell{declType: meta.typ, interfaceValue: meta.interfaceValue}
+		if meta.interfaceValue.nilIface {
+			cell.vr = expand.Variable{Set: true, Kind: expand.String}
+		} else if meta.interfaceValue.cell != nil {
+			cell.vr = meta.interfaceValue.cell.vr
+		} else {
+			cell.vr = expand.NewObject(value)
+		}
+		return r.bashPPTypeAssertCell(assert, commaOK, cell)
 	}
 	cell := r.bashPPScope.lookup(id.Name.Value)
+	return r.bashPPTypeAssertCell(assert, commaOK, cell)
+}
+
+func (r *Runner) bashPPTypeAssertCell(assert *syntax.BashPPTypeAssertExpr, commaOK bool, cell *bashPPCell) ([]string, *bashPPCell, error) {
 	if cell == nil || cell.interfaceValue == nil {
-		return nil, nil, fmt.Errorf("BASHPP-EASSERT-OPERAND: %s is not an interface", id.Name.Value)
+		return nil, nil, fmt.Errorf("BASHPP-EASSERT-OPERAND: type assertion operand is not an interface")
 	}
 	iv := cell.interfaceValue
 	if iface, ok := r.bashPPInterfaceType(cell.declType); ok {
-		if _, assertIface := r.bashPPInterfaceType(assert.Assert); !assertIface {
-			if err := r.bashPPImplements(assert.Assert, iface); err != nil {
+		if _, assertIface := r.bashPPInterfaceType(assert.Assert); !assertIface && !r.goSourceImportedTypeName(bashPPTypeText(assert.Assert)) {
+			methods, methodErr := r.bashPPInterfaceMethodSet("interface", iface, make(map[string]bool))
+			if methodErr != nil {
+				return nil, nil, methodErr
+			}
+			if len(methods.order) > 0 && r.bashPPImplements(assert.Assert, iface) != nil {
 				return nil, nil, fmt.Errorf("BASHPP-EASSERT-IMPOSSIBLE: %s cannot be asserted from %s", bashPPTypeText(assert.Assert), bashPPTypeText(cell.declType))
 			}
 		}
@@ -587,7 +613,8 @@ func (r *Runner) bashPPTypeAssert(assert *syntax.BashPPTypeAssertExpr, commaOK b
 		if assertingInterface {
 			matched = r.bashPPImplements(iv.dynamic, assertIface) == nil
 		} else {
-			matched = bashPPTypeText(iv.dynamic) == bashPPTypeText(assert.Assert)
+			matched = bashPPInterfaceAssertTypeText(iv.dynamic) == bashPPInterfaceAssertTypeText(assert.Assert) ||
+				r.goSourceNativeTypeIdentical(iv.dynamic, assert.Assert)
 		}
 	}
 	if !matched {
@@ -616,6 +643,14 @@ func (r *Runner) bashPPTypeAssert(assert *syntax.BashPPTypeAssertExpr, commaOK b
 		return []string{source.vr.Str, "true"}, source, nil
 	}
 	return []string{iv.cell.vr.Str, "true"}, iv.cell, nil
+}
+
+func bashPPInterfaceAssertTypeText(typ syntax.BashPPTypeExpr) string {
+	text := bashPPTypeText(typ)
+	text = strings.ReplaceAll(text, "interface{}", "any")
+	text = strings.ReplaceAll(text, "interface {}", "any")
+	text = strings.ReplaceAll(text, "interface", "any")
+	return text
 }
 
 func (r *Runner) bashPPTypeSwitch(ctx context.Context, sw *syntax.BashPPSwitch) {

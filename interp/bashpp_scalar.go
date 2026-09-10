@@ -164,33 +164,100 @@ func (r *Runner) bashPPEvalScalarExpr(expr syntax.BashPPExpr) (result bashPPScal
 			return bashPPScalar{}, err
 		}
 		return r.bashPPConvertNamedScalar(x.ConvType.Value, v)
-	case *syntax.BashPPIndexExpr, *syntax.BashPPSelectorExpr, *syntax.BashPPDerefExpr:
-		value, meta, err := r.bashPPReadExpr(expr)
-		if err != nil {
-			return bashPPScalar{}, err
-		}
-		if meta != nil {
-			return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-OPERAND: indexed value is not a scalar")
-		}
-		typ := ""
-		if scalarType := r.bashPPExprScalarType(expr); scalarType != nil {
-			if named, ok := scalarType.(*syntax.BashPPNamedType); ok {
-				typ = named.Name.Value
+	case *syntax.BashPPIndexExpr:
+		// Strings are scalar values, not collection objects. Go indexing is by
+		// byte, so keep it in the scalar evaluator and leave other index shapes
+		// to the structured reader below.
+		stringOperand := x.GoString
+		switch x.X.(type) {
+		case *syntax.BashPPBasicLit, *syntax.BashPPIdent, *syntax.BashPPParenExpr:
+			stringOperand = true
+		default:
+			if typ := r.bashPPExprScalarType(x.X); typ != nil {
+				stringOperand = bashPPTypeText(r.bashPPUnderlyingType(typ)) == "string"
 			}
 		}
-		switch value := value.(type) {
-		case string:
-			return bashPPScalar{value: constant.MakeString(value), typ: typ, runtime: true}, nil
-		case bool:
-			return bashPPScalar{value: constant.MakeBool(value), typ: typ, runtime: true}, nil
-		case int:
-			return bashPPScalar{value: constant.MakeInt64(int64(value)), typ: typ, runtime: true}, nil
-		case float64:
-			return bashPPScalar{value: constant.MakeFloat64(value), typ: typ, runtime: true}, nil
+		if stringOperand {
+			base, err := r.bashPPEvalScalarExpr(x.X)
+			if err != nil {
+				return r.bashPPScalarPath(expr)
+			}
+			if base.value.Kind() != constant.String {
+				return r.bashPPScalarPath(expr)
+			}
+			text := constant.StringVal(base.value)
+			index, err := r.bashPPCollectionIndex(x.Index)
+			if err != nil {
+				return bashPPScalar{}, err
+			}
+			if index < 0 || index >= len(text) {
+				return bashPPScalar{}, fmt.Errorf("BASHPP-ECOLLECTION-BOUNDS: index %d out of bounds for length %d", index, len(text))
+			}
+			return bashPPScalar{value: constant.MakeUint64(uint64(text[index])), typ: "uint8", runtime: true}, nil
 		}
-		return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-OPERAND: indexed value is not a scalar")
+		return r.bashPPScalarPath(expr)
+	case *syntax.BashPPSliceExpr:
+		if r.bashPPGoSource && !x.GoString {
+			return r.bashPPScalarPath(expr)
+		}
+		base, err := r.bashPPEvalScalarExpr(x.X)
+		if err != nil || base.value.Kind() != constant.String {
+			return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-OPERAND: sliced value is not a string")
+		}
+		if x.Max != nil {
+			return bashPPScalar{}, fmt.Errorf("BASHPP-ECOLLECTION-SLICE: three-index slicing is not defined on strings")
+		}
+		text := constant.StringVal(base.value)
+		low, high := 0, len(text)
+		if x.Low != nil {
+			low, err = r.bashPPCollectionIndex(x.Low)
+			if err != nil {
+				return bashPPScalar{}, err
+			}
+		}
+		if x.High != nil {
+			high, err = r.bashPPCollectionIndex(x.High)
+			if err != nil {
+				return bashPPScalar{}, err
+			}
+		}
+		if low < 0 || high < low || high > len(text) {
+			return bashPPScalar{}, fmt.Errorf("BASHPP-ECOLLECTION-BOUNDS: slice [%d:%d] out of bounds for length %d", low, high, len(text))
+		}
+		return bashPPScalar{value: constant.MakeString(text[low:high]), typ: "string", runtime: true}, nil
+	case *syntax.BashPPSelectorExpr, *syntax.BashPPDerefExpr:
+		return r.bashPPScalarPath(expr)
 	}
 	return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-FORM: unsupported scalar expression %T", expr)
+}
+
+func (r *Runner) bashPPScalarPath(expr syntax.BashPPExpr) (bashPPScalar, error) {
+	value, meta, err := r.bashPPReadExpr(expr)
+	if err != nil {
+		return bashPPScalar{}, err
+	}
+	if meta != nil {
+		return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-OPERAND: indexed value is not a scalar")
+	}
+	typ := ""
+	if scalarType := r.bashPPExprScalarType(expr); scalarType != nil {
+		if named, ok := scalarType.(*syntax.BashPPNamedType); ok {
+			typ = named.Name.Value
+		}
+	}
+	switch value := value.(type) {
+	case string:
+		return bashPPScalar{value: constant.MakeString(value), typ: typ, runtime: true}, nil
+	case bool:
+		return bashPPScalar{value: constant.MakeBool(value), typ: typ, runtime: true}, nil
+	case int:
+		return bashPPScalar{value: constant.MakeInt64(int64(value)), typ: typ, runtime: true}, nil
+	case int64:
+		return bashPPScalar{value: constant.MakeInt64(value), typ: typ, runtime: true}, nil
+	case float64:
+		return bashPPScalar{value: constant.MakeFloat64(value), typ: typ, runtime: true}, nil
+	}
+	return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-OPERAND: indexed value is not a scalar")
 }
 
 // bashPPExprScalarType follows the declared shape of a path after the value
@@ -216,15 +283,33 @@ func (r *Runner) bashPPExprScalarType(expr syntax.BashPPExpr) syntax.BashPPTypeE
 			return meta.typ
 		}
 		if cell.typeName != "" {
+			if cell.scalarKind == constant.String && cell.typeName == "untyped string" {
+				return &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "string"}}
+			}
 			return &syntax.BashPPNamedType{Name: &syntax.Lit{Value: cell.typeName}}
+		}
+		if cell.scalarKind == constant.String {
+			return &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "string"}}
+		}
+	case *syntax.BashPPBasicLit:
+		if x.Kind == "STRING" {
+			return &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "string"}}
 		}
 	case *syntax.BashPPDerefExpr:
 		if pointer, ok := r.bashPPUnderlyingType(r.bashPPExprScalarType(x.X)).(*syntax.BashPPPointerType); ok {
 			return pointer.Element
 		}
 	case *syntax.BashPPIndexExpr:
-		if collection, ok := r.bashPPUnderlyingType(r.bashPPExprScalarType(x.X)).(*syntax.BashPPCollectionType); ok {
+		base := r.bashPPUnderlyingType(r.bashPPExprScalarType(x.X))
+		if collection, ok := base.(*syntax.BashPPCollectionType); ok {
 			return collection.Element
+		}
+		if named, ok := base.(*syntax.BashPPNamedType); ok && named.Name.Value == "string" {
+			return &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "uint8"}}
+		}
+	case *syntax.BashPPSliceExpr:
+		if named, ok := r.bashPPUnderlyingType(r.bashPPExprScalarType(x.X)).(*syntax.BashPPNamedType); ok && named.Name.Value == "string" {
+			return &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "string"}}
 		}
 	case *syntax.BashPPSelectorExpr:
 		parent := r.bashPPExprScalarType(x.X)
@@ -774,6 +859,8 @@ func bashPPCompareValues(left any, leftMeta *bashPPCollectionMeta, leftNilLitera
 	switch leftMeta.kind {
 	case "slice", "map":
 		return false, fmt.Errorf("BASHPP-ECOMPARE-NONCOMPARABLE: %s values can only be compared to nil", leftMeta.kind)
+	case "channel":
+		return bashPPChannelElementEqual(left, leftMeta, right, rightMeta), nil
 	case "array", "inferred-array":
 		leftSeq := left.([]any)
 		rightSeq := right.([]any)
@@ -812,7 +899,7 @@ func bashPPPointerComparable(meta *bashPPCollectionMeta) bool {
 }
 
 func bashPPNilComparable(meta *bashPPCollectionMeta) bool {
-	return meta != nil && (meta.kind == "slice" || meta.kind == "map" || meta.kind == "interface")
+	return meta != nil && (meta.kind == "slice" || meta.kind == "map" || meta.kind == "interface" || meta.kind == "channel")
 }
 
 func bashPPCompareScalarAny(left, right any) (bool, error) {
@@ -879,6 +966,11 @@ func bashPPNilComparableValue(value any) bool {
 	}
 	if iface, ok := value.(*bashPPInterfaceValue); ok {
 		return iface == nil || iface.nilIface
+	}
+	// A dependency-owned channel stored in a collection is its handle, and the
+	// dependency reports a nil one as the nil value rather than as a handle.
+	if native, ok := value.(*bashPPBridgeValue); ok {
+		return native == nil || native.Kind == "nil"
 	}
 	return false
 }

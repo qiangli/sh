@@ -8,10 +8,13 @@ import (
  "fmt"
  "go/ast"
  "go/parser"
+ bppLog "log"
  "net"
+ "path/filepath"
  "reflect"
  "strconv"
  "sync"
+ "time"
  bppTextTemplate "text/template"
  bppTemplateParse "text/template/parse"
 //IMPORTS
@@ -19,10 +22,13 @@ import (
 
 //CONNECTION
 
+//EMBEDS
+
 type value struct {
  ReaderBuffer []byte `json:"reader_buffer,omitempty"`
  ReaderLength int `json:"reader_length,omitempty"`
  CallArgs []value `json:"call_args,omitempty"`
+ Function bool `json:"function,omitempty"`
  NativeType string `json:"native_type,omitempty"`
  Origin uint64 `json:"origin,omitempty"`
  Interface string `json:"interface,omitempty"`
@@ -37,7 +43,7 @@ type value struct {
 }
 type bppProtocolEntry struct {Key value `json:"key"`; Value value `json:"value"`}
 type sliceBuffer struct {Index int `json:"index"`;Length int `json:"length"`;Value value `json:"value"`}
-type request struct { SliceBuffers []sliceBuffer `json:"slice_buffers,omitempty"`; ID uint64 `json:"id"`; Op string `json:"op"`; Selector string `json:"selector"`; Receiver *value `json:"receiver,omitempty"`; Args []value `json:"args,omitempty"`; Spread bool `json:"spread,omitempty"`; Values []value `json:"values,omitempty"`; Error string `json:"error,omitempty"` }
+type request struct { SliceBuffers []sliceBuffer `json:"slice_buffers,omitempty"`; ID uint64 `json:"id"`; Op string `json:"op"`; Selector string `json:"selector"`; Receiver *value `json:"receiver,omitempty"`; Args []value `json:"args,omitempty"`; Spread bool `json:"spread,omitempty"`; SourceFile string `json:"source_file,omitempty"`; SourceLine int `json:"source_line,omitempty"`; LogPrint string `json:"log_print,omitempty"`; Values []value `json:"values,omitempty"`; Error string `json:"error,omitempty"` }
 // Op, Selector and Receiver are set only on a callback: the reverse direction
 // in which this helper asks the interpreter to run an original method body.
 type response struct { SliceUpdates []sliceBuffer `json:"slice_updates,omitempty"`; PtrUpdates []value `json:"ptr_updates,omitempty"`; Panic *value `json:"panic,omitempty"`; ID uint64 `json:"id"`; Op string `json:"op,omitempty"`; Selector string `json:"selector,omitempty"`; Receiver *value `json:"receiver,omitempty"`; Values []value `json:"values,omitempty"`; Error string `json:"error,omitempty"` }
@@ -55,14 +61,30 @@ var localStructCodecs = map[reflect.Type]localStructCodec{}
 func localTypeKey(name string) string { expr,err:=parser.ParseExpr(name);if err!=nil{return name};var b bytes.Buffer;if format.Node(&b,token.NewFileSet(),expr)!=nil{return name};return b.String() }
 //LOCALTYPES
 
-var originalPointers = struct {sync.Mutex; values map[uint64]reflect.Value; ids map[uintptr]uint64}{values:map[uint64]reflect.Value{},ids:map[uintptr]uint64{}}
+var originalPointers = struct {sync.Mutex; values map[uint64]reflect.Value; ids map[uintptr]uint64; sent map[uint64]string}{values:map[uint64]reflect.Value{},ids:map[uintptr]uint64{},sent:map[uint64]string{}}
+// pointerSnapshot renders one origin pointee so the writeback can report only
+// what this dependency actually changed. Without it every later call would
+// re-send every live pointee and revert original state it never touched.
+func pointerSnapshot(v value)string{b,err:=json.Marshal(v);if err!=nil{return ""};return string(b)}
+// recordPointee remembers what a pointee looked like when the interpreter last
+// sent it. structural takes the same lock for its own pointer case, so the
+// rendering must happen outside it.
+func recordPointee(origin uint64,ptr reflect.Value){snapshot:=pointerSnapshot(structural(ptr.Elem()));originalPointers.Lock();originalPointers.sent[origin]=snapshot;originalPointers.Unlock()}
+// livePointers copies the live origin table so each pointee can be rendered
+// without holding the lock structural itself needs.
+func livePointers()([]uint64,[]reflect.Value){originalPointers.Lock();defer originalPointers.Unlock();var origins []uint64;var ptrs []reflect.Value;for origin,ptr:=range originalPointers.values{if ptr.IsValid()&&ptr.Kind()==reflect.Pointer&&!ptr.IsNil(){origins=append(origins,origin);ptrs=append(ptrs,ptr)}};return origins,ptrs}
+// writablePointee is the set of pointee shapes the interpreter rebuilds at the
+// pointer's declared type. A shape outside it is never written back silently.
+func writablePointee(kind string)bool{switch kind{case "string","bool","int","uint","float","complex","nil","handle","struct","slice","array","map":return true};return false}
 var handles = struct { sync.Mutex; next uint64; values map[uint64]reflect.Value; stop chan struct{} }{values: map[uint64]reflect.Value{},stop:make(chan struct{})}
 func typeID(t reflect.Type) string { if t.Name()!="" && t.PkgPath()!="" {return t.PkgPath()+"."+t.Name()}; return t.String() }
 func nativeTypeID(t reflect.Type) string {if t.Kind()==reflect.Pointer{return "*"+nativeTypeID(t.Elem())};if t.Name()!=""&&t.PkgPath()!=""{return t.PkgPath()+"."+t.Name()};return t.String()}
+func encodeHandle(v reflect.Value,result value)value {handles.Lock();handles.next++;id:=handles.next;copy:=reflect.New(v.Type()).Elem();copy.Set(v);handles.values[id]=copy;handles.Unlock();result.Kind="handle";result.Handle=id;return result}
 func encode(v reflect.Value) value {
  if !v.IsValid() { return value{Kind:"nil"} }
  static:="";if v.Kind()==reflect.Interface {static=typeID(v.Type());if v.IsNil(){return value{Kind:"nil",Type:static,Interface:static}};v=v.Elem()}
- result:=value{Type:typeID(v.Type()),NativeType:nativeTypeID(v.Type()),Interface:static}
+ result:=value{Type:typeID(v.Type()),NativeType:nativeTypeID(v.Type()),Interface:static,Function:v.Kind()==reflect.Func}
+ if v.Type().PkgPath()!=""&&v.Type().PkgPath()!="main"&&!token.IsExported(v.Type().Name()){return encodeHandle(v,result)}
  switch v.Kind(){
  case reflect.String: result.Kind="string";result.Text=v.String()
  case reflect.Bool:result.Kind="bool";result.Text=strconv.FormatBool(v.Bool())
@@ -70,7 +92,7 @@ func encode(v reflect.Value) value {
  case reflect.Uint,reflect.Uint8,reflect.Uint16,reflect.Uint32,reflect.Uint64,reflect.Uintptr:result.Kind="uint";result.Text=strconv.FormatUint(v.Uint(),10)
  case reflect.Complex64,reflect.Complex128:result.Kind="complex";result.Text=strconv.FormatComplex(v.Complex(),'g',-1,v.Type().Bits())
  case reflect.Float32,reflect.Float64:result.Kind="float";result.Text=strconv.FormatFloat(v.Float(),'g',-1,v.Type().Bits())
- default: handles.Lock();handles.next++;id:=handles.next;copy:=reflect.New(v.Type()).Elem();copy.Set(v);handles.values[id]=copy;handles.Unlock();result.Kind="handle";result.Handle=id
+ default:return encodeHandle(v,result)
  }
  return result
 }
@@ -167,7 +189,7 @@ func decode(v value, target reflect.Type)(reflect.Value,error){
   case "complex":n,e:=strconv.ParseComplex(v.Text,128);if e!=nil{return result,e};if typ.Kind()!=reflect.Complex64&&typ.Kind()!=reflect.Complex128{return result,fmt.Errorf("complex for %s",typ)};if result.OverflowComplex(n){return result,fmt.Errorf("complex overflow")};result.SetComplex(n)
   case "float":n,e:=strconv.ParseFloat(v.Text,64);if e!=nil{return result,e};switch typ.Kind(){case reflect.Float32,reflect.Float64:result.SetFloat(n);case reflect.Complex64,reflect.Complex128:result.SetComplex(complex(n,0));default:return result,fmt.Errorf("float for %s",typ)}
   case "slice","array":if typ.Kind()==reflect.Slice {result=reflect.MakeSlice(typ,len(v.Elements),len(v.Elements))} else if typ.Kind()!=reflect.Array||typ.Len()!=len(v.Elements){return result,fmt.Errorf("invalid collection %s",typ)};for i,elem:=range v.Elements{item,e:=decode(elem,typ.Elem());if e!=nil{return result,e};result.Index(i).Set(item)}
-  case "pointer":if typ.Kind()!=reflect.Pointer{return result,fmt.Errorf("pointer for %s",typ)};if len(v.Elements)!=1{return result,fmt.Errorf("pointer needs one referent")};item,e:=decode(v.Elements[0],typ.Elem());if e!=nil{return result,e};originalPointers.Lock();if v.Origin!=0 {result=originalPointers.values[v.Origin]};if !result.IsValid() || result.Type()!=typ || result.IsNil(){result=reflect.New(typ.Elem())};result.Elem().Set(item);if v.Origin!=0{originalPointers.values[v.Origin]=result;originalPointers.ids[result.Pointer()]=v.Origin};originalPointers.Unlock()
+  case "pointer":if typ.Kind()!=reflect.Pointer{return result,fmt.Errorf("pointer for %s",typ)};if len(v.Elements)!=1{return result,fmt.Errorf("pointer needs one referent")};item,e:=decode(v.Elements[0],typ.Elem());if e!=nil{return result,e};originalPointers.Lock();if v.Origin!=0 {result=originalPointers.values[v.Origin]};if !result.IsValid() || result.Type()!=typ || result.IsNil(){result=reflect.New(typ.Elem())};result.Elem().Set(item);if v.Origin!=0{originalPointers.values[v.Origin]=result;originalPointers.ids[result.Pointer()]=v.Origin};originalPointers.Unlock();if v.Origin!=0{recordPointee(v.Origin,result)}
   case "map":if typ.Kind()!=reflect.Map{return result,fmt.Errorf("map for %s",typ)};result=reflect.MakeMapWithSize(typ,len(v.Entries));for _,entry:=range v.Entries{key,e:=decode(entry.Key,typ.Key());if e!=nil{return result,e};item,e:=decode(entry.Value,typ.Elem());if e!=nil{return result,e};result.SetMapIndex(key,item)}
   case "struct":if typ.Kind()!=reflect.Struct{return result,fmt.Errorf("struct for %s",typ)};if len(v.Elements)>0&&(len(v.Fields)>0||len(v.Elements)!=typ.NumField()){return result,fmt.Errorf("invalid positional field count or mixed fields for %s",typ)};if codec,ok:=localStructCodecs[typ];ok{var err error;result,err=codec.decode(v);if err!=nil{return result,err};break};for name,field:=range v.Fields{slot:=result.FieldByName(name);if !slot.IsValid(){return result,fmt.Errorf("unknown field %s of %s",name,typ)};if !slot.CanSet(){return result,fmt.Errorf("unexported field %s of %s cannot cross the dependency boundary",name,typ)};item,e:=decode(field,slot.Type());if e!=nil{return result,e};slot.Set(item)}
    for i,field:=range v.Elements{if i>=result.NumField(){return result,fmt.Errorf("too many values for %s",typ)};slot:=result.Field(i);if !slot.CanSet(){return result,fmt.Errorf("unexported field %s of %s cannot cross the dependency boundary",typ.Field(i).Name,typ)};item,e:=decode(field,slot.Type());if e!=nil{return result,e};slot.Set(item)}
@@ -208,6 +230,18 @@ func access(rv reflect.Value,q request)([]value,string){
  }
  for rv.Kind()==reflect.Pointer&&rv.Type().Elem().Kind()==reflect.Array {if rv.IsNil(){return nil,"index through nil pointer"};rv=rv.Elem()}
  switch q.Op {
+ case "kind":
+  // The original program's `range` needs to know whether it is iterating keys
+  // or indexes before it asks for either. Only the reflect kind crosses.
+  return []value{encode(reflect.ValueOf(rv.Kind().String()))},""
+ case "keys":
+  if rv.Kind()!=reflect.Map{return nil,"range keys are not defined on "+rv.Type().String()}
+  keys:=rv.MapKeys();out:=make([]value,0,len(keys));for _,key:=range keys{out=append(out,encode(key))};return out,""
+ case "deref":
+  for rv.Kind()==reflect.Interface&&!rv.IsNil(){rv=rv.Elem()}
+  if rv.Kind()!=reflect.Pointer{return nil,"dereference requires a pointer"}
+  if rv.IsNil(){return nil,"invalid memory address or nil pointer dereference"}
+  return []value{encode(rv.Elem())},""
  case "len":
   switch rv.Kind(){case reflect.String,reflect.Slice,reflect.Array,reflect.Map,reflect.Chan:return []value{encode(reflect.ValueOf(rv.Len()))},""}
   return nil,"len is not defined on "+rv.Type().String()
@@ -235,6 +269,17 @@ func access(rv reflect.Value,q request)([]value,string){
   return []value{encode(rv.Slice(low,high))},""
  }
  return nil,"unsupported native access "+q.Op
+}
+func sourceLog(q request,args []reflect.Value)(bool,string){
+ if q.SourceFile==""||q.SourceLine==0||q.LogPrint==""{return false,""}
+ values:=make([]any,len(args));for i,arg:=range args{values[i]=arg.Interface()}
+ message:="";switch q.LogPrint{case "Print":message=fmt.Sprint(values...);case "Println":message=fmt.Sprintln(values...);case "Printf":if len(values)==0{return true,"missing format"};format,ok:=values[0].(string);if !ok{return true,"format is not a string"};message=fmt.Sprintf(format,values[1:]...);default:return false,""}
+ if message==""||message[len(message)-1]!='\n'{message+="\n"}
+ flags:=bppLog.Flags();now:=time.Now();var b bytes.Buffer;b.WriteString(bppLog.Prefix())
+ if flags&bppLog.Ldate!=0{y,m,d:=now.Date();fmt.Fprintf(&b,"%04d/%02d/%02d ",y,m,d)}
+ if flags&(bppLog.Ltime|bppLog.Lmicroseconds)!=0{h,m,s:=now.Clock();fmt.Fprintf(&b,"%02d:%02d:%02d",h,m,s);if flags&bppLog.Lmicroseconds!=0{fmt.Fprintf(&b,".%06d",now.Nanosecond()/1000)};b.WriteByte(' ')}
+ if flags&(bppLog.Lshortfile|bppLog.Llongfile)!=0{file:=q.SourceFile;if flags&bppLog.Lshortfile!=0{file=filepath.Base(file)};fmt.Fprintf(&b,"%s:%d: ",file,q.SourceLine)}
+ b.WriteString(message);_,err:=bppLog.Writer().Write(b.Bytes());if err!=nil{return true,err.Error()};return true,""
 }
 // A tree containing any function identifier or template invocation is outside
 // the read-only primitive-slice contract, regardless of its Funcs registry.
@@ -307,7 +352,7 @@ func dispatch(q request)(reply response){
  if q.Op=="construct"||q.Op=="address" {if len(q.Args)!=1{reply.Error="construction requires one literal";return};typ:=resolveType(q.Selector);if typ==nil{reply.Error="unregistered bridge type "+strconv.Quote(q.Selector);return};v,err:=decode(q.Args[0],typ);if err!=nil{reply.Error=err.Error();return};if q.Op=="address"{ptr:=reflect.New(typ);ptr.Elem().Set(v);v=ptr};reply.Values=[]value{encode(v)};return}
  fn:=symbols[q.Selector]
  if q.Receiver!=nil {receiver,err:=decode(*q.Receiver,nil);if err!=nil{reply.Error=err.Error();return}
-  switch q.Op {case "len","cap","index","slice","field","member","receiver_field","byte-set":reply.Values,reply.Error=access(receiver,q);return}
+  switch q.Op {case "deref","len","cap","index","slice","field","member","receiver_field","byte-set","kind","keys":reply.Values,reply.Error=access(receiver,q);return}
   if q.Selector==""&&receiver.Kind()==reflect.Func{fn=receiver}else{fn=memberMethod(receiver,q.Selector)}}
  if q.Op=="new" {typ:=resolveType(q.Selector);if typ==nil{reply.Error="unregistered bridge type "+strconv.Quote(q.Selector);return};reply.Values=[]value{encode(reflect.New(typ).Elem())};return}
  if !fn.IsValid(){reply.Error="unknown imported symbol or method: "+q.Selector;return}
@@ -318,7 +363,8 @@ func dispatch(q request)(reply response){
  args:=make([]reflect.Value,len(q.Args))
  for i,arg:=range q.Args {var target reflect.Type;if signature.IsVariadic()&&i>=n-1 {target=signature.In(n-1);if !q.Spread{target=target.Elem()}}else{target=signature.In(i)};v,err:=decode(arg,target);if err!=nil{reply.Error=err.Error();return};args[i]=v}
  for _,buffer:=range q.SliceBuffers {if buffer.Index<0||buffer.Index>=len(args)||args[buffer.Index].Kind()!=reflect.Slice{reply.Error="invalid native buffer index";return};backing,err:=decode(buffer.Value,args[buffer.Index].Type());if err!=nil{reply.Error=err.Error();return};if backing.Kind()!=reflect.Slice||buffer.Length<0||buffer.Length>backing.Len(){reply.Error="invalid native buffer bounds";return};args[buffer.Index]=backing.Slice3(0,buffer.Length,backing.Len())}
-  defer func(){for _,buffer:=range q.SliceBuffers {v:=args[buffer.Index];reply.SliceUpdates=append(reply.SliceUpdates,sliceBuffer{Index:buffer.Index,Length:v.Len(),Value:structural(v.Slice(0,v.Cap()))})};originalPointers.Lock();for origin,ptr:=range originalPointers.values{if ptr.IsValid()&&ptr.Kind()==reflect.Pointer&&!ptr.IsNil(){elem:=structural(ptr.Elem());switch elem.Kind{case "string","bool","int","uint","float","complex","nil":reply.PtrUpdates=append(reply.PtrUpdates,value{Kind:"pointer",Type:ptr.Type().String(),Origin:origin,Session:bridgeAuth[:16],Elements:[]value{elem}})}}};originalPointers.Unlock()}()
+  defer func(){for _,buffer:=range q.SliceBuffers {v:=args[buffer.Index];reply.SliceUpdates=append(reply.SliceUpdates,sliceBuffer{Index:buffer.Index,Length:v.Len(),Value:structural(v.Slice(0,v.Cap()))})};origins,ptrs:=livePointers();for i,origin:=range origins{elem:=structural(ptrs[i].Elem());if !writablePointee(elem.Kind){continue};snapshot:=pointerSnapshot(elem);originalPointers.Lock();changed:=snapshot!=originalPointers.sent[origin];if changed{originalPointers.sent[origin]=snapshot};originalPointers.Unlock();if !changed{continue};reply.PtrUpdates=append(reply.PtrUpdates,value{Kind:"pointer",Type:ptrs[i].Type().String(),Origin:origin,Session:bridgeAuth[:16],Elements:[]value{elem}})}}()
+ if handled,err:=sourceLog(q,args);handled{reply.Error=err;return}
  var returned []reflect.Value
  if q.Spread {if !signature.IsVariadic()||len(args)!=n{reply.Error="invalid spread call";return};returned=fn.CallSlice(args)}else{returned=fn.Call(args)}
  for _,v:=range returned{reply.Values=append(reply.Values,encode(v))};return

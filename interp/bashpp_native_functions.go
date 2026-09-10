@@ -32,9 +32,24 @@ func (r *Runner) bashPPBridgeFunction(fn *bashPPFunc) (bashPPBridgeValue, error)
 					continue
 				}
 			}
-			if !r.bashPPCallbackScalarType(field.FieldTypeExpr) {
-				return bashPPBridgeValue{}, fmt.Errorf("gosource: original callback signature requires scalar parameters and supported results")
+			// A value-semantics aggregate — a struct or array built only from
+			// scalars — is copied by Go itself at the call boundary, so the
+			// copied transport observes what native Go observes. A parameter
+			// naming an imported type is not copied at all: it stays the
+			// dependency's own value behind a session handle.
+			if r.bashPPCallbackValueType(field.FieldTypeExpr) || r.bashPPCallbackNativeType(field.FieldTypeExpr) {
+				continue
 			}
+			if group == 0 && r.bashPPNativeType(field.FieldTypeExpr) {
+				continue
+			}
+			// Interface parameters and results can carry nil, native handles, or
+			// interpreter-owned dynamic values through the existing interface
+			// side channel without flattening them to strings.
+			if _, ok := r.bashPPInterfaceType(field.FieldTypeExpr); ok {
+				continue
+			}
+			return bashPPBridgeValue{}, fmt.Errorf("gosource: original callback signature requires value-semantics parameters and supported results")
 		}
 	}
 	req, err := r.bashPPEvalRequest()
@@ -102,13 +117,16 @@ func (r *Runner) bashPPNativeFunctionCallback(ctx context.Context, id uint64, ar
 			cells[i] = &bashPPCell{vr: vr, declType: signature}
 			continue
 		}
-		scalar, err := arg.scalar()
+		cell, text, err := r.goSourceCallbackCell(arg, params[i])
 		if err != nil {
-			return nil, fmt.Errorf("gosource: callback parameter %d: %w", i, err)
+			if arg.Kind != "handle" && arg.Kind != "nil" {
+				return nil, fmt.Errorf("gosource: callback parameter %d: %w", i, err)
+			}
+			cells[i] = goSourceNativeValueCell(arg)
+			cells[i].declType = params[i].typ
+			continue
 		}
-		texts[i] = bashPPScalarString(scalar.value)
-		cells[i] = goSourceNativeValueCell(arg)
-		cells[i].typeName, cells[i].declType = params[i].declared, params[i].typ
+		cells[i], texts[i] = cell, text
 	}
 	r.bashPPCallCells = cells
 	results := r.bashPPInvoke(ctx, fn, texts)
@@ -160,7 +178,7 @@ func synchronousFunctionCallback(req bashPPEvalRequest, q bashPPBridgeRequest) b
 		}
 		path = req.Imports[alias] + "." + name
 	}
-	if path == "golang.org/x/tour/wc.Test" || path == "golang.org/x/tour/pic.Show" {
+	if path == "golang.org/x/tour/wc.Test" || path == "golang.org/x/tour/pic.Show" || path == "path/filepath.WalkDir" {
 		return true
 	}
 	if pkg, name, ok := strings.Cut(path, "."); ok {
@@ -183,6 +201,35 @@ func synchronousFunctionCallback(req bashPPEvalRequest, q bashPPBridgeRequest) b
 		case "Map", "FieldsFunc", "ContainsFunc", "IndexFunc", "LastIndexFunc", "TrimFunc", "TrimLeftFunc", "TrimRightFunc":
 			return true
 		}
+	}
+	return false
+}
+
+// retainedFunctionCallback reports a registration API that keeps an original
+// function past the call that hands it over and invokes it later, possibly from
+// the dependency's own goroutines. Admitting one switches the whole session to
+// callback-capable dispatch: every later request serves callbacks on its own
+// parked goroutine, so a retained handler runs on the Runner that owns it and
+// never concurrently with another interpreted frame.
+func retainedFunctionCallback(req bashPPEvalRequest, q bashPPBridgeRequest) bool {
+	path := ""
+	if q.Receiver != nil && q.Receiver.Kind == "handle" {
+		path = strings.TrimPrefix(q.Receiver.Callable, "*")
+		if path == "" && q.Receiver.NativeType != "" {
+			path = strings.TrimPrefix(q.Receiver.NativeType, "*") + "." + q.Selector
+		}
+	}
+	if path == "" {
+		alias, name, ok := strings.Cut(q.Selector, ".")
+		if !ok {
+			return false
+		}
+		path = req.Imports[alias] + "." + name
+	}
+	switch path {
+	case "net/http.HandleFunc", "net/http.Handle",
+		"net/http.ServeMux.HandleFunc", "net/http.ServeMux.Handle":
+		return true
 	}
 	return false
 }

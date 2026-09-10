@@ -280,6 +280,9 @@ func sharpExpr(x syntax.BashPPExpr) *sharpNullExpr {
 		n.children = []*sharpNullExpr{sharpExpr(v.X)}
 	case *syntax.BashPPNewExpr:
 		n.op = "new"
+		if v.Init != nil {
+			n.children = []*sharpNullExpr{sharpExpr(v.Init)}
+		}
 	case *syntax.BashPPIndexExpr:
 		n.op = "index"
 		n.children = []*sharpNullExpr{sharpExpr(v.X), sharpExpr(v.Index)}

@@ -4,6 +4,7 @@
 package interp
 
 import (
+	"fmt"
 	"strings"
 
 	"mvdan.cc/sh/v3/syntax"
@@ -65,6 +66,12 @@ type bashPPPanicState struct {
 	// cleanup clears it again, so the rest of that cleanup is abandoned too.
 	running bool
 	chain   []string
+	// GoSource panics retain the interpreted frame names and source site so the
+	// process boundary reports a genuine Go-shaped traceback. Classic Bash++
+	// keeps its established concise diagnostic.
+	traceSource string
+	traceLine   uint
+	traceFrames []string
 }
 
 // value is the payload a recover would take: the most recent panic's.
@@ -121,6 +128,14 @@ func (r *Runner) bashPPPredeclared(name string, c *syntax.BashPPCall, args []str
 			r.errf("panic: takes exactly one argument\n")
 			r.exit = exitStatus{code: 2}
 			return nil, false
+		}
+		if r.bashPPGoSource {
+			r.bashPPPanic.traceSource = r.filename
+			r.bashPPPanic.traceLine = c.Pos().Line()
+			r.bashPPPanic.traceFrames = r.bashPPPanic.traceFrames[:0]
+			for _, frame := range r.callStack {
+				r.bashPPPanic.traceFrames = append(r.bashPPPanic.traceFrames, frame.funcName)
+			}
 		}
 		r.bashPPRaise(args[0])
 		return nil, false
@@ -207,10 +222,8 @@ func (r *Runner) bashPPRecover() (string, bool) {
 
 // bashPPPanicTerminate reports an unrecovered panic and terminates the shell.
 //
-// The report is the panic chain and nothing more. A fabricated Go stack trace
-// would name frames this shell does not have, so what is printed is exactly
-// what the shell knows: the value panicked with, and each value that replaced
-// it while the stack unwound.
+// Classic Bash++ reports only the panic chain. GoSource also reports the real
+// interpreted function frames and panic site it retained at the raise point.
 func (r *Runner) bashPPPanicTerminate() {
 	var b strings.Builder
 	for i, value := range r.bashPPPanic.chain {
@@ -220,6 +233,21 @@ func (r *Runner) bashPPPanicTerminate() {
 		b.WriteString("panic: ")
 		b.WriteString(value)
 		b.WriteString("\n")
+	}
+	if r.bashPPGoSource {
+		b.WriteString("\ngoroutine 1 [running]:\n")
+		for i := len(r.bashPPPanic.traceFrames) - 1; i >= 0; i-- {
+			name := r.bashPPPanic.traceFrames[i]
+			if name == "" {
+				name = "func1"
+			}
+			b.WriteString("main.")
+			b.WriteString(name)
+			b.WriteString("()\n")
+			if i == len(r.bashPPPanic.traceFrames)-1 && r.bashPPPanic.traceSource != "" {
+				fmt.Fprintf(&b, "\t%s:%d\n", r.bashPPPanic.traceSource, r.bashPPPanic.traceLine)
+			}
+		}
 	}
 	r.errf("%s", b.String())
 	r.bashPPPanic = bashPPPanicState{}

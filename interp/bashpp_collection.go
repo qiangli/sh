@@ -26,6 +26,13 @@ type bashPPCollectionMeta struct {
 	// stored inside a collection or struct. The JSON-shaped payload alone can
 	// only retain its printable shell value.
 	interfaceValue *bashPPInterfaceValue
+	// channel preserves the identity of an interpreter-owned channel stored in
+	// a struct field, slice element or map value. A channel is a reference, so
+	// what a payload has to carry across a copy is which channel it names —
+	// something no rendering of the value can express. A dependency-owned
+	// channel needs no entry here: its handle IS the payload.
+	channel      *bashPPChannel
+	channelOwner *bashPPConcurrent
 }
 
 func bashPPArrayMeta(meta *bashPPCollectionMeta) bool {
@@ -468,6 +475,12 @@ func (r *Runner) bashPPEvalConstIntExpr(expr goast.Expr) (value constant.Value, 
 }
 
 func (r *Runner) bashPPEvalElement(expr syntax.BashPPExpr, expected syntax.BashPPTypeExpr) (any, *bashPPCollectionMeta, error) {
+	// A channel element is claimed first: every other reading of the value —
+	// as a call result, as a scalar — discards the identity that IS the
+	// channel. See [Runner.goSourceChannelElement].
+	if value, meta, handled, err := r.goSourceChannelElement(expr, expected); handled {
+		return value, meta, err
+	}
 	if conversion, ok := expr.(*syntax.BashPPConvertExpr); ok && r.bashPPGoSource {
 		if value, meta, handled, err := r.bashPPConvertToCollection(conversion); handled {
 			if err != nil {

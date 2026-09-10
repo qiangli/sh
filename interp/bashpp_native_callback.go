@@ -20,7 +20,7 @@ import (
 // enterCallbacks serializes callback-capable outer requests. Nested imports from
 // the active callback may reenter; an unrelated Runner never borrows its state.
 func (s *bashPPNativeSession) enterCallbacks(ctx context.Context, req bashPPEvalRequest, q bashPPBridgeRequest) (func(), chan bashPPBridgeResponse, error) {
-	if !requestHasCallbacks(req, q) {
+	if !requestCallbackCapable(req, q) {
 		return func() {}, nil, nil
 	}
 	s.mu.Lock()
@@ -129,6 +129,7 @@ func (r *Runner) bashPPNativeCallback(ctx context.Context, selector string, recv
 		return nil, fmt.Errorf("gosource: malformed original method selector %q", selector)
 	}
 	typeName = bashPPLocalTypeName(typeName)
+	var copied *bashPPCell
 	if r.bashPPMethods[typeName][method] == nil {
 		return nil, fmt.Errorf("gosource: original type %s has no method %s", typeName, method)
 	}
@@ -153,7 +154,12 @@ func (r *Runner) bashPPNativeCallback(ctx context.Context, selector string, recv
 		}
 		cell = &bashPPCell{declType: named, typeName: typeName}
 		bashPPStoreCellValue(cell, value, meta)
+		// The receiver is a copy of storage the caller still shares. A write
+		// through one of its references would be invisible to the caller here,
+		// so it is detected after the body rather than dropped.
+		copied = cell
 	}
+	before := r.goSourceCopiedReceiverDigest(copied)
 
 	// The callback borrows the runner while its caller is parked inside the
 	// imported call, so the caller's in-flight argument state is restored
@@ -235,6 +241,9 @@ func (r *Runner) bashPPNativeCallback(ctx context.Context, selector string, recv
 	if r.exit.exiting || r.exit.fatalExit || r.exit.code != 0 || r.bashPPShortFailureSeq != failure {
 		return nil, fmt.Errorf("gosource: original %s failed (status %d)", selector, r.exit.code)
 	}
+	if copied != nil && r.goSourceCopiedReceiverDigest(copied) != before {
+		return nil, fmt.Errorf("gosource: original %s wrote through reference storage of a copied receiver; that effect cannot cross back", selector)
+	}
 	// Error and String answer with the one string the original body returns.
 	// Every other mirrored signature — Read, and the image.Image method set —
 	// crosses back as typed values, so a native handle stays an authenticated
@@ -287,7 +296,7 @@ func (r *Runner) bashPPBridgeContents(v bashPPBridgeValue, typ syntax.BashPPType
 		if v.Kind == "nil" && (v.Type == "" || v.Type == v.Interface) {
 			return "", &bashPPCollectionMeta{kind: "interface", typ: typ, interfaceValue: &bashPPInterfaceValue{nilIface: true}}, nil
 		}
-		dynamic := &syntax.BashPPNamedType{Name: &syntax.Lit{Value: bashPPLocalTypeName(v.Type)}}
+		dynamic := bashPPBridgeDynamicType(v.Type)
 		if _, ok := r.bashPPInterfaceType(dynamic); ok {
 			return nil, nil, fmt.Errorf("dynamic type %s of an interface value is not materialised", v.Type)
 		}
@@ -306,7 +315,10 @@ func (r *Runner) bashPPBridgeContents(v bashPPBridgeValue, typ syntax.BashPPType
 		if err != nil {
 			return nil, nil, err
 		}
-		payload := &bashPPCell{declType: dynamic, typeName: dynamic.Name.Value}
+		payload := &bashPPCell{declType: dynamic}
+		if named, ok := dynamic.(*syntax.BashPPNamedType); ok && named.Name != nil {
+			payload.typeName = named.Name.Value
+		}
 		bashPPStoreCellValue(payload, inner, innerMeta)
 		iv := &bashPPInterfaceValue{cell: payload, dynamic: dynamic}
 		return inner, &bashPPCollectionMeta{kind: "interface", typ: typ, interfaceValue: iv}, nil
@@ -382,6 +394,31 @@ func (r *Runner) bashPPBridgeContents(v bashPPBridgeValue, typ syntax.BashPPType
 		return out, meta, nil
 	}
 	return bashPPBridgeScalarValue(v)
+}
+
+func bashPPBridgeDynamicType(name string) syntax.BashPPTypeExpr {
+	name = strings.TrimSpace(name)
+	switch name {
+	case "interface {}", "interface{}":
+		return &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "any"}}
+	}
+	if strings.HasPrefix(name, "[]") {
+		return &syntax.BashPPCollectionType{
+			Kind:    "slice",
+			Element: bashPPBridgeDynamicType(name[2:]),
+		}
+	}
+	if strings.HasPrefix(name, "map[") {
+		end := strings.IndexByte(name, ']')
+		if end > len("map[") {
+			return &syntax.BashPPCollectionType{
+				Kind:    "map",
+				Key:     bashPPBridgeDynamicType(name[len("map["):end]),
+				Element: bashPPBridgeDynamicType(name[end+1:]),
+			}
+		}
+	}
+	return &syntax.BashPPNamedType{Name: &syntax.Lit{Value: bashPPLocalTypeName(name)}}
 }
 
 // bashPPBridgeScalarValue converts one transported scalar into the interpreter

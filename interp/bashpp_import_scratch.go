@@ -30,6 +30,10 @@ const (
 	// read-only input, so a TMPDIR pointing back into it is a request the
 	// session cannot honour and must reject rather than silently relocate.
 	bashPPScratchIsolated bashPPScratchPolicy = iota
+	// bashPPScratchSourceRoot gives an overlay-backed helper a logical path in
+	// the source directory itself. Compiler directives such as go:embed resolve
+	// their patterns relative to that logical path without writing there.
+	bashPPScratchSourceRoot
 	// bashPPScratchSourceTree additionally tolerates a scratch root inside
 	// the source directory. Classic bash++ imports have always evaluated
 	// helpers from a dot directory under the importer, and profiles point
@@ -90,12 +94,17 @@ func bashPPImportTempSource(dir, pattern string, env []string, policy bashPPScra
 	buildPath := f.Name()
 	if !inSource {
 		virtualDir := filepath.Join(contextDir, filepath.Base(work))
-		if _, err := os.Lstat(virtualDir); !os.IsNotExist(err) {
+		collisionPath := virtualDir
+		if policy == bashPPScratchSourceRoot {
+			virtualDir = contextDir
+			collisionPath = filepath.Join(virtualDir, filepath.Base(f.Name()))
+		}
+		buildPath = filepath.Join(virtualDir, filepath.Base(f.Name()))
+		if _, err := os.Lstat(collisionPath); !os.IsNotExist(err) {
 			f.Close()
 			cleanup()
 			return nil, fmt.Errorf("bash++: helper overlay would mask an existing source path")
 		}
-		buildPath = filepath.Join(virtualDir, filepath.Base(f.Name()))
 		replace[buildPath] = f.Name()
 	}
 	overlay := filepath.Join(work, "overlay.json")

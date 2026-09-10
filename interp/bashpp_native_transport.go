@@ -22,8 +22,13 @@ func validateLocalTransport(req bashPPEvalRequest, q bashPPBridgeRequest) error 
 		local[typ.Name] = typ
 	}
 	functionCallbacks := false
-	var inspect func(bashPPBridgeValue) (bool, bool, error)
-	inspect = func(v bashPPBridgeValue) (bool, bool, error) {
+	// identity reports that this value is reachable through an original pointer
+	// the dependency can name, so a method callback on it binds to the original
+	// interpreter storage rather than to a rebuilt copy. It propagates from a
+	// pointer to its pointee and from a struct to its fields, which is exactly
+	// the addressable chain `&x.f.g` names in Go.
+	var inspect func(bashPPBridgeValue, bool) (bool, bool, error)
+	inspect = func(v bashPPBridgeValue, identity bool) (bool, bool, error) {
 		if v.Kind == "callback" {
 			functionCallbacks = true
 			return false, false, nil
@@ -47,9 +52,11 @@ func validateLocalTransport(req bashPPEvalRequest, q bashPPBridgeRequest) error 
 			}
 		}
 		reference := v.Kind == "pointer" || v.Kind == "slice" || v.Kind == "map"
+		identity = identity || v.Origin != 0
+		nested := identity && (v.Kind == "pointer" || v.Kind == "struct")
 		nestedRef := false
 		for _, child := range v.Elements {
-			l, ref, err := inspect(child)
+			l, ref, err := inspect(child, nested)
 			if err != nil {
 				return false, false, err
 			}
@@ -57,7 +64,7 @@ func validateLocalTransport(req bashPPEvalRequest, q bashPPBridgeRequest) error 
 			nestedRef = nestedRef || ref
 		}
 		for _, child := range v.Fields {
-			l, ref, err := inspect(child)
+			l, ref, err := inspect(child, nested)
 			if err != nil {
 				return false, false, err
 			}
@@ -65,19 +72,24 @@ func validateLocalTransport(req bashPPEvalRequest, q bashPPBridgeRequest) error 
 			nestedRef = nestedRef || ref
 		}
 		for _, entry := range v.Entries {
-			l, ref, err := inspect(entry.Value)
+			l, ref, err := inspect(entry.Value, false)
 			if err != nil {
 				return false, false, err
 			}
 			isLocal = isLocal || l
 			nestedRef = nestedRef || ref
 		}
-		// Value-receiver methods on copied maps/slices/reference-bearing structs
-		// cannot silently lose effects on their shared referents.
-		if len(typ.Methods) > 0 && (reference || nestedRef) && v.Origin == 0 {
+		// A value-receiver method on copied maps/slices/reference-bearing
+		// structs used to be refused outright here. It is now admitted: the
+		// callback runs against the rebuilt copy and bashPPNativeCallback
+		// compares the shared storage before and after the body, so an effect
+		// on a shared referent is reported instead of silently lost. A pointer
+		// method still requires original identity, which it already has
+		// wherever the value is addressable.
+		if len(typ.Methods) > 0 && (reference || nestedRef) && !identity {
 			for _, m := range typ.Methods {
-				if !m.Pointer {
-					return false, false, fmt.Errorf("gosource: callback on reference-bearing value %s requires original reference identity", v.Type)
+				if m.Pointer {
+					return false, false, fmt.Errorf("gosource: pointer-receiver callback on reference-bearing value %s requires original reference identity", v.Type)
 				}
 			}
 		}
@@ -85,30 +97,32 @@ func validateLocalTransport(req bashPPEvalRequest, q bashPPBridgeRequest) error 
 	}
 	unsafe := false
 	for _, arg := range q.Args {
-		local, ref, err := inspect(arg)
+		local, ref, err := inspect(arg, false)
 		if err != nil {
 			return err
 		}
 		unsafe = unsafe || (local && ref) || arg.Kind == "pointer"
 	}
-	if nativePointerWritebackAllowed(req, q) {
+	if !functionCallbacks && nativePointerWritebackAllowed(req, q) {
 		return nil
 	}
-	// A read-only structural emitter (json/xml Marshal, base64/hex encode) walks
-	// the transported value tree and allocates its own output; it never retains
-	// or mutates the interpreter-owned slices nested inside a local struct. It is
-	// safe precisely when no original callback rides along — a type carrying its
-	// own Marshal method would surface as a callback and take the paths below.
-	if callable := nativeSliceCallable(req, q); nativeSliceReadOnly(callable) && !functionCallbacks && !requestHasCallbacks(req, q) {
+	// A read-only structural emitter (json/xml Marshal, base64/hex encode, the
+	// fmt formatters) walks the transported value tree and allocates its own
+	// output; it never retains or mutates the interpreter-owned slices nested
+	// inside a local struct. An original mirror method may ride along and is
+	// executed synchronously on the parked Runner, exactly as it is for the fmt
+	// entries in the same set. A general function callback still is not
+	// admitted here: those go through synchronousFunctionCallback below.
+	if callable := nativeSliceCallable(req, q); nativeSliceReadOnly(callable) && !functionCallbacks {
 		return nil
 	}
 	if synchronousReaderCallback(req, q) || synchronousImageCallback(req, q) || !functionCallbacks && (synchronousUnwrapCallback(req, q) || synchronousErrorsAsType(req, q)) {
 		return nil
 	}
-	if functionCallbacks && !synchronousFunctionCallback(req, q) {
+	if functionCallbacks && !synchronousFunctionCallback(req, q) && !retainedFunctionCallback(req, q) {
 		return fmt.Errorf("gosource: asynchronous or retained original function callbacks are unsupported for %s", q.Selector)
 	}
-	if !unsafe && synchronousFunctionCallback(req, q) {
+	if !unsafe && (synchronousFunctionCallback(req, q) || retainedFunctionCallback(req, q)) {
 		return nil
 	}
 	if !unsafe && !requestHasCallbacks(req, q) {
@@ -130,11 +144,62 @@ func validateLocalTransport(req bashPPEvalRequest, q bashPPBridgeRequest) error 
 	return fmt.Errorf("gosource: dependency mutation of interpreter-owned references is unsupported for %s", q.Selector)
 }
 
+// nativePointerWritebackAllowed reports a call whose pointer arguments all
+// carry original identity. Every write the dependency performs through such a
+// pointer — during this call, or during a later one if the dependency retained
+// it — is compared against the value it was given and transported back into
+// the original storage, so no native write is silently dropped. A pointer
+// without identity is still refused: there would be nothing to write back to.
 func nativePointerWritebackAllowed(req bashPPEvalRequest, q bashPPBridgeRequest) bool {
-	name := nativeSliceCallable(req, q)
+	var inspect func(bashPPBridgeValue) (pointers int, valid bool)
+	inspect = func(v bashPPBridgeValue) (int, bool) {
+		pointers := 0
+		if v.Kind == "pointer" {
+			if v.Origin == 0 {
+				return 0, false
+			}
+			pointers++
+		}
+		for _, child := range v.Elements {
+			n, ok := inspect(child)
+			if !ok {
+				return 0, false
+			}
+			pointers += n
+		}
+		for _, child := range v.Fields {
+			n, ok := inspect(child)
+			if !ok {
+				return 0, false
+			}
+			pointers += n
+		}
+		for _, entry := range v.Entries {
+			for _, child := range []bashPPBridgeValue{entry.Key, entry.Value} {
+				n, ok := inspect(child)
+				if !ok {
+					return 0, false
+				}
+				pointers += n
+			}
+		}
+		return pointers, true
+	}
+	pointers := 0
+	for _, arg := range q.Args {
+		n, ok := inspect(arg)
+		if !ok {
+			return false
+		}
+		pointers += n
+	}
+	return pointers > 0
+}
+
+func nativeRetainedPointerMutator(name string) bool {
 	switch name {
-	case "*flag.FlagSet.IntVar":
-		return len(q.Args) >= 1 && q.Args[0].Kind == "pointer" && q.Args[0].Origin != 0
+	case "flag.Parse", "*flag.FlagSet.Parse":
+		return true
 	}
 	return false
 }
@@ -145,6 +210,18 @@ func synchronousErrorsAsType(req bashPPEvalRequest, q bashPPBridgeRequest) bool 
 	}
 	alias, name, ok := strings.Cut(q.Selector, ".")
 	return ok && req.Imports[alias] == "errors" && name == "AsType" && len(q.Args) == 1
+}
+
+// requestCallbackCapable reports a request that must be able to service an
+// original callback while it is in flight. That is either a request carrying
+// one, or any request on a session that has already been handed a RETAINED
+// callback: the dependency may raise that one at any later moment, and the
+// request parked at that moment is the only frame able to run it.
+func requestCallbackCapable(req bashPPEvalRequest, q bashPPBridgeRequest) bool {
+	if requestHasCallbacks(req, q) {
+		return true
+	}
+	return req.Bridge != nil && req.Bridge.retainedCallbacks()
 }
 
 // Only requests carrying a local interface callback acquire the gate. Native

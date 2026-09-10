@@ -1309,7 +1309,11 @@ func (p *Printer) bashppExpr(expr BashPPExpr) {
 		p.bashppExpr(x.X)
 	case *BashPPNewExpr:
 		p.writeLit("new(")
-		p.bashppType(x.AllocType)
+		if x.Init != nil {
+			p.bashppExpr(x.Init)
+		} else {
+			p.bashppType(x.AllocType)
+		}
 		p.writeLit(")")
 	case *BashPPTypeAssertExpr:
 		p.bashppExpr(x.X)

@@ -73,6 +73,9 @@ func (r *Runner) bashPPNativeDeclaration(d *syntax.BashPPDecl) bool {
 	if !r.bashPPGoSource || d.Site != syntax.StartVar {
 		return false
 	}
+	if r.bashPPNativeEmbedDeclaration(d) {
+		return true
+	}
 	var value bashPPBridgeValue
 	var err error
 	if d.InitExpr != nil && r.bashPPNativeExpr(d.InitExpr) {

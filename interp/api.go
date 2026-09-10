@@ -210,6 +210,11 @@ type Runner struct {
 	bashPPCallChannels   []*bashPPChannel
 	bashPPCallInterfaces []*bashPPInterfaceValue
 	bashPPCallCells      []*bashPPCell
+	// bashPPCallSpread records that the pending call's last argument was
+	// written `xs...`. Go gives that spelling a different meaning from passing
+	// the elements one by one — the callee receives the caller's own slice
+	// rather than a fresh one — and only the call site knows which was written.
+	bashPPCallSpread bool
 	// bashPPResultCells is the authoritative value transport for the most
 	// recent typed function invocation. The parallel string results remain the
 	// shell-facing representation; these cells retain pointer, channel,

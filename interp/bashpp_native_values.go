@@ -25,6 +25,7 @@ func (r *Runner) bashPPBridgeHandles(call *syntax.BashPPCall) bool {
 			return false
 		}
 		return r.bashPPNativeExpr(selector.X) ||
+			r.goSourceNativeScalarReceiver(selector.X) ||
 			r.bashPPPromotedNativeReceiver(selector.X, selector.Sel.Value) != nil
 	}
 	if len(call.Fun) < 1 {
@@ -35,6 +36,9 @@ func (r *Runner) bashPPBridgeHandles(call *syntax.BashPPCall) bool {
 			return true
 		}
 		if r.bashPPNativeCellValue(call.Fun[0].Value) != nil {
+			return true
+		}
+		if len(call.Fun) == 2 && r.goSourceNativeScalarReceiver(&syntax.BashPPIdent{Name: call.Fun[0]}) {
 			return true
 		}
 		var receiver syntax.BashPPExpr = &syntax.BashPPIdent{Name: call.Fun[0]}
@@ -51,7 +55,7 @@ func (r *Runner) bashPPBridgeHandles(call *syntax.BashPPCall) bool {
 		}
 	}
 	if len(call.Fun) == 1 {
-		if value := r.bashPPNativeCellValue(call.Fun[0].Value); value != nil && value.Kind == "handle" && strings.HasPrefix(value.Type, "func(") {
+		if value := r.bashPPNativeCellValue(call.Fun[0].Value); value != nil && value.Kind == "handle" && (value.Function || strings.HasPrefix(value.Type, "func(")) {
 			return true
 		}
 		for alias := range r.bashPPImports {
@@ -65,6 +69,12 @@ func (r *Runner) bashPPBridgeHandles(call *syntax.BashPPCall) bool {
 	return false
 }
 func (r *Runner) bashPPBridgeCall(ctx context.Context, call *syntax.BashPPCall) ([]bashPPBridgeValue, error) {
+	// The integer sync/atomic functions address interpreter storage, so they
+	// are answered here rather than prepared as a dependency request; see
+	// gosource_atomic.md.
+	if values, claimed, err := r.goSourceAtomicCall(call); claimed {
+		return values, err
+	}
 	q, err := r.bashPPPrepareNativeCall(ctx, call)
 	if err != nil {
 		return nil, err
@@ -83,6 +93,12 @@ func (r *Runner) bashPPPrepareNativeCall(ctx context.Context, call *syntax.BashP
 		return bashPPBridgeRequest{}, fmt.Errorf("gosource: call is not an imported dependency operation")
 	}
 	q := bashPPBridgeRequest{Op: "call", Spread: call.Ellipsis.IsValid()}
+	if r.bashPPGoSourceFile != nil && call.Pos().IsValid() {
+		if source, ok := r.bashPPGoSourceFile.SourceAt(call.Pos()); ok {
+			q.SourceFile = source.Name
+			q.SourceLine = int(call.Pos().Line())
+		}
+	}
 	if selector, ok := call.CalleeExpr.(*syntax.BashPPSelectorExpr); ok {
 		receiver, err := r.bashPPNativeMethodReceiver(selector.X, selector.Sel.Value)
 		if err != nil {
@@ -105,11 +121,19 @@ func (r *Runner) bashPPPrepareNativeCall(ctx context.Context, call *syntax.BashP
 			q.Receiver = &receiver
 			q.Selector = call.Fun[len(call.Fun)-1].Value
 		}
-	} else if value := r.bashPPNativeCellValue(call.Fun[0].Value); value != nil && value.Kind == "handle" && strings.HasPrefix(value.Type, "func(") {
+	} else if value := r.bashPPNativeCellValue(call.Fun[0].Value); value != nil && value.Kind == "handle" && (value.Function || strings.HasPrefix(value.Type, "func(")) {
 		copy := *value
 		q.Receiver = &copy
 	} else {
 		q.Selector = call.Fun[0].Value
+	}
+	if q.Receiver == nil {
+		if alias, name, ok := strings.Cut(q.Selector, "."); ok && r.bashPPImports[alias] == "log" {
+			switch name {
+			case "Print", "Println", "Printf":
+				q.LogPrint = name
+			}
+		}
 	}
 	if len(call.ArgExprs) != len(call.Args) {
 		return bashPPBridgeRequest{}, fmt.Errorf("gosource: missing evaluated dependency arguments")
@@ -166,6 +190,8 @@ func (r *Runner) bashPPBridgeScalar(expr syntax.BashPPExpr) (bashPPScalar, bool,
 	case *syntax.BashPPIndexExpr:
 		handled = r.bashPPNativeExpr(e.X)
 	case *syntax.BashPPSliceExpr:
+		handled = r.bashPPNativeExpr(e.X)
+	case *syntax.BashPPDerefExpr:
 		handled = r.bashPPNativeExpr(e.X)
 	}
 	if !handled {
@@ -348,6 +374,13 @@ func (r *Runner) bashPPBridgeExpr(expr syntax.BashPPExpr) (bashPPBridgeValue, er
 			return r.bashPPNativeSlice(x)
 		}
 	case *syntax.BashPPDerefExpr:
+		if r.bashPPNativeExpr(x.X) {
+			base, err := r.bashPPBridgeExpr(x.X)
+			if err != nil {
+				return bashPPBridgeValue{}, err
+			}
+			return r.bashPPNativeAccess(r.ectx, "deref", base, "")
+		}
 		ptr, err := r.bashPPPointerExprValue(x.X)
 		if err != nil {
 			return bashPPBridgeValue{}, err
@@ -531,6 +564,10 @@ func (s *bashPPNativeSession) applyNativePointerUpdates(req bashPPEvalRequest, r
 		if len(update.Elements) != 1 {
 			return fmt.Errorf("gosource: native pointer writeback needs one value")
 		}
+		// A structural pointee may nest native values this session still owns.
+		// They arrived on its own authenticated connection, so they carry its
+		// identity — a handle from any other session still fails closed.
+		s.bashPPAuthenticateCallbackValue(&update.Elements[0])
 		if err := owner.bashPPWriteBridgePointer(ptr, update.Elements[0]); err != nil {
 			return err
 		}
@@ -548,12 +585,16 @@ func (r *Runner) bashPPWriteBridgePointer(ptr *bashPPPointer, value bashPPBridge
 	if ptr.target.constant || ptr.target.vr.ReadOnly {
 		return fmt.Errorf("BASHPP-EREADONLY-MUTATION: cannot mutate readonly value through pointer")
 	}
-	converted, err := bashPPNativeReadValue(value)
+	_, _, typ, err := ptr.read()
 	if err != nil {
 		return err
 	}
+	converted, meta, err := r.bashPPBridgeContents(value, typ)
+	if err != nil {
+		return fmt.Errorf("gosource: native pointer writeback: %w", err)
+	}
 	if len(ptr.path) == 0 {
-		bashPPStoreCellValue(ptr.target, converted, nil)
+		bashPPStoreCellValue(ptr.target, converted, meta)
 		return nil
 	}
 	parent, parentMeta, _, err := ptr.readParent()
@@ -568,7 +609,7 @@ func (r *Runner) bashPPWriteBridgePointer(ptr *bashPPPointer, value bashPPBridge
 		}
 		mapping[last.field] = converted
 		if parentMeta != nil {
-			parentMeta.mapping[last.field] = nil
+			parentMeta.mapping[last.field] = meta
 		}
 		return nil
 	}
@@ -578,7 +619,7 @@ func (r *Runner) bashPPWriteBridgePointer(ptr *bashPPPointer, value bashPPBridge
 	}
 	sequence[last.index] = converted
 	if parentMeta != nil {
-		parentMeta.sequence[last.index] = nil
+		parentMeta.sequence[last.index] = meta
 	}
 	return nil
 }
@@ -610,6 +651,14 @@ func (r *Runner) bashPPBridgeCollection(value any, meta *bashPPCollectionMeta, t
 			return bashPPBridgeValue{}, fmt.Errorf("gosource: missing native field value")
 		}
 		return *value, nil
+	case *bashPPPointer:
+		// An element or field holding a pointer to original storage — the
+		// []*T shape — crosses as the pointee it addresses, with the identity
+		// that lets a method callback bind back to that same storage.
+		if !r.bashPPGoSource {
+			return result, fmt.Errorf("gosource: unsupported interpreter collection value %T", value)
+		}
+		return r.bashPPBridgePointerValue(value)
 	case []any:
 		result.Kind = "slice"
 		inferredArray := false

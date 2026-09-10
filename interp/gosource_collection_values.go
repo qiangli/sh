@@ -153,6 +153,29 @@ func (r *Runner) goSourceBridgeCollectionRead(expr syntax.BashPPExpr) (bashPPBri
 	if !r.bashPPGoSource {
 		return bashPPBridgeValue{}, false, nil
 	}
+	var scalarBase syntax.BashPPExpr
+	switch path := expr.(type) {
+	case *syntax.BashPPIndexExpr:
+		if path.GoString {
+			scalarBase = path.X
+		}
+	case *syntax.BashPPSliceExpr:
+		if path.GoString {
+			scalarBase = path.X
+		}
+	}
+	if scalarBase != nil {
+		// A string lives in the scalar carrier, so its byte index must be
+		// evaluated there before the general structured-read path tries to find
+		// collection metadata. GoString comes from go/types, so a computed base
+		// can be evaluated once without speculative execution.
+		scalar, err := r.bashPPEvalScalarExpr(expr)
+		if err != nil {
+			return bashPPBridgeValue{}, true, err
+		}
+		value, err := bridgeScalar(scalar)
+		return value, true, err
+	}
 	switch expr.(type) {
 	case *syntax.BashPPIndexExpr, *syntax.BashPPSliceExpr, *syntax.BashPPSelectorExpr, *syntax.BashPPDerefExpr:
 	default:

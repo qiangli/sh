@@ -43,6 +43,7 @@ func (r *Runner) goSourceCallArguments(call *syntax.BashPPCall, fn *bashPPFunc) 
 		interfaces[i] = cell.interfaceValue
 	}
 	r.bashPPCallCells, r.bashPPCallChannels, r.bashPPCallInterfaces = cells, channels, interfaces
+	r.bashPPCallSpread = call.Ellipsis.IsValid()
 	return args, true, nil
 }
 

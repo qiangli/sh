@@ -93,7 +93,7 @@ func (r *Runner) bashPPTestingCallback(handle *goSourceTestingHandle, method str
 			if !ok {
 				panic("gosource: scheduler supplied invalid test capability")
 			}
-			if err := handle.session.runFunction(ctx, name, fn, target, true, nil); err != nil {
+			if err := handle.session.runFunction(ctx, name, fn, target, handle.capabilityName(), true, nil); err != nil {
 				target.Errorf("interpreted callback: %v", err)
 			}
 			return nil
@@ -115,7 +115,7 @@ func (r *Runner) bashPPTestingCallback(handle *goSourceTestingHandle, method str
 	// lifetime remains valid until the harness closes the session.
 	ctx := handle.session.context
 	callback := reflect.MakeFunc(native.Type().In(0), func(_ []reflect.Value) []reflect.Value {
-		if err := handle.session.runFunction(ctx, "cleanup", fn, handle.target, true, handle); err != nil {
+		if err := handle.session.runFunction(ctx, "cleanup", fn, handle.target, handle.capabilityName(), true, handle); err != nil {
 			handle.target.Errorf("interpreted cleanup: %v", err)
 		}
 		return nil
@@ -124,15 +124,24 @@ func (r *Runner) bashPPTestingCallback(handle *goSourceTestingHandle, method str
 	return false, nil
 }
 
-// Run's Boolean result participates in ordinary interpreted expressions.
+// Run's and Loop's Boolean results participate in ordinary interpreted
+// expressions — `if !t.Run(...)` and `for b.Loop()`.
 func (r *Runner) bashPPTestingScalar(expr syntax.BashPPExpr) (bashPPScalar, bool, error) {
 	call, ok := expr.(*syntax.BashPPCall)
-	if !ok || len(call.Fun) != 2 || call.Fun[1].Value != "Run" {
+	if !ok || len(call.Fun) != 2 {
+		return bashPPScalar{}, false, nil
+	}
+	method := call.Fun[1].Value
+	if method != "Run" && method != "Loop" {
 		return bashPPScalar{}, false, nil
 	}
 	handle, args, handled, err := r.bashPPTestingArguments(call)
 	if err != nil || !handled {
 		return bashPPScalar{}, handled, err
+	}
+	if method == "Loop" {
+		result, err := r.bashPPTestingLoop(handle, args)
+		return bashPPScalar{value: constant.MakeBool(result), typ: "bool", runtime: true}, true, err
 	}
 	result, err := r.bashPPTestingCallback(handle, "Run", args)
 	return bashPPScalar{value: constant.MakeBool(result), typ: "bool", runtime: true}, true, err

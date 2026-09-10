@@ -288,11 +288,20 @@ func (r *Runner) bashPPRangeCollection(ctx context.Context, rng *syntax.BashPPRa
 	}
 	root, ok := bashPPCollectionRoot(rng.Expr)
 	if !ok {
-		return false
+		// A composite is a range value in its own right. It has no lexical root
+		// cell, so materialize it exactly once below instead of passing it to the
+		// scalar evaluator. The resulting metadata preserves array-copy and
+		// slice/map reference semantics.
+		if _, composite := rng.Expr.(*syntax.BashPPCompositeLit); !composite {
+			return false
+		}
 	}
-	cell := r.bashPPScope.lookup(root)
-	if cell == nil || cell.channel != nil {
-		return false
+	var cell *bashPPCell
+	if ok {
+		cell = r.bashPPScope.lookup(root)
+		if cell == nil || cell.channel != nil {
+			return false
+		}
 	}
 	// A variadic parameter binds as an indexed variable rather than an
 	// object — see [Runner.bashPPInvoke] — so it carries its collection meta
@@ -300,14 +309,16 @@ func (r *Runner) bashPPRangeCollection(ctx context.Context, rng *syntax.BashPPRa
 	// only shape that meta describes; a path rooted in one more scalars would
 	// still need the Object machinery below, which a variadic parameter never
 	// has.
-	if _, isIdent := rng.Expr.(*syntax.BashPPIdent); isIdent && cell.vr.Kind == expand.Indexed && cell.valueMeta != nil {
+	if _, isIdent := rng.Expr.(*syntax.BashPPIdent); isIdent && cell != nil && cell.vr.Kind == expand.Indexed && cell.valueMeta != nil {
 		return r.bashPPRangeIndexed(ctx, rng, cell)
 	}
-	if cell.vr.Kind != expand.Object && !cell.pointer {
+	if cell != nil && cell.vr.Kind != expand.Object && !cell.pointer {
 		return false
 	}
-	if _, native := r.goSourceNativeChannel(cell); native {
-		return false
+	if cell != nil {
+		if _, native := r.goSourceNativeChannel(cell); native {
+			return false
+		}
 	}
 	value, meta, err := r.bashPPReadExpr(rng.Expr)
 	if err != nil {
@@ -401,6 +412,13 @@ func (r *Runner) bashPPRangeIteration(ctx context.Context, rng *syntax.BashPPRan
 	}
 	r.cmd(r.bashPPTaskContext(ctx), rng.Body)
 	leave()
+	return r.bashPPRangeControl()
+}
+
+// bashPPRangeControl reduces the runner state one executed loop body leaves to
+// whether the range should continue. Every range shape shares it, so break,
+// continue, return and abandonment behave identically across them.
+func (r *Runner) bashPPRangeControl() bool {
 	if r.exit.exiting || r.exit.returning || r.exit.fatalExit || r.loopControlPending() {
 		return false
 	}

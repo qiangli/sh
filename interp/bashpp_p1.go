@@ -6,6 +6,7 @@ package interp
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"go/constant"
 	"go/token"
@@ -893,7 +894,14 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 			}
 			value, meta, err := r.bashPPEvalComposite(lit, nil)
 			if err != nil {
-				r.errf("%v\n", err)
+				// A composite element may reach the dependency — a channel, a
+				// native constructor — and a cancelled task group aborts that
+				// evaluation with the teardown sentinel rather than with a
+				// diagnostic about the program. Reporting it would put a line
+				// on stderr that the original Go never prints.
+				if !errors.Is(err, errBashPPScalarInterrupted) {
+					r.errf("%v\n", err)
+				}
 				r.exit = exitStatus{code: 2}
 				return
 			}
