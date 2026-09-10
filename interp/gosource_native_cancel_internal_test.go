@@ -132,3 +132,11 @@ func TestGoSourceNativeForwardedSignalBecomesProgramStatus(t *testing.T) {
 		t.Fatalf("task exit code=%d canceled=%v", r.exit.code, r.bashPPTaskCanceled)
 	}
 }
+
+func TestGoSourceScalarInterruptionCannotBecomeFatal(t *testing.T) {
+	var status exitStatus
+	status.fatal(&goSourceError{prefix: "original.go:1:1: ", err: errBashPPScalarInterrupted})
+	if status.exiting || status.fatalExit || status.err != nil || status.code != 0 {
+		t.Fatalf("interruption became fatal: %+v", status)
+	}
+}

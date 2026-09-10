@@ -1000,7 +1000,11 @@ func (e *exitStatus) oneIf(b bool) {
 }
 
 func (e *exitStatus) fatal(err error) {
-	if e.fatalExit || err == nil {
+	// Scalar interruption is an internal unwind token after a Go panic, exit,
+	// cancellation or forwarded signal has already recorded the real outcome.
+	// It must never escape as the File's diagnostic, regardless of which
+	// expression boundary observes it first.
+	if e.fatalExit || err == nil || errors.Is(err, errBashPPScalarInterrupted) {
 		return
 	}
 	e.exiting = true
