@@ -2,6 +2,7 @@ package interp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"mvdan.cc/sh/v3/expand"
@@ -132,7 +133,7 @@ func (r *Runner) goSourceValues(exprs []syntax.BashPPExpr) ([]*bashPPCell, bool)
 	for i, expr := range exprs {
 		cell, err := r.goSourceValueCell(expr)
 		if err != nil {
-			if err != errBashPPScalarInterrupted {
+			if !errors.Is(err, errBashPPScalarInterrupted) {
 				r.errf("%s%v\n", r.bashErrPrefix(expr.Pos()), err)
 				r.exit = exitStatus{code: 2}
 				r.bashPPShortFailureSeq++
