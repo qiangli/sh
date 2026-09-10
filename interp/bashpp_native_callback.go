@@ -10,6 +10,7 @@ package interp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -76,7 +77,7 @@ func (s *bashPPNativeSession) serveCallback(ctx context.Context, owner *Runner, 
 		owner.bashPPTools.callbackDepth--
 		if err != nil {
 			answer.Error = err.Error()
-			if !owner.exit.exiting {
+			if !errors.Is(err, errBashPPScalarInterrupted) && !owner.exit.exiting {
 				owner.exit.fatal(err)
 			}
 		} else {
