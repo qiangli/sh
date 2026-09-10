@@ -325,3 +325,21 @@ func TestGoSourceGbETestingAndBenchmarking(t *testing.T) {
 		t.Fatal("original source changed")
 	}
 }
+
+// The production corpus gate supplies a separate main with contextual
+// imported struct literals. Keep that exact syntax covered as well as the
+// hosted LoadGoSourceTests API above.
+func TestGoSourceGbETestingDriverComposite(t *testing.T) {
+	source := `package main
+import (
+	"fmt"
+	"testing"
+)
+func sample(*testing.T) {}
+func main() {
+	tests := []testing.InternalTest{{Name: "sample", F: sample}}
+	fmt.Println(len(tests))
+}
+`
+	differGoSource(t, source, nil, "")
+}

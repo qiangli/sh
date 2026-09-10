@@ -6,3 +6,7 @@
 package interp
 
 func forwardExecReplacementSignals(pid int) func() { return func() {} }
+
+func forwardExecReplacementSignalsWithReport(pid int, report func(int)) func() {
+	return forwardExecReplacementSignals(pid)
+}

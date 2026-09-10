@@ -522,6 +522,18 @@ func (r *Runner) bashPPEvalElement(expr syntax.BashPPExpr, expected syntax.BashP
 		return r.bashPPEvalTypedValue(expr, expected)
 	}
 	if lit, ok := expr.(*syntax.BashPPCompositeLit); ok {
+		if r.bashPPNativeType(expected) {
+			// An element literal may omit its type when the enclosing collection
+			// supplies it, as in []testing.InternalTest{{Name: "x", F: f}}.
+			// Give the dependency constructor that contextual imported type.
+			nativeLit := *lit
+			nativeLit.LitType = expected
+			value, err := r.bashPPNativeComposite(&nativeLit, false)
+			if err != nil {
+				return nil, nil, err
+			}
+			return &value, &bashPPCollectionMeta{kind: "native", typ: expected}, nil
+		}
 		return r.bashPPEvalComposite(lit, expected)
 	}
 	if _, indexed := expr.(*syntax.BashPPIndexExpr); indexed {

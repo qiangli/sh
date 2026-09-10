@@ -20,6 +20,10 @@ import (
 // proxy limitation. Signals already ignored at the OS boundary are skipped so
 // the replacement retains execve's inherited SIG_IGN semantics.
 func forwardExecReplacementSignals(pid int) func() {
+	return forwardExecReplacementSignalsWithReport(pid, nil)
+}
+
+func forwardExecReplacementSignalsWithReport(pid int, report func(int)) func() {
 	ch := make(chan os.Signal, 16)
 	var forwarded []os.Signal
 	var dispositions []signalDisposition
@@ -62,7 +66,9 @@ func forwardExecReplacementSignals(pid int) func() {
 				return
 			case sig := <-ch:
 				if unixSig, ok := sig.(syscall.Signal); ok {
-					_ = syscall.Kill(pid, unixSig)
+					if syscall.Kill(pid, unixSig) == nil && report != nil {
+						report(int(unixSig))
+					}
 				}
 			}
 		}

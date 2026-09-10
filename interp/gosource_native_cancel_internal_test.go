@@ -108,3 +108,20 @@ func TestGoSourceNativeCancellationKeepsProcessFailures(t *testing.T) {
 		t.Fatalf("independent exit with late cancellation suppressed: %v", got)
 	}
 }
+
+func TestGoSourceNativeForwardedSignalBecomesProgramStatus(t *testing.T) {
+	err := exec.Command("/bin/sh", "-c", "kill -TERM $$").Run()
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() >= 0 {
+		t.Fatalf("requires signaled process failure: %v", err)
+	}
+	s := &bashPPNativeSession{waitErr: err, forwardedSignal: int(syscall.SIGTERM)}
+	var programExit *bashPPNativeExit
+	if got := s.programExitError(err); !errors.As(got, &programExit) || programExit.status != 143 {
+		t.Fatalf("forwarded SIGTERM error = %#v", got)
+	}
+	s.forwardedSignal = 0
+	if got := s.programExitError(err); errors.As(got, &programExit) {
+		t.Fatalf("unexplained signal became program status: %#v", got)
+	}
+}

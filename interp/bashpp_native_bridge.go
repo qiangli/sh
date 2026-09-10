@@ -120,6 +120,7 @@ type bashPPNativeSession struct {
 	pending             map[uint64]chan bashPPBridgeResponse
 	done                chan struct{}
 	waitErr             error
+	forwardedSignal     int   // protected by mu; last parent signal delivered to cmd
 	closeCancellation   error // protected by mu; set only by the closer of conn
 	processCancellation error // protected by mu; command context requested kill
 	closeOnce           sync.Once
@@ -264,7 +265,11 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 	// The helper owns the native standard-library state of the interpreted Go
 	// program. Keep it in an isolated process group for cleanup, but proxy the
 	// program process's catchable signals as an exec replacement would.
-	s.stopSignals = forwardExecReplacementSignals(cmd.Process.Pid)
+	s.stopSignals = forwardExecReplacementSignalsWithReport(cmd.Process.Pid, func(sig int) {
+		s.mu.Lock()
+		s.forwardedSignal = sig
+		s.mu.Unlock()
+	})
 	s.cmd = cmd
 	s.done = make(chan struct{})
 	s.pending = make(map[uint64]chan bashPPBridgeResponse)
@@ -472,18 +477,30 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 			if canceled := s.canceledTermination(ctx, err); canceled != nil {
 				return nil, canceled
 			}
-			if err == nil {
-				// A clean exit is the original program terminating itself, for
-				// example os.Exit(0) or a successful syscall.Exec replacement.
-				return nil, &bashPPNativeExit{}
-			}
-			var exit *exec.ExitError
-			if errors.As(err, &exit) && exit.ExitCode() >= 0 {
-				return nil, &bashPPNativeExit{status: exit.ExitCode(), err: err}
-			}
-			return nil, fmt.Errorf("gosource: dependency process exited: %w", err)
+			return nil, s.programExitError(err)
 		}
 	}
+}
+
+func (s *bashPPNativeSession) programExitError(err error) error {
+	if err == nil {
+		// A clean exit is the original program terminating itself, for example
+		// os.Exit(0) or a successful syscall.Exec replacement.
+		return &bashPPNativeExit{}
+	}
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		if exit.ExitCode() >= 0 {
+			return &bashPPNativeExit{status: exit.ExitCode(), err: err}
+		}
+		s.mu.Lock()
+		forwardedSignal := s.forwardedSignal
+		s.mu.Unlock()
+		if forwardedSignal > 0 {
+			return &bashPPNativeExit{status: 128 + forwardedSignal, err: err}
+		}
+	}
+	return fmt.Errorf("gosource: dependency process exited: %w", err)
 }
 func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, error) {
 	// Import package export data through the same reviewed SDK and module context.

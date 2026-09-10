@@ -378,6 +378,15 @@ func (r *Runner) bashPPZeroValue(typ syntax.BashPPTypeExpr) (any, *bashPPCollect
 }
 
 func (r *Runner) bashPPEvalTypedValue(expr syntax.BashPPExpr, expected syntax.BashPPTypeExpr) (any, *bashPPCollectionMeta, error) {
+	if lit, ok := expr.(*syntax.BashPPCompositeLit); ok && r.bashPPNativeType(expected) {
+		nativeLit := *lit
+		nativeLit.LitType = expected
+		value, err := r.bashPPNativeComposite(&nativeLit, false)
+		if err != nil {
+			return nil, nil, err
+		}
+		return &value, &bashPPCollectionMeta{kind: "native", typ: expected}, nil
+	}
 	if r.bashPPGoSource && r.bashPPNativeType(expected) && r.bashPPNativeExpr(expr) {
 		value, err := r.bashPPBridgeExpr(expr)
 		if err != nil {
