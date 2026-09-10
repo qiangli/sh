@@ -4,6 +4,7 @@
 package interp
 
 import (
+	"errors"
 	"fmt"
 	"go/constant"
 	"go/token"
@@ -234,7 +235,7 @@ func (r *Runner) bashPPRunValueBuiltin(name string, c *syntax.BashPPCall) (*bash
 		if r.bashPPGoSource && (name == "print" || name == "println") && i < len(c.ArgExprs) && c.ArgExprs[i] != nil {
 			scalar, err := r.bashPPEvalScalarExpr(c.ArgExprs[i])
 			if err != nil {
-				if err != errBashPPScalarInterrupted {
+				if !errors.Is(err, errBashPPScalarInterrupted) {
 					r.exit.fatal(err)
 				}
 				return nil, false
@@ -246,7 +247,7 @@ func (r *Runner) bashPPRunValueBuiltin(name string, c *syntax.BashPPCall) (*bash
 		var err error
 		args[i], err = r.goSourceBuiltinArg(c, i)
 		if err != nil {
-			if err != errBashPPScalarInterrupted {
+			if !errors.Is(err, errBashPPScalarInterrupted) {
 				r.exit.fatal(err)
 			}
 			return nil, false

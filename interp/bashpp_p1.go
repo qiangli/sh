@@ -223,7 +223,7 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 	}
 	if typed, handled, err := r.bashPPTypedScalarDeclValue(d); handled {
 		if err != nil {
-			if err == errBashPPScalarInterrupted {
+			if errors.Is(err, errBashPPScalarInterrupted) {
 				return
 			}
 			pos := d.Pos()
@@ -1024,7 +1024,7 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 		}
 		value, err := r.bashPPEvalScalarExpr(d.Expr)
 		if err != nil {
-			if err == errBashPPScalarInterrupted {
+			if errors.Is(err, errBashPPScalarInterrupted) {
 				return
 			}
 			r.errf("%v\n", err)
@@ -1121,7 +1121,7 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 		if conv, ok := r.bashPPShortDeclConversion(d); ok {
 			value, err := r.bashPPEvalScalarExpr(conv)
 			if err != nil {
-				if err != errBashPPScalarInterrupted {
+				if !errors.Is(err, errBashPPScalarInterrupted) {
 					r.errf("%v\n", err)
 					r.exit = exitStatus{code: 2}
 				}
@@ -1522,7 +1522,7 @@ func (r *Runner) bashPPSwitch(ctx context.Context, sw *syntax.BashPPSwitch) {
 	} else {
 		tag, err = r.bashPPEvalScalarExpr(sw.Tag)
 		if err != nil {
-			if err == errBashPPScalarInterrupted {
+			if errors.Is(err, errBashPPScalarInterrupted) {
 				return
 			}
 			r.errf("%v\n", err)
@@ -1532,7 +1532,7 @@ func (r *Runner) bashPPSwitch(ctx context.Context, sw *syntax.BashPPSwitch) {
 	}
 	cases, err := r.bashPPValidateSwitchCases(sw, tag)
 	if err != nil {
-		if err == errBashPPScalarInterrupted {
+		if errors.Is(err, errBashPPScalarInterrupted) {
 			return
 		}
 		r.errf("%v\n", err)
@@ -2010,7 +2010,7 @@ func (r *Runner) bashPPIf(ctx context.Context, i *syntax.BashPPIf) {
 	}
 	cond, err := r.bashPPEvalScalarExpr(i.Cond)
 	if err != nil {
-		if err == errBashPPScalarInterrupted {
+		if errors.Is(err, errBashPPScalarInterrupted) {
 			return
 		}
 		r.errf("%v\n", err)
@@ -2057,7 +2057,7 @@ func (r *Runner) bashPPFor(ctx context.Context, loop *syntax.BashPPFor) {
 		if loop.Cond != nil {
 			cond, err := r.bashPPEvalScalarExpr(loop.Cond)
 			if err != nil {
-				if err == errBashPPScalarInterrupted {
+				if errors.Is(err, errBashPPScalarInterrupted) {
 					return
 				}
 				r.errf("%v\n", err)
@@ -2132,7 +2132,7 @@ func (r *Runner) bashPPForAssign(assign *syntax.BashPPForAssign) {
 	}
 	value, err := r.bashPPEvalScalarExpr(assign.Expr)
 	if err != nil {
-		if err == errBashPPScalarInterrupted {
+		if errors.Is(err, errBashPPScalarInterrupted) {
 			return
 		}
 		r.errf("%v\n", err)

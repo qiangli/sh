@@ -5,6 +5,7 @@ package interp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"go/constant"
 	"maps"
@@ -1458,7 +1459,7 @@ func (r *Runner) bashPPCallValues(c *syntax.BashPPCall, fn *bashPPFunc) (result 
 	if r.bashPPGoSource && len(c.ArgExprs) == len(c.Args) {
 		args, ok, err := r.goSourceCallArguments(c, fn)
 		if err != nil {
-			if err != errBashPPScalarInterrupted {
+			if !errors.Is(err, errBashPPScalarInterrupted) {
 				r.errf("%s%v\n", r.bashErrPrefix(c.Pos()), err)
 				r.exit = exitStatus{code: 2}
 			}
@@ -2331,7 +2332,7 @@ func (r *Runner) bashPPReturnScalarExpr(expr syntax.BashPPExpr) {
 		if err != nil {
 			// Native evaluation may already have recorded a Go panic or exit.
 			// Keep that state so deferred recover and cancellation can unwind.
-			if err == errBashPPScalarInterrupted || r.bashPPPanicking() || r.exit.exiting || r.exit.fatalExit {
+			if errors.Is(err, errBashPPScalarInterrupted) || r.bashPPPanicking() || r.exit.exiting || r.exit.fatalExit {
 				return
 			}
 			r.exit.fatal(&goSourceError{prefix: r.bashErrPrefix(expr.Pos()), err: err})
@@ -2360,7 +2361,7 @@ func (r *Runner) bashPPReturnScalarExpr(expr syntax.BashPPExpr) {
 	}
 	value, err := r.bashPPEvalScalarExpr(expr)
 	if err != nil {
-		if err == errBashPPScalarInterrupted {
+		if errors.Is(err, errBashPPScalarInterrupted) {
 			return
 		}
 		r.errf("%v\n", err)
