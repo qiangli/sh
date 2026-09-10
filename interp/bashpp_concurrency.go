@@ -1505,6 +1505,9 @@ func (r *Runner) bashPPSelect(ctx context.Context, s *syntax.BashPPSelect) {
 }
 
 func (r *Runner) bashPPRange(ctx context.Context, rng *syntax.BashPPRange) {
+	if r.goSourceRangeFunction(ctx, rng) {
+		return
+	}
 	if r.bashPPRangeCollection(ctx, rng) {
 		return
 	}

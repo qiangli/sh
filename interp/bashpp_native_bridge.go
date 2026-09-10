@@ -329,7 +329,7 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 	// dependency symbol, so it is answered interpreter-side over the values that
 	// already crossed the collection transport, before the dependency dispatch.
 	if req.CallbackOwner != nil {
-		if values, handled, err := req.CallbackOwner.nativeSliceGenericHelper(req, &q); handled || err != nil {
+		if values, handled, err := req.CallbackOwner.nativeSliceGenericHelper(ctx, req, &q); handled || err != nil {
 			return values, err
 		}
 	}

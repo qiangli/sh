@@ -46,6 +46,8 @@ import (
 type bashPPFunc struct {
 	goSourceReceiver *goSourceMethodBinding
 	native           *bashPPBridgeValue
+	rangeYield       *goSourceRangeYield
+	collectYield     *[]bashPPBridgeValue
 	decl             *syntax.BashPPFuncDecl
 	lit              *syntax.BashPPFuncLit
 	scope            *bashPPScope
@@ -1703,6 +1705,12 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 	r.bashPPCallInterfaces = nil
 	if fn.native != nil {
 		return r.goSourceInvokeNative(ctx, fn, args, callCells)
+	}
+	if fn.rangeYield != nil {
+		return r.goSourceInvokeRangeYield(ctx, fn, args, callCells)
+	}
+	if fn.collectYield != nil {
+		return r.goSourceInvokeCollectYield(fn, args, callCells)
 	}
 	if fn.decl != nil && fn.decl.Agentic != nil && !r.bashPPAgentic {
 		r.bashPPAgenticCallError(r.curStmtPos, fn.name())
