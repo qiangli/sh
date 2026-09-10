@@ -185,6 +185,26 @@ func (r *Runner) bashPPMakeClosure(lit *syntax.BashPPFuncLit) (*bashPPFunc, expa
 	return fn, r.bashPPStoreFunc(fn)
 }
 
+// bashPPFuncLitType is the concrete signature a function literal names as a
+// value. A function-typed target — `var f func(int) int; f = func(n int) int
+// {…}` — owns a func type, so the value it is given has to arrive naming one
+// too. Without this the closure travels as a bare handle with no declared
+// type, and reassigning it reads as an untyped scalar that is rejected as
+// "not assignable to func(int)(int)". Building the type from the literal's own
+// parameter and result fields keeps its identity exactly the signature the
+// programmer wrote, which is what a recursive closure calling itself relies on.
+func bashPPFuncLitType(lit *syntax.BashPPFuncLit) *syntax.BashPPFuncType {
+	return &syntax.BashPPFuncType{
+		Func:      lit.Kw.Pos(),
+		Lparen:    lit.Lparen,
+		Rparen:    lit.Rparen,
+		Params:    lit.Params,
+		Results:   lit.Results,
+		ResLparen: lit.ResLparen,
+		ResRparen: lit.ResRparen,
+	}
+}
+
 func (r *Runner) bashPPStoreFunc(fn *bashPPFunc) expand.Variable {
 	r.bashPPClosures = append(r.bashPPClosures, fn)
 	return expand.Variable{

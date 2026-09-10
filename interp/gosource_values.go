@@ -23,7 +23,7 @@ func (r *Runner) goSourceCallableCell(expr syntax.BashPPExpr) (*bashPPCell, bool
 		return r.goSourceCallableCell(x.X)
 	case *syntax.BashPPFuncLit:
 		_, v := r.bashPPMakeClosure(x)
-		return &bashPPCell{vr: v}, true, nil
+		return &bashPPCell{vr: v, declType: bashPPFuncLitType(x)}, true, nil
 	case *syntax.BashPPIdent:
 		if cell := r.bashPPScope.lookup(x.Name.Value); cell != nil {
 			if _, ok := r.bashPPClosure(cell.vr.Str); ok {
