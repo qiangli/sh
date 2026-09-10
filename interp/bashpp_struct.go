@@ -840,6 +840,18 @@ func (r *Runner) bashPPStructuredAssign(target, rhs syntax.BashPPExpr) {
 		r.exit = exitStatus{code: 2}
 		return
 	}
+	// When the parent expression itself names a pointer -- e.g. a struct field
+	// of pointer type, as in `lst.tail.next = v` where `tail` is `*element` --
+	// the write lands in the struct the pointer refers to, not in the pointer
+	// value. Follow it to that storage before resolving the field, mirroring the
+	// deref bashPPReadExpr already performs when reading such selectors. The map
+	// returned aliases the pointed-at struct, so the write mutates it in place.
+	// A non-pointer parent is returned unchanged; a nil pointer is a nil deref.
+	if parent, parentMeta, err = bashPPDerefEmbedded(parent, parentMeta); err != nil {
+		r.errf("%v\n", err)
+		r.exit = exitStatus{code: 2}
+		return
+	}
 	if parentMeta == nil {
 		r.errf("BASHPP-ESELECTOR-TYPE: assignment parent is not a structured value\n")
 		r.exit = exitStatus{code: 2}
