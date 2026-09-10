@@ -8,10 +8,187 @@ import (
 	"fmt"
 	"go/constant"
 	"sort"
+	"strconv"
 
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/syntax"
 )
+
+// goSourceRangeYield is the interpreter-owned callback supplied to an iterator.
+// Its body is still the authored range body; this state only carries the bool
+// continuation result and an outer return across the iterator's call frame.
+type goSourceRangeYield struct {
+	rng       *syntax.BashPPRange
+	stopped   bool
+	returning bool
+	ret       bashPPReturnState
+}
+
+func (r *Runner) goSourceIteratorYield(fn *bashPPFunc) (*syntax.BashPPFuncType, error) {
+	if fn == nil || len(fn.results()) != 0 {
+		return nil, fmt.Errorf("iterator callback must have no results")
+	}
+	params := bashppParams(fn.params())
+	if len(params) != 1 || params[0].variadic {
+		return nil, fmt.Errorf("iterator callback must accept one yield function")
+	}
+	yield, ok := params[0].typ.(*syntax.BashPPFuncType)
+	if !ok || bashppResultCount(yield.Results) != 1 || len(bashppParams(yield.Results)) != 1 ||
+		bashPPTypeText(r.bashPPUnderlyingType(bashppParams(yield.Results)[0].typ)) != "bool" {
+		return nil, fmt.Errorf("iterator yield must return one bool")
+	}
+	yieldParams := bashppParams(yield.Params)
+	if len(yieldParams) > 2 {
+		return nil, fmt.Errorf("iterator yield accepts at most two parameters")
+	}
+	for _, param := range yieldParams {
+		if param.variadic || !r.bashPPCallbackScalarType(param.typ) {
+			return nil, fmt.Errorf("iterator callback requires scalar yield parameters")
+		}
+	}
+	return yield, nil
+}
+
+func (r *Runner) bashPPCallbackScalarType(typ syntax.BashPPTypeExpr) bool {
+	underlying := r.bashPPUnderlyingType(typ)
+	named, ok := underlying.(*syntax.BashPPNamedType)
+	if !ok || named.Name == nil {
+		return false
+	}
+	name := named.Name.Value
+	return bashPPIntegerType(name) || name == "bool" || name == "string" || name == "float32" || name == "float64"
+}
+
+func goSourceRangeFuncType(expr syntax.BashPPExpr) *syntax.BashPPFuncType {
+	switch x := expr.(type) {
+	case *syntax.BashPPParenExpr:
+		return goSourceRangeFuncType(x.X)
+	case *syntax.BashPPCall:
+		return x.ResultFuncType
+	case *syntax.BashPPFuncLit:
+		return bashPPFuncLitType(x)
+	case *syntax.BashPPSelectorExpr:
+		return x.FuncType
+	}
+	return nil
+}
+
+// goSourceRangeFunction executes the Go 1.23 range-over-function protocol. It
+// is GoSource-only: Classic/Bash++ retain their existing explicit rejection.
+func (r *Runner) goSourceRangeFunction(ctx context.Context, rng *syntax.BashPPRange) bool {
+	if !r.bashPPGoSource || rng == nil || rng.Expr == nil {
+		return false
+	}
+	var fn *bashPPFunc
+	if cell, handled, err := r.goSourceCallableCell(rng.Expr); handled {
+		if err != nil {
+			r.bashPPRangeError(rng, "BASHPP-ERANGE-FUNC: %v", err)
+			return true
+		}
+		fn, _ = r.bashPPClosure(cell.vr.Str)
+	} else if signature := goSourceRangeFuncType(rng.Expr); signature != nil {
+		cell, err := r.goSourceValueCell(rng.Expr)
+		if err != nil {
+			r.bashPPRangeError(rng, "BASHPP-ERANGE-FUNC: %v", err)
+			return true
+		}
+		if local, ok := r.bashPPClosure(cell.vr.Str); ok {
+			fn = local
+		} else if value, ok := cell.vr.Obj.(*bashPPBridgeValue); ok && value.Kind == "handle" {
+			native := *value
+			native.Callable = "range-iterator"
+			fn = &bashPPFunc{native: &native, lit: &syntax.BashPPFuncLit{Params: signature.Params, Results: signature.Results}}
+		}
+	}
+	if fn == nil {
+		return false
+	}
+	yieldType, err := r.goSourceIteratorYield(fn)
+	if err != nil {
+		r.bashPPRangeError(rng, "BASHPP-ERANGE-FUNC: %v", err)
+		return true
+	}
+	if len(rng.Names) > len(bashppParams(yieldType.Params)) {
+		r.bashPPRangeError(rng, "BASHPP-ERANGE-ARITY: iterator yields %d value(s)", len(bashppParams(yieldType.Params)))
+		return true
+	}
+	state := &goSourceRangeYield{rng: rng}
+	yield := &bashPPFunc{
+		rangeYield: state,
+		lit:        &syntax.BashPPFuncLit{Params: yieldType.Params, Results: yieldType.Results},
+		scope:      r.bashPPScope,
+	}
+	vr := r.bashPPStoreFunc(yield)
+	r.bashPPCallCells = []*bashPPCell{{vr: vr, declType: yieldType}}
+	r.bashPPInvoke(ctx, fn, []string{vr.Str})
+	if state.returning {
+		r.bashPPReturn = state.ret
+		r.exit.returning = true
+	}
+	return true
+}
+
+func (r *Runner) goSourceInvokeRangeYield(ctx context.Context, fn *bashPPFunc, args []string, cells []*bashPPCell) []string {
+	state := fn.rangeYield
+	if state.stopped {
+		r.bashPPRaise("runtime error: range function continued iteration after function for loop body returned false")
+		return nil
+	}
+	more := !state.stopped
+	if more {
+		params := bashppParams(fn.params())
+		if len(args) != len(params) {
+			r.exit.fatal(fmt.Errorf("gosource: iterator yield argument count mismatch"))
+			return nil
+		}
+		values := make([]string, len(args))
+		for i := range args {
+			values[i] = args[i]
+			if i < len(cells) && cells[i] != nil {
+				values[i] = cells[i].vr.String()
+			}
+		}
+		savedScope := r.bashPPScope
+		r.bashPPScope = fn.scope
+		var key, value any
+		var keyType, valueType syntax.BashPPTypeExpr
+		if len(values) > 0 {
+			key, keyType = values[0], params[0].typ
+		}
+		if len(values) > 1 {
+			value, valueType = values[1], params[1].typ
+		}
+		more = r.bashPPRangeIteration(ctx, state.rng, key, keyType, value, nil, valueType)
+		r.bashPPScope = savedScope
+		if r.exit.returning {
+			state.returning, state.ret = true, r.bashPPReturn
+			r.bashPPReturn = bashPPReturnState{}
+			r.exit.returning = false
+			more = false
+		}
+		state.stopped = !more
+	}
+	text := strconv.FormatBool(more)
+	cell := &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: text}, scalarKind: constant.Bool, typeName: "bool", declType: bashPPRangeNamedType("bool")}
+	r.bashPPResultCells = []*bashPPCell{cell}
+	return []string{text}
+}
+
+func (r *Runner) goSourceInvokeCollectYield(fn *bashPPFunc, args []string, cells []*bashPPCell) []string {
+	if len(args) != 1 || len(cells) != 1 || cells[0] == nil {
+		r.exit.fatal(fmt.Errorf("gosource: slices.Collect iterator yield argument count mismatch"))
+		return nil
+	}
+	value, err := r.bashPPBridgeCell(cells[0])
+	if err != nil {
+		r.exit.fatal(err)
+		return nil
+	}
+	*fn.collectYield = append(*fn.collectYield, value)
+	cell := &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: "true"}, scalarKind: constant.Bool, typeName: "bool", declType: bashPPRangeNamedType("bool")}
+	r.bashPPResultCells = []*bashPPCell{cell}
+	return []string{"true"}
+}
 
 // bashPPRangeScalar handles the two non-container range operands whose values
 // live in the scalar namespace: strings and integers. It deliberately leaves

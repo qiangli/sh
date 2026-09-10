@@ -14,6 +14,7 @@ func (r *Runner) bashPPBridgeFunction(fn *bashPPFunc) (bashPPBridgeValue, error)
 	if fn.native != nil {
 		return *fn.native, nil
 	}
+	iteratorYield, _ := r.goSourceIteratorYield(fn)
 	for group, fields := range [][]*syntax.BashPPField{fn.params(), fn.results()} {
 		for _, field := range fields {
 			if field.Variadic() {
@@ -24,9 +25,14 @@ func (r *Runner) bashPPBridgeFunction(fn *bashPPFunc) (bashPPBridgeValue, error)
 			if group == 1 && r.bashPPTourCallbackResult(field.FieldTypeExpr) {
 				continue
 			}
-			typ := r.bashPPUnderlyingType(field.FieldTypeExpr)
-			n, ok := typ.(*syntax.BashPPNamedType)
-			if !ok || n.Name == nil || !(bashPPIntegerType(n.Name.Value) || n.Name.Value == "bool" || n.Name.Value == "string" || n.Name.Value == "float32" || n.Name.Value == "float64") {
+			if group == 0 && iteratorYield != nil {
+				if nested, ok := field.FieldTypeExpr.(*syntax.BashPPFuncType); ok &&
+					bashPPFieldsSignature(nested.Params) == bashPPFieldsSignature(iteratorYield.Params) &&
+					bashPPFieldsSignature(nested.Results) == bashPPFieldsSignature(iteratorYield.Results) {
+					continue
+				}
+			}
+			if !r.bashPPCallbackScalarType(field.FieldTypeExpr) {
 				return bashPPBridgeValue{}, fmt.Errorf("gosource: original callback signature requires scalar parameters and supported results")
 			}
 		}
@@ -85,6 +91,17 @@ func (r *Runner) bashPPNativeFunctionCallback(ctx context.Context, id uint64, ar
 	texts := make([]string, len(args))
 	cells := make([]*bashPPCell, len(args))
 	for i, arg := range args {
+		if signature, ok := params[i].typ.(*syntax.BashPPFuncType); ok {
+			if arg.Kind != "handle" || (!strings.HasPrefix(arg.Type, "func(") && !strings.HasPrefix(arg.NativeType, "func(")) {
+				return nil, fmt.Errorf("gosource: callback parameter %d requires a native function", i)
+			}
+			native := arg
+			callback := &bashPPFunc{native: &native, lit: &syntax.BashPPFuncLit{Params: signature.Params, Results: signature.Results}}
+			vr := r.bashPPStoreFunc(callback)
+			texts[i] = vr.Str
+			cells[i] = &bashPPCell{vr: vr, declType: signature}
+			continue
+		}
 		scalar, err := arg.scalar()
 		if err != nil {
 			return nil, fmt.Errorf("gosource: callback parameter %d: %w", i, err)
@@ -125,6 +142,9 @@ func (r *Runner) bashPPNativeFunctionCallback(ctx context.Context, id uint64, ar
 func synchronousFunctionCallback(req bashPPEvalRequest, q bashPPBridgeRequest) bool {
 	path := ""
 	if q.Receiver != nil && q.Receiver.Kind == "handle" {
+		if q.Receiver.Callable == "range-iterator" {
+			return true
+		}
 		path = strings.TrimPrefix(q.Receiver.Callable, "*")
 		if path == "sync.Once.Do" {
 			return true
@@ -142,6 +162,17 @@ func synchronousFunctionCallback(req bashPPEvalRequest, q bashPPBridgeRequest) b
 	}
 	if path == "golang.org/x/tour/wc.Test" || path == "golang.org/x/tour/pic.Show" {
 		return true
+	}
+	if pkg, name, ok := strings.Cut(path, "."); ok {
+		if pkg == "slices" {
+			switch name {
+			case "AppendSeq", "Collect", "Sorted", "SortedFunc", "SortedStableFunc":
+				return true
+			}
+		}
+		if pkg == "maps" && (name == "Collect" || name == "Insert") {
+			return true
+		}
 	}
 	pkg, name, ok := strings.Cut(path, ".")
 	if !ok {

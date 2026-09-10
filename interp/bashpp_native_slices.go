@@ -3,6 +3,7 @@ package interp
 // Sprint: #118; Story: #54; Story-ID: c3a60493cde9
 import (
 	"cmp"
+	"context"
 	"fmt"
 	"sort"
 	"strconv"
@@ -314,11 +315,14 @@ func applyNativeSliceBuffers(runner *Runner, q bashPPBridgeRequest, reply bashPP
 // header observes the reordering exactly as the concrete sort.Strings path does.
 // handled is false for every other callable, leaving the normal dependency
 // dispatch untouched.
-func (r *Runner) nativeSliceGenericHelper(req bashPPEvalRequest, q *bashPPBridgeRequest) (values []bashPPBridgeValue, handled bool, err error) {
+func (r *Runner) nativeSliceGenericHelper(ctx context.Context, req bashPPEvalRequest, q *bashPPBridgeRequest) (values []bashPPBridgeValue, handled bool, err error) {
 	if q.Op != "call" {
 		return nil, false, nil
 	}
 	switch nativeSliceCallable(req, *q) {
+	case "slices.Collect":
+		values, err := r.goSourceSlicesCollect(ctx, req, q.Args)
+		return values, true, err
 	case "slices.Equal":
 		if len(q.Args) != 2 {
 			return nil, false, fmt.Errorf("gosource: slices.Equal requires two slices")
@@ -347,6 +351,39 @@ func (r *Runner) nativeSliceGenericHelper(req bashPPEvalRequest, q *bashPPBridge
 		return nil, true, nil
 	}
 	return nil, false, nil
+}
+
+func (r *Runner) goSourceSlicesCollect(ctx context.Context, req bashPPEvalRequest, args []bashPPBridgeValue) ([]bashPPBridgeValue, error) {
+	if len(args) != 1 || args[0].Kind != "callback" || args[0].Session != req.Bridge.id {
+		return nil, fmt.Errorf("gosource: slices.Collect requires one current iterator callback")
+	}
+	req.Bridge.mu.Lock()
+	iterator := req.Bridge.functions[args[0].Handle]
+	req.Bridge.mu.Unlock()
+	yieldType, err := r.goSourceIteratorYield(iterator)
+	if err != nil {
+		return nil, fmt.Errorf("gosource: slices.Collect: %w", err)
+	}
+	yieldParams := bashppParams(yieldType.Params)
+	if len(yieldParams) != 1 {
+		return nil, fmt.Errorf("gosource: slices.Collect iterator must yield one value")
+	}
+	var collected []bashPPBridgeValue
+	yield := &bashPPFunc{
+		collectYield: &collected,
+		lit:          &syntax.BashPPFuncLit{Params: yieldType.Params, Results: yieldType.Results},
+		scope:        r.bashPPScope,
+	}
+	vr := r.bashPPStoreFunc(yield)
+	savedResults, savedCalls := r.bashPPResultCells, r.bashPPCallCells
+	defer func() { r.bashPPResultCells, r.bashPPCallCells = savedResults, savedCalls }()
+	r.bashPPCallCells = []*bashPPCell{{vr: vr, declType: yieldType}}
+	failure := r.bashPPShortFailureSeq
+	r.bashPPInvoke(ctx, iterator, []string{vr.Str})
+	if r.bashPPPanicking() || r.exit.exiting || r.exit.fatalExit || r.exit.err != nil || r.bashPPShortFailureSeq != failure {
+		return nil, errBashPPScalarInterrupted
+	}
+	return []bashPPBridgeValue{{Kind: "slice", Type: "[]" + bashPPTypeText(yieldParams[0].typ), Elements: collected}}, nil
 }
 
 // nativeSliceElements returns the element values of a transported slice, treating

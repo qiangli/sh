@@ -795,6 +795,10 @@ type BashPPCall struct {
 	// type rather than a value. Today only make populates it.
 	// Keeping it on the positioned call avoids re-parsing source in interp.
 	ArgType BashPPTypeExpr
+	// ResultFuncType preserves the concrete underlying signature when the call
+	// returns a function value. Range-over-function needs the signature even
+	// when the declared result is a named type such as iter.Seq[T].
+	ResultFuncType *BashPPFuncType
 
 	// TypeArgs are the explicit instantiation arguments in f[T, *U](...).
 	// They are nil for ordinary inferred calls.

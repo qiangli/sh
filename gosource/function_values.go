@@ -13,10 +13,13 @@ func (c *converter) functionValueType(expr ast.Expr) *syntax.BashPPFuncType {
 	if typ == nil {
 		return nil
 	}
-	if _, ok := typ.Underlying().(*types.Signature); !ok {
+	typeSignature, ok := typ.Underlying().(*types.Signature)
+	if !ok {
 		return nil
 	}
-	text := types.TypeString(typ, func(p *types.Package) string {
+	// A named function type (notably iter.Seq[T]) prints as its name. The
+	// interpreter needs its callable shape, so retain the underlying signature.
+	text := types.TypeString(typeSignature, func(p *types.Package) string {
 		if p.Path() == c.packagePath {
 			return ""
 		}
