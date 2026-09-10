@@ -5,6 +5,7 @@ package interp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -344,6 +345,13 @@ func (r *Runner) bashPPCommitTupleAssign(assign *syntax.BashPPAssign, candidates
 			return
 		}
 		if err := r.bashPPValidateReusedShortValue(target, candidates[i]); err != nil {
+			// A forwarded program signal can arrive after a native call has
+			// produced its results but while a reused target is being checked by
+			// the native helper. The interruption is private control flow, not an
+			// assignment diagnostic; the shared signal path owns status 128+sig.
+			if errors.Is(err, errBashPPScalarInterrupted) {
+				return
+			}
 			r.errf("%s%v\n", r.bashErrPrefix(name.Pos()), err)
 			r.exit = exitStatus{code: 2}
 			return
