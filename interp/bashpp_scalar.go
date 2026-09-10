@@ -27,7 +27,7 @@ type bashPPScalar struct {
 // to syntax; this package evaluates the tree it was handed.
 func (r *Runner) bashPPEvalScalarExpr(expr syntax.BashPPExpr) (result bashPPScalar, failure error) {
 	defer func() {
-		if r.bashPPGoSource && failure != nil && failure != errBashPPScalarInterrupted && expr != nil {
+		if r.bashPPGoSource && failure != nil && !errors.Is(failure, errBashPPScalarInterrupted) && expr != nil {
 			var positioned *goSourceError
 			if !errors.As(failure, &positioned) {
 				failure = &goSourceError{prefix: r.bashErrPrefix(expr.Pos()), err: failure}
