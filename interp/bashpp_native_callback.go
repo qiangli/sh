@@ -76,8 +76,13 @@ func (s *bashPPNativeSession) serveCallback(ctx context.Context, owner *Runner, 
 		}
 		owner.bashPPTools.callbackDepth--
 		if err != nil {
-			answer.Error = err.Error()
-			if !errors.Is(err, errBashPPScalarInterrupted) && !owner.exit.exiting {
+			// Interruption is an internal unwind token after the shared program
+			// outcome is already known. Never serialize its text as an ordinary
+			// callback failure and destroy that identity across the bridge.
+			if !errors.Is(err, errBashPPScalarInterrupted) {
+				answer.Error = err.Error()
+			}
+			if answer.Error != "" && !owner.exit.exiting {
 				owner.exit.fatal(err)
 			}
 		} else {
