@@ -655,7 +655,7 @@ func (e *emitter) returnTypes(fields []*syntax.BashPPField) []string {
 
 func (e *emitter) typeSwitchStmt(n *syntax.BashPPSwitch) (string, error) {
 	init, ok := n.Init.(*syntax.BashPPShortDecl)
-	if !ok || len(init.Lhs) != 1 {
+	if !ok || len(init.Lhs) > 1 {
 		return "", e.fail(n, CodeUnsupported, "type switch guard")
 	}
 	assert, ok := init.Expr.(*syntax.BashPPTypeAssertExpr)
@@ -666,13 +666,21 @@ func (e *emitter) typeSwitchStmt(n *syntax.BashPPSwitch) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	name := init.Lhs[0].Value
 	var out strings.Builder
-	out.WriteString("switch " + name + " := " + root + ".(type) {\n")
+	name := ""
+	if len(init.Lhs) == 1 {
+		name = init.Lhs[0].Value
+		out.WriteString("switch " + name + " := ")
+	} else {
+		out.WriteString("switch ")
+	}
+	out.WriteString(root + ".(type) {\n")
 	for _, arm := range n.Arms {
 		e.push()
-		e.bind(name)
-		e.projections.projectionBind(name, interfaceProjection())
+		if name != "" {
+			e.bind(name)
+			e.projections.projectionBind(name, interfaceProjection())
+		}
 		if len(arm.Exprs) == 0 {
 			out.WriteString("default:\n")
 		} else {
@@ -685,14 +693,18 @@ func (e *emitter) typeSwitchStmt(n *syntax.BashPPSwitch) (string, error) {
 				}
 				values = append(values, v)
 			}
-			if len(values) == 1 && values[0] != "nil" {
-				e.projections.projectionBind(name, e.projectionType(values[0], nil))
-			} else {
-				e.projections.projectionBind(name, interfaceProjection())
+			if name != "" {
+				if len(values) == 1 && values[0] != "nil" {
+					e.projections.projectionBind(name, e.projectionType(values[0], nil))
+				} else {
+					e.projections.projectionBind(name, interfaceProjection())
+				}
 			}
 			out.WriteString("case " + strings.Join(values, ",") + ":\n")
 		}
-		out.WriteString("_ = " + name + "\n")
+		if name != "" {
+			out.WriteString("_ = " + name + "\n")
+		}
 		for _, stmt := range arm.Stmts {
 			text, err := e.statement(stmt)
 			if err != nil {

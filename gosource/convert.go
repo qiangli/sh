@@ -590,9 +590,10 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 	case *ast.BlockStmt:
 		cmd = c.block(x)
 	case *ast.ExprStmt:
-		if call, ok := x.X.(*ast.CallExpr); ok {
+		expr := ast.Unparen(x.X)
+		if call, ok := expr.(*ast.CallExpr); ok {
 			cmd = c.call(call)
-		} else if recv, ok := x.X.(*ast.UnaryExpr); ok && recv.Op == token.ARROW {
+		} else if recv, ok := expr.(*ast.UnaryExpr); ok && recv.Op == token.ARROW {
 			cmd = &s.BashPPReceive{Arrow: c.pos(recv.OpPos), Chan: c.word(recv.X), ChanExpr: c.expr(recv.X)}
 		} else {
 			c.fail(x, "expression statement")
@@ -777,7 +778,18 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 		if x.Init != nil {
 			c.fail(x.Init, "type switch initializer")
 		}
-		out := &s.BashPPSwitch{Switch: c.pos(x.Switch), TypeSwitch: true, Init: c.one(x.Assign), Lbrace: c.pos(x.Body.Lbrace), Rbrace: c.pos(x.Body.Rbrace)}
+		guard := &s.BashPPShortDecl{Class: s.ClassR, GoRegion: true}
+		switch assign := x.Assign.(type) {
+		case *ast.ExprStmt:
+			guard.Expr = c.expr(assign.X.(*ast.TypeAssertExpr))
+		case *ast.AssignStmt:
+			guard.OpPos = c.pos(assign.TokPos)
+			for _, lhs := range assign.Lhs {
+				guard.Lhs = append(guard.Lhs, c.ident(lhs.(*ast.Ident)))
+			}
+			guard.Expr = c.expr(assign.Rhs[0].(*ast.TypeAssertExpr))
+		}
+		out := &s.BashPPSwitch{Switch: c.pos(x.Switch), TypeSwitch: true, Init: guard, Lbrace: c.pos(x.Body.Lbrace), Rbrace: c.pos(x.Body.Rbrace)}
 		for _, st := range x.Body.List {
 			cc := st.(*ast.CaseClause)
 			v := &s.BashPPSwitchArm{Case: c.pos(cc.Case), Colon: c.pos(cc.Colon)}
