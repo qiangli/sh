@@ -777,16 +777,24 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 	case *ast.ForStmt:
 		cmd = &s.BashPPFor{For: c.pos(x.For), Init: c.one(x.Init), Cond: c.expr(x.Cond), Post: c.one(x.Post), Body: c.block(x.Body), FirstSemi: c.headerToken(x.For, x.Body.Lbrace, token.SEMICOLON, 0), SecondSemi: c.headerToken(x.For, x.Body.Lbrace, token.SEMICOLON, 1)}
 	case *ast.RangeStmt:
-		out := &s.BashPPRange{For: c.pos(x.For), Define: c.pos(x.TokPos), Range: c.pos(x.Range), Chan: c.word(x.X), Expr: c.expr(x.X), Body: c.block(x.Body)}
-		for _, e := range []ast.Expr{x.Key, x.Value} {
+		out := &s.BashPPRange{For: c.pos(x.For), Range: c.pos(x.Range), Chan: c.word(x.X), Expr: c.expr(x.X), Body: c.block(x.Body)}
+		var assignments []*s.Stmt
+		for i, e := range []ast.Expr{x.Key, x.Value} {
 			if e != nil {
-				if id, ok := e.(*ast.Ident); ok {
-					out.Names = append(out.Names, c.ident(id))
+				if x.Tok == token.DEFINE {
+					out.Names = append(out.Names, c.ident(e.(*ast.Ident)))
 				} else {
-					c.fail(e, "range assignment target")
+					temp := &ast.Ident{NamePos: e.Pos(), Name: fmt.Sprintf("%srange_%d_%d", c.prefix, x.TokPos, i)}
+					out.Names = append(out.Names, c.ident(temp))
+					assign := &ast.AssignStmt{Lhs: []ast.Expr{e}, TokPos: x.TokPos, Tok: token.ASSIGN, Rhs: []ast.Expr{temp}}
+					assignments = append(assignments, c.statements(assign)...)
 				}
 			}
 		}
+		if x.Tok == token.DEFINE || len(assignments) > 0 {
+			out.Define = c.pos(x.TokPos)
+		}
+		out.Body.Stmts = append(assignments, out.Body.Stmts...)
 		cmd = out
 	case *ast.BranchStmt:
 		if x.Label != nil {

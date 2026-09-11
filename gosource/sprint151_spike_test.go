@@ -35,9 +35,9 @@ func TestSprint151Spike(t *testing.T) {
 		{"expression-kind/type-switch-composite-case", "expr_typeswitch_composite_case.go", "expr_typeswitch_composite_case.go:11:7: gosource: unsupported expression *ast.ArrayType"},
 		{"type-kind/indexed-call", "type_indexed_call.go", ""},
 		{"type-kind/indexed-call-ident", "type_indexed_call_ident.go", ""},
-		{"range-target/index", "range_target_index.go", "range_target_index.go:8:6: gosource: unsupported range assignment target"},
-		{"range-target/field", "range_target_field.go", "range_target_field.go:10:9: gosource: unsupported range assignment target"},
-		{"range-target/deref", "range_target_deref.go", "range_target_deref.go:9:6: gosource: unsupported range assignment target"},
+		{"range-target/index", "range_target_index.go", ""},
+		{"range-target/field", "range_target_field.go", ""},
+		{"range-target/deref", "range_target_deref.go", ""},
 		{"compound-simple-statement/for-init", "forinit_compound.go", "forinit_compound.go:11:6: gosource: unsupported compound simple statement"},
 		{"function-value-type/generic-selector", "funcvalue_generic_selector.go", "funcvalue_generic_selector.go:12:7: gosource: unsupported function value type"},
 		{"function-value-type/named-func-type", "funcvalue_named_type.go", ""},
@@ -65,6 +65,9 @@ func TestSprint151Implemented(t *testing.T) {
 		"exprstmt_paren_call.go",
 		"type_indexed_call.go",
 		"type_indexed_call_ident.go",
+		"range_target_index.go",
+		"range_target_field.go",
+		"range_target_deref.go",
 	} {
 		t.Run(file, func(t *testing.T) {
 			path := filepath.Join("testdata", "sprint151", file)
