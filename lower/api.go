@@ -3,8 +3,10 @@ package lower
 
 import (
 	"fmt"
-	"mvdan.cc/sh/v3/syntax"
+	"go/types"
 	"strings"
+
+	"mvdan.cc/sh/v3/syntax"
 )
 
 const DefaultRuntime = "mvdan.cc/sh/v3/lower/shellrt"
@@ -25,6 +27,11 @@ type Options struct {
 	// Entry optionally names an exported entry accepting runtime SessionOptions.
 	// Empty preserves the hygienic private entry and runtime-free native units.
 	Entry string
+	// Importer, when set, replaces the module importer built from Dir, so a
+	// caller that type-checked the source against an explicit package map
+	// (gosource.Options.Packages) can lower it against the same map. Nil
+	// keeps the on-disk module/GOPATH policy.
+	Importer types.Importer
 }
 type Result struct {
 	Sources  []syntax.SourceFile

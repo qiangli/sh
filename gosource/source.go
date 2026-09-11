@@ -58,6 +58,18 @@ type Options struct {
 	// the checker default; a nonempty value selects Go language semantics, not
 	// an SDK executable. Invalid or newer versions are rejected by the checker.
 	GoVersion string
+	// Packages are explicitly supplied dependency packages, type-checked in
+	// the given order before the program and registered under their Path.
+	// They are the policy-free half of Go's import model — an in-memory
+	// `-importcfg` — and are consulted before Importer for every import.
+	Packages []PackageSpec
+	// ImportBase is the compiler's `-D`: a relative import "./x" in any file
+	// means ImportBase/x. Empty refuses relative imports. It is never
+	// resolved against the filesystem.
+	ImportBase string
+	// ImportPath is the program package's own import path, used to attribute
+	// its resolutions. Empty uses the package name, as before.
+	ImportPath string
 }
 type Program struct {
 	File          *syntax.File
@@ -65,6 +77,9 @@ type Program struct {
 	Sources       []SourceInfo
 	InitFunctions []string
 	Main          string
+	// Resolutions records every import the type checker resolved, for the
+	// explicit packages and the program alike, in resolution order.
+	Resolutions []Resolution
 }
 
 // SourceAt maps an AST offset to the original source identity and byte offset.
@@ -122,13 +137,27 @@ func Load(sources []Source, options Options) (*Program, error) {
 	if len(c.files) == 0 {
 		return nil, parseErrors
 	}
-	imp := options.Importer
-	if imp == nil {
-		imp = importer.Default()
+	fallback := options.Importer
+	if fallback == nil {
+		fallback = importer.Default()
 	}
+	imp := newMapImporter(options.ImportBase, fallback)
+	// Explicit packages are checked first, in order, so a later package sees
+	// every earlier one; a failing package stops here with its diagnostics
+	// and the program is never checked against a partial map.
+	for _, spec := range options.Packages {
+		if diagnostics := imp.checkDependency(c.fset, spec, options.GoVersion); len(diagnostics) > 0 {
+			return nil, append(parseErrors, diagnostics...)
+		}
+	}
+	programPath := options.ImportPath
+	if programPath == "" {
+		programPath = p.Package
+	}
+	imp.from = programPath
 	var typeErrors ErrorList
 	config := types.Config{Importer: imp, GoVersion: options.GoVersion, Error: func(err error) { typeErrors = append(typeErrors, err) }}
-	pkg, err := config.Check(p.Package, c.fset, c.files, c.info)
+	pkg, err := config.Check(programPath, c.fset, c.files, c.info)
 	// Match the native checker test flow: parser diagnostics first, followed
 	// by semantic diagnostics from every recoverable file. Check's returned
 	// first error is already reported through Error; do not duplicate it.
@@ -139,6 +168,7 @@ func Load(sources []Source, options Options) (*Program, error) {
 	if len(diagnostics) > 0 {
 		return nil, diagnostics
 	}
+	p.Resolutions = imp.resolutions
 	if main, ok := pkg.Scope().Lookup("main").(*types.Func); ok && p.Package == "main" {
 		p.Main = main.Name()
 	}

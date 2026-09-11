@@ -93,6 +93,9 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 	}
 	e := &emitter{goSource: file.GoSource, sourceFile: file, writtenNames: map[string]bool{}, inferredParams: map[*syntax.BashPPField]string{}, declaredTypes: map[string]*syntax.BashPPDecl{}, functionDecls: map[string]*syntax.BashPPFuncDecl{}, enumMembers: map[string][]*syntax.Lit{}, options: options, funcs: map[string]bool{}, scopes: []map[string]bool{{}}, globals: map[string]bool{}, visibleGlobals: map[string]bool{}, imports: map[string]string{}, callableParams: map[*syntax.BashPPField]string{}, dotNames: map[string]bool{}, declaredGlobals: map[string]bool{}, typeNames: map[string]bool{}, globalTypes: globalTypes}
 	e.moduleImporter = newModuleImporter(options.Dir)
+	if options.Importer != nil {
+		e.moduleImporter = options.Importer
+	}
 	e.sourceName = options.Origin
 	if e.sourceName == "" {
 		e.sourceName = file.Name
