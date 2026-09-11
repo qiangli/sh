@@ -80,6 +80,11 @@ type Program struct {
 	// Resolutions records every import the type checker resolved, for the
 	// explicit packages and the program alike, in resolution order.
 	Resolutions []Resolution
+	// Importer is the importer the program was checked with: the explicit
+	// package map in front of Options.Importer. Lowering the same program
+	// should type-check against it (lower.Options.Importer) so both halves
+	// see one map.
+	Importer types.Importer
 }
 
 // SourceAt maps an AST offset to the original source identity and byte offset.
@@ -169,6 +174,7 @@ func Load(sources []Source, options Options) (*Program, error) {
 		return nil, diagnostics
 	}
 	p.Resolutions = imp.resolutions
+	p.Importer = imp
 	if main, ok := pkg.Scope().Lookup("main").(*types.Func); ok && p.Package == "main" {
 		p.Main = main.Name()
 	}
