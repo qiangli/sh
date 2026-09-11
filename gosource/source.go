@@ -115,7 +115,7 @@ func Load(sources []Source, options Options) (*Program, error) {
 	}
 	sources = append([]Source(nil), sources...)
 	sort.SliceStable(sources, func(i, j int) bool { return sources[i].Name < sources[j].Name })
-	c := &converter{fset: token.NewFileSet(), info: &types.Info{Types: map[ast.Expr]types.TypeAndValue{}, Defs: map[*ast.Ident]types.Object{}, Uses: map[*ast.Ident]types.Object{}, Implicits: map[ast.Node]types.Object{}, Selections: map[*ast.SelectorExpr]*types.Selection{}}, renames: map[types.Object]string{}}
+	c := &converter{fset: token.NewFileSet(), info: newTypeInfo(), renames: map[types.Object]string{}}
 	p := &Program{File: &syntax.File{Name: sources[0].Name, GoSource: true}}
 	var parseErrors ErrorList
 	for i, s := range sources {
