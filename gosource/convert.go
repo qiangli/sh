@@ -19,6 +19,14 @@ import (
 type converter struct {
 	packagePath   string
 	importAliases map[string]string
+	// mapped is the set of explicit package paths linked into the same file;
+	// a selector on one of their import bindings collapses to the bare name
+	// and their types are spelled unqualified, exactly as packagePath's are.
+	mapped map[string]bool
+	// resolveImport applies the relative-import rule to an import path as
+	// written, so an import without a binding (blank) can still be matched
+	// against mapped.
+	resolveImport func(string) (string, error)
 	syntheticPos  token.Pos
 	prefix        string
 	fset          *token.FileSet
@@ -330,6 +338,9 @@ func (c *converter) function(f *ast.FuncDecl) *s.BashPPFuncDecl {
 }
 func (c *converter) importSpec(g *ast.GenDecl, i *ast.ImportSpec) *s.BashPPImport {
 	path, _ := strconv.Unquote(i.Path.Value)
+	if c.importedPathIsMapped(i, path) {
+		return nil
+	}
 	out := &s.BashPPImport{Site: s.StartImport, Class: s.ClassR, Kw: c.lit(g.TokPos, "import"), Path: &s.DblQuoted{Left: c.pos(i.Path.Pos()), Right: c.pos(i.Path.End() - 1), Parts: []s.WordPart{c.lit(i.Path.Pos()+1, path)}}}
 	if i.Name != nil {
 		out.Alias = c.ident(i.Name)
@@ -337,6 +348,30 @@ func (c *converter) importSpec(g *ast.GenDecl, i *ast.ImportSpec) *s.BashPPImpor
 		out.Alias = c.lit(i.Path.Pos(), c.renames[obj])
 	}
 	return out
+}
+
+// importedPathIsMapped reports whether an import spec names a package in the
+// explicit package map, through its binding when it has one and through the
+// relative-import rule otherwise.
+func (c *converter) importedPathIsMapped(i *ast.ImportSpec, path string) bool {
+	if len(c.mapped) == 0 {
+		return false
+	}
+	var obj types.Object
+	if i.Name != nil {
+		obj = c.info.Defs[i.Name]
+	} else {
+		obj = c.info.Implicits[i]
+	}
+	if pkgname, ok := obj.(*types.PkgName); ok {
+		return c.mapped[pkgname.Imported().Path()]
+	}
+	if c.resolveImport != nil {
+		if resolved, err := c.resolveImport(path); err == nil {
+			path = resolved
+		}
+	}
+	return c.mapped[path]
 }
 func (c *converter) typeDecl(g *ast.GenDecl, t *ast.TypeSpec) *s.BashPPDecl {
 	out := &s.BashPPDecl{Site: s.StartTypeDecl, Kw: c.lit(g.TokPos, "type"), Name: c.ident(t.Name), DeclType: c.lit(t.Type.Pos(), c.text(t.Type)), DeclTypeExpr: c.typ(t.Type), Alias: t.Assign.IsValid(), TypeParams: c.typeParams(t.TypeParams), End_: c.pos(t.End())}

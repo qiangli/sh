@@ -85,6 +85,18 @@ type Program struct {
 	// should type-check against it (lower.Options.Importer) so both halves
 	// see one map.
 	Importer types.Importer
+	// Packages lists the explicit packages linked into File, in map order.
+	// Each was lowered from its exact sources ahead of the program, so the
+	// interpreter runs it without any on-disk lookup; its InitFunctions are
+	// included in InitFunctions ahead of the program's own.
+	Packages []LinkedPackage
+}
+
+// LinkedPackage is one explicit package lowered into Program.File.
+type LinkedPackage struct {
+	Path  string
+	Name  string
+	Files []string
 }
 
 // SourceAt maps an AST offset to the original source identity and byte offset.
@@ -181,47 +193,144 @@ func Load(sources []Source, options Options) (*Program, error) {
 	if options.RunMain && p.Main == "" {
 		return nil, fmt.Errorf("%s: Go execution requires package main with func main()", sources[0].Name)
 	}
+	// The link set is every explicit package, in map order, then the
+	// program. All are lowered into one flat file, so the hygiene prefix
+	// must be free in every file of the set and the package-level names
+	// must be distinct across it.
+	var linked []*converter
+	mapped := map[string]bool{}
+	for _, path := range imp.order {
+		checked := imp.checked[path]
+		mapped[path] = true
+		linked = append(linked, &converter{packagePath: path, fset: c.fset, files: checked.files, sources: checked.sources, info: checked.info, renames: c.renames})
+	}
+	c.packagePath = programPath
+	linked = append(linked, c)
 	c.prefix = "__gosource_"
 	for {
 		collision := false
-		for _, f := range c.files {
-			ast.Inspect(f, func(n ast.Node) bool {
-				if id, ok := n.(*ast.Ident); ok && strings.HasPrefix(id.Name, c.prefix) {
-					collision = true
-				}
-				return true
-			})
+		for _, lc := range linked {
+			for _, f := range lc.files {
+				ast.Inspect(f, func(n ast.Node) bool {
+					if id, ok := n.(*ast.Ident); ok && strings.HasPrefix(id.Name, c.prefix) {
+						collision = true
+					}
+					return true
+				})
+			}
 		}
 		if !collision {
 			break
 		}
 		c.prefix += "_"
 	}
-	c.packagePath = p.Package
-	c.importAliases = map[string]string{}
-	for id, obj := range c.info.Defs {
-		if obj != nil && (id.Name == "nil" || id.Name == "true" || id.Name == "false") {
-			c.renames[obj] = fmt.Sprintf("%sbinding_%d", c.prefix, id.Pos())
-		}
+	if err := checkLinkedNames(imp, pkg, programPath); err != nil {
+		return nil, err
 	}
-	// Imports are file scoped. Give each binding a collision-free package alias.
-	for fi, f := range c.files {
-		for ii, s := range f.Imports {
-			var obj types.Object
-			if s.Name != nil {
-				obj = c.info.Defs[s.Name]
-			} else {
-				obj = c.info.Implicits[s]
+	// Import aliases are shared: every package's imports are hoisted into
+	// the one file, so an alias minted by any package names that path for all.
+	importAliases := map[string]string{}
+	var lowered []*loweredPackage
+	for pi, lc := range linked {
+		lc.prefix = c.prefix
+		lc.mapped = mapped
+		lc.importAliases = importAliases
+		lc.resolveImport = imp.resolve
+		if lc != c {
+			if err := refuseEmbedDirectives(lc); err != nil {
+				return nil, err
 			}
-			if obj != nil && obj.Name() != "_" && obj.Name() != "." {
-				c.renames[obj] = fmt.Sprintf("%simport_%d_%d", c.prefix, fi, ii)
-				if pkgname, ok := obj.(*types.PkgName); ok {
-					c.importAliases[pkgname.Imported().Path()] = c.renames[obj]
+		}
+		for id, obj := range lc.info.Defs {
+			if obj != nil && (id.Name == "nil" || id.Name == "true" || id.Name == "false") {
+				lc.renames[obj] = fmt.Sprintf("%sbinding_%d", c.prefix, id.Pos())
+			}
+		}
+		// Imports are file scoped. Give each binding a collision-free package
+		// alias; a mapped package's aliases carry its map index as well.
+		for fi, f := range lc.files {
+			for ii, spec := range f.Imports {
+				var obj types.Object
+				if spec.Name != nil {
+					obj = lc.info.Defs[spec.Name]
+				} else {
+					obj = lc.info.Implicits[spec]
+				}
+				if obj != nil && obj.Name() != "_" && obj.Name() != "." {
+					if lc == c {
+						lc.renames[obj] = fmt.Sprintf("%simport_%d_%d", c.prefix, fi, ii)
+					} else {
+						lc.renames[obj] = fmt.Sprintf("%simport_%d_%d_%d", c.prefix, pi, fi, ii)
+					}
+					if pkgname, ok := obj.(*types.PkgName); ok && !mapped[pkgname.Imported().Path()] {
+						importAliases[pkgname.Imported().Path()] = lc.renames[obj]
+					}
 				}
 			}
 		}
+		lp, err := lc.lowerPackage(len(p.InitFunctions))
+		if err != nil {
+			return nil, err
+		}
+		p.InitFunctions = append(p.InitFunctions, lp.initFunctions...)
+		lowered = append(lowered, lp)
 	}
-	var imports, decls, funcs []*syntax.Stmt
+	// Imports first: the interpreter starts the native dependency bridge once,
+	// at the first statement that is not an import.
+	for _, lp := range lowered {
+		p.File.Stmts = append(p.File.Stmts, lp.imports...)
+	}
+	// Then each package in link order, a dependency completely before its
+	// importer: function definitions precede all initializers to support
+	// forward references, and a mapped package's init calls run before the
+	// next package's initializers, as Go orders them.
+	for i, lp := range lowered {
+		p.File.Stmts = append(p.File.Stmts, lp.decls...)
+		p.File.Stmts = append(p.File.Stmts, lp.funcs...)
+		p.File.Stmts = append(p.File.Stmts, lp.inits...)
+		if !options.RunMain {
+			continue
+		}
+		calls := lp.initFunctions
+		if i == len(lowered)-1 {
+			calls = append(append([]string(nil), calls...), p.Main)
+		}
+		for _, name := range calls {
+			pos := p.File.Pos()
+			lit := &syntax.Lit{Value: name, ValuePos: pos, ValueEnd: pos}
+			p.File.Stmts = append(p.File.Stmts, c.stmt(&syntax.BashPPCall{Fun: []*syntax.Lit{lit}, Lparen: pos, Rparen: pos}))
+		}
+	}
+	for _, path := range imp.order {
+		checked := imp.checked[path]
+		p.Packages = append(p.Packages, LinkedPackage{Path: path, Name: checked.pkg.Name(), Files: imp.files[path]})
+		// A checked package parsed every source, so files and sources align.
+		for i, src := range checked.sources {
+			tf := c.fset.File(checked.files[i].FileStart)
+			p.Sources = append(p.Sources, SourceInfo{Name: src.Name, SHA256: fmt.Sprintf("%x", sha256.Sum256(src.Data)), Base: uint(tf.Base() - 1), Size: uint(len(src.Data))})
+		}
+	}
+	c.attachEmbedDirectives(p.File)
+	p.File.Sources = append([]syntax.SourceFile(nil), p.Sources...)
+	return p, nil
+}
+
+// loweredPackage is one package's lowered top-level statements, grouped so
+// Load can hoist every package's imports ahead of the first declaration and
+// emit the rest per package in link order.
+type loweredPackage struct {
+	imports, decls, funcs []*syntax.Stmt
+	// inits holds the zero-initialized globals followed by the checker's
+	// InitOrder initializers.
+	inits         []*syntax.Stmt
+	initFunctions []string
+}
+
+// lowerPackage converts the converter's files into grouped statements. The
+// init functions are numbered from initBase so names stay unique across the
+// link set.
+func (c *converter) lowerPackage(initBase int) (*loweredPackage, error) {
+	out := &loweredPackage{}
 	vars := map[*types.Var]*syntax.BashPPDecl{}
 	tupleSpecs := map[*types.Var]*ast.ValueSpec{}
 	tupleDecls := map[*ast.ValueSpec]*ast.GenDecl{}
@@ -229,20 +338,24 @@ func Load(sources []Source, options Options) (*Program, error) {
 		for _, d := range f.Decls {
 			if fd, ok := d.(*ast.FuncDecl); ok {
 				fn := c.function(fd)
-				if fd.Name.Name == "init" {
-					fn.Name.Value = fmt.Sprintf("%sinit_%d", c.prefix, len(p.InitFunctions))
-					p.InitFunctions = append(p.InitFunctions, fn.Name.Value)
+				if fd.Name.Name == "init" && fd.Recv == nil {
+					fn.Name.Value = fmt.Sprintf("%sinit_%d", c.prefix, initBase+len(out.initFunctions))
+					out.initFunctions = append(out.initFunctions, fn.Name.Value)
 				}
-				funcs = append(funcs, c.stmt(fn))
+				out.funcs = append(out.funcs, c.stmt(fn))
 				continue
 			}
 			gd := d.(*ast.GenDecl)
 			for _, s := range gd.Specs {
 				switch v := s.(type) {
 				case *ast.ImportSpec:
-					imports = append(imports, c.stmt(c.importSpec(gd, v)))
+					// An import satisfied by the explicit package map is
+					// linked, not imported: nothing reaches the runtime.
+					if imp := c.importSpec(gd, v); imp != nil {
+						out.imports = append(out.imports, c.stmt(imp))
+					}
 				case *ast.TypeSpec:
-					decls = append(decls, c.stmt(c.typeDecl(gd, v)))
+					out.decls = append(out.decls, c.stmt(c.typeDecl(gd, v)))
 				case *ast.ValueSpec:
 					valueSpec := v
 					if gd.Tok == token.VAR && len(v.Values) == 1 && len(v.Names) > 1 {
@@ -259,7 +372,7 @@ func Load(sources []Source, options Options) (*Program, error) {
 						if gd.Tok == token.VAR {
 							vars[c.info.Defs[n].(*types.Var)] = node
 						} else {
-							decls = append(decls, c.stmt(node))
+							out.decls = append(out.decls, c.stmt(node))
 						}
 					}
 				}
@@ -269,10 +382,6 @@ func Load(sources []Source, options Options) (*Program, error) {
 	if c.err != nil {
 		return nil, c.err
 	}
-	// Function definitions precede all initializers to support forward references.
-	p.File.Stmts = append(p.File.Stmts, imports...)
-	p.File.Stmts = append(p.File.Stmts, decls...)
-	p.File.Stmts = append(p.File.Stmts, funcs...)
 	initialized := map[*types.Var]bool{}
 	// Zero-initialized globals are available to initializer functions.
 	for _, f := range c.files {
@@ -283,7 +392,7 @@ func Load(sources []Source, options Options) (*Program, error) {
 					if len(v.Values) == 0 {
 						for _, n := range v.Names {
 							obj := c.info.Defs[n].(*types.Var)
-							p.File.Stmts = append(p.File.Stmts, c.stmt(vars[obj]))
+							out.inits = append(out.inits, c.stmt(vars[obj]))
 							initialized[obj] = true
 						}
 					}
@@ -297,14 +406,14 @@ func Load(sources []Source, options Options) (*Program, error) {
 			if spec == nil {
 				return nil, fmt.Errorf("%s: gosource: missing tuple initializer", c.fset.Position(init.Rhs.Pos()))
 			}
-			p.File.Stmts = append(p.File.Stmts, c.tupleValueDecls(tupleDecls[spec], spec)...)
+			out.inits = append(out.inits, c.tupleValueDecls(tupleDecls[spec], spec)...)
 			for _, variable := range init.Lhs {
 				initialized[variable] = true
 			}
 			continue
 		}
 		v := init.Lhs[0]
-		p.File.Stmts = append(p.File.Stmts, c.stmt(vars[v]))
+		out.inits = append(out.inits, c.stmt(vars[v]))
 		initialized[v] = true
 	}
 	for v := range vars {
@@ -312,17 +421,53 @@ func Load(sources []Source, options Options) (*Program, error) {
 			return nil, fmt.Errorf("gosource: missing initialization of %s", v.Name())
 		}
 	}
-	if options.RunMain {
-		for _, name := range append(append([]string(nil), p.InitFunctions...), p.Main) {
-			pos := p.File.Pos()
-			lit := &syntax.Lit{Value: name, ValuePos: pos, ValueEnd: pos}
-			p.File.Stmts = append(p.File.Stmts, c.stmt(&syntax.BashPPCall{Fun: []*syntax.Lit{lit}, Lparen: pos, Rparen: pos}))
-		}
-	}
 	if c.err != nil {
 		return nil, c.err
 	}
-	c.attachEmbedDirectives(p.File)
-	p.File.Sources = append([]syntax.SourceFile(nil), p.Sources...)
-	return p, nil
+	return out, nil
+}
+
+// checkLinkedNames refuses a link set whose packages declare one package-level
+// name twice. The lowered file is one flat namespace and the converter renames
+// only import bindings and predeclared-identifier shadows, never declarations,
+// so a shared name would silently alias rather than shadow.
+func checkLinkedNames(imp *mapImporter, program *types.Package, programPath string) error {
+	type member struct {
+		path string
+		pkg  *types.Package
+	}
+	var set []member
+	for _, path := range imp.order {
+		set = append(set, member{path, imp.checked[path].pkg})
+	}
+	set = append(set, member{programPath, program})
+	declared := map[string]string{}
+	for _, m := range set {
+		for _, name := range m.pkg.Scope().Names() {
+			if name == "_" {
+				continue
+			}
+			if first, dup := declared[name]; dup {
+				return fmt.Errorf("gosource: package-level name %s declared by both %s and %s; execution against the explicit package map requires distinct names", name, first, m.path)
+			}
+			declared[name] = m.path
+		}
+	}
+	return nil
+}
+
+// refuseEmbedDirectives rejects go:embed inside a mapped package: embed
+// directives are attached for the program's files only and the runtime's
+// embed request assumes the program's single source root.
+func refuseEmbedDirectives(c *converter) error {
+	for _, f := range c.files {
+		for _, group := range f.Comments {
+			for _, comment := range group.List {
+				if strings.HasPrefix(comment.Text, "//go:embed ") || strings.HasPrefix(comment.Text, "//go:embed\t") || comment.Text == "//go:embed" {
+					return fmt.Errorf("%s: gosource: go:embed in mapped package %q is not supported by the explicit package map", c.fset.Position(comment.Slash), c.packagePath)
+				}
+			}
+		}
+	}
+	return nil
 }
