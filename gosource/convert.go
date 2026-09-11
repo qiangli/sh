@@ -529,6 +529,42 @@ func (c *converter) funlit(x *ast.FuncLit) *s.BashPPFuncLit {
 }
 func (c *converter) call(x *ast.CallExpr) *s.BashPPCall {
 	out := &s.BashPPCall{Lparen: c.pos(x.Lparen), Rparen: c.pos(x.Rparen), Ellipsis: c.pos(x.Ellipsis), ResultFuncType: c.functionValueType(x)}
+	isInstantiation := func(e ast.Expr) bool {
+		var base ast.Expr
+		var args []ast.Expr
+		switch v := e.(type) {
+		case *ast.IndexExpr:
+			base, args = v.X, []ast.Expr{v.Index}
+		case *ast.IndexListExpr:
+			base, args = v.X, v.Indices
+		default:
+			return false
+		}
+		var id *ast.Ident
+		switch v := base.(type) {
+		case *ast.Ident:
+			id = v
+		case *ast.SelectorExpr:
+			id = v.Sel
+		}
+		if id != nil {
+			if _, ok := c.info.Instances[id]; ok {
+				return true
+			}
+		}
+		baseType := c.info.Types[base]
+		if !baseType.IsType() {
+			if _, ok := baseType.Type.(*types.Signature); !ok {
+				return false
+			}
+		}
+		for _, arg := range args {
+			if !c.info.Types[arg].IsType() {
+				return false
+			}
+		}
+		return true
+	}
 	var simple func(ast.Expr) bool
 	simple = func(e ast.Expr) bool {
 		switch v := e.(type) {
@@ -537,9 +573,9 @@ func (c *converter) call(x *ast.CallExpr) *s.BashPPCall {
 		case *ast.SelectorExpr:
 			return simple(v.X)
 		case *ast.IndexExpr:
-			return simple(v.X)
+			return isInstantiation(v) && simple(v.X)
 		case *ast.IndexListExpr:
-			return simple(v.X)
+			return isInstantiation(v) && simple(v.X)
 		}
 		return false
 	}

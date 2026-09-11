@@ -33,7 +33,8 @@ func TestSprint151Spike(t *testing.T) {
 		{"expression-statement/bare-type-switch", "exprstmt_bare_typeswitch.go", ""},
 		{"expression-kind/IndexListExpr", "expr_indexlist_funcvalue.go", "expr_indexlist_funcvalue.go:10:7: gosource: unsupported expression *ast.IndexListExpr"},
 		{"expression-kind/type-switch-composite-case", "expr_typeswitch_composite_case.go", "expr_typeswitch_composite_case.go:11:7: gosource: unsupported expression *ast.ArrayType"},
-		{"type-kind/indexed-call", "type_indexed_call.go", "type_indexed_call.go:12:23: gosource: unsupported type *ast.BasicLit"},
+		{"type-kind/indexed-call", "type_indexed_call.go", ""},
+		{"type-kind/indexed-call-ident", "type_indexed_call_ident.go", ""},
 		{"range-target/index", "range_target_index.go", "range_target_index.go:8:6: gosource: unsupported range assignment target"},
 		{"range-target/field", "range_target_field.go", "range_target_field.go:10:9: gosource: unsupported range assignment target"},
 		{"range-target/deref", "range_target_deref.go", "range_target_deref.go:9:6: gosource: unsupported range assignment target"},
@@ -62,6 +63,8 @@ func TestSprint151Implemented(t *testing.T) {
 	for _, file := range []string{
 		"exprstmt_bare_typeswitch.go",
 		"exprstmt_paren_call.go",
+		"type_indexed_call.go",
+		"type_indexed_call_ident.go",
 	} {
 		t.Run(file, func(t *testing.T) {
 			path := filepath.Join("testdata", "sprint151", file)
