@@ -689,6 +689,14 @@ func mangleLinkedNames(linked []*converter, mappedPkgs []*types.Package) {
 			if !ok || !field.Embedded() {
 				continue
 			}
+			if pkg := field.Pkg(); pkg != nil {
+				if declared := pkg.Scope().Lookup(field.Name()); declared != nil {
+					if rename := c.renames[declared]; rename != "" {
+						c.renames[field] = rename
+						continue
+					}
+				}
+			}
 			typ := field.Type()
 			if pointer, ok := typ.(*types.Pointer); ok {
 				typ = pointer.Elem()
