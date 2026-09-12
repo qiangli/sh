@@ -243,6 +243,7 @@ func Walk(node Node, f func(Node) bool) {
 		walkList(node.Arms, f)
 	case *BashPPSwitchArm:
 		walkList(node.Exprs, f)
+		walkList(node.Types, f)
 		walkList(node.Commas, f)
 		walkList(node.Stmts, f)
 		walkComments(node.Last, f)

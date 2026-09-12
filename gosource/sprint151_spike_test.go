@@ -33,7 +33,7 @@ func TestSprint151Spike(t *testing.T) {
 		{"expression-statement/paren-call", "exprstmt_paren_call.go", ""},
 		{"expression-statement/bare-type-switch", "exprstmt_bare_typeswitch.go", ""},
 		{"expression-kind/IndexListExpr", "expr_indexlist_funcvalue.go", "expr_indexlist_funcvalue.go:10:7: gosource: unsupported expression *ast.IndexListExpr"},
-		{"expression-kind/type-switch-composite-case", "expr_typeswitch_composite_case.go", "expr_typeswitch_composite_case.go:11:7: gosource: unsupported expression *ast.ArrayType"},
+		{"expression-kind/type-switch-composite-case", "expr_typeswitch_composite_case.go", ""},
 		{"type-kind/indexed-call", "type_indexed_call.go", ""},
 		{"type-kind/indexed-call-ident", "type_indexed_call_ident.go", ""},
 		{"range-target/index", "range_target_index.go", ""},
@@ -73,6 +73,7 @@ func TestSprint151Implemented(t *testing.T) {
 		"labeled_continue_for.go",
 		"labeled_break_switch.go",
 		"labeled_break_select.go",
+		"expr_typeswitch_composite_case.go",
 	} {
 		t.Run(file, func(t *testing.T) {
 			path := filepath.Join("testdata", "sprint151", file)

@@ -1021,10 +1021,12 @@ type BashPPSwitch struct {
 func (s *BashPPSwitch) Pos() Pos { return s.Switch }
 func (s *BashPPSwitch) End() Pos { return posAddCol(s.Rbrace, 1) }
 
-// BashPPSwitchArm is one case clause. Exprs is empty for default.
+// BashPPSwitchArm is one case clause. Types carries Go type-switch cases;
+// Exprs carries expression-switch cases. Both are empty for default.
 type BashPPSwitchArm struct {
 	Case   Pos // position of case/default
 	Exprs  []BashPPExpr
+	Types  []BashPPTypeExpr
 	Commas []*Lit
 	Colon  Pos
 	Stmts  []*Stmt

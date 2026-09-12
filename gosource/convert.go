@@ -887,7 +887,7 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 			cc := st.(*ast.CaseClause)
 			v := &s.BashPPSwitchArm{Case: c.pos(cc.Case), Colon: c.pos(cc.Colon)}
 			for _, e := range cc.List {
-				v.Exprs = append(v.Exprs, c.expr(e))
+				v.Types = append(v.Types, c.typ(e))
 			}
 			for _, body := range cc.Body {
 				v.Stmts = append(v.Stmts, c.statements(body)...)

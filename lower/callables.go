@@ -695,10 +695,18 @@ func (e *emitter) typeSwitchStmt(n *syntax.BashPPSwitch) (string, error) {
 			e.bind(name)
 			e.projections.projectionBind(name, interfaceProjection())
 		}
-		if len(arm.Exprs) == 0 {
+		if len(arm.Exprs) == 0 && len(arm.Types) == 0 {
 			out.WriteString("default:\n")
 		} else {
 			var values []string
+			for _, typ := range arm.Types {
+				v, err := e.typeExpr(typ)
+				if err != nil {
+					e.pop()
+					return "", err
+				}
+				values = append(values, v)
+			}
 			for _, x := range arm.Exprs {
 				v, err := e.expr(x)
 				if err != nil {

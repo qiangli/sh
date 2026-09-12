@@ -178,11 +178,17 @@ func (r *Runner) bashPPBindSwitch(s *syntax.BashPPSwitch) *syntax.BashPPSwitch {
 	for i, arm := range s.Arms {
 		arms[i] = arm
 		exprs, armChanged := r.bashPPBindExprList(arm.Exprs)
-		if !armChanged {
+		types := make([]syntax.BashPPTypeExpr, len(arm.Types))
+		typesChanged := false
+		for j, typ := range arm.Types {
+			types[j] = r.bashPPBindTypeExpr(typ)
+			typesChanged = typesChanged || types[j] != typ
+		}
+		if !armChanged && !typesChanged {
 			continue
 		}
 		ac := *arm
-		ac.Exprs = exprs
+		ac.Exprs, ac.Types = exprs, types
 		arms[i] = &ac
 		changed = true
 	}
