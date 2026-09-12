@@ -82,11 +82,10 @@ func gcSyntaxVerdict(name string, src []byte, checkerBranchErrors bool) ErrorLis
 	return out
 }
 
-// syntaxVerdict runs gcSyntaxVerdict over every source. A non-empty result
-// is the complete diagnostic set for the load: gc runs no type checker after
-// a syntax error, so neither go/parser nor go/types output is ever appended
-// to it. An empty result means every file passed gc's parser and loading
-// proceeds with go/parser + go/types exactly as before.
+// syntaxVerdict runs gcSyntaxVerdict over every source. A non-empty result is
+// gc's complete syntax-stage diagnostic set; Load decides whether policy stops
+// there or continues with go/parser recovery and go/types. An empty result
+// means every file passed gc's parser.
 func syntaxVerdict(sources []Source, checkerBranchErrors bool) ErrorList {
 	var out ErrorList
 	for _, s := range sources {

@@ -171,19 +171,20 @@ func (m *mapImporter) checkDependency(fset *token.FileSet, spec PackageSpec, che
 	}
 	sources := append([]Source(nil), spec.Sources...)
 	sort.SliceStable(sources, func(i, j int) bool { return sources[i].Name < sources[j].Name })
-	// Same syntax verdict as Load: gc's parser decides, and a rejection is
-	// the package's complete diagnostic set.
-	if syntaxErrors := syntaxVerdict(sources, checker.checkerBranchErrors); len(syntaxErrors) > 0 {
+	// Same syntax-verdict policy as Load: checker-test mode may continue on
+	// go/parser's recovered AST after retaining gc's diagnostics.
+	syntaxErrors := syntaxVerdict(sources, checker.checkerBranchErrors)
+	if len(syntaxErrors) > 0 && !checker.checkAfterSyntaxErrors {
 		return syntaxErrors
 	}
-	var diagnostics ErrorList
+	diagnostics := append(ErrorList(nil), syntaxErrors...)
 	var files []*ast.File
 	for i, s := range sources {
 		if i > 0 && s.Name == sources[i-1].Name {
 			return ErrorList{fmt.Errorf("gosource: duplicate file %q in package %q", s.Name, spec.Path)}
 		}
 		f, err := parser.ParseFile(fset, s.Name, s.Data, parser.ParseComments|parser.AllErrors)
-		if err != nil {
+		if err != nil && len(syntaxErrors) == 0 {
 			diagnostics = appendDiagnostics(diagnostics, err)
 		}
 		if f != nil {
@@ -193,7 +194,9 @@ func (m *mapImporter) checkDependency(fset *token.FileSet, spec PackageSpec, che
 	if len(files) == 0 {
 		return diagnostics
 	}
-	diagnostics = append(diagnostics, validateCompilerDirectives(fset, files, checker)...)
+	if len(syntaxErrors) == 0 {
+		diagnostics = append(diagnostics, validateCompilerDirectives(fset, files, checker)...)
+	}
 	m.from = spec.Path
 	var typeErrors ErrorList
 	config := checker.config(m, &typeErrors)
