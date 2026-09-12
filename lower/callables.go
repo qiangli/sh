@@ -406,6 +406,9 @@ func (e *emitter) importDecl(n *syntax.BashPPImport) error {
 			}
 		}
 		e.imports[alias] = p
+		if spec.Alias != nil {
+			e.importAliased[alias] = true
+		}
 		e.bind(alias)
 	}
 	return nil
@@ -530,6 +533,11 @@ func (e *emitter) importLines() string {
 	sort.Strings(aliases)
 	var out strings.Builder
 	for _, alias := range aliases {
+		if e.goSource && !e.importAliased[alias] {
+			// The input bound the package under its own name (C8).
+			fmt.Fprintf(&out, "import %s\n", strconv.Quote(e.imports[alias]))
+			continue
+		}
 		fmt.Fprintf(&out, "import %s %s\n", alias, strconv.Quote(e.imports[alias]))
 	}
 	return out.String()

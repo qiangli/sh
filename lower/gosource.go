@@ -6,6 +6,53 @@ import (
 	"strings"
 )
 
+// inferredDeclType reports a var declaration whose type the converter
+// inferred rather than the input wrote: the converter anchors a synthesized
+// type at the declared name, where a written type can never start. A const
+// keeps its inferred type: the converter materializes a constant by value,
+// and the defined type it inherits (`C2 = C1` with C1 of type E) travels
+// only through that spelling.
+func inferredDeclType(n *syntax.BashPPDecl) bool {
+	return n.Kw.Value == "var" && n.DeclType != nil && len(n.Init) > 0 && n.DeclType.Pos().IsValid() && n.DeclType.Pos() == n.Name.Pos()
+}
+
+// forwardedCallee unwraps the converter's forwarding closure for a generic
+// function used as a value — `func(a0 T0) R { return F[T](a0) }` for the
+// input's `F[T]` — back to the callee's own spelling, which Go accepts as a
+// function value directly. The closure is synthesized entirely at the
+// expression's position, so a literal whose keyword and closing brace share
+// one position is never a written one. Its body is the single call, bare or
+// returned; the parameters are what the call forwards.
+func (e *emitter) forwardedCallee(f *syntax.BashPPFuncLit) (string, bool, error) {
+	if f.Kw == nil || f.Body == nil || !f.Kw.Pos().IsValid() || f.Kw.Pos() != f.Body.Rbrace || len(f.Body.Stmts) != 1 {
+		return "", false, nil
+	}
+	var call *syntax.BashPPCall
+	switch n := f.Body.Stmts[0].Cmd.(type) {
+	case *syntax.BashPPCall:
+		call = n
+	case *syntax.BashPPReturn:
+		call = n.Call
+	}
+	if call == nil || len(call.Fun) == 0 || call.CalleeExpr != nil || call.FuncLit != nil {
+		return "", false, nil
+	}
+	// A method expression on a type parameter forwards through its first
+	// parameter as the receiver; that closure has no callee to name.
+	for _, group := range f.Params {
+		for _, name := range group.Names {
+			if name.Value == call.Fun[0].Value {
+				return "", false, nil
+			}
+		}
+	}
+	typeargs, err := e.typeArgs(call.TypeArgs)
+	if err != nil {
+		return "", true, err
+	}
+	return strings.Join(names(call.Fun), ".") + typeargs, true, nil
+}
+
 // Pure Go source uses native Go concurrency. Bash++ sessions, cancellation
 // carriers and shell scope are not part of the Go language's execution model.
 func (e *emitter) goSourceCommand(c syntax.Command) (string, bool, error) {

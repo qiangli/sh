@@ -35,6 +35,7 @@ type emitter struct {
 	functionGlobals    map[string]bool
 	panicSupport       bool
 	imports            map[string]string
+	importAliased      map[string]bool // import bindings the input spelled with an alias
 	callableParams     map[*syntax.BashPPField]string
 	resultTypes        []string
 	resultNames        []string
@@ -160,7 +161,7 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 	if !token.IsIdentifier(options.Package) || token.Lookup(options.Package).IsKeyword() {
 		return nil, ErrorList{{Code: CodeType, Msg: "invalid package name", Pos: file.Pos()}}
 	}
-	e := &emitter{goSource: file.GoSource, sourceFile: file, writtenNames: map[string]bool{}, inferredParams: map[*syntax.BashPPField]string{}, declaredTypes: map[string]*syntax.BashPPDecl{}, functionDecls: map[string]*syntax.BashPPFuncDecl{}, enumMembers: map[string][]*syntax.Lit{}, options: options, funcs: map[string]bool{}, scopes: []map[string]bool{{}}, globals: map[string]bool{}, visibleGlobals: map[string]bool{}, imports: map[string]string{}, callableParams: map[*syntax.BashPPField]string{}, dotNames: map[string]bool{}, declaredGlobals: map[string]bool{}, typeNames: map[string]bool{}, globalTypes: globalTypes}
+	e := &emitter{goSource: file.GoSource, sourceFile: file, writtenNames: map[string]bool{}, inferredParams: map[*syntax.BashPPField]string{}, declaredTypes: map[string]*syntax.BashPPDecl{}, functionDecls: map[string]*syntax.BashPPFuncDecl{}, enumMembers: map[string][]*syntax.Lit{}, options: options, funcs: map[string]bool{}, scopes: []map[string]bool{{}}, globals: map[string]bool{}, visibleGlobals: map[string]bool{}, imports: map[string]string{}, importAliased: map[string]bool{}, callableParams: map[*syntax.BashPPField]string{}, dotNames: map[string]bool{}, declaredGlobals: map[string]bool{}, typeNames: map[string]bool{}, globalTypes: globalTypes}
 	e.moduleImporter = newModuleImporter(options.Dir)
 	if options.Importer != nil {
 		e.moduleImporter = options.Importer
@@ -254,7 +255,13 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 		return true
 	})
 	var declarations, body strings.Builder
+	// Under goSource the declarations are re-emitted in the order the input
+	// wrote them (C11): each statement's declaration text is captured here
+	// with the statement's source position and written sorted, instead of
+	// flushing globalDecls ahead of declarations.
+	var sourceOrder []sourceDecl
 	for _, s := range file.Stmts {
+		globalStart, declStart := e.globalDecls.Len(), declarations.Len()
 		if f, ok := s.Cmd.(*syntax.BashPPFuncDecl); ok {
 			if err := e.statementFlags(s); err != nil {
 				return nil, err
@@ -319,6 +326,11 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 			}
 			body.WriteString(text)
 		}
+		if e.goSource {
+			if chunk := e.globalDecls.String()[globalStart:] + declarations.String()[declStart:]; chunk != "" {
+				sourceOrder = append(sourceOrder, sourceDecl{pos: s.Pos(), text: chunk})
+			}
+		}
 	}
 	imports := []string{}
 	if e.mixedShell {
@@ -373,8 +385,21 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 	if e.execution && e.globalTypes == nil && len(e.globals) > 0 {
 		fmt.Fprintf(&raw, "var %sprogram *%srt.Program\n", e.prefix, e.prefix)
 	}
-	raw.WriteString(e.globalDecls.String())
-	raw.WriteString(declarations.String())
+	if e.goSource {
+		// The converter buckets a package's declarations (vars, then
+		// types and consts, then funcs) for the interpreter's
+		// forward-reference rule; Go orders package-level declarations
+		// itself, so the generated Go keeps the input's order.
+		sort.SliceStable(sourceOrder, func(i, j int) bool {
+			return sourceOrder[i].before(sourceOrder[j])
+		})
+		for _, d := range sourceOrder {
+			raw.WriteString(d.text)
+		}
+	} else {
+		raw.WriteString(e.globalDecls.String())
+		raw.WriteString(declarations.String())
+	}
 	tail := ""
 	if e.bridge && !e.goSource {
 		tail = e.prefix + "rt.Exit()\n"
@@ -541,6 +566,22 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 		}
 	}
 	return result, nil
+}
+
+// sourceDecl is one top-level declaration's generated text keyed by the
+// position of the statement it came from, for source-order emission.
+type sourceDecl struct {
+	pos  syntax.Pos
+	text string
+}
+
+// before orders declarations by source offset; a declaration without a
+// position (synthetic) sorts after every positioned one.
+func (d sourceDecl) before(o sourceDecl) bool {
+	if !d.pos.IsValid() || !o.pos.IsValid() {
+		return d.pos.IsValid() && !o.pos.IsValid()
+	}
+	return d.pos.Offset() < o.pos.Offset()
 }
 
 func (e *emitter) sourceMappings(source []byte) []Mapping {
@@ -1005,7 +1046,10 @@ func (e *emitter) command(c syntax.Command) (string, error) {
 			return "", e.fail(n, CodeUnsupported, "composite declaration")
 		}
 		typ := ""
-		if n.DeclTypeExpr != nil {
+		if e.goSource && inferredDeclType(n) {
+			// The converter spells the inferred type of `var x = f()` for
+			// the interpreter; Go infers it from the initializer itself.
+		} else if n.DeclTypeExpr != nil {
 			x, err := e.typeExpr(n.DeclTypeExpr)
 			if err != nil {
 				return "", err
@@ -1383,6 +1427,11 @@ func (e *emitter) forStmt(n *syntax.BashPPFor) (string, error) {
 func (e *emitter) expr(x syntax.BashPPExpr) (string, error) {
 	switch n := x.(type) {
 	case *syntax.BashPPFuncLit:
+		if e.goSource {
+			if text, ok, err := e.forwardedCallee(n); ok || err != nil {
+				return text, err
+			}
+		}
 		return e.literal(n)
 	case *syntax.BashPPCall:
 		return e.call(n)
