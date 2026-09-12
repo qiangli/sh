@@ -86,7 +86,7 @@ func (e *emitter) literal(f *syntax.BashPPFuncLit) (string, error) {
 		body = e.prefix + "closureProgram := *" + p + "\n" + p + " = &" + e.prefix + "closureProgram\n" + p + ".Bindings = " + captured + "\n" + p + " = " + p + ".LexicalScope(nil)\n" + body
 		return "func() func" + signature + " { " + captured + " := " + parent + ".LexicalScope(nil).Bindings\nreturn func" + signature + " {\n" + body + "}\n}()", nil
 	}
-	return "func" + signature + " {\n" + body + "}", nil
+	return "func" + signature + e.bodyText(f.Body, body), nil
 }
 func (e *emitter) signature(params, results []*syntax.BashPPField, body *syntax.Block) (string, error) {
 	p, err := e.fields(params)

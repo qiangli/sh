@@ -17,6 +17,12 @@ import (
 // FINDINGS.md); a class is closed when its generated Go, after gofmt and
 // dropping the package clause, the "// lower:N" markers, their gofmt "//"
 // separators and the "//line" directives, is byte-identical to the input.
+// One layout detail belongs to the directives: gofmt separates a top-level
+// declaration from a comment group before it (a doc comment or a
+// free-floating one alike) with a blank line, so a per-declaration //line
+// directive costs a blank line between adjacent declarations that the input
+// may not have. The comparison therefore takes both sides with a blank line
+// before every top-level declaration.
 // Classes not yet closed are listed in fidelityOpen and are still exercised
 // so that their output stays gofmt-stable.
 var fidelityOpen = map[string]bool{
@@ -25,8 +31,6 @@ var fidelityOpen = map[string]bool{
 	"untyped-constants":        true, // C3
 	"reparenthesised-exprs":    true, // C4
 	"main-rename":              true, // C5
-	"guard-prologue":           true, // C6
-	"explicit-deref":           true, // C7
 	"import-aliasing":          true, // C8
 	"type-assertion":           true, // C9
 	"synthetic-receiver-names": true, // C10
@@ -37,9 +41,7 @@ var fidelityOpen = map[string]bool{
 // removed but whose reproducer still carries a class that is open, the
 // spellings that rewrite used to emit; none may appear in the output.
 var fidelityLanded = map[string][]string{
-	"guard-prologue": {"import ", "defer func()"}, // C6
-	"explicit-deref": {"(*(", ")."},               // C7
-	"main-rename":    {"sourceMain"},              // C5
+	"main-rename": {"sourceMain"}, // C5
 }
 
 func TestGoSourceFidelity(t *testing.T) {
@@ -95,7 +97,8 @@ func TestGoSourceFidelity(t *testing.T) {
 
 // fidelityNormalize gofmts src and drops the package clause, the generated
 // header, the "// lower:N" markers with their "//" separators and the
-// "//line" directives.
+// "//line" directives, then puts a blank line before every top-level
+// declaration (and the comment group attached to it).
 func fidelityNormalize(t *testing.T, src []byte) string {
 	t.Helper()
 	formatted, err := format.Source(src)
@@ -105,6 +108,15 @@ func fidelityNormalize(t *testing.T, src []byte) string {
 	var out []string
 	marker := false
 	for _, line := range strings.Split(string(formatted), "\n") {
+		if fidelityDecl(line) {
+			start := len(out)
+			for start > 0 && strings.HasPrefix(out[start-1], "//") {
+				start--
+			}
+			if start > 0 && out[start-1] != "" {
+				out = append(out[:start], append([]string{""}, out[start:]...)...)
+			}
+		}
 		trimmed := strings.TrimSpace(line)
 		switch {
 		case strings.HasPrefix(trimmed, "// lower:"):
@@ -125,4 +137,14 @@ func fidelityNormalize(t *testing.T, src []byte) string {
 		out = append(out, line)
 	}
 	return strings.TrimSpace(strings.Join(out, "\n")) + "\n"
+}
+
+// fidelityDecl reports a line that opens a top-level declaration.
+func fidelityDecl(line string) bool {
+	for _, kw := range []string{"func ", "type ", "var ", "const ", "import "} {
+		if strings.HasPrefix(line, kw) {
+			return true
+		}
+	}
+	return false
 }

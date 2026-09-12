@@ -843,7 +843,16 @@ func (e *emitter) function(f *syntax.BashPPFuncDecl) (string, error) {
 		body = e.program() + " = " + e.program() + ".LexicalScope(" + e.lexicalNames(e.functionGlobals) + ")\n" + body
 		return e.runtimeFunction(f, signature, body, generics)
 	}
-	return e.mark(f) + "func " + recv + e.goName(f.Name.Value) + generics + signature + " {\n" + body + "}\n", nil
+	return e.mark(f) + "func " + recv + e.goName(f.Name.Value) + generics + signature + e.bodyText(f.Body, body) + "\n", nil
+}
+
+// bodyText lays out an emitted function body. gofmt keeps an empty body whose
+// braces share a source line as `{}`, so Go source gets the same shape back.
+func (e *emitter) bodyText(b *syntax.Block, body string) string {
+	if e.goSource && body == "" && b != nil && b.Lbrace.IsValid() && b.Lbrace.Line() == b.Rbrace.Line() {
+		return " {}"
+	}
+	return " {\n" + body + "}"
 }
 func scalarType(s string) bool {
 	switch s {
