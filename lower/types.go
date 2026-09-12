@@ -100,6 +100,12 @@ func (e *emitter) typeExpr(t syntax.BashPPTypeExpr) (string, error) {
 		fields, err := e.structFields(n.Fields)
 		return "struct {" + fields + "}", err
 	case *syntax.BashPPInterfaceType:
+		// The converter keeps a source-written `any` as the interface node
+		// whose keyword literal is the identifier itself; Go spells the
+		// empty interface either way, so the input's spelling is kept.
+		if e.goSource && n.Interface != nil && n.Interface.Value == "any" && len(n.Elems) == 0 && len(n.Methods) == 0 {
+			return "any", nil
+		}
 		var parts []string
 		// Methods is a compatibility projection of Elems. Emitting both duplicates
 		// method declarations and loses the positioned embedded-element ordering.

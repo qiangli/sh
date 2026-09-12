@@ -29,7 +29,6 @@ var fidelityOpen = map[string]bool{
 	"comments-dropped": true, // C1
 	"import-aliasing":  true, // C8
 	"type-assertion":   true, // C9
-	"decl-reordering":  true, // C11
 }
 
 // fidelityLanded records, for classes whose emitter rewrite is already
