@@ -29,7 +29,7 @@ func TestGoSourceOrderedOutputInterleaving(t *testing.T) {
 		want := runOrderedNative(t, path)
 		got := runOrderedInterpreter(t, path, string(source))
 		if got.status != want.status || got.combined != want.combined {
-			t.Skipf("requires native bridge output barrier: run %d interpreter=%+v native=%+v", run, got, want)
+			t.Fatalf("native bridge output barrier violated: run %d interpreter=%+v native=%+v", run, got, want)
 		}
 		if !orderedOutputEqual(got, want) {
 			t.Fatal("equal captures compared unequal")

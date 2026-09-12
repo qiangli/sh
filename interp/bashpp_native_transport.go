@@ -14,7 +14,7 @@ func validateLocalTransport(req bashPPEvalRequest, q bashPPBridgeRequest) error 
 	}
 	alias, name, selected := strings.Cut(q.Selector, ".")
 	nativeWriterFormat := selected && req.Imports[alias] == "fmt" && (name == "Fprint" || name == "Fprintln" || name == "Fprintf")
-	if nativeWriterFormat && (len(q.Args) == 0 || q.Args[0].Kind != "handle") {
+	if nativeWriterFormat && !bashPPDependencyOwnedWriter(q.Args) {
 		return fmt.Errorf("gosource: fmt.%s requires a dependency-owned writer; original Write callbacks are unsupported", name)
 	}
 	local := map[string]bashPPLocalType{}
@@ -149,6 +149,22 @@ func validateLocalTransport(req bashPPEvalRequest, q bashPPBridgeRequest) error 
 		}
 	}
 	return fmt.Errorf("gosource: dependency mutation of interpreter-owned references is unsupported for %s", q.Selector)
+}
+
+// bashPPDependencyOwnedWriter reports a writer argument the dependency itself
+// stores: a native handle, or an original pointer whose pointee is one. The
+// worker binds such a pointer to the handle's own storage, so formatted writes
+// land in the value later reads observe. Anything else — an original type's
+// own Write method, a rebuilt copy — stays refused.
+func bashPPDependencyOwnedWriter(args []bashPPBridgeValue) bool {
+	if len(args) == 0 {
+		return false
+	}
+	w := args[0]
+	if w.Kind == "handle" {
+		return true
+	}
+	return w.Kind == "pointer" && len(w.Elements) == 1 && w.Elements[0].Kind == "handle"
 }
 
 // nativePointerWritebackAllowed reports a call whose pointer arguments all

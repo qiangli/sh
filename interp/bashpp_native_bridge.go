@@ -131,6 +131,7 @@ type bashPPNativeSession struct {
 	closeOnce           sync.Once
 	cleanup             func()
 	stopSignals         func()
+	drains              []*bashPPNativeOutputDrain
 	imports             string
 	locals              string
 	embeds              string
@@ -174,6 +175,13 @@ func (s *bashPPNativeSession) closeCanceled(cause error) {
 		}
 		if s.stopSignals != nil {
 			s.stopSignals()
+		}
+		s.closeDrains()
+		if s.cmd != nil && s.cmd.Process != nil {
+			// The child is gone by now, so the copiers can reach EOF; waiting
+			// here makes the program's final output visible before the session
+			// reports closed.
+			s.waitDrains()
 		}
 		if s.cleanup != nil {
 			s.cleanup()
@@ -255,6 +263,33 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 	cmd.Args = append([]string(nil), req.Argv...)
 	cmd.Dir, cmd.Env = req.Dir, req.RuntimeEnv
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = req.Stdin, req.Stdout, req.Stderr
+	// A non-file writer receives child output through a pipe this session owns,
+	// so each answered request can drain its output before the interpreter's
+	// next direct write; see bashpp_native_output.go. One writer given for both
+	// streams shares one pipe, exactly as os/exec would share one descriptor.
+	if _, isFile := req.Stdout.(*os.File); !isFile && req.Stdout != nil {
+		drain, err := newBashPPNativeOutputDrain(req.Stdout)
+		if err != nil {
+			cleanup()
+			return err
+		}
+		s.drains = append(s.drains, drain)
+		cmd.Stdout = drain.write
+	}
+	if _, isFile := req.Stderr.(*os.File); !isFile && req.Stderr != nil {
+		if bashPPSameWriter(req.Stderr, req.Stdout) {
+			cmd.Stderr = cmd.Stdout
+		} else {
+			drain, err := newBashPPNativeOutputDrain(req.Stderr)
+			if err != nil {
+				s.closeDrains()
+				cleanup()
+				return err
+			}
+			s.drains = append(s.drains, drain)
+			cmd.Stderr = drain.write
+		}
+	}
 	bashPPNativeProcessGroup(cmd)
 	cmd.Cancel = func() error {
 		s.mu.Lock()
@@ -264,6 +299,7 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 		return nil
 	}
 	if err = cmd.Start(); err != nil {
+		s.closeDrains()
 		cleanup()
 		return err
 	}
@@ -285,6 +321,9 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 		conn := s.conn
 		s.mu.Unlock()
 		close(s.done)
+		// The child's descriptors are gone; retiring the host write ends lets
+		// each copier drain to EOF and flush the program's final output.
+		s.closeDrains()
 		_ = listener.Close()
 		if conn != nil {
 			// Serialize local close with writes and cancellation provenance.
@@ -433,6 +472,9 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 	for {
 		select {
 		case callback := <-callbacks:
+			// The callback body may write to the caller's streams directly;
+			// child output raised before the callback must land first.
+			s.drainOutputs()
 			s.serveCallback(ctx, req.CallbackOwner, callback)
 			if owner := req.CallbackOwner; owner != nil {
 				if owner.exit.err != nil {
@@ -443,6 +485,9 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 				}
 			}
 		case reply := <-wait:
+			// The reply crossed the control channel after the dependency's own
+			// writes; the barrier keeps the next interpreted statement behind them.
+			s.drainOutputs()
 			if err := applyNativeSliceBuffers(req.CallbackOwner, q, reply); err != nil {
 				return nil, err
 			}
@@ -485,6 +530,7 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 			s.closeCanceled(ctx.Err())
 			return nil, ctx.Err()
 		case <-s.done:
+			s.waitDrains()
 			s.mu.Lock()
 			err := s.waitErr
 			s.mu.Unlock()

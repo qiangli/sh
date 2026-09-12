@@ -26,6 +26,7 @@ func (r *Runner) bashPPBridgeHandles(call *syntax.BashPPCall) bool {
 		}
 		return r.bashPPNativeExpr(selector.X) ||
 			r.goSourceNativeScalarReceiver(selector.X) ||
+			r.bashPPNativePointerExpr(selector.X) ||
 			r.bashPPPromotedNativeReceiver(selector.X, selector.Sel.Value) != nil
 	}
 	if len(call.Fun) < 1 {
@@ -38,7 +39,8 @@ func (r *Runner) bashPPBridgeHandles(call *syntax.BashPPCall) bool {
 		if r.bashPPNativeCellValue(call.Fun[0].Value) != nil {
 			return true
 		}
-		if len(call.Fun) == 2 && r.goSourceNativeScalarReceiver(&syntax.BashPPIdent{Name: call.Fun[0]}) {
+		if len(call.Fun) == 2 && (r.goSourceNativeScalarReceiver(&syntax.BashPPIdent{Name: call.Fun[0]}) ||
+			r.bashPPNativePointerExpr(&syntax.BashPPIdent{Name: call.Fun[0]})) {
 			return true
 		}
 		var receiver syntax.BashPPExpr = &syntax.BashPPIdent{Name: call.Fun[0]}
