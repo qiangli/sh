@@ -416,7 +416,7 @@ func (e *emitter) selectorExpr(n *syntax.BashPPSelectorExpr) (string, error) {
 	if n.Sel == nil {
 		return "", e.fail(n.X, CodeExpr, "missing selector name")
 	}
-	return "(" + value + ")." + n.Sel.Value, nil
+	return e.group(value) + "." + n.Sel.Value, nil
 }
 func (e *emitter) typeAssertExpr(n *syntax.BashPPTypeAssertExpr) (string, error) {
 	value, err := e.expr(n.X)
@@ -430,7 +430,7 @@ func (e *emitter) typeAssertExpr(n *syntax.BashPPTypeAssertExpr) (string, error)
 			return "", err
 		}
 	}
-	return "(" + value + ").(" + typ + ")", nil
+	return e.group(value) + ".(" + typ + ")", nil
 }
 
 // nativeBuiltin identifies predeclared Go operations whose typed behavior uses

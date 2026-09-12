@@ -1419,14 +1419,14 @@ func (e *emitter) expr(x syntax.BashPPExpr) (string, error) {
 		return "(" + v + ")", err
 	case *syntax.BashPPUnaryExpr:
 		v, err := e.expr(n.X)
-		return "(" + n.Op.Value + v + ")", err
+		return e.group(n.Op.Value + v), err
 	case *syntax.BashPPBinaryExpr:
 		l, err := e.expr(n.X)
 		if err != nil {
 			return "", err
 		}
 		r, err := e.expr(n.Y)
-		return "(" + l + " " + n.Op.Value + " " + r + ")", err
+		return e.group(l + " " + n.Op.Value + " " + r), err
 	case *syntax.BashPPConvertExpr:
 		if e.goSource && n.ConvTypeExpr != nil {
 			target, err := e.typeExpr(n.ConvTypeExpr)
@@ -1434,7 +1434,7 @@ func (e *emitter) expr(x syntax.BashPPExpr) (string, error) {
 				return "", err
 			}
 			v, err := e.expr(n.X)
-			return "(" + target + ")(" + v + ")", err
+			return conversionType(target) + "(" + v + ")", err
 		}
 		if !scalarType(n.ConvType.Value) && !(e.goSource && (e.typeNames[n.ConvType.Value] || n.ConvType.Value == "complex64" || n.ConvType.Value == "complex128")) {
 			return "", e.fail(n, CodeUnsupported, "non-scalar conversion")
@@ -1444,6 +1444,28 @@ func (e *emitter) expr(x syntax.BashPPExpr) (string, error) {
 	default:
 		return "", e.fail(x, CodeUnsupported, "typed expression not implemented: "+nodeName(x))
 	}
+}
+
+// conversionType spells a conversion's type as its callee. The converter
+// resolves the parentheses Go requires around a pointer, channel or function
+// type in that position, so they are put back from the type's own spelling.
+func conversionType(typ string) string {
+	for _, prefix := range []string{"*", "<-", "chan ", "func"} {
+		if strings.HasPrefix(typ, prefix) {
+			return "(" + typ + ")"
+		}
+	}
+	return typ
+}
+
+// group parenthesises an emitted operand. The Bash++ path builds expressions
+// the shell parser never grouped, so every operator and callee is wrapped; Go
+// source carries its own BashPPParenExpr nodes and gets its precedence back.
+func (e *emitter) group(text string) string {
+	if e.goSource {
+		return text
+	}
+	return "(" + text + ")"
 }
 func (e *emitter) call(c *syntax.BashPPCall) (string, error) {
 	if c.CalleeExpr != nil {
@@ -1462,7 +1484,7 @@ func (e *emitter) call(c *syntax.BashPPCall) (string, error) {
 		if c.Ellipsis.IsValid() {
 			spread = "..."
 		}
-		return "(" + callee + ")(" + strings.Join(args, ",") + spread + ")", nil
+		return e.group(callee) + "(" + strings.Join(args, ",") + spread + ")", nil
 	}
 	frame := e.resultCallFrame
 	e.resultCallFrame = ""
@@ -1507,7 +1529,7 @@ func (e *emitter) call(c *syntax.BashPPCall) (string, error) {
 		if e.execution {
 			args = append([]string{invocation, e.callSite(c, "func")}, args...)
 		}
-		return "(" + callee + ")(" + strings.Join(args, ",") + ")", nil
+		return e.group(callee) + "(" + strings.Join(args, ",") + ")", nil
 	}
 	if len(c.Fun) == 0 {
 		return "", e.fail(c, CodeExpr, "missing callable")
