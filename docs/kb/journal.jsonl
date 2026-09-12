@@ -21,3 +21,5 @@
 {"op":"add","slug":"resolve-collection-metadata-through-named-types","tool":"codex:gpt5.6-sol-c","host":"dragon","episode":"weave-issue-29","at":"2026-09-07T02:24:43.293748Z"}
 {"op":"validate","slug":"resolve-collection-metadata-through-named-types","tool":"codex:gpt5.6-sol-c","host":"dragon","episode":"weave-issue-29","at":"2026-09-07T02:24:49.660288Z"}
 {"op":"add","slug":"handle-generic-dependency-helpers-at-the-interpreter-boundary","tool":"codex-gpt-5.5-x","host":"dragon","episode":"weave-issue-76","at":"2026-09-09T18:36:27.112827Z"}
+{"op":"add","slug":"dereference-pointer-valued-parents-before-structured-writes","tool":"codex-gpt5.6-sol-y","host":"dragon","episode":"weave-issue-129","at":"2026-09-12T05:19:15.940127Z"}
+{"op":"validate","slug":"dereference-pointer-valued-parents-before-structured-writes","tool":"codex-gpt5.6-sol-y","host":"dragon","episode":"weave-issue-129","at":"2026-09-12T05:19:20.962855Z"}
