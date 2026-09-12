@@ -610,6 +610,18 @@ func (r *Runner) bashPPReadExpr(expr syntax.BashPPExpr) (any, *bashPPCollectionM
 			return nil, nil, err
 		}
 		return pointer, bashPPPointerMeta(r.bashPPPointerExprType(expr, pointer)), nil
+	case *syntax.BashPPConvertExpr:
+		if value, meta, handled, err := r.bashPPConvertToCollection(x); handled {
+			return value, meta, err
+		}
+		if target, nilPointer := r.bashPPNilPointerConversion(x); nilPointer {
+			return nil, bashPPPointerMeta(target), nil
+		}
+		scalar, err := r.bashPPEvalScalarExpr(x)
+		if err != nil {
+			return nil, nil, err
+		}
+		return bashPPScalarAny(scalar.value), nil, nil
 	case *syntax.BashPPCompositeLit:
 		return r.bashPPEvalComposite(x, nil)
 	case *syntax.BashPPIdent:
