@@ -27,7 +27,6 @@ import (
 // so that their output stays gofmt-stable.
 var fidelityOpen = map[string]bool{
 	"comments-dropped": true, // C1
-	"import-aliasing":  true, // C8
 	"type-assertion":   true, // C9
 }
 

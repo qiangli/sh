@@ -261,7 +261,13 @@ func Load(sources []Source, options Options) (*Program, error) {
 		}
 		// Only live package bindings need an alias. Blank imports and package
 		// bindings with no selector use must not create unused alias imports
-		// in the lowered file.
+		// in the lowered file. The program's own imports keep the file's
+		// spelling (C8): the checker already forbids a package-level name in
+		// a file block, so in the flat file the only collision left is a
+		// name the program's files bind to two different paths, and only the
+		// later binding takes an alias. A linked package's imports are
+		// hoisted into the same file and always take one.
+		bound := map[string]string{}
 		for fi, f := range lc.files {
 			for ii, spec := range f.Imports {
 				var obj types.Object
@@ -272,15 +278,22 @@ func Load(sources []Source, options Options) (*Program, error) {
 				}
 				if obj != nil && obj.Name() != "_" && obj.Name() != "." {
 					if pkgname, ok := obj.(*types.PkgName); ok {
-						if liveImportPaths[pkgname.Imported().Path()] {
-							if lc == c {
+						path := pkgname.Imported().Path()
+						if liveImportPaths[path] {
+							if lc != c {
+								lc.renames[obj] = fmt.Sprintf("%simport_%d_%d_%d", c.prefix, pi, fi, ii)
+							} else if prev, ok := bound[obj.Name()]; ok && prev != path {
 								lc.renames[obj] = fmt.Sprintf("%simport_%d_%d", c.prefix, fi, ii)
 							} else {
-								lc.renames[obj] = fmt.Sprintf("%simport_%d_%d_%d", c.prefix, pi, fi, ii)
+								bound[obj.Name()] = path
 							}
 						}
-						if _, linked := mapped[pkgname.Imported().Path()]; !linked {
-							importAliases[pkgname.Imported().Path()] = lc.renames[obj]
+						if _, linked := mapped[path]; !linked {
+							alias := lc.renames[obj]
+							if alias == "" {
+								alias = obj.Name()
+							}
+							importAliases[path] = alias
 						}
 					}
 				}

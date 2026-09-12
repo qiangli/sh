@@ -573,10 +573,14 @@ func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, err
 				if named, ok := obj.Type().(*types.Named); ok && named.TypeParams().Len() > 0 {
 					continue
 				}
+				// A package bound under its own name (`import "strings"`
+				// from Go source) is keyed once: alias and path coincide.
+				keyed := map[string]bool{}
 				for _, key := range append(keyNames, path) {
-					if strings.HasPrefix(key, "_:") || strings.HasPrefix(key, ".:") {
+					if strings.HasPrefix(key, "_:") || strings.HasPrefix(key, ".:") || keyed[key] {
 						continue
 					}
+					keyed[key] = true
 					fmt.Fprintf(&typeEntries, "%q: reflect.TypeFor[%s.%s](),\n", key+"."+name, alias, name)
 				}
 				used = true
