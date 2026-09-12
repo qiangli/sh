@@ -19,6 +19,20 @@ func (e *emitter) goName(name string) string {
 	return name
 }
 
+// goDirectives spells the compiler directives the converter attached to a
+// Go-source declaration (Stmt.Comments, the //go:embed path) so gc sees them
+// on the declaration they came from: //go:embed on a var, //go:noinline,
+// //go:norace, //go:nosplit and the rest on a func.
+func (e *emitter) goDirectives(s *syntax.Stmt) string {
+	var out strings.Builder
+	for _, comment := range s.Comments {
+		if strings.HasPrefix(comment.Text, "go:") {
+			out.WriteString("//" + comment.Text + "\n")
+		}
+	}
+	return out.String()
+}
+
 // nativeMain reports whether the source's own func main is the program entry:
 // Go source that declares main and needs no generated boundary around it. The
 // converter's synthetic entry calls are then folded into a Go init function
@@ -218,13 +232,7 @@ func (e *emitter) globalStatement(s *syntax.Stmt) (string, error) {
 		}
 	}
 	if e.goSource {
-		var directives strings.Builder
-		for _, comment := range s.Comments {
-			if strings.HasPrefix(comment.Text, "go:embed ") || strings.HasPrefix(comment.Text, "go:embed\t") {
-				directives.WriteString("//" + comment.Text + "\n")
-			}
-		}
-		e.globalDecls.WriteString(e.mark(s.Cmd) + directives.String() + line + "\n")
+		e.globalDecls.WriteString(e.mark(s.Cmd) + e.goDirectives(s) + line + "\n")
 		return "", nil
 	}
 	if constant {

@@ -10,6 +10,7 @@ import (
 
 	"mvdan.cc/sh/v3/gosource"
 	"mvdan.cc/sh/v3/lower"
+	"mvdan.cc/sh/v3/syntax"
 )
 
 // Sprint 152 decision D1: a Go-only input lowers to itself. The reproducers
@@ -149,4 +150,42 @@ func fidelityDecl(line string) bool {
 		}
 	}
 	return false
+}
+
+// TestGoSourceDirectives is the lower/ half of spike F class C1: a //go:
+// directive the converter attaches to a declaration (Stmt.Comments, the
+// //go:embed path) is emitted on that declaration. The converter attaches
+// only //go:embed today, so the test attaches the func directive itself.
+func TestGoSourceDirectives(t *testing.T) {
+	src := []byte("package main\n\n//go:noinline\nfunc F(x int) int {\n\treturn x\n}\n\n//go:norace\nfunc main() {\n\tvar x int\n\tprintln(F(x))\n}\n")
+	program, err := gosource.Parse(bytes.NewReader(src), "directives.go", gosource.Options{RunMain: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stmt := range program.File.Stmts {
+		if f, ok := stmt.Cmd.(*syntax.BashPPFuncDecl); ok {
+			switch f.Name.Value {
+			case "F":
+				stmt.Comments = append(stmt.Comments, syntax.Comment{Text: "go:noinline"})
+			case "main":
+				stmt.Comments = append(stmt.Comments, syntax.Comment{Text: "go:norace"})
+			}
+		}
+	}
+	result, err := lower.Compile(program.File, lower.Options{Origin: "directives.go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	formatted, err := format.Source(result.Source)
+	if err != nil || !bytes.Equal(formatted, result.Source) {
+		t.Errorf("generated != gofmt(generated): %v\n%s", err, result.Source)
+	}
+	for _, want := range []string{"//go:noinline\n//line directives.go:4:1\nfunc F(", "//go:norace\n//line directives.go:9:1\nfunc main("} {
+		if !bytes.Contains(result.Source, []byte(want)) {
+			t.Errorf("missing %q\n%s", want, result.Source)
+		}
+	}
+	if want, got := fidelityNormalize(t, src), fidelityNormalize(t, result.Source); want != got {
+		t.Errorf("generated Go is not the input\n--- want\n%s\n--- got\n%s", want, got)
+	}
 }

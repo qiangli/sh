@@ -263,6 +263,12 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 			if err != nil {
 				return nil, err
 			}
+			if directives := e.goDirectives(s); directives != "" && e.goSource {
+				// Between the marker and the declaration, where gofmt
+				// keeps a directive block.
+				marker, decl, _ := strings.Cut(text, "\n")
+				text = marker + "\n" + directives + decl
+			}
 			declarations.WriteString(text)
 		} else {
 			var text string
