@@ -552,25 +552,23 @@ func (r *Runner) bashPPCellForInterfaceExpr(expr syntax.BashPPExpr) (*bashPPCell
 		if cell == nil {
 			return nil, nil, fmt.Errorf("BASHPP-EINTERFACE-VALUE: undefined value %s", id.Name.Value)
 		}
-		if cell.interfaceValue != nil {
-			if cell.interfaceValue.nilIface {
-				return cell, cell.declType, nil
-			}
-			return cell.interfaceValue.cell, cell.interfaceValue.dynamic, nil
+		return r.bashPPInterfaceSourceCell(cell, id.Name.Value)
+	}
+	// A call's result is the cell the callee returned: an interface result
+	// contributes its own dynamic value, a typed one its declared type. Read
+	// as a scalar it would keep only a type NAME, which for `List[int]` is
+	// not a type at all.
+	if call, ok := expr.(*syntax.BashPPCall); ok && r.bashPPGoSource {
+		cell, err := r.goSourceValueCell(call)
+		if err != nil {
+			return nil, nil, err
 		}
-		actual := cell.declType
-		if actual == nil {
-			if meta := bashPPCellMeta(cell); meta != nil {
-				actual = meta.typ
-			}
+		if cell.vr.Kind != expand.Object && cell.interfaceValue == nil && cell.declType == nil && !cell.pointer {
+			// A plain scalar result: the scalar path below names its default
+			// type and is what every other scalar takes.
+			return r.bashPPScalarInterfaceCell(expr)
 		}
-		if actual == nil && cell.typeName != "" {
-			actual, _ = bashPPScalarNamedType(cell.typeName)
-		}
-		if actual == nil {
-			return nil, nil, fmt.Errorf("BASHPP-EINTERFACE-VALUE: %s has no dynamic type", id.Name.Value)
-		}
-		return cell, actual, nil
+		return r.bashPPInterfaceSourceCell(cell, "call result")
 	}
 	// A dynamic value need not be a variable. `var i I = T{"hello"}`,
 	// `i = &T{}` and `i = 42` all store a value the interface then owns, so
@@ -604,6 +602,13 @@ func (r *Runner) bashPPCellForInterfaceExpr(expr syntax.BashPPExpr) (*bashPPCell
 		}
 		return cell, cell.declType, nil
 	}
+	return r.bashPPScalarInterfaceCell(expr)
+}
+
+// bashPPScalarInterfaceCell materializes a scalar expression as the cell an
+// interface stores, typed by its named type or its untyped constant's Go
+// default type.
+func (r *Runner) bashPPScalarInterfaceCell(expr syntax.BashPPExpr) (*bashPPCell, syntax.BashPPTypeExpr, error) {
 	value, err := r.bashPPEvalScalarExpr(expr)
 	if err != nil {
 		return nil, nil, err
@@ -621,6 +626,31 @@ func (r *Runner) bashPPCellForInterfaceExpr(expr syntax.BashPPExpr) (*bashPPCell
 		scalarKind: value.value.Kind(),
 		typeName:   name,
 		declType:   actual,
+	}
+	return cell, actual, nil
+}
+
+// bashPPInterfaceSourceCell reads an existing cell as an interface source:
+// an interface value contributes its dynamic value, anything else is its own
+// value with the type it declares or carries.
+func (r *Runner) bashPPInterfaceSourceCell(cell *bashPPCell, what string) (*bashPPCell, syntax.BashPPTypeExpr, error) {
+	if cell.interfaceValue != nil {
+		if cell.interfaceValue.nilIface {
+			return cell, cell.declType, nil
+		}
+		return cell.interfaceValue.cell, cell.interfaceValue.dynamic, nil
+	}
+	actual := cell.declType
+	if actual == nil {
+		if meta := bashPPCellMeta(cell); meta != nil {
+			actual = meta.typ
+		}
+	}
+	if actual == nil && cell.typeName != "" {
+		actual, _ = bashPPScalarNamedType(cell.typeName)
+	}
+	if actual == nil {
+		return nil, nil, fmt.Errorf("BASHPP-EINTERFACE-VALUE: %s has no dynamic type", what)
 	}
 	return cell, actual, nil
 }
