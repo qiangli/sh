@@ -168,6 +168,10 @@ func decode(v value, target reflect.Type)(reflect.Value,error){
  if v.Kind=="handle" {handles.Lock();result=handles.values[v.Handle];handles.Unlock();if !result.IsValid(){return result,fmt.Errorf("unknown native handle %d",v.Handle)}} else {
   typ:=resolveType(v.Type)
   if v.Type!="" && typ==nil {return result,fmt.Errorf("unregistered bridge type %q",v.Type)}
+  // A scalar carrying a declared interface identity — an element of an
+  // original ...any spread — decodes at its own kind; the interface stays
+  // the assignability target below.
+  if typ!=nil&&typ.Kind()==reflect.Interface{switch v.Kind{case "string","bool","int","uint","float","complex":typ=nil}}
   if typ==nil && target!=nil && target.Kind()!=reflect.Interface {typ=target}
   if typ==nil {switch v.Kind{case "string":typ=types["string"];case "bool":typ=types["bool"];case "int":typ=types["int"];case "uint":typ=types["uint"];case "float":typ=types["float64"];case "complex":typ=types["complex128"]}}
   if typ==nil{return result,fmt.Errorf("missing bridge type for %s",v.Kind)}
