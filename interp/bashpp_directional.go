@@ -71,6 +71,13 @@ func (r *Runner) bashPPCheckChannelResult(fn *bashPPFunc, required syntax.BashPP
 	if r.goSourceNativeChannelFits(source, typ) {
 		return true
 	}
+	// A bare nil return has not acquired its declared channel type yet. The
+	// result-context coercion immediately after this check supplies that type;
+	// accept the untyped nil cell here rather than rejecting it as a channel of
+	// unknown direction and element.
+	if r.bashPPGoSource && source != nil && source.declType == nil && source.interfaceValue != nil && source.interfaceValue.nilIface {
+		return true
+	}
 	if r.bashPPGoSource && source != nil && source.channel == nil && source.vr.Str == "" {
 		if actual, ok := source.declType.(*syntax.BashPPChanType); ok && bashPPTypeText(actual.Element) == bashPPTypeText(typ.Element) && (actual.Direction == "" || actual.Direction == typ.Direction) {
 			return true

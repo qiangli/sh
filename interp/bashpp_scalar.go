@@ -806,8 +806,24 @@ func (r *Runner) bashPPComparableExpr(expr syntax.BashPPExpr) (bashPPComparableV
 			if cell.pointer {
 				return bashPPComparableValue{value: cell.pointerValue, meta: bashPPPointerMeta(cell.declType)}, nil
 			}
+			if r.bashPPGoSource {
+				if native, ok := cell.vr.Obj.(*bashPPBridgeValue); ok && native != nil && native.Kind == "nil" {
+					if _, ok := r.bashPPUnderlyingType(cell.declType).(*syntax.BashPPFuncType); ok {
+						return bashPPComparableValue{meta: &bashPPCollectionMeta{kind: "func", typ: cell.declType}}, nil
+					}
+				}
+			}
 			if cell.vr.Kind == expand.Object {
 				return bashPPComparableValue{value: cell.vr.Obj, meta: bashPPCellMeta(cell)}, nil
+			}
+			if r.bashPPGoSource {
+				if _, ok := r.bashPPUnderlyingType(cell.declType).(*syntax.BashPPFuncType); ok {
+					var value any = cell.vr.Str
+					if cell.vr.Str == "" || cell.vr.Str == "nil" {
+						value = nil
+					}
+					return bashPPComparableValue{value: value, meta: &bashPPCollectionMeta{kind: "func", typ: cell.declType}}, nil
+				}
 			}
 		}
 		return bashPPComparableValue{}, fmt.Errorf("BASHPP-ECOMPARE-SCALAR: scalar")
@@ -817,6 +833,15 @@ func (r *Runner) bashPPComparableExpr(expr syntax.BashPPExpr) (bashPPComparableV
 			return bashPPComparableValue{}, err
 		}
 		return bashPPComparableValue{value: ptr, meta: bashPPPointerMeta(&syntax.BashPPPointerType{Element: ptr.elem})}, nil
+	case *syntax.BashPPCall:
+		if !r.bashPPGoSource {
+			return bashPPComparableValue{}, fmt.Errorf("BASHPP-ECOMPARE-SCALAR: scalar")
+		}
+		value, meta, err := r.bashPPReadExpr(expr)
+		if err != nil {
+			return bashPPComparableValue{}, err
+		}
+		return bashPPComparableValue{value: value, meta: meta}, nil
 	case *syntax.BashPPDerefExpr, *syntax.BashPPIndexExpr, *syntax.BashPPSliceExpr, *syntax.BashPPSelectorExpr:
 		value, meta, err := r.bashPPReadExpr(expr)
 		if err != nil {
@@ -899,7 +924,7 @@ func bashPPPointerComparable(meta *bashPPCollectionMeta) bool {
 }
 
 func bashPPNilComparable(meta *bashPPCollectionMeta) bool {
-	return meta != nil && (meta.kind == "slice" || meta.kind == "map" || meta.kind == "interface" || meta.kind == "channel")
+	return meta != nil && (meta.kind == "slice" || meta.kind == "map" || meta.kind == "interface" || meta.kind == "channel" || meta.kind == "func")
 }
 
 func bashPPCompareScalarAny(left, right any) (bool, error) {

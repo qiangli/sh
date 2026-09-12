@@ -555,6 +555,20 @@ func bashPPCellMeta(cell *bashPPCell) *bashPPCollectionMeta {
 }
 
 func (r *Runner) bashPPReadExpr(expr syntax.BashPPExpr) (any, *bashPPCollectionMeta, error) {
+	// A call result is transported in a cell. In particular, pointers use the
+	// cell's pointerValue side channel and intentionally have an empty scalar
+	// spelling. Reading only vr below therefore turned every pointer-returning
+	// call into an untyped empty scalar before a dereference or selector could
+	// consume it.
+	if r.bashPPGoSource {
+		if _, call := expr.(*syntax.BashPPCall); call {
+			cell, err := r.goSourceValueCell(expr)
+			if err != nil {
+				return nil, nil, err
+			}
+			return r.bashPPReadCellValue(cell)
+		}
+	}
 	if value, meta, handled, err := r.goSourceCollectionCallValue(expr); handled {
 		return value, meta, err
 	}
@@ -572,8 +586,32 @@ func (r *Runner) bashPPReadExpr(expr syntax.BashPPExpr) (any, *bashPPCollectionM
 	// to a defined map or slice type, since `p[k]` is not valid there.
 	case *syntax.BashPPParenExpr:
 		return r.bashPPReadExpr(x.X)
+	case *syntax.BashPPAddressExpr, *syntax.BashPPNewExpr:
+		pointer, err := r.bashPPPointerExprValue(expr)
+		if err != nil {
+			return nil, nil, err
+		}
+		return pointer, bashPPPointerMeta(r.bashPPPointerExprType(expr, pointer)), nil
+	case *syntax.BashPPConvertExpr:
+		if value, meta, handled, err := r.bashPPConvertToCollection(x); handled {
+			return value, meta, err
+		}
+		if target, nilPointer := r.bashPPNilPointerConversion(x); nilPointer {
+			return nil, bashPPPointerMeta(target), nil
+		}
+		scalar, err := r.bashPPEvalScalarExpr(x)
+		if err != nil {
+			return nil, nil, err
+		}
+		return bashPPScalarAny(scalar.value), nil, nil
 	case *syntax.BashPPCompositeLit:
 		return r.bashPPEvalComposite(x, nil)
+	case *syntax.BashPPTypeAssertExpr:
+		_, cell, err := r.bashPPTypeAssert(x, false)
+		if err != nil {
+			return nil, nil, err
+		}
+		return r.bashPPReadCellValue(cell)
 	case *syntax.BashPPIdent:
 		cell := r.bashPPScope.lookup(x.Name.Value)
 		if cell != nil && cell.pointer {
@@ -621,6 +659,13 @@ func (r *Runner) bashPPReadExpr(expr syntax.BashPPExpr) (any, *bashPPCollectionM
 		_ = mapping
 		return bashPPReadSelection(value, meta, sel.edges)
 	case *syntax.BashPPIndexExpr:
+		if r.bashPPGoSource && x.GoString {
+			scalar, err := r.bashPPEvalScalarExpr(x)
+			if err != nil {
+				return nil, nil, err
+			}
+			return bashPPScalarAny(scalar.value), nil, nil
+		}
 		value, meta, err := r.bashPPReadExpr(x.X)
 		if err != nil {
 			return nil, nil, err
@@ -674,6 +719,13 @@ func (r *Runner) bashPPReadExpr(expr syntax.BashPPExpr) (any, *bashPPCollectionM
 		}
 		return sequence[i], meta.sequence[i], nil
 	case *syntax.BashPPSliceExpr:
+		if r.bashPPGoSource && x.GoString {
+			scalar, err := r.bashPPEvalScalarExpr(x)
+			if err != nil {
+				return nil, nil, err
+			}
+			return bashPPScalarAny(scalar.value), nil, nil
+		}
 		value, meta, err := r.bashPPReadExpr(x.X)
 		if err != nil {
 			return nil, nil, err
@@ -722,6 +774,28 @@ func (r *Runner) bashPPReadExpr(expr syntax.BashPPExpr) (any, *bashPPCollectionM
 		return out, child, nil
 	}
 	return nil, nil, fmt.Errorf("BASHPP-ESELECTOR-EXPR: unsupported structured expression")
+}
+
+func (r *Runner) bashPPReadCellValue(cell *bashPPCell) (any, *bashPPCollectionMeta, error) {
+	if cell == nil {
+		return nil, nil, fmt.Errorf("Go value has no result")
+	}
+	if cell.pointer {
+		return cell.pointerValue, bashPPPointerMeta(cell.declType), nil
+	}
+	if cell.interfaceValue != nil {
+		return cell.vrValue(), &bashPPCollectionMeta{kind: "interface", typ: cell.declType, interfaceValue: cell.interfaceValue}, nil
+	}
+	if cell.vr.Kind == expand.Object {
+		return cell.vr.Obj, bashPPCellMeta(cell), nil
+	}
+	if _, ok := r.bashPPUnderlyingType(cell.declType).(*syntax.BashPPFuncType); ok {
+		if cell.vr.Str == "" || cell.vr.Str == "nil" {
+			return nil, &bashPPCollectionMeta{kind: "func", typ: cell.declType}, nil
+		}
+		return cell.vr.Str, &bashPPCollectionMeta{kind: "func", typ: cell.declType}, nil
+	}
+	return bashPPScalarAny(r.bashPPScalarFromCell(cell).value), nil, nil
 }
 
 func (r *Runner) bashPPStructuredAssign(target, rhs syntax.BashPPExpr) {
@@ -784,6 +858,28 @@ func (r *Runner) bashPPStructuredAssign(target, rhs syntax.BashPPExpr) {
 			r.exit = exitStatus{code: 2}
 			return
 		}
+		// Go inserts an implicit dereference between selector components. The
+		// address path normally records that step, but instantiated generic
+		// receiver fields can retain the pointer as the parent value instead.
+		// Follow that storage identity before writing the final field, just as
+		// an explicit (*parent).field assignment would.
+		for {
+			parentPointer, pointerParent := parent.(*bashPPPointer)
+			if !pointerParent {
+				break
+			}
+			if parentPointer == nil {
+				r.errf("BASHPP-ENIL-DEREF: dereference of nil pointer\n")
+				r.exit = exitStatus{code: 2}
+				return
+			}
+			parent, parentMeta, _, err = parentPointer.read()
+			if err != nil {
+				r.errf("%v\n", err)
+				r.exit = exitStatus{code: 2}
+				return
+			}
+		}
 		if parentMeta == nil {
 			r.errf("BASHPP-ESELECTOR-TYPE: assignment parent is not a structured value\n")
 			r.exit = exitStatus{code: 2}
@@ -800,10 +896,22 @@ func (r *Runner) bashPPStructuredAssign(target, rhs syntax.BashPPExpr) {
 		}
 		last := ptr.path[len(ptr.path)-1]
 		if last.field != "" {
-			parent.(map[string]any)[last.field] = value
+			mapping, ok := parent.(map[string]any)
+			if !ok {
+				r.errf("BASHPP-ESELECTOR-TYPE: assignment parent is not struct storage\n")
+				r.exit = exitStatus{code: 2}
+				return
+			}
+			mapping[last.field] = value
 			parentMeta.mapping[last.field] = meta
 		} else {
-			parent.([]any)[last.index] = value
+			sequence, ok := parent.([]any)
+			if !ok || last.index < 0 || last.index >= len(sequence) {
+				r.errf("BASHPP-ESELECTOR-TYPE: assignment parent is not collection storage\n")
+				r.exit = exitStatus{code: 2}
+				return
+			}
+			sequence[last.index] = value
 			parentMeta.sequence[last.index] = meta
 		}
 		return
