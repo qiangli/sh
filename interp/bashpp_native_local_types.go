@@ -621,7 +621,21 @@ func (l *bashPPLocalTypeSet) source(typ syntax.BashPPTypeExpr, depth int) (strin
 	case *syntax.BashPPStructType:
 		var fields []string
 		for _, field := range t.Fields {
-			if field.Embedded || len(field.Names) == 0 {
+			// An embedded field is emitted as real embedding of the rendered
+			// element type, so promotion and the promoted method set are the
+			// dependency's own Go semantics rather than an imitation.
+			if field.Embedded {
+				element, ok := l.source(field.FieldTypeExpr, depth+1)
+				if !ok {
+					return "", false
+				}
+				if field.Tag != nil {
+					element += " " + field.Tag.Value
+				}
+				fields = append(fields, element)
+				continue
+			}
+			if len(field.Names) == 0 {
 				return "", false
 			}
 			element, ok := l.source(field.FieldTypeExpr, depth+1)
