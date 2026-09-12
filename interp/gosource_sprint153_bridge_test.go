@@ -54,3 +54,10 @@ func TestGoSourceBridgeLocalInterfaceDecl(t *testing.T) {
 func TestGoSourceBridgeLocalArrayLength(t *testing.T) {
 	differSprint153(t, "local-array-length")
 }
+
+// TestGoSourceBridgeLocalTypeClosure covers the dependency closure of the
+// materialised set: a declaration naming an unmaterialisable local type — and
+// anything that in turn names it — stays out of the helper.
+func TestGoSourceBridgeLocalTypeClosure(t *testing.T) {
+	differSprint153(t, "local-type-closure")
+}

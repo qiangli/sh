@@ -46,6 +46,9 @@ type bashPPLocalType struct {
 	Decl           string
 	Methods        []bashPPLocalMethod
 	OmittedMethods []string
+	// refs are the other local names this rendered declaration mentions;
+	// host-only, used to keep the materialised set dependency-closed.
+	refs map[string]bool
 }
 
 // bashPPHelperReserved are identifiers the fixed helper template already
@@ -137,11 +140,12 @@ func (r *Runner) bashPPLocalTypeDescriptors() []bashPPLocalType {
 		if bashPPHelperReserved[name] {
 			continue
 		}
+		local.refs = map[string]bool{}
 		decl, ok := local.source(declared[name], 0)
 		if !ok {
 			continue
 		}
-		materialised := bashPPLocalType{Name: name, Decl: decl, Alias: aliases[name]}
+		materialised := bashPPLocalType{Name: name, Decl: decl, Alias: aliases[name], refs: local.refs}
 		// A defined interface type cannot carry a method declaration, so its
 		// implementations are mirrored instead — the dynamic value is what
 		// crosses the boundary.
@@ -173,6 +177,7 @@ func (r *Runner) bashPPLocalTypeDescriptors() []bashPPLocalType {
 	}
 	sort.Strings(keys)
 	for _, key := range keys {
+		local.refs = map[string]bool{}
 		decl, ok := local.source(shapes[key], 0)
 		if !ok {
 			continue
@@ -181,7 +186,35 @@ func (r *Runner) bashPPLocalTypeDescriptors() []bashPPLocalType {
 		for declared[name] != nil || bashPPHelperReserved[name] {
 			name += "_"
 		}
-		out = append(out, bashPPLocalType{Name: name, Decl: decl, Alias: true, WireType: key})
+		out = append(out, bashPPLocalType{Name: name, Decl: decl, Alias: true, WireType: key, refs: local.refs})
+	}
+	// The materialised set must be dependency-closed: a declaration naming a
+	// local type that itself stays unregistered — generic, ambiguous, or any
+	// other refusal — would not compile in the helper. Dropping it cascades
+	// until every remaining declaration mentions only emitted names.
+	emitted := map[string]bool{}
+	for _, materialised := range out {
+		emitted[materialised.Name] = true
+	}
+	for changed := true; changed; {
+		changed = false
+		kept := out[:0]
+		for _, materialised := range out {
+			closed := true
+			for ref := range materialised.refs {
+				if !emitted[ref] {
+					closed = false
+					break
+				}
+			}
+			if !closed {
+				delete(emitted, materialised.Name)
+				changed = true
+				continue
+			}
+			kept = append(kept, materialised)
+		}
+		out = kept
 	}
 	return out
 }
@@ -191,6 +224,9 @@ func (r *Runner) bashPPLocalTypeDescriptors() []bashPPLocalType {
 type bashPPLocalTypeSet struct {
 	declared map[string]syntax.BashPPTypeExpr
 	imports  map[string]string
+	// refs records every declared local name the current rendering mentions,
+	// so a declaration is only emitted when everything it names is too.
+	refs map[string]bool
 }
 
 // mirrored reports the method set the helper stubs out. String/Error and Read
@@ -338,6 +374,9 @@ func (l *bashPPLocalTypeSet) source(typ syntax.BashPPTypeExpr, depth int) (strin
 			return "any", true
 		}
 		if _, local := l.declared[name]; local && !bashPPHelperReserved[name] {
+			if l.refs != nil {
+				l.refs[name] = true
+			}
 			return name, true
 		}
 		if alias, symbol, ok := strings.Cut(name, "."); ok && l.imports[alias] != "" && symbol != "" {
