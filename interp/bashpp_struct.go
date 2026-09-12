@@ -653,6 +653,13 @@ func (r *Runner) bashPPReadExpr(expr syntax.BashPPExpr) (any, *bashPPCollectionM
 		_ = mapping
 		return bashPPReadSelection(value, meta, sel.edges)
 	case *syntax.BashPPIndexExpr:
+		if r.bashPPGoSource && x.GoString {
+			scalar, err := r.bashPPEvalScalarExpr(x)
+			if err != nil {
+				return nil, nil, err
+			}
+			return bashPPScalarAny(scalar.value), nil, nil
+		}
 		value, meta, err := r.bashPPReadExpr(x.X)
 		if err != nil {
 			return nil, nil, err
@@ -706,6 +713,13 @@ func (r *Runner) bashPPReadExpr(expr syntax.BashPPExpr) (any, *bashPPCollectionM
 		}
 		return sequence[i], meta.sequence[i], nil
 	case *syntax.BashPPSliceExpr:
+		if r.bashPPGoSource && x.GoString {
+			scalar, err := r.bashPPEvalScalarExpr(x)
+			if err != nil {
+				return nil, nil, err
+			}
+			return bashPPScalarAny(scalar.value), nil, nil
+		}
 		value, meta, err := r.bashPPReadExpr(x.X)
 		if err != nil {
 			return nil, nil, err
