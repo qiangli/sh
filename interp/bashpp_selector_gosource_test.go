@@ -33,6 +33,10 @@ func TestGoSourceStringIndexAndSliceStructuredConsumers(t *testing.T) {
 	compareSprint151PointerWithGo(t, "string_index_slice.go")
 }
 
+func TestGoSourceNilValues(t *testing.T) {
+	compareSprint151PointerWithGo(t, "nil_values.go")
+}
+
 func compareSprint151PointerWithGo(t *testing.T, name string) {
 	t.Helper()
 	path := filepath.Join("..", "gosource", "testdata", "sprint151", "pointers", name)

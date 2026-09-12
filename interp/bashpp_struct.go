@@ -578,6 +578,12 @@ func (r *Runner) bashPPReadExpr(expr syntax.BashPPExpr) (any, *bashPPCollectionM
 			if cell.vr.Kind == expand.Object {
 				return cell.vr.Obj, bashPPCellMeta(cell), nil
 			}
+			if _, ok := r.bashPPUnderlyingType(cell.declType).(*syntax.BashPPFuncType); ok {
+				if cell.vr.Str == "" || cell.vr.Str == "nil" {
+					return nil, &bashPPCollectionMeta{kind: "func", typ: cell.declType}, nil
+				}
+				return cell.vr.Str, &bashPPCollectionMeta{kind: "func", typ: cell.declType}, nil
+			}
 			return bashPPScalarAny(r.bashPPScalarFromCell(cell).value), nil, nil
 		}
 	}
