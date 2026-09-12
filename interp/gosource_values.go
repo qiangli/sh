@@ -68,44 +68,67 @@ func (r *Runner) goSourceCallableCell(expr syntax.BashPPExpr) (*bashPPCell, bool
 	return nil, false, nil
 }
 func (r *Runner) goSourceValueCell(expr syntax.BashPPExpr) (*bashPPCell, error) {
+	cells, err := r.goSourceValueCells(expr, false)
+	if err != nil {
+		return nil, err
+	}
+	return cells[0], nil
+}
+
+// goSourceValueCells evaluates one expression to its result cells. A call is
+// the only expression with more than one: with spread set it contributes
+// every result it returns, which is how `f(g())` hands g's results to f;
+// without it a call must yield exactly one value. Every other expression is
+// one cell.
+func (r *Runner) goSourceValueCells(expr syntax.BashPPExpr, spread bool) ([]*bashPPCell, error) {
+	one := func(cell *bashPPCell, err error) ([]*bashPPCell, error) {
+		if err != nil {
+			return nil, err
+		}
+		return []*bashPPCell{cell}, nil
+	}
 	if cell, handled, err := r.goSourceNilValueCell(expr); handled {
-		return cell, err
+		return one(cell, err)
 	}
 	if paren, ok := expr.(*syntax.BashPPParenExpr); ok {
-		return r.goSourceValueCell(paren.X)
+		return r.goSourceValueCells(paren.X, spread)
 	}
 	if cell, handled, err := r.goSourceChannelValueCell(expr); handled {
-		return cell, err
+		return one(cell, err)
 	}
 	if cell, handled, err := r.goSourceCollectionBuiltinCell(expr); handled {
-		return cell, err
+		return one(cell, err)
 	}
 	if cell, handled, err := r.goSourceCallableCell(expr); handled {
-		return cell, err
+		return one(cell, err)
 	}
 	if call, ok := expr.(*syntax.BashPPCall); ok {
 		if cell, handled, err := r.goSourceBuiltinResult(call); handled {
-			return cell, err
+			return one(cell, err)
 		}
 		if r.bashPPBridgeHandles(call) {
 			values, err := r.bashPPBridgeCall(r.ectx, call)
 			if err != nil {
 				return nil, err
 			}
-			if len(values) != 1 {
+			if len(values) != 1 && !spread {
 				return nil, fmt.Errorf("Go value requires one result")
 			}
-			return goSourceNativeValueCell(values[0]), nil
+			cells := make([]*bashPPCell, len(values))
+			for i, value := range values {
+				cells[i] = goSourceNativeValueCell(value)
+			}
+			return cells, nil
 		}
 		if fn, ok := r.bashPPLookupFunc(call); ok {
 			cells, err := r.goSourceCallResultCells(call, fn)
 			if err != nil {
 				return nil, err
 			}
-			if len(cells) != 1 {
+			if len(cells) != 1 && !spread {
 				return nil, fmt.Errorf("Go value requires one result")
 			}
-			return cells[0], nil
+			return cells, nil
 		}
 	}
 	if r.bashPPNativeExpr(expr) {
@@ -113,10 +136,10 @@ func (r *Runner) goSourceValueCell(expr syntax.BashPPExpr) (*bashPPCell, error) 
 		if err != nil {
 			return nil, err
 		}
-		return goSourceNativeValueCell(value), nil
+		return one(goSourceNativeValueCell(value), nil)
 	}
 	if cell, err := r.bashPPStructuredArgCell(nil, expr); err != nil || cell != nil {
-		return cell, err
+		return one(cell, err)
 	}
 	v, err := r.bashPPEvalScalarExpr(expr)
 	if err != nil {
@@ -126,7 +149,7 @@ func (r *Runner) goSourceValueCell(expr syntax.BashPPExpr) (*bashPPCell, error) 
 	if v.typ != "" {
 		cell.declType, cell.typeName = bashPPScalarNamedType(v.typ)
 	}
-	return cell, nil
+	return one(cell, nil)
 }
 func (r *Runner) goSourceValues(exprs []syntax.BashPPExpr) ([]*bashPPCell, bool) {
 	cells := make([]*bashPPCell, len(exprs))
