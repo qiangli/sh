@@ -3,10 +3,11 @@ id: 0354fc6a5aea
 kind: task
 title: S154.3 parser-exclusive causal audit
 seq: 89
-status: todo
+status: done
 priority: p0
 created: 2026-09-10T21:18:21.299302Z
 sprint: 154
+closed: 2026-09-12T21:54:17.743248Z
 ---
 
 Packet 154.3 has 0 baseline roots; manifest SHA-256 `4cbcf889d17fa9ac97b34ce7cc6beb6b2c9713889530beaaee94d1395f89565c`, empty root-list SHA-256 `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`. It is a Barrier A mechanism/audit leaf, not implementation inventory. Evidence: `/srv/sprint142/evidence/product-baseline-001-control/{packet-manifests-v4/packet-154.3.json,final-causal-v2.json}`; the baseline parser-exclusive count is exactly zero.
