@@ -28,6 +28,7 @@ func TestSprint151Generics(t *testing.T) {
 		"iface_generic_method.go",
 		"named_func_conversion.go",
 		"typeparam_method_expr.go",
+		"map_typeparam_key.go",
 	} {
 		t.Run(file, func(t *testing.T) {
 			path := filepath.Join("testdata", "sprint151", "generics", file)

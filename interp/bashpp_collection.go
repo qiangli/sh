@@ -653,6 +653,14 @@ func (r *Runner) bashPPCheckCollectionValue(value any, expected syntax.BashPPTyp
 // identity: resolving through the declaration keeps key encoding and lookup
 // canonical over the same scalar instead of rejecting the named type.
 func (r *Runner) bashPPMapKeyType(typ syntax.BashPPTypeExpr) bool {
+	// A type parameter is checked where it is instantiated; the constraint
+	// (comparable) is what a generic declaration promises about it.
+	if _, ok := typ.(*syntax.BashPPTypeParamType); ok {
+		return true
+	}
+	if len(r.bashPPTypeParamArgs) > 0 {
+		typ = bashPPSubstituteType(typ, r.bashPPTypeParamArgs)
+	}
 	name, ok := r.bashPPUnderlyingType(typ).(*syntax.BashPPNamedType)
 	if !ok {
 		return false
