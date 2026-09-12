@@ -99,28 +99,20 @@ func main() {
 }
 
 // A promoted receiver still has to be one the dependency can be handed. When
-// the embedded imported type sits inside a *local* struct field, emitting a
-// codec for that enclosing type is what fails, and it fails the same way for
-// the explicit spelling — so this is the local-codec gap, not selection.
-// Recorded rather than skipped so it stays visible.
-func TestGoSourceEmbeddedImportedMethodLocalCodecGap(t *testing.T) {
+// the embedded imported type sits inside a *local* struct field, a local type
+// that references it (holder → box, where box embeds sync.Mutex) was once
+// emitted into the helper with the unmaterialisable box still named, so the
+// worker failed to build with "undefined: box". Keeping the materialised set
+// dependency-closed (S153.4) now drops the referencing type instead of
+// emitting an uncompilable declaration, and the promoted mutex reaches the
+// stored receiver through the ordinary path. Promoted and explicit spellings
+// agree with native Go across all three modes.
+func TestGoSourceEmbeddedImportedMethodLocalCodec(t *testing.T) {
 	for name, source := range map[string]string{
 		"promoted": `package main;import ("fmt";"sync");type box struct{n int;sync.Mutex};type holder struct{b box};func main(){h:=holder{};h.b.Lock();h.b.n=3;h.b.Unlock();fmt.Println(h.b.n)}`,
 		"explicit": `package main;import ("fmt";"sync");type box struct{n int;sync.Mutex};type holder struct{b box};func main(){h:=holder{};h.b.Mutex.Lock();h.b.n=3;h.b.Mutex.Unlock();fmt.Println(h.b.n)}`,
 	} {
-		t.Run(name, func(t *testing.T) {
-			_, errout, err := runGoSource(t, "localcodec", source)
-			if err == nil {
-				t.Fatalf("documented gap now passes; promote it to a three-mode case")
-			}
-			diagnostic := err.Error() + errout
-			if strings.Contains(diagnostic, "has no method Lock") {
-				t.Fatalf("embedded imported method promotion regressed: %s", diagnostic)
-			}
-			if !strings.Contains(diagnostic, "undefined: box") {
-				t.Fatalf("gap changed: %s", diagnostic)
-			}
-		})
+		t.Run(name, func(t *testing.T) { typedSendThreeModes(t, source) })
 	}
 }
 
