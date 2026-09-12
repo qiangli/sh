@@ -144,6 +144,13 @@ func goSourcePositions(result *Result, origin string) error {
 				return fmt.Errorf("source filename cannot be represented in Go line directive")
 			}
 			if name != "" && m.Pos.Line() > 0 {
+				// A marker in doc-comment position (column 1) followed by a
+				// directive is one comment group; gofmt separates the two
+				// with a bare "//" line. Emit it so the output is gofmt-stable.
+				if i > 0 && strings.HasPrefix(lines[i-1], "// lower:") {
+					out.WriteString("//\n")
+					physical++
+				}
 				fmt.Fprintf(&out, "//line %s:%d:%d\n", name, m.Pos.Line(), m.Pos.Col())
 				physical++
 			}
