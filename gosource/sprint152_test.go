@@ -190,6 +190,37 @@ func TestSprint152PackageMapNonMainPackageMainIdentifier(t *testing.T) {
 	}
 }
 
+func TestSprint152ConstGroupedSpecsUseGroupCarrier(t *testing.T) {
+	path := filepath.Join("testdata", "sprint152", "grouped-specs", "grouped_specs.go")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	program, err := gosource.Load([]gosource.Source{{Name: "grouped_specs.go", Data: data}}, gosource.Options{RunMain: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seenGroup := false
+	for _, stmt := range program.File.Stmts {
+		if group, ok := stmt.Cmd.(*syntax.BashPPConstGroup); ok {
+			seenGroup = true
+			if len(group.Specs) != 2 {
+				t.Fatalf("const group specs = %d, want 2", len(group.Specs))
+			}
+		}
+	}
+	if !seenGroup {
+		t.Fatalf("no const group carrier in lowered gosource AST")
+	}
+	result, err := lower.Compile(program.File, lower.Options{Origin: "grouped_specs.go"})
+	if err != nil {
+		t.Fatalf("lower: %v", err)
+	}
+	if !strings.Contains(string(result.Source), "const (") {
+		t.Fatalf("const block was not preserved:\n%s", result.Source)
+	}
+}
+
 // TestSprint152SyntheticCallPosition pins the C5 converter half: the synthetic
 // `main` wrapper's call to the renamed source main must carry no borrowed
 // //line. The first declaration is an import, so the old borrowed position
