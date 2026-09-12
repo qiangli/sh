@@ -407,8 +407,14 @@ func (l *bashPPLocalTypeSet) source(typ syntax.BashPPTypeExpr, depth int) (strin
 		}
 		return "struct {\n" + strings.Join(fields, "\n") + "\n}", true
 	case *syntax.BashPPInterfaceType:
-		if len(t.Elems) > 0 {
-			return "", false
+		// Elems is the ordered element list; every method specification
+		// appears there as well as in Methods. Only an embedded element —
+		// including a union or constraint element, which parses as one — is
+		// outside the set the helper can reproduce faithfully.
+		for _, elem := range t.Elems {
+			if elem.Method == nil {
+				return "", false
+			}
 		}
 		if len(t.Methods) == 0 {
 			return "any", true
