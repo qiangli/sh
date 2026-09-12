@@ -59,6 +59,32 @@ func (r *Runner) bashPPNativeExpr(expr syntax.BashPPExpr) bool {
 	return false
 }
 
+// bashPPNativePointerExpr reports an expression bound to an original pointer
+// whose pointee is a native handle — new(bytes.Buffer), &b of an imported
+// type. The worker binds such a pointer to the handle's own storage, so its
+// methods are the dependency's to run, not the interpreter's.
+func (r *Runner) bashPPNativePointerExpr(expr syntax.BashPPExpr) bool {
+	switch x := expr.(type) {
+	case *syntax.BashPPParenExpr:
+		return r.bashPPNativePointerExpr(x.X)
+	case *syntax.BashPPIdent:
+		if r.bashPPScope == nil {
+			return false
+		}
+		cell := r.bashPPScope.lookup(x.Name.Value)
+		if cell == nil || !cell.pointer || cell.pointerValue == nil {
+			return false
+		}
+		value, _, _, err := cell.pointerValue.read()
+		if err != nil {
+			return false
+		}
+		bridge, ok := value.(*bashPPBridgeValue)
+		return ok && bridge != nil && bridge.Kind == "handle"
+	}
+	return false
+}
+
 // bashPPNativeCellValue returns the native value bound to name, if any.
 func (r *Runner) bashPPNativeCellValue(name string) *bashPPBridgeValue {
 	if r.bashPPScope == nil {

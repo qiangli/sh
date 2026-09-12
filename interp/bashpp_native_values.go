@@ -26,6 +26,7 @@ func (r *Runner) bashPPBridgeHandles(call *syntax.BashPPCall) bool {
 		}
 		return r.bashPPNativeExpr(selector.X) ||
 			r.goSourceNativeScalarReceiver(selector.X) ||
+			r.bashPPNativePointerExpr(selector.X) ||
 			r.bashPPPromotedNativeReceiver(selector.X, selector.Sel.Value) != nil
 	}
 	if len(call.Fun) < 1 {
@@ -38,7 +39,8 @@ func (r *Runner) bashPPBridgeHandles(call *syntax.BashPPCall) bool {
 		if r.bashPPNativeCellValue(call.Fun[0].Value) != nil {
 			return true
 		}
-		if len(call.Fun) == 2 && r.goSourceNativeScalarReceiver(&syntax.BashPPIdent{Name: call.Fun[0]}) {
+		if len(call.Fun) == 2 && (r.goSourceNativeScalarReceiver(&syntax.BashPPIdent{Name: call.Fun[0]}) ||
+			r.bashPPNativePointerExpr(&syntax.BashPPIdent{Name: call.Fun[0]})) {
 			return true
 		}
 		var receiver syntax.BashPPExpr = &syntax.BashPPIdent{Name: call.Fun[0]}
@@ -732,22 +734,23 @@ func (r *Runner) bashPPBridgeCollection(value any, meta *bashPPCollectionMeta, t
 		case *syntax.BashPPStructType:
 			result.Kind = "struct"
 			result.Fields = map[string]bashPPBridgeValue{}
-			for _, field := range shape.Fields {
-				for _, name := range field.Names {
-					item, exists := value[name.Value]
-					if !exists {
-						return result, fmt.Errorf("gosource: missing struct field %s", name.Value)
-					}
-					var child *bashPPCollectionMeta
-					if meta != nil {
-						child = meta.mapping[name.Value]
-					}
-					converted, err := r.bashPPBridgeCollection(item, child, field.FieldTypeExpr)
-					if err != nil {
-						return result, err
-					}
-					result.Fields[name.Value] = converted
+			// Flattening includes embedded fields under their promoted names,
+			// which is where the interpreter keeps their storage; the worker's
+			// FieldByName and the generated codecs address the same names.
+			for _, field := range bashPPFlatFields(shape.Fields) {
+				item, exists := value[field.name]
+				if !exists {
+					return result, fmt.Errorf("gosource: missing struct field %s", field.name)
 				}
+				var child *bashPPCollectionMeta
+				if meta != nil {
+					child = meta.mapping[field.name]
+				}
+				converted, err := r.bashPPBridgeCollection(item, child, field.typ)
+				if err != nil {
+					return result, err
+				}
+				result.Fields[field.name] = converted
 			}
 			return result, nil
 		default:
@@ -840,8 +843,15 @@ func bashPPBridgeTypeText(typ syntax.BashPPTypeExpr) string {
 	case *syntax.BashPPStructType:
 		var fields []string
 		for _, field := range t.Fields {
+			// An embedded field spells only its element type, exactly as the
+			// original wrote it; the helper materialises the same embedding.
 			if field.Embedded {
-				return "<unsupported embedded field>"
+				text := bashPPBridgeTypeText(field.FieldTypeExpr)
+				if field.Tag != nil {
+					text += " " + field.Tag.Value
+				}
+				fields = append(fields, text)
+				continue
 			}
 			names := make([]string, len(field.Names))
 			for i, name := range field.Names {

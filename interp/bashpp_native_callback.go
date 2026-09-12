@@ -150,6 +150,12 @@ func (r *Runner) bashPPNativeCallback(ctx context.Context, selector string, recv
 			return nil, fmt.Errorf("gosource: callback receiver identity expired")
 		}
 		cell = bashPPPointerCell(ptr)
+	} else if recv.Kind == "nil" {
+		// A typed-nil pointer receiver has no storage to bind. The original
+		// body runs with a nil receiver, exactly as native Go invokes it — a
+		// body that checks its receiver observes nil, one that dereferences
+		// it panics as the original would.
+		cell = &bashPPCell{pointer: true, nilPointer: true, typeName: typeName, declType: &syntax.BashPPPointerType{Element: named}}
 	} else {
 		if r.bashPPMethods[typeName][method].decl.Receiver.Pointer {
 			return nil, fmt.Errorf("gosource: pointer callback requires original receiver identity")

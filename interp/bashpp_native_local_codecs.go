@@ -15,6 +15,38 @@ import (
 	"strings"
 )
 
+// bashPPCodecFieldNames lists the storage names one struct field contributes
+// to a codec: each declared name, or the promoted name of an embedded field,
+// which Go's field selector resolves on the enclosing type.
+func bashPPCodecFieldNames(field *ast.Field) []string {
+	if len(field.Names) == 0 {
+		var name func(ast.Expr) (string, bool)
+		name = func(expr ast.Expr) (string, bool) {
+			switch e := expr.(type) {
+			case *ast.Ident:
+				return e.Name, true
+			case *ast.StarExpr:
+				return name(e.X)
+			case *ast.SelectorExpr:
+				return e.Sel.Name, true
+			}
+			return "", false
+		}
+		if promoted, ok := name(field.Type); ok {
+			return []string{promoted}
+		}
+		return nil
+	}
+	var out []string
+	for _, id := range field.Names {
+		if id.Name == "_" {
+			continue
+		}
+		out = append(out, id.Name)
+	}
+	return out
+}
+
 func bashPPLocalCodecsGo(locals []bashPPLocalType) (string, error) {
 	declarations := make(map[string]ast.Expr)
 	for _, local := range locals {
@@ -82,21 +114,15 @@ func bashPPLocalCodecsGo(locals []bashPPLocalType) (string, error) {
 		fmt.Fprintf(&b, "func init() {\nlocalStructCodecs[reflect.TypeFor[%s]()] = localStructCodec{\n", name)
 		fmt.Fprintf(&b, "decode: func(%sWire value) (reflect.Value,error) {\nvar %sDst %s\nfor %sName,%sField := range %sWire.Fields { _ = %sField; switch %sName {\n", prefix, prefix, name, prefix, prefix, prefix, prefix, prefix)
 		for _, field := range shape.Fields.List {
-			for _, id := range field.Names {
-				if id.Name == "_" {
-					continue
-				}
-				fmt.Fprintf(&b, "case %q: %sItem,%sErr := decode(%sField,reflect.TypeOf(&%sDst.%s).Elem()); if %sErr != nil { return reflect.Value{},%sErr }; reflect.ValueOf(&%sDst.%s).Elem().Set(%sItem)\n", id.Name, prefix, prefix, prefix, prefix, id.Name, prefix, prefix, prefix, id.Name, prefix)
+			for _, name := range bashPPCodecFieldNames(field) {
+				fmt.Fprintf(&b, "case %q: %sItem,%sErr := decode(%sField,reflect.TypeOf(&%sDst.%s).Elem()); if %sErr != nil { return reflect.Value{},%sErr }; reflect.ValueOf(&%sDst.%s).Elem().Set(%sItem)\n", name, prefix, prefix, prefix, prefix, name, prefix, prefix, prefix, name, prefix)
 			}
 		}
 		fmt.Fprintf(&b, "default: return reflect.Value{},fmt.Errorf(\"unknown field %%s of %%T\",%sName,%sDst)\n} }; return reflect.ValueOf(%sDst),nil },\n", prefix, prefix, prefix)
 		fmt.Fprintf(&b, "structural: func(%sRV reflect.Value) value {\n%sSrc := %sRV.Interface().(%s)\n_ = %sSrc\nreturn value{Kind:\"struct\",Type:typeID(%sRV.Type()),Fields:map[string]value{\n", prefix, prefix, prefix, name, prefix, prefix)
 		for _, field := range shape.Fields.List {
-			for _, id := range field.Names {
-				if id.Name == "_" {
-					continue
-				}
-				fmt.Fprintf(&b, "%q: structural(reflect.ValueOf(&%sSrc.%s).Elem()),\n", id.Name, prefix, id.Name)
+			for _, name := range bashPPCodecFieldNames(field) {
+				fmt.Fprintf(&b, "%q: structural(reflect.ValueOf(&%sSrc.%s).Elem()),\n", name, prefix, name)
 			}
 		}
 		b.WriteString("}} },\n}\n")

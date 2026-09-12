@@ -34,6 +34,14 @@ type bashPPLocalMethod struct {
 	ReaderLocalBuffer bool
 	Params            []string
 	Results           []string
+	// General marks a method mirrored by the generalised stub regardless of
+	// arity, so a zero-parameter zero-result method is not mistaken for the
+	// fixed one-string protocol stubs.
+	General bool
+	// refs are the local names this mirrored signature mentions; host-only,
+	// used to drop a mirror whose types the helper does not materialise
+	// without dropping the type that owns it.
+	refs map[string]bool
 }
 
 // bashPPLocalType is the transportable descriptor of one original named type.
@@ -308,6 +316,27 @@ func (r *Runner) bashPPLocalTypeDescriptors() []bashPPLocalType {
 		}
 		out = kept
 	}
+	// A generally mirrored signature may name local types of its own; one that
+	// names an unmaterialised type cannot compile in the helper. The mirror is
+	// dropped back into OmittedMethods — the owning type stays materialised.
+	for i := range out {
+		methods := out[i].Methods[:0]
+		for _, method := range out[i].Methods {
+			closed := true
+			for ref := range method.refs {
+				if !emitted[ref] {
+					closed = false
+					break
+				}
+			}
+			if closed {
+				methods = append(methods, method)
+			} else {
+				out[i].OmittedMethods = append(out[i].OmittedMethods, method.Name)
+			}
+		}
+		out[i].Methods = methods
+	}
 	return out
 }
 
@@ -371,7 +400,56 @@ func (l *bashPPLocalTypeSet) mirrored(decls []*syntax.BashPPFuncDecl) []bashPPLo
 		methods = append(methods, bashPPLocalMethod{Name: "Read", Pointer: decl.Receiver.Pointer, ReaderLocalBuffer: bashPPReaderLocalBufferProof(decl)})
 		break
 	}
+	// Every remaining method with an expressible non-variadic signature is
+	// mirrored by the generalised stub — exported or not, any result arity —
+	// so the materialised type presents the original method set to reflect
+	// and the dependency can invoke any of them through the callback. Each
+	// signature's own local-name references are recorded separately: a mirror
+	// naming an unmaterialised type is dropped later without dropping the
+	// type that owns it.
+	seen := map[string]bool{}
+	for _, m := range methods {
+		seen[m.Name] = true
+	}
+	shared := l.refs
+	for _, decl := range decls {
+		if decl.Name == nil || seen[decl.Name.Value] {
+			continue
+		}
+		if len(decl.TypeParams) > 0 || (len(decl.Receiver.TypeParams) > 0 && !l.instantiated) {
+			continue
+		}
+		l.refs = map[string]bool{}
+		params, okParams := l.fieldTypes(decl.Params)
+		results, okResults := l.fieldTypes(decl.Results)
+		refs := l.refs
+		l.refs = shared
+		if !okParams || !okResults {
+			continue
+		}
+		seen[decl.Name.Value] = true
+		methods = append(methods, bashPPLocalMethod{Name: decl.Name.Value, Pointer: decl.Receiver.Pointer, Params: params, Results: results, General: true, refs: refs})
+	}
 	return methods
+}
+
+// fieldTypes renders a parameter or result list one entry per declared value.
+// It reports false for variadic or inexpressible entries.
+func (l *bashPPLocalTypeSet) fieldTypes(fields []*syntax.BashPPField) ([]string, bool) {
+	var out []string
+	for _, field := range fields {
+		if field.Variadic() {
+			return nil, false
+		}
+		text, ok := l.source(field.FieldTypeExpr, 0)
+		if !ok {
+			return nil, false
+		}
+		for range max(len(field.Names), 1) {
+			out = append(out, text)
+		}
+	}
+	return out, true
 }
 
 // importedType reports whether typ names exactly the symbol path.name through
@@ -543,7 +621,21 @@ func (l *bashPPLocalTypeSet) source(typ syntax.BashPPTypeExpr, depth int) (strin
 	case *syntax.BashPPStructType:
 		var fields []string
 		for _, field := range t.Fields {
-			if field.Embedded || len(field.Names) == 0 {
+			// An embedded field is emitted as real embedding of the rendered
+			// element type, so promotion and the promoted method set are the
+			// dependency's own Go semantics rather than an imitation.
+			if field.Embedded {
+				element, ok := l.source(field.FieldTypeExpr, depth+1)
+				if !ok {
+					return "", false
+				}
+				if field.Tag != nil {
+					element += " " + field.Tag.Value
+				}
+				fields = append(fields, element)
+				continue
+			}
+			if len(field.Names) == 0 {
 				return "", false
 			}
 			element, ok := l.source(field.FieldTypeExpr, depth+1)
@@ -647,7 +739,7 @@ func bashPPLocalTypeGo(local bashPPLocalType) string {
 		if method.Pointer {
 			receiver = "*" + local.Name
 		}
-		if len(method.Params) > 0 || len(method.Results) > 0 {
+		if method.General || len(method.Params) > 0 || len(method.Results) > 0 {
 			b.WriteString(bashPPLocalMethodGo(selectorBase, receiver, method))
 			continue
 		}
@@ -750,7 +842,7 @@ func bashPPLocalTypeIdentity(locals []bashPPLocalType) string {
 	for _, local := range locals {
 		fmt.Fprintf(&b, "%s|%s|%t|%s|%s|", local.Name, local.Decl, local.Alias, local.WireType, local.Callback)
 		for _, method := range local.Methods {
-			fmt.Fprintf(&b, "%s:%t:%t:%v:%v,", method.Name, method.Pointer, method.ReaderLocalBuffer, method.Params, method.Results)
+			fmt.Fprintf(&b, "%s:%t:%t:%t:%v:%v,", method.Name, method.Pointer, method.ReaderLocalBuffer, method.General, method.Params, method.Results)
 		}
 		fmt.Fprintf(&b, "%v;", local.OmittedMethods)
 	}
