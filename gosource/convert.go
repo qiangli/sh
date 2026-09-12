@@ -661,6 +661,9 @@ func (c *converter) exprValue(e ast.Expr) s.BashPPExpr {
 	case *ast.BasicLit:
 		return &s.BashPPBasicLit{Kind: x.Kind.String(), Value: c.lit(x.ValuePos, x.Value)}
 	case *ast.Ident:
+		if value := c.genericFuncValue(x); value != nil {
+			return value
+		}
 		return &s.BashPPIdent{Name: c.ident(x)}
 	case *ast.ParenExpr:
 		return &s.BashPPParenExpr{Lparen: c.pos(x.Lparen), Rparen: c.pos(x.Rparen), X: c.expr(x.X)}
@@ -674,6 +677,9 @@ func (c *converter) exprValue(e ast.Expr) s.BashPPExpr {
 	case *ast.BinaryExpr:
 		return &s.BashPPBinaryExpr{X: c.expr(x.X), Op: c.lit(x.OpPos, x.Op.String()), Y: c.expr(x.Y)}
 	case *ast.SelectorExpr:
+		if value := c.genericFuncValue(x); value != nil {
+			return value
+		}
 		if c.mappedPkgName(x.X) {
 			return &s.BashPPIdent{Name: c.ident(x.Sel)}
 		}
@@ -684,7 +690,14 @@ func (c *converter) exprValue(e ast.Expr) s.BashPPExpr {
 		}
 		return out
 	case *ast.IndexExpr:
+		if value := c.genericFuncValue(x); value != nil {
+			return value
+		}
 		return &s.BashPPIndexExpr{GoString: c.stringValue(x.X), X: c.expr(x.X), Lbrack: c.pos(x.Lbrack), Rbrack: c.pos(x.Rbrack), Index: c.expr(x.Index)}
+	case *ast.IndexListExpr:
+		if value := c.genericFuncValue(x); value != nil {
+			return value
+		}
 	case *ast.SliceExpr:
 		return &s.BashPPSliceExpr{GoString: c.stringValue(x.X), X: c.expr(x.X), Lbrack: c.pos(x.Lbrack), Rbrack: c.pos(x.Rbrack), Low: c.expr(x.Low), High: c.expr(x.High), Max: c.expr(x.Max), Colon: c.pos(x.Lbrack + 1), SecondColon: func() s.Pos {
 			if x.Slice3 {
@@ -793,35 +806,8 @@ func (c *converter) call(x *ast.CallExpr) *s.BashPPCall {
 		}
 		return false
 	}
-	var callee func(ast.Expr)
-	callee = func(e ast.Expr) {
-		switch v := e.(type) {
-		case *ast.Ident:
-			out.Fun = append(out.Fun, c.ident(v))
-		case *ast.SelectorExpr:
-			if !c.mappedPkgName(v.X) {
-				callee(v.X)
-			}
-			out.Fun = append(out.Fun, c.ident(v.Sel))
-		case *ast.FuncLit:
-			out.FuncLit = c.funlit(v)
-		case *ast.IndexExpr:
-			callee(v.X)
-			out.TypeArgs = append(out.TypeArgs, &s.BashPPTypeArg{ArgType: c.typ(v.Index)})
-		case *ast.IndexListExpr:
-			callee(v.X)
-			for _, t := range v.Indices {
-				out.TypeArgs = append(out.TypeArgs, &s.BashPPTypeArg{ArgType: c.typ(t)})
-			}
-		default:
-			c.fail(e, "call target")
-		}
-	}
 	if simple(x.Fun) {
-		callee(x.Fun)
-		if args := c.instanceTypeArgs(x.Fun); args != nil {
-			out.TypeArgs = args
-		}
+		c.callee(out, x.Fun)
 	} else {
 		out.CalleeExpr = c.expr(x.Fun)
 	}
@@ -837,6 +823,124 @@ func (c *converter) call(x *ast.CallExpr) *s.BashPPCall {
 	}
 	return out
 }
+
+// callee lowers a simple callee — a name, a selector chain, a literal, or
+// one of those instantiated — onto the call's Fun/FuncLit/TypeArgs.
+func (c *converter) callee(out *s.BashPPCall, e ast.Expr) {
+	switch v := e.(type) {
+	case *ast.Ident:
+		out.Fun = append(out.Fun, c.ident(v))
+	case *ast.SelectorExpr:
+		if !c.mappedPkgName(v.X) {
+			c.callee(out, v.X)
+		}
+		out.Fun = append(out.Fun, c.ident(v.Sel))
+	case *ast.FuncLit:
+		out.FuncLit = c.funlit(v)
+	case *ast.IndexExpr:
+		c.callee(out, v.X)
+		out.TypeArgs = append(out.TypeArgs, &s.BashPPTypeArg{ArgType: c.typ(v.Index)})
+	case *ast.IndexListExpr:
+		c.callee(out, v.X)
+		for _, t := range v.Indices {
+			out.TypeArgs = append(out.TypeArgs, &s.BashPPTypeArg{ArgType: c.typ(t)})
+		}
+	default:
+		c.fail(e, "call target")
+		return
+	}
+	if args := c.instanceTypeArgs(e); args != nil {
+		out.TypeArgs = args
+	}
+}
+
+// genericFuncValue lowers a generic function used as a VALUE — `Abs[T]`,
+// `pair[string, int]`, `slices.Max[[]int]`, or a bare `Abs` whose type
+// arguments the checker inferred from the assignment context — as the
+// closure that forwards to the instantiated function:
+//
+//	func(p0 T0, p1 ...T1) R { return Abs[T](p0, p1...) }
+//
+// The closure is the value's instantiated signature exactly, so every
+// consumer — a parameter, a variable, a struct field, a map value — sees an
+// ordinary function value and nothing downstream needs a notion of a
+// partially applied generic. Go forbids comparing functions, so the extra
+// indirection is unobservable. Returns nil when e is not such a value.
+func (c *converter) genericFuncValue(e ast.Expr) s.BashPPExpr {
+	base := ast.Unparen(e)
+	switch v := base.(type) {
+	case *ast.IndexExpr:
+		base = v.X
+	case *ast.IndexListExpr:
+		base = v.X
+	}
+	var id *ast.Ident
+	switch v := ast.Unparen(base).(type) {
+	case *ast.Ident:
+		id = v
+	case *ast.SelectorExpr:
+		id = v.Sel
+	default:
+		return nil
+	}
+	inst, ok := c.info.Instances[id]
+	if !ok || inst.TypeArgs == nil || inst.TypeArgs.Len() == 0 {
+		return nil
+	}
+	instantiated, ok := inst.Type.(*types.Signature)
+	if !ok {
+		return nil
+	}
+	// The instance carries the instantiated signature; the expression's own
+	// type still spells the type parameter list when the name is bare.
+	signature, _ := c.checkedType(instantiated, e, "instantiated function value type").(*s.BashPPFuncType)
+	if signature == nil {
+		return nil
+	}
+	c.syntheticPos = e.Pos()
+	defer func() { c.syntheticPos = token.NoPos }()
+	at := e.Pos()
+	call := &s.BashPPCall{Lparen: c.pos(at), Rparen: c.pos(at)}
+	c.callee(call, ast.Unparen(e))
+	lit := &s.BashPPFuncLit{Kw: c.lit(at, "func"), Lparen: c.pos(at), Rparen: c.pos(at)}
+	var spelled []string
+	for _, group := range signature.Params {
+		names := len(group.Names)
+		if names == 0 {
+			names = 1
+		}
+		for range names {
+			name := fmt.Sprintf("%sarg%d", c.prefix, len(spelled))
+			field := *group
+			field.Names = []*s.Lit{c.lit(at, name)}
+			lit.Params = append(lit.Params, &field)
+			text := name
+			if field.Variadic() {
+				text += "..."
+				call.Ellipsis = c.pos(at)
+			}
+			spelled = append(spelled, text)
+			call.Args = append(call.Args, &s.Word{Parts: []s.WordPart{c.lit(at, text)}})
+			call.ArgExprs = append(call.ArgExprs, &s.BashPPIdent{Name: c.lit(at, name)})
+		}
+	}
+	for _, group := range signature.Results {
+		field := *group
+		field.Names = nil
+		lit.Results = append(lit.Results, &field)
+	}
+	body := &s.Block{Lbrace: c.pos(at), Rbrace: c.pos(at)}
+	if len(lit.Results) == 0 {
+		body.Stmts = []*s.Stmt{c.stmt(call)}
+	} else {
+		spelling := c.text(e) + "(" + strings.Join(spelled, ", ") + ")"
+		ret := &s.BashPPReturn{Kw: c.lit(at, "return"), Call: call, Results: []*s.Word{{Parts: []s.WordPart{c.lit(at, spelling)}}}}
+		body.Stmts = []*s.Stmt{c.stmt(ret)}
+	}
+	lit.Body = body
+	return lit
+}
+
 func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 	var cmd s.Command
 	switch x := st.(type) {
@@ -920,6 +1024,11 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 					}
 				default:
 					out.Expr = c.expr(rhs)
+					// An instantiated generic function value lowers to a
+					// closure; it takes the literal's slot, as a literal does.
+					if lit, ok := out.Expr.(*s.BashPPFuncLit); ok {
+						out.FuncLit, out.Expr, out.Rhs = lit, nil, nil
+					}
 				}
 			}
 			cmd = out
@@ -974,6 +1083,9 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 				out.Results = nil
 			default:
 				out.Expr = c.expr(e)
+				if lit, ok := out.Expr.(*s.BashPPFuncLit); ok {
+					out.FuncLit, out.Expr, out.Results = lit, nil, nil
+				}
 			}
 		}
 		cmd = out

@@ -32,7 +32,7 @@ func TestSprint151Spike(t *testing.T) {
 		{"goto/forward", "goto_forward.go", "goto_forward.go:10:3: gosource: unsupported labeled branch"},
 		{"expression-statement/paren-call", "exprstmt_paren_call.go", ""},
 		{"expression-statement/bare-type-switch", "exprstmt_bare_typeswitch.go", ""},
-		{"expression-kind/IndexListExpr", "expr_indexlist_funcvalue.go", "expr_indexlist_funcvalue.go:10:7: gosource: unsupported expression *ast.IndexListExpr"},
+		{"expression-kind/IndexListExpr", "expr_indexlist_funcvalue.go", ""},
 		{"expression-kind/type-switch-composite-case", "expr_typeswitch_composite_case.go", ""},
 		{"type-kind/indexed-call", "type_indexed_call.go", ""},
 		{"type-kind/indexed-call-ident", "type_indexed_call_ident.go", ""},
@@ -40,7 +40,7 @@ func TestSprint151Spike(t *testing.T) {
 		{"range-target/field", "range_target_field.go", ""},
 		{"range-target/deref", "range_target_deref.go", ""},
 		{"compound-simple-statement/for-init", "forinit_compound.go", "forinit_compound.go:11:6: gosource: unsupported compound simple statement"},
-		{"function-value-type/generic-selector", "funcvalue_generic_selector.go", "funcvalue_generic_selector.go:12:7: gosource: unsupported function value type"},
+		{"function-value-type/generic-selector", "funcvalue_generic_selector.go", ""},
 		{"function-value-type/named-func-type", "funcvalue_named_type.go", ""},
 	} {
 		t.Run(tc.mechanism, func(t *testing.T) {
@@ -74,6 +74,7 @@ func TestSprint151Implemented(t *testing.T) {
 		"labeled_break_switch.go",
 		"labeled_break_select.go",
 		"expr_typeswitch_composite_case.go",
+		"expr_indexlist_funcvalue.go",
 	} {
 		t.Run(file, func(t *testing.T) {
 			path := filepath.Join("testdata", "sprint151", file)
