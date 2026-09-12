@@ -887,6 +887,7 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 				target.vr = source.vr
 				target.typeName = source.typeName
 				target.declType = source.declType
+				target.scalarKind = source.scalarKind
 				target.pointer, target.nilPointer, target.pointerValue = source.pointer, source.nilPointer, source.pointerValue
 				target.object, target.valueMeta = source.object, source.valueMeta
 				target.interfaceValue = source.interfaceValue
