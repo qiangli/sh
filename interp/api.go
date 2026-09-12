@@ -417,9 +417,10 @@ type Runner struct {
 
 	// >0 to break or continue out of N enclosing loops
 	breakEnclosing, contnEnclosing int
-	// bashPPBranch carries one validated unlabeled branch through nested typed
-	// blocks until the innermost eligible typed control statement consumes it.
-	bashPPBranch bashPPBranchKind
+	// bashPPBranch carries one validated branch through nested typed blocks.
+	// bashPPBranchDepth counts eligible enclosing control statements.
+	bashPPBranch      bashPPBranchKind
+	bashPPBranchDepth int
 
 	inLoop        bool
 	inFunc        bool

@@ -424,12 +424,16 @@ func (r *Runner) bashPPRangeControl() bool {
 	}
 	switch r.bashPPBranch {
 	case bashPPBranchBreak:
-		r.bashPPBranch = bashPPBranchNone
-		r.exit.clear()
+		if r.bashPPBranchEscapesEligible() {
+			return false
+		}
+		r.bashPPClearBranch()
 		return false
 	case bashPPBranchContinue:
-		r.bashPPBranch = bashPPBranchNone
-		r.exit.clear()
+		if r.bashPPBranchEscapesEligible() {
+			return false
+		}
+		r.bashPPClearBranch()
 	case bashPPBranchFallthrough:
 		panic("validated fallthrough escaped to Bash++ range")
 	}

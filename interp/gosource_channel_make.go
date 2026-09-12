@@ -152,12 +152,16 @@ func (r *Runner) goSourceRangeNativeChannel(ctx context.Context, rng *syntax.Bas
 		}
 		switch r.bashPPBranch {
 		case bashPPBranchBreak:
-			r.bashPPBranch = bashPPBranchNone
-			r.exit.clear()
+			if r.bashPPBranchEscapesEligible() {
+				return
+			}
+			r.bashPPClearBranch()
 			return
 		case bashPPBranchContinue:
-			r.bashPPBranch = bashPPBranchNone
-			r.exit.clear()
+			if r.bashPPBranchEscapesEligible() {
+				return
+			}
+			r.bashPPClearBranch()
 		}
 	}
 }

@@ -713,12 +713,13 @@ func (r *Runner) bashPPTypeSwitch(ctx context.Context, sw *syntax.BashPPSwitch) 
 		leaveArm()
 		switch r.bashPPBranch {
 		case bashPPBranchBreak:
-			r.bashPPBranch = bashPPBranchNone
-			r.exit.clear()
+			if r.bashPPBranchEscapesEligible() {
+				return
+			}
+			r.bashPPClearBranch()
 			return
 		case bashPPBranchFallthrough:
-			r.bashPPBranch = bashPPBranchNone
-			r.exit.clear()
+			r.bashPPClearBranch()
 			continue
 		default:
 			return

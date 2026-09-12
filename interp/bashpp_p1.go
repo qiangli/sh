@@ -37,6 +37,24 @@ func (r *Runner) bashPPBranchStmt(branch *syntax.BashPPBranch) {
 	default:
 		panic("invalid Bash++ branch " + branch.Kw.Value)
 	}
+	r.bashPPBranchDepth = int(branch.Depth)
+	if r.bashPPBranchDepth < 1 {
+		r.bashPPBranchDepth = 1
+	}
+	r.exit.clear()
+}
+
+func (r *Runner) bashPPBranchEscapesEligible() bool {
+	if r.bashPPBranchDepth <= 1 {
+		return false
+	}
+	r.bashPPBranchDepth--
+	return true
+}
+
+func (r *Runner) bashPPClearBranch() {
+	r.bashPPBranch = bashPPBranchNone
+	r.bashPPBranchDepth = 0
 	r.exit.clear()
 }
 
@@ -1574,12 +1592,13 @@ func (r *Runner) bashPPSwitch(ctx context.Context, sw *syntax.BashPPSwitch) {
 		leaveArm()
 		switch r.bashPPBranch {
 		case bashPPBranchBreak:
-			r.bashPPBranch = bashPPBranchNone
-			r.exit.clear()
+			if r.bashPPBranchEscapesEligible() {
+				return
+			}
+			r.bashPPClearBranch()
 			return
 		case bashPPBranchFallthrough:
-			r.bashPPBranch = bashPPBranchNone
-			r.exit.clear()
+			r.bashPPClearBranch()
 			continue
 		default:
 			return
@@ -2080,12 +2099,16 @@ func (r *Runner) bashPPFor(ctx context.Context, loop *syntax.BashPPFor) {
 		}
 		switch r.bashPPBranch {
 		case bashPPBranchBreak:
-			r.bashPPBranch = bashPPBranchNone
-			r.exit.clear()
+			if r.bashPPBranchEscapesEligible() {
+				return
+			}
+			r.bashPPClearBranch()
 			return
 		case bashPPBranchContinue:
-			r.bashPPBranch = bashPPBranchNone
-			r.exit.clear()
+			if r.bashPPBranchEscapesEligible() {
+				return
+			}
+			r.bashPPClearBranch()
 		case bashPPBranchFallthrough:
 			panic("validated fallthrough escaped to Bash++ for")
 		}

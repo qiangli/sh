@@ -39,6 +39,8 @@ func (e *emitter) goSourceCommand(c syntax.Command) (string, bool, error) {
 		return "close(" + ch + ")", true, err
 	case *syntax.BashPPSelect:
 		var out strings.Builder
+		target := e.pushBranchTarget(false)
+		defer e.popBranchTarget()
 		out.WriteString("select {\n")
 		for _, arm := range n.Cases {
 			e.push()
@@ -63,6 +65,9 @@ func (e *emitter) goSourceCommand(c syntax.Command) (string, bool, error) {
 			e.pop()
 		}
 		out.WriteString("}\n")
+		if target.label != "" {
+			return target.label + ":\n" + out.String(), true, nil
+		}
 		return out.String(), true, nil
 	case *syntax.BashPPShortDecl:
 		if n.MakeChan != nil {

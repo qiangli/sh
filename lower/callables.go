@@ -269,6 +269,8 @@ func (e *emitter) switchStmt(n *syntax.BashPPSwitch) (string, error) {
 		}
 	}
 	var out strings.Builder
+	target := e.pushBranchTarget(false)
+	defer e.popBranchTarget()
 	out.WriteString("switch " + tag + " {\n")
 	for _, arm := range n.Arms {
 		e.push()
@@ -300,10 +302,14 @@ func (e *emitter) switchStmt(n *syntax.BashPPSwitch) (string, error) {
 		out.WriteString("default: panic(\"invalid enum value\")\n")
 	}
 	out.WriteString("}")
-	if init != "" {
-		return "{\n" + init + "\n" + out.String() + "\n}", nil
+	text := out.String()
+	if target.label != "" {
+		text = target.label + ":\n" + text
 	}
-	return out.String(), nil
+	if init != "" {
+		return "{\n" + init + "\n" + text + "\n}", nil
+	}
+	return text, nil
 }
 
 func (e *emitter) isRecover(c *syntax.BashPPCall) bool {
@@ -472,8 +478,14 @@ func (e *emitter) rangeStmt(n *syntax.BashPPRange) (string, error) {
 	if len(ns) > 0 {
 		prefix = strings.Join(ns, ",") + op
 	}
+	target := e.pushBranchTarget(true)
 	body, err := e.block(n.Body)
-	return "for " + prefix + "range " + rhs + " {\n" + body + "}", err
+	e.popBranchTarget()
+	out := "for " + prefix + "range " + rhs + " {\n" + body + "}"
+	if target.label != "" {
+		out = target.label + ":\n" + out
+	}
+	return out, err
 }
 func (e *emitter) importLines() string {
 	aliases := make([]string, 0, len(e.imports))
@@ -667,6 +679,8 @@ func (e *emitter) typeSwitchStmt(n *syntax.BashPPSwitch) (string, error) {
 		return "", err
 	}
 	var out strings.Builder
+	target := e.pushBranchTarget(false)
+	defer e.popBranchTarget()
 	name := ""
 	if len(init.Lhs) == 1 {
 		name = init.Lhs[0].Value
@@ -716,5 +730,8 @@ func (e *emitter) typeSwitchStmt(n *syntax.BashPPSwitch) (string, error) {
 		e.pop()
 	}
 	out.WriteString("}")
+	if target.label != "" {
+		return target.label + ":\n" + out.String(), nil
+	}
 	return out.String(), nil
 }

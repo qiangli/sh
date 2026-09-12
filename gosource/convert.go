@@ -17,16 +17,50 @@ import (
 )
 
 type converter struct {
-	packagePath   string
-	importAliases map[string]string
-	syntheticPos  token.Pos
-	prefix        string
-	fset          *token.FileSet
-	files         []*ast.File
-	sources       []Source
-	info          *types.Info
-	renames       map[types.Object]string
-	err           error
+	packagePath    string
+	importAliases  map[string]string
+	syntheticPos   token.Pos
+	prefix         string
+	fset           *token.FileSet
+	files          []*ast.File
+	sources        []Source
+	info           *types.Info
+	renames        map[types.Object]string
+	branchScopes   []converterBranchScope
+	statementLabel string
+	err            error
+}
+
+type converterBranchScope struct {
+	label string
+	loop  bool
+}
+
+func (c *converter) pushBranchScope(label string, loop bool) func() {
+	c.branchScopes = append(c.branchScopes, converterBranchScope{label: label, loop: loop})
+	return func() { c.branchScopes = c.branchScopes[:len(c.branchScopes)-1] }
+}
+
+func (c *converter) takeStatementLabel() string {
+	label := c.statementLabel
+	c.statementLabel = ""
+	return label
+}
+
+func (c *converter) labeledBranchDepth(branch *ast.BranchStmt) int {
+	depth := 0
+	for i := len(c.branchScopes) - 1; i >= 0; i-- {
+		scope := c.branchScopes[i]
+		if branch.Tok == token.CONTINUE && !scope.loop {
+			continue
+		}
+		depth++
+		if scope.label == branch.Label.Name {
+			return depth
+		}
+	}
+	c.fail(branch, "labeled branch")
+	return 0
 }
 
 func (c *converter) pos(p token.Pos) s.Pos {
@@ -775,9 +809,15 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 		}
 		cmd = out
 	case *ast.ForStmt:
-		cmd = &s.BashPPFor{For: c.pos(x.For), Init: c.one(x.Init), Cond: c.expr(x.Cond), Post: c.one(x.Post), Body: c.block(x.Body), FirstSemi: c.headerToken(x.For, x.Body.Lbrace, token.SEMICOLON, 0), SecondSemi: c.headerToken(x.For, x.Body.Lbrace, token.SEMICOLON, 1)}
+		leaveBranch := c.pushBranchScope(c.takeStatementLabel(), true)
+		body := c.block(x.Body)
+		leaveBranch()
+		cmd = &s.BashPPFor{For: c.pos(x.For), Init: c.one(x.Init), Cond: c.expr(x.Cond), Post: c.one(x.Post), Body: body, FirstSemi: c.headerToken(x.For, x.Body.Lbrace, token.SEMICOLON, 0), SecondSemi: c.headerToken(x.For, x.Body.Lbrace, token.SEMICOLON, 1)}
 	case *ast.RangeStmt:
-		out := &s.BashPPRange{For: c.pos(x.For), Range: c.pos(x.Range), Chan: c.word(x.X), Expr: c.expr(x.X), Body: c.block(x.Body)}
+		leaveBranch := c.pushBranchScope(c.takeStatementLabel(), true)
+		body := c.block(x.Body)
+		leaveBranch()
+		out := &s.BashPPRange{For: c.pos(x.For), Range: c.pos(x.Range), Chan: c.word(x.X), Expr: c.expr(x.X), Body: body}
 		var assignments []*s.Stmt
 		for i, e := range []ast.Expr{x.Key, x.Value} {
 			if e != nil {
@@ -797,10 +837,15 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 		out.Body.Stmts = append(assignments, out.Body.Stmts...)
 		cmd = out
 	case *ast.BranchStmt:
+		depth := 0
 		if x.Label != nil {
-			c.fail(x, "labeled branch")
+			if x.Tok != token.BREAK && x.Tok != token.CONTINUE {
+				c.fail(x, "labeled branch")
+			} else {
+				depth = c.labeledBranchDepth(x)
+			}
 		}
-		cmd = &s.BashPPBranch{Kw: c.lit(x.TokPos, x.Tok.String())}
+		cmd = &s.BashPPBranch{Kw: c.lit(x.TokPos, x.Tok.String()), Depth: uint(depth)}
 	case *ast.DeferStmt:
 		cmd = &s.BashPPDefer{Kw: c.lit(x.Defer, "defer"), Call: c.call(x.Call)}
 	case *ast.GoStmt:
@@ -808,6 +853,8 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 	case *ast.SendStmt:
 		cmd = &s.BashPPSend{Chan: c.word(x.Chan), Arrow: c.pos(x.Arrow), Value: c.word(x.Value), ValueExpr: c.expr(x.Value), ChanExpr: c.expr(x.Chan)}
 	case *ast.SelectStmt:
+		leaveBranch := c.pushBranchScope("", false)
+		defer leaveBranch()
 		out := &s.BashPPSelect{Select: c.pos(x.Select), Lbrace: c.pos(x.Body.Lbrace), Rbrace: c.pos(x.Body.Rbrace)}
 		for _, st := range x.Body.List {
 			cc := st.(*ast.CommClause)
@@ -833,6 +880,8 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 			}
 			guard.Expr = c.expr(assign.Rhs[0].(*ast.TypeAssertExpr))
 		}
+		leaveBranch := c.pushBranchScope("", false)
+		defer leaveBranch()
 		out := &s.BashPPSwitch{Switch: c.pos(x.Switch), TypeSwitch: true, Init: guard, Lbrace: c.pos(x.Body.Lbrace), Rbrace: c.pos(x.Body.Rbrace)}
 		for _, st := range x.Body.List {
 			cc := st.(*ast.CaseClause)
@@ -847,6 +896,8 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 		}
 		cmd = out
 	case *ast.SwitchStmt:
+		leaveBranch := c.pushBranchScope("", false)
+		defer leaveBranch()
 		out := &s.BashPPSwitch{Switch: c.pos(x.Switch), Init: c.one(x.Init), Tag: c.expr(x.Tag), Lbrace: c.pos(x.Body.Lbrace), Rbrace: c.pos(x.Body.Rbrace)}
 		for _, st := range x.Body.List {
 			cc := st.(*ast.CaseClause)
@@ -860,6 +911,17 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 			out.Arms = append(out.Arms, v)
 		}
 		cmd = out
+	case *ast.LabeledStmt:
+		switch x.Stmt.(type) {
+		case *ast.ForStmt, *ast.RangeStmt:
+			previous := c.statementLabel
+			c.statementLabel = x.Label.Name
+			out := c.statements(x.Stmt)
+			c.statementLabel = previous
+			return out
+		default:
+			c.fail(st, "LabeledStmt")
+		}
 	default:
 		c.fail(st, strings.TrimPrefix(fmt.Sprintf("%T", st), "*ast."))
 	}

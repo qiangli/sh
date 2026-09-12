@@ -10,6 +10,7 @@ import (
 
 	"mvdan.cc/sh/v3/gosource"
 	"mvdan.cc/sh/v3/interp"
+	"mvdan.cc/sh/v3/lower"
 	"mvdan.cc/sh/v3/syntax"
 )
 
@@ -23,10 +24,10 @@ func TestSprint151Spike(t *testing.T) {
 	for _, tc := range []struct {
 		mechanism, file, want string
 	}{
-		{"labeled-branch/for-break", "labeled_break_for.go", "labeled_break_for.go:8:1: gosource: unsupported LabeledStmt"},
-		{"labeled-branch/for-continue", "labeled_continue_for.go", "labeled_continue_for.go:8:1: gosource: unsupported LabeledStmt"},
-		{"labeled-branch/switch-break", "labeled_break_switch.go", "labeled_break_switch.go:9:1: gosource: unsupported LabeledStmt"},
-		{"labeled-branch/select-break", "labeled_break_select.go", "labeled_break_select.go:13:1: gosource: unsupported LabeledStmt"},
+		{"labeled-branch/for-break", "labeled_break_for.go", ""},
+		{"labeled-branch/for-continue", "labeled_continue_for.go", ""},
+		{"labeled-branch/switch-break", "labeled_break_switch.go", ""},
+		{"labeled-branch/select-break", "labeled_break_select.go", ""},
 		{"goto/backward", "goto_backward.go", "goto_backward.go:8:1: gosource: unsupported LabeledStmt"},
 		{"goto/forward", "goto_forward.go", "goto_forward.go:10:3: gosource: unsupported labeled branch"},
 		{"expression-statement/paren-call", "exprstmt_paren_call.go", ""},
@@ -68,6 +69,10 @@ func TestSprint151Implemented(t *testing.T) {
 		"range_target_index.go",
 		"range_target_field.go",
 		"range_target_deref.go",
+		"labeled_break_for.go",
+		"labeled_continue_for.go",
+		"labeled_break_switch.go",
+		"labeled_break_select.go",
 	} {
 		t.Run(file, func(t *testing.T) {
 			path := filepath.Join("testdata", "sprint151", file)
@@ -93,6 +98,21 @@ func TestSprint151Implemented(t *testing.T) {
 			}
 			if !bytes.Equal(stdout.Bytes(), goOut) {
 				t.Fatalf("stdout differs from go run\ninterpreter: %q\ngo run:      %q", stdout.Bytes(), goOut)
+			}
+			result, err := lower.Compile(program.File, lower.Options{Origin: file})
+			if err != nil {
+				t.Fatalf("lower: %v", err)
+			}
+			generated := filepath.Join(t.TempDir(), "generated.go")
+			if err := os.WriteFile(generated, result.Source, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			loweredOut, err := exec.Command("go", "run", generated).Output()
+			if err != nil {
+				t.Fatalf("go run lowered program: %v\n%s", err, result.Source)
+			}
+			if !bytes.Equal(loweredOut, goOut) {
+				t.Fatalf("lowered stdout differs from go run\nlowered: %q\ngo run:  %q", loweredOut, goOut)
 			}
 		})
 	}
