@@ -800,6 +800,11 @@ func (e *emitter) function(f *syntax.BashPPFuncDecl) (string, error) {
 	savedResults := e.resultTypes
 	e.resultTypes = e.returnTypes(f.Results)
 	defer func() { e.resultTypes = savedResults }()
+	if f.Body == nil {
+		// Go admits a body-less declaration only when assembly or a linkname
+		// supplies the body; nothing here can, so say so instead of crashing.
+		return "", e.fail(f, CodeUnsupported, "function declaration without body")
+	}
 	body, err := e.block(f.Body)
 	if err != nil {
 		return "", err
