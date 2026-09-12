@@ -29,7 +29,7 @@ func (r *Runner) goSourceWaitGroupGo(ctx context.Context, call *syntax.BashPPCal
 		return false
 	}
 	base, ok := goSourceWaitGroupSelector(call)
-	if !ok || !r.bashPPNativeExpr(base) {
+	if !ok || !(r.bashPPNativeExpr(base) || r.bashPPNativePointerExpr(base)) {
 		return false
 	}
 	// The argument shape is checked before the receiver is evaluated, so an
@@ -42,6 +42,11 @@ func (r *Runner) goSourceWaitGroupGo(ctx context.Context, call *syntax.BashPPCal
 	if err != nil {
 		// Not this operation's diagnostic to own; the native path re-reports it.
 		return false
+	}
+	// An original pointer to the dependency's WaitGroup names the same native
+	// object; the methods run against the handle's own storage.
+	if receiver.Kind == "pointer" && len(receiver.Elements) == 1 && receiver.Elements[0].Kind == "handle" {
+		receiver = receiver.Elements[0]
 	}
 	if !goSourceWaitGroupHandle(receiver) {
 		return false
