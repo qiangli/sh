@@ -438,7 +438,7 @@ func (r *Runner) bashPPTypedScalarDeclValue(d *syntax.BashPPDecl) (expand.Variab
 		return expand.Variable{}, true, err
 	}
 	if value.typ != "" {
-		actual := &syntax.BashPPNamedType{Name: &syntax.Lit{Value: value.typ}}
+		actual, _ := bashPPScalarNamedType(value.typ)
 		if !r.bashPPTypeAssignable(actual, d.DeclTypeExpr) {
 			return expand.Variable{}, true, fmt.Errorf("BASHPP-EASSIGN-TYPE: cannot use %s as %s in declaration", value.typ, bashPPTypeText(d.DeclTypeExpr))
 		}
@@ -1083,6 +1083,12 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 		if target != nil {
 			target.scalarKind = value.value.Kind()
 			target.typeName = value.typ
+			// `f := IteratorFunc[int](it)`: an instantiated named type is
+			// kept as a tree, since its type arguments are what the
+			// receiver's methods are bound with.
+			if strings.Contains(value.typ, "[") {
+				target.declType, target.typeName = bashPPScalarNamedType(value.typ)
+			}
 			if source != nil {
 				target.object = source.object
 				target.channel, target.channelOwner = source.channel, source.channelOwner

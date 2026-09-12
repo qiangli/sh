@@ -124,7 +124,7 @@ func (r *Runner) goSourceValueCell(expr syntax.BashPPExpr) (*bashPPCell, error) 
 	}
 	cell := &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarString(v.value)}, scalarKind: v.value.Kind(), typeName: v.typ}
 	if v.typ != "" {
-		cell.declType = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: v.typ}}
+		cell.declType, cell.typeName = bashPPScalarNamedType(v.typ)
 	}
 	return cell, nil
 }

@@ -373,6 +373,13 @@ func bashppTypeExpr(w *Word) BashPPTypeExpr {
 	return bashppConvertType(expr, pos, lit)
 }
 
+// BashPPTypeExprFromText parses a type spelled as text — the spelling a
+// scalar carries after a conversion such as `IteratorFunc[int](it)` — into
+// its type tree, or nil when the text is not a supported type.
+func BashPPTypeExprFromText(text string) BashPPTypeExpr {
+	return bashppTypeExprFromLit(&Lit{Value: text})
+}
+
 func bashppTypeExprFromLit(src *Lit) BashPPTypeExpr {
 	if src == nil {
 		return nil

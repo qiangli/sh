@@ -603,7 +603,7 @@ func bashPPSelectorCellType(cell *bashPPCell) syntax.BashPPTypeExpr {
 		}
 	}
 	if typ == nil && cell.typeName != "" {
-		typ = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: cell.typeName}}
+		typ, _ = bashPPScalarNamedType(cell.typeName)
 		if cell.pointer {
 			typ = &syntax.BashPPPointerType{Element: typ}
 		}
@@ -1189,8 +1189,7 @@ func (r *Runner) bashPPGoSourceArgCell(w *syntax.Word, expr syntax.BashPPExpr) *
 		scalarKind: value.value.Kind(),
 	}
 	if value.typ != "" {
-		cell.typeName = value.typ
-		cell.declType = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: value.typ}}
+		cell.declType, cell.typeName = bashPPScalarNamedType(value.typ)
 	}
 	return cell
 }
@@ -1255,7 +1254,7 @@ func (r *Runner) bashPPTypedCallArgs(call *syntax.BashPPCall, fn *bashPPFunc) (r
 		text := bashPPScalarString(value.value)
 		cell := &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: text}, scalarKind: value.value.Kind()}
 		if value.typ != "" {
-			cell.declType = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: value.typ}}
+			cell.declType, cell.typeName = bashPPScalarNamedType(value.typ)
 		}
 		cells[i], args[i] = cell, text
 	}
@@ -2379,8 +2378,7 @@ func (r *Runner) bashPPReturnScalarExpr(expr syntax.BashPPExpr) {
 	text := bashPPScalarString(value.value)
 	cell := &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: text}, scalarKind: value.value.Kind()}
 	if value.typ != "" {
-		cell.typeName = value.typ
-		cell.declType = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: value.typ}}
+		cell.declType, cell.typeName = bashPPScalarNamedType(value.typ)
 	}
 	r.bashPPReturn = bashPPReturnState{active: true, values: []string{text}, cells: []*bashPPCell{cell}}
 	r.exit.returning = true

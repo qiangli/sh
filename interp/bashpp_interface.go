@@ -463,7 +463,7 @@ func (r *Runner) bashPPBindInterfaceParam(cell *bashPPCell, typ syntax.BashPPTyp
 		}
 	}
 	if dynamic == nil && cell.typeName != "" {
-		dynamic = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: cell.typeName}}
+		dynamic, _ = bashPPScalarNamedType(cell.typeName)
 	}
 	if dynamic == nil {
 		if name := bashPPDefaultScalarTypeName(cell.scalarKind); name != "" {
@@ -556,7 +556,7 @@ func (r *Runner) bashPPCellForInterfaceExpr(expr syntax.BashPPExpr) (*bashPPCell
 			}
 		}
 		if actual == nil && cell.typeName != "" {
-			actual = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: cell.typeName}}
+			actual, _ = bashPPScalarNamedType(cell.typeName)
 		}
 		if actual == nil {
 			return nil, nil, fmt.Errorf("BASHPP-EINTERFACE-VALUE: %s has no dynamic type", id.Name.Value)
@@ -606,7 +606,7 @@ func (r *Runner) bashPPCellForInterfaceExpr(expr syntax.BashPPExpr) (*bashPPCell
 	if name == "" {
 		return nil, nil, fmt.Errorf("BASHPP-EINTERFACE-VALUE: interface assignment requires a named value")
 	}
-	actual := &syntax.BashPPNamedType{Name: &syntax.Lit{Value: name}}
+	actual, name := bashPPScalarNamedType(name)
 	cell := &bashPPCell{
 		vr:         expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarString(value.value)},
 		scalarKind: value.value.Kind(),

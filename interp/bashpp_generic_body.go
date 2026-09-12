@@ -3,7 +3,11 @@
 
 package interp
 
-import "mvdan.cc/sh/v3/syntax"
+import (
+	"strings"
+
+	"mvdan.cc/sh/v3/syntax"
+)
 
 // Type parameters inside a generic BODY.
 //
@@ -398,4 +402,19 @@ func (r *Runner) bashPPBindExprs(x syntax.BashPPExpr) syntax.BashPPExpr {
 		return &cp
 	}
 	return x
+}
+
+// bashPPScalarNamedType turns the type name a scalar carries into the type
+// it names. A conversion to an instantiated generic type spells its result
+// with the type arguments — `IteratorFunc[int]` — and those arguments are
+// what the receiver's methods and the interface checks are bound with, so
+// the spelling is parsed back into a tree and the bare name returned beside
+// it for the declaration lookup. Any other name is the named type it is.
+func bashPPScalarNamedType(name string) (syntax.BashPPTypeExpr, string) {
+	if strings.Contains(name, "[") {
+		if named, ok := syntax.BashPPTypeExprFromText(name).(*syntax.BashPPNamedType); ok && named.Name != nil && len(named.TypeArgs) > 0 {
+			return named, named.Name.Value
+		}
+	}
+	return &syntax.BashPPNamedType{Name: &syntax.Lit{Value: name}}, name
 }

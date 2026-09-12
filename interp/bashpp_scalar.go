@@ -163,6 +163,16 @@ func (r *Runner) bashPPEvalScalarExpr(expr syntax.BashPPExpr) (result bashPPScal
 		if err != nil {
 			return bashPPScalar{}, err
 		}
+		// `IteratorFunc[int](it)`: a function value converted to a named
+		// function type keeps its handle and takes the name, which is what
+		// its methods are then resolved on.
+		if target := r.bashPPConvertTarget(x); target != nil && v.value.Kind() == constant.String {
+			if _, ok := r.bashPPUnderlyingType(target).(*syntax.BashPPFuncType); ok {
+				if _, closure := r.bashPPClosure(constant.StringVal(v.value)); closure {
+					return bashPPScalar{value: v.value, typ: bashPPTypeText(target), runtime: true}, nil
+				}
+			}
+		}
 		return r.bashPPConvertNamedScalar(x.ConvType.Value, v)
 	case *syntax.BashPPIndexExpr:
 		// Strings are scalar values, not collection objects. Go indexing is by
@@ -286,7 +296,8 @@ func (r *Runner) bashPPExprScalarType(expr syntax.BashPPExpr) syntax.BashPPTypeE
 			if cell.scalarKind == constant.String && cell.typeName == "untyped string" {
 				return &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "string"}}
 			}
-			return &syntax.BashPPNamedType{Name: &syntax.Lit{Value: cell.typeName}}
+			typ, _ := bashPPScalarNamedType(cell.typeName)
+			return typ
 		}
 		if cell.scalarKind == constant.String {
 			return &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "string"}}
