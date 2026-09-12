@@ -750,7 +750,7 @@ func (e *emitter) typeSwitchStmt(n *syntax.BashPPSwitch) (string, error) {
 			}
 			out.WriteString("case " + strings.Join(values, ",") + ":\n")
 		}
-		if name != "" {
+		if name != "" && !e.goSource {
 			out.WriteString("_ = " + name + "\n")
 		}
 		for _, stmt := range arm.Stmts {

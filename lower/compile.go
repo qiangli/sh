@@ -731,6 +731,11 @@ func names(lits []*syntax.Lit) []string {
 	return out
 }
 func (e *emitter) unused(ns []string) string {
+	// Go source is checked by gc itself: an unused variable is the source's
+	// own error, and a sink would only hide it.
+	if e.goSource {
+		return ""
+	}
 	var out string
 	for _, n := range ns {
 		if n != "_" {
@@ -1006,11 +1011,7 @@ func (e *emitter) command(c syntax.Command) (string, error) {
 			return "", e.fail(n, CodeUnsupported, "initialized typed float needs certified scalar conversion semantics")
 		}
 		e.projections.projectionBind(n.Name.Value, projection)
-		unused := e.unused([]string{n.Name.Value})
-		if e.goSource && n.Kw.Value == "const" {
-			unused = ""
-		}
-		return n.Kw.Value + " " + n.Name.Value + typ + init + unused, nil
+		return n.Kw.Value + " " + n.Name.Value + typ + init + e.unused([]string{n.Name.Value}), nil
 	case *syntax.BashPPShortDecl:
 		if text, handled, err := e.shortResultCall(n); handled || err != nil {
 			return text, err
