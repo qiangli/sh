@@ -19,7 +19,7 @@ func (c *converter) functionValueType(expr ast.Expr) *syntax.BashPPFuncType {
 	}
 	// A named function type (notably iter.Seq[T]) prints as its name. The
 	// interpreter needs its callable shape, so retain the underlying signature.
-	text := types.TypeString(typeSignature, c.qualifier)
+	text := c.typeString(typeSignature)
 	parsed, err := parser.ParseExpr(text)
 	if err != nil {
 		c.fail(expr, "function value type")

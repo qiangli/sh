@@ -12,7 +12,27 @@ retains files/Info/package, `Load` links every mapped package into the one
 qualifiers (`mappedPkgName`, `qualifier`), and `Program.Packages` lists what
 was linked. `packages_test.go` (`TestMapped*`) runs the fixture, init order,
 diamond imports and the selector sites through `interp` against `go run`, and
-pins the collision and go:embed refusals and the `%T` known difference.
+pins the go:embed refusal and the `%T` known difference.
+
+**Name mangling (implemented, Story #72, follow-up).** The collision
+diagnostic of §3.4 is gone: `mangleLinkedNames` renames every package-level
+object of a mapped package (types, funcs, vars, consts, exported or not) to
+`__gosource_pkg_<i>_<Name>` by map index through the converter's existing
+`renames` map, so `a.F`/`b.F`, `a.T`/`b.T` and a program name shadowing a
+dependency's all link. Methods keep their names (dispatch is by receiver
+type, which is renamed); an embedded field of a renamed type takes the
+type's rename, since the runtime derives the field name from the type
+spelling and the converter spells the field's uses through the field
+object. The three `types.TypeString` sites go through `converter.typeString`,
+which qualifies a mapped package by a marker and rewrites `<marker>.Name`
+into the rename. `checkLoweredNames` guards the result: a duplicate
+top-level name in the flat file is a converter defect. The `%T` difference
+narrows but stays: a mapped `a.T` prints as `main.__gosource_pkg_0_T`
+(the native bridge mirrors the type into its helper under that name;
+a display name would be a bridge change). `TestMappedNameCollisionRuns`,
+`TestMappedCollidingNamesAcrossTwoDependencies`,
+`TestMappedProgramNameShadowsDependency` and
+`TestMappedEmbeddedTypeKeepsFieldName` cover it.
 
 **Bottom line.** The map is a *lowering-time* input that today stops at the
 type checker; the runtime never sees it and has no field that could hold it.
