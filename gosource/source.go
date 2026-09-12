@@ -244,6 +244,7 @@ func Load(sources []Source, options Options) (*Program, error) {
 	// Import aliases are shared: every package's imports are hoisted into
 	// the one file, so an alias minted by any package names that path for all.
 	importAliases := map[string]string{}
+	liveImportPaths := liveImports(linked, mapped)
 	var lowered []*loweredPackage
 	for pi, lc := range linked {
 		lc.importAliases = importAliases
@@ -258,8 +259,9 @@ func Load(sources []Source, options Options) (*Program, error) {
 				lc.renames[obj] = fmt.Sprintf("%sbinding_%d", c.prefix, id.Pos())
 			}
 		}
-		// Imports are file scoped. Give each binding a collision-free package
-		// alias; a mapped package's aliases carry its map index as well.
+		// Only live package bindings need an alias. Blank imports and package
+		// bindings with no selector use must not create unused alias imports
+		// in the lowered file.
 		for fi, f := range lc.files {
 			for ii, spec := range f.Imports {
 				var obj types.Object
@@ -269,12 +271,14 @@ func Load(sources []Source, options Options) (*Program, error) {
 					obj = lc.info.Implicits[spec]
 				}
 				if obj != nil && obj.Name() != "_" && obj.Name() != "." {
-					if lc == c {
-						lc.renames[obj] = fmt.Sprintf("%simport_%d_%d", c.prefix, fi, ii)
-					} else {
-						lc.renames[obj] = fmt.Sprintf("%simport_%d_%d_%d", c.prefix, pi, fi, ii)
-					}
 					if pkgname, ok := obj.(*types.PkgName); ok {
+						if liveImportPaths[pkgname.Imported().Path()] {
+							if lc == c {
+								lc.renames[obj] = fmt.Sprintf("%simport_%d_%d", c.prefix, fi, ii)
+							} else {
+								lc.renames[obj] = fmt.Sprintf("%simport_%d_%d_%d", c.prefix, pi, fi, ii)
+							}
+						}
 						if _, linked := mapped[pkgname.Imported().Path()]; !linked {
 							importAliases[pkgname.Imported().Path()] = lc.renames[obj]
 						}
@@ -334,6 +338,40 @@ func Load(sources []Source, options Options) (*Program, error) {
 	c.attachEmbedDirectives(p.File)
 	p.File.Sources = append([]syntax.SourceFile(nil), p.Sources...)
 	return p, nil
+}
+
+func liveImports(linked []*converter, mapped map[string]int) map[string]bool {
+	live := map[*types.PkgName]bool{}
+	for _, lc := range linked {
+		for _, obj := range lc.info.Uses {
+			if pkgname, ok := obj.(*types.PkgName); ok {
+				live[pkgname] = true
+			}
+		}
+	}
+	paths := map[string]bool{}
+	for _, lc := range linked {
+		for _, f := range lc.files {
+			for _, spec := range f.Imports {
+				var obj types.Object
+				if spec.Name != nil {
+					obj = lc.info.Defs[spec.Name]
+				} else {
+					obj = lc.info.Implicits[spec]
+				}
+				pkgname, ok := obj.(*types.PkgName)
+				if !ok || !live[pkgname] {
+					continue
+				}
+				path := pkgname.Imported().Path()
+				if _, linked := mapped[path]; linked {
+					continue
+				}
+				paths[path] = true
+			}
+		}
+	}
+	return paths
 }
 
 // shadowedBuiltinTypes reports the predeclared type names a package redeclares
