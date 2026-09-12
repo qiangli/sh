@@ -608,6 +608,30 @@ func bashPPLocalMethodGo(typeName, receiver string, method bashPPLocalMethod) st
 	return b.String()
 }
 
+// bashPPBridgeResolvableArrayType reports whether the helper's type resolver
+// can already resolve the declared spelling of an array value: a materialised
+// local name, an imported identity registered from export data, or a literal
+// length. Anything else needs the realised structural spelling instead.
+func (r *Runner) bashPPBridgeResolvableArrayType(typ syntax.BashPPTypeExpr, collection *syntax.BashPPCollectionType) bool {
+	if named, ok := typ.(*syntax.BashPPNamedType); ok && named.Name != nil {
+		name := named.Name.Value
+		if strings.Contains(name, ".") {
+			return true
+		}
+		for _, local := range r.bashPPLocalTypeDescriptors() {
+			if local.Name == name || local.WireType == name {
+				return true
+			}
+		}
+		return false
+	}
+	if collection.Length == nil {
+		return false
+	}
+	_, err := strconv.ParseUint(collection.Length.Value, 0, 63)
+	return err == nil
+}
+
 // bashPPLocalTypeIdentity is the comparison key that decides whether a running
 // dependency session already materialises the current local type namespace.
 func bashPPLocalTypeIdentity(locals []bashPPLocalType) string {

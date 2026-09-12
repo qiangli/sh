@@ -61,3 +61,10 @@ func TestGoSourceBridgeLocalArrayLength(t *testing.T) {
 func TestGoSourceBridgeLocalTypeClosure(t *testing.T) {
 	differSprint153(t, "local-type-closure")
 }
+
+// TestGoSourceBridgeArrayValueTransport covers values of array types the
+// helper does not materialise: they cross under their realised structural
+// spelling ([3]int) instead of an unregistered name.
+func TestGoSourceBridgeArrayValueTransport(t *testing.T) {
+	differSprint153(t, "array-value-transport")
+}
