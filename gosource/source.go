@@ -194,6 +194,7 @@ func Load(sources []Source, options Options) (*Program, error) {
 	}
 	p.Resolutions = imp.resolutions
 	p.Importer = imp
+	c.shadowedBuiltins = shadowedBuiltinTypes(pkg)
 	if main, ok := pkg.Scope().Lookup("main").(*types.Func); ok && p.Package == "main" {
 		p.Main = main.Name()
 	}
@@ -212,7 +213,7 @@ func Load(sources []Source, options Options) (*Program, error) {
 		checked := imp.checked[path]
 		mapped[path] = i
 		mappedPkgs = append(mappedPkgs, checked.pkg)
-		linked = append(linked, &converter{packagePath: path, fset: c.fset, files: checked.files, sources: checked.sources, info: checked.info, renames: c.renames})
+		linked = append(linked, &converter{packagePath: path, fset: c.fset, files: checked.files, sources: checked.sources, info: checked.info, renames: c.renames, shadowedBuiltins: shadowedBuiltinTypes(checked.pkg)})
 	}
 	c.packagePath = programPath
 	linked = append(linked, c)
@@ -309,9 +310,13 @@ func Load(sources []Source, options Options) (*Program, error) {
 			calls = append(append([]string(nil), calls...), p.Main)
 		}
 		for _, name := range calls {
-			pos := p.File.Pos()
-			lit := &syntax.Lit{Value: name, ValuePos: pos, ValueEnd: pos}
-			p.File.Stmts = append(p.File.Stmts, c.stmt(&syntax.BashPPCall{Fun: []*syntax.Lit{lit}, Lparen: pos, Rparen: pos}))
+			// These init and main entry calls are synthetic glue with no line
+			// in any source file. Borrowing the first declaration's position
+			// (p.File.Pos()) stamped a //line on them and mis-attributed -m
+			// diagnostics to that unrelated line; leave them unpositioned so
+			// the emitter never points a diagnostic back at borrowed source.
+			lit := &syntax.Lit{Value: name}
+			p.File.Stmts = append(p.File.Stmts, c.stmt(&syntax.BashPPCall{Fun: []*syntax.Lit{lit}}))
 		}
 	}
 	if err := checkLoweredNames(p.File); err != nil {
@@ -329,6 +334,32 @@ func Load(sources []Source, options Options) (*Program, error) {
 	c.attachEmbedDirectives(p.File)
 	p.File.Sources = append([]syntax.SourceFile(nil), p.Sources...)
 	return p, nil
+}
+
+// shadowedBuiltinTypes reports the predeclared type names a package redeclares
+// at package scope as something other than a type — `const int = 15`,
+// `var error = …`, `func string() {}`. Within such a package the name no
+// longer spells the universe type, so the converter must not synthesize a
+// `<name>(x)` conversion around a materialized constant.
+func shadowedBuiltinTypes(pkg *types.Package) map[string]bool {
+	if pkg == nil {
+		return nil
+	}
+	var out map[string]bool
+	scope := pkg.Scope()
+	for _, name := range scope.Names() {
+		if _, ok := types.Universe.Lookup(name).(*types.TypeName); !ok {
+			continue
+		}
+		if _, ok := scope.Lookup(name).(*types.TypeName); ok {
+			continue
+		}
+		if out == nil {
+			out = map[string]bool{}
+		}
+		out[name] = true
+	}
+	return out
 }
 
 // checkerOptions is the complete policy passed to every types.Config in one

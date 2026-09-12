@@ -40,7 +40,12 @@ type converter struct {
 	sources        []Source
 	info           *types.Info
 	renames        map[types.Object]string
-	err            error
+	// shadowedBuiltins names predeclared type names a package redeclares at
+	// package scope as a non-type (e.g. `const int = 15`). expr() must not
+	// materialize an untyped constant through such a name: `int(x)` would call
+	// the const, not convert to the type.
+	shadowedBuiltins map[string]bool
+	err              error
 	branchScopes   []converterBranchScope
 	statementLabel string
 }
@@ -595,6 +600,21 @@ func (c *converter) valueDecl(g *ast.GenDecl, v *ast.ValueSpec, n *ast.Ident, in
 	if v.Type != nil {
 		out.DeclType = c.lit(v.Type.Pos(), c.text(v.Type))
 		out.DeclTypeExpr = c.typ(v.Type)
+	} else if g.Tok == token.CONST {
+		// A const without an explicit type but with a defined (named) type —
+		// `const C2 = C1` where C1 has type E — inherits that type, so the
+		// method set and identity travel with it. Emitting only the untyped
+		// value drops E and the emitter rejects any later C2.P(). Spell the
+		// inferred type; untyped and predeclared-basic consts keep the value
+		// as written.
+		if obj, ok := c.info.Defs[n].(*types.Const); ok {
+			if _, named := obj.Type().(*types.Named); named {
+				if typeExpr := c.checkedType(obj.Type(), n, "inferred constant type"); typeExpr != nil {
+					out.DeclType = c.lit(n.Pos(), c.typeString(obj.Type()))
+					out.DeclTypeExpr = typeExpr
+				}
+			}
+		}
 	}
 	if g.Tok == token.CONST {
 		if obj, ok := c.info.Defs[n].(*types.Const); ok {
@@ -645,6 +665,12 @@ func (c *converter) expr(e ast.Expr) s.BashPPExpr {
 	// Preserve that boundary, particularly float and rune defaults in any.
 	if tv := c.info.Types[e]; tv.Value != nil {
 		if basic, ok := tv.Type.(*types.Basic); ok && basic.Info()&types.IsUntyped == 0 {
+			// A package that redeclares this predeclared type name as a
+			// non-type has no usable `basic.Name()` conversion; emitting one
+			// calls the redeclared object. Leave the constant as written.
+			if c.shadowedBuiltins[basic.Name()] {
+				return result
+			}
 			return &s.BashPPConvertExpr{ConvType: c.lit(e.Pos(), basic.Name()), Lparen: c.pos(e.Pos()), Rparen: c.pos(e.End() - 1), X: result}
 		}
 	}

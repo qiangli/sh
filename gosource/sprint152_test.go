@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"mvdan.cc/sh/v3/gosource"
@@ -26,6 +27,8 @@ func TestSprint152Converter(t *testing.T) {
 	}{
 		{"blank-target-paren", "blank-target-paren/blank_target_paren.go"},
 		{"new-paren", "new-paren/new_paren.go"},
+		{"const-defined-type", "const-defined-type/const_defined_type.go"},
+		{"shadowed-builtin-const", "shadowed-builtin-const/shadowed_builtin_const.go"},
 	} {
 		t.Run(tc.mechanism, func(t *testing.T) {
 			path := filepath.Join("testdata", "sprint152", filepath.FromSlash(tc.file))
@@ -69,5 +72,53 @@ func TestSprint152Converter(t *testing.T) {
 				t.Fatalf("lowered stdout differs from go run\nlowered: %q\ngo run:  %q", loweredOut, goOut)
 			}
 		})
+	}
+}
+
+// TestSprint152SyntheticCallPosition pins the C5 converter half: the synthetic
+// `main` wrapper's call to the renamed source main must carry no borrowed
+// //line. The first declaration is an import, so the old borrowed position
+// stamped a //line on the call attributing diagnostics to the import's line.
+func TestSprint152SyntheticCallPosition(t *testing.T) {
+	path := filepath.Join("testdata", "sprint152", "synthetic-main-call", "synthetic_main_call.go")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := filepath.Base(path)
+	program, err := gosource.Load([]gosource.Source{{Name: name, Data: data}}, gosource.Options{RunMain: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := lower.Compile(program.File, lower.Options{Origin: name})
+	if err != nil {
+		t.Fatalf("lower: %v", err)
+	}
+	// Find the wrapper's call to the renamed source main and assert no //line
+	// directive sits between `func main() {` and that call.
+	lines := strings.Split(string(result.Source), "\n")
+	wrapper := -1
+	for i, line := range lines {
+		if strings.TrimSpace(line) == "func main() {" {
+			wrapper = i
+			break
+		}
+	}
+	if wrapper < 0 {
+		t.Fatalf("no synthetic main wrapper in lowered source:\n%s", result.Source)
+	}
+	found := false
+	for i := wrapper + 1; i < len(lines); i++ {
+		trimmed := strings.TrimSpace(lines[i])
+		if strings.HasSuffix(trimmed, "sourceMain()") {
+			found = true
+			break
+		}
+		if strings.HasPrefix(trimmed, "//line ") {
+			t.Fatalf("synthetic main call borrows a position: %q precedes the sourceMain call\n%s", trimmed, result.Source)
+		}
+	}
+	if !found {
+		t.Fatalf("no sourceMain call inside the synthetic wrapper:\n%s", result.Source)
 	}
 }
