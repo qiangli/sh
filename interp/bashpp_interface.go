@@ -72,7 +72,7 @@ func (r *Runner) bashPPInterfaceMethodSet(name string, iface *syntax.BashPPInter
 		if elem.Method == nil {
 			embeddedIface, ok := r.bashPPInterfaceType(elem.Embedded)
 			if !ok {
-				if bashPPDirectTypeSetTerm(elem.Embedded) {
+				if bashPPDirectTypeSetTerm(elem.Embedded) || r.bashPPSingleTypeTerm(elem.Embedded) {
 					continue
 				}
 				return nil, fmt.Errorf("BASHPP-EINTERFACE-EMBED: interface %s embeds non-interface %s", name, bashPPTypeText(elem.Embedded))
@@ -113,6 +113,29 @@ func (r *Runner) bashPPInterfaceMethodSet(name string, iface *syntax.BashPPInter
 		set.byName[method] = bashPPInterfaceMethod{spec: spec, sig: sig}
 	}
 	return set, nil
+}
+
+// bashPPSingleTypeTerm reports whether a non-interface element embedded in
+// an interface is a one-term type set — `interface{ string }`, `interface{
+// []byte }`, `interface{ *B }`, `interface{ List[T] }` — which contributes
+// no methods and restricts the constraint's type set exactly as the union
+// spelling of the same term would. A bare name that resolves to nothing is
+// not one: it is an interface the runtime does not know, and saying so is
+// better than silently narrowing the type set to a type that does not exist.
+func (r *Runner) bashPPSingleTypeTerm(typ syntax.BashPPTypeExpr) bool {
+	switch t := typ.(type) {
+	case *syntax.BashPPNamedType:
+		if t.Name == nil {
+			return false
+		}
+		if _, declared := r.bashPPTypes[t.Name.Value]; declared {
+			return true
+		}
+		return bashPPBuiltinType(t.Name.Value)
+	case *syntax.BashPPCollectionType, *syntax.BashPPPointerType, *syntax.BashPPFuncType, *syntax.BashPPChanType, *syntax.BashPPStructType, *syntax.BashPPTypeParamType:
+		return true
+	}
+	return false
 }
 
 func bashPPDirectTypeSetTerm(typ syntax.BashPPTypeExpr) bool {

@@ -24,6 +24,7 @@ func TestSprint151Generics(t *testing.T) {
 		"chan_typeparam.go",
 		"generic_funcvalue.go",
 		"typeswitch_operand.go",
+		"embed_type_term.go",
 	} {
 		t.Run(file, func(t *testing.T) {
 			path := filepath.Join("testdata", "sprint151", "generics", file)
