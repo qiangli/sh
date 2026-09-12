@@ -2558,6 +2558,14 @@ func (r *Runner) bashPPDeferStmt(ctx context.Context, d *syntax.BashPPDefer) {
 		r.bashPPDeferStack = append(r.bashPPDeferStack, entry)
 		return
 	}
+	if captured, handled := r.goSourceCaptureDeferredValueBuiltin(d.Call); handled {
+		if captured != nil {
+			entry.call = captured
+			entry.predeclared = bashPPPredeclaredCall(d.Call)
+			r.bashPPDeferStack = append(r.bashPPDeferStack, entry)
+		}
+		return
+	}
 	if fn, ok := r.bashPPLookupFunc(d.Call); ok {
 		args, ok := r.bashPPCallValues(d.Call, fn)
 		if !ok {
