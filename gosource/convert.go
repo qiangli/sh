@@ -45,9 +45,17 @@ type converter struct {
 	// materialize an untyped constant through such a name: `int(x)` would call
 	// the const, not convert to the type.
 	shadowedBuiltins map[string]bool
-	err              error
-	branchScopes     []converterBranchScope
-	statementLabel   string
+	// constSpecs maps each package-level or local constant this package
+	// declares to its spec, so a use site can tell whether the declaration
+	// was emitted as written or materialized by value (see constAsWritten).
+	// Built on first use from files.
+	constSpecs map[*types.Const]constSpec
+	// shiftOperand is the constant left operand of a non-constant shift
+	// about to be converted; its contextual type is always spelled.
+	shiftOperand   ast.Expr
+	err            error
+	branchScopes   []converterBranchScope
+	statementLabel string
 }
 
 type converterBranchScope struct {
@@ -574,7 +582,13 @@ func (c *converter) typeDecl(g *ast.GenDecl, t *ast.TypeSpec) *s.BashPPDecl {
 }
 func (c *converter) valueDecl(g *ast.GenDecl, v *ast.ValueSpec, n *ast.Ident, index int) *s.BashPPDecl {
 	out := &s.BashPPDecl{Kw: c.lit(g.TokPos, g.Tok.String()), Name: c.ident(n), Site: s.StartVar, End_: c.pos(v.End())}
-	if v.Type == nil && g.Tok == token.VAR {
+	// A Go-source `var x = 5` keeps its inferred type implicit: the
+	// declaration is emitted as written when the value is a constant whose
+	// form already spells the type Go infers (C3). Any other initializer —
+	// a call, a composite, a mixed-kind constant — still carries the type,
+	// which the interpreter needs to bind a package-level value it cannot
+	// type from the word alone (`var a = f()`).
+	if v.Type == nil && g.Tok == token.VAR && !c.constInferredAsWritten(v, n, index) {
 		if obj := c.info.Defs[n]; obj != nil {
 			typeName := c.typeString(obj.Type())
 			// The synthetic AST has no go/types object bindings. Expand the
@@ -617,6 +631,15 @@ func (c *converter) valueDecl(g *ast.GenDecl, v *ast.ValueSpec, n *ast.Ident, in
 		}
 	}
 	if g.Tok == token.CONST {
+		// C3: a constant whose value is written out in a form the
+		// interpreter evaluates exactly — literals, constant names and
+		// operators, no iota or call — is emitted as written, so the
+		// generated Go is the source and an untyped rune keeps its kind.
+		if c.constAsWritten(v, index) {
+			out.Init = []*s.Word{c.word(v.Values[index])}
+			out.InitExpr = c.expr(v.Values[index])
+			return out
+		}
 		if obj, ok := c.info.Defs[n].(*types.Const); ok {
 			value := obj.Val().ExactString()
 			kind := "INT"
@@ -663,6 +686,12 @@ func (c *converter) expr(e ast.Expr) s.BashPPExpr {
 	// go/types records the concrete type only at a constant's contextual
 	// conversion/defaulting boundary. Inner untyped operands remain exact.
 	// Preserve that boundary, particularly float and rune defaults in any.
+	// C3: the boundary is spelled only when the constant's own form does
+	// not reveal its kind — a call, a foreign or by-value materialized
+	// constant, mixed-kind arithmetic defaulting into any. A literal, a
+	// constant name or same-kind arithmetic is left as written: the
+	// interpreter's exact scalar evaluation reproduces the kind from the
+	// form, and the generated Go stays the source.
 	if tv := c.info.Types[e]; tv.Value != nil {
 		if basic, ok := tv.Type.(*types.Basic); ok && basic.Info()&types.IsUntyped == 0 {
 			// A package that redeclares this predeclared type name as a
@@ -671,10 +700,236 @@ func (c *converter) expr(e ast.Expr) s.BashPPExpr {
 			if c.shadowedBuiltins[basic.Name()] {
 				return result
 			}
+			if c.constAsWrittenIn(e, basic) {
+				return result
+			}
 			return &s.BashPPConvertExpr{ConvType: c.lit(e.Pos(), basic.Name()), Lparen: c.pos(e.Pos()), Rparen: c.pos(e.End() - 1), X: result}
 		}
 	}
 	return result
+}
+
+// constSpec locates a constant's declaring spec and the index of its name.
+type constSpec struct {
+	spec  *ast.ValueSpec
+	index int
+}
+
+// constKind reports the untyped kind a constant expression has as written —
+// the kind the interpreter's exact scalar evaluation reproduces from the
+// source form — and false when the form does not reveal it: a call, a
+// conversion, a selector into a linked or native package, a constant this
+// package materialized by value, or arithmetic that mixes kinds and so
+// depends on Go's defaulting.
+func (c *converter) constKind(e ast.Expr) (types.BasicKind, bool) {
+	switch x := e.(type) {
+	case *ast.BasicLit:
+		switch x.Kind {
+		case token.INT:
+			return types.UntypedInt, true
+		case token.FLOAT:
+			return types.UntypedFloat, true
+		case token.CHAR:
+			return types.UntypedRune, true
+		case token.STRING:
+			return types.UntypedString, true
+		}
+	case *ast.ParenExpr:
+		return c.constKind(x.X)
+	case *ast.UnaryExpr:
+		if x.Op == token.NOT {
+			return types.UntypedBool, true
+		}
+		if x.Op == token.SUB || x.Op == token.ADD || x.Op == token.XOR {
+			return c.constKind(x.X)
+		}
+	case *ast.BinaryExpr:
+		left, ok := c.constKind(x.X)
+		if !ok {
+			return 0, false
+		}
+		switch x.Op {
+		case token.EQL, token.NEQ, token.LSS, token.LEQ, token.GTR, token.GEQ, token.LAND, token.LOR:
+			if _, ok := c.constKind(x.Y); ok {
+				return types.UntypedBool, true
+			}
+			return 0, false
+		case token.SHL, token.SHR:
+			if _, ok := c.constKind(x.Y); ok {
+				return left, true
+			}
+			return 0, false
+		}
+		right, ok := c.constKind(x.Y)
+		if !ok {
+			return 0, false
+		}
+		if right == left {
+			return left, true
+		}
+		// One typed operand types the whole expression.
+		if types.Typ[left].Info()&types.IsUntyped == 0 {
+			return left, true
+		}
+		if types.Typ[right].Info()&types.IsUntyped == 0 {
+			return right, true
+		}
+		// Untyped numeric kinds mix by rank: int < rune < float < complex.
+		if rank := untypedRank(left); rank > 0 && untypedRank(right) > 0 {
+			if untypedRank(right) > rank {
+				return right, true
+			}
+			return left, true
+		}
+	case *ast.Ident:
+		obj, ok := c.info.Uses[x].(*types.Const)
+		if !ok {
+			return 0, false
+		}
+		basic, ok := obj.Type().(*types.Basic)
+		if !ok {
+			return 0, false
+		}
+		if basic.Info()&types.IsUntyped == 0 {
+			return basic.Kind(), true
+		}
+		if obj == types.Universe.Lookup("iota") || obj == types.Universe.Lookup("true") || obj == types.Universe.Lookup("false") {
+			return basic.Kind(), true
+		}
+		// A named rune constant reaches the interpreter as an exact
+		// integer whether its declaration is written `'a'` or
+		// materialized as 97: the constant cell has no rune kind. The
+		// use site keeps its conversion.
+		if basic.Kind() == types.UntypedRune {
+			return 0, false
+		}
+		if _, ok := c.constSpecOf(obj); !ok {
+			// Declared by another package: whether its value reaches the
+			// interpreter with the kind of its form is not this
+			// converter's to know.
+			return 0, false
+		}
+		// Declared here: written out or materialized by value, an int,
+		// float, string or bool keeps its kind.
+		return basic.Kind(), true
+	}
+	return 0, false
+}
+
+// constAsWrittenIn reports whether a constant expression of typed basic type
+// typ may be emitted without the conversion spelling that type: its kind is
+// evident from its form and the interpreter reproduces typ from that form in
+// this context. That is the case when typ is the kind's own default (an int
+// literal as int, a float as float64, a rune as rune, a string, a bool), and
+// for an int kind in a floating-point context, which the interpreter's exact
+// scalar arithmetic widens (`f != 0`, `2 * g`). Any other context — a rune
+// into a byte, an int beyond int64 into a uint64, a float into float32, a
+// constant shifted by a variable count — keeps the conversion.
+func (c *converter) constAsWrittenIn(e ast.Expr, typ *types.Basic) bool {
+	if e == c.shiftOperand {
+		c.shiftOperand = nil
+		return false
+	}
+	kind, evident := c.constKind(e)
+	if !evident {
+		return false
+	}
+	if types.Identical(types.Default(types.Typ[kind]), typ) {
+		return true
+	}
+	if kind == types.UntypedInt && typ.Info()&types.IsFloat != 0 {
+		if v := c.info.Types[e].Value; v != nil {
+			_, exact := constant.Int64Val(constant.ToInt(v))
+			return exact
+		}
+	}
+	return false
+}
+
+// untypedRank orders the untyped numeric kinds as Go's constant expression
+// rules promote them; 0 for a kind that does not mix.
+func untypedRank(kind types.BasicKind) int {
+	switch kind {
+	case types.UntypedInt:
+		return 1
+	case types.UntypedRune:
+		return 2
+	case types.UntypedFloat:
+		return 3
+	case types.UntypedComplex:
+		return 4
+	}
+	return 0
+}
+
+// constSpecOf finds the spec declaring a constant of this package, building
+// the cache from every const declaration, package-level or local, on first
+// use.
+func (c *converter) constSpecOf(obj *types.Const) (constSpec, bool) {
+	if c.constSpecs == nil {
+		c.constSpecs = map[*types.Const]constSpec{}
+		for _, f := range c.files {
+			ast.Inspect(f, func(n ast.Node) bool {
+				gd, ok := n.(*ast.GenDecl)
+				if !ok || gd.Tok != token.CONST {
+					return true
+				}
+				for _, raw := range gd.Specs {
+					v := raw.(*ast.ValueSpec)
+					for i, name := range v.Names {
+						if obj, ok := c.info.Defs[name].(*types.Const); ok {
+							c.constSpecs[obj] = constSpec{spec: v, index: i}
+						}
+					}
+				}
+				return true
+			})
+		}
+	}
+	decl, ok := c.constSpecs[obj]
+	return decl, ok
+}
+
+// constAsWritten reports whether the constant declared at spec.Names[index]
+// is emitted with its value as written rather than materialized by value:
+// it has an explicit value of evident kind that mentions no iota.
+func (c *converter) constAsWritten(spec *ast.ValueSpec, index int) bool {
+	if len(spec.Values) != len(spec.Names) || index >= len(spec.Values) {
+		return false
+	}
+	value := spec.Values[index]
+	usesIota := false
+	ast.Inspect(value, func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok && c.info.Uses[id] == types.Universe.Lookup("iota") {
+			usesIota = true
+		}
+		return !usesIota
+	})
+	if usesIota {
+		return false
+	}
+	_, evident := c.constKind(value)
+	return evident
+}
+
+// constInferredAsWritten reports whether a `var` spec without a type may be
+// emitted without its inferred type: the value at index is an int, float or
+// string literal whose default is the very type Go infers, so the
+// declaration as written already spells it for the interpreter and the
+// generated Go alike. The interpreter binds a package-level value without a
+// declared type from its word, which only such a literal survives: a rune
+// literal would read as a quoted string and an expression as its text.
+func (c *converter) constInferredAsWritten(spec *ast.ValueSpec, n *ast.Ident, index int) bool {
+	if len(spec.Values) != len(spec.Names) || index >= len(spec.Values) {
+		return false
+	}
+	lit, ok := spec.Values[index].(*ast.BasicLit)
+	if !ok || (lit.Kind != token.INT && lit.Kind != token.FLOAT && lit.Kind != token.STRING) {
+		return false
+	}
+	kind, _ := c.constKind(lit)
+	obj := c.info.Defs[n]
+	return obj != nil && types.Identical(types.Default(types.Typ[kind]), obj.Type())
 }
 
 func (c *converter) exprValue(e ast.Expr) s.BashPPExpr {
@@ -701,6 +956,13 @@ func (c *converter) exprValue(e ast.Expr) s.BashPPExpr {
 	case *ast.StarExpr:
 		return &s.BashPPDerefExpr{Star: c.pos(x.Star), X: c.expr(x.X)}
 	case *ast.BinaryExpr:
+		if (x.Op == token.SHL || x.Op == token.SHR) && c.info.Types[x].Value == nil {
+			// A constant shifted by a variable count takes the type of
+			// its context, which the form does not reveal (`1 << n` is
+			// an int, a uint64, ... by use); the interpreter widens the
+			// result from the spelled type. Keep that spelling.
+			c.shiftOperand = x.X
+		}
 		return &s.BashPPBinaryExpr{X: c.expr(x.X), Op: c.lit(x.OpPos, x.Op.String()), Y: c.expr(x.Y)}
 	case *ast.SelectorExpr:
 		if value := c.genericFuncValue(x); value != nil {
