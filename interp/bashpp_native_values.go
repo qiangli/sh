@@ -679,6 +679,13 @@ func (r *Runner) bashPPBridgeCollection(value any, meta *bashPPCollectionMeta, t
 		if inferredArray {
 			result.Type = "[" + strconv.Itoa(len(value)) + "]" + bashPPBridgeTypeText(collection.Element)
 		}
+		// A named array type the helper does not materialise — its length is a
+		// constant name or expression the helper cannot evaluate — still has a
+		// realised length here. Transport the structural spelling the resolver
+		// can parse, exactly like the inferred-length form above.
+		if result.Kind == "array" && !inferredArray && r.bashPPGoSource && !r.bashPPBridgeResolvableArrayType(typ, collection) {
+			result.Type = "[" + strconv.Itoa(len(value)) + "]" + bashPPBridgeTypeText(collection.Element)
+		}
 		if r.bashPPGoSource && result.Kind == "slice" {
 			result.sliceView = &bashPPNativeSlice{view: value, meta: meta, typ: typ}
 		}
