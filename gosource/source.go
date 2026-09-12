@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"mvdan.cc/sh/v3/syntax"
 )
@@ -63,6 +64,10 @@ type Options struct {
 	// types.Config.FakeImportC. It does not provide cgo declarations or make
 	// cgo source executable by the Bash++ runtime.
 	FakeImportC bool
+	// TestBuiltins mirrors types.DefPredeclaredTestFuncs, enabling the assert and
+	// trace test builtins of the go/types testing environment. It is off by
+	// default; this is a checker-environment option, not a language feature.
+	TestBuiltins bool
 	// Packages are explicitly supplied dependency packages, type-checked in
 	// the given order before the program and registered under their Path.
 	// They are the policy-free half of Go's import model — an in-memory
@@ -414,15 +419,19 @@ func shadowedBuiltinTypes(pkg *types.Package) map[string]bool {
 }
 
 // checkerOptions is the complete policy passed to every types.Config in one
-// Load. Keeping it as a value prevents language and cgo-test settings from
-// leaking between the program and explicit packages or between Load calls.
+// Load. Keeping it as a value applies the same settings to the program and
+// explicit packages. Test builtins are the exception to per-Load isolation:
+// the go/types API installs them process-wide, irreversibly.
 type checkerOptions struct {
-	goVersion   string
-	fakeImportC bool
+	goVersion    string
+	fakeImportC  bool
+	testBuiltins bool
 }
 
+var definePredeclaredTestFuncs sync.Once
+
 func checkerOptionsFor(sources []Source, options Options) (checkerOptions, error) {
-	out := checkerOptions{goVersion: options.GoVersion, fakeImportC: options.FakeImportC}
+	out := checkerOptions{goVersion: options.GoVersion, fakeImportC: options.FakeImportC, testBuiltins: options.TestBuiltins}
 	// The Go checker corpus places flag-compatible configuration on the first
 	// source line (for example "// -lang=go1.13"). Testdir errorcheck recipes
 	// use the same flag later on that line. Honor only checker flags, only from
@@ -445,6 +454,9 @@ func checkerOptionsFor(sources []Source, options Options) (checkerOptions, error
 }
 
 func (o checkerOptions) config(imp types.Importer, diagnostics *ErrorList) types.Config {
+	if o.testBuiltins {
+		definePredeclaredTestFuncs.Do(types.DefPredeclaredTestFuncs)
+	}
 	return types.Config{
 		Importer:    imp,
 		GoVersion:   o.goVersion,
