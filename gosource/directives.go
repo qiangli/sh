@@ -47,37 +47,75 @@ func lineDirectives(tf *token.File, f *ast.File) []syntax.LineDirective {
 	return out
 }
 
-// Preserve compiler embed directives on the positioned declaration. The native
-// build consumes the same relative asset paths as the unchanged source package.
+// attachEmbedDirectives preserves the compiler directives written on the
+// input's declarations — //go:embed on a var; //go:noinline, //go:nosplit,
+// //go:norace, //go:noescape, //go:registerparams, //go:linkname,
+// //go:uintptrescapes and the rest on a func — as Stmt.Comments on the
+// positioned declaration, where the emitter (goDirectives) prints them
+// verbatim above it so gc applies them as it did to the source: an embed
+// consumes the same relative asset paths as the unchanged package, a
+// noinline keeps the call the asmcheck row measures. Only the directive
+// lines of a declaration's own doc group travel; //go:build and
+// //go:generate address the file and the tooling, not a declaration. The
+// name is historical: the //go:embed path was the first to exist.
 func (c *converter) attachEmbedDirectives(file *syntax.File) {
 	byNamePos := map[uint][]syntax.Comment{}
-	for _, f := range c.files {
-		for _, decl := range f.Decls {
-			gd, ok := decl.(*ast.GenDecl)
-			if !ok || gd.Tok != token.VAR {
+	attach := func(name *ast.Ident, doc *ast.CommentGroup) {
+		if doc == nil {
+			return
+		}
+		for _, comment := range doc.List {
+			if !isDeclDirective(comment.Text) {
 				continue
 			}
-			for _, spec := range gd.Specs {
-				v := spec.(*ast.ValueSpec)
-				doc := v.Doc
-				if doc == nil && len(gd.Specs) == 1 {
-					doc = gd.Doc
-				}
-				if doc == nil || len(v.Names) != 1 {
+			pos := c.pos(name.Pos()).Offset()
+			byNamePos[pos] = append(byNamePos[pos], syntax.Comment{Hash: c.pos(comment.Slash), Text: strings.TrimPrefix(comment.Text, "//")})
+		}
+	}
+	for _, f := range c.files {
+		for _, decl := range f.Decls {
+			switch d := decl.(type) {
+			case *ast.FuncDecl:
+				attach(d.Name, d.Doc)
+			case *ast.GenDecl:
+				if d.Tok != token.VAR {
 					continue
 				}
-				for _, comment := range doc.List {
-					if strings.HasPrefix(comment.Text, "//go:embed ") || strings.HasPrefix(comment.Text, "//go:embed\t") {
-						pos := c.pos(v.Names[0].Pos()).Offset()
-						byNamePos[pos] = append(byNamePos[pos], syntax.Comment{Hash: c.pos(comment.Slash), Text: strings.TrimPrefix(comment.Text, "//")})
+				for _, spec := range d.Specs {
+					v := spec.(*ast.ValueSpec)
+					doc := v.Doc
+					if doc == nil && len(d.Specs) == 1 {
+						doc = d.Doc
 					}
+					if len(v.Names) != 1 {
+						continue
+					}
+					attach(v.Names[0], doc)
 				}
 			}
 		}
 	}
 	for _, stmt := range file.Stmts {
-		if d, ok := stmt.Cmd.(*syntax.BashPPDecl); ok && d.Name != nil {
-			stmt.Comments = append(stmt.Comments, byNamePos[d.Name.Pos().Offset()]...)
+		var name *syntax.Lit
+		switch d := stmt.Cmd.(type) {
+		case *syntax.BashPPDecl:
+			name = d.Name
+		case *syntax.BashPPFuncDecl:
+			name = d.Name
+		}
+		if name != nil {
+			stmt.Comments = append(stmt.Comments, byNamePos[name.Pos().Offset()]...)
 		}
 	}
+}
+
+// isDeclDirective reports whether a comment line is a compiler directive
+// that addresses the declaration it documents.
+func isDeclDirective(text string) bool {
+	if !strings.HasPrefix(text, "//go:") {
+		return false
+	}
+	directive, _, _ := strings.Cut(strings.TrimPrefix(text, "//go:"), " ")
+	directive, _, _ = strings.Cut(directive, "\t")
+	return directive != "build" && directive != "generate"
 }
