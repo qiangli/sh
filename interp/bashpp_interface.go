@@ -536,7 +536,10 @@ func bashPPCopyInterfaceCell(cell *bashPPCell) *bashPPCell {
 }
 
 func (r *Runner) bashPPCellForInterfaceExpr(expr syntax.BashPPExpr) (*bashPPCell, syntax.BashPPTypeExpr, error) {
-	if id, ok := expr.(*syntax.BashPPIdent); ok {
+	// `true` and `false` are identifiers, not literals; when no variable
+	// shadows them they are the untyped boolean constants the scalar
+	// evaluator below already knows, and store as a bool.
+	if id, ok := expr.(*syntax.BashPPIdent); ok && !(bashPPBoolIdent(id.Name.Value) && r.bashPPScope.lookup(id.Name.Value) == nil) {
 		cell := r.bashPPScope.lookup(id.Name.Value)
 		if cell == nil {
 			return nil, nil, fmt.Errorf("BASHPP-EINTERFACE-VALUE: undefined value %s", id.Name.Value)
@@ -612,6 +615,10 @@ func (r *Runner) bashPPCellForInterfaceExpr(expr syntax.BashPPExpr) (*bashPPCell
 		declType:   actual,
 	}
 	return cell, actual, nil
+}
+
+func bashPPBoolIdent(name string) bool {
+	return name == "true" || name == "false"
 }
 
 // bashPPDefaultScalarTypeName names the Go default type of an untyped
