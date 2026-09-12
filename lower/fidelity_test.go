@@ -10,7 +10,6 @@ import (
 
 	"mvdan.cc/sh/v3/gosource"
 	"mvdan.cc/sh/v3/lower"
-	"mvdan.cc/sh/v3/syntax"
 )
 
 // Sprint 152 decision D1: a Go-only input lowers to itself. The reproducers
@@ -27,13 +26,10 @@ import (
 // Classes not yet closed are listed in fidelityOpen and are still exercised
 // so that their output stays gofmt-stable.
 var fidelityOpen = map[string]bool{
-	"comments-dropped":  true, // C1
-	"sink-statements":   true, // C2
-	"untyped-constants": true, // C3
-	"main-rename":       true, // C5
-	"import-aliasing":   true, // C8
-	"type-assertion":    true, // C9
-	"decl-reordering":   true, // C11
+	"comments-dropped": true, // C1
+	"import-aliasing":  true, // C8
+	"type-assertion":   true, // C9
+	"decl-reordering":  true, // C11
 }
 
 // fidelityLanded records, for classes whose emitter rewrite is already
@@ -153,22 +149,12 @@ func fidelityDecl(line string) bool {
 // TestGoSourceDirectives is the lower/ half of spike F class C1: a //go:
 // directive the converter attaches to a declaration (Stmt.Comments, the
 // //go:embed path) is emitted on that declaration. The converter attaches
-// only //go:embed today, so the test attaches the func directive itself.
+// every func and var directive itself (gosource/directives.go).
 func TestGoSourceDirectives(t *testing.T) {
 	src := []byte("package main\n\n//go:noinline\nfunc F(x int) int {\n\treturn x\n}\n\n//go:norace\nfunc main() {\n\tvar x int\n\tprintln(F(x))\n}\n")
 	program, err := gosource.Parse(bytes.NewReader(src), "directives.go", gosource.Options{RunMain: true})
 	if err != nil {
 		t.Fatal(err)
-	}
-	for _, stmt := range program.File.Stmts {
-		if f, ok := stmt.Cmd.(*syntax.BashPPFuncDecl); ok {
-			switch f.Name.Value {
-			case "F":
-				stmt.Comments = append(stmt.Comments, syntax.Comment{Text: "go:noinline"})
-			case "main":
-				stmt.Comments = append(stmt.Comments, syntax.Comment{Text: "go:norace"})
-			}
-		}
 	}
 	result, err := lower.Compile(program.File, lower.Options{Origin: "directives.go"})
 	if err != nil {
