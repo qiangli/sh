@@ -717,17 +717,49 @@ func (e *emitter) statement(s *syntax.Stmt) (string, error) {
 	return e.mark(s.Cmd) + reset + text + "\n", nil
 }
 func (e *emitter) block(b *syntax.Block) (string, error) {
+	parts, err := e.blockParts(b)
+	return strings.Join(parts, ""), err
+}
+
+// blockParts emits a block one statement per element, each ending in a
+// newline and led by its marker line where it has one.
+func (e *emitter) blockParts(b *syntax.Block) ([]string, error) {
 	e.push()
 	defer e.pop()
-	var out strings.Builder
+	var out []string
 	for _, s := range b.Stmts {
 		x, err := e.statement(s)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
-		out.WriteString(x)
+		out = append(out, x)
 	}
-	return out.String(), nil
+	return out, nil
+}
+
+// oneLineBody lays a Go-source body whose braces share a source line out on
+// that one line, as gofmt keeps it, when every statement is itself one line:
+// `{ return x }`. The statements' own markers are dropped — the declaration's
+// //line directive already names the line — and an empty body is `{}`.
+func (e *emitter) oneLineBody(b *syntax.Block, parts []string) (string, bool) {
+	if !e.goSource || b == nil || !b.Lbrace.IsValid() || b.Lbrace.Line() != b.Rbrace.Line() {
+		return "", false
+	}
+	var stmts []string
+	for _, part := range parts {
+		if strings.HasPrefix(part, "// lower:") {
+			_, part, _ = strings.Cut(part, "\n")
+		}
+		part = strings.TrimSuffix(part, "\n")
+		if part == "" || strings.Contains(part, "\n") {
+			return "", false
+		}
+		stmts = append(stmts, part)
+	}
+	if len(stmts) == 0 {
+		return " {}", true
+	}
+	return " { " + strings.Join(stmts, "; ") + " }", true
 }
 func names(lits []*syntax.Lit) []string {
 	out := make([]string, len(lits))
@@ -840,10 +872,11 @@ func (e *emitter) function(f *syntax.BashPPFuncDecl) (string, error) {
 		// supplies the body; nothing here can, so say so instead of crashing.
 		return "", e.fail(f, CodeUnsupported, "function declaration without body")
 	}
-	body, err := e.block(f.Body)
+	parts, err := e.blockParts(f.Body)
 	if err != nil {
 		return "", err
 	}
+	body := strings.Join(parts, "")
 	recv := ""
 	if f.Receiver != nil {
 		r := f.Receiver
@@ -867,16 +900,16 @@ func (e *emitter) function(f *syntax.BashPPFuncDecl) (string, error) {
 		body = e.program() + " = " + e.program() + ".LexicalScope(" + e.lexicalNames(e.functionGlobals) + ")\n" + body
 		return e.runtimeFunction(f, signature, body, generics)
 	}
-	return e.mark(f) + "func " + recv + e.goName(f.Name.Value) + generics + signature + e.bodyText(f.Body, body) + "\n", nil
+	return e.mark(f) + "func " + recv + e.goName(f.Name.Value) + generics + signature + e.bodyText(f.Body, parts) + "\n", nil
 }
 
-// bodyText lays out an emitted function body. gofmt keeps an empty body whose
-// braces share a source line as `{}`, so Go source gets the same shape back.
-func (e *emitter) bodyText(b *syntax.Block, body string) string {
-	if e.goSource && body == "" && b != nil && b.Lbrace.IsValid() && b.Lbrace.Line() == b.Rbrace.Line() {
-		return " {}"
+// bodyText lays out an emitted function body: on one line where the Go
+// source had it so (oneLineBody), else braced on its own lines.
+func (e *emitter) bodyText(b *syntax.Block, parts []string) string {
+	if text, ok := e.oneLineBody(b, parts); ok {
+		return text
 	}
-	return " {\n" + body + "}"
+	return " {\n" + strings.Join(parts, "") + "}"
 }
 func scalarType(s string) bool {
 	switch s {

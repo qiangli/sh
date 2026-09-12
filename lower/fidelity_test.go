@@ -27,24 +27,22 @@ import (
 // Classes not yet closed are listed in fidelityOpen and are still exercised
 // so that their output stays gofmt-stable.
 var fidelityOpen = map[string]bool{
-	"comments-dropped":      true, // C1
-	"sink-statements":       true, // C2
-	"untyped-constants":     true, // C3
-	"reparenthesised-exprs": true, // C4
-	"main-rename":           true, // C5
-	"import-aliasing":       true, // C8
-	"type-assertion":        true, // C9
-	"decl-reordering":       true, // C11
+	"comments-dropped":  true, // C1
+	"sink-statements":   true, // C2
+	"untyped-constants": true, // C3
+	"main-rename":       true, // C5
+	"import-aliasing":   true, // C8
+	"type-assertion":    true, // C9
+	"decl-reordering":   true, // C11
 }
 
 // fidelityLanded records, for classes whose emitter rewrite is already
 // removed but whose reproducer still carries a class that is open, the
 // spellings that rewrite used to emit; none may appear in the output.
 var fidelityLanded = map[string][]string{
-	"main-rename":           {"sourceMain"},                                      // C5
-	"sink-statements":       {"_ = "},                                            // C2
-	"reparenthesised-exprs": {"((", "])(", "(x * i)", "(g(i))"},                  // C4
-	"type-assertion":        {"MustValue", "MustAssertOK", "Assert[", "import "}, // C9
+	"main-rename":     {"sourceMain"},                                      // C5
+	"sink-statements": {"_ = "},                                            // C2
+	"type-assertion":  {"MustValue", "MustAssertOK", "Assert[", "import "}, // C9
 }
 
 func TestGoSourceFidelity(t *testing.T) {

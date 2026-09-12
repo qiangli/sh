@@ -78,10 +78,11 @@ func (e *emitter) literal(f *syntax.BashPPFuncLit) (string, error) {
 	savedResults := e.resultTypes
 	e.resultTypes = e.returnTypes(f.Results)
 	defer func() { e.resultTypes = savedResults }()
-	body, err := e.block(f.Body)
+	parts, err := e.blockParts(f.Body)
 	if err != nil {
 		return "", err
 	}
+	body := strings.Join(parts, "")
 	if e.execution {
 		entry, err := e.programEntry("func", false, f.Results)
 		if err != nil {
@@ -100,7 +101,7 @@ func (e *emitter) literal(f *syntax.BashPPFuncLit) (string, error) {
 		body = e.prefix + "closureProgram := *" + p + "\n" + p + " = &" + e.prefix + "closureProgram\n" + p + ".Bindings = " + captured + "\n" + p + " = " + p + ".LexicalScope(nil)\n" + body
 		return "func() func" + signature + " { " + captured + " := " + parent + ".LexicalScope(nil).Bindings\nreturn func" + signature + " {\n" + body + "}\n}()", nil
 	}
-	return "func" + signature + e.bodyText(f.Body, body), nil
+	return "func" + signature + e.bodyText(f.Body, parts), nil
 }
 func (e *emitter) signature(params, results []*syntax.BashPPField, body *syntax.Block) (string, error) {
 	p, err := e.fields(params)
