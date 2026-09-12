@@ -44,13 +44,16 @@ func TestSprint153Evaluator(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		programs := 0
+		programs, other := 0, 0
 		for _, entry := range entries {
 			path := filepath.Join(root, mechanism.Name(), entry.Name())
 			name := mechanism.Name() + "/" + strings.TrimSuffix(entry.Name(), ".go")
 			switch {
 			case entry.IsDir():
 				if _, err := os.Stat(filepath.Join(path, "go.mod")); err != nil {
+					// Another lane's layout (scaled controls, triage
+					// cases), driven by its own test.
+					other++
 					continue
 				}
 				programs++
@@ -58,6 +61,10 @@ func TestSprint153Evaluator(t *testing.T) {
 					t.Parallel()
 					differGoSourceModule(t, path)
 				})
+			case strings.HasSuffix(entry.Name(), ".md"):
+				// Findings and spike notes document a lane rather than a
+				// mechanism.
+				other++
 			case strings.HasSuffix(entry.Name(), ".go"):
 				source, err := os.ReadFile(path)
 				if err != nil {
@@ -70,7 +77,7 @@ func TestSprint153Evaluator(t *testing.T) {
 				})
 			}
 		}
-		if programs == 0 {
+		if programs == 0 && other < len(entries) {
 			t.Fatalf("%s: no programs", mechanism.Name())
 		}
 	}
