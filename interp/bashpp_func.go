@@ -1060,7 +1060,9 @@ func (r *Runner) bashPPConstraintSatisfied(arg, constraint syntax.BashPPTypeExpr
 	case *syntax.BashPPUnionType, *syntax.BashPPApproxType:
 		return r.bashPPTypeSetSatisfied(arg, constraint)
 	}
-	return false
+	// Any other type written as a constraint — `T []MyByte`, `P *S` — is Go's
+	// shorthand for the interface with that one type term.
+	return r.bashPPTypeSetSatisfied(arg, constraint)
 }
 
 // bashPPEmptyInterfaceType reports whether typ is spelled as an interface with

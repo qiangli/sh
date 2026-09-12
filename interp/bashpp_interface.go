@@ -205,14 +205,12 @@ func bashPPInterfaceElems(iface *syntax.BashPPInterfaceType) []*syntax.BashPPInt
 }
 
 func (r *Runner) bashPPImplements(actual syntax.BashPPTypeExpr, iface *syntax.BashPPInterfaceType) error {
-	if r.bashPPGoSource && !r.bashPPInterfaceHasTypeTerms(iface, make(map[*syntax.BashPPInterfaceType]bool)) {
-		methods, err := r.bashPPInterfaceMethodSet("interface", iface, make(map[string]bool))
-		if err != nil {
-			return err
-		}
-		if len(methods.order) == 0 {
-			return nil
-		}
+	// An interface with no methods — `any`, or a constraint made only of
+	// type terms such as `interface{ []int64 | [5]int64 }` — is implemented
+	// by every type, including one that has no method owner at all; its
+	// type terms are the caller's separate check.
+	if methods, err := r.bashPPInterfaceMethodSet("interface", iface, make(map[string]bool)); err == nil && len(methods.order) == 0 {
+		return nil
 	}
 	if actualIface, ok := r.bashPPInterfaceType(actual); ok {
 		actualSet, err := r.bashPPInterfaceMethodSet(bashPPTypeText(actual), actualIface, make(map[string]bool))
