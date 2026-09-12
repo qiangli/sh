@@ -1139,6 +1139,15 @@ func (r *Runner) bashPPStructuredArgCell(w *syntax.Word, expr syntax.BashPPExpr)
 		}
 		return bashPPPointerCell(ptr), nil
 	case *syntax.BashPPConvertExpr:
+		// `f((*T)(p))`: a pointer conversion travels as the retyped pointer.
+		if ptr, target, converted, err := r.bashPPPointerConversion(x); converted {
+			if err != nil {
+				return nil, err
+			}
+			cell := bashPPPointerCell(ptr)
+			cell.declType = target
+			return cell, nil
+		}
 		// `f([]byte(s))`: a conversion whose result is a collection travels as
 		// the cell holding it; see bashPPConvertCollectionCell in
 		// bashpp_collection_convert.go. Scalar conversions report false.

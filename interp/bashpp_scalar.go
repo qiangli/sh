@@ -844,6 +844,16 @@ func (r *Runner) bashPPComparableExpr(expr syntax.BashPPExpr) (bashPPComparableV
 			return bashPPComparableValue{}, err
 		}
 		return bashPPComparableValue{value: ptr, meta: bashPPPointerMeta(&syntax.BashPPPointerType{Element: ptr.elem})}, nil
+	case *syntax.BashPPConvertExpr:
+		// `(*T)(p) == nil`: a pointer conversion compares as the pointer it
+		// retypes. Any other conversion is a scalar.
+		ptr, target, converted, err := r.bashPPPointerConversion(x)
+		if err != nil {
+			return bashPPComparableValue{}, err
+		}
+		if converted {
+			return bashPPComparableValue{value: ptr, meta: bashPPPointerMeta(target)}, nil
+		}
 	case *syntax.BashPPCall:
 		if !r.bashPPGoSource {
 			return bashPPComparableValue{}, fmt.Errorf("BASHPP-ECOMPARE-SCALAR: scalar")
