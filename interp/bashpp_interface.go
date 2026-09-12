@@ -763,7 +763,7 @@ func (r *Runner) bashPPTypeAssertCell(assert *syntax.BashPPTypeAssertExpr, comma
 		if assertingInterface {
 			matched = r.bashPPImplements(iv.dynamic, assertIface) == nil
 		} else {
-			matched = bashPPInterfaceAssertTypeText(iv.dynamic) == bashPPInterfaceAssertTypeText(assert.Assert) ||
+			matched = bashPPInterfaceAssertTypeText(r.bashPPPredeclaredAliases(iv.dynamic)) == bashPPInterfaceAssertTypeText(r.bashPPPredeclaredAliases(assert.Assert)) ||
 				r.goSourceNativeTypeIdentical(iv.dynamic, assert.Assert)
 		}
 	}

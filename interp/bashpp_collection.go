@@ -205,8 +205,8 @@ func (r *Runner) bashPPTypeAssignable(actual, expected syntax.BashPPTypeExpr) bo
 	if expected == nil {
 		return true
 	}
-	actual = r.bashPPCanonicalAssignableType(actual)
-	expected = r.bashPPCanonicalAssignableType(expected)
+	actual = r.bashPPCanonicalAssignableType(r.bashPPPredeclaredAliases(actual))
+	expected = r.bashPPCanonicalAssignableType(r.bashPPPredeclaredAliases(expected))
 	if bashPPTypeText(actual) == bashPPTypeText(expected) {
 		return true
 	}
@@ -216,6 +216,27 @@ func (r *Runner) bashPPTypeAssignable(actual, expected syntax.BashPPTypeExpr) bo
 		return false
 	}
 	return bashPPTypeText(r.bashPPUnderlyingType(actual)) == bashPPTypeText(r.bashPPUnderlyingType(expected))
+}
+
+// bashPPPredeclaredAliases spells the predeclared aliases by the types they
+// name — byte is uint8 and rune is int32, wherever they occur in a type —
+// so `byte(1)` is a uint8 to a type switch and []byte is []uint8 to an
+// assignment. A declaration of either name in the program shadows the
+// predeclared one and is left as declared.
+func (r *Runner) bashPPPredeclaredAliases(typ syntax.BashPPTypeExpr) syntax.BashPPTypeExpr {
+	if typ == nil {
+		return nil
+	}
+	aliases := make(map[string]syntax.BashPPTypeExpr, 2)
+	for alias, actual := range map[string]string{"byte": "uint8", "rune": "int32"} {
+		if _, declared := r.bashPPTypes[alias]; !declared {
+			aliases[alias] = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: actual}}
+		}
+	}
+	if len(aliases) == 0 {
+		return typ
+	}
+	return bashPPSubstituteType(typ, aliases)
 }
 
 func (r *Runner) bashPPCanonicalAssignableType(typ syntax.BashPPTypeExpr) syntax.BashPPTypeExpr {
