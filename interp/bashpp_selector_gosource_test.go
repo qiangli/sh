@@ -14,7 +14,20 @@ import (
 )
 
 func TestGoSourcePointerCallResult(t *testing.T) {
-	path := filepath.Join("..", "gosource", "testdata", "sprint151", "pointers", "call_pointer.go")
+	compareSprint151PointerWithGo(t, "call_pointer.go")
+}
+
+func TestGoSourceNilPointerReceiver(t *testing.T) {
+	compareSprint151PointerWithGo(t, "nil_receiver.go")
+}
+
+func TestGoSourcePointerReceiverMethodValue(t *testing.T) {
+	compareSprint151PointerWithGo(t, "method_value.go")
+}
+
+func compareSprint151PointerWithGo(t *testing.T, name string) {
+	t.Helper()
+	path := filepath.Join("..", "gosource", "testdata", "sprint151", "pointers", name)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
