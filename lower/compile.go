@@ -60,6 +60,46 @@ type emitter struct {
 	globalChecked      map[*syntax.BashPPShortDecl]string
 	nativeShellNames   map[string]bool
 	nativeShellBody    bool
+	branchTargets      []*lowerBranchTarget
+	branchLabelSeq     int
+}
+
+type lowerBranchTarget struct {
+	loop  bool
+	label string
+}
+
+func (e *emitter) pushBranchTarget(loop bool) *lowerBranchTarget {
+	target := &lowerBranchTarget{loop: loop}
+	e.branchTargets = append(e.branchTargets, target)
+	return target
+}
+
+func (e *emitter) popBranchTarget() {
+	e.branchTargets = e.branchTargets[:len(e.branchTargets)-1]
+}
+
+func (e *emitter) branchStmt(n *syntax.BashPPBranch) (string, error) {
+	if n.Depth <= 1 {
+		return n.Kw.Value, nil
+	}
+	depth := int(n.Depth)
+	for i := len(e.branchTargets) - 1; i >= 0; i-- {
+		target := e.branchTargets[i]
+		if n.Kw.Value == "continue" && !target.loop {
+			continue
+		}
+		depth--
+		if depth != 0 {
+			continue
+		}
+		if target.label == "" {
+			target.label = fmt.Sprintf("%sbranch%d", e.prefix, e.branchLabelSeq)
+			e.branchLabelSeq++
+		}
+		return n.Kw.Value + " " + target.label, nil
+	}
+	return "", e.fail(n, CodeUnsupported, "branch depth exceeds enclosing statements")
 }
 
 // Compile returns canonical Go and mappings, or positioned diagnostics with no
@@ -1106,7 +1146,7 @@ func (e *emitter) command(c syntax.Command) (string, error) {
 	case *syntax.BashPPSwitch:
 		return e.switchStmt(n)
 	case *syntax.BashPPBranch:
-		return n.Kw.Value, nil
+		return e.branchStmt(n)
 	case *syntax.BashPPDefer:
 		if !e.goSource && n.Call != nil && len(n.Call.Fun) == 1 && n.Call.Fun[0].Value == "panic" && !e.funcs["panic"] {
 			if len(n.Call.Args) != 1 {
@@ -1197,7 +1237,9 @@ func (e *emitter) forStmt(n *syntax.BashPPFor) (string, error) {
 			return "", err
 		}
 	}
+	target := e.pushBranchTarget(true)
 	body, err := e.block(n.Body)
+	e.popBranchTarget()
 	if err != nil {
 		return "", err
 	}
@@ -1216,6 +1258,9 @@ func (e *emitter) forStmt(n *syntax.BashPPFor) (string, error) {
 		}
 	}
 	out := "for " + header + " {\n" + body + "}"
+	if target.label != "" {
+		out = target.label + ":\n" + out
+	}
 	if init != "" {
 		out = "{\n" + init + "\n" + out + "\n}"
 	}

@@ -176,8 +176,10 @@ func (r *Runner) goSourceNativeSelect(ctx context.Context, cases []bashPPBridgeV
 	}
 	r.stmts(r.bashPPTaskContext(ctx), arm.Stmts)
 	if r.bashPPBranch == bashPPBranchBreak {
-		r.bashPPBranch = bashPPBranchNone
-		r.exit.clear()
+		if r.bashPPBranchEscapesEligible() {
+			return
+		}
+		r.bashPPClearBranch()
 	}
 }
 

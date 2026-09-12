@@ -183,15 +183,12 @@ func bashPPInterfaceElems(iface *syntax.BashPPInterfaceType) []*syntax.BashPPInt
 
 func (r *Runner) bashPPImplements(actual syntax.BashPPTypeExpr, iface *syntax.BashPPInterfaceType) error {
 	if r.bashPPGoSource && !r.bashPPInterfaceHasTypeTerms(iface, make(map[*syntax.BashPPInterfaceType]bool)) {
-		switch r.bashPPUnderlyingType(actual).(type) {
-		case *syntax.BashPPFuncType, *syntax.BashPPChanType:
-			methods, err := r.bashPPInterfaceMethodSet("interface", iface, make(map[string]bool))
-			if err != nil {
-				return err
-			}
-			if len(methods.order) == 0 {
-				return nil
-			}
+		methods, err := r.bashPPInterfaceMethodSet("interface", iface, make(map[string]bool))
+		if err != nil {
+			return err
+		}
+		if len(methods.order) == 0 {
+			return nil
 		}
 	}
 	if actualIface, ok := r.bashPPInterfaceType(actual); ok {
@@ -671,9 +668,18 @@ func (r *Runner) bashPPTypeSwitch(ctx context.Context, sw *syntax.BashPPSwitch) 
 	iv := cell.interfaceValue
 	selected, defaultArm := -1, -1
 	for armIndex, arm := range sw.Arms {
-		if len(arm.Exprs) == 0 {
+		if len(arm.Types) == 0 && len(arm.Exprs) == 0 {
 			defaultArm = armIndex
 			continue
+		}
+		for _, typ := range arm.Types {
+			if typeCaseTypeMatches(r, iv, typ) {
+				selected = armIndex
+				break
+			}
+		}
+		if selected >= 0 {
+			break
 		}
 		for _, expr := range arm.Exprs {
 			if typeCaseMatches(r, iv, expr) {
@@ -713,12 +719,13 @@ func (r *Runner) bashPPTypeSwitch(ctx context.Context, sw *syntax.BashPPSwitch) 
 		leaveArm()
 		switch r.bashPPBranch {
 		case bashPPBranchBreak:
-			r.bashPPBranch = bashPPBranchNone
-			r.exit.clear()
+			if r.bashPPBranchEscapesEligible() {
+				return
+			}
+			r.bashPPClearBranch()
 			return
 		case bashPPBranchFallthrough:
-			r.bashPPBranch = bashPPBranchNone
-			r.exit.clear()
+			r.bashPPClearBranch()
 			continue
 		default:
 			return
@@ -731,13 +738,16 @@ func typeCaseMatches(r *Runner, iv *bashPPInterfaceValue, expr syntax.BashPPExpr
 	if !ok {
 		return false
 	}
-	if id.Name.Value == "nil" {
+	return typeCaseTypeMatches(r, iv, &syntax.BashPPNamedType{Name: id.Name})
+}
+
+func typeCaseTypeMatches(r *Runner, iv *bashPPInterfaceValue, target syntax.BashPPTypeExpr) bool {
+	if named, ok := target.(*syntax.BashPPNamedType); ok && named.Name.Value == "nil" {
 		return iv == nil || iv.nilIface
 	}
 	if iv == nil || iv.nilIface {
 		return false
 	}
-	target := &syntax.BashPPNamedType{Name: id.Name}
 	if iface, ok := r.bashPPInterfaceType(target); ok {
 		return r.bashPPImplements(iv.dynamic, iface) == nil
 	}

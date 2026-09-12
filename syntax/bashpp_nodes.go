@@ -995,11 +995,11 @@ type BashPPUpdate struct {
 func (u *BashPPUpdate) Pos() Pos { return u.TargetWord.Pos() }
 func (u *BashPPUpdate) End() Pos { return u.ValueWord.End() }
 
-// BashPPBranch is an unlabeled Go-form break, continue, or fallthrough. It is
-// constructed only inside a committed typed control statement; the same bare
-// words everywhere else remain ordinary shell calls.
+// BashPPBranch is a Go-form break, continue, or fallthrough. Depth is zero for
+// an unlabeled branch and otherwise counts eligible enclosing constructs.
 type BashPPBranch struct {
-	Kw *Lit
+	Kw    *Lit
+	Depth uint
 }
 
 func (b *BashPPBranch) Pos() Pos { return b.Kw.Pos() }
@@ -1021,10 +1021,12 @@ type BashPPSwitch struct {
 func (s *BashPPSwitch) Pos() Pos { return s.Switch }
 func (s *BashPPSwitch) End() Pos { return posAddCol(s.Rbrace, 1) }
 
-// BashPPSwitchArm is one case clause. Exprs is empty for default.
+// BashPPSwitchArm is one case clause. Types carries Go type-switch cases;
+// Exprs carries expression-switch cases. Both are empty for default.
 type BashPPSwitchArm struct {
 	Case   Pos // position of case/default
 	Exprs  []BashPPExpr
+	Types  []BashPPTypeExpr
 	Commas []*Lit
 	Colon  Pos
 	Stmts  []*Stmt

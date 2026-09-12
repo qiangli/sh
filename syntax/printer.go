@@ -2185,12 +2185,18 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 		p.wantSpace = spaceRequired
 		for _, arm := range cmd.Arms {
 			p.newlines(arm.Pos())
-			if len(arm.Exprs) == 0 {
+			if len(arm.Exprs) == 0 && len(arm.Types) == 0 {
 				p.writeLit("default:")
 			} else {
 				p.writeLit("case ")
-				for i, expr := range arm.Exprs {
+				for i, typ := range arm.Types {
 					if i > 0 {
+						p.writeLit(", ")
+					}
+					p.bashppType(typ)
+				}
+				for i, expr := range arm.Exprs {
+					if i > 0 || len(arm.Types) > 0 {
 						p.writeLit(", ")
 					}
 					p.bashppExpr(expr)

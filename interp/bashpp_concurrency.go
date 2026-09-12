@@ -1499,8 +1499,10 @@ func (r *Runner) bashPPSelect(ctx context.Context, s *syntax.BashPPSelect) {
 	}
 	r.stmts(r.bashPPTaskContext(ctx), arm.Stmts)
 	if r.bashPPBranch == bashPPBranchBreak {
-		r.bashPPBranch = bashPPBranchNone
-		r.exit.clear()
+		if r.bashPPBranchEscapesEligible() {
+			return
+		}
+		r.bashPPClearBranch()
 	}
 }
 
@@ -1564,12 +1566,16 @@ func (r *Runner) bashPPRange(ctx context.Context, rng *syntax.BashPPRange) {
 		}
 		switch r.bashPPBranch {
 		case bashPPBranchBreak:
-			r.bashPPBranch = bashPPBranchNone
-			r.exit.clear()
+			if r.bashPPBranchEscapesEligible() {
+				return
+			}
+			r.bashPPClearBranch()
 			return
 		case bashPPBranchContinue:
-			r.bashPPBranch = bashPPBranchNone
-			r.exit.clear()
+			if r.bashPPBranchEscapesEligible() {
+				return
+			}
+			r.bashPPClearBranch()
 		case bashPPBranchFallthrough:
 			panic("validated fallthrough escaped to Bash++ range")
 		}

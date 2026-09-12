@@ -269,6 +269,8 @@ func (e *emitter) switchStmt(n *syntax.BashPPSwitch) (string, error) {
 		}
 	}
 	var out strings.Builder
+	target := e.pushBranchTarget(false)
+	defer e.popBranchTarget()
 	out.WriteString("switch " + tag + " {\n")
 	for _, arm := range n.Arms {
 		e.push()
@@ -300,10 +302,14 @@ func (e *emitter) switchStmt(n *syntax.BashPPSwitch) (string, error) {
 		out.WriteString("default: panic(\"invalid enum value\")\n")
 	}
 	out.WriteString("}")
-	if init != "" {
-		return "{\n" + init + "\n" + out.String() + "\n}", nil
+	text := out.String()
+	if target.label != "" {
+		text = target.label + ":\n" + text
 	}
-	return out.String(), nil
+	if init != "" {
+		return "{\n" + init + "\n" + text + "\n}", nil
+	}
+	return text, nil
 }
 
 func (e *emitter) isRecover(c *syntax.BashPPCall) bool {
@@ -472,8 +478,14 @@ func (e *emitter) rangeStmt(n *syntax.BashPPRange) (string, error) {
 	if len(ns) > 0 {
 		prefix = strings.Join(ns, ",") + op
 	}
+	target := e.pushBranchTarget(true)
 	body, err := e.block(n.Body)
-	return "for " + prefix + "range " + rhs + " {\n" + body + "}", err
+	e.popBranchTarget()
+	out := "for " + prefix + "range " + rhs + " {\n" + body + "}"
+	if target.label != "" {
+		out = target.label + ":\n" + out
+	}
+	return out, err
 }
 func (e *emitter) importLines() string {
 	aliases := make([]string, 0, len(e.imports))
@@ -655,7 +667,7 @@ func (e *emitter) returnTypes(fields []*syntax.BashPPField) []string {
 
 func (e *emitter) typeSwitchStmt(n *syntax.BashPPSwitch) (string, error) {
 	init, ok := n.Init.(*syntax.BashPPShortDecl)
-	if !ok || len(init.Lhs) != 1 {
+	if !ok || len(init.Lhs) > 1 {
 		return "", e.fail(n, CodeUnsupported, "type switch guard")
 	}
 	assert, ok := init.Expr.(*syntax.BashPPTypeAssertExpr)
@@ -666,17 +678,35 @@ func (e *emitter) typeSwitchStmt(n *syntax.BashPPSwitch) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	name := init.Lhs[0].Value
 	var out strings.Builder
-	out.WriteString("switch " + name + " := " + root + ".(type) {\n")
+	target := e.pushBranchTarget(false)
+	defer e.popBranchTarget()
+	name := ""
+	if len(init.Lhs) == 1 {
+		name = init.Lhs[0].Value
+		out.WriteString("switch " + name + " := ")
+	} else {
+		out.WriteString("switch ")
+	}
+	out.WriteString(root + ".(type) {\n")
 	for _, arm := range n.Arms {
 		e.push()
-		e.bind(name)
-		e.projections.projectionBind(name, interfaceProjection())
-		if len(arm.Exprs) == 0 {
+		if name != "" {
+			e.bind(name)
+			e.projections.projectionBind(name, interfaceProjection())
+		}
+		if len(arm.Exprs) == 0 && len(arm.Types) == 0 {
 			out.WriteString("default:\n")
 		} else {
 			var values []string
+			for _, typ := range arm.Types {
+				v, err := e.typeExpr(typ)
+				if err != nil {
+					e.pop()
+					return "", err
+				}
+				values = append(values, v)
+			}
 			for _, x := range arm.Exprs {
 				v, err := e.expr(x)
 				if err != nil {
@@ -685,14 +715,18 @@ func (e *emitter) typeSwitchStmt(n *syntax.BashPPSwitch) (string, error) {
 				}
 				values = append(values, v)
 			}
-			if len(values) == 1 && values[0] != "nil" {
-				e.projections.projectionBind(name, e.projectionType(values[0], nil))
-			} else {
-				e.projections.projectionBind(name, interfaceProjection())
+			if name != "" {
+				if len(values) == 1 && values[0] != "nil" {
+					e.projections.projectionBind(name, e.projectionType(values[0], nil))
+				} else {
+					e.projections.projectionBind(name, interfaceProjection())
+				}
 			}
 			out.WriteString("case " + strings.Join(values, ",") + ":\n")
 		}
-		out.WriteString("_ = " + name + "\n")
+		if name != "" {
+			out.WriteString("_ = " + name + "\n")
+		}
 		for _, stmt := range arm.Stmts {
 			text, err := e.statement(stmt)
 			if err != nil {
@@ -704,5 +738,8 @@ func (e *emitter) typeSwitchStmt(n *syntax.BashPPSwitch) (string, error) {
 		e.pop()
 	}
 	out.WriteString("}")
+	if target.label != "" {
+		return target.label + ":\n" + out.String(), nil
+	}
 	return out.String(), nil
 }

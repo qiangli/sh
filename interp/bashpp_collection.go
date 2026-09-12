@@ -568,6 +568,24 @@ func (r *Runner) bashPPEvalElement(expr syntax.BashPPExpr, expected syntax.BashP
 		value, meta = bashPPCopyArrayValue(value, meta)
 		return value, meta, nil
 	}
+	if cell, handled, err := r.goSourceCallableCell(expr); handled {
+		if err != nil {
+			return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-ELEMENT: %v", err)
+		}
+		signature, ok := r.bashPPUnderlyingType(expected).(*syntax.BashPPFuncType)
+		if !ok {
+			return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-ELEMENT: cannot use function as %s", bashPPTypeText(expected))
+		}
+		candidate, ok := r.bashPPClosure(cell.vr.Str)
+		if !ok {
+			return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-ELEMENT: function value is unavailable")
+		}
+		bound, status := r.bashPPContextualFuncValue(candidate, signature)
+		if status != bashPPBindOK {
+			return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-ELEMENT: function does not match %s", bashPPTypeText(expected))
+		}
+		return r.bashPPStoreFunc(bound).Str, nil, nil
+	}
 	scalar, err := r.bashPPEvalScalarExpr(expr)
 	if err != nil {
 		return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-ELEMENT: %v", err)

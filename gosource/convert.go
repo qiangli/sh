@@ -26,15 +26,49 @@ type converter struct {
 	// resolveImport applies the relative-import rule to an import path as
 	// written, so an import without a binding (blank) can still be matched
 	// against mapped.
-	resolveImport func(string) (string, error)
-	syntheticPos  token.Pos
-	prefix        string
-	fset          *token.FileSet
-	files         []*ast.File
-	sources       []Source
-	info          *types.Info
-	renames       map[types.Object]string
-	err           error
+	resolveImport  func(string) (string, error)
+	syntheticPos   token.Pos
+	prefix         string
+	fset           *token.FileSet
+	files          []*ast.File
+	sources        []Source
+	info           *types.Info
+	renames        map[types.Object]string
+	err            error
+	branchScopes   []converterBranchScope
+	statementLabel string
+}
+
+type converterBranchScope struct {
+	label string
+	loop  bool
+}
+
+func (c *converter) pushBranchScope(label string, loop bool) func() {
+	c.branchScopes = append(c.branchScopes, converterBranchScope{label: label, loop: loop})
+	return func() { c.branchScopes = c.branchScopes[:len(c.branchScopes)-1] }
+}
+
+func (c *converter) takeStatementLabel() string {
+	label := c.statementLabel
+	c.statementLabel = ""
+	return label
+}
+
+func (c *converter) labeledBranchDepth(branch *ast.BranchStmt) int {
+	depth := 0
+	for i := len(c.branchScopes) - 1; i >= 0; i-- {
+		scope := c.branchScopes[i]
+		if branch.Tok == token.CONTINUE && !scope.loop {
+			continue
+		}
+		depth++
+		if scope.label == branch.Label.Name {
+			return depth
+		}
+	}
+	c.fail(branch, "labeled branch")
+	return 0
 }
 
 func (c *converter) pos(p token.Pos) s.Pos {
@@ -591,6 +625,42 @@ func (c *converter) funlit(x *ast.FuncLit) *s.BashPPFuncLit {
 }
 func (c *converter) call(x *ast.CallExpr) *s.BashPPCall {
 	out := &s.BashPPCall{Lparen: c.pos(x.Lparen), Rparen: c.pos(x.Rparen), Ellipsis: c.pos(x.Ellipsis), ResultFuncType: c.functionValueType(x)}
+	isInstantiation := func(e ast.Expr) bool {
+		var base ast.Expr
+		var args []ast.Expr
+		switch v := e.(type) {
+		case *ast.IndexExpr:
+			base, args = v.X, []ast.Expr{v.Index}
+		case *ast.IndexListExpr:
+			base, args = v.X, v.Indices
+		default:
+			return false
+		}
+		var id *ast.Ident
+		switch v := base.(type) {
+		case *ast.Ident:
+			id = v
+		case *ast.SelectorExpr:
+			id = v.Sel
+		}
+		if id != nil {
+			if _, ok := c.info.Instances[id]; ok {
+				return true
+			}
+		}
+		baseType := c.info.Types[base]
+		if !baseType.IsType() {
+			if _, ok := baseType.Type.(*types.Signature); !ok {
+				return false
+			}
+		}
+		for _, arg := range args {
+			if !c.info.Types[arg].IsType() {
+				return false
+			}
+		}
+		return true
+	}
 	var simple func(ast.Expr) bool
 	simple = func(e ast.Expr) bool {
 		switch v := e.(type) {
@@ -599,9 +669,9 @@ func (c *converter) call(x *ast.CallExpr) *s.BashPPCall {
 		case *ast.SelectorExpr:
 			return simple(v.X)
 		case *ast.IndexExpr:
-			return simple(v.X)
+			return isInstantiation(v) && simple(v.X)
 		case *ast.IndexListExpr:
-			return simple(v.X)
+			return isInstantiation(v) && simple(v.X)
 		}
 		return false
 	}
@@ -654,9 +724,10 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 	case *ast.BlockStmt:
 		cmd = c.block(x)
 	case *ast.ExprStmt:
-		if call, ok := x.X.(*ast.CallExpr); ok {
+		expr := ast.Unparen(x.X)
+		if call, ok := expr.(*ast.CallExpr); ok {
 			cmd = c.call(call)
-		} else if recv, ok := x.X.(*ast.UnaryExpr); ok && recv.Op == token.ARROW {
+		} else if recv, ok := expr.(*ast.UnaryExpr); ok && recv.Op == token.ARROW {
 			cmd = &s.BashPPReceive{Arrow: c.pos(recv.OpPos), Chan: c.word(recv.X), ChanExpr: c.expr(recv.X)}
 		} else {
 			c.fail(x, "expression statement")
@@ -802,24 +873,43 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 		}
 		cmd = out
 	case *ast.ForStmt:
-		cmd = &s.BashPPFor{For: c.pos(x.For), Init: c.one(x.Init), Cond: c.expr(x.Cond), Post: c.one(x.Post), Body: c.block(x.Body), FirstSemi: c.headerToken(x.For, x.Body.Lbrace, token.SEMICOLON, 0), SecondSemi: c.headerToken(x.For, x.Body.Lbrace, token.SEMICOLON, 1)}
+		leaveBranch := c.pushBranchScope(c.takeStatementLabel(), true)
+		body := c.block(x.Body)
+		leaveBranch()
+		cmd = &s.BashPPFor{For: c.pos(x.For), Init: c.one(x.Init), Cond: c.expr(x.Cond), Post: c.one(x.Post), Body: body, FirstSemi: c.headerToken(x.For, x.Body.Lbrace, token.SEMICOLON, 0), SecondSemi: c.headerToken(x.For, x.Body.Lbrace, token.SEMICOLON, 1)}
 	case *ast.RangeStmt:
-		out := &s.BashPPRange{For: c.pos(x.For), Define: c.pos(x.TokPos), Range: c.pos(x.Range), Chan: c.word(x.X), Expr: c.expr(x.X), Body: c.block(x.Body)}
-		for _, e := range []ast.Expr{x.Key, x.Value} {
+		leaveBranch := c.pushBranchScope(c.takeStatementLabel(), true)
+		body := c.block(x.Body)
+		leaveBranch()
+		out := &s.BashPPRange{For: c.pos(x.For), Range: c.pos(x.Range), Chan: c.word(x.X), Expr: c.expr(x.X), Body: body}
+		var assignments []*s.Stmt
+		for i, e := range []ast.Expr{x.Key, x.Value} {
 			if e != nil {
-				if id, ok := e.(*ast.Ident); ok {
-					out.Names = append(out.Names, c.ident(id))
+				if x.Tok == token.DEFINE {
+					out.Names = append(out.Names, c.ident(e.(*ast.Ident)))
 				} else {
-					c.fail(e, "range assignment target")
+					temp := &ast.Ident{NamePos: e.Pos(), Name: fmt.Sprintf("%srange_%d_%d", c.prefix, x.TokPos, i)}
+					out.Names = append(out.Names, c.ident(temp))
+					assign := &ast.AssignStmt{Lhs: []ast.Expr{e}, TokPos: x.TokPos, Tok: token.ASSIGN, Rhs: []ast.Expr{temp}}
+					assignments = append(assignments, c.statements(assign)...)
 				}
 			}
 		}
+		if x.Tok == token.DEFINE || len(assignments) > 0 {
+			out.Define = c.pos(x.TokPos)
+		}
+		out.Body.Stmts = append(assignments, out.Body.Stmts...)
 		cmd = out
 	case *ast.BranchStmt:
+		depth := 0
 		if x.Label != nil {
-			c.fail(x, "labeled branch")
+			if x.Tok != token.BREAK && x.Tok != token.CONTINUE {
+				c.fail(x, "labeled branch")
+			} else {
+				depth = c.labeledBranchDepth(x)
+			}
 		}
-		cmd = &s.BashPPBranch{Kw: c.lit(x.TokPos, x.Tok.String())}
+		cmd = &s.BashPPBranch{Kw: c.lit(x.TokPos, x.Tok.String()), Depth: uint(depth)}
 	case *ast.DeferStmt:
 		cmd = &s.BashPPDefer{Kw: c.lit(x.Defer, "defer"), Call: c.call(x.Call)}
 	case *ast.GoStmt:
@@ -827,6 +917,8 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 	case *ast.SendStmt:
 		cmd = &s.BashPPSend{Chan: c.word(x.Chan), Arrow: c.pos(x.Arrow), Value: c.word(x.Value), ValueExpr: c.expr(x.Value), ChanExpr: c.expr(x.Chan)}
 	case *ast.SelectStmt:
+		leaveBranch := c.pushBranchScope("", false)
+		defer leaveBranch()
 		out := &s.BashPPSelect{Select: c.pos(x.Select), Lbrace: c.pos(x.Body.Lbrace), Rbrace: c.pos(x.Body.Rbrace)}
 		for _, st := range x.Body.List {
 			cc := st.(*ast.CommClause)
@@ -841,12 +933,25 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 		if x.Init != nil {
 			c.fail(x.Init, "type switch initializer")
 		}
-		out := &s.BashPPSwitch{Switch: c.pos(x.Switch), TypeSwitch: true, Init: c.one(x.Assign), Lbrace: c.pos(x.Body.Lbrace), Rbrace: c.pos(x.Body.Rbrace)}
+		guard := &s.BashPPShortDecl{Class: s.ClassR, GoRegion: true}
+		switch assign := x.Assign.(type) {
+		case *ast.ExprStmt:
+			guard.Expr = c.expr(assign.X.(*ast.TypeAssertExpr))
+		case *ast.AssignStmt:
+			guard.OpPos = c.pos(assign.TokPos)
+			for _, lhs := range assign.Lhs {
+				guard.Lhs = append(guard.Lhs, c.ident(lhs.(*ast.Ident)))
+			}
+			guard.Expr = c.expr(assign.Rhs[0].(*ast.TypeAssertExpr))
+		}
+		leaveBranch := c.pushBranchScope("", false)
+		defer leaveBranch()
+		out := &s.BashPPSwitch{Switch: c.pos(x.Switch), TypeSwitch: true, Init: guard, Lbrace: c.pos(x.Body.Lbrace), Rbrace: c.pos(x.Body.Rbrace)}
 		for _, st := range x.Body.List {
 			cc := st.(*ast.CaseClause)
 			v := &s.BashPPSwitchArm{Case: c.pos(cc.Case), Colon: c.pos(cc.Colon)}
 			for _, e := range cc.List {
-				v.Exprs = append(v.Exprs, c.expr(e))
+				v.Types = append(v.Types, c.typ(e))
 			}
 			for _, body := range cc.Body {
 				v.Stmts = append(v.Stmts, c.statements(body)...)
@@ -855,6 +960,8 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 		}
 		cmd = out
 	case *ast.SwitchStmt:
+		leaveBranch := c.pushBranchScope("", false)
+		defer leaveBranch()
 		out := &s.BashPPSwitch{Switch: c.pos(x.Switch), Init: c.one(x.Init), Tag: c.expr(x.Tag), Lbrace: c.pos(x.Body.Lbrace), Rbrace: c.pos(x.Body.Rbrace)}
 		for _, st := range x.Body.List {
 			cc := st.(*ast.CaseClause)
@@ -868,6 +975,17 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 			out.Arms = append(out.Arms, v)
 		}
 		cmd = out
+	case *ast.LabeledStmt:
+		switch x.Stmt.(type) {
+		case *ast.ForStmt, *ast.RangeStmt:
+			previous := c.statementLabel
+			c.statementLabel = x.Label.Name
+			out := c.statements(x.Stmt)
+			c.statementLabel = previous
+			return out
+		default:
+			c.fail(st, "LabeledStmt")
+		}
 	default:
 		c.fail(st, strings.TrimPrefix(fmt.Sprintf("%T", st), "*ast."))
 	}
