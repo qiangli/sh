@@ -72,6 +72,9 @@ type Options struct {
 	// trace test builtins of the go/types testing environment. It is off by
 	// default; this is a checker-environment option, not a language feature.
 	TestBuiltins bool
+	// CheckerBranchErrors leaves label, goto, break, and continue diagnostics
+	// to go/types instead of reporting them during the gc syntax verdict.
+	CheckerBranchErrors bool
 	// Packages are explicitly supplied dependency packages, type-checked in
 	// the given order before the program and registered under their Path.
 	// They are the policy-free half of Go's import model — an in-memory
@@ -140,7 +143,7 @@ func Load(sources []Source, options Options) (*Program, error) {
 	sort.SliceStable(sources, func(i, j int) bool { return sources[i].Name < sources[j].Name })
 	// gc's own parser is the syntax verdict: if it rejects any source, its
 	// diagnostics are the complete result and nothing below runs.
-	if syntaxErrors := syntaxVerdict(sources); len(syntaxErrors) > 0 {
+	if syntaxErrors := syntaxVerdict(sources, options.CheckerBranchErrors); len(syntaxErrors) > 0 {
 		return nil, syntaxErrors
 	}
 	checker, err := checkerOptionsFor(sources, options)
@@ -432,15 +435,16 @@ func shadowedBuiltinTypes(pkg *types.Package) map[string]bool {
 // explicit packages. Test builtins are the exception to per-Load isolation:
 // the go/types API installs them process-wide, irreversibly.
 type checkerOptions struct {
-	goVersion    string
-	fakeImportC  bool
-	testBuiltins bool
+	goVersion           string
+	fakeImportC         bool
+	testBuiltins        bool
+	checkerBranchErrors bool
 }
 
 var definePredeclaredTestFuncs sync.Once
 
 func checkerOptionsFor(sources []Source, options Options) (checkerOptions, error) {
-	out := checkerOptions{goVersion: options.GoVersion, fakeImportC: options.FakeImportC, testBuiltins: options.TestBuiltins}
+	out := checkerOptions{goVersion: options.GoVersion, fakeImportC: options.FakeImportC, testBuiltins: options.TestBuiltins, checkerBranchErrors: options.CheckerBranchErrors}
 	// The Go checker corpus places flag-compatible configuration on the first
 	// source line (for example "// -lang=go1.13"). Testdir errorcheck recipes
 	// use the same flag later on that line. Honor only checker flags, only from

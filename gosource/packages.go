@@ -173,7 +173,7 @@ func (m *mapImporter) checkDependency(fset *token.FileSet, spec PackageSpec, che
 	sort.SliceStable(sources, func(i, j int) bool { return sources[i].Name < sources[j].Name })
 	// Same syntax verdict as Load: gc's parser decides, and a rejection is
 	// the package's complete diagnostic set.
-	if syntaxErrors := syntaxVerdict(sources); len(syntaxErrors) > 0 {
+	if syntaxErrors := syntaxVerdict(sources, checker.checkerBranchErrors); len(syntaxErrors) > 0 {
 		return syntaxErrors
 	}
 	var diagnostics ErrorList

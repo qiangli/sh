@@ -65,6 +65,28 @@ func TestTypeErrorContinuations(t *testing.T) {
 	}
 }
 
+func TestCheckerBranchErrors(t *testing.T) {
+	const src = "package p\nfunc f() {\nL:\n\tfor {\nL:\n\t\tbreak L\n\t}\n}\n"
+	for _, tc := range []struct {
+		name string
+		opts gosource.Options
+		want string
+	}{
+		{"gc", gosource.Options{}, "branch.go:5:1: label L already defined at branch.go:3:1"},
+		{"go-types", gosource.Options{CheckerBranchErrors: true}, "branch.go:5:1: label L already declared\n\tbranch.go:3:1: other declaration of L"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := gosource.Load([]gosource.Source{{Name: "branch.go", Data: []byte(src)}}, tc.opts)
+			if err == nil {
+				t.Fatal("duplicate label accepted")
+			}
+			if got := err.Error(); got != tc.want {
+				t.Fatalf("diagnostic differs\ngot:  %q\nwant: %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestSyntaxVerdictClasses covers one out-of-corpus reproducer per failure
 // class from gosource/testdata/sprint154/parser/FINDINGS.md. Each case
 // asserts the exact gc diagnostic (message, line, col — column is 1-based
