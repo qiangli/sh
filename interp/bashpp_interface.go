@@ -22,6 +22,10 @@ type bashPPInterfaceValue struct {
 type bashPPInterfaceMethod struct {
 	spec *syntax.BashPPMethodSpec
 	sig  string
+	// pkg is the linked-package tag of the declared interface the method
+	// is spelled in; see gosource_method_package.go. An unexported method
+	// name is only the same method in the same package.
+	pkg string
 }
 
 type bashPPInterfaceMethods struct {
@@ -68,6 +72,7 @@ func (r *Runner) bashPPInterfaceMethodSet(name string, iface *syntax.BashPPInter
 
 	set := &bashPPInterfaceMethods{byName: make(map[string]bashPPInterfaceMethod)}
 	direct := make(map[string]bool)
+	pkg := r.goSourceInterfacePackage(iface)
 	for _, elem := range bashPPInterfaceElems(iface) {
 		if elem.Method == nil {
 			embeddedIface, ok := r.bashPPInterfaceType(elem.Embedded)
@@ -110,7 +115,7 @@ func (r *Runner) bashPPInterfaceMethodSet(name string, iface *syntax.BashPPInter
 		if _, found := set.byName[method]; !found {
 			set.order = append(set.order, method)
 		}
-		set.byName[method] = bashPPInterfaceMethod{spec: spec, sig: sig}
+		set.byName[method] = bashPPInterfaceMethod{spec: spec, sig: sig, pkg: pkg}
 	}
 	return set, nil
 }
@@ -224,7 +229,7 @@ func (r *Runner) bashPPImplements(actual syntax.BashPPTypeExpr, iface *syntax.Ba
 		for _, name := range expectedSet.order {
 			expected := expectedSet.byName[name]
 			actualMethod, found := actualSet.byName[name]
-			if !found {
+			if !found || goSourceUnexportedName(name) && actualMethod.pkg != expected.pkg {
 				return fmt.Errorf("BASHPP-EINTERFACE-MISSING: %s does not implement interface (missing method %s)", bashPPTypeText(actual), name)
 			}
 			if actualMethod.sig != expected.sig {
@@ -245,6 +250,9 @@ func (r *Runner) bashPPImplements(actual syntax.BashPPTypeExpr, iface *syntax.Ba
 		expected := expectedSet.byName[name]
 		sel := r.bashPPResolveSelection(actual, name, true, false)
 		if sel.ambiguous || sel.method == nil && sel.interfaceSpec == nil {
+			return fmt.Errorf("BASHPP-EINTERFACE-MISSING: %s does not implement interface (missing method %s)", bashPPTypeText(actual), name)
+		}
+		if goSourceUnexportedName(name) && r.goSourceMethodPackage(sel) != expected.pkg {
 			return fmt.Errorf("BASHPP-EINTERFACE-MISSING: %s does not implement interface (missing method %s)", bashPPTypeText(actual), name)
 		}
 		actualSig := ""
