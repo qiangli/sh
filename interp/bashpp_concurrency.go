@@ -470,6 +470,25 @@ func (r *Runner) bashPPArmBeforeBlock(ctx context.Context) bool {
 	return true
 }
 
+func (r *Runner) bashPPDeadlockIfNoTasks(ctx context.Context) bool {
+	if !r.bashPPGoSource || r.bashPPGoTask || r.bashPPConcurrent == nil {
+		return false
+	}
+	if err := r.bashPPTaskContext(ctx).Err(); err != nil {
+		return false
+	}
+	c := r.bashPPConcurrent
+	c.mu.Lock()
+	deadlocked := c.active == 0
+	c.mu.Unlock()
+	if !deadlocked {
+		return false
+	}
+	r.errf("fatal error: all goroutines are asleep - deadlock!\n")
+	r.exit = exitStatus{code: bashPPPanicStatus}
+	return true
+}
+
 // bashPPTaskOpen acquires a filesystem descriptor without ever blocking on a
 // pathname that races to a FIFO. Task opens deliberately fail closed for
 // custom handlers: the OpenHandler contract does not promise cancellation or
@@ -737,6 +756,9 @@ func (r *Runner) bashPPSend(ctx context.Context, s *syntax.BashPPSend) {
 	if !r.bashPPArmBeforeBlock(ctx) {
 		return
 	}
+	if r.bashPPDeadlockIfNoTasks(ctx) {
+		return
+	}
 	select {
 	case c.ch <- v:
 	case <-c.closing:
@@ -786,6 +808,9 @@ func (r *Runner) bashPPReceiveCell(ctx context.Context, recv *syntax.BashPPRecei
 		return nil, false
 	default:
 		if !r.bashPPArmBeforeBlock(ctx) {
+			return nil, false
+		}
+		if r.bashPPDeadlockIfNoTasks(ctx) {
 			return nil, false
 		}
 		select {
@@ -1444,6 +1469,9 @@ func (r *Runner) bashPPSelect(ctx context.Context, s *syntax.BashPPSelect) {
 		if !r.bashPPArmBeforeBlock(ctx) {
 			return
 		}
+		if r.bashPPDeadlockIfNoTasks(ctx) {
+			return
+		}
 		<-taskCtx.Done()
 		r.bashPPTaskCanceled = true
 		r.exit.code = 1
@@ -1467,6 +1495,9 @@ func (r *Runner) bashPPSelect(ctx context.Context, s *syntax.BashPPSelect) {
 			i = -1 // language default has no entry in cases/arms
 		} else {
 			if !r.bashPPArmBeforeBlock(ctx) {
+				return
+			}
+			if r.bashPPDeadlockIfNoTasks(ctx) {
 				return
 			}
 			i, v, open = reflect.Select(cases)
@@ -1542,6 +1573,9 @@ func (r *Runner) bashPPRange(ctx context.Context, rng *syntax.BashPPRange) {
 			return
 		default:
 			if !r.bashPPArmBeforeBlock(ctx) {
+				return
+			}
+			if r.bashPPDeadlockIfNoTasks(ctx) {
 				return
 			}
 			select {
