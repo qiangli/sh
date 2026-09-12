@@ -235,17 +235,22 @@ func (r *Runner) bashPPPanicTerminate() {
 		b.WriteString("\n")
 	}
 	if r.bashPPGoSource {
-		b.WriteString("\ngoroutine 1 [running]:\n")
-		for i := len(r.bashPPPanic.traceFrames) - 1; i >= 0; i-- {
-			name := r.bashPPPanic.traceFrames[i]
-			if name == "" {
-				name = "func1"
-			}
-			b.WriteString("main.")
-			b.WriteString(name)
-			b.WriteString("()\n")
-			if i == len(r.bashPPPanic.traceFrames)-1 && r.bashPPPanic.traceSource != "" {
-				fmt.Fprintf(&b, "\t%s:%d\n", r.bashPPPanic.traceSource, r.bashPPPanic.traceLine)
+		// Go's GOTRACEBACK=none retains the panic value and status but omits
+		// the traceback. Honour it here too: unlike a post-processing filter,
+		// this is the program's selected runtime output contract.
+		if r.lookupVar("GOTRACEBACK").String() != "none" {
+			b.WriteString("\ngoroutine 1 [running]:\n")
+			for i := len(r.bashPPPanic.traceFrames) - 1; i >= 0; i-- {
+				name := r.bashPPPanic.traceFrames[i]
+				if name == "" {
+					name = "func1"
+				}
+				b.WriteString("main.")
+				b.WriteString(name)
+				b.WriteString("()\n")
+				if i == len(r.bashPPPanic.traceFrames)-1 && r.bashPPPanic.traceSource != "" {
+					fmt.Fprintf(&b, "\t%s:%d\n", r.bashPPPanic.traceSource, r.bashPPPanic.traceLine)
+				}
 			}
 		}
 	}
