@@ -158,6 +158,8 @@ func (r *Runner) goSourceDynamicTypeIdentity(typ syntax.BashPPTypeExpr) string {
 			length = t.Length.Value
 		}
 		return "[" + length + "]" + r.goSourceDynamicTypeIdentity(t.Element)
+	case *syntax.BashPPStructType:
+		return r.goSourceStructIdentity(t)
 	}
 	return bashPPTypeText(typ)
 }

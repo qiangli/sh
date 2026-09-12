@@ -846,13 +846,20 @@ func (r *Runner) bashPPComparableExpr(expr syntax.BashPPExpr) (bashPPComparableV
 		return bashPPComparableValue{value: ptr, meta: bashPPPointerMeta(&syntax.BashPPPointerType{Element: ptr.elem})}, nil
 	case *syntax.BashPPConvertExpr:
 		// `(*T)(p) == nil`: a pointer conversion compares as the pointer it
-		// retypes. Any other conversion is a scalar.
+		// retypes; `v == any(x)` compares the interface value the conversion
+		// boxes. Any other conversion is a scalar.
 		ptr, target, converted, err := r.bashPPPointerConversion(x)
 		if err != nil {
 			return bashPPComparableValue{}, err
 		}
 		if converted {
 			return bashPPComparableValue{value: ptr, meta: bashPPPointerMeta(target)}, nil
+		}
+		if cell, handled, err := r.bashPPInterfaceConversion(x); handled {
+			if err != nil {
+				return bashPPComparableValue{}, err
+			}
+			return bashPPComparableValue{value: cell.interfaceValue, meta: &bashPPCollectionMeta{kind: "interface", typ: cell.declType}}, nil
 		}
 	case *syntax.BashPPCall:
 		if !r.bashPPGoSource {

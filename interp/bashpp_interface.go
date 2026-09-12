@@ -765,6 +765,11 @@ func (r *Runner) bashPPTypeAssertCell(assert *syntax.BashPPTypeAssertExpr, comma
 		} else {
 			matched = bashPPInterfaceAssertTypeText(r.bashPPPredeclaredAliases(iv.dynamic)) == bashPPInterfaceAssertTypeText(r.bashPPPredeclaredAliases(assert.Assert)) ||
 				r.goSourceNativeTypeIdentical(iv.dynamic, assert.Assert)
+			// A struct literal type is identified by its fields, not by the
+			// word "struct"; see gosource_struct_identity.go.
+			if matched && (bashPPStructLiteralType(iv.dynamic) || bashPPStructLiteralType(assert.Assert)) {
+				matched = r.goSourceDynamicTypeIdentity(iv.dynamic) == r.goSourceDynamicTypeIdentity(assert.Assert)
+			}
 		}
 	}
 	if !matched {
@@ -903,7 +908,17 @@ func typeCaseTypeMatches(r *Runner, iv *bashPPInterfaceValue, target syntax.Bash
 	if iface, ok := r.bashPPInterfaceType(target); ok {
 		return r.bashPPImplements(iv.dynamic, iface) == nil
 	}
+	if bashPPStructLiteralType(iv.dynamic) || bashPPStructLiteralType(target) {
+		return r.goSourceDynamicTypeIdentity(iv.dynamic) == r.goSourceDynamicTypeIdentity(target)
+	}
 	return r.bashPPTypeAssignable(iv.dynamic, target)
+}
+
+// bashPPStructLiteralType reports whether a type is spelled as a struct
+// literal rather than by a name.
+func bashPPStructLiteralType(typ syntax.BashPPTypeExpr) bool {
+	_, ok := typ.(*syntax.BashPPStructType)
+	return ok
 }
 
 // The predeclared error type is an ordinary interface. A source declaration

@@ -185,6 +185,11 @@ type Runner struct {
 	// function bodies that shadow a registry entry, so the frame that leaves
 	// restores what it shadowed; see [Runner.bashPPShadowLocalType].
 	bashPPShadowedTypes []bashPPShadowedType
+	// bashPPSourcePackages caches, per linked Go source file (keyed by its
+	// base offset), the linked-package tag its declarations carry; see
+	// goSourcePackageAt in gosource_struct_identity.go.
+	bashPPSourcePackages     map[uint]string
+	bashPPSourcePackagesFile *syntax.File
 	// bashPPShortTxn makes every := result producer use the same atomic
 	// current-scope commit rules. Transactions nest across function calls, so a
 	// declaration evaluated by an RHS cannot be mistaken for the caller's LHS.
