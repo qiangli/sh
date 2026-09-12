@@ -19,6 +19,14 @@ import (
 type converter struct {
 	packagePath   string
 	importAliases map[string]string
+	// mapped is the set of explicit package paths linked into the same file;
+	// a selector on one of their import bindings collapses to the bare name
+	// and their types are spelled unqualified, exactly as packagePath's are.
+	mapped map[string]bool
+	// resolveImport applies the relative-import rule to an import path as
+	// written, so an import without a binding (blank) can still be matched
+	// against mapped.
+	resolveImport func(string) (string, error)
 	syntheticPos  token.Pos
 	prefix        string
 	fset          *token.FileSet
@@ -57,12 +65,46 @@ func (c *converter) ident(n *ast.Ident) *s.Lit {
 	out.ValueEnd = c.pos(n.End())
 	return out
 }
+
+// mappedPkgName reports whether e is the import binding of a linked explicit
+// package. A selector through it collapses to the bare selected name: the
+// package's declarations were lowered into the same flat file.
+func (c *converter) mappedPkgName(e ast.Expr) bool {
+	id, ok := e.(*ast.Ident)
+	if !ok || len(c.mapped) == 0 {
+		return false
+	}
+	pkgname, ok := c.info.ObjectOf(id).(*types.PkgName)
+	return ok && c.mapped[pkgname.Imported().Path()]
+}
+
+// qualifier spells a package in a type string: unqualified for this package
+// and for every linked explicit package, by hoisted alias for an import, and
+// by declared name otherwise.
+func (c *converter) qualifier(p *types.Package) string {
+	if p.Path() == c.packagePath || c.mapped[p.Path()] {
+		return ""
+	}
+	if alias := c.importAliases[p.Path()]; alias != "" {
+		return alias
+	}
+	return p.Name()
+}
 func (c *converter) text(n ast.Node) string {
 	var b bytes.Buffer
 	original := map[*ast.Ident]string{}
+	// A mapped package binding is spelled as a marker the hygiene prefix
+	// guarantees absent from the source, then dropped with its dot.
+	marker := c.prefix + "mapped"
 	ast.Inspect(n, func(node ast.Node) bool {
+		if sel, ok := node.(*ast.SelectorExpr); ok && c.mappedPkgName(sel.X) {
+			id := sel.X.(*ast.Ident)
+			original[id] = id.Name
+			id.Name = marker
+			return true
+		}
 		if id, ok := node.(*ast.Ident); ok {
-			if name := c.renames[c.info.ObjectOf(id)]; name != "" {
+			if name := c.renames[c.info.ObjectOf(id)]; name != "" && original[id] == "" {
 				original[id] = id.Name
 				id.Name = name
 			}
@@ -75,7 +117,10 @@ func (c *converter) text(n ast.Node) string {
 		}
 	}()
 	_ = format.Node(&b, c.fset, n)
-	return b.String()
+	if len(c.mapped) == 0 {
+		return b.String()
+	}
+	return strings.ReplaceAll(b.String(), marker+".", "")
 }
 func (c *converter) word(n ast.Expr) *s.Word {
 	if lit, ok := n.(*ast.BasicLit); ok && lit.Kind == token.STRING {
@@ -141,15 +186,7 @@ func (c *converter) valueType(e ast.Expr) s.BashPPTypeExpr {
 		return nil
 	}
 	typ = types.Default(typ)
-	typeName := types.TypeString(typ, func(p *types.Package) string {
-		if p.Path() == c.packagePath {
-			return ""
-		}
-		if alias := c.importAliases[p.Path()]; alias != "" {
-			return alias
-		}
-		return p.Name()
-	})
+	typeName := types.TypeString(typ, c.qualifier)
 	if typeName == "any" && types.Identical(typ, types.Universe.Lookup("any").Type()) {
 		typeName = "interface{}"
 	}
@@ -188,6 +225,9 @@ func (c *converter) typ(e ast.Expr) s.BashPPTypeExpr {
 		}
 		return &s.BashPPNamedType{Name: c.ident(x)}
 	case *ast.SelectorExpr:
+		if c.mappedPkgName(x.X) {
+			return &s.BashPPNamedType{Name: c.ident(x.Sel)}
+		}
 		return &s.BashPPNamedType{Name: c.lit(x.Pos(), c.ident(x.X.(*ast.Ident)).Value+"."+x.Sel.Name)}
 	case *ast.StarExpr:
 		return &s.BashPPPointerType{Star: c.pos(x.Star), Element: c.typ(x.X)}
@@ -330,6 +370,9 @@ func (c *converter) function(f *ast.FuncDecl) *s.BashPPFuncDecl {
 }
 func (c *converter) importSpec(g *ast.GenDecl, i *ast.ImportSpec) *s.BashPPImport {
 	path, _ := strconv.Unquote(i.Path.Value)
+	if c.importedPathIsMapped(i, path) {
+		return nil
+	}
 	out := &s.BashPPImport{Site: s.StartImport, Class: s.ClassR, Kw: c.lit(g.TokPos, "import"), Path: &s.DblQuoted{Left: c.pos(i.Path.Pos()), Right: c.pos(i.Path.End() - 1), Parts: []s.WordPart{c.lit(i.Path.Pos()+1, path)}}}
 	if i.Name != nil {
 		out.Alias = c.ident(i.Name)
@@ -337,6 +380,30 @@ func (c *converter) importSpec(g *ast.GenDecl, i *ast.ImportSpec) *s.BashPPImpor
 		out.Alias = c.lit(i.Path.Pos(), c.renames[obj])
 	}
 	return out
+}
+
+// importedPathIsMapped reports whether an import spec names a package in the
+// explicit package map, through its binding when it has one and through the
+// relative-import rule otherwise.
+func (c *converter) importedPathIsMapped(i *ast.ImportSpec, path string) bool {
+	if len(c.mapped) == 0 {
+		return false
+	}
+	var obj types.Object
+	if i.Name != nil {
+		obj = c.info.Defs[i.Name]
+	} else {
+		obj = c.info.Implicits[i]
+	}
+	if pkgname, ok := obj.(*types.PkgName); ok {
+		return c.mapped[pkgname.Imported().Path()]
+	}
+	if c.resolveImport != nil {
+		if resolved, err := c.resolveImport(path); err == nil {
+			path = resolved
+		}
+	}
+	return c.mapped[path]
 }
 func (c *converter) typeDecl(g *ast.GenDecl, t *ast.TypeSpec) *s.BashPPDecl {
 	out := &s.BashPPDecl{Site: s.StartTypeDecl, Kw: c.lit(g.TokPos, "type"), Name: c.ident(t.Name), DeclType: c.lit(t.Type.Pos(), c.text(t.Type)), DeclTypeExpr: c.typ(t.Type), Alias: t.Assign.IsValid(), TypeParams: c.typeParams(t.TypeParams), End_: c.pos(t.End())}
@@ -352,15 +419,7 @@ func (c *converter) valueDecl(g *ast.GenDecl, v *ast.ValueSpec, n *ast.Ident, in
 	out := &s.BashPPDecl{Kw: c.lit(g.TokPos, g.Tok.String()), Name: c.ident(n), Site: s.StartVar, End_: c.pos(v.End())}
 	if v.Type == nil && g.Tok == token.VAR {
 		if obj := c.info.Defs[n]; obj != nil {
-			typeName := types.TypeString(obj.Type(), func(p *types.Package) string {
-				if p.Path() == c.packagePath {
-					return ""
-				}
-				if alias := c.importAliases[p.Path()]; alias != "" {
-					return alias
-				}
-				return p.Name()
-			})
+			typeName := types.TypeString(obj.Type(), c.qualifier)
 			// The synthetic AST has no go/types object bindings. Expand the
 			// predeclared any alias so it keeps its interface shape instead
 			// of becoming an unresolved named type during initialization.
@@ -463,6 +522,9 @@ func (c *converter) exprValue(e ast.Expr) s.BashPPExpr {
 	case *ast.BinaryExpr:
 		return &s.BashPPBinaryExpr{X: c.expr(x.X), Op: c.lit(x.OpPos, x.Op.String()), Y: c.expr(x.Y)}
 	case *ast.SelectorExpr:
+		if c.mappedPkgName(x.X) {
+			return &s.BashPPIdent{Name: c.ident(x.Sel)}
+		}
 		out := &s.BashPPSelectorExpr{X: c.expr(x.X), Dot: c.pos(x.Sel.Pos() - 1), Sel: c.ident(x.Sel), FuncType: c.functionValueType(x)}
 		if selection := c.info.Selections[x]; selection != nil && selection.Kind() == types.MethodVal {
 			out.MethodValue = true
@@ -549,7 +611,9 @@ func (c *converter) call(x *ast.CallExpr) *s.BashPPCall {
 		case *ast.Ident:
 			out.Fun = append(out.Fun, c.ident(v))
 		case *ast.SelectorExpr:
-			callee(v.X)
+			if !c.mappedPkgName(v.X) {
+				callee(v.X)
+			}
 			out.Fun = append(out.Fun, c.ident(v.Sel))
 		case *ast.FuncLit:
 			out.FuncLit = c.funlit(v)

@@ -5,6 +5,15 @@ no product code changed. Fixture: `mapped/main.go` + `mapped/a/a.go` in this
 directory (import base `test`, mapped path `test/a`, relative import `./a` —
 the convention of `gosource/packages_test.go`).
 
+**Status (implemented, Story #72).** §3 is in `gosource`: `checkDependency`
+retains files/Info/package, `Load` links every mapped package into the one
+`*syntax.File` ahead of the program (`converter.lowerPackage`,
+`checkLinkedNames`, `refuseEmbedDirectives`), the converter collapses mapped
+qualifiers (`mappedPkgName`, `qualifier`), and `Program.Packages` lists what
+was linked. `packages_test.go` (`TestMapped*`) runs the fixture, init order,
+diamond imports and the selector sites through `interp` against `go run`, and
+pins the collision and go:embed refusals and the `%T` known difference.
+
 **Bottom line.** The map is a *lowering-time* input that today stops at the
 type checker; the runtime never sees it and has no field that could hold it.
 The smallest honest change is not to teach the runtime about packages at all
