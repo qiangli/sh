@@ -135,8 +135,15 @@ func (w *callbackCancelWriter) String() string {
 func (w *callbackCancelWriter) Reset() { w.mu.Lock(); defer w.mu.Unlock(); w.Buffer.Reset() }
 
 func TestGoSourceCallbackReferenceBoundary(t *testing.T) {
+	// supported cases run the original body faithfully since the S153.2 full
+	// method mirror: a mirrored fmt.Formatter writes through the dependency-
+	// owned State, and a typed-nil pointer receiver runs the original body
+	// with a nil receiver, exactly as native Go invokes it. The remaining
+	// case pins the boundary: a value receiver writing through its copied
+	// slice storage must stay refused, never silently diverge.
+	supported := map[string]bool{"mirrored_formatter": true, "nil_pointer_callback": true}
 	for name, source := range map[string]string{
-		"omitted_formatter": `package main
+		"mirrored_formatter": `package main
 import "fmt"
 type V int
 func(v V)Format(s fmt.State,verb rune){fmt.Fprint(s,"custom")}
@@ -172,6 +179,12 @@ func main(){s:=Slice{1};fmt.Println(s);println("after")}`,
 				t.Fatal(err)
 			}
 			err = r.Run(context.Background(), p.File)
+			if supported[name] {
+				if err != nil || out.String() != want.stdout+want.stderr {
+					t.Fatalf("supported case diverged: %v %q; native %+v", err, out.String(), want)
+				}
+				return
+			}
 			if err == nil || strings.Contains(out.String(), "after") || strings.Contains(out.String(), "changed") {
 				t.Fatalf("unsupported execution accepted: %v %q", err, out.String())
 			}

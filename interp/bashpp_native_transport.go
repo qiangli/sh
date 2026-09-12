@@ -36,12 +36,10 @@ func validateLocalTransport(req bashPPEvalRequest, q bashPPBridgeRequest) error 
 		if v.Kind == "handle" {
 			return false, false, nil
 		}
+		// A typed-nil pointer of a method-bearing local type is admitted: a
+		// mirrored method raised on it runs the original body with a nil
+		// receiver, which is exactly how native Go invokes it.
 		name := strings.TrimPrefix(v.Type, "main.")
-		if v.Kind == "nil" && strings.HasPrefix(name, "*") {
-			if t, ok := local[strings.TrimPrefix(name, "*")]; ok && len(t.Methods) > 0 {
-				return false, false, fmt.Errorf("gosource: nil pointer callback requires original reference identity")
-			}
-		}
 		typ, isLocal := local[name]
 		if len(typ.OmittedMethods) > 0 {
 			alias, _, _ := strings.Cut(q.Selector, ".")

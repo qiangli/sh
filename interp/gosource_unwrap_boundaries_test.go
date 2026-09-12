@@ -91,10 +91,15 @@ func main(){fmt.Println(errors.Unwrap(wrapped{})==nil);println("after")}`
 				t.Fatal(err)
 			}
 			err = r.Run(context.Background(), p.File)
-			if err == nil || !strings.Contains(err.Error(), "original method wrapped.Unwrap is not supported") {
+			// Since the S153.2 full method mirror these signatures cross: the
+			// helper mirrors Unwrap at its original (non-error) signature, and
+			// errors.Unwrap — which uses only Unwrap() error — never invokes
+			// it, exactly as native Go never does. The boundary that remains
+			// is that the original body must not run.
+			if err != nil || out.String() != "true\nafter\n" {
 				t.Fatalf("boundary: %v %q", err, out.String())
 			}
-			if strings.Contains(out.String(), "original-body") || strings.Contains(out.String(), "after") {
+			if strings.Contains(out.String(), "original-body") {
 				t.Fatalf("unsupported execution: %q", out.String())
 			}
 		})
