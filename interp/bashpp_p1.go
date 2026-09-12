@@ -1942,19 +1942,27 @@ func (r *Runner) bashPPCall(ctx context.Context, c *syntax.BashPPCall) {
 		}
 		return
 	}
-	if c.CalleeExpr != nil && !(r.bashPPGoSource && r.bashPPGoSourcePin != nil && r.bashPPGoSourcePin.call == c) {
+	if c.CalleeExpr != nil && !r.bashPPGoSource {
 		r.exit.fatal(fmt.Errorf("%sgosource: computed call runtime is not implemented", r.bashErrPrefix(c.Pos())))
 		return
 	}
 	// A call to a typed function declared in this session runs the function.
 	// It is checked before the external eval toolchain so a user's own `func`
-	// always wins over a same-named tool binding.
+	// always wins over a same-named tool binding. A Go computed callee —
+	// `fs[i]()`, `get()()`, `(*T).M(p)` — resolves to its function value the
+	// same way it does in expression position.
 	if fn, ok := r.bashPPLookupFunc(c); ok {
 		args, ok := r.bashPPCallValues(c, fn)
 		if !ok {
 			return
 		}
 		r.bashPPInvoke(ctx, fn, args)
+		return
+	}
+	if c.CalleeExpr != nil {
+		if r.exit.code == 0 && !r.bashPPPanicking() && r.exit.err == nil {
+			r.exit.fatal(fmt.Errorf("%sgosource: computed callee is not a function", r.bashErrPrefix(c.Pos())))
+		}
 		return
 	}
 	if r.exit.code != 0 {
