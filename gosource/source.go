@@ -30,7 +30,11 @@ type ErrorList []error
 func (e ErrorList) Error() string {
 	lines := make([]string, len(e))
 	for i, err := range e {
-		lines[i] = err.Error()
+		if typeErr, ok := err.(types.Error); ok && strings.HasPrefix(typeErr.Msg, "\t") {
+			lines[i] = "\t" + typeErr.Fset.Position(typeErr.Pos).String() + ": " + strings.TrimPrefix(typeErr.Msg, "\t")
+		} else {
+			lines[i] = err.Error()
+		}
 	}
 	return strings.Join(lines, "\n")
 }

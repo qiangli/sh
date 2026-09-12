@@ -29,6 +29,42 @@ func diagnosticsOf(t *testing.T, name, src string) []string {
 	return out
 }
 
+func TestTypeErrorContinuations(t *testing.T) {
+	for _, tc := range []struct {
+		name, src, want string
+	}{
+		{
+			"redeclare.go",
+			"package p\nvar x int\nvar x string\n",
+			"redeclare.go:3:5: x redeclared in this block\n\tredeclare.go:2:5: other declaration of x",
+		},
+		{
+			"switch.go",
+			"package p\nfunc f() {\n\tswitch 0 {\n\tcase 1:\n\tcase 1:\n\t}\n}\n",
+			"switch.go:5:7: duplicate case 1 (constant of type int) in expression switch\n\tswitch.go:4:7: previous case",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := gosource.Load([]gosource.Source{{Name: tc.name, Data: []byte(tc.src)}}, gosource.Options{})
+			if err == nil {
+				t.Fatal("invalid source accepted")
+			}
+			if got := err.Error(); got != tc.want {
+				t.Fatalf("diagnostics differ\ngot:\n%s\nwant:\n%s", got, tc.want)
+			}
+			unindented := 0
+			for _, line := range strings.Split(err.Error(), "\n") {
+				if !strings.HasPrefix(line, "\t") {
+					unindented++
+				}
+			}
+			if unindented != 1 {
+				t.Fatalf("got %d unindented diagnostics, want one", unindented)
+			}
+		})
+	}
+}
+
 // TestSyntaxVerdictClasses covers one out-of-corpus reproducer per failure
 // class from gosource/testdata/sprint154/parser/FINDINGS.md. Each case
 // asserts the exact gc diagnostic (message, line, col — column is 1-based
