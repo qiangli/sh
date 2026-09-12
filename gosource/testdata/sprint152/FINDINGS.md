@@ -17,6 +17,7 @@ out-of-corpus reduction (5–15 lines) transpiled with
 | LOWER-EUNDEFINED: undefined: _ | fixedbugs/bug420.go | testdata/sprint152/blank-target-paren | unwrap parenthesized assignment targets (`(_) = v`) |
 | LOWER-EUNDEFINED: undefined: new | fixedbugs/issue63436.go | testdata/sprint152/new-paren | unwrap parenthesized `new` builtin callee (`(new)(T)`) |
 | LOWER-ETYPE: C2.P undefined (untyped int …) | fixedbugs/bug439.go | testdata/sprint152/const-defined-type | a const initialized from a defined-type value inherits that type |
+| LOWER-ETYPE: cannot call int (untyped int constant …) | rename.go | testdata/sprint152/shadowed-builtin-const | skip the C3 constant wrap when its predeclared type name is redeclared at package scope |
 
 ## Cause is in lower/ — for the emitter owner
 

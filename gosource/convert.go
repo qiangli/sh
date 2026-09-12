@@ -40,7 +40,12 @@ type converter struct {
 	sources        []Source
 	info           *types.Info
 	renames        map[types.Object]string
-	err            error
+	// shadowedBuiltins names predeclared type names a package redeclares at
+	// package scope as a non-type (e.g. `const int = 15`). expr() must not
+	// materialize an untyped constant through such a name: `int(x)` would call
+	// the const, not convert to the type.
+	shadowedBuiltins map[string]bool
+	err              error
 	branchScopes   []converterBranchScope
 	statementLabel string
 }
@@ -660,6 +665,12 @@ func (c *converter) expr(e ast.Expr) s.BashPPExpr {
 	// Preserve that boundary, particularly float and rune defaults in any.
 	if tv := c.info.Types[e]; tv.Value != nil {
 		if basic, ok := tv.Type.(*types.Basic); ok && basic.Info()&types.IsUntyped == 0 {
+			// A package that redeclares this predeclared type name as a
+			// non-type has no usable `basic.Name()` conversion; emitting one
+			// calls the redeclared object. Leave the constant as written.
+			if c.shadowedBuiltins[basic.Name()] {
+				return result
+			}
 			return &s.BashPPConvertExpr{ConvType: c.lit(e.Pos(), basic.Name()), Lparen: c.pos(e.Pos()), Rparen: c.pos(e.End() - 1), X: result}
 		}
 	}
