@@ -680,6 +680,9 @@ func (c *converter) exprValue(e ast.Expr) s.BashPPExpr {
 		if value := c.genericFuncValue(x); value != nil {
 			return value
 		}
+		if value := c.typeParamMethodExpr(x); value != nil {
+			return value
+		}
 		if c.mappedPkgName(x.X) {
 			return &s.BashPPIdent{Name: c.ident(x.Sel)}
 		}
@@ -897,19 +900,59 @@ func (c *converter) genericFuncValue(e ast.Expr) s.BashPPExpr {
 	if signature == nil {
 		return nil
 	}
+	return c.forwardingClosure(e, signature, func(call *s.BashPPCall, _ []*s.Lit) {
+		c.callee(call, ast.Unparen(e))
+	})
+}
+
+// typeParamMethodExpr lowers a method expression whose receiver type is a
+// type parameter — `T.String` inside `func f[T Stringer]` — as the closure
+// that calls the method on its first argument, `func(r T, …) R { return
+// r.String(…) }`. The receiver is a value at run time, and a method
+// selected on a value is what the runtime resolves; a method selected on
+// a type parameter's NAME has no declaration to resolve against until the
+// frame binds it. Returns nil for every other selector.
+func (c *converter) typeParamMethodExpr(x *ast.SelectorExpr) s.BashPPExpr {
+	selection := c.info.Selections[x]
+	if selection == nil || selection.Kind() != types.MethodExpr {
+		return nil
+	}
+	recv := selection.Recv()
+	if pointer, ok := recv.(*types.Pointer); ok {
+		recv = pointer.Elem()
+	}
+	if _, ok := recv.(*types.TypeParam); !ok {
+		return nil
+	}
+	signature, _ := c.checkedType(c.info.TypeOf(x), x, "method expression type").(*s.BashPPFuncType)
+	if signature == nil {
+		return nil
+	}
+	return c.forwardingClosure(x, signature, func(call *s.BashPPCall, args []*s.Lit) {
+		call.Fun = []*s.Lit{args[0], c.ident(x.Sel)}
+		call.Args, call.ArgExprs = call.Args[1:], call.ArgExprs[1:]
+	})
+}
+
+// forwardingClosure builds `func(a0 T0, a1 ...T1) R { return <callee>(a0,
+// a1...) }` for a signature: a closure with that exact signature whose body
+// forwards every parameter to a call the caller completes. The callee hook
+// receives the call with its arguments already in place and the parameter
+// names, so it can take one of them as a receiver.
+func (c *converter) forwardingClosure(e ast.Expr, signature *s.BashPPFuncType, callee func(call *s.BashPPCall, args []*s.Lit)) s.BashPPExpr {
 	c.syntheticPos = e.Pos()
 	defer func() { c.syntheticPos = token.NoPos }()
 	at := e.Pos()
 	call := &s.BashPPCall{Lparen: c.pos(at), Rparen: c.pos(at)}
-	c.callee(call, ast.Unparen(e))
 	lit := &s.BashPPFuncLit{Kw: c.lit(at, "func"), Lparen: c.pos(at), Rparen: c.pos(at)}
 	var spelled []string
+	var names []*s.Lit
 	for _, group := range signature.Params {
-		names := len(group.Names)
-		if names == 0 {
-			names = 1
+		count := len(group.Names)
+		if count == 0 {
+			count = 1
 		}
-		for range names {
+		for range count {
 			name := fmt.Sprintf("%sarg%d", c.prefix, len(spelled))
 			field := *group
 			field.Names = []*s.Lit{c.lit(at, name)}
@@ -920,10 +963,12 @@ func (c *converter) genericFuncValue(e ast.Expr) s.BashPPExpr {
 				call.Ellipsis = c.pos(at)
 			}
 			spelled = append(spelled, text)
+			names = append(names, c.lit(at, name))
 			call.Args = append(call.Args, &s.Word{Parts: []s.WordPart{c.lit(at, text)}})
 			call.ArgExprs = append(call.ArgExprs, &s.BashPPIdent{Name: c.lit(at, name)})
 		}
 	}
+	callee(call, names)
 	for _, group := range signature.Results {
 		field := *group
 		field.Names = nil
