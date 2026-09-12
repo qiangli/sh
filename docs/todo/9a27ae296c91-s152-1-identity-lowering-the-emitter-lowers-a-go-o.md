@@ -3,10 +3,11 @@ id: 9a27ae296c91
 kind: task
 title: S152.1 identity lowering — the emitter lowers a Go-only input to itself (asmcheck residue)
 seq: 77
-status: todo
+status: done
 priority: p0
 created: 2026-09-10T21:18:20.954959Z
 sprint: 152
+closed: 2026-09-12T13:58:52.243317Z
 ---
 
 RE-BOUND 2026-09-12 (plan step 5, leaf-152r1b): this card owns the emitter half of decision D1 — a Go-only input lowers to itself — and the asmcheck residue it drives. Landed on sh master 074f29aa (run 132): C2 sinks, C4 parentheses, C5 main, C6 guard prologue, C7 deref, C9 plain assertions, C10 names, the lower half of C1 (directives) and the C11 layout parts; lower/fidelity_test.go asserts byte-identity per closed class (C4/C6/C7/C10 closed; C1/C2/C3/C5/C8/C9/C11 open only because their reproducers still carry converter classes). Harness side (bashpp-tests, S152.0): H1 listing normalization, file-argument asm build. Active roots after run 1b: 11 asmcheck roots (C1-converter 5, C3 2, 4 to re-attribute on candidate 3: append, comparisons, issue60324, memops). Exit: every asmcheck root in leaf-152r1b/active-152-manifest.tsv passes compiled mode on the next candidate, or is moved to a named owner by manifest commit with its mechanism.

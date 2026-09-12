@@ -3,10 +3,11 @@ id: 85214291800b
 kind: task
 title: S152.4 source-map completeness — user //line pass-through and column-0 directives
 seq: 80
-status: todo
+status: done
 priority: p0
 created: 2026-09-10T21:18:21.041669Z
 sprint: 152
+closed: 2026-09-12T13:58:52.311157Z
 ---
 
 RE-BOUND 2026-09-12 (plan step 5, leaf-152r1b): landed (run 134, sh 074f29aa): the emitter reproduces the user's line directive (filename and adjusted line) in its //line, emits the line-only form when the column is unknown (closes 'invalid column number: 0' on dwarf/dwarf.go, issue18149.go, issue22662.go, issue38698.go compiled mode), records both physical and adjusted positions in the map, and Result.ValidateMappings fails closed on a corrupted/truncated map. Remaining after run 1b: issue18149.go and issue22662.go INTERPRETED mode ('want /foo/bar.go:N', 'want ??:N') — the interpreter's runtime.Caller view of user line directives, a runtime concern to route to 153 by manifest commit at closure unless the interpreter owner claims it inside this sprint. Exit: no 'invalid column number' row on candidate 3; the two interpreted rows moved with their mechanism named.

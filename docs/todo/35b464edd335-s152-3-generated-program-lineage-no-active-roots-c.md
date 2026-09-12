@@ -3,10 +3,11 @@ id: 35b464edd335
 kind: task
 title: S152.3 generated-program lineage — no active roots (closed empty by manifest evidence)
 seq: 79
-status: todo
+status: done
 priority: p0
 created: 2026-09-10T21:18:21.011961Z
 sprint: 152
+closed: 2026-09-12T13:58:52.288204Z
 ---
 
 RE-BOUND 2026-09-12 (plan step 5, decision D5): no root in the Barrier A or leaf-152r0/r1b active manifests is lineage-shaped. The seed roots moved at Barrier A (64bit.go → 153, chan/select5.go → 151). The four runtime-shaped rows that had landed in 152 by first-line rule were triaged with reproducers in run 136 (sh gosource/testdata/sprint152/triage/FINDINGS.md): bug367.go, issue4167.go, for.go, reorder.go → 153 (runtime), and leaf 1b's partition already places bug367/reorder in 153. The card keeps its stable ID and closes as empty when the closure handoff records this; no borrowed work is filed here.

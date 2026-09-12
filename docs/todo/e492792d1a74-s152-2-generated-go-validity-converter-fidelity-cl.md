@@ -3,10 +3,11 @@ id: e492792d1a74
 kind: task
 title: S152.2 generated-Go validity — converter fidelity classes and LOWER-E* rows
 seq: 78
-status: todo
+status: done
 priority: p0
 created: 2026-09-10T21:18:20.985496Z
 sprint: 152
+closed: 2026-09-12T13:58:52.265733Z
 ---
 
 RE-BOUND 2026-09-12 (plan step 5, leaf-152r1b): this card owns the converter (gosource/) half of D1 and every LOWER-ETYPE/LOWER-EUNDEFINED row. Landed (runs 133, 138): parenthesized targets/callee, const defined type, synthetic entry position, shadowed builtin constant, tuple-split evaluation order; triage in gosource/testdata/sprint152/FINDINGS.md. In flight: lane A run 139 (C3 untyped constants, C1 directives) and lane B run 140 (C8 import aliasing — the 8 'imported and not used' rows —, C11 declaration order). Remaining named roots: alias3.go (alias declaration across the package map), fixedbugs/issue24801.go (compiledir root on the single-file path — verify the recipe before fixing). Exit: the 8 import rows and the C3/C1 asmcheck rows pass; fidelityOpen in lower/fidelity_test.go is empty or every open entry names a decision.
