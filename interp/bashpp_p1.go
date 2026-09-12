@@ -903,6 +903,22 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 				target.object = &bashPPObjectIdentity{owner: name, collection: cell.valueMeta}
 				return
 			}
+			// `i := any(x)`: a conversion to an interface binds the interface
+			// value that boxes x, which is what a later `i.(type)` reads.
+			cell, handled, err = r.bashPPInterfaceConversion(conv)
+			if err != nil {
+				r.errf("%s%v\n", r.bashErrPrefix(conv.Pos()), err)
+				r.exit = exitStatus{code: 2}
+				return
+			}
+			if handled {
+				name := d.Lhs[0].Value
+				r.bashPPDeclareName(name, cell.vr)
+				if target := r.bashPPScope.lookup(name); target != nil {
+					*target = *cell
+				}
+				return
+			}
 		}
 		if lit, ok := d.Expr.(*syntax.BashPPCompositeLit); ok {
 			if len(d.Lhs) != 1 {
@@ -1015,6 +1031,19 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 		var source *bashPPCell
 		if ident, ok := d.Expr.(*syntax.BashPPIdent); ok {
 			source = r.bashPPScope.lookup(ident.Name.Value)
+			// `xx := x` with x an interface copies the interface value whole,
+			// whatever its dynamic value's carrier; the scalar path below
+			// would keep the text and drop the dynamic type.
+			if vr := r.lookupVar(ident.Name.Value); vr.IsSet() && source != nil && source.interfaceValue != nil && vr.Kind != expand.Object {
+				r.bashPPDeclareName(d.Lhs[0].Value, vr)
+				if target := r.bashPPScope.lookup(d.Lhs[0].Value); target != nil {
+					target.typeName = source.typeName
+					target.declType = source.declType
+					target.scalarKind = source.scalarKind
+					target.interfaceValue = source.interfaceValue
+				}
+				return
+			}
 			if vr := r.lookupVar(ident.Name.Value); vr.IsSet() && vr.Kind == expand.Object {
 				if source != nil && source.object != nil && bashPPValueMeta(bashPPCellMeta(source)) {
 					value, meta := bashPPCopyArrayValue(vr.Obj, bashPPCellMeta(source))
