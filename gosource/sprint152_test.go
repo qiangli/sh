@@ -156,6 +156,40 @@ func TestSprint152PackageMapAlias3(t *testing.T) {
 	}
 }
 
+func TestSprint152PackageMapNonMainPackageMainIdentifier(t *testing.T) {
+	read := func(rel string) gosource.Source {
+		t.Helper()
+		path := filepath.Join("testdata", "sprint152", "issue24801", filepath.FromSlash(rel))
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return gosource.Source{Name: filepath.Base(rel), Data: data}
+	}
+	program, err := gosource.Load([]gosource.Source{read("main/main.go")}, gosource.Options{
+		RunMain:    true,
+		ImportBase: "test",
+		ImportPath: "test/main",
+		Packages: []gosource.PackageSpec{
+			{Path: "test/a", Sources: []gosource.Source{read("a/a.go")}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := lower.Compile(program.File, lower.Options{Origin: "main.go"})
+	if err != nil {
+		t.Fatalf("lower: %v", err)
+	}
+	generated := filepath.Join(t.TempDir(), "generated.go")
+	if err := os.WriteFile(generated, result.Source, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("go", "run", generated).CombinedOutput(); err != nil {
+		t.Fatalf("go run lowered program: %v\n%s\n%s", err, out, result.Source)
+	}
+}
+
 // TestSprint152SyntheticCallPosition pins the C5 converter half: the synthetic
 // `main` wrapper's call to the renamed source main must carry no borrowed
 // //line. The first declaration is an import, so the old borrowed position
