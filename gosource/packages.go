@@ -187,6 +187,7 @@ func (m *mapImporter) checkDependency(fset *token.FileSet, spec PackageSpec, che
 	if len(files) == 0 {
 		return diagnostics
 	}
+	diagnostics = append(diagnostics, validateCompilerDirectives(fset, files, checker)...)
 	m.from = spec.Path
 	var typeErrors ErrorList
 	config := checker.config(m, &typeErrors)

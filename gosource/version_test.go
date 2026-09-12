@@ -91,3 +91,28 @@ func TestGoSourceCollectsAllCheckerDiagnostics(t *testing.T) {
 		}
 	}
 }
+
+func TestGoSourceCompilerDirectiveDiagnostics(t *testing.T) {
+	for _, tc := range []struct {
+		file string
+		want string
+	}{
+		{"misplaced_noinline.go.txt", "misplaced compiler directive"},
+		{"embed_in_function.go.txt", "go:embed cannot apply to var inside func"},
+		{"embed_before_go116.go.txt", "go:embed requires go1.16 or later"},
+		{"embed_without_import.go.txt", `go:embed only allowed in Go files that import "embed"`},
+	} {
+		t.Run(tc.file, func(t *testing.T) {
+			source := checkerFixture(t, tc.file)
+			_, err := Parse(strings.NewReader(source), tc.file, Options{})
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want %q", err, tc.want)
+			}
+		})
+	}
+
+	const valid = "package p\n\n//go:noinline\nfunc f() {}\n"
+	if _, err := Parse(strings.NewReader(valid), "valid.go", Options{}); err != nil {
+		t.Fatalf("valid function directive: %v", err)
+	}
+}

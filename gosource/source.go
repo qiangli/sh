@@ -14,6 +14,7 @@ import (
 	"go/version"
 	"io"
 	"sort"
+	"strconv"
 	"strings"
 
 	"mvdan.cc/sh/v3/syntax"
@@ -159,6 +160,7 @@ func Load(sources []Source, options Options) (*Program, error) {
 	if len(c.files) == 0 {
 		return nil, parseErrors
 	}
+	parseErrors = append(parseErrors, validateCompilerDirectives(c.fset, c.files, checker)...)
 	fallback := options.Importer
 	if fallback == nil {
 		fallback = importer.Default()
@@ -369,6 +371,110 @@ func (o checkerOptions) config(imp types.Importer, diagnostics *ErrorList) types
 			*diagnostics = append(*diagnostics, err)
 		},
 	}
+}
+
+// validateCompilerDirectives covers source checks that the gc compiler runs
+// around go/types. The public checker deliberately ignores pragmas, but a
+// semantic-only Go source check must not accept a directive that compilation
+// will reject.
+func validateCompilerDirectives(fset *token.FileSet, files []*ast.File, checker checkerOptions) ErrorList {
+	var diagnostics ErrorList
+	for _, file := range files {
+		haveEmbed := false
+		for _, spec := range file.Imports {
+			if path, err := strconv.Unquote(spec.Path.Value); err == nil && path == "embed" {
+				haveEmbed = true
+			}
+		}
+
+		var funcs []*ast.FuncDecl
+		embedDecl := map[*ast.Comment]*ast.ValueSpec{}
+		insideFunc := map[*ast.Comment]bool{}
+		for _, decl := range file.Decls {
+			if fn, ok := decl.(*ast.FuncDecl); ok {
+				funcs = append(funcs, fn)
+			}
+		}
+		ast.Inspect(file, func(node ast.Node) bool {
+			gd, ok := node.(*ast.GenDecl)
+			if !ok || gd.Tok != token.VAR {
+				return true
+			}
+			for _, raw := range gd.Specs {
+				value := raw.(*ast.ValueSpec)
+				doc := value.Doc
+				if doc == nil && len(gd.Specs) == 1 {
+					doc = gd.Doc
+				}
+				if doc == nil {
+					continue
+				}
+				for _, comment := range doc.List {
+					embedDecl[comment] = value
+					for _, fn := range funcs {
+						if fn.Body != nil && fn.Body.Pos() < comment.Slash && comment.End() < fn.Body.End() {
+							insideFunc[comment] = true
+						}
+					}
+				}
+			}
+			return true
+		})
+
+		for _, group := range file.Comments {
+			for _, comment := range group.List {
+				text := strings.TrimPrefix(comment.Text, "//")
+				switch {
+				case strings.HasPrefix(text, "go:build"):
+					if comment.Slash > file.Package {
+						diagnostics = append(diagnostics, fmt.Errorf("%s: misplaced compiler directive", fset.Position(comment.Slash)))
+					}
+				case strings.HasPrefix(text, "go:noinline"):
+					allowed := false
+					for _, fn := range funcs {
+						if fn.Body != nil && fn.Body.Pos() < comment.Slash && comment.End() < fn.Body.End() {
+							allowed = false
+							break
+						}
+					}
+					if comment.Slash > file.Package && fset.Position(comment.Slash).Column == 1 {
+						for _, decl := range file.Decls {
+							if comment.Slash < decl.Pos() {
+								_, allowed = decl.(*ast.FuncDecl)
+								break
+							}
+						}
+					}
+					if !allowed {
+						diagnostics = append(diagnostics, fmt.Errorf("%s: misplaced compiler directive", fset.Position(comment.Slash)))
+					}
+				case text == "go:embed" || strings.HasPrefix(text, "go:embed ") || strings.HasPrefix(text, "go:embed\t"):
+					value := embedDecl[comment]
+					msg := ""
+					switch {
+					case value == nil:
+						msg = "misplaced go:embed directive"
+					case !haveEmbed:
+						msg = `go:embed only allowed in Go files that import "embed"`
+					case len(value.Names) != 1:
+						msg = "go:embed cannot apply to multiple vars"
+					case len(value.Values) != 0:
+						msg = "go:embed cannot apply to var with initializer"
+					case value.Type == nil:
+						msg = "go:embed cannot apply to var without type"
+					case insideFunc[comment]:
+						msg = "go:embed cannot apply to var inside func"
+					case checker.goVersion != "" && version.Compare(checker.goVersion, "go1.16") < 0:
+						msg = fmt.Sprintf("go:embed requires go1.16 or later (-lang was set to %s; check go.mod)", checker.goVersion)
+					}
+					if msg != "" {
+						diagnostics = append(diagnostics, fmt.Errorf("%s: %s", fset.Position(comment.Slash), msg))
+					}
+				}
+			}
+		}
+	}
+	return diagnostics
 }
 
 // loweredPackage is one package's lowered top-level statements, grouped so
