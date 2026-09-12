@@ -46,3 +46,11 @@ func differSprint153(t *testing.T, mechanism string) {
 func TestGoSourceBridgeLocalInterfaceDecl(t *testing.T) {
 	differSprint153(t, "local-interface-decl")
 }
+
+// TestGoSourceBridgeLocalArrayLength covers local array types whose length is
+// a constant name or expression: the helper refuses to materialise them (it
+// never sees the original constant declarations) instead of emitting an
+// uncompilable declaration; a literal length keeps materialising.
+func TestGoSourceBridgeLocalArrayLength(t *testing.T) {
+	differSprint153(t, "local-array-length")
+}

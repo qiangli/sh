@@ -13,6 +13,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"mvdan.cc/sh/v3/syntax"
@@ -374,7 +375,14 @@ func (l *bashPPLocalTypeSet) source(typ syntax.BashPPTypeExpr, depth int) (strin
 		case "slice":
 			return "[]" + element, true
 		case "array":
+			// Only a plain integer literal is expressible: a constant name or
+			// expression (`[N]int`, `[C * C]byte`, `[unsafe.Sizeof(x)]T`) has
+			// no meaning inside the helper, which never sees the original
+			// program's constant declarations.
 			if t.Length == nil {
+				return "", false
+			}
+			if _, err := strconv.ParseUint(t.Length.Value, 0, 63); err != nil {
 				return "", false
 			}
 			return "[" + t.Length.Value + "]" + element, true
