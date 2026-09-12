@@ -89,7 +89,11 @@ func (c *converter) pos(p token.Pos) s.Pos {
 }
 func (c *converter) fail(n ast.Node, what string) {
 	if c.err == nil {
-		c.err = fmt.Errorf("%s: gosource: unsupported %s", c.fset.Position(n.Pos()), what)
+		p := n.Pos()
+		if c.syntheticPos.IsValid() {
+			p = c.syntheticPos
+		}
+		c.err = fmt.Errorf("%s: gosource: unsupported %s", c.fset.Position(p), what)
 	}
 }
 func (c *converter) lit(p token.Pos, v string) *s.Lit {
@@ -271,20 +275,80 @@ func (c *converter) valueType(e ast.Expr) s.BashPPTypeExpr {
 	if typ == nil {
 		return nil
 	}
-	typ = types.Default(typ)
+	return c.checkedType(types.Default(typ), e, "inferred value type")
+}
+
+// checkedType converts a go/types type into the typed syntax representation,
+// anchored at the source node it stands for. The checker's spelling of the
+// type is reparsed rather than reconstructed so that every form typ already
+// understands — instantiated named types, type parameters of the enclosing
+// declaration, function and interface literals — comes out the same way it
+// would have from the source.
+func (c *converter) checkedType(typ types.Type, at ast.Node, what string) s.BashPPTypeExpr {
 	typeName := c.typeString(typ)
 	if typeName == "any" && types.Identical(typ, types.Universe.Lookup("any").Type()) {
 		typeName = "interface{}"
 	}
 	parsed, err := parser.ParseExpr(typeName)
 	if err != nil {
-		c.fail(e, "inferred value type")
+		c.fail(at, what)
 		return nil
 	}
-	c.syntheticPos = e.Pos()
+	c.syntheticPos = at.Pos()
 	result := c.typ(parsed)
 	c.syntheticPos = token.NoPos
 	return result
+}
+
+// instanceTypeArgs spells the type arguments the checker instantiated a
+// generic function callee with: the full list whether the call wrote them
+// all, wrote a prefix and left the rest to inference, or wrote none. The
+// runtime then binds the callee's type parameters from the call itself and
+// never has to infer them from argument values — go/types' inference, which
+// accepted the program, is the only inference in the pipeline. Generic types
+// are not callees (a conversion is lowered before reaching the call form),
+// so only a function instance qualifies.
+func (c *converter) instanceTypeArgs(fun ast.Expr) []*s.BashPPTypeArg {
+	base := fun
+	for {
+		switch v := base.(type) {
+		case *ast.ParenExpr:
+			base = v.X
+			continue
+		case *ast.IndexExpr:
+			base = v.X
+			continue
+		case *ast.IndexListExpr:
+			base = v.X
+			continue
+		}
+		break
+	}
+	var id *ast.Ident
+	switch v := base.(type) {
+	case *ast.Ident:
+		id = v
+	case *ast.SelectorExpr:
+		id = v.Sel
+	default:
+		return nil
+	}
+	inst, ok := c.info.Instances[id]
+	if !ok || inst.TypeArgs == nil || inst.TypeArgs.Len() == 0 {
+		return nil
+	}
+	if _, ok := inst.Type.(*types.Signature); !ok {
+		return nil
+	}
+	out := make([]*s.BashPPTypeArg, 0, inst.TypeArgs.Len())
+	for i := range inst.TypeArgs.Len() {
+		typ := c.checkedType(inst.TypeArgs.At(i), id, "instantiated type argument")
+		if typ == nil {
+			return nil
+		}
+		out = append(out, &s.BashPPTypeArg{ArgType: typ})
+	}
+	return out
 }
 
 func (c *converter) stringValue(e ast.Expr) bool {
@@ -755,6 +819,9 @@ func (c *converter) call(x *ast.CallExpr) *s.BashPPCall {
 	}
 	if simple(x.Fun) {
 		callee(x.Fun)
+		if args := c.instanceTypeArgs(x.Fun); args != nil {
+			out.TypeArgs = args
+		}
 	} else {
 		out.CalleeExpr = c.expr(x.Fun)
 	}
