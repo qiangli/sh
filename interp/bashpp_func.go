@@ -1173,6 +1173,16 @@ func (r *Runner) bashPPStructuredArgCell(w *syntax.Word, expr syntax.BashPPExpr)
 		}
 		bashPPStoreCellValue(cell, value, meta)
 		return cell, nil
+	case *syntax.BashPPTypeAssertExpr:
+		// `return v.(I)`, `f(v.(T))`: an assertion yields the asserted cell —
+		// an interface value with its dynamic type, or the concrete value —
+		// which the scalar evaluator would flatten to text and a bare type
+		// name.
+		cell, handled, err := r.bashPPAssertCandidate(x)
+		if !handled {
+			return nil, nil
+		}
+		return cell, err
 	case *syntax.BashPPDerefExpr, *syntax.BashPPIndexExpr, *syntax.BashPPSelectorExpr, *syntax.BashPPSliceExpr:
 		// `f(*p)`, `f(xs[0])`, `f(v.Inner)`, `f(xs[1:])`: a read that yields structured
 		// storage is passed as the value it is. A scalar read has no metadata
