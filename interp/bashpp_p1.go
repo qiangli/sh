@@ -833,7 +833,11 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 		if len(d.Rhs) == 1 {
 			sourceName = d.Rhs[0].Lit()
 		}
-		if sourceName != "" {
+		// Only a name can name a function. A literal such as `1` is a
+		// value, and looking it up would find the positional parameter $1 —
+		// inside a function whose first argument is a closure, `i := 1`
+		// would bind the closure instead of the number.
+		if sourceName != "" && syntax.BashPPValidIdent(sourceName) {
 			if vr := r.lookupVar(sourceName); vr.IsSet() {
 				if _, ok := r.bashPPClosure(vr.Str); ok {
 					r.bashPPDeclareName(d.Lhs[0].Value, vr)
