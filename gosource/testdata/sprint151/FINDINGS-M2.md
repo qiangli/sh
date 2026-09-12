@@ -91,6 +91,10 @@ change. Do §1 first and re-measure: the residual `LabeledStmt` count then
 
 **Estimate**: design (syntax + interp + lower).
 
+**Landed** (S151.4): `BashPPLabeled` + `BashPPGoto`, block-list restart in
+`Runner.stmts`, verbatim labels in `lower`. Both spike rows flipped; see
+`goto/FINDINGS.md` for the mechanism and the 38-root measurement.
+
 ## 3. Expression statement — 12 roots
 
 **Fail site**: `convert.go:598` — `*ast.ExprStmt` whose `X` is neither

@@ -1578,6 +1578,8 @@ func (r *Runner) bashPPRange(ctx context.Context, rng *syntax.BashPPRange) {
 			r.bashPPClearBranch()
 		case bashPPBranchFallthrough:
 			panic("validated fallthrough escaped to Bash++ range")
+		case bashPPBranchGoto:
+			return
 		}
 	}
 }

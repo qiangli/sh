@@ -24,6 +24,7 @@ const (
 	bashPPBranchBreak
 	bashPPBranchContinue
 	bashPPBranchFallthrough
+	bashPPBranchGoto
 )
 
 func (r *Runner) bashPPBranchStmt(branch *syntax.BashPPBranch) {
@@ -55,7 +56,32 @@ func (r *Runner) bashPPBranchEscapesEligible() bool {
 func (r *Runner) bashPPClearBranch() {
 	r.bashPPBranch = bashPPBranchNone
 	r.bashPPBranchDepth = 0
+	r.bashPPGotoLabel = ""
 	r.exit.clear()
+}
+
+// bashPPGotoStmt raises a goto. It unwinds like a break through every
+// enclosing statement until [Runner.stmts] finds the label in a statement
+// list it is executing, then that list resumes at the label. Go forbids
+// jumping into a block, over a variable declaration, or across a function
+// boundary, and go/types has already rejected those programs, so the label is
+// always in the current block or an enclosing one of the same function.
+func (r *Runner) bashPPGotoStmt(g *syntax.BashPPGoto) {
+	r.bashPPBranch = bashPPBranchGoto
+	r.bashPPBranchDepth = 0
+	r.bashPPGotoLabel = g.Label.Value
+	r.exit.clear()
+}
+
+// bashPPGotoTarget reports the index of the statement labeled with the
+// pending goto's label in stmts, or -1 when the goto must keep unwinding.
+func (r *Runner) bashPPGotoTarget(stmts []*syntax.Stmt) int {
+	for i, stmt := range stmts {
+		if labeled, ok := stmt.Cmd.(*syntax.BashPPLabeled); ok && labeled.Label.Value == r.bashPPGotoLabel {
+			return i
+		}
+	}
+	return -1
 }
 
 // Evaluation of the Bash++ P1 ("Day-1") nodes.
@@ -2111,6 +2137,8 @@ func (r *Runner) bashPPFor(ctx context.Context, loop *syntax.BashPPFor) {
 			r.bashPPClearBranch()
 		case bashPPBranchFallthrough:
 			panic("validated fallthrough escaped to Bash++ for")
+		case bashPPBranchGoto:
+			return
 		}
 		// Go 1.27 creates the next iteration's variable after the body and
 		// initializes it from this iteration's value before running post.

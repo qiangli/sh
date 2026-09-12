@@ -97,6 +97,11 @@ func (c *bashPPCell) vrValue() any {
 type bashPPScope struct {
 	parent  *bashPPScope
 	entries map[string]*bashPPCell
+	// labels records, per Go label executed in this block, which names the
+	// block had declared when the label was reached. A backward goto to the
+	// label re-enters the block at that point, so the names declared after
+	// it go out of scope again and their declarations run afresh.
+	labels map[string]map[string]bool
 }
 
 func newBashPPScope(parent *bashPPScope) *bashPPScope {
@@ -127,6 +132,34 @@ func (s *bashPPScope) declare(name string, vr expand.Variable, constant bool) er
 	vr.ReadOnly = vr.ReadOnly || constant
 	s.entries[name] = &bashPPCell{vr: vr, constant: constant}
 	return nil
+}
+
+// markLabel records the names declared in this block when label is reached.
+func (s *bashPPScope) markLabel(label string) {
+	if s.labels == nil {
+		s.labels = make(map[string]map[string]bool)
+	}
+	visible := make(map[string]bool, len(s.entries))
+	for name := range s.entries {
+		visible[name] = true
+	}
+	s.labels[label] = visible
+}
+
+// resumeAtLabel drops the names this block declared after label was reached,
+// so that re-running the statements from the label declares them anew as Go
+// does. A label the block has not reached yet (a forward goto) declared
+// nothing to drop: Go rejects a goto that would skip a declaration.
+func (s *bashPPScope) resumeAtLabel(label string) {
+	visible, ok := s.labels[label]
+	if !ok {
+		return
+	}
+	for name := range s.entries {
+		if !visible[name] {
+			delete(s.entries, name)
+		}
+	}
 }
 
 // snapshot freezes which NAMES are visible while keeping the cells live.

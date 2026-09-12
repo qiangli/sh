@@ -62,6 +62,10 @@ type emitter struct {
 	nativeShellBody    bool
 	branchTargets      []*lowerBranchTarget
 	branchLabelSeq     int
+	// pendingLabel is the source label of the labeled loop, switch, or select
+	// about to push its branch target; it seeds the target so a deep branch
+	// and a goto name the same label instead of a synthesized one.
+	pendingLabel string
 }
 
 type lowerBranchTarget struct {
@@ -70,7 +74,8 @@ type lowerBranchTarget struct {
 }
 
 func (e *emitter) pushBranchTarget(loop bool) *lowerBranchTarget {
-	target := &lowerBranchTarget{loop: loop}
+	target := &lowerBranchTarget{loop: loop, label: e.pendingLabel}
+	e.pendingLabel = ""
 	e.branchTargets = append(e.branchTargets, target)
 	return target
 }
@@ -80,7 +85,7 @@ func (e *emitter) popBranchTarget() {
 }
 
 func (e *emitter) branchStmt(n *syntax.BashPPBranch) (string, error) {
-	if n.Depth <= 1 {
+	if n.Depth == 0 {
 		return n.Kw.Value, nil
 	}
 	depth := int(n.Depth)
@@ -93,13 +98,37 @@ func (e *emitter) branchStmt(n *syntax.BashPPBranch) (string, error) {
 		if depth != 0 {
 			continue
 		}
+		// A labeled branch to the innermost target stays labeled when the
+		// target carries its source label: Go rejects a label nothing names.
 		if target.label == "" {
+			if n.Depth == 1 {
+				return n.Kw.Value, nil
+			}
 			target.label = fmt.Sprintf("%sbranch%d", e.prefix, e.branchLabelSeq)
 			e.branchLabelSeq++
 		}
 		return n.Kw.Value + " " + target.label, nil
 	}
 	return "", e.fail(n, CodeUnsupported, "branch depth exceeds enclosing statements")
+}
+
+// labeledStmt emits a Go label verbatim. A labeled loop, switch, or select
+// emits the label through its branch target so that target does not
+// synthesize a second one; go/types has already rejected unused labels, so
+// every emitted label has a branch or goto naming it.
+func (e *emitter) labeledStmt(n *syntax.BashPPLabeled) (string, error) {
+	if n.Stmt == nil {
+		return n.Label.Value + ":", nil
+	}
+	switch n.Stmt.Cmd.(type) {
+	case *syntax.BashPPFor, *syntax.BashPPRange, *syntax.BashPPSwitch, *syntax.BashPPSelect:
+		e.pendingLabel = n.Label.Value
+		text, err := e.statement(n.Stmt)
+		e.pendingLabel = ""
+		return text, err
+	}
+	text, err := e.statement(n.Stmt)
+	return n.Label.Value + ":\n" + text, err
 }
 
 // Compile returns canonical Go and mappings, or positioned diagnostics with no
@@ -771,6 +800,11 @@ func (e *emitter) function(f *syntax.BashPPFuncDecl) (string, error) {
 	savedResults := e.resultTypes
 	e.resultTypes = e.returnTypes(f.Results)
 	defer func() { e.resultTypes = savedResults }()
+	if f.Body == nil {
+		// Go admits a body-less declaration only when assembly or a linkname
+		// supplies the body; nothing here can, so say so instead of crashing.
+		return "", e.fail(f, CodeUnsupported, "function declaration without body")
+	}
 	body, err := e.block(f.Body)
 	if err != nil {
 		return "", err
@@ -1147,6 +1181,10 @@ func (e *emitter) command(c syntax.Command) (string, error) {
 		return e.switchStmt(n)
 	case *syntax.BashPPBranch:
 		return e.branchStmt(n)
+	case *syntax.BashPPLabeled:
+		return e.labeledStmt(n)
+	case *syntax.BashPPGoto:
+		return "goto " + n.Label.Value, nil
 	case *syntax.BashPPDefer:
 		if !e.goSource && n.Call != nil && len(n.Call.Fun) == 1 && n.Call.Fun[0].Value == "panic" && !e.funcs["panic"] {
 			if len(n.Call.Args) != 1 {

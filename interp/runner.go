@@ -5478,6 +5478,18 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		r.bashPPUpdate(cm)
 	case *syntax.BashPPBranch:
 		r.bashPPBranchStmt(cm)
+	case *syntax.BashPPLabeled:
+		// goto resolves the label in [Runner.stmts], which owns the statement
+		// list the label lives in; here the block only remembers what it had
+		// declared so far, for a backward goto to re-enter it at this point.
+		if r.bashPPScope != nil {
+			r.bashPPScope.markLabel(cm.Label.Value)
+		}
+		if cm.Stmt != nil {
+			r.stmt(ctx, cm.Stmt)
+		}
+	case *syntax.BashPPGoto:
+		r.bashPPGotoStmt(cm)
 	case *syntax.Subshell:
 		r2 := r.subshell(false)
 		if bg, _ := ctx.Value(bgProcCtxKey{}).(*bgProc); bg != nil && bg.carrierRootSubshell == cm {
@@ -9086,8 +9098,8 @@ func (r *Runner) localeDecimalPoint() string {
 }
 
 func (r *Runner) stmts(ctx context.Context, stmts []*syntax.Stmt) {
-	for _, stmt := range stmts {
-		r.stmt(ctx, stmt)
+	for i := 0; i < len(stmts); i++ {
+		r.stmt(ctx, stmts[i])
 		// Go source form has no "the last command failed" status to carry, so a
 		// statement that reports failure aborts the program. A status a call
 		// uses to REPORT a result is exempt, exactly as it is exempt from
@@ -9096,6 +9108,20 @@ func (r *Runner) stmts(ctx context.Context, stmts []*syntax.Stmt) {
 		// re-reported as a plain fatal status.
 		if r.bashPPGoSource && r.exit.code != 0 && !r.exit.errexitExempt && !r.bashPPPanicking() {
 			r.exit.fatal(ExitStatus(r.exit.code))
+		}
+		// A Go-form goto whose label is in this list resumes the list at the
+		// label; otherwise it unwinds like a break until the list that holds
+		// the label is reached.
+		if r.bashPPBranch == bashPPBranchGoto {
+			if at := r.bashPPGotoTarget(stmts); at >= 0 {
+				if r.bashPPScope != nil {
+					r.bashPPScope.resumeAtLabel(r.bashPPGotoLabel)
+				}
+				r.bashPPClearBranch()
+				i = at - 1
+				continue
+			}
+			return
 		}
 		// Propagate a pending break/continue out of a compound body (brace
 		// group, if/case body) so the rest of the list is skipped. Safe across

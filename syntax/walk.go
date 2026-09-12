@@ -237,6 +237,12 @@ func Walk(node Node, f func(Node) bool) {
 		walkNilable(node.Value, f)
 	case *BashPPBranch:
 		walkNilable(node.Kw, f)
+	case *BashPPLabeled:
+		walkNilable(node.Label, f)
+		walkNilable(node.Stmt, f)
+	case *BashPPGoto:
+		walkNilable(node.Kw, f)
+		walkNilable(node.Label, f)
 	case *BashPPSwitch:
 		walkNilable(node.Init, f)
 		walkNilable(node.Tag, f)

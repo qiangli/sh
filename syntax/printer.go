@@ -2248,6 +2248,16 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 		p.command(cmd.Body, nil)
 	case *BashPPBranch:
 		p.writeLit(cmd.Kw.Value)
+	case *BashPPLabeled:
+		p.writeLit(cmd.Label.Value + ":")
+		if cmd.Stmt != nil {
+			p.space()
+			p.stmt(cmd.Stmt)
+		}
+	case *BashPPGoto:
+		p.spacedString(cmd.Kw.Value, cmd.Kw.Pos())
+		p.space()
+		p.writeLit(cmd.Label.Value)
 	case *BashPPConstGroup:
 		p.spacedString(cmd.Kw.Value, cmd.Kw.Pos())
 		p.spacedString("(", cmd.Lparen)

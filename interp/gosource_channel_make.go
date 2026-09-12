@@ -162,6 +162,8 @@ func (r *Runner) goSourceRangeNativeChannel(ctx context.Context, rng *syntax.Bas
 				return
 			}
 			r.bashPPClearBranch()
+		case bashPPBranchGoto:
+			return
 		}
 	}
 }

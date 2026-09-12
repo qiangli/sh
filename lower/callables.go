@@ -26,6 +26,11 @@ func (e *emitter) literal(f *syntax.BashPPFuncLit) (string, error) {
 	saved := e.inFunc
 	e.inFunc = true
 	defer func() { e.inFunc = saved }()
+	// Labels are function-scoped: a loop inside the literal must not take a
+	// label pending for the statement that contains the literal.
+	savedLabel := e.pendingLabel
+	e.pendingLabel = ""
+	defer func() { e.pendingLabel = savedLabel }()
 	e.push()
 	defer e.pop()
 	signature, err := e.signature(f.Params, f.Results, f.Body)
