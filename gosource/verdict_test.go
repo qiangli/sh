@@ -231,7 +231,10 @@ func TestSyntaxVerdictReproducers(t *testing.T) {
 		{"parser-range-three", []string{"reject.go:4:12: expected at most 2 expressions"}},
 	} {
 		t.Run(tc.dir, func(t *testing.T) {
-			data, err := os.ReadFile(filepath.Join(base, tc.dir, "reject.go"))
+			// reject.go.src: deliberately invalid Go, kept outside the *.go set the
+			// repository-wide gofmt gate (scripts/fmtcheck.sh) parses; it is loaded
+			// under the name reject.go so the diagnostics read as gc's would.
+			data, err := os.ReadFile(filepath.Join(base, tc.dir, "reject.go.src"))
 			if err != nil {
 				t.Fatal(err)
 			}

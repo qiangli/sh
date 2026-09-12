@@ -24,6 +24,12 @@ func TestReproducers(t *testing.T) {
 		}
 		for _, name := range []string{"reject.go", "accept.go"} {
 			path := filepath.Join(dir, name)
+			if name == "reject.go" {
+				// Deliberately invalid Go lives as reject.go.src so the
+				// repository-wide gofmt gate does not parse it; it is fed to
+				// the front end under the name reject.go.
+				path += ".src"
+			}
 			src, err := os.ReadFile(path)
 			if err != nil {
 				t.Fatal(err)

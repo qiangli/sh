@@ -1,6 +1,6 @@
 # S154.3 reproducers — out-of-corpus, one directory per row family
 
-Each directory holds `reject.go` (a 5-line form the Bash++ front end
+Each directory holds `reject.go.src` (a 5-line form the Bash++ front end
 diagnoses) and `accept.go` (the nearest accepted form). None is a corpus
 copy. `reproducers_test.go` only checks accept/reject — the wording below is
 the finding, never a gate. gc output is from the Spike S scratch build of
@@ -10,7 +10,7 @@ Since S154.1 the gc column IS what the front end emits: gosource parses
 with the vendored gc parser first (`gosource/internal/gcsyntax`), and a
 gc rejection is the complete diagnostic set. `gosource/verdict_test.go`
 (`TestSyntaxVerdictReproducers`) asserts the exact gc line for every
-`reject.go` below — except `parser-range-three`, where gc's parser
+`reject.go.src` below — except `parser-range-three`, where gc's parser
 accepts and the go/parser diagnostic remains. The "Bash++ (go/parser)"
 columns below are the S154.3 pre-verdict findings, kept for the record.
 
@@ -36,3 +36,8 @@ parser closes 49 of the 50 scanner/parser-stage roots — see `../FINDINGS.md`).
 The second family is a front-end policy, not a parser difference: the
 Bash++ front end runs go/types over a file that failed to parse, and every
 diagnostic it adds is an Unmatched Error under the upstream harness.
+
+`reject.go.src` files are deliberately invalid Go and carry the `.src` suffix so
+the repository-wide gofmt gate (`scripts/fmtcheck.sh`, which parses every
+tracked `*.go`) does not reject the tree; the tests load them under the name
+`reject.go`.
