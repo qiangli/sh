@@ -2306,6 +2306,12 @@ func (r *Runner) bashPPReturnStmt(ctx context.Context, ret *syntax.BashPPReturn)
 			r.bashPPReturnScalarExpr(conv)
 			return
 		}
+		// `return new(T)` likewise arrives as a call; it is the allocation
+		// the Go front end spells as a NewExpr everywhere else.
+		if alloc, ok := r.goSourceNewCall(ret.Call); ok {
+			r.bashPPReturnScalarExpr(alloc)
+			return
+		}
 		if cell, handled, err := r.goSourceBuiltinResult(ret.Call); handled {
 			if err != nil {
 				r.bashPPShortFailureSeq++
@@ -3020,4 +3026,51 @@ func bashppExitCode(s string) (uint8, bool) {
 		return 0, false
 	}
 	return uint8(n), true
+}
+
+// goSourceNewCall recognizes the predeclared `new(T)` delivered as a call —
+// the single-result return is the one place the Go front end does not lower
+// it to a NewExpr — and rebuilds the allocation with the type its argument
+// spells. A shadowed `new`, or a type spelling the call cannot carry, is
+// left to the ordinary call path.
+func (r *Runner) goSourceNewCall(call *syntax.BashPPCall) (*syntax.BashPPNewExpr, bool) {
+	if !r.bashPPGoSource || bashPPPredeclaredCall(call) != "new" || len(call.ArgExprs) != 1 || call.ArgType != nil {
+		return nil, false
+	}
+	if r.bashPPFuncs["new"] != nil || (r.bashPPScope != nil && r.bashPPScope.lookup("new") != nil) {
+		return nil, false
+	}
+	typ, ok := goSourceExprType(call.ArgExprs[0])
+	if !ok {
+		return nil, false
+	}
+	return &syntax.BashPPNewExpr{New: call.Fun[0], Lparen: call.Lparen, Rparen: call.Rparen, AllocType: r.bashPPBindTypeExpr(typ)}, true
+}
+
+// goSourceExprType reads a type spelled as an expression: a name, `*T`, or
+// an instantiation `G[A, B]` of names.
+func goSourceExprType(expr syntax.BashPPExpr) (syntax.BashPPTypeExpr, bool) {
+	switch x := expr.(type) {
+	case *syntax.BashPPParenExpr:
+		return goSourceExprType(x.X)
+	case *syntax.BashPPIdent:
+		return &syntax.BashPPNamedType{Name: x.Name}, true
+	case *syntax.BashPPDerefExpr:
+		elem, ok := goSourceExprType(x.X)
+		if !ok {
+			return nil, false
+		}
+		return &syntax.BashPPPointerType{Star: x.Star, Element: elem}, true
+	case *syntax.BashPPIndexExpr:
+		base, ok := x.X.(*syntax.BashPPIdent)
+		if !ok {
+			return nil, false
+		}
+		arg, ok := goSourceExprType(x.Index)
+		if !ok {
+			return nil, false
+		}
+		return &syntax.BashPPNamedType{Name: base.Name, TypeArgs: []*syntax.BashPPTypeArg{{ArgType: arg}}}, true
+	}
+	return nil, false
 }
