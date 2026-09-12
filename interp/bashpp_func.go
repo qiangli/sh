@@ -840,7 +840,14 @@ func (r *Runner) bashPPTypeSetSatisfied(arg, constraint syntax.BashPPTypeExpr) b
 		if c.Name.Value == "comparable" {
 			return r.bashPPComparableType(arg, make(map[string]bool))
 		}
+		// A union term may itself be an interface — `OrderedNumeric |
+		// Complex` — whose type set, not its assignability, decides.
+		if iface, ok := r.bashPPInterfaceType(c); ok {
+			return r.bashPPConstraintSatisfied(arg, iface)
+		}
 		return r.bashPPTypeAssignable(arg, c)
+	case *syntax.BashPPInterfaceType:
+		return r.bashPPConstraintSatisfied(arg, c)
 	case *syntax.BashPPUnionType:
 		for _, term := range c.Terms {
 			if r.bashPPTypeSetSatisfied(arg, term) {
