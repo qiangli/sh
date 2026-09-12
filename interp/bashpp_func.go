@@ -2916,6 +2916,18 @@ func bashPPSubstituteType(typ syntax.BashPPTypeExpr, typeArgs map[string]syntax.
 		cp := *x
 		cp.Term = bashPPSubstituteType(cp.Term, typeArgs)
 		return &cp
+	case *syntax.BashPPChanType:
+		// The element travels twice: as a type node and as the text the
+		// channel checks compare against a channel's recorded element, so
+		// both are rewritten or `chan T` would still read as `chan T`.
+		cp := *x
+		cp.Element = bashPPSubstituteType(x.Element, typeArgs)
+		if cp.Element != x.Element && x.Elem != nil {
+			elem := *x.Elem
+			elem.Value = bashPPTypeText(cp.Element)
+			cp.Elem = &elem
+		}
+		return &cp
 	}
 	return typ
 }

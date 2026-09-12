@@ -114,15 +114,13 @@ func (r *Runner) bashPPBindShortDecl(d *syntax.BashPPShortDecl) *syntax.BashPPSh
 	}
 	expr := r.bashPPBindExprs(d.Expr)
 	call := r.bashPPBindCallNode(d.Call)
-	// A channel element is spelled as a bare literal rather than a type tree,
-	// so `make(chan T, n)` is rebound by name like a conversion target.
+	// `make(chan T, n)` carries its element both as a type tree and as the
+	// bare literal the channel records; substitution rewrites the pair.
 	var makeChan *syntax.BashPPMakeChan
-	if d.MakeChan != nil && d.MakeChan.ChanType != nil && d.MakeChan.ChanType.Elem != nil {
-		if bound := r.bashPPTypeParamArgs[d.MakeChan.ChanType.Elem.Value]; bound != nil {
-			chanType := *d.MakeChan.ChanType
-			chanType.Elem = r.bashPPBindTypeLit(d.MakeChan.ChanType.Elem, bound)
+	if d.MakeChan != nil && d.MakeChan.ChanType != nil {
+		if bound, ok := r.bashPPBindTypeExpr(d.MakeChan.ChanType).(*syntax.BashPPChanType); ok && bound != d.MakeChan.ChanType {
 			mc := *d.MakeChan
-			mc.ChanType = &chanType
+			mc.ChanType = bound
 			makeChan = &mc
 		}
 	}

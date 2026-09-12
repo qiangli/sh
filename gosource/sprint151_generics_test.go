@@ -21,6 +21,7 @@ import (
 func TestSprint151Generics(t *testing.T) {
 	for _, file := range []string{
 		"infer_typeargs.go",
+		"chan_typeparam.go",
 	} {
 		t.Run(file, func(t *testing.T) {
 			path := filepath.Join("testdata", "sprint151", "generics", file)
