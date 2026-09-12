@@ -43,3 +43,30 @@ func Nested(s Stream) Stream { return Forward(s) }
 		})
 	}
 }
+
+// A task that stops on a fatal diagnostic reports that diagnostic, not only
+// its status: the same refusal a statement reports in the main goroutine
+// must be the text of the task's failure.
+func TestSprint153FatalDiagnosticSurvivesTask(t *testing.T) {
+	const program = `package main
+
+import (
+	"fmt"
+	"reflect"
+)
+
+func main() {
+	done := make(chan bool)
+	go func() {
+		it := func(fn func(int) bool) {}
+		fmt.Println(reflect.TypeOf(it).String())
+		done <- true
+	}()
+	<-done
+}
+`
+	got := runGoSourceRunnerError(t, program)
+	if !strings.Contains(got, "task failed: gosource: asynchronous or retained original function callbacks are unsupported for reflect.TypeOf") {
+		t.Fatalf("diagnostic lost: %q", got)
+	}
+}

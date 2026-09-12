@@ -1116,7 +1116,14 @@ func (r *Runner) bashPPGo(ctx context.Context, g *syntax.BashPPGo) {
 			child.trapCallback(c.ctx, child.trapCallbacks["ERR"], "error")
 		}
 		if code != 0 {
-			failure = &bashPPTaskFailure{ordinal: ordinal, code: code, text: fmt.Sprintf("exit status %d", code)}
+			text := fmt.Sprintf("exit status %d", code)
+			// A fatal diagnostic recorded by the task — a dependency call the
+			// bridge refused — is the reason the task failed; the status
+			// alone would hide it.
+			if child.exit.fatalExit && child.exit.err != nil && !child.bashPPPanicking() && !errors.Is(child.exit.err, errBashPPScalarInterrupted) {
+				text = child.exit.err.Error()
+			}
+			failure = &bashPPTaskFailure{ordinal: ordinal, code: code, text: text}
 		}
 	}()
 	// Deterministic launch handshake: a nonblocking first command completes
