@@ -27,7 +27,6 @@ import (
 // so that their output stays gofmt-stable.
 var fidelityOpen = map[string]bool{
 	"comments-dropped": true, // C1
-	"type-assertion":   true, // C9
 }
 
 // fidelityLanded records, for classes whose emitter rewrite is already

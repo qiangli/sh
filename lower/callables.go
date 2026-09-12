@@ -323,14 +323,12 @@ func (e *emitter) switchStmt(n *syntax.BashPPSwitch) (string, error) {
 			}
 			out.WriteString("case " + strings.Join(cases, ",") + ":\n")
 		}
-		for _, s := range arm.Stmts {
-			x, err := e.statement(s)
-			if err != nil {
-				e.pop()
-				return "", err
-			}
-			out.WriteString(x)
+		parts, err := e.statementList(arm.Stmts)
+		if err != nil {
+			e.pop()
+			return "", err
 		}
+		out.WriteString(strings.Join(parts, ""))
 		e.pop()
 	}
 	if e.completeEnumSwitch(n) {
@@ -770,14 +768,12 @@ func (e *emitter) typeSwitchStmt(n *syntax.BashPPSwitch) (string, error) {
 		if name != "" && !e.goSource {
 			out.WriteString("_ = " + name + "\n")
 		}
-		for _, stmt := range arm.Stmts {
-			text, err := e.statement(stmt)
-			if err != nil {
-				e.pop()
-				return "", err
-			}
-			out.WriteString(text)
+		parts, err := e.statementList(arm.Stmts)
+		if err != nil {
+			e.pop()
+			return "", err
 		}
+		out.WriteString(strings.Join(parts, ""))
 		e.pop()
 	}
 	out.WriteString("}")
