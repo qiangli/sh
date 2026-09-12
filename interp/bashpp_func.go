@@ -699,7 +699,10 @@ func (r *Runner) bashPPInstantiateFunc(c *syntax.BashPPCall, fn *bashPPFunc) (*b
 		i := 0
 		for _, group := range params {
 			for _, name := range group.Names {
-				bindings[name.Value] = c.TypeArgs[i].ArgType
+				// `g[T]()` inside a generic body names the caller's own type
+				// parameter; the instantiation binds what this frame bound it
+				// to, exactly as a type spelled in the body resolves.
+				bindings[name.Value] = r.bashPPBindTypeExpr(c.TypeArgs[i].ArgType)
 				i++
 			}
 		}
