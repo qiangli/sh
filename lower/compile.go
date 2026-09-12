@@ -263,6 +263,12 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 			if err != nil {
 				return nil, err
 			}
+			if directives := e.goDirectives(s); directives != "" && e.goSource {
+				// Between the marker and the declaration, where gofmt
+				// keeps a directive block.
+				marker, decl, _ := strings.Cut(text, "\n")
+				text = marker + "\n" + directives + decl
+			}
 			declarations.WriteString(text)
 		} else {
 			var text string
@@ -291,6 +297,14 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 			case *syntax.BashPPShortDecl:
 				text, err = e.globalStatement(s)
 			default:
+				// A synthetic entry call has no source position of its own:
+				// emit it bare rather than marking it with a borrowed one.
+				if name, ok := e.syntheticEntryCall(s); ok && e.nativeMain() {
+					if name != "main" {
+						text = name + "()\n"
+					}
+					break
+				}
 				text, err = e.statement(s)
 			}
 			if err != nil {
@@ -374,6 +388,12 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 	}
 	if e.execution {
 		raw.WriteString(e.programMain(body.String()))
+	} else if e.nativeMain() {
+		// The source's main is the entry; what remains of the body is the
+		// converter's init calls, which Go sequences before main itself.
+		if body.Len() > 0 {
+			fmt.Fprintf(&raw, "func init() {\n%s}\n", body.String())
+		}
 	} else {
 		fmt.Fprintf(&raw, "func main() {\n%s%s%s}\n", head, body.String(), tail)
 	}
@@ -697,17 +717,49 @@ func (e *emitter) statement(s *syntax.Stmt) (string, error) {
 	return e.mark(s.Cmd) + reset + text + "\n", nil
 }
 func (e *emitter) block(b *syntax.Block) (string, error) {
+	parts, err := e.blockParts(b)
+	return strings.Join(parts, ""), err
+}
+
+// blockParts emits a block one statement per element, each ending in a
+// newline and led by its marker line where it has one.
+func (e *emitter) blockParts(b *syntax.Block) ([]string, error) {
 	e.push()
 	defer e.pop()
-	var out strings.Builder
+	var out []string
 	for _, s := range b.Stmts {
 		x, err := e.statement(s)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
-		out.WriteString(x)
+		out = append(out, x)
 	}
-	return out.String(), nil
+	return out, nil
+}
+
+// oneLineBody lays a Go-source body whose braces share a source line out on
+// that one line, as gofmt keeps it, when every statement is itself one line:
+// `{ return x }`. The statements' own markers are dropped — the declaration's
+// //line directive already names the line — and an empty body is `{}`.
+func (e *emitter) oneLineBody(b *syntax.Block, parts []string) (string, bool) {
+	if !e.goSource || b == nil || !b.Lbrace.IsValid() || b.Lbrace.Line() != b.Rbrace.Line() {
+		return "", false
+	}
+	var stmts []string
+	for _, part := range parts {
+		if strings.HasPrefix(part, "// lower:") {
+			_, part, _ = strings.Cut(part, "\n")
+		}
+		part = strings.TrimSuffix(part, "\n")
+		if part == "" || strings.Contains(part, "\n") {
+			return "", false
+		}
+		stmts = append(stmts, part)
+	}
+	if len(stmts) == 0 {
+		return " {}", true
+	}
+	return " { " + strings.Join(stmts, "; ") + " }", true
 }
 func names(lits []*syntax.Lit) []string {
 	out := make([]string, len(lits))
@@ -717,6 +769,11 @@ func names(lits []*syntax.Lit) []string {
 	return out
 }
 func (e *emitter) unused(ns []string) string {
+	// Go source is checked by gc itself: an unused variable is the source's
+	// own error, and a sink would only hide it.
+	if e.goSource {
+		return ""
+	}
 	var out string
 	for _, n := range ns {
 		if n != "_" {
@@ -757,19 +814,26 @@ func (e *emitter) function(f *syntax.BashPPFuncDecl) (string, error) {
 	e.scopes = []map[string]bool{{}}
 	defer func() { e.scopes = saved }()
 	if f.Receiver != nil {
-		if f.Receiver.Name == nil {
-			f.Receiver.Name = &syntax.Lit{Value: e.syntheticName()}
-		} else if f.Receiver.Name.Value == "_" {
-			f.Receiver.Name.Value = e.syntheticName()
+		// The runtime path names every receiver and parameter so its
+		// projections can refer to them; Go source keeps its own spelling,
+		// including an unnamed or blank receiver.
+		if !e.goSource {
+			if f.Receiver.Name == nil {
+				f.Receiver.Name = &syntax.Lit{Value: e.syntheticName()}
+			} else if f.Receiver.Name.Value == "_" {
+				f.Receiver.Name.Value = e.syntheticName()
+			}
 		}
-		e.bind(f.Receiver.Name.Value)
 		typ := f.Receiver.RecvType.Value
 		if f.Receiver.Pointer {
 			typ = "*" + typ
 		}
-		info := e.projectionType(typ, nil)
-		info.receiver = f.Receiver.Pointer
-		e.projections.projectionBind(f.Receiver.Name.Value, info)
+		if f.Receiver.Name != nil {
+			e.bind(f.Receiver.Name.Value)
+			info := e.projectionType(typ, nil)
+			info.receiver = f.Receiver.Pointer
+			e.projections.projectionBind(f.Receiver.Name.Value, info)
+		}
 		for _, param := range f.Receiver.TypeParams {
 			e.bind(param.Value)
 		}
@@ -780,6 +844,9 @@ func (e *emitter) function(f *syntax.BashPPFuncDecl) (string, error) {
 		}
 	}
 	for _, p := range f.Params {
+		if e.goSource {
+			break
+		}
 		if len(p.Names) == 0 {
 			p.Names = []*syntax.Lit{{Value: e.syntheticName()}}
 		} else {
@@ -805,10 +872,11 @@ func (e *emitter) function(f *syntax.BashPPFuncDecl) (string, error) {
 		// supplies the body; nothing here can, so say so instead of crashing.
 		return "", e.fail(f, CodeUnsupported, "function declaration without body")
 	}
-	body, err := e.block(f.Body)
+	parts, err := e.blockParts(f.Body)
 	if err != nil {
 		return "", err
 	}
+	body := strings.Join(parts, "")
 	recv := ""
 	if f.Receiver != nil {
 		r := f.Receiver
@@ -819,7 +887,10 @@ func (e *emitter) function(f *syntax.BashPPFuncDecl) (string, error) {
 		if len(r.TypeParams) > 0 {
 			typ += "[" + strings.Join(names(r.TypeParams), ",") + "]"
 		}
-		recv = "(" + r.Name.Value + " " + typ + ") "
+		recv = "(" + typ + ") "
+		if r.Name != nil {
+			recv = "(" + r.Name.Value + " " + typ + ") "
+		}
 	}
 	generics, err := e.typeParams(f.TypeParams)
 	if err != nil {
@@ -829,7 +900,16 @@ func (e *emitter) function(f *syntax.BashPPFuncDecl) (string, error) {
 		body = e.program() + " = " + e.program() + ".LexicalScope(" + e.lexicalNames(e.functionGlobals) + ")\n" + body
 		return e.runtimeFunction(f, signature, body, generics)
 	}
-	return e.mark(f) + "func " + recv + e.goName(f.Name.Value) + generics + signature + " {\n" + body + "}\n", nil
+	return e.mark(f) + "func " + recv + e.goName(f.Name.Value) + generics + signature + e.bodyText(f.Body, parts) + "\n", nil
+}
+
+// bodyText lays out an emitted function body: on one line where the Go
+// source had it so (oneLineBody), else braced on its own lines.
+func (e *emitter) bodyText(b *syntax.Block, parts []string) string {
+	if text, ok := e.oneLineBody(b, parts); ok {
+		return text
+	}
+	return " {\n" + strings.Join(parts, "") + "}"
 }
 func scalarType(s string) bool {
 	switch s {
@@ -970,11 +1050,7 @@ func (e *emitter) command(c syntax.Command) (string, error) {
 			return "", e.fail(n, CodeUnsupported, "initialized typed float needs certified scalar conversion semantics")
 		}
 		e.projections.projectionBind(n.Name.Value, projection)
-		unused := e.unused([]string{n.Name.Value})
-		if e.goSource && n.Kw.Value == "const" {
-			unused = ""
-		}
-		return n.Kw.Value + " " + n.Name.Value + typ + init + unused, nil
+		return n.Kw.Value + " " + n.Name.Value + typ + init + e.unused([]string{n.Name.Value}), nil
 	case *syntax.BashPPShortDecl:
 		if text, handled, err := e.shortResultCall(n); handled || err != nil {
 			return text, err
@@ -1382,14 +1458,14 @@ func (e *emitter) expr(x syntax.BashPPExpr) (string, error) {
 		return "(" + v + ")", err
 	case *syntax.BashPPUnaryExpr:
 		v, err := e.expr(n.X)
-		return "(" + n.Op.Value + v + ")", err
+		return e.group(n.Op.Value + v), err
 	case *syntax.BashPPBinaryExpr:
 		l, err := e.expr(n.X)
 		if err != nil {
 			return "", err
 		}
 		r, err := e.expr(n.Y)
-		return "(" + l + " " + n.Op.Value + " " + r + ")", err
+		return e.group(l + " " + n.Op.Value + " " + r), err
 	case *syntax.BashPPConvertExpr:
 		if e.goSource && n.ConvTypeExpr != nil {
 			target, err := e.typeExpr(n.ConvTypeExpr)
@@ -1397,7 +1473,7 @@ func (e *emitter) expr(x syntax.BashPPExpr) (string, error) {
 				return "", err
 			}
 			v, err := e.expr(n.X)
-			return "(" + target + ")(" + v + ")", err
+			return conversionType(target) + "(" + v + ")", err
 		}
 		if !scalarType(n.ConvType.Value) && !(e.goSource && (e.typeNames[n.ConvType.Value] || n.ConvType.Value == "complex64" || n.ConvType.Value == "complex128")) {
 			return "", e.fail(n, CodeUnsupported, "non-scalar conversion")
@@ -1407,6 +1483,28 @@ func (e *emitter) expr(x syntax.BashPPExpr) (string, error) {
 	default:
 		return "", e.fail(x, CodeUnsupported, "typed expression not implemented: "+nodeName(x))
 	}
+}
+
+// conversionType spells a conversion's type as its callee. The converter
+// resolves the parentheses Go requires around a pointer, channel or function
+// type in that position, so they are put back from the type's own spelling.
+func conversionType(typ string) string {
+	for _, prefix := range []string{"*", "<-", "chan ", "func"} {
+		if strings.HasPrefix(typ, prefix) {
+			return "(" + typ + ")"
+		}
+	}
+	return typ
+}
+
+// group parenthesises an emitted operand. The Bash++ path builds expressions
+// the shell parser never grouped, so every operator and callee is wrapped; Go
+// source carries its own BashPPParenExpr nodes and gets its precedence back.
+func (e *emitter) group(text string) string {
+	if e.goSource {
+		return text
+	}
+	return "(" + text + ")"
 }
 func (e *emitter) call(c *syntax.BashPPCall) (string, error) {
 	if c.CalleeExpr != nil {
@@ -1425,7 +1523,7 @@ func (e *emitter) call(c *syntax.BashPPCall) (string, error) {
 		if c.Ellipsis.IsValid() {
 			spread = "..."
 		}
-		return "(" + callee + ")(" + strings.Join(args, ",") + spread + ")", nil
+		return e.group(callee) + "(" + strings.Join(args, ",") + spread + ")", nil
 	}
 	frame := e.resultCallFrame
 	e.resultCallFrame = ""
@@ -1470,7 +1568,7 @@ func (e *emitter) call(c *syntax.BashPPCall) (string, error) {
 		if e.execution {
 			args = append([]string{invocation, e.callSite(c, "func")}, args...)
 		}
-		return "(" + callee + ")(" + strings.Join(args, ",") + ")", nil
+		return e.group(callee) + "(" + strings.Join(args, ",") + ")", nil
 	}
 	if len(c.Fun) == 0 {
 		return "", e.fail(c, CodeExpr, "missing callable")

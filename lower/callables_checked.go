@@ -14,7 +14,8 @@ func (e *emitter) findCheckedValues(file *syntax.File) {
 			// runtime path checks the pointer and needs the guard.
 			e.guarded = e.guarded || !e.goSource
 		case *syntax.BashPPTypeAssertExpr:
-			e.guarded = e.guarded || n.TypeToken == nil
+			// Likewise Go source asserts natively (valueAssertion).
+			e.guarded = e.guarded || (n.TypeToken == nil && !e.goSource)
 		}
 		return true
 	})
@@ -37,7 +38,10 @@ func (e *emitter) guardBoundary() string {
 }
 
 func (e *emitter) valueAssertion(n *syntax.BashPPTypeAssertExpr, commaOK bool) (string, error) {
-	if n.TypeToken != nil {
+	// Go source keeps Go's own assertion: `x.(T)` panics or, with two
+	// targets, yields the comma-ok pair. The runtime's Assert/AssertOK and
+	// their site metadata are the Bash++ path's diagnostic contract.
+	if n.TypeToken != nil || e.goSource {
 		return e.typeAssertExpr(n)
 	}
 	value, err := e.expr(n.X)

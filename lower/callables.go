@@ -13,10 +13,45 @@ func (e *emitter) goName(name string) string {
 	if e.execution && e.funcs[name] {
 		return e.prefix + "call_" + name
 	}
-	if name == "main" && e.funcs[name] {
+	if name == "main" && e.funcs[name] && !e.nativeMain() {
 		return e.prefix + "sourceMain"
 	}
 	return name
+}
+
+// goDirectives spells the compiler directives the converter attached to a
+// Go-source declaration (Stmt.Comments, the //go:embed path) so gc sees them
+// on the declaration they came from: //go:embed on a var, //go:noinline,
+// //go:norace, //go:nosplit and the rest on a func.
+func (e *emitter) goDirectives(s *syntax.Stmt) string {
+	var out strings.Builder
+	for _, comment := range s.Comments {
+		if strings.HasPrefix(comment.Text, "go:") {
+			out.WriteString("//" + comment.Text + "\n")
+		}
+	}
+	return out.String()
+}
+
+// nativeMain reports whether the source's own func main is the program entry:
+// Go source that declares main and needs no generated boundary around it. The
+// converter's synthetic entry calls are then folded into a Go init function
+// (init calls) or dropped (the main call), since Go runs both itself.
+func (e *emitter) nativeMain() bool {
+	return e.goSource && e.funcs["main"] && !e.guarded && !e.execution
+}
+
+// syntheticEntryCall recognises the converter's top-level entry call. Go has no
+// top-level statements, so under goSource any bare call at file level is one.
+func (e *emitter) syntheticEntryCall(s *syntax.Stmt) (string, bool) {
+	if !e.goSource {
+		return "", false
+	}
+	c, ok := s.Cmd.(*syntax.BashPPCall)
+	if !ok || len(c.Fun) != 1 || len(c.Args) > 0 || c.CalleeExpr != nil || c.FuncLit != nil {
+		return "", false
+	}
+	return c.Fun[0].Value, true
 }
 
 func (e *emitter) literal(f *syntax.BashPPFuncLit) (string, error) {
@@ -43,10 +78,11 @@ func (e *emitter) literal(f *syntax.BashPPFuncLit) (string, error) {
 	savedResults := e.resultTypes
 	e.resultTypes = e.returnTypes(f.Results)
 	defer func() { e.resultTypes = savedResults }()
-	body, err := e.block(f.Body)
+	parts, err := e.blockParts(f.Body)
 	if err != nil {
 		return "", err
 	}
+	body := strings.Join(parts, "")
 	if e.execution {
 		entry, err := e.programEntry("func", false, f.Results)
 		if err != nil {
@@ -65,7 +101,7 @@ func (e *emitter) literal(f *syntax.BashPPFuncLit) (string, error) {
 		body = e.prefix + "closureProgram := *" + p + "\n" + p + " = &" + e.prefix + "closureProgram\n" + p + ".Bindings = " + captured + "\n" + p + " = " + p + ".LexicalScope(nil)\n" + body
 		return "func() func" + signature + " { " + captured + " := " + parent + ".LexicalScope(nil).Bindings\nreturn func" + signature + " {\n" + body + "}\n}()", nil
 	}
-	return "func" + signature + " {\n" + body + "}", nil
+	return "func" + signature + e.bodyText(f.Body, parts), nil
 }
 func (e *emitter) signature(params, results []*syntax.BashPPField, body *syntax.Block) (string, error) {
 	p, err := e.fields(params)
@@ -197,13 +233,7 @@ func (e *emitter) globalStatement(s *syntax.Stmt) (string, error) {
 		}
 	}
 	if e.goSource {
-		var directives strings.Builder
-		for _, comment := range s.Comments {
-			if strings.HasPrefix(comment.Text, "go:embed ") || strings.HasPrefix(comment.Text, "go:embed\t") {
-				directives.WriteString("//" + comment.Text + "\n")
-			}
-		}
-		e.globalDecls.WriteString(e.mark(s.Cmd) + directives.String() + line + "\n")
+		e.globalDecls.WriteString(e.mark(s.Cmd) + e.goDirectives(s) + line + "\n")
 		return "", nil
 	}
 	if constant {
@@ -729,7 +759,7 @@ func (e *emitter) typeSwitchStmt(n *syntax.BashPPSwitch) (string, error) {
 			}
 			out.WriteString("case " + strings.Join(values, ",") + ":\n")
 		}
-		if name != "" {
+		if name != "" && !e.goSource {
 			out.WriteString("_ = " + name + "\n")
 		}
 		for _, stmt := range arm.Stmts {
