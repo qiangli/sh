@@ -291,6 +291,14 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 			case *syntax.BashPPShortDecl:
 				text, err = e.globalStatement(s)
 			default:
+				// A synthetic entry call has no source position of its own:
+				// emit it bare rather than marking it with a borrowed one.
+				if name, ok := e.syntheticEntryCall(s); ok && e.nativeMain() {
+					if name != "main" {
+						text = name + "()\n"
+					}
+					break
+				}
 				text, err = e.statement(s)
 			}
 			if err != nil {
@@ -374,6 +382,12 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 	}
 	if e.execution {
 		raw.WriteString(e.programMain(body.String()))
+	} else if e.nativeMain() {
+		// The source's main is the entry; what remains of the body is the
+		// converter's init calls, which Go sequences before main itself.
+		if body.Len() > 0 {
+			fmt.Fprintf(&raw, "func init() {\n%s}\n", body.String())
+		}
 	} else {
 		fmt.Fprintf(&raw, "func main() {\n%s%s%s}\n", head, body.String(), tail)
 	}

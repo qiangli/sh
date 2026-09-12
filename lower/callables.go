@@ -13,10 +13,31 @@ func (e *emitter) goName(name string) string {
 	if e.execution && e.funcs[name] {
 		return e.prefix + "call_" + name
 	}
-	if name == "main" && e.funcs[name] {
+	if name == "main" && e.funcs[name] && !e.nativeMain() {
 		return e.prefix + "sourceMain"
 	}
 	return name
+}
+
+// nativeMain reports whether the source's own func main is the program entry:
+// Go source that declares main and needs no generated boundary around it. The
+// converter's synthetic entry calls are then folded into a Go init function
+// (init calls) or dropped (the main call), since Go runs both itself.
+func (e *emitter) nativeMain() bool {
+	return e.goSource && e.funcs["main"] && !e.guarded && !e.execution
+}
+
+// syntheticEntryCall recognises the converter's top-level entry call. Go has no
+// top-level statements, so under goSource any bare call at file level is one.
+func (e *emitter) syntheticEntryCall(s *syntax.Stmt) (string, bool) {
+	if !e.goSource {
+		return "", false
+	}
+	c, ok := s.Cmd.(*syntax.BashPPCall)
+	if !ok || len(c.Fun) != 1 || len(c.Args) > 0 || c.CalleeExpr != nil || c.FuncLit != nil {
+		return "", false
+	}
+	return c.Fun[0].Value, true
 }
 
 func (e *emitter) literal(f *syntax.BashPPFuncLit) (string, error) {

@@ -39,6 +39,7 @@ var fidelityOpen = map[string]bool{
 var fidelityLanded = map[string][]string{
 	"guard-prologue": {"import ", "defer func()"}, // C6
 	"explicit-deref": {"(*(", ")."},               // C7
+	"main-rename":    {"sourceMain"},              // C5
 }
 
 func TestGoSourceFidelity(t *testing.T) {
