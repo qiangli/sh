@@ -288,7 +288,10 @@ func (r *Runner) bashPPTupleAssign(assign *syntax.BashPPAssign) {
 			candidates[i] = candidate
 			continue
 		}
-		if ident, ok := expr.(*syntax.BashPPIdent); ok {
+		// `flag = true`: the predeclared booleans are identifiers with no
+		// cell; unless a variable shadows them they are the constants the
+		// scalar evaluator below knows.
+		if ident, ok := expr.(*syntax.BashPPIdent); ok && !(bashPPBoolIdent(ident.Name.Value) && r.bashPPScope.lookup(ident.Name.Value) == nil) {
 			source := r.bashPPScope.lookup(ident.Name.Value)
 			if source == nil {
 				r.errf("%sBASHPP-EASSIGN-UNDECLARED: RHS %s is not declared\n", r.bashErrPrefix(ident.Pos()), ident.Name.Value)
