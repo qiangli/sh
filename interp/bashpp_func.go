@@ -2086,6 +2086,34 @@ func (r *Runner) bashPPEnterFrame(fn *bashPPFunc, args []string) *bashPPFrame {
 	return frame
 }
 
+// bashPPShadowedType is one function-local type declaration that shadowed a
+// registry entry: the depth of the frame that declared it, its name, and the
+// entry it displaced (nil when the name was free).
+type bashPPShadowedType struct {
+	depth int
+	name  string
+	prev  *bashPPType
+}
+
+// bashPPShadowLocalType lets a type declared inside a Go-form function body
+// take a name the registry already holds. Go scopes a local type to its
+// block, so two functions may each declare `type s struct{…}`, and a body
+// re-executed declares its type again; the runtime's registry is flat, so
+// the declaration shadows the entry for the frame's lifetime and
+// [bashPPFrame.leave] puts the previous one back. It reports whether the
+// declaration is such a shadowing one.
+func (r *Runner) bashPPShadowLocalType(name string) bool {
+	if !r.bashPPGoSource || r.bashPPFuncActive == 0 {
+		return false
+	}
+	var prev *bashPPType
+	if existing, ok := r.bashPPTypes[name]; ok {
+		prev = &existing
+	}
+	r.bashPPShadowedTypes = append(r.bashPPShadowedTypes, bashPPShadowedType{depth: len(r.callStack), name: name, prev: prev})
+	return true
+}
+
 // leave restores the caller's execution context.
 //
 // It is deliberately tolerant about depth: it truncates the call and defer
@@ -2094,6 +2122,18 @@ func (r *Runner) bashPPEnterFrame(fn *bashPPFunc, args []string) *bashPPFrame {
 // entry too many.
 func (f *bashPPFrame) leave() {
 	r := f.r
+	for len(r.bashPPShadowedTypes) > 0 {
+		local := r.bashPPShadowedTypes[len(r.bashPPShadowedTypes)-1]
+		if local.depth <= f.callDepth {
+			break
+		}
+		r.bashPPShadowedTypes = r.bashPPShadowedTypes[:len(r.bashPPShadowedTypes)-1]
+		if local.prev != nil {
+			r.bashPPTypes[local.name] = *local.prev
+		} else {
+			delete(r.bashPPTypes, local.name)
+		}
+	}
 	r.bashPPAgentic = f.agentic
 	r.writeEnv = f.writeEnv
 	r.bashPPScope = f.scope
