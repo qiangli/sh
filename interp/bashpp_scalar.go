@@ -833,7 +833,16 @@ func (r *Runner) bashPPComparableExpr(expr syntax.BashPPExpr) (bashPPComparableV
 			return bashPPComparableValue{}, err
 		}
 		return bashPPComparableValue{value: ptr, meta: bashPPPointerMeta(&syntax.BashPPPointerType{Element: ptr.elem})}, nil
-	case *syntax.BashPPCall, *syntax.BashPPDerefExpr, *syntax.BashPPIndexExpr, *syntax.BashPPSliceExpr, *syntax.BashPPSelectorExpr:
+	case *syntax.BashPPCall:
+		if !r.bashPPGoSource {
+			return bashPPComparableValue{}, fmt.Errorf("BASHPP-ECOMPARE-SCALAR: scalar")
+		}
+		value, meta, err := r.bashPPReadExpr(expr)
+		if err != nil {
+			return bashPPComparableValue{}, err
+		}
+		return bashPPComparableValue{value: value, meta: meta}, nil
+	case *syntax.BashPPDerefExpr, *syntax.BashPPIndexExpr, *syntax.BashPPSliceExpr, *syntax.BashPPSelectorExpr:
 		value, meta, err := r.bashPPReadExpr(expr)
 		if err != nil {
 			return bashPPComparableValue{}, err

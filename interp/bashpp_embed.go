@@ -384,7 +384,7 @@ func (r *Runner) bashPPBindPromotedMethod(rootCell *bashPPCell, method string, s
 		}
 		receiver = &copyCell
 	}
-	if sel.method.decl.Receiver.Pointer && !receiver.pointer {
+	if sel.method.decl.Receiver.Pointer && !receiver.pointer && (r.bashPPGoSource || len(sel.edges) > 0) {
 		ptr, err := bashPPEmbeddedAddress(rootCell, sel.edges, sel.receiverType)
 		if err != nil {
 			r.errf("%v\n", err)
