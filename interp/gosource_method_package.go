@@ -41,6 +41,15 @@ func goSourceLinkedPackage(name string) string {
 	return rest[:i]
 }
 
+// goSourceDeclaredName strips a linked package's marker from a renamed
+// declaration, giving the name as its package declared it.
+func goSourceDeclaredName(name string) string {
+	if tag := goSourceLinkedPackage(name); tag != "" {
+		return name[len(goSourceLinkedPackageMarker)+len(tag)+1:]
+	}
+	return name
+}
+
 // goSourceUnexportedName reports whether a method name is qualified by its
 // package: one that does not begin with an upper-case letter.
 func goSourceUnexportedName(name string) bool {

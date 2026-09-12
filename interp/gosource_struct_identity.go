@@ -37,8 +37,9 @@ func (r *Runner) goSourceStructIdentity(x *syntax.BashPPStructType) string {
 		typ := r.goSourceDynamicTypeIdentity(field.FieldTypeExpr)
 		names := field.Names
 		if len(names) == 0 {
-			// An embedded field's name is its type's base name.
-			name := bashPPNamedTypeBase(field.FieldTypeExpr)
+			// An embedded field's name is its type's base name — the name as
+			// declared, without a linked package's marker.
+			name := goSourceDeclaredName(bashPPNamedTypeBase(field.FieldTypeExpr))
 			b.WriteString(r.goSourceFieldIdentity(name, pkg))
 			b.WriteString(" ")
 			b.WriteString(typ)
