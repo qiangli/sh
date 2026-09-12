@@ -1151,6 +1151,11 @@ func (r *Runner) bashPPStructuredArgCell(w *syntax.Word, expr syntax.BashPPExpr)
 			cell.declType = target
 			return cell, nil
 		}
+		// `Stringer(m).String()`, `f(any(x))`, `return I(v)`: a conversion
+		// to an interface is the interface value that boxes its operand.
+		if cell, handled, err := r.bashPPInterfaceConversion(x); handled {
+			return cell, err
+		}
 		// `f([]byte(s))`: a conversion whose result is a collection travels as
 		// the cell holding it; see bashPPConvertCollectionCell in
 		// bashpp_collection_convert.go. Scalar conversions report false.
