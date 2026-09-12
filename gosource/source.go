@@ -309,9 +309,13 @@ func Load(sources []Source, options Options) (*Program, error) {
 			calls = append(append([]string(nil), calls...), p.Main)
 		}
 		for _, name := range calls {
-			pos := p.File.Pos()
-			lit := &syntax.Lit{Value: name, ValuePos: pos, ValueEnd: pos}
-			p.File.Stmts = append(p.File.Stmts, c.stmt(&syntax.BashPPCall{Fun: []*syntax.Lit{lit}, Lparen: pos, Rparen: pos}))
+			// These init and main entry calls are synthetic glue with no line
+			// in any source file. Borrowing the first declaration's position
+			// (p.File.Pos()) stamped a //line on them and mis-attributed -m
+			// diagnostics to that unrelated line; leave them unpositioned so
+			// the emitter never points a diagnostic back at borrowed source.
+			lit := &syntax.Lit{Value: name}
+			p.File.Stmts = append(p.File.Stmts, c.stmt(&syntax.BashPPCall{Fun: []*syntax.Lit{lit}}))
 		}
 	}
 	if err := checkLoweredNames(p.File); err != nil {
