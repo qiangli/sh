@@ -158,7 +158,7 @@ func (m *mapImporter) add(checked *checkedPackage) error {
 // for the link step. Parse and type diagnostics are returned together,
 // attributed by file position exactly as the main package's are; nothing is
 // converted or executed here.
-func (m *mapImporter) checkDependency(fset *token.FileSet, spec PackageSpec, goVersion string) ErrorList {
+func (m *mapImporter) checkDependency(fset *token.FileSet, spec PackageSpec, checker checkerOptions) ErrorList {
 	if spec.Path == "" {
 		return ErrorList{fmt.Errorf("gosource: explicit package with empty import path")}
 	}
@@ -189,7 +189,7 @@ func (m *mapImporter) checkDependency(fset *token.FileSet, spec PackageSpec, goV
 	}
 	m.from = spec.Path
 	var typeErrors ErrorList
-	config := types.Config{Importer: m, GoVersion: goVersion, Error: func(err error) { typeErrors = append(typeErrors, err) }}
+	config := checker.config(m, &typeErrors)
 	info := newTypeInfo()
 	pkg, err := config.Check(spec.Path, fset, files, info)
 	diagnostics = append(diagnostics, typeErrors...)
