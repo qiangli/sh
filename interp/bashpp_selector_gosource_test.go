@@ -45,6 +45,10 @@ func TestGoSourceTypeAssertionSelector(t *testing.T) {
 	compareSprint151PointerWithGo(t, "assert_selector.go")
 }
 
+func TestGoSourcePointerCallAssignment(t *testing.T) {
+	compareSprint151PointerWithGo(t, "call_pointer_assign.go")
+}
+
 func compareSprint151PointerWithGo(t *testing.T, name string) {
 	t.Helper()
 	path := filepath.Join("..", "gosource", "testdata", "sprint151", "pointers", name)
