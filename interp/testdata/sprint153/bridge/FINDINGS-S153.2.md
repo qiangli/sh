@@ -15,7 +15,10 @@ and `bashpp_output_order_test.go`.
 - C3′ `interp: claim wg.Go through an original pointer to the native WaitGroup`
 - C1a `interp: transport reflect.TypeOf arguments type-only`
 - C2 `interp: mirror the full expressible method set of materialised local types`
+- C2′ `interp: run original method callbacks on typed-nil pointer receivers`
 - E4 `interp: transport embedded struct fields by real embedding and promoted storage`
+- S1 `interp: decode interface-identity scalars at their own kind`
+- C1b `interp: record the retained-finalizer design and lock its prompt refusal`
 
 ## C3 — dependency-owned writer + ordered output
 
@@ -71,6 +74,17 @@ set did **not** need `gosource/` — no seam change was required.
 | fixedbugs/issue19028.go (.dir) | OPEN: `rundir` relative import `./a` blocks at the loader before any bridge request (same class as the S153.4a `.dir` rows). The method-set half is closed by C2. |
 | dependency-invoked mirrors | proven by `method-mirror/marshaler_invoked.go`: json.Marshal runs an original `MarshalJSON() ([]byte, error)` body via the callback and marshals its result. |
 | variadic method signatures | stay omitted; owner type keeps the prompt omitted-method refusal for non-fmt consumers (`TestGoSourceBridgeMethodMirrorRefusal`). |
+
+C2′: the full mirror surfaced two pre-mirror policies. A typed-nil pointer
+of a method-bearing local type was refused at transport, regressing the Tour
+nil-interface program once its M() was mirrored; a nil receiver now binds a
+typed-nil pointer cell and the original body runs exactly as native Go
+invokes it (nil-checking bodies observe nil; dereferencing bodies panic as
+the original would). Boundary tests superseded faithfully were flipped to
+native comparisons — mirrored fmt.Formatter (mirror + writer aliasing
+together), nil-receiver String, wrong-signature/[]error Unwrap — while the
+value-receiver copied-slice mutation stays refused
+(`TestGoSourceCallbackReferenceBoundary`, `TestGoSourceUnwrapTransportBoundaries`).
 
 ## E4 — embedded-field transport
 
