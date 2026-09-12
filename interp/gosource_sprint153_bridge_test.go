@@ -114,3 +114,12 @@ func TestGoSourceBridgeSliceRetainedRefusal(t *testing.T) {
 		t.Fatalf("want retention refusal, got err=%v stdout=%q stderr=%q", err, stdout.String(), stderr.String())
 	}
 }
+
+// TestGoSourceBridgeGenericInstantiation covers instantiated local generic
+// types: the helper materialises each instantiation under a generated name
+// (the generic body with type arguments substituted), registers it under the
+// instantiation spelling so transported values resolve, and its mirrored
+// method stubs call back through the base generic name.
+func TestGoSourceBridgeGenericInstantiation(t *testing.T) {
+	differSprint153(t, "generic-instantiation")
+}

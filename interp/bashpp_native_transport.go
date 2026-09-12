@@ -236,7 +236,16 @@ func requestCallbackCapable(req bashPPEvalRequest, q bashPPBridgeRequest) bool {
 func requestHasCallbacks(req bashPPEvalRequest, q bashPPBridgeRequest) bool {
 	local := map[string]bool{}
 	for _, typ := range req.LocalTypes {
-		local[typ.Name] = len(typ.Methods) > 0
+		if len(typ.Methods) == 0 {
+			continue
+		}
+		local[typ.Name] = true
+		// An instantiated generic type is materialised under a generated name
+		// but transported under its instantiation spelling; recognise both, so
+		// a value carrying its mirrored method is still seen as a callback.
+		if typ.WireType != "" {
+			local[typ.WireType] = true
+		}
 	}
 	var check func(bashPPBridgeValue) bool
 	check = func(v bashPPBridgeValue) bool {
