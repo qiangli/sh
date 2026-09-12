@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"mvdan.cc/sh/v3/syntax"
@@ -403,7 +404,22 @@ func isJSONByteSlice(t reflect.Type) bool {
 	return !ptrElem.Implements(jsonMarshalerType) && !ptrElem.Implements(textMarshalerType)
 }
 
+// callerMethodTypes memoizes typeHasCallerMethod per type. The answer is a
+// property of the type alone, and the preflight asks it for every node of an
+// object graph, so an interpreter appending to a long list would otherwise
+// repeat the same eight interface checks per element on every append.
+var callerMethodTypes sync.Map // reflect.Type -> bool
+
 func typeHasCallerMethod(t reflect.Type) bool {
+	if has, ok := callerMethodTypes.Load(t); ok {
+		return has.(bool)
+	}
+	has := computeTypeHasCallerMethod(t)
+	callerMethodTypes.Store(t, has)
+	return has
+}
+
+func computeTypeHasCallerMethod(t reflect.Type) bool {
 	if t == jsonNumberType {
 		// The JSON decoder uses json.Number to preserve source spelling.
 		// encoding/json handles it as a scalar without calling String.

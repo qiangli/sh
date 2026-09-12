@@ -7,7 +7,9 @@ import (
 )
 
 // A refusal recorded inside a callee is the program's outcome wherever the
-// callee was called from. A dependency operation the bridge refuses has no
+// callee was called from. (The refusing operation is a retained finalizer
+// callback — the one bridge refusal S153.2 kept by design; reflect.TypeOf
+// of a closure, the original pin, is admitted since S153.2 C1a.) A dependency operation the bridge refuses has no
 // native counterpart, so this is pinned by the diagnostic itself rather than
 // by a native oracle: the same refusal must surface whether the refusing
 // function is called as a statement, as an assignment's producer, or as the
@@ -18,8 +20,9 @@ func TestSprint153FatalDiagnosticSurvivesReturnCall(t *testing.T) {
 type Stream struct{}
 
 func Pipe(s Stream) Stream {
-	it := func(fn func(int) bool) {}
-	fmt.Println(reflect.TypeOf(it).String())
+	x := new(int)
+	runtime.SetFinalizer(x, func(p *int) {})
+	fmt.Println("unreached")
 	return Stream{}
 }
 
@@ -35,9 +38,9 @@ func Nested(s Stream) Stream { return Forward(s) }
 		"return_in_main": `_ = Nested(Stream{})`,
 	} {
 		t.Run(name, func(t *testing.T) {
-			source := "package main\n\nimport (\n\t\"fmt\"\n\t\"reflect\"\n)\n" + body + "\nfunc main() {\n\t" + main + "\n}\n"
+			source := "package main\n\nimport (\n\t\"fmt\"\n\t\"runtime\"\n)\n" + body + "\nfunc main() {\n\t" + main + "\n}\n"
 			got := runGoSourceRunnerError(t, source)
-			if !strings.Contains(got, "retained original function callbacks are unsupported for reflect.TypeOf") {
+			if !strings.Contains(got, "original callback signature requires value-semantics parameters") {
 				t.Fatalf("diagnostic lost: %q", got)
 			}
 		})
@@ -52,21 +55,22 @@ func TestSprint153FatalDiagnosticSurvivesTask(t *testing.T) {
 
 import (
 	"fmt"
-	"reflect"
+	"runtime"
 )
 
 func main() {
 	done := make(chan bool)
 	go func() {
-		it := func(fn func(int) bool) {}
-		fmt.Println(reflect.TypeOf(it).String())
+		x := new(int)
+		runtime.SetFinalizer(x, func(p *int) {})
+		fmt.Println("unreached")
 		done <- true
 	}()
 	<-done
 }
 `
 	got := runGoSourceRunnerError(t, program)
-	if !strings.Contains(got, "task failed: gosource: asynchronous or retained original function callbacks are unsupported for reflect.TypeOf") {
+	if !strings.Contains(got, "task failed: ") || !strings.Contains(got, "original callback signature requires value-semantics parameters") {
 		t.Fatalf("diagnostic lost: %q", got)
 	}
 }

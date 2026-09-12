@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/term"
@@ -56,6 +57,80 @@ type overlayEnviron struct {
 	// still write through to the caller, while local variables remain scoped
 	// to the overlay. Implies funcScope.
 	funsubScope bool
+
+	// skip caches [overlayEnviron.holder] for a function scope that holds
+	// nothing: the nearest ancestor that can answer a lookup or take a
+	// write-through. A deep recursion is a chain of such empty scopes, and
+	// without the cache every global read or write from the innermost frame
+	// walks the whole chain, making the program quadratic in its call depth.
+	// The cache is valid while skipGen matches [overlayLateTouch].
+	skip    *overlayEnviron
+	skipGen uint64
+
+	// liveChildren counts the function scopes currently chained on this
+	// one. A scope that first gains a value while a child is chained on it
+	// invalidates every cached skip, since a child may have cached a jump
+	// past it; see [overlayEnviron.touch].
+	liveChildren int
+}
+
+// overlayLateTouch counts the times a function scope gained its first value
+// while a child scope was chained on it. Cached skips are stamped with it and
+// are recomputed when it moves.
+var overlayLateTouch atomic.Uint64
+
+// newFuncScopeEnviron chains a function scope on parent.
+func newFuncScopeEnviron(parent expand.WriteEnviron, funsub bool) *overlayEnviron {
+	if p, ok := parent.(*overlayEnviron); ok {
+		p.liveChildren++
+	}
+	return &overlayEnviron{parent: parent, funcScope: true, funsubScope: funsub}
+}
+
+// release unchains a function scope from its parent when the frame that
+// pushed it returns.
+func (o *overlayEnviron) release() {
+	if p, ok := o.parent.(*overlayEnviron); ok && o.funcScope {
+		p.liveChildren--
+	}
+}
+
+// touch prepares o to hold its first value.
+func (o *overlayEnviron) touch() {
+	if o.values != nil {
+		return
+	}
+	o.values = make(map[string]namedVariable)
+	if o.funcScope && o.liveChildren > 0 {
+		overlayLateTouch.Add(1)
+	}
+}
+
+// holder is the nearest scope, starting at o, that a lookup or a
+// write-through has to consult: o itself when it holds a value, is not a
+// function scope, or sits on a foreign environment; otherwise the holder of
+// its parent, cached in skip.
+func (o *overlayEnviron) holder() *overlayEnviron {
+	if o.values != nil || !o.funcScope {
+		return o
+	}
+	p, ok := o.parent.(*overlayEnviron)
+	if !ok {
+		return o
+	}
+	if gen := overlayLateTouch.Load(); o.skip == nil || o.skipGen != gen {
+		o.skip, o.skipGen = p.holder(), gen
+	}
+	return o.skip
+}
+
+// next is the scope a lookup that missed in o continues at, or nil when o
+// has no overlay parent.
+func (o *overlayEnviron) next() *overlayEnviron {
+	if p, ok := o.parent.(*overlayEnviron); ok {
+		return p.holder()
+	}
+	return nil
 }
 
 // namedVariable records the original name of a variable for platforms
@@ -84,13 +159,19 @@ func (o *overlayEnviron) Get(name string) expand.Variable {
 		return environArrayElemAsScalar(idx, o.Get(base), o)
 	}
 	normalized := o.normalize(name)
-	if vr, ok := o.values[normalized]; ok {
-		return vr.Variable
+	for cur := o; ; {
+		if vr, ok := cur.values[normalized]; ok {
+			return vr.Variable
+		}
+		next := cur.next()
+		if next == nil {
+			if cur.parent != nil {
+				return cur.parent.Get(name)
+			}
+			return expand.Variable{}
+		}
+		cur = next
 	}
-	if o.parent != nil {
-		return o.parent.Get(name)
-	}
-	return expand.Variable{}
 }
 
 func (o *overlayEnviron) ResolveNameRef(name string) expand.Variable {
@@ -226,6 +307,9 @@ func (o *overlayEnviron) Set(name string, vr expand.Variable) error {
 	}
 	if o.funcScope && !vr.Local && !prev.Local {
 		// In a function, the parent environment is ours, so it's always read-write.
+		if next := o.next(); next != nil {
+			return next.Set(name, vr)
+		}
 		return o.parent.(expand.WriteEnviron).Set(name, vr)
 	}
 	if !inOverlay && o.parent != nil {
@@ -241,9 +325,7 @@ func (o *overlayEnviron) Set(name string, vr expand.Variable) error {
 		}
 	}
 
-	if o.values == nil {
-		o.values = make(map[string]namedVariable)
-	}
+	o.touch()
 	parentTemp := false
 	if !inOverlay && o.parent != nil {
 		if p, ok := o.parent.(*overlayEnviron); ok {

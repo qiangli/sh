@@ -129,7 +129,7 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 				oldInFunc := r.inFunc
 				r.inFunc = true
 				origEnv := r.writeEnv
-				funEnv := &overlayEnviron{parent: r.writeEnv, funcScope: true, funsubScope: true}
+				funEnv := newFuncScopeEnviron(r.writeEnv, true)
 				if cs.ReplyVar {
 					reply := r.lookupVar(shellReplyVar)
 					reply.Local = true
@@ -159,6 +159,7 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 					reply = r.lookupVar(shellReplyVar).Str
 				}
 				r.opts[optErrExit] = oldErrExit
+				funEnv.release()
 				r.writeEnv = origEnv
 				r.inFunc = oldInFunc
 				r.stdout = oldStdout
@@ -4860,7 +4861,9 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 	// still see whether exec made this scope persistent.
 	defer func() {
 		r.redirScopes = r.redirScopes[:scopeIndex]
-		r.bashPPReconcileFIFOs()
+		if r.bashPPHasFIFOs() {
+			r.bashPPReconcileFIFOs()
+		}
 	}()
 	defer func() {
 		for _, closer := range r.redirScopes[scopeIndex].boundaryClosers {
@@ -4911,20 +4914,25 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 		oldFdWriteTable = maps.Clone(r.fdWriteTable)
 		oldFdClosedTable = maps.Clone(r.fdClosedTable)
 	}
-	varredirClose := false
-	if opt, _ := r.bashOptByName("varredir_close"); opt != nil {
-		varredirClose = *opt
-	}
-	if !varredirClose {
-		for _, rd := range st.Redirs {
-			if isNamedFdRedir(rd) {
-				persistNamedRedirs = true
-				break
+	if len(st.Redirs) > 0 {
+		varredirClose := false
+		if opt, _ := r.bashOptByName("varredir_close"); opt != nil {
+			varredirClose = *opt
+		}
+		if !varredirClose {
+			for _, rd := range st.Redirs {
+				if isNamedFdRedir(rd) {
+					persistNamedRedirs = true
+					break
+				}
 			}
 		}
 	}
 	oldRedirMoveCloseFds := r.redirMoveCloseFds
-	if r.bashPPConcurrent != nil {
+	// A FIFO registered later is a fresh descriptor, never one of the
+	// files this scope restores, so a scope that begins with none
+	// registered has nothing to retain.
+	if r.bashPPHasFIFOs() {
 		// Retain exactly what this scope restores. An unrelated outer
 		// redirect must not delay an inner exec's persistent close.
 		r.redirScopes[scopeIndex].fifoRestoreRefs = func(refs map[*os.File]bool) {
@@ -5318,7 +5326,9 @@ func (r *Runner) persistCurrentRedirs() {
 		}
 		r.redirScopes[i].persist = true
 	}
-	r.bashPPReconcileFIFOs()
+	if r.bashPPHasFIFOs() {
+		r.bashPPReconcileFIFOs()
+	}
 }
 
 func (r *Runner) checkFuncDeclRedirs(ctx context.Context, body *syntax.Stmt) bool {
@@ -7202,9 +7212,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				vr := r.lookupVar(name)
 				vr.Exported = true
 				if overlay, ok := r.writeEnv.(*overlayEnviron); ok {
-					if overlay.values == nil {
-						overlay.values = make(map[string]namedVariable)
-					}
+					overlay.touch()
 					overlay.values[overlay.normalize(name)] = namedVariable{Name: name, Variable: vr}
 				} else if r.writeEnv.Set(name, vr) != nil {
 					r.exit.code = 1
@@ -10680,7 +10688,7 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 		// Honor $FUNCNEST: when set to a positive integer, bash aborts
 		// once nesting reaches that depth. An unset, empty, zero, or
 		// non-numeric value disables the limit.
-		if limit, _ := strconv.Atoi(r.envGet("FUNCNEST")); limit > 0 && len(r.callStack) >= limit {
+		if limit := r.bashPPFuncNest(); limit > 0 && len(r.callStack) >= limit {
 			r.errf("%s%s: maximum function nesting level exceeded (%d)\n",
 				r.bashErrPrefix(pos), name, limit)
 			r.exit.code = 1
@@ -10738,7 +10746,8 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 		// Functions run in a nested scope.
 		// Note that [Runner.exec] below does something similar.
 		origEnv := r.writeEnv
-		r.writeEnv = &overlayEnviron{parent: r.writeEnv, funcScope: true}
+		funEnv := newFuncScopeEnviron(r.writeEnv, false)
+		r.writeEnv = funEnv
 		// A function body's free identifiers resolve where the function was
 		// DEFINED, not where it is called; r.bashPPFuncScopes holds that
 		// environment. A function defined outside the dialect, or imported
@@ -10772,6 +10781,7 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 			r.exitTrapCallStack = slices.Clone(r.callStack)
 		}
 
+		funEnv.release()
 		r.writeEnv = origEnv
 		r.bashPPScope = origBashPPScope
 

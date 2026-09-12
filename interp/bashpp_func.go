@@ -1824,7 +1824,7 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 	if !r.bashPPCheckChannelArgs(fn, params, callChannels, callCells) {
 		return nil
 	}
-	if limit, _ := strconv.Atoi(r.envGet("FUNCNEST")); limit > 0 && len(r.callStack) >= limit {
+	if limit := r.bashPPFuncNest(); limit > 0 && len(r.callStack) >= limit {
 		r.errf("%s: maximum function nesting level exceeded (%d)\n", fn.name(), limit)
 		r.exit.code = 1
 		return nil
@@ -1884,15 +1884,17 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 		if param.name == "" {
 			continue
 		}
-		_ = r.bashPPScope.declare(param.name,
-			expand.Variable{Set: true, Kind: expand.String, Str: args[i]}, false)
 		if i < len(callCells) && callCells[i] != nil {
 			copy, err := r.goSourceExpectedCell(callCells[i], param.typ)
 			if err != nil {
 				r.exit.fatal(err)
 				return nil
 			}
-			copy = bashPPCopyAssignmentCell(copy)
+			// The parameter owns a private copy of the argument. A cell
+			// the expected-type conversion already made is that copy.
+			if copy == callCells[i] {
+				copy = bashPPCopyAssignmentCell(copy)
+			}
 			copy.channel = nil
 			copy.channelOwner = nil
 			copy.constant = false
@@ -1907,6 +1909,9 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 				copy.declType = param.typ
 			}
 			r.bashPPScope.entries[param.name] = copy
+		} else {
+			_ = r.bashPPScope.declare(param.name,
+				expand.Variable{Set: true, Kind: expand.String, Str: args[i]}, false)
 		}
 		if i < len(callChannels) && callChannels[i] != nil {
 			cell := r.bashPPScope.lookup(param.name)
@@ -2044,6 +2049,7 @@ type bashPPFrame struct {
 	params     []string
 	inFunc     bool
 	writeEnv   expand.WriteEnviron
+	own        *overlayEnviron
 	scope      *bashPPScope
 	callDepth  int
 	deferMark  int
@@ -2080,7 +2086,8 @@ func (r *Runner) bashPPEnterFrame(fn *bashPPFunc, args []string) *bashPPFrame {
 	r.bashPPAgentic = fn.decl != nil && fn.decl.Agentic != nil
 	r.Params = args
 	r.inFunc = true
-	r.writeEnv = &overlayEnviron{parent: r.writeEnv, funcScope: true}
+	frame.own = newFuncScopeEnviron(r.writeEnv, false)
+	r.writeEnv = frame.own
 	r.bashPPScope = newBashPPScope(fn.scope)
 	if fn.decl != nil && fn.decl.Receiver != nil && fn.decl.Receiver.Name != nil && fn.decl.Receiver.Name.Value != "_" && fn.receiver != nil {
 		recv := fn.decl.Receiver
@@ -2146,6 +2153,7 @@ func (f *bashPPFrame) leave() {
 		}
 	}
 	r.bashPPAgentic = f.agentic
+	f.own.release()
 	r.writeEnv = f.writeEnv
 	r.bashPPScope = f.scope
 	if len(r.callStack) > f.callDepth {

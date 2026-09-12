@@ -9,6 +9,7 @@ import (
 	"go/constant"
 	goparser "go/parser"
 	gotoken "go/token"
+	"maps"
 	"strconv"
 	"strings"
 
@@ -227,16 +228,37 @@ func (r *Runner) bashPPPredeclaredAliases(typ syntax.BashPPTypeExpr) syntax.Bash
 	if typ == nil {
 		return nil
 	}
-	aliases := make(map[string]syntax.BashPPTypeExpr, 2)
-	for alias, actual := range map[string]string{"byte": "uint8", "rune": "int32"} {
-		if _, declared := r.bashPPTypes[alias]; !declared {
-			aliases[alias] = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: actual}}
+	// The result is only ever read, so a type that spells neither alias is
+	// returned as it is rather than as a copy: this check runs on every
+	// typed assignment.
+	text := bashPPTypeText(typ)
+	aliases := bashPPPredeclaredAliasTypes
+	for alias := range bashPPPredeclaredAliasTypes {
+		if _, declared := r.bashPPTypes[alias]; declared {
+			if len(aliases) == len(bashPPPredeclaredAliasTypes) {
+				aliases = maps.Clone(aliases)
+			}
+			delete(aliases, alias)
 		}
 	}
-	if len(aliases) == 0 {
+	mentioned := false
+	for alias := range aliases {
+		if strings.Contains(text, alias) {
+			mentioned = true
+			break
+		}
+	}
+	if !mentioned {
 		return typ
 	}
 	return bashPPSubstituteType(typ, aliases)
+}
+
+// bashPPPredeclaredAliasTypes are the types the predeclared aliases name.
+// The nodes are shared and never written.
+var bashPPPredeclaredAliasTypes = map[string]syntax.BashPPTypeExpr{
+	"byte": &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "uint8"}},
+	"rune": &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "int32"}},
 }
 
 func (r *Runner) bashPPCanonicalAssignableType(typ syntax.BashPPTypeExpr) syntax.BashPPTypeExpr {

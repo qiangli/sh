@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"go/constant"
 	"go/token"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -1354,31 +1355,69 @@ func bashPPWordScalarKind(word *syntax.Word, value expand.Variable) constant.Kin
 }
 
 type bashPPShortDeclTxn struct {
-	parent    *bashPPShortDeclTxn
-	scope     *bashPPScope
-	entries   map[string]*bashPPCell
-	cells     map[*bashPPCell]bashPPCell
-	newName   bool
-	expected  int
-	bound     map[string]bool
-	positions map[string]syntax.Pos
-	names     []string
-	failed    bool
+	parent *bashPPShortDeclTxn
+	scope  *bashPPScope
+	// saved is every cell the block held when the declaration began, with
+	// its contents, so that a failed declaration puts the block back exactly
+	// as it was: the producer may have written through any of them.
+	saved []bashPPSavedCell
+	// names are the left-hand names in order with their positions.
+	names    []bashPPShortName
+	bound    []string
+	newName  bool
+	expected int
+	failed   bool
+}
+
+type bashPPSavedCell struct {
+	name   string
+	cell   *bashPPCell
+	before bashPPCell
+}
+
+type bashPPShortName struct {
+	name string
+	pos  syntax.Pos
+}
+
+// position is where name appeared on the left-hand side, or the zero
+// position for a name that did not.
+func (txn *bashPPShortDeclTxn) position(name string) syntax.Pos {
+	for _, n := range txn.names {
+		if n.name == name {
+			return n.pos
+		}
+	}
+	return syntax.Pos{}
+}
+
+// savedCell is the block's cell for name from before the declaration began,
+// or nil when the declaration introduced the name.
+func (txn *bashPPShortDeclTxn) savedCell(name string) *bashPPSavedCell {
+	for i := range txn.saved {
+		if txn.saved[i].name == name {
+			return &txn.saved[i]
+		}
+	}
+	return nil
+}
+
+// bind records that name received a value.
+func (txn *bashPPShortDeclTxn) bind(name string) {
+	if !slices.Contains(txn.bound, name) {
+		txn.bound = append(txn.bound, name)
+	}
 }
 
 func (r *Runner) bashPPBeginShortDecl(d *syntax.BashPPShortDecl) (*bashPPShortDeclTxn, bool) {
-	seen := make(map[string]bool, len(d.Lhs))
 	txn := &bashPPShortDeclTxn{
-		parent:    r.bashPPShortTxn,
-		scope:     r.bashPPScope,
-		entries:   make(map[string]*bashPPCell, len(r.bashPPScope.entries)),
-		cells:     make(map[*bashPPCell]bashPPCell, len(r.bashPPScope.entries)),
-		bound:     make(map[string]bool, len(d.Lhs)),
-		positions: make(map[string]syntax.Pos, len(d.Lhs)),
+		parent: r.bashPPShortTxn,
+		scope:  r.bashPPScope,
+		saved:  make([]bashPPSavedCell, 0, len(r.bashPPScope.entries)),
+		names:  make([]bashPPShortName, 0, len(d.Lhs)),
 	}
 	for name, cell := range r.bashPPScope.entries {
-		txn.entries[name] = cell
-		txn.cells[cell] = *cell
+		txn.saved = append(txn.saved, bashPPSavedCell{name: name, cell: cell, before: *cell})
 	}
 	for _, lhs := range d.Lhs {
 		name := lhs.Value
@@ -1391,15 +1430,13 @@ func (r *Runner) bashPPBeginShortDecl(d *syntax.BashPPShortDecl) (*bashPPShortDe
 			continue
 		}
 		txn.expected++
-		if seen[name] {
+		if txn.position(name).IsValid() {
 			r.errf("%s%s repeated on left side of :=\n", r.bashErrPrefix(lhs.Pos()), name)
 			r.exit = exitStatus{code: 2}
 			r.bashPPShortFailureSeq++
 			return nil, false
 		}
-		seen[name] = true
-		txn.positions[name] = lhs.Pos()
-		txn.names = append(txn.names, name)
+		txn.names = append(txn.names, bashPPShortName{name: name, pos: lhs.Pos()})
 		if _, exists := r.bashPPScope.entries[name]; !exists {
 			txn.newName = true
 		}
@@ -1408,11 +1445,21 @@ func (r *Runner) bashPPBeginShortDecl(d *syntax.BashPPShortDecl) (*bashPPShortDe
 	return txn, true
 }
 
+// bashPPRollbackShortDecl puts the block back as it was when the declaration
+// began: every cell it held gets its contents and its name back, and the
+// names introduced since are dropped.
 func (r *Runner) bashPPRollbackShortDecl(txn *bashPPShortDeclTxn) {
-	for cell, before := range txn.cells {
-		*cell = before
+	entries := txn.scope.entries
+	for name := range entries {
+		if txn.savedCell(name) == nil {
+			delete(entries, name)
+		}
 	}
-	txn.scope.entries = txn.entries
+	for i := range txn.saved {
+		saved := &txn.saved[i]
+		*saved.cell = saved.before
+		entries[saved.name] = saved.cell
+	}
 }
 
 func (r *Runner) bashPPEndShortDecl(txn *bashPPShortDeclTxn, pos syntax.Pos) {
@@ -1427,17 +1474,17 @@ func (r *Runner) bashPPEndShortDecl(txn *bashPPShortDeclTxn, pos syntax.Pos) {
 		txn.failed = true
 	}
 	if !txn.failed && len(txn.bound) == txn.expected {
-		for _, name := range txn.names {
-			if !txn.bound[name] {
+		for _, n := range txn.names {
+			if !slices.Contains(txn.bound, n.name) {
 				continue
 			}
-			cell, reused := txn.entries[name]
-			if !reused {
+			saved := txn.savedCell(n.name)
+			if saved == nil {
 				continue
 			}
-			before := txn.cells[cell]
+			cell, before := saved.cell, saved.before
 			if err := r.bashPPValidateReusedShortValue(&before, cell); err != nil {
-				r.errf("%s%v\n", r.bashErrPrefix(txn.positions[name]), err)
+				r.errf("%s%v\n", r.bashErrPrefix(n.pos), err)
 				txn.failed = true
 				break
 			}
@@ -1871,7 +1918,7 @@ func (r *Runner) bashPPDeclareName(name string, vr expand.Variable) {
 		}
 		if cell, exists := txn.scope.entries[name]; exists {
 			if cell.constant || cell.vr.ReadOnly {
-				r.errf("%s%s: cannot assign to constant\n", r.bashErrPrefix(txn.positions[name]), name)
+				r.errf("%s%s: cannot assign to constant\n", r.bashErrPrefix(txn.position(name)), name)
 				r.exit = exitStatus{code: 2}
 				txn.failed = true
 				return
@@ -1880,11 +1927,11 @@ func (r *Runner) bashPPDeclareName(name string, vr expand.Variable) {
 			// validates that candidate against the saved target identity and
 			// restores the target identity only at commit.
 			*cell = bashPPCell{vr: vr}
-			txn.bound[name] = true
+			txn.bind(name)
 			return
 		}
 		_ = txn.scope.declare(name, vr, false)
-		txn.bound[name] = true
+		txn.bind(name)
 		return
 	}
 	if err := r.bashPPScope.declare(name, vr, false); err != nil {

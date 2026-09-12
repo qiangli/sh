@@ -15,7 +15,7 @@ func TestSprint153PipelineSelectCancel(t *testing.T) {
 }
 
 func TestSprint153ChannelDeadlockReports(t *testing.T) {
-	out, errout, err := runSprint153Concurrency(t, "deadlock_negative.go")
+	out, errout, err := runSprint153Concurrency(t, "deadlock_negative.go.txt")
 	if status, ok := interp.IsExitStatus(err); !ok || status != 2 || out != "" || !strings.Contains(errout, "all goroutines are asleep - deadlock!") {
 		t.Fatalf("deadlock: err=%v stdout=%q stderr=%q", err, out, errout)
 	}
