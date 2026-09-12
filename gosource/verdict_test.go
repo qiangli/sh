@@ -29,6 +29,102 @@ func diagnosticsOf(t *testing.T, name, src string) []string {
 	return out
 }
 
+func TestTypeErrorContinuations(t *testing.T) {
+	for _, tc := range []struct {
+		name, src, want string
+	}{
+		{
+			"redeclare.go",
+			"package p\nvar x int\nvar x string\n",
+			"redeclare.go:3:5: x redeclared in this block\n\tredeclare.go:2:5: other declaration of x",
+		},
+		{
+			"switch.go",
+			"package p\nfunc f() {\n\tswitch 0 {\n\tcase 1:\n\tcase 1:\n\t}\n}\n",
+			"switch.go:5:7: duplicate case 1 (constant of type int) in expression switch\n\tswitch.go:4:7: previous case",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := gosource.Load([]gosource.Source{{Name: tc.name, Data: []byte(tc.src)}}, gosource.Options{})
+			if err == nil {
+				t.Fatal("invalid source accepted")
+			}
+			if got := err.Error(); got != tc.want {
+				t.Fatalf("diagnostics differ\ngot:\n%s\nwant:\n%s", got, tc.want)
+			}
+			unindented := 0
+			for _, line := range strings.Split(err.Error(), "\n") {
+				if !strings.HasPrefix(line, "\t") {
+					unindented++
+				}
+			}
+			if unindented != 1 {
+				t.Fatalf("got %d unindented diagnostics, want one", unindented)
+			}
+		})
+	}
+}
+
+func TestCheckerBranchErrors(t *testing.T) {
+	const src = "package p\nfunc f() {\nL:\n\tfor {\nL:\n\t\tbreak L\n\t}\n}\n"
+	for _, tc := range []struct {
+		name string
+		opts gosource.Options
+		want string
+	}{
+		{"gc", gosource.Options{}, "branch.go:5:1: label L already defined at branch.go:3:1"},
+		{"go-types", gosource.Options{CheckerBranchErrors: true}, "branch.go:5:1: label L already declared\n\tbranch.go:3:1: other declaration of L"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := gosource.Load([]gosource.Source{{Name: "branch.go", Data: []byte(src)}}, tc.opts)
+			if err == nil {
+				t.Fatal("duplicate label accepted")
+			}
+			if got := err.Error(); got != tc.want {
+				t.Fatalf("diagnostic differs\ngot:  %q\nwant: %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCheckAfterSyntaxErrors(t *testing.T) {
+	const src = "package p\nimport ;\nvar n int = \"wrong\"\n"
+	const syntaxLine = "mixed.go:2:8: syntax error: missing import path"
+	const checkerLine = `mixed.go:3:13: cannot use "wrong" (untyped string constant) as int value in variable declaration`
+	for _, tc := range []struct {
+		name string
+		opts gosource.Options
+		want string
+	}{
+		{"gc", gosource.Options{}, syntaxLine},
+		{"go-types", gosource.Options{CheckAfterSyntaxErrors: true}, syntaxLine + "\n" + checkerLine},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := gosource.Load([]gosource.Source{{Name: "mixed.go", Data: []byte(src)}}, tc.opts)
+			if err == nil {
+				t.Fatal("invalid source accepted")
+			}
+			if got := err.Error(); got != tc.want {
+				t.Fatalf("diagnostics differ\ngot:\n%s\nwant:\n%s", got, tc.want)
+			}
+		})
+	}
+
+	const validSyntax = "package p\nvar n int = \"wrong\"\n"
+	var withoutOption string
+	for _, opts := range []gosource.Options{{}, {CheckAfterSyntaxErrors: true}} {
+		_, err := gosource.Load([]gosource.Source{{Name: "valid.go", Data: []byte(validSyntax)}}, opts)
+		if err == nil {
+			t.Fatal("type error accepted")
+		}
+		if withoutOption == "" {
+			withoutOption = err.Error()
+		} else if got := err.Error(); got != withoutOption {
+			t.Fatalf("option changed diagnostics without syntax errors\ngot:  %q\nwant: %q", got, withoutOption)
+		}
+	}
+}
+
 // TestSyntaxVerdictClasses covers one out-of-corpus reproducer per failure
 // class from gosource/testdata/sprint154/parser/FINDINGS.md. Each case
 // asserts the exact gc diagnostic (message, line, col — column is 1-based

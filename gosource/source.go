@@ -30,7 +30,11 @@ type ErrorList []error
 func (e ErrorList) Error() string {
 	lines := make([]string, len(e))
 	for i, err := range e {
-		lines[i] = err.Error()
+		if typeErr, ok := err.(types.Error); ok && strings.HasPrefix(typeErr.Msg, "\t") {
+			lines[i] = "\t" + typeErr.Fset.Position(typeErr.Pos).String() + ": " + strings.TrimPrefix(typeErr.Msg, "\t")
+		} else {
+			lines[i] = err.Error()
+		}
 	}
 	return strings.Join(lines, "\n")
 }
@@ -68,6 +72,13 @@ type Options struct {
 	// trace test builtins of the go/types testing environment. It is off by
 	// default; this is a checker-environment option, not a language feature.
 	TestBuiltins bool
+	// CheckerBranchErrors leaves label, goto, break, and continue diagnostics
+	// to go/types instead of reporting them during the gc syntax verdict.
+	CheckerBranchErrors bool
+	// CheckAfterSyntaxErrors continues with go/parser recovery and go/types
+	// after a non-empty gc syntax verdict, retaining only gc's syntax errors
+	// before the checker's diagnostics.
+	CheckAfterSyntaxErrors bool
 	// Packages are explicitly supplied dependency packages, type-checked in
 	// the given order before the program and registered under their Path.
 	// They are the policy-free half of Go's import model — an in-memory
@@ -134,9 +145,11 @@ func Load(sources []Source, options Options) (*Program, error) {
 	}
 	sources = append([]Source(nil), sources...)
 	sort.SliceStable(sources, func(i, j int) bool { return sources[i].Name < sources[j].Name })
-	// gc's own parser is the syntax verdict: if it rejects any source, its
-	// diagnostics are the complete result and nothing below runs.
-	if syntaxErrors := syntaxVerdict(sources); len(syntaxErrors) > 0 {
+	// gc's own parser is the syntax verdict. By default a rejection is the
+	// complete result; checker-test policy may continue on go/parser's partial
+	// AST while retaining gc's diagnostics instead of go/parser's.
+	syntaxErrors := syntaxVerdict(sources, options.CheckerBranchErrors)
+	if len(syntaxErrors) > 0 && !options.CheckAfterSyntaxErrors {
 		return nil, syntaxErrors
 	}
 	checker, err := checkerOptionsFor(sources, options)
@@ -145,13 +158,13 @@ func Load(sources []Source, options Options) (*Program, error) {
 	}
 	c := &converter{fset: token.NewFileSet(), info: newTypeInfo(), renames: map[types.Object]string{}}
 	p := &Program{File: &syntax.File{Name: sources[0].Name, GoSource: true}}
-	var parseErrors ErrorList
+	parseErrors := append(ErrorList(nil), syntaxErrors...)
 	for i, s := range sources {
 		if i > 0 && s.Name == sources[i-1].Name {
 			return nil, fmt.Errorf("gosource: duplicate file %q", s.Name)
 		}
 		f, err := parser.ParseFile(c.fset, s.Name, s.Data, parser.ParseComments|parser.AllErrors)
-		if err != nil {
+		if err != nil && len(syntaxErrors) == 0 {
 			parseErrors = appendDiagnostics(parseErrors, err)
 		}
 		// A recovered file still contains declarations and bodies for the Go
@@ -170,7 +183,9 @@ func Load(sources []Source, options Options) (*Program, error) {
 	if len(c.files) == 0 {
 		return nil, parseErrors
 	}
-	parseErrors = append(parseErrors, validateCompilerDirectives(c.fset, c.files, checker)...)
+	if len(syntaxErrors) == 0 {
+		parseErrors = append(parseErrors, validateCompilerDirectives(c.fset, c.files, checker)...)
+	}
 	fallback := options.Importer
 	if fallback == nil {
 		fallback = importer.Default()
@@ -428,15 +443,23 @@ func shadowedBuiltinTypes(pkg *types.Package) map[string]bool {
 // explicit packages. Test builtins are the exception to per-Load isolation:
 // the go/types API installs them process-wide, irreversibly.
 type checkerOptions struct {
-	goVersion    string
-	fakeImportC  bool
-	testBuiltins bool
+	goVersion              string
+	fakeImportC            bool
+	testBuiltins           bool
+	checkerBranchErrors    bool
+	checkAfterSyntaxErrors bool
 }
 
 var definePredeclaredTestFuncs sync.Once
 
 func checkerOptionsFor(sources []Source, options Options) (checkerOptions, error) {
-	out := checkerOptions{goVersion: options.GoVersion, fakeImportC: options.FakeImportC, testBuiltins: options.TestBuiltins}
+	out := checkerOptions{
+		goVersion:              options.GoVersion,
+		fakeImportC:            options.FakeImportC,
+		testBuiltins:           options.TestBuiltins,
+		checkerBranchErrors:    options.CheckerBranchErrors,
+		checkAfterSyntaxErrors: options.CheckAfterSyntaxErrors,
+	}
 	// The Go checker corpus places flag-compatible configuration on the first
 	// source line (for example "// -lang=go1.13"). Testdir errorcheck recipes
 	// use the same flag later on that line. Honor only checker flags, only from

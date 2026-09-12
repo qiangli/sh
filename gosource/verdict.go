@@ -29,8 +29,9 @@ func (e gcError) Error() string {
 }
 
 // gcSyntaxVerdict parses src with gc's own parser (the vendored
-// cmd/compile/internal/syntax) in CheckBranches mode and returns its
-// diagnostics, filtered the way gc's base.ErrorfAt filters them before they
+// cmd/compile/internal/syntax) and returns its diagnostics. Branch checking is
+// enabled for gc behavior unless checkerBranchErrors leaves it to go/types.
+// Diagnostics are filtered the way gc's base.ErrorfAt filters them before they
 // reach stderr (cmd/compile/internal/base/print.go, Go 1.27.0):
 //
 //	if strings.HasPrefix(msg, "syntax error") {
@@ -47,7 +48,7 @@ func (e gcError) Error() string {
 // where sameline compares position base and line. Errors are returned in the
 // order gc emits them (source order). An empty result is gc accepting the
 // file at syntax stage.
-func gcSyntaxVerdict(name string, src []byte) ErrorList {
+func gcSyntaxVerdict(name string, src []byte, checkerBranchErrors bool) ErrorList {
 	var out ErrorList
 	var lastSyntax, lastOther gcsyntax.Pos
 	lastMsg := ""
@@ -73,19 +74,22 @@ func gcSyntaxVerdict(name string, src []byte) ErrorList {
 		}
 		out = append(out, gcError{pos: e.Pos, msg: e.Msg})
 	}
-	gcsyntax.Parse(gcsyntax.NewFileBase(name), bytes.NewReader(src), errh, nil, gcsyntax.CheckBranches)
+	mode := gcsyntax.CheckBranches
+	if checkerBranchErrors {
+		mode = 0
+	}
+	gcsyntax.Parse(gcsyntax.NewFileBase(name), bytes.NewReader(src), errh, nil, mode)
 	return out
 }
 
-// syntaxVerdict runs gcSyntaxVerdict over every source. A non-empty result
-// is the complete diagnostic set for the load: gc runs no type checker after
-// a syntax error, so neither go/parser nor go/types output is ever appended
-// to it. An empty result means every file passed gc's parser and loading
-// proceeds with go/parser + go/types exactly as before.
-func syntaxVerdict(sources []Source) ErrorList {
+// syntaxVerdict runs gcSyntaxVerdict over every source. A non-empty result is
+// gc's complete syntax-stage diagnostic set; Load decides whether policy stops
+// there or continues with go/parser recovery and go/types. An empty result
+// means every file passed gc's parser.
+func syntaxVerdict(sources []Source, checkerBranchErrors bool) ErrorList {
 	var out ErrorList
 	for _, s := range sources {
-		out = append(out, gcSyntaxVerdict(s.Name, s.Data)...)
+		out = append(out, gcSyntaxVerdict(s.Name, s.Data, checkerBranchErrors)...)
 	}
 	return out
 }
