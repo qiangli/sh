@@ -240,6 +240,11 @@ func (r *Runner) bashPPPredeclaredAliases(typ syntax.BashPPTypeExpr) syntax.Bash
 }
 
 func (r *Runner) bashPPCanonicalAssignableType(typ syntax.BashPPTypeExpr) syntax.BashPPTypeExpr {
+	// An alias is transparent through a pointer too: `*Eint` is the same type
+	// as `*E[int]`, so resolve the element before the pointer is compared.
+	if ptr, ok := typ.(*syntax.BashPPPointerType); ok {
+		return &syntax.BashPPPointerType{Star: ptr.Star, Element: r.bashPPCanonicalAssignableType(ptr.Element)}
+	}
 	seen := make(map[string]bool)
 	for {
 		name, ok := typ.(*syntax.BashPPNamedType)
@@ -446,6 +451,14 @@ func (r *Runner) bashPPEvalConstIntExpr(expr goast.Expr) (value constant.Value, 
 		}
 	}()
 	switch x := expr.(type) {
+	case *goast.CallExpr:
+		// `unsafe.Sizeof`/`unsafe.Alignof` are compile-time uintptr constants
+		// read from the operand's static type — the only call form an integer
+		// constant expression (here, an array length) may legitimately contain.
+		if value, ok := r.bashPPUnsafeConstOperator(x); ok {
+			return value, true
+		}
+		return nil, false
 	case *goast.BasicLit:
 		if x.Kind != gotoken.INT {
 			return nil, false

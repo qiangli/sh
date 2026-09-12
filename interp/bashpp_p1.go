@@ -1977,6 +1977,12 @@ func (r *Runner) bashPPCall(ctx context.Context, c *syntax.BashPPCall) {
 		return
 	}
 	if c.CalleeExpr != nil {
+		// A computed callee that evaluates to a dependency's function value —
+		// a handle reached through a type assertion or index, with no name to
+		// look up — is invoked on the dependency here.
+		if r.bashPPGoSourceComputedNativeCall(ctx, c) {
+			return
+		}
 		if r.exit.code == 0 && !r.bashPPPanicking() && r.exit.err == nil {
 			r.exit.fatal(fmt.Errorf("%sgosource: computed callee is not a function", r.bashErrPrefix(c.Pos())))
 		}

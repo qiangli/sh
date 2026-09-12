@@ -228,7 +228,12 @@ func (r *Runner) bashPPEvalComposite(lit *syntax.BashPPCompositeLit, expected sy
 	if !ok {
 		return nil, nil, fmt.Errorf("BASHPP-ESTRUCT-TYPE: %s is not a supported struct type", bashPPTypeText(typ))
 	}
-	if expected != nil && lit.LitType != nil && bashPPTypeText(lit.LitType) != bashPPTypeText(expected) {
+	// A type alias is the very type it names, so `Eint{…}` is an `E[int]`
+	// literal where the field was declared `E[int]`, and vice versa. Resolve
+	// each side's aliases before comparing; two distinct defined types stay
+	// distinct because alias resolution stops at the first non-alias name.
+	if expected != nil && lit.LitType != nil &&
+		bashPPTypeText(r.bashPPCanonicalAssignableType(lit.LitType)) != bashPPTypeText(r.bashPPCanonicalAssignableType(expected)) {
 		return nil, nil, fmt.Errorf("BASHPP-ESTRUCT-TYPE: cannot use %s as %s", bashPPTypeText(lit.LitType), bashPPTypeText(expected))
 	}
 	flat := bashPPFlatFields(fields)

@@ -801,11 +801,64 @@ func (r *Runner) bashPPTypeAssertCell(assert *syntax.BashPPTypeAssertExpr, comma
 }
 
 func bashPPInterfaceAssertTypeText(typ syntax.BashPPTypeExpr) string {
-	text := bashPPTypeText(typ)
+	text := bashPPGoCanonicalTypeText(typ)
 	text = strings.ReplaceAll(text, "interface{}", "any")
 	text = strings.ReplaceAll(text, "interface {}", "any")
 	text = strings.ReplaceAll(text, "interface", "any")
 	return text
+}
+
+// bashPPGoCanonicalTypeText is bashPPTypeText except a function type is spelled
+// the way Go's own reflect/types renderers do: parameters joined by ", ", a
+// single unnamed result written bare, several results parenthesized, and no
+// trailing "()" when there are none. A dependency reports a function value's
+// dynamic type in that Go spelling (`func(string)`, `func(io.Writer, string)
+// (int, error)`), so a BashPPFuncType parsed from an asserted spelling must
+// render the same way here; the interpreter's internal `func(p)(r)` form would
+// make an exact-match assertion against a native func handle fail spuriously.
+func bashPPGoCanonicalTypeText(typ syntax.BashPPTypeExpr) string {
+	ft, ok := typ.(*syntax.BashPPFuncType)
+	if !ok {
+		return bashPPTypeText(typ)
+	}
+	params := bashPPGoCanonicalFieldTypes(ft.Params)
+	text := "func(" + strings.Join(params, ", ") + ")"
+	results := bashPPGoCanonicalFieldTypes(ft.Results)
+	switch len(results) {
+	case 0:
+	case 1:
+		text += " " + results[0]
+	default:
+		text += " (" + strings.Join(results, ", ") + ")"
+	}
+	return text
+}
+
+// bashPPGoCanonicalFieldTypes expands a parameter/result list into one type
+// spelling per value: a group `(a, b int)` contributes two `int`s, a variadic
+// group keeps its leading `...`, and every nested function type is spelled in
+// the same Go-canonical form.
+func bashPPGoCanonicalFieldTypes(fields []*syntax.BashPPField) []string {
+	var out []string
+	for _, field := range fields {
+		count := len(field.Names)
+		if count == 0 {
+			count = 1
+		}
+		text := ""
+		if field.FieldTypeExpr != nil {
+			text = bashPPGoCanonicalTypeText(field.FieldTypeExpr)
+		} else if field.FieldType != nil {
+			text = field.FieldType.Value
+		}
+		if field.Variadic() {
+			text = "..." + text
+		}
+		for j := 0; j < count; j++ {
+			out = append(out, text)
+		}
+	}
+	return out
 }
 
 func (r *Runner) bashPPTypeSwitch(ctx context.Context, sw *syntax.BashPPSwitch) {

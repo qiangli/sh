@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/syntax"
@@ -237,4 +238,62 @@ func (r *Runner) goSourceInvokeNative(ctx context.Context, fn *bashPPFunc, args 
 		results[i] = cell.vr.String()
 	}
 	return results
+}
+
+// bashPPGoSourceComputedNativeCall dispatches a call whose computed callee
+// evaluates to a dependency's function value — `m.Func.Interface().(func(M))(v)`,
+// `fs[i]()` where fs holds native handles. The statement and expression callee
+// branches resolve only local closures and named cells by themselves; a handle
+// reached through a type assertion, index, or any other computed expression has
+// no name to look up, so it is evaluated here and invoked on the dependency.
+//
+// It reports whether it claimed the call. A handle that is not a function
+// value, or a callee that does not evaluate to one, is declined so the ordinary
+// "computed callee is not a function" diagnostic still applies.
+func (r *Runner) bashPPGoSourceComputedNativeCall(ctx context.Context, c *syntax.BashPPCall) bool {
+	if !r.bashPPGoSource || c == nil || c.CalleeExpr == nil {
+		return false
+	}
+	cell, err := r.goSourceValueCell(c.CalleeExpr)
+	if err != nil || cell == nil {
+		return false
+	}
+	value, err := r.bashPPBridgeCell(cell)
+	if err != nil {
+		return false
+	}
+	if value.Kind != "handle" || !(value.Function || strings.HasPrefix(value.Type, "func(")) {
+		return false
+	}
+	fn := &bashPPFunc{native: &value}
+	if sig := bashPPComputedCalleeSignature(c.CalleeExpr, cell); sig != nil {
+		fn.lit = &syntax.BashPPFuncLit{Params: sig.Params, Results: sig.Results}
+	}
+	args, ok := r.bashPPCallValues(c, fn)
+	if !ok {
+		return true
+	}
+	r.bashPPInvoke(ctx, fn, args)
+	return true
+}
+
+// bashPPComputedCalleeSignature recovers the concrete signature a computed
+// callee was asserted or declared to have, so argument binding has the
+// parameter types the dependency expects. A type assertion `.(func(...))` spells
+// it directly; otherwise the evaluated cell's declared type may carry it.
+func bashPPComputedCalleeSignature(expr syntax.BashPPExpr, cell *bashPPCell) *syntax.BashPPFuncType {
+	switch x := expr.(type) {
+	case *syntax.BashPPParenExpr:
+		return bashPPComputedCalleeSignature(x.X, cell)
+	case *syntax.BashPPTypeAssertExpr:
+		if ft, ok := x.Assert.(*syntax.BashPPFuncType); ok {
+			return ft
+		}
+	}
+	if cell != nil {
+		if ft, ok := cell.declType.(*syntax.BashPPFuncType); ok {
+			return ft
+		}
+	}
+	return nil
 }

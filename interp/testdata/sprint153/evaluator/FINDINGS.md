@@ -79,3 +79,112 @@ PATH=/bin:/usr/bin:$(dirname $(which go)) go test -count=1 -timeout 30m -run GoS
 PATH=/bin:/usr/bin:$(dirname $(which go)) go test -count=1 -timeout 30m ./interp/...
 PATH=/bin:/usr/bin:$(dirname $(which go)) go test -short -timeout 30m ./...
 ```
+
+## S153.4b — second pass (evaluator owner 2)
+
+Continued from 4260767f. Each closed mechanism has an outside-corpus
+reproducer plus a nearby positive control under
+`interp/testdata/sprint153/<mechanism>/`, run by `TestSprint153Evaluator`.
+
+### Test harness
+
+`TestSprint153Evaluator` was red on the clean tree before any edit: a mechanism
+directory that holds only a lane's prose (`bridge`, `triage`, `output`) tripped
+the `programs == 0` fatal before any reproducer ran. The harness now skips a
+documentation-only directory. This surfaced one **pre-existing** divergence it
+had been masking — `concurrency/deadlock_negative` compares full stderr, and
+the interpreter cannot reproduce Go's goroutine stack dump after
+`fatal error: all goroutines are asleep - deadlock!`. That reproducer belongs
+to the concurrency lane (`concurrency/` testdata); its exact-stderr comparison
+is the divergence, not an evaluator regression.
+
+### Closed
+
+| Root(s) | Mechanism | Commit | Reproducer |
+|---|---|---|---|
+| leaf-153 r1a asserted func handles; prerequisite for reflectmethod2/3 | A type assertion/switch compared an interface's dynamic type against the asserted type as text, but a `BashPPFuncType` rendered `func(p)(r)` — run-together params, always-parenthesised results, a trailing `()` for no results — while a dependency reports `func(string)`, `func(io.Writer, string) (int, error)`. Render function types Go-canonically at that boundary. | `func type assert text` | `func_type_assert_text/` |
+| reflectmethod2/3 (then blocked, see open) | A call whose callee is a computed expression yielding a dependency func handle (`x.(func(M))(v)`) fell through to "computed callee is not a function"; the statement dispatcher only resolved local closures and named cells. Evaluate the computed callee and, when it is a native func handle, invoke it on the dependency. | `computed callee native` | `computed_callee_native/` |
+| `typeparam/struct.go` | Embedding an instantiated generic and filling it with an alias of that instantiation (`field E[int]`, literal `Eint{…}`) was rejected because the composite-literal type check compared raw text; the pointer embed (`*Eint` into `*E[int]`) failed the same way. Resolve aliases before the comparison and make the alias canonicaliser transparent through a pointer. | `struct embed type alias` | `struct_embed_alias/` |
+| part of `fixedbugs/bug517.go` (array-length arm) | `unsafe.Sizeof`/`Alignof` in a constant array length were handed to the dependency evaluator, where the pseudo-function has no callable symbol. Fold them from the operand's static type in the constant-integer evaluator, for operand shapes fixed by their own syntax (basic conversion, call of a declared function with a basic result, function value, basic literal). | `unsafe Sizeof/Alignof array length` | `array_length_unsafe/` |
+
+### Open — needs another lane or an architectural change
+
+1. **`unsafe` compile-time operators in the scalar and const paths** (sizeof.go;
+   const-initializer regression issue15550/issue30709; issue57823 SliceData).
+   * *Scalar position* (`println(unsafe.Sizeof(t))`): `bashPPBridgeScalar`
+     claims the call before the evaluator sees it, because
+     `bashPPBridgeHandles` (`bashpp_native_values.go`, bridge lane) returns true
+     for any `unsafe.X(...)` selector (`r.bashPPImports["unsafe"] != ""`).
+     NEEDED in the bridge lane: `bashPPBridgeHandles` must decline the
+     compile-time operators `unsafe.Sizeof`/`Alignof`/`Offsetof` so the
+     evaluator can fold them (the folding core is `bashPPUnsafeConstOperator` in
+     `gosource_unsafe.go`, ready to extend to the syntax AST).
+   * *Const-initializer* (`const _ = unsafe.Sizeof(func(){})`): rejected by
+     `bashPPConstantScalarExpr` (`BASHPP-ECONST-EXPR`), and even if accepted the
+     const group evaluates via `bashPPEvalScalarExpr`, which hits the bridge as
+     above. NEEDED: recognise the operator as constant and fold it without the
+     bridge (a rewrite-to-literal in the const group, owned, once the bridge
+     declines it).
+   * `Offsetof` needs struct field layout; `SliceData`/`String`/`StringData`
+     are runtime conversions, not constants — both the bridge's (runtime).
+   * A **package-level** array type whose length calls a package function
+     (`type B [unsafe.Sizeof(F())]*byte`) is still rejected: the length is
+     evaluated before the package's functions register in `bashPPFuncs`. A
+     function-local type with the same length works. Ordering fix only.
+
+2. **Generic map/slice element conversion by the instantiated type**
+   (`typeparam/map.go`: `BASHPP-ECOLLECTION-ELEMENT: cannot use string value as
+   float64`). `mapper[F,T any](s []F, f func(F) T)` with a func-literal argument
+   binds `T` to `F`, so `make([]T,…)` carries the wrong element type. NEEDED
+   (outside may-edit set): `bashPPInferTypeFromParam` (`bashpp_func.go:812`) has
+   no `*syntax.BashPPFuncType` case, so a `f func(F) T` parameter contributes no
+   `T` binding; add one recursing into Params/Results, or correct the
+   func-literal type-arg propagation in `bashpp_generic_body.go`. The named-func
+   arm (`strconv.Itoa`) already works via the converter's explicit type args.
+
+3. **Function-valued struct field called** (`s.fn(args)`; abi/idata.go
+   `undefined callable computed function`). `f := s.fn; f(args)` already works;
+   only the direct call is misrouted to method dispatch (`type S has no method
+   fn`). The fix must be one choke point because the call reaches the method
+   resolver from statement, decl, scalar-expression and bridge-argument
+   positions (the last two via `bashpp_scalar.go`/`bashpp_native_values.go`,
+   both out of lane). NEEDED in `bashpp_func.go`: in `bashPPBindLocalSelector`
+   (≈`:660`, and `bashPPBindMethod` ≈`:1371`), when `sel.method == nil &&
+   sel.interfaceSpec == nil`, resolve the selector as a field via
+   `bashPPResolveField`; if its `fieldType` underlies to a `*BashPPFuncType`,
+   read the field value and return `bashPPClosure(cell.vr.Str)` instead of
+   erroring. (A self-contained owned intercept was prototyped and reverted: it
+   closed statement + value positions but not the bridge-argument position,
+   which `bashpp_native_values.go:153` resolves directly.)
+
+4. **Selector on a value returned through a call/interface**
+   (`fixedbugs/issue21879.go` `?.frame has no fields`; `fixedbugs/issue54542.go`
+   `ESELECTOR-ASSIGN: target is not a structured value`). `caller().frame`
+   reads the selector's receiver with `bashPPReadExpr(x.X)`
+   (`bashpp_struct.go:646`), which for a call result returns `meta == nil`, so
+   the struct field set is unknown. The field is then a native `runtime.Frame`,
+   so the full root additionally needs the bridge. Reducing the
+   call-result-as-struct half (owned, `bashPPReadExpr` must carry the call's
+   result `meta`) from the native half is the next step.
+
+5. **Typed nil func value to reflect** (`fixedbugs/issue16331.go`). `(func())(nil)`
+   evaluates correctly on its own (`f := (func())(nil); f == nil` → true); it
+   fails only as an argument to `reflect.TypeOf`/`reflect.MakeFunc`, prepared by
+   the bridge (`nil is not a scalar`). Bridge lane (`bashpp_native_*`): a typed
+   nil function value must cross as a native argument.
+
+6. **reflectmethod2/3 next blocker.** With mechanisms 1–2 above closed, the
+   assertion `.(func(M))` now compares the asserted `func(M)` against the
+   handle's dependency-reported `func(main.M)` — a local type unqualified in the
+   asserted text but package-qualified in the dynamic type. Package-qualifying
+   local type names inside a function signature at the bridge boundary is the
+   gosource/bridge lane's `__gosource_pkg_N_` work (see "Needs for other lanes"
+   above).
+
+7. **Panicking self-checks** (leaf-153 r1a `panic:` rows). `maymorestack.go`
+   needs `-d=maymorestack` gcflag semantics — not interpretable, record only.
+   The `unsafe.Pointer`/`uintptr`/finalizer roots (issue24491a/b, issue45045)
+   remain the no-memory-model class recorded in the first pass. The remaining
+   `makeslice: len out of range` / `interface conversion` / `defer of nil func`
+   rows each reduce to one of the bridge or memory-model classes above and are
+   not evaluator-local.
