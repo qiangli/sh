@@ -10,6 +10,7 @@ import (
 	"go/scanner"
 	"go/token"
 	"go/types"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -19,10 +20,15 @@ import (
 type converter struct {
 	packagePath   string
 	importAliases map[string]string
-	// mapped is the set of explicit package paths linked into the same file;
-	// a selector on one of their import bindings collapses to the bare name
-	// and their types are spelled unqualified, exactly as packagePath's are.
-	mapped map[string]bool
+	// mapped maps each explicit package path linked into the same file to
+	// its map index. A selector on one of their import bindings collapses
+	// to the selected object's rename, and their package-level names are
+	// spelled by that rename everywhere (see mangledName); the program's
+	// own names are never renamed.
+	mapped map[string]int
+	// mappedPkgs lists the linked packages by map index, so a type string's
+	// marker qualifier can be resolved back to the named object.
+	mappedPkgs []*types.Package
 	// resolveImport applies the relative-import rule to an import path as
 	// written, so an import without a binding (blank) can still be matched
 	// against mapped.
@@ -101,28 +107,74 @@ func (c *converter) ident(n *ast.Ident) *s.Lit {
 }
 
 // mappedPkgName reports whether e is the import binding of a linked explicit
-// package. A selector through it collapses to the bare selected name: the
-// package's declarations were lowered into the same flat file.
+// package. A selector through it collapses to the selected object's rename:
+// the package's declarations were lowered into the same flat file.
 func (c *converter) mappedPkgName(e ast.Expr) bool {
 	id, ok := e.(*ast.Ident)
 	if !ok || len(c.mapped) == 0 {
 		return false
 	}
 	pkgname, ok := c.info.ObjectOf(id).(*types.PkgName)
-	return ok && c.mapped[pkgname.Imported().Path()]
+	if !ok {
+		return false
+	}
+	_, mapped := c.mapped[pkgname.Imported().Path()]
+	return mapped
 }
 
-// qualifier spells a package in a type string: unqualified for this package
-// and for every linked explicit package, by hoisted alias for an import, and
-// by declared name otherwise.
+// mappedMarker is the qualifier a type string spells a mapped package by:
+// the hygiene prefix, which is free in every linked source, and the map
+// index. typeString rewrites "<marker>.Name" into the object's rename.
+func (c *converter) mappedMarker(index int) string {
+	return fmt.Sprintf("%spkg_%d", c.prefix, index)
+}
+
+// mangledName is the flat-file spelling of a mapped package's package-level
+// object: the marker followed by the declared name.
+func (c *converter) mangledName(index int, name string) string {
+	return c.mappedMarker(index) + "_" + name
+}
+
+// qualifier spells a package in a type string: unqualified for the program
+// package, by marker for a linked explicit package, by hoisted alias for an
+// import, and by declared name otherwise. Only typeString may use it, since
+// the marker must be rewritten before the text is read.
 func (c *converter) qualifier(p *types.Package) string {
-	if p.Path() == c.packagePath || c.mapped[p.Path()] {
+	if index, ok := c.mapped[p.Path()]; ok {
+		return c.mappedMarker(index)
+	}
+	if p.Path() == c.packagePath {
 		return ""
 	}
 	if alias := c.importAliases[p.Path()]; alias != "" {
 		return alias
 	}
 	return p.Name()
+}
+
+// typeString spells a checked type for the flat file. types.TypeString can
+// qualify a package but not rename an object, so a mapped package's names
+// come out as "<marker>.Name" and are rewritten here: a package-level name
+// becomes its rename, and any other (a function-local type, which the
+// checker qualifies by package too) stays bare, as it is declared. A local
+// type spelled like a package-level one of the same package takes the
+// latter's rename; the runtime has no lexical type namespace either.
+func (c *converter) typeString(t types.Type) string {
+	text := types.TypeString(t, c.qualifier)
+	if len(c.mapped) == 0 || !strings.Contains(text, c.prefix+"pkg_") {
+		return text
+	}
+	pattern := regexp.MustCompile(regexp.QuoteMeta(c.prefix+"pkg_") + `([0-9]+)\.([\pL\pN_]+)`)
+	return pattern.ReplaceAllStringFunc(text, func(match string) string {
+		sub := pattern.FindStringSubmatch(match)
+		index, _ := strconv.Atoi(sub[1])
+		if obj := c.mappedPkgs[index].Scope().Lookup(sub[2]); obj != nil {
+			if rename := c.renames[obj]; rename != "" {
+				return rename
+			}
+		}
+		return sub[2]
+	})
 }
 func (c *converter) text(n ast.Node) string {
 	var b bytes.Buffer
@@ -220,7 +272,7 @@ func (c *converter) valueType(e ast.Expr) s.BashPPTypeExpr {
 		return nil
 	}
 	typ = types.Default(typ)
-	typeName := types.TypeString(typ, c.qualifier)
+	typeName := c.typeString(typ)
 	if typeName == "any" && types.Identical(typ, types.Universe.Lookup("any").Type()) {
 		typeName = "interface{}"
 	}
@@ -430,14 +482,16 @@ func (c *converter) importedPathIsMapped(i *ast.ImportSpec, path string) bool {
 		obj = c.info.Implicits[i]
 	}
 	if pkgname, ok := obj.(*types.PkgName); ok {
-		return c.mapped[pkgname.Imported().Path()]
+		_, mapped := c.mapped[pkgname.Imported().Path()]
+		return mapped
 	}
 	if c.resolveImport != nil {
 		if resolved, err := c.resolveImport(path); err == nil {
 			path = resolved
 		}
 	}
-	return c.mapped[path]
+	_, mapped := c.mapped[path]
+	return mapped
 }
 func (c *converter) typeDecl(g *ast.GenDecl, t *ast.TypeSpec) *s.BashPPDecl {
 	out := &s.BashPPDecl{Site: s.StartTypeDecl, Kw: c.lit(g.TokPos, "type"), Name: c.ident(t.Name), DeclType: c.lit(t.Type.Pos(), c.text(t.Type)), DeclTypeExpr: c.typ(t.Type), Alias: t.Assign.IsValid(), TypeParams: c.typeParams(t.TypeParams), End_: c.pos(t.End())}
@@ -453,7 +507,7 @@ func (c *converter) valueDecl(g *ast.GenDecl, v *ast.ValueSpec, n *ast.Ident, in
 	out := &s.BashPPDecl{Kw: c.lit(g.TokPos, g.Tok.String()), Name: c.ident(n), Site: s.StartVar, End_: c.pos(v.End())}
 	if v.Type == nil && g.Tok == token.VAR {
 		if obj := c.info.Defs[n]; obj != nil {
-			typeName := types.TypeString(obj.Type(), c.qualifier)
+			typeName := c.typeString(obj.Type())
 			// The synthetic AST has no go/types object bindings. Expand the
 			// predeclared any alias so it keeps its interface shape instead
 			// of becoming an unresolved named type during initialization.

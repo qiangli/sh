@@ -195,13 +195,16 @@ func Load(sources []Source, options Options) (*Program, error) {
 	}
 	// The link set is every explicit package, in map order, then the
 	// program. All are lowered into one flat file, so the hygiene prefix
-	// must be free in every file of the set and the package-level names
-	// must be distinct across it.
+	// must be free in every file of the set; a mapped package's
+	// package-level names are then renamed under it, which keeps the flat
+	// namespace collision-free without touching the program's own names.
 	var linked []*converter
-	mapped := map[string]bool{}
-	for _, path := range imp.order {
+	mapped := map[string]int{}
+	var mappedPkgs []*types.Package
+	for i, path := range imp.order {
 		checked := imp.checked[path]
-		mapped[path] = true
+		mapped[path] = i
+		mappedPkgs = append(mappedPkgs, checked.pkg)
 		linked = append(linked, &converter{packagePath: path, fset: c.fset, files: checked.files, sources: checked.sources, info: checked.info, renames: c.renames})
 	}
 	c.packagePath = programPath
@@ -224,16 +227,17 @@ func Load(sources []Source, options Options) (*Program, error) {
 		}
 		c.prefix += "_"
 	}
-	if err := checkLinkedNames(imp, pkg, programPath); err != nil {
-		return nil, err
+	for _, lc := range linked {
+		lc.prefix = c.prefix
+		lc.mapped = mapped
+		lc.mappedPkgs = mappedPkgs
 	}
+	mangleLinkedNames(linked, mappedPkgs)
 	// Import aliases are shared: every package's imports are hoisted into
 	// the one file, so an alias minted by any package names that path for all.
 	importAliases := map[string]string{}
 	var lowered []*loweredPackage
 	for pi, lc := range linked {
-		lc.prefix = c.prefix
-		lc.mapped = mapped
 		lc.importAliases = importAliases
 		lc.resolveImport = imp.resolve
 		if lc != c {
@@ -262,8 +266,10 @@ func Load(sources []Source, options Options) (*Program, error) {
 					} else {
 						lc.renames[obj] = fmt.Sprintf("%simport_%d_%d_%d", c.prefix, pi, fi, ii)
 					}
-					if pkgname, ok := obj.(*types.PkgName); ok && !mapped[pkgname.Imported().Path()] {
-						importAliases[pkgname.Imported().Path()] = lc.renames[obj]
+					if pkgname, ok := obj.(*types.PkgName); ok {
+						if _, linked := mapped[pkgname.Imported().Path()]; !linked {
+							importAliases[pkgname.Imported().Path()] = lc.renames[obj]
+						}
 					}
 				}
 			}
@@ -300,6 +306,9 @@ func Load(sources []Source, options Options) (*Program, error) {
 			lit := &syntax.Lit{Value: name, ValuePos: pos, ValueEnd: pos}
 			p.File.Stmts = append(p.File.Stmts, c.stmt(&syntax.BashPPCall{Fun: []*syntax.Lit{lit}, Lparen: pos, Rparen: pos}))
 		}
+	}
+	if err := checkLoweredNames(p.File); err != nil {
+		return nil, err
 	}
 	for _, path := range imp.order {
 		checked := imp.checked[path]
@@ -427,31 +436,74 @@ func (c *converter) lowerPackage(initBase int) (*loweredPackage, error) {
 	return out, nil
 }
 
-// checkLinkedNames refuses a link set whose packages declare one package-level
-// name twice. The lowered file is one flat namespace and the converter renames
-// only import bindings and predeclared-identifier shadows, never declarations,
-// so a shared name would silently alias rather than shadow.
-func checkLinkedNames(imp *mapImporter, program *types.Package, programPath string) error {
-	type member struct {
-		path string
-		pkg  *types.Package
+// mangleLinkedNames renames every package-level object of every mapped
+// package — types, functions, variables and constants, exported or not — to
+// its flat-file spelling, so two linked packages may declare one name and
+// the program keeps its own names untouched. Methods are not renamed: they
+// dispatch by receiver type, and the receiver's type name is. An embedded
+// field is selected by its type's unqualified name, which the runtime
+// derives from the field's type spelling, so an embedded field of a renamed
+// type takes the same rename; the converter spells the field's uses
+// through the field object, and the two agree.
+func mangleLinkedNames(linked []*converter, mappedPkgs []*types.Package) {
+	if len(mappedPkgs) == 0 {
+		return
 	}
-	var set []member
-	for _, path := range imp.order {
-		set = append(set, member{path, imp.checked[path].pkg})
+	// renames is one map shared by every converter of the link set.
+	c := linked[0]
+	for i, pkg := range mappedPkgs {
+		scope := pkg.Scope()
+		for _, name := range scope.Names() {
+			c.renames[scope.Lookup(name)] = c.mangledName(i, name)
+		}
 	}
-	set = append(set, member{programPath, program})
-	declared := map[string]string{}
-	for _, m := range set {
-		for _, name := range m.pkg.Scope().Names() {
-			if name == "_" {
+	for _, lc := range linked {
+		for _, obj := range lc.info.Defs {
+			field, ok := obj.(*types.Var)
+			if !ok || !field.Embedded() {
 				continue
 			}
-			if first, dup := declared[name]; dup {
-				return fmt.Errorf("gosource: package-level name %s declared by both %s and %s; execution against the explicit package map requires distinct names", name, first, m.path)
+			typ := field.Type()
+			if pointer, ok := typ.(*types.Pointer); ok {
+				typ = pointer.Elem()
 			}
-			declared[name] = m.path
+			if named, ok := typ.(*types.Named); ok {
+				if rename := c.renames[named.Obj()]; rename != "" {
+					c.renames[field] = rename
+				}
+			}
 		}
+	}
+}
+
+// checkLoweredNames is the guard behind mangleLinkedNames: the lowered file
+// is one flat namespace, so every top-level declaration must have a distinct
+// name (a method is keyed by receiver type as well). The checker already
+// rejects a package redeclaring a name across its own files and the renames
+// keep packages apart, so a duplicate here is a converter defect, reported
+// rather than left to alias silently at runtime.
+func checkLoweredNames(file *syntax.File) error {
+	declared := map[string]bool{}
+	for _, stmt := range file.Stmts {
+		var name string
+		switch d := stmt.Cmd.(type) {
+		case *syntax.BashPPFuncDecl:
+			name = d.Name.Value
+			if d.Receiver != nil && d.Receiver.RecvType != nil {
+				name = d.Receiver.RecvType.Value + "." + name
+			}
+		case *syntax.BashPPDecl:
+			name = d.Name.Value
+		default:
+			continue
+		}
+		if name == "_" {
+			continue
+		}
+		if declared[name] {
+			return fmt.Errorf("gosource: package-level name %s declared twice in the lowered file", name)
+		}
+		declared[name] = true
 	}
 	return nil
 }

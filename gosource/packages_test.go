@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -342,10 +343,12 @@ func G() int { return BVar + a.AVar }
 	}
 }
 
-// TestMappedNameCollisionIsRefused pins the flat-namespace boundary: a
-// package-level name declared by two linked packages, the program included
-// and unexported names included, is refused at Load with both paths named.
-func TestMappedNameCollisionIsRefused(t *testing.T) {
+// TestMappedNameCollisionRuns pins the lift of the M1 flat-namespace
+// boundary: a package-level name declared by two linked packages, the
+// program included and unexported names included, runs and prints what go
+// run prints, because a mapped package's names are renamed under the
+// hygiene prefix while the program keeps its own.
+func TestMappedNameCollisionRuns(t *testing.T) {
 	a := PackageSpec{Path: "test/a", Sources: []Source{src("a.go", "package a\n\nvar count = 1\n\nfunc F() int { return count }\n")}}
 	for _, tc := range []struct {
 		name string
@@ -353,20 +356,269 @@ func TestMappedNameCollisionIsRefused(t *testing.T) {
 		want string
 	}{
 		{"program-vs-package", mappedProgram{
-			program:  []Source{src("main.go", "package main\n\nimport \"./a\"\n\nvar count = 2\n\nfunc main() { _ = a.F() + count }\n")},
+			program:  []Source{src("main.go", "package main\n\nimport (\n\t\"fmt\"\n\n\t\"./a\"\n)\n\nvar count = 2\n\nfunc main() { fmt.Println(a.F(), count, a.F()+count) }\n")},
 			packages: []PackageSpec{a},
-		}, "gosource: package-level name count declared by both test/a and test/main; execution against the explicit package map requires distinct names"},
+		}, "1 2 3\n"},
 		{"package-vs-package", mappedProgram{
-			program:  []Source{src("main.go", "package main\n\nimport (\n\t\"./a\"\n\t\"./b\"\n)\n\nfunc main() { _ = a.F() + b.G() }\n")},
-			packages: []PackageSpec{a, {Path: "test/b", Sources: []Source{src("b.go", "package b\n\ntype F struct{}\n\nfunc G() int { return 0 }\n")}}},
-		}, "gosource: package-level name F declared by both test/a and test/b; execution against the explicit package map requires distinct names"},
+			program:  []Source{src("main.go", "package main\n\nimport (\n\t\"fmt\"\n\n\t\"./a\"\n\t\"./b\"\n)\n\nfunc main() { fmt.Println(a.F(), b.G(), b.F{}) }\n")},
+			packages: []PackageSpec{a, {Path: "test/b", Sources: []Source{src("b.go", "package b\n\ntype F struct{ N int }\n\nfunc G() int { return 0 }\n")}}},
+		}, "1 0 {0}\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := Load(tc.m.program, tc.m.options(true))
-			if err == nil || err.Error() != tc.want {
-				t.Fatalf("err = %v\nwant %s", err, tc.want)
+			want := goRunMapped(t, tc.m)
+			if got := runMapped(t, tc.m); got != want {
+				t.Fatalf("interp %q, go run %q", got, want)
+			}
+			if want != tc.want {
+				t.Fatalf("go run = %q, want %q", want, tc.want)
 			}
 		})
+	}
+}
+
+// TestMappedCollidingNamesAcrossTwoDependencies covers the shape the corpus
+// collides on: two dependencies declaring the same function, type, method,
+// variable and constant names, used side by side by the program through
+// every spelling site — calls, composite literals, method calls on both
+// types, inferred variable types, function values whose signatures name
+// the types, conversions, pointers, a type switch over both, and a
+// function-local type whose inferred spelling stays bare. (The local types
+// are spelled apart: the runtime has no lexical type namespace, in one
+// package or across the map.)
+func TestMappedCollidingNamesAcrossTwoDependencies(t *testing.T) {
+	dep := func(name string, base int) PackageSpec {
+		return PackageSpec{Path: "test/" + name, Sources: []Source{src(name+".go", `package `+name+`
+
+import "fmt"
+
+const Base = `+strconv.Itoa(base)+`
+
+var V = Base * 10
+
+type T struct{ N int }
+
+func New(n int) T { return T{N: n + Base} }
+
+func (t T) Describe() string { return fmt.Sprintf("`+name+`.T(%d)", t.N) }
+
+func (t *T) Bump() { t.N++ }
+
+func F() int { return V + 1 }
+
+type S string
+
+func (s S) Tag() string { return "`+name+`:" + string(s) }
+
+func Local() string {
+	type L`+name+` struct{ N int }
+	var l = L`+name+`{N: Base}
+	return fmt.Sprint(l.N)
+}
+`)}}
+	}
+	m := mappedProgram{
+		program: []Source{src("main.go", `package main
+
+import (
+	"fmt"
+
+	"./a"
+	"./b"
+)
+
+var va = a.New(1)
+
+var vb = b.New(1)
+
+func describe(x any) string {
+	switch v := x.(type) {
+	case a.T:
+		return "a: " + v.Describe()
+	case b.T:
+		return "b: " + v.Describe()
+	case a.S:
+		return v.Tag()
+	case b.S:
+		return v.Tag()
+	}
+	return "?"
+}
+
+func main() {
+	fmt.Println(a.F(), b.F(), a.V, b.V, a.Base, b.Base)
+	fmt.Println(a.T{N: 5}.Describe(), b.T{N: 5}.Describe())
+	fmt.Println(va.Describe(), vb.Describe())
+	fa, fb := a.New, b.New
+	fmt.Println(fa(2).Describe(), fb(2).Describe())
+	pa, pb := &va, &vb
+	pa.Bump()
+	pb.Bump()
+	pb.Bump()
+	fmt.Println(pa.N, pb.N)
+	fmt.Println(describe(va), describe(vb), describe(a.S("x")), describe(b.S("y")))
+	fmt.Println(a.S("p").Tag(), b.S("q").Tag(), string(a.S("r")))
+	fmt.Println(a.Local(), b.Local())
+}
+`)},
+		packages: []PackageSpec{dep("a", 100), dep("b", 200)},
+	}
+	want := goRunMapped(t, m)
+	if got := runMapped(t, m); got != want {
+		t.Fatalf("interp:\n%sgo run:\n%s", got, want)
+	}
+	const pinned = "1001 2001 1000 2000 100 200\na.T(5) b.T(5)\na.T(101) b.T(201)\na.T(102) b.T(202)\n102 203\na: a.T(102) b: b.T(203) a:x b:y\na:p b:q r\n100 200\n"
+	if want != pinned {
+		t.Fatalf("go run = %q, want %q", want, pinned)
+	}
+}
+
+// TestMappedProgramNameShadowsDependency pins that the program's own names
+// are untouched when a dependency declares the same ones: main's I, T, F
+// and global keep their spelling in the lowered file, and both sides run.
+func TestMappedProgramNameShadowsDependency(t *testing.T) {
+	m := mappedProgram{
+		program: []Source{src("main.go", `package main
+
+import (
+	"fmt"
+
+	"./dep"
+)
+
+type I interface{ Name() string }
+
+type T struct{}
+
+func (T) Name() string { return "main.T" }
+
+var global = "main global"
+
+func F() string { return "main F" }
+
+func main() {
+	var mine I = T{}
+	var theirs dep.I = dep.T{}
+	fmt.Println(mine.Name(), theirs.Name(), F(), dep.F(), global, dep.Global)
+	var both []I = []I{mine, theirs}
+	for _, i := range both {
+		fmt.Println(i.Name())
+	}
+}
+`)},
+		packages: []PackageSpec{{Path: "test/dep", Sources: []Source{src("dep.go", `package dep
+
+type I interface{ Name() string }
+
+type T struct{}
+
+func (T) Name() string { return "dep.T" }
+
+var Global = "dep global"
+
+var global = "dep unexported"
+
+func F() string { return "dep F " + global }
+`)}}},
+	}
+	want := goRunMapped(t, m)
+	if got := runMapped(t, m); got != want {
+		t.Fatalf("interp:\n%sgo run:\n%s", got, want)
+	}
+	if want != "main.T dep.T main F dep F dep unexported main global dep global\nmain.T\ndep.T\n" {
+		t.Fatalf("go run = %q", want)
+	}
+	prog, err := Load(m.program, m.options(true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := map[string]bool{}
+	for _, stmt := range prog.File.Stmts {
+		switch d := stmt.Cmd.(type) {
+		case *syntax.BashPPFuncDecl:
+			if d.Receiver == nil {
+				names[d.Name.Value] = true
+			} else {
+				names[d.Receiver.RecvType.Value+"."+d.Name.Value] = true
+			}
+		case *syntax.BashPPDecl:
+			names[d.Name.Value] = true
+		}
+	}
+	for _, name := range []string{"I", "T", "F", "global", "T.Name", "__gosource_pkg_0_I", "__gosource_pkg_0_T", "__gosource_pkg_0_F", "__gosource_pkg_0_global", "__gosource_pkg_0_Global", "__gosource_pkg_0_T.Name"} {
+		if !names[name] {
+			t.Errorf("%s missing from the lowered file; have %v", name, names)
+		}
+	}
+}
+
+// TestMappedEmbeddedTypeKeepsFieldName pins embedding across the map: an
+// embedded mapped type is selected by its Go field name, promotes its fields
+// and methods, and is addressable through a keyed composite literal, in the
+// program and inside a mapped package alike, by pointer and by value.
+func TestMappedEmbeddedTypeKeepsFieldName(t *testing.T) {
+	m := mappedProgram{
+		program: []Source{src("main.go", `package main
+
+import (
+	"fmt"
+
+	"./a"
+	"./b"
+)
+
+type Wrapper struct {
+	a.Base
+	Extra int
+}
+
+type PtrWrapper struct {
+	*a.Base
+}
+
+func main() {
+	w := Wrapper{Base: a.Base{ID: 1}, Extra: 2}
+	fmt.Println(w.ID, w.Base.ID, w.Label(), w.Extra)
+	w.Base.ID = 3
+	w.ID++
+	fmt.Println(w.ID, w.Label())
+	p := PtrWrapper{Base: &a.Base{ID: 7}}
+	fmt.Println(p.ID, p.Label(), p.Base.ID)
+	d := b.Derived{Base: a.Base{ID: 9}, Name: "d"}
+	fmt.Println(d.ID, d.Label(), d.Base.ID, d.Name, b.Show(d))
+	var l a.Labeler = w
+	fmt.Println(l.Label())
+}
+`)},
+		packages: []PackageSpec{
+			{Path: "test/a", Sources: []Source{src("a.go", `package a
+
+import "fmt"
+
+type Base struct{ ID int }
+
+func (b Base) Label() string { return fmt.Sprintf("base#%d", b.ID) }
+
+type Labeler interface{ Label() string }
+`)}},
+			{Path: "test/b", Sources: []Source{src("b.go", `package b
+
+import "./a"
+
+type Derived struct {
+	a.Base
+	Name string
+}
+
+func Show(d Derived) string { return d.Name + "/" + d.Label() }
+`)}},
+		},
+	}
+	want := goRunMapped(t, m)
+	if got := runMapped(t, m); got != want {
+		t.Fatalf("interp:\n%sgo run:\n%s", got, want)
+	}
+	if want != "1 1 base#1 2\n4 base#4\n7 base#7 7\n9 base#9 9 d d/base#9\nbase#4\n" {
+		t.Fatalf("go run = %q", want)
 	}
 }
 
@@ -384,10 +636,12 @@ func TestMappedEmbedIsRefused(t *testing.T) {
 	}
 }
 
-// TestMappedTypeNameKnownDifference documents the M1 limit the finding names:
-// the flat file spells every linked type under the program's package, so a
-// mapped a.T prints as main.T where go run prints a.T. Pinned, not hidden;
-// name mangling (M2) lifts it.
+// TestMappedTypeNameKnownDifference documents the limit that remains after
+// name mangling: the flat file spells every linked type under the program's
+// package, and a mapped type by its rename, so a mapped a.T prints as
+// main.__gosource_pkg_0_T where go run prints a.T. Pinned, not hidden; a
+// display name for the type would have to be registered by the native
+// dependency bridge, which mirrors the type into its helper under that name.
 func TestMappedTypeNameKnownDifference(t *testing.T) {
 	m := mappedProgram{
 		program: []Source{src("main.go", `package main
@@ -418,14 +672,15 @@ func Describe(t T) string { return fmt.Sprintf("%T", t) }
 	if want, got := "a.T {3} 3\na.T\n", goRunMapped(t, m); got != want {
 		t.Fatalf("go run = %q, want %q", got, want)
 	}
-	if want, got := "main.T {3} 3\nmain.T\n", runMapped(t, m); got != want {
+	if want, got := "main.__gosource_pkg_0_T {3} 3\nmain.__gosource_pkg_0_T\n", runMapped(t, m); got != want {
 		t.Fatalf("interp = %q, want the pinned known difference %q (if a mapped type now keeps its package, update this test and FINDINGS-M1.md)", got, want)
 	}
 }
 
 // TestMappedDiamondImportLinksOnce pins that a package imported by two linked
 // packages (b→a, c→a, main→b,c) is lowered once: one linked entry, one
-// function definition, one initialised variable, and go run's output.
+// function definition, one initialised variable — each under its mapped
+// rename, by map index — and go run's output.
 func TestMappedDiamondImportLinksOnce(t *testing.T) {
 	m := mappedProgram{
 		program: []Source{src("main.go", `package main
@@ -468,7 +723,7 @@ func main() { fmt.Println(b.G(), c.H(), b.G()+c.H()) }
 			defs[d.Name.Value]++
 		}
 	}
-	for _, name := range []string{"F", "next", "Counter", "calls", "G", "H"} {
+	for _, name := range []string{"__gosource_pkg_0_F", "__gosource_pkg_0_next", "__gosource_pkg_0_Counter", "__gosource_pkg_0_calls", "__gosource_pkg_1_G", "__gosource_pkg_2_H"} {
 		if defs[name] != 1 {
 			t.Fatalf("%s defined %d times in the lowered file", name, defs[name])
 		}
