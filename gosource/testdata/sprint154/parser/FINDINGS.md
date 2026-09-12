@@ -12,96 +12,96 @@ Notes: `chk-after-syn` = the root has syntax diagnostics AND go/types diagnostic
 
 | stage \ class | wording | position | multiplicity | extra | missing | pass | total |
 |---|---|---|---|---|---|---|---|
-| scanner | 3 | 0 | 0 | 0 | 0 | 0 | 3 |
-| parser | 33 | 1 | 9 | 4 | 0 | 0 | 47 |
-| checker | 6 | 0 | 6 | 3 | 1 | 0 | 16 |
-| pass | 0 | 0 | 0 | 0 | 0 | 17 | 17 |
+| scanner | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| parser | 1 | 0 | 0 | 0 | 0 | 0 | 1 |
+| checker | 1 | 0 | 0 | 1 | 1 | 0 | 3 |
+| pass | 0 | 0 | 0 | 0 | 0 | 79 | 79 |
 
 ## Rows
 
 | root | header | stage | class | expected (first failing) | got (first failing line) | notes |
 |---|---|---|---|---|---|---|
-| bombad.go | `errorcheck` | scanner | wording | L15 `BOM` | `bombad.go:15:4: illegal byte order mark` | +5 more |
-| fixedbugs/bug014.go | `errorcheck` | checker | multiplicity | L10 (none) | `bug014.go:10:18: malformed constant: '\0'` | chk-after-syn, +3 more |
-| fixedbugs/bug068.go | `errorcheck` | checker | multiplicity | L12 (none) | `bug068.go:12:11: malformed constant: "\'"` | chk-after-syn |
-| fixedbugs/bug121.go | `errorcheck` | parser | wording | L12 `unexpected comma` | `bug121.go:12:3: expected ';', found ','` | chk-after-syn, +3 more |
+| bombad.go | `errorcheck` | pass | pass |  |  |  |
+| fixedbugs/bug014.go | `errorcheck` | pass | pass |  |  |  |
+| fixedbugs/bug068.go | `errorcheck` | pass | pass |  |  |  |
+| fixedbugs/bug121.go | `errorcheck` | pass | pass |  |  |  |
 | fixedbugs/bug132.go | `errorcheck` | pass | pass |  |  | related=1 |
-| fixedbugs/bug136.go | `errorcheck` | checker | extra | L10 (none) | `bug136.go:10:2: label L declared and not used` | +1 more |
-| fixedbugs/bug163.go | `errorcheck` | parser | wording | L9 `invalid character .* in identifier` | `bug163.go:9:6: expected type, found 'ILLEGAL'` |  |
-| fixedbugs/bug169.go | `errorcheck` | checker | multiplicity | L8 (none) | `bug169.go:8:9: malformed constant: ''` | chk-after-syn, dup=2 |
-| fixedbugs/bug179.go | `errorcheck` | checker | extra | L18 (none) | `bug179.go:18:1: label L1 declared and not used` |  |
+| fixedbugs/bug136.go | `errorcheck` | pass | pass |  |  |  |
+| fixedbugs/bug163.go | `errorcheck` | pass | pass |  |  |  |
+| fixedbugs/bug169.go | `errorcheck` | pass | pass |  |  | dup=2 |
+| fixedbugs/bug179.go | `errorcheck` | pass | pass |  |  |  |
 | fixedbugs/bug200.go | `errorcheck` | pass | pass |  |  | related=1 |
-| fixedbugs/bug228.go | `errorcheck` | parser | multiplicity | L11 (none) | `bug228.go:11:30: expected type, found ')'` |  |
-| fixedbugs/bug274.go | `errorcheck` | parser | extra | L24 (none) | `bug274.go:24:2: expected statement, found 'case'` | chk-after-syn, +2 more |
-| fixedbugs/bug300.go | `errorcheck` | checker | multiplicity | L25 (none) | `bug300.go:25:8: invalid use of [...] array (outside a composite literal)` | chk-after-syn |
-| fixedbugs/bug349.go | `errorcheck` | parser | wording | L12 `unexpected literal 2.01\|expected ';' or '}' or newline\|not enough arguments to return` | `bug349.go:12:14: expected ';', found 2.01` | chk-after-syn, +2 more |
-| fixedbugs/bug388.go | `errorcheck` | checker | multiplicity | L12 (none) | `bug388.go:12:18: undefined: runtime.UintType` | chk-after-syn, +2 more |
+| fixedbugs/bug228.go | `errorcheck` | pass | pass |  |  |  |
+| fixedbugs/bug274.go | `errorcheck` | pass | pass |  |  |  |
+| fixedbugs/bug300.go | `errorcheck` | pass | pass |  |  |  |
+| fixedbugs/bug349.go | `errorcheck` | pass | pass |  |  |  |
+| fixedbugs/bug388.go | `errorcheck` | pass | pass |  |  |  |
 | fixedbugs/bug412.go | `errorcheck` | pass | pass |  |  | related=1 |
 | fixedbugs/bug416.go | `errorcheck` | pass | pass |  |  | related=1 |
-| fixedbugs/bug435.go | `errorcheck` | parser | multiplicity | L15 (none) | `bug435.go:15:48: expected ')', found 'EOF'` | chk-after-syn, +3 more |
-| fixedbugs/issue11359.go | `errorcheck` | parser | wording | L11 `identifier cannot begin with digit` | `issue11359.go:11:5: expected 'IDENT', found 'ILLEGAL'` |  |
+| fixedbugs/bug435.go | `errorcheck` | pass | pass |  |  |  |
+| fixedbugs/issue11359.go | `errorcheck` | pass | pass |  |  |  |
 | fixedbugs/issue11362.go | `errorcheck` | checker | missing | L11 `non-canonical import path .unicode//utf8. \(should be .unicode/utf8.\)` | (no diagnostic) |  |
-| fixedbugs/issue11610.go | `errorcheck` | parser | wording | L11 `invalid character U\+003F '\?'\|invalid character 0x3f in input file` | `issue11610.go:11:4: expected 'IDENT', found 'ILLEGAL'` |  |
-| fixedbugs/issue13248.go | `errorcheck` | parser | multiplicity | L13 (none) | `issue13248.go:13:52: expected ')', found 'EOF'` | chk-after-syn, dup=1, +4 more |
-| fixedbugs/issue13266.go | `errorcheck` | parser | wording | L10 `unexpected %\|package name must be an identifier\|after package clause\|expected declaration` | `issue13266.go:10:8: expected 'IDENT', found '%'` |  |
-| fixedbugs/issue13273.go | `errorcheck` | parser | wording | L51 `unexpected <-, expected chan\|expecting {` | `issue13273.go:51:4: expected 'chan'` | chk-after-syn, +6 more |
-| fixedbugs/issue13274.go | `errorcheck` | parser | multiplicity | L11 (none) | `issue13274.go:11:58: expected ';', found 'EOF'` |  |
-| fixedbugs/issue13319.go | `errorcheck` | parser | wording | L12 `expecting \)\|possibly missing comma or \)` | `issue13319.go:12:72: missing ',' before newline in argument list` | chk-after-syn, +11 more |
-| fixedbugs/issue14006.go | `errorcheck` | parser | wording | L24 `unexpected :\|expected .*;.* or .*}.* or newline\|value computed is not used` | `issue14006.go:24:4: illegal label declaration` | chk-after-syn, related=2, +15 more |
-| fixedbugs/issue14520.go | `errorcheck` | parser | wording | L9 `unexpected newline` | `issue14520.go:9:49: missing ',' before newline in parameter list` |  |
-| fixedbugs/issue15611.go | `errorcheck` | scanner | wording | L11 `newline in character literal\|newline in rune literal` | `issue15611.go:11: rune literal not terminated` | chk-after-syn, +5 more |
+| fixedbugs/issue11610.go | `errorcheck` | pass | pass |  |  |  |
+| fixedbugs/issue13248.go | `errorcheck` | pass | pass |  |  |  |
+| fixedbugs/issue13266.go | `errorcheck` | pass | pass |  |  |  |
+| fixedbugs/issue13273.go | `errorcheck` | pass | pass |  |  |  |
+| fixedbugs/issue13274.go | `errorcheck` | pass | pass |  |  |  |
+| fixedbugs/issue13319.go | `errorcheck` | pass | pass |  |  |  |
+| fixedbugs/issue14006.go | `errorcheck` | pass | pass |  |  |  |
+| fixedbugs/issue14520.go | `errorcheck` | pass | pass |  |  |  |
+| fixedbugs/issue15611.go | `errorcheck` | pass | pass |  |  |  |
 | fixedbugs/issue15898.go | `errorcheck` | pass | pass |  |  | related=2 |
-| fixedbugs/issue17328.go | `errorcheck` | parser | extra | L13 (none) | `issue17328.go:13:41: expected ';', found 'EOF'` | +1 more |
-| fixedbugs/issue18092.go | `errorcheck` | parser | wording | L14 `expected :` | `issue18092.go:14:38: expected ':', found newline` | chk-after-syn, +3 more |
-| fixedbugs/issue18747.go | `errorcheck` | parser | wording | L26 `unexpected newline, expected { after if clause` | `issue18747.go:26:66: unexpected newline, expecting { after if clause` | chk-after-syn, +4 more |
-| fixedbugs/issue18915.go | `errorcheck` | parser | wording | L13 `cannot use a := 10 as value\|expected .*;\|declared and not used` | `issue18915.go:13:5: expected boolean expression, found assignment (missing parentheses around composite lit...` | +2 more |
-| fixedbugs/issue19667.go | `errorcheck` | parser | multiplicity | L13 (none) | `issue19667.go:13:104: expected ')', found 'EOF'` | chk-after-syn, dup=5, +5 more |
-| fixedbugs/issue20789.go | `errorcheck` | parser | wording | L13 `unexpected name u` | `issue20789.go:13:13: expected channel type` | chk-after-syn |
-| fixedbugs/issue22164.go | `errorcheck` | parser | wording | L12 `unexpected newline` | `issue22164.go:12:42: missing ',' before newline in argument list` | chk-after-syn, +11 more |
-| fixedbugs/issue22581.go | `errorcheck` | parser | wording | L10 `unexpected \)` | `issue22581.go:10:13: expected ';', found ')'` | chk-after-syn, +9 more |
+| fixedbugs/issue17328.go | `errorcheck` | pass | pass |  |  |  |
+| fixedbugs/issue18092.go | `errorcheck` | pass | pass |  |  |  |
+| fixedbugs/issue18747.go | `errorcheck` | pass | pass |  |  |  |
+| fixedbugs/issue18915.go | `errorcheck` | pass | pass |  |  |  |
+| fixedbugs/issue19667.go | `errorcheck` | pass | pass |  |  |  |
+| fixedbugs/issue20789.go | `errorcheck` | pass | pass |  |  |  |
+| fixedbugs/issue22164.go | `errorcheck` | pass | pass |  |  |  |
+| fixedbugs/issue22581.go | `errorcheck` | pass | pass |  |  |  |
 | fixedbugs/issue23586.go | `errorcheck` | checker | extra | L15 (none) | `issue23586.go:15:2: "fmt" imported and not used` | chk-after-syn, +2 more |
-| fixedbugs/issue23587.go | `errorcheck` | parser | wording | L14 `unexpected ~ at end of statement` | `issue23587.go:14:8: expected ';', found '~'` | chk-after-syn, +3 more |
-| fixedbugs/issue23664.go | `errorcheck` | parser | wording | L12 `unexpected name true, expected {` | `issue23664.go:12:9: expected ';', found true` | chk-after-syn, +2 more |
+| fixedbugs/issue23587.go | `errorcheck` | pass | pass |  |  |  |
+| fixedbugs/issue23664.go | `errorcheck` | pass | pass |  |  |  |
 | fixedbugs/issue24159.go | `errorcheck` | pass | pass |  |  | related=3 |
 | fixedbugs/issue28085.go | `errorcheck` | pass | pass |  |  | related=1 |
 | fixedbugs/issue28268.go | `errorcheck` | pass | pass |  |  | related=2 |
-| fixedbugs/issue30722.go | `errorcheck` | checker | multiplicity | L12 (none) | `issue30722.go:12:6: malformed constant: 1_` | chk-after-syn, +4 more |
-| fixedbugs/issue32133.go | `errorcheck` | scanner | wording | L10 `newline in string` | `issue32133.go:10:8: string literal not terminated` | chk-after-syn, +6 more |
-| fixedbugs/issue33386.go | `errorcheck` | parser | extra | L20 (none) | `issue33386.go:20:2: expected ';', found 'defer'` | +12 more |
+| fixedbugs/issue30722.go | `errorcheck` | pass | pass |  |  |  |
+| fixedbugs/issue32133.go | `errorcheck` | pass | pass |  |  |  |
+| fixedbugs/issue33386.go | `errorcheck` | pass | pass |  |  |  |
 | fixedbugs/issue33460.go | `errorcheck` | pass | pass |  |  | related=3 |
-| fixedbugs/issue4405.go | `errorcheck` | parser | multiplicity | L11 (none) | `issue4405.go:11:3: expected ';', found 'ILLEGAL'` | +2 more |
-| fixedbugs/issue4776.go | `errorcheck` | parser | wording | L9 `package statement must be first\|package clause` | `issue4776.go:9:1: expected 'package', found 'type'` |  |
+| fixedbugs/issue4405.go | `errorcheck` | pass | pass |  |  |  |
+| fixedbugs/issue4776.go | `errorcheck` | pass | pass |  |  |  |
 | fixedbugs/issue50372.go | `errorcheck` | parser | wording | L16 `range clause permits at most two iteration variables` | `issue50372.go:16:19: expected at most 2 expressions` | chk-after-syn, +3 more |
 | fixedbugs/issue6977.go | `errorcheck` | pass | pass |  |  | related=4 |
-| fixedbugs/issue7538a.go | `errorcheck` | checker | wording | L14 `not defined\|undefined label` | `issue7538a.go:14:7: label _ not declared` |  |
-| goto.go | `errorcheck` | checker | wording | L42 `goto L jumps over declaration of x at goto.go:43\|goto jumps over declaration` | `goto.go:42:7: goto L jumps over variable declaration at line 43` | +33 more |
+| fixedbugs/issue7538a.go | `errorcheck` | pass | pass |  |  |  |
+| goto.go | `errorcheck` | pass | pass |  |  |  |
 | import6.go | `errorcheck` | checker | wording | L38 `import path cannot be absolute path\|not used` | `import6.go:38:8: could not import /foo (can't find import: "/foo": stat /foo.a: no such file or directory)` |  |
 | index1.go | `errorcheckoutput ./index.go` | pass | pass |  |  | dup=144 |
 | index2.go | `errorcheckoutput ./index.go` | pass | pass |  |  | dup=1128 |
-| label.go | `errorcheck` | checker | wording | L16 `label .*L1.* defined and not used` | `label.go:16:1: label L1 declared and not used` | related=1, +7 more |
-| label1.go | `errorcheck` | checker | wording | L18 `continue is not in a loop$\|continue statement not within for` | `label1.go:18:3: continue not in for statement` | +3 more |
+| label.go | `errorcheck` | pass | pass |  |  |  |
+| label1.go | `errorcheck` | pass | pass |  |  |  |
 | mainsig.go | `errorcheck` | pass | pass |  |  | related=1 |
-| switch2.go | `errorcheck` | parser | wording | L14 `expecting := or = or : or comma\|expected :` | `switch2.go:14:8: expected ':', found ';'` | chk-after-syn, +15 more |
+| switch2.go | `errorcheck` | pass | pass |  |  |  |
 | switch5.go | `errorcheck` | pass | pass |  |  | related=18 |
 | switch7.go | `errorcheck` | pass | pass |  |  | related=4 |
-| syntax/chan.go | `errorcheck` | parser | wording | L11 `unexpected .*}.* in channel type\|missing channel element type` | `chan.go:11:1: expected type, found '}'` | +2 more |
-| syntax/chan1.go | `errorcheck` | parser | wording | L13 `cannot use c <- v as value\|send statement used as value` | `chan1.go:13:5: expected boolean expression, found simple statement (missing parentheses around composite li...` | +1 more |
-| syntax/composite.go | `errorcheck` | parser | wording | L10 `need trailing comma before newline in composite literal\|possibly missing comma or }` | `composite.go:10:98: missing ',' before newline in composite literal` |  |
-| syntax/ddd.go | `errorcheck` | parser | wording | L10 `unexpected literal \.3, expected name or \(` | `ddd.go:10:6: expected selector or type assertion, found .3` | chk-after-syn |
-| syntax/else.go | `errorcheck` | parser | wording | L11 `else must be followed by if or statement block\|expected .if. or .{.` | `else.go:11:9: expected if statement or block, found ';'` |  |
-| syntax/import.go | `errorcheck` | parser | wording | L10 `unexpected comma` | `import.go:10:6: expected ';', found ','` | chk-after-syn, +1 more |
-| syntax/initvar.go | `errorcheck` | parser | wording | L12 `var declaration not allowed in switch initializer` | `initvar.go:12:9: expected '{', found 'var'` | chk-after-syn, +5 more |
-| syntax/semi1.go | `errorcheck` | parser | multiplicity | L10 (none) | `semi1.go:10:62: expected '{', found newline` | chk-after-syn, dup=1, +7 more |
-| syntax/semi2.go | `errorcheck` | parser | multiplicity | L10 (none) | `semi2.go:10:68: expected '{', found newline` | chk-after-syn, dup=1, +4 more |
-| syntax/semi3.go | `errorcheck` | parser | multiplicity | L10 (none) | `semi3.go:10:66: expected '{', found newline` | chk-after-syn, dup=2, +7 more |
-| syntax/semi4.go | `errorcheck` | parser | wording | L11 `unexpected {, expected for loop condition\|expecting .*{.* after for clause` | `semi4.go:11:2: expected operand, found '{'` | chk-after-syn, +8 more |
-| syntax/semi5.go | `errorcheck` | parser | extra | L13 (none) | `semi5.go:13:2: expected ';', found 'EOF'` | +1 more |
-| syntax/semi6.go | `errorcheck` | parser | wording | L9 `newline in type declaration` | `semi6.go:9:47: expected type, found newline` | +1 more |
-| syntax/semi7.go | `errorcheck` | parser | wording | L11 `unexpected semicolon or newline before .?else.?\|unexpected keyword else` | `semi7.go:11:2: expected statement, found 'else'` | chk-after-syn, +3 more |
-| syntax/topexpr.go | `errorcheck` | parser | position | L14 `non-declaration statement outside function body\|expected declaration` | `topexpr.go:9:1: expected declaration, found fmt` | +1 more |
-| syntax/typesw.go | `errorcheck` | checker | wording | L10 `invalid variable name\|cannot use .* as value` | `typesw.go:10:2: invalid syntax tree: incorrect form of type switch guard` |  |
-| syntax/vareq.go | `errorcheck` | parser | wording | L10 `unexpected { at end of statement\|expected ';' or '}' or newline` | `vareq.go:10:25: expected ';', found '{'` | chk-after-syn |
-| syntax/vareq1.go | `errorcheck` | parser | wording | L9 `unexpected { at end of statement\|unexpected { after top level declaration\|expected ';' or newline after t...` | `vareq1.go:9:24: expected ';', found '{'` |  |
+| syntax/chan.go | `errorcheck` | pass | pass |  |  |  |
+| syntax/chan1.go | `errorcheck` | pass | pass |  |  |  |
+| syntax/composite.go | `errorcheck` | pass | pass |  |  |  |
+| syntax/ddd.go | `errorcheck` | pass | pass |  |  |  |
+| syntax/else.go | `errorcheck` | pass | pass |  |  |  |
+| syntax/import.go | `errorcheck` | pass | pass |  |  |  |
+| syntax/initvar.go | `errorcheck` | pass | pass |  |  |  |
+| syntax/semi1.go | `errorcheck` | pass | pass |  |  |  |
+| syntax/semi2.go | `errorcheck` | pass | pass |  |  |  |
+| syntax/semi3.go | `errorcheck` | pass | pass |  |  |  |
+| syntax/semi4.go | `errorcheck` | pass | pass |  |  |  |
+| syntax/semi5.go | `errorcheck` | pass | pass |  |  |  |
+| syntax/semi6.go | `errorcheck` | pass | pass |  |  |  |
+| syntax/semi7.go | `errorcheck` | pass | pass |  |  |  |
+| syntax/topexpr.go | `errorcheck` | pass | pass |  |  |  |
+| syntax/typesw.go | `errorcheck` | pass | pass |  |  |  |
+| syntax/vareq.go | `errorcheck` | pass | pass |  |  |  |
+| syntax/vareq1.go | `errorcheck` | pass | pass |  |  |  |
 | typeparam/issue48711.go | `errorcheck` | pass | pass |  |  | related=1 |
 | typeswitch2.go | `errorcheck` | pass | pass |  |  | related=3 |
 
@@ -109,319 +109,21 @@ Notes: `chk-after-syn` = the root has syntax diagnostics AND go/types diagnostic
 
 Roots whose every failure is a scanner/parser diagnostic in class `wording` — the rows a different parser wording alone would close.
 
-- fixedbugs/bug163.go — L9 want `invalid character .* in identifier` got `bug163.go:9:6: expected type, found 'ILLEGAL'`
-- fixedbugs/issue11359.go — L11 want `identifier cannot begin with digit` got `issue11359.go:11:5: expected 'IDENT', found 'ILLEGAL'`
-- fixedbugs/issue11610.go — L11 want `invalid character U\+003F '\?'\|invalid character 0x3f in input file` got `issue11610.go:11:4: expected 'IDENT', found 'ILLEGAL'`
-- fixedbugs/issue13266.go — L10 want `unexpected %\|package name must be an identifier\|after package clause\|expected declaration` got `issue13266.go:10:8: expected 'IDENT', found '%'`
-- fixedbugs/issue14520.go — L9 want `unexpected newline` got `issue14520.go:9:49: missing ',' before newline in parameter list`
-- fixedbugs/issue18915.go — L13 want `cannot use a := 10 as value\|expected .*;\|declared and not used` got `issue18915.go:13:5: expected boolean expression, found assignment (missing parentheses around composite lit...`
-- fixedbugs/issue20789.go — L13 want `unexpected name u` got `issue20789.go:13:13: expected channel type`
-- fixedbugs/issue4776.go — L9 want `package statement must be first\|package clause` got `issue4776.go:9:1: expected 'package', found 'type'`
 - fixedbugs/issue50372.go — L16 want `range clause permits at most two iteration variables` got `issue50372.go:16:19: expected at most 2 expressions`
-- syntax/chan.go — L11 want `unexpected .*}.* in channel type\|missing channel element type` got `chan.go:11:1: expected type, found '}'`
-- syntax/chan1.go — L13 want `cannot use c <- v as value\|send statement used as value` got `chan1.go:13:5: expected boolean expression, found simple statement (missing parentheses around composite li...`
-- syntax/composite.go — L10 want `need trailing comma before newline in composite literal\|possibly missing comma or }` got `composite.go:10:98: missing ',' before newline in composite literal`
-- syntax/ddd.go — L10 want `unexpected literal \.3, expected name or \(` got `ddd.go:10:6: expected selector or type assertion, found .3`
-- syntax/else.go — L11 want `else must be followed by if or statement block\|expected .if. or .{.` got `else.go:11:9: expected if statement or block, found ';'`
-- syntax/semi6.go — L9 want `newline in type declaration` got `semi6.go:9:47: expected type, found newline`
-- syntax/vareq.go — L10 want `unexpected { at end of statement\|expected ';' or '}' or newline` got `vareq.go:10:25: expected ';', found '{'`
-- syntax/vareq1.go — L9 want `unexpected { at end of statement\|unexpected { after top level declaration\|expected ';' or newline after t...` got `vareq1.go:9:24: expected ';', found '{'`
 
-wording-only parser/scanner rows: 17
+wording-only parser/scanner rows: 1
 
 ## Failure detail (every failure, per root)
-
-### bombad.go (scanner/wording; 4 wants, 7 diagnostics)
-
-- scanner/wording L15 want `BOM` got `bombad.go:15:4: illegal byte order mark`
-- scanner/wording L16 want `BOM` got `bombad.go:16:4: illegal byte order mark`
-- scanner/wording L17 want `BOM` got `bombad.go:17:13: illegal byte order mark`
-- parser/wording L14 want `BOM` got `bombad.go:14:2: expected statement, found 'ILLEGAL'`
-- parser/extra L18 got `bombad.go:18:3: expected ';', found 'EOF'`
-- parser/extra L18 got `bombad.go:18:3: expected '}', found 'EOF'`
-
-### fixedbugs/bug014.go (checker/multiplicity; 4 wants, 8 diagnostics)
-
-- checker/multiplicity L10 got `bug014.go:10:18: malformed constant: '\0'`
-- checker/multiplicity L11 got `bug014.go:11:18: malformed constant: '\07'`
-- checker/multiplicity L12 got `bug014.go:12:18: malformed constant: '\x0'`
-- checker/multiplicity L13 got `bug014.go:13:18: malformed constant: '\x'`
-
-### fixedbugs/bug068.go (checker/multiplicity; 1 wants, 2 diagnostics)
-
-- checker/multiplicity L12 got `bug068.go:12:11: malformed constant: "\'"`
-
-### fixedbugs/bug121.go (parser/wording; 2 wants, 6 diagnostics)
-
-- parser/wording L12 want `unexpected comma` got `bug121.go:12:3: expected ';', found ','`
-- parser/wording L16 want `syntax\|signature` got `bug121.go:16:4: expected ';', found T`
-- parser/extra L17 got `bug121.go:17:3: expected ';', found 'EOF'`
-- parser/extra L17 got `bug121.go:17:3: expected '}', found 'EOF'`
-
-### fixedbugs/bug136.go (checker/extra; 2 wants, 4 diagnostics)
-
-- checker/extra L10 got `bug136.go:10:2: label L declared and not used`
-- checker/extra L16 got `bug136.go:16:2: label L1 declared and not used`
-
-### fixedbugs/bug163.go (parser/wording; 1 wants, 2 diagnostics)
-
-- parser/wording L9 want `invalid character .* in identifier` got `bug163.go:9:6: expected type, found 'ILLEGAL'`
-
-### fixedbugs/bug169.go (checker/multiplicity; 1 wants, 4 diagnostics)
-
-- checker/multiplicity L8 got `bug169.go:8:9: malformed constant: ''`
-
-### fixedbugs/bug179.go (checker/extra; 4 wants, 5 diagnostics)
-
-- checker/extra L18 got `bug179.go:18:1: label L1 declared and not used`
-
-### fixedbugs/bug228.go (parser/multiplicity; 3 wants, 4 diagnostics)
-
-- parser/multiplicity L11 got `bug228.go:11:30: expected type, found ')'`
-
-### fixedbugs/bug274.go (parser/extra; 2 wants, 2 diagnostics)
-
-- parser/extra L24 got `bug274.go:24:2: expected statement, found 'case'`
-- parser/position L25 want `statement` got `bug274.go:24:2: expected statement, found 'case'`
-- checker/wording L23 want `statement` got `bug274.go:23:3: label L0 declared and not used`
-
-### fixedbugs/bug300.go (checker/multiplicity; 6 wants, 7 diagnostics)
-
-- checker/multiplicity L25 got `bug300.go:25:8: invalid use of [...] array (outside a composite literal)`
-
-### fixedbugs/bug349.go (parser/wording; 1 wants, 4 diagnostics)
-
-- parser/wording L12 want `unexpected literal 2.01\|expected ';' or '}' or newline\|not enough arguments to return` got `bug349.go:12:14: expected ';', found 2.01`
-- parser/extra L13 got `bug349.go:13:3: expected ';', found 'EOF'`
-- parser/extra L13 got `bug349.go:13:3: expected '}', found 'EOF'`
-
-### fixedbugs/bug388.go (checker/multiplicity; 3 wants, 6 diagnostics)
-
-- checker/multiplicity L12 got `bug388.go:12:18: undefined: runtime.UintType`
-- checker/extra L13 got `bug388.go:13:21: undefined: runtime.UintType`
-- checker/extra L28 got `bug388.go:28:2: undefined: bar`
-
-### fixedbugs/bug435.go (parser/multiplicity; 1 wants, 5 diagnostics)
-
-- parser/multiplicity L15 got `bug435.go:15:48: expected ')', found 'EOF'`
-- parser/multiplicity L15 got `bug435.go:15:48: expected ';', found 'EOF'`
-- parser/multiplicity L15 got `bug435.go:15:48: expected ';', found 'EOF'`
-- parser/multiplicity L15 got `bug435.go:15:48: expected '}', found 'EOF'`
-
-### fixedbugs/issue11359.go (parser/wording; 1 wants, 2 diagnostics)
-
-- parser/wording L11 want `identifier cannot begin with digit` got `issue11359.go:11:5: expected 'IDENT', found 'ILLEGAL'`
 
 ### fixedbugs/issue11362.go (checker/missing; 1 wants, 0 diagnostics)
 
 - checker/missing L11 want `non-canonical import path .unicode//utf8. \(should be .unicode/utf8.\)`
-
-### fixedbugs/issue11610.go (parser/wording; 2 wants, 3 diagnostics)
-
-- parser/wording L11 want `invalid character U\+003F '\?'\|invalid character 0x3f in input file` got `issue11610.go:11:4: expected 'IDENT', found 'ILLEGAL'`
-
-### fixedbugs/issue13248.go (parser/multiplicity; 1 wants, 7 diagnostics)
-
-- parser/multiplicity L13 got `issue13248.go:13:52: expected ')', found 'EOF'`
-- parser/multiplicity L13 got `issue13248.go:13:52: expected ';', found 'EOF'`
-- parser/multiplicity L13 got `issue13248.go:13:52: expected ';', found 'EOF'`
-- parser/multiplicity L13 got `issue13248.go:13:52: expected '}', found 'EOF'`
-- checker/extra L12 got `issue13248.go:12:5: undefined: foo`
-
-### fixedbugs/issue13266.go (parser/wording; 1 wants, 2 diagnostics)
-
-- parser/wording L10 want `unexpected %\|package name must be an identifier\|after package clause\|expected declaration` got `issue13266.go:10:8: expected 'IDENT', found '%'`
-
-### fixedbugs/issue13273.go (parser/wording; 4 wants, 11 diagnostics)
-
-- parser/wording L51 want `unexpected <-, expected chan\|expecting {` got `issue13273.go:51:4: expected 'chan'`
-- parser/multiplicity L53 got `issue13273.go:53:128: expected type, found newline`
-- parser/wording L54 want `unexpected int, expected chan\|expecting {` got `issue13273.go:54:8: expected channel type`
-- checker/extra L24 got `issue13273.go:24:4: invalid operation: cannot receive from send-only channel chan<- chan int chan<- chan in...`
-- checker/extra L25 got `issue13273.go:25:4: invalid operation: cannot receive from send-only channel chan<- chan<- chan int chan<- ...`
-- checker/extra L26 got `issue13273.go:26:4: invalid operation: cannot receive from send-only channel chan<- chan<- chan<- chan int ...`
-- checker/extra L27 got `issue13273.go:27:4: invalid operation: cannot receive from send-only channel chan<- chan<- chan<- chan<- ch...`
-
-### fixedbugs/issue13274.go (parser/multiplicity; 1 wants, 2 diagnostics)
-
-- parser/multiplicity L11 got `issue13274.go:11:58: expected ';', found 'EOF'`
-
-### fixedbugs/issue13319.go (parser/wording; 2 wants, 12 diagnostics)
-
-- parser/wording L12 want `expecting \)\|possibly missing comma or \)` got `issue13319.go:12:72: missing ',' before newline in argument list`
-- parser/extra L13 got `issue13319.go:13:5: expected operand, found 'case'`
-- parser/missing L16 want `expecting \)\|possibly missing comma or \)`
-- parser/extra L18 got `issue13319.go:18:3: expected ')', found 'EOF'`
-- parser/extra L18 got `issue13319.go:18:3: expected ';', found 'EOF'`
-- parser/extra L18 got `issue13319.go:18:3: expected ';', found 'EOF'`
-- parser/extra L18 got `issue13319.go:18:3: expected ';', found 'EOF'`
-- parser/extra L18 got `issue13319.go:18:3: expected '}', found 'EOF'`
-- parser/extra L18 got `issue13319.go:18:3: expected '}', found 'EOF'`
-- parser/extra L18 got `issue13319.go:18:3: missing ',' in argument list`
-- checker/extra L10 got `issue13319.go:10:12: undefined: x`
-- checker/extra L13 got `issue13319.go:13:5: too many arguments in call to f ⏎ 	have (number, unknown type, unknown type) ⏎ 	wan...`
-
-### fixedbugs/issue14006.go (parser/wording; 7 wants, 16 diagnostics)
-
-- parser/wording L24 want `unexpected :\|expected .*;.* or .*}.* or newline\|value computed is not used` got `issue14006.go:24:4: illegal label declaration`
-- parser/extra L25 got `issue14006.go:25:2: expected ';', found 'case'`
-- parser/wording L30 want `unexpected :\|expected .*;.* or .*}.* or newline\|value computed is not used` got `issue14006.go:30:4: illegal label declaration`
-- parser/wording L37 want `unexpected :\|expected .*;.* or .*}.* or newline\|value computed is not used` got `issue14006.go:37:8: illegal label declaration`
-- parser/extra L38 got `issue14006.go:38:2: expected ';', found 'case'`
-- parser/wording L43 want `unexpected :\|expected .*;.* or .*}.* or newline\|value computed is not used` got `issue14006.go:43:8: illegal label declaration`
-- parser/extra L51 got `issue14006.go:51:2: expected statement, found 'case'`
-- parser/extra L67 got `issue14006.go:67:3: expected ';', found 'EOF'`
-- parser/extra L67 got `issue14006.go:67:3: expected ';', found 'EOF'`
-- parser/extra L67 got `issue14006.go:67:3: expected ';', found 'EOF'`
-- parser/extra L67 got `issue14006.go:67:3: expected '}', found 'EOF'`
-- parser/extra L67 got `issue14006.go:67:3: expected '}', found 'EOF'`
-- parser/extra L67 got `issue14006.go:67:3: expected '}', found 'EOF'`
-- checker/wording L50 want `missing statement after label` got `issue14006.go:50:3: label labelname declared and not used`
-- checker/wording L59 want `label labelname defined and not used\|previous definition\|defined and not used` got `issue14006.go:59:3: label labelname already declared ⏎ 	issue14006.go:50:3: other declaration of labelname`
-- checker/wording L64 want `label labelname already defined at issue14006.go:59\|label .*labelname.* already defined` got `issue14006.go:64:3: label labelname already declared ⏎ 	issue14006.go:50:3: other declaration of labelname`
-
-### fixedbugs/issue14520.go (parser/wording; 1 wants, 1 diagnostics)
-
-- parser/wording L9 want `unexpected newline` got `issue14520.go:9:49: missing ',' before newline in parameter list`
-
-### fixedbugs/issue15611.go (scanner/wording; 4 wants, 9 diagnostics)
-
-- scanner/wording L11 want `newline in character literal\|newline in rune literal` got `issue15611.go:11: rune literal not terminated`
-- scanner/wording L15 want `empty character literal or unescaped ' in character literal\|empty rune literal` got `issue15611.go:15:6: illegal rune literal`
-- scanner/wording L17 want `invalid character literal \(more than one character\)\|more than one character in rune literal` got `issue15611.go:17:6: illegal rune literal`
-- parser/multiplicity L12 got `issue15611.go:12: expected ')', found 'EOF'`
-- parser/multiplicity L12 got `issue15611.go:12: expected ';', found 'EOF'`
-- checker/multiplicity L12 got `issue15611.go:12: malformed constant: '`
-
-### fixedbugs/issue17328.go (parser/extra; 1 wants, 3 diagnostics)
-
-- parser/extra L13 got `issue17328.go:13:41: expected ';', found 'EOF'`
-- parser/extra L13 got `issue17328.go:13:41: expected '}', found 'EOF'`
-
-### fixedbugs/issue18092.go (parser/wording; 1 wants, 4 diagnostics)
-
-- parser/wording L14 want `expected :` got `issue18092.go:14:38: expected ':', found newline`
-- parser/extra L15 got `issue18092.go:15:3: expected ';', found 'EOF'`
-- parser/extra L15 got `issue18092.go:15:3: expected '}', found 'EOF'`
-- checker/extra L13 got `issue18092.go:13:9: ch (local variable) is not a type`
-
-### fixedbugs/issue18747.go (parser/wording; 6 wants, 11 diagnostics)
-
-- parser/wording L26 want `unexpected newline, expected { after if clause` got `issue18747.go:26:66: unexpected newline, expecting { after if clause`
-- checker/multiplicity L17 got `issue18747.go:17:5: undefined: foo`
-- checker/multiplicity L19 got `issue18747.go:19:5: undefined: foo`
-- checker/extra L22 got `issue18747.go:22:5: undefined: foo`
-- checker/extra L24 got `issue18747.go:24:7: undefined: foo`
-
-### fixedbugs/issue18915.go (parser/wording; 3 wants, 3 diagnostics)
-
-- parser/wording L13 want `cannot use a := 10 as value\|expected .*;\|declared and not used` got `issue18915.go:13:5: expected boolean expression, found assignment (missing parentheses around composite lit...`
-- parser/wording L16 want `cannot use b := 10 as value\|parse error\|declared and not used` got `issue18915.go:16:6: expected boolean or range expression, found assignment (missing parentheses around comp...`
-- parser/wording L19 want `cannot use c := 10 as value\|expected .*;\|declared and not used` got `issue18915.go:19:9: expected switch expression, found assignment (missing parentheses around composite lite...`
-
-### fixedbugs/issue19667.go (parser/multiplicity; 1 wants, 12 diagnostics)
-
-- parser/multiplicity L13 got `issue19667.go:13:104: expected ')', found 'EOF'`
-- parser/multiplicity L13 got `issue19667.go:13:104: expected '}', found 'EOF'`
-- parser/multiplicity L13 got `issue19667.go:13:104: expected '}', found 'EOF'`
-- parser/multiplicity L13 got `issue19667.go:13:104: missing ',' in argument list`
-- checker/extra L12 got `issue19667.go:12:12: undefined: http`
-- checker/extra L12 got `issue19667.go:12:5: declared and not used: err`
-
-### fixedbugs/issue20789.go (parser/wording; 1 wants, 17 diagnostics)
-
-- parser/wording L13 want `unexpected name u` got `issue20789.go:13:13: expected channel type`
-
-### fixedbugs/issue22164.go (parser/wording; 3 wants, 14 diagnostics)
-
-- parser/wording L12 want `unexpected newline` got `issue22164.go:12:42: missing ',' before newline in argument list`
-- parser/extra L13 got `issue22164.go:13:4: missing ',' in argument list`
-- parser/extra L13 got `issue22164.go:13:8: missing ',' before newline in argument list`
-- parser/extra L14 got `issue22164.go:14:1: expected operand, found '}'`
-- parser/missing L20 want `unexpected newline`
-- parser/missing L24 want `unexpected newline`
-- parser/extra L26 got `issue22164.go:26:2: expected ')', found 'EOF'`
-- parser/extra L26 got `issue22164.go:26:2: expected ';', found 'EOF'`
-- parser/extra L26 got `issue22164.go:26:2: expected ';', found 'EOF'`
-- parser/extra L26 got `issue22164.go:26:2: expected '}', found 'EOF'`
-- parser/extra L26 got `issue22164.go:26:2: missing ',' in argument list`
-- checker/extra L13 got `issue22164.go:13:2: undefined: y`
-
-### fixedbugs/issue22581.go (parser/wording; 6 wants, 23 diagnostics)
-
-- parser/wording L10 want `unexpected \)` got `issue22581.go:10:13: expected ';', found ')'`
-- parser/wording L13 want `unexpected \]` got `issue22581.go:13:2: expected '{', found 'if'`
-- parser/wording L16 want `unexpected \)` got `issue22581.go:16:9: expected switch expression, found assignment (missing parentheses around composite lite...`
-- parser/wording L19 want `unexpected \]` got `issue22581.go:19:12: expected '{', found ']'`
-- parser/wording L22 want `unexpected \)` got `issue22581.go:22:6: expected boolean or range expression, found assignment (missing parentheses around comp...`
-- parser/wording L25 want `unexpected \]` got `issue22581.go:25:9: expected '{', found ']'`
-- parser/extra L27 got `issue22581.go:27:3: expected ';', found 'EOF'`
-- parser/extra L27 got `issue22581.go:27:3: expected ';', found 'EOF'`
-- parser/extra L27 got `issue22581.go:27:3: expected '}', found 'EOF'`
-- parser/extra L27 got `issue22581.go:27:3: expected '}', found 'EOF'`
 
 ### fixedbugs/issue23586.go (checker/extra; 3 wants, 6 diagnostics)
 
 - checker/extra L15 got `issue23586.go:15:2: "fmt" imported and not used`
 - checker/extra L16 got `issue23586.go:16:2: "math" imported and not used`
 - checker/extra L20 got `issue23586.go:20:6: declared and not used: i`
-
-### fixedbugs/issue23587.go (parser/wording; 1 wants, 4 diagnostics)
-
-- parser/wording L14 want `unexpected ~ at end of statement` got `issue23587.go:14:8: expected ';', found '~'`
-- parser/extra L15 got `issue23587.go:15:3: expected ';', found 'EOF'`
-- parser/extra L15 got `issue23587.go:15:3: expected '}', found 'EOF'`
-- checker/extra L10 got `issue23587.go:10:6: cannot use ~ outside of interface or type constraint (use ^ for bitwise complement)`
-
-### fixedbugs/issue23664.go (parser/wording; 2 wants, 5 diagnostics)
-
-- parser/wording L12 want `unexpected name true, expected {` got `issue23664.go:12:9: expected ';', found true`
-- parser/wording L15 want `unexpected name true, expected {` got `issue23664.go:15:13: expected '{', found true`
-- parser/extra L17 got `issue23664.go:17:1: expected declaration, found '}'`
-
-### fixedbugs/issue30722.go (checker/multiplicity; 5 wants, 10 diagnostics)
-
-- checker/multiplicity L12 got `issue30722.go:12:6: malformed constant: 1_`
-- checker/multiplicity L13 got `issue30722.go:13:6: malformed constant: 0b`
-- checker/multiplicity L14 got `issue30722.go:14:6: malformed constant: 0o`
-- checker/multiplicity L15 got `issue30722.go:15:6: malformed constant: 0x`
-- checker/multiplicity L16 got `issue30722.go:16:6: malformed constant: 0xde__ad`
-
-### fixedbugs/issue32133.go (scanner/wording; 7 wants, 16 diagnostics)
-
-- scanner/wording L10 want `newline in string` got `issue32133.go:10:8: string literal not terminated`
-- scanner/wording L11 want `newline in character literal\|newline in rune literal` got `issue32133.go:11:2: rune literal not terminated`
-- scanner/wording L12 want `newline in string` got `issue32133.go:12:2: string literal not terminated`
-- scanner/wording L13 want `string not terminated` got `issue32133.go:13:2: raw string literal not terminated`
-- checker/multiplicity L20 got `issue32133.go:20:2: malformed constant: 0x`
-- checker/multiplicity L24 got `issue32133.go:24:2: 0x1.0 (untyped float constant 1) is not used`
-- checker/multiplicity L28 got `issue32133.go:28:2: malformed constant: 0_i`
-
-### fixedbugs/issue33386.go (parser/extra; 5 wants, 12 diagnostics)
-
-- parser/extra L20 got `issue33386.go:20:2: expected ';', found 'defer'`
-- parser/extra L20 got `issue33386.go:20:7: expression in go must be function call`
-- parser/position L26 want `expected expression\|expected operand` got `issue33386.go:16:2: expected operand, found '}'`
-- parser/position L27 want `expected expression\|expected operand\|undefined name` got `issue33386.go:16:2: expected operand, found '}'`
-- parser/position L28 want `expected expression\|expected operand` got `issue33386.go:16:2: expected operand, found '}'`
-- parser/extra L29 got `issue33386.go:29:3: expected ';', found 'EOF'`
-- parser/extra L29 got `issue33386.go:29:3: expected ';', found 'EOF'`
-- parser/extra L29 got `issue33386.go:29:3: expected ';', found 'EOF'`
-- parser/extra L29 got `issue33386.go:29:3: expected ';', found 'EOF'`
-- parser/extra L29 got `issue33386.go:29:3: expected '}', found 'EOF'`
-- parser/extra L29 got `issue33386.go:29:3: expected '}', found 'EOF'`
-- parser/extra L29 got `issue33386.go:29:3: expected '}', found 'EOF'`
-- parser/extra L29 got `issue33386.go:29:3: expression in defer must be function call`
-
-### fixedbugs/issue4405.go (parser/multiplicity; 4 wants, 7 diagnostics)
-
-- parser/multiplicity L11 got `issue4405.go:11:3: expected ';', found 'ILLEGAL'`
-- parser/extra L15 got `issue4405.go:15:3: expected ')', found 'EOF'`
-- parser/extra L15 got `issue4405.go:15:3: expected ';', found 'EOF'`
-
-### fixedbugs/issue4776.go (parser/wording; 1 wants, 2 diagnostics)
-
-- parser/wording L9 want `package statement must be first\|package clause` got `issue4776.go:9:1: expected 'package', found 'type'`
 
 ### fixedbugs/issue50372.go (parser/wording; 5 wants, 5 diagnostics)
 
@@ -430,200 +132,9 @@ wording-only parser/scanner rows: 17
 - parser/wording L27 want `range over .* permits only one iteration variable` got `issue50372.go:27:19: expected at most 2 expressions`
 - parser/wording L28 want `range over .* permits only one iteration variable` got `issue50372.go:28:22: expected at most 2 expressions`
 
-### fixedbugs/issue7538a.go (checker/wording; 1 wants, 1 diagnostics)
-
-- checker/wording L14 want `not defined\|undefined label` got `issue7538a.go:14:7: label _ not declared`
-
-### goto.go (checker/wording; 34 wants, 34 diagnostics)
-
-- checker/wording L42 want `goto L jumps over declaration of x at goto.go:43\|goto jumps over declaration` got `goto.go:42:7: goto L jumps over variable declaration at line 43`
-- checker/wording L60 want `goto L jumps over declaration of x at goto.go:65\|goto jumps over declaration` got `goto.go:60:7: goto L jumps over variable declaration at line 65`
-- checker/wording L80 want `goto L jumps over declaration of y at goto.go:83\|goto jumps over declaration` got `goto.go:80:7: goto L jumps over variable declaration at line 83`
-- checker/wording L90 want `goto L jumps over declaration of y at goto.go:93\|goto jumps over declaration` got `goto.go:90:7: goto L jumps over variable declaration at line 93`
-- checker/wording L117 want `goto L jumps into block starting at goto.go:118\|goto jumps into block` got `goto.go:117:7: goto L jumps into block`
-- checker/wording L128 want `goto L jumps into block starting at goto.go:125\|goto jumps into block` got `goto.go:128:7: goto L jumps into block`
-- checker/wording L133 want `goto L jumps into block starting at goto.go:136\|goto jumps into block` got `goto.go:133:7: goto L jumps into block`
-- checker/wording L145 want `goto L jumps into block starting at goto.go:148\|goto jumps into block` got `goto.go:145:7: goto L jumps into block`
-- checker/wording L182 want `goto L jumps into block starting at goto.go:183\|goto jumps into block` got `goto.go:182:7: goto L jumps into block`
-- checker/wording L189 want `goto L jumps into block starting at goto.go:190\|goto jumps into block` got `goto.go:189:7: goto L jumps into block`
-- checker/wording L197 want `goto L jumps into block starting at goto.go:199\|goto jumps into block` got `goto.go:197:7: goto L jumps into block`
-- checker/wording L208 want `goto L jumps into block starting at goto.go:205\|goto jumps into block` got `goto.go:208:8: goto L jumps into block`
-- checker/wording L214 want `goto L jumps into block starting at goto.go:215\|goto jumps into block` got `goto.go:214:8: goto L jumps into block`
-- checker/wording L222 want `goto L jumps into block starting at goto.go:223\|goto jumps into block` got `goto.go:222:8: goto L jumps into block`
-- checker/wording L230 want `goto L jumps into block starting at goto.go:231\|goto jumps into block` got `goto.go:230:8: goto L jumps into block`
-- checker/wording L244 want `goto L jumps into block starting at goto.go:246\|goto jumps into block` got `goto.go:244:8: goto L jumps into block`
-- checker/wording L293 want `goto L jumps into block starting at goto.go:290\|goto jumps into block` got `goto.go:293:7: goto L jumps into block`
-- checker/wording L302 want `goto L1 jumps into block starting at goto.go:297\|goto jumps into block` got `goto.go:302:7: goto L1 jumps into block`
-- checker/wording L309 want `goto L jumps into block starting at goto.go:306\|goto jumps into block` got `goto.go:309:7: goto L jumps into block`
-- checker/wording L316 want `goto L jumps into block starting at goto.go:313\|goto jumps into block` got `goto.go:316:7: goto L jumps into block`
-- checker/wording L323 want `goto L jumps into block starting at goto.go:320\|goto jumps into block` got `goto.go:323:7: goto L jumps into block`
-- checker/wording L330 want `goto L jumps into block starting at goto.go:327\|goto jumps into block` got `goto.go:330:7: goto L jumps into block`
-- checker/wording L337 want `goto L jumps into block starting at goto.go:334\|goto jumps into block` got `goto.go:337:7: goto L jumps into block`
-- checker/wording L344 want `goto L jumps into block starting at goto.go:341\|goto jumps into block` got `goto.go:344:7: goto L jumps into block`
-- checker/wording L398 want `goto L jumps into block starting at goto.go:400\|goto jumps into block` got `goto.go:398:7: goto L jumps into block`
-- checker/wording L406 want `goto L jumps into block starting at goto.go:408\|goto jumps into block` got `goto.go:406:7: goto L jumps into block`
-- checker/wording L416 want `goto L jumps into block starting at goto.go:419\|goto jumps into block` got `goto.go:416:7: goto L jumps into block`
-- checker/wording L427 want `goto L jumps into block starting at goto.go:428\|goto jumps into block` got `goto.go:427:8: goto L jumps into block`
-- checker/wording L439 want `goto L jumps into block starting at goto.go:435\|goto jumps into block` got `goto.go:439:8: goto L jumps into block`
-- checker/wording L495 want `goto L jumps into block starting at goto.go:497\|goto jumps into block` got `goto.go:495:7: goto L jumps into block`
-- checker/wording L503 want `goto L jumps into block starting at goto.go:505\|goto jumps into block` got `goto.go:503:7: goto L jumps into block`
-- checker/wording L513 want `goto L jumps into block starting at goto.go:516\|goto jumps into block` got `goto.go:513:7: goto L jumps into block`
-- checker/wording L524 want `goto L jumps into block starting at goto.go:525\|goto jumps into block` got `goto.go:524:8: goto L jumps into block`
-- checker/wording L536 want `goto L jumps into block starting at goto.go:532\|goto jumps into block` got `goto.go:536:8: goto L jumps into block`
-
 ### import6.go (checker/wording; 20 wants, 20 diagnostics)
 
 - checker/wording L38 want `import path cannot be absolute path\|not used` got `import6.go:38:8: could not import /foo (can't find import: "/foo": stat /foo.a: no such file or directory)`
-
-### label.go (checker/wording; 8 wants, 8 diagnostics)
-
-- checker/wording L16 want `label .*L1.* defined and not used` got `label.go:16:1: label L1 declared and not used`
-- checker/wording L19 want `label .*L2.* defined and not used` got `label.go:19:1: label L2 declared and not used`
-- checker/wording L21 want `label .*L3.* defined and not used` got `label.go:21:1: label L3 declared and not used`
-- checker/wording L24 want `label .*L4.* defined and not used` got `label.go:24:1: label L4 declared and not used`
-- checker/wording L27 want `label .*L5.* defined and not used` got `label.go:27:1: label L5 declared and not used`
-- checker/wording L31 want `label .*L6.* already defined` got `label.go:31:1: label L6 already declared ⏎ 	label.go:29:1: other declaration of L6`
-- checker/wording L53 want `label .*defalt.* defined and not used` got `label.go:53:2: label defalt declared and not used`
-- checker/wording L64 want `label go2 not defined\|reference to undefined label .*go2` got `label.go:64:7: label go2 not declared`
-
-### label1.go (checker/wording; 15 wants, 15 diagnostics)
-
-- checker/wording L18 want `continue is not in a loop$\|continue statement not within for` got `label1.go:18:3: continue not in for statement`
-- checker/wording L22 want `continue is not in a loop$\|continue statement not within for` got `label1.go:22:3: continue not in for statement`
-- checker/wording L106 want `continue is not in a loop$\|continue statement not within for` got `label1.go:106:2: continue not in for statement`
-- checker/wording L111 want `break is not in a loop, switch, or select\|break statement not within for or switch or select` got `label1.go:111:2: break not in for, switch, or select statement`
-
-### switch2.go (parser/wording; 5 wants, 21 diagnostics)
-
-- parser/wording L14 want `expecting := or = or : or comma\|expected :` got `switch2.go:14:8: expected ':', found ';'`
-- parser/wording L18 want `expecting := or = or : or comma\|expected :` got `switch2.go:18:8: expected ':', found ';'`
-- parser/wording L28 want `unexpected keyword case at end of statement` got `switch2.go:28:14: expected ';', found 'case'`
-- parser/wording L33 want `unexpected keyword default at end of statement` got `switch2.go:33:14: expected ';', found 'default'`
-- parser/wording L37 want `expected case or default or }` got `switch2.go:37:2: expected '}', found 'if'`
-- parser/extra L39 got `switch2.go:39:3: expected ';', found 'EOF'`
-- parser/extra L39 got `switch2.go:39:3: expected ';', found 'EOF'`
-- parser/extra L39 got `switch2.go:39:3: expected ';', found 'EOF'`
-- parser/extra L39 got `switch2.go:39:3: expected '}', found 'EOF'`
-- parser/extra L39 got `switch2.go:39:3: expected '}', found 'EOF'`
-- parser/extra L39 got `switch2.go:39:3: expected '}', found 'EOF'`
-- checker/extra L23 got `switch2.go:23:7: cannot convert 0 (untyped int constant) to type bool`
-- checker/extra L23 got `switch2.go:23:15: cannot convert 0 (untyped int constant) to type bool`
-- checker/extra L27 got `switch2.go:27:7: cannot convert 0 (untyped int constant) to type bool`
-- checker/extra L27 got `switch2.go:27:20: cannot convert 0 (untyped int constant) to type bool`
-- checker/extra L32 got `switch2.go:32:7: cannot convert 0 (untyped int constant) to type bool`
-
-### syntax/chan.go (parser/wording; 3 wants, 3 diagnostics)
-
-- parser/wording L11 want `unexpected .*}.* in channel type\|missing channel element type` got `chan.go:11:1: expected type, found '}'`
-- parser/wording L13 want `unexpected .*\).* in channel type\|missing channel element type` got `chan.go:13:16: expected type, found ')'`
-- parser/wording L16 want `unexpected comma in channel type\|missing channel element type` got `chan.go:16:16: expected type, found ','`
-
-### syntax/chan1.go (parser/wording; 2 wants, 2 diagnostics)
-
-- parser/wording L13 want `cannot use c <- v as value\|send statement used as value` got `chan1.go:13:5: expected boolean expression, found simple statement (missing parentheses around composite li...`
-- parser/wording L17 want `unexpected <-\|send statement used as value` got `chan1.go:17:11: expected ';', found '<-'`
-
-### syntax/composite.go (parser/wording; 1 wants, 1 diagnostics)
-
-- parser/wording L10 want `need trailing comma before newline in composite literal\|possibly missing comma or }` got `composite.go:10:98: missing ',' before newline in composite literal`
-
-### syntax/ddd.go (parser/wording; 1 wants, 3 diagnostics)
-
-- parser/wording L10 want `unexpected literal \.3, expected name or \(` got `ddd.go:10:6: expected selector or type assertion, found .3`
-
-### syntax/else.go (parser/wording; 1 wants, 1 diagnostics)
-
-- parser/wording L11 want `else must be followed by if or statement block\|expected .if. or .{.` got `else.go:11:9: expected if statement or block, found ';'`
-
-### syntax/import.go (parser/wording; 1 wants, 3 diagnostics)
-
-- parser/wording L10 want `unexpected comma` got `import.go:10:6: expected ';', found ','`
-- checker/extra L11 got `import.go:11:2: "os" imported and not used`
-
-### syntax/initvar.go (parser/wording; 3 wants, 13 diagnostics)
-
-- parser/wording L12 want `var declaration not allowed in switch initializer` got `initvar.go:12:9: expected '{', found 'var'`
-- parser/wording L14 want `var declaration not allowed in for initializer` got `initvar.go:14:6: expected '{', found 'var'`
-- parser/extra L15 got `initvar.go:15:3: expected ';', found 'EOF'`
-- parser/extra L15 got `initvar.go:15:3: expected '}', found 'EOF'`
-- checker/multiplicity L10 got `initvar.go:10:9: undefined: x`
-- checker/multiplicity L10 got `initvar.go:10:16: undefined: x`
-
-### syntax/semi1.go (parser/multiplicity; 1 wants, 10 diagnostics)
-
-- parser/multiplicity L10 got `semi1.go:10:62: expected '{', found newline`
-- parser/extra L14 got `semi1.go:14:2: expected ';', found 'EOF'`
-- parser/extra L14 got `semi1.go:14:2: expected ';', found 'EOF'`
-- parser/extra L14 got `semi1.go:14:2: expected ';', found 'EOF'`
-- parser/extra L14 got `semi1.go:14:2: expected '}', found 'EOF'`
-- parser/extra L14 got `semi1.go:14:2: expected '}', found 'EOF'`
-- parser/extra L14 got `semi1.go:14:2: expected '}', found 'EOF'`
-- checker/extra L12 got `semi1.go:12:3: undefined: z`
-
-### syntax/semi2.go (parser/multiplicity; 1 wants, 7 diagnostics)
-
-- parser/multiplicity L10 got `semi2.go:10:68: expected '{', found newline`
-- parser/extra L11 got `semi2.go:11:2: expected '}', found '{'`
-- parser/extra L12 got `semi2.go:12:3: expected ';', found z`
-- parser/extra L14 got `semi2.go:14:2: expected ';', found 'EOF'`
-- parser/extra L14 got `semi2.go:14:2: expected '}', found 'EOF'`
-
-### syntax/semi3.go (parser/multiplicity; 1 wants, 11 diagnostics)
-
-- parser/multiplicity L10 got `semi3.go:10:66: expected '{', found newline`
-- parser/extra L14 got `semi3.go:14:2: expected ';', found 'EOF'`
-- parser/extra L14 got `semi3.go:14:2: expected ';', found 'EOF'`
-- parser/extra L14 got `semi3.go:14:2: expected ';', found 'EOF'`
-- parser/extra L14 got `semi3.go:14:2: expected '}', found 'EOF'`
-- parser/extra L14 got `semi3.go:14:2: expected '}', found 'EOF'`
-- parser/extra L14 got `semi3.go:14:2: expected '}', found 'EOF'`
-- checker/extra L12 got `semi3.go:12:3: undefined: z`
-
-### syntax/semi4.go (parser/wording; 1 wants, 9 diagnostics)
-
-- parser/wording L11 want `unexpected {, expected for loop condition\|expecting .*{.* after for clause` got `semi4.go:11:2: expected operand, found '{'`
-- parser/extra L12 got `semi4.go:12:32: expected ';', found 'EOF'`
-- parser/extra L12 got `semi4.go:12:32: expected ';', found 'EOF'`
-- parser/extra L12 got `semi4.go:12:32: expected ';', found 'EOF'`
-- parser/extra L12 got `semi4.go:12:32: expected '{', found 'EOF'`
-- parser/extra L12 got `semi4.go:12:32: expected '}', found 'EOF'`
-- parser/extra L12 got `semi4.go:12:32: expected '}', found 'EOF'`
-- parser/extra L12 got `semi4.go:12:32: expected operand, found 'EOF'`
-- checker/extra L10 got `semi4.go:10:6: undefined: x`
-
-### syntax/semi5.go (parser/extra; 1 wants, 3 diagnostics)
-
-- parser/extra L13 got `semi5.go:13:2: expected ';', found 'EOF'`
-- parser/extra L13 got `semi5.go:13:2: expected '}', found 'EOF'`
-
-### syntax/semi6.go (parser/wording; 2 wants, 2 diagnostics)
-
-- parser/wording L9 want `newline in type declaration` got `semi6.go:9:47: expected type, found newline`
-- parser/wording L11 want `(semicolon.*\|EOF) in type declaration` got `semi6.go:11:63: expected type, found newline`
-
-### syntax/semi7.go (parser/wording; 1 wants, 4 diagnostics)
-
-- parser/wording L11 want `unexpected semicolon or newline before .?else.?\|unexpected keyword else` got `semi7.go:11:2: expected statement, found 'else'`
-- parser/extra L14 got `semi7.go:14:2: expected ';', found 'EOF'`
-- parser/extra L14 got `semi7.go:14:2: expected '}', found 'EOF'`
-- checker/extra L10 got `semi7.go:10:5: undefined: x`
-
-### syntax/topexpr.go (parser/position; 3 wants, 1 diagnostics)
-
-- parser/position L14 want `non-declaration statement outside function body\|expected declaration` got `topexpr.go:9:1: expected declaration, found fmt`
-- parser/position L19 want `non-declaration statement outside function body\|expected declaration` got `topexpr.go:9:1: expected declaration, found fmt`
-
-### syntax/typesw.go (checker/wording; 1 wants, 1 diagnostics)
-
-- checker/wording L10 want `invalid variable name\|cannot use .* as value` got `typesw.go:10:2: invalid syntax tree: incorrect form of type switch guard`
-
-### syntax/vareq.go (parser/wording; 1 wants, 4 diagnostics)
-
-- parser/wording L10 want `unexpected { at end of statement\|expected ';' or '}' or newline` got `vareq.go:10:25: expected ';', found '{'`
-
-### syntax/vareq1.go (parser/wording; 1 wants, 1 diagnostics)
-
-- parser/wording L9 want `unexpected { at end of statement\|unexpected { after top level declaration\|expected ';' or newline after t...` got `vareq1.go:9:24: expected ';', found '{'`
 
 
 ## Spike S — gc `cmd/compile/internal/syntax` as the syntax verdict (findings only)

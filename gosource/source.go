@@ -134,6 +134,11 @@ func Load(sources []Source, options Options) (*Program, error) {
 	}
 	sources = append([]Source(nil), sources...)
 	sort.SliceStable(sources, func(i, j int) bool { return sources[i].Name < sources[j].Name })
+	// gc's own parser is the syntax verdict: if it rejects any source, its
+	// diagnostics are the complete result and nothing below runs.
+	if syntaxErrors := syntaxVerdict(sources); len(syntaxErrors) > 0 {
+		return nil, syntaxErrors
+	}
 	checker, err := checkerOptionsFor(sources, options)
 	if err != nil {
 		return nil, err
