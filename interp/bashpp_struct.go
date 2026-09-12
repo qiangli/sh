@@ -858,6 +858,28 @@ func (r *Runner) bashPPStructuredAssign(target, rhs syntax.BashPPExpr) {
 			r.exit = exitStatus{code: 2}
 			return
 		}
+		// Go inserts an implicit dereference between selector components. The
+		// address path normally records that step, but instantiated generic
+		// receiver fields can retain the pointer as the parent value instead.
+		// Follow that storage identity before writing the final field, just as
+		// an explicit (*parent).field assignment would.
+		for {
+			parentPointer, pointerParent := parent.(*bashPPPointer)
+			if !pointerParent {
+				break
+			}
+			if parentPointer == nil {
+				r.errf("BASHPP-ENIL-DEREF: dereference of nil pointer\n")
+				r.exit = exitStatus{code: 2}
+				return
+			}
+			parent, parentMeta, _, err = parentPointer.read()
+			if err != nil {
+				r.errf("%v\n", err)
+				r.exit = exitStatus{code: 2}
+				return
+			}
+		}
 		if parentMeta == nil {
 			r.errf("BASHPP-ESELECTOR-TYPE: assignment parent is not a structured value\n")
 			r.exit = exitStatus{code: 2}
@@ -874,10 +896,22 @@ func (r *Runner) bashPPStructuredAssign(target, rhs syntax.BashPPExpr) {
 		}
 		last := ptr.path[len(ptr.path)-1]
 		if last.field != "" {
-			parent.(map[string]any)[last.field] = value
+			mapping, ok := parent.(map[string]any)
+			if !ok {
+				r.errf("BASHPP-ESELECTOR-TYPE: assignment parent is not struct storage\n")
+				r.exit = exitStatus{code: 2}
+				return
+			}
+			mapping[last.field] = value
 			parentMeta.mapping[last.field] = meta
 		} else {
-			parent.([]any)[last.index] = value
+			sequence, ok := parent.([]any)
+			if !ok || last.index < 0 || last.index >= len(sequence) {
+				r.errf("BASHPP-ESELECTOR-TYPE: assignment parent is not collection storage\n")
+				r.exit = exitStatus{code: 2}
+				return
+			}
+			sequence[last.index] = value
 			parentMeta.sequence[last.index] = meta
 		}
 		return
