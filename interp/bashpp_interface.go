@@ -577,6 +577,15 @@ func (r *Runner) bashPPCellForInterfaceExpr(expr syntax.BashPPExpr) (*bashPPCell
 	switch x := expr.(type) {
 	case *syntax.BashPPParenExpr:
 		return r.bashPPCellForInterfaceExpr(x.X)
+	case *syntax.BashPPFuncLit:
+		// `x = func() {…}`, or a generic function value the front end lowers
+		// to a literal: the interface owns the closure, whose dynamic type
+		// is the literal's own signature.
+		cell, handled, err := r.goSourceCallableCell(x)
+		if err != nil || !handled {
+			return nil, nil, fmt.Errorf("BASHPP-EINTERFACE-VALUE: function literal cannot be stored")
+		}
+		return cell, cell.declType, nil
 	case *syntax.BashPPCompositeLit:
 		if x.LitType == nil {
 			return nil, nil, fmt.Errorf("BASHPP-EINTERFACE-VALUE: composite literal has no type")
@@ -648,6 +657,13 @@ func (r *Runner) bashPPInterfaceSourceCell(cell *bashPPCell, what string) (*bash
 	}
 	if actual == nil && cell.typeName != "" {
 		actual, _ = bashPPScalarNamedType(cell.typeName)
+	}
+	// A closure bound by `:=` carries only its handle; its dynamic type is
+	// the signature of the literal it was made from.
+	if actual == nil && cell.vr.Kind == expand.String {
+		if fn, ok := r.bashPPClosure(cell.vr.Str); ok && fn.lit != nil {
+			actual = bashPPFuncLitType(fn.lit)
+		}
 	}
 	if actual == nil {
 		return nil, nil, fmt.Errorf("BASHPP-EINTERFACE-VALUE: %s has no dynamic type", what)
