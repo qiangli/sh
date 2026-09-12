@@ -325,7 +325,8 @@ func bashPPValidateTypeParamDecls(params []*syntax.BashPPTypeParam) error {
 			if name == nil || !syntax.BashPPValidIdent(name.Value) {
 				return fmt.Errorf("BASHPP-EGENERIC-PARAM: invalid type parameter")
 			}
-			if seen[name.Value] {
+			// The blank identifier declares nothing and may be repeated.
+			if seen[name.Value] && name.Value != "_" {
 				return fmt.Errorf("BASHPP-EGENERIC-PARAM: type parameter %s redeclared", name.Value)
 			}
 			seen[name.Value] = true
@@ -424,7 +425,7 @@ func (r *Runner) bashPPMethodDecl(d *syntax.BashPPFuncDecl) {
 	}
 	seenParams := make(map[string]bool, len(recv.TypeParams))
 	for _, param := range recv.TypeParams {
-		if seenParams[param.Value] {
+		if seenParams[param.Value] && param.Value != "_" {
 			r.errf("BASHPP-EGENERIC-RECEIVER: receiver type parameter %s redeclared\n", param.Value)
 			r.exit.code = 2
 			return
@@ -697,7 +698,9 @@ func (r *Runner) bashPPInstantiateFunc(c *syntax.BashPPCall, fn *bashPPFunc) (*b
 	} else if !r.bashPPInferTypeArgs(c, fn, bindings) {
 		return nil, false
 	}
-	if len(bindings) != want {
+	// Blank parameters share one binding slot, so the count of bindings is
+	// the count of distinct names.
+	if len(bindings) != bashPPDistinctTypeParamCount(params) {
 		r.errf("BASHPP-EGENERIC-INFER: cannot infer type arguments for %s\n", fn.name())
 		r.exit.code = 2
 		return nil, false
@@ -719,6 +722,16 @@ func (r *Runner) bashPPInstantiateFunc(c *syntax.BashPPCall, fn *bashPPFunc) (*b
 	}
 	bound.typeArgs = bindings
 	return &bound, true
+}
+
+func bashPPDistinctTypeParamCount(params []*syntax.BashPPTypeParam) int {
+	seen := make(map[string]bool)
+	for _, param := range params {
+		for _, name := range param.Names {
+			seen[name.Value] = true
+		}
+	}
+	return len(seen)
 }
 
 func bashPPTypeParamCount(params []*syntax.BashPPTypeParam) int {
