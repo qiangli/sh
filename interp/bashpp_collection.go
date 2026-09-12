@@ -451,6 +451,14 @@ func (r *Runner) bashPPEvalConstIntExpr(expr goast.Expr) (value constant.Value, 
 		}
 	}()
 	switch x := expr.(type) {
+	case *goast.CallExpr:
+		// `unsafe.Sizeof`/`unsafe.Alignof` are compile-time uintptr constants
+		// read from the operand's static type — the only call form an integer
+		// constant expression (here, an array length) may legitimately contain.
+		if value, ok := r.bashPPUnsafeConstOperator(x); ok {
+			return value, true
+		}
+		return nil, false
 	case *goast.BasicLit:
 		if x.Kind != gotoken.INT {
 			return nil, false
