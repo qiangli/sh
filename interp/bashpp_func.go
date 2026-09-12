@@ -1884,15 +1884,17 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 		if param.name == "" {
 			continue
 		}
-		_ = r.bashPPScope.declare(param.name,
-			expand.Variable{Set: true, Kind: expand.String, Str: args[i]}, false)
 		if i < len(callCells) && callCells[i] != nil {
 			copy, err := r.goSourceExpectedCell(callCells[i], param.typ)
 			if err != nil {
 				r.exit.fatal(err)
 				return nil
 			}
-			copy = bashPPCopyAssignmentCell(copy)
+			// The parameter owns a private copy of the argument. A cell
+			// the expected-type conversion already made is that copy.
+			if copy == callCells[i] {
+				copy = bashPPCopyAssignmentCell(copy)
+			}
 			copy.channel = nil
 			copy.channelOwner = nil
 			copy.constant = false
@@ -1907,6 +1909,9 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 				copy.declType = param.typ
 			}
 			r.bashPPScope.entries[param.name] = copy
+		} else {
+			_ = r.bashPPScope.declare(param.name,
+				expand.Variable{Set: true, Kind: expand.String, Str: args[i]}, false)
 		}
 		if i < len(callChannels) && callChannels[i] != nil {
 			cell := r.bashPPScope.lookup(param.name)
