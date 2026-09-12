@@ -25,6 +25,10 @@ func TestGoSourcePointerReceiverMethodValue(t *testing.T) {
 	compareSprint151PointerWithGo(t, "method_value.go")
 }
 
+func TestGoSourceNewArraySlice(t *testing.T) {
+	compareSprint151PointerWithGo(t, "new_array_slice.go")
+}
+
 func compareSprint151PointerWithGo(t *testing.T, name string) {
 	t.Helper()
 	path := filepath.Join("..", "gosource", "testdata", "sprint151", "pointers", name)

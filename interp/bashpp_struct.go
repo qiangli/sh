@@ -598,6 +598,12 @@ func (r *Runner) bashPPReadExpr(expr syntax.BashPPExpr) (any, *bashPPCollectionM
 	// to a defined map or slice type, since `p[k]` is not valid there.
 	case *syntax.BashPPParenExpr:
 		return r.bashPPReadExpr(x.X)
+	case *syntax.BashPPAddressExpr, *syntax.BashPPNewExpr:
+		pointer, err := r.bashPPPointerExprValue(expr)
+		if err != nil {
+			return nil, nil, err
+		}
+		return pointer, bashPPPointerMeta(r.bashPPPointerExprType(expr, pointer)), nil
 	case *syntax.BashPPCompositeLit:
 		return r.bashPPEvalComposite(x, nil)
 	case *syntax.BashPPIdent:
