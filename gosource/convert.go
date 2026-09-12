@@ -245,7 +245,7 @@ func (c *converter) block(b *ast.BlockStmt) *s.Block {
 // type operand. Go 1.27 also allows new(v) over a value, whose argument is not
 // convertible by typ; those calls stay on the generic call path.
 func (c *converter) isNewType(x *ast.CallExpr) bool {
-	id, ok := x.Fun.(*ast.Ident)
+	id, ok := ast.Unparen(x.Fun).(*ast.Ident)
 	if !ok || len(x.Args) != 1 {
 		return false
 	}
@@ -257,7 +257,7 @@ func (c *converter) isNewType(x *ast.CallExpr) bool {
 }
 
 func (c *converter) isNewBuiltin(x *ast.CallExpr) bool {
-	id, ok := x.Fun.(*ast.Ident)
+	id, ok := ast.Unparen(x.Fun).(*ast.Ident)
 	if !ok || len(x.Args) != 1 {
 		return false
 	}
@@ -730,11 +730,11 @@ func (c *converter) exprValue(e ast.Expr) s.BashPPExpr {
 		return out
 	case *ast.CallExpr:
 		if c.isNewType(x) {
-			id := x.Fun.(*ast.Ident)
+			id := ast.Unparen(x.Fun).(*ast.Ident)
 			return &s.BashPPNewExpr{New: c.ident(id), Lparen: c.pos(x.Lparen), Rparen: c.pos(x.Rparen), AllocType: c.typ(x.Args[0])}
 		}
 		if c.isNewBuiltin(x) {
-			id := x.Fun.(*ast.Ident)
+			id := ast.Unparen(x.Fun).(*ast.Ident)
 			return &s.BashPPNewExpr{New: c.ident(id), Lparen: c.pos(x.Lparen), Rparen: c.pos(x.Rparen), AllocType: c.valueType(x.Args[0]), Init: c.expr(x.Args[0])}
 		}
 		if c.info.Types[x.Fun].IsType() && len(x.Args) == 1 {
@@ -1081,9 +1081,14 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 			if len(x.Lhs) > 1 && !tuplePlainTargets(x.Lhs) {
 				return c.tupleAssignStmts(x)
 			}
-			out := &s.BashPPAssign{Eq: c.pos(x.TokPos), Target: c.word(x.Lhs[0]), Value: c.word(x.Rhs[0]), TargetExpr: c.expr(x.Lhs[0])}
+			// Parentheses around an lvalue are meaningless in Go: `(_) = v`
+			// and `(x) = v` assign exactly as their unparenthesized forms. Peel
+			// them so a parenthesized blank still reaches the blank-name list
+			// and a parenthesized name is not lowered as a value read.
+			target := ast.Unparen(x.Lhs[0])
+			out := &s.BashPPAssign{Eq: c.pos(x.TokPos), Target: c.word(target), Value: c.word(x.Rhs[0]), TargetExpr: c.expr(target)}
 			for _, e := range x.Lhs {
-				if id, ok := e.(*ast.Ident); ok {
+				if id, ok := ast.Unparen(e).(*ast.Ident); ok {
 					out.Names = append(out.Names, c.ident(id))
 				}
 			}
