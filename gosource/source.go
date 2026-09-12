@@ -14,6 +14,7 @@ import (
 	"go/version"
 	"io"
 	"sort"
+	"strconv"
 	"strings"
 
 	"mvdan.cc/sh/v3/syntax"
@@ -58,6 +59,10 @@ type Options struct {
 	// the checker default; a nonempty value selects Go language semantics, not
 	// an SDK executable. Invalid or newer versions are rejected by the checker.
 	GoVersion string
+	// FakeImportC permits import "C" while type checking, matching
+	// types.Config.FakeImportC. It does not provide cgo declarations or make
+	// cgo source executable by the Bash++ runtime.
+	FakeImportC bool
 	// Packages are explicitly supplied dependency packages, type-checked in
 	// the given order before the program and registered under their Path.
 	// They are the policy-free half of Go's import model — an in-memory
@@ -119,14 +124,15 @@ func Parse(r io.Reader, name string, options Options) (*Program, error) {
 // Load processes a single package in lexical filename order, matching the Go
 // toolchain. Source bytes are neither modified nor executed by the native toolchain.
 func Load(sources []Source, options Options) (*Program, error) {
-	if options.GoVersion != "" && !version.IsValid(options.GoVersion) {
-		return nil, fmt.Errorf("gosource: invalid Go version %q", options.GoVersion)
-	}
 	if len(sources) == 0 {
 		return nil, fmt.Errorf("gosource: no source files")
 	}
 	sources = append([]Source(nil), sources...)
 	sort.SliceStable(sources, func(i, j int) bool { return sources[i].Name < sources[j].Name })
+	checker, err := checkerOptionsFor(sources, options)
+	if err != nil {
+		return nil, err
+	}
 	c := &converter{fset: token.NewFileSet(), info: newTypeInfo(), renames: map[types.Object]string{}}
 	p := &Program{File: &syntax.File{Name: sources[0].Name, GoSource: true}}
 	var parseErrors ErrorList
@@ -154,6 +160,7 @@ func Load(sources []Source, options Options) (*Program, error) {
 	if len(c.files) == 0 {
 		return nil, parseErrors
 	}
+	parseErrors = append(parseErrors, validateCompilerDirectives(c.fset, c.files, checker)...)
 	fallback := options.Importer
 	if fallback == nil {
 		fallback = importer.Default()
@@ -163,7 +170,7 @@ func Load(sources []Source, options Options) (*Program, error) {
 	// every earlier one; a failing package stops here with its diagnostics
 	// and the program is never checked against a partial map.
 	for _, spec := range options.Packages {
-		if diagnostics := imp.checkDependency(c.fset, spec, options.GoVersion); len(diagnostics) > 0 {
+		if diagnostics := imp.checkDependency(c.fset, spec, checker); len(diagnostics) > 0 {
 			return nil, append(parseErrors, diagnostics...)
 		}
 	}
@@ -173,7 +180,7 @@ func Load(sources []Source, options Options) (*Program, error) {
 	}
 	imp.from = programPath
 	var typeErrors ErrorList
-	config := types.Config{Importer: imp, GoVersion: options.GoVersion, Error: func(err error) { typeErrors = append(typeErrors, err) }}
+	config := checker.config(imp, &typeErrors)
 	pkg, err := config.Check(programPath, c.fset, c.files, c.info)
 	// Match the native checker test flow: parser diagnostics first, followed
 	// by semantic diagnostics from every recoverable file. Check's returned
@@ -322,6 +329,152 @@ func Load(sources []Source, options Options) (*Program, error) {
 	c.attachEmbedDirectives(p.File)
 	p.File.Sources = append([]syntax.SourceFile(nil), p.Sources...)
 	return p, nil
+}
+
+// checkerOptions is the complete policy passed to every types.Config in one
+// Load. Keeping it as a value prevents language and cgo-test settings from
+// leaking between the program and explicit packages or between Load calls.
+type checkerOptions struct {
+	goVersion   string
+	fakeImportC bool
+}
+
+func checkerOptionsFor(sources []Source, options Options) (checkerOptions, error) {
+	out := checkerOptions{goVersion: options.GoVersion, fakeImportC: options.FakeImportC}
+	// The Go checker corpus places flag-compatible configuration on the first
+	// source line (for example "// -lang=go1.13"). Testdir errorcheck recipes
+	// use the same flag later on that line. Honor only checker flags, only from
+	// the first source, and let explicit API options win.
+	line, _, _ := strings.Cut(string(sources[0].Data), "\n")
+	if strings.HasPrefix(strings.TrimSpace(line), "//") {
+		for _, field := range strings.Fields(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "//"))) {
+			if out.goVersion == "" && strings.HasPrefix(field, "-lang=") {
+				out.goVersion = strings.TrimPrefix(field, "-lang=")
+			}
+			if field == "-fakeImportC" && !options.FakeImportC {
+				out.fakeImportC = true
+			}
+		}
+	}
+	if out.goVersion != "" && !version.IsValid(out.goVersion) {
+		return checkerOptions{}, fmt.Errorf("gosource: invalid Go version %q", out.goVersion)
+	}
+	return out, nil
+}
+
+func (o checkerOptions) config(imp types.Importer, diagnostics *ErrorList) types.Config {
+	return types.Config{
+		Importer:    imp,
+		GoVersion:   o.goVersion,
+		FakeImportC: o.fakeImportC,
+		Error: func(err error) {
+			*diagnostics = append(*diagnostics, err)
+		},
+	}
+}
+
+// validateCompilerDirectives covers source checks that the gc compiler runs
+// around go/types. The public checker deliberately ignores pragmas, but a
+// semantic-only Go source check must not accept a directive that compilation
+// will reject.
+func validateCompilerDirectives(fset *token.FileSet, files []*ast.File, checker checkerOptions) ErrorList {
+	var diagnostics ErrorList
+	for _, file := range files {
+		haveEmbed := false
+		for _, spec := range file.Imports {
+			if path, err := strconv.Unquote(spec.Path.Value); err == nil && path == "embed" {
+				haveEmbed = true
+			}
+		}
+
+		var funcs []*ast.FuncDecl
+		embedDecl := map[*ast.Comment]*ast.ValueSpec{}
+		insideFunc := map[*ast.Comment]bool{}
+		for _, decl := range file.Decls {
+			if fn, ok := decl.(*ast.FuncDecl); ok {
+				funcs = append(funcs, fn)
+			}
+		}
+		ast.Inspect(file, func(node ast.Node) bool {
+			gd, ok := node.(*ast.GenDecl)
+			if !ok || gd.Tok != token.VAR {
+				return true
+			}
+			for _, raw := range gd.Specs {
+				value := raw.(*ast.ValueSpec)
+				doc := value.Doc
+				if doc == nil && len(gd.Specs) == 1 {
+					doc = gd.Doc
+				}
+				if doc == nil {
+					continue
+				}
+				for _, comment := range doc.List {
+					embedDecl[comment] = value
+					for _, fn := range funcs {
+						if fn.Body != nil && fn.Body.Pos() < comment.Slash && comment.End() < fn.Body.End() {
+							insideFunc[comment] = true
+						}
+					}
+				}
+			}
+			return true
+		})
+
+		for _, group := range file.Comments {
+			for _, comment := range group.List {
+				text := strings.TrimPrefix(comment.Text, "//")
+				switch {
+				case strings.HasPrefix(text, "go:build"):
+					if comment.Slash > file.Package {
+						diagnostics = append(diagnostics, fmt.Errorf("%s: misplaced compiler directive", fset.Position(comment.Slash)))
+					}
+				case strings.HasPrefix(text, "go:noinline"):
+					allowed := false
+					for _, fn := range funcs {
+						if fn.Body != nil && fn.Body.Pos() < comment.Slash && comment.End() < fn.Body.End() {
+							allowed = false
+							break
+						}
+					}
+					if comment.Slash > file.Package && fset.Position(comment.Slash).Column == 1 {
+						for _, decl := range file.Decls {
+							if comment.Slash < decl.Pos() {
+								_, allowed = decl.(*ast.FuncDecl)
+								break
+							}
+						}
+					}
+					if !allowed {
+						diagnostics = append(diagnostics, fmt.Errorf("%s: misplaced compiler directive", fset.Position(comment.Slash)))
+					}
+				case text == "go:embed" || strings.HasPrefix(text, "go:embed ") || strings.HasPrefix(text, "go:embed\t"):
+					value := embedDecl[comment]
+					msg := ""
+					switch {
+					case value == nil:
+						msg = "misplaced go:embed directive"
+					case !haveEmbed:
+						msg = `go:embed only allowed in Go files that import "embed"`
+					case len(value.Names) != 1:
+						msg = "go:embed cannot apply to multiple vars"
+					case len(value.Values) != 0:
+						msg = "go:embed cannot apply to var with initializer"
+					case value.Type == nil:
+						msg = "go:embed cannot apply to var without type"
+					case insideFunc[comment]:
+						msg = "go:embed cannot apply to var inside func"
+					case checker.goVersion != "" && version.Compare(checker.goVersion, "go1.16") < 0:
+						msg = fmt.Sprintf("go:embed requires go1.16 or later (-lang was set to %s; check go.mod)", checker.goVersion)
+					}
+					if msg != "" {
+						diagnostics = append(diagnostics, fmt.Errorf("%s: %s", fset.Position(comment.Slash), msg))
+					}
+				}
+			}
+		}
+	}
+	return diagnostics
 }
 
 // loweredPackage is one package's lowered top-level statements, grouped so

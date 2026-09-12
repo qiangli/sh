@@ -123,6 +123,18 @@ func TestDependencyDiagnosticsAreAttributedAndStopTheLoad(t *testing.T) {
 	}
 }
 
+func TestDependencyUsesProgramCheckerConfiguration(t *testing.T) {
+	_, err := Load([]Source{src("main.go", "// -lang=go1.12\npackage main\n\nimport \"./a\"\nfunc main() { _ = a.F }\n")}, Options{
+		ImportBase: "test",
+		Packages: []PackageSpec{{Path: "test/a", Sources: []Source{
+			src("a.go", "package a\n\nvar F = 0b101\n"),
+		}}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "binary literal requires go1.13 or later") {
+		t.Fatalf("dependency checker configuration: %v", err)
+	}
+}
+
 func TestExplicitPackageRejectsRelativeOrDuplicatePaths(t *testing.T) {
 	for _, tc := range []struct{ path, want string }{
 		{"./a", "must not be relative"},
