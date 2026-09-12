@@ -40,9 +40,10 @@ var fidelityOpen = map[string]bool{
 // removed but whose reproducer still carries a class that is open, the
 // spellings that rewrite used to emit; none may appear in the output.
 var fidelityLanded = map[string][]string{
-	"main-rename":           {"sourceMain"},                     // C5
-	"sink-statements":       {"_ = "},                           // C2
-	"reparenthesised-exprs": {"((", "])(", "(x * i)", "(g(i))"}, // C4
+	"main-rename":           {"sourceMain"},                                      // C5
+	"sink-statements":       {"_ = "},                                            // C2
+	"reparenthesised-exprs": {"((", "])(", "(x * i)", "(g(i))"},                  // C4
+	"type-assertion":        {"MustValue", "MustAssertOK", "Assert[", "import "}, // C9
 }
 
 func TestGoSourceFidelity(t *testing.T) {
