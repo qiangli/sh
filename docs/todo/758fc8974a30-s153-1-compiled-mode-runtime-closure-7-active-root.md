@@ -3,7 +3,7 @@ id: 758fc8974a30
 kind: task
 title: S153.1 compiled-mode runtime closure (7 active roots)
 seq: 81
-status: todo
+status: doing
 priority: p0
 created: 2026-09-10T21:18:21.072692Z
 sprint: 153
