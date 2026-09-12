@@ -1081,9 +1081,14 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 			if len(x.Lhs) > 1 && !tuplePlainTargets(x.Lhs) {
 				return c.tupleAssignStmts(x)
 			}
-			out := &s.BashPPAssign{Eq: c.pos(x.TokPos), Target: c.word(x.Lhs[0]), Value: c.word(x.Rhs[0]), TargetExpr: c.expr(x.Lhs[0])}
+			// Parentheses around an lvalue are meaningless in Go: `(_) = v`
+			// and `(x) = v` assign exactly as their unparenthesized forms. Peel
+			// them so a parenthesized blank still reaches the blank-name list
+			// and a parenthesized name is not lowered as a value read.
+			target := ast.Unparen(x.Lhs[0])
+			out := &s.BashPPAssign{Eq: c.pos(x.TokPos), Target: c.word(target), Value: c.word(x.Rhs[0]), TargetExpr: c.expr(target)}
 			for _, e := range x.Lhs {
-				if id, ok := e.(*ast.Ident); ok {
+				if id, ok := ast.Unparen(e).(*ast.Ident); ok {
 					out.Names = append(out.Names, c.ident(id))
 				}
 			}
