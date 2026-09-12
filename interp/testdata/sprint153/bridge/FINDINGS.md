@@ -97,6 +97,16 @@ Replaced the per-name policy with mechanism classes (C6):
   extension S153.2 will bring (a session-scoped writer identity for
   interpreter-owned aggregates, distinct from the pointer-origin writeback).
 
+## Bonus closure
+
+`TestGoSourceEmbeddedImportedMethodLocalCodecGap` documented a gap (a local
+type referencing another local type that embeds an imported field —
+holder → box{sync.Mutex} — emitted an undefined `box` into the worker). The
+dependency-closure fix (C3) drops the referencing type instead, so both the
+promoted and explicit spellings now match native Go in all three modes. The
+test's own instruction was to promote it to a three-mode case once it passed;
+done, renamed to `TestGoSourceEmbeddedImportedMethodLocalCodec`.
+
 ## Gates run
 
 - `go test -count=1 -timeout 30m -run 'GoSource' ./interp/...` before first edit:
