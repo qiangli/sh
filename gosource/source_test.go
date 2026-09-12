@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -217,7 +218,7 @@ func TestSourceMetadataAndComputedCallJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 	file := node.(*syntax.File)
-	if !file.GoSource || len(file.Sources) != 1 || file.Sources[0] != p.Sources[0] {
+	if !file.GoSource || len(file.Sources) != 1 || !reflect.DeepEqual(file.Sources[0], p.Sources[0]) {
 		t.Fatalf("source metadata lost: %+v", file)
 	}
 	found := false

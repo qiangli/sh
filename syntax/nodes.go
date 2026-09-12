@@ -37,6 +37,24 @@ type File struct {
 type SourceFile struct {
 	Name, SHA256 string
 	Base, Size   uint
+
+	// LineDirectives records, in offset order, where a Go line directive in
+	// this input changes the reported filename. Node positions already carry
+	// the directive-adjusted line and column; the filename is the one part of
+	// the adjusted position a Pos cannot hold. Each entry governs positions
+	// from its Offset up to the next entry; positions before the first entry
+	// report Name.
+	LineDirectives []LineDirective
+}
+
+// LineDirective is one adjusted-filename segment of a SourceFile.
+type LineDirective struct {
+	// Offset is the first byte, relative to the file's own bytes, whose
+	// reported position the directive governs.
+	Offset uint
+	// Filename is the reported filename; empty means the directive cleared it
+	// (the Go toolchain prints such positions as "??").
+	Filename string
 }
 
 // SourceAt returns the input containing pos. Offsets are relative to Base.
