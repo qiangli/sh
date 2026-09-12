@@ -105,7 +105,12 @@ func TestSprint152SyntheticCallPosition(t *testing.T) {
 		}
 	}
 	if wrapper < 0 {
-		t.Fatalf("no synthetic main wrapper in lowered source:\n%s", result.Source)
+		t.Fatalf("no main in lowered source:\n%s", result.Source)
+	}
+	// S152.1 C5: a Go source that declares main keeps it as the entry, so
+	// there is no wrapper and no synthetic call to carry a position at all.
+	if !strings.Contains(string(result.Source), "sourceMain") {
+		return
 	}
 	found := false
 	for i := wrapper + 1; i < len(lines); i++ {
