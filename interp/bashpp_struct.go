@@ -555,6 +555,32 @@ func bashPPCellMeta(cell *bashPPCell) *bashPPCollectionMeta {
 }
 
 func (r *Runner) bashPPReadExpr(expr syntax.BashPPExpr) (any, *bashPPCollectionMeta, error) {
+	// A call result is transported in a cell. In particular, pointers use the
+	// cell's pointerValue side channel and intentionally have an empty scalar
+	// spelling. Reading only vr below therefore turned every pointer-returning
+	// call into an untyped empty scalar before a dereference or selector could
+	// consume it.
+	if r.bashPPGoSource {
+		if _, call := expr.(*syntax.BashPPCall); call {
+			cell, err := r.goSourceValueCell(expr)
+			if err != nil {
+				return nil, nil, err
+			}
+			if cell == nil {
+				return nil, nil, fmt.Errorf("Go call has no result")
+			}
+			if cell.pointer {
+				return cell.pointerValue, bashPPPointerMeta(cell.declType), nil
+			}
+			if cell.interfaceValue != nil {
+				return cell.vrValue(), &bashPPCollectionMeta{kind: "interface", typ: cell.declType, interfaceValue: cell.interfaceValue}, nil
+			}
+			if cell.vr.Kind == expand.Object {
+				return cell.vr.Obj, bashPPCellMeta(cell), nil
+			}
+			return bashPPScalarAny(r.bashPPScalarFromCell(cell).value), nil, nil
+		}
+	}
 	if value, meta, handled, err := r.goSourceCollectionCallValue(expr); handled {
 		return value, meta, err
 	}
