@@ -314,7 +314,13 @@ func bashPPFieldsSignature(fields []*syntax.BashPPField) string {
 			if field.Variadic() {
 				b.WriteString("...")
 			}
-			if field.FieldType != nil {
+			// The type tree is the canonical spelling: a substituted field
+			// is respelled from its tree, so a signature written `func(T)
+			// bool` and one instantiated to `func(int)(bool)` must both be
+			// read from the tree to compare equal.
+			if field.FieldTypeExpr != nil {
+				b.WriteString(bashPPTypeText(field.FieldTypeExpr))
+			} else if field.FieldType != nil {
 				b.WriteString(field.FieldType.Value)
 			}
 		}

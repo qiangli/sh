@@ -305,16 +305,26 @@ func (r *Runner) bashPPBindExprs(x syntax.BashPPExpr) syntax.BashPPExpr {
 		// with its own diagnostic rather than a mangled one.
 		bound := r.bashPPTypeParamArgs[e.ConvType.Value]
 		inner := r.bashPPBindExprs(e.X)
-		if bound == nil {
-			if inner == e.X {
-				return x
+		convType, convTypeExpr := e.ConvType, e.ConvTypeExpr
+		if bound != nil {
+			convType = r.bashPPBindTypeLit(e.ConvType, bound)
+			if convTypeExpr != nil {
+				convTypeExpr = bound
 			}
-			cp := *e
-			cp.X = inner
-			return &cp
+		} else if e.ConvTypeExpr != nil {
+			// A target that only MENTIONS a parameter — `IteratorFunc[R]`,
+			// `*T`, `[]T` — is rewritten through its type tree, and the
+			// literal spelling follows it.
+			if rebound := r.bashPPBindTypeExpr(e.ConvTypeExpr); rebound != e.ConvTypeExpr {
+				convTypeExpr = rebound
+				convType = r.bashPPBindTypeLit(e.ConvType, rebound)
+			}
+		}
+		if inner == e.X && convType == e.ConvType && convTypeExpr == e.ConvTypeExpr {
+			return x
 		}
 		cp := *e
-		cp.ConvType, cp.X = r.bashPPBindTypeLit(e.ConvType, bound), inner
+		cp.ConvType, cp.ConvTypeExpr, cp.X = convType, convTypeExpr, inner
 		return &cp
 	case *syntax.BashPPCall:
 		if bound := r.bashPPBindCallNode(e); bound != e {
