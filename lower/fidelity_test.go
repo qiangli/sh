@@ -33,6 +33,13 @@ var fidelityOpen = map[string]bool{
 	"decl-reordering":          true, // C11
 }
 
+// fidelityLanded records, for classes whose emitter rewrite is already
+// removed but whose reproducer still carries a class that is open, the
+// spellings that rewrite used to emit; none may appear in the output.
+var fidelityLanded = map[string][]string{
+	"guard-prologue": {"import ", "defer func()"}, // C6
+}
+
 func TestGoSourceFidelity(t *testing.T) {
 	dir := filepath.Join("testdata", "sprint152", "fidelity")
 	entries, err := os.ReadDir(dir)
@@ -64,6 +71,11 @@ func TestGoSourceFidelity(t *testing.T) {
 			}
 			if !bytes.Equal(formatted, result.Source) {
 				t.Errorf("generated != gofmt(generated)\n--- generated\n%s\n--- gofmt\n%s", result.Source, formatted)
+			}
+			for _, landed := range fidelityLanded[strings.TrimSuffix(name, ".go")] {
+				if bytes.Contains(result.Source, []byte(landed)) {
+					t.Errorf("removed rewrite still emits %q\n%s", landed, result.Source)
+				}
 			}
 			want := fidelityNormalize(t, data)
 			got := fidelityNormalize(t, result.Source)
