@@ -949,13 +949,43 @@ func (r *Runner) bashPPValidateNamedTypeArgs(named *syntax.BashPPNamedType) erro
 		constraint := bashPPSubstituteType(group.Constraint, bindings)
 		for _, param := range group.Names {
 			arg := named.TypeArgs[i].ArgType
+			i++
+			// `type List[T Ordered] struct { next *List[T] }`: an argument
+			// that is itself a type parameter is checked where the outer
+			// declaration is instantiated, the first point a concrete type
+			// exists; go/types has already checked the parameter's own
+			// constraint implies this one.
+			if r.bashPPOpenTypeParam(arg) {
+				continue
+			}
 			if !r.bashPPConstraintSatisfied(arg, constraint) {
 				return fmt.Errorf("BASHPP-EGENERIC-CONSTRAINT: %s does not satisfy constraint for %s in %s", bashPPTypeText(arg), param.Value, named.Name.Value)
 			}
-			i++
 		}
 	}
 	return nil
+}
+
+// bashPPOpenTypeParam reports whether typ is a type parameter the current
+// frame has not bound: the marker the parser leaves in signature positions,
+// or a bare name that is neither declared nor builtin while a generic
+// declaration is being validated.
+func (r *Runner) bashPPOpenTypeParam(typ syntax.BashPPTypeExpr) bool {
+	switch x := typ.(type) {
+	case *syntax.BashPPTypeParamType:
+		return r.bashPPTypeParamArgs[x.Name.Value] == nil
+	case *syntax.BashPPPointerType:
+		return r.bashPPOpenTypeParam(x.Element)
+	case *syntax.BashPPNamedType:
+		if x.Name == nil || len(x.TypeArgs) > 0 {
+			return false
+		}
+		if _, declared := r.bashPPTypes[x.Name.Value]; declared || bashPPBuiltinType(x.Name.Value) {
+			return false
+		}
+		return r.bashPPTypeParamArgs[x.Name.Value] == nil
+	}
+	return false
 }
 
 func bashPPValidateConcreteTypeArgs(args []*syntax.BashPPTypeArg) error {

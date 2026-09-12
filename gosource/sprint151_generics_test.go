@@ -29,6 +29,7 @@ func TestSprint151Generics(t *testing.T) {
 		"named_func_conversion.go",
 		"typeparam_method_expr.go",
 		"map_typeparam_key.go",
+		"recursive_constrained.go",
 	} {
 		t.Run(file, func(t *testing.T) {
 			path := filepath.Join("testdata", "sprint151", "generics", file)
