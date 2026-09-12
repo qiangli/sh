@@ -707,8 +707,15 @@ func (c *converter) constGroup(g *ast.GenDecl) *s.BashPPConstGroup {
 					continue
 				}
 				spec.Init = []*s.Word{c.word(v.Values[i])}
+				// The interpreter evaluates a const initializer with its
+				// exact scalar evaluator, which folds literals and same-kind
+				// arithmetic but not every constant call (complex, huge
+				// literals). So the raw source form is kept only when folding
+				// would erase a use of an imported package (unsafe.Sizeof and
+				// friends) — the one case where the generated Go must keep
+				// the expression to keep the import.
 				saved := c.rawConstantExpr
-				c.rawConstantExpr = true
+				c.rawConstantExpr = c.usesImportedPackage(v.Values[i])
 				spec.InitExpr = c.expr(v.Values[i])
 				c.rawConstantExpr = saved
 			}
@@ -716,6 +723,43 @@ func (c *converter) constGroup(g *ast.GenDecl) *s.BashPPConstGroup {
 		}
 	}
 	return out
+}
+
+// usesImportedPackage reports whether e selects through an imported package
+// name (unsafe.Sizeof, pkg.Const): folding such a constant would leave the
+// import unused in the generated Go.
+func (c *converter) usesImportedPackage(e ast.Expr) bool {
+	found := false
+	ast.Inspect(e, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		if sel, ok := n.(*ast.SelectorExpr); ok {
+			if id, ok := sel.X.(*ast.Ident); ok {
+				if _, isPkg := c.info.Uses[id].(*types.PkgName); isPkg {
+					found = true
+					return false
+				}
+			}
+		}
+		return true
+	})
+	return found
+}
+
+// constGroupUsesImports reports whether any initializer in a const group
+// selects through an imported package name.
+func (c *converter) constGroupUsesImports(g *ast.GenDecl) bool {
+	for _, raw := range g.Specs {
+		if v, ok := raw.(*ast.ValueSpec); ok {
+			for _, value := range v.Values {
+				if c.usesImportedPackage(value) {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 func (c *converter) expr(e ast.Expr) s.BashPPExpr {

@@ -590,7 +590,14 @@ func (c *converter) lowerPackage(initBase int) (*loweredPackage, error) {
 				continue
 			}
 			gd := d.(*ast.GenDecl)
-			if gd.Tok == token.CONST {
+			// A parenthesised const group keeps its grouping through the
+			// group carrier, and a const whose initializer selects through
+			// an imported package (unsafe.Sizeof) keeps its source form so
+			// the generated Go keeps the import. A single const stays on the
+			// per-spec path, whose folded value the interpreter's exact
+			// evaluator accepts (a constant call such as complex is not a
+			// scalar expression to it).
+			if gd.Tok == token.CONST && (gd.Lparen.IsValid() || c.constGroupUsesImports(gd)) {
 				out.decls = append(out.decls, c.stmt(c.constGroup(gd)))
 				continue
 			}
