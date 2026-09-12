@@ -92,7 +92,9 @@ func TestBashPPInterfaceDiagnostics(t *testing.T) {
 		{"wrong signature", "type T int\nfunc (v T) M(n int) { }\ntype I interface { M(string) }\nfunc main() { var v T = 1; var i I = v }\nmain()\n", "BASHPP-EINTERFACE-SIGNATURE: T method M has wrong signature\n"},
 		{"embedded promoted missing", "type T int\nfunc (v T) Close() { }\ntype Reader interface { Read(string) }\ntype Closer interface { Close() }\ntype ReadCloser interface { Reader; Closer }\nfunc main() {\n var v T = 1\n var i ReadCloser = v\n}\nmain()\n", "BASHPP-EINTERFACE-MISSING: T does not implement interface (missing method Read)\n"},
 		{"embedded duplicate identical accepted conflict later", "type A interface { M(int) }\ntype B interface { M(string) }\ntype C interface { A; B }\n", "BASHPP-EINTERFACE-CONFLICT: interface C has conflicting method M\n"},
-		{"embedded non interface", "type T int\ntype I interface { T }\n", "BASHPP-EINTERFACE-EMBED: interface I embeds non-interface T\n"},
+		// `interface { T }` with T a declared type is a one-term type set,
+		// as in Go; only a name the runtime cannot resolve is an error.
+		{"embedded unresolved", "type I interface { Unknown }\n", "BASHPP-EINTERFACE-EMBED: interface I embeds non-interface Unknown\n"},
 		{"assert fail", "type T int\nfunc (v T) M(s string) { }\ntype U int\nfunc (v U) M(s string) { }\ntype I interface { M(string) }\nfunc main() { var v T = 1; var i I = v; x := i.(U); echo $x }\nmain()\n", "BASHPP-EASSERT-FAIL: interface value has dynamic type T, not U\n"},
 		{"assert impossible", "type T int\nfunc (v T) M(s string) { }\ntype U int\ntype I interface { M(string) }\nfunc main() { var v T = 1; var i I = v; x, ok := i.(U); echo $x $ok }\nmain()\n", "BASHPP-EASSERT-IMPOSSIBLE: U cannot be asserted from I\n"},
 		{"nil interface call", "type T int\nfunc (v T) M() { }\ntype I interface { M() }\nfunc main() {\n var i I\n i.M()\n}\nmain()\n", "nil interface has no method M\n"},

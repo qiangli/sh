@@ -325,7 +325,8 @@ func bashPPValidateTypeParamDecls(params []*syntax.BashPPTypeParam) error {
 			if name == nil || !syntax.BashPPValidIdent(name.Value) {
 				return fmt.Errorf("BASHPP-EGENERIC-PARAM: invalid type parameter")
 			}
-			if seen[name.Value] {
+			// The blank identifier declares nothing and may be repeated.
+			if seen[name.Value] && name.Value != "_" {
 				return fmt.Errorf("BASHPP-EGENERIC-PARAM: type parameter %s redeclared", name.Value)
 			}
 			seen[name.Value] = true
@@ -424,7 +425,7 @@ func (r *Runner) bashPPMethodDecl(d *syntax.BashPPFuncDecl) {
 	}
 	seenParams := make(map[string]bool, len(recv.TypeParams))
 	for _, param := range recv.TypeParams {
-		if seenParams[param.Value] {
+		if seenParams[param.Value] && param.Value != "_" {
 			r.errf("BASHPP-EGENERIC-RECEIVER: receiver type parameter %s redeclared\n", param.Value)
 			r.exit.code = 2
 			return
@@ -603,7 +604,7 @@ func bashPPSelectorCellType(cell *bashPPCell) syntax.BashPPTypeExpr {
 		}
 	}
 	if typ == nil && cell.typeName != "" {
-		typ = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: cell.typeName}}
+		typ, _ = bashPPScalarNamedType(cell.typeName)
 		if cell.pointer {
 			typ = &syntax.BashPPPointerType{Element: typ}
 		}
@@ -697,7 +698,9 @@ func (r *Runner) bashPPInstantiateFunc(c *syntax.BashPPCall, fn *bashPPFunc) (*b
 	} else if !r.bashPPInferTypeArgs(c, fn, bindings) {
 		return nil, false
 	}
-	if len(bindings) != want {
+	// Blank parameters share one binding slot, so the count of bindings is
+	// the count of distinct names.
+	if len(bindings) != bashPPDistinctTypeParamCount(params) {
 		r.errf("BASHPP-EGENERIC-INFER: cannot infer type arguments for %s\n", fn.name())
 		r.exit.code = 2
 		return nil, false
@@ -719,6 +722,16 @@ func (r *Runner) bashPPInstantiateFunc(c *syntax.BashPPCall, fn *bashPPFunc) (*b
 	}
 	bound.typeArgs = bindings
 	return &bound, true
+}
+
+func bashPPDistinctTypeParamCount(params []*syntax.BashPPTypeParam) int {
+	seen := make(map[string]bool)
+	for _, param := range params {
+		for _, name := range param.Names {
+			seen[name.Value] = true
+		}
+	}
+	return len(seen)
 }
 
 func bashPPTypeParamCount(params []*syntax.BashPPTypeParam) int {
@@ -840,7 +853,14 @@ func (r *Runner) bashPPTypeSetSatisfied(arg, constraint syntax.BashPPTypeExpr) b
 		if c.Name.Value == "comparable" {
 			return r.bashPPComparableType(arg, make(map[string]bool))
 		}
+		// A union term may itself be an interface — `OrderedNumeric |
+		// Complex` — whose type set, not its assignability, decides.
+		if iface, ok := r.bashPPInterfaceType(c); ok {
+			return r.bashPPConstraintSatisfied(arg, iface)
+		}
 		return r.bashPPTypeAssignable(arg, c)
+	case *syntax.BashPPInterfaceType:
+		return r.bashPPConstraintSatisfied(arg, c)
 	case *syntax.BashPPUnionType:
 		for _, term := range c.Terms {
 			if r.bashPPTypeSetSatisfied(arg, term) {
@@ -942,13 +962,43 @@ func (r *Runner) bashPPValidateNamedTypeArgs(named *syntax.BashPPNamedType) erro
 		constraint := bashPPSubstituteType(group.Constraint, bindings)
 		for _, param := range group.Names {
 			arg := named.TypeArgs[i].ArgType
+			i++
+			// `type List[T Ordered] struct { next *List[T] }`: an argument
+			// that is itself a type parameter is checked where the outer
+			// declaration is instantiated, the first point a concrete type
+			// exists; go/types has already checked the parameter's own
+			// constraint implies this one.
+			if r.bashPPOpenTypeParam(arg) {
+				continue
+			}
 			if !r.bashPPConstraintSatisfied(arg, constraint) {
 				return fmt.Errorf("BASHPP-EGENERIC-CONSTRAINT: %s does not satisfy constraint for %s in %s", bashPPTypeText(arg), param.Value, named.Name.Value)
 			}
-			i++
 		}
 	}
 	return nil
+}
+
+// bashPPOpenTypeParam reports whether typ is a type parameter the current
+// frame has not bound: the marker the parser leaves in signature positions,
+// or a bare name that is neither declared nor builtin while a generic
+// declaration is being validated.
+func (r *Runner) bashPPOpenTypeParam(typ syntax.BashPPTypeExpr) bool {
+	switch x := typ.(type) {
+	case *syntax.BashPPTypeParamType:
+		return r.bashPPTypeParamArgs[x.Name.Value] == nil
+	case *syntax.BashPPPointerType:
+		return r.bashPPOpenTypeParam(x.Element)
+	case *syntax.BashPPNamedType:
+		if x.Name == nil || len(x.TypeArgs) > 0 {
+			return false
+		}
+		if _, declared := r.bashPPTypes[x.Name.Value]; declared || bashPPBuiltinType(x.Name.Value) {
+			return false
+		}
+		return r.bashPPTypeParamArgs[x.Name.Value] == nil
+	}
+	return false
 }
 
 func bashPPValidateConcreteTypeArgs(args []*syntax.BashPPTypeArg) error {
@@ -1023,7 +1073,9 @@ func (r *Runner) bashPPConstraintSatisfied(arg, constraint syntax.BashPPTypeExpr
 	case *syntax.BashPPUnionType, *syntax.BashPPApproxType:
 		return r.bashPPTypeSetSatisfied(arg, constraint)
 	}
-	return false
+	// Any other type written as a constraint — `T []MyByte`, `P *S` — is Go's
+	// shorthand for the interface with that one type term.
+	return r.bashPPTypeSetSatisfied(arg, constraint)
 }
 
 // bashPPEmptyInterfaceType reports whether typ is spelled as an interface with
@@ -1182,8 +1234,7 @@ func (r *Runner) bashPPGoSourceArgCell(w *syntax.Word, expr syntax.BashPPExpr) *
 		scalarKind: value.value.Kind(),
 	}
 	if value.typ != "" {
-		cell.typeName = value.typ
-		cell.declType = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: value.typ}}
+		cell.declType, cell.typeName = bashPPScalarNamedType(value.typ)
 	}
 	return cell
 }
@@ -1248,7 +1299,7 @@ func (r *Runner) bashPPTypedCallArgs(call *syntax.BashPPCall, fn *bashPPFunc) (r
 		text := bashPPScalarString(value.value)
 		cell := &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: text}, scalarKind: value.value.Kind()}
 		if value.typ != "" {
-			cell.declType = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: value.typ}}
+			cell.declType, cell.typeName = bashPPScalarNamedType(value.typ)
 		}
 		cells[i], args[i] = cell, text
 	}
@@ -2372,8 +2423,7 @@ func (r *Runner) bashPPReturnScalarExpr(expr syntax.BashPPExpr) {
 	text := bashPPScalarString(value.value)
 	cell := &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: text}, scalarKind: value.value.Kind()}
 	if value.typ != "" {
-		cell.typeName = value.typ
-		cell.declType = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: value.typ}}
+		cell.declType, cell.typeName = bashPPScalarNamedType(value.typ)
 	}
 	r.bashPPReturn = bashPPReturnState{active: true, values: []string{text}, cells: []*bashPPCell{cell}}
 	r.exit.returning = true
@@ -2915,6 +2965,18 @@ func bashPPSubstituteType(typ syntax.BashPPTypeExpr, typeArgs map[string]syntax.
 	case *syntax.BashPPApproxType:
 		cp := *x
 		cp.Term = bashPPSubstituteType(cp.Term, typeArgs)
+		return &cp
+	case *syntax.BashPPChanType:
+		// The element travels twice: as a type node and as the text the
+		// channel checks compare against a channel's recorded element, so
+		// both are rewritten or `chan T` would still read as `chan T`.
+		cp := *x
+		cp.Element = bashPPSubstituteType(x.Element, typeArgs)
+		if cp.Element != x.Element && x.Elem != nil {
+			elem := *x.Elem
+			elem.Value = bashPPTypeText(cp.Element)
+			cp.Elem = &elem
+		}
 		return &cp
 	}
 	return typ

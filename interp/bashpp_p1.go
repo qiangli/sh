@@ -166,6 +166,11 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 		if r.bashPPTypes == nil {
 			r.bashPPTypes = make(map[string]bashPPType)
 		}
+		// `type _ struct{}` declares nothing that can be named: go/types has
+		// checked its representation, and repeating it is not a clash.
+		if name == "_" {
+			return
+		}
 		// A pre-registered package-level type is already in the registry by
 		// design; only an entry this statement did not put there is a clash.
 		preRegistered := r.bashPPGoSourceClaimType(name)
@@ -464,7 +469,7 @@ func (r *Runner) bashPPTypedScalarDeclValue(d *syntax.BashPPDecl) (expand.Variab
 		return expand.Variable{}, true, err
 	}
 	if value.typ != "" {
-		actual := &syntax.BashPPNamedType{Name: &syntax.Lit{Value: value.typ}}
+		actual, _ := bashPPScalarNamedType(value.typ)
 		if !r.bashPPTypeAssignable(actual, d.DeclTypeExpr) {
 			return expand.Variable{}, true, fmt.Errorf("BASHPP-EASSIGN-TYPE: cannot use %s as %s in declaration", value.typ, bashPPTypeText(d.DeclTypeExpr))
 		}
@@ -929,6 +934,22 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 				target.object = &bashPPObjectIdentity{owner: name, collection: cell.valueMeta}
 				return
 			}
+			// `i := any(x)`: a conversion to an interface binds the interface
+			// value that boxes x, which is what a later `i.(type)` reads.
+			cell, handled, err = r.bashPPInterfaceConversion(conv)
+			if err != nil {
+				r.errf("%s%v\n", r.bashErrPrefix(conv.Pos()), err)
+				r.exit = exitStatus{code: 2}
+				return
+			}
+			if handled {
+				name := d.Lhs[0].Value
+				r.bashPPDeclareName(name, cell.vr)
+				if target := r.bashPPScope.lookup(name); target != nil {
+					*target = *cell
+				}
+				return
+			}
 		}
 		if lit, ok := d.Expr.(*syntax.BashPPCompositeLit); ok {
 			if len(d.Lhs) != 1 {
@@ -1041,6 +1062,19 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 		var source *bashPPCell
 		if ident, ok := d.Expr.(*syntax.BashPPIdent); ok {
 			source = r.bashPPScope.lookup(ident.Name.Value)
+			// `xx := x` with x an interface copies the interface value whole,
+			// whatever its dynamic value's carrier; the scalar path below
+			// would keep the text and drop the dynamic type.
+			if vr := r.lookupVar(ident.Name.Value); vr.IsSet() && source != nil && source.interfaceValue != nil && vr.Kind != expand.Object {
+				r.bashPPDeclareName(d.Lhs[0].Value, vr)
+				if target := r.bashPPScope.lookup(d.Lhs[0].Value); target != nil {
+					target.typeName = source.typeName
+					target.declType = source.declType
+					target.scalarKind = source.scalarKind
+					target.interfaceValue = source.interfaceValue
+				}
+				return
+			}
 			if vr := r.lookupVar(ident.Name.Value); vr.IsSet() && vr.Kind == expand.Object {
 				if source != nil && source.object != nil && bashPPValueMeta(bashPPCellMeta(source)) {
 					value, meta := bashPPCopyArrayValue(vr.Obj, bashPPCellMeta(source))
@@ -1080,6 +1114,12 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 		if target != nil {
 			target.scalarKind = value.value.Kind()
 			target.typeName = value.typ
+			// `f := IteratorFunc[int](it)`: an instantiated named type is
+			// kept as a tree, since its type arguments are what the
+			// receiver's methods are bound with.
+			if strings.Contains(value.typ, "[") {
+				target.declType, target.typeName = bashPPScalarNamedType(value.typ)
+			}
 			if source != nil {
 				target.object = source.object
 				target.channel, target.channelOwner = source.channel, source.channelOwner

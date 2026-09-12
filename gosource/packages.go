@@ -79,9 +79,10 @@ func newMapImporter(base string, fallback types.Importer) *mapImporter {
 
 // newTypeInfo allocates the Info map set the converter reads. The program
 // and every explicit package are checked into an Info of this shape so the
-// same converter can lower any of them.
+// same converter can lower any of them. Instances is what lets the converter
+// spell every generic call's type arguments explicitly, inferred or not.
 func newTypeInfo() *types.Info {
-	return &types.Info{Types: map[ast.Expr]types.TypeAndValue{}, Defs: map[*ast.Ident]types.Object{}, Uses: map[*ast.Ident]types.Object{}, Implicits: map[ast.Node]types.Object{}, Selections: map[*ast.SelectorExpr]*types.Selection{}}
+	return &types.Info{Types: map[ast.Expr]types.TypeAndValue{}, Defs: map[*ast.Ident]types.Object{}, Uses: map[*ast.Ident]types.Object{}, Implicits: map[ast.Node]types.Object{}, Selections: map[*ast.SelectorExpr]*types.Selection{}, Instances: map[*ast.Ident]types.Instance{}}
 }
 
 func isRelativeImport(p string) bool {

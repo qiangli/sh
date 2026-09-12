@@ -72,7 +72,7 @@ func (r *Runner) bashPPInterfaceMethodSet(name string, iface *syntax.BashPPInter
 		if elem.Method == nil {
 			embeddedIface, ok := r.bashPPInterfaceType(elem.Embedded)
 			if !ok {
-				if bashPPDirectTypeSetTerm(elem.Embedded) {
+				if bashPPDirectTypeSetTerm(elem.Embedded) || r.bashPPSingleTypeTerm(elem.Embedded) {
 					continue
 				}
 				return nil, fmt.Errorf("BASHPP-EINTERFACE-EMBED: interface %s embeds non-interface %s", name, bashPPTypeText(elem.Embedded))
@@ -113,6 +113,29 @@ func (r *Runner) bashPPInterfaceMethodSet(name string, iface *syntax.BashPPInter
 		set.byName[method] = bashPPInterfaceMethod{spec: spec, sig: sig}
 	}
 	return set, nil
+}
+
+// bashPPSingleTypeTerm reports whether a non-interface element embedded in
+// an interface is a one-term type set — `interface{ string }`, `interface{
+// []byte }`, `interface{ *B }`, `interface{ List[T] }` — which contributes
+// no methods and restricts the constraint's type set exactly as the union
+// spelling of the same term would. A bare name that resolves to nothing is
+// not one: it is an interface the runtime does not know, and saying so is
+// better than silently narrowing the type set to a type that does not exist.
+func (r *Runner) bashPPSingleTypeTerm(typ syntax.BashPPTypeExpr) bool {
+	switch t := typ.(type) {
+	case *syntax.BashPPNamedType:
+		if t.Name == nil {
+			return false
+		}
+		if _, declared := r.bashPPTypes[t.Name.Value]; declared {
+			return true
+		}
+		return bashPPBuiltinType(t.Name.Value)
+	case *syntax.BashPPCollectionType, *syntax.BashPPPointerType, *syntax.BashPPFuncType, *syntax.BashPPChanType, *syntax.BashPPStructType, *syntax.BashPPTypeParamType:
+		return true
+	}
+	return false
 }
 
 func bashPPDirectTypeSetTerm(typ syntax.BashPPTypeExpr) bool {
@@ -182,14 +205,12 @@ func bashPPInterfaceElems(iface *syntax.BashPPInterfaceType) []*syntax.BashPPInt
 }
 
 func (r *Runner) bashPPImplements(actual syntax.BashPPTypeExpr, iface *syntax.BashPPInterfaceType) error {
-	if r.bashPPGoSource && !r.bashPPInterfaceHasTypeTerms(iface, make(map[*syntax.BashPPInterfaceType]bool)) {
-		methods, err := r.bashPPInterfaceMethodSet("interface", iface, make(map[string]bool))
-		if err != nil {
-			return err
-		}
-		if len(methods.order) == 0 {
-			return nil
-		}
+	// An interface with no methods — `any`, or a constraint made only of
+	// type terms such as `interface{ []int64 | [5]int64 }` — is implemented
+	// by every type, including one that has no method owner at all; its
+	// type terms are the caller's separate check.
+	if methods, err := r.bashPPInterfaceMethodSet("interface", iface, make(map[string]bool)); err == nil && len(methods.order) == 0 {
+		return nil
 	}
 	if actualIface, ok := r.bashPPInterfaceType(actual); ok {
 		actualSet, err := r.bashPPInterfaceMethodSet(bashPPTypeText(actual), actualIface, make(map[string]bool))
@@ -291,7 +312,13 @@ func bashPPFieldsSignature(fields []*syntax.BashPPField) string {
 			if field.Variadic() {
 				b.WriteString("...")
 			}
-			if field.FieldType != nil {
+			// The type tree is the canonical spelling: a substituted field
+			// is respelled from its tree, so a signature written `func(T)
+			// bool` and one instantiated to `func(int)(bool)` must both be
+			// read from the tree to compare equal.
+			if field.FieldTypeExpr != nil {
+				b.WriteString(bashPPTypeText(field.FieldTypeExpr))
+			} else if field.FieldType != nil {
 				b.WriteString(field.FieldType.Value)
 			}
 		}
@@ -434,7 +461,7 @@ func (r *Runner) bashPPBindInterfaceParam(cell *bashPPCell, typ syntax.BashPPTyp
 		}
 	}
 	if dynamic == nil && cell.typeName != "" {
-		dynamic = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: cell.typeName}}
+		dynamic, _ = bashPPScalarNamedType(cell.typeName)
 	}
 	if dynamic == nil {
 		if name := bashPPDefaultScalarTypeName(cell.scalarKind); name != "" {
@@ -452,6 +479,45 @@ func (r *Runner) bashPPBindInterfaceParam(cell *bashPPCell, typ syntax.BashPPTyp
 	}
 	cell.interfaceValue = &bashPPInterfaceValue{dynamic: dynamic, cell: bashPPCopyInterfaceCell(cell)}
 	return nil
+}
+
+// bashPPInterfaceConversion evaluates a conversion to an interface type —
+// `any(x)`, `interface{}(d)`, `I(v)` — to a cell holding the interface value,
+// which is how a type switch or assertion reads a type parameter's dynamic
+// type. It reports false for any other expression. The operand is read the
+// way an interface assignment reads its source, so a struct is captured by
+// value and an interface operand contributes its own dynamic value.
+func (r *Runner) bashPPInterfaceConversion(x syntax.BashPPExpr) (*bashPPCell, bool, error) {
+	if paren, ok := x.(*syntax.BashPPParenExpr); ok {
+		return r.bashPPInterfaceConversion(paren.X)
+	}
+	conv, ok := x.(*syntax.BashPPConvertExpr)
+	if !ok {
+		return nil, false, nil
+	}
+	target := r.bashPPBindTypeExpr(r.bashPPConvertTarget(conv))
+	if target == nil {
+		return nil, false, nil
+	}
+	iface, ok := r.bashPPInterfaceType(target)
+	if !ok {
+		return nil, false, nil
+	}
+	source, dynamic, err := r.bashPPCellForInterfaceExpr(conv.X)
+	if err != nil {
+		return nil, true, err
+	}
+	cell := &bashPPCell{declType: target, vr: expand.Variable{Set: true, Kind: expand.String}}
+	if source.interfaceValue != nil && source.interfaceValue.nilIface {
+		cell.interfaceValue = &bashPPInterfaceValue{nilIface: true}
+		return cell, true, nil
+	}
+	if err := r.bashPPImplements(dynamic, iface); err != nil {
+		return nil, true, err
+	}
+	cell.interfaceValue = &bashPPInterfaceValue{dynamic: dynamic, cell: bashPPCopyInterfaceCell(source)}
+	cell.vr = cell.interfaceValue.cell.vr
+	return cell, true, nil
 }
 
 // bashPPCopyInterfaceCell captures the dynamic value at assignment time.
@@ -488,7 +554,7 @@ func (r *Runner) bashPPCellForInterfaceExpr(expr syntax.BashPPExpr) (*bashPPCell
 			}
 		}
 		if actual == nil && cell.typeName != "" {
-			actual = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: cell.typeName}}
+			actual, _ = bashPPScalarNamedType(cell.typeName)
 		}
 		if actual == nil {
 			return nil, nil, fmt.Errorf("BASHPP-EINTERFACE-VALUE: %s has no dynamic type", id.Name.Value)
@@ -538,7 +604,7 @@ func (r *Runner) bashPPCellForInterfaceExpr(expr syntax.BashPPExpr) (*bashPPCell
 	if name == "" {
 		return nil, nil, fmt.Errorf("BASHPP-EINTERFACE-VALUE: interface assignment requires a named value")
 	}
-	actual := &syntax.BashPPNamedType{Name: &syntax.Lit{Value: name}}
+	actual, name := bashPPScalarNamedType(name)
 	cell := &bashPPCell{
 		vr:         expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarString(value.value)},
 		scalarKind: value.value.Kind(),
@@ -565,27 +631,53 @@ func bashPPDefaultScalarTypeName(kind constant.Kind) string {
 }
 
 func (r *Runner) bashPPTypeAssert(assert *syntax.BashPPTypeAssertExpr, commaOK bool) ([]string, *bashPPCell, error) {
-	id, ok := assert.X.(*syntax.BashPPIdent)
-	if !ok {
-		value, meta, err := r.bashPPReadExpr(assert.X)
-		if err != nil {
-			return nil, nil, err
-		}
-		if meta == nil || meta.interfaceValue == nil {
-			return nil, nil, fmt.Errorf("BASHPP-EASSERT-OPERAND: type assertion operand must be an interface")
-		}
-		cell := &bashPPCell{declType: meta.typ, interfaceValue: meta.interfaceValue}
-		if meta.interfaceValue.nilIface {
-			cell.vr = expand.Variable{Set: true, Kind: expand.String}
-		} else if meta.interfaceValue.cell != nil {
-			cell.vr = meta.interfaceValue.cell.vr
-		} else {
-			cell.vr = expand.NewObject(value)
-		}
-		return r.bashPPTypeAssertCell(assert, commaOK, cell)
+	cell, err := r.bashPPInterfaceOperand(assert.X, "type assertion")
+	if err != nil {
+		return nil, nil, err
 	}
-	cell := r.bashPPScope.lookup(id.Name.Value)
 	return r.bashPPTypeAssertCell(assert, commaOK, cell)
+}
+
+// bashPPInterfaceOperand evaluates the operand of a type assertion or type
+// switch to the cell holding its interface value. A name is its own cell;
+// any other expression — `any(x)`, `interface{}(d)`, a call, a field — is
+// read and must carry an interface value. Only a nil cell is reported here;
+// a non-interface name is the caller's message.
+func (r *Runner) bashPPInterfaceOperand(x syntax.BashPPExpr, what string) (*bashPPCell, error) {
+	if id, ok := x.(*syntax.BashPPIdent); ok {
+		return r.bashPPScope.lookup(id.Name.Value), nil
+	}
+	if cell, ok, err := r.bashPPInterfaceConversion(x); ok {
+		return cell, err
+	}
+	// A call's interface result is its result cell, which already carries
+	// the dynamic value the callee returned.
+	if call, ok := x.(*syntax.BashPPCall); ok && r.bashPPGoSource {
+		cell, err := r.goSourceValueCell(call)
+		if err != nil {
+			return nil, err
+		}
+		if cell == nil || cell.interfaceValue == nil {
+			return nil, fmt.Errorf("BASHPP-EASSERT-OPERAND: %s operand must be an interface", what)
+		}
+		return cell, nil
+	}
+	value, meta, err := r.bashPPReadExpr(x)
+	if err != nil {
+		return nil, err
+	}
+	if meta == nil || meta.interfaceValue == nil {
+		return nil, fmt.Errorf("BASHPP-EASSERT-OPERAND: %s operand must be an interface", what)
+	}
+	cell := &bashPPCell{declType: meta.typ, interfaceValue: meta.interfaceValue}
+	if meta.interfaceValue.nilIface {
+		cell.vr = expand.Variable{Set: true, Kind: expand.String}
+	} else if meta.interfaceValue.cell != nil {
+		cell.vr = meta.interfaceValue.cell.vr
+	} else {
+		cell.vr = expand.NewObject(value)
+	}
+	return cell, nil
 }
 
 func (r *Runner) bashPPTypeAssertCell(assert *syntax.BashPPTypeAssertExpr, commaOK bool, cell *bashPPCell) ([]string, *bashPPCell, error) {
@@ -653,15 +745,14 @@ func bashPPInterfaceAssertTypeText(typ syntax.BashPPTypeExpr) string {
 func (r *Runner) bashPPTypeSwitch(ctx context.Context, sw *syntax.BashPPSwitch) {
 	decl, _ := sw.Init.(*syntax.BashPPShortDecl)
 	assert, _ := decl.Expr.(*syntax.BashPPTypeAssertExpr)
-	id, ok := assert.X.(*syntax.BashPPIdent)
-	if !ok {
-		r.errf("BASHPP-ETYPESWITCH-OPERAND: type switch operand must be an interface\n")
+	cell, err := r.bashPPInterfaceOperand(assert.X, "type switch")
+	if err != nil {
+		r.errf("BASHPP-ETYPESWITCH-OPERAND: %v\n", strings.TrimPrefix(err.Error(), "BASHPP-EASSERT-OPERAND: "))
 		r.exit = exitStatus{code: 2}
 		return
 	}
-	cell := r.bashPPScope.lookup(id.Name.Value)
 	if cell == nil || cell.interfaceValue == nil {
-		r.errf("BASHPP-ETYPESWITCH-OPERAND: %s is not an interface\n", id.Name.Value)
+		r.errf("BASHPP-ETYPESWITCH-OPERAND: %s is not an interface\n", bashPPExprText(assert.X))
 		r.exit = exitStatus{code: 2}
 		return
 	}

@@ -3,7 +3,11 @@
 
 package interp
 
-import "mvdan.cc/sh/v3/syntax"
+import (
+	"strings"
+
+	"mvdan.cc/sh/v3/syntax"
+)
 
 // Type parameters inside a generic BODY.
 //
@@ -114,15 +118,13 @@ func (r *Runner) bashPPBindShortDecl(d *syntax.BashPPShortDecl) *syntax.BashPPSh
 	}
 	expr := r.bashPPBindExprs(d.Expr)
 	call := r.bashPPBindCallNode(d.Call)
-	// A channel element is spelled as a bare literal rather than a type tree,
-	// so `make(chan T, n)` is rebound by name like a conversion target.
+	// `make(chan T, n)` carries its element both as a type tree and as the
+	// bare literal the channel records; substitution rewrites the pair.
 	var makeChan *syntax.BashPPMakeChan
-	if d.MakeChan != nil && d.MakeChan.ChanType != nil && d.MakeChan.ChanType.Elem != nil {
-		if bound := r.bashPPTypeParamArgs[d.MakeChan.ChanType.Elem.Value]; bound != nil {
-			chanType := *d.MakeChan.ChanType
-			chanType.Elem = r.bashPPBindTypeLit(d.MakeChan.ChanType.Elem, bound)
+	if d.MakeChan != nil && d.MakeChan.ChanType != nil {
+		if bound, ok := r.bashPPBindTypeExpr(d.MakeChan.ChanType).(*syntax.BashPPChanType); ok && bound != d.MakeChan.ChanType {
 			mc := *d.MakeChan
-			mc.ChanType = &chanType
+			mc.ChanType = bound
 			makeChan = &mc
 		}
 	}
@@ -307,16 +309,26 @@ func (r *Runner) bashPPBindExprs(x syntax.BashPPExpr) syntax.BashPPExpr {
 		// with its own diagnostic rather than a mangled one.
 		bound := r.bashPPTypeParamArgs[e.ConvType.Value]
 		inner := r.bashPPBindExprs(e.X)
-		if bound == nil {
-			if inner == e.X {
-				return x
+		convType, convTypeExpr := e.ConvType, e.ConvTypeExpr
+		if bound != nil {
+			convType = r.bashPPBindTypeLit(e.ConvType, bound)
+			if convTypeExpr != nil {
+				convTypeExpr = bound
 			}
-			cp := *e
-			cp.X = inner
-			return &cp
+		} else if e.ConvTypeExpr != nil {
+			// A target that only MENTIONS a parameter — `IteratorFunc[R]`,
+			// `*T`, `[]T` — is rewritten through its type tree, and the
+			// literal spelling follows it.
+			if rebound := r.bashPPBindTypeExpr(e.ConvTypeExpr); rebound != e.ConvTypeExpr {
+				convTypeExpr = rebound
+				convType = r.bashPPBindTypeLit(e.ConvType, rebound)
+			}
+		}
+		if inner == e.X && convType == e.ConvType && convTypeExpr == e.ConvTypeExpr {
+			return x
 		}
 		cp := *e
-		cp.ConvType, cp.X = r.bashPPBindTypeLit(e.ConvType, bound), inner
+		cp.ConvType, cp.ConvTypeExpr, cp.X = convType, convTypeExpr, inner
 		return &cp
 	case *syntax.BashPPCall:
 		if bound := r.bashPPBindCallNode(e); bound != e {
@@ -390,4 +402,19 @@ func (r *Runner) bashPPBindExprs(x syntax.BashPPExpr) syntax.BashPPExpr {
 		return &cp
 	}
 	return x
+}
+
+// bashPPScalarNamedType turns the type name a scalar carries into the type
+// it names. A conversion to an instantiated generic type spells its result
+// with the type arguments — `IteratorFunc[int]` — and those arguments are
+// what the receiver's methods and the interface checks are bound with, so
+// the spelling is parsed back into a tree and the bare name returned beside
+// it for the declaration lookup. Any other name is the named type it is.
+func bashPPScalarNamedType(name string) (syntax.BashPPTypeExpr, string) {
+	if strings.Contains(name, "[") {
+		if named, ok := syntax.BashPPTypeExprFromText(name).(*syntax.BashPPNamedType); ok && named.Name != nil && len(named.TypeArgs) > 0 {
+			return named, named.Name.Value
+		}
+	}
+	return &syntax.BashPPNamedType{Name: &syntax.Lit{Value: name}}, name
 }
