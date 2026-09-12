@@ -408,6 +408,7 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 			return values, err
 		}
 	}
+	bashPPReflectTypeOnly(req, &q)
 	if err := validateLocalTransport(req, q); err != nil {
 		return nil, err
 	}
@@ -520,7 +521,7 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 					// parked as a callback server for the session — every
 					// request once a retained handler is registered — hands
 					// its callbacks to nothing and marks nothing.
-					if requestHasCallbacks(req, q) && !synchronousFunctionCallback(req, q) {
+					if requestHasCallbacks(req, q) && !synchronousFunctionCallback(req, q) && !bashPPTypeDescriptorResult(req, q) {
 						reply.Values[i].Callbacks = true
 					}
 				}

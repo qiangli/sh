@@ -79,6 +79,9 @@ func nativeSliceReadOnly(name string) bool {
 		"encoding/hex.EncodeToString", "encoding/hex.Dump",
 		"regexp.Match", "*regexp.Regexp.Match", "*regexp.Regexp.Find", "*regexp.Regexp.FindAll", "*regexp.Regexp.FindIndex", "*regexp.Regexp.FindSubmatch", "*regexp.Regexp.ReplaceAll", "*regexp.Regexp.ReplaceAllFunc",
 		"slices.IsSorted",
+		// reflect.TypeOf reads only the argument's type: no element storage is
+		// retained or written, and no mirrored method is invoked.
+		"reflect.TypeOf",
 		// Structural value emitters — the marshalers walk the transported value
 		// tree and allocate their own output. Element storage is read only.
 		"encoding/json.Marshal", "encoding/json.MarshalIndent", "encoding/json/v2.Marshal",

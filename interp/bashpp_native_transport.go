@@ -151,6 +151,51 @@ func validateLocalTransport(req bashPPEvalRequest, q bashPPBridgeRequest) error 
 	return fmt.Errorf("gosource: dependency mutation of interpreter-owned references is unsupported for %s", q.Selector)
 }
 
+// bashPPReflectTypeOnly rewrites original function arguments of reflect.TypeOf
+// into bare type descriptors. TypeOf inspects the argument's type and never
+// invokes the value, so no callback trampoline is wired and the value is not
+// marked callback-bearing; the worker resolves the rendered signature against
+// its registered type table and hands reflect a zero value of that type.
+func bashPPReflectTypeOnly(req bashPPEvalRequest, q *bashPPBridgeRequest) {
+	if q.Op != "call" || q.Receiver != nil {
+		return
+	}
+	alias, name, ok := strings.Cut(q.Selector, ".")
+	if !ok || req.Imports[alias] != "reflect" || name != "TypeOf" {
+		return
+	}
+	s := req.Bridge
+	if s == nil {
+		return
+	}
+	for i, arg := range q.Args {
+		if arg.Kind != "callback" || arg.Session != s.id {
+			continue
+		}
+		s.mu.Lock()
+		fn := s.functions[arg.Handle]
+		s.mu.Unlock()
+		if fn == nil {
+			continue
+		}
+		if text, ok := bashPPFunctionTypeText(fn); ok {
+			q.Args[i] = bashPPBridgeValue{Kind: "nil", Type: text}
+		}
+	}
+}
+
+// bashPPTypeDescriptorResult reports a call whose results are pure type
+// descriptors. reflect.TypeOf retains neither its argument nor the argument's
+// mirrored callbacks, so its result handle must not be marked callback-bearing
+// — later method reads on the descriptor are plain dependency operations.
+func bashPPTypeDescriptorResult(req bashPPEvalRequest, q bashPPBridgeRequest) bool {
+	if q.Op != "call" || q.Receiver != nil {
+		return false
+	}
+	alias, name, ok := strings.Cut(q.Selector, ".")
+	return ok && req.Imports[alias] == "reflect" && name == "TypeOf"
+}
+
 // bashPPDependencyOwnedWriter reports a writer argument the dependency itself
 // stores: a native handle, or an original pointer whose pointee is one. The
 // worker binds such a pointer to the handle's own storage, so formatted writes

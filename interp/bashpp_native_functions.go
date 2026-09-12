@@ -73,6 +73,46 @@ func (r *Runner) bashPPBridgeFunction(fn *bashPPFunc) (bashPPBridgeValue, error)
 	return bashPPBridgeValue{Kind: "callback", Handle: id, Session: s.id, Callbacks: true}, nil
 }
 
+// bashPPFunctionTypeText renders an original function's type in the original
+// program's own spellings — the names the worker's type resolver is registered
+// under. It reports false for a signature it cannot spell completely.
+func bashPPFunctionTypeText(fn *bashPPFunc) (string, bool) {
+	render := func(fields []*syntax.BashPPField) ([]string, bool) {
+		var out []string
+		for _, p := range bashppParams(fields) {
+			if p.typ == nil {
+				return nil, false
+			}
+			text := bashPPTypeText(p.typ)
+			if text == "" {
+				return nil, false
+			}
+			if p.variadic {
+				text = "..." + text
+			}
+			out = append(out, text)
+		}
+		return out, true
+	}
+	params, ok := render(fn.params())
+	if !ok {
+		return "", false
+	}
+	results, ok := render(fn.results())
+	if !ok {
+		return "", false
+	}
+	text := "func(" + strings.Join(params, ", ") + ")"
+	switch len(results) {
+	case 0:
+	case 1:
+		text += " " + results[0]
+	default:
+		text += " (" + strings.Join(results, ", ") + ")"
+	}
+	return text, true
+}
+
 func (r *Runner) bashPPNativeFunctionCallback(ctx context.Context, id uint64, args []bashPPBridgeValue) (values []bashPPBridgeValue, err error) {
 	defer func() {
 		if failure := recover(); failure != nil {
@@ -186,6 +226,10 @@ func synchronousFunctionCallback(req bashPPEvalRequest, q bashPPBridgeRequest) b
 	if path == "golang.org/x/tour/wc.Test" || path == "golang.org/x/tour/pic.Show" || path == "path/filepath.WalkDir" || path == "testing.Main" {
 		return true
 	}
+	// testing.AllocsPerRun stays refused: it would invoke the original func
+	// synchronously, but its observable is the child's allocation count, and
+	// the callback trampoline's own allocations are part of that measurement.
+	// Serving it would answer with a number native Go never produces.
 	if pkg, name, ok := strings.Cut(path, "."); ok {
 		if pkg == "slices" {
 			switch name {
