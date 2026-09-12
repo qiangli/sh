@@ -1960,7 +1960,13 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 		r.bashPPDeferStack = r.bashPPDeferStack[:frame.deferMark]
 	}
 	if shortDeclFailed {
-		r.exit = exitStatus{code: 2}
+		// A fatal diagnostic recorded inside the body — a dependency call
+		// the bridge refused, say — is the outcome; a `return f()` whose f
+		// failed that way counts as a failed producer too, and must not
+		// replace the diagnostic with a bare status.
+		if !r.exit.fatalExit && !r.exit.exiting {
+			r.exit = exitStatus{code: 2}
+		}
 		return nil
 	}
 
