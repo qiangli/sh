@@ -566,25 +566,7 @@ func (r *Runner) bashPPReadExpr(expr syntax.BashPPExpr) (any, *bashPPCollectionM
 			if err != nil {
 				return nil, nil, err
 			}
-			if cell == nil {
-				return nil, nil, fmt.Errorf("Go call has no result")
-			}
-			if cell.pointer {
-				return cell.pointerValue, bashPPPointerMeta(cell.declType), nil
-			}
-			if cell.interfaceValue != nil {
-				return cell.vrValue(), &bashPPCollectionMeta{kind: "interface", typ: cell.declType, interfaceValue: cell.interfaceValue}, nil
-			}
-			if cell.vr.Kind == expand.Object {
-				return cell.vr.Obj, bashPPCellMeta(cell), nil
-			}
-			if _, ok := r.bashPPUnderlyingType(cell.declType).(*syntax.BashPPFuncType); ok {
-				if cell.vr.Str == "" || cell.vr.Str == "nil" {
-					return nil, &bashPPCollectionMeta{kind: "func", typ: cell.declType}, nil
-				}
-				return cell.vr.Str, &bashPPCollectionMeta{kind: "func", typ: cell.declType}, nil
-			}
-			return bashPPScalarAny(r.bashPPScalarFromCell(cell).value), nil, nil
+			return r.bashPPReadCellValue(cell)
 		}
 	}
 	if value, meta, handled, err := r.goSourceCollectionCallValue(expr); handled {
@@ -624,6 +606,12 @@ func (r *Runner) bashPPReadExpr(expr syntax.BashPPExpr) (any, *bashPPCollectionM
 		return bashPPScalarAny(scalar.value), nil, nil
 	case *syntax.BashPPCompositeLit:
 		return r.bashPPEvalComposite(x, nil)
+	case *syntax.BashPPTypeAssertExpr:
+		_, cell, err := r.bashPPTypeAssert(x, false)
+		if err != nil {
+			return nil, nil, err
+		}
+		return r.bashPPReadCellValue(cell)
 	case *syntax.BashPPIdent:
 		cell := r.bashPPScope.lookup(x.Name.Value)
 		if cell != nil && cell.pointer {
@@ -786,6 +774,28 @@ func (r *Runner) bashPPReadExpr(expr syntax.BashPPExpr) (any, *bashPPCollectionM
 		return out, child, nil
 	}
 	return nil, nil, fmt.Errorf("BASHPP-ESELECTOR-EXPR: unsupported structured expression")
+}
+
+func (r *Runner) bashPPReadCellValue(cell *bashPPCell) (any, *bashPPCollectionMeta, error) {
+	if cell == nil {
+		return nil, nil, fmt.Errorf("Go value has no result")
+	}
+	if cell.pointer {
+		return cell.pointerValue, bashPPPointerMeta(cell.declType), nil
+	}
+	if cell.interfaceValue != nil {
+		return cell.vrValue(), &bashPPCollectionMeta{kind: "interface", typ: cell.declType, interfaceValue: cell.interfaceValue}, nil
+	}
+	if cell.vr.Kind == expand.Object {
+		return cell.vr.Obj, bashPPCellMeta(cell), nil
+	}
+	if _, ok := r.bashPPUnderlyingType(cell.declType).(*syntax.BashPPFuncType); ok {
+		if cell.vr.Str == "" || cell.vr.Str == "nil" {
+			return nil, &bashPPCollectionMeta{kind: "func", typ: cell.declType}, nil
+		}
+		return cell.vr.Str, &bashPPCollectionMeta{kind: "func", typ: cell.declType}, nil
+	}
+	return bashPPScalarAny(r.bashPPScalarFromCell(cell).value), nil, nil
 }
 
 func (r *Runner) bashPPStructuredAssign(target, rhs syntax.BashPPExpr) {
