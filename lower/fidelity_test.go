@@ -26,15 +26,14 @@ import (
 // Classes not yet closed are listed in fidelityOpen and are still exercised
 // so that their output stays gofmt-stable.
 var fidelityOpen = map[string]bool{
-	"comments-dropped":         true, // C1
-	"sink-statements":          true, // C2
-	"untyped-constants":        true, // C3
-	"reparenthesised-exprs":    true, // C4
-	"main-rename":              true, // C5
-	"import-aliasing":          true, // C8
-	"type-assertion":           true, // C9
-	"synthetic-receiver-names": true, // C10
-	"decl-reordering":          true, // C11
+	"comments-dropped":      true, // C1
+	"sink-statements":       true, // C2
+	"untyped-constants":     true, // C3
+	"reparenthesised-exprs": true, // C4
+	"main-rename":           true, // C5
+	"import-aliasing":       true, // C8
+	"type-assertion":        true, // C9
+	"decl-reordering":       true, // C11
 }
 
 // fidelityLanded records, for classes whose emitter rewrite is already

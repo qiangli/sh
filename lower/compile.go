@@ -771,19 +771,26 @@ func (e *emitter) function(f *syntax.BashPPFuncDecl) (string, error) {
 	e.scopes = []map[string]bool{{}}
 	defer func() { e.scopes = saved }()
 	if f.Receiver != nil {
-		if f.Receiver.Name == nil {
-			f.Receiver.Name = &syntax.Lit{Value: e.syntheticName()}
-		} else if f.Receiver.Name.Value == "_" {
-			f.Receiver.Name.Value = e.syntheticName()
+		// The runtime path names every receiver and parameter so its
+		// projections can refer to them; Go source keeps its own spelling,
+		// including an unnamed or blank receiver.
+		if !e.goSource {
+			if f.Receiver.Name == nil {
+				f.Receiver.Name = &syntax.Lit{Value: e.syntheticName()}
+			} else if f.Receiver.Name.Value == "_" {
+				f.Receiver.Name.Value = e.syntheticName()
+			}
 		}
-		e.bind(f.Receiver.Name.Value)
 		typ := f.Receiver.RecvType.Value
 		if f.Receiver.Pointer {
 			typ = "*" + typ
 		}
-		info := e.projectionType(typ, nil)
-		info.receiver = f.Receiver.Pointer
-		e.projections.projectionBind(f.Receiver.Name.Value, info)
+		if f.Receiver.Name != nil {
+			e.bind(f.Receiver.Name.Value)
+			info := e.projectionType(typ, nil)
+			info.receiver = f.Receiver.Pointer
+			e.projections.projectionBind(f.Receiver.Name.Value, info)
+		}
 		for _, param := range f.Receiver.TypeParams {
 			e.bind(param.Value)
 		}
@@ -794,6 +801,9 @@ func (e *emitter) function(f *syntax.BashPPFuncDecl) (string, error) {
 		}
 	}
 	for _, p := range f.Params {
+		if e.goSource {
+			break
+		}
 		if len(p.Names) == 0 {
 			p.Names = []*syntax.Lit{{Value: e.syntheticName()}}
 		} else {
@@ -833,7 +843,10 @@ func (e *emitter) function(f *syntax.BashPPFuncDecl) (string, error) {
 		if len(r.TypeParams) > 0 {
 			typ += "[" + strings.Join(names(r.TypeParams), ",") + "]"
 		}
-		recv = "(" + r.Name.Value + " " + typ + ") "
+		recv = "(" + typ + ") "
+		if r.Name != nil {
+			recv = "(" + r.Name.Value + " " + typ + ") "
+		}
 	}
 	generics, err := e.typeParams(f.TypeParams)
 	if err != nil {
