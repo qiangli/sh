@@ -80,6 +80,47 @@ func TestSprint152Converter(t *testing.T) {
 	}
 }
 
+// TestSprint152ConstInitializersAsWritten pins the C3 converter half for
+// Go-source constants: the source initializer is retained even when go/types
+// gives us a typed constant value. Without that, unsafe.Sizeof folds to "8",
+// the generated Go no longer references unsafe, and gc rejects the hoisted
+// import alias as unused.
+func TestSprint152ConstInitializersAsWritten(t *testing.T) {
+	path := filepath.Join("testdata", "sprint152", "const-initializers-as-written", "const_initializers_as_written.go")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := filepath.Base(path)
+	goOut, err := exec.Command("go", "run", path).Output()
+	if err != nil {
+		t.Fatalf("go run: %v", err)
+	}
+	program, err := gosource.Load([]gosource.Source{{Name: name, Data: data}}, gosource.Options{RunMain: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := lower.Compile(program.File, lower.Options{Origin: name})
+	if err != nil {
+		t.Fatalf("lower: %v", err)
+	}
+	source := string(result.Source)
+	if !strings.Contains(source, ".Sizeof([8]byte{})") {
+		t.Fatalf("const initializer was not retained as written:\n%s", source)
+	}
+	generated := filepath.Join(t.TempDir(), "generated.go")
+	if err := os.WriteFile(generated, result.Source, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loweredOut, err := exec.Command("go", "run", generated).Output()
+	if err != nil {
+		t.Fatalf("go run lowered program: %v\n%s", err, result.Source)
+	}
+	if !bytes.Equal(loweredOut, goOut) {
+		t.Fatalf("lowered stdout differs from go run\nlowered: %q\ngo run:  %q", loweredOut, goOut)
+	}
+}
+
 // TestSprint152SyntheticCallPosition pins the C5 converter half: the synthetic
 // `main` wrapper's call to the renamed source main must carry no borrowed
 // //line. The first declaration is an import, so the old borrowed position

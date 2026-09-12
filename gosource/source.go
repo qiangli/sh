@@ -577,6 +577,10 @@ func (c *converter) lowerPackage(initBase int) (*loweredPackage, error) {
 				continue
 			}
 			gd := d.(*ast.GenDecl)
+			if gd.Tok == token.CONST {
+				out.decls = append(out.decls, c.stmt(c.constGroup(gd)))
+				continue
+			}
 			for _, s := range gd.Specs {
 				switch v := s.(type) {
 				case *ast.ImportSpec:
