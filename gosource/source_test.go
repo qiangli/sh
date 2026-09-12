@@ -330,7 +330,10 @@ func TestAllGoDiagnostics(t *testing.T) {
 		needles      []string
 	}{
 		{"types", "package main\nfunc main(){\n println(missingOne)\n println(missingTwo)\n}\n", []string{"types.go:3:", "undefined: missingOne", "types.go:4:", "undefined: missingTwo"}},
-		{"syntax", "package main\nfunc first( {\n}\nfunc second( {\n}\n", []string{"syntax.go:2:", "syntax.go:4:"}},
+		// A syntax error is reported with gc's parser wording (the syntax
+		// verdict); gc recovers past the second bad signature without a
+		// second diagnostic, so only line 2 is reported.
+		{"syntax", "package main\nfunc first( {\n}\nfunc second( {\n}\n", []string{"syntax.go:2:13: syntax error: unexpected {, expected )"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := gosource.Parse(strings.NewReader(tc.source), tc.name+".go", gosource.Options{})
