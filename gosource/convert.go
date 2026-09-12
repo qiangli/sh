@@ -32,22 +32,22 @@ type converter struct {
 	// resolveImport applies the relative-import rule to an import path as
 	// written, so an import without a binding (blank) can still be matched
 	// against mapped.
-	resolveImport  func(string) (string, error)
-	syntheticPos   token.Pos
-	prefix         string
-	fset           *token.FileSet
-	files          []*ast.File
-	sources        []Source
-	info           *types.Info
-	renames        map[types.Object]string
+	resolveImport func(string) (string, error)
+	syntheticPos  token.Pos
+	prefix        string
+	fset          *token.FileSet
+	files         []*ast.File
+	sources       []Source
+	info          *types.Info
+	renames       map[types.Object]string
 	// shadowedBuiltins names predeclared type names a package redeclares at
 	// package scope as a non-type (e.g. `const int = 15`). expr() must not
 	// materialize an untyped constant through such a name: `int(x)` would call
 	// the const, not convert to the type.
 	shadowedBuiltins map[string]bool
 	err              error
-	branchScopes   []converterBranchScope
-	statementLabel string
+	branchScopes     []converterBranchScope
+	statementLabel   string
 }
 
 type converterBranchScope struct {
