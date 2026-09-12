@@ -110,3 +110,37 @@ func (r *Runner) goSourcePackageAt(pos syntax.Pos) string {
 	return r.bashPPSourcePackages[source.Base]
 }
 
+// goSourceReflectTypeText spells a type the way Go's runtime does in a
+// diagnostic: a struct literal as `struct { f T; g U }`.
+func goSourceReflectTypeText(typ syntax.BashPPTypeExpr) string {
+	switch x := typ.(type) {
+	case *syntax.BashPPStructType:
+		var fields []string
+		for _, field := range x.Fields {
+			text := goSourceReflectTypeText(field.FieldTypeExpr)
+			if len(field.Names) == 0 {
+				fields = append(fields, text)
+				continue
+			}
+			for _, name := range field.Names {
+				fields = append(fields, name.Value+" "+text)
+			}
+		}
+		if len(fields) == 0 {
+			return "struct {}"
+		}
+		return "struct { " + strings.Join(fields, "; ") + " }"
+	case *syntax.BashPPPointerType:
+		return "*" + goSourceReflectTypeText(x.Element)
+	case *syntax.BashPPCollectionType:
+		if x.Kind == "map" {
+			return "map[" + goSourceReflectTypeText(x.Key) + "]" + goSourceReflectTypeText(x.Element)
+		}
+		length := ""
+		if x.Length != nil {
+			length = x.Length.Value
+		}
+		return "[" + length + "]" + goSourceReflectTypeText(x.Element)
+	}
+	return bashPPTypeText(typ)
+}
