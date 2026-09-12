@@ -421,6 +421,8 @@ type Runner struct {
 	// bashPPBranchDepth counts eligible enclosing control statements.
 	bashPPBranch      bashPPBranchKind
 	bashPPBranchDepth int
+	// bashPPGotoLabel names the label a pending goto is unwinding towards.
+	bashPPGotoLabel string
 
 	inLoop        bool
 	inFunc        bool

@@ -436,6 +436,8 @@ func (r *Runner) bashPPRangeControl() bool {
 		r.bashPPClearBranch()
 	case bashPPBranchFallthrough:
 		panic("validated fallthrough escaped to Bash++ range")
+	case bashPPBranchGoto:
+		return false
 	}
 	return true
 }

@@ -287,6 +287,9 @@ func (s *bashPPGoSourceScope) command(cmd syntax.Command) {
 			s.words(cmd.Results)
 		}
 	case *syntax.BashPPBranch:
+	case *syntax.BashPPGoto:
+	case *syntax.BashPPLabeled:
+		s.stmt(cmd.Stmt)
 	case *syntax.BashPPGo:
 		s.call(cmd.Call)
 	case *syntax.BashPPDefer:

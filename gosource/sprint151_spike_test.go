@@ -28,8 +28,8 @@ func TestSprint151Spike(t *testing.T) {
 		{"labeled-branch/for-continue", "labeled_continue_for.go", ""},
 		{"labeled-branch/switch-break", "labeled_break_switch.go", ""},
 		{"labeled-branch/select-break", "labeled_break_select.go", ""},
-		{"goto/backward", "goto_backward.go", "goto_backward.go:8:1: gosource: unsupported LabeledStmt"},
-		{"goto/forward", "goto_forward.go", "goto_forward.go:10:3: gosource: unsupported labeled branch"},
+		{"goto/backward", "goto_backward.go", ""},
+		{"goto/forward", "goto_forward.go", ""},
 		{"expression-statement/paren-call", "exprstmt_paren_call.go", ""},
 		{"expression-statement/bare-type-switch", "exprstmt_bare_typeswitch.go", ""},
 		{"expression-kind/IndexListExpr", "expr_indexlist_funcvalue.go", "expr_indexlist_funcvalue.go:10:7: gosource: unsupported expression *ast.IndexListExpr"},
@@ -74,13 +74,21 @@ func TestSprint151Implemented(t *testing.T) {
 		"labeled_break_switch.go",
 		"labeled_break_select.go",
 		"expr_typeswitch_composite_case.go",
+		"goto_forward.go",
+		"goto_backward.go",
+		"goto/goto_backward_loop.go",
+		"goto/goto_out_of_nested.go",
+		"goto/goto_over_switch.go",
+		"goto/goto_label_at_end.go",
+		"goto/goto_labeled_loop.go",
 	} {
 		t.Run(file, func(t *testing.T) {
-			path := filepath.Join("testdata", "sprint151", file)
+			path := filepath.Join("testdata", "sprint151", filepath.FromSlash(file))
 			data, err := os.ReadFile(path)
 			if err != nil {
 				t.Fatal(err)
 			}
+			file := filepath.Base(file)
 			goOut, err := exec.Command("go", "run", path).Output()
 			if err != nil {
 				t.Fatalf("go run: %v", err)

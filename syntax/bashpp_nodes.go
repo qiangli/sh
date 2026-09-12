@@ -1005,6 +1005,36 @@ type BashPPBranch struct {
 func (b *BashPPBranch) Pos() Pos { return b.Kw.Pos() }
 func (b *BashPPBranch) End() Pos { return b.Kw.End() }
 
+// BashPPLabeled is a Go-form labeled statement: Label names the statement
+// that follows the colon so a BashPPGoto can target it. A nil Stmt is Go's
+// empty statement (a label at the end of a block). Labeled loops still
+// resolve break/continue through BashPPBranch.Depth; the label is carried so
+// goto can target the loop and so lowering can emit the source label.
+type BashPPLabeled struct {
+	Label *Lit
+	Colon Pos
+	Stmt  *Stmt
+}
+
+func (l *BashPPLabeled) Pos() Pos { return l.Label.Pos() }
+func (l *BashPPLabeled) End() Pos {
+	if l.Stmt != nil {
+		return l.Stmt.End()
+	}
+	return posAddCol(l.Colon, 1)
+}
+
+// BashPPGoto is a Go-form goto. Label names a BashPPLabeled statement in the
+// same block or an enclosing block of the same function; go/types has already
+// rejected jumps into blocks and over variable declarations.
+type BashPPGoto struct {
+	Kw    *Lit
+	Label *Lit
+}
+
+func (g *BashPPGoto) Pos() Pos { return g.Kw.Pos() }
+func (g *BashPPGoto) End() Pos { return g.Label.End() }
+
 // BashPPSwitch is a Go-form expression switch admitted inside a typed Bash++
 // function. A nil Tag is a tagless switch, whose implicit tag is true.
 type BashPPSwitch struct {
@@ -1483,6 +1513,8 @@ func (*BashPPForAssign) commandNode()   {}
 func (*BashPPIncDec) commandNode()      {}
 func (*BashPPUpdate) commandNode()      {}
 func (*BashPPBranch) commandNode()      {}
+func (*BashPPLabeled) commandNode()     {}
+func (*BashPPGoto) commandNode()        {}
 func (*BashPPSwitch) commandNode()      {}
 func (*BashPPImport) commandNode()      {}
 func (*BashPPFuncDecl) commandNode()    {}

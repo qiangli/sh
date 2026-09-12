@@ -955,13 +955,13 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 		out.Body.Stmts = append(assignments, out.Body.Stmts...)
 		cmd = out
 	case *ast.BranchStmt:
+		if x.Tok == token.GOTO {
+			cmd = &s.BashPPGoto{Kw: c.lit(x.TokPos, "goto"), Label: c.ident(x.Label)}
+			break
+		}
 		depth := 0
 		if x.Label != nil {
-			if x.Tok != token.BREAK && x.Tok != token.CONTINUE {
-				c.fail(x, "labeled branch")
-			} else {
-				depth = c.labeledBranchDepth(x)
-			}
+			depth = c.labeledBranchDepth(x)
 		}
 		cmd = &s.BashPPBranch{Kw: c.lit(x.TokPos, x.Tok.String()), Depth: uint(depth)}
 	case *ast.DeferStmt:
@@ -971,7 +971,7 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 	case *ast.SendStmt:
 		cmd = &s.BashPPSend{Chan: c.word(x.Chan), Arrow: c.pos(x.Arrow), Value: c.word(x.Value), ValueExpr: c.expr(x.Value), ChanExpr: c.expr(x.Chan)}
 	case *ast.SelectStmt:
-		leaveBranch := c.pushBranchScope("", false)
+		leaveBranch := c.pushBranchScope(c.takeStatementLabel(), false)
 		defer leaveBranch()
 		out := &s.BashPPSelect{Select: c.pos(x.Select), Lbrace: c.pos(x.Body.Lbrace), Rbrace: c.pos(x.Body.Rbrace)}
 		for _, st := range x.Body.List {
@@ -984,6 +984,7 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 		}
 		cmd = out
 	case *ast.TypeSwitchStmt:
+		label := c.takeStatementLabel()
 		if x.Init != nil {
 			c.fail(x.Init, "type switch initializer")
 		}
@@ -998,7 +999,7 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 			}
 			guard.Expr = c.expr(assign.Rhs[0].(*ast.TypeAssertExpr))
 		}
-		leaveBranch := c.pushBranchScope("", false)
+		leaveBranch := c.pushBranchScope(label, false)
 		defer leaveBranch()
 		out := &s.BashPPSwitch{Switch: c.pos(x.Switch), TypeSwitch: true, Init: guard, Lbrace: c.pos(x.Body.Lbrace), Rbrace: c.pos(x.Body.Rbrace)}
 		for _, st := range x.Body.List {
@@ -1014,7 +1015,7 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 		}
 		cmd = out
 	case *ast.SwitchStmt:
-		leaveBranch := c.pushBranchScope("", false)
+		leaveBranch := c.pushBranchScope(c.takeStatementLabel(), false)
 		defer leaveBranch()
 		out := &s.BashPPSwitch{Switch: c.pos(x.Switch), Init: c.one(x.Init), Tag: c.expr(x.Tag), Lbrace: c.pos(x.Body.Lbrace), Rbrace: c.pos(x.Body.Rbrace)}
 		for _, st := range x.Body.List {
@@ -1030,16 +1031,29 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 		}
 		cmd = out
 	case *ast.LabeledStmt:
+		// The label is carried for goto and for lowering. A labeled loop,
+		// switch, or select additionally becomes a named branch scope so a
+		// labeled break/continue resolves to a depth; any other statement is
+		// only a goto target, so a loop nested inside it must not take the
+		// label.
+		out := &s.BashPPLabeled{Label: c.ident(x.Label), Colon: c.pos(x.Colon)}
+		previous := c.statementLabel
+		c.statementLabel = ""
 		switch x.Stmt.(type) {
-		case *ast.ForStmt, *ast.RangeStmt:
-			previous := c.statementLabel
+		case *ast.ForStmt, *ast.RangeStmt, *ast.SwitchStmt, *ast.TypeSwitchStmt, *ast.SelectStmt:
 			c.statementLabel = x.Label.Name
-			out := c.statements(x.Stmt)
-			c.statementLabel = previous
-			return out
-		default:
-			c.fail(st, "LabeledStmt")
 		}
+		inner := c.statements(x.Stmt)
+		c.statementLabel = previous
+		// A statement that converts to several (a range with assignment
+		// targets, a tuple assignment) keeps its first as the labeled one; the
+		// rest follow it in the block, which is where execution resumes after a
+		// goto to the label.
+		if len(inner) > 0 {
+			out.Stmt = inner[0]
+			inner = inner[1:]
+		}
+		return append([]*s.Stmt{c.stmt(out)}, inner...)
 	default:
 		c.fail(st, strings.TrimPrefix(fmt.Sprintf("%T", st), "*ast."))
 	}
