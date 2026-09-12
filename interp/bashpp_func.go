@@ -2044,6 +2044,7 @@ type bashPPFrame struct {
 	params     []string
 	inFunc     bool
 	writeEnv   expand.WriteEnviron
+	own        *overlayEnviron
 	scope      *bashPPScope
 	callDepth  int
 	deferMark  int
@@ -2080,7 +2081,8 @@ func (r *Runner) bashPPEnterFrame(fn *bashPPFunc, args []string) *bashPPFrame {
 	r.bashPPAgentic = fn.decl != nil && fn.decl.Agentic != nil
 	r.Params = args
 	r.inFunc = true
-	r.writeEnv = &overlayEnviron{parent: r.writeEnv, funcScope: true}
+	frame.own = newFuncScopeEnviron(r.writeEnv, false)
+	r.writeEnv = frame.own
 	r.bashPPScope = newBashPPScope(fn.scope)
 	if fn.decl != nil && fn.decl.Receiver != nil && fn.decl.Receiver.Name != nil && fn.decl.Receiver.Name.Value != "_" && fn.receiver != nil {
 		recv := fn.decl.Receiver
@@ -2146,6 +2148,7 @@ func (f *bashPPFrame) leave() {
 		}
 	}
 	r.bashPPAgentic = f.agentic
+	f.own.release()
 	r.writeEnv = f.writeEnv
 	r.bashPPScope = f.scope
 	if len(r.callStack) > f.callDepth {
