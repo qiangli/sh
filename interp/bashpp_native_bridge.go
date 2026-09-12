@@ -76,15 +76,15 @@ type bashPPBridgeRequest struct {
 	// nothing is written back; changed elements are an in-place mutation and
 	// are written back over the visible length. Host-only.
 	sliceReconcile []bool
-	ID         uint64              `json:"id"`
-	Op         string              `json:"op"`
-	Selector   string              `json:"selector"`
-	Receiver   *bashPPBridgeValue  `json:"receiver,omitempty"`
-	Args       []bashPPBridgeValue `json:"args,omitempty"`
-	Spread     bool                `json:"spread,omitempty"`
-	SourceFile string              `json:"source_file,omitempty"`
-	SourceLine int                 `json:"source_line,omitempty"`
-	LogPrint   string              `json:"log_print,omitempty"`
+	ID             uint64              `json:"id"`
+	Op             string              `json:"op"`
+	Selector       string              `json:"selector"`
+	Receiver       *bashPPBridgeValue  `json:"receiver,omitempty"`
+	Args           []bashPPBridgeValue `json:"args,omitempty"`
+	Spread         bool                `json:"spread,omitempty"`
+	SourceFile     string              `json:"source_file,omitempty"`
+	SourceLine     int                 `json:"source_line,omitempty"`
+	LogPrint       string              `json:"log_print,omitempty"`
 	// Values and Error answer a callback the dependency raised; they are set
 	// only when Op is "callback-reply". Sprint #118 Story #54 (c3a60493cde9).
 	Values []bashPPBridgeValue `json:"values,omitempty"`
