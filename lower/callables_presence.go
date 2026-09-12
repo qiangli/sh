@@ -95,6 +95,11 @@ func (e *emitter) checkedSelector(n *syntax.BashPPSelectorExpr) (string, error) 
 			return e.runtimeMethodHandle(n, base, typ, n.Sel.Value)
 		}
 	}
+	if e.goSource {
+		// Go selects through a pointer itself; the explicit dereference is
+		// the runtime path's nil check and the parentheses its spelling.
+		return base + "." + n.Sel.Value, nil
+	}
 	if info := e.projectionExpr(n.X); info.kind == projectPointer {
 		base = e.checkedDeref(n, base, "")
 	}
@@ -102,7 +107,9 @@ func (e *emitter) checkedSelector(n *syntax.BashPPSelectorExpr) (string, error) 
 }
 
 func (e *emitter) checkedShortDeclaration(n *syntax.BashPPShortDecl, rhs string) (string, bool, error) {
-	if len(n.Lhs) != 1 || n.Expr == nil || n.Lhs[0].Value == "_" || e.scopes[len(e.scopes)-1][n.Lhs[0].Value] {
+	// The TryValue binding turns a nil dereference into the runtime's value
+	// diagnostic; Go source keeps Go's own nil-pointer panic.
+	if e.goSource || len(n.Lhs) != 1 || n.Expr == nil || n.Lhs[0].Value == "_" || e.scopes[len(e.scopes)-1][n.Lhs[0].Value] {
 		return "", false, nil
 	}
 	risky := false

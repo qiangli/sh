@@ -38,6 +38,7 @@ var fidelityOpen = map[string]bool{
 // spellings that rewrite used to emit; none may appear in the output.
 var fidelityLanded = map[string][]string{
 	"guard-prologue": {"import ", "defer func()"}, // C6
+	"explicit-deref": {"(*(", ")."},               // C7
 }
 
 func TestGoSourceFidelity(t *testing.T) {
