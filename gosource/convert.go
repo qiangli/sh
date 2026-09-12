@@ -52,10 +52,11 @@ type converter struct {
 	constSpecs map[*types.Const]constSpec
 	// shiftOperand is the constant left operand of a non-constant shift
 	// about to be converted; its contextual type is always spelled.
-	shiftOperand   ast.Expr
-	err            error
-	branchScopes   []converterBranchScope
-	statementLabel string
+	shiftOperand    ast.Expr
+	rawConstantExpr bool
+	err             error
+	branchScopes    []converterBranchScope
+	statementLabel  string
 }
 
 type converterBranchScope struct {
@@ -678,11 +679,53 @@ func (c *converter) valueDecl(g *ast.GenDecl, v *ast.ValueSpec, n *ast.Ident, in
 	}
 	return out
 }
+
+func (c *converter) constGroup(g *ast.GenDecl) *s.BashPPConstGroup {
+	out := &s.BashPPConstGroup{Kw: c.lit(g.TokPos, "const"), Lparen: c.pos(g.Lparen), Rparen: c.pos(g.Rparen)}
+	if !g.Lparen.IsValid() {
+		out.Lparen = c.pos(g.TokPos + token.Pos(len("const")))
+		out.Rparen = c.pos(g.End())
+	}
+	for _, raw := range g.Specs {
+		v := raw.(*ast.ValueSpec)
+		for i, name := range v.Names {
+			spec := &s.BashPPConstSpec{Name: c.ident(name), Iota: uint32(len(out.Specs))}
+			if v.Type != nil {
+				spec.DeclType = c.lit(v.Type.Pos(), c.text(v.Type))
+				spec.DeclTypeExpr = c.typ(v.Type)
+			} else if obj, ok := c.info.Defs[name].(*types.Const); ok {
+				if _, named := obj.Type().(*types.Named); named {
+					if typeExpr := c.checkedType(obj.Type(), name, "inferred constant type"); typeExpr != nil {
+						spec.DeclType = c.lit(name.Pos(), c.typeString(obj.Type()))
+						spec.DeclTypeExpr = typeExpr
+					}
+				}
+			}
+			if len(v.Values) > 0 {
+				if len(v.Values) != len(v.Names) || i >= len(v.Values) {
+					c.fail(v, "constant declaration")
+					continue
+				}
+				spec.Init = []*s.Word{c.word(v.Values[i])}
+				saved := c.rawConstantExpr
+				c.rawConstantExpr = true
+				spec.InitExpr = c.expr(v.Values[i])
+				c.rawConstantExpr = saved
+			}
+			out.Specs = append(out.Specs, spec)
+		}
+	}
+	return out
+}
+
 func (c *converter) expr(e ast.Expr) s.BashPPExpr {
 	if e == nil {
 		return nil
 	}
 	result := c.exprValue(e)
+	if c.rawConstantExpr {
+		return result
+	}
 	// go/types records the concrete type only at a constant's contextual
 	// conversion/defaulting boundary. Inner untyped operands remain exact.
 	// Preserve that boundary, particularly float and rune defaults in any.
