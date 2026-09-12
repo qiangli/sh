@@ -25,6 +25,7 @@ func TestSprint152Converter(t *testing.T) {
 		mechanism, file string
 	}{
 		{"blank-target-paren", "blank-target-paren/blank_target_paren.go"},
+		{"new-paren", "new-paren/new_paren.go"},
 	} {
 		t.Run(tc.mechanism, func(t *testing.T) {
 			path := filepath.Join("testdata", "sprint152", filepath.FromSlash(tc.file))

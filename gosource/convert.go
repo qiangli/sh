@@ -245,7 +245,7 @@ func (c *converter) block(b *ast.BlockStmt) *s.Block {
 // type operand. Go 1.27 also allows new(v) over a value, whose argument is not
 // convertible by typ; those calls stay on the generic call path.
 func (c *converter) isNewType(x *ast.CallExpr) bool {
-	id, ok := x.Fun.(*ast.Ident)
+	id, ok := ast.Unparen(x.Fun).(*ast.Ident)
 	if !ok || len(x.Args) != 1 {
 		return false
 	}
@@ -257,7 +257,7 @@ func (c *converter) isNewType(x *ast.CallExpr) bool {
 }
 
 func (c *converter) isNewBuiltin(x *ast.CallExpr) bool {
-	id, ok := x.Fun.(*ast.Ident)
+	id, ok := ast.Unparen(x.Fun).(*ast.Ident)
 	if !ok || len(x.Args) != 1 {
 		return false
 	}
@@ -730,11 +730,11 @@ func (c *converter) exprValue(e ast.Expr) s.BashPPExpr {
 		return out
 	case *ast.CallExpr:
 		if c.isNewType(x) {
-			id := x.Fun.(*ast.Ident)
+			id := ast.Unparen(x.Fun).(*ast.Ident)
 			return &s.BashPPNewExpr{New: c.ident(id), Lparen: c.pos(x.Lparen), Rparen: c.pos(x.Rparen), AllocType: c.typ(x.Args[0])}
 		}
 		if c.isNewBuiltin(x) {
-			id := x.Fun.(*ast.Ident)
+			id := ast.Unparen(x.Fun).(*ast.Ident)
 			return &s.BashPPNewExpr{New: c.ident(id), Lparen: c.pos(x.Lparen), Rparen: c.pos(x.Rparen), AllocType: c.valueType(x.Args[0]), Init: c.expr(x.Args[0])}
 		}
 		if c.info.Types[x.Fun].IsType() && len(x.Args) == 1 {
