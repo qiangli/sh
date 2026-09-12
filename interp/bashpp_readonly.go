@@ -207,7 +207,7 @@ func (r *Runner) bashPPTupleAssignCall(ctx context.Context, assign *syntax.BashP
 }
 
 func (r *Runner) bashPPTupleAssign(assign *syntax.BashPPAssign) {
-	if r.goSourceReceiveAssign(assign) {
+	if r.goSourceReceiveAssign(assign) || r.goSourceCommaOkAssign(assign) {
 		return
 	}
 	if len(assign.Values) == 0 || len(assign.ValueExprs) != len(assign.Values) {

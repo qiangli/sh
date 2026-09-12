@@ -107,25 +107,79 @@ func (r *Runner) goSourceMapCommaDecl(d *syntax.BashPPShortDecl) bool {
 	if !ok {
 		return false
 	}
+	value, found := r.goSourceMapCommaCells(index)
+	if value == nil {
+		return true
+	}
+	r.bashPPBindReceivedCell(d.Lhs[0].Value, value)
+	r.bashPPBindReceivedCell(d.Lhs[1].Value, found)
+	return true
+}
+
+// goSourceCommaOkAssign settles the two-target, one-expression assignment
+// forms whose second value is Go's comma-ok boolean: `v, ok = m[k]` and
+// `v, ok = i.(T)`. The `:=` spellings already have their own paths; the
+// plain assignment is the same read, committed to existing targets. It
+// reports whether it claimed the statement.
+func (r *Runner) goSourceCommaOkAssign(assign *syntax.BashPPAssign) bool {
+	if !r.bashPPGoSource || len(assign.Names) != 2 || len(assign.ValueExprs) != 1 {
+		return false
+	}
+	switch expr := assign.ValueExprs[0].(type) {
+	case *syntax.BashPPIndexExpr:
+		value, found := r.goSourceMapCommaCells(expr)
+		if value == nil {
+			return true
+		}
+		r.bashPPCommitTupleAssign(assign, []*bashPPCell{value, found})
+		return true
+	case *syntax.BashPPTypeAssertExpr:
+		if expr.TypeToken != nil {
+			r.bashPPGoSendError(expr, fmt.Errorf("BASHPP-EASSERT-TYPE: .(type) is only valid in a type switch"))
+			return true
+		}
+		values, source, err := r.bashPPTypeAssert(expr, true)
+		if err != nil {
+			r.bashPPGoSendError(expr, err)
+			return true
+		}
+		if r.exit.code != 0 || len(values) != 2 {
+			return true
+		}
+		value := &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: values[0]}}
+		if source != nil {
+			value = bashPPCopyAssignmentCell(source)
+		}
+		found := &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: values[1]}, scalarKind: constant.Bool, declType: &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "bool"}}, typeName: "bool"}
+		r.bashPPCommitTupleAssign(assign, []*bashPPCell{value, found})
+		return true
+	}
+	return false
+}
+
+// goSourceMapCommaCells reads `m[k]` in its comma-ok form: the element (or
+// the element type's zero value) and the boolean reporting whether the key
+// was present. A nil element cell means the read was already reported.
+func (r *Runner) goSourceMapCommaCells(index *syntax.BashPPIndexExpr) (*bashPPCell, *bashPPCell) {
 	value, meta, err := r.bashPPReadExpr(index.X)
 	if err != nil {
 		r.bashPPGoSendError(index.X, err)
-		return true
+		return nil, nil
 	}
 	shape, ok := r.bashPPUnderlyingType(metaType(meta)).(*syntax.BashPPCollectionType)
 	if !ok || meta == nil || meta.kind != "map" {
 		r.bashPPGoSendError(index, fmt.Errorf("comma-ok index requires a represented map"))
-		return true
+		return nil, nil
 	}
 	key, _, err := r.bashPPEvalElement(index.Index, shape.Key)
 	if err != nil {
 		r.bashPPGoSendError(index.Index, err)
-		return true
+		return nil, nil
 	}
 	table, valid := value.(map[string]any)
 	if !valid && value != nil {
 		r.bashPPGoSendError(index, fmt.Errorf("BASHPP-ECOLLECTION-STORAGE: map payload has type %T", value))
-		return true
+		return nil, nil
 	}
 	canonical := fmt.Sprint(key)
 	result, found := table[canonical]
@@ -136,9 +190,7 @@ func (r *Runner) goSourceMapCommaDecl(d *syntax.BashPPShortDecl) bool {
 	result, child = bashPPCopyArrayValue(result, child)
 	cell := &bashPPCell{declType: shape.Element}
 	bashPPStoreCellValue(cell, result, child)
-	r.bashPPBindReceivedCell(d.Lhs[0].Value, cell)
-	r.bashPPBindReceivedCell(d.Lhs[1].Value, &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: fmt.Sprint(found)}, scalarKind: constant.Bool, declType: &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "bool"}}})
-	return true
+	return cell, &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: fmt.Sprint(found)}, scalarKind: constant.Bool, declType: &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "bool"}}}
 }
 func metaType(meta *bashPPCollectionMeta) syntax.BashPPTypeExpr {
 	if meta == nil {
