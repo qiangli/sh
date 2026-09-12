@@ -1824,7 +1824,7 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 	if !r.bashPPCheckChannelArgs(fn, params, callChannels, callCells) {
 		return nil
 	}
-	if limit, _ := strconv.Atoi(r.envGet("FUNCNEST")); limit > 0 && len(r.callStack) >= limit {
+	if limit := r.bashPPFuncNest(); limit > 0 && len(r.callStack) >= limit {
 		r.errf("%s: maximum function nesting level exceeded (%d)\n", fn.name(), limit)
 		r.exit.code = 1
 		return nil

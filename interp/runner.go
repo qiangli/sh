@@ -4861,7 +4861,9 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 	// still see whether exec made this scope persistent.
 	defer func() {
 		r.redirScopes = r.redirScopes[:scopeIndex]
-		r.bashPPReconcileFIFOs()
+		if r.bashPPHasFIFOs() {
+			r.bashPPReconcileFIFOs()
+		}
 	}()
 	defer func() {
 		for _, closer := range r.redirScopes[scopeIndex].boundaryClosers {
@@ -4912,20 +4914,25 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 		oldFdWriteTable = maps.Clone(r.fdWriteTable)
 		oldFdClosedTable = maps.Clone(r.fdClosedTable)
 	}
-	varredirClose := false
-	if opt, _ := r.bashOptByName("varredir_close"); opt != nil {
-		varredirClose = *opt
-	}
-	if !varredirClose {
-		for _, rd := range st.Redirs {
-			if isNamedFdRedir(rd) {
-				persistNamedRedirs = true
-				break
+	if len(st.Redirs) > 0 {
+		varredirClose := false
+		if opt, _ := r.bashOptByName("varredir_close"); opt != nil {
+			varredirClose = *opt
+		}
+		if !varredirClose {
+			for _, rd := range st.Redirs {
+				if isNamedFdRedir(rd) {
+					persistNamedRedirs = true
+					break
+				}
 			}
 		}
 	}
 	oldRedirMoveCloseFds := r.redirMoveCloseFds
-	if r.bashPPConcurrent != nil {
+	// A FIFO registered later is a fresh descriptor, never one of the
+	// files this scope restores, so a scope that begins with none
+	// registered has nothing to retain.
+	if r.bashPPHasFIFOs() {
 		// Retain exactly what this scope restores. An unrelated outer
 		// redirect must not delay an inner exec's persistent close.
 		r.redirScopes[scopeIndex].fifoRestoreRefs = func(refs map[*os.File]bool) {
@@ -5319,7 +5326,9 @@ func (r *Runner) persistCurrentRedirs() {
 		}
 		r.redirScopes[i].persist = true
 	}
-	r.bashPPReconcileFIFOs()
+	if r.bashPPHasFIFOs() {
+		r.bashPPReconcileFIFOs()
+	}
 }
 
 func (r *Runner) checkFuncDeclRedirs(ctx context.Context, body *syntax.Stmt) bool {
@@ -10679,7 +10688,7 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 		// Honor $FUNCNEST: when set to a positive integer, bash aborts
 		// once nesting reaches that depth. An unset, empty, zero, or
 		// non-numeric value disables the limit.
-		if limit, _ := strconv.Atoi(r.envGet("FUNCNEST")); limit > 0 && len(r.callStack) >= limit {
+		if limit := r.bashPPFuncNest(); limit > 0 && len(r.callStack) >= limit {
 			r.errf("%s%s: maximum function nesting level exceeded (%d)\n",
 				r.bashErrPrefix(pos), name, limit)
 			r.exit.code = 1

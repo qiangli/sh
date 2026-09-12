@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"strconv"
 
 	"mvdan.cc/sh/v3/syntax"
 )
@@ -267,4 +268,30 @@ func (e *policyBashPPEvaluator) Values(ctx context.Context, req bashPPEvalReques
 		return nil, errors.New("bash++: selected evaluator cannot return object values")
 	}
 	return values.Values(ctx, req)
+}
+
+// bashPPFuncNest is $FUNCNEST as bash reads it: the nesting limit when set
+// to a positive integer, and 0 otherwise. Unset is the common case, and the
+// call path must not pay for a parse failure on every call.
+func (r *Runner) bashPPFuncNest() int {
+	raw := r.envGet("FUNCNEST")
+	if raw == "" {
+		return 0
+	}
+	limit, _ := strconv.Atoi(raw)
+	return limit
+}
+
+// bashPPHasFIFOs reports whether the task group holds any FIFO registration.
+// A registration is only ever a fresh descriptor, so a statement that sees
+// none has no reference scan to run and nothing to retain for one.
+func (r *Runner) bashPPHasFIFOs() bool {
+	c := r.bashPPConcurrent
+	if c == nil {
+		return false
+	}
+	c.fifoMu.Lock()
+	n := len(c.fifos)
+	c.fifoMu.Unlock()
+	return n > 0
 }
