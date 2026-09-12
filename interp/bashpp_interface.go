@@ -22,6 +22,10 @@ type bashPPInterfaceValue struct {
 type bashPPInterfaceMethod struct {
 	spec *syntax.BashPPMethodSpec
 	sig  string
+	// pkg is the linked-package tag of the declared interface the method
+	// is spelled in; see gosource_method_package.go. An unexported method
+	// name is only the same method in the same package.
+	pkg string
 }
 
 type bashPPInterfaceMethods struct {
@@ -68,6 +72,7 @@ func (r *Runner) bashPPInterfaceMethodSet(name string, iface *syntax.BashPPInter
 
 	set := &bashPPInterfaceMethods{byName: make(map[string]bashPPInterfaceMethod)}
 	direct := make(map[string]bool)
+	pkg := r.goSourceInterfacePackage(iface)
 	for _, elem := range bashPPInterfaceElems(iface) {
 		if elem.Method == nil {
 			embeddedIface, ok := r.bashPPInterfaceType(elem.Embedded)
@@ -110,7 +115,7 @@ func (r *Runner) bashPPInterfaceMethodSet(name string, iface *syntax.BashPPInter
 		if _, found := set.byName[method]; !found {
 			set.order = append(set.order, method)
 		}
-		set.byName[method] = bashPPInterfaceMethod{spec: spec, sig: sig}
+		set.byName[method] = bashPPInterfaceMethod{spec: spec, sig: sig, pkg: pkg}
 	}
 	return set, nil
 }
@@ -224,7 +229,7 @@ func (r *Runner) bashPPImplements(actual syntax.BashPPTypeExpr, iface *syntax.Ba
 		for _, name := range expectedSet.order {
 			expected := expectedSet.byName[name]
 			actualMethod, found := actualSet.byName[name]
-			if !found {
+			if !found || goSourceUnexportedName(name) && actualMethod.pkg != expected.pkg {
 				return fmt.Errorf("BASHPP-EINTERFACE-MISSING: %s does not implement interface (missing method %s)", bashPPTypeText(actual), name)
 			}
 			if actualMethod.sig != expected.sig {
@@ -245,6 +250,9 @@ func (r *Runner) bashPPImplements(actual syntax.BashPPTypeExpr, iface *syntax.Ba
 		expected := expectedSet.byName[name]
 		sel := r.bashPPResolveSelection(actual, name, true, false)
 		if sel.ambiguous || sel.method == nil && sel.interfaceSpec == nil {
+			return fmt.Errorf("BASHPP-EINTERFACE-MISSING: %s does not implement interface (missing method %s)", bashPPTypeText(actual), name)
+		}
+		if goSourceUnexportedName(name) && r.goSourceMethodPackage(sel) != expected.pkg {
 			return fmt.Errorf("BASHPP-EINTERFACE-MISSING: %s does not implement interface (missing method %s)", bashPPTypeText(actual), name)
 		}
 		actualSig := ""
@@ -536,30 +544,31 @@ func bashPPCopyInterfaceCell(cell *bashPPCell) *bashPPCell {
 }
 
 func (r *Runner) bashPPCellForInterfaceExpr(expr syntax.BashPPExpr) (*bashPPCell, syntax.BashPPTypeExpr, error) {
-	if id, ok := expr.(*syntax.BashPPIdent); ok {
+	// `true` and `false` are identifiers, not literals; when no variable
+	// shadows them they are the untyped boolean constants the scalar
+	// evaluator below already knows, and store as a bool.
+	if id, ok := expr.(*syntax.BashPPIdent); ok && !(bashPPBoolIdent(id.Name.Value) && r.bashPPScope.lookup(id.Name.Value) == nil) {
 		cell := r.bashPPScope.lookup(id.Name.Value)
 		if cell == nil {
 			return nil, nil, fmt.Errorf("BASHPP-EINTERFACE-VALUE: undefined value %s", id.Name.Value)
 		}
-		if cell.interfaceValue != nil {
-			if cell.interfaceValue.nilIface {
-				return cell, cell.declType, nil
-			}
-			return cell.interfaceValue.cell, cell.interfaceValue.dynamic, nil
+		return r.bashPPInterfaceSourceCell(cell, id.Name.Value)
+	}
+	// A call's result is the cell the callee returned: an interface result
+	// contributes its own dynamic value, a typed one its declared type. Read
+	// as a scalar it would keep only a type NAME, which for `List[int]` is
+	// not a type at all.
+	if call, ok := expr.(*syntax.BashPPCall); ok && r.bashPPGoSource {
+		cell, err := r.goSourceValueCell(call)
+		if err != nil {
+			return nil, nil, err
 		}
-		actual := cell.declType
-		if actual == nil {
-			if meta := bashPPCellMeta(cell); meta != nil {
-				actual = meta.typ
-			}
+		if cell.vr.Kind != expand.Object && cell.interfaceValue == nil && cell.declType == nil && !cell.pointer {
+			// A plain scalar result: the scalar path below names its default
+			// type and is what every other scalar takes.
+			return r.bashPPScalarInterfaceCell(expr)
 		}
-		if actual == nil && cell.typeName != "" {
-			actual, _ = bashPPScalarNamedType(cell.typeName)
-		}
-		if actual == nil {
-			return nil, nil, fmt.Errorf("BASHPP-EINTERFACE-VALUE: %s has no dynamic type", id.Name.Value)
-		}
-		return cell, actual, nil
+		return r.bashPPInterfaceSourceCell(cell, "call result")
 	}
 	// A dynamic value need not be a variable. `var i I = T{"hello"}`,
 	// `i = &T{}` and `i = 42` all store a value the interface then owns, so
@@ -568,6 +577,15 @@ func (r *Runner) bashPPCellForInterfaceExpr(expr syntax.BashPPExpr) (*bashPPCell
 	switch x := expr.(type) {
 	case *syntax.BashPPParenExpr:
 		return r.bashPPCellForInterfaceExpr(x.X)
+	case *syntax.BashPPFuncLit:
+		// `x = func() {…}`, or a generic function value the front end lowers
+		// to a literal: the interface owns the closure, whose dynamic type
+		// is the literal's own signature.
+		cell, handled, err := r.goSourceCallableCell(x)
+		if err != nil || !handled {
+			return nil, nil, fmt.Errorf("BASHPP-EINTERFACE-VALUE: function literal cannot be stored")
+		}
+		return cell, cell.declType, nil
 	case *syntax.BashPPCompositeLit:
 		if x.LitType == nil {
 			return nil, nil, fmt.Errorf("BASHPP-EINTERFACE-VALUE: composite literal has no type")
@@ -593,6 +611,13 @@ func (r *Runner) bashPPCellForInterfaceExpr(expr syntax.BashPPExpr) (*bashPPCell
 		}
 		return cell, cell.declType, nil
 	}
+	return r.bashPPScalarInterfaceCell(expr)
+}
+
+// bashPPScalarInterfaceCell materializes a scalar expression as the cell an
+// interface stores, typed by its named type or its untyped constant's Go
+// default type.
+func (r *Runner) bashPPScalarInterfaceCell(expr syntax.BashPPExpr) (*bashPPCell, syntax.BashPPTypeExpr, error) {
 	value, err := r.bashPPEvalScalarExpr(expr)
 	if err != nil {
 		return nil, nil, err
@@ -612,6 +637,42 @@ func (r *Runner) bashPPCellForInterfaceExpr(expr syntax.BashPPExpr) (*bashPPCell
 		declType:   actual,
 	}
 	return cell, actual, nil
+}
+
+// bashPPInterfaceSourceCell reads an existing cell as an interface source:
+// an interface value contributes its dynamic value, anything else is its own
+// value with the type it declares or carries.
+func (r *Runner) bashPPInterfaceSourceCell(cell *bashPPCell, what string) (*bashPPCell, syntax.BashPPTypeExpr, error) {
+	if cell.interfaceValue != nil {
+		if cell.interfaceValue.nilIface {
+			return cell, cell.declType, nil
+		}
+		return cell.interfaceValue.cell, cell.interfaceValue.dynamic, nil
+	}
+	actual := cell.declType
+	if actual == nil {
+		if meta := bashPPCellMeta(cell); meta != nil {
+			actual = meta.typ
+		}
+	}
+	if actual == nil && cell.typeName != "" {
+		actual, _ = bashPPScalarNamedType(cell.typeName)
+	}
+	// A closure bound by `:=` carries only its handle; its dynamic type is
+	// the signature of the literal it was made from.
+	if actual == nil && cell.vr.Kind == expand.String {
+		if fn, ok := r.bashPPClosure(cell.vr.Str); ok && fn.lit != nil {
+			actual = bashPPFuncLitType(fn.lit)
+		}
+	}
+	if actual == nil {
+		return nil, nil, fmt.Errorf("BASHPP-EINTERFACE-VALUE: %s has no dynamic type", what)
+	}
+	return cell, actual, nil
+}
+
+func bashPPBoolIdent(name string) bool {
+	return name == "true" || name == "false"
 }
 
 // bashPPDefaultScalarTypeName names the Go default type of an untyped
@@ -702,8 +763,13 @@ func (r *Runner) bashPPTypeAssertCell(assert *syntax.BashPPTypeAssertExpr, comma
 		if assertingInterface {
 			matched = r.bashPPImplements(iv.dynamic, assertIface) == nil
 		} else {
-			matched = bashPPInterfaceAssertTypeText(iv.dynamic) == bashPPInterfaceAssertTypeText(assert.Assert) ||
+			matched = bashPPInterfaceAssertTypeText(r.bashPPPredeclaredAliases(iv.dynamic)) == bashPPInterfaceAssertTypeText(r.bashPPPredeclaredAliases(assert.Assert)) ||
 				r.goSourceNativeTypeIdentical(iv.dynamic, assert.Assert)
+			// A struct literal type is identified by its fields, not by the
+			// word "struct"; see gosource_struct_identity.go.
+			if matched && (bashPPStructLiteralType(iv.dynamic) || bashPPStructLiteralType(assert.Assert)) {
+				matched = r.goSourceDynamicTypeIdentity(iv.dynamic) == r.goSourceDynamicTypeIdentity(assert.Assert)
+			}
 		}
 	}
 	if !matched {
@@ -842,7 +908,17 @@ func typeCaseTypeMatches(r *Runner, iv *bashPPInterfaceValue, target syntax.Bash
 	if iface, ok := r.bashPPInterfaceType(target); ok {
 		return r.bashPPImplements(iv.dynamic, iface) == nil
 	}
+	if bashPPStructLiteralType(iv.dynamic) || bashPPStructLiteralType(target) {
+		return r.goSourceDynamicTypeIdentity(iv.dynamic) == r.goSourceDynamicTypeIdentity(target)
+	}
 	return r.bashPPTypeAssignable(iv.dynamic, target)
+}
+
+// bashPPStructLiteralType reports whether a type is spelled as a struct
+// literal rather than by a name.
+func bashPPStructLiteralType(typ syntax.BashPPTypeExpr) bool {
+	_, ok := typ.(*syntax.BashPPStructType)
+	return ok
 }
 
 // The predeclared error type is an ordinary interface. A source declaration

@@ -474,6 +474,14 @@ func (r *Runner) bashPPLookupFunc(c *syntax.BashPPCall) (*bashPPFunc, bool) {
 		}
 		return r.bashPPClosure(pin.handle)
 	}
+	if recv, method, ok := r.goSourceMethodExprCallee(c); ok {
+		fn, err := r.goSourceMethodExprClosure(recv, method)
+		if err != nil {
+			r.exit.fatal(err)
+			return nil, false
+		}
+		return fn, true
+	}
 	if r.bashPPGoSource && c.CalleeExpr != nil {
 		if method, ok := c.CalleeExpr.(*syntax.BashPPSelectorExpr); ok && method.MethodValue && !r.bashPPNativeExpr(method.X) {
 			fn, err := r.goSourceLocalMethod(method, len(c.Args) > 0)
@@ -691,7 +699,10 @@ func (r *Runner) bashPPInstantiateFunc(c *syntax.BashPPCall, fn *bashPPFunc) (*b
 		i := 0
 		for _, group := range params {
 			for _, name := range group.Names {
-				bindings[name.Value] = c.TypeArgs[i].ArgType
+				// `g[T]()` inside a generic body names the caller's own type
+				// parameter; the instantiation binds what this frame bound it
+				// to, exactly as a type spelled in the body resolves.
+				bindings[name.Value] = r.bashPPBindTypeExpr(c.TypeArgs[i].ArgType)
 				i++
 			}
 		}
@@ -1131,6 +1142,20 @@ func (r *Runner) bashPPStructuredArgCell(w *syntax.Word, expr syntax.BashPPExpr)
 		}
 		return bashPPPointerCell(ptr), nil
 	case *syntax.BashPPConvertExpr:
+		// `f((*T)(p))`: a pointer conversion travels as the retyped pointer.
+		if ptr, target, converted, err := r.bashPPPointerConversion(x); converted {
+			if err != nil {
+				return nil, err
+			}
+			cell := bashPPPointerCell(ptr)
+			cell.declType = target
+			return cell, nil
+		}
+		// `Stringer(m).String()`, `f(any(x))`, `return I(v)`: a conversion
+		// to an interface is the interface value that boxes its operand.
+		if cell, handled, err := r.bashPPInterfaceConversion(x); handled {
+			return cell, err
+		}
 		// `f([]byte(s))`: a conversion whose result is a collection travels as
 		// the cell holding it; see bashPPConvertCollectionCell in
 		// bashpp_collection_convert.go. Scalar conversions report false.
@@ -1153,6 +1178,16 @@ func (r *Runner) bashPPStructuredArgCell(w *syntax.Word, expr syntax.BashPPExpr)
 		}
 		bashPPStoreCellValue(cell, value, meta)
 		return cell, nil
+	case *syntax.BashPPTypeAssertExpr:
+		// `return v.(I)`, `f(v.(T))`: an assertion yields the asserted cell —
+		// an interface value with its dynamic type, or the concrete value —
+		// which the scalar evaluator would flatten to text and a bare type
+		// name.
+		cell, handled, err := r.bashPPAssertCandidate(x)
+		if !handled {
+			return nil, nil
+		}
+		return cell, err
 	case *syntax.BashPPDerefExpr, *syntax.BashPPIndexExpr, *syntax.BashPPSelectorExpr, *syntax.BashPPSliceExpr:
 		// `f(*p)`, `f(xs[0])`, `f(v.Inner)`, `f(xs[1:])`: a read that yields structured
 		// storage is passed as the value it is. A scalar read has no metadata
@@ -1930,7 +1965,13 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 		r.bashPPDeferStack = r.bashPPDeferStack[:frame.deferMark]
 	}
 	if shortDeclFailed {
-		r.exit = exitStatus{code: 2}
+		// A fatal diagnostic recorded inside the body — a dependency call
+		// the bridge refused, say — is the outcome; a `return f()` whose f
+		// failed that way counts as a failed producer too, and must not
+		// replace the diagnostic with a bare status.
+		if !r.exit.fatalExit && !r.exit.exiting {
+			r.exit = exitStatus{code: 2}
+		}
 		return nil
 	}
 
@@ -2056,6 +2097,34 @@ func (r *Runner) bashPPEnterFrame(fn *bashPPFunc, args []string) *bashPPFrame {
 	return frame
 }
 
+// bashPPShadowedType is one function-local type declaration that shadowed a
+// registry entry: the depth of the frame that declared it, its name, and the
+// entry it displaced (nil when the name was free).
+type bashPPShadowedType struct {
+	depth int
+	name  string
+	prev  *bashPPType
+}
+
+// bashPPShadowLocalType lets a type declared inside a Go-form function body
+// take a name the registry already holds. Go scopes a local type to its
+// block, so two functions may each declare `type s struct{…}`, and a body
+// re-executed declares its type again; the runtime's registry is flat, so
+// the declaration shadows the entry for the frame's lifetime and
+// [bashPPFrame.leave] puts the previous one back. It reports whether the
+// declaration is such a shadowing one.
+func (r *Runner) bashPPShadowLocalType(name string) bool {
+	if !r.bashPPGoSource || r.bashPPFuncActive == 0 {
+		return false
+	}
+	var prev *bashPPType
+	if existing, ok := r.bashPPTypes[name]; ok {
+		prev = &existing
+	}
+	r.bashPPShadowedTypes = append(r.bashPPShadowedTypes, bashPPShadowedType{depth: len(r.callStack), name: name, prev: prev})
+	return true
+}
+
 // leave restores the caller's execution context.
 //
 // It is deliberately tolerant about depth: it truncates the call and defer
@@ -2064,6 +2133,18 @@ func (r *Runner) bashPPEnterFrame(fn *bashPPFunc, args []string) *bashPPFrame {
 // entry too many.
 func (f *bashPPFrame) leave() {
 	r := f.r
+	for len(r.bashPPShadowedTypes) > 0 {
+		local := r.bashPPShadowedTypes[len(r.bashPPShadowedTypes)-1]
+		if local.depth <= f.callDepth {
+			break
+		}
+		r.bashPPShadowedTypes = r.bashPPShadowedTypes[:len(r.bashPPShadowedTypes)-1]
+		if local.prev != nil {
+			r.bashPPTypes[local.name] = *local.prev
+		} else {
+			delete(r.bashPPTypes, local.name)
+		}
+	}
 	r.bashPPAgentic = f.agentic
 	r.writeEnv = f.writeEnv
 	r.bashPPScope = f.scope
@@ -2287,6 +2368,12 @@ func (r *Runner) bashPPReturnStmt(ctx context.Context, ret *syntax.BashPPReturn)
 		// undeclared callable.
 		if conv, ok := r.bashPPConversionCall(ret.Call); ok {
 			r.bashPPReturnScalarExpr(conv)
+			return
+		}
+		// `return new(T)` likewise arrives as a call; it is the allocation
+		// the Go front end spells as a NewExpr everywhere else.
+		if alloc, ok := r.goSourceNewCall(ret.Call); ok {
+			r.bashPPReturnScalarExpr(alloc)
 			return
 		}
 		if cell, handled, err := r.goSourceBuiltinResult(ret.Call); handled {
@@ -3003,4 +3090,51 @@ func bashppExitCode(s string) (uint8, bool) {
 		return 0, false
 	}
 	return uint8(n), true
+}
+
+// goSourceNewCall recognizes the predeclared `new(T)` delivered as a call —
+// the single-result return is the one place the Go front end does not lower
+// it to a NewExpr — and rebuilds the allocation with the type its argument
+// spells. A shadowed `new`, or a type spelling the call cannot carry, is
+// left to the ordinary call path.
+func (r *Runner) goSourceNewCall(call *syntax.BashPPCall) (*syntax.BashPPNewExpr, bool) {
+	if !r.bashPPGoSource || bashPPPredeclaredCall(call) != "new" || len(call.ArgExprs) != 1 || call.ArgType != nil {
+		return nil, false
+	}
+	if r.bashPPFuncs["new"] != nil || (r.bashPPScope != nil && r.bashPPScope.lookup("new") != nil) {
+		return nil, false
+	}
+	typ, ok := goSourceExprType(call.ArgExprs[0])
+	if !ok {
+		return nil, false
+	}
+	return &syntax.BashPPNewExpr{New: call.Fun[0], Lparen: call.Lparen, Rparen: call.Rparen, AllocType: r.bashPPBindTypeExpr(typ)}, true
+}
+
+// goSourceExprType reads a type spelled as an expression: a name, `*T`, or
+// an instantiation `G[A, B]` of names.
+func goSourceExprType(expr syntax.BashPPExpr) (syntax.BashPPTypeExpr, bool) {
+	switch x := expr.(type) {
+	case *syntax.BashPPParenExpr:
+		return goSourceExprType(x.X)
+	case *syntax.BashPPIdent:
+		return &syntax.BashPPNamedType{Name: x.Name}, true
+	case *syntax.BashPPDerefExpr:
+		elem, ok := goSourceExprType(x.X)
+		if !ok {
+			return nil, false
+		}
+		return &syntax.BashPPPointerType{Star: x.Star, Element: elem}, true
+	case *syntax.BashPPIndexExpr:
+		base, ok := x.X.(*syntax.BashPPIdent)
+		if !ok {
+			return nil, false
+		}
+		arg, ok := goSourceExprType(x.Index)
+		if !ok {
+			return nil, false
+		}
+		return &syntax.BashPPNamedType{Name: base.Name, TypeArgs: []*syntax.BashPPTypeArg{{ArgType: arg}}}, true
+	}
+	return nil, false
 }

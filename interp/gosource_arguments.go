@@ -14,16 +14,20 @@ func (r *Runner) goSourceCallArguments(call *syntax.BashPPCall, fn *bashPPFunc) 
 	if len(call.ArgExprs) != len(call.Args) {
 		return nil, false, fmt.Errorf("gosource: missing positioned call argument")
 	}
-	cells := make([]*bashPPCell, len(call.ArgExprs))
-	for i, expr := range call.ArgExprs {
-		cell, err := r.goSourceValueCell(expr)
+	cells := make([]*bashPPCell, 0, len(call.ArgExprs))
+	for _, expr := range call.ArgExprs {
+		// `f(g())` with a multi-result g is the one place a call's results are
+		// spread; g's every result is an argument, in order.
+		results, err := r.goSourceValueCells(expr, len(call.ArgExprs) == 1)
 		if err != nil {
 			return nil, false, err
 		}
-		if cell.channel != nil && cell.channelOwner != r.bashPPConcurrent {
-			return nil, false, fmt.Errorf("channel belongs to another task group")
+		for _, cell := range results {
+			if cell.channel != nil && cell.channelOwner != r.bashPPConcurrent {
+				return nil, false, fmt.Errorf("channel belongs to another task group")
+			}
+			cells = append(cells, bashPPCopyAssignmentCell(cell))
 		}
-		cells[i] = bashPPCopyAssignmentCell(cell)
 	}
 	if fn.skipArgs > len(cells) {
 		return nil, false, fmt.Errorf("gosource: missing method expression receiver")

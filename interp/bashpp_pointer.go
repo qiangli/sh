@@ -81,9 +81,44 @@ func (r *Runner) bashPPValidatePointerType(typ syntax.BashPPTypeExpr) error {
 	return nil
 }
 
+// bashPPPointerConversion settles `(*T)(p)` — a conversion whose target is
+// a pointer type — to the same pointer retyped: it names the storage p
+// names, and dereferences and method selection read it as a T. It reports
+// whether the expression was such a conversion; a nil operand stays nil.
+func (r *Runner) bashPPPointerConversion(expr syntax.BashPPExpr) (*bashPPPointer, *syntax.BashPPPointerType, bool, error) {
+	for {
+		paren, ok := expr.(*syntax.BashPPParenExpr)
+		if !ok {
+			break
+		}
+		expr = paren.X
+	}
+	conv, ok := expr.(*syntax.BashPPConvertExpr)
+	if !ok {
+		return nil, nil, false, nil
+	}
+	target, ok := r.bashPPPointerType(r.bashPPConvertTarget(conv))
+	if !ok || target.Element == nil {
+		return nil, nil, false, nil
+	}
+	if goSourceNilLiteral(conv.X) {
+		return nil, target, true, nil
+	}
+	ptr, err := r.bashPPPointerExprValue(conv.X)
+	if err != nil || ptr == nil {
+		return nil, target, true, err
+	}
+	retyped := *ptr
+	retyped.elem = target.Element
+	return &retyped, target, true, nil
+}
+
 func (r *Runner) bashPPPointerExprValue(expr syntax.BashPPExpr) (*bashPPPointer, error) {
 	if _, nilConversion := r.bashPPNilPointerConversion(expr); nilConversion {
 		return nil, nil
+	}
+	if ptr, _, converted, err := r.bashPPPointerConversion(expr); converted {
+		return ptr, err
 	}
 	switch x := expr.(type) {
 	case *syntax.BashPPParenExpr:
@@ -424,7 +459,19 @@ func (r *Runner) bashPPBindPointerExpr(name string, expr syntax.BashPPExpr) bool
 	var value any
 	var meta *bashPPCollectionMeta
 	var typ syntax.BashPPTypeExpr
+	if ptr, target, converted, err := r.bashPPPointerConversion(expr); converted {
+		if err != nil {
+			r.errf("%v\n", err)
+			r.exit.code = 2
+			return true
+		}
+		if ptr == nil {
+			return false
+		}
+		expr, value, typ = nil, ptr, target
+	}
 	switch x := expr.(type) {
+	case nil:
 	case *syntax.BashPPAddressExpr, *syntax.BashPPNewExpr:
 		ptr, err := r.bashPPPointerExprValue(expr)
 		if err != nil {

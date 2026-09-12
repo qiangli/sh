@@ -116,6 +116,12 @@ func (r *Runner) goSourceInterfaceEqual(left, right bashPPComparableValue) (bool
 	if r.goSourceDynamicTypeIdentity(li.dynamic) != r.goSourceDynamicTypeIdentity(ri.dynamic) {
 		return false, true, nil
 	}
+	// Identical dynamic types that are not comparable — a struct with a
+	// slice field, say — are a run-time panic in Go, not a static refusal.
+	if !r.bashPPComparableType(li.dynamic, make(map[string]bool)) {
+		r.bashPPRaise("runtime error: comparing uncomparable type " + goSourceReflectTypeText(li.dynamic))
+		return false, true, errBashPPScalarInterrupted
+	}
 	if li.cell == nil || ri.cell == nil {
 		return false, true, fmt.Errorf("Go interface lacks dynamic storage")
 	}
@@ -158,6 +164,8 @@ func (r *Runner) goSourceDynamicTypeIdentity(typ syntax.BashPPTypeExpr) string {
 			length = t.Length.Value
 		}
 		return "[" + length + "]" + r.goSourceDynamicTypeIdentity(t.Element)
+	case *syntax.BashPPStructType:
+		return r.goSourceStructIdentity(t)
 	}
 	return bashPPTypeText(typ)
 }

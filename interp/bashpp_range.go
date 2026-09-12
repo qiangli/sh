@@ -5,6 +5,7 @@ package interp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"go/constant"
 	"sort"
@@ -228,6 +229,11 @@ func (r *Runner) bashPPRangeScalar(ctx context.Context, rng *syntax.BashPPRange)
 		r.bashPPRangeError(rng, "BASHPP-ERANGE-TYPE: %v", err)
 		return true
 	}
+	return r.bashPPRangeScalarValue(ctx, rng, value)
+}
+
+// bashPPRangeScalarValue iterates an already evaluated scalar range operand.
+func (r *Runner) bashPPRangeScalarValue(ctx context.Context, rng *syntax.BashPPRange, value bashPPScalar) bool {
 	switch value.value.Kind() {
 	case constant.String:
 		text := constant.StringVal(value.value)
@@ -286,6 +292,26 @@ func (r *Runner) bashPPRangeCollection(ctx context.Context, rng *syntax.BashPPRa
 	if rng.Expr == nil || r.bashPPScope == nil {
 		return false
 	}
+	// `range f()`: a call's result is read once, as the cell the callee
+	// returned. A collection result ranges as that collection; a scalar
+	// result — a string, an integer — takes the scalar iteration without
+	// being evaluated a second time.
+	if call, isCall := rng.Expr.(*syntax.BashPPCall); isCall && r.bashPPGoSource && !r.bashPPBridgeHandles(call) {
+		cell, err := r.goSourceValueCell(call)
+		if err != nil {
+			if !errors.Is(err, errBashPPScalarInterrupted) {
+				r.bashPPRangeError(rng, "BASHPP-ERANGE-TYPE: %v", err)
+			}
+			return true
+		}
+		if cell.vr.Kind == expand.Object && bashPPCellMeta(cell) != nil {
+			return r.bashPPRangeCollectionValue(ctx, rng, cell.vr.Obj, bashPPCellMeta(cell))
+		}
+		if cell.channel != nil || cell.vr.Kind == expand.Object {
+			return false
+		}
+		return r.bashPPRangeScalarValue(ctx, rng, r.bashPPScalarFromCell(cell))
+	}
 	root, ok := bashPPCollectionRoot(rng.Expr)
 	if !ok {
 		// A composite is a range value in its own right. It has no lexical root
@@ -331,6 +357,11 @@ func (r *Runner) bashPPRangeCollection(ctx context.Context, rng *syntax.BashPPRa
 	if meta == nil {
 		return false
 	}
+	return r.bashPPRangeCollectionValue(ctx, rng, value, meta)
+}
+
+// bashPPRangeCollectionValue iterates an already read collection operand.
+func (r *Runner) bashPPRangeCollectionValue(ctx context.Context, rng *syntax.BashPPRange, value any, meta *bashPPCollectionMeta) bool {
 	if meta.kind == "struct" || meta.kind == "pointer" {
 		r.bashPPRangeError(rng, "BASHPP-ERANGE-TYPE: cannot range over %s", bashPPTypeText(meta.typ))
 		return true

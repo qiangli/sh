@@ -62,15 +62,27 @@ func (r *Runner) bashPPAssign(ctx context.Context, assign *syntax.BashPPAssign) 
 		r.exit = exitStatus{code: 2}
 		return
 	}
+	// `p = new(T)`, `ps[i] = new(T)`: the Go front end lowers the allocation
+	// as the NewExpr in ValueExpr and also records the call. The allocation
+	// is what is assigned; the call spelling would look up `new` as a
+	// function and read `T` as a value.
+	allocation := false
+	if r.bashPPGoSource && assign.Call != nil && bashPPPredeclaredCall(assign.Call) == "new" && r.bashPPFuncs["new"] == nil && r.bashPPScope.lookup("new") == nil {
+		_, allocation = assign.ValueExpr.(*syntax.BashPPNewExpr)
+	}
 	if r.bashPPGoSource && assign.Call != nil {
+		rhs := syntax.BashPPExpr(assign.Call)
+		if allocation {
+			rhs = assign.ValueExpr
+		}
 		switch assign.TargetExpr.(type) {
 		case *syntax.BashPPIndexExpr, *syntax.BashPPSelectorExpr, *syntax.BashPPDerefExpr:
-			r.bashPPStructuredAssign(assign.TargetExpr, assign.Call)
+			r.bashPPStructuredAssign(assign.TargetExpr, rhs)
 			return
 		}
 	}
 	if len(assign.Names) > 0 {
-		if assign.Call != nil {
+		if assign.Call != nil && !allocation {
 			r.bashPPTupleAssignCall(ctx, assign)
 			return
 		}
@@ -207,7 +219,7 @@ func (r *Runner) bashPPTupleAssignCall(ctx context.Context, assign *syntax.BashP
 }
 
 func (r *Runner) bashPPTupleAssign(assign *syntax.BashPPAssign) {
-	if r.goSourceReceiveAssign(assign) {
+	if r.goSourceReceiveAssign(assign) || r.goSourceCommaOkAssign(assign) {
 		return
 	}
 	if len(assign.Values) == 0 || len(assign.ValueExprs) != len(assign.Values) {
@@ -276,7 +288,10 @@ func (r *Runner) bashPPTupleAssign(assign *syntax.BashPPAssign) {
 			candidates[i] = candidate
 			continue
 		}
-		if ident, ok := expr.(*syntax.BashPPIdent); ok {
+		// `flag = true`: the predeclared booleans are identifiers with no
+		// cell; unless a variable shadows them they are the constants the
+		// scalar evaluator below knows.
+		if ident, ok := expr.(*syntax.BashPPIdent); ok && !(bashPPBoolIdent(ident.Name.Value) && r.bashPPScope.lookup(ident.Name.Value) == nil) {
 			source := r.bashPPScope.lookup(ident.Name.Value)
 			if source == nil {
 				r.errf("%sBASHPP-EASSIGN-UNDECLARED: RHS %s is not declared\n", r.bashErrPrefix(ident.Pos()), ident.Name.Value)

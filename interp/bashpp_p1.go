@@ -174,7 +174,7 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 		// A pre-registered package-level type is already in the registry by
 		// design; only an entry this statement did not put there is a clash.
 		preRegistered := r.bashPPGoSourceClaimType(name)
-		if _, exists := r.bashPPTypes[name]; exists && !preRegistered {
+		if _, exists := r.bashPPTypes[name]; exists && !preRegistered && !r.bashPPShadowLocalType(name) {
 			r.errf("%stype %s redeclared in this session\n", r.bashErrPrefix(d.Pos()), name)
 			r.exit = exitStatus{code: 2}
 			return
@@ -809,6 +809,19 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 			}
 			return
 		}
+		// `f := T.M`, `f := (*T).M`: a method expression is the forwarding
+		// closure it denotes; see goSourceMethodExprClosure.
+		if cell, handled, err := r.goSourceMethodExprCell(d.Expr); handled {
+			if err != nil {
+				r.exit.fatal(err)
+				return
+			}
+			r.bashPPDeclareName(d.Lhs[0].Value, cell.vr)
+			if target := r.bashPPScope.lookup(d.Lhs[0].Value); target != nil {
+				*target = *cell
+			}
+			return
+		}
 	}
 	// A named function value uses the same callable registry as a closure or
 	// method value, retaining its declaration (including the agentic marker).
@@ -820,7 +833,11 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 		if len(d.Rhs) == 1 {
 			sourceName = d.Rhs[0].Lit()
 		}
-		if sourceName != "" {
+		// Only a name can name a function. A literal such as `1` is a
+		// value, and looking it up would find the positional parameter $1 —
+		// inside a function whose first argument is a closure, `i := 1`
+		// would bind the closure instead of the number.
+		if sourceName != "" && syntax.BashPPValidIdent(sourceName) {
 			if vr := r.lookupVar(sourceName); vr.IsSet() {
 				if _, ok := r.bashPPClosure(vr.Str); ok {
 					r.bashPPDeclareName(d.Lhs[0].Value, vr)
@@ -887,6 +904,7 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 				target.vr = source.vr
 				target.typeName = source.typeName
 				target.declType = source.declType
+				target.scalarKind = source.scalarKind
 				target.pointer, target.nilPointer, target.pointerValue = source.pointer, source.nilPointer, source.pointerValue
 				target.object, target.valueMeta = source.object, source.valueMeta
 				target.interfaceValue = source.interfaceValue
@@ -1941,19 +1959,27 @@ func (r *Runner) bashPPCall(ctx context.Context, c *syntax.BashPPCall) {
 		}
 		return
 	}
-	if c.CalleeExpr != nil && !(r.bashPPGoSource && r.bashPPGoSourcePin != nil && r.bashPPGoSourcePin.call == c) {
+	if c.CalleeExpr != nil && !r.bashPPGoSource {
 		r.exit.fatal(fmt.Errorf("%sgosource: computed call runtime is not implemented", r.bashErrPrefix(c.Pos())))
 		return
 	}
 	// A call to a typed function declared in this session runs the function.
 	// It is checked before the external eval toolchain so a user's own `func`
-	// always wins over a same-named tool binding.
+	// always wins over a same-named tool binding. A Go computed callee —
+	// `fs[i]()`, `get()()`, `(*T).M(p)` — resolves to its function value the
+	// same way it does in expression position.
 	if fn, ok := r.bashPPLookupFunc(c); ok {
 		args, ok := r.bashPPCallValues(c, fn)
 		if !ok {
 			return
 		}
 		r.bashPPInvoke(ctx, fn, args)
+		return
+	}
+	if c.CalleeExpr != nil {
+		if r.exit.code == 0 && !r.bashPPPanicking() && r.exit.err == nil {
+			r.exit.fatal(fmt.Errorf("%sgosource: computed callee is not a function", r.bashErrPrefix(c.Pos())))
+		}
 		return
 	}
 	if r.exit.code != 0 {

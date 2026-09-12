@@ -599,6 +599,12 @@ func (r *Runner) bashPPReadExpr(expr syntax.BashPPExpr) (any, *bashPPCollectionM
 		if target, nilPointer := r.bashPPNilPointerConversion(x); nilPointer {
 			return nil, bashPPPointerMeta(target), nil
 		}
+		if ptr, target, converted, err := r.bashPPPointerConversion(x); converted {
+			if err != nil {
+				return nil, nil, err
+			}
+			return ptr, bashPPPointerMeta(target), nil
+		}
 		scalar, err := r.bashPPEvalScalarExpr(x)
 		if err != nil {
 			return nil, nil, err
