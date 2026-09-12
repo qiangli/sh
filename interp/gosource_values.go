@@ -51,6 +51,9 @@ func (r *Runner) goSourceCallableCell(expr syntax.BashPPExpr) (*bashPPCell, bool
 			cell, err := r.goSourceLocalMethodValue(x)
 			return cell, true, err
 		}
+		if cell, handled, err := r.goSourceMethodExprCell(x); handled {
+			return cell, true, err
+		}
 		if x.FuncType == nil {
 			return nil, false, nil
 		}

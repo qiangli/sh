@@ -474,6 +474,14 @@ func (r *Runner) bashPPLookupFunc(c *syntax.BashPPCall) (*bashPPFunc, bool) {
 		}
 		return r.bashPPClosure(pin.handle)
 	}
+	if recv, method, ok := r.goSourceMethodExprCallee(c); ok {
+		fn, err := r.goSourceMethodExprClosure(recv, method)
+		if err != nil {
+			r.exit.fatal(err)
+			return nil, false
+		}
+		return fn, true
+	}
 	if r.bashPPGoSource && c.CalleeExpr != nil {
 		if method, ok := c.CalleeExpr.(*syntax.BashPPSelectorExpr); ok && method.MethodValue && !r.bashPPNativeExpr(method.X) {
 			fn, err := r.goSourceLocalMethod(method, len(c.Args) > 0)
