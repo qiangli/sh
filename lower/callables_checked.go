@@ -10,7 +10,9 @@ func (e *emitter) findCheckedValues(file *syntax.File) {
 	syntax.Walk(file, func(node syntax.Node) bool {
 		switch n := node.(type) {
 		case *syntax.BashPPDerefExpr, *syntax.BashPPSelectorExpr:
-			e.guarded = true
+			// Go source dereferences natively (checkedDeref); only the
+			// runtime path checks the pointer and needs the guard.
+			e.guarded = e.guarded || !e.goSource
 		case *syntax.BashPPTypeAssertExpr:
 			e.guarded = e.guarded || n.TypeToken == nil
 		}

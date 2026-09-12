@@ -22,7 +22,9 @@ func (e *emitter) checkedValueSite(node syntax.Node, name string) string {
 // boolean RHS. The pointer is passed once; the result remains addressable.
 func (e *emitter) checkedDeref(node syntax.Node, pointer, name string) string {
 	if e.goSource {
-		return "(*(" + pointer + "))"
+		// Go source spells its own dereference; the operand is already
+		// the source's operand, parenthesised only where the source was.
+		return "*" + pointer
 	}
 	site := e.checkedValueSite(node, name)
 	return "(*" + e.prefix + "rt.MustValue(" + e.prefix + "rt.CheckedPointer(" + pointer + ", " + site + ")))"
