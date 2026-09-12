@@ -70,7 +70,12 @@ type bashPPBridgeRequest struct {
 	sliceMutating []bool
 	// sliceElem[i] is the declared element type of sliceTargets[i], used to
 	// rebuild the writeback elements as interpreter values. Host-only.
-	sliceElem  []syntax.BashPPTypeExpr
+	sliceElem []syntax.BashPPTypeExpr
+	// sliceReconcile[i] marks a buffer whose class is decided by the observed
+	// call behaviour: elements returned unchanged are a read-only consumer and
+	// nothing is written back; changed elements are an in-place mutation and
+	// are written back over the visible length. Host-only.
+	sliceReconcile []bool
 	ID         uint64              `json:"id"`
 	Op         string              `json:"op"`
 	Selector   string              `json:"selector"`

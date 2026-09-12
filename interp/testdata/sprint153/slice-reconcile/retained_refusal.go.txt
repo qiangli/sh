@@ -1,0 +1,16 @@
+// Negative case (run by TestGoSourceBridgeSliceRetainedRefusal, not the
+// differ): slice storage nested inside another value cannot be reconciled by
+// the buffer writeback and keeps the retention refusal. Native Go accepts this
+// program; the interpreter must refuse it promptly rather than hang or corrupt.
+package main
+
+import (
+	"fmt"
+	"reflect"
+)
+
+func main() {
+	a := [][]int{{1, 2}}
+	b := [][]int{{1, 2}}
+	fmt.Println(reflect.DeepEqual(a, b))
+}

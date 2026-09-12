@@ -208,7 +208,7 @@ func prepareNativeSliceBuffers(req bashPPEvalRequest, q *bashPPBridgeRequest) er
 		if nativeSliceReadOnly(name) || goSourceInterpretedCallable(name) {
 			return nil
 		}
-		return fmt.Errorf("gosource: native slice retention or mutation is unsupported for %s", name)
+		return prepareNativeSliceReconcile(req, q)
 	}
 	if index >= len(q.Args) || q.Args[index].sliceView == nil {
 		return fmt.Errorf("gosource: native Read requires a direct original byte slice")
@@ -271,6 +271,146 @@ func prepareNativeSliceMutation(req bashPPEvalRequest, q *bashPPBridgeRequest, i
 	return nil
 }
 
+// nestedNativeSliceView reports an original slice view carried inside another
+// value — an element, field or entry — where the buffer writeback cannot reach
+// its storage.
+func nestedNativeSliceView(v bashPPBridgeValue) bool {
+	for _, e := range v.Elements {
+		if e.sliceView != nil || nestedNativeSliceView(e) {
+			return true
+		}
+	}
+	for _, e := range v.Fields {
+		if e.sliceView != nil || nestedNativeSliceView(e) {
+			return true
+		}
+	}
+	for _, e := range v.Entries {
+		if e.Key.sliceView != nil || nestedNativeSliceView(e.Key) {
+			return true
+		}
+		if e.Value.sliceView != nil || nestedNativeSliceView(e.Value) {
+			return true
+		}
+	}
+	return false
+}
+
+// prepareNativeSliceReconcile transports every direct original slice argument
+// as a registered buffer and lets the observed call behaviour decide its
+// class: a read-only consumer hands the elements back unchanged and nothing is
+// written back, while an in-place mutator's changes are written back over the
+// visible length, so aliases observe them as native Go would. Storage the
+// writeback cannot reach — a slice view nested inside another value, or one
+// whose declared type has no slice identity — keeps the retention refusal.
+func prepareNativeSliceReconcile(req bashPPEvalRequest, q *bashPPBridgeRequest) error {
+	name := nativeSliceCallable(req, *q)
+	refuse := fmt.Errorf("gosource: native slice retention or mutation is unsupported for %s", name)
+	if q.Receiver != nil && (q.Receiver.sliceView != nil || nestedNativeSliceView(*q.Receiver)) {
+		return refuse
+	}
+	for i := range q.Args {
+		if nestedNativeSliceView(q.Args[i]) {
+			return refuse
+		}
+		target := q.Args[i].sliceView
+		if target == nil {
+			continue
+		}
+		collection, ok := req.CallbackOwner.bashPPUnderlyingType(target.typ).(*syntax.BashPPCollectionType)
+		if !ok || collection.Kind != "slice" {
+			return refuse
+		}
+		visible, err := req.CallbackOwner.bashPPBridgeCollection(target.view, target.meta, target.typ)
+		if err != nil {
+			return err
+		}
+		if visible.Kind != "slice" {
+			return refuse
+		}
+		// Visible length may still hold the collection layer's lazy nil slots
+		// (make([]T, n) before assignment). For scalar storage those slots are
+		// Go's zero values.
+		elem := bashPPTypeText(req.CallbackOwner.bashPPUnderlyingType(collection.Element))
+		for j := range visible.Elements {
+			if visible.Elements[j].Kind == "nil" {
+				if zero, ok := bridgeZeroScalar(elem); ok {
+					visible.Elements[j] = zero
+				}
+			}
+		}
+		q.SliceBuffers = append(q.SliceBuffers, bashPPNativeSliceBuffer{Index: i, Length: len(target.view), Value: visible})
+		q.sliceTargets = append(q.sliceTargets, target)
+		q.sliceMutating = append(q.sliceMutating, true)
+		q.sliceElem = append(q.sliceElem, collection.Element)
+		q.sliceReconcile = append(q.sliceReconcile, true)
+	}
+	return nil
+}
+
+// bridgeZeroScalar is the transported zero value for a scalar element type,
+// filling the collection layer's lazy nil slots the way Go zero-initialises
+// backing storage. A non-scalar element reports false and keeps its nil slot.
+func bridgeZeroScalar(elem string) (bashPPBridgeValue, bool) {
+	switch elem {
+	case "int", "int8", "int16", "int32", "int64", "rune":
+		return bashPPBridgeValue{Kind: "int", Type: elem, Text: "0"}, true
+	case "uint", "uint8", "uint16", "uint32", "uint64", "uintptr", "byte":
+		return bashPPBridgeValue{Kind: "uint", Type: elem, Text: "0"}, true
+	case "float32", "float64":
+		return bashPPBridgeValue{Kind: "float", Type: elem, Text: "0"}, true
+	case "complex64", "complex128":
+		return bashPPBridgeValue{Kind: "complex", Type: elem, Text: "(0+0i)"}, true
+	case "string":
+		return bashPPBridgeValue{Kind: "string", Type: elem, Text: ""}, true
+	case "bool":
+		return bashPPBridgeValue{Kind: "bool", Type: elem, Text: "false"}, true
+	}
+	return bashPPBridgeValue{}, false
+}
+
+// bridgeValueUnchanged reports whether the worker handed a value back exactly
+// as sent. Only value content is compared: the worker's snapshot spells types
+// through its own reflect view and mints fresh handle ids, so type spellings
+// do not participate and a handle only matches its own id.
+func bridgeValueUnchanged(a, b bashPPBridgeValue) bool {
+	if a.Kind != b.Kind || a.Text != b.Text || a.Handle != b.Handle {
+		return false
+	}
+	if !bridgeElementsUnchanged(a.Elements, b.Elements) {
+		return false
+	}
+	if len(a.Fields) != len(b.Fields) {
+		return false
+	}
+	for name, av := range a.Fields {
+		bv, ok := b.Fields[name]
+		if !ok || !bridgeValueUnchanged(av, bv) {
+			return false
+		}
+	}
+	if len(a.Entries) != len(b.Entries) {
+		return false
+	}
+	for i := range a.Entries {
+		if !bridgeValueUnchanged(a.Entries[i].Key, b.Entries[i].Key) || !bridgeValueUnchanged(a.Entries[i].Value, b.Entries[i].Value) {
+			return false
+		}
+	}
+	return true
+}
+func bridgeElementsUnchanged(sent, got []bashPPBridgeValue) bool {
+	if len(sent) != len(got) {
+		return false
+	}
+	for i := range sent {
+		if !bridgeValueUnchanged(sent[i], got[i]) {
+			return false
+		}
+	}
+	return true
+}
+
 func applyNativeSliceBuffers(runner *Runner, q bashPPBridgeRequest, reply bashPPBridgeResponse) error {
 	if len(reply.SliceUpdates) == 0 && reply.Error != "" {
 		return nil
@@ -294,6 +434,13 @@ func applyNativeSliceBuffers(runner *Runner, q bashPPBridgeRequest, reply bashPP
 		}
 		if wire.Index != q.SliceBuffers[i].Index || wire.Length != len(target.view) || wire.Value.Kind != "slice" || len(wire.Value.Elements) != want {
 			return fmt.Errorf("gosource: invalid native slice writeback shape")
+		}
+		// A reconciled buffer's class is decided here by what the call actually
+		// did: elements handed back unchanged mean a read-only consumer, and
+		// the interpreter's storage — including element identity — is left
+		// untouched.
+		if i < len(q.sliceReconcile) && q.sliceReconcile[i] && bridgeElementsUnchanged(q.SliceBuffers[i].Value.Elements, wire.Value.Elements) {
+			continue
 		}
 		values := make([]any, len(wire.Value.Elements))
 		metas := make([]*bashPPCollectionMeta, len(wire.Value.Elements))
