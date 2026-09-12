@@ -3,10 +3,11 @@ id: 7f1711595732
 kind: task
 title: S151.5 residual evaluator and static bridge closure
 seq: 76
-status: todo
+status: done
 priority: p0
 created: 2026-09-10T21:18:20.930004Z
 sprint: 151
+closed: 2026-09-12T04:40:25.029574Z
 ---
 
 Status: non-dispatchable seed/localization card until Barrier A. Packet 151.5 has 100 baseline roots; manifest SHA-256 `f5ea52017684e591621e6d400f9d9216ecdabd4e795ca019c3905136571e8774`, root-list SHA-256 `2be549d7b7d66c56ae25ef4d5e22ea4642b0afe88d2ea1cfa3f1938330ed3239`. Evidence: `/srv/sprint142/evidence/product-baseline-001-control/{packet-manifests-v4/packet-151.5.json,final-causal-v2.json}`. Representatives `testdir:abi/method_wrapper.go` and `testdir:bigmap.go` are native PASS and interpreted `run` exit 2 under `type_evaluation.interpreted_rejection`.
