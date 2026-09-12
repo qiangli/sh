@@ -125,6 +125,15 @@ func goSourceCommNames(c syntax.Command) []string {
 // goSourcePositions preserves caller positions in native stack and logging APIs.
 // Add directives only after checking emitted Go, while retaining physical output
 // lines in the external source map used by transpile consumers.
+//
+// Positions are the adjusted ones the Go compiler would have reported for the
+// original input: when the input's own line directive is in effect at a
+// mapped position, the emitted directive reproduces the user's filename (from
+// the source's LineDirectives table) and adjusted line. A position whose
+// column is unknown — one governed by a line-only user directive — emits the
+// line-only "//line file:N" form; a ":0" column would be rejected by the Go
+// compiler. The map keeps both halves: Source/SourceOffset and Pos.Offset are
+// physical, Pos line/column are adjusted.
 func goSourcePositions(result *Result, origin string) error {
 	byLine := make(map[int]int, len(result.Mappings))
 	for i, m := range result.Mappings {
@@ -140,10 +149,16 @@ func goSourcePositions(result *Result, origin string) error {
 			if name == "" {
 				name = origin
 			}
+			directive := false
+			if adjusted, ok := adjustedSourceName(result.Sources, m.Pos.Offset()); ok {
+				// The user's directive may legitimately clear the filename;
+				// "//line :N" reproduces that (reported as "??").
+				name, directive = adjusted, true
+			}
 			if strings.ContainsAny(name, "\r\n") {
 				return fmt.Errorf("source filename cannot be represented in Go line directive")
 			}
-			if name != "" && m.Pos.Line() > 0 {
+			if (name != "" || directive) && m.Pos.Line() > 0 {
 				// A marker in doc-comment position (column 1) followed by a
 				// directive is one comment group; gofmt separates the two
 				// with a bare "//" line. Emit it so the output is gofmt-stable.
@@ -151,7 +166,11 @@ func goSourcePositions(result *Result, origin string) error {
 					out.WriteString("//\n")
 					physical++
 				}
-				fmt.Fprintf(&out, "//line %s:%d:%d\n", name, m.Pos.Line(), m.Pos.Col())
+				if m.Pos.Col() > 0 {
+					fmt.Fprintf(&out, "//line %s:%d:%d\n", name, m.Pos.Line(), m.Pos.Col())
+				} else {
+					fmt.Fprintf(&out, "//line %s:%d\n", name, m.Pos.Line())
+				}
 				physical++
 			}
 			m.GoLine = physical
@@ -184,6 +203,79 @@ func goSourcePositions(result *Result, origin string) error {
 	}
 	if pending || index != len(result.Mappings) {
 		return fmt.Errorf("generated marker count differs from source mappings")
+	}
+	return nil
+}
+
+// adjustedSourceName returns the filename a line directive in the original
+// input puts in effect at the global offset, when the covering source records
+// one. The reported filename may be empty: a "//line :N" directive clears it.
+func adjustedSourceName(sources []syntax.SourceFile, offset uint) (string, bool) {
+	for _, src := range sources {
+		if offset < src.Base || offset > src.Base+src.Size {
+			continue
+		}
+		rel := offset - src.Base
+		name, ok := "", false
+		for _, d := range src.LineDirectives {
+			if d.Offset > rel {
+				break
+			}
+			name, ok = d.Filename, true
+		}
+		return name, ok
+	}
+	return "", false
+}
+
+// ValidateMappings rejects a result whose map no longer matches the generated
+// source or the recorded inputs: every generated marker must have exactly one
+// mapping, every mapping must anchor a nonempty generated line, and for Go
+// input every mapping must resolve to the one recorded source containing its
+// position. A consumer of the external map fails closed on a corrupted or
+// truncated map instead of degrading to guessed positions.
+func (r *Result) ValidateMappings() error {
+	lines := strings.Split(string(r.Source), "\n")
+	markers := 0
+	for _, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "// lower:") {
+			markers++
+		}
+	}
+	if markers != len(r.Mappings) {
+		return fmt.Errorf("source map: %d mappings for %d generated markers", len(r.Mappings), markers)
+	}
+	for i, m := range r.Mappings {
+		if m.GoLine < 1 || m.GoLine > len(lines) {
+			return fmt.Errorf("source map: mapping %d anchors line %d outside the generated source", i, m.GoLine)
+		}
+		line := lines[m.GoLine-1]
+		if strings.TrimSpace(line) == "" {
+			return fmt.Errorf("source map: mapping %d anchors empty generated line %d", i, m.GoLine)
+		}
+		if m.GoCol < 1 || m.GoCol > len(line)+1 {
+			return fmt.Errorf("source map: mapping %d anchors column %d outside generated line %d", i, m.GoCol, m.GoLine)
+		}
+		if len(r.Sources) == 0 {
+			continue
+		}
+		found := false
+		for _, src := range r.Sources {
+			if m.Pos.Offset() < src.Base || m.Pos.Offset() > src.Base+src.Size {
+				continue
+			}
+			found = true
+			if m.Source != src.Name {
+				return fmt.Errorf("source map: mapping %d names %q but offset %d is in %q", i, m.Source, m.Pos.Offset(), src.Name)
+			}
+			if m.SourceOffset != m.Pos.Offset()-src.Base {
+				return fmt.Errorf("source map: mapping %d file offset %d does not match position offset %d", i, m.SourceOffset, m.Pos.Offset()-src.Base)
+			}
+			break
+		}
+		if !found {
+			return fmt.Errorf("source map: mapping %d offset %d resolves to no recorded source", i, m.Pos.Offset())
+		}
 	}
 	return nil
 }
