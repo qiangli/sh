@@ -29,6 +29,7 @@ func TestSprint152Converter(t *testing.T) {
 		{"new-paren", "new-paren/new_paren.go"},
 		{"const-defined-type", "const-defined-type/const_defined_type.go"},
 		{"shadowed-builtin-const", "shadowed-builtin-const/shadowed_builtin_const.go"},
+		{"tuple-eval-order", "tuple-eval-order/tuple_eval_order.go"},
 	} {
 		t.Run(tc.mechanism, func(t *testing.T) {
 			path := filepath.Join("testdata", "sprint152", filepath.FromSlash(tc.file))
