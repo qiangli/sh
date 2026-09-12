@@ -25,9 +25,17 @@ import (
 // before every top-level declaration.
 // Classes not yet closed are listed in fidelityOpen and are still exercised
 // so that their output stays gofmt-stable.
+//
+// C1 stays open by design (S152.1): the converter carries only the //go:
+// directives of a declaration into Stmt.Comments (gosource/directives.go);
+// no other comment group reaches the Bash++ tree, so the emitter has nothing
+// to write. Closing it means attaching every ast.CommentGroup — doc, inline,
+// trailing, end-of-block and the pre-package header — in the converter, with
+// the leading/trailing distinction reconstructed from positions (Comment has
+// only its position and text), and blocks no row: asmcheck and // ERROR
+// patterns are read from the original file.
 var fidelityOpen = map[string]bool{
 	"comments-dropped": true, // C1
-	"type-assertion":   true, // C9
 }
 
 // fidelityLanded records, for classes whose emitter rewrite is already

@@ -767,15 +767,7 @@ func (e *emitter) block(b *syntax.Block) (string, error) {
 func (e *emitter) blockParts(b *syntax.Block) ([]string, error) {
 	e.push()
 	defer e.pop()
-	var out []string
-	for _, s := range b.Stmts {
-		x, err := e.statement(s)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, x)
-	}
-	return out, nil
+	return e.statementList(b.Stmts)
 }
 
 // oneLineBody lays a Go-source body whose braces share a source line out on

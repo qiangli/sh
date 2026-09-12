@@ -101,14 +101,12 @@ func (e *emitter) goSourceCommand(c syntax.Command) (string, bool, error) {
 				}
 				out.WriteString("case " + strings.TrimSuffix(comm, e.unused(goSourceCommNames(arm.Comm))) + ":\n")
 			}
-			for _, stmt := range arm.Stmts {
-				v, err := e.statement(stmt)
-				if err != nil {
-					e.pop()
-					return "", true, err
-				}
-				out.WriteString(v)
+			parts, err := e.statementList(arm.Stmts)
+			if err != nil {
+				e.pop()
+				return "", true, err
 			}
+			out.WriteString(strings.Join(parts, ""))
 			e.pop()
 		}
 		out.WriteString("}\n")
@@ -332,4 +330,212 @@ func (e *emitter) goSourceReceiveOperand(recv *syntax.BashPPReceive) (string, er
 		return e.expr(recv.ChanExpr)
 	}
 	return e.valueWord(recv.Chan)
+}
+
+// statementList emits a statement list one statement per element, each
+// ending in a newline and led by its marker line where it has one. Under
+// goSource a converter tuple split is emitted as the one assignment it came
+// from (see tupleSplit).
+func (e *emitter) statementList(stmts []*syntax.Stmt) ([]string, error) {
+	var out []string
+	for i := 0; i < len(stmts); i++ {
+		if e.goSource {
+			text, consumed, err := e.tupleSplit(stmts[i:])
+			if err != nil {
+				return nil, err
+			}
+			if consumed > 0 {
+				out = append(out, text)
+				i += consumed - 1
+				continue
+			}
+		}
+		x, err := e.statement(stmts[i])
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, x)
+	}
+	return out, nil
+}
+
+// tupleSplit recognises the converter's lowering of a multi-value
+// assignment or declaration (gosource/tuple.go) at the head of stmts and
+// emits it as the input wrote it (C9). A multi-target `=` whose targets are
+// not all plain identifiers is split as
+//
+//	__t_ptr_0 := (&ok)          capture bindings, one per addressing operand
+//	__t_0, __t_1 := y.(int)     the results, evaluated once
+//	v = __t_0                   one assignment per target
+//	*__t_ptr_0 = __t_1
+//
+// which becomes `v, *(&ok) = y.(int)` again; a `var a, b = f()` is split
+// as the same temporaries followed by one declaration per name (a blank
+// name is consumed by `_ = __t_i`), which becomes `var a, b = f()`. Go
+// evaluates both exactly as the split does; the split is the interpreter's
+// shape. The short declarations of a split are anchored at one source
+// token, which no two written statements share, and the statements that
+// follow each consume one of the split's temporaries, whose names the
+// converter allocates outside the input's identifiers; both are checked
+// before anything is coalesced. Returns the number of statements consumed,
+// zero when stmts does not start with a split.
+func (e *emitter) tupleSplit(stmts []*syntax.Stmt) (string, int, error) {
+	at := tupleSplitPos(stmts[0])
+	if !at.IsValid() {
+		return "", 0, nil
+	}
+	var captures []*syntax.BashPPShortDecl
+	var tuple *syntax.BashPPShortDecl
+	n := 0
+	for ; n < len(stmts) && tuple == nil; n++ {
+		d, ok := stmts[n].Cmd.(*syntax.BashPPShortDecl)
+		if !ok || d.OpPos != at {
+			return "", 0, nil
+		}
+		if len(d.Lhs) == 1 {
+			captures = append(captures, d)
+		} else {
+			tuple = d
+		}
+	}
+	if tuple == nil || len(stmts) < n+len(tuple.Lhs) {
+		return "", 0, nil
+	}
+	consumers := stmts[n : n+len(tuple.Lhs)]
+	n += len(tuple.Lhs)
+	declared := false
+	for i, s := range consumers {
+		var value syntax.BashPPExpr
+		switch cmd := s.Cmd.(type) {
+		case *syntax.BashPPAssign:
+			if cmd.Call != nil {
+				return "", 0, nil
+			}
+			value = cmd.ValueExpr
+		case *syntax.BashPPDecl:
+			if cmd.Kw.Value != "var" {
+				return "", 0, nil
+			}
+			declared = true
+			value = cmd.InitExpr
+			// The comma-ok boolean is restored by a conversion.
+			if conv, ok := value.(*syntax.BashPPConvertExpr); ok {
+				value = conv.X
+			}
+		default:
+			return "", 0, nil
+		}
+		if id, ok := value.(*syntax.BashPPIdent); !ok || id.Name.Value != tuple.Lhs[i].Value {
+			return "", 0, nil
+		}
+	}
+	for _, s := range stmts[:n] {
+		if err := e.statementFlags(s); err != nil {
+			return "", 0, err
+		}
+	}
+	// A short declaration's right-hand side is spelled by the declaration
+	// itself, whatever its form (a call, an assertion, a receive, a list).
+	rhs := func(d *syntax.BashPPShortDecl) (string, error) {
+		text, err := e.command(d)
+		if err != nil {
+			return "", err
+		}
+		_, value, ok := strings.Cut(text, " := ")
+		if !ok {
+			return "", e.fail(d, CodeUnsupported, "tuple split right-hand side")
+		}
+		return strings.TrimSuffix(value, e.unused(names(d.Lhs))), nil
+	}
+	bound := map[string]string{}
+	for _, c := range captures {
+		value, err := rhs(c)
+		if err != nil {
+			return "", 0, err
+		}
+		bound[c.Lhs[0].Value] = value
+	}
+	substitute := func(text string) string {
+		for name, value := range bound {
+			text = replaceIdent(text, name, value)
+		}
+		return text
+	}
+	value, err := rhs(tuple)
+	if err != nil {
+		return "", 0, err
+	}
+	targets := make([]string, len(consumers))
+	typ := ""
+	for i, s := range consumers {
+		switch cmd := s.Cmd.(type) {
+		case *syntax.BashPPAssign:
+			if len(cmd.Names) == 1 {
+				targets[i] = cmd.Names[0].Value
+			} else if targets[i], err = e.expr(cmd.TargetExpr); err != nil {
+				return "", 0, err
+			}
+			targets[i] = substitute(targets[i])
+		case *syntax.BashPPDecl:
+			targets[i] = cmd.Name.Value
+			e.bind(cmd.Name.Value)
+			if typ == "" && !inferredDeclType(cmd) && cmd.DeclTypeExpr != nil {
+				if typ, err = e.typeExpr(cmd.DeclTypeExpr); err != nil {
+					return "", 0, err
+				}
+				typ = " " + typ
+			}
+		}
+	}
+	text := strings.Join(targets, ", ") + typ + " = " + substitute(value) + "\n"
+	if declared {
+		// The declaration starts at its keyword, which the first
+		// declared name's statement carries.
+		return e.mark(consumers[0].Cmd) + "var " + text, n, nil
+	}
+	return e.mark(tuple) + text, n, nil
+}
+
+// tupleSplitPos is the position of a statement's assignment token, which
+// the converter's tuple split shares across every statement it emits.
+func tupleSplitPos(s *syntax.Stmt) syntax.Pos {
+	switch cmd := s.Cmd.(type) {
+	case *syntax.BashPPShortDecl:
+		return cmd.OpPos
+	case *syntax.BashPPAssign:
+		return cmd.Eq
+	}
+	return syntax.Pos{}
+}
+
+// replaceIdent substitutes every whole-identifier occurrence of name in text.
+func replaceIdent(text, name, with string) string {
+	var out strings.Builder
+	for {
+		i := strings.Index(text, name)
+		for i >= 0 {
+			before := i == 0 || !identByte(text[i-1])
+			after := i+len(name) == len(text) || !identByte(text[i+len(name)])
+			if before && after {
+				break
+			}
+			next := strings.Index(text[i+1:], name)
+			if next < 0 {
+				i = -1
+			} else {
+				i += 1 + next
+			}
+		}
+		if i < 0 {
+			out.WriteString(text)
+			return out.String()
+		}
+		out.WriteString(text[:i])
+		out.WriteString(with)
+		text = text[i+len(name):]
+	}
+}
+
+func identByte(b byte) bool {
+	return b == '_' || b >= '0' && b <= '9' || b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= 0x80
 }
