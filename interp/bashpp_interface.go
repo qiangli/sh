@@ -790,6 +790,11 @@ func (r *Runner) bashPPTypeAssertCell(assert *syntax.BashPPTypeAssertExpr, comma
 			if matched && (bashPPStructLiteralType(iv.dynamic) || bashPPStructLiteralType(assert.Assert)) {
 				matched = r.goSourceDynamicTypeIdentity(iv.dynamic) == r.goSourceDynamicTypeIdentity(assert.Assert)
 			}
+			// Same spelling, possibly different declarations: a type declared
+			// inside a function is its own type; see bashpp_sprint162_type_scope.go.
+			if matched {
+				matched = r.goSourceSameTypeScope(iv.dynamic, assert.Assert)
+			}
 		}
 	}
 	if !matched {
@@ -987,7 +992,7 @@ func typeCaseTypeMatches(r *Runner, iv *bashPPInterfaceValue, target syntax.Bash
 	if bashPPStructLiteralType(iv.dynamic) || bashPPStructLiteralType(target) {
 		return r.goSourceDynamicTypeIdentity(iv.dynamic) == r.goSourceDynamicTypeIdentity(target)
 	}
-	return r.bashPPTypeAssignable(iv.dynamic, target)
+	return r.bashPPTypeAssignable(iv.dynamic, target) && r.goSourceSameTypeScope(iv.dynamic, target)
 }
 
 // bashPPStructLiteralType reports whether a type is spelled as a struct

@@ -98,3 +98,18 @@ func TestBashPPSprint162RuntimeErrorClassicNegative(t *testing.T) {
 		t.Fatalf("classic division by zero: err=%v output=%q", err, out.String())
 	}
 }
+
+// TestBashPPSprint162LocalTypeScope: a type declared inside a function is
+// its own type — an assertion, a type switch and an interface comparison
+// keep it apart from a same-named type declared elsewhere, and report the
+// collision as Go does; the same declaration stays one type across calls
+// and nested blocks.
+func TestBashPPSprint162LocalTypeScope(t *testing.T) {
+	out, err := bashPPSprint162Control4Run(t, "type_scope", "local_types")
+	if err != nil {
+		t.Fatalf("run: %v, output=%q", err, out)
+	}
+	if want := bashPPSprint162Control4Expected(t, "type_scope", "local_types"); out != want {
+		t.Fatalf("output:\n%s\nwant:\n%s", out, want)
+	}
+}

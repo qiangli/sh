@@ -165,6 +165,11 @@ func (r *Runner) goSourceDynamicTypeIdentity(typ syntax.BashPPTypeExpr) string {
 		if t.Name.Value == "rune" {
 			return "int32"
 		}
+		// A function-local declaration is its own type; see
+		// bashpp_sprint162_type_scope.go.
+		if scope, known := r.goSourceLocalTypeScope(t); known && scope != "" {
+			return bashPPTypeText(typ) + "·" + scope
+		}
 	case *syntax.BashPPPointerType:
 		return "*" + r.goSourceDynamicTypeIdentity(t.Element)
 	case *syntax.BashPPCollectionType:

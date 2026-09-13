@@ -190,6 +190,10 @@ type Runner struct {
 	// goSourcePackageAt in gosource_struct_identity.go.
 	bashPPSourcePackages     map[uint]string
 	bashPPSourcePackagesFile *syntax.File
+	// bashPPLocalTypes indexes the function-local type declarations of the
+	// linked Go source, built on first use; see
+	// bashpp_sprint162_type_scope.go.
+	bashPPLocalTypes *goSourceLocalTypeIndex
 	// bashPPShortTxn makes every := result producer use the same atomic
 	// current-scope commit rules. Transactions nest across function calls, so a
 	// declaration evaluated by an RHS cannot be mistaken for the caller's LHS.
