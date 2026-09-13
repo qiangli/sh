@@ -1,0 +1,6 @@
+package main
+
+func main() {
+	var s string = "3.5"
+	println(-s)
+}

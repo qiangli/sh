@@ -402,7 +402,7 @@ func (r *Runner) bashPPScalarFromCell(cell *bashPPCell) bashPPScalar {
 	case constant.Complex:
 		value.value = bashPPParseComplex(text)
 	case constant.Float:
-		value.value = constant.MakeFromLiteral(text, token.FLOAT, 0)
+		value.value = bashPPFloatText(text)
 	default:
 		if named, ok := r.bashPPUnderlyingType(cell.declType).(*syntax.BashPPNamedType); ok {
 			switch named.Name.Value {
@@ -424,13 +424,9 @@ func (r *Runner) bashPPScalarFromCell(cell *bashPPCell) bashPPScalar {
 			value = bashPPScalarFromString(text)
 		}
 	}
-	if r.bashPPGoSource && cell.scalarKind == constant.Float && (value.value == nil || value.value.Kind() == constant.Unknown) {
-		if parts := strings.Split(text, "/"); len(parts) == 2 {
-			numerator := constant.MakeFromLiteral(parts[0], token.FLOAT, 0)
-			denominator := constant.MakeFromLiteral(parts[1], token.FLOAT, 0)
-			if numerator.Kind() != constant.Unknown && denominator.Kind() != constant.Unknown && constant.Sign(denominator) != 0 {
-				value.value = constant.BinaryOp(numerator, token.QUO, denominator)
-			}
+	if r.bashPPGoSource && (value.value == nil || value.value.Kind() == constant.Unknown) && r.bashPPFloatStorage(cell) {
+		if exact := bashPPExactFloatText(text); exact != nil {
+			value.value = exact
 		}
 	}
 	value.runtime = !cell.constant
