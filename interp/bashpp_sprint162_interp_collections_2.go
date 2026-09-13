@@ -5,9 +5,19 @@ package interp
 
 import (
 	"fmt"
+	"go/constant"
 
 	"mvdan.cc/sh/v3/syntax"
 )
+
+// bashPPSprint162ComplexCollectionText recognises the interpreter's finite
+// complex scalar carrier. Collections remain JSON-shaped, so complex values
+// stay in their lossless string spelling and are reconstructed from the
+// destination type when read.
+func bashPPSprint162ComplexCollectionText(value any) bool {
+	text, ok := value.(string)
+	return ok && bashPPParseComplex(text).Kind() == constant.Complex
+}
 
 // bashPPSprint162CollectionBridgeScalar validates a scalar which crossed the
 // dependency boundary in its transport wrapper. Non-finite floats cannot live

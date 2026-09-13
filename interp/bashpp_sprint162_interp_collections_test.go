@@ -51,3 +51,22 @@ func TestSprint162CollectionBridgeScalarElementNegative(t *testing.T) {
 	_, err = gosource.Parse(strings.NewReader(string(source)), path, gosource.Options{RunMain: true})
 	qt.Assert(t, qt.ErrorMatches(err, `(?s).*cannot use .*string.* as float64.*`))
 }
+
+func TestSprint162CollectionComplexElement(t *testing.T) {
+	root := filepath.Join("testdata", "sprint162", "interp-collections")
+	source, err := os.ReadFile(filepath.Join(root, "complex_element.go"))
+	qt.Assert(t, qt.IsNil(err))
+	want, err := os.ReadFile(filepath.Join(root, "complex_element.expected"))
+	qt.Assert(t, qt.IsNil(err))
+	out, stderr, err := runGoSource(t, "complex_element", string(source))
+	qt.Assert(t, qt.IsNil(err), qt.Commentf("stderr: %s", stderr))
+	qt.Assert(t, qt.Equals(out, string(want)))
+}
+
+func TestSprint162CollectionComplexElementNegative(t *testing.T) {
+	path := filepath.Join("testdata", "sprint162", "interp-collections", "complex_element_negative.go")
+	source, err := os.ReadFile(path)
+	qt.Assert(t, qt.IsNil(err))
+	_, err = gosource.Parse(strings.NewReader(string(source)), path, gosource.Options{RunMain: true})
+	qt.Assert(t, qt.ErrorMatches(err, `(?s).*cannot use .*string.* as complex128.*`))
+}
