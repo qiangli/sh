@@ -297,13 +297,6 @@ func (r *Runner) bashPPBridgeExpr(expr syntax.BashPPExpr) (bashPPBridgeValue, er
 			}
 		}
 	case *syntax.BashPPCall:
-		if r.bashPPGoSource && len(x.Fun) == 1 && x.Fun[0].Value == "recover" && len(x.Args) == 0 && r.bashPPFuncs["recover"] == nil && (r.bashPPScope == nil || r.bashPPScope.lookup("recover") == nil) {
-			value, recovered := r.bashPPRecover()
-			if !recovered {
-				return bashPPBridgeValue{Kind: "nil"}, nil
-			}
-			return bashPPBridgeValue{Kind: "string", Type: "string", Text: value}, nil
-		}
 		if r.bashPPBridgeHandles(x) {
 			values, err := r.bashPPBridgeCall(r.ectx, x)
 			if err != nil {

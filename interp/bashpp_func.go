@@ -1131,6 +1131,13 @@ func bashPPPointerCell(ptr *bashPPPointer) *bashPPCell {
 // one without naming a variable. A scalar argument returns (nil, nil) so it
 // keeps being evaluated as an expression rather than passed by name.
 func (r *Runner) bashPPStructuredArgCell(w *syntax.Word, expr syntax.BashPPExpr) (*bashPPCell, error) {
+	if r.bashPPGoSource && bashPPRecoverExpr(expr) && r.bashPPFuncs["recover"] == nil && (r.bashPPScope == nil || r.bashPPScope.lookup("recover") == nil) {
+		iv, _ := r.bashPPRecoverInterfaceValue()
+		if iv.nilIface {
+			return &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String}, declType: &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "any"}}, interfaceValue: iv}, nil
+		}
+		return &bashPPCell{vr: iv.cell.vr, declType: &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "any"}}, interfaceValue: iv}, nil
+	}
 	if cell, handled, err := r.goSourceCallableCell(expr); handled {
 		return cell, err
 	}

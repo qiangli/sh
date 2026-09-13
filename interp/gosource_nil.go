@@ -106,8 +106,20 @@ func (r *Runner) goSourceInterfaceEqual(left, right bashPPComparableValue) (bool
 	if !lok && !rok {
 		return false, false, nil
 	}
-	if !lok || !rok {
-		return false, true, fmt.Errorf("Go interface comparison requires represented dynamic values")
+	box := func(value any) *bashPPInterfaceValue {
+		constantValue := bashPPScalarConstant(value)
+		typ := bashPPDefaultScalarTypeName(constantValue.Kind())
+		decl := &syntax.BashPPNamedType{Name: &syntax.Lit{Value: typ}}
+		return &bashPPInterfaceValue{dynamic: decl, cell: &bashPPCell{
+			vr:          expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarString(constantValue)},
+			exactScalar: constantValue, scalarKind: constantValue.Kind(), declType: decl,
+		}}
+	}
+	if !lok {
+		li = box(left.value)
+	}
+	if !rok {
+		ri = box(right.value)
 	}
 	ln, rn := li == nil || li.nilIface, ri == nil || ri.nilIface
 	if ln || rn {

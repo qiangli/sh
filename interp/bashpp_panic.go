@@ -66,6 +66,7 @@ type bashPPPanicState struct {
 	// cleanup clears it again, so the rest of that cleanup is abandoned too.
 	running bool
 	chain   []string
+	values  []any
 	// GoSource panics retain the interpreted frame names and source site so the
 	// process boundary reports a genuine Go-shaped traceback. Classic Bash++
 	// keeps its established concise diagnostic.
@@ -137,7 +138,18 @@ func (r *Runner) bashPPPredeclared(name string, c *syntax.BashPPCall, args []str
 				r.bashPPPanic.traceFrames = append(r.bashPPPanic.traceFrames, frame.funcName)
 			}
 		}
-		r.bashPPRaise(args[0])
+		var value any = args[0]
+		if r.bashPPGoSource && len(c.ArgExprs) == 1 {
+			if cell, err := r.bashPPStructuredArgCell(c.Args[0], c.ArgExprs[0]); err == nil && cell != nil && cell.interfaceValue != nil {
+				value = cell.interfaceValue
+			}
+			if scalar, err := r.bashPPEvalScalarExpr(c.ArgExprs[0]); err == nil {
+				if _, alreadyInterface := value.(*bashPPInterfaceValue); !alreadyInterface {
+					value = bashPPScalarAny(scalar.value)
+				}
+			}
+		}
+		r.bashPPRaiseValue(args[0], value)
 		return nil, false
 	case "recover":
 		if len(args) != 0 {
@@ -165,7 +177,7 @@ func (r *Runner) bashPPPredeclared(name string, c *syntax.BashPPCall, args []str
 			r.exit.recoverSeq = r.bashPPRecoverSeq
 		}
 		r.exit.errexitExempt = true
-		return []string{value}, true
+		return []string{fmt.Sprint(value)}, true
 	}
 	return nil, false
 }
@@ -176,7 +188,12 @@ func (r *Runner) bashPPPredeclared(name string, c *syntax.BashPPCall, args []str
 // could recover it, so the panic is reported and terminates the shell at once
 // rather than pretending to look for a handler that cannot exist.
 func (r *Runner) bashPPRaise(value string) {
-	r.bashPPPanic.chain = append(r.bashPPPanic.chain, value)
+	r.bashPPRaiseValue(value, value)
+}
+
+func (r *Runner) bashPPRaiseValue(text string, value any) {
+	r.bashPPPanic.chain = append(r.bashPPPanic.chain, text)
+	r.bashPPPanic.values = append(r.bashPPPanic.values, value)
 	r.bashPPPanic.active = true
 	// A panic raised inside a cleanup is a new unwind, not a continuation of
 	// the one that ran the cleanup: it abandons the rest of that cleanup too.
@@ -202,22 +219,25 @@ func (r *Runner) bashPPUnwind() {
 // in the function body itself is too shallow, a recover in a function called
 // BY the deferred function is too deep, and `defer recover()` never pushes a
 // frame at all, so it is too shallow as well and does not stop the panic.
-func (r *Runner) bashPPRecover() (string, bool) {
+func (r *Runner) bashPPRecover() (any, bool) {
 	if !r.bashPPPanic.active {
-		return "", false
+		return nil, false
 	}
 	if r.bashPPDeferDepth == 0 || len(r.callStack) != r.bashPPDeferDepth {
-		return "", false
+		return nil, false
 	}
 	last := len(r.bashPPPanic.chain) - 1
 	value := r.bashPPPanic.chain[last]
 	r.bashPPPanic.chain = r.bashPPPanic.chain[:last]
+	payload := r.bashPPPanic.values[last]
+	r.bashPPPanic.values = r.bashPPPanic.values[:last]
 	r.bashPPPanic.active = len(r.bashPPPanic.chain) > 0
 	// A directly deferred invocation continues after recover. When it has
 	// recovered a nested panic, an older panic still exists but stays suspended
 	// until this cleanup returns to the older unwind's defer runner.
 	r.bashPPPanic.running = r.bashPPPanic.active
-	return value, true
+	_ = value
+	return payload, true
 }
 
 // bashPPPanicTerminate reports an unrecovered panic and terminates the shell.

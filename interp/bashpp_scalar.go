@@ -51,6 +51,13 @@ func (r *Runner) bashPPEvalScalarExpr(expr syntax.BashPPExpr) (result bashPPScal
 		}
 		return value, err
 	case *syntax.BashPPCall:
+		if r.bashPPGoSource && bashPPRecoverExpr(x) && r.bashPPFuncs["recover"] == nil && (r.bashPPScope == nil || r.bashPPScope.lookup("recover") == nil) {
+			iv, _ := r.bashPPRecoverInterfaceValue()
+			if iv.cell == nil {
+				return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-NIL: recover returned nil interface")
+			}
+			return r.bashPPScalarFromCell(iv.cell), nil
+		}
 		if v, handled, err := r.bashPPComplexBuiltin(x); handled {
 			return v, err
 		}
@@ -806,6 +813,25 @@ func (r *Runner) bashPPComparableExpr(expr syntax.BashPPExpr) (bashPPComparableV
 	switch x := expr.(type) {
 	case *syntax.BashPPParenExpr:
 		return r.bashPPComparableExpr(x.X)
+	case *syntax.BashPPBasicLit:
+		value, err := r.bashPPEvalScalarExpr(x)
+		if err != nil {
+			return bashPPComparableValue{}, err
+		}
+		return bashPPComparableValue{value: bashPPScalarAny(value.value)}, nil
+	case *syntax.BashPPCall:
+		if r.bashPPGoSource && bashPPRecoverExpr(x) && r.bashPPFuncs["recover"] == nil && (r.bashPPScope == nil || r.bashPPScope.lookup("recover") == nil) {
+			iv, _ := r.bashPPRecoverInterfaceValue()
+			return bashPPComparableValue{value: iv, meta: &bashPPCollectionMeta{kind: "interface", typ: &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "any"}}, interfaceValue: iv}}, nil
+		}
+		if !r.bashPPGoSource {
+			return bashPPComparableValue{}, fmt.Errorf("BASHPP-ECOMPARE-SCALAR: scalar")
+		}
+		value, meta, err := r.bashPPReadExpr(expr)
+		if err != nil {
+			return bashPPComparableValue{}, err
+		}
+		return bashPPComparableValue{value: value, meta: meta}, nil
 	case *syntax.BashPPIdent:
 		if x.Name.Value == "nil" {
 			return bashPPComparableValue{nilLiteral: true}, nil
@@ -861,15 +887,6 @@ func (r *Runner) bashPPComparableExpr(expr syntax.BashPPExpr) (bashPPComparableV
 			}
 			return bashPPComparableValue{value: cell.interfaceValue, meta: &bashPPCollectionMeta{kind: "interface", typ: cell.declType}}, nil
 		}
-	case *syntax.BashPPCall:
-		if !r.bashPPGoSource {
-			return bashPPComparableValue{}, fmt.Errorf("BASHPP-ECOMPARE-SCALAR: scalar")
-		}
-		value, meta, err := r.bashPPReadExpr(expr)
-		if err != nil {
-			return bashPPComparableValue{}, err
-		}
-		return bashPPComparableValue{value: value, meta: meta}, nil
 	case *syntax.BashPPDerefExpr, *syntax.BashPPIndexExpr, *syntax.BashPPSliceExpr, *syntax.BashPPSelectorExpr:
 		value, meta, err := r.bashPPReadExpr(expr)
 		if err != nil {

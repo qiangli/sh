@@ -705,6 +705,14 @@ func (r *Runner) bashPPTypeAssert(assert *syntax.BashPPTypeAssertExpr, commaOK b
 // read and must carry an interface value. Only a nil cell is reported here;
 // a non-interface name is the caller's message.
 func (r *Runner) bashPPInterfaceOperand(x syntax.BashPPExpr, what string) (*bashPPCell, error) {
+	if r.bashPPGoSource && bashPPRecoverExpr(x) && r.bashPPFuncs["recover"] == nil && (r.bashPPScope == nil || r.bashPPScope.lookup("recover") == nil) {
+		iv, _ := r.bashPPRecoverInterfaceValue()
+		cell := &bashPPCell{declType: &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "any"}}, interfaceValue: iv}
+		if iv.cell != nil {
+			cell.vr = iv.cell.vr
+		}
+		return cell, nil
+	}
 	if id, ok := x.(*syntax.BashPPIdent); ok {
 		return r.bashPPScope.lookup(id.Name.Value), nil
 	}
