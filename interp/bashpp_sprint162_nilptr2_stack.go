@@ -62,8 +62,15 @@ type goSourceFaultStack struct {
 
 // goSourcePCBase is the first synthetic program counter. Real code
 // addresses of the dependency never reach the interpreter, so the range is
-// unambiguous.
-const goSourcePCBase = 0x7f000000
+// unambiguous. Each reported frame owns goSourcePCStride counters from its
+// entry; the counter reported for it lies inside, so a program that looks
+// up pc-1 — the return address convention runtime.Callers documents — or
+// pc itself resolves the same frame, and (*runtime.Func).Entry is below.
+const (
+	goSourcePCBase   = 0x7f000000
+	goSourcePCStride = 16
+	goSourcePCOffset = 8
+)
 
 // goSourceNextFrameSeq issues the identity a call frame carries, so a frame
 // snapshot can tell a frame still on the stack from a new one at the same
@@ -212,9 +219,10 @@ func (r *Runner) goSourceFaultLive() bool {
 
 // goSourceStackFrames is the stack Go would report from a call at top,
 // innermost first: the frames entered since the deferred call for a live
-// panic began, then the snapshot of the panicking frames — the frames both
-// share are reported once, at the lines they held when the panic was
-// raised, since Go has not unwound them.
+// panic began, runtime.gopanic — which called that deferred call — then
+// the snapshot of the panicking frames. The frames both share are reported
+// once, at the lines they held when the panic was raised, since Go has not
+// unwound them.
 func (r *Runner) goSourceStackFrames(top syntax.Pos) []goSourceStackFrame {
 	live := r.goSourceLiveFrames(top)
 	var ordered []goSourceStackFrame
@@ -226,6 +234,9 @@ func (r *Runner) goSourceStackFrames(top syntax.Pos) []goSourceStackFrame {
 		}
 		for i := len(live) - 1; i >= shared; i-- {
 			ordered = append(ordered, live[i])
+		}
+		if len(live) > shared {
+			ordered = append(ordered, goSourceRuntimeFrames.gopanic)
 		}
 		for i := len(fault) - 1; i >= 0; i-- {
 			ordered = append(ordered, fault[i])
@@ -239,18 +250,30 @@ func (r *Runner) goSourceStackFrames(top syntax.Pos) []goSourceStackFrame {
 }
 
 // goSourceFramePC issues the synthetic program counter naming a reported
-// frame.
+// frame. One site — a function at a file and line — keeps one counter, as
+// a real program's code address does.
 func (r *Runner) goSourceFramePC(frame goSourceStackFrame) uint64 {
+	for i, known := range r.goSourcePCs {
+		if known.name == frame.name && known.file == frame.file && known.line == frame.line {
+			return goSourcePCBase + uint64(i)*goSourcePCStride + goSourcePCOffset
+		}
+	}
 	r.goSourcePCs = append(r.goSourcePCs, frame)
-	return goSourcePCBase + uint64(len(r.goSourcePCs)-1)
+	return goSourcePCBase + uint64(len(r.goSourcePCs)-1)*goSourcePCStride + goSourcePCOffset
 }
 
-// goSourcePCFrame resolves a synthetic program counter.
+// goSourcePCFrame resolves a synthetic program counter anywhere inside the
+// frame's range.
 func (r *Runner) goSourcePCFrame(pc uint64) (goSourceStackFrame, bool) {
-	if pc < goSourcePCBase || pc-goSourcePCBase >= uint64(len(r.goSourcePCs)) {
+	if pc < goSourcePCBase || (pc-goSourcePCBase)/goSourcePCStride >= uint64(len(r.goSourcePCs)) {
 		return goSourceStackFrame{}, false
 	}
-	return r.goSourcePCs[pc-goSourcePCBase], true
+	return r.goSourcePCs[(pc-goSourcePCBase)/goSourcePCStride], true
+}
+
+// goSourceFrameEntry is the entry counter of the frame owning pc.
+func goSourceFrameEntry(pc uint64) uint64 {
+	return pc - (pc-goSourcePCBase)%goSourcePCStride
 }
 
 // goSourceStackText renders the frames the way runtime.Stack does.
@@ -259,7 +282,13 @@ func (r *Runner) goSourceStackText(frames []goSourceStackFrame) string {
 	b.WriteString("goroutine 1 [running]:\n")
 	for _, frame := range frames {
 		pc := r.goSourceFramePC(frame)
-		fmt.Fprintf(&b, "%s()\n\t%s:%d +0x%x\n", frame.name, frame.file, frame.line, pc-goSourcePCBase)
+		name, args := frame.name, "()"
+		if name == goSourceRuntimeFrames.gopanic.name {
+			// Tracebacks print the runtime's panic entry as Go does, by
+			// the name the program called it by.
+			name, args = "panic", "({...})"
+		}
+		fmt.Fprintf(&b, "%s%s\n\t%s:%d +0x%x\n", name, args, frame.file, frame.line, pc-goSourceFrameEntry(pc))
 	}
 	return b.String()
 }
@@ -302,13 +331,8 @@ func goSourceFrameFuncValue(pc uint64) bashPPBridgeValue {
 // call's receiver expression denotes, without evaluating anything that is
 // not one: a runtime.FuncForPC call, or a variable holding such a value.
 func (r *Runner) goSourceFrameFuncReceiver(call *syntax.BashPPCall) (uint64, string, bool) {
-	var receiver syntax.BashPPExpr
-	var method string
-	if selector, ok := call.CalleeExpr.(*syntax.BashPPSelectorExpr); ok {
-		receiver, method = selector.X, selector.Sel.Value
-	} else if len(call.Fun) == 2 {
-		receiver, method = &syntax.BashPPIdent{Name: call.Fun[0]}, call.Fun[1].Value
-	} else {
+	receiver, method, ok := goSourceMethodCallReceiver(call)
+	if !ok {
 		return 0, "", false
 	}
 	switch method {
@@ -322,6 +346,9 @@ func (r *Runner) goSourceFrameFuncReceiver(call *syntax.BashPPCall) (uint64, str
 			break
 		}
 		receiver = paren.X
+	}
+	if pc, ok := r.goSourceFrameFieldFunc(receiver); ok {
+		return pc, method, true
 	}
 	var value bashPPBridgeValue
 	switch x := receiver.(type) {
@@ -365,6 +392,9 @@ func (r *Runner) goSourceRuntimeStackCall(call *syntax.BashPPCall) ([]bashPPBrid
 	if pc, method, ok := r.goSourceFrameFuncReceiver(call); ok {
 		return r.goSourceFrameFuncMethod(call, pc, method)
 	}
+	if frames, method, ok := r.goSourceFramesReceiver(call); ok {
+		return r.goSourceFramesNext(call, frames, method)
+	}
 	name, ok := r.goSourceStackSelector(call)
 	if !ok {
 		return nil, false, nil
@@ -376,12 +406,16 @@ func (r *Runner) goSourceRuntimeStackCall(call *syntax.BashPPCall) ([]bashPPBrid
 		if err != nil {
 			return nil, true, err
 		}
-		frames := r.goSourceStackFrames(call.Pos())
+		frames := r.goSourceCallerFrames(call.Pos())
 		if skip < 0 || skip >= int64(len(frames)) {
 			return []bashPPBridgeValue{goSourceStackUintptr(0), goSourceStackString(""), goSourceStackIntValue(0), goSourceStackBool(false)}, true, nil
 		}
 		frame := frames[skip]
 		return []bashPPBridgeValue{goSourceStackUintptr(r.goSourceFramePC(frame)), goSourceStackString(frame.file), goSourceStackIntValue(int(frame.line)), goSourceStackBool(true)}, true, nil
+	case name == "runtime.Callers" && args == 2:
+		return r.goSourceCallersValue(call)
+	case name == "runtime.CallersFrames" && args == 1:
+		return r.goSourceFramesValue(call)
 	case name == "runtime.FuncForPC" && args == 1:
 		pc, err := r.goSourceStackInt(call.ArgExprs[0])
 		if err != nil {
@@ -406,7 +440,7 @@ func (r *Runner) goSourceRuntimeStackCall(call *syntax.BashPPCall) ([]bashPPBrid
 		}
 		return []bashPPBridgeValue{goSourceStackIntValue(n)}, true, nil
 	case name == "runtime/debug.Stack" && args == 0:
-		text := r.goSourceStackText(r.goSourceStackFrames(call.Pos()))
+		text := r.goSourceStackText(append([]goSourceStackFrame{goSourceRuntimeFrames.debugStack}, r.goSourceStackFrames(call.Pos())...))
 		value, err := r.goSourceStackBytes(text)
 		if err != nil {
 			return nil, true, err
@@ -430,7 +464,7 @@ func (r *Runner) goSourceFrameFuncMethod(call *syntax.BashPPCall, pc uint64, met
 	case method == "Name" && len(call.ArgExprs) == 0:
 		return []bashPPBridgeValue{goSourceStackString(frame.name)}, true, nil
 	case method == "Entry" && len(call.ArgExprs) == 0:
-		return []bashPPBridgeValue{goSourceStackUintptr(pc)}, true, nil
+		return []bashPPBridgeValue{goSourceStackUintptr(goSourceFrameEntry(pc))}, true, nil
 	case method == "FileLine" && len(call.ArgExprs) == 1:
 		at, err := r.goSourceStackInt(call.ArgExprs[0])
 		if err != nil {

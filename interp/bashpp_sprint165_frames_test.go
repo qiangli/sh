@@ -95,6 +95,17 @@ func TestBashPPSprint165FramesLineDirectives(t *testing.T) {
 	}
 }
 
+// runtime.Caller counts runtime.main and runtime.goexit below main.main;
+// runtime.Callers lists itself first and fills counters that resolve at pc-1;
+// runtime.CallersFrames replays them as runtime.Frame values with a working
+// Func; function literals carry Go's names; a deferred call for a panic is
+// called by runtime.gopanic, printed as panic({...}) in tracebacks, and
+// debug.Stack names itself first. A skip past the last frame reports
+// nothing, and a counter no function owns resolves to no function.
+func TestBashPPSprint165FramesCallersWalk(t *testing.T) {
+	sprint165FramesExpect(t, "callers", "callers_walk", false)
+}
+
 // Frames are named as Go names them: declared functions and methods by
 // their qualified names, generic ones with `[...]`, function literals after
 // the declaration they are written in and numbered in source order, nested
