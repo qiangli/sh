@@ -36,6 +36,22 @@ func (r *Runner) bashPPSprint162CollectionBoundsPanic(expr syntax.BashPPExpr, in
 	return errBashPPScalarInterrupted
 }
 
+// bashPPSprint162PointerCollectionStorage applies Go's implicit dereference
+// for an indexed assignment through a pointer to an array. Pointer-to-slice
+// and pointer-to-map values still require an explicit dereference in Go and
+// are rejected by the checker before reaching this path.
+func (r *Runner) bashPPSprint162PointerCollectionStorage(value any, meta *bashPPCollectionMeta) (any, *bashPPCollectionMeta, error) {
+	pointer, ok := value.(*bashPPPointer)
+	if !ok {
+		return value, meta, nil
+	}
+	if pointer == nil {
+		return nil, nil, fmt.Errorf("BASHPP-ENIL-DEREF: dereference of nil pointer")
+	}
+	value, meta, _, err := pointer.read()
+	return value, meta, err
+}
+
 // bashPPSprint162CollectionBridgeScalar validates a scalar which crossed the
 // dependency boundary in its transport wrapper. Non-finite floats cannot live
 // in the collection's JSON-shaped scalar payload, so the wrapper remains the

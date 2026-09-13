@@ -1114,6 +1114,10 @@ func (r *Runner) bashPPPointerElementAssign(target *syntax.BashPPIndexExpr, rhs 
 	if err != nil {
 		return err
 	}
+	parent, parentMeta, err = r.bashPPSprint162PointerCollectionStorage(parent, parentMeta)
+	if err != nil {
+		return err
+	}
 	if parentMeta == nil {
 		return fmt.Errorf("BASHPP-ECOLLECTION-ASSIGN: indexed target is not a collection")
 	}
