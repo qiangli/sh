@@ -53,6 +53,13 @@ func sprint162NilPtrExpect(t *testing.T, mechanism, name string, wantErr bool) {
 func TestBashPPSprint162NilDereferencePanics(t *testing.T) {
 	sprint162NilPtrExpect(t, "nilderef", "deref_recover", false)
 	sprint162NilPtrExpect(t, "nilderef", "deref_order", false)
+	sprint162NilPtrExpect(t, "nilderef", "defer_nested_call", false)
+}
+
+func TestBashPPSprint162NilValue(t *testing.T) {
+	sprint162NilPtrExpect(t, "nilvalue", "nil_value", false)
+	sprint162NilPtrExpect(t, "nilvalue", "nil_value_negative", false)
+	sprint162NilPtrExpect(t, "nilvalue", "nil_assign", false)
 }
 
 func TestBashPPSprint162RangePointerArray(t *testing.T) {

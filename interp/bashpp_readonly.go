@@ -288,6 +288,15 @@ func (r *Runner) bashPPTupleAssign(assign *syntax.BashPPAssign) {
 			candidates[i] = candidate
 			continue
 		}
+		if candidate, handled, err := r.goSourceNilAssignCandidate(r.bashPPScope.lookup(assign.Names[i].Value), expr); handled {
+			if err != nil {
+				r.errf("%s%v\n", r.bashErrPrefix(expr.Pos()), err)
+				r.exit = exitStatus{code: 2}
+				return
+			}
+			candidates[i] = candidate
+			continue
+		}
 		// `flag = true`: the predeclared booleans are identifiers with no
 		// cell; unless a variable shadows them they are the constants the
 		// scalar evaluator below knows.

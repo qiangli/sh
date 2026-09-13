@@ -269,6 +269,12 @@ func (r *Runner) bashPPBridgeExpr(expr syntax.BashPPExpr) (bashPPBridgeValue, er
 			}
 		}
 	}
+	if value, ok := r.goSourceTypedNilBridgeValue(expr); ok {
+		return value, nil
+	}
+	if value, handled, err := r.goSourceRecoverBridgeValue(expr); handled {
+		return value, err
+	}
 	switch x := expr.(type) {
 	case *syntax.BashPPUnaryExpr:
 		if cell, handled, err := r.goSourceChannelValueCell(x); handled {

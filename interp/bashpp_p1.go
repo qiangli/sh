@@ -1672,6 +1672,13 @@ func (r *Runner) bashPPSwitch(ctx context.Context, sw *syntax.BashPPSwitch) {
 	}
 	var tag bashPPScalar
 	var err error
+	if r.goSourceValueSwitchTag(sw.Tag) {
+		selected, stopped := r.goSourceValueSwitch(sw)
+		if !stopped && selected >= 0 {
+			r.bashPPSwitchArms(ctx, sw, selected)
+		}
+		return
+	}
 	if sw.Tag == nil {
 		tag.value = constant.MakeBool(true)
 	} else {
@@ -1723,6 +1730,12 @@ func (r *Runner) bashPPSwitch(ctx context.Context, sw *syntax.BashPPSwitch) {
 	if selected < 0 {
 		return
 	}
+	r.bashPPSwitchArms(ctx, sw, selected)
+}
+
+// bashPPSwitchArms runs the selected arm and whatever fallthrough chain
+// follows it.
+func (r *Runner) bashPPSwitchArms(ctx context.Context, sw *syntax.BashPPSwitch, selected int) {
 	for armIndex := selected; armIndex < len(sw.Arms); armIndex++ {
 		leaveArm := r.bashPPPushScope()
 		r.stmts(ctx, sw.Arms[armIndex].Stmts)
@@ -2004,6 +2017,10 @@ func (r *Runner) bashPPCall(ctx context.Context, c *syntax.BashPPCall) {
 	// receiver the dependency authenticated as a sync.WaitGroup, before the
 	// call would be prepared as a native request. See gosource_waitgroup.go.
 	if r.goSourceWaitGroupGo(ctx, c) {
+		return
+	}
+	if r.goSourceNilFuncCallee(c) {
+		r.goSourceRuntimeFault(errBashPPNilDereference)
 		return
 	}
 	if r.bashPPBridgeHandles(c) {

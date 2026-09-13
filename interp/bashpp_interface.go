@@ -544,6 +544,9 @@ func bashPPCopyInterfaceCell(cell *bashPPCell) *bashPPCell {
 }
 
 func (r *Runner) bashPPCellForInterfaceExpr(expr syntax.BashPPExpr) (*bashPPCell, syntax.BashPPTypeExpr, error) {
+	if cell, ok := r.goSourceNilInterfaceSource(expr); ok {
+		return cell, nil, nil
+	}
 	// `true` and `false` are identifiers, not literals; when no variable
 	// shadows them they are the untyped boolean constants the scalar
 	// evaluator below already knows, and store as a bool.

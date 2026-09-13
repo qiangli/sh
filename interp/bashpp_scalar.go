@@ -869,6 +869,9 @@ func (r *Runner) bashPPComparableExpr(expr syntax.BashPPExpr) (bashPPComparableV
 				}
 			}
 		}
+		if value, ok := r.goSourceFuncComparable(x.Name.Value); ok {
+			return value, nil
+		}
 		return bashPPComparableValue{}, fmt.Errorf("BASHPP-ECOMPARE-SCALAR: scalar")
 	case *syntax.BashPPAddressExpr, *syntax.BashPPNewExpr:
 		ptr, err := r.bashPPPointerExprValue(expr)
@@ -892,6 +895,9 @@ func (r *Runner) bashPPComparableExpr(expr syntax.BashPPExpr) (bashPPComparableV
 				return bashPPComparableValue{}, err
 			}
 			return bashPPComparableValue{value: cell.interfaceValue, meta: &bashPPCollectionMeta{kind: "interface", typ: cell.declType}}, nil
+		}
+		if value, ok := r.goSourceTypedNilComparable(x); ok {
+			return value, nil
 		}
 	case *syntax.BashPPDerefExpr, *syntax.BashPPIndexExpr, *syntax.BashPPSliceExpr, *syntax.BashPPSelectorExpr:
 		value, meta, err := r.bashPPReadExpr(expr)
@@ -1265,6 +1271,9 @@ func (r *Runner) bashPPBooleanExprShape(expr syntax.BashPPExpr) (known, boolean 
 func (r *Runner) bashPPScalarFuncCall(call *syntax.BashPPCall) (bashPPScalar, error) {
 	fn, ok := r.bashPPLookupFunc(call)
 	if !ok {
+		if r.goSourceNilFuncCallee(call) {
+			return bashPPScalar{}, r.goSourceRuntimeFault(errBashPPNilDereference)
+		}
 		name := "computed function"
 		if len(call.Fun) > 0 {
 			name = call.Fun[0].Value
