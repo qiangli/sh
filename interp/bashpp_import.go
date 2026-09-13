@@ -48,6 +48,12 @@ type bashPPEvalRequest struct {
 	LocalTypes    []bashPPLocalType
 	CallbackOwner *Runner
 	CallbackDepth int
+	// ImportPath is the program's declared identity (the compiler's -p,
+	// bashy --go-import-path) and TestMain the backend-asserted fact that it
+	// is cmd/go's generated test main; both empty for an ordinary program.
+	// See [GoSourceIdentity].
+	ImportPath string
+	TestMain   bool
 }
 
 type bashPPEvaluator interface {
@@ -72,6 +78,8 @@ type bashPPToolchain struct {
 	bridge        *bashPPNativeSession
 	callbackDepth int
 	moduleDir     string
+	importPath    string
+	testMain      bool
 }
 
 type bashPPGoReview struct {
@@ -123,19 +131,75 @@ func (nativeBashPPEvaluator) Resolve(ctx context.Context, req bashPPEvalRequest,
 	if err := json.Unmarshal(out.Bytes(), &info); err != nil {
 		return "", fmt.Errorf("go list %q: %w", path, err)
 	}
-	if info.Standard && !syntax.BashPPStdlibImportAllowed(path) {
+	if info.Standard && !syntax.BashPPStdlibImportAllowed(path) && !bashPPIdentityAdmitsInternal(req, path) {
 		return "", fmt.Errorf("bash++ import %q: package is not in the reviewed Go standard library", path)
 	}
 	if !syntax.BashPPValidIdent(info.Name) {
 		return "", fmt.Errorf("bash++ import %q: invalid package name %q", path, info.Name)
 	}
-	if err := validateBashPPImportVisibility(req.Dir, info.Dir, path); err != nil {
+	if err := validateBashPPImportVisibilityFor(req, info.Dir, path); err != nil {
 		return "", err
 	}
 	return info.Name, nil
 }
 
+// GoSourceIdentity declares the identity of the Go program the runner
+// executes — its import path, the compiler's -p (bashy --go-import-path) —
+// and whether it is cmd/go's generated test main (bashy --go-test-main, a
+// fact the backend passes from the site that knows, never inferred from a
+// ".test" suffix). With an identity declared, internal-package visibility at
+// `import` is cmd/go's rule on identities (syntax.BashPPInternalImportVisible)
+// instead of the directory rule, and an internal standard-library package
+// outside the reviewed inventory is admitted exactly when that rule admits
+// it for this identity — which no dotted (user) identity ever qualifies for.
+// Inert for shell source and for a runner without an identity.
+func GoSourceIdentity(importPath string, testMain bool) RunnerOption {
+	return func(r *Runner) error {
+		if testMain && importPath == "" {
+			return fmt.Errorf("gosource: the test-main fact asserts the identity of the program and requires an import path")
+		}
+		r.bashPPTools.importPath, r.bashPPTools.testMain = importPath, testMain
+		return nil
+	}
+}
+
+// bashPPIdentityAdmitsInternal is the one identity-keyed branch in front of
+// the reviewed inventory: an INTERNAL standard-library package is admitted
+// when the declared identity qualifies under cmd/go's rule. It admits
+// nothing else — a non-internal unreviewed package (cmd/go, cmd/compile)
+// stays with the inventory's verdict.
+func bashPPIdentityAdmitsInternal(req bashPPEvalRequest, path string) bool {
+	if req.ImportPath == "" {
+		return false
+	}
+	if _, internal := syntax.BashPPInternalImportElement(path); !internal {
+		return false
+	}
+	return syntax.BashPPInternalImportVisible(req.ImportPath, path, req.TestMain)
+}
+
+// validateBashPPImportVisibilityFor applies the request's declared identity
+// to internal-package visibility (cmd/go's identity rule) and the directory
+// rule to everything else — traversal, vendor and, for a request without an
+// identity, internal packages as before.
+func validateBashPPImportVisibilityFor(req bashPPEvalRequest, packageDir, importPath string) error {
+	if req.ImportPath == "" {
+		return validateBashPPImportVisibility(req.Dir, packageDir, importPath)
+	}
+	if _, internal := syntax.BashPPInternalImportElement(importPath); internal && !syntax.BashPPInternalImportVisible(req.ImportPath, importPath, req.TestMain) {
+		return fmt.Errorf("bash++ import %q: use of internal package %s not allowed", importPath, importPath)
+	}
+	return validateBashPPImportVisibilityDir(req.Dir, packageDir, importPath, false)
+}
+
 func validateBashPPImportVisibility(importerDir, packageDir, importPath string) error {
+	return validateBashPPImportVisibilityDir(importerDir, packageDir, importPath, true)
+}
+
+// validateBashPPImportVisibilityDir is the directory rule; internalToo
+// selects whether "internal" directories are subject to it (false when the
+// identity rule already decided them).
+func validateBashPPImportVisibilityDir(importerDir, packageDir, importPath string, internalToo bool) error {
 	for _, elem := range strings.Split(importPath, "/") {
 		if elem == "." || elem == ".." {
 			return fmt.Errorf("bash++ import %q: path traversal is not allowed", importPath)
@@ -154,7 +218,7 @@ func validateBashPPImportVisibility(importerDir, packageDir, importPath string) 
 	}
 	for current := filepath.Clean(cleanPackage); ; current = filepath.Dir(current) {
 		elem := filepath.Base(current)
-		if elem != "internal" && elem != "vendor" {
+		if (elem != "internal" || !internalToo) && elem != "vendor" {
 			parent := filepath.Dir(current)
 			if parent == current {
 				break
@@ -404,16 +468,17 @@ func (r *Runner) bashPPEvalRequest() (bashPPEvalRequest, error) {
 		// the original body. Sprint #118 Story #54 (c3a60493cde9).
 		r.bashPPTools.bridge = &bashPPNativeSession{}
 	}
-	moduleDir := ""
+	moduleDir, importPath, testMain := "", "", false
 	if r.bashPPGoSource {
 		moduleDir = r.bashPPTools.moduleDir
+		importPath, testMain = r.bashPPTools.importPath, r.bashPPTools.testMain
 	}
 	runtimeEnv := environStrings(r.writeEnv)
 	if r.bashPPGoSource {
 		runtimeEnv = r.bashPPGoSourceEnvironment()
 	}
 	embedDecls, sourceDir := r.bashPPGoSourceEmbedRequest()
-	return bashPPEvalRequest{CallbackOwner: r, CallbackDepth: r.bashPPTools.callbackDepth, LocalTypes: r.bashPPLocalTypeDescriptors(), RuntimeEnv: runtimeEnv, ModuleDir: moduleDir, Argv: append([]string{r.filename}, r.Params...), Bridge: r.bashPPTools.bridge, Go: r.bashPPTools.goBinary, Dir: r.Dir, Env: env, Stdin: r.stdin,
+	return bashPPEvalRequest{CallbackOwner: r, CallbackDepth: r.bashPPTools.callbackDepth, LocalTypes: r.bashPPLocalTypeDescriptors(), RuntimeEnv: runtimeEnv, ModuleDir: moduleDir, ImportPath: importPath, TestMain: testMain, Argv: append([]string{r.filename}, r.Params...), Bridge: r.bashPPTools.bridge, Go: r.bashPPTools.goBinary, Dir: r.Dir, Env: env, Stdin: r.stdin,
 		Stdout: r.bashPPWriter(r.stdout), Stderr: r.bashPPWriter(r.stderr), Imports: r.bashPPImports, SourceDir: sourceDir, EmbedDecls: embedDecls}, nil
 }
 
