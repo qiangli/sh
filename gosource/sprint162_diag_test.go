@@ -56,13 +56,24 @@ func TestSprint162ImportPathDiagnostics(t *testing.T) {
 		"missing":            got[1:],
 		"extra":              append(append([]string{}, got...), "reject.go:5:1: extra"),
 		"duplicate":          append(append([]string{}, got...), got[0]),
-		"wrong-line":         []string{strings.Replace(got[0], ":3:", ":2:", 1)},
-		"wrong-wording":      []string{strings.Replace(got[0], "non-canonical", "canonical", 1)},
+		"wrong-line":         {strings.Replace(got[0], ":3:", ":2:", 1)},
+		"wrong-wording":      {strings.Replace(got[0], "non-canonical", "canonical", 1)},
 		"unexpected-success": nil,
 	}
 	for name, candidate := range negatives {
 		if reflect.DeepEqual(candidate, want) {
 			t.Fatalf("negative %s was accepted", name)
+		}
+	}
+	// gc exempts local names ("./x", "../x", "/x") from the canonical-form
+	// check (noder/import.go islocalname); a relative import must reach the
+	// importer, never this diagnostic.
+	for _, local := range []string{"./b", "../b", "/abs/b"} {
+		src := []byte("package p\n\nimport _ \"" + local + "\"\n")
+		for _, d := range diagnostics("local.go", src) {
+			if strings.Contains(d, "non-canonical import path") {
+				t.Fatalf("local import %q was canonicalised: %q", local, d)
+			}
 		}
 	}
 	if got := diagnostics("empty.go", read("empty.go.src")); !reflect.DeepEqual(got, []string{"empty.go:3:8: invalid import path (empty string)"}) {
