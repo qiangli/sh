@@ -52,6 +52,7 @@ type bashPPBridgeValue struct {
 	Kind       string                       `json:"kind"`
 	Type       string                       `json:"type,omitempty"`
 	Text       string                       `json:"text,omitempty"`
+	Bytes      []byte                       `json:"bytes,omitempty"`
 	Handle     uint64                       `json:"handle,omitempty"`
 	Elements   []bashPPBridgeValue          `json:"elements,omitempty"`
 	Fields     map[string]bashPPBridgeValue `json:"fields,omitempty"`
@@ -782,7 +783,7 @@ func bashPPBridgeLiteral(text string) (bashPPBridgeValue, error) {
 		return bashPPBridgeValue{Kind: "nil"}, nil
 	}
 	if str, err := strconv.Unquote(text); err == nil {
-		return bashPPBridgeValue{Kind: "string", Text: str}, nil
+		return bashPPBridgeValue{Kind: "string", Text: str, Bytes: []byte(str)}, nil
 	}
 	if text == "true" || text == "false" {
 		return bashPPBridgeValue{Kind: "bool", Text: text}, nil

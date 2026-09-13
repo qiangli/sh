@@ -36,6 +36,7 @@ type value struct {
  Kind string `json:"kind"`
  Type string `json:"type,omitempty"`
  Text string `json:"text,omitempty"`
+ Bytes []byte `json:"bytes,omitempty"`
  Handle uint64 `json:"handle,omitempty"`
  Elements []value `json:"elements,omitempty"`
  Fields map[string]value `json:"fields,omitempty"`
@@ -86,7 +87,7 @@ func encode(v reflect.Value) value {
  result:=value{Type:typeID(v.Type()),NativeType:nativeTypeID(v.Type()),Interface:static,Function:v.Kind()==reflect.Func}
  if v.Type().PkgPath()!=""&&v.Type().PkgPath()!="main"&&!token.IsExported(v.Type().Name()){return encodeHandle(v,result)}
  switch v.Kind(){
- case reflect.String: result.Kind="string";result.Text=v.String()
+ case reflect.String: result.Kind="string";result.Text=v.String();result.Bytes=[]byte(v.String())
  case reflect.Bool:result.Kind="bool";result.Text=strconv.FormatBool(v.Bool())
  case reflect.Int,reflect.Int8,reflect.Int16,reflect.Int32,reflect.Int64:result.Kind="int";result.Text=strconv.FormatInt(v.Int(),10)
  case reflect.Uint,reflect.Uint8,reflect.Uint16,reflect.Uint32,reflect.Uint64,reflect.Uintptr:result.Kind="uint";result.Text=strconv.FormatUint(v.Uint(),10)
@@ -186,7 +187,7 @@ func decode(v value, target reflect.Type)(reflect.Value,error){
     outputs:=make([]reflect.Value,len(returned));for i,item:=range returned {output,err:=decode(item,target.Out(i));if err!=nil{panic(err)};outputs[i]=output};return outputs
    })
    return result,nil
-  case "string":if typ.Kind()!=reflect.String{return result,fmt.Errorf("string for %s",typ)};result.SetString(v.Text)
+  case "string":if typ.Kind()!=reflect.String{return result,fmt.Errorf("string for %s",typ)};if v.Bytes!=nil{result.SetString(string(v.Bytes))}else{result.SetString(v.Text)}
   case "bool":b,e:=strconv.ParseBool(v.Text);if e!=nil||typ.Kind()!=reflect.Bool{return result,fmt.Errorf("invalid bool")};result.SetBool(b)
   case "int":n,e:=strconv.ParseInt(v.Text,10,64);if e!=nil{return result,e};switch typ.Kind(){case reflect.Int,reflect.Int8,reflect.Int16,reflect.Int32,reflect.Int64:if result.OverflowInt(n){return result,fmt.Errorf("integer overflow")};result.SetInt(n);case reflect.Uint,reflect.Uint8,reflect.Uint16,reflect.Uint32,reflect.Uint64,reflect.Uintptr:if n<0||result.OverflowUint(uint64(n)){return result,fmt.Errorf("unsigned overflow")};result.SetUint(uint64(n));case reflect.Float32,reflect.Float64:result.SetFloat(float64(n));case reflect.Complex64,reflect.Complex128:result.SetComplex(complex(float64(n),0));default:return result,fmt.Errorf("integer for %s",typ)}
   case "uint":n,e:=strconv.ParseUint(v.Text,10,64);if e!=nil{return result,e};switch typ.Kind(){case reflect.Uint,reflect.Uint8,reflect.Uint16,reflect.Uint32,reflect.Uint64,reflect.Uintptr:if result.OverflowUint(n){return result,fmt.Errorf("unsigned overflow")};result.SetUint(n);case reflect.Int,reflect.Int8,reflect.Int16,reflect.Int32,reflect.Int64:if n>1<<63-1||result.OverflowInt(int64(n)){return result,fmt.Errorf("integer overflow")};result.SetInt(int64(n));case reflect.Float32,reflect.Float64:result.SetFloat(float64(n));default:return result,fmt.Errorf("unsigned for %s",typ)}

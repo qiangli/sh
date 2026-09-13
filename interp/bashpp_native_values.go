@@ -236,6 +236,7 @@ func bridgeScalar(value bashPPScalar) (bashPPBridgeValue, error) {
 	case constant.String:
 		out.Kind = "string"
 		out.Text = constant.StringVal(value.value)
+		out.Bytes = []byte(out.Text)
 	case constant.Bool:
 		out.Kind = "bool"
 		out.Text = strconv.FormatBool(constant.BoolVal(value.value))

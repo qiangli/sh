@@ -58,3 +58,7 @@ func TestGoSourceSprint162NativeVariableSetNegative(t *testing.T) {
 		t.Fatalf("wrong var-set type error: %v", err)
 	}
 }
+
+func TestGoSourceSprint162BridgeStringBytes(t *testing.T) {
+	differGoSource(t, mustReadSprint162Bridge(t, "string_bytes.go.txt"), nil, "")
+}
