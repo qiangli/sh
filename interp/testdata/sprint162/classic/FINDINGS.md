@@ -78,3 +78,31 @@ output in both modes); GNU Bash closes at the `exec` too.
 - **bashpp-tests (classic lane, #70):** add `histexpand` to the classic-ON
   record: it is ON-only on Linux native (`classic-1`), same first cause as
   `procsub`, and follows this fix.
+
+## Linux evidence (the leaf host, native serial gate, pinned Go 1.27, 2 vCPU)
+
+Candidate `classic-fix` = the published base pins with `sh` at this
+branch (`9ffad2ff`), built by the sprint's `rebuild-candidate.sh`; the gate
+is bashy's `make test-bash` / `make test-bash-run` (`tools/bash53suite`),
+Bash++ ON = `BASHY_BASHPP=1` in the runner's environment, exactly the
+sibling lane's `classic-1` procedure. Evidence directories on the leaf
+host: `classic-fix-2/` (gate) and `classic-fix-3/` (the `jobs` control).
+
+| run | OFF | ON |
+| --- | --- | --- |
+| focused `cprint procsub histexpand` | 3/3 PASS | 3/3 PASS |
+| full 86 | 75 PASS, 11 FAIL — the same 11 native-venue rows as the base (`classic-1`: `execscript glob-test intl jobs new-exp read redir test trap varenv vredir`, all no-tty / locale / signal environment rows) | 75 PASS, 10 FAIL + `jobs` TIME; `procsub` and `histexpand` PASS (base ON: `procsub` TIME, `histexpand` FAIL) |
+
+`jobs` TIME under ON in the full run: repeated in `classic-fix-3` —
+candidate ON ×2, candidate OFF ×1 and a base-pin candidate ON ×2 all FAIL
+at 52.5 s with byte-identical output (the `fg: no controlling terminal`
+native-venue row), so the single TIME is the fixture's known native
+hang-proneness (bashy's Makefile history records `jobs` as one of the
+fixtures that hung natively), not the candidate. On darwin, `jobs` ON is
+likewise identical for base and candidate (54.5 s, same row).
+
+The container gate (`make test-bash-container[-bashpp]`), the venue of the
+darwin record, was not run: no podman machine exists on the darwin host
+and the leaf host has no podman. The 86/86-in-container verdict for OFF
+and ON is therefore still owed by a venue that has it; every row this
+lane can measure is green in both modes.
