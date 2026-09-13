@@ -1075,6 +1075,11 @@ type callFrame struct {
 	callPos  syntax.Pos
 	bashPPFn *bashPPFunc
 	seq      uint64
+	// lastCallPos is the position of the last call this frame made, and
+	// deferPos the position the frame is returning from once its deferred
+	// calls run; see bashpp_sprint165_frames_defer.go.
+	lastCallPos syntax.Pos
+	deferPos    syntax.Pos
 	// bodyLine is the line of the function body's opening token.
 	// Bash's parser stamps for/select commands inside a function with
 	// this line rather than their own, and runtime diagnostics like

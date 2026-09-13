@@ -74,8 +74,10 @@ const (
 
 // goSourceNextFrameSeq issues the identity a call frame carries, so a frame
 // snapshot can tell a frame still on the stack from a new one at the same
-// depth.
+// depth. It runs as the frame is pushed, while the caller is still on top,
+// and notes on the caller what the new frame tells about it.
 func (r *Runner) goSourceNextFrameSeq() uint64 {
+	r.goSourceFrameEntering()
 	r.goSourceFrameSeq++
 	return r.goSourceFrameSeq
 }
@@ -156,7 +158,7 @@ func (r *Runner) goSourceLiveFrames(top syntax.Pos) []goSourceStackFrame {
 	for i := range r.callStack {
 		pos := top
 		if i+1 < len(r.callStack) {
-			pos = r.callStack[i+1].callPos
+			pos = r.goSourceFrameLinePos(i)
 		}
 		file, line := r.goSourceFramePosition(pos)
 		frames[i] = goSourceStackFrame{name: r.goSourceFrameFuncName(i), file: file, line: line, seq: r.callStack[i].seq}

@@ -106,6 +106,15 @@ func TestBashPPSprint165FramesCallersWalk(t *testing.T) {
 	sprint165FramesExpect(t, "callers", "callers_walk", false)
 }
 
+// A deferred call finds the deferring frame at its return point — the
+// return statement's line, also when its expression called a function, or
+// the closing brace of a body that ran to its end. An ordinary callee still
+// finds its caller at the call's line, and a panicking frame stays at the
+// fault line.
+func TestBashPPSprint165FramesDeferSite(t *testing.T) {
+	sprint165FramesExpect(t, "defersite", "defer_site", false)
+}
+
 // Frames are named as Go names them: declared functions and methods by
 // their qualified names, generic ones with `[...]`, function literals after
 // the declaration they are written in and numbered in source order, nested
