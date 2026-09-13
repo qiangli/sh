@@ -900,16 +900,6 @@ func (e *emitter) function(f *syntax.BashPPFuncDecl) (string, error) {
 	savedResults := e.resultTypes
 	e.resultTypes = e.returnTypes(f.Results)
 	defer func() { e.resultTypes = savedResults }()
-	if f.Body == nil {
-		// Go admits a body-less declaration only when assembly or a linkname
-		// supplies the body; nothing here can, so say so instead of crashing.
-		return "", e.fail(f, CodeUnsupported, "function declaration without body")
-	}
-	parts, err := e.blockParts(f.Body)
-	if err != nil {
-		return "", err
-	}
-	body := strings.Join(parts, "")
 	recv := ""
 	if f.Receiver != nil {
 		r := f.Receiver
@@ -929,6 +919,23 @@ func (e *emitter) function(f *syntax.BashPPFuncDecl) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if f.Body == nil {
+		// A body-less declaration is a compile-time fact of Go source: the
+		// body comes from assembly, a //go:linkname or a //go:wasmimport, and
+		// gc decides whether one is present (the generic form is the
+		// checker's error before lowering). Go source passes it through as
+		// written; the runtime path wraps a body it does not have, and a
+		// Bash++ script cannot spell one, so both keep refusing.
+		if e.goSource && !e.execution {
+			return e.mark(f) + "func " + recv + e.goName(f.Name.Value) + generics + signature + "\n", nil
+		}
+		return "", e.fail(f, CodeUnsupported, "function declaration without body")
+	}
+	parts, err := e.blockParts(f.Body)
+	if err != nil {
+		return "", err
+	}
+	body := strings.Join(parts, "")
 	if e.execution {
 		body = e.program() + " = " + e.program() + ".LexicalScope(" + e.lexicalNames(e.functionGlobals) + ")\n" + body
 		return e.runtimeFunction(f, signature, body, generics)

@@ -153,6 +153,9 @@ func (e *emitter) functionResultPlan(f *syntax.BashPPFuncDecl) richResultPlan {
 		ds[i] = richResultDescriptor{Index: i, Declared: typ, Name: names[i]}
 	}
 	locals := map[string]string{}
+	if f.Body == nil {
+		return e.richResultPlanFor(ds)
+	}
 	syntax.Walk(f.Body, func(node syntax.Node) bool {
 		switch n := node.(type) {
 		case *syntax.BashPPFuncLit, *syntax.BashPPFuncDecl:

@@ -313,6 +313,11 @@ func (e *emitter) inferChannelParameters(file *syntax.File) error {
 			local := map[string]string{}
 			var root syntax.Node = file
 			if owner != nil {
+				if owner.Body == nil {
+					// A body-less declaration has no calls to infer from;
+					// the emitter diagnoses it when it reaches it.
+					continue
+				}
 				root = owner.Body
 				for _, p := range owner.Params {
 					if typ := e.inferredParams[p]; typ != "" {
