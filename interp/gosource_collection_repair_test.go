@@ -81,9 +81,15 @@ func TestGoSourceCollectionInvalidIndexDoesNotPanicHost(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			// Any escaping host panic fails the test. This is a negative containment
-			// check, not a claim that native panic stack text is already reproduced.
+			// check: since Sprint 162 the interpreter reports an out-of-range index
+			// the way Go's runtime does (a recoverable panic with Go's wording and
+			// exit status 2); the older static BOUNDS diagnostic is still accepted
+			// for the paths that refuse an index before evaluation.
 			err = runner.Run(ctx, program.File)
-			if err == nil || (!strings.Contains(err.Error(), "BOUNDS") && !strings.Contains(errout.String(), "BOUNDS")) {
+			bounds := func(s string) bool {
+				return strings.Contains(s, "BOUNDS") || strings.Contains(s, "runtime error: index out of range")
+			}
+			if err == nil || (!bounds(err.Error()) && !bounds(errout.String())) {
 				t.Fatalf("missing bounds failure: %v %q", err, errout.String())
 			}
 		})
