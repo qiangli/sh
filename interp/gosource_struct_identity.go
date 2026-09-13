@@ -133,6 +133,8 @@ func goSourceReflectTypeText(typ syntax.BashPPTypeExpr) string {
 		return "struct { " + strings.Join(fields, "; ") + " }"
 	case *syntax.BashPPPointerType:
 		return "*" + goSourceReflectTypeText(x.Element)
+	case *syntax.BashPPFuncType:
+		return bashPPGoCanonicalTypeText(x)
 	case *syntax.BashPPCollectionType:
 		if x.Kind == "map" {
 			return "map[" + goSourceReflectTypeText(x.Key) + "]" + goSourceReflectTypeText(x.Element)

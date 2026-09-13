@@ -481,6 +481,9 @@ func (r *Runner) bashPPBindInterfaceParam(cell *bashPPCell, typ syntax.BashPPTyp
 		dynamic, _ = bashPPScalarNamedType(cell.typeName)
 	}
 	if dynamic == nil {
+		dynamic = r.bashPPFuncValueType(cell)
+	}
+	if dynamic == nil {
 		if name := bashPPDefaultScalarTypeName(cell.scalarKind); name != "" {
 			dynamic = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: name}}
 		}

@@ -1216,7 +1216,7 @@ func (r *Runner) bashPPStructuredArgCell(w *syntax.Word, expr syntax.BashPPExpr)
 		return cell, nil
 	}
 	if id, ok := expr.(*syntax.BashPPIdent); ok && r.bashPPScope != nil {
-		if cell := r.bashPPScope.lookup(id.Name.Value); bashPPStructuredCell(cell) {
+		if cell := r.bashPPScope.lookup(id.Name.Value); bashPPStructuredCell(cell) || r.bashPPFuncTypedCell(cell) {
 			return cell, nil
 		}
 		return nil, nil

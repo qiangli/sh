@@ -113,3 +113,17 @@ func TestBashPPSprint162LocalTypeScope(t *testing.T) {
 		t.Fatalf("output:\n%s\nwant:\n%s", out, want)
 	}
 }
+
+// TestBashPPSprint162FuncValueInterface: a function value boxed in an
+// interface keeps its func type — comparing it panics as Go does for a nil
+// func variable, a literal and a declared function alike, a type switch
+// sees the signature — while comparable dynamic values compare as before.
+func TestBashPPSprint162FuncValueInterface(t *testing.T) {
+	out, err := bashPPSprint162Control4Run(t, "func_interface", "uncomparable")
+	if err != nil {
+		t.Fatalf("run: %v, output=%q", err, out)
+	}
+	if want := bashPPSprint162Control4Expected(t, "func_interface", "uncomparable"); out != want {
+		t.Fatalf("output:\n%s\nwant:\n%s", out, want)
+	}
+}
