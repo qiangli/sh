@@ -25,7 +25,7 @@ func TestGoSourceLibraryEmission(t *testing.T) {
 			}
 			sources = append(sources, gosource.Source{Name: name, Data: data})
 		}
-		program, err := gosource.Load(sources, gosource.Options{})
+		program, err := gosource.Load(sources, gosource.Options{PreserveNativeInit: true})
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -58,6 +58,10 @@ type SourceInfo = syntax.SourceFile
 type Options struct {
 	// RunMain appends init and main entry calls. Loading itself never executes code.
 	RunMain bool
+	// PreserveNativeInit leaves init declarations named init for a native
+	// library build. It is incompatible with RunMain and explicit package
+	// flattening, both of which need uniquely named callable init functions.
+	PreserveNativeInit bool
 	// Importer may resolve module dependencies. Nil uses the Go export importer.
 	Importer types.Importer
 	// GoVersion is passed unchanged to types.Config.GoVersion. Empty preserves
@@ -140,6 +144,9 @@ func Parse(r io.Reader, name string, options Options) (*Program, error) {
 // Load processes a single package in lexical filename order, matching the Go
 // toolchain. Source bytes are neither modified nor executed by the native toolchain.
 func Load(sources []Source, options Options) (*Program, error) {
+	if options.PreserveNativeInit && (options.RunMain || len(options.Packages) > 0) {
+		return nil, fmt.Errorf("gosource: native init preservation requires a non-executing package without an explicit package map")
+	}
 	if len(sources) == 0 {
 		return nil, fmt.Errorf("gosource: no source files")
 	}
@@ -334,8 +341,7 @@ func Load(sources []Source, options Options) (*Program, error) {
 		// A plain non-executing package is a native library input: keep its
 		// init declarations for cmd/go to schedule. Flattened execution and
 		// explicit package maps still need uniquely named callable init funcs.
-		preserveNativeInit := !options.RunMain && len(options.Packages) == 0
-		lp, err := lc.lowerPackage(len(p.InitFunctions), preserveNativeInit)
+		lp, err := lc.lowerPackage(len(p.InitFunctions), options.PreserveNativeInit)
 		if err != nil {
 			return nil, err
 		}
@@ -372,7 +378,7 @@ func Load(sources []Source, options Options) (*Program, error) {
 			p.File.Stmts = append(p.File.Stmts, c.stmt(&syntax.BashPPCall{Fun: []*syntax.Lit{lit}}))
 		}
 	}
-	if err := checkLoweredNames(p.File, !options.RunMain && len(options.Packages) == 0); err != nil {
+	if err := checkLoweredNames(p.File, options.PreserveNativeInit); err != nil {
 		return nil, err
 	}
 	for _, path := range imp.order {
