@@ -274,6 +274,13 @@ func (r *Runner) bashPPRecover() (any, bool) {
 		return nil, false
 	}
 	last := len(r.bashPPPanic.chain) - 1
+	// Only the panic the deferring frame is unwinding is visible: one an
+	// outer frame is still unwinding — after this cleanup recovered the
+	// nested panic that interrupted it — belongs to that frame's own
+	// deferred calls. See bashPPPanicState.depths.
+	if last < len(r.bashPPPanic.depths) && r.bashPPPanic.depths[last] != r.bashPPDeferDepth-1 {
+		return nil, false
+	}
 	value := r.bashPPPanic.chain[last]
 	r.bashPPPanic.chain = r.bashPPPanic.chain[:last]
 	payload := r.bashPPPanic.values[last]

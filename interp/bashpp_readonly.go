@@ -190,6 +190,11 @@ func (r *Runner) bashPPTupleAssignCall(ctx context.Context, assign *syntax.BashP
 			r.bashPPBuiltinAssign(assign)
 			return
 		}
+		// `v = recover()`: the recovered interface value, or the nil interface.
+		if cell, handled := r.bashPPReturnRecover(assign.Call); handled && len(assign.Names) == 1 {
+			r.bashPPCommitTupleAssign(assign, []*bashPPCell{cell})
+			return
+		}
 		r.errf("%sBASHPP-EASSIGN-CALL: tuple assignment requires a declared result-bearing function\n", r.bashErrPrefix(assign.Call.Pos()))
 		r.exit = exitStatus{code: 2}
 		return

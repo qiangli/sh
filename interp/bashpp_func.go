@@ -2683,11 +2683,13 @@ func (r *Runner) bashPPRunDefers(ctx context.Context, mark int) {
 		r.exit = exitStatus{}
 		// A cleanup runs even while a panic is unwinding — that is the whole
 		// point of it — so the panic stops halting statements for the length
-		// of this call, without ceasing to be recoverable by it. The panic
-		// has unwound to this frame: a function the cleanup calls is deeper
-		// and returns normally.
+		// of this call, without ceasing to be recoverable by it. A panic
+		// that abandoned this frame has unwound to it: a function the
+		// cleanup calls is deeper and returns normally. A panic an outer
+		// frame is unwinding — this frame being one of its cleanups — stays
+		// that frame's.
 		r.bashPPPanic.running = r.bashPPPanic.active
-		if n := len(r.bashPPPanic.depths); r.bashPPPanic.active && n > 0 {
+		if n := len(r.bashPPPanic.depths); r.bashPPPanic.active && n > 0 && r.bashPPPanic.depths[n-1] > len(r.callStack) {
 			r.bashPPPanic.depths[n-1] = len(r.callStack)
 		}
 		builtinPanicDepth := len(r.bashPPPanic.chain)
@@ -2759,8 +2761,10 @@ func (r *Runner) bashPPRunDefers(ctx context.Context, mark int) {
 		// `defer panic(v)`, a function that panics. Its unwind status is not
 		// a failed shell cleanup to restore after a later defer recovers; the
 		// panic state carries that control transfer.
+		// A status a call uses to REPORT its answer — `defer recover()` with
+		// nothing to recover — is not a failed cleanup either.
 		panicRaised := len(r.bashPPPanic.chain) > builtinPanicDepth
-		if !deferFailed && !panicRaised && (!r.exit.ok() || r.exit.err != nil) {
+		if !deferFailed && !panicRaised && (!r.exit.ok() && !r.exit.errexitExempt || r.exit.err != nil) {
 			failed, deferFailed = r.exit, true
 		}
 	}

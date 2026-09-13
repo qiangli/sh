@@ -136,10 +136,12 @@ func TestBashPPSprint162FuncValueInterface(t *testing.T) {
 // interface value; a `defer recover()` is a no-op in the panicking frame
 // and that function's own recover when deferred by a deferred call; and a
 // deferred method that survives a nested panic in a callee still recovers
-// the outer one. The negative program keeps a nested recover inert and an
-// unrecovered deferred panic fatal for its frame.
+// the outer one; and a deferred call sees only the panic its deferring
+// frame is unwinding, so a second recover after the nested one is nil.
+// The negative program keeps a nested recover inert and an unrecovered
+// deferred panic fatal for its frame.
 func TestBashPPSprint162AbortedPanics(t *testing.T) {
-	for _, name := range []string{"nested", "helper_during_unwind", "deferred_recover", "deferred_failure_negative"} {
+	for _, name := range []string{"nested", "helper_during_unwind", "deferred_recover", "frame_owned", "deferred_failure_negative"} {
 		out, err := bashPPSprint162Control4Run(t, "aborted_panics", name)
 		if err != nil {
 			t.Fatalf("%s: run: %v, output=%q", name, err, out)
