@@ -226,6 +226,10 @@ func (r *Runner) bashPPBindCallNode(c *syntax.BashPPCall) *syntax.BashPPCall {
 	}
 	argType := r.bashPPBindTypeExpr(c.ArgType)
 	args, argsChanged := r.bashPPBindExprList(c.ArgExprs)
+	// A computed callee — `reflect.TypeOf(new(T)).String()` — is an
+	// expression of the body like any other, and the parameter it mentions
+	// is bound the same way.
+	callee := r.bashPPBindExprs(c.CalleeExpr)
 	typeArgs := c.TypeArgs
 	typeArgsChanged := false
 	if len(c.TypeArgs) > 0 {
@@ -245,11 +249,11 @@ func (r *Runner) bashPPBindCallNode(c *syntax.BashPPCall) *syntax.BashPPCall {
 			typeArgs = c.TypeArgs
 		}
 	}
-	if argType == c.ArgType && !argsChanged && !typeArgsChanged {
+	if argType == c.ArgType && !argsChanged && !typeArgsChanged && callee == c.CalleeExpr {
 		return c
 	}
 	cp := *c
-	cp.ArgType, cp.ArgExprs, cp.TypeArgs = argType, args, typeArgs
+	cp.ArgType, cp.ArgExprs, cp.TypeArgs, cp.CalleeExpr = argType, args, typeArgs, callee
 	return &cp
 }
 

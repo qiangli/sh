@@ -82,3 +82,10 @@ func TestBashPPSprint162ChannelDirectionCompare(t *testing.T) {
 	sprint162NilPtr2Expect(t, "chandir", "chan_direction_compare", false)
 	sprint162NilPtr2Refused(t, "chandir", "chan_direction_compare_negative", "mismatched types")
 }
+
+// A type parameter inside a computed callee is bound to the frame's type
+// argument; an undeclared type there stays refused.
+func TestBashPPSprint162TypeParamInCallee(t *testing.T) {
+	sprint162NilPtr2Expect(t, "generic", "new_typeparam_callee", false)
+	sprint162NilPtr2Refused(t, "generic", "new_typeparam_callee_negative", "undefined: U")
+}
