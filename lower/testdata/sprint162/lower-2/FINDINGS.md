@@ -64,7 +64,9 @@ core caller diff is:
 The flag parser must require `--source=go`, reject `--go-package` flattening,
 permit an existing output directory, and keep `GoFiles+TestGoFiles` and
 `XTestGoFiles` as separate `gosource.Load` units so the second call passes
-`Package: p_test`. Each generated map uses `FileResult.Mappings`; a duplicate
+`Package: p_test`. Those loads set
+`gosource.Options.PreserveNativeInit = true`. Each generated map uses
+`FileResult.Mappings`; a duplicate
 or unresolved source basename fails before any write.
 
 ### Package frontend and backend
