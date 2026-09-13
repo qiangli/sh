@@ -108,3 +108,19 @@ func TestBashPPSprint162RecoverAssign(t *testing.T) {
 func TestBashPPSprint162RuntimeStackIntrospection(t *testing.T) {
 	sprint162NilPtr2Expect(t, "stack", "runtime_caller", false)
 }
+
+// A goroutine started by a deferred call running for a panic runs; without
+// a recover the program still dies of the panic afterwards.
+func TestBashPPSprint162GoroutineDuringUnwind(t *testing.T) {
+	sprint162NilPtr2Expect(t, "unwindgo", "goroutine_during_unwind", false)
+	got, err := sprint162NilPtr2Run(t, "unwindgo", "goroutine_during_unwind_negative")
+	if err == nil {
+		t.Fatalf("unrecovered panic did not terminate: output=%q", got)
+	}
+	if status, ok := IsExitStatus(err); !ok || status != 2 {
+		t.Fatalf("status %v, want 2; output=%q", err, got)
+	}
+	if !strings.HasPrefix(got, "literal ran\npanic: boom\n") {
+		t.Fatalf("output %q", got)
+	}
+}

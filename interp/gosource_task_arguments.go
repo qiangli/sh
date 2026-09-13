@@ -53,7 +53,10 @@ func (r *Runner) goSourcePrepareTaskArguments(call *syntax.BashPPCall, pin *bash
 		}
 		return nil, nil
 	}
-	if !ok || r.bashPPPanicking() || r.exit.exiting || r.exit.err != nil {
+	// A panic halting the frame launches nothing; a deferred call running
+	// for the panic is an ordinary statement sequence, and a goroutine it
+	// starts runs as Go runs it — the deferred calls run before the unwind.
+	if !ok || r.bashPPPanicHalts() || r.exit.exiting || r.exit.err != nil {
 		return nil, nil
 	}
 	for _, cell := range r.bashPPCallCells {
