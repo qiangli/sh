@@ -27,6 +27,9 @@ func (e *emitter) typeExpr(t syntax.BashPPTypeExpr) (string, error) {
 		if err != nil {
 			return "", err
 		}
+		if strings.HasPrefix(element, "<-chan ") {
+			element = "(" + element + ")"
+		}
 		switch n.Direction {
 		case "":
 			return "chan " + element, nil
