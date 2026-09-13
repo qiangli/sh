@@ -184,6 +184,13 @@ func Load(sources []Source, options Options) (*Program, error) {
 		return nil, parseErrors
 	}
 	if len(syntaxErrors) == 0 {
+		// Like syntax errors, import-path errors are front-end errors. Do not
+		// pass an invalid path to go/types or an importer: that would add a
+		// second, environment-dependent diagnostic in place of gc's verdict.
+		importPathErrors := validateImportPaths(c.fset, c.files)
+		if len(importPathErrors) > 0 {
+			return nil, append(parseErrors, importPathErrors...)
+		}
 		parseErrors = append(parseErrors, validateCompilerDirectives(c.fset, c.files, checker)...)
 	}
 	fallback := options.Importer
