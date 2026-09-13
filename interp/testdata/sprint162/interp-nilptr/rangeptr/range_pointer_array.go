@@ -31,3 +31,16 @@ func main() {
 		fmt.Println("unreachable", i, v)
 	}
 }
+
+func init() {
+	// The parenthesised explicit dereference is the same range: with one
+	// iteration variable the pointer is not evaluated.
+	var q *[2]int
+	for i := range *q {
+		fmt.Println("deref index", i)
+	}
+	r := &[2]int{4, 5}
+	for i, v := range *r {
+		fmt.Println("deref", i, v)
+	}
+}

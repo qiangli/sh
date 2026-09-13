@@ -351,6 +351,9 @@ func (r *Runner) bashPPRangeCollection(ctx context.Context, rng *syntax.BashPPRa
 			return false
 		}
 	}
+	if r.goSourceRangeDerefArray(ctx, rng, cell) {
+		return true
+	}
 	value, meta, err := r.bashPPReadExpr(rng.Expr)
 	if err != nil {
 		if !errors.Is(err, errBashPPScalarInterrupted) {

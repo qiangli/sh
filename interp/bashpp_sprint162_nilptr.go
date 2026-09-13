@@ -656,3 +656,38 @@ func (r *Runner) goSourceRecoverBridgeValue(expr syntax.BashPPExpr) (bashPPBridg
 	value, err := r.bashPPBridgeCell(iv.cell)
 	return value, true, err
 }
+
+// goSourceRangeDerefArray ranges `for i := range (*p)` — an explicit
+// dereference of a pointer to an array — through goSourceRangePointerArray
+// on the pointer itself, before the operand is read: with at most one
+// iteration variable Go does not evaluate `*p` at all, so a nil p ranges
+// its indices instead of faulting.
+func (r *Runner) goSourceRangeDerefArray(ctx context.Context, rng *syntax.BashPPRange, cell *bashPPCell) bool {
+	if !r.bashPPGoSource || cell == nil || !cell.pointer {
+		return false
+	}
+	expr := rng.Expr
+	for {
+		paren, ok := expr.(*syntax.BashPPParenExpr)
+		if !ok {
+			break
+		}
+		expr = paren.X
+	}
+	deref, ok := expr.(*syntax.BashPPDerefExpr)
+	if !ok {
+		return false
+	}
+	operand := deref.X
+	for {
+		paren, ok := operand.(*syntax.BashPPParenExpr)
+		if !ok {
+			break
+		}
+		operand = paren.X
+	}
+	if _, ok := operand.(*syntax.BashPPIdent); !ok {
+		return false
+	}
+	return r.goSourceRangePointerArray(ctx, rng, cell.pointerValue, bashPPPointerMeta(cell.declType))
+}
