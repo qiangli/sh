@@ -242,13 +242,19 @@ func (e *policyBashPPEvaluator) Resolve(ctx context.Context, req bashPPEvalReque
 		return "", err
 	}
 	capability := classifyBashPPPackage(facts, path)
+	// Sprint 165 D8: an INTERNAL standard-library package outside the
+	// reviewed inventory is admitted for a declared identity that cmd/go's
+	// rule admits it for (bashPPIdentityAdmitsInternal); nothing else moves.
+	if capability == capUnreviewedStdlib && bashPPIdentityAdmitsInternal(req, path) {
+		capability = capReviewedStdlib
+	}
 	if bashPPPolicyFor(capability) != policyToolchain {
 		return "", fmt.Errorf("bash++ import %q: %s", path, capability.refusal())
 	}
 	if !syntax.BashPPValidIdent(facts.Name) {
 		return "", fmt.Errorf("bash++ import %q: invalid package name %q", path, facts.Name)
 	}
-	if err := validateBashPPImportVisibility(req.Dir, facts.Dir, path); err != nil {
+	if err := validateBashPPImportVisibilityFor(req, facts.Dir, path); err != nil {
 		return "", err
 	}
 	return facts.Name, nil
