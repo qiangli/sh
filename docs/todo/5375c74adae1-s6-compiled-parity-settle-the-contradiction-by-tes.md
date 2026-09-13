@@ -6,7 +6,7 @@ seq: 71
 status: todo
 priority: p1
 created: 2026-09-10T10:45:21.559674Z
-sprint: 166
+sprint: 146
 ---
 
 sh/docs/lowering-agentic.md states that the statement and expression dispatcher in lower/compile.go does not thread frames yet, and that the groundwork therefore does not certify compiled agentic behaviour.
