@@ -3,9 +3,11 @@ id: d408f15b7cb4
 kind: task
 title: 'Sprint 162.4: lowering — the barrier-b/active-152 roots (19) + the 93 retained-COMPILED product FAILs (LOWER-EUNSUPPORTED body-less funcs, generate/execute phase, cgo policy)'
 seq: 94
-status: todo
+status: assigned
 priority: p0
 created: 2026-09-13T00:37:02.745334Z
+weave: 159
+assignee: qiangli
 sprint: 162
 ---
 

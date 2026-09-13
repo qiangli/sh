@@ -3,9 +3,11 @@ id: e2a7c4ef43c9
 kind: task
 title: 'Sprint 162.1: type/evaluator residue — the barrier-b/active-151 roots (511, minus the 26 package roots), by mechanism'
 seq: 91
-status: todo
+status: assigned
 priority: p0
 created: 2026-09-13T00:36:40.612037Z
+weave: 162
+assignee: qiangli
 sprint: 162
 ---
 
