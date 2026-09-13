@@ -641,6 +641,22 @@ func (c *converter) valueDecl(g *ast.GenDecl, v *ast.ValueSpec, n *ast.Ident, in
 			out.InitExpr = c.expr(v.Values[index])
 			return out
 		}
+		// A const outside a group — a function-local declaration, or a
+		// single top-level spec — whose initializer selects through an
+		// imported package (unsafe.Sizeof, math.MaxInt8) keeps its source
+		// form as the group path does: folding it would erase the file's only
+		// use of the import in the generated Go. A spec that also mentions
+		// iota stays on the folded path: this per-spec site has no group
+		// carrier, so a textual iota would re-evaluate at position 0.
+		if len(v.Values) == len(v.Names) && index < len(v.Values) &&
+			c.usesImportedPackage(v.Values[index]) && !c.usesIota(v.Values[index]) {
+			out.Init = []*s.Word{c.word(v.Values[index])}
+			saved := c.rawConstantExpr
+			c.rawConstantExpr = true
+			out.InitExpr = c.expr(v.Values[index])
+			c.rawConstantExpr = saved
+			return out
+		}
 		if obj, ok := c.info.Defs[n].(*types.Const); ok {
 			value := obj.Val().ExactString()
 			kind := "INT"
@@ -985,18 +1001,23 @@ func (c *converter) constAsWritten(spec *ast.ValueSpec, index int) bool {
 		return false
 	}
 	value := spec.Values[index]
-	usesIota := false
-	ast.Inspect(value, func(n ast.Node) bool {
-		if id, ok := n.(*ast.Ident); ok && c.info.Uses[id] == types.Universe.Lookup("iota") {
-			usesIota = true
-		}
-		return !usesIota
-	})
-	if usesIota {
+	if c.usesIota(value) {
 		return false
 	}
 	_, evident := c.constKind(value)
 	return evident
+}
+
+// usesIota reports whether e mentions the predeclared iota.
+func (c *converter) usesIota(e ast.Expr) bool {
+	found := false
+	ast.Inspect(e, func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok && c.info.Uses[id] == types.Universe.Lookup("iota") {
+			found = true
+		}
+		return !found
+	})
+	return found
 }
 
 // constInferredAsWritten reports whether a `var` spec without a type may be
