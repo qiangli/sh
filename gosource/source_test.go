@@ -180,7 +180,10 @@ func TestMultipleFileRuntimeAndLowerPositions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = r.Run(context.Background(), p.File); err == nil || !strings.Contains(err.Error()+stderr.String(), "b.go:3:") {
+	// A run-time fault is Go's panic report since Sprint 162: the goroutine
+	// trace names the interpreted frame's file:line (`b.go:3`), as gc does,
+	// rather than a positioned file:line:col diagnostic.
+	if err = r.Run(context.Background(), p.File); err == nil || !strings.Contains(err.Error()+stderr.String(), "b.go:3") {
 		t.Fatalf("runtime position: %v stderr=%q", err, stderr.String())
 	}
 	result, err := lower.Compile(p.File, lower.Options{Origin: "a.go"})
