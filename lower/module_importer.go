@@ -333,3 +333,23 @@ func (m *moduleImporter) loadLocked(target string) error {
 // It does not execute the importing program. Callers loading unchanged Go source
 // can provide this importer to their Go type checker.
 func NewModuleImporter(dir string) types.Importer { return newModuleImporter(dir) }
+
+// ImportFromPackage is gosource's IdentityImporter: the explicit package map
+// has already decided internal visibility on the importer's DECLARED
+// identity (the compiler's -p), so this resolves the path policy-free — the
+// directory rule of ImportFrom, keyed on where the importing files happen
+// to sit, is exactly what would refuse an import the identity admits. Module,
+// workspace, vendor and GOPATH resolution are the delegate's, unchanged.
+// identity is the importer's declared path, for diagnostics.
+func (m *moduleImporter) ImportFromPackage(path, identity, srcDir string) (*types.Package, error) {
+	m.mu.Lock()
+	sdkErr := m.sdkErr
+	m.mu.Unlock()
+	if sdkErr != nil {
+		return nil, fmt.Errorf("cannot resolve %q for %q: %w", path, identity, sdkErr)
+	}
+	if from, ok := m.delegate.(types.ImporterFrom); ok {
+		return from.ImportFrom(path, srcDir, 0)
+	}
+	return m.delegate.Import(path)
+}
