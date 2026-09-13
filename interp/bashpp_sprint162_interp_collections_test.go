@@ -70,3 +70,16 @@ func TestSprint162CollectionComplexElementNegative(t *testing.T) {
 	_, err = gosource.Parse(strings.NewReader(string(source)), path, gosource.Options{RunMain: true})
 	qt.Assert(t, qt.ErrorMatches(err, `(?s).*cannot use .*string.* as complex128.*`))
 }
+
+func TestSprint162CollectionBoundsPanic(t *testing.T) {
+	root := filepath.Join("testdata", "sprint162", "interp-collections")
+	for _, name := range []string{"bounds_recover", "bounds_no_panic"} {
+		source, err := os.ReadFile(filepath.Join(root, name+".go"))
+		qt.Assert(t, qt.IsNil(err))
+		want, err := os.ReadFile(filepath.Join(root, name+".expected"))
+		qt.Assert(t, qt.IsNil(err))
+		out, stderr, err := runGoSource(t, name, string(source))
+		qt.Assert(t, qt.IsNil(err), qt.Commentf("%s stderr: %s", name, stderr))
+		qt.Assert(t, qt.Equals(out, string(want)), qt.Commentf("case %s", name))
+	}
+}

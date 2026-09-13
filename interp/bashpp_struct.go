@@ -723,6 +723,9 @@ func (r *Runner) bashPPReadExpr(expr syntax.BashPPExpr) (any, *bashPPCollectionM
 			return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-STORAGE: sequence payload has type %T", value)
 		}
 		if i < 0 || i >= len(sequence) {
+			if r.bashPPGoSource {
+				return nil, nil, r.bashPPSprint162CollectionBoundsPanic(x, i, len(sequence))
+			}
 			return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-BOUNDS: index %d out of bounds for length %d", i, len(sequence))
 		}
 		if i >= len(meta.sequence) {

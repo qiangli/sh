@@ -19,6 +19,23 @@ func bashPPSprint162ComplexCollectionText(value any) bool {
 	return ok && bashPPParseComplex(text).Kind() == constant.Complex
 }
 
+// bashPPSprint162CollectionBoundsPanic turns a dynamic indexing fault into
+// Go's recoverable runtime panic. Static constant bounds remain the checker's
+// responsibility and never reach this evaluator path.
+func (r *Runner) bashPPSprint162CollectionBoundsPanic(expr syntax.BashPPExpr, index, length int) error {
+	message := fmt.Sprintf("runtime error: index out of range [%d] with length %d", index, length)
+	if expr != nil {
+		r.bashPPPanic.traceSource = r.filename
+		r.bashPPPanic.traceLine = expr.Pos().Line()
+		r.bashPPPanic.traceFrames = r.bashPPPanic.traceFrames[:0]
+		for _, frame := range r.callStack {
+			r.bashPPPanic.traceFrames = append(r.bashPPPanic.traceFrames, frame.funcName)
+		}
+	}
+	r.bashPPRaise(message)
+	return errBashPPScalarInterrupted
+}
+
 // bashPPSprint162CollectionBridgeScalar validates a scalar which crossed the
 // dependency boundary in its transport wrapper. Non-finite floats cannot live
 // in the collection's JSON-shaped scalar payload, so the wrapper remains the
