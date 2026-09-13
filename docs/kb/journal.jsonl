@@ -26,3 +26,4 @@
 {"op":"add","slug":"deadline-measurements-need-kill-after-and-exact-survivor-scans","tool":"codex-gpt-5.5-p","host":"dragon","episode":"weave-issue-146","at":"2026-09-12T16:27:19.617615Z"}
 {"op":"add","slug":"recover-instantiated-generic-type-at-mirrored-callback-receiver","tool":"claude-t","host":"dragon","episode":"weave-issue-176","at":"2026-09-13T03:55:48.897176Z"}
 {"op":"validate","slug":"recover-instantiated-generic-type-at-mirrored-callback-receiver","tool":"claude-t","host":"dragon","episode":"weave-issue-176","at":"2026-09-13T03:55:52.657319Z"}
+{"op":"add","slug":"gate-string-carrier-numeric-conversions-by-source-type","tool":"codex-gpt-5.5-r","host":"dragon","episode":"weave-issue-200","at":"2026-09-13T22:04:26.269371Z"}

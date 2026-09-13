@@ -1141,6 +1141,9 @@ func (r *Runner) bashPPConvertScalar(typ string, x bashPPScalar) (bashPPScalar, 
 			return bashPPScalar{value: value, typ: typ, runtime: x.runtime}, nil
 		}
 	default:
+		if converted, ok, err := r.bashPPConvertGoSourceStringToUint64(typ, x); ok {
+			return converted, err
+		}
 		if bashPPIntegerType(typ) && (x.value.Kind() == constant.Int || x.value.Kind() == constant.Float) {
 			integer := constant.ToInt(x.value)
 			if r.bashPPGoSource && x.runtime {
@@ -1162,6 +1165,49 @@ func (r *Runner) bashPPConvertScalar(typ string, x bashPPScalar) (bashPPScalar, 
 		}
 	}
 	return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-CONVERT: cannot convert %s to %s", x.value.Kind(), typ)
+}
+
+func (r *Runner) bashPPConvertGoSourceStringToUint64(typ string, x bashPPScalar) (bashPPScalar, bool, error) {
+	if !r.bashPPGoSource || !x.runtime || typ != "uint64" || x.value.Kind() != constant.String {
+		return bashPPScalar{}, false, nil
+	}
+	source, ok := r.bashPPGoSourceStringCarrierType(x.typ)
+	if !ok || source == "string" {
+		return bashPPScalar{}, false, nil
+	}
+	switch source {
+	case "float32", "float64":
+		value := bashPPFloatText(constant.StringVal(x.value))
+		if value.Kind() != constant.Float {
+			return bashPPScalar{}, true, fmt.Errorf("BASHPP-EEXPR-CONVERT: cannot convert String to %s", typ)
+		}
+		converted, err := r.bashPPConvertScalar(typ, bashPPScalar{value: value, typ: source, runtime: true})
+		return converted, true, err
+	case "byte", "int", "int8", "int16", "int32", "int64", "rune",
+		"uint", "uint8", "uint16", "uint32", "uint64", "uintptr":
+		value := constant.MakeFromLiteral(constant.StringVal(x.value), token.INT, 0)
+		if value.Kind() != constant.Int || !bashPPIntegerRepresentable(source, value) {
+			return bashPPScalar{}, true, fmt.Errorf("BASHPP-EEXPR-CONVERT: cannot convert String to %s", typ)
+		}
+		converted, err := r.bashPPConvertScalar(typ, bashPPScalar{value: value, typ: source, runtime: true})
+		return converted, true, err
+	}
+	return bashPPScalar{}, false, nil
+}
+
+func (r *Runner) bashPPGoSourceStringCarrierType(typ string) (string, bool) {
+	if typ == "" {
+		return "", false
+	}
+	if bashPPBuiltinType(typ) {
+		return typ, true
+	}
+	named := &syntax.BashPPNamedType{Name: &syntax.Lit{Value: typ}}
+	shape, ok := r.bashPPUnderlyingType(named).(*syntax.BashPPNamedType)
+	if !ok || shape == named || shape.Name == nil || !bashPPBuiltinType(shape.Name.Value) {
+		return "", false
+	}
+	return shape.Name.Value, true
 }
 
 // bashPPStringRune implements Go's integer-to-string conversion. It is not an
