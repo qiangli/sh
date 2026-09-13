@@ -607,6 +607,9 @@ func (r *Runner) bashPPBinaryScalar(op token.Token, left, right bashPPScalar) (b
 		return bashPPScalar{value: constant.MakeBool(ok)}, nil
 	case token.QUO, token.REM:
 		if right.value.Kind() == constant.Int && constant.Sign(right.value) == 0 {
+			if r.bashPPGoSource {
+				return bashPPScalar{}, r.bashPPRaiseRuntimeError(bashPPRuntimeErrorString, bashPPRuntimeErrorMessage+"integer divide by zero")
+			}
 			return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-DIVZERO: division by zero")
 		}
 		if right.value.Kind() == constant.Float {

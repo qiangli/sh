@@ -73,6 +73,10 @@ type bashPPPanicState struct {
 	traceSource string
 	traceLine   uint
 	traceFrames []string
+	// recovered is the payload the most recent successful recover took, kept
+	// so a statement binding recover's result (`p := recover()`) can present
+	// the typed interface value rather than its rendered text.
+	recovered *bashPPInterfaceValue
 }
 
 // value is the payload a recover would take: the most recent panic's.
@@ -145,11 +149,15 @@ func (r *Runner) bashPPPredeclared(name string, c *syntax.BashPPCall, args []str
 			}
 			if scalar, err := r.bashPPEvalScalarExpr(c.ArgExprs[0]); err == nil {
 				if _, alreadyInterface := value.(*bashPPInterfaceValue); !alreadyInterface {
-					value = bashPPScalarAny(scalar.value)
+					value = r.bashPPPanicScalarValue(scalar)
 				}
 			}
 		}
-		r.bashPPRaiseValue(args[0], value)
+		text := args[0]
+		if r.bashPPGoSource {
+			value, text = r.bashPPPanicArgument(c, value, text)
+		}
+		r.bashPPRaiseValue(text, value)
 		return nil, false
 	case "recover":
 		if len(args) != 0 {
@@ -158,6 +166,10 @@ func (r *Runner) bashPPPredeclared(name string, c *syntax.BashPPCall, args []str
 			return nil, false
 		}
 		value, ok := r.bashPPRecover()
+		r.bashPPPanic.recovered = nil
+		if ok && r.bashPPGoSource {
+			r.bashPPPanic.recovered = bashPPBoxPanicValue(value)
+		}
 		r.exit = exitStatus{}
 		r.exit.oneIf(!ok)
 		// "nothing to recover" is this call's ANSWER, not a failed command:

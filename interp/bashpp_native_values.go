@@ -304,6 +304,12 @@ func (r *Runner) bashPPBridgeExpr(expr syntax.BashPPExpr) (bashPPBridgeValue, er
 			}
 		}
 	case *syntax.BashPPCall:
+		// `fmt.Println(recover())`: the recovered value crosses as the
+		// interface value it is, with its dynamic type.
+		if r.bashPPPredeclaredRecover(x) {
+			iv, _ := r.bashPPRecoverInterfaceValue()
+			return r.bashPPBridgeCell(&bashPPCell{declType: &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "any"}}, interfaceValue: iv})
+		}
 		if r.bashPPBridgeHandles(x) {
 			values, err := r.bashPPBridgeCall(r.ectx, x)
 			if err != nil {
@@ -640,6 +646,9 @@ func (r *Runner) bashPPBridgeCollection(value any, meta *bashPPCollectionMeta, t
 		if meta.interfaceValue.nilIface || cell == nil {
 			return bashPPBridgeValue{Kind: "nil"}, nil
 		}
+		if bashPPRuntimeErrorType(meta.interfaceValue.dynamic) {
+			return bashPPBridgeValue{Kind: "string", Text: bashPPRuntimeErrorText(meta.interfaceValue)}, nil
+		}
 		if cell.pointer {
 			if r.bashPPGoSource {
 				return r.bashPPBridgeCell(cell)
@@ -901,6 +910,9 @@ func (r *Runner) bashPPBridgeCell(cell *bashPPCell) (bashPPBridgeValue, error) {
 	if cell.interfaceValue != nil {
 		if cell.interfaceValue.nilIface {
 			return bashPPBridgeValue{Kind: "nil"}, nil
+		}
+		if bashPPRuntimeErrorType(cell.interfaceValue.dynamic) {
+			return bashPPBridgeValue{Kind: "string", Text: bashPPRuntimeErrorText(cell.interfaceValue)}, nil
 		}
 		value, err := r.bashPPBridgeCell(cell.interfaceValue.cell)
 		if err == nil && r.bashPPGoSource {

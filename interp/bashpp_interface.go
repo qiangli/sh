@@ -51,6 +51,9 @@ func (r *Runner) bashPPInterfaceType(typ syntax.BashPPTypeExpr) (*syntax.BashPPI
 		if !found && named.Name.Value == "error" {
 			return bashPPPredeclaredErrorInterface(), true
 		}
+		if !found && named.Name.Value == "runtime.Error" && r.bashPPGoSource {
+			return bashPPRuntimeErrorInterface(), true
+		}
 		if !found || decl.typeExpr == nil {
 			return nil, false
 		}
@@ -216,6 +219,9 @@ func (r *Runner) bashPPImplements(actual syntax.BashPPTypeExpr, iface *syntax.Ba
 	// type terms are the caller's separate check.
 	if methods, err := r.bashPPInterfaceMethodSet("interface", iface, make(map[string]bool)); err == nil && len(methods.order) == 0 {
 		return nil
+	}
+	if bashPPRuntimeErrorType(actual) {
+		return r.bashPPRuntimeErrorImplements(actual, iface)
 	}
 	if actualIface, ok := r.bashPPInterfaceType(actual); ok {
 		actualSet, err := r.bashPPInterfaceMethodSet(bashPPTypeText(actual), actualIface, make(map[string]bool))
@@ -800,6 +806,9 @@ func (r *Runner) bashPPTypeAssertCell(assert *syntax.BashPPTypeAssertExpr, comma
 			}
 			bashPPStoreCellValue(zero, value, meta)
 			return []string{zero.vr.Str, "false"}, zero, nil
+		}
+		if r.bashPPGoSource {
+			return nil, nil, r.bashPPRaiseRuntimeError(bashPPRuntimeTypeAssert, r.goSourceTypeAssertionFailure(cell.declType, iv, assert.Assert, assertIface))
 		}
 		return nil, nil, fmt.Errorf("BASHPP-EASSERT-FAIL: interface value has dynamic type %s, not %s", bashPPTypeText(iv.dynamic), bashPPTypeText(assert.Assert))
 	}

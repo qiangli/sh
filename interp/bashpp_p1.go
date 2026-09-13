@@ -887,6 +887,9 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 				return
 			}
 			values, source, err := r.bashPPTypeAssert(assert, len(d.Lhs) == 2)
+			if errors.Is(err, errBashPPScalarInterrupted) {
+				return
+			}
 			if err != nil {
 				r.errf("%v\n", err)
 				// A one-result failed assertion is a language-level panic in Go.
@@ -1919,8 +1922,14 @@ func (r *Runner) bashPPDeclareRecoverInterface(name, value string, recovered boo
 	if cell == nil {
 		return
 	}
+	cell.declType = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "any"}}
 	if !recovered {
 		cell.interfaceValue = &bashPPInterfaceValue{nilIface: true}
+		return
+	}
+	if iv := r.bashPPPanic.recovered; iv != nil && iv.cell != nil {
+		cell.interfaceValue = iv
+		cell.vr, cell.scalarKind = iv.cell.vr, iv.cell.scalarKind
 		return
 	}
 	stringType := &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "string"}}

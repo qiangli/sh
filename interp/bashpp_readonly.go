@@ -105,6 +105,9 @@ func (r *Runner) bashPPAssign(ctx context.Context, assign *syntax.BashPPAssign) 
 	cell := r.bashPPScope.lookup(target)
 	if syntax.BashPPValidIdent(target) && cell != nil && cell.pointer && assign.ValueExpr != nil {
 		value, meta, err := r.bashPPEvalTypedValue(assign.ValueExpr, cell.declType)
+		if errors.Is(err, errBashPPScalarInterrupted) {
+			return
+		}
 		if err != nil {
 			r.errf("BASHPP-EASSIGN-MISMATCH: %v\n", err)
 			r.exit = exitStatus{code: 2}
@@ -248,6 +251,9 @@ func (r *Runner) bashPPTupleAssign(assign *syntax.BashPPAssign) {
 		// `f = i.(float64)` is an assertion, not a scalar expression, and its
 		// one-result form panics rather than yielding a value when it fails.
 		if cell, handled, err := r.bashPPAssertCandidate(expr); handled {
+			if errors.Is(err, errBashPPScalarInterrupted) {
+				return
+			}
 			if err != nil {
 				r.errf("%s%v\n", r.bashErrPrefix(expr.Pos()), err)
 				r.exit = exitStatus{code: 2}
@@ -331,6 +337,9 @@ func (r *Runner) bashPPTupleAssign(assign *syntax.BashPPAssign) {
 			continue
 		}
 		value, err := r.bashPPEvalScalarExpr(expr)
+		if errors.Is(err, errBashPPScalarInterrupted) {
+			return
+		}
 		if err != nil {
 			if !errors.Is(err, errBashPPScalarInterrupted) {
 				r.errf("%s%v\n", r.bashErrPrefix(expr.Pos()), err)

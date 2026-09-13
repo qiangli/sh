@@ -59,3 +59,42 @@ func TestBashPPSprint162StructFieldRace(t *testing.T) {
 		}
 	}
 }
+
+// TestBashPPSprint162RuntimeErrorPanics: Go run-time errors (integer divide
+// by zero, a failed one-result type assertion, panic(nil)) are recoverable
+// panics whose value satisfies error and runtime.Error and renders the
+// runtime's wording; an unrecovered one reports `panic: …` and exits 2.
+func TestBashPPSprint162RuntimeErrorPanics(t *testing.T) {
+	out, err := bashPPSprint162Control4Run(t, "runtime_error", "recoverable")
+	if err == nil {
+		t.Fatalf("unrecovered panic did not fail the run; output=%q", out)
+	}
+	if want := bashPPSprint162Control4Expected(t, "runtime_error", "recoverable"); out != want {
+		t.Fatalf("output:\n%s\nwant:\n%s", out, want)
+	}
+}
+
+// TestBashPPSprint162RuntimeErrorClassicNegative: the classic Bash++ surface
+// keeps its diagnostic and its non-committing update for the same condition.
+func TestBashPPSprint162RuntimeErrorClassicNegative(t *testing.T) {
+	source, err := os.ReadFile(filepath.Join("testdata", "sprint162", "interp-control-4", "runtime_error", "classic_negative.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(string(source)), "classic_negative.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	runner, err := New(Lang(syntax.LangBashPP), StdIO(nil, &out, &out))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Classic semantics: the diagnostic is reported, the update does not
+	// commit, and the script carries on — nothing unwinds and no `panic:`
+	// report appears.
+	err = runner.Run(context.Background(), file)
+	if err != nil || !strings.Contains(out.String(), "BASHPP-EEXPR-DIVZERO") || !strings.Contains(out.String(), "unreachable 7") || strings.Contains(out.String(), "panic") {
+		t.Fatalf("classic division by zero: err=%v output=%q", err, out.String())
+	}
+}

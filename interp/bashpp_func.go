@@ -49,6 +49,7 @@ type bashPPFunc struct {
 	native           *bashPPBridgeValue
 	rangeYield       *goSourceRangeYield
 	collectYield     *[]bashPPBridgeValue
+	runtimeError     *bashPPRuntimeErrorCall
 	decl             *syntax.BashPPFuncDecl
 	lit              *syntax.BashPPFuncLit
 	scope            *bashPPScope
@@ -1370,6 +1371,9 @@ func (r *Runner) bashPPBindInterfaceMethod(iv *bashPPInterfaceValue, method stri
 		r.exit.code = 2
 		return nil, false
 	}
+	if bashPPRuntimeErrorType(iv.dynamic) {
+		return r.bashPPRuntimeErrorMethod(iv, method)
+	}
 	sel := r.bashPPResolveSelection(iv.dynamic, method, true, false)
 	if sel.ambiguous {
 		r.errf("BASHPP-ESELECTOR-AMBIGUOUS: ambiguous selector %s.%s\n", bashPPTypeText(iv.dynamic), method)
@@ -1823,6 +1827,9 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 	r.bashPPCallSpread = false
 	if fn.native != nil {
 		return r.goSourceInvokeNative(ctx, fn, args, callCells)
+	}
+	if fn.runtimeError != nil {
+		return r.bashPPInvokeRuntimeErrorMethod(fn)
 	}
 	if fn.rangeYield != nil {
 		return r.goSourceInvokeRangeYield(ctx, fn, args, callCells)

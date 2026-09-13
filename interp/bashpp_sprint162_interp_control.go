@@ -15,8 +15,14 @@ func (r *Runner) bashPPRecoverInterfaceValue() (*bashPPInterfaceValue, bool) {
 	if !ok {
 		return &bashPPInterfaceValue{nilIface: true}, false
 	}
+	return bashPPBoxPanicValue(value), true
+}
+
+// bashPPBoxPanicValue is the interface value a recovered panic payload
+// presents: an interface value as itself, a scalar boxed by its kind.
+func bashPPBoxPanicValue(value any) *bashPPInterfaceValue {
 	if iv, ok := value.(*bashPPInterfaceValue); ok {
-		return iv, true
+		return iv
 	}
 	constantValue := bashPPScalarConstant(value)
 	kind := constantValue.Kind()
@@ -26,7 +32,7 @@ func (r *Runner) bashPPRecoverInterfaceValue() (*bashPPInterfaceValue, bool) {
 		exactScalar: constantValue, scalarKind: kind,
 		declType: &syntax.BashPPNamedType{Name: &syntax.Lit{Value: typ}},
 	}
-	return &bashPPInterfaceValue{dynamic: cell.declType, cell: cell}, true
+	return &bashPPInterfaceValue{dynamic: cell.declType, cell: cell}
 }
 
 func bashPPScalarConstant(value any) constant.Value {
