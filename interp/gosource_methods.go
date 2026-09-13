@@ -57,6 +57,11 @@ func (r *Runner) goSourceLocalMethod(expr *syntax.BashPPSelectorExpr, afterArgs 
 	}
 	var fn *bashPPFunc
 	var ok bool
+	// A computed receiver the dependency owns binds its method there; see
+	// bashpp_sprint165_runtime_panic.go.
+	if native, claimed, err := r.goSourceNativeReceiverMethod(receiver, expr.Sel.Value); claimed {
+		return native, err
+	}
 	if receiver.interfaceValue != nil {
 		fn, ok = r.bashPPBindInterfaceMethod(receiver.interfaceValue, expr.Sel.Value)
 	} else {

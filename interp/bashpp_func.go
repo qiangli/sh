@@ -1374,6 +1374,15 @@ func (r *Runner) bashPPBindInterfaceMethod(iv *bashPPInterfaceValue, method stri
 	if bashPPRuntimeErrorType(iv.dynamic) {
 		return r.bashPPRuntimeErrorMethod(iv, method)
 	}
+	// A dependency-owned dynamic value binds its method there; see
+	// bashpp_sprint165_runtime_panic.go.
+	if native, claimed, err := r.goSourceNativeReceiverMethod(iv.cell, method); claimed {
+		if err != nil {
+			r.exit.fatal(err)
+			return nil, false
+		}
+		return native, true
+	}
 	sel := r.bashPPResolveSelection(iv.dynamic, method, true, false)
 	if sel.ambiguous {
 		r.errf("BASHPP-ESELECTOR-AMBIGUOUS: ambiguous selector %s.%s\n", bashPPTypeText(iv.dynamic), method)
@@ -1384,6 +1393,9 @@ func (r *Runner) bashPPBindInterfaceMethod(iv *bashPPInterfaceValue, method stri
 		r.errf("type %s has no method %s\n", bashPPTypeText(iv.dynamic), method)
 		r.exit.code = 2
 		return nil, false
+	}
+	if wrapper := r.goSourcePanicWrap(iv, sel, method); wrapper != nil {
+		return wrapper, true
 	}
 	return r.bashPPBindPromotedMethod(iv.cell, method, sel, false)
 }
@@ -2441,6 +2453,12 @@ func (r *Runner) bashPPReturnStmt(ctx context.Context, ret *syntax.BashPPReturn)
 		}
 		fn, ok := r.bashPPLookupFunc(ret.Call)
 		if !ok {
+			// A lookup that raised — a method selected on a nil interface —
+			// is unwinding the frame; marking it failed as well would make
+			// the frame exit 2 after a deferred call has recovered the panic.
+			if r.bashPPPanicking() {
+				return
+			}
 			r.bashPPShortFailureSeq++
 			if r.exit.code == 0 {
 				r.errf("BASHPP-ERETURN-CALL: return requires a declared callable\n")

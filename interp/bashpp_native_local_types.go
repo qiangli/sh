@@ -132,6 +132,15 @@ func (r *Runner) bashPPLocalTypeDescriptors() []bashPPLocalType {
 		}
 		return true
 	})
+	// The instantiations the program only reaches — through a generic
+	// function's result, a generic method body, a nested instantiation —
+	// carry the same run-time identity as the ones it spells; see
+	// bashpp_sprint165_runtime_instantiations.go.
+	for wire, named := range r.bashPPReachedInstantiations() {
+		if _, spelled := instantiations[wire]; !spelled {
+			instantiations[wire] = named
+		}
+	}
 	// A name used in two scopes denotes distinct Go types even when their
 	// fields are identical. Do not let either name escape through the helper.
 	for name := range ambiguous {
@@ -159,7 +168,7 @@ func (r *Runner) bashPPLocalTypeDescriptors() []bashPPLocalType {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	local := &bashPPLocalTypeSet{declared: declared, imports: r.bashPPImports}
+	local := &bashPPLocalTypeSet{declared: declared, imports: r.bashPPImports, generics: generics}
 	var out []bashPPLocalType
 	for _, name := range names {
 		if bashPPHelperReserved[name] {
@@ -270,10 +279,7 @@ func (r *Runner) bashPPLocalTypeDescriptors() []bashPPLocalType {
 		if !ok {
 			continue
 		}
-		name := fmt.Sprintf("bppInstance_%x", sha256.Sum256([]byte(wire)))
-		for declared[name] != nil || bashPPHelperReserved[name] {
-			name += "_"
-		}
+		name := local.instanceName(wire)
 		materialised := bashPPLocalType{Name: name, Decl: decl, WireType: wire, Callback: named.Name.Value, Methods: mirrored, refs: local.refs}
 		for _, method := range methods[named.Name.Value] {
 			seen := false
@@ -345,6 +351,9 @@ func (r *Runner) bashPPLocalTypeDescriptors() []bashPPLocalType {
 type bashPPLocalTypeSet struct {
 	declared map[string]syntax.BashPPTypeExpr
 	imports  map[string]string
+	// generics are the local generic type declarations, so an instantiated
+	// spelling inside a rendered body resolves to its materialised name.
+	generics map[string]*syntax.BashPPDecl
 	// refs records every declared local name the current rendering mentions,
 	// so a declaration is only emitted when everything it names is too.
 	refs map[string]bool
@@ -355,6 +364,50 @@ type bashPPLocalTypeSet struct {
 	// parameters: every parameter is bound by the instantiation, and only the
 	// fixed-signature String/Error/Read stubs are mirrored for them.
 	instantiated bool
+}
+
+// embeddedInstantiation reports an embedded field spelled as a local generic
+// instantiation, directly or through a pointer.
+func (l *bashPPLocalTypeSet) embeddedInstantiation(typ syntax.BashPPTypeExpr) bool {
+	if ptr, ok := typ.(*syntax.BashPPPointerType); ok {
+		typ = ptr.Element
+	}
+	named, ok := typ.(*syntax.BashPPNamedType)
+	return ok && named.Name != nil && len(named.TypeArgs) > 0 && l.generics[named.Name.Value] != nil
+}
+
+// instanceName is the generated helper name of one instantiation spelling.
+func (l *bashPPLocalTypeSet) instanceName(wire string) string {
+	name := fmt.Sprintf("bppInstance_%x", sha256.Sum256([]byte(wire)))
+	for l.declared[name] != nil || bashPPHelperReserved[name] {
+		name += "_"
+	}
+	return name
+}
+
+// instanceRef renders an instantiated local generic type — `Box[T]` inside
+// a generic body, `Wrap[Box[int]]` as a type argument — as the generated
+// name its own materialisation carries, with the bindings in force applied
+// to the arguments. The reference keeps the materialised set
+// dependency-closed: a spelling whose instantiation is not itself emitted
+// drops the declaration that names it.
+func (l *bashPPLocalTypeSet) instanceRef(t *syntax.BashPPNamedType, depth int) (string, bool) {
+	if t.Name == nil || l.generics[t.Name.Value] == nil {
+		return "", false
+	}
+	args := make([]string, len(t.TypeArgs))
+	for i, arg := range t.TypeArgs {
+		rendered, ok := l.source(arg.ArgType, depth+1)
+		if !ok {
+			return "", false
+		}
+		args[i] = rendered
+	}
+	name := l.instanceName(t.Name.Value + "[" + strings.Join(args, ", ") + "]")
+	if l.refs != nil {
+		l.refs[name] = true
+	}
+	return name, true
 }
 
 // mirrored reports the method set the helper stubs out. String/Error and Read
@@ -546,7 +599,7 @@ func (l *bashPPLocalTypeSet) source(typ syntax.BashPPTypeExpr, depth int) (strin
 		return "", false
 	case *syntax.BashPPNamedType:
 		if len(t.TypeArgs) > 0 {
-			return "", false
+			return l.instanceRef(t, depth)
 		}
 		name := t.Name.Value
 		if s, ok := l.subst[name]; ok {
@@ -625,6 +678,15 @@ func (l *bashPPLocalTypeSet) source(typ syntax.BashPPTypeExpr, depth int) (strin
 			// element type, so promotion and the promoted method set are the
 			// dependency's own Go semantics rather than an imitation.
 			if field.Embedded {
+				// An embedded instantiated generic type stays refused: the
+				// helper would embed it under its generated name while the
+				// interpreter transports the storage under the promoted
+				// original name, and the two would not address the same
+				// field. (Sprint 153's recorded refusal; the instantiation
+				// itself is materialised, see instanceRef.)
+				if l.embeddedInstantiation(field.FieldTypeExpr) {
+					return "", false
+				}
 				element, ok := l.source(field.FieldTypeExpr, depth+1)
 				if !ok {
 					return "", false

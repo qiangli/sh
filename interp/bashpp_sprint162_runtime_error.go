@@ -169,9 +169,20 @@ func (r *Runner) bashPPRuntimeErrorMethod(iv *bashPPInterfaceValue, method strin
 type bashPPRuntimeErrorCall struct {
 	text   string
 	method string
+	// panicWrap is set on the itab wrapper of a value method reached through
+	// a nil pointer in an interface: invoking it raises the runtime's
+	// panicwrap fault instead of running a body. See
+	// bashpp_sprint165_runtime_panic.go.
+	panicWrap *bashPPInterfaceValue
 }
 
 func (r *Runner) bashPPInvokeRuntimeErrorMethod(fn *bashPPFunc) []string {
+	if fn.runtimeError.panicWrap != nil {
+		r.bashPPResultCells = nil
+		r.bashPPPanicTrace(nil)
+		r.bashPPRaiseValue(fn.runtimeError.text, fn.runtimeError.panicWrap)
+		return nil
+	}
 	if fn.runtimeError.method != "Error" {
 		r.bashPPResultCells = nil
 		return nil

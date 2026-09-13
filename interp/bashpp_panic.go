@@ -164,8 +164,18 @@ func (r *Runner) bashPPPredeclared(name string, c *syntax.BashPPCall, args []str
 		r.bashPPPanicTrace(c)
 		var value any = args[0]
 		if r.bashPPGoSource && len(c.ArgExprs) == 1 {
-			if cell, err := r.bashPPStructuredArgCell(c.Args[0], c.ArgExprs[0]); err == nil && cell != nil && cell.interfaceValue != nil {
-				value = cell.interfaceValue
+			if cell, err := r.bashPPStructuredArgCell(c.Args[0], c.ArgExprs[0]); err == nil && cell != nil {
+				if cell.interfaceValue != nil {
+					value = cell.interfaceValue
+				} else if boxed := r.goSourcePanicStructuredValue(cell); boxed != nil {
+					value = boxed
+				}
+			} else if boxed, text, ok := r.goSourcePanicNativeValue(c.ArgExprs[0]); ok {
+				if boxed == nil {
+					return nil, false
+				}
+				r.bashPPRaiseValue(text, boxed)
+				return nil, false
 			}
 			if scalar, err := r.bashPPEvalScalarExpr(c.ArgExprs[0]); err == nil {
 				if _, alreadyInterface := value.(*bashPPInterfaceValue); !alreadyInterface {
@@ -227,6 +237,15 @@ func (r *Runner) bashPPPredeclared(name string, c *syntax.BashPPCall, args []str
 // could recover it, so the panic is reported and terminates the shell at once
 // rather than pretending to look for a handler that cannot exist.
 func (r *Runner) bashPPRaise(value string) {
+	// A runtime fault raised by its message alone still panics with the
+	// runtime's error value in an original Go program; see
+	// bashpp_sprint165_runtime_panic.go.
+	if r.bashPPGoSource {
+		if payload, ok := bashPPRuntimeErrorPayload(value); ok {
+			r.bashPPRaiseValue(value, payload)
+			return
+		}
+	}
 	r.bashPPRaiseValue(value, value)
 }
 

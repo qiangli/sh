@@ -36,6 +36,9 @@ func (r *Runner) bashPPBridgeHandles(call *syntax.BashPPCall) bool {
 		if _, ok := r.bashPPImports[call.Fun[0].Value]; ok {
 			return true
 		}
+		if len(call.Fun) == 2 && r.goSourceOriginalMethodCall(call.Fun[0].Value, call.Fun[1].Value) {
+			return false
+		}
 		if r.bashPPNativeCellValue(call.Fun[0].Value) != nil {
 			return true
 		}
@@ -457,7 +460,8 @@ func (r *Runner) bashPPBridgeExpr(expr syntax.BashPPExpr) (bashPPBridgeValue, er
 	if err != nil {
 		return value, err
 	}
-	return r.bashPPBridgeDefinedScalar(value)
+	value, err = r.bashPPBridgeDefinedScalar(value)
+	return bashPPBridgeInstantiatedScalar(value, r.bashPPExprScalarType(expr)), err
 }
 
 // bashPPBridgeFloatText normalises one shell-held float, including the exact
@@ -534,9 +538,15 @@ func (r *Runner) bashPPBridgePointerValue(ptr *bashPPPointer) (bashPPBridgeValue
 	if err != nil {
 		return bashPPBridgeValue{}, err
 	}
-	inner, err := r.bashPPBridgeCollection(value, meta, typ)
+	inner, isInterface, err := r.goSourceInterfacePointee(ptr)
 	if err != nil {
 		return bashPPBridgeValue{}, err
+	}
+	if !isInterface {
+		inner, err = r.bashPPBridgeCollection(value, meta, typ)
+		if err != nil {
+			return bashPPBridgeValue{}, err
+		}
 	}
 	req, err := r.bashPPEvalRequest()
 	if err != nil {
@@ -560,7 +570,12 @@ func (r *Runner) bashPPBridgePointerValue(ptr *bashPPPointer) (bashPPBridgeValue
 		session.origins[origin] = ptr
 	}
 	session.mu.Unlock()
-	return bashPPBridgeValue{Origin: origin, Session: session.id, Kind: "pointer", Type: "*" + inner.Type, Elements: []bashPPBridgeValue{inner}}, nil
+	pointerType := "*" + inner.Type
+	if isInterface {
+		// The pointee is the interface variable, whatever it holds.
+		pointerType = "*" + inner.Interface
+	}
+	return bashPPBridgeValue{Origin: origin, Session: session.id, Kind: "pointer", Type: pointerType, Elements: []bashPPBridgeValue{inner}}, nil
 }
 
 func (s *bashPPNativeSession) applyNativePointerUpdates(req bashPPEvalRequest, reply bashPPBridgeResponse) error {
@@ -666,7 +681,8 @@ func (r *Runner) bashPPBridgeCollection(value any, meta *bashPPCollectionMeta, t
 		if bashPPRuntimeErrorType(cell.declType) {
 			return bashPPBridgeValue{Kind: "string", Text: cell.vr.String()}, nil
 		}
-		return bridgeScalar(r.bashPPScalarFromCell(cell))
+		scalar, err := bridgeScalar(r.bashPPScalarFromCell(cell))
+		return bashPPBridgeInstantiatedScalar(scalar, cell.declType), err
 	}
 	if meta != nil && meta.typ != nil {
 		typ = meta.typ
@@ -950,5 +966,6 @@ func (r *Runner) bashPPBridgeCell(cell *bashPPCell) (bashPPBridgeValue, error) {
 	if bashPPRuntimeErrorType(cell.declType) {
 		return bashPPBridgeValue{Kind: "string", Text: cell.vr.String()}, nil
 	}
-	return bridgeScalar(r.bashPPScalarFromCell(cell))
+	scalar, err := bridgeScalar(r.bashPPScalarFromCell(cell))
+	return bashPPBridgeInstantiatedScalar(scalar, cell.declType), err
 }

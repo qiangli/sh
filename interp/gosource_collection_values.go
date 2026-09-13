@@ -247,7 +247,7 @@ func (r *Runner) goSourceBridgeCollectionRead(expr syntax.BashPPExpr) (bashPPBri
 		return result, true, err
 	}
 	result, err = r.bashPPBridgeDefinedScalar(result)
-	return result, true, err
+	return bashPPBridgeInstantiatedScalar(result, cell.declType), true, err
 }
 func (r *Runner) goSourceCollectionReadCell(expr syntax.BashPPExpr, value any, meta *bashPPCollectionMeta) *bashPPCell {
 	cell := &bashPPCell{declType: r.bashPPExprScalarType(expr)}

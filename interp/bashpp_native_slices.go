@@ -82,6 +82,9 @@ func nativeSliceReadOnly(name string) bool {
 		// reflect.TypeOf reads only the argument's type: no element storage is
 		// retained or written, and no mirrored method is invoked.
 		"reflect.TypeOf",
+		// reflect.DeepEqual walks both transported values and answers a bool;
+		// it retains neither, writes nothing and invokes no method.
+		"reflect.DeepEqual",
 		// Structural value emitters — the marshalers walk the transported value
 		// tree and allocate their own output. Element storage is read only.
 		"encoding/json.Marshal", "encoding/json.MarshalIndent", "encoding/json/v2.Marshal",

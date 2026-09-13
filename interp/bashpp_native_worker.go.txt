@@ -79,11 +79,19 @@ func livePointers()([]uint64,[]reflect.Value){originalPointers.Lock();defer orig
 func writablePointee(kind string)bool{switch kind{case "string","bool","int","uint","float","complex","nil","handle","struct","slice","array","map":return true};return false}
 var handles = struct { sync.Mutex; next uint64; values map[uint64]reflect.Value; stop chan struct{} }{values: map[uint64]reflect.Value{},stop:make(chan struct{})}
 func typeID(t reflect.Type) string { if t.Name()!="" && t.PkgPath()!="" {return t.PkgPath()+"."+t.Name()}; return t.String() }
+// seenTypes registers every type this helper has handed the interpreter, by
+// the identity it was handed under. A value the interpreter sends back names
+// its type by that identity — a package path the program never imported
+// (hash.Hash behind md5.New), an instantiation — and resolves here whether or
+// not the fixed registry spells it.
+var seenTypes sync.Map
+func registerType(t reflect.Type) { if t!=nil { seenTypes.LoadOrStore(typeID(t),t) } }
 func nativeTypeID(t reflect.Type) string {if t.Kind()==reflect.Pointer{return "*"+nativeTypeID(t.Elem())};if t.Name()!=""&&t.PkgPath()!=""{return t.PkgPath()+"."+t.Name()};return t.String()}
 func encodeHandle(v reflect.Value,result value)value {handles.Lock();handles.next++;id:=handles.next;copy:=reflect.New(v.Type()).Elem();copy.Set(v);handles.values[id]=copy;handles.Unlock();result.Kind="handle";result.Handle=id;return result}
 func encode(v reflect.Value) value {
  if !v.IsValid() { return value{Kind:"nil"} }
- static:="";if v.Kind()==reflect.Interface {static=typeID(v.Type());if v.IsNil(){return value{Kind:"nil",Type:static,Interface:static}};v=v.Elem()}
+ static:="";if v.Kind()==reflect.Interface {registerType(v.Type());static=typeID(v.Type());if v.IsNil(){return value{Kind:"nil",Type:static,Interface:static}};v=v.Elem()}
+ registerType(v.Type())
  result:=value{Type:typeID(v.Type()),NativeType:nativeTypeID(v.Type()),Interface:static,Function:v.Kind()==reflect.Func}
  if v.Type().PkgPath()!=""&&v.Type().PkgPath()!="main"&&!token.IsExported(v.Type().Name()){return encodeHandle(v,result)}
  switch v.Kind(){
@@ -102,7 +110,8 @@ func encode(v reflect.Value) value {
 // body and needs the field names, element values and defined type name.
 func structural(v reflect.Value) value {
  if !v.IsValid() { return value{Kind:"nil"} }
- static:="";if v.Kind()==reflect.Interface {static=typeID(v.Type());if v.IsNil(){return value{Kind:"nil",Type:static,Interface:static}};v=v.Elem()}
+ static:="";if v.Kind()==reflect.Interface {registerType(v.Type());static=typeID(v.Type());if v.IsNil(){return value{Kind:"nil",Type:static,Interface:static}};v=v.Elem()}
+ registerType(v.Type())
  result:=value{Type:typeID(v.Type()),Interface:static}
  switch v.Kind(){
  case reflect.Pointer:if pkg:=v.Type().Elem().PkgPath();pkg!=""&&pkg!="main"{encoded:=encode(v);encoded.Interface=static;return encoded};if v.IsNil(){return value{Kind:"nil",Type:result.Type,Interface:static}};inner:=structural(v.Elem());inner.Interface=static;originalPointers.Lock();inner.Origin=originalPointers.ids[v.Pointer()];originalPointers.Unlock();return inner
@@ -139,6 +148,11 @@ func(p originalCallbackPanic)Error()string{return p.value.Text}
 func resolveType(name string) reflect.Type {
  if typ:=types[name];typ!=nil{return typ}
  if t:=types[localTypeKey(name)];t!=nil{return t}
+ if t,ok:=seenTypes.Load(name);ok{return t.(reflect.Type)}
+ // The interpreter spells a pointer to a value it was handed as "*" and the
+ // identity it was handed — "*sync/atomic.Uint64" — which is not a Go
+ // expression; the pointee identity resolves and the pointer is built on it.
+ if len(name)>1&&name[0]=='*' {if element:=resolveType(name[1:]);element!=nil{return reflect.PointerTo(element)}}
  expression,err:=parser.ParseExpr(name);if err!=nil{return nil}
  var walk func(ast.Expr) reflect.Type
  walk=func(expr ast.Expr) reflect.Type {var canonical bytes.Buffer;if format.Node(&canonical,token.NewFileSet(),expr)==nil {if typ:=types[canonical.String()];typ!=nil{return typ}};switch e:=expr.(type){

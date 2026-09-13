@@ -133,6 +133,11 @@ func (r *Runner) goSourceValueCells(expr syntax.BashPPExpr, spread bool) ([]*bas
 				return nil, fmt.Errorf("Go value requires one result")
 			}
 			return cells, nil
+		} else if r.bashPPPanicHalts() || r.exit.code != 0 {
+			// The callee lookup itself raised — a method selected on a nil
+			// interface — or reported; evaluating the call again below would
+			// raise a second panic inside the unwinding of the first.
+			return nil, errBashPPScalarInterrupted
 		}
 	}
 	if r.bashPPNativeExpr(expr) {

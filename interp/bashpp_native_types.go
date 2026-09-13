@@ -114,6 +114,7 @@ func (r *Runner) bashPPNativeCompareValues(lv bashPPBridgeValue, op token.Token,
 	if err != nil {
 		return false, err
 	}
+	lv, rv = bashPPBridgeCompareOperands(lv, rv)
 	values, err := r.bashPPNativeRequest(r.ectx, req, bashPPBridgeRequest{Op: "equal", Args: []bashPPBridgeValue{lv, rv}})
 	if err != nil {
 		return false, err

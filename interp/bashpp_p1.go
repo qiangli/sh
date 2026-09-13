@@ -270,6 +270,13 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 	vr := r.bashPPValue(ctx, d.Init)
 	if lit, ok := d.InitExpr.(*syntax.BashPPFuncLit); ok {
 		_, vr = r.bashPPMakeClosure(lit)
+	} else if r.bashPPGoSource && d.Site == syntax.StartVar && d.InitExpr != nil {
+		// `var fn = f`, `var m = T.M`, `var g = Box[int]{}.Get`: a function
+		// value spelled by name binds the same closure `fn := f` binds; see
+		// bashpp_sprint165_runtime_panic.go.
+		if callable, ok := r.goSourceCallableDeclValue(d.InitExpr); ok {
+			vr = callable
+		}
 	}
 	if typed, handled, err := r.bashPPTypedScalarDeclValue(d); handled {
 		if err != nil {

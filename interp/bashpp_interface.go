@@ -783,7 +783,16 @@ func (r *Runner) bashPPTypeAssertCell(assert *syntax.BashPPTypeAssertExpr, comma
 	assertIface, assertingInterface := r.bashPPInterfaceType(assert.Assert)
 	matched := false
 	if !iv.nilIface {
-		if assertingInterface {
+		// A dependency-owned dynamic value asserted to an interface — local
+		// or imported — answers from the dependency; see
+		// bashpp_sprint165_runtime_panic.go.
+		native, claimed, err := r.goSourceNativeAssertsInterface(iv, assert.Assert)
+		if err != nil {
+			return nil, nil, err
+		}
+		if claimed {
+			matched, assertingInterface = native, true
+		} else if assertingInterface {
 			matched = r.bashPPImplements(iv.dynamic, assertIface) == nil
 		} else {
 			matched = bashPPInterfaceAssertTypeText(r.bashPPPredeclaredAliases(iv.dynamic)) == bashPPInterfaceAssertTypeText(r.bashPPPredeclaredAliases(assert.Assert)) ||
@@ -988,6 +997,18 @@ func typeCaseTypeMatches(r *Runner, iv *bashPPInterfaceValue, target syntax.Bash
 	}
 	if iv == nil || iv.nilIface {
 		return false
+	}
+	// A dependency-owned dynamic value against an interface case — local or
+	// imported — answers from the dependency; see
+	// bashpp_sprint165_runtime_panic.go. A refusal there is a diagnostic the
+	// switch statement reports, not a case that silently misses.
+	native, claimed, err := r.goSourceNativeAssertsInterface(iv, target)
+	if err != nil {
+		r.exit.fatal(err)
+		return false
+	}
+	if claimed {
+		return native
 	}
 	if iface, ok := r.bashPPInterfaceType(target); ok {
 		return r.bashPPImplements(iv.dynamic, iface) == nil
