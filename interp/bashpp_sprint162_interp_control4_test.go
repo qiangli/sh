@@ -181,3 +181,16 @@ func TestBashPPSprint162BlankDeclaration(t *testing.T) {
 		t.Fatalf("classic redeclaration: output=%q", classic.String())
 	}
 }
+
+// TestBashPPSprint162NilFuncCall: calling a nil function value — directly,
+// deferred, or as a conversion of nil to a func type — is a recoverable
+// run-time error; non-nil function values are called as before.
+func TestBashPPSprint162NilFuncCall(t *testing.T) {
+	out, err := bashPPSprint162Control4Run(t, "nil_func_call", "nil_call")
+	if err != nil {
+		t.Fatalf("run: %v, output=%q", err, out)
+	}
+	if want := bashPPSprint162Control4Expected(t, "nil_func_call", "nil_call"); out != want {
+		t.Fatalf("output:\n%s\nwant:\n%s", out, want)
+	}
+}

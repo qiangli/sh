@@ -50,3 +50,57 @@ func (r *Runner) bashPPFuncValueType(cell *bashPPCell) syntax.BashPPTypeExpr {
 	}
 	return nil
 }
+
+// bashPPNilFuncCall reports whether a call's callee is a nil function value:
+// a func-typed variable holding nil, or a conversion of nil to a func type
+// (`((func())(nil))()`). Calling one is a run-time error in Go, raised when
+// the call — or the deferred call — runs.
+func (r *Runner) bashPPNilFuncCall(c *syntax.BashPPCall) bool {
+	if c == nil || !r.bashPPGoSource {
+		return false
+	}
+	if c.CalleeExpr != nil {
+		return r.bashPPNilFuncConversion(c.CalleeExpr)
+	}
+	if len(c.Fun) != 1 || r.bashPPScope == nil || r.bashPPFuncs[c.Fun[0].Value] != nil {
+		return false
+	}
+	cell := r.bashPPScope.lookup(c.Fun[0].Value)
+	if !r.bashPPFuncTypedCell(cell) {
+		return false
+	}
+	switch cell.vr.Kind {
+	case expand.String:
+		_, closure := r.bashPPClosure(cell.vr.Str)
+		return cell.vr.Str == "" && !closure
+	case expand.Object:
+		native, ok := cell.vr.Obj.(*bashPPBridgeValue)
+		return ok && native != nil && native.Kind == "nil"
+	}
+	return false
+}
+
+func (r *Runner) bashPPNilFuncConversion(expr syntax.BashPPExpr) bool {
+	switch x := expr.(type) {
+	case *syntax.BashPPParenExpr:
+		return r.bashPPNilFuncConversion(x.X)
+	case *syntax.BashPPConvertExpr:
+		id, ok := x.X.(*syntax.BashPPIdent)
+		if !ok || id.Name.Value != "nil" || r.bashPPScope.lookup("nil") != nil {
+			return false
+		}
+		target := r.bashPPBindTypeExpr(r.bashPPConvertTarget(x))
+		if target == nil {
+			return false
+		}
+		_, isFunc := r.bashPPUnderlyingType(target).(*syntax.BashPPFuncType)
+		return isFunc
+	}
+	return false
+}
+
+// bashPPRaiseNilFuncCall raises the run-time error a call of a nil function
+// value produces.
+func (r *Runner) bashPPRaiseNilFuncCall() {
+	r.bashPPRaiseRuntimeError(bashPPRuntimeErrorString, bashPPRuntimeErrorMessage+"invalid memory address or nil pointer dereference")
+}

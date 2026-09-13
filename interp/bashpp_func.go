@@ -2628,6 +2628,10 @@ func (r *Runner) bashPPDeferStmt(ctx context.Context, d *syntax.BashPPDefer) {
 		entry.fn, entry.args = fn, args
 		entry.cells = r.bashPPCallCells
 		r.bashPPCallCells = nil
+	} else if r.bashPPNilFuncCall(d.Call) {
+		// The function value is fixed now and is nil; the run-time error is
+		// raised when the deferred call runs, as in Go.
+		entry.builtin = r.bashPPRaiseNilFuncCall
 	} else {
 		if r.exit.code != 0 {
 			return

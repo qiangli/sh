@@ -29,7 +29,7 @@ tree; the leaf manifests are the evidence.
 | `testdir:chancap.go`, `fixedbugs/bug279.go`, `bug292.go`, `bug339.go`, `bug479.go`, `bug517.go`, `issue15550.go`, `issue30709.go`, `issue53137.go`, `issue54220.go`, `issue60601.go`, `issue9604b.go` | `unsafe.Sizeof/Offsetof/Alignof` (and `unsafe.SliceData`, `issue57823`/`issue59293`) are constant expressions go/types has already evaluated; the interpreter has no memory layout and refuses them (`unknown imported symbol`, `BASHPP-ECONST-EXPR`) | constant folding of `unsafe` calls at the converter | **request to the gosource seam** (below); not fixed here |
 | `testdir:fixedbugs/issue11945.go` | `const _ = real(0)` — a constant builtin call the const predicate does not model | const predicate: `real`, `imag`, `complex`, `len`/`cap` of constants, `min`/`max` | not fixed (budget); same converter folding request covers it |
 | `testdir:fixedbugs/issue6866.go` | a package-level const group references constants declared in a LATER group; Go resolves package-level declarations in dependency order, the evaluator in source order | dependency-ordered package-level constant initialization | **design finding**; the converter is the natural place (request below) |
-| `testdir:fixedbugs/issue8047.go` | `defer ((func())(nil))()` — deferring a nil func value must panic when the deferred call runs | nil func call panic (runtime error family) | not fixed (budget) — the mechanism exists: raise `bashPPRuntimeErrorString` / `invalid memory address or nil pointer dereference` where the deferred callee resolves to a nil func |
+| `testdir:fixedbugs/issue8047.go` | `defer ((func())(nil))()` — a nil func value was deferred silently and never called; `f()` on a nil func variable was `unknown imported symbol or method: f` | nil function call (`nil_func_call/`) | fixed in the nil-func commit (see report) |
 | `testdir:fixedbugs/issue70156.go`, `bug434.go`, `typeparam/issue48225.go` | `reflect` on interpreter values / other | bridge / other lanes | not mine |
 
 ## Requests to other seams
@@ -84,8 +84,11 @@ mutation of interpreter-owned references is unsupported for Method`.
   no longer names struct storage`; `[]*T{{1}, {2}}` (elided `&T` in a
   composite literal) reports `BASHPP-ESTRUCT-TYPE: <inferred> is not a
   supported struct type`; `var x interface{} = g` for a declared function
-  `g` reports `BASHPP-EINTERFACE-VALUE: undefined value g`. All three are
-  expression-forms / nil-pointer lane shapes.
+  `g` reports `BASHPP-EINTERFACE-VALUE: undefined value g`, and `f = g`
+  (assigning a declared function to a func-typed variable) reports
+  `BASHPP-EASSIGN-UNDECLARED: RHS g is not declared`. All are
+  expression-forms / nil-pointer lane shapes (a declared function as a
+  value).
 - `fmt.Printf("%T", x)` for an interface holding a nil func prints
   `string`; the bridge has no func handle for a nil func value.
 

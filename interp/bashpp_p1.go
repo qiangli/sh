@@ -2038,8 +2038,10 @@ func (r *Runner) bashPPCall(ctx context.Context, c *syntax.BashPPCall) {
 	if r.goSourceWaitGroupGo(ctx, c) {
 		return
 	}
-	if r.goSourceNilFuncCallee(c) {
-		r.goSourceRuntimeFault(errBashPPNilDereference)
+	// Calling a nil function value is a run-time error, not an unknown
+	// callee; see bashpp_sprint162_func_value.go.
+	if r.bashPPNilFuncCall(c) {
+		r.bashPPRaiseNilFuncCall()
 		return
 	}
 	if r.bashPPBridgeHandles(c) {
