@@ -262,6 +262,7 @@ func Walk(node Node, f func(Node) bool) {
 		walkNilable(node.TargetExpr, f)
 		walkNilable(node.ValueExpr, f)
 		walkNilable(node.Call, f)
+		walkNilable(node.Recv, f)
 	case *BashPPShortDecl:
 		walkList(node.RhsExprs, f)
 		walkList(node.Lhs, f)

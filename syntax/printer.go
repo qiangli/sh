@@ -1835,6 +1835,10 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 			}
 			p.spacedString("=", cmd.Eq)
 			p.space()
+			if cmd.Recv != nil {
+				p.command(cmd.Recv, nil)
+				break
+			}
 			if cmd.Call != nil {
 				p.command(cmd.Call, nil)
 				break
@@ -1859,7 +1863,9 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 		p.word(cmd.Target)
 		p.spacedString("=", cmd.Eq)
 		p.space()
-		if cmd.Call != nil {
+		if cmd.Recv != nil {
+			p.command(cmd.Recv, nil)
+		} else if cmd.Call != nil {
 			p.command(cmd.Call, nil)
 		} else {
 			p.word(cmd.Value)

@@ -131,18 +131,47 @@ func bashppClassifyComm(pre []*Word, arrow Pos, post []*Word) Command {
 	if len(pre) == 0 {
 		return recv
 	}
-	// `v := <-ch` and `v, ok := <-ch`. Go allows the second value only for a
-	// receive, and only as the boolean that reports whether the channel was
-	// still open, so two names is the ceiling.
+	// `v := <-ch`, `v, ok := <-ch`, `v = <-ch`, and `v, ok = <-ch`.
+	// Go allows the second value only for a receive, and only as the boolean
+	// that reports whether the channel was still open, so two targets is the
+	// ceiling.
 	opLit := bashppBareLit(pre[len(pre)-1])
-	if opLit == nil || opLit.Value != ":=" {
+	if opLit == nil {
 		return nil
 	}
-	lhs, ok := bashppShortLHS(pre[:len(pre)-1])
-	if !ok || len(lhs) == 0 || len(lhs) > 2 {
+	switch opLit.Value {
+	case ":=":
+		lhs, ok := bashppShortLHS(pre[:len(pre)-1])
+		if !ok || len(lhs) == 0 || len(lhs) > 2 {
+			return nil
+		}
+		return &BashPPShortDecl{Lhs: lhs, Class: ClassE, OpPos: opLit.Pos(), GoRegion: true, Recv: recv}
+	case "=":
+		return bashppReceiveAssign(pre[:len(pre)-1], opLit.Pos(), recv)
+	default:
 		return nil
 	}
-	return &BashPPShortDecl{Lhs: lhs, Class: ClassE, OpPos: opLit.Pos(), GoRegion: true, Recv: recv}
+}
+
+// bashppReceiveAssign builds the same assignment node used for ordinary `=`
+// statements. Identifier lists retain Names for tuple assignment; a selector
+// or index target retains its typed address expression for the existing
+// assignment machinery.
+func bashppReceiveAssign(lhs []*Word, eq Pos, recv *BashPPReceive) *BashPPAssign {
+	if names, ok := bashppShortLHS(lhs); ok {
+		if len(names) == 0 || len(names) > 2 {
+			return nil
+		}
+		return &BashPPAssign{Names: names, Eq: eq, Recv: recv}
+	}
+	if len(lhs) != 1 {
+		return nil
+	}
+	target := bashppAssignmentTargetExpr(lhs[0])
+	if target == nil {
+		return nil
+	}
+	return &BashPPAssign{Target: lhs[0], TargetExpr: target, Eq: eq, Recv: recv}
 }
 
 // bashppChanOperand reports whether w names a channel plainly enough to be the

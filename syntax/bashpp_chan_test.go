@@ -225,6 +225,31 @@ func TestBashPPSelectArms(t *testing.T) {
 	qt.Assert(t, qt.HasLen(sel.Cases, 0))
 }
 
+func TestBashPPSelectReceiveAssignments(t *testing.T) {
+	t.Parallel()
+	src := bashppWrapFunc("select {\n\tcase value = <-ch:\n\tcase value, open = <-ch:\n\tcase pair.value = <-ch:\n\tcase values[0] = <-ch:\n\t}")
+	f := bashppRoundTrip(t, src)
+	cases := f.Stmts[0].Cmd.(*BashPPFuncDecl).Body.Stmts[0].Cmd.(*BashPPSelect).Cases
+	if got := len(cases); got != 4 {
+		t.Fatalf("cases = %d", got)
+	}
+	for i, arm := range cases {
+		assign, ok := arm.Comm.(*BashPPAssign)
+		if !ok || assign.Recv == nil {
+			t.Fatalf("case %d = %#v, want receive assignment", i, arm.Comm)
+		}
+	}
+	if names := cases[1].Comm.(*BashPPAssign).Names; len(names) != 2 || names[0].Value != "value" || names[1].Value != "open" {
+		t.Fatalf("tuple names = %#v", names)
+	}
+	if _, ok := cases[2].Comm.(*BashPPAssign).TargetExpr.(*BashPPSelectorExpr); !ok {
+		t.Fatalf("selector target = %T", cases[2].Comm.(*BashPPAssign).TargetExpr)
+	}
+	if _, ok := cases[3].Comm.(*BashPPAssign).TargetExpr.(*BashPPIndexExpr); !ok {
+		t.Fatalf("index target = %T", cases[3].Comm.(*BashPPAssign).TargetExpr)
+	}
+}
+
 // TestBashPPChanSelectCompactRoundTrip pins separators that source positions do
 // not supply when all arms occupy one line. The printer may normalize the
 // layout, but the printed form must reparse to the same arms and bodies.

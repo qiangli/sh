@@ -173,6 +173,8 @@ func (r *Runner) goSourceNativeSelect(ctx context.Context, cases []bashPPBridgeV
 		if len(decl.Lhs) == 2 {
 			r.bashPPDeclareName(decl.Lhs[1].Value, expand.Variable{Set: true, Kind: expand.String, Str: strconv.FormatBool(open)})
 		}
+	} else if assign, ok := arm.Comm.(*syntax.BashPPAssign); ok {
+		r.bashPPSelectReceiveAssign(assign, cell, open)
 	}
 	r.stmts(r.bashPPTaskContext(ctx), arm.Stmts)
 	if r.bashPPBranch == bashPPBranchBreak {

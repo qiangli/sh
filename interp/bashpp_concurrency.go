@@ -1403,6 +1403,25 @@ func (r *Runner) bashPPSelect(ctx context.Context, s *syntax.BashPPSelect) {
 			}
 			cases = append(cases, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(c.ch)})
 			caseElems = append(caseElems, c)
+		case *syntax.BashPPAssign:
+			recv := bashPPSelectAssignReceive(comm)
+			if recv == nil {
+				r.errf("invalid select receive assignment\n")
+				r.exit.code = 2
+				return
+			}
+			c, ok := r.bashPPGoReceiveChannel(recv)
+			if !ok {
+				return
+			}
+			if c.native != nil {
+				nativeCases = append(nativeCases, bashPPBridgeValue{Kind: "recv", Elements: []bashPPBridgeValue{*c.native}})
+				nativeArms = append(nativeArms, arm)
+			} else {
+				hasLocal = true
+			}
+			cases = append(cases, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(c.ch)})
+			caseElems = append(caseElems, c)
 		case *syntax.BashPPSend:
 			c, ok := r.bashPPGoSendChannel(comm)
 			if !ok {
@@ -1534,6 +1553,12 @@ func (r *Runner) bashPPSelect(ctx context.Context, s *syntax.BashPPSelect) {
 		if len(decl.Lhs) == 2 {
 			r.bashPPDeclareName(decl.Lhs[1].Value, expand.Variable{Set: true, Kind: expand.String, Str: strconv.FormatBool(open)})
 		}
+	} else if assign, yes := arm.Comm.(*syntax.BashPPAssign); yes {
+		var value any
+		if v.IsValid() {
+			value = v.Interface()
+		}
+		r.bashPPSelectReceiveAssign(assign, r.bashPPReceivedCell(caseElems[i], value, open), open)
 	}
 	r.stmts(r.bashPPTaskContext(ctx), arm.Stmts)
 	if r.bashPPBranch == bashPPBranchBreak {

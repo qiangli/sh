@@ -290,6 +290,10 @@ type BashPPAssign struct {
 	// Call is set when the right side is a Go-form call. Value retains its
 	// exact source span for compatibility.
 	Call *BashPPCall
+	// Recv is the receive right-hand side of an assignment in a select
+	// communication clause. It keeps `=` receive clauses on the ordinary
+	// assignment node while preserving the channel operand for the scheduler.
+	Recv *BashPPReceive
 }
 
 func (a *BashPPAssign) Pos() Pos {
@@ -304,6 +308,9 @@ func (a *BashPPAssign) End() Pos {
 	}
 	if len(a.Values) > 0 {
 		return a.Values[len(a.Values)-1].End()
+	}
+	if a.Recv != nil {
+		return a.Recv.End()
 	}
 	return a.Value.End()
 }
