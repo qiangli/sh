@@ -403,6 +403,18 @@ func (r *Runner) bashPPRangeCollectionValue(ctx context.Context, rng *syntax.Bas
 		}
 	case "map":
 		mapping, _ := value.(map[string]any)
+		if bashPPSprint165MapHasTypedKeys(meta) {
+			for _, entry := range bashPPSprint165MapEntries(meta) {
+				item, child, exists := bashPPSprint165MapEntryValue(mapping, meta, entry.storage)
+				if !exists {
+					continue
+				}
+				if !r.bashPPRangeIteration(ctx, rng, entry.key, collection.Key, item, child, collection.Element) {
+					return true
+				}
+			}
+			break
+		}
 		keys := bashPPStorageKeys(mapping)
 		sort.Strings(keys)
 		for _, key := range keys {

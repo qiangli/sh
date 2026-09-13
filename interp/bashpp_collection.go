@@ -23,6 +23,8 @@ type bashPPCollectionMeta struct {
 	typ      syntax.BashPPTypeExpr
 	sequence []*bashPPCollectionMeta
 	mapping  map[string]*bashPPCollectionMeta
+	mapKeys  map[bashPPMapKey]*bashPPMapEntry
+	mapNonce uint64
 	// interfaceValue preserves the dynamic type and value of an interface
 	// stored inside a collection or struct. The JSON-shaped payload alone can
 	// only retain its printable shell value.
@@ -105,7 +107,9 @@ func bashPPCloneCollectionMeta(meta *bashPPCollectionMeta, seen map[*bashPPColle
 	if done := seen[meta]; done != nil {
 		return done
 	}
+	bashPPStorageMu.RLock()
 	out := *meta
+	bashPPStorageMu.RUnlock()
 	seen[meta] = &out
 	if meta.interfaceValue != nil {
 		iface := *meta.interfaceValue
@@ -127,6 +131,22 @@ func bashPPCloneCollectionMeta(meta *bashPPCollectionMeta, seen map[*bashPPColle
 		out.mapping = make(map[string]*bashPPCollectionMeta, len(layout))
 		for key, child := range layout {
 			out.mapping[key] = bashPPCloneCollectionMeta(child, seen, cloneCell)
+		}
+	}
+	if entries := bashPPSprint165MapEntryTable(meta); entries != nil {
+		out.mapKeys = make(map[bashPPMapKey]*bashPPMapEntry, len(entries))
+		for key, entry := range entries {
+			entryCopy := *entry
+			entryCopy.keyMeta = bashPPCloneCollectionMeta(entry.keyMeta, seen, cloneCell)
+			entryCopy.key, entryCopy.keyMeta = bashPPCopyArrayValue(entry.key, entryCopy.keyMeta)
+			if pointer, ok := entry.key.(*bashPPPointer); ok && cloneCell != nil && pointer != nil {
+				pointerCopy := *pointer
+				pointerCopy.target = cloneCell(pointer.target)
+				pointerCopy.path = append([]bashPPPointerStep(nil), pointer.path...)
+				entryCopy.key = &pointerCopy
+				key.value = bashPPSprint165PointerMapValue(&pointerCopy)
+			}
+			out.mapKeys[key] = &entryCopy
 		}
 	}
 	return &out
@@ -317,23 +337,27 @@ func (r *Runner) bashPPEvalCollection(lit *syntax.BashPPCompositeLit, expected s
 		}
 		out := make(map[string]any, len(lit.Elems))
 		meta.mapping = make(map[string]*bashPPCollectionMeta, len(lit.Elems))
+		meta.mapKeys = make(map[bashPPMapKey]*bashPPMapEntry, len(lit.Elems))
 		for _, elem := range lit.Elems {
 			if elem.Key == nil {
 				return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-MAP-ELEMENT: map literal element requires key:value")
 			}
-			key, _, err := r.bashPPEvalElement(elem.Key, collection.Key)
+			key, keyMeta, err := r.bashPPEvalElement(elem.Key, collection.Key)
 			if err != nil {
 				return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-KEY: %v", err)
 			}
-			canonical := fmt.Sprint(key)
-			if _, exists := out[canonical]; exists {
-				return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-DUPLICATE: duplicate map key %q", canonical)
+			if _, _, exists, err := r.bashPPSprint165MapLookup(meta, key, keyMeta, collection.Key); err != nil {
+				return nil, nil, err
+			} else if exists && !r.bashPPGoSource {
+				return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-DUPLICATE: duplicate map key %q", fmt.Sprint(key))
 			}
 			value, child, err := r.bashPPEvalElement(elem.Value, collection.Element)
 			if err != nil {
 				return nil, nil, err
 			}
-			out[canonical], meta.mapping[canonical] = value, child
+			if _, err := r.bashPPSprint165MapStore(out, meta, key, keyMeta, collection.Key, value, child); err != nil {
+				return nil, nil, err
+			}
 		}
 		return out, meta, nil
 	}
@@ -534,6 +558,9 @@ func (r *Runner) bashPPEvalConstIntExpr(expr goast.Expr) (value constant.Value, 
 }
 
 func (r *Runner) bashPPEvalElement(expr syntax.BashPPExpr, expected syntax.BashPPTypeExpr) (any, *bashPPCollectionMeta, error) {
+	if value, meta, handled, err := r.bashPPSprint165StoredBridgeScalar(expr, expected); handled {
+		return value, meta, err
+	}
 	// A channel element is claimed first: every other reading of the value —
 	// as a call result, as a scalar — discards the identity that IS the
 	// channel. See [Runner.goSourceChannelElement].
@@ -582,6 +609,13 @@ func (r *Runner) bashPPEvalElement(expr syntax.BashPPExpr, expected syntax.BashP
 			return nil, nil, err
 		}
 		return r.bashPPEvalTypedValue(expr, expected)
+	}
+	if r.bashPPGoSource {
+		if _, composite := expr.(*syntax.BashPPCompositeLit); composite {
+			if _, iface := r.bashPPInterfaceType(expected); iface {
+				return r.bashPPEvalTypedValue(expr, expected)
+			}
+		}
 	}
 	if lit, ok := expr.(*syntax.BashPPCompositeLit); ok {
 		if r.bashPPNativeType(expected) {
@@ -776,12 +810,10 @@ func (r *Runner) bashPPMapKeyType(typ syntax.BashPPTypeExpr) bool {
 	if len(r.bashPPTypeParamArgs) > 0 {
 		typ = bashPPSubstituteType(typ, r.bashPPTypeParamArgs)
 	}
-	name, ok := r.bashPPUnderlyingType(typ).(*syntax.BashPPNamedType)
-	if !ok {
-		return false
+	if _, ok := r.bashPPUnderlyingType(typ).(*syntax.BashPPChanType); ok {
+		return true
 	}
-	t := name.Name.Value
-	return t == "string" || t == "bool" || bashPPIntegerType(t)
+	return r.bashPPComparableType(typ, make(map[string]bool))
 }
 
 func (r *Runner) bashPPCollectionIndex(expr syntax.BashPPExpr) (int, error) {
@@ -959,14 +991,16 @@ func (r *Runner) bashPPCollectionAssign(target *syntax.BashPPIndexExpr, rhs synt
 			r.exit = exitStatus{code: 2}
 			return
 		}
-		key, _, keyErr := r.bashPPEvalElement(target.Index, typ.Key)
+		key, keyMeta, keyErr := r.bashPPEvalElement(target.Index, typ.Key)
 		if keyErr != nil {
 			r.errf("BASHPP-ECOLLECTION-KEY: %v\n", keyErr)
 			r.exit = exitStatus{code: 2}
 			return
 		}
-		canonical := fmt.Sprint(key)
-		bashPPStorageSetField(parent.(map[string]any), meta.mapping, canonical, value, child)
+		if _, err := r.bashPPSprint165MapStore(parent.(map[string]any), meta, key, keyMeta, typ.Key, value, child); err != nil {
+			r.errf("%v\n", err)
+			r.exit = exitStatus{code: 2}
+		}
 		return
 	}
 	i, indexErr := r.bashPPCollectionIndex(target.Index)

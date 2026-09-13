@@ -171,7 +171,7 @@ func (r *Runner) goSourceMapCommaCells(index *syntax.BashPPIndexExpr) (*bashPPCe
 		r.bashPPGoSendError(index, fmt.Errorf("comma-ok index requires a represented map"))
 		return nil, nil
 	}
-	key, _, err := r.bashPPEvalElement(index.Index, shape.Key)
+	key, keyMeta, err := r.bashPPEvalElement(index.Index, shape.Key)
 	if err != nil {
 		r.bashPPGoSendError(index.Index, err)
 		return nil, nil
@@ -181,9 +181,12 @@ func (r *Runner) goSourceMapCommaCells(index *syntax.BashPPIndexExpr) (*bashPPCe
 		r.bashPPGoSendError(index, fmt.Errorf("BASHPP-ECOLLECTION-STORAGE: map payload has type %T", value))
 		return nil, nil
 	}
-	canonical := fmt.Sprint(key)
-	result, found := bashPPStorageGet(table, canonical)
-	child := bashPPLayoutGet(meta.mapping, canonical)
+	storage, _, found, err := r.bashPPSprint165MapLookup(meta, key, keyMeta, shape.Key)
+	if err != nil {
+		r.bashPPGoSendError(index.Index, err)
+		return nil, nil
+	}
+	result, child := bashPPSprint165MapEntryValueFound(table, meta, storage, found)
 	if !found {
 		result, child = r.bashPPZeroValue(shape.Element)
 	}
