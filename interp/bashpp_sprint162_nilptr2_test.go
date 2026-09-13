@@ -75,3 +75,10 @@ func TestBashPPSprint162NilFuncArgument(t *testing.T) {
 	sprint162NilPtr2Expect(t, "nilfunc", "nil_func_argument", false)
 	sprint162NilPtr2Refused(t, "nilfunc", "nil_func_argument_negative", "cannot use")
 }
+
+// A channel compared across its direction types compares by identity; two
+// opposite directional types stay refused as mismatched.
+func TestBashPPSprint162ChannelDirectionCompare(t *testing.T) {
+	sprint162NilPtr2Expect(t, "chandir", "chan_direction_compare", false)
+	sprint162NilPtr2Refused(t, "chandir", "chan_direction_compare_negative", "mismatched types")
+}
