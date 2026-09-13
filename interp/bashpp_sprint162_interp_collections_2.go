@@ -79,6 +79,21 @@ func (r *Runner) bashPPSprint162MakeChannelBuiltin(name string, call *syntax.Bas
 	return cell, true
 }
 
+// bashPPSprint162MakeSlicePanic applies Go's runtime failure for dynamic make
+// sizes. Constant-invalid sizes remain checker errors and Classic Bash++ keeps
+// its established builtin diagnostic.
+func (r *Runner) bashPPSprint162MakeSlicePanic(length, capacity int) bool {
+	if !r.bashPPGoSource {
+		return false
+	}
+	message := "makeslice: len out of range"
+	if length >= 0 && capacity < length {
+		message = "makeslice: cap out of range"
+	}
+	r.bashPPRaise(message)
+	return true
+}
+
 // bashPPSprint162CollectionBridgeScalar validates a scalar which crossed the
 // dependency boundary in its transport wrapper. Non-finite floats cannot live
 // in the collection's JSON-shaped scalar payload, so the wrapper remains the

@@ -462,6 +462,9 @@ func (r *Runner) bashPPRunValueBuiltin(name string, c *syntax.BashPPCall) (*bash
 			}
 		}
 		if length < 0 || capacity < length {
+			if r.bashPPSprint162MakeSlicePanic(length, capacity) {
+				return nil, false
+			}
 			r.bashPPBuiltinError("SIZE", "make slice length/capacity is invalid: %d/%d", length, capacity)
 			return nil, false
 		}

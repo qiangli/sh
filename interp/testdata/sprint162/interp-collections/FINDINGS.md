@@ -12,6 +12,7 @@
 | `testdir:fixedbugs/issue32477.go` | the failing indexed assignment is reached through an intentional nil pointer fault | nil pointer runtime panic | moved to `interp-nilptr` |
 | `testdir:235.go`, `testdir:chan/zerosize.go`, `testdir:fixedbugs/bug285.go` | value-position `make` only dispatched raw channels with dependency-owned element types; defined channels and aggregate element channels fell through to slice/map validation | unified Go channel allocation for value builtins | fixed in pending commit |
 | `testdir:typeparam/append.go` | `make` receives an instantiated named slice type, whose underlying collection shape is already supported on the merged baseline | named collection type resolution | needs leaf re-measure; no new mechanism justified |
+| `testdir:fixedbugs/issue68816.go`, `testdir:fixedbugs/issue80517_1.go`, `testdir:fixedbugs/issue80517_2.go`, `testdir:fixedbugs/issue80517_3.go` | dynamic negative slice lengths returned a static evaluator diagnostic instead of Go's recoverable runtime panic | runtime `makeslice` size panic | fixed in pending commit |
 
 ## Requests to other seams
 
