@@ -87,3 +87,80 @@ func TestSprint162ImportPathDiagnostics(t *testing.T) {
 		}
 	}
 }
+
+// TestSprint162ScannerDiagnostics is an outside-corpus reproducer for gc's
+// source-reader verdict on NUL bytes and invalid UTF-8 (syntax/source.go
+// nextch): every occurrence is reported at its own position, under the
+// caller's file name, with gc's one-equal-message-per-line filter. The
+// expected list is `go tool compile -p p -e reject.go` verbatim; the
+// positive control carries the same bytes inside escape sequences and valid
+// multi-byte runes, which gc accepts. A run-time consumer that re-encodes
+// the bytes (U+FFFD) before they reach Load is outside this verdict.
+func TestSprint162ScannerDiagnostics(t *testing.T) {
+	base := filepath.Join("testdata", "sprint162", "diag", "scanner")
+	read := func(name string) []byte {
+		t.Helper()
+		data, err := os.ReadFile(filepath.Join(base, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return data
+	}
+	diagnostics := func(name string, data []byte) []string {
+		t.Helper()
+		_, err := gosource.Load([]gosource.Source{{Name: name, Data: data}}, gosource.Options{})
+		if err == nil {
+			return nil
+		}
+		list, ok := err.(gosource.ErrorList)
+		if !ok {
+			t.Fatalf("diagnostics lost types: %T", err)
+		}
+		out := make([]string, len(list))
+		for i, diagnostic := range list {
+			out[i] = diagnostic.Error()
+		}
+		return out
+	}
+
+	if got := diagnostics("positive.go", read("positive.go")); got != nil {
+		t.Fatalf("positive control rejected: %q", got)
+	}
+	want := []string{
+		"reject.go:3:20: invalid NUL character",
+		"reject.go:5:24: invalid NUL character",
+		"reject.go:7:15: invalid NUL character",
+		"reject.go:9:21: invalid UTF-8 encoding",
+		"reject.go:11:21: invalid UTF-8 encoding",
+		"reject.go:11:22: invalid NUL character",
+		"reject.go:13:6: invalid UTF-8 encoding",
+	}
+	// The name is the caller's, not a working copy's: a runner attributes
+	// the verdict by the name it passed.
+	got := diagnostics("reject.go", read("reject.go.src"))
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("errorCheck comparison mismatch\ngot: %q\nwant: %q", got, want)
+	}
+	negatives := map[string][]string{
+		"missing":            got[1:],
+		"extra":              append(append([]string{}, got...), "reject.go:14:1: extra"),
+		"duplicate":          append(append([]string{}, got...), got[0]),
+		"wrong-line":         append([]string{strings.Replace(got[0], ":3:", ":2:", 1)}, got[1:]...),
+		"wrong-wording":      append([]string{strings.Replace(got[0], "invalid NUL character", "illegal character NUL", 1)}, got[1:]...),
+		"working-copy-name":  append([]string{"tmp/reject.go:3:20: invalid NUL character"}, got[1:]...),
+		"unexpected-success": nil,
+	}
+	for name, candidate := range negatives {
+		if reflect.DeepEqual(candidate, want) {
+			t.Fatalf("negative %s was accepted", name)
+		}
+	}
+	// U+FFFD written as valid UTF-8 is not an invalid encoding: the bytes
+	// that reach Load decide the verdict, so a re-encoded copy is accepted.
+	reencoded := []byte(strings.ToValidUTF8(string(read("reject.go.src")), "�"))
+	for _, d := range diagnostics("reencoded.go", reencoded) {
+		if strings.Contains(d, "invalid UTF-8 encoding") {
+			t.Fatalf("re-encoded source reported an invalid encoding: %q", d)
+		}
+	}
+}
