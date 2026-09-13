@@ -3,7 +3,7 @@ id: 23e622ce643e
 kind: task
 title: 'Sprint 165.1: evaluator residue (151) by mechanism — selector-assign re-measure, expression forms, builtin-type, const/unsafe (GoSource-only), typechecker 15, long tail'
 seq: 97
-status: todo
+status: doing
 priority: p0
 created: 2026-09-13T09:07:05.039636Z
 sprint: 165

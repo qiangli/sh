@@ -3,7 +3,7 @@ id: ca559d7ee23d
 kind: task
 title: 'Sprint 165.3: runtime/bridge residue (153) — output barrier, callback signatures, next-defect rows behind runtime panics'
 seq: 99
-status: todo
+status: doing
 priority: p0
 created: 2026-09-13T09:07:05.090479Z
 sprint: 165

@@ -3,7 +3,7 @@ id: 39824239941b
 kind: task
 title: 'Sprint 165.4: lowering residue (152) — compiled -m, .s companions (D3(b)), nilptr3 fidelity; cgo by ID'
 seq: 100
-status: todo
+status: doing
 priority: p1
 created: 2026-09-13T09:07:05.115527Z
 sprint: 165

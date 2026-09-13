@@ -3,7 +3,7 @@ id: 54313fa7cf4d
 kind: task
 title: 'Sprint 165.5: diagnostics — nul1 verdict, unclassified → empty by manifest, source-preserving front end DESIGN'
 seq: 101
-status: todo
+status: doing
 priority: p1
 created: 2026-09-13T09:07:05.140246Z
 sprint: 165

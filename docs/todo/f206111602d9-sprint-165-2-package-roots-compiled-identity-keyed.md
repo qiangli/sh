@@ -3,7 +3,7 @@ id: f206111602d9
 kind: task
 title: 'Sprint 165.2: package roots compiled — identity-keyed internal visibility (USER DECISION) + generated-package fidelity; 3/26 → 26/26'
 seq: 98
-status: todo
+status: doing
 priority: p0
 created: 2026-09-13T09:07:05.065407Z
 sprint: 165
