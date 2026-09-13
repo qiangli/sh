@@ -100,3 +100,30 @@ func (r *Runner) goSourceNilFuncArgument(arg string) bool {
 func (r *Runner) goSourceCalleeFaulted() bool {
 	return r.bashPPGoSource && r.bashPPPanicHalts()
 }
+
+// recover() as the value of an assignment.
+//
+// `r = recover()` and `_ = recover()` assign the recovered value — the
+// interface value the expression forms hand out — to an existing variable
+// or discard it; the lookup that serves declared functions has nothing for
+// the predeclared call. It reports whether the assignment was this shape.
+func (r *Runner) goSourceRecoverAssign(assign *syntax.BashPPAssign) bool {
+	if !r.bashPPGoSource || len(assign.Names) != 1 || !bashPPRecoverExpr(assign.Call) || r.bashPPFuncs["recover"] != nil || r.bashPPScope.lookup("recover") != nil {
+		return false
+	}
+	cell, err := r.bashPPStructuredArgCell(nil, assign.Call)
+	if err != nil || cell == nil {
+		return false
+	}
+	// The source was typechecked: the target is an interface variable, and
+	// the value keeps that variable's static type, as a dependency result
+	// assigned to one does (goSourceNativeAssignCall).
+	if target := r.bashPPScope.lookup(assign.Names[0].Value); target != nil {
+		if _, iface := r.bashPPInterfaceType(target.declType); iface {
+			cell.declType = target.declType
+			cell.typeName = target.typeName
+		}
+	}
+	r.bashPPCommitTupleAssign(assign, []*bashPPCell{cell})
+	return true
+}

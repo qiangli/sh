@@ -96,3 +96,8 @@ func TestBashPPSprint162TypeParamInCallee(t *testing.T) {
 func TestBashPPSprint162PromotedMethodNilReceiver(t *testing.T) {
 	sprint162NilPtr2Expect(t, "promoted", "promoted_nil_receiver", false)
 }
+
+// `r = recover()` and `_ = recover()` assign the recovered value.
+func TestBashPPSprint162RecoverAssign(t *testing.T) {
+	sprint162NilPtr2Expect(t, "recoverassign", "recover_assign", false)
+}
