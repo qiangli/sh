@@ -47,11 +47,15 @@ type Resolution struct {
 // the compiler's `-D` rule for relative imports. It mirrors what
 // `go tool compile -importcfg -D` does with `.a` files, in memory.
 type mapImporter struct {
-	base        string
-	packages    map[string]*types.Package
-	files       map[string][]string
-	fallback    types.Importer
-	from        string
+	base     string
+	packages map[string]*types.Package
+	files    map[string][]string
+	fallback types.Importer
+	from     string
+	// identity qualifies from: whether it was declared (the map's path or
+	// Options.ImportPath) and whether it is the asserted test main. See
+	// import_visibility.go.
+	identity    importerIdentity
 	resolutions []Resolution
 	// checked retains what checkDependency parsed and checked, keyed by
 	// path, and order lists the paths as they were checked. Load links
@@ -119,6 +123,13 @@ func (m *mapImporter) ImportFrom(p, srcDir string, mode types.ImportMode) (*type
 	if err != nil {
 		return nil, err
 	}
+	// Visibility is decided on the importer's declared identity before the
+	// map is consulted: a mapped internal package is no more visible to a
+	// foreign identity than an on-disk one, exactly as cmd/go would never
+	// have written it into that importer's importcfg.
+	if !m.visible(resolved) {
+		return nil, visibilityError(resolved)
+	}
 	if pkg, ok := m.packages[resolved]; ok {
 		m.resolutions = append(m.resolutions, Resolution{From: m.from, Import: p, Path: resolved, Origin: "package-map", Name: pkg.Name(), Files: m.files[resolved]})
 		return pkg, nil
@@ -126,12 +137,7 @@ func (m *mapImporter) ImportFrom(p, srcDir string, mode types.ImportMode) (*type
 	if isRelativeImport(p) {
 		return nil, fmt.Errorf("import %q: package %q is not in the explicit package map", p, resolved)
 	}
-	var pkg *types.Package
-	if from, ok := m.fallback.(types.ImporterFrom); ok {
-		pkg, err = from.ImportFrom(resolved, srcDir, mode)
-	} else {
-		pkg, err = m.fallback.Import(resolved)
-	}
+	pkg, err := m.fallbackImport(resolved, srcDir, mode)
 	if err != nil {
 		return nil, err
 	}
@@ -205,6 +211,9 @@ func (m *mapImporter) checkDependency(fset *token.FileSet, spec PackageSpec, che
 		diagnostics = append(diagnostics, validateCompilerDirectives(fset, files, checker)...)
 	}
 	m.from = spec.Path
+	// A mapped package's identity is always declared: it is the path the
+	// map registers it under. It is never the test main.
+	m.identity = importerIdentity{declared: true}
 	info := newTypeInfo()
 	typeErrors := newCheckerDiagnostics(fset, files, info, checker)
 	config := checker.config(m, typeErrors.report)

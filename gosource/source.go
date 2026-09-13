@@ -94,7 +94,19 @@ type Options struct {
 	ImportBase string
 	// ImportPath is the program package's own import path, used to attribute
 	// its resolutions. Empty uses the package name, as before.
+	//
+	// It is also the program's DECLARED identity for internal-package
+	// visibility (the compiler's -p): with it set, every import of the
+	// program is admitted or refused by cmd/go's rule on identities
+	// (syntax.BashPPInternalImportVisible) — a mapped package always has one,
+	// its Path — before the map or Importer is consulted. Without it the
+	// program's imports go through Importer's own rule, unchanged.
 	ImportPath string
+	// TestMain asserts that the program is cmd/go's generated test main,
+	// which cmd/go alone may import testing/internal/…. It is a fact the
+	// caller passes in from the site that knows it is running the testmain;
+	// it is never inferred from a ".test" suffix, and it requires ImportPath.
+	TestMain bool
 }
 type Program struct {
 	File          *syntax.File
@@ -146,6 +158,9 @@ func Parse(r io.Reader, name string, options Options) (*Program, error) {
 func Load(sources []Source, options Options) (*Program, error) {
 	if options.PreserveNativeInit && (options.RunMain || len(options.Packages) > 0) {
 		return nil, fmt.Errorf("gosource: native init preservation requires a non-executing package without an explicit package map")
+	}
+	if options.TestMain && options.ImportPath == "" {
+		return nil, fmt.Errorf("gosource: TestMain asserts the identity of the program and requires ImportPath")
 	}
 	if len(sources) == 0 {
 		return nil, fmt.Errorf("gosource: no source files")
@@ -216,6 +231,7 @@ func Load(sources []Source, options Options) (*Program, error) {
 		programPath = p.Package
 	}
 	imp.from = programPath
+	imp.identity = importerIdentity{declared: options.ImportPath != "", testMain: options.TestMain}
 	typeErrors := newCheckerDiagnostics(c.fset, c.files, c.info, checker)
 	config := checker.config(imp, typeErrors.report)
 	pkg, err := config.Check(programPath, c.fset, c.files, c.info)
