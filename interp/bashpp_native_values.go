@@ -403,6 +403,13 @@ func (r *Runner) bashPPBridgeExpr(expr syntax.BashPPExpr) (bashPPBridgeValue, er
 			return bashPPBridgeValue{}, err
 		}
 		return r.bashPPBridgePointerValue(ptr)
+	case *syntax.BashPPNewExpr:
+		// `new(T)` is the pointer it allocates, exactly as `&T{}` is.
+		ptr, err := r.bashPPPointerExprValue(x)
+		if err != nil {
+			return bashPPBridgeValue{}, err
+		}
+		return r.bashPPBridgePointerValue(ptr)
 	case *syntax.BashPPCompositeLit:
 		if r.bashPPNativeType(x.LitType) {
 			return r.bashPPNativeComposite(x, false)

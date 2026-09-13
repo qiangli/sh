@@ -260,6 +260,18 @@ func (r *Runner) bashPPTupleAssign(assign *syntax.BashPPAssign) {
 			candidates[i] = cell
 			continue
 		}
+		// `f = v.M`: a method value is the bound closure it denotes, exactly
+		// as `f := v.M` binds it.
+		if cell, handled, err := r.goSourceMethodValueCandidate(expr); handled {
+			if err != nil {
+				if !errors.Is(err, errBashPPScalarInterrupted) && !r.bashPPPanicking() {
+					r.exit.fatal(err)
+				}
+				return
+			}
+			candidates[i] = cell
+			continue
+		}
 		// An interface-typed target owns the dynamic type of what it is
 		// given, so the value is built against the target's declared
 		// interface rather than read as a plain scalar.

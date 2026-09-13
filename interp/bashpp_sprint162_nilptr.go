@@ -263,6 +263,8 @@ func (r *Runner) goSourceValueSwitchTag(expr syntax.BashPPExpr) bool {
 		return target != nil && r.goSourceNilableType(target)
 	case *syntax.BashPPAddressExpr:
 		return true
+	case *syntax.BashPPCompositeLit:
+		return x.LitType != nil && !r.bashPPNativeType(x.LitType)
 	}
 	return false
 }
@@ -444,6 +446,115 @@ func (r *Runner) goSourceIndexedPointee(value any, meta *bashPPCollectionMeta) (
 	return target, targetMeta, nil
 }
 
+// goSourceCompositeComparable is the comparable form of a composite literal
+// used as an operand: the struct or array value it builds, compared field
+// by field as Go compares it. Slice and map literals are not comparable and
+// are left to the scalar path's refusal.
+func (r *Runner) goSourceCompositeComparable(lit *syntax.BashPPCompositeLit) (bashPPComparableValue, bool, error) {
+	if !r.bashPPGoSource || lit.LitType == nil {
+		return bashPPComparableValue{}, false, nil
+	}
+	if r.bashPPNativeType(lit.LitType) {
+		return bashPPComparableValue{}, false, nil
+	}
+	value, meta, err := r.bashPPEvalComposite(lit, lit.LitType)
+	if err != nil {
+		return bashPPComparableValue{}, true, err
+	}
+	if meta == nil || (meta.kind != "struct" && meta.kind != "array" && meta.kind != "inferred-array") {
+		return bashPPComparableValue{}, false, nil
+	}
+	return bashPPComparableValue{value: value, meta: meta}, true, nil
+}
+
+// goSourceConvertedInterfaceValue is the interface value an explicit
+// interface conversion — `any(new(T))`, `I(v)` — yields when it is stored in
+// an interface: the conversion's own dynamic value, which the scalar path
+// would otherwise try, and fail, to read as a scalar.
+func (r *Runner) goSourceConvertedInterfaceValue(expr syntax.BashPPExpr, iface *syntax.BashPPInterfaceType) (*bashPPInterfaceValue, expand.Variable, bool, error) {
+	if !r.bashPPGoSource {
+		return nil, expand.Variable{}, false, nil
+	}
+	cell, handled, err := r.bashPPInterfaceConversion(expr)
+	if !handled {
+		return nil, expand.Variable{}, false, nil
+	}
+	if err != nil {
+		return nil, expand.Variable{}, true, err
+	}
+	source := cell.interfaceValue
+	if source == nil || source.nilIface {
+		return &bashPPInterfaceValue{nilIface: true}, expand.Variable{Set: true, Kind: expand.String}, true, nil
+	}
+	if err := r.bashPPImplements(source.dynamic, iface); err != nil {
+		return nil, expand.Variable{}, true, err
+	}
+	iv := *source
+	iv.cell = bashPPCopyInterfaceCell(source.cell)
+	return &iv, iv.cell.vr, true, nil
+}
+
+// goSourceConvertedComposite is the value of a composite literal converted
+// to another struct or array type with the same underlying type —
+// `node(SourceRange{})`, `Tbigv([2]uintptr{5, 6})`: the literal's value,
+// retyped so the target's methods resolve on it. The checker has already
+// established the two types convert; nothing is re-verified here.
+func (r *Runner) goSourceConvertedComposite(x *syntax.BashPPConvertExpr) (any, *bashPPCollectionMeta, bool, error) {
+	if !r.bashPPGoSource {
+		return nil, nil, false, nil
+	}
+	operand := x.X
+	for {
+		paren, ok := operand.(*syntax.BashPPParenExpr)
+		if !ok {
+			break
+		}
+		operand = paren.X
+	}
+	lit, ok := operand.(*syntax.BashPPCompositeLit)
+	if !ok || lit.LitType == nil {
+		return nil, nil, false, nil
+	}
+	target := r.bashPPConvertTarget(x)
+	if target == nil || r.bashPPNativeType(target) || r.bashPPNativeType(lit.LitType) {
+		return nil, nil, false, nil
+	}
+	switch shape := r.bashPPUnderlyingType(target).(type) {
+	case *syntax.BashPPStructType:
+	case *syntax.BashPPCollectionType:
+		if shape.Kind != "array" {
+			return nil, nil, false, nil
+		}
+	default:
+		return nil, nil, false, nil
+	}
+	value, meta, err := r.bashPPEvalComposite(lit, lit.LitType)
+	if err != nil {
+		return nil, nil, true, err
+	}
+	if meta == nil {
+		return nil, nil, false, nil
+	}
+	retyped := *meta
+	retyped.typ = target
+	return value, &retyped, true, nil
+}
+
+// goSourceConvertedCompositeCell is goSourceConvertedComposite's value as
+// the cell a declaration or argument binds, typed by the conversion target.
+func (r *Runner) goSourceConvertedCompositeCell(x *syntax.BashPPConvertExpr) (*bashPPCell, bool, error) {
+	value, meta, handled, err := r.goSourceConvertedComposite(x)
+	if !handled || err != nil {
+		return nil, handled, err
+	}
+	cell := &bashPPCell{declType: meta.typ}
+	if named, ok := meta.typ.(*syntax.BashPPNamedType); ok && named.Name != nil {
+		cell.typeName = named.Name.Value
+	}
+	bashPPStoreCellValue(cell, value, meta)
+	return cell, true, nil
+}
+
 // goSourceStructuredIdent reports whether an identifier names a pointer or
 // structured variable — one whose value is not its scalar spelling.
 func (r *Runner) goSourceStructuredIdent(id *syntax.BashPPIdent) bool {
@@ -498,6 +609,25 @@ func (r *Runner) bashPPReportFault(err error) {
 	}
 	r.errf("%v\n", err)
 	r.exit.code = 2
+}
+
+// goSourceMethodValueCandidate is the closure a method value selector
+// denotes when it is assigned — `f = v.M` — the same binding `f := v.M`
+// makes. Selecting through a nil pointer or nil interface raises the fault
+// the binding meets, as an error the caller leaves unreported.
+func (r *Runner) goSourceMethodValueCandidate(expr syntax.BashPPExpr) (*bashPPCell, bool, error) {
+	if !r.bashPPGoSource {
+		return nil, false, nil
+	}
+	method, ok := expr.(*syntax.BashPPSelectorExpr)
+	if !ok || !method.MethodValue || r.bashPPNativeExpr(method.X) {
+		return nil, false, nil
+	}
+	cell, err := r.goSourceLocalMethodValue(method)
+	if err != nil {
+		return nil, true, r.goSourceRuntimeFault(err)
+	}
+	return cell, true, nil
 }
 
 // goSourceNestedDeferRunning decides whether a panic keeps running — not

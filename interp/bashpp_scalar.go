@@ -905,6 +905,11 @@ func (r *Runner) bashPPComparableExpr(expr syntax.BashPPExpr) (bashPPComparableV
 			return bashPPComparableValue{}, err
 		}
 		return bashPPComparableValue{value: value, meta: meta}, nil
+	case *syntax.BashPPCompositeLit:
+		// `(T{1, 2}) == v`: a composite literal is the value it builds.
+		if value, ok, err := r.goSourceCompositeComparable(x); ok {
+			return value, err
+		}
 	}
 	return bashPPComparableValue{}, fmt.Errorf("BASHPP-ECOMPARE-SCALAR: scalar")
 }

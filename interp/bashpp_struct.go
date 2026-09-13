@@ -449,6 +449,17 @@ func (r *Runner) bashPPEvalTypedValue(expr syntax.BashPPExpr, expected syntax.Ba
 	if lit, ok := expr.(*syntax.BashPPCompositeLit); ok {
 		return r.bashPPEvalComposite(lit, expected)
 	}
+	if conv, ok := expr.(*syntax.BashPPConvertExpr); ok {
+		if value, meta, handled, err := r.goSourceConvertedComposite(conv); handled {
+			if err != nil {
+				return nil, nil, err
+			}
+			if expected != nil && !r.bashPPTypeAssignable(meta.typ, expected) {
+				return nil, nil, fmt.Errorf("BASHPP-EASSIGN-MISMATCH: cannot use %s as %s", bashPPTypeText(meta.typ), bashPPTypeText(expected))
+			}
+			return value, meta, nil
+		}
+	}
 	if _, ok := expr.(*syntax.BashPPIndexExpr); ok {
 		value, meta, err := r.bashPPReadExpr(expr)
 		if err != nil {
@@ -601,6 +612,9 @@ func (r *Runner) bashPPReadExpr(expr syntax.BashPPExpr) (value any, meta *bashPP
 		return pointer, bashPPPointerMeta(r.bashPPPointerExprType(expr, pointer)), nil
 	case *syntax.BashPPConvertExpr:
 		if value, meta, handled, err := r.bashPPConvertToCollection(x); handled {
+			return value, meta, err
+		}
+		if value, meta, handled, err := r.goSourceConvertedComposite(x); handled {
 			return value, meta, err
 		}
 		if target, nilPointer := r.bashPPNilPointerConversion(x); nilPointer {

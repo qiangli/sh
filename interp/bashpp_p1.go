@@ -945,6 +945,16 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 				r.exit = exitStatus{code: 2}
 				return
 			}
+			if !handled {
+				// `n := node(SourceRange{})`: a composite literal converted to
+				// another struct or array type binds that retyped value.
+				cell, handled, err = r.goSourceConvertedCompositeCell(conv)
+				if err != nil {
+					r.errf("%s%v\n", r.bashErrPrefix(conv.Pos()), err)
+					r.exit = exitStatus{code: 2}
+					return
+				}
+			}
 			if handled {
 				name := d.Lhs[0].Value
 				r.bashPPDeclareName(name, cell.vr)

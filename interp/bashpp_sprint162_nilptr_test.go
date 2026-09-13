@@ -53,6 +53,7 @@ func sprint162NilPtrExpect(t *testing.T, mechanism, name string, wantErr bool) {
 func TestBashPPSprint162NilDereferencePanics(t *testing.T) {
 	sprint162NilPtrExpect(t, "nilderef", "deref_recover", false)
 	sprint162NilPtrExpect(t, "nilderef", "deref_order", false)
+	sprint162NilPtrExpect(t, "nilderef", "method_value_nil_receiver", false)
 	sprint162NilPtrExpect(t, "nilderef", "defer_nested_call", false)
 }
 
@@ -60,6 +61,23 @@ func TestBashPPSprint162NilValue(t *testing.T) {
 	sprint162NilPtrExpect(t, "nilvalue", "nil_value", false)
 	sprint162NilPtrExpect(t, "nilvalue", "nil_value_negative", false)
 	sprint162NilPtrExpect(t, "nilvalue", "nil_assign", false)
+}
+
+func TestBashPPSprint162CompositeAndNewForms(t *testing.T) {
+	sprint162NilPtrExpect(t, "exprform", "composite_new_forms", false)
+	sprint162NilPtrExpect(t, "exprform", "composite_convert", false)
+}
+
+// The checker keeps refusing what Go refuses: a composite literal of a
+// non-comparable struct type is not an operand of ==.
+func TestBashPPSprint162CompositeCompareNegative(t *testing.T) {
+	source, err := os.ReadFile(filepath.Join("testdata", "sprint162", "interp-nilptr", "exprform", "composite_negative.go.src"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gosource.Parse(strings.NewReader(string(source)), "composite_negative.go", gosource.Options{RunMain: true}); err == nil || !strings.Contains(err.Error(), "cannot be compared") {
+		t.Fatalf("non-comparable struct comparison accepted: %v", err)
+	}
 }
 
 func TestBashPPSprint162RangePointerArray(t *testing.T) {

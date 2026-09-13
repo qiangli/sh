@@ -389,6 +389,9 @@ func (r *Runner) bashPPMakeInterfaceValue(expr syntax.BashPPExpr, expected synta
 		iv.cell = bashPPCopyInterfaceCell(source.cell)
 		return &iv, iv.cell.vr, nil
 	}
+	if iv, vr, handled, err := r.goSourceConvertedInterfaceValue(expr, iface); handled {
+		return iv, vr, err
+	}
 	cell, actual, err := r.bashPPCellForInterfaceExpr(expr)
 	if err != nil {
 		return nil, expand.Variable{}, err

@@ -1168,6 +1168,9 @@ func (r *Runner) bashPPStructuredArgCell(w *syntax.Word, expr syntax.BashPPExpr)
 		// bashpp_collection_convert.go. Scalar conversions report false.
 		cell, handled, err := r.bashPPConvertCollectionCell(x)
 		if !handled {
+			cell, handled, err = r.goSourceConvertedCompositeCell(x)
+		}
+		if !handled {
 			return nil, nil
 		}
 		return cell, err
