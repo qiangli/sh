@@ -413,9 +413,12 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 	}
 	if e.execution {
 		raw.WriteString(e.programMain(body.String()))
-	} else if e.nativeMain() {
+	} else if e.nativeMain() || (e.goSource && options.Package != "main") {
 		// The source's main is the entry; what remains of the body is the
 		// converter's init calls, which Go sequences before main itself.
+		// A Go package that is not main has no entry to synthesise either:
+		// gc compiles it as it is, and a made-up main would be one more
+		// function for its -m notes to report.
 		if body.Len() > 0 {
 			fmt.Fprintf(&raw, "func init() {\n%s}\n", body.String())
 		}
