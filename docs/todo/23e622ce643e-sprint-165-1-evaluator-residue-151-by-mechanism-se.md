@@ -1,0 +1,12 @@
+---
+id: 23e622ce643e
+kind: task
+title: 'Sprint 165.1: evaluator residue (151) by mechanism — selector-assign re-measure, expression forms, builtin-type, const/unsafe (GoSource-only), typechecker 15, long tail'
+seq: 97
+status: todo
+priority: p0
+created: 2026-09-13T09:07:05.039636Z
+sprint: 165
+---
+
+Input: Barrier C active-151 re-measured by S165.0. Sprint 162 landed nil/pointer (runtime panics, nil first-class, composite/new/method values, frames, defer-goroutine, named pointers), collections (element conversion, bounds/make panics, pointer arrays, make chan), control (select RecvStmt forms, recover in expression/assignment, deferred-recover rules, blank ident, nil func call, storage lock, runtime.Error values), function-local type identity, func values boxed by signature. Remaining by first line (integ-2): selector-assign on native handles 11 (bridge field-set landed in bridge-2 — RE-MEASURE first), expression forms 13, builtin-type 6, const exprs + unsafe.Sizeof/Offsetof folding 7 (the GoSource-only typed-float read-back: the 162 form was REVERTED because it changed Bash++ SCRIPT rational rendering — keep Classic parity), undefined callable 3, convert 3, undefined type comparable, the 15 typechecker roots (both modes; check_test 'no error expected' with a col mismatch), and the long tail. Findings ledgers to continue: interp/testdata/sprint162/{interp-nilptr,interp-collections,interp-control,interp-control-4}/FINDINGS.md. Work by mechanism, biggest first; one merge batch per mechanism through the full sh gate. RULES: exact upstream Go 1.27 harness is the authority; harness/tests Go or Bash only; product fixes = general Go mechanisms in sh/{gosource,interp,lower} from outside-corpus reproducers under <seam>/testdata/sprint165/<mechanism>/ with a DRIVING TEST and the negative set; never keyed to a fixture/expected string; never permissive; never a timeout raise; never edit sh/gosource/internal/gcsyntax; keep Options.CheckAfterSyntaxErrors. Rows recorded by ID in #162 (D1–D7) are never relabeled. Verify: focused go test -count=1, then the FULL sh gate go test -short ./interp/ ./lower/ ./gosource/ ./syntax/ (lower's parity tests are the classic-isolation gate; 8 GoSource* interp tests are pre-existing darwin failures), gofmt, git diff --check; then a subset leaf — workers ship a bundle + root TSV, ONLY the manager submits (leaf-submit.sh on sprint162-leaf). Trailers Sprint: #165 / Story: #<seq> / Story-ID as the last paragraph.
