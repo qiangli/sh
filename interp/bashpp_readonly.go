@@ -190,12 +190,15 @@ func (r *Runner) bashPPTupleAssignCall(ctx context.Context, assign *syntax.BashP
 			r.bashPPBuiltinAssign(assign)
 			return
 		}
-		// `v = recover()`: the recovered interface value, or the nil interface.
-		if cell, handled := r.bashPPReturnRecover(assign.Call); handled && len(assign.Names) == 1 {
-			r.bashPPCommitTupleAssign(assign, []*bashPPCell{cell})
+		// `v = recover()`: the recovered interface value, or the nil interface,
+		// typed as the target's own static interface type (any / interface{} /
+		// a named interface) so the assignment type check sees the variable's
+		// type, not the spelling `any`.
+		if r.goSourceRecoverAssign(assign) {
 			return
 		}
-		if r.goSourceRecoverAssign(assign) {
+		if cell, handled := r.bashPPReturnRecover(assign.Call); handled && len(assign.Names) == 1 {
+			r.bashPPCommitTupleAssign(assign, []*bashPPCell{cell})
 			return
 		}
 		r.errf("%sBASHPP-EASSIGN-CALL: tuple assignment requires a declared result-bearing function\n", r.bashErrPrefix(assign.Call.Pos()))
