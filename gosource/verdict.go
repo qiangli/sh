@@ -7,6 +7,7 @@ import (
 	"go/scanner"
 	"go/token"
 	"go/types"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -130,10 +131,14 @@ func checksAfterSyntaxVerdict(verdict ErrorList) bool {
 // statement's label, a branch statement's keyword or a branch statement's
 // label, and nothing else the checker reports is anchored there.
 //
-// With gcStderr set the collector also applies gc's stderr filter to the
-// checker's diagnostics, as base.ErrorfAt does to every non-syntax error:
-// only one of multiple equal messages per line is printed (the position base
-// and line are compared, so //line directives are honored).
+// With gcStderr set the collector also renders the checker's diagnostics as
+// gc's conf.Error handler does (noder/irgen.go checkFiles): a language
+// version error ("requires go1.22 or later") names its cause — the file's
+// //go:build version when that is what set the version, otherwise the -lang
+// setting — and gc's stderr filter applies as base.ErrorfAt applies it to
+// every non-syntax error: only one of multiple equal messages per line is
+// printed (the position base and line are compared, so //line directives
+// are honored).
 //
 // go/types reports the continuation lines of a message ("\tother declaration
 // of x") as separate errors that follow their primary; they stay with it:
@@ -144,14 +149,17 @@ type checkerDiagnostics struct {
 	anchors     map[token.Pos]bool
 	gcStderr    bool
 	fset        *token.FileSet
+	files       []*ast.File
+	info        *types.Info
+	goVersion   string
 	lastLine    token.Position
 	lastMsg     string
 	lastDropped bool
 }
 
-func newCheckerDiagnostics(fset *token.FileSet, files []*ast.File, gcBranchVerdict, gcStderr bool) *checkerDiagnostics {
-	d := &checkerDiagnostics{gcStderr: gcStderr, fset: fset}
-	if !gcBranchVerdict {
+func newCheckerDiagnostics(fset *token.FileSet, files []*ast.File, info *types.Info, checker checkerOptions) *checkerDiagnostics {
+	d := &checkerDiagnostics{gcStderr: checker.gcStderr(), fset: fset, files: files, info: info, goVersion: checker.goVersion}
+	if checker.checkerBranchErrors {
 		return d
 	}
 	d.anchors = map[token.Pos]bool{}
@@ -197,8 +205,31 @@ func (d *checkerDiagnostics) report(err error) {
 			return
 		}
 		d.lastLine, d.lastMsg = pos, e.Msg
+		if versionErrorRx.MatchString(e.Msg) {
+			if file := d.fileAt(e.Pos); file != nil {
+				if fileVersion := d.info.FileVersions[file]; file.GoVersion == fileVersion {
+					e.Msg = fmt.Sprintf("%s (file declares //go:build %s)", e.Msg, fileVersion)
+				} else {
+					e.Msg = fmt.Sprintf("%s (-lang was set to %s; check go.mod)", e.Msg, d.goVersion)
+				}
+				err = e
+			}
+		}
 	}
 	d.list = append(d.list, err)
+}
+
+// versionErrorRx is gc's (noder/irgen.go): the checker's language version
+// errors, whose cause gc names.
+var versionErrorRx = regexp.MustCompile(`requires go[0-9]+\.[0-9]+ or later`)
+
+func (d *checkerDiagnostics) fileAt(pos token.Pos) *ast.File {
+	for _, file := range d.files {
+		if file.FileStart <= pos && pos <= file.FileEnd {
+			return file
+		}
+	}
+	return nil
 }
 
 // isContinuation reports whether a go/types error is a continuation line of

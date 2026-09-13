@@ -277,3 +277,69 @@ func TestSprint162CheckAfterParserDiagnostics(t *testing.T) {
 		}
 	}
 }
+
+// TestSprint162VersionErrorCause is an outside-corpus reproducer for gc's
+// rendering of a language version error (noder/irgen.go checkFiles
+// conf.Error): "requires goX.Y or later" names its cause — the file's
+// //go:build version when that set the file's version, otherwise the -lang
+// setting. The expected lists are `go tool compile -lang=… -e` verbatim.
+func TestSprint162VersionErrorCause(t *testing.T) {
+	base := filepath.Join("testdata", "sprint162", "diag", "version")
+	read := func(name string) []byte {
+		t.Helper()
+		data, err := os.ReadFile(filepath.Join(base, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return data
+	}
+	diagnostics := func(name string, data []byte, options gosource.Options) []string {
+		t.Helper()
+		_, err := gosource.Load([]gosource.Source{{Name: name, Data: data}}, options)
+		if err == nil {
+			return nil
+		}
+		list, ok := err.(gosource.ErrorList)
+		if !ok {
+			t.Fatalf("diagnostics lost types: %T", err)
+		}
+		out := make([]string, len(list))
+		for i, diagnostic := range list {
+			out[i] = diagnostic.Error()
+		}
+		return out
+	}
+
+	if got := diagnostics("positive.go", read("positive.go"), gosource.Options{GoVersion: "go1.22"}); got != nil {
+		t.Fatalf("positive control rejected: %q", got)
+	}
+	wantBuild := []string{"build.go:6:12: cannot range over 10 (untyped int constant): requires go1.22 or later (file declares //go:build go1.21)"}
+	if got := diagnostics("build.go", read("build.go.src"), gosource.Options{GoVersion: "go1.22"}); !reflect.DeepEqual(got, wantBuild) {
+		t.Fatalf("//go:build cause\ngot: %q\nwant: %q", got, wantBuild)
+	}
+	wantLang := []string{
+		"lang.go:4:12: cannot range over 10 (untyped int constant): requires go1.22 or later (-lang was set to go1.21; check go.mod)",
+		"lang.go:6:12: cannot range over 10 (untyped int constant): requires go1.22 or later (-lang was set to go1.21; check go.mod)",
+	}
+	got := diagnostics("lang.go", read("lang.go.src"), gosource.Options{GoVersion: "go1.21"})
+	if !reflect.DeepEqual(got, wantLang) {
+		t.Fatalf("-lang cause\ngot: %q\nwant: %q", got, wantLang)
+	}
+	negatives := map[string][]string{
+		"missing":            got[1:],
+		"undecorated":        {strings.TrimSuffix(got[0], " (-lang was set to go1.21; check go.mod)"), got[1]},
+		"wrong-cause":        {strings.Replace(got[0], "-lang was set to go1.21; check go.mod", "file declares //go:build go1.21", 1), got[1]},
+		"wrong-line":         {strings.Replace(got[0], ":4:", ":3:", 1), got[1]},
+		"unexpected-success": nil,
+	}
+	for name, candidate := range negatives {
+		if reflect.DeepEqual(candidate, wantLang) {
+			t.Fatalf("negative %s was accepted", name)
+		}
+	}
+	// The checker-test policy reports go/types' message undecorated.
+	policy := diagnostics("lang.go", read("lang.go.src"), gosource.Options{GoVersion: "go1.21", CheckAfterSyntaxErrors: true, CheckerBranchErrors: true})
+	if want := []string{negatives["undecorated"][0], strings.TrimSuffix(got[1], " (-lang was set to go1.21; check go.mod)")}; !reflect.DeepEqual(policy, want) {
+		t.Fatalf("checker-test policy changed\ngot: %q\nwant: %q", policy, want)
+	}
+}

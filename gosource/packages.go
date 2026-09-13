@@ -82,7 +82,7 @@ func newMapImporter(base string, fallback types.Importer) *mapImporter {
 // same converter can lower any of them. Instances is what lets the converter
 // spell every generic call's type arguments explicitly, inferred or not.
 func newTypeInfo() *types.Info {
-	return &types.Info{Types: map[ast.Expr]types.TypeAndValue{}, Defs: map[*ast.Ident]types.Object{}, Uses: map[*ast.Ident]types.Object{}, Implicits: map[ast.Node]types.Object{}, Selections: map[*ast.SelectorExpr]*types.Selection{}, Instances: map[*ast.Ident]types.Instance{}}
+	return &types.Info{Types: map[ast.Expr]types.TypeAndValue{}, Defs: map[*ast.Ident]types.Object{}, Uses: map[*ast.Ident]types.Object{}, Implicits: map[ast.Node]types.Object{}, Selections: map[*ast.SelectorExpr]*types.Selection{}, Instances: map[*ast.Ident]types.Instance{}, FileVersions: map[*ast.File]string{}}
 }
 
 func isRelativeImport(p string) bool {
@@ -205,9 +205,9 @@ func (m *mapImporter) checkDependency(fset *token.FileSet, spec PackageSpec, che
 		diagnostics = append(diagnostics, validateCompilerDirectives(fset, files, checker)...)
 	}
 	m.from = spec.Path
-	typeErrors := newCheckerDiagnostics(fset, files, !checker.checkerBranchErrors, checker.gcStderr())
-	config := checker.config(m, typeErrors.report)
 	info := newTypeInfo()
+	typeErrors := newCheckerDiagnostics(fset, files, info, checker)
+	config := checker.config(m, typeErrors.report)
 	pkg, err := config.Check(spec.Path, fset, files, info)
 	diagnostics = append(diagnostics, typeErrors.result(err)...)
 	if len(diagnostics) > 0 {

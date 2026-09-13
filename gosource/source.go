@@ -216,7 +216,7 @@ func Load(sources []Source, options Options) (*Program, error) {
 		programPath = p.Package
 	}
 	imp.from = programPath
-	typeErrors := newCheckerDiagnostics(c.fset, c.files, !checker.checkerBranchErrors, checker.gcStderr())
+	typeErrors := newCheckerDiagnostics(c.fset, c.files, c.info, checker)
 	config := checker.config(imp, typeErrors.report)
 	pkg, err := config.Check(programPath, c.fset, c.files, c.info)
 	// gc's stderr is sorted by position; the checker-test flow instead lists
