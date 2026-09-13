@@ -55,44 +55,63 @@ func lineDirectives(tf *token.File, f *ast.File) []syntax.LineDirective {
 // verbatim above it so gc applies them as it did to the source: an embed
 // consumes the same relative asset paths as the unchanged package, a
 // noinline keeps the call the asmcheck row measures. Only the directive
-// lines of a declaration's own doc group travel; //go:build and
-// //go:generate address the file and the tooling, not a declaration. The
-// name is historical: the //go:embed path was the first to exist.
+// lines between the preceding declaration and this declaration travel;
+// unlike go/ast's Doc field, gc's pragma association does not require the
+// comment to be adjacent. //go:build and //go:generate address the file and
+// the tooling, not a declaration. The name is historical: the //go:embed path
+// was the first to exist.
 func (c *converter) attachEmbedDirectives(file *syntax.File) {
 	byNamePos := map[uint][]syntax.Comment{}
-	attach := func(name *ast.Ident, doc *ast.CommentGroup) {
-		if doc == nil {
-			return
-		}
-		for _, comment := range doc.List {
-			if !isDeclDirective(comment.Text) {
-				continue
+	attach := func(name *ast.Ident, groups []*ast.CommentGroup) {
+		for _, group := range groups {
+			for _, comment := range group.List {
+				if !isDeclDirective(comment.Text) {
+					continue
+				}
+				pos := c.pos(name.Pos()).Offset()
+				byNamePos[pos] = append(byNamePos[pos], syntax.Comment{Hash: c.pos(comment.Slash), Text: strings.TrimPrefix(comment.Text, "//")})
 			}
-			pos := c.pos(name.Pos()).Offset()
-			byNamePos[pos] = append(byNamePos[pos], syntax.Comment{Hash: c.pos(comment.Slash), Text: strings.TrimPrefix(comment.Text, "//")})
 		}
 	}
 	for _, f := range c.files {
+		previousEnd := f.Package
 		for _, decl := range f.Decls {
+			var groups []*ast.CommentGroup
+			for _, group := range f.Comments {
+				if group.Pos() > previousEnd && group.End() < decl.Pos() {
+					groups = append(groups, group)
+				}
+			}
 			switch d := decl.(type) {
 			case *ast.FuncDecl:
-				attach(d.Name, d.Doc)
+				attach(d.Name, groups)
 			case *ast.GenDecl:
 				if d.Tok != token.VAR {
+					previousEnd = decl.End()
 					continue
+				}
+				declGroups := groups
+				if len(d.Specs) != 1 && d.Doc != nil {
+					declGroups = nil
+					for _, group := range groups {
+						if group != d.Doc {
+							declGroups = append(declGroups, group)
+						}
+					}
 				}
 				for _, spec := range d.Specs {
 					v := spec.(*ast.ValueSpec)
-					doc := v.Doc
-					if doc == nil && len(d.Specs) == 1 {
-						doc = d.Doc
-					}
 					if len(v.Names) != 1 {
 						continue
 					}
-					attach(v.Names[0], doc)
+					specGroups := declGroups
+					if v.Doc != nil && v.Doc != d.Doc {
+						specGroups = append(append([]*ast.CommentGroup(nil), declGroups...), v.Doc)
+					}
+					attach(v.Names[0], specGroups)
 				}
 			}
+			previousEnd = decl.End()
 		}
 	}
 	for _, stmt := range file.Stmts {
