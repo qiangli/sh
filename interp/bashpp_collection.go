@@ -817,7 +817,7 @@ func (r *Runner) bashPPMapKeyType(typ syntax.BashPPTypeExpr) bool {
 }
 
 func (r *Runner) bashPPCollectionIndex(expr syntax.BashPPExpr) (int, error) {
-	v, err := r.bashPPEvalScalarExpr(expr)
+	v, err := r.bashPPCollectionIndexScalar(expr)
 	if err != nil {
 		return 0, fmt.Errorf("BASHPP-ECOLLECTION-INDEX: %v", err)
 	}
@@ -828,11 +828,27 @@ func (r *Runner) bashPPCollectionIndex(expr syntax.BashPPExpr) (int, error) {
 	return int(n), nil
 }
 
+func (r *Runner) bashPPCollectionIndexScalar(expr syntax.BashPPExpr) (bashPPScalar, error) {
+	if r.bashPPGoSource {
+		switch x := expr.(type) {
+		case *syntax.BashPPParenExpr:
+			return r.bashPPCollectionIndexScalar(x.X)
+		case *syntax.BashPPCall:
+			cell, err := r.goSourceValueCell(x)
+			if err != nil {
+				return bashPPScalar{}, err
+			}
+			return r.bashPPScalarFromCell(cell), nil
+		}
+	}
+	return r.bashPPEvalScalarExpr(expr)
+}
+
 func (r *Runner) bashPPSliceBound(expr syntax.BashPPExpr, fallback int) (int, error) {
 	if expr == nil {
 		return fallback, nil
 	}
-	v, err := r.bashPPEvalScalarExpr(expr)
+	v, err := r.bashPPCollectionIndexScalar(expr)
 	if err != nil {
 		return 0, fmt.Errorf("BASHPP-ECOLLECTION-SLICE: %v", err)
 	}

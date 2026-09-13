@@ -136,11 +136,19 @@ func (r *Runner) bashPPAssign(ctx context.Context, assign *syntax.BashPPAssign) 
 // rather than a scalar spelling of it.
 func (r *Runner) bashPPBuiltinAssign(assign *syntax.BashPPAssign) {
 	target := bashPPWordSource(assign.Target)
-	if r.bashPPGoSource && target == "_" && assign.Call != nil && bashPPPredeclaredCall(assign.Call) == "make" {
-		if _, ok := assign.Call.ArgType.(*syntax.BashPPChanType); ok {
-			r.bashPPRunValueBuiltin("make", assign.Call)
+	if r.bashPPGoSource && target == "_" && assign.Call != nil {
+		name := bashPPPredeclaredCall(assign.Call)
+		if !bashPPValueBuiltin(name) {
+			r.bashPPBuiltinError("TYPE", "assignment call %s is not a supported value builtin", name)
 			return
 		}
+		result, produced := r.bashPPRunValueBuiltin(name, assign.Call)
+		if !produced || result == nil {
+			if r.exit.code == 0 {
+				r.bashPPBuiltinError("ARITY", "%s produces no value", name)
+			}
+		}
+		return
 	}
 	cell := r.bashPPScope.lookup(target)
 	if cell == nil || !syntax.BashPPValidIdent(target) {
