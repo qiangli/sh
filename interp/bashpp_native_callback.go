@@ -139,7 +139,7 @@ func (r *Runner) bashPPNativeCallback(ctx context.Context, selector string, recv
 	if r.bashPPMethods[typeName][method] == nil {
 		return nil, fmt.Errorf("gosource: original type %s has no method %s", typeName, method)
 	}
-	named := &syntax.BashPPNamedType{Name: &syntax.Lit{Value: typeName}}
+	named := r.bashPPSprint162CallbackType(recv, typeName)
 	var cell *bashPPCell
 	if recv.Origin != 0 {
 		session := r.bashPPTools.bridge
