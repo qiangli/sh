@@ -123,14 +123,17 @@ func (r *Runner) bashPPApplyMapUpdate(target *syntax.BashPPIndexExpr, collection
 		r.bashPPUpdateError(target.Pos(), "TYPE", "target is not map storage")
 		return
 	}
-	key, _, err := r.bashPPEvalElement(target.Index, collection.Key)
+	key, keyMeta, err := r.bashPPEvalElement(target.Index, collection.Key)
 	if err != nil {
 		r.bashPPUpdateError(target.Index.Pos(), "TARGET", err.Error())
 		return
 	}
-	canonical := fmt.Sprint(key)
-	current, found := bashPPStorageGet(mapping, canonical)
-	child := bashPPLayoutGet(meta.mapping, canonical)
+	storage, _, found, err := r.bashPPSprint162MapLookup(meta, key, keyMeta, collection.Key)
+	if err != nil {
+		r.bashPPUpdateError(target.Index.Pos(), "TARGET", err.Error())
+		return
+	}
+	current, child := bashPPSprint162MapEntryValueFound(mapping, meta, storage, found)
 	if !found {
 		current, child = r.bashPPZeroValue(collection.Element)
 	}
@@ -155,7 +158,10 @@ func (r *Runner) bashPPApplyMapUpdate(target *syntax.BashPPIndexExpr, collection
 		r.bashPPUpdateError(pos, "OP", err.Error())
 		return
 	}
-	bashPPStorageSetField(mapping, meta.mapping, canonical, value, nil)
+	if _, err := r.bashPPSprint162MapStore(mapping, meta, key, keyMeta, collection.Key, value, nil); err != nil {
+		r.bashPPUpdateError(target.Pos(), "WRITE", err.Error())
+		return
+	}
 	r.exit.clear()
 }
 

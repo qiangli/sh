@@ -381,13 +381,21 @@ func (r *Runner) bashPPRunValueBuiltin(name string, c *syntax.BashPPCall) (*bash
 		if !r.bashPPBuiltinMutable(name, args[0]) {
 			return nil, false
 		}
-		if err := r.bashPPCheckCollectionValue(args[1].value, shape.Key); err != nil {
+		if err := r.bashPPCheckCollectionValue(args[1].value, shape.Key); err != nil && !r.bashPPGoSource {
 			r.bashPPBuiltinError("TYPE", "delete key: %v", err)
 			return nil, false
 		}
 		if mapping, ok := args[0].value.(map[string]any); ok {
-			key := fmt.Sprint(args[1].value)
-			bashPPStorageDelete(mapping, args[0].meta.mapping, key)
+			keyMeta := args[1].meta
+			keyType := shape.Key
+			if args[1].cell != nil && args[1].cell.interfaceValue != nil {
+				keyMeta = &bashPPCollectionMeta{kind: "interface", typ: args[1].cell.declType, interfaceValue: args[1].cell.interfaceValue}
+			} else if _, iface := r.bashPPInterfaceType(shape.Key); iface && args[1].typ != nil {
+				keyType = args[1].typ
+			}
+			if err := r.bashPPSprint162MapDelete(mapping, args[0].meta, args[1].value, keyMeta, keyType); err != nil {
+				r.bashPPBuiltinError("TYPE", "delete key: %v", err)
+			}
 		}
 		return nil, false
 
@@ -406,8 +414,7 @@ func (r *Runner) bashPPRunValueBuiltin(name string, c *syntax.BashPPCall) (*bash
 		}
 		if args[0].meta.kind == "map" {
 			if mapping, ok := args[0].value.(map[string]any); ok {
-				clear(mapping)
-				clear(args[0].meta.mapping)
+				bashPPSprint162MapClear(mapping, args[0].meta)
 			}
 		} else if seq, ok := args[0].value.([]any); ok {
 			for i := range seq {
@@ -442,7 +449,7 @@ func (r *Runner) bashPPRunValueBuiltin(name string, c *syntax.BashPPCall) (*bash
 				}
 			}
 			value := make(map[string]any)
-			meta := &bashPPCollectionMeta{kind: "map", typ: typ, mapping: make(map[string]*bashPPCollectionMeta)}
+			meta := &bashPPCollectionMeta{kind: "map", typ: typ, mapping: make(map[string]*bashPPCollectionMeta), mapKeys: make(map[bashPPMapKey]*bashPPMapEntry)}
 			return &bashPPCell{vr: expand.NewObject(value), object: &bashPPObjectIdentity{collection: meta}, valueMeta: meta, declType: typ}, true
 		}
 		if len(args) < 2 {

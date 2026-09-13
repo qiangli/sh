@@ -673,6 +673,9 @@ func (r *Runner) bashPPInterfaceSourceCell(cell *bashPPCell, what string) (*bash
 	if actual == nil && cell.typeName != "" {
 		actual, _ = bashPPScalarNamedType(cell.typeName)
 	}
+	if actual == nil {
+		actual = r.bashPPSprint162CollectionInterfaceDynamicType(cell)
+	}
 	// A closure bound by `:=` carries only its handle; its dynamic type is
 	// the signature of the literal it was made from.
 	if actual == nil && cell.vr.Kind == expand.String {
