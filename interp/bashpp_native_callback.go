@@ -346,6 +346,16 @@ func (r *Runner) bashPPBridgeContents(v bashPPBridgeValue, typ syntax.BashPPType
 		if v.Kind == "nil" {
 			return nil, bashPPPointerMeta(typ), nil
 		}
+		// A pointee the dependency sends under an origin of this session IS
+		// that origin's pointer — whether spelled as a back-reference (no
+		// pointee: a cycle) or flattened with its origin — so identity
+		// survives a writeback; a back-reference to no known origin fails
+		// closed. See bashpp_sprint165_runtime2_cycle.go.
+		if ptr, resolved, err := r.bashPPBridgeOriginPointer(v); err != nil {
+			return nil, nil, err
+		} else if resolved {
+			return ptr, bashPPPointerMeta(typ), nil
+		}
 		// The dependency sends the pointee by shape, so the original body
 		// reads the value it would have read through the pointer. The
 		// dependency keeps ownership of the address itself.

@@ -162,6 +162,11 @@ type Runner struct {
 	// keeps a computed callee from being evaluated a second time; see
 	// gosource_task_capture.go. Nil everywhere else.
 	bashPPGoSourcePin *bashPPGoSourcePin
+	// bashPPTransportPath is the set of pointer origins on the bridge
+	// transport walk in progress, nil between walks; a pointer met again on
+	// its own path crosses as a back-reference. See
+	// bashpp_sprint165_runtime2_cycle.go.
+	bashPPTransportPath map[uint64]bool
 	// bashPPGoSourceSharableCells memoizes, per cell, whether GoSource task
 	// capture may grant it identity. The answer is taken while this runner is
 	// still the cell's sole owner and never revisited; see

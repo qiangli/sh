@@ -112,17 +112,20 @@ func bashPPLocalCodecsGo(locals []bashPPLocalType) (string, error) {
 	for _, name := range names {
 		shape := shapes[name]
 		fmt.Fprintf(&b, "func init() {\nlocalStructCodecs[reflect.TypeFor[%s]()] = localStructCodec{\n", name)
-		fmt.Fprintf(&b, "decode: func(%sWire value) (reflect.Value,error) {\nvar %sDst %s\nfor %sName,%sField := range %sWire.Fields { _ = %sField; switch %sName {\n", prefix, prefix, name, prefix, prefix, prefix, prefix, prefix)
+		fmt.Fprintf(&b, "decode: func(%sState *decodeState, %sWire value) (reflect.Value,error) {\nvar %sDst %s\nfor %sName,%sField := range %sWire.Fields { _ = %sField; switch %sName {\n", prefix, prefix, prefix, name, prefix, prefix, prefix, prefix, prefix)
 		for _, field := range shape.Fields.List {
 			for _, name := range bashPPCodecFieldNames(field) {
-				fmt.Fprintf(&b, "case %q: %sItem,%sErr := decode(%sField,reflect.TypeOf(&%sDst.%s).Elem()); if %sErr != nil { return reflect.Value{},%sErr }; reflect.ValueOf(&%sDst.%s).Elem().Set(%sItem)\n", name, prefix, prefix, prefix, prefix, name, prefix, prefix, prefix, name, prefix)
+				fmt.Fprintf(&b, "case %q: %sItem,%sErr := decodeIn(%sState,%sField,reflect.TypeOf(&%sDst.%s).Elem()); if %sErr != nil { return reflect.Value{},%sErr }; reflect.ValueOf(&%sDst.%s).Elem().Set(%sItem)\n", name, prefix, prefix, prefix, prefix, prefix, name, prefix, prefix, prefix, name, prefix)
 			}
 		}
 		fmt.Fprintf(&b, "default: return reflect.Value{},fmt.Errorf(\"unknown field %%s of %%T\",%sName,%sDst)\n} }; return reflect.ValueOf(%sDst),nil },\n", prefix, prefix, prefix)
-		fmt.Fprintf(&b, "structural: func(%sRV reflect.Value) value {\n%sSrc := %sRV.Interface().(%s)\n_ = %sSrc\nreturn value{Kind:\"struct\",Type:typeID(%sRV.Type()),Fields:map[string]value{\n", prefix, prefix, prefix, name, prefix, prefix)
+		// The structural direction carries the walk's pointer path so a
+		// field that refers back to a pointer on it is a back-reference;
+		// see bashpp_sprint165_runtime2_cycle.go.
+		fmt.Fprintf(&b, "structural: func(%sRV reflect.Value, %sPath map[uintptr]bool) value {\n%sSrc := %sRV.Interface().(%s)\n_ = %sSrc\nreturn value{Kind:\"struct\",Type:typeID(%sRV.Type()),Fields:map[string]value{\n", prefix, prefix, prefix, prefix, name, prefix, prefix)
 		for _, field := range shape.Fields.List {
 			for _, name := range bashPPCodecFieldNames(field) {
-				fmt.Fprintf(&b, "%q: structural(reflect.ValueOf(&%sSrc.%s).Elem()),\n", name, prefix, name)
+				fmt.Fprintf(&b, "%q: structuralPath(reflect.ValueOf(&%sSrc.%s).Elem(), %sPath),\n", name, prefix, name, prefix)
 			}
 		}
 		b.WriteString("}} },\n}\n")

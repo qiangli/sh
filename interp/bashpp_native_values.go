@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"go/constant"
 	"go/token"
-	"reflect"
 	"strconv"
 	"strings"
 
@@ -538,6 +537,20 @@ func (r *Runner) bashPPBridgePointerValue(ptr *bashPPPointer) (bashPPBridgeValue
 	if err != nil {
 		return bashPPBridgeValue{}, err
 	}
+	req, err := r.bashPPEvalRequest()
+	if err != nil {
+		return bashPPBridgeValue{}, err
+	}
+	session := req.Bridge
+	// The origin is known before the pointee crosses, and a pointer met
+	// again on its own transport path is a back-reference, not a second
+	// walk; see bashpp_sprint165_runtime2_cycle.go.
+	origin := bashPPTransportOrigin(session, ptr)
+	onPath, leave := r.bashPPTransportEnter(origin)
+	if onPath {
+		return bashPPTransportBackReference(session, origin, meta, typ), nil
+	}
+	defer leave()
 	inner, isInterface, err := r.goSourceInterfacePointee(ptr)
 	if err != nil {
 		return bashPPBridgeValue{}, err
@@ -548,28 +561,6 @@ func (r *Runner) bashPPBridgePointerValue(ptr *bashPPPointer) (bashPPBridgeValue
 			return bashPPBridgeValue{}, err
 		}
 	}
-	req, err := r.bashPPEvalRequest()
-	if err != nil {
-		return bashPPBridgeValue{}, err
-	}
-	session := req.Bridge
-	session.mu.Lock()
-	if session.origins == nil {
-		session.origins = map[uint64]*bashPPPointer{}
-	}
-	var origin uint64
-	for id, existing := range session.origins {
-		if existing.target == ptr.target && reflect.DeepEqual(existing.path, ptr.path) {
-			origin = id
-			break
-		}
-	}
-	if origin == 0 {
-		session.originNext++
-		origin = session.originNext
-		session.origins[origin] = ptr
-	}
-	session.mu.Unlock()
 	pointerType := "*" + inner.Type
 	if isInterface {
 		// The pointee is the interface variable, whatever it holds.
