@@ -1312,6 +1312,9 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 		r.bashPPDeclareName(name, vr)
 		if cell := r.bashPPScope.lookup(name); cell != nil && len(d.Rhs) == 1 {
 			cell.scalarKind = bashPPWordScalarKind(d.Rhs[0], vr)
+			if r.bashPPGoSource {
+				cell.scalarKind = bashPPScalarFromString(bashPPWordSource(d.Rhs[0])).value.Kind()
+			}
 		}
 		if len(d.Rhs) == 1 {
 			if channel, owner := r.bashPPDirectChannel(d.Rhs[0]); channel != nil {
@@ -1351,7 +1354,10 @@ func bashPPWordScalarKind(word *syntax.Word, value expand.Variable) constant.Kin
 			return bashPPScalarFromString(value.Str).value.Kind()
 		}
 	}
-	return constant.String
+	// Compound unquoted words can still be numeric Go constants. Quoted words
+	// were handled above and remain strings; recovering the kind here preserves
+	// contextual assignment into collection elements.
+	return bashPPScalarFromString(value.Str).value.Kind()
 }
 
 type bashPPShortDeclTxn struct {

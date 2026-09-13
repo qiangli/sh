@@ -647,10 +647,46 @@ func (r *Runner) bashPPEvalElement(expr syntax.BashPPExpr, expected syntax.BashP
 		return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-ELEMENT: %v", err)
 	}
 	value := bashPPScalarAny(r.bashPPRepresentableScalar(scalar, expected).value)
+	value = r.bashPPContextualCollectionValue(value, expected)
 	if err := r.bashPPCheckCollectionValue(value, expected); err != nil {
 		return nil, nil, err
 	}
 	return value, nil, nil
+}
+
+// bashPPContextualCollectionValue restores the destination-driven conversion
+// of an untyped constant. The shell carrier stores some Go-region words as
+// strings; when a collection element supplies a numeric destination, parse
+// that spelling with the destination's underlying scalar type before the
+// ordinary representation check.
+func (r *Runner) bashPPContextualCollectionValue(value any, expected syntax.BashPPTypeExpr) any {
+	name, ok := r.bashPPUnderlyingType(expected).(*syntax.BashPPNamedType)
+	if !ok {
+		return value
+	}
+	text, ok := value.(string)
+	if !ok {
+		return value
+	}
+	switch name.Name.Value {
+	case "float32", "float64":
+		if parsed := constant.MakeFromLiteral(text, gotoken.FLOAT, 0); parsed.Kind() == constant.Float {
+			return bashPPScalarAny(parsed)
+		}
+		parts := strings.Split(text, "/")
+		if len(parts) == 2 {
+			numerator, nerr := strconv.ParseFloat(parts[0], 64)
+			denominator, derr := strconv.ParseFloat(parts[1], 64)
+			if nerr == nil && derr == nil && denominator != 0 {
+				return numerator / denominator
+			}
+		}
+	case "int", "int8", "int16", "int32", "int64", "uint", "uint8", "uint16", "uint32", "uint64", "uintptr", "byte", "rune":
+		if parsed := constant.MakeFromLiteral(text, gotoken.INT, 0); parsed.Kind() == constant.Int {
+			return bashPPScalarAny(parsed)
+		}
+	}
+	return value
 }
 
 func bashPPScalarAny(value constant.Value) any {
@@ -696,12 +732,27 @@ func (r *Runner) bashPPCheckCollectionValue(value any, expected syntax.BashPPTyp
 		switch value.(type) {
 		case int, float64:
 			valid = true
+		case string:
+			valid = bashPPCollectionFloatText(value.(string))
 		}
 	}
 	if !valid {
 		return fmt.Errorf("BASHPP-ECOLLECTION-ELEMENT: cannot use %T value as %s", value, name.Name.Value)
 	}
 	return nil
+}
+
+func bashPPCollectionFloatText(text string) bool {
+	if _, err := strconv.ParseFloat(text, 64); err == nil {
+		return true
+	}
+	parts := strings.Split(text, "/")
+	if len(parts) != 2 {
+		return false
+	}
+	_, nerr := strconv.ParseFloat(parts[0], 64)
+	denominator, derr := strconv.ParseFloat(parts[1], 64)
+	return nerr == nil && derr == nil && denominator != 0
 }
 
 // bashPPMapKeyType reports whether typ may encode map keys. A named scalar
