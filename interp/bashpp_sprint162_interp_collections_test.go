@@ -1,9 +1,13 @@
 package interp_test
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/go-quicktest/qt"
+	"mvdan.cc/sh/v3/gosource"
 	"mvdan.cc/sh/v3/interp"
 )
 
@@ -27,4 +31,23 @@ main()
 	_, stderr, err := runBashSharpCall(t, src)
 	qt.Assert(t, qt.ErrorIs(err, interp.ExitStatus(2)))
 	qt.Assert(t, qt.IsNotNil(err), qt.Commentf("stderr: %s", stderr))
+}
+
+func TestSprint162CollectionBridgeScalarElement(t *testing.T) {
+	root := filepath.Join("testdata", "sprint162", "interp-collections")
+	source, err := os.ReadFile(filepath.Join(root, "bridge_scalar.go"))
+	qt.Assert(t, qt.IsNil(err))
+	want, err := os.ReadFile(filepath.Join(root, "bridge_scalar.expected"))
+	qt.Assert(t, qt.IsNil(err))
+	out, stderr, err := runGoSource(t, "bridge_scalar", string(source))
+	qt.Assert(t, qt.IsNil(err), qt.Commentf("stderr: %s", stderr))
+	qt.Assert(t, qt.Equals(out, string(want)))
+}
+
+func TestSprint162CollectionBridgeScalarElementNegative(t *testing.T) {
+	path := filepath.Join("testdata", "sprint162", "interp-collections", "bridge_scalar_negative.go")
+	source, err := os.ReadFile(path)
+	qt.Assert(t, qt.IsNil(err))
+	_, err = gosource.Parse(strings.NewReader(string(source)), path, gosource.Options{RunMain: true})
+	qt.Assert(t, qt.ErrorMatches(err, `(?s).*cannot use .*string.* as float64.*`))
 }

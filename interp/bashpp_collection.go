@@ -553,6 +553,9 @@ func (r *Runner) bashPPEvalElement(expr syntax.BashPPExpr, expected syntax.BashP
 		if err != nil {
 			return nil, nil, err
 		}
+		if scalar, scalarMeta, claimed, err := r.bashPPSprint162CollectionBridgeScalar(value, expected); claimed {
+			return scalar, scalarMeta, err
+		}
 		if err := r.bashPPCheckTypedValue(value, meta, expected); err != nil {
 			return nil, nil, err
 		}
