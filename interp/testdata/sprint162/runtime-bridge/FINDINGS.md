@@ -12,6 +12,8 @@
 
 ## Requests to other seams
 
+| `testdir:const7.go`, `fixedbugs/issue11771.go`, `fixedbugs/issue54542.go`, `nosplit.go`, `fixedbugs/issue19658.go`, `linkx_run.go`, `fixedbugs/issue9110.go`, `chan/select2.go`, `finprofiled.go`, `fixedbugs/issue8606b.go` | Dependency-owned native handle fields and exported package variables were not addressable through the bridge. | General `field-set` and `var-set` protocol operations with Go assignability enforced by reflection. | fixed in pending field/variable-set commits; leaf confirmation pending |
+
 The generic nil/interface, alias/descriptor-closure, nested identity, and
 same-spelling local-type rows need the type/collection owner to preserve their
 distinct original identities. No file change is requested here.

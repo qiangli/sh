@@ -839,6 +839,20 @@ func (r *Runner) bashPPStructuredAssign(target, rhs syntax.BashPPExpr) {
 	if r.bashPPNativeByteAssign(target, rhs) {
 		return
 	}
+	if selector, ok := target.(*syntax.BashPPSelectorExpr); ok && r.bashPPNativeExpr(selector.X) {
+		base, err := r.bashPPNativeReceiver(selector.X)
+		if err == nil {
+			value, valueErr := r.bashPPBridgeExpr(rhs)
+			if valueErr == nil {
+				_, err = r.bashPPNativeAccess(r.ectx, "field-set", base, selector.Sel.Value, value)
+			}
+		}
+		if err != nil {
+			r.errf("%v\n", err)
+			r.exit = exitStatus{code: 2}
+		}
+		return
+	}
 	// Parentheses around an assignment target carry no meaning of their own,
 	// so `(*p) = v` has to reach the same handler as `*p = v`. Without this,
 	// a parenthesised dereference fell through to the pointer path below and

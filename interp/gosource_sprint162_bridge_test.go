@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"mvdan.cc/sh/v3/gosource"
 )
 
 func mustReadSprint162Bridge(t *testing.T, name string) string {
@@ -32,5 +34,16 @@ func TestGoSourceSprint162GenericBridgeNegativeReferenceReceiver(t *testing.T) {
 	got := runGoSourceRunnerError(t, mustReadSprint162Bridge(t, "generic_types_negative.go.txt"))
 	if !strings.Contains(got, "wrote through reference storage") {
 		t.Fatalf("wrong refusal for reference-bearing generic receiver: %q", got)
+	}
+}
+
+func TestGoSourceSprint162NativeFieldSet(t *testing.T) {
+	differGoSource(t, mustReadSprint162Bridge(t, "field_set.go.txt"), nil, "")
+}
+
+func TestGoSourceSprint162NativeFieldSetNegative(t *testing.T) {
+	_, err := gosource.Parse(strings.NewReader(mustReadSprint162Bridge(t, "field_set_negative.go.txt")), "field_set_negative.go", gosource.Options{RunMain: true})
+	if err == nil || !strings.Contains(err.Error(), "cannot use 1") {
+		t.Fatalf("wrong field-set type error: %v", err)
 	}
 }
