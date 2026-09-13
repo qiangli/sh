@@ -1190,7 +1190,10 @@ func (c *converter) call(x *ast.CallExpr) *s.BashPPCall {
 		out.CalleeExpr = c.expr(x.Fun)
 	}
 	for i, a := range x.Args {
-		if i == 0 && len(out.Fun) == 1 && out.Fun[0].Value == "make" {
+		// A type operand — make's and new's first argument — is a type, not a
+		// value; it is lowered as ArgType whatever its form (a name, a struct,
+		// array or interface literal), never as an expression.
+		if i == 0 && len(out.Fun) == 1 && c.info.Types[a].IsType() {
 			out.ArgType = c.typ(a)
 			out.Args = append(out.Args, c.word(a))
 			out.ArgExprs = append(out.ArgExprs, nil)
@@ -1280,13 +1283,18 @@ func (c *converter) genericFuncValue(e ast.Expr) s.BashPPExpr {
 	})
 }
 
-// typeParamMethodExpr lowers a method expression whose receiver type is a
-// type parameter — `T.String` inside `func f[T Stringer]` — as the closure
-// that calls the method on its first argument, `func(r T, …) R { return
-// r.String(…) }`. The receiver is a value at run time, and a method
-// selected on a value is what the runtime resolves; a method selected on
-// a type parameter's NAME has no declaration to resolve against until the
-// frame binds it. Returns nil for every other selector.
+// typeParamMethodExpr lowers a method expression whose receiver type is not
+// a plain declared name — a type parameter (`T.String` inside
+// `func f[T Stringer]`), a type literal (`interface{ M() }.M`,
+// `struct{ I }.M`) or an instantiated generic type (`S[int, string].M`,
+// `(*S[K, V]).M`) — as the closure that calls the method on its first
+// argument, `func(r T, …) R { return r.String(…) }`. The receiver is a value
+// at run time, and a method selected on a value is what the runtime
+// resolves; a type parameter's NAME has no declaration until the frame binds
+// it, an unnamed type has none at all, and an instantiation's type arguments
+// belong to the receiver's type, which the closure's parameter spells.
+// Returns nil for every other selector: a declared name's method expression
+// is spelled as written.
 func (c *converter) typeParamMethodExpr(x *ast.SelectorExpr) s.BashPPExpr {
 	selection := c.info.Selections[x]
 	if selection == nil || selection.Kind() != types.MethodExpr {
@@ -1296,7 +1304,13 @@ func (c *converter) typeParamMethodExpr(x *ast.SelectorExpr) s.BashPPExpr {
 	if pointer, ok := recv.(*types.Pointer); ok {
 		recv = pointer.Elem()
 	}
-	if _, ok := recv.(*types.TypeParam); !ok {
+	switch r := recv.(type) {
+	case *types.TypeParam, *types.Struct, *types.Interface:
+	case *types.Named:
+		if r.TypeArgs().Len() == 0 {
+			return nil
+		}
+	default:
 		return nil
 	}
 	signature, _ := c.checkedType(c.info.TypeOf(x), x, "method expression type").(*s.BashPPFuncType)
@@ -1498,7 +1512,10 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 		if len(x.Results) == 1 {
 			switch e := x.Results[0].(type) {
 			case *ast.CallExpr:
-				if c.info.Types[e.Fun].IsType() {
+				// A conversion and an allocation are expressions, as in every
+				// other position: `return new(T)` is the NewExpr the type
+				// spells, whether T is a name or a type literal.
+				if c.info.Types[e.Fun].IsType() || c.isNewType(e) || c.isNewBuiltin(e) {
 					out.Expr = c.expr(e)
 				} else {
 					out.Call = c.call(e)
