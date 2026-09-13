@@ -4,6 +4,7 @@
 package interp
 
 import (
+	"errors"
 	"fmt"
 	"go/constant"
 
@@ -113,7 +114,8 @@ func (r *Runner) bashPPPointerConversion(expr syntax.BashPPExpr) (*bashPPPointer
 	return &retyped, target, true, nil
 }
 
-func (r *Runner) bashPPPointerExprValue(expr syntax.BashPPExpr) (*bashPPPointer, error) {
+func (r *Runner) bashPPPointerExprValue(expr syntax.BashPPExpr) (ptr *bashPPPointer, err error) {
+	defer func() { err = r.goSourceRuntimeFault(err) }()
 	if _, nilConversion := r.bashPPNilPointerConversion(expr); nilConversion {
 		return nil, nil
 	}
@@ -155,7 +157,7 @@ func (r *Runner) bashPPPointerExprValue(expr syntax.BashPPExpr) (*bashPPPointer,
 			return nil, err
 		}
 		if outer == nil {
-			return nil, fmt.Errorf("BASHPP-ENIL-DEREF: dereference of nil pointer")
+			return nil, errBashPPNilDereference
 		}
 		value, _, _, err := outer.read()
 		if err != nil {
@@ -179,7 +181,8 @@ func (r *Runner) bashPPPointerExprValue(expr syntax.BashPPExpr) (*bashPPPointer,
 	}
 }
 
-func (r *Runner) bashPPAddress(expr syntax.BashPPExpr) (*bashPPPointer, error) {
+func (r *Runner) bashPPAddress(expr syntax.BashPPExpr) (result *bashPPPointer, err error) {
+	defer func() { err = r.goSourceRuntimeFault(err) }()
 	for {
 		paren, ok := expr.(*syntax.BashPPParenExpr)
 		if !ok {
@@ -213,7 +216,7 @@ func (r *Runner) bashPPAddress(expr syntax.BashPPExpr) (*bashPPPointer, error) {
 	if cell.pointer {
 		if _, direct := expr.(*syntax.BashPPIdent); !direct {
 			if cell.pointerValue == nil {
-				return nil, fmt.Errorf("BASHPP-ENIL-DEREF: dereference of nil pointer")
+				return nil, errBashPPNilDereference
 			}
 			base := cell.pointerValue
 			ptr = &bashPPPointer{target: base.target, path: append([]bashPPPointerStep(nil), base.path...), elem: base.elem}
@@ -336,7 +339,7 @@ func bashPPInferredCellType(cell *bashPPCell) syntax.BashPPTypeExpr {
 
 func (p *bashPPPointer) read() (any, *bashPPCollectionMeta, syntax.BashPPTypeExpr, error) {
 	if p == nil || p.target == nil {
-		return nil, nil, nil, fmt.Errorf("BASHPP-ENIL-DEREF: dereference of nil pointer")
+		return nil, nil, nil, errBashPPNilDereference
 	}
 	var value any
 	meta := bashPPCellMeta(p.target)
@@ -351,7 +354,7 @@ func (p *bashPPPointer) read() (any, *bashPPCollectionMeta, syntax.BashPPTypeExp
 		if step.deref {
 			pointer, ok := value.(*bashPPPointer)
 			if !ok || pointer == nil {
-				return nil, nil, nil, fmt.Errorf("BASHPP-ENIL-DEREF: dereference of nil embedded pointer")
+				return nil, nil, nil, errBashPPNilEmbeddedDereference
 			}
 			var err error
 			value, meta, _, err = pointer.read()
@@ -494,8 +497,7 @@ func (r *Runner) bashPPBindPointerExpr(name string, expr syntax.BashPPExpr) bool
 			return true
 		}
 		if ptr == nil {
-			r.errf("BASHPP-ENIL-DEREF: dereference of nil pointer\n")
-			r.exit.code = 2
+			r.bashPPReportNilDereference()
 			return true
 		}
 		value, meta, typ, err = ptr.read()
@@ -525,11 +527,13 @@ func (r *Runner) bashPPBindPointerExpr(name string, expr syntax.BashPPExpr) bool
 func (r *Runner) bashPPDerefAssign(target *syntax.BashPPDerefExpr, rhs syntax.BashPPExpr) {
 	ptr, err := r.bashPPPointerExprValue(target.X)
 	if err == nil && ptr == nil {
-		err = fmt.Errorf("BASHPP-ENIL-DEREF: dereference of nil pointer")
+		err = r.goSourceRuntimeFault(errBashPPNilDereference)
 	}
 	if err != nil {
-		r.errf("%v\n", err)
-		r.exit.code = 2
+		if !errors.Is(err, errBashPPScalarInterrupted) {
+			r.errf("%v\n", err)
+			r.exit.code = 2
+		}
 		return
 	}
 	value, meta, err := r.bashPPEvalTypedValue(rhs, ptr.elem)

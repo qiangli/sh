@@ -35,7 +35,7 @@ func (r *Runner) goSourceCallResultCells(call *syntax.BashPPCall, fn *bashPPFunc
 	defer func() { r.bashPPResultCells = previous }()
 	failure := r.bashPPShortFailureSeq
 	values := r.bashPPInvoke(r.ectx, fn, args)
-	if r.bashPPPanicking() || r.exit.exiting || r.exit.fatalExit || r.exit.err != nil || r.bashPPShortFailureSeq != failure || len(values) != len(r.bashPPResultCells) {
+	if r.bashPPPanicHalts() || r.exit.exiting || r.exit.fatalExit || r.exit.err != nil || r.bashPPShortFailureSeq != failure || len(values) != len(r.bashPPResultCells) {
 		return nil, errBashPPScalarInterrupted
 	}
 	results := make([]*bashPPCell, len(values))

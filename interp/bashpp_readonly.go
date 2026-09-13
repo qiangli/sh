@@ -311,8 +311,10 @@ func (r *Runner) bashPPTupleAssign(assign *syntax.BashPPAssign) {
 		}
 		value, err := r.bashPPEvalScalarExpr(expr)
 		if err != nil {
-			r.errf("%s%v\n", r.bashErrPrefix(expr.Pos()), err)
-			r.exit = exitStatus{code: 2}
+			if !errors.Is(err, errBashPPScalarInterrupted) {
+				r.errf("%s%v\n", r.bashErrPrefix(expr.Pos()), err)
+				r.exit = exitStatus{code: 2}
+			}
 			return
 		}
 		cell := &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarString(value.value)}, scalarKind: value.value.Kind()}

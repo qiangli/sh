@@ -245,9 +245,10 @@ fmt.Println((*p)[1:3])}`,
 	}
 }
 
-// These controls pin the existing diagnostics for nil map writes and nil
-// pointer access. Recoverable Go panics for these paths remain unsupported;
-// these checks do not claim native panic/recover parity.
+// These controls pin the diagnostics for nil map writes and nil pointer
+// access. A nil pointer access is Go's run-time panic, reported as an
+// unrecovered panic when nothing recovers it; the nil map write keeps its
+// diagnostic.
 func TestGoSourcePointerDefinedMapNilDiagnostics(t *testing.T) {
 	for _, tc := range []struct{ name, source, want string }{
 		{
@@ -263,14 +264,14 @@ func main(){var empty table;p:=&empty;(*p)["a"]=1}`,
 import "fmt"
 type table map[string]int
 func main(){var p *table;fmt.Println((*p)["a"])}`,
-			want: "BASHPP-ENIL-DEREF: dereference of nil pointer",
+			want: "panic: runtime error: invalid memory address or nil pointer dereference",
 		},
 		{
 			name: "assign_through_nil_pointer",
 			source: `package main
 type table map[string]int
 func main(){var p *table;(*p)["a"]=1}`,
-			want: "BASHPP-ENIL-DEREF: dereference of nil pointer",
+			want: "panic: runtime error: invalid memory address or nil pointer dereference",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

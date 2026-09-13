@@ -4,6 +4,7 @@
 package interp
 
 import (
+	"errors"
 	"fmt"
 	"go/constant"
 	"go/token"
@@ -73,7 +74,9 @@ func (r *Runner) bashPPApplyUpdate(target syntax.BashPPExpr, op string, rhs synt
 	}
 	right, err := r.bashPPEvalScalarExpr(rhs)
 	if err != nil {
-		r.bashPPUpdateError(rhs.Pos(), "RHS", err.Error())
+		if !errors.Is(err, errBashPPScalarInterrupted) {
+			r.bashPPUpdateError(rhs.Pos(), "RHS", err.Error())
+		}
 		return
 	}
 	value, kind, err := r.bashPPUpdateResult(op, left, right)
@@ -142,7 +145,9 @@ func (r *Runner) bashPPApplyMapUpdate(target *syntax.BashPPIndexExpr, collection
 	}
 	right, err := r.bashPPEvalScalarExpr(rhs)
 	if err != nil {
-		r.bashPPUpdateError(rhs.Pos(), "RHS", err.Error())
+		if !errors.Is(err, errBashPPScalarInterrupted) {
+			r.bashPPUpdateError(rhs.Pos(), "RHS", err.Error())
+		}
 		return
 	}
 	value, _, err := r.bashPPUpdateResult(op, left, right)

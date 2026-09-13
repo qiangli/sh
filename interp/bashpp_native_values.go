@@ -381,7 +381,7 @@ func (r *Runner) bashPPBridgeExpr(expr syntax.BashPPExpr) (bashPPBridgeValue, er
 			return bashPPBridgeValue{}, err
 		}
 		if ptr == nil {
-			return bashPPBridgeValue{}, fmt.Errorf("gosource: invalid memory address or nil pointer dereference")
+			return bashPPBridgeValue{}, r.goSourceRuntimeFault(errBashPPNilDereference)
 		}
 		value, meta, typ, err := ptr.read()
 		if err != nil {
@@ -572,7 +572,7 @@ func (s *bashPPNativeSession) applyNativePointerUpdates(req bashPPEvalRequest, r
 
 func (r *Runner) bashPPWriteBridgePointer(ptr *bashPPPointer, value bashPPBridgeValue) error {
 	if ptr == nil {
-		return fmt.Errorf("BASHPP-ENIL-DEREF: dereference of nil pointer")
+		return errBashPPNilDereference
 	}
 	if ptr.target.object != nil && ptr.target.object.readonly {
 		return fmt.Errorf("BASHPP-EREADONLY-MUTATION: cannot mutate readonly value %q through pointer", ptr.target.object.owner)

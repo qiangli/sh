@@ -1352,6 +1352,12 @@ func (r *Runner) bashPPTypedCallArgs(call *syntax.BashPPCall, fn *bashPPFunc) (r
 
 func (r *Runner) bashPPBindInterfaceMethod(iv *bashPPInterfaceValue, method string) (*bashPPFunc, bool) {
 	if iv == nil || iv.nilIface {
+		// Selecting a method on a nil interface is Go's nil dereference:
+		// the itab lookup faults.
+		if r.bashPPGoSource {
+			r.goSourceRuntimeFault(errBashPPNilDereference)
+			return nil, false
+		}
 		r.errf("nil interface has no method %s\n", method)
 		r.exit.code = 2
 		return nil, false
@@ -1389,6 +1395,9 @@ func (r *Runner) bashPPBindMethod(cell *bashPPCell, method string, addressable b
 		return nil, false
 	}
 	if !ptrRecv && cell.pointer && cell.nilPointer {
+		if r.goSourceNilValueReceiver() {
+			return nil, false
+		}
 		r.errf("value method %s called using nil *%s pointer\n", method, cell.typeName)
 		r.exit.code = 2
 		return nil, false
@@ -1556,7 +1565,12 @@ func (r *Runner) bashPPCallValues(c *syntax.BashPPCall, fn *bashPPFunc) (result 
 				r.errf("%s%v\n", r.bashErrPrefix(c.Pos()), err)
 				r.exit = exitStatus{code: 2}
 			}
-			r.bashPPShortFailureSeq++
+			// A panic raised while an argument was evaluated is unwinding
+			// the frame itself; marking the frame failed as well would make
+			// it exit 2 after a deferred call has recovered the panic.
+			if !r.bashPPPanicking() {
+				r.bashPPShortFailureSeq++
+			}
 			return nil, false
 		}
 		return args, ok
@@ -1836,6 +1850,10 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 		r.exit.code = 1
 		return nil
 	}
+	// A frame called BY a deferred call of a running panic must leave the
+	// panic running when it returns, whatever its own defers did; see
+	// goSourceNestedDeferRunning.
+	enteredRunning, enteredChain := r.bashPPPanic.running, len(r.bashPPPanic.chain)
 
 	// Save the caller's execution context and restore it with a defer, so
 	// that EVERY exit path — a return, a panic unwinding through this frame,
@@ -1993,7 +2011,11 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 	if r.bashPPPanicSettledByExit() {
 		return nil
 	}
-	if r.bashPPPanicking() {
+	// A frame called by a deferred call of a running panic returns normally
+	// — the panic is running, not halting — so only a halting panic marks
+	// this frame abandoned.
+	r.bashPPPanic.running = r.goSourceNestedDeferRunning(enteredRunning, enteredChain)
+	if r.bashPPPanicHalts() {
 		// The frame was abandoned, not returned from: it has no results, and
 		// the panic continues into the caller unless this was the last frame
 		// that could have recovered it.

@@ -27,6 +27,7 @@ type bashPPScalar struct {
 // to syntax; this package evaluates the tree it was handed.
 func (r *Runner) bashPPEvalScalarExpr(expr syntax.BashPPExpr) (result bashPPScalar, failure error) {
 	defer func() {
+		failure = r.goSourceRuntimeFault(failure)
 		if r.bashPPGoSource && failure != nil && !errors.Is(failure, errBashPPScalarInterrupted) && expr != nil {
 			var positioned *goSourceError
 			if !errors.As(failure, &positioned) {
@@ -186,8 +187,13 @@ func (r *Runner) bashPPEvalScalarExpr(expr syntax.BashPPExpr) (result bashPPScal
 		// byte, so keep it in the scalar evaluator and leave other index shapes
 		// to the structured reader below.
 		stringOperand := x.GoString
-		switch x.X.(type) {
-		case *syntax.BashPPBasicLit, *syntax.BashPPIdent, *syntax.BashPPParenExpr:
+		switch operand := x.X.(type) {
+		case *syntax.BashPPIdent:
+			// A pointer or structured variable is never a string operand,
+			// whatever its (empty) scalar spelling: `p[i]` on a pointer to
+			// an array reads through p below.
+			stringOperand = !r.goSourceStructuredIdent(operand)
+		case *syntax.BashPPBasicLit, *syntax.BashPPParenExpr:
 			stringOperand = true
 		default:
 			if typ := r.bashPPExprScalarType(x.X); typ != nil {
@@ -1285,7 +1291,7 @@ func (r *Runner) bashPPScalarFuncCall(call *syntax.BashPPCall) (bashPPScalar, er
 	defer func() { r.bashPPResultCells = previous }()
 	failure := r.bashPPShortFailureSeq
 	values := r.bashPPInvoke(r.ectx, fn, args)
-	if r.bashPPPanicking() || r.exit.exiting || r.exit.fatalExit || r.exit.err != nil || r.bashPPShortFailureSeq != failure || len(values) != 1 {
+	if r.bashPPPanicHalts() || r.exit.exiting || r.exit.fatalExit || r.exit.err != nil || r.bashPPShortFailureSeq != failure || len(values) != 1 {
 		return bashPPScalar{}, errBashPPScalarInterrupted
 	}
 	if len(r.bashPPResultCells) != 1 {

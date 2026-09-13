@@ -382,7 +382,8 @@ func (r *Runner) bashPPZeroValue(typ syntax.BashPPTypeExpr) (any, *bashPPCollect
 	return r.bashPPCollectionZero(typ)
 }
 
-func (r *Runner) bashPPEvalTypedValue(expr syntax.BashPPExpr, expected syntax.BashPPTypeExpr) (any, *bashPPCollectionMeta, error) {
+func (r *Runner) bashPPEvalTypedValue(expr syntax.BashPPExpr, expected syntax.BashPPTypeExpr) (value any, meta *bashPPCollectionMeta, err error) {
+	defer func() { err = r.goSourceRuntimeFault(err) }()
 	if lit, ok := expr.(*syntax.BashPPCompositeLit); ok && r.bashPPNativeType(expected) {
 		nativeLit := *lit
 		nativeLit.LitType = expected
@@ -433,7 +434,7 @@ func (r *Runner) bashPPEvalTypedValue(expr syntax.BashPPExpr, expected syntax.Ba
 			return nil, nil, err
 		}
 		if ptr == nil {
-			return nil, nil, fmt.Errorf("BASHPP-ENIL-DEREF: dereference of nil pointer")
+			return nil, nil, errBashPPNilDereference
 		}
 		value, meta, typ, err := ptr.read()
 		if err != nil {
@@ -490,7 +491,7 @@ func (r *Runner) bashPPEvalTypedValue(expr syntax.BashPPExpr, expected syntax.Ba
 			return value, copied, nil
 		}
 	}
-	value, meta, err := r.bashPPEvalElement(expr, expected)
+	value, meta, err = r.bashPPEvalElement(expr, expected)
 	if r.bashPPGoSource {
 		return value, meta, err
 	}
@@ -559,7 +560,8 @@ func bashPPCellMeta(cell *bashPPCell) *bashPPCollectionMeta {
 	return nil
 }
 
-func (r *Runner) bashPPReadExpr(expr syntax.BashPPExpr) (any, *bashPPCollectionMeta, error) {
+func (r *Runner) bashPPReadExpr(expr syntax.BashPPExpr) (value any, meta *bashPPCollectionMeta, err error) {
+	defer func() { err = r.goSourceRuntimeFault(err) }()
 	// A call result is transported in a cell. In particular, pointers use the
 	// cell's pointerValue side channel and intentionally have an empty scalar
 	// spelling. Reading only vr below therefore turned every pointer-returning
@@ -638,18 +640,21 @@ func (r *Runner) bashPPReadExpr(expr syntax.BashPPExpr) (any, *bashPPCollectionM
 			return nil, nil, err
 		}
 		if ptr == nil {
-			return nil, nil, fmt.Errorf("BASHPP-ENIL-DEREF: dereference of nil pointer")
+			return nil, nil, errBashPPNilDereference
 		}
 		value, meta, _, err := ptr.read()
 		return value, meta, err
 	case *syntax.BashPPSelectorExpr:
+		if r.goSourceNilInterfaceOperand(x.X) {
+			return nil, nil, errBashPPNilDereference
+		}
 		value, meta, err := r.bashPPReadExpr(x.X)
 		if err != nil {
 			return nil, nil, err
 		}
 		if pointer, ok := value.(*bashPPPointer); ok {
 			if pointer == nil {
-				return nil, nil, fmt.Errorf("BASHPP-ENIL-DEREF: dereference of nil pointer")
+				return nil, nil, errBashPPNilDereference
 			}
 			value, meta, _, err = pointer.read()
 			if err != nil {
@@ -683,7 +688,7 @@ func (r *Runner) bashPPReadExpr(expr syntax.BashPPExpr) (any, *bashPPCollectionM
 		}
 		if pointer, ok := value.(*bashPPPointer); ok {
 			if pointer == nil {
-				return nil, nil, fmt.Errorf("BASHPP-ENIL-DEREF: dereference of nil pointer")
+				return nil, nil, errBashPPNilDereference
 			}
 			value, meta, _, err = pointer.read()
 			if err != nil {
@@ -746,7 +751,7 @@ func (r *Runner) bashPPReadExpr(expr syntax.BashPPExpr) (any, *bashPPCollectionM
 		}
 		if pointer, ok := value.(*bashPPPointer); ok {
 			if pointer == nil {
-				return nil, nil, fmt.Errorf("BASHPP-ENIL-DEREF: dereference of nil pointer")
+				return nil, nil, errBashPPNilDereference
 			}
 			value, meta, _, err = pointer.read()
 			if err != nil {
@@ -835,7 +840,7 @@ func (r *Runner) bashPPStructuredAssign(target, rhs syntax.BashPPExpr) {
 	cell := r.bashPPScope.lookup(root)
 	if ok && cell != nil && cell.pointer {
 		if index, indexed := target.(*syntax.BashPPIndexExpr); indexed && r.bashPPGoSource {
-			if err := r.bashPPPointerElementAssign(index, rhs); err != nil {
+			if err := r.bashPPPointerElementAssign(index, rhs); err != nil && !errors.Is(err, errBashPPScalarInterrupted) {
 				r.errf("%v\n", err)
 				r.exit = exitStatus{code: 2}
 			}
@@ -843,8 +848,10 @@ func (r *Runner) bashPPStructuredAssign(target, rhs syntax.BashPPExpr) {
 		}
 		ptr, err := r.bashPPAddress(target)
 		if err != nil {
-			r.errf("%v\n", err)
-			r.exit = exitStatus{code: 2}
+			if !errors.Is(err, errBashPPScalarInterrupted) {
+				r.errf("%v\n", err)
+				r.exit = exitStatus{code: 2}
+			}
 			return
 		}
 		if ptr == nil {
@@ -852,8 +859,10 @@ func (r *Runner) bashPPStructuredAssign(target, rhs syntax.BashPPExpr) {
 		}
 		value, meta, err := r.bashPPEvalTypedValue(rhs, ptr.elem)
 		if err != nil {
-			r.errf("BASHPP-EASSIGN-MISMATCH: %v\n", err)
-			r.exit = exitStatus{code: 2}
+			if !errors.Is(err, errBashPPScalarInterrupted) {
+				r.errf("BASHPP-EASSIGN-MISMATCH: %v\n", err)
+				r.exit = exitStatus{code: 2}
+			}
 			return
 		}
 		if ptr.target.object != nil && ptr.target.object.readonly {
@@ -883,8 +892,7 @@ func (r *Runner) bashPPStructuredAssign(target, rhs syntax.BashPPExpr) {
 				break
 			}
 			if parentPointer == nil {
-				r.errf("BASHPP-ENIL-DEREF: dereference of nil pointer\n")
-				r.exit = exitStatus{code: 2}
+				r.bashPPReportNilDereference()
 				return
 			}
 			parent, parentMeta, _, err = parentPointer.read()
@@ -1112,6 +1120,13 @@ func (r *Runner) bashPPMapElementWrite(parent any, parentMeta *bashPPCollectionM
 func (r *Runner) bashPPPointerElementAssign(target *syntax.BashPPIndexExpr, rhs syntax.BashPPExpr) error {
 	parent, parentMeta, err := r.bashPPReadExpr(target.X)
 	if err != nil {
+		return err
+	}
+	// `p[i] = v` on a pointer to an array is `(*p)[i] = v`: Go inserts the
+	// dereference, and a nil p is the nil dereference it always is (a Go
+	// runtime panic). Any other pointer-held collection storage is read the
+	// same way afterwards.
+	if parent, parentMeta, err = r.goSourceIndexedPointee(parent, parentMeta); err != nil {
 		return err
 	}
 	parent, parentMeta, err = r.bashPPSprint162PointerCollectionStorage(parent, parentMeta)

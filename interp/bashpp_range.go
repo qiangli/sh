@@ -226,7 +226,9 @@ func (r *Runner) bashPPRangeScalar(ctx context.Context, rng *syntax.BashPPRange)
 
 	value, err := r.bashPPEvalScalarExpr(rng.Expr)
 	if err != nil {
-		r.bashPPRangeError(rng, "BASHPP-ERANGE-TYPE: %v", err)
+		if !errors.Is(err, errBashPPScalarInterrupted) {
+			r.bashPPRangeError(rng, "BASHPP-ERANGE-TYPE: %v", err)
+		}
 		return true
 	}
 	return r.bashPPRangeScalarValue(ctx, rng, value)
@@ -318,7 +320,10 @@ func (r *Runner) bashPPRangeCollection(ctx context.Context, rng *syntax.BashPPRa
 		// cell, so materialize it exactly once below instead of passing it to the
 		// scalar evaluator. The resulting metadata preserves array-copy and
 		// slice/map reference semantics.
-		if _, composite := rng.Expr.(*syntax.BashPPCompositeLit); !composite {
+		// `range &arr` is a pointer to the array, read as a value the same
+		// way; see goSourceRangePointerArray.
+		_, address := rng.Expr.(*syntax.BashPPAddressExpr)
+		if _, composite := rng.Expr.(*syntax.BashPPCompositeLit); !composite && !(address && r.bashPPGoSource) {
 			return false
 		}
 	}
@@ -348,7 +353,9 @@ func (r *Runner) bashPPRangeCollection(ctx context.Context, rng *syntax.BashPPRa
 	}
 	value, meta, err := r.bashPPReadExpr(rng.Expr)
 	if err != nil {
-		r.bashPPRangeError(rng, "%v", err)
+		if !errors.Is(err, errBashPPScalarInterrupted) {
+			r.bashPPRangeError(rng, "%v", err)
+		}
 		return true
 	}
 	// A path rooted in a collection can still select an ordinary scalar, for
@@ -362,6 +369,9 @@ func (r *Runner) bashPPRangeCollection(ctx context.Context, rng *syntax.BashPPRa
 
 // bashPPRangeCollectionValue iterates an already read collection operand.
 func (r *Runner) bashPPRangeCollectionValue(ctx context.Context, rng *syntax.BashPPRange, value any, meta *bashPPCollectionMeta) bool {
+	if r.goSourceRangePointerArray(ctx, rng, value, meta) {
+		return true
+	}
 	if meta.kind == "struct" || meta.kind == "pointer" {
 		r.bashPPRangeError(rng, "BASHPP-ERANGE-TYPE: cannot range over %s", bashPPTypeText(meta.typ))
 		return true

@@ -240,14 +240,14 @@ func bashPPSelectionError(typ syntax.BashPPTypeExpr, name string, sel bashPPSele
 
 func bashPPDerefEmbedded(value any, meta *bashPPCollectionMeta) (any, *bashPPCollectionMeta, error) {
 	if value == nil && meta != nil && meta.kind == "pointer" {
-		return nil, nil, fmt.Errorf("BASHPP-ENIL-DEREF: dereference of nil embedded pointer")
+		return nil, nil, errBashPPNilEmbeddedDereference
 	}
 	pointer, ok := value.(*bashPPPointer)
 	if !ok {
 		return value, meta, nil
 	}
 	if pointer == nil {
-		return nil, nil, fmt.Errorf("BASHPP-ENIL-DEREF: dereference of nil embedded pointer")
+		return nil, nil, errBashPPNilEmbeddedDereference
 	}
 	value, meta, _, err := pointer.read()
 	return value, meta, err
@@ -284,7 +284,7 @@ func bashPPEmbeddedAddress(rootCell *bashPPCell, edges []bashPPEmbedEdge, elem s
 	ptr := &bashPPPointer{target: rootCell, elem: elem}
 	if rootCell.pointer {
 		if rootCell.pointerValue == nil {
-			return nil, fmt.Errorf("BASHPP-ENIL-DEREF: dereference of nil pointer")
+			return nil, errBashPPNilDereference
 		}
 		base := rootCell.pointerValue
 		ptr.target = base.target
@@ -307,7 +307,7 @@ func (r *Runner) bashPPEmbeddedReceiver(rootCell *bashPPCell, sel bashPPSelectio
 	meta := bashPPCellMeta(rootCell)
 	if rootCell.pointer {
 		if rootCell.pointerValue == nil {
-			return nil, fmt.Errorf("BASHPP-ENIL-DEREF: dereference of nil pointer")
+			return nil, errBashPPNilDereference
 		}
 		var err error
 		value, meta, _, err = rootCell.pointerValue.read()
@@ -341,8 +341,7 @@ func (r *Runner) bashPPBindPromotedMethod(rootCell *bashPPCell, method string, s
 		var err error
 		if rootCell.pointer {
 			if rootCell.pointerValue == nil {
-				r.errf("BASHPP-ENIL-DEREF: dereference of nil pointer\n")
-				r.exit.code = 2
+				r.bashPPReportNilDereference()
 				return nil, false
 			}
 			value, meta, _, err = rootCell.pointerValue.read()
@@ -350,15 +349,13 @@ func (r *Runner) bashPPBindPromotedMethod(rootCell *bashPPCell, method string, s
 			value = rootCell.vrValue()
 		}
 		if err != nil {
-			r.errf("%v\n", err)
-			r.exit.code = 2
+			r.bashPPReportFault(err)
 			return nil, false
 		}
 		value, meta, err = bashPPReadSelection(value, meta, sel.edges)
 		_ = value
 		if err != nil {
-			r.errf("%v\n", err)
-			r.exit.code = 2
+			r.bashPPReportFault(err)
 			return nil, false
 		}
 		if meta == nil || meta.interfaceValue == nil {
@@ -370,8 +367,7 @@ func (r *Runner) bashPPBindPromotedMethod(rootCell *bashPPCell, method string, s
 	}
 	receiver, err := r.bashPPEmbeddedReceiver(rootCell, sel)
 	if err != nil {
-		r.errf("%v\n", err)
-		r.exit.code = 2
+		r.bashPPReportFault(err)
 		return nil, false
 	}
 	methodOwner := sel.method.decl.Receiver.RecvType.Value
@@ -387,8 +383,7 @@ func (r *Runner) bashPPBindPromotedMethod(rootCell *bashPPCell, method string, s
 	if sel.method.decl.Receiver.Pointer && !receiver.pointer && (r.bashPPGoSource || len(sel.edges) > 0) {
 		ptr, err := bashPPEmbeddedAddress(rootCell, sel.edges, sel.receiverType)
 		if err != nil {
-			r.errf("%v\n", err)
-			r.exit.code = 2
+			r.bashPPReportFault(err)
 			return nil, false
 		}
 		owner, _, _ := bashPPNamedOwner(sel.receiverType)
