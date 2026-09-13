@@ -1114,7 +1114,7 @@ func (e *emitter) command(c syntax.Command) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if init != "" && init != "nil" && strings.HasPrefix(strings.TrimSpace(typ), "*") {
+		if !e.goSource && init != "" && init != "nil" && strings.HasPrefix(strings.TrimSpace(typ), "*") {
 			source := scalarProjection()
 			if n.InitExpr != nil {
 				source = e.projectionExpr(n.InitExpr)
