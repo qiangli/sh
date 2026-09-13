@@ -3,10 +3,9 @@ id: 984c9550abe1
 kind: task
 title: 'Sprint 162.3: runtime/output/perf residue — the barrier-b/active-153 roots (105) incl. the deadline family (DESIGN: interpreter per-call cost, a number before code)'
 seq: 93
-status: assigned
+status: todo
 priority: p0
 created: 2026-09-13T00:36:40.661549Z
-weave: 176
 assignee: qiangli
 sprint: 162
 ---
