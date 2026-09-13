@@ -148,11 +148,12 @@ func (r *Runner) goSourceLiteralIndex(fn *bashPPFunc, depth int) int {
 func (r *Runner) goSourceLiveFrames(top syntax.Pos) []goSourceStackFrame {
 	frames := make([]goSourceStackFrame, len(r.callStack))
 	for i := range r.callStack {
-		line := top.Line()
+		pos := top
 		if i+1 < len(r.callStack) {
-			line = r.callStack[i+1].callPos.Line()
+			pos = r.callStack[i+1].callPos
 		}
-		frames[i] = goSourceStackFrame{name: r.goSourceFrameFuncName(i), file: r.goSourceStackFile(""), line: line, seq: r.callStack[i].seq}
+		file, line := r.goSourceFramePosition(pos)
+		frames[i] = goSourceStackFrame{name: r.goSourceFrameFuncName(i), file: file, line: line, seq: r.callStack[i].seq}
 	}
 	return frames
 }
@@ -165,12 +166,16 @@ func (r *Runner) goSourceCaptureFault() {
 		return
 	}
 	top := r.curStmtPos
-	if r.bashPPPanic.traceLine != 0 {
-		top = syntax.NewPos(0, r.bashPPPanic.traceLine, 1)
-	}
 	frames := r.goSourceLiveFrames(top)
-	if r.bashPPPanic.traceSource != "" {
-		frames[len(frames)-1].file = r.goSourceStackFile(r.bashPPPanic.traceSource)
+	fault := &frames[len(frames)-1]
+	if r.bashPPPanic.traceLine != 0 && r.bashPPPanic.traceLine != top.Line() {
+		// The trace line is the raise site's (a panic call spanning lines,
+		// say); the file stays the one governing the statement, which the
+		// raise site shares.
+		fault.line = r.bashPPPanic.traceLine
+		if r.bashPPPanic.traceSource != "" && (r.bashPPGoSourceFile == nil || !top.IsValid()) {
+			fault.file = r.goSourceStackFile(r.bashPPPanic.traceSource)
+		}
 	}
 	r.goSourceFault = &goSourceFaultStack{frames: frames}
 }
