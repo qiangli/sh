@@ -8,7 +8,7 @@ this directory):
 
 | mechanism | commit | reproducers |
 |---|---|---|
-| nil dereference is Go's runtime panic (`runtime error: invalid memory address or nil pointer dereference`), recoverable; nil value receiver, nil interface method, nil func call, promoted method through nil embedded pointer; a frame called by a running deferred call keeps the panic running; a panic in call arguments does not fail the recovered frame; range / index over a pointer to an array | `ef3bde4f` | `nilderef/`, `rangeptr/` |
+| nil dereference is Go's runtime panic (`runtime error: invalid memory address or nil pointer dereference`), recoverable (`3454f1fd` adds a nil pointer field on the way to a selector target); nil value receiver, nil interface method, nil func call, promoted method through nil embedded pointer; a frame called by a running deferred call keeps the panic running; a panic in call arguments does not fail the recovered frame; range / index over a pointer to an array | `ef3bde4f` | `nilderef/`, `rangeptr/` |
 | nil as a first-class value: func-value and typed-nil comparison, value switch (func / map / slice / chan / pointer / interface / composite tag), `x = nil`, typed nil to a dependency, nil interface conversion, `recover()` as a native argument | `c95a77b7` | `nilvalue/` |
 | composite literals compared and switched on, composite literal converted to a named struct/array type, `new(T)` and `any(new(T))` as operands, `f = v.M` method values | `c5ee56b1` | `exprform/` |
 
@@ -170,7 +170,7 @@ passes alone (twice) on this tree.
    the selector names an import. 10 roots.
 4. **lower owner** — `lower/gosource_pointer_field_assign_test.go`
    (`TestGoSourcePointerFieldAssignRejectsNilStorage`) runs the interpreter
-   on `lst.head.next = &element{…}` with a nil `head` and asserts the old refusal. With `ef3bde4f` the interpreter
+   on `lst.head.next = &element{…}` with a nil `head` and asserts the old refusal. With `3454f1fd` the interpreter
    reports Go's panic; the exact diff needed:
    `-	qt.Assert(t, qt.StringContains(stderr, "BASHPP-ENIL-DEREF:"))`
    `+	qt.Assert(t, qt.StringContains(stderr, "panic: runtime error: invalid memory address or nil pointer dereference"))`
