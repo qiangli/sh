@@ -418,12 +418,14 @@ func (e *emitter) importDecl(n *syntax.BashPPImport) error {
 }
 
 func (e *emitter) constGroup(n *syntax.BashPPConstGroup) (string, error) {
+	shadowed := e.goSource && e.bound("iota")
 	e.push()
-	e.bind("iota")
+	if !e.goSource {
+		e.bind("iota")
+	}
 	defer e.pop()
 	saved := e.iotaValue
 	defer func() { e.iotaValue = saved }()
-	shadowed := false
 	var lines []string
 	var lastExpr syntax.BashPPExpr
 	var lastWords []*syntax.Word

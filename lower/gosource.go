@@ -340,7 +340,16 @@ func (e *emitter) statementList(stmts []*syntax.Stmt) ([]string, error) {
 	var out []string
 	for i := 0; i < len(stmts); i++ {
 		if e.goSource {
-			text, consumed, err := e.tupleSplit(stmts[i:])
+			text, consumed, err := e.constDeclGroup(stmts[i:])
+			if err != nil {
+				return nil, err
+			}
+			if consumed > 0 {
+				out = append(out, text)
+				i += consumed - 1
+				continue
+			}
+			text, consumed, err = e.tupleSplit(stmts[i:])
 			if err != nil {
 				return nil, err
 			}
@@ -357,6 +366,51 @@ func (e *emitter) statementList(stmts []*syntax.Stmt) ([]string, error) {
 		out = append(out, x)
 	}
 	return out, nil
+}
+
+// constDeclGroup reverses the converter's local-declaration split. Each local
+// ValueSpec becomes one BashPPDecl, but every declaration from the same Go
+// const group retains the group's const-token position. Reconstituting the
+// group is required for iota: its value is the ConstSpec index, and a constant
+// named iota shadows the predeclared identifier only after its own initializer.
+func (e *emitter) constDeclGroup(stmts []*syntax.Stmt) (string, int, error) {
+	if len(stmts) < 2 {
+		return "", 0, nil
+	}
+	first, ok := stmts[0].Cmd.(*syntax.BashPPDecl)
+	if !ok || first.Kw == nil || first.Kw.Value != "const" || !first.Kw.Pos().IsValid() {
+		return "", 0, nil
+	}
+	groupPos := first.Kw.Pos()
+	var decls []*syntax.BashPPDecl
+	for _, stmt := range stmts {
+		decl, ok := stmt.Cmd.(*syntax.BashPPDecl)
+		if !ok || decl.Kw == nil || decl.Kw.Value != "const" || decl.Kw.Pos() != groupPos {
+			break
+		}
+		decls = append(decls, decl)
+	}
+	if len(decls) < 2 {
+		return "", 0, nil
+	}
+	group := &syntax.BashPPConstGroup{Kw: first.Kw}
+	var previousEnd syntax.Pos
+	var iotaIndex uint32
+	for i, decl := range decls {
+		if i > 0 && decl.End_ != previousEnd {
+			iotaIndex++
+		}
+		group.Specs = append(group.Specs, &syntax.BashPPConstSpec{
+			Name: decl.Name, DeclType: decl.DeclType, DeclTypeExpr: decl.DeclTypeExpr,
+			Init: decl.Init, InitExpr: decl.InitExpr, Iota: iotaIndex,
+		})
+		previousEnd = decl.End_
+	}
+	text, err := e.constGroup(group)
+	if err != nil {
+		return "", 0, err
+	}
+	return e.mark(group) + text + "\n", len(decls), nil
 }
 
 // tupleSplit recognises the converter's lowering of a multi-value
