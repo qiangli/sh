@@ -1279,6 +1279,9 @@ func (r *Runner) bashPPScalarFuncCall(call *syntax.BashPPCall) (bashPPScalar, er
 		if r.goSourceNilFuncCallee(call) {
 			return bashPPScalar{}, r.goSourceRuntimeFault(errBashPPNilDereference)
 		}
+		if r.goSourceCalleeFaulted() {
+			return bashPPScalar{}, errBashPPScalarInterrupted
+		}
 		name := "computed function"
 		if len(call.Fun) > 0 {
 			name = call.Fun[0].Value

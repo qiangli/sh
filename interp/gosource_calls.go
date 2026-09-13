@@ -15,6 +15,9 @@ func (r *Runner) bashPPGoSourceTupleCall(call *syntax.BashPPCall) ([]*bashPPCell
 		if r.goSourceNilFuncCallee(call) {
 			return nil, r.goSourceRuntimeFault(errBashPPNilDereference)
 		}
+		if r.goSourceCalleeFaulted() {
+			return nil, errBashPPScalarInterrupted
+		}
 		return nil, fmt.Errorf("gosource: undefined interpreted callable")
 	}
 	return r.goSourceCallResultCells(call, fn)

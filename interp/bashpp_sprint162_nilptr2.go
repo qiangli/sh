@@ -87,3 +87,16 @@ func bashPPBuiltinScalarKind(name string) constant.Kind {
 func (r *Runner) goSourceNilFuncArgument(arg string) bool {
 	return r.bashPPGoSource && arg == ""
 }
+
+// A promoted method selected through a nil pointer.
+//
+// Resolving `o.M()` where o is a nil *Outer and M is promoted from an
+// embedded field dereferences o on the way to the receiver, and the binding
+// step raises Go's nil-dereference panic there (bashPPBindPromotedMethod).
+// The lookup then reports no callee, and a call site that read that as an
+// undefined name would print a second, wrong diagnostic. goSourceCalleeFaulted
+// tells the call sites the failed lookup was that panic: the expression is
+// interrupted, not undefined.
+func (r *Runner) goSourceCalleeFaulted() bool {
+	return r.bashPPGoSource && r.bashPPPanicHalts()
+}

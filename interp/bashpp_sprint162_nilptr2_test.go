@@ -89,3 +89,10 @@ func TestBashPPSprint162TypeParamInCallee(t *testing.T) {
 	sprint162NilPtr2Expect(t, "generic", "new_typeparam_callee", false)
 	sprint162NilPtr2Refused(t, "generic", "new_typeparam_callee_negative", "undefined: U")
 }
+
+// A promoted method selected through a nil pointer in expression position
+// raises the nil-dereference panic rather than an undefined-callable
+// diagnostic.
+func TestBashPPSprint162PromotedMethodNilReceiver(t *testing.T) {
+	sprint162NilPtr2Expect(t, "promoted", "promoted_nil_receiver", false)
+}
