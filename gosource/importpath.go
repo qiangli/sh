@@ -1,50 +1,43 @@
 package gosource
 
 import (
+	"errors"
 	"fmt"
-	"go/ast"
-	"go/token"
 	"path"
-	"strconv"
 	"strings"
 )
 
-// importPathError is a compiler-front-end diagnostic. Import path validity is
-// checked before import resolution: a malformed path must not be turned into
-// an importer-dependent "could not import" failure.
-type importPathError struct {
-	pos token.Position
-	msg string
-}
-
-func (e importPathError) Error() string {
-	return fmt.Sprintf("%s: %s", e.pos, e.msg)
-}
-
-// validateImportPaths implements the compiler's path-normal-form checks that
-// go/types deliberately leaves to an importer. The checks apply to every
-// parsed package, independently of the selected importer or package map.
-func validateImportPaths(fset *token.FileSet, files []*ast.File) ErrorList {
-	var out ErrorList
-	for _, file := range files {
-		for _, spec := range file.Imports {
-			value, err := strconv.Unquote(spec.Path.Value)
-			if err != nil {
-				continue // gc's scanner/parser owns malformed string literals.
-			}
-			pos := fset.Position(spec.Path.Pos())
-			// go/types already owns the empty-path diagnostic and continues
-			// checking its sibling imports. Only normal-form differences would
-			// otherwise reach importer-dependent resolution.
-			// gc (noder/import.go openPackage) exempts local names — paths
-			// beginning with "./", "../" or "/" — from the canonical-form
-			// check; only non-local paths must already be clean.
-			if value != "" && !isLocalImportName(value) && path.Clean(value) != value {
-				out = append(out, importPathError{pos, fmt.Sprintf("non-canonical import path %q (should be %q)", value, path.Clean(value))})
-			}
-		}
+// resolveImportPath applies the compiler's own import-path rules
+// (cmd/compile/internal/noder/import.go resolveImportPath and openPackage)
+// to a path go/types has already validated, before any package map or
+// importer is consulted. The checks are gc's, in gc's order, with gc's
+// wording; go/types renders a rejection as "could not import P (E)" exactly
+// as types2 does for gc, and keeps checking the file against a fake package,
+// so every later import of the same file is still diagnosed.
+//
+// Covered: the reserved "main" path, an absolute local path, and a non-local
+// path that is not in canonical form. A relative path is resolved by
+// mapImporter.resolve (the `-D` rule) and is exempt from the canonical-form
+// check, as gc's islocalname exempts it. The import-cycle check
+// (path == the package being compiled) needs the `-p` identity, which a Load
+// without Options.ImportPath does not carry, and is left to the checker.
+func resolveImportPath(p string) error {
+	if p == "main" {
+		return errors.New(`cannot import "main"`)
 	}
-	return out
+	if isLocalImportName(p) {
+		if p[0] == '/' {
+			return errors.New("import path cannot be absolute path")
+		}
+		return nil
+	}
+	// local imports should be canonicalized already.
+	// don't want to see "encoding/../encoding/base64"
+	// as different from "encoding/base64".
+	if q := path.Clean(p); q != p {
+		return fmt.Errorf("non-canonical import path %q (should be %q)", p, q)
+	}
+	return nil
 }
 
 // isLocalImportName mirrors gc's islocalname: a path that begins with "./",

@@ -89,10 +89,14 @@ func isRelativeImport(p string) bool {
 	return p == "." || p == ".." || strings.HasPrefix(p, "./") || strings.HasPrefix(p, "../")
 }
 
-// resolve applies the relative-import rule. Without a base a relative path
-// is refused, as the compiler refuses it without -D; with a base it is joined
-// and must stay inside the base.
+// resolve applies the compiler's import-path rules (resolveImportPath) and
+// then the relative-import rule. Without a base a relative path is refused,
+// as the compiler refuses it without -D; with a base it is joined and must
+// stay inside the base.
 func (m *mapImporter) resolve(p string) (string, error) {
+	if err := resolveImportPath(p); err != nil {
+		return "", err
+	}
 	if !isRelativeImport(p) {
 		return p, nil
 	}
