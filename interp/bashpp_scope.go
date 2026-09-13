@@ -126,7 +126,10 @@ func (s *bashPPScope) lookup(name string) *bashPPCell {
 // iteration re-running `var i = 1` succeeds precisely because the first
 // iteration's block is gone.
 func (s *bashPPScope) declare(name string, vr expand.Variable, constant bool) error {
-	if _, exists := s.entries[name]; exists {
+	// The blank identifier binds nothing a program can name, so `var _ = x`
+	// may be spelled any number of times in one block: each spelling
+	// replaces the discarded cell rather than clashing with it.
+	if _, exists := s.entries[name]; exists && name != "_" {
 		return fmt.Errorf("%s redeclared in this block", name)
 	}
 	vr.ReadOnly = vr.ReadOnly || constant

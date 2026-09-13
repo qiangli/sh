@@ -149,3 +149,33 @@ func TestBashPPSprint162AbortedPanics(t *testing.T) {
 		}
 	}
 }
+
+// TestBashPPSprint162BlankDeclaration: `var _ = f()` may be spelled any
+// number of times in one block and every initializer runs; a real name
+// declared twice in one block is still refused.
+func TestBashPPSprint162BlankDeclaration(t *testing.T) {
+	out, err := bashPPSprint162Control4Run(t, "blank_decl", "blank")
+	if err != nil {
+		t.Fatalf("run: %v, output=%q", err, out)
+	}
+	if want := bashPPSprint162Control4Expected(t, "blank_decl", "blank"); out != want {
+		t.Fatalf("output %q, want %q", out, want)
+	}
+	source, err := os.ReadFile(filepath.Join("testdata", "sprint162", "interp-control-4", "blank_decl", "redeclared_negative.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(string(source)), "redeclared_negative.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var classic strings.Builder
+	runner, err := New(Lang(syntax.LangBashPP), StdIO(nil, &classic, &classic))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = runner.Run(context.Background(), file)
+	if !strings.Contains(classic.String(), "a redeclared in this block") || !strings.Contains(classic.String(), "value 1") {
+		t.Fatalf("classic redeclaration: output=%q", classic.String())
+	}
+}
