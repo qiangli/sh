@@ -121,11 +121,16 @@ func TestGoSourceBodylessPassThrough(t *testing.T) {
 					continue
 				}
 				directives := bodylessDirectives[decl]
-				for i := range directives {
-					j := at - 1 - len(directives) + i
+				j := at - 2 // skip the declaration's //line directive
+				for i := len(directives) - 1; i >= 0; i-- {
+					for j >= 0 && strings.HasPrefix(lines[j], "//line ") {
+						j--
+					}
 					if j < 0 || lines[j] != directives[i] {
 						t.Errorf("directive %q of %q is not kept above it\n%s", directives[i], decl, got)
+						continue
 					}
+					j--
 				}
 			}
 

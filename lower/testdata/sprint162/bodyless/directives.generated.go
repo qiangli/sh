@@ -5,19 +5,23 @@ import _ "unsafe"
 
 // lower:0
 //
+//line directives.go:5:1
 //go:noescape
 //line directives.go:6:1
 func Load(p *uint64) uint64
 
 // lower:1
 //
+//line directives.go:8:1
 //go:nosplit
+//line directives.go:9:1
 //go:noescape
 //line directives.go:10:1
 func Store(p *uint64, v uint64)
 
 // lower:2
 //
+//line directives.go:12:1
 //go:linkname nanotime runtime.nanotime
 //line directives.go:13:1
 func nanotime() int64

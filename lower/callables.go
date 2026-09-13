@@ -22,15 +22,42 @@ func (e *emitter) goName(name string) string {
 // goDirectives spells the compiler directives the converter attached to a
 // Go-source declaration (Stmt.Comments, the //go:embed path) so gc sees them
 // on the declaration they came from: //go:embed on a var, //go:noinline,
-// //go:norace, //go:nosplit and the rest on a func.
+// //go:norace, //go:nosplit and the rest on a func. Each directive gets its
+// own source position: a declaration's later //line directive cannot govern a
+// diagnostic which gc reports on the preceding pragma comment itself.
 func (e *emitter) goDirectives(s *syntax.Stmt) string {
 	var out strings.Builder
-	for _, comment := range s.Comments {
+	for i := range s.Comments {
+		comment := &s.Comments[i]
 		if strings.HasPrefix(comment.Text, "go:") {
+			out.WriteString(e.goSourceLineDirective(comment.Pos()))
 			out.WriteString("//" + comment.Text + "\n")
 		}
 	}
 	return out.String()
+}
+
+func (e *emitter) goSourceLineDirective(pos syntax.Pos) string {
+	if e.sourceFile == nil || !pos.IsValid() {
+		return ""
+	}
+	source, ok := e.sourceFile.SourceAt(pos)
+	if !ok {
+		return ""
+	}
+	name := source.Name
+	adjustedName := false
+	if adjusted, ok := adjustedSourceName(e.sourceFile.Sources, pos.Offset()); ok {
+		name = adjusted
+		adjustedName = true
+	}
+	if (name == "" && !adjustedName) || strings.ContainsAny(name, "\r\n") || pos.Line() == 0 {
+		return ""
+	}
+	if pos.Col() > 0 {
+		return fmt.Sprintf("//line %s:%d:%d\n", name, pos.Line(), pos.Col())
+	}
+	return fmt.Sprintf("//line %s:%d\n", name, pos.Line())
 }
 
 // nativeMain reports whether the source's own func main is the program entry:
