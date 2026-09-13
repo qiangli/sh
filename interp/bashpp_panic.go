@@ -238,6 +238,7 @@ func (r *Runner) bashPPRaiseValue(text string, value any) {
 	// A panic raised inside a cleanup is a new unwind, not a continuation of
 	// the one that ran the cleanup: it abandons the rest of that cleanup too.
 	r.bashPPPanic.running = false
+	r.goSourceCaptureFault()
 	if r.bashPPFuncActive == 0 {
 		r.bashPPPanicTerminate()
 		return
@@ -296,6 +297,7 @@ func (r *Runner) bashPPRecover() (any, bool) {
 	// recovered a nested panic, an older panic still exists but stays suspended
 	// until this cleanup returns to the older unwind's defer runner.
 	r.bashPPPanic.running = r.bashPPPanic.active
+	r.goSourceFaultRecovered()
 	_ = value
 	return payload, true
 }

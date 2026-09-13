@@ -383,7 +383,7 @@ func (r *Runner) bashPPZeroValue(typ syntax.BashPPTypeExpr) (any, *bashPPCollect
 }
 
 func (r *Runner) bashPPEvalTypedValue(expr syntax.BashPPExpr, expected syntax.BashPPTypeExpr) (value any, meta *bashPPCollectionMeta, err error) {
-	defer func() { err = r.goSourceRuntimeFault(err) }()
+	defer func() { err = r.goSourceRuntimeFaultAt(err, expr) }()
 	if lit, ok := expr.(*syntax.BashPPCompositeLit); ok && r.bashPPNativeType(expected) {
 		nativeLit := *lit
 		nativeLit.LitType = expected
@@ -572,7 +572,7 @@ func bashPPCellMeta(cell *bashPPCell) *bashPPCollectionMeta {
 }
 
 func (r *Runner) bashPPReadExpr(expr syntax.BashPPExpr) (value any, meta *bashPPCollectionMeta, err error) {
-	defer func() { err = r.goSourceRuntimeFault(err) }()
+	defer func() { err = r.goSourceRuntimeFaultAt(err, expr) }()
 	// A call result is transported in a cell. In particular, pointers use the
 	// cell's pointerValue side channel and intentionally have an empty scalar
 	// spelling. Reading only vr below therefore turned every pointer-returning

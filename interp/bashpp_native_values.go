@@ -77,6 +77,11 @@ func (r *Runner) bashPPBridgeCall(ctx context.Context, call *syntax.BashPPCall) 
 	if values, claimed, err := r.goSourceAtomicCall(call); claimed {
 		return values, err
 	}
+	// Stack introspection reads the interpreter's own frames; see
+	// bashpp_sprint162_nilptr2_stack.go.
+	if values, claimed, err := r.goSourceRuntimeStackCall(call); claimed {
+		return values, err
+	}
 	q, err := r.bashPPPrepareNativeCall(ctx, call)
 	if err != nil {
 		return nil, err

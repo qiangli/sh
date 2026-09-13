@@ -101,3 +101,10 @@ func TestBashPPSprint162PromotedMethodNilReceiver(t *testing.T) {
 func TestBashPPSprint162RecoverAssign(t *testing.T) {
 	sprint162NilPtr2Expect(t, "recoverassign", "recover_assign", false)
 }
+
+// runtime.Caller / FuncForPC / Stack and debug.Stack see the interpreted
+// frames, including the panicking frames while a deferred call runs for the
+// panic, and not after the recovering call has returned.
+func TestBashPPSprint162RuntimeStackIntrospection(t *testing.T) {
+	sprint162NilPtr2Expect(t, "stack", "runtime_caller", false)
+}

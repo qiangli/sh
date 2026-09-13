@@ -2137,7 +2137,7 @@ func (r *Runner) bashPPEnterFrame(fn *bashPPFunc, args []string) *bashPPFrame {
 			r.bashPPScope.entries[recv.Name.Value] = &copyCell
 		}
 	}
-	r.callStack = append(r.callStack, callFrame{funcName: fn.name()})
+	r.callStack = append(r.callStack, callFrame{funcName: fn.name(), callPos: r.curStmtPos, bashPPFn: fn, seq: r.goSourceNextFrameSeq()})
 	r.bashPPReturn = bashPPReturnState{}
 	r.bashPPFuncActive++
 	return frame

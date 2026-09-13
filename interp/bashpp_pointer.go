@@ -115,7 +115,7 @@ func (r *Runner) bashPPPointerConversion(expr syntax.BashPPExpr) (*bashPPPointer
 }
 
 func (r *Runner) bashPPPointerExprValue(expr syntax.BashPPExpr) (ptr *bashPPPointer, err error) {
-	defer func() { err = r.goSourceRuntimeFault(err) }()
+	defer func() { err = r.goSourceRuntimeFaultAt(err, expr) }()
 	if _, nilConversion := r.bashPPNilPointerConversion(expr); nilConversion {
 		return nil, nil
 	}
@@ -182,7 +182,7 @@ func (r *Runner) bashPPPointerExprValue(expr syntax.BashPPExpr) (ptr *bashPPPoin
 }
 
 func (r *Runner) bashPPAddress(expr syntax.BashPPExpr) (result *bashPPPointer, err error) {
-	defer func() { err = r.goSourceRuntimeFault(err) }()
+	defer func() { err = r.goSourceRuntimeFaultAt(err, expr) }()
 	for {
 		paren, ok := expr.(*syntax.BashPPParenExpr)
 		if !ok {

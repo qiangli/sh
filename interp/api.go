@@ -701,6 +701,12 @@ type Runner struct {
 
 	// callStack tracks function call frames for caller/BASH_SOURCE/BASH_LINENO/FUNCNAME.
 	callStack []callFrame
+	// goSourceFrameSeq, goSourceFault and goSourcePCs back Go's runtime
+	// stack introspection of interpreted frames; see
+	// bashpp_sprint162_nilptr2_stack.go.
+	goSourceFrameSeq uint64
+	goSourceFault    *goSourceFaultStack
+	goSourcePCs      []goSourceStackFrame
 
 	// exitTrapCallStack preserves the function stack for an EXIT trap
 	// triggered by `exit` from inside a function.
@@ -1054,6 +1060,13 @@ type callFrame struct {
 	callerSource string
 	funcName     string
 	args         []string
+	// callPos, bashPPFn and seq describe a Bash++ frame for Go's stack
+	// introspection: the position of the call that entered it, the
+	// function running in it, and an identity that survives the frame's
+	// depth being reused; see bashpp_sprint162_nilptr2_stack.go.
+	callPos  syntax.Pos
+	bashPPFn *bashPPFunc
+	seq      uint64
 	// bodyLine is the line of the function body's opening token.
 	// Bash's parser stamps for/select commands inside a function with
 	// this line rather than their own, and runtime diagnostics like
