@@ -6,7 +6,7 @@ seq: 68
 status: todo
 priority: p0
 created: 2026-09-10T10:45:00.486687Z
-sprint: 146
+sprint: 166
 ---
 
 The normative artifact. Every other Sprint 146 story gates against this text, so it lands first.

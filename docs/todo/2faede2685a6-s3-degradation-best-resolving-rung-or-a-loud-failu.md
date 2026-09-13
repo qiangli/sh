@@ -6,7 +6,7 @@ seq: 70
 status: todo
 priority: p0
 created: 2026-09-10T10:45:21.53684Z
-sprint: 146
+sprint: 166
 ---
 
 Depends on S1. Replaces the shipped refuse-before-the-body rule.

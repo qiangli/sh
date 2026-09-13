@@ -6,7 +6,7 @@ seq: 69
 status: todo
 priority: p0
 created: 2026-09-10T10:45:00.509126Z
-sprint: 146
+sprint: 166
 ---
 
 Depends on S1. Reverses a shipped rule, deliberately.
