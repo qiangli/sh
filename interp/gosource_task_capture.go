@@ -634,7 +634,7 @@ func bashPPCellHoldsNative(cell *bashPPCell) bool {
 				return false
 			}
 			seen[key] = true
-			for _, item := range value {
+			for _, item := range bashPPStorageSnapshot(value) {
 				if holds(item) {
 					return true
 				}

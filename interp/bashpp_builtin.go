@@ -387,8 +387,7 @@ func (r *Runner) bashPPRunValueBuiltin(name string, c *syntax.BashPPCall) (*bash
 		}
 		if mapping, ok := args[0].value.(map[string]any); ok {
 			key := fmt.Sprint(args[1].value)
-			delete(mapping, key)
-			delete(args[0].meta.mapping, key)
+			bashPPStorageDelete(mapping, args[0].meta.mapping, key)
 		}
 		return nil, false
 
@@ -657,7 +656,7 @@ func (r *Runner) bashPPBuiltinLength(name string, c *syntax.BashPPCall, args []b
 		// than an empty table. Reading it as a table crashed the interpreter on
 		// `len(m)` for `var m map[string]int`.
 		table, _ := arg.value.(map[string]any)
-		return bashPPBuiltinScalarCell(strconv.Itoa(len(table))), nil
+		return bashPPBuiltinScalarCell(strconv.Itoa(bashPPStorageLen(table))), nil
 	}
 	seq, _ := arg.value.([]any)
 	size := len(seq)

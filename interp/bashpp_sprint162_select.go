@@ -87,8 +87,7 @@ func (r *Runner) bashPPSelectReceiveAssign(assign *syntax.BashPPAssign, received
 			r.exit.code = 2
 			return
 		}
-		mapping[last.field] = value
-		parentMeta.mapping[last.field] = candidate.valueMeta
+		bashPPStorageSetField(mapping, parentMeta.mapping, last.field, value, candidate.valueMeta)
 		return
 	}
 	sequence, ok := parent.([]any)

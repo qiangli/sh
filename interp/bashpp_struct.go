@@ -336,15 +336,15 @@ func bashPPSetStructSelector(root map[string]any, meta *bashPPCollectionMeta, ed
 	currentMeta := meta
 	for i, edge := range edges {
 		if i == len(edges)-1 {
-			mapping[edge.name] = value
-			currentMeta.mapping[edge.name] = child
+			bashPPStorageSetField(mapping, currentMeta.mapping, edge.name, value, child)
 			return nil
 		}
-		nested, ok := mapping[edge.name].(map[string]any)
+		nestedValue, _ := bashPPStorageGet(mapping, edge.name)
+		nested, ok := nestedValue.(map[string]any)
 		if !ok || currentMeta == nil {
 			return fmt.Errorf("promoted path %s no longer names struct storage", bashPPEmbedPath(edges[:i+1]))
 		}
-		nestedMeta := currentMeta.mapping[edge.name]
+		nestedMeta := bashPPLayoutGet(currentMeta.mapping, edge.name)
 		if nestedMeta == nil || nestedMeta.kind != "struct" {
 			return fmt.Errorf("promoted path %s no longer names struct storage", bashPPEmbedPath(edges[:i+1]))
 		}
@@ -730,12 +730,12 @@ func (r *Runner) bashPPReadExpr(expr syntax.BashPPExpr) (value any, meta *bashPP
 			if !valid && value != nil {
 				return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-STORAGE: map payload has type %T", value)
 			}
-			result, found := mapping[canonical]
+			result, found := bashPPStorageGet(mapping, canonical)
 			if !found {
 				zero, child := r.bashPPZeroValue(collection.Element)
 				return zero, child, nil
 			}
-			return result, meta.mapping[canonical], nil
+			return result, bashPPLayoutGet(meta.mapping, canonical), nil
 		}
 		i, indexErr := r.bashPPCollectionIndex(x.Index)
 		if indexErr != nil {
@@ -974,8 +974,7 @@ func (r *Runner) bashPPStructuredAssign(target, rhs syntax.BashPPExpr) {
 				r.exit = exitStatus{code: 2}
 				return
 			}
-			mapping[last.field] = value
-			parentMeta.mapping[last.field] = meta
+			bashPPStorageSetField(mapping, parentMeta.mapping, last.field, value, meta)
 		} else {
 			sequence, ok := parent.([]any)
 			if !ok || last.index < 0 || last.index >= len(sequence) {
@@ -1080,8 +1079,7 @@ func (r *Runner) bashPPStructuredAssign(target, rhs syntax.BashPPExpr) {
 			err = fmt.Errorf("BASHPP-ESELECTOR-TYPE: assignment parent is not struct storage")
 			break
 		}
-		mapping[last] = value
-		parentMeta.mapping[last] = child
+		bashPPStorageSetField(mapping, parentMeta.mapping, last, value, child)
 	case *syntax.BashPPIndexExpr:
 		collection, found := r.bashPPUnderlyingType(parentMeta.typ).(*syntax.BashPPCollectionType)
 		if !found {
@@ -1161,8 +1159,7 @@ func (r *Runner) bashPPMapElementWrite(parent any, parentMeta *bashPPCollectionM
 		return fmt.Errorf("BASHPP-ENIL-MAP: assignment to nil map")
 	}
 	canonical := fmt.Sprint(key)
-	mapping[canonical] = value
-	parentMeta.mapping[canonical] = child
+	bashPPStorageSetField(mapping, parentMeta.mapping, canonical, value, child)
 	return nil
 }
 

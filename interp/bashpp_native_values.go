@@ -616,10 +616,11 @@ func (r *Runner) bashPPWriteBridgePointer(ptr *bashPPPointer, value bashPPBridge
 		if !ok {
 			return fmt.Errorf("BASHPP-EPOINTER-TARGET: pointer field path no longer names struct storage")
 		}
-		mapping[last.field] = converted
+		var layout map[string]*bashPPCollectionMeta
 		if parentMeta != nil {
-			parentMeta.mapping[last.field] = meta
+			layout = parentMeta.mapping
 		}
+		bashPPStorageSetField(mapping, layout, last.field, converted, meta)
 		return nil
 	}
 	sequence, ok := parent.([]any)
@@ -717,7 +718,7 @@ func (r *Runner) bashPPBridgeCollection(value any, meta *bashPPCollectionMeta, t
 				return result, fmt.Errorf("gosource: mapping without map type")
 			}
 			result.Kind = "map"
-			for key, item := range value {
+			for key, item := range bashPPStorageSnapshot(value) {
 				keyValue := bashPPBridgeValue{Type: bashPPTypeText(shape.Key), Text: key}
 				switch bashPPTypeText(r.bashPPUnderlyingType(shape.Key)) {
 				case "string":
@@ -729,7 +730,7 @@ func (r *Runner) bashPPBridgeCollection(value any, meta *bashPPCollectionMeta, t
 				}
 				var child *bashPPCollectionMeta
 				if meta != nil {
-					child = meta.mapping[key]
+					child = bashPPLayoutGet(meta.mapping, key)
 				}
 				converted, err := r.bashPPBridgeCollection(item, child, shape.Element)
 				if err != nil {
@@ -745,13 +746,13 @@ func (r *Runner) bashPPBridgeCollection(value any, meta *bashPPCollectionMeta, t
 			// which is where the interpreter keeps their storage; the worker's
 			// FieldByName and the generated codecs address the same names.
 			for _, field := range bashPPFlatFields(shape.Fields) {
-				item, exists := value[field.name]
+				item, exists := bashPPStorageGet(value, field.name)
 				if !exists {
 					return result, fmt.Errorf("gosource: missing struct field %s", field.name)
 				}
 				var child *bashPPCollectionMeta
 				if meta != nil {
-					child = meta.mapping[field.name]
+					child = bashPPLayoutGet(meta.mapping, field.name)
 				}
 				converted, err := r.bashPPBridgeCollection(item, child, field.typ)
 				if err != nil {

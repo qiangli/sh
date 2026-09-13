@@ -403,17 +403,14 @@ func (r *Runner) bashPPRangeCollectionValue(ctx context.Context, rng *syntax.Bas
 		}
 	case "map":
 		mapping, _ := value.(map[string]any)
-		keys := make([]string, 0, len(mapping))
-		for key := range mapping {
-			keys = append(keys, key)
-		}
+		keys := bashPPStorageKeys(mapping)
 		sort.Strings(keys)
 		for _, key := range keys {
-			item, exists := mapping[key]
+			item, exists := bashPPStorageGet(mapping, key)
 			if !exists {
 				continue
 			}
-			if !r.bashPPRangeIteration(ctx, rng, key, collection.Key, item, meta.mapping[key], collection.Element) {
+			if !r.bashPPRangeIteration(ctx, rng, key, collection.Key, item, bashPPLayoutGet(meta.mapping, key), collection.Element) {
 				return true
 			}
 		}

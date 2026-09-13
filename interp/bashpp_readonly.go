@@ -42,7 +42,7 @@ func bashPPPathValue(value any, parts []bashPPPathPart) (any, bool) {
 			if key == "" {
 				key, _ = part.index.(string)
 			}
-			value = current[key]
+			value, _ = bashPPStorageGet(current, key)
 		case []any:
 			i, ok := part.index.(int)
 			if !ok || i < 0 || i >= len(current) {
@@ -436,7 +436,7 @@ func (r *Runner) bashPPResolveWord(w *syntax.Word) (string, bool) {
 				if !ok {
 					return "", false
 				}
-				value = mapping[part.field]
+				value, _ = bashPPStorageGet(mapping, part.field)
 				continue
 			}
 			sel := r.bashPPResolveField(meta.typ, part.field)
@@ -453,9 +453,9 @@ func (r *Runner) bashPPResolveWord(w *syntax.Word) (string, bool) {
 		switch current := value.(type) {
 		case map[string]any:
 			key, _ := part.index.(string)
-			value = current[key]
+			value, _ = bashPPStorageGet(current, key)
 			if meta != nil {
-				meta = meta.mapping[key]
+				meta = bashPPLayoutGet(meta.mapping, key)
 			}
 		case []any:
 			i, ok := part.index.(int)

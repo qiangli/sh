@@ -129,8 +129,8 @@ func (r *Runner) bashPPApplyMapUpdate(target *syntax.BashPPIndexExpr, collection
 		return
 	}
 	canonical := fmt.Sprint(key)
-	current, found := mapping[canonical]
-	child := meta.mapping[canonical]
+	current, found := bashPPStorageGet(mapping, canonical)
+	child := bashPPLayoutGet(meta.mapping, canonical)
 	if !found {
 		current, child = r.bashPPZeroValue(collection.Element)
 	}
@@ -155,8 +155,7 @@ func (r *Runner) bashPPApplyMapUpdate(target *syntax.BashPPIndexExpr, collection
 		r.bashPPUpdateError(pos, "OP", err.Error())
 		return
 	}
-	mapping[canonical] = value
-	meta.mapping[canonical] = nil
+	bashPPStorageSetField(mapping, meta.mapping, canonical, value, nil)
 	r.exit.clear()
 }
 
@@ -267,10 +266,11 @@ func (r *Runner) bashPPWriteUpdatePointer(ptr *bashPPPointer, value any, kind co
 		if !ok {
 			return fmt.Errorf("selector target storage is no longer a struct")
 		}
-		mapping[last.field] = value
+		var layout map[string]*bashPPCollectionMeta
 		if parentMeta != nil {
-			parentMeta.mapping[last.field] = nil
+			layout = parentMeta.mapping
 		}
+		bashPPStorageSetField(mapping, layout, last.field, value, nil)
 		return nil
 	}
 	sequence, ok := parent.([]any)

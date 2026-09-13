@@ -260,7 +260,7 @@ func (r *Runner) bashPPAddress(expr syntax.BashPPExpr) (result *bashPPPointer, e
 			for i, edge := range sel.edges {
 				ptr.path = append(ptr.path, bashPPPointerStep{field: edge.name})
 				if meta != nil {
-					meta = meta.mapping[edge.name]
+					meta = bashPPLayoutGet(meta.mapping, edge.name)
 				}
 				if edge.pointer && i+1 < len(sel.edges) {
 					ptr.path = append(ptr.path, bashPPPointerStep{deref: true})
@@ -369,12 +369,12 @@ func (p *bashPPPointer) read() (any, *bashPPCollectionMeta, syntax.BashPPTypeExp
 				return nil, nil, nil, fmt.Errorf("BASHPP-EPOINTER-TARGET: pointer field path no longer names struct storage")
 			}
 			var found bool
-			value, found = mapping[step.field]
+			value, found = bashPPStorageGet(mapping, step.field)
 			if !found {
 				return nil, nil, nil, fmt.Errorf("BASHPP-EPOINTER-TARGET: pointer field %q no longer exists", step.field)
 			}
 			if meta != nil {
-				meta = meta.mapping[step.field]
+				meta = bashPPLayoutGet(meta.mapping, step.field)
 			}
 		} else {
 			seq, ok := value.([]any)
@@ -570,10 +570,11 @@ func (r *Runner) bashPPDerefAssign(target *syntax.BashPPDerefExpr, rhs syntax.Ba
 			r.exit.code = 2
 			return
 		}
-		mapping[last.field] = value
+		var layout map[string]*bashPPCollectionMeta
 		if parentMeta != nil {
-			parentMeta.mapping[last.field] = meta
+			layout = parentMeta.mapping
 		}
+		bashPPStorageSetField(mapping, layout, last.field, value, meta)
 	} else {
 		sequence, ok := parent.([]any)
 		if !ok || last.index < 0 || last.index >= len(sequence) {

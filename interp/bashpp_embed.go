@@ -265,11 +265,11 @@ func bashPPReadSelection(value any, meta *bashPPCollectionMeta, edges []bashPPEm
 			return nil, nil, fmt.Errorf("BASHPP-ESELECTOR-TYPE: promoted path no longer names struct storage")
 		}
 		var found bool
-		value, found = mapping[edge.name]
+		value, found = bashPPStorageGet(mapping, edge.name)
 		if !found {
 			return nil, nil, fmt.Errorf("BASHPP-ESELECTOR-UNKNOWN: embedded field %q is missing", edge.name)
 		}
-		meta = meta.mapping[edge.name]
+		meta = bashPPLayoutGet(meta.mapping, edge.name)
 		if edge.pointer && i+1 < len(edges) {
 			value, meta, err = bashPPDerefEmbedded(value, meta)
 			if err != nil {

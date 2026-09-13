@@ -127,9 +127,10 @@ func (c *bashPPObjectCloner) clone(value any) (any, error) {
 		if done, ok := c.done[key]; ok {
 			return done, nil
 		}
-		out := make(map[string]any, len(value))
+		entries := bashPPStorageSnapshot(value)
+		out := make(map[string]any, len(entries))
 		c.active[key] = true
-		for name, item := range value {
+		for name, item := range entries {
 			copy, err := c.clone(item)
 			if err != nil {
 				return nil, err

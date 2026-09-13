@@ -965,10 +965,11 @@ func bashPPCompareValues(left any, leftMeta *bashPPCollectionMeta, leftNilLitera
 		}
 		return true, nil
 	case "struct":
-		leftMap := left.(map[string]any)
-		rightMap := right.(map[string]any)
-		for field, child := range leftMeta.mapping {
-			ok, err := bashPPCompareValues(leftMap[field], child, false, rightMap[field], rightMeta.mapping[field], false)
+		leftMap := bashPPStorageSnapshot(left.(map[string]any))
+		rightMap := bashPPStorageSnapshot(right.(map[string]any))
+		rightLayout := bashPPLayoutSnapshot(rightMeta.mapping)
+		for field, child := range bashPPLayoutSnapshot(leftMeta.mapping) {
+			ok, err := bashPPCompareValues(leftMap[field], child, false, rightMap[field], rightLayout[field], false)
 			if err != nil {
 				return false, err
 			}

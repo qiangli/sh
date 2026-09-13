@@ -71,10 +71,12 @@ func bashPPCopyArrayValue(value any, meta *bashPPCollectionMeta) (any, *bashPPCo
 		if !ok {
 			return value, meta
 		}
+		mapping = bashPPStorageSnapshot(mapping)
+		layout := bashPPLayoutSnapshot(meta.mapping)
 		out := make(map[string]any, len(mapping))
-		metaCopy.mapping = make(map[string]*bashPPCollectionMeta, len(meta.mapping))
+		metaCopy.mapping = make(map[string]*bashPPCollectionMeta, len(layout))
 		for field, item := range mapping {
-			child := meta.mapping[field]
+			child := layout[field]
 			if bashPPValueMeta(child) || child != nil && child.interfaceValue != nil {
 				item, child = bashPPCopyArrayValue(item, child)
 			}
@@ -121,8 +123,9 @@ func bashPPCloneCollectionMeta(meta *bashPPCollectionMeta, seen map[*bashPPColle
 		out.sequence[i] = bashPPCloneCollectionMeta(child, seen, cloneCell)
 	}
 	if meta.mapping != nil {
-		out.mapping = make(map[string]*bashPPCollectionMeta, len(meta.mapping))
-		for key, child := range meta.mapping {
+		layout := bashPPLayoutSnapshot(meta.mapping)
+		out.mapping = make(map[string]*bashPPCollectionMeta, len(layout))
+		for key, child := range layout {
 			out.mapping[key] = bashPPCloneCollectionMeta(child, seen, cloneCell)
 		}
 	}
@@ -963,8 +966,7 @@ func (r *Runner) bashPPCollectionAssign(target *syntax.BashPPIndexExpr, rhs synt
 			return
 		}
 		canonical := fmt.Sprint(key)
-		parent.(map[string]any)[canonical] = value
-		meta.mapping[canonical] = child
+		bashPPStorageSetField(parent.(map[string]any), meta.mapping, canonical, value, child)
 		return
 	}
 	i, indexErr := r.bashPPCollectionIndex(target.Index)

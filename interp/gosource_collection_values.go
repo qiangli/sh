@@ -182,8 +182,8 @@ func (r *Runner) goSourceMapCommaCells(index *syntax.BashPPIndexExpr) (*bashPPCe
 		return nil, nil
 	}
 	canonical := fmt.Sprint(key)
-	result, found := table[canonical]
-	child := meta.mapping[canonical]
+	result, found := bashPPStorageGet(table, canonical)
+	child := bashPPLayoutGet(meta.mapping, canonical)
 	if !found {
 		result, child = r.bashPPZeroValue(shape.Element)
 	}
