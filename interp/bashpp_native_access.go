@@ -54,7 +54,11 @@ func (r *Runner) bashPPNativeExpr(expr syntax.BashPPExpr) bool {
 		}
 		return r.bashPPNativeExpr(x.X)
 	case *syntax.BashPPIdent:
-		return r.bashPPNativeCellValue(x.Name.Value) != nil
+		// A pointer whose pointee is a native handle — new(runtime.MemStats)
+		// — is the dependency's value as much as the handle itself: its
+		// fields are read through the worker, which dereferences the
+		// pointer it bound to the handle's storage (Sprint 165 runtime-2).
+		return r.bashPPNativeCellValue(x.Name.Value) != nil || r.bashPPNativePointerExpr(x)
 	}
 	return false
 }
@@ -109,6 +113,12 @@ func (r *Runner) bashPPNativeAccess(ctx context.Context, op string, base bashPPB
 	}
 	values, err := r.bashPPNativeRequest(ctx, req, bashPPBridgeRequest{Op: op, Selector: selector, Receiver: &base, Args: args})
 	if err != nil {
+		// The dependency's own nil-pointer fault on a structured read is
+		// the nil dereference Go's runtime raises — a recoverable
+		// runtime.Error, not a diagnostic (Sprint 165 runtime-2).
+		if err.Error() == errBashPPNilDereference.bashPPRuntimeErrorText() {
+			return bashPPBridgeValue{}, r.goSourceRuntimeFault(errBashPPNilDereference)
+		}
 		return bashPPBridgeValue{}, err
 	}
 	if len(values) != 1 {

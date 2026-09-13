@@ -261,7 +261,7 @@ func access(rv reflect.Value,q request)([]value,string){
  if rv.Kind()==reflect.Interface&&!rv.IsNil(){rv=rv.Elem()}
  if q.Op=="field-set" {
   if len(q.Args)!=1{return nil,"native field writes require one value"}
-  for rv.Kind()==reflect.Pointer {if rv.IsNil(){return nil,"field access through nil pointer"};rv=rv.Elem()}
+  for rv.Kind()==reflect.Pointer {if rv.IsNil(){return nil,"runtime error: invalid memory address or nil pointer dereference"};rv=rv.Elem()}
   if rv.Kind()!=reflect.Struct{return nil,"native field writes require a struct"}
   field:=rv.FieldByName(q.Selector)
   if !field.IsValid(){return nil,"unknown exported member "+q.Selector+" of "+rv.Type().String()}
@@ -272,7 +272,7 @@ func access(rv reflect.Value,q request)([]value,string){
  }
  if q.Op=="field"||q.Op=="member"||q.Op=="receiver_field" {
   original:=rv
-  for rv.Kind()==reflect.Pointer {if rv.IsNil(){if q.Op=="member" {if method:=memberMethod(original,q.Selector);method.IsValid(){return []value{encode(method)},""}};return nil,"field access through nil pointer"};rv=rv.Elem()}
+  for rv.Kind()==reflect.Pointer {if rv.IsNil(){if q.Op=="member" {if method:=memberMethod(original,q.Selector);method.IsValid(){return []value{encode(method)},""}};return nil,"runtime error: invalid memory address or nil pointer dereference"};rv=rv.Elem()}
   if rv.Kind()==reflect.Struct {
    f:=rv.FieldByName(q.Selector)
    if f.IsValid(){if !f.CanInterface(){return nil,"unexported field "+q.Selector};encoded:=encode(f)
