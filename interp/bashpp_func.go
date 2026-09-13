@@ -2705,11 +2705,18 @@ func (r *Runner) bashPPRunDefers(ctx context.Context, mark int) {
 				r.bashPPCallCells = d.cells
 				r.bashPPInvoke(ctx, d.fn, d.args)
 			case d.predeclared != "":
-				// `defer panic(v)` and `defer recover()`. The latter is the shape
-				// Go documents as not working, and it does not work here either,
-				// for the reason it does not there: recover IS the deferred call,
-				// so nothing deferred it in turn — see [Runner.bashPPRecover].
-				if bashPPValueBuiltin(d.predeclared) {
+				// `defer panic(v)` and `defer recover()`. The latter in the
+				// panicking frame itself is the shape Go documents as not
+				// working, and it does not work here either: recover IS the
+				// deferred call, so nothing deferred it in turn — see
+				// [Runner.bashPPRecover]. Deferred by a function that is itself
+				// a directly deferred call of the unwinding frame, it is that
+				// function's own recover and does work, as in Go.
+				if d.predeclared == "recover" && savedDeferDepth == len(r.callStack) {
+					r.bashPPDeferDepth = savedDeferDepth
+					r.bashPPPredeclared(d.predeclared, d.call, d.args)
+					r.bashPPDeferDepth = len(r.callStack) + 1
+				} else if bashPPValueBuiltin(d.predeclared) {
 					r.bashPPRunValueBuiltin(d.predeclared, d.call)
 				} else {
 					r.bashPPPredeclared(d.predeclared, d.call, d.args)

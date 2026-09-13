@@ -64,6 +64,8 @@ type bashPPPanicState struct {
 	// shell": the cleanups an unwind runs are ordinary statements and must be
 	// allowed to run, while everything else must not. A panic raised inside a
 	// cleanup clears it again, so the rest of that cleanup is abandoned too.
+	// Frames deeper than the panic has unwound to are never halted by it;
+	// see bashPPPanicHalts.
 	running bool
 	chain   []string
 	values  []any
@@ -110,9 +112,15 @@ func (r *Runner) bashPPPanicking() bool {
 }
 
 // bashPPPanicHalts reports whether a panic must stop the next statement from
-// running. See [bashPPPanicState.running] for the one case where it must not.
+// running: when it is abandoning the executing frame and no cleanup of that
+// frame is in progress. A deferred Go-form call runs one frame deeper than
+// the frame the panic has unwound to, so its statements — and those of
+// anything it calls — run whatever the flag says; a deferred shell command
+// runs in the unwinding frame itself and needs the lifted halt (running).
+// A panic a cleanup raises is deeper again and halts it. See
+// [bashPPPanicState.depths] and [bashPPPanicState.running].
 func (r *Runner) bashPPPanicHalts() bool {
-	return r.bashPPPanic.active && !r.bashPPPanic.running
+	return r.bashPPPanicking() && !r.bashPPPanic.running
 }
 
 // bashPPPredeclaredCall reports which predeclared Bash++ function a call names,
