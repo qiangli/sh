@@ -56,6 +56,14 @@ func main() {
 	guard("fieldwrite", func() {
 		t.val = 1
 	})
+	guard("nestedfieldwrite", func() {
+		var lst List
+		lst.head.next = &element{val: 11}
+	})
+	guard("nestedfieldread", func() {
+		var lst List
+		fmt.Println(lst.head.next.val)
+	})
 	guard("callarg", func() {
 		take2(boom())
 	})
@@ -65,6 +73,13 @@ func main() {
 }
 
 func take(struct{}) {}
+
+type element struct {
+	next *element
+	val  int
+}
+
+type List struct{ head, tail *element }
 
 func take2(int) {}
 

@@ -666,6 +666,10 @@ func (r *Runner) bashPPReadExpr(expr syntax.BashPPExpr) (value any, meta *bashPP
 		if err != nil {
 			return nil, nil, err
 		}
+		// A nil pointer field reads back as nil under pointer metadata.
+		if value == nil && meta != nil && meta.kind == "pointer" {
+			return nil, nil, errBashPPNilDereference
+		}
 		if pointer, ok := value.(*bashPPPointer); ok {
 			if pointer == nil {
 				return nil, nil, errBashPPNilDereference
@@ -891,8 +895,8 @@ func (r *Runner) bashPPStructuredAssign(target, rhs syntax.BashPPExpr) {
 		}
 		parent, parentMeta, _, err := ptr.readParent()
 		if err != nil {
-			r.errf("%v\n", err)
-			r.exit = exitStatus{code: 2}
+			// `lst.head.next = v` with a nil head is the nil dereference.
+			r.bashPPReportFault(err)
 			return
 		}
 		// Go inserts an implicit dereference between selector components. The
@@ -992,8 +996,10 @@ func (r *Runner) bashPPStructuredAssign(target, rhs syntax.BashPPExpr) {
 	parentExpr := bashPPParentExpr(target)
 	parent, parentMeta, err := r.bashPPReadExpr(parentExpr)
 	if err != nil {
-		r.errf("%v\n", err)
-		r.exit = exitStatus{code: 2}
+		if !errors.Is(err, errBashPPScalarInterrupted) {
+			r.errf("%v\n", err)
+			r.exit = exitStatus{code: 2}
+		}
 		return
 	}
 	// When the parent expression itself names a pointer -- e.g. a struct field
@@ -1004,8 +1010,7 @@ func (r *Runner) bashPPStructuredAssign(target, rhs syntax.BashPPExpr) {
 	// returned aliases the pointed-at struct, so the write mutates it in place.
 	// A non-pointer parent is returned unchanged; a nil pointer is a nil deref.
 	if parent, parentMeta, err = bashPPDerefEmbedded(parent, parentMeta); err != nil {
-		r.errf("%v\n", err)
-		r.exit = exitStatus{code: 2}
+		r.bashPPReportFault(err)
 		return
 	}
 	if parentMeta == nil {
@@ -1098,8 +1103,9 @@ func (r *Runner) bashPPStructuredAssign(target, rhs syntax.BashPPExpr) {
 		}
 	}
 	if err != nil {
-		r.errf("%v\n", err)
-		r.exit = exitStatus{code: 2}
+		// A fault met on the way to the target — a nil pointer in the path —
+		// is the panic it always is; anything else is the diagnostic.
+		r.bashPPReportFault(err)
 	}
 }
 
