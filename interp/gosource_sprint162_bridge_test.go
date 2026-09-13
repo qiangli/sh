@@ -47,3 +47,14 @@ func TestGoSourceSprint162NativeFieldSetNegative(t *testing.T) {
 		t.Fatalf("wrong field-set type error: %v", err)
 	}
 }
+
+func TestGoSourceSprint162NativeVariableSet(t *testing.T) {
+	differGoSource(t, mustReadSprint162Bridge(t, "var_set.go.txt"), nil, "")
+}
+
+func TestGoSourceSprint162NativeVariableSetNegative(t *testing.T) {
+	_, err := gosource.Parse(strings.NewReader(mustReadSprint162Bridge(t, "var_set_negative.go.txt")), "var_set_negative.go", gosource.Options{RunMain: true})
+	if err == nil || !strings.Contains(err.Error(), "cannot use \"wrong\"") {
+		t.Fatalf("wrong var-set type error: %v", err)
+	}
+}

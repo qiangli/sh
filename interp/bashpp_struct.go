@@ -853,6 +853,24 @@ func (r *Runner) bashPPStructuredAssign(target, rhs syntax.BashPPExpr) {
 		}
 		return
 	}
+	if selector, ok := target.(*syntax.BashPPSelectorExpr); ok {
+		if id, imported := selector.X.(*syntax.BashPPIdent); imported && r.bashPPImports[id.Name.Value] != "" {
+			value, err := r.bashPPBridgeExpr(rhs)
+			if err == nil {
+				req, reqErr := r.bashPPEvalRequest()
+				if reqErr != nil {
+					err = reqErr
+				} else {
+					_, err = r.bashPPNativeRequest(r.ectx, req, bashPPBridgeRequest{Op: "var-set", Selector: id.Name.Value + "." + selector.Sel.Value, Args: []bashPPBridgeValue{value}})
+				}
+			}
+			if err != nil {
+				r.errf("%v\n", err)
+				r.exit = exitStatus{code: 2}
+			}
+			return
+		}
+	}
 	// Parentheses around an assignment target carry no meaning of their own,
 	// so `(*p) = v` has to reach the same handler as `*p = v`. Without this,
 	// a parenthesised dereference fell through to the pointer path below and
