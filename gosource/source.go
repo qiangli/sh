@@ -152,11 +152,13 @@ func Load(sources []Source, options Options) (*Program, error) {
 	}
 	sources = append([]Source(nil), sources...)
 	sort.SliceStable(sources, func(i, j int) bool { return sources[i].Name < sources[j].Name })
-	// gc's own parser is the syntax verdict. By default a rejection is the
-	// complete result; checker-test policy may continue on go/parser's partial
-	// AST while retaining gc's diagnostics instead of go/parser's.
-	syntaxErrors := syntaxVerdict(sources, options.CheckerBranchErrors)
-	if len(syntaxErrors) > 0 && !options.CheckAfterSyntaxErrors {
+	// gc's own parser is the syntax verdict. A "syntax error" is the complete
+	// result, as it is for gc; after any other parser or scanner diagnostic
+	// gc still type-checks, and so does Load, on go/parser's recovered AST
+	// while retaining gc's diagnostics instead of go/parser's. Checker-test
+	// policy may continue the same way after a syntax error too.
+	syntaxErrors, gcFiles := syntaxVerdict(sources, options.CheckerBranchErrors)
+	if len(syntaxErrors) > 0 && !options.CheckAfterSyntaxErrors && !checksAfterSyntaxVerdict(syntaxErrors) {
 		return nil, syntaxErrors
 	}
 	checker, err := checkerOptionsFor(sources, options)
@@ -178,6 +180,9 @@ func Load(sources []Source, options Options) (*Program, error) {
 		// checker. Keep it for diagnostics only; no errored AST is converted.
 		if f == nil {
 			continue
+		}
+		if len(syntaxErrors) > 0 && checker.gcStderr() {
+			mirrorGCTree(c.fset, f, gcFiles[i])
 		}
 		if p.Package == "" {
 			p.Package = f.Name.Name
@@ -211,17 +216,17 @@ func Load(sources []Source, options Options) (*Program, error) {
 		programPath = p.Package
 	}
 	imp.from = programPath
-	var typeErrors ErrorList
-	config := checker.config(imp, &typeErrors)
+	typeErrors := newCheckerDiagnostics(c.fset, c.files, !checker.checkerBranchErrors, checker.gcStderr())
+	config := checker.config(imp, typeErrors.report)
 	pkg, err := config.Check(programPath, c.fset, c.files, c.info)
-	// Match the native checker test flow: parser diagnostics first, followed
-	// by semantic diagnostics from every recoverable file. Check's returned
-	// first error is already reported through Error; do not duplicate it.
-	diagnostics := append(parseErrors, typeErrors...)
-	if err != nil && len(typeErrors) == 0 {
-		diagnostics = appendDiagnostics(diagnostics, err)
-	}
+	// gc's stderr is sorted by position; the checker-test flow instead lists
+	// parser diagnostics first, followed by semantic diagnostics from every
+	// recoverable file.
+	diagnostics := append(parseErrors, typeErrors.result(err)...)
 	if len(diagnostics) > 0 {
+		if checker.gcStderr() {
+			diagnostics = sortGCStderr(c.fset, sources, diagnostics)
+		}
 		return nil, diagnostics
 	}
 	p.Resolutions = imp.resolutions
@@ -460,6 +465,14 @@ type checkerOptions struct {
 	checkAfterSyntaxErrors bool
 }
 
+// gcStderr reports whether the diagnostics are gc's stderr for the sources:
+// gc's tree after its parser's recovery and gc's per-line filter. The
+// checker-test policy (CheckAfterSyntaxErrors) instead expects go/types'
+// complete output on go/parser's tree.
+func (o checkerOptions) gcStderr() bool {
+	return !o.checkAfterSyntaxErrors
+}
+
 var definePredeclaredTestFuncs sync.Once
 
 func checkerOptionsFor(sources []Source, options Options) (checkerOptions, error) {
@@ -491,7 +504,7 @@ func checkerOptionsFor(sources []Source, options Options) (checkerOptions, error
 	return out, nil
 }
 
-func (o checkerOptions) config(imp types.Importer, diagnostics *ErrorList) types.Config {
+func (o checkerOptions) config(imp types.Importer, report func(error)) types.Config {
 	if o.testBuiltins {
 		definePredeclaredTestFuncs.Do(types.DefPredeclaredTestFuncs)
 	}
@@ -499,9 +512,7 @@ func (o checkerOptions) config(imp types.Importer, diagnostics *ErrorList) types
 		Importer:    imp,
 		GoVersion:   o.goVersion,
 		FakeImportC: o.fakeImportC,
-		Error: func(err error) {
-			*diagnostics = append(*diagnostics, err)
-		},
+		Error:       report,
 	}
 }
 

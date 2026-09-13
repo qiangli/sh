@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -161,6 +162,118 @@ func TestSprint162ScannerDiagnostics(t *testing.T) {
 	for _, d := range diagnostics("reencoded.go", reencoded) {
 		if strings.Contains(d, "invalid UTF-8 encoding") {
 			t.Fatalf("re-encoded source reported an invalid encoding: %q", d)
+		}
+	}
+}
+
+// TestSprint162CheckAfterParserDiagnostics is an outside-corpus reproducer
+// for gc's rule on what follows its parser's verdict
+// (cmd/compile/internal/noder/irgen.go checkFiles, base.SyntaxErrors): a
+// "syntax error" ends compilation; after every other parser or scanner
+// diagnostic gc type-checks its own tree and prints the checker's rows too,
+// sorted by position, one of multiple equal messages per line. The expected
+// lists are `go tool compile -p diag -e` verbatim. reject.go carries, in one
+// file: a method with no receiver and one with two (gc's tree keeps a
+// function and the first receiver — no repeated diagnostic), 3-index slices
+// of a string with missing bounds (parser rows, then the checker's "3-index
+// slice of string" on gc's kept node), a malformed literal (Bad in gc's
+// tree — the checker is silent), two equal checker messages on one line
+// (one printed), an unused label and a goto over a declaration (the
+// parser's branch check reports them; the checker's copies are dropped as
+// types2's IgnoreBranchErrors drops them).
+func TestSprint162CheckAfterParserDiagnostics(t *testing.T) {
+	base := filepath.Join("testdata", "sprint162", "diag", "continue")
+	read := func(name string) []byte {
+		t.Helper()
+		data, err := os.ReadFile(filepath.Join(base, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return data
+	}
+	diagnostics := func(name string, data []byte, options gosource.Options) []string {
+		t.Helper()
+		_, err := gosource.Load([]gosource.Source{{Name: name, Data: data}}, options)
+		if err == nil {
+			return nil
+		}
+		list, ok := err.(gosource.ErrorList)
+		if !ok {
+			t.Fatalf("diagnostics lost types: %T", err)
+		}
+		out := make([]string, len(list))
+		for i, diagnostic := range list {
+			out[i] = diagnostic.Error()
+		}
+		return out
+	}
+
+	if got := diagnostics("positive.go", read("positive.go"), gosource.Options{}); got != nil {
+		t.Fatalf("positive control rejected: %q", got)
+	}
+	want := []string{
+		"reject.go:3:9: method has no receiver",
+		"reject.go:5:15: method has multiple receivers",
+		"reject.go:11:13: middle index required in 3-index slice",
+		"reject.go:11:14: final index required in 3-index slice",
+		"reject.go:11:14: invalid operation: 3-index slice of string",
+		"reject.go:13:15: final index required in 3-index slice",
+		"reject.go:13:15: invalid operation: 3-index slice of string",
+		"reject.go:15:13: hexadecimal literal has no digits",
+		`reject.go:17:13: cannot use "a" + "b" (untyped string constant "ab") as int value in variable declaration`,
+		`reject.go:19:16: cannot use "x" (untyped string constant) as int value in variable declaration`,
+		"reject.go:22:1: label L defined and not used",
+		"reject.go:26:7: goto N jumps over declaration of y at reject.go:27:6",
+	}
+	got := diagnostics("reject.go", read("reject.go.src"), gosource.Options{})
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("errorCheck comparison mismatch\ngot: %q\nwant: %q", got, want)
+	}
+	negatives := map[string][]string{
+		"missing":            got[1:],
+		"parser-only":        got[:2],
+		"extra":              append(append([]string{}, got...), "reject.go:30:1: extra"),
+		"duplicate":          append(append([]string{}, got...), got[9]),
+		"repeated-receiver":  append(append([]string{}, got...), "reject.go:3:6: method has no receiver"),
+		"bad-literal":        append(append([]string{}, got...), "reject.go:15:11: malformed constant: 0x"),
+		"repeated-branch":    append(append([]string{}, got...), "reject.go:22:1: label L declared and not used"),
+		"wrong-line":         append([]string{strings.Replace(got[0], ":3:", ":2:", 1)}, got[1:]...),
+		"wrong-wording":      append([]string{strings.Replace(got[0], "no receiver", "no receivers", 1)}, got[1:]...),
+		"unsorted":           append(append([]string{}, got[1:]...), got[0]),
+		"unexpected-success": nil,
+	}
+	for name, candidate := range negatives {
+		if reflect.DeepEqual(candidate, want) {
+			t.Fatalf("negative %s was accepted", name)
+		}
+	}
+	// A syntax error is the complete result: the parser's other rows before
+	// it are kept, the checker never runs (line 7 is a checker error).
+	wantSyntax := []string{
+		"syntax.go:3:13: middle index required in 3-index slice",
+		"syntax.go:3:14: final index required in 3-index slice",
+		"syntax.go:5:13: syntax error: unexpected ), expected expression",
+	}
+	if got := diagnostics("syntax.go", read("syntax.go.src"), gosource.Options{}); !reflect.DeepEqual(got, wantSyntax) {
+		t.Fatalf("syntax error did not end the verdict\ngot: %q\nwant: %q", got, wantSyntax)
+	}
+	// The checker-test policy is untouched: gc's parser rows (its branch
+	// check left to go/types) first, then go/types' complete output on
+	// go/parser's tree — the repeated receiver rows, the malformed literal,
+	// both equal messages on line 19 and go/types' own branch wording.
+	policy := diagnostics("reject.go", read("reject.go.src"), gosource.Options{CheckAfterSyntaxErrors: true, CheckerBranchErrors: true})
+	parserRows := []string{want[0], want[1], want[2], want[3], want[5], want[7]}
+	if len(policy) < len(parserRows) || !reflect.DeepEqual(policy[:len(parserRows)], parserRows) {
+		t.Fatalf("checker-test policy changed: %q", policy)
+	}
+	for _, row := range []string{
+		"reject.go:3:6: method has no receiver",
+		"reject.go:15:11: malformed constant: 0x",
+		`reject.go:19:21: cannot use "x" (untyped string constant) as int value in variable declaration`,
+		"reject.go:22:1: label L declared and not used",
+	} {
+		if !slices.Contains(policy, row) {
+			t.Fatalf("checker-test policy lost go/types' own row %q in %q", row, policy)
 		}
 	}
 }

@@ -17,15 +17,18 @@ import (
 )
 
 func TestGoSourceDiagnosticRecovery(t *testing.T) {
-	// Each fixture fails gc's parser, so the load's diagnostics are exactly
-	// gc's syntax errors — wording, positions and multiplicity, in source
-	// order, with no go/types output appended (gc runs no type checker after
-	// a syntax error).
+	// Each fixture fails gc's parser, so the load's diagnostics carry exactly
+	// gc's parser diagnostics — wording, positions and multiplicity, in
+	// source order. After a "syntax error" gc runs no type checker and the
+	// list is complete; after the parser's other diagnostics (expr3's missing
+	// 3-index slice bounds) gc type-checks and its stderr adds the checker's
+	// rows, interleaved by position.
 	for _, tc := range []struct {
 		name, sha string
+		checks    bool
 		want      []string
 	}{
-		{"expr3", "09291a9472f94a3001a74d01f46aa25fbb8a0490973c803c3dbbd13f0087aad9", []string{
+		{"expr3", "09291a9472f94a3001a74d01f46aa25fbb8a0490973c803c3dbbd13f0087aad9", true, []string{
 			"expr3.go:22:46: middle index required in 3-index slice",
 			"expr3.go:22:83: final index required in 3-index slice",
 			"expr3.go:23:47: middle index required in 3-index slice",
@@ -34,7 +37,7 @@ func TestGoSourceDiagnosticRecovery(t *testing.T) {
 			"expr3.go:90:46: middle index required in 3-index slice",
 			"expr3.go:90:84: final index required in 3-index slice",
 		}},
-		{"stmt0", "29472d473c7ed9ad26b3d762837e8c1757b85473637a8ab28f12510a8ad249a0", []string{
+		{"stmt0", "29472d473c7ed9ad26b3d762837e8c1757b85473637a8ab28f12510a8ad249a0", false, []string{
 			"stmt0.go:234:5: expression in go must not be parenthesized",
 			"stmt0.go:244:8: expression in defer must not be parenthesized",
 			"stmt0.go:254:2: break is not in a loop, switch, or select",
@@ -60,7 +63,7 @@ func TestGoSourceDiagnosticRecovery(t *testing.T) {
 			"stmt0.go:969:2: label L1 already defined at stmt0.go:968:2",
 			"stmt0.go:973:3: label L0 already defined at stmt0.go:967:2",
 		}},
-		{"issue43190", "def735fe9882adcc1af85ce2d59c3a97e0a3444cc054575719f9cb9cef32c02a", []string{
+		{"issue43190", "def735fe9882adcc1af85ce2d59c3a97e0a3444cc054575719f9cb9cef32c02a", false, []string{
 			"issue43190.go:10:8: syntax error: missing import path",
 			"issue43190.go:13:1: syntax error: missing import path",
 			"issue43190.go:14:9: syntax error: missing import path",
@@ -90,12 +93,32 @@ func TestGoSourceDiagnosticRecovery(t *testing.T) {
 				if !ok {
 					t.Fatalf("diagnostics lost types: %T", err)
 				}
-				var got []string
+				var got, parser []string
+				wanted := map[string]bool{}
+				for _, w := range tc.want {
+					wanted[w] = true
+				}
 				for _, e := range list {
 					got = append(got, e.Error())
+					if wanted[e.Error()] {
+						parser = append(parser, e.Error())
+					}
 				}
-				if !reflect.DeepEqual(got, tc.want) {
+				if !tc.checks && !reflect.DeepEqual(got, tc.want) {
 					t.Fatalf("diagnostics differ from gc's syntax errors\ngot: %q\nwant: %q", got, tc.want)
+				}
+				if tc.checks {
+					if !reflect.DeepEqual(parser, tc.want) {
+						t.Fatalf("gc parser diagnostics differ\ngot: %q\nwant: %q", parser, tc.want)
+					}
+					if len(got) == len(parser) {
+						t.Fatalf("gc type-checks after these parser diagnostics; no checker diagnostic followed: %q", got)
+					}
+					for _, d := range got {
+						if strings.Contains(d, "syntax error") {
+							t.Fatalf("a syntax error would have stopped gc: %q", d)
+						}
+					}
 				}
 				if fmt.Sprintf("%x", sha256.Sum256(data)) != tc.sha {
 					t.Fatal("load changed source bytes")

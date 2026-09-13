@@ -177,8 +177,8 @@ func (m *mapImporter) checkDependency(fset *token.FileSet, spec PackageSpec, che
 	sort.SliceStable(sources, func(i, j int) bool { return sources[i].Name < sources[j].Name })
 	// Same syntax-verdict policy as Load: checker-test mode may continue on
 	// go/parser's recovered AST after retaining gc's diagnostics.
-	syntaxErrors := syntaxVerdict(sources, checker.checkerBranchErrors)
-	if len(syntaxErrors) > 0 && !checker.checkAfterSyntaxErrors {
+	syntaxErrors, gcFiles := syntaxVerdict(sources, checker.checkerBranchErrors)
+	if len(syntaxErrors) > 0 && !checker.checkAfterSyntaxErrors && !checksAfterSyntaxVerdict(syntaxErrors) {
 		return syntaxErrors
 	}
 	diagnostics := append(ErrorList(nil), syntaxErrors...)
@@ -192,6 +192,9 @@ func (m *mapImporter) checkDependency(fset *token.FileSet, spec PackageSpec, che
 			diagnostics = appendDiagnostics(diagnostics, err)
 		}
 		if f != nil {
+			if len(syntaxErrors) > 0 && checker.gcStderr() {
+				mirrorGCTree(fset, f, gcFiles[i])
+			}
 			files = append(files, f)
 		}
 	}
@@ -202,15 +205,15 @@ func (m *mapImporter) checkDependency(fset *token.FileSet, spec PackageSpec, che
 		diagnostics = append(diagnostics, validateCompilerDirectives(fset, files, checker)...)
 	}
 	m.from = spec.Path
-	var typeErrors ErrorList
-	config := checker.config(m, &typeErrors)
+	typeErrors := newCheckerDiagnostics(fset, files, !checker.checkerBranchErrors, checker.gcStderr())
+	config := checker.config(m, typeErrors.report)
 	info := newTypeInfo()
 	pkg, err := config.Check(spec.Path, fset, files, info)
-	diagnostics = append(diagnostics, typeErrors...)
-	if err != nil && len(typeErrors) == 0 {
-		diagnostics = appendDiagnostics(diagnostics, err)
-	}
+	diagnostics = append(diagnostics, typeErrors.result(err)...)
 	if len(diagnostics) > 0 {
+		if checker.gcStderr() {
+			diagnostics = sortGCStderr(fset, sources, diagnostics)
+		}
 		return diagnostics
 	}
 	if err := m.add(&checkedPackage{spec: spec, sources: sources, files: files, info: info, pkg: pkg}); err != nil {
