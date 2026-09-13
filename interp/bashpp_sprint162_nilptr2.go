@@ -127,3 +127,22 @@ func (r *Runner) goSourceRecoverAssign(assign *syntax.BashPPAssign) bool {
 	r.bashPPCommitTupleAssign(assign, []*bashPPCell{cell})
 	return true
 }
+
+// A named pointer type as a parameter or result.
+//
+// `type PS *dch` is a pointer type under its own name, and a parameter or
+// result declared PS binds a pointer exactly as one declared *dch does. The
+// binding sites read the declared text and took a leading `*` as the whole
+// test, so a PS value arrived without its pointer flag and was read as an
+// empty scalar downstream: a nil where Go has the pointer. The declared name
+// is a pointer when it is spelled as one or when its underlying type is one.
+func (r *Runner) bashPPDeclaredPointer(declared string) bool {
+	if strings.HasPrefix(declared, "*") {
+		return true
+	}
+	if declared == "" {
+		return false
+	}
+	_, ok := r.bashPPPointerType(&syntax.BashPPNamedType{Name: &syntax.Lit{Value: declared}})
+	return ok
+}

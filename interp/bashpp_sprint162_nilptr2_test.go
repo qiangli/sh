@@ -124,3 +124,10 @@ func TestBashPPSprint162GoroutineDuringUnwind(t *testing.T) {
 		t.Fatalf("output %q", got)
 	}
 }
+
+// A parameter or result of a named pointer type binds the pointer; a pointer
+// to another type stays refused.
+func TestBashPPSprint162NamedPointerBinding(t *testing.T) {
+	sprint162NilPtr2Expect(t, "namedptr", "named_pointer_binding", false)
+	sprint162NilPtr2Refused(t, "namedptr", "named_pointer_binding_negative", "cannot use")
+}

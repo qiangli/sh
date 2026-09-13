@@ -1960,7 +1960,7 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 			if _, ok := r.bashPPTypes[base]; ok {
 				cell := r.bashPPScope.lookup(param.name)
 				cell.typeName = base
-				cell.pointer = strings.HasPrefix(param.declared, "*")
+				cell.pointer = r.bashPPDeclaredPointer(param.declared)
 				cell.nilPointer = cell.pointer && args[i] == ""
 				if r.bashPPGoSource && cell.pointer {
 					cell.nilPointer = cell.pointerValue == nil
@@ -2270,7 +2270,7 @@ func (r *Runner) bashPPShortDeclCall(ctx context.Context, d *syntax.BashPPShortD
 			base := strings.TrimPrefix(declared, "*")
 			if _, ok := r.bashPPTypes[base]; ok {
 				target.typeName = base
-				target.pointer = strings.HasPrefix(declared, "*")
+				target.pointer = r.bashPPDeclaredPointer(declared)
 				// A pointer binding's text is always empty, so the result cell
 				// is what distinguishes a live pointer from a nil one.
 				target.nilPointer = target.pointer && target.pointerValue == nil && results[i] == ""
