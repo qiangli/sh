@@ -177,7 +177,14 @@ func (r *Runner) bashPPPredeclared(name string, c *syntax.BashPPCall, args []str
 			r.exit.recoverSeq = r.bashPPRecoverSeq
 		}
 		r.exit.errexitExempt = true
-		return []string{fmt.Sprint(value)}, true
+		// The shell-facing view of recover's result: a nil interface (no panic
+		// in flight) is the empty string, exactly as the compiled lowering
+		// renders it; only a real payload is printed with fmt.Sprint.
+		text := ""
+		if value != nil {
+			text = fmt.Sprint(value)
+		}
+		return []string{text}, true
 	}
 	return nil, false
 }
