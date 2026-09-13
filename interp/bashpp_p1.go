@@ -509,6 +509,8 @@ func (r *Runner) bashPPConstantScalarExpr(expr syntax.BashPPExpr, targetBase str
 		return r.bashPPConstantScalarExpr(x.X, targetBase) && r.bashPPConstantScalarExpr(x.Y, targetBase)
 	case *syntax.BashPPConvertExpr:
 		return r.bashPPConstantScalarExpr(x.X, targetBase)
+	case *syntax.BashPPCall:
+		return r.goSourceConstantCall(x)
 	}
 	return false
 }
