@@ -677,7 +677,7 @@ func (r *Runner) bashPPInterfaceSourceCell(cell *bashPPCell, what string) (*bash
 	// the signature of the literal it was made from.
 	if actual == nil && cell.vr.Kind == expand.String {
 		if fn, ok := r.bashPPClosure(cell.vr.Str); ok && fn.lit != nil {
-			actual = bashPPFuncLitType(fn.lit)
+			actual = bashPPClosureType(fn)
 		}
 	}
 	if actual == nil {

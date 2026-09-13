@@ -131,3 +131,10 @@ func TestBashPPSprint162NamedPointerBinding(t *testing.T) {
 	sprint162NilPtr2Expect(t, "namedptr", "named_pointer_binding", false)
 	sprint162NilPtr2Refused(t, "namedptr", "named_pointer_binding_negative", "cannot use")
 }
+
+// A closure made in an instantiated generic frame carries the instantiated
+// signature as its dynamic type, and the init clause and condition of an
+// if statement in that frame are bound to the type arguments too.
+func TestBashPPSprint162ClosureInstantiatedType(t *testing.T) {
+	sprint162NilPtr2Expect(t, "generic", "closure_instantiated_type", false)
+}

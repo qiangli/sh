@@ -2206,7 +2206,10 @@ func (r *Runner) bashPPIf(ctx context.Context, i *syntax.BashPPIf) {
 		if i.InitStmt != nil {
 			r.cmd(ctx, i.InitStmt)
 		} else {
-			r.bashPPShortDecl(ctx, i.Init)
+			// The init clause is a statement of the body like any other:
+			// in a generic frame it is bound to the type arguments as the
+			// statement dispatcher binds a free-standing declaration.
+			r.bashPPShortDecl(ctx, r.bashPPBindShortDecl(i.Init))
 		}
 		if r.bashPPPanicking() {
 			return
@@ -2221,7 +2224,7 @@ func (r *Runner) bashPPIf(ctx context.Context, i *syntax.BashPPIf) {
 		}
 		r.exit.clear()
 	}
-	cond, err := r.bashPPEvalScalarExpr(i.Cond)
+	cond, err := r.bashPPEvalScalarExpr(r.bashPPBindExprs(i.Cond))
 	if err != nil {
 		if errors.Is(err, errBashPPScalarInterrupted) {
 			return
@@ -2268,7 +2271,7 @@ func (r *Runner) bashPPFor(ctx context.Context, loop *syntax.BashPPFor) {
 	}
 	for !r.stop(ctx) {
 		if loop.Cond != nil {
-			cond, err := r.bashPPEvalScalarExpr(loop.Cond)
+			cond, err := r.bashPPEvalScalarExpr(r.bashPPBindExprs(loop.Cond))
 			if err != nil {
 				if errors.Is(err, errBashPPScalarInterrupted) {
 					return

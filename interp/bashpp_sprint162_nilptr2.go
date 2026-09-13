@@ -146,3 +146,16 @@ func (r *Runner) bashPPDeclaredPointer(declared string) bool {
 	_, ok := r.bashPPPointerType(&syntax.BashPPNamedType{Name: &syntax.Lit{Value: declared}})
 	return ok
 }
+
+// bashPPClosureType is the signature a closure names as a value: the
+// literal's own, with the type arguments of the instantiation that made it
+// substituted — a literal written in a generic body is part of that
+// instantiation, and the type it is asserted against is written in the
+// instantiated frame too.
+func bashPPClosureType(fn *bashPPFunc) syntax.BashPPTypeExpr {
+	typ := syntax.BashPPTypeExpr(bashPPFuncLitType(fn.lit))
+	if len(fn.typeArgs) > 0 {
+		typ = bashPPSubstituteType(typ, fn.typeArgs)
+	}
+	return typ
+}
