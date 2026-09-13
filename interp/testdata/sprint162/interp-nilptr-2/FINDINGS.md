@@ -22,6 +22,7 @@ lane's darwin build of bashy; the leaf verdict column is the evidence.
 | runtime stack introspection of interpreted frames: `runtime.Caller`, `runtime.FuncForPC(pc).Name/Entry/FileLine`, `runtime.Stack`, `debug.Stack`, `debug.PrintStack` answered from a frame table (call position + identity per Bash++ frame; fault snapshot spliced in while a deferred call runs for the panic, kept until the recovering frame returns); a fault is raised at the evaluated expression's line | `4da3d55a` | `stack/` |
 | a deferred call running for a panic may start goroutines (task launch gate asks whether the panic halts the frame) | `35549f1d` | `unwindgo/` |
 | named pointer type (`type PS *dch`) bound as a pointer in parameters and results | `e3d0cfce` | `namedptr/` |
+| a closure made in an instantiated generic frame carries the instantiated signature as its dynamic type; the if statement's init clause and condition and the for condition are bound in generic frames (the follow-on of `f16f4352` that `TestSprint153Evaluator/interface_func_literal` caught) | `4f485f2e` | `generic/closure_instantiated_type.go` |
 
 ## Roots
 
@@ -38,7 +39,7 @@ lane's darwin build of bashy; the leaf verdict column is the evidence.
 | `testdir:literal.go` | `var f00 float32 = 3.14159` read back as a String, `-f00` refused; then `equal(f09, 1/f10)` failed the parameter check on the exact text | typed float storage | fixed in `c29eb4c9` (local PASS) |
 | `testdir:method5.go` | fixed by the first pass (`c5ee56b1`); local PASS on this tree, included in the leaf for the verdict | — | leaf |
 | `testdir:typeparam/mdempsky/15.go` | `reflect.TypeOf(new(T)).Elem()` reached the bridge as `*T` — fixed in `f16f4352`; the root then instantiates `T` with an anonymous interface type (`interface{ EBad() }`) and `new(T)` reaches the bridge as `*interface`: the worker's `resolveType` cannot build an interface type with methods (reflect has no InterfaceOf), and the helper's type registry does not register the program's anonymous interface types by their canonical spelling | bridge type registry: anonymous interface types with methods | moved to S162.3-A bridge lane — request 1 below |
-| `testdir:chan/powser1.go` | the nil `PS` in `get` was a named pointer type bound without its pointer flag — fixed in `e3d0cfce`; the root then reaches `getn`'s select over channels held in `req := new([2]chan int)` / `dat := new([2]chan rat)` — `gosource: mixed native/interpreted channel select requires atomic arbitration` (chan/powser1.go:146) | select over channel elements of an interpreter-owned array | moved to lane `select/concurrency` — request 2 below |
+| `testdir:chan/powser1.go` | the nil `PS` in `get` was a named pointer type bound without its pointer flag — fixed in `e3d0cfce`; the root then reaches `getn`'s select, whose `dat[i] = nil` elements (`case it = <-dat[0]:`) resolve to a channel with neither a native handle nor an interpreter channel, which `bashPPSelect` counts as a local case beside the native ones — `gosource: mixed native/interpreted channel select requires atomic arbitration` (chan/powser1.go:146). A nil channel case is never ready; it belongs in the native select as a nil channel, not as a local case | nil channel as a select case among native cases | moved to lane `select/concurrency` — request 2 below |
 | `testdir:chan/powser2.go` | same named-pointer cause fixed; the root then needs `(<-in.dat).(*rat)` — a type assertion whose operand is a parenthesised receive expression (`BASHPP-ESELECTOR-EXPR: unsupported structured expression`; `v := <-in.dat; v.(*rat)` works) — and afterwards the same select shape as powser1 (`req := make([]chan int, 2)`) | receive expression as a type-assertion operand; select over channel elements | moved to lane `select/concurrency` — request 2 below |
 
 ## Design (recorded, not attempted)
@@ -69,11 +70,13 @@ lane's darwin build of bashy; the leaf verdict column is the evidence.
    with methods the same way (today it returns "" and the pointer text
    becomes `*interface`). `typeparam/mdempsky/15.go` also type-switches
    `interface{}(new(T)).(type)` on such types.
-2. **lane `select/concurrency`** — (a) `select` whose case channels are
-   elements of an interpreter-owned array or slice of channels
-   (`req := new([2]chan int)`; `case req[0] <- seqno:` / `case it = <-dat[0]:`):
-   `gosource: mixed native/interpreted channel select requires atomic
-   arbitration` (chan/powser1.go:146, chan/powser2.go); (b) a receive
+2. **lane `select/concurrency`** — (a) a nil channel as a select case
+   among native cases (`dat[i] = nil`; `case it = <-dat[0]:`): in
+   `bashPPSelect` (`bashpp_concurrency.go`, the `c.native != nil` /
+   `hasLocal` classification) a channel operand with neither a native
+   handle nor an interpreter channel is a nil channel — never ready — and
+   should join the native select as a `nil` channel value rather than mark
+   the select as mixed (chan/powser1.go:146, chan/powser2.go); (b) a receive
    expression as the operand of a type assertion, `(<-in.dat).(*rat)`
    (chan/powser2.go:108).
 3. **lane `select/recover/const`** — a recovered runtime fault has dynamic
