@@ -71,6 +71,22 @@ unwinding" (the assignment, short-declaration and tuple consumers already
 do after `888c5b02`). recover2.go and recover3.go then pass end to end
 (recover3 verified locally up to its nil-deref check).
 
+### gosource (test): TestMultipleFileRuntimeAndLowerPositions
+
+After `888c5b02` an integer division by zero in an original Go program is
+a Go panic with a traceback, not a positioned fatal diagnostic, so
+`gosource/source_test.go:184` — which asserts the old form — fails on
+darwin with the panic report (the position is still named, in gc's
+traceback shape `\tb.go:3`). The test's assertion needs the exact diff
+below; the source name of a multi-file panic site is resolved through
+`File.SourceAt` (`bashPPPanicTrace`), so the position it checks is there:
+
+    -	if err = r.Run(context.Background(), p.File); err == nil || !strings.Contains(err.Error()+stderr.String(), "b.go:3:") {
+    +	if err = r.Run(context.Background(), p.File); err == nil || !strings.Contains(err.Error()+stderr.String(), "b.go:3") {
+
+This is the only `go test -short ./...` failure outside the pre-existing
+darwin set, and it is a test of the old diagnostic, not of Go behaviour.
+
 ### bridge lane (S162.3-A)
 
 `reflect.ValueOf(v).Method(i)` / `reflect.TypeOf(v).Method(i).Func` on an

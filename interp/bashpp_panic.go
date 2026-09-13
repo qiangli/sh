@@ -161,14 +161,7 @@ func (r *Runner) bashPPPredeclared(name string, c *syntax.BashPPCall, args []str
 			r.exit = exitStatus{code: 2}
 			return nil, false
 		}
-		if r.bashPPGoSource {
-			r.bashPPPanic.traceSource = r.filename
-			r.bashPPPanic.traceLine = c.Pos().Line()
-			r.bashPPPanic.traceFrames = r.bashPPPanic.traceFrames[:0]
-			for _, frame := range r.callStack {
-				r.bashPPPanic.traceFrames = append(r.bashPPPanic.traceFrames, frame.funcName)
-			}
-		}
+		r.bashPPPanicTrace(c)
 		var value any = args[0]
 		if r.bashPPGoSource && len(c.ArgExprs) == 1 {
 			if cell, err := r.bashPPStructuredArgCell(c.Args[0], c.ArgExprs[0]); err == nil && cell != nil && cell.interfaceValue != nil {

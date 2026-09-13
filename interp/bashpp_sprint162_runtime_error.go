@@ -104,12 +104,19 @@ func (r *Runner) bashPPPanicTrace(call *syntax.BashPPCall) {
 	if !r.bashPPGoSource {
 		return
 	}
-	r.bashPPPanic.traceSource = r.filename
+	pos := r.curStmtPos
 	if call != nil {
-		r.bashPPPanic.traceLine = call.Pos().Line()
-	} else {
-		r.bashPPPanic.traceLine = r.curStmtPos.Line()
+		pos = call.Pos()
 	}
+	// A multi-file program names the source the position lies in, as every
+	// positioned diagnostic does.
+	r.bashPPPanic.traceSource = r.filename
+	if r.bashPPGoSourceFile != nil {
+		if source, ok := r.bashPPGoSourceFile.SourceAt(pos); ok {
+			r.bashPPPanic.traceSource = source.Name
+		}
+	}
+	r.bashPPPanic.traceLine = pos.Line()
 	r.bashPPPanic.traceFrames = r.bashPPPanic.traceFrames[:0]
 	for _, frame := range r.callStack {
 		r.bashPPPanic.traceFrames = append(r.bashPPPanic.traceFrames, frame.funcName)
