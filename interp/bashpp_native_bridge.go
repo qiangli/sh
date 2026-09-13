@@ -250,13 +250,24 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 		return err
 	}
 	binary := file.Name() + ".bin"
-	build := exec.CommandContext(ctx, req.Go, "build", "-p", "2", "-overlay="+file.overlay, "-o", binary, file.buildPath)
-	build.Dir, build.Env = bashPPModuleRequest(req).Dir, setEnvString(req.Env, "CGO_ENABLED", "0")
-	var diagnostics bytes.Buffer
-	build.Stdout, build.Stderr = &diagnostics, &diagnostics
-	if err = build.Run(); err != nil {
+	buildEnv := setEnvString(req.Env, "CGO_ENABLED", "0")
+	if policy == bashPPScratchSourceRoot {
+		// go:embed patterns resolve against the worker's logical location;
+		// only cmd/go's overlay gives the worker one inside the source root.
+		build := exec.CommandContext(ctx, req.Go, "build", "-p", "2", "-overlay="+file.overlay, "-o", binary, file.buildPath)
+		build.Dir, build.Env = bashPPModuleRequest(req).Dir, buildEnv
+		var diagnostics bytes.Buffer
+		build.Stdout, build.Stderr = &diagnostics, &diagnostics
+		if err = build.Run(); err != nil {
+			cleanup()
+			return fmt.Errorf("gosource: build dependency bridge: %w: %s", err, diagnostics.String())
+		}
+	} else if err = bashPPBuildWorkerImportcfg(ctx, req.Go, bashPPModuleRequest(req).Dir, buildEnv, filepath.Dir(file.Name()), file.Name(), binary); err != nil {
+		// The importcfg route: the worker's imports were decided at the
+		// check (identity-keyed, D8); cmd/go's directory rule does not
+		// re-decide them. See bashpp_sprint165_runtime2_worker_build.go.
 		cleanup()
-		return fmt.Errorf("gosource: build dependency bridge: %w: %s", err, diagnostics.String())
+		return err
 	}
 	cmd := exec.CommandContext(ctx, binary)
 	// Bootstrap data is compiled into this ephemeral dependency-only helper.
@@ -634,7 +645,12 @@ func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, err
 						continue
 					}
 					keyed[key] = true
-					fmt.Fprintf(&typeEntries, "%q: reflect.TypeFor[%s.%s](),\n", key+"."+name, alias, name)
+					// TypeOf((*T)(nil)).Elem() is TypeFor's own definition,
+					// spelled without a type argument: a type only the
+					// compiler knows to be unallocatable (a struct embedding
+					// internal/runtime/sys.NotInHeap) cannot instantiate
+					// TypeFor but is an ordinary pointee.
+					fmt.Fprintf(&typeEntries, "%q: reflect.TypeOf((*%s.%s)(nil)).Elem(),\n", key+"."+name, alias, name)
 				}
 				used = true
 			case *types.Func:
