@@ -14,7 +14,6 @@ func Load(p *uint64) uint64
 //
 //line directives.go:8:1
 //go:nosplit
-//line directives.go:9:1
 //go:noescape
 //line directives.go:10:1
 func Store(p *uint64, v uint64)

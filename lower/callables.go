@@ -27,14 +27,33 @@ func (e *emitter) goName(name string) string {
 // diagnostic which gc reports on the preceding pragma comment itself.
 func (e *emitter) goDirectives(s *syntax.Stmt) string {
 	var out strings.Builder
+	var previous syntax.Pos
 	for i := range s.Comments {
 		comment := &s.Comments[i]
 		if strings.HasPrefix(comment.Text, "go:") {
-			out.WriteString(e.goSourceLineDirective(comment.Pos()))
+			pos := comment.Pos()
+			if !e.consecutiveSourceLines(previous, pos) {
+				out.WriteString(e.goSourceLineDirective(pos))
+			}
 			out.WriteString("//" + comment.Text + "\n")
+			previous = pos
 		}
 	}
 	return out.String()
+}
+
+func (e *emitter) consecutiveSourceLines(previous, current syntax.Pos) bool {
+	if e.sourceFile == nil || !previous.IsValid() || !current.IsValid() || current.Line() != previous.Line()+1 || current.Col() != previous.Col() {
+		return false
+	}
+	before, beforeOK := e.sourceFile.SourceAt(previous)
+	after, afterOK := e.sourceFile.SourceAt(current)
+	if !beforeOK || !afterOK || before.Name != after.Name {
+		return false
+	}
+	beforeName, beforeAdjusted := adjustedSourceName(e.sourceFile.Sources, previous.Offset())
+	afterName, afterAdjusted := adjustedSourceName(e.sourceFile.Sources, current.Offset())
+	return beforeAdjusted == afterAdjusted && beforeName == afterName
 }
 
 func (e *emitter) goSourceLineDirective(pos syntax.Pos) string {
