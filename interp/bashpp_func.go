@@ -521,6 +521,11 @@ func (r *Runner) bashPPLookupFunc(c *syntax.BashPPCall) (*bashPPFunc, bool) {
 		return nil, false
 	}
 	name := c.Fun[0].Value
+	// A block-scoped closure of the same name shadows the package function;
+	// see bashpp_sprint165_runtime2_shadow.go.
+	if fn, ok := r.bashPPScopedClosureCallee(name); ok {
+		return r.bashPPInstantiateFunc(c, fn)
+	}
 	if fn, ok := r.bashPPFuncs[name]; ok {
 		return r.bashPPInstantiateFunc(c, fn)
 	}
