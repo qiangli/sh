@@ -195,8 +195,11 @@ func main(){s:=Slice{1};fmt.Println(s);println("after")}`,
 	}
 }
 
-// Bounds-panic transport is not implemented; its existing runtime diagnostic
-// must remain a failure instead of a successful fmt placeholder.
+// A panic inside a String method called back from fmt is recovered by fmt
+// itself (`%!v(PANIC=String method: …)`) and the program continues. Since
+// Sprint 162 an out-of-range index is Go's runtime panic in the interpreter
+// too, so the interpreted program must match the native oracle exactly:
+// the placeholder line, then "after", exit status 0.
 func TestGoSourceCallbackBodyFailure(t *testing.T) {
 	source := `package main
 import "fmt"
@@ -222,13 +225,8 @@ func main(){fmt.Println(V(1));println("after")}`
 		t.Fatal(err)
 	}
 	err = r.Run(context.Background(), p.File)
-	if err == nil || strings.Contains(output.String(), "after") || strings.Contains(output.String(), "original method unavailable") {
-		t.Fatalf("body failure swallowed: %v %q", err, output.String())
-	}
-	// Collection reads now return a positioned diagnostic instead of a host
-	// panic. Preserve failure containment; this is not Go bounds-panic support.
-	if !strings.Contains(err.Error(), path+":4:56: BASHPP-ECOLLECTION-BOUNDS: index 0 out of bounds for length 0") {
-		t.Fatalf("unrelated failure: %v %q", err, output.String())
+	if err != nil || output.String() != want.stdout+want.stderr {
+		t.Fatalf("interpreted run differs from the native oracle: err=%v\ngot:  %q\nwant: %q", err, output.String(), want.stdout+want.stderr)
 	}
 }
 
