@@ -1094,10 +1094,22 @@ func (r *Runner) bashPPConvertScalar(typ string, x bashPPScalar) (bashPPScalar, 
 			return bashPPScalar{value: x.value, typ: typ, runtime: x.runtime}, nil
 		case constant.Int:
 			n, ok := constant.Int64Val(x.value)
-			if !ok {
-				return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-CONVERT: cannot convert %s to string", x.value)
+			if ok {
+				if r.bashPPGoSource {
+					return bashPPScalar{value: constant.MakeString(string(bashPPStringRune(int64(n)))), typ: typ, runtime: x.runtime}, nil
+				}
+				return bashPPScalar{value: constant.MakeString(string(rune(n))), typ: typ, runtime: x.runtime}, nil
 			}
-			return bashPPScalar{value: constant.MakeString(string(rune(n))), typ: typ, runtime: x.runtime}, nil
+			// GoSource scalar cells use shell text for storage. A uint64 can
+			// therefore arrive here as an exact integer larger than int64 even
+			// though Go permits converting every integer type to string via its
+			// rune value. Keep Classic's old signed carrier boundary intact.
+			if r.bashPPGoSource {
+				if u, ok := constant.Uint64Val(x.value); ok {
+					return bashPPScalar{value: constant.MakeString(string(bashPPStringRune(uint64(u)))), typ: typ, runtime: x.runtime}, nil
+				}
+			}
+			return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-CONVERT: cannot convert %s to string", x.value)
 		}
 	case "bool":
 		if x.value.Kind() == constant.Bool {
@@ -1150,6 +1162,21 @@ func (r *Runner) bashPPConvertScalar(typ string, x bashPPScalar) (bashPPScalar, 
 		}
 	}
 	return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-CONVERT: cannot convert %s to %s", x.value.Kind(), typ)
+}
+
+// bashPPStringRune implements Go's integer-to-string conversion. It is not an
+// ordinary conversion to rune: an integer outside the Unicode scalar range,
+// including a uint64 that cannot fit in int64, becomes U+FFFD rather than
+// wrapping through the target integer width.
+func bashPPStringRune[T int64 | uint64](value T) rune {
+	const replacement = '\uFFFD'
+	const maxRune = 0x10FFFF
+	const surrogateFirst = 0xD800
+	const surrogateLast = 0xDFFF
+	if value < 0 || value > maxRune || value >= surrogateFirst && value <= surrogateLast {
+		return replacement
+	}
+	return rune(value)
 }
 
 func bashPPIntegerRepresentable(typ string, v constant.Value) bool {
