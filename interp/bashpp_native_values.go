@@ -658,6 +658,9 @@ func (r *Runner) bashPPBridgeCollection(value any, meta *bashPPCollectionMeta, t
 		if cell.vr.Kind == expand.Object {
 			return r.bashPPBridgeCollection(cell.vr.Obj, cell.valueMeta, cell.declType)
 		}
+		if bashPPRuntimeErrorType(cell.declType) {
+			return bashPPBridgeValue{Kind: "string", Text: cell.vr.String()}, nil
+		}
 		return bridgeScalar(r.bashPPScalarFromCell(cell))
 	}
 	if meta != nil && meta.typ != nil {
@@ -934,6 +937,13 @@ func (r *Runner) bashPPBridgeCell(cell *bashPPCell) (bashPPBridgeValue, error) {
 			return *value, nil
 		}
 		return r.bashPPBridgeCollection(cell.vr.Obj, cell.valueMeta, cell.declType)
+	}
+	// A runtime error's payload cell (declared as the runtime's unexported
+	// error type, see bashpp_sprint162_runtime_error.go) crosses as its
+	// message string: the dependency has no such type to resolve, and the
+	// message is exactly what %v / %s / Error() print.
+	if bashPPRuntimeErrorType(cell.declType) {
+		return bashPPBridgeValue{Kind: "string", Text: cell.vr.String()}, nil
 	}
 	return bridgeScalar(r.bashPPScalarFromCell(cell))
 }
