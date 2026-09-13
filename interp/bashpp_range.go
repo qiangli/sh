@@ -403,21 +403,6 @@ func (r *Runner) bashPPRangeCollectionValue(ctx context.Context, rng *syntax.Bas
 		}
 	case "map":
 		mapping, _ := value.(map[string]any)
-		if bashPPSprint162MapHasTypedKeys(meta) {
-			// Go deliberately leaves map iteration order unspecified. Small maps
-			// retain the evaluator's stable order, while large maps avoid sorting
-			// every remaining key in the runtime's range/delete idiom.
-			for _, entry := range bashPPSprint162MapIterationEntries(meta) {
-				item, child, exists := bashPPSprint162MapEntryValue(mapping, meta, entry.storage)
-				if !exists {
-					continue
-				}
-				if !r.bashPPRangeIteration(ctx, rng, entry.key, collection.Key, item, child, collection.Element) {
-					return true
-				}
-			}
-			break
-		}
 		keys := bashPPStorageKeys(mapping)
 		sort.Strings(keys)
 		for _, key := range keys {

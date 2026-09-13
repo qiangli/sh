@@ -721,24 +721,21 @@ func (r *Runner) bashPPReadExpr(expr syntax.BashPPExpr) (value any, meta *bashPP
 			return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-INDEX: value is not a collection")
 		}
 		if meta.kind == "map" {
-			key, keyMeta, keyErr := r.bashPPEvalElement(x.Index, collection.Key)
+			key, _, keyErr := r.bashPPEvalElement(x.Index, collection.Key)
 			if keyErr != nil {
 				return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-KEY: %v", keyErr)
 			}
+			canonical := fmt.Sprint(key)
 			mapping, valid := value.(map[string]any)
 			if !valid && value != nil {
 				return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-STORAGE: map payload has type %T", value)
 			}
-			storage, _, found, keyErr := r.bashPPSprint162MapLookup(meta, key, keyMeta, collection.Key)
-			if keyErr != nil {
-				return nil, nil, keyErr
-			}
-			result, child := bashPPSprint162MapEntryValueFound(mapping, meta, storage, found)
+			result, found := bashPPStorageGet(mapping, canonical)
 			if !found {
 				zero, child := r.bashPPZeroValue(collection.Element)
 				return zero, child, nil
 			}
-			return result, child, nil
+			return result, bashPPLayoutGet(meta.mapping, canonical), nil
 		}
 		i, indexErr := r.bashPPCollectionIndex(x.Index)
 		if indexErr != nil {
@@ -1091,11 +1088,10 @@ func (r *Runner) bashPPStructuredAssign(target, rhs syntax.BashPPExpr) {
 		}
 		expected = collection.Element
 		var savedKey any
-		var savedKeyMeta *bashPPCollectionMeta
 		var savedIndex int
 		if r.bashPPGoSource {
 			if parentMeta.kind == "map" {
-				savedKey, savedKeyMeta, err = r.bashPPEvalElement(x.Index, collection.Key)
+				savedKey, _, err = r.bashPPEvalElement(x.Index, collection.Key)
 			} else {
 				savedIndex, err = r.bashPPCollectionIndex(x.Index)
 			}
@@ -1109,7 +1105,7 @@ func (r *Runner) bashPPStructuredAssign(target, rhs syntax.BashPPExpr) {
 			break
 		}
 		if parentMeta.kind == "map" {
-			err = r.bashPPMapElementWrite(parent, parentMeta, collection, x.Index, savedKey, savedKeyMeta, value, child)
+			err = r.bashPPMapElementWrite(parent, parentMeta, collection, x.Index, savedKey, value, child)
 			break
 		} else {
 			i, indexErr := savedIndex, error(nil)
@@ -1147,15 +1143,14 @@ func (r *Runner) bashPPStructuredAssign(target, rhs syntax.BashPPExpr) {
 // does not make map elements addressable, so this write -- not a write through
 // an address -- is the only way any indexed map target is assigned, whether
 // the map is named directly or reached through a pointer.
-func (r *Runner) bashPPMapElementWrite(parent any, parentMeta *bashPPCollectionMeta, collection *syntax.BashPPCollectionType, index syntax.BashPPExpr, savedKey any, savedKeyMeta *bashPPCollectionMeta, value any, child *bashPPCollectionMeta) error {
+func (r *Runner) bashPPMapElementWrite(parent any, parentMeta *bashPPCollectionMeta, collection *syntax.BashPPCollectionType, index syntax.BashPPExpr, savedKey, value any, child *bashPPCollectionMeta) error {
 	if parent == nil {
 		return fmt.Errorf("BASHPP-ENIL-MAP: assignment to nil map")
 	}
 	key := savedKey
-	keyMeta := savedKeyMeta
 	if !r.bashPPGoSource {
 		var keyErr error
-		if key, keyMeta, keyErr = r.bashPPEvalElement(index, collection.Key); keyErr != nil {
+		if key, _, keyErr = r.bashPPEvalElement(index, collection.Key); keyErr != nil {
 			return keyErr
 		}
 	}
@@ -1163,8 +1158,9 @@ func (r *Runner) bashPPMapElementWrite(parent any, parentMeta *bashPPCollectionM
 	if !valid || mapping == nil {
 		return fmt.Errorf("BASHPP-ENIL-MAP: assignment to nil map")
 	}
-	_, err := r.bashPPSprint162MapStore(mapping, parentMeta, key, keyMeta, collection.Key, value, child)
-	return err
+	canonical := fmt.Sprint(key)
+	bashPPStorageSetField(mapping, parentMeta.mapping, canonical, value, child)
+	return nil
 }
 
 // bashPPPointerElementAssign retains the evaluated parent storage for GoSource
@@ -1213,11 +1209,10 @@ func (r *Runner) bashPPPointerElementAssign(target *syntax.BashPPIndexExpr, rhs 
 		}
 	}
 	var savedKey any
-	var savedKeyMeta *bashPPCollectionMeta
 	var savedIndex int
 	// Resolve all operands once, before the RHS, retaining the parent storage.
 	if parentMeta.kind == "map" {
-		savedKey, savedKeyMeta, err = r.bashPPEvalElement(target.Index, collection.Key)
+		savedKey, _, err = r.bashPPEvalElement(target.Index, collection.Key)
 	} else {
 		savedIndex, err = r.bashPPCollectionIndex(target.Index)
 	}
@@ -1229,7 +1224,7 @@ func (r *Runner) bashPPPointerElementAssign(target *syntax.BashPPIndexExpr, rhs 
 		return err
 	}
 	if parentMeta.kind == "map" {
-		return r.bashPPMapElementWrite(parent, parentMeta, collection, target.Index, savedKey, savedKeyMeta, value, child)
+		return r.bashPPMapElementWrite(parent, parentMeta, collection, target.Index, savedKey, value, child)
 	}
 	sequence, valid := parent.([]any)
 	if !valid && parent != nil {

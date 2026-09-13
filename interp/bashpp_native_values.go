@@ -751,24 +751,6 @@ func (r *Runner) bashPPBridgeCollection(value any, meta *bashPPCollectionMeta, t
 				return result, fmt.Errorf("gosource: mapping without map type")
 			}
 			result.Kind = "map"
-			if bashPPSprint162MapHasTypedKeys(meta) {
-				for _, entry := range bashPPSprint162MapEntries(meta) {
-					keyValue, err := r.bashPPBridgeCollection(entry.key, entry.keyMeta, shape.Key)
-					if err != nil {
-						return result, err
-					}
-					item, child, found := bashPPSprint162MapEntryValue(value, meta, entry.storage)
-					if !found {
-						continue
-					}
-					converted, err := r.bashPPBridgeCollection(item, child, shape.Element)
-					if err != nil {
-						return result, err
-					}
-					result.Entries = append(result.Entries, bashPPBridgeEntry{Key: keyValue, Value: converted})
-				}
-				return result, nil
-			}
 			for key, item := range bashPPStorageSnapshot(value) {
 				keyValue := bashPPBridgeValue{Type: bashPPTypeText(shape.Key), Text: key}
 				switch bashPPTypeText(r.bashPPUnderlyingType(shape.Key)) {

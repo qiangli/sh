@@ -380,19 +380,13 @@ func (r *Runner) bashPPBridgeContents(v bashPPBridgeValue, typ syntax.BashPPType
 				return nil, nil, fmt.Errorf("%s is a map but the dependency sent %s", bashPPTypeText(typ), v.Kind)
 			}
 			out := map[string]any{}
-			meta := &bashPPCollectionMeta{kind: "map", typ: typ, mapping: map[string]*bashPPCollectionMeta{}, mapKeys: map[bashPPMapKey]*bashPPMapEntry{}}
+			meta := &bashPPCollectionMeta{kind: "map", typ: typ, mapping: map[string]*bashPPCollectionMeta{}}
 			for _, item := range v.Entries {
-				key, keyMeta, err := r.bashPPBridgeContents(item.Key, shape.Key)
-				if err != nil {
-					return nil, nil, err
-				}
 				value, child, err := r.bashPPBridgeContents(item.Value, shape.Element)
 				if err != nil {
 					return nil, nil, err
 				}
-				if _, err := r.bashPPSprint162MapStore(out, meta, key, keyMeta, shape.Key, value, child); err != nil {
-					return nil, nil, err
-				}
+				out[item.Key.Text], meta.mapping[item.Key.Text] = value, child
 			}
 			return out, meta, nil
 		}
