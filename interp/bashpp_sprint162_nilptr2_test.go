@@ -68,3 +68,10 @@ func TestBashPPSprint162TypedFloatStorage(t *testing.T) {
 	sprint162NilPtr2Expect(t, "typedfloat", "typed_float", false)
 	sprint162NilPtr2Refused(t, "typedfloat", "typed_float_negative", "operator - not defined on")
 }
+
+// A nil function value is an argument to a func-typed parameter; a call
+// through it faults. A closure of the wrong signature stays refused.
+func TestBashPPSprint162NilFuncArgument(t *testing.T) {
+	sprint162NilPtr2Expect(t, "nilfunc", "nil_func_argument", false)
+	sprint162NilPtr2Refused(t, "nilfunc", "nil_func_argument_negative", "cannot use")
+}

@@ -2889,6 +2889,9 @@ func (r *Runner) bashPPCheckArgs(fn *bashPPFunc, params []bashPPParam, args []st
 			continue
 		}
 		if signature, ok := param.typ.(*syntax.BashPPFuncType); ok {
+			if r.goSourceNilFuncArgument(arg) {
+				continue
+			}
 			actual, found := r.bashPPClosure(arg)
 			if !found || bashPPFieldsSignature(actual.params()) != bashPPFieldsSignature(signature.Params) || bashPPFieldsSignature(actual.results()) != bashPPFieldsSignature(signature.Results) {
 				r.errf("BASHPP-EARG-FUNCTYPE: %s requires %s for parameter %s\n", fn.name(), bashPPTypeText(signature), param.name)

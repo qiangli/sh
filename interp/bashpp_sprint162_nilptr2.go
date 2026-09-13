@@ -74,3 +74,16 @@ func bashPPBuiltinScalarKind(name string) constant.Kind {
 	}
 	return constant.Unknown
 }
+
+// A nil function value as an argument.
+//
+// A func-typed parameter accepts nil — the literal, or a func variable that
+// holds no closure. Both arrive as an empty argument text: a closure is always
+// a handle, and a declared function named as an argument was bound to one
+// before the type check (see bashPPBindFuncValueArgs), so the empty text is
+// the only spelling of a nil func value. The checker has already verified the
+// argument's type, and a call through the bound parameter faults as Go's nil
+// function call does.
+func (r *Runner) goSourceNilFuncArgument(arg string) bool {
+	return r.bashPPGoSource && arg == ""
+}
