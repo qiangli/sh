@@ -1578,7 +1578,7 @@ func (e *emitter) call(c *syntax.BashPPCall) (string, error) {
 		if c.Ellipsis.IsValid() {
 			spread = "..."
 		}
-		return e.group(callee) + "(" + strings.Join(args, ",") + spread + ")", nil
+		return e.group(callee) + e.callArgs(c, args, spread), nil
 	}
 	frame := e.resultCallFrame
 	e.resultCallFrame = ""
@@ -1692,11 +1692,11 @@ func (e *emitter) call(c *syntax.BashPPCall) (string, error) {
 		}
 	}
 	if e.goSource && !e.funcs[name] && (name == "panic" || name == "recover") {
-		return name + "(" + strings.Join(args, ",") + ")", nil
+		return name + e.callArgs(c, args, ""), nil
 	}
 	if !e.funcs[name] && (name == "print" || name == "println") {
 		if e.goSource {
-			return name + "(" + strings.Join(args, ",") + ")", nil
+			return name + e.callArgs(c, args, ""), nil
 		}
 		for i, w := range c.Args {
 			projected, err := e.projectionArgument(w, args[i])
@@ -1749,5 +1749,25 @@ func (e *emitter) call(c *syntax.BashPPCall) (string, error) {
 	if e.execution && (e.funcs[name] || e.bound(name)) {
 		args = append([]string{invocation, e.callSite(c, name)}, args...)
 	}
-	return e.goName(name) + typeargs + "(" + strings.Join(args, ", ") + spread + ")", nil
+	return e.goName(name) + typeargs + e.callArgs(c, args, spread), nil
+}
+
+// callArgs spells a call's parenthesised argument list. Go source keeps the
+// lines the input put its arguments on (goBracketed): gc reports an escape
+// note at the argument's own line. Every other unit, and a call whose
+// argument list the emitter extended (a runtime invocation, a spelled
+// make type), keeps the one-line spelling.
+func (e *emitter) callArgs(c *syntax.BashPPCall, args []string, spread string) string {
+	if !e.goSource || len(args) != len(c.Args) || !c.Lparen.IsValid() || !c.Rparen.IsValid() {
+		return "(" + strings.Join(args, ", ") + spread + ")"
+	}
+	items := append([]string(nil), args...)
+	if spread != "" && len(items) > 0 {
+		items[len(items)-1] += spread
+	}
+	starts, ends := make([]syntax.Pos, len(c.Args)), make([]syntax.Pos, len(c.Args))
+	for i, w := range c.Args {
+		starts[i], ends[i] = w.Pos(), w.End()
+	}
+	return goBracketed("(", ")", c.Lparen, c.Rparen, items, starts, ends, ",")
 }

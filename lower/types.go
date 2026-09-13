@@ -97,6 +97,9 @@ func (e *emitter) typeExpr(t syntax.BashPPTypeExpr) (string, error) {
 			return "", e.fail(n, CodeType, "unknown collection type: "+n.Kind)
 		}
 	case *syntax.BashPPStructType:
+		if e.goSource {
+			return e.goStructType(n)
+		}
 		fields, err := e.structFields(n.Fields)
 		return "struct {" + fields + "}", err
 	case *syntax.BashPPInterfaceType:
@@ -382,6 +385,7 @@ func (e *emitter) compositeExpr(n *syntax.BashPPCompositeLit) (string, error) {
 		}
 	}
 	var elems []string
+	var starts, ends []syntax.Pos
 	for _, elem := range n.Elems {
 		if elem == nil {
 			return "", e.fail(n, CodeExpr, "missing composite element")
@@ -405,8 +409,76 @@ func (e *emitter) compositeExpr(n *syntax.BashPPCompositeLit) (string, error) {
 			value = key + ": " + value
 		}
 		elems = append(elems, value)
+		starts, ends = append(starts, elem.Pos()), append(ends, elem.End())
+	}
+	if e.goSource {
+		return typ + goBracketed("{", "}", n.Lbrace, n.Rbrace, elems, starts, ends, ","), nil
 	}
 	return typ + "{" + strings.Join(elems, ", ") + "}", nil
+}
+
+// goStructType emits an anonymous struct type from Go source with its
+// fields laid out as the input laid them out (goBracketed).
+func (e *emitter) goStructType(n *syntax.BashPPStructType) (string, error) {
+	var parts []string
+	var starts, ends []syntax.Pos
+	for _, f := range n.Fields {
+		if f == nil {
+			return "", e.fail(nil, CodeType, "missing struct field")
+		}
+		part, err := e.structFields([]*syntax.BashPPField{f})
+		if err != nil {
+			return "", err
+		}
+		parts = append(parts, part)
+		starts, ends = append(starts, f.Pos()), append(ends, f.End())
+	}
+	return "struct " + goBracketed("{", "}", n.Lbrace, n.Rbrace, parts, starts, ends, ";"), nil
+}
+
+// goBracketed lays out the items of a bracketed Go construct — a composite
+// literal's elements, a struct type's fields — on the lines the input put
+// them on: an item that started on a later line than the previous item
+// ended (or than the opening bracket) is preceded by that many newlines,
+// and a closing bracket on a later line than the last item follows a
+// trailing separator. Items on one line keep the one-line spelling. gc
+// reports an escape or inlining note at the element's own line, and
+// upstream errorcheck keys the expectation on that line; gofmt keeps a line
+// structure the source chose, so the generated Go stays gofmt-stable.
+func goBracketed(open, close string, lbrace, rbrace syntax.Pos, items []string, starts, ends []syntax.Pos, sep string) string {
+	var b strings.Builder
+	b.WriteString(open)
+	prev := lbrace
+	for i, item := range items {
+		br := goLineBreak(prev, starts[i])
+		if i > 0 {
+			b.WriteString(sep)
+			if br == "" {
+				b.WriteString(" ")
+			}
+		}
+		b.WriteString(br)
+		b.WriteString(item)
+		prev = ends[i]
+	}
+	if br := goLineBreak(prev, rbrace); br != "" {
+		if len(items) > 0 {
+			b.WriteString(sep)
+		}
+		b.WriteString(br)
+	}
+	b.WriteString(close)
+	return b.String()
+}
+
+// goLineBreak is the newlines between the end of one source item and the
+// start of the next, or "" when the next starts on the same line (or a
+// position is unknown).
+func goLineBreak(from, to syntax.Pos) string {
+	if !from.IsValid() || !to.IsValid() || to.Line() <= from.Line() {
+		return ""
+	}
+	return strings.Repeat("\n", int(to.Line()-from.Line()))
 }
 func (e *emitter) compositeValue(x syntax.BashPPExpr) (string, error) {
 	if n, ok := x.(*syntax.BashPPCompositeLit); ok {
