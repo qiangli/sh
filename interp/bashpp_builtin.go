@@ -209,6 +209,9 @@ func (r *Runner) bashPPBuiltinElement(arg bashPPBuiltinArg, expected syntax.Bash
 // bashPPRunValueBuiltin executes a non-panic predeclared call. Its result is a
 // full cell so structured identity and named type metadata survive `:=`.
 func (r *Runner) bashPPRunValueBuiltin(name string, c *syntax.BashPPCall) (*bashPPCell, bool) {
+	if cell, handled := r.bashPPSprint162MakeChannelBuiltin(name, c); handled {
+		return cell, cell != nil
+	}
 	if r.bashPPGoSource && name == "make" {
 		if typ, ok := c.ArgType.(*syntax.BashPPChanType); ok {
 			var expr syntax.BashPPExpr

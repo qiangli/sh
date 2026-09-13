@@ -52,6 +52,33 @@ func (r *Runner) bashPPSprint162PointerCollectionStorage(value any, meta *bashPP
 	return value, meta, err
 }
 
+// bashPPSprint162MakeChannelBuiltin routes every Go make(chan T) value through
+// the channel allocator, including defined channel types and interpreter-owned
+// aggregate element types. The older fast path only claimed raw channel types
+// whose elements could live in the dependency process.
+func (r *Runner) bashPPSprint162MakeChannelBuiltin(name string, call *syntax.BashPPCall) (*bashPPCell, bool) {
+	if !r.bashPPGoSource || name != "make" || call == nil {
+		return nil, false
+	}
+	if _, ok := r.bashPPUnderlyingType(call.ArgType).(*syntax.BashPPChanType); !ok {
+		return nil, false
+	}
+	var capacity syntax.BashPPExpr
+	var word *syntax.Word
+	if len(call.ArgExprs) > 1 {
+		capacity = call.ArgExprs[1]
+	}
+	if len(call.Args) > 1 {
+		word = call.Args[1]
+	}
+	cell, err := r.goSourceMakeChannelCell(call.ArgType, capacity, word)
+	if err != nil {
+		r.goSourceNativeChannelError(err)
+		return nil, true
+	}
+	return cell, true
+}
+
 // bashPPSprint162CollectionBridgeScalar validates a scalar which crossed the
 // dependency boundary in its transport wrapper. Non-finite floats cannot live
 // in the collection's JSON-shaped scalar payload, so the wrapper remains the

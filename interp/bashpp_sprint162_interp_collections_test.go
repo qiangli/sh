@@ -102,3 +102,22 @@ func TestSprint162NestedCollectionAssignmentNegative(t *testing.T) {
 	_, err = gosource.Parse(strings.NewReader(string(source)), path, gosource.Options{RunMain: true})
 	qt.Assert(t, qt.ErrorMatches(err, `(?s).*cannot assign to value\[0\].*`))
 }
+
+func TestSprint162MakeChannelBuiltin(t *testing.T) {
+	root := filepath.Join("testdata", "sprint162", "interp-collections")
+	source, err := os.ReadFile(filepath.Join(root, "make_channel.go"))
+	qt.Assert(t, qt.IsNil(err))
+	want, err := os.ReadFile(filepath.Join(root, "make_channel.expected"))
+	qt.Assert(t, qt.IsNil(err))
+	out, stderr, err := runGoSource(t, "make_channel", string(source))
+	qt.Assert(t, qt.IsNil(err), qt.Commentf("stderr: %s", stderr))
+	qt.Assert(t, qt.Equals(out, string(want)))
+}
+
+func TestSprint162MakeChannelBuiltinNegative(t *testing.T) {
+	path := filepath.Join("testdata", "sprint162", "interp-collections", "make_channel_negative.go")
+	source, err := os.ReadFile(path)
+	qt.Assert(t, qt.IsNil(err))
+	_, err = gosource.Parse(strings.NewReader(string(source)), path, gosource.Options{RunMain: true})
+	qt.Assert(t, qt.ErrorMatches(err, `(?s).*cannot make int.*`))
+}
