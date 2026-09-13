@@ -3,10 +3,9 @@ id: b4a4775ac3dc
 kind: task
 title: 'Sprint 162.5: diagnostics/parser — the barrier-b/active-154 roots (7) + unclassified triage (26)'
 seq: 95
-status: assigned
+status: todo
 priority: p1
 created: 2026-09-13T00:37:02.770036Z
-weave: 169
 assignee: qiangli
 sprint: 162
 ---

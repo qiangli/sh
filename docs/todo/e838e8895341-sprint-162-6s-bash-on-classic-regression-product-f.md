@@ -3,9 +3,11 @@ id: e838e8895341
 kind: task
 title: 'Sprint 162.6s: Bash++-ON classic regression — product fix in sh (cprint output, procsub hang under activation)'
 seq: 96
-status: todo
+status: assigned
 priority: p0
 created: 2026-09-13T02:07:06.732928Z
+weave: 170
+assignee: qiangli
 sprint: 162
 ---
 
