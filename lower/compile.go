@@ -648,11 +648,18 @@ func (e *emitter) fail(n syntax.Node, code, msg string) error {
 }
 func (e *emitter) mark(n syntax.Node) string {
 	id := len(e.marks)
+	pos := n.Pos()
+	if d, ok := n.(*syntax.BashPPDecl); ok && e.goSource && d.Name != nil && d.Name.Pos().Line() > pos.Line() {
+		// A spec of a grouped `var (` / `type (` declaration carries the
+		// group's keyword position; it is emitted as its own declaration,
+		// and gc reports diagnostics and -m notes on the spec's own line.
+		pos = d.Name.Pos()
+	}
 	source := syntax.SourceFile{}
 	if e.sourceFile != nil {
-		source, _ = e.sourceFile.SourceAt(n.Pos())
+		source, _ = e.sourceFile.SourceAt(pos)
 	}
-	e.marks = append(e.marks, Mapping{Pos: n.Pos(), Node: nodeName(n), Source: source.Name, SourceOffset: n.Pos().Offset() - source.Base})
+	e.marks = append(e.marks, Mapping{Pos: pos, Node: nodeName(n), Source: source.Name, SourceOffset: pos.Offset() - source.Base})
 	return fmt.Sprintf("// lower:%d\n", id)
 }
 func (e *emitter) known(name string) bool {
