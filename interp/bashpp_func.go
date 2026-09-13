@@ -2432,6 +2432,13 @@ func (r *Runner) bashPPReturnStmt(ctx context.Context, ret *syntax.BashPPReturn)
 			r.exit.returning = true
 			return
 		}
+		// `return recover()`: the predeclared recover yields the interface
+		// value it recovered (or the nil interface), never a declared callable.
+		if cell, handled := r.bashPPReturnRecover(ret.Call); handled {
+			r.bashPPReturn = bashPPReturnState{active: true, values: []string{cell.vr.String()}, cells: []*bashPPCell{cell}}
+			r.exit.returning = true
+			return
+		}
 		fn, ok := r.bashPPLookupFunc(ret.Call)
 		if !ok {
 			r.bashPPShortFailureSeq++
@@ -2658,10 +2665,14 @@ func (r *Runner) bashPPRunDefers(ctx context.Context, mark int) {
 	// depth is the whole of recover's "called directly by a deferred function"
 	// rule; see [Runner.bashPPRecover].
 	r.bashPPDeferDepth = len(r.callStack) + 1
+	// A frame that a deferred call of an OUTER unwinding frame invoked
+	// entered with the halt lifted (running); its own defers must hand that
+	// back, or the cleanup that called it stops at the call.
+	savedRunning := r.bashPPPanic.running
 	defer func() {
 		r.bashPPAgentic = savedAgentic
 		r.bashPPDeferDepth = savedDeferDepth
-		r.bashPPPanic.running = false
+		r.bashPPPanic.running = savedRunning && r.bashPPPanic.active
 	}()
 	var failed exitStatus
 	deferFailed := false
@@ -2672,8 +2683,13 @@ func (r *Runner) bashPPRunDefers(ctx context.Context, mark int) {
 		r.exit = exitStatus{}
 		// A cleanup runs even while a panic is unwinding — that is the whole
 		// point of it — so the panic stops halting statements for the length
-		// of this call, without ceasing to be recoverable by it.
+		// of this call, without ceasing to be recoverable by it. The panic
+		// has unwound to this frame: a function the cleanup calls is deeper
+		// and returns normally.
 		r.bashPPPanic.running = r.bashPPPanic.active
+		if n := len(r.bashPPPanic.depths); r.bashPPPanic.active && n > 0 {
+			r.bashPPPanic.depths[n-1] = len(r.callStack)
+		}
 		builtinPanicDepth := len(r.bashPPPanic.chain)
 		runDeferred := func() {
 			switch {
@@ -2732,11 +2748,12 @@ func (r *Runner) bashPPRunDefers(ctx context.Context, mark int) {
 		// Cleanup failures are observable. Keep the first failure in execution
 		// order while still running every remaining defer, then restore the
 		// enclosing function's return status when all cleanups succeeded.
-		// A deferred GoSource builtin can start a recoverable panic. Its
-		// unwind status is not a failed shell cleanup to restore after a later
-		// defer recovers; the panic state carries that control transfer.
-		builtinPanic := d.builtin != nil && len(r.bashPPPanic.chain) > builtinPanicDepth
-		if !deferFailed && !builtinPanic && (!r.exit.ok() || r.exit.err != nil) {
+		// A deferred call can start a recoverable panic — a GoSource builtin,
+		// `defer panic(v)`, a function that panics. Its unwind status is not
+		// a failed shell cleanup to restore after a later defer recovers; the
+		// panic state carries that control transfer.
+		panicRaised := len(r.bashPPPanic.chain) > builtinPanicDepth
+		if !deferFailed && !panicRaised && (!r.exit.ok() || r.exit.err != nil) {
 			failed, deferFailed = r.exit, true
 		}
 	}

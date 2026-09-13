@@ -67,6 +67,15 @@ type bashPPPanicState struct {
 	running bool
 	chain   []string
 	values  []any
+	// depths records, for each entry of chain, the call-stack depth the panic
+	// was raised at, lowered to each frame it unwinds to as that frame runs
+	// its deferred calls. It answers two questions: whether the executing
+	// frame is the one being abandoned (bashPPPanicking), and which older
+	// panics a recover discards along with the newest — every one raised by
+	// the recovering frame or deeper, the panics a deferred call started
+	// while that frame was already unwinding — so the frame returns normally
+	// instead of resuming an unwind Go has abandoned.
+	depths []int
 	// GoSource panics retain the interpreted frame names and source site so the
 	// process boundary reports a genuine Go-shaped traceback. Classic Bash++
 	// keeps its established concise diagnostic.
@@ -87,8 +96,18 @@ func (p bashPPPanicState) value() string {
 	return p.chain[len(p.chain)-1]
 }
 
-// bashPPPanicking reports whether a panic is currently unwinding this shell.
-func (r *Runner) bashPPPanicking() bool { return r.bashPPPanic.active }
+// bashPPPanicking reports whether a panic is abandoning the frame that is
+// executing now: one raised by this frame or a deeper one, or one that has
+// unwound to it. A panic an OUTER frame is unwinding is not — the deferred
+// call that frame is running may call other functions, and those return
+// normally; see bashPPPanicState.depths.
+func (r *Runner) bashPPPanicking() bool {
+	p := &r.bashPPPanic
+	if !p.active {
+		return false
+	}
+	return len(p.depths) == 0 || p.depths[len(p.depths)-1] >= len(r.callStack)
+}
 
 // bashPPPanicHalts reports whether a panic must stop the next statement from
 // running. See [bashPPPanicState.running] for the one case where it must not.
@@ -213,6 +232,7 @@ func (r *Runner) bashPPRaise(value string) {
 func (r *Runner) bashPPRaiseValue(text string, value any) {
 	r.bashPPPanic.chain = append(r.bashPPPanic.chain, text)
 	r.bashPPPanic.values = append(r.bashPPPanic.values, value)
+	r.bashPPPanic.depths = append(r.bashPPPanic.depths, len(r.callStack))
 	r.bashPPPanic.active = true
 	// A panic raised inside a cleanup is a new unwind, not a continuation of
 	// the one that ran the cleanup: it abandons the rest of that cleanup too.
@@ -250,6 +270,19 @@ func (r *Runner) bashPPRecover() (any, bool) {
 	r.bashPPPanic.chain = r.bashPPPanic.chain[:last]
 	payload := r.bashPPPanic.values[last]
 	r.bashPPPanic.values = r.bashPPPanic.values[:last]
+	r.bashPPPanic.depths = r.bashPPPanic.depths[:last]
+	// The recovering frame is the one whose deferred call this is. Every
+	// older panic it or a deeper frame raised was aborted by the one just
+	// recovered and is discarded with it; only a panic an outer frame is
+	// still unwinding stays suspended. See bashPPPanicState.depths.
+	frame := r.bashPPDeferDepth - 1
+	keep := len(r.bashPPPanic.chain)
+	for keep > 0 && r.bashPPPanic.depths[keep-1] >= frame {
+		keep--
+	}
+	r.bashPPPanic.chain = r.bashPPPanic.chain[:keep]
+	r.bashPPPanic.values = r.bashPPPanic.values[:keep]
+	r.bashPPPanic.depths = r.bashPPPanic.depths[:keep]
 	r.bashPPPanic.active = len(r.bashPPPanic.chain) > 0
 	// A directly deferred invocation continues after recover. When it has
 	// recovered a nested panic, an older panic still exists but stays suspended

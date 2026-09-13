@@ -361,3 +361,25 @@ func (r *Runner) bashPPPanicScalarValue(scalar bashPPScalar) any {
 func (r *Runner) bashPPPredeclaredRecover(expr syntax.BashPPExpr) bool {
 	return r.bashPPGoSource && bashPPRecoverExpr(expr) && r.bashPPFuncs["recover"] == nil && (r.bashPPScope == nil || r.bashPPScope.lookup("recover") == nil)
 }
+
+// bashPPRecoverCell is the cell a `recover()` expression yields: an `any`
+// holding the recovered interface value, or the nil interface when nothing
+// was in flight.
+func (r *Runner) bashPPRecoverCell() *bashPPCell {
+	iv, _ := r.bashPPRecoverInterfaceValue()
+	cell := &bashPPCell{declType: &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "any"}}, interfaceValue: iv}
+	if iv.cell != nil {
+		cell.vr, cell.scalarKind = iv.cell.vr, iv.cell.scalarKind
+	} else {
+		cell.vr = expand.Variable{Set: true, Kind: expand.String}
+	}
+	return cell
+}
+
+// bashPPReturnRecover claims `return recover()` in an original Go program.
+func (r *Runner) bashPPReturnRecover(call *syntax.BashPPCall) (*bashPPCell, bool) {
+	if call == nil || !r.bashPPPredeclaredRecover(call) {
+		return nil, false
+	}
+	return r.bashPPRecoverCell(), true
+}

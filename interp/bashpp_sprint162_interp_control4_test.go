@@ -127,3 +127,22 @@ func TestBashPPSprint162FuncValueInterface(t *testing.T) {
 		t.Fatalf("output:\n%s\nwant:\n%s", out, want)
 	}
 }
+
+// TestBashPPSprint162AbortedPanics: recovering a panic discards the older
+// panics the recovering frame raised while it was already unwinding, so the
+// frame returns normally; an unrecovered replacement propagates as the
+// newest value; a function called from a deferred call while an outer
+// panic unwinds runs to completion; and `return recover()` yields the
+// interface value. The negative program keeps a nested recover inert and
+// an unrecovered deferred panic fatal for its frame.
+func TestBashPPSprint162AbortedPanics(t *testing.T) {
+	for _, name := range []string{"nested", "helper_during_unwind", "deferred_failure_negative"} {
+		out, err := bashPPSprint162Control4Run(t, "aborted_panics", name)
+		if err != nil {
+			t.Fatalf("%s: run: %v, output=%q", name, err, out)
+		}
+		if want := bashPPSprint162Control4Expected(t, "aborted_panics", name); out != want {
+			t.Fatalf("%s: output:\n%s\nwant:\n%s", name, out, want)
+		}
+	}
+}
