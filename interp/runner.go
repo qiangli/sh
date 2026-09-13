@@ -274,6 +274,20 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 						close(bg.pidReady)
 					}
 				}()
+				// The substitution's end of the FIFO is opened as Bash opens
+				// it: blocking, paired by the kernel with whichever peer
+				// opens the other end — an external command or the shell's
+				// own redirection alike. Under Bash++ the descriptor is then
+				// published to the File's task group so a redirection that
+				// waits for a registered peer is released by it; Classic has
+				// no group and takes exactly the open it always took.
+				var endpoint *bashPPFIFOEntry
+				closeEndpoint := func(f *os.File) error {
+					if endpoint != nil {
+						return endpoint.Close()
+					}
+					return f.Close()
+				}
 				switch ps.Op {
 				case syntax.CmdIn:
 					f, err := os.OpenFile(path, os.O_WRONLY, 0)
@@ -281,9 +295,12 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 						r.errf("cannot open fifo for stdout: %v\n", err)
 						return
 					}
+					if c := r2.bashPPConcurrent; c != nil {
+						endpoint = r2.bashPPFIFOPublish(c, f, path, os.O_WRONLY)
+					}
 					r2.stdout = f
 					defer func() {
-						if err := f.Close(); err != nil {
+						if err := closeEndpoint(f); err != nil {
 							r.errf("closing stdout fifo: %v\n", err)
 						}
 						os.Remove(path)
@@ -294,11 +311,14 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 						r.errf("cannot open fifo for stdin: %v\n", err)
 						return
 					}
+					if c := r2.bashPPConcurrent; c != nil {
+						endpoint = r2.bashPPFIFOPublish(c, f, path, os.O_RDONLY)
+					}
 					r2.stdin = f
 					r2.stdout = stdout
 
 					defer func() {
-						f.Close()
+						closeEndpoint(f)
 						os.Remove(path)
 					}()
 				default:

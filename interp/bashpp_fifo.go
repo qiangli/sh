@@ -50,47 +50,119 @@ type bashPPFIFOEntry struct {
 	once        sync.Once
 }
 
-// A native peer is deliberately insufficient: only descriptors registered in
-// the same File task group may release a Bash++ FIFO open. In particular an
-// external writer must not turn an unmatched read into premature EOF.
-func (r *Runner) bashPPFIFOOpen(ctx context.Context, path string, flags int) (*os.File, bool, error) {
-	file, probe, key, fifo, err := bashPPFIFOAcquire(r.bashPPTaskContext(ctx), r.dirFile, r.Dir, path, flags)
-	if !fifo || err != nil {
-		return nil, fifo, err
+// bashPPFIFOPublish registers a FIFO descriptor this runner opened natively.
+// The open already completed, so the entry never waits; it is recorded so
+// that a task snapshot inherits it (the owner's pre-task descriptors, and a
+// process substitution's end, still belong to this File) and so that a
+// registered opener of the opposite end is released by it: a completed
+// blocking open proves that peer's descriptor exists, so releasing it —
+// even while it is still acquiring — cannot expose a premature end-of-file.
+// Non-FIFO descriptors are ignored. Returns the entry, or nil.
+func (r *Runner) bashPPFIFOPublish(c *bashPPConcurrent, file *os.File, path string, flags int) *bashPPFIFOEntry {
+	key, fifo := bashPPFIFOFileIdentity(file)
+	if !fifo {
+		return nil
 	}
-	// Configuration failure remains in the synchronous prefix. Do not publish
-	// an endpoint or release an opposite opener until its descriptor is ready.
-	if err := bashPPTaskSourceClearNonblock(file); err != nil {
-		_ = file.Close()
-		if probe != nil {
-			_ = probe.Close()
-		}
-		return nil, true, err
-	}
-	// Owner FIFO descriptors opened before the first go/chan declaration
-	// still belong to this File, and must survive into task snapshots.
-	c := r.bashPPConcurrency(ctx)
-	e := &bashPPFIFOEntry{group: c, owner: r, key: key, file: file, probe: probe, path: path,
+	e := &bashPPFIFOEntry{group: c, owner: r, key: key, file: file, path: path,
 		read: flags&os.O_WRONLY == 0, write: flags&(os.O_WRONLY|os.O_RDWR) != 0,
-		ready: make(chan struct{})}
+		ready: make(chan struct{}), matched: true}
+	close(e.ready)
 	c.fifoMu.Lock()
 	if c.fifos == nil {
 		c.fifos = make(map[*os.File]*bashPPFIFOEntry)
 	}
 	c.fifos[file] = e
-	for _, peer := range c.fifos {
-		if peer.key == key && !peer.closed && ((e.read && peer.write) || (e.write && peer.read)) {
-			for _, match := range []*bashPPFIFOEntry{e, peer} {
-				if !match.matched {
-					match.matched = true
-					if match.probe != nil {
-						_ = match.probe.Close()
-						match.probe = nil
-					}
-					close(match.ready)
+	c.fifoMatch(e, true)
+	c.fifoMu.Unlock()
+	return e
+}
+
+// fifoMatch releases e and every registered opener of the same inode in the
+// opposite direction that has a descriptor. Only a published endpoint
+// (whose own open has completed and which holds no probe) may also release
+// a peer still acquiring: a rendezvous opener that did so would close its
+// probe before its peer holds a descriptor, and a rendezvous reader would
+// read end-of-file before its writer opened. Called with fifoMu held.
+func (c *bashPPConcurrent) fifoMatch(e *bashPPFIFOEntry, published bool) {
+	release := func(peer *bashPPFIFOEntry) {
+		if peer.key != e.key || peer.closed || !((e.read && peer.write) || (e.write && peer.read)) {
+			return
+		}
+		for _, match := range []*bashPPFIFOEntry{e, peer} {
+			if !match.matched {
+				match.matched = true
+				if match.probe != nil {
+					_ = match.probe.Close()
+					match.probe = nil
 				}
+				close(match.ready)
 			}
 		}
+	}
+	for _, peer := range c.fifos {
+		release(peer)
+	}
+	if published {
+		for peer := range c.fifoPending {
+			release(peer)
+		}
+	}
+}
+
+// A native peer is deliberately insufficient: only descriptors registered in
+// the same File task group may release a Bash++ FIFO open. In particular an
+// external writer must not turn an unmatched read into premature EOF.
+func (r *Runner) bashPPFIFOOpen(ctx context.Context, path string, flags int) (*os.File, bool, error) {
+	taskCtx := r.bashPPTaskContext(ctx)
+	key, fifo, err := bashPPFIFOIdentify(taskCtx, r.dirFile, path)
+	if !fifo || err != nil {
+		return nil, fifo, err
+	}
+	// Owner FIFO descriptors opened before the first go/chan declaration
+	// still belong to this File, and must survive into task snapshots.
+	c := r.bashPPConcurrency(ctx)
+	e := &bashPPFIFOEntry{group: c, owner: r, key: key, path: path,
+		read: flags&os.O_WRONLY == 0, write: flags&(os.O_WRONLY|os.O_RDWR) != 0,
+		ready: make(chan struct{})}
+	// Announced before acquiring. Acquisition is what releases a peer's
+	// blocking open, and a published peer may then run to completion before
+	// the descriptor below is registered; it must still find this opener.
+	c.fifoMu.Lock()
+	if c.fifoPending == nil {
+		c.fifoPending = make(map[*bashPPFIFOEntry]struct{})
+	}
+	c.fifoPending[e] = struct{}{}
+	c.fifoMu.Unlock()
+	file, probe, err := bashPPFIFOAcquire(taskCtx, r.dirFile, r.Dir, path, flags, key)
+	// Configuration failure remains in the synchronous prefix. Do not publish
+	// an endpoint or release an opposite opener until its descriptor is ready.
+	if err == nil {
+		if err = bashPPTaskSourceClearNonblock(file); err != nil {
+			_ = file.Close()
+			if probe != nil {
+				_ = probe.Close()
+			}
+		}
+	}
+	c.fifoMu.Lock()
+	delete(c.fifoPending, e)
+	if err != nil {
+		c.fifoMu.Unlock()
+		return nil, true, err
+	}
+	e.file, e.probe = file, probe
+	if c.fifos == nil {
+		c.fifos = make(map[*os.File]*bashPPFIFOEntry)
+	}
+	c.fifos[file] = e
+	if e.matched {
+		// Released while announced, by a published peer.
+		if e.probe != nil {
+			_ = e.probe.Close()
+			e.probe = nil
+		}
+	} else {
+		c.fifoMatch(e, false)
 	}
 	matched := e.matched
 	c.fifoMu.Unlock()

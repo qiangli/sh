@@ -590,3 +590,96 @@ func TestBashPPFIFOPreservesOwnerSpecialFiles(t *testing.T) {
 	}
 	_ = f.Close()
 }
+
+// A published endpoint — one whose blocking open completed natively — releases
+// a rendezvous opener of the opposite end, including one that has announced
+// itself but not yet registered a descriptor: the acquisition is what released
+// the publisher's open, so the announcement is what closes the window in which
+// the publisher could run to completion unseen. A rendezvous opener never
+// releases an announced peer, since that peer holds no descriptor yet.
+func TestBashPPFIFOPublishedPeerReleasesAnnouncedOpener(t *testing.T) {
+	path := fifoTestPath(t)
+	c := newBashPPConcurrent(context.Background())
+	defer c.cancel()
+	defer c.closeFIFOs(nil)
+	key, fifo, err := bashPPFIFOIdentify(c.ctx, nil, path)
+	if err != nil || !fifo {
+		t.Fatalf("fifo=%v err=%v", fifo, err)
+	}
+	reader := newFIFOTestTask(t, c)
+	announced := &bashPPFIFOEntry{group: c, owner: reader, key: key, path: path, read: true, ready: make(chan struct{})}
+	c.fifoMu.Lock()
+	c.fifoPending = map[*bashPPFIFOEntry]struct{}{announced: {}}
+	c.fifoMu.Unlock()
+
+	// A rendezvous writer sees no descriptor to pair with and waits.
+	writer := newFIFOTestTask(t, c)
+	pending := startFIFOTestOpen(writer, path, os.O_WRONLY)
+	<-writer.bashPPTaskState.ready
+	c.fifoMu.Lock()
+	released := announced.matched
+	c.fifoMu.Unlock()
+	if released {
+		t.Fatal("rendezvous writer released an opener that holds no descriptor")
+	}
+
+	// A published writer releases it at once.
+	owner := newFIFOTestTask(t, c)
+	owner.bashPPGoTask = false
+	file, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := owner.bashPPFIFOPublish(c, file, path, os.O_WRONLY)
+	if e == nil {
+		t.Fatal("FIFO descriptor was not published")
+	}
+	select {
+	case <-announced.ready:
+	default:
+		t.Fatal("published writer did not release the announced reader")
+	}
+	// A published reader pairs with the acquired rendezvous writer as well.
+	reading, err := os.OpenFile(path, os.O_RDONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	re := owner.bashPPFIFOPublish(c, reading, path, os.O_RDONLY)
+	if re == nil {
+		t.Fatal("FIFO descriptor was not published")
+	}
+	if res := awaitFIFOTestOpen(t, pending); res.err != nil {
+		t.Fatal(res.err)
+	} else {
+		_ = writer.bashPPFIFOCloser(res.file).Close()
+	}
+	for _, e := range []*bashPPFIFOEntry{e, re} {
+		if err := e.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c.fifoMu.Lock()
+	delete(c.fifoPending, announced)
+	n := len(c.fifos)
+	c.fifoMu.Unlock()
+	if n != 0 {
+		t.Fatalf("retained %d FIFO registrations", n)
+	}
+}
+
+// End to end: a task's redirection over a FIFO whose writer is a process
+// substitution — natively opened, then published — joins and reads the data.
+func TestBashPPFIFOTaskRedirectOverProcessSubstitution(t *testing.T) {
+	out, err := runBashPPConcurrency(t, `
+func consume(ack) { /bin/cat < <(echo published); ack <- ok; }
+func main() {
+ ack := make(chan string)
+ go consume(ack)
+ <-ack
+}
+main()
+`)
+	if err != nil || out != "published\n" {
+		t.Fatalf("out=%q err=%v", out, err)
+	}
+}

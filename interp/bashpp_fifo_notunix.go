@@ -10,6 +10,14 @@ import (
 	"os"
 )
 
-func bashPPFIFOAcquire(ctx context.Context, dirFile *os.File, dir, path string, flags int) (*os.File, *os.File, bashPPFIFOIdentity, bool, error) {
-	return nil, nil, bashPPFIFOIdentity{}, false, nil
+func bashPPFIFOIdentify(ctx context.Context, dirFile *os.File, path string) (bashPPFIFOIdentity, bool, error) {
+	return bashPPFIFOIdentity{}, false, nil
+}
+
+func bashPPFIFOFileIdentity(file *os.File) (bashPPFIFOIdentity, bool) {
+	return bashPPFIFOIdentity{}, false
+}
+
+func bashPPFIFOAcquire(ctx context.Context, dirFile *os.File, dir, path string, flags int, key bashPPFIFOIdentity) (*os.File, *os.File, error) {
+	return nil, nil, nil
 }

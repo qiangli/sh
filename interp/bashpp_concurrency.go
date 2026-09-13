@@ -244,6 +244,9 @@ type bashPPConcurrent struct {
 	observerMu sync.Mutex
 	fifoMu     sync.Mutex
 	fifos      map[*os.File]*bashPPFIFOEntry
+	// fifoPending holds rendezvous openers that have announced themselves
+	// but not yet acquired a descriptor; see bashPPFIFOOpen.
+	fifoPending map[*bashPPFIFOEntry]struct{}
 }
 
 // bashPPLockedWriter serializes one Write call at a time across every task in
