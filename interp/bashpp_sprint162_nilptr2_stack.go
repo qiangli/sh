@@ -103,14 +103,13 @@ func (r *Runner) goSourceFrameFuncName(i int) string {
 		return "main." + frame.funcName
 	}
 	if fn.decl != nil {
-		if recv := fn.decl.Receiver; recv != nil && recv.RecvType != nil {
-			owner := recv.RecvType.Value
-			if recv.Pointer {
-				owner = "(*" + owner + ")"
-			}
-			return "main." + owner + "." + fn.decl.Name.Value
-		}
-		return "main." + fn.decl.Name.Value
+		return goSourceDeclFrameName(fn.decl)
+	}
+	// A literal the program declares is named from the source index; one
+	// the index does not know (a body the runtime instantiated) is numbered
+	// from the frames on the stack.
+	if name, ok := r.goSourceLiteralNames()[fn.lit]; ok {
+		return name
 	}
 	parent := "main"
 	if i > 0 {

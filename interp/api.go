@@ -712,6 +712,9 @@ type Runner struct {
 	goSourceFrameSeq uint64
 	goSourceFault    *goSourceFaultStack
 	goSourcePCs      []goSourceStackFrame
+	// goSourceLiteralNameIndex names the program's function literals as Go
+	// names their frames; see bashpp_sprint165_frames_names.go.
+	goSourceLiteralNameIndex map[*syntax.BashPPFuncLit]string
 
 	// exitTrapCallStack preserves the function stack for an EXIT trap
 	// triggered by `exit` from inside a function.

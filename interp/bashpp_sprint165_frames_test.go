@@ -94,3 +94,11 @@ func TestBashPPSprint165FramesLineDirectives(t *testing.T) {
 		t.Fatalf("absolute name: output\n%s\nwant\n%s", got, string(want))
 	}
 }
+
+// Frames are named as Go names them: declared functions and methods by
+// their qualified names, generic ones with `[...]`, function literals after
+// the declaration they are written in and numbered in source order, nested
+// literals with a dotted index, package-level literals after init.
+func TestBashPPSprint165FramesLiteralNames(t *testing.T) {
+	sprint165FramesExpect(t, "names", "literal_names", false)
+}
