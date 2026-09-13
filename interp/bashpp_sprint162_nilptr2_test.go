@@ -64,9 +64,13 @@ func sprint162NilPtr2Refused(t *testing.T, mechanism, name, want string) {
 }
 
 // A typed float variable reads back as a float whatever text its cell stores.
+// REVERTED in Sprint 162: the mechanism rendered the exact rational constants
+// of Bash++ SCRIPTS as decimals (`3/10` → `0.3`) and broke the
+// compiled/interpreted parity gates in lower (TestLexicalValuesCompiledArtifact,
+// TestProjectedNativeBindings). The GoSource-only form is Sprint 164 work;
+// literal.go stays a recorded residue row until then.
 func TestBashPPSprint162TypedFloatStorage(t *testing.T) {
-	sprint162NilPtr2Expect(t, "typedfloat", "typed_float", false)
-	sprint162NilPtr2Refused(t, "typedfloat", "typed_float_negative", "operator - not defined on")
+	t.Skip("typed float read-back reverted: it changed Classic Bash++ exact-rational rendering; see Sprint 162 closure")
 }
 
 // A nil function value is an argument to a func-typed parameter; a call

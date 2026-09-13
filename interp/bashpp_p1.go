@@ -399,11 +399,6 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 		if _, named := r.bashPPTypes[base]; named {
 			cell.typeName = base
 		}
-		if r.bashPPGoSource && cell.scalarKind == constant.Unknown && !pointer && valueMeta == nil {
-			if named, ok := r.bashPPUnderlyingType(d.DeclTypeExpr).(*syntax.BashPPNamedType); ok && named.Name != nil {
-				cell.scalarKind = bashPPBuiltinScalarKind(named.Name.Value)
-			}
-		}
 		if pointer {
 			cell.pointer, cell.pointerValue = true, pointerValue
 			cell.nilPointer = pointerValue == nil
@@ -1580,7 +1575,7 @@ func (r *Runner) bashPPValidateReusedShortValue(target, candidate *bashPPCell) e
 	case constant.Complex:
 		value.value = bashPPParseComplex(candidate.vr.Str)
 	case constant.Float:
-		value.value = bashPPFloatText(candidate.vr.Str)
+		value.value = constant.MakeFromLiteral(candidate.vr.Str, token.FLOAT, 0)
 	}
 	if !bashPPUntypedScalarAssignable(shape.Name.Value, value.value) {
 		return fmt.Errorf("BASHPP-EASSIGN-TYPE: cannot assign %s to %s", value.value.Kind(), bashPPTypeText(target.declType))

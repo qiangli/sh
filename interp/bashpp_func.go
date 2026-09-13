@@ -2980,10 +2980,10 @@ func (r *Runner) bashPPValueFits(declared, value string) bool {
 		return err == nil
 	case "float32":
 		_, err := strconv.ParseFloat(value, 32)
-		return err == nil || r.bashPPGoSource && bashPPExactFloatText(value) != nil
+		return err == nil
 	case "float64":
 		_, err := strconv.ParseFloat(value, 64)
-		return err == nil || r.bashPPGoSource && bashPPExactFloatText(value) != nil
+		return err == nil
 	case "complex64":
 		_, err := strconv.ParseComplex(value, 64)
 		return err == nil
