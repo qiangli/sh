@@ -69,7 +69,9 @@ func main() {
 	stdout, stderr, status := runGoSourcePointerAssign(t, src)
 	qt.Assert(t, qt.Equals(stdout, ""))
 	qt.Assert(t, qt.Equals(status, 2))
-	qt.Assert(t, qt.StringContains(stderr, "BASHPP-ENIL-DEREF:"))
+	// Since Sprint 162 a nil pointer on the way to a selector target is Go's
+	// runtime panic (recoverable, exit 2), not a static refusal.
+	qt.Assert(t, qt.StringContains(stderr, "runtime error: invalid memory address or nil pointer dereference"))
 	// The pre-fix miscategorisation must not resurface.
 	qt.Assert(t, qt.Not(qt.StringContains(stderr, "assignment parent is not struct storage")))
 }
