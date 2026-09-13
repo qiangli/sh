@@ -359,6 +359,10 @@ func (r *Runner) bashPPCommitTupleAssign(assign *syntax.BashPPAssign, candidates
 			r.exit = exitStatus{code: 2}
 			return
 		}
+		r.bashPPPrepareInterfaceAssignment(target, candidates[i])
+		if r.exit.code != 0 {
+			return
+		}
 		if err := r.bashPPValidateReusedShortValue(target, candidates[i]); err != nil {
 			// A forwarded program signal can arrive after a native call has
 			// produced its results but while a reused target is being checked by

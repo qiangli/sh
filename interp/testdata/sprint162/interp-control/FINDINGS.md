@@ -1,4 +1,4 @@
-# Sprint 162 interp-control-2 findings
+# Sprint 162 interp-control-3 findings
 
 | root | first cause | mechanism | status |
 |---|---|---|---|
@@ -16,3 +16,5 @@
 ## Requests to other seams
 
 None.
+| `testdir:fixedbugs/bug312.go` | select receive assignment into interface bypassed interface boxing | typed-cell interface boxing | fixed in `9a5e4a9d` |
+| `testdir:typeparam/mdempsky/18.go` | select receive assignment into interface bypassed interface boxing | typed-cell interface boxing | fixed in `9a5e4a9d` |

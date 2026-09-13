@@ -46,7 +46,12 @@ func (r *Runner) bashPPSelectReceiveAssign(assign *syntax.BashPPAssign, received
 		return
 	}
 	candidate := bashPPCopyAssignmentCell(received)
-	if err := r.bashPPValidateReusedShortValue(&bashPPCell{declType: ptr.elem}, candidate); err != nil {
+	target := &bashPPCell{declType: ptr.elem}
+	r.bashPPPrepareInterfaceAssignment(target, candidate)
+	if r.exit.code != 0 {
+		return
+	}
+	if err := r.bashPPValidateReusedShortValue(target, candidate); err != nil {
 		r.errf("%v\n", err)
 		r.exit.code = 2
 		return
