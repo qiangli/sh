@@ -148,7 +148,11 @@ func TestSyntaxVerdictClasses(t *testing.T) {
 			"else.go:5:9: syntax error: else must be followed by if or statement block",
 		}},
 		// Scanner stage: BOM in the middle of the file (corpus: bombad.go).
+		// gc's source layer drops the BOM and its scanner's segment for the
+		// literal still runs to the newline, so types2 also reports the
+		// literal as malformed (Sprint 165: `go tool compile -e` verbatim).
 		{"bom.go", "package p\n\nvar x = 1\xEF\xBB\xBF\n", []string{
+			"bom.go:3:9: malformed constant: 1\ufeff",
 			"bom.go:3:10: invalid BOM in the middle of the file",
 		}},
 		// CheckBranches: label defined and not used (corpus: label.go) —

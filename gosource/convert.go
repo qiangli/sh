@@ -1597,6 +1597,18 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 		out := &s.BashPPSelect{Select: c.pos(x.Select), Lbrace: c.pos(x.Body.Lbrace), Rbrace: c.pos(x.Body.Rbrace)}
 		for _, st := range x.Body.List {
 			cc := st.(*ast.CommClause)
+			// A RecvStmt's receive may be parenthesized (spec: RecvExpr;
+			// go/types stmt.go unparens it before the receive check), and
+			// the checker has already required it to be a receive; the
+			// lowered case carries the receive itself.
+			switch comm := cc.Comm.(type) {
+			case *ast.AssignStmt:
+				if len(comm.Rhs) == 1 {
+					comm.Rhs[0] = ast.Unparen(comm.Rhs[0])
+				}
+			case *ast.ExprStmt:
+				comm.X = ast.Unparen(comm.X)
+			}
 			v := &s.BashPPSelectCase{Case: c.pos(cc.Case), Colon: c.pos(cc.Colon), Default: cc.Comm == nil, Comm: c.one(cc.Comm)}
 			for _, body := range cc.Body {
 				v.Stmts = append(v.Stmts, c.statements(body)...)

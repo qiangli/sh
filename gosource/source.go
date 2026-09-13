@@ -172,7 +172,7 @@ func Load(sources []Source, options Options) (*Program, error) {
 	// gc still type-checks, and so does Load, on go/parser's recovered AST
 	// while retaining gc's diagnostics instead of go/parser's. Checker-test
 	// policy may continue the same way after a syntax error too.
-	syntaxErrors, gcFiles := syntaxVerdict(sources, options.CheckerBranchErrors)
+	syntaxErrors, gcFiles := syntaxVerdict(sources, checkerOptions{checkerBranchErrors: options.CheckerBranchErrors, checkAfterSyntaxErrors: options.CheckAfterSyntaxErrors})
 	if len(syntaxErrors) > 0 && !options.CheckAfterSyntaxErrors && !checksAfterSyntaxVerdict(syntaxErrors) {
 		return nil, syntaxErrors
 	}
@@ -187,7 +187,7 @@ func Load(sources []Source, options Options) (*Program, error) {
 		if i > 0 && s.Name == sources[i-1].Name {
 			return nil, fmt.Errorf("gosource: duplicate file %q", s.Name)
 		}
-		f, err := parser.ParseFile(c.fset, s.Name, s.Data, parser.ParseComments|parser.AllErrors)
+		f, err := parseGoFile(c.fset, s.Name, s.Data, parser.ParseComments|parser.AllErrors)
 		if err != nil && len(syntaxErrors) == 0 {
 			parseErrors = appendDiagnostics(parseErrors, err)
 		}
@@ -196,7 +196,10 @@ func Load(sources []Source, options Options) (*Program, error) {
 		if f == nil {
 			continue
 		}
-		if len(syntaxErrors) > 0 && checker.gcStderr() {
+		// Under either policy go/types checks what types2 checks: gc's
+		// tree records its parser's recoveries, go/parser's keeps the
+		// rejected text and would repeat the parser's diagnostic.
+		if len(syntaxErrors) > 0 {
 			mirrorGCTree(c.fset, f, gcFiles[i])
 		}
 		if p.Package == "" {
@@ -482,9 +485,10 @@ type checkerOptions struct {
 }
 
 // gcStderr reports whether the diagnostics are gc's stderr for the sources:
-// gc's tree after its parser's recovery and gc's per-line filter. The
-// checker-test policy (CheckAfterSyntaxErrors) instead expects go/types'
-// complete output on go/parser's tree.
+// sorted by position and passed through gc's per-line filter. The
+// checker-test policy (CheckAfterSyntaxErrors) instead expects the parser's
+// rows first, every one of them, then go/types' complete output. Both
+// policies check gc's tree (mirrorGCTree).
 func (o checkerOptions) gcStderr() bool {
 	return !o.checkAfterSyntaxErrors
 }
@@ -828,7 +832,10 @@ func checkLoweredNames(file *syntax.File, allowNativeInit bool) error {
 		default:
 			continue
 		}
-		if name == "_" {
+		// A blank function or method is not declared (spec: Blank
+		// identifier; Method declarations) and cannot be referenced, so
+		// several may be lowered side by side, like several `func _()`.
+		if name == "_" || strings.HasSuffix(name, "._") {
 			continue
 		}
 		if allowNativeInit && name == "init" {

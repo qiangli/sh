@@ -23,6 +23,18 @@ import (
 //     several receivers keeps the first (parser.go funcDeclOrNil). go/parser
 //     keeps the whole receiver list, on which go/types would repeat the
 //     parser's diagnostic.
+//   - a receiver written as ...T is T (parser.go paramList: "use T instead
+//     of invalid ...T", after "invalid use of ..."). go/parser parses the
+//     receiver list like a parameter list, where a final ...T is legal, so
+//     the Ellipsis reaches go/types, which reports the parser's diagnostic
+//     again as an invalid syntax tree.
+//
+// Both policies check the mirrored tree: gc's stderr because types2 checks
+// gc's tree, the checker-test policy because its runners' own parsers make
+// the same recoveries before their checker runs (the go/types runner's
+// go/parser drops the receiver list's error entirely and the syntax
+// runner's parser is gc's), so neither ever sees a checker diagnostic
+// repeat its parser's.
 //
 // Nodes are matched by their absolute (not //line-adjusted) position, which
 // both parsers assign to the same byte.
@@ -33,13 +45,21 @@ func mirrorGCTree(fset *token.FileSet, file *ast.File, gc *gcsyntax.File) {
 	type lineCol struct{ line, col uint }
 	bad := map[lineCol]bool{}
 	funcs := map[lineCol]*gcsyntax.FuncDecl{}
+	// After a syntax error gc's tree may hold a typed nil where the parser
+	// gave up (an import declaration without a path); the walker visits it.
 	gcsyntax.Inspect(gc, func(n gcsyntax.Node) bool {
 		switch n := n.(type) {
 		case *gcsyntax.BasicLit:
+			if n == nil {
+				return false
+			}
 			if n.Bad {
 				bad[lineCol{n.Pos().Line(), n.Pos().Col()}] = true
 			}
 		case *gcsyntax.FuncDecl:
+			if n == nil {
+				return false
+			}
 			funcs[lineCol{n.Pos().Line(), n.Pos().Col()}] = n
 		}
 		return true
@@ -67,9 +87,17 @@ func mirrorGCTree(fset *token.FileSet, file *ast.File, gc *gcsyntax.File) {
 		switch {
 		case gcFn.Recv == nil:
 			fn.Recv = nil
+			continue
+		case len(fn.Recv.List) == 0:
+			continue
 		case fn.Recv.NumFields() > 1:
 			fn.Recv.List = fn.Recv.List[:1]
 			fn.Recv.List[0].Names = fn.Recv.List[0].Names[:min(1, len(fn.Recv.List[0].Names))]
+		}
+		if _, dots := gcFn.Recv.Type.(*gcsyntax.DotsType); !dots {
+			if ell, ok := fn.Recv.List[0].Type.(*ast.Ellipsis); ok && ell.Elt != nil {
+				fn.Recv.List[0].Type = ell.Elt
+			}
 		}
 	}
 	if len(bad) == 0 {

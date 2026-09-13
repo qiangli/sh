@@ -54,7 +54,12 @@ func (e gcError) Error() string {
 // where sameline compares position base and line. Errors are returned in the
 // order gc emits them (source order). An empty result is gc accepting the
 // file at syntax stage.
-func gcSyntaxVerdict(name string, src []byte, checkerBranchErrors bool) (ErrorList, *gcsyntax.File) {
+//
+// The filter is gc's stderr's, not the parser's: with gcStderr false (the
+// checker-test policy) every diagnostic the parser emits is returned, as the
+// check_test runners' own parsers hand them to the runner (types2's errh
+// appends each one; go/parser runs with AllErrors).
+func gcSyntaxVerdict(name string, src []byte, checkerBranchErrors, gcStderr bool) (ErrorList, *gcsyntax.File) {
 	var out ErrorList
 	var lastSyntax, lastOther gcsyntax.Pos
 	lastMsg := ""
@@ -65,6 +70,10 @@ func gcSyntaxVerdict(name string, src []byte, checkerBranchErrors bool) (ErrorLi
 		e, ok := err.(gcsyntax.Error)
 		if !ok {
 			out = append(out, err)
+			return
+		}
+		if !gcStderr {
+			out = append(out, gcError{pos: e.Pos, msg: e.Msg})
 			return
 		}
 		if strings.HasPrefix(e.Msg, "syntax error") {
@@ -93,12 +102,12 @@ func gcSyntaxVerdict(name string, src []byte, checkerBranchErrors bool) (ErrorLi
 // there or continues with go/parser recovery and go/types. An empty result
 // means every file passed gc's parser. The trees are gc's own, index-aligned
 // with sources (nil where gc produced none); mirrorGCTree reads them.
-func syntaxVerdict(sources []Source, checkerBranchErrors bool) (ErrorList, []*gcsyntax.File) {
+func syntaxVerdict(sources []Source, checker checkerOptions) (ErrorList, []*gcsyntax.File) {
 	var out ErrorList
 	files := make([]*gcsyntax.File, len(sources))
 	for i, s := range sources {
 		var errs ErrorList
-		errs, files[i] = gcSyntaxVerdict(s.Name, s.Data, checkerBranchErrors)
+		errs, files[i] = gcSyntaxVerdict(s.Name, s.Data, checker.checkerBranchErrors, checker.gcStderr())
 		out = append(out, errs...)
 	}
 	return out, files

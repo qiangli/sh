@@ -257,23 +257,31 @@ func TestSprint162CheckAfterParserDiagnostics(t *testing.T) {
 	if got := diagnostics("syntax.go", read("syntax.go.src"), gosource.Options{}); !reflect.DeepEqual(got, wantSyntax) {
 		t.Fatalf("syntax error did not end the verdict\ngot: %q\nwant: %q", got, wantSyntax)
 	}
-	// The checker-test policy is untouched: gc's parser rows (its branch
-	// check left to go/types) first, then go/types' complete output on
-	// go/parser's tree — the repeated receiver rows, the malformed literal,
-	// both equal messages on line 19 and go/types' own branch wording.
+	// The checker-test policy: gc's parser rows (its branch check left to
+	// go/types) first, every one of them, then go/types' complete output on
+	// gc's tree — both equal messages on line 19 and go/types' own branch
+	// wording, and no repeat of a parser row (Sprint 165: the check_test
+	// runners' checkers run on their own parser's recovered tree and never
+	// repeat it; TestSprint165RepeatedParserDiagnostic).
 	policy := diagnostics("reject.go", read("reject.go.src"), gosource.Options{CheckAfterSyntaxErrors: true, CheckerBranchErrors: true})
 	parserRows := []string{want[0], want[1], want[2], want[3], want[5], want[7]}
 	if len(policy) < len(parserRows) || !reflect.DeepEqual(policy[:len(parserRows)], parserRows) {
 		t.Fatalf("checker-test policy changed: %q", policy)
 	}
 	for _, row := range []string{
-		"reject.go:3:6: method has no receiver",
-		"reject.go:15:11: malformed constant: 0x",
 		`reject.go:19:21: cannot use "x" (untyped string constant) as int value in variable declaration`,
 		"reject.go:22:1: label L declared and not used",
 	} {
 		if !slices.Contains(policy, row) {
 			t.Fatalf("checker-test policy lost go/types' own row %q in %q", row, policy)
+		}
+	}
+	for _, row := range []string{
+		"reject.go:3:6: method has no receiver",
+		"reject.go:15:11: malformed constant: 0x",
+	} {
+		if slices.Contains(policy, row) {
+			t.Fatalf("checker-test policy repeated the parser's row %q in %q", row, policy)
 		}
 	}
 }

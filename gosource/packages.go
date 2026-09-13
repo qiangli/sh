@@ -183,7 +183,7 @@ func (m *mapImporter) checkDependency(fset *token.FileSet, spec PackageSpec, che
 	sort.SliceStable(sources, func(i, j int) bool { return sources[i].Name < sources[j].Name })
 	// Same syntax-verdict policy as Load: checker-test mode may continue on
 	// go/parser's recovered AST after retaining gc's diagnostics.
-	syntaxErrors, gcFiles := syntaxVerdict(sources, checker.checkerBranchErrors)
+	syntaxErrors, gcFiles := syntaxVerdict(sources, checker)
 	if len(syntaxErrors) > 0 && !checker.checkAfterSyntaxErrors && !checksAfterSyntaxVerdict(syntaxErrors) {
 		return syntaxErrors
 	}
@@ -193,12 +193,12 @@ func (m *mapImporter) checkDependency(fset *token.FileSet, spec PackageSpec, che
 		if i > 0 && s.Name == sources[i-1].Name {
 			return ErrorList{fmt.Errorf("gosource: duplicate file %q in package %q", s.Name, spec.Path)}
 		}
-		f, err := parser.ParseFile(fset, s.Name, s.Data, parser.ParseComments|parser.AllErrors)
+		f, err := parseGoFile(fset, s.Name, s.Data, parser.ParseComments|parser.AllErrors)
 		if err != nil && len(syntaxErrors) == 0 {
 			diagnostics = appendDiagnostics(diagnostics, err)
 		}
 		if f != nil {
-			if len(syntaxErrors) > 0 && checker.gcStderr() {
+			if len(syntaxErrors) > 0 {
 				mirrorGCTree(fset, f, gcFiles[i])
 			}
 			files = append(files, f)
