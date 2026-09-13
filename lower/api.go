@@ -21,6 +21,10 @@ const (
 
 type Options struct {
 	Package, Runtime, Origin string
+	// Library emits one runtime-free Go file per original Go source file.
+	// It requires a Go-source tree and an empty Entry. Package must name the
+	// source package; callers lower an external test package as a separate unit.
+	Library bool
 	// Dir is the source directory used to resolve module imports.
 	// Empty uses the current working directory; Origin remains source identity.
 	Dir string
@@ -40,6 +44,17 @@ type Result struct {
 	Entry    string // emitted callable entry name, or empty for a runtime-free unit
 	Imports  []string
 	Origin   string
+	Mappings []Mapping
+	// Files holds per-origin output when Options.Library is set. Source is empty
+	// in that mode so a caller cannot accidentally compile a partial flat unit.
+	Files []FileResult
+}
+
+// FileResult is one generated file in a library result.
+type FileResult struct {
+	Name     string
+	Source   []byte
+	Imports  []string
 	Mappings []Mapping
 }
 type Mapping struct {

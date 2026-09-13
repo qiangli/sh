@@ -407,6 +407,11 @@ func (e *emitter) importDecl(n *syntax.BashPPImport) error {
 		if spec.Alias != nil {
 			e.importAliased[alias] = true
 		}
+		if e.sourceFile != nil {
+			if source, ok := e.sourceFile.SourceAt(spec.Pos()); ok {
+				e.fileImports[source.Name] = append(e.fileImports[source.Name], sourceImport{alias: alias, path: p, aliased: spec.Alias != nil})
+			}
+		}
 		e.bind(alias)
 	}
 	return nil

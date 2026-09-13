@@ -331,7 +331,11 @@ func Load(sources []Source, options Options) (*Program, error) {
 				}
 			}
 		}
-		lp, err := lc.lowerPackage(len(p.InitFunctions))
+		// A plain non-executing package is a native library input: keep its
+		// init declarations for cmd/go to schedule. Flattened execution and
+		// explicit package maps still need uniquely named callable init funcs.
+		preserveNativeInit := !options.RunMain && len(options.Packages) == 0
+		lp, err := lc.lowerPackage(len(p.InitFunctions), preserveNativeInit)
 		if err != nil {
 			return nil, err
 		}
@@ -368,7 +372,7 @@ func Load(sources []Source, options Options) (*Program, error) {
 			p.File.Stmts = append(p.File.Stmts, c.stmt(&syntax.BashPPCall{Fun: []*syntax.Lit{lit}}))
 		}
 	}
-	if err := checkLoweredNames(p.File); err != nil {
+	if err := checkLoweredNames(p.File, !options.RunMain && len(options.Packages) == 0); err != nil {
 		return nil, err
 	}
 	for _, path := range imp.order {
@@ -620,7 +624,7 @@ type loweredPackage struct {
 // lowerPackage converts the converter's files into grouped statements. The
 // init functions are numbered from initBase so names stay unique across the
 // link set.
-func (c *converter) lowerPackage(initBase int) (*loweredPackage, error) {
+func (c *converter) lowerPackage(initBase int, preserveNativeInit bool) (*loweredPackage, error) {
 	out := &loweredPackage{}
 	vars := map[*types.Var]*syntax.BashPPDecl{}
 	tupleSpecs := map[*types.Var]*ast.ValueSpec{}
@@ -629,7 +633,7 @@ func (c *converter) lowerPackage(initBase int) (*loweredPackage, error) {
 		for _, d := range f.Decls {
 			if fd, ok := d.(*ast.FuncDecl); ok {
 				fn := c.function(fd)
-				if fd.Name.Name == "init" && fd.Recv == nil {
+				if fd.Name.Name == "init" && fd.Recv == nil && !preserveNativeInit {
 					fn.Name.Value = fmt.Sprintf("%sinit_%d", c.prefix, initBase+len(out.initFunctions))
 					out.initFunctions = append(out.initFunctions, fn.Name.Value)
 				}
@@ -783,7 +787,7 @@ func mangleLinkedNames(linked []*converter, mappedPkgs []*types.Package) {
 // rejects a package redeclaring a name across its own files and the renames
 // keep packages apart, so a duplicate here is a converter defect, reported
 // rather than left to alias silently at runtime.
-func checkLoweredNames(file *syntax.File) error {
+func checkLoweredNames(file *syntax.File, allowNativeInit bool) error {
 	declared := map[string]bool{}
 	for _, stmt := range file.Stmts {
 		var name string
@@ -799,6 +803,9 @@ func checkLoweredNames(file *syntax.File) error {
 			continue
 		}
 		if name == "_" {
+			continue
+		}
+		if allowNativeInit && name == "init" {
 			continue
 		}
 		if declared[name] {
