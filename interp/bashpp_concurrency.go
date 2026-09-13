@@ -516,6 +516,14 @@ func (r *Runner) bashPPTaskOpen(ctx context.Context, path string, flags int, mod
 			}
 			return nil, err
 		}
+		// The registered-peer rendezvous below is for a group with
+		// concurrent members. Until the File has had a task, a FIFO open
+		// is Bash's blocking open (a Classic script under the Bash++
+		// dialect must behave as Classic), published to the group so a
+		// later task still finds the descriptor.
+		if !r.bashPPFIFORendezvous() {
+			return r.bashPPFIFOOpenNative(ctx, path, flags, mode, print)
+		}
 		file, fifo, err := r.bashPPFIFOOpen(ctx, path, flags)
 		if fifo {
 			if err != nil && print {

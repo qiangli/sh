@@ -50,6 +50,41 @@ type bashPPFIFOEntry struct {
 	once        sync.Once
 }
 
+// bashPPFIFORendezvous reports whether a FIFO open by this runner must wait
+// for a peer registered in its task group rather than take Bash's blocking
+// open. The registered-peer rule exists for the concurrent members of a
+// group: until the group has had a task (and this runner is not one), a
+// File is single-threaded apart from its own shell copies and process
+// substitutions, which open natively too — so the open is Bash's, paired by
+// the kernel with whichever peer arrives, an external process included.
+// A task that has run is enough: descriptors it may still hold keep the
+// rule in force for the rest of the File.
+func (r *Runner) bashPPFIFORendezvous() bool {
+	if r.inBashPPTask() {
+		return true
+	}
+	c := r.bashPPConcurrent
+	if c == nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.nextTask > 0
+}
+
+// bashPPFIFOOpenNative is Bash's blocking open, followed by publishing the
+// descriptor to the task group when it is a FIFO (see bashPPFIFOPublish).
+func (r *Runner) bashPPFIFOOpenNative(ctx context.Context, path string, flags int, mode os.FileMode, print bool) (io.ReadWriteCloser, error) {
+	f, err := r.open(ctx, path, flags, mode, print)
+	if err != nil {
+		return nil, err
+	}
+	if file, ok := f.(*os.File); ok {
+		r.bashPPFIFOPublish(r.bashPPConcurrency(ctx), file, path, flags)
+	}
+	return f, nil
+}
+
 // bashPPFIFOPublish registers a FIFO descriptor this runner opened natively.
 // The open already completed, so the entry never waits; it is recorded so
 // that a task snapshot inherits it (the owner's pre-task descriptors, and a
