@@ -1195,7 +1195,7 @@ func (e *emitter) command(c syntax.Command) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if len(n.Lhs) == 1 && n.Call == nil && n.FuncLit == nil {
+		if !e.goSource && len(n.Lhs) == 1 && n.Call == nil && n.FuncLit == nil {
 			if value, err := types.Eval(token.NewFileSet(), nil, token.NoPos, rhs); err == nil && value.Value != nil && value.Value.Kind() == constant.Int {
 				if _, fits := constant.Int64Val(value.Value); !fits {
 					e.bigIntegers = true
