@@ -3,9 +3,11 @@ id: b99c6ad50037
 kind: task
 title: S170.2 remaining collection-operation evaluator batch
 seq: 103
-status: todo
+status: assigned
 priority: p0
 created: 2026-09-14T09:02:18.114556Z
+weave: 209
+assignee: codex-gpt5.6-sol
 sprint: 170
 ---
 

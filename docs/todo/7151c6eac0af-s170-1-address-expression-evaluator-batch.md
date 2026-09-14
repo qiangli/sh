@@ -3,9 +3,11 @@ id: 7151c6eac0af
 kind: task
 title: S170.1 address-expression evaluator batch
 seq: 102
-status: todo
+status: assigned
 priority: p0
 created: 2026-09-14T09:02:18.114529Z
+weave: 208
+assignee: claude-fable5
 sprint: 170
 ---
 

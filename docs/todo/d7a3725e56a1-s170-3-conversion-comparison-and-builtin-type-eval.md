@@ -3,9 +3,11 @@ id: d7a3725e56a1
 kind: task
 title: S170.3 conversion comparison and builtin-type evaluator batch
 seq: 104
-status: todo
+status: assigned
 priority: p0
 created: 2026-09-14T09:02:18.114567Z
+weave: 210
+assignee: codex-gpt5.6-terra
 sprint: 170
 ---
 
