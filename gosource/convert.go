@@ -57,6 +57,9 @@ type converter struct {
 	err             error
 	branchScopes    []converterBranchScope
 	statementLabel  string
+	// gotoTargets holds the labels a goto names, built on first use by
+	// gotoTarget; nil until then.
+	gotoTargets map[types.Object]bool
 }
 
 type converterBranchScope struct {
@@ -89,6 +92,35 @@ func (c *converter) labeledBranchDepth(branch *ast.BranchStmt) int {
 	}
 	c.fail(branch, "labeled branch")
 	return 0
+}
+
+// scopedTypeSwitch reports whether st is a type switch whose init statement
+// converts to an enclosing block (see the TypeSwitchStmt case of statements).
+func (c *converter) scopedTypeSwitch(st ast.Stmt) bool {
+	x, ok := st.(*ast.TypeSwitchStmt)
+	return ok && x.Init != nil
+}
+
+// gotoTarget reports whether a goto anywhere in the package names the label
+// declared by ident. Labels are function-scoped objects in go/types, so the
+// answer is exact across nested function literals. The goto set is built on
+// first use from every file's branches.
+func (c *converter) gotoTarget(ident *ast.Ident) bool {
+	if c.gotoTargets == nil {
+		c.gotoTargets = map[types.Object]bool{}
+		for _, f := range c.files {
+			ast.Inspect(f, func(n ast.Node) bool {
+				if branch, ok := n.(*ast.BranchStmt); ok && branch.Tok == token.GOTO && branch.Label != nil {
+					if obj := c.info.Uses[branch.Label]; obj != nil {
+						c.gotoTargets[obj] = true
+					}
+				}
+				return true
+			})
+		}
+	}
+	obj := c.info.Defs[ident]
+	return obj != nil && c.gotoTargets[obj]
 }
 
 func (c *converter) pos(p token.Pos) s.Pos {
@@ -1639,9 +1671,6 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 		cmd = out
 	case *ast.TypeSwitchStmt:
 		label := c.takeStatementLabel()
-		if x.Init != nil {
-			c.fail(x.Init, "type switch initializer")
-		}
 		guard := &s.BashPPShortDecl{Class: s.ClassR, GoRegion: true}
 		switch assign := x.Assign.(type) {
 		case *ast.ExprStmt:
@@ -1667,7 +1696,17 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 			}
 			out.Arms = append(out.Arms, v)
 		}
-		cmd = out
+		if x.Init == nil {
+			cmd = out
+			break
+		}
+		// Go scopes a type switch's init statement to the switch: the spec
+		// places init, guard and body in one implicit block. That block is
+		// spelled here — the init statements, then the switch — the same
+		// shape lowering gives an expression switch with an init.
+		block := &s.Block{Lbrace: c.pos(x.Switch), Rbrace: c.pos(x.Body.Rbrace)}
+		block.Stmts = append(c.statements(x.Init), c.stmt(out))
+		cmd = block
 	case *ast.SwitchStmt:
 		leaveBranch := c.pushBranchScope(c.takeStatementLabel(), false)
 		defer leaveBranch()
@@ -1704,6 +1743,18 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 		// rest follow it in the block, which is where execution resumes after a
 		// goto to the label.
 		if len(inner) > 0 {
+			// A type switch with an init statement converts to the block
+			// scoping that init around the switch. A break names the switch
+			// by depth, so the label belongs on the switch itself, inside
+			// the block, unless a goto names it: a goto resumes at the
+			// labeled statement, which must then be the block so the init
+			// runs again, as Go re-evaluates it on every entry.
+			if block, ok := inner[0].Cmd.(*s.Block); ok && c.scopedTypeSwitch(x.Stmt) && !c.gotoTarget(x.Label) {
+				last := len(block.Stmts) - 1
+				out.Stmt = block.Stmts[last]
+				block.Stmts[last] = c.stmt(out)
+				return inner
+			}
 			out.Stmt = inner[0]
 			inner = inner[1:]
 		}
