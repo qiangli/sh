@@ -54,8 +54,12 @@ func TestGoSourceLibraryLocalConstImport(t *testing.T) {
 	if strings.Contains(plain, "import") {
 		t.Errorf("plain.go gained an import\n--- generated\n%s", plain)
 	}
-	if !strings.Contains(plain, "const width = 3") {
-		t.Errorf("plain.go no longer folds its import-free constant\n--- generated\n%s", plain)
+	// Sprint 171 (w3-fidelity): a Go-only input lowers to itself — the
+	// written initializer is the compiled carrier even when it needs no
+	// import, so gc evaluates `len("abc")` exactly as it did the original
+	// (folding to `3` was the Sprint 169 boundary this supersedes).
+	if !strings.Contains(plain, `const width = len("abc")`) || strings.Contains(plain, "const width = 3") {
+		t.Errorf("plain.go does not keep its written import-free constant\n--- generated\n%s", plain)
 	}
 
 	buildDir := t.TempDir()
@@ -105,11 +109,22 @@ func Sizes() int {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = lower.Compile(program.File, lower.Options{Package: program.Package, Library: true, Importer: program.Importer})
-	if err == nil {
-		t.Fatal("the iota bound was silently widened; decide the group-carrier shape first")
+	// Sprint 171 (w3-fidelity) decided the group-carrier shape: a native
+	// const group is emitted as its written initializers, so iota keeps its
+	// per-line value and the import stays used. Sprint 169 pinned the
+	// refusal this replaces; the generated unit must now build and compute
+	// what the original does (first=8, second=9 on a 64-bit target).
+	result, err := lower.Compile(program.File, lower.Options{Package: program.Package, Library: true, Importer: program.Importer})
+	if err != nil {
+		t.Fatalf("the iota group no longer lowers: %v", err)
 	}
-	if !strings.Contains(err.Error(), `"unsafe" imported and not used`) {
-		t.Fatalf("unexpected diagnostic: %v", err)
+	if len(result.Files) != 1 {
+		t.Fatalf("emitted %d files, want 1", len(result.Files))
+	}
+	generated := string(result.Files[0].Source)
+	for _, want := range []string{"first  = iota + int(unsafe.Sizeof(int(0)))", "second = iota + int(unsafe.Sizeof(int(0)))", `import "unsafe"`} {
+		if !strings.Contains(generated, want) {
+			t.Fatalf("generated unit lost %q:\n%s", want, generated)
+		}
 	}
 }

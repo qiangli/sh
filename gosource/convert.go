@@ -752,7 +752,17 @@ func (c *converter) valueDecl(g *ast.GenDecl, v *ast.ValueSpec, n *ast.Ident, in
 			if out.InitExpr == nil {
 				out.InitExpr = &s.BashPPBasicLit{Kind: kind, Value: c.lit(n.Pos(), value)}
 			}
-			out.Init = []*s.Word{{Parts: []s.WordPart{c.lit(n.Pos(), value)}}}
+			// Init is the WRITTEN carrier: compiled Go re-emits the source
+			// expression and lets gc evaluate it, so the folded value must
+			// never replace it — ExactString spells a rational (`1/3 +
+			// 2/3i`) that Go would parse as `1/3 + 2/(3i)`. Only a constant
+			// with no written initializer (an implicit repetition) carries
+			// its value here.
+			if len(v.Values) == len(v.Names) && index < len(v.Values) {
+				out.Init = []*s.Word{c.word(v.Values[index])}
+			} else {
+				out.Init = []*s.Word{{Parts: []s.WordPart{c.lit(n.Pos(), value)}}}
+			}
 		}
 		return out
 	}
