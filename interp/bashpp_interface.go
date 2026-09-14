@@ -567,6 +567,13 @@ func (r *Runner) bashPPCellForInterfaceExpr(expr syntax.BashPPExpr) (*bashPPCell
 		if cell == nil {
 			return nil, nil, fmt.Errorf("BASHPP-EINTERFACE-VALUE: undefined value %s", id.Name.Value)
 		}
+		// An untyped constant's name stores what its literal would: the
+		// value with the constant's default type (`const a = 0; var i any =
+		// a` holds an int). The constant cell carries no type of its own,
+		// so the scalar path names the default from the value's kind.
+		if cell.constant && cell.declType == nil && cell.typeName == "" && cell.interfaceValue == nil && cell.vr.Kind == expand.String {
+			return r.bashPPScalarInterfaceCell(expr)
+		}
 		return r.bashPPInterfaceSourceCell(cell, id.Name.Value)
 	}
 	// A call's result is the cell the callee returned: an interface result

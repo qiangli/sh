@@ -293,3 +293,14 @@ func main() {
 func TestSprint171UnsafeString(t *testing.T) {
 	sprint171RunBothModes(t, filepath.Join("testdata", "sprint171", "w2-imports", "unsafe-string", "unsafe_string.go"))
 }
+
+// TestSprint171ConstantInInterface is an outside-corpus reproducer for an
+// untyped constant's NAME stored in an interface (`const a = 0;
+// (interface{})(a)`), which the runtime refused as a value with no dynamic
+// type where the literal `0` was boxed as an int: the constant cell carries
+// no type, and its default type comes from its value's kind, as the
+// literal's does. Typed constants keep their declared type. Salvaged from
+// the Sprint 165 lane-203 tree (request R1 of the w2-imports FINDINGS).
+func TestSprint171ConstantInInterface(t *testing.T) {
+	sprint171RunBothModes(t, filepath.Join("testdata", "sprint171", "w2-imports", "const-interface", "const_interface.go"))
+}
