@@ -185,6 +185,19 @@ func (c *converter) mangledName(index int, name string) string {
 	return c.mappedMarker(index) + "_" + name
 }
 
+// bridgedType reports whether a named type is declared by a package the
+// dependency helper serves: neither the program's own package nor a package
+// linked into the file by the explicit map, whose declarations the runtime
+// holds. A predeclared name (error) has no package and is not bridged.
+func (c *converter) bridgedType(named *types.Named) bool {
+	pkg := named.Obj().Pkg()
+	if pkg == nil || pkg.Path() == c.packagePath {
+		return false
+	}
+	_, mapped := c.mapped[pkg.Path()]
+	return !mapped
+}
+
 // qualifier spells a package in a type string: unqualified for the program
 // package, by marker for a linked explicit package, by hoisted alias for an
 // import, and by declared name otherwise. Only typeString may use it, since
@@ -1265,6 +1278,12 @@ func (c *converter) callee(out *s.BashPPCall, e ast.Expr) {
 	case *ast.Ident:
 		out.Fun = append(out.Fun, c.ident(v))
 	case *ast.SelectorExpr:
+		// A method expression the runtime cannot select from a declaration
+		// is called as the closure it lowers to; see typeParamMethodExpr.
+		if lit, ok := c.typeParamMethodExpr(v).(*s.BashPPFuncLit); ok {
+			out.FuncLit = lit
+			return
+		}
 		if !c.mappedPkgName(v.X) {
 			c.callee(out, v.X)
 		}
@@ -1346,8 +1365,11 @@ func (c *converter) genericFuncValue(e ast.Expr) s.BashPPExpr {
 // resolves; a type parameter's NAME has no declaration until the frame binds
 // it, an unnamed type has none at all, and an instantiation's type arguments
 // belong to the receiver's type, which the closure's parameter spells.
-// Returns nil for every other selector: a declared name's method expression
-// is spelled as written.
+// An imported package's named type (`reflect.Type.Method`,
+// `(*bytes.Buffer).Write`) takes the same closure: the program has no
+// declaration of it to select the method from, only values of it, which the
+// dependency resolves the method on. Returns nil for every other selector:
+// a declared name's method expression is spelled as written.
 func (c *converter) typeParamMethodExpr(x *ast.SelectorExpr) s.BashPPExpr {
 	selection := c.info.Selections[x]
 	if selection == nil || selection.Kind() != types.MethodExpr {
@@ -1360,7 +1382,7 @@ func (c *converter) typeParamMethodExpr(x *ast.SelectorExpr) s.BashPPExpr {
 	switch r := recv.(type) {
 	case *types.TypeParam, *types.Struct, *types.Interface:
 	case *types.Named:
-		if r.TypeArgs().Len() == 0 {
+		if r.TypeArgs().Len() == 0 && !c.bridgedType(r) {
 			return nil
 		}
 	default:

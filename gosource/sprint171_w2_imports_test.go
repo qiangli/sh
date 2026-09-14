@@ -149,3 +149,44 @@ func TestSprint171ImportedGenericFunctions(t *testing.T) {
 		}
 	}
 }
+
+// TestSprint171ImportedMethodExpressions is an outside-corpus reproducer for
+// method expressions on an imported package's named types
+// (reflect.Type.Method, (*bytes.Buffer).WriteString): the program has no
+// declaration to select the method from, so — like a type parameter's or a
+// type literal's method expression — it lowers to the closure calling the
+// method on its first argument, as a value and as a direct call.
+func TestSprint171ImportedMethodExpressions(t *testing.T) {
+	program := sprint171RunBothModes(t, filepath.Join("testdata", "sprint171", "w2-imports", "imported-method-expr", "imported_method_expr.go"))
+	closures := 0
+	syntax.Walk(program.File, func(n syntax.Node) bool {
+		if _, ok := n.(*syntax.BashPPFuncLit); ok {
+			closures++
+		}
+		return true
+	})
+	if closures != 5 {
+		t.Fatalf("imported method expressions lowered as %d closures, want 5", closures)
+	}
+
+	// Negatives: a declared type's method expression is spelled as written,
+	// and a method VALUE on an imported value stays the selector it is.
+	load := func(src string) (*gosource.Program, error) {
+		return gosource.Load([]gosource.Source{{Name: "negative.go", Data: []byte(src)}}, gosource.Options{RunMain: true})
+	}
+	local, err := load("package main\n\nimport \"bytes\"\n\ntype T struct{}\n\nfunc (T) M() int { return 1 }\n\nfunc main() {\n\tf := T.M\n\tvar b bytes.Buffer\n\tw := b.WriteString\n\tw(\"x\")\n\tprintln(f(T{}), b.Len())\n}\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	syntax.Walk(local.File, func(n syntax.Node) bool {
+		switch n := n.(type) {
+		case *syntax.BashPPFuncLit:
+			t.Fatalf("a declared type's method expression or an imported method value lowered as a closure: %v", n)
+		case *syntax.BashPPSelectorExpr:
+			if n.Sel.Value == "WriteString" && !n.MethodValue {
+				t.Fatalf("imported method value lost its selector form")
+			}
+		}
+		return true
+	})
+}
