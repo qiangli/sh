@@ -102,7 +102,7 @@ func Prepare(ctx context.Context, blocks []Block, analyzers map[string]Analyzer)
 		if err != nil {
 			return nil, fmt.Errorf("polyglot %s: %w", lang, err)
 		}
-		hash := sha256.Sum256([]byte(lang + "\x00" + group.alias + "\x00" + source))
+		hash := sha256.Sum256([]byte(lang + "\x00" + group.alias + "\x00" + source + "\x00" + artifact))
 		plans = append(plans, Plan{ID: hex.EncodeToString(hash[:]), Language: lang, Alias: group.alias, Source: source, Artifact: artifact, Exports: exports})
 	}
 	return plans, nil
