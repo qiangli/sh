@@ -5,6 +5,8 @@ package interp
 
 import (
 	"encoding/json"
+	"go/ast"
+	"go/parser"
 	"sort"
 	"strconv"
 	"strings"
@@ -164,14 +166,43 @@ func bashPPImportedInstanceSymbols(symbols *strings.Builder, list []bashPPImport
 		}
 		args := make([]string, len(instance.Args))
 		for i, arg := range instance.Args {
+			// A type argument qualified by a name the helper does not
+			// import is not expressible in it; registering the
+			// instantiation would leave the helper unbuildable.
+			if !bashPPTypeImportsKnown(arg, aliases) {
+				expressible = false
+				break
+			}
 			mapped, err := bashPPNativeTypeImports(arg, aliases)
 			if err != nil {
 				return false, err
 			}
 			args[i] = mapped
 		}
+		if !expressible {
+			continue
+		}
 		symbols.WriteString(strconv.Quote(instance.Key) + ": reflect.ValueOf(" + helperAlias + "." + name + "[" + strings.Join(args, ", ") + "]),\n")
 		emitted = true
 	}
 	return emitted, nil
+}
+
+// bashPPTypeImportsKnown reports whether every package-qualified name in
+// the type expression decl is qualified by an alias the helper imports.
+func bashPPTypeImportsKnown(decl string, aliases map[string]string) bool {
+	expr, err := parser.ParseExpr(decl)
+	if err != nil {
+		return false
+	}
+	known := true
+	ast.Inspect(expr, func(node ast.Node) bool {
+		if sel, ok := node.(*ast.SelectorExpr); ok {
+			if id, ok := sel.X.(*ast.Ident); ok && aliases[id.Name] == "" {
+				known = false
+			}
+		}
+		return known
+	})
+	return known
 }

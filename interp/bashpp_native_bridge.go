@@ -611,14 +611,27 @@ func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, err
 	for _, local := range req.LocalTypes {
 		materialised[local.Name] = true
 	}
+	// Every package's helper alias is settled before any symbol is
+	// emitted: an instantiation registered under one package names types
+	// of others (`errors.AsType[*fs.PathError]`), whichever order the
+	// packages come in.
+	blankOnly := map[string]bool{}
 	for i, path := range ordered {
-		blankOnly := true
+		blankOnly[path] = true
 		for _, alias := range paths[path] {
 			if !strings.HasPrefix(alias, "_:") {
-				blankOnly = false
+				blankOnly[path] = false
 			}
 		}
-		if blankOnly {
+		if blankOnly[path] {
+			continue
+		}
+		for _, original := range paths[path] {
+			importAliases[original] = fmt.Sprintf("bpppkg%d", i)
+		}
+	}
+	for i, path := range ordered {
+		if blankOnly[path] {
 			fmt.Fprintf(&imports, "_ %q\n", path)
 			continue
 		}
@@ -627,9 +640,6 @@ func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, err
 			return "", err
 		}
 		alias := fmt.Sprintf("bpppkg%d", i)
-		for _, original := range paths[path] {
-			importAliases[original] = alias
-		}
 		fmt.Fprintf(&imports, "%s %q\n", alias, path)
 		used := false
 		for _, name := range pkg.Scope().Names() {

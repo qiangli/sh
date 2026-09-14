@@ -2,13 +2,16 @@
 // arguments are inferred (maps.Clone, slices.Max), spelled (slices.Max[[]int]),
 // partly a local type (maps.Keys over a map[key]int), reached only through a local generic body whose parameter
 // binds them (dedupe[string]), and return an instantiated imported type
-// (unique.Make).
+// (unique.Make), and name a type of a package the helper imports after
+// the function's own (cmp.Or over time.Duration).
 package main
 
 import (
+	"cmp"
 	"fmt"
 	"maps"
 	"slices"
+	"time"
 	"unique"
 )
 
@@ -41,4 +44,6 @@ func main() {
 
 	h := unique.Make("handle")
 	fmt.Println(h.Value(), h == unique.Make("handle"))
+
+	fmt.Println(cmp.Or(0*time.Second, time.Minute))
 }

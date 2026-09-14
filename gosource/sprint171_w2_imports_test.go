@@ -143,7 +143,7 @@ func TestSprint171ImportedGenericFunctions(t *testing.T) {
 		}
 		return true
 	})
-	for name, want := range map[string]int{"maps.Clone": 3, "slices.Max": 2, "slices.Index": 2, "maps.Keys": 3, "slices.Sorted": 1, "slices.Clip": 2, "unique.Make": 1, "fmt.Println": 0} {
+	for name, want := range map[string]int{"maps.Clone": 3, "slices.Max": 2, "slices.Index": 2, "maps.Keys": 3, "slices.Sorted": 1, "slices.Clip": 2, "unique.Make": 1, "cmp.Or": 1, "fmt.Println": 0} {
 		if got, ok := calls[name]; !ok || got != want {
 			t.Errorf("%s: %d type arguments (present=%v), want %d", name, got, ok, want)
 		}
