@@ -449,9 +449,16 @@ func (e *emitter) importDecl(n *syntax.BashPPImport) error {
 				}
 			}
 		}
-		e.imports[alias] = p
+		// A dot or blank import binds no identifier, so several may name
+		// distinct paths; key those by path so none replaces another. No
+		// identifier lookup can match a key holding a space.
+		key := alias
+		if alias == "." || alias == "_" {
+			key = alias + " " + p
+		}
+		e.imports[key] = p
 		if spec.Alias != nil {
-			e.importAliased[alias] = true
+			e.importAliased[key] = true
 		}
 		if e.sourceFile != nil {
 			if source, ok := e.sourceFile.SourceAt(spec.Pos()); ok {
@@ -590,13 +597,14 @@ func (e *emitter) importLines() string {
 	}
 	sort.Strings(aliases)
 	var out strings.Builder
-	for _, alias := range aliases {
-		if e.goSource && !e.importAliased[alias] {
+	for _, key := range aliases {
+		if e.goSource && !e.importAliased[key] {
 			// The input bound the package under its own name (C8).
-			fmt.Fprintf(&out, "import %s\n", strconv.Quote(e.imports[alias]))
+			fmt.Fprintf(&out, "import %s\n", strconv.Quote(e.imports[key]))
 			continue
 		}
-		fmt.Fprintf(&out, "import %s %s\n", alias, strconv.Quote(e.imports[alias]))
+		alias, _, _ := strings.Cut(key, " ")
+		fmt.Fprintf(&out, "import %s %s\n", alias, strconv.Quote(e.imports[key]))
 	}
 	return out.String()
 }
