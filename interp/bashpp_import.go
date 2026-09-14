@@ -45,7 +45,10 @@ type bashPPEvalRequest struct {
 	EmbedDecls []bashPPEmbedDecl
 	// LocalTypes materialises the original program's own named types inside
 	// the dependency helper. Sprint #118 Story #54 (c3a60493cde9).
-	LocalTypes    []bashPPLocalType
+	LocalTypes []bashPPLocalType
+	// Instances registers the instantiations of imported generic functions
+	// the program reaches; see bashpp_sprint171_imported_instances.go.
+	Instances     []bashPPImportedInstance
 	CallbackOwner *Runner
 	CallbackDepth int
 	// ImportPath is the program's declared identity (the compiler's -p,
@@ -481,7 +484,7 @@ func (r *Runner) bashPPEvalRequest() (bashPPEvalRequest, error) {
 		runtimeEnv = r.bashPPGoSourceEnvironment()
 	}
 	embedDecls, sourceDir := r.bashPPGoSourceEmbedRequest()
-	return bashPPEvalRequest{CallbackOwner: r, CallbackDepth: r.bashPPTools.callbackDepth, LocalTypes: r.bashPPLocalTypeDescriptors(), RuntimeEnv: runtimeEnv, ModuleDir: moduleDir, ImportPath: importPath, TestMain: testMain, Argv: append([]string{r.filename}, r.Params...), Bridge: r.bashPPTools.bridge, Go: r.bashPPTools.goBinary, Dir: r.Dir, Env: env, Stdin: r.stdin,
+	return bashPPEvalRequest{CallbackOwner: r, CallbackDepth: r.bashPPTools.callbackDepth, LocalTypes: r.bashPPLocalTypeDescriptors(), Instances: r.bashPPImportedInstances(), RuntimeEnv: runtimeEnv, ModuleDir: moduleDir, ImportPath: importPath, TestMain: testMain, Argv: append([]string{r.filename}, r.Params...), Bridge: r.bashPPTools.bridge, Go: r.bashPPTools.goBinary, Dir: r.Dir, Env: env, Stdin: r.stdin,
 		Stdout: r.bashPPWriter(r.stdout), Stderr: r.bashPPWriter(r.stderr), Imports: r.bashPPImports, SourceDir: sourceDir, EmbedDecls: embedDecls}, nil
 }
 

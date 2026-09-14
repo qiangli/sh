@@ -77,15 +77,18 @@ type bashPPBridgeRequest struct {
 	// nothing is written back; changed elements are an in-place mutation and
 	// are written back over the visible length. Host-only.
 	sliceReconcile []bool
-	ID             uint64              `json:"id"`
-	Op             string              `json:"op"`
-	Selector       string              `json:"selector"`
-	Receiver       *bashPPBridgeValue  `json:"receiver,omitempty"`
-	Args           []bashPPBridgeValue `json:"args,omitempty"`
-	Spread         bool                `json:"spread,omitempty"`
-	SourceFile     string              `json:"source_file,omitempty"`
-	SourceLine     int                 `json:"source_line,omitempty"`
-	LogPrint       string              `json:"log_print,omitempty"`
+	ID             uint64 `json:"id"`
+	Op             string `json:"op"`
+	Selector       string `json:"selector"`
+	// Instance is the type-argument suffix of an instantiated imported
+	// generic function; the helper resolves Selector+Instance.
+	Instance   string              `json:"instance,omitempty"`
+	Receiver   *bashPPBridgeValue  `json:"receiver,omitempty"`
+	Args       []bashPPBridgeValue `json:"args,omitempty"`
+	Spread     bool                `json:"spread,omitempty"`
+	SourceFile string              `json:"source_file,omitempty"`
+	SourceLine int                 `json:"source_line,omitempty"`
+	LogPrint   string              `json:"log_print,omitempty"`
 	// Values and Error answer a callback the dependency raised; they are set
 	// only when Op is "callback-reply". Sprint #118 Story #54 (c3a60493cde9).
 	Values []bashPPBridgeValue `json:"values,omitempty"`
@@ -136,6 +139,7 @@ type bashPPNativeSession struct {
 	imports             string
 	locals              string
 	embeds              string
+	instances           string
 	id                  string
 }
 
@@ -205,6 +209,9 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 		}
 		if s.embeds != bashPPEmbedIdentity(req.EmbedDecls) {
 			return errors.New("gosource: embed declarations changed after native dependency initialization")
+		}
+		if s.instances != bashPPImportedInstanceIdentity(req.Instances) {
+			return errors.New("gosource: imported instantiations changed after native dependency initialization")
 		}
 		return nil
 	}
@@ -372,6 +379,7 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 	s.imports = bridgeImportIdentity(req.Imports)
 	s.locals = bashPPLocalTypeIdentity(req.LocalTypes)
 	s.embeds = bashPPEmbedIdentity(req.EmbedDecls)
+	s.instances = bashPPImportedInstanceIdentity(req.Instances)
 	go func() {
 		for {
 			var reply bashPPBridgeResponse
@@ -599,6 +607,10 @@ func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, err
 	sort.Strings(ordered)
 	var imports, symbols, typeEntries strings.Builder
 	importAliases := map[string]string{}
+	materialised := map[string]bool{}
+	for _, local := range req.LocalTypes {
+		materialised[local.Name] = true
+	}
 	for i, path := range ordered {
 		blankOnly := true
 		for _, alias := range paths[path] {
@@ -655,6 +667,14 @@ func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, err
 				used = true
 			case *types.Func:
 				if sig, ok := obj.Type().(*types.Signature); ok && sig.TypeParams().Len() > 0 {
+					// A generic function is a value only once instantiated:
+					// the instantiations the program reaches are registered
+					// under their instantiated spelling.
+					emitted, err := bashPPImportedInstanceSymbols(&symbols, req.Instances, keyNames, name, alias, sig.TypeParams().Len(), importAliases, materialised)
+					if err != nil {
+						return "", err
+					}
+					used = used || emitted
 					continue
 				}
 				for _, key := range keyNames {

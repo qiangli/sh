@@ -44,6 +44,17 @@ const bashPPInstantiationBound = 1024
 type bashPPInstantiationIndex struct {
 	file  *syntax.File
 	named map[string]*syntax.BashPPNamedType
+	// imported holds the concrete instantiations of imported generic
+	// functions the program reaches, keyed by bashPPImportedInstanceKey;
+	// see bashpp_sprint171_imported_instances.go.
+	imported map[string]bashPPImportedInstantiation
+}
+
+// bashPPImportedInstantiation is one reached binding of an imported generic
+// function — `maps.Clone` with `map[string]int` — as the program spells it.
+type bashPPImportedInstantiation struct {
+	alias, name string
+	args        []syntax.BashPPTypeExpr
 }
 
 // bashPPInstantiationItem is one binding of a generic declaration to
@@ -56,21 +67,39 @@ type bashPPInstantiationItem struct {
 }
 
 func (r *Runner) bashPPReachedInstantiations() map[string]*syntax.BashPPNamedType {
+	return r.bashPPInstantiationIndexFor().named
+}
+
+// bashPPReachedImportedInstantiations is the closure's imported generic
+// function instantiations, keyed by bashPPImportedInstanceKey.
+func (r *Runner) bashPPReachedImportedInstantiations() map[string]bashPPImportedInstantiation {
+	return r.bashPPInstantiationIndexFor().imported
+}
+
+func (r *Runner) bashPPInstantiationIndexFor() *bashPPInstantiationIndex {
 	file := r.bashPPGoSourceFile
 	if file == nil {
-		return nil
+		return &bashPPInstantiationIndex{}
 	}
 	if cache := r.bashPPTools.instantiations; cache != nil && cache.file == file {
-		return cache.named
+		return cache
 	}
-	index := &bashPPInstantiationIndex{file: file, named: bashPPInstantiationClosure(file)}
+	index := &bashPPInstantiationIndex{file: file}
+	index.named, index.imported = bashPPInstantiationClosure(file)
 	r.bashPPTools.instantiations = index
-	return index.named
+	return index
 }
 
 // bashPPInstantiationClosure computes every concrete named-type instantiation
-// the program reaches, keyed by its spelling.
-func bashPPInstantiationClosure(file *syntax.File) map[string]*syntax.BashPPNamedType {
+// the program reaches, keyed by its spelling, and every concrete
+// instantiation of an imported generic function it reaches (a call of
+// `alias.Name` whose type arguments — spelled or inferred by the checker —
+// are concrete after substitution), keyed by bashPPImportedInstanceKey. A
+// qualified callee with type arguments can only be a package's generic
+// function (a method has no type parameters), so the import table is not
+// consulted here; the helper registers an instantiation only for a package
+// it imports, and the call names one only through an import alias.
+func bashPPInstantiationClosure(file *syntax.File) (map[string]*syntax.BashPPNamedType, map[string]bashPPImportedInstantiation) {
 	generics := map[string]*syntax.BashPPDecl{}
 	funcs := map[string]*syntax.BashPPFuncDecl{}
 	methods := map[string][]*syntax.BashPPFuncDecl{}
@@ -94,10 +123,8 @@ func bashPPInstantiationClosure(file *syntax.File) map[string]*syntax.BashPPName
 		}
 		concrete = append(concrete, stmt)
 	}
-	if len(generics) == 0 && len(funcs) == 0 {
-		return nil
-	}
 	out := map[string]*syntax.BashPPNamedType{}
+	imported := map[string]bashPPImportedInstantiation{}
 	seen := map[string]bool{}
 	var queue []bashPPInstantiationItem
 	// enqueue records one binding; a spelling seen before is not re-walked.
@@ -137,16 +164,25 @@ func bashPPInstantiationClosure(file *syntax.File) map[string]*syntax.BashPPName
 					enqueue(bashPPInstantiationItem{name: x.Name.Value, args: args})
 				}
 			case *syntax.BashPPCall:
-				if len(x.TypeArgs) == 0 || len(x.Fun) != 1 || funcs[x.Fun[0].Value] == nil {
+				if len(x.TypeArgs) == 0 {
 					return true
 				}
 				args := make([]syntax.BashPPTypeExpr, len(x.TypeArgs))
 				for i, arg := range x.TypeArgs {
 					args[i] = bashPPSubstituteType(arg.ArgType, binding)
 				}
-				if bashPPInstantiationConcrete(args, params) {
-					enqueue(bashPPInstantiationItem{function: true, name: x.Fun[0].Value, args: args})
+				if !bashPPInstantiationConcrete(args, params) {
+					return true
 				}
+				if len(x.Fun) == 2 {
+					item := bashPPImportedInstantiation{alias: x.Fun[0].Value, name: x.Fun[1].Value, args: args}
+					imported[bashPPImportedInstanceKey(item.alias+"."+item.name, args)] = item
+					return true
+				}
+				if len(x.Fun) != 1 || funcs[x.Fun[0].Value] == nil {
+					return true
+				}
+				enqueue(bashPPInstantiationItem{function: true, name: x.Fun[0].Value, args: args})
 			}
 			return true
 		})
@@ -196,7 +232,13 @@ func bashPPInstantiationClosure(file *syntax.File) map[string]*syntax.BashPPName
 			collect(method, receiverBinding, receiverParams)
 		}
 	}
-	return out
+	if len(out) == 0 {
+		out = nil
+	}
+	if len(imported) == 0 {
+		imported = nil
+	}
+	return out, imported
 }
 
 func bashPPTypeParamNames(groups []*syntax.BashPPTypeParam) []string {

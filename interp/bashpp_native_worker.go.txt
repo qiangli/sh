@@ -44,7 +44,7 @@ type value struct {
 }
 type bppProtocolEntry struct {Key value `json:"key"`; Value value `json:"value"`}
 type sliceBuffer struct {Index int `json:"index"`;Length int `json:"length"`;Value value `json:"value"`}
-type request struct { SliceBuffers []sliceBuffer `json:"slice_buffers,omitempty"`; ID uint64 `json:"id"`; Op string `json:"op"`; Selector string `json:"selector"`; Receiver *value `json:"receiver,omitempty"`; Args []value `json:"args,omitempty"`; Spread bool `json:"spread,omitempty"`; SourceFile string `json:"source_file,omitempty"`; SourceLine int `json:"source_line,omitempty"`; LogPrint string `json:"log_print,omitempty"`; Values []value `json:"values,omitempty"`; Error string `json:"error,omitempty"` }
+type request struct { SliceBuffers []sliceBuffer `json:"slice_buffers,omitempty"`; ID uint64 `json:"id"`; Op string `json:"op"`; Selector string `json:"selector"`; Instance string `json:"instance,omitempty"`; Receiver *value `json:"receiver,omitempty"`; Args []value `json:"args,omitempty"`; Spread bool `json:"spread,omitempty"`; SourceFile string `json:"source_file,omitempty"`; SourceLine int `json:"source_line,omitempty"`; LogPrint string `json:"log_print,omitempty"`; Values []value `json:"values,omitempty"`; Error string `json:"error,omitempty"` }
 // Op, Selector and Receiver are set only on a callback: the reverse direction
 // in which this helper asks the interpreter to run an original method body.
 type response struct { SliceUpdates []sliceBuffer `json:"slice_updates,omitempty"`; PtrUpdates []value `json:"ptr_updates,omitempty"`; Panic *value `json:"panic,omitempty"`; ID uint64 `json:"id"`; Op string `json:"op,omitempty"`; Selector string `json:"selector,omitempty"`; Receiver *value `json:"receiver,omitempty"`; Values []value `json:"values,omitempty"`; Error string `json:"error,omitempty"` }
@@ -405,12 +405,12 @@ func dispatch(q request)(reply response){
  if q.Op=="type" {typ:=resolveType(q.Selector);if typ==nil{reply.Error="unregistered bridge type "+strconv.Quote(q.Selector);return};reply.Values=[]value{encode(reflect.ValueOf(typeID(typ)))};return}
  if q.Op=="construct"||q.Op=="address" {if len(q.Args)!=1{reply.Error="construction requires one literal";return};typ:=resolveType(q.Selector);if typ==nil{reply.Error="unregistered bridge type "+strconv.Quote(q.Selector);return};v,err:=decode(q.Args[0],typ);if err!=nil{reply.Error=err.Error();return};if q.Op=="address"{ptr:=reflect.New(typ);ptr.Elem().Set(v);v=ptr};reply.Values=[]value{encode(v)};return}
  if q.Op=="var-set" {if len(q.Args)!=1{reply.Error="native variable writes require one value";return};slot:=symbols[q.Selector];if !slot.IsValid()||!slot.CanSet(){reply.Error="unknown or read-only imported variable: "+q.Selector;return};v,err:=decode(q.Args[0],slot.Type());if err!=nil{reply.Error=err.Error();return};slot.Set(v);return}
- fn:=symbols[q.Selector]
+ fn:=symbols[q.Selector+q.Instance]
  if q.Receiver!=nil {receiver,err:=decode(*q.Receiver,nil);if err!=nil{reply.Error=err.Error();return}
   switch q.Op {case "deref","len","cap","index","slice","field","field-set","member","receiver_field","byte-set","kind","keys":reply.Values,reply.Error=access(receiver,q);return}
   if q.Selector==""&&receiver.Kind()==reflect.Func{fn=receiver}else{fn=memberMethod(receiver,q.Selector)}}
  if q.Op=="new" {typ:=resolveType(q.Selector);if typ==nil{reply.Error="unregistered bridge type "+strconv.Quote(q.Selector);return};reply.Values=[]value{encode(reflect.New(typ).Elem())};return}
- if !fn.IsValid(){reply.Error="unknown imported symbol or method: "+q.Selector;return}
+ if !fn.IsValid(){reply.Error="unknown imported symbol or method: "+q.Selector+q.Instance;return}
  if q.Op=="get" {reply.Values=[]value{encode(fn)};return}
  if q.Op!="call"||fn.Kind()!=reflect.Func{reply.Error="imported symbol is not callable";return}
  signature:=fn.Type();n:=signature.NumIn();minimum:=n;if signature.IsVariadic(){minimum--}

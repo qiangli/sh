@@ -121,3 +121,31 @@ func TestSprint171TypeSwitchInit(t *testing.T) {
 		return true
 	})
 }
+
+// TestSprint171ImportedGenericFunctions is an outside-corpus reproducer for
+// calls of imported generic functions (maps.Clone, unique.Make, slices.Max),
+// which the dependency helper could not register by name: a generic
+// function is a value only once instantiated. The front end records each
+// call's type arguments, spelled or inferred; the runtime's instantiation
+// closure substitutes an enclosing generic body's bindings into them, so
+// every concrete instantiation the program reaches is registered under its
+// instantiated spelling and the call names it beside the selector.
+func TestSprint171ImportedGenericFunctions(t *testing.T) {
+	program := sprint171RunBothModes(t, filepath.Join("testdata", "sprint171", "w2-imports", "imported-generics", "imported_generics.go"))
+
+	// Every qualified call of a generic function carries its type arguments
+	// in the tree, the inferred ones included; a non-generic call carries
+	// none.
+	calls := map[string]int{}
+	syntax.Walk(program.File, func(n syntax.Node) bool {
+		if call, ok := n.(*syntax.BashPPCall); ok && len(call.Fun) == 2 {
+			calls[call.Fun[0].Value+"."+call.Fun[1].Value] = len(call.TypeArgs)
+		}
+		return true
+	})
+	for name, want := range map[string]int{"maps.Clone": 3, "slices.Max": 2, "slices.Index": 2, "maps.Keys": 3, "slices.Sorted": 1, "slices.Clip": 2, "unique.Make": 1, "fmt.Println": 0} {
+		if got, ok := calls[name]; !ok || got != want {
+			t.Errorf("%s: %d type arguments (present=%v), want %d", name, got, ok, want)
+		}
+	}
+}

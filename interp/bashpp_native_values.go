@@ -118,6 +118,18 @@ func (r *Runner) bashPPPrepareNativeCall(ctx context.Context, call *syntax.BashP
 	} else if len(call.Fun) >= 2 {
 		if _, ok := r.bashPPImports[call.Fun[0].Value]; ok && len(call.Fun) == 2 {
 			q.Selector = call.Fun[0].Value + "." + call.Fun[1].Value
+			if len(call.TypeArgs) > 0 {
+				// An imported generic function is registered per
+				// instantiation; the call names the instantiation under the
+				// enclosing frame's type bindings, beside the selector every
+				// host-side policy reads. See
+				// bashpp_sprint171_imported_instances.go.
+				args := make([]syntax.BashPPTypeExpr, len(call.TypeArgs))
+				for i, arg := range call.TypeArgs {
+					args[i] = r.bashPPBindTypeExpr(arg.ArgType)
+				}
+				q.Instance = bashPPImportedInstanceSuffix(args)
+			}
 		} else {
 			var receiverExpr syntax.BashPPExpr = &syntax.BashPPIdent{Name: call.Fun[0]}
 			for _, part := range call.Fun[1 : len(call.Fun)-1] {

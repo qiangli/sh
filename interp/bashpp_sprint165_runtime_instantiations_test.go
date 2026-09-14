@@ -15,7 +15,8 @@ func sprint165Closure(t *testing.T, source string) []string {
 		t.Fatalf("gosource.Parse: %v", err)
 	}
 	var out []string
-	for wire := range bashPPInstantiationClosure(program.File) {
+	named, _ := bashPPInstantiationClosure(program.File)
+	for wire := range named {
 		out = append(out, wire)
 	}
 	sort.Strings(out)
@@ -64,5 +65,50 @@ func main() {
 func TestSprint165InstantiationClosureNone(t *testing.T) {
 	if got := sprint165Closure(t, "package main\n\ntype T struct{}\n\nfunc main() { _ = T{} }\n"); len(got) != 0 {
 		t.Fatalf("closure = %v, want none", got)
+	}
+}
+
+// The closure also records the concrete instantiations of imported generic
+// functions the program reaches — spelled, inferred, or bound through a
+// local generic body — keyed by bashPPImportedInstanceKey; a non-generic
+// imported call, a local generic call and an instantiation still naming an
+// enclosing parameter are not among them.
+func TestSprint165ImportedInstantiationClosure(t *testing.T) {
+	program, err := gosource.Parse(strings.NewReader(`package main
+
+import (
+	"maps"
+	"slices"
+	"strings"
+)
+
+type key string
+
+func dedupe[T comparable](in []T) []T {
+	return slices.Clip(slices.Compact(in))
+}
+
+// Unreached: no concrete binding ever names T here.
+func unused[T any](in []T) []T { return slices.Clone(in) }
+
+func main() {
+	_ = maps.Clone(map[key]int{})
+	_ = slices.Max[[]int]([]int{1})
+	_ = dedupe([]string{"a"})
+	_ = strings.ToUpper("x")
+}
+`), "closure.go", gosource.Options{RunMain: true})
+	if err != nil {
+		t.Fatalf("gosource.Parse: %v", err)
+	}
+	_, imported := bashPPInstantiationClosure(program.File)
+	var got []string
+	for key := range imported {
+		got = append(got, key)
+	}
+	sort.Strings(got)
+	want := []string{"maps.Clone[map[key]int, key, int]", "slices.Clip[[]string, string]", "slices.Compact[[]string, string]", "slices.Max[[]int, int]"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("imported closure = %v, want %v", got, want)
 	}
 }
