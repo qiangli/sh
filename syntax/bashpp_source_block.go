@@ -66,8 +66,8 @@ func (p *Parser) bashppSourceBlock() *SourceBlock {
 		if line.String() == fence {
 			block.Body = body.String()
 			block.ClosingPos = linePos
-			if language == "python" && alias == "" {
-				p.bashppRegisterSourceBlockFuncs(block.Body)
+			if alias == "" {
+				p.bashppRegisterSourceBlockFuncs(language, block.Body)
 			}
 			if p.r == '\n' {
 				p.tok = _Newl
@@ -92,12 +92,26 @@ func (p *Parser) bashppSourceBlock() *SourceBlock {
 // of look-ahead it needs to distinguish a later zero-argument direct call
 // from a shell function header. The Python AST analyzer remains authoritative
 // for declarations, visibility, signatures, and diagnostics.
-func (p *Parser) bashppRegisterSourceBlockFuncs(body string) {
+func (p *Parser) bashppRegisterSourceBlockFuncs(language, body string) {
 	for _, line := range strings.Split(body, "\n") {
-		if !strings.HasPrefix(line, "def ") {
+		var declaration string
+		switch strings.ToLower(language) {
+		case "python":
+			if strings.HasPrefix(line, "def ") {
+				declaration = strings.TrimPrefix(line, "def ")
+			}
+		case "typescript", "ts":
+			declaration = strings.TrimPrefix(line, "export ")
+			if !strings.HasPrefix(declaration, "function ") {
+				declaration = ""
+			} else {
+				declaration = strings.TrimPrefix(declaration, "function ")
+			}
+		}
+		if declaration == "" {
 			continue
 		}
-		name, _, ok := strings.Cut(strings.TrimPrefix(line, "def "), "(")
+		name, _, ok := strings.Cut(declaration, "(")
 		name = strings.TrimSpace(name)
 		if ok && !strings.HasPrefix(name, "_") && BashPPValidIdent(name) {
 			p.bashppRegisterFunc(name)

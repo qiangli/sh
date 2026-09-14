@@ -18,8 +18,8 @@ end with ` as NAME`. The body is raw foreign source; like the rest of the shell
 parser, CRLF input is normalized to LF. Backtick and quote runs retain their
 Classic shell meanings.
 
-A fence is a declaration unit, not an implicit command. Python is the first
-implemented adapter. Its blocks may contain one module docstring followed by
+A fence is a declaration unit, not an implicit command. Python and TypeScript
+are implemented adapters. Python blocks may contain one module docstring followed by
 ordinary synchronous, undecorated function declarations. Imports, classes,
 async declarations, decorators, executable top-level statements, and
 non-literal defaults are rejected during preparation without executing the
@@ -51,7 +51,44 @@ Arguments and results cross a Go-owned NDJSON protocol to one persistent
 terminates the worker, and a later call recreates it from the immutable module
 plan. No cgo or CPython ABI binding is used.
 
-The fence start site is Class E because `~~~python` is a valid Classic shell
+TypeScript uses `~~~typescript` (or the `~~~ts` shorthand) and follows the
+same promotion and alias rules:
+
+```bash
+~~~typescript as ts
+interface Pair { left: number; right: number }
+export function sum(pair: Pair): number {
+    return pair.left + pair.right
+}
+~~~
+
+answer, err := ts.sum('{"left":20,"right":22}')
+```
+
+The adapter loads the official Apache-2.0 `typescript` npm compiler module in
+an isolated Node process. TypeScript 5.9/6.x uses its established `Program`
+compiler API; TypeScript 7.x uses Microsoft's new Go-backed synchronous
+snapshot/checker API and official emitter. Both paths use the official AST,
+checker, diagnostics, and CommonJS output; Bash++ does not implement a second
+TypeScript parser. Analysis never evaluates the source. The emitted artifact
+is stored in the immutable private-module plan and executed on first call by
+one persistent Node worker.
+
+Function declarations and declaration-safe forms such as interfaces and type
+aliases are accepted. Imports and arbitrary executable top-level statements
+remain errors until Bash++ publishes module resolution and initialization
+semantics. Function bodies may use any TypeScript feature supported by the
+selected compiler and ES target. Types representable by Bash++ receive typed
+wrappers; other valid signatures receive the dynamic `(any, error)` wrapper.
+
+Node and the compiler are discovered lazily. `BASHPP_NODE` overrides the Node
+executable and `BASHPP_TYPESCRIPT_MODULE` overrides the module name or absolute
+entrypoint; defaults are `node` and normal `require("typescript")` resolution.
+Scripts with no TypeScript blocks perform no discovery. The process boundary
+provides lifecycle and protocol isolation, not a security sandbox: called code
+runs with the shell account's authority.
+
+The fence start site is Class E because a language fence is a valid Classic shell
 command. It is therefore deliberately narrow: indentation, an argument
 position, `command ~~~python`, or a quoted opener remains ordinary shell. The
 feature is inert in Classic and POSIX dialects. Merely reading or rendering a

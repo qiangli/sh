@@ -36,7 +36,9 @@ func (e *emitter) prepareForeign(ctx context.Context, file *syntax.File) error {
 	if len(blocks) == 0 {
 		return nil
 	}
-	plans, err := polyglot.Prepare(ctx, blocks, map[string]polyglot.Analyzer{"python": polyglot.Python{}})
+	plans, err := polyglot.Prepare(ctx, blocks, map[string]polyglot.Analyzer{
+		"python": polyglot.Python{}, "typescript": polyglot.TypeScript{},
+	})
 	if err != nil {
 		return e.fail(first, CodeUnsupported, err.Error())
 	}
@@ -115,7 +117,11 @@ func (e *emitter) foreignDeclarations() string {
 	var out strings.Builder
 	for i, plan := range e.foreignPlans {
 		module := fmt.Sprintf("%sforeign%d", e.prefix, i)
-		fmt.Fprintf(&out, "var %s = %spolyglot.Start(%spolyglot.Plan{ID:%s,Language:%s,Alias:%s,Source:%s}, %spolyglot.Python{})\n", module, e.prefix, e.prefix, strconv.Quote(plan.ID), strconv.Quote(plan.Language), strconv.Quote(plan.Alias), strconv.Quote(plan.Source), e.prefix)
+		runtime := "Python"
+		if plan.Language == "typescript" {
+			runtime = "TypeScript"
+		}
+		fmt.Fprintf(&out, "var %s = %spolyglot.Start(%spolyglot.Plan{ID:%s,Language:%s,Alias:%s,Source:%s,Artifact:%s,Exports:%s}, %spolyglot.%s{})\n", module, e.prefix, e.prefix, strconv.Quote(plan.ID), strconv.Quote(plan.Language), strconv.Quote(plan.Alias), strconv.Quote(plan.Source), strconv.Quote(plan.Artifact), e.foreignExports(plan.Exports), e.prefix, runtime)
 		if plan.Alias != "" {
 			typ := fmt.Sprintf("%sforeignModule%d", e.prefix, i)
 			fmt.Fprintf(&out, "type %s struct{}\nvar %s %s\n", typ, plan.Alias, typ)
@@ -128,6 +134,16 @@ func (e *emitter) foreignDeclarations() string {
 			}
 		}
 	}
+	return out.String()
+}
+
+func (e *emitter) foreignExports(exports []polyglot.Export) string {
+	var out strings.Builder
+	fmt.Fprintf(&out, "[]%spolyglot.Export{", e.prefix)
+	for _, export := range exports {
+		fmt.Fprintf(&out, "{Name:%s,Signature:%spolyglot.Signature{Params:%#v,Results:%#v,Dynamic:%t}},", strconv.Quote(export.Name), e.prefix, export.Signature.Params, export.Signature.Results, export.Signature.Dynamic)
+	}
+	out.WriteByte('}')
 	return out.String()
 }
 

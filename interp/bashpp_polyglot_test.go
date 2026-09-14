@@ -125,3 +125,27 @@ env | grep '^py=' || true
 		t.Fatalf("out=%q err=%v", out, err)
 	}
 }
+
+func TestBashPPTypeScriptDirectQualifiedAndCoexistence(t *testing.T) {
+	if os.Getenv("BASHPP_TYPESCRIPT_MODULE") == "" {
+		t.Skip("set BASHPP_TYPESCRIPT_MODULE to an official TypeScript compiler module")
+	}
+	source := `~~~python as py
+def twice(value: int) -> int:
+    return value * 2
+~~~
+~~~typescript
+interface Label { value: string }
+export function add(a: number, b: number): number { console.log("ts"); return a + b }
+function answer(): number { return 42 }
+~~~
+x := add(20, 22)
+y := answer()
+z := py.twice(3)
+echo "$x:$y:$z"
+`
+	out, diagnostic, err := runPolyglot(t, source)
+	if err != nil || out != "ts\n42:42:6\n" || diagnostic != "" {
+		t.Fatalf("out=%q diagnostic=%q err=%v", out, diagnostic, err)
+	}
+}

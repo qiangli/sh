@@ -108,3 +108,15 @@ func TestBashPPSourceBlockCRLFUsesParserNewlineContract(t *testing.T) {
 		t.Fatalf("body=%q closing=%v", block.Body, block.ClosingPos)
 	}
 }
+
+func TestBashPPTypeScriptSourceBlockRegistersDirectCalls(t *testing.T) {
+	source := "~~~typescript\nexport function answer(): number { return 42 }\nfunction greet(name: string): string { return name }\n~~~\nx := answer()\ny := greet(hello)\n"
+	f, err := NewParser(Variant(LangBashPP)).Parse(strings.NewReader(source), "typescript.bpp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	block := f.Stmts[0].Cmd.(*SourceBlock)
+	if block.Language.Value != "typescript" || len(f.Stmts) != 3 {
+		t.Fatalf("block=%#v statements=%d", block, len(f.Stmts))
+	}
+}

@@ -46,6 +46,19 @@ echo "$x:$callErr"
 	}
 }
 
+func TestTypeScriptFenceInterpretedNativeParity(t *testing.T) {
+	if os.Getenv("BASHPP_TYPESCRIPT_MODULE") == "" {
+		t.Skip("set BASHPP_TYPESCRIPT_MODULE to an official TypeScript compiler module")
+	}
+	testPythonFenceInterpretedNativeParity(t, `~~~typescript as ts
+type Numeric = number
+export function add(a: Numeric, b: Numeric): number { console.log("typescript"); return a + b }
+~~~
+x := ts.add(20, 22)
+echo "x=$x"
+`)
+}
+
 func testPythonFenceInterpretedNativeParity(t *testing.T, source string) {
 	t.Helper()
 	file := parse(t, source, "input.bpp")

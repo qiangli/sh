@@ -43,11 +43,16 @@ type Plan struct {
 	Language string
 	Alias    string
 	Source   string
+	Artifact string
 	Exports  []Export
 }
 
 type Analyzer interface {
 	Analyze(context.Context, string) ([]Export, error)
+}
+
+type artifactAnalyzer interface {
+	AnalyzeArtifact(context.Context, string) ([]Export, string, error)
 }
 
 // Prepare aggregates same-language blocks into one immutable module. Alias
@@ -59,7 +64,7 @@ func Prepare(ctx context.Context, blocks []Block, analyzers map[string]Analyzer)
 	}
 	groups := map[string]*aggregate{}
 	for _, block := range blocks {
-		lang := strings.ToLower(strings.TrimSpace(block.Language))
+		lang := canonicalLanguage(block.Language)
 		if lang == "" {
 			return nil, errors.New("polyglot: empty language")
 		}
@@ -86,14 +91,29 @@ func Prepare(ctx context.Context, blocks []Block, analyzers map[string]Analyzer)
 		}
 		group := groups[lang]
 		source := strings.Join(group.sources, "\n")
-		exports, err := analyzer.Analyze(ctx, source)
+		var exports []Export
+		var artifact string
+		var err error
+		if aa, ok := analyzer.(artifactAnalyzer); ok {
+			exports, artifact, err = aa.AnalyzeArtifact(ctx, source)
+		} else {
+			exports, err = analyzer.Analyze(ctx, source)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("polyglot %s: %w", lang, err)
 		}
 		hash := sha256.Sum256([]byte(lang + "\x00" + group.alias + "\x00" + source))
-		plans = append(plans, Plan{ID: hex.EncodeToString(hash[:]), Language: lang, Alias: group.alias, Source: source, Exports: exports})
+		plans = append(plans, Plan{ID: hex.EncodeToString(hash[:]), Language: lang, Alias: group.alias, Source: source, Artifact: artifact, Exports: exports})
 	}
 	return plans, nil
+}
+
+func canonicalLanguage(language string) string {
+	language = strings.ToLower(strings.TrimSpace(language))
+	if language == "ts" {
+		return "typescript"
+	}
+	return language
 }
 
 type Python struct{ Command string }
@@ -132,17 +152,30 @@ type CallResult struct {
 	Stdout, Stderr string
 }
 
-type Module struct {
-	plan   Plan
-	python Python
-	mu     sync.Mutex
-	cmd    *exec.Cmd
-	in     io.WriteCloser
-	out    *bufio.Reader
-	nextID uint64
+type Runtime interface {
+	executable() string
+	arguments(Plan) []string
+	loadRequest(Plan) map[string]any
+	name() string
 }
 
-func Start(plan Plan, python Python) *Module { return &Module{plan: plan, python: python} }
+func (p Python) arguments(Plan) []string { return []string{"-u", "-c", pythonWorker} }
+func (p Python) loadRequest(plan Plan) map[string]any {
+	return map[string]any{"id": 0, "op": "load", "source": plan.Source}
+}
+func (p Python) name() string { return "Python" }
+
+type Module struct {
+	plan    Plan
+	runtime Runtime
+	mu      sync.Mutex
+	cmd     *exec.Cmd
+	in      io.WriteCloser
+	out     *bufio.Reader
+	nextID  uint64
+}
+
+func Start(plan Plan, runtime Runtime) *Module { return &Module{plan: plan, runtime: runtime} }
 
 func (m *Module) Plan() Plan { return m.plan }
 
@@ -150,7 +183,7 @@ func (m *Module) ensure(ctx context.Context) error {
 	if m.cmd != nil {
 		return nil
 	}
-	cmd := exec.CommandContext(ctx, m.python.executable(), "-u", "-c", pythonWorker)
+	cmd := exec.CommandContext(ctx, m.runtime.executable(), m.runtime.arguments(m.plan)...)
 	in, err := cmd.StdinPipe()
 	if err != nil {
 		return err
@@ -164,16 +197,16 @@ func (m *Module) ensure(ctx context.Context) error {
 	cmd.Stderr = &stderr
 	if err := cmd.Start(); err != nil {
 		if errors.Is(err, exec.ErrNotFound) || errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("Python runtime unavailable: %w", err)
+			return fmt.Errorf("%s runtime unavailable: %w", m.runtime.name(), err)
 		}
 		return err
 	}
 	m.cmd, m.in, m.out = cmd, in, bufio.NewReader(out)
-	load := map[string]any{"id": 0, "op": "load", "source": m.plan.Source}
+	load := m.runtime.loadRequest(m.plan)
 	var response workerResponse
 	if err := m.exchange(load, &response); err != nil {
 		m.kill()
-		return fmt.Errorf("load Python module: %w", err)
+		return fmt.Errorf("load %s module: %w", m.runtime.name(), err)
 	}
 	if !response.OK {
 		m.kill()
@@ -181,7 +214,7 @@ func (m *Module) ensure(ctx context.Context) error {
 	}
 	if response.ID != 0 {
 		m.kill()
-		return fmt.Errorf("load Python module: response ID %d does not match request ID 0", response.ID)
+		return fmt.Errorf("load %s module: response ID %d does not match request ID 0", m.runtime.name(), response.ID)
 	}
 	return nil
 }
@@ -210,7 +243,7 @@ func (m *Module) Call(ctx context.Context, name string, args ...any) (CallResult
 	}
 	if response.ID != m.nextID {
 		m.kill()
-		return CallResult{}, fmt.Errorf("Python worker response ID %d does not match request ID %d", response.ID, m.nextID)
+		return CallResult{}, fmt.Errorf("%s worker response ID %d does not match request ID %d", m.runtime.name(), response.ID, m.nextID)
 	}
 	result := CallResult{Stdout: response.Stdout, Stderr: response.Stderr}
 	if !response.OK {
@@ -218,7 +251,7 @@ func (m *Module) Call(ctx context.Context, name string, args ...any) (CallResult
 	}
 	decoded, decodeErr := decodeValue(response.Result)
 	if decodeErr != nil {
-		return result, fmt.Errorf("decode Python result: %w", decodeErr)
+		return result, fmt.Errorf("decode %s result: %w", m.runtime.name(), decodeErr)
 	}
 	result.Value = decoded
 	for _, export := range m.plan.Exports {
@@ -231,7 +264,7 @@ func (m *Module) Call(ctx context.Context, name string, args ...any) (CallResult
 		}
 		coerced, coerceErr := coerceResult(result.Value, want)
 		if coerceErr != nil {
-			return result, fmt.Errorf("Python function %s violated its %s result annotation: %w", name, want, coerceErr)
+			return result, fmt.Errorf("%s function %s violated its %s result annotation: %w", m.runtime.name(), name, want, coerceErr)
 		}
 		result.Value = coerced
 		break

@@ -48,7 +48,9 @@ func (r *Runner) bashPPPrepareSourceBlocks(ctx context.Context, file *syntax.Fil
 	if len(blocks) == 0 {
 		return restore, nil
 	}
-	plans, err := polyglot.Prepare(ctx, blocks, map[string]polyglot.Analyzer{"python": polyglot.Python{}})
+	plans, err := polyglot.Prepare(ctx, blocks, map[string]polyglot.Analyzer{
+		"python": polyglot.Python{}, "typescript": polyglot.TypeScript{},
+	})
 	if err != nil {
 		return restore, fmt.Errorf("%s: %w", file.Name, err)
 	}
@@ -74,7 +76,11 @@ func (r *Runner) bashPPPrepareSourceBlocks(ctx context.Context, file *syntax.Fil
 	}
 	foreign := map[string]*bashPPFunc{}
 	for _, plan := range plans {
-		module := polyglot.Start(plan, polyglot.Python{})
+		var runtime polyglot.Runtime = polyglot.Python{}
+		if plan.Language == "typescript" {
+			runtime = polyglot.TypeScript{}
+		}
+		module := polyglot.Start(plan, runtime)
 		r.bashPPForeignModules = append(r.bashPPForeignModules, module)
 		if plan.Alias != "" {
 			if kind := reserved[plan.Alias]; kind != "" {
@@ -152,7 +158,7 @@ func (r *Runner) bashPPInvokeForeign(ctx context.Context, fn *bashPPForeignFunc,
 			r.exit = exitStatus{}
 			return []string{"", err.Error()}
 		}
-		r.errf("bash++: Python call %s failed: %v\n", fn.qualified, err)
+		r.errf("bash++: foreign call %s failed: %v\n", fn.qualified, err)
 		r.exit.code = 1
 		return nil
 	}
