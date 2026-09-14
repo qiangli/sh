@@ -488,14 +488,14 @@ func bashPPBridgeFloatText(text string) (string, bool) {
 // `type Celsius float64` crosses the boundary as a float and keeps the
 // materialised Celsius identity rather than arriving as a string.
 func (r *Runner) bashPPBridgeDefinedScalar(value bashPPBridgeValue) (bashPPBridgeValue, error) {
-	if value.Kind != "string" || value.Type == "" {
-		return value, nil
-	}
-	if _, local := r.bashPPTypes[value.Type]; !local {
+	if value.Type == "" {
 		return value, nil
 	}
 	named := &syntax.BashPPNamedType{Name: &syntax.Lit{Value: value.Type}}
 	underlying := bashPPTypeText(r.bashPPUnderlyingType(named))
+	if underlying == value.Type {
+		return value, nil
+	}
 	switch {
 	case underlying == "string":
 		return value, nil
@@ -513,7 +513,8 @@ func (r *Runner) bashPPBridgeDefinedScalar(value bashPPBridgeValue) (bashPPBridg
 		}
 		value.Kind, value.Text = "float", number
 	case bashPPIntegerType(underlying):
-		if _, err := strconv.ParseInt(value.Text, 10, 64); err != nil {
+		integer := constant.MakeFromLiteral(value.Text, token.INT, 0)
+		if integer.Kind() != constant.Int || !bashPPIntegerRepresentable(underlying, integer) {
 			return value, fmt.Errorf("gosource: %s value %q is not an %s", value.Type, value.Text, underlying)
 		}
 		value.Kind = "int"
@@ -976,5 +977,9 @@ func (r *Runner) bashPPBridgeCell(cell *bashPPCell) (bashPPBridgeValue, error) {
 		return bashPPBridgeValue{Kind: "string", Text: cell.vr.String()}, nil
 	}
 	scalar, err := bridgeScalar(r.bashPPScalarFromCell(cell))
-	return bashPPBridgeInstantiatedScalar(scalar, cell.declType), err
+	if err != nil {
+		return scalar, err
+	}
+	scalar = bashPPBridgeInstantiatedScalar(scalar, cell.declType)
+	return r.bashPPBridgeDefinedScalar(scalar)
 }
