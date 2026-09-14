@@ -2915,6 +2915,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		if err != nil {
 			return failf(1, "source: %v\n", err)
 		}
+		restoreForeign, err := r.bashPPPrepareSourceBlocks(ctx, file)
+		if err != nil {
+			return failf(1, "source: %v\n", err)
+		}
+		defer restoreForeign()
 
 		// Keep the current versions of some fields we might modify.
 		oldParams := r.Params

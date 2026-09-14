@@ -30,6 +30,7 @@ import (
 
 	"golang.org/x/term"
 	"mvdan.cc/sh/v3/expand"
+	"mvdan.cc/sh/v3/polyglot"
 	"mvdan.cc/sh/v3/syntax"
 )
 
@@ -131,6 +132,10 @@ type Runner struct {
 	// site. It is preserved across [Runner.Reset] alongside Funcs for the same
 	// reason bashPPFuncScopes is.
 	bashPPFuncs map[string]*bashPPFunc
+	// Foreign modules are private runtime records. They never enter shell
+	// variables or the environment.
+	bashPPForeignFuncs   map[string]*bashPPFunc
+	bashPPForeignModules []*polyglot.Module
 	// bashPPTypes and bashPPMethods are the runner-local named-type namespace.
 	// They persist with the session and are cloned for subshell isolation.
 	bashPPTypes   map[string]bashPPType
@@ -3220,6 +3225,12 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 			r.bashPPConcurrency(ctx)
 		}
 		r.filename = node.Name
+		restoreForeign, err := r.bashPPPrepareSourceBlocks(ctx, node)
+		if err != nil {
+			r.exit.fatal(err)
+			break
+		}
+		defer restoreForeign()
 		if r.Dialect() == syntax.LangBashPP && !r.bashPPValidatePackageInitOrder(node) {
 			break
 		}
@@ -3598,6 +3609,8 @@ func (r *Runner) subshell(background bool) *Runner {
 	r2.bashPPAgenticFuncs = maps.Clone(r.bashPPAgenticFuncs)
 	r2.funcSources = maps.Clone(r.funcSources)
 	r2.bashPPImports = maps.Clone(r.bashPPImports)
+	r2.bashPPForeignFuncs = maps.Clone(r.bashPPForeignFuncs)
+	r2.bashPPForeignModules = append([]*polyglot.Module(nil), r.bashPPForeignModules...)
 	r2.bashPPTypes = maps.Clone(r.bashPPTypes)
 	// The bindings map is read-only once installed, but a subshell may enter
 	// its own frames, so it gets its own map rather than sharing this one.

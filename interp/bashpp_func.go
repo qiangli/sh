@@ -50,6 +50,7 @@ type bashPPFunc struct {
 	rangeYield       *goSourceRangeYield
 	collectYield     *[]bashPPBridgeValue
 	runtimeError     *bashPPRuntimeErrorCall
+	foreign          *bashPPForeignFunc
 	decl             *syntax.BashPPFuncDecl
 	lit              *syntax.BashPPFuncLit
 	scope            *bashPPScope
@@ -503,6 +504,13 @@ func (r *Runner) bashPPLookupFunc(c *syntax.BashPPCall) (*bashPPFunc, bool) {
 	}
 	if c.FuncLit != nil {
 		fn, _ := r.bashPPMakeClosure(c.FuncLit)
+		return fn, true
+	}
+	foreignName := make([]string, len(c.Fun))
+	for i, part := range c.Fun {
+		foreignName[i] = part.Value
+	}
+	if fn := r.bashPPForeignFuncs[strings.Join(foreignName, ".")]; fn != nil {
 		return fn, true
 	}
 	if len(c.Fun) >= 2 {
@@ -1842,6 +1850,9 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 	r.bashPPCallChannels = nil
 	r.bashPPCallInterfaces = nil
 	r.bashPPCallSpread = false
+	if fn.foreign != nil {
+		return r.bashPPInvokeForeign(ctx, fn.foreign, args)
+	}
 	if fn.native != nil {
 		return r.goSourceInvokeNative(ctx, fn, args, callCells)
 	}

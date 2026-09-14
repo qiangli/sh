@@ -5444,6 +5444,10 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 	trace := r.tracer(cm.Pos())
 
 	switch cm := cm.(type) {
+	case *syntax.SourceBlock:
+		// The complete source unit is prepared before its first statement.
+		// A declaration block has no execution side effect at this point.
+		return
 	case *syntax.BashPPAgenticBlock:
 		saved := r.bashPPAgentic
 		r.bashPPAgentic = true
