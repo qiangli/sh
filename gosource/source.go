@@ -59,8 +59,18 @@ type Options struct {
 	// RunMain appends init and main entry calls. Loading itself never executes code.
 	RunMain bool
 	// PreserveNativeInit leaves init declarations named init for a native
-	// library build. It is incompatible with RunMain and explicit package
-	// flattening, both of which need uniquely named callable init functions.
+	// library build. It is incompatible with RunMain, which needs uniquely
+	// named callable init functions.
+	//
+	// With Packages it selects native units: every mapped package is
+	// type-checked and consulted for the program's imports exactly as
+	// before, but nothing of it is linked into File. File is then one unit
+	// of the program package alone — its package clause, its package-level
+	// names unchanged, its imports of mapped packages kept as imports for
+	// the compiler's own -D/-importcfg resolution, and its init declarations
+	// left to the toolchain — so a caller lowers a package map one package
+	// per unit (lower.Options.Library), as cmd/go compiles it. Without it
+	// the map is flattened into File for the interpreter.
 	PreserveNativeInit bool
 	// Importer may resolve module dependencies. Nil uses the Go export importer.
 	Importer types.Importer
@@ -156,8 +166,8 @@ func Parse(r io.Reader, name string, options Options) (*Program, error) {
 // Load processes a single package in lexical filename order, matching the Go
 // toolchain. Source bytes are neither modified nor executed by the native toolchain.
 func Load(sources []Source, options Options) (*Program, error) {
-	if options.PreserveNativeInit && (options.RunMain || len(options.Packages) > 0) {
-		return nil, fmt.Errorf("gosource: native init preservation requires a non-executing package without an explicit package map")
+	if options.PreserveNativeInit && options.RunMain {
+		return nil, fmt.Errorf("gosource: native init preservation requires a non-executing package")
 	}
 	if options.TestMain && options.ImportPath == "" {
 		return nil, fmt.Errorf("gosource: TestMain asserts the identity of the program and requires ImportPath")
@@ -262,10 +272,18 @@ func Load(sources []Source, options Options) (*Program, error) {
 	// must be free in every file of the set; a mapped package's
 	// package-level names are then renamed under it, which keeps the flat
 	// namespace collision-free without touching the program's own names.
+	//
+	// A native unit (PreserveNativeInit) links nothing: the map served the
+	// checker, and the program's imports of it stay imports, so the link
+	// set is the program alone and no name is renamed.
 	var linked []*converter
 	mapped := map[string]int{}
 	var mappedPkgs []*types.Package
-	for i, path := range imp.order {
+	var linkedPaths []string
+	if !options.PreserveNativeInit {
+		linkedPaths = imp.order
+	}
+	for i, path := range linkedPaths {
 		checked := imp.checked[path]
 		mapped[path] = i
 		mappedPkgs = append(mappedPkgs, checked.pkg)
@@ -398,7 +416,7 @@ func Load(sources []Source, options Options) (*Program, error) {
 	if err := checkLoweredNames(p.File, options.PreserveNativeInit); err != nil {
 		return nil, err
 	}
-	for _, path := range imp.order {
+	for _, path := range linkedPaths {
 		checked := imp.checked[path]
 		p.Packages = append(p.Packages, LinkedPackage{Path: path, Name: checked.pkg.Name(), Files: imp.files[path]})
 		// A checked package parsed every source, so files and sources align.
