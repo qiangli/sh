@@ -82,6 +82,11 @@ func (r *Runner) bashPPBridgeCall(ctx context.Context, call *syntax.BashPPCall) 
 	if values, claimed, err := r.goSourceAtomicCall(call); claimed {
 		return values, err
 	}
+	// unsafe.String reads interpreter-owned byte storage through an original
+	// pointer, so it is answered here as well.
+	if values, claimed, err := r.goSourceUnsafeStringCall(call); claimed {
+		return values, err
+	}
 	// Stack introspection reads the interpreter's own frames; see
 	// bashpp_sprint162_nilptr2_stack.go.
 	if values, claimed, err := r.goSourceRuntimeStackCall(call); claimed {
@@ -1011,4 +1016,74 @@ func (r *Runner) goSourceUnsafeConstantOperator(call *syntax.BashPPCall) bool {
 		return true
 	}
 	return false
+}
+
+// goSourceUnsafeStringCall answers `unsafe.String(ptr, len)`: the string of
+// len bytes starting at the byte ptr names. The pointer is one of the
+// interpreter's own — into an array or slice element, or to a single byte
+// variable — so the bytes are read from that storage; the dependency helper
+// could neither see it nor return a string over it. A nil pointer with a
+// zero length is the empty string; with any other length, or a length past
+// the storage the pointer names, the call is the run-time fault Go raises.
+// It reports claimed=false for any other call.
+func (r *Runner) goSourceUnsafeStringCall(call *syntax.BashPPCall) (values []bashPPBridgeValue, claimed bool, err error) {
+	defer func() { err = r.goSourceRuntimeFault(err) }()
+	if !r.bashPPGoSource || call == nil || len(call.Fun) != 2 || call.Fun[1].Value != "String" || r.bashPPImports[call.Fun[0].Value] != "unsafe" {
+		return nil, false, nil
+	}
+	if len(call.ArgExprs) != 2 || len(call.ArgExprs) != len(call.Args) || call.Ellipsis.IsValid() {
+		return nil, false, nil
+	}
+	if r.bashPPScope != nil && r.bashPPScope.lookup(call.Fun[0].Value) != nil {
+		return nil, false, nil
+	}
+	ptr, err := r.bashPPPointerExprValue(call.ArgExprs[0])
+	if err != nil {
+		return nil, true, err
+	}
+	length, err := r.bashPPEvalScalarExpr(call.ArgExprs[1])
+	if err != nil {
+		return nil, true, err
+	}
+	n, ok := constant.Int64Val(constant.ToInt(length.value))
+	if !ok || n < 0 {
+		return nil, true, &bashPPRuntimeError{refusal: "BASHPP-EUNSAFE-STRING: unsafe.String: len out of range", runtime: "unsafe.String: len out of range"}
+	}
+	if ptr == nil {
+		if n == 0 {
+			return []bashPPBridgeValue{{Kind: "string", Type: "string", NativeType: "string"}}, true, nil
+		}
+		return nil, true, &bashPPRuntimeError{refusal: "BASHPP-EUNSAFE-STRING: unsafe.String: ptr is nil and len is not zero", runtime: "unsafe.String: ptr is nil and len is not zero"}
+	}
+	var bytes []any
+	if last := len(ptr.path) - 1; last >= 0 && ptr.path[last].field == "" && !ptr.path[last].deref {
+		// A pointer to an element: the bytes run on from that element.
+		parent, _, _, err := ptr.readParent()
+		if err != nil {
+			return nil, true, err
+		}
+		seq, ok := parent.([]any)
+		if !ok || ptr.path[last].index < 0 || ptr.path[last].index > len(seq) {
+			return nil, true, fmt.Errorf("BASHPP-EUNSAFE-STRING: pointer no longer names byte storage")
+		}
+		bytes = seq[ptr.path[last].index:]
+	} else {
+		value, _, _, err := ptr.read()
+		if err != nil {
+			return nil, true, err
+		}
+		bytes = []any{value}
+	}
+	if n > int64(len(bytes)) {
+		return nil, true, &bashPPRuntimeError{refusal: "BASHPP-EUNSAFE-STRING: unsafe.String: len out of range", runtime: "unsafe.String: len out of range"}
+	}
+	out := make([]byte, n)
+	for i := range out {
+		b, ok := bytes[i].(int)
+		if !ok || b < 0 || b > 255 {
+			return nil, true, fmt.Errorf("BASHPP-EUNSAFE-STRING: pointer does not name byte storage")
+		}
+		out[i] = byte(b)
+	}
+	return []bashPPBridgeValue{{Kind: "string", Type: "string", NativeType: "string", Text: string(out), Bytes: out}}, true, nil
 }

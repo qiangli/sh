@@ -282,3 +282,14 @@ func main() {
 		t.Fatalf("negative statement forms: got %q, want %q", got, want)
 	}
 }
+
+// TestSprint171UnsafeString is an outside-corpus reproducer for
+// unsafe.String, which the runtime sent to the dependency helper as an
+// imported function: the helper has no such symbol, and could not read the
+// interpreter-owned byte storage the pointer names in any case. The call is
+// answered by the interpreter from that storage, with the run-time faults
+// Go raises for a nil pointer with a length and a negative length; a local
+// type's own String method is the control.
+func TestSprint171UnsafeString(t *testing.T) {
+	sprint171RunBothModes(t, filepath.Join("testdata", "sprint171", "w2-imports", "unsafe-string", "unsafe_string.go"))
+}
