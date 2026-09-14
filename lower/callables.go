@@ -500,7 +500,14 @@ func (e *emitter) constGroup(n *syntax.BashPPConstGroup) (string, error) {
 			lastExpr, lastWords, lastType = expr, words, typ
 		}
 		value := ""
-		if expr != nil {
+		if e.goSource && len(words) > 0 {
+			// The Go-source converter retains the written initializer in Init
+			// even when its typed expression is materialized or contextualized
+			// for interpretation. Let gc evaluate that original expression in
+			// compiled output. This preserves import and lexical-name uses, and
+			// lets iota take the current spec's value naturally.
+			value, err = e.wordSequence(words)
+		} else if expr != nil {
 			value, err = e.expr(expr)
 		} else if len(words) > 0 {
 			value, err = e.wordSequence(words)
