@@ -492,7 +492,9 @@ func (e *emitter) constGroup(n *syntax.BashPPConstGroup) (string, error) {
 		}
 		typ := ""
 		var err error
-		if spec.DeclTypeExpr != nil {
+		if e.goSource && inferredSpecType(spec) {
+			// Go infers the constant's type from its written initializer.
+		} else if spec.DeclTypeExpr != nil {
 			typ, err = e.typeExpr(spec.DeclTypeExpr)
 		} else if spec.DeclType != nil {
 			typ, err = e.typeSpelling(spec.DeclType, spec.DeclType.Value)

@@ -13,7 +13,17 @@ import (
 // and the defined type it inherits (`C2 = C1` with C1 of type E) travels
 // only through that spelling.
 func inferredDeclType(n *syntax.BashPPDecl) bool {
-	return n.Kw.Value == "var" && n.DeclType != nil && len(n.Init) > 0 && n.DeclType.Pos().IsValid() && n.DeclType.Pos() == n.Name.Pos()
+	// A const's inferred NAMED type (`const code = WrongAssignCount`, of a
+	// dot-imported or aliased type) is spelled for the interpreter the same
+	// way; the written initializer carries it for gc, and the spelling
+	// would qualify the type by its package name where the file binds it
+	// otherwise. Same marker: the type sits at the name's position.
+	return (n.Kw.Value == "var" || n.Kw.Value == "const") && n.DeclType != nil && len(n.Init) > 0 && n.DeclType.Pos().IsValid() && n.DeclType.Pos() == n.Name.Pos()
+}
+
+// inferredSpecType is inferredDeclType for one spec of a grouped const.
+func inferredSpecType(spec *syntax.BashPPConstSpec) bool {
+	return spec.DeclType != nil && len(spec.Init) > 0 && spec.DeclType.Pos().IsValid() && spec.DeclType.Pos() == spec.Name.Pos()
 }
 
 // forwardedCallee unwraps the converter's forwarding closure for a generic
