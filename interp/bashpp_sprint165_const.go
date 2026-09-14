@@ -117,6 +117,11 @@ func (r *Runner) goSourceStaticExprType(expr syntax.BashPPExpr) (syntax.BashPPTy
 			return &syntax.BashPPPointerType{Element: cell.pointerValue.elem}, true
 		}
 	case *syntax.BashPPConvertExpr:
+		if x.ConvTypeExpr == nil && x.ConvType != nil {
+			// The constant boundary emits a conversion with only the type's
+			// name (`unsafe.Sizeof(int(0))`).
+			return &syntax.BashPPNamedType{Name: x.ConvType}, true
+		}
 		return x.ConvTypeExpr, x.ConvTypeExpr != nil
 	case *syntax.BashPPCompositeLit:
 		return x.LitType, x.LitType != nil
@@ -126,7 +131,12 @@ func (r *Runner) goSourceStaticExprType(expr syntax.BashPPExpr) (syntax.BashPPTy
 	case *syntax.BashPPDerefExpr:
 		typ, ok := r.goSourceStaticExprType(x.X)
 		pointer, pointerOK := r.bashPPUnderlyingType(typ).(*syntax.BashPPPointerType)
-		return pointer.Element, ok && pointerOK
+		if !ok || !pointerOK {
+			// `*new(T)` under a type parameter has no static pointee here;
+			// an honest refusal, not a nil dereference.
+			return nil, false
+		}
+		return pointer.Element, true
 	case *syntax.BashPPFuncLit:
 		return &syntax.BashPPFuncType{Params: x.Params, Results: x.Results}, true
 	case *syntax.BashPPCall:
