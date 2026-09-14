@@ -64,6 +64,12 @@ type mapImporter struct {
 	// file set, and the checker's Info over them.
 	checked map[string]*checkedPackage
 	order   []string
+	// variants are dependencies re-checked from source against the map
+	// (variantImport); fset and checker are what Load checks with.
+	variants    map[string]*types.Package
+	variantBusy map[string]bool
+	fset        *token.FileSet
+	checker     checkerOptions
 }
 
 // checkedPackage is one explicit package after checkDependency: its sorted
@@ -78,7 +84,7 @@ type checkedPackage struct {
 }
 
 func newMapImporter(base string, fallback types.Importer) *mapImporter {
-	return &mapImporter{base: base, packages: map[string]*types.Package{}, files: map[string][]string{}, fallback: fallback, checked: map[string]*checkedPackage{}}
+	return &mapImporter{base: base, packages: map[string]*types.Package{}, files: map[string][]string{}, fallback: fallback, checked: map[string]*checkedPackage{}, variants: map[string]*types.Package{}, variantBusy: map[string]bool{}}
 }
 
 // newTypeInfo allocates the Info map set the converter reads. The program
@@ -139,6 +145,9 @@ func (m *mapImporter) ImportFrom(p, srcDir string, mode types.ImportMode) (*type
 	}
 	pkg, err := m.fallbackImport(resolved, srcDir, mode)
 	if err != nil {
+		return nil, err
+	}
+	if pkg, err = m.variantImport(resolved, pkg, srcDir); err != nil {
 		return nil, err
 	}
 	m.resolutions = append(m.resolutions, Resolution{From: m.from, Import: p, Path: resolved, Origin: "importer", Name: pkg.Name()})

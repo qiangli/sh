@@ -231,6 +231,7 @@ func Load(sources []Source, options Options) (*Program, error) {
 		fallback = importer.Default()
 	}
 	imp := newMapImporter(options.ImportBase, fallback)
+	imp.fset, imp.checker = c.fset, checker
 	// Explicit packages are checked first, in order, so a later package sees
 	// every earlier one; a failing package stops here with its diagnostics
 	// and the program is never checked against a partial map.
@@ -245,9 +246,19 @@ func Load(sources []Source, options Options) (*Program, error) {
 	}
 	imp.from = programPath
 	imp.identity = importerIdentity{declared: options.ImportPath != "", testMain: options.TestMain}
+	// An external test package (`package x_test`) declared under the tested
+	// package's identity is checked as cmd/go checks pxtest: its own path
+	// is <pkg>_test, so a type of the tested package it imports stays
+	// qualified (`types.Sym`, not a same-package `Sym`), while its import
+	// visibility is still decided under the tested package's identity, as
+	// cmd/go decides it with the tested package as the importer.
+	checkPath := programPath
+	if options.ImportPath != "" && !options.TestMain && strings.HasSuffix(p.Package, "_test") && !strings.HasSuffix(options.ImportPath, "_test") {
+		checkPath = options.ImportPath + "_test"
+	}
 	typeErrors := newCheckerDiagnostics(c.fset, c.files, c.info, checker)
 	config := checker.config(imp, typeErrors.report)
-	pkg, err := config.Check(programPath, c.fset, c.files, c.info)
+	pkg, err := config.Check(checkPath, c.fset, c.files, c.info)
 	// gc's stderr is sorted by position; the checker-test flow instead lists
 	// parser diagnostics first, followed by semantic diagnostics from every
 	// recoverable file.
@@ -289,7 +300,11 @@ func Load(sources []Source, options Options) (*Program, error) {
 		mappedPkgs = append(mappedPkgs, checked.pkg)
 		linked = append(linked, &converter{packagePath: path, fset: c.fset, files: checked.files, sources: checked.sources, info: checked.info, renames: c.renames, shadowedBuiltins: shadowedBuiltinTypes(checked.pkg)})
 	}
-	c.packagePath = programPath
+	// The converter's own package is the one the checker built: for an
+	// external test package that is <pkg>_test, so the tested package's
+	// types it imports keep their qualifier (types.Sym) and its own stay
+	// bare.
+	c.packagePath = checkPath
 	linked = append(linked, c)
 	c.prefix = "__gosource_"
 	for {
@@ -318,6 +333,7 @@ func Load(sources []Source, options Options) (*Program, error) {
 	// Import aliases are shared: every package's imports are hoisted into
 	// the one file, so an alias minted by any package names that path for all.
 	importAliases := map[string]string{}
+	c.dotImports = map[*ast.File]map[string]bool{}
 	liveImportPaths := liveImports(linked, mapped)
 	var lowered []*loweredPackage
 	for pi, lc := range linked {
@@ -349,6 +365,18 @@ func Load(sources []Source, options Options) (*Program, error) {
 					obj = lc.info.Defs[spec.Name]
 				} else {
 					obj = lc.info.Implicits[spec]
+				}
+				if obj != nil && obj.Name() == "." && lc == c {
+					// A dot import binds the package's names bare IN THIS
+					// FILE; a type of it the converter spells there (an
+					// instantiation's arguments, an inferred declaration
+					// type) must stay bare too.
+					if pkgname, ok := obj.(*types.PkgName); ok {
+						if c.dotImports[f] == nil {
+							c.dotImports[f] = map[string]bool{}
+						}
+						c.dotImports[f][pkgname.Imported().Path()] = true
+					}
 				}
 				if obj != nil && obj.Name() != "_" && obj.Name() != "." {
 					if pkgname, ok := obj.(*types.PkgName); ok {
@@ -736,6 +764,7 @@ func (c *converter) lowerPackage(initBase int, preserveNativeInit bool) (*lowere
 	tupleSpecs := map[*types.Var]*ast.ValueSpec{}
 	tupleDecls := map[*ast.ValueSpec]*ast.GenDecl{}
 	for _, f := range c.files {
+		c.currentFile = f
 		for _, d := range f.Decls {
 			if fd, ok := d.(*ast.FuncDecl); ok {
 				fn := c.function(fd)

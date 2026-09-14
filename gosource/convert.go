@@ -20,6 +20,10 @@ import (
 type converter struct {
 	packagePath   string
 	importAliases map[string]string
+	// dotImports are, per file, the paths that file binds by dot import:
+	// their types are spelled bare while that file is being lowered.
+	dotImports  map[*ast.File]map[string]bool
+	currentFile *ast.File
 	// mapped maps each explicit package path linked into the same file to
 	// its map index. A selector on one of their import bindings collapses
 	// to the selected object's rename, and their package-level names are
@@ -207,6 +211,9 @@ func (c *converter) qualifier(p *types.Package) string {
 		return c.mappedMarker(index)
 	}
 	if p.Path() == c.packagePath {
+		return ""
+	}
+	if c.currentFile != nil && c.dotImports[c.currentFile][p.Path()] {
 		return ""
 	}
 	if alias := c.importAliases[p.Path()]; alias != "" {

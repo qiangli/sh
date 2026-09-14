@@ -233,6 +233,34 @@ func (m *moduleImporter) ImportFrom(path, srcDir string, mode types.ImportMode) 
 	return m.delegate.Import(path)
 }
 
+// SourcePackageFiles lists a package's build-constrained Go source files in
+// the resolved SDK (gosource.SourcePackageLister): the map importer
+// re-checks a dependency from them when its export data reaches a mapped
+// package (cmd/go's test-variant rebuild). Packages with cgo files, and
+// packages the standard structural resolver cannot place, report an error
+// and stay on their export data.
+func (m *moduleImporter) SourcePackageFiles(path, srcDir string) (string, []string, error) {
+	m.mu.Lock()
+	sdk, sdkErr, dir := m.sdk, m.sdkErr, m.dir
+	m.mu.Unlock()
+	if sdkErr != nil {
+		return "", nil, sdkErr
+	}
+	ctx := build.Default
+	ctx.GOROOT, ctx.GOPATH = sdk.Root, sdk.GOPATH
+	if srcDir == "" {
+		srcDir = dir
+	}
+	pkg, err := ctx.Import(path, srcDir, 0)
+	if err != nil {
+		return "", nil, err
+	}
+	if len(pkg.CgoFiles) > 0 {
+		return "", nil, fmt.Errorf("package %q has cgo files", path)
+	}
+	return pkg.Dir, append([]string(nil), pkg.GoFiles...), nil
+}
+
 func (m *moduleImporter) lookup(path string) (io.ReadCloser, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
