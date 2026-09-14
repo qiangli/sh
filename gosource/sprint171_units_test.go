@@ -371,3 +371,72 @@ func TestNativeUnitsCompileDirectly(t *testing.T) {
 		t.Errorf("q -m notes are not the original package's alone:\n%s", output)
 	}
 }
+
+// stdlibImportcfg writes the standard library's importcfg for a direct
+// `go tool compile` under work.
+func stdlibImportcfg(t *testing.T, work string) string {
+	t.Helper()
+	stdlib, err := goCommand(t, work, "list", "-export", "-f", "{{if .Export}}packagefile {{.ImportPath}}={{.Export}}{{end}}", "std")
+	if err != nil {
+		t.Fatalf("go list -export std: %v\n%s", err, stdlib)
+	}
+	importcfg := filepath.Join(work, "importcfg")
+	if err := os.WriteFile(importcfg, []byte(stdlib), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return importcfg
+}
+
+// TestFloatingDirectivesReachCompiler: a //go:linkname written after the
+// last declaration or above a type documents no declaration, yet gc reads
+// it wherever it stands. The lowered unit carries every such directive at
+// its own source position, so gc accepts the well-formed one and refuses an
+// undeclared target and a duplicate on the lines the source wrote them.
+func TestFloatingDirectivesReachCompiler(t *testing.T) {
+	dir := filepath.Join("testdata", "sprint171", "w1-units", "floating-pragma")
+	work := t.TempDir()
+	importcfg := stdlibImportcfg(t, work)
+	compile := func(name string) (string, error) {
+		t.Helper()
+		data, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		program, err := gosource.Load([]gosource.Source{{Name: name, Data: data}}, gosource.Options{PreserveNativeInit: true, ImportPath: "p"})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		result, err := lower.Compile(program.File, lower.Options{Package: program.Package, Importer: program.Importer})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if got := strings.Count(string(result.Source), "//go:linkname"); got != strings.Count(string(data), "//go:linkname") {
+			t.Errorf("%s: %d linkname directives lowered, want every one:\n%s", name, got, result.Source)
+		}
+		generated := filepath.Join(work, name)
+		if err := os.WriteFile(generated, result.Source, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return goCommand(t, work, "tool", "compile", "-e", "-p=p", "-importcfg="+importcfg, "-o", filepath.Join(work, name+".o"), generated)
+	}
+	if output, err := compile("positive.go"); err != nil {
+		t.Errorf("positive.go: %v\n%s", err, output)
+	}
+	output, err := compile("reject.go")
+	if err == nil {
+		t.Fatalf("reject.go compiled; gc never saw its directives:\n%s", output)
+	}
+	var got []string
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		got = append(got, strings.TrimPrefix(line, work+string(filepath.Separator)))
+	}
+	// gc's own positions on the unchanged file: the directive text after
+	// the comment marker, on the line the source wrote it.
+	want := []string{
+		"reject.go:5:3: //go:linkname must refer to declared function or variable",
+		"reject.go:13:3: duplicate //go:linkname for x",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("gc diagnostics\ngot:  %q\nwant: %q", got, want)
+	}
+}

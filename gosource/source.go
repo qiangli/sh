@@ -427,7 +427,65 @@ func Load(sources []Source, options Options) (*Program, error) {
 	}
 	c.attachEmbedDirectives(p.File)
 	p.File.Sources = append([]syntax.SourceFile(nil), p.Sources...)
+	c.attachFloatingDirectives(p.File)
 	return p, nil
+}
+
+// attachFloatingDirectives keeps the file-level compiler directives that
+// address no declaration. A //go:linkname or //go:cgo_* line is not bound
+// to the declaration below it: gc reads it wherever it stands in the file,
+// after the last declaration or above a type or const, and checks every one
+// (an undeclared target, a duplicate, an instantiation) whether or not a
+// declaration follows. attachEmbedDirectives carries only the directives
+// documenting a func or var, so the rest are attached here to the last
+// named declaration of the same source file — each with its own position,
+// which the emitter spells as its own line directive — so the generated
+// unit still carries them for gc to read and refuse.
+func (c *converter) attachFloatingDirectives(file *syntax.File) {
+	attached := map[uint]bool{}
+	last := map[string]*syntax.Stmt{}
+	for _, stmt := range file.Stmts {
+		for _, comment := range stmt.Comments {
+			attached[comment.Hash.Offset()] = true
+		}
+		switch stmt.Cmd.(type) {
+		case *syntax.BashPPDecl, *syntax.BashPPFuncDecl:
+			if source, ok := file.SourceAt(stmt.Pos()); ok {
+				last[source.Name] = stmt
+			}
+		}
+	}
+	for _, f := range c.files {
+		for _, group := range f.Comments {
+			for _, comment := range group.List {
+				if !isFileDirective(comment.Text) {
+					continue
+				}
+				pos := c.pos(comment.Slash)
+				if attached[pos.Offset()] {
+					continue
+				}
+				source, ok := file.SourceAt(pos)
+				if !ok {
+					continue
+				}
+				if stmt := last[source.Name]; stmt != nil {
+					stmt.Comments = append(stmt.Comments, syntax.Comment{Hash: pos, Text: strings.TrimPrefix(comment.Text, "//")})
+				}
+			}
+		}
+	}
+}
+
+// isFileDirective reports whether a comment line is a compiler directive gc
+// applies to the file rather than to the declaration it documents.
+func isFileDirective(text string) bool {
+	if !strings.HasPrefix(text, "//go:") {
+		return false
+	}
+	directive, _, _ := strings.Cut(strings.TrimPrefix(text, "//go:"), " ")
+	directive, _, _ = strings.Cut(directive, "\t")
+	return directive == "linkname" || strings.HasPrefix(directive, "cgo_")
 }
 
 func liveImports(linked []*converter, mapped map[string]int) map[string]bool {
