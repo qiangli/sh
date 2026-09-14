@@ -33,7 +33,10 @@ func (r *Runner) bashPPBridgeHandles(call *syntax.BashPPCall) bool {
 	}
 	if len(call.Fun) >= 2 {
 		if _, ok := r.bashPPImports[call.Fun[0].Value]; ok {
-			return true
+			// unsafe.Sizeof, Alignof and Offsetof are constant operators
+			// the evaluator folds from the operand's declared type; the
+			// dependency has no callable symbol for them.
+			return !r.goSourceUnsafeConstantOperator(call)
 		}
 		if len(call.Fun) == 2 && r.goSourceOriginalMethodCall(call.Fun[0].Value, call.Fun[1].Value) {
 			return false
@@ -994,4 +997,18 @@ func (r *Runner) bashPPBridgeCell(cell *bashPPCell) (bashPPBridgeValue, error) {
 	}
 	scalar = bashPPBridgeInstantiatedScalar(scalar, cell.declType)
 	return r.bashPPBridgeDefinedScalar(scalar)
+}
+
+// goSourceUnsafeConstantOperator reports whether call is one of the unsafe
+// constant operators — Sizeof, Alignof or Offsetof of one operand — that
+// goSourceUnsafeConstant folds; such a call is never a dependency request.
+func (r *Runner) goSourceUnsafeConstantOperator(call *syntax.BashPPCall) bool {
+	if !r.bashPPGoSource || len(call.Fun) != 2 || len(call.ArgExprs) != 1 || r.bashPPImports[call.Fun[0].Value] != "unsafe" {
+		return false
+	}
+	switch call.Fun[1].Value {
+	case "Sizeof", "Alignof", "Offsetof":
+		return true
+	}
+	return false
 }

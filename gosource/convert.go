@@ -324,6 +324,32 @@ func (c *converter) isNewBuiltin(x *ast.CallExpr) bool {
 	return ok && obj.Name() == "new"
 }
 
+// isConstantCall reports whether call is a constant expression — the
+// checker evaluated it (len, cap, real, imag, complex over constant
+// operands; unsafe.Sizeof, Alignof, Offsetof of a fixed layout) — or an
+// unsafe layout operator over a type parameter, whose value the instantiated
+// frame settles. Neither evaluates its operand nor runs a function, so every
+// statement position treats it as an expression, the way a conversion is,
+// rather than as a call to dispatch.
+func (c *converter) isConstantCall(x *ast.CallExpr) bool {
+	if c.info.Types[x].Value != nil {
+		return true
+	}
+	sel, ok := ast.Unparen(x.Fun).(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	obj, ok := c.info.Uses[sel.Sel].(*types.Builtin)
+	if !ok || obj.Pkg() != types.Unsafe {
+		return false
+	}
+	switch obj.Name() {
+	case "Sizeof", "Alignof", "Offsetof":
+		return true
+	}
+	return false
+}
+
 // valueType converts the go/types result of an expression back into the typed
 // syntax representation. Go 1.27's new(v) needs both v and its defaulted type:
 // the former initializes the fresh cell while the latter is the pointer's
@@ -1507,7 +1533,7 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 						out.Rhs = nil
 						break
 					}
-					if c.info.Types[rhs.Fun].IsType() {
+					if c.info.Types[rhs.Fun].IsType() || c.isConstantCall(rhs) {
 						out.Expr = c.expr(rhs)
 						out.Rhs = nil
 						break
@@ -1562,7 +1588,7 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 			}
 			if len(x.Rhs) == 1 {
 				out.ValueExpr = c.expr(x.Rhs[0])
-				if call, ok := x.Rhs[0].(*ast.CallExpr); ok && !c.info.Types[call.Fun].IsType() {
+				if call, ok := x.Rhs[0].(*ast.CallExpr); ok && !c.info.Types[call.Fun].IsType() && !c.isConstantCall(call) {
 					out.Call = c.call(call)
 				}
 			}
@@ -1590,7 +1616,7 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 				// A conversion and an allocation are expressions, as in every
 				// other position: `return new(T)` is the NewExpr the type
 				// spells, whether T is a name or a type literal.
-				if c.info.Types[e.Fun].IsType() || c.isNewType(e) || c.isNewBuiltin(e) {
+				if c.info.Types[e.Fun].IsType() || c.isNewType(e) || c.isNewBuiltin(e) || c.isConstantCall(e) {
 					out.Expr = c.expr(e)
 				} else {
 					out.Call = c.call(e)

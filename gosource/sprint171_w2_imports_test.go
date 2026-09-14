@@ -190,3 +190,95 @@ func TestSprint171ImportedMethodExpressions(t *testing.T) {
 		return true
 	})
 }
+
+// TestSprint171UnsafeOperators is an outside-corpus reproducer for
+// unsafe.Sizeof, Alignof and Offsetof in statement positions that record a
+// call to dispatch — a short declaration, an assignment, a return, a tuple —
+// where the runtime sent the operator to the dependency helper, which has
+// no callable symbol for it. The operators are constant expressions (or,
+// over a type parameter, expressions the instantiated frame settles), so
+// the converter records them as expressions in every position, the way a
+// conversion is, and the evaluator folds them from the operand's type.
+func TestSprint171UnsafeOperators(t *testing.T) {
+	program := sprint171RunBothModes(t, filepath.Join("testdata", "sprint171", "w2-imports", "unsafe-operators", "unsafe_operators.go"))
+
+	// Tree shape: no statement carries an unsafe operator as its call; each
+	// position holds it as an expression. The import is still spelled, so
+	// the lowered program keeps its use of unsafe.
+	unsafeCall := func(call *syntax.BashPPCall) bool {
+		return call != nil && len(call.Fun) == 2 && call.Fun[0].Value == "unsafe"
+	}
+	operators := 0
+	syntax.Walk(program.File, func(n syntax.Node) bool {
+		switch n := n.(type) {
+		case *syntax.BashPPShortDecl:
+			if unsafeCall(n.Call) {
+				t.Errorf("short declaration dispatches %s as a call", n.Call.Fun[1].Value)
+			}
+		case *syntax.BashPPAssign:
+			if unsafeCall(n.Call) {
+				t.Errorf("assignment dispatches %s as a call", n.Call.Fun[1].Value)
+			}
+		case *syntax.BashPPReturn:
+			if unsafeCall(n.Call) {
+				t.Errorf("return dispatches %s as a call", n.Call.Fun[1].Value)
+			}
+		case *syntax.BashPPCall:
+			if unsafeCall(n) {
+				operators++
+			}
+		}
+		return true
+	})
+	if operators == 0 {
+		t.Errorf("no unsafe operator kept its spelling in the tree")
+	}
+
+	// Negatives: a call of an imported function, a declared function or a
+	// conversion in the same positions keeps its form — the imported call
+	// and the declared call are dispatched, the conversion is an expression.
+	negative, err := gosource.Load([]gosource.Source{{Name: "negative.go", Data: []byte(`package main
+
+import "strings"
+
+func id(s string) string { return s }
+
+func upper() string {
+	return strings.ToUpper("a")
+}
+
+func main() {
+	x := strings.ToUpper("b")
+	x = id(x)
+	y := int64(3)
+	_, _ = x, y
+	println(upper())
+}
+`)}}, gosource.Options{RunMain: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls []string
+	syntax.Walk(negative.File, func(n syntax.Node) bool {
+		switch n := n.(type) {
+		case *syntax.BashPPShortDecl:
+			if n.Call != nil {
+				calls = append(calls, "decl:"+n.Call.Fun[len(n.Call.Fun)-1].Value)
+			} else if _, ok := n.Expr.(*syntax.BashPPConvertExpr); ok {
+				calls = append(calls, "decl:conversion")
+			}
+		case *syntax.BashPPAssign:
+			if n.Call != nil {
+				calls = append(calls, "assign:"+n.Call.Fun[len(n.Call.Fun)-1].Value)
+			}
+		case *syntax.BashPPReturn:
+			if n.Call != nil {
+				calls = append(calls, "return:"+n.Call.Fun[len(n.Call.Fun)-1].Value)
+			}
+		}
+		return true
+	})
+	if got, want := strings.Join(calls, " "), "return:ToUpper decl:ToUpper assign:id decl:conversion"; got != want {
+		t.Fatalf("negative statement forms: got %q, want %q", got, want)
+	}
+}
