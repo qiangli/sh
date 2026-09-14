@@ -6,7 +6,6 @@ seq: 103
 status: done
 priority: p0
 created: 2026-09-14T09:02:18.114556Z
-weave: 209
 assignee: codex-gpt-5.5
 sprint: 170
 closed: 2026-09-14T11:48:33.463613Z
