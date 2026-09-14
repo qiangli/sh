@@ -1514,6 +1514,19 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 	p.advanceLine(cmd.Pos().Line())
 	p.spacePad(cmd.Pos())
 	switch cmd := cmd.(type) {
+	case *SourceBlock:
+		p.writeLit(cmd.Fence + cmd.Language.Value)
+		if cmd.Alias != nil {
+			p.writeLit(" as " + cmd.Alias.Value)
+		}
+		p.w.WriteByte('\n')
+		p.w.WriteString(cmd.Body)
+		if cmd.Body != "" && !strings.HasSuffix(cmd.Body, "\n") {
+			p.w.WriteByte('\n')
+		}
+		p.writeLit(cmd.Fence)
+		p.line = cmd.ClosingPos.Line()
+		p.wantSpace = spaceRequired
 	case *CallExpr:
 		p.assigns(cmd.Assigns)
 		if len(cmd.Args) > 0 {

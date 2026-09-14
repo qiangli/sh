@@ -95,6 +95,20 @@ func TestStartSiteDay1(t *testing.T) {
 	}
 }
 
+func TestStartSiteSourceFence(t *testing.T) {
+	for _, src := range []string{"~~~python", "~~~~python", "~~~python as py"} {
+		got := RecognizeStartSite(src)
+		if got.Site != StartSource || got.Class != ClassE || !got.Bounded {
+			t.Fatalf("RecognizeStartSite(%q) = %#v", src, got)
+		}
+	}
+	for _, src := range []string{" ~~~python", "~~python", "~~~", "~~~python nope", "```python"} {
+		if got := RecognizeStartSite(src); got.Site != StartNone {
+			t.Fatalf("RecognizeStartSite(%q) = %#v, want no match", src, got)
+		}
+	}
+}
+
 // Case 2 of the five-case matrix: NEAR MISS. The shape with its signal removed
 // must fall back to shell. These are the inputs most likely to be broken by an
 // over-eager recognizer, because each one differs from a claimed shape by a

@@ -181,6 +181,9 @@ func Walk(node Node, f func(Node) bool) {
 	case *TestDecl:
 		Walk(node.Description, f)
 		Walk(node.Body, f)
+	case *SourceBlock:
+		Walk(node.Language, f)
+		walkNilable(node.Alias, f)
 	case *BashPPDecl:
 		// The Bash++ nodes live in bashpp_nodes.go, but Walk is the one place
 		// they cannot: a Command the visitor does not know reaches the panic

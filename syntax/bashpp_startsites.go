@@ -83,6 +83,11 @@ func RecognizeStartSite(src string) StartSiteMatch {
 	if len(src) > maxLookahead {
 		src = src[:maxLookahead]
 	}
+	// Unlike ordinary shell commands, indentation is itself an escape for a
+	// naked source fence. Check it before the general command-position trim.
+	if recognizeSourceFence(src) {
+		return StartSiteMatch{Site: StartSource, Class: ClassE, Bounded: true}
+	}
 	s := strings.TrimLeft(src, " \t")
 	if s == "" {
 		return noMatch
@@ -128,6 +133,26 @@ func RecognizeStartSite(src string) StartSiteMatch {
 		return m
 	}
 	return noMatch
+}
+
+func recognizeSourceFence(src string) bool {
+	if src == "" || src[0] == ' ' || src[0] == '\t' {
+		return false
+	}
+	line, _, _ := strings.Cut(src, "\n")
+	fields := strings.Fields(line)
+	if len(fields) != 1 && len(fields) != 3 {
+		return false
+	}
+	opener := fields[0]
+	n := 0
+	for n < len(opener) && opener[n] == '~' {
+		n++
+	}
+	if n < 3 || n == len(opener) || !BashPPValidIdent(opener[n:]) {
+		return false
+	}
+	return len(fields) == 1 || fields[1] == "as" && BashPPValidIdent(fields[2])
 }
 
 func recognizeImportPrefix(s string) bool {

@@ -2959,6 +2959,15 @@ func (p *Parser) gotStmtPipe(s *Stmt, binCmd bool) *Stmt {
 	redirsStart := len(s.Redirs)
 	switch p.tok {
 	case _LitWord:
+		if p.lang.in(LangBashPP) && p.pos.Col() == 1 && RecognizeStartSite(p.val).Site == StartSource {
+			txn := p.beginBashPPTxn()
+			if block := p.bashppSourceBlock(); block != nil {
+				txn.commit(p)
+				s.Cmd = block
+				break
+			}
+			txn.rollback(p)
+		}
 		switch p.val {
 		case "{":
 			p.block(s)

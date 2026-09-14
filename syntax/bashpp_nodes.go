@@ -5,6 +5,27 @@ package syntax
 
 import "fmt"
 
+// SourceBlock is a raw, fenced foreign-language declaration unit. It is
+// recognized only by the Bash++ grammar at a statement boundary. Body is
+// opaque to the shell parser; the selected language adapter owns its text.
+type SourceBlock struct {
+	Fence      string
+	FencePos   Pos
+	Language   *Lit
+	Alias      *Lit
+	Body       string
+	BodyPos    Pos
+	ClosingPos Pos
+}
+
+func (b *SourceBlock) Pos() Pos { return b.FencePos }
+func (b *SourceBlock) End() Pos {
+	if b.ClosingPos.IsValid() {
+		return posAddCol(b.ClosingPos, len(b.Fence))
+	}
+	return b.BodyPos
+}
+
 // This file holds the Bash++ P1 ("Day-1") typed nodes. It is deliberately a
 // separate file from nodes.go: the nodes can be declared, reviewed and merged
 // without touching a single line the certification workstream owns, which
@@ -50,6 +71,7 @@ const (
 	StartGo        // go f() · go func() { … }()
 	StartSelect    // select { case …: …; default: … }
 	StartAgentic   // agentic { … } or agentic function/func declaration
+	StartSource    // ~~~python … ~~~
 )
 
 func (s StartSite) String() string {
@@ -82,6 +104,8 @@ func (s StartSite) String() string {
 		return "select"
 	case StartAgentic:
 		return "agentic"
+	case StartSource:
+		return "source-fence"
 	}
 	return "none"
 }
@@ -123,6 +147,8 @@ func (s *StartSite) UnmarshalText(b []byte) error {
 		*s = StartGo
 	case "select":
 		*s = StartSelect
+	case "source-fence":
+		*s = StartSource
 	default:
 		return fmt.Errorf("unknown Bash++ start site: %q", b)
 	}
@@ -1533,3 +1559,4 @@ func (*BashPPReceive) commandNode()     {}
 func (*BashPPClose) commandNode()       {}
 func (*BashPPSelect) commandNode()      {}
 func (*BashPPRange) commandNode()       {}
+func (*SourceBlock) commandNode()       {}

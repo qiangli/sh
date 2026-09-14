@@ -1,0 +1,110 @@
+package syntax
+
+import (
+	"bytes"
+	"strings"
+	"testing"
+	"testing/iotest"
+)
+
+func TestBashPPSourceBlockParsePrintWalkAndStreaming(t *testing.T) {
+	src := "~~~~python as py\n\ndef add(a: int, b: int) -> int:\n    return a + b\n~~~~\npy.add(2, 3)\n"
+	parse := func(rd interface{ Read([]byte) (int, error) }) *File {
+		t.Helper()
+		f, err := NewParser(Variant(LangBashPP)).Parse(rd, "polyglot.bpp")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return f
+	}
+	buffered := parse(strings.NewReader(src))
+	streamed := parse(iotest.OneByteReader(strings.NewReader(src)))
+	for _, f := range []*File{buffered, streamed} {
+		if len(f.Stmts) != 2 {
+			t.Fatalf("statements = %d", len(f.Stmts))
+		}
+		block, ok := f.Stmts[0].Cmd.(*SourceBlock)
+		if !ok {
+			t.Fatalf("command = %T", f.Stmts[0].Cmd)
+		}
+		if block.Fence != "~~~~" || block.Language.Value != "python" || block.Alias.Value != "py" {
+			t.Fatalf("block = %#v", block)
+		}
+		if block.Body != "\ndef add(a: int, b: int) -> int:\n    return a + b\n" {
+			t.Fatalf("body = %q", block.Body)
+		}
+		if block.Pos().Line() != 1 || block.BodyPos.Line() != 2 || block.ClosingPos.Line() != 5 {
+			t.Fatalf("positions: %v %v %v", block.Pos(), block.BodyPos, block.ClosingPos)
+		}
+		seen := false
+		Walk(f, func(n Node) bool {
+			if n == block {
+				seen = true
+			}
+			return true
+		})
+		if !seen {
+			t.Fatal("source block not walked")
+		}
+	}
+	var out bytes.Buffer
+	if err := NewPrinter().Print(&out, buffered); err != nil {
+		t.Fatal(err)
+	}
+	if out.String() != src {
+		t.Fatalf("printed:\n%s", out.String())
+	}
+}
+
+func TestBashPPSourceBlockDialectIsolationAndNearMiss(t *testing.T) {
+	valid := "~~~python\ndef f():\n    return 1\n~~~\n"
+	f, err := NewParser(Variant(LangBashPP)).Parse(strings.NewReader(valid), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := f.Stmts[0].Cmd.(*SourceBlock); !ok {
+		t.Fatalf("command = %T", f.Stmts[0].Cmd)
+	}
+	for _, src := range []string{"~~python\n", "~~~python nope\n", "echo ~~~python\n", " ~~~python\n", "command ~~~python\n", "'~~~python'\n"} {
+		f, err := NewParser(Variant(LangBashPP)).Parse(strings.NewReader(src), "")
+		if err != nil {
+			continue
+		}
+		Walk(f, func(n Node) bool {
+			if _, ok := n.(*SourceBlock); ok {
+				t.Fatalf("near miss claimed: %q", src)
+			}
+			return true
+		})
+	}
+	for _, lang := range []LangVariant{LangBash, LangPOSIX} {
+		f, err := NewParser(Variant(lang)).Parse(strings.NewReader(valid), "")
+		if err != nil {
+			continue
+		}
+		Walk(f, func(n Node) bool {
+			if _, ok := n.(*SourceBlock); ok {
+				t.Fatalf("%s claimed fence", lang)
+			}
+			return true
+		})
+	}
+}
+
+func TestBashPPSourceBlockUnclosed(t *testing.T) {
+	_, err := NewParser(Variant(LangBashPP)).Parse(strings.NewReader("~~~python\ndef f(): pass\n"), "bad.bpp")
+	if err == nil || !strings.Contains(err.Error(), "unclosed source block") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestBashPPSourceBlockCRLFUsesParserNewlineContract(t *testing.T) {
+	f, err := NewParser(Variant(LangBashPP)).Parse(strings.NewReader("~~~python\r\ndef f():\r\n    return 1\r\n~~~\r\n"), "windows.bpp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	block := f.Stmts[0].Cmd.(*SourceBlock)
+	if block.Body != "def f():\n    return 1\n" || block.ClosingPos.Line() != 4 {
+		t.Fatalf("body=%q closing=%v", block.Body, block.ClosingPos)
+	}
+}

@@ -1732,12 +1732,12 @@ func (p *Parser) bashppParenForm(ce *CallExpr) Command {
 		return nil
 	}
 	if !short && !strings.Contains(name.Value, ".") && p.r == ')' && !p.bashppCallable(name.Value) {
-		// `f()` is also the prefix of a classic shell function definition.
-		// Only a previously declared Bash++ function makes the zero-argument
-		// call unambiguous; calls with arguments remain unambiguous Class R.
+		// A zero-argument bare call is indistinguishable from the head of a
+		// shell function declaration until its name has been declared. Keep
+		// unknown names in the shell grammar; source-block declarations add
+		// their public names to the same parser-local callable set.
 		return nil
 	}
-
 	txn := p.beginBashPPTxn()
 	lparen := p.pos
 	p.next()
