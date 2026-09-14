@@ -1106,7 +1106,12 @@ func (e *emitter) command(c syntax.Command) (string, error) {
 		}
 		init := ""
 		var err error
-		if n.InitExpr != nil {
+		if e.goSource && n.Kw.Value == "const" && len(n.Init) > 0 {
+			// Init is the written Go initializer carrier; InitExpr may hold a
+			// checker-derived value for interpretation. Compiled native Go must
+			// keep the source expression and let gc evaluate it.
+			init, err = e.wordSequence(n.Init)
+		} else if n.InitExpr != nil {
 			init, err = e.expr(n.InitExpr)
 		} else if len(n.Init) > 0 {
 			init, err = e.wordSequence(n.Init)

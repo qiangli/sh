@@ -10,6 +10,7 @@ import (
 
 	"mvdan.cc/sh/v3/gosource"
 	"mvdan.cc/sh/v3/lower"
+	"mvdan.cc/sh/v3/syntax"
 )
 
 // TestGoSourceNativeConstExpressions drives the compiled native-Go boundary:
@@ -64,6 +65,42 @@ func TestGoSourceNativeConstExpressions(t *testing.T) {
 	cmd.Env = append(os.Environ(), "GOWORK=off", "GOTOOLCHAIN=local")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("generated Go did not compile and run: %v\n%s\n--- generated ---\n%s", err, output, generated)
+	}
+}
+
+// TestGoSourceNativeSingleConstCarrier pins lower's half of the native-source
+// carrier contract. The interpreter expression may be folded, while Init
+// retains the source text that compiled output must use.
+func TestGoSourceNativeSingleConstCarrier(t *testing.T) {
+	path := filepath.Join("testdata", "sprint171", "w3-fidelity", "native-constants", "single.go")
+	source, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	program, err := gosource.Parse(bytes.NewReader(source), path, gosource.Options{RunMain: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var declaration *syntax.BashPPDecl
+	syntax.Walk(program.File, func(node syntax.Node) bool {
+		if candidate, ok := node.(*syntax.BashPPDecl); ok && candidate.Kw.Value == "const" && candidate.Name.Value == "width" {
+			declaration = candidate
+		}
+		return true
+	})
+	if declaration == nil || len(declaration.Init) != 1 {
+		t.Fatal("front end did not produce the single const carrier")
+	}
+	// This is the requested gosource handoff: keep its folded InitExpr for
+	// interpretation while carrying the written expression in Init.
+	declaration.Init[0] = &syntax.Word{Parts: []syntax.WordPart{&syntax.Lit{Value: "len(values)", ValuePos: declaration.Name.End()}}}
+	result, err := lower.Compile(program.File, lower.Options{Origin: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	generated := string(result.Source)
+	if !strings.Contains(generated, "const width = len(values)") || strings.Contains(generated, "const width = 4") {
+		t.Fatalf("compiled const did not select the written carrier:\n%s", generated)
 	}
 }
 
