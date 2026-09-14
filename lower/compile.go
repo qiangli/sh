@@ -1,6 +1,7 @@
 package lower
 
 import (
+	"context"
 	"fmt"
 	"go/ast"
 	"go/constant"
@@ -13,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 
+	"mvdan.cc/sh/v3/polyglot"
 	"mvdan.cc/sh/v3/syntax"
 )
 
@@ -46,6 +48,8 @@ type emitter struct {
 	iotaValue          *int
 	bigIntegers        bool
 	functionDecls      map[string]*syntax.BashPPFuncDecl
+	foreignFunctions   map[string]foreignFunction
+	foreignPlans       []polyglot.Plan
 	methodDeclarations []*syntax.BashPPFuncDecl
 	enumMembers        map[string][]*syntax.Lit
 	projections        projector
@@ -172,6 +176,7 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 		return nil, ErrorList{{Code: CodeType, Msg: "invalid package name", Pos: file.Pos()}}
 	}
 	e := &emitter{goSource: file.GoSource, sourceFile: file, writtenNames: map[string]bool{}, inferredParams: map[*syntax.BashPPField]string{}, declaredTypes: map[string]*syntax.BashPPDecl{}, functionDecls: map[string]*syntax.BashPPFuncDecl{}, enumMembers: map[string][]*syntax.Lit{}, options: options, funcs: map[string]bool{}, scopes: []map[string]bool{{}}, globals: map[string]bool{}, visibleGlobals: map[string]bool{}, imports: map[string]string{}, importAliased: map[string]bool{}, fileImports: map[string][]sourceImport{}, callableParams: map[*syntax.BashPPField]string{}, dotNames: map[string]bool{}, declaredGlobals: map[string]bool{}, typeNames: map[string]bool{}, globalTypes: globalTypes}
+	e.foreignFunctions = map[string]foreignFunction{}
 	e.moduleImporter = newModuleImporter(options.Dir)
 	if options.Importer != nil {
 		e.moduleImporter = options.Importer
@@ -179,6 +184,9 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 	e.sourceName = options.Origin
 	if e.sourceName == "" {
 		e.sourceName = file.Name
+	}
+	if err := e.prepareForeign(context.Background(), file); err != nil {
+		return nil, err
 	}
 	e.projections.projectionPush()
 	e.needsExecution(file)
@@ -265,6 +273,7 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 		return true
 	})
 	var declarations, body strings.Builder
+	declarations.WriteString(e.foreignDeclarations())
 	fileBodies := map[string]*strings.Builder{}
 	// Under goSource the declarations are re-emitted in the order the input
 	// wrote them (C11): each statement's declaration text is captured here
@@ -370,6 +379,9 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 	if e.output {
 		imports = append(imports, "fmt")
 	}
+	if len(e.foreignPlans) > 0 {
+		imports = append(imports, "context", "mvdan.cc/sh/v3/polyglot")
+	}
 	if e.bridge {
 		imports = append(imports, options.Runtime)
 	}
@@ -395,6 +407,10 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 	}
 	if e.output {
 		fmt.Fprintf(&raw, "import %sfmt \"fmt\"\n", e.prefix)
+	}
+	if len(e.foreignPlans) > 0 {
+		fmt.Fprintf(&raw, "import %scontext \"context\"\n", e.prefix)
+		fmt.Fprintf(&raw, "import %spolyglot \"mvdan.cc/sh/v3/polyglot\"\n", e.prefix)
 	}
 	if e.bridge {
 		fmt.Fprintf(&raw, "import %srt %s\n", e.prefix, strconv.Quote(options.Runtime))
@@ -1049,6 +1065,8 @@ func (e *emitter) command(c syntax.Command) (string, error) {
 		}
 	}
 	switch n := c.(type) {
+	case *syntax.SourceBlock:
+		return "", nil
 	case *syntax.BashPPAgenticBlock:
 		return e.agenticBlock(n)
 	case *syntax.BashPPSend:
@@ -1668,6 +1686,21 @@ func (e *emitter) call(c *syntax.BashPPCall) (string, error) {
 	}
 	if len(c.Fun) == 0 {
 		return "", e.fail(c, CodeExpr, "missing callable")
+	}
+	qualifiedParts := make([]string, len(c.Fun))
+	for i, part := range c.Fun {
+		qualifiedParts[i] = part.Value
+	}
+	if _, ok := e.foreignFunctions[strings.Join(qualifiedParts, ".")]; ok {
+		var args []string
+		for i := range c.Args {
+			x, err := e.callArgument(c, i)
+			if err != nil {
+				return "", err
+			}
+			args = append(args, x)
+		}
+		return strings.Join(qualifiedParts, ".") + "(" + strings.Join(args, ",") + ")", nil
 	}
 	if len(c.Fun) > 1 && e.execution && e.imports[c.Fun[0].Value] == "" {
 		return e.methodCall(c)
