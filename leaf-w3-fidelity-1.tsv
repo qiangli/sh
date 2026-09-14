@@ -1,0 +1,7 @@
+root
+testdir:fixedbugs/bug273.go
+testdir:fixedbugs/issue22344.go
+testdir:shift3.go
+package:cmd/compile/internal/ir
+testdir:fixedbugs/bug115.go
+testdir:fixedbugs/issue6847.go
