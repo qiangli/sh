@@ -264,9 +264,9 @@ type Runner struct {
 	// subscription kept its default action from running here already.
 	bashPPForwardedDeath int
 	bashPPTaskFailed     bool
-	bashPPTaskFailCode uint8
-	bashPPLogicalDepth int
-	bashPPCustomOpen   bool
+	bashPPTaskFailCode   uint8
+	bashPPLogicalDepth   int
+	bashPPCustomOpen     bool
 
 	// funcSources records the script name active when a function was
 	// defined. Bash reports runtime diagnostics in a function body against
