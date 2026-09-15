@@ -69,10 +69,10 @@ func main() {
 // TestGoSourceCallbackAsyncRetainedRefused pins the retained-callback policy at
 // a second, unrelated door: time.AfterFunc keeps an original function and calls
 // it later from a timer goroutine. That asynchronous retention is not one of the
-// reviewed synchronous or net/http registration shapes, so it must be refused
-// before the dependency can keep the function — never run out of band. The
-// existing WalkDir case pins one refused retainer; this pins that the refusal is
-// a general policy, not a WalkDir special case.
+// reviewed synchronous (e.g. filepath.WalkDir) or net/http registration shapes,
+// so it must be refused before the dependency can keep the function — never run
+// out of band. This is the general pin that retention outside the reviewed
+// shapes is refused, not that any single API is special-cased.
 func TestGoSourceCallbackAsyncRetainedRefused(t *testing.T) {
 	const source = `package main
 import (

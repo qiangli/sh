@@ -188,7 +188,7 @@ func TestGoSourceTourCallbackReferenceBoundaries(t *testing.T) {
 	for name, tc := range map[string]struct{ source, diagnostic string }{
 		"aggregate_parameter": {`package main
 import "reflect"
-func main(){reflect.ValueOf(func(b []byte){println("callback-ran")});println("after")}`, "signature requires scalar parameters"},
+func main(){reflect.ValueOf(func(b []byte){println("callback-ran")});println("after")}`, "signature requires value-semantics parameters"},
 		"unreviewed_consumer": {`package main
 import "reflect"
 func main(){reflect.ValueOf(func()map[string]int{println("callback-ran");return nil});println("after")}`, "retained original function callbacks are unsupported"},

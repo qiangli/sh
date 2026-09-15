@@ -242,18 +242,9 @@ func main(){
 	differGoSource(t, source, nil, "")
 }
 
-// TestGoSourceRetainedCallbackPolicy pins that admitting retained HTTP handler
-// registration did not open every retaining API: an unreviewed one is still
-// refused before the dependency can keep the original function.
-func TestGoSourceRetainedCallbackPolicy(t *testing.T) {
-	const source = `package main
-import ("fmt";"os";"path/filepath";"io/fs")
-func main(){
-	filepath.WalkDir(".",func(path string,d fs.DirEntry,err error)error{fmt.Println(path);return nil})
-	os.Exit(0)
-}`
-	got := runGoSourceRunnerError(t, source)
-	if !strings.Contains(got, "callback") {
-		t.Fatalf("an unreviewed retaining API was admitted: %q", got)
-	}
-}
+// The retained-callback policy — that admitting the reviewed synchronous and
+// net/http registration shapes did not open every retaining API — is pinned by
+// TestGoSourceCallbackAsyncRetainedRefused (interp/gosource_callback_lifecycle_test.go).
+// A WalkDir-based pin used to live here, but filepath.WalkDir is a reviewed
+// synchronous callback (it is on the allowlist and drives the supported GBE
+// "directories" case), so it can no longer stand in for a refused retainer.
