@@ -219,6 +219,28 @@ func TestDiscoverEnvironmentProjectAndFingerprint(t *testing.T) {
 	}
 }
 
+func TestCanonicalExecutablePreservesVirtualEnvironmentSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "base-python")
+	writeEnvironmentFile(t, target, "runtime")
+	venvPython := filepath.Join(dir, ".venv", "bin", "python")
+	if err := os.MkdirAll(filepath.Dir(venvPython), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, venvPython); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	got, err := canonicalExecutable(venvPython, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantParent, _ := filepath.EvalSymlinks(filepath.Dir(venvPython))
+	want := filepath.Join(wantParent, filepath.Base(venvPython))
+	if got != want {
+		t.Fatalf("executable = %q, want virtual-environment path %q", got, want)
+	}
+}
+
 func TestDiscoverEnvironmentOverlaySelectionAndAmbiguity(t *testing.T) {
 	root := t.TempDir()
 	source := filepath.Join(root, "x.bpp")

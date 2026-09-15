@@ -375,10 +375,15 @@ func canonicalExecutableFor(name, goos, pathExt string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	name, err = filepath.EvalSymlinks(name)
+	// Preserve the selected executable path. Virtual environments commonly
+	// expose bin/python as a symlink; resolving it to the base interpreter
+	// discards the venv prefix and therefore its site-packages. os.Stat and the
+	// fingerprint still follow the link when validating its target.
+	parent, err := filepath.EvalSymlinks(filepath.Dir(name))
 	if err != nil {
 		return "", err
 	}
+	name = filepath.Join(parent, filepath.Base(name))
 	info, err := os.Stat(name)
 	if err != nil {
 		return "", err
