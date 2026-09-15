@@ -68,6 +68,12 @@ type bashPPFunc struct {
 	// skipArgs is one for a method expression T.M(v, ...), where v supplies
 	// the receiver rather than the first ordinary parameter.
 	skipArgs int
+	// decoratorNext marks the predeclared Call.Next, answered natively by
+	// [Runner.bashPPDecoratorNext] rather than by a body.
+	decoratorNext bool
+	// advised holds the policy decorators [Advice] added at registration;
+	// they wrap the declaration's own, outermost first.
+	advised []DecoratorSpec
 }
 
 // bashPPType is one script-local named type. Aliases intentionally cannot own
@@ -307,6 +313,10 @@ func (r *Runner) bashPPFuncDecl(d *syntax.BashPPFuncDecl) {
 		r.exit.code = 2
 		return
 	}
+	advised, ok := r.bashPPRegisterDecorators(name, d.Pos(), d.Decorators, d.Agentic != nil)
+	if !ok {
+		return
+	}
 	var captured *bashPPScope
 	if r.bashPPScope != nil {
 		if r.bashPPGoSource {
@@ -315,7 +325,7 @@ func (r *Runner) bashPPFuncDecl(d *syntax.BashPPFuncDecl) {
 			captured = r.bashPPScope.snapshot()
 		}
 	}
-	r.bashPPFuncs[name] = &bashPPFunc{decl: d, scope: captured}
+	r.bashPPFuncs[name] = &bashPPFunc{decl: d, scope: captured, advised: advised}
 }
 
 func bashPPValidateTypeParamDecls(params []*syntax.BashPPTypeParam) error {
@@ -448,6 +458,10 @@ func (r *Runner) bashPPMethodDecl(d *syntax.BashPPFuncDecl) {
 		r.exit.code = 2
 		return
 	}
+	advised, ok := r.bashPPRegisterDecorators(recv.RecvType.Value+"."+d.Name.Value, d.Pos(), d.Decorators, d.Agentic != nil)
+	if !ok {
+		return
+	}
 	var captured *bashPPScope
 	if r.bashPPScope != nil {
 		if r.bashPPGoSource {
@@ -456,7 +470,7 @@ func (r *Runner) bashPPMethodDecl(d *syntax.BashPPFuncDecl) {
 			captured = r.bashPPScope.snapshot()
 		}
 	}
-	methods[d.Name.Value] = &bashPPFunc{decl: d, scope: captured}
+	methods[d.Name.Value] = &bashPPFunc{decl: d, scope: captured, advised: advised}
 }
 
 // bashPPLookupFunc resolves a call's callee to a callable function: a literal
@@ -1910,6 +1924,9 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 	r.bashPPCallChannels = nil
 	r.bashPPCallInterfaces = nil
 	r.bashPPCallSpread = false
+	if fn.decoratorNext {
+		return r.bashPPDecoratorNext(ctx, fn)
+	}
 	if fn.foreign != nil {
 		return r.bashPPInvokeForeign(ctx, fn.foreign, args)
 	}
@@ -2069,7 +2086,16 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 		}
 	}
 
-	if body := fn.body(); body != nil {
+	// A decorated declaration runs its body through the decorator chain.
+	// The chain sits here on purpose: after the agentic, argument and
+	// FUNCNEST gates above, inside the frame, so a decorator cannot smuggle
+	// a marked action out of scope and the frame's defers still bracket it.
+	decorated := false
+	var decoratedResults []string
+	if fn.decl != nil && (len(fn.decl.Decorators) > 0 || len(fn.advised) > 0) {
+		decorated = true
+		decoratedResults, _ = r.bashPPInvokeDecorated(ctx, fn, args, resultNames, bashPPDecoratorRungs(fn.decl.Decorators, fn.advised))
+	} else if body := fn.body(); body != nil {
 		r.stmts(ctx, body.Stmts)
 	}
 
@@ -2080,7 +2106,9 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 	// otherwise have failed to produce.
 	shortDeclFailed := r.bashPPShortFailureSeq != shortFailureMark
 	var results []string
-	if !shortDeclFailed {
+	if decorated {
+		results = decoratedResults
+	} else if !shortDeclFailed {
 		results = r.bashPPSettleResults(fn, resultNames)
 	}
 

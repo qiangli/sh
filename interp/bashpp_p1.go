@@ -176,6 +176,8 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 		// A pre-registered package-level type is already in the registry by
 		// design; only an entry this statement did not put there is a clash.
 		preRegistered := r.bashPPGoSourceClaimType(name)
+		// A script's own Call shadows the predeclared decorator context.
+		r.bashPPShadowPredeclaredCall(name)
 		if _, exists := r.bashPPTypes[name]; exists && !preRegistered && !r.bashPPShadowLocalType(name) {
 			r.errf("%stype %s redeclared in this session\n", r.bashErrPrefix(d.Pos()), name)
 			r.exit = exitStatus{code: 2}

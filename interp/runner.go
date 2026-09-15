@@ -2058,6 +2058,9 @@ func (r *Runner) printFuncDecl(name string, body *syntax.Stmt) {
 	// `(`, `)`, or other characters that break the standard
 	// declaration syntax. Pure-digit / dash names render as plain
 	// `NAME ()` without `function`.
+	if entry := r.bashPPDecoratedShellFunc(name); entry != nil {
+		r.bashPPPrintDecorators(entry.decorators)
+	}
 	if r.bashPPAgenticFunc(name) {
 		r.outf("agentic function %s () \n", name)
 	} else if funcDeclNeedsKeyword(name) {
@@ -6827,12 +6830,26 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			r.exit.code = 1
 			return
 		}
+		var advised []DecoratorSpec
+		if r.bashPPEnabled() {
+			var ok bool
+			if advised, ok = r.bashPPRegisterDecorators(name, cm.Pos(), cm.Decorators, cm.Agentic != nil); !ok {
+				return
+			}
+		}
 		r.setFunc(name, cm.Body)
 		if cm.Agentic != nil {
 			if r.bashPPAgenticFuncs == nil {
 				r.bashPPAgenticFuncs = make(map[string]*syntax.Stmt)
 			}
 			r.bashPPAgenticFuncs[name] = cm.Body
+			delete(r.exportedFuncs, name)
+		}
+		if len(cm.Decorators) > 0 || len(advised) > 0 {
+			if r.bashPPDecoratedFuncs == nil {
+				r.bashPPDecoratedFuncs = make(map[string]*bashPPDecorated)
+			}
+			r.bashPPDecoratedFuncs[name] = &bashPPDecorated{body: cm.Body, decorators: cm.Decorators, advised: advised}
 			delete(r.exportedFuncs, name)
 		}
 	case *syntax.ArithmCmd:
@@ -7290,7 +7307,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 					// function itself does exist. The diagnostic
 					// is `export: <name>: cannot export` and the
 					// builtin keeps going (exit 1).
-					if !validExportedFuncName(name) || r.bashPPAgenticFunc(name) {
+					if !validExportedFuncName(name) || r.bashPPAgenticFunc(name) || r.bashPPDecoratedShellFunc(name) != nil {
 						r.errf("%sexport: %s: cannot export\n",
 							r.bashErrPrefix(r.curStmtPos), name)
 						r.exit.code = 1
@@ -10799,7 +10816,17 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 		// loop-control can't leak out to the caller's loop.
 		oldBreakEnc, oldContnEnc := r.breakEnclosing, r.contnEnclosing
 		r.breakEnclosing, r.contnEnclosing = 0, 0
-		r.stmt(ctx, body)
+		if decorated := r.bashPPDecoratedShellFunc(name); decorated != nil {
+			// Decorators wrap the body, never the gates: the chain runs
+			// after the agentic and FUNCNEST checks above and inside the
+			// DEBUG/RETURN trap bracket, so RETURN fires once.
+			r.bashPPCallDecorated(ctx, name, decorated, args[1:], func(ctx context.Context) {
+				r.breakEnclosing, r.contnEnclosing = 0, 0
+				r.stmt(ctx, body)
+			})
+		} else {
+			r.stmt(ctx, body)
+		}
 		r.breakEnclosing, r.contnEnclosing = oldBreakEnc, oldContnEnc
 		if r.exit.exiting && r.trapCallbacks["EXIT"] != "" {
 			r.exitTrapCallStack = slices.Clone(r.callStack)
