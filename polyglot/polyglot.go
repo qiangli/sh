@@ -14,6 +14,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -217,6 +218,7 @@ type Module struct {
 	generation uint64
 	pendingOut string
 	pendingErr string
+	tempDir    string
 }
 
 func Start(plan Plan, runtime Runtime) *Module { return &Module{plan: plan, runtime: runtime} }
@@ -247,7 +249,15 @@ func (m *Module) ensure(ctx context.Context) error {
 	}
 	var protocolRead io.ReadCloser
 	var protocolWrite *os.File
-	if _, python := m.runtime.(Python); python {
+	_, typeScript := m.runtime.(TypeScript)
+	if runtime.GOOS == "windows" && typeScript {
+		protocolRead, err = cmd.StdoutPipe()
+		if err != nil {
+			in.Close()
+			return err
+		}
+		cmd.Stderr = io.Discard
+	} else {
 		protocolRead, protocolWrite, err = os.Pipe()
 		if err != nil {
 			in.Close()
@@ -255,13 +265,6 @@ func (m *Module) ensure(ctx context.Context) error {
 		}
 		cmd.ExtraFiles = []*os.File{protocolWrite}
 		cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
-	} else {
-		protocolRead, err = cmd.StdoutPipe()
-		if err != nil {
-			in.Close()
-			return err
-		}
-		cmd.Stderr = io.Discard
 	}
 	if err := cmd.Start(); err != nil {
 		_ = protocolRead.Close()
@@ -279,6 +282,14 @@ func (m *Module) ensure(ctx context.Context) error {
 	m.generation++
 	m.cmd, m.in, m.out, m.outFile = cmd, in, bufio.NewReader(protocolRead), protocolRead
 	load := m.runtime.loadRequest(m.plan)
+	if typeScript {
+		m.tempDir, err = os.MkdirTemp("", "bashpp-typescript-")
+		if err != nil {
+			m.kill()
+			return err
+		}
+		load["module_dir"] = m.tempDir
+	}
 	if m.importPlan != nil {
 		load = map[string]any{"id": 0, "op": "import", "module": m.importPlan.Module}
 	}
@@ -455,7 +466,10 @@ func (m *Module) request(ctx context.Context, request map[string]any, annotation
 
 func (m *Module) exchangeContext(ctx context.Context, request any, response *workerResponse) error {
 	done := make(chan error, 1)
-	go func() { done <- m.exchange(request, response) }()
+	in, out := m.in, m.out
+	_, typeScript := m.runtime.(TypeScript)
+	requireMarker := runtime.GOOS == "windows" && typeScript
+	go func() { done <- exchange(in, out, request, response, requireMarker) }()
 	select {
 	case <-ctx.Done():
 		_ = m.kill()
@@ -515,6 +529,10 @@ func (m *Module) kill() error {
 	}
 	m.cmd, m.in, m.out, m.outFile = nil, nil, nil, nil
 	m.pendingOut, m.pendingErr = "", ""
+	if m.tempDir != "" {
+		_ = os.RemoveAll(m.tempDir)
+		m.tempDir = ""
+	}
 	if errors.Is(err, os.ErrProcessDone) {
 		return nil
 	}
@@ -528,23 +546,31 @@ type workerResponse struct {
 	Error, Stdout, Stderr string
 }
 
-func (m *Module) exchange(request any, response *workerResponse) error {
+func exchange(in io.Writer, out *bufio.Reader, request any, response *workerResponse, requireMarker bool) error {
 	data, err := json.Marshal(request)
 	if err != nil {
 		return err
 	}
-	if _, err := m.in.Write(append(data, '\n')); err != nil {
-		return err
-	}
-	line, err := m.out.ReadBytes('\n')
-	if err != nil {
+	if _, err := in.Write(append(data, '\n')); err != nil {
 		return err
 	}
 	var got workerResponse
-	dec := json.NewDecoder(bytes.NewReader(line))
-	dec.UseNumber()
-	if err := dec.Decode(&got); err != nil {
-		return fmt.Errorf("invalid worker response: %w", err)
+	for {
+		line, err := out.ReadBytes('\n')
+		if err != nil {
+			return err
+		}
+		if marker := bytes.Index(line, []byte("\x1eBASHPP")); marker >= 0 {
+			line = line[marker+len("\x1eBASHPP"):]
+		} else if requireMarker || len(bytes.TrimSpace(line)) == 0 || bytes.TrimSpace(line)[0] != '{' {
+			continue
+		}
+		dec := json.NewDecoder(bytes.NewReader(line))
+		dec.UseNumber()
+		if err := dec.Decode(&got); err != nil {
+			return fmt.Errorf("invalid worker response: %w", err)
+		}
+		break
 	}
 	if response != nil {
 		*response = got

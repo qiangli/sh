@@ -46,6 +46,113 @@ func TestDiscoverEnvironmentManagerMetadata(t *testing.T) {
 	}
 }
 
+func TestDiscoverTypeScriptEnvironmentManagerAndRuntime(t *testing.T) {
+	for _, tc := range []struct {
+		lock, manager string
+	}{
+		{"package-lock.json", "npm"},
+		{"pnpm-lock.yaml", "pnpm"},
+		{"bun.lock", "bun"},
+		{"bun.lockb", "bun"},
+	} {
+		t.Run(tc.manager+"-"+tc.lock, func(t *testing.T) {
+			root := t.TempDir()
+			bin := filepath.Join(root, "bin")
+			node := filepath.Join(bin, "node")
+			bun := filepath.Join(bin, "bun")
+			writeEnvironmentFile(t, node, "node runtime")
+			writeEnvironmentFile(t, bun, "bun runtime")
+			writeEnvironmentFile(t, filepath.Join(root, "package.json"), `{"packageManager":"`+tc.manager+`@99.0.0","engines":{"node":">=22"}}`)
+			writeEnvironmentFile(t, filepath.Join(root, "tsconfig.json"), `{}`)
+			writeEnvironmentFile(t, filepath.Join(root, tc.lock), "lock")
+			writeEnvironmentFile(t, filepath.Join(root, "node_modules", "typescript", "package.json"), `{"name":"typescript"}`)
+			source := filepath.Join(root, "src", "program.bpp")
+			plan, err := DiscoverEnvironment(EnvironmentRequest{
+				Source: source, Language: "ts", Environ: []string{"PATH=" + bin},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			canonicalNode, _ := canonicalExecutable(node, nil)
+			if plan.Language != "typescript" || plan.Manager != tc.manager || plan.RuntimeConstraint != ">=22" || plan.Executable != canonicalNode {
+				t.Fatalf("plan = %#v", plan)
+			}
+			if filepath.Base(plan.CompilerModule) != "typescript" || len(plan.Manifests) != 2 || len(plan.Locks) != 1 {
+				t.Fatalf("metadata = %#v", plan)
+			}
+			bunPlan, err := DiscoverEnvironment(EnvironmentRequest{
+				Source: source, Language: "typescript", Environ: []string{"PATH=" + bin, "BASHPP_TYPESCRIPT_RUNTIME=bun"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			canonicalBun, _ := canonicalExecutable(bun, nil)
+			if bunPlan.Executable != canonicalBun || bunPlan.Manager != tc.manager {
+				t.Fatalf("runtime and manager were coupled: %#v", bunPlan)
+			}
+		})
+	}
+}
+
+func TestDiscoverTypeScriptEnvironmentOverrides(t *testing.T) {
+	root := t.TempDir()
+	custom := filepath.Join(root, "custom-node")
+	writeEnvironmentFile(t, custom, "runtime")
+	writeEnvironmentFile(t, filepath.Join(root, "package.json"), `{}`)
+	plan, err := DiscoverEnvironment(EnvironmentRequest{Source: filepath.Join(root, "program.bpp"), Language: "typescript", Environ: []string{
+		"PATH=", "BASHPP_NODE=" + custom, "BASHPP_TYPESCRIPT_MODULE=/compiler/typescript.js",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalCustom, _ := canonicalExecutable(custom, nil)
+	if plan.Executable != canonicalCustom || plan.CompilerModule != "/compiler/typescript.js" {
+		t.Fatalf("plan = %#v", plan)
+	}
+	if _, err := DiscoverEnvironment(EnvironmentRequest{Source: filepath.Join(root, "program.bpp"), Language: "typescript", Environ: []string{"PATH=", "BASHPP_TYPESCRIPT_RUNTIME=bun"}}); err == nil || !strings.Contains(err.Error(), "bun runtime unavailable") {
+		t.Fatalf("missing Bun error = %v", err)
+	}
+}
+
+func TestDiscoverTypeScriptWorkspaceMetadata(t *testing.T) {
+	root := t.TempDir()
+	project := filepath.Join(root, "packages", "app")
+	bin := filepath.Join(root, "bin")
+	writeEnvironmentFile(t, filepath.Join(bin, "node"), "runtime")
+	writeEnvironmentFile(t, filepath.Join(root, "package.json"), `{"workspaces":["packages/*"],"packageManager":"pnpm@10"}`)
+	writeEnvironmentFile(t, filepath.Join(root, "pnpm-lock.yaml"), "lock")
+	writeEnvironmentFile(t, filepath.Join(project, "package.json"), `{"name":"app"}`)
+	writeEnvironmentFile(t, filepath.Join(project, "tsconfig.json"), `{}`)
+	writeEnvironmentFile(t, filepath.Join(root, "node_modules", "typescript", "package.json"), `{"name":"typescript"}`)
+	plan, err := DiscoverEnvironment(EnvironmentRequest{Source: filepath.Join(project, "src", "program.bpp"), Language: "ts", Environ: []string{"PATH=" + bin}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalRoot, _ := filepath.EvalSymlinks(root)
+	if plan.Root != canonicalRoot || plan.Manager != "pnpm" || len(plan.Manifests) != 3 || len(plan.Locks) != 1 {
+		t.Fatalf("workspace plan = %#v", plan)
+	}
+	if filepath.Dir(plan.CompilerModule) != filepath.Join(canonicalRoot, "node_modules") {
+		t.Fatalf("compiler = %q", plan.CompilerModule)
+	}
+}
+
+func TestDiscoverTypeScriptWorkspacePackageManagerFallback(t *testing.T) {
+	root := t.TempDir()
+	project := filepath.Join(root, "packages", "app")
+	bin := filepath.Join(root, "bin")
+	writeEnvironmentFile(t, filepath.Join(bin, "node"), "runtime")
+	writeEnvironmentFile(t, filepath.Join(root, "package.json"), `{"workspaces":["packages/*"],"packageManager":"pnpm@10"}`)
+	writeEnvironmentFile(t, filepath.Join(project, "package.json"), `{"name":"app"}`)
+	plan, err := DiscoverEnvironment(EnvironmentRequest{Source: filepath.Join(project, "src", "program.bpp"), Language: "ts", Environ: []string{"PATH=" + bin}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Manager != "pnpm" {
+		t.Fatalf("manager = %q, want pnpm", plan.Manager)
+	}
+}
+
 func TestDiscoverEnvironmentRejectsConflictingManagerLocks(t *testing.T) {
 	root := t.TempDir()
 	pythonFixture(t, root)

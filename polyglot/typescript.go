@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -15,12 +16,28 @@ import (
 // CompilerModule may be a Node module name or an absolute typescript.js path.
 type TypeScript struct {
 	NodeCommand    string
+	BunCommand     string
+	Runtime        string
 	CompilerModule string
+	Environment    *EnvironmentPlan
 }
 
 func (t TypeScript) executable() string {
+	if t.Environment != nil && t.Environment.Executable != "" {
+		return t.Environment.Executable
+	}
 	if t.NodeCommand != "" {
 		return t.NodeCommand
+	}
+	if t.BunCommand != "" {
+		return t.BunCommand
+	}
+	runtime := t.runtimeName()
+	if runtime == "bun" {
+		if command := os.Getenv("BASHPP_BUN"); command != "" {
+			return command
+		}
+		return "bun"
 	}
 	if command := os.Getenv("BASHPP_NODE"); command != "" {
 		return command
@@ -28,7 +45,29 @@ func (t TypeScript) executable() string {
 	return "node"
 }
 
+func (t TypeScript) runtimeName() string {
+	if t.Environment != nil && t.Environment.Runtime != "" {
+		return t.Environment.Runtime
+	}
+	if t.Runtime != "" {
+		return strings.ToLower(t.Runtime)
+	}
+	if t.BunCommand != "" {
+		return "bun"
+	}
+	if t.NodeCommand != "" {
+		return "node"
+	}
+	if runtime := strings.ToLower(os.Getenv("BASHPP_TYPESCRIPT_RUNTIME")); runtime != "" {
+		return runtime
+	}
+	return "node"
+}
+
 func (t TypeScript) compilerModule() string {
+	if t.Environment != nil && t.Environment.CompilerModule != "" {
+		return t.Environment.CompilerModule
+	}
 	if t.CompilerModule != "" {
 		return t.CompilerModule
 	}
@@ -43,7 +82,22 @@ func (t TypeScript) arguments(Plan) []string {
 	return []string{"-e", typeScriptWorker}
 }
 func (t TypeScript) loadRequest(plan Plan) map[string]any {
-	return map[string]any{"id": 0, "op": "load", "artifact": plan.Artifact}
+	dir := ""
+	if t.Environment != nil {
+		dir = t.Environment.SourceDir
+		if dir == "" {
+			dir = t.Environment.Dir
+		}
+	}
+	return map[string]any{"id": 0, "op": "load", "artifact": plan.Artifact, "dir": dir}
+}
+
+func (t TypeScript) configure(cmd *exec.Cmd) {
+	if t.Environment == nil {
+		return
+	}
+	cmd.Dir = t.Environment.Dir
+	cmd.Env = append([]string(nil), t.Environment.Env...)
 }
 
 func (t TypeScript) Analyze(ctx context.Context, source string) ([]Export, error) {
@@ -52,7 +106,16 @@ func (t TypeScript) Analyze(ctx context.Context, source string) ([]Export, error
 }
 
 func (t TypeScript) AnalyzeArtifact(ctx context.Context, source string) ([]Export, string, error) {
-	cmd := exec.CommandContext(ctx, t.executable(), "-e", typeScriptAnalyze, t.compilerModule())
+	input := "<bash++ typescript>.ts"
+	if t.Environment != nil && t.Environment.Dir != "" {
+		dir := t.Environment.SourceDir
+		if dir == "" {
+			dir = t.Environment.Dir
+		}
+		input = filepath.Join(dir, ".bashpp-fence.ts")
+	}
+	cmd := exec.CommandContext(ctx, t.executable(), "-e", typeScriptAnalyze, t.compilerModule(), input)
+	t.configure(cmd)
 	cmd.Stdin = strings.NewReader(source)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
@@ -81,7 +144,12 @@ func (t TypeScript) AnalyzeArtifact(ctx context.Context, source string) ([]Expor
 		return nil, "", fmt.Errorf("invalid TypeScript analyzer response: %w", err)
 	}
 	if response.V7 {
-		cmd = exec.CommandContext(ctx, t.executable(), "--input-type=module", "-e", typeScriptAnalyze7, response.Root)
+		args := []string{"--input-type=module", "-e", typeScriptAnalyze7, response.Root, filepath.Dir(input)}
+		if t.runtimeName() == "bun" {
+			args = args[1:]
+		}
+		cmd = exec.CommandContext(ctx, t.executable(), args...)
+		t.configure(cmd)
 		cmd.Stdin = strings.NewReader(source)
 		stdout.Reset()
 		stderr.Reset()
@@ -108,14 +176,22 @@ const fs = require('fs');
 const cp = require('child_process');
 const path = require('path');
 const requested = process.argv[1] || 'typescript';
+const input = process.argv[2] || '<bash++ typescript>.ts';
 function loadCompiler(name) {
   try {
     let entry, packageFile;
-    if (path.isAbsolute(name) && fs.statSync(name).isDirectory()) {
-      packageFile = path.join(name, 'package.json');
-      const manifest = require(packageFile);
-      entry = path.join(name, manifest.main || 'lib/version.cjs');
-    } else {
+	if (path.isAbsolute(name)) {
+	  if (fs.statSync(name).isDirectory()) {
+	    packageFile = path.join(name, 'package.json');
+	    const manifest = require(packageFile);
+	    entry = path.join(name, manifest.main || 'lib/version.cjs');
+	  } else {
+	    entry = name;
+	    let dir = path.dirname(name);
+	    while (dir !== path.dirname(dir) && !fs.existsSync(path.join(dir, 'package.json'))) dir = path.dirname(dir);
+	    packageFile = path.join(dir, 'package.json');
+	  }
+	} else {
       entry = require.resolve(name);
       packageFile = require.resolve(name + '/package.json');
     }
@@ -144,7 +220,6 @@ try {
   if (typeof ts.createProgram !== 'function') {
     process.stdout.write(JSON.stringify({v7:true,root:loaded.root})); process.exit(0);
   }
-  const input = '<bash++ typescript>.ts';
   const original = fs.readFileSync(0, 'utf8');
   const parsed = ts.createSourceFile(input, original, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   const names = [], namesToExport = [];
@@ -157,15 +232,16 @@ try {
       }
       continue;
     }
-    if (ts.isInterfaceDeclaration(node) || ts.isTypeAliasDeclaration(node) ||
-        ts.isEnumDeclaration(node) || ts.isEmptyStatement(node)) continue;
-    fail('<bash++ typescript>:' + (parsed.getLineAndCharacterOfPosition(node.getStart(parsed)).line + 1) +
-      ': only functions, interfaces, type aliases, and enums are allowed at module scope');
+    // Imports and ordinary module initialization are part of the module. Only
+    // function declarations become Bash++ callables.
   }
   const source = original + (namesToExport.length ? '\nexport { ' + namesToExport.join(', ') + ' };\n' : '');
-  const options = {target:ts.ScriptTarget.ES2022, module:ts.ModuleKind.CommonJS,
-    moduleResolution:ts.ModuleResolutionKind.Node10, ignoreDeprecations:'6.0', skipLibCheck:true,
+	  const modern = ts.ModuleKind.ESNext !== undefined && ts.ModuleResolutionKind.Bundler !== undefined;
+	  const options = {target:ts.ScriptTarget.ES2022,
+	    module:modern ? ts.ModuleKind.ESNext : ts.ModuleKind.CommonJS,
+	    moduleResolution:modern ? ts.ModuleResolutionKind.Bundler : ts.ModuleResolutionKind.Node10, skipLibCheck:true,
     noEmitOnError:true, strict:false, sourceMap:false, declaration:false};
+  if (Number.parseInt(ts.versionMajorMinor || ts.version || '0', 10) >= 6) options.ignoreDeprecations = '6.0';
   const host = ts.createCompilerHost(options);
   const baseGet = host.getSourceFile.bind(host);
   host.getSourceFile = (file, version, onError, fresh) =>
@@ -173,11 +249,14 @@ try {
   host.fileExists = ((base) => file => file === input || base(file))(host.fileExists.bind(host));
   host.readFile = ((base) => file => file === input ? source : base(file))(host.readFile.bind(host));
   let artifact = '';
-  host.writeFile = (file, text) => { if (file.endsWith('.js')) artifact = text; };
+  host.writeFile = (file, text) => {
+	    const output = path.basename(input).replace(/\.[cm]?tsx?$/, '.js');
+	    if (path.basename(file) === output) artifact = text;
+  };
   const program = ts.createProgram([input], options, host);
   const sourceFile = program.getSourceFile(input);
   const checker = program.getTypeChecker();
-  const diagnostics = ts.getPreEmitDiagnostics(program);
+	  const diagnostics = ts.getPreEmitDiagnostics(program).filter(d => !d.file || d.file.fileName === input);
   if (diagnostics.length) fail(diagnostics.map(d => diagnostic(ts, d)).join('\n'));
   const exports = [];
   const mapType = type => {
@@ -201,14 +280,21 @@ try {
     }
     let results = [];
     if (sig) {
-      const mapped = mapType(checker.getReturnTypeOfSignature(sig));
+      const returned = checker.getReturnTypeOfSignature(sig);
+      const awaited = checker.getPromisedTypeOfPromise ? checker.getPromisedTypeOfPromise(returned) : undefined;
+      const mapped = mapType(awaited || returned);
       if (!mapped) dynamic = true;
       else if (mapped !== 'nil') results = [mapped];
     }
     exports.push({name:node.name.text,signature:{params,results,dynamic}});
   }
-  const emitted = program.emit();
-  if (emitted.emitSkipped || !artifact) fail('TypeScript compiler did not emit the module');
+	  if (modern) artifact = ts.transpileModule(source, {compilerOptions:{
+	    target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext,sourceMap:false,declaration:false
+	  },fileName:input}).outputText;
+	  else {
+	    const emitted = program.emit();
+	    if (emitted.emitSkipped || !artifact) fail('TypeScript compiler did not emit the module');
+	  }
   process.stdout.write(JSON.stringify({ok:true,exports,artifact}));
 } catch (error) {
   process.stderr.write(String(error && error.stack || error));
@@ -223,6 +309,7 @@ import path from 'node:path';
 import cp from 'node:child_process';
 import {pathToFileURL} from 'node:url';
 const root = process.argv[1];
+const projectDir = process.argv[2] || process.cwd();
 const apiModule = await import(pathToFileURL(path.join(root, 'dist/api/sync/api.js')));
 const ast = await import(pathToFileURL(path.join(root, 'dist/ast/is.js')));
 const original = fs.readFileSync(0, 'utf8');
@@ -235,8 +322,17 @@ function location(sourceFile, node) {
   return '<bash++ typescript>:' + (p.line + 1) + ':' + (p.character + 1);
 }
 try {
-  fs.writeFileSync(path.join(dir, 'tsconfig.json'), JSON.stringify({compilerOptions:{
-    target:'es2022',module:'commonjs',outDir:'dist',strict:false,skipLibCheck:true,
+	let packageDir = projectDir, modulesDir = projectDir;
+	while (packageDir !== path.dirname(packageDir) && !fs.existsSync(path.join(packageDir, 'package.json'))) packageDir = path.dirname(packageDir);
+	while (modulesDir !== path.dirname(modulesDir) && !fs.existsSync(path.join(modulesDir, 'node_modules'))) modulesDir = path.dirname(modulesDir);
+	if (fs.existsSync(path.join(packageDir, 'package.json'))) {
+	  fs.copyFileSync(path.join(packageDir, 'package.json'), path.join(dir, 'package.json'));
+	  const sourceDir = path.join(packageDir, 'src');
+	  if (fs.existsSync(sourceDir)) fs.symlinkSync(sourceDir, path.join(dir, 'src'), 'junction');
+	}
+	if (fs.existsSync(path.join(modulesDir, 'node_modules'))) fs.symlinkSync(path.join(modulesDir, 'node_modules'), path.join(dir, 'node_modules'), 'junction');
+	  fs.writeFileSync(path.join(dir, 'tsconfig.json'), JSON.stringify({compilerOptions:{
+	    target:'es2022',module:'esnext',moduleResolution:'bundler',outDir:'dist',strict:false,skipLibCheck:true,
     noEmitOnError:true,sourceMap:false,declaration:false},include:['module.ts']}));
   fs.writeFileSync(input, original);
   api = new apiModule.API({cwd:dir});
@@ -254,9 +350,7 @@ try {
       }
       continue;
     }
-    if (ast.isInterfaceDeclaration(node) || ast.isTypeAliasDeclaration(node) ||
-        ast.isEnumDeclaration(node) || ast.isEmptyStatement(node)) continue;
-    fail(location(sourceFile,node) + ': only functions, interfaces, type aliases, and enums are allowed at module scope');
+    // Imports and ordinary module initialization remain in the emitted module.
   }
   if (namesToExport.length) {
     fs.writeFileSync(input, original + '\nexport { ' + namesToExport.join(', ') + ' };\n');
@@ -295,7 +389,9 @@ try {
       params.push(mapped || 'any'); dynamic ||= !mapped || mapped === 'any';
     }
     if (sig) {
-      const mapped = mapType(checker.getReturnTypeOfSignature(sig));
+      const returned = checker.getReturnTypeOfSignature(sig);
+      const awaited = checker.getPromisedTypeOfPromise ? checker.getPromisedTypeOfPromise(returned) : undefined;
+      const mapped = mapType(awaited || returned);
       if (!mapped) dynamic = true; else if (mapped !== 'nil') results = [mapped];
     }
     exports.push({name:node.name.text,signature:{params,results,dynamic}});
@@ -304,7 +400,7 @@ try {
   const tsc = path.join(root, 'bin/tsc');
   const emitted = cp.spawnSync(process.execPath,[tsc,'-p',path.join(dir,'tsconfig.json'),'--pretty','false'],{encoding:'utf8'});
   if (emitted.status !== 0) fail((emitted.stdout || emitted.stderr || 'TypeScript 7 emit failed').trim());
-  const artifact = fs.readFileSync(path.join(dir,'dist/module.js'),'utf8');
+	  const artifact = fs.readFileSync(path.join(dir,'dist/module.js'),'utf8');
   process.stdout.write(JSON.stringify({ok:true,exports,artifact}));
 } finally {
   if (api) api.close();
@@ -314,9 +410,20 @@ try {
 
 const typeScriptWorker = `
 const readline = require('readline');
-const vm = require('vm');
+const fs = require('fs');
+const path = require('path');
+const {pathToFileURL} = require('url');
 const util = require('util');
+let protocolWrite;
+try {
+  fs.fstatSync(3);
+  const protocol = fs.createWriteStream(null, {fd:3, autoClose:false});
+  protocolWrite = text => protocol.write(text);
+} catch (_) {
+  protocolWrite = process.stdout.write.bind(process.stdout);
+}
 let moduleExports = Object.create(null), currentOut = '', currentErr = '';
+let moduleDir = '';
 const consoleBridge = {
   log: (...args) => { currentOut += util.format(...args) + '\n'; },
   info: (...args) => { currentOut += util.format(...args) + '\n'; },
@@ -335,33 +442,73 @@ function enc(v) {
   if (typeof v === 'bigint') return {$bigint:v.toString()};
   if (v instanceof Uint8Array) return {$bytes:Buffer.from(v).toString('base64')};
   if (Array.isArray(v)) return v.map(enc);
-  if (v && Object.prototype.toString.call(v) === '[object Object]') return Object.fromEntries(Object.entries(v).map(([k,x]) => [k,enc(x)]));
+  if (v && Object.prototype.toString.call(v) === '[object Object]' &&
+      (Object.getPrototypeOf(v) === Object.prototype || Object.getPrototypeOf(v) === null)) {
+    return Object.fromEntries(Object.entries(v).map(([k,x]) => [k,enc(x)]));
+  }
   if (typeof v === 'number' && !Number.isFinite(v)) throw new TypeError('unsupported non-finite number result');
   if (typeof v === 'boolean' || typeof v === 'number' || typeof v === 'string') return v;
   throw new TypeError('unsupported foreign result type: ' + typeof v);
 }
 const rl = readline.createInterface({input:process.stdin, crlfDelay:Infinity});
-rl.on('line', line => {
+function findUp(start, name) {
+  let dir = start;
+  for (;;) {
+    if (fs.existsSync(path.join(dir, name))) return dir;
+    const parent = path.dirname(dir);
+    if (parent === dir) return '';
+    dir = parent;
+  }
+}
+function linkPackageContext(sourceDir, targetDir) {
+  const packageDir = findUp(sourceDir, 'package.json');
+  if (packageDir) {
+    fs.copyFileSync(path.join(packageDir, 'package.json'), path.join(targetDir, 'package.json'));
+    for (const entry of fs.readdirSync(packageDir, {withFileTypes:true})) {
+      if (entry.name === 'package.json' || entry.name === 'node_modules') continue;
+      const target = path.join(targetDir, entry.name);
+      if (fs.existsSync(target)) continue;
+      const source = path.join(packageDir, entry.name);
+      if (entry.isDirectory()) fs.symlinkSync(source, target, 'junction');
+      else if (entry.isFile()) fs.copyFileSync(source, target);
+    }
+  }
+  const modulesDir = findUp(sourceDir, 'node_modules');
+  if (modulesDir) fs.symlinkSync(path.join(modulesDir, 'node_modules'), path.join(targetDir, 'node_modules'), 'junction');
+}
+rl.on('line', async line => {
   let req, response;
   try {
     req = JSON.parse(line); const id = req.id || 0;
     if (req.op === 'load') {
-      const context = vm.createContext({console:consoleBridge, Uint8Array, TextEncoder, TextDecoder});
-      const module = {exports:{}};
-      const wrapper = vm.runInContext('(function(exports,module){' + req.artifact + '\n})', context, {filename:'<bash++ typescript>.js'});
-      wrapper(module.exports, module); moduleExports = module.exports;
-      response = {id,ok:true};
+      const dir = req.dir || process.cwd();
+      if (moduleDir) fs.rmSync(moduleDir, {recursive:true, force:true});
+      moduleDir = req.module_dir;
+      if (!moduleDir) throw new Error('missing TypeScript module directory');
+      linkPackageContext(dir, moduleDir);
+      const filename = path.join(moduleDir, 'module.mjs');
+      fs.writeFileSync(filename, req.artifact);
+      const priorConsole = globalThis.console;
+      globalThis.console = consoleBridge;
+      try {
+        moduleExports = await import(pathToFileURL(filename).href + '?v=' + Date.now());
+        response = {id,ok:true,stdout:currentOut,stderr:currentErr};
+      } finally { globalThis.console = priorConsole; }
     } else if (req.op === 'call') {
       currentOut = ''; currentErr = '';
       const fn = moduleExports[req.name];
       if (typeof fn !== 'function') throw new TypeError('unknown TypeScript export ' + req.name);
-      const value = fn(...dec(req.args || []));
-      if (value && typeof value.then === 'function') throw new TypeError('async TypeScript results are not supported');
+      const priorConsole = globalThis.console;
+      globalThis.console = consoleBridge;
+      let value;
+      try { value = await fn(...dec(req.args || [])); }
+      finally { globalThis.console = priorConsole; }
       response = {id,ok:true,result:enc(value),stdout:currentOut,stderr:currentErr};
     } else throw new Error('unknown operation');
   } catch (error) {
     response = {id:req && req.id || 0,ok:false,error:String(error && error.stack || error),stdout:currentOut,stderr:currentErr};
   }
-  process.stdout.write(JSON.stringify(response) + '\n');
+	  protocolWrite('\x1eBASHPP' + JSON.stringify(response) + '\n');
 });
+process.on('exit', () => { if (moduleDir) fs.rmSync(moduleDir, {recursive:true, force:true}); });
 `

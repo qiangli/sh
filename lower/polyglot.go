@@ -96,22 +96,28 @@ func (e *emitter) prepareForeign(ctx context.Context, file *syntax.File) error {
 		reserved[alias] = "Python import"
 	}
 	pythonRuntime := polyglot.Python{}
+	typeScriptRuntime := polyglot.TypeScript{}
 	for _, block := range blocks {
-		if polyglot.CanonicalLanguage(block.Language) == "python" {
-			environment, err := polyglot.DiscoverEnvironment(polyglot.EnvironmentRequest{Source: source, Language: "python"})
+		language := polyglot.CanonicalLanguage(block.Language)
+		if language == "python" || language == "typescript" {
+			environment, err := polyglot.DiscoverEnvironment(polyglot.EnvironmentRequest{Source: source, Language: language})
 			if err != nil {
 				return e.fail(first, CodeUnsupported, err.Error())
 			}
-			e.foreignPythonEnv = &environment
-			pythonRuntime.Environment = &environment
-			break
+			if language == "python" {
+				e.foreignPythonEnv = &environment
+				pythonRuntime.Environment = &environment
+			} else {
+				e.foreignTypeScriptEnv = &environment
+				typeScriptRuntime.Environment = &environment
+			}
 		}
 	}
 	var plans []polyglot.Plan
 	if len(blocks) > 0 {
 		var err error
 		plans, err = polyglot.Prepare(ctx, blocks, map[string]polyglot.Analyzer{
-			"python": pythonRuntime, "typescript": polyglot.TypeScript{},
+			"python": pythonRuntime, "typescript": typeScriptRuntime,
 		})
 		if err != nil {
 			return e.fail(first, CodeUnsupported, err.Error())
@@ -278,7 +284,7 @@ func (e *emitter) foreignDeclarations() string {
 		module := fmt.Sprintf("%sforeign%d", e.prefix, i)
 		runtime := fmt.Sprintf("%spolyglot.Python{Environment:%s}", e.prefix, e.foreignEnvironment())
 		if plan.Language == "typescript" {
-			runtime = fmt.Sprintf("%spolyglot.TypeScript{}", e.prefix)
+			runtime = fmt.Sprintf("%spolyglot.TypeScript{Environment:%s}", e.prefix, e.environmentLiteral(e.foreignTypeScriptEnv))
 		}
 		fmt.Fprintf(&out, "var %s = %spolyglot.Start(%spolyglot.Plan{ID:%s,Language:%s,Alias:%s,Source:%s,Artifact:%s,Exports:%s}, %s)\n", module, e.prefix, e.prefix, strconv.Quote(plan.ID), strconv.Quote(plan.Language), strconv.Quote(plan.Alias), strconv.Quote(plan.Source), strconv.Quote(plan.Artifact), e.foreignExports(plan.Exports), runtime)
 		if plan.Alias != "" {
@@ -305,8 +311,8 @@ func (e *emitter) environmentLiteral(p *polyglot.EnvironmentPlan) string {
 	if p == nil {
 		return "nil"
 	}
-	return fmt.Sprintf("&%spolyglot.EnvironmentPlan{Language:%s,Name:%s,Root:%s,Dir:%s,Executable:%s,Manager:%s,RuntimeConstraint:%s,Manifests:%#v,Locks:%#v,PythonPath:%#v,Env:%#v,Explanation:%#v,ResolutionFiles:%#v,Fingerprint:%s}",
-		e.prefix, strconv.Quote(p.Language), strconv.Quote(p.Name), strconv.Quote(p.Root), strconv.Quote(p.Dir), strconv.Quote(p.Executable), strconv.Quote(p.Manager), strconv.Quote(p.RuntimeConstraint), p.Manifests, p.Locks, p.PythonPath, p.Env, p.Explanation, p.ResolutionFiles, strconv.Quote(p.Fingerprint))
+	return fmt.Sprintf("&%spolyglot.EnvironmentPlan{Language:%s,Name:%s,Root:%s,Dir:%s,SourceDir:%s,Executable:%s,Manager:%s,RuntimeConstraint:%s,Runtime:%s,CompilerModule:%s,Manifests:%#v,Locks:%#v,PythonPath:%#v,Env:%#v,Explanation:%#v,ResolutionFiles:%#v,Fingerprint:%s}",
+		e.prefix, strconv.Quote(p.Language), strconv.Quote(p.Name), strconv.Quote(p.Root), strconv.Quote(p.Dir), strconv.Quote(p.SourceDir), strconv.Quote(p.Executable), strconv.Quote(p.Manager), strconv.Quote(p.RuntimeConstraint), strconv.Quote(p.Runtime), strconv.Quote(p.CompilerModule), p.Manifests, p.Locks, p.PythonPath, p.Env, p.Explanation, p.ResolutionFiles, strconv.Quote(p.Fingerprint))
 }
 
 func (e *emitter) foreignExports(exports []polyglot.Export) string {
