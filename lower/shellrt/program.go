@@ -71,6 +71,13 @@ type Program struct {
 	// owner marks the program whose Run revokes the channel scope. A task
 	// entry is not an owner: it must not close channels its siblings still use.
 	owner bool
+
+	// callable and caller are the callable this region belongs to and the
+	// one it was entered from, as Enter records them; both are empty at the
+	// top level. They exist for the decorator context's Caller, which the
+	// engine derives from its call stack.
+	callable string
+	caller   string
 }
 
 // sequential is the per-execution bookkeeping shared by Enter and Block and
@@ -141,7 +148,19 @@ func (p *Program) Enter(site Site, marked bool) (*Program, error) {
 	if err != nil {
 		return nil, err
 	}
-	return p.derive(frame), nil
+	entered := p.derive(frame)
+	entered.callable, entered.caller = site.Name, p.callable
+	return entered, nil
+}
+
+// Caller is the callable the current region was entered from, or "main" for
+// a region the top level reached directly; it is the engine's spelling of the
+// decorator context's Caller.
+func (p *Program) Caller() string {
+	if p.caller == "" {
+		return "main"
+	}
+	return p.caller
 }
 
 // Block returns the program for the statements of an explicit agentic block.

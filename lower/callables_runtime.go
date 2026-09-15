@@ -30,6 +30,10 @@ func (e *emitter) needsExecution(file *syntax.File) {
 		}
 		return true
 	})
+	// A decorated callable lowers as private entry plus public wrapper, the
+	// same shape a marked one takes, and a decorator body reaches the
+	// runtime's Call; both are execution-mode units.
+	e.execution = e.execution || usesPredeclaredCall(file)
 	if e.execution {
 		e.bridge = true
 	}
@@ -55,6 +59,10 @@ func (e *emitter) privateSignature(signature string) string {
 	return "(" + parameters + signature[1:]
 }
 func (e *emitter) callSite(n syntax.Node, name string) string {
+	if e.predeclaredCall && n != nil && n.Pos().IsValid() {
+		location := fmt.Sprintf("%s:%d", e.sourceName, n.Pos().Line())
+		return fmt.Sprintf("%srt.Site{Name:%s, CallSite:%s}", e.prefix, strconv.Quote(name), strconv.Quote(location))
+	}
 	return fmt.Sprintf("%srt.Site{Name:%s}", e.prefix, strconv.Quote(name))
 }
 func (e *emitter) resultStorage(fields []*syntax.BashPPField) (declarations, values string, err error) {
@@ -92,7 +100,11 @@ func (e *emitter) resultStorage(fields []*syntax.BashPPField) (declarations, val
 	}
 	return declarations, strings.Join(namesList, ","), nil
 }
-func (e *emitter) programEntry(name string, marked bool, results []*syntax.BashPPField) (string, error) {
+
+// programEntry is the private entry's prolog. A decorated entry settles its
+// named results itself, from the chain's outcome, so the deferred
+// named-result observation is left out for it.
+func (e *emitter) programEntry(name string, marked bool, results []*syntax.BashPPField, decorated bool) (string, error) {
 	storage, values, err := e.resultStorage(results)
 	if err != nil {
 		return "", err
@@ -115,7 +127,7 @@ func (e *emitter) programEntry(name string, marked bool, results []*syntax.BashP
 			index++
 		}
 	}
-	if len(named) > 0 {
+	if len(named) > 0 && !decorated {
 		settle += "defer func(){if " + p + ".ShortFailureMark()==" + mark + " {" + strings.Join(named, ";") + "}}()\n"
 	}
 	return e.prefix + "results := " + p + ".Results\n_ = " + e.prefix + "results\n" + p + " = " + p + ".WithResults(nil)\n" + site + ".Name = " + strconv.Quote(name) + "\n" + child + ", " + failure + " := " + p + ".Enter(" + site + ", " + strconv.FormatBool(marked) + ")\nif " + failure + " != nil { " + p + ".Fail(" + failure + ")\n" + storage + "return " + values + "\n}\n" + p + " = " + child + "\n" + settle, nil
@@ -124,11 +136,17 @@ func (e *emitter) runtimeFunction(f *syntax.BashPPFuncDecl, signature, body, gen
 	if f.Receiver != nil {
 		return e.runtimeMethodFunction(f, signature, body, generics)
 	}
-	entry, err := e.programEntry(f.Name.Value, f.Agentic != nil, f.Results)
+	entry, err := e.programEntry(f.Name.Value, f.Agentic != nil, f.Results, len(f.Decorators) > 0)
 	if err != nil {
 		return "", err
 	}
 	entry += e.bindResultArguments(f.Params)
+	decorators := ""
+	if len(f.Decorators) > 0 {
+		if body, decorators, err = e.decoratedBody(f, signature, body); err != nil {
+			return "", err
+		}
+	}
 	private := e.goName(f.Name.Value)
 	var args []string
 	for _, field := range f.Params {
@@ -202,7 +220,7 @@ func (e *emitter) runtimeFunction(f *syntax.BashPPFuncDecl, signature, body, gen
 		invocation = name + " = " + p + "\n" + invocation
 	}
 	wrapper := "func " + public + generics + publicSignature + " {\n" + p + ",err := " + e.prefix + "rt.NewProgram()\nif err != nil {panic(err)}\n" + storage + captured + resultAllocation + "err = " + p + ".Run(func(" + p + " *" + e.prefix + "rt.Program){" + invocation + "})\nif err != nil {panic(err)}\n" + resultValidation + adapters + "return " + returned + "\n}\n"
-	return e.mark(f) + "func " + private + generics + e.privateSignature(signature) + " {\n" + entry + body + "}\n" + wrapper, nil
+	return e.mark(f) + "func " + private + generics + e.privateSignature(signature) + " {\n" + entry + body + "}\n" + wrapper + decorators, nil
 }
 func (e *emitter) programMain(body string) string {
 	if e.options.Entry != "" {

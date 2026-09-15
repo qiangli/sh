@@ -91,6 +91,9 @@ type Site struct {
 	Name string
 	File string
 	Line int
+	// CallSite carries source metadata for decorators independently of the
+	// diagnostic location, so enabling decorators does not change errors.
+	CallSite string
 }
 
 // prefix reproduces the engine's diagnostic prefix. With a caller statement
