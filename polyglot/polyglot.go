@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -194,16 +195,31 @@ func (p Python) configure(cmd *exec.Cmd) {
 }
 
 type Module struct {
-	plan    Plan
-	runtime Runtime
-	mu      sync.Mutex
-	cmd     *exec.Cmd
-	in      io.WriteCloser
-	out     *bufio.Reader
-	nextID  uint64
+	plan       Plan
+	importPlan *ImportPlan
+	runtime    Runtime
+	mu         sync.Mutex
+	cmd        *exec.Cmd
+	in         io.WriteCloser
+	out        *bufio.Reader
+	outFile    io.ReadCloser
+	nextID     uint64
+	generation uint64
+	pendingOut string
+	pendingErr string
 }
 
 func Start(plan Plan, runtime Runtime) *Module { return &Module{plan: plan, runtime: runtime} }
+
+// StartImport creates a lazy direct Python import. The process and module are
+// not loaded until the first operation.
+func StartImport(plan ImportPlan) *Module {
+	copy := plan.Clone()
+	return &Module{
+		plan:       Plan{ID: plan.ID, Language: plan.Language, Alias: plan.Alias},
+		importPlan: &copy, runtime: Python{Environment: &copy.Environment},
+	}
+}
 
 func (m *Module) Plan() Plan { return m.plan }
 
@@ -211,7 +227,7 @@ func (m *Module) ensure(ctx context.Context) error {
 	if m.cmd != nil {
 		return nil
 	}
-	cmd := exec.CommandContext(ctx, m.runtime.executable(), m.runtime.arguments(m.plan)...)
+	cmd := exec.Command(m.runtime.executable(), m.runtime.arguments(m.plan)...)
 	if configured, ok := m.runtime.(configuredRuntime); ok {
 		configured.configure(cmd)
 	}
@@ -219,23 +235,45 @@ func (m *Module) ensure(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	out, err := cmd.StdoutPipe()
-	if err != nil {
-		in.Close()
-		return err
+	var protocolRead io.ReadCloser
+	var protocolWrite *os.File
+	if _, python := m.runtime.(Python); python {
+		protocolRead, protocolWrite, err = os.Pipe()
+		if err != nil {
+			in.Close()
+			return err
+		}
+		cmd.ExtraFiles = []*os.File{protocolWrite}
+		cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
+	} else {
+		protocolRead, err = cmd.StdoutPipe()
+		if err != nil {
+			in.Close()
+			return err
+		}
+		cmd.Stderr = io.Discard
 	}
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
 	if err := cmd.Start(); err != nil {
+		_ = protocolRead.Close()
+		if protocolWrite != nil {
+			_ = protocolWrite.Close()
+		}
 		if errors.Is(err, exec.ErrNotFound) || errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("%s runtime unavailable: %w", m.runtime.name(), err)
 		}
 		return err
 	}
-	m.cmd, m.in, m.out = cmd, in, bufio.NewReader(out)
+	if protocolWrite != nil {
+		_ = protocolWrite.Close()
+	}
+	m.generation++
+	m.cmd, m.in, m.out, m.outFile = cmd, in, bufio.NewReader(protocolRead), protocolRead
 	load := m.runtime.loadRequest(m.plan)
+	if m.importPlan != nil {
+		load = map[string]any{"id": 0, "op": "import", "module": m.importPlan.Module}
+	}
 	var response workerResponse
-	if err := m.exchange(load, &response); err != nil {
+	if err := m.exchangeContext(ctx, load, &response); err != nil {
 		m.kill()
 		return fmt.Errorf("load %s module: %w", m.runtime.name(), err)
 	}
@@ -247,44 +285,146 @@ func (m *Module) ensure(ctx context.Context) error {
 		m.kill()
 		return fmt.Errorf("load %s module: response ID %d does not match request ID 0", m.runtime.name(), response.ID)
 	}
+	m.pendingOut, m.pendingErr = response.Stdout, response.Stderr
 	return nil
 }
 
 func (m *Module) Call(ctx context.Context, name string, args ...any) (CallResult, error) {
+	return m.CallKeywords(ctx, name, args, nil)
+}
+
+// CallKeywords invokes a source export or direct-module attribute.
+func (m *Module) CallKeywords(ctx context.Context, name string, args []any, kwargs map[string]any) (CallResult, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if err := m.ensure(ctx); err != nil {
 		return CallResult{}, err
 	}
 	m.nextID++
-	request := map[string]any{"id": m.nextID, "op": "call", "name": name, "args": encodeValue(args)}
+	encodedArgs, err := m.encodeValue(args)
+	if err != nil {
+		return CallResult{}, err
+	}
+	encodedKwargs, err := m.encodeValue(kwargs)
+	if err != nil {
+		return CallResult{}, err
+	}
+	request := map[string]any{"id": m.nextID, "op": "call", "name": name, "args": encodedArgs, "kwargs": encodedKwargs}
+	return m.request(ctx, request, name)
+}
+
+// Handle is an opaque value owned by one worker generation.
+type Handle struct {
+	module     *Module
+	id         uint64
+	generation uint64
+	Type       string
+	Repr       string
+	Callable   bool
+}
+
+func (h *Handle) GetAttr(ctx context.Context, name string) (CallResult, error) {
+	if h == nil || h.module == nil {
+		return CallResult{}, errors.New("polyglot: stale or foreign Python handle")
+	}
+	return h.module.GetAttr(ctx, h, name)
+}
+
+func (h *Handle) Call(ctx context.Context, args []any, kwargs map[string]any) (CallResult, error) {
+	if h == nil || h.module == nil {
+		return CallResult{}, errors.New("polyglot: stale or foreign Python handle")
+	}
+	return h.module.CallHandle(ctx, h, args, kwargs)
+}
+
+func (h *Handle) CallAttr(ctx context.Context, name string, args []any, kwargs map[string]any) (CallResult, error) {
+	if h == nil || h.module == nil {
+		return CallResult{}, errors.New("polyglot: stale or foreign Python handle")
+	}
+	return h.module.CallAttr(ctx, h, name, args, kwargs)
+}
+
+func (h *Handle) Release(ctx context.Context) error {
+	if h == nil || h.module == nil {
+		return errors.New("polyglot: stale or foreign Python handle")
+	}
+	return h.module.Release(ctx, h)
+}
+
+func (m *Module) GetAttr(ctx context.Context, handle *Handle, name string) (CallResult, error) {
+	if !publicPythonAttribute(name) {
+		return CallResult{}, fmt.Errorf("Python attribute %q is private", name)
+	}
+	return m.handleRequest(ctx, handle, map[string]any{"op": "getattr", "name": name})
+}
+
+func (m *Module) CallHandle(ctx context.Context, handle *Handle, args []any, kwargs map[string]any) (CallResult, error) {
+	return m.callHandle(ctx, handle, "", args, kwargs)
+}
+
+func (m *Module) CallAttr(ctx context.Context, handle *Handle, name string, args []any, kwargs map[string]any) (CallResult, error) {
+	if !publicPythonAttribute(name) {
+		return CallResult{}, fmt.Errorf("Python attribute %q is private", name)
+	}
+	return m.callHandle(ctx, handle, name, args, kwargs)
+}
+
+func (m *Module) callHandle(ctx context.Context, handle *Handle, name string, args []any, kwargs map[string]any) (CallResult, error) {
+	encodedArgs, err := m.encodeValue(args)
+	if err != nil {
+		return CallResult{}, err
+	}
+	encodedKwargs, err := m.encodeValue(kwargs)
+	if err != nil {
+		return CallResult{}, err
+	}
+	return m.handleRequest(ctx, handle, map[string]any{"op": "call", "name": name, "args": encodedArgs, "kwargs": encodedKwargs})
+}
+
+func (m *Module) Release(ctx context.Context, handle *Handle) error {
+	_, err := m.handleRequest(ctx, handle, map[string]any{"op": "release"})
+	return err
+}
+
+func publicPythonAttribute(name string) bool {
+	return name == "__name__" || name != "" && name[0] != '_'
+}
+
+func (m *Module) handleRequest(ctx context.Context, handle *Handle, request map[string]any) (CallResult, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.ensure(ctx); err != nil {
+		return CallResult{}, err
+	}
+	if handle == nil || handle.module != m || handle.generation != m.generation {
+		return CallResult{}, errors.New("polyglot: stale or foreign Python handle")
+	}
+	m.nextID++
+	request["id"], request["handle"] = m.nextID, handle.id
+	return m.request(ctx, request, request["name"])
+}
+
+func (m *Module) request(ctx context.Context, request map[string]any, annotation any) (CallResult, error) {
 	var response workerResponse
-	done := make(chan error, 1)
-	go func() { done <- m.exchange(request, &response) }()
-	select {
-	case <-ctx.Done():
+	if err := m.exchangeContext(ctx, request, &response); err != nil {
 		m.kill()
-		<-done
-		return CallResult{}, ctx.Err()
-	case err := <-done:
-		if err != nil {
-			m.kill()
-			return CallResult{}, err
-		}
+		return CallResult{}, err
 	}
 	if response.ID != m.nextID {
 		m.kill()
 		return CallResult{}, fmt.Errorf("%s worker response ID %d does not match request ID %d", m.runtime.name(), response.ID, m.nextID)
 	}
-	result := CallResult{Stdout: response.Stdout, Stderr: response.Stderr}
+	result := CallResult{Stdout: m.pendingOut + response.Stdout, Stderr: m.pendingErr + response.Stderr}
+	m.pendingOut, m.pendingErr = "", ""
 	if !response.OK {
 		return result, errors.New(response.Error)
 	}
-	decoded, decodeErr := decodeValue(response.Result)
+	decoded, decodeErr := m.decodeValue(response.Result)
 	if decodeErr != nil {
 		return result, fmt.Errorf("decode %s result: %w", m.runtime.name(), decodeErr)
 	}
 	result.Value = decoded
+	name, _ := annotation.(string)
 	for _, export := range m.plan.Exports {
 		if export.Name != name || export.Signature.Dynamic {
 			continue
@@ -301,6 +441,19 @@ func (m *Module) Call(ctx context.Context, name string, args ...any) (CallResult
 		break
 	}
 	return result, nil
+}
+
+func (m *Module) exchangeContext(ctx context.Context, request any, response *workerResponse) error {
+	done := make(chan error, 1)
+	go func() { done <- m.exchange(request, response) }()
+	select {
+	case <-ctx.Done():
+		_ = m.kill()
+		<-done
+		return ctx.Err()
+	case err := <-done:
+		return err
+	}
 }
 
 func coerceResult(value any, want string) (any, error) {
@@ -347,7 +500,11 @@ func (m *Module) kill() error {
 	_ = m.in.Close()
 	err := m.cmd.Process.Kill()
 	_ = m.cmd.Wait()
-	m.cmd, m.in, m.out = nil, nil, nil
+	if m.outFile != nil {
+		_ = m.outFile.Close()
+	}
+	m.cmd, m.in, m.out, m.outFile = nil, nil, nil, nil
+	m.pendingOut, m.pendingErr = "", ""
 	if errors.Is(err, os.ErrProcessDone) {
 		return nil
 	}
@@ -385,37 +542,61 @@ func (m *Module) exchange(request any, response *workerResponse) error {
 	return nil
 }
 
-func encodeValue(v any) any {
+func (m *Module) encodeValue(v any) (any, error) {
 	switch x := v.(type) {
+	case *Handle:
+		if x == nil || x.module != m || x.generation != m.generation {
+			return nil, errors.New("polyglot: stale or foreign Python handle")
+		}
+		return map[string]any{"$handle": x.id}, nil
 	case []byte:
-		return map[string]any{"$bytes": base64.StdEncoding.EncodeToString(x)}
+		return map[string]any{"$bytes": base64.StdEncoding.EncodeToString(x)}, nil
 	case []any:
 		out := make([]any, len(x))
 		for i := range x {
-			out[i] = encodeValue(x[i])
+			var err error
+			out[i], err = m.encodeValue(x[i])
+			if err != nil {
+				return nil, err
+			}
 		}
-		return out
+		return out, nil
 	case map[string]any:
 		out := map[string]any{}
 		for k, v := range x {
-			out[k] = encodeValue(v)
+			var err error
+			out[k], err = m.encodeValue(v)
+			if err != nil {
+				return nil, err
+			}
 		}
-		return out
+		return out, nil
 	default:
-		return v
+		return v, nil
 	}
 }
 
-func decodeValue(v any) (any, error) {
+func (m *Module) decodeValue(v any) (any, error) {
 	switch x := v.(type) {
 	case map[string]any:
+		if raw, ok := x["$handle"].(map[string]any); ok {
+			id, err := numericID(raw["id"])
+			if err != nil {
+				return nil, err
+			}
+			h := &Handle{module: m, id: id, generation: m.generation}
+			h.Type, _ = raw["type"].(string)
+			h.Repr, _ = raw["repr"].(string)
+			h.Callable, _ = raw["callable"].(bool)
+			return h, nil
+		}
 		if raw, ok := x["$bytes"].(string); ok {
 			return base64.StdEncoding.DecodeString(raw)
 		}
 		out := map[string]any{}
 		for k, v := range x {
 			var err error
-			out[k], err = decodeValue(v)
+			out[k], err = m.decodeValue(v)
 			if err != nil {
 				return nil, err
 			}
@@ -425,7 +606,7 @@ func decodeValue(v any) (any, error) {
 		out := make([]any, len(x))
 		for i := range x {
 			var err error
-			out[i], err = decodeValue(x[i])
+			out[i], err = m.decodeValue(x[i])
 			if err != nil {
 				return nil, err
 			}
@@ -438,6 +619,17 @@ func decodeValue(v any) (any, error) {
 		return x.Float64()
 	default:
 		return v, nil
+	}
+}
+
+func numericID(v any) (uint64, error) {
+	switch n := v.(type) {
+	case json.Number:
+		return strconv.ParseUint(string(n), 10, 64)
+	case float64:
+		return uint64(n), nil
+	default:
+		return 0, fmt.Errorf("invalid Python handle id %v", v)
 	}
 }
 
@@ -477,31 +669,83 @@ print(json.dumps(out,separators=(',',':')))
 `
 
 const pythonWorker = pythonPathBootstrap + `
-import ast, base64, contextlib, io, json, traceback
+import ast, base64, importlib, json, os, sys, tempfile, traceback
+protocol=os.fdopen(3,'w',buffering=1)
 ns={'__name__':'__bashpp__'}
+module=None
+handles={}
+next_handle=0
 def dec(v):
     if isinstance(v,dict) and set(v)=={'$bytes'}: return base64.b64decode(v['$bytes'])
+    if isinstance(v,dict) and set(v)=={'$handle'}:
+        key=int(v['$handle'])
+        if key not in handles: raise ValueError('stale Python handle')
+        return handles[key]
     if isinstance(v,list): return [dec(x) for x in v]
     if isinstance(v,dict): return {k:dec(x) for k,x in v.items()}
     return v
 def enc(v):
+    global next_handle
     if isinstance(v,bytes): return {'$bytes':base64.b64encode(v).decode('ascii')}
     if isinstance(v,(list,tuple)): return [enc(x) for x in v]
-    if isinstance(v,dict): return {str(k):enc(x) for k,x in v.items()}
+    if isinstance(v,dict) and all(isinstance(k,str) for k in v): return {k:enc(x) for k,x in v.items()}
     if v is None or isinstance(v,(bool,int,float,str)): return v
-    raise TypeError('unsupported foreign result type: '+type(v).__name__)
+    next_handle+=1; handles[next_handle]=v
+    try: shown=repr(v)
+    except Exception: shown='<unrepresentable>'
+    return {'$handle':{'id':next_handle,'type':type(v).__name__,'repr':shown,'callable':callable(v)}}
+def attr(target,name):
+    if name.startswith('_') and name!='__name__': raise AttributeError('private Python attribute: '+name)
+    return getattr(target,name)
+class CaptureFailure(Exception):
+    def __init__(self,trace,out,err): self.trace,self.out,self.err=trace,out,err
+def capture(operation):
+    sys.stdout.flush(); sys.stderr.flush()
+    oldout,olderr=os.dup(1),os.dup(2)
+    with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
+        failure=None
+        try:
+            os.dup2(out.fileno(),1); os.dup2(err.fileno(),2)
+            value=operation()
+        except BaseException:
+            failure=traceback.format_exc()
+        finally:
+            sys.stdout.flush(); sys.stderr.flush()
+            os.dup2(oldout,1); os.dup2(olderr,2); os.close(oldout); os.close(olderr)
+        out.seek(0); err.seek(0)
+        captured_out,captured_err=out.read().decode(errors='replace'),err.read().decode(errors='replace')
+        if failure is not None: raise CaptureFailure(failure,captured_out,captured_err)
+        return value,captured_out,captured_err
 for line in sys.stdin:
-    req=json.loads(line); rid=req.get('id',0)
+    req=json.loads(line); rid=req.get('id',0); captured_out=captured_err=''
     try:
-        if req['op']=='load':
-            source='from __future__ import annotations\n'+req['source']
-            exec(compile(source,'<bash++ python>','exec'),ns,ns); res={'id':rid,'ok':True}
-        elif req['op']=='call':
-            out,err=io.StringIO(),io.StringIO()
-            with contextlib.redirect_stdout(out),contextlib.redirect_stderr(err): value=ns[req['name']](*dec(req.get('args',[])))
-            res={'id':rid,'ok':True,'result':enc(value),'stdout':out.getvalue(),'stderr':err.getvalue()}
+        op=req['op']
+        if op=='load':
+            def action():
+                source='from __future__ import annotations\n'+req['source']
+                exec(compile(source,'<bash++ python>','exec'),ns,ns)
+            value,captured_out,captured_err=capture(action)
+        elif op=='import':
+            def action():
+                global module
+                module=importlib.import_module(req['module'])
+            value,captured_out,captured_err=capture(action)
+        elif op=='getattr':
+            value,captured_out,captured_err=capture(lambda:attr(handles[int(req['handle'])],req['name']))
+        elif op=='call':
+            def action():
+                target=handles[int(req['handle'])] if 'handle' in req else module if module is not None else ns
+                if req.get('name'): target=attr(target,req['name']) if module is not None or 'handle' in req else target[req['name']]
+                if not callable(target): raise TypeError('Python target is not callable')
+                return target(*dec(req.get('args',[])),**dec(req.get('kwargs',{})))
+            value,captured_out,captured_err=capture(action)
+        elif op=='release':
+            handles.pop(int(req['handle']),None); value=None
         else: raise ValueError('unknown operation')
+        res={'id':rid,'ok':True,'result':enc(value),'stdout':captured_out,'stderr':captured_err}
+    except CaptureFailure as failure:
+        res={'id':rid,'ok':False,'error':failure.trace,'stdout':failure.out,'stderr':failure.err}
     except Exception:
-        res={'id':rid,'ok':False,'error':traceback.format_exc(),'stdout':locals().get('out',io.StringIO()).getvalue(),'stderr':locals().get('err',io.StringIO()).getvalue()}
-    print(json.dumps(res,separators=(',',':')),flush=True)
+        res={'id':rid,'ok':False,'error':traceback.format_exc(),'stdout':captured_out,'stderr':captured_err}
+    protocol.write(json.dumps(res,separators=(',',':'))+'\n')
 `

@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/polyglot"
 	"mvdan.cc/sh/v3/syntax"
 )
@@ -16,12 +17,18 @@ type bashPPForeignFunc struct {
 	module    *polyglot.Module
 	export    polyglot.Export
 	qualified string
+	direct    bool
+	receiver  *polyglot.Handle
+	argNames  []string
+	argCells  []*bashPPCell
+	call      *syntax.BashPPCall
 }
 
 func (r *Runner) bashPPPrepareSourceBlocks(ctx context.Context, file *syntax.File) (func(), error) {
-	oldFuncs, oldModules := r.bashPPForeignFuncs, r.bashPPForeignModules
+	oldFuncs, oldModules, oldImports := r.bashPPForeignFuncs, r.bashPPForeignModules, r.bashPPForeignImports
 	r.bashPPForeignFuncs = nil
 	r.bashPPForeignModules = nil
+	r.bashPPForeignImports = nil
 	restore := func() {
 		// Close only modules owned by this source unit. A nested `source` call
 		// temporarily replaces the namespace but must leave its caller's
@@ -29,24 +36,60 @@ func (r *Runner) bashPPPrepareSourceBlocks(ctx context.Context, file *syntax.Fil
 		for _, module := range r.bashPPForeignModules {
 			_ = module.Close()
 		}
-		r.bashPPForeignFuncs, r.bashPPForeignModules = oldFuncs, oldModules
+		r.bashPPForeignFuncs, r.bashPPForeignModules, r.bashPPForeignImports = oldFuncs, oldModules, oldImports
 	}
 	if r.Dialect() != syntax.LangBashPP {
 		return restore, nil
 	}
 	var blocks []polyglot.Block
+	var imports []*syntax.BashPPImport
 	for _, stmt := range file.Stmts {
-		block, ok := stmt.Cmd.(*syntax.SourceBlock)
-		if !ok {
-			continue
+		switch node := stmt.Cmd.(type) {
+		case *syntax.SourceBlock:
+			alias := ""
+			if node.Alias != nil {
+				alias = node.Alias.Value
+			}
+			blocks = append(blocks, polyglot.Block{Language: node.Language.Value, Alias: alias, Source: node.Body, Filename: file.Name, Line: int(node.BodyPos.Line())})
+		case *syntax.BashPPImport:
+			if node.Language != nil {
+				imports = append(imports, node)
+			}
 		}
-		alias := ""
-		if block.Alias != nil {
-			alias = block.Alias.Value
+	}
+	if len(blocks) == 0 && len(imports) == 0 {
+		return restore, nil
+	}
+	source := file.Name
+	if source == "" {
+		source = filepath.Join(r.Dir, ".bashpp-stdin")
+	} else if !filepath.IsAbs(source) {
+		source = filepath.Join(r.Dir, source)
+	}
+	r.bashPPForeignImports = make(map[string]*polyglot.Module, len(imports))
+	for _, imp := range imports {
+		modulePath, err := strconv.Unquote(`"` + imp.Path.Parts[0].(*syntax.Lit).Value + `"`)
+		if err != nil {
+			return restore, err
 		}
-		blocks = append(blocks, polyglot.Block{Language: block.Language.Value, Alias: alias, Source: block.Body, Filename: file.Name, Line: int(block.BodyPos.Line())})
+		alias, _ := syntax.BashPPDerivedImportAlias(modulePath)
+		if imp.Alias != nil {
+			alias = imp.Alias.Value
+		}
+		environment := ""
+		if imp.Environment != nil {
+			environment = imp.Environment.Value
+		}
+		plan, err := polyglot.PlanImport(polyglot.ImportRequest{Source: source, Language: imp.Language.Value, Environment: environment, Module: modulePath, Alias: alias, Environ: execEnv(r.writeEnv)})
+		if err != nil {
+			return restore, fmt.Errorf("%s: %w", file.Name, err)
+		}
+		module := polyglot.StartImport(plan)
+		r.bashPPForeignImports[alias] = module
+		r.bashPPForeignModules = append(r.bashPPForeignModules, module)
 	}
 	if len(blocks) == 0 {
+		r.bashPPForeignFuncs = map[string]*bashPPFunc{}
 		return restore, nil
 	}
 	pythonRuntime := polyglot.Python{}
@@ -152,6 +195,78 @@ func foreignDecl(name string, sig polyglot.Signature) *syntax.BashPPFuncDecl {
 }
 
 func (r *Runner) bashPPInvokeForeign(ctx context.Context, fn *bashPPForeignFunc, args []string) []string {
+	if fn.direct {
+		values := make([]any, len(args))
+		for i, arg := range args {
+			values[i] = arg
+			if i < len(fn.argCells) && fn.argCells[i] != nil && fn.argCells[i].vr.Kind == expand.Object {
+				values[i] = fn.argCells[i].vr.Obj
+			} else if fn.call != nil && i < len(fn.call.ArgExprs) {
+				switch expr := fn.call.ArgExprs[i].(type) {
+				case *syntax.BashPPBasicLit:
+					switch expr.Kind {
+					case "INT":
+						values[i], _ = strconv.ParseInt(arg, 0, 64)
+					case "FLOAT":
+						values[i], _ = strconv.ParseFloat(arg, 64)
+					case "STRING":
+						values[i] = strings.Trim(arg, `"'`)
+					}
+				case *syntax.BashPPIdent:
+					if expr.Name.Value == "true" {
+						values[i] = true
+					}
+					if expr.Name.Value == "false" {
+						values[i] = false
+					}
+				}
+			} else if fn.call != nil && i < len(fn.call.Args) {
+				if lit := fn.call.Args[i].Lit(); lit != "" {
+					if integer, err := strconv.ParseInt(lit, 0, 64); err == nil {
+						values[i] = integer
+					} else if number, err := strconv.ParseFloat(lit, 64); err == nil {
+						values[i] = number
+					} else if lit == "true" || lit == "false" {
+						values[i] = lit == "true"
+					}
+				}
+			}
+		}
+		positional := len(values) - len(fn.argNames)
+		kwargs := make(map[string]any, len(fn.argNames))
+		for i, name := range fn.argNames {
+			kwargs[name] = values[positional+i]
+		}
+		values = values[:positional]
+		var result polyglot.CallResult
+		var err error
+		if fn.receiver != nil {
+			if fn.export.Name == "" {
+				result, err = fn.receiver.Call(ctx, values, kwargs)
+			} else {
+				result, err = fn.receiver.CallAttr(ctx, fn.export.Name, values, kwargs)
+			}
+		} else {
+			result, err = fn.module.CallKeywords(ctx, fn.export.Name, values, kwargs)
+		}
+		if result.Stdout != "" {
+			fmt.Fprint(r.stdout, result.Stdout)
+		}
+		if result.Stderr != "" {
+			fmt.Fprint(r.stderr, result.Stderr)
+		}
+		if err != nil {
+			r.errf("bash++: foreign call %s failed: %v\n", fn.qualified, err)
+			r.exit.code = 1
+			return nil
+		}
+		r.exit = exitStatus{}
+		if handle, ok := result.Value.(*polyglot.Handle); ok {
+			r.bashPPResultCells = []*bashPPCell{{vr: expand.NewObject(handle)}}
+			return []string{""}
+		}
+		return []string{foreignResult(result.Value)}
+	}
 	values := make([]any, len(args))
 	for i, arg := range args {
 		typ := "any"

@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"mvdan.cc/sh/v3/expand"
+	"mvdan.cc/sh/v3/polyglot"
 	"mvdan.cc/sh/v3/syntax"
 )
 
@@ -794,6 +795,22 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 		return
 	}
 	defer r.bashPPEndShortDecl(txn, d.Pos())
+	if len(d.Lhs) == 1 && d.Expr != nil {
+		if value, handled, err := r.bashPPPythonValue(d.Expr); handled {
+			if err != nil {
+				r.errf("%v\n", err)
+				r.exit = exitStatus{code: 2}
+				return
+			}
+			name := d.Lhs[0].Value
+			if handle, ok := value.(*polyglot.Handle); ok {
+				r.bashPPDeclareName(name, expand.NewObject(handle))
+			} else {
+				r.bashPPDeclareName(name, expand.Variable{Set: true, Kind: expand.String, Str: foreignResult(value)})
+			}
+			return
+		}
+	}
 	if r.bashPPGoSource && len(d.RhsExprs) > 0 {
 		r.goSourceParallelDecl(d)
 		return
