@@ -17,12 +17,17 @@ func TestPythonDoesNotImportFromImplicitWorkingDirectory(t *testing.T) {
 		t.Skip("python3 unavailable")
 	}
 	dir := t.TempDir()
+	pythonPath := filepath.Join(t.TempDir(), "recorded")
+	if err := os.MkdirAll(pythonPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	for _, name := range []string{"ast.py", "contextlib.py"} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte("raise RuntimeError('cwd shadow imported')\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
-	runtime := Python{Command: python, Environment: &EnvironmentPlan{Dir: dir, Env: os.Environ()}}
+	env := []string{"PATH=" + os.Getenv("PATH"), "PYTHONNOUSERSITE=1", "PYTHONPATH=" + pythonPath}
+	runtime := Python{Command: python, Environment: &EnvironmentPlan{Dir: dir, Env: env}}
 	plans, err := Prepare(context.Background(), []Block{{Language: "python", Source: "def ok(): return 1\n"}}, map[string]Analyzer{"python": runtime})
 	if err != nil {
 		t.Fatal(err)
@@ -33,6 +38,38 @@ func TestPythonDoesNotImportFromImplicitWorkingDirectory(t *testing.T) {
 	if err != nil || got.Value != int64(1) {
 		t.Fatalf("call = %#v, %v", got, err)
 	}
+}
+
+func TestPythonPreservesRecordedWorkingDirectoryPythonPath(t *testing.T) {
+	python, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("python3 unavailable")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "recorded.py"), []byte("value = 7\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	env := []string{"PATH=" + os.Getenv("PATH"), "PYTHONNOUSERSITE=1", "PYTHONPATH=" + dir}
+	runtime := Python{Command: python, Environment: &EnvironmentPlan{Dir: dir, Env: env}}
+	plan := pythonPlanWithRuntime(t, "def load():\n    import recorded\n    return recorded.value\n", runtime)
+	module := Start(plan, runtime)
+	defer module.Close()
+	got, err := module.Call(context.Background(), "load")
+	if err != nil || got.Value != int64(7) {
+		t.Fatalf("call = %#v, %v", got, err)
+	}
+}
+
+func pythonPlanWithRuntime(t *testing.T, source string, runtime Python) Plan {
+	t.Helper()
+	plans, err := Prepare(context.Background(), []Block{{Language: "python", Source: source}}, map[string]Analyzer{"python": runtime})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plans) != 1 {
+		t.Fatalf("plans = %d", len(plans))
+	}
+	return plans[0]
 }
 
 func TestPythonUnavailable(t *testing.T) {
@@ -52,15 +89,7 @@ func TestPythonUnavailable(t *testing.T) {
 }
 
 func pythonPlan(t *testing.T, source string) Plan {
-	t.Helper()
-	plans, err := Prepare(context.Background(), []Block{{Language: "python", Source: source}}, map[string]Analyzer{"python": Python{}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(plans) != 1 {
-		t.Fatalf("plans = %d", len(plans))
-	}
-	return plans[0]
+	return pythonPlanWithRuntime(t, source, Python{})
 }
 
 func TestPythonAnalyzeDeclarationOnlyAndSignatures(t *testing.T) {

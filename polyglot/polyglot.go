@@ -430,9 +430,21 @@ func decodeValue(v any) (any, error) {
 	}
 }
 
-const pythonAnalyze = `
-import sys
-if sys.path and sys.path[0] == '': del sys.path[0]
+const pythonPathBootstrap = `
+import os, sys
+_cwd=os.path.normcase(os.path.realpath(os.getcwd()))
+_explicit_cwd=sum(os.path.normcase(os.path.realpath(os.path.abspath(p))) == _cwd for p in os.environ.get('PYTHONPATH','').split(os.pathsep) if p)
+_paths=[]
+for _path in sys.path:
+    if not _path: continue
+    if os.path.normcase(os.path.realpath(os.path.abspath(_path))) == _cwd:
+        if not _explicit_cwd: continue
+        _explicit_cwd-=1
+    _paths.append(_path)
+sys.path[:]=_paths
+`
+
+const pythonAnalyze = pythonPathBootstrap + `
 import ast, json
 src=sys.stdin.read()
 tree=ast.parse(src)
@@ -460,9 +472,7 @@ for node in nodes:
 print(json.dumps(out,separators=(',',':')))
 `
 
-const pythonWorker = `
-import sys
-if sys.path and sys.path[0] == '': del sys.path[0]
+const pythonWorker = pythonPathBootstrap + `
 import ast, base64, contextlib, io, json, traceback
 ns={'__name__':'__bashpp__'}
 def dec(v):
