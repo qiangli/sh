@@ -212,6 +212,13 @@ func (r *Runner) bashPPAddress(expr syntax.BashPPExpr) (result *bashPPPointer, e
 	}
 	ptr := &bashPPPointer{target: cell}
 	typ := cell.declType
+	// Taking a typed variable's address needs its storage and declared type,
+	// not its current value metadata. Atomic operations may be updating that
+	// metadata concurrently before this address reaches the atomic lock.
+	if _, direct := expr.(*syntax.BashPPIdent); direct && typ != nil {
+		ptr.elem = typ
+		return ptr, nil
+	}
 	meta := bashPPCellMeta(cell)
 	if cell.pointer {
 		if _, direct := expr.(*syntax.BashPPIdent); !direct {
