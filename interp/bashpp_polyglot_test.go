@@ -131,6 +131,44 @@ echo "$value"
 	}
 }
 
+func TestBashPPShellDialectIslands(t *testing.T) {
+	bashSource := `~~~bash as island
+var() { printf '%s:%s:%s' "$1" "$2" "$3"; }
+Show() { counter=$(( ${counter:-0} + 1 )); var "$1" = "$counter"; }
+~~~
+first := island.Show(alpha)
+second := island.Show(alpha)
+printf '%s|%s\n' "$first" "$second"
+`
+	out, diagnostic, err := runPolyglot(t, bashSource)
+	if err != nil || out != "alpha:=:1|alpha:=:1\n" || diagnostic != "" {
+		t.Fatalf("bash island: out=%q diagnostic=%q err=%v", out, diagnostic, err)
+	}
+
+	shSource := `~~~sh as posix
+Join() { printf '%s/%s/%s' "$#" "$1" "$2"; }
+~~~
+value := posix.Join("a b", c)
+echo "$value"
+`
+	out, diagnostic, err = runPolyglot(t, shSource)
+	if err != nil || out != "2/a b/c\n" || diagnostic != "" {
+		t.Fatalf("POSIX island: out=%q diagnostic=%q err=%v", out, diagnostic, err)
+	}
+}
+
+func TestBashPPShellDialectIslandStatusIsCallError(t *testing.T) {
+	source := `~~~sh as posix
+Fail() { echo detail >&2; return 7; }
+~~~
+value := posix.Fail()
+`
+	out, diagnostic, err := runPolyglot(t, source)
+	if err == nil || out != "" || !strings.Contains(diagnostic, "detail") || !strings.Contains(diagnostic, "status 7") {
+		t.Fatalf("out=%q diagnostic=%q err=%v", out, diagnostic, err)
+	}
+}
+
 func TestBashPPCAndCPPDirectAndQualifiedCalls(t *testing.T) {
 	if _, err := exec.LookPath("clang"); err != nil {
 		t.Skip("clang unavailable")

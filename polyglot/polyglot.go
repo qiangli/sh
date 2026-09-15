@@ -30,9 +30,10 @@ type Block struct {
 }
 
 type Signature struct {
-	Params  []string `json:"params"`
-	Results []string `json:"results"`
-	Dynamic bool     `json:"dynamic"`
+	Params   []string `json:"params"`
+	Results  []string `json:"results"`
+	Dynamic  bool     `json:"dynamic"`
+	Variadic bool     `json:"variadic,omitempty"`
 }
 
 type Export struct {
@@ -201,6 +202,15 @@ type CallResult struct {
 	Stdout, Stderr string
 }
 
+// StringsToAny adapts a typed variadic shell boundary to Module.Call.
+func StringsToAny(values []string) []any {
+	result := make([]any, len(values))
+	for i := range values {
+		result[i] = values[i]
+	}
+	return result
+}
+
 type Runtime interface {
 	executable() string
 	arguments(Plan) []string
@@ -209,6 +219,23 @@ type Runtime interface {
 }
 
 type configuredRuntime interface{ configure(*exec.Cmd) }
+
+// Embedded adapts an in-process runtime without making polyglot depend on its
+// implementation package. Dialect islands use this path and never start an
+// external worker.
+type Embedded struct {
+	RuntimeName string
+	AnalyzeFunc func(context.Context, string) ([]Export, error)
+	CallFunc    func(context.Context, Plan, string, []any, map[string]any) (CallResult, error)
+}
+
+func (e Embedded) Analyze(ctx context.Context, source string) ([]Export, error) {
+	return e.AnalyzeFunc(ctx, source)
+}
+func (e Embedded) executable() string              { return "" }
+func (e Embedded) arguments(Plan) []string         { return nil }
+func (e Embedded) loadRequest(Plan) map[string]any { return nil }
+func (e Embedded) name() string                    { return e.RuntimeName }
 
 func (p Python) arguments(Plan) []string { return p.pythonArguments(pythonWorker, true) }
 func (p Python) pythonArguments(script string, unbuffered bool) []string {
@@ -348,6 +375,9 @@ func (m *Module) Call(ctx context.Context, name string, args ...any) (CallResult
 func (m *Module) CallKeywords(ctx context.Context, name string, args []any, kwargs map[string]any) (CallResult, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if embedded, ok := m.runtime.(Embedded); ok {
+		return embedded.CallFunc(ctx, m.plan, name, args, kwargs)
+	}
 	if _, ok := m.runtime.(Go); ok {
 		return m.callGo(ctx, name, args, kwargs)
 	}

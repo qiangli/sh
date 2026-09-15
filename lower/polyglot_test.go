@@ -100,6 +100,30 @@ echo "x=$x"
 	}
 }
 
+func TestShellFenceInterpretedNativeParity(t *testing.T) {
+	for name, source := range map[string]string{
+		"bash": `~~~bash as island
+Show() { local value=$1; printf 'bash:%s:%s' "$#" "$value"; }
+~~~
+value := island.Show("a b", c)
+echo "$value"
+`,
+		"posix": `~~~sh as island
+Show() { value=$1; printf 'posix:%s:%s' "$#" "$value"; }
+~~~
+value := island.Show("a b", c)
+echo "$value"
+`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := testPythonFenceInterpretedNativeParityAt(t, source, filepath.Join("testdata", "input.bpp"))
+			if want := name + ":2:a b\n"; got != want {
+				t.Fatalf("output = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
 func TestCAndCPPFenceInterpretedNativeParity(t *testing.T) {
 	if _, err := exec.LookPath("clang"); err != nil {
 		t.Skip("clang unavailable")

@@ -3,10 +3,12 @@ package lower
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 
+	"mvdan.cc/sh/v3/interp"
 	"mvdan.cc/sh/v3/polyglot"
 	"mvdan.cc/sh/v3/syntax"
 )
@@ -15,6 +17,15 @@ type foreignFunction struct {
 	plan   int
 	export polyglot.Export
 	alias  string
+}
+
+func (e *emitter) hasEmbeddedShellRuntime() bool {
+	for _, plan := range e.foreignPlans {
+		if plan.Language == "bash" || plan.Language == "sh" {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *emitter) prepareForeign(ctx context.Context, file *syntax.File) error {
@@ -101,6 +112,8 @@ func (e *emitter) prepareForeign(ctx context.Context, file *syntax.File) error {
 	cRuntime := polyglot.C{}
 	cppRuntime := polyglot.CPP{}
 	goRuntime := polyglot.Go{}
+	bashRuntime := interp.ShellRuntime("bash", e.options.Dir, os.Environ())
+	shRuntime := interp.ShellRuntime("sh", e.options.Dir, os.Environ())
 	for _, block := range blocks {
 		language := polyglot.CanonicalLanguage(block.Language)
 		if language == "python" || language == "typescript" || language == "rust" || language == "c" || language == "cpp" || language == "go" {
@@ -134,6 +147,7 @@ func (e *emitter) prepareForeign(ctx context.Context, file *syntax.File) error {
 		var err error
 		plans, err = polyglot.Prepare(ctx, blocks, map[string]polyglot.Analyzer{
 			"python": pythonRuntime, "typescript": typeScriptRuntime, "rust": rustRuntime, "c": cRuntime, "cpp": cppRuntime, "go": goRuntime,
+			"bash": bashRuntime, "sh": shRuntime,
 		})
 		if err != nil {
 			return e.fail(first, CodeUnsupported, err.Error())
@@ -275,7 +289,11 @@ func lowerForeignDecl(export polyglot.Export) *syntax.BashPPFuncDecl {
 		return d
 	}
 	for i, typ := range export.Signature.Params {
-		d.Params = append(d.Params, &syntax.BashPPField{Names: []*syntax.Lit{{Value: fmt.Sprintf("arg%d", i)}}, FieldType: &syntax.Lit{Value: typ}})
+		field := &syntax.BashPPField{Names: []*syntax.Lit{{Value: fmt.Sprintf("arg%d", i)}}, FieldType: &syntax.Lit{Value: typ}}
+		if export.Signature.Variadic && i == len(export.Signature.Params)-1 {
+			field.Ellipsis = syntax.NewPos(0, 1, 1)
+		}
+		d.Params = append(d.Params, field)
 	}
 	for _, typ := range export.Signature.Results {
 		d.Results = append(d.Results, &syntax.BashPPField{FieldType: &syntax.Lit{Value: typ}})
@@ -309,6 +327,8 @@ func (e *emitter) foreignDeclarations() string {
 			runtime = fmt.Sprintf("%spolyglot.CPP{Environment:%s}", e.prefix, e.environmentLiteral(e.foreignCPPEnv))
 		} else if plan.Language == "go" {
 			runtime = fmt.Sprintf("%spolyglot.Go{Environment:%s}", e.prefix, e.environmentLiteral(e.foreignGoEnv))
+		} else if plan.Language == "bash" || plan.Language == "sh" {
+			runtime = fmt.Sprintf("%sinterp.ShellRuntime(%s,\"\",nil)", e.prefix, strconv.Quote(plan.Language))
 		}
 		fmt.Fprintf(&out, "var %s = %spolyglot.Start(%spolyglot.Plan{ID:%s,Language:%s,Alias:%s,Source:%s,Artifact:%s,Exports:%s}, %s)\n", module, e.prefix, e.prefix, strconv.Quote(plan.ID), strconv.Quote(plan.Language), strconv.Quote(plan.Alias), strconv.Quote(plan.Source), strconv.Quote(plan.Artifact), e.foreignExports(plan.Exports), runtime)
 		if plan.Alias != "" {
@@ -359,7 +379,11 @@ func (e *emitter) foreignWrapper(receiver, module string, export polyglot.Export
 		params = []string{"args ...any"}
 	} else {
 		for i, typ := range export.Signature.Params {
-			params = append(params, fmt.Sprintf("arg%d %s", i, foreignGoType(typ)))
+			if export.Signature.Variadic && i == len(export.Signature.Params)-1 {
+				params = append(params, fmt.Sprintf("arg%d ...%s", i, foreignGoType(typ)))
+			} else {
+				params = append(params, fmt.Sprintf("arg%d %s", i, foreignGoType(typ)))
+			}
 		}
 	}
 	var results []string
@@ -372,11 +396,15 @@ func (e *emitter) foreignWrapper(receiver, module string, export polyglot.Export
 	}
 	args := "args..."
 	if !export.Signature.Dynamic {
-		names := make([]string, len(export.Signature.Params))
-		for i := range names {
-			names[i] = fmt.Sprintf("arg%d", i)
+		if export.Signature.Variadic {
+			args = fmt.Sprintf("%spolyglot.StringsToAny(arg0)...", e.prefix)
+		} else {
+			names := make([]string, len(export.Signature.Params))
+			for i := range names {
+				names[i] = fmt.Sprintf("arg%d", i)
+			}
+			args = strings.Join(names, ",")
 		}
-		args = strings.Join(names, ",")
 	}
 	if args != "" {
 		args = "," + args

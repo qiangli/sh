@@ -3,9 +3,10 @@ id: 6a4e3f994948
 kind: task
 title: S193.2 Embedded Bash and POSIX dialect islands
 seq: 126
-status: todo
+status: assigned
 priority: p0
 created: 2026-09-15T12:14:17.378661Z
+assignee: codex-gpt-5.5
 sprint: 193
 ---
 

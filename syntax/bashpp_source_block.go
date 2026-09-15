@@ -135,6 +135,13 @@ func (p *Parser) bashppRegisterSourceBlockFuncs(language, body string) {
 			} else {
 				declaration = strings.TrimPrefix(declaration, "func ")
 			}
+		case "bash", "sh":
+			declaration = strings.TrimSpace(line)
+			if before, _, ok := strings.Cut(declaration, "()"); ok {
+				declaration = strings.TrimSpace(before) + "("
+			} else {
+				declaration = ""
+			}
 		}
 		if declaration == "" {
 			continue

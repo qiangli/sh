@@ -99,7 +99,7 @@ func (e *emitter) callParameterType(c *syntax.BashPPCall, index int) string {
 		if count == 0 {
 			count = 1
 		}
-		if index < count {
+		if index < count || field.Ellipsis.IsValid() {
 			if typ, err := e.fieldType(field); err == nil {
 				return typ
 			}

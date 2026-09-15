@@ -19,8 +19,9 @@ parser, CRLF input is normalized to LF. Backtick and quote runs retain their
 Classic shell meanings.
 
 A fence is a declaration unit, not an implicit command. Python, TypeScript,
-Rust, C, C++, and Go are implemented adapters. Python blocks may contain one module docstring followed by
-ordinary synchronous, undecorated function declarations. Imports, classes,
+Rust, C, C++, Go, Bash, and POSIX sh are implemented adapters. Python blocks
+may contain one module docstring followed by ordinary synchronous,
+undecorated function declarations. Imports, classes,
 async declarations, decorators, executable top-level statements, and
 non-literal defaults are rejected during preparation without executing the
 module.
@@ -145,3 +146,21 @@ lowered output. Each call launches a fresh worker, exchanges one JSON
 request/result frame, exposes ordinary stdout/stderr, and turns panics,
 build/worker failures, malformed frames, and non-nil trailing errors into
 Bash++ call errors.
+
+## Shell dialect islands
+
+`~~~bash` and `~~~sh` contain only top-level shell function declarations.
+Their public functions use the same direct or `as NAME` call model, with a
+variadic string boundary: call arguments become `$1`, `$2`, and so on; the
+function's exact stdout is its string result; stderr remains stderr; and a
+non-zero status is a Bash++ call error.
+
+These adapters never select or start a host shell. `bash` parses and runs with
+Bashy's embedded Bash-5.3 dialect, while `sh` uses its embedded POSIX dialect.
+Every invocation creates a fresh child Runner from an environment snapshot and
+the invoking directory, so variables, functions, options, and `cd` changes
+cannot leak to another call or the parent Bash++ runner. Lowered programs use
+the same embedded adapter. Code inside an island retains ordinary shell
+authority—an explicit external command may still start that command—but the
+fence runtime itself has no worker, toolchain, cache artifact, or host-shell
+dependency.

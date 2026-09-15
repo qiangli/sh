@@ -98,6 +98,8 @@ func (r *Runner) bashPPPrepareSourceBlocks(ctx context.Context, file *syntax.Fil
 	cRuntime := polyglot.C{}
 	cppRuntime := polyglot.CPP{}
 	goRuntime := polyglot.Go{}
+	bashRuntime := ShellRuntime("bash", r.Dir, execEnv(r.writeEnv))
+	shRuntime := ShellRuntime("sh", r.Dir, execEnv(r.writeEnv))
 	for _, block := range blocks {
 		language := polyglot.CanonicalLanguage(block.Language)
 		if language == "python" || language == "typescript" || language == "rust" || language == "c" || language == "cpp" || language == "go" {
@@ -130,6 +132,7 @@ func (r *Runner) bashPPPrepareSourceBlocks(ctx context.Context, file *syntax.Fil
 	}
 	plans, err := polyglot.Prepare(ctx, blocks, map[string]polyglot.Analyzer{
 		"python": pythonRuntime, "typescript": typeScriptRuntime, "rust": rustRuntime, "c": cRuntime, "cpp": cppRuntime, "go": goRuntime,
+		"bash": bashRuntime, "sh": shRuntime,
 	})
 	if err != nil {
 		return restore, fmt.Errorf("%s: %w", file.Name, err)
@@ -167,6 +170,10 @@ func (r *Runner) bashPPPrepareSourceBlocks(ctx context.Context, file *syntax.Fil
 			runtime = cppRuntime
 		} else if plan.Language == "go" {
 			runtime = goRuntime
+		} else if plan.Language == "bash" {
+			runtime = bashRuntime
+		} else if plan.Language == "sh" {
+			runtime = shRuntime
 		}
 		module := polyglot.Start(plan, runtime)
 		r.bashPPForeignModules = append(r.bashPPForeignModules, module)
@@ -211,7 +218,11 @@ func foreignDecl(name string, sig polyglot.Signature) *syntax.BashPPFuncDecl {
 		return decl
 	}
 	for i, typ := range sig.Params {
-		decl.Params = append(decl.Params, &syntax.BashPPField{Names: []*syntax.Lit{{Value: fmt.Sprintf("arg%d", i)}}, FieldType: &syntax.Lit{Value: typ}})
+		field := &syntax.BashPPField{Names: []*syntax.Lit{{Value: fmt.Sprintf("arg%d", i)}}, FieldType: &syntax.Lit{Value: typ}}
+		if sig.Variadic && i == len(sig.Params)-1 {
+			field.Ellipsis = syntax.NewPos(0, 1, 1)
+		}
+		decl.Params = append(decl.Params, field)
 	}
 	for _, typ := range sig.Results {
 		decl.Results = append(decl.Results, &syntax.BashPPField{FieldType: &syntax.Lit{Value: typ}})
@@ -295,8 +306,12 @@ func (r *Runner) bashPPInvokeForeign(ctx context.Context, fn *bashPPForeignFunc,
 	values := make([]any, len(args))
 	for i, arg := range args {
 		typ := "any"
-		if !fn.export.Signature.Dynamic && i < len(fn.export.Signature.Params) {
-			typ = fn.export.Signature.Params[i]
+		if !fn.export.Signature.Dynamic && len(fn.export.Signature.Params) > 0 {
+			if i < len(fn.export.Signature.Params) {
+				typ = fn.export.Signature.Params[i]
+			} else if fn.export.Signature.Variadic {
+				typ = fn.export.Signature.Params[len(fn.export.Signature.Params)-1]
+			}
 		}
 		value, err := foreignArgument(arg, typ)
 		if err != nil {

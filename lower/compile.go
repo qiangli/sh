@@ -392,6 +392,9 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 	if len(e.foreignPlans) > 0 || len(e.foreignImports) > 0 {
 		imports = append(imports, "context", "mvdan.cc/sh/v3/polyglot")
 	}
+	if e.hasEmbeddedShellRuntime() {
+		imports = append(imports, "mvdan.cc/sh/v3/interp")
+	}
 	if e.bridge {
 		imports = append(imports, options.Runtime)
 	}
@@ -421,6 +424,9 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 	if len(e.foreignPlans) > 0 || len(e.foreignImports) > 0 {
 		fmt.Fprintf(&raw, "import %scontext \"context\"\n", e.prefix)
 		fmt.Fprintf(&raw, "import %spolyglot \"mvdan.cc/sh/v3/polyglot\"\n", e.prefix)
+	}
+	if e.hasEmbeddedShellRuntime() {
+		fmt.Fprintf(&raw, "import %sinterp \"mvdan.cc/sh/v3/interp\"\n", e.prefix)
 	}
 	if e.bridge {
 		fmt.Fprintf(&raw, "import %srt %s\n", e.prefix, strconv.Quote(options.Runtime))
