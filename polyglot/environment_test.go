@@ -9,14 +9,50 @@ import (
 )
 
 func TestPythonEnvironmentLaunchIsFixedAndSanitized(t *testing.T) {
-	plan := EnvironmentPlan{Dir: t.TempDir(), Executable: "/runtime", Env: []string{"PATH=/safe", "PYTHONNOUSERSITE=1", "PYTHONSAFEPATH=1"}}
+	env := launchEnvironment(map[string]string{
+		"PATH":           "/safe",
+		"PYTHONHOME":     "/unsafe",
+		"PYTHONSAFEPATH": "1",
+	}, nil)
+	plan := EnvironmentPlan{Dir: t.TempDir(), Executable: "/runtime", Env: env}
 	cmd := exec.Command("ignored")
 	(Python{Environment: &plan}).configure(cmd)
 	if cmd.Dir != plan.Dir || strings.Join(cmd.Env, "\n") != strings.Join(plan.Env, "\n") {
 		t.Fatalf("cmd = dir %q env %q", cmd.Dir, cmd.Env)
 	}
-	if strings.Contains(strings.Join(cmd.Env, "\n"), "PYTHONHOME=") || !strings.Contains(strings.Join((Python{}).arguments(Plan{}), " "), "-P") {
+	if strings.Contains(strings.Join(cmd.Env, "\n"), "PYTHONHOME=") || strings.Contains(strings.Join(cmd.Env, "\n"), "PYTHONSAFEPATH=") || strings.Contains(strings.Join((Python{}).arguments(Plan{}), " "), "-P") {
 		t.Fatalf("unsafe Python launch: env=%q args=%q", cmd.Env, (Python{}).arguments(Plan{}))
+	}
+}
+
+func TestDiscoverEnvironmentManagerMetadata(t *testing.T) {
+	root := t.TempDir()
+	pythonFixture(t, root)
+	writeEnvironmentFile(t, filepath.Join(root, "uv.lock"), "version = 1\n")
+	writeEnvironmentFile(t, filepath.Join(root, ".python-version"), "3.10\n")
+	plan, err := DiscoverEnvironment(EnvironmentRequest{Source: filepath.Join(root, "missing", "source.bpp")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Manager != "uv" || plan.RuntimeConstraint != "3.10" || len(plan.Manifests) != 1 || filepath.Base(plan.Manifests[0]) != "pyproject.toml" || len(plan.Locks) != 1 || filepath.Base(plan.Locks[0]) != "uv.lock" {
+		t.Fatalf("metadata plan = %#v", plan)
+	}
+	clone := plan.Clone()
+	clone.Manifests[0] = "changed"
+	clone.Locks[0] = "changed"
+	if filepath.Base(plan.Manifests[0]) != "pyproject.toml" || filepath.Base(plan.Locks[0]) != "uv.lock" {
+		t.Fatal("Clone shared metadata slices")
+	}
+}
+
+func TestDiscoverEnvironmentRejectsConflictingManagerLocks(t *testing.T) {
+	root := t.TempDir()
+	pythonFixture(t, root)
+	writeEnvironmentFile(t, filepath.Join(root, "uv.lock"), "version = 1\n")
+	writeEnvironmentFile(t, filepath.Join(root, "poetry.lock"), "package = []\n")
+	_, err := DiscoverEnvironment(EnvironmentRequest{Source: filepath.Join(root, "source.bpp")})
+	if err == nil || !strings.Contains(err.Error(), "conflicting Python manager lockfiles") {
+		t.Fatalf("conflicting lock error = %v", err)
 	}
 }
 

@@ -30,16 +30,20 @@ type EnvironmentRequest struct {
 // EnvironmentPlan is the immutable, language-neutral resolution record. Its
 // fields are values, rather than handles to discovery state, so it can be
 // fingerprinted, cached, and handed from checking to execution unchanged.
-// PythonPath and Env are copies owned by the plan and must be treated read-only.
+// Slice fields are copies owned by the plan and must be treated read-only.
 type EnvironmentPlan struct {
-	Language    string
-	Name        string
-	Root        string // project or VCS boundary
-	Dir         string // fixed child-process working directory
-	Executable  string // absolute selected runtime executable
-	PythonPath  []string
-	Env         []string // normalized launch environment, sorted by key
-	Explanation []string // deterministic and redacted; no ambient values
+	Language          string
+	Name              string
+	Root              string // project or VCS boundary
+	Dir               string // fixed child-process working directory
+	Executable        string // absolute selected runtime executable
+	Manager           string
+	RuntimeConstraint string
+	Manifests         []string
+	Locks             []string
+	PythonPath        []string
+	Env               []string // normalized launch environment, sorted by key
+	Explanation       []string // deterministic and redacted; no ambient values
 	// ResolutionFiles are canonical, source-relative metadata inputs whose
 	// contents participate in Fingerprint. They are ordered by discovery.
 	ResolutionFiles []string
@@ -48,6 +52,8 @@ type EnvironmentPlan struct {
 
 // Clone returns an independently owned copy of p.
 func (p EnvironmentPlan) Clone() EnvironmentPlan {
+	p.Manifests = append([]string(nil), p.Manifests...)
+	p.Locks = append([]string(nil), p.Locks...)
 	p.PythonPath = append([]string(nil), p.PythonPath...)
 	p.Env = append([]string(nil), p.Env...)
 	p.Explanation = append([]string(nil), p.Explanation...)
@@ -147,6 +153,14 @@ func DiscoverEnvironment(request EnvironmentRequest) (EnvironmentPlan, error) {
 			plan.ResolutionFiles = append(plan.ResolutionFiles, file)
 		}
 	}
+	metadata, err := discoverPythonMetadata(root)
+	if err != nil {
+		return EnvironmentPlan{}, err
+	}
+	plan.Manager = metadata.manager
+	plan.RuntimeConstraint = metadata.runtimeConstraint
+	plan.Manifests = metadata.manifests
+	plan.Locks = metadata.locks
 	var executable string
 	if selected != nil {
 		plan.Explanation = append(plan.Explanation, "selected bashpp overlay")
@@ -203,7 +217,7 @@ type environmentOverlay struct {
 }
 
 func environmentDirs(start string) (string, []string, error) {
-	start, err := filepath.EvalSymlinks(start)
+	start, err := nearestExistingDir(start)
 	if err != nil {
 		return "", nil, err
 	}
@@ -232,6 +246,30 @@ func environmentDirs(start string) (string, []string, error) {
 	}
 	// closest overlays are considered first, and discovery cannot escape root.
 	return project, dirs, nil
+}
+
+func nearestExistingDir(start string) (string, error) {
+	start, err := filepath.Abs(start)
+	if err != nil {
+		return "", err
+	}
+	for d := start; ; d = filepath.Dir(d) {
+		resolved, err := filepath.EvalSymlinks(d)
+		if err == nil {
+			info, statErr := os.Stat(resolved)
+			if statErr == nil && info.IsDir() {
+				return resolved, nil
+			}
+			if statErr != nil && !os.IsNotExist(statErr) {
+				return "", statErr
+			}
+		} else if !os.IsNotExist(err) {
+			return "", err
+		}
+		if parent := filepath.Dir(d); parent == d {
+			return "", fmt.Errorf("polyglot: no existing source ancestor for %s", start)
+		}
+	}
 }
 
 func recognizedPythonProject(dir string) bool {
@@ -294,6 +332,16 @@ func projectPythonRuntime(root string, env map[string]string) (string, string) {
 		version[0] = strings.TrimPrefix(version[0], "python")
 		if executable, err := lookupPath(env, "python"+version[0]); err == nil {
 			return executable, "selected nearest Python runtime metadata"
+		}
+	}
+	if data, err := os.ReadFile(filepath.Join(root, ".tool-versions")); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 && fields[0] == "python" {
+				if executable, err := lookupPath(env, "python"+fields[1]); err == nil {
+					return executable, "selected nearest Python runtime metadata"
+				}
+			}
 		}
 	}
 	return "", ""
@@ -387,7 +435,7 @@ func canonicalPythonPath(value, root string) ([]string, error) {
 	return out, nil
 }
 func launchEnvironment(env map[string]string, paths []string) []string {
-	keep := map[string]string{"PYTHONNOUSERSITE": "1", "PYTHONSAFEPATH": "1"}
+	keep := map[string]string{"PYTHONNOUSERSITE": "1"}
 	if len(paths) > 0 {
 		keep["PYTHONPATH"] = strings.Join(paths, string(os.PathListSeparator))
 	}
@@ -414,8 +462,16 @@ func environmentFingerprint(p EnvironmentPlan) (string, error) {
 	write(p.Language)
 	write(p.Root)
 	write(p.Dir)
+	write(p.Manager)
+	write(p.RuntimeConstraint)
 	write(runtime.GOOS)
 	write(runtime.GOARCH)
+	for _, s := range p.Manifests {
+		write(s)
+	}
+	for _, s := range p.Locks {
+		write(s)
+	}
 	for _, s := range p.PythonPath {
 		write(s)
 	}
@@ -451,6 +507,94 @@ func fingerprintFile(h io.Writer, name string) error {
 }
 
 var pythonProjectMetadata = []string{"pyproject.toml", "setup.py", "setup.cfg", "requirements.txt", "requirements-dev.txt", "Pipfile", "poetry.lock", "uv.lock", "pdm.lock", "Pipfile.lock", ".python-version", "runtime.txt", ".tool-versions"}
+
+type pythonMetadataPlan struct {
+	manager           string
+	runtimeConstraint string
+	manifests         []string
+	locks             []string
+}
+
+func discoverPythonMetadata(root string) (pythonMetadataPlan, error) {
+	var result pythonMetadataPlan
+	for _, name := range []string{"pyproject.toml", "setup.py", "setup.cfg", "requirements.txt", "requirements-dev.txt", "Pipfile"} {
+		if file := canonicalExistingFile(filepath.Join(root, name)); file != "" {
+			result.manifests = append(result.manifests, file)
+		}
+	}
+	lockManagers := []struct{ name, manager string }{
+		{"uv.lock", "uv"},
+		{"poetry.lock", "poetry"},
+		{"pdm.lock", "pdm"},
+		{"Pipfile.lock", "pipenv"},
+	}
+	for _, candidate := range lockManagers {
+		if file := canonicalExistingFile(filepath.Join(root, candidate.name)); file != "" {
+			result.locks = append(result.locks, file)
+			if result.manager != "" && result.manager != candidate.manager {
+				return pythonMetadataPlan{}, fmt.Errorf("polyglot: conflicting Python manager lockfiles in %s", root)
+			}
+			result.manager = candidate.manager
+		}
+	}
+	if result.manager == "" {
+		result.manager = inferredPythonManager(root)
+	}
+	result.runtimeConstraint = pythonRuntimeConstraint(root)
+	return result, nil
+}
+
+func inferredPythonManager(root string) string {
+	if exists(filepath.Join(root, "Pipfile")) {
+		return "pipenv"
+	}
+	if data, err := os.ReadFile(filepath.Join(root, "pyproject.toml")); err == nil {
+		text := string(data)
+		for _, candidate := range []struct{ marker, manager string }{
+			{"[tool.uv", "uv"},
+			{"[tool.poetry", "poetry"},
+			{"[tool.pdm", "pdm"},
+		} {
+			if strings.Contains(text, candidate.marker) {
+				return candidate.manager
+			}
+		}
+	}
+	if exists(filepath.Join(root, "requirements.txt")) || exists(filepath.Join(root, "requirements-dev.txt")) {
+		return "pip"
+	}
+	if exists(filepath.Join(root, "setup.py")) || exists(filepath.Join(root, "setup.cfg")) {
+		return "setuptools"
+	}
+	return ""
+}
+
+func pythonRuntimeConstraint(root string) string {
+	for _, name := range []string{".python-version", "runtime.txt"} {
+		if data, err := os.ReadFile(filepath.Join(root, name)); err == nil {
+			if fields := strings.Fields(string(data)); len(fields) > 0 {
+				return strings.TrimPrefix(strings.TrimPrefix(fields[0], "python-"), "python")
+			}
+		}
+	}
+	if data, err := os.ReadFile(filepath.Join(root, ".tool-versions")); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 && fields[0] == "python" {
+				return fields[1]
+			}
+		}
+	}
+	if data, err := os.ReadFile(filepath.Join(root, "pyproject.toml")); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			key, value, ok := strings.Cut(line, "=")
+			if ok && strings.TrimSpace(key) == "requires-python" {
+				return strings.Trim(strings.TrimSpace(value), "\"'")
+			}
+		}
+	}
+	return ""
+}
 
 func readOverlay(name string) ([]environmentOverlay, error) {
 	data, err := os.ReadFile(name)

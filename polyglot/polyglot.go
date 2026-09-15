@@ -168,7 +168,7 @@ type Runtime interface {
 
 type configuredRuntime interface{ configure(*exec.Cmd) }
 
-func (p Python) arguments(Plan) []string { return []string{"-P", "-u", "-c", pythonWorker} }
+func (p Python) arguments(Plan) []string { return []string{"-u", "-c", pythonWorker} }
 func (p Python) loadRequest(plan Plan) map[string]any {
 	return map[string]any{"id": 0, "op": "load", "source": plan.Source}
 }
