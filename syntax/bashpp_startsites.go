@@ -152,7 +152,7 @@ func recognizeSourceFence(src string) bool {
 	if n < 3 || n == len(opener) || !bashppValidSourceLanguage(opener[n:]) {
 		return false
 	}
-	return len(fields) == 1 || fields[1] == "as" && BashPPValidIdent(fields[2])
+	return len(fields) == 1 || fields[1] == "as" && bashppValidSourceAlias(opener[n:], fields[2])
 }
 
 func recognizeImportPrefix(s string) bool {

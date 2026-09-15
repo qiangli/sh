@@ -119,10 +119,10 @@ echo "x=$x"
 	if err != nil || out != "go\nx=42\n" || diagnostic != "" {
 		t.Fatalf("direct: out=%q diagnostic=%q err=%v", out, diagnostic, err)
 	}
-	qualified := `~~~go as native
+	qualified := `~~~go as go
 func Greet(name string) string { return "hello "+name }
 ~~~
-value := native.Greet(world)
+value := go.Greet(world)
 echo "$value"
 `
 	out, diagnostic, err = runPolyglot(t, qualified)

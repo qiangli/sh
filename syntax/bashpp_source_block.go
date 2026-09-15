@@ -32,7 +32,7 @@ func (p *Parser) bashppSourceBlock() *SourceBlock {
 	switch len(fields) {
 	case 0:
 	case 2:
-		if fields[0] != "as" || !BashPPValidIdent(fields[1]) {
+		if fields[0] != "as" || !bashppValidSourceAlias(language, fields[1]) {
 			return nil
 		}
 		alias = fields[1]
@@ -151,4 +151,11 @@ func (p *Parser) bashppRegisterSourceBlockFuncs(language, body string) {
 // adapter therefore legitimately uses the otherwise-reserved word "go".
 func bashppValidSourceLanguage(language string) bool {
 	return BashPPValidIdent(language) || language == "go"
+}
+
+// A Go fence may use the natural `go` qualifier promised by the dag front
+// door. Keep that one contextual spelling local to source fences; `go`
+// remains invalid for every Bash++ declaration and ordinary callable.
+func bashppValidSourceAlias(language, alias string) bool {
+	return BashPPValidIdent(alias) || strings.EqualFold(language, "go") && alias == "go"
 }

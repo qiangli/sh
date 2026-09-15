@@ -313,9 +313,13 @@ func (e *emitter) foreignDeclarations() string {
 		fmt.Fprintf(&out, "var %s = %spolyglot.Start(%spolyglot.Plan{ID:%s,Language:%s,Alias:%s,Source:%s,Artifact:%s,Exports:%s}, %s)\n", module, e.prefix, e.prefix, strconv.Quote(plan.ID), strconv.Quote(plan.Language), strconv.Quote(plan.Alias), strconv.Quote(plan.Source), strconv.Quote(plan.Artifact), e.foreignExports(plan.Exports), runtime)
 		if plan.Alias != "" {
 			typ := fmt.Sprintf("%sforeignModule%d", e.prefix, i)
-			fmt.Fprintf(&out, "type %s struct{}\nvar %s %s\n", typ, plan.Alias, typ)
+			alias := plan.Alias
+			if alias == "go" {
+				alias = fmt.Sprintf("%sforeignAlias%d", e.prefix, i)
+			}
+			fmt.Fprintf(&out, "type %s struct{}\nvar %s %s\n", typ, alias, typ)
 			for _, export := range plan.Exports {
-				out.WriteString(e.foreignWrapper("("+plan.Alias+" "+typ+") ", module, export))
+				out.WriteString(e.foreignWrapper("("+alias+" "+typ+") ", module, export))
 			}
 		} else {
 			for _, export := range plan.Exports {

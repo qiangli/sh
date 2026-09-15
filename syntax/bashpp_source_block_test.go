@@ -140,7 +140,7 @@ func TestBashPPRustSourceBlockRegistersDirectCalls(t *testing.T) {
 }
 
 func TestBashPPGoSourceBlockUsesReservedLanguageName(t *testing.T) {
-	src := "~~~go\nfunc Answer() int { return 42 }\n~~~\nx := Answer()\n"
+	src := "~~~go as go\nfunc Answer() int { return 42 }\n~~~\nx := go.Answer()\n"
 	f, err := bashppParse(LangBashPP, src)
 	if err != nil {
 		t.Fatal(err)
@@ -148,7 +148,7 @@ func TestBashPPGoSourceBlockUsesReservedLanguageName(t *testing.T) {
 	if len(f.Stmts) != 2 {
 		t.Fatalf("statements = %d", len(f.Stmts))
 	}
-	if block, ok := f.Stmts[0].Cmd.(*SourceBlock); !ok || block.Language.Value != "go" {
+	if block, ok := f.Stmts[0].Cmd.(*SourceBlock); !ok || block.Language.Value != "go" || block.Alias.Value != "go" {
 		t.Fatalf("first statement = %#v", f.Stmts[0].Cmd)
 	}
 }

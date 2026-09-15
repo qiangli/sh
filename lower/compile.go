@@ -1710,7 +1710,7 @@ func (e *emitter) call(c *syntax.BashPPCall) (string, error) {
 	for i, part := range c.Fun {
 		qualifiedParts[i] = part.Value
 	}
-	if _, ok := e.foreignFunctions[strings.Join(qualifiedParts, ".")]; ok {
+	if foreign, ok := e.foreignFunctions[strings.Join(qualifiedParts, ".")]; ok {
 		var args []string
 		for i := range c.Args {
 			x, err := e.callArgument(c, i)
@@ -1719,7 +1719,11 @@ func (e *emitter) call(c *syntax.BashPPCall) (string, error) {
 			}
 			args = append(args, x)
 		}
-		return strings.Join(qualifiedParts, ".") + "(" + strings.Join(args, ",") + ")", nil
+		name := strings.Join(qualifiedParts, ".")
+		if foreign.alias == "go" {
+			name = fmt.Sprintf("%sforeignAlias%d.%s", e.prefix, foreign.plan, foreign.export.Name)
+		}
+		return name + "(" + strings.Join(args, ",") + ")", nil
 	}
 	if len(c.Fun) > 1 && e.execution && e.imports[c.Fun[0].Value] == "" {
 		return e.methodCall(c)
