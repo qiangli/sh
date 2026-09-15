@@ -17,7 +17,7 @@ func (p *Parser) bashppSourceBlock() *SourceBlock {
 		return nil
 	}
 	language := opener[n:]
-	if !BashPPValidIdent(language) {
+	if !bashppValidSourceLanguage(language) {
 		return nil
 	}
 	fence := opener[:n]
@@ -128,6 +128,13 @@ func (p *Parser) bashppRegisterSourceBlockFuncs(language, body string) {
 			} else {
 				declaration = ""
 			}
+		case "go":
+			declaration = strings.TrimSpace(line)
+			if !strings.HasPrefix(declaration, "func ") {
+				declaration = ""
+			} else {
+				declaration = strings.TrimPrefix(declaration, "func ")
+			}
 		}
 		if declaration == "" {
 			continue
@@ -138,4 +145,10 @@ func (p *Parser) bashppRegisterSourceBlockFuncs(language, body string) {
 			p.bashppRegisterFunc(name)
 		}
 	}
+}
+
+// A fence language is a lexical identifier, not a Go declaration name. The Go
+// adapter therefore legitimately uses the otherwise-reserved word "go".
+func bashppValidSourceLanguage(language string) bool {
+	return BashPPValidIdent(language) || language == "go"
 }

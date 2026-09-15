@@ -348,6 +348,9 @@ func (m *Module) Call(ctx context.Context, name string, args ...any) (CallResult
 func (m *Module) CallKeywords(ctx context.Context, name string, args []any, kwargs map[string]any) (CallResult, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if _, ok := m.runtime.(Go); ok {
+		return m.callGo(ctx, name, args, kwargs)
+	}
 	if rustRuntime, ok := m.runtime.(Rust); ok {
 		return m.callRust(ctx, rustRuntime, name, args, kwargs)
 	}

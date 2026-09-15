@@ -104,6 +104,33 @@ echo "$value"
 	}
 }
 
+func TestBashPPGoDirectAndQualifiedCalls(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go unavailable")
+	}
+	direct := `~~~go
+import "fmt"
+func Add(a int64, b int64) int64 { fmt.Println("go"); return a+b }
+~~~
+x := Add(20, 22)
+echo "x=$x"
+`
+	out, diagnostic, err := runPolyglot(t, direct)
+	if err != nil || out != "go\nx=42\n" || diagnostic != "" {
+		t.Fatalf("direct: out=%q diagnostic=%q err=%v", out, diagnostic, err)
+	}
+	qualified := `~~~go as native
+func Greet(name string) string { return "hello "+name }
+~~~
+value := native.Greet(world)
+echo "$value"
+`
+	out, diagnostic, err = runPolyglot(t, qualified)
+	if err != nil || out != "hello world\n" || diagnostic != "" {
+		t.Fatalf("qualified: out=%q diagnostic=%q err=%v", out, diagnostic, err)
+	}
+}
+
 func TestBashPPCAndCPPDirectAndQualifiedCalls(t *testing.T) {
 	if _, err := exec.LookPath("clang"); err != nil {
 		t.Skip("clang unavailable")

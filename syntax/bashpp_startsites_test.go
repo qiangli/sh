@@ -96,7 +96,7 @@ func TestStartSiteDay1(t *testing.T) {
 }
 
 func TestStartSiteSourceFence(t *testing.T) {
-	for _, src := range []string{"~~~python", "~~~~python", "~~~python as py"} {
+	for _, src := range []string{"~~~python", "~~~~python", "~~~python as py", "~~~go", "~~~go as native"} {
 		got := RecognizeStartSite(src)
 		if got.Site != StartSource || got.Class != ClassE || !got.Bounded {
 			t.Fatalf("RecognizeStartSite(%q) = %#v", src, got)

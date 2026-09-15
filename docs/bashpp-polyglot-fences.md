@@ -18,8 +18,8 @@ end with ` as NAME`. The body is raw foreign source; like the rest of the shell
 parser, CRLF input is normalized to LF. Backtick and quote runs retain their
 Classic shell meanings.
 
-A fence is a declaration unit, not an implicit command. Python and TypeScript
-are implemented adapters. Python blocks may contain one module docstring followed by
+A fence is a declaration unit, not an implicit command. Python, TypeScript,
+Rust, C, C++, and Go are implemented adapters. Python blocks may contain one module docstring followed by
 ordinary synchronous, undecorated function declarations. Imports, classes,
 async declarations, decorators, executable top-level statements, and
 non-literal defaults are rejected during preparation without executing the
@@ -121,3 +121,27 @@ compiler's own `<…>` search), but Bash++ does not infer build flags or link
 third-party libraries. Each call launches a fresh worker, so
 native globals do not persist between calls. The boundary is process
 isolation, not a sandbox; fenced native code has the shell account's authority.
+
+## Go fences
+
+`~~~go` exposes exported top-level functions through the same direct or
+`as NAME` call model. Imports and function declarations are accepted; package
+clauses, methods, top-level variables/types/constants, variadics, and more than
+one value result are refused. Supported parameters/results are booleans,
+integer and floating-point kinds, strings, and `[]byte`. A final `error` result
+is the call error, so both `func F() error` and `func F() (T, error)` follow the
+ordinary Go convention.
+
+The nearest `go.mod` defines the project. `BASHPP_GO` selects an explicit Go
+executable; otherwise the adapter uses `go` on PATH, then the `bashy go`
+provisioner. Module/workspace files, `GOFLAGS`, the launch environment, and the
+executable identity participate in the environment fingerprint.
+
+Preparation writes generated sources only to a private temporary directory.
+`go build -overlay` makes them appear inside the checkout module for the build,
+so a fence may import checkout packages while the checkout remains
+byte-identical. The worker is stored in the immutable plan and embedded in
+lowered output. Each call launches a fresh worker, exchanges one JSON
+request/result frame, exposes ordinary stdout/stderr, and turns panics,
+build/worker failures, malformed frames, and non-nil trailing errors into
+Bash++ call errors.

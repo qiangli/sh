@@ -58,6 +58,7 @@ type emitter struct {
 	foreignRustEnv       *polyglot.EnvironmentPlan
 	foreignCEnv          *polyglot.EnvironmentPlan
 	foreignCPPEnv        *polyglot.EnvironmentPlan
+	foreignGoEnv         *polyglot.EnvironmentPlan
 	methodDeclarations   []*syntax.BashPPFuncDecl
 	enumMembers          map[string][]*syntax.Lit
 	projections          projector

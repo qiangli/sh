@@ -149,7 +149,7 @@ func recognizeSourceFence(src string) bool {
 	for n < len(opener) && opener[n] == '~' {
 		n++
 	}
-	if n < 3 || n == len(opener) || !BashPPValidIdent(opener[n:]) {
+	if n < 3 || n == len(opener) || !bashppValidSourceLanguage(opener[n:]) {
 		return false
 	}
 	return len(fields) == 1 || fields[1] == "as" && BashPPValidIdent(fields[2])

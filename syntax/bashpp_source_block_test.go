@@ -139,6 +139,20 @@ func TestBashPPRustSourceBlockRegistersDirectCalls(t *testing.T) {
 	}
 }
 
+func TestBashPPGoSourceBlockUsesReservedLanguageName(t *testing.T) {
+	src := "~~~go\nfunc Answer() int { return 42 }\n~~~\nx := Answer()\n"
+	f, err := bashppParse(LangBashPP, src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Stmts) != 2 {
+		t.Fatalf("statements = %d", len(f.Stmts))
+	}
+	if block, ok := f.Stmts[0].Cmd.(*SourceBlock); !ok || block.Language.Value != "go" {
+		t.Fatalf("first statement = %#v", f.Stmts[0].Cmd)
+	}
+}
+
 func TestBashPPNativeSourceBlockRegistersDirectCalls(t *testing.T) {
 	for _, language := range []string{"c", "cpp", "cxx"} {
 		src := "~~~" + language + "\nlong long answer() { return 42; }\n~~~\nx := answer()\n"

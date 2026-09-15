@@ -3,9 +3,10 @@ id: d79ed874ff8c
 kind: task
 title: S191.2 Native Go source-fence engine
 seq: 125
-status: todo
+status: assigned
 priority: p0
 created: 2026-09-15T12:14:16.922508Z
+assignee: codex-gpt-5.5
 sprint: 191
 ---
 

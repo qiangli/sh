@@ -100,9 +100,10 @@ func (e *emitter) prepareForeign(ctx context.Context, file *syntax.File) error {
 	rustRuntime := polyglot.Rust{}
 	cRuntime := polyglot.C{}
 	cppRuntime := polyglot.CPP{}
+	goRuntime := polyglot.Go{}
 	for _, block := range blocks {
 		language := polyglot.CanonicalLanguage(block.Language)
-		if language == "python" || language == "typescript" || language == "rust" || language == "c" || language == "cpp" {
+		if language == "python" || language == "typescript" || language == "rust" || language == "c" || language == "cpp" || language == "go" {
 			environment, err := polyglot.DiscoverEnvironment(polyglot.EnvironmentRequest{Source: source, Language: language})
 			if err != nil {
 				return e.fail(first, CodeUnsupported, err.Error())
@@ -119,9 +120,12 @@ func (e *emitter) prepareForeign(ctx context.Context, file *syntax.File) error {
 			} else if language == "c" {
 				e.foreignCEnv = &environment
 				cRuntime.Environment = &environment
-			} else {
+			} else if language == "cpp" {
 				e.foreignCPPEnv = &environment
 				cppRuntime.Environment = &environment
+			} else {
+				e.foreignGoEnv = &environment
+				goRuntime.Environment = &environment
 			}
 		}
 	}
@@ -129,7 +133,7 @@ func (e *emitter) prepareForeign(ctx context.Context, file *syntax.File) error {
 	if len(blocks) > 0 {
 		var err error
 		plans, err = polyglot.Prepare(ctx, blocks, map[string]polyglot.Analyzer{
-			"python": pythonRuntime, "typescript": typeScriptRuntime, "rust": rustRuntime, "c": cRuntime, "cpp": cppRuntime,
+			"python": pythonRuntime, "typescript": typeScriptRuntime, "rust": rustRuntime, "c": cRuntime, "cpp": cppRuntime, "go": goRuntime,
 		})
 		if err != nil {
 			return e.fail(first, CodeUnsupported, err.Error())
@@ -303,6 +307,8 @@ func (e *emitter) foreignDeclarations() string {
 			runtime = fmt.Sprintf("%spolyglot.C{Environment:%s}", e.prefix, e.environmentLiteral(e.foreignCEnv))
 		} else if plan.Language == "cpp" {
 			runtime = fmt.Sprintf("%spolyglot.CPP{Environment:%s}", e.prefix, e.environmentLiteral(e.foreignCPPEnv))
+		} else if plan.Language == "go" {
+			runtime = fmt.Sprintf("%spolyglot.Go{Environment:%s}", e.prefix, e.environmentLiteral(e.foreignGoEnv))
 		}
 		fmt.Fprintf(&out, "var %s = %spolyglot.Start(%spolyglot.Plan{ID:%s,Language:%s,Alias:%s,Source:%s,Artifact:%s,Exports:%s}, %s)\n", module, e.prefix, e.prefix, strconv.Quote(plan.ID), strconv.Quote(plan.Language), strconv.Quote(plan.Alias), strconv.Quote(plan.Source), strconv.Quote(plan.Artifact), e.foreignExports(plan.Exports), runtime)
 		if plan.Alias != "" {

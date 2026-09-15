@@ -83,6 +83,23 @@ echo "x=$x"
 	}
 }
 
+func TestGoFenceInterpretedNativeParity(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go unavailable")
+	}
+	got := testPythonFenceInterpretedNativeParityAt(t, `~~~go as native
+import "fmt"
+func Add(a int64, b int64) int64 { fmt.Println("go"); return a+b }
+func Checked(value int64) (int64, error) { if value < 0 { return 0, fmt.Errorf("negative") }; return value, nil }
+~~~
+x := native.Add(20, 22)
+echo "x=$x"
+`, filepath.Join("testdata", "input.bpp"))
+	if got != "go\nx=42\n" {
+		t.Fatalf("output = %q", got)
+	}
+}
+
 func TestCAndCPPFenceInterpretedNativeParity(t *testing.T) {
 	if _, err := exec.LookPath("clang"); err != nil {
 		t.Skip("clang unavailable")

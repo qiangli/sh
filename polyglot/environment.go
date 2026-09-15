@@ -73,7 +73,7 @@ func DiscoverEnvironment(request EnvironmentRequest) (EnvironmentPlan, error) {
 		lang = "python"
 	}
 	lang = canonicalLanguage(lang)
-	if lang != "python" && lang != "typescript" && lang != "rust" && lang != "c" && lang != "cpp" {
+	if lang != "python" && lang != "typescript" && lang != "rust" && lang != "c" && lang != "cpp" && lang != "go" {
 		return EnvironmentPlan{}, fmt.Errorf("polyglot: no environment metadata reader for %q", lang)
 	}
 	if request.Source == "" {
@@ -159,6 +159,8 @@ func DiscoverEnvironment(request EnvironmentRequest) (EnvironmentPlan, error) {
 		projectMetadata = rustProjectMetadata
 	} else if lang == "c" || lang == "cpp" {
 		projectMetadata = nativeProjectMetadata
+	} else if lang == "go" {
+		projectMetadata = goProjectMetadata
 	}
 	for _, name := range projectMetadata {
 		if file := canonicalExistingFile(filepath.Join(root, name)); file != "" {
@@ -173,6 +175,9 @@ func DiscoverEnvironment(request EnvironmentRequest) (EnvironmentPlan, error) {
 	}
 	if lang == "c" || lang == "cpp" {
 		return discoverNativeEnvironment(plan, selected, env)
+	}
+	if lang == "go" {
+		return discoverGoEnvironment(plan, selected, env)
 	}
 	metadata, err := discoverPythonMetadata(root)
 	if err != nil {
@@ -325,6 +330,9 @@ func nearestExistingDir(start string) (string, error) {
 }
 
 func recognizedProject(dir, language string) bool {
+	if language == "go" {
+		return exists(filepath.Join(dir, "go.mod"))
+	}
 	metadata := pythonProjectMetadata
 	if language == "typescript" {
 		metadata = typeScriptProjectMetadata
@@ -344,6 +352,69 @@ func recognizedProject(dir, language string) bool {
 var rustProjectMetadata = []string{"Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "rust-toolchain"}
 
 var nativeProjectMetadata = []string{"CMakeLists.txt", "compile_commands.json", "meson.build", "Makefile", "makefile"}
+
+var goProjectMetadata = []string{"go.mod", "go.sum", "go.work", "go.work.sum"}
+
+func discoverGoEnvironment(plan EnvironmentPlan, selected *environmentOverlay, env map[string]string) (EnvironmentPlan, error) {
+	if canonicalExistingFile(filepath.Join(plan.Root, "go.mod")) == "" {
+		return EnvironmentPlan{}, fmt.Errorf("polyglot: Go source fence requires a nearest go.mod")
+	}
+	for _, name := range goProjectMetadata {
+		if file := canonicalExistingFile(filepath.Join(plan.Root, name)); file != "" {
+			if name == "go.sum" || name == "go.work.sum" {
+				plan.Locks = append(plan.Locks, file)
+			} else {
+				plan.Manifests = append(plan.Manifests, file)
+			}
+		}
+	}
+	requested, manager := "go", "go"
+	if selected != nil && selected.Runtime != "" {
+		requested = selected.Runtime
+		plan.Explanation = append(plan.Explanation, "selected bashpp overlay")
+	}
+	if override := env["BASHPP_GO"]; override != "" {
+		requested = override
+		plan.Explanation = append(plan.Explanation, "Go executable overridden")
+	}
+	var executable string
+	var err error
+	if filepath.IsAbs(requested) {
+		executable, err = canonicalExecutable(requested, env)
+	} else {
+		executable, err = lookupPath(env, requested)
+	}
+	if err != nil && requested == "go" {
+		executable, err = lookupPath(env, "bashy")
+		manager = "bashy"
+		if err == nil {
+			plan.Explanation = append(plan.Explanation, "selected bashy go provisioner")
+		}
+	} else if err == nil {
+		plan.Explanation = append(plan.Explanation, "selected Go toolchain")
+	}
+	if err != nil {
+		return EnvironmentPlan{}, fmt.Errorf("polyglot: Go toolchain unavailable: %w", err)
+	}
+	plan.Executable, plan.Manager, plan.Runtime = executable, manager, "native"
+	plan.Env = goLaunchEnvironment(env)
+	plan.Fingerprint, err = environmentFingerprint(plan)
+	if err != nil {
+		return EnvironmentPlan{}, err
+	}
+	return plan.Clone(), nil
+}
+
+func goLaunchEnvironment(env map[string]string) []string {
+	var out []string
+	for _, key := range []string{"PATH", "HOME", "SystemRoot", "TMPDIR", "TEMP", "TMP", "GOTOOLCHAIN", "GOFLAGS", "GOWORK", "GOMODCACHE", "GOCACHE", "GOPATH"} {
+		if value := environmentValue(env, key); value != "" {
+			out = append(out, key+"="+value)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
 
 func discoverNativeEnvironment(plan EnvironmentPlan, selected *environmentOverlay, env map[string]string) (EnvironmentPlan, error) {
 	for _, name := range nativeProjectMetadata {
