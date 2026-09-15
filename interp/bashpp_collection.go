@@ -762,6 +762,8 @@ func (r *Runner) bashPPCheckCollectionValue(value any, expected syntax.BashPPTyp
 	}
 	valid := false
 	switch {
+	case typ == "any":
+		valid = true
 	case typ == "string":
 		_, valid = value.(string)
 	case typ == "bool":

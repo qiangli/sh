@@ -1003,6 +1003,8 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					continue
 				}
 				delete(r.Funcs, arg)
+				delete(r.bashPPAgenticFuncs, arg)
+				delete(r.bashPPDecoratedFuncs, arg)
 			}
 		}
 	case "echo":

@@ -102,6 +102,19 @@ type Runner struct {
 	// public function table, which embedders may replace directly.
 	bashPPAgenticFuncs map[string]*syntax.Stmt
 	bashPPAgentic      bool
+	// bashPPDecoratedFuncs mirrors bashPPAgenticFuncs for decorated shell
+	// functions; typed functions carry their decorators on the declaration.
+	// bashPPNativeDecorators and bashPPAdvice are the [Decorators] and
+	// [Advice] options; bashPPDecoratorChains maps a script-visible Call to
+	// the invocation it belongs to, and bashPPDecoratorStack names the
+	// decorators executing right now, for cycle detection.
+	bashPPDecoratedFuncs   map[string]*bashPPDecorated
+	bashPPNativeDecorators map[string]DecoratorFunc
+	bashPPAdvice           AdviceFunc
+	bashPPDecoratorChains  map[*bashPPCell]*bashPPDecoratorChain
+	bashPPDecoratorStack   []string
+	bashPPDecoratorFailSeq uint64
+	bashPPPredeclaredCall  bool
 
 	// bashPPScope is the innermost Bash++ lexical block, or nil when the
 	// runner is not in the bash++ dialect. Nil is the fast path every other
@@ -2984,9 +2997,13 @@ func (r *Runner) Reset() {
 		// `BASH_FUNC_*` env imports run at construction time and the
 		// resulting functions are part of the initial shell state,
 		// not per-Run scratch state.
-		Funcs:              r.Funcs,
-		bashPPAgenticFuncs: r.bashPPAgenticFuncs,
-		funcSources:        r.funcSources,
+		Funcs:                  r.Funcs,
+		bashPPAgenticFuncs:     r.bashPPAgenticFuncs,
+		bashPPDecoratedFuncs:   r.bashPPDecoratedFuncs,
+		bashPPNativeDecorators: r.bashPPNativeDecorators,
+		bashPPAdvice:           r.bashPPAdvice,
+		bashPPPredeclaredCall:  r.bashPPPredeclaredCall,
+		funcSources:            r.funcSources,
 
 		// A function's captured Bash++ scope is part of the function, so it
 		// is preserved exactly as far as Funcs is. The runner's own current
@@ -3689,6 +3706,11 @@ func (r *Runner) subshell(background bool) *Runner {
 	// Funcs are copied, since they might be modified.
 	r2.Funcs = maps.Clone(r.Funcs)
 	r2.bashPPAgenticFuncs = maps.Clone(r.bashPPAgenticFuncs)
+	r2.bashPPDecoratedFuncs = maps.Clone(r.bashPPDecoratedFuncs)
+	// A chain in flight belongs to the parent's frames; a subshell that
+	// calls Next on an inherited Call gets the outside-a-chain diagnostic.
+	r2.bashPPDecoratorChains = nil
+	r2.bashPPDecoratorStack = append([]string(nil), r.bashPPDecoratorStack...)
 	r2.funcSources = maps.Clone(r.funcSources)
 	r2.bashPPImports = maps.Clone(r.bashPPImports)
 	r2.bashPPForeignFuncs = maps.Clone(r.bashPPForeignFuncs)
