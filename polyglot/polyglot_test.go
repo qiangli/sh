@@ -26,8 +26,11 @@ func TestPythonDoesNotImportFromImplicitWorkingDirectory(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if err := os.WriteFile(filepath.Join(pythonPath, "sitecustomize.py"), []byte("raise RuntimeError('sitecustomize ran before bootstrap')\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	env := []string{"PATH=" + os.Getenv("PATH"), "PYTHONNOUSERSITE=1", "PYTHONPATH=" + pythonPath}
-	runtime := Python{Command: python, Environment: &EnvironmentPlan{Dir: dir, Env: env}}
+	runtime := Python{Command: python, Environment: &EnvironmentPlan{Dir: dir, Env: env, PythonPath: []string{pythonPath}}}
 	plans, err := Prepare(context.Background(), []Block{{Language: "python", Source: "def ok(): return 1\n"}}, map[string]Analyzer{"python": runtime})
 	if err != nil {
 		t.Fatal(err)
@@ -50,7 +53,7 @@ func TestPythonPreservesRecordedWorkingDirectoryPythonPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	env := []string{"PATH=" + os.Getenv("PATH"), "PYTHONNOUSERSITE=1", "PYTHONPATH=" + dir}
-	runtime := Python{Command: python, Environment: &EnvironmentPlan{Dir: dir, Env: env}}
+	runtime := Python{Command: python, Environment: &EnvironmentPlan{Dir: dir, Env: env, PythonPath: []string{dir}}}
 	plan := pythonPlanWithRuntime(t, "def load():\n    import recorded\n    return recorded.value\n", runtime)
 	module := Start(plan, runtime)
 	defer module.Close()

@@ -132,7 +132,7 @@ func (p Python) executable() string {
 }
 
 func (p Python) Analyze(ctx context.Context, source string) ([]Export, error) {
-	cmd := exec.CommandContext(ctx, p.executable(), "-c", pythonAnalyze)
+	cmd := exec.CommandContext(ctx, p.executable(), p.pythonArguments(pythonAnalyze, false)...)
 	p.configure(cmd)
 	cmd.Stdin = strings.NewReader(source)
 	var stdout, stderr bytes.Buffer
@@ -168,7 +168,18 @@ type Runtime interface {
 
 type configuredRuntime interface{ configure(*exec.Cmd) }
 
-func (p Python) arguments(Plan) []string { return []string{"-u", "-c", pythonWorker} }
+func (p Python) arguments(Plan) []string { return p.pythonArguments(pythonWorker, true) }
+func (p Python) pythonArguments(script string, unbuffered bool) []string {
+	args := []string{"-I"}
+	if unbuffered {
+		args = append(args, "-u")
+	}
+	args = append(args, "-c", script)
+	if p.Environment != nil {
+		args = append(args, p.Environment.PythonPath...)
+	}
+	return args
+}
 func (p Python) loadRequest(plan Plan) map[string]any {
 	return map[string]any{"id": 0, "op": "load", "source": plan.Source}
 }
@@ -431,17 +442,10 @@ func decodeValue(v any) (any, error) {
 }
 
 const pythonPathBootstrap = `
-import os, sys
-_cwd=os.path.normcase(os.path.realpath(os.getcwd()))
-_explicit_cwd=sum(os.path.normcase(os.path.realpath(os.path.abspath(p))) == _cwd for p in os.environ.get('PYTHONPATH','').split(os.pathsep) if p)
-_paths=[]
-for _path in sys.path:
-    if not _path: continue
-    if os.path.normcase(os.path.realpath(os.path.abspath(_path))) == _cwd:
-        if not _explicit_cwd: continue
-        _explicit_cwd-=1
-    _paths.append(_path)
-sys.path[:]=_paths
+import sys
+_pythonpath=sys.argv[1:]
+del sys.argv[1:]
+sys.path[:0]=_pythonpath
 `
 
 const pythonAnalyze = pythonPathBootstrap + `

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -48,8 +49,27 @@ func (r *Runner) bashPPPrepareSourceBlocks(ctx context.Context, file *syntax.Fil
 	if len(blocks) == 0 {
 		return restore, nil
 	}
+	pythonRuntime := polyglot.Python{}
+	for _, block := range blocks {
+		if strings.EqualFold(strings.TrimSpace(block.Language), "python") {
+			source := file.Name
+			if source == "" {
+				source = filepath.Join(r.Dir, ".bashpp-stdin")
+			} else if !filepath.IsAbs(source) {
+				source = filepath.Join(r.Dir, source)
+			}
+			environment, err := polyglot.DiscoverEnvironment(polyglot.EnvironmentRequest{
+				Source: source, Language: "python", Environ: execEnv(r.writeEnv),
+			})
+			if err != nil {
+				return restore, fmt.Errorf("%s: %w", file.Name, err)
+			}
+			pythonRuntime.Environment = &environment
+			break
+		}
+	}
 	plans, err := polyglot.Prepare(ctx, blocks, map[string]polyglot.Analyzer{
-		"python": polyglot.Python{}, "typescript": polyglot.TypeScript{},
+		"python": pythonRuntime, "typescript": polyglot.TypeScript{},
 	})
 	if err != nil {
 		return restore, fmt.Errorf("%s: %w", file.Name, err)
@@ -76,7 +96,7 @@ func (r *Runner) bashPPPrepareSourceBlocks(ctx context.Context, file *syntax.Fil
 	}
 	foreign := map[string]*bashPPFunc{}
 	for _, plan := range plans {
-		var runtime polyglot.Runtime = polyglot.Python{}
+		var runtime polyglot.Runtime = pythonRuntime
 		if plan.Language == "typescript" {
 			runtime = polyglot.TypeScript{}
 		}
