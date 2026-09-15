@@ -104,6 +104,34 @@ echo "$value"
 	}
 }
 
+func TestBashPPCAndCPPDirectAndQualifiedCalls(t *testing.T) {
+	if _, err := exec.LookPath("clang"); err != nil {
+		t.Skip("clang unavailable")
+	}
+	direct := `~~~c
+#include <stdint.h>
+int64_t add(int64_t a, int64_t b) { return a + b; }
+~~~
+x := add(20, 22)
+echo "c=$x"
+`
+	out, diagnostic, err := runPolyglot(t, direct)
+	if err != nil || out != "c=42\n" || diagnostic != "" {
+		t.Fatalf("C: out=%q diagnostic=%q err=%v", out, diagnostic, err)
+	}
+	qualified := `~~~cxx as native
+#include <string>
+std::string greet(const std::string& name) { return "hello "+name; }
+~~~
+value := native.greet(world)
+echo "$value"
+`
+	out, diagnostic, err = runPolyglot(t, qualified)
+	if err != nil || out != "hello world\n" || diagnostic != "" {
+		t.Fatalf("C++: out=%q diagnostic=%q err=%v", out, diagnostic, err)
+	}
+}
+
 func TestBashPPPythonSourcedFileIsolation(t *testing.T) {
 	child := filepath.Join(t.TempDir(), "child.bpp")
 	err := os.WriteFile(child, []byte("~~~python\ndef answer() -> int:\n    return 2\n~~~\nchildX := answer()\necho child=$childX\n"), 0o600)

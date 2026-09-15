@@ -83,6 +83,30 @@ echo "x=$x"
 	}
 }
 
+func TestCAndCPPFenceInterpretedNativeParity(t *testing.T) {
+	if _, err := exec.LookPath("clang"); err != nil {
+		t.Skip("clang unavailable")
+	}
+	for name, source := range map[string]string{
+		"c": `~~~c as native
+#include <stdint.h>
+int64_t add(int64_t a, int64_t b) { return a+b; }
+~~~
+x := native.add(20, 22)
+echo "c=$x"
+`,
+		"cpp": `~~~cpp as native
+#include <string>
+std::string greet(const std::string& name) { return "hello "+name; }
+~~~
+value := native.greet(world)
+echo "$value"
+`,
+	} {
+		t.Run(name, func(t *testing.T) { testPythonFenceInterpretedNativeParity(t, source) })
+	}
+}
+
 func TestPythonFenceUsesSourceEnvironmentPlan(t *testing.T) {
 	python, err := exec.LookPath("python3")
 	if err != nil {

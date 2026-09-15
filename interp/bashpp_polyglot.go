@@ -95,9 +95,11 @@ func (r *Runner) bashPPPrepareSourceBlocks(ctx context.Context, file *syntax.Fil
 	pythonRuntime := polyglot.Python{}
 	typeScriptRuntime := polyglot.TypeScript{}
 	rustRuntime := polyglot.Rust{}
+	cRuntime := polyglot.C{}
+	cppRuntime := polyglot.CPP{}
 	for _, block := range blocks {
 		language := polyglot.CanonicalLanguage(block.Language)
-		if language == "python" || language == "typescript" || language == "rust" {
+		if language == "python" || language == "typescript" || language == "rust" || language == "c" || language == "cpp" {
 			source := file.Name
 			if source == "" {
 				source = filepath.Join(r.Dir, ".bashpp-stdin")
@@ -114,13 +116,17 @@ func (r *Runner) bashPPPrepareSourceBlocks(ctx context.Context, file *syntax.Fil
 				pythonRuntime.Environment = &environment
 			} else if language == "typescript" {
 				typeScriptRuntime.Environment = &environment
-			} else {
+			} else if language == "rust" {
 				rustRuntime.Environment = &environment
+			} else if language == "c" {
+				cRuntime.Environment = &environment
+			} else {
+				cppRuntime.Environment = &environment
 			}
 		}
 	}
 	plans, err := polyglot.Prepare(ctx, blocks, map[string]polyglot.Analyzer{
-		"python": pythonRuntime, "typescript": typeScriptRuntime, "rust": rustRuntime,
+		"python": pythonRuntime, "typescript": typeScriptRuntime, "rust": rustRuntime, "c": cRuntime, "cpp": cppRuntime,
 	})
 	if err != nil {
 		return restore, fmt.Errorf("%s: %w", file.Name, err)
@@ -152,6 +158,10 @@ func (r *Runner) bashPPPrepareSourceBlocks(ctx context.Context, file *syntax.Fil
 			runtime = typeScriptRuntime
 		} else if plan.Language == "rust" {
 			runtime = rustRuntime
+		} else if plan.Language == "c" {
+			runtime = cRuntime
+		} else if plan.Language == "cpp" {
+			runtime = cppRuntime
 		}
 		module := polyglot.Start(plan, runtime)
 		r.bashPPForeignModules = append(r.bashPPForeignModules, module)

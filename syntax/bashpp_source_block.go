@@ -114,6 +114,20 @@ func (p *Parser) bashppRegisterSourceBlockFuncs(language, body string) {
 			} else {
 				declaration = strings.TrimPrefix(declaration, "pub fn ")
 			}
+		case "c", "cpp", "cxx":
+			declaration = strings.TrimSpace(line)
+			if strings.HasPrefix(declaration, "static ") || strings.HasPrefix(declaration, "#") {
+				declaration = ""
+			} else if before, after, ok := strings.Cut(declaration, "("); ok && before != "" && !strings.HasSuffix(strings.TrimSpace(before), "if") && !strings.HasSuffix(strings.TrimSpace(before), "for") && !strings.HasSuffix(strings.TrimSpace(before), "while") {
+				parts := strings.Fields(before)
+				if len(parts) > 1 {
+					declaration = parts[len(parts)-1] + "(" + after
+				} else {
+					declaration = ""
+				}
+			} else {
+				declaration = ""
+			}
 		}
 		if declaration == "" {
 			continue

@@ -73,7 +73,7 @@ func DiscoverEnvironment(request EnvironmentRequest) (EnvironmentPlan, error) {
 		lang = "python"
 	}
 	lang = canonicalLanguage(lang)
-	if lang != "python" && lang != "typescript" && lang != "rust" {
+	if lang != "python" && lang != "typescript" && lang != "rust" && lang != "c" && lang != "cpp" {
 		return EnvironmentPlan{}, fmt.Errorf("polyglot: no environment metadata reader for %q", lang)
 	}
 	if request.Source == "" {
@@ -157,6 +157,8 @@ func DiscoverEnvironment(request EnvironmentRequest) (EnvironmentPlan, error) {
 		projectMetadata = typeScriptProjectMetadata
 	} else if lang == "rust" {
 		projectMetadata = rustProjectMetadata
+	} else if lang == "c" || lang == "cpp" {
+		projectMetadata = nativeProjectMetadata
 	}
 	for _, name := range projectMetadata {
 		if file := canonicalExistingFile(filepath.Join(root, name)); file != "" {
@@ -168,6 +170,9 @@ func DiscoverEnvironment(request EnvironmentRequest) (EnvironmentPlan, error) {
 	}
 	if lang == "rust" {
 		return discoverRustEnvironment(plan, selected, env)
+	}
+	if lang == "c" || lang == "cpp" {
+		return discoverNativeEnvironment(plan, selected, env)
 	}
 	metadata, err := discoverPythonMetadata(root)
 	if err != nil {
@@ -325,6 +330,8 @@ func recognizedProject(dir, language string) bool {
 		metadata = typeScriptProjectMetadata
 	} else if language == "rust" {
 		metadata = rustProjectMetadata
+	} else if language == "c" || language == "cpp" {
+		metadata = nativeProjectMetadata
 	}
 	for _, n := range metadata {
 		if exists(filepath.Join(dir, n)) {
@@ -335,6 +342,62 @@ func recognizedProject(dir, language string) bool {
 }
 
 var rustProjectMetadata = []string{"Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "rust-toolchain"}
+
+var nativeProjectMetadata = []string{"CMakeLists.txt", "compile_commands.json", "meson.build", "Makefile", "makefile"}
+
+func discoverNativeEnvironment(plan EnvironmentPlan, selected *environmentOverlay, env map[string]string) (EnvironmentPlan, error) {
+	for _, name := range nativeProjectMetadata {
+		if file := canonicalExistingFile(filepath.Join(plan.Root, name)); file != "" {
+			if name == "compile_commands.json" {
+				plan.Locks = append(plan.Locks, file)
+			} else {
+				plan.Manifests = append(plan.Manifests, file)
+			}
+		}
+	}
+	requested := ""
+	if selected != nil && selected.Runtime != "" {
+		requested = selected.Runtime
+		plan.Explanation = append(plan.Explanation, "selected bashpp overlay")
+	}
+	override := "BASHPP_CC"
+	candidates := []string{"clang", "cc"}
+	if plan.Language == "cpp" {
+		override = "BASHPP_CXX"
+		candidates = []string{"clang++", "c++"}
+	}
+	if value := env[override]; value != "" {
+		requested = value
+		plan.Explanation = append(plan.Explanation, "compiler executable overridden")
+	}
+	var executable string
+	var err error
+	if requested != "" {
+		if filepath.IsAbs(requested) {
+			executable, err = canonicalExecutable(requested, env)
+		} else {
+			executable, err = lookupPath(env, requested)
+		}
+	} else {
+		for _, candidate := range candidates {
+			if executable, err = lookupPath(env, candidate); err == nil {
+				break
+			}
+		}
+		plan.Explanation = append(plan.Explanation, "selected PATH Clang-compatible compiler")
+	}
+	if err != nil {
+		return EnvironmentPlan{}, fmt.Errorf("polyglot: %s compiler unavailable: %w", nativeLanguageName(plan.Language), err)
+	}
+	plan.Executable = executable
+	plan.Manager, plan.Runtime = "clang", "native"
+	plan.Env = typeScriptLaunchEnvironment(env)
+	plan.Fingerprint, err = environmentFingerprint(plan)
+	if err != nil {
+		return EnvironmentPlan{}, err
+	}
+	return plan.Clone(), nil
+}
 
 func discoverRustEnvironment(plan EnvironmentPlan, selected *environmentOverlay, env map[string]string) (EnvironmentPlan, error) {
 	var err error

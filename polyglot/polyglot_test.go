@@ -181,7 +181,7 @@ func TestPrepareAggregationAliasesAndIdentity(t *testing.T) {
 }
 
 func TestCanonicalLanguageAliases(t *testing.T) {
-	for in, want := range map[string]string{"python": "python", "Python": "python", "py": "python", "PY": "python", "ts": "typescript", "typescript": "typescript", " py ": "python", "rust": "rust", "rs": "rust", "RS": "rust"} {
+	for in, want := range map[string]string{"python": "python", "Python": "python", "py": "python", "PY": "python", "ts": "typescript", "typescript": "typescript", " py ": "python", "rust": "rust", "rs": "rust", "RS": "rust", "c": "c", "cpp": "cpp", "cxx": "cpp", "CXX": "cpp"} {
 		if got := CanonicalLanguage(in); got != want {
 			t.Fatalf("CanonicalLanguage(%q) = %q, want %q", in, got, want)
 		}

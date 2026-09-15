@@ -56,6 +56,8 @@ type emitter struct {
 	foreignPythonEnv     *polyglot.EnvironmentPlan
 	foreignTypeScriptEnv *polyglot.EnvironmentPlan
 	foreignRustEnv       *polyglot.EnvironmentPlan
+	foreignCEnv          *polyglot.EnvironmentPlan
+	foreignCPPEnv        *polyglot.EnvironmentPlan
 	methodDeclarations   []*syntax.BashPPFuncDecl
 	enumMembers          map[string][]*syntax.Lit
 	projections          projector

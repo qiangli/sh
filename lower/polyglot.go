@@ -98,9 +98,11 @@ func (e *emitter) prepareForeign(ctx context.Context, file *syntax.File) error {
 	pythonRuntime := polyglot.Python{}
 	typeScriptRuntime := polyglot.TypeScript{}
 	rustRuntime := polyglot.Rust{}
+	cRuntime := polyglot.C{}
+	cppRuntime := polyglot.CPP{}
 	for _, block := range blocks {
 		language := polyglot.CanonicalLanguage(block.Language)
-		if language == "python" || language == "typescript" || language == "rust" {
+		if language == "python" || language == "typescript" || language == "rust" || language == "c" || language == "cpp" {
 			environment, err := polyglot.DiscoverEnvironment(polyglot.EnvironmentRequest{Source: source, Language: language})
 			if err != nil {
 				return e.fail(first, CodeUnsupported, err.Error())
@@ -111,9 +113,15 @@ func (e *emitter) prepareForeign(ctx context.Context, file *syntax.File) error {
 			} else if language == "typescript" {
 				e.foreignTypeScriptEnv = &environment
 				typeScriptRuntime.Environment = &environment
-			} else {
+			} else if language == "rust" {
 				e.foreignRustEnv = &environment
 				rustRuntime.Environment = &environment
+			} else if language == "c" {
+				e.foreignCEnv = &environment
+				cRuntime.Environment = &environment
+			} else {
+				e.foreignCPPEnv = &environment
+				cppRuntime.Environment = &environment
 			}
 		}
 	}
@@ -121,7 +129,7 @@ func (e *emitter) prepareForeign(ctx context.Context, file *syntax.File) error {
 	if len(blocks) > 0 {
 		var err error
 		plans, err = polyglot.Prepare(ctx, blocks, map[string]polyglot.Analyzer{
-			"python": pythonRuntime, "typescript": typeScriptRuntime, "rust": rustRuntime,
+			"python": pythonRuntime, "typescript": typeScriptRuntime, "rust": rustRuntime, "c": cRuntime, "cpp": cppRuntime,
 		})
 		if err != nil {
 			return e.fail(first, CodeUnsupported, err.Error())
@@ -291,6 +299,10 @@ func (e *emitter) foreignDeclarations() string {
 			runtime = fmt.Sprintf("%spolyglot.TypeScript{Environment:%s}", e.prefix, e.environmentLiteral(e.foreignTypeScriptEnv))
 		} else if plan.Language == "rust" {
 			runtime = fmt.Sprintf("%spolyglot.Rust{Environment:%s}", e.prefix, e.environmentLiteral(e.foreignRustEnv))
+		} else if plan.Language == "c" {
+			runtime = fmt.Sprintf("%spolyglot.C{Environment:%s}", e.prefix, e.environmentLiteral(e.foreignCEnv))
+		} else if plan.Language == "cpp" {
+			runtime = fmt.Sprintf("%spolyglot.CPP{Environment:%s}", e.prefix, e.environmentLiteral(e.foreignCPPEnv))
 		}
 		fmt.Fprintf(&out, "var %s = %spolyglot.Start(%spolyglot.Plan{ID:%s,Language:%s,Alias:%s,Source:%s,Artifact:%s,Exports:%s}, %s)\n", module, e.prefix, e.prefix, strconv.Quote(plan.ID), strconv.Quote(plan.Language), strconv.Quote(plan.Alias), strconv.Quote(plan.Source), strconv.Quote(plan.Artifact), e.foreignExports(plan.Exports), runtime)
 		if plan.Alias != "" {

@@ -93,3 +93,27 @@ command. It is therefore deliberately narrow: indentation, an argument
 position, `command ~~~python`, or a quoted opener remains ordinary shell. The
 feature is inert in Classic and POSIX dialects. Merely reading or rendering a
 Markdown file never invokes the Bash++ parser or worker.
+
+## Native C and C++ fences
+
+`~~~c`, `~~~cpp`, and the `~~~cxx` alias expose non-`static`, top-level
+function definitions through the same direct/qualified call model. Clang's
+JSON AST is the signature authority; Bash++ does not parse C or C++ itself.
+The combined C17 or C++20 translation unit is compiled once, and its native
+worker artifact is stored in the immutable module plan and embedded in lowered
+Go output.
+
+Supported signatures contain `void`, booleans, ordinary or fixed-width
+integers, `float`, `double`, C strings, and C++ `std::string` values or const
+references. C++ namespace members are not exported; overloads, methods, templates, variadics,
+aggregates, and other pointer types fail during preparation. Private helpers
+use `static` linkage. C++ exceptions and worker failures become Bash++ call
+errors; ordinary stdout and stderr remain visible.
+
+Compiler selection is source-relative and deterministic: a matching
+`bashpp.yaml`/`bashpp.json` runtime, then `BASHPP_CC` or `BASHPP_CXX`, then
+`clang`/`cc` or `clang++`/`c++` on the recorded `PATH`. The source directory
+and discovered project root are include roots, but Bash++ does not infer build
+flags or link third-party libraries. Each call launches a fresh worker, so
+native globals do not persist between calls. The boundary is process
+isolation, not a sandbox; fenced native code has the shell account's authority.

@@ -61,8 +61,8 @@ type artifactAnalyzer interface {
 // policy is per source unit: all blocks for a language must use the same alias.
 func Prepare(ctx context.Context, blocks []Block, analyzers map[string]Analyzer) ([]Plan, error) {
 	type aggregate struct {
-		alias   string
-		sources []string
+		alias  string
+		blocks []Block
 	}
 	groups := map[string]*aggregate{}
 	for _, block := range blocks {
@@ -78,7 +78,7 @@ func Prepare(ctx context.Context, blocks []Block, analyzers map[string]Analyzer)
 		if group.alias != block.Alias {
 			return nil, fmt.Errorf("polyglot: inconsistent aliases for %s", lang)
 		}
-		group.sources = append(group.sources, block.Source)
+		group.blocks = append(group.blocks, block)
 	}
 	langs := make([]string, 0, len(groups))
 	for lang := range groups {
@@ -92,7 +92,7 @@ func Prepare(ctx context.Context, blocks []Block, analyzers map[string]Analyzer)
 			return nil, fmt.Errorf("polyglot: unsupported language %q", lang)
 		}
 		group := groups[lang]
-		source := strings.Join(group.sources, "\n")
+		source := aggregateSource(lang, group.blocks)
 		var exports []Export
 		var artifact string
 		var err error
@@ -108,6 +108,32 @@ func Prepare(ctx context.Context, blocks []Block, analyzers map[string]Analyzer)
 		plans = append(plans, Plan{ID: hex.EncodeToString(hash[:]), Language: lang, Alias: group.alias, Source: source, Artifact: artifact, Exports: exports})
 	}
 	return plans, nil
+}
+
+func aggregateSource(language string, blocks []Block) string {
+	if language != "c" && language != "cpp" {
+		sources := make([]string, len(blocks))
+		for i := range blocks {
+			sources[i] = blocks[i].Source
+		}
+		return strings.Join(sources, "\n")
+	}
+	var out strings.Builder
+	for _, block := range blocks {
+		name := block.Filename
+		if name == "" {
+			name = "<bash++ " + language + ">"
+		}
+		line := block.Line
+		if line < 1 {
+			line = 1
+		}
+		fmt.Fprintf(&out, "#line %d %s\n%s", line, strconv.Quote(name), block.Source)
+		if !strings.HasSuffix(block.Source, "\n") {
+			out.WriteByte('\n')
+		}
+	}
+	return out.String()
 }
 
 // CanonicalLanguage maps a fence or import language spelling to the name the
@@ -126,6 +152,8 @@ func canonicalLanguage(language string) string {
 		return "python"
 	case "rs":
 		return "rust"
+	case "cxx":
+		return "cpp"
 	}
 	return language
 }
@@ -322,6 +350,12 @@ func (m *Module) CallKeywords(ctx context.Context, name string, args []any, kwar
 	defer m.mu.Unlock()
 	if rustRuntime, ok := m.runtime.(Rust); ok {
 		return m.callRust(ctx, rustRuntime, name, args, kwargs)
+	}
+	if _, ok := m.runtime.(C); ok {
+		return m.callNativeArtifact(ctx, "C", name, args, kwargs)
+	}
+	if _, ok := m.runtime.(CPP); ok {
+		return m.callNativeArtifact(ctx, "C++", name, args, kwargs)
 	}
 	if err := m.ensure(ctx); err != nil {
 		return CallResult{}, err
