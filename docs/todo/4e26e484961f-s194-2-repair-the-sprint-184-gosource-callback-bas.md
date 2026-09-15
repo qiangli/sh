@@ -3,9 +3,11 @@ id: 4e26e484961f
 kind: task
 title: S194.2 repair the Sprint 184 GoSource callback baseline
 seq: 123
-status: todo
+status: assigned
 priority: p0
 created: 2026-09-15T12:05:21.439633Z
+weave: 223
+assignee: qiangli
 sprint: 194
 ---
 
