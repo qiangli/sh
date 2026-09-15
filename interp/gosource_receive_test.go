@@ -58,30 +58,14 @@ func main(){c:=make(chan int,1);c<-7;var x int;x=<-pick(c);fmt.Println(x)}`,
 	}
 }
 
-// This is a documented unsupported-storage guard, not a product success claim:
-// the original valid Go program must fail before fabricating a channel from an
-// aggregate's scalar carrier or consuming a different channel.
-func TestGoSourceReceiveRejectsUnrepresentedChannelStorage(t *testing.T) {
-	source := `package main
+// Channels with interpreter-owned element types retain their identity when
+// stored in aggregates, including a defined element type with methods.
+func TestGoSourceReceiveChannelStorage(t *testing.T) {
+	typedSendThreeModes(t, `package main
 import "fmt"
 type Item int
 func(Item) String() string { return "item" }
-func main(){c:=make(chan Item,1);c<-Item(7);cs:=[]chan Item{c};fmt.Println(<-cs[0])}`
-	program, err := gosource.Parse(strings.NewReader(source), "channel-storage.go", gosource.Options{RunMain: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var out, errout bytes.Buffer
-	runner, err := interp.New(interp.Lang(syntax.LangBashPP), interp.StdIO(nil, &out, &errout))
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	err = runner.Run(ctx, program.File)
-	if status, ok := interp.IsExitStatus(err); !ok || status != 2 || !strings.Contains(errout.String(), "BASHPP-ECOLLECTION-ELEMENT") || out.Len() != 0 {
-		t.Fatalf("unsupported storage must fail closed: %v stdout=%q stderr=%q", err, out.String(), errout.String())
-	}
+func main(){c:=make(chan Item,2);c<-Item(7);cs:=[]chan Item{c};cs[0]<-Item(8);fmt.Println(cs[0]==c,<-cs[0],<-c);close(cs[0]);_,ok:=<-c;fmt.Println(ok)}`)
 }
 func TestGoSourceComputedReceiveCancellation(t *testing.T) {
 	for name, body := range map[string]string{
