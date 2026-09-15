@@ -3,10 +3,14 @@ id: 8bc986724c49
 kind: task
 title: 'S184.2: execute TypeScript project fences on Node and Bun'
 seq: 118
-status: todo
+status: done
 priority: p0
 created: 2026-09-15T05:25:35.698697Z
+weave: 220
+assignee: qiangli
 sprint: 184
+closed: 2026-09-15T06:13:48.785887Z
+closed_by: codex-gpt5.6-sol
 ---
 
 ## Setup
