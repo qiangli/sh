@@ -93,6 +93,43 @@ func TestLowerNonPythonDoesNotDiscoverEnvironment(t *testing.T) {
 	}
 }
 
+func TestPythonFenceEnvironmentUsesOrigin(t *testing.T) {
+	python, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("python3 unavailable")
+	}
+	root := t.TempDir()
+	launcher := filepath.Join(root, "origin-python")
+	body := "#!/bin/sh\nexec " + strconv.Quote(python) + " \"$@\"\n"
+	if err := os.WriteFile(launcher, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "bashpp.yaml"), []byte("runtime: origin-python\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	origin := filepath.Join(root, "program.bpp")
+	if err := os.WriteFile(origin, []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	file := parse(t, "~~~python\ndef answer() -> int:\n    return 42\n~~~\n", "<stdin>")
+	result, err := lower.Compile(file, lower.Options{Origin: origin})
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalLauncher, err := filepath.EvalSymlinks(launcher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	generated := string(result.Source)
+	if !strings.Contains(generated, "Dir: "+strconv.Quote(canonicalRoot)) || !strings.Contains(generated, "Executable: "+strconv.Quote(canonicalLauncher)) {
+		t.Fatalf("generated plan did not use Origin project:\n%s", generated)
+	}
+}
+
 func testPythonFenceInterpretedNativeParity(t *testing.T, source string) {
 	testPythonFenceInterpretedNativeParityAt(t, source, "input.bpp")
 }

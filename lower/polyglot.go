@@ -40,7 +40,7 @@ func (e *emitter) prepareForeign(ctx context.Context, file *syntax.File) error {
 	pythonRuntime := polyglot.Python{}
 	for _, block := range blocks {
 		if strings.EqualFold(strings.TrimSpace(block.Language), "python") {
-			source := file.Name
+			source := e.sourceName
 			if source == "" {
 				source = filepath.Join(e.options.Dir, ".bashpp-input")
 			} else if !filepath.IsAbs(source) && e.options.Dir != "" {
