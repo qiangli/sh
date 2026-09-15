@@ -107,6 +107,13 @@ func (p *Parser) bashppRegisterSourceBlockFuncs(language, body string) {
 			} else {
 				declaration = strings.TrimPrefix(declaration, "function ")
 			}
+		case "rust", "rs":
+			declaration = strings.TrimSpace(line)
+			if !strings.HasPrefix(declaration, "pub fn ") {
+				declaration = ""
+			} else {
+				declaration = strings.TrimPrefix(declaration, "pub fn ")
+			}
 		}
 		if declaration == "" {
 			continue

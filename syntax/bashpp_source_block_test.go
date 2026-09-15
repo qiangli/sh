@@ -121,6 +121,24 @@ func TestBashPPTypeScriptSourceBlockRegistersDirectCalls(t *testing.T) {
 	}
 }
 
+func TestBashPPRustSourceBlockRegistersDirectCalls(t *testing.T) {
+	for _, language := range []string{"rust", "rs"} {
+		src := "~~~" + language + "\npub fn add(a: i64, b: i64) -> i64 { a + b }\n~~~\nx := add(1, 2)\n"
+		f, err := NewParser(Variant(LangBashPP)).Parse(strings.NewReader(src), "rust.bpp")
+		if err != nil {
+			t.Fatalf("%s: %v", language, err)
+		}
+		block, ok := f.Stmts[0].Cmd.(*SourceBlock)
+		if !ok || block.Language.Value != language {
+			t.Fatalf("%s: block = %#v", language, f.Stmts[0].Cmd)
+		}
+		decl, ok := f.Stmts[1].Cmd.(*BashPPShortDecl)
+		if !ok || decl.Call == nil || decl.Call.Fun[0].Value != "add" {
+			t.Fatalf("%s: call = %#v", language, f.Stmts[1].Cmd)
+		}
+	}
+}
+
 // `py` is an alias spelling of `python` (as `ts` is of `typescript`): the
 // parser's def look-ahead must treat a naked `~~~py` block like `~~~python`,
 // so a later zero-argument `answer()` parses as a direct call rather than a

@@ -55,6 +55,7 @@ type emitter struct {
 	pythonValues         map[string]bool
 	foreignPythonEnv     *polyglot.EnvironmentPlan
 	foreignTypeScriptEnv *polyglot.EnvironmentPlan
+	foreignRustEnv       *polyglot.EnvironmentPlan
 	methodDeclarations   []*syntax.BashPPFuncDecl
 	enumMembers          map[string][]*syntax.Lit
 	projections          projector

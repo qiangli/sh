@@ -124,6 +124,8 @@ func canonicalLanguage(language string) string {
 		return "typescript"
 	case "py":
 		return "python"
+	case "rs":
+		return "rust"
 	}
 	return language
 }
@@ -318,6 +320,9 @@ func (m *Module) Call(ctx context.Context, name string, args ...any) (CallResult
 func (m *Module) CallKeywords(ctx context.Context, name string, args []any, kwargs map[string]any) (CallResult, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if rustRuntime, ok := m.runtime.(Rust); ok {
+		return m.callRust(ctx, rustRuntime, name, args, kwargs)
+	}
 	if err := m.ensure(ctx); err != nil {
 		return CallResult{}, err
 	}
@@ -519,6 +524,10 @@ func (m *Module) Close() error { m.mu.Lock(); defer m.mu.Unlock(); return m.kill
 
 func (m *Module) kill() error {
 	if m.cmd == nil {
+		if m.tempDir != "" {
+			_ = os.RemoveAll(m.tempDir)
+			m.tempDir = ""
+		}
 		return nil
 	}
 	_ = m.in.Close()

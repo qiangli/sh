@@ -67,6 +67,22 @@ echo "x=$x"
 `)
 }
 
+func TestRustFenceInterpretedNativeParity(t *testing.T) {
+	if _, err := exec.LookPath("rustc"); err != nil {
+		t.Skip("rustc unavailable")
+	}
+	got := testPythonFenceInterpretedNativeParityAt(t, `~~~rust as rs
+pub fn add(a: i64, b: i64) -> i64 { println!("rust"); a + b }
+pub fn checked(value: i64) -> Result<i64, String> { if value < 0 { Err("negative".into()) } else { Ok(value) } }
+~~~
+x := rs.add(20, 22)
+echo "x=$x"
+`, "input.bpp")
+	if got != "rust\nx=42\n" {
+		t.Fatalf("output = %q", got)
+	}
+}
+
 func TestPythonFenceUsesSourceEnvironmentPlan(t *testing.T) {
 	python, err := exec.LookPath("python3")
 	if err != nil {

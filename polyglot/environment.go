@@ -72,10 +72,8 @@ func DiscoverEnvironment(request EnvironmentRequest) (EnvironmentPlan, error) {
 	if lang == "" {
 		lang = "python"
 	}
-	if lang == "ts" {
-		lang = "typescript"
-	}
-	if lang != "python" && lang != "typescript" {
+	lang = canonicalLanguage(lang)
+	if lang != "python" && lang != "typescript" && lang != "rust" {
 		return EnvironmentPlan{}, fmt.Errorf("polyglot: no environment metadata reader for %q", lang)
 	}
 	if request.Source == "" {
@@ -157,6 +155,8 @@ func DiscoverEnvironment(request EnvironmentRequest) (EnvironmentPlan, error) {
 	projectMetadata := pythonProjectMetadata
 	if lang == "typescript" {
 		projectMetadata = typeScriptProjectMetadata
+	} else if lang == "rust" {
+		projectMetadata = rustProjectMetadata
 	}
 	for _, name := range projectMetadata {
 		if file := canonicalExistingFile(filepath.Join(root, name)); file != "" {
@@ -165,6 +165,9 @@ func DiscoverEnvironment(request EnvironmentRequest) (EnvironmentPlan, error) {
 	}
 	if lang == "typescript" {
 		return discoverTypeScriptEnvironment(plan, dirs, selected, env)
+	}
+	if lang == "rust" {
+		return discoverRustEnvironment(plan, selected, env)
 	}
 	metadata, err := discoverPythonMetadata(root)
 	if err != nil {
@@ -320,6 +323,8 @@ func recognizedProject(dir, language string) bool {
 	metadata := pythonProjectMetadata
 	if language == "typescript" {
 		metadata = typeScriptProjectMetadata
+	} else if language == "rust" {
+		metadata = rustProjectMetadata
 	}
 	for _, n := range metadata {
 		if exists(filepath.Join(dir, n)) {
@@ -327,6 +332,48 @@ func recognizedProject(dir, language string) bool {
 		}
 	}
 	return false
+}
+
+var rustProjectMetadata = []string{"Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "rust-toolchain"}
+
+func discoverRustEnvironment(plan EnvironmentPlan, selected *environmentOverlay, env map[string]string) (EnvironmentPlan, error) {
+	var err error
+	for _, name := range rustProjectMetadata {
+		if file := canonicalExistingFile(filepath.Join(plan.Root, name)); file != "" {
+			switch name {
+			case "Cargo.toml":
+				plan.Manifests = append(plan.Manifests, file)
+			case "Cargo.lock":
+				plan.Locks = append(plan.Locks, file)
+			}
+		}
+	}
+	requested := "rustc"
+	if selected != nil && selected.Runtime != "" {
+		requested = selected.Runtime
+		plan.Explanation = append(plan.Explanation, "selected bashpp overlay")
+	}
+	if override := env["BASHPP_RUSTC"]; override != "" {
+		requested = override
+		plan.Explanation = append(plan.Explanation, "compiler executable overridden")
+	} else {
+		plan.Explanation = append(plan.Explanation, "selected PATH Rust compiler")
+	}
+	if filepath.IsAbs(requested) {
+		plan.Executable, err = canonicalExecutable(requested, env)
+	} else {
+		plan.Executable, err = lookupPath(env, requested)
+	}
+	if err != nil {
+		return EnvironmentPlan{}, fmt.Errorf("polyglot: Rust compiler unavailable: %w", err)
+	}
+	plan.Manager, plan.Runtime = "cargo", "native"
+	plan.Env = typeScriptLaunchEnvironment(env)
+	plan.Fingerprint, err = environmentFingerprint(plan)
+	if err != nil {
+		return EnvironmentPlan{}, err
+	}
+	return plan.Clone(), nil
 }
 
 func recognizedPythonProject(dir string) bool {

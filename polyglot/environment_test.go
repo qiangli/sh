@@ -114,6 +114,40 @@ func TestDiscoverTypeScriptEnvironmentOverrides(t *testing.T) {
 	}
 }
 
+func TestDiscoverRustEnvironmentProjectAndOverride(t *testing.T) {
+	root := t.TempDir()
+	bin := filepath.Join(root, "bin")
+	rustc := filepath.Join(bin, "rustc")
+	writeEnvironmentFile(t, rustc, "fixture compiler")
+	writeEnvironmentFile(t, filepath.Join(root, "Cargo.toml"), "[package]\nname='fixture'\n")
+	writeEnvironmentFile(t, filepath.Join(root, "Cargo.lock"), "version = 4\n")
+	writeEnvironmentFile(t, filepath.Join(root, "rust-toolchain.toml"), "[toolchain]\nchannel='stable'\n")
+	plan, err := DiscoverEnvironment(EnvironmentRequest{
+		Source: filepath.Join(root, "src", "program.bpp"), Language: "rs",
+		Environ: []string{"PATH=" + bin},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalRustc, _ := canonicalExecutable(rustc, nil)
+	if plan.Language != "rust" || plan.Manager != "cargo" || plan.Runtime != "native" || plan.Executable != canonicalRustc || len(plan.Manifests) != 1 || len(plan.Locks) != 1 || len(plan.ResolutionFiles) != 3 || plan.Fingerprint == "" {
+		t.Fatalf("plan = %#v", plan)
+	}
+	override := filepath.Join(root, "custom-rustc")
+	writeEnvironmentFile(t, override, "custom compiler")
+	overridden, err := DiscoverEnvironment(EnvironmentRequest{
+		Source: filepath.Join(root, "program.bpp"), Language: "rust",
+		Environ: []string{"PATH=", "BASHPP_RUSTC=" + override},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalOverride, _ := canonicalExecutable(override, nil)
+	if overridden.Executable != canonicalOverride {
+		t.Fatalf("override = %#v", overridden)
+	}
+}
+
 func TestDiscoverTypeScriptWorkspaceMetadata(t *testing.T) {
 	root := t.TempDir()
 	project := filepath.Join(root, "packages", "app")

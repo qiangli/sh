@@ -78,6 +78,32 @@ func runPolyglot(t *testing.T, source string) (string, string, error) {
 	return stdout.String(), stderr.String(), err
 }
 
+func TestBashPPRustDirectAndQualifiedCalls(t *testing.T) {
+	if _, err := exec.LookPath("rustc"); err != nil {
+		t.Skip("rustc unavailable")
+	}
+	direct := `~~~rust
+pub fn add(a: i64, b: i64) -> i64 { println!("rust"); a + b }
+~~~
+x := add(20, 22)
+echo "x=$x"
+`
+	out, diagnostic, err := runPolyglot(t, direct)
+	if err != nil || out != "rust\nx=42\n" || diagnostic != "" {
+		t.Fatalf("direct: out=%q diagnostic=%q err=%v", out, diagnostic, err)
+	}
+	qualified := `~~~rs as native
+pub fn greet(name: &str) -> String { format!("hello {name}") }
+~~~
+value := native.greet(world)
+echo "$value"
+`
+	out, diagnostic, err = runPolyglot(t, qualified)
+	if err != nil || out != "hello world\n" || diagnostic != "" {
+		t.Fatalf("qualified: out=%q diagnostic=%q err=%v", out, diagnostic, err)
+	}
+}
+
 func TestBashPPPythonSourcedFileIsolation(t *testing.T) {
 	child := filepath.Join(t.TempDir(), "child.bpp")
 	err := os.WriteFile(child, []byte("~~~python\ndef answer() -> int:\n    return 2\n~~~\nchildX := answer()\necho child=$childX\n"), 0o600)
