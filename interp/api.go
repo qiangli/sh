@@ -46,7 +46,9 @@ const BashyInheritedFdsEnv = "BASHY_INHERITED_FDS"
 const BashyHardIgnoreEnv = "BASHY_HARD_IGNORE"
 
 // A Runner interprets shell programs. It can be reused, but it is not safe for
-// concurrent use. Use [New] to build a new Runner.
+// concurrent use. Use [New] to build a new Runner. In particular, callers must
+// serialize Run and Subshell calls on one Runner; only shell-created copies
+// (such as asynchronous lists and Bash++ go tasks) are isolated internally.
 //
 // Note that writes to Stdout and Stderr may be concurrent if background
 // commands are used. If you plan on using an [io.Writer] implementation that
@@ -1694,7 +1696,9 @@ func Env(env expand.Environ) RunnerOption {
 }
 
 // Dir sets the interpreter's working directory. If empty, the process's current
-// directory is used.
+// directory is used. The resulting directory is Runner-local: interpreting cd
+// updates this Runner and does not call [os.Chdir] or change the process-global
+// working directory.
 func Dir(path string) RunnerOption {
 	return func(r *Runner) error {
 		if path == "" {
@@ -3173,7 +3177,8 @@ func (r *Runner) ExpandDocument(ctx context.Context, src string) (string, error)
 // call Reset.
 //
 // Calling Run on an entire [*File] implies an exit, meaning that an exit trap may
-// run.
+// run. Run calls on one Runner, and calls to Subshell while a Run is active,
+// must be serialized by the caller.
 func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 	if r.goSourceTesting != nil && !r.goSourceTesting.loading {
 		return fmt.Errorf("gosource: runner is reserved by a testing session; close it first")
