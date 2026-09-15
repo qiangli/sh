@@ -6,6 +6,7 @@ package interp_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -115,7 +116,7 @@ echo "x=$x"
 			"result rewrite",
 			`func upper(c *Call) {
 	c.Next()
-	c.Results = []string{"REWRITTEN"}
+	c.Results = []any{"REWRITTEN"}
 }
 @upper()
 func greet() string { return hello }
@@ -316,9 +317,9 @@ func TestBashPPDecoratorDiagnostics(t *testing.T) {
 		{"self", "@d()\nfunc d(c *Call) { c.Next(); }\n", "BASHPP-EDECO-SELF"},
 		{"reserved namespace", "@ns.d()\nfunc f() { :; }\n", "BASHPP-EDECO-RESERVED"},
 		{"cycle", "@b()\nfunc a(c *Call) { c.Next(); }\n@a()\nfunc b(c *Call) { c.Next(); }\n@a()\nfunc f() { echo leaked }\nf()\n", "BASHPP-EDECO-CYCLE"},
-		{"result count", "func d(c *Call) { c.Next(); c.Results = []string{\"a\", \"b\"}; }\n@d()\nfunc f() int { return 1 }\nx := f()\n", "BASHPP-EDECO-RESULT"},
-		{"result type", "func d(c *Call) { c.Next(); c.Results = []string{\"nope\"}; }\n@d()\nfunc f() int { return 1 }\nx := f()\n", "BASHPP-EDECO-RESULT"},
-		{"results for a result-less function", "func d(c *Call) { c.Next(); c.Results = []string{\"x\"}; }\n@d()\nfunc f() { :; }\nf()\n", "BASHPP-EDECO-RESULT"},
+		{"result count", "func d(c *Call) { c.Next(); c.Results = []any{\"a\", \"b\"}; }\n@d()\nfunc f() int { return 1 }\nx := f()\n", "BASHPP-EDECO-RESULT"},
+		{"result type", "func d(c *Call) { c.Next(); c.Results = []any{\"nope\"}; }\n@d()\nfunc f() int { return 1 }\nx := f()\n", "BASHPP-EDECO-RESULT"},
+		{"results for a result-less function", "func d(c *Call) { c.Next(); c.Results = []any{\"x\"}; }\n@d()\nfunc f() { :; }\nf()\n", "BASHPP-EDECO-RESULT"},
 		{"export -f refuses", "func d(c *Call) { c.Next(); }\n@d()\nfunction f() { :; }\nexport -f f\n", "cannot export"},
 		{"agentic gate stays first", "func d(c *Call) { echo leaked; c.Next(); }\n@d()\nagentic func f() { :; }\nf()\n", "requires an explicit agentic"},
 	} {
@@ -337,12 +338,12 @@ func TestBashPPDecoratorNative(t *testing.T) {
 	var seen []string
 	natives := map[string]interp.DecoratorFunc{
 		"trace": func(ctx context.Context, c *interp.Call, args []interp.DecoratorArg) error {
-			seen = append(seen, "enter "+c.Name+" "+strings.Join(c.Args, ","))
+			seen = append(seen, "enter "+c.Name+" "+decoratorValues(c.Args))
 			for _, a := range args {
 				seen = append(seen, "arg "+a.Name+"="+a.Value)
 			}
 			c.Next(ctx)
-			seen = append(seen, "leave "+c.Name+" status="+itoa(c.Status)+" results="+strings.Join(c.Results, ","))
+			seen = append(seen, "leave "+c.Name+" status="+itoa(c.Status)+" results="+decoratorValues(c.Results))
 			return nil
 		},
 		"deny": func(ctx context.Context, c *interp.Call, args []interp.DecoratorArg) error {
@@ -351,6 +352,16 @@ func TestBashPPDecoratorNative(t *testing.T) {
 		},
 		"boom": func(ctx context.Context, c *interp.Call, args []interp.DecoratorArg) error {
 			return errBoom
+		},
+		"rewriteArgs": func(ctx context.Context, c *interp.Call, args []interp.DecoratorArg) error {
+			c.Args[0] = "9"
+			c.Next(ctx)
+			return nil
+		},
+		"rewriteResults": func(ctx context.Context, c *interp.Call, args []interp.DecoratorArg) error {
+			c.Next(ctx)
+			c.Results[0] = "11"
+			return nil
 		},
 	}
 	t.Run("native wraps typed and shell functions", func(t *testing.T) {
@@ -388,6 +399,27 @@ echo "status=$?"
 		qt.Assert(t, qt.Equals(out, ""))
 		qt.Assert(t, qt.IsTrue(strings.Contains(stderr, "BASHPP-EDECO-NATIVE")))
 	})
+	t.Run("mutated args feed Next and results feed the caller", func(t *testing.T) {
+		out, stderr, err := runDecorated(t, `@rewriteArgs()
+func arg(n int) int { return n }
+@rewriteResults()
+func result() int { return 3 }
+a := arg(1)
+b := result()
+echo "$a $b"
+`, interp.Decorators(natives))
+		qt.Assert(t, qt.IsNil(err))
+		qt.Assert(t, qt.Equals(stderr, ""))
+		qt.Assert(t, qt.Equals(out, "9 11\n"))
+	})
+}
+
+func decoratorValues(values []any) string {
+	parts := make([]string, len(values))
+	for i, value := range values {
+		parts[i] = fmt.Sprint(value)
+	}
+	return strings.Join(parts, ",")
 }
 
 func TestBashPPDecoratorAdvice(t *testing.T) {

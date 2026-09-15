@@ -2094,7 +2094,7 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 	var decoratedResults []string
 	if fn.decl != nil && (len(fn.decl.Decorators) > 0 || len(fn.advised) > 0) {
 		decorated = true
-		decoratedResults, _ = r.bashPPInvokeDecorated(ctx, fn, args, resultNames, bashPPDecoratorRungs(fn.decl.Decorators, fn.advised))
+		decoratedResults, _ = r.bashPPInvokeDecorated(ctx, fn, args, callCells, resultNames, bashPPDecoratorRungs(fn.decl.Decorators, fn.advised))
 	} else if body := fn.body(); body != nil {
 		r.stmts(ctx, body.Stmts)
 	}
@@ -2156,11 +2156,14 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 	// read here rather than trusted from before the defers ran.
 	results = r.bashPPFinalResults(results, resultNames)
 	resultTypes := bashppResultTypeExprs(fn.results())
+	decoratorCells := r.bashPPResultCells
 	r.bashPPResultCells = make([]*bashPPCell, len(results))
 	for i := range results {
 		var source *bashPPCell
 		if i < len(resultNames) && resultNames[i] != "" {
 			source = r.bashPPScope.lookup(resultNames[i])
+		} else if decorated && i < len(decoratorCells) {
+			source = decoratorCells[i]
 		} else if i < len(r.bashPPReturn.cells) {
 			source = r.bashPPReturn.cells[i]
 		}

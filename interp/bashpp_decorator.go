@@ -30,13 +30,14 @@ type Call struct {
 	// function it was made from ("main" at the top level).
 	Site   string
 	Caller string
-	// Args are the call's arguments in shell rendering: `"$@"` for a shell
-	// function, the bound parameter values for a typed one.
-	Args []string
+	// Args are `"$@"` strings for a shell function and typed value cells for
+	// a typed function. Positions are never collapsed, including interface,
+	// channel, pointer, map, and function-valued arguments.
+	Args []any
 	// Results are the target's result values once Next has run. A decorator
 	// may rewrite them; they are type-checked back into the declared result
 	// cells when the chain completes.
-	Results []string
+	Results []any
 	// Status is the exit status the call will report.
 	Status int
 	// Agentic reports whether the DECLARATION is marked agentic. It is
@@ -193,8 +194,8 @@ const bashPPPredeclaredCallSource = `type Call struct {
 	Name string
 	Site string
 	Caller string
-	Args []string
-	Results []string
+	Args []any
+	Results []any
 	Status int
 	Agentic bool
 	Advised string
@@ -328,8 +329,15 @@ func bashPPDecoratorRungs(decorators []*syntax.BashPPDecorator, advised []Decora
 // from inside the target frame — after the agentic, argument and FUNCNEST
 // gates and inside the trap bracket — so the frame it captures is the one the
 // body must run in.
-func (r *Runner) bashPPNewDecoratorChain(name string, rungs []bashPPDecoratorRung, args []string, agentic bool) *bashPPDecoratorChain {
-	call := &Call{Name: name, Args: append([]string(nil), args...), Agentic: agentic}
+func (r *Runner) bashPPNewDecoratorChain(name string, rungs []bashPPDecoratorRung, args []string, cells []*bashPPCell, agentic bool) *bashPPDecoratorChain {
+	values := make([]any, len(args))
+	for i, arg := range args {
+		values[i] = arg
+		if i < len(cells) && cells[i] != nil {
+			values[i] = bashPPDecoratorCellValue(cells[i])
+		}
+	}
+	call := &Call{Name: name, Args: values, Agentic: agentic}
 	pos := r.curStmtPos
 	if pos.IsValid() {
 		call.Site = fmt.Sprintf("%s:%d", r.filename, pos.Line())
@@ -454,7 +462,13 @@ func (c *bashPPDecoratorChain) runBody(ctx context.Context) {
 		return
 	}
 	c.call.Status = status
-	c.call.Results = results
+	c.call.Results = make([]any, len(results))
+	for i, result := range results {
+		c.call.Results[i] = result
+		if i < len(r.bashPPResultCells) && r.bashPPResultCells[i] != nil {
+			c.call.Results[i] = bashPPDecoratorCellValue(r.bashPPResultCells[i])
+		}
+	}
 	r.exit = exitStatus{}
 	c.sync()
 }
@@ -584,12 +598,17 @@ func (c *bashPPDecoratorChain) store() {
 	set := func(field string, value any, child *bashPPCollectionMeta) {
 		bashPPStorageSetField(obj, meta.mapping, field, value, child)
 	}
-	strings := func(field string, values []string) {
-		typ := &syntax.BashPPCollectionType{Kind: "slice", Element: &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "string"}}}
+	values := func(field string, values []any) {
+		typ := &syntax.BashPPCollectionType{Kind: "slice", Element: &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "any"}}}
 		child := &bashPPCollectionMeta{kind: "slice", typ: typ, sequence: make([]*bashPPCollectionMeta, len(values))}
 		seq := make([]any, len(values))
 		for i, v := range values {
-			seq[i] = v
+			if cell, ok := v.(*bashPPCell); ok {
+				seq[i] = cell.vrValue()
+				child.sequence[i] = &bashPPCollectionMeta{kind: "interface", typ: typ.Element, interfaceValue: &bashPPInterfaceValue{dynamic: cell.declType, cell: cell}}
+			} else {
+				seq[i] = v
+			}
 		}
 		set(field, seq, child)
 	}
@@ -599,8 +618,8 @@ func (c *bashPPDecoratorChain) store() {
 	set("Status", c.call.Status, nil)
 	set("Agentic", c.call.Agentic, nil)
 	set("Advised", c.call.Advised, nil)
-	strings("Args", c.call.Args)
-	strings("Results", c.call.Results)
+	values("Args", c.call.Args)
+	values("Results", c.call.Results)
 }
 
 // load reads the fields a decorator may have rewritten back into the
@@ -617,11 +636,26 @@ func (c *bashPPDecoratorChain) load() {
 		c.call.Status = bashPPDecoratorInt(v)
 	}
 	if v, ok := bashPPStorageGet(obj, "Results"); ok {
-		c.call.Results = bashPPDecoratorStrings(v)
+		c.call.Results = c.loadValues("Results", v)
 	}
 	if v, ok := bashPPStorageGet(obj, "Args"); ok {
-		c.call.Args = bashPPDecoratorStrings(v)
+		c.call.Args = c.loadValues("Args", v)
 	}
+}
+
+func (c *bashPPDecoratorChain) loadValues(field string, value any) []any {
+	seq, _ := value.([]any)
+	out := append([]any(nil), seq...)
+	meta := bashPPCellMeta(c.cell)
+	if meta == nil || meta.mapping[field] == nil {
+		return out
+	}
+	for i, elem := range meta.mapping[field].sequence {
+		if elem != nil && elem.interfaceValue != nil && elem.interfaceValue.cell != nil {
+			out[i] = elem.interfaceValue.cell
+		}
+	}
+	return out
 }
 
 // sync pushes the Go-side context into the struct when one exists.
@@ -643,23 +677,23 @@ func bashPPDecoratorInt(v any) int {
 	return n
 }
 
-func bashPPDecoratorStrings(v any) []string {
-	switch x := v.(type) {
-	case nil:
-		return nil
-	case []any:
-		out := make([]string, len(x))
-		for i, e := range x {
-			if e == nil {
-				continue
-			}
-			out[i] = fmt.Sprint(e)
-		}
-		return out
-	case []string:
-		return append([]string(nil), x...)
+func bashPPDecoratorValueCell(value any) (*bashPPCell, string) {
+	if cell, ok := value.(*bashPPCell); ok && cell != nil {
+		return bashPPCopyAssignmentCell(cell), fmt.Sprint(cell.vrValue())
 	}
-	return nil
+	text := fmt.Sprint(value)
+	return &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: text}}, text
+}
+
+func bashPPDecoratorCellValue(cell *bashPPCell) any {
+	if cell == nil {
+		return nil
+	}
+	_, function := cell.declType.(*syntax.BashPPFuncType)
+	if bashPPStructuredCell(cell) || cell.channel != nil || function {
+		return bashPPCopyAssignmentCell(cell)
+	}
+	return cell.vrValue()
 }
 
 // bashPPDecoratorNext answers the predeclared Call.Next method: it finds the
@@ -688,14 +722,34 @@ func (r *Runner) bashPPDecoratorNext(ctx context.Context, fn *bashPPFunc) []stri
 // chain. It returns the settled results, or false when the chain failed;
 // the caller's own settle path is bypassed because the context is now the
 // source of truth for status and results.
-func (r *Runner) bashPPInvokeDecorated(ctx context.Context, fn *bashPPFunc, args []string, resultNames []string, rungs []bashPPDecoratorRung) ([]string, bool) {
+func (r *Runner) bashPPInvokeDecorated(ctx context.Context, fn *bashPPFunc, args []string, callCells []*bashPPCell, resultNames []string, rungs []bashPPDecoratorRung) ([]string, bool) {
 	name := fn.name()
 	if recv := fn.decl.Receiver; recv != nil && recv.RecvType != nil && fn.decl.Name != nil {
 		name = recv.RecvType.Value + "." + fn.decl.Name.Value
 	}
-	chain := r.bashPPNewDecoratorChain(name, rungs, args, fn.decl.Agentic != nil)
+	chain := r.bashPPNewDecoratorChain(name, rungs, args, callCells, fn.decl.Agentic != nil)
 	defer chain.release()
 	chain.body = func(ctx context.Context) (int, []string) {
+		params := bashppParams(fn.params())
+		args = make([]string, len(chain.call.Args))
+		for i, value := range chain.call.Args {
+			cell, text := bashPPDecoratorValueCell(value)
+			args[i] = text
+			if i < len(params) && params[i].name != "" {
+				if expected := params[i].typ; expected != nil {
+					var err error
+					cell, err = r.goSourceExpectedCell(cell, expected)
+					if err != nil {
+						r.errf("BASHPP-EDECO-ARG: %s: %v\n", fn.name(), err)
+						r.exit.code = 1
+						return 1, nil
+					}
+					cell.declType = expected
+				}
+				r.bashPPScope.entries[params[i].name] = cell
+			}
+		}
+		r.Params = append([]string(nil), args...)
 		if body := fn.body(); body != nil {
 			r.stmts(ctx, body.Stmts)
 		}
@@ -716,47 +770,63 @@ func (r *Runner) bashPPInvokeDecorated(ctx context.Context, fn *bashPPFunc, args
 		return nil, false
 	}
 	count := bashppResultCount(fn.results())
-	results := chain.call.Results
+	resultValues := chain.call.Results
 	r.exit = exitStatus{code: uint8(chain.call.Status)}
 	if count == 0 {
-		if len(results) != 0 {
-			r.errf("BASHPP-EDECO-RESULT: %s declares no results; decorator supplied %d\n", fn.name(), len(results))
+		if len(resultValues) != 0 {
+			r.errf("BASHPP-EDECO-RESULT: %s declares no results; decorator supplied %d\n", fn.name(), len(resultValues))
 			r.exit.code = 1
 			return nil, false
 		}
 		return nil, true
 	}
-	if len(results) == 0 {
+	if len(resultValues) == 0 {
 		// A skipped body yields zero results.
-		results = make([]string, count)
+		resultValues = make([]any, count)
 		resultTypes := bashppResultTypeExprs(fn.results())
-		for i := range results {
+		for i := range resultValues {
 			if i < len(resultTypes) {
-				// A scalar zero renders as itself; a structured zero has
-				// no string form and stays empty, as an unnamed result does.
-				if zero, meta := r.bashPPZeroValue(resultTypes[i]); meta == nil && zero != nil {
-					results[i] = fmt.Sprint(zero)
-				}
+				zero, meta := r.bashPPZeroValue(resultTypes[i])
+				cell := &bashPPCell{declType: resultTypes[i]}
+				bashPPStoreCellValue(cell, zero, meta)
+				cell.typeName = bashPPNamedTypeBase(resultTypes[i])
+				resultValues[i] = cell
 			}
 		}
 	}
-	if len(results) != count {
-		r.errf("BASHPP-EDECO-RESULT: %s declares %d result(s); decorator supplied %d\n", fn.name(), count, len(results))
+	if len(resultValues) != count {
+		r.errf("BASHPP-EDECO-RESULT: %s declares %d result(s); decorator supplied %d\n", fn.name(), count, len(resultValues))
 		r.exit.code = 1
 		return nil, false
 	}
 	resultTypes := bashppResultTypeExprs(fn.results())
-	for i, value := range results {
+	results := make([]string, count)
+	r.bashPPResultCells = make([]*bashPPCell, count)
+	for i, value := range resultValues {
 		if i >= len(resultTypes) || resultTypes[i] == nil {
 			continue
 		}
-		if declared := bashPPTypeText(resultTypes[i]); !r.bashPPValueFits(declared, value) {
-			r.errf("BASHPP-EDECO-RESULT: %s: cannot use %q as %s result %d\n", fn.name(), value, declared, i+1)
+		cell, text := bashPPDecoratorValueCell(value)
+		if _, typed := value.(*bashPPCell); !typed && !r.bashPPValueFits(bashPPTypeText(resultTypes[i]), text) {
+			r.errf("BASHPP-EDECO-RESULT: %s: cannot use %q as %s result %d\n", fn.name(), text, bashPPTypeText(resultTypes[i]), i+1)
 			r.exit.code = 1
 			return nil, false
 		}
+		converted, err := r.goSourceExpectedCell(cell, resultTypes[i])
+		if err != nil {
+			r.errf("BASHPP-EDECO-RESULT: %s: cannot use %q as %s result %d\n", fn.name(), text, bashPPTypeText(resultTypes[i]), i+1)
+			r.exit.code = 1
+			return nil, false
+		}
+		converted.declType = resultTypes[i]
+		r.bashPPResultCells[i] = converted
+		results[i] = text
 		if i < len(resultNames) && resultNames[i] != "" {
-			r.setVarString(resultNames[i], value)
+			if target := r.bashPPScope.lookup(resultNames[i]); target != nil {
+				*target = *bashPPCopyAssignmentCell(converted)
+			} else {
+				r.setVarString(resultNames[i], text)
+			}
 		}
 	}
 	// Results were settled by the chain, so the frame's own return state
@@ -769,7 +839,7 @@ func (r *Runner) bashPPInvokeDecorated(ctx context.Context, fn *bashPPFunc, args
 // chain, positioned exactly where Runner.call would run the body.
 func (r *Runner) bashPPCallDecorated(ctx context.Context, name string, entry *bashPPDecorated, args []string, run func(context.Context)) {
 	rungs := bashPPDecoratorRungs(entry.decorators, entry.advised)
-	chain := r.bashPPNewDecoratorChain(name, rungs, args, r.bashPPAgenticFunc(name))
+	chain := r.bashPPNewDecoratorChain(name, rungs, args, nil, r.bashPPAgenticFunc(name))
 	defer chain.release()
 	chain.body = func(ctx context.Context) (int, []string) {
 		run(ctx)
