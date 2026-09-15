@@ -3,6 +3,8 @@ package polyglot
 import (
 	"context"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -22,15 +24,17 @@ func TestTypeScriptAnalyzeAndCall(t *testing.T) {
 	source := `
 interface Pair { left: number; right: number }
 type Label = string
+const initialized = 40
 export function add(a: number, b: number): number { console.log("typescript"); return a + b }
 function label(value: Label): string { return value.toUpperCase() }
 function dynamic(pair: Pair): Pair { return {left: pair.left + 1, right: pair.right + 1} }
+export async function delayed(): Promise<number> { return initialized + 2 }
 `
 	plans, err := Prepare(context.Background(), []Block{{Language: "ts", Source: source}}, map[string]Analyzer{"typescript": ts})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(plans) != 1 || plans[0].Language != "typescript" || plans[0].Artifact == "" || len(plans[0].Exports) != 3 {
+	if len(plans) != 1 || plans[0].Language != "typescript" || plans[0].Artifact == "" || len(plans[0].Exports) != 4 {
 		t.Fatalf("unexpected plan: %+v", plans)
 	}
 	module := Start(plans[0], ts)
@@ -53,13 +57,49 @@ function dynamic(pair: Pair): Pair { return {left: pair.left + 1, right: pair.ri
 	if got := result.Value.(map[string]any)["left"]; got != int64(2) {
 		t.Fatalf("dynamic result = %#v", result.Value)
 	}
+	result, err = module.Call(context.Background(), "delayed")
+	if err != nil || result.Value != int64(42) {
+		t.Fatalf("delayed = %#v, %v", result, err)
+	}
+}
+
+func TestTypeScriptAnalyzeProjectImport(t *testing.T) {
+	configured := testTypeScript(t)
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node unavailable")
+	}
+	root := t.TempDir()
+	writeEnvironmentFile(t, filepath.Join(root, "package.json"), `{}`)
+	writeEnvironmentFile(t, filepath.Join(root, "node_modules", "fixture", "package.json"), `{"name":"fixture","main":"index.js","types":"index.d.ts"}`)
+	writeEnvironmentFile(t, filepath.Join(root, "node_modules", "fixture", "index.js"), `exports.base = 40`)
+	writeEnvironmentFile(t, filepath.Join(root, "node_modules", "fixture", "index.d.ts"), `export const base: number`)
+	runtime := TypeScript{Environment: &EnvironmentPlan{
+		Language: "typescript", Runtime: "node", Executable: node, CompilerModule: configured.CompilerModule,
+		Dir: root, Env: os.Environ(),
+	}}
+	exports, artifact, err := runtime.AnalyzeArtifact(context.Background(), `
+import { base } from "fixture"
+const increment = 2
+export async function answer(): Promise<number> { return base + increment }
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(exports) != 1 || exports[0].Name != "answer" || len(exports[0].Signature.Results) != 1 || exports[0].Signature.Results[0] != "float64" {
+		t.Fatalf("exports = %#v", exports)
+	}
+	module := Start(Plan{Language: "typescript", Artifact: artifact, Exports: exports}, runtime)
+	defer module.Close()
+	result, err := module.Call(context.Background(), "answer")
+	if err != nil || result.Value != int64(42) {
+		t.Fatalf("answer = %#v, %v", result, err)
+	}
 }
 
 func TestTypeScriptDiagnosticsAndRuntime(t *testing.T) {
 	ts := testTypeScript(t)
 	for _, source := range []string{
-		`import {x} from "./x"; export function f() { return x }`,
-		`const initialized = 1; function f() { return initialized }`,
 		`function broken(: number): number { return 1 }`,
 	} {
 		if _, _, err := ts.AnalyzeArtifact(context.Background(), source); err == nil || !strings.Contains(err.Error(), "<bash++ typescript>") {
@@ -90,6 +130,61 @@ func TestTypeScriptDiagnosticsAndRuntime(t *testing.T) {
 	result, err = module.Call(context.Background(), "ok")
 	if err != nil || result.Value != "restarted" {
 		t.Fatalf("restart = %#v, %v", result, err)
+	}
+}
+
+func TestTypeScriptWorkerProjectImportAsyncAndFraming(t *testing.T) {
+	root := t.TempDir()
+	writeEnvironmentFile(t, filepath.Join(root, "package.json"), `{}`)
+	writeEnvironmentFile(t, filepath.Join(root, "node_modules", "fixture", "package.json"), `{"name":"fixture","main":"index.js"}`)
+	writeEnvironmentFile(t, filepath.Join(root, "node_modules", "fixture", "index.js"), `
+console.log("module initialized");
+process.stdout.write("unframed module output\n");
+exports.answer = async value => { console.log("called"); process.stdout.write("unframed call output\n"); return value + 1; };
+`)
+	artifact := `
+const fixture = require("fixture");
+exports.answer = async value => await fixture.answer(value);
+exports.identity = () => new (class Example {})();
+`
+	for _, name := range []string{"node", "bun"} {
+		t.Run(name, func(t *testing.T) {
+			executable, err := exec.LookPath(name)
+			if err != nil && name == "bun" {
+				home, _ := os.UserHomeDir()
+				executable = filepath.Join(home, ".bun", "bin", "bun")
+				if _, statErr := os.Stat(executable); statErr != nil {
+					t.Skip("bun unavailable")
+				}
+			} else if err != nil {
+				t.Skip(name + " unavailable")
+			}
+			runtime := TypeScript{Environment: &EnvironmentPlan{
+				Language: "typescript", Runtime: name, Executable: executable, Dir: root, Env: os.Environ(),
+			}}
+			module := Start(Plan{Language: "typescript", Artifact: artifact}, runtime)
+			defer module.Close()
+			result, err := module.Call(context.Background(), "answer", float64(41))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Value != int64(42) || result.Stdout != "module initialized\ncalled\n" {
+				t.Fatalf("result = %#v", result)
+			}
+			if _, err := module.Call(context.Background(), "identity"); err == nil || !strings.Contains(err.Error(), "unsupported foreign result type") {
+				t.Fatalf("identity error = %v", err)
+			}
+		})
+	}
+}
+
+func TestTypeScriptMissingCompilerModule(t *testing.T) {
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node unavailable")
+	}
+	missing := TypeScript{CompilerModule: filepath.Join(t.TempDir(), "missing-typescript")}
+	if _, err := missing.Analyze(context.Background(), `function f(): number { return 1 }`); err == nil || !strings.Contains(err.Error(), "compiler module unavailable") {
+		t.Fatalf("missing compiler error = %v", err)
 	}
 }
 

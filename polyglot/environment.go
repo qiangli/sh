@@ -39,6 +39,7 @@ type EnvironmentPlan struct {
 	Executable        string // absolute selected runtime executable
 	Manager           string
 	RuntimeConstraint string
+	Runtime           string // selected runtime family, such as node or bun
 	CompilerModule    string // TypeScript compiler package or entry point
 	Manifests         []string
 	Locks             []string
@@ -234,29 +235,60 @@ func environmentDirs(start, language string) (string, []string, error) {
 	}
 	var dirs []string
 	project := ""
+	projectIndex := -1
 	for d := start; ; d = filepath.Dir(d) {
 		dirs = append(dirs, d)
 		if recognizedProject(d, language) {
 			if project == "" {
 				project = d
+				projectIndex = len(dirs) - 1
 			}
-			break
+			if language == "typescript" {
+				if typeScriptWorkspaceBoundary(d) {
+					project = d
+					projectIndex = len(dirs) - 1
+					break
+				}
+			} else {
+				break
+			}
 		}
 		if exists(filepath.Join(d, ".git")) {
-			if project == "" {
+			if project == "" || language == "typescript" {
 				project = d
+				projectIndex = len(dirs) - 1
 			}
 			break
 		}
 		if parent := filepath.Dir(d); parent == d {
 			if project == "" {
 				project = start
+				projectIndex = 0
 			}
 			break
 		}
 	}
+	if projectIndex >= 0 {
+		dirs = dirs[:projectIndex+1]
+	}
 	// closest overlays are considered first, and discovery cannot escape root.
 	return project, dirs, nil
+}
+
+func typeScriptWorkspaceBoundary(dir string) bool {
+	for _, name := range []string{"package-lock.json", "pnpm-lock.yaml", "bun.lock", "bun.lockb"} {
+		if exists(filepath.Join(dir, name)) {
+			return true
+		}
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "package.json"))
+	if err != nil {
+		return false
+	}
+	var pkg struct {
+		Workspaces json.RawMessage `json:"workspaces"`
+	}
+	return json.Unmarshal(data, &pkg) == nil && len(pkg.Workspaces) > 0 && string(pkg.Workspaces) != "null"
 }
 
 func nearestExistingDir(start string) (string, error) {
@@ -539,23 +571,32 @@ func launchEnvironment(env map[string]string, paths []string) []string {
 
 var typeScriptProjectMetadata = []string{"package.json", "tsconfig.json", "package-lock.json", "pnpm-lock.yaml", "bun.lock", "bun.lockb"}
 
-func discoverTypeScriptEnvironment(plan EnvironmentPlan, dirs []string, selected *environmentOverlay, env map[string]string) (EnvironmentPlan, error) {
+func discoverTypeScriptEnvironment(plan EnvironmentPlan, dirs []string, _ *environmentOverlay, env map[string]string) (EnvironmentPlan, error) {
 	var err error
-	for _, name := range []string{"package.json", "tsconfig.json"} {
-		if file := canonicalExistingFile(filepath.Join(plan.Root, name)); file != "" {
-			plan.Manifests = append(plan.Manifests, file)
+	for _, dir := range dirs {
+		for _, name := range []string{"package.json", "tsconfig.json"} {
+			if file := canonicalExistingFile(filepath.Join(dir, name)); file != "" && !containsString(plan.Manifests, file) {
+				plan.Manifests = append(plan.Manifests, file)
+			}
 		}
 	}
 	locks := []struct{ name, manager string }{
 		{"package-lock.json", "npm"}, {"pnpm-lock.yaml", "pnpm"}, {"bun.lock", "bun"}, {"bun.lockb", "bun"},
 	}
-	for _, candidate := range locks {
-		if file := canonicalExistingFile(filepath.Join(plan.Root, candidate.name)); file != "" {
-			plan.Locks = append(plan.Locks, file)
-			if plan.Manager != "" && plan.Manager != candidate.manager {
-				return EnvironmentPlan{}, fmt.Errorf("polyglot: conflicting TypeScript manager lockfiles in %s", plan.Root)
+	for _, dir := range dirs {
+		for _, candidate := range locks {
+			if file := canonicalExistingFile(filepath.Join(dir, candidate.name)); file != "" {
+				plan.Locks = append(plan.Locks, file)
+				if plan.Manager != "" && plan.Manager != candidate.manager {
+					return EnvironmentPlan{}, fmt.Errorf("polyglot: conflicting TypeScript manager lockfiles in %s", plan.Root)
+				}
+				plan.Manager = candidate.manager
 			}
-			plan.Manager = candidate.manager
+		}
+	}
+	for _, file := range append(append([]string(nil), plan.Manifests...), plan.Locks...) {
+		if !containsString(plan.ResolutionFiles, file) {
+			plan.ResolutionFiles = append(plan.ResolutionFiles, file)
 		}
 	}
 	if manifest := firstPackageManifest(plan.Manifests); manifest != "" {
@@ -586,6 +627,7 @@ func discoverTypeScriptEnvironment(plan EnvironmentPlan, dirs []string, selected
 	if runtimeName != "node" && runtimeName != "bun" {
 		return EnvironmentPlan{}, fmt.Errorf("polyglot: unsupported TypeScript runtime %q", runtimeName)
 	}
+	plan.Runtime = runtimeName
 	requested := runtimeName
 	if override := env[map[string]string{"node": "BASHPP_NODE", "bun": "BASHPP_BUN"}[runtimeName]]; override != "" {
 		requested = override
@@ -630,6 +672,15 @@ func discoverTypeScriptEnvironment(plan EnvironmentPlan, dirs []string, selected
 	return plan.Clone(), nil
 }
 
+func containsString(values []string, wanted string) bool {
+	for _, value := range values {
+		if value == wanted {
+			return true
+		}
+	}
+	return false
+}
+
 func typeScriptLaunchEnvironment(env map[string]string) []string {
 	var out []string
 	for _, key := range []string{"PATH", "SystemRoot", "TMPDIR", "TEMP", "TMP"} {
@@ -658,6 +709,7 @@ func environmentFingerprint(p EnvironmentPlan) (string, error) {
 	write(p.Dir)
 	write(p.Manager)
 	write(p.RuntimeConstraint)
+	write(p.Runtime)
 	write(p.CompilerModule)
 	write(runtime.GOOS)
 	write(runtime.GOARCH)

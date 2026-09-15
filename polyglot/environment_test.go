@@ -114,6 +114,29 @@ func TestDiscoverTypeScriptEnvironmentOverrides(t *testing.T) {
 	}
 }
 
+func TestDiscoverTypeScriptWorkspaceMetadata(t *testing.T) {
+	root := t.TempDir()
+	project := filepath.Join(root, "packages", "app")
+	bin := filepath.Join(root, "bin")
+	writeEnvironmentFile(t, filepath.Join(bin, "node"), "runtime")
+	writeEnvironmentFile(t, filepath.Join(root, "package.json"), `{"workspaces":["packages/*"],"packageManager":"pnpm@10"}`)
+	writeEnvironmentFile(t, filepath.Join(root, "pnpm-lock.yaml"), "lock")
+	writeEnvironmentFile(t, filepath.Join(project, "package.json"), `{"name":"app"}`)
+	writeEnvironmentFile(t, filepath.Join(project, "tsconfig.json"), `{}`)
+	writeEnvironmentFile(t, filepath.Join(root, "node_modules", "typescript", "package.json"), `{"name":"typescript"}`)
+	plan, err := DiscoverEnvironment(EnvironmentRequest{Source: filepath.Join(project, "src", "program.bpp"), Language: "ts", Environ: []string{"PATH=" + bin}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalRoot, _ := filepath.EvalSymlinks(root)
+	if plan.Root != canonicalRoot || plan.Manager != "pnpm" || len(plan.Manifests) != 3 || len(plan.Locks) != 1 {
+		t.Fatalf("workspace plan = %#v", plan)
+	}
+	if filepath.Dir(plan.CompilerModule) != filepath.Join(canonicalRoot, "node_modules") {
+		t.Fatalf("compiler = %q", plan.CompilerModule)
+	}
+}
+
 func TestDiscoverEnvironmentRejectsConflictingManagerLocks(t *testing.T) {
 	root := t.TempDir()
 	pythonFixture(t, root)

@@ -245,24 +245,13 @@ func (m *Module) ensure(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	var protocolRead io.ReadCloser
-	var protocolWrite *os.File
-	if _, python := m.runtime.(Python); python {
-		protocolRead, protocolWrite, err = os.Pipe()
-		if err != nil {
-			in.Close()
-			return err
-		}
-		cmd.ExtraFiles = []*os.File{protocolWrite}
-		cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
-	} else {
-		protocolRead, err = cmd.StdoutPipe()
-		if err != nil {
-			in.Close()
-			return err
-		}
-		cmd.Stderr = io.Discard
+	protocolRead, protocolWrite, err := os.Pipe()
+	if err != nil {
+		in.Close()
+		return err
 	}
+	cmd.ExtraFiles = []*os.File{protocolWrite}
+	cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
 	if err := cmd.Start(); err != nil {
 		_ = protocolRead.Close()
 		if protocolWrite != nil {
