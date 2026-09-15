@@ -50,6 +50,7 @@ type emitter struct {
 	functionDecls      map[string]*syntax.BashPPFuncDecl
 	foreignFunctions   map[string]foreignFunction
 	foreignPlans       []polyglot.Plan
+	foreignPythonEnv   *polyglot.EnvironmentPlan
 	methodDeclarations []*syntax.BashPPFuncDecl
 	enumMembers        map[string][]*syntax.Lit
 	projections        projector
