@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -57,6 +58,9 @@ func TestDiscoverEnvironmentRejectsConflictingManagerLocks(t *testing.T) {
 }
 
 func TestDiscoverEnvironmentPATHRequiresExecutableRegularFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows uses executable extensions rather than mode bits")
+	}
 	root := t.TempDir()
 	bad, good := filepath.Join(root, "bad"), filepath.Join(root, "good")
 	writeEnvironmentFile(t, filepath.Join(bad, "python3"), "not executable")
@@ -81,6 +85,58 @@ func TestDiscoverEnvironmentPATHRequiresExecutableRegularFile(t *testing.T) {
 	}
 	if _, err := lookupPath(map[string]string{"PATH": filepath.Dir(directoryCandidate)}, "python3"); err == nil {
 		t.Fatal("directory accepted as PATH runtime")
+	}
+}
+
+func TestRuntimePathsRequireExecutableRegularFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows uses executable extensions rather than mode bits")
+	}
+	root := t.TempDir()
+	runtimePath := filepath.Join(root, "python")
+	writeEnvironmentFile(t, runtimePath, "not executable")
+	if err := os.Chmod(runtimePath, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resolveRuntime(root, "python"); err == nil || !strings.Contains(err.Error(), "not an executable file") {
+		t.Fatalf("direct runtime error = %v", err)
+	}
+
+	writeEnvironmentFile(t, filepath.Join(root, "source.bpp"), "")
+	writeEnvironmentFile(t, filepath.Join(root, "bashpp.yaml"), "runtime: python\n")
+	if _, err := DiscoverEnvironment(EnvironmentRequest{Source: filepath.Join(root, "source.bpp")}); err == nil || !strings.Contains(err.Error(), "not an executable file") {
+		t.Fatalf("overlay runtime error = %v", err)
+	}
+
+	venvRoot := t.TempDir()
+	venvPython := pythonFixture(t, venvRoot)
+	if err := os.Chmod(venvPython, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DiscoverEnvironment(EnvironmentRequest{Source: filepath.Join(venvRoot, "source.bpp")}); err == nil || !strings.Contains(err.Error(), "not an executable file") {
+		t.Fatalf("project runtime error = %v", err)
+	}
+
+	overrideRoot := t.TempDir()
+	pythonFixture(t, overrideRoot)
+	override := filepath.Join(overrideRoot, "override")
+	writeEnvironmentFile(t, override, "not executable")
+	if err := os.Chmod(override, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DiscoverEnvironment(EnvironmentRequest{Source: filepath.Join(overrideRoot, "source.bpp"), Environ: []string{"BASHPP_PYTHON=" + override}}); err == nil || !strings.Contains(err.Error(), "not an executable file") {
+		t.Fatalf("override runtime error = %v", err)
+	}
+}
+
+func TestExecutableNamesWindowsPATHEXT(t *testing.T) {
+	got := executableNames("python", "windows", ".COM;.EXE;.CMD")
+	want := []string{"python.COM", "python.EXE", "python.CMD"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("names = %q, want %q", got, want)
+	}
+	if got := executableNames("python.exe", "windows", ".COM;.EXE"); len(got) != 1 || got[0] != "python.exe" {
+		t.Fatalf("explicit extension names = %q", got)
 	}
 }
 

@@ -192,7 +192,7 @@ func DiscoverEnvironment(request EnvironmentRequest) (EnvironmentPlan, error) {
 		}
 		plan.Explanation = append(plan.Explanation, "runtime executable overridden")
 	}
-	plan.Executable, err = canonicalFile(executable)
+	plan.Executable, err = canonicalExecutable(executable)
 	if err != nil {
 		return EnvironmentPlan{}, err
 	}
@@ -365,9 +365,9 @@ func resolveRuntime(root, value string) (string, error) {
 	if !filepath.IsAbs(value) {
 		value = filepath.Join(root, value)
 	}
-	return canonicalFile(value)
+	return canonicalExecutable(value)
 }
-func canonicalFile(name string) (string, error) {
+func canonicalExecutable(name string) (string, error) {
 	name, err := filepath.Abs(name)
 	if err != nil {
 		return "", err
@@ -380,8 +380,8 @@ func canonicalFile(name string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if info.IsDir() {
-		return "", fmt.Errorf("polyglot: runtime %s is a directory", name)
+	if !info.Mode().IsRegular() || (runtime.GOOS != "windows" && info.Mode().Perm()&0o111 == 0) {
+		return "", fmt.Errorf("polyglot: runtime %s is not an executable file", name)
 	}
 	return name, nil
 }
@@ -399,17 +399,46 @@ func envMap(entries []string) map[string]string {
 	return out
 }
 func lookupPath(env map[string]string, file string) (string, error) {
-	for _, d := range filepath.SplitList(env["PATH"]) {
+	for _, d := range filepath.SplitList(environmentValue(env, "PATH")) {
 		if d == "" {
 			continue
 		}
-		n := filepath.Join(d, file)
-		info, err := os.Stat(n)
-		if err == nil && info.Mode().IsRegular() && (runtime.GOOS == "windows" || info.Mode().Perm()&0o111 != 0) {
-			return n, nil
+		for _, candidate := range executableNames(file, runtime.GOOS, environmentValue(env, "PATHEXT")) {
+			n := filepath.Join(d, candidate)
+			if executable, err := canonicalExecutable(n); err == nil {
+				return executable, nil
+			}
 		}
 	}
 	return "", os.ErrNotExist
+}
+
+func environmentValue(env map[string]string, key string) string {
+	if value := env[key]; value != "" || runtime.GOOS != "windows" {
+		return value
+	}
+	for candidate, value := range env {
+		if strings.EqualFold(candidate, key) {
+			return value
+		}
+	}
+	return ""
+}
+
+func executableNames(file, goos, pathExt string) []string {
+	if goos != "windows" || filepath.Ext(file) != "" {
+		return []string{file}
+	}
+	if pathExt == "" {
+		pathExt = ".COM;.EXE;.BAT;.CMD"
+	}
+	names := make([]string, 0, 4)
+	for _, ext := range strings.Split(pathExt, ";") {
+		if ext = strings.TrimSpace(ext); ext != "" {
+			names = append(names, file+ext)
+		}
+	}
+	return names
 }
 func canonicalPythonPath(value, root string) ([]string, error) {
 	if value == "" {
