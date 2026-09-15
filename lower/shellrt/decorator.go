@@ -29,7 +29,7 @@ type Call struct {
 	Name string
 	// Site is the call site the private entry was reached from, and Caller
 	// the callable it was made from ("main" at the top level).
-	Site   Site
+	Site   string
 	Caller string
 	// Args are the bound parameter values, one entry per position; a
 	// variadic tail contributes one entry per element. A structured value —

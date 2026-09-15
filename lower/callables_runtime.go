@@ -59,6 +59,10 @@ func (e *emitter) privateSignature(signature string) string {
 	return "(" + parameters + signature[1:]
 }
 func (e *emitter) callSite(n syntax.Node, name string) string {
+	if e.predeclaredCall && n != nil && n.Pos().IsValid() {
+		location := fmt.Sprintf("%s:%d", e.sourceName, n.Pos().Line())
+		return fmt.Sprintf("%srt.Site{Name:%s, CallSite:%s}", e.prefix, strconv.Quote(name), strconv.Quote(location))
+	}
 	return fmt.Sprintf("%srt.Site{Name:%s}", e.prefix, strconv.Quote(name))
 }
 func (e *emitter) resultStorage(fields []*syntax.BashPPField) (declarations, values string, err error) {

@@ -34,10 +34,10 @@ const decoratorCallType = "Call"
 
 // decoratorCallProjection is the predeclared Call as the emitter's projection
 // tables see it, so `c.Name`, `c.Status`, `c.Results[0]` and the rest lower
-// through the ordinary struct field paths. Site is deliberately absent: the
-// runtime's Call reuses shellrt.Site, which has no source-level projection.
+// through the ordinary struct field paths.
 const decoratorCallProjection = `type Call struct {
 	Name string
+	Site string
 	Caller string
 	Args []any
 	Results []any
@@ -296,7 +296,7 @@ func (e *emitter) decoratedBody(f *syntax.BashPPFuncDecl, signature, body string
 		fixed++
 		packed = append(packed, param.name)
 	}
-	fmt.Fprintf(&out, "%s := &%sCall{Name: %s, Site: %ssite, Caller: %s.Caller(), Agentic: %t, Args: []any{%s}}\n", call, rt, quoted, e.prefix, p, f.Agentic != nil, strings.Join(packed, ", "))
+	fmt.Fprintf(&out, "%s := &%sCall{Name: %s, Site: %ssite.CallSite, Caller: %s.Caller(), Agentic: %t, Args: []any{%s}}\n", call, rt, quoted, e.prefix, p, f.Agentic != nil, strings.Join(packed, ", "))
 	if variadic {
 		tail := params[len(params)-1]
 		fmt.Fprintf(&out, "for _, %sv := range %s { %s.Args = append(%s.Args, %sv) }\n", e.prefix, tail.name, call, call, e.prefix)
