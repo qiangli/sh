@@ -1638,6 +1638,12 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 		}
 		p.nestedBinary = false
 	case *FuncDecl:
+		p.bashppDecorators(cmd.Decorators, func() Pos {
+			if cmd.Agentic != nil {
+				return cmd.Agentic.Pos()
+			}
+			return cmd.Position
+		}())
 		if cmd.Agentic != nil {
 			p.spacedString("agentic", cmd.Agentic.Pos())
 		}
@@ -2011,6 +2017,12 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 		p.space()
 		p.command(cmd.Body, nil)
 	case *BashPPFuncDecl:
+		p.bashppDecorators(cmd.Decorators, func() Pos {
+			if cmd.Agentic != nil {
+				return cmd.Agentic.Pos()
+			}
+			return cmd.Kw.Pos()
+		}())
 		if cmd.Agentic != nil {
 			p.spacedString("agentic", cmd.Agentic.Pos())
 		}
@@ -2384,6 +2396,39 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 		panic(fmt.Sprintf("syntax.Printer: unexpected node type %T", cmd))
 	}
 	return startRedirs
+}
+
+func (p *Printer) bashppDecorators(decorators []*BashPPDecorator, target Pos) {
+	for i, decorator := range decorators {
+		p.spacePad(decorator.At)
+		p.writeLit("@")
+		p.writeLit(decorator.Name.Value)
+		p.writeLit("(")
+		positional := len(decorator.Args) - len(decorator.ArgNames)
+		for j, arg := range decorator.Args {
+			if j > 0 {
+				p.writeLit(", ")
+			}
+			if j >= positional {
+				p.writeLit(decorator.ArgNames[j-positional].Value)
+				p.writeLit(": ")
+			}
+			p.word(arg)
+		}
+		p.writeLit(")")
+		p.wantSpace = spaceRequired
+
+		next := target
+		if i+1 < len(decorators) {
+			next = decorators[i+1].Pos()
+		}
+		if decorator.Semicolon.IsValid() || p.minify || p.singleLine {
+			p.writeLit(";")
+			p.wantSpace = spaceRequired
+		}
+		p.comments(decorator.Comments...)
+		p.newlines(next)
+	}
 }
 
 func (p *Printer) ifClause(ic *IfClause, elif bool) {

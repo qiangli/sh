@@ -533,10 +533,11 @@ func (b *BinaryCmd) End() Pos { return b.Y.End() }
 
 // FuncDecl represents the declaration of a function.
 type FuncDecl struct {
-	Agentic  *Lit // optional Bash++ assistance contract
-	Position Pos
-	RsrvWord bool // non-posix "function f" style
-	Parens   bool // with () parentheses, can only be false when RsrvWord==true
+	Decorators []*BashPPDecorator // Bash++ declaration decorators, outermost first
+	Agentic    *Lit               // optional Bash++ assistance contract
+	Position   Pos
+	RsrvWord   bool // non-posix "function f" style
+	Parens     bool // with () parentheses, can only be false when RsrvWord==true
 
 	// Only one of these is set at a time.
 	// Neither is set when declaring an anonymous func with [LangZsh].
@@ -548,6 +549,9 @@ type FuncDecl struct {
 }
 
 func (f *FuncDecl) Pos() Pos {
+	if len(f.Decorators) > 0 {
+		return f.Decorators[0].Pos()
+	}
 	if f.Agentic != nil {
 		return f.Agentic.Pos()
 	}

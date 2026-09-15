@@ -1222,10 +1222,11 @@ func (f *BashPPField) End() Pos {
 // from a working script. That is why the signature may be parsed forward
 // without a transaction: a malformed body is a bash syntax error either way.
 type BashPPFuncDecl struct {
-	Agentic  *Lit            // optional bare "agentic" modifier
-	Kw       *Lit            // the literal "func"
-	Name     *Lit            // the declared function name
-	Receiver *BashPPReceiver // nil for an ordinary function
+	Decorators []*BashPPDecorator // declaration decorators, outermost first
+	Agentic    *Lit               // optional bare "agentic" modifier
+	Kw         *Lit               // the literal "func"
+	Name       *Lit               // the declared function name
+	Receiver   *BashPPReceiver    // nil for an ordinary function
 	// TypeParams are the type parameters the declaration itself introduces.
 	// A METHOD may have them too, independent of its receiver's: Go 1.27
 	// accepts `func (r R) M[T any](v T) T`, so the two scopes coexist over one
@@ -1261,11 +1262,31 @@ func (r *BashPPReceiver) Pos() Pos { return r.Lparen }
 func (r *BashPPReceiver) End() Pos { return posAddCol(r.Rparen, 1) }
 
 func (d *BashPPFuncDecl) Pos() Pos {
+	if len(d.Decorators) > 0 {
+		return d.Decorators[0].Pos()
+	}
 	if d.Agentic != nil {
 		return d.Agentic.Pos()
 	}
 	return d.Kw.Pos()
 }
+
+// BashPPDecorator is one @name(args) line attached to a function declaration.
+// Decorators remain in source order, so the first entry is the outermost
+// decorator and the entry nearest the declaration is the innermost one.
+type BashPPDecorator struct {
+	At        Pos
+	Name      *Lit
+	Args      []*Word
+	ArgNames  []*Lit
+	Lparen    Pos
+	Rparen    Pos
+	Semicolon Pos
+	Comments  []Comment // comments before the next decorator or declaration
+}
+
+func (d *BashPPDecorator) Pos() Pos { return d.At }
+func (d *BashPPDecorator) End() Pos { return posAddCol(d.Rparen, 1) }
 func (d *BashPPFuncDecl) End() Pos {
 	if d.Body != nil {
 		return d.Body.End()
