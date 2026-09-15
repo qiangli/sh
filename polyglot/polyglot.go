@@ -116,9 +116,15 @@ func canonicalLanguage(language string) string {
 	return language
 }
 
-type Python struct{ Command string }
+type Python struct {
+	Command     string
+	Environment *EnvironmentPlan
+}
 
 func (p Python) executable() string {
+	if p.Environment != nil && p.Environment.Executable != "" {
+		return p.Environment.Executable
+	}
 	if p.Command != "" {
 		return p.Command
 	}
@@ -126,7 +132,8 @@ func (p Python) executable() string {
 }
 
 func (p Python) Analyze(ctx context.Context, source string) ([]Export, error) {
-	cmd := exec.CommandContext(ctx, p.executable(), "-c", pythonAnalyze)
+	cmd := exec.CommandContext(ctx, p.executable(), p.pythonArguments(pythonAnalyze, false)...)
+	p.configure(cmd)
 	cmd.Stdin = strings.NewReader(source)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
@@ -159,11 +166,32 @@ type Runtime interface {
 	name() string
 }
 
-func (p Python) arguments(Plan) []string { return []string{"-u", "-c", pythonWorker} }
+type configuredRuntime interface{ configure(*exec.Cmd) }
+
+func (p Python) arguments(Plan) []string { return p.pythonArguments(pythonWorker, true) }
+func (p Python) pythonArguments(script string, unbuffered bool) []string {
+	args := []string{"-I"}
+	if unbuffered {
+		args = append(args, "-u")
+	}
+	args = append(args, "-c", script)
+	if p.Environment != nil {
+		args = append(args, p.Environment.PythonPath...)
+	}
+	return args
+}
 func (p Python) loadRequest(plan Plan) map[string]any {
 	return map[string]any{"id": 0, "op": "load", "source": plan.Source}
 }
 func (p Python) name() string { return "Python" }
+
+func (p Python) configure(cmd *exec.Cmd) {
+	if p.Environment == nil {
+		return
+	}
+	cmd.Dir = p.Environment.Dir
+	cmd.Env = append([]string(nil), p.Environment.Env...)
+}
 
 type Module struct {
 	plan    Plan
@@ -184,6 +212,9 @@ func (m *Module) ensure(ctx context.Context) error {
 		return nil
 	}
 	cmd := exec.CommandContext(ctx, m.runtime.executable(), m.runtime.arguments(m.plan)...)
+	if configured, ok := m.runtime.(configuredRuntime); ok {
+		configured.configure(cmd)
+	}
 	in, err := cmd.StdinPipe()
 	if err != nil {
 		return err
@@ -410,8 +441,15 @@ func decodeValue(v any) (any, error) {
 	}
 }
 
-const pythonAnalyze = `
-import ast, json, sys
+const pythonPathBootstrap = `
+import sys
+_pythonpath=sys.argv[1:]
+del sys.argv[1:]
+sys.path[:0]=_pythonpath
+`
+
+const pythonAnalyze = pythonPathBootstrap + `
+import ast, json
 src=sys.stdin.read()
 tree=ast.parse(src)
 nodes=tree.body
@@ -438,8 +476,8 @@ for node in nodes:
 print(json.dumps(out,separators=(',',':')))
 `
 
-const pythonWorker = `
-import ast, base64, contextlib, io, json, sys, traceback
+const pythonWorker = pythonPathBootstrap + `
+import ast, base64, contextlib, io, json, traceback
 ns={'__name__':'__bashpp__'}
 def dec(v):
     if isinstance(v,dict) and set(v)=={'$bytes'}: return base64.b64decode(v['$bytes'])

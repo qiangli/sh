@@ -2,14 +2,66 @@ package interp_test
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 
+	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/interp"
 	"mvdan.cc/sh/v3/syntax"
 )
+
+func TestBashPPPythonUsesSourceEnvironmentPlan(t *testing.T) {
+	python, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("python3 unavailable")
+	}
+	root := t.TempDir()
+	runtime := filepath.Join(root, "planned-python")
+	body := "#!/bin/sh\nexport BASHPP_SELECTED_RUNTIME=yes\nexec " + strconv.Quote(python) + " \"$@\"\n"
+	if err := os.WriteFile(runtime, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "bashpp.yaml"), []byte("runtime: planned-python\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	name := filepath.Join(root, "program.bpp")
+	source := "~~~python\ndef planned() -> str:\n    import os\n    return os.environ.get('BASHPP_SELECTED_RUNTIME', '') + ':' + os.getcwd()\n~~~\nvalue := planned()\necho \"$value\"\n"
+	file, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(source), name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr strings.Builder
+	runner, err := interp.New(interp.Lang(syntax.LangBashPP), interp.Dir(t.TempDir()), interp.StdIO(nil, &stdout, &stderr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.Run(t.Context(), file); err != nil || stderr.Len() != 0 || stdout.String() != "yes:"+canonicalRoot+"\n" {
+		t.Fatalf("stdout=%q stderr=%q err=%v", stdout.String(), stderr.String(), err)
+	}
+}
+
+func TestBashPPNonPythonDoesNotDiscoverEnvironment(t *testing.T) {
+	file, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader("echo ok\n"), filepath.Join(t.TempDir(), "missing", "script.bpp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr strings.Builder
+	env := expand.ListEnviron("BASHPP_PYTHON=/definitely/missing", "PATH="+os.Getenv("PATH"))
+	runner, err := interp.New(interp.Lang(syntax.LangBashPP), interp.Env(env), interp.StdIO(nil, &stdout, &stderr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.Run(t.Context(), file); err != nil || stderr.Len() != 0 || stdout.String() != "ok\n" {
+		t.Fatalf("stdout=%q stderr=%q err=%v", stdout.String(), stderr.String(), err)
+	}
+}
 
 func runPolyglot(t *testing.T, source string) (string, string, error) {
 	t.Helper()

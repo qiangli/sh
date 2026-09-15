@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -59,9 +60,83 @@ echo "x=$x"
 `)
 }
 
+func TestPythonFenceUsesSourceEnvironmentPlan(t *testing.T) {
+	python, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("python3 unavailable")
+	}
+	root := t.TempDir()
+	launcher := filepath.Join(root, "planned-python")
+	body := "#!/bin/sh\nexport BASHPP_SELECTED_RUNTIME=yes\nexec " + strconv.Quote(python) + " \"$@\"\n"
+	if err := os.WriteFile(launcher, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "bashpp.yaml"), []byte("runtime: planned-python\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	canonicalRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := "~~~python\ndef planned() -> str:\n    import os\n    return os.environ.get('BASHPP_SELECTED_RUNTIME', '') + ':' + os.getcwd()\n~~~\nvalue := planned()\necho \"$value\"\n"
+	got := testPythonFenceInterpretedNativeParityAt(t, source, filepath.Join(root, "program.bpp"))
+	if got != "yes:"+canonicalRoot+"\n" {
+		t.Fatalf("output = %q", got)
+	}
+}
+
+func TestLowerNonPythonDoesNotDiscoverEnvironment(t *testing.T) {
+	t.Setenv("BASHPP_PYTHON", filepath.Join(t.TempDir(), "missing-python"))
+	file := parse(t, "echo ok\n", filepath.Join(t.TempDir(), "missing", "input.bpp"))
+	if _, err := lower.Compile(file, lower.Options{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPythonFenceEnvironmentUsesOrigin(t *testing.T) {
+	python, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("python3 unavailable")
+	}
+	root := t.TempDir()
+	launcher := filepath.Join(root, "origin-python")
+	body := "#!/bin/sh\nexec " + strconv.Quote(python) + " \"$@\"\n"
+	if err := os.WriteFile(launcher, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "bashpp.yaml"), []byte("runtime: origin-python\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	origin := filepath.Join(root, "program.bpp")
+	if err := os.WriteFile(origin, []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	file := parse(t, "~~~python\ndef answer() -> int:\n    return 42\n~~~\n", "<stdin>")
+	result, err := lower.Compile(file, lower.Options{Origin: origin})
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalLauncher, err := filepath.EvalSymlinks(launcher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	generated := string(result.Source)
+	if !strings.Contains(generated, "Dir: "+strconv.Quote(canonicalRoot)) || !strings.Contains(generated, "Executable: "+strconv.Quote(canonicalLauncher)) {
+		t.Fatalf("generated plan did not use Origin project:\n%s", generated)
+	}
+}
+
 func testPythonFenceInterpretedNativeParity(t *testing.T, source string) {
+	testPythonFenceInterpretedNativeParityAt(t, source, "input.bpp")
+}
+
+func testPythonFenceInterpretedNativeParityAt(t *testing.T, source, filename string) string {
 	t.Helper()
-	file := parse(t, source, "input.bpp")
+	file := parse(t, source, filename)
 	result, err := lower.Compile(file, lower.Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -110,4 +185,5 @@ func testPythonFenceInterpretedNativeParity(t *testing.T, source string) {
 	if native.String() != interpreted.String() || nativeErr.String() != interpretedErr.String() {
 		t.Fatalf("interpreted=(%q,%q) native=(%q,%q)", interpreted.String(), interpretedErr.String(), native.String(), nativeErr.String())
 	}
+	return native.String()
 }
