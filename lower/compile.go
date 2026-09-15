@@ -19,57 +19,59 @@ import (
 )
 
 type emitter struct {
-	sourceFile         *syntax.File
-	goSource           bool
-	options            Options
-	moduleImporter     types.Importer
-	prefix             string
-	marks              []Mapping
-	scopes             []map[string]bool
-	funcs              map[string]bool
-	bridge             bool
-	output             bool
-	inFunc             bool
-	globals            map[string]bool
-	globalTypes        map[string]string
-	typeNames          map[string]bool
-	visibleGlobals     map[string]bool
-	functionGlobals    map[string]bool
-	panicSupport       bool
-	imports            map[string]string
-	importAliased      map[string]bool // import bindings the input spelled with an alias
-	fileImports        map[string][]sourceImport
-	callableParams     map[*syntax.BashPPField]string
-	resultTypes        []string
-	resultNames        []string
-	resultCallFrame    string
-	dotNames           map[string]bool
-	declaredGlobals    map[string]bool
-	iotaValue          *int
-	bigIntegers        bool
-	functionDecls      map[string]*syntax.BashPPFuncDecl
-	foreignFunctions   map[string]foreignFunction
-	foreignPlans       []polyglot.Plan
-	foreignImports     []polyglot.ImportPlan
-	foreignPythonEnv   *polyglot.EnvironmentPlan
-	methodDeclarations []*syntax.BashPPFuncDecl
-	enumMembers        map[string][]*syntax.Lit
-	projections        projector
-	declaredTypes      map[string]*syntax.BashPPDecl
-	writtenNames       map[string]bool
-	execution          bool
-	guarded            bool
-	readonly           bool
-	mixedShell         bool
-	programExpr        string
-	sourceName         string
-	inferredParams     map[*syntax.BashPPField]string
-	globalDecls        strings.Builder
-	globalChecked      map[*syntax.BashPPShortDecl]string
-	nativeShellNames   map[string]bool
-	nativeShellBody    bool
-	branchTargets      []*lowerBranchTarget
-	branchLabelSeq     int
+	sourceFile           *syntax.File
+	goSource             bool
+	options              Options
+	moduleImporter       types.Importer
+	prefix               string
+	marks                []Mapping
+	scopes               []map[string]bool
+	funcs                map[string]bool
+	bridge               bool
+	output               bool
+	inFunc               bool
+	globals              map[string]bool
+	globalTypes          map[string]string
+	typeNames            map[string]bool
+	visibleGlobals       map[string]bool
+	functionGlobals      map[string]bool
+	panicSupport         bool
+	imports              map[string]string
+	importAliased        map[string]bool // import bindings the input spelled with an alias
+	fileImports          map[string][]sourceImport
+	callableParams       map[*syntax.BashPPField]string
+	resultTypes          []string
+	resultNames          []string
+	resultCallFrame      string
+	dotNames             map[string]bool
+	declaredGlobals      map[string]bool
+	iotaValue            *int
+	bigIntegers          bool
+	functionDecls        map[string]*syntax.BashPPFuncDecl
+	foreignFunctions     map[string]foreignFunction
+	foreignPlans         []polyglot.Plan
+	foreignImports       []polyglot.ImportPlan
+	foreignImportAliases map[string]int
+	pythonValues         map[string]bool
+	foreignPythonEnv     *polyglot.EnvironmentPlan
+	methodDeclarations   []*syntax.BashPPFuncDecl
+	enumMembers          map[string][]*syntax.Lit
+	projections          projector
+	declaredTypes        map[string]*syntax.BashPPDecl
+	writtenNames         map[string]bool
+	execution            bool
+	guarded              bool
+	readonly             bool
+	mixedShell           bool
+	programExpr          string
+	sourceName           string
+	inferredParams       map[*syntax.BashPPField]string
+	globalDecls          strings.Builder
+	globalChecked        map[*syntax.BashPPShortDecl]string
+	nativeShellNames     map[string]bool
+	nativeShellBody      bool
+	branchTargets        []*lowerBranchTarget
+	branchLabelSeq       int
 	// pendingLabel is the source label of the labeled loop, switch, or select
 	// about to push its branch target; it seeds the target so a deep branch
 	// and a goto name the same label instead of a synthesized one.
@@ -177,7 +179,7 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 	if !token.IsIdentifier(options.Package) || token.Lookup(options.Package).IsKeyword() {
 		return nil, ErrorList{{Code: CodeType, Msg: "invalid package name", Pos: file.Pos()}}
 	}
-	e := &emitter{goSource: file.GoSource, sourceFile: file, writtenNames: map[string]bool{}, inferredParams: map[*syntax.BashPPField]string{}, declaredTypes: map[string]*syntax.BashPPDecl{}, functionDecls: map[string]*syntax.BashPPFuncDecl{}, enumMembers: map[string][]*syntax.Lit{}, options: options, funcs: map[string]bool{}, scopes: []map[string]bool{{}}, globals: map[string]bool{}, visibleGlobals: map[string]bool{}, imports: map[string]string{}, importAliased: map[string]bool{}, fileImports: map[string][]sourceImport{}, callableParams: map[*syntax.BashPPField]string{}, dotNames: map[string]bool{}, declaredGlobals: map[string]bool{}, typeNames: map[string]bool{}, globalTypes: globalTypes}
+	e := &emitter{goSource: file.GoSource, sourceFile: file, writtenNames: map[string]bool{}, inferredParams: map[*syntax.BashPPField]string{}, declaredTypes: map[string]*syntax.BashPPDecl{}, functionDecls: map[string]*syntax.BashPPFuncDecl{}, enumMembers: map[string][]*syntax.Lit{}, options: options, funcs: map[string]bool{}, scopes: []map[string]bool{{}}, globals: map[string]bool{}, visibleGlobals: map[string]bool{}, imports: map[string]string{}, importAliased: map[string]bool{}, fileImports: map[string][]sourceImport{}, callableParams: map[*syntax.BashPPField]string{}, dotNames: map[string]bool{}, declaredGlobals: map[string]bool{}, typeNames: map[string]bool{}, globalTypes: globalTypes, foreignImportAliases: map[string]int{}, pythonValues: map[string]bool{}}
 	e.foreignFunctions = map[string]foreignFunction{}
 	e.moduleImporter = newModuleImporter(options.Dir)
 	if options.Importer != nil {
@@ -190,6 +192,7 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 	if err := e.prepareForeign(context.Background(), file); err != nil {
 		return nil, err
 	}
+	e.findPythonValues(file)
 	e.projections.projectionPush()
 	e.needsExecution(file)
 	e.needsShell(file)
@@ -381,7 +384,7 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 	if e.output {
 		imports = append(imports, "fmt")
 	}
-	if len(e.foreignPlans) > 0 {
+	if len(e.foreignPlans) > 0 || len(e.foreignImports) > 0 {
 		imports = append(imports, "context", "mvdan.cc/sh/v3/polyglot")
 	}
 	if e.bridge {
@@ -410,7 +413,7 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 	if e.output {
 		fmt.Fprintf(&raw, "import %sfmt \"fmt\"\n", e.prefix)
 	}
-	if len(e.foreignPlans) > 0 {
+	if len(e.foreignPlans) > 0 || len(e.foreignImports) > 0 {
 		fmt.Fprintf(&raw, "import %scontext \"context\"\n", e.prefix)
 		fmt.Fprintf(&raw, "import %spolyglot \"mvdan.cc/sh/v3/polyglot\"\n", e.prefix)
 	}
@@ -1514,6 +1517,9 @@ func (e *emitter) expr(x syntax.BashPPExpr) (string, error) {
 		}
 		return e.compositeExpr(n)
 	case *syntax.BashPPSelectorExpr:
+		if e.pythonExpr(n.X) {
+			return e.pythonAttr(n)
+		}
 		return e.checkedSelector(n)
 	case *syntax.BashPPTypeAssertExpr:
 		return e.valueAssertion(n, false)
@@ -1626,6 +1632,9 @@ func (e *emitter) group(text string) string {
 	return "(" + text + ")"
 }
 func (e *emitter) call(c *syntax.BashPPCall) (string, error) {
+	if e.pythonCallKind(c) != "" {
+		return e.pythonCall(c)
+	}
 	if c.CalleeExpr != nil {
 		callee, err := e.expr(c.CalleeExpr)
 		if err != nil {

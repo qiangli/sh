@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"mvdan.cc/sh/v3/expand"
+	"mvdan.cc/sh/v3/polyglot"
 	"mvdan.cc/sh/v3/syntax"
 )
 
@@ -513,6 +514,39 @@ func (r *Runner) bashPPLookupFunc(c *syntax.BashPPCall) (*bashPPFunc, bool) {
 	if fn := r.bashPPForeignFuncs[strings.Join(foreignName, ".")]; fn != nil {
 		return fn, true
 	}
+	if len(c.Fun) == 2 {
+		if module := r.bashPPForeignImports[c.Fun[0].Value]; module != nil {
+			name := c.Fun[1].Value
+			return bashPPDirectForeign(module, nil, name, strings.Join(foreignName, ".")), true
+		}
+	}
+	if len(c.Fun) >= 1 && r.bashPPScope != nil {
+		if cell := r.bashPPScope.lookup(c.Fun[0].Value); cell != nil && cell.vr.Kind == expand.Object {
+			if handle, ok := cell.vr.Obj.(*polyglot.Handle); ok {
+				var middle []*syntax.Lit
+				if len(c.Fun) > 2 {
+					middle = c.Fun[1 : len(c.Fun)-1]
+				}
+				for _, part := range middle {
+					result, err := handle.GetAttr(r.ectx, part.Value)
+					if err != nil {
+						r.exit.fatal(err)
+						return nil, false
+					}
+					handle, ok = result.Value.(*polyglot.Handle)
+					if !ok {
+						r.exit.fatal(fmt.Errorf("Python attribute %s is not an object", part.Value))
+						return nil, false
+					}
+				}
+				name := ""
+				if len(c.Fun) > 1 {
+					name = c.Fun[len(c.Fun)-1].Value
+				}
+				return bashPPDirectForeign(nil, handle, name, strings.Join(foreignName, ".")), true
+			}
+		}
+	}
 	if len(c.Fun) >= 2 {
 		// A selector call resolves to its method first and is instantiated
 		// second, exactly as a plain call is. A method's own type parameters
@@ -548,6 +582,15 @@ func (r *Runner) bashPPLookupFunc(c *syntax.BashPPCall) (*bashPPFunc, bool) {
 		return r.bashPPInstantiateFunc(c, fn)
 	}
 	return nil, false
+}
+
+func bashPPDirectForeign(module *polyglot.Module, receiver *polyglot.Handle, name, qualified string) *bashPPFunc {
+	decl := &syntax.BashPPFuncDecl{
+		Name:    &syntax.Lit{Value: name},
+		Params:  []*syntax.BashPPField{{Names: []*syntax.Lit{{Value: "args"}}, FieldType: &syntax.Lit{Value: "any"}, Ellipsis: syntax.NewPos(0, 1, 1)}},
+		Results: []*syntax.BashPPField{{FieldType: &syntax.Lit{Value: "any"}}},
+	}
+	return &bashPPFunc{decl: decl, foreign: &bashPPForeignFunc{module: module, receiver: receiver, export: polyglot.Export{Name: name}, qualified: qualified, direct: true}}
 }
 
 // bashPPLookupSelectorFunc resolves the `x.M`, `T.M` and `(*T).M` callee forms
@@ -1585,6 +1628,23 @@ func (r *Runner) bashPPCallValues(c *syntax.BashPPCall, fn *bashPPFunc) (result 
 			success = false
 		}
 	}()
+	if fn.foreign != nil && fn.foreign.direct {
+		fn.foreign.call = c
+		args, cells := r.bashPPCallArgValuesWithCells(c)
+		seen := map[string]bool{}
+		fn.foreign.argNames = fn.foreign.argNames[:0]
+		for _, name := range c.ArgNames {
+			if seen[name.Value] {
+				r.errf("BASHPP-EKWARG-DUPLICATE: argument %q is supplied more than once\n", name.Value)
+				r.exit = exitStatus{code: 2}
+				return nil, false
+			}
+			seen[name.Value] = true
+			fn.foreign.argNames = append(fn.foreign.argNames, name.Value)
+		}
+		fn.foreign.argCells = cells
+		return args, true
+	}
 	if c.Ellipsis.IsValid() && !bashppVariadic(fn.params()) {
 		r.errf("cannot use ... in call to non-variadic %s\n", fn.name())
 		r.exit = exitStatus{code: 2}

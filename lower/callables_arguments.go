@@ -1,8 +1,10 @@
 package lower
 
 import (
-	"mvdan.cc/sh/v3/syntax"
+	"go/types"
 	"strconv"
+
+	"mvdan.cc/sh/v3/syntax"
 )
 
 // callArgument reads the authoritative typed edge when the parser committed
@@ -12,12 +14,27 @@ func (e *emitter) callArgument(c *syntax.BashPPCall, index int) (string, error) 
 		if index >= len(c.ArgExprs) || c.ArgExprs[index] == nil {
 			return "", e.fail(c, CodeExpr, "missing typed call argument")
 		}
-		return e.expr(c.ArgExprs[index])
+		text, err := e.expr(c.ArgExprs[index])
+		if err == nil && e.pythonExpr(c.ArgExprs[index]) {
+			if typ := e.callParameterType(c, index); typ != "" && typ != "any" && scalarType(typ) {
+				text = "(" + text + ").(" + typ + ")"
+			}
+		}
+		return text, err
 	}
 	if name := c.Args[index].Lit(); e.funcs[name] && e.callParameterType(c, index) == "string" {
 		return strconv.Quote(name), nil
 	}
-	return e.argument(c.Args[index])
+	text, err := e.argument(c.Args[index])
+	if err == nil {
+		name := c.Args[index].Lit()
+		if e.pythonValues[name] || e.pythonValues[text] {
+			if typ := e.callParameterType(c, index); typ != "" && typ != "any" && scalarType(typ) {
+				text = "(" + text + ").(" + typ + ")"
+			}
+		}
+	}
+	return text, err
 }
 func (e *emitter) plannedCallArgument(c *syntax.BashPPCall, w *syntax.Word) (string, error) {
 	for i, supplied := range c.Args {
@@ -29,6 +46,27 @@ func (e *emitter) plannedCallArgument(c *syntax.BashPPCall, w *syntax.Word) (str
 }
 
 func (e *emitter) callParameterType(c *syntax.BashPPCall, index int) string {
+	if len(c.Fun) == 2 && e.imports[c.Fun[0].Value] != "" {
+		if pkg, err := e.moduleImporter.Import(e.imports[c.Fun[0].Value]); err == nil {
+			if fn, ok := pkg.Scope().Lookup(c.Fun[1].Value).(*types.Func); ok {
+				if signature, ok := fn.Type().(*types.Signature); ok && signature.Params().Len() > 0 {
+					param := index
+					if signature.Variadic() && param >= signature.Params().Len()-1 {
+						param = signature.Params().Len() - 1
+					}
+					if param < signature.Params().Len() {
+						typ := signature.Params().At(param).Type()
+						if signature.Variadic() && param == signature.Params().Len()-1 {
+							if slice, ok := typ.(*types.Slice); ok {
+								typ = slice.Elem()
+							}
+						}
+						return types.TypeString(typ, func(*types.Package) string { return "" })
+					}
+				}
+			}
+		}
+	}
 	var fields []*syntax.BashPPField
 	if c.FuncLit != nil {
 		fields = c.FuncLit.Params

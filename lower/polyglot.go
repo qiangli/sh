@@ -92,6 +92,7 @@ func (e *emitter) prepareForeign(ctx context.Context, file *syntax.File) error {
 			return e.fail(imp, CodeUnsupported, err.Error())
 		}
 		e.foreignImports = append(e.foreignImports, plan)
+		e.foreignImportAliases[alias] = len(e.foreignImports) - 1
 		reserved[alias] = "Python import"
 	}
 	pythonRuntime := polyglot.Python{}
@@ -144,11 +145,104 @@ func (e *emitter) prepareForeign(ctx context.Context, file *syntax.File) error {
 		}
 	}
 	e.foreignPlans = plans
-	if len(plans) > 0 {
+	if len(plans) > 0 || len(imports) > 0 {
 		e.bridge = true
 		e.output = true
 	}
 	return nil
+}
+
+func (e *emitter) findPythonValues(file *syntax.File) {
+	for range 3 {
+		syntax.Walk(file, func(node syntax.Node) bool {
+			d, ok := node.(*syntax.BashPPShortDecl)
+			if !ok || len(d.Lhs) != 1 {
+				return true
+			}
+			if d.Call != nil && e.pythonCallKind(d.Call) != "" || d.Expr != nil && e.pythonExpr(d.Expr) {
+				e.pythonValues[d.Lhs[0].Value] = true
+			}
+			return true
+		})
+	}
+}
+
+func (e *emitter) pythonCallKind(call *syntax.BashPPCall) string {
+	if call == nil || len(call.Fun) == 0 {
+		return ""
+	}
+	if len(call.Fun) == 2 {
+		if _, ok := e.foreignImportAliases[call.Fun[0].Value]; ok {
+			return "module"
+		}
+	}
+	if e.pythonValues[call.Fun[0].Value] {
+		if len(call.Fun) == 1 {
+			return "handle"
+		}
+		return "method"
+	}
+	return ""
+}
+
+func (e *emitter) pythonExpr(expr syntax.BashPPExpr) bool {
+	switch x := expr.(type) {
+	case *syntax.BashPPIdent:
+		return e.pythonValues[x.Name.Value]
+	case *syntax.BashPPSelectorExpr:
+		return e.pythonExpr(x.X)
+	}
+	return false
+}
+
+func (e *emitter) pythonCall(call *syntax.BashPPCall) (string, error) {
+	kind := e.pythonCallKind(call)
+	if kind == "" {
+		return "", e.fail(call, CodeUndefined, "unresolved Python call")
+	}
+	values := make([]string, len(call.Args))
+	for i := range call.Args {
+		value, err := e.callArgument(call, i)
+		if err != nil {
+			return "", err
+		}
+		values[i] = value
+	}
+	positional := len(values) - len(call.ArgNames)
+	args := "[]any{" + strings.Join(values[:positional], ",") + "}"
+	kwargs := "map[string]any{"
+	for i, name := range call.ArgNames {
+		if i > 0 {
+			kwargs += ","
+		}
+		kwargs += strconv.Quote(name.Value) + ":" + values[positional+i]
+	}
+	kwargs += "}"
+	ctx := e.prefix + "context.Background()"
+	var operation string
+	switch kind {
+	case "module":
+		index := e.foreignImportAliases[call.Fun[0].Value]
+		operation = fmt.Sprintf("%spython%d.CallKeywords(%s,%s,%s,%s)", e.prefix, index, ctx, strconv.Quote(call.Fun[1].Value), args, kwargs)
+	case "handle":
+		receiver := e.goName(call.Fun[0].Value)
+		operation = fmt.Sprintf("%spythonHandle(%s).Call(%s,%s,%s)", e.prefix, receiver, ctx, args, kwargs)
+	case "method":
+		receiver := e.goName(call.Fun[0].Value)
+		for _, part := range call.Fun[1 : len(call.Fun)-1] {
+			receiver = fmt.Sprintf("%spythonValue(%spythonHandle(%s).GetAttr(%s,%s))", e.prefix, e.prefix, receiver, ctx, strconv.Quote(part.Value))
+		}
+		operation = fmt.Sprintf("%spythonHandle(%s).CallAttr(%s,%s,%s,%s)", e.prefix, receiver, ctx, strconv.Quote(call.Fun[len(call.Fun)-1].Value), args, kwargs)
+	}
+	return e.prefix + "pythonValue(" + operation + ")", nil
+}
+
+func (e *emitter) pythonAttr(selector *syntax.BashPPSelectorExpr) (string, error) {
+	receiver, err := e.expr(selector.X)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%spythonValue(%spythonHandle(%s).GetAttr(%scontext.Background(),%s))", e.prefix, e.prefix, receiver, e.prefix, strconv.Quote(selector.Sel.Value)), nil
 }
 
 func lowerForeignDecl(export polyglot.Export) *syntax.BashPPFuncDecl {
@@ -168,10 +262,18 @@ func lowerForeignDecl(export polyglot.Export) *syntax.BashPPFuncDecl {
 }
 
 func (e *emitter) foreignDeclarations() string {
-	if len(e.foreignPlans) == 0 {
+	if len(e.foreignPlans) == 0 && len(e.foreignImports) == 0 {
 		return ""
 	}
 	var out strings.Builder
+	for i, plan := range e.foreignImports {
+		fmt.Fprintf(&out, "var %spython%d = %spolyglot.StartImport(%spolyglot.ImportPlan{ID:%s,Language:%s,Module:%s,Alias:%s,Environment:*%s})\n", e.prefix, i, e.prefix, e.prefix, strconv.Quote(plan.ID), strconv.Quote(plan.Language), strconv.Quote(plan.Module), strconv.Quote(plan.Alias), e.environmentLiteral(&plan.Environment))
+	}
+	if len(e.foreignImports) > 0 {
+		fmt.Fprintf(&out, "var _ = %scontext.Background\n", e.prefix)
+		fmt.Fprintf(&out, "func %spythonValue(result %spolyglot.CallResult, err error) any { if result.Stdout != \"\" { %sfmt.Fprint(%srt.Stdout,result.Stdout) }; if result.Stderr != \"\" { %sfmt.Fprint(%srt.Stderr,result.Stderr) }; if err != nil { panic(%srt.ValueAbort{Err:err}) }; return result.Value }\n", e.prefix, e.prefix, e.prefix, e.prefix, e.prefix, e.prefix, e.prefix)
+		fmt.Fprintf(&out, "func %spythonHandle(value any) *%spolyglot.Handle { handle,ok:=value.(*%spolyglot.Handle); if !ok { panic(%srt.ValueAbort{Err:%sfmt.Errorf(\"Python value %%T is not an object\",value)}) }; return handle }\n", e.prefix, e.prefix, e.prefix, e.prefix, e.prefix)
+	}
 	for i, plan := range e.foreignPlans {
 		module := fmt.Sprintf("%sforeign%d", e.prefix, i)
 		runtime := fmt.Sprintf("%spolyglot.Python{Environment:%s}", e.prefix, e.foreignEnvironment())
@@ -196,6 +298,10 @@ func (e *emitter) foreignDeclarations() string {
 
 func (e *emitter) foreignEnvironment() string {
 	p := e.foreignPythonEnv
+	return e.environmentLiteral(p)
+}
+
+func (e *emitter) environmentLiteral(p *polyglot.EnvironmentPlan) string {
 	if p == nil {
 		return "nil"
 	}

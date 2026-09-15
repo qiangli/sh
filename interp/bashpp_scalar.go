@@ -38,6 +38,12 @@ func (r *Runner) bashPPEvalScalarExpr(expr syntax.BashPPExpr) (result bashPPScal
 	if value, handled, err := r.bashPPTestingScalar(expr); handled {
 		return value, err
 	}
+	if value, handled, err := r.bashPPPythonValue(expr); handled {
+		if err != nil {
+			return bashPPScalar{}, err
+		}
+		return bashPPPythonScalar(value)
+	}
 	if call, ok := expr.(*syntax.BashPPCall); ok {
 		if value, handled, err := r.goSourceUnsafeConstant(call); handled {
 			return value, err

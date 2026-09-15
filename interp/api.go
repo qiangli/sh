@@ -136,6 +136,7 @@ type Runner struct {
 	// variables or the environment.
 	bashPPForeignFuncs   map[string]*bashPPFunc
 	bashPPForeignModules []*polyglot.Module
+	bashPPForeignImports map[string]*polyglot.Module
 	// bashPPTypes and bashPPMethods are the runner-local named-type namespace.
 	// They persist with the session and are cloned for subshell isolation.
 	bashPPTypes   map[string]bashPPType
@@ -3611,6 +3612,7 @@ func (r *Runner) subshell(background bool) *Runner {
 	r2.bashPPImports = maps.Clone(r.bashPPImports)
 	r2.bashPPForeignFuncs = maps.Clone(r.bashPPForeignFuncs)
 	r2.bashPPForeignModules = append([]*polyglot.Module(nil), r.bashPPForeignModules...)
+	r2.bashPPForeignImports = maps.Clone(r.bashPPForeignImports)
 	r2.bashPPTypes = maps.Clone(r.bashPPTypes)
 	// The bindings map is read-only once installed, but a subshell may enter
 	// its own frames, so it gets its own map rather than sharing this one.

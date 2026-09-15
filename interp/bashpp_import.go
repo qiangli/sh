@@ -675,6 +675,9 @@ func (r *Runner) bashPPImport(ctx context.Context, imp *syntax.BashPPImport) {
 		r.shellFallbackImport(ctx, imp)
 		return
 	}
+	if imp.Language != nil {
+		return
+	}
 	req, err := r.bashPPEvalRequest()
 	if err != nil {
 		r.exit.fatal(err)
