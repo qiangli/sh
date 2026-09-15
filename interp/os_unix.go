@@ -430,7 +430,7 @@ func runnerForegroundJobTTY(r *Runner) (*foregroundJobTTY, error) {
 		if closeFD {
 			_ = unix.Close(fd)
 		}
-		return nil, fmt.Errorf("get foreground process group: %w", err)
+		return nil, fmt.Errorf("query controlling terminal foreground process group: %w", err)
 	}
 	if stdinIsTTY && foreground != shellPgrp {
 		return nil, fmt.Errorf("shell does not own the controlling terminal")
@@ -478,7 +478,7 @@ func foregroundExistingJob(r *Runner, pgrp int) (*foregroundJobTTY, error) {
 		return nil, err
 	}
 	if err := tty.giveTo(pgrp); err != nil {
-		return nil, fmt.Errorf("give terminal to process group %d: %w", pgrp, err)
+		return nil, fmt.Errorf("give controlling terminal to process group %d: %w", pgrp, err)
 	}
 	return tty, nil
 }

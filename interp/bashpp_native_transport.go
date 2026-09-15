@@ -101,7 +101,17 @@ func validateLocalTransport(req bashPPEvalRequest, q bashPPBridgeRequest) error 
 		}
 		unsafe = unsafe || (local && ref) || arg.Kind == "pointer"
 	}
-	if !functionCallbacks && nativePointerWritebackAllowed(req, q) {
+	// Plain-data pointer writeback reconciles field mutations the dependency
+	// performs through an origin-bearing pointer; it never accounts for the
+	// dependency invoking the pointee's ORIGINAL methods. A pointer to a local
+	// method-bearing type is a callback interface value (e.g. an image.Image):
+	// handing it to an arbitrary dependency lets that dependency retain it and
+	// raise its original callbacks later, asynchronously, which this transport
+	// cannot service. Such values may only cross to a reviewed synchronous
+	// consumer (png.Encode, pic.ShowImage, the reader helpers) below; the
+	// writeback admission is restricted to callback-free requests so an
+	// unreviewed retainer like dep.Retain(image.Image) is refused here.
+	if !functionCallbacks && !requestHasCallbacks(req, q) && nativePointerWritebackAllowed(req, q) {
 		return nil
 	}
 	// A read-only structural emitter (json/xml Marshal, base64/hex encode, the
