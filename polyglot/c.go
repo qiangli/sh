@@ -170,6 +170,12 @@ func analyzeNativeArtifact(ctx context.Context, language, compiler string, envir
 	return exports, string(binary), nil
 }
 
+// nativeIncludeArgs makes the fence's source directory and the discovered
+// project root include roots for quoted includes only (-iquote). A plain -I
+// would also serve angle-bracket includes, so a project file named like a
+// standard header — tesseract's VERSION on a case-insensitive filesystem
+// shadowing C++20's <version>, or any root file called version, string, map
+// — would break every fence that includes the standard library.
 func nativeIncludeArgs(environment *EnvironmentPlan) []string {
 	if environment == nil {
 		return nil
@@ -178,7 +184,7 @@ func nativeIncludeArgs(environment *EnvironmentPlan) []string {
 	var args []string
 	for _, dir := range []string{environment.SourceDir, environment.Root} {
 		if dir != "" && !seen[dir] {
-			args, seen[dir] = append(args, "-I", dir), true
+			args, seen[dir] = append(args, "-iquote", dir), true
 		}
 	}
 	return args

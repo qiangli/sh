@@ -104,6 +104,45 @@ void fail() { throw std::runtime_error("native boom"); }
 	}
 }
 
+func TestNativeIncludeRootsServeQuotedIncludesOnly(t *testing.T) {
+	clang, err := exec.LookPath("clang++")
+	if err != nil {
+		t.Skip("clang++ unavailable")
+	}
+	// A project root carrying a file named like a standard header must not
+	// shadow <version> (pulled in by <string>); it is still reachable through
+	// a quoted include, which is the documented contract.
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "version"), []byte("5.5.3\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "coordinates.h"), []byte("#define PROJECT_MAJOR 5\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := DiscoverEnvironment(EnvironmentRequest{Source: filepath.Join(root, "program.bpp"), Language: "cpp", Environ: []string{"PATH=" + os.Getenv("PATH"), "BASHPP_CXX=" + clang}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := nativeIncludeArgs(&plan); len(got) < 2 || got[0] != "-iquote" {
+		t.Fatalf("include args = %q", got)
+	}
+	runtime := CPP{Command: clang, Environment: &plan}
+	plans, err := Prepare(context.Background(), []Block{{Language: "cxx", Filename: filepath.Join(root, "program.bpp"), Source: `
+#include <string>
+#include "coordinates.h"
+std::string major() { return std::to_string(PROJECT_MAJOR); }
+`}}, map[string]Analyzer{"cpp": runtime})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := Start(plans[0], runtime)
+	defer m.Close()
+	got, err := m.Call(context.Background(), "major")
+	if err != nil || got.Value != "5" {
+		t.Fatalf("major = %#v, %v", got, err)
+	}
+}
+
 func TestNativeRejectsUnsupportedSurface(t *testing.T) {
 	clang, err := exec.LookPath("clang++")
 	if err != nil {

@@ -113,7 +113,11 @@ errors; ordinary stdout and stderr remain visible.
 Compiler selection is source-relative and deterministic: a matching
 `bashpp.yaml`/`bashpp.json` runtime, then `BASHPP_CC` or `BASHPP_CXX`, then
 `clang`/`cc` or `clang++`/`c++` on the recorded `PATH`. The source directory
-and discovered project root are include roots, but Bash++ does not infer build
-flags or link third-party libraries. Each call launches a fresh worker, so
+and discovered project root are include roots for quoted includes
+(`#include "libavutil/version.h"` resolves against the checkout; passed as
+`-iquote`, so a project file named like a standard header — `VERSION` beside
+C++20's `<version>` on a case-insensitive filesystem — never shadows the
+compiler's own `<…>` search), but Bash++ does not infer build flags or link
+third-party libraries. Each call launches a fresh worker, so
 native globals do not persist between calls. The boundary is process
 isolation, not a sandbox; fenced native code has the shell account's authority.
