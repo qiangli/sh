@@ -39,6 +39,7 @@ type EnvironmentPlan struct {
 	Executable        string // absolute selected runtime executable
 	Manager           string
 	RuntimeConstraint string
+	CompilerModule    string // TypeScript compiler package or entry point
 	Manifests         []string
 	Locks             []string
 	PythonPath        []string
@@ -69,7 +70,10 @@ func DiscoverEnvironment(request EnvironmentRequest) (EnvironmentPlan, error) {
 	if lang == "" {
 		lang = "python"
 	}
-	if lang != "python" {
+	if lang == "ts" {
+		lang = "typescript"
+	}
+	if lang != "python" && lang != "typescript" {
 		return EnvironmentPlan{}, fmt.Errorf("polyglot: no environment metadata reader for %q", lang)
 	}
 	if request.Source == "" {
@@ -81,7 +85,7 @@ func DiscoverEnvironment(request EnvironmentRequest) (EnvironmentPlan, error) {
 	}
 	dir := filepath.Dir(source)
 	env := envMap(request.Environ)
-	root, dirs, err := environmentDirs(dir)
+	root, dirs, err := environmentDirs(dir, lang)
 	if err != nil {
 		return EnvironmentPlan{}, err
 	}
@@ -148,10 +152,17 @@ func DiscoverEnvironment(request EnvironmentRequest) (EnvironmentPlan, error) {
 			}
 		}
 	}
-	for _, name := range pythonProjectMetadata {
+	projectMetadata := pythonProjectMetadata
+	if lang == "typescript" {
+		projectMetadata = typeScriptProjectMetadata
+	}
+	for _, name := range projectMetadata {
 		if file := canonicalExistingFile(filepath.Join(root, name)); file != "" {
 			plan.ResolutionFiles = append(plan.ResolutionFiles, file)
 		}
+	}
+	if lang == "typescript" {
+		return discoverTypeScriptEnvironment(plan, dirs, selected, env)
 	}
 	metadata, err := discoverPythonMetadata(root)
 	if err != nil {
@@ -216,7 +227,7 @@ type environmentOverlay struct {
 	dir                     string
 }
 
-func environmentDirs(start string) (string, []string, error) {
+func environmentDirs(start, language string) (string, []string, error) {
 	start, err := nearestExistingDir(start)
 	if err != nil {
 		return "", nil, err
@@ -225,7 +236,7 @@ func environmentDirs(start string) (string, []string, error) {
 	project := ""
 	for d := start; ; d = filepath.Dir(d) {
 		dirs = append(dirs, d)
-		if recognizedPythonProject(d) {
+		if recognizedProject(d, language) {
 			if project == "" {
 				project = d
 			}
@@ -272,13 +283,21 @@ func nearestExistingDir(start string) (string, error) {
 	}
 }
 
-func recognizedPythonProject(dir string) bool {
-	for _, n := range pythonProjectMetadata {
+func recognizedProject(dir, language string) bool {
+	metadata := pythonProjectMetadata
+	if language == "typescript" {
+		metadata = typeScriptProjectMetadata
+	}
+	for _, n := range metadata {
 		if exists(filepath.Join(dir, n)) {
 			return true
 		}
 	}
 	return false
+}
+
+func recognizedPythonProject(dir string) bool {
+	return recognizedProject(dir, "python")
 }
 func exists(name string) bool { _, err := os.Lstat(name); return err == nil }
 
@@ -518,6 +537,119 @@ func launchEnvironment(env map[string]string, paths []string) []string {
 	return out
 }
 
+var typeScriptProjectMetadata = []string{"package.json", "tsconfig.json", "package-lock.json", "pnpm-lock.yaml", "bun.lock", "bun.lockb"}
+
+func discoverTypeScriptEnvironment(plan EnvironmentPlan, dirs []string, selected *environmentOverlay, env map[string]string) (EnvironmentPlan, error) {
+	var err error
+	for _, name := range []string{"package.json", "tsconfig.json"} {
+		if file := canonicalExistingFile(filepath.Join(plan.Root, name)); file != "" {
+			plan.Manifests = append(plan.Manifests, file)
+		}
+	}
+	locks := []struct{ name, manager string }{
+		{"package-lock.json", "npm"}, {"pnpm-lock.yaml", "pnpm"}, {"bun.lock", "bun"}, {"bun.lockb", "bun"},
+	}
+	for _, candidate := range locks {
+		if file := canonicalExistingFile(filepath.Join(plan.Root, candidate.name)); file != "" {
+			plan.Locks = append(plan.Locks, file)
+			if plan.Manager != "" && plan.Manager != candidate.manager {
+				return EnvironmentPlan{}, fmt.Errorf("polyglot: conflicting TypeScript manager lockfiles in %s", plan.Root)
+			}
+			plan.Manager = candidate.manager
+		}
+	}
+	if manifest := firstPackageManifest(plan.Manifests); manifest != "" {
+		var pkg struct {
+			PackageManager string            `json:"packageManager"`
+			Engines        map[string]string `json:"engines"`
+		}
+		data, readErr := os.ReadFile(manifest)
+		if readErr != nil {
+			return EnvironmentPlan{}, readErr
+		}
+		if jsonErr := json.Unmarshal(data, &pkg); jsonErr != nil {
+			return EnvironmentPlan{}, fmt.Errorf("polyglot: parse %s: %w", manifest, jsonErr)
+		}
+		if plan.Manager == "" {
+			manager, _, _ := strings.Cut(pkg.PackageManager, "@")
+			switch manager {
+			case "npm", "pnpm", "bun":
+				plan.Manager = manager
+			}
+		}
+		plan.RuntimeConstraint = pkg.Engines["node"]
+	}
+	runtimeName := strings.ToLower(strings.TrimSpace(env["BASHPP_TYPESCRIPT_RUNTIME"]))
+	if runtimeName == "" {
+		runtimeName = "node"
+	}
+	if runtimeName != "node" && runtimeName != "bun" {
+		return EnvironmentPlan{}, fmt.Errorf("polyglot: unsupported TypeScript runtime %q", runtimeName)
+	}
+	requested := runtimeName
+	if override := env[map[string]string{"node": "BASHPP_NODE", "bun": "BASHPP_BUN"}[runtimeName]]; override != "" {
+		requested = override
+		plan.Explanation = append(plan.Explanation, "runtime executable overridden")
+	} else {
+		plan.Explanation = append(plan.Explanation, "selected "+runtimeName+" TypeScript runtime")
+	}
+	if filepath.IsAbs(requested) {
+		plan.Executable, err = canonicalExecutable(requested, env)
+	} else {
+		plan.Executable, err = lookupPath(env, requested)
+	}
+	if err != nil {
+		return EnvironmentPlan{}, fmt.Errorf("polyglot: TypeScript %s runtime unavailable: %w", runtimeName, err)
+	}
+	if override := env["BASHPP_TYPESCRIPT_MODULE"]; override != "" {
+		plan.CompilerModule = override
+		plan.Explanation = append(plan.Explanation, "compiler module overridden")
+	} else {
+		for _, d := range dirs {
+			packageFile := filepath.Join(d, "node_modules", "typescript", "package.json")
+			if canonicalExistingFile(packageFile) != "" {
+				plan.CompilerModule, err = filepath.EvalSymlinks(filepath.Dir(packageFile))
+				if err != nil {
+					return EnvironmentPlan{}, err
+				}
+				plan.ResolutionFiles = append(plan.ResolutionFiles, canonicalExistingFile(packageFile))
+				plan.Explanation = append(plan.Explanation, "selected project-local official TypeScript compiler")
+				break
+			}
+		}
+		if plan.CompilerModule == "" {
+			plan.CompilerModule = "typescript"
+			plan.Explanation = append(plan.Explanation, "selected default official TypeScript compiler")
+		}
+	}
+	plan.Env = typeScriptLaunchEnvironment(env)
+	plan.Fingerprint, err = environmentFingerprint(plan)
+	if err != nil {
+		return EnvironmentPlan{}, err
+	}
+	return plan.Clone(), nil
+}
+
+func typeScriptLaunchEnvironment(env map[string]string) []string {
+	var out []string
+	for _, key := range []string{"PATH", "SystemRoot", "TMPDIR", "TEMP", "TMP"} {
+		if value := environmentValue(env, key); value != "" {
+			out = append(out, key+"="+value)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func firstPackageManifest(manifests []string) string {
+	for _, file := range manifests {
+		if filepath.Base(file) == "package.json" {
+			return file
+		}
+	}
+	return ""
+}
+
 func environmentFingerprint(p EnvironmentPlan) (string, error) {
 	h := sha256.New()
 	write := func(s string) { _, _ = io.WriteString(h, s+"\x00") }
@@ -526,6 +658,7 @@ func environmentFingerprint(p EnvironmentPlan) (string, error) {
 	write(p.Dir)
 	write(p.Manager)
 	write(p.RuntimeConstraint)
+	write(p.CompilerModule)
 	write(runtime.GOOS)
 	write(runtime.GOARCH)
 	for _, s := range p.Manifests {
