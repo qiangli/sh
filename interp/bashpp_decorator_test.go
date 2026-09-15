@@ -127,7 +127,9 @@ func f() { defer cleanup(); echo "body"; return; }
 f()
 echo "done"
 `,
-			"body\nbody\nafter\ncleanup\ncleanup\ndone\n",
+			// Each Next is an ordinary invocation boundary, so its target
+			// defers finish before control returns to the decorator.
+			"body\ncleanup\nbody\ncleanup\nafter\ndone\n",
 		},
 		{
 			"repeated Next feeds shell positionals freshly",
@@ -333,7 +335,8 @@ func f() { defer cleanup(); echo body }
 f()
 echo done
 `,
-			"body\nafter next\ncleanup\ndone\n",
+			// The target call unwinds before Next returns to its decorator.
+			"body\ncleanup\nafter next\ndone\n",
 		},
 		{
 			"redefinition drops the decoration",
@@ -605,6 +608,78 @@ main()
 	qt.Assert(t, qt.IsNil(err))
 	qt.Assert(t, qt.Equals(stderr, ""))
 	qt.Assert(t, qt.Equals(out, wantOut))
+}
+
+// TestBashPPDecoratorManagerRegressions embeds the manager's exact source
+// fixtures and expected output. These are end-to-end contracts: helper-only
+// cell tests do not exercise result transport or the target/decorator unwind
+// boundary.
+func TestBashPPDecoratorManagerRegressions(t *testing.T) {
+	for _, tc := range []struct{ name, src, want string }{
+		{
+			"identity.bpp",
+			`#!/usr/bin/env bashy
+# bash++ profile: decorators · phase S197 · status: planned
+#
+# Typed object identity through no-op decorator.
+
+func noop(c *Call) {
+    c.Next()
+}
+
+@noop()
+func identity(ch chan string) chan string {
+    return ch
+}
+
+func main() {
+    c := make(chan string, 1)
+    c <- "token"
+    d := identity(c)
+    v := <-d
+    echo "identity:[$v]"
+}
+main()
+`,
+			"identity:[token]\n",
+		},
+		{
+			"lifecycle.bpp",
+			`#!/usr/bin/env bashy
+# bash++ profile: decorators · phase S197 · status: planned
+#
+# defer/panic/recover lifecycle through decorator frames.
+
+func catch(c *Call) {
+    defer func() {
+        r := recover()
+        echo "caught:[$r]"
+        c.Status = 1
+    }()
+    c.Next()
+}
+
+func cleanup() { echo "defer:body" }
+
+@catch()
+func panic_maker() {
+    defer cleanup()
+    panic("boom")
+}
+
+panic_maker()
+echo "status:[$?]"
+`,
+			"defer:body\ncaught:[boom]\nstatus:[1]\n",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, stderr, err := runDecorated(t, tc.src)
+			qt.Assert(t, qt.IsNil(err))
+			qt.Assert(t, qt.Equals(stderr, ""))
+			qt.Assert(t, qt.Equals(out, tc.want))
+		})
+	}
 }
 
 func decoratorValues(values []any) string {

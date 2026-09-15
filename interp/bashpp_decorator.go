@@ -171,6 +171,8 @@ type bashPPDecoratorChain struct {
 	body func(ctx context.Context) (int, []string)
 	// frame is the target's context, restored around the body.
 	frame bashPPDecoratorFrame
+	// resultNames lets the body boundary re-read named results after defers.
+	resultNames []string
 	// declScope is the TARGET's captured declaration scope for a typed
 	// target, and nil for a shell one: a typed rung's arguments evaluate
 	// there on every invocation, so neither a decorator's locals nor the
@@ -185,7 +187,6 @@ type bashPPDecoratorChain struct {
 	// runs with that frame rotated to the top, so FUNCNAME[0] is still the
 	// decorated function and FUNCNAME[1] the innermost decorator.
 	targetDepth int
-	bodyDefers  []bashPPDeferred
 	bodyRan     bool
 	failed      bool
 }
@@ -442,9 +443,10 @@ func (c *bashPPDecoratorChain) fail(format string, args ...any) {
 }
 
 // runBody runs the target in its own frame and records the outcome on the
-// context. Deferred calls the body scheduled are set aside so that they run
-// when the TARGET frame unwinds, after the decorators, rather than when the
-// innermost decorator's frame does.
+// context. Each body invocation is an ordinary call boundary: its deferred
+// calls run before Next returns to the innermost decorator, including while a
+// panic is unwinding. This is also what makes repeated Next calls independent
+// invocations rather than one frame with an accumulated defer stack.
 func (c *bashPPDecoratorChain) runBody(ctx context.Context) {
 	r := c.r
 	decorator := r.bashPPDecoratorFrame()
@@ -460,14 +462,34 @@ func (c *bashPPDecoratorChain) runBody(ctx context.Context) {
 	}
 	mark := len(r.bashPPDeferStack)
 	status, results := c.body(ctx)
+	if !r.exit.exiting {
+		r.bashPPRunDefers(ctx, mark)
+	} else if !r.bashPPTestingCancelUnwind(ctx, mark) {
+		r.bashPPDeferStack = r.bashPPDeferStack[:mark]
+	}
+	if !c.failed && !r.exit.exiting && !r.bashPPPanicking() {
+		results = r.bashPPFinalResults(results, c.resultNames)
+		c.call.Status = status
+		c.call.Results = make([]any, len(results))
+		for i, result := range results {
+			c.call.Results[i] = result
+			var source *bashPPCell
+			if i < len(c.resultNames) && c.resultNames[i] != "" {
+				source = r.bashPPScope.lookup(c.resultNames[i])
+			} else if i < len(r.bashPPReturn.cells) {
+				source = r.bashPPReturn.cells[i]
+			}
+			if source != nil {
+				c.call.Results[i] = bashPPDecoratorCellValue(source)
+			}
+		}
+		r.exit = exitStatus{}
+		c.sync()
+	}
 	if rotated && len(r.callStack) == top+1 {
 		target := r.callStack[top]
 		copy(r.callStack[c.targetDepth+1:top+1], r.callStack[c.targetDepth:top])
 		r.callStack[c.targetDepth] = target
-	}
-	if len(r.bashPPDeferStack) > mark {
-		c.bodyDefers = append(c.bodyDefers, r.bashPPDeferStack[mark:]...)
-		r.bashPPDeferStack = r.bashPPDeferStack[:mark]
 	}
 	r.bashPPRestoreDecoratorFrame(decorator)
 	r.bashPPDecoratorStack = stack
@@ -475,16 +497,6 @@ func (c *bashPPDecoratorChain) runBody(ctx context.Context) {
 	if c.failed || r.exit.exiting || r.bashPPPanicking() {
 		return
 	}
-	c.call.Status = status
-	c.call.Results = make([]any, len(results))
-	for i, result := range results {
-		c.call.Results[i] = result
-		if i < len(r.bashPPResultCells) && r.bashPPResultCells[i] != nil {
-			c.call.Results[i] = bashPPDecoratorCellValue(r.bashPPResultCells[i])
-		}
-	}
-	r.exit = exitStatus{}
-	c.sync()
 }
 
 // decoratorArgScope positions the runner's typed scope for evaluating a
@@ -769,6 +781,7 @@ func (r *Runner) bashPPInvokeDecorated(ctx context.Context, fn *bashPPFunc, args
 	}
 	chain := r.bashPPNewDecoratorChain(name, rungs, args, callCells, fn.decl.Agentic != nil)
 	chain.declScope = fn.scope
+	chain.resultNames = resultNames
 	// An argument bound to an interface parameter keeps its typed cell in
 	// Args, whatever its shape: the cell's declared type IS the dynamic type
 	// a no-op chain must hand back to the body, and a plain scalar rendering
@@ -920,15 +933,9 @@ func (r *Runner) bashPPInvokeDecorated(ctx context.Context, fn *bashPPFunc, args
 			return int(r.exit.code), nil
 		}
 		results := r.bashPPSettleResults(fn, resultNames)
-		if len(resultNames) > 0 && results != nil {
-			results = r.bashPPFinalResults(results, resultNames)
-		}
 		return int(r.exit.code), results
 	}
 	ok := chain.run(ctx)
-	if len(chain.bodyDefers) > 0 {
-		r.bashPPDeferStack = append(r.bashPPDeferStack, chain.bodyDefers...)
-	}
 	if !ok || r.exit.exiting || r.bashPPPanicking() {
 		return nil, false
 	}
@@ -981,6 +988,10 @@ func (r *Runner) bashPPInvokeDecorated(ctx context.Context, fn *bashPPFunc, args
 			r.exit.code = 1
 			return nil, false
 		}
+		// Conversion to the declared result type may allocate a fresh cell.
+		// Channel identity is runtime provenance rather than its printable
+		// value, so carry it across just as parameter binding does.
+		converted.channel, converted.channelOwner = cell.channel, cell.channelOwner
 		converted.declType = resultTypes[i]
 		r.bashPPResultCells[i] = converted
 		results[i] = text
@@ -1020,9 +1031,6 @@ func (r *Runner) bashPPCallDecorated(ctx context.Context, name string, entry *ba
 		return int(r.exit.code), nil
 	}
 	ok := chain.run(ctx)
-	if len(chain.bodyDefers) > 0 {
-		r.bashPPDeferStack = append(r.bashPPDeferStack, chain.bodyDefers...)
-	}
 	if !ok || r.exit.exiting || r.bashPPPanicking() {
 		return
 	}
