@@ -874,12 +874,19 @@ func (r *Runner) bashPPComparableExpr(expr syntax.BashPPExpr) (bashPPComparableV
 				return bashPPComparableValue{value: cell.vr.Obj, meta: bashPPCellMeta(cell)}, nil
 			}
 			if r.bashPPGoSource {
-				if _, ok := r.bashPPUnderlyingType(cell.declType).(*syntax.BashPPFuncType); ok {
+				var kind string
+				switch r.bashPPUnderlyingType(cell.declType).(type) {
+				case *syntax.BashPPFuncType:
+					kind = "func"
+				case *syntax.BashPPChanType:
+					kind = "channel"
+				}
+				if kind != "" {
 					var value any = cell.vr.Str
 					if cell.vr.Str == "" || cell.vr.Str == "nil" {
 						value = nil
 					}
-					return bashPPComparableValue{value: value, meta: &bashPPCollectionMeta{kind: "func", typ: cell.declType}}, nil
+					return bashPPComparableValue{value: value, meta: &bashPPCollectionMeta{kind: kind, typ: cell.declType, channel: cell.channel, channelOwner: cell.channelOwner}}, nil
 				}
 			}
 		}

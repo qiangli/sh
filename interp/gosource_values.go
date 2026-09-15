@@ -140,15 +140,21 @@ func (r *Runner) goSourceValueCells(expr syntax.BashPPExpr, spread bool) ([]*bas
 			return nil, errBashPPScalarInterrupted
 		}
 	}
+	// A field or index read from an interpreter-owned aggregate may carry a
+	// typed nil func or channel. Preserve that cell before the native-expression
+	// path below: transporting it first keeps the nil payload but drops the
+	// aggregate's declared type, leaving a later `value == nil` to fall back to
+	// scalar evaluation. StructuredArgCell evaluates the read once and retains
+	// both its payload and metadata, including for non-nil aggregate values.
+	if cell, err := r.bashPPStructuredArgCell(nil, expr); err != nil || cell != nil {
+		return one(cell, err)
+	}
 	if r.bashPPNativeExpr(expr) {
 		value, err := r.bashPPBridgeExpr(expr)
 		if err != nil {
 			return nil, err
 		}
 		return one(goSourceNativeValueCell(value), nil)
-	}
-	if cell, err := r.bashPPStructuredArgCell(nil, expr); err != nil || cell != nil {
-		return one(cell, err)
 	}
 	v, err := r.bashPPEvalScalarExpr(expr)
 	if err != nil {

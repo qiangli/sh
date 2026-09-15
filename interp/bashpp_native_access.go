@@ -333,6 +333,13 @@ func (r *Runner) bashPPNativeRead(expr syntax.BashPPExpr) (any, *bashPPCollectio
 			return nil, nil, nil, false
 		}
 	case *syntax.BashPPSelectorExpr:
+		// A local aggregate can contain a dependency-shaped value (notably a
+		// nil func or channel). Its field still belongs to the aggregate's
+		// typed storage, so let the ordinary selector reader retain that
+		// metadata instead of projecting it as an untyped native read.
+		if r.bashPPNativeLocalField(x) != nil {
+			return nil, nil, nil, false
+		}
 		if !r.bashPPNativeExpr(x) {
 			return nil, nil, nil, false
 		}
