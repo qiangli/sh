@@ -3,9 +3,11 @@ id: c1069bac0af6
 kind: task
 title: S194.6 pin awd concurrency across Classic async jobs and Bash++ go tasks
 seq: 124
-status: todo
+status: assigned
 priority: p0
 created: 2026-09-15T12:05:21.550966Z
+weave: 221
+assignee: qiangli
 sprint: 194
 ---
 
