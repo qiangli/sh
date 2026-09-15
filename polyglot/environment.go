@@ -167,7 +167,7 @@ func DiscoverEnvironment(request EnvironmentRequest) (EnvironmentPlan, error) {
 		if selected.Name != "" {
 			plan.Name = selected.Name
 		}
-		executable, err = resolveRuntime(selected.dir, selected.Runtime)
+		executable, err = resolveRuntime(selected.dir, selected.Runtime, env)
 		if err != nil {
 			return EnvironmentPlan{}, err
 		}
@@ -186,13 +186,13 @@ func DiscoverEnvironment(request EnvironmentRequest) (EnvironmentPlan, error) {
 	}
 	// The override changes only the executable, never which environment won.
 	if override := env["BASHPP_PYTHON"]; override != "" {
-		executable, err = resolveRuntime(root, override)
+		executable, err = resolveRuntime(root, override, env)
 		if err != nil {
 			return EnvironmentPlan{}, err
 		}
 		plan.Explanation = append(plan.Explanation, "runtime executable overridden")
 	}
-	plan.Executable, err = canonicalExecutable(executable)
+	plan.Executable, err = canonicalExecutable(executable, env)
 	if err != nil {
 		return EnvironmentPlan{}, err
 	}
@@ -358,16 +358,19 @@ func activePythonRuntime(env map[string]string) string {
 	}
 	return ""
 }
-func resolveRuntime(root, value string) (string, error) {
+func resolveRuntime(root, value string, env map[string]string) (string, error) {
 	if value == "" {
 		return "", fmt.Errorf("polyglot: empty Python runtime")
 	}
 	if !filepath.IsAbs(value) {
 		value = filepath.Join(root, value)
 	}
-	return canonicalExecutable(value)
+	return canonicalExecutable(value, env)
 }
-func canonicalExecutable(name string) (string, error) {
+func canonicalExecutable(name string, env map[string]string) (string, error) {
+	return canonicalExecutableFor(name, runtime.GOOS, environmentValue(env, "PATHEXT"))
+}
+func canonicalExecutableFor(name, goos, pathExt string) (string, error) {
 	name, err := filepath.Abs(name)
 	if err != nil {
 		return "", err
@@ -380,10 +383,26 @@ func canonicalExecutable(name string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if !info.Mode().IsRegular() || (runtime.GOOS != "windows" && info.Mode().Perm()&0o111 == 0) {
+	if !executableFileMode(name, info.Mode(), goos, pathExt) {
 		return "", fmt.Errorf("polyglot: runtime %s is not an executable file", name)
 	}
 	return name, nil
+}
+
+func executableFileMode(name string, mode os.FileMode, goos, pathExt string) bool {
+	if !mode.IsRegular() {
+		return false
+	}
+	if goos != "windows" {
+		return mode.Perm()&0o111 != 0
+	}
+	ext := filepath.Ext(name)
+	for _, allowed := range windowsExecutableExtensions(pathExt) {
+		if strings.EqualFold(ext, allowed) {
+			return true
+		}
+	}
+	return false
 }
 
 func envMap(entries []string) map[string]string {
@@ -405,7 +424,7 @@ func lookupPath(env map[string]string, file string) (string, error) {
 		}
 		for _, candidate := range executableNames(file, runtime.GOOS, environmentValue(env, "PATHEXT")) {
 			n := filepath.Join(d, candidate)
-			if executable, err := canonicalExecutable(n); err == nil {
+			if executable, err := canonicalExecutableFor(n, runtime.GOOS, environmentValue(env, "PATHEXT")); err == nil {
 				return executable, nil
 			}
 		}
@@ -429,16 +448,24 @@ func executableNames(file, goos, pathExt string) []string {
 	if goos != "windows" || filepath.Ext(file) != "" {
 		return []string{file}
 	}
+	names := make([]string, 0, 4)
+	for _, ext := range windowsExecutableExtensions(pathExt) {
+		names = append(names, file+ext)
+	}
+	return names
+}
+
+func windowsExecutableExtensions(pathExt string) []string {
 	if pathExt == "" {
 		pathExt = ".COM;.EXE;.BAT;.CMD"
 	}
-	names := make([]string, 0, 4)
+	var extensions []string
 	for _, ext := range strings.Split(pathExt, ";") {
 		if ext = strings.TrimSpace(ext); ext != "" {
-			names = append(names, file+ext)
+			extensions = append(extensions, ext)
 		}
 	}
-	return names
+	return extensions
 }
 func canonicalPythonPath(value, root string) ([]string, error) {
 	if value == "" {

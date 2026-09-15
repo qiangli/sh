@@ -98,7 +98,7 @@ func TestRuntimePathsRequireExecutableRegularFile(t *testing.T) {
 	if err := os.Chmod(runtimePath, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := resolveRuntime(root, "python"); err == nil || !strings.Contains(err.Error(), "not an executable file") {
+	if _, err := resolveRuntime(root, "python", nil); err == nil || !strings.Contains(err.Error(), "not an executable file") {
 		t.Fatalf("direct runtime error = %v", err)
 	}
 
@@ -137,6 +137,21 @@ func TestExecutableNamesWindowsPATHEXT(t *testing.T) {
 	}
 	if got := executableNames("python.exe", "windows", ".COM;.EXE"); len(got) != 1 || got[0] != "python.exe" {
 		t.Fatalf("explicit extension names = %q", got)
+	}
+}
+
+func TestExecutableFileModeWindowsPATHEXT(t *testing.T) {
+	mode := os.FileMode(0o644)
+	if !executableFileMode("python.ExE", mode, "windows", ".COM;.EXE;.CMD") {
+		t.Fatal("case-insensitive PATHEXT executable rejected")
+	}
+	for _, name := range []string{"python", "python.txt", "python.EXE.txt"} {
+		if executableFileMode(name, mode, "windows", ".COM;.EXE;.CMD") {
+			t.Fatalf("non-PATHEXT file %q accepted", name)
+		}
+	}
+	if executableFileMode("python.EXE", os.ModeDir|0o755, "windows", ".EXE") {
+		t.Fatal("directory accepted as Windows executable")
 	}
 }
 
