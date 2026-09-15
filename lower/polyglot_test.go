@@ -41,6 +41,13 @@ def loose(value):
 x, callErr := loose(ok)
 echo "$x:$callErr"
 `,
+		"py alias launcher": `~~~py as py
+def main() -> str:
+    return "launched"
+~~~
+value := py.main()
+echo "value=$value"
+`,
 	}
 	for name, source := range tests {
 		t.Run(name, func(t *testing.T) { testPythonFenceInterpretedNativeParity(t, source) })

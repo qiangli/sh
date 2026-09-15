@@ -94,7 +94,7 @@ func (r *Runner) bashPPPrepareSourceBlocks(ctx context.Context, file *syntax.Fil
 	}
 	pythonRuntime := polyglot.Python{}
 	for _, block := range blocks {
-		if strings.EqualFold(strings.TrimSpace(block.Language), "python") {
+		if polyglot.CanonicalLanguage(block.Language) == "python" {
 			source := file.Name
 			if source == "" {
 				source = filepath.Join(r.Dir, ".bashpp-stdin")

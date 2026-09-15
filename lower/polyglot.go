@@ -97,7 +97,7 @@ func (e *emitter) prepareForeign(ctx context.Context, file *syntax.File) error {
 	}
 	pythonRuntime := polyglot.Python{}
 	for _, block := range blocks {
-		if strings.EqualFold(strings.TrimSpace(block.Language), "python") {
+		if polyglot.CanonicalLanguage(block.Language) == "python" {
 			environment, err := polyglot.DiscoverEnvironment(polyglot.EnvironmentRequest{Source: source, Language: "python"})
 			if err != nil {
 				return e.fail(first, CodeUnsupported, err.Error())

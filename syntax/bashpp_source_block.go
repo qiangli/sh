@@ -96,7 +96,7 @@ func (p *Parser) bashppRegisterSourceBlockFuncs(language, body string) {
 	for _, line := range strings.Split(body, "\n") {
 		var declaration string
 		switch strings.ToLower(language) {
-		case "python":
+		case "python", "py":
 			if strings.HasPrefix(line, "def ") {
 				declaration = strings.TrimPrefix(line, "def ")
 			}

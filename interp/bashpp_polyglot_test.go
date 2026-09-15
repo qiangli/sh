@@ -124,6 +124,51 @@ echo "x=$x"
 	}
 }
 
+// `~~~py` is an alias spelling of `~~~python`: both the aliased and the naked
+// forms run through the same Python module plan, and a `py` alias on a `py`
+// fence is the documented `py.main()` shape.
+func TestBashPPPythonPyAliasSpelling(t *testing.T) {
+	qualified := `~~~py as py
+def main() -> str:
+    return "launched"
+~~~
+value := py.main()
+echo "value=$value"
+`
+	out, diagnostic, err := runPolyglot(t, qualified)
+	if err != nil || out != "value=launched\n" || diagnostic != "" {
+		t.Fatalf("qualified: out=%q diagnostic=%q err=%v", out, diagnostic, err)
+	}
+
+	naked := `~~~py
+def answer() -> int:
+    return 42
+~~~
+x := answer()
+echo "x=$x"
+`
+	out, diagnostic, err = runPolyglot(t, naked)
+	if err != nil || out != "x=42\n" || diagnostic != "" {
+		t.Fatalf("naked: out=%q diagnostic=%q err=%v", out, diagnostic, err)
+	}
+
+	// One module per language per source unit: a `py` block and a `python`
+	// block are the SAME language, so they must agree on the alias.
+	mixed := `~~~python as py
+def one() -> int:
+    return 1
+~~~
+~~~py
+def two() -> int:
+    return 2
+~~~
+echo unreachable
+`
+	if _, _, err := runPolyglot(t, mixed); err == nil || !strings.Contains(err.Error(), "inconsistent aliases") {
+		t.Fatalf("mixed spellings with different aliases: err=%v", err)
+	}
+}
+
 func TestBashPPPythonDynamicAndCollisions(t *testing.T) {
 	dynamic := `~~~python
 def loose(value):

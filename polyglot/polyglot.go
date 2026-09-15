@@ -109,10 +109,20 @@ func Prepare(ctx context.Context, blocks []Block, analyzers map[string]Analyzer)
 	return plans, nil
 }
 
+// CanonicalLanguage maps a fence or import language spelling to the name the
+// analyzers and runtimes are keyed by. Short spellings are aliases, never
+// separate languages: `~~~ts` is `typescript` and `~~~py` is `python`.
+func CanonicalLanguage(language string) string {
+	return canonicalLanguage(language)
+}
+
 func canonicalLanguage(language string) string {
 	language = strings.ToLower(strings.TrimSpace(language))
-	if language == "ts" {
+	switch language {
+	case "ts":
 		return "typescript"
+	case "py":
+		return "python"
 	}
 	return language
 }

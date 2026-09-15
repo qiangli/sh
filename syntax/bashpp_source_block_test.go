@@ -120,3 +120,27 @@ func TestBashPPTypeScriptSourceBlockRegistersDirectCalls(t *testing.T) {
 		t.Fatalf("block=%#v statements=%d", block, len(f.Stmts))
 	}
 }
+
+// `py` is an alias spelling of `python` (as `ts` is of `typescript`): the
+// parser's def look-ahead must treat a naked `~~~py` block like `~~~python`,
+// so a later zero-argument `answer()` parses as a direct call rather than a
+// shell function header.
+func TestBashPPSourceBlockPyAliasDirectCallLookahead(t *testing.T) {
+	for _, lang := range []string{"python", "py"} {
+		src := "~~~" + lang + "\ndef answer() -> int:\n    return 42\n~~~\nx := answer()\necho \"$x\"\n"
+		f, err := NewParser(Variant(LangBashPP)).Parse(strings.NewReader(src), "polyglot.bpp")
+		if err != nil {
+			t.Fatalf("%s: %v", lang, err)
+		}
+		if len(f.Stmts) != 3 {
+			t.Fatalf("%s: statements = %d", lang, len(f.Stmts))
+		}
+		block, ok := f.Stmts[0].Cmd.(*SourceBlock)
+		if !ok || block.Language.Value != lang {
+			t.Fatalf("%s: block = %#v", lang, f.Stmts[0].Cmd)
+		}
+		if _, ok := f.Stmts[1].Cmd.(*FuncDecl); ok {
+			t.Fatalf("%s: answer() parsed as a shell function header", lang)
+		}
+	}
+}
