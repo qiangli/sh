@@ -64,7 +64,9 @@ func main(){c:=make(chan int,1);c<-7;var x int;x=<-pick(c);fmt.Println(x)}`,
 func TestGoSourceReceiveRejectsUnrepresentedChannelStorage(t *testing.T) {
 	source := `package main
 import "fmt"
-func main(){c:=make(chan int,1);c<-7;cs:=[]chan int{c};fmt.Println(<-cs[0])}`
+type Item int
+func(Item) String() string { return "item" }
+func main(){c:=make(chan Item,1);c<-Item(7);cs:=[]chan Item{c};fmt.Println(<-cs[0])}`
 	program, err := gosource.Parse(strings.NewReader(source), "channel-storage.go", gosource.Options{RunMain: true})
 	if err != nil {
 		t.Fatal(err)

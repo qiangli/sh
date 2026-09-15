@@ -98,6 +98,18 @@ func nativeSliceReadOnly(name string) bool {
 	return false
 }
 
+// nativeSliceRetainsStorage reports constructors whose result keeps the
+// supplied slice as backing storage after the call returns. The bridge only
+// transports a copy, so admitting these calls would silently sever Go's alias
+// relationship between the original slice and the returned object.
+func nativeSliceRetainsStorage(name string) bool {
+	switch name {
+	case "bytes.NewBuffer", "bytes.NewReader":
+		return true
+	}
+	return false
+}
+
 // nativeSliceMutatingIndex reports the argument that an in-place collection
 // operation reorders or rewrites through the transported backing storage, or
 // -1 when the callable does not mutate a slice argument. The dependency sorts
@@ -127,6 +139,7 @@ func prepareNativeSliceBuffers(req bashPPEvalRequest, q *bashPPBridgeRequest) er
 	q.SliceBuffers = nil
 	q.sliceTargets = nil
 	hasSlice := false
+	hasDirectSlice := false
 	var refresh func(*bashPPBridgeValue) error
 	refresh = func(v *bashPPBridgeValue) error {
 		if capture := v.sliceView; capture != nil {
@@ -162,6 +175,7 @@ func prepareNativeSliceBuffers(req bashPPEvalRequest, q *bashPPBridgeRequest) er
 		return nil
 	}
 	for i := range q.Args {
+		hasDirectSlice = hasDirectSlice || q.Args[i].sliceView != nil
 		if err := refresh(&q.Args[i]); err != nil {
 			return err
 		}
@@ -177,7 +191,8 @@ func prepareNativeSliceBuffers(req bashPPEvalRequest, q *bashPPBridgeRequest) er
 	// and allocates its own output. The latter is the same footing fmt's
 	// formatting entries already stand on, and they are in that set.
 	if callable := nativeSliceCallable(req, *q); requestHasCallbacks(req, *q) &&
-		!goSourceInterpretedCallable(callable) && !nativeSliceReadOnly(callable) {
+		!goSourceInterpretedCallable(callable) &&
+		(!nativeSliceReadOnly(callable) || hasDirectSlice && strings.HasPrefix(callable, "fmt.")) {
 		return fmt.Errorf("gosource: original callback with copied slice references is unsupported")
 	}
 	if nativeSliceCallable(req, *q) == "*text/template.Template.Execute" {
@@ -209,6 +224,9 @@ func prepareNativeSliceBuffers(req bashPPEvalRequest, q *bashPPBridgeRequest) er
 	}
 	index := nativeSliceReadIndex(req, *q)
 	if index < 0 {
+		if nativeSliceRetainsStorage(name) {
+			return fmt.Errorf("gosource: native slice retention or mutation is unsupported for %s", name)
+		}
 		// An interpreter-computed helper that does not mutate reads the
 		// transported elements and allocates its own answer.
 		if nativeSliceReadOnly(name) || goSourceInterpretedCallable(name) {

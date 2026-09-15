@@ -55,8 +55,13 @@ func (r *Runner) goSourceChannelCellValue(cell *bashPPCell, expected syntax.Bash
 		return native, nil
 	}
 	if cell.channel != nil {
-		meta.channel, meta.channelOwner = cell.channel, cell.channelOwner
-		return cell.vrValue(), nil
+		// An interpreter-owned channel's identity lives on its variable cell;
+		// a collection element has no room for it and could only carry the
+		// cell's empty scalar, which would impersonate the channel on a later
+		// receive. Fail closed at the collection representation boundary rather
+		// than fabricate a channel from that scalar carrier. A dependency-owned
+		// channel is a handle value and was already returned above.
+		return nil, fmt.Errorf("BASHPP-ECOLLECTION-ELEMENT: cannot use value as %s", bashPPTypeText(expected))
 	}
 	// A nil channel is still a channel: the declared type is what says so, and
 	// the zero value carries no identity to check.
