@@ -66,7 +66,17 @@ var originalPointers = struct {sync.Mutex; values map[uint64]reflect.Value; ids 
 // pointerSnapshot renders one origin pointee so the writeback can report only
 // what this dependency actually changed. Without it every later call would
 // re-send every live pointee and revert original state it never touched.
-func pointerSnapshot(v value)string{b,err:=json.Marshal(v);if err!=nil{return ""};return string(b)}
+// Native pointer handles are freshly allocated by structural, even when the
+// pointee still holds the same native object. Compare that object's identity,
+// not its transport handle, or a nested call writes stale receiver state back.
+func pointerSnapshot(v value)string{v=pointerSnapshotValue(v);b,err:=json.Marshal(v);if err!=nil{return ""};return string(b)}
+func pointerSnapshotValue(v value)value{
+ if v.Kind=="handle" {handles.Lock();native:=handles.values[v.Handle];handles.Unlock();if native.IsValid()&&native.Kind()==reflect.Pointer {v.Handle=0;v.Text=strconv.FormatUint(uint64(native.Pointer()),16)}}
+ if v.Fields!=nil {fields:=make(map[string]value,len(v.Fields));for name,field:=range v.Fields{fields[name]=pointerSnapshotValue(field)};v.Fields=fields}
+ if v.Elements!=nil {elements:=make([]value,len(v.Elements));for i,element:=range v.Elements{elements[i]=pointerSnapshotValue(element)};v.Elements=elements}
+ if v.Entries!=nil {entries:=make([]bppProtocolEntry,len(v.Entries));for i,entry:=range v.Entries{entries[i]=bppProtocolEntry{Key:pointerSnapshotValue(entry.Key),Value:pointerSnapshotValue(entry.Value)}};v.Entries=entries}
+ return v
+}
 // recordPointee remembers what a pointee looked like when the interpreter last
 // sent it. structural takes the same lock for its own pointer case, so the
 // rendering must happen outside it.

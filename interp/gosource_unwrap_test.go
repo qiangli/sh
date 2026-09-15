@@ -16,6 +16,13 @@ type wrapped struct{err error;calls int}
 func(w *wrapped)Error()string{return "wrapped"}
 func(w *wrapped)Unwrap()error{w.calls++;return errors.Unwrap(w.err)}
 func main(){leaf:=errors.New("leaf");inside:=fmt.Errorf("inside: %w",leaf);w:=wrapped{inside,0};fmt.Println(errors.Is(&w,leaf),w.calls);fmt.Println(errors.Unwrap(&w)==leaf,w.calls)}`,
+		"pointer_state_reentry_replaced_error": `package main
+import("fmt";"errors")
+type wrapped struct{err error;calls int}
+func(w *wrapped)Error()string{return "wrapped"}
+func(w *wrapped)Unwrap()error{w.calls++;return errors.Unwrap(w.err)}
+func main(){first:=errors.New("first");second:=errors.New("second");inside:=fmt.Errorf("inside: %w",first);replacement:=fmt.Errorf("replacement: %w",second);w:=wrapped{inside,0};fmt.Println(errors.Is(&w,first),w.calls);w.err=replacement;fmt.Println(errors.Is(&w,second),w.calls);fmt.Println(errors.Is(&w,first),w.calls)}`,
+
 		"typed_nil_result": `package main
 import("fmt";"errors";"io/fs")
 type wrapped struct{err error}
