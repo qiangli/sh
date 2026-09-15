@@ -76,6 +76,96 @@ f()
 			"tag 1\ntag 2\n",
 		},
 		{
+			"typed target args evaluate in the declaration scope, not the target parameters",
+			`label := "outer"
+func tag(c *Call, v string) { echo "tag $v"; c.Next(); }
+@tag($label)
+func f(label string) { echo "body $label"; }
+f(inner)
+`,
+			"tag outer\nbody inner\n",
+		},
+		{
+			"typed target args do not see decorator locals",
+			`x := "glob"
+func outerd(c *Call) { x := "shadow"; echo "outer $x"; c.Next(); }
+func innerd(c *Call, v string) { echo "inner $v"; c.Next(); }
+@outerd()
+@innerd($x)
+func f() { :; }
+f()
+`,
+			"outer shadow\ninner glob\n",
+		},
+		{
+			"shell target args stay dynamically scoped",
+			`func tag(c *Call, v string) { echo "tag $v"; c.Next(); }
+@tag($y)
+function s() { :; }
+caller() { local y="dyn"; s; }
+y="top"
+caller
+s
+`,
+			"tag dyn\ntag top\n",
+		},
+		{
+			"repeated Next freshly binds body args",
+			`func twice(c *Call) { c.Next(); c.Next(); }
+@twice()
+func f(n int) { echo "n=$n"; n=9; }
+f(3)
+`,
+			"n=3\nn=3\n",
+		},
+		{
+			"repeated Next keeps the return and defer lifecycle",
+			`func twice(c *Call) { c.Next(); c.Next(); echo "after"; }
+func cleanup() { echo "cleanup"; }
+@twice()
+func f() { defer cleanup(); echo "body"; return; }
+f()
+echo "done"
+`,
+			"body\nbody\nafter\ncleanup\ncleanup\ndone\n",
+		},
+		{
+			"repeated Next feeds shell positionals freshly",
+			`func twice(c *Call) { c.Next(); c.Next(); }
+@twice()
+function f() { echo "1=$1"; set -- changed; }
+f start
+`,
+			"1=start\n1=start\n",
+		},
+		{
+			"args rewrite reaches shell positional parameters",
+			`func grow(c *Call) { c.Args = []any{"x", "y"}; c.Next(); }
+@grow()
+function s() { echo "$# -> $*"; }
+s one
+`,
+			"2 -> x y\n",
+		},
+		{
+			"args rewrite rebinds a variadic target",
+			`func grow(c *Call) { c.Args = []any{"h", "1", "9"}; c.Next(); }
+@grow()
+func v(head string, rest ...int) { echo "$head ${rest[*]} n=${#rest[@]}"; }
+v(h, 1)
+`,
+			"h 1 9 n=2\n",
+		},
+		{
+			"variadic target unchanged through a no-op decorator",
+			`func noopd(c *Call) { c.Next(); }
+@noopd()
+func v(head string, rest ...int) { echo "$head ${rest[*]} n=${#rest[@]}"; }
+v(a, 1, 2)
+`,
+			"a 1 2 n=2\n",
+		},
+		{
 			"keyword and default arguments",
 			`func retry(c *Call, n int = 1, backoff string = "0") {
 	i := 0
@@ -317,6 +407,10 @@ func TestBashPPDecoratorDiagnostics(t *testing.T) {
 		{"self", "@d()\nfunc d(c *Call) { c.Next(); }\n", "BASHPP-EDECO-SELF"},
 		{"reserved namespace", "@ns.d()\nfunc f() { :; }\n", "BASHPP-EDECO-RESERVED"},
 		{"cycle", "@b()\nfunc a(c *Call) { c.Next(); }\n@a()\nfunc b(c *Call) { c.Next(); }\n@a()\nfunc f() { echo leaked }\nf()\n", "BASHPP-EDECO-CYCLE"},
+		{"args arity mutation", "func d(c *Call) { c.Args = []any{\"1\", \"2\"}; c.Next(); }\n@d()\nfunc f(n int) { echo leaked }\nf(1)\n", "BASHPP-EDECO-ARG"},
+		{"args variadic arity mutation", "func d(c *Call) { c.Args = []any{}; c.Next(); }\n@d()\nfunc f(head string, rest ...int) { echo leaked }\nf(h)\n", "BASHPP-EDECO-ARG"},
+		{"args type mutation", "func d(c *Call) { c.Args = []any{\"nope\"}; c.Next(); }\n@d()\nfunc f(n int) { echo leaked }\nf(1)\n", "BASHPP-EDECO-ARG"},
+		{"args variadic element type mutation", "func d(c *Call) { c.Args = []any{\"h\", \"nope\"}; c.Next(); }\n@d()\nfunc f(head string, rest ...int) { echo leaked }\nf(h)\n", "BASHPP-EDECO-ARG"},
 		{"result count", "func d(c *Call) { c.Next(); c.Results = []any{\"a\", \"b\"}; }\n@d()\nfunc f() int { return 1 }\nx := f()\n", "BASHPP-EDECO-RESULT"},
 		{"result type", "func d(c *Call) { c.Next(); c.Results = []any{\"nope\"}; }\n@d()\nfunc f() int { return 1 }\nx := f()\n", "BASHPP-EDECO-RESULT"},
 		{"results for a result-less function", "func d(c *Call) { c.Next(); c.Results = []any{\"x\"}; }\n@d()\nfunc f() { :; }\nf()\n", "BASHPP-EDECO-RESULT"},
@@ -355,6 +449,11 @@ func TestBashPPDecoratorNative(t *testing.T) {
 		},
 		"rewriteArgs": func(ctx context.Context, c *interp.Call, args []interp.DecoratorArg) error {
 			c.Args[0] = "9"
+			c.Next(ctx)
+			return nil
+		},
+		"addArg": func(ctx context.Context, c *interp.Call, args []interp.DecoratorArg) error {
+			c.Args = append(c.Args, "extra")
 			c.Next(ctx)
 			return nil
 		},
@@ -412,6 +511,100 @@ echo "$a $b"
 		qt.Assert(t, qt.Equals(stderr, ""))
 		qt.Assert(t, qt.Equals(out, "9 11\n"))
 	})
+	t.Run("mutated args feed shell positional parameters", func(t *testing.T) {
+		out, stderr, err := runDecorated(t, `@rewriteArgs()
+function sh() { echo "1=$1 n=$#"; }
+sh 5 6
+`, interp.Decorators(natives))
+		qt.Assert(t, qt.IsNil(err))
+		qt.Assert(t, qt.Equals(stderr, ""))
+		qt.Assert(t, qt.Equals(out, "1=9 n=2\n"))
+	})
+	t.Run("mutated args are revalidated for arity", func(t *testing.T) {
+		out, stderr, err := runDecorated(t, `@addArg()
+func f(n int) { echo leaked }
+f(1)
+`, interp.Decorators(natives))
+		qt.Assert(t, qt.IsNotNil(err))
+		qt.Assert(t, qt.IsTrue(strings.Contains(stderr, "BASHPP-EDECO-ARG")))
+		qt.Assert(t, qt.IsFalse(strings.Contains(out, "leaked")))
+	})
+}
+
+// TestBashPPDecoratorAdvisedRestore pins that Call.Advised names the rung
+// that is EXECUTING: after an inner Next returns, the outer rung sees its own
+// rule id again, not the inner rung's.
+func TestBashPPDecoratorAdvisedRestore(t *testing.T) {
+	var log []string
+	natives := map[string]interp.DecoratorFunc{
+		"audit": func(ctx context.Context, c *interp.Call, args []interp.DecoratorArg) error {
+			log = append(log, "before="+c.Advised)
+			c.Next(ctx)
+			log = append(log, "after="+c.Advised)
+			return nil
+		},
+	}
+	advice := func(name, file string, agentic bool) []interp.DecoratorSpec {
+		if name != "pay" {
+			return nil
+		}
+		return []interp.DecoratorSpec{{ID: "r1", Name: "audit"}}
+	}
+	out, stderr, err := runDecorated(t, `func trace(c *Call) { a := c.Advised; echo "trace in <$a>"; c.Next(); a2 := c.Advised; echo "trace out <$a2>"; }
+@trace()
+func pay() { echo paying }
+pay()
+`, interp.Decorators(natives), interp.Advice(advice))
+	qt.Assert(t, qt.Equals(stderr, ""))
+	qt.Assert(t, qt.IsNil(err))
+	qt.Assert(t, qt.Equals(out, "trace in <>\npaying\ntrace out <>\n"))
+	qt.Assert(t, qt.DeepEquals(log, []string{"before=r1", "after=r1"}))
+}
+
+// TestBashPPDecoratorTypedNoopPreservation drives a REAL decorated call end
+// to end: a no-op decorator must leave pointer, map, channel, interface and
+// function-valued arguments exactly as an undecorated call would, including
+// mutations the body makes through them.
+func TestBashPPDecoratorTypedNoopPreservation(t *testing.T) {
+	const body = `	p.N = 7
+	m := mv.(map[string]int)
+	m["k"] = 9
+	ch <- 3
+	n := f()
+	switch x := v.(type) {
+	case int:
+		echo "iface int $x"
+	default:
+		echo "iface lost"
+	}
+	return $n
+`
+	const drive = `func ten() int { return 10 }
+func main() {
+	b := Box{N: 1}
+	p := &b
+	m := map[string]int{"seed": 1}
+	ch := make(chan int, 1)
+	i := 42
+	r := mutate(p, m, ch, i, ten)
+	got := <-ch
+	printf 'r=%s n=%s k=%s seed=%s got=%s\n' "$r" b.N m["k"] m["seed"] "$got"
+}
+main()
+`
+	sig := "func mutate(p *Box, mv any, ch chan int, v any, f func() int) int {\n"
+	undecorated := "type Box struct { N int }\n" + sig + body + "}\n" + drive
+	decorated := "func noop(c *Call) { c.Next(); }\ntype Box struct { N int }\n@noop()\n" + sig + body + "}\n" + drive
+
+	wantOut, wantErr, err := runDecorated(t, undecorated)
+	qt.Assert(t, qt.IsNil(err))
+	qt.Assert(t, qt.Equals(wantErr, ""))
+	qt.Assert(t, qt.Equals(wantOut, "iface int 42\nr=10 n=7 k=9 seed=1 got=3\n"))
+
+	out, stderr, err := runDecorated(t, decorated)
+	qt.Assert(t, qt.IsNil(err))
+	qt.Assert(t, qt.Equals(stderr, ""))
+	qt.Assert(t, qt.Equals(out, wantOut))
 }
 
 func decoratorValues(values []any) string {

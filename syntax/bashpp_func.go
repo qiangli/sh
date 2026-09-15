@@ -510,7 +510,11 @@ func (p *Parser) bashppFieldList(open Pos, result bool) ([]*BashPPField, bool) {
 			signatureTypes[lit] = typ
 		}
 		if lit == nil {
+			// A word that is not a single literal — `map[string]int` lexes as
+			// two parts, say — is not a supported parameter spelling; report
+			// it rather than dereferencing the missing literal below.
 			p.posErr(w.Pos(), "func parameter must be a name or type")
+			break
 		}
 		if lit.Value == "==" {
 			nearMiss = true

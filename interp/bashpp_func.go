@@ -2094,7 +2094,7 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 	var decoratedResults []string
 	if fn.decl != nil && (len(fn.decl.Decorators) > 0 || len(fn.advised) > 0) {
 		decorated = true
-		decoratedResults, _ = r.bashPPInvokeDecorated(ctx, fn, args, callCells, resultNames, bashPPDecoratorRungs(fn.decl.Decorators, fn.advised))
+		decoratedResults, _ = r.bashPPInvokeDecorated(ctx, fn, args, callCells, callChannels, resultNames, bashPPDecoratorRungs(fn.decl.Decorators, fn.advised))
 	} else if body := fn.body(); body != nil {
 		r.stmts(ctx, body.Stmts)
 	}

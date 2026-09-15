@@ -171,6 +171,12 @@ type bashPPDecoratorChain struct {
 	body func(ctx context.Context) (int, []string)
 	// frame is the target's context, restored around the body.
 	frame bashPPDecoratorFrame
+	// declScope is the TARGET's captured declaration scope for a typed
+	// target, and nil for a shell one: a typed rung's arguments evaluate
+	// there on every invocation, so neither a decorator's locals nor the
+	// target's bound parameters are visible to them, while a shell target
+	// keeps the dynamic scoping shell functions already have.
+	declScope *bashPPScope
 	// stack is the decorator names executing when the chain began; cycles
 	// are detected against it, and the body runs with it restored so a
 	// decorated function called from a decorated body is not a cycle.
@@ -187,9 +193,9 @@ type bashPPDecoratorChain struct {
 const bashPPDecoratorCallType = "Call"
 
 // bashPPPredeclaredCallSource is the predeclared Call as the script sees it.
-// Args and Results are the shell renderings of the values: this interpreter
-// boxes every value as its shell string, so the []any of the design is the
-// string slice here, with positions preserved by index.
+// Args and Results hold one entry per position, preserved by index: a plain
+// value is its shell string, while a structured, pointer, channel, interface
+// or function-valued position keeps its typed cell.
 const bashPPPredeclaredCallSource = `type Call struct {
 	Name string
 	Site string
@@ -372,7 +378,15 @@ func (c *bashPPDecoratorChain) next(ctx context.Context) {
 	}
 	depth := c.depth
 	c.depth++
-	defer func() { c.depth = depth }()
+	advised := c.call.Advised
+	defer func() {
+		c.depth = depth
+		// The rung this Next entered set Advised for its own run; the rung
+		// that resumes after Next is the one this restores, on the context
+		// and in the script-visible struct alike.
+		c.call.Advised = advised
+		c.sync()
+	}()
 	if depth >= len(c.rungs) {
 		c.runBody(ctx)
 		return
@@ -458,7 +472,7 @@ func (c *bashPPDecoratorChain) runBody(ctx context.Context) {
 	r.bashPPRestoreDecoratorFrame(decorator)
 	r.bashPPDecoratorStack = stack
 	c.bodyRan = true
-	if r.exit.exiting || r.bashPPPanicking() {
+	if c.failed || r.exit.exiting || r.bashPPPanicking() {
 		return
 	}
 	c.call.Status = status
@@ -473,6 +487,19 @@ func (c *bashPPDecoratorChain) runBody(ctx context.Context) {
 	c.sync()
 }
 
+// decoratorArgScope positions the runner's typed scope for evaluating a
+// rung's argument words: a typed target's captured declaration scope, or the
+// current (dynamic) scope for a shell target. It returns the scope to restore.
+func (c *bashPPDecoratorChain) decoratorArgScope() *bashPPScope {
+	saved := c.r.bashPPScope
+	base := saved
+	if c.declScope != nil {
+		base = c.declScope
+	}
+	c.r.bashPPScope = newBashPPScope(base)
+	return saved
+}
+
 // runNative invokes a registry decorator with the rung's evaluated args.
 func (c *bashPPDecoratorChain) runNative(ctx context.Context, rung bashPPDecoratorRung, fn DecoratorFunc) {
 	r := c.r
@@ -480,6 +507,7 @@ func (c *bashPPDecoratorChain) runNative(ctx context.Context, rung bashPPDecorat
 	if rung.args != nil {
 		args = make([]DecoratorArg, 0, len(rung.args))
 		positional := len(rung.args) - len(rung.argNames)
+		saved := c.decoratorArgScope()
 		for i, w := range rung.args {
 			arg := DecoratorArg{Value: r.bashPPExprValue(w)}
 			if i >= positional {
@@ -487,6 +515,7 @@ func (c *bashPPDecoratorChain) runNative(ctx context.Context, rung bashPPDecorat
 			}
 			args = append(args, arg)
 		}
+		r.bashPPScope = saved
 	}
 	c.load()
 	r.bashPPDecoratorStack = append(r.bashPPDecoratorStack, rung.name)
@@ -530,8 +559,10 @@ func (c *bashPPDecoratorChain) runScripted(ctx context.Context, rung bashPPDecor
 	}
 	call := &syntax.BashPPCall{Fun: []*syntax.Lit{{Value: rung.name}}, Args: callWords, ArgNames: names}
 
-	scope := r.bashPPScope
-	r.bashPPScope = newBashPPScope(scope)
+	// The rung's argument words evaluate for THIS invocation, in the typed
+	// target's captured declaration scope (dynamic for a shell target); the
+	// pushed child also carries the hidden *Call binding.
+	scope := c.decoratorArgScope()
 	ctxCell := &bashPPCell{declType: &syntax.BashPPPointerType{Element: &syntax.BashPPNamedType{Name: &syntax.Lit{Value: bashPPDecoratorCallType}}}, typeName: bashPPDecoratorCallType}
 	bashPPStoreCellValue(ctxCell, c.ptr, nil)
 	r.bashPPScope.entries[bashPPDecoratorContextName] = ctxCell
@@ -681,8 +712,17 @@ func bashPPDecoratorValueCell(value any) (*bashPPCell, string) {
 	if cell, ok := value.(*bashPPCell); ok && cell != nil {
 		return bashPPCopyAssignmentCell(cell), fmt.Sprint(cell.vrValue())
 	}
-	text := fmt.Sprint(value)
+	text := bashPPDecoratorValueText(value)
 	return &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: text}}, text
+}
+
+// bashPPDecoratorValueText renders one Call.Args/Results entry as the shell
+// string a positional parameter or plain binding receives.
+func bashPPDecoratorValueText(value any) string {
+	if cell, ok := value.(*bashPPCell); ok && cell != nil {
+		return fmt.Sprint(cell.vrValue())
+	}
+	return fmt.Sprint(value)
 }
 
 func bashPPDecoratorCellValue(cell *bashPPCell) any {
@@ -722,31 +762,154 @@ func (r *Runner) bashPPDecoratorNext(ctx context.Context, fn *bashPPFunc) []stri
 // chain. It returns the settled results, or false when the chain failed;
 // the caller's own settle path is bypassed because the context is now the
 // source of truth for status and results.
-func (r *Runner) bashPPInvokeDecorated(ctx context.Context, fn *bashPPFunc, args []string, callCells []*bashPPCell, resultNames []string, rungs []bashPPDecoratorRung) ([]string, bool) {
+func (r *Runner) bashPPInvokeDecorated(ctx context.Context, fn *bashPPFunc, args []string, callCells []*bashPPCell, callChannels []*bashPPChannel, resultNames []string, rungs []bashPPDecoratorRung) ([]string, bool) {
 	name := fn.name()
 	if recv := fn.decl.Receiver; recv != nil && recv.RecvType != nil && fn.decl.Name != nil {
 		name = recv.RecvType.Value + "." + fn.decl.Name.Value
 	}
 	chain := r.bashPPNewDecoratorChain(name, rungs, args, callCells, fn.decl.Agentic != nil)
+	chain.declScope = fn.scope
+	// An argument bound to an interface parameter keeps its typed cell in
+	// Args, whatever its shape: the cell's declared type IS the dynamic type
+	// a no-op chain must hand back to the body, and a plain scalar rendering
+	// would erase it.
+	targetParams := bashppParams(fn.params())
+	for i := range chain.call.Args {
+		if i >= len(callCells) || callCells[i] == nil || len(targetParams) == 0 {
+			continue
+		}
+		param := targetParams[min(i, len(targetParams)-1)]
+		if _, ok := chain.call.Args[i].(*bashPPCell); ok || param.typ == nil {
+			continue
+		}
+		if _, iface := r.bashPPInterfaceType(param.typ); iface {
+			chain.call.Args[i] = bashPPCopyAssignmentCell(callCells[i])
+		}
+	}
+	// A channel argument's identity travels beside the cells, gated by task
+	// group ownership at the call; carry it on the Args cell so a no-op chain
+	// hands the body the very channel the caller passed.
+	for i, channel := range callChannels {
+		if channel == nil || i >= len(chain.call.Args) {
+			continue
+		}
+		cell, ok := chain.call.Args[i].(*bashPPCell)
+		if !ok {
+			if i < len(callCells) && callCells[i] != nil {
+				cell = bashPPCopyAssignmentCell(callCells[i])
+			} else {
+				cell = &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: args[i]}}
+			}
+			chain.call.Args[i] = cell
+		}
+		cell.channel, cell.channelOwner = channel, r.bashPPConcurrent
+	}
 	defer chain.release()
 	chain.body = func(ctx context.Context) (int, []string) {
+		// Every Next binds the body's parameters afresh from the context, so
+		// a decorator's Args rewrite feeds the body and a repeated Next never
+		// sees what the previous run left in the bindings. The rebinding
+		// revalidates what the original call already proved: the arity and
+		// the per-parameter types, which an Args mutation may have broken.
+		r.bashPPResultCells = nil
 		params := bashppParams(fn.params())
-		args = make([]string, len(chain.call.Args))
-		for i, value := range chain.call.Args {
+		fixed := len(params)
+		variadic := fixed > 0 && params[fixed-1].variadic
+		if variadic {
+			fixed--
+		}
+		callArgs := chain.call.Args
+		switch {
+		case variadic && len(callArgs) < fixed:
+			chain.fail("BASHPP-EDECO-ARG: %s: decorator supplied %d argument(s); expected at least %d\n", fn.name(), len(callArgs), fixed)
+			return 1, nil
+		case !variadic && len(callArgs) != fixed:
+			chain.fail("BASHPP-EDECO-ARG: %s: decorator supplied %d argument(s); expected %d\n", fn.name(), len(callArgs), fixed)
+			return 1, nil
+		}
+		args = make([]string, len(callArgs))
+		cells := make([]*bashPPCell, len(callArgs))
+		for i, value := range callArgs {
 			cell, text := bashPPDecoratorValueCell(value)
-			args[i] = text
-			if i < len(params) && params[i].name != "" {
-				if expected := params[i].typ; expected != nil {
-					var err error
-					cell, err = r.goSourceExpectedCell(cell, expected)
-					if err != nil {
-						r.errf("BASHPP-EDECO-ARG: %s: %v\n", fn.name(), err)
-						r.exit.code = 1
+			args[i], cells[i] = text, cell
+			param := params[min(i, len(params)-1)]
+			if _, typed := value.(*bashPPCell); typed {
+				continue
+			}
+			if _, funcTyped := param.typ.(*syntax.BashPPFuncType); funcTyped {
+				continue
+			}
+			if param.declared != "" && !r.bashPPValueFits(param.declared, text) {
+				where := param.name
+				if where == "" {
+					where = strconv.Itoa(i + 1)
+				}
+				chain.fail("BASHPP-EDECO-ARG: %s: cannot use %q as %s value for parameter %s\n", fn.name(), text, param.declared, where)
+				return 1, nil
+			}
+		}
+		for i, param := range params {
+			if param.variadic {
+				if r.bashPPGoSource && param.name != "" {
+					if !r.goSourceBindVariadic(param, args[i:], cells[min(i, len(cells)):], false) {
+						chain.failed = true
 						return 1, nil
 					}
-					cell.declType = expected
+					break
 				}
-				r.bashPPScope.entries[params[i].name] = cell
+				if param.name != "" {
+					rest := append([]string(nil), args[i:]...)
+					cell := &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.Indexed, List: rest}}
+					cell.valueMeta = &bashPPCollectionMeta{
+						kind:     "slice",
+						typ:      &syntax.BashPPCollectionType{Kind: "slice", Element: param.typ},
+						sequence: make([]*bashPPCollectionMeta, len(rest)),
+					}
+					r.bashPPScope.entries[param.name] = cell
+				}
+				break
+			}
+			if param.name == "" {
+				continue
+			}
+			cell := cells[i]
+			if expected := param.typ; expected != nil {
+				// The expected-type conversion may build a fresh cell; the
+				// channel identity rides the argument, so it is put back after,
+				// as the undecorated binding rebinds it from the call's own
+				// channel provenance.
+				channel, channelOwner := cell.channel, cell.channelOwner
+				bound, err := r.goSourceExpectedCell(cell, expected)
+				if err != nil {
+					chain.fail("BASHPP-EDECO-ARG: %s: %v\n", fn.name(), err)
+					return 1, nil
+				}
+				if bound == cell {
+					bound = bashPPCopyAssignmentCell(bound)
+				}
+				bound.constant = false
+				bound.vr.ReadOnly = false
+				bound.vr.Exported = false
+				if err := r.bashPPBindInterfaceParam(bound, expected); err != nil {
+					chain.fail("BASHPP-EDECO-ARG: %s: %v\n", fn.name(), err)
+					return 1, nil
+				}
+				bound.declType = expected
+				if channel != nil {
+					bound.channel, bound.channelOwner = channel, channelOwner
+				}
+				cell = bound
+			}
+			r.bashPPScope.entries[param.name] = cell
+			if base := strings.TrimPrefix(param.declared, "*"); base != "" {
+				if _, ok := r.bashPPTypes[base]; ok {
+					cell.typeName = base
+					cell.pointer = r.bashPPDeclaredPointer(param.declared)
+					cell.nilPointer = cell.pointer && args[i] == ""
+					if r.bashPPGoSource && cell.pointer {
+						cell.nilPointer = cell.pointerValue == nil
+					}
+				}
 			}
 		}
 		r.Params = append([]string(nil), args...)
@@ -842,6 +1005,14 @@ func (r *Runner) bashPPCallDecorated(ctx context.Context, name string, entry *ba
 	chain := r.bashPPNewDecoratorChain(name, rungs, args, nil, r.bashPPAgenticFunc(name))
 	defer chain.release()
 	chain.body = func(ctx context.Context) (int, []string) {
+		// The body's "$@" is fed from the context afresh on every Next, so a
+		// decorator's Args rewrite reaches the positional parameters. A shell
+		// function has no declared arity or types to revalidate.
+		fresh := make([]string, len(chain.call.Args))
+		for i, value := range chain.call.Args {
+			fresh[i] = bashPPDecoratorValueText(value)
+		}
+		r.Params = fresh
 		run(ctx)
 		if !r.exit.exiting && !r.bashPPPanicking() {
 			r.exit.returning = false
