@@ -44,6 +44,13 @@ func (r *Runner) bashPPNativeExitStatus(err error) bool {
 	}
 	r.closeGoSourceBridge()
 	r.exit = exitStatus{code: uint8(status), exiting: true}
+	if exit.forwarded && status > 128 {
+		// The dependency process died by a signal an external sender addressed
+		// to this host's PID. The program never installed a handler for it, so
+		// Run must reproduce the same signal death on this process once the
+		// interpreter has finished unwinding; see bashPPForwardedDeath.
+		r.bashPPForwardedDeath = status - 128
+	}
 	if exit.forwarded && r.bashPPGoTask {
 		// Every task shares the program's dependency process. A parent signal
 		// terminates that one program; sibling tasks must not report its status

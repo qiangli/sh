@@ -675,6 +675,14 @@ func execReplaceCwdMatches(dir string) bool {
 
 func relayAsyncOwnerSignal(sig killSig) error { return relayExecReplacementSignal(sig) }
 
+// relayForwardedProgramDeath reproduces on this process the signal death of an
+// interpreted Go program whose dependency process was killed by a
+// parent-delivered signal the host proxied to it. num is the platform signal
+// number recorded in bashPPForwardedDeath.
+func relayForwardedProgramDeath(num int) error {
+	return relayExecReplacementSignal(syscall.Signal(num))
+}
+
 func relayExecReplacementSignal(sig syscall.Signal) error {
 	// execve resets caught dispositions to default. Do the same before
 	// relaying a proxied replacement child's terminal signal to the shell

@@ -255,7 +255,15 @@ type Runner struct {
 	bashPPTaskFiles    []*os.File
 	bashPPTaskState    *bashPPTaskState
 	bashPPTaskCanceled bool
-	bashPPTaskFailed   bool
+	// bashPPForwardedDeath is the number of a parent-delivered signal this
+	// process proxied to the interpreted Go program's dependency process and
+	// that killed it. The program left no handler for it, so once the
+	// interpreter has unwound (bridge closed, scratch removed) Run reproduces
+	// the same death on this host instead of returning 128+sig as a normal
+	// exit; the signal's sender addressed this PID, and only the proxy
+	// subscription kept its default action from running here already.
+	bashPPForwardedDeath int
+	bashPPTaskFailed     bool
 	bashPPTaskFailCode uint8
 	bashPPLogicalDepth int
 	bashPPCustomOpen   bool
@@ -3250,6 +3258,7 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 	r.fillExpandConfig(ctx)
 	r.exit = exitStatus{}
 	r.expandRunExit = exitStatus{}
+	r.bashPPForwardedDeath = 0
 	// The CLI drives an exiting statement followed by an empty File to run its
 	// EXIT trap. Preserve the statement's signal across that bookkeeping Run;
 	// every executable node still starts with a fresh termination record.
@@ -3435,6 +3444,17 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 			// embedded hosts return the status and leave the sender alive.
 			_ = relayAsyncOwnerSignal(ownerSignal.signal)
 		}
+	}
+	if sig := r.bashPPForwardedDeath; sig > 0 {
+		// The interpreted Go program was killed by a signal this host proxied
+		// to its dependency process. bashPPNativeExitStatus already closed the
+		// bridge session (child reaped, output drained, scratch removed,
+		// forwarder unsubscribed), so the host can now take the same signal
+		// under its default disposition and report WIFSIGNALED to its parent —
+		// exactly what a compiled build of the program would have shown. Off
+		// unix there is no signal death to reproduce and this returns the
+		// familiar 128+sig exit status instead.
+		return relayForwardedProgramDeath(sig)
 	}
 	// Return the first of: a fatal error, a non-fatal handler error, or the exit code.
 	if err := r.exit.err; err != nil {

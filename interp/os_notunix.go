@@ -158,6 +158,10 @@ func relayAsyncOwnerSignal(sig killSig) error { return relayExecReplacementSigna
 
 func relayExecReplacementSignal(sig int) error { return ExitStatus(128 + sig) }
 
+// relayForwardedProgramDeath has no signal death to reproduce off unix; the
+// program's outcome stays the ordinary 128+sig exit status.
+func relayForwardedProgramDeath(num int) error { return relayExecReplacementSignal(num) }
+
 func (r *Runner) inheritedFd(fd int) (*os.File, bool) {
 	return nil, false
 }
