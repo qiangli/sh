@@ -684,7 +684,7 @@ func parseOverlayYAML(data []byte, file string) ([]environmentOverlay, error) {
 	inEnvironments, currentIndent := false, -1
 	var current *environmentOverlay
 	for _, raw := range lines {
-		withoutComment := strings.SplitN(raw, "#", 2)[0]
+		withoutComment := yamlWithoutComment(raw)
 		indent := len(withoutComment) - len(strings.TrimLeft(withoutComment, " \t"))
 		line := strings.TrimSpace(withoutComment)
 		if line == "" {
@@ -732,7 +732,7 @@ func parseOverlayYAML(data []byte, file string) ([]environmentOverlay, error) {
 	values := map[string]string{}
 	section := ""
 	for _, line := range lines {
-		line = strings.TrimSpace(strings.SplitN(line, "#", 2)[0])
+		line = strings.TrimSpace(yamlWithoutComment(line))
 		if line == "" {
 			continue
 		}
@@ -755,6 +755,46 @@ func parseOverlayYAML(data []byte, file string) ([]environmentOverlay, error) {
 	}
 	return []environmentOverlay{{Name: values["name"], Language: values["language"], Runtime: first(values["runtime"], values["python"], values["environment"])}}, nil
 }
+
+func yamlWithoutComment(line string) string {
+	var quote byte
+	escaped := false
+	for i := 0; i < len(line); i++ {
+		c := line[i]
+		if quote == '"' {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if c == '\\' {
+				escaped = true
+				continue
+			}
+			if c == quote {
+				quote = 0
+			}
+			continue
+		}
+		if quote == '\'' {
+			if c == quote {
+				if i+1 < len(line) && line[i+1] == quote {
+					i++
+					continue
+				}
+				quote = 0
+			}
+			continue
+		}
+		switch c {
+		case '\'', '"':
+			quote = c
+		case '#':
+			return line[:i]
+		}
+	}
+	return line
+}
+
 func first(v ...string) string {
 	for _, s := range v {
 		if s != "" {

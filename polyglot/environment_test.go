@@ -240,6 +240,26 @@ func TestDiscoverEnvironmentOverlaySelectionAndAmbiguity(t *testing.T) {
 	}
 }
 
+func TestDiscoverEnvironmentYAMLQuotedHash(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source.bpp")
+	writeEnvironmentFile(t, source, "")
+	runtimePath := filepath.Join(root, "runtime#selected")
+	writeEnvironmentFile(t, runtimePath, "runtime")
+	writeEnvironmentFile(t, filepath.Join(root, "bashpp.yaml"), "name: 'dev#one' # selected environment\nlanguage: \"python\" # foreign language\nruntime: \"runtime#selected\" # executable\n")
+	plan, err := DiscoverEnvironment(EnvironmentRequest{Source: source, Name: "dev#one"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := filepath.EvalSymlinks(runtimePath)
+	if err != nil || plan.Executable != want {
+		t.Fatalf("executable = %q, want %q (err %v)", plan.Executable, want, err)
+	}
+	if got := strings.TrimSpace(yamlWithoutComment(`runtime: "a\"#b" # comment`)); got != `runtime: "a\"#b"` {
+		t.Fatalf("escaped quote comment scan = %q", got)
+	}
+}
+
 func TestDiscoverEnvironmentRejectsMultipleMatchingOverlays(t *testing.T) {
 	root := t.TempDir()
 	source := filepath.Join(root, "x.bpp")
