@@ -40,7 +40,10 @@ type EnvironmentPlan struct {
 	PythonPath  []string
 	Env         []string // normalized launch environment, sorted by key
 	Explanation []string // deterministic and redacted; no ambient values
-	Fingerprint string
+	// ResolutionFiles are canonical, source-relative metadata inputs whose
+	// contents participate in Fingerprint. They are ordered by discovery.
+	ResolutionFiles []string
+	Fingerprint     string
 }
 
 // Clone returns an independently owned copy of p.
@@ -48,6 +51,7 @@ func (p EnvironmentPlan) Clone() EnvironmentPlan {
 	p.PythonPath = append([]string(nil), p.PythonPath...)
 	p.Env = append([]string(nil), p.Env...)
 	p.Explanation = append([]string(nil), p.Explanation...)
+	p.ResolutionFiles = append([]string(nil), p.ResolutionFiles...)
 	return p
 }
 
@@ -80,8 +84,9 @@ func DiscoverEnvironment(request EnvironmentRequest) (EnvironmentPlan, error) {
 	// preferring YAML made adding a JSON override change a build unexpectedly.
 	var overlays []environmentOverlay
 	for _, d := range dirs {
-		yaml, yerr := readOverlay(filepath.Join(d, "bashpp.yaml"))
-		jsonOverlay, jerr := readOverlay(filepath.Join(d, "bashpp.json"))
+		yamlFile, jsonFile := filepath.Join(d, "bashpp.yaml"), filepath.Join(d, "bashpp.json")
+		yaml, yerr := readOverlay(yamlFile)
+		jsonOverlay, jerr := readOverlay(jsonFile)
 		if yerr != nil {
 			return EnvironmentPlan{}, yerr
 		}
@@ -92,9 +97,15 @@ func DiscoverEnvironment(request EnvironmentRequest) (EnvironmentPlan, error) {
 			return EnvironmentPlan{}, fmt.Errorf("polyglot: ambiguous environment overlays in %s", d)
 		}
 		if yaml != nil {
+			for i := range yaml {
+				yaml[i].dir = d
+			}
 			overlays = append(overlays, yaml...)
 		}
 		if jsonOverlay != nil {
+			for i := range jsonOverlay {
+				jsonOverlay[i].dir = d
+			}
 			overlays = append(overlays, jsonOverlay...)
 		}
 	}
@@ -124,13 +135,25 @@ func DiscoverEnvironment(request EnvironmentRequest) (EnvironmentPlan, error) {
 	}
 
 	plan := EnvironmentPlan{Language: lang, Name: request.Name, Root: root, Dir: root}
+	for _, d := range dirs {
+		for _, name := range []string{"bashpp.yaml", "bashpp.json"} {
+			if file := canonicalExistingFile(filepath.Join(d, name)); file != "" {
+				plan.ResolutionFiles = append(plan.ResolutionFiles, file)
+			}
+		}
+	}
+	for _, name := range pythonProjectMetadata {
+		if file := canonicalExistingFile(filepath.Join(root, name)); file != "" {
+			plan.ResolutionFiles = append(plan.ResolutionFiles, file)
+		}
+	}
 	var executable string
 	if selected != nil {
 		plan.Explanation = append(plan.Explanation, "selected bashpp overlay")
 		if selected.Name != "" {
 			plan.Name = selected.Name
 		}
-		executable, err = resolveRuntime(root, selected.Runtime)
+		executable, err = resolveRuntime(selected.dir, selected.Runtime)
 		if err != nil {
 			return EnvironmentPlan{}, err
 		}
@@ -159,6 +182,9 @@ func DiscoverEnvironment(request EnvironmentRequest) (EnvironmentPlan, error) {
 	if err != nil {
 		return EnvironmentPlan{}, err
 	}
+	if cfg := pyvenvConfig(plan.Executable); cfg != "" {
+		plan.ResolutionFiles = append(plan.ResolutionFiles, cfg)
+	}
 	plan.PythonPath, err = canonicalPythonPath(env["PYTHONPATH"], root)
 	if err != nil {
 		return EnvironmentPlan{}, err
@@ -171,7 +197,10 @@ func DiscoverEnvironment(request EnvironmentRequest) (EnvironmentPlan, error) {
 	return plan.Clone(), nil
 }
 
-type environmentOverlay struct{ Name, Language, Runtime string }
+type environmentOverlay struct {
+	Name, Language, Runtime string
+	dir                     string
+}
 
 func environmentDirs(start string) (string, []string, error) {
 	start, err := filepath.EvalSymlinks(start)
@@ -214,6 +243,32 @@ func recognizedPythonProject(dir string) bool {
 	return false
 }
 func exists(name string) bool { _, err := os.Lstat(name); return err == nil }
+
+func canonicalExistingFile(name string) string {
+	if !exists(name) {
+		return ""
+	}
+	name, err := filepath.EvalSymlinks(name)
+	if err != nil {
+		return ""
+	}
+	info, err := os.Stat(name)
+	if err != nil || info.IsDir() {
+		return ""
+	}
+	return name
+}
+
+func pyvenvConfig(executable string) string {
+	for d := filepath.Dir(executable); ; d = filepath.Dir(d) {
+		if cfg := canonicalExistingFile(filepath.Join(d, "pyvenv.cfg")); cfg != "" {
+			return cfg
+		}
+		if parent := filepath.Dir(d); parent == d {
+			return ""
+		}
+	}
+}
 
 func projectPythonRuntime(root string, env map[string]string) (string, string) {
 	for _, n := range []string{".venv", "venv", "env", ".env"} {
@@ -373,23 +428,9 @@ func environmentFingerprint(p EnvironmentPlan) (string, error) {
 	// Project and overlay contents are resolution inputs too. Recording their
 	// bytes makes a cached plan expire when a lock file or declared runtime is
 	// edited, without exposing their contents in Explanation.
-	for _, n := range append(pythonProjectMetadata, "bashpp.yaml", "bashpp.json") {
-		if file := filepath.Join(p.Root, n); exists(file) {
-			if err := fingerprintFile(h, file); err != nil {
-				return "", err
-			}
-		}
-	}
-	for d := filepath.Dir(p.Executable); ; d = filepath.Dir(d) {
-		cfg := filepath.Join(d, "pyvenv.cfg")
-		if exists(cfg) {
-			if err := fingerprintFile(h, cfg); err != nil {
-				return "", err
-			}
-			break
-		}
-		if parent := filepath.Dir(d); parent == d {
-			break
+	for _, file := range p.ResolutionFiles {
+		if err := fingerprintFile(h, file); err != nil {
+			return "", err
 		}
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil

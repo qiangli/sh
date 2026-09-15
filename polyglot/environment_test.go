@@ -134,3 +134,43 @@ func TestDiscoverEnvironmentOverrideOnlyChangesRuntime(t *testing.T) {
 		t.Fatalf("plan=%#v", plan)
 	}
 }
+
+func TestDiscoverEnvironmentIsSourceRelativeAndFingerprintsNestedOverlay(t *testing.T) {
+	root := t.TempDir()
+	pythonFixture(t, root)
+	sourceDir := filepath.Join(root, "pkg")
+	source := filepath.Join(sourceDir, "source.bpp")
+	writeEnvironmentFile(t, source, "")
+	runtime := filepath.Join(sourceDir, "runtime")
+	writeEnvironmentFile(t, runtime, "runtime")
+	overlay := filepath.Join(sourceDir, "bashpp.yaml")
+	writeEnvironmentFile(t, overlay, "runtime: runtime\n")
+
+	// Neither the caller's cwd nor HOME may contribute an implicit candidate.
+	away := t.TempDir()
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(away); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+	plan, err := DiscoverEnvironment(EnvironmentRequest{Source: source, Environ: []string{"HOME=" + away}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalRuntime, err := filepath.EvalSymlinks(runtime)
+	if err != nil || plan.Executable != canonicalRuntime {
+		t.Fatalf("plan=%#v, canonical runtime=%q, err=%v", plan, canonicalRuntime, err)
+	}
+	first := plan.Fingerprint
+	writeEnvironmentFile(t, overlay, "runtime: runtime\n# changed\n")
+	changed, err := DiscoverEnvironment(EnvironmentRequest{Source: source, Environ: []string{"HOME=" + away}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == changed.Fingerprint {
+		t.Fatal("nested overlay did not invalidate fingerprint")
+	}
+}
