@@ -3,10 +3,10 @@ id: 11649908a9f8
 kind: task
 title: S183.3 — parse and plan direct Python imports
 seq: 115
-status: assigned
+status: todo
 priority: p0
 created: 2026-09-15T00:07:55.305604Z
-assignee: claude-opus4.8
+assignee: qiangli
 sprint: 183
 ---
 
