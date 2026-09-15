@@ -36,6 +36,7 @@ type EnvironmentPlan struct {
 	Name              string
 	Root              string // project or VCS boundary
 	Dir               string // fixed child-process working directory
+	SourceDir         string // directory containing the requesting source
 	Executable        string // absolute selected runtime executable
 	Manager           string
 	RuntimeConstraint string
@@ -145,7 +146,7 @@ func DiscoverEnvironment(request EnvironmentRequest) (EnvironmentPlan, error) {
 		return EnvironmentPlan{}, fmt.Errorf("polyglot: ambiguous matching environment overlays")
 	}
 
-	plan := EnvironmentPlan{Language: lang, Name: request.Name, Root: root, Dir: root}
+	plan := EnvironmentPlan{Language: lang, Name: request.Name, Root: root, Dir: root, SourceDir: dir}
 	for _, d := range dirs {
 		for _, name := range []string{"bashpp.yaml", "bashpp.json"} {
 			if file := canonicalExistingFile(filepath.Join(d, name)); file != "" {
@@ -707,6 +708,7 @@ func environmentFingerprint(p EnvironmentPlan) (string, error) {
 	write(p.Language)
 	write(p.Root)
 	write(p.Dir)
+	write(p.SourceDir)
 	write(p.Manager)
 	write(p.RuntimeConstraint)
 	write(p.Runtime)

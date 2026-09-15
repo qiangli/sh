@@ -84,7 +84,10 @@ func (t TypeScript) arguments(Plan) []string {
 func (t TypeScript) loadRequest(plan Plan) map[string]any {
 	dir := ""
 	if t.Environment != nil {
-		dir = t.Environment.Dir
+		dir = t.Environment.SourceDir
+		if dir == "" {
+			dir = t.Environment.Dir
+		}
 	}
 	return map[string]any{"id": 0, "op": "load", "artifact": plan.Artifact, "dir": dir}
 }
@@ -105,7 +108,11 @@ func (t TypeScript) Analyze(ctx context.Context, source string) ([]Export, error
 func (t TypeScript) AnalyzeArtifact(ctx context.Context, source string) ([]Export, string, error) {
 	input := "<bash++ typescript>.ts"
 	if t.Environment != nil && t.Environment.Dir != "" {
-		input = filepath.Join(t.Environment.Dir, ".bashpp-fence.ts")
+		dir := t.Environment.SourceDir
+		if dir == "" {
+			dir = t.Environment.Dir
+		}
+		input = filepath.Join(dir, ".bashpp-fence.ts")
 	}
 	cmd := exec.CommandContext(ctx, t.executable(), "-e", typeScriptAnalyze, t.compilerModule(), input)
 	t.configure(cmd)
@@ -229,9 +236,12 @@ try {
     // function declarations become Bash++ callables.
   }
   const source = original + (namesToExport.length ? '\nexport { ' + namesToExport.join(', ') + ' };\n' : '');
-  const options = {target:ts.ScriptTarget.ES2022, module:ts.ModuleKind.CommonJS,
-    moduleResolution:ts.ModuleResolutionKind.Node10, ignoreDeprecations:'6.0', skipLibCheck:true,
+	  const modern = ts.ModuleKind.ESNext !== undefined && ts.ModuleResolutionKind.Bundler !== undefined;
+	  const options = {target:ts.ScriptTarget.ES2022,
+	    module:modern ? ts.ModuleKind.ESNext : ts.ModuleKind.CommonJS,
+	    moduleResolution:modern ? ts.ModuleResolutionKind.Bundler : ts.ModuleResolutionKind.Node10, skipLibCheck:true,
     noEmitOnError:true, strict:false, sourceMap:false, declaration:false};
+  if (Number.parseInt(ts.versionMajorMinor || ts.version || '0', 10) >= 6) options.ignoreDeprecations = '6.0';
   const host = ts.createCompilerHost(options);
   const baseGet = host.getSourceFile.bind(host);
   host.getSourceFile = (file, version, onError, fresh) =>
@@ -240,12 +250,13 @@ try {
   host.readFile = ((base) => file => file === input ? source : base(file))(host.readFile.bind(host));
   let artifact = '';
   host.writeFile = (file, text) => {
-    if (path.basename(file) === path.basename(input).replace(/\.tsx?$/, '.js')) artifact = text;
+	    const output = path.basename(input).replace(/\.[cm]?tsx?$/, '.js');
+	    if (path.basename(file) === output) artifact = text;
   };
   const program = ts.createProgram([input], options, host);
   const sourceFile = program.getSourceFile(input);
   const checker = program.getTypeChecker();
-  const diagnostics = ts.getPreEmitDiagnostics(program);
+	  const diagnostics = ts.getPreEmitDiagnostics(program).filter(d => !d.file || d.file.fileName === input);
   if (diagnostics.length) fail(diagnostics.map(d => diagnostic(ts, d)).join('\n'));
   const exports = [];
   const mapType = type => {
@@ -277,8 +288,13 @@ try {
     }
     exports.push({name:node.name.text,signature:{params,results,dynamic}});
   }
-  const emitted = program.emit();
-  if (emitted.emitSkipped || !artifact) fail('TypeScript compiler did not emit the module');
+	  if (modern) artifact = ts.transpileModule(source, {compilerOptions:{
+	    target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext,sourceMap:false,declaration:false
+	  },fileName:input}).outputText;
+	  else {
+	    const emitted = program.emit();
+	    if (emitted.emitSkipped || !artifact) fail('TypeScript compiler did not emit the module');
+	  }
   process.stdout.write(JSON.stringify({ok:true,exports,artifact}));
 } catch (error) {
   process.stderr.write(String(error && error.stack || error));
@@ -306,10 +322,17 @@ function location(sourceFile, node) {
   return '<bash++ typescript>:' + (p.line + 1) + ':' + (p.character + 1);
 }
 try {
-  const projectModules = path.join(projectDir, 'node_modules');
-  if (fs.existsSync(projectModules)) fs.symlinkSync(projectModules, path.join(dir, 'node_modules'), 'junction');
-  fs.writeFileSync(path.join(dir, 'tsconfig.json'), JSON.stringify({compilerOptions:{
-    target:'es2022',module:'commonjs',outDir:'dist',strict:false,skipLibCheck:true,
+	let packageDir = projectDir, modulesDir = projectDir;
+	while (packageDir !== path.dirname(packageDir) && !fs.existsSync(path.join(packageDir, 'package.json'))) packageDir = path.dirname(packageDir);
+	while (modulesDir !== path.dirname(modulesDir) && !fs.existsSync(path.join(modulesDir, 'node_modules'))) modulesDir = path.dirname(modulesDir);
+	if (fs.existsSync(path.join(packageDir, 'package.json'))) {
+	  fs.copyFileSync(path.join(packageDir, 'package.json'), path.join(dir, 'package.json'));
+	  const sourceDir = path.join(packageDir, 'src');
+	  if (fs.existsSync(sourceDir)) fs.symlinkSync(sourceDir, path.join(dir, 'src'), 'junction');
+	}
+	if (fs.existsSync(path.join(modulesDir, 'node_modules'))) fs.symlinkSync(path.join(modulesDir, 'node_modules'), path.join(dir, 'node_modules'), 'junction');
+	  fs.writeFileSync(path.join(dir, 'tsconfig.json'), JSON.stringify({compilerOptions:{
+	    target:'es2022',module:'esnext',moduleResolution:'bundler',outDir:'dist',strict:false,skipLibCheck:true,
     noEmitOnError:true,sourceMap:false,declaration:false},include:['module.ts']}));
   fs.writeFileSync(input, original);
   api = new apiModule.API({cwd:dir});
@@ -377,7 +400,7 @@ try {
   const tsc = path.join(root, 'bin/tsc');
   const emitted = cp.spawnSync(process.execPath,[tsc,'-p',path.join(dir,'tsconfig.json'),'--pretty','false'],{encoding:'utf8'});
   if (emitted.status !== 0) fail((emitted.stdout || emitted.stderr || 'TypeScript 7 emit failed').trim());
-  const artifact = fs.readFileSync(path.join(dir,'dist/module.js'),'utf8');
+	  const artifact = fs.readFileSync(path.join(dir,'dist/module.js'),'utf8');
   process.stdout.write(JSON.stringify({ok:true,exports,artifact}));
 } finally {
   if (api) api.close();
@@ -388,11 +411,20 @@ try {
 const typeScriptWorker = `
 const readline = require('readline');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
-const nativeModule = require('module');
+const {pathToFileURL} = require('url');
 const util = require('util');
-const protocol = fs.createWriteStream(null, {fd:3, autoClose:false});
+let protocolWrite;
+try {
+  fs.fstatSync(3);
+  const protocol = fs.createWriteStream(null, {fd:3, autoClose:false});
+  protocolWrite = text => protocol.write(text);
+} catch (_) {
+  protocolWrite = process.stdout.write.bind(process.stdout);
+}
 let moduleExports = Object.create(null), currentOut = '', currentErr = '';
+let moduleDir = '';
 const consoleBridge = {
   log: (...args) => { currentOut += util.format(...args) + '\n'; },
   info: (...args) => { currentOut += util.format(...args) + '\n'; },
@@ -420,19 +452,43 @@ function enc(v) {
   throw new TypeError('unsupported foreign result type: ' + typeof v);
 }
 const rl = readline.createInterface({input:process.stdin, crlfDelay:Infinity});
+function findUp(start, name) {
+  let dir = start;
+  for (;;) {
+    if (fs.existsSync(path.join(dir, name))) return dir;
+    const parent = path.dirname(dir);
+    if (parent === dir) return '';
+    dir = parent;
+  }
+}
+function linkPackageContext(sourceDir, targetDir) {
+  const packageDir = findUp(sourceDir, 'package.json');
+  if (packageDir) {
+    fs.copyFileSync(path.join(packageDir, 'package.json'), path.join(targetDir, 'package.json'));
+    for (const entry of fs.readdirSync(packageDir, {withFileTypes:true})) {
+      if (entry.name === 'package.json' || entry.name === 'node_modules') continue;
+      const target = path.join(targetDir, entry.name);
+      if (!fs.existsSync(target)) fs.symlinkSync(path.join(packageDir, entry.name), target, entry.isDirectory() ? 'junction' : 'file');
+    }
+  }
+  const modulesDir = findUp(sourceDir, 'node_modules');
+  if (modulesDir) fs.symlinkSync(path.join(modulesDir, 'node_modules'), path.join(targetDir, 'node_modules'), 'junction');
+}
 rl.on('line', async line => {
   let req, response;
   try {
     req = JSON.parse(line); const id = req.id || 0;
     if (req.op === 'load') {
-      const module = {exports:{}};
-      const dir = req.dir || process.cwd(), filename = path.join(dir, '.bashpp-fence.cjs');
-      const localRequire = nativeModule.createRequire(filename);
+      const dir = req.dir || process.cwd();
+      if (moduleDir) fs.rmSync(moduleDir, {recursive:true, force:true});
+      moduleDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bashpp-typescript-'));
+      linkPackageContext(dir, moduleDir);
+      const filename = path.join(moduleDir, 'module.mjs');
+      fs.writeFileSync(filename, req.artifact);
       const priorConsole = globalThis.console;
       globalThis.console = consoleBridge;
       try {
-        const wrapper = new Function('exports','module','require','__filename','__dirname',req.artifact);
-        wrapper(module.exports,module,localRequire,filename,dir); moduleExports = module.exports;
+        moduleExports = await import(pathToFileURL(filename).href + '?v=' + Date.now());
         response = {id,ok:true,stdout:currentOut,stderr:currentErr};
       } finally { globalThis.console = priorConsole; }
     } else if (req.op === 'call') {
@@ -449,6 +505,7 @@ rl.on('line', async line => {
   } catch (error) {
     response = {id:req && req.id || 0,ok:false,error:String(error && error.stack || error),stdout:currentOut,stderr:currentErr};
   }
-  protocol.write(JSON.stringify(response) + '\n');
+	  protocolWrite('\x1eBASHPP' + JSON.stringify(response) + '\n');
 });
+process.on('exit', () => { if (moduleDir) fs.rmSync(moduleDir, {recursive:true, force:true}); });
 `

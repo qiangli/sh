@@ -58,7 +58,7 @@ export async function delayed(): Promise<number> { return initialized + 2 }
 		t.Fatalf("dynamic result = %#v", result.Value)
 	}
 	result, err = module.Call(context.Background(), "delayed")
-	if err != nil || result.Value != int64(42) {
+	if err != nil || result.Value != float64(42) {
 		t.Fatalf("delayed = %#v, %v", result, err)
 	}
 }
@@ -92,8 +92,45 @@ export async function answer(): Promise<number> { return base + increment }
 	module := Start(Plan{Language: "typescript", Artifact: artifact, Exports: exports}, runtime)
 	defer module.Close()
 	result, err := module.Call(context.Background(), "answer")
-	if err != nil || result.Value != int64(42) {
+	if err != nil || result.Value != float64(42) {
 		t.Fatalf("answer = %#v, %v", result, err)
+	}
+}
+
+func TestTypeScriptOpenCodeBunImport(t *testing.T) {
+	root := os.Getenv("BASHPP_OPENCODE_ROOT")
+	if root == "" {
+		t.Skip("set BASHPP_OPENCODE_ROOT to exercise the OpenCode workspace")
+	}
+	compiler := os.Getenv("BASHPP_TYPESCRIPT_MODULE")
+	if compiler == "" {
+		t.Skip("set BASHPP_TYPESCRIPT_MODULE to OpenCode's official TypeScript compiler")
+	}
+	bun, err := exec.LookPath("bun")
+	if err != nil {
+		home, _ := os.UserHomeDir()
+		bun = filepath.Join(home, ".bun", "bin", "bun")
+		if _, statErr := os.Stat(bun); statErr != nil {
+			t.Skip("bun unavailable")
+		}
+	}
+	runtime := TypeScript{Environment: &EnvironmentPlan{
+		Language: "typescript", Runtime: "bun", Executable: bun, CompilerModule: compiler,
+		Dir: root, SourceDir: filepath.Join(root, "packages", "opencode"), Env: os.Environ(),
+	}}
+	source := `import { fileInDirectory } from "opencode/config/paths"
+export async function extract(): Promise<string> { return fileInDirectory("/tmp", "opencode")[0] }
+`
+	exports, artifact, err := runtime.AnalyzeArtifact(context.Background(), source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	module := Start(Plan{Language: "typescript", Artifact: artifact, Exports: exports}, runtime)
+	defer module.Close()
+	result, err := module.Call(context.Background(), "extract")
+	value, _ := result.Value.(string)
+	if err != nil || value != "/tmp/opencode.json" {
+		t.Fatalf("extract = %#v, %v", result, err)
 	}
 }
 
@@ -143,9 +180,9 @@ process.stdout.write("unframed module output\n");
 exports.answer = async value => { console.log("called"); process.stdout.write("unframed call output\n"); return value + 1; };
 `)
 	artifact := `
-const fixture = require("fixture");
-exports.answer = async value => await fixture.answer(value);
-exports.identity = () => new (class Example {})();
+import fixture from "fixture";
+export const answer = async value => await fixture.answer(value);
+export const identity = () => new (class Example {})();
 `
 	for _, name := range []string{"node", "bun"} {
 		t.Run(name, func(t *testing.T) {

@@ -14,6 +14,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -245,13 +246,25 @@ func (m *Module) ensure(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	protocolRead, protocolWrite, err := os.Pipe()
-	if err != nil {
-		in.Close()
-		return err
+	var protocolRead io.ReadCloser
+	var protocolWrite *os.File
+	_, typeScript := m.runtime.(TypeScript)
+	if runtime.GOOS == "windows" && typeScript {
+		protocolRead, err = cmd.StdoutPipe()
+		if err != nil {
+			in.Close()
+			return err
+		}
+		cmd.Stderr = io.Discard
+	} else {
+		protocolRead, protocolWrite, err = os.Pipe()
+		if err != nil {
+			in.Close()
+			return err
+		}
+		cmd.ExtraFiles = []*os.File{protocolWrite}
+		cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
 	}
-	cmd.ExtraFiles = []*os.File{protocolWrite}
-	cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
 	if err := cmd.Start(); err != nil {
 		_ = protocolRead.Close()
 		if protocolWrite != nil {
@@ -444,7 +457,8 @@ func (m *Module) request(ctx context.Context, request map[string]any, annotation
 
 func (m *Module) exchangeContext(ctx context.Context, request any, response *workerResponse) error {
 	done := make(chan error, 1)
-	go func() { done <- m.exchange(request, response) }()
+	in, out := m.in, m.out
+	go func() { done <- exchange(in, out, request, response) }()
 	select {
 	case <-ctx.Done():
 		_ = m.kill()
@@ -517,23 +531,31 @@ type workerResponse struct {
 	Error, Stdout, Stderr string
 }
 
-func (m *Module) exchange(request any, response *workerResponse) error {
+func exchange(in io.Writer, out *bufio.Reader, request any, response *workerResponse) error {
 	data, err := json.Marshal(request)
 	if err != nil {
 		return err
 	}
-	if _, err := m.in.Write(append(data, '\n')); err != nil {
-		return err
-	}
-	line, err := m.out.ReadBytes('\n')
-	if err != nil {
+	if _, err := in.Write(append(data, '\n')); err != nil {
 		return err
 	}
 	var got workerResponse
-	dec := json.NewDecoder(bytes.NewReader(line))
-	dec.UseNumber()
-	if err := dec.Decode(&got); err != nil {
-		return fmt.Errorf("invalid worker response: %w", err)
+	for {
+		line, err := out.ReadBytes('\n')
+		if err != nil {
+			return err
+		}
+		if marker := bytes.Index(line, []byte("\x1eBASHPP")); marker >= 0 {
+			line = line[marker+len("\x1eBASHPP"):]
+		} else if len(bytes.TrimSpace(line)) == 0 || bytes.TrimSpace(line)[0] != '{' {
+			continue
+		}
+		dec := json.NewDecoder(bytes.NewReader(line))
+		dec.UseNumber()
+		if err := dec.Decode(&got); err != nil {
+			return fmt.Errorf("invalid worker response: %w", err)
+		}
+		break
 	}
 	if response != nil {
 		*response = got

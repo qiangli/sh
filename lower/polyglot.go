@@ -311,8 +311,8 @@ func (e *emitter) environmentLiteral(p *polyglot.EnvironmentPlan) string {
 	if p == nil {
 		return "nil"
 	}
-	return fmt.Sprintf("&%spolyglot.EnvironmentPlan{Language:%s,Name:%s,Root:%s,Dir:%s,Executable:%s,Manager:%s,RuntimeConstraint:%s,Runtime:%s,CompilerModule:%s,Manifests:%#v,Locks:%#v,PythonPath:%#v,Env:%#v,Explanation:%#v,ResolutionFiles:%#v,Fingerprint:%s}",
-		e.prefix, strconv.Quote(p.Language), strconv.Quote(p.Name), strconv.Quote(p.Root), strconv.Quote(p.Dir), strconv.Quote(p.Executable), strconv.Quote(p.Manager), strconv.Quote(p.RuntimeConstraint), strconv.Quote(p.Runtime), strconv.Quote(p.CompilerModule), p.Manifests, p.Locks, p.PythonPath, p.Env, p.Explanation, p.ResolutionFiles, strconv.Quote(p.Fingerprint))
+	return fmt.Sprintf("&%spolyglot.EnvironmentPlan{Language:%s,Name:%s,Root:%s,Dir:%s,SourceDir:%s,Executable:%s,Manager:%s,RuntimeConstraint:%s,Runtime:%s,CompilerModule:%s,Manifests:%#v,Locks:%#v,PythonPath:%#v,Env:%#v,Explanation:%#v,ResolutionFiles:%#v,Fingerprint:%s}",
+		e.prefix, strconv.Quote(p.Language), strconv.Quote(p.Name), strconv.Quote(p.Root), strconv.Quote(p.Dir), strconv.Quote(p.SourceDir), strconv.Quote(p.Executable), strconv.Quote(p.Manager), strconv.Quote(p.RuntimeConstraint), strconv.Quote(p.Runtime), strconv.Quote(p.CompilerModule), p.Manifests, p.Locks, p.PythonPath, p.Env, p.Explanation, p.ResolutionFiles, strconv.Quote(p.Fingerprint))
 }
 
 func (e *emitter) foreignExports(exports []polyglot.Export) string {
