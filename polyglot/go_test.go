@@ -20,6 +20,9 @@ func TestGoArtifactUsesModuleOverlayAndBridgesValues(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.local/project\n\ngo 1.25\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(root, "project.go"), []byte("package project\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(root, "version", "version.go"), []byte("package version\nconst Value = \"module\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}

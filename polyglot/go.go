@@ -89,8 +89,12 @@ func (g Go) AnalyzeArtifact(ctx context.Context, source string) ([]Export, strin
 		}
 	}
 	hash := strconv.FormatInt(int64(len(source)), 10)
-	moduleVirtual := filepath.Join(root, "zz_bashpp_fence_"+hash+".go")
-	workerVirtual := filepath.Join(root, "zz_bashpp_worker_"+hash+".go")
+	// Use a virtual subdirectory so a module whose root is a library package
+	// does not collide with the generated package main. Keeping it beneath the
+	// module still permits imports of that module's internal packages.
+	virtualDir := filepath.Join(root, ".bashpp-overlay-"+hash)
+	moduleVirtual := filepath.Join(virtualDir, "fence.go")
+	workerVirtual := filepath.Join(virtualDir, "worker.go")
 	for name, data := range map[string]string{moduleBacking: moduleSource, workerBacking: workerSource} {
 		if err := os.WriteFile(name, []byte(data), 0o600); err != nil {
 			return nil, "", err
