@@ -355,7 +355,7 @@ func (e *emitter) decoratedBody(f *syntax.BashPPFuncDecl, signature, body string
 	// Run the chain. The body binder revalidates what the original call
 	// proved — the arity and every position's type — because a decorator's
 	// Args rewrite may have broken either.
-	fmt.Fprintf(&out, "if !%s.Decorate(%s, %srungs, func() error {\n", p, call, e.prefix)
+	fmt.Fprintf(&out, "if !%s.Decorate(%s, %srungs, func(%s *%sProgram) error {\n", p, call, e.prefix, p, rt)
 	// Every local here is prefix-spelled: the lexical storage pass treats an
 	// unprefixed local as script storage to register.
 	errName := e.prefix + "err"
@@ -425,6 +425,7 @@ func (e *emitter) decoratorRung(target *syntax.BashPPFuncDecl, d *syntax.BashPPD
 	rt := e.prefix + "rt."
 	p := e.prefix + "program"
 	c := e.prefix + "c"
+	lexical := p + " = " + p + ".LexicalScope(" + e.lexicalNames(e.functionGlobals) + "); "
 	line := &syntax.BashPPCall{Fun: []*syntax.Lit{d.Name}, Args: d.Args, ArgNames: d.ArgNames, Lparen: d.Lparen, Rparen: d.Rparen}
 	dec := e.functionDecls[d.Name.Value]
 	if dec == nil {
@@ -441,7 +442,7 @@ func (e *emitter) decoratorRung(target *syntax.BashPPFuncDecl, d *syntax.BashPPD
 			}
 			args = append(args, rt+"DecoratorArg{Name: "+strconv.Quote(argName)+", Value: "+rt+"DecoratorArgText("+value+")}")
 		}
-		return rt + "Decorator{Name: " + strconv.Quote(d.Name.Value) + ", Args: func() []" + rt + "DecoratorArg { return []" + rt + "DecoratorArg{" + strings.Join(args, ", ") + "} }}", nil
+		return rt + "Decorator{Name: " + strconv.Quote(d.Name.Value) + ", Args: func(" + p + " *" + rt + "Program) []" + rt + "DecoratorArg { " + lexical + "return []" + rt + "DecoratorArg{" + strings.Join(args, ", ") + "} }}", nil
 	}
 	// The hidden context parameter is bound by the chain, so the plan sees
 	// the decorator's remaining parameters only.
@@ -460,7 +461,8 @@ func (e *emitter) decoratorRung(target *syntax.BashPPFuncDecl, d *syntax.BashPPD
 		byEvaluation[evaluation] = parameter
 	}
 	var out strings.Builder
-	fmt.Fprintf(&out, "%sDecorator{Name: %s, Run: func(%s *%sCall) {\n", rt, strconv.Quote(d.Name.Value), c, rt)
+	fmt.Fprintf(&out, "%sDecorator{Name: %s, Run: func(%s *%sProgram, %s *%sCall) {\n", rt, strconv.Quote(d.Name.Value), p, rt, c, rt)
+	out.WriteString(lexical)
 	values := make([]string, len(plan.Words))
 	for i, w := range plan.Words {
 		value, err := e.plannedCallArgument(line, w)

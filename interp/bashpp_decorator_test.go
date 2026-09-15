@@ -732,3 +732,38 @@ declare -f payout
 var errBoom = errors.New("boom")
 
 func itoa(n int) string { return strconv.Itoa(n) }
+
+func TestBashPPDecoratorAdviceNativeOnly(t *testing.T) {
+	for _, declaration := range []string{
+		"func guard(c *Call) { echo bypass; c.Next(); }\n",
+		"guard() { echo bypass; }\n",
+	} {
+		for _, registered := range []bool{false, true} {
+			natives := map[string]interp.DecoratorFunc{}
+			calls := 0
+			if registered {
+				natives["guard"] = func(ctx context.Context, c *interp.Call, args []interp.DecoratorArg) error {
+					calls++
+					c.Status = 77
+					return nil
+				}
+			}
+			advice := func(name, file string, agentic bool) []interp.DecoratorSpec {
+				if name == "target" {
+					return []interp.DecoratorSpec{{ID: "policy", Name: "guard"}}
+				}
+				return nil
+			}
+			out, stderr, err := runDecorated(t, declaration+"func target() { echo body }\ntarget()\n", interp.Decorators(natives), interp.Advice(advice))
+			if out != "" || err == nil {
+				t.Fatalf("policy bypass: registered=%v stdout=%q stderr=%q err=%v", registered, out, stderr, err)
+			}
+			if registered && (calls != 1 || stderr != "") {
+				t.Fatalf("native guard: calls=%d stderr=%q", calls, stderr)
+			}
+			if !registered && !strings.Contains(stderr, "BASHPP-EDECO-UNDEF") {
+				t.Fatalf("missing native: %q", stderr)
+			}
+		}
+	}
+}

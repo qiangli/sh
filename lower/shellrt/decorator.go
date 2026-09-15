@@ -14,10 +14,6 @@ import (
 // method value, interface dispatch, function handle — already reaches the
 // private entry, so nothing can bypass the chain.
 //
-// The shape is the interpreter's Call, field for field, so a native decorator
-// written once against interp.DecoratorFunc registers here with a field-wise
-// conversion and no reflection.
-
 // Call is the decorator context: the one value every decorator receives.
 // A decorator never sees or changes the target's signature; it observes the
 // call through this context and decides whether the rest of the chain runs by
@@ -52,11 +48,19 @@ type Call struct {
 }
 
 // Next runs the next decorator in the chain, or the body when this is the
-// innermost decorator. It may be called more than once — a retry decorator
+// innermost decorator. Native decorators may pass a derived context; it
+// applies only to that continuation, without mutating the caller Program.
+// Next may be called more than once — a retry decorator
 // does exactly that — and each call re-runs everything inside it.
-func (c *Call) Next() {
+func (c *Call) Next(contexts ...context.Context) {
 	if c != nil && c.chain != nil {
-		c.chain.next()
+		p := c.chain.p
+		if len(contexts) > 0 && contexts[0] != nil {
+			derived := *p
+			derived.Context = p.Frame.Context(contexts[0])
+			p = &derived
+		}
+		c.chain.next(p)
 	}
 }
 
@@ -84,8 +88,8 @@ var Decorators map[string]DecoratorFunc
 // Run resolves Name through Decorators when it runs, with Args evaluated then.
 type Decorator struct {
 	Name string
-	Run  func(c *Call)
-	Args func() []DecoratorArg
+	Run  func(p *Program, c *Call)
+	Args func(p *Program) []DecoratorArg
 }
 
 // DecoratorArgText renders one native decorator argument the way the
@@ -98,7 +102,7 @@ type decoratorChain struct {
 	p      *Program
 	call   *Call
 	rungs  []Decorator
-	body   func() error
+	body   func(*Program) error
 	depth  int
 	failed bool
 }
@@ -109,10 +113,10 @@ type decoratorChain struct {
 // error it returns is a binding diagnostic that fails the chain. Decorate
 // reports whether the chain completed; on completion the program's status is
 // the context's Status and Results hold the outcome for the entry to settle.
-func (p *Program) Decorate(c *Call, rungs []Decorator, body func() error) bool {
+func (p *Program) Decorate(c *Call, rungs []Decorator, body func(*Program) error) bool {
 	chain := &decoratorChain{p: p, call: c, rungs: rungs, body: body}
 	c.chain = chain
-	chain.next()
+	chain.next(p)
 	c.chain = nil
 	if chain.failed {
 		return false
@@ -121,10 +125,13 @@ func (p *Program) Decorate(c *Call, rungs []Decorator, body func() error) bool {
 	return true
 }
 
-func (c *decoratorChain) next() {
+func (c *decoratorChain) next(p *Program) {
 	if c.failed {
 		return
 	}
+	previous := c.p
+	c.p = p
+	defer func() { c.p = previous }()
 	depth := c.depth
 	c.depth++
 	defer func() { c.depth = depth }()
@@ -134,7 +141,7 @@ func (c *decoratorChain) next() {
 	}
 	rung := c.rungs[depth]
 	if rung.Run != nil {
-		rung.Run(c.call)
+		rung.Run(p, c.call)
 		return
 	}
 	native := Decorators[rung.Name]
@@ -144,7 +151,7 @@ func (c *decoratorChain) next() {
 	}
 	var args []DecoratorArg
 	if rung.Args != nil {
-		args = rung.Args()
+		args = rung.Args(p)
 	}
 	if err := native(c.p.Context, c.call, args); err != nil {
 		c.fail(fmt.Sprintf("BASHPP-EDECO-NATIVE: @%s: %v", rung.Name, err))
@@ -156,7 +163,7 @@ func (c *decoratorChain) next() {
 // decorator, and a repeated Next is an independent invocation. The status the
 // body left is captured on the context and cleared, as the engine does.
 func (c *decoratorChain) runBody() {
-	if err := c.body(); err != nil {
+	if err := c.body(c.p); err != nil {
 		c.fail(err.Error())
 		return
 	}

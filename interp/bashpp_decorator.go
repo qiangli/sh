@@ -394,6 +394,16 @@ func (c *bashPPDecoratorChain) next(ctx context.Context) {
 	}
 	rung := c.rungs[depth]
 	c.call.Advised = rung.advised
+	// Policy advice is trusted native code; source declarations cannot
+	// replace it, even when an explicit decorator uses the same name.
+	if rung.advised != "" {
+		if native := r.bashPPNativeDecorators[rung.name]; native != nil {
+			c.runNative(ctx, rung, native)
+		} else {
+			c.fail("BASHPP-EDECO-UNDEF: native policy decorator %s is not defined\n", rung.name)
+		}
+		return
+	}
 	// A cycle is a decorator's own chain reaching a decorator that is
 	// already running: the target is on the decorator stack and so is the
 	// rung. The same decorator stacked twice on one declaration is not a

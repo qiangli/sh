@@ -9,11 +9,12 @@ route reaches it).
 
 - `shellrt.Call` mirrors `interp.Call` field for field (`Name`, `Site`,
   `Caller`, `Args`, `Results`, `Status`, `Agentic`, `Advised`) and `Next()`.
-  `Site` reuses `shellrt.Site`. The native slot is the process-level
+  `Site` is a source-visible `filename:line` string. The native slot is the process-level
   `shellrt.Decorators map[string]DecoratorFunc` with
   `DecoratorFunc func(ctx, *Call, []DecoratorArg) error` — the same signature
-  as `interp.DecoratorFunc`, so one bashy adapter registers one implementation
-  on both engines with a field-wise conversion and no reflection.
+  as `interp.DecoratorFunc`, native adapters must bridge the continuation explicitly; copying fields
+  cannot transfer either engine's private continuation. Native `Next(ctx)`
+  derives a Program for the continuation without mutating its parent.
 - A decorated typed callable forces execution mode (like `agentic`), so it is
   emitted as private entry + public wrapper. Inside the private entry, after
   the agentic gate and result/argument plumbing, the original body becomes a
