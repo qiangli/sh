@@ -20,46 +20,26 @@ type foreignFunction struct {
 func (e *emitter) prepareForeign(ctx context.Context, file *syntax.File) error {
 	var blocks []polyglot.Block
 	var first *syntax.SourceBlock
+	var imports []*syntax.BashPPImport
 	for _, stmt := range file.Stmts {
-		block, ok := stmt.Cmd.(*syntax.SourceBlock)
-		if !ok {
-			continue
+		switch node := stmt.Cmd.(type) {
+		case *syntax.SourceBlock:
+			if first == nil {
+				first = node
+			}
+			alias := ""
+			if node.Alias != nil {
+				alias = node.Alias.Value
+			}
+			blocks = append(blocks, polyglot.Block{Language: node.Language.Value, Alias: alias, Source: node.Body, Filename: file.Name, Line: int(node.BodyPos.Line())})
+		case *syntax.BashPPImport:
+			if node.Language != nil {
+				imports = append(imports, node)
+			}
 		}
-		if first == nil {
-			first = block
-		}
-		alias := ""
-		if block.Alias != nil {
-			alias = block.Alias.Value
-		}
-		blocks = append(blocks, polyglot.Block{Language: block.Language.Value, Alias: alias, Source: block.Body, Filename: file.Name, Line: int(block.BodyPos.Line())})
 	}
-	if len(blocks) == 0 {
+	if len(blocks) == 0 && len(imports) == 0 {
 		return nil
-	}
-	pythonRuntime := polyglot.Python{}
-	for _, block := range blocks {
-		if strings.EqualFold(strings.TrimSpace(block.Language), "python") {
-			source := e.sourceName
-			if source == "" {
-				source = filepath.Join(e.options.Dir, ".bashpp-input")
-			} else if !filepath.IsAbs(source) && e.options.Dir != "" {
-				source = filepath.Join(e.options.Dir, source)
-			}
-			environment, err := polyglot.DiscoverEnvironment(polyglot.EnvironmentRequest{Source: source, Language: "python"})
-			if err != nil {
-				return e.fail(first, CodeUnsupported, err.Error())
-			}
-			e.foreignPythonEnv = &environment
-			pythonRuntime.Environment = &environment
-			break
-		}
-	}
-	plans, err := polyglot.Prepare(ctx, blocks, map[string]polyglot.Analyzer{
-		"python": pythonRuntime, "typescript": polyglot.TypeScript{},
-	})
-	if err != nil {
-		return e.fail(first, CodeUnsupported, err.Error())
 	}
 	reserved := map[string]string{}
 	for _, stmt := range file.Stmts {
@@ -75,9 +55,65 @@ func (e *emitter) prepareForeign(ctx context.Context, file *syntax.File) error {
 				reserved[n.Name.Value] = "declaration"
 			}
 		case *syntax.BashPPImport:
-			if n.Alias != nil {
-				reserved[n.Alias.Value] = "import"
+			if n.Language == nil && n.Alias != nil && n.Alias.Value != "_" && n.Alias.Value != "." {
+				reserved[n.Alias.Value] = "Go import"
 			}
+		}
+	}
+	source := e.sourceName
+	if source == "" {
+		source = filepath.Join(e.options.Dir, ".bashpp-input")
+	} else if !filepath.IsAbs(source) && e.options.Dir != "" {
+		source = filepath.Join(e.options.Dir, source)
+	}
+	for _, imp := range imports {
+		module, err := strconv.Unquote(`"` + imp.Path.Parts[0].(*syntax.Lit).Value + `"`)
+		if err != nil {
+			return e.fail(imp, CodeType, "invalid Python import path")
+		}
+		alias, ok := syntax.BashPPDerivedImportAlias(module)
+		if imp.Alias != nil {
+			alias, ok = imp.Alias.Value, true
+		}
+		if !ok {
+			return e.fail(imp, CodeType, "Python import requires an explicit alias")
+		}
+		if kind := reserved[alias]; kind != "" {
+			return e.fail(imp, CodeType, "Python import alias "+alias+" collides with "+kind)
+		}
+		environment := ""
+		if imp.Environment != nil {
+			environment = imp.Environment.Value
+		}
+		plan, err := polyglot.PlanImport(polyglot.ImportRequest{
+			Source: source, Language: imp.Language.Value, Environment: environment, Module: module, Alias: alias,
+		})
+		if err != nil {
+			return e.fail(imp, CodeUnsupported, err.Error())
+		}
+		e.foreignImports = append(e.foreignImports, plan)
+		reserved[alias] = "Python import"
+	}
+	pythonRuntime := polyglot.Python{}
+	for _, block := range blocks {
+		if strings.EqualFold(strings.TrimSpace(block.Language), "python") {
+			environment, err := polyglot.DiscoverEnvironment(polyglot.EnvironmentRequest{Source: source, Language: "python"})
+			if err != nil {
+				return e.fail(first, CodeUnsupported, err.Error())
+			}
+			e.foreignPythonEnv = &environment
+			pythonRuntime.Environment = &environment
+			break
+		}
+	}
+	var plans []polyglot.Plan
+	if len(blocks) > 0 {
+		var err error
+		plans, err = polyglot.Prepare(ctx, blocks, map[string]polyglot.Analyzer{
+			"python": pythonRuntime, "typescript": polyglot.TypeScript{},
+		})
+		if err != nil {
+			return e.fail(first, CodeUnsupported, err.Error())
 		}
 	}
 	for pi, plan := range plans {
@@ -108,8 +144,10 @@ func (e *emitter) prepareForeign(ctx context.Context, file *syntax.File) error {
 		}
 	}
 	e.foreignPlans = plans
-	e.bridge = true
-	e.output = true
+	if len(plans) > 0 {
+		e.bridge = true
+		e.output = true
+	}
 	return nil
 }
 

@@ -50,6 +50,7 @@ type emitter struct {
 	functionDecls      map[string]*syntax.BashPPFuncDecl
 	foreignFunctions   map[string]foreignFunction
 	foreignPlans       []polyglot.Plan
+	foreignImports     []polyglot.ImportPlan
 	foreignPythonEnv   *polyglot.EnvironmentPlan
 	methodDeclarations []*syntax.BashPPFuncDecl
 	enumMembers        map[string][]*syntax.Lit
@@ -497,6 +498,9 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 		return nil, e.fail(file, CodeExpr, "generated Go is not syntactically valid: "+err.Error())
 	}
 	result := &Result{Sources: append([]syntax.SourceFile(nil), file.Sources...), Source: source, Package: options.Package, Imports: imports, Origin: options.Origin}
+	for _, plan := range e.foreignImports {
+		result.ForeignImports = append(result.ForeignImports, plan.Clone())
+	}
 	if e.execution {
 		result.Entry = e.prefix + "execute"
 		if options.Entry != "" {

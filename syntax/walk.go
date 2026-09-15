@@ -391,6 +391,9 @@ func Walk(node Node, f func(Node) bool) {
 		Walk(node.Call, f)
 	case *BashPPImport:
 		Walk(node.Kw, f)
+		walkNilable(node.Language, f)
+		walkNilable(node.Environment, f)
+		walkNilable(node.As, f)
 		walkNilable(node.Alias, f)
 		walkNilable(node.Path, f)
 		walkComments(node.Comments, f)

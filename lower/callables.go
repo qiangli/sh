@@ -417,6 +417,11 @@ func (e *emitter) panicBoundary() string {
 }
 
 func (e *emitter) importDecl(n *syntax.BashPPImport) error {
+	if n.Language != nil {
+		// Direct foreign imports are planned before emission and loaded lazily
+		// by the runtime path; they are not Go package imports.
+		return nil
+	}
 	if e.moduleImporter == nil {
 		e.moduleImporter = newModuleImporter(e.options.Dir)
 	}

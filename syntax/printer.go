@@ -2319,11 +2319,22 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 	case *BashPPImport:
 		p.spacedString(cmd.Kw.Value, cmd.Kw.Pos())
 		if cmd.Path != nil {
-			if cmd.Alias != nil {
+			if cmd.Language != nil {
+				p.spacedString(cmd.Language.Value, cmd.Language.Pos())
+				if cmd.Environment != nil {
+					p.writeLit("[")
+					p.writeLit(cmd.Environment.Value)
+					p.writeLit("]")
+				}
+			} else if cmd.Alias != nil {
 				p.spacedString(cmd.Alias.Value, cmd.Alias.Pos())
 			}
 			p.space()
 			p.dblQuoted(cmd.Path)
+			if cmd.Language != nil && cmd.Alias != nil {
+				p.writeLit(" as ")
+				p.writeLit(cmd.Alias.Value)
+			}
 			break
 		}
 		if len(cmd.Comments) > 0 {
