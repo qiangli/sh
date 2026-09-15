@@ -411,7 +411,6 @@ try {
 const typeScriptWorker = `
 const readline = require('readline');
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
 const {pathToFileURL} = require('url');
 const util = require('util');
@@ -468,7 +467,10 @@ function linkPackageContext(sourceDir, targetDir) {
     for (const entry of fs.readdirSync(packageDir, {withFileTypes:true})) {
       if (entry.name === 'package.json' || entry.name === 'node_modules') continue;
       const target = path.join(targetDir, entry.name);
-      if (!fs.existsSync(target)) fs.symlinkSync(path.join(packageDir, entry.name), target, entry.isDirectory() ? 'junction' : 'file');
+      if (fs.existsSync(target)) continue;
+      const source = path.join(packageDir, entry.name);
+      if (entry.isDirectory()) fs.symlinkSync(source, target, 'junction');
+      else if (entry.isFile()) fs.copyFileSync(source, target);
     }
   }
   const modulesDir = findUp(sourceDir, 'node_modules');
@@ -481,7 +483,8 @@ rl.on('line', async line => {
     if (req.op === 'load') {
       const dir = req.dir || process.cwd();
       if (moduleDir) fs.rmSync(moduleDir, {recursive:true, force:true});
-      moduleDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bashpp-typescript-'));
+      moduleDir = req.module_dir;
+      if (!moduleDir) throw new Error('missing TypeScript module directory');
       linkPackageContext(dir, moduleDir);
       const filename = path.join(moduleDir, 'module.mjs');
       fs.writeFileSync(filename, req.artifact);

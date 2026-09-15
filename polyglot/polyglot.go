@@ -218,6 +218,7 @@ type Module struct {
 	generation uint64
 	pendingOut string
 	pendingErr string
+	tempDir    string
 }
 
 func Start(plan Plan, runtime Runtime) *Module { return &Module{plan: plan, runtime: runtime} }
@@ -281,6 +282,14 @@ func (m *Module) ensure(ctx context.Context) error {
 	m.generation++
 	m.cmd, m.in, m.out, m.outFile = cmd, in, bufio.NewReader(protocolRead), protocolRead
 	load := m.runtime.loadRequest(m.plan)
+	if typeScript {
+		m.tempDir, err = os.MkdirTemp("", "bashpp-typescript-")
+		if err != nil {
+			m.kill()
+			return err
+		}
+		load["module_dir"] = m.tempDir
+	}
 	if m.importPlan != nil {
 		load = map[string]any{"id": 0, "op": "import", "module": m.importPlan.Module}
 	}
@@ -458,7 +467,9 @@ func (m *Module) request(ctx context.Context, request map[string]any, annotation
 func (m *Module) exchangeContext(ctx context.Context, request any, response *workerResponse) error {
 	done := make(chan error, 1)
 	in, out := m.in, m.out
-	go func() { done <- exchange(in, out, request, response) }()
+	_, typeScript := m.runtime.(TypeScript)
+	requireMarker := runtime.GOOS == "windows" && typeScript
+	go func() { done <- exchange(in, out, request, response, requireMarker) }()
 	select {
 	case <-ctx.Done():
 		_ = m.kill()
@@ -518,6 +529,10 @@ func (m *Module) kill() error {
 	}
 	m.cmd, m.in, m.out, m.outFile = nil, nil, nil, nil
 	m.pendingOut, m.pendingErr = "", ""
+	if m.tempDir != "" {
+		_ = os.RemoveAll(m.tempDir)
+		m.tempDir = ""
+	}
 	if errors.Is(err, os.ErrProcessDone) {
 		return nil
 	}
@@ -531,7 +546,7 @@ type workerResponse struct {
 	Error, Stdout, Stderr string
 }
 
-func exchange(in io.Writer, out *bufio.Reader, request any, response *workerResponse) error {
+func exchange(in io.Writer, out *bufio.Reader, request any, response *workerResponse, requireMarker bool) error {
 	data, err := json.Marshal(request)
 	if err != nil {
 		return err
@@ -547,7 +562,7 @@ func exchange(in io.Writer, out *bufio.Reader, request any, response *workerResp
 		}
 		if marker := bytes.Index(line, []byte("\x1eBASHPP")); marker >= 0 {
 			line = line[marker+len("\x1eBASHPP"):]
-		} else if len(bytes.TrimSpace(line)) == 0 || bytes.TrimSpace(line)[0] != '{' {
+		} else if requireMarker || len(bytes.TrimSpace(line)) == 0 || bytes.TrimSpace(line)[0] != '{' {
 			continue
 		}
 		dec := json.NewDecoder(bytes.NewReader(line))

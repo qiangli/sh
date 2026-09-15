@@ -600,7 +600,10 @@ func discoverTypeScriptEnvironment(plan EnvironmentPlan, dirs []string, _ *envir
 			plan.ResolutionFiles = append(plan.ResolutionFiles, file)
 		}
 	}
-	if manifest := firstPackageManifest(plan.Manifests); manifest != "" {
+	for _, manifest := range plan.Manifests {
+		if filepath.Base(manifest) != "package.json" {
+			continue
+		}
 		var pkg struct {
 			PackageManager string            `json:"packageManager"`
 			Engines        map[string]string `json:"engines"`
@@ -619,7 +622,9 @@ func discoverTypeScriptEnvironment(plan EnvironmentPlan, dirs []string, _ *envir
 				plan.Manager = manager
 			}
 		}
-		plan.RuntimeConstraint = pkg.Engines["node"]
+		if plan.RuntimeConstraint == "" {
+			plan.RuntimeConstraint = pkg.Engines["node"]
+		}
 	}
 	runtimeName := strings.ToLower(strings.TrimSpace(env["BASHPP_TYPESCRIPT_RUNTIME"]))
 	if runtimeName == "" {
@@ -691,15 +696,6 @@ func typeScriptLaunchEnvironment(env map[string]string) []string {
 	}
 	sort.Strings(out)
 	return out
-}
-
-func firstPackageManifest(manifests []string) string {
-	for _, file := range manifests {
-		if filepath.Base(file) == "package.json" {
-			return file
-		}
-	}
-	return ""
 }
 
 func environmentFingerprint(p EnvironmentPlan) (string, error) {

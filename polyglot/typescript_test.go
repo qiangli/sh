@@ -1,6 +1,8 @@
 package polyglot
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"os"
 	"os/exec"
@@ -211,7 +213,26 @@ export const identity = () => new (class Example {})();
 			if _, err := module.Call(context.Background(), "identity"); err == nil || !strings.Contains(err.Error(), "unsupported foreign result type") {
 				t.Fatalf("identity error = %v", err)
 			}
+			materialized := module.tempDir
+			if err := module.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Stat(materialized); !os.IsNotExist(err) {
+				t.Fatalf("materialized module directory was not removed: %v", err)
+			}
 		})
+	}
+}
+
+func TestTypeScriptStdoutTransportRequiresMarker(t *testing.T) {
+	input := bufio.NewReader(strings.NewReader("{\"id\":99,\"ok\":true}\n\x1eBASHPP{\"id\":1,\"ok\":true}\n"))
+	var written bytes.Buffer
+	var response workerResponse
+	if err := exchange(&written, input, map[string]any{"id": 1}, &response, true); err != nil {
+		t.Fatal(err)
+	}
+	if response.ID != 1 {
+		t.Fatalf("response ID = %d, want framed ID 1", response.ID)
 	}
 }
 

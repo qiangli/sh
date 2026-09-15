@@ -137,6 +137,22 @@ func TestDiscoverTypeScriptWorkspaceMetadata(t *testing.T) {
 	}
 }
 
+func TestDiscoverTypeScriptWorkspacePackageManagerFallback(t *testing.T) {
+	root := t.TempDir()
+	project := filepath.Join(root, "packages", "app")
+	bin := filepath.Join(root, "bin")
+	writeEnvironmentFile(t, filepath.Join(bin, "node"), "runtime")
+	writeEnvironmentFile(t, filepath.Join(root, "package.json"), `{"workspaces":["packages/*"],"packageManager":"pnpm@10"}`)
+	writeEnvironmentFile(t, filepath.Join(project, "package.json"), `{"name":"app"}`)
+	plan, err := DiscoverEnvironment(EnvironmentRequest{Source: filepath.Join(project, "src", "program.bpp"), Language: "ts", Environ: []string{"PATH=" + bin}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Manager != "pnpm" {
+		t.Fatalf("manager = %q, want pnpm", plan.Manager)
+	}
+}
+
 func TestDiscoverEnvironmentRejectsConflictingManagerLocks(t *testing.T) {
 	root := t.TempDir()
 	pythonFixture(t, root)
