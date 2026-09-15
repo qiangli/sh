@@ -130,7 +130,7 @@ func (e *emitter) literal(f *syntax.BashPPFuncLit) (string, error) {
 	}
 	body := strings.Join(parts, "")
 	if e.execution {
-		entry, err := e.programEntry("func", false, f.Results)
+		entry, err := e.programEntry("func", false, f.Results, false)
 		if err != nil {
 			return "", err
 		}

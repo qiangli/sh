@@ -81,6 +81,11 @@ type emitter struct {
 	// about to push its branch target; it seeds the target so a deep branch
 	// and a goto name the same label instead of a synthesized one.
 	pendingLabel string
+	// predeclaredCall is set when a Bash++ unit uses the predeclared
+	// decorator context without declaring its own Call type; shellFuncs
+	// names the unit's shell functions for the decorator diagnostics.
+	predeclaredCall bool
+	shellFuncs      map[string]bool
 }
 
 type lowerBranchTarget struct {
@@ -264,6 +269,9 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 	if options.Entry != "" && (e.funcs[options.Entry] || e.globals[options.Entry] || e.typeNames[options.Entry]) {
 		return nil, e.fail(file, CodeType, "entry conflicts with source declaration: "+options.Entry)
 	}
+	if err := e.prepareDecorators(file); err != nil {
+		return nil, err
+	}
 	if err := e.discoverCallableParams(file); err != nil {
 		return nil, err
 	}
@@ -284,6 +292,7 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 	})
 	var declarations, body strings.Builder
 	declarations.WriteString(e.foreignDeclarations())
+	declarations.WriteString(e.decoratorCallAlias())
 	fileBodies := map[string]*strings.Builder{}
 	// Under goSource the declarations are re-emitted in the order the input
 	// wrote them (C11): each statement's declaration text is captured here

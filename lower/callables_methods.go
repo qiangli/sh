@@ -242,9 +242,15 @@ func (e *emitter) runtimeMethodFunction(f *syntax.BashPPFuncDecl, signature, bod
 	if f == nil || f.Receiver == nil || f.Receiver.RecvType == nil || f.Name == nil {
 		return "", e.fail(f, CodeUnsupported, "runtime method lowering needs a named receiver declaration")
 	}
-	entry, err := e.programEntry(f.Name.Value, f.Agentic != nil, f.Results)
+	entry, err := e.programEntry(f.Name.Value, f.Agentic != nil, f.Results, len(f.Decorators) > 0)
 	if err != nil {
 		return "", err
+	}
+	decorators := ""
+	if len(f.Decorators) > 0 {
+		if body, decorators, err = e.decoratedBody(f, signature, body); err != nil {
+			return "", err
+		}
 	}
 	var args []string
 	for _, field := range f.Params {
@@ -296,7 +302,7 @@ func (e *emitter) runtimeMethodFunction(f *syntax.BashPPFuncDecl, signature, bod
 		"err = " + p + ".Run(func(" + p + " *" + e.prefix + "rt.Program){\n" + invocation + "\n})\n" +
 		"if err != nil { panic(err) }\n" +
 		"return " + values + "\n}\n"
-	return e.mark(f) + "func " + recv + private + generics + e.privateSignature(signature) + " {\n" + entry + body + "}\n" + wrapper, nil
+	return e.mark(f) + "func " + recv + private + generics + e.privateSignature(signature) + " {\n" + entry + body + "}\n" + wrapper + decorators, nil
 }
 
 // promotedInterfaceSource names the embedded interface field a promoted method
