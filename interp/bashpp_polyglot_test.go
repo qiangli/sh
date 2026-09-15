@@ -136,12 +136,13 @@ func TestBashPPShellDialectIslands(t *testing.T) {
 var() { printf '%s:%s:%s' "$1" "$2" "$3"; }
 Show() { counter=$(( ${counter:-0} + 1 )); var "$1" = "$counter"; }
 ~~~
+counter=99
 first := island.Show(alpha)
 second := island.Show(alpha)
-printf '%s|%s\n' "$first" "$second"
+printf '%s|%s|%s\n' "$first" "$second" "$counter"
 `
 	out, diagnostic, err := runPolyglot(t, bashSource)
-	if err != nil || out != "alpha:=:1|alpha:=:1\n" || diagnostic != "" {
+	if err != nil || out != "alpha:=:1|alpha:=:1|99\n" || diagnostic != "" {
 		t.Fatalf("bash island: out=%q diagnostic=%q err=%v", out, diagnostic, err)
 	}
 
