@@ -843,6 +843,11 @@ type Runner struct {
 	auditHandler func(AuditEvent)
 	auditLog     io.Writer
 
+	// commandResolver, when non-nil, is the embedder's rung between the
+	// shell's own names and PATH for the introspection builtins — see
+	// [CommandResolver].
+	commandResolver CommandResolverFunc
+
 	// structuredErrorHandler, when non-nil, is invoked for known
 	// user-facing diagnostics as they are emitted to stderr. It is an
 	// additive observability hook; stderr output and exit semantics are
@@ -2392,6 +2397,55 @@ func WithAuditHandler(fn func(AuditEvent)) RunnerOption {
 	}
 }
 
+// ResolvedCommand is what a [CommandResolverFunc] reports for a name the
+// embedder dispatches itself.
+type ResolvedCommand struct {
+	// Kind is what `type -t` prints. Bash's vocabulary is closed (alias,
+	// keyword, function, builtin, file); an empty Kind reports "file" — the
+	// closest of the five to a program the shell hands off rather than
+	// runs itself, and the answer scripts that switch on `type -t` expect
+	// for something that is neither a builtin nor a function.
+	Kind string
+	// Desc is the `type NAME` / `command -V NAME` line. Empty reports
+	// "NAME is NAME".
+	Desc string
+	// Path is what `command -v NAME` and `type -p NAME` print. Empty means
+	// there is no file the shell could exec directly: `command -v` then
+	// prints the bare name, as it does for a builtin or function, and
+	// `type -p` prints nothing.
+	Path string
+}
+
+// CommandResolverFunc answers "does the embedder run this name itself, and
+// as what" for one word that is not a keyword, alias, function or enabled
+// builtin. ok=false falls through to the hash table and PATH.
+type CommandResolverFunc func(name string) (ResolvedCommand, bool)
+
+// CommandResolver registers the embedder's rung in command LOOKUP, so the
+// introspection builtins — `type`, `command -v`, `command -V` — see the
+// same ladder the dispatch path runs. An [ExecHandlerFunc] middleware that
+// intercepts a name before PATH (an in-process applet, a registered
+// command) is invisible to those builtins by default: the name runs, yet
+// `command -v NAME` says not found, so a script that probes before
+// calling concludes the command is absent. The resolver closes that gap
+// without the embedder defining a shell function per name.
+//
+// It is consulted after the shell's own names (keyword, alias, function,
+// builtin) and BEFORE the command hash table and PATH, which is exactly
+// where a pre-PATH exec rung sits. `type -a` lists the resolver's match and
+// then any PATH file, like a function shadowing a file. `type -P` stays a
+// pure PATH search and `hash` stays a PATH cache: both are questions about
+// files, and the resolver's names need not be files.
+//
+// nil (the default) changes nothing: a runner without a resolver resolves
+// exactly as bash does.
+func CommandResolver(fn CommandResolverFunc) RunnerOption {
+	return func(r *Runner) error {
+		r.commandResolver = fn
+		return nil
+	}
+}
+
 // WithAuditLog writes each [AuditEvent] as one JSON object per line.
 // It is additive with [WithAuditHandler]; both receive the same event.
 func WithAuditLog(w io.Writer) RunnerOption {
@@ -2959,6 +3013,7 @@ func (r *Runner) Reset() {
 		bashSource:             slices.Clone(r.bashSource),
 		stdinScript:            r.stdinScript,
 		auditHandler:           r.auditHandler,
+		commandResolver:        r.commandResolver,
 		auditLog:               r.auditLog,
 		structuredErrorHandler: r.structuredErrorHandler,
 		deterministic:          r.deterministic,
@@ -3569,6 +3624,7 @@ func (r *Runner) subshell(background bool) *Runner {
 		bashCompatErrors:       r.bashCompatErrors,
 		strictPosix:            r.strictPosix,
 		auditHandler:           r.auditHandler,
+		commandResolver:        r.commandResolver,
 		auditLog:               r.auditLog,
 		structuredErrorHandler: r.structuredErrorHandler,
 		deterministic:          r.deterministic,

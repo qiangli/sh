@@ -2183,12 +2183,17 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			// -p: only print path if no non-file match exists.
 			if mode == "-p" {
 				var pathMatch string
-				hasNonFile := false
+				hasNonFile, sawFile := false, false
 				for _, m := range matches {
-					if m.kind == "file" {
-						pathMatch = m.path
-					} else {
+					if m.kind != "file" {
 						hasNonFile = true
+						continue
+					}
+					// The first file-kind match is the one that would run;
+					// an embedder-resolved name with no path prints nothing
+					// rather than the PATH file it shadows.
+					if !sawFile {
+						sawFile, pathMatch = true, m.path
 					}
 				}
 				if !hasNonFile && pathMatch != "" {
@@ -3330,6 +3335,16 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				foundAny = true
 			} else if als, ok := r.alias[arg]; ok && r.opts[optExpandAliases] {
 				r.outf("alias %s='%s'\n", arg, strings.ReplaceAll(aliasValue(als), "'", `'\''`))
+				foundAny = true
+			} else if m, ok := r.resolvedCommandMatch(arg); ok {
+				// The embedder's rung: a path when it has one, else the
+				// bare name — the builtin/function shape, since the name
+				// runs when invoked.
+				if m.path != "" {
+					r.outf("%s\n", m.path)
+				} else {
+					r.outf("%s\n", arg)
+				}
 				foundAny = true
 			} else if path, err := LookPathDir(r.Dir, lookupEnv, arg); err == nil {
 				if r.opts[optPosix] && strings.ContainsRune(arg, '/') && !filepath.IsAbs(path) {
@@ -7267,6 +7282,11 @@ func (r *Runner) typeMatches(arg string, skipFuncs bool, env expand.Environ) []t
 			desc: fmt.Sprintf("%s is a shell builtin", arg),
 		})
 	}
+	// The embedder's pre-PATH rung (see [CommandResolver]) outranks the hash
+	// table and PATH, as it does at dispatch; with -a both are listed.
+	if m, ok := r.resolvedCommandMatch(arg); ok {
+		ms = append(ms, m)
+	}
 	// Check the command hash table before doing a PATH lookup.
 	// Bash uses the hashed entry directly (`<name> is hashed
 	// (<path>)`) even when the file no longer exists.
@@ -7286,6 +7306,27 @@ func (r *Runner) typeMatches(arg string, skipFuncs bool, env expand.Environ) []t
 		})
 	}
 	return ms
+}
+
+// resolvedCommandMatch asks the embedder's [CommandResolver] about arg and
+// shapes the answer as a typeMatch. Never consulted for a word containing a
+// slash: that is a path, and paths are the shell's own business.
+func (r *Runner) resolvedCommandMatch(arg string) (typeMatch, bool) {
+	if r.commandResolver == nil || strings.ContainsRune(arg, '/') {
+		return typeMatch{}, false
+	}
+	rc, ok := r.commandResolver(arg)
+	if !ok {
+		return typeMatch{}, false
+	}
+	m := typeMatch{kind: rc.Kind, desc: rc.Desc, path: rc.Path}
+	if m.kind == "" {
+		m.kind = "file"
+	}
+	if m.desc == "" {
+		m.desc = fmt.Sprintf("%s is %s", arg, arg)
+	}
+	return m, true
 }
 
 // symbolicUmaskResult conveys how parseSymbolicUmask classified its input.
