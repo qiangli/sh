@@ -242,6 +242,11 @@ try {
 	    moduleResolution:modern ? ts.ModuleResolutionKind.Bundler : ts.ModuleResolutionKind.Node10, skipLibCheck:true,
     noEmitOnError:true, strict:false, sourceMap:false, declaration:false};
   if (Number.parseInt(ts.versionMajorMinor || ts.version || '0', 10) >= 6) options.ignoreDeprecations = '6.0';
+  // The ESM artifact comes from transpileModule below, so the checking program
+  // never emits; that lets it accept an explicit .ts specifier — the spelling
+  // Node's native type stripping requires for a relative source import, and
+  // one project tsconfigs enable with allowImportingTsExtensions.
+  if (modern) { options.noEmit = true; options.allowImportingTsExtensions = true; }
   const host = ts.createCompilerHost(options);
   const baseGet = host.getSourceFile.bind(host);
   host.getSourceFile = (file, version, onError, fresh) =>

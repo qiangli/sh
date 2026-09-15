@@ -99,6 +99,44 @@ export async function answer(): Promise<number> { return base + increment }
 	}
 }
 
+// A relative source import may name its .ts file explicitly: that is the
+// spelling Node's native type stripping requires, and one project tsconfigs
+// enable with allowImportingTsExtensions. The fence's checking program must not
+// refuse it (TS5097) just because it does not read the project's tsconfig.
+func TestTypeScriptAnalyzeRelativeTsExtensionImport(t *testing.T) {
+	configured := testTypeScript(t)
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node unavailable")
+	}
+	root := t.TempDir()
+	writeEnvironmentFile(t, filepath.Join(root, "package.json"), `{"type":"module"}`)
+	writeEnvironmentFile(t, filepath.Join(root, "src", "format.ts"), `export function compact(value: number): string { return value >= 1000 ? (value / 1000) + "k" : String(value) }`)
+	runtime := TypeScript{Environment: &EnvironmentPlan{
+		Language: "typescript", Runtime: "node", Executable: node, CompilerModule: configured.CompilerModule,
+		Dir: root, Env: os.Environ(),
+	}}
+	exports, artifact, err := runtime.AnalyzeArtifact(context.Background(), `
+import { compact } from "./src/format.ts"
+export function launch(n: number): string { return compact(n) }
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(exports) != 1 || exports[0].Name != "launch" {
+		t.Fatalf("exports = %#v", exports)
+	}
+	if !strings.Contains(artifact, `"./src/format.ts"`) {
+		t.Fatalf("artifact lost the explicit .ts specifier:\n%s", artifact)
+	}
+	module := Start(Plan{Language: "typescript", Artifact: artifact, Exports: exports}, runtime)
+	defer module.Close()
+	result, err := module.Call(context.Background(), "launch", float64(1500))
+	if err != nil || result.Value != "1.5k" {
+		t.Fatalf("launch = %#v, %v", result, err)
+	}
+}
+
 func TestTypeScriptOpenCodeBunImport(t *testing.T) {
 	root := os.Getenv("BASHPP_OPENCODE_ROOT")
 	if root == "" {
