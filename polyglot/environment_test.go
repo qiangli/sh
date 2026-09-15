@@ -56,6 +56,34 @@ func TestDiscoverEnvironmentRejectsConflictingManagerLocks(t *testing.T) {
 	}
 }
 
+func TestDiscoverEnvironmentPATHRequiresExecutableRegularFile(t *testing.T) {
+	root := t.TempDir()
+	bad, good := filepath.Join(root, "bad"), filepath.Join(root, "good")
+	writeEnvironmentFile(t, filepath.Join(bad, "python3"), "not executable")
+	if err := os.Chmod(filepath.Join(bad, "python3"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeEnvironmentFile(t, filepath.Join(good, "python3"), "executable")
+	plan, err := DiscoverEnvironment(EnvironmentRequest{
+		Source:  filepath.Join(root, "source.bpp"),
+		Environ: []string{"PATH=" + bad + string(os.PathListSeparator) + good},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := filepath.EvalSymlinks(filepath.Join(good, "python3"))
+	if err != nil || plan.Executable != want {
+		t.Fatalf("executable = %q, want %q (err %v)", plan.Executable, want, err)
+	}
+	directoryCandidate := filepath.Join(root, "directory", "python3")
+	if err := os.MkdirAll(directoryCandidate, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := lookupPath(map[string]string{"PATH": filepath.Dir(directoryCandidate)}, "python3"); err == nil {
+		t.Fatal("directory accepted as PATH runtime")
+	}
+}
+
 func writeEnvironmentFile(t *testing.T, name, body string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(name), 0o755); err != nil {

@@ -404,7 +404,8 @@ func lookupPath(env map[string]string, file string) (string, error) {
 			continue
 		}
 		n := filepath.Join(d, file)
-		if exists(n) {
+		info, err := os.Stat(n)
+		if err == nil && info.Mode().IsRegular() && (runtime.GOOS == "windows" || info.Mode().Perm()&0o111 != 0) {
 			return n, nil
 		}
 	}

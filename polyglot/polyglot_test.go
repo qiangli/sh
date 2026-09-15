@@ -3,10 +3,37 @@ package polyglot
 import (
 	"context"
 	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestPythonDoesNotImportFromImplicitWorkingDirectory(t *testing.T) {
+	python, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("python3 unavailable")
+	}
+	dir := t.TempDir()
+	for _, name := range []string{"ast.py", "contextlib.py"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("raise RuntimeError('cwd shadow imported')\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runtime := Python{Command: python, Environment: &EnvironmentPlan{Dir: dir, Env: os.Environ()}}
+	plans, err := Prepare(context.Background(), []Block{{Language: "python", Source: "def ok(): return 1\n"}}, map[string]Analyzer{"python": runtime})
+	if err != nil {
+		t.Fatal(err)
+	}
+	module := Start(plans[0], runtime)
+	defer module.Close()
+	got, err := module.Call(context.Background(), "ok")
+	if err != nil || got.Value != int64(1) {
+		t.Fatalf("call = %#v, %v", got, err)
+	}
+}
 
 func TestPythonUnavailable(t *testing.T) {
 	python := Python{Command: t.TempDir() + "/missing-python"}

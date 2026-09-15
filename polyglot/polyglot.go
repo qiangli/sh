@@ -431,7 +431,9 @@ func decodeValue(v any) (any, error) {
 }
 
 const pythonAnalyze = `
-import ast, json, sys
+import sys
+if sys.path and sys.path[0] == '': del sys.path[0]
+import ast, json
 src=sys.stdin.read()
 tree=ast.parse(src)
 nodes=tree.body
@@ -459,7 +461,9 @@ print(json.dumps(out,separators=(',',':')))
 `
 
 const pythonWorker = `
-import ast, base64, contextlib, io, json, sys, traceback
+import sys
+if sys.path and sys.path[0] == '': del sys.path[0]
+import ast, base64, contextlib, io, json, traceback
 ns={'__name__':'__bashpp__'}
 def dec(v):
     if isinstance(v,dict) and set(v)=={'$bytes'}: return base64.b64decode(v['$bytes'])
