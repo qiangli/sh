@@ -6,6 +6,7 @@ import (
 	"go/types"
 	"strings"
 
+	"mvdan.cc/sh/v3/polyglot"
 	"mvdan.cc/sh/v3/syntax"
 )
 
@@ -38,13 +39,16 @@ type Options struct {
 	Importer types.Importer
 }
 type Result struct {
-	Sources  []syntax.SourceFile
-	Source   []byte
-	Package  string
-	Entry    string // emitted callable entry name, or empty for a runtime-free unit
-	Imports  []string
-	Origin   string
-	Mappings []Mapping
+	Sources []syntax.SourceFile
+	Source  []byte
+	Package string
+	Entry   string // emitted callable entry name, or empty for a runtime-free unit
+	Imports []string
+	// ForeignImports are immutable lazy package plans. Compilation selects an
+	// environment but never imports the referenced modules.
+	ForeignImports []polyglot.ImportPlan
+	Origin         string
+	Mappings       []Mapping
 	// Files holds per-origin output when Options.Library is set. Source is empty
 	// in that mode so a caller cannot accidentally compile a partial flat unit.
 	Files []FileResult

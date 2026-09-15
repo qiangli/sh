@@ -234,3 +234,92 @@ func TestBashPPImportPrintWalk(t *testing.T) {
 		t.Fatal("walk missed BashPPImport")
 	}
 }
+
+func TestBashPPPythonImport(t *testing.T) {
+	tests := []struct {
+		src, want, environment, alias string
+	}{
+		{`import python "nanochat.execution"`, "import python \"nanochat.execution\"\n", "", "execution"},
+		{`import python "nanochat.execution" as nano`, "import python \"nanochat.execution\" as nano\n", "", "nano"},
+		{`import python[training] "nanochat.execution" as nano`, "import python[training] \"nanochat.execution\" as nano\n", "training", "nano"},
+	}
+	for _, test := range tests {
+		for _, oneByte := range []bool{false, true} {
+			var input interface{ Read([]byte) (int, error) } = strings.NewReader(test.src)
+			if oneByte {
+				input = &oneByteReader{r: strings.NewReader(test.src)}
+			}
+			file, err := NewParser(Variant(LangBashPP)).Parse(input, "python.bpp")
+			if err != nil {
+				t.Fatalf("parse %q: %v", test.src, err)
+			}
+			imp, ok := file.Stmts[0].Cmd.(*BashPPImport)
+			if !ok || imp.Language == nil || imp.Language.Value != "python" {
+				t.Fatalf("parse %q: got %#v", test.src, file.Stmts[0].Cmd)
+			}
+			got := ""
+			if imp.Environment != nil {
+				got = imp.Environment.Value
+				if imp.Lbrack.Col()+1 != imp.Environment.Pos().Col() || imp.Environment.End().Col() != imp.Rbrack.Col() {
+					t.Fatalf("environment positions: [%v %v %v]", imp.Lbrack, imp.Environment.Pos(), imp.Rbrack)
+				}
+			}
+			if got != test.environment {
+				t.Fatalf("environment = %q, want %q", got, test.environment)
+			}
+			alias, _ := BashPPDerivedImportAlias(imp.Path.Parts[0].(*Lit).Value)
+			if imp.Alias != nil {
+				alias = imp.Alias.Value
+			}
+			wantEnd := imp.Path.End()
+			if imp.Alias != nil {
+				wantEnd = imp.Alias.End()
+			}
+			if alias != test.alias || imp.End() != wantEnd {
+				t.Fatalf("alias/end = %q/%v", alias, imp.End())
+			}
+			var out bytes.Buffer
+			if err := NewPrinter().Print(&out, file); err != nil || out.String() != test.want {
+				t.Fatalf("print = %q, %v; want %q", out.String(), err, test.want)
+			}
+			seen := map[string]bool{}
+			Walk(imp, func(node Node) bool {
+				if lit, ok := node.(*Lit); ok {
+					seen[lit.Value] = true
+				}
+				return true
+			})
+			if !seen["python"] || !seen[imp.Path.Parts[0].(*Lit).Value] || test.environment != "" && !seen[test.environment] {
+				t.Fatalf("walk literals = %#v", seen)
+			}
+		}
+	}
+}
+
+func TestBashPPPythonImportFallback(t *testing.T) {
+	for _, src := range []string{
+		`import python`,
+		`import python "mod" as`, `import python "mod" alias x`,
+	} {
+		assertImportFallbackExact(t, src, false)
+		assertImportFallbackExact(t, src, true)
+	}
+	for _, src := range []string{`import python "mod" as _`, `import python "mod" as .`} {
+		file, err := NewParser(Variant(LangBashPP)).Parse(strings.NewReader(src), "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, claimed := file.Stmts[0].Cmd.(*BashPPImport); claimed {
+			t.Fatalf("claimed invalid Python import %q", src)
+		}
+	}
+	for _, lang := range []LangVariant{LangBash, LangPOSIX} {
+		file, err := NewParser(Variant(lang)).Parse(strings.NewReader(`import python "mod" as py`), "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, claimed := file.Stmts[0].Cmd.(*BashPPImport); claimed {
+			t.Fatalf("%v claimed Python import", lang)
+		}
+	}
+}

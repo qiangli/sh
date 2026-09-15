@@ -888,20 +888,28 @@ func (c *BashPPCommandCall) End() Pos { return c.Call.End() }
 // BashPPImport imports one or more standard-library packages into the
 // Runner-local Bash++ namespace.
 type BashPPImport struct {
-	Site     StartSite
-	Class    SiteClass
-	Kw       *Lit
-	Alias    *Lit                // nil means the package's declared name (single form)
-	Path     *DblQuoted          // non-nil in the single form
-	Comments []Comment           // comments between the keyword and grouped form
-	Specs    []*BashPPImportSpec // non-nil in the grouped form
-	Last     []Comment           // comments before the closing parenthesis
-	Lparen   Pos
-	Rparen   Pos
+	Site        StartSite
+	Class       SiteClass
+	Kw          *Lit
+	Language    *Lit // non-nil for a direct foreign import
+	Lbrack      Pos  // optional named environment, foreign form only
+	Environment *Lit
+	Rbrack      Pos
+	As          *Lit                // non-nil when the foreign alias was explicit
+	Alias       *Lit                // nil means the package's declared name (single form)
+	Path        *DblQuoted          // non-nil in the single form
+	Comments    []Comment           // comments between the keyword and grouped form
+	Specs       []*BashPPImportSpec // non-nil in the grouped form
+	Last        []Comment           // comments before the closing parenthesis
+	Lparen      Pos
+	Rparen      Pos
 }
 
 func (i *BashPPImport) Pos() Pos { return i.Kw.Pos() }
 func (i *BashPPImport) End() Pos {
+	if i.Language != nil && i.Alias != nil {
+		return i.Alias.End()
+	}
 	if i.Path != nil {
 		return i.Path.End()
 	}

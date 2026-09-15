@@ -3,6 +3,8 @@ package syntax
 import (
 	"slices"
 	"strconv"
+	"strings"
+	"unicode"
 
 	"golang.org/x/mod/module"
 )
@@ -12,7 +14,13 @@ import (
 // bashppImport runs only after an ordinary CallExpr has reached its
 // terminator. Refusing a shape returns the original tree untouched.
 func bashppImport(ce *CallExpr, redirs []*Redirect) *BashPPImport {
-	if ce == nil || len(ce.Assigns) != 0 || len(redirs) != 0 || (len(ce.Args) != 2 && len(ce.Args) != 3) {
+	if ce == nil || len(ce.Assigns) != 0 || len(redirs) != 0 {
+		return nil
+	}
+	if imp := bashppForeignImport(ce); imp != nil {
+		return imp
+	}
+	if len(ce.Args) != 2 && len(ce.Args) != 3 {
 		return nil
 	}
 	kw := bashppBareLit(ce.Args[0])
@@ -37,6 +45,98 @@ func bashppImport(ce *CallExpr, redirs []*Redirect) *BashPPImport {
 		return nil
 	}
 	return &BashPPImport{Site: StartImport, Class: ClassE, Kw: kw, Alias: alias, Path: q}
+}
+
+// bashppForeignImport recognizes only the explicit Python form. In particular,
+// a malformed prefix is left as an ordinary shell command.
+func bashppForeignImport(ce *CallExpr) *BashPPImport {
+	if len(ce.Args) != 3 && len(ce.Args) != 5 {
+		return nil
+	}
+	kw := bashppBareLit(ce.Args[0])
+	if kw == nil || kw.Value != "import" {
+		return nil
+	}
+	language, environment, lbrack, rbrack, ok := bashppForeignLanguage(ce.Args[1])
+	if !ok || language.Value != "python" {
+		return nil
+	}
+	path, ok := exactGoImportString(ce.Args[2])
+	if !ok {
+		return nil
+	}
+	modulePath, err := strconv.Unquote(`"` + path.Parts[0].(*Lit).Value + `"`)
+	if err != nil || !validPythonImportPath(modulePath) {
+		return nil
+	}
+	var as, alias *Lit
+	if len(ce.Args) == 5 {
+		as, alias = bashppBareLit(ce.Args[3]), bashppBareLit(ce.Args[4])
+		if as == nil || as.Value != "as" || alias == nil || alias.Value == "_" || !bashppIsIdent(alias.Value) {
+			return nil
+		}
+	} else if _, ok := BashPPDerivedImportAlias(modulePath); !ok {
+		return nil
+	}
+	return &BashPPImport{
+		Site: StartImport, Class: ClassE, Kw: kw, Language: language,
+		Lbrack: lbrack, Environment: environment, Rbrack: rbrack,
+		As: as, Alias: alias, Path: path,
+	}
+}
+
+func bashppForeignLanguage(word *Word) (language, environment *Lit, lbrack, rbrack Pos, ok bool) {
+	if word == nil || len(word.Parts) == 0 {
+		return nil, nil, Pos{}, Pos{}, false
+	}
+	var text strings.Builder
+	for _, part := range word.Parts {
+		lit, ok := part.(*Lit)
+		if !ok {
+			return nil, nil, Pos{}, Pos{}, false
+		}
+		text.WriteString(lit.Value)
+	}
+	value := text.String()
+	if value == "python" {
+		return &Lit{ValuePos: word.Pos(), ValueEnd: word.End(), Value: value}, nil, Pos{}, Pos{}, true
+	}
+	if !strings.HasPrefix(value, "python[") || !strings.HasSuffix(value, "]") {
+		return nil, nil, Pos{}, Pos{}, false
+	}
+	name := value[len("python[") : len(value)-1]
+	if name == "" {
+		return nil, nil, Pos{}, Pos{}, false
+	}
+	for _, r := range name {
+		if !(unicode.IsLetter(r) || unicode.IsDigit(r) || strings.ContainsRune("._-", r)) {
+			return nil, nil, Pos{}, Pos{}, false
+		}
+	}
+	language = &Lit{ValuePos: word.Pos(), ValueEnd: posAddCol(word.Pos(), len("python")), Value: "python"}
+	environment = &Lit{ValuePos: posAddCol(word.Pos(), len("python[")), ValueEnd: posAddCol(word.Pos(), len(value)-1), Value: name}
+	return language, environment, language.End(), posAddCol(word.Pos(), len(value)-1), true
+}
+
+// BashPPDerivedImportAlias returns the safe default binding for a Python
+// module path. Callers must require an explicit alias when ok is false.
+func BashPPDerivedImportAlias(modulePath string) (alias string, ok bool) {
+	if i := strings.LastIndexByte(modulePath, '.'); i >= 0 {
+		modulePath = modulePath[i+1:]
+	}
+	return modulePath, bashppIsIdent(modulePath)
+}
+
+func validPythonImportPath(path string) bool {
+	if path == "" || strings.HasPrefix(path, ".") || strings.HasSuffix(path, ".") {
+		return false
+	}
+	for _, part := range strings.Split(path, ".") {
+		if !bashppIsIdent(part) {
+			return false
+		}
+	}
+	return true
 }
 
 func bashppImportAlias(name string) bool {
