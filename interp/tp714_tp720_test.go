@@ -33,6 +33,7 @@ func TestTP714TrapAfterIgnoreCatchesSignal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer r.Reset()
 	src := "trap '' USR1\n" +
 		"trap 'echo caught' USR1\n" +
 		"kill -s USR1 $$\n" +
