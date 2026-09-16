@@ -882,6 +882,9 @@ func (r *Runner) bashPPSliceBounds(expr *syntax.BashPPSliceExpr, length, capacit
 		highLimit = capacity
 	}
 	if low < 0 || high < low || high > highLimit || max < high || max > capacity {
+		if r.bashPPGoSource {
+			return 0, 0, 0, r.goSourceSliceBoundsPanic(expr, low, high, max, highLimit, capacity, sliceOperand)
+		}
 		if expr.SecondColon.IsValid() {
 			return 0, 0, 0, fmt.Errorf("BASHPP-ECOLLECTION-SLICE: slice bounds out of range [%d:%d:%d] with length %d and capacity %d", low, high, max, length, capacity)
 		}

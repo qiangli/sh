@@ -30,6 +30,11 @@ func (r *Runner) goSourceLocalMethod(expr *syntax.BashPPSelectorExpr, afterArgs 
 		if err != nil {
 			return nil, err
 		}
+		// &*p may produce a nil address; evaluating (*p).M still
+		// dereferences p before binding the method.
+		if ptr == nil {
+			return nil, r.goSourceRuntimeFaultAt(errBashPPNilDereference, expr.X)
+		}
 		_, pointer := r.bashPPPointerType(ptr.elem)
 		_, iface := r.bashPPInterfaceType(ptr.elem)
 		if !pointer && !iface {
@@ -63,6 +68,11 @@ func (r *Runner) goSourceLocalMethod(expr *syntax.BashPPSelectorExpr, afterArgs 
 		return native, err
 	}
 	if receiver.interfaceValue != nil {
+		// The interface lookup faults at the method name, including
+		// selectors whose dot and method name occupy different lines.
+		oldPos := r.curStmtPos
+		r.curStmtPos = expr.Sel.Pos()
+		defer func() { r.curStmtPos = oldPos }()
 		fn, ok = r.bashPPBindInterfaceMethod(receiver.interfaceValue, expr.Sel.Value)
 	} else {
 		typ := bashPPSelectorCellType(receiver)

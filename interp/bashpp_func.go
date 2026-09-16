@@ -698,6 +698,11 @@ func bashPPSelectorCellType(cell *bashPPCell) syntax.BashPPTypeExpr {
 func (r *Runner) bashPPBindLocalSelector(c *syntax.BashPPCall, root *bashPPCell) (*bashPPFunc, bool) {
 	method := c.Fun[len(c.Fun)-1].Value
 	if len(c.Fun) == 2 && root.interfaceValue != nil {
+		oldPos := r.curStmtPos
+		if r.bashPPGoSource {
+			r.curStmtPos = c.Fun[1].Pos()
+		}
+		defer func() { r.curStmtPos = oldPos }()
 		return r.bashPPBindInterfaceMethod(root.interfaceValue, method)
 	}
 	typ := bashPPSelectorCellType(root)
