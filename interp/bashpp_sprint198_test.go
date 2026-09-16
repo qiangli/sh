@@ -63,3 +63,8 @@ func TestSprint198GotoCancellation(t *testing.T) {
 		t.Fatalf("cancellation: %v", err)
 	}
 }
+
+func TestSprint198ShellOptionsRuntime(t *testing.T) {
+	wantOutput(t, bashPPRun(t, "set -- first second\necho \"$#:$1\"\nprintf -- '%s\\n' ok\n"), "2:first\nok\n")
+	wantOutput(t, bashPPRun(t, "func f() { x := 2; x --; x ++; echo \"$x\"; }\nf()\n"), "2\n")
+}

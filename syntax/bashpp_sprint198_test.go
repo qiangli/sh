@@ -108,3 +108,32 @@ func TestSprint198LabelScopes(t *testing.T) {
 		}
 	}
 }
+
+func TestSprint198SpacedOptionsRemainShell(t *testing.T) {
+	for _, src := range []string{"arbitrary --", "arbitrary ++", "set --", "printf --", "suspend --", "x --", "x ++"} {
+		bashppCheckIdentical(t, src)
+	}
+	for _, src := range []string{"x--", "x++"} {
+		for _, mode := range bashppReadModes {
+			f, err := bashppParseAs(LangBashPP, src, false, mode.wrap)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, ok := f.Stmts[0].Cmd.(*BashPPIncDec); !ok {
+				t.Fatalf("%q: %T", src, f.Stmts[0].Cmd)
+			}
+		}
+	}
+	for _, src := range []string{"func f() { x --; }", "func f() { x ++; }"} {
+		for _, mode := range bashppReadModes {
+			f, err := bashppParseAs(LangBashPP, src, false, mode.wrap)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body := f.Stmts[0].Cmd.(*BashPPFuncDecl).Body
+			if _, ok := body.Stmts[0].Cmd.(*BashPPIncDec); !ok {
+				t.Fatalf("%q: %T", src, body.Stmts[0].Cmd)
+			}
+		}
+	}
+}

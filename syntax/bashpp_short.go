@@ -1093,7 +1093,12 @@ func (p *Parser) bashppUpdate(ce *CallExpr, redirs []*Redirect, goRegion bool) C
 		return nil
 	}
 	if inc := bashppStandaloneIncDec(ce.Args); inc != nil {
-		return inc
+		// Mixed top-level updates use adjacent x++/x--. A separate token
+		// remains a shell argument, independent of the command's name.
+		if p.bashppFuncDepth > 0 || inc.TargetWord.End() == inc.Op.Pos() {
+			return inc
+		}
+		return nil
 	}
 	if len(ce.Args) == 1 {
 		for _, part := range ce.Args[0].Parts {

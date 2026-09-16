@@ -75,12 +75,6 @@ func (p *Parser) bashppKeywordStatement(s *Stmt) bool {
 	probe := &Stmt{Position: s.Position}
 	name := p.wordOne(p.lit(p.pos, p.val))
 	p.next()
-	// `time --` is an ordinary timing prefix; spaced option spelling
-	// does not turn the shell keyword into a decrement target.
-	if name.Lit() == "time" && p.val == "--" && p.spaced {
-		txn.rollback(p)
-		return false
-	}
 	p.callExpr(probe, name, false)
 	switch probe.Cmd.(type) {
 	case *BashPPShortDecl, *BashPPAssign, *BashPPUpdate, *BashPPIncDec, *BashPPSend:
