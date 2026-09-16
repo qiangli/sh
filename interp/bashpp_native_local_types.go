@@ -129,6 +129,11 @@ func (r *Runner) bashPPBuildLocalTypeDescriptors() []bashPPLocalType {
 	instantiations := map[string]*syntax.BashPPNamedType{}
 	var anonymous []*syntax.BashPPStructType
 	syntax.Walk(r.bashPPGoSourceFile, func(node syntax.Node) bool {
+		if d, ok := node.(*syntax.BashPPDecl); ok && d.Site == syntax.StartTypeDecl && d.Name.Value == "_" {
+			// A blank declaration introduces no type name to register. Keep
+			// walking its children so anonymous shapes retain their codecs.
+			return true
+		}
 		if d, ok := node.(*syntax.BashPPDecl); ok && d.Site == syntax.StartTypeDecl && len(d.TypeParams) == 0 && d.DeclTypeExpr != nil {
 			name := d.Name.Value
 			if _, exists := declared[name]; exists {
