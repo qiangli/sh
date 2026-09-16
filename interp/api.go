@@ -306,6 +306,8 @@ type Runner struct {
 
 	// openHandler is a function responsible for opening files. It must not be nil.
 	openHandler OpenHandlerFunc
+	// dryRunOpenHandler overrides openHandler only while dryrun is on.
+	dryRunOpenHandler OpenHandlerFunc
 
 	// readDirHandler is a function responsible for reading directories during
 	// glob expansion. It must be non-nil.
@@ -2103,6 +2105,21 @@ func OpenHandler(f OpenHandlerFunc) RunnerOption {
 	}
 }
 
+// DryRunOpenHandler overrides file opens only while the option enabled by
+// [EnableDryRunOption] is on. Runtime `set -o dryrun` / `set +o dryrun` selects
+// the override dynamically, including in shell copies. Normal execution keeps
+// its existing open handler and native cooperative task/FIFO behavior.
+//
+// The override is still a custom [OpenHandlerFunc]: it is not invoked inside
+// Bash++ tasks, whose opens require the native cancellation-aware path. Passing
+// nil removes the override. This option does not enable the dryrun option.
+func DryRunOpenHandler(f OpenHandlerFunc) RunnerOption {
+	return func(r *Runner) error {
+		r.dryRunOpenHandler = f
+		return nil
+	}
+}
+
 // EnableDryRunOption turns on the non-POSIX `set -o dryrun` shell option,
 // initialized to enabled. When on, `set -o dryrun` / `set +o dryrun` toggle the
 // runner's dry-run flag, which exec/open handlers read via [HandlerContext.DryRun]
@@ -2944,6 +2961,7 @@ func (r *Runner) Reset() {
 		callHandler:        r.callHandler,
 		execHandler:        r.execHandler,
 		openHandler:        r.openHandler,
+		dryRunOpenHandler:  r.dryRunOpenHandler,
 		bashPPCustomOpen:   r.bashPPCustomOpen,
 		readDirHandler:     r.readDirHandler,
 		statHandler:        r.statHandler,
@@ -3614,7 +3632,12 @@ func (r *Runner) subshell(background bool) *Runner {
 		Params:               r.Params,
 		callHandler:          r.callHandler,
 		execHandler:          r.execHandler,
+		dryRun:               r.dryRun,
+		dryRunOpt:            r.dryRunOpt,
+		origDryRun:           r.origDryRun,
+		origDryRunOpt:        r.origDryRunOpt,
 		openHandler:          r.openHandler,
+		dryRunOpenHandler:    r.dryRunOpenHandler,
 		bashPPCustomOpen:     r.bashPPCustomOpen,
 		readDirHandler:       r.readDirHandler,
 		statHandler:          r.statHandler,

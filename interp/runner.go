@@ -11337,6 +11337,12 @@ func (f fifoWriteFile) Close() error {
 	return err
 }
 
+// customOpenActive follows the same dynamic selection as open, so an inactive
+// dry-run override cannot disable native task opens or FIFO rendezvous.
+func (r *Runner) customOpenActive() bool {
+	return r.bashPPCustomOpen || r.dryRun && r.dryRunOpenHandler != nil
+}
+
 func (r *Runner) open(ctx context.Context, path string, flags int, mode os.FileMode, print bool) (io.ReadWriteCloser, error) {
 	// Apply this Runner's virtual umask when creating a file. The
 	// process-wide syscall umask is never touched (see Runner.umask),
@@ -11360,7 +11366,11 @@ func (r *Runner) open(ctx context.Context, path string, flags int, mode os.FileM
 		return os.OpenFile(path, flags, mode)
 	}
 
-	f, err := r.openHandler(r.handlerCtx(ctx, handlerKindOpen, todoPos), path, flags, mode)
+	handler := r.openHandler
+	if r.dryRun && r.dryRunOpenHandler != nil {
+		handler = r.dryRunOpenHandler
+	}
+	f, err := handler(r.handlerCtx(ctx, handlerKindOpen, todoPos), path, flags, mode)
 	// TODO: support wrapped PathError returned from openHandler.
 	switch err := err.(type) {
 	case nil:

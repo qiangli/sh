@@ -503,7 +503,7 @@ func (r *Runner) bashPPTaskOpen(ctx context.Context, path string, flags int, mod
 	if !r.inBashPPTask() && path == "/dev/stdin" && flags&3 == os.O_RDONLY && r.stdin != nil {
 		return r.open(ctx, path, flags, mode, print)
 	}
-	groupOpen := !requireRegular && !r.bashPPCustomOpen &&
+	groupOpen := !requireRegular && !r.customOpenActive() &&
 		(r.bashPPConcurrent != nil || (r.bashPPFileRun && r.Dialect() == syntax.LangBashPP))
 	if groupOpen {
 		openCtx := ctx
@@ -559,7 +559,7 @@ func (r *Runner) bashPPTaskOpen(ctx context.Context, path string, flags int, mod
 		}
 		return err
 	}
-	if r.bashPPCustomOpen {
+	if r.customOpenActive() {
 		err := fmt.Errorf("custom open handlers are unavailable inside a Bash++ task")
 		return nil, reportOpenError(err)
 	}
