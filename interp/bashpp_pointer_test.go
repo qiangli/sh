@@ -90,10 +90,14 @@ func TestBashPPPointerTaskSnapshotAndIdentity(t *testing.T) {
  p := &x
  alias := p
  *alias = 2
+ finished := make(chan int)
  go func() {
   *p = 3
   printf 'task:%s\n' "$x"
+  finished <- 1
  }()
+ # File completion cancels unfinished tasks; wait for the snapshot assertion.
+ completed := <-finished
  printf 'parent:%s\n' "$x"
 }
 main()
