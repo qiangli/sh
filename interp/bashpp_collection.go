@@ -344,7 +344,7 @@ func (r *Runner) bashPPEvalCollection(lit *syntax.BashPPCompositeLit, expected s
 			}
 			key, keyMeta, err := r.bashPPEvalElement(elem.Key, collection.Key)
 			if err != nil {
-				return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-KEY: %v", err)
+				return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-KEY: %w", err)
 			}
 			if _, _, exists, err := r.bashPPSprint165MapLookup(meta, key, keyMeta, collection.Key); err != nil {
 				return nil, nil, err
@@ -558,6 +558,12 @@ func (r *Runner) bashPPEvalConstIntExpr(expr goast.Expr) (value constant.Value, 
 }
 
 func (r *Runner) bashPPEvalElement(expr syntax.BashPPExpr, expected syntax.BashPPTypeExpr) (any, *bashPPCollectionMeta, error) {
+	// Imported concrete values can implement an imported interface element.
+	// Keep their native handle and let the existing typed assignment check
+	// validate the actual type, instead of attempting scalar evaluation.
+	if r.bashPPGoSource && r.bashPPNativeType(expected) && r.bashPPNativeExpr(expr) {
+		return r.bashPPEvalTypedValue(expr, expected)
+	}
 	if value, meta, handled, err := r.bashPPSprint165StoredBridgeScalar(expr, expected); handled {
 		return value, meta, err
 	}

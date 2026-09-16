@@ -64,7 +64,10 @@ func (r *Runner) goSourceInterfacePackage(iface *syntax.BashPPInterfaceType) str
 		return ""
 	}
 	for name, decl := range r.bashPPTypes {
-		if decl.typeExpr == iface {
+		if original, ok := decl.typeExpr.(*syntax.BashPPInterfaceType); ok &&
+			(original == iface || original.Interface != nil && original.Interface == iface.Interface) {
+			// Generic substitution copies the interface shape but retains its
+			// declaration token. That token identifies the declaring package.
 			return goSourceLinkedPackage(name)
 		}
 	}
@@ -83,7 +86,7 @@ func (r *Runner) goSourceMethodSpecPackage(spec *syntax.BashPPMethodSpec) string
 			continue
 		}
 		for _, elem := range bashPPInterfaceElems(iface) {
-			if elem.Method == spec {
+			if elem.Method == spec || elem.Method != nil && elem.Method.Name != nil && elem.Method.Name == spec.Name {
 				return goSourceLinkedPackage(name)
 			}
 		}

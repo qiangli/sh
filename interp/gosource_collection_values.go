@@ -93,6 +93,9 @@ func (r *Runner) goSourceCollectionCallValue(expr syntax.BashPPExpr) (any, *bash
 	if cell == nil {
 		return nil, nil, true, fmt.Errorf("Go collection call has no result")
 	}
+	if cell.pointer {
+		return cell.pointerValue, bashPPPointerMeta(cell.declType), true, nil
+	}
 	if cell.vr.Kind == expand.Object {
 		return cell.vr.Obj, bashPPCellMeta(cell), true, nil
 	}
@@ -296,5 +299,5 @@ func (r *Runner) goSourceNativeAssignedValue(native bashPPBridgeValue, expected 
 	if assignable.Interface != "" {
 		native.Interface = assignable.Interface
 	}
-	return &native, &bashPPCollectionMeta{typ: expected}, nil
+	return &native, &bashPPCollectionMeta{typ: expected, interfaceValue: goSourceNativeValueCell(native).interfaceValue}, nil
 }

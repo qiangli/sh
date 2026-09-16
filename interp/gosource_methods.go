@@ -2,6 +2,7 @@ package interp
 
 import (
 	"fmt"
+	"go/types"
 
 	"mvdan.cc/sh/v3/syntax"
 )
@@ -37,6 +38,9 @@ func (r *Runner) goSourceLocalMethod(expr *syntax.BashPPSelectorExpr, afterArgs 
 		}
 		_, pointer := r.bashPPPointerType(ptr.elem)
 		_, iface := r.bashPPInterfaceType(ptr.elem)
+		if native := r.bashPPEmbeddedNativeType(ptr.elem); native != nil {
+			_, iface = native.Underlying().(*types.Interface)
+		}
 		if !pointer && !iface {
 			// An addressable concrete receiver needs only its address/type.
 			// Reading and validating a temporary object here would traverse

@@ -1389,7 +1389,9 @@ func (r *Runner) bashPPScalarFuncCall(call *syntax.BashPPCall) (bashPPScalar, er
 		}
 		return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-UNDEFINED: undefined callable %s", name)
 	}
-	if bashppResultCount(fn.results()) != 1 {
+	// A native callable may name an imported result type which has no local
+	// signature tree. Its returned typed cells below are the result authority.
+	if fn.native == nil && bashppResultCount(fn.results()) != 1 {
 		return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-CALL: scalar call requires one result")
 	}
 	var args []string

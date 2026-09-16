@@ -351,7 +351,13 @@ func (r *Runner) bashPPTupleAssign(assign *syntax.BashPPAssign) {
 		// no scalar spelling, so it is assigned as the value it is. A scalar
 		// read returns no cell and falls through to the scalar evaluator, which
 		// keeps owning that diagnostic.
-		if cell, err := r.bashPPStructuredArgCell(assign.Values[i], expr); err == nil && cell != nil {
+		if cell, err := r.bashPPStructuredArgCell(assign.Values[i], expr); err != nil && r.bashPPGoSource {
+			if !errors.Is(err, errBashPPScalarInterrupted) {
+				r.errf("%s%v\n", r.bashErrPrefix(expr.Pos()), err)
+				r.exit = exitStatus{code: 2}
+			}
+			return
+		} else if err == nil && cell != nil {
 			candidates[i] = cell
 			continue
 		}
