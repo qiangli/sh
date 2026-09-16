@@ -1128,7 +1128,15 @@ func (p *Parser) bashppUpdate(ce *CallExpr, redirs []*Redirect, goRegion bool) C
 		return nil
 	}
 	op := bashppBareLit(ce.Args[1])
-	if op == nil || !strings.HasSuffix(op.Value, "=") || op.Value == "=" || op.Value == ":=" {
+	if op == nil {
+		return nil
+	}
+	// Only compound assignment operators claim this start site. A shell
+	// argument such as IFS= also ends in '=', including when probing the
+	// condition in `while IFS= read ...`; it must retain shell grammar.
+	switch op.Value {
+	case "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=", "&^=":
+	default:
 		return nil
 	}
 	switch bashppAssignmentTargetExpr(ce.Args[0]).(type) {

@@ -343,24 +343,27 @@ func TestBashPPScalarShellOperatorDiagnostics(t *testing.T) {
 	}
 }
 
-// TestBashPPScalarShellOperatorsStayShellOutsideGoRegions is the runtime half
-// of the compatibility boundary. At top level `z := x < y` is still a Class-E
-// declaration with a redirect attached, so the shell tries to open the file
-// `y`, fails, and leaves z unset — it does not bind the boolean the same line
-// would produce inside a func body.
-func TestBashPPScalarShellOperatorsStayShellOutsideGoRegions(t *testing.T) {
+// Explicit := starts own the typed scalar RHS at mixed top level as well as
+// inside Go functions. The command escape still selects shell redirection.
+func TestBashPPScalarExplicitStartsAndShellEscape(t *testing.T) {
 	const tail = "z := x < y\nprintf '[%s]' \"$z\"\n"
-
-	var shell strings.Builder
-	rShell := bashPPRunner(t, &shell, interp.Lang(syntax.LangBashPP))
-	bashPPRun(t, rShell, "x := 1\ny := 2\n"+tail)
-	qt.Assert(t, qt.Equals(shell.String(), "open y: no such file or directory\n[]"))
-
-	var region strings.Builder
-	rRegion := bashPPRunner(t, &region, interp.Lang(syntax.LangBashPP))
-	bashPPRun(t, rRegion, "func main() {\n\tx := 1\n\ty := 2\n\t"+
-		strings.ReplaceAll(tail, "\n", "\n\t")+"}\nmain()\n")
-	qt.Assert(t, qt.Equals(region.String(), "[true]"))
+	for _, tc := range []struct {
+		name, src, want string
+	}{
+		{"top-level", "x := 1\ny := 2\n" + tail, "[true]"},
+		{"function", "func main() {\n\tx := 1\n\ty := 2\n\t" +
+			strings.ReplaceAll(tail, "\n", "\n\t") + "}\nmain()\n", "[true]"},
+		{"shell-escape", "x := 1\ny := 2\ncommand " + tail, "open y: no such file or directory\n[]"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, bytewise := range []bool{false, true} {
+				var out strings.Builder
+				r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP), interp.Dir(t.TempDir()))
+				bashPPRunReader(t, r, tc.src, bytewise)
+				qt.Assert(t, qt.Equals(out.String(), tc.want))
+			}
+		})
+	}
 }
 
 func TestBashPPTopLevelSingleQuotesStayShellStrings(t *testing.T) {
