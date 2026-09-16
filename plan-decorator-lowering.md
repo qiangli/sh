@@ -52,3 +52,16 @@ order, args/results rewrite, skip, repeated `Next`, typed channel and map
 identity through the chain, method value / interface / handle routes, the
 native slot, the gate ordering (agentic denial before any decorator runs),
 and the undecorated D1 fidelity suite.
+
+## Sprint 197 broad-gate performance follow-up
+
+The DO full gate exposed deadline failures in the original mutex and Tour image
+fixtures. A CPU profile of the unchanged mutex source showed repeated local type
+descriptor construction and duplicate environment enumeration at every native
+call. Cache immutable descriptors in the copied toolchain, keyed by source file
+and a copied import map; a different file or changed import rebuilds them. Keep
+the native session's namespace-drift checks. Collect the shell environment once
+per request, preserving the separate Go source runtime environment. Verify import
+invalidation, copied-runner isolation, generic instantiation, callback/reset
+behavior, and the unchanged original fixtures under the race detector. Fixture
+bodies, assertion outputs, and harness deadlines remain unchanged.

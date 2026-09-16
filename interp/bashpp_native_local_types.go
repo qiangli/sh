@@ -12,6 +12,7 @@ package interp
 import (
 	"crypto/sha256"
 	"fmt"
+	"maps"
 	"sort"
 	"strconv"
 	"strings"
@@ -87,6 +88,15 @@ var bashPPLocalScalarTypes = map[string]bool{
 	"uintptr": true, "float32": true, "float64": true, "rune": true, "byte": true,
 }
 
+// Immutable descriptors are shared with copied toolchains. Both the syntax
+// file and import bindings determine their identity; a new file or changed
+// import must be rebuilt so the native session still rejects namespace drift.
+type bashPPLocalTypeCache struct {
+	file    *syntax.File
+	imports map[string]string
+	types   []bashPPLocalType
+}
+
 // bashPPLocalTypeDescriptors renders every original named type the helper can
 // mirror faithfully. The set is read from the loaded program rather than from
 // declarations executed so far, because the dependency session starts as soon
@@ -102,6 +112,15 @@ func (r *Runner) bashPPLocalTypeDescriptors() []bashPPLocalType {
 	if !r.bashPPGoSource || r.bashPPGoSourceFile == nil {
 		return nil
 	}
+	if cache := r.bashPPTools.localTypes; cache != nil && cache.file == r.bashPPGoSourceFile && maps.Equal(cache.imports, r.bashPPImports) {
+		return cache.types
+	}
+	types := r.bashPPBuildLocalTypeDescriptors()
+	r.bashPPTools.localTypes = &bashPPLocalTypeCache{file: r.bashPPGoSourceFile, imports: maps.Clone(r.bashPPImports), types: types}
+	return types
+}
+
+func (r *Runner) bashPPBuildLocalTypeDescriptors() []bashPPLocalType {
 	declared := map[string]syntax.BashPPTypeExpr{}
 	methods := map[string][]*syntax.BashPPFuncDecl{}
 	aliases := map[string]bool{}

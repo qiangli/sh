@@ -86,6 +86,7 @@ type bashPPToolchain struct {
 	// instantiations is the per-file closure of reached generic
 	// instantiations; see bashpp_sprint165_runtime_instantiations.go.
 	instantiations *bashPPInstantiationIndex
+	localTypes     *bashPPLocalTypeCache
 }
 
 type bashPPGoReview struct {
@@ -455,6 +456,7 @@ func (nativeBashPPEvaluator) Values(ctx context.Context, req bashPPEvalRequest) 
 
 func (r *Runner) bashPPEvalRequest() (bashPPEvalRequest, error) {
 	env := environStrings(r.writeEnv)
+	runtimeEnv := env
 	if r.bashPPTools.goBinary == "" {
 		identity, err := bashPPGoIdentity()
 		if err != nil {
@@ -479,7 +481,6 @@ func (r *Runner) bashPPEvalRequest() (bashPPEvalRequest, error) {
 		moduleDir = r.bashPPTools.moduleDir
 		importPath, testMain = r.bashPPTools.importPath, r.bashPPTools.testMain
 	}
-	runtimeEnv := environStrings(r.writeEnv)
 	if r.bashPPGoSource {
 		runtimeEnv = r.bashPPGoSourceEnvironment()
 	}
