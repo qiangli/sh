@@ -456,26 +456,37 @@ func (r *Runner) bashPPRunValueBuiltin(name string, c *syntax.BashPPCall) (*bash
 			r.bashPPBuiltinArity(name, "a slice type and length, with optional capacity", len(args))
 			return nil, false
 		}
-		length, ok := r.bashPPBuiltinInt(name, args[1])
+		length, ok := r.goSourceMakeSliceSize(args[1])
 		if !ok {
 			return nil, false
 		}
 		capacity := length
 		if len(args) == 3 {
-			capacity, ok = r.bashPPBuiltinInt(name, args[2])
+			capacity, ok = r.goSourceMakeSliceSize(args[2])
 			if !ok {
 				return nil, false
 			}
 		}
+		if r.goSourceMakeSliceFault(shape.Element, length, capacity) {
+			return nil, false
+		}
 		if length < 0 || capacity < length {
-			if r.bashPPSprint162MakeSlicePanic(length, capacity) {
-				return nil, false
-			}
 			r.bashPPBuiltinError("SIZE", "make slice length/capacity is invalid: %d/%d", length, capacity)
 			return nil, false
 		}
-		value := make([]any, length, capacity)
-		children := make([]*bashPPCollectionMeta, length, capacity)
+		var value []any
+		var children []*bashPPCollectionMeta
+		if r.bashPPGoSource {
+			var err error
+			value, children, err = goSourceAllocateSlice(length, capacity)
+			if err != nil {
+				r.exit.fatal(err)
+				return nil, false
+			}
+		} else {
+			value = make([]any, length, capacity)
+			children = make([]*bashPPCollectionMeta, length, capacity)
+		}
 		for i := range value {
 			value[i], children[i] = r.bashPPZeroValue(shape.Element)
 		}

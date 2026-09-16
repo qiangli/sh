@@ -195,6 +195,11 @@ func (r *Runner) goSourceLayoutType(typ syntax.BashPPTypeExpr, seen map[string]b
 		if basic, ok := bashPPGoBasicType(named.Name.Value); ok {
 			return basic, true
 		}
+		// Imported fields and array elements retain their authentic layout
+		// even when nested inside an interpreter-owned aggregate.
+		if native := r.bashPPEmbeddedNativeType(named); native != nil {
+			return native, true
+		}
 		key := bashPPTypeText(named)
 		if seen[key] {
 			return nil, false

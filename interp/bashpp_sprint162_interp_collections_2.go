@@ -86,11 +86,11 @@ func (r *Runner) bashPPSprint162MakeSlicePanic(length, capacity int) bool {
 	if !r.bashPPGoSource {
 		return false
 	}
-	message := "makeslice: len out of range"
+	message := "runtime error: makeslice: len out of range"
 	if length >= 0 && capacity < length {
-		message = "makeslice: cap out of range"
+		message = "runtime error: makeslice: cap out of range"
 	}
-	r.bashPPRaise(message)
+	r.bashPPRaiseRuntimeError("runtime.errorString", message)
 	return true
 }
 
