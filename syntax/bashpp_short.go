@@ -1006,15 +1006,24 @@ func bashppAssign(ce *CallExpr, redirs []*Redirect, goRegion bool) *BashPPAssign
 			if values, valuesOK := bashppShortValues(ce.Args[eq+1:], true); valuesOK {
 				out := &BashPPAssign{Names: names, Values: values, Eq: ce.Args[eq].Pos()}
 				for _, value := range values {
-					out.ValueExprs = append(out.ValueExprs, bashppScalarExpr(value))
+					expr := bashppScalarExpr(value)
+					if expr == nil {
+						out.ValueExprs = nil
+						break
+					}
+					out.ValueExprs = append(out.ValueExprs, expr)
 				}
-				return out
+				if len(out.ValueExprs) != 0 || len(names) != 1 {
+					return out
+				}
 			}
 			// Once an identifier-list `=` is seen in a committed Go region,
 			// malformed or not-yet-supported RHS syntax must not fall through and
 			// execute as a shell command. Preserve its words for a positioned
 			// runtime EASSIGN-FORM diagnostic.
-			return &BashPPAssign{Names: names, Values: ce.Args[eq+1:], Eq: ce.Args[eq].Pos()}
+			if len(names) != 1 || !bashppSupportedValue(bashppJoinWords(ce.Args[eq+1:])) {
+				return &BashPPAssign{Names: names, Values: ce.Args[eq+1:], Eq: ce.Args[eq].Pos()}
+			}
 		}
 	}
 	for i := 1; i < eq; i++ {
@@ -1087,6 +1096,11 @@ func (p *Parser) bashppUpdate(ce *CallExpr, redirs []*Redirect, goRegion bool) C
 		return inc
 	}
 	if len(ce.Args) == 1 {
+		for _, part := range ce.Args[0].Parts {
+			if _, ok := part.(*Lit); !ok {
+				return nil
+			}
+		}
 		text := bashppWordText(ce.Args[0])
 		for _, value := range []string{"<<=", ">>=", "&^=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^="} {
 			if at := strings.Index(text, value); at > 0 && at+len(value) < len(text) {
@@ -1096,6 +1110,9 @@ func (p *Parser) bashppUpdate(ce *CallExpr, redirs []*Redirect, goRegion bool) C
 				valuePos := posAddCol(opPos, len(value))
 				valueLit := &Lit{ValuePos: valuePos, ValueEnd: ce.Args[0].End(), Value: text[at+len(value):]}
 				targetWord, valueWord := &Word{Parts: []WordPart{targetLit}}, &Word{Parts: []WordPart{valueLit}}
+				if bashppAssignmentTargetExpr(targetWord) == nil {
+					return nil
+				}
 				return &BashPPUpdate{TargetWord: targetWord, Target: bashppAssignmentTargetExpr(targetWord),
 					Op:        &Lit{ValuePos: opPos, ValueEnd: valuePos, Value: value},
 					ValueWord: valueWord, Value: bashppScalarExpr(valueWord)}
@@ -1107,6 +1124,11 @@ func (p *Parser) bashppUpdate(ce *CallExpr, redirs []*Redirect, goRegion bool) C
 	}
 	op := bashppBareLit(ce.Args[1])
 	if op == nil || !strings.HasSuffix(op.Value, "=") || op.Value == "=" || op.Value == ":=" {
+		return nil
+	}
+	switch bashppAssignmentTargetExpr(ce.Args[0]).(type) {
+	case *BashPPIdent, *BashPPIndexExpr, *BashPPSelectorExpr, *BashPPDerefExpr, *BashPPParenExpr:
+	default:
 		return nil
 	}
 	valueWord := bashppJoinWords(ce.Args[2:])
@@ -1156,6 +1178,9 @@ func bashppStandaloneIncDec(words []*Word) *BashPPIncDec {
 		return nil
 	}
 	target := bashppAssignmentTargetExpr(targetWord)
+	if target == nil {
+		return nil
+	}
 	var name *Lit
 	if ident, ok := target.(*BashPPIdent); ok {
 		name = ident.Name
@@ -1658,7 +1683,7 @@ func (p *Parser) bashppParenForm(ce *CallExpr) Command {
 		op := len(ce.Args) - 2
 		opLit, funLit := bashppBareLit(ce.Args[op]), bashppWordLit(ce.Args[op+1])
 		var ok bool
-		if opLit != nil && opLit.Value == "=" && funLit != nil && p.bashppFuncDepth > 0 {
+		if opLit != nil && opLit.Value == "=" && funLit != nil {
 			lhs, ok = bashppShortLHS(ce.Args[:op])
 			if !ok {
 				return nil
@@ -1685,7 +1710,7 @@ func (p *Parser) bashppParenForm(ce *CallExpr) Command {
 	} else {
 		return nil
 	}
-	if short && p.bashppFuncDepth > 0 && name != nil && strings.HasSuffix(name.Value, ".") {
+	if short && name != nil && strings.HasSuffix(name.Value, ".") {
 		txn := p.beginBashPPTxn()
 		lparen := p.pos
 		p.next()
@@ -1731,7 +1756,7 @@ func (p *Parser) bashppParenForm(ce *CallExpr) Command {
 	if name == nil || !bashppSelector(name.Value) {
 		return nil
 	}
-	if !short && !strings.Contains(name.Value, ".") && p.r == ')' && !p.bashppCallable(name.Value) {
+	if !short && !assignCall && !strings.Contains(name.Value, ".") && p.r == ')' && !p.bashppCallable(name.Value) {
 		// A zero-argument bare call is indistinguishable from the head of a
 		// shell function declaration until its name has been declared. Keep
 		// unknown names in the shell grammar; source-block declarations add
@@ -1743,11 +1768,11 @@ func (p *Parser) bashppParenForm(ce *CallExpr) Command {
 	p.next()
 	// `make(chan T, n)` is not an ordinary call: its first argument is a TYPE,
 	// which no argument list can hold, so it gets its own reader. Like every
-	// other channel form it is admitted only inside a committed func body —
-	// see sh/syntax/bashpp_chan.go — and a `make(` the channel grammar does
+	// other channel form it uses the existing typed channel reader, including
+	// at mixed top level. A `make(` the channel grammar does
 	// not spell rewinds to the shell, which keeps `make(1)` and the GNU make
 	// command exactly as they are.
-	if short && p.bashppFuncDepth > 0 && name.Value == "make" {
+	if short && name.Value == "make" {
 		makeTxn := p.beginBashPPTxn()
 		mk := p.bashppMakeChanTail(name, lparen)
 		if mk == nil {
@@ -1755,10 +1780,10 @@ func (p *Parser) bashppParenForm(ce *CallExpr) Command {
 		} else {
 			makeTxn.commit(p)
 			txn.commit(p)
-			return &BashPPShortDecl{Lhs: lhs, Class: ClassR, OpPos: opPos, GoRegion: p.bashppFuncDepth > 0, MakeChan: mk}
+			return &BashPPShortDecl{Lhs: lhs, Class: ClassR, OpPos: opPos, GoRegion: true, MakeChan: mk}
 		}
 	}
-	if (short || (assignNew && len(lhs) == 1)) && p.bashppFuncDepth > 0 && name.Value == "new" {
+	if (short || (assignNew && len(lhs) == 1)) && name.Value == "new" {
 		newTxn := p.beginBashPPTxn()
 		typeWord := p.getWord()
 		var typ BashPPTypeExpr
@@ -1790,7 +1815,7 @@ func (p *Parser) bashppParenForm(ce *CallExpr) Command {
 	var argNames []*Lit
 	var ellipsis Pos
 	var ok bool
-	if (short || assignCall) && p.bashppFuncDepth > 0 && name.Value == "make" {
+	if (short || assignCall) && name.Value == "make" {
 		makeTxn := p.beginBashPPTxn()
 		args, argTypes, ok = p.bashppMakeValueArgs()
 		if ok {
@@ -1847,7 +1872,7 @@ func (p *Parser) bashppParenForm(ce *CallExpr) Command {
 		!call.Ellipsis.IsValid() && bashppScalarConversionType(call.Fun[0].Value) {
 		if arg := bashppScalarExpr(call.Args[0]); arg != nil {
 			return &BashPPShortDecl{Lhs: lhs, Class: ClassR, OpPos: opPos,
-				GoRegion: p.bashppFuncDepth > 0,
+				GoRegion: true,
 				Expr:     &BashPPConvertExpr{ConvType: call.Fun[0], Lparen: call.Lparen, X: arg, Rparen: call.Rparen}}
 		}
 	}
@@ -1897,7 +1922,7 @@ func (p *Parser) bashppParenForm(ce *CallExpr) Command {
 	}
 	text.WriteByte(')')
 	rhs := &Word{Parts: []WordPart{&Lit{ValuePos: name.Pos(), ValueEnd: call.End(), Value: text.String()}}}
-	return &BashPPShortDecl{Lhs: lhs, Rhs: []*Word{rhs}, Class: ClassR, OpPos: opPos, GoRegion: p.bashppFuncDepth > 0, Call: call}
+	return &BashPPShortDecl{Lhs: lhs, Rhs: []*Word{rhs}, Class: ClassR, OpPos: opPos, GoRegion: true, Call: call}
 }
 
 // bashppMakeValueArgs reads make(T[, n[, cap]]) for slice and map T. Channel

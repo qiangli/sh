@@ -41,9 +41,9 @@ type oneByteReader struct{ r *strings.Reader }
 
 func (r *oneByteReader) Read(p []byte) (int, error) { return r.r.Read(p[:1]) }
 
-func TestBashPPImportFallbackExact(t *testing.T) {
+func TestBashPPImportReservedNearMisses(t *testing.T) {
 	shapes := []string{
-		`import`, `"import" "fmt"`, `import fmt`, `import 'fmt'`, `import "$pkg"`,
+		`import`, `import fmt`, `import 'fmt'`, `import "$pkg"`,
 		`import if "fmt"`, `import f "fmt" extra`,
 		`X=1 import "fmt"`, `import "fmt" >out`, `import "bad path"`,
 		"import \"fmt\\nlog\"", `import "fmt\\"`,
@@ -53,8 +53,36 @@ func TestBashPPImportFallbackExact(t *testing.T) {
 		`import (; "fmt")`, "import (\n\t\"fmt\";;\n)", "import (\n\t\"fmt\" \"log\"\n)",
 	}
 	for _, src := range shapes {
+		assertImportReservedError(t, src, false)
+		assertImportReservedError(t, src, true)
+	}
+}
+
+func TestBashPPImportShellEscapes(t *testing.T) {
+	for _, src := range []string{`"import" "fmt"`, `'import' "fmt"`, `command import "fmt"`} {
 		assertImportFallbackExact(t, src, false)
 		assertImportFallbackExact(t, src, true)
+	}
+}
+
+func assertImportReservedError(t *testing.T, src string, oneByte bool) {
+	t.Helper()
+	var rd interface{ Read([]byte) (int, error) } = strings.NewReader(src)
+	if oneByte {
+		rd = &oneByteReader{r: strings.NewReader(src)}
+	}
+	_, err := NewParser(Variant(LangBashPP)).Parse(rd, "reserved.sh")
+	want := "reserved.sh:1:1: invalid import statement; use command import to invoke a shell command"
+	if strings.HasPrefix(src, "X=1 ") {
+		want = "reserved.sh:1:5: invalid import statement; use command import to invoke a shell command"
+	}
+	switch src {
+	case "import (\n\t`fmt`\n)\n", "import (\n\t'fmt'\n)\n", "import (\n\t\"fmt\" extra\n)", `import (; "fmt")`, "import (\n\t\"fmt\";;\n)", "import (\n\t\"fmt\" \"log\"\n)":
+		want = "reserved.sh:1:1: `foo(` must be followed by `)`"
+	}
+
+	if fmt.Sprint(err) != want {
+		t.Errorf("reserved import %q oneByte=%v: got %v; want %s", src, oneByte, err, want)
 	}
 }
 
@@ -104,7 +132,7 @@ func TestGo127StdlibAllowlistProvenanceAndNearMisses(t *testing.T) {
 				t.Fatalf("near miss %q unexpectedly allowed (from %q)", near, path)
 			}
 			if strings.HasPrefix(near, "/") || strings.HasPrefix(near, "./") || strings.HasPrefix(near, "../") {
-				assertImportFallbackExact(t, `import "`+near+`"`, true)
+				assertImportReservedError(t, `import "`+near+`"`, true)
 			}
 		}
 	}
@@ -296,22 +324,17 @@ func TestBashPPPythonImport(t *testing.T) {
 	}
 }
 
-func TestBashPPPythonImportFallback(t *testing.T) {
+func TestBashPPPythonImportReservedNearMisses(t *testing.T) {
 	for _, src := range []string{
 		`import python`,
 		`import python "mod" as`, `import python "mod" alias x`,
 	} {
-		assertImportFallbackExact(t, src, false)
-		assertImportFallbackExact(t, src, true)
+		assertImportReservedError(t, src, false)
+		assertImportReservedError(t, src, true)
 	}
 	for _, src := range []string{`import python "mod" as _`, `import python "mod" as .`} {
-		file, err := NewParser(Variant(LangBashPP)).Parse(strings.NewReader(src), "")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, claimed := file.Stmts[0].Cmd.(*BashPPImport); claimed {
-			t.Fatalf("claimed invalid Python import %q", src)
-		}
+		assertImportReservedError(t, src, false)
+		assertImportReservedError(t, src, true)
 	}
 	for _, lang := range []LangVariant{LangBash, LangPOSIX} {
 		file, err := NewParser(Variant(lang)).Parse(strings.NewReader(`import python "mod" as py`), "")

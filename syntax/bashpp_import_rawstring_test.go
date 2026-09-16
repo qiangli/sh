@@ -8,22 +8,10 @@ import (
 	"testing"
 )
 
-// Raw-string imports: an explicit compatibility decision, NOT an accident.
-//
-// Go spells an import path with either an interpreted string ("fmt") or a raw
-// string (`fmt`). Bash++ claims ONLY the interpreted form, and this file is
-// the decision rather than a description of whatever the parser happens to do.
-//
-// The reason is that a backquote is already shell command substitution. In
-// stock bash, `import ` + "`fmt`" runs the command `fmt` and passes its output
-// to `import`, so the shape is Class E with a REAL and common meaning. Claiming
-// it would silently change what such a line does, which is the one thing the
-// superset rule forbids. Single-quoted and $'...' forms fall to shell for the
-// same reason: they are ordinary shell quoting, not Go syntax.
-//
-// The cost of the decision is that `import ` + "`fmt`" is not a Bash++ import.
-// That is accepted: a user who wants one writes the interpreted form, which is
-// also what gofmt produces.
+// Mixed Bash++ reserves unquoted import. Only the supported interpreted
+// string form is accepted; raw/shell quoting is a positioned import error.
+// Quoting the command name or using command import preserves shell semantics.
+// Selected Go compilation units separately keep Go raw-string semantics.
 func TestBashPPImportClaimsOnlyInterpretedStrings(t *testing.T) {
 	for _, test := range []struct {
 		src    string
@@ -40,6 +28,11 @@ func TestBashPPImportClaimsOnlyInterpretedStrings(t *testing.T) {
 	} {
 		t.Run(test.reason, func(t *testing.T) {
 			f, err := NewParser(Variant(LangBashPP)).Parse(strings.NewReader(test.src), "t")
+			if !test.claim {
+				assertImportReservedError(t, test.src, false)
+				assertImportReservedError(t, test.src, true)
+				return
+			}
 			if err != nil {
 				t.Fatalf("parse %q: %v", test.src, err)
 			}
@@ -51,22 +44,19 @@ func TestBashPPImportClaimsOnlyInterpretedStrings(t *testing.T) {
 	}
 }
 
-// A raw string inside a grouped import must not merely be unclaimed: the
-// resulting error has to be byte-identical to Classic Bash's, or Bash++ would
-// have changed what a broken script reports.
-func TestBashPPGroupedRawStringMatchesClassicBash(t *testing.T) {
+// Grouped near misses also diagnose the reserved marker, while Classic's
+// existing rejection remains independent of the Bash++ diagnostic.
+func TestBashPPGroupedRawStringReservedError(t *testing.T) {
 	for _, src := range []string{
 		"import (\n\t`fmt`\n)\n",
 		"import (\n\t'fmt'\n)\n",
 	} {
 		bashErr := parseErrText(t, LangBash, src)
-		bashPPErr := parseErrText(t, LangBashPP, src)
 		if bashErr == "" {
 			t.Fatalf("%q: expected Classic Bash to reject the shape", src)
 		}
-		if bashErr != bashPPErr {
-			t.Fatalf("%q: bash %q != bash++ %q", src, bashErr, bashPPErr)
-		}
+		assertImportReservedError(t, src, false)
+		assertImportReservedError(t, src, true)
 	}
 	// The interpreted form is the one Bash++ claims, and Classic still rejects it.
 	const claimed = "import (\n\t\"fmt\"\n)\n"

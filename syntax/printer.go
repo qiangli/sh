@@ -1228,10 +1228,9 @@ func (p *Printer) stmt(s *Stmt) {
 		// share the same flush-the-operator convention.
 		if p.spaceRedirects && r.Op != DplIn && r.Op != DplOut && r.Op != Hdoc && r.Op != DashHdoc {
 			p.space()
-		} else if s.Cmd == nil && r.BashPPKeepSpace {
-			// Keep a commandless `< -file` distinct from the Bash++ receive
-			// `<-file` when reparsed. A command-prefixed redirect is already
-			// unambiguous and retains the base formatter's compact spelling.
+		} else if r.BashPPKeepSpace {
+			// Preserve the space that distinguishes a shell redirect from
+			// a Bash++ channel arrow when this statement is reparsed.
 			p.space()
 		} else {
 			p.wantSpace = spaceRequired

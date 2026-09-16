@@ -24,9 +24,8 @@ import (
 //
 // THE THREE RULES the re-expressed gate enforces, in TestBashPPMatchesBash:
 //
-//  1. NEVER LOSE. If LangBash parses an input, LangBashPP must parse it too.
-//     Bash++ is a superset; it may never reject a script bash accepts,
-//     whatever the class.
+//  1. Rejection changes require an exact Sprint198 policy row and diagnostic.
+//     Every other classic input must remain accepted.
 //  2. MEANING PRESERVED, OR NAMED. If LangBash parses an input, the two ASTs,
 //     node positions and printed bytes must be identical UNLESS a published
 //     Class E row licenses the divergence at a real bash command position.
@@ -36,7 +35,8 @@ import (
 //     but the acceptance must still be attributable to a recognized start
 //     site, so that a parser bug cannot hide as "purely additive".
 //
-// WHY CLASS E IS THE ONLY LICENSE. The class is the measured answer to "what
+// Class E licenses accepted-tree changes; the exact Sprint198 diagnostic rows
+// below separately cover deliberate rejection. The class answers "what
 // does stock bash 5.3 do with this shape". Class R means bash REJECTS it, so
 // claiming the shape takes nothing away from anyone and needs no row. Class E
 // means bash ACCEPTS it, so claiming it changes what an existing script does —
@@ -734,27 +734,121 @@ func TestBashPPAcceptedShapesAreLicensed(t *testing.T) {
 	})
 }
 
-// TestBashPPRejectedShapesClaimNothing is the executable form of the rejection
-// evidence that sent the first tranche back.
-//
-// Each input below is an ORDINARY BASH COMMAND that the first cut of the
-// dispatch turned into a *BashPPDecl. They fall into two groups and the groups
-// fail for different reasons, which is why both are listed:
-//
-//   - a Go reserved word where a name belongs. `var if = 1`, `var type = 1`
-//     and `const return = 1` are not unsupported declarations, they are not
-//     declarations at all; Go has no such identifier. An arity-plus-identifier
-//     test that reuses the shell's notion of a name accepts every one of them.
-//   - a last word that is not a Go expression. `var x = 1,` and `var x = {1}`
-//     have the supported ARITY and nothing else, which is precisely what an
-//     arity check cannot see.
-//
-// Claiming any of them changes what a working script does at a site bash
-// accepts today, which is the one outcome Class E forbids. The assertion here
-// is the narrow one — nothing was claimed;
-// TestBashPPUnsupportedDeclBodyStaysShell separately asserts the whole tree,
-// positions and printed bytes stay identical to LangBash in every reader and
-// POSIX configuration.
+// bashppSprint198DiagnosticRows enumerates deliberate rejection changes,
+// measured with GNU Bash 5.3 -n. Matching is by complete input, never by an
+// error prefix or the presence of a keyword somewhere in unrelated source.
+var bashppSprint198DiagnosticRows = map[string]string{
+	"> out var x = 1":                   "var",
+	"const":                             "const",
+	"const K = 2 extra":                 "const",
+	"const return = 1":                  "const",
+	"const() { :; }":                    "const-group",
+	"e=1 var x = 1":                     "var",
+	"echo $(var x = 1 extra)":           "var",
+	"echo hi\nvar x = 1 extra":          "var",
+	"echo ready; package main":          "package",
+	"f() { var x = 1 extra; }":          "var",
+	"func":                              "func",
+	"func() { :; }":                     "function:func",
+	"goto":                              "goto",
+	"goto() { :; }":                     "function:goto",
+	"if true; then var x = foo bar; fi": "var",
+	"import":                            "import",
+	"import() { :; }":                   "function:import",
+	"package() { :; }":                  "function:package",
+	"var":                               "var",
+	"var \"x\" = 1":                     "var",
+	"var $x = 1":                        "var",
+	"var -x = 1":                        "var",
+	"var = 1":                           "var",
+	"var if = 1":                        "var",
+	"var type = 1":                      "var",
+	"var x":                             "var",
+	"var x 1":                           "var",
+	"var x := 1":                        "var",
+	"var x =":                           "var",
+	"var x = \"\"":                      "var",
+	"var x = \"a b\"":                   "var",
+	"var x = $(id)":                     "var",
+	"var x = $y":                        "var",
+	"var x = ${y}":                      "var",
+	"var x = 'q'":                       "var",
+	"var x = *":                         "var",
+	"var x = -1":                        "var",
+	"var x = -f":                        "var",
+	"var x = 007":                       "var",
+	"var x = 0x1f":                      "var",
+	"var x = 1 > out":                   "var",
+	"var x = 1 a b c d e":               "var",
+	"var x = 1 extra":                   "var",
+	"var x = 1 extra\nvar y = 2 extra":  "var",
+	"var x = 1,":                        "var",
+	"var x = 1.5":                       "var",
+	"var x = 1_000":                     "var",
+	"var x = `id`":                      "var",
+	"var x = a/b":                       "var",
+	"var x = a=b":                       "var",
+	"var x = foo bar":                   "var",
+	"var x = y":                         "var",
+	"var x = {1}":                       "var",
+	"var x-y = 1":                       "var",
+	"var x=1":                           "var",
+	"var() { :; }":                      "function:var",
+	"x :=":                              ":=",
+	"x := 1 extra":                      ":=",
+}
+
+func bashppSprint198Diagnostic(in string) string {
+	word := bashppSprint198DiagnosticRows[in]
+	switch {
+	case word == "":
+		return ""
+	case word == "const-group":
+		return "bash++ const declaration must end after closing parenthesis"
+	case word == ":=":
+		return "invalid := binding"
+	case word == "package":
+		return "package must begin a Go compilation unit; use the Go source route"
+	case strings.HasPrefix(word, "function:"):
+		return strings.TrimPrefix(word, "function:") + " is reserved and cannot name a shell function"
+	default:
+		return "invalid " + word + " statement; use command " + word + " to invoke a shell command"
+	}
+}
+
+func bashppSprint198DiagnosticMatches(in string, err error) bool {
+	pe, ok := err.(ParseError)
+	return ok && bashppSprint198Diagnostic(in) != "" && pe.Text == bashppSprint198Diagnostic(in)
+}
+
+func TestBashPPSprint198DiagnosticPolicy(t *testing.T) {
+	for in := range bashppSprint198DiagnosticRows {
+		t.Run(in, func(t *testing.T) {
+			if _, err := bashppParse(LangBash, in); err != nil {
+				t.Fatalf("classic input rejected: %v", err)
+			}
+			if _, err := bashppParse(LangBashPP, in); !bashppSprint198DiagnosticMatches(in, err) {
+				t.Fatalf("diagnostic = %v, want %q", err, bashppSprint198Diagnostic(in))
+			}
+		})
+	}
+	for _, word := range []string{"var", "const", "func", "import", "package", "goto"} {
+		for _, in := range []string{"command " + word + " extra", "\"" + word + "\" extra", "/bin/" + word + " extra"} {
+			a, ae := bashppParse(LangBash, in)
+			b, be := bashppParse(LangBashPP, in)
+			if ae != nil || be != nil {
+				t.Errorf("escape %q rejected: %v / %v", in, ae, be)
+				continue
+			}
+			if diff := bashppTreeDiff(a, b); diff != "" {
+				t.Errorf("escape %q changed: %s", in, diff)
+			}
+		}
+	}
+}
+
+// These formerly silent fallback witnesses now commit to a reserved declaration
+// start. Assert the named diagnostic instead of licensing arbitrary rejection.
 func TestBashPPRejectedShapesClaimNothing(t *testing.T) {
 	t.Parallel()
 
@@ -762,6 +856,12 @@ func TestBashPPRejectedShapesClaimNothing(t *testing.T) {
 		t.Run(in, func(t *testing.T) {
 			t.Parallel()
 			f, err := bashppParse(LangBashPP, in)
+			if want := bashppSprint198Diagnostic(in); want != "" {
+				if !bashppSprint198DiagnosticMatches(in, err) {
+					t.Fatalf("diagnostic = %v, want %q", err, want)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatalf("LangBashPP rejected %q: %v; a Class E near-miss must "+
 					"fall back silently, never diagnose", in, err)

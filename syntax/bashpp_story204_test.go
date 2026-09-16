@@ -36,16 +36,7 @@ func TestBashPPTypedConstDeclaration(t *testing.T) {
 }
 
 func TestBashPPTypedConstRequiresInitializer(t *testing.T) {
-	f, err := NewParser(Variant(LangBashPP)).Parse(strings.NewReader("const Limit int8"), "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	Walk(f, func(node Node) bool {
-		if _, ok := node.(*BashPPDecl); ok {
-			t.Fatal("typed const without an initializer was claimed")
-		}
-		return true
-	})
+	bashppCheckDiagnostic(t, "const Limit int8", "invalid const statement; use command const to invoke a shell command")
 }
 
 func TestBashPPTypedConstClassicPOSIXIsolation(t *testing.T) {

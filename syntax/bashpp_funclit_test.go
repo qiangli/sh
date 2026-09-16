@@ -286,25 +286,17 @@ func TestBashPPFuncLitClassicIsolation(t *testing.T) {
 		}
 	}
 
-	// The excluded shape: a bash function definition named `func`, which stays
-	// shell under Bash++ because only an unbounded scan could tell it from a
-	// parameterless literal. See recognizeFuncLit.
 	const shellFunc = "func() { echo hi; }\n"
-	for _, lang := range []LangVariant{LangBash, LangBashPP} {
-		cmd := func() Command {
-			f, err := NewParser(Variant(lang)).Parse(strings.NewReader(shellFunc), "")
-			if err != nil {
-				t.Fatalf("%v: %v", lang, err)
-			}
-			return f.Stmts[0].Cmd
-		}()
-		if _, ok := cmd.(*FuncDecl); !ok {
-			t.Fatalf("%v parsed %q as %T, want the shell *FuncDecl", lang, shellFunc, cmd)
+	for _, lang := range []LangVariant{LangBash, LangPOSIX} {
+		f, err := NewParser(Variant(lang)).Parse(strings.NewReader(shellFunc), "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := f.Stmts[0].Cmd.(*FuncDecl); !ok {
+			t.Fatalf("classic function: %T", f.Stmts[0].Cmd)
 		}
 	}
-	if diff := bashppParseDiff(t, shellFunc); diff != "" {
-		t.Fatalf("dialects disagree about %q: %s", shellFunc, diff)
-	}
+	bashppCheckDiagnostic(t, shellFunc, "func is reserved and cannot name a shell function")
 
 	// POSIX MODE is a runtime gate, not a parse-time one: the tree survives so
 	// the interpreter can refuse it with a diagnostic of its own.

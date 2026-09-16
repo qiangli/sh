@@ -116,6 +116,6 @@ func TestBashPPReadonlyMutationAST(t *testing.T) {
 
 func TestBashPPReadonlyNearMissStaysShell(t *testing.T) {
 	bashppCheckIdentical(t, "read-only cfg")
-	bashppCheckIdentical(t, "x := map[string]int{\necho ordinary\n")
-	bashppCheckIdentical(t, "x := map[string]int{\necho ordinary\n}\n")
+	bashppCheckDiagnostic(t, "x := map[string]int{\necho ordinary\n", "invalid := binding")
+	bashppCheckDiagnostic(t, "x := map[string]int{\necho ordinary\n}\n", "invalid := binding")
 }

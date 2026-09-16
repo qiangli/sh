@@ -32,7 +32,13 @@ func TestBashPPGoCallAndClassicIsolation(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%v: %v", lang, err)
 		}
-		for _, stmt := range f.Stmts {
+		for i, stmt := range f.Stmts {
+			if lang == LangBashPP && i == 1 {
+				if _, ok := stmt.Cmd.(*BashPPSend); !ok {
+					t.Fatalf("channel send: %T", stmt.Cmd)
+				}
+				continue
+			}
 			if _, ok := stmt.Cmd.(*CallExpr); !ok {
 				t.Fatalf("%v: got %T, want shell CallExpr", lang, stmt.Cmd)
 			}

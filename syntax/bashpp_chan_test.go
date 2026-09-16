@@ -410,9 +410,37 @@ func TestBashPPChanFormsInertInBashAndPOSIX(t *testing.T) {
 		t.Run(shape.name, func(t *testing.T) {
 			// LangBashPP must agree with LangBash byte for byte: same AST,
 			// same node offsets, same printed output.
-			if diff := bashppParseDiff(t, shape.src); diff != "" {
-				t.Errorf("input %q: %s", shape.src, diff)
+			switch shape.name {
+			case "send is a redirect", "receive is a redirect", "short decl receive is a redirect", "tuple receive is a redirect":
+				pp, err := bashppParse(LangBashPP, shape.src)
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := map[string]string{"send is a redirect": "*syntax.BashPPSend", "receive is a redirect": "*syntax.BashPPReceive", "short decl receive is a redirect": "*syntax.BashPPShortDecl", "tuple receive is a redirect": "*syntax.BashPPShortDecl"}[shape.name]
+				if got := fmt.Sprintf("%T", pp.Stmts[0].Cmd); got != want {
+					t.Errorf("%q node=%s want=%s", shape.src, got, want)
+				}
+			case "spaced dash redirect":
+				pp, err := bashppParse(LangBashPP, shape.src)
+				if err != nil {
+					t.Fatal(err)
+				}
+				classic, err := bashppParse(LangBash, shape.src)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got, want := bashppShellShape(pp.Stmts), bashppShellShape(classic.Stmts); got != want {
+					t.Fatalf("shell structure %q want %q", got, want)
+				}
+				if got, err := bashppPrint(pp); err != nil || got != shape.src {
+					t.Fatalf("spaced redirect printed %q: %v", got, err)
+				}
+			default:
+				if diff := bashppParseDiff(t, shape.src); diff != "" {
+					t.Errorf("input %q: %s", shape.src, diff)
+				}
 			}
+
 			// And LangPOSIX must be untouched: it parses what it always
 			// parsed, and never grows a Bash++ node.
 			f, err := bashppParse(LangPOSIX, shape.src)

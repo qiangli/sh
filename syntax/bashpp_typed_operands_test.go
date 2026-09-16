@@ -105,10 +105,22 @@ func TestBashPPTypedOperands(t *testing.T) {
 func TestBashPPTypedOperandsShellIsolation(t *testing.T) {
 	for _, lang := range []LangVariant{LangBashPP, LangBash, LangPOSIX} {
 		for _, src := range []string{"s=`printf hello`\n", "echo `printf hello`\n", "x := `printf hello`\n", "f() { return 0 && echo yes; }\n", "(echo hello)\n"} {
+
 			f, err := NewParser(Variant(lang)).Parse(guardByteReader{strings.NewReader(src)}, "")
 			if err != nil {
 				t.Fatal(err)
 			}
+			if lang == LangBashPP && src == "x := `printf hello`\n" {
+				d, ok := f.Stmts[0].Cmd.(*BashPPShortDecl)
+				if !ok {
+					t.Fatalf("Go binding: %T", f.Stmts[0].Cmd)
+				}
+				if _, ok := d.Expr.(*BashPPBasicLit); !ok {
+					t.Fatalf("raw literal: %#v", d)
+				}
+				continue
+			}
+
 			Walk(f, func(n Node) bool {
 				switch n.(type) {
 				case *BashPPShortDecl, *BashPPReturn, *BashPPBasicLit:

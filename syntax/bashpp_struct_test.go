@@ -107,5 +107,5 @@ func TestBashPPStructDialectAndTopLevelFallback(t *testing.T) {
 		})
 	}
 	// A top-level Class-E near miss remains the exact shell tree Bash sees.
-	bashppCheckIdentical(t, "x := Config{Name: nope extra}\n")
+	bashppCheckDiagnostic(t, "x := Config{Name: nope extra}\n", "invalid := binding")
 }

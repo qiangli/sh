@@ -234,35 +234,30 @@ func TestBashPPScalarExpressionShellOperatorsReachTheTypedTree(t *testing.T) {
 	}
 }
 
-// TestBashPPScalarExpressionShellOperatorsStayShellOutsideGoRegions pins the
-// top-level Class-E boundary. `x := 1` is a published Class-E declaration and
-// is claimed there as it always was, but the operator after it is not: the
-// pipeline, background and redirect structure bash builds must survive byte
-// for byte, so `x := 1 < 2` still redirects stdin from the file `2`.
-func TestBashPPScalarExpressionShellOperatorsStayShellOutsideGoRegions(t *testing.T) {
+// Enumerated top-level Go bindings own their complete expression; Classic
+// grammars continue to parse the same bytes as shell commands and redirects.
+func TestBashPPScalarExpressionOperatorsAtTopLevel(t *testing.T) {
 	for _, test := range bashppShellOperatorExprs {
 		t.Run(test.expr, func(t *testing.T) {
+			bashppCheckIdentical(t, "command x := "+test.expr+"\n")
 			src := "x := " + test.expr + "\n"
 			for _, posix := range []bool{false, true} {
-				bash, bashErr := bashppParseAs(LangBash, src, posix, bashppReadModes[0].wrap)
 				for _, mode := range bashppReadModes {
-					pp, ppErr := bashppParseAs(LangBashPP, src, posix, mode.wrap)
-					if (bashErr == nil) != (ppErr == nil) {
-						t.Fatalf("%s: bash err=%s but bashpp err=%s",
-							mode.name, errText(bashErr), errText(ppErr))
+					pp, err := bashppParseAs(LangBashPP, src, posix, mode.wrap)
+					if err != nil {
+						t.Fatal(err)
 					}
-					if ppErr != nil {
-						continue
+					if len(pp.Stmts) != 1 || len(pp.Stmts[0].Redirs) != 0 || pp.Stmts[0].Background {
+						t.Fatalf("Go binding retained shell operators: %#v", pp.Stmts)
 					}
-					if got, want := bashppShellShape(pp.Stmts), bashppShellShape(bash.Stmts); got != want {
-						t.Fatalf("%s posix=%v: shell shape %s, want %s", mode.name, posix, got, want)
+					d, ok := pp.Stmts[0].Cmd.(*BashPPShortDecl)
+					if !ok {
+						t.Fatalf("binding: %T", pp.Stmts[0].Cmd)
 					}
-					Walk(pp, func(node Node) bool {
-						if binary, ok := node.(*BashPPBinaryExpr); ok {
-							t.Errorf("%s: operator %q was claimed at top level", mode.name, binary.Op.Value)
-						}
-						return true
-					})
+					expr, ok := d.Expr.(*BashPPBinaryExpr)
+					if !ok || expr.Op.Value != test.op {
+						t.Fatalf("operator: %#v", d.Expr)
+					}
 				}
 			}
 		})
@@ -370,6 +365,13 @@ func TestBashPPScalarExpressionCarrierDeclinesNearMisses(t *testing.T) {
 			src := "func main() {\n\t" + test.body + "\n}\n"
 			for _, mode := range bashppReadModes {
 				f, err := bashppParseAs(LangBashPP, src, false, mode.wrap)
+				if test.body != "x := 1 &" {
+					pe, ok := err.(ParseError)
+					if !ok || pe.Text != "invalid := binding" || pe.Pos.Line() != 2 {
+						t.Fatalf("%s: expected positioned invalidbinding, got %v", mode.name, err)
+					}
+					continue
+				}
 				if err != nil {
 					t.Fatalf("%s: %v", mode.name, err)
 				}
@@ -421,8 +423,20 @@ func TestBashPPScalarExpressionExactPositions(t *testing.T) {
 	}
 }
 
-func TestBashPPScalarExpressionDoesNotClaimTopLevelShellCommand(t *testing.T) {
-	bashppCheckIdentical(t, "x := 1 + 2\n")
+func TestBashPPScalarExpressionClaimsTopLevelBinding(t *testing.T) {
+	for _, mode := range bashppReadModes {
+		f, err := bashppParseAs(LangBashPP, "x := 1 + 2\n", false, mode.wrap)
+		if err != nil {
+			t.Fatal(err)
+		}
+		d, ok := f.Stmts[0].Cmd.(*BashPPShortDecl)
+		if !ok {
+			t.Fatalf("binding: %T", f.Stmts[0].Cmd)
+		}
+		if _, ok := d.Expr.(*BashPPBinaryExpr); !ok {
+			t.Fatalf("expression: %T", d.Expr)
+		}
+	}
 }
 
 func TestBashPPGoCallsAndTerminators(t *testing.T) {
@@ -532,7 +546,7 @@ func TestBashPPCallBeforePipeFallsBackExactly(t *testing.T) {
 
 func TestBashPPShortPorousShapesStayShell(t *testing.T) {
 	for _, src := range []string{"x := x-y{}", "x := Max[]", "x := Max[int]junk"} {
-		t.Run(src, func(t *testing.T) { bashppCheckIdentical(t, src) })
+		t.Run(src, func(t *testing.T) { bashppCheckDiagnostic(t, src, "invalid := binding") })
 	}
 }
 

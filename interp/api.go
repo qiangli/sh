@@ -3333,7 +3333,8 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 		}
 		runExitTrap = true
 		goImportsStarted := false
-		for _, stmt := range node.Stmts {
+		for stmtIndex := 0; stmtIndex < len(node.Stmts); stmtIndex++ {
+			stmt := node.Stmts[stmtIndex]
 			if r.stdinSourceActive && int(stmt.Pos().Offset()) < r.stdinSourceOffset {
 				continue
 			}
@@ -3377,6 +3378,17 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 			}
 			r.verboseStmt(stmt)
 			r.stmt(ctx, stmt)
+			if r.bashPPBranch == bashPPBranchGoto {
+				if at := r.bashPPGotoTarget(node.Stmts); at >= 0 {
+					if r.bashPPScope != nil {
+						r.bashPPScope.resumeAtLabel(r.bashPPGotoLabel)
+					}
+					r.bashPPClearBranch()
+					stmtIndex = at - 1
+					continue
+				}
+				break
+			}
 			if r.bashPPGoSource && r.exit.code != 0 {
 				r.exit.fatal(ExitStatus(r.exit.code))
 			}

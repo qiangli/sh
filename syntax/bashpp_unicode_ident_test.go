@@ -74,7 +74,7 @@ func TestBashPPUnicodeIdentifierStreamingPrintWalk(t *testing.T) {
 }
 
 func TestBashPPInvalidUnicodeIdentifiersAreNotClaimed(t *testing.T) {
-	const src = "func f() {\n\t２bad := 1\n\ta\u0301 := 2\n}\nvar 😀 = 3\n"
+	const src = "func f() {\n\t２bad := 1\n\ta\u0301 := 2\n}\n"
 	file, err := NewParser(Variant(LangBashPP)).Parse(strings.NewReader(src), "invalid-unicode.bpp")
 	if err != nil {
 		t.Fatal(err)
@@ -85,9 +85,7 @@ func TestBashPPInvalidUnicodeIdentifiersAreNotClaimed(t *testing.T) {
 			t.Fatalf("invalid Unicode statement %d parsed as %T", i, stmt.Cmd)
 		}
 	}
-	if _, ok := file.Stmts[1].Cmd.(*CallExpr); !ok {
-		t.Fatalf("invalid Unicode declaration parsed as %T", file.Stmts[1].Cmd)
-	}
+	bashppCheckDiagnostic(t, "var 😀 = 3\n", "invalid var statement; use command var to invoke a shell command")
 }
 
 func TestBashPPUnicodeIdentifierDialectIsolation(t *testing.T) {

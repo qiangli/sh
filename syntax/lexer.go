@@ -371,7 +371,14 @@ skipSpace:
 				return
 			}
 			p.tok = p.regToken(r)
-		case '#':
+		case '#', '/':
+			if r == '/' {
+				if !p.lang.in(LangBashPP) || p.peek() != '/' || p.quote == testExpr || !p.spaced && p.quote == unquotedWordCont {
+					p.advanceLitNone(r)
+					return
+				}
+				r = p.rune() // consume the first slash; comment handling consumes the second
+			}
 			// If we're parsing $foo#bar, ${foo}#bar, 'foo'#bar, or "foo"#bar,
 			// #bar is a continuation of the same word, not a comment.
 			// The same applies inside [[ ]] tests, where '#' has no comment meaning.

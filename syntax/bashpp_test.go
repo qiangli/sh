@@ -200,6 +200,9 @@ func bashppSharedCorpus(t *testing.T) []string {
 		inputs = append(inputs, tc.in)
 	}
 	inputs = append(inputs, bashppRejectionEvidence...)
+	for in := range bashppSprint198DiagnosticRows {
+		inputs = append(inputs, in)
+	}
 	if len(inputs) < 500 {
 		t.Fatalf("corpus looks too small to be meaningful: %d inputs", len(inputs))
 	}
@@ -217,8 +220,8 @@ func bashppSharedCorpus(t *testing.T) []string {
 // at that point would discard the only gate that can tell a designed
 // divergence from a regression, so the claim is re-expressed instead:
 //
-//  1. NEVER LOSE — if LangBash parses an input, LangBashPP must parse it too.
-//     Bash++ is a superset and may never reject a script bash accepts.
+//  1. Rejection changes require an exact Sprint198 policy row and diagnostic.
+//     Every other classic input must remain accepted.
 //  2. MEANING PRESERVED, OR NAMED — for an input LangBash parses, the ASTs,
 //     node positions and printed bytes must be identical unless a published
 //     Class E row licenses a divergence at a real bash command position. The
@@ -240,11 +243,18 @@ func TestBashPPMatchesBash(t *testing.T) {
 
 	inputs := bashppSharedCorpus(t)
 
-	var identical, licensed, additive, rejected int
+	var identical, licensed, additive, rejected, policyRejected int
 	for _, in := range inputs {
 		bashFile, bashErr := bashppParse(LangBash, in)
 		ppFile, ppErr := bashppParse(LangBashPP, in)
 
+		if bashppSprint198Diagnostic(in) != "" {
+			if bashErr != nil || !bashppSprint198DiagnosticMatches(in, ppErr) {
+				t.Errorf("policy row %q: classic=%v, Bash++=%v; want %q", in, bashErr, ppErr, bashppSprint198Diagnostic(in))
+			}
+			policyRejected++
+			continue
+		}
 		if bashErr != nil {
 			// Rule 3 — bash rejects, so this is purely additive ground.
 			if ppErr != nil {
@@ -272,8 +282,7 @@ func TestBashPPMatchesBash(t *testing.T) {
 		if ppErr != nil {
 			t.Errorf("REGRESSION for input %q:\n"+
 				"  LangBash parses it but LangBashPP rejects it (%v).\n"+
-				"  Bash++ is a strict superset; no class licenses losing a script\n"+
-				"  bash accepts.", in, ppErr)
+				"  No explicit Sprint198 policy row licenses this rejection.", in, ppErr)
 			continue
 		}
 
@@ -318,8 +327,8 @@ func TestBashPPMatchesBash(t *testing.T) {
 	}
 
 	t.Logf("bash/bashpp corpus: %d inputs — %d identical, %d licensed divergences, "+
-		"%d additive acceptances, %d rejected by both",
-		len(inputs), identical, licensed, additive, rejected)
+		"%d additive acceptances, %d rejected by both, %d policy diagnostics",
+		len(inputs), identical, licensed, additive, rejected, policyRejected)
 
 	// The gate must never be able to report success without having compared
 	// anything. This is the cheap guard against a corpus that silently stops

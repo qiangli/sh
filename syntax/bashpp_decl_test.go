@@ -12,40 +12,9 @@ import (
 	"testing/iotest"
 )
 
-// THE UNSUPPORTED-BODY REGRESSION, and why it is written before the parser
-// dispatch that makes it interesting.
-//
-// The Day-1 `var`/`const` sites are Class E: `var x = 1` runs today as an
-// ordinary command with three arguments. So the dispatch may only claim a
-// command once it knows the WHOLE body is a form Bash++ supports. The failure
-// this file exists to catch is the parser committing on the PREFIX — seeing
-// `var` and an identifier, deciding a Go region has opened, and then finding
-// `extra` or `bar` where it wanted a terminator. At that point the tokens are
-// spent: a streaming, non-backtracking parser cannot put them back, so the
-// only exits are a diagnostic (which breaks a working script — the one
-// outcome the design forbids for Class E) or a half-built node.
-//
-// `var x = 1 extra` and `var x = foo bar` are the two cheapest witnesses. Both
-// open exactly like the supported form and neither IS it, so a recognizer that
-// answers from the prefix cannot tell them apart from `var x = 1`, while one
-// that waits for the full body separates them without effort.
-//
-// The four configurations are not decoration:
-//
-//   - PosixMode off/on, because [Parser.posixBehavior] changes parse rules
-//     underneath the dispatch, and a fallback that only survives one of them
-//     is not a fallback.
-//   - a whole-string reader and a ONE-BYTE reader, because the parser is
-//     streaming over an [io.Reader] and its buffer boundary is where
-//     lookahead-based designs have historically failed — the conservative
-//     answer at a chunk boundary silently restores the old behaviour, which
-//     looks exactly like success. A one-byte reader puts a chunk boundary
-//     between every pair of bytes, so any hidden dependence on "the rest of
-//     the shape happens to be buffered" shows up as a diff here.
-//
-// The assertion is identity with LangBash — same AST, same node positions,
-// same printed bytes — which is the only claim that cannot be satisfied by a
-// node that merely happens to run the same way.
+// Reserved declaration near misses now diagnose in Bash++ while explicit
+// shell escapes retain AST identity. Both reader chunking and POSIX composition
+// remain covered; classic grammar checks are unchanged.
 
 // bashppReadModes feeds the same source to the parser two ways: in one piece,
 // and one byte at a time.
@@ -109,8 +78,9 @@ func bashppCheckIdentical(t *testing.T, in string) {
 // They are exercised twice: [TestBashPPRejectedShapesClaimNothing] asserts the
 // narrow claim (nothing was claimed), and they are folded into
 // bashppUnsupportedDeclBodies below so the full identity assertion — AST,
-// positions, printed bytes, both readers, both POSIX settings — covers them
-// too. They also reach the compatibility gate through bashppSharedCorpus.
+// positions, printed bytes, both readers, both POSIX settings — covers the
+// remaining shell forms. Reserved forms now have explicit diagnostic policy.
+// They also reach the compatibility gate through bashppSharedCorpus.
 var bashppRejectionEvidence = []string{
 	"var if = 1",
 	"var type = 1",
@@ -132,9 +102,8 @@ var bashppGoKeywords = []string{
 }
 
 // bashppUnsupportedDeclBodies are the shapes that open like a Day-1 var/const
-// declaration and are not one. Every entry must parse, print and position
-// EXACTLY as LangBash does; claiming any of them would change what a working
-// script does at a site bash accepts today.
+// declaration and are not one. Sprint198 makes reserved forms diagnostics;
+// escaped and unrelated shell forms still parse identically to LangBash.
 var bashppUnsupportedDeclBodies = []struct{ name, in string }{
 	// The two named witnesses: a supported body with a word glued on the end.
 	// A prefix-committing dispatch claims both.
@@ -226,15 +195,31 @@ var bashppUnsupportedDeclBodies = []struct{ name, in string }{
 	{"inside an if", "if true; then var x = foo bar; fi"},
 }
 
-// TestBashPPUnsupportedDeclBodyStaysShell is the regression named above: an
-// unsupported declaration body must leave LangBashPP byte-identical to
-// LangBash, in every reader and POSIX configuration.
-func TestBashPPUnsupportedDeclBodyStaysShell(t *testing.T) {
-	t.Parallel()
+func bashppCheckDiagnostic(t *testing.T, in, want string) {
+	t.Helper()
+	for _, posix := range []bool{false, true} {
+		for _, mode := range bashppReadModes {
+			_, err := bashppParseAs(LangBashPP, in, posix, mode.wrap)
+			pe, ok := err.(ParseError)
+			if !ok || pe.Text != want || pe.Pos.Line() == 0 || pe.Pos.Col() == 0 {
+				t.Errorf("%q %s posix=%v: got %v; want positioned %q", in, mode.name, posix, err, want)
+			}
+		}
+	}
+}
 
+func TestBashPPUnsupportedDeclBodyContract(t *testing.T) {
+	t.Parallel()
 	for _, tc := range bashppUnsupportedDeclBodies {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
+			if want := bashppSprint198Diagnostic(tc.in); want != "" {
+				bashppCheckDiagnostic(t, tc.in, want)
+				return
+			}
+			if tc.in == "if := 1" {
+				bashppCheckDiagnostic(t, tc.in, "`if <cond>` must be followed by `then`")
+				return
+			}
 			bashppCheckIdentical(t, tc.in)
 		})
 	}
@@ -552,44 +537,18 @@ func TestBashPPDeclOnlyInBashPP(t *testing.T) {
 	}
 }
 
-// TestBashPPReservedNamesStayShell sweeps the whole Go keyword set rather than
-// only the three keywords the rejection named.
-//
-// The reported witnesses were `if`, `type` and `return`, and fixing exactly
-// those three would have left twenty-two more ways to claim a command that is
-// not a declaration. The list is what Go's specification says it is, so the
-// sweep is cheap and the alternative — a hand-picked subset that looked
-// plausible — is how the first three got through.
-//
-// `const` and `var` are in the sweep too, which is not a curiosity: `var var =
-// 1` and `var const = 1` are ordinary bash commands, and a name check that
-// only refused OTHER keywords would still claim them.
-func TestBashPPReservedNamesStayShell(t *testing.T) {
+// Go-reserved declared names remain invalid; the reserved declaration
+// introducer now diagnoses instead of executing a shell command.
+func TestBashPPReservedNamesDiagnose(t *testing.T) {
 	t.Parallel()
-
 	for _, kw := range bashppGoKeywords {
 		for _, decl := range []string{"var", "const"} {
 			in := decl + " " + kw + " = 1"
 			t.Run(in, func(t *testing.T) {
-				t.Parallel()
-				// The recognizer must not fire either. The two gates answer
-				// different questions, but a name Go reserves fails both: no
-				// phase of Bash++ can ever open a region there, so leaving the
-				// site on the Class E ledger would owe the table a row for a
-				// shape that can never be claimed.
 				if got := RecognizeStartSite(in); got.Site != StartNone {
-					t.Errorf("RecognizeStartSite(%q) = %v; %q is a Go keyword and "+
-						"can never be a declared name", in, got.Site, kw)
+					t.Errorf("invalid declared name recognized: %v", got.Site)
 				}
-				f, err := bashppParse(LangBashPP, in)
-				if err != nil {
-					t.Fatalf("LangBashPP rejected %q: %v", in, err)
-				}
-				if d, ok := bashppFirstDecl(f); ok {
-					t.Fatalf("%q was claimed as %q; it is an ordinary bash command",
-						in, bashppDeclShape(d))
-				}
-				bashppCheckIdentical(t, in)
+				bashppCheckDiagnostic(t, in, "invalid "+decl+" statement; use command "+decl+" to invoke a shell command")
 			})
 		}
 	}

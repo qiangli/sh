@@ -326,6 +326,9 @@ func (p *Parser) Parse(r io.Reader, name string) (*File, error) {
 		// trigger the parsing error.
 		p.doHeredocs()
 	}
+	if p.err == nil && p.lang.in(LangBashPP) {
+		p.bashppValidateLabels(p.f)
+	}
 	return p.f, p.err
 }
 
@@ -2835,7 +2838,7 @@ func (p *Parser) doRedirect(s *Stmt) {
 	default:
 		r.Word = p.followWordTok(token(r.Op), r.OpPos)
 	}
-	if p.lang.in(LangBashPP) && (p.bashppFuncDepth > 0 || p.bashppChanCopy) && r.Op == RdrIn &&
+	if p.lang.in(LangBashPP) && r.Op == RdrIn &&
 		r.Word != nil && r.Word.Pos().Offset() != r.OpPos.Offset()+1 && bashppLeadingDash(r.Word) {
 		r.BashPPKeepSpace = true
 	}
@@ -2959,6 +2962,9 @@ func (p *Parser) gotStmtPipe(s *Stmt, binCmd bool) *Stmt {
 	redirsStart := len(s.Redirs)
 	switch p.tok {
 	case _LitWord:
+		if p.lang.in(LangBashPP) && (p.bashppLabel(s) || p.bashppKeywordStatement(s)) {
+			break
+		}
 		if p.lang.in(LangBashPP) && strings.HasPrefix(p.val, "@") && p.bashppDecoratedDecl(s) {
 			break
 		}
@@ -3242,7 +3248,7 @@ func (p *Parser) gotStmtPipe(s *Stmt, binCmd bool) *Stmt {
 	// whose only content is that redirect. Reclassifying it needs the redirect
 	// list to be final, which is why this sits after the trailing loop rather
 	// than beside the other Bash++ dispatch in callExpr.
-	if s.Cmd == nil && p.lang.in(LangBashPP) && (p.bashppFuncDepth > 0 || p.bashppChanCopy) {
+	if s.Cmd == nil && p.lang.in(LangBashPP) {
 		if cmd := bashppChanForm(nil, s.Redirs); cmd != nil {
 			s.Cmd = cmd
 			s.Redirs = nil
@@ -4080,8 +4086,8 @@ func (p *Parser) callExpr(s *Stmt, w *Word, assign bool) {
 	bashppReturnTried := false
 loop:
 	for {
-		if p.lang.in(LangBashPP) && p.bashppFuncDepth > 0 && bashppCompositeTxn == nil && len(s.Redirs) == 0 {
-			if !bashppReturnTried && len(ce.Assigns) == 0 && len(ce.Args) > 0 && bashppLitValue(ce.Args[0]) == "return" {
+		if p.lang.in(LangBashPP) && bashppCompositeTxn == nil && len(s.Redirs) == 0 {
+			if p.bashppFuncDepth > 0 && !bashppReturnTried && len(ce.Assigns) == 0 && len(ce.Args) > 0 && bashppLitValue(ce.Args[0]) == "return" {
 				bashppReturnTried = true
 				if ret := p.bashppScalarReturn(ce); ret != nil {
 					s.Cmd = ret
@@ -4101,7 +4107,7 @@ loop:
 		// be inspected; see sh/syntax/bashpp_scalar.go. The attempt is
 		// transactional and made at most once, so a shape it declines reaches
 		// the ordinary arms with the parser exactly as they would have found it.
-		if p.lang.in(LangBashPP) && p.bashppFuncDepth > 0 && !bashppScalarTried &&
+		if p.lang.in(LangBashPP) && !bashppScalarTried &&
 			bashppCompositeTxn == nil && len(s.Redirs) == 0 &&
 			bashppScalarOpTok(p.tok) != "" && (bashppScalarHead(ce) || p.tok == and && bashppAddressHead(ce)) {
 			bashppScalarTried = true
@@ -4110,7 +4116,7 @@ loop:
 				return
 			}
 		}
-		if p.lang.in(LangBashPP) && p.bashppFuncDepth > 0 && bashppCompositeTxn == nil && len(s.Redirs) == 0 &&
+		if p.lang.in(LangBashPP) && bashppCompositeTxn == nil && len(s.Redirs) == 0 &&
 			bashppCompoundTokenHead(ce, p.tok) {
 			if update := p.bashppCompoundTail(ce); update != nil {
 				s.Cmd = update
@@ -4239,12 +4245,12 @@ loop:
 				// unambiguous pointer assignment, not a shell command with a
 				// nested call as its final argument. Let bashppParenForm consume
 				// the complete typed assignment transactionally below.
-				if p.bashppFuncDepth > 0 && len(ce.Args) == 3 && ce.Args[1].Lit() == "=" && ce.Args[2].Lit() == "new" {
+				if len(ce.Args) == 3 && ce.Args[1].Lit() == "=" && ce.Args[2].Lit() == "new" {
 					nested = false
 				}
 				// Likewise, `x, y = f()` owns the entire result-bearing
 				// assignment; it is not a shell command followed by a nested call.
-				if p.bashppFuncDepth > 0 && len(ce.Args) >= 3 && ce.Args[len(ce.Args)-2].Lit() == "=" {
+				if len(ce.Args) >= 3 && ce.Args[len(ce.Args)-2].Lit() == "=" {
 					nested = false
 				}
 				if nested {
@@ -4309,9 +4315,15 @@ loop:
 	// The Bash++ command-position dispatch. It runs here, after the command is
 	// complete and its terminator reached, precisely so that nothing has been
 	// consumed on the strength of a prefix; see sh/syntax/bashpp_decl.go. An
-	// unsupported body is handed back untouched, so LangBashPP stays identical
-	// to LangBash everywhere it does not claim a shape.
-	if p.lang.in(LangBashPP) {
+	// ordinary command is handed back untouched. Reserved declaration words
+	// and binding start sites diagnose invalid bodies instead of falling back.
+	if p.lang.in(LangBashPP) && p.err == nil {
+		if len(ce.Assigns) == 0 && len(s.Redirs) == 0 && len(ce.Args) == 2 && bashppLitValue(ce.Args[0]) == "goto" {
+			if label := bashppBareLit(ce.Args[1]); label != nil && bashppIsIdent(label.Value) && !isGoReservedWord(label.Value) {
+				s.Cmd = &BashPPGoto{Kw: bashppBareLit(ce.Args[0]), Label: label}
+				return
+			}
+		}
 		if branch := p.bashppBranch(ce, s.Redirs); branch != nil {
 			s.Cmd = branch
 			return
@@ -4332,14 +4344,12 @@ loop:
 		// sh/syntax/bashpp_chan.go for why they are reclassified from the
 		// finished tree rather than recognized in the lexer. The redirect is
 		// consumed by the typed node, so it is dropped from the statement.
-		if p.bashppFuncDepth > 0 || p.bashppChanCopy {
-			if cmd := bashppChanForm(ce, s.Redirs); cmd != nil {
-				s.Cmd = cmd
-				s.Redirs = nil
-				return
-			}
+		if cmd := bashppChanForm(ce, s.Redirs); cmd != nil {
+			s.Cmd = cmd
+			s.Redirs = nil
+			return
 		}
-		if decl := bashppShortDecl(ce, s.Redirs, p.bashppFuncDepth > 0); decl != nil {
+		if decl := bashppShortDecl(ce, s.Redirs, true); decl != nil {
 			knownFuncValue := len(decl.Rhs) == 1 && p.bashppCallable(bashppLitValue(decl.Rhs[0]))
 			if ident, ok := decl.Expr.(*BashPPIdent); ok {
 				knownFuncValue = p.bashppCallable(ident.Name.Value)
@@ -4352,11 +4362,11 @@ loop:
 			s.Cmd = decl
 			return
 		}
-		if update := p.bashppUpdate(ce, s.Redirs, p.bashppFuncDepth > 0); update != nil {
+		if update := p.bashppUpdate(ce, s.Redirs, p.bashppFuncDepth > 0 || len(ce.Assigns) == 0); update != nil {
 			s.Cmd = update
 			return
 		}
-		if assign := bashppAssign(ce, s.Redirs, p.bashppFuncDepth > 0); assign != nil {
+		if assign := bashppAssign(ce, s.Redirs, true); assign != nil {
 			s.Cmd = assign
 			return
 		}
@@ -4372,6 +4382,7 @@ loop:
 			s.Cmd = decl
 			return
 		}
+		p.bashppReservedFallback(ce)
 	}
 	s.Cmd = ce
 }
@@ -4404,6 +4415,15 @@ func (p *Parser) evalArrayArgParts() []WordPart {
 }
 
 func (p *Parser) funcDecl(s *Stmt, pos Pos, long, withParens bool, names ...*Lit) {
+	if p.lang.in(LangBashPP) {
+		for _, name := range names {
+			plainName := strings.NewReplacer("\"", "", "'", "").Replace(name.Value)
+			if bashppReservedWord(plainName) {
+				p.posErr(name.Pos(), "%s is reserved and cannot name a shell function", name.Value)
+				return
+			}
+		}
+	}
 	fd := &FuncDecl{
 		Position: pos,
 		RsrvWord: long,
