@@ -174,7 +174,7 @@ func (r *Runner) bashPPBuildLocalTypeDescriptors() []bashPPLocalType {
 	for _, stmt := range r.bashPPGoSourceFile.Stmts {
 		switch d := stmt.Cmd.(type) {
 		case *syntax.BashPPFuncDecl:
-			if d.Receiver != nil && d.Receiver.RecvType != nil {
+			if d.Receiver != nil && d.Receiver.RecvType != nil && d.Name.Value != "_" {
 				owner := d.Receiver.RecvType.Value
 				methods[owner] = append(methods[owner], d)
 			}

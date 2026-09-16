@@ -312,6 +312,21 @@ func (r *Runner) bashPPTupleAssign(assign *syntax.BashPPAssign) {
 				continue
 			}
 		}
+		// A declared function has no variable cell; retain its callable
+		// value just as declarations and call arguments already do.
+		if cell, handled, err := r.goSourceCallableCell(expr); handled {
+			if err != nil {
+				if !errors.Is(err, errBashPPScalarInterrupted) {
+					r.exit.fatal(err)
+				}
+				return
+			}
+			if cell.declType == nil {
+				cell.declType = r.bashPPFuncValueType(cell)
+			}
+			candidates[i] = cell
+			continue
+		}
 		if r.bashPPGoSource && r.bashPPNativeExpr(expr) {
 			value, err := r.bashPPBridgeExpr(expr)
 			if err != nil {

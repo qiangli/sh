@@ -445,6 +445,10 @@ func (r *Runner) bashPPMethodDecl(d *syntax.BashPPFuncDecl) {
 		}
 		seenParams[param.Value] = true
 	}
+	if r.bashPPGoSource && d.Name.Value == "_" {
+		// Blank methods are checked declarations, not entries in a method set.
+		return
+	}
 	if r.bashPPMethods == nil {
 		r.bashPPMethods = make(map[string]map[string]*bashPPFunc)
 	}
