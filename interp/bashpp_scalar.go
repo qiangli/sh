@@ -428,6 +428,12 @@ func (r *Runner) bashPPScalarFromCell(cell *bashPPCell) bashPPScalar {
 					value.value = bashPPParseComplex(text)
 				} else if named.Name.Value == "float32" || named.Name.Value == "float64" {
 					value.value = constant.MakeFromLiteral(text, token.FLOAT, 0)
+					// Go result and declaration cells can carry their float
+					// provenance only in declType. Decode the exact stored
+					// rational before the untyped text fallback makes it a string.
+					if r.bashPPGoSource {
+						value.value = bashPPFloatText(text)
+					}
 				}
 			}
 		}
