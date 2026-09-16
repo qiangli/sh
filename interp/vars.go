@@ -2150,6 +2150,26 @@ func bashDeclareQuote(v string) string {
 	if hasNonPrintable(v) {
 		q, err := syntax.Quote(v, syntax.LangBash)
 		if err == nil {
+			// GNU Bash's declaration/export format spells ESC as \E.
+			// Quote's general-purpose octal spelling round-trips too, but
+			// consumers of `export -p` also depend on Bash's exact format.
+			// Walk escapes so a literal backslash followed by 033 stays literal.
+			if strings.ContainsRune(v, '\x1b') {
+				var b strings.Builder
+				for i := 0; i < len(q); i++ {
+					if q[i] == '\\' && i+1 < len(q) {
+						if strings.HasPrefix(q[i:], `\033`) {
+							b.WriteString(`\E`)
+							i += 3
+							continue
+						}
+						b.WriteByte(q[i])
+						i++
+					}
+					b.WriteByte(q[i])
+				}
+				return b.String()
+			}
 			return q
 		}
 	}
