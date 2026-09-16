@@ -366,18 +366,46 @@ func TestBashPPScalarExplicitStartsAndShellEscape(t *testing.T) {
 	}
 }
 
-func TestBashPPTopLevelSingleQuotesStayShellStrings(t *testing.T) {
-	var out strings.Builder
-	r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP))
-	bashPPRun(t, r, `x := 'a'; printf '%s' "$x"`)
-	qt.Assert(t, qt.Equals(out.String(), "a"))
+// A reserved := start parses Go literals; ordinary shell assignments and
+// escaped commands retain shell quoting and literal argument semantics.
+func TestBashPPTopLevelRuneBindingAndShellQuotes(t *testing.T) {
+	for _, tc := range []struct {
+		name, src, want string
+	}{
+		{"typed-rune", `x := 'a'; printf '%s' "$x"`, "97"},
+		{"shell-assignment", `x='a'; printf '%s' "$x"`, "a"},
+		{"shell-escape", `command printf '%s|%s' := 'a'`, ":=|a"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, bytewise := range []bool{false, true} {
+				var out strings.Builder
+				r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP))
+				bashPPRunReader(t, r, tc.src, bytewise)
+				qt.Assert(t, qt.Equals(out.String(), tc.want))
+			}
+		})
+	}
 }
 
-func TestBashPPTopLevelIdentifierShortDeclKeepsClassEBehavior(t *testing.T) {
-	var out strings.Builder
-	r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP))
-	bashPPRun(t, r, `base := 40; copy := base; printf '%s' "$copy"`)
-	qt.Assert(t, qt.Equals(out.String(), "base"))
+// The RHS identifier at an explicit := start reads its typed value. It is
+// still literal text in a shell assignment or an escaped command argument.
+func TestBashPPTopLevelIdentifierBindingAndShellLiteral(t *testing.T) {
+	for _, tc := range []struct {
+		name, src, want string
+	}{
+		{"typed-identifier", `base := 40; copy := base; printf '%s' "$copy"`, "40"},
+		{"shell-assignment", `base := 40; copy=base; printf '%s' "$copy"`, "base"},
+		{"shell-escape", `base := 40; command printf '%s|%s' := base`, ":=|base"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, bytewise := range []bool{false, true} {
+				var out strings.Builder
+				r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP))
+				bashPPRunReader(t, r, tc.src, bytewise)
+				qt.Assert(t, qt.Equals(out.String(), tc.want))
+			}
+		})
+	}
 }
 
 func TestBashPPTypedScalarTreeIsDialectGatedAtRuntime(t *testing.T) {
