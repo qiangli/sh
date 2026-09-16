@@ -26,8 +26,12 @@ func TestLocalTypeDescriptorsTrackFileAndImports(t *testing.T) {
 		}
 	}
 	// Copied toolchains share immutable descriptors, but use their own imports.
-	child := *r
-	child.bashPPImports = nil
+	child := &Runner{
+		bashPPGoSource:     r.bashPPGoSource,
+		bashPPGoSourceFile: r.bashPPGoSourceFile,
+		bashPPImports:      nil,
+		bashPPTools:        r.bashPPTools,
+	}
 	if got := child.bashPPLocalTypeDescriptors(); len(got) != 0 {
 		t.Fatalf("unbound import materialized: %+v", got)
 	}

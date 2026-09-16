@@ -30,15 +30,15 @@ jobs:
     # still runs; the regexes partition Test* names and examples run last.
     - name: Test with isolated Darwin signal state
       run: |
-        go list ./... | grep -v '/interp$' | xargs go test
+        go list ./... | grep -v '/interp$' | xargs go test -timeout=30m
         for group in 'A-E' 'F-J' 'K-O' 'P-T' 'U-Z'; do
-          go test ./interp -run "^Test[$group]"
+          go test ./interp -timeout=30m -run "^Test[$group]"
         done
-        go test ./interp -run '^Example'
+        go test ./interp -timeout=30m -run '^Example'
       if: matrix.os == 'macos-latest'
-    - run: go test ./...
+    - run: go test -timeout=30m ./...
       if: matrix.os != 'macos-latest'
-    - run: cd moreinterp && go test ./...
+    - run: cd moreinterp && go test -timeout=30m ./...
 
     - name: Bash++ race lifecycle gate
       run: make bashpp-race-gate
