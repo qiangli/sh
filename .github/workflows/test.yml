@@ -11,6 +11,8 @@ jobs:
         # windows-specific debugging pass. Linux + macOS + alpine are green.
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    env:
+      CGO_ENABLED: 0
     # The Linux race/lifecycle gate runs a bounded schedule matrix plus the
     # complete race suite; keep CI from killing it before its own diagnostics.
     # The gate's bounded operations total at most 3600s and its global
