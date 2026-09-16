@@ -3,10 +3,13 @@ id: e74ad50874cf
 kind: task
 title: S174.2 recover and replan Sprint 170 under-investigated evaluator residue
 seq: 105
-status: todo
+status: done
 priority: p0
 created: 2026-09-14T14:25:17.275536Z
+assignee: sprint172-198-manager
 sprint: 174
+closed: 2026-09-16T08:22:34.483024Z
+closed_by: sprint172-198-manager
 ---
 
 Entry gate
