@@ -115,13 +115,15 @@ func TestGoSourceNativeConstNegativeControls(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			var file = parse(t, test.source, "negative.bpp")
+			var file *syntax.File
 			if strings.HasPrefix(test.source, "package ") {
 				program, err := gosource.Parse(strings.NewReader(test.source), "negative.go", gosource.Options{RunMain: true})
 				if err != nil {
 					t.Fatal(err)
 				}
 				file = program.File
+			} else {
+				file = parse(t, test.source, "negative.bpp")
 			}
 			result, err := lower.Compile(file, lower.Options{})
 			if err != nil {
