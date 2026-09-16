@@ -199,7 +199,7 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 		if d.DeclType.Value == "struct" {
 			seenFields := make(map[string]bool)
 			for _, field := range bashPPFlatFields(d.StructFields) {
-				if seenFields[field.name] {
+				if seenFields[field.name] && (!r.bashPPGoSource || field.name != "_") {
 					r.errf("BASHPP-ESTRUCT-FIELD-DUPLICATE: field %q declared more than once\n", field.name)
 					r.exit = exitStatus{code: 2}
 					return

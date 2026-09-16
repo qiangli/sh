@@ -120,7 +120,7 @@ func (r *Runner) bashPPValidateTypeRepresentation(typ syntax.BashPPTypeExpr, act
 			}
 		}
 		for _, field := range bashPPFlatFields(x.Fields) {
-			if seenFields[field.name] {
+			if seenFields[field.name] && (!r.bashPPGoSource || field.name != "_") {
 				return fmt.Errorf("BASHPP-ESTRUCT-FIELD-DUPLICATE: field %q declared more than once", field.name)
 			}
 			seenFields[field.name] = true
@@ -258,6 +258,11 @@ func (r *Runner) bashPPEvalComposite(lit *syntax.BashPPCompositeLit, expected sy
 			value, child, err := r.bashPPEvalTypedValue(elem.Value, flat[i].typ)
 			if err != nil {
 				return nil, nil, err
+			}
+			// Blank fields consume and evaluate their positional initializer,
+			// but retain the zero value rather than the result.
+			if r.bashPPGoSource && flat[i].name == "_" {
+				continue
 			}
 			out[flat[i].name], meta.mapping[flat[i].name] = value, child
 		}

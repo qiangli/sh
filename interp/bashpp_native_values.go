@@ -809,6 +809,11 @@ func (r *Runner) bashPPBridgeCollection(value any, meta *bashPPCollectionMeta, t
 			// which is where the interpreter keeps their storage; the worker's
 			// FieldByName and the generated codecs address the same names.
 			for _, field := range bashPPFlatFields(shape.Fields) {
+				// Blank fields have layout but no addressable storage. The
+				// native declaration supplies their zero values.
+				if r.bashPPGoSource && field.name == "_" {
+					continue
+				}
 				item, exists := bashPPStorageGet(value, field.name)
 				if !exists {
 					return result, fmt.Errorf("gosource: missing struct field %s", field.name)
