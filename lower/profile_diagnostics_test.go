@@ -1596,20 +1596,45 @@ main()
 // operands do not support leaves the expression undecided. go/constant panics
 // rather than erroring on those, so the kinds are checked before the operation.
 func TestCheckProfileMalformedOperandsAreUndecided(t *testing.T) {
-	for _, source := range []string{
-		"func main() { var x bool = true + false }\nmain()\n",
-		"func main() { var x string = \"left\" - \"right\" }\nmain()\n",
-		"func main() { var x int = 1 % 0 }\nmain()\n",
-		"func main() { if \"a\" < 1 { echo wrong } }\nmain()\n",
+	for _, tc := range []struct {
+		name, source, rejectedVar string
+	}{
+		{"boolean-addition", "func main() { x := true + false }\nmain()\n",
+			"func main() { var x bool = true + false }\nmain()\n"},
+		{"string-subtraction", "func main() { x := \"left\" - \"right\" }\nmain()\n",
+			"func main() { var x string = \"left\" - \"right\" }\nmain()\n"},
+		{"remainder-by-zero", "func main() { x := 1 % 0 }\nmain()\n",
+			"func main() { var x int = 1 % 0 }\nmain()\n"},
+		{"mixed-comparison", "func main() { if \"a\" < 1 { echo wrong } }\nmain()\n", ""},
 	} {
-		const origin = "operands.bpp"
-		file := parseProfile(t, source, origin)
-		var panicked any
-		func() {
-			defer func() { panicked = recover() }()
-			lower.CheckProfile(file, origin)
-		}()
-		qt.Assert(t, qt.IsNil(panicked))
+		t.Run(tc.name, func(t *testing.T) {
+			const origin = "operands.bpp"
+			// Sprint 198 reserves var continuations: these unsupported var
+			// forms diagnose instead of falling back to shell commands. Use
+			// the explicit := expression route to reach the profile evaluator.
+			if tc.rejectedVar != "" {
+				_, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(tc.rejectedVar), origin)
+				qt.Assert(t, qt.IsNotNil(err))
+				qt.Assert(t, qt.Equals(err.Error(), "operands.bpp:1:15: invalid var statement; use command var to invoke a shell command"))
+			}
+			file := parseProfile(t, tc.source, origin)
+			binaryExpressions := 0
+			syntax.Walk(file, func(node syntax.Node) bool {
+				if _, ok := node.(*syntax.BashPPBinaryExpr); ok {
+					binaryExpressions++
+				}
+				return true
+			})
+			qt.Assert(t, qt.Equals(binaryExpressions, 1))
+			var panicked any
+			var diagnostics lower.ErrorList
+			func() {
+				defer func() { panicked = recover() }()
+				diagnostics = lower.CheckProfile(file, origin)
+			}()
+			qt.Assert(t, qt.IsNil(panicked))
+			qt.Assert(t, qt.IsNil(diagnostics))
+		})
 	}
 }
 
