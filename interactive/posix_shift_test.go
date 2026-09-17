@@ -40,7 +40,7 @@ func TestPOSIXInteractiveShiftErrorReprompts(t *testing.T) {
 		syntax.LangBash, true,
 		func() string { return "PROMPT> " },
 		func() string { return "> " },
-		func(error) {}, nil)
+		func(error) {}, nil, nil)
 	qt.Assert(t, qt.IsNil(err))
 
 	qt.Check(t, qt.StringContains(stdout.String(), "first:1 count:3 args:one two three"))

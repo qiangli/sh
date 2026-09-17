@@ -6,6 +6,7 @@
 package interactive
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"strings"
@@ -14,7 +15,31 @@ import (
 	"github.com/ergochat/readline"
 	"github.com/go-quicktest/qt"
 	"mvdan.cc/sh/v3/interp"
+	"mvdan.cc/sh/v3/syntax"
 )
+
+func TestPlainTerminalResolvesLiveBashPPInPosixMode(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	r, err := interp.New(
+		interp.Lang(syntax.LangBash),
+		interp.WithPosixMode(true),
+		interp.StdIO(strings.NewReader(""), &stdout, &stderr),
+	)
+	qt.Assert(t, qt.IsNil(err))
+
+	err = Run(context.Background(), Options{
+		Runner:        r,
+		Stdin:         strings.NewReader("set -o bashpp; var x = 1; echo $x; exit 0\n"),
+		Stdout:        &stdout,
+		Stderr:        &stderr,
+		PlainTerminal: true,
+		PosixMode:     true,
+		LangFunc:      func(r *interp.Runner) syntax.LangVariant { return r.Dialect() },
+	})
+	qt.Assert(t, qt.IsNil(err))
+	qt.Check(t, qt.StringContains(stderr.String(), "bash++ declaration evaluated with extensions disabled"), qt.Commentf("stdout=%q stderr=%q", stdout.String(), stderr.String()))
+	qt.Check(t, qt.Not(qt.StringContains(stderr.String(), "command not found")), qt.Commentf("stdout=%q stderr=%q", stdout.String(), stderr.String()))
+}
 
 func TestConfigureReadlineRunsBeforeConstruction(t *testing.T) {
 	r, err := interp.New(interp.Interactive(true), interp.StdIO(strings.NewReader(""), io.Discard, io.Discard))

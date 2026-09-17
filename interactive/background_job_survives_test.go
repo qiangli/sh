@@ -68,7 +68,7 @@ func TestBackgroundJobSurvivesStatementBoundary(t *testing.T) {
 			syntax.LangBash, false,
 			func() string { return "PROMPT> " },
 			func() string { return "> " },
-			func(error) {}, nil)
+			func(error) {}, nil, nil)
 	}()
 
 	select {

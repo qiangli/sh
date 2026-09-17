@@ -252,7 +252,7 @@ func Run(ctx context.Context, opts Options) error {
 	}
 	r.EnableInteractiveHistory()
 	if opts.PlainTerminal {
-		return runFallback(ctx, r, stdin, stdout, stderr, lang, opts.PosixMode, ps1, ps2, onRunError, opts.PreCommand)
+		return runFallback(ctx, r, stdin, stdout, stderr, lang, opts.PosixMode, ps1, ps2, onRunError, opts.PreCommand, opts.LangFunc)
 	}
 
 	cfg := &readline.Config{
@@ -289,7 +289,7 @@ func Run(ctx context.Context, opts Options) error {
 
 	rl, err := readline.NewFromConfig(cfg)
 	if err != nil {
-		return runFallback(ctx, opts.Runner, stdin, stdout, stderr, lang, opts.PosixMode, ps1, ps2, onRunError, opts.PreCommand)
+		return runFallback(ctx, opts.Runner, stdin, stdout, stderr, lang, opts.PosixMode, ps1, ps2, onRunError, opts.PreCommand, opts.LangFunc)
 	}
 	defer rl.Close()
 
@@ -500,8 +500,17 @@ func runAssumedTTY(ctx context.Context, opts Options, r *interp.Runner, stdin io
 		// readline loop, using a fresh parser per probe.
 		input := line
 		for {
-			pp := syntax.NewParser(syntax.Variant(lang), syntax.PosixMode(opts.PosixMode))
+			pp := syntax.NewParser(syntax.Variant(currentLang(opts, r, lang)), syntax.PosixMode(opts.PosixMode))
 			_, perr := pp.Parse(strings.NewReader(input), "")
+			if perr != nil && !pp.Incomplete() && opts.LangFunc != nil {
+				r.RecordInteractiveHistory(input)
+				r.AdvanceAliasInput(strings.Count(input, "\n") + 1)
+				if runErr, exited := runInput(ctx, opts, r, input, lang, stderr, onRunError); exited {
+					return runErr
+				}
+				input = ""
+				break
+			}
 			if perr == nil || !pp.Incomplete() {
 				break
 			}
@@ -518,29 +527,14 @@ func runAssumedTTY(ctx context.Context, opts Options, r *interp.Runner, stdin io
 		}
 		r.RecordInteractiveHistory(input)
 
-		parser := syntax.NewParser(syntax.Variant(lang), syntax.PosixMode(opts.PosixMode))
-		prog, perr := parser.Parse(strings.NewReader(input), "")
-		if perr != nil {
-			_, _ = io.WriteString(stderr, perr.Error()+"\n")
-			continue
-		}
 		// Each input chunk is parsed by a fresh parser (line numbers
 		// restart at 1), so advance the runner's alias-timing base past
 		// the previous chunk. This keeps an alias defined on an earlier
 		// prompt expanding on a later one, while a definition and use
 		// typed on the same line still do not expand (bash semantics).
 		r.AdvanceAliasInput(strings.Count(input, "\n") + 1)
-		for _, stmt := range prog.Stmts {
-			// Run under ctx directly, not a per-statement derivative — see
-			// the comment in Run above; the same background-job-survival
-			// reasoning applies here.
-			runErr := r.Run(ctx, stmt)
-			if runErr != nil && !isExitStatus(runErr) {
-				onRunError(runErr)
-			}
-			if r.Exited() {
-				return runErr
-			}
+		if runErr, exited := runInput(ctx, opts, r, input, lang, stderr, onRunError); exited {
+			return runErr
 		}
 	}
 }
@@ -661,7 +655,7 @@ func (h *fileHistory) At(idx int) string {
 // that pre-existed in cmd/bashy/runInteractiveBasic and outpost's
 // shell.Session.Run prior to this package — kept here so Run() has a
 // single entry point regardless of TTY status.
-func runFallback(ctx context.Context, r *interp.Runner, stdin io.Reader, stdout, stderr io.Writer, lang syntax.LangVariant, posixMode bool, ps1, ps2 func() string, onRunError func(error), preCommand func(context.Context, *interp.Runner)) error {
+func runFallback(ctx context.Context, r *interp.Runner, stdin io.Reader, stdout, stderr io.Writer, lang syntax.LangVariant, posixMode bool, ps1, ps2 func() string, onRunError func(error), preCommand func(context.Context, *interp.Runner), langFunc func(*interp.Runner) syntax.LangVariant) error {
 	r.EnableInteractiveHistory()
 	if preCommand != nil {
 		preCommand(ctx, r)
@@ -670,6 +664,7 @@ func runFallback(ctx context.Context, r *interp.Runner, stdin io.Reader, stdout,
 	for {
 		var input string
 		var prog *syntax.File
+		dynamicParse := false
 		for {
 			line, err := readInteractiveLine(stdin)
 			if err != nil && line == "" {
@@ -680,7 +675,7 @@ func runFallback(ctx context.Context, r *interp.Runner, stdin io.Reader, stdout,
 			}
 			input += line
 
-			parser := syntax.NewParser(syntax.Variant(lang), syntax.PosixMode(posixMode))
+			parser := syntax.NewParser(syntax.Variant(currentLang(Options{LangFunc: langFunc}, r, lang)), syntax.PosixMode(posixMode))
 			prog, err = parser.Parse(strings.NewReader(input), "")
 			if err == nil {
 				break
@@ -688,6 +683,10 @@ func runFallback(ctx context.Context, r *interp.Runner, stdin io.Reader, stdout,
 			if parser.Incomplete() {
 				_, _ = io.WriteString(stdout, ps2())
 				continue
+			}
+			if langFunc != nil {
+				dynamicParse = true
+				break
 			}
 			_, _ = io.WriteString(stderr, err.Error()+"\n")
 			return err
@@ -704,16 +703,19 @@ func runFallback(ctx context.Context, r *interp.Runner, stdin io.Reader, stdout,
 			lineCount++
 		}
 		r.AdvanceAliasInput(max(lineCount, 1))
-		for _, stmt := range prog.Stmts {
-			// Run under ctx directly, not a per-statement derivative — see
-			// the comment in Run above; the same background-job-survival
-			// reasoning applies here.
-			runErr := r.Run(ctx, stmt)
-			if runErr != nil && !isExitStatus(runErr) {
-				onRunError(runErr)
-			}
-			if r.Exited() {
+		if dynamicParse || langFunc != nil {
+			if runErr, exited := runInput(ctx, Options{LangFunc: langFunc, PosixMode: posixMode}, r, input, lang, stderr, onRunError); exited {
 				return runErr
+			}
+		} else {
+			for _, stmt := range prog.Stmts {
+				runErr := r.Run(ctx, stmt)
+				if runErr != nil && !isExitStatus(runErr) {
+					onRunError(runErr)
+				}
+				if r.Exited() {
+					return runErr
+				}
 			}
 		}
 		if preCommand != nil {
