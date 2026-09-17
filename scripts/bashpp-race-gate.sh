@@ -75,16 +75,16 @@ start_watcher() {
 # exits, so the nested setsid groups cannot escape the global watchdog.
 if ((!internal)); then
 	# Every operation below has its own diagnostic bound. With the fail-closed
-	# 20-package ceiling, their aggregate maximum is 3600s:
+	# 20-package ceiling, their aggregate maximum is 5040s:
 	#
 	#   list 60 + package discovery 20*60 + focused discovery 60
 	#   + two oracle audits 2*60 + race build 300
-	#   + focused lanes 3*420 + full race suite 600
+	#   + focused lanes 3*900 + full race suite 600
 	#
 	# Keep the global watchdog beyond that sum, with one minute for process
 	# startup, evidence copying, and cleanup. It must never erase the more useful
 	# label from a later lane's own timeout diagnostic.
-	global_seconds=${BASHPP_RACE_GLOBAL_TIMEOUT_SECONDS:-3660}
+	global_seconds=${BASHPP_RACE_GLOBAL_TIMEOUT_SECONDS:-5100}
 	args=(--internal)
 	((discovery_only)) && args+=(--discovery-only)
 	marker=$(mktemp "${TMPDIR:-/tmp}/bashpp-race-global.XXXXXX")
@@ -435,11 +435,18 @@ run_bounded 300 "race build" "$tmpdir/racebuild" 0 \
 # is a lifecycle leak that never terminates; that is unbounded, so a generous
 # ceiling catches it exactly as well as a tight one and stops manufacturing
 # false timeouts on slower hardware.
+#
+# Re-measured 2026-09-17 after the Sprint 150–198 lifecycle members were
+# manifested: the 25 Go-source rows each build a native worker per count, so
+# under -race -count=3 they cost 168s on the dev box against 126s for the
+# other 152 interp members — the last green CI lane ran those in 225s, so
+# the GOMAXPROCS=1 lane is now expected near 525s. 14m keeps the same 1.6x
+# headroom the 6m bound had; the outer bound stays one minute beyond it.
 for procs in 1 2 4; do
-	run_bounded 420 \
-		"GOMAXPROCS=$procs go test -race -timeout=6m -count=3 -run '$focused_re' ${required_manifest_packages[*]}" \
+	run_bounded 900 \
+		"GOMAXPROCS=$procs go test -race -timeout=14m -count=3 -run '$focused_re' ${required_manifest_packages[*]}" \
 		"$tmpdir/focused.$procs" 1 env GOMAXPROCS="$procs" \
-		"$go_bin" test -race -timeout=6m -count=3 -run "$focused_re" "${required_manifest_packages[@]}"
+		"$go_bin" test -race -timeout=14m -count=3 -run "$focused_re" "${required_manifest_packages[@]}"
 done
 run_bounded 600 \
 	"go test -race -timeout=8m ./... -skip 'TestRunnerRunConfirm|TestParseConfirm'" \
