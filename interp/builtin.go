@@ -2617,7 +2617,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		}
 		src := strings.Join(args, " ")
 		p := syntax.NewParser()
-		if r.Dialect() == syntax.LangBashPP {
+		if r.LangVariant() == syntax.LangBashPP {
 			syntax.Variant(syntax.LangBashPP)(p)
 		}
 		file, err := p.Parse(strings.NewReader(src), "")
@@ -2877,7 +2877,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		}
 		defer f.Close()
 		p := syntax.NewParser()
-		if r.Dialect() == syntax.LangBashPP {
+		if r.LangVariant() == syntax.LangBashPP {
 			syntax.Variant(syntax.LangBashPP)(p)
 		}
 		var file *syntax.File
