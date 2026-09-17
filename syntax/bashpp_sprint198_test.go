@@ -39,7 +39,7 @@ func TestSprint198StartSites(t *testing.T) {
 }
 
 func TestSprint198Diagnostics(t *testing.T) {
-	for _, src := range []string{"var nope", "const nope", "func nope", "import nope", "package main", "echo ok\npackage main", "goto", "x :=", "x := map[string]int{", "f[int]", "var if = 1"} {
+	for _, src := range []string{"var nope", "const nope", "func nope(", "import nope", "package main", "echo ok\npackage main", "goto", "x :=", "x := map[string]int{", "f[int]", "var if = 1"} {
 		for _, mode := range bashppReadModes {
 			f, e := bashppParseAs(LangBashPP, src, false, mode.wrap)
 			if e == nil {
