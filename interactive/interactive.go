@@ -526,6 +526,18 @@ func runAssumedTTY(ctx context.Context, opts Options, r *interp.Runner, stdin io
 			continue
 		}
 		r.RecordInteractiveHistory(input)
+		var prog *syntax.File
+		if opts.LangFunc == nil {
+			// Keep the existing whole-line parse contract when the caller
+			// has not opted into statement-by-statement dialect changes.
+			parser := syntax.NewParser(syntax.Variant(lang), syntax.PosixMode(opts.PosixMode))
+			var perr error
+			prog, perr = parser.Parse(strings.NewReader(input), "")
+			if perr != nil {
+				_, _ = io.WriteString(stderr, perr.Error()+"\n")
+				continue
+			}
+		}
 
 		// Each input chunk is parsed by a fresh parser (line numbers
 		// restart at 1), so advance the runner's alias-timing base past
@@ -533,6 +545,18 @@ func runAssumedTTY(ctx context.Context, opts Options, r *interp.Runner, stdin io
 		// prompt expanding on a later one, while a definition and use
 		// typed on the same line still do not expand (bash semantics).
 		r.AdvanceAliasInput(strings.Count(input, "\n") + 1)
+		if opts.LangFunc == nil {
+			for _, stmt := range prog.Stmts {
+				runErr := r.Run(ctx, stmt)
+				if runErr != nil && !isExitStatus(runErr) {
+					onRunError(runErr)
+				}
+				if r.Exited() {
+					return runErr
+				}
+			}
+			continue
+		}
 		if runErr, exited := runInput(ctx, opts, r, input, lang, stderr, onRunError); exited {
 			return runErr
 		}
