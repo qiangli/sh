@@ -401,6 +401,8 @@ func TestSprint119ClassicFuncCallForms(t *testing.T) {
 	for _, src := range []string{
 		"func nope\n",
 		"func a b c\n",
+		"func IFS= read\n",
+		"func name=value\n",
 		"A=BVAR func\n",
 		"var=40 func\n",
 		"var=two func\n",

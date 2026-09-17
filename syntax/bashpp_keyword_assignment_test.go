@@ -22,6 +22,8 @@ func TestBashPPKeywordAssignmentShellParity(t *testing.T) {
 		`probe EMPTY= value`,
 		`probe --output= value`,
 		`command var IFS= read`,
+		`func IFS= read`,
+		`func name=value`,
 	} {
 		t.Run(src, func(t *testing.T) {
 			want, err := NewParser(Variant(LangBash)).Parse(strings.NewReader(src), "")
@@ -57,7 +59,7 @@ func TestBashPPKeywordAssignmentTypedStarts(t *testing.T) {
 			}
 		}
 	}
-	for _, src := range []string{"var IFS= read", "const IFS= read", "func IFS= read", "import IFS= read", "package IFS= read", "goto IFS= read", "x :="} {
+	for _, src := range []string{"var IFS= read", "const IFS= read", "import IFS= read", "package IFS= read", "goto IFS= read", "x :="} {
 		for _, reader := range []io.Reader{strings.NewReader(src), iotest.OneByteReader(strings.NewReader(src))} {
 			if _, err := NewParser(Variant(LangBashPP)).Parse(reader, ""); err == nil {
 				t.Fatalf("%s: reserved form fell back to a shell command", src)
