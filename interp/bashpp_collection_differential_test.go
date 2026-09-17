@@ -1,3 +1,5 @@
+//go:build full
+
 package interp_test
 
 // Sprint: #118; Story: #1; Story-ID: 2daf9ef04ad4

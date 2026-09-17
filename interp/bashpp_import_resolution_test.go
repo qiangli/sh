@@ -1,9 +1,10 @@
+//go:build full
+
 package interp
 
 import (
 	"bytes"
 	"context"
-	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -14,29 +15,6 @@ import (
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/syntax"
 )
-
-func writeImportFixture(t *testing.T, root, name, contents string) {
-	t.Helper()
-	name = filepath.Join(root, filepath.FromSlash(name))
-	if err := os.MkdirAll(filepath.Dir(name), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(name, []byte(contents), 0o644); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func nativeResolveRequest(dir string, env ...string) bashPPEvalRequest {
-	base := os.Environ()
-	for _, entry := range env {
-		name, value, _ := strings.Cut(entry, "=")
-		base = setEnvString(base, name, value)
-	}
-	return bashPPEvalRequest{
-		Go: filepath.Join(runtime.GOROOT(), "bin", "go"), Dir: dir, Env: base,
-		Stdout: io.Discard, Stderr: io.Discard,
-	}
-}
 
 func TestBashPPResolveLocalModuleAllImportForms(t *testing.T) {
 	root := t.TempDir()

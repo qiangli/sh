@@ -1,4 +1,4 @@
-//go:build unix
+//go:build full && unix
 
 package interp_test
 

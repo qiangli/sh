@@ -1,3 +1,5 @@
+//go:build full
+
 package interp
 
 import (
@@ -13,10 +15,6 @@ import (
 	"mvdan.cc/sh/v3/gosource"
 	"mvdan.cc/sh/v3/syntax"
 )
-
-type callbackProbeWriter func([]byte) (int, error)
-
-func (w callbackProbeWriter) Write(p []byte) (int, error) { return w(p) }
 
 // A callback ID from a completed run must not resolve to the new run's closure
 // with the same numeric ID. Probe two real initialized dependency sessions.

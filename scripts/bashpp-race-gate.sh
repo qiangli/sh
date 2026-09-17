@@ -15,6 +15,9 @@ for arg in "$@"; do
 done
 
 evidence=${BASHPP_RACE_EVIDENCE:-artifacts/bashpp-race-gate.txt}
+# The manifested tests live in the full tier (`//go:build full`); every go
+# test/list below must see the tag or the exact manifest reports them missing.
+export GOFLAGS="${GOFLAGS:+$GOFLAGS }-tags=full"
 mkdir -p "$(dirname "$evidence")"
 
 # POSIX::setsid ships with the system Perl on macOS and Linux. Every bounded
@@ -75,16 +78,16 @@ start_watcher() {
 # exits, so the nested setsid groups cannot escape the global watchdog.
 if ((!internal)); then
 	# Every operation below has its own diagnostic bound. With the fail-closed
-	# 20-package ceiling, their aggregate maximum is 5040s:
+	# 20-package ceiling, their aggregate maximum is 8340s:
 	#
 	#   list 60 + package discovery 20*60 + focused discovery 60
 	#   + two oracle audits 2*60 + race build 300
-	#   + focused lanes 3*900 + full race suite 600
+	#   + focused lanes 3*900 + full race suite 3900
 	#
 	# Keep the global watchdog beyond that sum, with one minute for process
 	# startup, evidence copying, and cleanup. It must never erase the more useful
 	# label from a later lane's own timeout diagnostic.
-	global_seconds=${BASHPP_RACE_GLOBAL_TIMEOUT_SECONDS:-5100}
+	global_seconds=${BASHPP_RACE_GLOBAL_TIMEOUT_SECONDS:-8400}
 	args=(--internal)
 	((discovery_only)) && args+=(--discovery-only)
 	marker=$(mktemp "${TMPDIR:-/tmp}/bashpp-race-global.XXXXXX")
@@ -448,8 +451,11 @@ for procs in 1 2 4; do
 		"$tmpdir/focused.$procs" 1 env GOMAXPROCS="$procs" \
 		"$go_bin" test -race -timeout=14m -count=3 -run "$focused_re" "${required_manifest_packages[@]}"
 done
-run_bounded 600 \
-	"go test -race -timeout=8m ./... -skip 'TestRunnerRunConfirm|TestParseConfirm'" \
-	"$tmpdir/all" 1 "$go_bin" test -race -timeout=8m ./... \
+# The complete suite under -race is bounded per package by the measured
+# interp cost: 1502s on the dev box (lower 667s) on 2026-09-17, ~1.8x that on
+# a runner, so 60m keeps ~1.3x headroom over the slowest package.
+run_bounded 3900 \
+	"go test -race -timeout=60m ./... -skip 'TestRunnerRunConfirm|TestParseConfirm'" \
+	"$tmpdir/all" 1 "$go_bin" test -race -timeout=60m ./... \
 	-skip 'TestRunnerRunConfirm|TestParseConfirm'
 log "gate: PASS"

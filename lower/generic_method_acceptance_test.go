@@ -1,17 +1,13 @@
+//go:build full
+
 package lower_test
 
 import (
-	"bytes"
-	"context"
 	"errors"
 	"strings"
 	"testing"
-	"time"
 
-	"mvdan.cc/sh/v3/expand"
-	"mvdan.cc/sh/v3/interp"
 	"mvdan.cc/sh/v3/lower"
-	"mvdan.cc/sh/v3/syntax"
 )
 
 // Sources are copied unchanged from interp/bashpp_generic_method_test.go:
@@ -103,24 +99,4 @@ func TestGenericMethodEntryControls(t *testing.T) {
 			execute(t, compile(t, tc.source))
 		})
 	}
-}
-
-func genericMethodOracle(t *testing.T, source string) (string, string, int) {
-	t.Helper()
-	var out, diagnostic bytes.Buffer
-	runner, err := interp.New(interp.Lang(syntax.LangBashPP), interp.StdIO(nil, &out, &diagnostic), interp.Dir(t.TempDir()), interp.Env(expand.ListEnviron("PATH=/no-tools")))
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	status := 0
-	if err = runner.Run(ctx, parse(t, source, "input.bpp")); err != nil {
-		var exit interp.ExitStatus
-		if !errors.As(err, &exit) {
-			t.Fatal(err)
-		}
-		status = int(exit)
-	}
-	return out.String(), diagnostic.String(), status
 }

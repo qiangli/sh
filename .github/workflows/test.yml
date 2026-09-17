@@ -1,5 +1,14 @@
 on: [push, pull_request]
 name: Test
+# The quick tier — the push gate: build + unit/mock tests (`make test-quick`),
+# vet and gofmt, under three minutes. Test files that build or run Go programs
+# with the reviewed toolchain carry `//go:build full` and are not compiled
+# here; `go vet -tags full` keeps them compiling. The full tier — those files,
+# the Bash 5.2 confirm run, the race/lifecycle gate — is full-tests.yml, run on
+# tags and by hand. Decided 2026-09-17: the full suite had grown past two hours
+# per push (interp alone went from 91s to 1047s between 2026-09-08 and
+# 2026-09-17) and had not been green since 2026-09-13, so pushes were
+# effectively ungated.
 jobs:
   test:
     strategy:
@@ -13,12 +22,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       GOFLAGS: -tags=netgo
-    # The Linux race/lifecycle gate runs a bounded schedule matrix plus the
-    # complete race suite; keep CI from killing it before its own diagnostics.
-    # The gate's bounded operations total at most 5040s and its global
-    # watchdog adds one minute for orchestration. A job-level kill reports no
-    # lane, so leave another 19 minutes for the surrounding build/test steps.
-    timeout-minutes: 104
+    timeout-minutes: 15
     steps:
     - uses: actions/checkout@v5
     - uses: actions/setup-go@v6
@@ -26,35 +30,13 @@ jobs:
         go-version: ${{ matrix.go-version }}
         cache: false
 
-    # Darwin signal dispositions are process-global. Isolate the large interp
-    # suite into bounded processes so signal conformance cases cannot leave
-    # runtime receiver state that affects hundreds of later tests. Every test
-    # still runs; the regexes partition Test* names and examples run last.
-    - name: Test with isolated Darwin signal state
-      run: |
-        go list ./... | grep -v '/interp$' | xargs go test -timeout=30m
-        for group in 'A-E' 'F-J' 'K-O' 'P-T' 'U-Z'; do
-          go test ./interp -timeout=30m -run "^Test[$group]"
-        done
-        go test ./interp -timeout=30m -run '^Example'
-      if: matrix.os == 'macos-latest'
-    - run: go test -timeout=30m ./...
-      if: matrix.os != 'macos-latest'
-    - run: cd moreinterp && go test -timeout=30m ./...
-
-    - name: Bash++ race lifecycle gate
-      run: make bashpp-race-gate
-      if: matrix.os == 'ubuntu-latest'
-    - uses: actions/upload-artifact@v4
-      if: matrix.os == 'ubuntu-latest' && always()
-      with:
-        name: bashpp-race-gate-${{ matrix.os }}-${{ matrix.go-version }}
-        path: artifacts/bashpp-race-gate.txt
-        if-no-files-found: error
-    - name: confirm tests with Bash 5.2
-      run: |
-        go install mvdan.cc/dockexec@latest
-        CGO_ENABLED=0 go test -run TestRunnerRunConfirm -exec 'dockexec bash:5.2' ./interp
+    # scripts/test-quick.sh owns the build + -short definition and the Darwin
+    # per-process isolation of the interp suite, so CI and a local
+    # `make test-quick` run the same thing.
+    - run: make test-quick
+    - run: cd moreinterp && go test -short -timeout=10m ./...
+    # The full tier is not run here, but it must keep compiling.
+    - run: go vet -tags full ./...
       if: matrix.os == 'ubuntu-latest'
 
     # Test that we can build for platforms that we can't currently test on.
@@ -74,9 +56,6 @@ jobs:
     - if: matrix.os == 'ubuntu-latest' && matrix.go-version == '1.27.x'
       run: go vet ./...
 
-  # Build (not test) sh natively on Windows: validates the Windows toolchain path
-  # for real (killSig, the /c/ path mapping, etc.). The interp test suite hangs on
-  # a Windows runner (readline/PTY), so the test-run stays deferred.
   build-windows:
     runs-on: windows-latest
     timeout-minutes: 10

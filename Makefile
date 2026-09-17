@@ -1,4 +1,4 @@
-.PHONY: build tidy clean test bashpp-race-gate help fmtcheck hooks
+.PHONY: build tidy clean test test-quick test-full bashpp-race-gate help fmtcheck hooks
 
 BIN_DIR := bin
 CMDS := gosh shfmt
@@ -11,9 +11,17 @@ build:
 		go build -o $(BIN_DIR)/$$cmd ./cmd/$$cmd; \
 	done
 
-## test: Run all Go tests
-test:
-	go test ./...
+## test: The quick tier (alias of test-quick) — what push CI runs
+test: test-quick
+
+## test-quick: Build + unit/mock tests: go test -short, without the `//go:build full` evaluator files (< 3 min)
+test-quick:
+	@/bin/bash ./scripts/test-quick.sh
+
+## test-full: Every Go test (-tags full), including the toolchain-driven evaluator and external-shell tests
+test-full:
+	go test -tags full -timeout=30m ./...
+	cd moreinterp && go test -timeout=30m ./...
 
 ## bashpp-race-gate: Run the Bash++ race/lifecycle gate and write local evidence
 bashpp-race-gate:

@@ -1,3 +1,5 @@
+//go:build full
+
 package gosource
 
 import (
@@ -17,8 +19,6 @@ import (
 	"mvdan.cc/sh/v3/interp"
 	"mvdan.cc/sh/v3/syntax"
 )
-
-func src(name, data string) Source { return Source{Name: name, Data: []byte(data)} }
 
 const pkgA = "package a\n\nfunc F() int { return 1 }\n"
 const pkgB = "package b\n\nimport \"./a\"\n\nfunc G() int { return a.F() + 1 }\n"

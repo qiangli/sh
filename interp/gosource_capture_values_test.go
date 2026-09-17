@@ -1,3 +1,5 @@
+//go:build full
+
 package interp_test
 
 import "testing"

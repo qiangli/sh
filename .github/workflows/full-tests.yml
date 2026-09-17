@@ -1,0 +1,71 @@
+name: Full tests
+# The full tier — every Go test (`-tags full`: the Bash++ evaluator files that
+# build or run Go programs with the reviewed toolchain), the Bash 5.2 confirm
+# run, and the Bash++ race/lifecycle gate. Runs on tags and by hand; the push
+# gate is test.yml (`make test-quick`). See the note at the top of test.yml for
+# why the two were split on 2026-09-17.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      race_gate:
+        description: 'Run the Bash++ race/lifecycle gate (Linux; up to ~80 minutes)'
+        type: boolean
+        default: true
+
+jobs:
+  full:
+    strategy:
+      fail-fast: false
+      matrix:
+        go-version: [1.27.x]
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      GOFLAGS: -tags=netgo,full
+    # The Linux race/lifecycle gate runs a bounded schedule matrix plus the
+    # complete race suite; keep CI from killing it before its own diagnostics.
+    # The gate's bounded operations total at most 8340s and its global
+    # watchdog adds one minute for orchestration. A job-level kill reports no
+    # lane, so leave room for the full suite (~35 minutes) before it.
+    timeout-minutes: 180
+    steps:
+    - uses: actions/checkout@v5
+    - uses: actions/setup-go@v6
+      with:
+        go-version: ${{ matrix.go-version }}
+        cache: false
+
+    # Darwin signal dispositions are process-global. Isolate the large interp
+    # suite into bounded processes so signal conformance cases cannot leave
+    # runtime receiver state that affects hundreds of later tests. Every test
+    # still runs; the regexes partition Test* names and examples run last.
+    - name: Test with isolated Darwin signal state
+      run: |
+        go list ./... | grep -v '/interp$' | xargs go test -timeout=30m
+        for group in 'A-E' 'F-J' 'K-O' 'P-T' 'U-Z'; do
+          go test ./interp -timeout=30m -run "^Test[$group]"
+        done
+        go test ./interp -timeout=30m -run '^Example'
+      if: matrix.os == 'macos-latest'
+    - run: make test-full
+      if: matrix.os != 'macos-latest'
+    - run: cd moreinterp && go test -timeout=30m ./...
+      if: matrix.os == 'macos-latest'
+
+    - name: Bash++ race lifecycle gate
+      run: make bashpp-race-gate
+      if: matrix.os == 'ubuntu-latest' && (github.event_name != 'workflow_dispatch' || inputs.race_gate)
+    - uses: actions/upload-artifact@v4
+      if: matrix.os == 'ubuntu-latest' && always() && hashFiles('artifacts/bashpp-race-gate.txt') != ''
+      with:
+        name: bashpp-race-gate-${{ matrix.os }}-${{ matrix.go-version }}
+        path: artifacts/bashpp-race-gate.txt
+        if-no-files-found: error
+    - name: confirm tests with Bash 5.2
+      run: |
+        go install mvdan.cc/dockexec@latest
+        CGO_ENABLED=0 go test -run TestRunnerRunConfirm -exec 'dockexec bash:5.2' ./interp
+      if: matrix.os == 'ubuntu-latest'

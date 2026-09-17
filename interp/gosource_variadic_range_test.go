@@ -1,6 +1,8 @@
 // Copyright (c) 2026, the bashy authors.
 // See LICENSE for licensing information.
 
+//go:build full
+
 package interp_test
 
 // Sprint: #118; Story: #3; Story-ID: fa07603b71dc

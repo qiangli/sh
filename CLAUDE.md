@@ -15,14 +15,14 @@ Note: this checkout is a fork. `origin/master` is the fork integration branch â€
 
 ## Build / test / lint
 
-The `Makefile` wraps the common flows: `make build`, `make test`, `make tidy`, `make clean`. For finer-grained control use the underlying `go` commands:
+The `Makefile` wraps the common flows: `make build`, `make test-quick` (the push gate, `make test` is its alias: build + `go test -short`, without the test files tagged `//go:build full`), `make test-full` (every test: `-tags full`), `make tidy`, `make clean`. CI runs `test-quick` on every push (`.github/workflows/test.yml`) and the full suite plus the race gate and the Bash 5.2 confirm on `v*` tags / `workflow_dispatch` (`full-tests.yml`) â€” split 2026-09-17, when the full suite passed two hours per push. For finer-grained control use the underlying `go` commands:
 
 ```sh
 # Build everything
 go build ./...
 
-# Run all tests (mirrors CI)
-go test ./...
+# Run all tests (mirrors the full-tests workflow; push CI runs `make test-quick`)
+go test -tags full ./...
 cd moreinterp && go test ./...   # separate Go module, must be tested independently
 
 # Race detector and 32-bit (CI runs both on Linux only)
@@ -33,7 +33,7 @@ GOARCH=386 go test -count=1 ./...
 gofmt -s -d .
 go vet ./...
 
-# Run a single test / package
+# Run a single test / package (add -tags full for a Bash++ evaluator test file)
 go test ./syntax -run TestParseBash
 go test ./interp -run TestRunnerRun/specific_subtest
 
