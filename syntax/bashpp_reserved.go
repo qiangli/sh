@@ -31,7 +31,25 @@ func (p *Parser) bashppReservedFallback(ce *CallExpr) {
 		}
 		head = &Lit{ValuePos: ce.Args[0].Pos(), ValueEnd: ce.Args[0].End(), Value: name.String()}
 	}
-	if (head.Value != "func" || len(ce.Args) != 1 || len(ce.Assigns) != 0) && bashppReservedWord(head.Value) {
+	funcAssignmentArg := false
+	if head.Value == "func" {
+		for _, arg := range ce.Args[1:] {
+			text := arg.Lit()
+			eq := strings.IndexByte(text, '=')
+			if eq <= 0 {
+				continue
+			}
+			name := text[:eq]
+			if strings.HasSuffix(name, "+") {
+				name = strings.TrimSuffix(name, "+")
+			}
+			if ValidName(name) {
+				funcAssignmentArg = true
+				break
+			}
+		}
+	}
+	if (head.Value != "func" || len(ce.Assigns) != 0 || funcAssignmentArg) && bashppReservedWord(head.Value) {
 		if head.Value == "package" {
 			p.posErr(head.Pos(), "package must begin a Go compilation unit; use the Go source route")
 		} else {
