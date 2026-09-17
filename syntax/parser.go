@@ -4418,7 +4418,7 @@ func (p *Parser) funcDecl(s *Stmt, pos Pos, long, withParens bool, names ...*Lit
 	if p.lang.in(LangBashPP) {
 		for _, name := range names {
 			plainName := strings.NewReplacer("\"", "", "'", "").Replace(name.Value)
-			if bashppReservedWord(plainName) {
+			if plainName != "func" && bashppReservedWord(plainName) {
 				p.posErr(name.Pos(), "%s is reserved and cannot name a shell function", name.Value)
 				return
 			}

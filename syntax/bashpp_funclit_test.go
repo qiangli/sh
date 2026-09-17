@@ -296,13 +296,39 @@ func TestBashPPFuncLitClassicIsolation(t *testing.T) {
 			t.Fatalf("classic function: %T", f.Stmts[0].Cmd)
 		}
 	}
-	bashppCheckDiagnostic(t, shellFunc, "func is reserved and cannot name a shell function")
+	bashppCheckIdentical(t, shellFunc)
 
 	// POSIX MODE is a runtime gate, not a parse-time one: the tree survives so
 	// the interpreter can refuse it with a diagnostic of its own.
 	if _, err := NewParser(Variant(LangBashPP), PosixMode(true)).
 		Parse(strings.NewReader(bashppFuncLitSources[0]), "lit.sh"); err != nil {
 		t.Fatalf("POSIX mode should preserve the AST for runtime gating: %v", err)
+	}
+}
+
+func TestSprint119ClassicFuncNameInBashFixtures(t *testing.T) {
+	t.Parallel()
+
+	// These are reduced forms of the Bash 5.3 trap/varenv fixtures that failed
+	// when Bash++ treated the classic function name `func` as a reserved word.
+	for _, src := range []string{
+		"func() { trap 'echo trapped' USR1; }; kill -USR1 $$\n",
+		"func() { kill -USR1 $$; }; trap func USR1; func\n",
+		"func() { var=20 return; }; var=10; func; echo $var\n",
+	} {
+		t.Run(src, func(t *testing.T) {
+			bashFile, bashErr := NewParser(Variant(LangBash)).Parse(strings.NewReader(src), "")
+			ppFile, ppErr := NewParser(Variant(LangBashPP)).Parse(strings.NewReader(src), "")
+			if (bashErr == nil) != (ppErr == nil) {
+				t.Fatalf("bash err=%v, bash++ err=%v", bashErr, ppErr)
+			}
+			if bashErr != nil {
+				return
+			}
+			if diff := bashppTreeDiff(bashFile, ppFile); diff != "" {
+				t.Fatalf("Bash++ changed classic fixture syntax: %s", diff)
+			}
+		})
 	}
 }
 

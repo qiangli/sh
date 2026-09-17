@@ -748,8 +748,6 @@ var bashppSprint198DiagnosticRows = map[string]string{
 	"echo hi\nvar x = 1 extra":          "var",
 	"echo ready; package main":          "package",
 	"f() { var x = 1 extra; }":          "var",
-	"func":                              "func",
-	"func() { :; }":                     "function:func",
 	"goto":                              "goto",
 	"goto() { :; }":                     "function:goto",
 	"if true; then var x = foo bar; fi": "var",
