@@ -370,6 +370,67 @@ func TestSprint119ClassicFuncNameForms(t *testing.T) {
 	}
 }
 
+func TestSprint119ClassicFuncCallForms(t *testing.T) {
+	t.Parallel()
+	parse := func(lang LangVariant, posix bool, entry string, src io.Reader) (*File, error) {
+		p := NewParser(Variant(lang), KeepComments(true), PosixMode(posix))
+		if entry == "Parse" {
+			return p.Parse(src, "")
+		}
+		f := &File{}
+		if entry == "Stmts" {
+			for stmt, err := range p.StmtsSeq(src) {
+				if err != nil {
+					return nil, err
+				}
+				f.Stmts = append(f.Stmts, stmt)
+			}
+		} else {
+			for stmts, err := range p.InteractiveSeq(src) {
+				if err != nil {
+					return nil, err
+				}
+				f.Stmts = append(f.Stmts, stmts...)
+			}
+		}
+		return f, nil
+	}
+	// Argument-bearing and assignment-prefixed calls occur in the unchanged
+	// comsub/varenv/func fixtures. They remain shell syntax independently of
+	// whether a function named func has already been defined.
+	for _, src := range []string{
+		"func nope\n",
+		"func a b c\n",
+		"A=BVAR func\n",
+		"var=40 func\n",
+		"var=two func\n",
+		"var=30 func\n",
+		"A=value func a b c\n",
+		"x=${ func a b c; }\n",
+		"func() { echo \"$var:$*\"; }; var=30 func a b c\n",
+	} {
+		t.Run(src, func(t *testing.T) {
+			for _, entry := range []string{"Parse", "Stmts", "Interactive"} {
+				for _, posix := range []bool{false, true} {
+					for _, mode := range bashppReadModes {
+						bashFile, bashErr := parse(LangBash, posix, entry, mode.wrap(src))
+						ppFile, ppErr := parse(LangBashPP, posix, entry, mode.wrap(src))
+						if bashErr != nil || ppErr != nil {
+							t.Fatalf("%s/%s posix=%v: bash err=%v, bash++ err=%v", entry, mode.name, posix, bashErr, ppErr)
+						}
+						if len(bashFile.Stmts) == 0 || len(ppFile.Stmts) == 0 {
+							t.Fatalf("%s/%s lost the shell call", entry, mode.name)
+						}
+						if diff := bashppTreeDiff(bashFile, ppFile); diff != "" {
+							t.Fatalf("%s/%s posix=%v changed shell call syntax: %s", entry, mode.name, posix, diff)
+						}
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestSprint119FuncRoutingTypedControls(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -421,13 +482,20 @@ func TestSprint119FuncRoutingTypedControls(t *testing.T) {
 			}
 		})
 	}
-	for _, src := range []string{"func nope", "func argument", "X=1 func"} {
-		bashppCheckDiagnostic(t, src, "invalid func statement; use command func to invoke a shell command")
-	}
-	for _, src := range []string{"func () M() { return; }", "func (r) M() { return; }"} {
-		for _, mode := range bashppReadModes {
-			if _, err := bashppParseAs(LangBashPP, src, false, mode.wrap); err == nil {
-				t.Fatalf("malformed method became a classic function: %q", src)
+	for _, src := range []string{
+		"func f(",
+		"func f(a ...int, b int) { return; }",
+		"func () M() { return; }",
+		"func (r) M() { return; }",
+		"func(n int) { echo $n; }", // A command-position literal must be invoked.
+	} {
+		for _, posixMode := range []bool{false, true} {
+			for _, mode := range bashppReadModes {
+				_, err := bashppParseAs(LangBashPP, src, posixMode, mode.wrap)
+				pe, ok := err.(ParseError)
+				if !ok || pe.Pos.Line() == 0 || pe.Pos.Col() == 0 {
+					t.Fatalf("malformed typed prefix lost its positioned diagnostic: %q: %v", src, err)
+				}
 			}
 		}
 	}
