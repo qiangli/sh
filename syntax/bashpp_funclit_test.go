@@ -315,6 +315,7 @@ func TestSprint119ClassicFuncNameInBashFixtures(t *testing.T) {
 		"func() { trap 'echo trapped' USR1; }; kill -USR1 $$\n",
 		"func() { kill -USR1 $$; }; trap func USR1; func\n",
 		"func() { var=20 return; }; var=10; func; echo $var\n",
+		"func() { printf 'arg=%s\\n' \"$1\"; }; func value\n",
 	} {
 		t.Run(src, func(t *testing.T) {
 			bashFile, bashErr := NewParser(Variant(LangBash)).Parse(strings.NewReader(src), "")
