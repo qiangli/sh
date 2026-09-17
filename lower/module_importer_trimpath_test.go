@@ -330,7 +330,7 @@ func TestModuleImporterGoSDKResolutionOrder(t *testing.T) {
 // flag configuration is injected behind the caller's back.
 func TestModuleImporterGoSDKToolchainRespected(t *testing.T) {
 	t.Run("deliberate-setting-passed-through", func(t *testing.T) {
-		for _, value := range []string{"local", "go1.27.0", "auto"} {
+		for _, value := range []string{"local", "go1.27.1", "auto"} {
 			t.Setenv("GOTOOLCHAIN", value)
 			if got := goToolchainSetting(); got != "GOTOOLCHAIN="+value {
 				t.Fatalf("GOTOOLCHAIN=%s became %q", value, got)
@@ -402,7 +402,7 @@ func TestModuleImporterGoSDKCapabilityNotAssumed(t *testing.T) {
 
 	older := &goSDK{Bin: sdk.Bin, Root: sdk.Root, Version: "go1.26.0", Source: "GOROOT"}
 	if older.atLeast(minimumGoSDK) {
-		t.Fatal("go1.26.0 credited with the go1.27.0 baseline")
+		t.Fatal("go1.26.0 credited with the go1.27.1 baseline")
 	}
 	if !strings.Contains(older.describe(), "older than "+minimumGoSDK) {
 		t.Fatalf("older SDK not reported precisely: %s", older.describe())

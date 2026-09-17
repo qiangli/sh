@@ -44,7 +44,7 @@ func TestGoSourcePragmaPosition(t *testing.T) {
 				t.Fatal(err)
 			}
 			cmd := exec.Command("go", "tool", "compile", "-p=pragmafixture", "-o", generated+".o", generated)
-			cmd.Env = append(os.Environ(), "GOTOOLCHAIN=go1.27.0")
+			cmd.Env = append(os.Environ(), "GOTOOLCHAIN=go1.27.1")
 			output, runErr := cmd.CombinedOutput()
 			if (runErr != nil) != tc.wantStatus {
 				t.Fatalf("compiler status error = %v, want failure %v\n%s\n--- generated\n%s", runErr, tc.wantStatus, output, result.Source)

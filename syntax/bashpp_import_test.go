@@ -103,7 +103,7 @@ func assertImportFallbackExact(t *testing.T, src string, oneByte bool) {
 }
 
 func TestGo127StdlibAllowlistProvenanceAndNearMisses(t *testing.T) {
-	if go127StdlibSourceSHA256 != "636d109763f0fe3e45347b74e07a0e00a1ca6a90b6130564b09ed8a04804d942" {
+	if go127StdlibSourceSHA256 != "76188f97e2bc012cb716a6e21d49ff38858eed94a1845ee3534e74a8208ff291" {
 		t.Fatalf("unreviewed Go 1.27 source inventory: %s", go127StdlibSourceSHA256)
 	}
 	if !slices.IsSorted(go127StdlibImports[:]) {

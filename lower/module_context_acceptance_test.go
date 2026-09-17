@@ -25,7 +25,7 @@ import (
 func TestModuleContextAcceptance(t *testing.T) {
 	// The source oracle authenticates the reviewed Go 1.27 toolchain. Keep
 	// ordinary Go 1.26 library tests usable without weakening that policy.
-	if runtime.Version() != "go1.27.0" {
+	if runtime.Version() != "go1.27.1" {
 		t.Skip("requires tests built with the reviewed Go 1.27.0 toolchain for the source interpreter oracle")
 	}
 

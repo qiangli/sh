@@ -20,18 +20,18 @@ import (
 )
 
 const (
-	toolchainVersion = "go1.27.0"
+	toolchainVersion = "go1.27.1"
 	// sourceSHA256 authenticates the complete src/ tree used during review.
 	// Regeneration must fail until a changed source snapshot is reviewed.
-	sourceSHA256    = "636d109763f0fe3e45347b74e07a0e00a1ca6a90b6130564b09ed8a04804d942"
+	sourceSHA256    = "76188f97e2bc012cb716a6e21d49ff38858eed94a1845ee3534e74a8208ff291"
 	inventorySHA256 = "de444f71390a90f274b5176d8da92480ab72e2992d8885823712cd927e289f6c"
 )
 
 var moduleSums = map[string]string{
-	"darwin-amd64": "h1:IzMA5UWIaARsT0Meuwbuhn57MLx3voSn0P2gTZQr/y8=",
-	"darwin-arm64": "h1:QFUhEu+WNZ4lGI/0ual1EOKBq/Z/df/cL75PkCW8m1k=",
-	"linux-amd64":  "h1:fVts2HjYwzBWrJtkf1B9HRDAuCZcZLexWI6ZX6Ls/IU=",
-	"linux-arm64":  "h1:j3YFWnbfYYDouN9SH55CdTuBmwMifUuKLBqZhkRRcHc=",
+	"darwin-amd64": "h1:0klAae3mIYfNIjR4ucgObyW53gWhHe7Pi8Rctm5uraY=",
+	"darwin-arm64": "h1:51Yfd9AJPm34szJ1qdVX7+kqAGDd3vI9FzVuY7UqLfA=",
+	"linux-amd64":  "h1:MeqkXdYlyiVdqJXENOTyX7xd8QjDM/mxR52RKOFBS0M=",
+	"linux-arm64":  "h1:BhjYbTkha2ZqOR13zJ7cl8yLP1Y2RsrE0vqkhjs4lmQ=",
 }
 
 func run(goBin string, env []string, args ...string) string {
@@ -106,7 +106,7 @@ func verifyModuleSum(goBin string, env []string) {
 	if !ok {
 		panic("no reviewed Go 1.27 module sum for generator platform " + platform)
 	}
-	version := "v0.0.1-go1.27.0." + platform
+	version := "v0.0.1-" + toolchainVersion + "." + platform
 	modCache := run(goBin, env, "env", "GOMODCACHE")
 	zipHash := filepath.Join(modCache, "cache", "download", "golang.org", "toolchain", "@v", version+".ziphash")
 	got, err := os.ReadFile(zipHash)

@@ -100,10 +100,10 @@ type bashPPGoReview struct {
 // execute Go. Each digest reviews the bin/go payload in the official Go
 // toolchain module, not whichever executable happens to be on PATH.
 var bashPPGoReviews = []bashPPGoReview{
-	{Version: "go1.27.0", GOOS: "darwin", GOARCH: "amd64", SHA256: "71189642c2912561f458bee762a3011335997594796fa963b6c284be0019a009"},
-	{Version: "go1.27.0", GOOS: "darwin", GOARCH: "arm64", SHA256: "a19a71df81715c12d9a7e81bab036c12696fec1ddbd4258b48a2131a9080b267"},
-	{Version: "go1.27.0", GOOS: "linux", GOARCH: "amd64", SHA256: "1db869c560a193573a71be466a34e0d4abb7792d78165c6102cdda069276a3a8"},
-	{Version: "go1.27.0", GOOS: "linux", GOARCH: "arm64", SHA256: "b51e8499a917e56a0b290e2ab3ba96f11715dc47ad9739d307e03708e630343a"},
+	{Version: "go1.27.1", GOOS: "darwin", GOARCH: "amd64", SHA256: "285418143831d996755c236ca0938ad317b22edeeb1d61bfa082f50550399fe3"},
+	{Version: "go1.27.1", GOOS: "darwin", GOARCH: "arm64", SHA256: "132b69336a1f809932a8a20b0201dbbb980e86e3a323ae32e893639d83d71598"},
+	{Version: "go1.27.1", GOOS: "linux", GOARCH: "amd64", SHA256: "30969f97169d7f43fe6a085873d75613adc21e30818a8c61d95bd27275df4624"},
+	{Version: "go1.27.1", GOOS: "linux", GOARCH: "arm64", SHA256: "1675694ef690db0f18fbe7046a886170904bede1d9db6ec96ae27945c1705c64"},
 }
 
 type bashPPGoIdentityInfo struct {
@@ -520,15 +520,15 @@ func bashPPGoIdentity() (bashPPGoIdentityInfo, error) {
 		return bashPPGoIdentityInfo{}, fmt.Errorf("resolve Go bootstrap: %w", err)
 	}
 	cmd := exec.Command(bootstrap, "env", "GOROOT", "GOOS", "GOARCH")
-	cmd.Env = setEnvString(os.Environ(), "GOTOOLCHAIN", "go1.27.0")
+	cmd.Env = setEnvString(os.Environ(), "GOTOOLCHAIN", "go1.27.1")
 	cmd.Env = setEnvString(cmd.Env, "GOROOT", bootstrapRoot)
 	out, err := cmd.Output()
 	if err != nil {
-		return bashPPGoIdentityInfo{}, fmt.Errorf("resolve GOTOOLCHAIN=go1.27.0: %w", err)
+		return bashPPGoIdentityInfo{}, fmt.Errorf("resolve GOTOOLCHAIN=go1.27.1: %w", err)
 	}
 	fields := strings.Fields(string(out))
 	if len(fields) != 3 {
-		return bashPPGoIdentityInfo{}, fmt.Errorf("resolve GOTOOLCHAIN=go1.27.0: unexpected go env output %q", out)
+		return bashPPGoIdentityInfo{}, fmt.Errorf("resolve GOTOOLCHAIN=go1.27.1: unexpected go env output %q", out)
 	}
 	root, goos, goarch := fields[0], fields[1], fields[2]
 	path := filepath.Join(root, "bin", name)
@@ -606,7 +606,7 @@ func bashPPGoBootstrap(name string) (root, binary string, err error) {
 		return "", "", fmt.Errorf("module cache path %q is not absolute", modCache)
 	}
 	root = filepath.Join(modCache, "golang.org",
-		"toolchain@v0.0.1-go1.27.0."+runtime.GOOS+"-"+runtime.GOARCH)
+		"toolchain@v0.0.1-go1.27.1."+runtime.GOOS+"-"+runtime.GOARCH)
 	binary, err = filepath.EvalSymlinks(filepath.Join(root, "bin", name))
 	if err != nil {
 		return "", "", err
@@ -619,7 +619,7 @@ func bashPPGoBootstrap(name string) (root, binary string, err error) {
 	if err != nil {
 		return "", "", err
 	}
-	identity := bashPPGoIdentityInfo{Version: "go1.27.0", GOOS: runtime.GOOS, GOARCH: runtime.GOARCH,
+	identity := bashPPGoIdentityInfo{Version: "go1.27.1", GOOS: runtime.GOOS, GOARCH: runtime.GOARCH,
 		Root: root, Binary: binary, SHA256: digest}
 	if err := validateBashPPGoIdentity(identity, bashPPGoReviews); err != nil {
 		return "", "", err

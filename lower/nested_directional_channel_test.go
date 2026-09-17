@@ -39,7 +39,7 @@ func TestGoSourceNestedDirectionalChannel(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "go", "run", generated)
-	cmd.Env = append(os.Environ(), "GOTOOLCHAIN=go1.27.0")
+	cmd.Env = append(os.Environ(), "GOTOOLCHAIN=go1.27.1")
 	output, err := cmd.CombinedOutput()
 	if ctx.Err() != nil {
 		t.Fatal("generated program exceeded its deadline")
