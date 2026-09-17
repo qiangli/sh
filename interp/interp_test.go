@@ -7183,6 +7183,32 @@ func TestBashCompatPosixTempEnvFunctionCallRestore(t *testing.T) {
 	qt.Assert(t, qt.Equals(cb.String(), "5 20\n"))
 }
 
+func TestBashPPVarenvTempAssignmentToFunc(t *testing.T) {
+	src := "func() {\n" +
+		"\tlocal YYZ\n" +
+		"\tYYZ=\"song by rush\"\n" +
+		"\techo $YYZ\n" +
+		"\techo $A\n" +
+		"}\n" +
+		"YYZ=\"toronto airport\"\n" +
+		"A=\"AVAR\"\n" +
+		"echo $YYZ\n" +
+		"echo $A\n" +
+		"A=BVAR func\n" +
+		"echo $YYZ\n" +
+		"echo $A\n"
+	file, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(src), "./varenv.tests")
+	qt.Assert(t, qt.IsNil(err))
+
+	var cb bytes.Buffer
+	r, err := interp.New(interp.Lang(syntax.LangBashPP), interp.StdIO(nil, &cb, &cb))
+	qt.Assert(t, qt.IsNil(err))
+
+	err = r.Run(context.Background(), file)
+	qt.Assert(t, qt.IsNil(err))
+	qt.Assert(t, qt.Equals(cb.String(), "toronto airport\nAVAR\nsong by rush\nBVAR\ntoronto airport\nAVAR\n"))
+}
+
 func TestBashCompatPosixTempEnvSpecialBuiltinInFunctionPersists(t *testing.T) {
 	src := "set -o posix\n" +
 		"myfunction() { var=20 return; }\n" +
