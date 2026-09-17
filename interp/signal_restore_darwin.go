@@ -33,6 +33,13 @@ func syscallPtr(fn, a1, a2, a3 uintptr) (r1, r2 uintptr, err syscall.Errno)
 // libc sigaction using the platform C ABI.
 func sigactionTrampolineAddr() uintptr
 
+// sigactionTrampoline is the assembly trampoline itself. It is reached only
+// through runtime.libcCall, never called from Go; the declaration exists so
+// the symbol has a Go-visible signature (as the standard library declares its
+// libc_*_trampoline stubs) and vet's asmdecl can check the assembly against
+// it.
+func sigactionTrampoline()
+
 //go:cgo_import_dynamic libc_sigaction sigaction "/usr/lib/libSystem.B.dylib"
 
 func libcSigaction(sig uint32, new, old *signalDisposition) int32 {
