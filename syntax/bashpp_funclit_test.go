@@ -332,6 +332,106 @@ func TestSprint119ClassicFuncNameInBashFixtures(t *testing.T) {
 	}
 }
 
+func TestSprint119ClassicFuncNameForms(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		src   string
+		posix bool
+	}{
+		{"adjacent", "func() { echo hi; }; func\n", true},
+		{"spaced", "func () { echo hi; }; func\n", true},
+		{"spaced-empty-list", "func ( ) { echo hi; }; func\n", true},
+		{"tabbed", "func\t() { echo hi; }; func\n", true},
+		{"long-form", "function func { echo hi; }; func\n", false},
+		{"long-form-parentheses", "function func () { echo hi; }; func\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// This compares AST, positions and printed bytes for both readers
+			// and Bash's POSIX mode, rather than merely accepting the source.
+			bashppCheckIdentical(t, tc.src)
+			for _, mode := range bashppReadModes {
+				f, err := bashppParseAs(LangPOSIX, tc.src, false, mode.wrap)
+				if !tc.posix {
+					if err == nil {
+						t.Fatalf("pure POSIX grammar accepted Bash function spelling %q", tc.src)
+					}
+					continue
+				}
+				if err != nil {
+					t.Fatalf("pure POSIX grammar rejected classic function: %v", err)
+				}
+				if _, ok := f.Stmts[0].Cmd.(*FuncDecl); !ok {
+					t.Fatalf("pure POSIX function became %T", f.Stmts[0].Cmd)
+				}
+			}
+		})
+	}
+}
+
+func TestSprint119FuncRoutingTypedControls(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		src  string
+		kind string
+	}{
+		{"declaration", "func f(n int) int { return n }\n", "declaration"},
+		{"method", "func (r Count) M(n int) int { return n }\n", "method"},
+		{"pointer-method", "func (r *Count) M() { return; }\n", "method"},
+		{"bound-literal", "greet := func(who string) { echo hi; }\n", "bound-literal"},
+		{"called-literal", "func(n int) { echo $n; }(1)\n", "called-literal"},
+		{"bound-empty-literal", "n := func() int { return 1 }()\n", "bound-empty-literal"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, mode := range bashppReadModes {
+				for _, posixMode := range []bool{false, true} {
+					// Explicit library grammar selection remains separate from
+					// Bashy's startup resolver and the interpreter's POSIX gate.
+					f, err := bashppParseAs(LangBashPP, tc.src, posixMode, mode.wrap)
+					if err != nil {
+						t.Fatalf("typed syntax rejected (%s posix=%v): %v", mode.name, posixMode, err)
+					}
+					cmd := f.Stmts[0].Cmd
+					switch tc.kind {
+					case "declaration", "method":
+						fd, ok := cmd.(*BashPPFuncDecl)
+						if !ok || (fd.Receiver != nil) != (tc.kind == "method") {
+							t.Fatalf("typed declaration routing changed: %T %#v", cmd, cmd)
+						}
+					case "bound-literal", "bound-empty-literal":
+						decl, ok := cmd.(*BashPPShortDecl)
+						if !ok || (tc.kind == "bound-literal" && decl.FuncLit == nil) ||
+							(tc.kind == "bound-empty-literal" && (decl.Call == nil || decl.Call.FuncLit == nil)) {
+							t.Fatalf("bound literal routing changed: %T %#v", cmd, cmd)
+						}
+					case "called-literal":
+						call, ok := cmd.(*BashPPCall)
+						if !ok || call.FuncLit == nil {
+							t.Fatalf("literal callee routing changed: %T %#v", cmd, cmd)
+						}
+					}
+				}
+				for _, lang := range []LangVariant{LangBash, LangPOSIX} {
+					if _, err := bashppParseAs(lang, tc.src, false, mode.wrap); err == nil {
+						t.Fatalf("classic %v accepted typed syntax %q", lang, tc.src)
+					}
+				}
+			}
+		})
+	}
+	for _, src := range []string{"func nope", "func argument", "X=1 func"} {
+		bashppCheckDiagnostic(t, src, "invalid func statement; use command func to invoke a shell command")
+	}
+	for _, src := range []string{"func () M() { return; }", "func (r) M() { return; }"} {
+		for _, mode := range bashppReadModes {
+			if _, err := bashppParseAs(LangBashPP, src, false, mode.wrap); err == nil {
+				t.Fatalf("malformed method became a classic function: %q", src)
+			}
+		}
+	}
+}
+
 // TestBashPPFuncLitStartSites pins the decision table entries the literal sites
 // rest on, without a parser in the way.
 func TestBashPPFuncLitStartSites(t *testing.T) {

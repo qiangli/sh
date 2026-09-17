@@ -57,6 +57,16 @@ func (p *Parser) bashppFuncForm(ce *CallExpr) Command {
 		if kw == nil || kw.Value != "func" || p.pos.Offset() == kw.End().Offset() {
 			return nil
 		}
+		// Bash also allows whitespace before the empty parentheses in a
+		// classic `func () { ...; }` definition. Probe one token before
+		// committing to a method receiver; a receiver cannot be empty.
+		txn := p.beginBashPPTxn()
+		p.next()
+		empty := p.err == nil && p.tok == rightParen
+		txn.rollback(p)
+		if empty {
+			return nil
+		}
 		return p.bashppMethodForm(kw)
 	}
 	if len(ce.Args) < 2 {
