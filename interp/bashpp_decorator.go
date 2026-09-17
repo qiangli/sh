@@ -6,6 +6,7 @@ package interp
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -57,6 +58,67 @@ func (c *Call) Next(ctx context.Context) {
 	if c.chain != nil {
 		c.chain.next(ctx)
 	}
+}
+
+// Run evaluates src as shell source in the decorated call's frame — the
+// callee's variable environment as the decorators see it, the runner's
+// working directory, and the call's current Args as $1..$n — through the
+// runner's own exec-handler chain, so whatever governs the body (an effect
+// cap, a registered command, dry-run, auditing) governs src identically. src
+// runs in a nested variable scope: it reads the frame's variables, and its
+// own assignments do not leak back. vars are bound in that scope first.
+//
+// It returns src's exit status; a parse error is status 2 with the
+// diagnostic on the runner's stderr. An `exit` inside src exits the shell,
+// as it would anywhere. Run exists for contract-style decorators whose
+// argument is a shell CHECK rather than a value (a precondition on $1, a
+// postcondition on a result); it is not a way to change the target.
+func (c *Call) Run(ctx context.Context, src string, vars map[string]string) int {
+	if c == nil || c.chain == nil {
+		return 1
+	}
+	r := c.chain.r
+	p := syntax.NewParser()
+	if r.Dialect() == syntax.LangBashPP {
+		syntax.Variant(syntax.LangBashPP)(p)
+	}
+	file, err := p.Parse(strings.NewReader(src), "check")
+	if err != nil {
+		r.errf("%s: %v\n", c.Name, err)
+		return 2
+	}
+	saved := r.bashPPDecoratorFrame()
+	savedExit := r.exit
+	r.bashPPRestoreDecoratorFrame(c.chain.frame)
+	params := make([]string, len(c.Args))
+	for i, value := range c.Args {
+		params[i] = bashPPDecoratorValueText(value)
+	}
+	r.Params = params
+	r.inFunc = true
+	// A plain overlay (not a function scope): every assignment src makes
+	// lands in the overlay and is discarded with it, like a subshell's.
+	r.writeEnv = &overlayEnviron{parent: c.chain.frame.writeEnv}
+	if r.bashPPScope != nil {
+		r.bashPPScope = newBashPPScope(r.bashPPScope)
+	}
+	names := make([]string, 0, len(vars))
+	for name := range vars {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	for _, name := range names {
+		r.setVarString(name, vars[name])
+	}
+	r.exit = exitStatus{}
+	r.stmts(ctx, file.Stmts)
+	status := int(r.exit.code)
+	exiting := r.exit.exiting
+	r.bashPPRestoreDecoratorFrame(saved)
+	if !exiting {
+		r.exit = savedExit
+	}
+	return status
 }
 
 // DecoratorArg is one evaluated argument of a decorator line, positional

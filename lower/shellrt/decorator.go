@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"sort"
+	"strings"
 )
 
 // This file carries the Bash++ decorator contract (see
@@ -62,6 +64,53 @@ func (c *Call) Next(contexts ...context.Context) {
 		}
 		c.chain.next(p)
 	}
+}
+
+// Run evaluates src as shell source in the program's session with the
+// call's current Args as $1..$n and vars bound as shell variables, inside a
+// subshell so nothing src assigns leaks back — the compiled counterpart of
+// the interpreter's Call.Run. The lexical (typed) bindings visible to a
+// shell region are visible to src, and ctx governs its commands exactly as
+// it governs the body's (an effect cap rides it). It returns src's exit
+// status; a session or parse fault is status 2.
+func (c *Call) Run(ctx context.Context, src string, vars map[string]string) int {
+	if c == nil || c.chain == nil || c.chain.p == nil || c.chain.p.Session == nil {
+		return 1
+	}
+	p := c.chain.p
+	var b strings.Builder
+	b.WriteString("(\nset --")
+	for _, arg := range c.Args {
+		b.WriteString(" ")
+		b.WriteString(shellQuote(DecoratorArgText(arg)))
+	}
+	names := make([]string, 0, len(vars))
+	for name := range vars {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		b.WriteString("\n" + name + "=" + shellQuote(vars[name]))
+	}
+	b.WriteString("\n" + src + "\n)")
+	exchange, err := p.shellExchangeBindings().BeginShell(p.Session)
+	if err != nil {
+		return 2
+	}
+	defer exchange.EndShell(p.Session)
+	if ctx == nil {
+		ctx = p.Context
+	}
+	ctx, _ = WithLexicalDeclarations(ctx, p.Bindings)
+	if err := p.Session.Shell(ctx, b.String()); err != nil {
+		return 2
+	}
+	return p.Session.Status()
+}
+
+// shellQuote single-quotes s for the shell.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // DecoratorArg is one evaluated argument of a decorator line handed to a
