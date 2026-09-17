@@ -185,7 +185,7 @@ func TestGoSourceSignalProxyOriginalShape(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var stderr bytes.Buffer
+	var stderr bytes.Buffer // bashpp-racegate:safe-synchronized os/exec owns the copier until Wait joins it; the only earlier read is the fatal path.
 	cmd.Stderr = &stderr
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
@@ -198,7 +198,7 @@ func TestGoSourceSignalProxyOriginalShape(t *testing.T) {
 	if err := cmd.Process.Signal(syscall.SIGINT); err != nil {
 		t.Fatal(err)
 	}
-	var output strings.Builder
+	var output strings.Builder // bashpp-racegate:safe-private the test goroutine is the sole writer.
 	output.WriteString(line)
 	for {
 		line, err = reader.ReadString('\n')

@@ -35,6 +35,7 @@
 ./interp|resource|TestBashPPFIFOPersistentAliasesAndSnapshot
 ./interp|resource|TestBashPPFIFOPersistentDescriptorLifetime
 ./interp|resource|TestBashPPFIFOPreservesOwnerSpecialFiles
+./interp|resource|TestBashPPFIFOPublishedPeerReleasesAnnouncedOpener
 ./interp|resource|TestBashPPFIFOReaderKeepsAcquiredDescriptor
 ./interp|resource|TestBashPPFIFORendezvous
 ./interp|resource|TestBashPPFIFOReplacementDoesNotMatchOldInode
@@ -168,3 +169,32 @@
 ./interp|pipeline|TestTimeIssue7NestedPipelinePrintsOnlyOuterReport
 ./interp|pipeline|TestTimeIssue7Pipeline
 ./interp|background|TestUnrelatedBackgroundDoesNotDelayExecReplacement
+# Legacy-selector members added by the Sprint 150–198 Go-source lanes after the
+# 2026-09-08 review. Reviewed 2026-09-17: the FIFO rows exercise the
+# process-substitution / dry-run rendezvous; every other row is a cancellation
+# contract (session or callback context cancelled mid-flight).
+./interp|fifo|TestBashPPFIFOTaskRedirectOverProcessSubstitution
+./interp|fifo|TestDryRunOpenHandlerInactiveFIFORendezvous
+./interp|cancellation|TestGoSourceBridgeCancellation
+./interp|cancellation|TestGoSourceCallbackCancelReset
+./interp|cancellation|TestGoSourceComputedReceiveCancellation
+./interp|cancellation|TestGoSourceFunctionCallbackCancelReset
+./interp|cancellation|TestGoSourceImageCallbackCancelReset
+./interp|cancellation|TestGoSourceLocalCodecCancelReset
+./interp|cancellation|TestGoSourceNativeCancellationClassification
+./interp|cancellation|TestGoSourceNativeCancellationKeepsProcessFailures
+./interp|cancellation|TestGoSourceNativeCancellationPreservesTaskFailure
+./interp|cancellation|TestGoSourceNativeChannelCancellationReset
+./interp|cancellation|TestGoSourceNativeMemberCancellation
+./interp|cancellation|TestGoSourceNativeReadSliceCancelReset
+./interp|cancellation|TestGoSourceNativeWriterCancelReset
+./interp|cancellation|TestGoSourceReaderCallbackCancelReset
+./interp|cancellation|TestGoSourceTestingCancelledDeferIsBounded
+./interp|cancellation|TestGoSourceTestingNestedCallbackCancellation
+./interp|cancellation|TestGoSourceTourCallbackCancelReset
+./interp|cancellation|TestGoSourceTypedSendCancellation
+./interp|cancellation|TestGoSourceUnifiedChannelCancellationReset
+./interp|cancellation|TestGoSourceUnwrapCancelReset
+./interp|cancellation|TestSprint153PipelineSelectCancel
+./interp|fifo|TestSprint162BashPPFIFOAfterTask
+./interp|cancellation|TestSprint198GotoCancellation

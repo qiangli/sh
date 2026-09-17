@@ -707,7 +707,7 @@ func TestBashPPProcessSubstitutionNoDeadlock(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			var out strings.Builder
+			var out strings.Builder // bashpp-racegate:safe-synchronized the Bash++ group wraps task writers in bashPPLockedWriter; Run joins the tasks before out is read.
 			r, err := New(Lang(syntax.LangBashPP), StdIO(nil, &out, &out))
 			if err != nil {
 				t.Fatal(err)
