@@ -683,3 +683,47 @@ main()
 		t.Fatalf("out=%q err=%v", out, err)
 	}
 }
+
+// Sprint 119 story 0f7d95e5cf1f: process substitution must not deadlock when
+// the Bash++ dialect is active but the shell has not started a Go task.
+func TestBashPPProcessSubstitutionNoDeadlock(t *testing.T) {
+	for _, tc := range []struct {
+		name, source, want string
+	}{
+		{
+			name:   "input-redirection",
+			source: `read -r x < <(echo hi); printf 'got=%s\n' "$x"`,
+			want:   "got=hi\n",
+		},
+		{
+			name:   "output-redirection",
+			source: `echo hi > >(cat); wait`,
+			want:   "hi\n",
+		},
+		{
+			name:   "fd-redirection",
+			source: `exec 3< <(echo hi); read -r x <&3; printf 'got=%s\n' "$x"`,
+			want:   "got=hi\n",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out strings.Builder
+			r, err := New(Lang(syntax.LangBashPP), StdIO(nil, &out, &out))
+			if err != nil {
+				t.Fatal(err)
+			}
+			f, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(tc.source), tc.name+".bpp")
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := r.Run(ctx, f); err != nil {
+				t.Fatalf("run: %v; output=%q", err, out.String())
+			}
+			if got := out.String(); got != tc.want {
+				t.Fatalf("output=%q, want %q", got, tc.want)
+			}
+		})
+	}
+}
