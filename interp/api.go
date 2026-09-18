@@ -1920,8 +1920,10 @@ func Params(args ...string) RunnerOption {
 				}
 				continue
 			}
-			if value == "bashpp" {
-				// Live dialect toggle. It changes only interp-side
+			if value == "bashpp" || value == "bashsharp" {
+				// Live dialect toggle (`set -o bashsharp`; `bashpp` is the
+				// Bash++-era alias, kept one minor release — the listed name
+				// stays `bashpp` this release). It changes only interp-side
 				// behaviour (object-valued variables); the grammar is
 				// unchanged, so no reparse or dispatch is implied.
 				// Orthogonal to `set -o posix`.

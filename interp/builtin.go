@@ -4413,7 +4413,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		for _, arg := range args {
 			opt, supported := (*bool)(nil), true
 			if posixOpts {
-				if arg == "bashpp" {
+				if arg == "bashpp" || arg == "bashsharp" {
 					if mode == "-s" || mode == "-u" {
 						r.setBashPPMode(mode == "-s")
 						continue
