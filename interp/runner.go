@@ -190,7 +190,29 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 			defer r2.closeDirFile()
 			r2.bgProcs = r.bgProcs
 			r2.jobsReadOnly = true
-			r2.stdout = w
+			// Capture through ONE real pipe, not the Go buffer: bash's
+			// $(...) is a fork whose stdout is a single fd, so `2>&1`
+			// inside it dups stderr onto that same fd and an external
+			// command's out/err arrive in write order. Handing the
+			// buffer to r2.stdout instead made `2>&1` alias two
+			// distinct os/exec pipes, and `x=$(cmd 2>&1)` came back
+			// with stderr after (or before) all of stdout.
+			pr, pw, perr := os.Pipe()
+			if perr != nil {
+				r2.stdout = w
+			} else {
+				r2.stdout = pw
+				drained := make(chan struct{})
+				go func() {
+					io.Copy(w, pr)
+					pr.Close()
+					close(drained)
+				}()
+				defer func() {
+					pw.Close()
+					<-drained
+				}()
+			}
 			if !r.functraceEnabled() {
 				delete(r2.trapCallbacks, "DEBUG")
 			}
