@@ -59,7 +59,7 @@ func detachedExecCmd(r *Runner, path string, args []string) exec.Cmd {
 	return exec.Cmd{
 		Path:        execPath,
 		Args:        args,
-		Env:         execEnv(r.bashPPEnv()),
+		Env:         nativeExecEnv(execEnv(r.bashPPEnv())),
 		Dir:         execDir,
 		Stdin:       r.stdin,
 		Stdout:      r.bashPPWriter(r.stdout),

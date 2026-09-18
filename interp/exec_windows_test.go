@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/interp"
 	"mvdan.cc/sh/v3/syntax"
 )
@@ -44,5 +45,37 @@ func TestWindowsRelativeExecAfterCd(t *testing.T) {
 				t.Fatalf("form %q: out=%q err=%q", form, out.String(), errb.String())
 			}
 		})
+	}
+}
+
+// A native child must receive the path-valued variables in the OS spelling:
+// bashy presents $TEMP as /c/Users/…, and go.exe / rustc resolve that
+// against the current drive (D:\c\Users\…) and fail to create their work dir.
+func TestWindowsExecNativePathEnv(t *testing.T) {
+	temp := filepath.ToSlash(t.TempDir())
+	if len(temp) < 2 || temp[1] != ':' {
+		t.Skipf("temp dir %q is not a drive path", temp)
+	}
+	msys := "/" + strings.ToLower(temp[:1]) + temp[2:]
+	native := filepath.Clean(temp)
+	env := append(os.Environ(), "TEMP="+msys, "TMP="+msys)
+	var out, errb strings.Builder
+	r, _ := interp.New(interp.StdIO(nil, &out, &errb), interp.Env(expand.ListEnviron(env...)))
+	script := `echo "shell=$TEMP"; cmd /c "echo child=%TEMP%"; cmd /c "echo child=%TMP%"`
+	f, err := syntax.NewParser().Parse(strings.NewReader(script), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Run(context.Background(), f); err != nil {
+		t.Fatalf("run: %v; out=%q err=%q", err, out.String(), errb.String())
+	}
+	got := out.String()
+	for _, want := range []string{"shell=" + msys + "\n", "child=" + native + "\r\n"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("output %q lacks %q (stderr %q)", got, want, errb.String())
+		}
+	}
+	if strings.Count(got, "child="+native) != 2 {
+		t.Errorf("output %q: want both children to see %q", got, native)
 	}
 }

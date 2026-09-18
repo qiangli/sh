@@ -455,7 +455,7 @@ func (nativeBashPPEvaluator) Values(ctx context.Context, req bashPPEvalRequest) 
 }
 
 func (r *Runner) bashPPEvalRequest() (bashPPEvalRequest, error) {
-	env := environStrings(r.writeEnv)
+	env := nativeExecEnv(environStrings(r.writeEnv))
 	runtimeEnv := env
 	if r.bashPPTools.goBinary == "" {
 		identity, err := bashPPGoIdentity()
@@ -482,7 +482,7 @@ func (r *Runner) bashPPEvalRequest() (bashPPEvalRequest, error) {
 		importPath, testMain = r.bashPPTools.importPath, r.bashPPTools.testMain
 	}
 	if r.bashPPGoSource {
-		runtimeEnv = r.bashPPGoSourceEnvironment()
+		runtimeEnv = nativeExecEnv(r.bashPPGoSourceEnvironment())
 	}
 	embedDecls, sourceDir := r.bashPPGoSourceEmbedRequest()
 	return bashPPEvalRequest{CallbackOwner: r, CallbackDepth: r.bashPPTools.callbackDepth, LocalTypes: r.bashPPLocalTypeDescriptors(), Instances: r.bashPPImportedInstances(), RuntimeEnv: runtimeEnv, ModuleDir: moduleDir, ImportPath: importPath, TestMain: testMain, Argv: append([]string{r.filename}, r.Params...), Bridge: r.bashPPTools.bridge, Go: r.bashPPTools.goBinary, Dir: r.Dir, Env: env, Stdin: r.stdin,

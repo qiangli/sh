@@ -156,3 +156,95 @@ func TestShellPathPosixTranslation(t *testing.T) {
 		})
 	}
 }
+
+func TestNativeExecEnvWindows(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		env  []string
+		want []string
+	}{
+		{
+			name: "temp on the C drive",
+			env:  []string{"TEMP=/c/Users/x/AppData/Local/Temp"},
+			want: []string{`TEMP=C:\Users\x\AppData\Local\Temp`},
+		},
+		{
+			name: "other drive letters",
+			env:  []string{"TMP=/d/w/a", "GOCACHE=/e/cache"},
+			want: []string{`TMP=D:\w\a`, `GOCACHE=E:\cache`},
+		},
+		{
+			name: "drive root",
+			env:  []string{"HOME=/c", "USERPROFILE=/c/"},
+			want: []string{`HOME=C:\`, `USERPROFILE=C:\`},
+		},
+		{
+			name: "names match case-insensitively",
+			env:  []string{"ProgramData=/c/ProgramData", "SystemRoot=/c/Windows", "windir=/c/Windows"},
+			want: []string{`ProgramData=C:\ProgramData`, `SystemRoot=C:\Windows`, `windir=C:\Windows`},
+		},
+		{
+			name: "PATH elements",
+			env:  []string{`PATH=/c/Go/bin;C:\Windows\System32;/d/tools/bin;.;`},
+			want: []string{`PATH=C:\Go\bin;C:\Windows\System32;D:\tools\bin;.;`},
+		},
+		{
+			name: "native values unchanged",
+			env:  []string{`TEMP=C:\Users\x\AppData\Local\Temp`, `PATH=C:\Go\bin;C:\Windows`, `HOME=\c\Users\x`},
+			want: []string{`TEMP=C:\Users\x\AppData\Local\Temp`, `PATH=C:\Go\bin;C:\Windows`, `HOME=\c\Users\x`},
+		},
+		{
+			name: "not an msys drive path",
+			env:  []string{"TMPDIR=/tmp", "TEMP=tmp/x", "GOPATH=/cc/go", "TMP=/c/a:/c/b", "TEMP="},
+			want: []string{"TMPDIR=/tmp", "TEMP=tmp/x", "GOPATH=/cc/go", "TMP=/c/a:/c/b", "TEMP="},
+		},
+		{
+			name: "unlisted variables unchanged",
+			env:  []string{"PWD=/c/work", "FOO=/c/bar", "_=/c/Go/bin/go.exe"},
+			want: []string{"PWD=/c/work", "FOO=/c/bar", "_=/c/Go/bin/go.exe"},
+		},
+		{
+			name: "malformed entries kept",
+			env:  []string{"", "NOEQUALS", "TEMP=/c/t"},
+			want: []string{"", "NOEQUALS", `TEMP=C:\t`},
+		},
+		{
+			name: "empty",
+			env:  []string{},
+			want: []string{},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			in := append([]string(nil), tc.env...)
+			got := nativeExecEnvMode(in, true)
+			if len(got) != len(tc.want) {
+				t.Fatalf("nativeExecEnvMode(%q) = %q, want %q", tc.env, got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Errorf("nativeExecEnvMode(%q)[%d] = %q, want %q", tc.env, i, got[i], tc.want[i])
+				}
+			}
+			// The caller's slice is never rewritten in place: the shell keeps
+			// handing scripts the MSYS spelling.
+			for i := range in {
+				if in[i] != tc.env[i] {
+					t.Errorf("input[%d] mutated to %q", i, in[i])
+				}
+			}
+			if got := nativeExecEnvMode(in, false); len(got) != len(in) {
+				t.Fatalf("non-windows: %q, want input unchanged", got)
+			} else {
+				for i := range got {
+					if got[i] != in[i] {
+						t.Errorf("non-windows[%d] = %q, want %q", i, got[i], in[i])
+					}
+				}
+			}
+		})
+	}
+}

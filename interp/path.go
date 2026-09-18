@@ -158,3 +158,90 @@ func msysDrivePath(path string) (drive, rest string, ok bool) {
 	}
 	return "", "", false
 }
+
+// windowsPathEnvNames are the variables a native Windows child reads as a
+// filesystem path. bashy hands scripts these in the MSYS drive spelling
+// (/c/Users/…) so scripts stay portable, but CreateFile has no idea what /c
+// is: go.exe dies with "creating work dir … D:\c\Users\…" when the current
+// drive is D:, and rustc's temp dir the same way. Matched case-insensitively,
+// as Windows environment names are.
+var windowsPathEnvNames = map[string]bool{
+	"TEMP": true, "TMP": true, "TMPDIR": true,
+	"HOME": true, "USERPROFILE": true,
+	"GOPATH": true, "GOCACHE": true, "GOMODCACHE": true, "GOROOT": true,
+	"CARGO_HOME": true, "RUSTUP_HOME": true,
+	"LOCALAPPDATA": true, "APPDATA": true, "PROGRAMDATA": true,
+	"SYSTEMROOT": true, "WINDIR": true,
+}
+
+// nativeExecEnv rewrites the path-valued variables of a child's environment
+// into the host's native spelling on Windows: an absolute MSYS drive path
+// (/c/Users/x) becomes C:\Users\x, and each such element of PATH is converted
+// in place. Every other value — a native path, a relative one, a bare /foo,
+// the empty string — stays byte-identical, and the shell's own variables are
+// untouched, so scripts keep seeing the MSYS form. On every other host env is
+// returned as is.
+func nativeExecEnv(env []string) []string {
+	return nativeExecEnvMode(env, runtime.GOOS == "windows")
+}
+
+func nativeExecEnvMode(env []string, windows bool) []string {
+	if !windows {
+		return env
+	}
+	var out []string
+	for i, kv := range env {
+		name, value, ok := strings.Cut(kv, "=")
+		if !ok || value == "" {
+			continue
+		}
+		var conv string
+		switch {
+		case strings.EqualFold(name, "PATH"):
+			conv = nativeExecPathList(value)
+		case windowsPathEnvNames[strings.ToUpper(name)]:
+			conv = nativeExecPath(value)
+		default:
+			continue
+		}
+		if conv == value {
+			continue
+		}
+		if out == nil {
+			out = append([]string(nil), env...)
+		}
+		out[i] = name + "=" + conv
+	}
+	if out == nil {
+		return env
+	}
+	return out
+}
+
+// nativeExecPath converts one absolute MSYS drive path (/c or /c/…); anything
+// else is returned unchanged. Only the forward-slash form counts: a value
+// holding a colon is never a single MSYS path, and \c\… is a drive-relative
+// native path a child can already open.
+func nativeExecPath(value string) string {
+	if len(value) < 2 || value[0] != '/' || strings.Contains(value, ":") {
+		return value
+	}
+	drive, rest, ok := msysDrivePath(value)
+	if !ok {
+		return value
+	}
+	return drive + ":" + strings.ReplaceAll(rest, "/", `\`)
+}
+
+// nativeExecPathList converts each MSYS-form element of a ;-separated PATH,
+// keeping the other elements and the separators as they are.
+func nativeExecPathList(value string) string {
+	if !strings.Contains(value, "/") {
+		return value
+	}
+	elems := strings.Split(value, ";")
+	for i, e := range elems {
+		elems[i] = nativeExecPath(e)
+	}
+	return strings.Join(elems, ";")
+}

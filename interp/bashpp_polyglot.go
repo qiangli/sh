@@ -80,7 +80,7 @@ func (r *Runner) bashPPPrepareSourceBlocks(ctx context.Context, file *syntax.Fil
 		if imp.Environment != nil {
 			environment = imp.Environment.Value
 		}
-		plan, err := polyglot.PlanImport(polyglot.ImportRequest{Source: source, Language: imp.Language.Value, Environment: environment, Module: modulePath, Alias: alias, Environ: execEnv(r.writeEnv)})
+		plan, err := polyglot.PlanImport(polyglot.ImportRequest{Source: source, Language: imp.Language.Value, Environment: environment, Module: modulePath, Alias: alias, Environ: nativeExecEnv(execEnv(r.writeEnv))})
 		if err != nil {
 			return restore, fmt.Errorf("%s: %w", file.Name, err)
 		}
@@ -110,7 +110,7 @@ func (r *Runner) bashPPPrepareSourceBlocks(ctx context.Context, file *syntax.Fil
 				source = filepath.Join(r.Dir, source)
 			}
 			environment, err := polyglot.DiscoverEnvironment(polyglot.EnvironmentRequest{
-				Source: source, Language: language, Environ: execEnv(r.writeEnv),
+				Source: source, Language: language, Environ: nativeExecEnv(execEnv(r.writeEnv)),
 			})
 			if err != nil {
 				return restore, fmt.Errorf("%s: %w", file.Name, err)
