@@ -164,6 +164,14 @@ func goSDKCandidates() ([]goSDKCandidate, []string) {
 		add(source, root, filepath.Join(root, "bin", goCommandName()))
 	}
 
+	// BASHPP_GO is the embedder's explicit toolchain injection — bashy passes
+	// its own provisioned go here when the host go is missing or older than
+	// the baseline — and like the other BASHPP_* runtime overrides it names
+	// the exact binary to use, so it is tried before everything else.
+	if injected := strings.TrimSpace(os.Getenv("BASHPP_GO")); injected != "" {
+		add("BASHPP_GO", "", injected)
+	}
+
 	fromRoot("GOROOT", os.Getenv("GOROOT"))
 	// A -trimpath build reports an empty runtime GOROOT; fromRoot rejects it
 	// instead of synthesising the relative command "bin/go".

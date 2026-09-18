@@ -12,6 +12,7 @@ import (
 	"go/parser"
 	"go/token"
 	"go/types"
+	goversion "go/version"
 	"io"
 	"os"
 	"os/exec"
@@ -511,6 +512,9 @@ func environStrings(env expand.Environ) []string {
 }
 
 func bashPPGoIdentity() (bashPPGoIdentityInfo, error) {
+	if injected := strings.TrimSpace(os.Getenv("BASHPP_GO")); injected != "" {
+		return bashPPInjectedGoIdentity(injected)
+	}
 	name := "go"
 	if runtime.GOOS == "windows" {
 		name += ".exe"
@@ -568,6 +572,56 @@ func bashPPGoIdentity() (bashPPGoIdentityInfo, error) {
 		return bashPPGoIdentityInfo{}, err
 	}
 	return identity, nil
+}
+
+// bashPPInjectedGoIdentity resolves the toolchain the embedder named in
+// BASHPP_GO — bashy's own provisioned go, or a host go the caller vouches for.
+// The binary is the caller's deliberate choice, so it is verified for what it
+// IS (an executable Go >= 1.27.0 toolchain, probed for its own GOROOT and
+// platform) rather than against the bootstrap review list, which governs only
+// the toolchain this package selects for itself.
+func bashPPInjectedGoIdentity(injected string) (bashPPGoIdentityInfo, error) {
+	binary, err := filepath.Abs(injected)
+	if err != nil {
+		return bashPPGoIdentityInfo{}, err
+	}
+	binary, err = filepath.EvalSymlinks(binary)
+	if err != nil {
+		return bashPPGoIdentityInfo{}, fmt.Errorf("BASHPP_GO: %w", err)
+	}
+	fi, err := os.Stat(binary)
+	if err != nil {
+		return bashPPGoIdentityInfo{}, fmt.Errorf("BASHPP_GO: %w", err)
+	}
+	if fi.IsDir() || (runtime.GOOS != "windows" && fi.Mode()&0111 == 0) {
+		return bashPPGoIdentityInfo{}, fmt.Errorf("BASHPP_GO: %s is not executable", binary)
+	}
+	cmd := exec.Command(binary, "env", "GOROOT", "GOOS", "GOARCH", "GOVERSION")
+	cmd.Env = setEnvString(os.Environ(), "GOTOOLCHAIN", "local")
+	out, err := cmd.Output()
+	if err != nil {
+		return bashPPGoIdentityInfo{}, fmt.Errorf("BASHPP_GO: %s env: %w", binary, err)
+	}
+	fields := strings.Fields(string(out))
+	if len(fields) != 4 {
+		return bashPPGoIdentityInfo{}, fmt.Errorf("BASHPP_GO: unexpected go env output %q", out)
+	}
+	root, goos, goarch, goVersion := fields[0], fields[1], fields[2], fields[3]
+	if !bashPPInjectedGoSupported(goVersion) {
+		return bashPPGoIdentityInfo{}, fmt.Errorf("BASHPP_GO: go toolchain %s is older than the go1.27.0 baseline", goVersion)
+	}
+	digest, err := bashPPGoDigest(binary)
+	if err != nil {
+		return bashPPGoIdentityInfo{}, err
+	}
+	return bashPPGoIdentityInfo{Version: goVersion, GOOS: goos, GOARCH: goarch,
+		Root: root, Binary: binary, SHA256: digest}, nil
+}
+
+// bashPPInjectedGoSupported reports whether an injected toolchain's GOVERSION
+// meets the Go 1.27 baseline; an unparseable version does not.
+func bashPPInjectedGoSupported(goVersion string) bool {
+	return goversion.IsValid(goVersion) && goversion.Compare(goVersion, "go1.27.0") >= 0
 }
 
 // bashPPGoBootstrap returns an absolute Go binary without consulting PATH.

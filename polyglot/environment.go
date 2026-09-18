@@ -205,7 +205,7 @@ func DiscoverEnvironment(request EnvironmentRequest) (EnvironmentPlan, error) {
 		executable = active
 	} else {
 		plan.Explanation = append(plan.Explanation, "selected PATH runtime")
-		executable, err = lookupPath(env, "python3")
+		executable, err = lookupPythonRuntime(env, runtime.GOOS)
 		if err != nil {
 			return EnvironmentPlan{}, fmt.Errorf("polyglot: Python runtime unavailable: %w", err)
 		}
@@ -462,7 +462,7 @@ func discoverNativeEnvironment(plan EnvironmentPlan, selected *environmentOverla
 	}
 	plan.Executable = executable
 	plan.Manager, plan.Runtime = "clang", "native"
-	plan.Env = typeScriptLaunchEnvironment(env)
+	plan.Env = nativeLaunchEnvironment(env)
 	plan.Fingerprint, err = environmentFingerprint(plan)
 	if err != nil {
 		return EnvironmentPlan{}, err
@@ -502,7 +502,7 @@ func discoverRustEnvironment(plan EnvironmentPlan, selected *environmentOverlay,
 		return EnvironmentPlan{}, fmt.Errorf("polyglot: Rust compiler unavailable: %w", err)
 	}
 	plan.Manager, plan.Runtime = "cargo", "native"
-	plan.Env = typeScriptLaunchEnvironment(env)
+	plan.Env = nativeLaunchEnvironment(env)
 	plan.Fingerprint, err = environmentFingerprint(plan)
 	if err != nil {
 		return EnvironmentPlan{}, err
@@ -619,7 +619,17 @@ func canonicalExecutableFor(name, goos, pathExt string) (string, error) {
 	name = filepath.Join(parent, filepath.Base(name))
 	info, err := os.Stat(name)
 	if err != nil {
-		return "", err
+		// A Windows App Execution Alias is a reparse point whose target Stat
+		// may refuse to resolve; Lstat still classifies it, and the launch
+		// path knows to start it through cmd.exe.
+		if goos != "windows" {
+			return "", err
+		}
+		linfo, lerr := os.Lstat(name)
+		if lerr != nil || linfo.Mode()&os.ModeIrregular == 0 {
+			return "", err
+		}
+		info = linfo
 	}
 	if !executableFileMode(name, info.Mode(), goos, pathExt) {
 		return "", fmt.Errorf("polyglot: runtime %s is not an executable file", name)
@@ -628,11 +638,17 @@ func canonicalExecutableFor(name, goos, pathExt string) (string, error) {
 }
 
 func executableFileMode(name string, mode os.FileMode, goos, pathExt string) bool {
-	if !mode.IsRegular() {
-		return false
-	}
 	if goos != "windows" {
+		if !mode.IsRegular() {
+			return false
+		}
 		return mode.Perm()&0o111 != 0
+	}
+	// An App Execution Alias (python3.exe on a stock runner) is a reparse
+	// point reported as irregular; it is runnable, just not by os/exec — the
+	// launch path routes it through cmd.exe.
+	if !mode.IsRegular() && mode&os.ModeIrregular == 0 {
+		return false
 	}
 	ext := filepath.Ext(name)
 	for _, allowed := range windowsExecutableExtensions(pathExt) {
@@ -656,18 +672,44 @@ func envMap(entries []string) map[string]string {
 	return out
 }
 func lookupPath(env map[string]string, file string) (string, error) {
+	return lookupPathFor(env, file, runtime.GOOS)
+}
+
+func lookupPathFor(env map[string]string, file, goos string) (string, error) {
 	for _, d := range filepath.SplitList(environmentValue(env, "PATH")) {
 		if d == "" {
 			continue
 		}
-		for _, candidate := range executableNames(file, runtime.GOOS, environmentValue(env, "PATHEXT")) {
+		for _, candidate := range executableNames(file, goos, environmentValue(env, "PATHEXT")) {
 			n := filepath.Join(d, candidate)
-			if executable, err := canonicalExecutableFor(n, runtime.GOOS, environmentValue(env, "PATHEXT")); err == nil {
+			if executable, err := canonicalExecutableFor(n, goos, environmentValue(env, "PATHEXT")); err == nil {
 				return executable, nil
 			}
 		}
 	}
 	return "", os.ErrNotExist
+}
+
+// pythonPATHRuntimes is the PATH fallback order per platform. On Windows the
+// launcher `py` comes first: the bare python3/python names there are commonly
+// App Execution Aliases (store reparse points os/exec cannot start) rather
+// than real installs, while `py` is a real executable that fronts one.
+func pythonPATHRuntimes(goos string) []string {
+	if goos == "windows" {
+		return []string{"py", "python", "python3"}
+	}
+	return []string{"python3"}
+}
+
+func lookupPythonRuntime(env map[string]string, goos string) (string, error) {
+	err := error(os.ErrNotExist)
+	for _, name := range pythonPATHRuntimes(goos) {
+		var executable string
+		if executable, err = lookupPathFor(env, name, goos); err == nil {
+			return executable, nil
+		}
+	}
+	return "", err
 }
 
 func environmentValue(env map[string]string, key string) string {
@@ -870,7 +912,31 @@ func containsString(values []string, wanted string) bool {
 
 func typeScriptLaunchEnvironment(env map[string]string) []string {
 	var out []string
-	for _, key := range []string{"PATH", "SystemRoot", "TMPDIR", "TEMP", "TMP"} {
+	// Beyond the portable set, the Windows entries let a toolchain child run
+	// its own discovery: rustc locates MSVC's link.exe through the VS
+	// installer under ProgramFiles(x86), and without it falls back to a bare
+	// PATH lookup of "link.exe" — which a GNU coreutils link (Git for
+	// Windows' usr/bin) then shadows. On other hosts these keys are simply
+	// absent. PATHEXT and ComSpec keep name resolution and cmd.exe launches
+	// working in the same child.
+	for _, key := range []string{"PATH", "SystemRoot", "TMPDIR", "TEMP", "TMP",
+		"PATHEXT", "ComSpec", "SystemDrive", "windir",
+		"ProgramFiles", "ProgramFiles(x86)", "ProgramW6432", "ProgramData",
+		"APPDATA", "LOCALAPPDATA", "USERPROFILE", "HOMEDRIVE", "HOMEPATH"} {
+		if value := environmentValue(env, key); value != "" {
+			out = append(out, key+"="+value)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// nativeLaunchEnvironment is the compiler-child environment: the toolchain
+// set above plus the MSVC Developer-prompt variables, so a vcvarsall session's
+// INCLUDE/LIB reach clang's own MSVC driver and the linker it invokes.
+func nativeLaunchEnvironment(env map[string]string) []string {
+	out := typeScriptLaunchEnvironment(env)
+	for _, key := range []string{"INCLUDE", "LIB", "LIBPATH"} {
 		if value := environmentValue(env, key); value != "" {
 			out = append(out, key+"="+value)
 		}

@@ -116,8 +116,13 @@ func analyzeNativeArtifact(ctx context.Context, language, compiler string, envir
 	if err := os.WriteFile(sourceFile, []byte(source), 0o600); err != nil {
 		return nil, "", err
 	}
+	hostInclude, err := nativeHostIncludeArgs(runtime.GOOS, compiler, environment)
+	if err != nil {
+		return nil, "", err
+	}
 	astArgs := []string{standard, "-Xclang", "-ast-dump=json", "-fsyntax-only"}
 	astArgs = append(astArgs, nativeIncludeArgs(environment)...)
+	astArgs = append(astArgs, hostInclude...)
 	astArgs = append(astArgs, sourceFile)
 	cmd := exec.CommandContext(ctx, compiler, astArgs...)
 	configureNativeCompiler(cmd, environment)
@@ -151,6 +156,7 @@ func analyzeNativeArtifact(ctx context.Context, language, compiler string, envir
 	}
 	args := []string{standard, "-O0", "-o", output}
 	args = append(args, nativeIncludeArgs(environment)...)
+	args = append(args, hostInclude...)
 	args = append(args, workerFile)
 	cmd = exec.CommandContext(ctx, compiler, args...)
 	configureNativeCompiler(cmd, environment)

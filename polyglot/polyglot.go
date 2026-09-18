@@ -14,6 +14,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strconv"
@@ -175,7 +176,8 @@ func (p Python) executable() string {
 }
 
 func (p Python) Analyze(ctx context.Context, source string) ([]Export, error) {
-	cmd := exec.CommandContext(ctx, p.executable(), p.pythonArguments(pythonAnalyze, false)...)
+	name, argv := workerExecArgs(p.executable(), p.pythonArguments(pythonAnalyze, false))
+	cmd := exec.CommandContext(ctx, name, argv...)
 	p.configure(cmd)
 	cmd.Stdin = strings.NewReader(source)
 	var stdout, stderr bytes.Buffer
@@ -239,7 +241,8 @@ func (e Embedded) name() string                    { return e.RuntimeName }
 
 func (p Python) arguments(Plan) []string { return p.pythonArguments(pythonWorker, true) }
 func (p Python) pythonArguments(script string, unbuffered bool) []string {
-	args := []string{"-I"}
+	args := append([]string(nil), pythonLauncherArgs(p.executable())...)
+	args = append(args, "-I")
 	if unbuffered {
 		args = append(args, "-u")
 	}
@@ -248,6 +251,40 @@ func (p Python) pythonArguments(script string, unbuffered bool) []string {
 		args = append(args, p.Environment.PythonPath...)
 	}
 	return args
+}
+
+// pythonLauncherArgs pins CPython 3 when the resolved runtime is the Windows
+// launcher: `py` is not itself an interpreter, and without -3 it starts
+// whatever default the host registers.
+func pythonLauncherArgs(executable string) []string {
+	base := strings.TrimSuffix(strings.ToLower(filepath.Base(executable)), ".exe")
+	if base == "py" {
+		return []string{"-3"}
+	}
+	return nil
+}
+
+// workerExecArgs rewrites a worker launch whose executable is a Windows App
+// Execution Alias — a reparse point os/exec refuses with "not supported by
+// windows" — to run through cmd.exe, which starts aliases fine. Everything
+// else launches unchanged.
+func workerExecArgs(path string, args []string) (string, []string) {
+	if !execNeedsCmdShim(lstatFileMode(path), runtime.GOOS) {
+		return path, args
+	}
+	return "cmd.exe", append([]string{"/d", "/c", path}, args...)
+}
+
+func lstatFileMode(path string) os.FileMode {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return 0
+	}
+	return info.Mode()
+}
+
+func execNeedsCmdShim(mode os.FileMode, goos string) bool {
+	return goos == "windows" && mode&os.ModeIrregular != 0
 }
 func (p Python) loadRequest(plan Plan) map[string]any {
 	return map[string]any{"id": 0, "op": "load", "source": plan.Source}
@@ -296,7 +333,8 @@ func (m *Module) ensure(ctx context.Context) error {
 	if m.cmd != nil {
 		return nil
 	}
-	cmd := exec.Command(m.runtime.executable(), m.runtime.arguments(m.plan)...)
+	name, argv := workerExecArgs(m.runtime.executable(), m.runtime.arguments(m.plan))
+	cmd := exec.Command(name, argv...)
 	if configured, ok := m.runtime.(configuredRuntime); ok {
 		configured.configure(cmd)
 	}
