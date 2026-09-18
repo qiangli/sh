@@ -13,6 +13,21 @@ This fork carries unmerged `interp`/`expand`/`syntax` patches that extend Bash 5
 
 Note: this checkout is a fork. `origin/master` is the fork integration branch — `upstream/master` with our unmerged patches rebased on top, force-pushed on each sync. Upstream PRs target `upstream/master` directly via single-commit topic branches (e.g. `interp-pipe-fd-eof`, `interp-bash-redirects`).
 
+**Bash++ (the Go-1.27 dialect) lives HERE, deliberately.** The evaluator
+(`interp/bashpp_*.go`, `interp/gosource_*.go`), the lowering compiler
+(`lower/`), the Go-source front end (`gosource/`) and the `BashPP*` syntax
+nodes are part of this module. Sprint 207 (2026-09-18) created the sibling
+repo [`github.com/qiangli/bashpp`](https://github.com/qiangli/bashpp) for the
+dialect's docs, decisions and Go-corpus status, and MEASURED a code move
+before declining it: `syntax/typedjson` is upstream, `polyglot` is imported
+by the classic engine, `gosource` is driven by 91 evaluator tests in
+`interp` (24 in `package interp`) so moving it cycles the modules, and the
+evaluator uses 49 unexported `Runner` members — there is no small hook. The
+isolation in force is `VSC_PROFILE=cert` (evaluator nil, dialect inert) and
+the `full` test tag. Read `bashpp/CLAUDE.md` §What stays in sh and why
+before proposing to move any of it; the change policy since Sprint 208 is
+that this engine is STABLE (bug fixes against the pinned coordinate only).
+
 ## Build / test / lint
 
 The `Makefile` wraps the common flows: `make build`, `make test-quick` (the push gate, `make test` is its alias: build + `go test -short`, without the test files tagged `//go:build full`), `make test-full` (every test: `-tags full`), `make tidy`, `make clean`. CI runs `test-quick` on every push (`.github/workflows/test.yml`) and the full suite plus the race gate and the Bash 5.2 confirm on `v*` tags / `workflow_dispatch` (`full-tests.yml`) — split 2026-09-17, when the full suite passed two hours per push. For finer-grained control use the underlying `go` commands:
