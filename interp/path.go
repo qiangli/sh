@@ -43,6 +43,14 @@ func shellPathJoinAbsMode(dir, path string, windows bool) string {
 	return dir + `\` + path
 }
 
+// ShellPathToOS converts a path in the shell's own spelling into the host's
+// native form, resolved against dir when relative: on Windows the MSYS drive
+// form (/c/…), a drive-relative /foo and C:\… all become real drive paths; on
+// every other host the path is returned unchanged. Embedders that open a
+// script operand themselves (bashy's argv[1], `bashy -c` callers) use it so
+// `bashy "$HOME/x.sh"` works on Windows, where $HOME is /c/Users/….
+func ShellPathToOS(dir, path string) string { return shellPathToOS(dir, path) }
+
 func shellPathToOS(dir, path string) string {
 	return shellPathToOSMode(dir, path, runtime.GOOS == "windows")
 }
