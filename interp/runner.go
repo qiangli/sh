@@ -10998,11 +10998,22 @@ func (r *Runner) execAs(ctx context.Context, pos syntax.Pos, argv0 string, clear
 		name := args[0]
 		newlyHashed := false
 		if entry, ok := r.cmdHashTable[name]; ok {
-			checkHash := false
-			if opt, _ := r.bashOptByName("checkhash"); opt != nil {
-				checkHash = *opt
+			// bash 5.3 findcmd.c search_for_command: a remembered path is
+			// re-checked when `posixly_correct || check_hashed_filenames`;
+			// if the file no longer exists or is not executable, the entry
+			// is dropped and $PATH is searched again ("Thank you Posix.2").
+			// Outside POSIX mode and without checkhash, the stale path is
+			// executed as-is and fails.
+			checkHash := r.opts[optPosix]
+			if opt, _ := r.bashOptByName("checkhash"); opt != nil && *opt {
+				checkHash = true
 			}
-			if _, err := r.stat(ctx, entry.path); err != nil && os.IsNotExist(err) {
+			info, err := r.stat(ctx, entry.path)
+			if err == nil && checkHash && runtime.GOOS != "windows" && info.Mode()&0o111 == 0 {
+				// exists but lost its execute bit: same re-search as a vanished file
+				err = os.ErrNotExist
+			}
+			if err != nil && os.IsNotExist(err) {
 				if checkHash {
 					delete(r.cmdHashTable, name)
 					if path, err := LookPathDir(r.Dir, r.writeEnv, name); err == nil {
