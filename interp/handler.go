@@ -295,6 +295,13 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 			return ExitStatus(127)
 		}
 		execPath := shellPathToOS(lookupDir, path)
+		if runtime.GOOS == "windows" && !filepath.IsAbs(execPath) {
+			// CreateProcess resolves a relative application path against the
+			// PARENT's cwd, not Cmd.Dir, so `./bin/x.exe` after a `cd` inside
+			// the shell was "not found". Anchor the path handed to the OS;
+			// argv[0], diagnostics and "_" keep the spelling the shell resolved.
+			execPath = filepath.Join(execDir, execPath)
+		}
 		scriptPath := execPath
 		if lookupDir != hc.Dir {
 			// On Linux, a retained cwd is represented by /proc/self/fd/N.

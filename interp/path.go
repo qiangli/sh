@@ -34,6 +34,13 @@ func shellPathJoinAbsMode(dir, path string, windows bool) string {
 	if path == "" || shellPathAbsMode(path, windows) {
 		return shellPathToOSMode(dir, path, windows)
 	}
+	if windows {
+		// dir is in the shell's spelling (/c/Users/… after a cd); joined as-is
+		// it becomes \c\Users\…, the drive-relative path C:\c\Users\…, and a
+		// relative executable or file after a cd is "not found". Resolve the
+		// directory to its OS form first.
+		dir = shellPathToOSMode(dir, dir, windows)
+	}
 	if !windows || runtime.GOOS == "windows" {
 		return filepath.Join(dir, path)
 	}
