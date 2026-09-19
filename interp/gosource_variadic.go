@@ -29,8 +29,16 @@ func (r *Runner) goSourceBindVariadic(param bashPPParam, args []string, cells []
 	metas := make([]*bashPPCollectionMeta, len(args))
 	for i := range args {
 		var cell *bashPPCell
-		if i < len(cells) {
-			cell = cells[i]
+		if i < len(cells) && cells[i] != nil {
+			// A variadic parameter is a slice whose elements are assigned
+			// independently. Copy first so boxing an interface element cannot
+			// change the caller's argument carrier.
+			cell = bashPPCopyAssignmentCell(cells[i])
+			if err := r.bashPPBindInterfaceParam(cell, param.typ); err != nil {
+				r.errf("%v\n", err)
+				r.exit = exitStatus{code: 2}
+				return false
+			}
 		}
 		sequence[i], metas[i] = r.goSourceVariadicElement(args[i], cell)
 	}
