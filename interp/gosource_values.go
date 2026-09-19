@@ -13,7 +13,17 @@ import (
 
 func goSourceNativeValueCell(value bashPPBridgeValue) *bashPPCell {
 	if scalar, err := value.scalar(); err == nil {
-		return &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarStorageString(scalar)}, scalarKind: scalar.value.Kind(), negativeZero: scalar.negativeZero, nonFinite: scalar.nonFinite, hasNonFinite: scalar.hasNonFinite, typeName: scalar.typ, declType: &syntax.BashPPNamedType{Name: &syntax.Lit{Value: scalar.typ}}}
+		cell := &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarStorageString(scalar)}, scalarKind: scalar.value.Kind(), negativeZero: scalar.negativeZero, nonFinite: scalar.nonFinite, hasNonFinite: scalar.hasNonFinite, typeName: scalar.typ, declType: &syntax.BashPPNamedType{Name: &syntax.Lit{Value: scalar.typ}}}
+		if value.Interface != "" {
+			cell.declType = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: value.Interface}}
+			payload := bashPPCopyAssignmentCell(cell)
+			cell.interfaceValue = &bashPPInterfaceValue{
+				nilIface: value.Kind == "nil",
+				cell:     payload,
+				dynamic:  &syntax.BashPPNamedType{Name: &syntax.Lit{Value: value.Type}},
+			}
+		}
+		return cell
 	}
 	cell := &bashPPCell{vr: expand.NewObject(&value), typeName: value.Type}
 	if value.Interface != "" {
