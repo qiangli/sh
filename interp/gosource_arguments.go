@@ -3,8 +3,10 @@ package interp
 // Sprint: #118; Story: #53; Story-ID: 99bd1de0093b
 import (
 	"fmt"
+	"go/constant"
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/syntax"
+	"strconv"
 )
 
 // goSourceCallArguments evaluates original expressions exactly once and retains
@@ -49,6 +51,63 @@ func (r *Runner) goSourceCallArguments(call *syntax.BashPPCall, fn *bashPPFunc) 
 	r.bashPPCallCells, r.bashPPCallChannels, r.bashPPCallInterfaces = cells, channels, interfaces
 	r.bashPPCallSpread = call.Ellipsis.IsValid()
 	return args, true, nil
+}
+
+// goSourceContextualFloatCallArgs applies a float parameter's destination type
+// to the exact scalar cell that accompanies a Go-source call argument. The
+// legacy args slice is still text and must remain strict: only a numeric cell
+// produced by the Go expression evaluator is rewritten, so a string containing
+// "6/5" keeps failing for a float parameter.
+func (r *Runner) goSourceContextualFloatCallArgs(params []bashPPParam, args []string, cells []*bashPPCell, spread bool) ([]string, []*bashPPCell, error) {
+	if !r.bashPPGoSource || spread || len(cells) == 0 {
+		return args, cells, nil
+	}
+	var outArgs []string
+	var outCells []*bashPPCell
+	for i, cell := range cells {
+		if i >= len(args) || cell == nil || i >= len(params) || params[i].variadic {
+			continue
+		}
+		expected, ok := r.bashPPUnderlyingType(params[i].typ).(*syntax.BashPPNamedType)
+		if !ok || expected.Name == nil || (expected.Name.Value != "float32" && expected.Name.Value != "float64") {
+			continue
+		}
+		scalar := r.bashPPScalarFromCell(cell)
+		if scalar.value == nil || scalar.value.Kind() != constant.Float {
+			continue
+		}
+		converted, err := r.bashPPConvertScalar(expected.Name.Value, scalar)
+		if err != nil {
+			return nil, nil, err
+		}
+		copy := bashPPCopyAssignmentCell(cell)
+		copy.vr = expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarStorageString(converted)}
+		copy.scalarKind = constant.Float
+		copy.negativeZero = converted.negativeZero
+		copy.nonFinite = converted.nonFinite
+		copy.hasNonFinite = converted.hasNonFinite
+		copy.declType = params[i].typ
+		copy.typeName = params[i].declared
+		if outArgs == nil {
+			outArgs = append([]string(nil), args...)
+			outCells = append([]*bashPPCell(nil), cells...)
+		}
+		outArgs[i] = goSourceRoundedFloatArgText(converted.value, expected.Name.Value)
+		outCells[i] = copy
+	}
+	if outArgs != nil {
+		return outArgs, outCells, nil
+	}
+	return args, cells, nil
+}
+
+func goSourceRoundedFloatArgText(value constant.Value, typ string) string {
+	if typ == "float32" {
+		f, _ := constant.Float32Val(value)
+		return strconv.FormatFloat(float64(f), 'g', -1, 32)
+	}
+	f, _ := constant.Float64Val(value)
+	return strconv.FormatFloat(f, 'g', -1, 64)
 }
 
 func (r *Runner) goSourceBuiltinResult(call *syntax.BashPPCall) (*bashPPCell, bool, error) {

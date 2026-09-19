@@ -1970,6 +1970,12 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 	if !bound {
 		return nil
 	}
+	var err error
+	args, callCells, err = r.goSourceContextualFloatCallArgs(params, args, callCells, callSpread)
+	if err != nil {
+		r.exit.fatal(err)
+		return nil
+	}
 	if !r.bashPPCheckArgs(fn, params, args, callSpread) {
 		return nil
 	}
