@@ -801,7 +801,14 @@ func (r *Runner) bashPPTypeAssertCell(assert *syntax.BashPPTypeAssertExpr, comma
 		return nil, nil, fmt.Errorf("BASHPP-EASSERT-OPERAND: type assertion operand is not an interface")
 	}
 	iv := cell.interfaceValue
-	if iface, ok := r.bashPPInterfaceType(cell.declType); ok {
+	// The static impossibility check is the classic dialect's own guard. A
+	// Go-source program was already vetted by go/types, which rejects every
+	// genuinely impossible assertion at parse time; the only asserted
+	// spellings that reach here despite not implementing the interface are
+	// instantiated type parameters (`x.(T)` with T a non-implementing
+	// instantiation), which Go resolves dynamically — comma-ok yields false
+	// and the bare form panics. See typeparam/issue50002.go.
+	if iface, ok := r.bashPPInterfaceType(cell.declType); ok && !r.bashPPGoSource {
 		if _, assertIface := r.bashPPInterfaceType(assert.Assert); !assertIface && !r.goSourceImportedTypeName(bashPPTypeText(assert.Assert)) {
 			methods, methodErr := r.bashPPInterfaceMethodSet("interface", iface, make(map[string]bool))
 			if methodErr != nil {
