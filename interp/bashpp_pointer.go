@@ -105,6 +105,9 @@ func (r *Runner) bashPPPointerConversion(expr syntax.BashPPExpr) (*bashPPPointer
 	if goSourceNilLiteral(conv.X) {
 		return nil, target, true, nil
 	}
+	if ptr, converted, err := r.bashPPSliceToArrayPointer(conv, target); converted {
+		return ptr, target, true, err
+	}
 	ptr, err := r.bashPPPointerExprValue(conv.X)
 	if err != nil || ptr == nil {
 		return nil, target, true, err
@@ -112,6 +115,64 @@ func (r *Runner) bashPPPointerConversion(expr syntax.BashPPExpr) (*bashPPPointer
 	retyped := *ptr
 	retyped.elem = target.Element
 	return &retyped, target, true, nil
+}
+
+// bashPPSliceToArrayPointer applies Go's `(*[N]T)(s)` conversion of a slice
+// to a pointer to its underlying array: the result aliases the slice's
+// storage (a write through it is a write to the slice), a nil slice converts
+// to a nil pointer, and a slice shorter than N raises Go's runtime error
+// rather than a refusal. It reports whether the conversion was such a shape;
+// a pointer operand is left to the retyping path, since `(*T)(p)` keeps its
+// own meaning when T is an array type.
+func (r *Runner) bashPPSliceToArrayPointer(conv *syntax.BashPPConvertExpr, target *syntax.BashPPPointerType) (*bashPPPointer, bool, error) {
+	array, ok := r.bashPPUnderlyingType(target.Element).(*syntax.BashPPCollectionType)
+	if !ok || array.Kind != "array" || array.Length == nil || r.bashPPScope == nil {
+		return nil, false, nil
+	}
+	operand := conv.X
+	for {
+		paren, ok := operand.(*syntax.BashPPParenExpr)
+		if !ok {
+			break
+		}
+		operand = paren.X
+	}
+	root, ok := bashPPCollectionRoot(operand)
+	if !ok {
+		return nil, false, nil
+	}
+	cell := r.bashPPScope.lookup(root)
+	if cell == nil {
+		return nil, false, nil
+	}
+	if _, direct := operand.(*syntax.BashPPIdent); direct && cell.pointer {
+		return nil, false, nil
+	}
+	ptr, err := r.bashPPAddress(operand)
+	if err != nil {
+		return nil, false, nil
+	}
+	value, meta, _, err := ptr.read()
+	if err != nil || meta == nil || meta.kind != "slice" {
+		return nil, false, nil
+	}
+	n, err := r.bashPPArrayLength(array.Length.Value)
+	if err != nil {
+		return nil, true, fmt.Errorf("BASHPP-EPOINTER-TYPE: %v", err)
+	}
+	seq, _ := value.([]any)
+	if seq == nil {
+		return nil, true, nil
+	}
+	if len(seq) < n {
+		message := fmt.Sprintf("runtime error: cannot convert slice with length %d to array or pointer to array with length %d", len(seq), n)
+		if r.bashPPGoSource {
+			return nil, true, r.bashPPRaiseRuntimeError("runtime.errorString", message)
+		}
+		return nil, true, fmt.Errorf("BASHPP-ECOLLECTION-BOUNDS: %s", message)
+	}
+	ptr.elem = target.Element
+	return ptr, true, nil
 }
 
 func (r *Runner) bashPPPointerExprValue(expr syntax.BashPPExpr) (ptr *bashPPPointer, err error) {
