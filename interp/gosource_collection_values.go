@@ -262,9 +262,15 @@ func (r *Runner) goSourceCollectionReadCell(expr syntax.BashPPExpr, value any, m
 	}
 	bashPPStoreCellValue(cell, value, meta)
 	if meta == nil {
-		switch value.(type) {
+		switch v := value.(type) {
 		case string:
-			cell.scalarKind = constant.String
+			// A large unsigned element stored as its decimal spelling keeps the
+			// integer identity of its declared type: leave the scalar kind
+			// unset so bashPPScalarFromCell reconstructs it as the integer it
+			// is. An ordinary string element still carries as a string.
+			if !r.bashPPStringCarriesInteger(cell.declType, v) {
+				cell.scalarKind = constant.String
+			}
 		case bool:
 			cell.scalarKind = constant.Bool
 		case int:

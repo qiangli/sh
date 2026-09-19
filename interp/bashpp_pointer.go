@@ -307,6 +307,9 @@ func (r *Runner) bashPPAddress(expr syntax.BashPPExpr) (result *bashPPPointer, e
 			}
 			seq := value.([]any)
 			if i < 0 || i >= len(seq) {
+				if r.bashPPGoSource {
+					return r.bashPPSprint162CollectionBoundsPanic(x, i, len(seq))
+				}
 				return fmt.Errorf("BASHPP-ECOLLECTION-BOUNDS: index %d out of bounds for length %d", i, len(seq))
 			}
 			ptr.path = append(ptr.path, bashPPPointerStep{index: i})

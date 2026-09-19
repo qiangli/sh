@@ -225,6 +225,11 @@ func (r *Runner) bashPPEvalScalarExpr(expr syntax.BashPPExpr) (result bashPPScal
 				return bashPPScalar{}, err
 			}
 			if index < 0 || index >= len(text) {
+				if r.bashPPGoSource {
+					// Indexing a string out of range is Go's recoverable runtime
+					// panic, not the classic hard diagnostic.
+					return bashPPScalar{}, r.bashPPSprint162CollectionBoundsPanic(x, index, len(text))
+				}
 				return bashPPScalar{}, fmt.Errorf("BASHPP-ECOLLECTION-BOUNDS: index %d out of bounds for length %d", index, len(text))
 			}
 			return bashPPScalar{value: constant.MakeUint64(uint64(text[index])), typ: "uint8", runtime: true}, nil
@@ -265,6 +270,19 @@ func (r *Runner) bashPPEvalScalarExpr(expr syntax.BashPPExpr) (result bashPPScal
 	return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-FORM: unsupported scalar expression %T", expr)
 }
 
+// bashPPReparseIntegerCarrier reconstructs an integer scalar from the decimal
+// spelling a large-unsigned element is stored under. Only a well-formed
+// integer literal representable in the destination integer type qualifies;
+// an ordinary string element (declared string, or a named string type) is
+// left as its string carrier.
+func (r *Runner) bashPPReparseIntegerCarrier(typ, text string) (bashPPScalar, bool) {
+	dest, ok := r.bashPPUnderlyingIntegerName(typ)
+	if !ok || !bashPPCollectionIntegerText(dest, text) {
+		return bashPPScalar{}, false
+	}
+	return bashPPScalar{value: constant.MakeFromLiteral(text, token.INT, 0), typ: typ, runtime: true}, true
+}
+
 func (r *Runner) bashPPScalarPath(expr syntax.BashPPExpr) (bashPPScalar, error) {
 	value, meta, err := r.bashPPReadExpr(expr)
 	if err != nil {
@@ -281,6 +299,15 @@ func (r *Runner) bashPPScalarPath(expr syntax.BashPPExpr) (bashPPScalar, error) 
 	}
 	switch value := value.(type) {
 	case string:
+		// A large unsigned element is stored as its decimal spelling because
+		// it exceeds the interpreter's signed int carrier. Reconstruct it as
+		// the integer it is when the declared scalar type is integral, so
+		// every downstream use (bridge, printf, comparison) sees a number.
+		if r.bashPPGoSource {
+			if reparsed, ok := r.bashPPReparseIntegerCarrier(typ, value); ok {
+				return reparsed, nil
+			}
+		}
 		return bashPPScalar{value: constant.MakeString(value), typ: typ, runtime: true}, nil
 	case bool:
 		return bashPPScalar{value: constant.MakeBool(value), typ: typ, runtime: true}, nil
