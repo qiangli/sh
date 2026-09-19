@@ -105,6 +105,11 @@ func (r *Runner) goSourceValueCells(expr syntax.BashPPExpr, spread bool) ([]*bas
 		return one(cell, err)
 	}
 	if call, ok := expr.(*syntax.BashPPCall); ok {
+		if conversion, converted := r.bashPPConversionCall(call); converted {
+			if cell, err := r.bashPPStructuredArgCell(nil, conversion); cell != nil || err != nil {
+				return one(cell, err)
+			}
+		}
 		if cell, handled, err := r.goSourceComplexBuiltinCell(call); handled {
 			return one(cell, err)
 		}

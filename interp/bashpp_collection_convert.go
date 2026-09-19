@@ -162,6 +162,21 @@ func (r *Runner) bashPPConvertToCollection(x *syntax.BashPPConvertExpr) (any, *b
 			}
 			return copied, converted, true, nil
 		}
+		// A defined or instantiated collection conversion preserves the
+		// non-scalar operand carrier when the source and target have identical
+		// underlying collection shapes (for example
+		// `sets[int, []int](x)`). The value is not a scalar spelling and must
+		// reach the generic/interface call as its complete cell.
+		if ok {
+			if value, meta, exists := r.bashPPCollectionOperand(x.X); exists {
+				if bashPPTypeText(r.bashPPUnderlyingType(meta.typ)) != bashPPTypeText(r.bashPPUnderlyingType(target)) {
+					return nil, nil, true, fmt.Errorf("BASHPP-EEXPR-CONVERT: cannot convert %s to %s", bashPPTypeText(meta.typ), bashPPTypeText(target))
+				}
+				converted := *meta
+				converted.typ = target
+				return value, &converted, true, nil
+			}
+		}
 	}
 	elemKind, ok := r.bashPPByteOrRuneSlice(target)
 	if !ok {
