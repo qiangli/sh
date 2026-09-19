@@ -128,7 +128,7 @@ func analyzeNativeArtifact(ctx context.Context, language, compiler string, envir
 	configureNativeCompiler(cmd, environment)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	if err := cmd.Run(); err != nil {
+	if err := cmd.Run(); err != nil && !zigDriverOnlyFailure(stderr.String()) {
 		return nil, "", nativeCompilerError(language, err, stderr.String())
 	}
 	var root clangASTNode
@@ -194,6 +194,26 @@ func nativeIncludeArgs(environment *EnvironmentPlan) []string {
 		}
 	}
 	return args
+}
+
+// zigDriverOnlyFailure recognises zig cc's one spurious failure: clang behind
+// zig's driver dumps the AST, then zig reports "<file>:1:1: error:
+// FileNotFound" because -fsyntax-only left it no object to cache. The dump
+// on stdout is complete and the exit status is noise — but only when that
+// is the SOLE error line; any clang diagnostic keeps the failure.
+func zigDriverOnlyFailure(stderr string) bool {
+	sawZig := false
+	for _, line := range strings.Split(stderr, "\n") {
+		if !strings.Contains(line, "error:") {
+			continue
+		}
+		if strings.HasSuffix(strings.TrimSpace(line), ":1:1: error: FileNotFound") {
+			sawZig = true
+			continue
+		}
+		return false
+	}
+	return sawZig
 }
 
 func nativeCompilerError(language string, err error, stderr string) error {

@@ -987,6 +987,24 @@ func discoverTypeScriptEnvironment(plan EnvironmentPlan, dirs []string, _ *envir
 				break
 			}
 		}
+		if plan.CompilerModule == "" && ToolResolver != nil {
+			// No project-local compiler: the same resolver that answered the
+			// runtime answers the module — a provisioned, pinned typescript
+			// package directory — so the island never depends on a global
+			// npm install.
+			argv, why, rerr := ToolResolver("typescript")
+			if rerr != nil {
+				return EnvironmentPlan{}, fmt.Errorf("polyglot: TypeScript compiler module unavailable: %w", rerr)
+			}
+			if len(argv) != 1 {
+				return EnvironmentPlan{}, fmt.Errorf("polyglot: TypeScript compiler module: %q is not a single package directory", argv)
+			}
+			plan.CompilerModule = argv[0]
+			if why == "" {
+				why = "selected provisioned TypeScript compiler"
+			}
+			plan.Explanation = append(plan.Explanation, why)
+		}
 		if plan.CompilerModule == "" {
 			plan.CompilerModule = "typescript"
 			plan.Explanation = append(plan.Explanation, "selected default official TypeScript compiler")
@@ -1017,8 +1035,11 @@ func typeScriptLaunchEnvironment(env map[string]string) []string {
 	// PATH lookup of "link.exe" — which a GNU coreutils link (Git for
 	// Windows' usr/bin) then shadows. On other hosts these keys are simply
 	// absent. PATHEXT and ComSpec keep name resolution and cmd.exe launches
-	// working in the same child.
-	for _, key := range []string{"PATH", "SystemRoot", "TMPDIR", "TEMP", "TMP",
+	// working in the same child. HOME and the XDG/zig cache keys let a
+	// provisioned zig cc find its own cache directory (it refuses to run
+	// without one: "AppDataDirUnavailable").
+	for _, key := range []string{"PATH", "HOME", "SystemRoot", "TMPDIR", "TEMP", "TMP",
+		"XDG_CACHE_HOME", "ZIG_GLOBAL_CACHE_DIR", "ZIG_LOCAL_CACHE_DIR",
 		"PATHEXT", "ComSpec", "SystemDrive", "windir",
 		"ProgramFiles", "ProgramFiles(x86)", "ProgramW6432", "ProgramData",
 		"APPDATA", "LOCALAPPDATA", "USERPROFILE", "HOMEDRIVE", "HOMEPATH"} {

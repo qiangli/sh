@@ -43,6 +43,8 @@ func TestToolResolverReplacesPATH(t *testing.T) {
 			return []string{zig, "cc"}, "selected provisioned zig cc", nil
 		case "python3", "go", "rustc", "node":
 			return []string{filepath.Join(provDir, name)}, "selected provisioned " + name, nil
+		case "typescript":
+			return []string{filepath.Join(provDir, "typescript")}, "selected provisioned typescript", nil
 		}
 		return nil, "", errors.New("no record for " + name)
 	}
@@ -68,6 +70,9 @@ func TestToolResolverReplacesPATH(t *testing.T) {
 			}
 		} else if len(plan.ExecutableArgs) != 0 {
 			t.Fatalf("%s: unexpected leading args %q", language, plan.ExecutableArgs)
+		}
+		if language == "typescript" && plan.CompilerModule != filepath.Join(provDir, "typescript") {
+			t.Fatalf("typescript: compiler module %q did not come from the resolver", plan.CompilerModule)
 		}
 	}
 	if len(asked) == 0 {
@@ -114,5 +119,17 @@ func TestToolResolverReplacesPATH(t *testing.T) {
 	}
 	if !strings.HasPrefix(plan.Executable, decoyDir) {
 		t.Fatalf("without a resolver PATH should win: %s", plan.Executable)
+	}
+}
+
+func TestZigDriverOnlyFailure(t *testing.T) {
+	if !zigDriverOnlyFailure("zig: warning: argument unused during compilation: '-c'\n/tmp/x/module.c:1:1: error: FileNotFound\n") {
+		t.Fatal("zig's post-dump FileNotFound must be tolerated")
+	}
+	if zigDriverOnlyFailure("/tmp/x/module.c:3:5: error: use of undeclared identifier 'y'\n/tmp/x/module.c:1:1: error: FileNotFound\n") {
+		t.Fatal("a clang diagnostic must keep the failure")
+	}
+	if zigDriverOnlyFailure("") {
+		t.Fatal("no error line is not the zig quirk")
 	}
 }

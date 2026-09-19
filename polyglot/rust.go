@@ -81,7 +81,10 @@ func (r Rust) AnalyzeArtifact(ctx context.Context, source string) ([]Export, str
 	if err := os.WriteFile(sourceFile, []byte(generated), 0o600); err != nil {
 		return nil, "", err
 	}
-	cmd := exec.CommandContext(ctx, r.executable(), append(leadingArgs(r.Environment), "--edition=2024", "-C", "panic=unwind", "-C", "opt-level=0", "-o", output, sourceFile)...)
+	args := append(leadingArgs(r.Environment), "--edition=2024", "-C", "panic=unwind", "-C", "opt-level=0")
+	args = append(args, rustLinkerArgs()...)
+	args = append(args, "-o", output, sourceFile)
+	cmd := exec.CommandContext(ctx, r.executable(), args...)
 	r.configure(cmd)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -400,4 +403,20 @@ func (m *Module) callRust(ctx context.Context, _ Rust, name string, args []any, 
 		return result, err
 	}
 	return result, nil
+}
+
+// rustLinkerArgs names rustc's linker when the embedder's tool resolver
+// provides one ("cc-linker": a single program that behaves as cc — bashy
+// answers with a wrapper over its provisioned zig cc). Without it rustc
+// looks for `cc` on PATH, which a host with no toolchain does not have.
+// Windows keeps rustc's own MSVC link.exe discovery.
+func rustLinkerArgs() []string {
+	if ToolResolver == nil || runtime.GOOS == "windows" {
+		return nil
+	}
+	argv, _, err := ToolResolver("cc-linker")
+	if err != nil || len(argv) != 1 {
+		return nil
+	}
+	return []string{"-C", "linker=" + argv[0]}
 }
