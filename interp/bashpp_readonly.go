@@ -187,8 +187,30 @@ func (r *Runner) bashPPTupleAssignCall(ctx context.Context, assign *syntax.BashP
 		r.goSourceNativeAssignCall(ctx, assign)
 		return
 	}
+	if r.bashPPGoSource && (assign.Call.CalleeExpr != nil || len(assign.Call.Fun) >= 2) {
+		if cells, handled := r.goSourceResultFuncValueCallCells(ctx, assign.Call); handled {
+			if len(assign.Names) != len(cells) {
+				r.errf("%sBASHPP-EASSIGN-ARITY: %d variable(s) but %d value(s)\n",
+					r.bashErrPrefix(assign.Eq), len(assign.Names), len(cells))
+				r.exit = exitStatus{code: 2}
+				return
+			}
+			r.bashPPCommitTupleAssign(assign, cells)
+			return
+		}
+	}
 	fn, ok := r.bashPPLookupFunc(assign.Call)
 	if !ok {
+		if cells, handled := r.goSourceResultFuncValueCallCells(ctx, assign.Call); handled {
+			if len(assign.Names) != len(cells) {
+				r.errf("%sBASHPP-EASSIGN-ARITY: %d variable(s) but %d value(s)\n",
+					r.bashErrPrefix(assign.Eq), len(assign.Names), len(cells))
+				r.exit = exitStatus{code: 2}
+				return
+			}
+			r.bashPPCommitTupleAssign(assign, cells)
+			return
+		}
 		// `s = append(s, 0)`: the Go front end records the single target in
 		// Names too, so a one-target assignment whose RHS is a predeclared
 		// value builtin arrives here rather than at the single-target path. It
