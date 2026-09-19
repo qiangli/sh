@@ -512,7 +512,7 @@ func (r *Runner) bashPPLookupFunc(c *syntax.BashPPCall) (*bashPPFunc, bool) {
 				}
 				return nil, false
 			}
-			return fn, true
+			return r.bashPPInstantiateFunc(c, fn)
 		}
 		cell, err := r.goSourceValueCell(c.CalleeExpr)
 		if err != nil {

@@ -1689,6 +1689,10 @@ func (e *emitter) call(c *syntax.BashPPCall) (string, error) {
 		if err != nil {
 			return "", err
 		}
+		typeargs, err := e.typeArgs(c.TypeArgs)
+		if err != nil {
+			return "", err
+		}
 		args := make([]string, len(c.Args))
 		for i := range c.Args {
 			args[i], err = e.callArgument(c, i)
@@ -1700,7 +1704,7 @@ func (e *emitter) call(c *syntax.BashPPCall) (string, error) {
 		if c.Ellipsis.IsValid() {
 			spread = "..."
 		}
-		return e.group(callee) + e.callArgs(c, args, spread), nil
+		return e.group(callee) + typeargs + e.callArgs(c, args, spread), nil
 	}
 	frame := e.resultCallFrame
 	e.resultCallFrame = ""

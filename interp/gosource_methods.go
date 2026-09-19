@@ -3,6 +3,7 @@ package interp
 import (
 	"fmt"
 	"go/types"
+	"maps"
 
 	"mvdan.cc/sh/v3/syntax"
 )
@@ -114,7 +115,18 @@ func (r *Runner) goSourceFinalizeReceiver(fn *bashPPFunc) bool {
 	bound, ok := r.bashPPBindPromotedMethod(binding.receiver, binding.method, binding.selection, binding.addressable)
 	if ok {
 		fn.receiver = bound.receiver
-		fn.typeArgs = bound.typeArgs
+		if len(fn.typeArgs) == 0 {
+			fn.typeArgs = bound.typeArgs
+		} else if len(bound.typeArgs) > 0 {
+			// Instantiation happens before argument evaluation. Finalizing an
+			// eagerly captured value receiver after those arguments must add
+			// its receiver bindings without discarding the generic method's
+			// own bindings.
+			merged := make(map[string]syntax.BashPPTypeExpr, len(bound.typeArgs)+len(fn.typeArgs))
+			maps.Copy(merged, bound.typeArgs)
+			maps.Copy(merged, fn.typeArgs)
+			fn.typeArgs = merged
+		}
 	}
 	return ok
 }
