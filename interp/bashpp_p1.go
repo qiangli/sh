@@ -723,7 +723,18 @@ func (r *Runner) bashPPConversionCall(call *syntax.BashPPCall) (*syntax.BashPPCo
 	}
 	name := call.Fun[0].Value
 	if r.bashPPFuncs[name] != nil || !bashPPScalarTypeName(name) {
-		return nil, false
+		if !r.bashPPGoSource || len(call.TypeArgs) == 0 || r.bashPPFuncs[name] != nil {
+			return nil, false
+		}
+		_, declared := r.bashPPTypes[name]
+		if !declared {
+			return nil, false
+		}
+		target := &syntax.BashPPNamedType{Name: call.Fun[0], TypeArgs: call.TypeArgs}
+		if _, ok := r.bashPPUnderlyingType(target).(*syntax.BashPPCollectionType); !ok {
+			return nil, false
+		}
+		return &syntax.BashPPConvertExpr{ConvType: call.Fun[0], ConvTypeExpr: target, Lparen: call.Lparen, Rparen: call.Rparen, X: call.ArgExprs[0]}, true
 	}
 	if !bashPPBuiltinType(name) {
 		decl, declared := r.bashPPTypes[name]
