@@ -119,3 +119,44 @@ func main(){fmt.Printf("%T %v %v\n",z,z,tiny)}
 		})
 	}
 }
+
+// Go's complex family is predeclared rather than an ordinary function.  In
+// particular, a single multi-result call supplies both complex operands; the
+// scalar spelling must not collapse that call to one argument.
+func TestGoSourceComplexBuiltinValuePath(t *testing.T) {
+	for name, tc := range map[string]struct{ source, want string }{
+		"spread": {`package main
+import "fmt"
+func parts() (float64, float64) { return 5, 7 }
+func main() { z := complex(parts()); fmt.Printf("%T %v %v %v\n", z, z, real(z), imag(z)) }
+`, "complex128 (5+7i) 5 7\n"},
+		"complex_collection": {`package main
+import "fmt"
+func main() { z := complex(5.0, 7.0); a := append([]complex128{}, z); fmt.Printf("%T %v %v\n", a[0], a[0], real(a[0])) }
+		`, "complex128 (5+7i) 5\n"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			out, stderr, err := runGoSource(t, name, tc.source)
+			if err != nil {
+				t.Fatalf("Runner: %v stdout=%q stderr=%q", err, out, stderr)
+			}
+			if out != tc.want || stderr != "" {
+				t.Fatalf("stdout=%q stderr=%q; want %q", out, stderr, tc.want)
+			}
+		})
+	}
+}
+
+func TestGoSourceComplexBuiltinRejectsInvalidOperands(t *testing.T) {
+	for name, tc := range map[string]struct{ source, want string }{
+		"complex_arity": {`package main; func main() { _ = complex(1) }`, "not enough arguments for complex"},
+		"real_string":   {`package main; func main() { _ = real("x") }`, "expected complex type"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := gosource.Parse(strings.NewReader(tc.source), name+".go", gosource.Options{RunMain: true})
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err=%v; want %q", err, tc.want)
+			}
+		})
+	}
+}

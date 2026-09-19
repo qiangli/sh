@@ -268,7 +268,7 @@ func (r *Runner) goSourceCollectionReadCell(expr syntax.BashPPExpr, value any, m
 			// integer identity of its declared type: leave the scalar kind
 			// unset so bashPPScalarFromCell reconstructs it as the integer it
 			// is. An ordinary string element still carries as a string.
-			if !r.bashPPStringCarriesInteger(cell.declType, v) {
+			if !r.bashPPStringCarriesInteger(cell.declType, v) && !r.bashPPStringCarriesComplex(cell.declType, v) {
 				cell.scalarKind = constant.String
 			}
 		case bool:
@@ -280,6 +280,14 @@ func (r *Runner) goSourceCollectionReadCell(expr syntax.BashPPExpr, value any, m
 		}
 	}
 	return cell
+}
+
+// A finite complex element crosses collection storage as its Go spelling.
+// Leave its scalar kind unset so the declared destination type reconstructs
+// the complex carrier rather than mistaking that spelling for a Go string.
+func (r *Runner) bashPPStringCarriesComplex(typ syntax.BashPPTypeExpr, text string) bool {
+	shape, ok := r.bashPPUnderlyingType(typ).(*syntax.BashPPNamedType)
+	return ok && (shape.Name.Value == "complex64" || shape.Name.Value == "complex128") && bashPPParseComplex(text).Kind() == constant.Complex
 }
 
 func (r *Runner) goSourceCheckNativeElement(value any, expected syntax.BashPPTypeExpr) error {
