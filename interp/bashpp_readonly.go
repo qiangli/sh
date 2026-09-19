@@ -187,6 +187,19 @@ func (r *Runner) bashPPTupleAssignCall(ctx context.Context, assign *syntax.BashP
 		r.goSourceNativeAssignCall(ctx, assign)
 		return
 	}
+	if r.bashPPGoSource && len(assign.Names) == 1 {
+		if cell, handled, err := r.goSourceBuiltinResult(assign.Call); handled {
+			if err != nil {
+				if !errors.Is(err, errBashPPScalarInterrupted) {
+					r.errf("%v\n", err)
+					r.exit = exitStatus{code: 2}
+				}
+				return
+			}
+			r.bashPPCommitTupleAssign(assign, []*bashPPCell{cell})
+			return
+		}
+	}
 	if r.bashPPGoSource && (assign.Call.CalleeExpr != nil || len(assign.Call.Fun) >= 2) {
 		if cells, handled := r.goSourceResultFuncValueCallCells(ctx, assign.Call); handled {
 			if len(assign.Names) != len(cells) {

@@ -55,6 +55,9 @@ func (r *Runner) goSourceBuiltinResult(call *syntax.BashPPCall) (*bashPPCell, bo
 	if !r.bashPPGoSource || call.CalleeExpr != nil {
 		return nil, false, nil
 	}
+	if cell, handled, err := r.goSourceComplexBuiltinCell(call); handled {
+		return cell, true, err
+	}
 	name := bashPPPredeclaredCall(call)
 	switch name {
 	case "len", "cap", "append", "copy", "make", "new", "min", "max":
