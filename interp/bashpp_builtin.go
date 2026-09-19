@@ -236,6 +236,17 @@ func (r *Runner) bashPPRunValueBuiltin(name string, c *syntax.BashPPCall) (*bash
 	args := make([]bashPPBuiltinArg, len(c.Args))
 	for i := range c.Args {
 		if r.bashPPGoSource && (name == "print" || name == "println") && i < len(c.ArgExprs) && c.ArgExprs[i] != nil {
+			if r.goSourcePrintReferenceOperand(c.ArgExprs[i]) {
+				text, err := r.goSourcePrintReference(c.ArgExprs[i])
+				if err != nil {
+					if !errors.Is(err, errBashPPScalarInterrupted) {
+						r.exit.fatal(err)
+					}
+					return nil, false
+				}
+				args[i] = bashPPBuiltinArg{value: text, scalar: bashPPScalar{value: constant.MakeString(text)}, hasScalar: true, text: text}
+				continue
+			}
 			scalar, err := r.bashPPEvalScalarExpr(c.ArgExprs[i])
 			if err != nil {
 				if !errors.Is(err, errBashPPScalarInterrupted) {
@@ -573,7 +584,11 @@ func (r *Runner) bashPPRunValueBuiltin(name string, c *syntax.BashPPCall) (*bash
 		}
 		parts := make([]string, len(args))
 		for i, arg := range args {
-			parts[i] = bashPPBuiltinScalar(arg.value)
+			if r.bashPPGoSource && arg.hasScalar {
+				parts[i] = r.goSourcePrintScalar(arg.scalar)
+			} else {
+				parts[i] = bashPPBuiltinScalar(arg.value)
+			}
 		}
 		if r.bashPPGoSource {
 			if name == "println" {

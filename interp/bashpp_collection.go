@@ -789,9 +789,12 @@ func bashPPScalarAny(value constant.Value) any {
 			return int(n)
 		}
 	case constant.Float:
-		if n, ok := constant.Float64Val(value); ok {
-			return n
-		}
+		// Float64Val's second result is exactness, not success: an untyped
+		// 0.1 or a computed 3/10 has no exact float64, and returning its
+		// rational text instead would hand `1/10` to fmt through an
+		// interface{} element. The nearest float64 is the Go value.
+		n, _ := constant.Float64Val(value)
+		return n
 	}
 	return bashPPScalarString(value)
 }

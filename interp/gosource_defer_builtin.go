@@ -3,6 +3,7 @@ package interp
 import (
 	"fmt"
 	"go/constant"
+	"strconv"
 
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/syntax"
@@ -54,7 +55,34 @@ func (r *Runner) goSourceCaptureDeferredValueBuiltin(call *syntax.BashPPCall) (*
 	captured := *call
 	captured.Args = append([]*syntax.Word(nil), call.Args...)
 	captured.ArgExprs = nil
+	printing := name == "print" || name == "println"
+	if printing {
+		captured.ArgExprs = make([]syntax.BashPPExpr, len(call.Args))
+	}
+	// A deferred print operand is only ever printed, so its text is fixed
+	// here in Go's print form — a float64 0.1 as `0.1`, not its exact
+	// rational `1/10`; a nil slice as `[0/0]0x0` — and carried to the unwind
+	// as a string literal the direct print path renders verbatim.
+	printText := func(i int, text string) {
+		captured.Args[i] = &syntax.Word{Parts: []syntax.WordPart{&syntax.SglQuoted{
+			Left: call.Args[i].Pos(), Right: call.Args[i].End(), Value: text,
+		}}}
+		captured.ArgExprs[i] = &syntax.BashPPBasicLit{Kind: "STRING", Value: &syntax.Lit{
+			Value: strconv.Quote(text), ValuePos: call.Args[i].Pos(), ValueEnd: call.Args[i].End(),
+		}}
+	}
 	for i, expr := range call.ArgExprs {
+		if printing && r.goSourcePrintReferenceOperand(expr) {
+			text, err := r.goSourcePrintReference(expr)
+			if err != nil {
+				if !r.bashPPPanicking() {
+					r.exit.fatal(err)
+				}
+				return nil, true
+			}
+			printText(i, text)
+			continue
+		}
 		cell, err := r.goSourceValueCell(expr)
 		if err != nil {
 			if !r.bashPPPanicking() {
@@ -73,6 +101,10 @@ func (r *Runner) goSourceCaptureDeferredValueBuiltin(call *syntax.BashPPCall) (*
 				r.errf("%sgosource: deferred %s scalar argument has no value\n", r.bashErrPrefix(call.Args[i].Pos()), name)
 				r.exit = exitStatus{code: 2}
 				return nil, true
+			}
+			if printing {
+				printText(i, r.goSourcePrintScalar(scalar))
+				continue
 			}
 			captured.Args[i] = &syntax.Word{Parts: []syntax.WordPart{&syntax.SglQuoted{
 				Left: call.Args[i].Pos(), Right: call.Args[i].End(), Value: bashPPScalarString(scalar.value),
