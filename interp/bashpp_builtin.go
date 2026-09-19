@@ -191,6 +191,24 @@ func (r *Runner) bashPPBuiltinInt(name string, arg bashPPBuiltinArg) (int, bool)
 }
 
 func (r *Runner) bashPPBuiltinElement(arg bashPPBuiltinArg, expected syntax.BashPPTypeExpr) (any, *bashPPCollectionMeta, bool) {
+	// A channel argument carries its identity on the cell, not in a value the
+	// scalar check below could see. Store it the way a composite literal
+	// element does, so `a = append(a, make(chan bool))` keeps the reference.
+	if _, ok := r.goSourceChannelType(expected); ok && arg.meta == nil {
+		cell := arg.cell
+		if cell == nil && arg.channel != nil {
+			cell = &bashPPCell{channel: arg.channel}
+		}
+		if cell != nil {
+			meta := &bashPPCollectionMeta{kind: "channel", typ: expected}
+			value, err := r.goSourceChannelCellValue(cell, expected, meta)
+			if err != nil {
+				r.bashPPBuiltinError("TYPE", "%v", err)
+				return nil, nil, false
+			}
+			return value, meta, true
+		}
+	}
 	if arg.meta != nil {
 		if err := r.bashPPCheckTypedValue(arg.value, arg.meta, expected); err != nil {
 			r.bashPPBuiltinError("TYPE", "%v", err)
@@ -402,10 +420,21 @@ func (r *Runner) bashPPRunValueBuiltin(name string, c *syntax.BashPPCall) (*bash
 			if args[1].cell != nil && args[1].cell.interfaceValue != nil {
 				keyMeta = &bashPPCollectionMeta{kind: "interface", typ: args[1].cell.declType, interfaceValue: args[1].cell.interfaceValue}
 			} else if _, iface := r.bashPPInterfaceType(shape.Key); iface && args[1].typ != nil {
+				// An interface-keyed delete hashes the key's dynamic type at
+				// run time, so an unhashable one is Go's recoverable panic,
+				// not a static type error.
+				if r.bashPPGoSource && !r.bashPPMapKeyType(args[1].typ) {
+					r.bashPPRaise("runtime error: hash of unhashable type " + bashPPTypeText(args[1].typ))
+					return nil, false
+				}
 				keyType = args[1].typ
 			}
 			if err := r.bashPPSprint165MapDelete(mapping, args[0].meta, args[1].value, keyMeta, keyType); err != nil {
-				r.bashPPBuiltinError("TYPE", "delete key: %v", err)
+				// An interrupted key hash has already raised its panic; a
+				// second diagnostic here would outlive the recover.
+				if !r.bashPPGoSource || !errors.Is(err, errBashPPScalarInterrupted) {
+					r.bashPPBuiltinError("TYPE", "delete key: %v", err)
+				}
 			}
 		}
 		return nil, false

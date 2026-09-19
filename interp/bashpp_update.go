@@ -192,12 +192,18 @@ func (r *Runner) bashPPApplyMapUpdate(target *syntax.BashPPIndexExpr, collection
 	}
 	key, keyMeta, err := r.bashPPEvalElement(target.Index, collection.Key)
 	if err != nil {
-		r.bashPPUpdateError(target.Index.Pos(), "TARGET", err.Error())
+		if !r.bashPPGoSource || !errors.Is(err, errBashPPScalarInterrupted) {
+			r.bashPPUpdateError(target.Index.Pos(), "TARGET", err.Error())
+		}
 		return
 	}
 	storage, _, found, err := r.bashPPSprint165MapLookup(meta, key, keyMeta, collection.Key)
 	if err != nil {
-		r.bashPPUpdateError(target.Index.Pos(), "TARGET", err.Error())
+		// Hashing an unhashable key has already raised its recoverable panic;
+		// reporting it again here would print past the recover.
+		if !r.bashPPGoSource || !errors.Is(err, errBashPPScalarInterrupted) {
+			r.bashPPUpdateError(target.Index.Pos(), "TARGET", err.Error())
+		}
 		return
 	}
 	current, child := bashPPSprint165MapEntryValueFound(mapping, meta, storage, found)
@@ -226,7 +232,9 @@ func (r *Runner) bashPPApplyMapUpdate(target *syntax.BashPPIndexExpr, collection
 		return
 	}
 	if _, err := r.bashPPSprint165MapStore(mapping, meta, key, keyMeta, collection.Key, value, nil); err != nil {
-		r.bashPPUpdateError(target.Pos(), "WRITE", err.Error())
+		if !r.bashPPGoSource || !errors.Is(err, errBashPPScalarInterrupted) {
+			r.bashPPUpdateError(target.Pos(), "WRITE", err.Error())
+		}
 		return
 	}
 	r.exit.clear()

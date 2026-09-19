@@ -35,24 +35,27 @@ func (r *Runner) goSourceCaptureDeferredClose(call *syntax.BashPPCall) (func(), 
 // goSourceCaptureDeferredValueBuiltin fixes the same defer-time evaluation
 // rule for the predeclared builtins implemented over interpreter cells. The
 // builtin still runs during unwind, but it sees the argument cells produced
-// where the defer statement executed, including receive expressions.
-func (r *Runner) goSourceCaptureDeferredValueBuiltin(call *syntax.BashPPCall) (*syntax.BashPPCall, bool) {
+// where the defer statement executed, including receive expressions. The
+// returned cells travel on the defer entry because the block that ran the
+// defer statement — a loop body, an inner block — may be gone by then.
+func (r *Runner) goSourceCaptureDeferredValueBuiltin(call *syntax.BashPPCall) (*syntax.BashPPCall, map[string]*bashPPCell, bool) {
 	if !r.bashPPGoSource || call == nil || call.FuncLit != nil || call.CalleeExpr != nil || len(call.Fun) != 1 {
-		return nil, false
+		return nil, nil, false
 	}
 	name := bashPPPredeclaredCall(call)
 	if !bashPPValueBuiltin(name) {
-		return nil, false
+		return nil, nil, false
 	}
 	if r.bashPPFuncs[name] != nil || (r.bashPPScope != nil && r.bashPPScope.lookup(name) != nil) {
-		return nil, false
+		return nil, nil, false
 	}
 	if len(call.Args) != len(call.ArgExprs) {
 		r.errf("gosource: deferred %s requires positioned operands\n", name)
 		r.exit = exitStatus{code: 2}
-		return nil, true
+		return nil, nil, true
 	}
 	captured := *call
+	var cells map[string]*bashPPCell
 	captured.Args = append([]*syntax.Word(nil), call.Args...)
 	captured.ArgExprs = nil
 	printing := name == "print" || name == "println"
@@ -78,7 +81,7 @@ func (r *Runner) goSourceCaptureDeferredValueBuiltin(call *syntax.BashPPCall) (*
 				if !r.bashPPPanicking() {
 					r.exit.fatal(err)
 				}
-				return nil, true
+				return nil, nil, true
 			}
 			printText(i, text)
 			continue
@@ -88,19 +91,19 @@ func (r *Runner) goSourceCaptureDeferredValueBuiltin(call *syntax.BashPPCall) (*
 			if !r.bashPPPanicking() {
 				r.exit.fatal(err)
 			}
-			return nil, true
+			return nil, nil, true
 		}
 		if cell == nil {
 			r.errf("%sgosource: deferred %s argument has no value\n", r.bashErrPrefix(call.Args[i].Pos()), name)
 			r.exit = exitStatus{code: 2}
-			return nil, true
+			return nil, nil, true
 		}
 		if cell.vr.Kind != expand.Object && cell.channel == nil && cell.interfaceValue == nil && !cell.pointer {
 			scalar := r.bashPPScalarFromCell(cell)
 			if scalar.value == nil || scalar.value.Kind() == constant.Unknown {
 				r.errf("%sgosource: deferred %s scalar argument has no value\n", r.bashErrPrefix(call.Args[i].Pos()), name)
 				r.exit = exitStatus{code: 2}
-				return nil, true
+				return nil, nil, true
 			}
 			if printing {
 				printText(i, r.goSourcePrintScalar(scalar))
@@ -114,7 +117,7 @@ func (r *Runner) goSourceCaptureDeferredValueBuiltin(call *syntax.BashPPCall) (*
 		if r.bashPPScope == nil {
 			r.errf("gosource: deferred %s has no lexical scope for captured argument\n", name)
 			r.exit = exitStatus{code: 2}
-			return nil, true
+			return nil, nil, true
 		}
 		argName := fmt.Sprintf("bashPPDeferredArg_%d_%d_%d", uint(call.Pos().Offset()), len(r.bashPPDeferStack), i)
 		copy := bashPPCopyAssignmentCell(cell)
@@ -123,12 +126,16 @@ func (r *Runner) goSourceCaptureDeferredValueBuiltin(call *syntax.BashPPCall) (*
 		if target == nil {
 			r.errf("gosource: deferred %s could not retain captured argument\n", name)
 			r.exit = exitStatus{code: 2}
-			return nil, true
+			return nil, nil, true
 		}
 		*target = *copy
+		if cells == nil {
+			cells = make(map[string]*bashPPCell)
+		}
+		cells[argName] = target
 		captured.Args[i] = &syntax.Word{Parts: []syntax.WordPart{&syntax.Lit{
 			Value: argName, ValuePos: call.Args[i].Pos(), ValueEnd: call.Args[i].End(),
 		}}}
 	}
-	return &captured, true
+	return &captured, cells, true
 }

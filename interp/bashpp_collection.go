@@ -713,6 +713,25 @@ func (r *Runner) bashPPEvalElement(expr syntax.BashPPExpr, expected syntax.BashP
 		value, meta = bashPPCopyArrayValue(value, meta)
 		return value, meta, nil
 	}
+	if r.bashPPGoSource {
+		// A collection destination cannot be served by the scalar fallback, so
+		// a name or type assertion carrying a collection is read whole — this
+		// is what admits an array-typed variable or assertion as a map key.
+		switch expr.(type) {
+		case *syntax.BashPPIdent, *syntax.BashPPTypeAssertExpr:
+			if _, collected := r.bashPPUnderlyingType(expected).(*syntax.BashPPCollectionType); collected {
+				value, meta, err := r.bashPPReadExpr(expr)
+				if err != nil {
+					return nil, nil, err
+				}
+				if err := r.bashPPCheckTypedValue(value, meta, expected); err != nil {
+					return nil, nil, err
+				}
+				value, meta = bashPPCopyArrayValue(value, meta)
+				return value, meta, nil
+			}
+		}
+	}
 	if cell, handled, err := r.goSourceCallableCell(expr); handled {
 		if err != nil {
 			return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-ELEMENT: %v", err)
