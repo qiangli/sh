@@ -121,8 +121,24 @@ func (r *Runner) goSourceInterfaceEqual(left, right bashPPComparableValue) (bool
 	if !lok && !rok {
 		return false, false, nil
 	}
-	box := func(value any) *bashPPInterfaceValue {
-		constantValue := bashPPScalarConstant(value)
+	// box turns the non-interface operand of a `concrete == interface`
+	// comparison into an interface value carrying its own dynamic type, so both
+	// sides go through the one comparison below. A composite (array/struct) or a
+	// pointer keeps its declared type and value identity; only a bare scalar
+	// falls back to a default-typed constant cell.
+	box := func(cv bashPPComparableValue) *bashPPInterfaceValue {
+		if ptr, ok := cv.value.(*bashPPPointer); ok && cv.meta != nil && cv.meta.typ != nil {
+			return &bashPPInterfaceValue{dynamic: cv.meta.typ, cell: &bashPPCell{
+				pointer: true, pointerValue: ptr, declType: cv.meta.typ,
+			}}
+		}
+		if cv.meta != nil && cv.meta.typ != nil && bashPPValueMeta(cv.meta) {
+			return &bashPPInterfaceValue{dynamic: cv.meta.typ, cell: &bashPPCell{
+				vr:        expand.Variable{Set: true, Kind: expand.Object, Obj: cv.value},
+				valueMeta: cv.meta, declType: cv.meta.typ,
+			}}
+		}
+		constantValue := bashPPScalarConstant(cv.value)
 		typ := bashPPDefaultScalarTypeName(constantValue.Kind())
 		decl := &syntax.BashPPNamedType{Name: &syntax.Lit{Value: typ}}
 		return &bashPPInterfaceValue{dynamic: decl, cell: &bashPPCell{
@@ -131,10 +147,10 @@ func (r *Runner) goSourceInterfaceEqual(left, right bashPPComparableValue) (bool
 		}}
 	}
 	if !lok {
-		li = box(left.value)
+		li = box(left)
 	}
 	if !rok {
-		ri = box(right.value)
+		ri = box(right)
 	}
 	ln, rn := li == nil || li.nilIface, ri == nil || ri.nilIface
 	if ln || rn {
