@@ -1088,6 +1088,26 @@ func (r *Runner) bashPPSliceBound(expr syntax.BashPPExpr, fallback int) (int, er
 	return int(n), nil
 }
 
+// bashPPStringSliceBound evaluates a string slice bound exactly once, reporting
+// whether the bound is a runtime value. A runtime-typed bound routes an
+// out-of-range string slice to Go's recoverable panic; a constant one keeps the
+// front-end diagnostic (the Go-source checker already rejects a wholly constant
+// invalid slice, so only the classic dialect reaches that branch here).
+func (r *Runner) bashPPStringSliceBound(expr syntax.BashPPExpr, fallback int) (int, bool, error) {
+	if expr == nil {
+		return fallback, false, nil
+	}
+	v, err := r.bashPPCollectionIndexScalar(expr)
+	if err != nil {
+		return 0, false, fmt.Errorf("BASHPP-ECOLLECTION-INDEX: %v", err)
+	}
+	n, ok := constant.Int64Val(v.value)
+	if !ok || int64(int(n)) != n {
+		return 0, false, fmt.Errorf("BASHPP-ECOLLECTION-INDEX: index must be an integer")
+	}
+	return int(n), v.runtime, nil
+}
+
 func (r *Runner) bashPPSliceBounds(expr *syntax.BashPPSliceExpr, length, capacity int, sliceOperand bool) (int, int, int, error) {
 	low, err := r.bashPPSliceBound(expr.Low, 0)
 	if err != nil {

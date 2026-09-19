@@ -282,20 +282,22 @@ func (r *Runner) bashPPEvalScalarExpr(expr syntax.BashPPExpr) (result bashPPScal
 			return bashPPScalar{}, fmt.Errorf("BASHPP-ECOLLECTION-SLICE: three-index slicing is not defined on strings")
 		}
 		text := constant.StringVal(base.value)
-		low, high := 0, len(text)
-		if x.Low != nil {
-			low, err = r.bashPPCollectionIndex(x.Low)
-			if err != nil {
-				return bashPPScalar{}, err
-			}
+		low, lowRuntime, err := r.bashPPStringSliceBound(x.Low, 0)
+		if err != nil {
+			return bashPPScalar{}, err
 		}
-		if x.High != nil {
-			high, err = r.bashPPCollectionIndex(x.High)
-			if err != nil {
-				return bashPPScalar{}, err
-			}
+		high, highRuntime, err := r.bashPPStringSliceBound(x.High, len(text))
+		if err != nil {
+			return bashPPScalar{}, err
 		}
 		if low < 0 || high < low || high > len(text) {
+			// A runtime-typed bound (or a runtime string operand) faults as
+			// Go's recoverable slice-bounds panic; a wholly constant invalid
+			// slice is the Go-source checker's compile-time error and stays a
+			// front-end diagnostic here.
+			if r.bashPPGoSource && (base.runtime || lowRuntime || highRuntime) {
+				return bashPPScalar{}, r.goSourceSliceBoundsPanic(x, low, high, 0, len(text), len(text), false)
+			}
 			return bashPPScalar{}, fmt.Errorf("BASHPP-ECOLLECTION-BOUNDS: slice [%d:%d] out of bounds for length %d", low, high, len(text))
 		}
 		return bashPPScalar{value: constant.MakeString(text[low:high]), typ: "string", runtime: true}, nil
