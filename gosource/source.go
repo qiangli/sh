@@ -372,10 +372,22 @@ func Load(sources []Source, options Options) (*Program, error) {
 					// instantiation's arguments, an inferred declaration
 					// type) must stay bare too.
 					if pkgname, ok := obj.(*types.PkgName); ok {
-						if c.dotImports[f] == nil {
-							c.dotImports[f] = map[string]bool{}
+						path := pkgname.Imported().Path()
+						if liveImportPaths[path] && dotImportCollides(lc, f, spec, pkgname, liveImportPaths, mapped) {
+							alias := fmt.Sprintf("%simport_%d_%d", c.prefix, fi, ii)
+							lc.renames[obj] = alias
+							importAliases[path] = alias
+							for _, name := range pkgname.Imported().Scope().Names() {
+								if member := pkgname.Imported().Scope().Lookup(name); member != nil {
+									lc.renames[member] = alias + "." + name
+								}
+							}
+						} else {
+							if c.dotImports[f] == nil {
+								c.dotImports[f] = map[string]bool{}
+							}
+							c.dotImports[f][path] = true
 						}
-						c.dotImports[f][pkgname.Imported().Path()] = true
 					}
 				}
 				if obj != nil && obj.Name() != "_" && obj.Name() != "." {
@@ -536,7 +548,18 @@ func liveImports(linked []*converter, mapped map[string]int) map[string]bool {
 					obj = lc.info.Implicits[spec]
 				}
 				pkgname, ok := obj.(*types.PkgName)
-				if !ok || !live[pkgname] {
+				if !ok {
+					continue
+				}
+				if !live[pkgname] && obj.Name() == "." {
+					for _, used := range lc.info.Uses {
+						if used != nil && used.Pkg() != nil && used.Pkg().Path() == pkgname.Imported().Path() {
+							live[pkgname] = true
+							break
+						}
+					}
+				}
+				if !live[pkgname] {
 					continue
 				}
 				path := pkgname.Imported().Path()
@@ -548,6 +571,48 @@ func liveImports(linked []*converter, mapped map[string]int) map[string]bool {
 		}
 	}
 	return paths
+}
+
+func dotImportCollides(lc *converter, file *ast.File, spec *ast.ImportSpec, pkgname *types.PkgName, live map[string]bool, mapped map[string]int) bool {
+	path := pkgname.Imported().Path()
+	scope := pkgname.Imported().Scope()
+	if scope == nil {
+		return false
+	}
+	for _, otherFile := range lc.files {
+		for _, otherSpec := range otherFile.Imports {
+			if otherFile == file && otherSpec == spec {
+				continue
+			}
+			var obj types.Object
+			if otherSpec.Name != nil {
+				obj = lc.info.Defs[otherSpec.Name]
+			} else {
+				obj = lc.info.Implicits[otherSpec]
+			}
+			otherPkg, ok := obj.(*types.PkgName)
+			if !ok || obj.Name() != "." {
+				continue
+			}
+			otherPath := otherPkg.Imported().Path()
+			if otherPath == path || !live[otherPath] {
+				continue
+			}
+			if _, linked := mapped[otherPath]; linked {
+				continue
+			}
+			otherScope := otherPkg.Imported().Scope()
+			if otherScope == nil {
+				continue
+			}
+			for _, name := range scope.Names() {
+				if otherScope.Lookup(name) != nil {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // shadowedBuiltinTypes reports the predeclared type names a package redeclares
