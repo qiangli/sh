@@ -1092,6 +1092,21 @@ func (c *converter) constAsWritten(spec *ast.ValueSpec, index int) bool {
 	if c.usesIota(value) {
 		return false
 	}
+	// The RHS of `iota = iota` (go.dev/issue/53585) resolves to the very
+	// constant being declared. Its written spelling names nothing that exists
+	// before this declaration, so only the folded value can carry it.
+	if def := c.info.Defs[spec.Names[index]]; def != nil {
+		self := false
+		ast.Inspect(value, func(n ast.Node) bool {
+			if id, ok := n.(*ast.Ident); ok && c.info.Uses[id] == def {
+				self = true
+			}
+			return !self
+		})
+		if self {
+			return false
+		}
+	}
 	_, evident := c.constKind(value)
 	return evident
 }

@@ -40,9 +40,20 @@ func (r *Runner) bashPPApplyUpdate(target syntax.BashPPExpr, op string, rhs synt
 		return
 	}
 	if index, ok := target.(*syntax.BashPPIndexExpr); ok {
-		if collection, ok := r.bashPPUnderlyingType(r.bashPPExprScalarType(index.X)).(*syntax.BashPPCollectionType); ok && collection.Kind == "map" {
-			r.bashPPApplyMapUpdate(index, collection, op, rhs, pos)
-			return
+		if collection, ok := r.bashPPUnderlyingType(r.bashPPExprScalarType(index.X)).(*syntax.BashPPCollectionType); ok {
+			if collection.Kind == "map" {
+				r.bashPPApplyMapUpdate(index, collection, op, rhs, pos)
+				return
+			}
+			// A slice is a reference value, so `x[i] += f()` commits to the
+			// payload x named when the target was evaluated even if f
+			// reassigns x before the store (Go evaluates the operand once).
+			// Arrays stay on the variable path below: their assignment
+			// copies, so the variable itself is the target's storage.
+			if collection.Kind == "slice" && r.bashPPGoSource {
+				r.bashPPApplySliceUpdate(index, collection, op, rhs, pos)
+				return
+			}
 		}
 	}
 	ptr, err := r.bashPPAddress(target)
@@ -88,6 +99,62 @@ func (r *Runner) bashPPApplyUpdate(target syntax.BashPPExpr, op string, rhs synt
 		r.bashPPUpdateError(target.Pos(), "WRITE", err.Error())
 		return
 	}
+	r.exit.clear()
+}
+
+// A slice index commits to the payload the target names at evaluation time:
+// the collection and index are read once, the RHS runs after, and the store
+// lands in that payload even if the RHS rebinds the variable that named it.
+func (r *Runner) bashPPApplySliceUpdate(target *syntax.BashPPIndexExpr, collection *syntax.BashPPCollectionType, op string, rhs syntax.BashPPExpr, pos syntax.Pos) {
+	if root, ok := bashPPCollectionRoot(target); ok {
+		if cell := r.bashPPScope.lookup(root); cell != nil {
+			if cell.constant || cell.vr.ReadOnly || cell.object != nil && cell.object.readonly {
+				r.bashPPUpdateError(target.Pos(), "WRITE", "BASHPP-EREADONLY-MUTATION: cannot mutate readonly slice")
+				return
+			}
+		}
+	}
+	parent, meta, err := r.bashPPReadExpr(target.X)
+	if err != nil {
+		r.bashPPUpdateError(target.Pos(), "TARGET", err.Error())
+		return
+	}
+	elements, ok := parent.([]any)
+	if !ok || meta == nil || meta.kind != "slice" {
+		r.bashPPUpdateError(target.Pos(), "TYPE", "target is not slice storage")
+		return
+	}
+	i, err := r.bashPPCollectionIndex(target.Index)
+	if err != nil {
+		r.bashPPUpdateError(target.Index.Pos(), "TARGET", err.Error())
+		return
+	}
+	if i < 0 || i >= len(elements) {
+		r.bashPPUpdateError(target.Index.Pos(), "TARGET", fmt.Sprintf("BASHPP-ECOLLECTION-BOUNDS: index %d out of bounds for length %d", i, len(elements)))
+		return
+	}
+	if i < len(meta.sequence) && meta.sequence[i] != nil {
+		r.bashPPUpdateError(target.Pos(), "TYPE", "target is not scalar")
+		return
+	}
+	left, err := r.bashPPUpdateScalar(elements[i], collection.Element)
+	if err != nil {
+		r.bashPPUpdateError(target.Pos(), "TYPE", err.Error())
+		return
+	}
+	right, err := r.bashPPEvalScalarExpr(rhs)
+	if err != nil {
+		if !errors.Is(err, errBashPPScalarInterrupted) {
+			r.bashPPUpdateError(rhs.Pos(), "RHS", err.Error())
+		}
+		return
+	}
+	value, _, err := r.bashPPUpdateResult(op, left, right)
+	if err != nil {
+		r.bashPPUpdateError(pos, "OP", err.Error())
+		return
+	}
+	elements[i] = value
 	r.exit.clear()
 }
 

@@ -38,7 +38,9 @@ func (r *Runner) goSourceMethodExprType(x syntax.BashPPExpr) (syntax.BashPPTypeE
 			pointer, x = true, v.X
 		case *syntax.BashPPIdent:
 			name := v.Name.Value
-			if _, declared := r.bashPPTypes[name]; !declared {
+			// `error.Error(err)` is a method expression on the predeclared
+			// error interface, which no type table lists.
+			if _, declared := r.bashPPTypes[name]; !declared && name != "error" {
 				return nil, false
 			}
 			// A type declaration leaves a marker cell of its own; a variable

@@ -476,9 +476,12 @@ func (r *Runner) bashPPBindPointerExpr(name string, expr syntax.BashPPExpr) bool
 			return true
 		}
 		if ptr == nil {
-			return false
+			// A runtime nil operand — `Peano(q)` with q nil — binds as a
+			// nil pointer of the conversion's type, like the retype below.
+			expr, typ, meta = nil, target, bashPPPointerMeta(target)
+		} else {
+			expr, value, typ = nil, ptr, target
 		}
-		expr, value, typ = nil, ptr, target
 	}
 	switch x := expr.(type) {
 	case nil:

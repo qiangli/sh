@@ -91,6 +91,14 @@ func (r *Runner) bashPPCollectionOperand(expr syntax.BashPPExpr) (any, *bashPPCo
 		}
 		return cell.vr.Obj, meta, true
 	}
+	// A nested collection-producing conversion — `string([]byte(nil))` reads
+	// `[]byte(nil)` here — already knows its own payload and metadata.
+	if convert, ok := expr.(*syntax.BashPPConvertExpr); ok {
+		if value, meta, handled, err := r.bashPPConvertToCollection(convert); handled && err == nil {
+			return value, meta, true
+		}
+		return nil, nil, false
+	}
 	return r.bashPPStructuredBridgeRead(expr)
 }
 
@@ -120,6 +128,12 @@ func (r *Runner) bashPPConvertToCollection(x *syntax.BashPPConvertExpr) (any, *b
 	elemKind, ok := r.bashPPByteOrRuneSlice(target)
 	if !ok {
 		return nil, nil, false, nil
+	}
+	// `[]byte(nil)` is Go's nil slice of the conversion's own type; there is
+	// no operand to read.
+	if r.bashPPGoSource && goSourceNilLiteral(x.X) {
+		value, meta := r.bashPPZeroValue(target)
+		return value, meta, true, nil
 	}
 	// `[]byte(bs)` on a slice operand is an identity conversion; the payload is
 	// shared, exactly as Go shares it.

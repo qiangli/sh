@@ -632,6 +632,15 @@ func (r *Runner) bashPPCellForInterfaceExpr(expr syntax.BashPPExpr) (*bashPPCell
 			return nil, nil, fmt.Errorf("BASHPP-EINTERFACE-VALUE: pointer value has no dynamic type")
 		}
 		return cell, cell.declType, nil
+	case *syntax.BashPPConvertExpr:
+		// `[]byte("0")` stored in an interface is the converted slice with
+		// the conversion's own type, not a scalar reading of its spelling.
+		if cell, handled, err := r.bashPPConvertCollectionCell(x); handled {
+			if err != nil {
+				return nil, nil, err
+			}
+			return cell, cell.declType, nil
+		}
 	}
 	return r.bashPPScalarInterfaceCell(expr)
 }

@@ -79,18 +79,32 @@ func (r *Runner) bashPPEvalScalarExpr(expr syntax.BashPPExpr) (result bashPPScal
 			}
 			return bashPPScalar{}, fmt.Errorf("gosource: computed call runtime is not implemented")
 		}
+		// An immediately-invoked literal — `if func() bool {…}() {…}` — is a
+		// call whose callee the lookup already resolves from the literal.
+		if x.FuncLit != nil {
+			return r.bashPPScalarFuncCall(x)
+		}
 		if len(x.Fun) == 0 {
 			return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-FORM: unsupported scalar call")
 		}
 		// A selector callee is a method value — `v.Abs()`, `p.q.M()` — which
 		// the callable lookup resolves against the receiver's type. Only the
-		// bare `len`/`cap` spellings are the length builtins.
-		if len(x.Fun) > 1 || (x.Fun[0].Value != "len" && x.Fun[0].Value != "cap") {
+		// bare `len`/`cap`/`copy` spellings are builtins with a scalar result.
+		if len(x.Fun) > 1 || (x.Fun[0].Value != "len" && x.Fun[0].Value != "cap" && x.Fun[0].Value != "copy") {
 			return r.bashPPScalarFuncCall(x)
 		}
 		name := x.Fun[0].Value
 		if r.bashPPFuncs[name] != nil || (r.bashPPScope != nil && r.bashPPScope.lookup(name) != nil) {
 			return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-CALL: scalar %s requires the unshadowed builtin", name)
+		}
+		// `copy(dst, src)` used as a value — `if copy(s1, s2) != n` — is the
+		// same mutation the statement position runs; its count is the scalar.
+		if name == "copy" {
+			cell, produced := r.bashPPRunValueBuiltin(name, x)
+			if !produced || cell == nil {
+				return bashPPScalar{}, errBashPPScalarInterrupted
+			}
+			return r.bashPPScalarFromCell(cell), nil
 		}
 		args := make([]bashPPBuiltinArg, len(x.Args))
 		for i := range x.Args {
@@ -192,6 +206,22 @@ func (r *Runner) bashPPEvalScalarExpr(expr syntax.BashPPExpr) (result bashPPScal
 				}
 			}
 		}
+		// A conversion to an interface type — `(J)(t)`, `I[T](x)`, an
+		// anonymous `(interface{ M() })(v)` — is an interface assignment,
+		// not a representation change: the checked program guarantees the
+		// operand implements it, so the value keeps its dynamic identity.
+		// A named pointer type — `Peano(p)` with `type Peano *Peano` — is
+		// the same identity conversion with the target's name attached.
+		if r.bashPPGoSource {
+			if target := r.bashPPConvertTarget(x); target != nil {
+				if _, iface := r.bashPPInterfaceType(target); iface {
+					return v, nil
+				}
+				if _, pointer := r.bashPPUnderlyingType(target).(*syntax.BashPPPointerType); pointer {
+					return bashPPScalar{value: v.value, typ: bashPPTypeText(target), runtime: true}, nil
+				}
+			}
+		}
 		return r.bashPPConvertNamedScalar(x.ConvType.Value, v)
 	case *syntax.BashPPIndexExpr:
 		// Strings are scalar values, not collection objects. Go indexing is by
@@ -261,6 +291,12 @@ func (r *Runner) bashPPEvalScalarExpr(expr syntax.BashPPExpr) (result bashPPScal
 		return bashPPScalar{value: constant.MakeString(text[low:high]), typ: "string", runtime: true}, nil
 	case *syntax.BashPPSelectorExpr, *syntax.BashPPDerefExpr:
 		return r.bashPPScalarPath(expr)
+	case *syntax.BashPPFuncLit:
+		// A literal in value position — `Func(func() {})` — is the same
+		// closure a declaration would bind: its handle, typed by its own
+		// signature so a conversion or method lookup resolves against it.
+		fn, vr := r.bashPPMakeClosure(x)
+		return bashPPScalar{value: constant.MakeString(vr.Str), typ: bashPPTypeText(bashPPFuncLitType(fn.lit)), runtime: true}, nil
 	}
 	return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-FORM: unsupported scalar expression %T", expr)
 }
@@ -377,6 +413,14 @@ func (r *Runner) bashPPIdentScalar(name string) (bashPPScalar, error) {
 	}
 	vr := r.lookupVar(name)
 	if !vr.IsSet() {
+		// A declared function named as a value — `F(a)` converting `a` to a
+		// named func type — is its handle, exactly as an argument slot binds
+		// it. A generic function has no value until instantiated.
+		if r.bashPPGoSource {
+			if fn := r.bashPPFuncs[name]; fn != nil && len(fn.typeParams()) == 0 {
+				return bashPPScalar{value: constant.MakeString(r.bashPPStoreFunc(fn).Str), runtime: true}, nil
+			}
+		}
 		return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-UNDEFINED: undefined: %s", name)
 	}
 	if vr.Kind == expand.Object {
@@ -1104,6 +1148,14 @@ func bashPPBinaryOp(left constant.Value, op token.Token, right constant.Value) (
 }
 
 func (r *Runner) bashPPConvertScalar(typ string, x bashPPScalar) (bashPPScalar, error) {
+	// A constant complex with a zero imaginary part converts to the real
+	// types — `T(0 + 0i)` with T ~float64 — exactly as Go's constant
+	// conversions do; one with a nonzero imaginary part keeps failing below.
+	if x.value != nil && x.value.Kind() == constant.Complex && typ != "complex64" && typ != "complex128" {
+		if constant.Sign(constant.Imag(x.value)) == 0 {
+			x.value = constant.ToFloat(constant.Real(x.value))
+		}
+	}
 	switch typ {
 	case "complex64", "complex128":
 		return r.bashPPConvertComplex(typ, x)
