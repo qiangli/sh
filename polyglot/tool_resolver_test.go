@@ -136,3 +136,43 @@ func TestZigDriverOnlyFailure(t *testing.T) {
 		t.Fatal("an include path containing 'error:' is not a diagnostic")
 	}
 }
+
+// A BASHPP_* override names a program explicitly: a bare name resolves on
+// PATH and never reaches the resolver, absolute or not.
+func TestOverridesBypassResolver(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX executable fixtures")
+	}
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pathDir := filepath.Join(root, "path")
+	for _, name := range []string{"gcc", "rustc-mine", "node-mine", "go-mine"} {
+		writeEnvironmentFile(t, filepath.Join(pathDir, name), "#!/bin/sh\nexit 0\n")
+	}
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module fixture\n\ngo 1.27\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ToolResolver = func(name string) ([]string, string, error) {
+		return nil, "", errors.New("resolver must not be asked for " + name)
+	}
+	t.Cleanup(func() { ToolResolver = nil })
+	for language, environ := range map[string][]string{
+		"c":          {"PATH=" + pathDir, "BASHPP_CC=gcc"},
+		"rust":       {"PATH=" + pathDir, "BASHPP_RUSTC=rustc-mine"},
+		"typescript": {"PATH=" + pathDir, "BASHPP_NODE=node-mine", "BASHPP_TYPESCRIPT_MODULE=" + root},
+		"go":         {"PATH=" + pathDir, "BASHPP_GO=go-mine"},
+	} {
+		plan, err := DiscoverEnvironment(EnvironmentRequest{Source: filepath.Join(root, "program.bsh"), Language: language, Environ: environ})
+		if err != nil {
+			t.Fatalf("%s: %v", language, err)
+		}
+		if !strings.HasPrefix(plan.Executable, pathDir) {
+			t.Fatalf("%s: override did not resolve on PATH: %s", language, plan.Executable)
+		}
+		if language == "rust" && len((Rust{Environment: &plan}).linkerArgs()) != 0 {
+			t.Fatal("an overridden rustc must keep its own linker")
+		}
+	}
+}

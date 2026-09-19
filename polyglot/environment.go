@@ -64,6 +64,16 @@ func resolveTool(env map[string]string, name string) (argv []string, why string,
 	return []string{executable}, "selected PATH " + name, nil
 }
 
+// resolveOverride is a BASHPP_* override: the program the caller named,
+// explicitly — an absolute path as given, a bare name on PATH. It never goes
+// through [ToolResolver]; that is what makes it the escape.
+func resolveOverride(env map[string]string, name string) (string, error) {
+	if filepath.IsAbs(name) {
+		return canonicalExecutable(name, env)
+	}
+	return lookupPath(env, name)
+}
+
 // applyTool records a resolved argv on the plan: argv[0] is the executable
 // (made canonical), the rest are the leading arguments every launch splices
 // in after it.
@@ -440,13 +450,17 @@ func discoverGoEnvironment(plan EnvironmentPlan, selected *environmentOverlay, e
 		requested = selected.Runtime
 		plan.Explanation = append(plan.Explanation, "selected bashpp overlay")
 	}
+	overridden := false
 	if override := env["BASHPP_GO"]; override != "" {
 		requested = override
+		overridden = true
 		plan.Explanation = append(plan.Explanation, "Go executable overridden")
 	}
 	var executable string
 	var err error
-	if filepath.IsAbs(requested) {
+	if overridden {
+		executable, err = resolveOverride(env, requested)
+	} else if filepath.IsAbs(requested) {
 		executable, err = canonicalExecutable(requested, env)
 		if err == nil {
 			plan.Explanation = append(plan.Explanation, "selected Go toolchain")
@@ -514,14 +528,18 @@ func discoverNativeEnvironment(plan EnvironmentPlan, selected *environmentOverla
 		override = "BASHPP_CXX"
 		candidates = []string{"clang++", "c++"}
 	}
+	overridden := false
 	if value := env[override]; value != "" {
 		requested = value
+		overridden = true
 		plan.Explanation = append(plan.Explanation, "compiler executable overridden")
 	}
 	var executable string
 	var err error
 	if requested != "" {
-		if filepath.IsAbs(requested) {
+		if overridden {
+			executable, err = resolveOverride(env, requested)
+		} else if filepath.IsAbs(requested) {
 			executable, err = canonicalExecutable(requested, env)
 		} else if argv, _, rerr := resolveTool(env, requested); rerr == nil {
 			err = plan.applyTool(argv, env)
@@ -577,11 +595,11 @@ func discoverRustEnvironment(plan EnvironmentPlan, selected *environmentOverlay,
 	if override := env["BASHPP_RUSTC"]; override != "" {
 		requested = override
 		plan.Explanation = append(plan.Explanation, "compiler executable overridden")
-	}
-	if filepath.IsAbs(requested) {
+		plan.Executable, err = resolveOverride(env, requested)
+	} else if filepath.IsAbs(requested) {
 		plan.Executable, err = canonicalExecutable(requested, env)
 	} else if argv, why, rerr := resolveTool(env, requested); rerr == nil {
-		if err = plan.applyTool(argv, env); err == nil && env["BASHPP_RUSTC"] == "" {
+		if err = plan.applyTool(argv, env); err == nil {
 			plan.Explanation = append(plan.Explanation, why)
 		}
 	} else {
@@ -963,10 +981,12 @@ func discoverTypeScriptEnvironment(plan EnvironmentPlan, dirs []string, _ *envir
 		overridden = true
 		plan.Explanation = append(plan.Explanation, "runtime executable overridden")
 	}
-	if filepath.IsAbs(requested) {
+	if overridden {
+		plan.Executable, err = resolveOverride(env, requested)
+	} else if filepath.IsAbs(requested) {
 		plan.Executable, err = canonicalExecutable(requested, env)
 	} else if argv, why, rerr := resolveTool(env, requested); rerr == nil {
-		if err = plan.applyTool(argv, env); err == nil && !overridden {
+		if err = plan.applyTool(argv, env); err == nil {
 			plan.Explanation = append(plan.Explanation, why)
 		}
 	} else {

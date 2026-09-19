@@ -611,17 +611,29 @@ func bashPPInjectedGoIdentity(injected string) (bashPPGoIdentityInfo, error) {
 	if fi.IsDir() || (runtime.GOOS != "windows" && fi.Mode()&0111 == 0) {
 		return bashPPGoIdentityInfo{}, fmt.Errorf("BASHPP_GO: %s is not executable", binary)
 	}
-	cmd := exec.Command(binary, "env", "GOROOT", "GOOS", "GOARCH", "GOVERSION")
-	cmd.Env = setEnvString(os.Environ(), "GOTOOLCHAIN", "local")
+	// The injected binary reports ITS OWN root: a host-exported GOROOT
+	// (setup-go, many Windows installs) would otherwise be echoed back and
+	// forced into every worker beside a different binary. -json: a GOROOT
+	// with a space (C:\Program Files\Go) or a devel GOVERSION splits
+	// strings.Fields.
+	cmd := exec.Command(binary, "env", "-json", "GOROOT", "GOOS", "GOARCH", "GOVERSION")
+	environ := make([]string, 0, len(os.Environ())+1)
+	for _, entry := range os.Environ() {
+		if strings.HasPrefix(entry, "GOROOT=") || strings.HasPrefix(entry, "GOTOOLCHAIN=") {
+			continue
+		}
+		environ = append(environ, entry)
+	}
+	cmd.Env = append(environ, "GOTOOLCHAIN=local")
 	out, err := cmd.Output()
 	if err != nil {
 		return bashPPGoIdentityInfo{}, fmt.Errorf("BASHPP_GO: %s env: %w", binary, err)
 	}
-	fields := strings.Fields(string(out))
-	if len(fields) != 4 {
+	var reported struct{ GOROOT, GOOS, GOARCH, GOVERSION string }
+	if err := json.Unmarshal(out, &reported); err != nil || reported.GOROOT == "" || reported.GOVERSION == "" {
 		return bashPPGoIdentityInfo{}, fmt.Errorf("BASHPP_GO: unexpected go env output %q", out)
 	}
-	root, goos, goarch, goVersion := fields[0], fields[1], fields[2], fields[3]
+	root, goos, goarch, goVersion := reported.GOROOT, reported.GOOS, reported.GOARCH, reported.GOVERSION
 	if !bashPPInjectedGoSupported(goVersion) {
 		return bashPPGoIdentityInfo{}, fmt.Errorf("BASHPP_GO: go toolchain %s is older than the go1.27.0 baseline", goVersion)
 	}

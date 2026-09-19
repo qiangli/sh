@@ -82,7 +82,7 @@ func (r Rust) AnalyzeArtifact(ctx context.Context, source string) ([]Export, str
 		return nil, "", err
 	}
 	args := append(leadingArgs(r.Environment), "--edition=2024", "-C", "panic=unwind", "-C", "opt-level=0")
-	args = append(args, rustLinkerArgs()...)
+	args = append(args, r.linkerArgs()...)
 	args = append(args, "-o", output, sourceFile)
 	cmd := exec.CommandContext(ctx, r.executable(), args...)
 	r.configure(cmd)
@@ -410,8 +410,8 @@ func (m *Module) callRust(ctx context.Context, _ Rust, name string, args []any, 
 // answers with a wrapper over its provisioned zig cc). Without it rustc
 // looks for `cc` on PATH, which a host with no toolchain does not have;
 // on Windows the provisioned toolchain is the gnu one, linked the same way.
-func rustLinkerArgs() []string {
-	if ToolResolver == nil {
+func (r Rust) linkerArgs() []string {
+	if ToolResolver == nil || r.overridden() {
 		return nil
 	}
 	argv, _, err := ToolResolver("cc-linker")
@@ -419,4 +419,19 @@ func rustLinkerArgs() []string {
 		return nil
 	}
 	return []string{"-C", "linker=" + argv[0]}
+}
+
+// overridden reports a rustc the caller named with BASHPP_RUSTC (or an
+// overlay): that toolchain keeps its own linker — a host msvc rustc handed
+// zig cc's gnu flavour would fail to link.
+func (r Rust) overridden() bool {
+	if r.Environment == nil {
+		return false
+	}
+	for _, why := range r.Environment.Explanation {
+		if why == "compiler executable overridden" || why == "selected bashpp overlay" {
+			return true
+		}
+	}
+	return false
 }
