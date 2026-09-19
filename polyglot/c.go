@@ -120,7 +120,9 @@ func analyzeNativeArtifact(ctx context.Context, language, compiler string, envir
 	if err != nil {
 		return nil, "", err
 	}
-	astArgs := append(leadingArgs(environment), standard, "-Xclang", "-ast-dump=json", "-fsyntax-only")
+	// -o pins the output zig's driver insists on writing even under
+	// -fsyntax-only (it would otherwise drop an a.out into the project dir).
+	astArgs := append(leadingArgs(environment), standard, "-Xclang", "-ast-dump=json", "-fsyntax-only", "-o", filepath.Join(dir, "syntax.o"))
 	astArgs = append(astArgs, nativeIncludeArgs(environment)...)
 	astArgs = append(astArgs, hostInclude...)
 	astArgs = append(astArgs, sourceFile)
