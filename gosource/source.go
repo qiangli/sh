@@ -266,6 +266,7 @@ func Load(sources []Source, options Options) (*Program, error) {
 	if len(diagnostics) > 0 {
 		if checker.gcStderr() {
 			diagnostics = sortGCStderr(c.fset, sources, diagnostics)
+			diagnostics = limitGCStderr(c.fset, diagnostics, checker.errorLimit)
 		}
 		return nil, diagnostics
 	}
@@ -651,6 +652,7 @@ type checkerOptions struct {
 	testBuiltins           bool
 	checkerBranchErrors    bool
 	checkAfterSyntaxErrors bool
+	errorLimit             int
 }
 
 // gcStderr reports whether the diagnostics are gc's stderr for the sources:
@@ -684,6 +686,9 @@ func checkerOptionsFor(sources []Source, options Options) (checkerOptions, error
 			}
 			if field == "-fakeImportC" && !options.FakeImportC {
 				out.fakeImportC = true
+			}
+			if out.errorLimit == 0 && field == "-e=0" {
+				out.errorLimit = 10
 			}
 		}
 	}

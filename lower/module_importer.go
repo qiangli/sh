@@ -86,6 +86,15 @@ func determineCallerPath(dir string, sdk *goSDK) string {
 	}
 
 	if sdk != nil {
+		cleanRoot, err := filepath.EvalSymlinks(sdk.Root)
+		if err != nil {
+			cleanRoot = filepath.Clean(sdk.Root)
+		}
+		srcRoot := filepath.Join(cleanRoot, "src")
+		if rel, err := filepath.Rel(srcRoot, cleanDir); err == nil && rel != "." && !strings.HasPrefix(rel, "..") {
+			return filepath.ToSlash(rel)
+		}
+
 		cmd := exec.Command(sdk.Bin, "list", "-m", "-json")
 		cmd.Dir = cleanDir
 		cmd.Env = sdk.env(os.Environ())

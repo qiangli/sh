@@ -34,6 +34,14 @@ func (e gcError) Error() string {
 	return fmt.Sprintf("%s:%d:%d: %s", name, line, col, e.msg)
 }
 
+type gcTooManyErrors struct {
+	pos string
+}
+
+func (e gcTooManyErrors) Error() string {
+	return e.pos + ": too many errors"
+}
+
 // gcSyntaxVerdict parses src with gc's own parser (the vendored
 // cmd/compile/internal/syntax) and returns its diagnostics. Branch checking is
 // enabled for gc behavior unless checkerBranchErrors leaves it to go/types.
@@ -311,4 +319,50 @@ func sortGCStderr(fset *token.FileSet, sources []Source, diagnostics ErrorList) 
 		out = append(out, g.list...)
 	}
 	return out
+}
+
+func limitGCStderr(fset *token.FileSet, diagnostics ErrorList, limit int) ErrorList {
+	if limit <= 0 {
+		return diagnostics
+	}
+	out := make(ErrorList, 0, min(len(diagnostics), limit+1))
+	primaries := 0
+	lastPrimaryPos := ""
+	for _, err := range diagnostics {
+		if e, ok := err.(types.Error); ok && isContinuation(e) {
+			if primaries <= limit {
+				out = append(out, err)
+			}
+			continue
+		}
+		if primaries == limit {
+			out = append(out, gcTooManyErrors{pos: lastPrimaryPos})
+			break
+		}
+		primaries++
+		out = append(out, err)
+		lastPrimaryPos = diagnosticPosition(fset, err)
+	}
+	return out
+}
+
+func diagnosticPosition(fset *token.FileSet, err error) string {
+	switch e := err.(type) {
+	case gcError:
+		name, line, col := e.pos.RelFilename(), e.pos.RelLine(), e.pos.RelCol()
+		if line == 0 {
+			return name
+		}
+		if col == 0 {
+			return fmt.Sprintf("%s:%d", name, line)
+		}
+		return fmt.Sprintf("%s:%d:%d", name, line, col)
+	case types.Error:
+		return fset.PositionFor(e.Pos, false).String()
+	case *scanner.Error:
+		return e.Pos.String()
+	case scanner.Error:
+		return e.Pos.String()
+	}
+	return ""
 }

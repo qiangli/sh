@@ -4,6 +4,7 @@ import (
 	"go/types"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"mvdan.cc/sh/v3/gosource"
@@ -42,5 +43,30 @@ func TestModuleImporterIdentityImporter(t *testing.T) {
 	b, err := imp.Import("strings")
 	if err != nil || a != b {
 		t.Fatalf("Import(strings) = %v, %v; identity path gave %v", b, err, a)
+	}
+}
+
+// Sprint #209, Story #464: a standard-library package rooted directly under
+// GOROOT/src has that relative import path as its caller identity. Falling back
+// to filepath.Base made internal/types/errors look like just "errors" to the
+// package loader while importer.Default used the real package identity.
+func TestModuleImporterGOROOTCallerPath(t *testing.T) {
+	goroot := runtime.GOROOT()
+	if goroot == "" {
+		t.Skip("runtime.GOROOT is empty")
+	}
+	dir := filepath.Join(goroot, "src", "internal", "types", "errors")
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		t.Skipf("missing GOROOT package directory %s", dir)
+	}
+	imp, ok := newModuleImporter(dir).(*moduleImporter)
+	if !ok {
+		t.Fatal("newModuleImporter did not return *moduleImporter")
+	}
+	if got, want := imp.callerPath, "internal/types/errors"; got != want {
+		t.Fatalf("callerPath = %q, want %q", got, want)
+	}
+	if _, err := imp.Import("internal/testenv"); err != nil {
+		t.Fatalf("root-internal import from %s was refused: %v", imp.callerPath, err)
 	}
 }
