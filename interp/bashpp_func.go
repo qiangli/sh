@@ -1355,8 +1355,9 @@ func (r *Runner) bashPPGoSourceArgCell(w *syntax.Word, expr syntax.BashPPExpr) *
 		return nil
 	}
 	cell := &bashPPCell{
-		vr:         expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarString(value.value)},
-		scalarKind: value.value.Kind(),
+		vr:           expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarString(value.value)},
+		scalarKind:   value.value.Kind(),
+		negativeZero: value.negativeZero,
 	}
 	if value.typ != "" {
 		cell.declType, cell.typeName = bashPPScalarNamedType(value.typ)

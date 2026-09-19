@@ -18,9 +18,10 @@ import (
 )
 
 type bashPPScalar struct {
-	value   constant.Value
-	typ     string
-	runtime bool
+	value        constant.Value
+	typ          string
+	runtime      bool
+	negativeZero bool
 }
 
 // bashPPEvalScalarExpr consumes syntax's typed tree. Parsing belongs solely
@@ -522,6 +523,7 @@ func (r *Runner) bashPPScalarFromCell(cell *bashPPCell) bashPPScalar {
 		}
 	}
 	value.runtime = !cell.constant
+	value.negativeZero = cell.negativeZero
 	switch {
 	case cell.typeName != "":
 		value.typ = cell.typeName
@@ -619,7 +621,13 @@ func (r *Runner) bashPPUnaryScalar(op token.Token, x bashPPScalar) (bashPPScalar
 				}
 			}
 		}
-		return r.bashPPTypedScalarResult(constant.UnaryOp(op, x.value, precision), x.typ, x.runtime)
+		result, err := r.bashPPTypedScalarResult(constant.UnaryOp(op, x.value, precision), x.typ, x.runtime)
+		// go/constant intentionally has no signed zero. Go runtime floats do,
+		// so retain that one bit only for an evaluated Go-source float.
+		if r.bashPPGoSource && op == token.SUB && x.runtime && result.value.Kind() == constant.Float && constant.Sign(result.value) == 0 {
+			result.negativeZero = !x.negativeZero
+		}
+		return result, err
 	case token.NOT:
 		if x.value.Kind() != constant.Bool {
 			return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-OPERAND: operator ! requires boolean operand")
@@ -1242,7 +1250,7 @@ func (r *Runner) bashPPConvertScalar(typ string, x bashPPScalar) (bashPPScalar, 
 					value = constant.MakeFloat64(v)
 				}
 			}
-			return bashPPScalar{value: value, typ: typ, runtime: x.runtime}, nil
+			return bashPPScalar{value: value, typ: typ, runtime: x.runtime, negativeZero: x.negativeZero && constant.Sign(value) == 0}, nil
 		}
 	default:
 		if converted, ok, err := r.bashPPConvertGoSourceStringToUint64(typ, x); ok {

@@ -1201,6 +1201,7 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 		target := r.bashPPScope.lookup(d.Lhs[0].Value)
 		if target != nil {
 			target.scalarKind = value.value.Kind()
+			target.negativeZero = value.negativeZero
 			target.typeName = value.typ
 			// `f := IteratorFunc[int](it)`: an instantiated named type is
 			// kept as a tree, since its type arguments are what the
