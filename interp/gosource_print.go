@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"go/constant"
 	"go/token"
+	"math"
 	"strconv"
 
 	"mvdan.cc/sh/v3/expand"
@@ -41,6 +42,9 @@ func (r *Runner) goSourcePrintScalar(scalar bashPPScalar) string {
 		// Float64Val's second result reports exactness, which an untyped
 		// 0.1 or a computed 3/10 never has; the nearest float64 is the value.
 		f, _ := constant.Float64Val(scalar.value)
+		if scalar.negativeZero && f == 0 {
+			f = math.Copysign(0, -1)
+		}
 		return strconv.FormatFloat(f, 'g', -1, bits)
 	case constant.Complex:
 		return strconv.FormatComplex(bashPPComplexNumber(scalar.value), 'g', -1, 2*bits)

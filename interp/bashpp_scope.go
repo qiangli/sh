@@ -57,6 +57,7 @@ type bashPPCell struct {
 	// exactScalar preserves untyped Go constants without a text round trip.
 	exactScalar  constant.Value
 	scalarKind   constant.Kind
+	negativeZero bool
 	channel      *bashPPChannel
 	channelOwner *bashPPConcurrent
 	// object is shared by every alias of one structured value. Deep readonly

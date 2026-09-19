@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"go/constant"
 	"go/token"
+	"math"
 	"strconv"
 	"strings"
 
@@ -246,6 +247,9 @@ func (value bashPPBridgeValue) scalar() (bashPPScalar, error) {
 		scalar.value = bashPPParseComplex(value.Text)
 	case "float":
 		scalar.value = constant.MakeFromLiteral(value.Text, token.FLOAT, 0)
+		if number, err := strconv.ParseFloat(value.Text, 64); err == nil {
+			scalar.negativeZero = number == 0 && math.Signbit(number)
+		}
 	default:
 		return scalar, fmt.Errorf("gosource: native %s (%s) is not scalar", value.Kind, value.Type)
 	}
@@ -280,6 +284,9 @@ func bridgeScalar(value bashPPScalar) (bashPPBridgeValue, error) {
 		out.Kind = "float"
 		number, _ := constant.Float64Val(value.value)
 		out.Text = strconv.FormatFloat(number, 'g', -1, 64)
+		if value.negativeZero && number == 0 {
+			out.Text = "-0"
+		}
 	default:
 		return out, fmt.Errorf("gosource: unsupported native scalar kind %s", value.value.Kind())
 	}
@@ -928,6 +935,7 @@ func (r *Runner) bashPPBindNativeValue(name string, value bashPPBridgeValue) {
 		r.bashPPDeclareName(name, expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarString(scalar.value)})
 		cell := r.bashPPScope.lookup(name)
 		cell.scalarKind = scalar.value.Kind()
+		cell.negativeZero = scalar.negativeZero
 		cell.typeName = value.Type
 		cell.declType = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: value.Type}}
 		return
