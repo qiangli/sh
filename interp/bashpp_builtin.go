@@ -218,8 +218,20 @@ func (r *Runner) bashPPBuiltinElement(arg bashPPBuiltinArg, expected syntax.Bash
 		return value, meta, true
 	}
 	if err := r.bashPPCheckCollectionValue(arg.value, expected); err != nil {
-		r.bashPPBuiltinError("TYPE", "%v", err)
-		return nil, nil, false
+		// A builtin argument can arrive as a dependency carrier without cell
+		// metadata (`append(frames, frame)` with a native element type).
+		// Claim it the way a composite literal element would, keeping the
+		// handle in its authenticated session and non-finite floats wrapped.
+		bridged, bridgedMeta, claimed, bridgeErr := r.bashPPCollectionBridgeValue(arg.value, expected)
+		if !claimed {
+			r.bashPPBuiltinError("TYPE", "%v", err)
+			return nil, nil, false
+		}
+		if bridgeErr != nil {
+			r.bashPPBuiltinError("TYPE", "%v", bridgeErr)
+			return nil, nil, false
+		}
+		return bridged, bridgedMeta, true
 	}
 	return arg.value, nil, true
 }

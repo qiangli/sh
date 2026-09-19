@@ -557,7 +557,16 @@ func (r *Runner) bashPPCheckTypedValue(value any, meta *bashPPCollectionMeta, ex
 		}
 		return nil
 	}
-	return r.bashPPCheckCollectionValue(value, expected)
+	if err := r.bashPPCheckCollectionValue(value, expected); err != nil {
+		// A dependency carrier reaching a scalar destination (a non-finite
+		// float64 struct field, say) is still wrapped; validate it with the
+		// same claim composite elements use instead of rejecting the wrapper.
+		if _, _, claimed, bridgeErr := r.bashPPCollectionBridgeValue(value, expected); claimed {
+			return bridgeErr
+		}
+		return err
+	}
+	return nil
 }
 
 func bashPPCellMeta(cell *bashPPCell) *bashPPCollectionMeta {
