@@ -1039,6 +1039,9 @@ func (r *Runner) bashPPComparableExpr(expr syntax.BashPPExpr) (bashPPComparableV
 		if err != nil {
 			return bashPPComparableValue{}, err
 		}
+		if r.bashPPGoSource && meta == nil {
+			meta = r.goSourceNilableScalarComparableMeta(expr)
+		}
 		return bashPPComparableValue{value: value, meta: meta}, nil
 	case *syntax.BashPPCompositeLit:
 		// `(T{1, 2}) == v`: a composite literal is the value it builds.
@@ -1059,7 +1062,10 @@ func bashPPCompareValues(left any, leftMeta *bashPPCollectionMeta, leftNilLitera
 			value, meta = right, rightMeta
 		}
 		if bashPPPointerComparable(meta) || bashPPNilComparable(meta) {
-			return bashPPNilComparableValue(value), nil
+			return bashPPNilComparableValue(value) || bashPPNilComparableZero(value, meta), nil
+		}
+		if bashPPNilComparableZero(value, meta) {
+			return true, nil
 		}
 		return false, fmt.Errorf("BASHPP-ECOMPARE-TYPE: value cannot be compared with nil")
 	}
@@ -1123,6 +1129,30 @@ func bashPPPointerComparable(meta *bashPPCollectionMeta) bool {
 
 func bashPPNilComparable(meta *bashPPCollectionMeta) bool {
 	return meta != nil && (meta.kind == "slice" || meta.kind == "map" || meta.kind == "interface" || meta.kind == "channel" || meta.kind == "func")
+}
+
+func (r *Runner) goSourceNilableScalarComparableMeta(expr syntax.BashPPExpr) *bashPPCollectionMeta {
+	typ := r.bashPPExprScalarType(expr)
+	switch r.bashPPUnderlyingType(typ).(type) {
+	case *syntax.BashPPFuncType:
+		return &bashPPCollectionMeta{kind: "func", typ: typ}
+	case *syntax.BashPPChanType:
+		return &bashPPCollectionMeta{kind: "channel", typ: typ}
+	}
+	return nil
+}
+
+func bashPPNilComparableZero(value any, meta *bashPPCollectionMeta) bool {
+	if value == nil {
+		return true
+	}
+	if native, ok := value.(*bashPPBridgeValue); ok && native != nil && native.Kind == "nil" {
+		return true
+	}
+	if text, ok := value.(string); ok && text == "" && meta != nil && (meta.kind == "func" || meta.kind == "channel") {
+		return true
+	}
+	return false
 }
 
 func bashPPCompareScalarAny(left, right any) (bool, error) {
