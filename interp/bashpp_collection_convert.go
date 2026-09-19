@@ -125,6 +125,44 @@ func bashPPElementInt(value any) (int, bool) {
 // conversion has been claimed.
 func (r *Runner) bashPPConvertToCollection(x *syntax.BashPPConvertExpr) (any, *bashPPCollectionMeta, bool, error) {
 	target := r.bashPPConvertTarget(x)
+	if r.bashPPGoSource {
+		array, ok := r.bashPPUnderlyingType(target).(*syntax.BashPPCollectionType)
+		if ok && array.Kind == "array" && array.Length != nil {
+			value, meta, err := r.bashPPReadExpr(x.X)
+			if err != nil {
+				return nil, nil, true, err
+			}
+			if meta == nil || meta.kind != "slice" {
+				return nil, nil, false, nil
+			}
+			n, err := r.bashPPArrayLength(array.Length.Value)
+			if err != nil {
+				return nil, nil, true, fmt.Errorf("BASHPP-EPOINTER-TYPE: %v", err)
+			}
+			sequence, ok := value.([]any)
+			if value == nil {
+				sequence, ok = nil, true
+			}
+			if !ok {
+				return nil, nil, true, fmt.Errorf("BASHPP-EEXPR-CONVERT: cannot convert %s to %s", bashPPTypeText(meta.typ), bashPPTypeText(target))
+			}
+			if len(sequence) < n {
+				message := fmt.Sprintf("runtime error: cannot convert slice with length %d to array or pointer to array with length %d", len(sequence), n)
+				if r.bashPPGoSource {
+					return nil, nil, true, r.bashPPRaiseRuntimeError("runtime.errorString", message)
+				}
+				return nil, nil, true, fmt.Errorf("BASHPP-ECOLLECTION-BOUNDS: %s", message)
+			}
+			converted := &bashPPCollectionMeta{kind: "array", typ: target, sequence: append([]*bashPPCollectionMeta(nil), meta.sequence[:n]...)}
+			copied := append([]any(nil), sequence[:n]...)
+			for i, child := range converted.sequence {
+				if bashPPValueMeta(child) || child != nil && child.interfaceValue != nil {
+					copied[i], converted.sequence[i] = bashPPCopyArrayValue(copied[i], child)
+				}
+			}
+			return copied, converted, true, nil
+		}
+	}
 	elemKind, ok := r.bashPPByteOrRuneSlice(target)
 	if !ok {
 		return nil, nil, false, nil

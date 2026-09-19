@@ -903,6 +903,9 @@ func (r *Runner) bashPPCompareExpr(left syntax.BashPPExpr, op token.Token, right
 				return r.bashPPNativeCompareValues(l, op, rr)
 			}
 		}
+		if bashPPPointerComparable(lv.meta) && bashPPPointerComparable(rv.meta) && bashPPTypeText(lv.meta.typ) == bashPPTypeText(rv.meta.typ) && r.bashPPZeroSizePointerEqual(lv.value, rv.value) {
+			return op != token.NEQ, nil
+		}
 	}
 	if equal, handled, err := r.goSourceInterfaceEqual(lv, rv); handled {
 		if op == token.NEQ {
@@ -1011,7 +1014,24 @@ func (r *Runner) bashPPComparableExpr(expr syntax.BashPPExpr) (bashPPComparableV
 		if value, ok := r.goSourceTypedNilComparable(x); ok {
 			return value, nil
 		}
-	case *syntax.BashPPDerefExpr, *syntax.BashPPIndexExpr, *syntax.BashPPSliceExpr, *syntax.BashPPSelectorExpr:
+	case *syntax.BashPPDerefExpr:
+		ptr, err := r.bashPPPointerExprValue(x.X)
+		if err != nil {
+			return bashPPComparableValue{}, err
+		}
+		if ptr == nil {
+			return bashPPComparableValue{}, errBashPPNilDereference
+		}
+		value, meta, _, err := ptr.read()
+		if err != nil {
+			return bashPPComparableValue{}, err
+		}
+		value, meta, err = r.bashPPSliceArrayPointerValue(ptr, value, meta)
+		if err != nil {
+			return bashPPComparableValue{}, err
+		}
+		return bashPPComparableValue{value: value, meta: meta}, nil
+	case *syntax.BashPPIndexExpr, *syntax.BashPPSliceExpr, *syntax.BashPPSelectorExpr:
 		value, meta, err := r.bashPPReadExpr(expr)
 		if err != nil {
 			return bashPPComparableValue{}, err
@@ -1137,6 +1157,22 @@ func bashPPPointerEqual(left, right any) bool {
 		}
 	}
 	return true
+}
+
+// bashPPZeroSizePointerEqual matches Go's 1.27 address identity for distinct
+// zero-size elements in one interpreter-owned aggregate.
+func (r *Runner) bashPPZeroSizePointerEqual(left, right any) bool {
+	lp, _ := left.(*bashPPPointer)
+	rp, _ := right.(*bashPPPointer)
+	if lp == nil || rp == nil || lp.target != rp.target {
+		return false
+	}
+	leftShape, ok := r.bashPPGoShapeType(lp.elem, 0)
+	if !ok || leftShape.Size() != 0 {
+		return false
+	}
+	rightShape, ok := r.bashPPGoShapeType(rp.elem, 0)
+	return ok && rightShape.Size() == 0
 }
 
 // bashPPComparablePayload recovers the value that decides an interface's

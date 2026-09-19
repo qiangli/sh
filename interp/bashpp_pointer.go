@@ -461,6 +461,30 @@ func (p *bashPPPointer) read() (any, *bashPPCollectionMeta, syntax.BashPPTypeExp
 	return value, meta, p.elem, nil
 }
 
+// bashPPSliceArrayPointerValue presents a slice-to-array pointer's backing
+// storage as the converted array on a Go-source dereference.
+func (r *Runner) bashPPSliceArrayPointerValue(ptr *bashPPPointer, value any, meta *bashPPCollectionMeta) (any, *bashPPCollectionMeta, error) {
+	if !r.bashPPGoSource || ptr == nil || meta == nil || meta.kind != "slice" {
+		return value, meta, nil
+	}
+	array, ok := r.bashPPUnderlyingType(ptr.elem).(*syntax.BashPPCollectionType)
+	if !ok || array.Kind != "array" || array.Length == nil {
+		return value, meta, nil
+	}
+	n, err := r.bashPPArrayLength(array.Length.Value)
+	if err != nil {
+		return nil, nil, err
+	}
+	sequence, ok := value.([]any)
+	if !ok || len(sequence) < n {
+		return nil, nil, fmt.Errorf("BASHPP-EPOINTER-TARGET: pointer array storage no longer names collection storage")
+	}
+	converted := *meta
+	converted.kind, converted.typ = "array", ptr.elem
+	converted.sequence = append([]*bashPPCollectionMeta(nil), meta.sequence[:n]...)
+	return sequence[:n], &converted, nil
+}
+
 func bashPPScalarValue(text string) any {
 	v := bashPPScalarFromString(text).value
 	switch v.Kind() {

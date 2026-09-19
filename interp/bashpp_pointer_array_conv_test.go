@@ -117,3 +117,52 @@ func main() {
 	qt.Assert(t, qt.Equals(stderr, ""))
 	qt.Assert(t, qt.Equals(out, "9 2\n"))
 }
+
+func TestGoSourceSliceToArrayValueConversion(t *testing.T) {
+	out, stderr, err := runGoSourcePointerConv(t, `package main
+
+import "fmt"
+
+func main() {
+	s := make([]byte, 8)
+	for i := range s {
+		s[i] = byte(i)
+	}
+	a := [8]byte(s)
+	a[3] = 42
+	fmt.Println(a == *(*[8]byte)(s), s[3])
+	type Slice []int
+	type Int4 [4]int
+	ii := make(Slice, 4)
+	ii[1] = 7
+	b := Int4(ii)
+	ii[1] = 8
+	var n []byte
+	z := make([]byte, 0)
+	n0 := [0]byte(n)
+	z0 := [0]byte(z)
+	fmt.Println(b[1], n0 == z0)
+	defer func() { fmt.Println(recover().(error).Error()) }()
+	_ = [9]byte(s)
+}
+`)
+	qt.Assert(t, qt.IsNil(err))
+	qt.Assert(t, qt.Equals(stderr, ""))
+	qt.Assert(t, qt.Equals(out, "false 3\n7 true\nruntime error: cannot convert slice with length 8 to array or pointer to array with length 9\n"))
+}
+
+func TestGoSourceZeroSizePointerIdentity(t *testing.T) {
+	out, stderr, err := runGoSourcePointerConv(t, `package main
+
+import "fmt"
+
+func main() {
+	x := [10][0]byte{}
+	y := make([]struct{}, 10)
+	fmt.Println(&x[1] == &x[2], &y[1] == &y[2])
+}
+`)
+	qt.Assert(t, qt.IsNil(err))
+	qt.Assert(t, qt.Equals(stderr, ""))
+	qt.Assert(t, qt.Equals(out, "true true\n"))
+}
