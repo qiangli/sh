@@ -40,7 +40,15 @@ func (r *Runner) bashPPApplyUpdate(target syntax.BashPPExpr, op string, rhs synt
 		return
 	}
 	if index, ok := target.(*syntax.BashPPIndexExpr); ok {
-		if collection, ok := r.bashPPUnderlyingType(r.bashPPExprScalarType(index.X)).(*syntax.BashPPCollectionType); ok {
+		baseType := r.bashPPExprScalarType(index.X)
+		if baseType == nil && r.bashPPGoSource {
+			// The map operand may itself be a call result, as in `f()[k] += v`
+			// (test/fixedbugs/bug196.go). It has no scalar-type cell to consult,
+			// so resolve the callee's single result type instead. The map path
+			// below reads the operand once, so f is still called exactly once.
+			baseType = r.bashPPUpdateCallResultType(index.X)
+		}
+		if collection, ok := r.bashPPUnderlyingType(baseType).(*syntax.BashPPCollectionType); ok {
 			if collection.Kind == "map" {
 				r.bashPPApplyMapUpdate(index, collection, op, rhs, pos)
 				return
@@ -158,23 +166,48 @@ func (r *Runner) bashPPApplySliceUpdate(target *syntax.BashPPIndexExpr, collecti
 	r.exit.clear()
 }
 
+// bashPPUpdateCallResultType resolves the single result type of a plain named
+// call so a map returned by a function can still route to the read-modify-write
+// path. It is deliberately narrow: it never resolves a computed callee or a
+// generic function, so it cannot evaluate an argument or call anything — the
+// operand's own single evaluation stays in bashPPApplyMapUpdate.
+func (r *Runner) bashPPUpdateCallResultType(x syntax.BashPPExpr) syntax.BashPPTypeExpr {
+	if paren, ok := x.(*syntax.BashPPParenExpr); ok {
+		return r.bashPPUpdateCallResultType(paren.X)
+	}
+	call, ok := x.(*syntax.BashPPCall)
+	if !ok || call.CalleeExpr != nil || call.FuncLit != nil || len(call.Fun) != 1 {
+		return nil
+	}
+	fn := r.bashPPFuncs[call.Fun[0].Value]
+	if fn == nil || len(fn.typeParams()) != 0 {
+		return nil
+	}
+	results := bashppResultTypeExprs(fn.results())
+	if len(results) != 1 {
+		return nil
+	}
+	return results[0]
+}
+
 // Map indices are the one Go assignment target which is assignable but not
 // addressable. Evaluate the map and key once, retain the candidate until the
 // operation succeeds, and only then commit it to the map slot.
 func (r *Runner) bashPPApplyMapUpdate(target *syntax.BashPPIndexExpr, collection *syntax.BashPPCollectionType, op string, rhs syntax.BashPPExpr, pos syntax.Pos) {
-	root, ok := bashPPCollectionRoot(target)
-	if !ok {
-		r.bashPPUpdateError(target.Pos(), "TARGET", "map index has no assignable root")
-		return
-	}
-	cell := r.bashPPScope.lookup(root)
-	if cell == nil {
-		r.bashPPUpdateError(target.Pos(), "TARGET", "undefined map target "+root)
-		return
-	}
-	if cell.constant || cell.vr.ReadOnly || cell.object != nil && cell.object.readonly {
-		r.bashPPUpdateError(target.Pos(), "WRITE", "BASHPP-EREADONLY-MUTATION: cannot mutate readonly map")
-		return
+	// A map is a reference value, so a map operand with no assignable root --
+	// `f()[k] += v` -- is still a legal update target: it is read once below
+	// and mutated in place. The readonly guard only applies when the operand
+	// names a variable that could itself be readonly.
+	if root, ok := bashPPCollectionRoot(target); ok {
+		cell := r.bashPPScope.lookup(root)
+		if cell == nil {
+			r.bashPPUpdateError(target.Pos(), "TARGET", "undefined map target "+root)
+			return
+		}
+		if cell.constant || cell.vr.ReadOnly || cell.object != nil && cell.object.readonly {
+			r.bashPPUpdateError(target.Pos(), "WRITE", "BASHPP-EREADONLY-MUTATION: cannot mutate readonly map")
+			return
+		}
 	}
 	parent, meta, err := r.bashPPReadExpr(target.X)
 	if err != nil {
