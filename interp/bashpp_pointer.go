@@ -201,7 +201,12 @@ func (r *Runner) bashPPPointerExprValue(expr syntax.BashPPExpr) (ptr *bashPPPoin
 			value, meta = initialized, initializedMeta
 		}
 		cell := &bashPPCell{declType: x.AllocType}
-		bashPPStoreCellValue(cell, value, meta)
+		if vr, ok := r.bashPPGoSourceCollectionCarrier(value, meta); ok {
+			cell.vr, cell.valueMeta = vr, meta
+			cell.object = &bashPPObjectIdentity{collection: meta}
+		} else {
+			bashPPStoreCellValue(cell, value, meta)
+		}
 		return &bashPPPointer{target: cell, elem: x.AllocType}, nil
 	case *syntax.BashPPIdent:
 		cell := r.bashPPScope.lookup(x.Name.Value)
@@ -558,6 +563,35 @@ func bashPPScalarValue(text string) any {
 		return f
 	}
 	return text
+}
+
+// bashPPGoSourceCollectionCarrier keeps a typed Go collection in its native
+// interpreter payload instead of sending it through expand.NewObject's JSON
+// safety policy. That policy is the right shell-object boundary, but its depth
+// and traversal limits are not Go collection limits. Both the runtime payload
+// and the authenticated collection shape must agree before this boundary is
+// bypassed; an arbitrary invalid object is never admitted here.
+func (r *Runner) bashPPGoSourceCollectionCarrier(value any, meta *bashPPCollectionMeta) (expand.Variable, bool) {
+	if !r.bashPPGoSource || meta == nil || meta.typ == nil {
+		return expand.Variable{}, false
+	}
+	shape, ok := r.bashPPUnderlyingType(meta.typ).(*syntax.BashPPCollectionType)
+	if !ok || shape.Kind != meta.kind {
+		return expand.Variable{}, false
+	}
+	switch shape.Kind {
+	case "array", "inferred-array", "slice":
+		if _, ok := value.([]any); !ok {
+			return expand.Variable{}, false
+		}
+	case "map":
+		if _, ok := value.(map[string]any); !ok {
+			return expand.Variable{}, false
+		}
+	default:
+		return expand.Variable{}, false
+	}
+	return expand.Variable{Set: true, Kind: expand.Object, Obj: value}, true
 }
 
 func bashPPStoreCellValue(cell *bashPPCell, value any, meta *bashPPCollectionMeta) {
