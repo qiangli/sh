@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"mvdan.cc/sh/v3/polyglot"
 )
 
 // minimumGoSDK is the toolchain baseline the Bash++ lowering targets. It is
@@ -170,6 +172,21 @@ func goSDKCandidates() ([]goSDKCandidate, []string) {
 	// the exact binary to use, so it is tried before everything else.
 	if injected := strings.TrimSpace(os.Getenv("BASHPP_GO")); injected != "" {
 		add("BASHPP_GO", "", injected)
+	}
+
+	// The embedder's tool resolver is the island rule applied to the Go
+	// front end: with one set, the toolchain comes from it — provisioned,
+	// pinned — and the host's GOROOT/PATH are never consulted, so a program
+	// lowers the same way on every host.
+	if polyglot.ToolResolver != nil {
+		if argv, _, err := polyglot.ToolResolver("go"); err != nil {
+			rejected = append(rejected, "resolver: "+err.Error())
+		} else if len(argv) != 1 {
+			rejected = append(rejected, fmt.Sprintf("resolver: %q is not a single go binary", argv))
+		} else {
+			add("resolver", "", argv[0])
+		}
+		return candidates, rejected
 	}
 
 	fromRoot("GOROOT", os.Getenv("GOROOT"))

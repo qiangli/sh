@@ -114,6 +114,7 @@ func (g Go) AnalyzeArtifact(ctx context.Context, source string) ([]Export, strin
 	if g.Environment != nil && g.Environment.Manager == "bashy" {
 		args = append([]string{"go"}, args...)
 	}
+	args = append(leadingArgs(g.Environment), args...)
 	cmd := exec.CommandContext(ctx, g.executable(), args...)
 	g.configure(cmd)
 	var stderr bytes.Buffer

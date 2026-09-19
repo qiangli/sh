@@ -25,6 +25,8 @@ import (
 
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/syntax"
+
+	"mvdan.cc/sh/v3/polyglot"
 )
 
 type bashPPEvalRequest struct {
@@ -514,6 +516,19 @@ func environStrings(env expand.Environ) []string {
 func bashPPGoIdentity() (bashPPGoIdentityInfo, error) {
 	if injected := strings.TrimSpace(os.Getenv("BASHPP_GO")); injected != "" {
 		return bashPPInjectedGoIdentity(injected)
+	}
+	// The embedder's tool resolver (see polyglot.ToolResolver) hands over
+	// the provisioned go the same way an explicit BASHPP_GO would; the host
+	// bootstrap below is the standalone engine's path only.
+	if polyglot.ToolResolver != nil {
+		argv, _, err := polyglot.ToolResolver("go")
+		if err != nil {
+			return bashPPGoIdentityInfo{}, fmt.Errorf("resolve Go toolchain: %w", err)
+		}
+		if len(argv) != 1 {
+			return bashPPGoIdentityInfo{}, fmt.Errorf("resolve Go toolchain: %q is not a single go binary", argv)
+		}
+		return bashPPInjectedGoIdentity(argv[0])
 	}
 	name := "go"
 	if runtime.GOOS == "windows" {

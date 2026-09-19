@@ -81,7 +81,7 @@ func (r Rust) AnalyzeArtifact(ctx context.Context, source string) ([]Export, str
 	if err := os.WriteFile(sourceFile, []byte(generated), 0o600); err != nil {
 		return nil, "", err
 	}
-	cmd := exec.CommandContext(ctx, r.executable(), "--edition=2024", "-C", "panic=unwind", "-C", "opt-level=0", "-o", output, sourceFile)
+	cmd := exec.CommandContext(ctx, r.executable(), append(leadingArgs(r.Environment), "--edition=2024", "-C", "panic=unwind", "-C", "opt-level=0", "-o", output, sourceFile)...)
 	r.configure(cmd)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr

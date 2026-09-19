@@ -20,6 +20,63 @@ import (
 // name (it need not exist). Name selects a named bashpp environment. Environ is
 // an optional os.Environ-style snapshot; an empty slice means os.Environ().
 // Supplying a snapshot makes planning independent of ambient process state.
+// ToolResolverFunc is the embedder's answer to "which program serves this
+// island tool name" — go, cc, c++, python3, pythonX.Y, node, bun, rustc,
+// cargo. It returns the argv to run (a prefix such as [zig cc] is allowed),
+// a one-line reason recorded in [EnvironmentPlan.Explanation], or an error
+// naming what it could not provide.
+//
+// It is the island counterpart of the shell's own command lookup, but a
+// MATERIALIZING one: the embedder may provision (download, verify, cache)
+// the toolchain before answering, because an island needs a program it can
+// exec, not a name. It is called only when a fence actually needs the tool.
+type ToolResolverFunc func(name string) (argv []string, why string, err error)
+
+// ToolResolver, when set, replaces the PATH rung of every island's tool
+// resolution: a fence then never resolves its tool from the process PATH,
+// so the same program means the same thing on every host. The project's own
+// declaration (a venv, an overlay runtime) and the BASHPP_* overrides still
+// win, as they name a program explicitly. nil (the default) keeps the PATH
+// lookup, which is what a standalone engine and the certification profile
+// run.
+var ToolResolver ToolResolverFunc
+
+// resolveTool answers name through [ToolResolver] when one is set, and from
+// PATH otherwise. The argv it returns is never empty on success.
+func resolveTool(env map[string]string, name string) (argv []string, why string, err error) {
+	if ToolResolver != nil {
+		argv, why, err = ToolResolver(name)
+		if err != nil {
+			return nil, "", err
+		}
+		if len(argv) == 0 || argv[0] == "" {
+			return nil, "", fmt.Errorf("tool resolver returned no program for %s", name)
+		}
+		if why == "" {
+			why = "selected provisioned " + name
+		}
+		return argv, why, nil
+	}
+	executable, err := lookupPath(env, name)
+	if err != nil {
+		return nil, "", err
+	}
+	return []string{executable}, "selected PATH " + name, nil
+}
+
+// applyTool records a resolved argv on the plan: argv[0] is the executable
+// (made canonical), the rest are the leading arguments every launch splices
+// in after it.
+func (p *EnvironmentPlan) applyTool(argv []string, env map[string]string) error {
+	executable, err := canonicalExecutable(argv[0], env)
+	if err != nil {
+		return err
+	}
+	p.Executable = executable
+	p.ExecutableArgs = append([]string(nil), argv[1:]...)
+	return nil
+}
+
 type EnvironmentRequest struct {
 	Source   string
 	Language string
@@ -34,10 +91,11 @@ type EnvironmentRequest struct {
 type EnvironmentPlan struct {
 	Language          string
 	Name              string
-	Root              string // project or VCS boundary
-	Dir               string // fixed child-process working directory
-	SourceDir         string // directory containing the requesting source
-	Executable        string // absolute selected runtime executable
+	Root              string   // project or VCS boundary
+	Dir               string   // fixed child-process working directory
+	SourceDir         string   // directory containing the requesting source
+	Executable        string   // absolute selected runtime executable
+	ExecutableArgs    []string // leading arguments every launch places after Executable (zig cc)
 	Manager           string
 	RuntimeConstraint string
 	Runtime           string // selected runtime family, such as node or bun
@@ -55,6 +113,7 @@ type EnvironmentPlan struct {
 
 // Clone returns an independently owned copy of p.
 func (p EnvironmentPlan) Clone() EnvironmentPlan {
+	p.ExecutableArgs = append([]string(nil), p.ExecutableArgs...)
 	p.Manifests = append([]string(nil), p.Manifests...)
 	p.Locks = append([]string(nil), p.Locks...)
 	p.PythonPath = append([]string(nil), p.PythonPath...)
@@ -203,6 +262,14 @@ func DiscoverEnvironment(request EnvironmentRequest) (EnvironmentPlan, error) {
 	} else if active := activePythonRuntime(env); active != "" {
 		plan.Explanation = append(plan.Explanation, "selected inherited active environment")
 		executable = active
+	} else if ToolResolver != nil {
+		argv, why, rerr := resolveTool(env, "python3")
+		if rerr != nil {
+			return EnvironmentPlan{}, fmt.Errorf("polyglot: Python runtime unavailable: %w", rerr)
+		}
+		plan.Explanation = append(plan.Explanation, why)
+		executable = argv[0]
+		plan.ExecutableArgs = append([]string(nil), argv[1:]...)
 	} else {
 		plan.Explanation = append(plan.Explanation, "selected PATH runtime")
 		executable, err = lookupPythonRuntime(env, runtime.GOOS)
@@ -381,17 +448,23 @@ func discoverGoEnvironment(plan EnvironmentPlan, selected *environmentOverlay, e
 	var err error
 	if filepath.IsAbs(requested) {
 		executable, err = canonicalExecutable(requested, env)
-	} else {
-		executable, err = lookupPath(env, requested)
-	}
-	if err != nil && requested == "go" {
+		if err == nil {
+			plan.Explanation = append(plan.Explanation, "selected Go toolchain")
+		}
+	} else if argv, why, rerr := resolveTool(env, requested); rerr == nil {
+		if err = plan.applyTool(argv, env); err == nil {
+			executable = plan.Executable
+			plan.Explanation = append(plan.Explanation, why)
+		}
+	} else if requested == "go" && ToolResolver == nil {
+		// Standalone engine, no go on PATH: bashy on PATH provisions one.
 		executable, err = lookupPath(env, "bashy")
 		manager = "bashy"
 		if err == nil {
 			plan.Explanation = append(plan.Explanation, "selected bashy go provisioner")
 		}
-	} else if err == nil {
-		plan.Explanation = append(plan.Explanation, "selected Go toolchain")
+	} else {
+		err = rerr
 	}
 	if err != nil {
 		return EnvironmentPlan{}, fmt.Errorf("polyglot: Go toolchain unavailable: %w", err)
@@ -446,16 +519,26 @@ func discoverNativeEnvironment(plan EnvironmentPlan, selected *environmentOverla
 	if requested != "" {
 		if filepath.IsAbs(requested) {
 			executable, err = canonicalExecutable(requested, env)
+		} else if argv, _, rerr := resolveTool(env, requested); rerr == nil {
+			err = plan.applyTool(argv, env)
+			executable = plan.Executable
 		} else {
-			executable, err = lookupPath(env, requested)
+			err = rerr
 		}
 	} else {
+		var why string
 		for _, candidate := range candidates {
-			if executable, err = lookupPath(env, candidate); err == nil {
+			var argv []string
+			if argv, why, err = resolveTool(env, candidate); err == nil {
+				if err = plan.applyTool(argv, env); err == nil {
+					executable = plan.Executable
+				}
 				break
 			}
 		}
-		plan.Explanation = append(plan.Explanation, "selected PATH Clang-compatible compiler")
+		if err == nil {
+			plan.Explanation = append(plan.Explanation, why)
+		}
 	}
 	if err != nil {
 		return EnvironmentPlan{}, fmt.Errorf("polyglot: %s compiler unavailable: %w", nativeLanguageName(plan.Language), err)
@@ -490,13 +573,15 @@ func discoverRustEnvironment(plan EnvironmentPlan, selected *environmentOverlay,
 	if override := env["BASHPP_RUSTC"]; override != "" {
 		requested = override
 		plan.Explanation = append(plan.Explanation, "compiler executable overridden")
-	} else {
-		plan.Explanation = append(plan.Explanation, "selected PATH Rust compiler")
 	}
 	if filepath.IsAbs(requested) {
 		plan.Executable, err = canonicalExecutable(requested, env)
+	} else if argv, why, rerr := resolveTool(env, requested); rerr == nil {
+		if err = plan.applyTool(argv, env); err == nil && env["BASHPP_RUSTC"] == "" {
+			plan.Explanation = append(plan.Explanation, why)
+		}
 	} else {
-		plan.Executable, err = lookupPath(env, requested)
+		err = rerr
 	}
 	if err != nil {
 		return EnvironmentPlan{}, fmt.Errorf("polyglot: Rust compiler unavailable: %w", err)
@@ -541,6 +626,16 @@ func pyvenvConfig(executable string) string {
 	}
 }
 
+// resolveToolExecutable is resolveTool for callers that can only carry a
+// single program: an argv with leading arguments is reported as absent.
+func resolveToolExecutable(env map[string]string, name string) string {
+	argv, _, err := resolveTool(env, name)
+	if err != nil || len(argv) != 1 {
+		return ""
+	}
+	return argv[0]
+}
+
 func projectPythonRuntime(root string, env map[string]string) (string, string) {
 	for _, n := range []string{".venv", "venv", "env", ".env"} {
 		d := filepath.Join(root, n)
@@ -563,7 +658,7 @@ func projectPythonRuntime(root string, env map[string]string) (string, string) {
 		}
 		version[0] = strings.TrimPrefix(version[0], "python-")
 		version[0] = strings.TrimPrefix(version[0], "python")
-		if executable, err := lookupPath(env, "python"+version[0]); err == nil {
+		if executable := resolveToolExecutable(env, "python"+version[0]); executable != "" {
 			return executable, "selected nearest Python runtime metadata"
 		}
 	}
@@ -571,7 +666,7 @@ func projectPythonRuntime(root string, env map[string]string) (string, string) {
 		for _, line := range strings.Split(string(data), "\n") {
 			fields := strings.Fields(line)
 			if len(fields) >= 2 && fields[0] == "python" {
-				if executable, err := lookupPath(env, "python"+fields[1]); err == nil {
+				if executable := resolveToolExecutable(env, "python"+fields[1]); executable != "" {
 					return executable, "selected nearest Python runtime metadata"
 				}
 			}
@@ -858,16 +953,20 @@ func discoverTypeScriptEnvironment(plan EnvironmentPlan, dirs []string, _ *envir
 	}
 	plan.Runtime = runtimeName
 	requested := runtimeName
+	overridden := false
 	if override := env[map[string]string{"node": "BASHPP_NODE", "bun": "BASHPP_BUN"}[runtimeName]]; override != "" {
 		requested = override
+		overridden = true
 		plan.Explanation = append(plan.Explanation, "runtime executable overridden")
-	} else {
-		plan.Explanation = append(plan.Explanation, "selected "+runtimeName+" TypeScript runtime")
 	}
 	if filepath.IsAbs(requested) {
 		plan.Executable, err = canonicalExecutable(requested, env)
+	} else if argv, why, rerr := resolveTool(env, requested); rerr == nil {
+		if err = plan.applyTool(argv, env); err == nil && !overridden {
+			plan.Explanation = append(plan.Explanation, why)
+		}
 	} else {
-		plan.Executable, err = lookupPath(env, requested)
+		err = rerr
 	}
 	if err != nil {
 		return EnvironmentPlan{}, fmt.Errorf("polyglot: TypeScript %s runtime unavailable: %w", runtimeName, err)
@@ -958,6 +1057,9 @@ func environmentFingerprint(p EnvironmentPlan) (string, error) {
 	write(p.CompilerModule)
 	write(runtime.GOOS)
 	write(runtime.GOARCH)
+	for _, s := range p.ExecutableArgs {
+		write(s)
+	}
 	for _, s := range p.Manifests {
 		write(s)
 	}

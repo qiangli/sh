@@ -79,7 +79,7 @@ func (t TypeScript) compilerModule() string {
 
 func (t TypeScript) name() string { return "TypeScript" }
 func (t TypeScript) arguments(Plan) []string {
-	return []string{"-e", typeScriptWorker}
+	return append(leadingArgs(t.Environment), "-e", typeScriptWorker)
 }
 func (t TypeScript) loadRequest(plan Plan) map[string]any {
 	dir := ""
@@ -114,7 +114,7 @@ func (t TypeScript) AnalyzeArtifact(ctx context.Context, source string) ([]Expor
 		}
 		input = filepath.Join(dir, ".bashpp-fence.ts")
 	}
-	cmd := exec.CommandContext(ctx, t.executable(), "-e", typeScriptAnalyze, t.compilerModule(), input)
+	cmd := exec.CommandContext(ctx, t.executable(), append(leadingArgs(t.Environment), "-e", typeScriptAnalyze, t.compilerModule(), input)...)
 	t.configure(cmd)
 	cmd.Stdin = strings.NewReader(source)
 	var stdout, stderr bytes.Buffer
@@ -148,7 +148,7 @@ func (t TypeScript) AnalyzeArtifact(ctx context.Context, source string) ([]Expor
 		if t.runtimeName() == "bun" {
 			args = args[1:]
 		}
-		cmd = exec.CommandContext(ctx, t.executable(), args...)
+		cmd = exec.CommandContext(ctx, t.executable(), append(leadingArgs(t.Environment), args...)...)
 		t.configure(cmd)
 		cmd.Stdin = strings.NewReader(source)
 		stdout.Reset()

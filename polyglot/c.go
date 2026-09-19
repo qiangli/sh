@@ -120,7 +120,7 @@ func analyzeNativeArtifact(ctx context.Context, language, compiler string, envir
 	if err != nil {
 		return nil, "", err
 	}
-	astArgs := []string{standard, "-Xclang", "-ast-dump=json", "-fsyntax-only"}
+	astArgs := append(leadingArgs(environment), standard, "-Xclang", "-ast-dump=json", "-fsyntax-only")
 	astArgs = append(astArgs, nativeIncludeArgs(environment)...)
 	astArgs = append(astArgs, hostInclude...)
 	astArgs = append(astArgs, sourceFile)
@@ -154,7 +154,7 @@ func analyzeNativeArtifact(ctx context.Context, language, compiler string, envir
 	if runtime.GOOS == "windows" {
 		output += ".exe"
 	}
-	args := []string{standard, "-O0", "-o", output}
+	args := append(leadingArgs(environment), standard, "-O0", "-o", output)
 	args = append(args, nativeIncludeArgs(environment)...)
 	args = append(args, hostInclude...)
 	args = append(args, workerFile)

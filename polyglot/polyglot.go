@@ -213,6 +213,15 @@ func StringsToAny(values []string) []any {
 	return result
 }
 
+// leadingArgs are the arguments a resolved tool carries before any of its
+// own (zig cc → [cc]); every launch places them right after the executable.
+func leadingArgs(environment *EnvironmentPlan) []string {
+	if environment == nil {
+		return nil
+	}
+	return append([]string(nil), environment.ExecutableArgs...)
+}
+
 type Runtime interface {
 	executable() string
 	arguments(Plan) []string
@@ -241,7 +250,7 @@ func (e Embedded) name() string                    { return e.RuntimeName }
 
 func (p Python) arguments(Plan) []string { return p.pythonArguments(pythonWorker, true) }
 func (p Python) pythonArguments(script string, unbuffered bool) []string {
-	args := append([]string(nil), pythonLauncherArgs(p.executable())...)
+	args := append(leadingArgs(p.Environment), pythonLauncherArgs(p.executable())...)
 	args = append(args, "-I")
 	if unbuffered {
 		args = append(args, "-u")
