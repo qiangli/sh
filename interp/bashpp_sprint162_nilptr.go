@@ -213,6 +213,13 @@ func (r *Runner) goSourceTypedNilComparable(x *syntax.BashPPConvertExpr) (bashPP
 	if target == nil || !r.goSourceNilableType(target) {
 		return bashPPComparableValue{}, false
 	}
+	if _, iface := r.bashPPInterfaceType(target); iface {
+		cell, handled, err := r.goSourceNilValueCell(x)
+		if err != nil || !handled || cell == nil {
+			return bashPPComparableValue{}, false
+		}
+		return bashPPComparableValue{value: cell.interfaceValue, meta: &bashPPCollectionMeta{kind: "interface", typ: cell.declType}}, true
+	}
 	switch r.bashPPUnderlyingType(target).(type) {
 	case *syntax.BashPPFuncType:
 		return bashPPComparableValue{meta: &bashPPCollectionMeta{kind: "func", typ: target}}, true

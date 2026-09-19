@@ -523,6 +523,22 @@ func (r *Runner) bashPPInterfaceConversion(x syntax.BashPPExpr) (*bashPPCell, bo
 	if !ok {
 		return nil, false, nil
 	}
+	if source, handled, err := r.goSourceNilValueCell(conv.X); handled {
+		if err != nil {
+			return nil, true, err
+		}
+		cell := &bashPPCell{declType: target, vr: expand.Variable{Set: true, Kind: expand.String}}
+		if source.interfaceValue != nil && source.interfaceValue.nilIface {
+			cell.interfaceValue = &bashPPInterfaceValue{nilIface: true}
+			return cell, true, nil
+		}
+		if err := r.bashPPImplements(source.declType, iface); err != nil {
+			return nil, true, err
+		}
+		cell.interfaceValue = &bashPPInterfaceValue{dynamic: source.declType, cell: bashPPCopyInterfaceCell(source)}
+		cell.vr = cell.interfaceValue.cell.vr
+		return cell, true, nil
+	}
 	source, dynamic, err := r.bashPPCellForInterfaceExpr(conv.X)
 	if err != nil {
 		return nil, true, err
