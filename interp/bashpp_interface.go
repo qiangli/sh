@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"go/constant"
+	"go/types"
 	"strings"
 
 	"mvdan.cc/sh/v3/expand"
@@ -44,6 +45,13 @@ func (r *Runner) bashPPInterfaceType(typ syntax.BashPPTypeExpr) (*syntax.BashPPI
 			return nil, false
 		}
 		seen[named.Name.Value] = true
+		// Imported interfaces are not declarations in the interpreter's type
+		// registry. Resolve them through the authenticated export metadata that
+		// the native bridge already collected; concrete imported types must not
+		// take this path.
+		if iface, ok := r.bashPPImportedInterfaceType(named); ok {
+			return iface, true
+		}
 		decl, found := r.bashPPTypes[named.Name.Value]
 		if !found && named.Name.Value == "any" {
 			return &syntax.BashPPInterfaceType{Interface: &syntax.Lit{Value: "interface"}}, true
@@ -59,6 +67,67 @@ func (r *Runner) bashPPInterfaceType(typ syntax.BashPPTypeExpr) (*syntax.BashPPI
 		}
 		typ = r.bashPPInstantiateNamedType(named)
 	}
+}
+
+// bashPPImportedInterfaceType exposes only the method set of an imported
+// interface. Its source identity stays in nativeTypes, which is populated
+// from go/types export data and is therefore not forgeable by a display name.
+// The narrow projection is intentional: imported concrete types are still
+// native values, not interface declarations.
+func (r *Runner) bashPPImportedInterfaceType(named *syntax.BashPPNamedType) (*syntax.BashPPInterfaceType, bool) {
+	if !r.bashPPGoSource || named == nil || named.Name == nil {
+		return nil, false
+	}
+	native := r.bashPPEmbeddedNativeType(named)
+	if native == nil {
+		return nil, false
+	}
+	iface, ok := types.Unalias(native).Underlying().(*types.Interface)
+	if !ok || !iface.IsMethodSet() {
+		return nil, false
+	}
+	iface.Complete()
+	out := &syntax.BashPPInterfaceType{Interface: &syntax.Lit{Value: "interface"}}
+	for i := 0; i < iface.NumMethods(); i++ {
+		method := iface.Method(i)
+		sig, ok := method.Type().(*types.Signature)
+		if !ok || sig.TypeParams().Len() != 0 {
+			return nil, false
+		}
+		out.Methods = append(out.Methods, bashPPImportedMethodSpec(method.Name(), sig))
+	}
+	return out, true
+}
+
+func bashPPImportedMethodSpec(name string, sig *types.Signature) *syntax.BashPPMethodSpec {
+	spec := &syntax.BashPPMethodSpec{Name: &syntax.Lit{Value: name}}
+	qualifier := func(pkg *types.Package) string {
+		if pkg == nil {
+			return ""
+		}
+		return pkg.Name()
+	}
+	fields := func(tuple *types.Tuple, variadic bool) []*syntax.BashPPField {
+		if tuple == nil {
+			return nil
+		}
+		out := make([]*syntax.BashPPField, 0, tuple.Len())
+		for i := 0; i < tuple.Len(); i++ {
+			typ := tuple.At(i).Type()
+			field := &syntax.BashPPField{FieldTypeExpr: syntax.BashPPTypeExprFromText(types.TypeString(typ, qualifier))}
+			if variadic && i == tuple.Len()-1 {
+				if slice, ok := typ.(*types.Slice); ok {
+					field.FieldTypeExpr = syntax.BashPPTypeExprFromText(types.TypeString(slice.Elem(), qualifier))
+					field.Ellipsis = syntax.NewPos(0, 1, 1)
+				}
+			}
+			out = append(out, field)
+		}
+		return out
+	}
+	spec.Params = fields(sig.Params(), sig.Variadic())
+	spec.Results = fields(sig.Results(), false)
+	return spec
 }
 
 func (r *Runner) bashPPValidateInterfaceType(name string, iface *syntax.BashPPInterfaceType) error {

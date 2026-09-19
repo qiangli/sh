@@ -140,3 +140,24 @@ func main() { _, ok := reflect.ValueOf(7).Interface().(string); if ok { panic("m
 	qt.Assert(t, qt.Equals(out, ""))
 	qt.Assert(t, qt.Equals(stderr, ""))
 }
+
+func TestStory461ImportedInterfacesCanBeEmbedded(t *testing.T) {
+	src := `package main
+import (
+	"encoding"
+	"fmt"
+)
+type Both interface { fmt.Stringer; encoding.BinaryMarshaler }
+type Value string
+func (Value) String() string { return "value" }
+func (Value) MarshalBinary() ([]byte, error) { return []byte("value"), nil }
+func main() {
+	var both Both = Value("value")
+	b, err := both.MarshalBinary()
+	if err != nil || string(b) != "value" || both.String() != "value" { panic("embedded imported interface failed") }
+}`
+	out, stderr, err := runGoSource(t, "story461-imported-interface", src)
+	qt.Assert(t, qt.IsNil(err), qt.Commentf("stdout=%q stderr=%q", out, stderr))
+	qt.Assert(t, qt.Equals(out, ""))
+	qt.Assert(t, qt.Equals(stderr, ""))
+}

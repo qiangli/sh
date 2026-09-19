@@ -70,3 +70,31 @@ func TestGoSourceNativeEmbeddedMethodSets(t *testing.T) {
 		t.Fatal("unauthenticated native type spelling accepted")
 	}
 }
+
+func TestGoSourceImportedInterfaceMethodSetIsNarrow(t *testing.T) {
+	imp := importer.Default()
+	r := &Runner{
+		bashPPGoSource: true,
+		bashPPImports:  map[string]string{"fmt": "fmt", "strings": "strings"},
+	}
+	r.bashPPTools.nativeTypes = map[string]types.Type{}
+	for _, path := range []string{"fmt", "strings"} {
+		pkg, err := imp.Import(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range []string{"Stringer", "Builder"} {
+			if obj, ok := pkg.Scope().Lookup(name).(*types.TypeName); ok {
+				r.bashPPTools.nativeTypes[path+"."+name] = obj.Type()
+			}
+		}
+	}
+	stringer := &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "fmt.Stringer"}}
+	if _, ok := r.bashPPInterfaceType(stringer); !ok {
+		t.Fatal("authenticated imported interface was treated as concrete")
+	}
+	concrete := &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "strings.Builder"}}
+	if _, ok := r.bashPPInterfaceType(concrete); ok {
+		t.Fatal("authenticated imported concrete type was treated as interface")
+	}
+}
