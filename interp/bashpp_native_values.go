@@ -411,6 +411,21 @@ func (r *Runner) bashPPBridgeExpr(expr syntax.BashPPExpr) (bashPPBridgeValue, er
 		if r.bashPPNativeExpr(x.X) {
 			return r.bashPPNativeIndex(x)
 		}
+		if typ, ok := r.goSourceStaticExprType(x); ok && r.bashPPNativeType(typ) {
+			value, meta, err := r.bashPPReadExpr(x)
+			if err != nil {
+				return bashPPBridgeValue{}, err
+			}
+			native, ok := value.(*bashPPBridgeValue)
+			if !ok || native == nil || meta == nil {
+				return bashPPBridgeValue{}, fmt.Errorf("gosource: native collection element lost its authenticated handle")
+			}
+			checked, _, err := r.goSourceNativeAssignedValue(*native, typ)
+			if err != nil {
+				return bashPPBridgeValue{}, err
+			}
+			return *checked.(*bashPPBridgeValue), nil
+		}
 	case *syntax.BashPPSliceExpr:
 		if r.bashPPNativeExpr(x.X) {
 			return r.bashPPNativeSlice(x)

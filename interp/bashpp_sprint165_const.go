@@ -107,6 +107,9 @@ func (r *Runner) goSourceStaticExprType(expr syntax.BashPPExpr) (syntax.BashPPTy
 		if cell.declType != nil {
 			return cell.declType, true
 		}
+		if meta := bashPPCellMeta(cell); meta != nil && meta.typ != nil {
+			return meta.typ, true
+		}
 		if cell.typeName != "" {
 			return &syntax.BashPPNamedType{Name: &syntax.Lit{Value: cell.typeName}}, true
 		}
@@ -173,7 +176,10 @@ func (r *Runner) goSourceStaticExprType(expr syntax.BashPPExpr) (syntax.BashPPTy
 	case *syntax.BashPPIndexExpr:
 		parent, ok := r.goSourceStaticExprType(x.X)
 		collection, collectionOK := r.bashPPUnderlyingType(parent).(*syntax.BashPPCollectionType)
-		return collection.Element, ok && collectionOK
+		if !ok || !collectionOK {
+			return nil, false
+		}
+		return collection.Element, true
 	case *syntax.BashPPSliceExpr:
 		parent, ok := r.goSourceStaticExprType(x.X)
 		if !ok {

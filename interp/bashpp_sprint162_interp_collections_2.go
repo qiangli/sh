@@ -94,14 +94,23 @@ func (r *Runner) bashPPSprint162MakeSlicePanic(length, capacity int) bool {
 	return true
 }
 
-// bashPPSprint162CollectionBridgeScalar validates a scalar which crossed the
-// dependency boundary in its transport wrapper. Non-finite floats cannot live
-// in the collection's JSON-shaped scalar payload, so the wrapper remains the
-// stored representation after its Go type and scalar spelling are validated.
-func (r *Runner) bashPPSprint162CollectionBridgeScalar(value any, expected syntax.BashPPTypeExpr) (any, *bashPPCollectionMeta, bool, error) {
+// bashPPCollectionBridgeValue validates a typed value which crossed
+// the dependency boundary in its transport wrapper. Handles stay in the
+// authenticated dependency session after the helper verifies assignability;
+// non-finite floats stay wrapped because they cannot live in the collection's
+// JSON-shaped scalar payload.
+func (r *Runner) bashPPCollectionBridgeValue(value any, expected syntax.BashPPTypeExpr) (any, *bashPPCollectionMeta, bool, error) {
 	native, ok := value.(*bashPPBridgeValue)
 	if !ok || native == nil {
 		return nil, nil, false, nil
+	}
+	if _, _, scalarErr := bashPPBridgeScalarValue(*native); scalarErr != nil {
+		value, meta, err := r.goSourceNativeAssignedValue(*native, expected)
+		if err != nil {
+			return nil, nil, true, fmt.Errorf("BASHPP-ECOLLECTION-ELEMENT: %v", err)
+		}
+		meta.kind = "native"
+		return value, meta, true, nil
 	}
 	actual := bashPPBridgeDynamicType(native.Type)
 	if native.Type == "" || !r.bashPPTypeAssignable(actual, expected) {

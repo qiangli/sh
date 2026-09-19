@@ -38,7 +38,14 @@ func (r *Runner) bashPPNativeExpr(expr syntax.BashPPExpr) bool {
 	case *syntax.BashPPParenExpr:
 		return r.bashPPNativeExpr(x.X)
 	case *syntax.BashPPIndexExpr:
-		return r.bashPPNativeExpr(x.X)
+		if r.bashPPNativeExpr(x.X) {
+			return true
+		}
+		// An interpreter-owned collection can retain a dependency value as an
+		// authenticated element handle. Its index expression is therefore a
+		// native receiver even though the collection itself is local.
+		typ, ok := r.goSourceStaticExprType(x)
+		return ok && r.bashPPNativeType(typ)
 	case *syntax.BashPPSliceExpr:
 		return r.bashPPNativeExpr(x.X)
 	case *syntax.BashPPCall:

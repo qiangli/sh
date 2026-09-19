@@ -47,7 +47,7 @@ func (r *Runner) bashPPSprint165StoredBridgeScalar(expr syntax.BashPPExpr, expec
 	default:
 		return nil, nil, false, nil
 	}
-	return r.bashPPSprint162CollectionBridgeScalar(cell.vr.Obj, expected)
+	return r.bashPPCollectionBridgeValue(cell.vr.Obj, expected)
 }
 
 func bashPPSprint165MapPart(text string) string {
