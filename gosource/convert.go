@@ -803,10 +803,14 @@ func (c *converter) constGroup(g *ast.GenDecl) *s.BashPPConstGroup {
 		out.Lparen = c.pos(g.TokPos + token.Pos(len("const")))
 		out.Rparen = c.pos(g.End())
 	}
-	for _, raw := range g.Specs {
+	for specIndex, raw := range g.Specs {
 		v := raw.(*ast.ValueSpec)
 		for i, name := range v.Names {
-			spec := &s.BashPPConstSpec{Name: c.ident(name), Iota: uint32(len(out.Specs))}
+			// iota is the ConstSpec's index within the group, so every name
+			// of a multi-name spec (`abit, amask = 1<<iota, 1<<iota-1`)
+			// shares one value; the flattened per-name position must not
+			// advance it.
+			spec := &s.BashPPConstSpec{Name: c.ident(name), Iota: uint32(specIndex)}
 			if v.Type != nil {
 				spec.DeclType = c.lit(v.Type.Pos(), c.text(v.Type))
 				spec.DeclTypeExpr = c.typ(v.Type)
@@ -1711,6 +1715,7 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 		leaveBranch()
 		out := &s.BashPPRange{For: c.pos(x.For), Range: c.pos(x.Range), Chan: c.word(x.X), Expr: c.expr(x.X), Body: body}
 		var assignments []*s.Stmt
+		var targets, temps []ast.Expr
 		for i, e := range []ast.Expr{x.Key, x.Value} {
 			if e != nil {
 				if x.Tok == token.DEFINE {
@@ -1718,10 +1723,25 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 				} else {
 					temp := &ast.Ident{NamePos: e.Pos(), Name: fmt.Sprintf("%srange_%d_%d", c.prefix, x.TokPos, i)}
 					out.Names = append(out.Names, c.ident(temp))
-					assign := &ast.AssignStmt{Lhs: []ast.Expr{e}, TokPos: x.TokPos, Tok: token.ASSIGN, Rhs: []ast.Expr{temp}}
-					assignments = append(assignments, c.statements(assign)...)
+					targets = append(targets, e)
+					temps = append(temps, temp)
 				}
 			}
+		}
+		if len(targets) == 1 || tuplePlainTargets(targets) {
+			// Plain identifiers assign the same values either way, so each
+			// keeps its own statement.
+			for i, e := range targets {
+				assign := &ast.AssignStmt{Lhs: []ast.Expr{e}, TokPos: x.TokPos, Tok: token.ASSIGN, Rhs: []ast.Expr{temps[i]}}
+				assignments = append(assignments, c.statements(assign)...)
+			}
+		} else if len(targets) > 1 {
+			// `for i, x[i] = range y` assigns as one assignment statement:
+			// x[i]'s operands are evaluated before the new i is stored, so
+			// the pair must go through the tuple-assignment split, not two
+			// sequential assignments.
+			assign := &ast.AssignStmt{Lhs: targets, TokPos: x.TokPos, Tok: token.ASSIGN, Rhs: temps}
+			assignments = c.statements(assign)
 		}
 		if x.Tok == token.DEFINE || len(assignments) > 0 {
 			out.Define = c.pos(x.TokPos)

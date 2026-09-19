@@ -48,6 +48,7 @@ type emitter struct {
 	iotaValue            *int
 	bigIntegers          bool
 	functionDecls        map[string]*syntax.BashPPFuncDecl
+	initEntries          map[string]bool
 	foreignFunctions     map[string]foreignFunction
 	foreignPlans         []polyglot.Plan
 	foreignImports       []polyglot.ImportPlan
@@ -290,6 +291,27 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 		}
 		return true
 	})
+	// The converter renames each Go-source `func init` to a uniquely named
+	// callable and appends one synthetic entry call per function. When the
+	// source's own main is the entry, gc schedules init functions itself:
+	// each renamed function is emitted back as a real `func init` and its
+	// dispatcher call is dropped. A synthetic `func init` that only calls
+	// them would survive gc's dead-init elimination as one live init func,
+	// which GOROOT test/noinit.go observes through the main init task.
+	e.initEntries = map[string]bool{}
+	if e.nativeMain() {
+		for _, s := range file.Stmts {
+			name, ok := e.syntheticEntryCall(s)
+			if !ok || name == "main" {
+				continue
+			}
+			f := e.functionDecls[name]
+			if f == nil || f.Receiver != nil || len(f.Params) > 0 || len(f.Results) > 0 {
+				continue
+			}
+			e.initEntries[name] = true
+		}
+	}
 	var declarations, body strings.Builder
 	declarations.WriteString(e.foreignDeclarations())
 	declarations.WriteString(e.decoratorCallAlias())
@@ -304,6 +326,13 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 		if f, ok := s.Cmd.(*syntax.BashPPFuncDecl); ok {
 			if err := e.statementFlags(s); err != nil {
 				return nil, err
+			}
+			if e.initEntries[f.Name.Value] {
+				renamed := *f
+				nameLit := *f.Name
+				nameLit.Value = "init"
+				renamed.Name = &nameLit
+				f = &renamed
 			}
 			text, err := e.function(f)
 			if err != nil {
@@ -346,7 +375,7 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 				// A synthetic entry call has no source position of its own:
 				// emit it bare rather than marking it with a borrowed one.
 				if name, ok := e.syntheticEntryCall(s); ok && e.nativeMain() {
-					if name != "main" {
+					if name != "main" && !e.initEntries[name] {
 						text = name + "()\n"
 					}
 					break
