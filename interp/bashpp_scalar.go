@@ -1024,7 +1024,7 @@ func (r *Runner) bashPPCompareExpr(left syntax.BashPPExpr, op token.Token, right
 		}
 		return equal, err
 	}
-	ok, err := bashPPCompareValues(lv.value, lv.meta, lv.nilLiteral, rv.value, rv.meta, rv.nilLiteral)
+	ok, err := r.bashPPCompareValues(lv.value, lv.meta, lv.nilLiteral, rv.value, rv.meta, rv.nilLiteral)
 	if err != nil {
 		return false, err
 	}
@@ -1161,6 +1161,14 @@ func (r *Runner) bashPPComparableExpr(expr syntax.BashPPExpr) (bashPPComparableV
 }
 
 func bashPPCompareValues(left any, leftMeta *bashPPCollectionMeta, leftNilLiteral bool, right any, rightMeta *bashPPCollectionMeta, rightNilLiteral bool) (bool, error) {
+	return bashPPCompareValuesWithRunner(nil, left, leftMeta, leftNilLiteral, right, rightMeta, rightNilLiteral)
+}
+
+func (r *Runner) bashPPCompareValues(left any, leftMeta *bashPPCollectionMeta, leftNilLiteral bool, right any, rightMeta *bashPPCollectionMeta, rightNilLiteral bool) (bool, error) {
+	return bashPPCompareValuesWithRunner(r, left, leftMeta, leftNilLiteral, right, rightMeta, rightNilLiteral)
+}
+
+func bashPPCompareValuesWithRunner(r *Runner, left any, leftMeta *bashPPCollectionMeta, leftNilLiteral bool, right any, rightMeta *bashPPCollectionMeta, rightNilLiteral bool) (bool, error) {
 	if leftNilLiteral || rightNilLiteral {
 		if leftNilLiteral && rightNilLiteral {
 			return false, fmt.Errorf("BASHPP-ECOMPARE-TYPE: nil cannot be compared with nil")
@@ -1176,6 +1184,20 @@ func bashPPCompareValues(left any, leftMeta *bashPPCollectionMeta, leftNilLitera
 			return true, nil
 		}
 		return false, fmt.Errorf("BASHPP-ECOMPARE-TYPE: value cannot be compared with nil")
+	}
+	// Go-source aggregates retain interface identity on each element's
+	// metadata. Re-enter interface equality while walking an array or struct
+	// so the dynamic value decides equality (or raises Go's runtime panic for
+	// a non-comparable dynamic type). The nil runner keeps classic Bash++ on
+	// its existing comparison path.
+	if r != nil && r.bashPPGoSource {
+		equal, handled, err := r.goSourceInterfaceEqual(
+			bashPPComparableValue{value: left, meta: leftMeta},
+			bashPPComparableValue{value: right, meta: rightMeta},
+		)
+		if handled {
+			return equal, err
+		}
 	}
 	if leftMeta == nil && rightMeta == nil {
 		return bashPPCompareScalarAny(left, right)
@@ -1204,7 +1226,7 @@ func bashPPCompareValues(left any, leftMeta *bashPPCollectionMeta, leftNilLitera
 			return false, nil
 		}
 		for i := range leftSeq {
-			ok, err := bashPPCompareValues(leftSeq[i], leftMeta.sequence[i], false, rightSeq[i], rightMeta.sequence[i], false)
+			ok, err := bashPPCompareValuesWithRunner(r, leftSeq[i], leftMeta.sequence[i], false, rightSeq[i], rightMeta.sequence[i], false)
 			if err != nil {
 				return false, err
 			}
@@ -1217,13 +1239,37 @@ func bashPPCompareValues(left any, leftMeta *bashPPCollectionMeta, leftNilLitera
 		leftMap := bashPPStorageSnapshot(left.(map[string]any))
 		rightMap := bashPPStorageSnapshot(right.(map[string]any))
 		rightLayout := bashPPLayoutSnapshot(rightMeta.mapping)
-		for field, child := range bashPPLayoutSnapshot(leftMeta.mapping) {
-			ok, err := bashPPCompareValues(leftMap[field], child, false, rightMap[field], rightLayout[field], false)
+		leftLayout := bashPPLayoutSnapshot(leftMeta.mapping)
+		compareField := func(field string) (bool, error) {
+			child := leftLayout[field]
+			ok, err := bashPPCompareValuesWithRunner(r, leftMap[field], child, false, rightMap[field], rightLayout[field], false)
 			if err != nil {
 				return false, err
 			}
-			if !ok {
-				return false, nil
+			return ok, nil
+		}
+		if r != nil && r.bashPPGoSource {
+			// Go compares struct fields in declaration order. That order is
+			// observable when a later interface field contains a value whose
+			// dynamic type is not comparable: an earlier mismatch must return
+			// false before the panic-producing field is reached.
+			if fields, _, ok := r.bashPPStructFields(leftMeta.typ); ok {
+				for _, field := range bashPPFlatFields(fields) {
+					if field.name == "_" {
+						continue
+					}
+					ok, err := compareField(field.name)
+					if err != nil || !ok {
+						return ok, err
+					}
+				}
+				return true, nil
+			}
+		}
+		for field := range leftLayout {
+			ok, err := compareField(field)
+			if err != nil || !ok {
+				return ok, err
 			}
 		}
 		return true, nil
