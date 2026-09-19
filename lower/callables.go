@@ -485,69 +485,111 @@ func (e *emitter) constGroup(n *syntax.BashPPConstGroup) (string, error) {
 	saved := e.iotaValue
 	defer func() { e.iotaValue = saved }()
 	var lines []string
-	var lastExpr syntax.BashPPExpr
-	var lastWords []*syntax.Word
+	var lastRunExprs []syntax.BashPPExpr
+	var lastRunWords [][]*syntax.Word
 	var lastType string
-	for _, spec := range n.Specs {
-		current := int(spec.Iota)
-		if shadowed {
-			e.iotaValue = nil
-		} else {
-			e.iotaValue = &current
+	// Specs sharing an Iota value came from one multi-name ConstSpec
+	// (`abit, amask = 1<<iota, 1<<iota-1`); they must be emitted on one
+	// line, or gc's own iota would advance per name instead of per spec.
+	for start := 0; start < len(n.Specs); {
+		end := start + 1
+		for end < len(n.Specs) && n.Specs[end].Iota == n.Specs[start].Iota {
+			end++
 		}
-		typ := ""
-		var err error
-		if e.goSource && inferredSpecType(spec) {
-			// Go infers the constant's type from its written initializer.
-		} else if spec.DeclTypeExpr != nil {
-			typ, err = e.typeExpr(spec.DeclTypeExpr)
-		} else if spec.DeclType != nil {
-			typ, err = e.typeSpelling(spec.DeclType, spec.DeclType.Value)
+		run := n.Specs[start:end]
+		explicit := run[0].InitExpr != nil || len(run[0].Init) > 0
+		names := make([]string, 0, len(run))
+		values := make([]string, 0, len(run))
+		runType := ""
+		for k, spec := range run {
+			current := int(spec.Iota)
+			if shadowed {
+				e.iotaValue = nil
+			} else {
+				e.iotaValue = &current
+			}
+			typ := ""
+			var err error
+			if e.goSource && inferredSpecType(spec) {
+				// Go infers the constant's type from its written initializer.
+			} else if spec.DeclTypeExpr != nil {
+				typ, err = e.typeExpr(spec.DeclTypeExpr)
+			} else if spec.DeclType != nil {
+				typ, err = e.typeSpelling(spec.DeclType, spec.DeclType.Value)
+			}
+			if err != nil {
+				return "", err
+			}
+			expr, words := spec.InitExpr, spec.Init
+			if !explicit {
+				if k < len(lastRunExprs) {
+					expr = lastRunExprs[k]
+				}
+				if k < len(lastRunWords) {
+					words = lastRunWords[k]
+				}
+				typ = lastType
+			}
+			value := ""
+			if explicit || len(run) == 1 {
+				if e.goSource && len(words) > 0 {
+					// The Go-source converter retains the written initializer in Init
+					// even when its typed expression is materialized or contextualized
+					// for interpretation. Let gc evaluate that original expression in
+					// compiled output. This preserves import and lexical-name uses, and
+					// lets iota take the current spec's value naturally.
+					value, err = e.wordSequence(words)
+				} else if expr != nil {
+					value, err = e.expr(expr)
+				} else if len(words) > 0 {
+					value, err = e.wordSequence(words)
+				}
+				if err != nil {
+					return "", err
+				}
+			}
+			// A multi-name spec with no written initializer repeats the
+			// previous spec's expression list implicitly; emitting the bare
+			// names keeps that repetition — and its per-line iota — in gc's
+			// hands.
+			names = append(names, spec.Name.Value)
+			if value != "" {
+				values = append(values, value)
+			}
+			if k == 0 && (explicit || len(run) == 1) {
+				runType = typ
+			}
+			e.bind(spec.Name.Value)
+			if expr != nil {
+				e.projections.projectionBind(spec.Name.Value, e.projectionExpr(expr))
+			} else if len(words) == 1 {
+				e.projections.projectionBind(spec.Name.Value, e.projectionWord(words[0]))
+			}
+			projection, _ := e.projections.projectionLookup(spec.Name.Value)
+			projection.constant = true
+			e.projections.projectionBind(spec.Name.Value, projection)
+			if spec.Name.Value == "iota" {
+				shadowed = true
+			}
 		}
-		if err != nil {
-			return "", err
+		if explicit {
+			lastRunExprs = lastRunExprs[:0]
+			lastRunWords = lastRunWords[:0]
+			for _, spec := range run {
+				lastRunExprs = append(lastRunExprs, spec.InitExpr)
+				lastRunWords = append(lastRunWords, spec.Init)
+			}
+			lastType = runType
 		}
-		expr, words := spec.InitExpr, spec.Init
-		if expr == nil && len(words) == 0 {
-			expr, words, typ = lastExpr, lastWords, lastType
-		} else {
-			lastExpr, lastWords, lastType = expr, words, typ
+		line := strings.Join(names, ", ")
+		if runType != "" {
+			line += " " + runType
 		}
-		value := ""
-		if e.goSource && len(words) > 0 {
-			// The Go-source converter retains the written initializer in Init
-			// even when its typed expression is materialized or contextualized
-			// for interpretation. Let gc evaluate that original expression in
-			// compiled output. This preserves import and lexical-name uses, and
-			// lets iota take the current spec's value naturally.
-			value, err = e.wordSequence(words)
-		} else if expr != nil {
-			value, err = e.expr(expr)
-		} else if len(words) > 0 {
-			value, err = e.wordSequence(words)
+		if len(values) > 0 {
+			line += " = " + strings.Join(values, ", ")
 		}
-		if err != nil {
-			return "", err
-		}
-		if typ != "" {
-			typ = " " + typ
-		}
-		if value != "" {
-			value = " = " + value
-		}
-		lines = append(lines, spec.Name.Value+typ+value)
-		e.bind(spec.Name.Value)
-		if expr != nil {
-			e.projections.projectionBind(spec.Name.Value, e.projectionExpr(expr))
-		} else if len(words) == 1 {
-			e.projections.projectionBind(spec.Name.Value, e.projectionWord(words[0]))
-		}
-		projection, _ := e.projections.projectionLookup(spec.Name.Value)
-		projection.constant = true
-		e.projections.projectionBind(spec.Name.Value, projection)
-		if spec.Name.Value == "iota" {
-			shadowed = true
-		}
+		lines = append(lines, line)
+		start = end
 	}
 	for _, spec := range n.Specs {
 		if spec.Name.Value != "_" {
