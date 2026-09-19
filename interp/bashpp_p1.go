@@ -994,6 +994,34 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 				target.object = &bashPPObjectIdentity{owner: name, collection: cell.valueMeta}
 				return
 			}
+			// `ch := Chan(make(chan T))`: a conversion to a named channel
+			// type binds the channel the operand makes, carrying the
+			// target's name so its methods resolve; the channel itself is
+			// untouched.
+			if r.bashPPGoSource {
+				if target := r.bashPPConvertTarget(conv); target != nil {
+					if _, isChan := r.bashPPUnderlyingType(target).(*syntax.BashPPChanType); isChan {
+						if call, ok := conv.X.(*syntax.BashPPCall); ok && call.CalleeExpr == nil && call.FuncLit == nil && len(call.Fun) == 1 && call.Fun[0].Value == "make" {
+							cell, produced := r.bashPPRunValueBuiltin("make", call)
+							if !produced {
+								return
+							}
+							name := d.Lhs[0].Value
+							r.bashPPDeclareName(name, cell.vr)
+							if bound := r.bashPPScope.lookup(name); bound != nil {
+								*bound = *cell
+								bound.declType = target
+								if base := bashPPNamedTypeBase(target); base != "" {
+									if _, named := r.bashPPTypes[base]; named {
+										bound.typeName = base
+									}
+								}
+							}
+							return
+						}
+					}
+				}
+			}
 			// `i := any(x)`: a conversion to an interface binds the interface
 			// value that boxes x, which is what a later `i.(type)` reads.
 			cell, handled, err = r.bashPPInterfaceConversion(conv)
