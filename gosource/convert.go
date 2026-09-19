@@ -1201,12 +1201,7 @@ func (c *converter) exprValue(e ast.Expr) s.BashPPExpr {
 		if c.mappedPkgName(x.X) {
 			return &s.BashPPIdent{Name: c.ident(x.Sel)}
 		}
-		out := &s.BashPPSelectorExpr{X: c.expr(x.X), Dot: c.pos(x.Sel.Pos() - 1), Sel: c.ident(x.Sel), FuncType: c.functionValueType(x)}
-		if selection := c.info.Selections[x]; selection != nil && selection.Kind() == types.MethodVal {
-			out.MethodValue = true
-			out.ReceiverAddressable = c.info.Types[x.X].Addressable()
-		}
-		return out
+		return c.selectorValue(x, x)
 	case *ast.IndexExpr:
 		if value := c.genericFuncValue(x); value != nil {
 			return value
@@ -1324,7 +1319,20 @@ func (c *converter) call(x *ast.CallExpr) *s.BashPPCall {
 		}
 		return false
 	}
-	if simple(x.Fun) {
+	if selector, typeArgs, ok := c.instantiatedMethodValue(x.Fun); ok {
+		// A generic method selected from a computed receiver is still a
+		// method call, not an index operation on a function value. Keep the
+		// receiver expression in the existing computed-callee carrier and
+		// put the checker's complete inferred/explicit method arguments on
+		// the call. This also evaluates the receiver before the arguments.
+		out.CalleeExpr = c.selectorValue(selector, x.Fun)
+		out.TypeArgs = typeArgs
+	} else if _, _, ok := c.instantiatedMethodExpression(x.Fun); ok {
+		// A method expression is an unbound function whose first argument is
+		// its receiver. genericFuncValue builds precisely that forwarding
+		// closure from the checker's instantiated signature.
+		out.FuncLit, _ = c.genericFuncValue(x.Fun).(*s.BashPPFuncLit)
+	} else if simple(x.Fun) {
 		c.callee(out, x.Fun)
 	} else {
 		out.CalleeExpr = c.expr(x.Fun)
@@ -1343,6 +1351,54 @@ func (c *converter) call(x *ast.CallExpr) *s.BashPPCall {
 		out.ArgExprs = append(out.ArgExprs, c.expr(a))
 	}
 	return out
+}
+
+// selectorValue lowers a selector without treating an instantiated generic
+// method as a standalone function value. Call sites use this direct form so
+// the receiver remains a receiver and the method type arguments remain on the
+// call; ordinary value positions still go through genericFuncValue above.
+func (c *converter) selectorValue(x *ast.SelectorExpr, value ast.Expr) *s.BashPPSelectorExpr {
+	out := &s.BashPPSelectorExpr{X: c.expr(x.X), Dot: c.pos(x.Sel.Pos() - 1), Sel: c.ident(x.Sel), FuncType: c.functionValueType(value)}
+	if selection := c.info.Selections[x]; selection != nil && selection.Kind() == types.MethodVal {
+		out.MethodValue = true
+		out.ReceiverAddressable = c.info.Types[x.X].Addressable()
+	}
+	return out
+}
+
+// instantiatedMethodValue recognizes a generic method value whether its type
+// arguments were written after the selector or inferred by go/types. Method
+// expressions are deliberately excluded: typeParamMethodExpr lowers those
+// through a receiver parameter rather than a bound receiver value.
+func (c *converter) instantiatedMethodValue(e ast.Expr) (*ast.SelectorExpr, []*s.BashPPTypeArg, bool) {
+	return c.instantiatedMethod(e, types.MethodVal)
+}
+
+func (c *converter) instantiatedMethodExpression(e ast.Expr) (*ast.SelectorExpr, []*s.BashPPTypeArg, bool) {
+	return c.instantiatedMethod(e, types.MethodExpr)
+}
+
+func (c *converter) instantiatedMethod(e ast.Expr, kind types.SelectionKind) (*ast.SelectorExpr, []*s.BashPPTypeArg, bool) {
+	base := ast.Unparen(e)
+	switch x := base.(type) {
+	case *ast.IndexExpr:
+		base = ast.Unparen(x.X)
+	case *ast.IndexListExpr:
+		base = ast.Unparen(x.X)
+	}
+	selector, ok := base.(*ast.SelectorExpr)
+	if !ok {
+		return nil, nil, false
+	}
+	selection := c.info.Selections[selector]
+	if selection == nil || selection.Kind() != kind {
+		return nil, nil, false
+	}
+	typeArgs := c.instanceTypeArgs(e)
+	if len(typeArgs) == 0 {
+		return nil, nil, false
+	}
+	return selector, typeArgs, true
 }
 
 // callee lowers a simple callee — a name, a selector chain, a literal, or
@@ -1422,13 +1478,34 @@ func (c *converter) genericFuncValue(e ast.Expr) s.BashPPExpr {
 	if !ok {
 		return nil
 	}
+	if _, _, methodExpr := c.instantiatedMethodExpression(e); methodExpr {
+		// Info.Instances records the generic method itself, whose signature
+		// omits the receiver. The type of a method expression includes that
+		// receiver as its first parameter, which the forwarding closure must
+		// preserve.
+		instantiated, _ = c.info.TypeOf(e).Underlying().(*types.Signature)
+		if instantiated == nil {
+			return nil
+		}
+	}
 	// The instance carries the instantiated signature; the expression's own
 	// type still spells the type parameter list when the name is bare.
 	signature, _ := c.checkedType(instantiated, e, "instantiated function value type").(*s.BashPPFuncType)
 	if signature == nil {
 		return nil
 	}
-	return c.forwardingClosure(e, signature, func(call *s.BashPPCall, _ []*s.Lit) {
+	return c.forwardingClosure(e, signature, func(call *s.BashPPCall, args []*s.Lit) {
+		if selector, typeArgs, ok := c.instantiatedMethodValue(e); ok {
+			call.CalleeExpr = c.selectorValue(selector, e)
+			call.TypeArgs = typeArgs
+			return
+		}
+		if selector, typeArgs, ok := c.instantiatedMethodExpression(e); ok {
+			call.Fun = []*s.Lit{args[0], c.ident(selector.Sel)}
+			call.Args, call.ArgExprs = call.Args[1:], call.ArgExprs[1:]
+			call.TypeArgs = typeArgs
+			return
+		}
 		c.callee(call, ast.Unparen(e))
 	})
 }
