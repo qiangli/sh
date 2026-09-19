@@ -195,6 +195,45 @@ func main() {
 	println("ok")
 }
 `,
+		// EASSERT-OPERAND "type assertion operand is not an interface": a
+		// concrete pointer returned to an interface result slot must be boxed
+		// before named-result settlement and before the caller observes it.
+		// The wrong-dynamic-type assertions are negative controls. Unblocks
+		// fixedbugs/bug184.go.
+		"return_result_interface_boxing": `package main
+
+type Buffer int
+
+func (*Buffer) Read() {}
+
+type Other int
+
+func (*Other) Read() {}
+
+type Reader interface{ Read() }
+
+func f() *Buffer { return nil }
+
+func g() Reader { return f() }
+
+func h() (b *Buffer, ok bool) { return }
+
+func i() (r Reader, ok bool) { return h() }
+
+func main() {
+	b := g()
+	bb, ok := b.(*Buffer)
+	println(bb == nil, ok)
+	_, wrong := b.(*Other)
+	println(wrong)
+
+	r, flag := i()
+	rb, asserted := r.(*Buffer)
+	println(rb == nil, flag, asserted)
+	_, wrong = r.(*Other)
+	println(wrong)
+}
+`,
 		// EEXPR-CONVERT "cannot convert String to Peano": a conversion to a
 		// named pointer type is the same identity conversion with the
 		// target's name attached, and a runtime nil operand binds as a nil
