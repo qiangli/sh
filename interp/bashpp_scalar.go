@@ -529,6 +529,12 @@ func (r *Runner) bashPPScalarFromCell(cell *bashPPCell) bashPPScalar {
 		if named, ok := cell.declType.(*syntax.BashPPNamedType); ok {
 			value.typ = named.Name.Value
 		}
+	case r.bashPPGoSource && value.runtime && value.value != nil && value.value.Kind() == constant.Float:
+		// A Go variable is never untyped: `x := 0.1` declares a float64,
+		// so arithmetic on it rounds at every step (0.1+0.2 is
+		// 0.30000000000000004, not the exact 3/10 the constant folder
+		// would keep) and it boxes into an interface as a float64.
+		value.typ = "float64"
 	}
 	return value
 }
