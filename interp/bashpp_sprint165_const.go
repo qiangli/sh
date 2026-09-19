@@ -287,6 +287,17 @@ func (r *Runner) goSourceOffsetof(expr syntax.BashPPExpr) (int64, bool) {
 	if !ok {
 		return 0, false
 	}
+	// Go permits the selector receiver itself to be a pointer to a struct
+	// (`unsafe.Offsetof(p.f)`).  This implicit outer dereference does not
+	// make the field path indirect; only an embedded pointer does.  Mirror
+	// go/types' derefStructPtr before both resolving the selector and
+	// calculating its layout.
+	if pointer, ok := r.bashPPUnderlyingType(parent).(*syntax.BashPPPointerType); ok {
+		if _, ok := r.bashPPUnderlyingType(pointer.Element).(*syntax.BashPPStructType); !ok {
+			return 0, false
+		}
+		parent = pointer.Element
+	}
 	selection := r.bashPPResolveField(parent, selector.Sel.Value)
 	if selection.ambiguous || len(selection.edges) == 0 {
 		return 0, false
