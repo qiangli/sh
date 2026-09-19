@@ -20,6 +20,21 @@ func (r *Runner) goSourceExpectedCell(cell *bashPPCell, expected syntax.BashPPTy
 			cell.declType = expected
 			return cell, nil
 		}
+		// A native (imported) interface such as io.Reader reaches this
+		// binding already proven assignable by the front end's go/types
+		// pass, so an untyped nil bound to it is a legal nil interface.
+		// bashPPInterfaceType cannot see through the dependency boundary, so
+		// such a type is not recognised as an interface by the branch above
+		// and bashPPUnderlyingType leaves it a bare named type — it would
+		// otherwise reach the refusal below, a false runtime error for an
+		// argument or result gc accepts. Keep the untyped-nil cell tagged
+		// with the native type, exactly as the recognised-interface branch
+		// does. bashPPNativeType is Go-source only, so this stays inert in
+		// the classic/POSIX dialect.
+		if r.bashPPNativeType(expected) {
+			cell.declType = expected
+			return cell, nil
+		}
 		shape := r.bashPPUnderlyingType(expected)
 		switch t := shape.(type) {
 		case *syntax.BashPPPointerType, *syntax.BashPPFuncType, *syntax.BashPPChanType:
