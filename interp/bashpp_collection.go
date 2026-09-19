@@ -493,6 +493,25 @@ func (r *Runner) bashPPArrayLength(text string) (int, error) {
 	return int(n), nil
 }
 
+// bashPPConstArrayLen resolves `len(a)` to the constant length of an array
+// operand. Only an identifier bound to an array (or inferred-length array)
+// qualifies; a slice or map length is a runtime value, not a constant.
+func (r *Runner) bashPPConstArrayLen(call *goast.CallExpr) (int, bool) {
+	fun, ok := call.Fun.(*goast.Ident)
+	if !ok || fun.Name != "len" || len(call.Args) != 1 || r.bashPPScope == nil {
+		return 0, false
+	}
+	ident, ok := call.Args[0].(*goast.Ident)
+	if !ok {
+		return 0, false
+	}
+	meta := bashPPCellMeta(r.bashPPScope.lookup(ident.Name))
+	if meta == nil || (meta.kind != "array" && meta.kind != "inferred-array") {
+		return 0, false
+	}
+	return len(meta.sequence), true
+}
+
 func (r *Runner) bashPPEvalConstIntExpr(expr goast.Expr) (value constant.Value, ok bool) {
 	defer func() {
 		if recover() != nil {
@@ -507,13 +526,37 @@ func (r *Runner) bashPPEvalConstIntExpr(expr goast.Expr) (value constant.Value, 
 		if value, ok := r.bashPPUnsafeConstOperator(x); ok {
 			return value, true
 		}
+		// `len(a)` where a is an array is a constant equal to the array's
+		// length (Go spec: the expression is not evaluated). This lets an
+		// array-of-arrays literal size its inner arrays, as in complit.go's
+		// `[][len(at)]*T`. Go-source only; a slice or map len is not constant.
+		if r.bashPPGoSource {
+			if n, ok := r.bashPPConstArrayLen(x); ok {
+				return constant.MakeInt64(int64(n)), true
+			}
+		}
 		return nil, false
 	case *goast.BasicLit:
-		if x.Kind != gotoken.INT {
-			return nil, false
+		switch x.Kind {
+		case gotoken.INT:
+			v := constant.MakeFromLiteral(x.Value, gotoken.INT, 0)
+			return v, v.Kind() == constant.Int
+		case gotoken.FLOAT:
+			// A floating constant is a legal array length when it holds no
+			// fractional part, exactly as Go treats `[1e1]int` as `[10]int`.
+			// Go-source only: Classic Bash# keeps its integer-literal length.
+			if !r.bashPPGoSource {
+				return nil, false
+			}
+			v := constant.MakeFromLiteral(x.Value, gotoken.FLOAT, 0)
+			if v.Kind() != constant.Float {
+				return nil, false
+			}
+			if i := constant.ToInt(v); i.Kind() == constant.Int {
+				return i, true
+			}
 		}
-		v := constant.MakeFromLiteral(x.Value, gotoken.INT, 0)
-		return v, v.Kind() == constant.Int
+		return nil, false
 	case *goast.Ident:
 		cell := r.bashPPScope.lookup(x.Name)
 		if cell == nil || !cell.constant {
@@ -775,7 +818,16 @@ func (r *Runner) bashPPCheckCollectionValue(value any, expected syntax.BashPPTyp
 	case typ == "bool":
 		_, valid = value.(bool)
 	case bashPPIntegerType(typ):
-		_, valid = value.(int)
+		switch v := value.(type) {
+		case int:
+			valid = true
+		case string:
+			// A large unsigned constant (> math.MaxInt64) cannot live in the
+			// interpreter's signed int carrier, so it arrives as its decimal
+			// spelling. Accept it only when it is a representable integer for
+			// this destination — an ordinary string element stays invalid.
+			valid = r.bashPPGoSource && bashPPCollectionIntegerText(typ, v)
+		}
 	case typ == "float32" || typ == "float64":
 		switch value.(type) {
 		case int, float64:
@@ -790,6 +842,54 @@ func (r *Runner) bashPPCheckCollectionValue(value any, expected syntax.BashPPTyp
 		return fmt.Errorf("BASHPP-ECOLLECTION-ELEMENT: cannot use %T value as %s", value, name.Name.Value)
 	}
 	return nil
+}
+
+// bashPPCollectionIntegerText reports whether an integer element carried as
+// its decimal spelling is a representable value for the destination integer
+// type. This is the large-unsigned carrier path (values above math.MaxInt64
+// that the signed int carrier cannot hold); it is not permissive string
+// parsing, since only a well-formed integer literal within range qualifies.
+func bashPPCollectionIntegerText(typ, text string) bool {
+	parsed := constant.MakeFromLiteral(text, gotoken.INT, 0)
+	if parsed.Kind() != constant.Int {
+		return false
+	}
+	return bashPPIntegerRepresentable(typ, parsed)
+}
+
+// bashPPUnderlyingIntegerName resolves a declared type name to the predeclared
+// integer type it is built on, following named-type declarations. It reports
+// false for any type whose underlying type is not an integer.
+func (r *Runner) bashPPUnderlyingIntegerName(name string) (string, bool) {
+	for {
+		decl, found := r.bashPPTypes[name]
+		if !found {
+			break
+		}
+		name = strings.TrimPrefix(decl.underlying, "*")
+	}
+	if bashPPIntegerType(name) {
+		return name, true
+	}
+	return "", false
+}
+
+// bashPPStringCarriesInteger reports whether the decimal spelling stored for a
+// scalar element is the large-unsigned carrier of an integer declared type —
+// a []uint64 element above math.MaxInt64 that could not live in the signed
+// int carrier. Only a representable integer literal for the resolved integer
+// type qualifies; an ordinary string element (declared string, or a named
+// string type) is left as its string carrier.
+func (r *Runner) bashPPStringCarriesInteger(typ syntax.BashPPTypeExpr, text string) bool {
+	named, ok := r.bashPPUnderlyingType(typ).(*syntax.BashPPNamedType)
+	if !ok {
+		return false
+	}
+	dest, ok := r.bashPPUnderlyingIntegerName(named.Name.Value)
+	if !ok {
+		return false
+	}
+	return bashPPCollectionIntegerText(dest, text)
 }
 
 func bashPPCollectionFloatText(text string) bool {
@@ -1038,6 +1138,12 @@ func (r *Runner) bashPPCollectionAssign(target *syntax.BashPPIndexExpr, rhs synt
 	}
 	sequence := parent.([]any)
 	if i < 0 || i >= len(sequence) {
+		if r.bashPPGoSource {
+			// Go's indexed assignment faults at runtime, recoverably; the
+			// classic diagnostic stays the abort Bash# always reported.
+			r.bashPPSprint162CollectionBoundsPanic(target, i, len(sequence))
+			return
+		}
 		r.errf("BASHPP-ECOLLECTION-BOUNDS: index %d out of bounds for length %d\n", i, len(sequence))
 		r.exit = exitStatus{code: 2}
 		return

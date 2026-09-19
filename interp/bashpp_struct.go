@@ -1131,7 +1131,11 @@ func (r *Runner) bashPPStructuredAssign(target, rhs syntax.BashPPExpr) {
 				break
 			}
 			if i < 0 || i >= len(sequence) {
-				err = fmt.Errorf("BASHPP-ECOLLECTION-BOUNDS: index %d out of bounds for length %d", i, len(sequence))
+				if r.bashPPGoSource {
+					err = r.bashPPSprint162CollectionBoundsPanic(x, i, len(sequence))
+				} else {
+					err = fmt.Errorf("BASHPP-ECOLLECTION-BOUNDS: index %d out of bounds for length %d", i, len(sequence))
+				}
 				break
 			}
 			if i >= len(parentMeta.sequence) {
@@ -1241,6 +1245,9 @@ func (r *Runner) bashPPPointerElementAssign(target *syntax.BashPPIndexExpr, rhs 
 		return fmt.Errorf("BASHPP-ECOLLECTION-STORAGE: invalid sequence payload")
 	}
 	if savedIndex < 0 || savedIndex >= len(sequence) {
+		if r.bashPPGoSource {
+			return r.bashPPSprint162CollectionBoundsPanic(target, savedIndex, len(sequence))
+		}
 		return fmt.Errorf("BASHPP-ECOLLECTION-BOUNDS: index %d out of bounds for length %d", savedIndex, len(sequence))
 	}
 	if savedIndex >= len(parentMeta.sequence) {

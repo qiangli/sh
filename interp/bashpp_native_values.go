@@ -672,6 +672,29 @@ func (r *Runner) bashPPWriteBridgePointer(ptr *bashPPPointer, value bashPPBridge
 	return nil
 }
 
+// bashPPBridgeIntegerCarrier reports the numeric wire kind for a collection
+// element carried as its decimal spelling. Only a well-formed integer literal
+// that is representable in the destination integer type qualifies, so an
+// ordinary string element (declared type string, or a named string type) is
+// left to cross as text. This is the large-unsigned carrier — a []uint64
+// element above math.MaxInt64 that the signed int carrier cannot hold.
+func (r *Runner) bashPPBridgeIntegerCarrier(typ syntax.BashPPTypeExpr, text string) (kind string, ok bool) {
+	name, isName := r.bashPPUnderlyingType(typ).(*syntax.BashPPNamedType)
+	if !isName {
+		return "", false
+	}
+	dest, ok := r.bashPPUnderlyingIntegerName(name.Name.Value)
+	if !ok || !bashPPCollectionIntegerText(dest, text) {
+		return "", false
+	}
+	switch dest {
+	case "uint", "uint8", "uint16", "uint32", "uint64", "uintptr", "byte":
+		return "uint", true
+	default:
+		return "int", true
+	}
+}
+
 func (r *Runner) bashPPBridgeCollection(value any, meta *bashPPCollectionMeta, typ syntax.BashPPTypeExpr) (bashPPBridgeValue, error) {
 	if meta != nil && meta.interfaceValue != nil {
 		cell := meta.interfaceValue.cell
@@ -833,7 +856,15 @@ func (r *Runner) bashPPBridgeCollection(value any, meta *bashPPCollectionMeta, t
 			return result, fmt.Errorf("gosource: missing mapping type schema")
 		}
 	case string:
-		result.Kind = "string"
+		// A large unsigned integer element is carried as its decimal spelling
+		// because it exceeds the interpreter's signed int carrier. Transport it
+		// with the numeric wire kind its declared type needs; an ordinary
+		// string element still crosses as a string.
+		if kind, ok := r.bashPPBridgeIntegerCarrier(typ, value); ok {
+			result.Kind = kind
+		} else {
+			result.Kind = "string"
+		}
 		result.Text = value
 	case bool:
 		result.Kind = "bool"
