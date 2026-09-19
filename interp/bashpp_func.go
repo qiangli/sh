@@ -2445,6 +2445,20 @@ func (r *Runner) bashPPSettleResults(fn *bashPPFunc, resultNames []string) []str
 			return nil
 		}
 		resultTypes := bashppResultTypeExprs(fn.results())
+		if r.bashPPGoSource {
+			for i, cell := range ret.cells {
+				if i >= len(resultTypes) || i >= len(ret.values) || cell == nil {
+					continue
+				}
+				typed, err := r.goSourceExpectedCell(cell, resultTypes[i])
+				if err != nil {
+					r.exit.fatal(err)
+					return nil
+				}
+				ret.cells[i] = typed
+				ret.values[i] = typed.vr.String()
+			}
+		}
 		for i, name := range resultNames {
 			if name != "" && i < len(ret.values) {
 				target := r.bashPPScope.lookup(name)
