@@ -1197,11 +1197,12 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 			r.exit = exitStatus{code: 2}
 			return
 		}
-		r.bashPPDeclareName(d.Lhs[0].Value, expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarString(value.value)})
+		r.bashPPDeclareName(d.Lhs[0].Value, expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarStorageString(value)})
 		target := r.bashPPScope.lookup(d.Lhs[0].Value)
 		if target != nil {
 			target.scalarKind = value.value.Kind()
 			target.negativeZero = value.negativeZero
+			target.nonFinite, target.hasNonFinite = value.nonFinite, value.hasNonFinite
 			target.typeName = value.typ
 			// `f := IteratorFunc[int](it)`: an instantiated named type is
 			// kept as a tree, since its type arguments are what the
@@ -1300,10 +1301,11 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 				}
 				return
 			}
-			r.bashPPDeclareName(d.Lhs[0].Value, expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarString(value.value)})
+			r.bashPPDeclareName(d.Lhs[0].Value, expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarStorageString(value)})
 			if target := r.bashPPScope.lookup(d.Lhs[0].Value); target != nil {
 				target.scalarKind = value.value.Kind()
 				target.typeName = value.typ
+				target.nonFinite, target.hasNonFinite = value.nonFinite, value.hasNonFinite
 			}
 			return
 		}

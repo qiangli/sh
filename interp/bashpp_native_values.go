@@ -263,6 +263,9 @@ func bridgeScalar(value bashPPScalar) (bashPPBridgeValue, error) {
 	if value.value == nil {
 		return out, fmt.Errorf("gosource: absent scalar value")
 	}
+	if value.hasNonFinite {
+		return bashPPBridgeValue{Kind: "float", Type: value.typ, Text: strconv.FormatFloat(value.nonFinite, 'g', -1, 64)}, nil
+	}
 	switch value.value.Kind() {
 	case constant.String:
 		out.Kind = "string"

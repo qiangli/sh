@@ -25,6 +25,9 @@ import (
 
 // goSourcePrintScalar renders a scalar operand as Go's print would.
 func (r *Runner) goSourcePrintScalar(scalar bashPPScalar) string {
+	if scalar.hasNonFinite {
+		return strconv.FormatFloat(scalar.nonFinite, 'g', -1, 64)
+	}
 	if scalar.value == nil {
 		return ""
 	}

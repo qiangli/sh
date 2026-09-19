@@ -58,6 +58,8 @@ type bashPPCell struct {
 	exactScalar  constant.Value
 	scalarKind   constant.Kind
 	negativeZero bool
+	nonFinite    float64
+	hasNonFinite bool
 	channel      *bashPPChannel
 	channelOwner *bashPPConcurrent
 	// object is shared by every alias of one structured value. Deep readonly

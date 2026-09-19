@@ -180,7 +180,7 @@ func (r *Runner) bashPPGoSourceEvaluatedCall(call *syntax.BashPPCall) *syntax.Ba
 // already resolves to a cell.
 func (r *Runner) bashPPGoArgWord(call *syntax.BashPPCall, i int, expr syntax.BashPPExpr) (*syntax.Word, bool) {
 	word := call.Args[i]
-	if value, err := r.bashPPEvalScalarExpr(expr); err == nil && value.value != nil {
+	if value, err := r.bashPPEvalScalarExpr(expr); err == nil && value.value != nil && !value.hasNonFinite {
 		return &syntax.Word{Parts: []syntax.WordPart{&syntax.SglQuoted{
 			Left: word.Pos(), Right: word.End(), Value: bashPPScalarString(value.value),
 		}}}, true

@@ -2,17 +2,17 @@
 
 // Sprint: #209; Story: #461; Story-ID: 4ed649697945
 //
-// The shared repair here is deliberately narrow: typed nils converted to an
-// interface type compare as Go interface values, while existing func-field nil
-// comparison stays covered by the same comparable-value path. The unsafe.Pointer
-// roots in bug328.go and issue44830.go are pinned as unrelated native/unsafe
-// materialization gaps rather than folded into this comparison mechanism.
+// The existing interface-comparison coverage remains alongside the arithmetic
+// constant-evaluation regression below.
 package interp_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/go-quicktest/qt"
+
+	"mvdan.cc/sh/v3/gosource"
 )
 
 func TestStory461TypedNilInterfaceComparison(t *testing.T) {
@@ -52,4 +52,30 @@ func main() {
 	qt.Assert(t, qt.IsNil(err), qt.Commentf("stderr: %s", stderr))
 	qt.Assert(t, qt.Equals(stderr, ""))
 	qt.Assert(t, qt.Equals(out, "zero missing t\n<nil>\n"))
+}
+
+// These are outside-corpus reductions of shift3 and the float runtime cases.
+// The RHS is an untyped constant representable as uint, while the zero divisor
+// is a typed runtime float rather than a constant-expression error.
+func TestStory461RuntimeFloatAndUntypedShift(t *testing.T) {
+	src := `package main
+import ("fmt"; "math")
+func main() {
+	var x int = 1
+	zero := float64(0)
+	inf := 1 / zero
+	fmt.Println(x<<(1+0.), x<<(1+0i), x<<(math.MaxUint+0.), inf, math.IsInf(inf, 1))
+}`
+	out, stderr, err := runGoSource(t, "story461runtime", src)
+	qt.Assert(t, qt.IsNil(err), qt.Commentf("stderr: %s", stderr))
+	qt.Assert(t, qt.Equals(stderr, ""))
+	qt.Assert(t, qt.Equals(out, "2 2 0 +Inf true\n"))
+}
+
+// A real constant division by zero remains a front-end error. The runtime
+// exception above must not become a blanket suppression of DIVZERO checking.
+func TestStory461ConstantZeroDivisionRejected(t *testing.T) {
+	_, err := gosource.Parse(strings.NewReader("package main\nconst bad = 1.0 / 0.0\nfunc main(){}\n"), "story461negative.go", gosource.Options{RunMain: true})
+	qt.Assert(t, qt.IsNotNil(err))
+	qt.Assert(t, qt.StringContains(err.Error(), "division by zero"))
 }
