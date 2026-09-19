@@ -231,6 +231,7 @@ func (m *mapImporter) checkDependency(fset *token.FileSet, spec PackageSpec, che
 	if len(diagnostics) > 0 {
 		if checker.gcStderr() {
 			diagnostics = sortGCStderr(fset, sources, diagnostics)
+			diagnostics = limitGCStderr(fset, diagnostics, checker.errorLimit)
 		}
 		return diagnostics
 	}
