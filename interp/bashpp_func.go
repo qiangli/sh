@@ -262,6 +262,10 @@ type bashPPDeferred struct {
 	predeclared string
 	args        []string
 	cells       []*bashPPCell
+	// captured holds the cells a deferred value builtin's synthetic argument
+	// names resolve to. They ride the entry because the block that ran the
+	// defer statement (a loop body, an inner block) is gone by unwind time.
+	captured map[string]*bashPPCell
 }
 
 // bashPPReturnState carries a Go-form return out through the body's statement
@@ -2761,9 +2765,10 @@ func (r *Runner) bashPPDeferStmt(ctx context.Context, d *syntax.BashPPDefer) {
 		r.bashPPDeferStack = append(r.bashPPDeferStack, entry)
 		return
 	}
-	if captured, handled := r.goSourceCaptureDeferredValueBuiltin(d.Call); handled {
+	if captured, cells, handled := r.goSourceCaptureDeferredValueBuiltin(d.Call); handled {
 		if captured != nil {
 			entry.call = captured
+			entry.captured = cells
 			entry.predeclared = bashPPPredeclaredCall(d.Call)
 			r.bashPPDeferStack = append(r.bashPPDeferStack, entry)
 		}
@@ -2872,7 +2877,20 @@ func (r *Runner) bashPPRunDefers(ctx context.Context, mark int) {
 					r.bashPPPredeclared(d.predeclared, d.call, d.args)
 					r.bashPPDeferDepth = len(r.callStack) + 1
 				} else if bashPPValueBuiltin(d.predeclared) {
-					r.bashPPRunValueBuiltin(d.predeclared, d.call)
+					// The captured argument cells are rebound in a scope of
+					// their own: the block that declared them at defer time
+					// may already have been popped.
+					if d.captured != nil {
+						saved := r.bashPPScope
+						r.bashPPScope = newBashPPScope(saved)
+						for name, cell := range d.captured {
+							r.bashPPScope.entries[name] = cell
+						}
+						r.bashPPRunValueBuiltin(d.predeclared, d.call)
+						r.bashPPScope = saved
+					} else {
+						r.bashPPRunValueBuiltin(d.predeclared, d.call)
+					}
 				} else {
 					r.bashPPPredeclared(d.predeclared, d.call, d.args)
 				}
