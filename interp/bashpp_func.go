@@ -742,12 +742,60 @@ func (r *Runner) bashPPBindLocalSelector(c *syntax.BashPPCall, root *bashPPCell)
 		return nil, false
 	}
 	if sel.method == nil && sel.interfaceSpec == nil {
+		if fn, handled := r.bashPPBindFuncField(root, edges, sel); handled {
+			return fn, fn != nil
+		}
 		r.errf("type %s has no method %s\n", bashPPTypeText(typ), method)
 		r.exit.code = 2
 		return nil, false
 	}
 	sel.edges = append(edges, sel.edges...)
 	return r.bashPPBindPromotedMethod(root, method, sel, true)
+}
+
+// bashPPBindFuncField dispatches a selector call whose final component names a
+// func-typed struct field rather than a method: `t.f(a, b)` for `type testCase
+// struct{ f fn }`. Only a selection that resolved to a field whose type is a
+// func type is dispatched, so an unknown name keeps the method diagnostic.
+// A nil field value is Go's nil-function call: a run-time panic at call time.
+func (r *Runner) bashPPBindFuncField(root *bashPPCell, path []bashPPEmbedEdge, sel bashPPSelection) (*bashPPFunc, bool) {
+	if sel.fieldType == nil || len(sel.edges) == 0 {
+		return nil, false
+	}
+	if _, ok := r.bashPPUnderlyingType(sel.fieldType).(*syntax.BashPPFuncType); !ok {
+		return nil, false
+	}
+	value, meta, err := r.bashPPReadCellValue(root)
+	if err == nil {
+		edges := append(append([]bashPPEmbedEdge(nil), path...), sel.edges...)
+		value, _, err = bashPPReadSelection(value, meta, edges)
+	}
+	if err != nil {
+		r.goSourceRuntimeFault(err)
+		return nil, true
+	}
+	switch v := value.(type) {
+	case string:
+		if fn, ok := r.bashPPClosure(v); ok {
+			return fn, true
+		}
+		if v != "" && v != "nil" {
+			// A non-empty value that is not a live closure handle is a shape
+			// this dispatch does not understand; keep the method diagnostic.
+			return nil, false
+		}
+	case *bashPPBridgeValue:
+		// A zero-valued func field is stored as a typed nil bridge value; see
+		// [Runner.goSourceNilCallableOrChannel].
+		if v != nil && v.Kind != "nil" {
+			return nil, false
+		}
+	case nil:
+	default:
+		return nil, false
+	}
+	r.bashPPRaiseNilFuncCall()
+	return nil, true
 }
 
 func (r *Runner) bashPPInstantiateFunc(c *syntax.BashPPCall, fn *bashPPFunc) (*bashPPFunc, bool) {
