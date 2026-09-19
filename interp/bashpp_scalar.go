@@ -1148,15 +1148,26 @@ func bashPPPointerEqual(left, right any) bool {
 	if lp == nil || rp == nil {
 		return lp == nil && rp == nil
 	}
-	if lp.target != rp.target || len(lp.path) != len(rp.path) {
-		return false
-	}
-	for i := range lp.path {
-		if lp.path[i] != rp.path[i] {
-			return false
+	if lp.target == rp.target && len(lp.path) == len(rp.path) {
+		same := true
+		for i := range lp.path {
+			if lp.path[i] != rp.path[i] {
+				same = false
+				break
+			}
+		}
+		if same {
+			return true
 		}
 	}
-	return true
+	// Distinct spellings can address one storage slot when slice backing is
+	// shared across a copy; see [bashPPPointer.slot].
+	if lseq, li, ok := lp.slot(); ok {
+		if rseq, ri, ok := rp.slot(); ok {
+			return &lseq[li] == &rseq[ri]
+		}
+	}
+	return false
 }
 
 // bashPPZeroSizePointerEqual matches Go's 1.27 address identity for distinct

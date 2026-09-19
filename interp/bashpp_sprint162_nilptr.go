@@ -404,7 +404,14 @@ func (r *Runner) goSourceNilAssignCandidate(target *bashPPCell, expr syntax.Bash
 	}
 	typ := target.declType
 	if typ == nil {
-		typ = bashPPInferredCellType(target)
+		// A cell born from `q := []T{...}` has no declared type; its
+		// collection metadata carries the type the literal built, and that —
+		// not the scalar spelling fallback — is what nil must be typed as.
+		if meta := bashPPCellMeta(target); meta != nil && meta.typ != nil {
+			typ = meta.typ
+		} else {
+			typ = bashPPInferredCellType(target)
+		}
 	}
 	if typ == nil || !r.goSourceNilableType(typ) {
 		return nil, false, nil

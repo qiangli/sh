@@ -4,6 +4,8 @@ package interp
 import (
 	"fmt"
 	"go/constant"
+	"strconv"
+	"strings"
 
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/syntax"
@@ -280,6 +282,45 @@ func (r *Runner) goSourceCollectionReadCell(expr syntax.BashPPExpr, value any, m
 		}
 	}
 	return cell
+}
+
+// goSourceNativeSequenceContents materialises a dependency-owned array or
+// slice as interpreter-owned storage for a local composite destination — a
+// reflect-built [8]string asserted into a map key has only a handle here, and
+// the handle cannot serve typed collection storage. Elements are read back
+// one by one through the handle; each arrives as the transported value the
+// dependency encodes, which bashPPBridgeContents already rebuilds.
+func (r *Runner) goSourceNativeSequenceContents(native *bashPPBridgeValue, expected syntax.BashPPTypeExpr) (any, *bashPPCollectionMeta, bool, error) {
+	if !r.bashPPGoSource || native == nil || native.Kind != "handle" || r.bashPPNativeType(expected) {
+		return nil, nil, false, nil
+	}
+	shape, ok := r.bashPPUnderlyingType(expected).(*syntax.BashPPCollectionType)
+	if !ok || shape.Kind == "map" || !strings.HasPrefix(native.Type, "[") {
+		return nil, nil, false, nil
+	}
+	length, err := r.bashPPNativeAccess(r.ectx, "len", *native, "")
+	if err != nil {
+		return nil, nil, true, err
+	}
+	n, err := strconv.Atoi(length.Text)
+	if err != nil || n < 0 {
+		return nil, nil, true, fmt.Errorf("BASHPP-ECOLLECTION-ELEMENT: native length %q is not a length", length.Text)
+	}
+	out := make([]any, 0, n)
+	meta := &bashPPCollectionMeta{kind: shape.Kind, typ: expected}
+	for i := range n {
+		element, err := r.bashPPNativeAccess(r.ectx, "index", *native, "", bashPPBridgeValue{Kind: "int", Type: "int", Text: strconv.Itoa(i)})
+		if err != nil {
+			return nil, nil, true, err
+		}
+		value, child, err := r.bashPPBridgeContents(element, shape.Element)
+		if err != nil {
+			return nil, nil, true, fmt.Errorf("BASHPP-ECOLLECTION-ELEMENT: %v", err)
+		}
+		out = append(out, value)
+		meta.sequence = append(meta.sequence, child)
+	}
+	return out, meta, true, nil
 }
 
 func (r *Runner) goSourceCheckNativeElement(value any, expected syntax.BashPPTypeExpr) error {
