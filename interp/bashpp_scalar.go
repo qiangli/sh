@@ -22,6 +22,10 @@ type bashPPScalar struct {
 	typ          string
 	runtime      bool
 	negativeZero bool
+	// nonFinite carries the runtime IEEE values that go/constant deliberately
+	// cannot represent. It is only set for Go-source runtime float operations.
+	nonFinite    float64
+	hasNonFinite bool
 }
 
 // bashPPEvalScalarExpr consumes syntax's typed tree. Parsing belongs solely
@@ -469,6 +473,9 @@ func (r *Runner) bashPPIdentScalar(name string) (bashPPScalar, error) {
 // considering its rendered shell text. Quoted "2" and "true" values must not
 // become numbers or booleans merely because their storage is textual.
 func (r *Runner) bashPPScalarFromCell(cell *bashPPCell) bashPPScalar {
+	if cell.hasNonFinite {
+		return bashPPScalar{value: constant.MakeFloat64(0), typ: cell.typeName, runtime: true, nonFinite: cell.nonFinite, hasNonFinite: true}
+	}
 	if r.bashPPGoSource && cell.constant && cell.exactScalar != nil {
 		value := bashPPScalar{value: cell.exactScalar}
 		if named, ok := cell.declType.(*syntax.BashPPNamedType); ok {
@@ -606,7 +613,69 @@ func bashPPScalarFromString(s string) bashPPScalar {
 	return bashPPScalar{value: constant.MakeString(s)}
 }
 
+func bashPPScalarFloat64(value bashPPScalar) (float64, bool) {
+	if value.hasNonFinite {
+		return value.nonFinite, true
+	}
+	if value.value == nil || (value.value.Kind() != constant.Int && value.value.Kind() != constant.Float) {
+		return 0, false
+	}
+	n, _ := constant.Float64Val(value.value)
+	return n, true
+}
+
+// bashPPRuntimeFloatSpecial handles exactly the IEEE results which cannot be
+// carried by go/constant. Ordinary finite arithmetic remains on the exact
+// constant path below, and an untyped constant zero divisor still reports the
+// language diagnostic there.
+func (r *Runner) bashPPRuntimeFloatSpecial(op token.Token, left, right bashPPScalar, typ string) (bashPPScalar, bool) {
+	if !r.bashPPGoSource || !(left.runtime || right.runtime) || (op != token.ADD && op != token.SUB && op != token.MUL && op != token.QUO) {
+		return bashPPScalar{}, false
+	}
+	underlying, ok := r.bashPPUnderlyingType(&syntax.BashPPNamedType{Name: &syntax.Lit{Value: typ}}).(*syntax.BashPPNamedType)
+	if !ok || (underlying.Name.Value != "float32" && underlying.Name.Value != "float64") {
+		return bashPPScalar{}, false
+	}
+	lf, lok := bashPPScalarFloat64(left)
+	rf, rok := bashPPScalarFloat64(right)
+	if !lok || !rok {
+		return bashPPScalar{}, false
+	}
+	var result float64
+	switch op {
+	case token.ADD:
+		result = lf + rf
+	case token.SUB:
+		result = lf - rf
+	case token.MUL:
+		result = lf * rf
+	case token.QUO:
+		result = lf / rf
+	}
+	if underlying.Name.Value == "float32" {
+		result = float64(float32(result))
+	}
+	if !math.IsInf(result, 0) && !math.IsNaN(result) {
+		return bashPPScalar{}, false
+	}
+	return bashPPScalar{value: constant.MakeFloat64(0), typ: typ, runtime: true, nonFinite: result, hasNonFinite: true}, true
+}
+
+func bashPPScalarStorageString(value bashPPScalar) string {
+	if value.hasNonFinite {
+		return strconv.FormatFloat(value.nonFinite, 'g', -1, 64)
+	}
+	return bashPPScalarString(value.value)
+}
+
 func (r *Runner) bashPPUnaryScalar(op token.Token, x bashPPScalar) (bashPPScalar, error) {
+	if r.bashPPGoSource && x.hasNonFinite && (op == token.ADD || op == token.SUB) {
+		value := x.nonFinite
+		if op == token.SUB {
+			value = -value
+		}
+		return bashPPScalar{value: constant.MakeFloat64(0), typ: x.typ, runtime: true, nonFinite: value, hasNonFinite: true}, nil
+	}
 	switch op {
 	case token.ADD, token.SUB, token.XOR:
 		if x.value.Kind() != constant.Int && x.value.Kind() != constant.Float && !(r.bashPPGoSource && x.value.Kind() == constant.Complex) {
@@ -694,6 +763,9 @@ func (r *Runner) bashPPBinaryScalar(op token.Token, left, right bashPPScalar) (b
 			}
 		}
 	}
+	if value, ok := r.bashPPRuntimeFloatSpecial(op, left, right, resultType); ok {
+		return value, nil
+	}
 	if v, handled, err := r.bashPPComplexRuntimeOp(op, left, right, resultType); handled {
 		return v, err
 	}
@@ -705,6 +777,28 @@ func (r *Runner) bashPPBinaryScalar(op token.Token, left, right bashPPScalar) (b
 		leftBool, rightBool := constant.BoolVal(left.value), constant.BoolVal(right.value)
 		return r.bashPPTypedScalarResult(constant.MakeBool(op == token.LAND && leftBool && rightBool || op == token.LOR && (leftBool || rightBool)), resultType, left.runtime || right.runtime)
 	case token.EQL, token.NEQ, token.LSS, token.LEQ, token.GTR, token.GEQ:
+		if left.hasNonFinite || right.hasNonFinite {
+			lf, lok := bashPPScalarFloat64(left)
+			rf, rok := bashPPScalarFloat64(right)
+			if lok && rok {
+				var ok bool
+				switch op {
+				case token.EQL:
+					ok = lf == rf
+				case token.NEQ:
+					ok = lf != rf
+				case token.LSS:
+					ok = lf < rf
+				case token.LEQ:
+					ok = lf <= rf
+				case token.GTR:
+					ok = lf > rf
+				case token.GEQ:
+					ok = lf >= rf
+				}
+				return bashPPScalar{value: constant.MakeBool(ok)}, nil
+			}
+		}
 		ok, err := bashPPCompareScalar(left.value, op, right.value)
 		if err != nil {
 			return bashPPScalar{}, err
@@ -719,6 +813,14 @@ func (r *Runner) bashPPBinaryScalar(op token.Token, left, right bashPPScalar) (b
 		}
 		if right.value.Kind() == constant.Float {
 			if f, _ := constant.Float64Val(right.value); f == 0 {
+				// A typed runtime float is not a constant expression merely because
+				// its current value is zero. Let the IEEE runtime rule produce Inf
+				// or NaN; untyped constant divisions remain diagnostics.
+				if r.bashPPGoSource && (left.runtime || right.runtime) {
+					if value, ok := r.bashPPRuntimeFloatSpecial(op, left, right, resultType); ok {
+						return value, nil
+					}
+				}
 				return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-DIVZERO: division by zero")
 			}
 		}
@@ -743,10 +845,16 @@ func (r *Runner) bashPPBinaryScalar(op token.Token, left, right bashPPScalar) (b
 		// constant.Uint64Val panics on a non-integer, and `1 << "a"` is now
 		// reachable from source, so the kind is checked before the call rather
 		// than recovered after it.
-		if right.value.Kind() != constant.Int {
+		shiftValue := constant.ToInt(right.value)
+		// Go also permits an untyped complex count whose imaginary component
+		// is zero (for example, `x << (1+0i)`).
+		if shiftValue.Kind() != constant.Int && right.value.Kind() == constant.Complex && constant.Sign(constant.Imag(right.value)) == 0 {
+			shiftValue = constant.ToInt(constant.Real(right.value))
+		}
+		if shiftValue.Kind() != constant.Int {
 			return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-SHIFT: shift count must be an unsigned integer")
 		}
-		shift, ok := constant.Uint64Val(right.value)
+		shift, ok := constant.Uint64Val(shiftValue)
 		if !ok {
 			return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-SHIFT: shift count must be an unsigned integer")
 		}
