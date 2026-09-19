@@ -94,3 +94,49 @@ func main() {
 	qt.Assert(t, qt.IsNotNil(err))
 	qt.Assert(t, qt.StringContains(err.Error(), "impossible type assertion"))
 }
+
+func TestStory461ReflectInterfaceResultAssertions(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		src  string
+		want string
+	}{
+		{name: "bug510", src: `package main
+import "reflect"
+type S[T any] struct { a interface{} }
+func (e S[T]) M() { v := reflect.ValueOf(e.a); _, _ = v.Interface().(int) }
+func main() { S[int]{0}.M() }`, want: ""},
+		{name: "issue47740b", src: `package main
+import "reflect"
+type S[T any] struct { a interface{} }
+func (e S[T]) M() { v := reflect.ValueOf(e.a); _, _ = v.Interface().(int) }
+func main() { e := S[int]{0}; e.M() }`, want: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, stderr, err := runGoSource(t, "story461-"+tc.name, tc.src)
+			qt.Assert(t, qt.IsNil(err), qt.Commentf("stdout=%q stderr=%q", out, stderr))
+			qt.Assert(t, qt.Equals(out, tc.want))
+			qt.Assert(t, qt.Equals(stderr, ""))
+		})
+	}
+}
+
+func TestStory461ReflectInterfaceResultAssertionOutsideCorpus(t *testing.T) {
+	src := `package main
+import "reflect"
+func main() { _, ok := reflect.ValueOf(7).Interface().(int); if !ok { panic("authenticated dynamic type lost") } }`
+	out, stderr, err := runGoSource(t, "story461-outside", src)
+	qt.Assert(t, qt.IsNil(err), qt.Commentf("stdout=%q stderr=%q", out, stderr))
+	qt.Assert(t, qt.Equals(out, ""))
+	qt.Assert(t, qt.Equals(stderr, ""))
+}
+
+func TestStory461ReflectInterfaceResultAssertionMismatch(t *testing.T) {
+	src := `package main
+import "reflect"
+func main() { _, ok := reflect.ValueOf(7).Interface().(string); if ok { panic("mismatched authenticated type accepted") } }`
+	out, stderr, err := runGoSource(t, "story461-mismatch", src)
+	qt.Assert(t, qt.IsNil(err), qt.Commentf("stdout=%q stderr=%q", out, stderr))
+	qt.Assert(t, qt.Equals(out, ""))
+	qt.Assert(t, qt.Equals(stderr, ""))
+}
