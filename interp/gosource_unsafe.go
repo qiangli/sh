@@ -93,15 +93,30 @@ func (r *Runner) bashPPGoAstOperandType(expr goast.Expr) (types.Type, bool) {
 		if basic, ok := bashPPGoBasicType(name.Name); ok {
 			return basic, true
 		}
-		// A call of a declared function with a single basic result takes that
-		// result's type.
-		if fn := r.bashPPFuncs[name.Name]; fn != nil {
-			results := fn.results()
+		// Type declarations are lowered before functions are registered, so
+		// constant array lengths may need a later function's declared result.
+		if results, ok := r.bashPPUnsafeOperandFuncResults(name.Name); ok {
 			if bashppResultCount(results) == 1 && len(results) == 1 && results[0].FieldTypeExpr != nil {
 				if basic, ok := bashPPGoTypeExprBasic(results[0].FieldTypeExpr); ok {
 					return basic, true
 				}
 			}
+		}
+	}
+	return nil, false
+}
+
+func (r *Runner) bashPPUnsafeOperandFuncResults(name string) ([]*syntax.BashPPField, bool) {
+	if fn := r.bashPPFuncs[name]; fn != nil {
+		return fn.results(), true
+	}
+	if !r.bashPPGoSource || r.bashPPGoSourceFile == nil {
+		return nil, false
+	}
+	for _, stmt := range r.bashPPGoSourceFile.Stmts {
+		decl, ok := stmt.Cmd.(*syntax.BashPPFuncDecl)
+		if ok && decl.Receiver == nil && decl.Name != nil && decl.Name.Value == name {
+			return decl.Results, true
 		}
 	}
 	return nil, false
