@@ -1,6 +1,8 @@
 package interp
 
 import (
+	"context"
+	"errors"
 	"fmt"
 
 	"mvdan.cc/sh/v3/expand"
@@ -24,6 +26,28 @@ func (r *Runner) bashPPGoSourceTupleCall(call *syntax.BashPPCall) ([]*bashPPCell
 }
 
 func (r *Runner) goSourceCallResultCells(call *syntax.BashPPCall, fn *bashPPFunc) ([]*bashPPCell, error) {
+	return r.goSourceCallResultCellsWithContext(r.ectx, call, fn)
+}
+
+func (r *Runner) goSourceResultFuncValueCallCells(ctx context.Context, call *syntax.BashPPCall) ([]*bashPPCell, bool) {
+	if !r.bashPPGoSource || call == nil {
+		return nil, false
+	}
+	fn, ok := r.goSourceFuncValueCallee(call)
+	if !ok {
+		return nil, false
+	}
+	cells, err := r.goSourceCallResultCellsWithContext(ctx, call, fn)
+	if err != nil {
+		if !errors.Is(err, errBashPPScalarInterrupted) && !r.bashPPPanicking() {
+			r.exit.fatal(err)
+		}
+		return nil, true
+	}
+	return cells, true
+}
+
+func (r *Runner) goSourceCallResultCellsWithContext(ctx context.Context, call *syntax.BashPPCall, fn *bashPPFunc) ([]*bashPPCell, error) {
 	var ok bool
 	var args []string
 	if call.ArgExprs != nil {
@@ -40,7 +64,7 @@ func (r *Runner) goSourceCallResultCells(call *syntax.BashPPCall, fn *bashPPFunc
 	previous := r.bashPPResultCells
 	defer func() { r.bashPPResultCells = previous }()
 	failure := r.bashPPShortFailureSeq
-	values := r.bashPPInvoke(r.ectx, fn, args)
+	values := r.bashPPInvoke(ctx, fn, args)
 	if r.bashPPPanicHalts() || r.exit.exiting || r.exit.fatalExit || r.exit.err != nil || r.bashPPShortFailureSeq != failure || len(values) != len(r.bashPPResultCells) {
 		return nil, errBashPPScalarInterrupted
 	}
@@ -49,6 +73,44 @@ func (r *Runner) goSourceCallResultCells(call *syntax.BashPPCall, fn *bashPPFunc
 		results[i] = bashPPCopyAssignmentCell(c)
 	}
 	return results, nil
+}
+
+func (r *Runner) goSourceFuncValueCallee(call *syntax.BashPPCall) (*bashPPFunc, bool) {
+	if fn, ok := r.goSourceComputedNativeFunc(call); ok {
+		return fn, true
+	}
+	expr := call.CalleeExpr
+	if expr == nil {
+		expr = bashPPCallFunExpr(call)
+	}
+	if expr == nil {
+		return nil, false
+	}
+	cell, err := r.goSourceValueCell(expr)
+	if err != nil || cell == nil {
+		return nil, false
+	}
+	fn, ok := r.bashPPClosure(cell.vr.Str)
+	if !ok {
+		return nil, false
+	}
+	if sig := bashPPComputedCalleeSignature(expr, cell); sig != nil {
+		if bound, status := r.bashPPContextualFuncValue(fn, sig); status == bashPPBindOK {
+			fn = bound
+		}
+	}
+	return r.bashPPInstantiateFunc(call, fn)
+}
+
+func bashPPCallFunExpr(call *syntax.BashPPCall) syntax.BashPPExpr {
+	if call == nil || len(call.Fun) == 0 {
+		return nil
+	}
+	var expr syntax.BashPPExpr = &syntax.BashPPIdent{Name: call.Fun[0]}
+	for _, part := range call.Fun[1:] {
+		expr = &syntax.BashPPSelectorExpr{X: expr, Sel: part}
+	}
+	return expr
 }
 
 // bashPPGoSourceChanCall answers the channel builtins a Go region spells as an

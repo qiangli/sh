@@ -322,20 +322,9 @@ func (r *Runner) bashPPGoSourceComputedNativeCall(ctx context.Context, c *syntax
 	if !r.bashPPGoSource || c == nil || c.CalleeExpr == nil {
 		return false
 	}
-	cell, err := r.goSourceValueCell(c.CalleeExpr)
-	if err != nil || cell == nil {
+	fn, ok := r.goSourceComputedNativeFunc(c)
+	if !ok {
 		return false
-	}
-	value, err := r.bashPPBridgeCell(cell)
-	if err != nil {
-		return false
-	}
-	if value.Kind != "handle" || !(value.Function || strings.HasPrefix(value.Type, "func(")) {
-		return false
-	}
-	fn := &bashPPFunc{native: &value}
-	if sig := bashPPComputedCalleeSignature(c.CalleeExpr, cell); sig != nil {
-		fn.lit = &syntax.BashPPFuncLit{Params: sig.Params, Results: sig.Results}
 	}
 	args, ok := r.bashPPCallValues(c, fn)
 	if !ok {
@@ -343,6 +332,28 @@ func (r *Runner) bashPPGoSourceComputedNativeCall(ctx context.Context, c *syntax
 	}
 	r.bashPPInvoke(ctx, fn, args)
 	return true
+}
+
+func (r *Runner) goSourceComputedNativeFunc(c *syntax.BashPPCall) (*bashPPFunc, bool) {
+	if !r.bashPPGoSource || c == nil || c.CalleeExpr == nil {
+		return nil, false
+	}
+	cell, err := r.goSourceValueCell(c.CalleeExpr)
+	if err != nil || cell == nil {
+		return nil, false
+	}
+	value, err := r.bashPPBridgeCell(cell)
+	if err != nil {
+		return nil, false
+	}
+	if value.Kind != "handle" || !(value.Function || strings.HasPrefix(value.Type, "func(")) {
+		return nil, false
+	}
+	fn := &bashPPFunc{native: &value}
+	if sig := bashPPComputedCalleeSignature(c.CalleeExpr, cell); sig != nil {
+		fn.lit = &syntax.BashPPFuncLit{Params: sig.Params, Results: sig.Results}
+	}
+	return fn, true
 }
 
 // bashPPComputedCalleeSignature recovers the concrete signature a computed
